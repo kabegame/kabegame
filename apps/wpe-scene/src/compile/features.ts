@@ -36,12 +36,14 @@ import {
   INSTANCE_FIELDS,
   instanceControlPoint,
   isOrthographic,
+  isRopeRenderer,
   PARTICLE_SYSTEM_KEYS,
   parseParticleChildEntry,
   particleModuleEntries,
   readParticleSystem,
   SCRIPT_INSTANCE_KEYS,
   type ParticleChildIssue,
+  type ParticleRenderer,
 } from "./particles";
 import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
@@ -1425,10 +1427,11 @@ export function checkParticleChildren(children: unknown, unsupported: Set<string
  * - renderer：`sprite`、`spritetrail` 在表里，`orientation`、`axis`、`flags` 的取值全部支持（P4c 步骤 5，`particles/orientation.ts`）；
  *   `rope`（P4d 步骤 1）在表里，`subdivision`、`uvscale`、`uvscrolling`、`uvsmoothing` 的取值全部支持（`particles/rope.ts`）；
  *   `ropetrail`（P4d 步骤 2）在表里，`length`、`segments`、`subdivision`、`fadealpha`、`fadesize`、`uvscale`、`uvscrolling` 的取值
- *   全部支持（`particles/ropetrail.ts`）。多于一个报 `particle:renderers`：WPE 按数组顺序各画一次、共用同一个顶点缓冲、各绑自己的变体材质
- *   （rea-p4c-render.md 6.3，实测两种顺序都是两次绘制），我们一个粒子层只有一次绘制，支持它要拆成一个系统多次绘制（顶点布局
- *   能不能共用、每次绘制各自的 uniform、快照「每对象至多一次」、四角探针按绘制输出）。语料里这样的系统 0 张，留着不做
- *   （2026-11-09 用户定）。
+ *   全部支持（`particles/ropetrail.ts`）。一个系统多条 renderer（P4f 步骤 4，rea-p4f-script.md 8.1–8.4）：WPE 按数组顺序各画一次、
+ *   各绑自己的变体材质、各按自己那条算 `g_Orientation*` 与 `g_RenderVar0`（实测 T8、T8r 两种顺序，`p4f-multi`），任意条数的 sprite /
+ *   spritetrail 都支持（`SceneParticle.draws`，渲染器一个系统出几个 draw）。表内的多于一个且其中有 rope 类时仍报 `particle:renderers`：
+ *   rope 与 ropetrail 的缓冲、rope 表、拖尾历史是系统级的（8.2，两个 ropetrail 共用一份历史、段数与间隔取第一条），多条 rope 类记录
+ *   各自的参数怎么作用到同一份缓冲上没追，也没有抓帧，语料 0 处。
  * - 属性关键帧（P4a 步骤 5）：系统级键、模块字段写成 `{animation: {…}, value}` 报 `value:animation`，与绑定分开报；
  *   控制点与子系统条目整段 `scanValue`。
  * - `mapsequence*`（P4d 步骤 3，`particles/mapsequence.ts`）在表里。`between` 的 `flags` 有 1、2、4、8、0x10、0x20 之外的位时由模块表
@@ -1465,10 +1468,16 @@ export function checkParticleFeatures(
       unsupported.add(`particle:system:${category}`);
       continue;
     }
-    // 一个系统多个 renderer 的绘制没做（见上）
-    if (category === "renderer" && entries.length > 1) unsupported.add("particle:renderers");
-    for (const entry of entries) {
-      const reading = readParticleModule(category, entry, orthographic);
+    const readings = entries.map((entry) => readParticleModule(category, entry, orthographic));
+    // 一个系统多个 renderer（P4f 步骤 4，见上）：只有表内的多于一个、且其中有 rope 类时照报
+    // TODO:[WPE_SCENE] 真实场景没确定：语料里唯一用到多 renderer 的 3465215190（Rainy Day）的 `Snow`（sprite + spritetrail）只看了强制
+    // 渲染的一帧，没和 WPE 抓帧比（这张另差人偶、挂接等 18 项，不能渲染）。它能渲染之后抓帧对比雪花与拖尾（phase-4f-script.md 步骤 4「没测到的」）
+    if (category === "renderer") {
+      const drawn = readings.filter((reading) => reading.known);
+      if (drawn.length > 1 && drawn.some((reading) => isRopeRenderer(reading.name as ParticleRenderer["kind"])))
+        unsupported.add("particle:renderers");
+    }
+    for (const reading of readings) {
       const module = `${category}:${reading.name || "unnamed"}`;
       if (!reading.known) {
         unsupported.add(`particle:${module}`);

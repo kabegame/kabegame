@@ -328,7 +328,13 @@ kbp.py corners offline <标签…> [--src 产品源码] [--data 目录] [--proje
   2. 比较：`deno run --unstable-webgpu ts/corners.ts`，写 `<out>/corners.txt`、`corners-result.json`。
 - 按轨迹形状选路径：
   - **按粒子认**（P4c 的 sprite / 拖尾，c5）：4 个角按 uv 对上 WPE 的角；「不画」（朝向 NaN 整次跳过，或拖尾退化一个也没写）⇔ WPE 四角全
-    是 NaN，给了 `--expect-hidden` 时还要在名单里（c5 的 `NOT_DRAWN`）；两个 renderer 的系统用 `--skip`（c5 的 `T8,T8r`）。
+    是 NaN，给了 `--expect-hidden` 时还要在名单里（c5 的 `NOT_DRAWN`）。
+  - **一个系统多个 renderer**（P4f 步骤 4 起）：轨迹里同一系统的第 r + 1 次绘制 `名字#<r + 1>` 对产品的 `draws[r]`（各用自己的变体程序、
+    朝向与拖尾参数，顶点输入同一份）。源码没有 `draws`（P4f 步骤 4 以前）时只比第一个 renderer，`#2…` 没有对应项、不比；那时的源码要比
+    的话用 `--skip`（c5 的 `T8,T8r`）。
+  - **static 子系统**（P4e 起的源码）：按 `ParticleSystem.forEachDrawn` 的模板路径与模型矩阵逐个比，名字取 `kbp-meta.json` 的 `children`；
+    老源码只比顶层。2026-11-14 在 HEAD `d58a7048` 上核对：p4c-trail、p4c-sprite、p4d-rope、p4f-multi 的结果和改之前的工具逐行相同，只多出
+    `m-child-c`（差 0）。
   - **按绘制认**（P4d 的绳，d1）：几何着色器展开，`gs_out` 的三角形列表还原成带后逐顶点比位置、uv、颜色；NaN 段 ⇔ 我们整段在裁剪体外；
     另把我们算的 uniform 和 WPE 读到的常量逐项比（限值 1e-6）。
 - 老源码兼容：P4c 的源码只有 `vertexPacking(attributes)`，P4d 起用 `programVertexPacking(result)`；要配当时的翻译器 wasm（见 `snapshot --wasm`）。

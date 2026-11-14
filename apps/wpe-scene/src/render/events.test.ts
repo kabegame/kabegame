@@ -293,11 +293,12 @@ interface DrawView {
   uniformBuffer: FakeBuffer;
   vertexBuffer: FakeBuffer;
 }
-/** 模板（`step.node.join("/")`）的 draw 池（私有字段）。 */
+/** 模板（`step.node.join("/")`）的 draw 池（私有字段）：P4f 步骤 4 起每次出现一组（每条 renderer 一个），这里都是单 renderer，展平。 */
 const pool = (scene: GpuScene, template: string): DrawView[] =>
-  (scene as unknown as { trees: Map<number, { templates: Map<string, { pool: DrawView[] }> }> }).trees
+  (scene as unknown as { trees: Map<number, { templates: Map<string, { pool: DrawView[][] }> }> }).trees
     .get(1)!
-    .templates.get(template)!.pool;
+    .templates.get(template)!
+    .pool.flat();
 const floats = (buffer: FakeBuffer, offset: number, count: number) =>
   Array.from(new Float32Array(buffer.bytes.buffer, offset, count));
 /** 一帧轨迹里的顶点缓冲标签与快照拷贝（去掉绘制次数）。 */

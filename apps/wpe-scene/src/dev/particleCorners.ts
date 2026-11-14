@@ -18,10 +18,13 @@
  * 粒子恒 n 段（`writeTrailSegments`），结果同样按段给出整条带子。
  * 关键帧动画（P10a 步骤 3）：和 `renderFrame` 一样交给 `replayReadback`，沿同一串 dt 推进（没有回放时按第 0 秒写一次），四角看到的
  * `instanceoverride`、图层变换等是动画写过的值。
+ * 一个系统多条 renderer（P4f 步骤 4）：每个粒子层按顶层系统的 `draws` 每条各出一项，第 r 项（r ≥ 1）带 `renderer: r`，各用那一条的
+ * 变体程序、uniform 与顶点（拖尾那条跳过退化粒子，sprite 那条照写），第 0 项和以前逐字节相同。
  */
 import { SceneAnimations } from "../animation/player";
 import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { compileSceneInWorker } from "../compile/client";
+import { particleDraws } from "../compile/particles";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
@@ -732,6 +735,11 @@ export interface ParticleCornersOptions {
 export interface ParticleCornersLayer {
   object: number;
   name: string;
+  /**
+   * 顶层系统的第几条 renderer（P4f 步骤 4，`SceneParticle.draws` 的下标）：一个粒子层按它的 `draws` 每条各出一项，第 r 项（r ≥ 1）才带
+   * 这个键，第 0 项和以前逐字节相同。对照 WPE 抓帧时，第 r 项对应同一系统的第 r + 1 次绘制（各用自己那条 renderer 的变体）。
+   */
+  renderer?: number;
   perspective: boolean;
   /**
    * 渲染时画不画这一层（P4c 步骤 5）：朝向是 NaN（`upright` 的轴平行于视线）时 `encode` 整次绘制跳过，这里为 false；四角照算
@@ -849,10 +857,14 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
             options.layer === undefined ||
             (typeof options.layer === "number" ? item.object === options.layer : item.name === options.layer),
         );
-      const out: ParticleCornersLayer[] = [];
-      for (const { object, name } of wanted) {
-        const probe = scene.particleProbe(object);
-        if (!probe) continue;
+      /** 一个粒子层顶层系统的第 `renderer` 条的四角；这一条没有绘制时为 null。 */
+      const probeCorners = async (
+        object: number,
+        name: string,
+        renderer: number,
+      ): Promise<ParticleCornersLayer | null> => {
+        const probe = scene.particleProbe(object, [], 0, renderer);
+        if (!probe) return null;
         const { program, layout, rope } = probe;
         // `limit` 对 rope 是段数
         const limit = Math.min(probe.count, options.limit ?? probe.count);
@@ -892,9 +904,11 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
           uvs.push(uv);
           colors.push(color);
         }
-        out.push({
+        return {
           object,
           name,
+          // 第 0 条不带这个键，和以前逐字节相同
+          ...(renderer ? { renderer } : {}),
           perspective: probe.perspective,
           drawn: !probe.hidden,
           count: probe.count,
@@ -920,7 +934,18 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
               }
             : {}),
           wgsl: options.wgsl ? code : undefined,
-        });
+        };
+      };
+      const out: ParticleCornersLayer[] = [];
+      for (const { object, name } of wanted) {
+        // 顶层系统的每条 renderer 各一项（P4f 步骤 4）：各用自己的变体程序、uniform 与顶点（`particleProbe` 的第 4 个参数）。`draws` 为空
+        // （`renderer: []`）时探针本来取不到，照旧试一次
+        const particle = bundle.layers.find((layer) => layer.object === object)?.particle;
+        const renderers = Math.max(1, particle ? particleDraws(particle).length : 0);
+        for (let renderer = 0; renderer < renderers; renderer++) {
+          const corners = await probeCorners(object, name, renderer);
+          if (corners) out.push(corners);
+        }
       }
       return out;
     } finally {

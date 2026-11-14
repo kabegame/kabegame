@@ -14,6 +14,7 @@
  * 给了 `zoom`（步骤 4）时投影绕场景中心缩放（`sceneViewProjection(size, zoom)`，静态、预热也用它）。
  */
 import type { SceneLayer } from "../compile/bundle";
+import { particleThick } from "../compile/particles";
 import { sceneViewProjection, worldMatrixOf } from "../render/layout";
 import { multiply, translation, type Mat4 } from "../render/math";
 import { shakeOffset, type ShakeFields } from "../render/shake";
@@ -30,8 +31,8 @@ export interface ParticleTrackParticle {
   alpha: number;
   rot: number[];
   /**
-   * 帧表系统（`spriteSheet`）与拖尾（renderer 是 `spritetrail`，P4c 步骤 5）才有：`[vx, vy, vz, frame 原值]`，写进顶点的第二组属性，
-   * frame 不取小数（P4b 步骤 2）。
+   * 厚格式的系统（`particleThick`：帧表 `spriteSheet`，或系统里有 `spritetrail`，P4c 步骤 5、P4f 步骤 4）才有：`[vx, vy, vz, frame 原值]`，
+   * 写进顶点的第二组属性，frame 不取小数（P4b 步骤 2）。
    */
   thick?: number[];
 }
@@ -117,7 +118,8 @@ export interface ParticleTrackOptions {
 export function particleSnapshot(system: ParticleSystem, keep?: (slot: number) => boolean): ParticleTrackParticle[] {
   const c = system.columns;
   const out: ParticleTrackParticle[] = [];
-  const thick = system.def.spriteSheet || system.def.renderer?.kind === "spritetrail";
+  // 厚格式看整个系统（P4f 步骤 4，rea-p4f-script.md 8.2）：sprite + spritetrail 的系统里 sprite 那次绘制的顶点同样带速度与 frame
+  const thick = particleThick(system.def);
   const born = system.scriptBorn;
   for (let i = 0; i < system.highWater; i++) {
     if (c.life[i] === 0) continue;

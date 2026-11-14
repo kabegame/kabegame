@@ -1118,7 +1118,7 @@ describe("能力表：粒子", () => {
     expect(particleKeys({ operator: { name: "movement" } })).toEqual(["particle:system:operator"]);
   });
 
-  it("renderer（P4c 步骤 5）：sprite 的 orientation、axis、flags 各种取值不报；spritetrail 不报；两个 renderer 仍报 particle:renderers；rope 两类不报（P4d 步骤 1、2）", () => {
+  it("renderer（P4c 步骤 5）：sprite 的 orientation、axis、flags 各种取值不报；spritetrail 不报；两个 sprite 类 renderer 不报（P4f 步骤 4）、rope 类混挂仍报 particle:renderers；rope 两类不报（P4d 步骤 1、2）", () => {
     for (const name of ["sprite", "spritetrail"]) {
       const renderer = (fields: JsonObject) => particleKeys({ renderer: [{ name, ...fields }] });
       expect(renderer({}), name).toEqual([]);
@@ -1137,10 +1137,11 @@ describe("能力表：粒子", () => {
     expect(particleKeys({ renderer: [{ name: "spritetrail", length: "x" }] })).toEqual([
       "particle:renderer:spritetrail:length",
     ]);
-    // 一个系统多个 renderer（WPE 各画一次、共用顶点缓冲，rea-p4c-render.md 6.3）：没做，照报
-    expect(particleKeys({ renderer: [{ name: "sprite" }, { name: "sprite" }] })).toEqual(["particle:renderers"]);
-    expect(particleKeys({ renderer: [{ name: "sprite" }, { name: "spritetrail" }] })).toEqual(["particle:renderers"]);
-    expect(particleKeys({ renderer: [{ name: "spritetrail" }, { name: "sprite" }] })).toEqual(["particle:renderers"]);
+    // 一个系统多个 renderer（WPE 各画一次、各绑自己的变体，rea-p4f-script.md 8.3）：P4f 步骤 4 起 sprite / spritetrail 任意条数不报
+    // （只有 rope 类混挂照报，见下面与 p4f4.test.ts）
+    expect(particleKeys({ renderer: [{ name: "sprite" }, { name: "sprite" }] })).toEqual([]);
+    expect(particleKeys({ renderer: [{ name: "sprite" }, { name: "spritetrail" }] })).toEqual([]);
+    expect(particleKeys({ renderer: [{ name: "spritetrail" }, { name: "sprite" }] })).toEqual([]);
     // rope 进表（P4d 步骤 1）：字段的各种取值都不报
     expect(particleKeys({ renderer: [{ name: "rope" }] })).toEqual([]);
     expect(

@@ -149,7 +149,7 @@ private installSound(api: ApiObject, object: number): void {
 | 1 | 实例覆盖挂 `{script}`：字段脚本的写回目标接到 `particle-instance`；`rate` 单独一条路（用户属性改值同样）：不置脏、不钳制、`timescale` 不跟 | 93 → 104 |
 | 2 | HDR 下的 `brightness`：从重编译目标改成就地目标，实例颜色乘 `k` | 104 → 107 |
 | 3 | `IParticleSystem`：`play` / `pause` / `stop` / `isPlaying` / `emitParticles` 与 `instance` 对象（24 个字段）；脚本发出的粒子本帧不画；已定 5–7 的三处不复刻 WPE；删 `PARTICLE_LAYER_METHODS` 的多报与 `MISSING_SCRIPT_API` 里的对应项 | 不变（去掉 39 张场景里的 `script:api:particle.*` 等键） |
-| 4 | 一个系统多个 renderer：一个系统按 renderer 数组出几个 draw，sprite 与 spritetrail 共用一份顶点写入 | 107 → 108 |
+| 4 | 一个系统多个 renderer：一个系统按 renderer 数组出几个 draw，各绑自己的变体材质、各写各的顶点（2026-11-13 改，原写「共用一份顶点写入」，理由见步骤 4「思路」）；rope 类和别的 renderer 混挂仍报 | 107 → 108 |
 | 收尾 | 文档、回归、覆盖数 | — |
 
 ## 步骤 1 — 实例覆盖挂 `{script}` 与 `rate` 的单独路径
@@ -520,3 +520,209 @@ emitParticles(n: number, inputs: ControlPointInputs): void;
 - rope / ropetrail 跳过本帧脚本出生的粒子只有单测。
 - 读码列了但没做、没测的：`stop` 后同一帧 `emitParticles` 会把旧顶点画一帧（rea 4.4【推】，不复刻）；图层图像发射器（类型 3）在脚本阶段的位置（4.4【推】）；脚本发出的粒子 `inheritcontrolpointvelocity` 读到 0（4.4【推】）；对象不可见时 `emitParticles` 发出的粒子下一帧被复位清掉（4.6）。
 - 暂停中 eventdeath 建出的实例带暂停位、`play` 后才发，只有单测。
+
+## 步骤 4 — 一个系统多个 renderer
+
+### 思路
+
+WPE 对一个系统的 renderer 数组逐条各画一次（rea-p4f-script 8.3）：每条有自己的变体材质（同一个基础材质按 renderer 类型加宏，8.1），绘制前按**这一条**的 `orientation` / `axis` 算 `g_Orientation*`，拖尾那条另写 `g_RenderVar0.xyz`；sprite 与 spritetrail 共用一份每帧写一次的顶点缓冲，速度为 0 的粒子在拖尾那次绘制里四角是 NaN、被丢掉（8.3，`p4f-multi` 的 `m-st-zero` 实测）。子系统、事件实例规则相同（8.4）。所以多 renderer 在我们这边就是「一个系统出几个 draw」：P4e 已经把粒子层改成每帧沿系统树现排、按模板池化 draw，这一步把模板从「一个系统」细分成「一个系统的一个 renderer」，每个 renderer 一个计划步骤、一份变体 pass、一组 draw。
+
+**各写各的顶点，不共用缓冲（改了定稿表的说法）。** 共用只是 WPE 省一次写入，画面上看不出：两个 draw 读的是同一批存活粒子、同一个槽序。我们现在每个 draw 自己持有顶点（`ParticleDraw.vertices` 与缓冲），拖尾 draw 写顶点时就跳过退化的粒子（`trailDrawable`，不靠 GPU 丢 NaN 图元）。要共用，就得把顶点从 draw 上拆出来给同一系统的几个 draw 共享、给拖尾 draw 另建逐帧的索引缓冲来跳过退化粒子，还要保证两个变体的顶点布局逐项相同；这些全是为语料里唯一的一处（`3465215190` 的 `Snow`，另差 18 项、不能渲染）多写的结构。各写各的，每个 draw 的写法和现在单 renderer 时完全一样，单 renderer 的系统逐字节不变，代价是多 renderer 的系统多写一次顶点。以后要是有能渲染的场景在这上面费时，再按 rea 8.2 改成共用。
+
+**rope 类和别的 renderer 混挂仍报 `particle:renderers`。** rope 与 ropetrail 的缓冲、rope 表、拖尾历史是系统级的（8.2：rope、ropetrail 各一份，两个 ropetrail 共用一份历史、段数与间隔取第一条；两类共用 `sys+0x30` 的 `K`），多条 rope 类记录各自的参数怎么作用到同一份缓冲上没追，也没有抓帧；语料 0 处。支持范围是任意条数的 sprite / spritetrail（实测过的组合：T8、T8r、`m-st-zero`、`m-ss`、`m-child`）。
+
+细节照 WPE：
+- **厚格式看整个系统**（8.1，rea-p4b-render 2.4）：系统里有 spritetrail（或槽 0 是帧表）时，同系统的 sprite 变体也写 `THICKFORMAT`、顶点带速度列（T8：sprite 那次有 `THICKFORMAT = 1`、没有 `TRAILRENDERER`）；`TEX0FORMAT` 跟着走厚格式的规则（只看格式 8–11，不看朝向）。轨迹的 `thick` 列同样按系统判断。
+- **顺序**：一个系统的各 renderer 按数组顺序连着画，画完才轮到子系统（8.3 的循环在递归之前）。快照照旧是每对象至多一次、在先序里第一个要帧缓冲的系统之前（同一个基础材质，各变体的 `framebuffer` 相同）。
+- **`g_RenderVar0`**：WPE 是全局的、没写的分量留着上一次绘制的值（8.3）；sprite 变体与非 `TRAILRENDERER` 变体不读它，所以不复刻残值，sprite 那次照旧写 0（同现在的单 sprite）。
+- **退化粒子**：sprite 那次画、拖尾那次不画，就是各自现在的写法。
+
+稳定键：第一个 renderer 的变体沿用 `objects/<i>/particle/passes/<k>`（单 renderer 系统的键、常量、管线缓存都不变），第 r 个（r ≥ 1）是 `objects/<i>/particle/renderers/<r>/passes/<k>`（子系统同样接在自己的键后面）。材质常量的用户属性绑定按 pass 键登记（`shaderUniforms`），两个变体各登记一份，改值时都写到；粒子材质里没有字段脚本与关键帧（它们只挂在 scene.json 的 effect pass 上，`owner.pass` 比的是 effect 的键）。
+
+覆盖：去掉 `particle:renderers` 后 `3465215190` 粒子用法干净，107 → 108（带粒子的场景全部覆盖）；不解锁场景。
+
+### 现状锚点
+
+**a. 能力表：两个以上 renderer 一律报**（`compile/features.ts:1374`，`checkParticleFeatures`）
+```ts
+if (category === "renderer" && entries.length > 1) unsupported.add("particle:renderers"); // 现状：sprite + spritetrail 也报
+```
+
+**b. 只解析第一个 renderer，材质只编一份**（`compile/particles.ts:519`、`compile/bundle.ts` 的 `compileParticleMaterial`）
+```ts
+const module = renderers.find((item) => DRAWN_RENDERERS.has(item.name)); // 现状：第一个表内的 renderer，其余忽略
+// compileParticleMaterial：
+const sheetSystem: ParticleSheetSystem = { flags, animationMode: particle.animationMode, renderer: particle.renderer };
+for (const [k, pass] of material.passes.entries())
+  particle.passes.push(await compilePass(pass, { key: `${key}/passes/${k}`, particle: sheetSystem })); // 现状：一份 pass
+```
+
+**c. 厚格式按单个 renderer 判断**（`compile/bundle.ts` 的 `particleDefines`、`particles/track.ts:120`）
+```ts
+const thick = rope || system.renderer?.kind === "spritetrail" || !!texture?.sheet; // 现状：sprite 不知道同系统有拖尾
+const thick = system.def.spriteSheet || system.def.renderer?.kind === "spritetrail";  // track.ts，同上
+```
+
+**d. 每个系统一个计划步骤**（`render/graph.ts:429`，`planParticleLayer`）
+```ts
+if (system.renderers.length)
+  steps.push({ kind: "particles", pass, /* … */ node, world: (system.flags & 1) !== 0, instanced }); // 现状：一个系统一步
+```
+
+**e. 渲染器按模板路径取模板，uniform 与几何读系统的 renderer**（`render/scene.ts`）
+```ts
+const template = tree.templates.get(path.join("/"));        // walkParticles：一个模板路径一个模板、一个 draw 池
+draw(template.pool[0]);                                     // arrangeParticles：每个系统画一次
+const renderer = particles.system.def.renderer;            // refreshParticleGeometry：朝向 NaN、拖尾眼位
+renderer: layer.particle ? particleNode(layer.particle, step.node).renderer : undefined, // uniformValues：g_Orientation*、g_RenderVar0
+```
+
+**f. 四角探针按图层出一项**（`dev/particleCorners.ts`、`render/scene.ts` 的 `particleProbe(object, node, occurrence)`）
+```ts
+const probe = scene.particleProbe(object);   // 现状：顶层系统、第一个 draw；没有 renderer 维度
+```
+
+### 点 1 — 编译（`compile/particles.ts`、`compile/bundle.ts`、`compile/features.ts`）
+
+- **修改** `checkParticleFeatures`：只在表内 renderer 多于一个、且其中有 rope 类时报 `particle:renderers`。
+```ts
+// 修改：sprite / spritetrail 任意条数支持（P4f 步骤 4）；rope 类的缓冲、rope 表、拖尾历史是系统级的，和别的 renderer 混挂没测，照报
+const drawn = entries.filter((entry) => DRAWN_RENDERERS.has(entry.name));
+if (category === "renderer" && drawn.length > 1 && drawn.some((entry) => isRopeRenderer(entry.name))) unsupported.add("particle:renderers");
+```
+- **新增** `SceneParticle.draws`，**修改** `renderer` 的含义：
+```ts
+/**
+ * 绘制（P4f 步骤 4，rea-p4f-script 8.3）：表内的每个 renderer 一项，JSON 顺序，各画一次；`renderer: []` 时为空。只有表外类型
+ * （已报）时按缺省 sprite 画一项，同现在强制渲染的画法。
+ * `passes` 是这一条的变体材质：第 0 项就是 `SceneParticle.passes`（同一个数组），第 r 项（r ≥ 1）的稳定键
+ * `<系统键>/renderers/<r>/passes/<k>`。
+ */
+draws: { renderer: ParticleRenderer; passes: ScenePass[] }[];
+/**
+ * 模拟用的 renderer（修改）：有 rope 类时是第一个 rope 类（rope 表与拖尾历史跟它建），否则是第一个表内的，一个都没有时缺省 sprite。
+ * 支持的组合里 rope 类总是唯一的 renderer，所以和以前「第一个」相同；强制渲染 rope 混挂时模拟仍有 rope 表。
+ */
+renderer: ParticleRenderer;
+/** 系统的 sprite 缓冲是厚格式（WPE 系统标志 `0x3000000`，rea-p4f-script 8.2）：有 spritetrail，或槽 0 是帧表。 */
+// 新增导出函数，bundle 的宏与 track.ts 共用
+export function particleThick(def: Pick<SceneParticle, "spriteSheet" | "draws">): boolean;
+```
+  > 说明：`spriteSheet` 在编完材质之后才定，宏那边按 `texture?.sheet` 判断帧表，只从 `draws` 取「有没有 spritetrail」。
+- **修改** `ParticleSheetSystem` **新增** `trail: boolean`（系统里有 spritetrail），`particleDefines` 的厚格式：
+```ts
+const thick = rope || system.renderer?.kind === "spritetrail" || system.trail || !!texture?.sheet; // 修改：同系统有拖尾时 sprite 也厚
+```
+  > 说明：sprite 分支在厚格式时写 `THICKFORMAT = 1`（rea-p4b-render 2.4 的写法，现在只有帧表会走到）；`particleTex0Format` 收到的 `thick` 跟着变。
+- **修改** `compileParticleMaterial`：每个 `draws` 项编一份变体，第 0 项沿用现在的键，`renderer: []` 时照旧按缺省 sprite 编一份放进 `passes`（只给「有没有材质」「要不要帧缓冲」用）。
+```ts
+const trail = particle.draws.some((draw) => draw.renderer.kind === "spritetrail");
+const variants = particle.draws.length ? particle.draws : [{ renderer: particle.renderer, passes: particle.passes }];
+for (const [r, draw] of variants.entries()) {
+  const sheetSystem: ParticleSheetSystem = { flags, animationMode: particle.animationMode, renderer: draw.renderer, trail };
+  const base = r === 0 ? key : `${key}/renderers/${r}`;
+  for (const [k, pass] of material.passes.entries())
+    draw.passes.push(await compilePass(pass, { key: `${base}/passes/${k}`, particle: sheetSystem }));
+}
+// 第 0 项和 `particle.passes` 是同一个数组（parseParticle 建 draws 时就这样连起来）
+```
+
+### 点 2 — 计划（`render/graph.ts`）
+
+- **修改** `ParticleStep` **新增** `renderer: number`（`draws` 下标），`planParticleLayer` 每个系统按 `draws` 顺序出步骤，每步用自己那一项的 `passes[0]`：
+```ts
+visitParticleTemplates(particle, (system, node, instanced) => {
+  const pass = system.passes[0];
+  if (!pass) return false;
+  // 修改：一个 renderer 一步，数组顺序（8.3）；`draws` 为空（`renderer: []`）时不出步骤，照常列子系统
+  system.draws.forEach((draw, renderer) => {
+    const variant = draw.passes[0];
+    // 强制渲染 rope 混挂：只画模拟跟着建的那条 rope 类（`SceneParticle.renderer`），别的 rope 类跳过
+    if (isRopeRenderer(draw.renderer.kind) && draw.renderer !== system.renderer) return;
+    steps.push({ kind: "particles", pass: variant, /* inputs、blending、raster 照旧取 variant */ node, renderer, world, instanced });
+  });
+});
+```
+  > 说明：`render:multi-pass` 与运行时纹理的检查照旧对每一步做。`particleTreeWantsFramebuffer` 不变（看基础 pass）。
+
+### 点 3 — 渲染（`render/scene.ts`）
+
+- **修改** 模板：键仍是模板路径，一个模板带这个系统的全部 renderer 步骤，池里每一项是一次出现的一组 draw（每个 renderer 一个）：
+```ts
+interface ParticleTemplate {
+  /** 这个系统的各 renderer 步骤与预备好的管线，`draws` 顺序（P4f 步骤 4）。 */
+  renderers: { step: ParticleStep; prepared: PreparedDraw }[];
+  /** 第 k 次出现用第 k 组（每组按 renderer 顺序各一个 draw）；非实例化的模板建场景时建第 0 组。 */
+  pool: Draw[][];
+  instanced: boolean;
+}
+```
+- **修改** `arrangeParticles`：一个系统的一组 draw 按顺序连着画，再走子系统（`walkParticles` 的回调里画完整组，子孙由 `forEachDrawn` 之后访问，顺序就是 8.3）；实例化模板换实例时整组 `assignParticles`。
+- **修改** `ParticleDraw` **新增** `renderer: ParticleRenderer`（这一步的 `draws[step.renderer].renderer`）；`refreshParticleGeometry`、`uniformValues` 的粒子分支、`createParticles` 的拖尾判断都读它，不再读 `system.def.renderer` / `particleNode(...).renderer`。
+```ts
+const renderer = particles.renderer;   // 修改：这次绘制自己的 renderer（8.3：朝向按各自记录算）
+renderer: particleNode(layer.particle, step.node).draws[step.renderer].renderer, // uniformValues：g_Orientation*、g_RenderVar0
+```
+- **修改** 标签：`renderer ≥ 1` 的 draw 在标签末尾加 ` r<r>`，第 0 个不变。
+- **修改** `particleProbe(object, node, occurrence, renderer = 0)`；`checkRenderable` / `planProblems` 的粒子属性检查按步骤自己的 renderer（`particleAttributeProblems`）。
+- **修改** `particles/track.ts` 的 `thick` 用 `particleThick(def)`；`particles/system.ts`、`rope.ts`、`ropetrail.ts` 读 `def.renderer` 的地方不改（含义见点 1）。
+- **修改** `dev/particleCorners.ts`：每个粒子层按顶层系统的 `draws` 各出一项，第 r 项（r ≥ 1）带 `renderer: r`，第 0 项和现在逐字节相同。
+  > 说明：这个文件工作区里有别的会话未提交的改动（+35 / −7），合并时三方合并。
+
+### 点 4 — 回放工具与案例（Claude 做）
+
+- `kbp corners offline` 与 `kbp rdc track` 的轨迹里，同一系统的第二次绘制叫 `<名字>#2`（`p4f-multi` 的 `kbp-meta.json` 记了每个对象的 `draws`）。工具按 `draws` 把 `#2…#n` 认成同一系统的第 2…n 个 renderer：四角比对应 renderer 的变体，粒子输入核对 n 份相同（共用缓冲）。
+- 新案例 `f4`：`p4c-trail`（fps 60，T8、T8r 起比）、`p4f-multi`（fps 20 / 60），只比四角与整帧，轨迹沿用 `c` 系列（模拟不变）。
+
+### 验收
+
+- 子代理：tsc 0 error，vitest（带 `KABEGAME_WPE_ROOT`）全过（已知的失败另列），Prettier（`--ignore-path <空文件>`）。新增单测：
+  - 编译：sprite + spritetrail 两种顺序各编两份变体，sprite 那份有 `THICKFORMAT`、没有 `TRAILRENDERER`、`TEX0FORMAT` 按厚格式规则；两个 sprite 不同朝向时非厚格式的 `TEX0FORMAT` 各按各的朝向；稳定键（第 0 个不变、第 r 个带 `renderers/<r>`）；材质常量绑用户属性时两份都登记；子系统同样；只有 rope 混挂报 `particle:renderers`；单 renderer 系统的 pass（键、宏、程序、常量）和改动前相同（bundle 只多出 `draws` 字段）。
+  - 计划：步骤按 `draws` 顺序、父的各 renderer 在子系统之前；`renderer: []` 不出步骤；强制渲染 rope 混挂只出模拟那条 rope 类。
+  - 渲染（假设备）：每帧绘制序列（父 r0、父 r1、static 子 r0、r1、实例……），实例化模板的整组复用与换实例；`g_Orientation*` 各按各的 renderer、拖尾那次 `g_RenderVar0.xyz` 是自己的参数、sprite 那次是 0；速度 0 的粒子 sprite 那次写、拖尾那次不写；朝向 NaN 只跳过那一个 draw；单 renderer 层的 draw、标签、uniform 字节和改动前相同。
+  - 轨迹：sprite + spritetrail 系统的 sprite 也带 `thick`。
+- Claude 独立验收：
+  1. `git status` 查越界；tsc、vitest 自跑；变异检查：sprite 不随系统变厚、两次绘制都用第一个 renderer 的朝向、renderer 顺序反过来、拖尾那次不跳退化粒子、子系统只画第一个 renderer、整组画完才画子系统改成先画子系统、第 r 个变体沿用第 0 个的键。
+  2. `kbp regress`（HEAD 快照 ↔ 步骤 4 快照，现有案例含 `f1`–`f3`）逐字节相同；语料只有 `3465215190` 去掉 `particle:renderers`，粒子覆盖 107 → 108，能渲染不变；单 renderer 场景的粒子 pass 键与宏不变（`kbp corpus diff` 的附加字段核对）。
+  3. 四角（`f4`）：T8、T8r、`m-st-zero`、`m-ss`、`m-child` 每个 renderer 的四角和 WPE `gs_out` 比，限 0.01 像素；`m-st-zero` 拖尾那次 WPE 是 NaN、我们不写。
+  4. 整帧：`renderFrame` 确定性回放 `p4f-multi`、`p4c-trail` 的抓帧时刻，和 WPE 整帧比（`kbp cmp frame`，按 bbox 归类），差在 P4c 的包络内。
+  5. 真机：`p4f-multi` 导入 dev 库、强制渲染开预览，截图看两次绘制都在、顺序对；`3465215190` 强制渲染看 `Snow` 的雪花与拖尾。测完删强制渲染开关、`projects_remove` 移除测试行。
+- 过后请用户提交。
+
+### 步骤 4 实施记录（2026-11-14）
+
+子代理在 HEAD `d58a7048` 的快照 `ignore/p4/f4/ov` 里实现点 1–3，Claude 做点 4 与验收。补丁 `ignore/p4/f4/step4.patch`（14 个文件，+1582 / −144）。合并时 HEAD 已到 `7cbde3c6`：12 个文件 HEAD 没动、工作区干净，照拷；`compile/bundle.ts`、`dev/particleCorners.ts` 被别的提交改过（P11a 的 `+3`、回放跑脚本的 `+159`），`git merge-file` 三方合并，没有冲突，合并引入的增删行数与补丁逐文件一致。合并前的文件在 `ignore/p4/f4/pre-merge/`。
+
+**和计划的差异（子代理报告，Claude 核对后接受）：**
+1. 【推】新增 `particleDraws(system)`，计划、渲染器、四角探针都经它读 `draws`：已有十几个测试在解析之后整个换掉 `particle.passes`，第 0 项总读 `passes` 才不会拿到换掉之前的空数组；没有 `draws` 的手写定义（`p5d-depth.test.ts`、`p8.test.ts`）按以前的规则画一次。编译出来的定义两种情况都碰不到。
+2. 【推】强制渲染 rope 混挂时按下标跳过别的 rope 类（和第一个 rope 类的下标比），不按计划比对象：bundle 经 JSON 往返后对象不再是同一个。
+3. 【推】`render:multi-pass` 与运行时纹理的不支持项仍按基础 pass、每个系统查一次（各变体是同一个材质，逐步查会让单 renderer 的 reasons 也变）；每一步的 `inputs` 按自己的变体算。
+4. 【推】`ParticleSheetSystem.trail` 可选；另导出 `hasSpriteTrail`：宏在编完材质之前定，那时 `spriteSheet` 还不知道，`particleThick = spriteSheet || hasSpriteTrail`。同系统有拖尾的 sprite 的 `THICKFORMAT` 写在 `particleRendererDefines` 里，有帧表时 `particleSheetDefines` 再写一遍同值。
+5. 【推】表外 renderer 不计条数：`[foo, rope]` 只报 `particle:renderer:foo`。
+6. 计划之外：`render/state.ts` 的 `SceneState.constants` 加上第 r 个变体的 pass 键（否则变体的材质常量与属性写入落不到它上面）；`uploadableTextures` 也过一遍变体；ropetrail 的 `g_RenderVar0` 按这次绘制的 renderer 写（强制混挂时 sprite 那次不再写它）。
+7. 改了两处已有测试：`compile/particles.test.ts` 的 `[sprite, sprite]`、`[sprite, spritetrail]`、`[spritetrail, sprite]` 不再报 `particle:renderers`（计划要的变化）；`render/events.test.ts` 的辅助函数改成 `pool.flat()`（池现在每次出现一组），断言没动。
+8. 过程问题：子代理在一条 grep 命令里误写了 `cat > /tmp/…`，在 `/tmp` 建了一个空文件，下一条命令删掉了。Claude 一侧：验收时为占位跑了一条空的 `python -X utf8 -I -c ""`（违反约定，没执行任何代码）；核对行数时用 `git add -N` 往共享暂存区加了三个新测试文件的占位项，随即 `git reset` 撤掉，暂存区恢复为空。
+
+**点 4 的做法和计划不同：** 没建回放案例 `f4`（模拟不变，轨迹沿用 `c` 系列）。改的是 `kbp corners offline`：同一系统的第 r + 1 次绘制 `名字#<r + 1>` 对产品的 `draws[r]`，P4e 起的源码另按 `forEachDrawn` 比 static 子系统（名字取 `kbp-meta.json` 的 `children`）；源码没有 `draws` 时只比第一个 renderer。工具改动在 HEAD 快照上和改之前逐行相同（p4c-trail、p4c-sprite、p4d-rope、p4f-multi，只多出 `m-child-c` 的 5 帧、差 0）。另外回归里 `e4` 两边都失败：案例要求编译「必须报」`uniform:g_AudioSpectrum*`，P11a 步骤 1（`94f5998f`）实现了这几个 uniform 之后不再报；案例改成 `allow`（只许出现这几个），P11a 前后的源码都通过。
+
+**验收结果：**
+
+| 项 | 结果 |
+|---|---|
+| tsc / vitest / Prettier | 快照：tsc 0 error，134 个文件（2 个跳过）3166 个用例，3124 通过、42 跳过、0 失败（Claude 自跑，已知的 `pipeline.test.ts` 这次也通过）；Prettier 14 个文件通过。合并后的工作区：宿主 tsc 0 error，本步相关的 12 个测试文件 342 个用例全过（没跑全量） |
+| 新增单测 | 31 个（`compile/p4f4.test.ts` 15、`render/p4f4.test.ts` 14、`particles/p4f4.test.ts` 2）；子代理另在同一进程里加载两份源码，逐字节核对单 renderer 的编译结果（去掉 `draws` 后的 bundle 与翻译请求）和 8 帧渲染（全部缓冲、管线、探针输出）相同 |
+| `kbp regress`（HEAD 快照 ↔ 步骤 4 快照，20 个案例 + 语料） | 20 个案例逐字节相同（`e4` 两边同样失败，原因见上，改案例后两边都过）；语料 183 张里只有 `3465215190` 不同，只去掉 `particle:renderers`，没有新增的键 |
+| 覆盖 | 粒子用法完全覆盖 107 → 108（带粒子的场景全部覆盖）；能渲染不变 |
+| 离线四角（`p4c-trail`、`p4c-sprite`、`p4d-rope`、`p4f-multi` fps 20 / 60） | 65 个系统、不符 0 处：T8、T8r 两个 renderer 的四角都差 0；`m-st-zero#2`（拖尾、速度 0）我们不写顶点、WPE 四角全是 NaN；`m-ss#2`（第二个 sprite，`fixed`、`axis 1 0 0`）、`m-child-c` / `m-child-c#2`（子系统的两个 renderer）差 0；两个工程不再报 `particle:renderers` |
+| 变异（`ignore/p4/f4/mutate_f4.py`，9 处） | 全部检出、快照按原字节还原。改变体宏的那处（每个变体都按模拟用的 renderer 编）单测与四角都抓到（T8#2 差 60 像素）；其余 8 处（sprite 不随系统变厚、第 r 个变体沿用第 0 个的键、能力表回到「多于一个就报」、步骤倒序、子系统只出第一个、uniform 按第一个 renderer、几何按模拟用的 renderer、轨迹 `thick` 旧规则）只有单测抓到：离线四角自己算 uniform，看不到渲染器里的改动 |
+| 整帧（真机宿主按工作区构建，`render_scene` 确定性回放，和 WPE 的 Present 比） | `p4c-trail` 第 922 帧、`p4f-multi` fps 60 第 789 帧整帧 0 差异。`p4f-multi` fps 20 第 278 帧差 25 个像素（最大 196），都在 `m-ss` 旋转 sprite 的两条斜边上：第 251–275 帧日志与轨迹都没有、时间线只能平分，粒子出生时刻跟着偏，这一帧 x 是 51.84（WPE 52.30），斜边错开一列，和绘制无关 |
+| 真机 | `3465215190`（Rainy Day）强制渲染出图正常，`Snow` 159 颗，不支持项里没有 `particle:renderers`。宿主产物按工作区重建过（`target/debug/resources/wpe-scene`）。测完 `projects_remove` 移除两条测试行（`p4f-multi`、`p4c-trail`），没有设强制渲染开关 |
+
+### 没测到的（步骤 4，2026-11-14 记）
+
+- `Snow` 只看了强制渲染的一帧，没和 WPE 抓帧比：这张另差 18 项，不能渲染，画面整体本来就和 WPE 不同。代码里在 `compile/features.ts` 的多 renderer 规则处标了 `TODO:[WPE_SCENE]`（2026-11-14 用户），这张能渲染之后抓帧对比。
+- 渲染器侧（uniform、几何、绘制顺序）只有单测和三帧整帧对比，离线四角看不到；实例化模板（事件子系统）挂多个 renderer 只有单测，测试工程里没有。
+- 帧表系统（`spriteSheet`）与 spritetrail 混挂、两个朝向不同的非厚格式 sprite 的 `TEX0FORMAT`（格式 8–11 以外）只有单测。
+- rope 类与别的 renderer 混挂仍报 `particle:renderers`，强制渲染时只画第一个 rope 类，没有 WPE 对照。
+- `g_RenderVar0` 的残值（WPE 是全局、没写的分量留着上一次绘制的值）不复刻，按读码不影响画面（sprite 变体不读它），没有实测。
+- 多 renderer 系统每帧多写一次顶点，开销没量。

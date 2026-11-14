@@ -47,7 +47,7 @@
  *   （`p5b-grp-nofx` 事件 125 关混合、`nofx0` 事件 120 translucent；rea-p5-modelflags §2.6 的 `(flags & 0x60) == 0x20`），
  *   colorBlendMode 31 照普通上屏改 additive（读码，没有实测）。
  * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：`particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序；有子系统时
- *   按模板树先序给出每个模板的步骤（P4e 步骤 1、2），绘制顺序与快照由渲染器每帧现排。
+ *   按模板树先序给出每个模板的步骤（P4e 步骤 1、2），绘制顺序与快照由渲染器每帧现排；一个系统多条 renderer 时每条一个步骤（P4f 步骤 4）。
  * - **文本层**（P6b 1d，`SceneLayer.text`，rea-p6b-layout 3–5，p6b-fx 抓帧）：图像层的一种，基础 pass 换成 `text` 步骤（逐字四边形，
  *   见 `TextStep`），尺寸来自排版（`TextLayout.size`、`compositeSize`），不来自 JSON 的 `size`；排版为空时整层不画。直接上屏是
  *   `[背景] → 普通字形 → [彩色字形]`；合成路径的基础 pass 是「清成背景色」（开了 `opaquebackground`）或 `composelayer_clearalpha`
@@ -74,7 +74,7 @@
  *   计划都认（`passInputs`）。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
-import { MAX_CHILD_DEPTH, type SceneParticle } from "../compile/particles";
+import { isRopeRenderer, MAX_CHILD_DEPTH, particleDraws, type SceneParticle } from "../compile/particles";
 import { NO_INSET, textureUvExtent, uvInset } from "./layout";
 
 export type TextureRef =
@@ -193,6 +193,11 @@ export interface ParticleStep {
    * 否则（顶层与 static 子孙）每帧恰好一次。
    */
   instanced: boolean;
+  /**
+   * 这一步画系统的第几条 renderer（`SceneParticle.draws` 的下标，P4f 步骤 4）：一个系统几条表内 renderer 就几个步骤，`pass` 是那一条的
+   * 变体，朝向、`g_RenderVar0` 与写顶点的规则也按那一条（渲染器经 `particleDraws` 取）。单 renderer 的系统是 0。
+   */
+  renderer: number;
 }
 /**
  * 文本层的一次绘制（P6b 1d，rea-p6b-layout 3.2、4、5）：几何不是图层四边形，是排版出的逐字四边形（`text/layout.ts` 的 `TextMesh`，
@@ -411,7 +416,10 @@ export function swapCompositeIndices(steps: readonly LayerStep[]): LayerStep[] {
  * `node` 是模板路径。步骤只用来预备管线与程序、做渲染器自查：一帧里实际画几次、按什么顺序、快照拷在哪里，由渲染器沿
  * `ParticleSystem.forEachDrawn` 每帧现排（`render/scene.ts` 的 `particle-tree` op），所以计划里不再有快照步骤。
  * - 基础材质为空（没有 pass）的系统整棵子树都不画（`sys+0x358 == 0` 直接返回），也不列出它的子孙。
- * - `renderer: []`（`renderers` 为空）的系统自己不画、不给步骤，照常列出子系统（语料里只靠子系统出图的发射器）。
+ * - `renderer: []`（`draws` 为空）的系统自己不画、不给步骤，照常列出子系统（语料里只靠子系统出图的发射器）。
+ * - 一个系统多条 renderer（P4f 步骤 4，rea-p4f-script.md 8.3）：按 `draws` 的顺序每条一个步骤（`renderer` 是下标），各用自己那一条的
+ *   变体 pass，同一系统的几步连着、排在它的子系统之前（WPE 的 renderer 循环在递归之前，8.3、8.4）。强制渲染 rope 类混挂时只出模拟跟着建
+ *   的那条 rope 类。
  *
  * 快照（P4b 步骤 5，`genericparticle` 的 `REFRACT` 从 `g_Texture3` 读 `_rt_FullFrameBuffer`）的规则见 `particleTreeWantsFramebuffer` 与
  * 渲染器：本帧先序里第一个需要帧缓冲的系统之前拷一次，每对象至多一次（折射位 `obj+0x93d` 父子共用）。
@@ -426,24 +434,36 @@ export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPla
     if (!pass) return false;
     // 编译期已报 `particle:material:passes`；渲染器只画第一个
     if (system.passes.length > 1) reasons.push("render:multi-pass");
-    const inputs = passInputs(pass);
-    for (const [slot, name] of Object.entries(pass.runtime)) {
-      if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
-      else reasons.push(`render:texture-rt:${name}`);
-    }
-    if (system.renderers.length)
+    // 运行时纹理按基础材质查一次：各 renderer 的变体是同一个材质加宏（rea-p4f-script.md 8.1），槽位与 `_rt_*` 名字都相同
+    for (const name of Object.values(pass.runtime))
+      if (name !== FRAMEBUFFER_RT) reasons.push(`render:texture-rt:${name}`);
+    // 一个系统几条表内 renderer 就几个步骤（P4f 步骤 4，rea-p4f-script.md 8.3）：数组顺序、各用自己那一条的变体，都排在子系统之前
+    // （`visitParticleTemplates` 在本回调之后才走子孙，同 WPE 的循环在递归之前）。`draws` 为空（`renderer: []`）时不出步骤，照常列子系统
+    const draws = particleDraws(system);
+    // 强制渲染 rope 类混挂（能力表报 `particle:renderers`）：只画模拟跟着建 rope 表 / 拖尾历史的那条 rope 类（第一个，
+    // `SceneParticle.renderer`），别的 rope 类跳过。按下标比，不比对象：bundle 经 JSON 往返后对象不再是同一个
+    const rope = draws.findIndex((draw) => isRopeRenderer(draw.renderer?.kind));
+    draws.forEach((draw, renderer) => {
+      if (isRopeRenderer(draw.renderer?.kind) && renderer !== rope) return;
+      const variant = draw.passes[0];
+      if (!variant) return;
+      const inputs = passInputs(variant);
+      for (const [slot, name] of Object.entries(variant.runtime))
+        if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
       steps.push({
         kind: "particles",
-        pass,
+        pass: variant,
         target: { kind: "scene" },
         inputs,
-        blending: pass.blending,
-        raster: rasterState(pass, pass, pass.blending),
+        blending: variant.blending,
+        raster: rasterState(variant, variant, variant.blending),
         perspective: (system.flags & 4) !== 0,
         node,
         world: (system.flags & 1) !== 0,
         instanced,
+        renderer,
       });
+    });
   });
   return { composite: null, steps, reasons };
 }

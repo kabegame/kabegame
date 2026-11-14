@@ -151,9 +151,10 @@ export function trailDrawable(
 /**
  * 把存活粒子按槽序写成交错顶点（每粒子 4 个），返回写了几个粒子。`into` 放不下的粒子不写（容量按 `maxcount` 分配，
  * 存活数不会超过它）。只写布局里有的输入，其余位置保持原值。
- * `trail` 是拖尾系统（renderer 是 `spritetrail`）的眼位（`trailEye`）：给了时跳过退化的粒子（`trailDrawable`），返回实际写的
- * 粒子数；非拖尾系统传 null，速度为 0 的粒子照写。退化粒子在写顶点时跳过、不靠 GPU 丢 NaN 图元：一个系统只有一个 renderer，
- * 顶点只给这一次绘制用（以后支持多 renderer 时，拖尾那次绘制要改用自己的索引）。
+ * `trail` 是拖尾绘制（这次的 renderer 是 `spritetrail`）的眼位（`trailEye`）：给了时跳过退化的粒子（`trailDrawable`），返回实际写的
+ * 粒子数；别的 renderer 传 null，速度为 0 的粒子照写。退化粒子在写顶点时跳过、不靠 GPU 丢 NaN 图元：每次绘制各写各的顶点
+ * （P4f 步骤 4：一个系统多条 renderer 时每条一份，不像 WPE 那样共用一个缓冲，rea-p4f-script.md 8.2），所以同系统 sprite 那次照写、
+ * 拖尾那次跳过，和 WPE 共用缓冲、拖尾那次在 GPU 上丢掉 NaN 图元画出来相同（8.3，`m-st-zero`）。
  * 本帧脚本发出的粒子（`scriptBorn`，P4f 步骤 3，rea-p4f-script.md 4.4）不写：WPE 写完顶点才跑脚本，它们下一帧才画。
  */
 export function writeVertices(

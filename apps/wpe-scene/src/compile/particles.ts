@@ -379,8 +379,21 @@ export interface SceneParticle {
    * 写成 `[]` 时 WPE 不补，系统不画（语料里都是只靠子系统出图的发射器）。
    */
   renderers: ParticleModule[];
-  /** 绘制用的 renderer（P4c 步骤 5，`particleRenderer`）：种类、拖尾的 `g_RenderVar0`、朝向、rope 的绘制参数（P4d 步骤 1）。 */
+  /**
+   * 模拟用的 renderer（P4c 步骤 5 起，`particleRenderer`；P4f 步骤 4 改了含义）：有 rope 类时是第一个 rope 类（rope 表与拖尾历史跟它建，
+   * `particles/system.ts`、`rope.ts`、`ropetrail.ts` 读它），否则是第一个表内的，一个都没有时缺省 sprite。支持的组合里 rope 类总是唯一的
+   * renderer，所以和以前「第一个」相同；强制渲染 rope 类与别的 renderer 混挂（`particle:renderers`）时模拟仍有 rope 表。
+   * 每次绘制用的是 `draws` 里各自那一项的 renderer。
+   */
   renderer: ParticleRenderer;
+  /**
+   * 绘制（P4f 步骤 4，rea-p4f-script.md 8.3）：表内的每个 renderer 一项，JSON 顺序，各画一次；`renderer: []` 时为空。只有表外类型
+   * （已报）时按缺省 sprite 画一项，同以前强制渲染的画法。`renderer` 是这一条的绘制参数（朝向、拖尾的 `g_RenderVar0`、rope 的参数），
+   * `passes` 是这一条的变体材质（8.1：同一个基础材质按 renderer 类型加宏）：第 0 项就是 `SceneParticle.passes`（同一个数组，
+   * `parseParticle` 建的时候就连起来），第 r 项（r ≥ 1）的稳定键 `<系统键>/renderers/<r>/passes/<k>`（`compileScene` 编）。
+   * 读的地方经 `particleDraws`（第 0 项总读 `passes`）。
+   */
+  draws: SceneParticleDraw[];
   /** 缺省值按正交还是透视那一套选（`isOrthographic`）。 */
   orthographic: boolean;
   /** 控制点数组（总是 8 项，`readControlPoints`）。 */
@@ -396,7 +409,8 @@ export interface SceneParticle {
   hdr: boolean;
   /**
    * 粒子材质的 pass（稳定键 `objects/<i>/particle/passes/<n>`）。步骤 4 才画：不放进 `layer.passes`，图像层的渲染图、
-   * `buildableLayers`、`checkRenderable` 都按 `passes` 判断。
+   * `buildableLayers`、`checkRenderable` 都按 `passes` 判断。是第一个 renderer 的变体（`draws[0].passes`，P4f 步骤 4）；
+   * `renderer: []` 时是按缺省 sprite 编的一份，只给「有没有材质」「要不要帧缓冲」用。
    */
   passes: ScenePass[];
   /**
@@ -459,8 +473,9 @@ export function isRopeRenderer(kind: ParticleRenderer["kind"] | undefined): kind
 }
 
 /**
- * 绘制用的 renderer（P4c 步骤 5）。一个系统只画一次：多个 renderer 时 WPE 各画一次、共用同一个顶点缓冲（rea-p4c-render.md 6.3），
- * 这里没做，能力表报 `particle:renderers`（`checkParticleFeatures`），强制渲染时取第一个。
+ * 一条 renderer 的绘制参数（P4c 步骤 5）。一个系统有几条表内 renderer 就画几次（P4f 步骤 4，rea-p4f-script.md 8.3）：按数组顺序，
+ * 每次用自己这一条的朝向与 `g_RenderVar0`、绑自己的变体材质（`SceneParticle.draws`）。rope 类和别的 renderer 混挂仍由能力表报
+ * `particle:renderers`（`checkParticleFeatures`）。
  */
 export interface ParticleRenderer {
   kind: "sprite" | "spritetrail" | "rope" | "ropetrail";
@@ -480,6 +495,14 @@ export interface ParticleRenderer {
   rope: RopeRenderer | null;
   /** `ropetrail` 的绘制参数（P4d 步骤 2）；其余 renderer 为 null。 */
   ropetrail: RopeTrailRenderer | null;
+}
+
+/**
+ * `SceneParticle.draws` 的一项（P4f 步骤 4）：这一次绘制的 renderer 与变体材质的 pass。
+ */
+export interface SceneParticleDraw {
+  renderer: ParticleRenderer;
+  passes: ScenePass[];
 }
 
 /** 表内的 renderer。 */
@@ -508,17 +531,53 @@ function ropeRateAndLifetime(
 }
 
 /**
- * 系统的 renderer：第一个表内的 renderer（`sprite` / `spritetrail` / `rope` / `ropetrail`）；一个都没有时按缺省的 `sprite` 画。
- * 表外 renderer 已由能力表报；`renderer: []` 时 WPE 不画这个系统（只靠子系统出图的发射器），这里照样给出缺省的 sprite（材质的宏
- * 按它编），绘制由 `render/graph.ts` 的 `planParticleLayer` 按 `renderers` 为空跳过（P4e 步骤 1）。`emitters`、`initializers` 给 rope 的
- * `R`、`L`（`ropeRateAndLifetime`），缺省为空（`R = L = 0`）。
+ * 系统的模拟用 renderer（`SceneParticle.renderer`，P4f 步骤 4 起的含义）：表内 renderer（`sprite` / `spritetrail` / `rope` / `ropetrail`）
+ * 里有 rope 类时取第一个 rope 类，否则取第一个；一个都没有时按缺省的 `sprite`。表外 renderer 已由能力表报；`renderer: []` 时 WPE 不画这个
+ * 系统（只靠子系统出图的发射器），这里照样给出缺省的 sprite（材质的宏按它编），绘制由 `render/graph.ts` 的 `planParticleLayer` 按 `draws`
+ * 为空跳过（P4e 步骤 1）。`emitters`、`initializers` 给 rope 的 `R`、`L`（`ropeRateAndLifetime`），缺省为空（`R = L = 0`）。
  */
 export function particleRenderer(
   renderers: readonly ParticleModule[],
   emitters: readonly ParticleModule[] = [],
   initializers: readonly ParticleModule[] = [],
 ): ParticleRenderer {
-  const module = renderers.find((item) => DRAWN_RENDERERS.has(item.name));
+  return simulationRenderer(drawRenderers(renderers, emitters, initializers), emitters, initializers);
+}
+
+/**
+ * 各次绘制的 renderer（P4f 步骤 4，rea-p4f-script.md 8.1、8.3：WPE 对 renderer 流逐条各建一个变体、各画一次）：表内的每一条一项，JSON
+ * 顺序；`renderers` 非空却一条表内的都没有（只有表外类型，能力表已报）时按缺省 sprite 一项，同以前强制渲染的画法；`renderer: []` 为空。
+ */
+function drawRenderers(
+  renderers: readonly ParticleModule[],
+  emitters: readonly ParticleModule[],
+  initializers: readonly ParticleModule[],
+): ParticleRenderer[] {
+  if (!renderers.length) return [];
+  const drawn = renderers.filter((item) => DRAWN_RENDERERS.has(item.name));
+  return drawn.length
+    ? drawn.map((module) => rendererOf(module, emitters, initializers))
+    : [rendererOf(undefined, emitters, initializers)];
+}
+
+/**
+ * 模拟用的 renderer（见 `particleRenderer`）：rope 表与 ropetrail 的历史是系统级的（rea-p4f-script.md 8.2），跟第一个 rope 类建；没有时取
+ * 第一个绘制的；`renderer: []` 时缺省 sprite。
+ */
+function simulationRenderer(
+  draws: readonly ParticleRenderer[],
+  emitters: readonly ParticleModule[],
+  initializers: readonly ParticleModule[],
+): ParticleRenderer {
+  return draws.find((item) => isRopeRenderer(item.kind)) ?? draws[0] ?? rendererOf(undefined, emitters, initializers);
+}
+
+/** 一条表内 renderer 的绘制参数；`module` 缺省时是缺省的 `sprite`。 */
+function rendererOf(
+  module: ParticleModule | undefined,
+  emitters: readonly ParticleModule[],
+  initializers: readonly ParticleModule[],
+): ParticleRenderer {
   const fields = module?.fields ?? readParticleModule("renderer", { name: "sprite" }, true).fields;
   const trail = module?.name === "spritetrail";
   // `divss`：`1.0f / uvscale`，0 时不写（def 构造值 1.0，`0x1401c17c6`）；rope 两类共用 `sys+0x30`
@@ -560,6 +619,45 @@ export function particleRenderer(
     rope,
     ropetrail,
   };
+}
+
+/**
+ * 系统的各次绘制（`SceneParticle.draws`，P4f 步骤 4），计划、渲染器、四角探针都经这里读：
+ * - 第 0 项的 pass 总读 `passes`：两者本来是同一个数组，单测与工具会整个换掉 `passes`（`particle.passes = [...]`），从这里读才不会拿到
+ *   换掉之前的那个空数组；
+ * - 没有 `draws` 的手写定义（单测）按 P4f 步骤 4 之前的规则：`renderers` 非空时画一次，用 `renderer`（可能也没写）。
+ * 编译出来的定义两种情况都碰不到，返回的就是 `draws` 本身。
+ */
+export function particleDraws(
+  system: Partial<Pick<SceneParticle, "draws" | "passes" | "renderers" | "renderer">>,
+): SceneParticleDraw[] {
+  const passes = system.passes;
+  const draws =
+    system.draws ?? (system.renderers?.length ? [{ renderer: system.renderer!, passes: passes ?? [] }] : []);
+  if (!passes || !draws.length || draws[0].passes === passes) return draws;
+  return [{ renderer: draws[0].renderer, passes }, ...draws.slice(1)];
+}
+
+/**
+ * 系统里有 `spritetrail`（WPE 解析到它时置系统标志 `0x2000000`，rea-p4c-render.md 6.1；renderer 流里算 `need |= 2`，
+ * rea-p4f-script.md 8.1）：同系统的 sprite 也走厚格式。
+ */
+export function hasSpriteTrail(
+  system: Partial<Pick<SceneParticle, "draws" | "passes" | "renderers" | "renderer">>,
+): boolean {
+  return particleDraws(system).some((draw) => draw.renderer?.kind === "spritetrail");
+}
+
+/**
+ * 系统的 sprite 缓冲是厚格式（WPE 系统标志 `& 0x3000000`，rea-p4f-script.md 8.2）：有 spritetrail（`0x2000000`），或槽 0 是帧表
+ * （`0x1000000`，`spriteSheet`）。厚格式的顶点带速度与 frame 列（`a_TexCoordVec4C1`），sprite 与 spritetrail 两次绘制都是。
+ * 轨迹的 `thick` 列按它（`particles/track.ts`）；材质的宏在编完材质之前定，`spriteSheet` 那时还不知道，按槽 0 的纹理判断帧表、
+ * 按 `hasSpriteTrail` 判断拖尾（`compile/bundle.ts` 的 `particleDefines`）。
+ */
+export function particleThick(
+  def: Pick<SceneParticle, "spriteSheet"> & Partial<Pick<SceneParticle, "draws" | "passes" | "renderers" | "renderer">>,
+): boolean {
+  return def.spriteSheet || hasSpriteTrail(def);
 }
 
 /** 粒子 JSON 的顶层键（`FUN_1401c5490` 读的全部键）；其余报 `particle:system:<键>`。 */
@@ -819,6 +917,12 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
   const renderers = modules("renderer");
   const emitters = modules("emitter");
   const initializers = modules("initializer");
+  // 绘制（P4f 步骤 4）：第 0 项的 pass 就是 `passes`（同一个数组），模拟用的 renderer 取自同一份对象
+  const passes: ScenePass[] = [];
+  const draws = drawRenderers(renderers, emitters, initializers).map((renderer, r): SceneParticleDraw => ({
+    renderer,
+    passes: r === 0 ? passes : [],
+  }));
   return {
     file: options.file,
     ...readParticleSystem(json),
@@ -827,13 +931,18 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
     initializers,
     operators: modules("operator"),
     renderers,
-    renderer: particleRenderer(renderers, emitters, initializers),
+    renderer: simulationRenderer(
+      draws.map((draw) => draw.renderer),
+      emitters,
+      initializers,
+    ),
+    draws,
     orthographic: options.orthographic,
     controlpoints: readControlPoints(json),
     instance: parseParticleInstance(options.instanceoverride, options.resolveInstance),
     colorSystem: particleColorSystem(json, options.sceneVersion ?? 0),
     hdr: options.hdr ?? false,
-    passes: [],
+    passes,
     children: [],
   };
 }

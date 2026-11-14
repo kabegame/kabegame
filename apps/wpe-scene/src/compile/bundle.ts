@@ -80,6 +80,7 @@ import {
   type SceneValue,
 } from "./model";
 import {
+  hasSpriteTrail,
   isOrthographic,
   isRopeRenderer,
   MAX_CHILD_DEPTH,
@@ -212,13 +213,14 @@ export function spriteSheet(
   };
 }
 
-/** 粒子材质宏要的系统描述（`readParticleSystem` 的两项，加上绘制用的 renderer）。 */
+/** 粒子材质宏要的系统描述（`readParticleSystem` 的两项，加上这一个变体的 renderer 与系统里有没有拖尾）。 */
 export interface ParticleSheetSystem {
   flags: number;
   animationMode: "sequence" | "randomframe";
   /**
-   * 系统的 renderer（`SceneParticle.renderer` 的种类与朝向模式，P4c 步骤 5）：拖尾写 `THICKFORMAT`、`TRAILRENDERER`
-   * （`particleRendererDefines`），非厚格式 sprite 的非 screen 朝向决定 `TEX0FORMAT`（`particleTex0Format`）。缺省是 screen 朝向的 sprite。
+   * 这一个变体的 renderer（`SceneParticle.draws` 那一项的种类与朝向模式，P4c 步骤 5；P4f 步骤 4 起一条 renderer 一个变体）：拖尾写
+   * `THICKFORMAT`、`TRAILRENDERER`（`particleRendererDefines`），非厚格式 sprite 的非 screen 朝向决定 `TEX0FORMAT`
+   * （`particleTex0Format`）。缺省是 screen 朝向的 sprite。
    * rope（P4d 步骤 1）另带 `subdivision`（`TRAILSUBDIVISION`），着色器换成 `ROPE_SHADER`。ropetrail（P4d 步骤 2）同样换着色器，
    * 另带细分与三个开关（`TRAILSCROLLALPHA`、`TRAILFADEALPHA`、`TRAILFADESIZE`）。
    */
@@ -228,6 +230,11 @@ export interface ParticleSheetSystem {
     rope?: Pick<RopeRenderer, "subdivision"> | null;
     ropetrail?: Pick<RopeTrailRenderer, "subdivision" | "scrolling" | "fadeAlpha" | "fadeSize"> | null;
   };
+  /**
+   * 系统里有 spritetrail（`hasSpriteTrail`，P4f 步骤 4）：厚格式看整个系统（rea-p4f-script.md 8.1 的 `need & 2`，rea-p4b-render.md
+   * 2.4），同系统的 sprite 变体也写 `THICKFORMAT`、`TEX0FORMAT` 按厚格式的规则。缺省 false（单 renderer 的 sprite 系统没有拖尾）。
+   */
+  trail?: boolean;
 }
 
 /**
@@ -240,8 +247,10 @@ export const ROPE_SHADER = "genericropeparticle";
 /**
  * renderer 的宏（`FUN_1401d2340` 的 renderer 分发，`0x1401d2590`，rea-p4c-render.md 6.2）：`spritetrail` 分支
  * （`0x1401d2c02`–`0x1401d2f78`）写 `THICKFORMAT = 1`（`0x1401d2c6d`）、`TRAILRENDERER = 1`（`0x1401d2cf6`），有帧表时再照
- * sprite 厚格式的写法加 `SPRITESHEET*`（`particleSheetDefines`）。sprite 不写 renderer 宏（朝向不进宏，7.8）。只支持系统里一个
- * renderer（多个报 `particle:renderers`）。
+ * sprite 厚格式的写法加 `SPRITESHEET*`（`particleSheetDefines`）。sprite 不写 renderer 宏（朝向不进宏，7.8），只在厚格式时写
+ * `THICKFORMAT = 1`（`0x1401d2f78` 分支，rea-p4f-script.md 8.1）：帧表的 `THICKFORMAT` 随 `particleSheetDefines` 写，同系统有
+ * spritetrail 时（`system.trail`，P4f 步骤 4，T8：sprite 那次有 `THICKFORMAT`、没有 `TRAILRENDERER`）在这里写。一个系统几条 renderer
+ * 就编几个变体，每个变体按自己那条调一次（`compileParticleMaterial`）。
  * rope 分支（`0x1401d29e1`–`0x1401d2bfd`，rea-p4d-rope.md 3.4）：无条件 `THICKFORMAT = 1`，`TRAILSUBDIVISION = subdivision`，
  * `ORIENTATION = 朝向模式`（`0x1401d2b3e`，值为 0 也写）；`TEX0FORMAT` 只在格式 8–11 时写（`particleTex0Format` 的厚格式一支），
  * 不写 `SPRITESHEET*`（`particleDefines` 跳过帧表宏）。
@@ -270,12 +279,15 @@ export function particleRendererDefines(system: ParticleSheetSystem): Record<str
       ...(trail?.fadeSize ? { TRAILFADESIZE: "1" } : {}),
     };
   }
+  // 同系统有拖尾的 sprite（P4f 步骤 4）：顶点缓冲是厚格式，sprite 的变体也写 THICKFORMAT（帧表时 `particleSheetDefines` 再写一遍同值）
+  if (system.trail) return { THICKFORMAT: "1" };
   return {};
 }
 
 /**
  * 粒子路径要写的 `TEX0FORMAT` 值（rea-p4b-render.md 2.4，`FUN_1401d2340`）；不写时为 undefined。
- * - 厚格式（拖尾，或槽 0 是帧表）：只在格式 8–11 时写（`particleWritesTex0Format`，拖尾分支 `0x1401d2ed1`）；
+ * - 厚格式（拖尾，或槽 0 是帧表；P4f 步骤 4 起同系统有拖尾的 sprite 也是，rea-p4f-script.md 8.1）：只在格式 8–11 时写
+ *   （`particleWritesTex0Format`，拖尾分支 `0x1401d2ed1`）；
  * - 非厚格式的 sprite：格式 8–11，**或者朝向不是 screen**（`movzx eax, r8b; or eax, [rdi + 0xc]`，`0x1401d3189`）时写，值是格式本身
  *   （不在 8–11 的格式不影响画面：`ConvertTexture0Format` 只认 RG88、RG1616F、R8、R16F），否则直接用基础材质。
  * WPE 在槽 0 没有纹理时格式取 0（`0x1401d2513`），我们取不到格式（槽 0 是 `_rt_*`、注解也没有缺省）时不写，语料里没有这种写法。
@@ -502,7 +514,7 @@ export interface SceneLayer {
   passthrough: ScenePass | null;
   /**
    * 粒子对象解析出的粒子系统（`particles.ts`）；其它对象、或粒子 JSON 读不到时为 null。粒子材质的 pass 在
-   * `particle.passes` 里，不在上面的 `passes`（步骤 4 才接绘制）。
+   * `particle.passes` 里，不在上面的 `passes`（步骤 4 才接绘制）；第 2 条起的 renderer 的变体在 `particle.draws`（P4f 步骤 4）。
    */
   particle: SceneParticle | null;
   /**
@@ -1190,7 +1202,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    * 槽 0 没按名字写时取着色器注解的 `default`：先不带这个宏翻译一次读注解（结果进缓存，不上报，正式翻译会再报一遍），
    * 仍取不到时不写（语料里粒子材质的槽 0 都按名字写了）。
    * 槽 0 的纹理带帧表（`SceneTexture.sheet`，WPE 据此置系统的 `0x1000000`）时另写帧表宏（`particleSheetDefines`，P4b 步骤 2）；
-   * 拖尾另写 `THICKFORMAT`、`TRAILRENDERER`（`particleRendererDefines`，P4c 步骤 5）。
+   * 拖尾另写 `THICKFORMAT`、`TRAILRENDERER`（`particleRendererDefines`，P4c 步骤 5），同系统有拖尾的 sprite 另写 `THICKFORMAT`
+   * （P4f 步骤 4）。
    * 槽 0 的纹理按同一规则取：按名字写的（`slots[0]`），否则是注解的 `default`。
    * rope（P4d 步骤 1）：`shaderName` 是换过的 `ROPE_SHADER`，读注解的那次同样带 `.geom`；只写 rope 的宏与 8–11 的 `TEX0FORMAT`，
    * 不写帧表宏（rea-p4d-rope.md 3.4）。ropetrail（P4d 步骤 2）同一条路，宏换成 ropetrail 的（不写 `THICKFORMAT`）。
@@ -1216,9 +1229,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         texture = found ? bundle.textures[found.index] : undefined;
       }
     }
-    // 拖尾一定走厚格式（`need |= 2`），帧表的 sprite 也是（rea-p4b-render.md 2.4）；rope 两类的 `TEX0FORMAT` 同样只看 8–11
-    // （rea-p4d-rope.md 3.4：不像非厚格式 sprite 那样也看朝向；ropetrail 虽是非厚格式，也只看格式）
-    const thick = rope || system.renderer?.kind === "spritetrail" || !!texture?.sheet;
+    // 拖尾一定走厚格式（`need |= 2`），帧表的 sprite 也是（rea-p4b-render.md 2.4）；厚格式看整个系统，同系统有拖尾的 sprite 也是
+    // （`system.trail`，P4f 步骤 4，rea-p4f-script.md 8.1）。rope 两类的 `TEX0FORMAT` 同样只看 8–11（rea-p4d-rope.md 3.4：不像非厚格式
+    // sprite 那样也看朝向；ropetrail 虽是非厚格式，也只看格式）
+    const thick = rope || system.renderer?.kind === "spritetrail" || !!system.trail || !!texture?.sheet;
     const tex0 = particleTex0Format(format, thick, system);
     return {
       ...particleRendererDefines(system),
@@ -1265,7 +1279,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    * 一个粒子系统（顶层与子系统共用，P4e 步骤 1）：能力检查 → 解析 → 编材质的 pass → 递归 `children`。`root` 是顶层系统（顶层自己给
    * null），`depth` 是嵌套深度（顶层 0）。
    * - 稳定键：顶层 `objects/<i>/particle/passes/<k>`（不变），子系统 `objects/<i>/particle/children/<n>/…/passes/<k>`，`<n>` 是条目在
-   *   JSON `children` 里的下标（不认识的类型丢掉之后也不移位）。
+   *   JSON `children` 里的下标（不认识的类型丢掉之后也不移位）。第 r 条 renderer（r ≥ 1）的变体在系统键后接 `renderers/<r>`
+   *   （P4f 步骤 4，`compileParticleMaterial`）。
    * - `instanceoverride`：只有顶层登记绑定（就地目标是对象的）；子系统按缺省值解析，实例值由模拟器从对象上传下去（`ParticleSystem`
    *   的 `link`，rea-p4e-children 3.4）。能力上子系统按自己的 `flags` 再查一遍对象的 `instanceoverride`（`color`、`colorn` 的照报项
    *   看各自的 bit3）。
@@ -1330,7 +1345,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     return particle;
   }
 
-  /** 粒子系统的材质（P4a 步骤 2）：pass 放进 `particle.passes`，稳定键 `<key>/passes/<k>`；帧表纹理定 `spriteSheet`。 */
+  /**
+   * 粒子系统的材质（P4a 步骤 2）：pass 放进 `particle.passes`，稳定键 `<key>/passes/<k>`；帧表纹理定 `spriteSheet`。
+   * 一个系统多条 renderer（P4f 步骤 4，rea-p4f-script.md 8.1）：WPE 对 renderer 流逐条用同一个基础材质按类型加宏建一个变体，这里同样
+   * 每个 `draws` 项编一份，放进那一项的 `passes`。第 0 项就是 `particle.passes`、沿用 `<key>/passes/<k>`（单 renderer 系统的键、宏、程序、
+   * 常量、管线缓存都不变）；第 r 项（r ≥ 1）是 `<key>/renderers/<r>/passes/<k>`（子系统的 `key` 已带自己的 `children/<n>`）。材质常量的
+   * 用户属性按 pass 键登记（`shaderUniforms`），每个变体各登记一份，改值时都写到。`renderer: []`（`draws` 为空）时照旧按缺省 sprite 编一份
+   * 放进 `passes`，只给「有没有材质」「要不要帧缓冲」用。厚格式看整个系统（`hasSpriteTrail`）。
+   */
   async function compileParticleMaterial(
     system: JsonObject,
     particle: SceneParticle,
@@ -1350,13 +1372,21 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const material = parseMaterial(materialText);
     // 语料里粒子材质都是 1 个 pass；多 pass 怎么画没读，保守报
     if (material.passes.length !== 1) unsupported.add("particle:material:passes");
-    const sheetSystem: ParticleSheetSystem = {
-      flags,
-      animationMode: particle.animationMode,
-      renderer: particle.renderer,
-    };
-    for (const [k, pass] of material.passes.entries())
-      particle.passes.push(await compilePass(pass, { key: `${key}/passes/${k}`, particle: sheetSystem }));
+    const trail = hasSpriteTrail(particle);
+    const variants = particle.draws.length
+      ? particle.draws
+      : [{ renderer: particle.renderer, passes: particle.passes }];
+    for (const [r, draw] of variants.entries()) {
+      const sheetSystem: ParticleSheetSystem = {
+        flags,
+        animationMode: particle.animationMode,
+        renderer: draw.renderer,
+        trail,
+      };
+      const base = r === 0 ? key : `${key}/renderers/${r}`;
+      for (const [k, pass] of material.passes.entries())
+        draw.passes.push(await compilePass(pass, { key: `${base}/passes/${k}`, particle: sheetSystem }));
+    }
     // 基础材质槽 0 的纹理带帧表：WPE 置系统的 `0x1000000`，模拟器据此每帧算 frame（rea-p4b-render.md 2.3、2.5）
     const slot0 = particle.passes[0]?.textures[0];
     particle.spriteSheet = slot0 !== undefined && !!bundle.textures[slot0].sheet;

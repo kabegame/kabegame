@@ -30,6 +30,10 @@
  *   再按「这个模板本帧第几次出现」取模板 draw 池里的一个 draw（各有顶点缓冲与 uniform，模型矩阵由 `forEachDrawn` 给）。顶层与 static
  *   子孙每帧恰好一次，draw 建场景时就建好；事件实例（及其子孙）的 draw 第一次用到时建、之后复用、不回收，模型矩阵变了就重写 uniform；
  *   快照插在本帧先序里第一个需要帧缓冲的系统之前，每对象至多一次。没有事件条目的场景，绘制顺序、uniform 与 draw 和步骤 1 逐字节相同。
+ *   一个系统多条 renderer（P4f 步骤 4，rea-p4f-script.md 8.3）：模板仍按模板路径，带这个系统每条 renderer 的步骤，池里每项是一次出现的
+ *   一组 draw（每条 renderer 一个，各有变体管线、顶点与 uniform），整组按 renderer 顺序连着画完才轮到子系统。各写各的顶点、不共用
+ *   缓冲（WPE 共用一份只是省一次写入，两次绘制读的是同一批粒子、同一个槽序）：sprite 那次照写速度为 0 的粒子，拖尾那次照旧跳过退化的。
+ *   单 renderer 的系统和以前逐字节相同。
  *   每个粒子层一个 `ParticleSystem`（种子默认随机，探针可固定；建场景时预热），顶点缓冲按 `maxcount` 分配，索引缓冲全场一份、
  *   只建一次。调用方每帧先 `stepParticles`（脚本之前，P4c 步骤 4）再 `update`，`encode` 把列写成顶点、`writeBuffer` 后
  *   `drawIndexed`。MVP = 视图投影 × 模型矩阵：本地系统是对象世界矩阵，世界空间系统（`flags & 1`）是单位阵；`flags & 4` 换透视
@@ -145,7 +149,7 @@ import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
 import type { SceneBundle, SceneFbo, SceneLayer, SceneModel, ScenePass, SceneTexture } from "../compile/bundle";
 import { layerCompositeName } from "../compile/dependencies";
-import type { ParticleRenderer, SceneParticle } from "../compile/particles";
+import { particleDraws, type ParticleRenderer, type SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
 import { silentParticleAudio, type ParticleAudio } from "../particles/audio";
 import { pointerScenePoint, type ControlPointInputs } from "../particles/controlpoints";
@@ -343,6 +347,12 @@ interface ParticleDraw {
    */
   system: ParticleSystem;
   /**
+   * 这次绘制的 renderer（`SceneParticle.draws[step.renderer].renderer`，P4f 步骤 4）：朝向是不是 NaN、拖尾的眼位、`g_Orientation*` 与
+   * `g_RenderVar0` 都按它（rea-p4f-script.md 8.3：每条 renderer 用自己的 `rec+4` 算朝向）。同一系统的几次绘制各不相同；实例化的 draw
+   * 换实例时不变（同一模板的实例共用定义）。没写 renderer 的手写定义（单测）为 undefined，按缺省的 sprite。
+   */
+  renderer: ParticleRenderer | undefined;
+  /**
    * 顶点布局：sprite / spritetrail 每粒子 4 个顶点（`particleVertexLayout`）；rope（`rope` 非空）每段一个实例（`ropeVertexLayout`），
    * ropetrail（`rope` 非空且系统有历史 `system.trail`）同样每段一个实例（`trailVertexLayout`）。
    */
@@ -367,8 +377,9 @@ interface ParticleDraw {
   /** 步进过（或换了系统）、还没写成顶点：`encode` 里写 `vertices` 并 `writeBuffer`。 */
   stale: boolean;
   /**
-   * 拖尾系统（renderer 是 `spritetrail`，P4c 步骤 5）写顶点时判断退化粒子用的眼位（`particles/vertices.ts` 的 `trailEye`）：
-   * `(g_EyePosition, 1)` 乘这次绘制模型矩阵的逆，和 uniform 同时算（`refreshParticleGeometry`）。非拖尾系统为 null。
+   * 拖尾绘制（这次的 renderer 是 `spritetrail`，P4c 步骤 5）写顶点时判断退化粒子用的眼位（`particles/vertices.ts` 的 `trailEye`）：
+   * `(g_EyePosition, 1)` 乘这次绘制模型矩阵的逆，和 uniform 同时算（`refreshParticleGeometry`）。别的 renderer 为 null（同系统的 sprite
+   * 那次也是，速度为 0 的粒子照写，P4f 步骤 4）。
    */
   trailEye: [number, number, number] | null;
   /**
@@ -386,14 +397,21 @@ interface ParticleDraw {
 }
 
 /**
- * 粒子层的一个模板（P4e 步骤 2）：计划里的一个 `particles` 步骤（模板路径 `step.node`）、预备好的程序与管线，以及它的 draw 池——这个模板
- * 本帧第 k 次出现用第 k 个（k 从 0 起）。非实例化的模板建场景时建第 0 个；实例化的模板第一次用到时建、之后复用、不回收（同 WPE 的池只增
- * 不减，rea-p4e-children 4.1）。
+ * 粒子层的一个模板（P4e 步骤 2）：一个模板路径（`node`）上的系统，它在计划里的 `particles` 步骤与预备好的程序、管线，以及它的 draw 池——
+ * 这个模板本帧第 k 次出现用第 k 组（k 从 0 起）。非实例化的模板建场景时建第 0 组；实例化的模板第一次用到时建、之后复用、不回收（同 WPE
+ * 的池只增不减，rea-p4e-children 4.1）。
+ * 一个系统多条 renderer（P4f 步骤 4）：`renderers` 是这个系统每条 renderer 的步骤（`draws` 顺序，强制渲染 rope 混挂时跳过的那条不在里面），
+ * 池里每组按同样的顺序每条一个 draw，一起建、一起换实例、连着画。单 renderer 的系统每组一个 draw。
  */
 interface ParticleTemplate {
-  step: ParticleStep;
-  prepared: PreparedDraw;
-  pool: Draw[];
+  /** 模板路径（各步骤的 `ParticleStep.node`）。 */
+  node: number[];
+  /** 模板路径经过事件条目（各步骤的 `ParticleStep.instanced`）。 */
+  instanced: boolean;
+  /** 这个系统的各 renderer 步骤与预备好的管线，`draws` 顺序（P4f 步骤 4）。 */
+  renderers: { step: ParticleStep; prepared: PreparedDraw }[];
+  /** 第 k 次出现用第 k 组（每组按 `renderers` 的顺序各一个 draw）；非实例化的模板建场景时建第 0 组。 */
+  pool: Draw[][];
 }
 
 /**
@@ -824,9 +842,9 @@ function writeSegments(system: ParticleSystem, layout: ParticleDraw["layout"], o
 }
 
 /**
- * 一份计划里渲染器画不了的项（加载时的自查与 `prepareVariants` 共用）。`particle` 是图层的粒子系统树：每个粒子步骤按它自己那个系统的
- * renderer 种类查程序的输入（子系统的 renderer 可以和父不同，P4e 步骤 1）。`model` 是图层的模型（P5c 步骤 2）：每个网格步骤按网格格式查
- * 程序的输入（`meshVertexLayout`）。
+ * 一份计划里渲染器画不了的项（加载时的自查与 `prepareVariants` 共用）。`particle` 是图层的粒子系统树：每个粒子步骤按它自己那个系统、
+ * 自己那一条 renderer（`step.renderer`，P4f 步骤 4）的种类查程序的输入（子系统的 renderer 可以和父不同，P4e 步骤 1）。`model` 是图层的
+ * 模型（P5c 步骤 2）：每个网格步骤按网格格式查程序的输入（`meshVertexLayout`）。
  */
 function planProblems(
   plan: LayerPlan,
@@ -841,7 +859,10 @@ function planProblems(
     if (!program) problems.push("render:no-program");
     else if (step.kind === "particles")
       problems.push(
-        ...particleAttributeProblems(program, particle ? particleNode(particle, step.node).renderer.kind : undefined),
+        ...particleAttributeProblems(
+          program,
+          particle ? particleDraws(particleNode(particle, step.node))[step.renderer]?.renderer?.kind : undefined,
+        ),
       );
     else if (step.kind === "mesh") {
       const mesh = model?.meshes[step.mesh];
@@ -952,6 +973,8 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
   };
   const addParticle = (particle: SceneParticle) => {
     particle.passes.forEach(add);
+    // 第 2 条起的 renderer 的变体（P4f 步骤 4）：同一个材质，纹理和上面相同，照样过一遍
+    for (const draw of particleDraws(particle).slice(1)) draw.passes.forEach(add);
     for (const child of particle.children ?? []) addParticle(child.system);
   };
   for (const layer of bundle.layers) {
@@ -1829,14 +1852,22 @@ export class GpuScene {
       const tree = this.createParticleTree(layer, resources, state);
       if (tree.framebuffer) this.ensureSnapshot();
       for (const step of steps) {
-        const template: ParticleTemplate = { step, prepared: prepared.get(step)!, pool: [] };
-        tree.templates.set(step.node.join("/"), template);
-        // 顶层与 static 子孙每帧恰好一次：建场景时建好（顺序同 P4e 步骤 1 的先序）；事件实例下的模板第一次用到时建
+        // 同一系统的各 renderer 步骤（P4f 步骤 4）在计划里连着、同一个模板路径，收进同一个模板
+        const path = step.node.join("/");
+        let template = tree.templates.get(path);
+        if (!template) {
+          template = { node: step.node, instanced: step.instanced, renderers: [], pool: [] };
+          tree.templates.set(path, template);
+        }
+        const entry = { step, prepared: prepared.get(step)! };
+        template.renderers.push(entry);
+        // 顶层与 static 子孙每帧恰好一次：建场景时建好第 0 组（顺序同 P4e 步骤 1 的先序，一个系统的各 renderer 连着）；事件实例下的
+        // 模板第一次用到时整组建
         if (step.instanced) continue;
         const system = tree.system.node(step.node);
-        if (!system) throw new SceneRenderError([`render:particle-node:${step.node.join("/")}`]);
-        const draw = this.createDraw(layer, step, resources, template.prepared, state, worlds, system);
-        template.pool.push(draw);
+        if (!system) throw new SceneRenderError([`render:particle-node:${path}`]);
+        const draw = this.createDraw(layer, step, resources, entry.prepared, state, worlds, system);
+        (template.pool[0] ??= []).push(draw);
         draws.push(draw);
       }
       ops.push({ kind: "particle-tree", tree });
@@ -1881,7 +1912,7 @@ export class GpuScene {
     runtime.tree = built.tree;
     if (built.tree) this.trees.set(runtime.object, built.tree);
     else this.trees.delete(runtime.object);
-    // 与 `runtime.draws` 同一个数组：之后按需建的实例化 draw（`addPooledDraw`）追加一次两边都有
+    // 与 `runtime.draws` 同一个数组：之后按需建的实例化 draw（`addPooledGroup`）追加一次两边都有
     this.drawsByLayer.set(runtime.object, built.draws);
     for (const draw of built.draws) this.indexDraw(draw);
   }
@@ -2230,13 +2261,25 @@ export class GpuScene {
   }
 
   /**
-   * 一次粒子绘制的 CPU 侧顶点：系统是这个模板的一次出现（P4e 步骤 1、2），顶点按它自己的 renderer 与 `particleUnits` 分配，第一次
-   * `encode` 时写（`stale`）。布局的问题 `checkRenderable` 已经查过。
+   * 一次粒子绘制的 CPU 侧顶点：系统是这个模板的一次出现（P4e 步骤 1、2），顶点按这一步的 renderer（`step.renderer`，P4f 步骤 4）、程序
+   * 与 `particleUnits` 分配，第一次 `encode` 时写（`stale`）。同一系统的几次绘制各有一份（不共用缓冲）。布局的问题 `checkRenderable`
+   * 已经查过。
    */
   private createParticles(step: ParticleStep, program: GpuProgram, system: ParticleSystem): ParticleDraw {
     const geometry = program.result.geometry;
     const units = particleUnits(system, step.instanced, system.alive);
-    const base = { system, units, count: 0, stale: true, trailEye: null, hidden: false, instanced: step.instanced };
+    // 这一步的 renderer：拖尾判断（`refreshParticleGeometry` 的眼位）、朝向与 `g_RenderVar0` 都读它，不读系统的 `def.renderer`
+    const renderer = particleDraws(system.def)[step.renderer]?.renderer;
+    const base = {
+      system,
+      renderer,
+      units,
+      count: 0,
+      stale: true,
+      trailEye: null,
+      hidden: false,
+      instanced: step.instanced,
+    };
     // 模型矩阵由 `createDraw` 按当时的状态写
     const model = identity();
     if (geometry) {
@@ -2274,8 +2317,9 @@ export class GpuScene {
    */
   private refreshParticleGeometry(particles: ParticleDraw, model: Mat4): void {
     particles.model = model;
-    // 子系统按它自己的 renderer 与模型矩阵（P4e 步骤 1）
-    const renderer = particles.system.def.renderer;
+    // 子系统按它自己的 renderer 与模型矩阵（P4e 步骤 1）；同一系统的几次绘制各按自己那一条 renderer（P4f 步骤 4，rea-p4f-script.md
+    // 8.3）：只有拖尾那次有眼位、跳过退化粒子，朝向是 NaN 只跳过算出 NaN 的那一次
+    const renderer = particles.renderer;
     if (!renderer) return;
     particles.hidden =
       particles.rope && renderer.orientation.mode === 0
@@ -2303,10 +2347,11 @@ export class GpuScene {
   ): Draw {
     const { device, bundle } = this;
     const { pass } = step;
-    // 子系统的绘制在标签后面带上树里的路径（P4e 步骤 1），顶层的标签不变；同一模板的第 k 个 draw（P4e 步骤 2）再带 `#k`
+    // 子系统的绘制在标签后面带上树里的路径（P4e 步骤 1），顶层的标签不变；同一模板的第 k 个 draw（P4e 步骤 2）再带 `#k`；
+    // 系统的第 r 条 renderer（r ≥ 1，P4f 步骤 4）末尾再带 ` r<r>`，第 0 条不带
     const label =
       step.kind === "particles"
-        ? `layer ${layer.id} ${layer.name} particles${step.node.length ? ` ${step.node.join("/")}` : ""}${occurrence ? `#${occurrence + 1}` : ""}`
+        ? `layer ${layer.id} ${layer.name} particles${step.node.length ? ` ${step.node.join("/")}` : ""}${occurrence ? `#${occurrence + 1}` : ""}${step.renderer ? ` r${step.renderer}` : ""}`
         : step.kind === "text"
           ? `layer ${layer.id} ${layer.name} text ${step.part}`
           : step.kind === "mesh"
@@ -2421,8 +2466,13 @@ export class GpuScene {
       frameNames = Object.keys(
         frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0], cursor: [0, 0] }),
       ).filter((name) => block!.has(name) && !(name in pass.uniforms));
-      // ropetrail（P4d 步骤 2）的 g_RenderVar0 随计时器每帧变（建 draw 时的值是计时器初值 0 的，`particleBuiltins`）
-      trailRenderVar = !!particles?.system.trail && block.has("g_RenderVar0") && !("g_RenderVar0" in pass.uniforms);
+      // ropetrail（P4d 步骤 2）的 g_RenderVar0 随计时器每帧变（建 draw 时的值是计时器初值 0 的，`particleBuiltins`）。只有 ropetrail 那次
+      // 绘制写（P4f 步骤 4：强制渲染混挂时同系统的 sprite 那次照旧是 0）
+      trailRenderVar =
+        !!particles?.system.trail &&
+        particles.renderer?.kind === "ropetrail" &&
+        block.has("g_RenderVar0") &&
+        !("g_RenderVar0" in pass.uniforms);
       uniformBuffer = this.own(
         device.createBuffer({
           label,
@@ -2590,8 +2640,11 @@ export class GpuScene {
           groupVp ??
           this.viewProjectionOf(layer, state, step.perspective ? this.perspectiveViewProjection : this.viewProjection),
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
-        // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）：这次绘制的系统自己的 renderer（P4e 步骤 1）
-        renderer: layer.particle ? particleNode(layer.particle, step.node).renderer : undefined,
+        // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）：这次绘制的系统自己的 renderer（P4e 步骤 1）里这一步的那一条（P4f 步骤 4，
+        // rea-p4f-script.md 8.3：每条按自己的 `rec+4` 算朝向；拖尾那条写 RV0.xyz，sprite 那条照旧写 0，不复刻上一次绘制的残值）
+        renderer: layer.particle
+          ? particleDraws(particleNode(layer.particle, step.node))[step.renderer]?.renderer
+          : undefined,
       });
     }
     if (step.kind === "mesh")
@@ -3118,9 +3171,11 @@ export class GpuScene {
   private applyFrame(draw: Draw, values: Record<string, ArrayLike<number>> | null): void {
     if (!draw.block) return;
     if (values) for (const name of draw.frameNames) draw.block.set(name, values[name]);
-    const system = draw.trailRenderVar ? draw.particles?.system : undefined;
-    if (system?.trail && system.def.renderer.ropetrail)
-      draw.block.set("g_RenderVar0", trailRenderVar0(system.def.renderer.ropetrail, system.trail.timer));
+    const particles = draw.trailRenderVar ? draw.particles : null;
+    // 这次绘制自己的 ropetrail（P4f 步骤 4）；计时器是系统的
+    const ropetrail = particles?.renderer?.ropetrail;
+    if (particles?.system.trail && ropetrail)
+      draw.block.set("g_RenderVar0", trailRenderVar0(ropetrail, particles.system.trail.timer));
   }
 
   /**
@@ -3309,7 +3364,7 @@ export class GpuScene {
         framebuffer?.();
       }
       const template = tree.templates.get(path.join("/"));
-      if (!template || (template.step.instanced && !system.alive)) return;
+      if (!template || (template.instanced && !system.alive)) return;
       const occurrence = counts.get(template) ?? 0;
       counts.set(template, occurrence + 1);
       visit(system, template, occurrence, model);
@@ -3317,10 +3372,12 @@ export class GpuScene {
   }
 
   /**
-   * 编码一个粒子层（`particle-tree` op，P4e 步骤 2）：沿 `walkParticles` 的先序逐个系统取 draw、画。非实例化的模板用建场景时建好的那个
-   * draw（顺序、uniform、顶点与 P4e 步骤 1 逐字节相同）；实例化的模板第 k 次出现用池里第 k 个，没有就现建（`addPooledDraw`），已有的
-   * 换了实例或模型矩阵变了就重写随它变的 uniform（`assignParticles`）。uniform 与顶点都在本帧提交之前经队列写入，每个 draw 每帧至多用
+   * 编码一个粒子层（`particle-tree` op，P4e 步骤 2）：沿 `walkParticles` 的先序逐个系统取一组 draw、画。非实例化的模板用建场景时建好的
+   * 第 0 组（顺序、uniform、顶点与 P4e 步骤 1 逐字节相同）；实例化的模板第 k 次出现用池里第 k 组，没有就现建（`addPooledGroup`），已有的
+   * 换了实例或模型矩阵变了就整组重写随它变的 uniform（`assignParticles`）。uniform 与顶点都在本帧提交之前经队列写入，每个 draw 每帧至多用
    * 一次，所以互不覆盖。`snapshot` 在先序里第一个需要帧缓冲的系统之前调。
+   * 一个系统多条 renderer（P4f 步骤 4，rea-p4f-script.md 8.3、8.4）：一组按 renderer 顺序连着画完，`walkParticles` 才往下走子系统（WPE 的
+   * renderer 循环在递归之前），所以先序是「父 r0、父 r1、static 子 r0、r1、实例……」。
    */
   private arrangeParticles(
     tree: ParticleTree,
@@ -3334,13 +3391,19 @@ export class GpuScene {
       tree,
       object,
       (system, template, occurrence, model) => {
-        if (!template.step.instanced) {
-          draw(template.pool[0]);
+        if (!template.instanced) {
+          for (const item of template.pool[0]) draw(item);
           return;
         }
-        const item = template.pool[occurrence];
-        if (item) this.assignParticles(item, system, model, state, worlds);
-        draw(item ?? this.addPooledDraw(tree, template, system, state, worlds));
+        const group = template.pool[occurrence];
+        if (!group) {
+          for (const item of this.addPooledGroup(tree, template, system, state, worlds)) draw(item);
+          return;
+        }
+        for (const item of group) {
+          this.assignParticles(item, system, model, state, worlds);
+          draw(item);
+        }
       },
       snapshot,
     );
@@ -3374,36 +3437,32 @@ export class GpuScene {
   }
 
   /**
-   * 实例化模板的池里再建一个 draw（P4e 步骤 2，第一次用到时）：同 `createDraw`（顶点缓冲按 `particleUnits`），进全场与本层的索引（就地
-   * 刷新、材质常量、每帧 uniform 都照常覆盖它），之后常驻到场景销毁。这一帧的 `update` 已经过去，建好后补上这一帧的每帧量再传一次。
+   * 实例化模板的池里再建一组 draw（P4e 步骤 2，第一次用到时；P4f 步骤 4 起每条 renderer 一个）：同 `createDraw`（顶点缓冲按
+   * `particleUnits`），进全场与本层的索引（就地刷新、材质常量、每帧 uniform 都照常覆盖它），之后常驻到场景销毁。这一帧的 `update` 已经
+   * 过去，建好后补上这一帧的每帧量再传一次。
    */
-  private addPooledDraw(
+  private addPooledGroup(
     tree: ParticleTree,
     template: ParticleTemplate,
     system: ParticleSystem,
     state: SceneState,
     worlds: Map<number, Mat4>,
-  ): Draw {
-    const draw = this.createDraw(
-      tree.layer,
-      template.step,
-      tree.resources,
-      template.prepared,
-      state,
-      worlds,
-      system,
-      template.pool.length,
-    );
-    template.pool.push(draw);
-    // 与 `LayerRuntime.draws` 同一个数组（`install`）：图层重建时一起释放
-    this.drawsByLayer.get(tree.object)?.push(draw);
-    this.indexDraw(draw);
-    if (this.particleTimings) this.particleTimings.set(draw, { simulate: [], vertices: [], upload: [], alive: [] });
-    if (draw.block && draw.uniformBuffer && this.frameValues) {
-      this.applyFrame(draw, this.frameValues);
-      this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
-    }
-    return draw;
+  ): Draw[] {
+    const occurrence = template.pool.length;
+    const group = template.renderers.map(({ step, prepared }) => {
+      const draw = this.createDraw(tree.layer, step, tree.resources, prepared, state, worlds, system, occurrence);
+      // 与 `LayerRuntime.draws` 同一个数组（`install`）：图层重建时一起释放
+      this.drawsByLayer.get(tree.object)?.push(draw);
+      this.indexDraw(draw);
+      if (this.particleTimings) this.particleTimings.set(draw, { simulate: [], vertices: [], upload: [], alive: [] });
+      if (draw.block && draw.uniformBuffer && this.frameValues) {
+        this.applyFrame(draw, this.frameValues);
+        this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
+      }
+      return draw;
+    });
+    template.pool.push(group);
+    return group;
   }
 
   /**
@@ -3425,11 +3484,11 @@ export class GpuScene {
   }[] {
     const out: ReturnType<GpuScene["particleStats"]> = [];
     for (const tree of this.trees.values())
-      this.walkParticles(tree, tree.world, (system, { step }, occurrence) =>
+      this.walkParticles(tree, tree.world, (system, { node }, occurrence) =>
         out.push({
           object: tree.object,
           name: tree.layer.name,
-          ...(step.node.length ? { node: [...step.node] } : {}),
+          ...(node.length ? { node: [...node] } : {}),
           ...(occurrence ? { occurrence: occurrence + 1 } : {}),
           alive: system.alive,
           highWater: system.highWater,
@@ -3474,13 +3533,15 @@ export class GpuScene {
    * dev 探针（`particleCorners`）：一个粒子层的程序、uniform 缓冲、bind group 条目，以及按当前状态写好的顶点
    * （存活粒子按槽序，`count` 个，每个 4 个顶点；拖尾系统跳过退化的粒子，同 `encode`）。`hidden`：朝向是 NaN，`encode` 不画这一层
    * （P4c 步骤 5）；`trailEye`：拖尾系统写顶点用的眼位（`trailDrawable` 按它挑出写了的粒子）。不是粒子层时为 null。
-   * `node`：系统树里的哪个模板（P4e 步骤 1，`ParticleStep.node`），缺省顶层；`occurrence`：这个模板池里的第几个 draw（P4e 步骤 2，从 0 起，
-   * 即最近一次编码时第几次出现的实例），缺省第一个。
+   * `node`：系统树里的哪个模板（P4e 步骤 1，`ParticleStep.node`），缺省顶层；`occurrence`：这个模板池里的第几组（P4e 步骤 2，从 0 起，
+   * 即最近一次编码时第几次出现的实例），缺省第一组；`renderer`：系统的第几条 renderer（P4f 步骤 4，`ParticleStep.renderer`，即
+   * `SceneParticle.draws` 的下标），缺省第一条。这一条没有绘制（越界、强制渲染时跳过的 rope 类）时为 null。
    */
   particleProbe(
     object: number,
     node: readonly number[] = [],
     occurrence = 0,
+    renderer = 0,
   ): {
     program: GpuProgram;
     uniformBuffer: GPUBuffer | null;
@@ -3497,7 +3558,10 @@ export class GpuScene {
     hidden: boolean;
     trailEye: [number, number, number] | null;
   } | null {
-    const draw = this.trees.get(object)?.templates.get(node.join("/"))?.pool[occurrence];
+    const template = this.trees.get(object)?.templates.get(node.join("/"));
+    // 组里按 `template.renderers` 的顺序；强制渲染跳过的 rope 类不在里面，所以按步骤的 `renderer` 找位置
+    const index = template?.renderers.findIndex((item) => item.step.renderer === renderer) ?? -1;
+    const draw = index < 0 ? undefined : template?.pool[occurrence]?.[index];
     if (!draw?.particles || draw.step.kind !== "particles") return null;
     const { system, layout, rope, trailEye: eye, hidden } = draw.particles;
     const vertices = new Float32Array(draw.particles.vertices.length);

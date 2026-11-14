@@ -54,6 +54,7 @@ import {
   instanceControlPointValue,
   instanceScalar,
   instanceValues,
+  particleDraws,
   type InstanceField,
   type ParticleInstanceValues,
   type SceneParticle,
@@ -327,9 +328,12 @@ export class SceneState {
         else children.set(layer.parent, [layer.object]);
       }
       for (const pass of layer.passes) constants.set(pass.key, { ...pass.uniforms });
-      // 粒子材质的常量（P4a 步骤 4）：粒子 draw 的 uniform 同样从这里取，绑定也按 pass 键就地写；含系统树里的子系统（P4e 步骤 1）
+      // 粒子材质的常量（P4a 步骤 4）：粒子 draw 的 uniform 同样从这里取，绑定也按 pass 键就地写；含系统树里的子系统（P4e 步骤 1）。
+      // 第 2 条起的 renderer 的变体（P4f 步骤 4）各有自己的键，属性绑定两份都登记，这里各留一份
       const addParticle = (particle: SceneParticle) => {
         for (const pass of particle.passes) constants.set(pass.key, { ...pass.uniforms });
+        for (const draw of particleDraws(particle).slice(1))
+          for (const pass of draw.passes) constants.set(pass.key, { ...pass.uniforms });
         for (const child of particle.children ?? []) addParticle(child.system);
       };
       if (layer.particle) addParticle(layer.particle);
