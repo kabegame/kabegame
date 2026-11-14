@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { EMPTY_ANIMATIONS_PROBE, SceneAnimations, type AnimationsProbe } from "./animation/player";
+import { ScenePuppets, stateSink } from "./puppet/player";
 import { ScenePlayer } from "./audio/player";
 import { SceneSounds, type SceneSoundProbe } from "./audio/sceneSounds";
 import {
@@ -184,6 +185,12 @@ export class SceneHost {
    * 用的是旧的这份。退回预览图与销毁时丢掉，下次能渲染时从 0 开始（同 WPE 重开壁纸）。
    */
   private sceneAnimations: SceneAnimations | null = null;
+  /**
+   * puppet 的骨骼动画运行时（P12a 步骤 4 点 4，`puppet/player.ts`）：每次场景换上（`load`）按那份 bundle 新建，`carryOver` 接回上一份的
+   * 动画层时钟（同 P10：WPE 改属性不重载场景），`refresh` 按新状态算一次姿势，第一帧就是当前姿势而不是绑定姿势。每个实时帧由渲染器的
+   * `stepPuppets` 推进。退回预览图与销毁时丢掉。
+   */
+  private scenePuppets: ScenePuppets | null = null;
   /**
    * 首次加载（或「清空脚本存储」后重建脚本环境）时，脚本 `init` 要用的动画播放器（P10b 步骤 3）：WPE 先登记全部动画再跑 `init`，所以
    * `init(){ thisObject.getAnimation().play() }` 开场就播。`init` 在 `beforeFirstFrame` 建播放器之前跑，这里先按新 bundle 建好，
@@ -408,6 +415,9 @@ export class SceneHost {
     if (target.kind === "recompile") return target.path;
     // 用户纹理（P11b）：同脚本运行时的 `targetKey`
     if (target.kind === "user-texture") return `usertextures/${target.name}`;
+    // puppet 动画层字段（P12a 步骤 3 点 3）：同脚本运行时的 `targetKey`
+    if (target.kind === "animation-layer")
+      return `objects/${target.object}/animationlayers/${target.layer}/${target.field}`;
     return `${target.script}/scriptproperties/${target.key}`;
   }
 
@@ -964,6 +974,11 @@ export class SceneHost {
       // 场景频谱的输入（P4e 步骤 4）：Hub 最近一次的原值，渲染器每帧开头取一次
       audioFrame: () => this.lastAudioFrame,
       stepObjects: (dt) => this.sceneSounds?.step(dt, this.soundVolumeOf),
+      // puppet（P12a 步骤 4）：用户属性写进状态后这一帧就读到（读的是渲染器正在画的那份状态）
+      stepPuppets: (dt) => {
+        const drawn = this.drawnState;
+        if (drawn) this.scenePuppets?.frame(dt, stateSink(drawn));
+      },
       videos: this.videoSink,
       beforeFrame: (dt, spectrum) => {
         // 脚本的音频缓冲改读归一化频谱（P4e 步骤 4，「决定」5）：渲染器这一帧推进之后、脚本之前拷一次
@@ -1039,6 +1054,7 @@ export class SceneHost {
     this.disposeVideos();
     // 关键帧动画同样丢掉：下次能渲染时从 0 开始
     this.sceneAnimations = null;
+    this.scenePuppets = null;
     this.pendingAnimations = null;
     this.bundle = null;
     this.scriptState = null;
@@ -1154,12 +1170,22 @@ export class SceneHost {
       const current = await this.ensureRenderer();
       if (id !== this.generation) return;
       current.setPaused(this.paused);
+      // puppet（P12a 步骤 4）：新建，在 `beforeFirstFrame` 里接回旧时钟并算一次姿势；没有 puppet 的场景是空运行时（`frame` 什么都不做）
+      const puppets = new ScenePuppets(
+        bundle.layers.flatMap((layer) => (layer.puppet ? [{ object: layer.object, puppet: layer.puppet }] : [])),
+      );
       await current.load(bundle, {
         ignoreUnsupported: force,
         texts,
         relayout,
         userTextures: this.userTextures,
+        puppets,
         beforeFirstFrame: (state) => {
+          // 新建 → carryOver → refresh（同 P10 的 `write`）：重编译时动画层时钟与 blendin 的清位接着走，换上就按当前时钟与当前状态算一次蒙皮，
+          // 不闪出绑定姿势；之后每帧由 `stepPuppets` 推进
+          puppets.carryOver(this.scenePuppets);
+          puppets.refresh(stateSink(state));
+          this.scenePuppets = puppets;
           // 运行中属性写进状态时同步交给来源表解码（P11b 步骤 2）；解码完成再经 `onUserTextureReady` 标脏
           state.onUserTexture = (name, value) => this.userTextures.setValue(name, value);
           // 预解码超时：建场景时这些槽用的是缺省纹理，超时后才解完的那几个在建场景前的 `onReady` 找不到状态、没标脏，这里补标，第一次 `sync` 换上
@@ -1267,6 +1293,7 @@ export class SceneHost {
     this.disposeVideos();
     this.userTextures.dispose();
     this.sceneAnimations = null;
+    this.scenePuppets = null;
     this.pendingAnimations = null;
     this.runtime?.destroy();
     this.runtime = null;

@@ -112,6 +112,24 @@ function boolField(value: SceneScalar | undefined, fallback: boolean): boolean {
 }
 
 /**
+ * 动画层字段的写入取值（用户属性就地写，`render/state.ts`），和编译期的 `floatField` / `boolField` 同一条规则：float 收数字、布尔（1 / 0）与能
+ * 解析的字符串，bool 收布尔与数字（非 0 为真）；别的类型返回 undefined（WPE 的 setter 不收时不写字段）。条件先由调用方换成布尔。
+ */
+export function animationLayerValue(
+  field: PuppetLayerField,
+  value: SceneScalar | undefined,
+): number | boolean | undefined {
+  if (field === "visible") {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    return undefined;
+  }
+  if (typeof value === "boolean") return value ? 1 : 0;
+  const parsed = typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? f(parsed) : undefined;
+}
+
+/**
  * 骨骼 JSON 的标志位（`FUN_140265c30` 的门，rea-mdl 2.1、2.2）：布尔键要求值确是布尔，`se` 0x1、`re` 0x2、`r` 0x1000、`t` 0x2000、
  * `ik` 0x4000、`ikce` 0x8000；物理开（`(r ‖ t) && (se ‖ re)`）、`ik` 或 `ikce` 时原样保留，三样都没有时整个清 0（`0x140266559`）。解析
  * 失败为 0。只算门用到的位（`ge`、`la` 等物理参数的位归 P12d）。

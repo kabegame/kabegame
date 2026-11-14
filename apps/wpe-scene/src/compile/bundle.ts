@@ -25,6 +25,7 @@ import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeNa
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
+import { buildPuppet, type ScenePuppet } from "./puppet";
 import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
 import {
   bindingReader,
@@ -62,6 +63,8 @@ import {
   normalizeDepthKeys,
   objectKind,
   PARTICLE_UNIFORMS,
+  PUPPET_COMBOS,
+  PUPPET_UNIFORMS,
   readsAudioUniforms,
   shapeIssues,
   TEXT_UNIFORMS,
@@ -581,6 +584,12 @@ export interface SceneLayer {
    */
   dependedOn?: boolean;
   /**
+   * puppet（P12a 步骤 3，rea-p12-mdl 第 9 节）：图像层的模型 JSON 带 `puppet`（字符串、不是 fullscreen、不是组合层）且 mdl 有网格时有；
+   * 网格 0 代替上屏的四边形。`layer.passes` 保持不带 puppet 组合键（合成路径的基础 pass 画四边形进合成 RT，要用它）。读不到 mdl 或网格
+   * 为空时为 null（WPE 销毁 P、照常画四边形，不报）。可选同 `alignment`：不动各处手写的测试图层。
+   */
+  puppet?: ScenePuppetLayer | null;
+  /**
    * 相机对象（P5d 步骤 3，`isCameraObject`，rea-p5-camera 4.1、4.2）：`fov` / `zoom` 的编译期值（缺省 50 / 1，取值规则 `cameraValue`），
    * 绑属性或挂 `{script}` 时登记成就地目标 `{ kind: "camera" }`，运行中的值在 `SceneState.cameras`。图层本身没有 pass，变换、层级、可见性
    * 照分组节点；渲染器每帧按 `objects` 倒序选第一个自身与父链都可见的相机（`render/camera.ts` 的 `activeCameraObject`）。同时带别的内容
@@ -601,6 +610,22 @@ export interface SceneLayer {
    * 可选同 `text`：不动各处手写的测试图层，缺省按不在半透明名单处理。
    */
   sortClass?: SortClass;
+}
+/**
+ * 图层上的 puppet（P12a 步骤 3 点 1，rea-p12-mdl 9.2–9.4）：`compile/puppet.ts` 的 `ScenePuppet` 加上两条上屏路径的材质变体。路径在编译期
+ * 定（WPE 加载时就置 `0x10`，之后不变）：
+ * - `composite`：图层有 effect（`layer.effects` 非空，含运行时才打开的）、colorBlendMode ∉ {0, 31} 或被依赖。基础 pass 照旧（`layer.passes`，
+ *   画四边形进合成 RT）、effect 全部留在合成链，最后用 `upload`（passthrough 材质 + puppet 组合键 + `BLENDMODE`）以 puppet 网格采样合成 RT
+ *   上屏，UV 不缩放；
+ * - 否则直接上屏：`passes` 是基础材质加 puppet 组合键的变体（稳定键同基础 pass，常量与绑定共用），画 puppet 网格，UV 乘「图像 / GPU 纹理」。
+ * 静态 puppet（没有骨骼，`combos` 为空）也走这两条路径，只是材质不带组合键、不写 `g_Bones`。
+ */
+export interface ScenePuppetLayer extends ScenePuppet {
+  composite: boolean;
+  /** 直接上屏的 pass（基础材质 + puppet 组合键）；composite 时为空。 */
+  passes: ScenePass[];
+  /** 合成路径的上屏 pass（passthrough 材质 + puppet 组合键 + `BLENDMODE`）；直接上屏时为 null。 */
+  upload: ScenePass | null;
 }
 /**
  * 透明排序的类别（P5d 步骤 4，rea-p5-mesh 4.2）：`opaque` 在第一遍按 `objects` 顺序画；`translucent` 在第二遍按「局部 origin · 前向」从大到小
@@ -998,6 +1023,8 @@ interface PassContext {
   sceneConstants?: Readonly<Record<string, unknown>>;
   /** instanced 图层（P11b）：对象 `size` 解析出的用户纹理参考尺寸；非 instanced 不传（`parseUserTextures` 的 `options.instanceSize`）。 */
   instanceSize?: { width: number; height: number } | null;
+  /** puppet 的 pass（P12a）：程序检查放行 `SKINNING` 组合键与 `g_Bones`（`PUPPET_UNIFORMS`）。 */
+  puppet?: boolean;
 }
 
 /**
@@ -1475,6 +1502,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     particle.spriteSheet = slot0 !== undefined && !!bundle.textures[slot0].sheet;
   }
 
+  /** puppet 图层的基础材质 pass（实例覆盖之后，`compileImageModel` 记、`finalizePuppet` 用），按 `objects` 下标。 */
+  const puppetMaterials = new Map<
+    number,
+    { passes: MaterialPass[]; instanceSize: { width: number; height: number } | null }
+  >();
   /** 解析过的 mdl，按规范化后的路径；读不到为 null。同一个 mdl 被多个对象引用时只读、只解析一次（3354366708 的两个圆环）。 */
   const mdls = new Map<string, MdlFile | null>();
   async function readMdl(path: string): Promise<MdlFile | null> {
@@ -1698,7 +1730,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             ? TEXT_UNIFORMS
             : context.fbos
               ? EFFECT_UNIFORMS
-              : undefined,
+              : context.puppet
+                ? PUPPET_UNIFORMS
+                : undefined,
+        context.puppet ? PUPPET_COMBOS : undefined,
       );
       // 着色器声明了、材质没给的槽位按注解 `default` 绑定（同 LWE `setupTextureUniforms` 先取着色器默认值）
       for (const binding of result.textures ?? []) {
@@ -1906,6 +1941,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // instanced（P5b 步骤 5）：对象的 `instance` 覆盖材质 pass 的同名键（rea-p5-modelflags §6.2），规则同 effect 实例覆盖：`combos`
     // 合并、`textures` 按槽合并（null 与非字符串的槽保留材质自己的）。`instance` 不是对象时不合并（能力表报 `model:instanced:instance`）
     const instance = layer.instanced ? instanceOverride(object.instance) : null;
+    /** puppet 的直接上屏变体要重编的材质 pass（实例覆盖之后的）；读不到 puppet 时不用。 */
+    const merged: MaterialPass[] = [];
     for (const [k, raw] of material.passes.entries()) {
       const pass: MaterialPass = instance
         ? {
@@ -1915,6 +1952,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             ...userTexturesOf(mergeUserTextures(raw.usertextures, instance.usertextures)),
           }
         : raw;
+      merged.push(pass);
       layer.passes.push(
         await compilePass(pass, {
           key: `objects/${index}/passes/${k}`,
@@ -1922,6 +1960,31 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           ...(instance ? { instanceSize: instanceReferenceSize(object.size) } : {}),
         }),
       );
+    }
+    // puppet（P12a 步骤 3 点 1，rea-p12-mdl 9.1）：模型 JSON 的 `puppet` 必须是字符串，且图层不是 fullscreen / 组合层（WPE `L+0x304 & 0x22`，
+    // 两种都整段跳过）。mdl 读不到或网格为空时 P 销毁、照常画四边形（不报）。上屏路径与材质变体要等 effect 编完才能定（`finalizePuppet`）
+    if (typeof model.puppet === "string" && !layer.fullscreen && !layer.passthroughModel) {
+      layer.puppet = null;
+      const file = await readMdl(model.puppet);
+      if (file) {
+        const built = buildPuppet(file, (object as Record<string, unknown>).animationlayers, model.puppet, properties);
+        for (const key of built.issues) unsupported.add(key);
+        if (built.puppet) {
+          layer.puppet = { ...built.puppet, composite: false, passes: [], upload: null };
+          puppetMaterials.set(index, {
+            passes: merged,
+            instanceSize: instance ? instanceReferenceSize(object.size) : null,
+          });
+          // 动画层的 `{user}` 绑定（步骤 3 点 3）：`rate` / `blend` / `visible` 就地写进 `SceneState.animationLayers`
+          for (const [slot, def] of built.puppet.layers.entries())
+            for (const { field, property, condition } of def.bindings)
+              bindings.list.push({
+                property,
+                ...(condition === undefined ? {} : { condition }),
+                target: { kind: "animation-layer", object: index, layer: slot, field },
+              });
+        }
+      }
     }
     // 透明排序的类别（P5d 步骤 4，rea-p5-modelflags 2.1、1.4，`p5d-sort-a` / `-fs`）：只看基础材质（第一个 pass 的混合），effect、
     // colorBlendMode、`copybackground` 都不参与（WPE 在图像层构造时定，那时 `copybackground` 还是缺省值）。`projectlayer` 在这里单独读：
@@ -1945,6 +2008,61 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       layer.size = imageLayerSize(model, layer.size, baseTexture, [bundle.general.width, bundle.general.height]);
     }
     return true;
+  }
+
+  /**
+   * puppet 的上屏路径与材质变体（P12a 步骤 3 点 1，rea-p12-mdl 9.3、9.4）。`composite` 在 effect 编完之后定：有 effect、colorBlendMode 混合或被依赖
+   * 时 WPE 加载就置 `0x10`（`L+0x320 > 0` 也走合成，9.2），全部 effect 留在合成链：
+   * - 合成：passthrough 材质（`passthroughMaterial`，P8 的那份）+ puppet 组合键 + `BLENDMODE` 编成 `upload`，`g_Color4` 置 1；skinned 时 cullmode
+   *   取基础材质的（9.3「合成上屏用」一行）；
+   * - 直接上屏：基础材质第一个 pass 加 puppet 组合键重编成 `passes`，稳定键同基础 pass（常量、属性绑定、关键帧共用，不重复登记）。
+   * 版本条件 `ctx+0x1510` 没查清，先按 P8 的 `passthroughMaterial` 选（步骤 5 用 `p12-fx` 核对）。
+   */
+  async function finalizePuppet(
+    index: number,
+    layer: SceneLayer,
+    composite: boolean,
+    blendMode: number,
+  ): Promise<void> {
+    const puppet = layer.puppet!;
+    puppet.composite = composite;
+    const checkAttributes = (pass: ScenePass) => {
+      if (pass.program !== null) checkMeshAttributes(bundle.programs[pass.program], puppet.mesh.format, unsupported);
+    };
+    if (composite) {
+      const path = passthroughMaterial(scene.version);
+      const text = await fs.text(path);
+      const pass = text ? parseMaterial(text).passes[0] : undefined;
+      if (!pass) {
+        unsupported.add(`material:missing:${path}`);
+        return;
+      }
+      const upload = await compilePass(
+        { ...pass, combos: { ...pass.combos, ...passthroughCombos(blendMode), ...puppet.combos } },
+        { key: `objects/${index}/puppetupload`, planned: [{ slot: 0 }], puppet: true },
+      );
+      upload.uniforms.g_Color4 = [1, 1, 1, 1];
+      if (Object.keys(puppet.combos).length && layer.passes[0]) upload.cullmode = layer.passes[0].cullmode;
+      checkAttributes(upload);
+      puppet.upload = upload;
+      return;
+    }
+    const source = puppetMaterials.get(index);
+    const raw = source?.passes[0];
+    if (!raw) return;
+    // 同键重编：基础 pass 编译时已登记过同一批绑定，截掉重复的
+    const before = bindings.list.length;
+    const compiled = await compilePass(
+      { ...raw, combos: { ...raw.combos, ...puppet.combos } },
+      {
+        key: `objects/${index}/passes/0`,
+        puppet: true,
+        ...(source.instanceSize ? { instanceSize: source.instanceSize } : {}),
+      },
+    );
+    bindings.list.length = before;
+    checkAttributes(compiled);
+    puppet.passes = [compiled];
   }
 
   /**
@@ -2169,7 +2287,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     if (lit && (layer.effects.length > 0 || blended || depended)) unsupported.add("lighting:prelighting");
     // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
     if (depended && hasChildren) unsupported.add("dependency:group");
-    if (blended || depended) {
+    // puppet 的上屏路径与材质变体（步骤 3 点 1）：composite 时 passthrough 上屏由 puppet 自己的 `upload` 承担，不再编 `layer.passthrough`
+    if (layer.puppet)
+      await finalizePuppet(index, layer, layer.effects.length > 0 || blended || depended, blended ? cbm : 0);
+    if ((blended || depended) && !layer.puppet) {
       const path = passthroughMaterial(scene.version);
       const text = await fs.text(path);
       const pass = text ? parseMaterial(text).passes[0] : undefined;
@@ -2245,12 +2366,22 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   return bundle;
 }
 
-/** 交给主线程时转移的缓冲：纹理 mip 与 mdl 文件（网格的顶点 / 索引是它的视图，同一个 mdl 的对象共用一份），去重。 */
+/** 交给主线程时转移的缓冲：纹理 mip 与 mdl 文件（网格与 puppet 的顶点 / 索引是它的视图，同一个 mdl 的对象共用一份）、puppet 的动画帧数据，去重。 */
 export function transferableBuffers(bundle: SceneBundle): ArrayBuffer[] {
   const buffers = [
     ...bundle.textures.flatMap((texture) => texture.mips.map((mip) => mip.bytes?.buffer)),
     ...bundle.layers.flatMap(
       (layer) => layer.model?.meshes.flatMap((mesh) => [mesh.vertices.buffer, mesh.indices.buffer]) ?? [],
+    ),
+    // puppet（P12a）：网格 0 的顶点 / 索引也是 mdl 文件缓冲上的视图；动画帧数据是编译期转好的自有缓冲
+    ...bundle.layers.flatMap((layer) =>
+      layer.puppet
+        ? [
+            layer.puppet.mesh.vertices.buffer,
+            layer.puppet.mesh.indices.buffer,
+            ...layer.puppet.animations.map((animation) => animation.frames.buffer),
+          ]
+        : [],
     ),
   ];
   return [...new Set(buffers.filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer))];

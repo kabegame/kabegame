@@ -162,7 +162,15 @@
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
-import type { SceneBundle, SceneFbo, SceneLayer, SceneModel, ScenePass, SceneTexture } from "../compile/bundle";
+import type {
+  SceneBundle,
+  SceneFbo,
+  SceneLayer,
+  SceneModel,
+  ScenePass,
+  ScenePuppetLayer,
+  SceneTexture,
+} from "../compile/bundle";
 import { layerCompositeName } from "../compile/dependencies";
 import { particleDraws, type ParticleRenderer, type SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
@@ -180,6 +188,7 @@ import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
 import { ParticleSystem, particleNode } from "../particles/system";
+import type { ScenePuppets } from "../puppet/player";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
 import {
   particleVertexLayout,
@@ -235,6 +244,7 @@ import {
 } from "./layout";
 import { identity, mulAffine, multiply, orthographic, translateGlm, translation, type Mat4 } from "./math";
 import { alignedBytes, frustumCulled, MESH_PLACEHOLDER_BYTES, meshVertexLayout, type MeshVertexLayout } from "./mesh";
+import { needsScaledVertices, scaledPuppetVertices } from "./puppet";
 import { parallaxOffset, type SceneParallax } from "./parallax";
 import {
   createPipeline,
@@ -342,6 +352,16 @@ interface PreparedDraw {
 /** 图层的绘制步骤、粒子层的绘制、文本层的绘制，或模型的网格绘制（`graph.ts`）：都画一次，共用 draw 的 uniform / bind group / 管线路径。 */
 type DrawLike = DrawStep | ParticleStep | TextStep | MeshStep;
 
+/** puppet 的上屏绘制（P12a 步骤 4）：几何是 puppet 的网格 0，走和模型网格同一条路径（顶点布局、索引、三角形列表）。 */
+type PuppetDrawStep = DrawStep & { geometry: "puppet" };
+function isPuppetDraw(step: DrawLike): step is PuppetDrawStep {
+  return step.kind === "draw" && step.geometry === "puppet";
+}
+/** 画网格的步骤：模型的网格步骤与 puppet 的上屏绘制。 */
+function drawsMesh(step: DrawLike): step is MeshStep | PuppetDrawStep {
+  return step.kind === "mesh" || isPuppetDraw(step);
+}
+
 /** 文本层一次绘制的索引（P6b 1d）：三角形列表，每四边形 6 个。 */
 interface TextDraw {
   indexBuffer: GPUBuffer;
@@ -358,6 +378,11 @@ interface MeshDraw {
   indexFormat: GPUIndexFormat;
   count: number;
   placeholder: GPUBuffer | null;
+  /**
+   * 顶点缓冲是本 draw 私有的（P12a：直接上屏的 puppet 把 `a_TexCoord` 乘了 `step.uv`，不能和 mdl 视图共用），图层重建时要释放；
+   * 共用的（模型网格、UV 为 (1, 1) 的 puppet）为假。
+   */
+  privateVertices?: boolean;
 }
 
 /** 一次粒子绘制的系统与 CPU 侧顶点（P4a 步骤 4）。 */
@@ -651,6 +676,11 @@ interface Draw {
   layer: SceneLayer;
   /** 本 pass 的稳定键（材质常量绑定按它找回 draw）。 */
   passKey: TargetKey;
+  /**
+   * skinned puppet 的上屏绘制（P12a 步骤 4）：图层的 `objects` 下标，每帧 `update` 把 `ScenePuppets.skin` 写进块里的 `g_Bones`；
+   * 静态 puppet、没有 `g_Bones` 的程序与别的绘制为 null。
+   */
+  puppet: number | null;
   resources: LayerResources;
   pipeline: GPURenderPipeline;
   vertexBuffer: GPUBuffer;
@@ -844,11 +874,11 @@ export function stepPipeline(
     format: target.kind === "fbo" ? fboFormat(target.effect, target.name) : format,
     alpha: writesAlpha(base, { upload, alphaMax, alphaWriting: pass.alphaWriting }),
     topology:
-      step.kind === "text" || step.kind === "mesh" || (step.kind === "particles" && !geometry)
+      step.kind === "text" || drawsMesh(step) || (step.kind === "particles" && !geometry)
         ? "triangle-list"
         : "triangle-strip",
     ...(alphaMax ? { alphaMax: true } : {}),
-    ...(step.kind === "mesh" ? { mesh: mesh ?? "" } : {}),
+    ...(drawsMesh(step) ? { mesh: mesh ?? "" } : {}),
     ...(raster.cull ? { cull: "back" as const } : {}),
     ...(sceneDepth && target.kind === "scene" && !group ? { depth: { test: raster.test, write: raster.write } } : {}),
     ...(alphaToCoverage(blending) ? { alphaToCoverage: true as const } : {}),
@@ -916,6 +946,8 @@ function planProblems(
   bundle: SceneBundle,
   particle?: SceneParticle | null,
   model?: SceneModel | null,
+  /** 图层的 puppet（P12a 步骤 4）：上屏绘制按网格 0 的格式查程序的输入。 */
+  puppet?: Pick<ScenePuppetLayer, "mesh"> | null,
 ): string[] {
   const problems = [...plan.reasons];
   for (const step of plan.steps) {
@@ -933,6 +965,9 @@ function planProblems(
       const mesh = model?.meshes[step.mesh];
       if (!mesh) problems.push(`render:mesh:${step.mesh}`);
       else problems.push(...meshVertexLayout(program.attributes ?? [], mesh.format).problems);
+    } else if (step.kind === "draw" && step.geometry === "puppet") {
+      if (!puppet) problems.push("render:puppet");
+      else problems.push(...meshVertexLayout(program.attributes ?? [], puppet.mesh.format).problems);
     }
     // 视频纹理（P9a）没有 mip：渲染器建空纹理、运行时拷帧，不算缺
     for (const input of Object.values(step.inputs)) {
@@ -978,6 +1013,7 @@ export function checkRenderable(
       bundle,
       layer.particle,
       layer.model,
+      layer.puppet,
     ))
       reasons.add(reason);
   return [...reasons];
@@ -1048,6 +1084,9 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
   for (const layer of bundle.layers) {
     layer.passes.forEach(add);
     if (layer.particle) addParticle(layer.particle);
+    // puppet 的材质变体（P12a 步骤 4）：纹理同基础材质，照样过一遍
+    layer.puppet?.passes.forEach(add);
+    if (layer.puppet?.upload) add(layer.puppet.upload);
     if (layer.passthrough) add(layer.passthrough);
     if (layer.groupUpload) add(layer.groupUpload);
     // 文本的宿主材质（P6b 1d）都没有静态纹理，照样过一遍
@@ -1213,6 +1252,8 @@ export class GpuScene {
   private gammaPass: GammaPass | null = null;
   /** 视频纹理的帧来源（P9a，`setVideoSink`）；null 时视频纹理保持全 0。 */
   private videoSink: VideoSink | null = null;
+  /** skinned puppet 的蒙皮矩阵来源（P12a，`setPuppets`）：`update` 每帧按图层写进 `g_Bones`；null 时 `g_Bones` 保持全 0。 */
+  private puppets: Pick<ScenePuppets, "skin"> | null = null;
   /** 已经记过 warning 的视频纹理（`size:<下标>` / `copy:<下标>`）：每张纹理每种只记一次。 */
   private readonly videoWarned = new Set<string>();
   /**
@@ -1520,11 +1561,13 @@ export class GpuScene {
    * 网格步骤的顶点布局（P5c 步骤 2）：程序的属性按网格格式配对（`meshVertexLayout`）。管线键、建管线与建 draw 都从这里取。
    * 网格不在图层上（手写的计划）时报 `render:mesh:<下标>`，自查（`planProblems`）已先挡下。
    */
-  private meshLayoutOf(layer: SceneLayer, step: MeshStep): MeshVertexLayout {
-    const mesh = layer.model?.meshes[step.mesh];
-    if (!mesh) throw new SceneRenderError([`render:mesh:${step.mesh}`]);
+  private meshLayoutOf(layer: SceneLayer, step: MeshStep | PuppetDrawStep): MeshVertexLayout {
+    // puppet 的上屏绘制（P12a 步骤 4）用网格 0 的格式，其余是模型的网格
+    const format = step.kind === "mesh" ? layer.model?.meshes[step.mesh]?.format : layer.puppet?.mesh.format;
+    if (format === undefined)
+      throw new SceneRenderError([step.kind === "mesh" ? `render:mesh:${step.mesh}` : "render:puppet"]);
     const program = step.pass.program === null ? undefined : this.bundle.programs[step.pass.program];
-    return meshVertexLayout(program?.attributes ?? [], mesh.format);
+    return meshVertexLayout(program?.attributes ?? [], format);
   }
 
   /**
@@ -1993,7 +2036,7 @@ export class GpuScene {
       // 组里画到「场景」的绘制落在组的合成 RT 上（P5b 步骤 4）：写 alpha，`copyBackground` 为 false 时 alpha 取 MAX
       this.groupOf(layer),
       // 网格（P5c 步骤 2）的顶点布局按网格格式
-      step.kind === "mesh" ? this.meshLayoutOf(layer, step).key : undefined,
+      drawsMesh(step) ? this.meshLayoutOf(layer, step).key : undefined,
       // 深度附件（P5d 步骤 1）：有时画进场景目标、不在组里的管线都带深度状态
       this.depthTarget !== null,
     );
@@ -2013,7 +2056,7 @@ export class GpuScene {
           step,
           runtime,
         );
-        const mesh = step.kind === "mesh" ? this.meshLayoutOf(runtime.layer, step) : undefined;
+        const mesh = drawsMesh(step) ? this.meshLayoutOf(runtime.layer, step) : undefined;
         prepared.set(step, {
           program,
           pipeline: await this.pipelineFor(
@@ -2063,7 +2106,13 @@ export class GpuScene {
       let failure: unknown = null;
       try {
         for (const plan of plans) {
-          const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model);
+          const problems = planProblems(
+            plan,
+            this.bundle,
+            runtime.layer.particle,
+            runtime.layer.model,
+            runtime.layer.puppet,
+          );
           if (problems.length) throw new SceneRenderError(problems);
           if (runtime.layer.text) {
             await this.prepareLayer(plan, runtime);
@@ -2686,6 +2735,31 @@ export class GpuScene {
         count: mesh.indexCount,
         placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
       };
+    } else if (isPuppetDraw(step)) {
+      // puppet 的网格 0（P12a 步骤 4，rea-p12-mdl 9.2）：代替图层四边形。直接上屏时 `a_TexCoord` 乘 `step.uv`（图像 / GPU 纹理）、另传一份
+      // 顶点；上屏采样合成 RT 时 uv 为 (1, 1)，直接用 mdl 视图（按视图共用）。索引一律 u16、三角形列表；位置不动、不按 `size` 缩放
+      const puppet = layer.puppet;
+      if (!puppet) throw new SceneRenderError(["render:puppet"]);
+      const name = `${puppet.path}#puppet`;
+      const privateVertices = needsScaledVertices(puppet.mesh, step.uv);
+      if (privateVertices) {
+        const bytes = scaledPuppetVertices(puppet.mesh, step.uv);
+        vertexBuffer = this.own(
+          device.createBuffer({
+            label: `${label} vertices`,
+            size: bytes.byteLength,
+            usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+          }),
+        );
+        device.queue.writeBuffer(vertexBuffer, 0, bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      } else vertexBuffer = this.meshBuffer(puppet.mesh.vertices, GPUBufferUsage.VERTEX, `${name} vertices`);
+      meshDraw = {
+        indexBuffer: this.meshBuffer(puppet.mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
+        indexFormat: "uint16",
+        count: puppet.mesh.indexCount,
+        placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
+        privateVertices,
+      };
     } else if (step.kind === "text") {
       // 文本（P6b 1d）：排版出的逐字四边形或背景四边形，按程序布局打包；索引照 WPE 的顺序，三角形列表
       const layout = state.texts.get(layer.object);
@@ -2757,6 +2831,7 @@ export class GpuScene {
     let uniformBuffer: GPUBuffer | null = null;
     let frameNames: string[] = [];
     let trailRenderVar = false;
+    let puppetObject: number | null = null;
     const slots = Math.max(10, ...program.textures.map((t) => t.slot + 1));
     const textureSizes = Array.from({ length: slots }, (_, slot) => sizeOf(step.inputs[slot]));
     if (program.uniformSize) {
@@ -2777,6 +2852,14 @@ export class GpuScene {
         particles.renderer?.kind === "ropetrail" &&
         block.has("g_RenderVar0") &&
         !("g_RenderVar0" in pass.uniforms);
+      // skinned puppet（P12a 步骤 4）：`g_Bones` 每帧由 `update` 写，建 draw 时先写一次当前的蒙皮矩阵（建 GPU 资源之前宿主已 `refresh`，
+      // 第一帧不会闪出绑定姿势）。矩阵数组按翻译器反射的布局写（`UniformBlock.set` 对 `array<mat4x3<f32>, N>`：每元素 12 个数、列主序、
+      // 列步长 16），`skinMatrices` 的输出原样传入，见 `render/p12a.test.ts`
+      if (isPuppetDraw(step) && layer.puppet?.skeleton && block.has("g_Bones")) {
+        puppetObject = layer.object;
+        const skin = this.puppets?.skin(layer.object);
+        if (skin) block.set("g_Bones", skin);
+      }
       uniformBuffer = this.own(
         device.createBuffer({
           label,
@@ -2855,6 +2938,7 @@ export class GpuScene {
       object: layer.object,
       layer,
       passKey: pass.key,
+      puppet: puppetObject,
       resources,
       pipeline,
       vertexBuffer,
@@ -3534,7 +3618,7 @@ export class GpuScene {
     if (!options.force && signature === runtime.signature) return;
     const started = performance.now();
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
-    const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model);
+    const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model, runtime.layer.puppet);
     if (problems.length) throw new SceneRenderError(problems);
     // 先取管线（缺了就抛，这时什么都还没换）；文本层再按新排版换独占的合成 RT、fbo 与图集，新 draw 才绑得到
     const prepared = this.preparedOf(plan, runtime);
@@ -3544,8 +3628,8 @@ export class GpuScene {
     for (const draw of runtime.draws) {
       this.draws.delete(draw);
       this.drawsByPass.delete(draw.passKey);
-      // 网格的顶点 / 索引缓冲按视图共用（`meshBuffer`），随场景销毁，这里不释放
-      if (!draw.mesh) this.release(draw.vertexBuffer);
+      // 网格的顶点 / 索引缓冲按视图共用（`meshBuffer`），随场景销毁，这里不释放；puppet 乘过 UV 的私有顶点缓冲例外（P12a）
+      if (!draw.mesh || draw.mesh.privateVertices) this.release(draw.vertexBuffer);
       if (draw.uniformBuffer) this.release(draw.uniformBuffer);
       if (draw.text) this.release(draw.text.indexBuffer);
     }
@@ -3627,8 +3711,13 @@ export class GpuScene {
     const values = (this.frameValues = frameBuiltins(frame));
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
-      if (!draw.frameNames.length && !draw.dirty && !draw.trailRenderVar) continue;
+      if (!draw.frameNames.length && !draw.dirty && !draw.trailRenderVar && draw.puppet === null) continue;
       this.applyFrame(draw, values);
+      // skinned puppet（P12a 步骤 4）：每帧把当前蒙皮矩阵写进 `g_Bones`（同 `trailRenderVar` 的做法，这类 draw 每帧都写）
+      if (draw.puppet !== null) {
+        const skin = this.puppets?.skin(draw.puppet);
+        if (skin) draw.block.set("g_Bones", skin);
+      }
       this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
       draw.dirty = false;
     }
@@ -3718,6 +3807,14 @@ export class GpuScene {
    */
   setVideoSink(sink: VideoSink | null): void {
     this.videoSink = sink;
+  }
+
+  /**
+   * skinned puppet 的蒙皮矩阵来源（P12a 步骤 4）：渲染器换上场景时交来（`SceneRenderer.load`，宿主的 `ScenePuppets`）；dev 探针的确定性回放
+   * 换上自己的。`update` 每帧把 `skin(图层)` 写进对应 draw 的 `g_Bones`；null 时保持原值（建 draw 时是 0）。
+   */
+  setPuppets(puppets: Pick<ScenePuppets, "skin"> | null): void {
+    this.puppets = puppets;
   }
 
   /**

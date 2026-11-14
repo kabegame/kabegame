@@ -22,6 +22,7 @@
  * 变体程序、uniform 与顶点（拖尾那条跳过退化粒子，sprite 那条照写），第 0 项和以前逐字节相同。
  */
 import { SceneAnimations, type AnimationHooks } from "../animation/player";
+import { stateSink, type ScenePuppets } from "../puppet/player";
 import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { compileSceneInWorker } from "../compile/client";
 import { particleDraws } from "../compile/particles";
@@ -524,6 +525,12 @@ export interface ReadbackReplayOptions {
    * 没有回放时不推进，由调用方先 `seek` 再 `write`（开头的 `sync` 刷进去）。不给时调用序列同以前。
    */
   animations?: Pick<SceneAnimations, "frame">;
+  /**
+   * puppet 的骨骼动画（P12a 步骤 4 点 5，`ScenePuppets`）：有回放时每一帧（前 n − 1 帧与读回帧）在步进粒子之后、设相机之前按这一帧的帧时间
+   * `frame`（同渲染器 `stepPuppets` 的位置），蒙皮矩阵由 `GpuScene.update` 写进 `g_Bones`（调用方先 `setPuppets`）。没有回放时不推进，由调用方先
+   * `seek`。不给时调用序列同以前。
+   */
+  puppets?: Pick<ScenePuppets, "frame">;
   /** 透视场景的探针相机（P5d 步骤 2，`probePerspective`）：按 `particles.dts` 推路径状态，不移动对象。正交场景不给。 */
   perspective?: ProbePerspective;
   /** 场景里的相机对象（P5d 步骤 3，`probeCameraObjects`）：每帧按状态选生效的。没有相机对象时不给。 */
@@ -600,6 +607,8 @@ export function replayReadback(
   // 一帧里步进粒子之后的部分（同渲染器）：设这一帧的相机 → 动画 → 脚本（`beforeFrame`）
   const afterStep = (at: number, dt: number, animated: boolean) => {
     if (scripts) generals.push(state.general);
+    // puppet（P12a 步骤 4 点 5）：粒子之后、相机之前（同渲染器 `stepPuppets`）；没有回放的读回帧不推进（调用方已 `seek`）
+    if (animated) options.puppets?.frame(dt, stateSink(state));
     shake.apply(at);
     // 先把本帧时间交给脚本时钟（P10b）：动画事件的回调读到本帧的 `engine.runtime`（同渲染器帧开头就推进 `frameClock`）
     scripts?.enterFrame?.(dt, at);
@@ -690,6 +699,8 @@ function replayEncoded(
     scene.sync(state);
     replayAudio(scene, replay, i);
     scene.stepParticles(frametime, time, state, pointers.cursors[i]);
+    // puppet（P12a 步骤 4 点 5）：粒子之后、相机之前，同渲染器 `stepPuppets`
+    options.puppets?.frame(frametime, stateSink(state));
     const eye = shake.apply(time);
     // 先把本帧时间交给脚本时钟（P10b），同 `replayReadback`
     scripts?.enterFrame?.(frametime, time);

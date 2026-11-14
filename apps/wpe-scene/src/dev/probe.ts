@@ -59,6 +59,7 @@
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
 import { SceneAnimations, type AnimationProbeEntry } from "../animation/player";
+import { ScenePuppets, stateSink } from "../puppet/player";
 import type { SceneBundle } from "../compile/bundle";
 import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker } from "../compile/client";
@@ -530,6 +531,16 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       // `getAnimation().play()` 才有落点，同宿主的待用播放器），回放推进、读回的就是这一份；不跑脚本时仍在回放之前才建，行为不变
       const animationList = bundle.animations ?? [];
       const animations = animationList.length ? new SceneAnimations(animationList) : null;
+      // puppet 的骨骼动画（P12a 步骤 4 点 5）：没有 puppet 图层时不建，调用序列逐字节同以前。有回放时沿同一串 dt 从第 1 帧推进
+      // （`replayReadback` 的 `puppets`，粒子之后、相机之前），没有回放时按 `time` 定位（`seek`）；profile 帧另用一份
+      const puppetList = bundle.layers.flatMap((layer) =>
+        layer.puppet ? [{ object: layer.object, puppet: layer.puppet }] : [],
+      );
+      const puppets = puppetList.length ? new ScenePuppets(puppetList) : null;
+      if (puppets) {
+        puppets.refresh(stateSink(state));
+        scene.setPuppets(puppets);
+      }
       if (scriptsOptions) {
         const properties = bundle.scripts.list.length
           ? await readProbeUserProperties(reader, options.projectDir, options.sceneAssets, options.userProperties)
@@ -553,6 +564,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         scene.profileParticles(true);
         // profile 帧另用一份动画、按 1/60 推进（计时含动画开销）；读回那一帧的值由下面另一份决定，不受 profile 帧数影响
         const profiled = animationList.length ? new SceneAnimations(animationList) : null;
+        const profiledPuppets = puppetList.length ? new ScenePuppets(puppetList) : null;
+        if (profiledPuppets) scene.setPuppets(profiledPuppets);
         const samples: number[] = [];
         for (let i = 0; i < options.profile; i++) {
           const t0 = performance.now();
@@ -567,6 +580,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           );
           scene.sync(state);
           scene.stepParticles(1 / 60, startTime + i / 60, state, cursor);
+          // puppet 在粒子之后、相机之前（同渲染器）
+          profiledPuppets?.frame(1 / 60, stateSink(state));
           scene.setCamera(camera);
           // 关键帧动画在粒子、相机之后写（同渲染器的 `beforeFrame`），写过的由视差之后的 `sync` 刷进 uniform
           profiled?.frame(1 / 60, state);
@@ -600,6 +615,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         };
         particleMs = scene.particleProfile();
         scene.profileParticles(false);
+        // 读回那一帧用自己的一份（profile 帧推进的是另一份）
+        if (puppets) scene.setPuppets(puppets);
       }
       // 粒子回放：前 n−1 帧在 replayParticles 里步进，最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。
       // 抖动与缩放（P5a 步骤 3、4）：每一帧先用上一帧的相机步进粒子、再设这一帧的（同渲染器），读回的那一帧同样，之后才 setParallax。
@@ -611,6 +628,11 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         animations.seek(startTime);
         animations.write(state);
       }
+      // puppet：没有回放时按 `time` 定位（回放时 `replayReadback` 逐帧推进）；seek 之后按当前状态再算一次（`visible` 等用户属性）
+      if (puppets && !replayed) {
+        puppets.seek(startTime);
+        puppets.refresh(stateSink(state));
+      }
       // 场景脚本（第 7 批）：每一帧设好相机、推进完动画之后跑一帧，`g_Daytime` 跟着脚本的时钟；不跑脚本时这两项不给，逐字节同以前
       const scriptsClock = scriptsOptions?.clock;
       const { time, frametime, frame } = replayReadback(scene, state, {
@@ -620,6 +642,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         parallax,
         size: [sceneWidth, sceneHeight],
         animations: replayed ? (animations ?? undefined) : undefined,
+        puppets: replayed ? (puppets ?? undefined) : undefined,
         perspective: perspective && { ...perspective, path: profileCamera.path },
         cameraObjects,
         // 回放时前 n − 1 帧每帧都在 GPU 上画（P10a 走查）：被依赖图层的合成 RT、`clearenabled: false` 的累加等跨帧状态同渲染器；

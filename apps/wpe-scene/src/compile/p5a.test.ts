@@ -58,9 +58,10 @@ describe("模型 JSON", () => {
     expect(modelKeys({ material: "materials/a.json", instanced: true })).toEqual([]);
     expect(modelKeys({ material: "materials/a.json", nopadding: true, instanced: true })).toEqual([]);
   });
-  it("非布尔键照旧按真值报：`puppet` 是路径字符串", () => {
-    expect(modelKeys({ material: "materials/a.json", puppet: "models/a.mdl" })).toEqual(["model:puppet"]);
-    expect(modelKeys({ material: "materials/a.json", puppet: "" })).toEqual([]);
+  it("非布尔键照旧按真值报；`puppet`（路径字符串）从 P12a 起放行，用法由 `buildPuppet` 报细分键", () => {
+    expect(modelKeys({ material: "materials/a.json", puppet: "models/a.mdl" })).toEqual([]);
+    expect(modelKeys({ material: "materials/a.json", bones: "models/a.mdl" })).toEqual(["model:bones"]);
+    expect(modelKeys({ material: "materials/a.json", bones: "" })).toEqual([]);
     expect(modelKeys({ material: "materials/a.json", unknownkey: 1 })).toEqual(["model:unknownkey"]);
   });
   it("`modelFlag`：`solidlayer` 写成 1 不算", () => {

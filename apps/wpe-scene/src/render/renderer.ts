@@ -32,6 +32,7 @@ import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { particlePasses } from "../particles/system";
+import type { ScenePuppets } from "../puppet/player";
 import type { ParticleScriptTarget } from "../script/api";
 import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
@@ -105,6 +106,12 @@ export interface SceneRendererOptions {
    */
   stepObjects?: (dt: number) => void;
   /**
+   * puppet 的动画推进（P12a 步骤 4 点 4，rea-p12-runtime 2）：每个实时帧在粒子步进之后、相机（`setCamera`）与脚本之前，用同一个钳过的帧时间
+   * （WPE 的对象更新循环里粒子与 puppet 同在、排在相机、关键帧与脚本之前，所以用户属性 K+0、脚本 K+1）。补画帧（帧时间 0）与暂停时不执行，
+   * 动画冻结；图层隐藏也推进。宿主在这里调 `ScenePuppets.frame`，算好的蒙皮矩阵由 `GpuScene.update` 写进 `g_Bones`。
+   */
+  stepPuppets?: (dt: number) => void;
+  /**
    * 视频纹理的帧来源（P9a 步骤 2，宿主的 `SceneVideos`）：每个实时帧开头 `beginFrame`（帧时钟推进之后、粒子步进之前；补画帧不调），
    * 换上的每个场景都交给 `GpuScene.setVideoSink`，编码时画到视频纹理才问 `drawn`。缺省时视频纹理保持全 0。
    */
@@ -121,6 +128,11 @@ export interface SceneLoadOptions {
   ignoreUnsupported?: boolean;
   /** 新状态建好后、首帧绘制前同步执行。 */
   beforeFirstFrame?: (state: SceneState) => void;
+  /**
+   * 蒙皮矩阵的来源（P12a 步骤 4 点 4，宿主的 `ScenePuppets`）：换上的每个场景都交给 `GpuScene.setPuppets`，`update` 每帧按图层写 `g_Bones`。
+   * 宿主在 `beforeFirstFrame` 里把它 `carryOver` 旧的并按新状态 `refresh`，第一帧就是当前姿势。不给时 `g_Bones` 保持 0。
+   */
+  puppets?: Pick<ScenePuppets, "skin"> | null;
   /**
    * 文本层的排版结果（P6b 1d，`objects` 下标 → `TextLayout`）：宿主在加载前排好（`text/host.ts` 的 `SceneTexts.prepare`），原样交给
    * `GpuScene.build`。bundle 里有文本层而没给时整场画不了（`render:text-layout`）。
@@ -391,6 +403,7 @@ export class SceneRenderer {
     }
     // 视频纹理（P9a）：画第一帧之前接上，第一帧就能问 `drawn`
     scene.setVideoSink(this.options.videos ?? null);
+    scene.setPuppets(options.puppets ?? null);
     const old = this.scene;
     // 重编译：粒子层沿用旧场景的脚本暂停 / 停止（P4f 步骤 3），在重放脚本写入、画第一帧之前
     if (old) scene.adoptParticleScripts(old);
@@ -706,6 +719,9 @@ export class SceneRenderer {
     // 的模拟用加载时的相机（s 为 0），同预热。绘制、`g_EyePosition`、视差点用当帧的 s（实测都对）：第一次 `sync` 里新建的 draw 用的是
     // 旧相机，脚本之后的 `setParallax` 因相机变了整体重写。缩放随同一个相机交（步骤 4）：模拟的反投影用上一帧的 zoom，绘制用当帧的
     // （静态缩放看不出先后，按读码与抖动的实测实现）
+    // puppet（P12a 步骤 4 点 4）：和粒子同在对象更新循环里，排在粒子之后、相机与脚本之前（rea-p12-runtime 2）：用户属性在两帧之间写进状态、
+    // 这一帧就读到，脚本写回在 puppet 之后、晚一帧。在 try 外，宿主回调的问题不让画面退回
+    if (live) this.options.stepPuppets?.(frametime);
     scene.setCamera(camera);
     // 声音（P6a 步骤 1）：粒子之后、脚本之前；同脚本在 try 外，声音的问题不让画面退回
     if (live) this.options.stepObjects?.(frametime);

@@ -88,6 +88,9 @@ export function targetKey(target: ScriptTarget): string {
     // 用户纹理（P11b）：属性来源，脚本写不到它；同宿主 `targetPath`
     case "user-texture":
       return `usertextures/${target.name}`;
+    // puppet 动画层字段（P12a 步骤 3 点 3）：只有用户属性写它，脚本写不到（`puppet:layer-script`）；同宿主 `targetPath`
+    case "animation-layer":
+      return `objects/${target.object}/animationlayers/${target.layer}/${target.field}`;
     default:
       return target.path;
   }

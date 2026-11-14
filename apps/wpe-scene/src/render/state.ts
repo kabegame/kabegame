@@ -61,6 +61,8 @@ import {
 } from "../compile/particles";
 import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import { soundVolume } from "../compile/sounds";
+import { animationLayerValue } from "../compile/puppet";
+import { animationLayerKey, type PuppetLayerFields } from "../puppet/player";
 import { sameTextField, textFieldFromJson, type TextFields } from "../text/fields";
 import type { TextLayout } from "../text/layout";
 import { alignmentOffset } from "./layout";
@@ -274,6 +276,11 @@ export class SceneState {
    */
   readonly cameras = new Map<number, { fov: number; zoom: number }>();
   /**
+   * puppet 动画层的就地字段（P12a 步骤 3 点 3，键 `animationLayerKey(对象下标, 层下标)`），起始值 = 编译期的 `PuppetLayerDef`（已按属性值解析）。
+   * 写入不标脏：`ScenePuppets.frame` 每帧经 `animationLayer` 读，用户属性在两帧之间写进来、puppet 当帧就读到（p12-REPORT 用例 4）。
+   */
+  readonly animationLayers = new Map<string, PuppetLayerFields>();
+  /**
    * 文本层的排版结果（P6b 1d，`objects` 下标 → `TextLayout`，含字形网格与它所在的图集）：宿主在加载前排好（`text/host.ts`），经
    * `GpuScene.build` 的 `texts` 交来（`setTexts`）。渲染图按它定文字框、合成 RT 与有没有彩色字形，世界矩阵带它的对齐偏移。
    * 1e 起运行中重排后由 `setText` 换上新的。
@@ -403,6 +410,15 @@ export class SceneState {
     // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
     for (const layer of bundle.layers)
       if (layer.camera) state.cameras.set(layer.object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
+    // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle
+    for (const layer of bundle.layers)
+      layer.puppet?.layers.forEach((def, slot) =>
+        state.animationLayers.set(animationLayerKey(layer.object, slot), {
+          rate: def.rate,
+          blend: def.blend,
+          visible: def.visible,
+        }),
+      );
     // 文本层的 effect 开关会改 `padding`、文字框与合成 RT（rea-p6b-layout 3.5），1d 没有就地重排：切换一律整场重编译（同冻结的图层）
     for (const layer of bundle.layers)
       if (layer.text) {
@@ -589,6 +605,16 @@ export class SceneState {
       // 取值规则与编译期相同（`cameraValue`），条件先换成布尔；不合法的值不改字段（同 general 的 float）
       const value = cameraValue(conditioned(binding, raw));
       if (camera && value !== undefined) camera[target.field] = value;
+      return "applied";
+    }
+    if (target.kind === "animation-layer") {
+      const fields = this.animationLayers.get(animationLayerKey(target.object, target.layer));
+      // 取值规则与编译期相同（`animationLayerValue`），条件先换成布尔；不合法的值不改字段
+      const value = animationLayerValue(target.field, conditioned(binding, raw));
+      if (fields && value !== undefined) {
+        if (target.field === "visible") fields.visible = value as boolean;
+        else fields[target.field] = value as number;
+      }
       return "applied";
     }
     if (target.kind === "layer") {

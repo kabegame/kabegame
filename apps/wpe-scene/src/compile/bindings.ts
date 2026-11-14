@@ -201,7 +201,16 @@ export type BindingTarget =
    * 不管它绑在几个槽上。值只认字符串，别的类型当空串（缺省纹理）。
    */
   | { kind: "user-texture"; name: string }
+  /**
+   * puppet 动画层的 `rate` / `blend` / `visible`（P12a 步骤 3 点 3，rea-p12-runtime 1.5：三个描述符可绑定，用户属性在两帧之间写进去、puppet
+   * 当帧就读到，p12-REPORT 用例 4）：就地写进 `SceneState.animationLayers`，不标脏，`ScenePuppets.frame` 每帧读。`object` 是 `objects` 下标，
+   * `layer` 是 `ScenePuppet.layers` 的下标（丢掉找不到动画的项之后）。字段挂脚本报 `puppet:layer-script`（P12c），不在这里。
+   */
+  | { kind: "animation-layer"; object: number; layer: number; field: AnimationLayerField }
   | { kind: "recompile"; reason: RecompileReason; path: string };
+
+/** 动画层能绑用户属性的字段（同 `compile/puppet.ts` 的 `PuppetLayerField`）。 */
+export type AnimationLayerField = "rate" | "blend" | "visible";
 
 /** 相机对象的就地字段（P5d 步骤 3）。 */
 export type CameraField = "fov" | "zoom";

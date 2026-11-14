@@ -345,6 +345,8 @@ const SUPPORTED_MODEL = new Set([
   "projectlayer",
   "fullscreen",
   "cropoffset",
+  // puppet（P12a）：路径字符串，用法由 `compile/puppet.ts` 的 `buildPuppet` 报细分键（`puppet:*`、`mdl:*`）；fullscreen / 组合层上 WPE 整段跳过
+  "puppet",
 ]);
 /**
  * 模型 JSON 的布尔键（`FUN_1401fac50`，rea-p5-modelflags §7）：WPE 只认 JSON 的 `true`，写成 1、字符串等于没写
@@ -856,6 +858,9 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !cameraKey(key) &&
       !(kind === "particle" && key === "instanceoverride") &&
       !(shape && key === "shape") &&
+      // 动画层（P12a）：图像层上 WPE 在加载模型 JSON 的 puppet 时读它（`FUN_1401fcc20`，rea-p12-runtime 1.4）；用法由 `buildPuppet` 报
+      // `puppet:*`。模型对象上 WPE 的读法没查（`3706286085`，P13），照报
+      !(kind === "image" && key === "animationlayers") &&
       active(value)
     )
       unsupported.add(`object:${key}`);
@@ -1231,6 +1236,8 @@ export function checkProgramFeatures(
   result: TranslateResult,
   unsupported: Set<string>,
   extra: ReadonlySet<string> = new Set(),
+  /** 放行的引擎 COMBO（P12a：puppet 的 pass 放行 `SKINNING`，`PUPPET_COMBOS`）。 */
+  allowedCombos: ReadonlySet<string> = new Set(),
 ): void {
   for (const uniform of result.uniforms ?? [])
     if (
@@ -1241,9 +1248,21 @@ export function checkProgramFeatures(
     )
       unsupported.add(`uniform:${uniform.name}`);
   for (const combo of result.combos ?? [])
-    if (combo.value !== 0 && ENGINE_COMBOS.has(combo.name.toUpperCase()))
+    if (
+      combo.value !== 0 &&
+      ENGINE_COMBOS.has(combo.name.toUpperCase()) &&
+      !allowedCombos.has(combo.name.toUpperCase())
+    )
       unsupported.add(`combo:${combo.name.toUpperCase()}`);
 }
+
+/**
+ * puppet 的 pass（P12a 步骤 3 点 2，rea-p12-mdl 9.3、9.6）里才写的引擎 uniform：`g_Bones` 是蒙皮矩阵数组，每帧由 `ScenePuppets` 写
+ * （`render/scene.ts` 的 `update`）。别的 pass 读到它照报 `uniform:g_Bones`。`g_BonesAlpha` 与变形的 uniform 归 P12b，不在这里。
+ */
+export const PUPPET_UNIFORMS: ReadonlySet<string> = new Set(["g_Bones"]);
+/** puppet 的 pass 放行的引擎 COMBO：只有 `SKINNING`（`BONECOUNT` 本来就不在 `ENGINE_COMBOS` 里）；`SKINNING_ALPHA` 等照报（P12b）。 */
+export const PUPPET_COMBOS: ReadonlySet<string> = new Set(["SKINNING"]);
 
 /**
  * 程序读不读音频频谱 uniform（P11a）：`bundle.audio` 据此决定宿主是否订阅音频。翻译器标了 `unused` 的不算（同 `checkProgramFeatures`：

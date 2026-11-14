@@ -72,6 +72,10 @@
  *   不可见时照画、只跳过上屏，在渲染器里（`render/scene.ts` 的 `layerOpsToRun`）。
  *   引用方材质里 `_rt_imageLayerComposite_<id>_a` 的槽（`ScenePass.layerComposites`）给出纹理来源 `{ kind: "layer", object }`，各种图层的
  *   计划都认（`passInputs`）。
+ * - **puppet**（P12a 步骤 4，`SceneLayer.puppet`，rea-p12-mdl 9.2–9.4，p12-REPORT 用例 8）：网格 0 代替上屏的四边形，两条路径在编译期定
+ *   （`puppet.composite`，WPE 加载时置 `0x10`）。直接上屏用 `puppet.passes[0]`（基础材质 + puppet 组合键），几何 `puppet`、UV 取「图像 / GPU 纹理」、
+ *   不内缩；合成路径同被依赖：基础 pass 照旧画四边形进合成 RT、全部 effect 留在合成链，最后用 `puppet.upload`（passthrough 材质 + puppet
+ *   组合键）以 puppet 网格采样合成 RT 上屏（角色 `passthrough`，几何 `puppet`，UV (1, 1)，不内缩）。
  * - **用户纹理**（P11b 步骤 2，`ScenePass.userTextures`）：槽上登记了用户纹理时，纹理来源是 `{ kind: "user" }`，带缺省纹理（`fallback`，静态纹理或
  *   被依赖图层的 RT），渲染器按来源当前的值解析：有图用那张（图像尺寸 = 纹理尺寸 = 裁后宽高），没有图用缺省。槽 0 换图后 UV 上界、UV 内缩、
  *   合成 RT 与 effect fbo 都按新纹理重算（WPE 的就绪回调 `FUN_140209360`，rea-p11b 4.2）：`planLayer` 的 `userBase` 是这一刻基础材质槽 0
@@ -121,8 +125,11 @@ export type DrawRole = "direct" | "base" | "effect" | "final" | "passthrough" | 
  *   UV 取步骤的 `uv` / `inset`，矩阵见 `scene.ts`。
  * - `shape`：形状对象的四边形（P8 步骤 2，`layout.ts` 的 `shapeQuad`，按 `SceneShape.points` 与图层 `size`），场景视图投影 × 图层世界矩阵；
  *   效果矩阵取 WPE 给形状的那组值（`uniforms.ts` 的 `drawMatrices`）。`uv` / `inset` 不用（uv 就是点本身）。
+ * - `puppet`（P12a 步骤 4，rea-p12-mdl 9.2、9.4）：puppet 的网格 0 代替图层四边形，只用在上屏那一步（直接上屏与 passthrough 上屏），矩阵同
+ *   `layer`（图层世界矩阵，画自己、带对齐偏移与视差，不乘 `size`：网格顶点本来就是图层局部像素）。`uv` 是直接上屏时 `a_TexCoord` 乘的比例
+ *   （图像 / GPU 纹理），上屏时是 (1, 1)；不内缩（`inset` 恒为 `NO_INSET`）。
  */
-export type Geometry = "layer" | "fill" | "fullscreen" | "shape";
+export type Geometry = "layer" | "fill" | "fullscreen" | "shape" | "puppet";
 
 /**
  * 一个绘制步骤的光栅状态（P5d 步骤 1，p5-REPORT「P5d 语义的实测核对」）：`test` 对场景的深度做 GREATER 测试，`write` 写深度，`cull` 剔背面
@@ -665,7 +672,10 @@ export function planLayer(
   // 被依赖（P8 步骤 4，rea-p8-render 第 1、2 节）：WPE 的 `0x10`，全部 effect 留在合成链、passthrough 上屏，同 colorBlendMode 混合；
   // 快照规则 1 仍只看 `passthrough`（colorBlendMode）
   const depended = !!layer.dependedOn;
-  const composited = passthrough || depended;
+  // puppet 的合成路径（P12a 步骤 4）：编译期定的 `0x10`，同被依赖，全部 effect 留在合成链，由 `puppet.upload` 上屏
+  const puppet = layer.puppet ?? null;
+  const puppetComposite = !!puppet?.composite;
+  const composited = passthrough || depended || puppetComposite;
   let snapped = false;
   const snapshot = () => {
     if (snapped) return;
@@ -706,7 +716,7 @@ export function planLayer(
   // 组（P5b 步骤 4）：带子层的组合层。没有 effect、colorBlendMode ∈ {0, 31} 时也要画：基础 pass → 子树 → `groupUpload` 上屏
   const group = layer.passthroughModel && layer.subtree.length > 0;
   // 被依赖的图层一律走合成路径（P8 步骤 4）：没有启用的 effect 也是，组合层这时同样要画（`p8-dep` 的 7、`p8-misc` 的 A13）
-  if (!needsComposite(layer, enabled) && !group && !depended) {
+  if (!needsComposite(layer, enabled) && !group && !depended && !puppetComposite) {
     // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl` 的 CL3、CL5）：没有启用的 effect、colorBlendMode ∈ {0, 31}、没有子层时整层不画。
     // WPE 在图层开始时照拷一次快照，没人读，不拷。带子层的是组，走下面的合成路径（步骤 4）。
     // fullscreenlayer 也是组合层，同样不画（P5b 步骤 3，`p5b-fsnofx` 没有 draw）
@@ -728,6 +738,25 @@ export function planLayer(
       if (mesh.glyphs.length) steps.push(textStep("glyphs", base, "direct", scene, blend(base)));
       if (mesh.colorGlyphs.length)
         steps.push(textStep("color", sceneText.colorPass, "direct", scene, blend(sceneText.colorPass)));
+      return { composite: null, steps, reasons };
+    }
+    // puppet 直接上屏（P12a 步骤 4，rea-p12-mdl 9.2、9.4）：材质是基础材质 + puppet 组合键，画网格 0，`a_TexCoord` 乘 `uv`（图像 / GPU
+    // 纹理，由 `scene.ts` 建顶点时乘），不内缩；混合、深度、剔除同基础 pass（变体与基础 pass 同一份材质键）
+    const direct = puppet?.passes[0];
+    if (puppet && direct) {
+      steps.push({
+        kind: "draw",
+        role: "direct",
+        pass: direct,
+        effect: null,
+        target: { kind: "scene" },
+        inputs: staticInputs(direct, null),
+        geometry: "puppet",
+        uv,
+        inset: NO_INSET,
+        blending: additive ? "additive" : direct.blending,
+        raster: rasterState(direct, direct, additive ? "additive" : direct.blending),
+      });
       return { composite: null, steps, reasons };
     }
     // fullscreen（P5b 步骤 3，`p5b-fsmvp` 的 FSBG、FSQ）：NDC 四边形、UV 照常取纹理上界、不内缩；MVP 照常，着色器乘不乘它决定
@@ -900,7 +929,8 @@ export function planLayer(
   });
 
   if (composited) {
-    const pass = layer.passthrough;
+    // puppet 的合成路径用自己的上屏 pass（passthrough 材质 + puppet 组合键 + BLENDMODE，P12a 步骤 4）
+    const pass = puppet ? puppet.upload : layer.passthrough;
     if (!pass) reasons.push("render:no-passthrough");
     else {
       const inputs = staticInputs(pass, null);
@@ -916,11 +946,12 @@ export function planLayer(
         effect: null,
         target: { kind: "scene" },
         inputs,
-        // fullscreen 同末 pass，画 NDC 四边形（P5b 步骤 3；colorBlendMode 混合的 fullscreen 没有实测，按同一条规则）
-        geometry: screenGeometry,
+        // fullscreen 同末 pass，画 NDC 四边形（P5b 步骤 3；colorBlendMode 混合的 fullscreen 没有实测，按同一条规则）。puppet 画网格 0，
+        // UV 0–1、不缩放不内缩（rea-p12-mdl 9.2、9.4：上屏采样合成 RT 全图）
+        geometry: puppet ? "puppet" : screenGeometry,
         uv: [1, 1],
         // 被依赖时同样内缩（P8 步骤 4 核对表第 1 行：`p8-dep` 的 A2 上屏 UV 0.00234375–0.99765625 = 0.15 / 64，组合层 A7 是 0–1）
-        inset: finalInset,
+        inset: puppet ? NO_INSET : finalInset,
         blending,
         // 上屏：深度借基础 pass，剔除用 passthrough 材质自己的
         raster: rasterState(base, pass, blending),

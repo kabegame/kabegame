@@ -576,3 +576,31 @@ export interface SceneLayer {
 **留给步骤 3、4**：
 - `PuppetSink` 还没接 `SceneState`，`bindings` 还没登记成绑定目标；
 - 宿主要按「新建 → `carryOver` → `refresh`」的顺序调用。
+
+### 步骤 3、4 — 编译期与渲染接线（2026-11-14，进行中）
+
+由执行代理（Sonnet）在独立工作树 `ignore/p12/a/wt`（基点 `69dc573f`）实现，主会话核对后三方合并进主工作区（祖先取基点；14 个改动文件无冲突，`script/runtime.ts` 在合并途中被别的会话改过，按它的新内容重新合并）。**还没提交，dev app 里的 GPU 核对还没做。**
+
+**改动**：
+- 修改 `compile/bindings.ts`、`compile/bundle.ts`、`compile/features.ts`、`compile/puppet.ts`、`compile/p5a.test.ts`、`dev/particleCorners.ts`、`dev/probe.ts`、`host.ts`、`puppet/player.ts`、`render/graph.ts`、`render/renderer.ts`、`render/scene.ts`、`render/state.ts`、`script/runtime.ts`；
+- 新建 `render/puppet.ts`、`compile/p12a.test.ts`、`render/p12a.test.ts`。
+
+**核对（工作树里）**：
+- tsc 0 error；
+- p12a / p5a / p5c / puppet / mdl / graph / state 相关单测 185 个全过；全量 vitest 只有 `compile/pipeline.test.ts` 的 `3293687972` 读取超限一处失败，和步骤 1、2 时相同，与本步无关。
+- 语料（192 张，`ignore/p12/a/corpus-diff.txt`）：
+  - 干净 100 → 110，新增的是子计划列的 9 张加 `3351072238`（puppet 默认被用户属性隐藏）；
+  - 去掉的键：`model:puppet` 36 张、`object:animationlayers` 32 张；新增的只有预期的 `puppet:*` 细分键；
+  - 非 puppet 场景逐张不变。
+- `g_Bones` 的传法：翻译器把 `mul(vec4(p, 1), g_Bones[i])` 译成 `mat4x3 * vec4`（列向量），WGSL 的第 c 列就是 K 的第 c 行的 xyz，`skinMatrices` 的 12 个数原样传给 `UniformBlock.set`，不用转置。单测按 WGSL 的算法读回字节，和 WPE 的公式逐位一致。
+
+**和子计划的出入**：
+- 直接上屏的材质变体沿用基础 pass 的稳定键 `objects/N/passes/0`（常量、属性绑定、关键帧共用），重编后把重复登记的绑定截掉。
+- `composite` 取 `layer.effects.length > 0`。写死不可见的 effect 编译期不进列表，和 WPE 的 effect 个数可能不同；语料里没有「puppet 的 effect 全部写死不可见」的（0 个），步骤 5 再核。
+- 精灵表与纹理通道也会让 WPE 走合成路径，没做：这两类本来就在 `tex:animation` / `puppet:texture-channels` 下照报。
+
+**合并进主工作区后**：
+- 主工作区的 tsc 报 `script/runtime.ts` 找不到 `../render/cursor`；`compile/p5c.test.ts` 有 2 个失败（`cursor:model`、`disablepropagation`）。
+- 两处都来自同期 P6c 会话还没写完的改动，不是本步的。
+
+**GPU 核对受阻**：主工作区缺 `render/cursor` 时建不出场景宿主。共享的宿主产物不能用工作树的源码覆盖，要等主工作区能构建，再按主工作区建一次、在 dev app 里核对。

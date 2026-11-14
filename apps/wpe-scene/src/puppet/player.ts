@@ -45,6 +45,16 @@ export interface PuppetSink {
   animationLayer(object: number, layer: number): PuppetLayerFields | undefined;
 }
 
+/** 把 `SceneState` 接成 `PuppetSink`（用户属性写进 `animationLayers`，puppet 当帧就读到）。 */
+export function stateSink(state: { readonly animationLayers: ReadonlyMap<string, PuppetLayerFields> }): PuppetSink {
+  return { animationLayer: (object, layer) => state.animationLayers.get(animationLayerKey(object, layer)) };
+}
+
+/** `SceneState.animationLayers` 的键：对象下标与层下标。 */
+export function animationLayerKey(object: number, layer: number): string {
+  return `${object}:${layer}`;
+}
+
 /** 一个动画层的运行时。 */
 interface LayerRuntime {
   readonly def: PuppetLayerDef;
