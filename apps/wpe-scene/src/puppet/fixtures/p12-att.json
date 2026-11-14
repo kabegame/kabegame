@@ -1,0 +1,24 @@
+{
+  "source": "ignore/p12/proj/p12-att/models/parent_puppet.mdl，挂点矩阵由 mdl12.py 解析；生成 ignore/p12/b/fix/mkfix_b.py",
+  "mdlGzip": "H4sIAAAAAAAC/62XP2gTURjAv+s/HQTrVreAUDrpaURczN2lGTokIiqiWyMYrDbekUTQ7QYRhw6BFjTicJOTg9DJRS5QnCIITm6dOgkWOnXSe5e8ppWY9zPNg5e7+/K77/3e947jXqlQvGPbl7JyWkLLEhHVq+XGg9pKebV+4fH94Glw/lHdfyL9lmn3jotJ99SZujmcOPjfkyMtdLr98PXfbVBMtSg/nnz6Os3XHk8+HRtHPh1j87Vw/fprdLx8B3NdJPO1cP3YeliwfnPp0RL1KE7IpEzJtMwkvzNyoseUCsVbtm1flptTkmI132+kD/3vpLn/vV4DYuVaVbTwPxKGwxOqogwexOqupu7HNB1jLqtnl1bYSyp8RZzZbiSe7EKqLqu+H6RviIXenfqlsTUtQ5p+ItKxXTMTAiYGjHhmJgMYFzDLgAkB0wRMBJiPgIkB8w0w24DZBYzkzcxJwMwCZg4wGcAsAMYGzFXAuIBZAswNwNwFzDJgHgImAMwzwISAeQGYV4BZA0wTMBuAeQOYd4CJAKPf5dFI+b52itfMTMfIvG2dzYGxcub5hTnzWC0jk81uAp+OkalUdoCzOOaxTjmgho7ZZ94xzz3rmJ1d4FwEzveAcwU414FzCMZ6Cea1BnzWwdxbwDkCzu+B8wfgvAmcPwHnGDh/Ac4d4PwdOP8AztvAeQc4/wTOe8B5Hzirb+uj73JDKxW828nH/kU5d0aS/ZYljZXAG2HHkzm07VWxJE1efjUbTvX665yGk/PPKjZ8T7Lb7u9JRrOJn2+lXcf+AHLToGskEQAA",
+  "attachments": [
+    {
+      "name": "tipA",
+      "bone": 1,
+      "matrix": [1.0, 0.0, 0.0, 0.0, -0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 40.0, 10.0, 0.0, 1.0]
+    },
+    {
+      "name": "tipB",
+      "bone": 0,
+      "matrix": [
+        0.955336511, 0.295520216, 0.0, 0.0, -0.295520216, 0.955336511, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -30.0, 0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "tipA",
+      "bone": 1,
+      "matrix": [1.0, 0.0, 0.0, 0.0, -0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -999.0, -999.0, 0.0, 1.0]
+    }
+  ]
+}

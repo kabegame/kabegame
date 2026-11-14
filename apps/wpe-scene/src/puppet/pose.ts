@@ -269,3 +269,149 @@ export function skinMatrices(
 
 /** 工作格（单线程，函数之间不重入）。 */
 const scratch = { local: new Float32Array(16), temp: new Float32Array(16) };
+
+// ———— 标量轨道：骨骼透明度与变形权重（P12b1 步骤 2，rea-p12-runtime 6.4、clip-morph-attach 5） ————
+
+/** 标量插值（`FUN_140178e00`）：`(1 − f)·a + b·f`，float32 逐步。 */
+function lerp(a: number, b: number, t: number): number {
+  return f(f(f(1 - t) * a) + f(b * t));
+}
+
+/** 骨骼透明度每帧先全置 1（网格标志 bit2 时，`0x1401febcd`）。 */
+export function resetBoneAlpha(alpha: Float32Array): void {
+  alpha.fill(1);
+}
+
+/**
+ * 把一层的骨骼透明度轨道叠进 `alpha`（p12-REPORT 用例 5：三种叠法 40 帧逐位成立）。`values` 是编译期排好的「帧 × 骨骼」，`mask` 为 0 的骨骼不参与；
+ * `lo` / `hi` / `frac` 是同一层采样用的帧号（`frameIndex`），`w` 是这一层的权重（`layerWeight`）。
+ * - `w == 1`（精确相等）且非加法：**覆盖** `lerp(lo, hi, frac)`；
+ * - 非加法其它 w：**混合** `lerp(cur, v, w)`（cur 从 1 开始）；
+ * - 加法：`clamp(cur + (v − 1)·w, min(cur, v), max(cur, v))`。
+ */
+export function blendScalarAlpha(
+  alpha: Float32Array,
+  values: Float32Array,
+  mask: Uint8Array,
+  bones: number,
+  lo: number,
+  hi: number,
+  frac: number,
+  w: number,
+  additive: boolean,
+): void {
+  const override = !additive && w === 1;
+  for (let b = 0; b < bones; b++) {
+    if (!mask[b]) continue;
+    const v = lerp(values[lo * bones + b], values[hi * bones + b], frac);
+    if (override) alpha[b] = v;
+    else if (!additive) alpha[b] = lerp(alpha[b], v, w);
+    else {
+      const cur = alpha[b];
+      const x = f(cur + f(f(v - 1) * w));
+      alpha[b] = Math.min(Math.max(x, Math.min(cur, v)), Math.max(cur, v));
+    }
+  }
+}
+
+/** 变形权重每帧先全清 0、生效位全清（`FUN_1401fdf90`，`0x1401fecb2`）。 */
+export function resetMorph(weights: Float32Array, active: Uint8Array): void {
+  weights.fill(0);
+  active.fill(0);
+}
+
+/**
+ * 把一层的变形权重轨道叠进 `weights` / `active`（clip-morph-attach 5(1)(2)；`tracks[t]` 为 null 的目标这一层不碰）。生效 = `|v| ≥ FLT_EPSILON`（负权重也生效，
+ * NaN 也算）。
+ * - 覆盖（`w == 1` 且非加法）：生效置位并写 v，不生效**清位**、权重不动；
+ * - 混合：生效置位（从不清位），权重总是 `lerp(cur, v, w)`（cur 从 0 开始）；
+ * - 加法：不生效整条跳过，否则置位，`a = v·w`，权重 = `max(min(cur, a), min(max(cur, a), cur + a))`（同号取绝对值大的，不相加）。
+ */
+export function blendMorphWeights(
+  weights: Float32Array,
+  active: Uint8Array,
+  tracks: readonly (Float32Array | null)[],
+  lo: number,
+  hi: number,
+  frac: number,
+  w: number,
+  additive: boolean,
+): void {
+  const override = !additive && w === 1;
+  for (let t = 0; t < tracks.length && t < weights.length; t++) {
+    const track = tracks[t];
+    if (!track) continue;
+    const v = lerp(track[lo], track[hi], frac);
+    const on = !(Math.abs(v) < FLT_EPSILON);
+    if (override) {
+      if (on) {
+        active[t] = 1;
+        weights[t] = v;
+      } else active[t] = 0;
+    } else if (!additive) {
+      if (on) active[t] = 1;
+      weights[t] = lerp(weights[t], v, w);
+    } else {
+      if (!on) continue;
+      active[t] = 1;
+      const cur = weights[t];
+      const a = f(v * w);
+      weights[t] = Math.max(Math.min(cur, a), Math.min(Math.max(cur, a), f(cur + a)));
+    }
+  }
+}
+
+/** `g_MorphOffsets` / `g_MorphWeights` 的槽数（`FUN_14020cff0`：最多 11 个目标 + 缩放那一槽）。 */
+export const MORPH_SLOTS = 12;
+
+/** 一个 puppet 的变形 uniform（`ScenePuppets.morph` 交出的形状）。 */
+export interface MorphUniforms {
+  /** `[0]` 生效数，`[1 + k]` = 第 k 个目标号 × nv；没用的槽为 0。 */
+  offsets: Uint32Array;
+  /** `[0]` 差值缩放，`[1 + k]` = 第 k 个目标的权重；没用的槽为 0。 */
+  weights: Float32Array;
+}
+
+/** 排序用的工作格（单线程，函数之间不重入）。 */
+const picked = { target: new Int32Array(MORPH_SLOTS), weight: new Float32Array(MORPH_SLOTS) };
+
+/**
+ * 写变形 uniform（`FUN_14020cff0`，clip-morph-attach 5(3)）：按目标号升序取前 11 个生效目标（不是权重最大的 11 个），再按带符号权重降序**稳定**排序
+ * （插入排序，`pred(新, 前)` 严格才前移：负权重排在正权重后，相等保持目标号升序，NaN 比较恒假原地不动）。`offsets[0]` = 个数，`offsets[1 + k]` =
+ * `t·nv`，`weights[0]` = `scale`，`weights[1 + k]` = 权重；其余写 0（WPE 不清偏移的空槽，那里没人读，这里清成确定值）。
+ */
+export function morphUniforms(
+  weights: Float32Array,
+  active: Uint8Array,
+  nv: number,
+  scale: number,
+  out: MorphUniforms,
+): void {
+  let n = 0;
+  for (let t = 0; t < weights.length && n < MORPH_SLOTS - 1; t++) {
+    if (!active[t]) continue;
+    picked.target[n] = t;
+    picked.weight[n] = weights[t];
+    n++;
+  }
+  for (let i = 1; i < n; i++) {
+    const target = picked.target[i];
+    const weight = picked.weight[i];
+    let j = i;
+    while (j > 0 && weight > picked.weight[j - 1]) {
+      picked.target[j] = picked.target[j - 1];
+      picked.weight[j] = picked.weight[j - 1];
+      j--;
+    }
+    picked.target[j] = target;
+    picked.weight[j] = weight;
+  }
+  out.offsets.fill(0);
+  out.weights.fill(0);
+  out.offsets[0] = n;
+  out.weights[0] = f(scale);
+  for (let k = 0; k < n; k++) {
+    out.offsets[1 + k] = picked.target[k] * nv;
+    out.weights[1 + k] = picked.weight[k];
+  }
+}

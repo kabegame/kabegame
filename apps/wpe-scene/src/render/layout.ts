@@ -272,11 +272,16 @@ export function effectiveVisible(
  * 一条链上的祖先只算一次。`cache` 跟随调用方的一次状态快照（一次建场景、一次 `sync`），状态变了要换新的。
  * 根节点直接是本地矩阵，不乘单位阵；父对象不在表里时当根节点；对象自己不在表里时为单位阵。
  * 不含任何一层的自身偏移（`offset`，P8 步骤 3）：子层、粒子、控制点、模型的视锥剔除都用它；图层画自己用 {@link drawMatrixOf}。
+ *
+ * 挂点（P12b1 步骤 3，rea-p12-attach-physics 1.2、clip-morph-attach 6）：`attach` 给挂在父 puppet 骨骼上的对象返回 `Pose[骨骼] · Att`，本地矩阵
+ * 先左乘它再乘父的世界矩阵：`W = W_父 · ((Pose · Att) · L)`（两次 `multiply`，顺序同 WPE 先后两次 `FUN_14005ecb0`）。没有挂点（`attach`
+ * 缺省或返回 null）的对象与以前逐字节相同。`cache` 是 `attach` 当时姿势下的缓存：姿势每帧变，调用方每次状态快照换新的。
  */
 export function worldMatrixOf(
   object: number,
   layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "parent">>,
   cache: Map<number, Mat4>,
+  attach?: (object: number) => Mat4 | null,
 ): Mat4 {
   const cached = cache.get(object);
   if (cached) return cached;
@@ -299,7 +304,9 @@ export function worldMatrixOf(
     current = layer.parent;
   }
   for (let i = chain.length - 1; i >= 0; i--) {
-    const local = layerLocalMatrix(layers.get(chain[i])!);
+    const own = layerLocalMatrix(layers.get(chain[i])!);
+    const pre = attach?.(chain[i]) ?? null;
+    const local = pre ? multiply(pre, own) : own;
     base = base ? multiply(base, local) : local;
     cache.set(chain[i], base);
   }
@@ -317,8 +324,9 @@ export function drawMatrixOf(
   object: number,
   layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "offset" | "parent">>,
   cache: Map<number, Mat4>,
+  attach?: (object: number) => Mat4 | null,
 ): Mat4 {
-  const world = worldMatrixOf(object, layers, cache);
+  const world = worldMatrixOf(object, layers, cache, attach);
   const [ox = 0, oy = 0] = layers.get(object)?.offset ?? [];
   // 对齐偏移只改平移列，`((a.x·W0 + W12) + a.y·W4) + a.z·W8`（rea-matrix-order 3.3）；偏移为 0 时原样返回
   return ox === 0 && oy === 0 ? world : alignOffset(world, [ox, oy, 0]);

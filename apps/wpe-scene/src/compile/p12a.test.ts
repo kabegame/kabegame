@@ -228,7 +228,7 @@ describe("能力表：puppet 的 pass（P12a 步骤 3 点 2）", () => {
     combos: [{ name: "SKINNING", value: 1, source: "request" }],
   } as unknown as TranslateResult;
 
-  it("checkProgramFeatures：默认报 uniform:g_Bones 与 combo:SKINNING；puppet 放行表里的不报；SKINNING_ALPHA 等照报", () => {
+  it("checkProgramFeatures：默认报 uniform:g_Bones 与 combo:SKINNING；puppet 放行表里的不报（P12b1 起含 SKINNING_ALPHA、MORPHING 与对应 uniform）", () => {
     const plain = new Set<string>();
     checkProgramFeatures(skinned, plain);
     expect([...plain].sort()).toEqual(["combo:SKINNING", "uniform:g_Bones"]);
@@ -249,7 +249,35 @@ describe("能力表：puppet 的 pass（P12a 步骤 3 点 2）", () => {
       PUPPET_UNIFORMS,
       PUPPET_COMBOS,
     );
-    expect([...alpha].sort()).toEqual(["combo:MORPHING", "combo:SKINNING_ALPHA"]);
+    expect([...alpha]).toEqual([]);
+    // 非 puppet 的 pass 读到照报（P12b1：放行只在 puppet 的 pass 里）
+    const plainAlpha = new Set<string>();
+    checkProgramFeatures(
+      {
+        ...skinned,
+        uniforms: [
+          ...(skinned.uniforms ?? []),
+          { name: "g_BonesAlpha", type: "array<f32, 2>", offset: 128, size: 32, array: 2, stride: 16 },
+          { name: "g_MorphOffsets", type: "array<u32, 12>", offset: 160, size: 192, array: 12, stride: 16 },
+          { name: "g_MorphWeights", type: "array<f32, 12>", offset: 352, size: 192, array: 12, stride: 16 },
+        ],
+        combos: [
+          { name: "SKINNING_ALPHA", value: 1 },
+          { name: "MORPHING", value: 1 },
+        ],
+      } as unknown as TranslateResult,
+      plainAlpha,
+    );
+    expect([...plainAlpha].sort()).toEqual(
+      [
+        "combo:MORPHING",
+        "combo:SKINNING_ALPHA",
+        "uniform:g_BonesAlpha",
+        "uniform:g_Bones",
+        "uniform:g_MorphOffsets",
+        "uniform:g_MorphWeights",
+      ].sort(),
+    );
   });
 
   it("非 puppet 的图层读 g_Bones / SKINNING 照报", async () => {

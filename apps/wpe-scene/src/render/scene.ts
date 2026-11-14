@@ -166,6 +166,7 @@ import type {
   SceneBundle,
   SceneFbo,
   SceneLayer,
+  SceneAttachment,
   SceneModel,
   ScenePass,
   ScenePuppetLayer,
@@ -187,7 +188,6 @@ import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
 import { ParticleSystem, particleNode } from "../particles/system";
-import type { ScenePuppets } from "../puppet/player";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
 import {
   particleVertexLayout,
@@ -244,7 +244,13 @@ import {
 } from "./layout";
 import { identity, mulAffine, multiply, orthographic, translateGlm, translation, type Mat4 } from "./math";
 import { alignedBytes, frustumCulled, MESH_PLACEHOLDER_BYTES, meshVertexLayout, type MeshVertexLayout } from "./mesh";
-import { needsScaledVertices, scaledPuppetVertices } from "./puppet";
+import {
+  clipMaskSize,
+  morphTexelData,
+  needsScaledVertices,
+  scaledPuppetVertices,
+  type PuppetSource,
+} from "./puppet";
 import { parallaxOffset, type SceneParallax } from "./parallax";
 import {
   createPipeline,
@@ -665,6 +671,9 @@ export interface PerspectiveSceneCamera {
 /** 一帧的相机（`GpuScene.setCamera`）：渲染器与探针在帧开头按脚本之前的 general 字段取，按场景的投影类型选一种。 */
 export type SceneCamera = OrthographicSceneCamera | PerspectiveSceneCamera;
 
+/** puppet 绘制每帧要写的 uniform 名（`writePuppetUniforms`）：块里有任何一个，这个 draw 每帧都写。 */
+const PUPPET_BLOCK_NAMES = ["g_Bones", "g_BonesAlpha", "g_MorphOffsets", "g_MorphWeights"];
+
 interface Draw {
   label: string;
   step: DrawLike;
@@ -914,7 +923,9 @@ export function stepPipeline(
   return {
     program: pass.program!,
     blending,
-    format: target.kind === "fbo" ? fboFormat(target.effect, target.name) : format,
+    // 裁切遮罩 RT（P12b1 步骤 5）是 R8：遮罩段画进它（`render/graph.ts` 的 `puppetSteps`）
+    format:
+      target.kind === "fbo" ? fboFormat(target.effect, target.name) : target.kind === "clip-mask" ? "r8unorm" : format,
     alpha: writesAlpha(base, { upload, alphaMax, alphaWriting: pass.alphaWriting }),
     topology:
       step.kind === "text" || drawsMesh(step) || (step.kind === "particles" && !geometry)
@@ -1050,6 +1061,9 @@ export function checkRenderable(
       const pass = bundle.bloom.passes[name as keyof typeof bundle.bloom.passes];
       if (!pass || pass.program === null || !bundle.programs[pass.program]) reasons.add(`render:bloom:${name}`);
     }
+  // puppet 的变形纹理（P12b1 步骤 4）：`rgba32float`（要 float32-filterable；rgba16snorm 在 Dawn 上不可过滤），没有就退回
+  if (buildableLayers(bundle).some((layer) => layer.puppet?.morph) && !features.has("float32-filterable"))
+    reasons.add("render:morph-texture");
   for (const layer of buildableLayers(bundle))
     for (const reason of planProblems(
       planLayer(layer, bundle.textures, undefined, options.texts?.get(layer.object) ?? null),
@@ -1130,6 +1144,9 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
     // puppet 的材质变体（P12a 步骤 4）：纹理同基础材质，照样过一遍
     layer.puppet?.passes.forEach(add);
     if (layer.puppet?.upload) add(layer.puppet.upload);
+    // 裁切遮罩的材质（P12b1 步骤 5）：遮罩 pass 的槽 1 是记录的遮罩纹理，目标 pass 同基础材质
+    layer.puppet?.clip?.masks.forEach(add);
+    if (layer.puppet?.clip) add(layer.puppet.clip.target);
     if (layer.passthrough) add(layer.passthrough);
     if (layer.groupUpload) add(layer.groupUpload);
     // 文本的宿主材质（P6b 1d）都没有静态纹理，照样过一遍
@@ -1301,8 +1318,25 @@ export class GpuScene {
   private gammaPass: GammaPass | null = null;
   /** 视频纹理的帧来源（P9a，`setVideoSink`）；null 时视频纹理保持全 0。 */
   private videoSink: VideoSink | null = null;
-  /** skinned puppet 的蒙皮矩阵来源（P12a，`setPuppets`）：`update` 每帧按图层写进 `g_Bones`；null 时 `g_Bones` 保持全 0。 */
-  private puppets: Pick<ScenePuppets, "skin"> | null = null;
+  /**
+   * puppet 运行时的来源（P12a，`setPuppets`）：`update` 每帧按图层写 `g_Bones`（P12b1 起还有 `g_BonesAlpha`、`g_MorphOffsets` / `g_MorphWeights`），
+   * 挂点的 `Pose` 也从这里取（`attachPose`）；null 时 `g_Bones` 保持全 0、挂点按普通父子。
+   */
+  private puppets: PuppetSource | null = null;
+  /** 设备开着的特性（`build` 的 `features`）：变形纹理要 `float32-filterable`（P12b1 步骤 4）。 */
+  private features: ReadonlySet<string> = new Set();
+  /** 挂点（P12b1 步骤 3，`SceneLayer.attachment`）：子对象 → 挂点；没有挂点的场景为空。 */
+  private attachments = new Map<number, SceneAttachment>();
+  /** 挂点子对象与全部子孙（`objects` 下标，第一次 `sync` 时按状态里的父子关系算）：姿势每帧变，每次 `sync` 都并进 `dirty.layers`。 */
+  private attachedLayers: number[] | null = null;
+  /** `worldMatrixOf` / `drawMatrixOf` 的挂点钩子（P12b1 步骤 3）：稳定的闭包，没有挂点时恒返回 null。 */
+  private readonly attachHook = (object: number): Mat4 | null => this.attachPose(object);
+  /** 没有透明度来源时 `g_BonesAlpha` 的全 1（按骨骼数缓存，P12b1 步骤 4）。 */
+  private readonly onesCache = new Map<number, Float32Array>();
+  /** 每个带变形的 puppet（`objects` 下标）的变形纹理（P12b1 步骤 4）：建场景时上传一次，`morph` 引用解析到这里。 */
+  private readonly morphTargets = new Map<number, RenderTarget>();
+  /** 裁切遮罩 RT（P12b1 步骤 5）：有裁切的 puppet 才建，场景目标宽高各一半。 */
+  private clipMask: RenderTarget | null = null;
   /** 已经记过 warning 的视频纹理（`size:<下标>` / `copy:<下标>`）：每张纹理每种只记一次。 */
   private readonly videoWarned = new Set<string>();
   /**
@@ -1424,6 +1458,7 @@ export class GpuScene {
     const reasons = checkRenderable(bundle, features, { ...options, texts: state.texts });
     if (reasons.length) throw new SceneRenderError(reasons);
     const scene = new GpuScene(device, bundle, warnings, options.particles ?? {});
+    scene.features = features;
     scene.relayouter = options.relayout ?? null;
     scene.userProvider = options.userTextures ?? null;
     scene.userWritten = state.userWritten;
@@ -2334,6 +2369,72 @@ export class GpuScene {
     else this.drawsByPass.set(draw.passKey, [draw]);
   }
 
+  /**
+   * puppet 的两样 GPU 资源（P12b1 步骤 4、5，建场景时一次）：
+   * - 每个带 `morph` 的 puppet 一张变形纹理（`side × side`，`rgba32float`，点采样、重复，WPE 实测）；设备没有 `float32-filterable` 时抛
+   *   `render:morph-texture`（`checkRenderable` 已先按特性报过）；
+   * - 有裁切的 puppet 时全场一张 `r8unorm` 遮罩 RT，宽高各为场景目标的一半（至少 2；WPE 是后备缓冲的一半，我们的对应物是场景目标）。
+   */
+  private createPuppetResources(layers: readonly SceneLayer[]): void {
+    for (const layer of layers) {
+      const morph = layer.puppet?.morph;
+      if (!morph) continue;
+      if (!this.features.has("float32-filterable")) throw new SceneRenderError(["render:morph-texture"]);
+      this.morphTargets.set(layer.object, this.uploadMorph(layer, morph));
+    }
+    if (layers.some((layer) => layer.puppet?.clipping)) {
+      const [width, height] = clipMaskSize(this.width, this.height);
+      this.clipMask = this.createTarget(
+        "clip mask",
+        width,
+        height,
+        "r8unorm",
+        this.sampler({
+          addressModeU: "clamp-to-edge",
+          addressModeV: "clamp-to-edge",
+          magFilter: "linear",
+          minFilter: "linear",
+        }),
+      );
+    }
+  }
+
+  /** 一个 puppet 的变形纹理上传（`morphTexelData` 转好数据，`writeTexture` 一次）。 */
+  private uploadMorph(layer: SceneLayer, morph: NonNullable<ScenePuppetLayer["morph"]>): RenderTarget {
+    const { device } = this;
+    const side = morph.side;
+    const texture = this.own(
+      device.createTexture({
+        label: `morph ${layer.object}`,
+        size: { width: side, height: side },
+        format: "rgba32float",
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      }),
+    );
+    const data = morphTexelData(morph.texels);
+    device.queue.writeTexture(
+      { texture },
+      data.buffer as ArrayBuffer,
+      { offset: data.byteOffset, bytesPerRow: side * 16, rowsPerImage: side },
+      { width: side, height: side },
+    );
+    this.targetBytes += side * side * 16;
+    return {
+      texture,
+      view: texture.createView(),
+      width: side,
+      height: side,
+      format: "rgba32float",
+      // WPE 点采样、重复（p12b 步骤 0b 实测）
+      sampler: this.sampler({
+        addressModeU: "repeat",
+        addressModeV: "repeat",
+        magFilter: "nearest",
+        minFilter: "nearest",
+      }),
+    };
+  }
+
   private async populate(state: SceneState, size?: readonly [number, number]): Promise<void> {
     const { device, bundle } = this;
     const { general } = bundle;
@@ -2366,6 +2467,9 @@ export class GpuScene {
     );
 
     const built = buildableLayers(bundle);
+    // puppet 的变形纹理与裁切遮罩 RT（P12b1 步骤 4、5）：要在建任何 draw 之前就位（`resolveTexture`）
+    this.createPuppetResources(built);
+    for (const layer of bundle.layers) if (layer.attachment) this.attachments.set(layer.object, layer.attachment);
     const plans = built.map((layer) => this.planOf(layer, state));
     // 深度附件（P5d 步骤 1）：按全部可能用到的计划判定（加载时的计划与预建的变体），要在建任何管线之前定下来，管线的深度状态跟着它
     if (
@@ -2581,6 +2685,9 @@ export class GpuScene {
     if (ref.kind === "atlas") return (ref.color ? resources.atlases?.color : resources.atlases?.main) ?? null;
     // 别的图层的独占 RT（P8 步骤 4）；那一层没建资源时为 null，建 draw 时报 `render:texture-rt:layer`
     if (ref.kind === "layer") return this.layerTargets.get(ref.object) ?? null;
+    // puppet 的变形纹理与裁切遮罩 RT（P12b1 步骤 4、5）
+    if (ref.kind === "morph") return this.morphTargets.get(ref.object) ?? null;
+    if (ref.kind === "clip-mask") return this.clipMask;
     return null;
   }
 
@@ -2650,7 +2757,7 @@ export class GpuScene {
     if (values) values.rate = system.instanceScalar("rate");
     // 频谱（P4e 步骤 4）：预热之前换上，预热读到的是当时的值（首次加载为 0，rea-p4e-audio.md 3.5【推】）
     system.setAudio(this.particleAudio);
-    const world = worldMatrixOf(layer.object, state.layers, new Map());
+    const world = worldMatrixOf(layer.object, state.layers, new Map(), this.attachHook);
     const inputs = { world, pointer: pointerScenePoint(this.view.viewProjection, this.particleCursor) };
     system.prewarm(inputs);
     // 单图层重建：旧树还在 `trees` 里（`install` 之后才换）
@@ -2757,7 +2864,7 @@ export class GpuScene {
    * 世界的都是单位阵（`ParticleSystem.drawTransform`，和 `forEachDrawn` 同一串运算）。
    */
   private particleModel(particles: ParticleDraw, object: number, state: SceneState, worlds: Map<number, Mat4>): Mat4 {
-    return particles.system.drawTransform(worldMatrixOf(object, state.layers, worlds)).model;
+    return particles.system.drawTransform(worldMatrixOf(object, state.layers, worlds, this.attachHook)).model;
   }
 
   /**
@@ -2808,7 +2915,7 @@ export class GpuScene {
           ? `layer ${layer.id} ${layer.name} text ${step.part}`
           : step.kind === "mesh"
             ? `layer ${layer.id} ${layer.name} mesh ${step.mesh}`
-            : `layer ${layer.id} ${layer.name} ${step.role}`;
+            : `layer ${layer.id} ${layer.name} ${step.role}${step.segment === undefined ? "" : ` segment ${step.segment}`}`;
 
     let vertexBuffer: GPUBuffer;
     let particles: ParticleDraw | null = null;
@@ -2845,10 +2952,19 @@ export class GpuScene {
         );
         device.queue.writeBuffer(vertexBuffer, 0, bytes.buffer, bytes.byteOffset, bytes.byteLength);
       } else vertexBuffer = this.meshBuffer(puppet.mesh.vertices, GPUBufferUsage.VERTEX, `${name} vertices`);
+      // 裁切分段（P12b1 步骤 5）：这一步只画 `segment` 的索引（编译期拼好的 u16，每段自己一块缓冲，起点 0）；没有分段画整张网格
+      const segment = step.segment === undefined ? undefined : puppet.clipping?.segments[step.segment];
+      if (step.segment !== undefined && !segment) throw new SceneRenderError([`render:puppet-segment:${step.segment}`]);
       meshDraw = {
-        indexBuffer: this.meshBuffer(puppet.mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
+        indexBuffer: segment
+          ? this.meshBuffer(
+              new Uint8Array(segment.buffer, segment.byteOffset, segment.byteLength),
+              GPUBufferUsage.INDEX,
+              `${name} segment ${step.segment}`,
+            )
+          : this.meshBuffer(puppet.mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
         indexFormat: "uint16",
-        count: puppet.mesh.indexCount,
+        count: segment ? segment.length : puppet.mesh.indexCount,
         placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
         privateVertices,
       };
@@ -2947,10 +3063,10 @@ export class GpuScene {
       // skinned puppet（P12a 步骤 4）：`g_Bones` 每帧由 `update` 写，建 draw 时先写一次当前的蒙皮矩阵（建 GPU 资源之前宿主已 `refresh`，
       // 第一帧不会闪出绑定姿势）。矩阵数组按翻译器反射的布局写（`UniformBlock.set` 对 `array<mat4x3<f32>, N>`：每元素 12 个数、列主序、
       // 列步长 16），`skinMatrices` 的输出原样传入，见 `render/p12a.test.ts`
-      if (isPuppetDraw(step) && layer.puppet?.skeleton && block.has("g_Bones")) {
+      // P12b1 步骤 4：同一批还有骨骼透明度与变形的 uniform（`writePuppetUniforms`）
+      if (isPuppetDraw(step) && layer.puppet && PUPPET_BLOCK_NAMES.some((name) => block!.has(name))) {
         puppetObject = layer.object;
-        const skin = this.puppets?.skin(layer.object);
-        if (skin) block.set("g_Bones", skin);
+        this.writePuppetUniforms(block, layer);
       }
       uniformBuffer = this.own(
         device.createBuffer({
@@ -3091,7 +3207,7 @@ export class GpuScene {
     const common = {
       // 图层画自己的矩阵（P8 步骤 3）：世界矩阵再乘自身偏移（文本排版、图像层对齐），直接上屏、合成链各角色、效果矩阵、
       // `g_LayerModelMatrix` 与文本都用它；粒子下面换成 `model`，模型网格没有偏移（字节同 `worldMatrixOf`）
-      world: drawMatrixOf(layer.object, state.layers, worlds),
+      world: drawMatrixOf(layer.object, state.layers, worlds, this.attachHook),
       constants: state.constants.get(step.pass.key) ?? {},
       // HDR 下颜色乘 brightness（B10）；passthrough 的 g_Color4 由材质值覆盖成 (1, 1, 1, 1)
       colorScale: this.hdr ? layerState.brightness : 1,
@@ -3111,7 +3227,7 @@ export class GpuScene {
     const group = this.groupOf(layer);
     const groupVp =
       group && !(step.kind === "draw" && step.role === "compose")
-        ? groupViewProjection(group.size, drawMatrixOf(group.object, state.layers, worlds))
+        ? groupViewProjection(group.size, drawMatrixOf(group.object, state.layers, worlds, this.attachHook))
         : null;
     if (step.kind === "text") {
       // 文本（P6b 1d）：直接上屏用这次画到场景的视图投影（带视差、抖动；组里是组的局部正交），画进合成 RT 用 RT 像素的正交
@@ -3381,6 +3497,9 @@ export class GpuScene {
    */
   sync(state: SceneState): void {
     const dirty = state.takeDirty();
+    // 挂点子对象（P12b1 步骤 3）：姿势每帧变，它们与全部子孙的世界矩阵每次都要重算（脚本写父的变换也在 `dirty.layers` 里，不重复）
+    if (this.attachments.size && this.puppets?.pose)
+      for (const object of this.attachedList(state)) dirty.layers.add(object);
     // 本次的状态快照下的世界矩阵：重建与刷新共用，一条父链只算一次。父的变换写过时子孙已在 `dirty.layers` 里（`SceneState.write`）
     const worlds = new Map<number, Mat4>();
     // 文本最先（P6b 1e）：重排、换进状态、图集纹理、强制重建本层；偏移变了的本层与子孙并进这次的 `dirty.layers`，下面照常刷
@@ -3921,10 +4040,7 @@ export class GpuScene {
       if (!draw.frameNames.length && !draw.dirty && !draw.trailRenderVar && draw.puppet === null) continue;
       this.applyFrame(draw, values);
       // skinned puppet（P12a 步骤 4）：每帧把当前蒙皮矩阵写进 `g_Bones`（同 `trailRenderVar` 的做法，这类 draw 每帧都写）
-      if (draw.puppet !== null) {
-        const skin = this.puppets?.skin(draw.puppet);
-        if (skin) draw.block.set("g_Bones", skin);
-      }
+      if (draw.puppet !== null) this.writePuppetUniforms(draw.block, draw.layer);
       this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
       draw.dirty = false;
     }
@@ -3984,7 +4100,7 @@ export class GpuScene {
       const object = tree.object;
       if (state && !effectiveVisible(object, state.layers)) {
         // 不可见时控制点照常更新（P4d 步骤 5，rea-p4d-modules.md 5.3）：`W` 与跟随点照可见时的算法算
-        const world = worldMatrixOf(object, state.layers, worlds);
+        const world = worldMatrixOf(object, state.layers, worlds, this.attachHook);
         pointer ??= pointerScenePoint(this.view.viewProjection, cursor);
         tree.inputs = { world, pointer };
         // 系统时间在不可见的帧上照常累加（P4d 收尾 A），所以把帧时间也交给它；子系统与事件实例这时以 `emit = false` 照常步进
@@ -3996,7 +4112,7 @@ export class GpuScene {
       const first = this.drawsByLayer.get(object)?.[0];
       const timing = first ? this.particleTimings?.get(first) : undefined;
       const started = timing ? performance.now() : 0;
-      const world = state ? worldMatrixOf(object, state.layers, worlds) : tree.world;
+      const world = state ? worldMatrixOf(object, state.layers, worlds, this.attachHook) : tree.world;
       pointer ??= pointerScenePoint(this.view.viewProjection, cursor);
       tree.inputs = { world, pointer };
       root.step(frametime, time, tree.inputs);
@@ -4020,8 +4136,61 @@ export class GpuScene {
    * skinned puppet 的蒙皮矩阵来源（P12a 步骤 4）：渲染器换上场景时交来（`SceneRenderer.load`，宿主的 `ScenePuppets`）；dev 探针的确定性回放
    * 换上自己的。`update` 每帧把 `skin(图层)` 写进对应 draw 的 `g_Bones`；null 时保持原值（建 draw 时是 0）。
    */
-  setPuppets(puppets: Pick<ScenePuppets, "skin"> | null): void {
+  setPuppets(puppets: PuppetSource | null): void {
     this.puppets = puppets;
+  }
+
+  /** 挂点子对象与全部子孙（按状态里的父子关系，只算一次）。 */
+  private attachedList(state: SceneState): number[] {
+    if (!this.attachedLayers) {
+      const out = new Set<number>();
+      for (const object of this.attachments.keys()) for (const item of state.subtree(object)) out.add(item);
+      this.attachedLayers = [...out];
+    }
+    return this.attachedLayers;
+  }
+
+  /**
+   * puppet 绘制的每帧 uniform（P12a 步骤 4、P12b1 步骤 4，`update` 与建 draw 共用）：蒙皮矩阵 `g_Bones`、骨骼透明度 `g_BonesAlpha`、变形的
+   * `g_MorphOffsets`（u32）/ `g_MorphWeights`。直接上屏、合成上屏与裁切的遮罩 / 目标段都用 puppet 自己的值（p12b 步骤 0b 实测：合成路径
+   * 不借别的 puppet 的残留值）。没有透明度来源时 `g_BonesAlpha` 写全 1（块是 0 会让整个 puppet 透明）；没有变形来源时保持 0（不变形）。
+   */
+  private writePuppetUniforms(block: UniformBlock, layer: SceneLayer): void {
+    const puppets = this.puppets;
+    if (!puppets) return;
+    const object = layer.object;
+    const skin = puppets.skin(object);
+    if (skin && block.has("g_Bones")) block.set("g_Bones", skin);
+    if (block.has("g_BonesAlpha")) {
+      let alpha = puppets.boneAlpha?.(object) ?? null;
+      if (!alpha) {
+        const bones = layer.puppet?.skeleton?.parents.length ?? 0;
+        alpha = this.onesCache.get(bones) ?? null;
+        if (!alpha) this.onesCache.set(bones, (alpha = new Float32Array(bones).fill(1)));
+      }
+      block.set("g_BonesAlpha", alpha);
+    }
+    if (block.has("g_MorphOffsets") || block.has("g_MorphWeights")) {
+      const morph = puppets.morph?.(object);
+      if (morph) {
+        block.set("g_MorphOffsets", morph.offsets);
+        block.set("g_MorphWeights", morph.weights);
+      }
+    }
+  }
+
+  /**
+   * 挂点子对象的 `Pose[骨骼] · Att`（P12b1 步骤 3，`worldMatrixOf` 的 `attach`）：父 puppet 当前的模型空间骨骼矩阵（`ScenePuppets.pose`）取那一根，
+   * 右乘 `Att`，一次 `multiply`（WPE 先 `Pose · Att`、再乘本地矩阵，各一次 `FUN_14005ecb0`）。没有挂点、没有姿势来源、静态父（没有姿势）时为 null，
+   * 子对象按普通父子。
+   */
+  private attachPose(object: number): Mat4 | null {
+    const attachment = this.attachments.get(object);
+    if (!attachment) return null;
+    const pose = this.puppets?.pose?.(attachment.parent);
+    const at = attachment.bone * 16;
+    if (!pose || at < 0 || at + 16 > pose.length) return null;
+    return multiply(pose.subarray(at, at + 16), attachment.matrix);
   }
 
   /**
@@ -4156,7 +4325,7 @@ export class GpuScene {
    */
   private arrangeParticles(tree: ParticleTree, state: SceneState, worlds: Map<number, Mat4>): ParticleArrangement {
     const items: ParticleArrangement = [];
-    const object = worldMatrixOf(tree.object, state.layers, worlds);
+    const object = worldMatrixOf(tree.object, state.layers, worlds, this.attachHook);
     this.walkParticles(
       tree,
       object,
@@ -4189,7 +4358,11 @@ export class GpuScene {
   private modelCulled(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>, viewProjection: Mat4): boolean {
     const model = layer.model;
     if (!model || layer.group != null) return false;
-    return frustumCulled(model.bounds, worldMatrixOf(layer.object, state.layers, worlds), viewProjection);
+    return frustumCulled(
+      model.bounds,
+      worldMatrixOf(layer.object, state.layers, worlds, this.attachHook),
+      viewProjection,
+    );
   }
 
   /**

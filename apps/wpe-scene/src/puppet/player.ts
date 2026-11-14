@@ -10,22 +10,30 @@
  *   （5.2）；一个可见层都没有时局部矩阵直接取静止来源矩阵（6.1）。
  * - 图层隐藏也推进（这里不看图层可见性，rea-RT 2）；暂停冻结、补画帧不推进由调用方决定是否调 `frame`。
  * - P12a 不派发事件与播完回调（P12c）：时钟收集的事件丢掉。
+ * - P12b1：同一个层循环里再叠骨骼透明度（`g_BonesAlpha`）与变形权重（`g_MorphOffsets` / `g_MorphWeights`），规则在 `pose.ts`；`pose` 交出模型空间骨骼矩阵（挂点用）。
  */
 import { AnimationClock, BACK, DONE, MIRROR, PAUSED, SINGLE } from "../animation/clock";
 import type { AnimationMode } from "../animation/types";
-import type { PuppetLayerDef, ScenePuppet } from "../compile/puppet";
+import type { PuppetAnimation, PuppetLayerDef, ScenePuppet } from "../compile/puppet";
 import {
   blendInto,
+  blendMorphWeights,
+  blendScalarAlpha,
   frameIndex,
   LAYER_ADDITIVE,
   LAYER_BLENDIN,
   LAYER_BLENDOUT,
   layerWeight,
+  MORPH_SLOTS,
+  morphUniforms,
   POSE_STRIDE,
+  resetBoneAlpha,
+  resetMorph,
   sampleLayer,
   SKIN_STRIDE,
   skinMatrices,
   type FrameIndex,
+  type MorphUniforms,
 } from "./pose";
 
 const f = Math.fround;
@@ -60,6 +68,8 @@ interface LayerRuntime {
   readonly def: PuppetLayerDef;
   readonly frames: Float32Array;
   readonly mask: Uint8Array;
+  /** 这条动画的骨骼透明度与变形权重轨道（`ScenePuppet.animations`）。 */
+  readonly animation: PuppetAnimation;
   readonly clock: AnimationClock;
   /** 动画的 `length`（帧号上限，`frameIndex` 用）。 */
   readonly length: number;
@@ -83,8 +93,12 @@ interface PuppetRuntime {
   readonly world: Float32Array;
   /** 蒙皮矩阵（每骨骼 12 个 f32）。 */
   readonly skin: Float32Array;
-  /** 上一次的蒙皮来自静止来源矩阵（没有可见层）：再没有可见层时结果不变，不必重算。 */
+  /** 上一次的蒙皮来自静止来源矩阵（没有可见层）：再没有可见层时结果不变，不必重算（骨骼透明度与变形 uniform 同样是复位后的值）。 */
   restSkin: boolean;
+  /** `g_BonesAlpha`（每骨骼 1 个 f32）；没有 `boneAlpha` 为 null。 */
+  readonly alpha: Float32Array | null;
+  /** 变形：每目标权重、生效位与交给渲染的 uniform；没有 `morph` 为 null。 */
+  readonly morph: { weights: Float32Array; active: Uint8Array; uniforms: MorphUniforms } | null;
 }
 
 /**
@@ -126,6 +140,7 @@ export class ScenePuppets {
           def,
           frames: animation.frames,
           mask: animation.mask,
+          animation,
           clock,
           length: Math.trunc(animation.length),
           flags,
@@ -143,6 +158,14 @@ export class ScenePuppets {
         world: new Float32Array(bones * 16),
         skin: new Float32Array(bones * SKIN_STRIDE),
         restSkin: false,
+        alpha: puppet.boneAlpha ? new Float32Array(bones).fill(1) : null,
+        morph: puppet.morph
+          ? {
+              weights: new Float32Array(puppet.morph.targets),
+              active: new Uint8Array(puppet.morph.targets),
+              uniforms: { offsets: new Uint32Array(MORPH_SLOTS), weights: new Float32Array(MORPH_SLOTS) },
+            }
+          : null,
       };
       this.runtimes.push(runtime);
       this.byObject.set(object, runtime);
@@ -170,6 +193,27 @@ export class ScenePuppets {
   /** 当前蒙皮矩阵（每骨骼 12 个 f32，见 `pose.ts` 的 `skinMatrices`）；静态 puppet、不是 puppet 的对象为 null。返回的数组每帧原地改写。 */
   skin(object: number): Float32Array | null {
     return this.byObject.get(object)?.skin ?? null;
+  }
+
+  /** 模型空间骨骼矩阵（每骨骼 16 个 f32，同 `Mat4` 的列主序布局，WPE 的 `P+0x2c8`，挂点用）；静态 puppet、不是 puppet 的对象为 null。每帧原地改写。 */
+  pose(object: number): Float32Array | null {
+    return this.byObject.get(object)?.world ?? null;
+  }
+
+  /**
+   * `g_BonesAlpha`（每骨骼 1 个 f32）；没有 `boneAlpha`（网格 0 没有 bit2、静态 puppet）的为 null。每帧原地改写：先全置 1，再逐可见层叠；
+   * 没有可见层时全 1。
+   */
+  boneAlpha(object: number): Float32Array | null {
+    return this.byObject.get(object)?.alpha ?? null;
+  }
+
+  /**
+   * `g_MorphOffsets`（12 个 u32：[0] 生效数，[1+k] 目标号 × nv）与 `g_MorphWeights`（12 个 f32：[0] 缩放，[1+k] 权重）；没有 `morph` 的为 null。
+   * 每帧原地改写：权重与生效位先清 0，再逐可见层叠，最后取前 11 个生效目标按权重降序写 uniform（`pose.ts` 的 `morphUniforms`）；没有可见层时生效数 0。
+   */
+  morph(object: number): { offsets: Uint32Array; weights: Float32Array } | null {
+    return this.byObject.get(object)?.morph?.uniforms ?? null;
   }
 
   /**
@@ -244,12 +288,18 @@ export class ScenePuppets {
 
   /** 一个 puppet：`d` 为 null 时不推进（`refresh`）。 */
   private evaluate(runtime: PuppetRuntime, d: number | null, state: PuppetSink | null): void {
-    const { bones, pose, sample, skeleton } = runtime;
+    const { bones, pose, sample, skeleton, alpha, morph } = runtime;
     let posed = false;
+    /** 骨骼透明度与变形权重每帧复位一次：第一个可见层之前，或者没有可见层且上次不是静止时。 */
+    const reset = () => {
+      if (alpha) resetBoneAlpha(alpha);
+      if (morph) resetMorph(morph.weights, morph.active);
+    };
     for (let index = 0; index < runtime.layers.length; index++) {
       const layer = runtime.layers[index];
       const fields = state?.animationLayer(runtime.object, index) ?? layer.def;
       if (!fields.visible) continue;
+      if (!posed) reset();
       if (d !== null) {
         // 推进量 `dt × rate`（`0x1401fed7d`：`mulss`，float32）
         layer.clock.advance(f(d * f(fields.rate)), this.events);
@@ -268,9 +318,26 @@ export class ScenePuppets {
         skeleton.rest,
         bones,
       );
+      const additive = (layer.flags & LAYER_ADDITIVE) !== 0;
+      const track = layer.animation;
+      if (alpha && track.alpha)
+        blendScalarAlpha(alpha, track.alpha, track.alphaMask, bones, at.lo, at.hi, at.frac, w, additive);
+      if (morph && track.morph)
+        blendMorphWeights(morph.weights, morph.active, track.morph, at.lo, at.hi, at.frac, w, additive);
       posed = true;
     }
-    if (!posed && runtime.restSkin) return;
+    if (!posed) {
+      if (runtime.restSkin) return;
+      reset();
+    }
+    if (morph)
+      morphUniforms(
+        morph.weights,
+        morph.active,
+        runtime.puppet.morph!.vertices,
+        runtime.puppet.morph!.scale,
+        morph.uniforms,
+      );
     skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin);
     runtime.restSkin = !posed;
   }

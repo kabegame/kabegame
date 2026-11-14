@@ -282,7 +282,9 @@ const SUPPORTED_OBJECT = new Set([
  * `perspective` 也不在这里（P5b 步骤 1）：图像层的 JSON `true` 已实现，其余在 `checkObjectFeatures` 里另判。
  * 这里的 `fullscreen`、`passthrough` 是对象上的键，和模型 JSON 的同名标志（P5b 步骤 2、3 已实现，见 `SUPPORTED_MODEL`）不是一回事。
  */
-const OBJECT_FLAGS = ["fullscreen", "passthrough", "attachment", "castshadow", "reflected", "skin"];
+const OBJECT_FLAGS = ["fullscreen", "passthrough", "castshadow", "reflected", "skin"];
+// `attachment`（P12b1 步骤 3）：对象挂在父 puppet 的挂点上，世界矩阵先乘 `Pose · Att`（`SceneLayer.attachment`，`bundle.ts` 的
+// `resolveAttachment`）。找不到挂点时 WPE 按普通父子，所以键本身中性，不再报 `object:attachment`
 /**
  * 模型对象上中性的 `OBJECT_FLAGS`（P5c 步骤 1，rea-p5-mesh 2.2，p5-REPORT「P5c 语义的实测核对」）：
  * - `skin`：选材质（`mdl.ts` 的 `meshSkin`，`p5c-skin` 实测）；
@@ -875,6 +877,8 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !OBJECT_FLAGS.includes(key) &&
       ![
         "disablepropagation",
+        // 挂点（P12b1 步骤 3）：解析成 `SceneLayer.attachment`，找不到时按普通父子，键本身中性
+        "attachment",
         "alignment",
         "perspective",
         "clampuvs",
@@ -1306,11 +1310,25 @@ export function checkProgramFeatures(
 
 /**
  * puppet 的 pass（P12a 步骤 3 点 2，rea-p12-mdl 9.3、9.6）里才写的引擎 uniform：`g_Bones` 是蒙皮矩阵数组，每帧由 `ScenePuppets` 写
- * （`render/scene.ts` 的 `update`）。别的 pass 读到它照报 `uniform:g_Bones`。`g_BonesAlpha` 与变形的 uniform 归 P12b，不在这里。
+ * （`render/scene.ts` 的 `update`）。别的 pass 读到它照报 `uniform:g_Bones`。P12b1 起加骨骼透明度 `g_BonesAlpha` 与变形的
+ * `g_MorphOffsets` / `g_MorphWeights`（每帧由 `ScenePuppets.boneAlpha` / `morph` 写）。
  */
-export const PUPPET_UNIFORMS: ReadonlySet<string> = new Set(["g_Bones"]);
-/** puppet 的 pass 放行的引擎 COMBO：只有 `SKINNING`（`BONECOUNT` 本来就不在 `ENGINE_COMBOS` 里）；`SKINNING_ALPHA` 等照报（P12b）。 */
-export const PUPPET_COMBOS: ReadonlySet<string> = new Set(["SKINNING"]);
+export const PUPPET_UNIFORMS: ReadonlySet<string> = new Set([
+  "g_Bones",
+  "g_BonesAlpha",
+  "g_MorphOffsets",
+  "g_MorphWeights",
+]);
+/**
+ * puppet 的 pass 放行的引擎 COMBO：`SKINNING`、`SKINNING_ALPHA`（网格 0 标志 bit2）、`MORPHING`（格式含 `a_PositionVec4`），P12b1 步骤 4
+ * （`BONECOUNT` 本来就不在 `ENGINE_COMBOS` 里）。
+ */
+export const PUPPET_COMBOS: ReadonlySet<string> = new Set(["SKINNING", "SKINNING_ALPHA", "MORPHING"]);
+/**
+ * 裁切遮罩 pass（`clippingmaskimage4`，P12b1 步骤 5）放行的引擎 uniform：puppet 的那几个再加 `g_RenderVar0`——WPE 的遮罩绘制写 `ctx+0xa8`，也就是
+ * `g_RenderVar0.x`（记录 flags bit1 取反时为 1，否则 0，clip-morph-attach 1(3)、3），编译期在 pass 上固定写 0。别的 puppet pass 读到它仍照报。
+ */
+export const PUPPET_CLIP_MASK_UNIFORMS: ReadonlySet<string> = new Set([...PUPPET_UNIFORMS, "g_RenderVar0"]);
 
 /**
  * 程序读不读音频频谱 uniform（P11a）：`bundle.audio` 据此决定宿主是否订阅音频。翻译器标了 `unused` 的不算（同 `checkProgramFeatures`：

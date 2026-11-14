@@ -88,6 +88,7 @@ import {
   type SceneFbo,
   type SceneLayer,
   type ScenePass,
+  type ScenePuppetLayer,
   type SceneTexture,
 } from "../compile/bundle";
 import { isRopeRenderer, MAX_CHILD_DEPTH, particleDraws, type SceneParticle } from "../compile/particles";
@@ -118,7 +119,17 @@ export type TextureRef =
    * 解析，有图用那张（`rgba8unorm`、直通 alpha、1 级 mip、按槽的 `nearest` / `clamp` 采样、无各向异性），没有图（值为空、读不出、还在解码、
    * 加载时就有值的 RT 参考槽）用 `fallback`：编译期的缺省纹理（`{ kind: "texture" }` 或被依赖图层的 `{ kind: "layer" }`），同没有用户纹理时。
    */
-  | { kind: "user"; slot: UserTextureSlot; fallback: TextureRef };
+  | { kind: "user"; slot: UserTextureSlot; fallback: TextureRef }
+  /**
+   * puppet 的变形纹理（P12b1 步骤 4，`objects` 下标 `object` 的 puppet）：槽 5，`side × side`，
+   * `rgba32float`（要 `float32-filterable`；WPE 是 rgba16snorm，Dawn 上不可过滤，见 `render/puppet.ts`），点采样、重复（WPE 实测）。每个带变形的 puppet 一张，渲染器建场景时按 `ScenePuppet.morph` 上传。
+   */
+  | { kind: "morph"; object: number }
+  /**
+   * 裁切遮罩 RT（P12b1 步骤 5，WPE 的 `_rt_FullAlphaMask`）：全场共用一张 `r8unorm`，宽高各为场景目标的一半（至少 2），有裁切 puppet 时才建。
+   * 目标段的 `g_Texture8`（线性、钳制）读它。
+   */
+  | { kind: "clip-mask" };
 /**
  * 运行时名字 → 纹理来源（`ScenePass.runtime` 的值）：快照与 P13b1 的两张反射 RT。effect 自己的 fbo 由调用方先判；
  * 认不出返回 null，调用方报 `render:texture-rt:<名>`。
@@ -131,7 +142,11 @@ function runtimeInput(name: string): TextureRef | null {
 }
 
 export type TargetRef =
-  { kind: "scene" } | { kind: "composite"; index: number } | { kind: "fbo"; effect: number; name: string };
+  | { kind: "scene" }
+  | { kind: "composite"; index: number }
+  | { kind: "fbo"; effect: number; name: string }
+  /** 裁切遮罩 RT（P12b1 步骤 5，见 `TextureRef` 的同名种类）：遮罩段画进它，每条记录先清成 0。 */
+  | { kind: "clip-mask" };
 
 /**
  * - `direct`：直接上屏的基础 pass；`base`：画进合成 RT 的基础 pass；`effect`：画全屏四边形到合成 RT / fbo；
@@ -206,6 +221,11 @@ export interface DrawStep {
   blending: string | null;
   /** 光栅状态（`rasterState`）：上屏角色的深度借图层基础 pass、剔除用自己；形状层两项都取自己；其余都取自己。 */
   raster: RasterState;
+  /**
+   * puppet 的裁切分段（P12b1 步骤 5，`ScenePuppet.clipping.segments` 的下标）：只画这一段的索引（每段自己一块 u16 索引缓冲）。没有裁切的
+   * puppet 与别的几何没有这个字段，整张网格一次画完。
+   */
+  segment?: number;
 }
 /**
  * 粒子层的绘制（P4a 步骤 4）：粒子材质的 pass 直接画到场景目标，和图像步骤一样按 `objects` 顺序执行。几何不是图层四边形，
@@ -644,6 +664,107 @@ export function planShapeLayer(layer: Pick<SceneLayer, "effects">): LayerPlan {
   return { composite: null, steps, reasons };
 }
 
+/** puppet 变形纹理的槽（`g_Texture5`，WPE 直接把槽 5 设成变形纹理）与裁切目标段读遮罩 RT 的隐藏槽（`g_Texture8`）。 */
+const MORPH_SLOT = 5;
+const CLIP_MASK_SLOT = 8;
+
+/**
+ * puppet 上屏的步骤（P12b1 步骤 4、5，clip-morph-attach 第 1 节）：没有裁切时一个绘制，和 P12a 逐字节相同（带变形时槽 5 绑变形纹理）；
+ * 有裁切（`puppet.clipping` 与 `puppet.clip` 都在）时照命令表展开：
+ * - `normal`：普通程序画一段（自己的 u16 索引，`segment`）；
+ * - `clip`：遮罩 RT 清成 0 → 遮罩 pass 画遮罩段（画进遮罩 RT，不挂深度，SrcAlpha / InvSrcAlpha）→ 目标 pass 画目标段（回场景目标，
+ *   `g_Texture8` 绑遮罩 RT，混合固定 translucent、不用基础材质的混合，深度借基础 pass、剔除用自己）。
+ * 三种 pass 的槽 0 都一样：直接上屏是基础反照率（pass 自己的静态纹理），合成路径（`slot0` 给合成 RT）是合成 RT。
+ */
+function puppetSteps(input: {
+  layer: SceneLayer;
+  puppet: ScenePuppetLayer;
+  role: "direct" | "passthrough";
+  /** 普通段的 pass：直接上屏是基础材质的 puppet 变体，合成路径是 `puppet.upload`。 */
+  normal: ScenePass;
+  /** 图层基础 pass：目标段的深度借它。 */
+  base: ScenePass;
+  /** 普通段的混合与光栅状态（调用方按两条路径各自的规则算）。 */
+  blending: string;
+  raster: RasterState;
+  uv: [number, number];
+  /** 合成路径：槽 0 的合成 RT；直接上屏为 null。 */
+  slot0: TextureRef | null;
+  inputsOf: (pass: ScenePass) => Record<number, TextureRef>;
+  reasons: string[];
+}): LayerStep[] {
+  const { layer, puppet, role, normal, base, slot0, inputsOf, reasons } = input;
+  const inputs = (pass: ScenePass): Record<number, TextureRef> => {
+    const out = inputsOf(pass);
+    if (slot0) out[0] = slot0;
+    if (puppet.morph) out[MORPH_SLOT] = { kind: "morph", object: layer.object };
+    return out;
+  };
+  const draw = (
+    pass: ScenePass,
+    target: TargetRef,
+    refs: Record<number, TextureRef>,
+    blending: string,
+    raster: RasterState,
+    segment?: number,
+  ): DrawStep => ({
+    kind: "draw",
+    role,
+    pass,
+    effect: null,
+    target,
+    inputs: refs,
+    geometry: "puppet",
+    uv: input.uv,
+    inset: NO_INSET,
+    blending,
+    raster,
+    ...(segment === undefined ? {} : { segment }),
+  });
+  const clipping = puppet.clipping;
+  const clip = puppet.clip;
+  if (!clipping) return [draw(normal, { kind: "scene" }, inputs(normal), input.blending, input.raster)];
+  if (!clip) {
+    reasons.push("render:puppet-clip");
+    return [];
+  }
+  const mask: TargetRef = { kind: "clip-mask" };
+  const steps: LayerStep[] = [];
+  for (const command of clipping.commands) {
+    if (command.kind === "normal") {
+      steps.push(draw(normal, { kind: "scene" }, inputs(normal), input.blending, input.raster, command.segment));
+      continue;
+    }
+    const maskPass = clip.masks[command.record];
+    if (!maskPass) {
+      reasons.push("render:puppet-clip");
+      continue;
+    }
+    steps.push({ kind: "clear", target: mask });
+    steps.push(
+      draw(
+        maskPass,
+        mask,
+        inputs(maskPass),
+        "translucent",
+        rasterState(maskPass, maskPass, "translucent"),
+        command.mask,
+      ),
+    );
+    steps.push(
+      draw(
+        clip.target,
+        { kind: "scene" },
+        { ...inputs(clip.target), [CLIP_MASK_SLOT]: { kind: "clip-mask" } },
+        "translucent",
+        rasterState(base, clip.target, "translucent"),
+        command.target,
+      ),
+    );
+  }
+  return steps;
+}
+
 export function planLayer(
   layer: SceneLayer,
   textures: readonly TextureSize[],
@@ -773,19 +894,22 @@ export function planLayer(
     // 纹理，由 `scene.ts` 建顶点时乘），不内缩；混合、深度、剔除同基础 pass（变体与基础 pass 同一份材质键）
     const direct = puppet?.passes[0];
     if (puppet && direct) {
-      steps.push({
-        kind: "draw",
-        role: "direct",
-        pass: direct,
-        effect: null,
-        target: { kind: "scene" },
-        inputs: staticInputs(direct, null),
-        geometry: "puppet",
-        uv,
-        inset: NO_INSET,
-        blending: additive ? "additive" : direct.blending,
-        raster: rasterState(direct, direct, additive ? "additive" : direct.blending),
-      });
+      const blending = additive ? "additive" : direct.blending;
+      steps.push(
+        ...puppetSteps({
+          layer,
+          puppet,
+          role: "direct",
+          normal: direct,
+          base,
+          blending,
+          raster: rasterState(direct, direct, blending),
+          uv,
+          slot0: null,
+          inputsOf: (pass) => staticInputs(pass, null),
+          reasons,
+        }),
+      );
       return { composite: null, steps, reasons };
     }
     // fullscreen（P5b 步骤 3，`p5b-fsmvp` 的 FSBG、FSQ）：NDC 四边形、UV 照常取纹理上界、不内缩；MVP 照常，着色器乘不乘它决定
@@ -968,23 +1092,41 @@ export function planLayer(
       // 混合：基础材质的；被依赖、colorBlendMode 31 时 additive（rea-p8-render 2.3 `FUN_1401e8aa0` 的上屏块：cbm 31 ? 2 : 基础材质混合）。
       // colorBlendMode 混合（∉ {0, 31}）时 `additive` 本来就是假，和以前一样
       const blending = additive ? "additive" : base.blending;
-      steps.push({
-        kind: "draw",
-        role: "passthrough",
-        pass,
-        effect: null,
-        target: { kind: "scene" },
-        inputs,
-        // fullscreen 同末 pass，画 NDC 四边形（P5b 步骤 3；colorBlendMode 混合的 fullscreen 没有实测，按同一条规则）。puppet 画网格 0，
-        // UV 0–1、不缩放不内缩（rea-p12-mdl 9.2、9.4：上屏采样合成 RT 全图）
-        geometry: puppet ? "puppet" : screenGeometry,
-        uv: [1, 1],
-        // 被依赖时同样内缩（P8 步骤 4 核对表第 1 行：`p8-dep` 的 A2 上屏 UV 0.00234375–0.99765625 = 0.15 / 64，组合层 A7 是 0–1）
-        inset: puppet ? NO_INSET : finalInset,
-        blending,
-        // 上屏：深度借基础 pass，剔除用 passthrough 材质自己的
-        raster: rasterState(base, pass, blending),
-      });
+      if (puppet) {
+        // puppet 的合成路径（P12b1 步骤 4、5）：命令表照直接上屏的写法展开，槽 0 是合成 RT
+        steps.push(
+          ...puppetSteps({
+            layer,
+            puppet,
+            role: "passthrough",
+            normal: pass,
+            base,
+            blending,
+            raster: rasterState(base, pass, blending),
+            uv: [1, 1],
+            slot0: inputs[0],
+            inputsOf: (item) => staticInputs(item, null),
+            reasons,
+          }),
+        );
+      } else
+        steps.push({
+          kind: "draw",
+          role: "passthrough",
+          pass,
+          effect: null,
+          target: { kind: "scene" },
+          inputs,
+          // fullscreen 同末 pass，画 NDC 四边形（P5b 步骤 3；colorBlendMode 混合的 fullscreen 没有实测，按同一条规则）。puppet 画网格 0，
+          // UV 0–1、不缩放不内缩（rea-p12-mdl 9.2、9.4：上屏采样合成 RT 全图）
+          geometry: puppet ? "puppet" : screenGeometry,
+          uv: [1, 1],
+          // 被依赖时同样内缩（P8 步骤 4 核对表第 1 行：`p8-dep` 的 A2 上屏 UV 0.00234375–0.99765625 = 0.15 / 64，组合层 A7 是 0–1）
+          inset: puppet ? NO_INSET : finalInset,
+          blending,
+          // 上屏：深度借基础 pass，剔除用 passthrough 材质自己的
+          raster: rasterState(base, pass, blending),
+        });
     }
   } else if (finalEffect < 0 && group) {
     // 没有 effect 的组（P5b 步骤 4，`p5b-grp-nofx` 事件 125、`nofx0` 事件 120）：`effectpassthrough` 把合成 RT 画到图层四边形上，

@@ -8,6 +8,9 @@
  * - 按 dt 序列从第 1 帧推进，和 WPE 的 `g_Bones` 比：容差 5 ulp 或绝对差 2e-6（二者取宽）。差来自 `rsqrtps` 的硬件近似（模型与实现都
  *   用精确的倒数平方根，rea-RT 7）。和 python 模型比：两边是同一套 float32 运算，只有 `sin` / `cos` 的 double 末位可能不同，要求逐位相同。
  * - 其余：静态 puppet、状态覆盖字段、隐藏的层不推进、重编译接回、`seek`、fps 不合法的早退。
+ * P12b1 步骤 2：`fixtures/p12-am.json`（生成脚本 `ignore/p12/b/fix/mkfix_b.py`，p12-REPORT 用例 5、6）：骨骼透明度三种叠法、变形权重与 uniform 排序
+ * （含权重超过 0.5 后的换序帧、没有 bit12 的 puppet、没有层的 puppet）按 dt 序列推进后逐位对 WPE；变形纹理等于 `case-p12-am-morphtex.txt`。
+ * `pose.ts` 的标量函数按 clip-morph-attach 5 逐条核对。
  */
 import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
@@ -17,7 +20,9 @@ import corpus3203 from "./fixtures/3203778110.json";
 import fade from "./fixtures/p12-fade.json";
 import mix from "./fixtures/p12-mix.json";
 import modes from "./fixtures/p12-modes.json";
+import am from "./fixtures/p12-am.json";
 import { ScenePuppets, type PuppetLayerFields, type PuppetSink } from "./player";
+import { blendMorphWeights, blendScalarAlpha, morphUniforms, type MorphUniforms } from "./pose";
 
 interface Fixture {
   source: string;
@@ -226,5 +231,210 @@ describe("ScenePuppets：运行时行为", () => {
     const puppets = new ScenePuppets([{ object: 0, puppet }]);
     puppets.frame(0.25);
     expect(frameOf(puppets)).toBe(0);
+  });
+});
+
+// ———— P12b1：骨骼透明度与变形权重（p12-am） ————
+
+const amPuppets = am.puppets.map((item) => {
+  const { puppet, issues } = buildPuppet(parseMdl(mdlBytes(item.mdlGzip)), item.layers, item.path);
+  expect([...issues], item.name).toEqual([]);
+  return { ...item, puppet: puppet! };
+});
+
+/** float32 逐位相同（+0 与 −0 算不同）。 */
+function same(got: number, want: number): boolean {
+  return Object.is(got, Math.fround(want));
+}
+
+describe("p12-am：g_BonesAlpha、g_MorphOffsets / g_MorphWeights 逐帧对 WPE（逐位相同）", () => {
+  it("40 帧：覆盖 / 混合 / 加法三种叠法、没有透明度轨道、没有层；变形含换序帧、层 blend 0.5、没有 bit12、没有层", () => {
+    const puppets = new ScenePuppets(amPuppets.map((item) => ({ object: item.object, puppet: item.puppet })));
+    const wanted = new Set(am.frames);
+    let reordered = 0;
+    let checked = 0;
+    for (let k = 1; k <= am.frames[am.frames.length - 1]; k++) {
+      puppets.frame(am.dt[k - 1]);
+      if (!wanted.has(k)) continue;
+      for (const item of amPuppets) {
+        const want = (item.wpe as Record<string, { alpha?: number[]; offsets?: number[]; weights?: number[] }>)[
+          String(k)
+        ];
+        const alpha = puppets.boneAlpha(item.object);
+        const morph = puppets.morph(item.object);
+        if (item.name.startsWith("alpha")) {
+          expect(morph, item.name).toBeNull();
+          expect(alpha, item.name).not.toBeNull();
+          want.alpha!.forEach((value, b) => {
+            if (!same(alpha![b], value)) expect.fail(`${item.name} 帧 ${k} 骨骼 ${b}：${alpha![b]} ≠ ${value}`);
+          });
+        } else {
+          expect(alpha, item.name).toBeNull();
+          expect(morph, item.name).not.toBeNull();
+          const count = want.offsets![0];
+          expect(morph!.offsets[0], `${item.name} 帧 ${k}`).toBe(count);
+          for (let i = 1; i <= count; i++)
+            expect(morph!.offsets[i], `${item.name} 帧 ${k} 偏移 ${i}`).toBe(want.offsets![i]);
+          want.weights!.forEach((value, i) => {
+            if (!same(morph!.weights[i], value))
+              expect.fail(`${item.name} 帧 ${k} 权重 ${i}：${morph!.weights[i]} ≠ ${value}`);
+          });
+          if (item.name === "morph" && count === 2 && want.offsets![1] === 0) reordered++;
+        }
+        checked++;
+      }
+    }
+    expect(checked).toBe(am.frames.length * am.puppets.length);
+    // 权重超过 0.5 后（帧 177–187）目标 0 排到前面：测试要真碰到换序
+    expect(reordered).toBeGreaterThan(5);
+  });
+
+  it("变形纹理：morph 的 3×3 等于 case-p12-am-morphtex.txt；没有 bit12 的只有纹素 0（rea-mdl 6.3）", () => {
+    const morph = amPuppets.find((item) => item.name === "morph")!.puppet.morph!;
+    expect([morph.side, morph.vertices, morph.targets, morph.scale]).toEqual([3, 2, 3, 40]);
+    expect(Array.from(morph.texels)).toEqual(am.morphTexture.texels.flat());
+    const nobit = amPuppets.find((item) => item.name === "morph_nobit12")!.puppet.morph!;
+    expect([nobit.side, nobit.vertices, nobit.targets]).toEqual([3, 2, 3]);
+    expect(Array.from(nobit.texels)).toEqual([0, 0, 0, 32767, ...new Array(8 * 4).fill(0)]);
+  });
+
+  it("组合键：bit2 → SKINNING_ALPHA、格式含 a_PositionVec4 → MORPHING；没有的 puppet 对应访问器为 null", () => {
+    const byName = (name: string) => amPuppets.find((item) => item.name === name)!.puppet;
+    expect(byName("alpha").combos).toEqual({ SKINNING: 1, BONECOUNT: 2, SKINNING_ALPHA: 1 });
+    expect(byName("morph").combos).toEqual({ SKINNING: 1, BONECOUNT: expect.any(Number), MORPHING: 1 });
+    expect(byName("alpha").boneAlpha).toBe(true);
+    expect(byName("morph").boneAlpha).toBe(false);
+    const puppets = new ScenePuppets([{ object: 0, puppet: byName("alpha") }]);
+    expect(puppets.morph(0)).toBeNull();
+    expect(puppets.boneAlpha(1)).toBeNull();
+    expect(puppets.boneAlpha(0)).not.toBeNull();
+  });
+
+  it("没有可见层：透明度全 1、变形生效数 0；再隐藏一帧走「已静止不重算」的捷径、结果不变；重新可见时回到动画值", () => {
+    const item = amPuppets.find((entry) => entry.name === "alpha")!;
+    const morphItem = amPuppets.find((entry) => entry.name === "morph")!;
+    const puppets = new ScenePuppets([
+      { object: 1, puppet: item.puppet },
+      { object: 2, puppet: morphItem.puppet },
+    ]);
+    puppets.frame(0.25);
+    expect(puppets.boneAlpha(1)![0]).toBeLessThan(1);
+    expect(puppets.morph(2)!.offsets[0]).toBeGreaterThan(0);
+    const hidden = sink({ "1:0": { rate: 1, blend: 1, visible: false }, "2:0": { rate: 1, blend: 1, visible: false } });
+    puppets.frame(0.25, hidden);
+    expect(Array.from(puppets.boneAlpha(1)!)).toEqual([1, 1]);
+    expect(puppets.morph(2)!.offsets[0]).toBe(0);
+    expect(puppets.morph(2)!.weights[0]).toBe(40);
+    expect(Array.from(puppets.morph(2)!.weights.subarray(1))).toEqual(new Array(11).fill(0));
+    puppets.frame(0.25, hidden);
+    expect(Array.from(puppets.boneAlpha(1)!)).toEqual([1, 1]);
+    expect(puppets.morph(2)!.offsets[0]).toBe(0);
+    puppets.frame(0.25, sink({}));
+    expect(puppets.boneAlpha(1)![0]).toBeLessThan(1);
+    expect(puppets.morph(2)!.offsets[0]).toBeGreaterThan(0);
+  });
+});
+
+describe("pose.ts：标量轨道的叠法（clip-morph-attach 5、rea-RT 6.4）", () => {
+  const f = Math.fround;
+
+  it("骨骼透明度：覆盖取 lerp(lo, hi, frac)，混合 lerp(cur, v, w)，加法夹在 cur 与 v 之间；mask 为 0 的骨骼不动", () => {
+    // 2 帧 × 2 骨骼：骨骼 0 从 0.2 到 0.8，骨骼 1 从 1 到 0
+    const values = Float32Array.from([0.2, 1, 0.8, 0]);
+    const run = (w: number, additive: boolean, mask = [1, 1]) => {
+      const alpha = Float32Array.from([1, 1]);
+      blendScalarAlpha(alpha, values, Uint8Array.from(mask), 2, 0, 1, 0.5, w, additive);
+      return Array.from(alpha);
+    };
+    expect(run(1, false)).toEqual([f(0.5), 0.5]);
+    expect(run(0.5, false)).toEqual([f(f(0.5 * 1) + f(0.5 * f(0.5))), 0.75]);
+    // 加法：骨骼 1：cur 1、v 0.5、w 0.5 → 1 + (0.5 − 1)·0.5 = 0.75，夹在 [0.5, 1]
+    expect(run(0.5, true)[1]).toBe(0.75);
+    // w = 1 的加法层不走覆盖：cur + (v − 1)·1 = v，夹在 [v, 1]
+    expect(run(1, true)[1]).toBe(0.5);
+    expect(run(1, false, [0, 1])).toEqual([1, 0.5]);
+  });
+
+  /** 一个目标一条两帧轨道（值 a → b）。 */
+  const track = (a: number, b: number) => Float32Array.from([a, b]);
+  const weightsOf = (n: number) => ({ weights: new Float32Array(n), active: new Uint8Array(n) });
+
+  it("变形生效 = |v| ≥ FLT_EPSILON：负权重生效、NaN 生效、刚好等于 FLT_EPSILON 生效、更小的不生效", () => {
+    const eps = 2 ** -23;
+    const { weights, active } = weightsOf(5);
+    blendMorphWeights(
+      weights,
+      active,
+      [track(-0.5, -0.5), track(NaN, NaN), track(eps, eps), track(eps / 2, eps / 2), track(0, 0)],
+      0,
+      0,
+      0,
+      1,
+      false,
+    );
+    expect(Array.from(active)).toEqual([1, 1, 1, 0, 0]);
+    expect(weights[0]).toBe(-0.5);
+  });
+
+  it("覆盖：不生效清位、权重不动；混合：从不清位、权重总是 lerp(cur, v, w)；加法：不生效整条跳过", () => {
+    const base = () => {
+      const state = weightsOf(1);
+      state.weights[0] = 0.5;
+      state.active[0] = 1;
+      return state;
+    };
+    const zero = [track(0, 0)];
+    const override = base();
+    blendMorphWeights(override.weights, override.active, zero, 0, 0, 0, 1, false);
+    expect([override.weights[0], override.active[0]]).toEqual([0.5, 0]);
+    const blend = base();
+    blendMorphWeights(blend.weights, blend.active, zero, 0, 0, 0, 0.5, false);
+    expect([blend.weights[0], blend.active[0]]).toEqual([0.25, 1]);
+    const add = base();
+    blendMorphWeights(add.weights, add.active, zero, 0, 0, 0, 0.5, true);
+    expect([add.weights[0], add.active[0]]).toEqual([0.5, 1]);
+    const skipped = weightsOf(1);
+    blendMorphWeights(skipped.weights, skipped.active, zero, 0, 0, 0, 0.5, true);
+    expect([skipped.weights[0], skipped.active[0]]).toEqual([0, 0]);
+  });
+
+  it("加法：同号取绝对值大的、异号才相加；从 0 开始的第一层就是 v·w", () => {
+    const run = (cur: number, v: number, w: number) => {
+      const state = weightsOf(1);
+      state.weights[0] = cur;
+      blendMorphWeights(state.weights, state.active, [track(v, v)], 0, 0, 0, w, true);
+      return state.weights[0];
+    };
+    expect(run(0, 0.8, 0.5)).toBe(f(0.4));
+    expect(run(0.6, 0.8, 0.5)).toBe(f(0.6)); // a = 0.4：同号取绝对值大的（cur）
+    expect(run(0.3, 0.8, 0.5)).toBe(f(0.4)); // a = 0.4 > cur
+    expect(run(0.5, -0.8, 0.5)).toBe(f(f(0.5) + f(-0.4))); // 异号相加
+    expect(run(-0.6, -0.8, 0.5)).toBe(f(-0.6));
+  });
+
+  it("morphUniforms：前 11 个生效目标（按目标号）→ 带符号权重降序稳定排序 → 偏移 t·nv；缩放在 weights[0]", () => {
+    const out: MorphUniforms = { offsets: new Uint32Array(12), weights: new Float32Array(12) };
+    // 目标 0..2：0.5、−0.2、0.5（并列保持目标号升序）；目标 3 不生效；目标 4：0.9
+    const weights = Float32Array.from([0.5, -0.2, 0.5, 0.7, 0.9]);
+    const active = Uint8Array.from([1, 1, 1, 0, 1]);
+    morphUniforms(weights, active, 10, 5.5, out);
+    expect(Array.from(out.offsets)).toEqual([4, 40, 0, 20, 10, 0, 0, 0, 0, 0, 0, 0]);
+    expect(Array.from(out.weights)).toEqual([5.5, f(0.9), 0.5, 0.5, f(-0.2), 0, 0, 0, 0, 0, 0, 0]);
+    morphUniforms(new Float32Array(3), new Uint8Array(3), 10, 7, out);
+    expect(Array.from(out.offsets)).toEqual(new Array(12).fill(0));
+    expect(Array.from(out.weights)).toEqual([7, ...new Array(11).fill(0)]);
+  });
+
+  it("morphUniforms：超过 11 个生效目标时取目标号最小的 11 个，不是权重最大的", () => {
+    const out: MorphUniforms = { offsets: new Uint32Array(12), weights: new Float32Array(12) };
+    const n = 14;
+    const weights = Float32Array.from({ length: n }, (_, t) => (t === 13 ? 100 : 0.1 + t * 0.01));
+    morphUniforms(weights, new Uint8Array(n).fill(1), 3, 1, out);
+    expect(out.offsets[0]).toBe(11);
+    // 目标 13（权重最大）没进来；进来的 0..10 按权重降序 = 10..0
+    expect(Array.from(out.offsets.subarray(1))).toEqual(
+      Array.from({ length: 11 }, (_, k) => (10 - k) * 3 * (k < 11 ? 1 : 0)),
+    );
+    expect(out.weights[1]).toBe(f(0.1 + 10 * 0.01));
   });
 });

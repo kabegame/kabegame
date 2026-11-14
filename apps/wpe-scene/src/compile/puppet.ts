@@ -62,6 +62,46 @@ export interface PuppetAnimation {
   mask: Uint8Array;
   /** 第 f 帧第 b 根骨骼在 `(f × 骨骼数 + b) × 10`：T(3) q(4，w x y z) S(3)。静态 puppet 不转换，为空。 */
   frames: Float32Array;
+  /**
+   * 骨骼透明度轨道（P12b1，rea-p12-runtime 6.4）：第 f 帧第 b 根骨骼在 `f × 骨骼数 + b`；只在 skinned、网格 0 有 bit2（`ScenePuppet.boneAlpha`）且这条动画有
+   * 透明度轨道时有，否则 null（有轨道没有 bit2 时 WPE 崩溃，报 `puppet:alpha-track`、不转）。
+   */
+  alpha: Float32Array | null;
+  /** 每骨骼 1 = 透明度轨道参与（骨骼轨道 flags & 3 ≠ 1，`0x1401ff1fb`）；`alpha` 为 null 时为空。 */
+  alphaMask: Uint8Array;
+  /** 变形权重轨道（P12b1）：每个目标一条（`length + 1` 个 f32），这条动画没给的目标为 null；没有 `ScenePuppet.morph` 或这条动画没有变形轨道时为 null。 */
+  morph: (Float32Array | null)[] | null;
+}
+
+/** `MDAT` 的一项（P12b1 步骤 1，rea-p12-mdl 5.1）：名字、骨骼下标、矩阵（16 个 f32，同 `Mat4` 的列主序布局，和 `ScenePuppets.pose` 一致）。 */
+export interface PuppetAttachment {
+  name: string;
+  bone: number;
+  matrix: Float32Array;
+}
+
+/**
+ * 变形纹理（P12b1 步骤 1，rea-p12-mdl 6.3）：`side × side` 个纹素，每纹素 4 个 i16（xyz 位置差、w 透明度，snorm），纹素 0 = (0, 0, 0, 32767)，
+ * 目标 t 第 v 个变形顶点在 `1 + t·vertices + v`；网格 0 没有 bit12 时只有纹素 0。
+ */
+export interface PuppetMorph {
+  /** `MDMP` 的差值缩放（`g_MorphWeights[0]`）。 */
+  scale: number;
+  /** 变形顶点数 nv。 */
+  vertices: number;
+  targets: number;
+  side: number;
+  texels: Int16Array;
+}
+
+/** 裁切命令表（P12b1 步骤 5 点 1，WPE `FUN_14020b720` 建的 `P+0x430`，`ignore/p12/b/rea/cm_cmdlist.py`）。 */
+export interface PuppetClipping {
+  /** normal：用普通程序画 `segment`；clip：清遮罩 RT、画 `record` 的遮罩段 `mask`，再画目标段 `target`。 */
+  commands: ({ kind: "normal"; segment: number } | { kind: "clip"; record: number; mask: number; target: number })[];
+  /** 每段一份 u16 索引（节点按位置顺序拼接）。 */
+  segments: Uint16Array[];
+  /** 每条记录的遮罩纹理路径 `materials/<记录名>.tex`（在 `scene.pkg` 里）。 */
+  records: { mask: string }[];
 }
 
 export interface ScenePuppet {
@@ -92,6 +132,14 @@ export interface ScenePuppet {
   animations: PuppetAnimation[];
   /** 按 JSON 顺序（语料没有 `autosort` / `index`，rea-RT 1.4）。找不到动画的项整层丢掉，不报。 */
   layers: PuppetLayerDef[];
+  /** `MDAT`（P12b1）。挂点只在 skinned 时乘 `Pose · Att`（rea-AP 1.2：`P+0x2c8` 为空时不乘），用的人按 `skeleton` 判断。 */
+  attachments: PuppetAttachment[];
+  /** 网格 0 标志 bit2 且 skinned（P12b1）：组合键带 `SKINNING_ALPHA`，每帧写 `g_BonesAlpha`（`ScenePuppets.boneAlpha`）。 */
+  boneAlpha: boolean;
+  /** 网格 0 格式含 `a_PositionVec4` 且 skinned（P12b1）：组合键带 `MORPHING`，槽 5 绑变形纹理，每帧写 `g_MorphOffsets` / `g_MorphWeights`（`ScenePuppets.morph`）。 */
+  morph: PuppetMorph | null;
+  /** 网格 0 有 v23 记录（P12b1）：按命令表分段画。 */
+  clipping: PuppetClipping | null;
 }
 
 /** 动画层的描述符字段（rea-RT 1.5 的属性表 `0x1404e8a60`，只读的 `fps` / `frameCount` / `duration` 不在 JSON 里写）。 */
@@ -170,7 +218,14 @@ const MODES: Record<MdlAnimation["mode"], AnimationMode> = { loop: 0, mirror: 1,
  * 轨道 flags bit0 的骨骼 mask 为 0（rea-mdl 4.3），帧数据不转（采样不读）；文件 flags bit1 的骨骼同样标成不动画（4.3，物理接管，语料 0 根，
  * 由调用方报 `puppet:physics`）。轨道比骨骼少时多出来的骨骼 mask 为 0、比骨骼多时多的不读（语料轨道数都等于骨骼数，不等时报键）。
  */
-function convertAnimation(animation: MdlAnimation, file: MdlFile, bones: number, skinned: boolean): PuppetAnimation {
+function convertAnimation(
+  animation: MdlAnimation,
+  file: MdlFile,
+  bones: number,
+  skinned: boolean,
+  withAlpha: boolean,
+  morphTargets: number,
+): PuppetAnimation {
   const frameCount = animation.length + 1;
   const mask = new Uint8Array(skinned ? bones : 0);
   const frames = new Float32Array(skinned ? frameCount * bones * POSE_STRIDE : 0);
@@ -194,6 +249,26 @@ function convertAnimation(animation: MdlAnimation, file: MdlFile, bones: number,
       }
     }
   }
+  // 骨骼透明度（P12b1）：每条骨骼轨道一条标量轨道，轨道 flags & 3 == 1 的跳过（`and cl, 3; cmp cl, 1; je`，`0x1401ff1fb`）
+  let alpha: Float32Array | null = null;
+  let alphaMask: Uint8Array = new Uint8Array(0);
+  if (skinned && withAlpha && animation.boneAlpha) {
+    const tracks = animation.tracks.length;
+    alpha = new Float32Array(frameCount * bones);
+    alphaMask = new Uint8Array(bones);
+    for (let b = 0; b < Math.min(bones, tracks); b++) {
+      if ((animation.tracks[b].flags & 3) === 1) continue;
+      alphaMask[b] = 1;
+      for (let k = 0; k < frameCount; k++) alpha[k * bones + b] = animation.boneAlpha[k * tracks + b];
+    }
+  }
+  let morph: (Float32Array | null)[] | null = null;
+  if (skinned && morphTargets > 0 && animation.morphWeights) {
+    const list: (Float32Array | null)[] = Array.from({ length: morphTargets }, () => null);
+    for (const { target, values } of animation.morphWeights)
+      if (target < morphTargets) list[target] = Float32Array.from(values);
+    morph = list;
+  }
   return {
     id: animation.id,
     name: animation.name,
@@ -202,6 +277,9 @@ function convertAnimation(animation: MdlAnimation, file: MdlFile, bones: number,
     length: animation.length,
     mask,
     frames,
+    alpha,
+    alphaMask,
+    morph,
   };
 }
 
@@ -212,9 +290,10 @@ function convertAnimation(animation: MdlAnimation, file: MdlFile, bones: number,
  * `issues`（P12a 不做、照报的细分键，子计划「总体设计思路」）：
  * - 文件：`mdl:truncated`（同模型对象）、`mdl:section:<标签>`（`MDLS` / `MDLA` 没恰好读到段末）、`mdl:skeleton:bones`（骨骼数 > 128，WPE
  *   直接终止进程）、`mdl:animation-id`（动画 id ≥ 2³²）；
- * - 网格（只看网格 0，纹理通道看全部网格）：`puppet:index32`（标志 bit0）、`puppet:alpha`（bit2 → `SKINNING_ALPHA`）、`puppet:morph`
- *   （格式含 `a_PositionVec4` → `MORPHING`）、`puppet:clipping`（v23 记录）、`puppet:texture-channels`（任一网格 bit1）。这几样不论 skinned
- *   都报（静态 puppet 上 WPE 怎么画没查清，语料的静态 puppet 都没有它们）；
+ * - 网格（只看网格 0，纹理通道看全部网格）：`puppet:index32`（标志 bit0）、`puppet:texture-channels`（任一网格 bit1），不论 skinned 都报（静态 puppet 上
+ *   WPE 怎么画没查清，语料的静态 puppet 都没有它们）；P12b1 起 bit2（`SKINNING_ALPHA`）、`a_PositionVec4`（`MORPHING`）、v23 记录（裁切）不再报，
+ *   只剩没做的细节：`puppet:morph:modifiers`（bit13，`MORPHING_MODIFIERS`）、`puppet:clipping:flags`（记录 flags 非 0）、`puppet:clipping:nested`
+ *   （遮罩被别的记录裁切）、`puppet:clipping:groups`（记录下标越界）；
  * - 动画层：`puppet:layer-script`（字段挂脚本，P12c）；
  * - 只在 skinned 时报（静态 puppet 每帧不做事，rea-RT 2）：`puppet:physics`（骨骼 JSON 的物理门，或文件 flags bit1）、`puppet:ik`
  *   （`MDLS` v ≥ 2 的记录、约束、键表、链表，或骨骼 JSON 的 `ik` / `ikce`）、动画层用到的动画里 `puppet:draw-order`（绘制顺序轨道且网格 0
@@ -236,15 +315,16 @@ export function buildPuppet(
   if (!mesh) return { puppet: null, issues };
 
   if (mesh.flags & 1) issues.add("puppet:index32");
-  if (mesh.flags & 4) issues.add("puppet:alpha");
-  if (mesh.format & POSITION_VEC4) issues.add("puppet:morph");
-  if (mesh.records.length) issues.add("puppet:clipping");
+  if (mesh.flags & 0x2000) issues.add("puppet:morph:modifiers");
   if (file.meshes.some((item) => item.flags & 2)) issues.add("puppet:texture-channels");
 
   const skeleton = file.skeleton;
   if (skeleton && skeleton.count > MAX_BONES) issues.add("mdl:skeleton:bones");
   const bones = skeleton && skeleton.count <= MAX_BONES ? skeleton.bones : [];
   const skinned = (mesh.format & BLEND_INDICES) !== 0 && bones.length > 0;
+  const withAlpha = skinned && (mesh.flags & 4) !== 0;
+  const morph = skinned && (mesh.format & POSITION_VEC4) !== 0 ? buildMorph(mesh) : null;
+  const clipping = buildClipping(mesh, issues);
 
   // 动画层（`FUN_1401fcc20`，rea-RT 1.4）：只认数组里的对象；`animation` 不是数或在 MDLA 里找不到就整层丢掉、不报
   const used: number[] = [];
@@ -307,10 +387,27 @@ export function buildPuppet(
       vertexCount: mesh.vertexCount,
       indexCount: mesh.indices.length >> 1,
     },
-    combos: skinned ? { SKINNING: 1, BONECOUNT: bones.length } : {},
+    combos: skinned
+      ? {
+          SKINNING: 1,
+          BONECOUNT: bones.length,
+          ...(withAlpha ? { SKINNING_ALPHA: 1 } : {}),
+          ...(morph ? { MORPHING: 1 } : {}),
+        }
+      : {},
     skeleton: skinned ? buildSkeleton(file) : null,
-    animations: used.map((index) => convertAnimation(file.animations[index], file, bones.length, skinned)),
+    animations: used.map((index) =>
+      convertAnimation(file.animations[index], file, bones.length, skinned, withAlpha, morph?.targets ?? 0),
+    ),
     layers: defs,
+    attachments: file.attachments.map((item) => ({
+      name: item.name,
+      bone: item.bone,
+      matrix: Float32Array.from(item.matrix),
+    })),
+    boneAlpha: withAlpha,
+    morph,
+    clipping,
   };
   return { puppet, issues };
 }
@@ -341,4 +438,137 @@ function buildSkeleton(file: MdlFile): NonNullable<ScenePuppet["skeleton"]> {
   const rest = new Float32Array(n * POSE_STRIDE);
   for (let i = 0; i < n; i++) decomposeRest(restMatrices, i * 16, rest, i * POSE_STRIDE);
   return { parents, inverseBind, rest, restMatrices };
+}
+
+type MdlMeshRef = MdlFile["meshes"][number];
+
+/**
+ * 变形纹理（P12b1，rea-p12-mdl 6.3，`FUN_1401fbae0`）：只看网格 0；`count = 目标数 × nv + 1`，`side = ⌊√count⌋`、`side² < count` 时加 1；纹素 0 =
+ * (0, 0, 0, 32767)；目标 t 第 v 个变形顶点在纹素 `1 + t·nv + v` = (位置差 xyz, 透明度)，**只有网格 0 标志带 bit12 时才写**，否则只有纹素 0。
+ * 没有 `MDMP` 目标（格式含 `a_PositionVec4` 却没有变形，WPE 照样编 `MORPHING`）时目标数 0、缩放 0。
+ */
+function buildMorph(mesh: MdlMeshRef): PuppetMorph {
+  const morph = mesh.morph;
+  const targets = morph?.targets.length ?? 0;
+  const vertices = morph?.count ?? 0;
+  const count = targets * vertices + 1;
+  let side = Math.floor(Math.sqrt(count));
+  if (side * side < count) side++;
+  const texels = new Int16Array(side * side * 4);
+  texels[3] = 0x7fff;
+  if (morph && mesh.flags & 0x1000)
+    morph.targets.forEach((target, t) => {
+      for (let v = 0; v < vertices; v++) {
+        const o = (1 + t * vertices + v) * 4;
+        texels[o] = target.position[3 * v];
+        texels[o + 1] = target.position[3 * v + 1];
+        texels[o + 2] = target.position[3 * v + 2];
+        texels[o + 3] = target.alpha?.[v] ?? 0;
+      }
+    });
+  return { scale: morph?.scale ?? 0, vertices, targets, side, texels };
+}
+
+/** 记录嵌套：记录 i 的 `list2` 全部出现在别的记录 j 的 `list1` 里时 `+0x48` = 第一个这样的 j，否则 −1（`0x14026203c`，`cm_cmdlist.py` 的 `parents`）。 */
+function clippingParents(records: MdlMeshRef["records"]): number[] {
+  return records.map((record, i) => {
+    if (!record.list2.length) return -1;
+    return records.findIndex((other, j) => j !== i && record.list2.every((group) => other.list1.includes(group)));
+  });
+}
+
+/**
+ * 裁切命令表（P12b1 步骤 5 点 1，WPE `FUN_14020b720` 建的 `P+0x430`，照 `ignore/p12/b/rea/cm_cmdlist.py` 的 `build`，语料 5 个网格与
+ * `cm_cmdlist_out.txt` 逐段相同）。网格 0 没有 v23 记录时为 null。
+ * - 节点 = 绘制组（按组表顺序，加载时不排序）；记录 `list1` 的组是目标、`list2` 的组是遮罩；
+ * - 每条记录：目标位置、首末遮罩位置、遮罩段 = 首末遮罩位置之间的全部位置减去本记录的目标（末位置沿嵌套链取最大）；
+ * - 沿位置走：不是目标的组（含遮罩组本身）累积成普通段，走到某条记录的末遮罩位置时先把累积的普通段落成一段、再发射这条记录
+ *   （遮罩段 + 目标段，一条记录的多个 `list1` 组合成一个目标段）；同一位置发射多条记录时按最小目标位置稳定排序；
+ * - 每段一份 u16 索引（节点按位置顺序拼接 `mesh0 索引 + 起点`）。
+ * 照报（WPE 行为清楚但语料 0 处）：记录 flags 非 0（`puppet:clipping:flags`：bit0 加法、bit1 取反、bit2 遮罩组不画、bit3 WPE 自己的查表 bug 不复刻）、
+ * 遮罩被别的记录裁切（`puppet:clipping:nested`，命令 2 要第二张中间遮罩 RT）、下标超出绘制组数（WPE `int 0x29`，`puppet:clipping:groups`，不出命令表）。
+ * 前两种仍按「单遮罩、flags 0」算出命令表（宿主因 `unsupported` 不会用它）。
+ */
+function buildClipping(mesh: MdlMeshRef, issues: Set<string>): PuppetClipping | null {
+  const records = mesh.records;
+  if (!records.length) return null;
+  if (records.some((record) => record.flags !== 0)) issues.add("puppet:clipping:flags");
+  const groups = mesh.drawGroups;
+  if (records.some((record) => [...record.list1, ...record.list2].some((group) => group >= groups.length))) {
+    issues.add("puppet:clipping:groups");
+    return null;
+  }
+  const parents = clippingParents(records);
+  if (parents.some((parent) => parent >= 0)) issues.add("puppet:clipping:nested");
+
+  // 节点标志：list1 的组 |= 1（目标），list2 的组 |= 8（遮罩）
+  const target = groups.map(() => false);
+  const maskGroup = groups.map(() => false);
+  for (const record of records) {
+    for (const group of record.list1) target[group] = true;
+    for (const group of record.list2) maskGroup[group] = true;
+  }
+  interface Entry {
+    record: number;
+    minTarget: number;
+    first: number;
+    last: number;
+    targets: number[];
+    masks: number[];
+  }
+  const entries: Entry[] = records.map((record, index) => {
+    const entry: Entry = { record: index, minTarget: 0x7fffffff, first: -1, last: -1, targets: [], masks: [] };
+    for (let p = 0; p < groups.length; p++) {
+      if (target[p] && record.list1.includes(p)) {
+        entry.targets.push(p);
+        entry.minTarget = Math.min(entry.minTarget, p);
+      }
+      if (record.list2.includes(p)) {
+        if (entry.first < 0) entry.first = p;
+        entry.last = p;
+      }
+    }
+    for (let p = 0; p < groups.length; p++)
+      if (p >= entry.first && p <= entry.last && !entry.targets.includes(p)) entry.masks.push(p);
+    return entry;
+  });
+  // 沿嵌套链取最大的末遮罩位置（0x14020bc33）；链上有环时最多走记录数步
+  for (const entry of entries) {
+    let j = parents[entry.record];
+    for (let step = 0; j !== -1 && step < records.length; step++, j = parents[j])
+      entry.last = Math.max(entry.last, entries[j].last);
+  }
+  entries.sort((a, b) => a.minTarget - b.minTarget); // 稳定排序，并列按记录下标
+
+  const segments: Uint16Array[] = [];
+  const commands: PuppetClipping["commands"] = [];
+  const indices = new DataView(mesh.indices.buffer, mesh.indices.byteOffset, mesh.indices.byteLength);
+  const indexCount = mesh.indices.byteLength >> 1;
+  const segment = (positions: readonly number[]): number => {
+    const out: number[] = [];
+    for (const p of positions) {
+      const { start, count } = groups[p];
+      for (let i = 0; i < count && start + i < indexCount; i++) out.push(indices.getUint16((start + i) * 2, true));
+    }
+    segments.push(Uint16Array.from(out));
+    return segments.length - 1;
+  };
+  let run: number[] = [];
+  const flush = () => {
+    if (!run.length) return;
+    commands.push({ kind: "normal", segment: segment(run) });
+    run = [];
+  };
+  for (let p = 0; p < groups.length; p++) {
+    if (!target[p]) run.push(p);
+    if (!maskGroup[p]) continue;
+    for (const entry of entries) {
+      if (entry.last !== p) continue;
+      flush();
+      const mask = segment(entry.masks);
+      commands.push({ kind: "clip", record: entry.record, mask, target: segment(entry.targets) });
+    }
+  }
+  flush();
+  return { commands, segments, records: records.map((record) => ({ mask: `materials/${record.name}.tex` })) };
 }

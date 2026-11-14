@@ -152,6 +152,33 @@ export interface MdlMesh {
   drawGroups: MdlDrawGroup[];
   /** v ≥ 23 的记录表（rea-p12-mdl 7.3：裁切遮罩，两组下标指向绘制组）。P12b 用；P12a 只看有没有（`puppet:clipping`）。 */
   records: MdlRecord[];
+  /** `MDMP` 里这个网格的变形（P12b1，rea-p12-mdl 6.1）；没有 `MDMP` 段或目标数为 0 时为 null。 */
+  morph: MdlMorph | null;
+}
+
+/** `MDAT0001` 的一项（P12b1，rea-p12-mdl 5.1）：名字、骨骼下标、64 字节矩阵（同 MDLS 局部矩阵的存法：16 个 f32，列主序，平移在 [12..14]）。 */
+export interface MdlAttachment {
+  name: string;
+  bone: number;
+  matrix: Float32Array;
+}
+
+/** `MDMP0001` 的一个目标（rea-p12-mdl 6.1）：位置差 i16 × 3nv；网格标志 bit12 时每顶点 i16 透明度，否则 null。 */
+export interface MdlMorphTarget {
+  id: number;
+  name: string;
+  position: Int16Array;
+  alpha: Int16Array | null;
+}
+
+/**
+ * `MDMP0001` 的一个网格（rea-p12-mdl 6.1）：差值缩放（f32，`g_MorphWeights[0]`）、变形顶点数 nv（各目标字节数 / 6 的最小值）、目标。
+ * 网格标志 bit10 / bit11 的法线 / 切线差与 bit13 的四个值照读码读过、不存（图像层不用；bit13 由 puppet 照报）。
+ */
+export interface MdlMorph {
+  scale: number;
+  count: number;
+  targets: MdlMorphTarget[];
 }
 
 /** 一个绘制组（可选块 2 的一项，rea-p12-mdl 7.2）。 */
@@ -222,9 +249,17 @@ export interface MdlAnimation {
    * 欧拉角 xyz（弧度）、缩放 xyz，不稀疏（rea 4.4）。字节 4 对齐时是原文件缓冲上的视图，否则拷一份。
    */
   tracks: { flags: number; frames: Float32Array }[];
-  /** v ≥ 3 的每骨骼透明度轨道（rea 4.7 第 12 项）：P12a 只记有没有，内容由 P12b 读。 */
-  boneAlpha: boolean;
-  /** v ≥ 6 的每骨骼绘制顺序轨道（rea 4.7 第 15 项）：同上。 */
+  /**
+   * v ≥ 3 的每骨骼透明度轨道（rea 4.7 第 12 项，P12b1 存内容）：第 f 帧第 b 条轨道在 `f × tracks.length + b`（帧数 = length + 1），
+   * 轨道数就是骨骼轨道数（rea-p12-runtime 6.4）；没有这一段为 null。
+   */
+  boneAlpha: Float32Array | null;
+  /**
+   * v ≥ 4 的变形权重轨道里网格 0 的条目（rea 4.2 第 13 项，P12b1）：只收网格 0 且该条目 flags 带 bit0 的；每个目标一条（目标下标取文件里的
+   * u16，值 `length + 1` 个 f32）。没有这一段、条目缺失或 flags 没有 bit0 为 null；其它网格的轨道读过即丢（图像层只看网格 0）。
+   */
+  morphWeights: { target: number; values: Float32Array }[] | null;
+  /** v ≥ 6 的每骨骼绘制顺序轨道（rea 4.7 第 15 项）：P12a 只记有没有。 */
   drawOrderTrack: boolean;
   /** 事件：f32 秒 + 事件 JSON（rea 4.7 第 17 项）。P12c 派发。 */
   events: { time: number; json: string }[];
@@ -247,6 +282,8 @@ export interface MdlFile {
   skeleton: MdlSkeleton | null;
   /** `MDLA` 段的动画（按文件顺序）；没有为空。 */
   animations: MdlAnimation[];
+  /** `MDAT0001` 的挂点（P12b1，按文件顺序，重名都留；没有为空）。 */
+  attachments: MdlAttachment[];
   /**
    * 读了内容却没恰好读到段末的段标签（`MDLS` / `MDLA`：读多、读少、段内读出文件末尾、长度检查不过）。WPE 的读取上限是整个文件，
    * 段内读多了会读进下一段（rea-p12-mdl 1.1），长度检查不过时 `int 0x29` 终止进程（4.2）；语料 137 个文件 0 处，puppet 报
@@ -377,6 +414,7 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
     truncated: false,
     skeleton: null,
     animations: [],
+    attachments: [],
     sectionIssues: [],
   };
   try {
@@ -437,6 +475,7 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
         blendRowCount,
         drawGroups,
         records,
+        morph: null,
       });
     }
     file.bounds = unionBounds(file.meshes);
@@ -464,18 +503,78 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
  */
 function readSection(reader: MdlReader, tag: string, end: number, file: MdlFile): void {
   const kind = tag.slice(0, 4);
-  if (kind !== "MDLS" && kind !== "MDLA") return;
+  // `MDAT` / `MDMP` 比前 8 个字符（`strncmp(标签, "MDAT0001", 8)`，rea-p12-mdl 5.1、6.1），别的版本号当不认识的段跳过
+  const attach = tag.startsWith("MDAT0001");
+  const morph = tag.startsWith("MDMP0001");
+  if (kind !== "MDLS" && kind !== "MDLA" && !attach && !morph) return;
   const version = atoi(tag.slice(4));
   try {
     if (kind === "MDLS") {
       const skeleton = readSkeleton(reader, version);
       file.skeleton = skeleton;
       if (skeleton.count > MAX_BONES) return;
-    } else file.animations = readAnimations(reader, version, file.skeleton, file.meshes.length);
+    } else if (kind === "MDLA") file.animations = readAnimations(reader, version, file.skeleton, file.meshes.length);
+    else if (attach) file.attachments = readAttachments(reader);
+    else readMorphs(reader, file.meshes);
     if (reader.pos !== end) file.sectionIssues.push(tag);
   } catch (error) {
     if (!(error instanceof Truncated) && !(error instanceof Malformed)) throw error;
     file.sectionIssues.push(tag);
+  }
+}
+
+/** `MDAT0001`（rea-p12-mdl 5.1）：u16 个数；每项 u16 骨骼下标、名字、裸 64 字节矩阵。 */
+function readAttachments(reader: MdlReader): MdlAttachment[] {
+  const count = reader.u16();
+  return repeat(count, () => {
+    const bone = reader.u16();
+    const name = reader.cstr();
+    return { name, bone, matrix: reader.matrix() };
+  });
+}
+
+/** i16 数组：字节 2 对齐时是原缓冲上的视图，否则拷一份。 */
+function shortView(block: Uint8Array): Int16Array {
+  return block.byteOffset % 2 === 0
+    ? new Int16Array(block.buffer, block.byteOffset, block.length >> 1)
+    : new Int16Array(block.slice().buffer);
+}
+
+/**
+ * `MDMP0001`（`0x1402656b8`–`0x1402658ad`，rea-p12-mdl 6.1，照 `mdl12.py`）：逐网格（mdl 的全部网格）u16 目标数 n，n 为 0 什么都不读；
+ * 否则 f32 缩放、u32 nv，再 n 个目标：u64 id、名字、位置差块；网格标志 bit10 / bit11 各一个差块（读过即丢）、bit12 每顶点 i16 块、bit13 两个 u32
+ * 与两个 f32（读过即丢）。nv 取各目标 `字节数 / 6` 的最小值，块字节数要恰好是 nv × 6（bit12 是 nv × 2），不满足 WPE `int 0x29`（Malformed）。
+ */
+function readMorphs(reader: MdlReader, meshes: MdlMesh[]): void {
+  for (const mesh of meshes) {
+    const n = reader.u16();
+    if (n === 0) continue;
+    const scale = reader.f32();
+    let count = reader.u32();
+    const targets: MdlMorphTarget[] = [];
+    for (let t = 0; t < n; t++) {
+      const id = reader.u64();
+      const name = reader.cstr();
+      const position = reader.block();
+      count = Math.min(count, Math.floor(position.length / 6));
+      if (position.length !== count * 6) throw new Malformed();
+      if (mesh.flags & 0x400 && reader.block().length !== count * 6) throw new Malformed();
+      if (mesh.flags & 0x800 && reader.block().length !== count * 6) throw new Malformed();
+      let alpha: Int16Array | null = null;
+      if (mesh.flags & 0x1000) {
+        const block = reader.block();
+        if (block.length !== count * 2) throw new Malformed();
+        alpha = shortView(block);
+      }
+      if (mesh.flags & 0x2000) {
+        reader.u32();
+        reader.u32();
+        reader.f32();
+        reader.f32();
+      }
+      targets.push({ id, name, position: shortView(position), alpha });
+    }
+    mesh.morph = { scale, count, targets };
   }
 }
 
@@ -621,23 +720,34 @@ function readAnimations(
       scalars(constraints);
       if (records > 0 || constraints > 0) unsupported = true;
     }
-    let boneAlpha = false;
+    let boneAlpha: Float32Array | null = null;
     if (version >= 3) {
       scalars(reader.u32());
       if (reader.u8()) {
-        boneAlpha = true;
-        scalars(trackCount);
+        // 每条骨骼轨道一条标量轨道（u32 读了不用 + f32 块），排成「帧 × 轨道」
+        const alpha = new Float32Array(frames * trackCount);
+        for (let b = 0; b < trackCount; b++) {
+          reader.u32();
+          const values = floatView(checkTrack(reader.block(), 4, frames));
+          for (let k = 0; k < frames; k++) alpha[k * trackCount + b] = values[k];
+        }
+        boneAlpha = alpha;
       }
     }
+    let morphWeights: MdlAnimation["morphWeights"] = null;
     if (version >= 4 && reader.u8())
       for (let m = 0; m < meshes; m++) {
-        if (!(reader.u32() & 1)) continue;
-        reader.u32();
+        const meshFlags = reader.u32();
+        if (!(meshFlags & 1)) continue;
+        reader.u32(); // f32 缩放（和 MDMP 的相同，不用）
         const targets = reader.u16();
+        const list: { target: number; values: Float32Array }[] = [];
         for (let t = 0; t < targets; t++) {
-          reader.u16();
-          checkTrack(reader.block(), 4, frames);
+          const target = reader.u16();
+          const values = floatView(checkTrack(reader.block(), 4, frames));
+          if (m === 0) list.push({ target, values });
         }
+        if (m === 0) morphWeights = list;
       }
     if (version >= 5) reader.skip(24);
     let drawOrderTrack = false;
@@ -647,7 +757,20 @@ function readAnimations(
     }
     if (flags & 1) reader.skip(2 + 16);
     const events = repeat(reader.u32(), () => ({ time: reader.f32(), json: reader.cstr() }));
-    out.push({ id, name, mode, fps, length, flags, tracks, boneAlpha, drawOrderTrack, events, unsupported });
+    out.push({
+      id,
+      name,
+      mode,
+      fps,
+      length,
+      flags,
+      tracks,
+      boneAlpha,
+      morphWeights,
+      drawOrderTrack,
+      events,
+      unsupported,
+    });
   }
   return out;
 }

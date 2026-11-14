@@ -3,7 +3,14 @@
  */
 import { meshAttributes } from "../compile/mdl";
 import type { ScenePuppet } from "../compile/puppet";
+import type { ScenePuppets } from "../puppet/player";
 import { alignedBytes } from "./mesh";
+
+/**
+ * 渲染器要的 puppet 运行时（`GpuScene.setPuppets`、`SceneRenderer.load` 的 `puppets`）：蒙皮矩阵必须有，挂点的模型空间姿势、骨骼透明度、变形上传值
+ * （P12b1）可以没有（手写的假来源、旧的调用方）：没有姿势时挂点按普通父子，没有透明度时全 1，没有变形时不变形。
+ */
+export type PuppetSource = Pick<ScenePuppets, "skin"> & Partial<Pick<ScenePuppets, "pose" | "boneAlpha" | "morph">>;
 
 /**
  * 直接上屏的 puppet 顶点（rea-p12-mdl 9.2 `FUN_14020ae00`）：WPE 拷一份网格 0 的顶点字节，把每个顶点的 `a_TexCoord`（表序 7，只有这一项，
@@ -34,4 +41,19 @@ export function needsScaledVertices(mesh: Pick<ScenePuppet["mesh"], "format">, u
   return (
     (uv[0] !== 1 || uv[1] !== 1) && meshAttributes(mesh.format).some((attribute) => attribute.name === "a_TexCoord")
   );
+}
+
+/**
+ * 变形纹理的上传数据（P12b1 步骤 4）：一律 `rgba32float`，值是 D3D snorm 的解码 `max(c / 32767, −1)`（float32，−32768 与 −32767 都是 −1）。
+ * 不用 WPE 的 `rgba16snorm`：rgba16snorm 在 Dawn 上只能当 unfilterable-float 采样，而翻译出的着色器是 textureSampleLevel + 普通 sampler，auto layout 要 filterable float，绑不上；WPE 是 rgba16snorm，snorm → float 的换算是 c / 32767，结果相同。设备要有 `float32-filterable`，没有时报 `render:morph-texture`。
+ */
+export function morphTexelData(texels: Int16Array): Float32Array {
+  const out = new Float32Array(texels.length);
+  for (let i = 0; i < texels.length; i++) out[i] = Math.fround(Math.max(texels[i] / 32767, -1));
+  return out;
+}
+
+/** 裁切遮罩 RT 的尺寸（P12b1 步骤 5，rea-p12b 第 2 节）：场景目标宽、高各整除 2、至少 2（WPE 是后备缓冲的一半，`_rt_FullAlphaMask`）。 */
+export function clipMaskSize(width: number, height: number): [number, number] {
+  return [Math.max(2, Math.floor(width / 2)), Math.max(2, Math.floor(height / 2))];
 }

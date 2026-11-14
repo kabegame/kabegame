@@ -321,6 +321,12 @@ const OBJECT_FLAGS = [
 
 ## P12b — 挂点、变形、骨骼透明度、裁切遮罩、纹理通道
 
+**拆成两半**（2026-11-14 用户定）：
+- **P12b1**：挂点、骨骼透明度、变形、裁切遮罩，子计划 [phase-12b-attach-morph-clip.md](phase-12b-attach-morph-clip.md)；
+- **P12b2**：纹理通道与模型对象的骨骼、动画、变形（`3706286085`，「决定」2 改定后归 P12），另写子计划。两样在只做 P12 时都不解锁场景：`3811424158` 还差精灵表动画，`3706286085` 还差 P13。
+
+下面是拆分之前写的范围。
+
 语义依据见 [rea-p12-mdl](rea-p12-mdl.md) 第 5–8 节、[rea-p12-attach-physics](rea-p12-attach-physics.md) 第 1 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 5、6、11、第二部分第 2、3 节。
 
 - **挂点**：对象 `attachment` 在父 puppet 的 `MDAT` 里按全名查第一个。子对象的世界矩阵是 `W_父 · Pose[骨骼] · Att · T·R·S`，其中 `W_父` 是基类矩阵（不含 alignment）、`Pose` 是本帧动画之后的骨骼矩阵。

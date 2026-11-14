@@ -300,8 +300,8 @@ const isPointList = (
  * 每帧都用它；逐帧的一串（和 `dts` 等长，P5a 收尾）时第 i 帧用第 i 项，最后一项留给调用方步进读回那一帧。
  * `afterStep` 在这 n−1 帧的每一帧步进之后按这一帧的 `g_Time` 与帧时间调一次（P5a 步骤 3、4：探针在这里设这一帧的相机，`frameCamera`；
  * 同渲染器，粒子先用上一帧的 s 步进，再换上这一帧的。P10a 步骤 3：关键帧动画也在这里按这一帧的帧时间推进；kabegame-chromium 第 7 批：
- * 跑脚本时接着跑这一帧的脚本，见 `replayReadback`）。`beforeStep` 在每一帧步进之前调（第 7 批：跑脚本时在这里 `sync`，上一帧脚本写的
- * 进模拟器，同渲染器每帧开头的 `sync`）；不给时不调。
+ * 跑脚本时接着跑这一帧的脚本，见 `replayReadback`）。`beforeStep` 在每一帧步进之前按这一帧的帧时间调（第 7 批：跑脚本时在这里 `sync`，上一帧脚本写的
+ * 进模拟器，同渲染器每帧开头的 `sync`；P12b1 步骤 3：puppet 也在这里先于粒子推进，同渲染器 `stepPuppets`）；不给时不调。
  */
 export function replayParticles(
   scene: Pick<GpuScene, "stepParticles"> & Partial<Pick<GpuScene, "particleAudio">>,
@@ -310,7 +310,7 @@ export function replayParticles(
   time = 0,
   cursor: readonly [number, number] | readonly (readonly [number, number])[] = [0.5, 0.5],
   afterStep?: (time: number, frametime: number) => void,
-  beforeStep?: () => void,
+  beforeStep?: (frametime: number) => void,
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
   const { dts, times } = replay;
@@ -319,7 +319,7 @@ export function replayParticles(
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
   for (let i = 0; i < dts.length - 1; i++) {
     const at = timeAt(i);
-    beforeStep?.();
+    beforeStep?.(dts[i]);
     replayAudio(scene, replay, i);
     scene.stepParticles(dts[i], at, state, perFrame ? perFrame[i] : (cursor as readonly [number, number]));
     afterStep?.(at, dts[i]);
@@ -527,7 +527,7 @@ export interface ReadbackReplayOptions {
    */
   animations?: Pick<SceneAnimations, "frame">;
   /**
-   * puppet 的骨骼动画（P12a 步骤 4 点 5，`ScenePuppets`）：有回放时每一帧（前 n − 1 帧与读回帧）在步进粒子之后、设相机之前按这一帧的帧时间
+   * puppet 的骨骼动画（P12a 步骤 4 点 5，`ScenePuppets`）：有回放时每一帧（前 n − 1 帧与读回帧）在步进粒子之前（P12b1 步骤 3 起）按这一帧的帧时间
    * `frame`（同渲染器 `stepPuppets` 的位置），蒙皮矩阵由 `GpuScene.update` 写进 `g_Bones`（调用方先 `setPuppets`）。没有回放时不推进，由调用方先
    * `seek`。不给时调用序列同以前。
    */
@@ -615,8 +615,7 @@ export function replayReadback(
   // 一帧里步进粒子之后的部分（同渲染器）：设这一帧的相机 → 动画 → 脚本（`beforeFrame`）
   const afterStep = (at: number, dt: number, animated: boolean) => {
     if (scripts) generals.push(state.general);
-    // puppet（P12a 步骤 4 点 5）：粒子之后、相机之前（同渲染器 `stepPuppets`）；没有回放的读回帧不推进（调用方已 `seek`）
-    if (animated) options.puppets?.frame(dt, stateSink(state));
+    // puppet 不在这里：P12b1 步骤 3 起先于粒子推进（`beforeStep` 与读回帧的步进之前，同渲染器 `stepPuppets`）
     shake.apply(at);
     // 先把本帧时间交给脚本时钟（P10b）：动画事件的回调读到本帧的 `engine.runtime`（同渲染器帧开头就推进 `frameClock`）
     scripts?.enterFrame?.(dt, at);
@@ -630,9 +629,15 @@ export function replayReadback(
     options.time,
     particles?.dts.length ? pointers.cursors : pointers.cursors[0],
     (at, dt) => afterStep(at, dt, true),
-    // 跑脚本时每帧步进之前 `sync`：上一帧动画与脚本写的（`instanceoverride`、变换、可见性……）这一帧就进模拟器
-    scripts ? () => scene.sync(state) : undefined,
+    // puppet 先于粒子（P12b1 步骤 3：WPE 对象更新循环按 `objects` 顺序，挂点子对象排在父 puppet 之后，粒子读本帧姿势）；
+    // 跑脚本时每帧步进之前再 `sync`：上一帧动画与脚本写的（`instanceoverride`、变换、可见性……）这一帧就进模拟器
+    (dt) => {
+      options.puppets?.frame(dt, stateSink(state));
+      if (scripts) scene.sync(state);
+    },
   );
+  // 读回帧的 puppet 同样在步进粒子之前；没有回放的读回帧不推进（调用方已 `seek`）
+  if (particles?.dts.length) options.puppets?.frame(frametime, stateSink(state));
   scene.sync(state);
   // 读回那一帧的频谱（P4e 步骤 4）：没有回放时不写
   if (particles?.dts.length) replayAudio(scene, particles, particles.dts.length - 1);
@@ -704,11 +709,11 @@ function replayEncoded(
     // 不跑脚本时照以前，用动画之后的
     const general = state.general;
     // 顺序同渲染器与读回帧：两帧之间写进状态的改值先刷进去，粒子用上一帧的相机步进，再设这一帧的；动画在粒子与相机之后写、再 sync
+    // puppet（P12a 步骤 4 点 5）：P12b1 步骤 3 起在步进粒子之前，同渲染器 `stepPuppets`
+    options.puppets?.frame(frametime, stateSink(state));
     scene.sync(state);
     replayAudio(scene, replay, i);
     scene.stepParticles(frametime, time, state, pointers.cursors[i]);
-    // puppet（P12a 步骤 4 点 5）：粒子之后、相机之前，同渲染器 `stepPuppets`
-    options.puppets?.frame(frametime, stateSink(state));
     const eye = shake.apply(time);
     // 先把本帧时间交给脚本时钟（P10b）：必须在光标派发之前。宿主渲染器 `render` 帧开头就 `frameClock.advance`（`renderer.ts`），
     // 之后才 `stepCursor`，光标回调里的 `engine.runtime` / `frametime` / `Date` 是当帧的值（P6c 走查 `3810092560` 发现这里曾反过来）

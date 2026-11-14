@@ -622,10 +622,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
             parallax,
             parallaxInput(state.general, { ...parallaxFrame, frametime: 1 / 60, eye }),
           );
+          // puppet 在粒子之前（P12b1 步骤 3，同渲染器：挂点子对象读本帧姿势）
+          profiledPuppets?.frame(1 / 60, stateSink(state));
           scene.sync(state);
           scene.stepParticles(1 / 60, startTime + i / 60, state, cursor);
-          // puppet 在粒子之后、相机之前（同渲染器）
-          profiledPuppets?.frame(1 / 60, stateSink(state));
           scene.setCamera(camera);
           // 关键帧动画在粒子、相机之后写（同渲染器的 `beforeFrame`），写过的由视差之后的 `sync` 刷进 uniform
           profiled?.frame(1 / 60, state);

@@ -21,8 +21,11 @@ export interface Gpu {
   features: ReadonlySet<string>;
 }
 
-/** 场景可能用到、适配器有就开的特性。 */
-const OPTIONAL_FEATURES: GPUFeatureName[] = ["texture-compression-bc"];
+/**
+ * 场景可能用到、适配器有就开的特性：BC 压缩纹理；puppet 变形纹理（P12b1 步骤 4）一律是 `rgba32float`，要 `float32-filterable`，没有时场景退回
+ * （`render:morph-texture`）。不用 WPE 的 `rgba16snorm`：rgba16snorm 在 Dawn 上只能当 unfilterable-float 采样，而翻译出的着色器是 textureSampleLevel + 普通 sampler，auto layout 要 filterable float，绑不上；WPE 是 rgba16snorm，snorm → float 的换算是 c / 32767，结果相同。
+ */
+const OPTIONAL_FEATURES: GPUFeatureName[] = ["texture-compression-bc", "float32-filterable"];
 
 export async function acquireGpu(): Promise<Gpu> {
   if (typeof navigator === "undefined" || !navigator.gpu) throw new SceneRenderError(["webgpu:unavailable"]);

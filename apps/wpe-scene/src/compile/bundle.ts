@@ -66,6 +66,7 @@ import {
   objectKind,
   PARTICLE_UNIFORMS,
   PUPPET_COMBOS,
+  PUPPET_CLIP_MASK_UNIFORMS,
   PUPPET_UNIFORMS,
   readsAudioUniforms,
   shapeIssues,
@@ -611,6 +612,13 @@ export interface SceneLayer {
    */
   puppet?: ScenePuppetLayer | null;
   /**
+   * 挂点（P12b1 步骤 3，rea-p12-attach-physics 1.1、clip-morph-attach 6）：对象的 JSON `attachment` 是字符串、`parent` 指向的图层有 skinned puppet、
+   * 父排在子前面（`objects` 顺序）、父 mdl 的 `MDAT` 里有同名项（区分大小写，取第一个）时有，`resolveAttachment` 在全部对象编完之后填。
+   * 世界矩阵（`render/layout.ts` 的 `worldMatrixOf`）先乘 `Pose[bone] · matrix` 再乘本层局部矩阵 L；`matrix` 是 `Att`（16 个 f32，列主序）。
+   * 缺省 / 没有：按普通父子（WPE 一样，不报键）。可选同 `alignment`：不动各处手写的测试图层。
+   */
+  attachment?: SceneAttachment | null;
+  /**
    * 相机对象（P5d 步骤 3，`isCameraObject`，rea-p5-camera 4.1、4.2）：`fov` / `zoom` 的编译期值（缺省 50 / 1，取值规则 `cameraValue`），
    * 绑属性或挂 `{script}` 时登记成就地目标 `{ kind: "camera" }`，运行中的值在 `SceneState.cameras`。图层本身没有 pass，变换、层级、可见性
    * 照分组节点；渲染器每帧按 `objects` 倒序选第一个自身与父链都可见的相机（`render/camera.ts` 的 `activeCameraObject`）。同时带别的内容
@@ -632,6 +640,32 @@ export interface SceneLayer {
    */
   sortClass?: SortClass;
 }
+/** 挂点（`SceneLayer.attachment`）：父图层的 `objects` 下标、父 puppet 骨骼下标、`Att` 矩阵。 */
+export interface SceneAttachment {
+  parent: number;
+  bone: number;
+  matrix: Float32Array;
+}
+
+/**
+ * 解析一个对象的挂点（P12b1 步骤 3）：`attachment` 必须是字符串；`parent` 指向有 skinned puppet 的图层、排在子前面（`objects` 下标更小，
+ * 否则加载时挂点丢失，rea-AP 1.1）、`MDAT` 里有同名项（区分大小写，取第一个）、骨骼下标在骨骼表内。任一不满足为 null（按普通父子，不报键）。
+ * `puppetOf` 返回父对象的 puppet（不是 puppet 或没有图层时 null）。
+ */
+export function resolveAttachment(
+  object: number,
+  parent: number | null,
+  name: unknown,
+  puppetOf: (object: number) => ScenePuppet | null | undefined,
+): SceneAttachment | null {
+  if (typeof name !== "string" || parent === null || parent >= object) return null;
+  const puppet = puppetOf(parent);
+  if (!puppet?.skeleton) return null;
+  const found = puppet.attachments.find((item) => item.name === name);
+  if (!found || found.bone < 0 || found.bone >= puppet.skeleton.parents.length) return null;
+  return { parent, bone: found.bone, matrix: found.matrix };
+}
+
 /**
  * 图层上的 puppet（P12a 步骤 3 点 1，rea-p12-mdl 9.2–9.4）：`compile/puppet.ts` 的 `ScenePuppet` 加上两条上屏路径的材质变体。路径在编译期
  * 定（WPE 加载时就置 `0x10`，之后不变）：
@@ -642,6 +676,12 @@ export interface SceneLayer {
  * 静态 puppet（没有骨骼，`combos` 为空）也走这两条路径，只是材质不带组合键、不写 `g_Bones`。
  */
 export interface ScenePuppetLayer extends ScenePuppet {
+  /**
+   * 裁切遮罩的材质变体（P12b1 步骤 5，`ScenePuppet.clipping` 非空时有）：`masks[r]` 是第 r 条记录的遮罩 pass（`clippingmaskimage4`，槽 1 是记录的
+   * 遮罩纹理，槽 0 直接上屏时是基础反照率、合成路径时由渲染图填合成 RT），`target` 是目标段的 pass（基础材质着色器 + puppet 组合键 +
+   * `CLIPPINGUVS` / `CLIPPINGTARGET`，槽 0 同普通段，`g_Texture8` 由渲染图绑遮罩 RT）。两种上屏路径共用同一份命令表，只是槽 0 不同。
+   */
+  clip?: { masks: ScenePass[]; target: ScenePass } | null;
   composite: boolean;
   /** 直接上屏的 pass（基础材质 + puppet 组合键）；composite 时为空。 */
   passes: ScenePass[];
@@ -1063,6 +1103,8 @@ interface PassContext {
   instanceSize?: { width: number; height: number } | null;
   /** puppet 的 pass（P12a）：程序检查放行 `SKINNING` 组合键与 `g_Bones`（`PUPPET_UNIFORMS`）。 */
   puppet?: boolean;
+  /** 裁切遮罩 pass（P12b1 步骤 5）：另放行 `g_RenderVar0`（`PUPPET_CLIP_MASK_UNIFORMS`）；一定同时带 `puppet`。 */
+  clipMask?: boolean;
 }
 
 /**
@@ -1804,7 +1846,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             : context.fbos
               ? EFFECT_UNIFORMS
               : context.puppet
-                ? PUPPET_UNIFORMS
+                ? context.clipMask
+                  ? PUPPET_CLIP_MASK_UNIFORMS
+                  : PUPPET_UNIFORMS
                 : undefined,
         context.puppet ? PUPPET_COMBOS : undefined,
         mipSlots,
@@ -2119,24 +2163,71 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       if (Object.keys(puppet.combos).length && layer.passes[0]) upload.cullmode = layer.passes[0].cullmode;
       checkAttributes(upload);
       puppet.upload = upload;
-      return;
     }
     const source = puppetMaterials.get(index);
     const raw = source?.passes[0];
     if (!raw) return;
-    // 同键重编：基础 pass 编译时已登记过同一批绑定，截掉重复的
-    const before = bindings.list.length;
-    const compiled = await compilePass(
-      { ...raw, combos: { ...raw.combos, ...puppet.combos } },
-      {
-        key: `objects/${index}/passes/0`,
-        puppet: true,
-        ...(source.instanceSize ? { instanceSize: source.instanceSize } : {}),
-      },
-    );
-    bindings.list.length = before;
-    checkAttributes(compiled);
-    puppet.passes = [compiled];
+    if (!composite) {
+      // 同键重编：基础 pass 编译时已登记过同一批绑定，截掉重复的
+      const before = bindings.list.length;
+      const compiled = await compilePass(
+        { ...raw, combos: { ...raw.combos, ...puppet.combos } },
+        {
+          key: `objects/${index}/passes/0`,
+          puppet: true,
+          ...(source.instanceSize ? { instanceSize: source.instanceSize } : {}),
+        },
+      );
+      bindings.list.length = before;
+      checkAttributes(compiled);
+      puppet.passes = [compiled];
+    }
+    // 裁切遮罩（P12b1 步骤 5，clip-morph-attach 第 1–3 节）：两种上屏路径共用一份命令表，材质变体按路径只在槽 0 上不同
+    if (puppet.clipping) {
+      const maskPath = "materials/util/clippingmaskimage4.json";
+      const maskText = await fs.text(maskPath);
+      const maskPass = maskText ? parseMaterial(maskText).passes[0] : undefined;
+      if (!maskPass) {
+        unsupported.add(`material:missing:${maskPath}`);
+        return;
+      }
+      // 合成路径的槽 0 是合成 RT（渲染图填），直接上屏是基础材质的反照率（槽 0 的纹理，同普通段）
+      const planned = composite ? { planned: [{ slot: 0 }] } : {};
+      const masks: ScenePass[] = [];
+      for (const [r, record] of puppet.clipping.records.entries()) {
+        const compiled = await compilePass(
+          {
+            ...maskPass,
+            // 组合键：puppet 的（SKINNING / BONECOUNT / SKINNING_ALPHA / MORPHING），基础材质 alphatocoverage 时加 ALPHATOCOVERAGE
+            combos: {
+              ...maskPass.combos,
+              ...puppet.combos,
+              ...(raw.blending === "alphatocoverage" ? { ALPHATOCOVERAGE: 1 } : {}),
+            },
+            textures: [composite ? null : (raw.textures?.[0] ?? null), record.mask],
+          },
+          { key: `objects/${index}/puppetclip/${r}`, puppet: true, clipMask: true, ...planned },
+        );
+        // `g_RenderVar0.x = 0`（只有记录 flags bit1 取反时是 1，语料 0 处，照报 `puppet:clipping:flags`）
+        compiled.uniforms.g_RenderVar0 = [0, 0, 0, 0];
+        checkAttributes(compiled);
+        masks.push(compiled);
+      }
+      // 目标段：基础材质的着色器 + puppet 组合键 + CLIPPINGUVS + CLIPPINGTARGET（`g_Texture8` 由渲染图绑遮罩 RT），同键重编、截掉重复的绑定
+      const before = bindings.list.length;
+      const target = await compilePass(
+        { ...raw, combos: { ...raw.combos, ...puppet.combos, CLIPPINGUVS: 1, CLIPPINGTARGET: 1 } },
+        {
+          key: `objects/${index}/passes/0`,
+          puppet: true,
+          ...planned,
+          ...(source.instanceSize ? { instanceSize: source.instanceSize } : {}),
+        },
+      );
+      bindings.list.length = before;
+      checkAttributes(target);
+      puppet.clip = { masks, target };
+    }
   }
 
   /**
@@ -2429,6 +2520,17 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       });
   }
   // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
+  // 挂点（P12b1 步骤 3）：父的 puppet 编完才解析，只在找得到时才写字段（找不到按普通父子）
+  const puppetsByObject = new Map(bundle.layers.map((layer) => [layer.object, layer.puppet ?? null]));
+  for (const layer of bundle.layers) {
+    const attachment = resolveAttachment(
+      layer.object,
+      layer.parent,
+      (scene.objects[layer.object] as Record<string, unknown> | undefined)?.attachment,
+      (object) => puppetsByObject.get(object),
+    );
+    if (attachment) layer.attachment = attachment;
+  }
   assignGroups(bundle.layers);
   for (const layer of bundle.layers) {
     if (layer.group === null) continue;
@@ -2520,6 +2622,9 @@ export function transferableBuffers(bundle: SceneBundle): ArrayBuffer[] {
             layer.puppet.mesh.vertices.buffer,
             layer.puppet.mesh.indices.buffer,
             ...layer.puppet.animations.map((animation) => animation.frames.buffer),
+            // P12b1：变形纹理与裁切分段索引是编译期自有缓冲
+            ...(layer.puppet.morph ? [layer.puppet.morph.texels.buffer] : []),
+            ...(layer.puppet.clipping?.segments.map((segment) => segment.buffer) ?? []),
           ]
         : [],
     ),

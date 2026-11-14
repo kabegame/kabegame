@@ -13,7 +13,9 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import att from "../puppet/fixtures/p12-att.json";
 import {
   attributeSemantic,
   MDL_ATTRIBUTES,
@@ -276,8 +278,8 @@ describe("parseMdl：尾部段（rea 1.7）", () => {
       }),
     );
     expect(file).toMatchObject({ truncated: false, sections: ["MDLS0004", "MDLA0006", "MDMP0001"] });
-    // 40 个 0：骨骼数 0，v4 的附加数据只占 18 字节，没读到段末；3 个字节的 MDLA 读进了下一段、读出文件末尾
-    expect(file.sectionIssues).toEqual(["MDLS0004", "MDLA0006"]);
+    // 40 个 0：骨骼数 0，v4 的附加数据只占 18 字节，没读到段末；3 个字节的 MDLA 读进了下一段、读出文件末尾；空的 MDMP 读不出网格的目标数（P12b1 起读 MDMP / MDAT）
+    expect(file.sectionIssues).toEqual(["MDLS0004", "MDLA0006", "MDMP0001"]);
     expect(file.skeleton).toMatchObject({ version: 4, count: 0, bones: [] });
   });
 
@@ -492,7 +494,7 @@ function encodeAnimations(
             .f32(5.5)
             .u16(1)
             .u16(0)
-            .block(new Uint8Array(4 * frames));
+            .block(new Uint8Array(Float32Array.from({ length: frames }, (_, i) => i + 0.5).buffer));
     }
     if (version >= 5) out.floats(anim.bounds ?? [0, 0, 0, 0, 0, 0]);
     if (version >= 6) {
@@ -651,7 +653,8 @@ describe("parseMdl：MDLA（rea-p12-mdl 4.2，P12a）", () => {
       fps: Math.fround(27.27),
       length: 3,
       flags: 0,
-      boneAlpha: false,
+      boneAlpha: null,
+      morphWeights: null,
       drawOrderTrack: false,
       unsupported: false,
       events: [{ time: 1, json: '{"frame":30,"name":"事件1"}' }],
@@ -679,11 +682,25 @@ describe("parseMdl：MDLA（rea-p12-mdl 4.2，P12a）", () => {
         2,
       );
       expect(file.sectionIssues, `v${version}`).toEqual([]);
-      expect(file.animations.map((item) => [item.id, item.boneAlpha, item.drawOrderTrack])).toEqual([
+      expect(file.animations.map((item) => [item.id, item.boneAlpha !== null, item.drawOrderTrack])).toEqual([
         [1, true, version >= 6],
         [2, false, false],
       ]);
     }
+  });
+
+  it("P12b1：骨骼透明度排成「帧 × 轨道」、变形权重只留网格 0 的条目（每目标一条）；没有这两段为 null", () => {
+    const anims: AnimSpec[] = [
+      { id: 1, length: 2, tracks: [track(2), track(2)], boneAlpha: true, morph: true },
+      { id: 2, length: 1, tracks: [track(1), track(1)] },
+    ];
+    const file = withSections([skeleton2(), ["MDLA0006", encodeAnimations(6, anims, { meshes: 2 })]], 2);
+    expect(file.sectionIssues).toEqual([]);
+    const [first, second] = file.animations;
+    // encodeAnimations 的标量轨道值 = 帧号：第 k 帧两条轨道都是 k
+    expect(Array.from(first.boneAlpha!)).toEqual([0, 0, 1, 1, 2, 2]);
+    expect(first.morphWeights).toEqual([{ target: 0, values: Float32Array.from([0.5, 1.5, 2.5]) }]);
+    expect([second.boneAlpha, second.morphWeights]).toEqual([null, null]);
   });
 
   it("flags bit0 的引用块、v2 的记录轨道 → unsupported", () => {
@@ -809,6 +826,226 @@ describe.skipIf(!root || !existsSync(bgfade))("本机语料", () => {
   });
 });
 
+// ———— MDAT / MDMP（P12b1 步骤 1） ————
+
+/** 一组网格（格式 0x180000f，标志照给）配给定的段。 */
+function withMeshFlags(flags: number[], sections: [string, Uint8Array][]): MdlFile {
+  const mesh = { ...quad(), format: 0x180000f, vertices: new Uint8Array(4 * mdlStride(0x180000f)) };
+  return parseMdl(
+    encodeMdl(
+      23,
+      flags.map((value) => ({ ...mesh, flags: value })),
+      { sections },
+    ),
+  );
+}
+
+/** `MDAT0001`：u16 个数；每项 u16 骨骼、名字、裸 64 字节矩阵（rea-p12-mdl 5.1）。 */
+function encodeAttachments(items: { name: string; bone: number; matrix: number[] }[]): Uint8Array {
+  const out = new Writer().u16(items.length);
+  for (const item of items) out.u16(item.bone).cstr(item.name).floats(item.matrix);
+  return out.done();
+}
+
+interface MorphTargetSpec {
+  id?: number;
+  name: string;
+  position: number[];
+  normal?: number[];
+  tangent?: number[];
+  alpha?: number[];
+  modifier?: boolean;
+}
+
+/** `MDMP0001`：每个网格 u16 目标数，非 0 时 f32 缩放、u32 nv、目标（rea-p12-mdl 6.1）；`meshFlags` 决定每个目标带哪些差块。 */
+function encodeMorphs(
+  meshes: ({ scale: number; count: number; targets: MorphTargetSpec[] } | null)[],
+  meshFlags: number[],
+): Uint8Array {
+  const out = new Writer();
+  const shorts = (values: number[]) => new Uint8Array(Int16Array.from(values).buffer);
+  meshes.forEach((mesh, m) => {
+    out.u16(mesh?.targets.length ?? 0);
+    if (!mesh || !mesh.targets.length) return;
+    out.f32(mesh.scale).u32(mesh.count);
+    for (const target of mesh.targets) {
+      out
+        .u64(target.id ?? 0x131)
+        .cstr(target.name)
+        .block(shorts(target.position));
+      if (meshFlags[m] & 0x400) out.block(shorts(target.normal ?? target.position));
+      if (meshFlags[m] & 0x800) out.block(shorts(target.tangent ?? target.position));
+      if (meshFlags[m] & 0x1000) out.block(shorts(target.alpha ?? []));
+      if (meshFlags[m] & 0x2000) out.u32(3).u32(1).f32(0.25).f32(0.75);
+    }
+  });
+  return out.done();
+}
+
+describe("parseMdl：MDAT 与 MDMP（rea-p12-mdl 5、6，P12b1）", () => {
+  const MATRIX = f32s([0.8, 0.6, 0, 0, -0.6, 0.8, 0, 0, 0, 0, 1, 0, 40, 10, 0, 1]);
+
+  it("MDAT0001：u16 个数、每项骨骼下标 + 名字 + 64 字节矩阵（平移在 [12..14]）；重名都留，按文件顺序", () => {
+    const file = withSections([
+      [
+        "MDAT0001",
+        encodeAttachments([
+          { name: "tipA", bone: 1, matrix: MATRIX },
+          { name: "tipB", bone: 0, matrix: IDENTITY16 },
+          { name: "tipA", bone: 1, matrix: ROT },
+        ]),
+      ],
+    ]);
+    expect(file.sectionIssues).toEqual([]);
+    expect(file.attachments.map((item) => [item.name, item.bone, Array.from(item.matrix)])).toEqual([
+      ["tipA", 1, MATRIX],
+      ["tipB", 0, IDENTITY16],
+      ["tipA", 1, ROT],
+    ]);
+    expect(file.attachments[0].matrix.slice(12, 15)).toEqual(Float32Array.from([40, 10, 0]));
+  });
+
+  it("p12-att 的真 mdl（生成工程 parent_puppet.mdl）：三个挂点和 mdl12.py 解析的矩阵逐位相同，tipA = T(40, 10)", () => {
+    const file = parseMdl(new Uint8Array(gunzipSync(Buffer.from(att.mdlGzip, "base64"))));
+    expect(file.sectionIssues).toEqual([]);
+    expect(file.truncated).toBe(false);
+    // 零的符号不比（JSON 里的 -0.0 经格式化可能变成 0.0），其余逐位
+    expect(
+      file.attachments.map((item) => [item.name, item.bone, Array.from(item.matrix, (value) => value + 0)]),
+    ).toEqual(
+      att.attachments.map((item) => [
+        item.name,
+        item.bone,
+        Array.from(Float32Array.from(item.matrix), (value) => value + 0),
+      ]),
+    );
+    expect(file.attachments.map((item) => item.name)).toEqual(["tipA", "tipB", "tipA"]);
+    expect(Array.from(file.attachments[0].matrix.subarray(12, 15))).toEqual([40, 10, 0]);
+    // tipB = T(0, −30)·Rz(0.3)（p12-REPORT 一 §11）
+    expect(Array.from(file.attachments[1].matrix.subarray(12, 15))).toEqual([0, -30, 0]);
+    expect(file.attachments[1].matrix[0]).toBeCloseTo(Math.cos(0.3), 6);
+    expect(file.attachments[1].matrix[1]).toBeCloseTo(Math.sin(0.3), 6);
+  });
+
+  it("MDAT 读到文件末尾（个数写大了）→ sectionIssues；不是 MDAT0001 的版本当不认识的段跳过", () => {
+    const bad = new Writer().u16(3).u16(0).cstr("a").floats(IDENTITY16).done();
+    const file = withSections([
+      ["MDAT0001", bad],
+      ["MDAT0002", encodeAttachments([{ name: "x", bone: 0, matrix: IDENTITY16 }])],
+    ]);
+    expect(file.sectionIssues).toEqual(["MDAT0001"]);
+    expect(file.attachments).toEqual([]);
+    expect(file.truncated).toBe(false);
+  });
+
+  it("MDMP0001：缩放、变形顶点数、每目标的位置差 i16 × 3nv 与（bit12）每顶点透明度；没有目标的网格为 null", () => {
+    const flags = [0x1000, 0];
+    const morphs = encodeMorphs(
+      [
+        {
+          scale: 40,
+          count: 2,
+          targets: [
+            { name: "Shape 1", id: 0x131, position: [1, 2, 3, 4, 5, 6], alpha: [16384, 32767] },
+            { name: "Shape 2", position: [-1, -2, -3, -4, -5, -6], alpha: [8192, 24575] },
+          ],
+        },
+        null,
+      ],
+      flags,
+    );
+    const file = withMeshFlags(flags, [["MDMP0001", morphs]]);
+    expect(file.sectionIssues).toEqual([]);
+    expect(file.meshes[1].morph).toBeNull();
+    const morph = file.meshes[0].morph!;
+    expect([morph.scale, morph.count, morph.targets.length]).toEqual([40, 2, 2]);
+    expect(morph.targets.map((target) => [target.id, target.name])).toEqual([
+      [0x131, "Shape 1"],
+      [0x131, "Shape 2"],
+    ]);
+    expect(Array.from(morph.targets[0].position)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(Array.from(morph.targets[1].position)).toEqual([-1, -2, -3, -4, -5, -6]);
+    expect(Array.from(morph.targets[0].alpha!)).toEqual([16384, 32767]);
+    expect(Array.from(morph.targets[1].alpha!)).toEqual([8192, 24575]);
+  });
+
+  it("没有 bit12：alpha 为 null；bit10 / bit11 的法线、切线差与 bit13 的四个值读过即丢，照读到段末", () => {
+    const flags = [0x400 | 0x800 | 0x2000];
+    const morphs = encodeMorphs([{ scale: 5.5, count: 1, targets: [{ name: "t", position: [7, 8, 9] }] }], flags);
+    const file = withMeshFlags(flags, [["MDMP0001", morphs]]);
+    expect(file.sectionIssues).toEqual([]);
+    const target = file.meshes[0].morph!.targets[0];
+    expect(Array.from(target.position)).toEqual([7, 8, 9]);
+    expect(target.alpha).toBeNull();
+  });
+
+  it("nv 取各目标 字节数 / 6 的最小值；块字节数不是 nv × 6（或 bit12 不是 nv × 2）→ sectionIssues（WPE int 0x29），morph 不留", () => {
+    // 文件写 nv 3，目标只有 2 个顶点的位置：nv 缩到 2
+    const small = withMeshFlags(
+      [0],
+      [
+        [
+          "MDMP0001",
+          encodeMorphs([{ scale: 1, count: 3, targets: [{ name: "t", position: [1, 2, 3, 4, 5, 6] }] }], [0]),
+        ],
+      ],
+    );
+    expect(small.sectionIssues).toEqual([]);
+    expect(small.meshes[0].morph!.count).toBe(2);
+    // 第二个目标的位置差比第一个短：nv 缩到更小，之后的块按它核对
+    const ragged = withMeshFlags(
+      [0],
+      [
+        [
+          "MDMP0001",
+          encodeMorphs(
+            [
+              {
+                scale: 1,
+                count: 2,
+                targets: [
+                  { name: "a", position: [1, 2, 3, 4, 5, 6] },
+                  { name: "b", position: [1, 2, 3] },
+                ],
+              },
+            ],
+            [0],
+          ),
+        ],
+      ],
+    );
+    expect(ragged.sectionIssues).toEqual([]);
+    expect(ragged.meshes[0].morph!.count).toBe(1);
+    // 位置差字节数不是 6 的倍数
+    const odd = withMeshFlags(
+      [0],
+      [["MDMP0001", encodeMorphs([{ scale: 1, count: 2, targets: [{ name: "a", position: [1, 2, 3, 4, 5] }] }], [0])]],
+    );
+    expect(odd.sectionIssues).toEqual(["MDMP0001"]);
+    expect(odd.meshes[0].morph).toBeNull();
+    // bit12 的透明度块不是 nv × 2
+    const alpha = withMeshFlags(
+      [0x1000],
+      [
+        [
+          "MDMP0001",
+          encodeMorphs(
+            [{ scale: 1, count: 2, targets: [{ name: "a", position: [1, 2, 3, 4, 5, 6], alpha: [1] }] }],
+            [0x1000],
+          ),
+        ],
+      ],
+    );
+    expect(alpha.sectionIssues).toEqual(["MDMP0001"]);
+  });
+
+  it("MDLE 仍整段跳过（不读内容、不报）", () => {
+    const file = withSections([["MDLE0002", new Uint8Array(70)]]);
+    expect(file.sections).toEqual(["MDLE0002"]);
+    expect(file.sectionIssues).toEqual([]);
+  });
+});
+
 /** P12 步骤 0 读码代理缓存的语料 mdl（`ignore/p12/rea/mdl/collect.py`，只在本机有）。 */
 const corpusDir = join(__dirname, "..", "..", "..", "..", "ignore", "p12", "rea", "mdl");
 const corpusIndex = join(corpusDir, "corpus_index.json");
@@ -865,8 +1102,15 @@ describe.skipIf(!root || !existsSync(corpusIndex))("本机语料：ignore/p12/re
           add("records", mesh.records.length);
         }
         if (mesh.flags & 2) count(stats.blendRowCount, mesh.blendRowCount);
+        if (mesh.morph) {
+          add("morphMeshes", 1);
+          add("morphTargets", mesh.morph.targets.length);
+          add("morphVertices", mesh.morph.count * mesh.morph.targets.length);
+          add("morphAlphaTargets", mesh.morph.targets.filter((target) => target.alpha).length);
+        }
       }
       for (const tag of file.sections) count(stats.sections, tag);
+      add("attachments", file.attachments.length);
       const skeleton = file.skeleton;
       if (skeleton) {
         count(stats.bones, bucket(skeleton.count));
@@ -890,6 +1134,8 @@ describe.skipIf(!root || !existsSync(corpusIndex))("本机语料：ignore/p12/re
         add("tracksMasked", animation.tracks.filter((item) => item.flags & 1).length);
         add("tracksNeBones", animation.tracks.length !== skeleton?.count ? 1 : 0);
         add("boneAlpha", animation.boneAlpha ? 1 : 0);
+        add("boneAlphaTracks", animation.boneAlpha ? animation.tracks.length : 0);
+        add("morphWeightTracks", animation.morphWeights?.length ?? 0);
         add("drawOrderTrack", animation.drawOrderTrack ? 1 : 0);
         add("events", animation.events.length);
         add("unsupported", animation.unsupported ? 1 : 0);
@@ -960,6 +1206,15 @@ describe.skipIf(!root || !existsSync(corpusIndex))("本机语料：ignore/p12/re
       groups: 926,
       recordMeshes: 5,
       records: 7,
+      // P12b1（和 ignore/p12/b/fix/corpus_b_stats.py 的 mdl12.py 统计一致）：MDAT 38 项；MDMP 10 个网格 14 个目标（6 个带 bit12 的透明度）；
+      // 骨骼透明度 15 条动画共 375 条轨道；网格 0 的变形权重轨道 7 条
+      attachments: 38,
+      morphMeshes: 10,
+      morphTargets: 14,
+      morphVertices: 2218,
+      morphAlphaTargets: 6,
+      boneAlphaTracks: 375,
+      morphWeightTracks: 7,
     });
     expect([...fileIssues]).toEqual([]);
   });
