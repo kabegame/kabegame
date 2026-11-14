@@ -20,7 +20,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 ### 单体仓库布局
 - `apps/kabegame/` — Vue 3 前端（Vite、Pinia、UnoCSS、`components/ui/` 下基于 reka-ui 的组件库）
 - `apps/wpe-scene/` — 场景壁纸宿主（纯 TS + Vite，P3 进行中）：构建进应用 `resources/wpe-scene`，主窗口 / 壁纸窗口以 `file:` iframe 加载；见 [场景壁纸文档](cocs/wpe/WPE_SCENE.md)「场景宿主」
-- `apps/kabegame-dev-mcp/` — dev 工具的 stdio MCP（`kabegame-dev`，Deno 直接跑 TS、不构建，`.mcp.json` 拉起）：探活、截图 / 求值 / 调应用命令、场景渲染与画面哈希、测试工程导入移除、读应用日志；只经 `src/client.ts` 调 vite 上 `kabegame-dev` 插件（`scripts/kabegame-dev/`）的 `/__kabegame_dev/*` REST，见 `.claude/skills/kabegame-chromium/SKILL.md`；`src/renderFrames.ts` 是按帧批量渲染场景的独立 CLI（进程内连同一个 MCP 工厂、每帧调 `render_scene`）
+- `apps/kabegame-dev-mcp/` — dev 工具的 stdio MCP（`kabegame-dev`，Deno 直接跑 TS、不构建，`.mcp.json` 拉起）：探活、截图 / 求值 / 调应用命令、场景渲染与画面哈希、测试工程导入移除、读应用日志；只经 `src/client.ts` 调 vite 上 `kabegame-dev` 插件（`scripts/kabegame-dev/`）的 `/__kabegame_dev/*` REST，见 `.claude/skills/kabegame-chromium/SKILL.md`；`src/renderFrames.ts` 是按帧批量渲染场景的独立 CLI（进程内连同一个 MCP 工厂、每帧调 `render_scene`）；`src/buildSceneHost.ts` 重建 dev 场景宿主产物并换进 `target/debug/resources/wpe-scene`（dev 只在启动时构建一次宿主，改了 `apps/wpe-scene` 不用重启 dev）
 - `.claude/mcps/` — 仓库自带的 Python MCP（uv 管依赖，`.mcp.json` 拉起）。现有 `wpe-renderdoc`：常驻共享的 Wallpaper Engine（`ensure_running`、不关不杀）、本会话的测试窗口、抓 RenderDoc 帧（`capture_wallpaper` / `capture_sweep`，机器级抓帧锁、不抢占）与无界面回放分析；见 `.claude/mcps/wpe-renderdoc/README.md`
 - `packages/` — 共享前端包、插件开发子仓库与生成型包；详见 [packages/AGENTS.md](packages/AGENTS.md)
 - `src-tauri/kabegame-core/` — `kabegame-core`：共享 Rust 库（爬虫引擎、插件系统、存储）

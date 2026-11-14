@@ -40,7 +40,7 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 ## 前置
 
 - 用户自己跑着 `deno task dev -c kabegame`（安卓是 `deno task dev -c kabegame --mode android`，另需 `adb` 与已授权的设备）。
-- 场景宿主相关（`host_*`、`render_scene`、`hash_baseline`）：宿主产物要用 `--mode development` 构建（要有 dev 探针）。
+- 场景宿主相关（`host_*`、`render_scene`、`hash_baseline`）：宿主产物要用 `--mode development` 构建（要有 dev 探针）。dev 只在启动时构建一次、不监听 `apps/wpe-scene`；改了宿主代码（含临时插桩）后用 `buildSceneHost.ts` 重建并换进去，不用重启 dev（见「重建场景宿主产物」）。
 - 不需要 playwright，也不用装浏览器。
 
 ## MCP 工具（`mcp__kabegame-dev__*`）
@@ -385,6 +385,26 @@ deno run -A apps/kabegame-dev-mcp/src/renderFrames.ts --image <id> --frames 241,
 - 2026-11-14 真机：`projects_import` 导入 `ignore/p10/proj/p10-curves`，时刻模式（`--fps 20 --frames 20,40,60 --canvas 1920x1080
   --trace-frames 40`）3 帧共 7.3 s、轨迹写出；回放模式（借 `p10-zoom-fps20` 的 `[kbp]` 日志当 dt 序列，`--frames 100,150-151 --reuse-host`）
   3 帧共 3.1 s，时间线说明与 FR 涂色行进了 `notes`；之后 `projects_remove`。
+
+### 重建场景宿主产物（`apps/kabegame-dev-mcp/src/buildSceneHost.ts`）
+
+```bash
+deno run -A apps/kabegame-dev-mcp/src/buildSceneHost.ts [--out-dir <目录>] [--staging <目录>] [--keep-staging]
+```
+
+- **为什么要它**：dev 只在启动时构建一次场景宿主（`scripts/plugins/wpe-scene-host-plugin.ts`），之后不监听 `apps/wpe-scene`。改了宿主
+  代码（修 bug、加 `// DEBUG-<主题>` 插桩验证一个推断）要让跑着的应用用上，以前只能重启 dev。
+- **做什么**：照 dev 插件同一条命令（`deno task build --mode development`）构建到暂存目录（缺省 `<target>/wpe-scene-staging`），核对有
+  `index.html`、产物带 dev 探针（`__kabegameSceneProbe`），再换进 `<target>/debug/resources/wpe-scene`：先拷新的资源，`index.html` 最后，
+  再删新产物里没有的旧哈希文件。不直接构建进去：vite 会先清空输出目录，构建期间别的会话加载宿主会失败。约 4–6 s。
+- **影响**：换掉**所有会话**正在用的宿主产物，产物里是工作区的代码（含别的会话未提交的改动），和重启 dev 一样。之后新开的宿主（`render_scene`、
+  `renderFrames.ts` 单开、预览重开）用新产物，已经开着的还跑旧代码。临时插桩验证完要撤掉，再跑一次把产物换回来。
+- **输出**：stdout 一行 JSON `{ ok, outDir, index, previous, copied, removed, seconds }`，`index` / `previous` 是新旧 `assets/index-*.js`
+  （`render_scene` 的说明行与 `renderFrames.ts` 的 `frames.json` 里的「宿主产物」就是它）。构建失败或产物没有 dev 探针时 `ok: false`、
+  输出目录不动。
+- **前提**：用户自己跑着 dev；本工具不启动、不重启任何进程。单测 `buildSceneHost.test.ts`（换入与列文件，不跑真构建）。
+- 2026-11-14 用法（P10b 走查）：临时把视差点的推进改成逐步 float32，重建、重渲 `3336377291` 复制工程的第 76 帧，和 WPE 逐像素相同；撤回后再
+  重建换回。
 
 ## REST（`/__kabegame_dev/*`，vite 上）
 
