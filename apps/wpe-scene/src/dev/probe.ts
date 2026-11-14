@@ -103,10 +103,16 @@ import {
   type ProbeScriptsResult,
 } from "./probeScripts";
 import { prepareProbeTexts } from "./probeTexts";
-import { prepareProbeUserTextures } from "./probeUserTextures";
+import { checkGifDts, prepareProbeUserTextures } from "./probeUserTextures";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
 import { applyScriptValues, wroteTextValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
-import { checkVideoTime, ProbeVideos, type ProbeVideoResult, type VideoTimeOption } from "./videoProbe";
+import {
+  checkVideoTime,
+  ProbeVideos,
+  requestedVideoTime,
+  type ProbeVideoResult,
+  type VideoTimeOption,
+} from "./videoProbe";
 
 /** 探针结果的存放处：键 → 字节（PNG、原始像素），由 `chunk` 分块取走。 */
 const stored = new Map<string, Uint8Array>();
@@ -298,6 +304,12 @@ export interface RenderFrameOptions {
    */
   videoTime?: VideoTimeOption;
   /**
+   * 用户纹理里 GIF 的推进（P11b 步骤 4）：每项是一帧的 `g_Frametime`（秒，有限非负）。场景建好、读回之前逐项 `beginFrame(dt)` + 推进一次，
+   * 相当于 GIF 每帧都被画到；读回那一帧不再推进（帧号已经等于上次推进的）。不给时 GIF 停在第 0 帧（第一次画到时 dt 为 0、不换帧，
+   * 延时 0 的第 0 帧除外）。`videoTime` 同样作用于用户视频：数字对全部，对象的键除了 bundle 视频纹理的 `path` 也可以是用户视频的值。
+   */
+  gifDts?: number[];
+  /**
    * 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`true`，或 `{ readback?: (pass 下标 | 标签子串)[], maxVertices?: 1–4096 }`。
    * 给了就把设备换成记录器包过的那个（`render/trace.ts`），读回那一帧记下每个 pass、每个 draw 的管线、绑定、uniform（按反射解码）、
    * 顶点与索引（每个 draw 前 `maxVertices` 个，缺省 64），轨迹存成 `<key>.trace.json`；`readback` 选中的 pass 结束后读回它的颜色附件 0，
@@ -419,6 +431,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const cursorWindow = pointerWindow(options.window, canvas);
   // 视频时刻（P9a 步骤 3）的形状同样先查；路径对不对要编译之后才知道（`ProbeVideos` 里查）
   const videoTime = checkVideoTime(options.videoTime);
+  const gifDts = checkGifDts(options.gifDts);
   // 逐 draw 轨迹：形状同样先查；没要时为 null，下面不建记录器、设备不包
   const traceOptions = traceOptionsOf(options.trace);
   // 跑场景脚本（第 7 批）：形状与互斥同样先查；没要时为 null，下面不建脚本环境
@@ -452,7 +465,11 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     if (canvas) checkCanvas(canvas, gpu.device.limits.maxTextureDimension2D);
     // 视频时刻（P9a 步骤 3）：对象里不是视频纹理的路径在这里抛错；读、seek 与建场景并行，第一次编码之前等它。建场景出错时
     // finally 里的 dispose 让它以「已释放」失败，先挂一个空的 catch，不留未处理的拒绝
-    const sink = new ProbeVideos(bundle.textures, videoTime);
+    // 用户视频（P11b 步骤 4）的值也是 `videoTime` 对象的合法键
+    const userVideoValues = (userTextures?.probe() ?? [])
+      .filter((item) => item.kind === "video")
+      .map((item) => item.value);
+    const sink = new ProbeVideos(bundle.textures, videoTime, {}, userVideoValues);
     videos = sink;
     const videosReady = sink.prepare();
     videosReady.catch(() => {});
@@ -493,6 +510,15 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       // 没有 draw 会问它，逐字节同以前。读不到 / 解码失败的那段不交出元素（透明），超过总时限在这里抛错
       await videosReady;
       scene.setVideoSink(sink);
+      // 用户纹理（P11b 步骤 4）：用户视频 seek 到 `videoTime` 的时刻（没给取 0）、GIF 按 `gifDts` 逐帧推进；都在建场景之后（各纹理名的帧状态
+      // 由 `crop` 登记），读回那一帧画到时上传。没有 GIF / 视频时不碰，逐字节同以前
+      if (userTextures) {
+        await userTextures.seekVideos((value) => requestedVideoTime(videoTime, value));
+        for (const dt of gifDts ?? []) {
+          userTextures.beginFrame(dt);
+          userTextures.advanceGifs();
+        }
+      }
       // 脚本值（第 6 批）：建好场景之后、回放之前写进状态，同宿主的脚本写回；第一次 `sync` 把它刷进 uniform
       const scriptValues = applyScriptValues(state, bundle, options.scriptValues);
       // 文本字段（P6b 1e-3）：写进状态只是标脏，重排在 `sync` 里；缺字体时重排器照画旧排版、后台读字体，探针没有帧外的补画，

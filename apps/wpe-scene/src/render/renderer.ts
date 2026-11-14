@@ -154,6 +154,8 @@ export class SceneRenderer {
   private readonly placementBuffer: GPUBuffer;
   private readonly observer: ResizeObserver | null;
   private scene: GpuScene | null = null;
+  /** 当前场景的用户纹理来源（P11b 步骤 4，换上场景时取 `load` 的 `userTextures`）：实时帧开头问它走帧号。 */
+  private userTextures: UserTextureProvider | null = null;
   /** 当前场景的 CPU 侧状态（就地写的落点，`GpuScene.sync` 每帧取脏项）。 */
   private state: SceneState | null = null;
   /** 上屏的 bind group，按场景目标的视图取：清屏可能关掉的场景有两张目标，每张一个（L11）。换场景或样式时清空。 */
@@ -393,6 +395,7 @@ export class SceneRenderer {
     // 重编译：粒子层沿用旧场景的脚本暂停 / 停止（P4f 步骤 3），在重放脚本写入、画第一帧之前
     if (old) scene.adoptParticleScripts(old);
     this.scene = scene;
+    this.userTextures = options.userTextures ?? null;
     this.state = state;
     this.projection = [bundle.general.width, bundle.general.height];
     this.perspective = perspective;
@@ -655,6 +658,8 @@ export class SceneRenderer {
     // （p9-REPORT「时钟、循环」），所以在粒子步进之前。补画帧不调，暂停期间帧号不走（WPE 的帧号每个渲染帧加一，rea-p9-video 第 4 节）。
     // 同声音在 try 外：视频的问题不让画面退回
     if (live) this.options.videos?.beginFrame();
+    // 用户纹理的 GIF / 视频（P11b 步骤 4）：同样只在实时帧、紧接视频帧号之后，带本帧的 `g_Frametime`（GIF 推进用）
+    if (live) this.userTextures?.beginFrame?.(this.frameClock.frametime);
     const { time, frametime } = this.frameClock;
     const wrapped = time % TIME_WRAP_SECONDS;
     // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上

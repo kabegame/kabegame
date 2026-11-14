@@ -33,6 +33,8 @@ export interface VideoSink {
  * 图层基础材质槽 0 的视频（P9b，WPE `getVideoTexture` 的判定：基础材质 `+0xd0` 是纹理槽 0、纹理标志带视频位，rea-p9-video 第 6 节）：
  * `passes[0].textures[0]` 指向的 bundle 纹理带 `video` 时返回它，否则（没有这个图层、槽 0 不是 bundle 纹理、不是视频）undefined。
  * 只看 bundle、不看播放器在不在：语料诊断与 `realmProbe` 没有播放器，也照样认得出视频图层。
+ * 槽 0 被用户纹理换成视频时（P11b 步骤 4），WPE 的 `getVideoTexture()` 会返回那个视频的包装（rea-p11b 3.2 末行）；这里不做：
+ * 只认 bundle 里的 `.tex` 视频，用户视频的播放器在 `usertex/sources.ts`，不经脚本接口。
  */
 export function layerVideoSource(
   bundle: Pick<SceneBundle, "layers" | "textures"> | null | undefined,

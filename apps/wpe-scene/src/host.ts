@@ -230,6 +230,8 @@ export class SceneHost {
    */
   private readonly userTextures = new UserTextureSources((path) => this.reader.readWhole(path), {
     log: (message) => this.options.report.debug(`场景壁纸 ${this.options.imageId} ${message}`),
+    // 用户视频的播放器 warning（P11b 步骤 4）
+    report: { warn: (message, detail) => this.options.report.warn(message, detail) },
   });
   private readonly textureCache = new TextureDecodeCache(this.reader);
   private targetTask: Promise<SceneTarget> | null = null;
@@ -245,6 +247,8 @@ export class SceneHost {
     },
   ) {
     this.userTextures.onReady = (name) => this.onUserTextureReady(name);
+    // 来源表建好后按当前暂停状态设一次（P11b 步骤 4，用户视频与 GIF 的时钟）
+    this.userTextures.setPaused(this.paused || this.hidden);
     this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理设置", (raw) => {
       if (this.disposed || !this.receivedProperties) return;
       const delta = (raw && typeof raw.changes === "object" ? raw.changes : raw) as Record<string, unknown> | null;
@@ -732,6 +736,7 @@ export class SceneHost {
     this.syncSoundGlobal();
     // 视频纹理（P9a）：宿主暂停时全部 pause，恢复时全部放（rea-p9-video 第 3 节第 5 条）
     this.sceneVideos?.setPaused(this.paused || this.hidden);
+    this.userTextures.setPaused(this.paused || this.hidden);
   }
 
   /**
@@ -749,6 +754,7 @@ export class SceneHost {
     this.syncSoundGlobal();
     // 视频纹理同样按暂停处理：循环停了帧号不走，不停的话视频会在后台一直放
     this.sceneVideos?.setPaused(this.paused || this.hidden);
+    this.userTextures.setPaused(this.paused || this.hidden);
   }
 
   /** 排期器看到的全局音量：暂停或隐藏时为 0，否则是宿主音量；暂停 / 恢复另交给播放器淡变。 */

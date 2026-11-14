@@ -14,7 +14,14 @@ import { generalDefaults, mergeProperties, planApply } from "../compile/bindings
 import type { SceneBundle, SceneEffect, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { UserTextureSlot } from "../compile/usertextures";
-import { UserTextureSources, type UserTextureDeps } from "../usertex/sources";
+import type { CropRect } from "../usertex/crop";
+import {
+  UserTextureSources,
+  type UserTextureAnimation,
+  type UserTextureDeps,
+  type UserTextureFrame,
+  type UserTextureProvider,
+} from "../usertex/sources";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { layerQuad, uvInset } from "./layout";
 import { GpuScene } from "./scene";
@@ -25,6 +32,7 @@ interface FakeTexture {
   label: string;
   width: number;
   height: number;
+  usage: number;
   destroyed: boolean;
   createView(): { label: string };
   destroy(): void;
@@ -39,6 +47,13 @@ class FakeGpu {
   readonly textures: FakeTexture[] = [];
   readonly copies: { source: unknown; texture: string; origin: unknown; size: { width: number; height: number } }[] =
     [];
+  /** `writeTexture` 的调用（P11b 步骤 4，GIF 上传）：目标纹理名、数据、布局与尺寸。 */
+  readonly writes: {
+    texture: string;
+    data: unknown;
+    layout: GPUTexelCopyBufferLayout;
+    size: { width: number; height: number };
+  }[] = [];
   readonly trace: string[] = [];
   /** 渲染 pass 的标签（gamma 校正画的那次叫 `user texture gamma`）与建过的缓冲。 */
   readonly passes: string[] = [];
@@ -70,6 +85,7 @@ class FakeGpu {
           label: descriptor.label ?? "",
           width,
           height,
+          usage: descriptor.usage,
           destroyed: false,
           createView: () => ({ label: descriptor.label ?? "" }),
           destroy: () => {
@@ -118,7 +134,14 @@ class FakeGpu {
             ? new Uint8Array(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength))
             : new Uint8Array(data.slice(0));
         },
-        writeTexture() {},
+        writeTexture: (
+          destination: GPUTexelCopyTextureInfo,
+          data: unknown,
+          layout: GPUTexelCopyBufferLayout,
+          size: { width: number; height: number },
+        ) => {
+          this.writes.push({ texture: (destination.texture as unknown as FakeTexture).label, data, layout, size });
+        },
         copyExternalImageToTexture: (
           source: GPUCopyExternalImageSourceInfo,
           destination: GPUCopyExternalImageDestInfo,
@@ -942,7 +965,7 @@ describe("用户纹理的边界", () => {
     expect(internals(scene).layers[0].draws[0].bindGroup!.key).toContain("1:npot");
   });
 
-  it("GIF / 视频先当无图：槽用缺省纹理", async () => {
+  it("GIF 打不开（这里的假来源给的不是 GIF 字节）时槽用缺省纹理", async () => {
     const live = await open(npotBundle());
     await live.set("b.png");
     await live.set("D:/a/anim.GIF");
@@ -1006,5 +1029,284 @@ describe("SceneState.write 的 user-texture 目标", () => {
     const plan = planApply([binding], cleared);
     expect(plan.recompile).toEqual([]);
     expect(plan.writes).toEqual([{ binding, value: "" }]);
+  });
+});
+
+// ———— GIF 与视频（P11b 步骤 4）————
+
+/** 假帧来源：`frames` 是接下来每次 `drawn()` 依次交出的内容（用完交 null），记下 `current` / `drawn` 的调用次数。 */
+class FakeAnimation implements UserTextureAnimation {
+  frames: (UserTextureFrame | null)[] = [];
+  drawnCalls = 0;
+  currentCalls = 0;
+  constructor(
+    readonly kind: "gif" | "video",
+    private readonly initial: UserTextureFrame | null,
+  ) {}
+  current() {
+    this.currentCalls++;
+    return this.initial;
+  }
+  drawn() {
+    this.drawnCalls++;
+    return this.frames.shift() ?? null;
+  }
+}
+
+/** 假来源表：`crop` 总返回同一个纹理名与矩形，帧来源可以换（`animation` 换对象 = 值换过）；`enabled` 关掉时没有图。 */
+function animProvider(animation: FakeAnimation, rect: CropRect, key = "k.gifx15") {
+  const provider = {
+    animation,
+    enabled: true,
+    crop: () => (provider.enabled ? { key, rect, image: null, animation: provider.animation } : null),
+  };
+  return provider;
+}
+
+/** 用户纹理的 writeTexture（缺省纹理的上传不算）。 */
+const userWrites = (gpu: FakeGpu) => gpu.writes.filter((write) => write.texture.startsWith("user "));
+
+/** GIF 100×80 在 3:2 的槽里裁成 100×66、起始行 7；视频 320×240 裁成 320×213、起始行 13。 */
+const GIF_RECT: CropRect = { x: 0, y: 7, width: 100, height: 66 };
+const VIDEO_RECT: CropRect = { x: 0, y: 13, width: 320, height: 213 };
+const gifPixels = (): UserTextureFrame => ({
+  kind: "pixels",
+  data: new Uint8Array(100 * 80 * 4),
+  width: 100,
+  height: 80,
+});
+const videoElement = (videoWidth = 320, videoHeight = 240) =>
+  ({ videoWidth, videoHeight }) as unknown as HTMLVideoElement;
+
+async function openAnim(provider: UserTextureProvider, bundle = npotBundle()) {
+  const gpu = new FakeGpu();
+  const state = SceneState.fromBundle(bundle);
+  const warnings: string[] = [];
+  const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), warnings, { userTextures: provider });
+  scene.update(FRAME);
+  const encode = () => {
+    scene.update(FRAME);
+    scene.encode(gpu.device.createCommandEncoder(), state);
+  };
+  return { gpu, state, scene, warnings, encode };
+}
+
+describe("GIF 与视频的用户纹理：GPU 纹理与上传", () => {
+  it("GIF：建纹理时上传当前画布（writeTexture 的 offset / bytesPerRow / size 按裁切），不带 RENDER_ATTACHMENT", async () => {
+    const animation = new FakeAnimation("gif", gifPixels());
+    const { gpu, scene } = await openAnim(animProvider(animation, GIF_RECT));
+    expect(gpu.named("user k.gifx15")).toHaveLength(1);
+    // TEXTURE_BINDING(2) | COPY_DST(8)
+    expect(gpu.named("user k.gifx15")[0].usage).toBe(10);
+    expect(userWrites(gpu)).toHaveLength(1);
+    expect(userWrites(gpu)[0]).toMatchObject({
+      texture: "user k.gifx15",
+      layout: { offset: (7 * 100 + 0) * 4, bytesPerRow: 400, rowsPerImage: 66 },
+      size: { width: 100, height: 66 },
+    });
+    expect(gpu.copies).toHaveLength(0);
+    expect(animation.currentCalls).toBe(1);
+    expect(internals(scene).layers[0].draws[0].bindGroup!.key).toContain("1:user k.gifx15");
+    // 纹理尺寸 = 裁后尺寸
+    expect(uniform(internals(scene).layers[0].draws[0], RES0, 4)).toEqual([100, 66, 100, 66]);
+  });
+
+  it("GIF 强制点采样（M5）、寻址仍按槽；视频与静态图按槽的 nearest（缺省线性）", async () => {
+    const gif = await openAnim(animProvider(new FakeAnimation("gif", gifPixels()), GIF_RECT));
+    const gifKey = internals(gif.scene).layers[0].draws[0].bindGroup!.key;
+    expect(gifKey).toContain('"magFilter":"nearest"');
+    expect(gifKey).toContain('"minFilter":"nearest"');
+    expect(gifKey).toContain('"addressModeU":"clamp-to-edge"');
+    const video = await openAnim(animProvider(new FakeAnimation("video", null), VIDEO_RECT, "k.mp4x15"));
+    const videoKey = internals(video.scene).layers[0].draws[0].bindGroup!.key;
+    expect(videoKey).toContain('"magFilter":"linear"');
+    // 槽要求点采样时视频也点采样
+    const bundle = npotBundle();
+    bundle.layers[0].passes[0].userTextures = [
+      slot(0, { nearest: true, clamp: false, reference: { kind: "size", width: 300, height: 200 } }),
+    ];
+    const nearest = await openAnim(animProvider(new FakeAnimation("video", null), VIDEO_RECT, "k.mp4x15"), bundle);
+    const nearestKey = internals(nearest.scene).layers[0].draws[0].bindGroup!.key;
+    expect(nearestKey).toContain('"magFilter":"nearest"');
+    expect(nearestKey).toContain('"addressModeU":"repeat"');
+  });
+
+  it("GIF 画到时有新内容就 writeTexture（同一份裁切布局）；没有新内容不上传", async () => {
+    const animation = new FakeAnimation("gif", gifPixels());
+    const { gpu, encode } = await openAnim(animProvider(animation, GIF_RECT));
+    encode();
+    expect(userWrites(gpu)).toHaveLength(1);
+    animation.frames.push(gifPixels());
+    encode();
+    expect(userWrites(gpu)).toHaveLength(2);
+    expect(userWrites(gpu)[1]).toMatchObject({
+      texture: "user k.gifx15",
+      layout: { offset: 2800, bytesPerRow: 400, rowsPerImage: 66 },
+      size: { width: 100, height: 66 },
+    });
+    encode();
+    expect(userWrites(gpu)).toHaveLength(2);
+    expect(animation.drawnCalls).toBe(3);
+  });
+
+  it("同一帧两个 draw 绑同一张纹理：每个 draw 各问一次 drawn，内容只上传一次", async () => {
+    const animation = new FakeAnimation("gif", gifPixels());
+    const bundle = bundleOf(
+      [0, 1].map((object) =>
+        layer(object, {
+          passes: [
+            pass(`objects/${object}/passes/0`, {
+              textures: { 0: 0 },
+              userTextures: [slot(0, { reference: { kind: "size", width: 300, height: 200 } })],
+            }),
+          ],
+        }),
+      ),
+      [texture("npot", [300, 200], [512, 256])],
+    );
+    const { gpu, scene, encode } = await openAnim(animProvider(animation, GIF_RECT), bundle);
+    expect(gpu.named("user k.gifx15")).toHaveLength(1);
+    expect(internals(scene).layers.map((item) => item.draws.length)).toEqual([1, 1]);
+    animation.drawnCalls = 0;
+    const before = userWrites(gpu).length;
+    animation.frames.push(gifPixels());
+    encode();
+    expect(animation.drawnCalls).toBe(2);
+    expect(userWrites(gpu)).toHaveLength(before + 1);
+  });
+
+  it("视频：建纹理时带 RENDER_ATTACHMENT、不上传（初值全 0）；画到时 copyExternalImageToTexture 的 origin 与 size 按裁切", async () => {
+    const animation = new FakeAnimation("video", null);
+    const { gpu, encode } = await openAnim(animProvider(animation, VIDEO_RECT, "k.mp4x15"));
+    // TEXTURE_BINDING(2) | COPY_DST(8) | RENDER_ATTACHMENT(1)
+    expect(gpu.named("user k.mp4x15")[0].usage).toBe(11);
+    expect(userWrites(gpu)).toHaveLength(0);
+    expect(gpu.copies).toHaveLength(0);
+    const element = videoElement();
+    animation.frames.push({ kind: "element", element });
+    encode();
+    expect(gpu.copies).toEqual([
+      { source: element, texture: "user k.mp4x15", origin: { x: 0, y: 13 }, size: { width: 320, height: 213 } },
+    ]);
+    encode();
+    expect(gpu.copies).toHaveLength(1);
+  });
+
+  it("视频元素装不下裁切矩形 / 拷贝抛错：这一帧不更新、记一条 warning（每个纹理名每种一次），整帧不失败", async () => {
+    const animation = new FakeAnimation("video", null);
+    const { gpu, warnings, encode } = await openAnim(animProvider(animation, VIDEO_RECT, "k.mp4x15"));
+    animation.frames.push({ kind: "element", element: videoElement(320, 100) });
+    expect(encode).not.toThrow();
+    animation.frames.push({ kind: "element", element: videoElement(320, 100) });
+    encode();
+    expect(gpu.copies).toHaveLength(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("装不下");
+    gpu.copyError = new DOMException("The video element has no frame", "InvalidStateError");
+    animation.frames.push({ kind: "element", element: videoElement() });
+    expect(encode).not.toThrow();
+    animation.frames.push({ kind: "element", element: videoElement() });
+    encode();
+    expect(warnings).toHaveLength(2);
+    expect(warnings[1]).toContain("拷进纹理失败");
+    // 视频还没有尺寸（videoWidth 为 0）：跳过，不记 warning
+    gpu.copyError = null;
+    animation.frames.push({ kind: "element", element: videoElement(0, 0) });
+    encode();
+    expect(gpu.copies).toHaveLength(0);
+    expect(warnings).toHaveLength(2);
+  });
+
+  it("图层不可见：整段跳过、不问 drawn（动图不推进）；再显示时接着放", async () => {
+    const animation = new FakeAnimation("gif", gifPixels());
+    const { state, scene, encode } = await openAnim(animProvider(animation, GIF_RECT));
+    encode();
+    expect(animation.drawnCalls).toBe(1);
+    state.write({ property: "p", target: { kind: "layer", object: 0, field: "visible" } }, false);
+    scene.sync(state);
+    encode();
+    encode();
+    expect(animation.drawnCalls).toBe(1);
+    state.write({ property: "p", target: { kind: "layer", object: 0, field: "visible" } }, true);
+    scene.sync(state);
+    encode();
+    expect(animation.drawnCalls).toBe(2);
+  });
+
+  it("帧来源换了对象（同一个纹理名、值换过）：旧 GPU 纹理释放、按新来源重建并上传初始内容", async () => {
+    const first = new FakeAnimation("gif", gifPixels());
+    const provider = animProvider(first, GIF_RECT);
+    const { gpu, state, scene, encode } = await openAnim(provider);
+    expect(gpu.named("user k.gifx15")).toHaveLength(1);
+    const second = new FakeAnimation("gif", gifPixels());
+    provider.animation = second;
+    state.touchUserTexture("ut");
+    scene.sync(state);
+    scene.update(FRAME);
+    expect(gpu.named("user k.gifx15")).toHaveLength(2);
+    expect(gpu.named("user k.gifx15")[0].destroyed).toBe(true);
+    expect(userWrites(gpu)).toHaveLength(2);
+    expect(second.currentCalls).toBe(1);
+    // 之后画到的是新来源，不再问旧的
+    first.drawnCalls = 0;
+    encode();
+    expect(first.drawnCalls).toBe(0);
+    expect(second.drawnCalls).toBe(1);
+  });
+
+  it("GIF 的帧变化不触发重建（不经 dirty.userTextures）：draw 对象与 GPU 纹理都不变", async () => {
+    const animation = new FakeAnimation("gif", gifPixels());
+    const { gpu, state, scene, encode } = await openAnim(animProvider(animation, GIF_RECT));
+    const draw = internals(scene).layers[0].draws[0];
+    const textures = gpu.textures.length;
+    for (let i = 0; i < 3; i++) {
+      animation.frames.push(gifPixels());
+      scene.sync(state);
+      encode();
+    }
+    expect(internals(scene).layers[0].draws[0]).toBe(draw);
+    expect(gpu.textures.length).toBe(textures);
+    expect(state.takeDirty().userTextures.size).toBe(0);
+  });
+
+  it("值换成没有图（来源 crop 为空）：用户 GPU 纹理销毁，动图不再被问", async () => {
+    const animation = new FakeAnimation("gif", gifPixels());
+    const provider = animProvider(animation, GIF_RECT);
+    const { gpu, state, scene, encode } = await openAnim(provider);
+    provider.enabled = false;
+    state.touchUserTexture("ut");
+    scene.sync(state);
+    expect(gpu.named("user k.gifx15")[0].destroyed).toBe(true);
+    animation.drawnCalls = 0;
+    encode();
+    expect(animation.drawnCalls).toBe(0);
+  });
+
+  it("接真来源表：GIF 第一次画到不换帧（dt 0），beginFrame 之后画到才推进并上传", async () => {
+    const canvas = new Uint8Array(100 * 80 * 4);
+    const advances: number[] = [];
+    const sources = new UserTextureSources(async () => new TextEncoder().encode("a.gif"), {
+      openGif: () => ({
+        width: 100,
+        height: 80,
+        canvas,
+        advance: (dt: number) => {
+          advances.push(dt);
+          return dt > 0;
+        },
+      }),
+    });
+    await sources.prime([["ut", "a.gif"]]);
+    const { gpu, encode } = await openAnim(sources);
+    // 建纹理时的初始上传
+    expect(userWrites(gpu)).toHaveLength(1);
+    expect(userWrites(gpu)[0].data).toBe(canvas);
+    encode();
+    expect(advances).toEqual([0]);
+    expect(userWrites(gpu)).toHaveLength(1);
+    sources.beginFrame(0.1);
+    encode();
+    expect(advances).toEqual([0, 0.1]);
+    expect(userWrites(gpu)).toHaveLength(2);
   });
 });

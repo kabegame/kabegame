@@ -13,6 +13,7 @@ import { generalDefaults } from "../compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import { particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
+import type { UserTextureProvider } from "../usertex/sources";
 import type { VideoSink } from "../video/sceneVideos";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { acquireGpu } from "./device";
@@ -407,7 +408,7 @@ describe("GpuScene：画到视频纹理时拷帧（P9a 步骤 2）", () => {
 });
 
 describe("SceneRenderer：视频的帧号与 sink（P9a 步骤 2）", () => {
-  async function start(videos: VideoSink) {
+  async function start(videos: VideoSink, userTextures?: UserTextureProvider) {
     const frames: FrameRequestCallback[] = [];
     const gpu = new FakeGpu();
     vi.mocked(acquireGpu).mockResolvedValue({
@@ -432,7 +433,7 @@ describe("SceneRenderer：视频的帧号与 sink（P9a 步骤 2）", () => {
       getBoundingClientRect: () => ({ width: 100, height: 100 }),
     } as unknown as HTMLCanvasElement;
     const renderer = await SceneRenderer.create(canvas, { maxFps: 0, videos });
-    await renderer.load(bundle([layer(0, { 0: 0 })]));
+    await renderer.load(bundle([layer(0, { 0: 0 })]), userTextures ? { userTextures } : {});
     return { renderer, frames };
   }
 
@@ -470,6 +471,36 @@ describe("SceneRenderer：视频的帧号与 sink（P9a 步骤 2）", () => {
     renderer.redraw();
     expect(videos.beginFrame).toHaveBeenCalledOnce();
     expect(videos.drawn).toHaveBeenCalledTimes(2);
+    renderer.destroy();
+  });
+
+  it("用户纹理来源（P11b 步骤 4）：实时帧在视频帧号之后调 beginFrame(本帧 frametime)，补画帧不调", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const order: string[] = [];
+    const videos = { beginFrame: () => order.push("videos"), drawn: () => null };
+    const frametimes: number[] = [];
+    const userTextures: UserTextureProvider = {
+      crop: () => null,
+      beginFrame: (frametime) => {
+        order.push("user");
+        frametimes.push(frametime);
+      },
+    };
+    const { renderer, frames } = await start(videos, userTextures);
+    // 加载的第一帧也是实时帧
+    expect(order).toEqual(["videos", "user"]);
+    order.length = 0;
+    frametimes.length = 0;
+    now += 20;
+    frames.at(-1)!(now);
+    expect(order).toEqual(["videos", "user"]);
+    expect(frametimes).toHaveLength(1);
+    expect(frametimes[0]).toBe(renderer.frameSeconds);
+    expect(frametimes[0]).toBeGreaterThan(0);
+    renderer.setPaused(true);
+    renderer.redraw();
+    expect(order).toEqual(["videos", "user"]);
     renderer.destroy();
   });
 });

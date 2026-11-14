@@ -482,3 +482,57 @@ export function parseUserTextures(pass: MaterialPass, defaults: (slot: number) =
 - 合成 RT 池只增不减：反复换不同尺寸的图时，旧尺寸的 RT 不回收。
 
 **工具问题：**共用的 dev 宿主产物 `target/debug/resources/wpe-scene` 被几个会话轮流从各自的源码重建。冒烟期间被换回不含 P11b 的旧产物两次，表现为渲染结果报 `material:usertextures`，或旧宿主 `t.onerror`（它的 worker 文件被删了）。每次渲染前要核对 `宿主产物` 那一行。
+
+### 步骤 4（2026-11-14，两个 Sonnet 代理并行）
+
+**分工：**在 HEAD `45e1cb89` 的快照副本里做（`ignore/p11/b4/head` 基线）。我先写约定 `ignore/p11/b4/contract.md` 与 `usertex/gif.ts` 的接口桩：
+- 代理 G（`ov-g`）：照 WPE `resourceutil64.dll` 的反编译逐字节移植 GIF 解码器（`usertex/gif.ts`），60 个用例；
+- 代理 I（`ov-i`）：来源表、渲染器、宿主、探针的接线，44 个用例。
+
+**做了什么：**
+- `usertex/gif.ts`：`GifAnimation`（`open` / `advance(dt)` / `canvas`）。照反编译，不照 stb 原版：
+  - disposal 2 的填色把调色板项原样拷进画布（R、B 互换）；上一帧透明时用 transparent 那一项；
+  - `bgindex` 只在有全局调色板、非 0、不越界时保留；
+  - 首帧（含重新开始）只在本帧不透明时填背景；
+  - alpha `> 128` 才写；
+  - `remain` 按 float32 扣减并带出超出部分，一次最多一帧。
+- `usertex/sources.ts`：
+  - `mediaKind`；
+  - GIF 与视频按值登记、引用计数；动图不进解码缓存，换走再选回来从头开始；
+  - 每个纹理名一份帧状态（`GifTexture` / `VideoTexture`，视频用 P9a 的 `VideoTexturePlayer`）；
+  - `beginFrame` / `setPaused`；dev 用的 `advanceGifs` / `seekVideos`；
+  - 视频第一帧上限 10 s。
+- `render/scene.ts`：
+  - `Draw.userAnimations` 只看着色器绑定的槽；
+  - 画到时 `drawn()`：GIF `writeTexture`（按裁切的 offset / 行距），视频 `copyExternalImageToTexture`（源矩形起点 = 裁切起点）；
+  - GIF 强制点采样；帧来源换了对象就重建 GPU 纹理。
+- `render/renderer.ts`：实时帧在视频帧号之后 `beginFrame(frametime)`。
+- `host.ts`：暂停 / 隐藏传给来源表，视频 warning 走宿主 report。
+- 探针：`gifDts`（逐项 `beginFrame` + `advanceGifs`）；`videoTime` 也作用于用户视频。
+
+**合并：**两边改的文件不重叠。`ov` = `ov-i` + G 的三个文件：tsc 0 error，vitest 3463 个全过（基线 3359）。
+
+以 HEAD 快照为祖先三方合并进工作区（`ignore/p11/b/a/merge_wt.py`，17 个文件，无冲突），工作区里别的会话未提交的改动保留。合并后的工作区快照（`ignore/p11/b4/wtm`）tsc 0 error、vitest 3573 个全过，Prettier 通过。
+
+**和 WPE 比**（`p11b-npot`，比例 1.5，整张 GIF 进纹理；抓帧 `A:\p11b\gifdisp*`，工具 `ignore/p11/b4/gif_*.py`、`gif_dump.ts`）：
+- **测试图**：`ignore/p11/b4/make_disp_gif.py` 手写编码三张，在 `ignore/p11/texsrc/`。
+  - `ut-disp.gif`：7 帧，disposal 1 / 3 / 2（透明）/ 2 / 0（局部调色板 + 交错）/ 3（全屏棋盘、透明）/ 0；延时 70 / 130 / 0 / 50 / 210 / 10 / 160 ms。
+  - `-b`：首帧带透明位，bgindex 是蓝。
+  - `-c`：bgindex 为 0。
+- **合成**：WPE 导出的 12 张槽纹理（RGBA，含 alpha）与解码器的逐帧画布逐像素相同，重新开始之后的同一帧也相同。实测看到：
+  - 背景色 R、B 互换：(255,0,128) 填成 (128,0,255)，蓝填成红；
+  - 首帧带透明位时不填背景。
+- **时机**：三张 GIF 共 96 次换帧（`gif_timing.py`，dt 取 CLK），都能用读码的推进模型复现，超出部分 c0 有一致的取值区间。延时 0 的帧恰好显示一个渲染帧，10 ms 的帧不被拉长。代理的 `advance` 和这个 float32 模型在 WPE 的 dt 序列（加 0、0.0001、0.25 等边界）上逐步相同。
+- **变异检查**：8 条（disposal 2 的 R/B 与取项、bgindex 0、首帧背景条件、`two_back` 更新条件、交错起始行、不带超出部分、disposal 3 降级）全被单测拦下。
+- **真 GPU**（dev 应用，宿主产物 `index-DAg0prwG.js`）：
+  - 第 0 帧整帧和 WPE 0 差（两个图层）；
+  - 屏外宿主里按 `gifDts` 推进 0–6 帧，`np-auto` 图层的 300×200 采样哈希和 WPE 的 7 种画面逐个相同。
+- **视频**：条纹测试片 `ut-vstripe.mp4`（`ignore/p11/b4/make_stripe_video.py`，8 条 40 像素竖条）。在 `p11-ut`（1:1）上，WPE 是从 x = 40 起的 6 条（抓帧 `A:\p11b\vstripe`）。在主窗口里用同一个 `copyExternalImageToTexture` + `origin {40, 0}` 读回，色带顺序与边界相同，交界 1–2 列是色度上采样（已知差异）。
+
+**没验到 / 已知：**
+- **屏外探针拿不到用户视频的帧**：屏外宿主 iframe 的 `document.hidden` 为真，Chromium 对不可见且没放过媒体的 frame 推迟媒体加载，`<video>` 只到 `loadstart` / `stalled`、`readyState` 0。用户视频在探针里因此超时成 `failed`。产品里桌面与预览的宿主可见，不受影响。P9a 的 `ProbeVideos` 用的是同样的元素，推测 `render_scene` 的 `videoTime` 现在在屏外宿主里同样拿不到帧（未核实，可能是 CEF 08 之后才出现的）。
+- `render_scene` 还不转发 `gifDts`：要改 dev 工具（vite 插件与 MCP），改完要重启它们才生效。这次直接在宿主里调探针。
+- 帧循环里的视频上传（`drawn` → `copyExternalImageToTexture`）没有在实时帧里跑过。
+- 视频源矩形起点落在半像素时，WPE 的 MF 会重采样，我们取整像素。HDR 视频不做。槽 0 换成用户视频时的 `getVideoTexture()` 不做。
+- 暂停期间改值建出的 GIF，第一次画到时用的是上一个实时帧的 frametime。
+- GIF 解码在几乎不可压缩的大帧上约 29 ms / 帧（1.1 MB 一帧，代理的一次性测量）。

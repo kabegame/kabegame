@@ -124,6 +124,8 @@ export class ProbeVideos implements VideoSink {
     textures: readonly Pick<SceneTexture, "path" | "video">[],
     option: VideoTimeOption | undefined,
     private readonly factories: VideoFactories = {},
+    /** 对象形式的 `videoTime` 里另外认得的键：用户视频的值（P11b 步骤 4，属性里的绝对路径），不在这个表里、也不是视频纹理的键照旧抛错。 */
+    userVideoValues: Iterable<string> = [],
   ) {
     textures.forEach((texture, index) => {
       if (!texture.video) return;
@@ -144,11 +146,12 @@ export class ProbeVideos implements VideoSink {
     });
     if (option && typeof option === "object") {
       const paths = new Set(this.entries.map((entry) => entry.path));
-      const unknown = Object.keys(option).filter((path) => !paths.has(path));
+      const user = new Set(userVideoValues);
+      const unknown = Object.keys(option).filter((path) => !paths.has(path) && !user.has(path));
       if (unknown.length)
         throw new RangeError(
           `videoTime 里的 ${unknown.map((path) => `"${path}"`).join("、")} 不是这个场景的视频纹理` +
-            `（有：${[...paths].map((path) => `"${path}"`).join("、") || "没有视频纹理"}）`,
+            `（有：${[...paths, ...user].map((path) => `"${path}"`).join("、") || "没有视频纹理"}）`,
         );
     }
   }

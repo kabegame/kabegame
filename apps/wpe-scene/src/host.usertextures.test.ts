@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "./compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass } from "./compile/bundle";
 import { SceneState } from "./render/state";
-import type { UserTextureProvider } from "./usertex/sources";
+import { UserTextureSources, type UserTextureProvider } from "./usertex/sources";
 
 const compile = vi.fn<() => Promise<SceneBundle>>();
 
@@ -270,5 +270,29 @@ describe("SceneHost 的用户纹理（P11b 步骤 2）", () => {
     expect([...state.takeDirty().userTextures]).toEqual(["ut"]);
     expect(state.userWritten.size).toBe(0);
     expect(host.userTextureProbe()[0].status).toBe("ready");
+  });
+
+  it("暂停 / 隐藏传给来源表（P11b 步骤 4，用户视频与 GIF 的时钟）：建好时设一次，两处都按 paused || hidden", async () => {
+    const spy = vi.spyOn(UserTextureSources.prototype, "setPaused");
+    try {
+      const { host } = await open({ ut: { type: "scenetexture", value: "" } });
+      // 构造时按当前状态设一次
+      expect(spy.mock.calls.at(0)).toEqual([false]);
+      spy.mockClear();
+      host.setPaused(true);
+      expect(spy).toHaveBeenLastCalledWith(true);
+      host.setPaused(false);
+      expect(spy).toHaveBeenLastCalledWith(false);
+      host.setHidden(true);
+      expect(spy).toHaveBeenLastCalledWith(true);
+      // 隐藏期间取消暂停：仍按暂停
+      host.setPaused(true);
+      host.setPaused(false);
+      expect(spy).toHaveBeenLastCalledWith(true);
+      host.setHidden(false);
+      expect(spy).toHaveBeenLastCalledWith(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

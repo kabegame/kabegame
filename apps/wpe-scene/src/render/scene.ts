@@ -193,7 +193,8 @@ import type { GlyphAtlas } from "../text/atlas";
 import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
 import type { UserTextureSlot } from "../compile/usertextures";
-import type { UserTextureCrop, UserTextureProvider } from "../usertex/sources";
+import type { CropRect } from "../usertex/crop";
+import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextureProvider } from "../usertex/sources";
 import type { VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
@@ -671,6 +672,11 @@ interface Draw {
    * 没有视频时为空。
    */
   videos: number[];
+  /**
+   * 着色器绑定的 GIF / 视频用户纹理（P11b 步骤 4，同 `videos` 只看真正绑定的槽，按纹理名去重）：建 draw 与 `rebindUserDraw` 时算，
+   * 编码时在视频之后逐个 `drawn()`，有内容就上传（`uploadUserFrame`）。没有时为空。
+   */
+  userAnimations: UserAnim[];
   /** 静态 uniform 被就地改过：下一次 `update` 要整块重写。 */
   dirty: boolean;
   /** 不引用 fbo 时建一次；引用 fbo 时按当前 swap 状态取（`bindGroups` 缓存）。 */
@@ -689,6 +695,18 @@ interface UserGpu {
   view: GPUTextureView;
   width: number;
   height: number;
+  /** 建它时的帧来源（P11b 步骤 4，GIF / 视频）：来源换了对象（值换过、WPE 从头开始）就释放重建。静态图没有。 */
+  animation?: UserTextureAnimation;
+}
+
+/** 一个 draw 绑定的 GIF / 视频用户纹理（`Draw.userAnimations`）。 */
+interface UserAnim {
+  /** WPE 的纹理名（`userGpu` 的键）。 */
+  key: string;
+  animation: UserTextureAnimation;
+  gpu: UserGpu;
+  /** 在源（GIF 的画布、视频的画面）上的裁切矩形。 */
+  rect: CropRect;
 }
 
 type UserRef = Extract<TextureRef, { kind: "user" }>;
@@ -1792,43 +1810,119 @@ export class GpuScene {
    * warning（每个名字一次）、返回 null，槽用缺省纹理。
    */
   private userGpuOf(crop: UserTextureCrop): UserGpu | null {
-    const found = this.userGpu.get(crop.key);
-    if (found) return found;
-    const { rect, image, key } = crop;
+    const { rect, image, key, animation } = crop;
+    const found = this.userGpu.get(key);
+    if (found) {
+      // GIF / 视频换了帧来源对象（值换过，WPE 从头开始）：旧的释放、按新的重建；同一个对象继续用
+      if (found.animation === animation) return found;
+      this.targetBytes -= found.width * found.height * 4;
+      this.release(found.texture);
+      this.userGpu.delete(key);
+    }
+    if (!image && !animation) return null;
     const limit = this.device.limits.maxTextureDimension2D;
     if (rect.width > limit || rect.height > limit) {
       this.warnUser(key, `用户纹理 ${key} 的尺寸 ${rect.width}×${rect.height} 超过设备上限 ${limit}，用缺省纹理`);
       return null;
     }
-    // copyExternalImageToTexture 要求目标带 RENDER_ATTACHMENT
-    const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT;
     const size = { width: rect.width, height: rect.height };
+    // copyExternalImageToTexture 要求目标带 RENDER_ATTACHMENT；GIF 只用 writeTexture（TEXTURE_BINDING | COPY_DST），视频与静态图要它
+    const usage =
+      animation?.kind === "gif"
+        ? GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+        : GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT;
     const texture = this.own(this.device.createTexture({ label: `user ${key}`, size, format: "rgba8unorm", usage }));
-    let temp: GPUTexture | null = null;
-    try {
-      // 带 gamma 表（PNG `gAMA`）时先拷进同尺寸的临时纹理，再用 GPU 逐字节查表画进最终纹理（`render/userGamma.ts`）；不带表直接拷
-      if (image.gamma)
-        temp = this.device.createTexture({ label: `user ${key} gamma source`, size, format: "rgba8unorm", usage });
-      this.device.queue.copyExternalImageToTexture(
-        { source: image.source, origin: { x: rect.x, y: rect.y } },
-        { texture: temp ?? texture, premultipliedAlpha: false },
-        size,
-      );
-      if (temp && image.gamma) {
-        this.gammaPass ??= createGammaPass(this.device);
-        encodeGamma(this.device, this.gammaPass, image.gamma, temp, texture).destroy();
+    if (animation) {
+      // 初始内容：GIF 是当前画布，视频没有（全 0，等第一次 `drawn` 交帧，同 WPE 的初始数据）
+      const initial = animation.current();
+      if (initial) this.uploadUserFrame(key, texture, rect, initial);
+    } else if (image) {
+      let temp: GPUTexture | null = null;
+      try {
+        // 带 gamma 表（PNG `gAMA`）时先拷进同尺寸的临时纹理，再用 GPU 逐字节查表画进最终纹理（`render/userGamma.ts`）；不带表直接拷
+        if (image.gamma)
+          temp = this.device.createTexture({ label: `user ${key} gamma source`, size, format: "rgba8unorm", usage });
+        this.device.queue.copyExternalImageToTexture(
+          { source: image.source, origin: { x: rect.x, y: rect.y } },
+          { texture: temp ?? texture, premultipliedAlpha: false },
+          size,
+        );
+        if (temp && image.gamma) {
+          this.gammaPass ??= createGammaPass(this.device);
+          encodeGamma(this.device, this.gammaPass, image.gamma, temp, texture).destroy();
+        }
+      } catch (error) {
+        this.release(texture);
+        this.warnUser(key, `用户纹理 ${key} 拷进纹理失败：${oneLine(String(error))}，用缺省纹理`);
+        return null;
+      } finally {
+        temp?.destroy();
       }
-    } catch (error) {
-      this.release(texture);
-      this.warnUser(key, `用户纹理 ${key} 拷进纹理失败：${oneLine(String(error))}，用缺省纹理`);
-      return null;
-    } finally {
-      temp?.destroy();
     }
-    const gpu: UserGpu = { texture, view: texture.createView(), width: rect.width, height: rect.height };
+    const gpu: UserGpu = { texture, view: texture.createView(), width: rect.width, height: rect.height, animation };
     this.userGpu.set(key, gpu);
     this.targetBytes += rect.width * rect.height * 4;
     return gpu;
+  }
+
+  /**
+   * 把 GIF 的画布 / 视频的画面的 `rect` 一块传进用户纹理（P11b 步骤 4）：GIF 是 `writeTexture`（`offset` 指到裁切起点、行距取整张画布，
+   * rea-p11b 2.1），视频是 `copyExternalImageToTexture`（源矩形起点 = `rect`，整像素）。元素装不下 `rect`、拷贝抛错时记一条 warning
+   * （每个纹理名每种一次）、这一帧不更新，不让整帧失败。
+   */
+  private uploadUserFrame(key: string, texture: GPUTexture, rect: CropRect, frame: UserTextureFrame): void {
+    const size = { width: rect.width, height: rect.height };
+    if (frame.kind === "pixels") {
+      this.device.queue.writeTexture(
+        { texture },
+        frame.data as Uint8Array<ArrayBuffer>,
+        { offset: (rect.y * frame.width + rect.x) * 4, bytesPerRow: frame.width * 4, rowsPerImage: rect.height },
+        size,
+      );
+      return;
+    }
+    const { videoWidth, videoHeight } = frame.element;
+    if (!videoWidth || !videoHeight) return;
+    if (videoWidth < rect.x + rect.width || videoHeight < rect.y + rect.height) {
+      this.warnUser(
+        `${key}#size`,
+        `用户视频 ${key} 的画面 ${videoWidth}×${videoHeight} 装不下裁切矩形 ${rect.width}×${rect.height}（起点 ${rect.x}, ${rect.y}），不更新`,
+      );
+      return;
+    }
+    try {
+      this.device.queue.copyExternalImageToTexture(
+        { source: frame.element, origin: { x: rect.x, y: rect.y } },
+        { texture },
+        size,
+      );
+    } catch (error) {
+      this.warnUser(`${key}#copy`, `用户视频 ${key} 拷进纹理失败：${oneLine(String(error))}`);
+    }
+  }
+
+  /** 一个 draw 的 GIF / 视频用户纹理：只看着色器真正绑定的槽，按纹理名去重；没有帧来源的（静态图、没图）不进。 */
+  private userAnimationsOf(program: GpuProgram, inputs: Record<number, TextureRef>): UserAnim[] {
+    const found = new Map<string, UserAnim>();
+    for (const binding of program.textures) {
+      const ref = inputs[binding.slot];
+      if (ref?.kind !== "user") continue;
+      const crop = this.userCrop(ref.slot);
+      if (!crop?.animation || found.has(crop.key)) continue;
+      const gpu = this.userGpuOf(crop);
+      if (gpu) found.set(crop.key, { key: crop.key, animation: crop.animation, gpu, rect: crop.rect });
+    }
+    return [...found.values()];
+  }
+
+  /** 画到这个 draw 绑定的 GIF / 视频：每个纹理名问一次 `drawn()`，有新内容就上传（同一帧另一个 draw 再问时已经交出过，不重复）。 */
+  private drawnUserAnimations(item: Draw): void {
+    for (const { key, animation, gpu, rect } of item.userAnimations) {
+      // 这张 GPU 纹理已被换掉（值换过）：等 `sync` 重绑，不往已释放的纹理上传
+      if (this.userGpu.get(key) !== gpu) continue;
+      const frame = animation.drawn();
+      if (frame) this.uploadUserFrame(key, gpu.texture, rect, frame);
+    }
   }
 
   private warnUser(key: string, message: string): void {
@@ -1838,9 +1932,10 @@ export class GpuScene {
   }
 
   /** 用户纹理的采样：线性或点（槽的 `nearest`）、寻址按槽的 `clamp`、1 级 mip、无各向异性（p11-REPORT「属性纹理」第 4 条）。 */
-  private userSampler(slot: UserTextureSlot): GPUSampler {
+  private userSampler(slot: UserTextureSlot, forceNearest = false): GPUSampler {
     const address: GPUAddressMode = slot.clamp ? "clamp-to-edge" : "repeat";
-    const filter: GPUFilterMode = slot.nearest ? "nearest" : "linear";
+    // GIF 强制点采样（p11-REPORT M5，WPE 的 GIF 纹理不走线性）；视频与静态图按槽的 `nearest`
+    const filter: GPUFilterMode = forceNearest || slot.nearest ? "nearest" : "linear";
     return this.sampler({
       addressModeU: address,
       addressModeV: address,
@@ -1855,7 +1950,7 @@ export class GpuScene {
   private resolveUser(ref: UserRef): UserResolved | null {
     const crop = this.userCrop(ref.slot);
     const gpu = crop ? this.userGpuOf(crop) : null;
-    return gpu ? { gpu, sampler: this.userSampler(ref.slot) } : null;
+    return gpu ? { gpu, sampler: this.userSampler(ref.slot, crop?.animation?.kind === "gif") } : null;
   }
 
   /** 图像层基础 pass 槽 0 此刻的用户纹理尺寸（`planLayer` 的 `userBase`）；没有图时 null。 */
@@ -2772,6 +2867,7 @@ export class GpuScene {
         ...new Set(Object.values(step.inputs).flatMap((ref) => (ref.kind === "user" ? [ref.slot.source.name] : []))),
       ],
       videos,
+      userAnimations: this.userAnimationsOf(program, step.inputs),
       dirty: false,
       bindGroup,
       bindGroups: new Map(),
@@ -3174,6 +3270,8 @@ export class GpuScene {
     if (step.kind !== "draw") return;
     const slots = Math.max(10, ...program.textures.map((t) => t.slot + 1));
     draw.textureSizes = Array.from({ length: slots }, (_, slot) => this.inputSize(step.inputs[slot], draw.resources));
+    // GIF / 视频的帧来源可能随换值变了（`userGpuOf` 已按新对象重建 GPU 纹理）：重算这个 draw 要上传的
+    draw.userAnimations = this.userAnimationsOf(program, step.inputs);
     // 引用 fbo 的 draw 按 swap 状态各缓存一份 bind group，一起作废；静态的重建一份
     draw.bindGroups.clear();
     if (draw.bindGroup)
@@ -4027,6 +4125,8 @@ export class GpuScene {
         const source = this.videoSink?.drawn(index);
         if (source) this.copyVideo(index, source);
       }
+      // GIF / 视频用户纹理（P11b 步骤 4）：画到就推进、有新内容就上传，同视频排在本帧提交之前
+      if (item.userAnimations.length) this.drawnUserAnimations(item);
       // 网格没有索引（空网格）就不画
       if (item.mesh && !item.mesh.count) return;
       const particles = item.particles;

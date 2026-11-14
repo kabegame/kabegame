@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  DECODED_CACHE_SIZE,
-  fileExtension,
-  isAnimatedMedia,
-  UserTextureSources,
-  type UserTextureDeps,
-} from "./sources";
+import { DECODED_CACHE_SIZE, fileExtension, mediaKind, UserTextureSources, type UserTextureDeps } from "./sources";
 
 interface FakeBitmap {
   width: number;
@@ -88,7 +82,7 @@ describe("UserTextureSources：解码、裁切与缓存键", () => {
     const cropped = sources.crop("ut", { width: 1, height: 1 })!;
     expect(cropped.key).toBe("a.pngx10");
     expect(cropped.rect).toEqual({ x: 50, y: 0, width: 200, height: 200 });
-    expect(cropped.image.width).toBe(300);
+    expect(cropped.image!.width).toBe(300);
   });
 
   it("keepaspect（参考尺寸 null）整张进纹理，纹理名比例为 0", async () => {
@@ -229,25 +223,6 @@ describe("UserTextureSources：缓存上限与释放", () => {
   });
 });
 
-describe("UserTextureSources：GIF 与视频先当无图（步骤 4）", () => {
-  it("扩展名不分大小写，GIF 与视频都不读文件、状态 unsupported", async () => {
-    const { sources, reads, ready } = setup();
-    expect(fileExtension("D:/a/B.GIF")).toBe("gif");
-    expect(fileExtension("D:/a.b/noext")).toBe("");
-    expect(isAnimatedMedia("x.MP4")).toBe(true);
-    expect(isAnimatedMedia("x.webm")).toBe(true);
-    expect(isAnimatedMedia("x.png")).toBe(false);
-    for (const value of ["D:/a/B.GIF", "D:/a/v.Mp4", "x.mkv", "x.wmv", "x.avi", "x.m4v", "x.mov"]) {
-      sources.setValue("ut", value);
-      expect(sources.status("ut")).toBe("unsupported");
-      expect(sources.crop("ut", null)).toBeNull();
-    }
-    await sources.settled();
-    expect(reads).toEqual([]);
-    expect(ready).toHaveLength(7);
-  });
-});
-
 describe("UserTextureSources：PNG 的 gAMA 校正走读回像素", () => {
   const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   const chunk = (type: string, data: number[]) => [
@@ -284,9 +259,9 @@ describe("UserTextureSources：PNG 的 gAMA 校正走读回像素", () => {
     const { sources, closed } = gammaSources(1.0);
     await sources.prime([["ut", "g.png"]]);
     const { image } = sources.crop("ut", null)!;
-    expect("data" in image.source).toBe(false);
-    expect(image.gamma).toHaveLength(256);
-    expect([...image.gamma!.slice(0, 8)]).toEqual([0, 21, 28, 34, 39, 43, 46, 50]);
+    expect("data" in image!.source).toBe(false);
+    expect(image!.gamma).toHaveLength(256);
+    expect([...image!.gamma!.slice(0, 8)]).toEqual([0, 21, 28, 34, 39, 43, 46, 50]);
     expect(closed).toEqual([]);
   });
 
@@ -294,7 +269,7 @@ describe("UserTextureSources：PNG 的 gAMA 校正走读回像素", () => {
     const { sources, closed } = gammaSources(0.45455);
     await sources.prime([["ut", "g.png"]]);
     const cropped = sources.crop("ut", null)!;
-    expect(cropped.image.gamma).toBeNull();
+    expect(cropped.image!.gamma).toBeNull();
     expect(closed).toEqual([]);
   });
 });
@@ -312,13 +287,14 @@ describe("UserTextureSources：探针", () => {
       {
         name: "a",
         value: "a.png",
+        kind: "image",
         status: "ready",
         width: 300,
         height: 200,
         decodeMs: 0,
         keys: ["a.pngx10", "a.pngx0"],
       },
-      { name: "b", value: "", status: "empty", keys: [] },
+      { name: "b", value: "", kind: "image", status: "empty", keys: [] },
     ]);
   });
 });
