@@ -133,3 +133,11 @@ drawn(frame: number, hostPaused: boolean): HTMLVideoElement | null {
 - 变异检查 7 个：去掉 `readyState` 条件、去掉 `playing` 条件、阈值改 ≥ 0、条件不满足时 / 时间变化时 / `sync` 结论变化时 / 中间没画到时不重置基准，各有测试挂掉。
 - 真机（主窗口预览 13586，加载前开 `Media` 域）：放了约 7 分钟在 131.90 s 卡住（`DECODER_UNDERFLOW`），约 2 s 后日志「场景视频卡住 2000 ms 没前进，原地跳一下」，`stallSeeks` 1，`readyState` 回到 4，按 60 fps 放到 141.4 s 并正常绕回。
 - 回归 `versions/latest/regression.md`「场景壁纸视频卡住的兜底（P9c）」X0–X2，X2（桌面上放 30 分钟）待测。
+
+## 步骤 2 — 多实例与落盘量（2026-11-14，进行中）
+
+**X2 桌面长时间播放**（13586 设为桌面壁纸 30 分钟，加载后开 `Media` 域，每秒采样，每 30 s 记 `nvidia-smi`；测完改回 14295 并关掉壁纸）：
+- 桌面加载 13586 用时 1687 ms（日志「开始渲染」），`blob_storage` 涨到 670 MB。
+- 这次 Chromium 的 GPU 进程在 RTX 4090 D 上（上午在 RTX 4070，dev 重启后选的显卡变了）。同一块卡上 WPE（`wallpaper64.exe`，别的会话的测试窗口）占解码器 92%，61 次采样里 36 次整卡解码 100%、多数 ≥ 94%。
+- 30 分钟里卡住 11 次（`readyState` 2），每次原地跳一下就恢复，一次重新加载都没用到；另有 76 次约 1 s 的短暂缺帧（75 次 `DECODER_UNDERFLOW`、1 次 `DEMUXER_UNDERFLOW`）自己恢复。间隔 1–7 分钟，没有越来越密：和「输出缓冲泄漏、池子越用越少」的推测不太吻合，更像是解码器吃紧时卡住的概率上升。根因仍未证实。
+- 解码器满载时的多实例开销数字不可信，等 WPE 空下来再量。
