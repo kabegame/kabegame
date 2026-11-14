@@ -20,6 +20,7 @@ import { scriptToString } from "../text/fields";
 import type { VideoTexturePlayer } from "../video/player";
 import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
+import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
 import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStorage } from "./storage";
 
@@ -123,7 +124,6 @@ export interface ParticleScriptTarget {
   emitParticles(count?: unknown): void;
 }
 
-const DEGREE = 0.017453292;
 /** `ITextLayer` 运行中字段在 API 写入时的类型（rea-p6b-layout 6.2；p6b-api / p6b-api-enum 实测，步骤 2 的表）。 */
 const TEXT_API_TYPES: Record<TextRuntimeField, ValueType | "string"> = {
   text: "string",
@@ -234,10 +234,11 @@ export class ScriptApi {
     const index = object;
     this.define(api, "name", () => this.findLayer(index)?.name ?? "");
     this.define(api, "id", () => this.findLayer(index)?.id ?? -1);
+    // 图层字段与 `size` 的读取按 WPE 取单精度、角度按 f32 算法换成度（`f32.ts`，P3b 补测 `ignore/p3b-f32`）；状态照旧存 double
     this.define(
       api,
       "size",
-      () => this.vector(this.findLayer(index)?.size ?? [0, 0], 2),
+      () => this.vector(scriptNumbers(this.findLayer(index)?.size ?? [0, 0]), 2),
       () => {},
     );
     for (const field of LAYER_FIELDS) {
@@ -249,10 +250,10 @@ export class ScriptApi {
           // `parallaxDepth` 是 Vec2（P5a 步骤 2，WPE 声明 `parallaxDepth: Vec2`），其余向量是 Vec3
           if (Array.isArray(value))
             return this.vector(
-              field === "angles" ? value.map((part) => part / DEGREE) : value,
+              field === "angles" ? value.map((part) => radiansToScript(part)) : scriptNumbers(value),
               field === "parallaxDepth" ? 2 : 3,
             );
-          return value;
+          return scriptNumber(value);
         },
         (value) => {
           const target: ApiTarget = { kind: "layer", object: index, field };
@@ -396,6 +397,8 @@ export class ScriptApi {
       target()?.stop();
     });
     this.method(api, "isPlaying", () => target()?.isPlaying() ?? false);
+    // TODO:[WPE_SCENE] 没实测：`volume` 读回仍是 double；图层字段与材质常量实测是 f32（P3b 补测 `ignore/p3b-f32`），这里大概率同样，
+    // 测过再按 `f32.ts` 改
     this.define(
       api,
       "volume",
@@ -523,6 +526,9 @@ export class ScriptApi {
    *   `Vec3` / `{x, y, z}`），`controlpointangleN` 是弧度、不换算（`+0x60` 没有角度位，1.3）。除 `rate` 外置脏，下一帧开头重算（5.2、5.3）；
    *   `rate` 只改步进率（5.4，P4f 步骤 1 的单独路径）。同一段脚本里先写的系数对随后 `emitParticles` 的这批不生效（4.4）。
    * 没有这一层的状态时读到 undefined。
+   *
+   * TODO:[WPE_SCENE] 没实测：系数、`colorn`、控制点的读回仍是 double；图层字段与材质常量实测是 f32（P3b 补测 `ignore/p3b-f32`），
+   * 这里大概率同样（`FLT_MAX` 本身是 f32 能表示的值），测过再按 `f32.ts` 改。
    */
   private particleInstance(object: number): ApiObject {
     const api = this.object();
@@ -632,7 +638,8 @@ export class ScriptApi {
         if (!parts.every((part) => typeof part === "number")) return;
         value = parts as number[];
       } else return;
-      if (type === "angles") value = value.map((part) => part * DEGREE);
+      // 角度按 WPE 的 f32 乘法换成弧度（`f32.ts`）；其余数原样交给宿主（下一次读时再取 f32）
+      if (type === "angles") value = value.map((part) => degreesFromScript(part));
     }
     if (target.kind === "recompile") {
       const id = this.current?.id ?? "<module>";
@@ -820,10 +827,11 @@ export class ScriptApi {
         () => {
           const target: ApiTarget = { kind: "constant", pass, material: name, ...shape };
           const values = this.access.read?.(target) ?? this.access.state().constants.get(pass)?.[shape.uniforms[0]];
+          // 同图层字段按 WPE 取单精度（P3b 补测 `ignore/p3b-f32`：`thisObject.alpha` 读出 0.30000001192092896）
           return Array.isArray(values)
             ? values.length === 1
-              ? values[0]
-              : this.vector(values, values.length as 2 | 3 | 4)
+              ? scriptNumber(values[0])
+              : this.vector(scriptNumbers(values), values.length as 2 | 3 | 4)
             : values;
         },
         (value) => this.write({ kind: "constant", pass, material: name, ...shape }, value, shape.type),
@@ -846,6 +854,8 @@ export class ScriptApi {
     return api;
   }
   private installGeneral(object: ApiObject): void {
+    // TODO:[WPE_SCENE] 没实测：泛光参数与 `GENERAL_FIELDS`（清屏色、环境光、相机 `zoom` 等）的读回仍是 double；图层字段与材质常量
+    // 实测是 f32（P3b 补测 `ignore/p3b-f32`），这里大概率同样，测过再按 `f32.ts` 改
     // `bloom` 是运行时状态，不走重编译
     this.define(
       object,

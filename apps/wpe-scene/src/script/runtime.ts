@@ -2,6 +2,7 @@ import { type TargetKey, type UserProperty } from "../compile/bindings";
 import { scriptToString } from "../text/fields";
 import { type SceneScript, type SceneScripts } from "../compile/scripts";
 import { type SceneReporter } from "../report";
+import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 
 export interface ScriptRealm {
   readonly global: Record<string, unknown>;
@@ -198,6 +199,13 @@ export class ScriptRuntime {
   private value(record: ScriptRecord): unknown {
     const raw = this.options.read(record.script.target);
     const input = raw ?? record.script.initial;
+  /**
+   * `init` / `update` 的入参：状态里的当前值（没有时取编译期初值）。数取单精度、角度按 WPE 的 f32 算法换成度（`f32.ts`，
+   * P3b 补测 `ignore/p3b-f32`）；存储不动，每次读都取一次。布尔、字符串原样。
+   *
+   * TODO:[WPE_SCENE] 没逐个实测：入参取单精度不分目标，实测只覆盖图层字段与材质常量；general、泛光、声音 `volume`、相机、文本、
+   * 粒子实例覆盖的字段脚本入参是照同一规则推的，vec4 目标语料里没有样本（P3b 补测「没测到的项」）。
+   */
     const type = record.script.valueType;
     if (type === "bool" || type === "string") return input;
     const values = Array.isArray(input)
@@ -205,13 +213,12 @@ export class ScriptRuntime {
       : typeof input === "string"
         ? input.trim().split(/\s+/).map(Number)
         : [input];
-    if (type === "float") return values[0];
+    if (type === "float") return scriptNumber(values[0]);
     const size = type === "vec2" ? 2 : type === "vec4" ? 4 : 3;
     const prototype = this.realm.prototypes[`Vec${size}` as "Vec2" | "Vec3" | "Vec4"];
     const ctor = (prototype as { constructor: new (...args: number[]) => unknown }).constructor;
     const parts = values.map(Number);
-    if (type === "angles") for (let i = 0; i < parts.length; i++) parts[i] /= 0.017453292;
-    return new ctor(...parts);
+    return new ctor(...(type === "angles" ? parts.map((part) => radiansToScript(part)) : scriptNumbers(parts)));
   }
 
   private writeReturn(record: ScriptRecord, result: unknown): void {
@@ -244,7 +251,8 @@ export class ScriptRuntime {
         if (!parts.every((part) => typeof part === "number")) return;
         value = parts as number[];
       } else return;
-      if (type === "angles") value = value.map((part) => part * 0.017453292);
+      // 角度按 WPE 的 f32 乘法换成弧度（`f32.ts`）；其余数原样交给宿主（下一次读时再取 f32，同 WPE 存下的值）
+      if (type === "angles") value = value.map((part) => degreesFromScript(part));
     }
     if (record.script.target.kind === "recompile") record.recompileWrites++;
     if (this.options.write(record.script.target, value, record.script.id))

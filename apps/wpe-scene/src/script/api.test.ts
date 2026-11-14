@@ -371,6 +371,132 @@ describe("SceneScript API（FakeRealm）", () => {
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(first)).toBe(true);
   });
 
+  describe("图层字段、size、材质常量按 WPE 取单精度（P3b 补测，期望值照 WPE 实测 ignore/p3b-f32）", () => {
+    it("每类字段读出 f32、状态照旧存 double；从别的图层读也一样", () => {
+      const h = setup();
+      const getLayer = h.api.thisScene.getLayer as (name: string) => Record<string, unknown>;
+      const first = getLayer("First");
+      first.origin = new Vec3(100.1, 200.2, 300.3);
+      first.scale = new Vec3(1.7, 0.3, 2.9);
+      first.color = new Vec3(0.3, 0.7, 0.1);
+      first.alpha = 0.3;
+      first.brightness = 1.7;
+      first.parallaxDepth = new Vec2(0.3, 1.7);
+      h.state.layers.get(0)!.angles = [0.0501731, 0.0513848, 0.0555392];
+      h.bundle.layers[0].size = [80.3, 60.7];
+      // 存储不动：状态里仍是 double
+      expect(h.state.layers.get(0)).toMatchObject({
+        origin: [100.1, 200.2, 300.3],
+        scale: [1.7, 0.3, 2.9],
+        color: [0.3, 0.7, 0.1],
+        alpha: 0.3,
+        brightness: 1.7,
+        parallaxDepth: [0.3, 1.7],
+      });
+      // `P.read` 一行：thisLayer 与 getLayer('A') 读到的都是这些（同一个图层对象，读取不看当前是哪段脚本）
+      h.api.enterScript(script("other", { kind: "layer", object: 1 }, 1));
+      expect(first.origin).toEqual(new Vec3(100.0999984741211, 200.1999969482422, 300.29998779296875));
+      expect(first.scale).toEqual(new Vec3(1.7000000476837158, 0.30000001192092896, 2.9000000953674316));
+      expect(first.color).toEqual(new Vec3(0.30000001192092896, 0.699999988079071, 0.10000000149011612));
+      expect(first.alpha).toBe(0.30000001192092896);
+      expect(first.brightness).toBe(1.7000000476837158);
+      expect(first.parallaxDepth).toEqual(new Vec2(0.30000001192092896, 1.7000000476837158));
+      expect(first.size).toEqual(new Vec2(80.30000305175781, 60.70000076293945));
+      // 角度：f32(f32(弧度) × f32(57.29578))；double 的「弧度 / 0.017453292」是 2.8747069607269506 2.944132258831171 3.1821618523313537
+      expect(first.angles).toEqual(new Vec3(2.874706983566284, 2.944132089614868, 3.182161808013916));
+      expect(first.visible).toBe(true);
+      h.api.enterScript(script("self", { kind: "layer", object: 0 }, 0));
+      expect(h.realm.global.thisLayer).toBe(first);
+      expect((h.realm.global.thisLayer as Record<string, unknown>).origin).toEqual(
+        new Vec3(100.0999984741211, 200.1999969482422, 300.29998779296875),
+      );
+    });
+
+    it("角度写回按 f32 乘法换成弧度，同帧读回与 WPE 相同（E / G / F 三组）", () => {
+      const h = setup();
+      const first = (h.api.thisScene.getLayer as (name: string) => Record<string, unknown>)("First");
+      const cases: [number[], number[]][] = [
+        [
+          [60.1939, 115.6584, 236.4931],
+          [60.193904876708984, 115.65840911865234, 236.4931182861328],
+        ],
+        [
+          [6.4317, 112.9374, 0.8652],
+          [6.431700229644775, 112.93740844726562, 0.8651999831199646],
+        ],
+        [
+          [125.5641, 237.1609, 246.6956],
+          [125.5641098022461, 237.16091918945312, 246.69561767578125],
+        ],
+      ];
+      for (const [write, read] of cases) {
+        first.angles = new Vec3(write[0], write[1], write[2]);
+        // 交给宿主的弧度是 f32 能精确表示的值
+        for (const part of h.state.layers.get(0)!.angles) expect(Math.fround(part)).toBe(part);
+        expect(first.angles).toEqual(new Vec3(read[0], read[1], read[2]));
+      }
+    });
+
+    it("经 thisLayer 读 → 改 → 写回累加 12 帧，逐帧值与 WPE 相同（C.api）", () => {
+      const h = setup();
+      const first = (h.api.thisScene.getLayer as (name: string) => Record<string, unknown>)("First");
+      first.origin = new Vec3(900.1, 300.3, 0);
+      h.state.layers.get(0)!.angles = [0, 0, 0.0555392];
+      const xs: number[] = [];
+      const zs: number[] = [];
+      for (let frame = 0; frame < 12; frame++) {
+        const origin = first.origin as Vec3;
+        const angles = first.angles as Vec3;
+        xs.push(origin.x);
+        zs.push(angles.z);
+        origin.x += 0.1;
+        first.origin = origin;
+        angles.z += 0.7;
+        first.angles = angles;
+      }
+      expect(xs).toEqual([
+        900.0999755859375, 900.199951171875, 900.2999267578125, 900.39990234375, 900.4998779296875, 900.599853515625,
+        900.6998291015625, 900.7998046875, 900.8997802734375, 900.999755859375, 901.0997314453125, 901.19970703125,
+      ]);
+      expect(zs).toEqual([
+        3.182161808013916, 3.882161855697632, 4.582161903381348, 5.282161712646484, 5.982161521911621,
+        6.682161331176758, 7.382160663604736, 8.082160949707031, 8.782160758972168, 9.482160568237305,
+        10.182160377502441, 10.882160186767578,
+      ]);
+    });
+
+    it("材质对象 thisObject.<键> 读出 f32（A.mat）", () => {
+      const h = setup();
+      h.bundle.layers[0].passes.push({
+        key: "objects/0/passes/0",
+        program: 0,
+        blending: "normal",
+        cullmode: "none",
+        depthtest: "disabled",
+        depthwrite: "disabled",
+        textures: {},
+        runtime: {},
+        uniforms: {},
+        framebuffer: false,
+      });
+      h.bundle.programs.push({
+        uniforms: [
+          { name: "g_TintColor", type: "vec3<f32>", meta: { material: "color" } },
+          { name: "g_BlendAlpha", type: "f32", meta: { material: "alpha" } },
+        ],
+      } as unknown as SceneBundle["programs"][number]);
+      h.state.constants.set("objects/0/passes/0", { g_TintColor: [0.3, 0.7, 0.1], g_BlendAlpha: [0.3] });
+      h.api.enterScript(script("mat", { kind: "material", pass: "objects/0/passes/0", layer: 0 }, 0));
+      const owner = h.realm.global.thisObject as Record<string, unknown>;
+      expect(owner.alpha).toBe(0.30000001192092896);
+      expect(owner.color).toEqual(new Vec3(0.30000001192092896, 0.699999988079071, 0.10000000149011612));
+      expect(h.state.constants.get("objects/0/passes/0")).toEqual({
+        g_TintColor: [0.3, 0.7, 0.1],
+        g_BlendAlpha: [0.3],
+      });
+    });
+  });
+
   describe("文本层（P6b 步骤 2，ITextLayer；期望值照 WPE 实测 p6b-api / p6b-api-enum）", () => {
     type TextLayer = Record<string, unknown>;
     const open = (initial: Partial<Record<string, unknown>> = {}, text: boolean | "hdr" = true) => {

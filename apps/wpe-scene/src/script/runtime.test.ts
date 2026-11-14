@@ -222,6 +222,166 @@ describe("脚本运行时（FakeRealm）", () => {
     expect(h.values.get("visible")).toBe(false);
   });
 
+  describe("init / update 的入参按 WPE 取单精度（P3b 补测，期望值照 WPE 实测 ignore/p3b-f32）", () => {
+    const layer = (field: string, valueType: SceneScript["valueType"], initial: SceneScript["initial"]) =>
+      script(field, {
+        target: { kind: "layer", object: 0, field } as SceneScript["target"],
+        valueType,
+        initial,
+      });
+
+    it("vec3 / vec2 / float / 材质常量 / angles 的入参是 f32，布尔与字符串原样（A.*）", async () => {
+      const h = harness();
+      const seen = new Map<string, unknown[]>();
+      const observe = (id: string) => ({
+        init: (value: unknown) => {
+          seen.set(id, [value]);
+        },
+        update: (value: unknown) => {
+          seen.get(id)!.push(value);
+        },
+      });
+      const cases = [
+        layer("origin", "vec3", "100.1 200.2 300.3"),
+        layer("scale", "vec3", "1.7 0.3 2.9"),
+        layer("color", "vec3", "0.3 0.7 0.1"),
+        layer("alpha", "float", 0.3),
+        layer("brightness", "float", 1.7),
+        layer("parallaxDepth", "vec2", "0.3 1.7"),
+        layer("angles", "angles", "0.0501731 0.0513848 0.0555392"),
+        layer("visible", "bool", true),
+        script("constant", {
+          target: {
+            kind: "constant",
+            pass: "objects/0/effects/0/passes/0",
+            material: "alpha",
+            uniforms: [],
+            type: "float",
+          },
+          owner: { kind: "material", pass: "objects/0/effects/0/passes/0", layer: 0 },
+          valueType: "float",
+          initial: 0.3,
+        }),
+        script("text", {
+          target: { kind: "text", object: 0, field: "text" },
+          valueType: "string",
+          initial: "0.3",
+        }),
+      ];
+      for (const item of cases) h.realm.modules.set(item.id, observe(item.id));
+      await h.runtime.load({ list: cases });
+      // 状态里有值时读状态（double），每次读都取一次 f32
+      h.values.set("origin", [100.1, 200.2, 300.3]);
+      h.values.set("alpha", [0.3]);
+      h.runtime.frame(0.1);
+      const expected: Record<string, unknown> = {
+        origin: new Vec3(100.0999984741211, 200.1999969482422, 300.29998779296875),
+        scale: new Vec3(1.7000000476837158, 0.30000001192092896, 2.9000000953674316),
+        color: new Vec3(0.30000001192092896, 0.699999988079071, 0.10000000149011612),
+        alpha: 0.30000001192092896,
+        brightness: 1.7000000476837158,
+        parallaxDepth: new Vec2(0.30000001192092896, 1.7000000476837158),
+        angles: new Vec3(2.874706983566284, 2.944132089614868, 3.182161808013916),
+        visible: true,
+        constant: 0.30000001192092896,
+        text: "0.3",
+      };
+      for (const [id, value] of Object.entries(expected)) expect(seen.get(id), id).toEqual([value, value]);
+      expect(h.values.get("origin")).toEqual([100.1, 200.2, 300.3]);
+    });
+
+    it("返回值累加 12 帧，逐帧入参与 WPE 相同（B.origin.x / B.alpha / B.angles.z）", async () => {
+      const h = harness();
+      const xs: number[] = [];
+      const alphas: number[] = [];
+      const zs: number[] = [];
+      h.realm.modules.set("origin", {
+        update: (value: Vec3) => {
+          xs.push(value.x);
+          value.x += 0.1;
+          return value;
+        },
+      });
+      h.realm.modules.set("alpha", {
+        update: (value: number) => {
+          alphas.push(value);
+          return value + 0.013;
+        },
+      });
+      h.realm.modules.set("angles", {
+        update: (value: Vec3) => {
+          zs.push(value.z);
+          value.z += 0.7;
+          return value;
+        },
+      });
+      await h.runtime.load({
+        list: [
+          layer("origin", "vec3", "500.1 300.3 0"),
+          layer("alpha", "float", 0.3),
+          layer("angles", "angles", "0 0 0.0572702"),
+        ],
+      });
+      for (let frame = 0; frame < 12; frame++) h.runtime.frame(0.05);
+      expect(xs).toEqual([
+        500.1000061035156, 500.20001220703125, 500.3000183105469, 500.4000244140625, 500.5000305175781,
+        500.60003662109375, 500.7000427246094, 500.800048828125, 500.9000549316406, 501.00006103515625,
+        501.1000671386719, 501.2000732421875,
+      ]);
+      expect(alphas).toEqual([
+        0.30000001192092896, 0.31300002336502075, 0.32600003480911255, 0.33900004625320435, 0.35200005769729614,
+        0.36500006914138794, 0.37800008058547974, 0.39100009202957153, 0.40400010347366333, 0.4170001149177551,
+        0.4300001263618469, 0.4430001378059387,
+      ]);
+      expect(zs).toEqual([
+        3.2813408374786377, 3.9813408851623535, 4.68134069442749, 5.381340503692627, 6.081340312957764, 6.7813401222229,
+        7.481340408325195, 8.181340217590332, 8.881340026855469, 9.581339836120605, 10.281339645385742,
+        10.981339454650879,
+      ]);
+    });
+
+    it("角度原样写回不漂移（D），init 写回的度数下一帧读回与 WPE 相同（E / G）", async () => {
+      const h = harness();
+      const seen: Vec3[] = [];
+      h.realm.modules.set("D", {
+        init: (value: Vec3) => {
+          seen.push(value);
+          return value;
+        },
+        update: (value: Vec3) => {
+          seen.push(value);
+          return value;
+        },
+      });
+      await h.runtime.load({ list: [{ ...layer("angles", "angles", "0.0501731 0.0513848 0.0555392"), id: "D" }] });
+      for (let frame = 0; frame < 6; frame++) h.runtime.frame(0.05);
+      expect(seen).toEqual(Array(7).fill(new Vec3(2.874706983566284, 2.944132089614868, 3.182161808013916)));
+
+      for (const [write, read] of [
+        [
+          [60.1939, 115.6584, 236.4931],
+          [60.193904876708984, 115.65840911865234, 236.4931182861328],
+        ],
+        [
+          [6.4317, 112.9374, 0.8652],
+          [6.431700229644775, 112.93740844726562, 0.8651999831199646],
+        ],
+      ]) {
+        const g = harness();
+        const reads: Vec3[] = [];
+        g.realm.modules.set("E", {
+          init: () => new Vec3(write[0], write[1], write[2]),
+          update: (value: Vec3) => {
+            reads.push(value);
+          },
+        });
+        await g.runtime.load({ list: [{ ...layer("angles", "angles", "0 0 0"), id: "E" }] });
+        g.runtime.frame(0.05);
+        expect(reads).toEqual([new Vec3(read[0], read[1], read[2])]);
+      }
+    });
+  });
+
   it("计时器按帧推进、顺序触发、周期对齐、取消并保持脚本归属", async () => {
     const h = harness();
     await h.runtime.load({ list: [script("one")] });
