@@ -774,6 +774,8 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 ## P12 — 骨骼与 puppet
 
+总计划见 [phase-12-puppet.md](phase12/phase-12-puppet.md)（2026-11-14）。按 183 张重算：37 张用到；只做 P12 能渲染 88 → 101（HEAD 上 13 张只差 P12），P4–P11 先做完时 135 → 167。和下面的原始范围相比，mdl 不限 v21 / v23（语料还有 v13、v16、v19），着色器另有 `SKINNING_ALPHA`、`MORPHING*` 与裁切遮罩，多了骨骼物理（5 张），模型对象的骨骼建议随 P13 接线；分四节：网格与骨骼动画、挂点 / 变形 / 裁切遮罩、脚本、骨骼物理。下面是写总计划之前的原始范围。
+
 - MDLV0021 / MDLV0023 的骨骼（MDLS）、动画（MDLA）、变形（MDMP），skinning（翻译器经 `defines` 传 `BONECOUNT`），puppet warp。语料 33 张。
 - 对象 `animationlayers`（31 张）、`attachment` 挂点（10 张）；脚本 `getAnimationLayer*`、骨骼与混合形状的 API。
 - **依赖：** P5c 的 mdl 解析。P5c 对带这些段的模型报 `mdl:skeleton` / `mdl:animation` / `mdl:morph`。
