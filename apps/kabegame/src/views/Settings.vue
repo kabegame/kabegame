@@ -373,6 +373,14 @@
 
                 <SettingRow
                   v-if="!IS_ANDROID && !IS_WEB"
+                  :label="$t('settings.wpeSceneReflection')"
+                  :description="$t('settings.wpeSceneReflectionDesc')"
+                >
+                  <SettingRadioControl setting-key="wpeSceneReflection" :options="wpeSceneReflectionOptions" />
+                </SettingRow>
+
+                <SettingRow
+                  v-if="!IS_ANDROID && !IS_WEB"
                   :label="$t('settings.wpeEngineDir')"
                   :description="$t('settings.wpeEngineDirDesc')"
                 >
@@ -571,6 +579,11 @@ const wpeScenePostprocessOptions = computed(() => [
   { label: t("settings.wpeScenePostprocessDisabled"), value: "disabled" },
   { label: t("settings.wpeScenePostprocessEnabled"), value: "enabled" },
   { label: t("settings.wpeScenePostprocessUltra"), value: "ultra" },
+]);
+const wpeSceneReflectionOptions = computed(() => [
+  { label: t("settings.wpeSceneReflectionFollow"), value: "follow" },
+  { label: t("settings.wpeSceneReflectionDisabled"), value: "disabled" },
+  { label: t("settings.wpeSceneReflectionEnabled"), value: "enabled" },
 ]);
 const linkOpenModeOptions = computed(() => [
   { label: t("settings.linkOpenSurf"), value: "surf" },

@@ -60,3 +60,17 @@ WPE 2.8.42，窗口 1920×1080。用户设置（`config.json` 的 `general.user`
 **两条读码更正**（读码代理顺带查出）：
 - rea-p5-mesh 第 5 节：`FUN_14017e180` 是剔除状态栈的 push，不是镜像视图；反射 pass 的触发位是 `G+0xe0` bit0，不是 `0x20000`；渲染标志 bit0 在壁纸进程里一直置位。
 - rea-p5-mesh 4.1 的「作用未知」`FUN_140198d00` 是体积光的模糊与合成。
+
+## P13b1 的实测（2026-11-14）
+
+「反射关」时两张 RT 的内容。工程 `ignore/p13/b1/gen_b1.py` → `ignore/p13/proj/p13b1-*`（正交 1920×1080，自带着色器按屏幕 UV 采 `g_Texture0`），抓帧 `A:\p13b1\`，常量 `ignore/p13/b1/out/`。WPE 设置没动（`reflection: false`、`postprocessing: ultra`）。
+
+| # | 预测 | 抓帧 | 结果 |
+|---|---|---|---|
+| B1 | 有模型读 `_rt_Reflection` 时建窗口尺寸 RGBA8、每帧清成清屏色（alpha 1），Clamp + Linear；`g_Texture<n>Resolution` 是 RT 尺寸 | r1：1920×1080、1 级，整张 (0.2, 0.4, 0.6, 1)；ClampEdge + Linear；(1920, 1080, 1920, 1080) | 成立 |
+| B2 | 同一场景里图像层读它也绑同一张 | r1 event 50 与 67 同一张 RT | 成立 |
+| B3 | 只有图像层读、没有模型读时 RT 不建 | r3：帧里只有场景的清屏；图像层绑 6×6 黄黑棋盘格，Wrap + Point，`Resolution` (6, 6, 6, 6) | RT 不建成立；绑的是棋盘格占位（新事实） |
+| B4 | 反射图的清屏不看 `clearenabled` | r4：场景不清，反射图仍清成清屏色 | 成立 |
+| B5 | 清屏色运行中改了，反射图跟着变 | r5：`p_cc` → (0.8, 0.1, 0.3)，反射图 (204, 25, 76)/255 | 成立 |
+| B6 | HDR 下仍是 RGBA8，清屏色截到 [0, 1] | r6：场景目标 RGBA16F；反射图 (255, 127, 64)/255（清屏色 2 0.5 0.25） | 成立 |
+| B7 | `_rt_MipMappedFrameBuffer` 图像层读也建；整张 (0, 0, 0, 1)；mip 数 = max(1, min(log2(npot(w)/2), log2(npot(h)/2)) − 2)，`g_Texture<n>MipMapInfo`（float）= mip 数 | r7：1920×1080 8 级、1600×900 7 级，各级全黑 alpha 1，ClampEdge + 三线性；MipMapInfo 8.0 / 7.0 | 成立 |

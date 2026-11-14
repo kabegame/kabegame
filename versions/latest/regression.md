@@ -2676,3 +2676,16 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | Y5 日历（`getLayer(图层对象)`） | Windows dev 屏外宿主 + WPE 抓帧 | `3824424509` 用探针 `scripts: { clock }` 渲染，和 WPE 同一天的抓帧比日历区域 | 日历格子相同；脚本不再报 `objects/8/visible` 的错误 | 2026-11-14 Claude：日历格子区域 0 差异（2026 年 11 月、14 号标红）；差异只在时钟秒数（两边时刻不同） |
 | [x] | Y6 解锁场景 | 同上 | `2861028294`、`3429479356` 各抓 WPE 一帧，探针按同一时刻渲染并排看 | 文字内容与位置一致 | 2026-11-14 Claude：`2861028294` 的日期、星期、时间与位置一致（差异是随机粒子）。`3429479356` 带 4K 视频纹理（约 700 MB），探针等第一帧超过 10 s 上限（三次都超时）。改做复制工程 `ignore/p6/b2/real/3429-text`（`kbp content isolate` 去掉视频层，留文字、logo、音频控制器）：时钟文字「12:01 PM」与位置和 WPE 一致，脚本没有报错；1920×1080 窗口下剩的差异在两个挂 `blurprecise` 的图层（时钟发光层 1493 个像素、logo 阴影 9059 个像素，最大差 58 / 50）。逐 draw 查下去，阴影层的合成 RT 与横向模糊和 WPE 都是 0 差异，WPE 最后一步按 1920×1080 的视口直接画、我们按场景 3840×2160 画再缩。改用 3840×2130 窗口（`A:\p6b\p6b2-3429-text-4k\`）比，整帧 0 差异，所以这些是 FINAL_CHECK 已登记的「先按场景分辨率画再缩」，不是模糊 effect 的问题 |
 | [ ] | Y7 解锁场景实时运行 | Windows dev，预览与桌面 | `3429479356`、`2861028294`、`3824424509` 在图库预览里打开、设为桌面壁纸 | 时钟走、日历是当天、提示文字轮换，没有脚本错误 | 待测 |
+
+## 场景壁纸反射设置与「反射关」（P13b1）
+
+2026-11-14。设置「场景反射」（`wpeSceneReflection`，跟随 WPE 的 `reflection`）；反射关时 `_rt_Reflection` 每帧清成清屏色、`_rt_MipMappedFrameBuffer` 加载时清成 (0, 0, 0, 1)。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md` 第 1、4 节与 `p13-REPORT.md`「P13b1 的实测」，计划、实施记录与走查见同目录 `phase-13b1-reflection-off.md`，测试工程 `ignore/p13/proj/p13b1-*`（`ignore/p13/b1/gen_b1.py`），走查工程 `ignore/p13/proj/{arsenal,audiophile,fantasticcar}-kbp`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | R0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；`kabegame-core` 设置单测；`cargo check`、vue-tsc | 0 error、全过 | 2026-11-14：tsc 0 error；vitest 只有 `pipeline.test.ts` 的 `3293687972` 读取上限（工作区原有，与本节无关）；13 处变异全部检出 |
+| [x] | R1 语料 | Node，197 个工程 | 前后重扫 `unsupported` | 只去掉 `_rt_Reflection`、`_rt_MipMappedFrameBuffer` 与对应的 `MipMapInfo` | 2026-11-14：干净 100 → 108（arsenal、audiophile、fantasticcar 与 5 个测试工程），没有新增键 |
+| [x] | R2 生成工程对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 清屏色、只有图像层读、`clearenabled: false`、属性改清屏色、HDR、mip 帧缓冲各一个工程 | 整帧逐像素相同 | 2026-11-14：4 个工程 0 差异；`clearenabled: false` 只差 RenderDoc 叠在没画到区域的文字；HDR 那张反射图与泛光前的场景目标逐值相同，上屏只差泛光链 ≤ 4 级 |
+| [x] | R3 真实壁纸走查 | Windows dev + WPE 抓帧，1920×1080，fps 20 | arsenal、audiophile、fantasticcar 各录 5 帧，`renderFrames.ts` 按日志逐帧回放、`kbp cmp frames` 比、逐 draw 对常量 | 读反射图的地面逐像素相同，差异逐处有解释 | 2026-11-14：地面相同；> 2 级的只有孤立的网格边像素（每帧 0–11 个），常量除相机矩阵差 1e-6 外逐值相同，归「网格边上的覆盖翻转」 |
+| [ ] | R4 设置页切换 | Windows dev（新构建） | 设置页「场景反射」切三档，预览 Arsenal | 跟随 / 关闭能渲染；开启显示预览图；切换时场景重新加载 | 待重启 dev 后真机看（运行中的 dev 构建还没有新命令，宿主按跟随处理） |
+| [ ] | R5 非 Windows | macOS / Linux | 预览 Arsenal | 同 Windows | 本机不能测 |

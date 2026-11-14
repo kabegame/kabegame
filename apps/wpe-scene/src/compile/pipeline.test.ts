@@ -402,6 +402,10 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
       "techno",
       // 遗留灯（P13a）：自带着色器读 g_LightsPosition / g_LightsColorRadius
       "demon_core",
+      // 平面反射读者（P13b1，反射关时 `_rt_Reflection` 是常量纹理；下面两次编译把反射设置固定为关闭）
+      "arsenal",
+      "audiophile",
+      "fantasticcar",
     ];
     // 工坊样本：用户真机确认过（2026-11-07）。不是每台机器都订阅，所以不要求存在
     const workshopUnlocked = ["2077883354", "2077888249", "2418800402", "2833452727", "2961807954"];
@@ -419,13 +423,14 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
         // 运行时的形态：确定退回就停（统计请求与读取量）
         const tally = newTally();
         vi.stubGlobal("fetch", nodeFetch(tally));
-        // 后处理固定为关闭，结果不随本机 WPE 设置变化（档位裁决另有单测）
+        // 后处理与反射固定为关闭，结果不随本机 WPE 设置变化（档位裁决另有单测）
         const fast = await compileScene({
           projectDir: dir,
           sceneAssets: [join(root!, "assets")],
           reader: new FetchSceneReader(),
           translator,
           postprocess: "disabled",
+          reflection: "disabled",
         });
         // 列全不支持项（能力表统计）
         vi.stubGlobal("fetch", nodeFetch(newTally()));
@@ -435,6 +440,7 @@ describe.skipIf(!root || !existsSync(wasm))("本机 WPE 场景语料", () => {
           reader: new FetchSceneReader(),
           translator,
           postprocess: "disabled",
+          reflection: "disabled",
           exhaustive: true,
         });
         check(fast.unsupported.length > 0 === bundle.unsupported.length > 0, `${dir}: 快速路径与完整编译的结论不同`);

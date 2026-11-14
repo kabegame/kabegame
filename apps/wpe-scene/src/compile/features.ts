@@ -169,8 +169,8 @@ export const EFFECT_UNIFORMS: ReadonlySet<string> = new Set(["g_LayerModelMatrix
  * - `SPRITESHEET`：要逐帧的 `g_Texture0Rotation` / `Translation`（P6），现在只给恒等帧；
  * - 蒙皮、变形、预光照：对应的 uniform 也会被 `uniform:*` 报出，这里一并列上，防止只改 COMBO 漏报。
  * - `REFLECTION` 不在这里（P13a）：这个名字在工坊 `cursorripple` 里是波纹在边界反弹的开关、在 `genericimage2` 不带法线图时只是着色器
- *   分支，都不要引擎数据。要引擎数据的两种反射由读到的 RT 报出：平面反射 `texture:rendertarget:_rt_Reflection`，屏幕空间反射
- *   `texture:rendertarget:_rt_MipMappedFrameBuffer` 与 `uniform:g_Texture3MipMapInfo`（p13-REPORT 第 19 条）。
+ *   分支，都不要引擎数据。要引擎数据的两种反射由读到的 RT 报出：平面反射 `reflection:planar`（P13b1 起），屏幕空间反射
+ *   `reflection:screen`（P13b1 起 `_rt_MipMappedFrameBuffer` 与槽对应的 `g_Texture<n>MipMapInfo` 在反射关时由渲染器给常量，不再单独报）。
  * `ALPHATOCOVERAGE` 自 P8 步骤 5 起不在这里：混合 `alphatocoverage` 的 pass 编译时加它（`writeState.ts` 的 `materialCombos`），着色器
  * 只做 alpha 锐化，丢弃由渲染器的 A2C 入口做；材质自己写它而混合不是 A2C 时只锐化、不丢弃，和 WPE（D3D11 下 `GLSL` 为 0）相同。
  */
@@ -1225,6 +1225,15 @@ export function checkPassFeatures(
 }
 
 /**
+ * `g_Texture<n>MipMapInfo`（P13b1，步骤 0 R7）：槽 n 绑的是 `_rt_MipMappedFrameBuffer` 时是引擎 uniform（float，= 该 RT 的 mip 数），
+ * 渲染器照写；别的槽照旧报 `uniform:*`。
+ */
+export function isMipMapInfoOf(name: string, mipSlots: ReadonlySet<number>): boolean {
+  const match = /^g_Texture(\d+)MipMapInfo$/.exec(name);
+  return match !== null && mipSlots.has(Number(match[1]));
+}
+
+/**
  * 翻译结果里依赖引擎、渲染器还不提供的部分：内置 uniform 与 COMBO。`extra` 是这类 pass 另外由渲染器写的引擎 uniform
  * （泛光链的 `g_RenderVar0`，见 `bloom.ts` 的 `POSTPROCESS_UNIFORMS`；粒子的 `PARTICLE_UNIFORMS`；effect pass 的 `EFFECT_UNIFORMS`；
  * 图层材质里它们没有意义，照报）。
@@ -1238,13 +1247,16 @@ export function checkProgramFeatures(
   extra: ReadonlySet<string> = new Set(),
   /** 放行的引擎 COMBO（P12a：puppet 的 pass 放行 `SKINNING`，`PUPPET_COMBOS`）。 */
   allowedCombos: ReadonlySet<string> = new Set(),
+  /** 绑 `_rt_MipMappedFrameBuffer` 的槽（P13b1）：这些槽的 `g_Texture<n>MipMapInfo` 是引擎 uniform。 */
+  mipSlots: ReadonlySet<number> = new Set(),
 ): void {
   for (const uniform of result.uniforms ?? [])
     if (
       !uniform.unused && // WPE 的反射里没有它，不进常量缓冲（p7-REPORT「P7d 的实测」）
       typeof uniform.meta?.material !== "string" &&
       !isEngineUniform(uniform.name) &&
-      !extra.has(uniform.name)
+      !extra.has(uniform.name) &&
+      !isMipMapInfoOf(uniform.name, mipSlots)
     )
       unsupported.add(`uniform:${uniform.name}`);
   for (const combo of result.combos ?? [])

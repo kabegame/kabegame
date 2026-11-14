@@ -200,11 +200,11 @@ describe("planModelLayer：每个网格一个 mesh 步骤（P5c 步骤 2 点 1�
       0x9,
       4,
       [0, 1, 2],
-      [pass("objects/0/meshes/0/passes/0", { runtime: { 0: "_rt_Reflection" } }), pass("objects/0/meshes/0/passes/1")],
+      [pass("objects/0/meshes/0/passes/0", { runtime: { 0: "_rt_Unknown" } }), pass("objects/0/meshes/0/passes/1")],
     );
     expect(planModelLayer(modelLayer(0, "m", { meshes: [odd.mesh] })).reasons).toEqual([
       "render:multi-pass",
-      "render:texture-rt:_rt_Reflection",
+      "render:texture-rt:_rt_Unknown",
     ]);
     expect(planModelLayer({ model: null })).toEqual({ composite: null, steps: [], reasons: [] });
   });

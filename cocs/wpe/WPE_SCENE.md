@@ -41,6 +41,17 @@
 - **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，阴影 / cookie 报 `lightconfig:*`，体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
 - 本机语料没有一张真的开 `LIGHTING`，这条路径靠 `ignore/lighting/` 的测试工程和 WPE 1:1 对比（最大差 1）。普通图层带法线图时另有 UV 内缩的差异（已知，最大 10）。
 
+## 反射（P13b1：设置与「反射关」）
+
+读码与实测见 [rea-p13-passes](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md) 第 1、4 节与 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13b1 的实测」，计划与走查见 [phase-13b1-reflection-off](../../.claude/plans/wpe-import/3-scene/phase13/phase-13b1-reflection-off.md)。
+
+- **设置「场景反射」**（`wpeSceneReflection`：`follow` 缺省 / `disabled` / `enabled`，`get_wpe_scene_reflection` 场景宿主可读）：跟随时读 WPE `config.json` 的 `general.user.reflection`（缺键、读不到、不是布尔都当开，`compile/postprocess.ts` 的 `resolveReflection`）。WPE 这一个设置同时管平面反射与屏幕空间反射；宿主随 `setting-change` 整场重新加载。只在场景里有读者时才读 `config.json`。
+- **两张运行时 RT**（`compile/bundle.ts` 的 `REFLECTION_RT` / `MIP_FRAMEBUFFER_RT` 进 `bindRuntime`，渲染图的纹理来源 `{ kind: "reflection" }` / `{ kind: "mip-framebuffer" }`，`render/graph.ts` 的 `runtimeInput` 统一翻译；RT 在 `render/reflection.ts` 的 `ReflectionTargets`）：
+  - `_rt_Reflection`：只有**模型**的网格材质读它时才建（WPE 的触发条件），`bundle.reflection.planar`。场景目标尺寸（WPE 是窗口尺寸）、`rgba8unorm`（HDR 下也是），Clamp + Linear；反射关时每帧在主 pass 之前清成 `(clearcolor, 1)`，不看 `clearenabled`，HDR 的大于 1 的清屏色在 8 位上截到 1。同一场景里图像层 / 粒子读它绑同一张。**没有模型读、只有图像层或粒子读**时 WPE 不建，那一槽绑 6×6 黄黑棋盘格占位（编译期在全部对象编完后回改成静态纹理 `checkerIndex()`）。
+  - `_rt_MipMappedFrameBuffer`：任何对象读到就建，`bundle.mipFramebuffer`。场景目标尺寸、格式跟场景目标（HDR 时 `rgba16float`），mip 数 `max(1, min(log2(npot(w)/2), log2(npot(h)/2)) − 2)`（1920×1080 为 8、1600×900 为 7），Clamp + 三线性；反射关时建好后各级清成 `(0, 0, 0, 1)` 一次、之后不动。绑它的槽的 `g_Texture<n>MipMapInfo`（float）是引擎 uniform，值为 mip 数（`features.ts` 的 `isMipMapInfoOf`），别的槽照报 `uniform:*`。
+- **照报**：设置为开（或跟随且 WPE 开着）时，有平面反射的场景报 `reflection:planar`、有 mip 帧缓冲的报 `reflection:screen`，整张退回预览图（「开」分别是 P13b2、P13g）。
+- **实测**：确定性工程（`ignore/p13/b1/gen_b1.py`）和 WPE 整帧逐像素相同（HDR 那张反射图与泛光前的场景目标逐值相同，最后只差泛光链的 ≤ 4 级）；arsenal、audiophile、fantasticcar 按日志逐帧回放，读反射图的地面逐像素相同，余下的是孤立的网格边像素（相机矩阵 1e-6 量级的差导致的覆盖翻转）。能渲染 +3 张（这三张）。
+
 ## 着色器翻译器 `wpesl2wgsl`
 
 完整契约（请求 / 结果、绑定布局、uniform 打包、内部流程、已知不支持、测试）见

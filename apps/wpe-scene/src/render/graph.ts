@@ -81,7 +81,15 @@
  *   合成 RT 与 effect fbo 都按新纹理重算（WPE 的就绪回调 `FUN_140209360`，rea-p11b 4.2）：`planLayer` 的 `userBase` 是这一刻基础材质槽 0
  *   的用户纹理尺寸（`UserBase`），没有图时不传、与没有用户纹理时逐字节相同。
  */
-import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
+import {
+  FRAMEBUFFER_RT,
+  MIP_FRAMEBUFFER_RT,
+  REFLECTION_RT,
+  type SceneFbo,
+  type SceneLayer,
+  type ScenePass,
+  type SceneTexture,
+} from "../compile/bundle";
 import { isRopeRenderer, MAX_CHILD_DEPTH, particleDraws, type SceneParticle } from "../compile/particles";
 import type { UserTextureSlot } from "../compile/usertextures";
 import { NO_INSET, textureUvExtent, uvInset } from "./layout";
@@ -91,6 +99,10 @@ export type TextureRef =
   | { kind: "composite"; index: number }
   | { kind: "fbo"; effect: number; name: string }
   | { kind: "framebuffer" }
+  /** 平面反射 RT（P13b1，`render/reflection.ts`）：场景目标尺寸、RGBA8，反射关时每帧清成清屏色。Clamp + Linear。 */
+  | { kind: "reflection" }
+  /** mip 帧缓冲（P13b1〔g1〕，`_rt_MipMappedFrameBuffer`）：反射关时加载时清成 (0, 0, 0, 1)，之后不更新。Clamp + 三线性。 */
+  | { kind: "mip-framebuffer" }
   /**
    * 文本层的字形图集（P6b 1d）：本层排版结果所在的 R8 主图集（`color: false`）或 RGBA8 彩色图集（`true`），按字体键共享，渲染器建场景时
    * 整张上传。线性过滤、repeat、没有 mip（rea-p6b-raster 3.2，p6b 抓帧的采样器是 Wrap）。
@@ -107,6 +119,17 @@ export type TextureRef =
    * 加载时就有值的 RT 参考槽）用 `fallback`：编译期的缺省纹理（`{ kind: "texture" }` 或被依赖图层的 `{ kind: "layer" }`），同没有用户纹理时。
    */
   | { kind: "user"; slot: UserTextureSlot; fallback: TextureRef };
+/**
+ * 运行时名字 → 纹理来源（`ScenePass.runtime` 的值）：快照与 P13b1 的两张反射 RT。effect 自己的 fbo 由调用方先判；
+ * 认不出返回 null，调用方报 `render:texture-rt:<名>`。
+ */
+function runtimeInput(name: string): TextureRef | null {
+  if (name === FRAMEBUFFER_RT) return { kind: "framebuffer" };
+  if (name === REFLECTION_RT) return { kind: "reflection" };
+  if (name === MIP_FRAMEBUFFER_RT) return { kind: "mip-framebuffer" };
+  return null;
+}
+
 export type TargetRef =
   { kind: "scene" } | { kind: "composite"; index: number } | { kind: "fbo"; effect: number; name: string };
 
@@ -467,7 +490,7 @@ export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPla
     if (system.passes.length > 1) reasons.push("render:multi-pass");
     // 运行时纹理按基础材质查一次：各 renderer 的变体是同一个材质加宏（rea-p4f-script.md 8.1），槽位与 `_rt_*` 名字都相同
     for (const name of Object.values(pass.runtime))
-      if (name !== FRAMEBUFFER_RT) reasons.push(`render:texture-rt:${name}`);
+      if (runtimeInput(name) === null) reasons.push(`render:texture-rt:${name}`);
     // 一个系统几条表内 renderer 就几个步骤（P4f 步骤 4，rea-p4f-script.md 8.3）：数组顺序、各用自己那一条的变体，都排在子系统之前
     // （`visitParticleTemplates` 在本回调之后才走子孙，同 WPE 的循环在递归之前）。`draws` 为空（`renderer: []`）时不出步骤，照常列子系统
     const draws = particleDraws(system);
@@ -479,8 +502,10 @@ export function planParticleLayer(layer: Pick<SceneLayer, "particle">): LayerPla
       const variant = draw.passes[0];
       if (!variant) return;
       const inputs = passInputs(variant);
-      for (const [slot, name] of Object.entries(variant.runtime))
-        if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
+      for (const [slot, name] of Object.entries(variant.runtime)) {
+        const input = runtimeInput(name);
+        if (input) inputs[Number(slot)] = input;
+      }
       steps.push({
         kind: "particles",
         pass: variant,
@@ -561,7 +586,8 @@ export function planModelLayer(layer: Pick<SceneLayer, "model">): LayerPlan {
     if (mesh.passes.length > 1) reasons.push("render:multi-pass");
     const inputs = passInputs(pass);
     for (const [slot, name] of Object.entries(pass.runtime)) {
-      if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
+      const input = runtimeInput(name);
+      if (input) inputs[Number(slot)] = input;
       else reasons.push(`render:texture-rt:${name}`);
     }
     steps.push({
@@ -596,7 +622,8 @@ export function planShapeLayer(layer: Pick<SceneLayer, "effects">): LayerPlan {
   const { pass } = step;
   const inputs = passInputs(pass);
   for (const [slot, name] of Object.entries(pass.runtime)) {
-    if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
+    const input = runtimeInput(name);
+    if (input) inputs[Number(slot)] = input;
     else reasons.push(`render:texture-rt:${name}`);
   }
   if (pass.framebuffer) steps.push({ kind: "snapshot" });
@@ -686,8 +713,10 @@ export function planLayer(
   const staticInputs = (pass: ScenePass, effect: number | null): Record<number, TextureRef> => {
     const inputs = passInputs(pass);
     for (const [slot, name] of Object.entries(pass.runtime)) {
+      const input = runtimeInput(name);
       if (name === FRAMEBUFFER_RT) inputs[Number(slot)] = { kind: "framebuffer" };
       else if (effect !== null && fboNames[effect].has(name)) inputs[Number(slot)] = { kind: "fbo", effect, name };
+      else if (input) inputs[Number(slot)] = input;
       else reasons.push(`render:texture-rt:${name}`);
     }
     return inputs;

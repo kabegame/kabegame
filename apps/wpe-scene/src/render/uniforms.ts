@@ -180,7 +180,10 @@ export interface StaticBuiltinInput {
   skylight?: readonly number[];
 }
 
-type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
+type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight"> & {
+  /** `_rt_MipMappedFrameBuffer` 的 mip 数（P13b1）：只有绑它的槽有，写 `g_Texture<n>MipMapInfo`（float）。 */
+  mipCount?: number;
+};
 
 /** 空纹理槽的 `g_Texture<n>Resolution` / `g_Texture<n>Texel`（WPE `FUN_1400d8300`）。 */
 const EMPTY_RESOLUTION = [2, 2, 2, 2];
@@ -205,6 +208,7 @@ export function textureBuiltins(textures: readonly (TextureSize | undefined)[]):
     values[`g_Texture${slot}Texel`] = texture
       ? [1 / texture.textureWidth, 1 / texture.textureHeight, texture.textureWidth, texture.textureHeight]
       : EMPTY_TEXEL;
+    if (texture?.mipCount !== undefined) values[`g_Texture${slot}MipMapInfo`] = [texture.mipCount];
   });
   return values;
 }

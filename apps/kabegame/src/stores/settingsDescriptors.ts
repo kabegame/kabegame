@@ -214,6 +214,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(
       tauri("wallpaperPaused", "get_wallpaper_paused", "set_wallpaper_paused", "paused"),
       tauri("wpeScenePostprocess", "get_wpe_scene_postprocess", "set_wpe_scene_postprocess", "value"),
+      tauri("wpeSceneReflection", "get_wpe_scene_reflection", "set_wpe_scene_reflection", "value"),
       tauri("wpeEngineDir", "get_wpe_engine_dir", "set_wpe_engine_dir", "dir"),
     );
   }

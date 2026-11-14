@@ -254,6 +254,7 @@ import {
   SCENE_DEPTH_FORMAT,
   type GpuProgram,
 } from "./programs";
+import { ReflectionTargets } from "./reflection";
 import { transparentDrawOrder } from "./sortOrder";
 import type { DirtyState, LayerState, SceneState } from "./state";
 import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
@@ -717,7 +718,10 @@ interface Draw {
 }
 
 /** 纹理尺寸（与 `render/uniforms.ts` 的 `TextureSize` 同形）。 */
-type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
+type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight"> & {
+  /** `_rt_MipMappedFrameBuffer` 的 mip 数（P13b1）：只有绑它的槽有，写 `g_Texture<n>MipMapInfo`。 */
+  mipCount?: number;
+};
 
 /** 一张用户纹理的 GPU 资源（P11b 步骤 2，`GpuScene.userGpu`）：裁后宽高就是纹理尺寸。 */
 interface UserGpu {
@@ -1128,6 +1132,8 @@ export class GpuScene {
   /** `linearizeBase` 的管线，第一次用时才建。 */
   private linearBase: { pipeline: GPURenderPipeline; bindGroup: GPUBindGroup } | null = null;
   private snapshot: RenderTarget | null = null;
+  /** `_rt_Reflection` 与 `_rt_MipMappedFrameBuffer`（P13b1，`reflection.ts`）；bundle 里没有读者时为 null。 */
+  private reflectionTargets: ReflectionTargets | null = null;
   /**
    * 场景目标的深度附件（P5d 步骤 1，`depth32float`，`wantsDepth`）：有测深度的绘制画进场景目标才建，尺寸同场景目标；两张交替的场景目标
    * 共用这一张（同 WPE 后备缓冲的深度不随交换链翻转）。没有时为 null，管线与 render pass 都不带深度。
@@ -2280,6 +2286,9 @@ export class GpuScene {
       uploadable.has(index) ? this.own(uploadTexture(device, texture)) : null,
     );
     this.dummies = this.createDummies();
+    // 反射的两张常量 RT（P13b1）：场景目标尺寸，只在有读者时建；要在建任何 draw 之前就位（`resolveTexture`）
+    this.reflectionTargets = ReflectionTargets.create(device, bundle, width, height, hdr);
+    if (this.reflectionTargets) this.targetBytes += this.reflectionTargets.bytes;
     this.atlasTextures = new TextAtlasTextures(
       device,
       this.sampler(ATLAS_SAMPLER),
@@ -2478,15 +2487,25 @@ export class GpuScene {
     }
     if (ref.kind === "texture") return this.bundle.textures[ref.index];
     const target = this.resolveTexture(ref, resources);
-    return target
-      ? { width: target.width, height: target.height, textureWidth: target.width, textureHeight: target.height }
-      : undefined;
+    if (!target) return undefined;
+    const size: TextureSize = {
+      width: target.width,
+      height: target.height,
+      textureWidth: target.width,
+      textureHeight: target.height,
+    };
+    // `g_Texture<n>MipMapInfo`（P13b1，步骤 0 R7）：只有绑 mip 帧缓冲的槽有，值是它的 mip 数
+    if (ref.kind === "mip-framebuffer") size.mipCount = this.reflectionTargets?.mipLevelCount;
+    return size;
   }
 
   private resolveTexture(ref: TextureRef, resources: LayerResources): RenderTarget | null {
     if (ref.kind === "composite") return resources.composites[ref.index] ?? null;
     if (ref.kind === "fbo") return this.targets[resources.fbos.resolve(ref.effect, ref.name)] ?? null;
     if (ref.kind === "framebuffer") return this.snapshot;
+    // 反射的两张 RT（P13b1）：没建（bundle 没记读者）时为 null，建 draw 时报 `render:texture-rt:<kind>`
+    if (ref.kind === "reflection") return this.reflectionTargets?.reflection ?? null;
+    if (ref.kind === "mip-framebuffer") return this.reflectionTargets?.mipFramebuffer ?? null;
     if (ref.kind === "atlas") return (ref.color ? resources.atlases?.color : resources.atlases?.main) ?? null;
     // 别的图层的独占 RT（P8 步骤 4）；那一层没建资源时为 null，建 draw 时报 `render:texture-rt:layer`
     if (ref.kind === "layer") return this.layerTargets.get(ref.object) ?? null;
@@ -4165,6 +4184,8 @@ export class GpuScene {
     // 粒子层现排时的世界矩阵（P4e 步骤 2）：这一刻的状态下，一条父链只算一次
     const worlds = new Map<number, Mat4>();
     const [r, g, b] = clearcolor;
+    // 平面反射 RT（P13b1）：反射关时每帧清成清屏色，在主 pass 之前，不看 clearenabled（rea-p13-passes 1.1）
+    this.reflectionTargets?.encode(encoder, clearcolor);
     if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);
     const snapshot = () => {
       if (this.snapshot)
@@ -4383,6 +4404,8 @@ export class GpuScene {
     this.alternate = null;
     this.linearBase = null;
     this.snapshot = null;
+    this.reflectionTargets?.destroy();
+    this.reflectionTargets = null;
     this.depthTarget = null;
     this.bloom = null;
     this.particleIndices = null;

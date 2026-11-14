@@ -111,9 +111,12 @@ import {
   bloomParams,
   flagValue,
   readWpePostprocessing,
+  readWpeReflection,
   resolvePostprocessLevel,
+  resolveReflection,
   scenePostprocessState,
   type BloomParams,
+  type SceneReflectionSetting,
   type ScenePostprocessSetting,
   type ScenePostprocessState,
 } from "./postprocess";
@@ -695,6 +698,13 @@ export interface SceneBundle {
    * 有链不等于开着：当前开不开看 `SceneState.bloomEnabled`，关着时渲染路径同样与 P2a 相同。
    */
   bloom: SceneBloom | null;
+  /**
+   * 平面反射 RT（P13b1，`_rt_Reflection`）：只有模型的网格材质读它时 WPE 才建这张 RT，才有反射 pass（rea-p13-passes 1.1、1.4）；
+   * 只有图像层 / 粒子读它时 WPE 不建，那一槽绑的是棋盘格占位（编译期已改成静态纹理，不记这个键）。`compileScene` 在有模型读时才写。
+   */
+  reflection?: { planar: boolean };
+  /** `_rt_MipMappedFrameBuffer` 被任何对象读到（P13b1〔g1〕，rea-p13-passes 4.1）：渲染器建带 mip 的 RT，反射关时加载时清成 (0, 0, 0, 1)。 */
+  mipFramebuffer?: boolean;
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
   unsupported: string[];
   /**
@@ -732,6 +742,8 @@ export interface CompileSceneInput {
   translator: Wpesl2wgsl | null;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
   postprocess?: ScenePostprocessSetting;
+  /** 设置「场景反射」（P13b1）；缺省跟随 WPE 的 `general.user.reflection`（缺键当开）。 */
+  reflection?: SceneReflectionSetting;
   /** dev 强制渲染：有不支持项也照常解码 mip，好让渲染器画出半成品（D4）。 */
   force?: boolean;
   /**
@@ -743,6 +755,10 @@ export interface CompileSceneInput {
 
 /** 场景目标的整帧快照（B8）。 */
 export const FRAMEBUFFER_RT = "_rt_FullFrameBuffer";
+/** 平面反射 RT（P13b1）：反射关时每帧清成场景清屏色。 */
+export const REFLECTION_RT = "_rt_Reflection";
+/** 屏幕空间反射用的 mip 帧缓冲（P13b1〔g1〕）：反射关时加载时清成 (0, 0, 0, 1)、之后不更新。 */
+export const MIP_FRAMEBUFFER_RT = "_rt_MipMappedFrameBuffer";
 
 /**
  * colorBlendMode ∉ {0, 31} 时的 passthrough 上屏材质（B8，`FUN_1401ecae0` → 0x1401853b0）：看场景 `scene.json` 顶层的
@@ -1021,6 +1037,8 @@ interface PassContext {
    * 能力检查只扫材质 JSON 自己的（`checkPassFeatures` 的 `sceneConstants`，P10a 步骤 2）。
    */
   sceneConstants?: Readonly<Record<string, unknown>>;
+  /** 模型的网格材质（P13b1）：只有它读 `_rt_Reflection` 才算 WPE 建了那张 RT。 */
+  model?: boolean;
   /** instanced 图层（P11b）：对象 `size` 解析出的用户纹理参考尺寸；非 instanced 不传（`parseUserTextures` 的 `options.instanceSize`）。 */
   instanceSize?: { width: number; height: number } | null;
   /** puppet 的 pass（P12a）：程序检查放行 `SKINNING` 组合键与 `g_Bones`（`PUPPET_UNIFORMS`）。 */
@@ -1217,6 +1235,18 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     }
     return checker;
   };
+  /**
+   * 读 `_rt_Reflection` 的 pass 槽（P13b1，rea-p13-passes 1.1）：全部对象编完之后看有没有模型的网格读它；没有就把别的读者那一槽
+   * 改绑棋盘格。记的是 pass 自己的 `runtime` / `textures` 对象，回改直接作用在已编好的 pass 上。
+   */
+  const reflectionReaders: {
+    runtime: Record<number, string>;
+    slots: Record<number, number>;
+    slot: number;
+    model: boolean;
+  }[] = [];
+  /** 有 pass 读 `_rt_MipMappedFrameBuffer`（P13b1〔g1〕）。 */
+  let mipReaders = false;
   // 粒子字段的缺省值按正交 / 透视选两套（`rea-p4a.md`「基础」），读上面的 `orthographic`
   const textureIndex = new Map<string, number>();
   /** 纹理下标 → 它的不支持项：同一张可能被关着的 effect 与启用的 effect 共用，缓存命中时重新上报。 */
@@ -1590,7 +1620,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 语料的模型材质都是一个 pass；多 pass 的网格 WPE 怎么画没测
     if (passes.length > 1) unsupported.add("mdl:material-passes");
     for (const [k, pass] of passes.entries()) {
-      const compiled = await compilePass(pass, { key: `objects/${index}/meshes/${m}/passes/${k}` });
+      const compiled = await compilePass(pass, {
+        key: `objects/${index}/meshes/${m}/passes/${k}`,
+        model: true,
+      });
       if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], mesh.format, unsupported);
       if (compiled.framebuffer) unsupported.add("mdl:framebuffer");
       out.passes.push(compiled);
@@ -1611,9 +1644,20 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const bindRuntime = (slot: number, name: string): boolean => {
       if (name === FRAMEBUFFER_RT) runtime[slot] = name;
       else if (context.fbos?.has(name)) runtime[slot] = name;
-      else return false;
+      else if (name === REFLECTION_RT) {
+        runtime[slot] = name;
+        reflectionReaders.push({ runtime, slots, slot, model: !!context.model });
+      } else if (name === MIP_FRAMEBUFFER_RT) {
+        runtime[slot] = name;
+        mipReaders = true;
+      } else return false;
       return true;
     };
+    /** 运行时 RT 的格式（着色器的 `TEX<n>FORMAT`）：反射图是 RGBA8，mip 帧缓冲跟场景目标，其余按 effect 的 fbo。 */
+    const runtimeFormat = (name: string): number =>
+      name === MIP_FRAMEBUFFER_RT && postprocess.hdr
+        ? FBO_FORMATS.rgba16161616f.tex
+        : FBO_FORMATS[context.fbos?.get(name)?.format ?? "rgba8888"].tex;
     /** 别的图层的独占 RT（P8 步骤 4）：槽位 → 被依赖图层的 `objects` 下标。 */
     const composites: Record<number, number> = {};
     /** 绑了棋盘格占位的槽（`_rt_imageLayerComposite_*` 没被依赖）：用户纹理的缺省是占位时照报（P11b）。 */
@@ -1651,8 +1695,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       // 别的图层的合成 RT（P8 步骤 4）：排在 `_rt_*` 之前（前缀相同），`planned` 的槽（`bind` 胜出，rea-p8-render 第 3 节）上面已跳过
       if (bindLayerComposite(slot, name, true)) continue;
       if (name.startsWith("_rt_")) {
-        if (bindRuntime(slot, name))
-          formats.push({ slot, format: FBO_FORMATS[context.fbos?.get(name)?.format ?? "rgba8888"].tex });
+        if (bindRuntime(slot, name)) formats.push({ slot, format: runtimeFormat(name) });
         else issues.add(`texture:rendertarget:${name}`);
         continue;
       }
@@ -1721,6 +1764,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     if (result?.ok) {
       // 粒子 pass 带粒子路径写的 uniform；effect pass（有 fbo 表的上下文）带只在 effect pass 写的 `g_LayerModelMatrix`
       // （P7d 步骤 2），基础材质读到它照报
+      // 绑 `_rt_MipMappedFrameBuffer` 的槽（材质 `textures`，或没写时着色器注解的缺省）：`g_Texture<n>MipMapInfo` 是引擎 uniform（P13b1）
+      const mipSlots = new Set<number>();
+      for (const binding of result.textures ?? []) {
+        const bound = names[binding.slot] || binding.meta?.default;
+        if (!planned.has(binding.slot) && bound === MIP_FRAMEBUFFER_RT) mipSlots.add(binding.slot);
+      }
+      for (const [slot, name] of names.entries())
+        if (!planned.has(slot) && name === MIP_FRAMEBUFFER_RT) mipSlots.add(slot);
       checkProgramFeatures(
         result,
         issues,
@@ -1734,6 +1785,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
                 ? PUPPET_UNIFORMS
                 : undefined,
         context.puppet ? PUPPET_COMBOS : undefined,
+        mipSlots,
       );
       // 着色器声明了、材质没给的槽位按注解 `default` 绑定（同 LWE `setupTextureUniforms` 先取着色器默认值）
       for (const binding of result.textures ?? []) {
@@ -2344,6 +2396,30 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     for (const effect of layer.effects)
       if (!effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER))
         effect.unsupported = [...effect.unsupported, GROUP_CHILD_FRAMEBUFFER].sort();
+  }
+  // 反射（P13b1）。设置解析成「反射开」一个布尔：跟随时读 WPE `config.json` 的 `general.user.reflection`，只在有读者时才读
+  if (reflectionReaders.length || mipReaders) {
+    const reflectionSetting = input.reflection ?? "follow";
+    const reflectionOn = resolveReflection(
+      reflectionSetting,
+      reflectionSetting === "follow" ? await readWpeReflection(input.reader, input.sceneAssets) : undefined,
+    );
+    if (reflectionReaders.some((reader) => reader.model)) {
+      // 平面反射（rea-p13-passes 1.1、1.4）：只有模型的网格读 `_rt_Reflection` 时 WPE 才建这张 RT、才有反射 pass
+      bundle.reflection = { planar: true };
+      if (reflectionOn) unsupported.add("reflection:planar"); // 反射开：P13b2 再做，照报
+    } else {
+      // RT 不建：WPE 把那一槽绑 6×6 黄黑棋盘格占位（步骤 0 R3）
+      for (const reader of reflectionReaders) {
+        delete reader.runtime[reader.slot];
+        reader.slots[reader.slot] = checkerIndex();
+      }
+    }
+    if (mipReaders) {
+      // 屏幕空间反射（rea-p13-passes 4.1）：任何对象读到就建
+      bundle.mipFramebuffer = true;
+      if (reflectionOn) unsupported.add("reflection:screen"); // 反射开：P13g 再做，照报
+    }
   }
   // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光且对象列表非空（A1）。当前开着，或运行中可能打开（绑了属性或挂了脚本）才建；
   // 不按「场景有脚本」判定：`bloom: false` 的场景大多带脚本，会平白多占显存。别的写入打开时走整场重编译（`SceneState.needsRecompile`）。

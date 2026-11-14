@@ -47,6 +47,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       userProperties: message.userProperties,
       scriptOverrides: message.scriptOverrides,
       postprocess: message.postprocess,
+      reflection: message.reflection,
       force: message.force,
       exhaustive: message.exhaustive,
       reader,

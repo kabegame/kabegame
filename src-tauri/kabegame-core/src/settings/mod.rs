@@ -131,6 +131,8 @@ pub enum SettingKey {
     WpeMediaIntegration,
     /// 场景壁纸后处理档位：follow（跟随 WPE 的 postprocessing）/ disabled / enabled / ultra
     WpeScenePostprocess,
+    /// 场景壁纸反射：follow（跟随 WPE 的 `general.user.reflection`，缺键当开）/ disabled / enabled
+    WpeSceneReflection,
     /// WPE 安装目录（场景的 `assets`、`config.json` 与 `ui_` 词条都从这里读）；None 时由
     /// `wpe::discover::engine_dir` 自动查找并写入，用户可以在壁纸设置里覆盖
     WpeEngineDir,
@@ -346,6 +348,9 @@ impl Settings {
             SettingKey::WpeScenePostprocess => {
                 SettingValue::String(DEFAULT_WPE_SCENE_POSTPROCESS.to_string())
             }
+            SettingKey::WpeSceneReflection => {
+                SettingValue::String(DEFAULT_WPE_SCENE_REFLECTION.to_string())
+            }
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
@@ -427,6 +432,7 @@ impl Settings {
             SettingKey::WallpaperPaused,
             SettingKey::WpeMediaIntegration,
             SettingKey::WpeScenePostprocess,
+            SettingKey::WpeSceneReflection,
             SettingKey::WpeEngineDir,
             SettingKey::WindowState,
             #[cfg(feature = "virtual-driver")]
@@ -560,6 +566,12 @@ impl Settings {
                 json.as_str()
                     .filter(|value| is_wpe_scene_postprocess(value))
                     .unwrap_or(DEFAULT_WPE_SCENE_POSTPROCESS)
+                    .to_string(),
+            )),
+            SettingKey::WpeSceneReflection => Ok(SettingValue::String(
+                json.as_str()
+                    .filter(|value| is_wpe_scene_reflection(value))
+                    .unwrap_or(DEFAULT_WPE_SCENE_REFLECTION)
                     .to_string(),
             )),
             #[cfg(feature = "virtual-driver")]
@@ -751,6 +763,7 @@ impl Settings {
             SettingKey::WallpaperPaused => "wallpaperPaused".to_string(),
             SettingKey::WpeMediaIntegration => "wpeMediaIntegration".to_string(),
             SettingKey::WpeScenePostprocess => "wpeScenePostprocess".to_string(),
+            SettingKey::WpeSceneReflection => "wpeSceneReflection".to_string(),
             SettingKey::WpeEngineDir => "wpeEngineDir".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             #[cfg(feature = "virtual-driver")]
@@ -1067,6 +1080,14 @@ impl Settings {
             .and_then(|c| c.load().as_string())
             .filter(|value| is_wpe_scene_postprocess(value))
             .unwrap_or_else(|| DEFAULT_WPE_SCENE_POSTPROCESS.to_string())
+    }
+
+    pub fn get_wpe_scene_reflection(&self) -> String {
+        Self::cells()
+            .get(&SettingKey::WpeSceneReflection)
+            .and_then(|c| c.load().as_string())
+            .filter(|value| is_wpe_scene_reflection(value))
+            .unwrap_or_else(|| DEFAULT_WPE_SCENE_REFLECTION.to_string())
     }
 
     pub fn get_window_state(&self) -> Option<WindowState> {
@@ -1474,6 +1495,20 @@ impl Settings {
         Ok(())
     }
 
+    /// 场景反射；只接受 `follow` / `disabled` / `enabled`。
+    pub fn set_wpe_scene_reflection(&self, value: String) -> Result<(), String> {
+        if !is_wpe_scene_reflection(&value) {
+            return Err(format!("无效的场景反射设置：{value}"));
+        }
+        let cells = Self::cells();
+        let new_value = SettingValue::String(value);
+        if let Some(cell) = cells.get(&SettingKey::WpeSceneReflection) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WpeSceneReflection, &new_value);
+        Ok(())
+    }
+
     /// WPE 安装目录；空串按未设置处理。是不是安装目录由调用方判断（`wpe::discover`，它只随 `wpe` feature 编译）。
     pub fn set_wpe_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
         let dir = dir
@@ -1553,6 +1588,13 @@ fn is_wpe_scene_postprocess(value: &str) -> bool {
     matches!(value, "follow" | "disabled" | "enabled" | "ultra")
 }
 
+/// 场景反射的默认值：跟随 WPE 安装目录 `config.json` 的 `general.user.reflection`（前端 `wpe-scene/compile/postprocess.ts` 解析）。
+const DEFAULT_WPE_SCENE_REFLECTION: &str = "follow";
+
+fn is_wpe_scene_reflection(value: &str) -> bool {
+    matches!(value, "follow" | "disabled" | "enabled")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1604,6 +1646,35 @@ mod tests {
             .as_string()
             .as_deref(),
             Some("disabled")
+        );
+    }
+
+    #[test]
+    fn wpe_scene_reflection_rejects_unknown_values() {
+        assert!(is_wpe_scene_reflection("follow"));
+        assert!(is_wpe_scene_reflection("disabled"));
+        assert!(is_wpe_scene_reflection("enabled"));
+        assert!(!is_wpe_scene_reflection("ultra"));
+        assert!(!is_wpe_scene_reflection(""));
+        assert_eq!(
+            Settings::json_value_to_setting_value(
+                SettingKey::WpeSceneReflection,
+                &serde_json::json!("high")
+            )
+            .unwrap()
+            .as_string()
+            .as_deref(),
+            Some("follow")
+        );
+        assert_eq!(
+            Settings::json_value_to_setting_value(
+                SettingKey::WpeSceneReflection,
+                &serde_json::json!("enabled")
+            )
+            .unwrap()
+            .as_string()
+            .as_deref(),
+            Some("enabled")
         );
     }
 

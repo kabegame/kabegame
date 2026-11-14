@@ -41,21 +41,51 @@ export interface ScenePostprocessState {
   hdr: boolean;
 }
 
-/** 从 WPE `config.json` 文本里取 `postprocessing`：顶层是 Steam 用户名（`?` 开头的键是安装信息），取第一个有该键的用户。 */
-export function wpePostprocessingOf(configText: string): string | null {
+/**
+ * 从 WPE `config.json` 文本里取 `general.user.<键>`：顶层是 Steam 用户名（`?` 开头的键是安装信息），取第一个「有该键且
+ * `accept` 认」的用户的值；文本不是 JSON 或没有这样的用户返回 undefined。
+ */
+export function wpeUserValueOf(
+  configText: string,
+  name: string,
+  accept: (value: unknown) => boolean = () => true,
+): unknown {
   let config: unknown;
   try {
     config = JSON.parse(configText.replace(/^﻿/, ""));
   } catch {
-    return null;
+    return undefined;
   }
-  if (!config || typeof config !== "object") return null;
+  if (!config || typeof config !== "object") return undefined;
   for (const [key, user] of Object.entries(config)) {
     if (key.startsWith("?") || !user || typeof user !== "object") continue;
-    const value = (user as { general?: { user?: { postprocessing?: unknown } } }).general?.user?.postprocessing;
-    if (typeof value === "string") return value;
+    const settings = (user as { general?: { user?: Record<string, unknown> } }).general?.user;
+    if (!settings || typeof settings !== "object" || !Object.hasOwn(settings, name)) continue;
+    if (accept(settings[name])) return settings[name];
   }
-  return null;
+  return undefined;
+}
+
+/** 从 WPE `config.json` 文本里取 `postprocessing`（字符串）。 */
+export function wpePostprocessingOf(configText: string): string | null {
+  const value = wpeUserValueOf(configText, "postprocessing", (v) => typeof v === "string");
+  return typeof value === "string" ? value : null;
+}
+
+/** 设置「场景反射」的取值；默认 `follow`。 */
+export type SceneReflectionSetting = "follow" | "disabled" | "enabled";
+
+export const SCENE_REFLECTION_SETTINGS: readonly SceneReflectionSetting[] = ["follow", "disabled", "enabled"];
+
+/**
+ * 反射开不开（rea-p13-passes 1.2）：WPE 的 `general.user.reflection` 是布尔，缺键补 true（`0x140047457`），
+ * 读不到 `config.json` 也按 true，值不是布尔同样按 true。不认识的设置值按跟随处理。
+ * `wpeValue` 是 `wpeUserValueOf(.., "reflection")` 的结果（读不到为 undefined / null）。
+ */
+export function resolveReflection(setting: string | null | undefined, wpeValue: unknown): boolean {
+  if (setting === "disabled") return false;
+  if (setting === "enabled") return true;
+  return typeof wpeValue === "boolean" ? wpeValue : true;
 }
 
 /** WPE 自己的取值 → 档位（`FUN_14010df40`：`memcmp(v, "disabled", 8)`，再比 `ultra` / `displayhdr`）。 */
@@ -223,13 +253,34 @@ export async function readWpePostprocessing(
   reader: SceneReader,
   sceneAssets: readonly string[],
 ): Promise<string | null> {
+  return readWpeUserValue(reader, sceneAssets, "postprocessing", (v) => typeof v === "string") as Promise<
+    string | null
+  >;
+}
+
+/** 读 WPE 用户设置里的 `reflection`（同上的查找方式）；读不到返回 undefined。只读。 */
+export async function readWpeReflection(reader: SceneReader, sceneAssets: readonly string[]): Promise<unknown> {
+  return (await readWpeUserValue(reader, sceneAssets, "reflection", () => true)) ?? undefined;
+}
+
+/** 依次查各安装目录的 `config.json`，第一个取到 `general.user.<键>` 的为准；postprocessing 取不到为 null。 */
+async function readWpeUserValue(
+  reader: SceneReader,
+  sceneAssets: readonly string[],
+  name: string,
+  accept: (value: unknown) => boolean,
+): Promise<unknown> {
   for (const assets of sceneAssets) {
     try {
-      const value = wpePostprocessingOf(new TextDecoder().decode(await reader.readWhole(wpeConfigPath(assets))));
-      if (value !== null) return value;
+      const value = wpeUserValueOf(
+        new TextDecoder().decode(await reader.readWhole(wpeConfigPath(assets))),
+        name,
+        accept,
+      );
+      if (value !== undefined) return value;
     } catch {
       // 没有这个文件或读不到：查下一个安装目录
     }
   }
-  return null;
+  return name === "postprocessing" ? null : undefined;
 }

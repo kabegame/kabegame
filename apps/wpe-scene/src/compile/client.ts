@@ -2,7 +2,7 @@ import { WPESL2WGSL_WASM_URL } from "../wpesl2wgsl";
 import { FetchSceneReader, type SceneReader } from "./fs";
 import type { SceneBundle } from "./bundle";
 import { decodeEncodedTextures, type TextureDecodeCache } from "./decode";
-import type { ScenePostprocessSetting } from "./postprocess";
+import type { SceneReflectionSetting, ScenePostprocessSetting } from "./postprocess";
 import { encodeFileError, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 export interface WorkerCompileInput {
@@ -12,6 +12,8 @@ export interface WorkerCompileInput {
   scriptOverrides?: Record<string, number[] | boolean | string>;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
   postprocess?: ScenePostprocessSetting;
+  /** 设置「场景反射」（P13b1）；缺省跟随 WPE。 */
+  reflection?: SceneReflectionSetting;
   /** dev 强制渲染（D4）：有不支持项也解码纹理。 */
   force?: boolean;
   exhaustive?: boolean;
@@ -94,6 +96,7 @@ async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> 
       userProperties: input.userProperties ?? {},
       scriptOverrides: input.scriptOverrides ?? {},
       postprocess: input.postprocess ?? "follow",
+      reflection: input.reflection ?? "follow",
       force: input.force === true,
       exhaustive: input.exhaustive === true,
       module,

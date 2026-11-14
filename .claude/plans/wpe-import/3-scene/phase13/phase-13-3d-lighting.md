@@ -383,3 +383,7 @@ const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as
 ### P13a — 能力表纠错、遗留灯与采样器宏别名（2026-11-14）
 
 子计划与实施记录见 [phase-13a-legacy-lights.md](phase-13a-legacy-lights.md)。`REFLECTION` 移出引擎 COMBO；遗留灯按 WPE 的槽位规则在编译期写三个数组（步骤 0 的确定性工程 6 条预测全部成立，另需逐步按单精度算）；翻译器沿对象宏找采样器别名。语料只去掉预期的键，干净 +3 张（`3413921910`、`3498150384`、demon_core，另加测试工程）；arsenal 只差 `_rt_Reflection`（P13b1）。
+
+### P13b1 — 反射设置与「反射关」（2026-11-14）
+
+子计划与实施记录见 [phase-13b1-reflection-off.md](phase-13b1-reflection-off.md)。三条待定按推荐（2026-11-14 用户：「按你的推荐开始」）：P13g 的「反射关」并进本节、设置只加反射一项、`_rt_Reflection` 用整张 RT。步骤 0 的 7 个确定性工程推翻一处预测：没有模型读 `_rt_Reflection` 时 WPE 给读它的图像层绑 6×6 棋盘格，照做。语料干净 100 → 108（arsenal、audiophile、fantasticcar 加测试工程）；三张按日志逐帧回放和 WPE 比，读反射图的地面逐像素相同，余下的是网格边的覆盖翻转。

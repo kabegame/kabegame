@@ -18,7 +18,12 @@ import { TextureDecodeCache } from "./compile/decode";
 import { FetchSceneReader } from "./compile/fs";
 import type { BindingTarget } from "./compile/bindings";
 import type { SceneScalar } from "./compile/model";
-import { SCENE_POSTPROCESS_SETTINGS, type ScenePostprocessSetting } from "./compile/postprocess";
+import {
+  SCENE_POSTPROCESS_SETTINGS,
+  SCENE_REFLECTION_SETTINGS,
+  type SceneReflectionSetting,
+  type ScenePostprocessSetting,
+} from "./compile/postprocess";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import type { SceneStyle } from "./render/layout";
 import { uploadableTextures, visibleObjects } from "./render/scene";
@@ -80,6 +85,12 @@ function asPostprocess(value: unknown): ScenePostprocessSetting {
     : "follow";
 }
 
+function asReflection(value: unknown): SceneReflectionSetting {
+  return SCENE_REFLECTION_SETTINGS.includes(value as SceneReflectionSetting)
+    ? (value as SceneReflectionSetting)
+    : "follow";
+}
+
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -129,6 +140,8 @@ export class SceneHost {
   private disposed = false;
   private paused = false;
   private postprocess: ScenePostprocessSetting | null = null;
+  /** 设置「场景反射」（P13b1）：最近一次加载用的值；还没加载过为 null。 */
+  private reflection: SceneReflectionSetting | null = null;
   /**
    * 累计全集（WPE 渲染器 `+0x1728`，I1）：键 → `{ type, value }`。保留 `type`，不学 WPE 的整项覆盖（I4）。
    * 加载传全集、运行时传增量，两条路都走 `apply`。
@@ -256,15 +269,29 @@ export class SceneHost {
     this.userTextures.onReady = (name) => this.onUserTextureReady(name);
     // 来源表建好后按当前暂停状态设一次（P11b 步骤 4，用户视频与 GIF 的时钟）
     this.userTextures.setPaused(this.paused || this.hidden);
-    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理设置", (raw) => {
+    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理与反射设置", (raw) => {
       if (this.disposed || !this.receivedProperties) return;
       const delta = (raw && typeof raw.changes === "object" ? raw.changes : raw) as Record<string, unknown> | null;
-      if (!delta || !("wpeScenePostprocess" in delta)) return;
-      const next = asPostprocess(delta.wpeScenePostprocess);
-      if (this.postprocess !== null && next === this.postprocess) return;
+      if (!delta) return;
+      const keys: string[] = [];
+      if ("wpeScenePostprocess" in delta) {
+        const next = asPostprocess(delta.wpeScenePostprocess);
+        if (this.postprocess === null || next !== this.postprocess) {
+          keys.push("wpeScenePostprocess");
+          options.report.debug(`场景壁纸 ${options.imageId} 后处理设置 ${this.postprocess} → ${next}，重新判定`);
+        }
+      }
+      // 反射（P13b1）：值变才重载；两项设置同时变（一条 setting-change 带两个键）只重载一次
+      if ("wpeSceneReflection" in delta) {
+        const next = asReflection(delta.wpeSceneReflection);
+        if (this.reflection === null || next !== this.reflection) {
+          keys.push("wpeSceneReflection");
+          options.report.debug(`场景壁纸 ${options.imageId} 反射设置 ${this.reflection} → ${next}，重新判定`);
+        }
+      }
+      if (!keys.length) return;
       // 设置变化引起的重载也计入探针的 recompiled（原因记 settings）
-      this.stats.recompiled.push({ reason: "settings", keys: ["wpeScenePostprocess"] });
-      options.report.debug(`场景壁纸 ${options.imageId} 后处理设置 ${this.postprocess} → ${next}，重新判定`);
+      this.stats.recompiled.push({ reason: "settings", keys });
       void this.reload();
     });
     // 应用页与这份存储不同来源，由后端广播：同一张图的全部宿主（预览、桌面）都停脚本、删前缀、重建
@@ -1078,6 +1105,15 @@ export class SceneHost {
     }
   }
 
+  private async readReflection(): Promise<SceneReflectionSetting> {
+    try {
+      return asReflection(await invoke<string>("get_wpe_scene_reflection"));
+    } catch (error) {
+      this.options.report.warn("读取场景反射设置失败，按跟随 WPE 处理：", error);
+      return "follow";
+    }
+  }
+
   /** 属性、档位或设备变化时重新编译；代数确保过期结果不能覆盖新场景。 */
   private async reload(): Promise<void> {
     if (!this.options.imageId) {
@@ -1100,9 +1136,14 @@ export class SceneHost {
         this.targetTask = null;
         throw error;
       }));
-      const [target, setting] = await Promise.all([targetTask, this.readPostprocess()]);
+      const [target, setting, reflection] = await Promise.all([
+        targetTask,
+        this.readPostprocess(),
+        this.readReflection(),
+      ]);
       if (id !== this.generation) return;
       this.postprocess = setting;
+      this.reflection = reflection;
       const force = forceRender();
       const userProperties = Object.fromEntries(
         [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
@@ -1114,6 +1155,7 @@ export class SceneHost {
         userProperties,
         scriptOverrides: Object.fromEntries(this.scriptOverrides),
         postprocess: setting,
+        reflection,
         force,
         textureCache: this.textureCache,
         reader: this.reader,

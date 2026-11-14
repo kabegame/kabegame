@@ -791,6 +791,8 @@ pub(crate) fn configure_app(
             set_wpe_media_integration,
             get_wpe_scene_postprocess,
             set_wpe_scene_postprocess,
+            get_wpe_scene_reflection,
+            set_wpe_scene_reflection,
             #[cfg(not(target_os = "android"))]
             get_web_server_enabled,
             #[cfg(not(target_os = "android"))]
