@@ -63,10 +63,10 @@ const PROJECT = {
  * objects：0 FR（颜色挂脚本）、1 T（alpha 挂脚本，用来记环境）、2 music（声音对象，没有脚本）。`scripts: false` 时都不挂脚本。
  * 场景 1920×1080，后处理关（`hdrFlag` 为 false）。
  */
-function compile(scripts = true): Promise<SceneBundle> {
+function compile(scripts = true, alpha: unknown = scripts ? { script: SCRIPT, value: 1 } : 1): Promise<SceneBundle> {
   const objects: SceneObject[] = [
     image({ id: 1, name: "FR", origin: "1820 40 0", color: scripts ? { script: SCRIPT, value: "0 0 1" } : "0 0 1" }),
-    image({ id: 2, name: "T", origin: "100 100 0", alpha: scripts ? { script: SCRIPT, value: 1 } : 1 }),
+    image({ id: 2, name: "T", origin: "100 100 0", alpha }),
     { id: 3, name: "music", sound: "sounds/a.mp3" } as SceneObject,
   ];
   return compileScene({
@@ -415,6 +415,39 @@ describe("createProbeScripts", () => {
       ["objects/1/alpha", "inited", 1, 3],
     ]);
     expect(scripts.result().frames).toBe(3);
+    scripts.dispose();
+  });
+
+  it("挂脚本又绑属性的字段（P6c 走查修复 1）：init 之后、首帧之前套属性值，第一次 update 收到属性值；脚本没有绑属性的字段不受影响", async () => {
+    const bundle = await compile(true, { script: SCRIPT, value: 1, user: "speed" });
+    const state = SceneState.fromBundle(bundle);
+    const seen: number[] = [];
+    const realm = fakeRealm({
+      "objects/0/color": frFactory,
+      "objects/1/alpha": () => ({
+        // init 写回 JSON 的 value（WPE 的 init 拿到的就是它）
+        init: () => 1,
+        update: (value: number) => {
+          seen.push(value);
+          return undefined;
+        },
+      }),
+    });
+    const scripts = createProbeScripts({
+      bundle,
+      state,
+      sceneAssets: ["A:/assets"],
+      properties: probeUserProperties(PROJECT, { speed: 5 }),
+      screen: [1280, 720],
+      options: OPTIONS,
+      createRealm: realm.createRealm,
+    });
+    // 编译期挂脚本的字段取 JSON 的 value
+    expect(state.layers.get(1)!.alpha).toBe(1);
+    await scripts.load();
+    expect(state.layers.get(1)!.alpha).toBe(5);
+    scripts.frame(0.1, 0.1);
+    expect(seen).toEqual([5]);
     scripts.dispose();
   });
 

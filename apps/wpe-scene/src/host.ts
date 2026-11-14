@@ -35,6 +35,7 @@ import type { SceneReporter } from "./report";
 import { schemeColor } from "./sceneStyle";
 import { instanceControlPoint, type InstanceField } from "./compile/particles";
 import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
+import { applyScriptedProperties } from "./script/initialApply";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, scriptDiagnostics, type ScriptTarget, type ScriptValue } from "./script/runtime";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "./script/stateWrite";
@@ -1309,6 +1310,16 @@ export class SceneHost {
           this.sceneAnimations = animations;
           animations.write(state, this.pushSoundVolume);
           this.runtime?.replayWrites();
+          // 挂脚本又绑属性的字段：`init` 拿的是 JSON `value`，首帧之前由属性全集覆盖（WPE 的「init 之后全集绑定一次」）。
+          // 与 `applyChanges` 同一份属性表（含内置项）；在脚本的 `applyUserProperties` 之前
+          applyScriptedProperties(
+            bundle.bindings,
+            bundle.scripts,
+            this.properties,
+            state,
+            this.runtime,
+            this.scriptNeedsFullApply,
+          );
           // 首次加载的 `init` 对粒子层调的方法（P4f 步骤 3）：新场景已经换上，补调
           this.flushPendingParticles(current);
           if (this.scriptNeedsFullApply && this.runtime) {

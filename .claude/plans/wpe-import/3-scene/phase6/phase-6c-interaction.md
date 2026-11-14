@@ -356,3 +356,75 @@ export function hitQuad(ray: Ray, p: Pickable, offset: [number, number]): { hit:
   - **语料**（192 个工程）：干净场景里因 P6c 新增 17 张（预期的 11 张加上 `3336377291`、`3354880265`、`3427691867`、`3560102937`、`3611425904`、`3714324957`，它们之前只被光标键挡着），没有新增键、没有掉出的；另 3 张是别的会话 P13b1 带来的。
   - **已知差异：** `perspective` 图层与透视场景的光标坐标差 1–3 ulp（不影响命中与序列）；抖动场景的数值没法逐位比（WPE 的时间未知）。
   - **没做：** 走查（单独做）；预览弹窗里画布点击会不会被工具条或拖动吃掉、桌面真机点击，留在回归 C4–C7。
+- 2026-11-14 提交 `3d6f4d86`（文档里别的会话的两处挪动没收）。
+
+## 走查（按 FINAL_CHECK，2026-11-14 用户：「可以，开始走查」）
+
+两张解锁的真实壁纸，各做复制工程（`kbp content isolate --instrument`，只留交互相关的对象及其闭包），WPE 用 `input_start` / `input_play` 喂同一串光标与左键并连续抓帧，我们按 FR 日志的逐帧帧时间、光标与时间线的左键回放，整帧逐像素比，差异逐处解释。
+- **`3637191856`**（拖动时钟）：留时钟文本层「时间」（id 29）。剧本：时钟上双击（两次点击间隔 < 500 ms）进入拖动模式，按住拖到别处松开。拖动中的位置只看光标；时钟文字取录制时刻（探针 `scripts.clock`）。场景 3936×2208 比窗口大，文字有已登记的分辨率差异（P6b），比较时单列。
+- **`3810092560`**（隐藏按钮触发卡片压扁动画）：留一组卡片（组 33、卡片「1」34）与它的隐藏按钮（27）及脚本按名字找的目标。动画按 `Date.now()` 推进：复制工程另加一个只写日志的对象记每帧 `Date.now()` 与目标卡片的 `scale`（同 FR 的先例，不改被测对象）；我们按 WPE 的 `Date` 差值给帧时间回放，逐帧比缩放值与画面。
+
+### 走查记录（2026-11-14，走查代理）
+
+**共用做法**（脚本都在 `ignore/p6/cw/`）：
+- 复制工程：`kbp content isolate <id> --keep … --instrument --data ignore/p6/cw`，再用 `add_logger.py` 在 `objects` 末尾加一个只写日志的对象 `kbp6w-LOG`（模型同 FR、放在画面外），每帧记 `Date.now()`、被测图层的字段与 `input.cursorLeftDown`，每 10 帧一条 `console.error('[kbp6w] …')`；被测对象一个字段都没改。WPE 与 Kabegame 用同一份目录。
+- WPE（fps 20、后处理 ultra；两张都没开泛光 / HDR）：`open_wallpaper` → `input_start(play)`（时间线 `tl/*.json`，`make_tl.py`）→ 按 `input_status` 的帧数在关键段 `capture` → `input_stop` → 按线程截 `log.txt`（`cut_wpe_log.py`，同时有别的会话的窗口在写日志）。抓帧文件名的 RenderDoc 帧号 + 1 = FR 帧号（FR 的 `g_Color` 与长帧的位置两种办法核对过）。抓帧在 `A:\p6c\walk\<标签>\`。
+- 我们：`projects_import` 导入，经 vite REST 开屏外宿主直接调探针 `renderFrame`（`run_frame.py`；`render_scene`、REST `render`、`renderFrames.ts` 都不收 `inputTimeline` / `buttons`）。帧时间、`g_Time` 取 FR 的 frametime / runtime 列；逐帧光标取 FR 记的屏幕光标、左键取 kbp6w 记的 `input.cursorLeftDown`（时间线开始之前的帧也照日志），组成每帧一项的 `inputTimeline`（`build_args.py`、`build_card_args.py`）；`window` = `canvas` = WPE 窗口；`scripts: { clock, consoleGrep: "kbp" }`。渲染前在 `apps/wpe-scene` 跑过 `deno task build --mode development`，产物里有 `cannot be accessed from global scope`。
+- 比较：`kbp rdc frame --present` 出 WPE 的图（`out/wpe-*.png`），`kbp cmp frames` 比（报告在 `cmp/`）；kbp6w 逐帧比用 `cmp_logs.py`。测完 `projects_remove` 移除三个导入行，测试窗口全部关掉。
+
+#### `3637191856`（拖动时钟）
+
+- **复制工程** `proj/3637191856-iso-clock`：留时钟文本层「时间」（29）、FR、kbp6w，删 5 个背景图层。属性 `time`（「Show」，绑在 29 的 `visible` 上）缺省是 false、时钟本来就隐藏，复制工程的 `project.json` 里改成 true（等于用户打开 Show），其余属性取缺省。窗口 1920×1080（场景 3936×2208，`fill` 横向裁掉 5.3 个场景像素）。时间线 841 帧：场外 20 → 时钟上点两下（按 2 抬 2 按 2 抬 4）→ 第三次按住、逐帧拖 200 帧 → 松开停 600 帧。
+- **结果：发现 bug，根因已定位（不是 P6c 引入的）。** WPE 的时钟画出来了，我们的不画：
+  - WPE：`init` 收到 JSON 的 `value`（false），日志里 `Uncaught TypeError: Cannot create property 'x' on boolean 'false' (line 116, col 9)`（`update` 第一次就抛错，整段只报一次）；kbp6w 从第 1 帧起读到 `visible` 为 true。
+  - 我们：探针和真实宿主都是 false（屏外宿主 `host.state()` 的 `layers[0].visible: false`）。比了 2 帧（1689、1932），各 2121 个像素、最大 77，就是整块时钟；kbp6w 的 `visible` 列 1930 帧全不同，拖动的 `origin` 照样在变（隐藏图层收光标事件，两边一致）。
+  - 根因：字段同时挂 `script` 和 `{user}` 时，编译期 `compile/model.ts` 的 `resolveValue` 对带 `script` 的值直接返回 JSON 的 `value`（这是给 `init` 的入参，这一半对）；之后整个加载过程没有再按属性全集走一次字段的直接绑定：`host.ts` 首包走整场编译，首帧之前的 `runtime.applyUserProperties(全集…)` 只更新 `scriptproperties` 绑定、调脚本导出的 `applyUserProperties`，字段的直接绑定（`planApply(...).writes` → `renderer.applyBindings`）只在之后的属性增量里走（`applyChanges`）；探针 `dev/probeScripts.ts:420` 同样。WPE 的顺序是「解析期写 JSON `value` → 构造完 `init` 并写回 → 以全集为增量走一次绑定 → 首帧」（`phase3/p3-script-REPORT.md` 第 911、1309 行；第 430 行「同时带 user 与 script，先由直接绑定写值」），所以 `init` 拿到 false、画面是属性值。
+  - 影响：语料 32 张场景有「同一字段同时 `script` + `{user}`」（`scan_script_user.py`，结果 `out/scan-script-user.txt`），能渲染的 6 张：`2903412088`、`3336377291`、`3427691867`、`3429479356`、`3460973721`、`3637191856`。缺省属性下 JSON `value` 和属性值几乎都一样，看不出来；用户改了这类属性（时钟的 Show、`enabletips`、`clock`、`music` 这类开关，`2903412088` 的位置滑块）之后，每次重新加载（启动、整场重编译）都回到 JSON `value`。运行中改属性走增量路径，是对的。`update` 每帧原样返回 `value` 的脚本会把错值一直带下去。
+  - 按要求没改产品代码。
+- **绕开这个 bug 看 P6c**：变体 `proj/3637191856-iso-clockv`，在上面的基础上 `--fix '29:/visible/value=true'`（`init` 拿到 true，两边都画出时钟；光标回调与拖动逻辑不变，只是 `update` 报错的文字变成 `'true'`）。
+  - **1920×1080**，抓 6 帧（拖动中 759–761、松开后 956–958，`A:\p6c\walk\clockv-drag`、`clockv-after`）：
+    - 日志：双击判定、进入拖动、拖动中的 `cursorMove` 都和 WPE 在同一帧；kbp6w 950 帧里 746 帧逐字相同，其余帧 `origin.x` 差 1 个 float32 ulp（如第 759 帧 WPE `1340.35546875`、我们 `1340.3555908203125`；松开后 WPE `986.6666259765625`、我们 `986.6665649414062`），`y` 全同。
+    - 1 ulp 的原因（已定位，没登记）：WPE 把 `fill` 的居中盖满裁切做进 `P·V`（抓帧里 FR 的 MVP `m0 = 0.0005095108645036817` = 2 / 3925.33，不是 2 / 3936），直接反投影窗口指针；我们的 `P·V` 不裁（场景目标），先用 `sceneCursor`（double）把指针换成场景纹理坐标再反投影，float32 舍入不同。`crop_world.ts` 用产品的 `invertF32` 和同一串 float32 反投影复算：「裁切做进 `P·V`」复现 WPE 日志 968 / 968 帧（另 1 帧是松开后光标移出窗口、`origin` 不再变，不算），「`sceneCursor` + 不裁的 `P·V`」复现我们的日志 319 / 319 帧。窗口与场景同比例时两条路一样（下面 3936×2208 逐位相同，P6c 验收的 `p6c-*` 工程也逐位相同）。P4c 的 `pointerScenePoint`（粒子跟随指针）是同一种写法，裁切时同样可能差 ulp（没测）。要逐位对上得照 WPE 在反投影时用裁过的 `P·V`。
+    - 画面：6 帧都有差，每帧 960–1139 个像素 > 0、最大 40–41，只在字形边缘（`cmp/clockv.txt`，并排放大 `cmp/clockv-f759-zoom.png`，位置对齐）。第 760 帧两边 `origin` 逐位相同，差异像素数和相邻帧同量级，所以差异全是已登记的「场景比窗口大时 WPE 按窗口分辨率直接画字形，我们先按场景分辨率画再缩」，1 ulp（6e-5 场景像素）在画面上看不出。
+  - **3936×2208 无边框窗口**（等于场景尺寸；比屏幕大，WPE 照开，客户区 3936×2208），同一份时间线，抓 4 帧（拖动中 784–785、松开后 1013–1014，`A:\p6c\walk\clockv4k-*`）：**4 帧整帧逐像素相同**（`cmp/clockv4k.txt`），kbp6w 1010 帧逐字相同（含拖动中每一帧的 `origin`）。
+- **结论**：P6c 的命中、双击、按住拖动、`worldPosition` 与 `origin` 写回，在窗口等于场景尺寸时逐像素、逐位相同；1080p 的差异已解释（字形分辨率，已知；`origin.x` 1 ulp，原因已定位、未登记）；另发现上面的 `script` + `{user}` 绑定 bug。
+
+#### `3810092560`（隐藏按钮触发卡片压扁动画）
+
+- **复制工程** `proj/3810092560-iso-card1`：留组 33、卡片「1」（34，带 waterwaves effect）、隐藏按钮「1」（27，`scale` 上的脚本按 `scriptproperties.targetLayerNames` 用 `getLayer('1')` 找目标，两边拿到的都是卡片 34，kbp6w 记的 `size.x` 是 829）、FR、kbp6w（记 `Date.now()`、`getLayer('1').scale`、左键）；删 51 个对象（另两组卡片、纯色背景）。isolate 报一条 `script-index` 警告（`getLayer` 的参数是变量），实际按名字 `"1"` 找，无影响。
+- 窗口 2560×1440，等于场景尺寸（避开分辨率差异）。时间线 1264 帧：场外 20 → 移到按钮（窗口 (152, 956)）→ 40 轮「按 2 帧、抬 14 帧」→ 移出停 600 帧。抓 34 帧：两段各连续 16 帧（624–639、899–914，含两次完整的压扁—回弹）与动画之后的 1190–1191（`A:\p6c\walk\card-anim`、`card-anim2`、`card-after`）。
+- **只按 runtime 回放时对不上，查下来是两件和产品无关的事：**
+  1. WPE 里每段脚本各自取 `Date.now()`：按钮脚本（`cursorDown` 在光标派发时取 `animationStart`，`update` 在它自己的 `update` 里取）和排在最后的日志对象拿到的差 ±3 ms，按日志对象的 Date 复算不出 WPE 的 `scale`。`card_infer.py` 照脚本公式（脚本属性取 JSON 的 double；取 float32 只对得上 217 / 303 帧），在日志 Date 差 ±6 ms 内找整数「`Date.now()` − `animationStart`」：303 个动画中的帧全部唯一解、逐位复现记下的 `scale`（`out/card-infer.json`）。WPE 偶尔在按下那一帧就已经差 1 ms（40 次里有 1 次 `scale` 当帧就变）。
+  2. **探针的 bug（工具缺口）**：`renderFrame` 回放时光标派发在 `enterFrame` 之前（`dev/particleCorners.ts` 的 `replayEncoded`：`scripts.cursor(...)` 在 `scripts.enterFrame(...)` 之前），光标回调里的 `Date`、`engine.runtime`、`engine.frametime` 是上一帧的。宿主是对的（`render/renderer.ts` 帧开头 `frameClock.advance` 在 `stepCursor` 之前，`Date` 是真时钟）。表现：我们按下那一帧 D 已经压扁了一整帧，WPE 在 D 帧 elapsed 是 0（或 1 ms）。P6c 验收的测试工程没在光标回调里读时间，所以没暴露。
+  - 绕法（`build_card_args.py`）：脚本时钟 `clock = 0`（Date = g_Time × 1000；1.8e12 的时间戳在 double 里只剩 2.4e-4 ms 的分辨率，两个 Date 相减就带误差）；要比的第 N 帧在动画中时，把 D − 1 帧的 g_Time 改成 runtime_N − e_N / 1000（N 本身是按下帧时改成 runtime_N），这样 `cursorDown` 拿到的 `animationStart` 正好让第 N 帧的差等于 WPE 的 e_N；D − 1 帧不比，它的 g_Time 只影响它自己画的 waterwaves；帧时间仍取 WPE 的 frametime。核对：第 910 帧（日志正好刷到）我们的 `scale` 是 `(0.66, 0.7041299343109131)`，和 WPE 逐位相同。没绕之前，动画中的帧整张卡片错位，每帧 23.7 万–27.7 万个像素差、最大 255。
+- **结果**（`cmp/card.txt`）：34 帧里 7 帧逐像素相同（628、631、901、905、907、908、914）；其余 27 帧各 2–19 个像素差 1，第 1190 帧有一个像素差 2，全在卡片里、散点，动画中的帧（624、625、637–639、899、909–911）和静止帧是同一量级。40 次按下两边在同一帧派发（`card_downs.py`）。
+  - 解释：waterwaves 的片元按 `sin(g_Time·speed + dot·scale)`、`pow`、`strength²` 扰动 UV 再双线性采样卡片的合成 RT。WPE 是 fxc 的 DXBC（`out/wpe-card-after-shaders/1ace7959-aef9c1c3-18fa5f1b-148475ab.txt`：`mad`、`sincos`、`log` / `exp`），我们是 WGSL 经 Dawn；UV 差在 float 舍入量级，偶尔跨过 GPU 双线性 1/256 子纹素权重的量化台阶，在边上差 1 级。第 1190 帧 (280, 779) 周围 5×5 的值从 30 到 191，u、v 两个方向同时跨台阶，差 2。归 `WPE_SCENE.md`「音频频谱 uniform（P11a）」已知差异里的「片元的零星舍入差」（那里写最大 1 级，这里陡边上见到 2 级，建议补一句）。
+- **结论：差异已解释。** 隐藏按钮的命中（随卡片的父链缩放一起变）、`cursorDown` 派发、`getLayer` 按名字找目标、压扁—回弹的缩放写回，和 WPE 逐帧一致；画面残差是 waterwaves 的片元舍入。
+
+#### 发现、缺口与没做的
+
+1. **bug（P3a / P3b 的加载顺序，不是 P6c 引入的）**：同一字段同时挂 `script` 与 `{user}` 时，加载后不按属性全集走一次直接绑定，字段停在 JSON `value` / `init` 的返回值。见上「3637191856」。
+2. **未登记的差异**：`fill` 裁切（窗口与场景比例不同）时，光标世界坐标与 WPE 差 1 个 float32 ulp（WPE 的裁切在 `P·V` 里，我们的在 `sceneCursor` 里）。不影响命中与派发、画面上看不出；要么登记成已知差异，要么照 WPE 用裁过的 `P·V` 反投影。
+3. **工具缺口**：
+   - 探针光标回调用上一帧的时钟（`replayEncoded` 的调用顺序），要改成先 `enterFrame` 再 `cursor`（宿主没有这个问题）；
+   - 探针每帧只有一个 `Date`，WPE 每次调用都是真时钟、一帧里各段脚本差几毫秒；按 `Date` 推进的脚本要「每段 / 每次调用的 Date」才能直接回放，这次靠从记下的值反推、改 g_Time 绕过；
+   - `render_scene`、REST `render`、`renderFrames.ts` 不收 `inputTimeline` / `buttons`，只能经 host eval 调 `renderFrame`；
+   - FR 与日志对象每 10 帧刷一次，回放到第 N 帧时 N 不是 10 的倍数就拿不到我们这边第 N 帧的值。
+4. **没做的**：`3637191856` 的原始复制工程（不 fix `visible.value`）只比了 2 帧、记录 bug 用；`3810092560` 没录 1920×1080（窗口比场景小的分辨率差异在时钟那张已经单列）；`WPE_SCENE.md` 的已知差异（裁切的 1 ulp、片元舍入见到 2 级）没改，留给主会话定。
+
+### 走查发现的问题与处理（2026-11-14 用户：「先修你发现的产品bug」）
+
+**修复 1 — 首次加载时「挂脚本又绑属性」的字段没套属性值（P3a / P3b 的缺口，不是 P6c 引入）**
+
+总体设计思路：WPE 首次加载是「解析期 setter 写 JSON 的 `value` → `init` 写回 → 以属性全集为增量走一次直接绑定 → `updateScriptProperties` → `applyUserProperties` → 首帧」（p3-script-REPORT I1、K3：`init` 读到 JSON 的 `value`，第一次 `update` 起是属性值；同时带 `user` 与 `script` 的属性先由直接绑定写值，下一帧被 `update` 覆盖）。我们的编译期对不挂脚本的字段直接取属性值（等价于那次全集绑定），挂脚本的字段取 JSON 的 `value` 给 `init`，这一半对；缺的是 `init` 之后那次全集绑定。修法：首次加载（`scriptNeedsFullApply`，即 `init` 刚跑过的那次）在 `beforeFirstFrame` 里、`runtime.applyUserProperties` 之前，按属性全集算 `planApply(bundle.bindings, 全集)`，只取落在「有脚本的目标」（脚本表里 `targetKey(script.target)` 的集合）上的就地写，交给 `renderer.applyBindings`，并对这些目标 `runtime.forgetWrite`（同运行中增量路径：属性覆盖了 `init` 的写回，重编译重放不该再放回 `init` 的值）；重编译类的条目忽略（编译期已按当前属性编过）。dev 探针（`dev/probeScripts.ts` 首帧前那段）照做。
+
+现状锚点：`host.ts` 的 `beforeFirstFrame` 只有 `this.runtime.applyUserProperties(全集, …)`（脚本属性与回调）；`compile/model.ts` 的 `resolveValue` 对带 `script` 的值返回 JSON `value`；`compile/bindings.ts` 的 `bind` 对这种值照样登记绑定。
+
+验收：`host.script.test.ts` 加用例（图层 `visible` / 数值字段 / 材质常量各一，`{script, value: false, user: "show"}`、属性为 true：`init` 收到 false，首帧前状态已是 true，第一次 `update` 收到 true；带 `condition` 的一例；重编译之后不再回到 `init` 的值）；探针同样的用例；走查的 `ignore/p6/cw/proj/3637191856-iso-clock`（「Show」= true）按走查的同一份输入回放，第 1689、1932 帧和 WPE 抓帧（`A:\p6c\walk\clock-*`）比，时钟出现，差异只剩已登记的字形边缘；kbp6w 日志的 `visible` 列和 WPE 相同。语料：受影响的 6 张（`2903412088`、`3336377291`、`3427691867`、`3429479356`、`3460973721`、`3637191856`）`unsupported` 不变。
+
+**修复 1 的实施与验收（2026-11-14，sonnet 实现，Claude 验收）**
+- 改动：新增 `script/initialApply.ts` 的 `applyScriptedProperties`（宿主与探针共用：按属性全集算 `planApply`，只取目标在脚本目标集合里的就地写，经 `state.write` 写进新场景的状态；`needsRecompile` 挡下的与重编译类目标忽略）；`host.ts` 在 `beforeFirstFrame` 的 `replayWrites` 之后、`runtime.applyUserProperties` 之前调用；`dev/probeScripts.ts` 在 `runtime.load` 之后同样调用；`script/runtime.ts` 加 `hasWrite`。
+- 代理自己定的：写进 `beforeFirstFrame` 收到的新状态（`renderer.applyBindings` 写的是渲染器当前那份，加载中可能还是旧场景）；**重编译那次也补**——首次加载后 `init` 的写入记录已忘掉，只补脚本没有写入记录的目标（有记录的是脚本最近一次写回，照常重放），否则只有 `init` 的字段重编译后会退回 JSON `value`；首次加载才 `forgetWrite`。两条旧用例按 WPE 的顺序改了期望（`init` 写 0.2、属性 0.3 → 首帧前 0.3；文本字段重编译后是属性值）。
+- 我核对的：只动了 `host.ts`（+11）、`runtime.ts`（+4）、`probeScripts.ts`（+3）、新模块与两个测试文件、文档；工作区里 `bindings.ts` / `bundle.ts` / `model.ts` / `scripts.ts` / `state.ts` 等的改动是别的会话的（布尔字段只收布尔）。tsc 0 error；`host.script.test.ts`、`probeScripts.test.ts`、`render/p3a.test.ts` 126 条全过（代理跑时 `p3a.test.ts` 有 1 条失败，是别的会话改 `state.ts` 时测试还没跟上，现在已过）。
+- 对 WPE：`3637191856-iso-clock`（「Show」= true）第 1689、1932 帧：修之前各 2121 个像素（整块时钟）、最大 77；修之后 861 / 968 个像素、最大 26 / 29，没有 > 32 的块，只在字形边缘（同 `clockv` 变体在 1080p 下的已登记字形差异）；kbp6w 的 `visible` 列 1930 帧 0 帧不同（修之前全不同）；其余不同只有 `origin` 的 1 ulp（走查已记的 fill 裁切）。报告 `ignore/p6/cw/cmp/clockfix.txt`。
+- 语料：HEAD 快照与工作区各 192 个场景，`corpus diff` 无变化（`ignore/p6/fix1/`）。

@@ -37,6 +37,7 @@ import {
   type ScriptTarget,
   type ScriptValue,
 } from "../script/runtime";
+import { applyScriptedProperties } from "../script/initialApply";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "../script/stateWrite";
 
 /** `renderFrame` 的 `scripts` 给对象时的选项：`clock` 是起点时刻（毫秒时间戳），`seed` 是 `Math.random` 的种子。 */
@@ -416,6 +417,8 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       // 同宿主：`init` 里 `engine.userProperties` 已是全集（含内置项）
       scriptApi.setProperties(input.properties);
       await runtime.load(bundle.scripts);
+      // 同宿主：`init` 之后按属性全集给挂脚本又绑属性的字段套一次属性值（`init` 拿的是 JSON `value`）
+      applyScriptedProperties(bundle.bindings, bundle.scripts, input.properties, state, runtime, true);
       // 同宿主首帧之前（`beforeFirstFrame`）：整份用户属性交一次，`engine.userProperties` 从这时起读得到
       runtime.applyUserProperties(Object.fromEntries(input.properties), input.properties, bundle.bindings);
     },

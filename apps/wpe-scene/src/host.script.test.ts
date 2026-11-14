@@ -9,6 +9,7 @@ import type { SceneFs } from "./compile/fs";
 import { compileText } from "./compile/texts";
 import { applyScriptValues } from "./dev/scriptValues";
 import { SceneState } from "./render/state";
+import { applyScriptedProperties } from "./script/initialApply";
 import { createMemoryStorage, SCENE_STORAGE_PREFIX } from "./script/storage";
 import { TEXT_DEFAULTS } from "./text/fields";
 
@@ -1212,8 +1213,9 @@ describe("SceneHost 脚本接线", () => {
       await settled();
       expect(compile).toHaveBeenCalledTimes(1);
       await recompile(host);
-      // 编译结果由替身给出（"Song Title"）：重放了脚本的写入就会是 "Script"
-      expect(fields().text).toBe("Song Title");
+      // 重放了脚本的写入就会是 "Script"；编译替身给 "Song Title"（真编译对挂脚本的字段取 JSON value），
+      // 脚本没有写入记录的目标由加载时按属性全集套属性值（P6c 走查修复 1），所以是用户值
+      expect(fields().text).toBe("User");
       host.dispose();
     });
 
@@ -1541,11 +1543,12 @@ describe("SceneHost 脚本接线", () => {
     const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
     host.applyUserProperties({ p: { type: "slider", value: 0.3 }, q: { type: "bool", value: false } });
     await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
-    expect(renderer.sceneState?.layers.get(0)?.alpha).toBe(0.2);
+    // 首次加载：init 的直接写入（0.2）在首帧之前被属性 p 的全集绑定盖掉（WPE 的顺序，P6c 走查修复 1），之后的重编译也保持属性值
+    expect(renderer.sceneState?.layers.get(0)?.alpha).toBe(0.3);
     host.setPaused(true);
     host.applyUserProperties({ q: { type: "bool", value: true } });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(renderer.sceneState?.layers.get(0)?.alpha).toBe(0.2));
+    await vi.waitFor(() => expect(renderer.sceneState?.layers.get(0)?.alpha).toBe(0.3));
     host.applyUserProperties({ p: { type: "slider", value: 0.4 } });
     host.applyUserProperties({ q: { type: "bool", value: false } });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(3));
@@ -1958,6 +1961,171 @@ describe("SceneHost 脚本接线", () => {
     await vi.waitFor(() => expect(events).toContain("render"));
     expect(events).not.toContain("redraw");
     host.dispose();
+  });
+});
+
+describe("SceneHost：挂脚本又绑属性的字段，首次加载套属性值（P6c 走查修复 1）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    vi.stubGlobal("document", {});
+    events.length = 0;
+    imports = 0;
+    destroyed = 0;
+    onUpdate = null;
+    updateArguments = [];
+    onInit = null;
+    onAnimationEvent = null;
+    frozen = false;
+    realmGate = null;
+    moduleGate = null;
+    realmsCreated = 0;
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  type Field = "visible" | "alpha" | "brightness";
+  /** 图层 0 的 `field` 挂脚本（initial 是 JSON `value`）又绑属性 `prop`（可带条件）；编译期取 JSON `value`。 */
+  function scriptedBundle(field: Field, json: boolean | number, condition?: string): SceneBundle {
+    const result = bundle();
+    (result.layers[0] as unknown as Record<string, unknown>)[field] = json;
+    result.bindings = [
+      {
+        property: "prop",
+        ...(condition === undefined ? {} : { condition }),
+        target: { kind: "layer", object: 0, field },
+      },
+    ];
+    result.scripts.list[0] = {
+      ...result.scripts.list[0],
+      id: `objects/0/${field}`,
+      target: { kind: "layer", object: 0, field },
+      valueType: field === "visible" ? "bool" : "float",
+      initial: json,
+      scriptProperties: null,
+    };
+    return result;
+  }
+
+  async function load(result: SceneBundle, value: boolean | number | string) {
+    compile.mockReset().mockImplementation(async () => result);
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ prop: { type: typeof value === "boolean" ? "bool" : "slider", value } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    return host;
+  }
+
+  it("visible：init 写回 JSON 的 false，首帧前被属性 true 盖掉，第一次 update 收到 true", async () => {
+    onInit = () => false;
+    onUpdate = () => undefined;
+    const host = await load(scriptedBundle("visible", false), true);
+    expect(renderer.sceneState?.layers.get(0)?.visible).toBe(true);
+    expect(updateArguments).toEqual([true]);
+    host.dispose();
+  });
+
+  it("数值字段（alpha / brightness）：同样被属性值覆盖", async () => {
+    for (const field of ["alpha", "brightness"] as const) {
+      events.length = 0;
+      updateArguments = [];
+      onInit = () => 0.2;
+      onUpdate = () => undefined;
+      const host = await load(scriptedBundle(field, 0.2), 0.7);
+      expect(renderer.sceneState?.layers.get(0)?.[field]).toBe(0.7);
+      expect(updateArguments).toEqual([Math.fround(0.7)]);
+      host.dispose();
+    }
+  });
+
+  it("带 condition：属性等于条件值时才为真", async () => {
+    onInit = () => false;
+    onUpdate = () => undefined;
+    let host = await load(scriptedBundle("visible", false, "2"), 2);
+    expect(renderer.sceneState?.layers.get(0)?.visible).toBe(true);
+    host.dispose();
+    host = await load(scriptedBundle("visible", true, "2"), 1);
+    expect(renderer.sceneState?.layers.get(0)?.visible).toBe(false);
+    host.dispose();
+  });
+
+  it("重编译之后不回到 init 的值（脚本没有写入记录的目标取属性值，有记录的照脚本最近一次写回）", async () => {
+    onInit = () => false;
+    onUpdate = () => undefined;
+    const host = await load(scriptedBundle("visible", false), true);
+    const first = renderer.sceneState;
+    listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+    await vi.waitFor(() => expect(renderer.sceneState).not.toBe(first));
+    expect(imports).toBe(1);
+    expect(renderer.sceneState?.layers.get(0)?.visible).toBe(true);
+    host.dispose();
+  });
+
+  it("脚本每帧写回的值不被重编译时的属性值盖掉", async () => {
+    onInit = () => false;
+    let frame = 0;
+    onUpdate = () => (++frame < 2 ? undefined : false);
+    const host = await load(scriptedBundle("visible", false), true);
+    renderer.tick();
+    expect(renderer.sceneState?.layers.get(0)?.visible).toBe(false);
+    const first = renderer.sceneState;
+    listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+    await vi.waitFor(() => expect(renderer.sceneState).not.toBe(first));
+    // 重放脚本最近一次写回（false），不是属性值 true；之后的 update 仍写 false
+    expect(renderer.sceneState?.layers.get(0)?.visible).toBe(false);
+    host.dispose();
+  });
+});
+
+describe("applyScriptedProperties", () => {
+  const scripted = (id: string, target: SceneBundle["bindings"][number]["target"]) =>
+    ({ id, target }) as SceneBundle["scripts"]["list"][number];
+
+  it("只写目标有脚本的绑定；被 needsRecompile 挡下与重编译类的条目忽略；首次加载忘掉脚本旧写入", () => {
+    const writes: unknown[] = [];
+    const forgotten: string[] = [];
+    const blockedBinding = { property: "e", target: { kind: "effect", object: 0, effect: 0 } } as const;
+    const state = {
+      needsRecompile: (binding: unknown) => binding === blockedBinding,
+      write: (binding: unknown, value: unknown) => void writes.push([binding, value]),
+    } as unknown as SceneState;
+    const constant = {
+      property: "c",
+      target: { kind: "constant", pass: "objects/0/passes/0", material: "g_X" },
+    } as const;
+    const layer = { property: "v", target: { kind: "layer", object: 0, field: "visible" } } as const;
+    const unscripted = { property: "a", target: { kind: "layer", object: 0, field: "alpha" } } as const;
+    const recompile = {
+      property: "r",
+      target: { kind: "recompile", reason: "layer-structure", path: "objects/0/size" },
+    } as const;
+    const bindings = [constant, layer, unscripted, blockedBinding, recompile] as unknown as SceneBundle["bindings"];
+    const scripts = {
+      list: [
+        scripted("1", constant.target as never),
+        scripted("2", layer.target),
+        scripted("3", blockedBinding.target),
+        scripted("4", recompile.target),
+      ],
+    };
+    const props = new Map([
+      ["c", { type: "slider", value: 3 }],
+      ["v", { type: "bool", value: true }],
+      ["a", { type: "slider", value: 1 }],
+      ["e", { type: "bool", value: true }],
+      ["r", { type: "slider", value: 9 }],
+    ]);
+    const runtime = { hasWrite: () => true, forgetWrite: (key: string) => void forgotten.push(key) };
+    expect(applyScriptedProperties(bindings, scripts, props, state, runtime, true)).toBe(2);
+    expect(writes).toEqual([
+      [constant, 3],
+      [layer, true],
+    ]);
+    expect(forgotten).toEqual(["objects/0/passes/0/constantshadervalues/g_X", "objects/0/visible"]);
+    // 重编译（first 为假）：脚本有记录的目标不碰，也不忘记
+    writes.length = 0;
+    forgotten.length = 0;
+    expect(applyScriptedProperties(bindings, scripts, props, state, runtime, false)).toBe(0);
+    expect(writes).toEqual([]);
+    expect(forgotten).toEqual([]);
   });
 });
 

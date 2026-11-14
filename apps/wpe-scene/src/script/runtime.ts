@@ -511,6 +511,10 @@ export class ScriptRuntime {
   rememberWrite(target: ScriptTarget, value: ScriptValue): void {
     this.writes.set(targetKey(target), { target, value });
   }
+  /** 脚本对这个目标有没有写入记录（重放表里）；加载时据此判断要不要补属性值（`initialApply.ts`）。 */
+  hasWrite(target: TargetKey): boolean {
+    return this.writes.has(target);
+  }
   forgetWrite(target: TargetKey): void {
     this.writes.delete(target);
   }
