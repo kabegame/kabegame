@@ -391,3 +391,7 @@ const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as
 ### P13b2 — 平面反射开（2026-11-14）
 
 子计划与实施记录见 [phase-13b2-reflection-on.md](phase-13b2-reflection-on.md)。两条已定（2026-11-14 用户：「粒子、文本也支持。同意用户属性重新编译。」）：反射 pass 支持模型、直接上屏的图像层与文本层、普通粒子，别的种类报 `reflection:planar:<种类>`；`reflected` 绑属性时重编译。步骤 0 的确定性工程推翻一处读码：正交场景的反射 pass 视图投影不变（只翻 eye / right / up 的 y）。执行代理撞额度，由 Claude 在独立工作树实现。语料跟随时不变、强制开时没有场景报 `reflection:planar:*`；六个确定性工程与 WPE 整帧 0 差（不清屏工程只差 RenderDoc 叠字），三张壁纸反射开按日志逐帧回放，余下是网格边的孤立单像素。
+
+### P13c — sprite 对象（2026-11-14）
+
+子计划与实施记录见 [phase-13c-sprite.md](phase-13c-sprite.md)。两条待定按推荐（2026-11-14 用户：「可以，按照推荐」）：自己数遮挡样本（Dawn D3D12 只有布尔遮挡查询）；k 用上一帧的结果——实现时改成在 GPU 上算 k、直接写进光斑的 uniform，产品与回放都正好是上一帧、没有读回延迟。步骤 0 推翻一处推测：遮挡方块只写 alpha、不写白。实现中发现我们从没定义 `REVERSEDEPTH`，补成恒定义。五个确定性工程与 WPE 整帧 0 差，ricepod 在太阳被部分遮挡的时段逐帧回放只剩孤立边缘像素；能渲染 +1（ricepod）。

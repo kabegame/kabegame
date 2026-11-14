@@ -37,7 +37,7 @@
 - **`"light": "point"` 是遗留灯**，不进这些数组；V1 灯是 `lpoint` / `lspot` / `ltube` / `ldirectional`。
 - 宿主 `compile/lights.ts` 把灯对象换算成 uniform（编译期常量，绑了 `{user}` 的字段登记重编译），宏经 `litDefines` 传给翻译器，只在最终 `LIGHTING` 非 0 时生效。
 - 光照路径自己的宏只有 `LIGHTS_*`。`SHADERVERSION` 是翻译器的平台宏（69），`genericimage3` 按它选公式。
-- **全局引擎宏**（[hdr-macro-REPORT](../../.claude/plans/wpe-import/3-scene/hdr-macro-REPORT.md)）：`HDR`、`SCENE_ORTHO` 经 `engineDefines` 传给全部着色器，关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。`TEX<n>FORMAT` 只给声明了 `formatcombo` 且按名字绑定的槽位定义，运行时槽位（`previous`、`bind`、passthrough）不定义。`HLSL_GS40_DISABLED` 不能定义，WPE 没有这个宏。
+- **全局引擎宏**（[hdr-macro-REPORT](../../.claude/plans/wpe-import/3-scene/hdr-macro-REPORT.md)）：`HDR`、`SCENE_ORTHO` 经 `engineDefines` 传给全部着色器，关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。`REVERSEDEPTH` 恒为 1（P13c，WPE 用反向深度；见「sprite 对象（P13c）」）。`TEX<n>FORMAT` 只给声明了 `formatcombo` 且按名字绑定的槽位定义，运行时槽位（`previous`、`bind`、passthrough）不定义。`HLSL_GS40_DISABLED` 不能定义，WPE 没有这个宏。
 - **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，阴影 / cookie 报 `lightconfig:*`，体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
 - 本机语料没有一张真的开 `LIGHTING`，这条路径靠 `ignore/lighting/` 的测试工程和 WPE 1:1 对比（最大差 1）。普通图层带法线图时另有 UV 内缩的差异（已知，最大 10）。
 
@@ -58,6 +58,20 @@
   - **dev 覆盖**：`localStorage["kabegame-dev-scene-reflection"]` 为 `follow` / `disabled` / `enabled` 时宿主加载与 dev 探针都用它（`dev/reflectionOverride.ts`，生产构建摇掉），验收不改用户设置就能按反射开渲染；用完要删掉，它对同源的全部场景宿主生效。
   - **实测**（2026-11-14）：确定性工程 `ignore/p13/b2/gen_b2.py`（透视、`clearenabled: false`、正交 + 图像层、剔除、透视粒子、正交粒子 + 文本）按 WPE 抓帧时刻渲染，上屏与 WPE 逐像素相同（不清屏工程只差 RenderDoc 叠加文字，它不清屏时留在后备缓冲里），透视工程的反射图只差帧号块；arsenal、audiophile、fantasticcar 按日志逐帧回放（后处理 ultra，audiophile 带频谱录制），读反射图的地面相同，余下是孤立的单像素（每帧 > 8 的 ≤ 11 个，不在反射区域）。语料按反射开扫描：没有场景报 `reflection:planar:*`，干净数不变，读 mip 帧缓冲的 2 张仍报 `reflection:screen`。
 - **实测**：确定性工程（`ignore/p13/b1/gen_b1.py`）和 WPE 整帧逐像素相同（HDR 那张反射图与泛光前的场景目标逐值相同，最后只差泛光链的 ≤ 4 级）；arsenal、audiophile、fantasticcar 按日志逐帧回放，读反射图的地面逐像素相同，余下的是孤立的网格边像素（相机矩阵 1e-6 量级的差导致的覆盖翻转）。能渲染 +3 张（这三张）。
+
+## sprite 对象（P13c）
+
+读码见 [rea-p13-lights](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-lights.md) 第 4 节，实测见 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13c 的实测」，计划与走查见 [phase-13c-sprite](../../.claude/plans/wpe-import/3-scene/phase13/phase-13c-sprite.md)。语料里只有 ricepod 的太阳用它。
+
+- **是什么**：WPE 的「带遮挡测试的太阳光斑」，不是图像层。对象的 `sprite` 键（字符串）是光斑材质；工厂只在值是字符串时建（`"sprite": null` 不建），绑属性等写法照报 `object:sprite`。对象的 `origin` / `angles` / `scale` / `parent` 不参与，`visible`（含父链）照常；`effects` 不读（照报 `sprite:effects`）。不进半透明名单。
+- **编译**（`compile/sprite.ts`）：编成两网格的常量模型挂在 `layer.model`（`layer.sprite` 标明它是 sprite），复用模型的网格绘制路径：网格 0 光斑（sprite 材质）、网格 1 遮挡方块（WPE 的 `materials/util/occlusiontest.json`），顺序固定、不做视锥剔除。顶点格式 `0x9`（位置 + 一组 uv，步长 20），四个顶点位置都是 `(−1, 0, 1)`、uv 四角、索引 `0,1,2, 0,2,3`。
+- **矩阵**：MVP = `P · V'`，V' 是场景视图去掉平移（光斑只随相机转、不随相机移），模型矩阵是单位阵（`render/sprite.ts` 的 `spriteViewProjection`）。正交场景视图本来就只有平移，去掉后是单位阵（S6）。
+- **k**：`k = min(512 · ⌊n/2⌋ / Hs², 1)`，n 是上一帧遮挡方块通过深度测试的样本数，`Hs` 是场景目标高（WPE 的后备缓冲高），float32 逐步算（S1 实测逐位成立）。光斑的 `g_ViewUp` / `g_ViewRight` 乘 `2k`、`g_Alpha = k²`；遮挡方块两个轴乘 0.2，只写 alpha（写掩码 8，S3）、测深度 GREATER、不写深度。首帧 k = 0。
+- **n 自己数、k 在 GPU 上算**（`render/sprite.ts` 的 `SpriteCounter`）：Chrome 在 Windows 上的 Dawn D3D12 后端只有布尔遮挡查询，给不出个数。每帧画到 sprite 时：计算 pass 从计数缓冲读上一帧的 n、算 k，把三个 uniform 直接写进光斑的 uniform 缓冲（缓冲带 STORAGE；CPU 上传的块按 k = 0 写，在本帧命令执行前落地，计算 pass 盖在上面）→ 画光斑 → 结束场景 pass，计数 pass 清零计数、用遮挡方块同一个顶点着色器与几何光栅化（覆盖的像素逐个相同），片元读场景深度纹理（场景深度在有 sprite 时带 `TEXTURE_BINDING`）按 GREATER 自己比较、通过的 `atomicAdd` → 接着场景 pass 画遮挡方块。用的正好是上一帧的结果，和 WPE 一样（S2 实测 WPE 不闪），产品与 dev 探针的回放都确定、不读回 CPU。比较放在 sprite 这个位置做：深度是「画到 sprite 时」的深度，排在它后面的对象挡不住它。
+- **`REVERSEDEPTH`**：WPE 用反向深度，引擎恒定义这个宏（`engineDefines`）。遮挡方块的顶点着色器靠它把 z 写成 1e−7（不定义时是 `0.999·w`，对任何深度都能通过、k 恒为 1）。语料的工程着色器没有用它的。
+- **照报**：组里的 sprite 报 `model:passthrough:children:sprite`（遮挡测试读哪张深度没测）；反射开时 sprite 在名单里报 `reflection:planar:sprite`（WPE 在反射 pass 里也画、谁先画谁做测试，矩阵怎么镜像没查清）；sprite 材质多 pass 报 `sprite:material-passes`、读快照报 `sprite:framebuffer`。
+- **拼错的深度键**：`depthtesting` / `depthwriting`（ricepod 的 `orbital_*`）中性，WPE 不读，按缺省规整（测深度，S4）。
+- **实测**（2026-11-14）：确定性工程 `ignore/p13/c/gen_c.py`（不挡 / 挡一半 / 全挡、相机平移 + sprite 写变换、正交）和 WPE 整帧 0 差异，挡一半的 k = 0.737888 和抓帧逐位相同；ricepod 去掉粒子的复制工程在太阳被船体部分挡住的时段（约 110 s）按日志逐帧回放，每帧 > 2 级的像素 ≤ 3 个（孤立的网格边像素）。
 
 ## 着色器翻译器 `wpesl2wgsl`
 

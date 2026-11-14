@@ -93,3 +93,22 @@ WPE 2.8.42，窗口 1920×1080。用户设置（`config.json` 的 `general.user`
 | C10 | 拖尾粒子 | ptc：宽度方向与 cross(速度, 中心 − 本 pass 眼位) 平行（|cos| = 1，另一个眼位 0.836），反射 pass 用镜像眼位（`ComputeParticleTrailTangents` 读 `g_EyePosition`） | 新事实 |
 | C11 | 正交的粒子与文本 | ptco：反射 pass 与主 pass 的 sprite、文本顶点逐值相同，拖尾差 0.0026（眼位翻了） | 与 C7、C10 一致 |
 | C12 | 真实场景 | arsenal（反射开）：反射 pass 没有绘制（名单里两个空模型对象、FR 在透视场景画面外），反射图只是清屏色 | 名单为空的路径在语料里会走到 |
+
+## P13c 的实测：sprite 对象（2026-11-14）
+
+工程 `ignore/p13/c/gen_c.py` → `ignore/p13/proj/p13c-{open,half,full,moved,ortho}`：透视，相机看向 (−1, 0, 1)，sprite 去掉视图平移后在屏幕
+正中、距离 √2；sprite 材质 = ricepod 的 `sprite.vert` + 输出红色 × `g_Alpha` 的片元（additive）；写深度的灰挡板在相机前 3 个单位，屏幕右方向上
+`open` [1.5, 2.5] 不挡、`half` [0, 1.5] 挡右半、`full` [−1.5, 1.5] 全挡；`moved` 同 open 但相机平移、sprite 写 origin / scale / angles；
+`ortho` 正交 1920×1080。抓帧 `A:\p13c\<open2|half2|full2|moved2|ortho>`（1920×1080，各 5 / 3 帧），常量 `ignore/p13/c/out/wpe-*-consts.json`。
+
+| # | 问题 | 抓帧 | 结果 |
+|---|---|---|---|
+| S1 | `k = min(512 · ((n/2) >> s) / Hs², 1)` | open：光斑的 `|g_ViewUp|` = 2、`g_Alpha` = 1（k = 1）；full：0、0；half：`|g_ViewUp|` = 1.475775、`g_Alpha` = 0.5444779 = k²。遮挡方块中心在 (960, 540)、边长 81.9 像素，覆盖 82 × 82 个像素中心；half 的挡板左缘正好在 x = 960，能看见 41 × 82 = 3362 个，n/2 = 1681，512 · 1681 / 1080² = 0.737888 | 成立，`s = 0`（无 MSAA），`Hs` = 后备缓冲高；5 帧都相同 |
+| S2 | 查询没就绪时 k 取什么 | half 开 1920×1080 窗口，PrintWindow 采 10 s（269 次）：太阳处 (940, 540) 恒为 (139, 0, 0) = 255 · k² | 不闪：结果总能在下一帧拿到 |
+| S3 | 遮挡方块写不写颜色 | 遮挡测试那次绘制（e75）的写掩码 8（只写 A）、不混合；绘制前后 RGB 逐像素相同 | **推翻读码的推测**：只写 alpha（写 1），不写 RGB |
+| S4 | 拼错的 `depthtesting` / `depthwriting` | ricepod `orbital_*`（e35）：深度测试开、GREATER、不写深度，additive，剔背面 | 成立：WPE 不读这两个键，按缺省 |
+| S5 | 对象变换无效、视图去平移 | moved（相机在 (3, 1, −2)、sprite 写 origin 5 5 5 / scale 3 / angles）：两次绘制的 MVP 与 open 逐值相同 | 成立 |
+| S6 | 正交场景 | ortho：MVP 就是场景的正交投影（视图去平移后是单位阵）；光斑 k = 0（遮挡方块在 x = −1 像素外，没有样本） | 成立：同一套公式，不用特判 |
+
+其它：两次绘制的 MVP 相同；光斑的 `g_ViewUp` = (0, 2k, 0)、`g_ViewRight` 长度 2k，遮挡方块的两个轴长 0.2；遮挡方块深度测试 GREATER、不写深度、
+不剔除。

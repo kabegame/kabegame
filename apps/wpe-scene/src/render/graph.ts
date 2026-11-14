@@ -93,6 +93,7 @@ import {
 } from "../compile/bundle";
 import { isRopeRenderer, MAX_CHILD_DEPTH, particleDraws, type SceneParticle } from "../compile/particles";
 import type { UserTextureSlot } from "../compile/usertextures";
+import { SPRITE_OCCLUSION } from "../compile/sprite";
 import { NO_INSET, textureUvExtent, uvInset } from "./layout";
 
 export type TextureRef =
@@ -301,6 +302,11 @@ export interface MeshStep {
   blending: string;
   /** 光栅状态（`rasterState`，两项都取自己的 pass）。 */
   raster: RasterState;
+  /**
+   * sprite 的遮挡方块（P13c，`layer.sprite` 的网格 `SPRITE_OCCLUSION`）：WPE 只写 alpha（写掩码 8，p13-REPORT「P13c 的实测」S3），渲染器在它
+   * 之前插计数 pass（`render/sprite.ts`）。别的网格不写这一项。
+   */
+  occlusion?: true;
 }
 
 /** 渲染图要的那部分排版结果（`text/layout.ts` 的 `TextLayout`）：有没有字形、文字框与合成 RT 尺寸。 */
@@ -594,7 +600,7 @@ export function particleTreeWantsFramebuffer(particle: SceneParticle): boolean {
  * - 运行时纹理只认 `_rt_FullFrameBuffer`：编译期已报 `mdl:framebuffer`（WPE 的模型绘制不拷快照，读到的是什么没测），所以这里不排快照
  *   步骤，强制渲染时读到的是快照纹理此刻的内容；其余名字照报 `render:texture-rt:<名>`。
  */
-export function planModelLayer(layer: Pick<SceneLayer, "model">): LayerPlan {
+export function planModelLayer(layer: Pick<SceneLayer, "model" | "sprite">): LayerPlan {
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   const model = layer.model;
@@ -618,6 +624,7 @@ export function planModelLayer(layer: Pick<SceneLayer, "model">): LayerPlan {
       inputs,
       blending: pass.blending,
       raster: rasterState(pass, pass, pass.blending),
+      ...(layer.sprite && m === SPRITE_OCCLUSION ? { occlusion: true as const } : {}),
     });
   }
   return { composite: null, steps, reasons };

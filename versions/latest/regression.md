@@ -2719,6 +2719,19 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | R4 设置页切换 | Windows dev（新构建） | 设置页「场景反射」切三档，预览 Arsenal | 三档都能渲染（开启见 P13b2 的 RB4）；切换时场景重新加载 | 待重启 dev 后真机看（运行中的 dev 构建还没有新命令，宿主按跟随处理） |
 | [ ] | R5 非 Windows | macOS / Linux | 预览 Arsenal | 同 Windows | 本机不能测 |
 
+## 场景壁纸 sprite 对象（P13c）
+
+2026-11-14。WPE 的 `sprite` 对象（ricepod 的太阳）：两网格的常量模型（光斑、遮挡方块），MVP = P · 去平移的视图；光斑大小 / 亮度 `k` 取上一帧遮挡方块通过深度测试的样本数，计数 pass 自己数、计算 pass 在 GPU 上算 k 写进光斑的 uniform；引擎恒定义 `REVERSEDEPTH`；拼错的 `depthtesting` / `depthwriting` 中性。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md`「P13c 的实测」与同目录 `rea-p13-lights.md` 第 4 节，计划与实施记录见 `phase-13c-sprite.md`；测试工程 `ignore/p13/proj/p13c-*`（`ignore/p13/c/gen_c.py`）、走查工程 `ignore/p13/proj/ricepod-iso-sun`，WPE 抓帧在 `A:\p13c\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | RC0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、本节相关的 vitest、Prettier；变异检查 | 0 error、全过；变异全部检出 | 2026-11-14 Claude：tsc 0 error（别的会话的 `puppet/player.test.ts` 除外）；相关测试全过；11 处变异全部检出 |
+| [x] | RC1 语料 | Node，238 个工程 | HEAD 与工作区各扫一遍 | 本节只去掉 `object:sprite`、`material:depthtesting` / `depthwriting`；加 `REVERSEDEPTH` 后能力表不变 | 2026-11-14 Claude：ricepod 变干净；其余增减是 P11c / P12 会话的改动；语料工程着色器没有用 `REVERSEDEPTH` 的 |
+| [x] | RC2 生成工程对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 不挡 / 挡一半 / 全挡、相机平移 + sprite 写变换、正交五个工程，回放 3 帧后读回 | 整帧逐像素相同（屏蔽 FR / CLK） | 2026-11-14 Claude：五个都 0 差；挡一半 k = 0.737888 和抓帧逐位相同；平移工程与不挡的像素摘要相同 |
+| [x] | RC3 ricepod 走查 | Windows dev + WPE 抓帧（后处理超高），1920×1080，fps 20 | 去掉粒子的复制工程，开窗 110 s 后（太阳被船体部分挡住）录 5 帧，`renderFrames.ts` 按日志回放 | 光斑位置、大小、渐隐与 WPE 相同 | 2026-11-14 Claude：每帧 > 2 级的像素 ≤ 3 个，孤立的网格边像素 |
+| [ ] | RC4 预览 ricepod | Windows dev | 预览 Rice Pod，等相机转到太阳那段（约 80–115 s） | 太阳光斑出现，被船体挡住时渐暗、不闪 | 待真机看 |
+| [ ] | RC5 非 Windows | macOS / Linux | 预览 Rice Pod | 同 Windows（计数不依赖遮挡查询） | 本机不能测 |
+
 ## 场景壁纸平面反射开（P13b2）
 
 2026-11-14。反射开时在主 pass 之前画平面反射 pass：编译期定名单（`reflected` 不为 false、去掉读反射图的模型，绑属性时重编译），透视场景 `S·VP·S`、正交场景视图投影不变、eye / right / up 的 y 取反，深度共用、`clearenabled` 决定清不清；支持模型、直接上屏的图像层与文本层、普通粒子，别的种类报 `reflection:planar:<种类>`。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md`「P13b2 的实测」，计划、实施记录与走查见同目录 `phase-13b2-reflection-on.md`；测试工程 `ignore/p13/proj/p13b2-*`（`ignore/p13/b2/gen_b2.py`），WPE 抓帧在 `A:\p13b2\`。dev 下验收用 `localStorage["kabegame-dev-scene-reflection"] = "enabled"` 强制反射开，测完删掉。

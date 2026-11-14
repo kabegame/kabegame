@@ -262,6 +262,7 @@ import {
 } from "./programs";
 import { ReflectionTargets } from "./reflection";
 import { mirroredView, type SceneView } from "./views";
+import { SPRITE_COUNT_TARGET_FORMAT, SpriteCounter, spriteOverrides, spriteViewProjection } from "./sprite";
 import { transparentDrawOrder } from "./sortOrder";
 import type { DirtyState, LayerState, SceneState } from "./state";
 import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
@@ -848,7 +849,8 @@ export interface PipelineSpec {
   program: number;
   blending: string | null;
   format: GPUTextureFormat;
-  alpha: boolean;
+  /** 写不写 alpha：`"only"` 只写 alpha、不写 RGB（P13c：sprite 的遮挡方块，WPE 写掩码 8），键里照写成 `only`。 */
+  alpha: boolean | "only";
   topology: "triangle-strip" | "triangle-list";
   /**
    * alpha 通道换成 One / One / Max（P5b 步骤 4：`copyBackground` 为 false 的组里画到「场景」的绘制，颜色通道照 `blending`，不混合的用
@@ -926,7 +928,11 @@ export function stepPipeline(
     // 裁切遮罩 RT（P12b1 步骤 5）是 R8：遮罩段画进它（`render/graph.ts` 的 `puppetSteps`）
     format:
       target.kind === "fbo" ? fboFormat(target.effect, target.name) : target.kind === "clip-mask" ? "r8unorm" : format,
-    alpha: writesAlpha(base, { upload, alphaMax, alphaWriting: pass.alphaWriting }),
+    // sprite 的遮挡方块（P13c，S3）只写 alpha
+    alpha:
+      step.kind === "mesh" && step.occlusion
+        ? "only"
+        : writesAlpha(base, { upload, alphaMax, alphaWriting: pass.alphaWriting }),
     topology:
       step.kind === "text" || drawsMesh(step) || (step.kind === "particles" && !geometry)
         ? "triangle-list"
@@ -1350,6 +1356,10 @@ export class GpuScene {
   private readonly reflectionList: ReadonlySet<number> | null;
   /** 参加反射 pass 的 draw 的副本（P13b2）：第一次画到时建（`reflectionCopyOf`），draw 被重建时释放。 */
   private readonly reflectionCopies = new Map<Draw, ReflectionCopy>();
+  /** sprite 的遮挡计数与 k（P13c，`render/sprite.ts`）：sprite 图层的 `objects` 下标 → 计数器，第一次画到它时建。 */
+  private readonly spriteCounters = new Map<number, SpriteCounter>();
+  /** 计数 pass 的颜色目标（只为满足附件要求，写掩码 0），和场景目标同尺寸；第一次计数时建。 */
+  private spriteTarget: GPUTextureView | null = null;
 
   private constructor(
     private readonly device: GPUDevice,
@@ -1521,7 +1531,10 @@ export class GpuScene {
         label: "scene depth",
         size: { width, height },
         format: SCENE_DEPTH_FORMAT,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        // 有 sprite 时（P13c）计数 pass 把深度当纹理读
+        usage:
+          GPUTextureUsage.RENDER_ATTACHMENT |
+          (this.bundle.layers.some((layer) => layer.sprite) ? GPUTextureUsage.TEXTURE_BINDING : 0),
       }),
     );
     this.targetBytes += width * height * 4;
@@ -1604,7 +1617,7 @@ export class GpuScene {
     program: GpuProgram,
     blending: string | null,
     format: GPUTextureFormat,
-    alpha: boolean,
+    alpha: PipelineSpec["alpha"],
     topology: PipelineSpec["topology"] = "triangle-strip",
     alphaMax = false,
     mesh?: MeshVertexLayout,
@@ -3072,7 +3085,11 @@ export class GpuScene {
         device.createBuffer({
           label,
           size: block.data.byteLength,
-          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+          // sprite 的光斑（P13c）：k 由计算 pass 写进这块缓冲（`SpriteCounter.encodeScale`）
+          usage:
+            GPUBufferUsage.UNIFORM |
+            GPUBufferUsage.COPY_DST |
+            (layer.sprite && step.kind === "mesh" && !step.occlusion ? GPUBufferUsage.STORAGE : 0),
         }),
       );
       traceUniforms(uniformBuffer, (program.result.uniforms ?? []) as UniformEntry[]);
@@ -3262,6 +3279,21 @@ export class GpuScene {
           : undefined,
       });
     }
+    if (step.kind === "mesh" && layer.sprite)
+      // sprite（P13c，`render/sprite.ts`）：模型矩阵是单位阵、视图去平移（对象变换与视差都不参与，S5），颜色组同网格；遮挡方块的两个轴
+      // 乘 0.2；光斑的两个轴与 `g_Alpha` 按 k = 0 写，真正的值由计算 pass 每帧盖上（`encodeSprite`）
+      return spriteOverrides(
+        drawUniformValues({
+          ...common,
+          world: identity(),
+          colorScale: 1,
+          step: { role: "direct", inputs: step.inputs },
+          layer: { ...layerState, color: [1, 1, 1], alpha: 1, size: layer.size },
+          viewProjection: spriteViewProjection(view.sceneCamera),
+        }),
+        !!step.occlusion,
+        view.viewVectors,
+      );
     if (step.kind === "mesh")
       // 模型网格（P5c 步骤 2）：同图像层直接上屏（`direct` 角色：`g_ModelMatrix` 是世界矩阵、MVP = VP · W，不乘 `size`），只换颜色组：
       // WPE 画网格之前把 `g_Color` / `g_Alpha` 写成 1（rea-p5-mesh 2.5，p5-REPORT `p5c-color`：对象写 `color 1 0 0`、`alpha 0.5`、
@@ -3917,6 +3949,90 @@ export class GpuScene {
     }
     draw.dirty = true;
     this.refreshReflection(draw, state, worlds, model);
+  }
+
+  /**
+   * 画一个 sprite（P13c，rea-p13-lights 4.2）：计算 pass（按计数缓冲里上一帧的样本数算 k、写进光斑的 uniform 缓冲）→ 光斑 → 计数 pass（读场景
+   * 深度）→ 遮挡方块。两个计算 / 计数 pass 都要先结束场景 pass。只在画进真正的场景目标、场景有深度附件时计数（组里的 sprite 照报
+   * `model:passthrough:children:sprite`，强制渲染时不计数，光斑按 k = 0）。
+   */
+  private encodeSprite(
+    encoder: GPUCommandEncoder,
+    object: number,
+    draws: readonly Draw[],
+    hooks: {
+      scene: () => GPURenderPassEncoder;
+      end: () => void;
+      draw: (pass: GPURenderPassEncoder, item: Draw) => void;
+    },
+    counted: boolean,
+  ): void {
+    const occlusion = draws.find((item) => item.step.kind === "mesh" && item.step.occlusion);
+    const counter = occlusion && counted && this.depthTarget ? this.spriteCounter(object, occlusion) : null;
+    for (const item of draws) {
+      const isOcclusion = item === occlusion;
+      if (counter && !isOcclusion && item.uniformBuffer && item.block) {
+        hooks.end();
+        counter.encodeScale(
+          encoder,
+          {
+            buffer: item.uniformBuffer,
+            up: item.block.offsetOf("g_ViewUp"),
+            right: item.block.offsetOf("g_ViewRight"),
+            alpha: item.block.offsetOf("g_Alpha"),
+          },
+          this.height * this.height,
+          this.view.viewVectors,
+        );
+      }
+      if (counter && isOcclusion && item.mesh && this.depthTarget) {
+        hooks.end();
+        counter.encodeCount(encoder, this.depthTarget.view, this.spriteCountTarget(), {
+          bindGroup: this.bindGroupOf(item),
+          vertexBuffer: item.vertexBuffer,
+          placeholder: item.mesh.placeholder,
+          indexBuffer: item.mesh.indexBuffer,
+          indexFormat: item.mesh.indexFormat,
+          count: item.mesh.count,
+        });
+      }
+      hooks.draw(hooks.scene(), item);
+    }
+  }
+
+  /** sprite 的计数器（第一次画到时按遮挡方块的程序与顶点布局建）。 */
+  private spriteCounter(object: number, occlusion: Draw): SpriteCounter {
+    let counter = this.spriteCounters.get(object);
+    if (!counter) {
+      counter = new SpriteCounter(
+        this.device,
+        {
+          program: occlusion.program,
+          layout: occlusion.layout,
+          vertexBuffers: this.meshLayoutOf(occlusion.layer, occlusion.step as MeshStep).buffers,
+        },
+        (buffer) => this.own(buffer),
+        `layer ${occlusion.layer.id} sprite`,
+      );
+      this.spriteCounters.set(object, counter);
+    }
+    return counter;
+  }
+
+  private spriteCountTarget(): GPUTextureView {
+    if (!this.spriteTarget) {
+      const texture = this.own(
+        this.device.createTexture({
+          label: "sprite count target",
+          size: { width: this.width, height: this.height },
+          format: SPRITE_COUNT_TARGET_FORMAT,
+          usage: GPUTextureUsage.RENDER_ATTACHMENT,
+        }),
+      );
+      this.targetBytes += this.width * this.height;
+      this.spriteTarget = texture.createView();
+    }
+    return this.spriteTarget;
   }
 
   /** 平面反射 pass 的视图（P13b2，`views.ts`）：透视场景 S·VP·S，正交场景 VP 不变；两者都翻 eye、right、up 的 y。 */
@@ -4697,6 +4813,15 @@ export class GpuScene {
               snapshot();
             }
           }
+        } else if (op.kind === "model" && op.layer.sprite) {
+          // sprite（P13c）：不做视锥剔除，光斑 → 计数 pass → 遮挡方块（`encodeSprite`）
+          this.encodeSprite(
+            encoder,
+            op.layer.object,
+            op.draws,
+            { scene: () => begin(sceneTarget), end, draw: (pass, item) => draw(pass, item) },
+            sceneTarget === sceneView,
+          );
         } else if (op.kind === "model") {
           // 模型（P5c 步骤 2）：先做视锥剔除，被剔就整个模型不画
           if (this.modelCulled(op.layer, state, worlds, this.view.viewProjection)) continue;

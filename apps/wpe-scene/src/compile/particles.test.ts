@@ -1483,17 +1483,17 @@ describe("compileScene：粒子对象", () => {
       return requests.map((request) => request.defines);
     };
     expect(await defines([{ name: "spritetrail" }])).toEqual([
-      { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" },
+      { REVERSEDEPTH: "1", SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" },
     ]);
     // 拖尾走厚格式：朝向不进宏，TEX0FORMAT 仍只看 8–11
     expect(await defines([{ name: "spritetrail", orientation: "fixed", axis: "1 0 0", flags: 1 }])).toEqual([
-      { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" },
+      { REVERSEDEPTH: "1", SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" },
     ]);
     expect(await defines([{ name: "spritetrail" }], 9)).toEqual([
-      { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1", TEX0FORMAT: "9" },
+      { REVERSEDEPTH: "1", SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1", TEX0FORMAT: "9" },
     ]);
-    expect(await defines([{ name: "sprite" }])).toEqual([{ SCENE_ORTHO: "1" }]);
-    expect(await defines([{ name: "sprite", flags: 1 }])).toEqual([{ SCENE_ORTHO: "1" }]);
+    expect(await defines([{ name: "sprite" }])).toEqual([{ REVERSEDEPTH: "1", SCENE_ORTHO: "1" }]);
+    expect(await defines([{ name: "sprite", flags: 1 }])).toEqual([{ REVERSEDEPTH: "1", SCENE_ORTHO: "1" }]);
   });
 
   describe("rope（P4d 步骤 1，rea-p4d-rope.md 3.4、第 6 节）", () => {
@@ -1539,12 +1539,14 @@ describe("compileScene：粒子对象", () => {
 
     it("宏：THICKFORMAT、TRAILSUBDIVISION、ORIENTATION（值为 0 也写）；不写 TRAILRENDERER、SPRITESHEET*", async () => {
       expect((await compileRope({})).requests[0].defines).toEqual({
+        REVERSEDEPTH: "1",
         SCENE_ORTHO: "1",
         THICKFORMAT: "1",
         TRAILSUBDIVISION: "4",
         ORIENTATION: "0",
       });
       expect((await compileRope({ subdivision: 40, orientation: "upright" })).requests[0].defines).toEqual({
+        REVERSEDEPTH: "1",
         SCENE_ORTHO: "1",
         THICKFORMAT: "1",
         TRAILSUBDIVISION: "32",
@@ -1629,6 +1631,7 @@ describe("compileScene：粒子对象", () => {
 
       it("宏：TRAILSUBDIVISION、ORIENTATION、TRAILRENDERER；不写 THICKFORMAT、SPRITESHEET*；三个开关各自只在为真时写", async () => {
         expect((await compileTrail({})).requests[0].defines).toEqual({
+          REVERSEDEPTH: "1",
           SCENE_ORTHO: "1",
           TRAILSUBDIVISION: "1",
           ORIENTATION: "0",
@@ -1645,6 +1648,7 @@ describe("compileScene：粒子对象", () => {
             })
           ).requests[0].defines,
         ).toEqual({
+          REVERSEDEPTH: "1",
           SCENE_ORTHO: "1",
           TRAILSUBDIVISION: "32",
           ORIENTATION: "2",
@@ -1655,6 +1659,7 @@ describe("compileScene：粒子对象", () => {
         });
         // 渐隐不看 uvscrolling（WPE 照写，着色器只在滚动分支读，实测 T3）
         expect((await compileTrail({ fadealpha: true })).requests[0].defines).toEqual({
+          REVERSEDEPTH: "1",
           SCENE_ORTHO: "1",
           TRAILSUBDIVISION: "1",
           ORIENTATION: "0",

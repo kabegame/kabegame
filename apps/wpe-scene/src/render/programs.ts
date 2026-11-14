@@ -487,7 +487,8 @@ export async function createPipeline(
   program: GpuProgram,
   blending: string | null,
   format: GPUTextureFormat,
-  writeAlpha = false,
+  /** `"only"`：只写 alpha（P13c，sprite 的遮挡方块，写掩码 8）。 */
+  writeAlpha: boolean | "only" = false,
   topology: "triangle-strip" | "triangle-list" = "triangle-strip",
   /** alpha 通道 One / One / Max（P5b 步骤 4，`groupBlendState`）；为 true 时标签多一个 ` max`。 */
   alphaMax = false,
@@ -513,8 +514,8 @@ export async function createPipeline(
       fragment: {
         module: fragment.module,
         entryPoint: fragment.entryPoint,
-        // 0x7 = RED | GREEN | BLUE，0xf 再加 ALPHA
-        targets: [{ format, blend, writeMask: writeAlpha ? 0xf : 0x7 }],
+        // 0x7 = RED | GREEN | BLUE，0xf 再加 ALPHA，0x8 只有 ALPHA
+        targets: [{ format, blend, writeMask: writeAlpha === "only" ? 0x8 : writeAlpha ? 0xf : 0x7 }],
       },
       primitive: cull ? { topology, cullMode: cull, frontFace: "ccw" } : { topology, cullMode: "none" },
       ...(depth

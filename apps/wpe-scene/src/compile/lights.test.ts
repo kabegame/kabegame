@@ -40,15 +40,15 @@ describe("general.lightconfig", () => {
     ]);
   });
 
-  it("宏：litDefines 只有 LIGHTS_*，HDR / SCENE_ORTHO 全局给，关闭时不写键", () => {
+  it("宏：litDefines 只有 LIGHTS_*，HDR / SCENE_ORTHO 全局给，关闭时不写键；REVERSEDEPTH 恒为 1（P13c）", () => {
     expect(litDefines({ point: 2, spot: 0, tube: 1, directional: 0 })).toEqual({
       LIGHTS_POINT: "2",
       LIGHTS_SPOT: "0",
       LIGHTS_TUBE: "1",
       LIGHTS_DIRECTIONAL: "0",
     });
-    expect(engineDefines(false, false)).toEqual({});
-    expect(engineDefines(true, true)).toEqual({ HDR: "1", SCENE_ORTHO: "1" });
+    expect(engineDefines(false, false)).toEqual({ REVERSEDEPTH: "1" });
+    expect(engineDefines(true, true)).toEqual({ REVERSEDEPTH: "1", HDR: "1", SCENE_ORTHO: "1" });
   });
 });
 

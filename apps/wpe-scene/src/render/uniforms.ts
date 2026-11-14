@@ -112,6 +112,11 @@ export class UniformBlock {
     return this.slots.has(name);
   }
 
+  /** 一个成员在块里的字节偏移（P13c：sprite 的 k 由计算 pass 直接写进 uniform 缓冲）；没有这个成员时为 undefined。 */
+  offsetOf(name: string): number | undefined {
+    return this.slots.get(name)?.offset;
+  }
+
   /** 写一个成员；值不足的分量保持原值（初始为 0），多余的忽略。 */
   set(name: string, values: ArrayLike<number>): void {
     const slot = this.slots.get(name);

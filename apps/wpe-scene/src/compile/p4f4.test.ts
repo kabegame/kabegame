@@ -235,11 +235,13 @@ describe("compileScene：每条 renderer 一个变体材质（rea-p4f-script.md 
         const tex0 = format === 9 ? { TEX0FORMAT: "9" } : {};
         // 非厚格式的 upright sprite 会对任何格式写 TEX0FORMAT；同系统有拖尾时厚格式，只看 8–11
         expect(definesOf(particle.draws[spriteAt].passes[0]), `${format}`).toEqual({
+          REVERSEDEPTH: "1",
           SCENE_ORTHO: "1",
           THICKFORMAT: "1",
           ...tex0,
         });
         expect(definesOf(particle.draws[trailAt].passes[0]), `${format}`).toEqual({
+          REVERSEDEPTH: "1",
           SCENE_ORTHO: "1",
           THICKFORMAT: "1",
           TRAILRENDERER: "1",
@@ -265,8 +267,8 @@ describe("compileScene：每条 renderer 一个变体材质（rea-p4f-script.md 
     });
     expect(bundle.unsupported).toEqual([]);
     const [screen, fixed] = particleOf(bundle).draws;
-    expect(definesOf(screen.passes[0])).toEqual({ SCENE_ORTHO: "1" });
-    expect(definesOf(fixed.passes[0])).toEqual({ SCENE_ORTHO: "1", TEX0FORMAT: "4" });
+    expect(definesOf(screen.passes[0])).toEqual({ REVERSEDEPTH: "1", SCENE_ORTHO: "1" });
+    expect(definesOf(fixed.passes[0])).toEqual({ REVERSEDEPTH: "1", SCENE_ORTHO: "1", TEX0FORMAT: "4" });
   });
 
   it("稳定键：第 0 个沿用 <系统键>/passes/<k>，第 r 个是 <系统键>/renderers/<r>/passes/<k>；SceneState 各留一份常量", async () => {
@@ -333,9 +335,14 @@ describe("compileScene：每条 renderer 一个变体材质（rea-p4f-script.md 
       ["objects/0/particle/children/0/renderers/1/passes/0"],
     ]);
     // 父只有 sprite：非厚格式；子系统的 sprite 跟着子系统的拖尾变厚
-    expect(definesOf(root.passes[0])).toEqual({ SCENE_ORTHO: "1" });
-    expect(definesOf(child.draws[1].passes[0])).toEqual({ SCENE_ORTHO: "1", THICKFORMAT: "1" });
-    expect(definesOf(child.draws[0].passes[0])).toEqual({ SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" });
+    expect(definesOf(root.passes[0])).toEqual({ REVERSEDEPTH: "1", SCENE_ORTHO: "1" });
+    expect(definesOf(child.draws[1].passes[0])).toEqual({ REVERSEDEPTH: "1", SCENE_ORTHO: "1", THICKFORMAT: "1" });
+    expect(definesOf(child.draws[0].passes[0])).toEqual({
+      REVERSEDEPTH: "1",
+      SCENE_ORTHO: "1",
+      THICKFORMAT: "1",
+      TRAILRENDERER: "1",
+    });
   });
 
   it("只有 rope 类混挂报 particle:renderers；sprite + spritetrail 不报", async () => {
@@ -355,12 +362,12 @@ describe("compileScene：每条 renderer 一个变体材质（rea-p4f-script.md 
 
   it("单 renderer 系统的 pass 和以前相同：键、宏、程序、常量；bundle 里粒子只多出 draws", async () => {
     for (const [renderer, defines] of [
-      [{ name: "sprite" }, { SCENE_ORTHO: "1" }],
+      [{ name: "sprite" }, { REVERSEDEPTH: "1", SCENE_ORTHO: "1" }],
       [
         { name: "sprite", orientation: "upright" },
-        { SCENE_ORTHO: "1", TEX0FORMAT: "0" },
+        { REVERSEDEPTH: "1", SCENE_ORTHO: "1", TEX0FORMAT: "0" },
       ],
-      [{ name: "spritetrail" }, { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" }],
+      [{ name: "spritetrail" }, { REVERSEDEPTH: "1", SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILRENDERER: "1" }],
     ] as const) {
       const { bundle, requests, definesOf } = await compile({ renderer: [renderer] });
       const particle = particleOf(bundle);
@@ -404,6 +411,6 @@ describe("compileScene：每条 renderer 一个变体材质（rea-p4f-script.md 
     const particle = particleOf(bundle);
     expect(particle.draws).toEqual([]);
     expect(particle.passes.map((pass) => pass.key)).toEqual(["objects/0/particle/passes/0"]);
-    expect(definesOf(particle.passes[0])).toEqual({ SCENE_ORTHO: "1" });
+    expect(definesOf(particle.passes[0])).toEqual({ REVERSEDEPTH: "1", SCENE_ORTHO: "1" });
   });
 });

@@ -23,6 +23,7 @@ import {
 import { conditionsHold, removedFbos } from "./conditions";
 import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
 import { reflectionKind, reflectionList } from "./reflection";
+import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from "./sprite";
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
@@ -583,6 +584,11 @@ export interface SceneLayer {
    * `planModelLayer`）。可选同 `text`：不动各处手写的测试图层，读的地方按 null 处理。
    */
   model?: SceneModel | null;
+  /**
+   * sprite 对象（P13c，`compile/sprite.ts`）：几何与两份 pass（光斑、遮挡方块）在 `model` 里（`spriteModel`），这里只标明这个模型是
+   * sprite：渲染器写 sprite 的 uniform、在遮挡方块前插计数 pass（`render/sprite.ts`）。其它对象为 null；可选同 `text`。
+   */
+  sprite?: SceneSprite | null;
   /**
    * 形状对象（P8 步骤 2，`compileShape`）：`passes` 为空、没有合成 RT，渲染图只画最后一个 effect（`render/graph.ts` 的
    * `planShapeLayer`）。其它对象为 null。可选同 `text`：不动各处手写的测试图层，读的地方按 null 处理。
@@ -1651,6 +1657,36 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
 
   /**
+   * sprite 对象（P13c，`compile/sprite.ts`）：`material` 是对象的 `sprite` 键（字符串）、光斑的材质，另编 WPE 的 `occlusiontest`；两份 pass 挂成两网格
+   * 的常量模型。材质读不到报 `material:missing:<路径>`，多 pass 报 `sprite:material-passes`、读快照报 `sprite:framebuffer`（WPE 的
+   * sprite 绘制只画第一个 pass、不拷快照，语料都没有）。
+   */
+  async function compileSprite(index: number, material: string, layer: SceneLayer): Promise<void> {
+    const body = await compileSpriteMaterial(index, material, "sprite");
+    const occlusion = await compileSpriteMaterial(index, OCCLUSION_MATERIAL, "occlusion");
+    layer.model = spriteModel(material, body, occlusion);
+    layer.sprite = { material };
+  }
+
+  async function compileSpriteMaterial(index: number, material: string, part: string): Promise<ScenePass[]> {
+    const text = await fs.text(material);
+    if (!text) {
+      unsupported.add(`material:missing:${material}`);
+      return [];
+    }
+    const { passes } = parseMaterial(text);
+    if (passes.length > 1) unsupported.add("sprite:material-passes");
+    const out: ScenePass[] = [];
+    for (const [k, pass] of passes.entries()) {
+      const compiled = await compilePass(pass, { key: `objects/${index}/${part}/passes/${k}` });
+      if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], SPRITE_FORMAT, unsupported);
+      if (compiled.framebuffer) unsupported.add("sprite:framebuffer");
+      out.push(compiled);
+    }
+    return out;
+  }
+
+  /**
    * 模型的一个网格：编选中的材质，按网格格式查程序读到的属性（`checkMeshAttributes`）。材质读 `_rt_FullFrameBuffer` 报
    * `mdl:framebuffer`（P5c 步骤 2）：WPE 的模型绘制不拷快照（rea-p5-mesh 2.6 没有拷贝这一步），读到的是什么没测，语料 0 个。
    */
@@ -2388,6 +2424,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 模型对象（P5c 步骤 1）：和粒子一样挂在图层上（`layer.model`），`effects` 不编译（能力表报 `model:effects`）
     if (objectKind(object) === "model") {
       await compileModel(index, object, layer);
+      continue;
+    }
+    // sprite 对象（P13c）：两网格的常量模型（光斑、遮挡方块），对象的变换不参与；不进半透明名单（构造不置半透明位，rea-p13-lights 4.1）
+    if (objectKind(object) === "sprite") {
+      layer.sortClass = "opaque";
+      // 不是字符串（绑属性等）时能力表已报 `object:sprite`，不编
+      if (typeof object.sprite === "string") await compileSprite(index, object.sprite, layer);
       continue;
     }
     // 声音对象（P6a 步骤 1）：图层上只有变换，播放字段进声音表；可见性不影响播放（p6-REPORT `p6a-misc`）

@@ -570,7 +570,11 @@ const LIGHT_KEYS = new Set([
   "usecookie",
 ]);
 
-const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as const;
+/**
+ * 对象的内容类别（`objectKind` 按表序取第一个有值的键）。`sprite`（P13c）：WPE 工厂只在值是字符串时建 sprite（rea-p13-lights 4.1，
+ * arsenal 灯对象上的 `"sprite": null` 不建），非字符串的有值写法由 `checkObjectFeatures` 照报 `object:sprite`。
+ */
+const OBJECT_KINDS = ["image", "model", "particle", "sprite", "sound", "text", "light"] as const;
 export type ObjectKind = (typeof OBJECT_KINDS)[number];
 
 /**
@@ -828,6 +832,11 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   } else if (kind === "model") {
     // 模型对象的 effect（WPE 怎么画没读，语料 0 个）：`bundle.ts` 也不编译它
     if (hasEffects) unsupported.add("model:effects");
+  } else if (kind === "sprite") {
+    // sprite 对象（P13c）：值是材质路径（字符串）才建（WPE 工厂同样只认字符串）；绑属性等写法照报。sprite 只用基类的加载（rea-p13-lights
+    // 4.1），`effects` 不读，`bundle.ts` 也不编译，带了照报（语料 0 个）
+    if (typeof object.sprite !== "string") unsupported.add("object:sprite");
+    if (hasEffects) unsupported.add("sprite:effects");
   } else if (kind && kind !== "image" && kind !== "light" && kind !== "sound" && kind !== "text")
     unsupported.add(`object:${kind}`);
   // 灯的位置取本地 origin（`lights.ts`），挂在父链下时的位置没有和 WPE 比过，照报
@@ -887,6 +896,7 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
         "dependencies",
         "instance",
         "model",
+        "sprite",
         "particle",
         "sound",
         "text",
@@ -1112,6 +1122,7 @@ export function groupChildIssues(
     | "particle"
     | "text"
     | "model"
+    | "sprite"
     | "shape"
   >,
 ): string[] {
@@ -1132,7 +1143,9 @@ export function groupChildIssues(
     (!!layer.particle && someParticleSystem(layer.particle, (system) => (system.flags & 4) !== 0))
   )
     keys.push("model:passthrough:children:perspective");
-  if (layer.model) keys.push("model:passthrough:children:model");
+  // sprite（P13c）也挂着 `model`：组里它的遮挡测试读哪张深度、画在哪没测，单独照报
+  if (layer.sprite) keys.push("model:passthrough:children:sprite");
+  else if (layer.model) keys.push("model:passthrough:children:model");
   if (layer.shape) keys.push("model:passthrough:children:shape");
   return keys;
 }
@@ -1233,8 +1246,9 @@ export function normalizeDepthKeys(pass: Pick<MaterialPass, "cullmode" | "deptht
 /**
  * 材质 pass 的能力检查。深度与剔除三个键不报（P5d 步骤 1）：缺键、合法值、非法值都按 WPE 规整（`normalizeDepthKeys`），渲染器按规整后的值
  * 给每个绘制步骤定光栅状态（`render/graph.ts` 的 `rasterState`），场景目标按需带深度附件（`render/scene.ts`）。依据是 p5-REPORT「P5d 语义的
- * 实测核对」：深度、剔除、非法值、缺键、正交场景同样测深度几行全部实测成立。拼错的键（ricepod 的 `depthtesting`）不在 `SUPPORTED_PASS`
- * 里，照旧报 `material:<键>`。
+ * 实测核对」：深度、剔除、非法值、缺键、正交场景同样测深度几行全部实测成立。拼错的 `depthtesting` / `depthwriting`（ricepod 的 `orbital_*`）
+ * 中性（P13c）：WPE 不读这两个键（exe 里没有这两个串，rea-p13-lights 4.5），按缺省规整，实测 ricepod 的 `orbital_*` 是测深度、不写深度
+ * （p13-REPORT「P13c 的实测」S4）。
  *
  * 常量上的关键帧报 `value:animation`（材质 JSON 不经属性框架）。`context.sceneConstants` 是 effect 实例从 `scene.json` 覆盖进来的常量
  * （`bundle.ts` 已把它们并进 `pass.constantshadervalues`）：这些键上的关键帧由 `collectAnimations` 处理，这里跳过（P10a 步骤 2）。
@@ -1256,7 +1270,9 @@ export function checkPassFeatures(
   for (const [key, value] of Object.entries(pass))
     if (
       !SUPPORTED_PASS.has(key) &&
-      !["alphawriting", "keepaspect", "usertextures", "usertexturereference"].includes(key) &&
+      !["alphawriting", "keepaspect", "usertextures", "usertexturereference", "depthtesting", "depthwriting"].includes(
+        key,
+      ) &&
       active(value)
     )
       unsupported.add(`material:${key}`);

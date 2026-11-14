@@ -49,9 +49,11 @@ export function lightConfigIssues(general: Record<string, unknown>): string[] {
 /**
  * 整场全局的引擎宏（hdr-macro-REPORT）：基础材质、effect、passthrough 都定义，运行中改属性不变。
  * 关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。
+ * `REVERSEDEPTH` 恒为 1（P13c）：WPE 用反向深度（清 0、GREATER，P5d 实测），引擎恒定义它；WPE 自带着色器里用到它的是 `occlusiontest.vert`
+ * （sprite 的遮挡方块把 z 写成 1e−7，p13-REPORT 第 18 行抓帧 z 近 0）、`volumetricsfront`、`common_pbr_2.h` 的级联阴影。
  */
 export function engineDefines(hdr: boolean, ortho: boolean): Record<string, string> {
-  const defines: Record<string, string> = {};
+  const defines: Record<string, string> = { REVERSEDEPTH: "1" };
   if (hdr) defines.HDR = "1";
   if (ortho) defines.SCENE_ORTHO = "1";
   return defines;

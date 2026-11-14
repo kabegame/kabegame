@@ -23,7 +23,8 @@ function someSystem(system: SceneParticle, test: (system: SceneParticle) => bool
  * - `effect`：带 effect 的图像层 / 文本层（上屏前要跑 effect 链）；
  * - `composite`：不带 effect 但走合成路径的图层（colorBlendMode 混合、被依赖、组合层），上屏要读快照或合成 RT；
  * - `particle-perspective`：粒子树里有透视系统（`flags & 4`）；
- * - `particle-framebuffer`：粒子树里有要快照的材质（折射等）。
+ * - `particle-framebuffer`：粒子树里有要快照的材质（折射等）；
+ * - `sprite`：sprite 对象（P13c）。
  * 模型、直接上屏的图像层（含 puppet）与文本层、其余粒子可画。
  */
 export function reflectionKind(
@@ -39,10 +40,13 @@ export function reflectionKind(
     | "passthroughModel"
     | "particle"
     | "model"
+    | "sprite"
     | "text"
   >,
 ): string | null {
   if (layer.group !== null || layer.subtree.length > 0) return "group";
+  // sprite（P13c）：WPE 在反射 pass 里也画它，「谁先画谁做遮挡测试」，矩阵怎么镜像没查清（rea-p13-lights「未查清」），语料 0 处
+  if (layer.sprite) return "sprite";
   if (layer.shape) return "shape";
   if (layer.perspective) return "perspective";
   if (layer.particle) {
