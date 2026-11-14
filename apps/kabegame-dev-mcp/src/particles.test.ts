@@ -17,6 +17,7 @@ import {
   summarizeCorners,
   traceRequestOf,
   videoLine,
+  userTexturesLine,
 } from "./tools.ts";
 import { frColor } from "./timeline.ts";
 import type { DevMcpDeps } from "./tools.ts";
@@ -148,6 +149,33 @@ const handler: Handler = (req, body, res) => {
                 height: 720,
                 failed: false,
               })),
+      };
+    }
+    // 用户纹理：给了 gifDts 时像新探针那样回 userTextures（一个 GIF 换过 gifDts.length 帧、一个视频）
+    const gifDts = (body as { gifDts?: number[] }).gifDts;
+    if (gifDts !== undefined) {
+      meta = {
+        ...meta,
+        userTextures: [
+          {
+            name: "pic",
+            value: "C:/a.gif",
+            kind: "gif",
+            status: "ready",
+            width: 64,
+            height: 48,
+            keys: ["k"],
+            gifs: [{ key: "k", frames: gifDts.length, lastFrame: gifDts.length - 1 }],
+          },
+          {
+            name: "clip",
+            value: "C:/b.mp4",
+            kind: "video",
+            status: "ready",
+            keys: ["v"],
+            videos: [{ key: "v", player: { currentTime: 1.25 } }],
+          },
+        ],
       };
     }
     // 跑场景脚本（第 7 批）：给了 scripts 时像新探针那样回 meta.scripts（两段脚本，一段出错停用、写过一个重编译目标、问过声音层）
@@ -1051,6 +1079,46 @@ describe("视频时刻（P9a 步骤 3）", () => {
       }
       assert.equal(bodiesOf(rest, "/render").length, 0, "参数错时不发请求");
     });
+  });
+
+  test("gifDts 原样转给 REST（空数组也转）；结果写一行用户纹理；host_render 同样转；形状由 SDK 参数校验拒绝", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const result = await call("render_scene", { imageId: "9", gifDts: [0.05, 0.1, 0] });
+      assert.notEqual(result.isError, true, textOf(result));
+      assert.deepEqual(bodiesOf(rest, "/render"), [{ imageId: "9", gifDts: [0.05, 0.1, 0] }]);
+      assert.match(
+        textOf(result),
+        /用户纹理：pic（gif，ready 64×48）：k 换过 3 帧（最近第 2 帧）；clip（video，ready）：v currentTime 1\.25 s/,
+      );
+
+      const empty = await call("render_scene", { imageId: "9", gifDts: [] });
+      assert.notEqual(empty.isError, true, textOf(empty));
+      assert.deepEqual(bodiesOf(rest, "/render")[1], { imageId: "9", gifDts: [] });
+
+      const plain = await call("render_scene", { imageId: "9" });
+      assert.deepEqual(bodiesOf(rest, "/render")[2], { imageId: "9" }, "不给 gifDts 时请求和以前一样");
+      assert.doesNotMatch(textOf(plain), /用户纹理/);
+
+      const host = await call("host_render", { handle: "h-7", imageId: "9", gifDts: [0.5] });
+      assert.notEqual(host.isError, true, textOf(host));
+      assert.deepEqual(bodiesOf(rest, "/hosts/h-7/render")[0].gifDts, [0.5]);
+
+      const before = bodiesOf(rest, "/render").length;
+      for (const gifDts of [[-1], ["1"], "0.1", 0.1]) {
+        const bad = await call("render_scene", { imageId: "9", gifDts });
+        assert.equal(bad.isError, true, JSON.stringify(gifDts));
+      }
+      assert.equal(bodiesOf(rest, "/render").length, before, "参数错时不发请求");
+    });
+  });
+
+  test("userTexturesLine：没有用户纹理时不写", () => {
+    assert.equal(userTexturesLine({}), null);
+    assert.equal(userTexturesLine({ userTextures: [] }), null);
+    assert.equal(
+      userTexturesLine({ userTextures: [{ name: "a", value: "x.png", kind: "image", status: "ready", keys: [] }] }),
+      "用户纹理：a（image，ready）",
+    );
   });
 
   test("videoLine：没有视频纹理或宿主产物没回 videos 时不写", () => {

@@ -16,7 +16,8 @@
  *   这时 `value` 还可以是字符串（最长 `MAX_SCRIPT_TEXT` 个 UTF-16 单元）；图层字段给字符串仍是 400。P11a 起可以不给 `field`、改给
  *   `constant`（材质常量的键，非空字符串）与可选的 `effect`（effects 下标），值同图层字段；两者同给、`effect` 不跟着 `constant` 都是 400。
  * - 视频时刻（P9a 步骤 3）：渲染的 `videoTime` 是非负有限数（秒），或「非空字符串 → 非负有限数」的对象、最多 `MAX_VIDEO_TIMES` 项；
- *   键是不是这个场景的视频纹理要编译之后才知道，由探针判（不是时报错，回 422）。
+ *   键是不是这个场景的视频纹理要编译之后才知道，由探针判（不是时报错，回 422）；键也可以是用户纹理里视频的值（属性里的绝对路径）。
+ * - 用户 GIF 逐帧时间：渲染的 `gifDts` 是数组、最多 `MAX_GIF_DTS` 项，每项非负有限数（秒）。
  * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：渲染的 `trace` 是 `true`，或 `{ readback?, maxVertices? }`：`readback` 是
  *   pass 下标（非负整数）或 pass / 目标纹理标签的子串（非空字符串）组成的数组、最多 `MAX_TRACE_READBACKS` 项，`maxVertices` 是
  *   1–`MAX_TRACE_VERTICES` 的整数（探针 `apps/wpe-scene/src/dev/drawTrace.ts` 的 `traceOptionsOf` 同样查）。
@@ -77,6 +78,8 @@ export const SCRIPT_VALUE_FIELDS = ["object", "field", "constant", "effect", "va
 export const MAX_SCRIPT_VALUES = 64;
 /** 文本字段的字符串值最长这么多个 UTF-16 单元（P6b 1e-3，探针 `dev/scriptValues.ts` 的 `MAX_SCRIPT_TEXT`，改了两边一起改）。 */
 export const MAX_SCRIPT_TEXT = 4096;
+/** `gifDts` 最多这么多项。 */
+export const MAX_GIF_DTS = 10000;
 /** `videoTime` 对象最多这么多项（语料一张场景最多 5 段视频）。 */
 export const MAX_VIDEO_TIMES = 64;
 export const TRACE_FIELDS = ["readback", "maxVertices"] as const;
@@ -454,6 +457,18 @@ export function checkVideoTime(value: unknown, field = "videoTime"): VideoTime {
   return value as Record<string, number>;
 }
 
+/** 用户纹理里 GIF 的逐帧 g_Frametime：非负有限数（秒）的数组、最多 `MAX_GIF_DTS` 项（空数组合法）。 */
+export function checkGifDts(value: unknown, field = "gifDts"): number[] {
+  if (!Array.isArray(value)) fail(field, `要是数组（每项是一帧的 g_Frametime，秒），收到 ${shown(value)}`);
+  if (value.length > MAX_GIF_DTS) fail(field, `有 ${value.length} 项，最多 ${MAX_GIF_DTS} 项`);
+  value.forEach((dt, index) => {
+    if (typeof dt !== "number" || !Number.isFinite(dt) || dt < 0) {
+      fail(`${field}[${index}]`, `要是非负有限数（秒），收到 ${shown(dt)}`);
+    }
+  });
+  return value as number[];
+}
+
 /**
  * 逐 draw 轨迹：`true`，或 `{ readback?, maxVertices? }`。`readback` 选哪些 pass 在结束后读回颜色附件（pass 下标，或 pass / 目标纹理标签的
  * 子串）；`maxVertices` 是每个 draw 解码的顶点数（缺省 64）。不认识的字段 400。选中的 pass 读不了（格式、没提交）由探针在轨迹里写明。
@@ -532,6 +547,7 @@ export function checkRenderReplay(body: {
   scriptValues?: unknown;
   scripts?: unknown;
   videoTime?: unknown;
+  gifDts?: unknown;
   trace?: unknown;
 }): ParticleReplay | undefined {
   const particles = body.particles === undefined ? undefined : checkReplay(body.particles, "particles");
@@ -561,6 +577,7 @@ export function checkRenderReplay(body: {
     }
   }
   if (body.videoTime !== undefined) checkVideoTime(body.videoTime);
+  if (body.gifDts !== undefined) checkGifDts(body.gifDts);
   if (body.trace !== undefined) checkTrace(body.trace);
   return particles;
 }

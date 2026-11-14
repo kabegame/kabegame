@@ -3,12 +3,13 @@
  * - `checkGifDts`：每项有限非负，否则抛 RangeError（`renderFrame` 在编译之前查）；
  * - `prepareProbeUserTextures`：来源表建好就按暂停处理（屏外渲染没有实时帧，视频不按真实时间放），没有属性来源时不建；
  * - `ProbeVideos` 的 `videoTime` 对象形式也认用户视频的值（属性里的绝对路径）为合法键。
+ * - `userVideoValues` / `checkVideoVisibility`（P11b 步骤 5）：要用视频而宿主 frame 不可见时立刻报原因。
  */
 import { describe, expect, it, vi } from "vitest";
 import type { SceneBundle } from "../compile/bundle";
 import { UserTextureSources } from "../usertex/sources";
-import { checkGifDts, prepareProbeUserTextures } from "./probeUserTextures";
-import { ProbeVideos } from "./videoProbe";
+import { checkGifDts, prepareProbeUserTextures, userVideoValues } from "./probeUserTextures";
+import { checkVideoVisibility, ProbeVideos } from "./videoProbe";
 
 describe("checkGifDts", () => {
   it("缺省原样返回；非负有限数组通过", () => {
@@ -69,5 +70,30 @@ describe("ProbeVideos：videoTime 对象的键也可以是用户视频的值", (
     );
     // 不给用户视频的值时同以前
     expect(() => new ProbeVideos(textures, { "D:/u/clip.mp4": 2 })).toThrow(/不是这个场景的视频纹理/);
+  });
+});
+
+describe("要用视频时宿主 frame 必须可见（P11b 步骤 5）", () => {
+  const bundle = {
+    userTextures: [
+      { kind: "property", name: "a" },
+      { kind: "property", name: "b" },
+      { kind: "system", name: "$mediaThumbnail" },
+    ],
+  } as unknown as SceneBundle;
+
+  it("userVideoValues：只取属性来源里选了视频的值（扩展名不分大小写），图片、GIF、空值、非字符串不算", () => {
+    expect(userVideoValues(bundle, { a: "D:/v/clip.MP4", b: "D:/i/x.gif" })).toEqual(["D:/v/clip.MP4"]);
+    expect(userVideoValues(bundle, { a: "", b: 3 })).toEqual([]);
+    expect(userVideoValues(bundle, undefined)).toEqual([]);
+    expect(userVideoValues({ userTextures: undefined } as unknown as SceneBundle, { a: "x.mp4" })).toEqual([]);
+  });
+
+  it("checkVideoVisibility：要用视频且 frame 不可见时立刻抛错说明原因；不用视频或可见时不管", () => {
+    expect(() => checkVideoVisibility(true, "hidden")).toThrow(/主窗口最小化或隐藏/);
+    expect(() => checkVideoVisibility(false, "hidden")).not.toThrow();
+    expect(() => checkVideoVisibility(true, "visible")).not.toThrow();
+    // Node 里没有 document：缺省参数是 undefined，不抛
+    expect(() => checkVideoVisibility(true)).not.toThrow();
   });
 });

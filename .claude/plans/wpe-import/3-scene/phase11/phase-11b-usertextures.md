@@ -536,3 +536,52 @@ export function parseUserTextures(pass: MaterialPass, defaults: (slot: number) =
 - 视频源矩形起点落在半像素时，WPE 的 MF 会重采样，我们取整像素。HDR 视频不做。槽 0 换成用户视频时的 `getVideoTexture()` 不做。
 - 暂停期间改值建出的 GIF，第一次画到时用的是上一个实时帧的 frametime。
 - GIF 解码在几乎不可压缩的大帧上约 29 ms / 帧（1.1 MB 一帧，代理的一次性测量）。
+
+### 步骤 5 — 走查（2026-11-14）
+
+**先补的工具**（用户同意「行」）：
+- `render_scene` / `host_render` 转发 `gifDts`（`scripts/kabegame-dev/`、`apps/kabegame-dev-mcp/`，一个 Sonnet 代理）。
+  - 我改了它的 409 条件：没有属性来源的场景，探针不回 `userTextures`，不能算旧产物。
+  - vite 插件改完自动重启生效；MCP 要等会话重启。
+- 屏外宿主拿不到视频帧，查明是**主窗口被最小化或隐藏**造成的：
+  - 宿主 iframe 的 `document.hidden` 跟着为真，Chromium 推迟没放过媒体的 frame 的媒体加载；
+  - 主窗口可见时屏外宿主是 `visible`、rAF 不跑，视频 30 ms 出第一帧。
+  - 不是宿主或探针的 bug。探针改成要用视频而 frame 不可见时立刻报原因（`dev/videoProbe.ts` 的 `checkVideoVisibility`，`dev/probeUserTextures.ts` 的 `userVideoValues`）。
+- `host.renderFrame(time, key?)` 给了 `key` 时存读回的 RGBA，用来按区域和 WPE 比运行中改值后的画面。
+
+**生成工程**（1920×1080 窗口，PNG `ut-a.png`；抓帧 `A:\p11b\s5-*`，比较 `ignore/p11/b/a/cmp_frame.py` 屏蔽 FR / CLK）：
+
+| 工程 | 情形 | 结果 |
+|---|---|---|
+| `p11-ut-ar` | 1:4 与 1:1 两种缺省纹理比例，寻址沿用缺省 | 整帧 0 差 |
+| `p11b-rt` | 空值 | 整帧 0 差 |
+| `p11b-rt-init` | 加载时就有值不生效（M8） | 整帧 0 差 |
+| `p11b-rt` | 运行中改值（M3）：屏外宿主收 `metadataId` 补丁就地写入，`host.renderFrame` 渲染宿主当前状态 | 前 1000 行区域哈希改值前后都和 WPE 相同；`applied` +1、没有重编译 |
+| `p11b-inst` | 运行中改值，槽 0 整层重建（合成 RT 32×32 → 300×200、强制白） | 同上，相同 |
+
+运行中换图的两条路（重绑 draw、整层重建）因此第一次在真 GPU 上验到。
+
+**真实壁纸的复制工程**（`kbp content isolate --instrument`。属性值写进复制工程 `project.json` 的缺省值，图片拷进工程目录：Kabegame 的 `file:` 放行认场景目录。WPE 用 `capture_sweep` 抓、按日志时间线回放，后处理 ultra。窗口和场景 1:1：3840×2130 带边框，或 wpe-renderdoc 新加的无边框 3840×2160 / 3396×2160）：
+
+| 场景 | 留下的对象 / 换成固定值的字段 | 结果 |
+|---|---|---|
+| 3462279189 天空 | 2737；相机 `origin` 的脚本换成它算出的 `1920 1080 500`（探针回放不跑脚本） | 整帧 0 差（属性 `_1` 没声明，永远是缺省纹理） |
+| 3351163962 instanced | 246 及父链；`background`、`roll1` 设成可见 | 整帧 0 差 |
+| 3253330537 blend | 617；`newproperty19` 设成可见；`cameraparallax` 关掉 | 整帧 0 差 |
+| 2833017810 yoshi（HDR + 泛光，非 2 的幂槽 0） | 286；`customsilhouette` 开、`texturecolor` 白、清屏色灰 | 最大差 1：WPE 的上屏是半精度浮点（线性），换算成 sRGB 8 位后的舍入差 |
+| 3783690410 xray（effect 槽 3，场景里有两段视频） | 17 | 视频时刻扫到 8.92 s 时差 > 32 的只剩 2055 个像素，是一颗会动的水珠；其余零星差异来自视频，遮罩各象限的边界上没有成条的差异 |
+
+没走完的两张：
+- 3660962877：用户纹理所在的 effect 的可见性绑在 `appdockapplyusertexture1` 上，两边都没画这个槽；图层槽 0 是 `usershortcut`（P11d），`scale` 和 alpha 还跟鼠标脚本，不可隔离。
+- 3351072238（缺省是 RT）：复制工程里被测对象不出画，整帧黑，两边相同但没有信息量。RT 缺省的运行中改值由生成工程 `p11b-rt` 覆盖。
+
+**走查中发现的、不属于 P11b 的问题**（已报告，不在本节修）：
+1. **布尔字段绑数值属性**：3253330537 的 `general.cameraparallax` 绑在滑块属性 `newproperty16`（值 −0.22）上，WPE 当真（视差开），我们当假。差异就是整层随光标平移约 (+0.7, −7.5) 像素。归 P5 / P3a 的绑定取值。
+2. **标清、未标色彩信息的视频整体偏色**（`ut-vstripe.mp4`，320×240）：
+   - Chromium 识别成 `smpte170m`，矩阵对；`copyExternalImageToTexture` 另做 SMPTE-C → sRGB 的原色转换。
+   - WPE（MF）只做矩阵，所以和源值相同。
+   - 已转给 P9，P11b 记为已知差异。
+3. `kbp cmp frame` 不认 R16G16B16A16_FLOAT 的 DDS（HDR 场景的上屏），临时用 `ignore/p11/b4/dds_srgb.py` 换算。
+4. HEAD 的 `compile/pipeline.test.ts` 语料用例失败（3293687972 读取 125 MB 超上限），不含 P11b 改动的 HEAD 同样失败。
+
+**语料**：步骤 4 没改编译，能渲染数同步骤 1（88 → 90），不重扫。

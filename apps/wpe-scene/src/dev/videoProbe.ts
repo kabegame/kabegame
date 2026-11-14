@@ -41,6 +41,23 @@ export interface ProbeVideoResult {
 
 /** 读、seek、等当前帧的总时限（全部视频共用）。 */
 export const VIDEO_PREPARE_TIMEOUT_MS = 10_000;
+
+/**
+ * 要用视频（bundle 的视频纹理或用户纹理里的视频）时，宿主 frame 必须可见：主窗口最小化或隐藏时屏外宿主 iframe 的
+ * `document.visibilityState` 跟着是 `hidden`，Chromium 推迟没放过媒体的 frame 的媒体加载（`RenderFrameImpl::DeferMediaLoad`），
+ * `<video>` 停在 `loadstart` / `stalled`、`readyState` 0，等到总时限也拿不到帧（P11b 步骤 5 实测：主窗口隐藏时 5.8 KB 的视频
+ * 3 s 没有元数据，恢复后 30 ms 出第一帧）。这里立刻报出原因，不等超时。主窗口可见时屏外宿主（挂在视口外）是 `visible`、
+ * rAF 不跑，视频照常加载。
+ */
+export function checkVideoVisibility(
+  needed: boolean,
+  visibility: DocumentVisibilityState | undefined = globalThis.document?.visibilityState,
+): void {
+  if (needed && visibility === "hidden")
+    throw new Error(
+      "宿主 frame 不可见（主窗口最小化或隐藏）：Chromium 推迟媒体加载，视频纹理拿不到帧；把主窗口恢复到屏幕上再渲染",
+    );
+}
 /** 事件之外的短轮询间隔。 */
 const POLL_MS = 20;
 /** `HTMLMediaElement.HAVE_CURRENT_DATA`（Node 里没有这个全局）。 */

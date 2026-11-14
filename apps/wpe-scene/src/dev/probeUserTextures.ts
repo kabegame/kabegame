@@ -6,7 +6,7 @@
  */
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
-import { UserTextureSources } from "../usertex/sources";
+import { mediaKind, UserTextureSources } from "../usertex/sources";
 
 export async function prepareProbeUserTextures(
   bundle: Pick<SceneBundle, "userTextures">,
@@ -25,6 +25,17 @@ export async function prepareProbeUserTextures(
     }),
   );
   return sources;
+}
+
+/** bundle 的属性来源按 `userProperties` 选了视频的那些值（`mediaKind`）：探针据此判断要不要加载视频（`checkVideoVisibility`）。 */
+export function userVideoValues(
+  bundle: Pick<SceneBundle, "userTextures">,
+  userProperties: Record<string, unknown> | undefined,
+): string[] {
+  return (bundle.userTextures ?? []).flatMap((source) => {
+    const value = source.kind === "property" ? userProperties?.[source.name] : undefined;
+    return typeof value === "string" && value !== "" && mediaKind(value) === "video" ? [value] : [];
+  });
 }
 
 /** 校验 `gifDts`：数组，每项有限非负；不合法抛 RangeError（编译之前查）。缺省原样返回 undefined。 */

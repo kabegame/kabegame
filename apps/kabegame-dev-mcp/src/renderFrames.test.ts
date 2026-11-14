@@ -168,6 +168,16 @@ describe("参数", () => {
     const timed = parseCli(["--image", "13", "--frames", "1", "--out", "o", "--fps", "20", "--video-time", "1.5"], cwd);
     assert.equal(timed.fps, 20);
     assert.equal(timed.videoTime, 1.5);
+    assert.equal(timed.gifDts, undefined);
+    const gif = (v: string) =>
+      parseCli(["--image", "13", "--frames", "1", "--out", "o", "--fps", "20", "--gif-dts", v], cwd).gifDts;
+    assert.deepEqual(gif("0.05,0.1"), [0.05, 0.1]);
+    assert.deepEqual(gif("[0.05, 0]"), [0.05, 0]);
+    assert.deepEqual(gif(""), []);
+    assert.throws(
+      () => parseCli(["--image", "13", "--frames", "1", "--out", "o", "--fps", "20", "--gif-dts", "-1"], cwd),
+      /--gif-dts/,
+    );
     assert.equal(timed.timeline, undefined);
 
     const bad = (args: string[], re: RegExp) => assert.throws(() => parseCli(args, cwd), re);

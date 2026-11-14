@@ -555,6 +555,89 @@ describe("粒子接口的参数透传", () => {
     );
   });
 
+  test("用户 GIF 逐帧时间：gifDts 原样交给探针（空数组也转）；不给时不带；不合法回 400 不碰页面；userTextures 的项没有 kind 回 409，没有 userTextures 不报", async () => {
+    const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
+    const f = await fixture({
+      renderFrame: (args: unknown) => {
+        const gifDts = (args as { gifDts?: number[] }).gifDts;
+        // gifDts 含 99 时模拟 P11b 步骤 4 之前的探针：回 userTextures 但项里没有 kind
+        if (gifDts?.includes(99))
+          return {
+            width: 1,
+            height: 1,
+            sha256: "old",
+            time: 1.5,
+            frametime: 0,
+            userTextures: [{ name: "pic", value: "a.gif", status: "empty", keys: [] }],
+          };
+        // 含 98 时模拟没有属性来源的场景：探针不回 userTextures
+        if (gifDts?.includes(98)) return { width: 1, height: 1, sha256: "none", time: 1.5, frametime: 0 };
+        return {
+          width: 1,
+          height: 1,
+          sha256: "x",
+          time: 1.5,
+          frametime: 0,
+          userTextures: [
+            {
+              name: "pic",
+              value: "a.gif",
+              kind: "gif",
+              status: "ready",
+              keys: ["k"],
+              gifs: [{ key: "k", frames: gifDts?.length ?? 0, lastFrame: (gifDts?.length ?? 0) - 1 }],
+            },
+          ],
+        };
+      },
+    });
+    vm.runInContext(
+      `window.__kabegameSceneProbe.chunk = (key, index) => (index === 0 ? ${JSON.stringify(png)} : null)`,
+      f.host,
+    );
+    const calls = () =>
+      f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
+    const response = await renderFrame(f.s, "h-1", { imageId: "14501", gifDts: [0.05, 0, 0.1], userProperties: {} });
+    assert.deepEqual(calls()[0].gifDts, [0.05, 0, 0.1]);
+    assert.equal(response.meta.userTextures?.[0].gifs?.[0].frames, 3);
+    await renderFrame(f.s, "h-1", { imageId: "14501", gifDts: [], userProperties: {} });
+    assert.deepEqual(calls()[1].gifDts, []);
+    await renderFrame(f.s, "h-1", { imageId: "14501", userProperties: {} });
+    assert.equal("gifDts" in calls()[2], false, "不给 gifDts 时请求和以前一样");
+
+    const before = f.conn.evaluated.length;
+    for (const [gifDts, field] of [
+      [-1, "gifDts"],
+      ["0.1", "gifDts"],
+      [null, "gifDts"],
+      [{ 0: 1 }, "gifDts"],
+      [[0.1, -0.5], "gifDts[1]"],
+      [[Number.NaN], "gifDts[0]"],
+      [[Number.POSITIVE_INFINITY], "gifDts[0]"],
+      [["1"], "gifDts[0]"],
+      [new Array(10001).fill(0), "gifDts"],
+    ] as const) {
+      await assert.rejects(
+        renderFrame(f.s, "h-1", { imageId: "14501", gifDts: gifDts as never, userProperties: {} }),
+        (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === field,
+        JSON.stringify(gifDts).slice(0, 40),
+      );
+    }
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14501", gifDts: [99], userProperties: {} }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 409 &&
+        error.layer === "host" &&
+        /探针不认识 gifDts/.test(error.message),
+    );
+    // 没有属性来源的场景：不回 userTextures，gifDts 照转、不报 409
+    const none = await renderFrame(f.s, "h-1", { imageId: "14501", gifDts: [98], userProperties: {} });
+    assert.equal(none.meta.userTextures, undefined);
+  });
+
   test("逐 draw 轨迹：trace 原样交给探针；取回轨迹 JSON 与读回图；没给不带；不合法 400；旧宿主 409；超过 64 MB 回 413 不取", async () => {
     const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
     const trace = {

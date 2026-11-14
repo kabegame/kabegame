@@ -9,7 +9,8 @@
  * - 读回画布（第 5 批）：`render_scene` / `host_render` 的 `canvas` 原样交给探针，探针按 `fill` 上屏到这么大的画布再读回；和时间线
  *   交给探针的窗口不同时在 MCP 里报 `[local]`，结果里写明读回的是什么。
  * - 视频时刻（P9a 步骤 3）：`render_scene` / `host_render` 的 `videoTime` 原样交给探针（每段视频 seek 到这个时刻再渲染），结果里写一行
- *   每段实际取的时刻（`meta.videos`）。
+ *   每段实际取的时刻（`meta.videos`）；也作用于用户纹理里的视频。
+ * - 用户 GIF（`gifDts`）：每项一帧 g_Frametime，探针读回前逐项推进用户纹理里的 GIF；结果写一行用户纹理（`userTexturesLine`）。
  * - 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`render_scene` / `host_render` 的 `trace: { save, readback?, maxVertices? }`，
  *   `readback` / `maxVertices` 交给 REST，轨迹 JSON 与读回图写进 `save` 目录（`writeTrace`），结果里只写一行摘要。
  * - 跑场景脚本（kabegame-chromium 第 7 批）：`render_scene` / `host_render` 的 `scripts: true | { clock?, seed? }` 原样交给 REST，探针照宿主
@@ -401,7 +402,14 @@ const VIDEO_TIME = z
   .describe(
     "视频纹理的时刻（秒），缺省 0：数字对全部视频纹理生效；{ <纹理 path>: 秒 } 分别给（键是 bundle 纹理的 path，如 materials/xxx.tex，" +
       "没给的取 0，不是这个场景的视频纹理时报错）。超过时长按循环取模（WPE 视频纹理缺省循环）。屏外宿主不跑帧循环、视频用自己的时钟" +
-      "（不跟 g_Time），这是确定性回放视频的唯一办法；实际取的时刻见结果里的「视频纹理」行与 meta.videos。读不到或解码失败的视频保持透明（同产品）",
+      "（不跟 g_Time），这是确定性回放视频的唯一办法；实际取的时刻见结果里的「视频纹理」行与 meta.videos。读不到或解码失败的视频保持透明（同产品）。也作用于用户纹理里的视频，对象的键可以是用户视频的值（属性里的绝对路径）",
+  );
+/** 用户纹理里 GIF 的逐帧时间：项数上限（10000）由 vite 的 `checkGifDts` 查。 */
+const GIF_DTS = z
+  .array(z.number().finite().nonnegative())
+  .describe(
+    "用户纹理里 GIF 的逐帧 g_Frametime（秒）：每项一帧，探针读回前逐项推进用户纹理里的 GIF（相当于每帧都被画到）；不给时 GIF 停在第 0 帧。" +
+      "和 WPE 抓帧比时填抓帧的逐帧 dt。结果里的「用户纹理」行写各 GIF 换过几帧",
   );
 /** 逐 draw 轨迹：`readback` 的项数上限同 vite 的 `MAX_TRACE_READBACKS`，`maxVertices` 同 `MAX_TRACE_VERTICES`。 */
 const TRACE = z
@@ -470,6 +478,7 @@ const RENDER_FIELDS = {
   replay: RENDER_REPLAY.optional(),
   canvas: CANVAS.optional(),
   videoTime: VIDEO_TIME.optional(),
+  gifDts: GIF_DTS.optional(),
   trace: TRACE.optional(),
   scripts: SCRIPTS.optional(),
 };
@@ -778,6 +787,20 @@ export function videoLine(meta: Pick<RenderMeta, "videos">): string | null {
       : `${video.path} 取 ${video.time} s（时长 ${video.duration ?? "?"} s，${video.width}×${video.height}）`,
   );
   return `视频纹理：${parts.join("；")}`;
+}
+
+/** 用户纹理（`meta.userTextures`）：每个来源的名字、kind、status、尺寸；GIF 给各纹理名换过几帧，视频给各纹理名的 currentTime。没有时不写。 */
+export function userTexturesLine(meta: Pick<RenderMeta, "userTextures">): string | null {
+  const list = meta.userTextures;
+  if (!Array.isArray(list) || !list.length) return null;
+  const parts = list.map((item) => {
+    const size = item.width !== undefined && item.height !== undefined ? ` ${item.width}×${item.height}` : "";
+    const extra: string[] = [];
+    for (const gif of item.gifs ?? []) extra.push(`${gif.key} 换过 ${gif.frames} 帧（最近第 ${gif.lastFrame} 帧）`);
+    for (const video of item.videos ?? []) extra.push(`${video.key} currentTime ${video.player?.currentTime ?? "?"} s`);
+    return `${item.name}（${item.kind}，${item.status}${size}）${extra.length ? "：" + extra.join("，") : ""}`;
+  });
+  return `用户纹理：${parts.join("；")}`;
 }
 
 type TraceArg = z.infer<typeof TRACE>;
@@ -1178,6 +1201,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         frLine(options.fr ?? null, response.meta) ?? "",
         ...scriptsLines(response.meta, !!options.scripts),
         videoLine(response.meta) ?? "",
+        userTexturesLine(response.meta) ?? "",
         `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
         `读回那一帧 g_Time ${response.meta.time}，g_Frametime ${response.meta.frametime}`,
         particleStatsLine(response.meta) ?? "",
@@ -1282,7 +1306,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
         "replay、canvas、videoTime 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回（replay.fr 缺省 true，把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色）；" +
-        "给 canvas 时读回按 fill 上屏到这么大的画布；videoTime 定视频纹理的时刻；trace 同 render_scene，把这一帧的逐 draw 轨迹写进 trace.save 目录；" +
+        "给 canvas 时读回按 fill 上屏到这么大的画布；videoTime 定视频纹理的时刻（也作用于用户视频）；gifDts 逐帧推进用户 GIF；trace 同 render_scene，把这一帧的逐 draw 轨迹写进 trace.save 目录；" +
         "scripts 同 render_scene：探针照宿主跑场景脚本（外部值来自请求、可重复），FR 由脚本自己画、不再涂色。",
       inputSchema: {
         handle: z.string().min(1),
@@ -1405,7 +1429,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "给 scripts: true | { clock?, seed? } 时探针照宿主跑场景脚本：建好场景之后跑 init，回放的每一帧设好相机之后跑一帧；Date、Math.random、" +
         "screenResolution（canvas ?? 窗口 ?? 1920×1080）都来自请求、两次同样的请求得到同一张图；FR 由脚本自己画、不涂；结果里写各段脚本的状态与出错、" +
         "要整场重编译而探针做不了的写入（有就说明这一帧不可信）、没接的 API（声音 / 视频 / 粒子层的脚本方法）。" +
-        "有视频纹理的场景用 videoTime 定视频的时刻（缺省 0，超过时长按循环取模），结果里写一行每段实际取的时刻。" +
+        "有视频纹理的场景用 videoTime 定视频的时刻（缺省 0，超过时长按循环取模），结果里写一行每段实际取的时刻；videoTime 也作用于用户纹理里的视频（对象的键可以是用户视频的值）。" +
+        "给 gifDts: [每帧 g_Frametime 秒…] 时探针读回前逐项推进用户纹理里的 GIF，不给时停在第 0 帧，和 WPE 抓帧比时填抓帧的逐帧 dt；结果里写一行用户纹理。" +
         "给 trace: { save, readback?, maxVertices? } 时探针记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform（按名字解码）、顶点，" +
         "写到 save 目录的 trace.json，readback 选中的 pass 的目标另存 pass-<下标>.png / .f32，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照；轨迹不进会话，结果里只有一行摘要。" +
         "工具不做比较，比较自己跑 ignore/p4 的脚本。",

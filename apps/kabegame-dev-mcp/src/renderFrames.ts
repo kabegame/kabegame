@@ -6,7 +6,7 @@
  *   [--timeline-log <日志> [--timeline-track <轨迹>] [--cursors log|track] [--cursor x,y] [--window WxH] [--gap error|split]
  *    [--audio <录制>] [--seed N] [--passes 1|2] [--no-fr]]
  *   [--fps N | --time 秒]                           不给日志时：每帧 g_Time = 帧号 / fps（名义时间），或每帧同一个时刻
- *   [--canvas WxH] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON]
+ *   [--canvas WxH] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON] [--gif-dts 秒,秒…|JSON]
  *   [--user-properties <JSON 文件或 JSON 串>] [--scripts [--clock 毫秒] [--script-seed N]]
  *   [--trace-frames 250 [--trace-readback 0,"text glyphs"] [--trace-max-vertices N]]
  *   [--reuse-host] [--timeout 秒] [--overwrite]
@@ -67,6 +67,8 @@ export interface RenderFramesOptions {
   postprocess?: "disabled" | "enabled" | "ultra" | "follow";
   pointer?: Point;
   videoTime?: number | Record<string, number>;
+  /** 用户 GIF 的逐帧 g_Frametime（秒）：每一帧 `render_scene` 都带同一份；不给时不传。 */
+  gifDts?: number[];
   userProperties?: Record<string, unknown>;
   /** 跑场景脚本（第 7 批）：原样作每一帧 `render_scene` 的 `scripts`；不给时不传。 */
   scripts?: true | { clock?: number; seed?: number };
@@ -168,6 +170,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
         postprocess: { type: "string" },
         pointer: { type: "string" },
         "video-time": { type: "string" },
+        "gif-dts": { type: "string" },
         "user-properties": { type: "string" },
         scripts: { type: "boolean" },
         clock: { type: "string" },
@@ -249,6 +252,19 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
       ? parseNumber(videoTime, "--video-time", (x) => Number.isFinite(x) && x >= 0)
       : (jsonArg(videoTime, cwd, "--video-time") as Record<string, number>);
   }
+  const gifDts = str("gif-dts");
+  if (gifDts !== undefined) {
+    // 逗号分隔的数，或 JSON 数组 / JSON 文件
+    const list = /^[\s\d.eE+,-]*$/.test(gifDts)
+      ? gifDts.trim() === ""
+        ? []
+        : gifDts.split(",").map((x) => parseNumber(x, "--gif-dts", (v) => Number.isFinite(v) && v >= 0))
+      : jsonArg(gifDts, cwd, "--gif-dts");
+    if (!Array.isArray(list) || list.some((x) => typeof x !== "number" || !Number.isFinite(x) || x < 0)) {
+      throw new ArgError("--gif-dts 要是非负数（秒）的数组");
+    }
+    options.gifDts = list as number[];
+  }
   if (str("user-properties")) {
     const props = jsonArg(str("user-properties")!, cwd, "--user-properties");
     if (!props || typeof props !== "object" || Array.isArray(props))
@@ -313,6 +329,7 @@ export function renderArgs(options: RenderFramesOptions, frame: number, host?: s
   if (options.postprocess) args.postprocess = options.postprocess;
   if (options.pointer) args.pointer = options.pointer;
   if (options.videoTime !== undefined) args.videoTime = options.videoTime;
+  if (options.gifDts !== undefined) args.gifDts = options.gifDts;
   if (options.userProperties) args.userProperties = options.userProperties;
   if (options.scripts !== undefined) args.scripts = options.scripts;
   if (options.trace?.frames.includes(frame)) {

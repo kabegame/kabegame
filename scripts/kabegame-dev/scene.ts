@@ -464,7 +464,9 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
  * 跑场景脚本 `scripts`（第 7 批）校验后原样转给探针（不和 `scriptValues` 同给）；给了而结果没有 `meta.scripts` 时（宿主产物不认识这一项，
  * 脚本没跑）同样报 409。
  * 视频时刻 `videoTime`（P9a 步骤 3）校验后原样转给探针（`0` 也转）；给了而结果没有 `meta.videos` 时（宿主产物不认识这一项，视频停在
- * 透明的初值）同样报 409。
+ * 透明的初值）同样报 409；也作用于用户纹理里的视频，对象的键可以是用户视频的值。
+ * 用户 GIF 逐帧时间 `gifDts` 校验后原样转给探针（空数组也转）；给了而 `meta.userTextures` 的项里没有 `kind` 时（宿主产物早于 P11b 步骤 4，
+ * 不认识）报 409。没有属性来源的场景探针不回 `userTextures`，不报。
  * 逐 draw 轨迹 `trace`（`.claude/plans/tools/scene-draw-trace.md`）校验后原样转给探针；给了而结果没有 `meta.trace` 时（宿主产物不认识
  * 这一项，设备没包）报 409。按 `meta.trace` 取回 `<key>.trace.json` 与各读回图，响应加 `trace`（解析后的 JSON）与 `traceImages`；
  * 合计超过 `MAX_TRACE_BYTES` 回 413（先按探针报的大小判，不取）。
@@ -505,6 +507,8 @@ export async function renderFrame(
     ...(request.scripts !== undefined ? { scripts: request.scripts } : {}),
     // 视频时刻（P9a 步骤 3）：checkRenderReplay 已校验（形状）；路径是不是视频纹理由探针判。0 也是有效值，不能按真假判
     ...(request.videoTime !== undefined ? { videoTime: request.videoTime } : {}),
+    // 用户 GIF 逐帧时间：checkRenderReplay 已校验；空数组也转
+    ...(request.gifDts !== undefined ? { gifDts: request.gifDts } : {}),
     // 逐 draw 轨迹：checkRenderReplay 已校验（true 或 { readback?, maxVertices? }）
     ...(request.trace !== undefined ? { trace: request.trace } : {}),
   };
@@ -549,6 +553,19 @@ export async function renderFrame(
       "host",
       "宿主产物没有回 videos：探针不认识 videoTime、视频停在透明的初值，重建宿主（--mode development）",
       { imageId: request.imageId, videoTime: request.videoTime, meta: { videos: meta.videos ?? null } },
+    );
+  }
+  // 没有属性来源的场景探针不回 `userTextures`（gifDts 本来就没东西可推），不算；回了而项里没有 `kind` 是 P11b 步骤 4 之前的产物
+  if (
+    request.gifDts !== undefined &&
+    Array.isArray(meta.userTextures) &&
+    !meta.userTextures.every((item) => item && "kind" in item)
+  ) {
+    throw new DevError(
+      409,
+      "host",
+      "宿主产物没有回带 kind 的 userTextures：探针不认识 gifDts、用户 GIF 停在第 0 帧，重建宿主（--mode development）",
+      { imageId: request.imageId, gifDts: request.gifDts, meta: { userTextures: meta.userTextures ?? null } },
     );
   }
   const summary = request.trace === undefined ? null : traceMeta(meta, request.imageId);

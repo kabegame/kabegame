@@ -455,6 +455,21 @@ export interface RenderVideo {
   error?: string;
 }
 
+/** 探针回的一个用户纹理来源（`UserTextureProbe` 的子集，视频播放器状态不展开）。 */
+export interface RenderUserTexture {
+  name: string;
+  value: string;
+  kind: "image" | "gif" | "video";
+  status: string;
+  width?: number;
+  height?: number;
+  keys: string[];
+  /** 视频：每个纹理名的播放器状态（`currentTime` 等）。 */
+  videos?: { key: string; player: { currentTime?: number; [key: string]: unknown } }[];
+  /** GIF：每个纹理名换过几次帧与最近一次推进时的帧号。 */
+  gifs?: { key: string; frames: number; lastFrame: number }[];
+}
+
 export interface RenderRequest {
   imageId: string;
   /** `g_Time`（秒），缺省 1.5（同画面哈希基线）。给了 `particles` 时不收（读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计）。 */
@@ -502,10 +517,15 @@ export interface RenderRequest {
   scripts?: RenderScriptsRequest;
   /**
    * 视频纹理的时刻（P9a 步骤 3，秒）：数字对全部视频纹理生效，`{ <纹理 path>: 秒 }` 分别给（没给的取 0，键不是视频纹理时探针报错、
-   * 回 422）；缺省 0。超过时长按循环取模。屏外宿主不跑帧循环、视频用自己的时钟，这是确定性回放视频的唯一办法。结果的 `meta.videos`
+   * 回 422）；缺省 0。也作用于用户纹理里的视频，对象的键可以是用户视频的值（属性里的绝对路径）。超过时长按循环取模。屏外宿主不跑帧循环、视频用自己的时钟，这是确定性回放视频的唯一办法。结果的 `meta.videos`
    * 给出每段实际取的时刻。
    */
   videoTime?: VideoTime;
+  /**
+   * 用户纹理里 GIF 的逐帧 g_Frametime（秒，每项有限非负，最多 `MAX_GIF_DTS` 项）：探针在读回之前逐项推进 GIF（相当于每帧都被画到）；
+   * 不给时 GIF 停在第 0 帧。空数组也原样转给探针。结果的 `meta.userTextures` 不是数组或项里没有 `kind` 时（宿主产物不认识）409。
+   */
+  gifDts?: number[];
   /**
    * 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`true`，或 `{ readback?, maxVertices? }`，原样交给探针。探针把设备换成
    * 记录器包过的那个，读回那一帧记下每个 pass、每个 draw 的管线、绑定、uniform、顶点；`readback` 选中的 pass 结束后读回它的颜色
@@ -732,6 +752,8 @@ export interface RenderMeta {
   scripts?: RenderScripts;
   /** 每段视频纹理实际取的时刻（P9a 步骤 3；没有视频纹理时空数组，之前的宿主产物没有这一项）。 */
   videos?: RenderVideo[];
+  /** 用户纹理来源的状态（`usertex/sources.ts` 的 `UserTextureProbe`；之前的宿主产物没有这一项）。 */
+  userTextures?: RenderUserTexture[];
   /** 逐 draw 轨迹的摘要：只在请求带 `trace` 时有（之前的宿主产物没有这一项）。 */
   trace?: RenderTraceMeta;
   key: string;
