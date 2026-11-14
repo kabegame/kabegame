@@ -1,3 +1,5 @@
+import { WPE_BUILTIN_PROPERTIES } from "./builtinProperties";
+
 export type SceneScalar = string | number | boolean | null;
 export type SceneValue =
   | SceneScalar
@@ -172,6 +174,8 @@ export function currentProperties(
   overrides: Record<string, unknown>,
 ): Record<string, SceneScalar> {
   const result: Record<string, SceneScalar> = {};
+  // WPE 注入的 14 个内置属性打底（P3a 修复）：工程声明的同名属性、再是用户值（宿主的全集已带内置项与按样式取的 `alignment`）依次覆盖
+  for (const [name, prop] of Object.entries(WPE_BUILTIN_PROPERTIES)) result[name] = prop.value;
   for (const [name, prop] of Object.entries(project.general?.properties ?? {})) result[name] = prop.value;
   for (const [name, value] of Object.entries(overrides))
     result[name] = (
@@ -211,7 +215,11 @@ export function resolveValue(
     if (!("user" in value) || !value.user)
       return isKeyframedValue(value) ? (value as { value?: SceneScalar }).value : undefined;
     const name = typeof value.user === "string" ? value.user : value.user.name;
-    const current = properties[name] ?? value.value;
+    // 经 `properties[name]` 读（编译期是 `currentProperties` 的 Proxy，完整性检查的读取观察要记到这次读）
+    const current = properties[name];
+    // 属性不存在（`project.json` 没声明、也不是 WPE 的内置项）时 WPE 一律保持 `value`、不比 condition：可见性、数值字段、脚本属性都实测过
+    // （phase-3a「补测：绑定的属性不存在时」）。绑定照样由 `BindingCollector.bind` 登记
+    if (current === undefined || current === null) return value.value;
     // condition 按字符串比（WPE 的值换字符串再与 condition 比；condition 写成数字时同样成立），见 `bindings.ts`
     if (typeof value.user === "object" && value.user.condition !== undefined)
       return String(current) === String(value.user.condition);

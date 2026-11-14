@@ -2201,6 +2201,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         layerVectorValue(field, unwrapValue(raw)) ?? [...fallback]
       );
     };
+    // 图层的标量字段（alpha / brightness）照 WPE 的 float setter：不收布尔（条件换成的、布尔属性本身、JSON 里直接写的布尔），写不进就留着
+    // 加载 JSON 时写进的 `value`，那个也是布尔就是构造时的缺省 1（P3a 补测 NC1–NC5，`p3am-bright` R1–R8 / A1）。就地写同一规则
+    // （`render/state.ts` 的 `SceneState.write`）
+    const scalar = (field: "alpha" | "brightness"): number => {
+      const raw = object[field] as SceneValue | undefined;
+      const bound = bindings.bind(raw, properties, at(field));
+      if (typeof bound !== "boolean") return asNumber(bound, 1);
+      const own = unwrapValue(raw);
+      return typeof own === "boolean" ? 1 : asNumber(own as SceneScalar | undefined, 1);
+    };
     const layer: SceneLayer = {
       id: object.id ?? bundle.layers.length,
       object: index,
@@ -2210,9 +2220,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       scale: vector("scale", [1, 1, 1]),
       angles: numbers(bindings.bind(object.angles, properties, at("angles")), [0, 0, 0]),
       size: numbers(bindings.bind(object.size, properties, recompile("layer-structure", `objects/${index}/size`))),
-      alpha: asNumber(bindings.bind(object.alpha, properties, at("alpha")), 1),
+      alpha: scalar("alpha"),
       color: vector("color", [1, 1, 1]),
-      brightness: asNumber(bindings.bind(object.brightness as SceneValue, properties, at("brightness")), 1),
+      brightness: scalar("brightness"),
       visible: bindings.bind(object.visible, properties, at("visible")) !== false,
       visibleBound: isUserBinding(object.visible),
       parallaxDepth: vector("parallaxDepth", [1, 1]),

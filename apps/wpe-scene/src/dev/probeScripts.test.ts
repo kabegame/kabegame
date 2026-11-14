@@ -5,6 +5,7 @@
  * 模块求值之前。脚本都是有限步的同步函数，不会卡住。
  */
 import { describe, expect, it, vi } from "vitest";
+import { builtinProperties } from "../compile/builtinProperties";
 import { compileScene, type SceneBundle } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
 import type { SceneObject } from "../compile/model";
@@ -269,17 +270,19 @@ describe("Date 与 Math.random 的替换", () => {
 });
 
 describe("用户属性全集（probeUserProperties）", () => {
-  it("工程声明的属性带类型，值取请求给的（裸值或 { value }）、没给的取缺省；分组、文本、空值与工程没声明的键不收", () => {
+  it("工程声明的属性带类型，值取请求给的（裸值或 { value }）、没给的取缺省；分组、文本、空值与工程没声明的键不收；另带 WPE 的 14 个内置项（P3a 修复）", () => {
     const properties = probeUserProperties(PROJECT, { speed: 5, tint: { value: "0 1 0" }, extra: 1 });
     expect(Object.fromEntries(properties)).toEqual({
+      ...builtinProperties(),
       speed: { type: "slider", value: 5 },
       tint: { type: "color", value: "0 1 0" },
     });
     expect(Object.fromEntries(probeUserProperties(PROJECT))).toEqual({
+      ...builtinProperties(),
       speed: { type: "slider", value: 2 },
       tint: { type: "color", value: "1 0 0" },
     });
-    expect(probeUserProperties(null, { speed: 1 }).size).toBe(0);
+    expect(Object.fromEntries(probeUserProperties(null, { speed: 1 }))).toEqual(builtinProperties());
   });
 });
 
@@ -383,12 +386,18 @@ describe("createProbeScripts", () => {
     expect(log).toEqual([]);
     await scripts.load();
     for (let i = 1; i <= 3; i++) scripts.frame(0.1, i * 0.1);
+    // 全集：WPE 的 14 个内置项加工程声明的（P3a 修复）
+    const full = JSON.stringify({
+      ...Object.fromEntries(Object.entries(builtinProperties()).map(([key, item]) => [key, item.value])),
+      speed: 5,
+      tint: "1 0 0",
+    });
     expect(log).toEqual([
       "evaluate objects/0/color",
       "evaluate objects/1/alpha",
-      // init 时还没交用户属性（同宿主：首帧之前才交）
-      "init userProperties={}",
-      'apply {"speed":5,"tint":"1 0 0"} userProperties={"speed":5,"tint":"1 0 0"}',
+      // init 里 engine.userProperties 已是全集（同 WPE 与宿主）；整份 applyUserProperties 在首帧之前
+      `init userProperties=${full}`,
+      `apply ${full} userProperties=${full}`,
       "update 0.1",
       "update 0.2",
       "update 0.30000000000000004",

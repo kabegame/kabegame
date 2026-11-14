@@ -299,8 +299,8 @@ describe("动画层绑定（P12a 步骤 3 点 3，p12-REPORT 用例 4）", () =>
     ]);
     expect(bundle.layers[0].puppet!.layers[0]).toMatchObject({ rate: 2, blend: 0.5 });
     const state = SceneState.fromBundle(bundle);
-    // `visible` 带 condition：编译期没有属性值时 `String(undefined) === "1"` 为假（宿主首帧之前会整份交一次属性，`pendingChanges`）
-    expect(state.animationLayers.get("0:0")).toEqual({ rate: 2, blend: 0.5, visible: false });
+    // `visible` 带 condition、属性 `walking` 工程没声明：保持 `value`、不比条件（P3a 修复，同 WPE 实测）
+    expect(state.animationLayers.get("0:0")).toEqual({ rate: 2, blend: 0.5, visible: true });
   });
 
   it("就地写：数字 / 布尔 / 字符串各按 float 规则，条件先换成布尔；不合法的值不改字段；不标脏、不要重编译", async () => {

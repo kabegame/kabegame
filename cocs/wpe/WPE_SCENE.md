@@ -424,6 +424,11 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 
 - **一个应用函数，两个来源**：垫片入口 `applyUserProperties(δ)` 只转调 `apply(δ)`。加载期传全集、运行时传增量，先并进累计全集（跳过 `group` / `text` / 空值，按值去重、保留 `type`，不学 WPE 的整项覆盖），再按编译期产出的 `bundle.bindings` 分成两组：**就地写**交给 `SceneRenderer.applyBindings`（写之前先问 `SceneState.needsRecompile`：打开带不支持项的 effect、切换不能就地的图层、打开没有泛光链的场景都要重编译，这时一条都不写）；只要**有任意一条重编译目标**，就带全集整场重编译（重新解析、翻译、建 GPU 场景）。
 - **就地写的范围**：材质常量（`usershadervalues` 与 `constantshadervalues` 的 `{user}`）、图层 `origin` / `scale` / `angles` / `alpha` / `color` / `brightness` / `parallaxDepth`（P5a）、图层 `visible`（含条件可见）、effect `visible`、`general.bloom`、泛光参数（含级数）、`GENERAL_FIELDS` 的字段、用户纹理（`scenetexture` 属性，P11b）。重编译日志是 `debug`（用户不关心；看探针 `stats()` 判断是否走了快速路径）。
+- **取值规则**（2026-11-14 修复，`ignore/p3a-missing/` 与 WPE 逐项对照）：
+  - 绑定的属性不存在（`project.json` 没声明、也不是 WPE 的内置项）时一律保持 `value`、不比 condition（`model.ts` 的 `resolveValue`；可见性、数值字段、脚本属性都实测过），绑定照样登记。
+  - WPE 注入的 14 个内置属性（`alignment*`、`rate`、`wcc_*`、`wec_*`，`compile/builtinProperties.ts`）算存在：编译期全集、宿主首包、`init` 里的 `engine.userProperties` 与首次 `applyUserProperties` 都带着，值是 WPE 默认值，工程声明了同名属性时以工程的为准。`alignment` 照视频壁纸已有的样式对应取（fill / tile 0、fit 1、stretch 2、center 3），运行中改样式作为一条增量走应用函数；其余没有对应设置，取默认值。我们不实现对齐与颜色校正，这些只是数据。
+  - 图层标量 `alpha` / `brightness` 照 WPE 的 float setter 不收布尔（条件换成的、布尔属性本身、JSON 里直接写的布尔）：编译期留 `value`（它也是布尔就是 1），就地写不写、不标脏；图层向量字段与材质常量本来就是这样。
+  - 没修的两处偏差（`p3am-empty` 实测）：空串 condition WPE 当成没写条件；图层 `visible` 的布尔 setter 不收字符串、留 `value`，我们按「不是 `false` 就显示」。语料里前者 0 处、后者 1 处（3276911872 的 objects/158）。
 - **重编译原因**：
 
   | 原因键 | 触发 | 为什么要重编译 |
@@ -497,7 +502,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 脚本表只扫描 `scene.json`，用 JSON 坐标作稳定 id，收集 `general`、图层字段、effect 字段、pass 的 `constantshadervalues` 四种来源，并记 owner、图层、初值、值类型、`scriptproperties` 和导入。未启用的 effect 里的脚本也入表，材质 JSON 内的脚本目前不收集。`thisObject` 随 owner 分别是 general、图层、effect 或该 pass 的材质常量对象；general 脚本的 `thisLayer` 为 `null`。后者暴露该 pass 全部有 `meta.material` 的常量，没编译出的 pass 则无法写入。`thisLayer` 与 `thisScene.getLayer(数字)` 按 `scene.json` 的 `objects` 下标定位，图层 API 对象跨重编译保持身份；非图片对象当前也有通用图层项，尚无声音、文本等专用 API。
 
 - **首次加载**：按脚本表顺序逐段求值，再按顺序更新 JSON `scriptproperties`（其中 `{user}` 已解析为当前属性值）并调用 `init(value)` 写回；首帧之前用属性全集做直接绑定、`updateScriptProperties` 与 `applyUserProperties`；首帧先推进计时器、逐段调用 `update(value)` 并写回，再同步 `SceneState` 到 GPU、渲染，最后报 `ready`。
-- **属性增量**：在两帧之间按「直接绑定 → `updateScriptProperties` → `applyUserProperties(增量)`」处理，下一帧生效，`init` 不重跑。只有同时带 `type` 和 `value` 的项会传给 `applyUserProperties`；`engine.userProperties` 读累计全集。用户直接绑定覆盖旧脚本写入时撤销该目标的重放值。暂停或 `document.hidden` 时不推进帧脚本和计时器；恢复后继续。
+- **属性增量**：在两帧之间按「直接绑定 → `updateScriptProperties` → `applyUserProperties(增量)`」处理，下一帧生效，`init` 不重跑。只有同时带 `type` 和 `value` 的项会传给 `applyUserProperties`；`engine.userProperties` 读累计全集，`init` 里就是（含 WPE 的 14 个内置项，同 WPE）。用户直接绑定覆盖旧脚本写入时撤销该目标的重放值。暂停或 `document.hidden` 时不推进帧脚本和计时器；恢复后继续。
 - **返回值与写回**：`init` / `update` 的非 `null`、非 `undefined` 返回值按目标类型转换：布尔只收布尔，数字可展开为向量各分量，向量读取 `x` / `y` / `z` / `w`，角度由度转弧度；类型不符不写，字符串目标目前不写。可写图层变换、透明度、颜色、可见性、亮度、材质常量、effect `visible`、泛光开关与参数、`GENERAL_FIELDS` 的字段；`hdr` 等重编译目标仅在值变化时请求重编译。宿主用 `scriptOverrides` 按稳定路径覆盖 Worker 的编译输入，同一时刻最多一项在途，期间再变化则下一轮合并。返回值写到 `text`、`maxwidth` 等不支持目标时只对该段告警一次，不写画面；这类运行期告警不进 `unsupported`（脚本里直接访问 `thisLayer.text` 这类未实现字段，由下面的「脚本 API 检查」在编译期报）。
 - **错误与保留**：模块导入或求值失败，整段不调用；回调抛错只禁用该段的这个回调，计时器抛错只取消该计时器，其余继续。单个回调超过 15 秒时，等它返回后停掉本场景全部脚本并保留已写画面；死循环仍可能卡住宿主，由既有 ping / 看门狗处理。`console.error` 每段每分钟最多向应用日志报 10 条，超出的数量随下一条可上报日志附带。跨重编译保留 realm 与脚本状态，新 `SceneState` 首帧前由 `replayWrites()` 重放脚本最后一次写入。有脚本时，所有**带材质 pass** 的图层即使初始隐藏也预建 GPU 资源，编码时仍按当前可见性跳过。
 - **数值是单精度**（2026-11-14 补测，`ignore/p3b-f32`）：WPE 交给脚本的数都是 float32，`init` / `update` 的入参（vec2 / vec3 / float、材质常量）、`thisLayer.<字段>` 与从别的图层读的字段、`size`、材质对象的 `thisObject.<键>` 都是（`100.1` 读成 `100.0999984741211`）。`SceneState` 照旧存 double，只在脚本读取时取单精度（`script/f32.ts`）：每次读都取一次，「读 → 改 → 写回」每一轮和 WPE 同值，累加逐帧逐位相同。角度读写都是 f32 乘法：读 `f32(f32(弧度) × f32(57.29578))`，写 `f32(f32(度) × f32(0.017453292))`（double 除法、读结果再取 f32、× π/180、写回 `f32(度 × 0.017453292)` 等都被实测排除）。入参取单精度不分目标；`thisObject` 读 general、泛光、声音 `volume`、粒子实例覆盖时还是 double（没实测）。
@@ -543,7 +548,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 
 development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（逐段状态、导出、禁用回调、错误与调用统计）、`host.read(path)`（读当前目标）、`host.realmCheck(extraSources?)`（另建 realm 检查导入、环境、错误位置与缓存），以及 `scriptCorpus(imageIds)`（逐张独立 realm、固定 dt 跑 120 帧，不建 GPU；生产构建无这些探针）。`scriptCorpus` 返回的 `remainingTestFrames` 是 `{ before, after }`，数的是 `iframe[data-kb-script-realm="1"]`，两者相等才说明没有残留子 frame。`missingApis` 是条目数组（类型、名字、场景数、段数、报错数），连带错误按属性名列出，没有归到根因。存储用临时前缀，跑完清掉，不碰真实场景存过的东西。探针也不统计重编译目标写入次数，使用作者默认属性且不派发 `cursor*` / `media*` 回调。
 
-**已知差异与后续**：realm 无 CSP，变量形式的动态 `import()` 仍可能加载远程模块；API 对象可加任意属性，写入未提供字段可能读回成功但画面无变化；回调里排的微任务（Promise）时机不同：WPE 推断在每个最外层回调返回后冲刷，我们要到本帧任务结束才跑（本机样本没用 Promise）；`thisObject.constructor.name` 我们是 `Object`，WPE 是空串，`String(thisObject)` 两边都是 `[object Object]`。不清屏的场景暂停时改属性，补画的那一帧会推进累加链（回归 D46，用户定为不动）。HDR 不清屏累加时，分界线上有约 1 像素宽的残余差异（回归 D37），推断是 FP16 舍入，没有抓帧证实。单层 mip 纹理的差异和非整数 `size` 的四边形（WPE 截断）没有处理，见 3c 计划「后续」。后续按渲染能力阶段补音频、层级、输入、纹理动画、声音和文本 API，并处理材质 JSON 脚本。当前有意不照搬 WPE 两个缺陷：属性增量不会从 `engine.userProperties` 的已有全集中丢键（未实现的 WPE 内置伪属性本来就不注入）；CLI 颜色改值也不降成字符串。
+**已知差异与后续**：realm 无 CSP，变量形式的动态 `import()` 仍可能加载远程模块；API 对象可加任意属性，写入未提供字段可能读回成功但画面无变化；回调里排的微任务（Promise）时机不同：WPE 推断在每个最外层回调返回后冲刷，我们要到本帧任务结束才跑（本机样本没用 Promise）；`thisObject.constructor.name` 我们是 `Object`，WPE 是空串，`String(thisObject)` 两边都是 `[object Object]`。不清屏的场景暂停时改属性，补画的那一帧会推进累加链（回归 D46，用户定为不动）。HDR 不清屏累加时，分界线上有约 1 像素宽的残余差异（回归 D37），推断是 FP16 舍入，没有抓帧证实。单层 mip 纹理的差异和非整数 `size` 的四边形（WPE 截断）没有处理，见 3c 计划「后续」。后续按渲染能力阶段补音频、层级、输入、纹理动画、声音和文本 API，并处理材质 JSON 脚本。当前有意不照搬 WPE 两个缺陷：属性增量不会从 `engine.userProperties` 的已有全集中丢键（WPE 注入的 14 个内置项首包补进全集后一直保留，见「属性与快速路径」的取值规则）；CLI 颜色改值也不降成字符串。
 
 ## 层级（P4a）
 

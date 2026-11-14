@@ -3,6 +3,7 @@ import { AnimationClock } from "./animation/clock";
 import { Channel, frameValues, type ParsedKey } from "./animation/curve";
 import type { AnimationClockParams, SceneAnimation } from "./animation/types";
 import { BindingCollector, generalDefaults } from "./compile/bindings";
+import { builtinProperties } from "./compile/builtinProperties";
 import type { SceneBundle, ScenePass } from "./compile/bundle";
 import type { SceneFs } from "./compile/fs";
 import { compileText } from "./compile/texts";
@@ -487,6 +488,20 @@ describe("SceneHost 脚本接线", () => {
     expect(events).toContain("destroy");
     expect(destroyed).toBe(1);
     expect(imports).toBe(1);
+  });
+
+  it("init 里 engine.userProperties 已是全集，含 WPE 的 14 个内置项（P3a 修复；WPE 实测 init 时就有）", async () => {
+    let seen: unknown = null;
+    onInit = () => {
+      seen = { ...(activeGlobal.engine as { userProperties: Record<string, unknown> }).userProperties };
+      return 0.8;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    expect(seen).toEqual({ ...builtinProperties(), p: { type: "slider", value: 0.3 } });
+    host.dispose();
   });
 
   it("退回后停止脚本，恢复沿用 realm 并重放写入", async () => {

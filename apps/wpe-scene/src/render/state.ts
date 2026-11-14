@@ -647,7 +647,13 @@ export class SceneState {
           const vector = layerVectorValue(field, conditioned(binding, raw));
           if (!vector) return "applied";
           writeLayer(layer, field, vector);
-        } else writeLayer(layer, field, bindingValue(raw, binding.condition, field));
+        } else {
+          // 标量字段（alpha / brightness）照 WPE 的 float setter 不收布尔（条件换成的、布尔属性本身）：不写、不标脏，同编译期（`bundle.ts`
+          // 的 `scalar`，P3a 补测 NC1–NC5、`p3am-bright`）
+          if ((field === "alpha" || field === "brightness") && typeof conditioned(binding, raw) === "boolean")
+            return "applied";
+          writeLayer(layer, field, bindingValue(raw, binding.condition, field));
+        }
         // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的
         if (INHERITED_FIELDS.has(field)) for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
         else this.dirtyLayers.add(target.object);

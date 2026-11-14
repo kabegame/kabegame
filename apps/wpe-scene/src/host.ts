@@ -12,6 +12,7 @@ import {
   type GeneralKey,
   type UserProperty,
 } from "./compile/bindings";
+import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
 import { compileSceneInWorker } from "./compile/client";
 import { TextureDecodeCache } from "./compile/decode";
@@ -153,6 +154,11 @@ export class SceneHost {
    * 加载传全集、运行时传增量，两条路都走 `apply`。
    */
   private readonly properties = new Map<string, UserProperty>();
+  /**
+   * 宿主补进全集的 WPE 内置属性（P3a 修复，`compile/builtinProperties.ts`）：首包里工程没声明的那几个。`alignment` 在这里时跟着
+   * 壁纸样式走（`setStyle`）；工程自己声明了的不在这里，以工程的为准。
+   */
+  private readonly hostBuiltins = new Set<string>();
   /** 当前场景编译时用的裸值快照；场景换上后与全集比较，补上加载期间到达的增量。 */
   private compiledWith: Record<string, unknown> = {};
   /** 当前场景的 bundle（取绑定表）与渲染器（就地写）。 */
@@ -326,6 +332,8 @@ export class SceneHost {
    * 没有任何绑定引用的属性（只给脚本用、或作者声明了却没绑）什么都不做。
    */
   private apply(delta: Record<string, SceneProperty>): void {
+    // 首包 = 全集：补上 WPE 注入的内置属性（WPE 首次加载就带着，绑定与脚本都看得到），工程声明了同名属性时以工程的为准
+    if (!this.receivedProperties) delta = this.withBuiltins(delta);
     const changes = mergeProperties(this.properties, delta);
     if (changes.has("schemecolor")) this.renderer?.setBackground(schemeColor(this.properties));
     if (!this.receivedProperties) {
@@ -343,6 +351,17 @@ export class SceneHost {
     // 加载中不丢：落地后按 `compiledWith` 的差异再走一次
     if (this.state !== "ready" || !this.bundle) return;
     this.applyChanges(changes);
+  }
+
+  /** 首包补上工程没声明的内置项（`alignment` 按当前壁纸样式），记进 `hostBuiltins`。 */
+  private withBuiltins(delta: Record<string, SceneProperty>): Record<string, SceneProperty> {
+    const builtins: Record<string, SceneProperty> = {};
+    for (const [key, property] of Object.entries(builtinProperties(this.style))) {
+      if (Object.hasOwn(delta, key)) continue;
+      builtins[key] = property;
+      this.hostBuiltins.add(key);
+    }
+    return { ...builtins, ...delta };
   }
 
   /** 按当前 bundle 的绑定表应用一批变化；有任何一条要重编译（或 `needsRecompile` 挡下了就地写）就整场重编译。 */
@@ -683,6 +702,8 @@ export class SceneHost {
         setModuleEvaluating: (evaluating) => api.setModuleEvaluating(evaluating),
       });
       api.attachRuntime(runtime);
+      // WPE 的 `init` 里 `engine.userProperties` 已是全集（含内置项，I4 与 `p3am-builtin` 实测）：求值、`init` 之前就交给 API
+      api.setProperties(this.properties);
       this.scriptApi = api;
       this.runtime = runtime;
       await runtime.load(bundle.scripts);
@@ -997,6 +1018,11 @@ export class SceneHost {
   setStyle(style: SceneStyle): void {
     this.style = style;
     this.renderer?.setStyle(style);
+    // 内置属性 `alignment` 跟着样式走（`wpeAlignmentOf`，工程自己声明了的不动），作为一条增量走应用函数（值没变时去重掉）；
+    // 首包之前只记下样式，补内置项时取
+    // TODO:[WPE_SCENE] 没实测：WPE 里运行中改对齐时脚本收不收到 `applyUserProperties({ alignment })`（推断收到：同 UI 改属性的增量）
+    if (this.receivedProperties && this.hostBuiltins.has("alignment"))
+      this.apply({ alignment: { type: WPE_BUILTIN_PROPERTIES.alignment.type, value: wpeAlignmentOf(style) } });
   }
 
   setDisplayScale(scale: number): void {

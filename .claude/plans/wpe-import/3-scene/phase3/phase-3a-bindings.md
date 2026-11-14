@@ -565,3 +565,148 @@ interface BloomDraw {
   - 未测：重编译类属性（能渲染的样本里没有，有的 7 张工坊场景强制也建不出 GPU 场景）；壁纸窗口（本次没有壁纸窗口 target）。
   - 发现：`stats().applied` 按批计数，只改了没有绑定的键（vortex「模式」）也 +1（读代码：`applyBindings([])` 返回 true，暂停时也会补画一帧，未实测）；`stats().recompiled` 不记退回状态下的重编译与退回后的补编译，那两种要看宿主控制台 / 应用日志的「退回预览图」warn。已在 `cocs/wpe/WPE_SCENE.md` 的「属性与快速路径」写明。
 
+### 补测：绑定的属性不存在时（2026-11-14）
+
+起因是 P12a 的 3351072238：图层 291 的 `visible` 是 `{user: {name: "newproperty4", condition: "0"}, value: true}`，`newproperty4` 不在 `project.json` 里，WPE 照常画，我们把它藏了（`phase-12a-mesh-animation.md`）。语料里「带 condition、属性不存在」13 处、7 张场景（`ignore/p12/missingprops.py`）。这次只核对、不改产品代码。
+
+**要分开的三种假设**：H1 保持 `value`、不比条件；H2 拿 `value` 去比 condition（我们现在 `model.ts` 的 `resolveValue`）；H3 把缺失属性当成某个缺省值（`""`、`0`、`false`）再比。
+
+**工程**（`ignore/p3a-missing/`，`python -X utf8 -I .claude/skills/kbp-tools/kbp.py gen p3am --data ignore/p3a-missing`，实验定义 `defs/p3am.py`）：
+- 每个用例一个 100×100 纯色方块（flat 着色器），按 `g_Color`（`judge.py`）或 MVP 的平移（`judge_pos.py`，颜色被绑的用例）认回对象。
+- 存在的属性：`kbp3a_combo`（下拉，`"0"`）、`kbp3a_bool`（`true`）、`kbp3a_slider`（0.25）；缺失的属性一律 `kbmiss_*`。
+- `p3am-missing`：可见性 V1–V8（缺失）与 C1–C3（存在），图层 `alpha` N1–N4 / NC1–NC3，tint 材质常量 `alpha` M1–M4 / MC1–MC3，脚本属性 S（`alpha` 挂脚本，`init`、`applyUserProperties`、`update` 第 1 / 3 帧把 `scriptProperties` 的值与类型打进日志 `[p3am]`）。
+- `p3am-extra`：数字 / 布尔属性怎么转字符串去比（E1–E3）、不带 condition 的缺失属性 `value: true`（E4）、条件必然为真时的 `alpha`（NC4）、布尔属性不带条件进 `alpha`（NC5）、图层 `color`（vec3，K1–K3）、属性存在且带 condition 时脚本拿到什么（X，日志 `[p3amx]`）。
+
+**怎么测**：
+- WPE：wpe-renderdoc 本会话的测试窗口 1920×1080，各抓 2 帧：`A:\p3a-missing\main\p3am-missing-frame978/979.rdc`、`A:\p3a-missing\extra\p3am-extra-frame90/91.rdc`；`kbp rdc consts` 取每次绘制的 `g_Color` / `g_Alpha` / `g_BlendAlpha` / MVP（`out/wpe-p3am-*-consts.json`，判读 `out/wpe-judge*.txt`，两帧相同）；脚本日志按字节偏移从 `log.txt` 截（`readlog.py`，`out/wpe-p3am-log.txt`、`out/wpe-p3amx-log.txt`）。`log_since` 的游标经客户端回传后被误判成「日志重写」（`created` 的数值精度），所以没用它。
+- 我们：kabegame-dev `projects_import` → `render_scene { time: 1.5, scripts: true, trace }`（`out/ours-*.png`、`out/ours-*-trace/trace.json`，判读 `out/ours-judge*.txt`，脚本日志在 `meta.scripts.console`）→ `projects_remove`（14853、14854，`imagesGone` / `tasksGone` 都为真）。
+
+**可见性**（缺失属性；「画」= 有这次绘制）：
+
+| 用例 | value | condition | H1 | H2 | H3 `""` / `0` / `false` | WPE | 我们 |
+|---|---|---|---|---|---|---|---|
+| V1 | true | `"0"` | 画 | 不画 | 不画 / 画 / 不画 | **画** | 不画 |
+| V2 | false | `"0"` | 不画 | 不画 | 不画 / 画 / 不画 | 不画 | 不画 |
+| V3 | true | `"true"` | 画 | 画 | 不画 / 不画 / 不画 | 画 | 画 |
+| V4 | false | `"false"` | 不画 | 画 | 不画 / 不画 / 画 | **不画** | 画 |
+| V5 | false | `""` | 不画 | 不画 | 画 / 不画 / 不画 | 不画 | 不画 |
+| V6 | true | `""` | 画 | 不画 | 画 / 不画 / 不画 | **画** | 不画 |
+| V7 / V8 | false | 无（字符串 / 对象写法） | 不画 | 不画 | 不画 | 不画 | 不画 |
+| E4 | true | 无 | 画 | 画 | 不画 | 画 | 画 |
+
+WPE 九格只和 H1 一致（V1、V6 排除 H2，V2、V4、V5 与 E4 排除三种 H3）；我们的是 H2，bug 复现。对照（属性存在）两边相同：C1（下拉 `"0"`、条件 `"0"`、value false）画，C2（条件 `"1"`、value true）不画，C3（布尔 true、条件 `"true"`）画，E1（滑块 0.25、条件 `"0.25"`）画，E2（条件 `"0.250000"`）不画，E3（布尔、条件 `"1"`）不画：属性存在时条件确实覆盖 `value`，布尔转成 `"true"`、滑块 0.25 转成 `"0.25"`，和我们的 `String()` 一致。
+
+**数值字段**（value 都是 0.5；读 `g_Alpha` / `g_BlendAlpha` / `g_Color`）：
+
+| 用例 | 目标 | 绑定 | WPE | 我们 |
+|---|---|---|---|---|
+| N1 / N2 / N3 | 图层 `alpha` | 缺失，条件 `"0"` / `"1"` / `"0.5"` | 0.5 / 0.5 / 0.5 | **0 / 0 / 1** |
+| N4 | 图层 `alpha` | 缺失，无条件 | 0.5 | 0.5 |
+| NC1 / NC2 / NC4 | 图层 `alpha` | 存在，条件真（滑块 `"0.25"`）/ 假（`"0.75"`）/ 必然真（下拉 `"0"`） | 0.5 / 0.5 / 0.5 | **1 / 0 / 1** |
+| NC5 | 图层 `alpha` | 布尔属性 true，无条件 | 0.5 | **1** |
+| NC3 | 图层 `alpha` | 滑块 0.25，无条件 | 0.25 | 0.25 |
+| M1–M4 | tint 常量 `alpha` | 缺失，条件 `"0"` / `"1"` / `"0.5"` / 无 | 0.5 | 0.5 |
+| MC1 / MC2 / MC3 | tint 常量 `alpha` | 存在，条件真 / 假 / 无条件 | 0.5 / 0.5 / 0.25 | 0.5 / 0.5 / 0.25 |
+| K1 / K3 | 图层 `color` | 缺失，条件 `"0"` / `"1"`，value 是颜色串 | value | value |
+| K2 | 图层 `color` | 存在，条件真 | value | value |
+
+- WPE 里带 condition 的数值字段**不论属性在不在、条件真假**都留 `value`：条件把值换成布尔，float / vec3 setter 不收布尔就不写（材质常量的同一规律见 `vector-constant-REPORT.md` 第 6 节 `u-cond-f` / `u-bool-f`，这次在图层 `alpha` 与 `color` 上也实测到）。所以数值字段本身分不开 H1 / H2 / H3，但「属性不存在时保持 value」照样成立。
+- 我们的材质常量（`shader.ts` 的 `materialStorage`）与图层向量字段（`bundle.ts` 的 `vector` / `layerVectorValue`，P6b 1e-3）已经对齐；**图层标量 `alpha`**（读代码 `brightness` 同一条路径，未实测）经 `asNumber(Number(布尔))` 变成 1 / 0，编译期与运行时（`render/state.ts` 的 `writeLayer(…, bindingValue(…))`）都错，而且不止「属性不存在」：属性存在、带 condition（NC1 / NC2 / NC4）与布尔属性不带条件（NC5）也错。
+
+**脚本属性**（`scriptProperties`；脚本声明的缺省值 0.125 / false，和 JSON 的 value 都不同）：
+
+| 键 | 绑定 | value | WPE init | WPE 首次 apply 之后 | 我们（init 起） | 对应 |
+|---|---|---|---|---|---|---|
+| sa | 缺失，条件 `"1"` | true | true | true | **false** | WPE = H1（H2、H3 都是 false） |
+| sb | 缺失，条件 `"1"` | 0.5 | 0.5（number） | 0.5 | **false** | WPE = H1 |
+| se | 缺失，条件 `"0"` | true | true | true | **false** | WPE = H1 或 H3(0)，与 sa 合看只有 H1 |
+| sf | 缺失，条件 `"0.5"` | 0.5 | 0.5（number） | 0.5 | **true** | WPE = H1（H2 是 true） |
+| sc | 缺失，无条件（字符串写法） | 0.25 | 0.25 | 0.25 | 0.25 | 同 |
+| sd / xa / xe | 下拉 `"0"`，条件 `"0"` / `"0"` / `"1"` | false / 0.5 / 0.5 | false / 0.5 / 0.5 | true / **true（boolean）** / false | 同右列 | 属性存在：条件生效，数值键也变成布尔 |
+| xb / xc | 滑块 0.25，条件 `"0.25"` / `"0.250000"` | false | false | true / false | 同右列 | |
+| sg / xd | 滑块 / 布尔，无条件 | 0.5 / false | 0.5 / false | 0.25 / true | 同右列 | |
+| sh | 无绑定 | 0.75 | 0.75 | 0.75 | 0.75 | |
+
+脚本属性没有类型 setter，属性存在时条件换成的布尔照原样交给脚本（xa），属性不存在时 WPE 留 `value`、类型也是 value 的类型。
+
+**结论**：
+1. 「属性不存在时保持 `value`」在可见性、数值字段（图层 `alpha` / `color`、材质常量）、脚本属性上都成立，没有例外；H2、H3 都被排除（可见性与脚本属性各自就能唯一定到 H1）。
+2. 我们的 bug 复现：`resolveValue` 在属性缺失时先退回 `value` 再比 condition，可见性（V1、V4、V6）与脚本属性（sa、sb、se、sf）都错。修法建议：属性不存在时直接返回 `value`、不比 condition；绑定照样登记（运行时属性来了还要能生效，见「没测到的」）。
+3. 另一个独立的偏差：图层标量字段（`alpha`，推断还有 `brightness`）收了布尔。WPE 的 float setter 不收布尔（条件换成的、布尔属性本身），应照向量字段与材质常量的做法：写不进就留 `value`，运行时不写、不标脏。
+4. 附带发现（只影响 `init` 里读到的值）：WPE 的 `init` 里绑定的脚本属性一律是 JSON 的 `value`（sd、sg、xa… 属性存在也一样），属性的当前值（带条件时是布尔）要到第一次 apply（`applyUserProperties` 回调之前、第一帧 `update` 之前）才写进去；我们在 `init` 之前就已解析好。
+
+**没测到的**：effect `visible` 绑缺失属性（REA I3：和图层 `visible` 同一个布尔 setter `FUN_1401e1a90`，推断同 H1）；`brightness` 等其它标量图层字段、文本层、声音音量、粒子 `instanceoverride`、`general`（泛光等）的同类绑定；`usershadervalues` 指向缺失属性；WPE 自己注入的 14 个内置项（`rate`、`alignment*`、`wec_*`、`wcc_*`）当作「缺失」属性名时（WPE 里它们有值，修的时候不能当成不存在）；加载时缺失、运行中才发来的属性（WPE 的绑定在加载时照登记，推断那时条件照常生效）。
+
+**环境**：没改 WPE 设置（没调 `restart_wpe`）；测试窗口 `kb-509904-3`、`kb-509904-4` 已关，`p3am-extra` 里 WPE 写的 `shaders/blobsSM40` 已用 `cleanup_project` 删掉。期间 WPE 的 PID 变过两次（580904 → 589900 → 554184，不是本会话重启的），每次 `ensure_running` 都是 `already_injected`。
+
+
+### 修复（2026-11-14）
+
+修三件事：属性不存在时保持 `value`、不比 condition；图层标量 `alpha` / `brightness` 不收布尔；WPE 注入的 14 个内置属性算存在。数据、工程与脚本都在 `ignore/p3a-missing/`。
+
+**步骤 0 调查**
+- **语料用法**（190 个 scene 工程，`builtin_scan.py` → `out/builtin-scan.txt`）：14 个内置名在 `{user}` 绑定（含 `scriptproperties`）、`usershadervalues`、经 `engine.userProperties` / `applyUserProperties` 参数读取的脚本里都是 **0 处**，也没有工程在 `project.json` 里声明这些名字。宽松匹配的 48 处都是 `video.rate`、`thisLayer.alignment` 这类图层成员，不是属性。
+- **默认值与类型**：用 p3 的实测日志 `ignore/p3-userprops/dyn-test/log-run-full.txt` 的首次 apply：`alignment` 0、`alignmentfliph` false、`alignmentposition` / `alignmentx` / `alignmenty` 50、`alignmentz` 100、`rate` 100、`wcc_amt` 100、`wcc_v` `""`、`wec_brs` / `wec_con` / `wec_hue` / `wec_sa` 50、`wec_e` false（数字 / 布尔 / 字符串）。本次 `p3am-builtin` 再测相同。WPE 给它们的 `type` 字符串没拿到；脚本看不到 `type`，只影响 `convertUserProperties` 的分支。
+- **我们原来的处理**：
+  - 编译期全集 `currentProperties` 只有工程声明的属性加用户值；
+  - 宿主全集只有垫片推来的，Kabegame 后端 `resolve_web_user_props` 只出工程声明的；
+  - 脚本的 `engine.userProperties` 在 `init` 里是空的，首帧之前的首次 apply 才交全集，也没有内置项；
+  - 属性面板与 metadata `userProperties` 只认工程声明的键（`user_props::apply_changes` 拒绝不存在的键），不会带这些键。
+- **对齐类**：Kabegame 样式与 WPE `alignment` 已有现成对应，就是视频壁纸的 `WallpaperStage.vue` `effectiveAlignment` 加 `properties.rs` 的 `WpeAlignment::from_value`：fill / tile → 0、fit → 1、stretch → 2、center → 3。这里照用。`alignmentposition` / `x` / `y` / `z` / `fliph` 没有对应设置，取 WPE 默认值。`rate`：Kabegame 只有视频播放速率 `wallpaperVideoPlaybackRate`，场景不读它、宿主也收不到，不算对应，取 100。`wec_*` / `wcc_*` 没有对应设置。
+- **3b 的决定**：已定 8 不照搬「运行中改值后内置伪属性从 `engine.userProperties` 消失」，照旧（全集里一直保留）。3b 待定 2 原按推荐不注入，这次用户要求支持，改为注入。
+
+**WPE 补测**（wpe-renderdoc 测试窗口 1920×1080，各抓 2 帧；工程定义 `defs/p3am.py` 的 `p3am-builtin` / `p3am-bright` / `p3am-empty`）
+- **内置名**（`A:\p3a-missing\builtin\`，判读 `out/wpe-judge-builtin.txt`，日志 `out/wpe-p3amb-log.txt`）：
+  - 可见性按内置值比较：B1 `rate` 条件 `"100"`（value false）画，B2 条件 `"0"`（value true）不画；B3 `wec_e` `"false"`、B4 `alignment` `"0"`、B6 `alignmentz` `"100"`、B9–B16（其余各项按默认值写条件）都画。
+  - 工程声明了 `wec_hue = 7`：B7 条件 `"7"` 画、B8 `"50"` 不画，工程的赢。脚本里 `engine.userProperties.wec_hue` 也是 7。
+  - 脚本：`init` 里 `engine.userProperties` 有 18 个键（工程 4 个加 14 个内置），首次 apply 的参数同样。`scriptproperties` 绑内置名，apply 之后取内置值（`ra` 100、`rb` true、`rc` `""`、`rd` 7、`re` false），`init` 里是 JSON 的 `value`（同上面「附带发现」4）。
+- **B5 为什么没画**（`wcc_v` 条件 `""`、value false）：另做 `p3am-empty`（`A:\p3a-missing\empty\`，`out/wpe-judge-empty.txt`）。
+  - W1（下拉值 `""`、条件 `""`、value false）不画；W2（下拉 `"0"`、条件 `""`、value true）画；W3 / W4（`wcc_v` 条件 `""` / 不带条件、value true）画；W5（下拉 `"0"` 不带条件、value false）不画；W6 画；W7（`wcc_v` 条件 `"x"`、value true）不画；W8（下拉 `""` 条件 `"x"`）不画。
+  - 结论：空串 condition 当成没写条件；图层 `visible` 不带条件时，字符串属性值写不进（bool setter 不收字符串），留 `value`。B5 就是「没条件 + 字符串 → 留 false」，`wcc_v` 加载时确实是 `""`。
+- **`brightness`**（`A:\p3a-missing\bright\`，`out/wpe-judge-bright.txt`）：HDR 场景才把它乘进 `g_Color`，工程开 `general.bloom` / `hdr`，WPE 档位本来就是超高（没改设置）。
+  - R1 / R2 / R7（属性存在、带条件，条件真 / 假 / 必然真）、R3（布尔属性不带条件）都留 0.5；R5（缺失、带条件）0.5；R4（滑块 0.25，不带条件）0.25；R6（写死 0.5）0.5。
+  - JSON 里直接写 `brightness: false`（R8）与 `alpha: false`（A1）都是 1，构造时的缺省。
+  - 和 `alpha` 同一规则：float setter 不收布尔，JSON 里的布尔也不收。
+
+**改动**
+- 新增 `compile/builtinProperties.ts`：14 项的值与类型、`wpeAlignmentOf`（照用视频的对应）、`builtinProperties(style)`。
+- `compile/model.ts`：
+  - `currentProperties` 先铺内置项，再工程声明，再用户值；
+  - `resolveValue` 属性取不到（`undefined` / `null`）就直接返回 `value`、不比 condition。照旧经 `properties[name]` 读，完整性检查的读取观察记得到。
+- `compile/bundle.ts`：图层 `alpha` / `brightness` 改走 `scalar`：解析出布尔就取 JSON 原值，原值也是布尔就取 1。
+- `render/state.ts`：`SceneState.write` 的图层标量字段收到布尔（条件换成的、布尔属性）直接返回 `applied`，不写、不标脏。
+- `host.ts`：
+  - 首包补内置项，工程声明了的不补，补了的记进 `hostBuiltins`；
+  - `setStyle`：首包之后、`alignment` 是宿主补的，就把新值作为一条增量走 `apply`（值没变去重掉）；
+  - 建好脚本 API、`runtime.load` 之前 `setProperties(this.properties)`，`init` 里的 `engine.userProperties` 就是全集。
+- `dev/probeScripts.ts`：`probeUserProperties` 同宿主补内置项（`alignment` 取 0，请求给的值可覆盖），`init` 之前交全集。
+- 测试：
+  - 新增 `compile/p3a-missing.test.ts` 12 条：缺失属性的可见性 / 数值 / 脚本属性（期望照 WPE）、读取观察、`alpha` / `brightness` 编译期与就地写（含「就地 = 重编译」）、内置项的值、样式对应、优先级、内置名绑定与脚本属性、探针全集；
+  - `host.test.ts` 新增「WPE 内置属性」3 条，两处编译输入断言加上内置项；
+  - `host.script.test.ts` 新增 1 条（`init` 里的 `engine.userProperties`）；
+  - `dev/probeScripts.test.ts` 两条改期望（全集带内置项、`init` 时已是全集）；
+  - `compile/p12a.test.ts` 一条改期望：动画层 `visible` 绑了工程没声明的 `walking`（条件 `"1"`、value true），原来按旧规则断言为 false，现在是 true。
+
+**验证**
+- 宿主 tsc 0 error；Prettier 改过的文件全部通过；全量 vitest 见回归表 D11（改动前基线 162 个文件 3850 条全过）。
+- 变异（`mutate.py`，`out/mutate.txt`，按原字节还原、SHA-256 核对）：去掉缺失判断、编译期 / 宿主 / 探针的内置项注入、宿主 / 探针 `init` 前交全集、样式改 `alignment`、编译期 / 就地写的布尔拦截，9 / 9 抓到。
+- 真机（kabegame-dev，宿主产物 `index-DT87CM1t.js`，`render_scene`，脚本用例带 `scripts: true`）：
+  - `p3am-missing` 26 项、`p3am-extra` 10 项逐项和 WPE 相同（`out/ours-judge-after.txt`、`out/ours-judge-extra-after.txt`）。脚本属性首次 apply 之后与 WPE 逐键相同；`init` 里存在的属性仍是当前值（附带发现 4，没改）。
+  - `p3am-bright` 9 项相同（`out/ours-judge-bright-after.txt`）。
+  - `p3am-builtin` 17 项里 16 项相同，B5 不同（我们画）：原因是下面的两处偏差，与本次修复无关。改动前（`out/ours-judge-builtin-before.txt`）B1、B4、B6、B10–B16 都错。`engine.userProperties` 在 `init` / apply / 第 1 帧的键与值都和 WPE 相同。
+  - 屏外真宿主（`host_open` 14867）的应用日志里，脚本 `init` 读到的 `engine.userProperties` 同样带 14 个内置项。
+  - `p3am-empty` 8 项里 W1 / W2 / W5 不同（见下）。
+  - 测试行 14866–14870 已 `projects_remove`，`imagesGone` / `tasksGone` 都为真。
+- 语料（`fields.test.ts`，选项同 `kbp corpus scan`：exhaustive、超高档；`fields_diff.py` → `out/fields-diff.txt`）：192 张，`unsupported` 一张都没变，能渲染 130 → 130。字段变化只有图层 `visible`：4 张 7 处由 false 变 true，3351072238 的 objects/1（id 291，背景视频）在内。另外 2833017810 两个 effect `visible`、3660962877 的 `general.cameraparallax` 也改按 `value`（转储没收这两类）。缺失属性带 condition 的 13 处逐处核对，现在都等于 `value`。
+
+**没修的偏差**（`p3am-empty` 实测，留作后续，不在这三件事里）：
+- 空串 condition WPE 当成没写条件，我们照常比较。语料 0 处。
+- 图层 `visible` 不带条件时，WPE 的 bool setter 不收字符串（应当也不收数字，没测），留 `value`；我们按「不是 `false` 就显示」。语料 1 处：3276911872 的 objects/158（textinput `"A3"`、value false，WPE 不画，我们画）。
+
+**没测到的**：
+- effect `visible` 绑缺失属性（REA I3 同一个布尔 setter，推断同 H1，已按 H1 生效）；
+- `alpha` / `brightness` 收字符串、`brightness` 收缺失属性以外的非数值；
+- WPE 里运行中改对齐时，脚本收不收到 `applyUserProperties({ alignment })`（推断收到，`host.ts` 的 `setStyle` 标了 `TODO:[WPE_SCENE]`）；
+- WPE 给内置项的 `type` 字符串（`builtinProperties.ts` 标了 `TODO:[WPE_SCENE]`）。
+
+**环境**：没改 WPE 设置；测试窗口 `kb-509904-5`、`-6`、`-7` 已关；三次抓帧在 `A:\p3a-missing\{builtin,empty,bright}\`；三个工程里 WPE 写的 `shaders/blobsSM40` 已用 `cleanup_project` 删掉。

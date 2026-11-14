@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SceneSpectrum } from "./audio/spectrum";
+import { builtinProperties } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
 import type { ScriptRealm } from "./script/runtime";
 import type { VideoSink } from "./video/sceneVideos";
@@ -136,6 +137,9 @@ function reporter() {
 }
 
 const fx = (value: boolean) => ({ fx: { type: "bool", value } });
+/** 宿主首包补进全集的 WPE 内置项（P3a 修复）的裸值，`alignment` 按缺省样式 fill。 */
+const builtinValues = () =>
+  Object.fromEntries(Object.entries(builtinProperties()).map(([key, item]) => [key, item.value]));
 
 describe("SceneHost：退回预览图后的属性变化", () => {
   beforeEach(() => {
@@ -156,7 +160,7 @@ describe("SceneHost：退回预览图后的属性变化", () => {
     host.applyUserProperties(fx(false));
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
     expect(compile).toHaveBeenCalledTimes(2);
-    expect(compile.mock.calls[1][0].userProperties).toEqual({ fx: false });
+    expect(compile.mock.calls[1][0].userProperties).toEqual({ ...builtinValues(), fx: false });
     host.dispose();
   });
 
@@ -182,7 +186,7 @@ describe("SceneHost：退回预览图后的属性变化", () => {
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
     expect(report.fallback).toHaveBeenCalledTimes(1);
     expect(compile).toHaveBeenCalledTimes(2);
-    expect(compile.mock.calls[1][0].userProperties).toEqual({ fx: false });
+    expect(compile.mock.calls[1][0].userProperties).toEqual({ ...builtinValues(), fx: false });
     host.dispose();
   });
 
@@ -663,6 +667,55 @@ describe("SceneHost：粒子 instanceoverride（P4a 步骤 5）", () => {
     expect(host.stats).toEqual({ applied: 1, recompiled: [] });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+});
+
+describe("SceneHost：WPE 内置属性（P3a 修复）", () => {
+  const binding = { property: "alignment", condition: "1", target: { kind: "layer", object: 0, field: "visible" } };
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    rendererWrites.applyBindings.mockClear();
+    compile.mockImplementation(async () => ({ ...bundleFor({}), bindings: [binding] }) as unknown as SceneBundle);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("首包补上 14 个内置项（alignment 按首包前收到的样式），工程声明的同名属性以工程的为准", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.setStyle("fit");
+    host.applyUserProperties({ wec_hue: { type: "slider", value: 7 }, mine: { type: "slider", value: 1 } });
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(compile.mock.calls[0][0].userProperties).toEqual({ ...builtinValues(), alignment: 1, wec_hue: 7, mine: 1 });
+    host.dispose();
+  });
+
+  it("运行中改样式：alignment 作为一条增量就地写（绑了它的目标跟着变），值没变不发；不重新编译", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    host.setStyle("fit");
+    expect(rendererWrites.applyBindings).toHaveBeenCalledExactlyOnceWith([{ binding, value: 1 }]);
+    // tile 与 fill 同是 0：fill → tile 只发一次
+    host.setStyle("fill");
+    host.setStyle("tile");
+    expect(rendererWrites.applyBindings).toHaveBeenCalledTimes(2);
+    expect(rendererWrites.applyBindings).toHaveBeenLastCalledWith([{ binding, value: 0 }]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+
+  it("工程自己声明了 alignment：样式不动它", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties({ alignment: { type: "combo", value: 3 } });
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(compile.mock.calls[0][0].userProperties.alignment).toBe(3);
+    host.setStyle("fit");
+    expect(rendererWrites.applyBindings).not.toHaveBeenCalled();
     host.dispose();
   });
 });

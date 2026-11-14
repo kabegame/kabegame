@@ -18,6 +18,7 @@
  */
 import type { SceneAnimations } from "../animation/player";
 import { mergeProperties, type UserProperty } from "../compile/bindings";
+import { builtinProperties } from "../compile/builtinProperties";
 import type { SceneBundle } from "../compile/bundle";
 import { SceneFs, type SceneReader } from "../compile/fs";
 import { parseProject, type ProjectJson } from "../compile/model";
@@ -158,19 +159,24 @@ export function installProbeRandom(global: Record<string, unknown>, seed: number
 
 /**
  * 场景的全部用户属性（带类型，同宿主的累计全集）：`project.json` 声明的属性，值取请求给的（`overrides`，裸值或 `{ value }`，同编译期的
- * `currentProperties`）、没给的取工程缺省值；分组、文本与空值跳过（`mergeProperties`，同宿主）。工程里没声明的键不收（宿主也只有声明的）。
+ * `currentProperties`）、没给的取工程缺省值；分组、文本与空值跳过（`mergeProperties`，同宿主）。另有 WPE 注入的 14 个内置项（P3a 修复，
+ * 同宿主首包补的）：工程声明了同名的以工程的为准；探针没有壁纸样式，`alignment` 取 fill 的 0。其余工程没声明的键不收（宿主也只有声明的）。
  */
 export function probeUserProperties(
   project: Pick<ProjectJson, "general"> | null,
   overrides: Record<string, unknown> = {},
 ): Map<string, UserProperty> {
   const delta: Record<string, UserProperty> = {};
+  const add = (key: string, type: string, fallback: unknown) => {
+    const raw = Object.hasOwn(overrides, key) ? overrides[key] : fallback;
+    const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
+    delta[key] = { type, value };
+  };
+  for (const [key, builtin] of Object.entries(builtinProperties())) add(key, builtin.type, builtin.value);
   for (const [key, declared] of Object.entries(project?.general?.properties ?? {})) {
     const type = (declared as { type?: unknown }).type;
     if (typeof type !== "string") continue;
-    const raw = Object.hasOwn(overrides, key) ? overrides[key] : declared.value;
-    const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
-    delta[key] = { type, value };
+    add(key, type, declared.value);
   }
   const properties = new Map<string, UserProperty>();
   mergeProperties(properties, delta);
@@ -407,6 +413,8 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         setModuleEvaluating: (evaluating) => scriptApi.setModuleEvaluating(evaluating),
       });
       scriptApi.attachRuntime(runtime);
+      // 同宿主：`init` 里 `engine.userProperties` 已是全集（含内置项）
+      scriptApi.setProperties(input.properties);
       await runtime.load(bundle.scripts);
       // 同宿主首帧之前（`beforeFirstFrame`）：整份用户属性交一次，`engine.userProperties` 从这时起读得到
       runtime.applyUserProperties(Object.fromEntries(input.properties), input.properties, bundle.bindings);
