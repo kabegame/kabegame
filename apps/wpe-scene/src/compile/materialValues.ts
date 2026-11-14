@@ -46,9 +46,13 @@ export interface MaterialSlot {
 
 /**
  * C 的 `atof`（WPE 用 `common_atof_l`，`FUN_1402d06ac`）：跳过前导空白，读最长的十进制浮点前缀，读不出为 0。
- * `inf` / `nan` / 十六进制浮点没有复刻（语料里没有）。
+ * UCRT 的 `atof` 还认带符号的 `inf` / `infinity` / `nan`（不分大小写，`nan(…)` 的括号部分不影响结果）：照做（P10b）。脚本写回与关键帧
+ * 写入的向量经 `scriptWriteValue` 拼成字符串再由这里读回，WPE 那两条走类型化 setter、NaN 与 ±∞ 原样存下；不认的话 `NaN` 读成 0
+ * （P10b 走查 `p10b-api` 的 `q4`：`rate = NaN` 之后 WPE 的 origin 是 NaN、不画，我们是 0）。十六进制浮点没有复刻（语料里没有）。
  */
 export function atof(text: string): number {
+  const special = /^[ \t\n\v\f\r]*([+-]?)(inf(?:inity)?|nan)/i.exec(text);
+  if (special) return special[2].toLowerCase() === "nan" ? NaN : special[1] === "-" ? -Infinity : Infinity;
   const match = /^[ \t\n\v\f\r]*([+-]?(?:\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?))/.exec(text);
   return match ? Number(match[1]) : 0;
 }

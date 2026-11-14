@@ -474,3 +474,59 @@ Sonnet 子代理实现，主会话独立验收。
 - 变异：
   - 子代理做了 7 处，都检出；
   - 主会话另做 4 处：包装对象不缓存（7 个失败）、没有 uniform 的常量也找得到（2 个）、`init` 时不认待用播放器（6 个）、事件也发给没跑完 `init` 的脚本（补用例前漏掉，补后检出）。
+
+### 步骤 4a — 生成工程的走查（2026-11-14，Sonnet 子代理做、主会话验收）
+
+- **录制**：
+  - `p10-script`、`p10-edge` 复用 P10a 的录制（`A:\p10s4\`），并补录覆盖 10.0–13.6 s 脚本动作的段；
+  - `p10b-api` 新录 6 段；
+  - 补录都在 `A:\p10b\s4\`，窗口 1920×1080、fps 20，WPE 当时是 `ultra` 档（别的会话改的，没改回）。
+- **回放**：`ignore/p10/b4a/walk.py`，`renderFrames.ts --scripts` 单开宿主，**不排除任何对象**；`kbp cmp frames --meta` 逐帧比；`[kf]` 日志用 `kfcmp.py` / `evcmp*.py` 对照（我们这边只有每段最后约 50 条控制台输出）。
+- **结果**：23 段 69 帧里 66 帧逐像素相同。覆盖的对象：
+  - `ctl`、`ctls`、`ovr`、`ovrinit`、`nameA` / `nameB`、`ev` / `evn` / `evp`、`link`、`kid`、`neg`、`pass`、`byprop` 等；
+  - q1–q8。
+- **找到两处差异，都已修**：
+  1. **`rate = NaN` 之后动画写进去的是 0，WPE 是 NaN**（`p10b-api-w12` 第 267–269 帧，`q4` 画到了左下角）：
+     - 播放器和脚本写回的向量都经 `scriptWriteValue` 拼成字符串，再由 `atof` 读回；我们的 `atof` 不认 `NaN`，读成 0。WPE 那两条走类型化 setter，NaN 原样存下、不画。
+     - 修法：`compile/materialValues.ts` 的 `atof` 照 UCRT 认带符号的 `inf` / `infinity` / `nan`（不分大小写），WPE 用的 `common_atof_l` 本来就认。这也让用户属性里的同类字符串跟 WPE 一致。补了用例。
+  2. **dev 探针里 `animationEvent` 回调读到的 `engine.runtime` 晚一帧**（只在探针，不影响画面）：
+     - 探针的脚本时钟在 `scripts.frame` 里才更新，事件在它之前派发。宿主没有这个问题：渲染器在 `beforeFrame` 之前就推进了 `frameClock`。
+     - 修法：`ProbeScripts.enterFrame(dt, time)`，两种回放在推进动画之前调，同 WPE 先加 `g_Time` 再跑动画循环（读码第 1 节）。补了用例，去掉调用后它失败。
+- **修后复核**（主会话，宿主产物 `index-GTdYHbia.js`）：重导入、重跑 `p10b-api-w12` 与 `p10-script-w10`。两段都 3 帧逐像素相同；`[kf]` 日志里逐帧条目、事件条目（含 `engine.runtime`）、`q4` 的 NaN 条目全部和 WPE 相同。测试工程已移除。
+- **验收的其它项**：
+  - tsc 0；vitest 3591 个通过；
+  - 有 1 个失败：`pipeline.test.ts` 的「`3293687972`：读取 125501007 字节」超出 80 MiB 上限。撤回 `atof` 的改动照样失败，来自工作区里别的会话未提交的改动，不是本步的。
+- **没覆盖到**：
+  - 只比了每段最后约 50 条控制台输出，不是全程；
+  - `p10-script` 13.3–13.6 s 的两个动作靠前后两段夹着，没有专门抓。
+
+### 步骤 4b — 真实壁纸的复制工程（2026-11-14，主会话）
+
+- **选样**：调用全在已实现回调里的只有 4 张。
+  - `2887099508` 的两条带事件的动画是 `startpaused`，脚本混淆过，靠 `cursorClick` 播放；测试窗口里没有点击，事件不会触发，走查不到，等 P6c。
+  - 另外两张的动画层归 P12。
+  - 剩下的是两张碧蓝航线壁纸的时钟：`init(){ thisObject.getAnimation().play() }`，60 fps、120 帧的 `single`，淡入加上移。
+- **复制工程**（`kbp content isolate --instrument`，`ignore/p10/b4b/proj/`）：
+  - `3336377291-iso-61`：`Clock` 与父 `Clock Shadow`，加 FR；
+  - `3427691867-iso-164`：`Clock`、`Clock Shadow`、父 `纯色`，加 FR；
+  - 两层文字的 `text` 换成固定的 `{"value": "12:34"}`：原来由脚本按 `Date` 算，两边对不上，它也不是被测的属性。动画、`init` 脚本、父链、`Clock Shadow` 的 `origin` 上的拖拽脚本、`scale` / `visible` 脚本都原样保留。
+- **录制**：`A:\p10b\s4b\`，1920×1080 窗口（和 3840×2160 的场景同为 16:9，投影两边相同），fps 20，WPE `ultra` 档。
+  - 每张 4 段，各 3 帧：等待 0 s 的那段落在动画中途（脚本帧 23–26，约 1.2 s），1 / 2 / 5 s 的在播完之后；
+  - 日志 `ignore/p10/b4b/out/`。
+- **回放与比较**（`ignore/p10/b4b/walk.py`）：`renderFrames.ts --scripts --cursors log` 单开宿主；`kbp cmp frames` 逐帧比；每段中间那帧用 `kbp rdc consts --no-clock` 对我们的 `--trace-frames` 逐 draw 比 MVP 与 `g_Color4`。
+- **结果**：
+  - **逐 draw 常量**：8 段全部 0 ulp，两层文字的 MVP（`origin` 动画与父链）、`g_Color4`（alpha 动画）都对上。动画中途那帧的 alpha 两边都是 0.7435418367385864：`init` 里的 `play()` 和 WPE 同一帧开播，时钟逐位相同。
+  - **整帧**：文字还没显出来的那帧（`clk61` 第 23 帧，alpha 仍是第 70 帧之前的 0）逐像素相同。文字可见的帧都有差：1500–2400 个像素、最大 47，外接框只在两层文字上（约 150×80 像素）。`3427691867` 的纯色图层 0 差异。
+  - **差异的归因**：抓帧里文字那次绘制（事件 36）的 30 个顶点，位置与纹理坐标和我们的轨迹逐项相同；字形图集都是 512×512 R8，常量 0 ulp。差别只在渲染分辨率：WPE 直接往 1920×1080 的目标里画（视口 1920×1080），对没有 mip 的图集做 0.5 倍缩小采样；我们按 3840×2160 的场景分辨率画再缩到画布。归「按窗口分辨率画」这一类已知差异（P10a 走查、`FINAL_CHECK.md` 的已知差异举例），不复刻。
+- 测试工程已移除。
+
+### 步骤 5 — 收尾（2026-11-14）
+
+- `cocs/wpe/WPE_SCENE.md`：
+  - 「关键帧动画」一节改成 P10a、P10b 合写：表里加脚本一行；规则加丢弃、查找、`IAnimation`、事件；能力表、走查、已知差异、语料、dev 探针同步；
+  - 脚本一节：导出回调表、`object` 分组、登记顺序；
+  - 材质取值一节：`atof` 认 `inf` / `nan`。
+- `cocs/README.md`：场景条目的关键帧一项与适用场景。
+- `versions/latest/regression.md`：新增 K7–K13，勾了 4 项。K11（27 张强制渲染跑脚本）没做，随 P6c / P11；K12（清空脚本存储）要动图库界面，待用户看；K13 非 Windows 本机测不了。
+- `versions/latest/changelog.md`：用户侧那一行改写，开发侧加一条。
+- `PLAN.md` 与总计划记进度。

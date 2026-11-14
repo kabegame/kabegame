@@ -259,8 +259,11 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
     animations: [{ ...animation, owner: "objects/0" }],
   } as unknown as SceneBundle;
 
-  /** 假 realm：模块导出 init（`play` 的开关由 `playInInit` 定）、animationEvent、update，都记进 `log`。 */
-  function fakeRealm(log: string[], playInInit: boolean) {
+  /**
+   * 假 realm：模块导出 init（`play` 的开关由 `playInInit` 定）、animationEvent、update，都记进 `log`；animationEvent 与 update 读到的
+   * `engine.runtime` 另记进 `times`。
+   */
+  function fakeRealm(log: string[], playInInit: boolean, times: [string, number][] = []) {
     return async (setup: ProbeRealmSetup): Promise<ScriptRealm> => {
       void setup;
       const global: Record<string, unknown> = {
@@ -284,9 +287,11 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
             },
             animationEvent(event: { name: string }, value: number) {
               log.push(`event:${event.name}:${value}`);
+              times.push(["event", (global.engine as { runtime: number }).runtime]);
             },
             update() {
               log.push("update");
+              times.push(["update", (global.engine as { runtime: number }).runtime]);
             },
           };
         },
@@ -297,6 +302,7 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
 
   async function replay(playInInit: boolean) {
     const log: string[] = [];
+    const times: [string, number][] = [];
     const calls: unknown[] = [];
     const state = SceneState.fromBundle(bundle);
     const players = new SceneAnimations(bundle.animations!);
@@ -308,7 +314,7 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
       screen: SCENE,
       options: probeScriptsOptionsOf(true)!,
       animations: players,
-      createRealm: fakeRealm(log, playInInit),
+      createRealm: fakeRealm(log, playInInit, times),
     });
     await probe.load();
     const scene = {
@@ -328,7 +334,7 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
       scripts: probe,
     });
     probe.dispose();
-    return { log, players };
+    return { log, players, times };
   }
 
   it("init 里 getAnimation().play() 有落点：回放第一帧起推进；事件在该帧的 update 之前派发给脚本，带上接收者的当前值", async () => {
@@ -344,6 +350,16 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
     expect(log[at + 1]).toBe("update");
     expect(log.slice(at - 1, at)).toEqual(["update"]); // 第一帧的 update 在事件之前
     expect(log.filter((line) => line === "update")).toHaveLength(PARTICLES.dts.length);
+  });
+
+  it("事件回调读到的 engine.runtime 是本帧的（同紧接着的 update），不是上一帧的（WPE 先加 g_Time 再跑动画循环）", async () => {
+    const { times } = await replay(true);
+    const at = times.findIndex(([kind]) => kind === "event");
+    expect(at).toBeGreaterThan(0);
+    expect(times[at + 1][0]).toBe("update");
+    expect(times[at][1]).toBe(times[at + 1][1]);
+    // 上一帧的 update 读到的是更早的时间
+    expect(times[at - 1][1]).toBeLessThan(times[at][1]);
   });
 
   it("对照：init 里不播放，startpaused 的动画不动、事件不触发", async () => {

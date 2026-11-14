@@ -97,6 +97,17 @@ describe("setter（报告 2.4）", () => {
 
   it("atof：读最长的十进制前缀", () => {
     expect([atof("  -1.5e2x"), atof(".5"), atof("1e"), atof("x1"), atof("")]).toEqual([-150, 0.5, 1, 0, 0]);
+    // UCRT 的 inf / infinity / nan，不分大小写、可带符号（P10b）；不完整的（`in`）照旧读不出
+    expect([atof("NaN"), atof(" nan(ind)"), atof("Infinity"), atof("-inf"), atof("+INF x"), atof("in")]).toEqual([
+      NaN,
+      NaN,
+      Infinity,
+      -Infinity,
+      Infinity,
+      0,
+    ]);
+    // 经字符串写回的向量（`scriptWriteValue` 拼成的）读回原值
+    expect(materialSetter(3, [NaN, 1040, -Infinity].join(" "))).toEqual([NaN, 1040, -Infinity]);
   });
 });
 

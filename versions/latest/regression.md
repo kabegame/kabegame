@@ -2643,6 +2643,20 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | K5 实时预览 | Windows dev，图库预览与桌面 | 打开 `2251857160`（冬季，等 10 s 看霜冻漫上来）与 `3818053626`（片头文字淡入） | 动画流畅、改属性时不从头开始；暂停时停 | 只在探针回放里比过，实时播放待用户看 |
 | [ ] | K6 非 Windows | macOS / Linux | 预览 `2251857160` | 同 Windows | 本机不能测 |
 
+## 场景壁纸关键帧动画的脚本控制与事件（P10b）
+
+2026-11-14。脚本的 `getAnimation()` / `thisScene.getAnimation()` 拿到动画、经 `IAnimation` 控制播放；时钟越过的事件派发给脚本的 `animationEvent`；脚本与动画的登记顺序照 WPE。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase10/p10-REPORT.md`「P10b 补测」，计划、实施记录与走查见同目录 `phase-10b-script.md`，测试工程 `ignore/p10/proj/p10b-api`、`p10b-order`，复制工程 `ignore/p10/b4b/proj/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | K7 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error、全过 | 2026-11-14：tsc 0 error；vitest 3591 个通过，另 1 个失败是工作区别的会话未提交的改动（`pipeline.test.ts` 的 `3293687972` 读取字节数），撤回本步改动照样失败 |
+| [x] | K8 语料 | Node，183 个工程 | 前后重扫 `unsupported` | 只去掉 `script:api:object.getAnimation` / `thisScene.getAnimation`、`script:callback:animationEvent` | 2026-11-14：27 / 1 / 1 张，没有新增键，能渲染 92 → 92（这 27 张都还差光标、媒体回调或人偶） |
+| [x] | K9 生成工程带脚本回放 | Windows dev + WPE 抓帧，1920×1080 | `p10-script`、`p10-edge`、`p10b-api` 共 23 段，`renderFrames.ts --scripts` 逐帧回放、`kbp cmp frames` 比，`[kf]` 日志对照 | 整帧逐像素相同，脚本日志相同 | 2026-11-14：69 帧全部相同（修了 `NaN` 写回与探针事件时刻两处之后）；不排除任何对象 |
+| [x] | K10 真实壁纸复制工程 | Windows dev + WPE 抓帧，1920×1080 | `3336377291`、`3427691867` 的时钟（`init` 里 `play()`）各 4 段，逐帧比、逐 draw 对常量 | 动画值与开播时刻和 WPE 逐位相同，像素差逐处有解释 | 2026-11-14：MVP 与 alpha 8 段 0 ulp（动画中途那帧 alpha 都是 0.7435418367385864）；像素差只在文字上，顶点与图集相同，归「按窗口分辨率画」 |
+| [ ] | K11 用 `getAnimation` 的场景跑脚本 | Windows dev，强制渲染 | 27 张场景在 dev 强制渲染下各跑一会儿 | 脚本诊断里没有 `getAnimation` / `IAnimation` 相关的错误 | 没做：这些场景的调用多在光标、媒体回调里，随 P6c / P11 一起看 |
+| [ ] | K12 清空脚本存储 | Windows dev，图库预览 | 在 `init` 里播放动画的场景上「清空脚本存储」 | 动画从头播一遍 | 只有单测；要动图库界面，待用户看 |
+| [ ] | K13 非 Windows | macOS / Linux | 同 K12 | 同 Windows | 本机不能测 |
+
 ## 场景壁纸 P6b 步骤 2：`ITextLayer` 脚本 API
 
 2026-11-14。文本层的脚本对象装上 WPE 文本描述符的 17 个字段（`script/api.ts` 的 `installText`），读写规则照 WPE 实测（`ignore/p6/b2/make_api.mjs` 的 `p6b-api`、`p6b-api-enum`）。

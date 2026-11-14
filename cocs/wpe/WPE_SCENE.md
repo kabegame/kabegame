@@ -214,7 +214,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **uniform 打包**：
   - 按 `offset` 写；标量 / 二三分量向量的数组按 `stride` 16 写前几个分量；`mat3` 列步长 16；整数写成 `i32` / `u32`。
   - 值来源：`drawUniformValues`（纯函数）先写内置值，再用材质常量覆盖。材质常量取自 `SceneState.constants`（编译期初值就是 `pass.uniforms`），就地改值时同一个函数重算，所以两条路逐字节一致（单测核对）。
-  - **材质常量的取值照 WPE**（`compile/materialValues.ts`，`.claude/plans/wpe-import/3-scene/vector-constant-REPORT.md`，`p4b-vec` 实测）：缺键插注解缺省（先转字符串，所以数字缺省进向量不铺满）；setter 里数字进向量铺满，字符串进向量先清零、只按空格切、逐段 `atof`（`"a, b"` 得 (a, b)），float 只收数字，布尔 / 数组不写；`{user}` 先写 JSON 的 `value`，再把属性值交给同一个 setter，带 condition 的、布尔 / 下拉字符串 / 颜色绑 float 的都不写；就地写与脚本写回用同一个 setter、整体重写。同键不同类型被翻译器拆开的两半共用合并类型与缺省：取**读到它的**片元一半，片元没读时取读到的顶点一半（P7d，WPE 每阶段只收被使用的键、合并时片元覆盖顶点）。槽位只数被读的键（WPE 按键名排序给被使用的键分配，48 个 float 为上限）；被读的顶点一半比合并类型宽（多读下一个键的存储）与超过 48 个 float 照报 `constant:mixed-type:<键>` / `constant:slots`，语料 0 处。按用户决定不复刻同阶段同键只上传后声明的、按声明行子串定类型两条。
+  - **材质常量的取值照 WPE**（`compile/materialValues.ts`，`.claude/plans/wpe-import/3-scene/vector-constant-REPORT.md`，`p4b-vec` 实测）：缺键插注解缺省（先转字符串，所以数字缺省进向量不铺满）；setter 里数字进向量铺满，字符串进向量先清零、只按空格切、逐段 `atof`（`"a, b"` 得 (a, b)；照 UCRT 也认带符号的 `inf` / `infinity` / `nan`，P10b），float 只收数字，布尔 / 数组不写；`{user}` 先写 JSON 的 `value`，再把属性值交给同一个 setter，带 condition 的、布尔 / 下拉字符串 / 颜色绑 float 的都不写；就地写与脚本写回用同一个 setter、整体重写。同键不同类型被翻译器拆开的两半共用合并类型与缺省：取**读到它的**片元一半，片元没读时取读到的顶点一半（P7d，WPE 每阶段只收被使用的键、合并时片元覆盖顶点）。槽位只数被读的键（WPE 按键名排序给被使用的键分配，48 个 float 为上限）；被读的顶点一半比合并类型宽（多读下一个键的存储）与超过 48 个 float 照报 `constant:mixed-type:<键>` / `constant:slots`，语料 0 处。按用户决定不复刻同阶段同键只上传后声明的、按声明行子串定类型两条。
   - **图层的向量字段同这组 setter**（P6b 1e-3 复核，`compile/bindings.ts` 的 `layerVectorValue`）：`origin`、`scale`、图像层 `color`（vec3，`FUN_1401a4230`）与 `parallaxDepth`（vec2，`FUN_1401a3fc0`）和材质常量是 WPE 的同一组 setter（对象描述符表 `ignore/p3-userprops/notes/descriptors-decomp.txt`），编译期与就地写共用 `setterValue`：滑块数字绑 `scale` 时三个分量都是它，字符串少写的分量为 0；属性值写不进（布尔、条件换成的布尔）时留 JSON 的 `value`，运行中不改字段、不标脏。P1 起这里用 `numbers`，数字只得一个分量，`layerLocalMatrix` 再把缺的 y、z 补成 1：`3836725625` 的「时钟大小」0.72 让文字纵向拉长 1 / 0.72 倍；语料 34 张场景、245 个字段是这种绑定。`angles` 走另一个 setter（`FUN_1401df2f0`，没读透、语料没有标量绑它），照旧。
   - 只有 `g_Time`、`g_Frametime`、`g_Daytime`、`g_PointerPosition(Last)`、`g_PointerState`、`g_ParallaxPosition`（P5a）每帧刷新；被就地改过的 draw 由 `update` 整块重写一次；视差或相机（抖动、缩放）变了的那一帧，全部 draw 的矩阵与眼位重写一遍（P5a）。
   - **就地刷新**（`GpuScene.refreshLayer` / `refreshPass`）：图层状态变化只重写由图层算出的那组名字（`LAYER_UNIFORMS`：矩阵、`g_Color*`、`g_Alpha` / `g_UserAlpha`、`g_CompositeColor`），`pass.uniforms` 里有的名字一律不动（材质值优先，如 passthrough 的 `g_Color4 = (1,1,1,1)`、材质自带的 `g_UserAlpha`）；材质常量变化重写本 pass 的全部常量。
@@ -503,16 +503,17 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 | 图层对象 | `name`、`id`、`size`（只读写入无效）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`（`Vec2`，P5a） |
 | `thisObject` 的其它 owner | general 的 `bloom`、`bloom*` 泛光参数、`GENERAL_FIELDS` 的 17 个字段（含 P5a 的 `zoom`），以及写入走重编译的 `hdr`；effect 的 `visible`；材质 pass 中全部带 `meta.material` 的常量。`fog*`、`wind*`、`gravity*` 等还没有 |
 
-**本机语料里出现、当前未提供的 API**：运行时报错最多的是 `thisLayer.getParent` / `getChildren` / `getTextureAnimation`、声音图层 `play` / `stop` / `isPlaying`、`thisObject.getAnimation`、`input.cursorWorldPosition`、图层 `getVideoTexture`；还有 `engine.registerAsset`、`thisObject.getMaterial`。静态扫描另见 `getTransformMatrix`、`thisScene.createLayer` / `sortLayer` / `destroyLayer`、图层 `setFrame` / `getEffect` / `getAnimationLayer`、`input.cursorLeftDown`；文本字段 `text`、`maxwidth`、`horizontalalign`、`verticalalign` 及 `cursor*` / `media*Changed` 回调也未接通。语料中的 `scene.getLayer` 是样本伪代码自身的未定义变量；`localStorage.remove`、`console.warn`、`originalOrigin` 也不是应补的 WPE API。
+**本机语料里出现、当前未提供的 API**：运行时报错最多的是 `thisLayer.getParent` / `getChildren` / `getTextureAnimation`、声音图层 `play` / `stop` / `isPlaying`、`input.cursorWorldPosition`、图层 `getVideoTexture`；还有 `engine.registerAsset`、`thisObject.getMaterial`。静态扫描另见 `getTransformMatrix`、`thisScene.createLayer` / `sortLayer` / `destroyLayer`、图层 `setFrame` / `getEffect` / `getAnimationLayer`、`input.cursorLeftDown`；文本字段 `text`、`maxwidth`、`horizontalalign`、`verticalalign` 及 `cursor*` / `media*Changed` 回调也未接通。语料中的 `scene.getLayer` 是样本伪代码自身的未定义变量；`localStorage.remove`、`console.warn`、`originalOrigin` 也不是应补的 WPE API。
 
 **脚本 API 检查**（2026-11-07 用户改定，提交 `c8ebf098`，`compile/scriptApi.ts`）：改定前不做静态扫描，未实现的 API 在调用时报错、只禁用那个回调，可能画出半成品。工坊 3304642534 就是这样：可视化脚本在 `init` 里调 `thisScene.createLayer` 造另外 63 根音频条，`init` 报错被禁用，`update` 每帧抛错又被脚本自己的 `try/catch` 吞掉，画面静默缺了整组条。现在编译期扫描每段会执行的脚本，用到下表成员就报 `script:api:<分组>.<成员>`、整张退回预览图；运行期的普通错误仍只进脚本诊断。
 
 - **表**（`MISSING_SCRIPT_API`）：WPE 2.8.42 自带的编辑器补全声明 `ui/dist/monaco/autocomplete/lib.sceneScript.d.ts`，加逆向报告 `p3-script-REPORT.md` 的 C、L1、L14 节，逐项减去 `script/api.ts`、`script/environment.ts` 与 `baseclasses.js` 已提供的成员。**实现一个 API 就从表里删一个**：`script/api.test.ts` 双向核对表里的成员确实不在 `ScriptApi` 上、`ScriptApi` 上的成员也不在表里；`scriptApi.test.ts` 核对表里的名字都出自声明或报告（本机测试）。
-- **分组**：`thisScene`、`engine`、`input`、`localStorage`、`console` 按根对象匹配；`layer`（图层及声音、文本、粒子、模型等接口）、`effect`、`object`（所有对象都有的 `getAnimation`）按类型分组，不看接收者变量。`thisObject` 按脚本挂在哪里解析：图层 → `layer`、effect → `effect`、材质常量 → 只认 `object`、general → 场景字段（键写 `thisScene.<字段>`）。
+- **分组**：`thisScene`、`engine`、`input`、`localStorage`、`console` 按根对象匹配；`layer`（图层及声音、文本、粒子、模型等接口）、`effect`、`object`（所有对象都有的 `getAnimation`；P10b 实现后组为空）按类型分组，不看接收者变量。`thisObject` 按脚本挂在哪里解析：图层 → `layer`、effect → `effect`、材质常量 → 只认 `object`、general → 场景字段（键写 `thisScene.<字段>`）。
 - **匹配**：词法扫描成员访问（`a.b`、`a?.b`、`a["b"]`，跳过注释、字符串和正则），不是完整解析器。`root` 项只认根对象直接访问（`play`、`stop`、`text`、`volume` 这类通用名字只认 `thisLayer.` / `thisObject.`）；`any` 项任意接收者都算，只收名字足够独特的，每项写明理由。子对象（纹理动画、视频纹理、动画层等）只能经表里的入口方法拿到，不另收。
 - **范围**：只扫 `collectScripts` 收集的 scene.json 脚本；导入说明符无效、整段不会求值的不扫。场景的风、重力字段在能力表里中性，但脚本读写它们照报（脚本读到 `undefined` 会算出 NaN）。
 - **3304642534**：报 `script:api:thisScene.createLayer`、`script:api:thisScene.sortLayer`，整场只剩这两项（加检查之前能渲染）。
-- **导出回调**（P6 前置，2026-11-11）：WPE 按固定的 19 个回调名调脚本的导出函数（`WPE_SCRIPT_CALLBACKS`，报告 C 节），运行时只调 `init`、`update`、`applyUserProperties`、`destroy`（`script/runtime.ts` 的 `RUNTIME_CALLBACKS`）。脚本导出了其余回调（`MISSING_SCRIPT_CALLBACKS`：`cursor*` 七个、`media*Changed` 五个、`resizeScreen`、`applyGeneralSettings`、`animationEvent`）时报 `script:callback:<名>`、整张退回，否则场景会静默缺交互。导出名由 `scriptExports` 用同一套词法认出（函数、类、`const` / `let` / `var` 含解构、`export { … }`，宁可多认；`export default` 与 `export * from` 不认），2026-11-11 对语料 3491 段与 TypeScript 解析器逐段比对，导出名全部一致。实现一个回调就从表里删一个、加进 `RUNTIME_CALLBACKS`，`api.test.ts` 核对两者合起来恰好是 19 个。语料 165 张里 53 张因此多报（光标 45 张、媒体 28 张，这些场景都另有阻塞），能渲染的 36 张不变。
+- **导出回调**（P6 前置，2026-11-11）：WPE 按固定的 19 个回调名调脚本的导出函数（`WPE_SCRIPT_CALLBACKS`，报告 C 节），运行时只调 `init`、`update`、`applyUserProperties`、`destroy`、`animationEvent`（`script/runtime.ts` 的 `RUNTIME_CALLBACKS`；`animationEvent` 是 P10b 加的，见「关键帧动画」）。脚本导出了其余回调（`MISSING_SCRIPT_CALLBACKS`：`cursor*` 七个、`media*Changed` 五个、`resizeScreen`、`applyGeneralSettings`）时报 `script:callback:<名>`、整张退回，否则场景会静默缺交互。导出名由 `scriptExports` 用同一套词法认出（函数、类、`const` / `let` / `var` 含解构、`export { … }`，宁可多认；`export default` 与 `export * from` 不认），2026-11-11 对语料 3491 段与 TypeScript 解析器逐段比对，导出名全部一致。实现一个回调就从表里删一个、加进 `RUNTIME_CALLBACKS`，`api.test.ts` 核对两者合起来恰好是 19 个。语料 165 张里 53 张因此多报（光标 45 张、媒体 28 张，这些场景都另有阻塞），能渲染的 36 张不变。
+- **登记顺序**（P10b，2026-11-14 实测 `p10b-order`）：WPE 的脚本列表按「`general` 的字段 → 按 `objects` 数组顺序，每个对象先自己的字段、再它的 `effects`（每个 effect 先 `visible`，再按 pass 顺序的常量）」登记，同一层按键名排序（jsoncpp 的字节序），`init`、`update`、事件派发都按这个顺序；关键帧动画的登记顺序相同。`collectScripts` 与 `collectAnimations` 共用 `compile/registration.ts` 的 `registrationKeys`。WPE 写的 `scene.json` 键本来就按字母序，和按书写顺序遍历的差别只在 effect 的位置（书写顺序里 `effects` 在 `origin`、`visible` 之前）；语料 27 张的脚本先后因此改变。`instanceoverride` 在字段里的位置按字母序是推断。
 - **Unicode 空白**：分词时 U+00A0、U+3000、U+FEFF 等是分隔符、不进标识符。语料有脚本写成 `export` + U+00A0 + `function`（3409595232 等），以前整串被切成一个词，导出与成员访问都认不出。
 
 本机 2026-11-04 的 38 张场景中，5 张 `unsupported` 为空、可完整渲染：beach、deep_space、eagleflag、razer_vortex、razer_bedroom；相对 P3a 新解锁的只有 razer_bedroom。23 张含脚本，共收集 638 段（另有 1 段在材质 JSON，未收集）：444 段求值与回调无报错，127 段求值失败，67 段有回调报错；123 段尝试写回不支持目标，209 段导出尚未调用的 `cursor*` / `media*` 回调。仍退回预览图的含脚本场景另有文本、着色器、声音、粒子等渲染阻塞，补 API 本身不等于解锁渲染。
@@ -2219,16 +2220,17 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 自有属性按 WPE 的 `Object.keys` 顺序：`duration`、`loop`、`rate`、`addEndedCallback`、`play`、`setCurrentTime`、`isPlaying`、`stop`、`pause`、`getCurrentTime`、`getAnimation`。宿主暂停恢复时把所有播放器置为想放（连脚本暂停、停止过的也放，同 WPE 读码）。
 
-## 关键帧动画（P10a）
+## 关键帧动画（P10a、P10b）
 
-`scene.json` 里写成 `{animation: {…}, value}` 的属性在 WPE 里是第三种写入方（另两种是用户属性和脚本写回）：每帧在粒子与相机之后、脚本 `update` 之前，按每条动画自己的 float32 时钟求值，经属性的 setter 写进字段。我们走同一条路：P3a 的绑定目标 `BindingTarget` 加 `SceneState.write`，不加新的 uniform、管线或重编译原因。脚本控制动画（`getAnimation` / `IAnimation`）与事件派发（`animationEvent`）是 P10b。依据：读码 [rea-p10-keyframes](../../.claude/plans/wpe-import/3-scene/phase10/rea-p10-keyframes.md)，实测 [p10-REPORT](../../.claude/plans/wpe-import/3-scene/phase10/p10-REPORT.md)，计划、实施记录与走查见 [phase-10a-curves.md](../../.claude/plans/wpe-import/3-scene/phase10/phase-10a-curves.md)。
+`scene.json` 里写成 `{animation: {…}, value}` 的属性在 WPE 里是第三种写入方（另两种是用户属性和脚本写回）：每帧在粒子与相机之后、脚本 `update` 之前，按每条动画自己的 float32 时钟求值，经属性的 setter 写进字段。我们走同一条路：P3a 的绑定目标 `BindingTarget` 加 `SceneState.write`，不加新的 uniform、管线或重编译原因。P10b 接上脚本：`getAnimation` 返回的 `IAnimation` 直接调播放器，时钟越过的事件当场派发给脚本的 `animationEvent`。依据：读码 [rea-p10-keyframes](../../.claude/plans/wpe-import/3-scene/phase10/rea-p10-keyframes.md)，实测 [p10-REPORT](../../.claude/plans/wpe-import/3-scene/phase10/p10-REPORT.md)（含「P10b 补测」），计划、实施记录与走查见 [phase-10a-curves.md](../../.claude/plans/wpe-import/3-scene/phase10/phase-10a-curves.md)、[phase-10b-script.md](../../.claude/plans/wpe-import/3-scene/phase10/phase-10b-script.md)。
 
 | 层 | 位置 | 做什么 |
 |---|---|---|
-| 求值 | `animation/curve.ts`、`animation/clock.ts`、`animation/types.ts` | 纯 TS，照读码第 14 节逐位写、float32 用 `Math.fround`：关键帧解析与 `wraploop`、整数帧上的三次贝塞尔（步进搜索反解）带缓存、整数帧之间线性插值；时钟的 `loop` / `mirror` / `single` 推进与事件收集，`play` / `pause` / `stop` / `setFrame` 等控制留给 P10b |
-| 编译 | `compile/animations.ts` → `SceneBundle.animations` | 每个关键帧值一条纯数据：目标（和字段脚本共用 `targetOf`）、值类型与 `writes`、通道、时钟参数、父的下标、事件 JSON；effect 常量的 uniform 名等着色器编完再补（`settleConstantAnimation`，同字段脚本）；没有就地目标的报细分键（见「能力表」） |
-| 播放 | `animation/player.ts`（`SceneAnimations`） | `frame(dt, state)`：按登记顺序走，时钟主人本帧第一次用到时推进一次（子排在父前面也不晚一帧），推进量 `f(f(rate)·f(dt))`；会写的按主人的时钟求值，经 `SceneState.write` 写入（返回值不看，所以动画不触发重编译），`recompile` / `unsupported` / `script-property` 目标不写；暂停的照写；事件每帧收进队列。`write`（不推进写一次）、`carryOver`（重编译时按 `id` 接回时钟与通道）、`seek`（dev 近似）、`probe` |
-| 宿主 | `host.ts` | 换场景时新建播放器、`carryOver`、先写一次，再重放脚本写入（暂停中重编译首帧不跑 `beforeFrame`，不写会先闪编译期的 `value`）；每个实时帧在脚本之前 `frame`，写进渲染器正在画的状态（只在「清空脚本存储」重建脚本时和 `scriptState` 不同）；声音目标当场推给排期器；退回预览图与销毁时丢掉 |
+| 求值 | `animation/curve.ts`、`animation/clock.ts`、`animation/types.ts` | 纯 TS，照读码第 14 节逐位写、float32 用 `Math.fround`：关键帧解析与 `wraploop`、整数帧上的三次贝塞尔（步进搜索反解）带缓存、整数帧之间线性插值；时钟的 `loop` / `mirror` / `single` 推进与事件收集，`play` / `pause` / `stop` / `setFrame` 等控制；丢弃的动画用惰性时钟（`AnimationClock.inert`） |
+| 编译 | `compile/animations.ts` → `SceneBundle.animations` | 每个关键帧值一条纯数据：目标（和字段脚本共用 `targetOf`）、值类型与 `writes`、通道、时钟参数、父的下标、事件 JSON，以及 `name`（`options.name`）、`object`（事件的接收范围）、`owner`（查找与联动的属主）、`inert`（丢弃的照样登记）；按 WPE 的登记顺序（`compile/registration.ts`）；effect 常量的 uniform 名等着色器编完再补（`settleConstantAnimation`，同字段脚本）；没有就地目标的报细分键（见「能力表」） |
+| 播放 | `animation/player.ts`（`SceneAnimations`） | `frame(dt, state, hooks)`：按登记顺序走，时钟主人本帧第一次用到时推进一次（子排在父前面也不晚一帧），推进量 `f(f(rate)·f(dt))`；会写的按主人的时钟求值，经 `SceneState.write` 写入（返回值不看，所以动画不触发重编译），`recompile` / `unsupported` / `script-property` 目标不写；暂停的照写；这一条推进出的事件在它处理完、下一条之前同步交给 `hooks.event`。每条都有自己的时钟（子的从不推进）；`control(id)` 给 `IAnimation` 的落点。`write`（不推进写一次）、`carryOver`（重编译时按 `id` 接回时钟、`rate` 与通道）、`seek`（dev 近似）、`probe`（含最近 100 个事件） |
+| 脚本 | `script/api.ts`、`script/runtime.ts` | `getAnimation` 装在图层、effect、材质、`general` 与 `thisScene` 上，`IAnimation` 包装对象按 `id` 缓存、每次调用现取落点；`ScriptRuntime.animationEvent(object, json)` 发给同一图层上跑完 `init` 的脚本 |
+| 宿主 | `host.ts` | 要跑 `init` 的加载先按新 bundle 建待用播放器（`pendingAnimations`，`init` 里的控制才有落点），换上时直接用、不接旧时钟；其余换场景时新建播放器、`carryOver`；都先写一次，再重放脚本写入（暂停中重编译首帧不跑 `beforeFrame`，不写会先闪编译期的 `value`）；每个实时帧在脚本之前 `frame`，写进渲染器正在画的状态（只在「清空脚本存储」重建脚本时和 `scriptState` 不同）；声音目标当场推给排期器；事件钩子接到 `runtime.animationEvent`；退回预览图与销毁时丢掉 |
 
 **规则**（WPE 读码与实测）：
 - **时钟**：每条动画（联动的子用父的）一个 float32 时间，每帧 `t += rate × dt`，`dt` 就是 `g_Frametime` 用的那个，`rate` 缺省 1，不读 `g_Time`；帧号 `t / (1/fps)`（float32）。
@@ -2237,23 +2239,29 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 - **写入**：通道数必须等于分量数，属性必须是 float、vec2、vec3、vec4 之一，否则整条不写、保持 `value`（不报不支持，WPE 也什么都不做）；`startpaused` 时钟不走、每帧照写第 0 帧的值；对象隐藏时照常推进与写入；`angles` 的关键帧是弧度；`relative` 只对三段字符串的 `value` 生效。
 - **一帧里的顺序**：粒子、相机 → 动画 → 脚本 `update` → 渲染。所以动画写的 `general.zoom` 晚一帧生效；脚本本帧写的值下一帧被动画覆盖；`init(value)` 收到的是静态 `value`。
 - **联动**：`options.parent.key` 是同一对象上另一个属性的名字，子完全用父的时钟（时间、模式、暂停、`rate`），`children` 不读。
-- **重编译**：改属性不重载场景，按 `id` 接回时钟（`t`、标志、`rate`），时钟参数变了才从 0 开始。
+- **重编译**：改属性不重载场景，按 `id` 接回时钟（`t`、标志、`rate`），时钟参数变了才从 0 开始。「清空脚本存储」重建脚本时动画一起从头来（P10b 决定 1，等于重开壁纸）。
+- **丢弃**：`options` 不合法（不是对象、`fps` / `length` 不是数或不为正）的动画照样登记、`getAnimation` 找得到：`fps` 读出 1、`duration` 0、时钟不走、不写。材质常量在着色器里没有 uniform 的不建绑定、找不到。
+- **查找**（P10b）：`getAnimation(名字)` 按 `options.name` 或属性名找，取登记顺序里第一条。对象上的只在这个对象的属主里找（图层字段归图层，effect 常量归它所在的材质 pass，effect 的 `visible` 归 effect，`general` 的归 `general`；所以图层上找不到 effect 常量的动画），参数不是非空字符串时用当前脚本所挂属性的名字，找不到返回 `undefined`；`thisScene.getAnimation` 找全场景，参数不是字符串、找不到都是 `null`，空串取第一条没写 `name` 的。模块顶层调用抛 `SyntaxError: getAnimation cannot be called from global scope.`。
+- **`IAnimation`**（P10b）：12 个自有可枚举成员，顺序 `name`、`frameCount`、`duration`、`fps`、`rate`、`play`、`isPlaying`、`stop`、`pause`、`setFrame`、`getFrame`、`getAnimation`；前四个只读（严格模式下赋值抛 `TypeError`）；同一条每次是同一个对象。`rate` 缺省 1、不钳制、只收数字（`NaN` 也收）；`setFrame(f)` 只改时间、下一帧才写值，`f` 不是数按 0；`play` 在 `single` 播完后先归零；`stop` 归零并暂停。子动画上的控制改的是子自己从不推进的时钟，不影响画面。
+- **事件**（P10b）：时钟越过事件帧的那一帧，在越过它的那一条写完之后、下一条之前派发，`loop` 的回绕帧先发回绕前的、再发回绕后的，`mirror` 正反向各一次。接收者是动画所在图层（或 `general`）上导出了 `animationEvent` 且跑完 `init` 的全部脚本，按登记顺序；回调 `animationEvent(event, value)`，`event` 是作者写的整个事件对象（键排序、数字 8 位有效数字），`value` 是接收脚本自己属性的当前值，返回值写回。派发是同步的：回调里对排在后面的动画 `stop()`，那一条本帧就写第 0 帧的值。
 
-**能力表**：`value:animation:light`（灯，P13）、`value:animation:camera`（相机对象，P5d 只做相机本身，`fov` / `zoom` / `origin` 的关键帧仍报）、`value:animation:other` 照报；`getAnimation` 报 `script:api:object.getAnimation` / `thisScene.getAnimation`，导出了 `animationEvent` 的报 `script:callback:animationEvent`（都是 P10b）。
+**能力表**：`value:animation:light`（灯，P13）、`value:animation:camera`（相机对象，P5d 只做相机本身，`fov` / `zoom` / `origin` 的关键帧仍报）、`value:animation:other` 照报。P10b 起 `script:api:object.getAnimation` / `thisScene.getAnimation`、`script:callback:animationEvent` 不再报。
 
 **走查**（FINAL_CHECK，2026-11-14）：
 - 四个生成测试工程（`ignore/p10/proj/`，窗口与场景同为 1920×1080）：不受脚本控制的动画整帧逐像素相同（`p10-curves`、`p10-zoom` 18 帧含 FR、CLK）；`p10-zoom` 的缩放和 WPE 一样晚一帧。
 - 真实壁纸的复制工程（`kbp content isolate`）7 张：`3577990983`（转场 effect）15 帧逐像素相同；其余动画写进的值（effect 常量、`alpha`、`color`、`angles`、`origin`、组缩放、文本层 alpha 与 `origin`）和 WPE 逐位相同，像素差都归「窗口与场景不同高」（WPE 按窗口分辨率画）。
 - 依据与逐 draw 对照见子计划「步骤 3 走查」「步骤 4」。
+- P10b：`p10-script`、`p10-edge`（不再排除受脚本控制的对象）与补测工程 `p10b-api` 共 23 段 69 帧，带脚本回放后全部逐像素相同，`[kf]` 日志的逐帧条目与事件条目（含回调里读到的 `engine.runtime`）和 WPE 相同。真实壁纸 `3336377291`、`3427691867` 的时钟（`init` 里 `play()`）复制工程 8 段：逐 draw 的 MVP 与 alpha 0 ulp，动画中途那帧两边 alpha 都是 0.7435418367385864；像素差只在文字上，顶点与图集两边相同，归「按窗口分辨率画」。走查里修了两处：经字符串写回的 `NaN` 被读成 0（`atof` 补上 UCRT 的 `inf` / `nan`）、dev 探针里事件回调读到的 `engine.runtime` 晚一帧（`ProbeScripts.enterFrame`）。
 
 **已知差异与只记不补**：
-- 事件只收不派发（P10b），用到的场景照报 `script:callback:animationEvent`。
+- `IAnimation` 的 `rate` 是访问器、原型是 `Object.prototype`（WPE 是原生数据属性、只有 `constructor` 的原型），只在脚本检查描述符或原型时看得出。
+- 用到 `animationEvent` 的唯一一张（`2887099508`）靠点击播放，等 P6c 才能走查；语料里多数 `getAnimation` 在光标、媒体回调里（P6c / P11）。
 - 每帧照写的开销：语料最多的 `3400241651`（23 条）`frame()` 每帧均值 0.053 ms，一半在向量拼字符串再解析。
 - dev 探针 `scriptValues` 仍在回放前写一次：同一目标上有动画时探针里动画赢，WPE 里脚本赢（kbp 的 FR 块不受影响）。
 
-**语料**（183 张）：`scene.json` 里的关键帧在 40 张场景里报过 `value:animation`，全部去掉；`2251857160`（P8、P4f 之后只差这一项）能整张渲染。40 张共 225 条动画、220 条会写（不写的 5 条：4 条常量在着色器里没有 uniform，1 条没有通道），联动 17 处，事件 2 个；其余场景还差脚本的回调与 API、人偶、相机路径等别的节。
+**语料**（183 张）：P10b 去掉 `script:api:object.getAnimation`（27 张）、`thisScene.getAnimation`、`script:callback:animationEvent`（各 1 张），没有新增键；这 27 张都还差光标回调、媒体回调或人偶，能渲染数不变。P10a：`scene.json` 里的关键帧在 40 张场景里报过 `value:animation`，全部去掉；`2251857160`（P8、P4f 之后只差这一项）能整张渲染。40 张共 225 条动画、220 条会写（不写的 5 条：4 条常量在着色器里没有 uniform，1 条没有通道），联动 17 处，事件 2 个；其余场景还差脚本的回调与 API、人偶、相机路径等别的节。
 
-**dev 探针**：`renderFrame` 有 `particles.dts` 时动画沿同一串 dt 逐帧推进（每帧在粒子与相机之后、第二次 `sync` 之前），没有时 `seek(time)` 再写一次；结果的 `animations` 给每条的 `id`、时钟主人、`t`、帧号、`playing`、标志与最后写入的值；`host.animations()` 报宿主正在播的那份与最近 600 次 `frame()` 的耗时。
+**dev 探针**：`renderFrame` 有 `particles.dts` 时动画沿同一串 dt 逐帧推进（每帧在粒子与相机之后、第二次 `sync` 之前），没有时 `seek(time)` 再写一次；结果的 `animations` 给每条的 `id`、时钟主人、`t`、帧号、`playing`、标志与最后写入的值；`host.animations()` 报宿主正在播的那份与最近 600 次 `frame()` 的耗时。跑脚本（`scripts`）时播放器在 `init` 之前建好、交给探针的脚本环境，事件派发给探针的脚本；每帧推进动画之前先 `enterFrame` 把本帧时间交给脚本时钟，事件回调读到本帧的 `engine.runtime`。
 
 ## 字体引擎 `wpefont`（P6b 1b 起）
 

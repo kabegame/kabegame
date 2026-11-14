@@ -287,7 +287,7 @@ function targetOf(
 
 ## P10b — 脚本与事件
 
-子计划见 [phase-10b-script.md](phase-10b-script.md)：补测 → 播放器与编译期 → 脚本 API 与运行时 → 宿主与 dev 探针 → 走查 → 收尾。下面是写子计划之前的范围。
+子计划见 [phase-10b-script.md](phase-10b-script.md)：补测 → 播放器与编译期 → 脚本 API 与运行时 → 宿主与 dev 探针 → 走查 → 收尾。**2026-11-14 完成**，结论与走查见子计划；和下面的范围不同的地方：`getAnimation` 对象上按属主找（不是按图层），登记顺序照 WPE 改了，丢弃的动画也登记。下面是写子计划之前的范围。
 
 - **`getAnimation`**：按 `options.name` 或属性名查找，登记顺序第一个；对象上的版本只在本对象内找，不带参数用调用脚本所挂属性的属性名，找不到返回 `undefined`；`thisScene` 版找全场景，找不到或不带参数返回 `null`。`IAnimation` 的 11 个成员是包装对象直接调播放器（读码第 11 节），`rate` 存在包装对象上；`getAnimation` 从 `scriptApi.ts` 的缺失表删掉。
 - **脚本与动画并存**：动画先写、脚本 `update(value)` 拿本帧动画值、返回值本帧生效、下一帧动画再覆盖——写入在脚本之前就自然如此；`setFrame` 的值下一帧才写。

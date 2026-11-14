@@ -224,6 +224,11 @@ export interface ProbeScriptsInput {
 export interface ProbeScripts {
   /** 建 realm、换 `Date` 与 `Math.random`、求值模块、跑 `init`，再整份交一次用户属性。场景没有脚本时什么都不做。 */
   load(): Promise<void>;
+  /**
+   * 这一帧开头先把 `g_Time` / `g_Frametime` 交给脚本时钟（同渲染器帧开头就推进 `frameClock`）：动画在脚本之前推进，越过的事件派发给
+   * `animationEvent` 时读到的 `engine.runtime` / `frametime` 是本帧的（WPE 在 `0x14017fcca` 先加 `g_Time`，再跑动画循环）。可选：单测的替身可以不给。
+   */
+  enterFrame?(dt: number, time: number): void;
   /** 跑一帧（计时器与每段 `update`）：`dt` 是这一帧的 `g_Frametime`，`time` 是 `g_Time`（也是脚本时钟的回放时间）。 */
   frame(dt: number, time: number): void;
   /** 动画事件（P10b）：回放推进动画时越过的事件在这里派发给脚本，同宿主 `runtime.animationEvent`；没有脚本时什么都不做（可选：单测的替身可以不给）。 */
@@ -358,6 +363,11 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       await runtime.load(bundle.scripts);
       // 同宿主首帧之前（`beforeFirstFrame`）：整份用户属性交一次，`engine.userProperties` 从这时起读得到
       runtime.applyUserProperties(Object.fromEntries(input.properties), input.properties, bundle.bindings);
+    },
+    enterFrame(dt, time) {
+      if (disposed) return;
+      clock.time = time;
+      clock.frametime = dt;
     },
     frame(dt, time) {
       if (disposed) return;

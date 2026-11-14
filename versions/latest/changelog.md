@@ -31,7 +31,7 @@
 - 场景壁纸支持视频：作为图层画面的视频（包括创意工坊打包在场景里的 4K 视频与 HEVC 视频）会循环播放，被隐藏的视频图层自动暂停解码，暂停壁纸时一起停；和 Wallpaper Engine 一样不出声。画面与 Wallpaper Engine 对照过，只在颜色剧烈变化的边缘有细微差别。创意工坊 3822149301、3824550659、3828359750 现在可实时渲染；其余带视频的场景大多还缺文本、音频频谱、关键帧动画等别的能力。HEVC 视频需要显卡支持硬件解码，不支持时这个图层显示为透明。
 - 场景壁纸支持音频频谱：声明了音频处理的场景里，读系统声音频谱的效果（频谱条、随音乐跳动的光圈等）会跟着正在播放的声音动，和 Wallpaper Engine 用的是同一份数据，测试场景逐帧逐像素一致。创意工坊 3502090109、3585875739、3825170583 现在可实时渲染；其余用到音频频谱的场景大多还缺文本、关键帧动画、媒体信息等别的能力。只在 Windows 上有声音数据，其它系统上频谱保持为 0。
 - 场景壁纸支持形状光束、图层对齐、图层互相引用与透明写入设置：编辑器里的光束形状图层按 Wallpaper Engine 的规则画出；图片图层的对齐方式（如左上、底部居中）生效，子图层不受影响，场景脚本也能读写；遮罩、混合类效果可以引用别的图层（包括隐藏的图层）的画面；图层叠加效果时的边缘处理、像素风图层的不插值、材质的透明通道写入与「透明度覆盖」混合也按 Wallpaper Engine 的规则处理（以前个别图层叠加效果时边缘会露出另一侧的画面）。测试场景逐像素对照过 Wallpaper Engine 的输出，只在纹理缩小处有细微差别。创意工坊 3656079027、3668499717、3811764016、3812887609、3819646765、3821678218 现在可实时渲染；其余用到这些功能的场景大多还缺场景脚本、关键帧动画、木偶动画等别的能力。
-- 场景壁纸支持关键帧动画：编辑器里给位置、旋转、缩放、颜色、透明度、效果参数、缩放镜头等属性打的关键帧会按 Wallpaper Engine 的规则播放（循环、往返、只播一次，子动画跟随父动画），改属性时动画接着走、不从头开始；动画值逐帧对照过 Wallpaper Engine 的输出。创意工坊 2251857160 现在可实时渲染。脚本控制动画（播放、暂停、跳帧、动画事件）还不支持，用到的场景仍显示预览图。
+- 场景壁纸支持关键帧动画：编辑器里给位置、旋转、缩放、颜色、透明度、效果参数、缩放镜头等属性打的关键帧会按 Wallpaper Engine 的规则播放（循环、往返、只播一次，子动画跟随父动画），改属性时动画接着走、不从头开始；动画值逐帧对照过 Wallpaper Engine 的输出。创意工坊 2251857160 现在可实时渲染。脚本也能控制动画（播放、暂停、停止、跳帧、调速）并收到动画事件，规则对照过 Wallpaper Engine；用到它们的创意工坊场景多数还要等光标与媒体交互，暂时仍显示预览图。
 - 场景壁纸支持透视 3D 场景、相机对象、深度与透明排序：用透视相机的场景（相机路径、相机抖动）按屏幕分辨率实时渲染，对象之间的遮挡（深度测试、背面剔除）和半透明物体由远到近的绘制顺序都按 Wallpaper Engine 的规则处理；场景里的相机对象（含脚本移动相机、按属性切换多个相机、缩放镜头）能控制视角，粒子也会面向相机。测试场景逐像素对照过 Wallpaper Engine 的输出，几张真实壁纸的相机与矩阵也逐项对过，只在纹理缩小处有细微差别。创意工坊 dna_fragment、techno、neon_sunset 现在可实时渲染；其余带相机对象的场景还缺文本、骨骼动画等别的能力，暂时仍显示预览图。
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
@@ -152,6 +152,14 @@
   - dev 探针：回放时动画沿同一串 dt 推进，结果带 `animations`；回放的每一帧都在 GPU 上画（`ReadbackReplayOptions.encodeFrame`）。
   - 走查工具：`kbp content isolate`（复制工程）、`kbp cmp frames`、`apps/kabegame-dev-mcp/src/renderFrames.ts`（按帧批量渲染）；`[kbp]` 日志改记精确时间（`@f64`）。
   - `pipeline.test.ts` 的请求上限 450 → 600（`2251857160` 整张编完 553 次）。计划、实施记录与走查见 `.claude/plans/wpe-import/3-scene/phase10/phase-10a-curves.md`。
+- 场景壁纸 P10b：关键帧动画的脚本控制与事件。
+  - 脚本 API（`script/api.ts`）：`getAnimation` 装在图层、effect、材质、`general`（按属主找）与 `thisScene`（全场景）上；`IAnimation` 包装对象按动画 `id` 缓存，12 个成员照 WPE 实测（`p10-REPORT.md`「P10b 补测」）；模块顶层调用抛 `SyntaxError`。
+  - 运行时（`script/runtime.ts`）：`animationEvent` 进 `RUNTIME_CALLBACKS`，`ScriptRuntime.animationEvent(object, json)` 发给同一图层上跑完 `init` 的脚本、返回值写回；能力表删掉 `getAnimation` 与 `animationEvent` 的三个键。
+  - 播放器（`animation/player.ts`）：每条有自己的时钟，`control(id)`，`frame(dt, state, hooks)` 在越过事件的那一条写完后同步派发；编译期收丢弃的动画（`inert`）与 `name` / `object` / `owner`。
+  - 登记顺序照 WPE（`compile/registration.ts`）：`collectScripts` 与 `collectAnimations` 都是对象字段在前、effect 在后、同层按键名排序。
+  - 宿主：要跑 `init` 的加载先建待用播放器（`pendingAnimations`），清空脚本存储后动画从头来；事件钩子接运行时。
+  - `atof` 照 UCRT 认 `inf` / `infinity` / `nan`：脚本与动画经字符串写回的 `NaN` 不再读成 0。
+  - dev 探针：跑脚本的回放接上动画控制与事件，`ProbeScripts.enterFrame` 让事件回调读到本帧的 `engine.runtime`。计划、实施记录与走查见 `.claude/plans/wpe-import/3-scene/phase10/phase-10b-script.md`。
 - 场景壁纸 P9a：视频纹理。编译期 `compile/tex.ts` 按 Video 标志跳过 mip 字节、给出磁盘区间（`SceneTexture.video`），删 `tex:video`；场景宿主新增 `apps/wpe-scene/src/video/`（`VideoTexturePlayer`：区间 `fetch(file:)` → `Response.blob()` → 不挂 DOM 的静音 `<video>`；`SceneVideos` 实现 `VideoSink`：帧号、30 帧没画到就暂停、宿主暂停、跨重编译按区间复用）；`GpuScene` 把视频纹理建成初值全 0 的 `rgba8unorm`，画到绑定它的 draw 时有新帧就 `copyExternalImageToTexture`，渲染器每个实时帧 `beginFrame`；宿主第一次 ready 前等可见视频出第一帧（最多 2 s）。dev 探针 `host.videos()`，`renderFrame` 与 vite `/render`、MCP `render_scene` / `host_render` 新增 `videoTime`（`dev/videoProbe.ts`，seek 好再拷）。WPE 语义见 `.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md`。
 - 场景壁纸 P9b：脚本控制视频。
   - 新增 `video/container.ts`：编译期读 MP4 `mvhd` / Matroska `Info.Duration`，放进 `SceneVideoSource.duration`，场景确定退回时不读。

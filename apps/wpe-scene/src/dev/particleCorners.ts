@@ -545,6 +545,8 @@ export interface ReadbackReplayOptions {
    */
   scripts?: {
     frame(dt: number, time: number): void;
+    /** 这一帧开头把时间交给脚本时钟（P10b）：在推进动画之前调，事件回调读到本帧的 `engine.runtime`。 */
+    enterFrame?(dt: number, time: number): void;
     /** 动画事件（P10b）：推进动画时越过的事件在写完那一条之后、下一条之前同步派发（同宿主 `beforeFrame` 的 `event` 钩子）。 */
     animationEvent?(object: number | null, json: string): void;
   };
@@ -599,6 +601,8 @@ export function replayReadback(
   const afterStep = (at: number, dt: number, animated: boolean) => {
     if (scripts) generals.push(state.general);
     shake.apply(at);
+    // 先把本帧时间交给脚本时钟（P10b）：动画事件的回调读到本帧的 `engine.runtime`（同渲染器帧开头就推进 `frameClock`）
+    scripts?.enterFrame?.(dt, at);
     if (animated) animate(dt);
     scripts?.frame(dt, at);
   };
@@ -687,6 +691,8 @@ function replayEncoded(
     replayAudio(scene, replay, i);
     scene.stepParticles(frametime, time, state, pointers.cursors[i]);
     const eye = shake.apply(time);
+    // 先把本帧时间交给脚本时钟（P10b），同 `replayReadback`
+    scripts?.enterFrame?.(frametime, time);
     if (animations) {
       animations.frame(frametime, state, animationHooks);
       // 跑脚本时不另 sync：同渲染器 `beforeFrame` 里动画、脚本连着跑，脚本之后的 `sync` 一起刷
