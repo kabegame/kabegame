@@ -805,8 +805,8 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     const check = () => {
       const local = Array.from(multiply(sceneViewProjection(GENERAL_1080), worldMatrixOf(2, state.layers, new Map())));
       expect(floats(uniforms(1), 0, 16)).toEqual(ortho);
-      // g_ModelMatrixInverse
-      expect(floats(uniforms(1), 64, 16)).toEqual(IDENTITY);
+      // g_ModelMatrixInverse：单位阵的逆照 WPE 的 FUN_14005f730（正负号乘 −1.0，phase-f32-inverse），非对角有 −0
+      expect(floats(uniforms(1), 64, 16)).toEqual([1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1]);
       expect(values(1).g_ModelMatrix).toEqual(IDENTITY);
       expect(values(1).g_ModelViewProjectionMatrix).toEqual(ortho);
       expect(floats(uniforms(3), 0, 16)).toEqual(perspective);

@@ -23,7 +23,8 @@
  * 写入按槽序、跳过 `life == 0` 的空槽（报告「对 P4a 底座的要求」：不是年龄序），尺寸、颜色、alpha 取当前值，同 `track.ts`。
  * 拖尾系统另跳过退化的粒子（速度为 0 或平行于视线，`trailDrawable`，P4c 步骤 5）。
  */
-import { identity, invert, type Mat4 } from "../render/math";
+import { uniformInverse } from "../render/inverseF32";
+import { identity, type Mat4 } from "../render/math";
 import type { PackedVertexAttribute } from "../render/programs";
 import type { ParticleColumns } from "./columns";
 import { f32 } from "./f32";
@@ -109,11 +110,11 @@ export function vertexCapacity(layout: Pick<ParticleVertexLayout, "stride">, int
 /**
  * 拖尾的眼位 `eyeLocal`（P4c 步骤 5）：着色器 `ComputeParticleTrailTangents` 的 `mul(vec4(g_EyePosition, 1.0), g_ModelMatrixInverse)`，
  * 翻译后是 `g_ModelMatrixInverse * (eye, 1)`。`model` 是这次绘制的模型矩阵（本地系统是对象世界矩阵，世界空间系统是单位阵），
- * 逆矩阵和 uniform 里写的同一个（`invert`，奇异时取单位阵，同 `staticBuiltins`），按列主序 `((m0·x + m4·y) + m8·z) + m12`
+ * 逆矩阵和 uniform 里写的同一个（`uniformInverse`，WPE 的单精度求逆，奇异时取单位阵，同 `staticBuiltins`），按列主序 `((m0·x + m4·y) + m8·z) + m12`
  * 逐步 float32。透视粒子（系统 `flags` bit2）的覆盖不改 `g_EyePosition`（rea-p4c-render.md 6.4），用场景的眼位。
  */
 export function trailEye(eye: readonly number[], model: Mat4): [number, number, number] {
-  const m = invert(model) ?? identity();
+  const m = uniformInverse(model) ?? identity();
   const [x, y, z] = [f32(eye[0] ?? 0), f32(eye[1] ?? 0), f32(eye[2] ?? 0)];
   const row = (r: number) => f32(f32(f32(f32(m[r] * x) + f32(m[4 + r] * y)) + f32(m[8 + r] * z)) + m[12 + r]);
   return [row(0), row(1), row(2)];

@@ -397,7 +397,7 @@ const placementStyle: SceneStyle = perspective ? "stretch" : this.style;
   - P2 shimmering_particles 的泛光核：说的是三屏 5760×1080 场景，没有录制；
   - P4e 细雨丝变暗（`WPE_SCENE.md`「细雨丝变暗」）：不在 0c 清单里，没跑。
 - **剩下的差异的归类**：
-  - **求逆的写法**：`sun` 的 `g_ModelViewProjectionMatrixInverse`、`tmpl2` 的 `g_EffectTextureProjectionMatrixInverse`，uniform 用 `math.ts` 的 `invert`（double 余子式），WPE 是单精度的 `FUN_14005f730`。`phase-f32-matrix.md` 登记过、说「走查碰到时再做」，P13a 也记过一次。改法是 uniform 的几处逆改用现成的 `invertF32`，会改变读这些 uniform 的场景的产品输出，**要不要改待用户定**。
+  - **求逆的写法**（**2026-11-15 更正**：照下面改成 WPE 的单精度求逆后，`sun`、`tmpl2` 的常量逐位相同、像素差一个没少，这两处其实归下一条「着色器求值的舍入」；受影响的是 P13a 的反馈 RT，见 [phase-f32-inverse.md](phase-f32-inverse.md)）：`sun` 的 `g_ModelViewProjectionMatrixInverse`、`tmpl2` 的 `g_EffectTextureProjectionMatrixInverse`，uniform 用 `math.ts` 的 `invert`（double 余子式），WPE 是单精度的 `FUN_14005f730`。`phase-f32-matrix.md` 登记过、说「走查碰到时再做」，P13a 也记过一次。改法是 uniform 的几处逆改用现成的 `invertF32`，会改变读这些 uniform 的场景的产品输出，**要不要改待用户定**。
   - **着色器求值的舍入**：`gradt`、`frostp` 已定位到输入与常量都相同的单次绘制；`whale`、`3822495444`、`p5b-fs` 同量级，没有逐 draw 定位。
   - 其余是各节已登记的：`rsqrtps`（P12a K2）、8 位反馈 RT（P13a）、JPEG 色度上采样（P11b）。
 - **文档**：`WPE_SCENE.md` 各节归到「按窗口分辨率画」的已知差异按上面改写（P5b 合成 RT 尺寸、P5d、P9、P10a、P10b 时钟与书页、P11a、P12a K1、P6b `3429479356`）；`FINAL_CHECK.md` 的「按窗口分辨率画」一段补重跑结论；回归 RS5、RS6 勾选。各节自己的计划文件（历史记录）没改，结论记在这里。

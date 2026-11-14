@@ -534,14 +534,11 @@ describe("drawMatrices 的形状分支（rea-p8-layer 1.5）", () => {
     });
     expectMatrix(values.g_ModelViewProjectionMatrix, shape.mvp, "g_ModelViewProjectionMatrix");
     expect(values.g_ModelMatrix).toEqual(Array.from(world));
-    for (const name of [
-      "g_EffectModelMatrix",
-      "g_EffectModelMatrixInverse",
-      "g_EffectModelViewProjectionMatrix",
-      "g_EffectModelViewProjectionMatrixInverse",
-      "g_LayerModelMatrix",
-    ])
+    for (const name of ["g_EffectModelMatrix", "g_EffectModelViewProjectionMatrix", "g_LayerModelMatrix"])
       expect(values[name], name).toEqual(IDENTITY);
+    // 单位阵的逆照 WPE 的 FUN_14005f730（正负号乘 −1.0，phase-f32-inverse）：非对角有 −0
+    for (const name of ["g_EffectModelMatrixInverse", "g_EffectModelViewProjectionMatrixInverse"])
+      expect(values[name], name).toEqual([1, -0, 0, -0, -0, 1, -0, 0, 0, -0, 1, -0, -0, 0, -0, 1]);
     expect(values.g_EffectTextureProjectionMatrix).toEqual(Array.from(scaling(540, 540, 1)));
     expectMatrix(
       values.g_EffectTextureProjectionMatrixInverse,

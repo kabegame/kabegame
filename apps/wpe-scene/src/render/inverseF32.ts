@@ -325,3 +325,13 @@ export function invertF32(m: Float32Array): Float32Array {
   out[15] = x4;
   return out;
 }
+
+/**
+ * 内置 uniform 的求逆（`g_*Inverse`）：WPE 写常量缓冲时一律现算 `FUN_14005f730`（rea-matrix-order 2.5），就是上面的 `invertF32`
+ * （2026-11-15 起替换 `math.ts` 的 `invert`，phase-f32-inverse）。结果里有 inf / NaN（奇异矩阵）时返回 null，调用方照以前取单位阵：
+ * WPE 会把 inf / NaN 原样写进常量缓冲，语料里没有这种样本，不跟。
+ */
+export function uniformInverse(m: Float32Array): Float32Array | null {
+  const out = invertF32(m);
+  return out.every(Number.isFinite) ? out : null;
+}

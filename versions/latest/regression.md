@@ -2831,3 +2831,15 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | RS4 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate` | 8 处（铺满 / 装下的分支、居中的差、`orthoWpe` 的平移、`schemecolor` 规则、目标宽高、主目标清屏色、光标窗口），清单 `ignore/prs/mutations.py` | 全部检出，快照还原 | 2026-11-14：8 / 8 |
 | [x] | RS5 dev 重启后的工具参数 | Windows dev | 重启 dev 与会话后，`render_scene` / `host_render` 带 `style`、`renderMode`，`renderFrames.ts --style` | 和经宿主求值调探针的结果相同；旧探针时 409 | 2026-11-14（dev 22:48 重启后）：`render_scene` 的 `style: "fit"`、`renderMode: "scene"` 与 `renderFrames.ts --style center` 三段，和步骤 1 经宿主求值得到的图文件 sha256 相同；错误组合在本地拒绝。409 没法现场造（要换回旧产物），只有单测 |
 | [x] | RS6 重跑各节的「按窗口分辨率画」样本 | Windows dev + WPE 抓帧 | phase-render-size.md「0c」的清单 | 能逐像素相同的从已知差异里删掉 | 2026-11-14（步骤 2）：用当时的录制按窗口尺寸重跑 13 节。逐像素相同的：P10a `intro`（7680×2160）、`rings`、`post`，P5d 三个相机，P6b `3429-text`、`2391389126` 文字区域、`e3clock` 三份，P6c `clockv` 1080p，P10b 两张时钟 24 帧与 `2887099508` 书页 5 帧，P11a Liberty 4 帧，P12a `3203778110` 6 帧中 5 帧。其余剩 ±1–4 的都另有解释：求逆写法（`sun`、`tmpl2`，`invertF32` 复现 WPE）、着色器舍入（`gradt`、`frostp` 已定位到单次绘制）、`rsqrtps`、8 位反馈 RT、JPEG 色度上采样。P5a 真实样本、P7 流体画布、P9a 视频、P2 超宽场景没重跑（原因见计划）。`WPE_SCENE.md` 各节已知差异已按结果改写 |
+
+## 场景壁纸：uniform 的逆矩阵照 WPE 用单精度
+
+2026-11-15。内置 uniform 的逆矩阵（`g_*Inverse`）改用照 WPE `FUN_14005f730` 搬运的 `uniformInverse`（`render/inverseF32.ts`），粒子拖尾的眼位同步；奇异时仍是单位阵。计划与记录见 `.claude/plans/wpe-import/3-scene/phase-f32-inverse.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | FI1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`uniformInverse.test.ts` 与读逆矩阵的测试 | 0 error、全过 | 2026-11-15：tsc 0 error；夹具 4 个 WPE 样本 `uniformInverse` 逐位相同、`invert` 都不同；`p8.test.ts`、`particles.test.ts` 单位阵逆的断言改成 WPE 的 −0 |
+| [x] | FI2 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate` | 五处调用方各改回 `invert`、去掉奇异兜底 | 都被单测抓到 | 2026-11-15：6 / 6（`ignore/prs/inv/mutations.py`） |
+| [x] | FI3 画面哈希 | Windows dev 屏外宿主 | `hash_baseline` 10 张 × 3 档，改动前后比 | 不读逆矩阵的场景不变 | 2026-11-15：30 组全部相同 |
+| [x] | FI4 和 WPE 比 | Windows dev + 已有的 WPE 抓帧 | 重跑 `sun`、`whale`（P10a）、`tmpl2` 四组（P5d）、`3822495444`（P7c）、`3498150384`（P13a）的按窗口尺寸对照 | 读逆矩阵的常量和 WPE 逐位相同；反馈 RT 的差异缩小 | 2026-11-15：`sun` 光晕那次绘制 14 个常量全部相同，但像素差和改前一样（归着色器舍入）；`tmpl2`、`whale`、`3822495444` 不变；P13a 229、230 帧逐像素相同、其余帧最大差 4 → 1，只把求逆换回 double 就回到原来的数字 |
+| [ ] | FI5 实时预览 | Windows dev，图库预览 | 预览 `3498150384`（鼠标波纹），在画面上拖动 | 波纹正常，没有闪烁或发散 | 只做了屏外回放 |

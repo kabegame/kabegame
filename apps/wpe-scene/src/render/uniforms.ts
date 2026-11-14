@@ -16,10 +16,10 @@ import { trailRenderVar0 } from "../particles/ropetrail";
 import { compositeTranslation, directTranslation, type TextLayout } from "../text/layout";
 import type { UniformLayout } from "../wpesl2wgsl";
 import { ORTHO_VIEW_VECTORS, type ViewVectors } from "./camera";
+import { uniformInverse } from "./inverseF32";
 import { textCompositeSize, type DrawStep, type Geometry, type TextStep } from "./graph";
 import {
   identity,
-  invert,
   mulAffine,
   multiply,
   normalMatrix,
@@ -224,7 +224,8 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
   const k = input.colorScale ?? 1;
   const color = [(input.layer.color[0] ?? 1) * k, (input.layer.color[1] ?? 1) * k, (input.layer.color[2] ?? 1) * k];
   const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-  const inverse = (m: Mat4) => Array.from(invert(m) ?? identity);
+  // uniform 的求逆照 WPE 用单精度余子式（`uniformInverse`，FUN_14005f730），奇异时单位阵
+  const inverse = (m: Mat4) => Array.from(uniformInverse(m) ?? identity);
   const effectModel = input.effectModel ?? input.model;
   const effectMvp = input.effectModelViewProjection ?? input.modelViewProjection;
   const view = input.view ?? ORTHO_VIEW_VECTORS;
@@ -443,7 +444,7 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
   const matrices = drawMatrices(input.step, input.world, input.layer.size, input.viewProjection);
   const values = staticBuiltins({
     ...matrices,
-    modelViewProjectionInverse: invert(matrices.modelViewProjection),
+    modelViewProjectionInverse: uniformInverse(matrices.modelViewProjection),
     layer: input.layer,
     colorScale: input.colorScale,
     textures: input.textures,
@@ -525,7 +526,7 @@ export function textUniformValues(input: TextUniformInput): Record<string, numbe
   const matrices = textMatrices(input.step, input.world, input.viewProjection, input.layout);
   const values = staticBuiltins({
     ...matrices,
-    modelViewProjectionInverse: invert(matrices.modelViewProjection),
+    modelViewProjectionInverse: uniformInverse(matrices.modelViewProjection),
     layer: input.layer,
     colorScale: input.colorScale,
     textures: input.textures,
@@ -636,7 +637,7 @@ export function particleUniformValues(input: ParticleUniformInput): Record<strin
   const modelViewProjection = mulAffine(input.viewProjection, input.world);
   const values = staticBuiltins({
     modelViewProjection,
-    modelViewProjectionInverse: invert(modelViewProjection),
+    modelViewProjectionInverse: uniformInverse(modelViewProjection),
     model: input.world,
     viewProjection: input.viewProjection,
     layer: input.layer,
