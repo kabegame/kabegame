@@ -1,11 +1,15 @@
 /**
  * 视频纹理播放器（P9a 步骤 1）：用替身元素核对 Blob 的读法与失败、元素设置、新帧标志、30 帧规则的单段部分、
- * 留给 P9b 的脚本接口（rate / currentTime 钳制 / stop / 结束回调）与释放。场景级的规则在 `sceneVideos.test.ts`。
+ * 留给 P9b 的脚本接口（rate / currentTime 钳制 / stop / 结束回调）与释放，以及 P9c 步骤 1 卡住的兜底（注入时钟）。
+ * 场景级的规则在 `sceneVideos.test.ts`。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { flush, videoEnv } from "./fakeVideo";
+import { FakeVideo, flush, videoEnv } from "./fakeVideo";
 import {
   IDLE_FRAMES,
+  STALL_MAX_RELOADS,
+  STALL_MS,
+  STALL_SEEKS_BEFORE_RELOAD,
   VideoTexturePlayer,
   attachToDocument,
   fetchVideoBlob,
@@ -397,6 +401,8 @@ describe("VideoTexturePlayer", () => {
       duration: 2.517,
       totalFrames: null,
       droppedFrames: null,
+      stallSeeks: 0,
+      stallReloads: 0,
     });
     element.quality = { totalVideoFrames: 300, droppedVideoFrames: 4 };
     expect(player.probe()).toMatchObject({ totalFrames: 300, droppedFrames: 4 });
@@ -652,5 +658,349 @@ describe("挂进页面（P9b 步骤 3）", () => {
     attachToDocument(bare as unknown as HTMLVideoElement)();
     expect(bare.style).toEqual({});
     expect(bare.remove).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * P9c 步骤 1：播放卡住的兜底。Chromium 硬件解码长时间放 4K60 后静默停住（`readyState` 停在 2、时间不动、没有错误），原地跳一下即恢复
+ * （phase-9c「步骤 0」）。用注入的时钟走墙钟，元素时间由测试摆布，记下每次写入（原地跳 / 设回）与每次重设 `src`（重新加载）。
+ */
+describe("卡住的兜底（P9c 步骤 1）", () => {
+  const stallPath = pkg.path;
+
+  async function stallSetup(start = 55.33, options: { loaded?: boolean } = {}) {
+    let clock = 1000;
+    const env = videoEnv();
+    const player = new VideoTexturePlayer(pkg, 0, { ...env.factories, report: env.report, now: () => clock });
+    const element = env.elements[0];
+    await flush();
+    if (options.loaded ?? true) element.loadData(141.43);
+    // 元素时间：测试用 setTime 摆布，播放器的写入记进 writes
+    let time = start;
+    const writes: number[] = [];
+    Object.defineProperty(element, "currentTime", {
+      configurable: true,
+      get: () => time,
+      set: (value: number) => {
+        writes.push(value);
+        time = value;
+      },
+    });
+    // 重设 src（重新加载）记进 srcs；读完时那一次不算
+    const srcs: string[] = [];
+    const srcAccessor = Object.getOwnPropertyDescriptor(FakeVideo.prototype, "src")!;
+    Object.defineProperty(element, "src", {
+      configurable: true,
+      get: () => srcAccessor.get!.call(element),
+      set: (value: string) => {
+        srcs.push(value);
+        srcAccessor.set!.call(element, value);
+      },
+    });
+    let frame = 0;
+    // 每个渲染帧：照 `SceneVideos` 先判结束、再画到
+    const step = (ms: number, hostPaused = false) => {
+      clock += ms;
+      frame += 1;
+      player.detectEnd();
+      return player.drawn(frame, hostPaused);
+    };
+    step(0);
+    /** 按 100 ms 一帧连续画 ms 毫秒（不足 100 的零头最后一帧补上）。 */
+    const run = (ms: number, hostPaused = false) => {
+      for (let left = ms; left > 0; left -= 100) step(Math.min(100, left), hostPaused);
+    };
+    return {
+      ...env,
+      player,
+      element,
+      writes,
+      srcs,
+      step,
+      run,
+      setTime: (value: number) => (time = value),
+      /** 时钟走 ms 毫秒、帧号不动、不画（测试摆布空闲与 rAF 不跑用）。 */
+      wait: (ms: number) => (clock += ms),
+      get frame() {
+        return frame;
+      },
+      messages: () => env.warnings.map(([message]) => message),
+    };
+  }
+
+  /** 摆出重新加载的效果（加载算法：暂停、时间回到 0、元数据之前 readyState 0；等元数据期间照常画），之后元数据回来、仍停在 2。 */
+  function finishReload(s: Awaited<ReturnType<typeof stallSetup>>) {
+    s.element.paused = true;
+    s.setTime(0);
+    s.element.readyState = 0;
+    s.run(300);
+    s.element.readyState = 2;
+    s.element.fire("loadedmetadata");
+  }
+
+  it("常量：2 s、原地跳 2 次再重载、最多重载 3 次", () => {
+    expect([STALL_MS, STALL_SEEKS_BEFORE_RELOAD, STALL_MAX_RELOADS]).toEqual([2000, 2, 3]);
+  });
+
+  it("卡住 2 s 原地跳一次（不经 setter、不碰 play / pause），时间前进后计数不再涨；再卡住重新计时", async () => {
+    const s = await stallSetup();
+    const calls = [...s.element.calls];
+    s.run(1900);
+    s.step(99);
+    expect(s.writes).toEqual([]);
+    s.step(1);
+    expect(s.writes).toEqual([55.33]);
+    expect(s.element.calls).toEqual(calls);
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 1, stallReloads: 0 });
+    expect(s.warnings).toEqual([
+      [`场景视频卡住 2000 ms 没前进，原地跳一下：${stallPath}`, "时间 55.33 s，readyState 2"],
+    ]);
+    // 跳完正常放 10 s（readyState 仍按 2 摆，只要时间在走就不算卡住）
+    for (let i = 1; i <= 100; i++) {
+      s.setTime(55.33 + i / 10);
+      s.step(100);
+    }
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 1, stallReloads: 0 });
+    // 又停住：从停住那一刻重新计时，这次也只原地跳（新的一轮）
+    s.run(1900);
+    expect(s.writes).toHaveLength(1);
+    s.run(100);
+    expect(s.writes).toEqual([55.33, 55.33 + 100 / 10]);
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 2, stallReloads: 0 });
+  });
+
+  it("连续两次原地跳无效后重新加载：同一个对象地址，等元数据期间不碰元素、不再兜底，回来后设回原时间并重新 play()", async () => {
+    const s = await stallSetup();
+    const ended = vi.fn();
+    s.player.addEndedCallback(ended);
+    s.run(2000);
+    s.run(2000);
+    expect(s.writes).toEqual([55.33, 55.33]);
+    expect(s.srcs).toEqual([]);
+    s.run(1900);
+    expect(s.srcs).toEqual([]);
+    s.run(100);
+    expect(s.srcs).toEqual(["blob:1"]);
+    expect(s.created).toEqual(["blob:1"]);
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 2, stallReloads: 1 });
+    expect(s.messages()[2]).toBe(`场景视频原地跳 2 次仍卡住，重新加载（第 1 次）：${stallPath}`);
+    expect(s.warnings[2][1]).toBe("时间 55.33 s，readyState 2");
+    // 加载算法：暂停、时间回到 0
+    s.element.paused = true;
+    s.setTime(0);
+    s.element.readyState = 0;
+    const calls = s.element.calls.length;
+    s.run(5000);
+    // 等元数据期间：不 play、不跳、不再重载；脚本读到的是要设回去的时间；时间回到 0 不当成绕回
+    expect(s.element.calls.length).toBe(calls);
+    expect(s.writes).toEqual([55.33, 55.33]);
+    expect(s.srcs).toEqual(["blob:1"]);
+    expect(s.player.currentTime).toBe(55.33);
+    expect(ended).not.toHaveBeenCalled();
+    // 脚本 pause / play 也只改意图
+    s.player.pause();
+    s.player.play();
+    expect(s.element.calls.length).toBe(calls);
+    s.element.readyState = 1;
+    s.element.fire("loadedmetadata");
+    expect(s.writes).toEqual([55.33, 55.33, 55.33]);
+    expect(s.element.calls.slice(calls)).toEqual(["play"]);
+    expect(s.element.paused).toBe(false);
+    expect(s.player.currentTime).toBe(55.33);
+    expect(ended).not.toHaveBeenCalled();
+    // 不是重载引起的 loadedmetadata：什么都不做
+    s.element.fire("loadedmetadata");
+    expect(s.writes).toHaveLength(3);
+    expect(s.element.calls.slice(calls)).toEqual(["play"]);
+    // 回来之后正常放：结束回调照常判定，计数不再涨
+    for (let i = 1; i <= 30; i++) {
+      s.setTime(55.33 + i / 10);
+      s.step(100);
+    }
+    expect(ended).not.toHaveBeenCalled();
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 2, stallReloads: 1 });
+    expect(s.warnings).toHaveLength(3);
+  });
+
+  it("重新加载期间脚本写时间：元数据回来时设回脚本写的；释放或失败了就什么都不做", async () => {
+    const seeked = await stallSetup();
+    seeked.run(6000);
+    expect(seeked.srcs).toHaveLength(1);
+    seeked.player.currentTime = 12;
+    expect(seeked.player.currentTime).toBe(12);
+    seeked.element.fire("loadedmetadata");
+    expect(seeked.writes.at(-1)).toBe(12);
+    expect(seeked.player.currentTime).toBe(12);
+
+    const disposed = await stallSetup();
+    disposed.run(6000);
+    expect(disposed.srcs).toHaveLength(1);
+    disposed.player.dispose();
+    const writes = disposed.writes.length;
+    const calls = disposed.element.calls.length;
+    disposed.element.fire("loadedmetadata");
+    expect(disposed.writes).toHaveLength(writes);
+    expect(disposed.element.calls).toHaveLength(calls);
+
+    const failed = await stallSetup();
+    failed.run(6000);
+    expect(failed.srcs).toHaveLength(1);
+    failed.element.fail();
+    const failedCalls = failed.element.calls.length;
+    failed.element.fire("loadedmetadata");
+    expect(failed.writes).toHaveLength(2);
+    expect(failed.element.calls).toHaveLength(failedCalls);
+  });
+
+  it("三次重新加载都无效后放弃，只记一条放弃的 warn；时间前进后重新装上", async () => {
+    const s = await stallSetup();
+    for (let reload = 1; reload <= STALL_MAX_RELOADS; reload++) {
+      s.run(6000); // 原地跳、原地跳、重载
+      finishReload(s);
+    }
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 6, stallReloads: 3 });
+    // 第三次重载之后又是一轮：原地跳两次，然后放弃
+    s.run(4000);
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 8, stallReloads: 3 });
+    const before = s.writes.length;
+    s.run(2000);
+    expect(s.messages().at(-1)).toBe(`场景视频重新加载 3 次仍卡住，不再处理，直到时间重新前进：${stallPath}`);
+    s.run(20000);
+    expect(s.writes).toHaveLength(before);
+    expect(s.srcs).toHaveLength(3);
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 8, stallReloads: 3 });
+    expect(s.messages().filter((message) => message.includes("不再处理"))).toHaveLength(1);
+    expect(s.warnings).toHaveLength(8 + 3 + 1);
+    // 时间前进：新的一轮，原地跳与重载次数都从头算
+    s.setTime(60);
+    s.step(16);
+    s.run(6000);
+    expect(s.player.probe()).toMatchObject({ stallSeeks: 10, stallReloads: 4 });
+    expect(s.srcs).toHaveLength(4);
+  });
+
+  it("不误判：脚本暂停、宿主暂停、空闲暂停、seeking、速率 0、已结束、readyState ≥ 3", async () => {
+    const paused = await stallSetup();
+    paused.player.pause();
+    paused.run(5000);
+    paused.player.play();
+    paused.run(1900);
+    expect(paused.writes).toEqual([]);
+    paused.run(100);
+    expect(paused.writes).toEqual([55.33]);
+
+    const host = await stallSetup();
+    host.run(5000, true);
+    expect(host.element.paused).toBe(true);
+    // 恢复的那一帧起计时
+    host.step(0);
+    expect(host.element.paused).toBe(false);
+    host.run(1900);
+    expect(host.writes).toEqual([]);
+    host.run(100);
+    expect(host.writes).toEqual([55.33]);
+
+    // 空闲：30 帧以上没画到（帧号照走），元素被暂停；再画到时恢复，从恢复那一刻计时
+    const idle = await stallSetup();
+    idle.run(1500);
+    let frame = idle.frame;
+    for (let i = 0; i <= IDLE_FRAMES; i++) {
+      idle.wait(10);
+      idle.player.apply(++frame, false);
+    }
+    expect(idle.element.paused).toBe(true);
+    idle.player.drawn(++frame, false);
+    expect(idle.element.paused).toBe(false);
+    idle.run(1900);
+    expect(idle.writes).toEqual([]);
+
+    const seeking = await stallSetup();
+    Object.assign(seeking.element, { seeking: true });
+    seeking.run(5000);
+    Object.assign(seeking.element, { seeking: false });
+    seeking.run(1900);
+    expect(seeking.writes).toEqual([]);
+    seeking.run(100);
+    expect(seeking.writes).toEqual([55.33]);
+
+    const still = await stallSetup();
+    still.player.rate = 0;
+    still.run(5000);
+    expect(still.writes).toEqual([]);
+
+    const ended = await stallSetup(141.43);
+    ended.player.loop = false;
+    ended.element.ended = true;
+    ended.run(5000);
+    expect(ended.writes).toEqual([]);
+
+    for (const readyState of [3, 4]) {
+      const ready = await stallSetup();
+      ready.element.readyState = readyState;
+      ready.run(5000);
+      expect(ready.writes).toEqual([]);
+    }
+  });
+
+  it("不误判：第一帧之前、读完之前", async () => {
+    const early = await stallSetup(0, { loaded: false });
+    expect(early.player.hasFirstFrame).toBe(false);
+    early.run(5000);
+    expect(early.writes).toEqual([]);
+    // 出了第一帧之后才开始计时
+    early.element.loadData(141.43);
+    early.run(1900);
+    expect(early.writes).toEqual([]);
+    early.run(100);
+    expect(early.writes).toEqual([0]);
+
+    let clock = 0;
+    const env = videoEnv({ read: () => new Promise<Blob>(() => {}) });
+    const reading = new VideoTexturePlayer(pkg, 0, { ...env.factories, report: env.report, now: () => clock });
+    for (let frame = 1; frame <= 100; frame++) {
+      clock += 100;
+      reading.drawn(frame, false);
+    }
+    expect(env.elements[0].calls).toEqual([]);
+    expect(env.warnings).toEqual([]);
+  });
+
+  it("不误判：1.9 s 内恢复的短暂缺帧", async () => {
+    const s = await stallSetup();
+    for (let i = 1; i <= 10; i++) {
+      s.run(1900);
+      s.setTime(55.33 + i);
+      s.step(16);
+    }
+    expect(s.writes).toEqual([]);
+    expect(s.warnings).toEqual([]);
+  });
+
+  it("中间没画到（窗口被盖住、rAF 不跑）的时间不算：从再画到时重新计时", async () => {
+    const s = await stallSetup();
+    s.run(1000);
+    s.wait(60000);
+    // 再画到的那一帧起计时
+    s.step(0);
+    s.run(1900);
+    s.step(99);
+    expect(s.writes).toEqual([]);
+    s.step(1);
+    expect(s.writes).toEqual([55.33]);
+  });
+
+  it("原地跳不触发结束回调、不改结束判定：跳完紧接着真绕回仍触发一次", async () => {
+    const s = await stallSetup(141.42);
+    const ended = vi.fn();
+    s.player.addEndedCallback(ended);
+    s.run(2000);
+    expect(s.writes).toEqual([141.42]);
+    expect(ended).not.toHaveBeenCalled();
+    s.setTime(0.01);
+    s.step(16);
+    expect(ended).toHaveBeenCalledOnce();
+    s.setTime(0.03);
+    s.step(16);
+    expect(ended).toHaveBeenCalledOnce();
   });
 });

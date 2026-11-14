@@ -2180,6 +2180,12 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **元素挂进宿主页面**（P9b 步骤 3，`attachToDocument`）：每个 `<video>` 挂在宿主页面最上层，左上角 2 px、1% 不透明、不接收指针，多段视频横向错开 2 px，释放时撤下。看不见的视频由 Chromium 视频合成器的后台渲染驱动，约 250 ms 才更新一次当前帧，暂停一两秒后恢复，第一帧要等约 255 ms。「看不见」有三种：不挂 DOM（P9a 的做法）、`opacity: 0`、被不透明的场景画布整个盖住（合成器把它裁掉不画）。脚本切换多段视频、30 帧空闲暂停后恢复都会碰到。放到最上层之后，预览里 15 次恢复都在 5–12 ms 内出第一帧；混进画面的只有左上角 2×2 像素，8 位输出里最多差 3 级。dev 探针的确定性回放（`dev/videoProbe.ts`）用的元素不播放、只 seek，不挂。
 
+**播放卡住的兜底**（P9c 步骤 1，`VideoTexturePlayer.watchStall`）：
+- **现象**：Chromium 的硬件解码（`D3D11VideoDecoder`）长时间放 4K60 视频后会静默停住。元素仍在放、没有错误，`readyState` 停在 2，时间与解码帧数不再变。13586（4K60 H.264、40 Mbps）的预览 7–14 分钟遇到一次。卡住时 renderer 报 `BUFFERING_HAVE_NOTHING`，原因 `DECODER_UNDERFLOW`。Chromium 没有停顿超时，`stalled` 对 Blob 不发。原地跳一下会清空渲染队列、复位解码器，约 75 ms 恢复。
+- **判定**：每次画到这张纹理时看一眼。播放器要求元素在放、`wantPlay`、非宿主暂停、元素没暂停没结束没在跳转、速率 > 0、`readyState < 3`，而时间 2 s（墙钟）没前进，就算卡住。暂停结论变化、超过 2 s 没画到时重新计时。
+- **处理**：先原地跳（不经脚本的 setter，不影响结束回调）。连续两次没救回就按同一个对象地址重新加载、回到原时间；重新加载期间脚本读到的是要设回的时间，结束判定暂停。重新加载三次仍不行就停手，直到时间重新前进。每次处理记一条 warn，`host.videos()` 的 `stallSeeks` / `stallReloads` 计数。
+- **未证实的根因**：解码器拿不到空闲输出缓冲。可疑的占用方是 WebGPU 零拷贝导入或合成器持有的当前帧，没做对照实验。用户纹理的视频（`usertex/sources.ts`）用同一个播放器，一起兜底。
+
 **已知差异**：
 - 色度上采样：4:2:0 视频还原成 RGB 时，Chromium 与 Media Foundation 的插值不同，颜色剧烈变化的边缘差到几十级；测试工程不缩放时 98% 的像素差 ≤ 1、99 分位 7，整体没有偏色。没标颜色的高清视频两边都按 BT.709 换算。
 - 时间轴：两边对容器编辑列表的处理可能不同，同一时刻可能差几帧（语料一段约 67 ms），实时播放看不出。
@@ -2194,7 +2200,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **语料**（173 个工程）：能渲染 47 → 50（`3822149301`（HEVC）、`3824550659`、`3828359750`）；报 `tex:video` 的 41 张只去掉这个键。三张解锁场景的视频纹理和 WPE 抓帧逐像素比：HEVC 那张平均差 0.19、最大 5；两段没标颜色的 H.264 平均差 1.2–1.7、99 分位 ≤ 10（WPE 与 ffmpeg 之间也是这个量级）。P9b：用到 `getVideoTexture` 的 6 张（3243449890、3276911872、3326873240、3361965869、3470764447、3605722997）只去掉 `script:api:layer.getVideoTexture`，能渲染数不变，它们还差别的节（人偶、相机、`input`、粒子层的 `play` 等）；强制渲染下按时段切换、改速度、自写控制都和脚本逻辑一致，没有和视频有关的报错。
 
-**dev 探针**：`host.videos()` 给每段视频的位置、`currentTime`、`paused`、`wantPlay`、`lastDrawn`、当前帧号、`fresh`、`failed`、尺寸与丢帧数。`renderFrame` 的 `videoTime`（秒，或按纹理路径分别给；超过时长按循环取模）先 seek 好、等到那一帧再拷，是屏外宿主里确定性回放视频的唯一办法（屏外 iframe 里 rAF 与 `requestVideoFrameCallback` 都不跑）；vite 的 `/render` 与 MCP `render_scene` / `host_render` 收同名参数。
+**dev 探针**：`host.videos()` 给每段视频的位置、`currentTime`、`paused`、`wantPlay`、`lastDrawn`、当前帧号、`fresh`、`failed`、尺寸与丢帧数，以及卡住兜底的 `stallSeeks` / `stallReloads`（P9c）。`renderFrame` 的 `videoTime`（秒，或按纹理路径分别给；超过时长按循环取模）先 seek 好、等到那一帧再拷，是屏外宿主里确定性回放视频的唯一办法（屏外 iframe 里 rAF 与 `requestVideoFrameCallback` 都不跑）；vite 的 `/render` 与 MCP `render_scene` / `host_render` 收同名参数。
 
 ### 脚本 `IVideoTexture`（P9b）
 

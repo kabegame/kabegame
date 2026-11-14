@@ -275,6 +275,8 @@ describe("SceneVideos", () => {
         duration: Number.NaN,
         totalFrames: 12,
         droppedFrames: 1,
+        stallSeeks: 0,
+        stallReloads: 0,
         textures: [1],
       },
     ]);

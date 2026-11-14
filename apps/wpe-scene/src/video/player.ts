@@ -18,6 +18,11 @@
  *   `IVideoTexture`（`script/api.ts`）的落点，宿主按视频区间从 `SceneVideos.playerFor` 现取。分工：这里管语义（WPE 的 P，rea 第 6 节、
  *   p9-REPORT「脚本 API」与「P9b 步骤 0 的补测」）——时长取容器时长、结束时报容器时长、脚本暂停 / 停止期间不交帧、失败后 `play()`
  *   仍置「想放」；包装对象管 WPE 脚本层的取值（`rate` / `loop` 字段、float32、`loop` 读出数字、参数转换、结束回调进脚本上下文）。
+ * - **卡住的兜底**（P9c 步骤 1，phase-9c「步骤 0」）：Chromium 的硬件解码长时间放 4K60 之后会静默停住——元素仍在放、没有错误，
+ *   `readyState` 停在 `HAVE_CURRENT_DATA`，时间与解码帧数都不再变（实测 10–14 分钟一次，renderer 报 `BUFFERING_HAVE_NOTHING`、原因
+ *   `DECODER_UNDERFLOW`；`D3D11VideoDecoder` 拿不到空闲输出缓冲就直接返回、不记日志、没有定时器，Chromium 没有停顿超时，`stalled`
+ *   对 Blob 不发）。跳转会清空渲染队列并复位解码器，原地跳一下约 75 ms 就恢复。所以画到这张纹理时看一眼时间有没有前进，
+ *   2 s 不动就原地跳、仍不动就重新加载、再不行就停手（`watchStall`）。根因（谁占着输出缓冲）没有证实，对照实验留待以后。
  */
 import { fileToUrl } from "../fileUrl";
 
@@ -42,6 +47,8 @@ export interface VideoFactories {
   readBlob?: (source: SceneVideoSource) => Promise<Blob>;
   createObjectUrl?: (blob: Blob) => string;
   revokeObjectUrl?: (url: string) => void;
+  /** 墙钟（毫秒，卡住的兜底计时用，缺省 `performance.now()`）。 */
+  now?: () => number;
 }
 
 export interface VideoPlayerOptions extends VideoFactories {
@@ -65,6 +72,9 @@ export interface VideoPlayerProbe {
   /** `getVideoPlaybackQuality()` 的总帧数 / 丢帧数，拿不到时 null（p9-REPORT 提到它在循环点上不可信，只作参考）。 */
   totalFrames: number | null;
   droppedFrames: number | null;
+  /** 卡住的兜底（P9c 步骤 1）累计做过的原地跳 / 重新加载次数。 */
+  stallSeeks: number;
+  stallReloads: number;
 }
 
 /** 纹理连续这么多个渲染帧没被画到就暂停（WPE 常量，rea 第 4 节；实测第 32 帧冻住，差的是工作线程的延迟）。 */
@@ -75,6 +85,18 @@ export const SEEK_END_MARGIN = 0.005;
 
 /** `HTMLMediaElement.HAVE_CURRENT_DATA`（Node 里没有这个全局，单测用替身时也不依赖它）。 */
 const HAVE_CURRENT_DATA = 2;
+/** `HTMLMediaElement.HAVE_FUTURE_DATA`：卡住时 `readyState` 低于它（停在 2）。 */
+const HAVE_FUTURE_DATA = 3;
+
+/**
+ * 该在放的视频时间这么久（墙钟毫秒）没前进就算卡住（P9c 步骤 1）。实测的短暂缺帧每次约 1 s 自己恢复
+ * （`BUFFERING_HAVE_NOTHING` → `HAVE_ENOUGH`），2 s 不会误伤。
+ */
+export const STALL_MS = 2000;
+/** 本轮连续原地跳这么多次仍卡住，下一次改为重新加载。 */
+export const STALL_SEEKS_BEFORE_RELOAD = 2;
+/** 连续重新加载这么多次仍卡住就停手，直到时间重新前进。 */
+export const STALL_MAX_RELOADS = 3;
 
 /** 复用播放器的键：同一文件的同一区间就是同一段视频。 */
 export function videoSourceKey(source: SceneVideoSource): string {
@@ -145,6 +167,10 @@ function isAbort(error: unknown): boolean {
   return !!error && typeof error === "object" && (error as { name?: unknown }).name === "AbortError";
 }
 
+/**
+ * 一段视频的播放器。除了 WPE 的语义，还兜底 Chromium 硬件解码的静默卡住（P9c 步骤 1，见文件头与 `watchStall`）：只在被画到时判断，
+ * 宿主暂停、空闲暂停、脚本暂停、页面隐藏都自然不进判断，不另起定时器；计时用墙钟，因为渲染帧率随显示器变。
+ */
 export class VideoTexturePlayer {
   /** 想放（WPE 的 `P+0x90`）：缺省为真；脚本的 play / pause / stop、宿主恢复、loop 为假时的结束与失败改它。 */
   wantPlay = true;
@@ -179,6 +205,19 @@ export class VideoTexturePlayer {
   /** 结束回调的判定状态，对应 WPE 脚本包装的 `V+0xf0`（上次读到的时间）与 `V+0xf4`（可触发），rea 第 6 节。 */
   private lastTime = 0;
   private armed = true;
+  /** 卡住的兜底（P9c 步骤 1）：墙钟、基准（上次看到的时间与看到它的墙钟）、本轮连续原地跳 / 连续重载次数、是否已放弃、累计计数。 */
+  private readonly now: () => number;
+  private stallTime = Number.NaN;
+  private stallSince = 0;
+  /** 上一次 `watchStall` 的墙钟：两次之间隔了 `STALL_MS` 以上（没画到，比如窗口被盖住、rAF 不跑）就从现在重新计时。 */
+  private stallSeen = Number.NEGATIVE_INFINITY;
+  private stallRoundSeeks = 0;
+  private stallRoundReloads = 0;
+  private stallGaveUp = false;
+  private stallSeeks = 0;
+  private stallReloads = 0;
+  /** 重新加载中、等 `loadedmetadata` 设回去的时间；不在重载时为 null。这期间元素的时间暂时回到 0，不碰 play / pause。 */
+  private reloadTo: number | null = null;
 
   constructor(
     readonly source: SceneVideoSource,
@@ -189,6 +228,7 @@ export class VideoTexturePlayer {
     this.lastDrawn = frame;
     this.frame = frame;
     this.revokeObjectUrl = options.revokeObjectUrl ?? ((url) => URL.revokeObjectURL(url));
+    this.now = options.now ?? (() => performance.now());
     const element = options.createElement ? options.createElement() : document.createElement("video");
     this.element = element;
     element.muted = true;
@@ -245,6 +285,8 @@ export class VideoTexturePlayer {
     if (this.disposed) return null;
     this.lastDrawn = frame;
     this.apply(frame, hostPaused);
+    // 画到时看时间有没有前进，卡住就原地跳 / 重新加载（P9c 步骤 1）
+    this.watchStall();
     // 脚本暂停 / 停止期间不取帧：seek 读回会变、画面不变，到 play() 之后第一次画到才换（P9b 步骤 0，WPE 的 pause 结束并 join 工作线程，
     // 不再 `TransferVideoFrame`）；标志留着。空闲暂停与宿主暂停时 wantPlay 仍为真，照常交帧，同 WPE 工作线程照常取帧
     if (!this.fresh || this.failed || !this.wantPlay) return null;
@@ -260,7 +302,8 @@ export class VideoTexturePlayer {
    * - `loop` 为假：`ended` 变真的那一帧触发一次，并清 `wantPlay`（WPE 的 `ENDED` 事件清 `P+0x90`）；不再 ended 之后重新装上。
    */
   detectEnd(): void {
-    if (this.disposed || this.failed) return;
+    // 卡住兜底的重新加载期间元素的时间暂时回到 0，不是绕回，也不是结束（P9c 步骤 1）
+    if (this.disposed || this.failed || this.reloadTo !== null) return;
     const element = this.element;
     if (this.loopValue) {
       const time = element.currentTime;
@@ -329,6 +372,8 @@ export class VideoTexturePlayer {
     // 结束时 Chromium 停在它自己的时长（各轨编辑之后），WPE 停在容器时长，读回正好等于 `duration`（P9b 步骤 0）：脚本拿它和
     // `duration` 比，所以报容器时长
     if (element.ended && this.source.duration !== undefined) return this.source.duration;
+    // 卡住兜底的重新加载期间报要设回去的时间，脚本看不到中间的 0（P9c 步骤 1）
+    if (this.reloadTo !== null) return this.reloadTo;
     return element.currentTime;
   }
 
@@ -343,6 +388,8 @@ export class VideoTexturePlayer {
     if (Number.isFinite(duration)) time = Math.min(time, Math.max(0, duration - SEEK_END_MARGIN));
     // WPE 的 setCurrentTime：loop 下清 `V+0xf4`，自己造成的回退不当成绕回
     if (this.loopValue) this.armed = false;
+    // 重新加载中：元数据回来时设回的是脚本这次写的时间
+    if (this.reloadTo !== null) this.reloadTo = time;
     this.element.currentTime = time;
   }
 
@@ -429,6 +476,8 @@ export class VideoTexturePlayer {
       duration: element.duration,
       totalFrames: quality?.totalVideoFrames ?? null,
       droppedFrames: quality?.droppedVideoFrames ?? null,
+      stallSeeks: this.stallSeeks,
+      stallReloads: this.stallReloads,
     };
   }
 
@@ -444,10 +493,13 @@ export class VideoTexturePlayer {
   }
 
   private sync(): void {
-    if (this.disposed || this.failed || this.url === null) return;
+    // 重新加载中（P9c 步骤 1）同读完之前：不碰 play / pause，等 `loadedmetadata` 设回时间之后再按结论放
+    if (this.disposed || this.failed || this.url === null || this.reloadTo !== null) return;
     const want = this.wantPlay && !this.hostPaused && this.frame <= this.lastDrawn + IDLE_FRAMES;
     if (want === this.playing) return;
     this.playing = want;
+    // 结论变了（空闲、宿主或脚本暂停后恢复、重新加载之后）：卡住的兜底从现在重新计时，暂停期间不算卡住
+    this.stallSince = this.now();
     if (!want) {
       this.element.pause();
       return;
@@ -460,6 +512,104 @@ export class VideoTexturePlayer {
       this.playWarned = true;
       this.report.warn(`场景视频播放失败：${this.source.path}`, error);
     });
+  }
+
+  /**
+   * 卡住的兜底（P9c 步骤 1），在 `drawn` 里 `apply` 之后调：画到才说明这张纹理此刻要用。
+   *
+   * 该前进的条件全满足才计时：没释放没失败、有对象地址、出过第一帧、元素被要求在放（`playing`）、`wantPlay`、非宿主暂停、元素
+   * `!paused && !ended && !seeking`、速率 > 0、`readyState < HAVE_FUTURE_DATA`（卡住时停在 2；`seeking`、速率 0、第一帧之前本来就不动）。
+   * 任一不满足就把基准墙钟重置为现在；时间和基准不同就把基准换成（现在，这个时间），并开始新的一轮：清本轮原地跳与重载次数、解除放弃。
+   * 元素没被要求在放时（宿主暂停、脚本暂停、重新加载等元数据）什么都不看、不比时间：重载期间元素的时间暂时回到 0，不能当成前进；
+   * 回到在放必经 `sync`，它在结论变化时从现在重新计时。离上一次判断已过 `STALL_MS`（中间没画到、没看着）时也从现在重新计时：
+   * 只算连续看着的那段。
+   *
+   * 满足且持续 `STALL_MS`：本轮原地跳不到 `STALL_SEEKS_BEFORE_RELOAD` 次就原地跳（跳转清空渲染队列、复位解码器，实测约 75 ms 恢复）；
+   * 否则重载不到 `STALL_MAX_RELOADS` 次就按同一个对象地址重新加载、回到原时间；再不行就放弃，之后不再处理，直到时间重新前进。
+   * 每次处理都记一条 warn、之后重新计时：慢机器上解码本来就跟不上时，连续跳转只会更糟，所以要等满一轮才升级。
+   */
+  private watchStall(): void {
+    if (this.disposed || this.failed) return;
+    const element = this.element;
+    const url = this.url;
+    const now = this.now();
+    if (now - this.stallSeen >= STALL_MS) this.stallSince = now;
+    this.stallSeen = now;
+    if (!this.playing) return;
+    const time = element.currentTime;
+    if (time !== this.stallTime) {
+      this.stallTime = time;
+      this.stallSince = now;
+      this.stallRoundSeeks = 0;
+      this.stallRoundReloads = 0;
+      this.stallGaveUp = false;
+      return;
+    }
+    const stalling =
+      url !== null &&
+      this.hasFirstFrame &&
+      this.wantPlay &&
+      !this.hostPaused &&
+      !element.paused &&
+      !element.ended &&
+      !element.seeking &&
+      element.playbackRate > 0 &&
+      element.readyState < HAVE_FUTURE_DATA;
+    if (!stalling || this.stallGaveUp) {
+      this.stallSince = now;
+      return;
+    }
+    if (now - this.stallSince < STALL_MS) return;
+    this.stallSince = now;
+    // 宿主转发日志时对详情取 `String()`（`report.ts`），给字符串，免得日志里只剩「[object Object]」
+    const detail = `时间 ${time} s，readyState ${element.readyState}`;
+    if (this.stallRoundSeeks < STALL_SEEKS_BEFORE_RELOAD) {
+      this.stallRoundSeeks++;
+      this.stallSeeks++;
+      this.report.warn(`场景视频卡住 ${STALL_MS} ms 没前进，原地跳一下：${this.source.path}`, detail);
+      // 不经 currentTime 的 setter：它会钳制、清结束判定的 armed；原地跳不是脚本的意图，时间也不回退，不该影响结束回调
+      element.currentTime = time;
+      return;
+    }
+    if (this.stallRoundReloads < STALL_MAX_RELOADS) {
+      this.stallRoundSeeks = 0;
+      this.stallRoundReloads++;
+      this.stallReloads++;
+      this.report.warn(
+        `场景视频原地跳 ${STALL_SEEKS_BEFORE_RELOAD} 次仍卡住，重新加载（第 ${this.stallRoundReloads} 次）：${this.source.path}`,
+        detail,
+      );
+      this.reload(url, time);
+      return;
+    }
+    this.stallGaveUp = true;
+    this.report.warn(
+      `场景视频重新加载 ${STALL_MAX_RELOADS} 次仍卡住，不再处理，直到时间重新前进：${this.source.path}`,
+      detail,
+    );
+  }
+
+  /**
+   * 按同一个对象地址重新加载、回到 `time`（P9c 步骤 1）。重设 `src` 会走加载算法：元素置为暂停、时间回到 0；`loadedmetadata` 之后
+   * 设回时间，再由 `sync` 重新 `play()`。这期间 `sync` 不碰元素、`detectEnd` 不判定，脚本读到的时间是要设回去的那个。
+   */
+  private reload(url: string, time: number): void {
+    const element = this.element;
+    this.reloadTo = time;
+    this.playing = false;
+    element.addEventListener(
+      "loadedmetadata",
+      () => {
+        // 等元数据期间释放或失败了：什么都不做
+        if (this.disposed || this.failed || this.reloadTo === null) return;
+        const target = this.reloadTo;
+        this.reloadTo = null;
+        element.currentTime = target;
+        this.sync();
+      },
+      { once: true },
+    );
+    element.src = url;
   }
 
   private watchFrames(): void {
@@ -505,6 +655,7 @@ export class VideoTexturePlayer {
       this.frameHandle = null;
     }
     this.playing = false;
+    this.reloadTo = null;
     element.pause();
     element.removeAttribute("src");
     element.load();

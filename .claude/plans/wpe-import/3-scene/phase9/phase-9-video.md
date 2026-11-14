@@ -250,10 +250,17 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
   - 删除场景行时一起清掉。
   - 不另起 HTTP 服务。
 - **HEVC 与 Matroska**：本机都能放（步骤 0）。用户显卡不支持 HEVC 时按 P9a 的规则，图层透明、记 warn。
+- **播放卡住的兜底**（2026-11-14 用户：并入 P9c）：
+  - 现象：13586（4K60 H.264、141.43 s、707 MB）的预览连续播了约 10 分 20 秒，第 5 遍走到 55.33 s 停住。元素 `paused` / `ended` 都是假、没有 `error`、`readyState` 2，已解码帧数与字节数不再增长；解码数比画面多约 7 帧。脚本不碰视频，元素没有音轨。
+  - 原地跳一下（`currentTime = currentTime`）就恢复：约 75 ms 后 `seeked`、`readyState` 回到 4，按 60 fps 往下播。
+  - 根因没拿到：这个播放器的 Chromium 媒体日志已被缓存淘汰（CDP `Media.enable` 只回放了两个声音播放器），dev 的 CEF 日志不落盘。这个配置走硬解（`mediaCapabilities` 报 `powerEfficient`），本机三块 N 卡。
+  - 做法：播放器加卡顿检测。条件：脚本要它放、元素没暂停没结束、本帧画到了、页面没隐藏，`currentTime` 约 2 s 不变；第一帧之前与跳转中不算。先原地跳，仍卡就按同一 Blob 地址重新加载并回到原时间；每次记一条日志，`host.videos()` 加计数。
+  - 复现：从加载起挂着 CDP `Media` 域跑 13586 预览 15–20 分钟，卡住时记下选用的解码器与消息。
 
 **验收：**
 - 674 MiB 那张在预览与桌面同时打开时，读入时间、内存和丢帧在实施记录里有数字，并和步骤 0 定的上限比。
 - 切走场景后内存回落（对象 URL 撤销、元素释放）。
+- 卡顿检测：用测试替身造「在放但不前进」时触发、跳转后恢复；暂停、没画到、脚本停止、第一帧之前都不误判。
 
 ## 和其它节的交界
 
@@ -339,3 +346,11 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 - 真机对照里发现，看不见的 `<video>` 暂停后恢复要等后台渲染约 255 ms。把元素挂到宿主页面最上层（2 px、1% 不透明）后，P9a 的 30 帧空闲恢复与 P9b 的脚本切换都不再停顿。
 
 留给 P9c：多实例开销（回归 V7）、674 MiB 级视频每次加载整段落盘。
+
+### P9c 步骤 0–1 — 播放卡住的兜底（2026-11-14）
+
+见 [phase-9c](phase-9c-multi.md)：
+- 步骤 0：13586 的预览两次在 10–14 分钟静默卡住，媒体日志原因 `DECODER_UNDERFLOW`（`D3D11VideoDecoder`），原地跳一下恢复；Chromium 没有停顿超时（读码）。根因（谁占着解码输出缓冲）未证实，对照实验留待以后。
+- 步骤 1：`VideoTexturePlayer.watchStall`，2 s 没前进就原地跳、两次无效重新加载、三次重载后停手；真机上第三次卡住时自动恢复。
+
+留给步骤 2：多实例开销（回归 V7）、反复加载的落盘量。

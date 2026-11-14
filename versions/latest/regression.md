@@ -2497,6 +2497,16 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | W7 桌面上的视频恢复 | Windows dev，窗口模式 | 把一张带视频、会隐藏视频图层的场景设为桌面壁纸，让图层隐藏 1 s 以上再显示 | 再显示时画面接着放，不停顿 | 只在预览里测过；用户当前的壁纸没有视频，没有替用户换 |
 | [ ] | W8 清空脚本存储 | Windows dev | 预览一张用脚本改过视频 `loop` / `rate` 的场景，右键「清空脚本存储」 | 视频回到缺省循环、速率 1，脚本重新 `init` 后照常控制 | 只有单测 |
 
+## 场景壁纸视频卡住的兜底（P9c）
+
+2026-11-14。Chromium 的硬件解码（`D3D11VideoDecoder`）长时间放 4K60 视频后会静默停住：元素仍在放、无错误，`readyState` 停在 2，媒体日志的原因是 `DECODER_UNDERFLOW`。播放器在画到视频纹理时发现该在放的时间 2 s 没前进，就原地跳一下；仍卡就重新加载、回到原时间；三次重载后停手。每次记 warn，`host.videos()` 有 `stallSeeks` / `stallReloads`。复现与读码见 `.claude/plans/wpe-import/3-scene/phase9/phase-9c-multi.md`「步骤 0」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | X0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；变异检查 | 0 error；除已知失败外全过；7 个变异各有测试挂掉 | 2026-11-14：tsc 0 error；vitest 3593 个只挂别的会话改动中的语料读取上界（`3293687972`） |
+| [x] | X1 卡住后自动恢复 | Windows dev | 预览 13586（3429479356，4K60 H.264）放到卡住，读应用日志与 `host.videos()` | 卡住约 2 s 后日志一条「场景视频卡住 2000 ms 没前进，原地跳一下」，`stallSeeks` 为 1，画面接着动、之后正常绕回 | 2026-11-14 Claude：放了约 7 分钟在 131.90 s 卡住，`DECODER_UNDERFLOW`；约 2 s 后原地跳，`readyState` 回到 4，按 60 fps 放到 141.4 s 并绕回 |
+| [ ] | X2 桌面上的长时间播放 | Windows dev，窗口模式 | 把 13586 设为桌面壁纸放 30 分钟以上，看应用日志 | 有「场景视频卡住」时画面随后恢复，没有「重新加载 3 次仍卡住」 | 只在预览里测过 |
+
 ## 按颜色排序与代表色
 
 2026-11-11。每张图入库时算一份色盘（最多 5 个代表色 + 占比，`images.palette`），详情「基本信息」里画成色带；排序新增「颜色」维度。迁移 v052 加色盘列、色桶表 `color_buckets`（12 个基本色桶，黄 / 绿 / 青为 `e6c200` / `2e9e3f` / `1fb5b5`，不是纯色）与关系表 `image_color_distances`，给存量图 × 每个色桶铺一行 65536；回填作业 `image_palette` 在后台给 `palette IS NULL` 的图补算。排序有两个段：`sort/by-color_0x<rrggbb>`（色桶，预计算、沿索引读）与 `sort/by-any-color_0x<rrggbb>`（任意颜色，现算），前端按色桶列表（`color_buckets://`）选段并在列表变化时校正；用户可把颜色保存成色桶（`add_color_bucket`，最多 24 个）或删除（`delete_color_bucket`），提交后发 `color-buckets-change`。机制见 `cocs/gallery/COLOR_PALETTE.md`。

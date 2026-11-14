@@ -160,6 +160,7 @@
   - `attachToDocument` 把 `<video>` 挂在宿主页面最上层（2 px、1% 不透明）。看不见的视频暂停后恢复要等后台渲染约 255 ms，被画布盖住也算看不见。
   - `compile/scriptApi.ts` 删 `getVideoTexture`，`dev/scriptErrors.ts` 认 `ended:` 前缀。
   - 计划与对照见 `.claude/plans/wpe-import/3-scene/phase9/phase-9b-script.md`。
+- 场景壁纸 P9c 步骤 1：视频播放卡住的兜底。`VideoTexturePlayer.watchStall` 在画到视频纹理时检查，该在放、`readyState < 3` 而时间 2 s 没前进（Chromium 硬件解码静默停住，`DECODER_UNDERFLOW`）就原地跳；连续两次无效改为按同一对象地址重新加载、回到原时间；三次重载后停手。每次记 warn，探针 `host.videos()` 加 `stallSeeks` / `stallReloads`，`VideoFactories` 加可注入的 `now`。复现与读码见 `.claude/plans/wpe-import/3-scene/phase9/phase-9c-multi.md`。
 - 场景壁纸 P8：图像层与材质补全。
   - 合成 RT 的采样：寻址只看对象 `clampuvs`（缺省钳制），过滤看对象 `nointerpolation` 或纹理的 NoInterpolation（`render/graph.ts` 的 `compositeSampling`，`SceneLayer.clampUVs` / `noInterpolation`），文本层同一规则；删 `object:clampuvs`、`object:nointerpolation`。
   - 形状对象：`features.ts` 的 `isShapeObject`、`shapeIssues`（`shape:effects` / `shape:effect-passes` / `shape:uniform:<名字>` / `shape:texture0`，`textureSlotRead` 看 WGSL 判断槽有没有被读）；`bundle.ts` 的 `shapePoints` / `shapeLayerSize`（effect 改写 `DIRECTDRAW = 1`、槽 0 不预留）；`render/layout.ts` 的 `shapeQuad`；`render/graph.ts` 的 `planShapeLayer`（只画最后一个 effect、强制 additive）。删 `object:shape`。
