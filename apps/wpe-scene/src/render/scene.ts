@@ -200,7 +200,7 @@ import type { ParticleScriptTarget } from "../script/api";
 import type { GlyphAtlas } from "../text/atlas";
 import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
-import type { UserTextureSlot } from "../compile/usertextures";
+import { isDynamicSource, type UserTextureSlot } from "../compile/usertextures";
 import type { CropRect } from "../usertex/crop";
 import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextureProvider } from "../usertex/sources";
 import type { VideoSink } from "../video/sceneVideos";
@@ -807,7 +807,7 @@ interface UserResolved {
 function baseUserSlot(layer: SceneLayer): UserTextureSlot | null {
   if (layer.text || layer.particle || layer.model || layer.shape) return null;
   const pass = layer.passes[0];
-  const slot = pass?.userTextures?.find((item) => item.slot === 0 && item.source.kind === "property");
+  const slot = pass?.userTextures?.find((item) => item.slot === 0 && isDynamicSource(item.source.kind));
   // 要有缺省（静态纹理或被依赖图层的 RT）才会包成用户引用（`graph.ts` 的 `passInputs`）
   return slot && (pass.textures[0] !== undefined || pass.layerComposites?.[0] !== undefined) ? slot : null;
 }
@@ -1964,7 +1964,7 @@ export class GpuScene {
   /** 解析一个槽的用户纹理的裁切（不碰 GPU）：没有图、来源不是属性、RT 参考的槽还没生效（M8）时 null。 */
   private userCrop(slot: UserTextureSlot): UserTextureCrop | null {
     const provider = this.userProvider;
-    if (!provider || slot.source.kind !== "property") return null;
+    if (!provider || !isDynamicSource(slot.source.kind)) return null;
     let reference: { width: number; height: number } | null;
     if (slot.keepAspect) reference = null;
     else if (slot.reference.kind === "size") reference = slot.reference;

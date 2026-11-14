@@ -20,12 +20,18 @@ import { FetchSceneReader } from "./compile/fs";
 import type { BindingTarget } from "./compile/bindings";
 import type { SceneScalar } from "./compile/model";
 import {
+  readWpeWindowUpdateRate,
   SCENE_POSTPROCESS_SETTINGS,
   SCENE_REFLECTION_SETTINGS,
   type SceneReflectionSetting,
   type ScenePostprocessSetting,
 } from "./compile/postprocess";
 import { reflectionOverride } from "./dev/reflectionOverride";
+import { scriptMediaCallbacks } from "./media/events";
+import { MEDIA_DEFAULT_INTERVAL_MS, mediaIntervalOf } from "./media/interval";
+import { MediaPending } from "./media/pending";
+import { SceneMedia, type MediaDelta, type SceneMediaSnapshot } from "./media/scene";
+import { closeCover, FLAG_STATUS, EMPTY_PROPS } from "./media/types";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import { emptyCursorInput, type CursorInputSnapshot } from "./render/cursor";
 import type { SceneStyle } from "./render/layout";
@@ -181,6 +187,19 @@ export class SceneHost {
   private audioSubscribed = false;
   private audioError: string | null = null;
   private audioFrames = 0;
+  /**
+   * 系统媒体集成（P11c，`media/`）：`bundle.media` 时第一次加载建，重编译保留（订阅只订一次、被拒也不重试；`SceneMedia` 的状态、队列与
+   * 脚本 realm 一样跨重编译），销毁时释放。消息先进 `MediaPending`（按 WPE 合并），一个 `windowupdaterate` 间隔的计时器把它切成事件推进
+   * `SceneMedia` 的队列，每帧脚本阶段开头取空（`drainMedia`）。
+   */
+  private sceneMedia: SceneMedia | null = null;
+  private mediaPending: MediaPending | null = null;
+  private mediaTimer: ReturnType<typeof setInterval> | null = null;
+  private mediaInterval = MEDIA_DEFAULT_INTERVAL_MS;
+  private mediaSubscribed = false;
+  private mediaError: string | null = null;
+  /** dev 探针：最近收到的消息（封面只记 PNG 的 base64 长度），带 `performance.now()`。 */
+  private readonly mediaMessages: { t: number; message: unknown }[] = [];
   /**
    * Hub 最近一次推来的原始频谱（128 个值，左 64 + 右 64，P4e 步骤 4）：宿主只存最近一份，渲染器每帧开头取它推进场景频谱
    * （`SceneRendererOptions.audioFrame`）。还没收到时为 null。
@@ -624,6 +643,146 @@ export class SceneHost {
   }
 
   /**
+   * 接入系统媒体集成（P11c）：第一次见到 `bundle.media` 时建 `SceneMedia` 与 `MediaPending`、订阅 `kind: "media"`、起刷新计时器；之后什么都不做
+   * （重编译保留，订阅只订一次）。计时器间隔取 WPE `config.json` 的 `windowupdaterate`（钳到 50–5000），读不到用 1000 并记一条 debug。
+   * 先同步建好对象再等读配置，并发的第二次加载直接返回。
+   */
+  private async loadMedia(bundle: SceneBundle, sceneAssets: string[]): Promise<void> {
+    if (!bundle.media || this.sceneMedia || this.disposed) return;
+    this.sceneMedia = new SceneMedia();
+    this.mediaPending = new MediaPending({
+      log: (message) => this.options.report.debug(`场景壁纸 ${this.options.imageId} ${message}`),
+    });
+    this.subscribeMedia();
+    let rate: unknown;
+    try {
+      rate = await readWpeWindowUpdateRate(this.reader, sceneAssets);
+    } catch {
+      rate = undefined;
+    }
+    if (this.disposed) return;
+    const interval = mediaIntervalOf(rate);
+    if (interval === null)
+      this.options.report.debug(
+        `场景壁纸 ${this.options.imageId} 读不到 WPE 的 windowupdaterate，媒体刷新间隔用 ${MEDIA_DEFAULT_INTERVAL_MS} ms`,
+      );
+    this.mediaInterval = interval ?? MEDIA_DEFAULT_INTERVAL_MS;
+    this.mediaTimer = setInterval(() => this.flushMedia(), this.mediaInterval);
+  }
+
+  /**
+   * 向 `WpeMediaHub` 订阅媒体（后端按调用方文档是场景宿主入口认成场景投影，约定见子计划）。订阅归属宿主 frame，frame 销毁时由 Phase 8 的
+   * `SubframeDestroyed` 释放，没有退订命令。收到的消息进 `MediaPending`；被拒（非 Windows 等）时当场把 `{flags: 0x10, enabled: false}`
+   * 推进场景队列、不经合并，脚本照 WPE「媒体集成不可用」收到 `{ enabled: false }`，封面槽是缺省纹理。「媒体集成」开关关着不算被拒，
+   * 那是后端发 `status { enabled: false }`。
+   */
+  private subscribeMedia(): void {
+    const imageId = this.options.imageId;
+    if (this.mediaSubscribed || !imageId) return;
+    this.mediaSubscribed = true;
+    const channel = new Channel<{ type: string } & Record<string, unknown>>();
+    channel.onmessage = (message) => {
+      this.recordMediaMessage(message);
+      this.mediaPending?.push(message);
+    };
+    // TODO:[WPE_SCENE] 在 macOS / Linux 上测试：场景媒体集成。后端还没有这两个系统的媒体会话数据源，订阅总被拒（脚本收到 `{ enabled: false }`、
+    // 封面槽是缺省纹理）；后端接上后这里不用改，核对标题与封面随播放器变化。
+    invoke("wpe_web_media_subscribe", { kind: "media", channel, imageId }).catch((error: unknown) => {
+      this.mediaError = String(error);
+      this.sceneMedia?.push({
+        flags: FLAG_STATUS,
+        enabled: false,
+        state: 0,
+        props: { ...EMPTY_PROPS },
+        position: 0,
+        duration: 0,
+        cover: null,
+      });
+      this.options.report.debug(`场景壁纸 ${imageId} 媒体订阅被拒：${this.mediaError}`);
+    });
+  }
+
+  private recordMediaMessage(message: { type: string } & Record<string, unknown>): void {
+    const shown =
+      message.type === "sceneThumbnail"
+        ? { ...message, png: typeof message.png === "string" ? `${message.png.length} 字符 base64` : message.png }
+        : message;
+    this.mediaMessages.push({ t: performance.now(), message: shown });
+    if (this.mediaMessages.length > 20) this.mediaMessages.shift();
+  }
+
+  /** 刷新计时器：把待发切成事件推进场景队列；退回预览图期间不派发，事件直接丢掉（位图关掉）。 */
+  private flushMedia(): void {
+    const pending = this.mediaPending;
+    const media = this.sceneMedia;
+    if (!pending || !media || this.disposed) return;
+    for (const event of pending.flush()) {
+      if (this.state === "fallback") closeCover(event.cover);
+      else media.push(event);
+    }
+  }
+
+  /**
+   * 每帧取空媒体队列（P11c，脚本阶段最开头）：事件逐条按 WPE 的顺序处理（`media/scene.ts`）。封面先把位图交给来源表（`provide`，当场生效）、
+   * 名字当一次属性增量走属性路径；五个回调发给导出了它的全部已 `init` 的脚本。
+   */
+  private drainMedia(): void {
+    const media = this.sceneMedia;
+    if (!media?.queued) return;
+    media.drain({
+      ...scriptMediaCallbacks(this.runtime),
+      cover: (name, image, delta) => {
+        this.userTextures.provide(name, image);
+        this.applyMediaProperties(delta);
+      },
+    });
+  }
+
+  /**
+   * 封面换名的属性增量（`$mediaThumbnail` / `$mediaPreviousThumbnail`，只有 `value`、没有 `type`）：并进累计全集后走 `applyChanges`——绑定表命中
+   * `user-texture` 就地换图、导出了 `applyUserProperties` 的脚本收到 `{}`（运行时只收同时带 `type` 与 `value` 的项）、`engine.userProperties` 读得到
+   * 名字字符串。和 `apply` 不同：没有场景（加载中、退回预览图）时不触发重编译，加载落地后靠 `pendingChanges` 补上。
+   */
+  private applyMediaProperties(delta: MediaDelta): void {
+    const changes = mergeProperties(this.properties, delta as unknown as Record<string, UserProperty>);
+    if (!changes.size || this.state !== "ready" || !this.bundle) return;
+    this.applyChanges(changes);
+  }
+
+  private disposeMedia(): void {
+    if (this.mediaTimer !== null) clearInterval(this.mediaTimer);
+    this.mediaTimer = null;
+    this.mediaPending?.dispose();
+    this.mediaPending = null;
+    this.sceneMedia?.discard();
+    this.sceneMedia = null;
+  }
+
+  /**
+   * dev 探针（P11c）：媒体订阅状态（`error` 是被拒的原因）、刷新间隔、最近收到的消息（带时间戳）、待发 flags、队列长度与 `SceneMedia` 的当前值；
+   * 场景没有接入媒体集成时 `active` 为假。
+   */
+  media(): {
+    active: boolean;
+    subscribed: boolean;
+    error: string | null;
+    intervalMs: number;
+    messages: { t: number; message: unknown }[];
+    pendingFlags: number;
+    scene: SceneMediaSnapshot | null;
+  } {
+    return {
+      active: this.sceneMedia !== null,
+      subscribed: this.mediaSubscribed && this.mediaError === null,
+      error: this.mediaError,
+      intervalMs: this.mediaInterval,
+      messages: this.mediaMessages.map((item) => ({ ...item })),
+      pendingFlags: this.mediaPending?.pendingFlags ?? 0,
+      scene: this.sceneMedia?.snapshot() ?? null,
+    };
+  }
+
+  /**
    * 建脚本环境。并发的重载要排队：不排队会建出第二个 realm、`init` 跑两次，`localStorage` 的写入也跟着多一次。
    * 等完再判断：在途的那次可能已被「清空脚本存储」作废，这时要重建。
    */
@@ -708,7 +867,8 @@ export class SceneHost {
       api.setProperties(this.properties);
       this.scriptApi = api;
       this.runtime = runtime;
-      await runtime.load(bundle.scripts);
+      // `init` 之后、首次 `applyUserProperties` 之前，按场景媒体状态给刚 `init` 的脚本补一轮媒体回调（P11c，rea-p11-media 2.5）
+      await runtime.load(bundle.scripts, () => this.sceneMedia?.replayAfterInit(scriptMediaCallbacks(runtime)));
     } catch (error) {
       this.scriptUnavailable = true;
       this.options.report.error(`场景脚本 baseclasses.js 或 realm 加载失败：${String(error)}`);
@@ -1066,6 +1226,9 @@ export class SceneHost {
         // 脚本的音频缓冲改读归一化频谱（P4e 步骤 4，「决定」5）：渲染器这一帧推进之后、脚本之前拷一次
         this.scriptApi?.applySpectrum(spectrum);
         if (this.state !== "fallback" && this.scriptState) {
+          // 系统媒体事件（P11c）：脚本阶段最开头，光标派发（渲染器 `stepCursor`）之后、动画之前（rea-p11-media 2.3、2.4）。没有脚本的场景也跑
+          // （只有封面纹理）：封面增量照走属性路径、换图同帧画出，回调只在有脚本运行时才调
+          this.drainMedia();
           // 关键帧动画（P10a 步骤 3）先于脚本写（rea-p10-keyframes 第 1、9 节）：脚本 `update(value)` 收到的是本帧的动画值，脚本写回
           // 只活到下一帧动画覆盖。不受脚本运行时门控：没有脚本的场景也跑（`scriptState` 在换场景时总会设上）。
           // 写进渲染器正在画的那份状态（`drawnState`），它和这份动画同时换（`beforeFirstFrame`）；平时就是 `scriptState`
@@ -1135,6 +1298,8 @@ export class SceneHost {
     // 退回预览图：场景不显示，声音也停（下次能渲染时重新开始）
     this.disposeSounds();
     this.disposeVideos();
+    // 媒体事件不派发了：队列清掉（订阅与状态保留，计时器在退回期间把新事件直接丢掉）
+    this.sceneMedia?.discard();
     // 关键帧动画同样丢掉：下次能渲染时从 0 开始
     this.sceneAnimations = null;
     this.scenePuppets = null;
@@ -1249,6 +1414,9 @@ export class SceneHost {
       this.loadSounds(bundle);
       // 场景用音频（P4e 步骤 4）：声明了开关且有带音频的粒子模块，加载就订阅（只订一次）
       if (bundle.audio) this.subscribeAudio();
+      // 系统媒体集成（P11c）：脚本导出了媒体回调、或有封面纹理槽；要在脚本 `init` 之前建好（`init` 之后的补发读 `SceneMedia`）
+      await this.loadMedia(bundle, target.sceneAssets);
+      if (id !== this.generation) return;
       // 视频纹理同样在脚本与 GPU 资源之前开始读、开始放（P9a）
       this.loadVideos(bundle);
       // 用户纹理（P11b 步骤 2）：按当前属性值预先解码，建场景时第一帧就是用户图
@@ -1401,6 +1569,7 @@ export class SceneHost {
     this.sceneTexts?.dispose();
     this.sceneTexts = null;
     this.disposeVideos();
+    this.disposeMedia();
     this.userTextures.dispose();
     this.sceneAnimations = null;
     this.scenePuppets = null;

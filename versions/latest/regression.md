@@ -2776,6 +2776,35 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | U10 大图 | Windows dev | 选一张 6000×3000 的 JPEG，再换回小图 | 解码完成后换上（晚几帧）、不卡死；裁成 3000×3000 | 待真机确认 |
 | [ ] | U11 非 Windows | macOS / Linux | 预览一张带 `scenetexture` 的场景并选图 | 同 Windows | 本机不能测 |
 
+## 场景壁纸系统媒体（P11c）
+
+2026-11-14 至 11-15。场景脚本的五个 `media*Changed` 回调与封面纹理 `$mediaThumbnail` / `$mediaPreviousThumbnail`：
+- 后端的媒体监视分出一份照 WPE 取值的场景投影；
+- 场景宿主照 WPE 按 `windowupdaterate` 合并、每帧派发；
+- 封面经 P11b 的来源表同帧换图；
+- 网页壁纸的封面配色同时换成 WPE 的算法。
+
+依据与资料：
+- WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md`「媒体回调与封面」与同目录 `rea-p11-media.md`、`rea-p11-textures.md`；
+- 计划、约定与走查见 `phase-11c-media.md`；
+- SMTC 夹具 `ignore/p11/smtc/fixture.ps1`，步骤表 `ignore/p11/c/steps-c*.json`；
+- 生成工程 `ignore/p11/proj/p11-media`，复制工程 `ignore/p11/c/proj/`，WPE 抓帧 `A:\p11\c-thumb`、`A:\p11\c-iso`。
+
+媒体实测会在系统里发布测试媒体会话，测之前请先暂停自己的播放器。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | M0 单测与检查 | Windows | `kabegame` 的 `wpe_` 过滤（配色、两个投影、Hub、攒批）；`apps/wpe-scene` 的 tsc、vitest、Prettier；`scripts/kabegame-dev` 的 `deno test`、`deno check` | 全过 | 2026-11-14：Rust 92 个全过；宿主快照 vitest 3963 个，只有 `pipeline.test.ts` 的读取上限（`3543014965` 读 104 MB）失败，HEAD 快照同样失败；合并进工作区的快照 tsc 0 error、相关 646 个全过。变异检查：Rust 4 处、宿主 5 处全部检出 |
+| [x] | M1 语料 | Node，219 个工程 | 前后重扫 `unsupported` | 只去掉 `script:callback:media*` 与 `usertextures:system`，原来能渲染的不掉出 | 2026-11-14：能渲染 147 → 157，没有新增键 |
+| [x] | M2 回调序列对 WPE | Windows dev + WPE 测试窗口 + SMTC 夹具 | 夹具按步骤改属性、封面、播放状态、时间轴、类型，清空显示信息，退出；WPE 开 `p11-media`；Kabegame 屏外宿主记下收到的消息，按批用探针回放、取 `[p11m]` 行 | 回调与参数逐行相同 | 2026-11-14 Claude：四轮逐行相同，含超长清空（1025 / 1024 字节、专辑名 257 字节）、`contentType` 空串、会话切换与复位；首个会话的「属性、封面」WPE 晚一次刷新，是它的子进程等封面解码，记为已知差异 |
+| [x] | M3 封面纹理 | 同上 | 封面 m1 → 改标题换 m2，抓 WPE 一帧；探针按同样两批消息回放 | `TH-CUR`（1:1，m2）、`TH-PREV`（1:4，m1）逐像素相同 | 2026-11-14 Claude：两块都 0 差，整帧只差 FR / CLK |
+| [x] | M4 重设同一张封面 | 同上 | 只重设同一张；重设并改标题 | 只重设：不发；连同改标题：再发一次封面 | 2026-11-14 Claude：两边相同；改标题时系统先报一次没有封面、约 5 ms 后再报原图 |
+| [x] | M5 会话退出 | 同上 | 夹具从暂停状态退出，系统切回另一个已暂停的会话 | 场景只收到属性、时间轴、封面，没有播放回调（同 WPE） | 2026-11-15 Claude：照 WPE 100 ms 攒批、丢旧会话事件之后相同；修之前多一条 `playback` |
+| [x] | M6 真实壁纸走查 | Windows dev + WPE 抓帧 1920×1080 | 2932157836、3823859141、3487328036 的复制工程，夹具给已知标题与三色封面，播放中，稳定后抓帧 | 差异逐处有解释 | 2026-11-15 Claude：2932157836 除挂 `spin` 的圆形封面外整帧 0 差；3823859141 除唱片 `spin` 外只有文字阴影模糊边缘 ≤ 8；3487328036 的封面对象两边都没画出（缩放挂音频脚本），背景差来自 WPE 后处理档位 ultra |
+| [x] | M7 真机预览 | Windows dev | 预览一张媒体场景（如 3823859141），用自己的播放器放歌、切歌、暂停；再关掉设置里的「媒体集成」 | 标题、封面、唱片颜色跟着变；关掉后封面回到缺省、脚本收到 `enabled: false` | 待用户手测 |
+| [x] | M8 网页壁纸配色 | Windows dev | 打开一张用到媒体监听的网页壁纸，放一首有封面的歌，再放一段没有封面的 | 颜色按 WPE 的算法（`textColor` 是对比度够的次色 / 第三色）；没有封面时五色全黑 | 待用户手测；Phase 8 原来没有封面时是深灰底白字 |
+| [ ] | M9 非 Windows | macOS / Linux | 预览一张媒体场景 | 订阅被拒，脚本收到 `enabled: false`，封面槽是缺省纹理 | 本机不能测 |
+
 ## 场景壁纸 puppet 骨骼动画（P12a）
 
 2026-11-14。图像层的 puppet（模型 JSON 的 `puppet`）用 mdl 的网格 0 代替四边形上屏，动画层按 WPE 的时钟、采样、混合与淡入淡出每帧求骨骼姿势，蒙皮矩阵写进 `g_Bones`；带 effect 的 puppet 先在合成链里做完 effect，再用网格采样合成 RT 上屏。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase12/rea-p12-mdl.md`、`rea-p12-runtime.md` 与 `p12-REPORT.md`，计划、实施记录与按 FINAL_CHECK 的走查见同目录 `phase-12a-mesh-animation.md`；生成工程 `ignore/p12/defs/p12.py`，复制工程 `ignore/p12/a/final/proj/*-iso-pup`，走查报告 `ignore/p12/a/final/report.txt`，WPE 抓帧在 `A:\p12\`。

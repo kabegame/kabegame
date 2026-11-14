@@ -51,6 +51,11 @@ export function installSceneDevProbe(host: SceneHost): void {
        */
       userTextures: () => host.userTextureProbe(),
       /**
+       * P11c：系统媒体集成的订阅状态（`error` 是被拒的原因）、刷新间隔、最近收到的消息（带 `performance.now()`）、待发 flags、
+       * 队列长度与场景媒体状态（`SceneMedia` 的快照）；场景没接媒体集成时 `active` 为假。
+       */
+      media: () => host.media(),
+      /**
        * P10a 步骤 3：每条关键帧动画的 `id`、时钟主人、`t`、`getFrame()`、`isPlaying()`、标志、最后写入的值，以及最近 600 帧 `frame()`
        * 的耗时（`frameMs`）。
        */

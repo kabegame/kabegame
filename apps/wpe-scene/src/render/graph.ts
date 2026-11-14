@@ -92,8 +92,8 @@ import {
   type SceneTexture,
 } from "../compile/bundle";
 import { isRopeRenderer, MAX_CHILD_DEPTH, particleDraws, type SceneParticle } from "../compile/particles";
-import type { UserTextureSlot } from "../compile/usertextures";
 import { SPRITE_OCCLUSION } from "../compile/sprite";
+import { isDynamicSource, type UserTextureSlot } from "../compile/usertextures";
 import { NO_INSET, textureUvExtent, uvInset } from "./layout";
 
 export type TextureRef =
@@ -448,10 +448,10 @@ function passInputs(
   for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
   for (const [slot, object] of Object.entries(pass.layerComposites ?? {}))
     inputs[Number(slot)] = { kind: "layer", object };
-  // 用户纹理（P11b 步骤 2）：只有缺省是静态纹理或被依赖图层 RT 的槽才包（`fallback` 要有）；属性来源以外的（封面 P11c、快捷方式 P11d）现在不处理
+  // 用户纹理（P11b 步骤 2）：只有缺省是静态纹理或被依赖图层 RT 的槽才包（`fallback` 要有）；属性与封面来源（P11c）会换图，快捷方式（P11d）现在不处理
   for (const slot of pass.userTextures ?? []) {
     const fallback = inputs[slot.slot];
-    if (slot.source.kind === "property" && fallback) inputs[slot.slot] = { kind: "user", slot, fallback };
+    if (isDynamicSource(slot.source.kind) && fallback) inputs[slot.slot] = { kind: "user", slot, fallback };
   }
   return inputs;
 }

@@ -40,8 +40,23 @@ export const RUNTIME_CALLBACKS = [
   "cursorClick",
   "cursorDown",
   "cursorUp",
+  // 系统媒体集成（P11c）：宿主按 WPE 的固定顺序派发（`media/scene.ts`），返回值丢弃
+  "mediaStatusChanged",
+  "mediaPlaybackChanged",
+  "mediaPropertiesChanged",
+  "mediaThumbnailChanged",
+  "mediaTimelineChanged",
 ] as const;
 type Callback = (typeof RUNTIME_CALLBACKS)[number];
+/** 五个系统媒体回调的名字（`ScriptRuntime.mediaEvent`）。 */
+export type MediaCallback = Extract<
+  Callback,
+  | "mediaStatusChanged"
+  | "mediaPlaybackChanged"
+  | "mediaPropertiesChanged"
+  | "mediaThumbnailChanged"
+  | "mediaTimelineChanged"
+>;
 /** 打开拾取的导出：六个光标回调加 `cursorHitTest`（WPE 绑定时 `mask & 0x3f80`，rea-p6c-dispatch 3.1）。 */
 const CURSOR_EXPORTS = [
   "cursorHitTest",
@@ -302,7 +317,11 @@ export class ScriptRuntime {
     }
   }
 
-  async load(scripts: SceneScripts): Promise<void> {
+  /**
+   * @param afterInit 全部脚本跑完 `init` 之后调一次（P11c：WPE 在这一步按场景媒体状态给刚 `init` 的脚本补发一轮媒体回调，
+   *   `media/scene.ts` 的 `replayAfterInit`，经 `mediaEvent`；在首次 `applyUserProperties` 之前）。
+   */
+  async load(scripts: SceneScripts, afterInit?: () => void): Promise<void> {
     this.records = scripts.list.map((script) => ({
       script,
       exports: null,
@@ -352,6 +371,7 @@ export class ScriptRuntime {
       record.state = "inited";
       if (this.halted) break;
     }
+    if (!this.halted) afterInit?.();
     this.options.report.info(
       `场景脚本加载完成：${this.records.length} 段，成功 ${this.records.filter((r) => r.state === "inited").length} 段，失败 ${this.records.filter((r) => r.state === "failed").length} 段，用时 ${Math.round((this.options.now ?? performance.now.bind(performance))() - start)} ms`,
     );
@@ -495,6 +515,25 @@ export class ScriptRuntime {
     event.worldPosition = vector(world);
     event.localPosition = vector(local);
     return event;
+  }
+
+  /**
+   * 系统媒体回调（P11c，rea-p11-media 2.3）：发给全部已跑完 `init`、导出了该回调且没被禁用的脚本，按记录顺序（= WPE 的登记顺序，全场景广播、
+   * 不分对象）。`makeEvent` 每个接收者各调一次（事件对象是普通对象，改它不影响别人），参数是脚本所在的 realm（对象与 `Vec3` 要在里面建）。
+   * 回调只有一个参数、返回值丢弃（WPE 只写回 `init` / `update` / `animationEvent`）；出错只禁用这个回调（`invoke`）。
+   */
+  mediaEvent(callback: MediaCallback, makeEvent: (realm: ScriptRealm) => unknown): void {
+    if (this.halted) return;
+    for (const record of this.records) {
+      if (
+        record.state !== "inited" ||
+        record.disabled.has(callback) ||
+        typeof record.exports?.[callback] !== "function"
+      )
+        continue;
+      this.call(record, callback, makeEvent(this.realm));
+      if (this.halted) break;
+    }
   }
 
   /** 某个对象上有没有脚本导出了光标回调（`cursorHitTest` 也算：它只打开拾取）：渲染器据此决定每帧要不要做命中测试。 */

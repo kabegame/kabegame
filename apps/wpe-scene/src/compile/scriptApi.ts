@@ -504,13 +504,22 @@ export const MISSING_SCRIPT_CALLBACKS: readonly string[] = [
   "resizeScreen",
   "applyGeneralSettings",
   // 光标回调已在 P6c 实现（`script/runtime.ts` 的 `cursorEvent`；`cursorHitTest` WPE 自己也不调，导出它只打开拾取）
-  // 系统媒体集成 → P11
+  // 系统媒体集成五个回调已在 P11c 实现（`script/runtime.ts` 的 `mediaEvent`，名字见 `MEDIA_CALLBACKS`）
+];
+
+/** 五个系统媒体回调（`WPE_SCRIPT_CALLBACKS` 编号 14–18，按 WPE 的派发顺序无关，只是名单）：导出了其中任一个，场景就要接入媒体集成。 */
+export const MEDIA_CALLBACKS: ReadonlySet<string> = new Set([
   "mediaStatusChanged",
   "mediaPlaybackChanged",
   "mediaPropertiesChanged",
   "mediaThumbnailChanged",
   "mediaTimelineChanged",
-];
+]);
+
+/** 一段脚本有没有导出五个媒体回调之一（WPE 绑定时 `mask & 0x7c000`，rea-p11-media 2.1）。 */
+export function exportsMediaCallback(source: string): boolean {
+  return scriptExports(source).some((name) => MEDIA_CALLBACKS.has(name));
+}
 
 function isPunct(token: Token | undefined, value: string): boolean {
   return token?.type === "punct" && token.value === value;

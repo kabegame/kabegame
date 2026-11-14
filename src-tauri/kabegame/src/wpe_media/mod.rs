@@ -17,6 +17,8 @@ mod colors;
 #[cfg(target_os = "windows")]
 mod media;
 #[cfg(target_os = "windows")]
+mod projection;
+#[cfg(target_os = "windows")]
 mod spectrum;
 #[cfg(target_os = "windows")]
 mod wpe_spectrum;
@@ -70,6 +72,30 @@ pub enum WpeMediaMessage {
         position: f64,
         duration: f64,
     },
+    /// 场景宿主的封面：原尺寸 PNG（Spotify 预处理之后）的 base64、不带 `data:` 前缀，空串表示没有封面；
+    /// `colors` 依次是 primary、secondary、tertiary、text、highContrast，0–255 整数，没有封面时全 0。
+    /// 只发给 [`WpeMediaFlavor::Scene`] 的订阅；网页订阅收到的是 [`Self::Thumbnail`]。
+    SceneThumbnail {
+        png: String,
+        colors: [[u8; 3]; 5],
+    },
+}
+
+/// 媒体订阅的投影：网页壁纸沿用 Phase 8 的数据（外推、缩图、`music` 缺省），场景宿主照 WPE 的数据
+/// （整秒时间轴、原尺寸封面、没有会话时复位）。由命令按调用方文档决定，页面不能自己选。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WpeMediaFlavor {
+    Web,
+    Scene,
+}
+
+impl WpeMediaFlavor {
+    fn index(self) -> usize {
+        match self {
+            Self::Web => 0,
+            Self::Scene => 1,
+        }
+    }
 }
 
 impl WpeMediaMessage {
@@ -77,7 +103,7 @@ impl WpeMediaMessage {
     fn media_slot(&self) -> Option<usize> {
         match self {
             Self::Properties { .. } => Some(0),
-            Self::Thumbnail { .. } => Some(1),
+            Self::Thumbnail { .. } | Self::SceneThumbnail { .. } => Some(1),
             Self::Playback { .. } => Some(2),
             Self::Timeline { .. } => Some(3),
             Self::Audio { .. } | Self::Status { .. } => None,
@@ -116,6 +142,8 @@ struct Subscription {
     label: String,
     frame: SubframeId,
     kind: WpeMediaKind,
+    /// 只对 media 订阅有意义（audio 订阅不分投影）
+    flavor: WpeMediaFlavor,
     sink: Box<dyn MediaSink>,
 }
 
@@ -126,8 +154,8 @@ struct HubState {
     audio: Option<Box<dyn Send>>,
     /// 运行中的媒体会话监视，丢弃即停。
     media: Option<Box<dyn Send>>,
-    /// 媒体每类最后一条，新订阅补发；监视停止即清空，避免重开后补发过期数据。
-    last_media: [Option<WpeMediaMessage>; 4],
+    /// 媒体每类最后一条（按 flavor 各一份），新订阅补发；监视停止即清空，避免重开后补发过期数据。
+    last_media: [[Option<WpeMediaMessage>; 4]; 2],
 }
 
 static HUB: OnceLock<WpeMediaHub> = OnceLock::new();
@@ -176,12 +204,15 @@ impl WpeMediaHub {
     }
 
     /// 新订阅；同一 `(label, frame, kind)` 已有的旧条被替换（iframe 自己刷新、frame 不变）。
-    /// media 先收到 `Status`，监视在运行时再补发当前快照，之后随变化推送。
+    /// media 先收到 `Status`，监视在运行时再补发自己 flavor 的当前快照，之后随变化推送。
+    /// 补发：网页订阅补全部缓存；场景订阅照 WPE 的 `AddMediaListener`，`title` 非空才补属性、有封面才补封面、
+    /// 状态非 0 才补播放、`duration` 非 0 才补时间轴。
     pub fn subscribe(
         &self,
         label: &str,
         frame: SubframeId,
         kind: WpeMediaKind,
+        flavor: WpeMediaFlavor,
         sink: Box<dyn MediaSink>,
     ) {
         let stopped = {
@@ -195,10 +226,11 @@ impl WpeMediaHub {
                     enabled: state.media_enabled,
                 });
                 if alive && state.media_enabled && state.media.is_some() {
-                    alive = state
-                        .last_media
+                    let cache = &state.last_media[flavor.index()];
+                    alive = cache
                         .iter()
                         .flatten()
+                        .filter(|message| flavor == WpeMediaFlavor::Web || scene_replays(message))
                         .all(|message| sink.send(message));
                 }
             }
@@ -207,6 +239,7 @@ impl WpeMediaHub {
                     label: label.to_string(),
                     frame: frame.clone(),
                     kind,
+                    flavor,
                     sink,
                 });
             }
@@ -270,15 +303,59 @@ impl WpeMediaHub {
             }
             state.media_enabled = enabled;
             let status = WpeMediaMessage::Status { enabled };
-            state
-                .subs
-                .retain(|s| s.kind != WpeMediaKind::Media || s.sink.send(&status));
+            // 关闭时场景订阅在 Status 之后再收缓存里不是缺省值的那几类的复位消息（读码推断 WPE 要等重新打开才一起到，
+            // 这里选当场发，记为已知差异）；之后清空场景缓存，网页缓存随 reconcile 停监视时一起清
+            let resets = if enabled {
+                Vec::new()
+            } else {
+                scene_resets(&state.last_media[WpeMediaFlavor::Scene.index()])
+            };
+            state.subs.retain(|s| {
+                if s.kind != WpeMediaKind::Media {
+                    return true;
+                }
+                if !s.sink.send(&status) {
+                    return false;
+                }
+                s.flavor != WpeMediaFlavor::Scene || resets.iter().all(|reset| s.sink.send(reset))
+            });
+            if !enabled {
+                state.last_media[WpeMediaFlavor::Scene.index()] = Default::default();
+            }
             self.reconcile(&mut state)
         };
         drop(stopped);
     }
 
-    /// 采集线程 / 监视器回调：按 kind 广播，发送失败的订阅删除后重算启停。
+    /// 监视器回调：一条媒体消息只发给同 flavor 的 media 订阅，并记入该 flavor 的缓存。
+    /// 监视已停止（迟到的消息）直接丢弃，发送失败的订阅删除后重算启停。
+    fn broadcast_media(&self, flavor: WpeMediaFlavor, message: &WpeMediaMessage) {
+        let stopped = {
+            let mut state = self.lock();
+            if state.media.is_none() {
+                return;
+            }
+            if let Some(slot) = message.media_slot() {
+                state.last_media[flavor.index()][slot] = Some(message.clone());
+            }
+            let before = state.subs.len();
+            state.subs.retain(|s| {
+                s.kind != WpeMediaKind::Media || s.flavor != flavor || s.sink.send(message)
+            });
+            if state.subs.len() == before {
+                return;
+            }
+            tracing::debug!(
+                ?flavor,
+                subscriptions = state.subs.len(),
+                "媒体订阅发送失败，已删除"
+            );
+            self.reconcile(&mut state)
+        };
+        drop(stopped);
+    }
+
+    /// 采集线程回调：音频按 kind 广播（不分 flavor），发送失败的订阅删除后重算启停。
     /// 对应的源已停止时（迟到的最后一帧）直接丢弃。
     fn broadcast(&self, kind: WpeMediaKind, message: &WpeMediaMessage) {
         let stopped = {
@@ -287,9 +364,6 @@ impl WpeMediaHub {
                 WpeMediaKind::Audio if state.audio.is_none() => return,
                 WpeMediaKind::Media if state.media.is_none() => return,
                 _ => {}
-            }
-            if let Some(slot) = message.media_slot() {
-                state.last_media[slot] = Some(message.clone());
             }
             let before = state.subs.len();
             state
@@ -338,6 +412,76 @@ impl WpeMediaHub {
     }
 }
 
+/// 场景订阅补发的条件（照 WPE `AddMediaListener`）：`title` 非空才补属性，有封面才补封面，
+/// 状态非 0 才补播放，`duration` 非 0 才补时间轴。
+fn scene_replays(message: &WpeMediaMessage) -> bool {
+    match message {
+        WpeMediaMessage::Properties { title, .. } => !title.is_empty(),
+        WpeMediaMessage::SceneThumbnail { png, .. } => !png.is_empty(),
+        WpeMediaMessage::Playback { state } => *state != 0,
+        WpeMediaMessage::Timeline { duration, .. } => *duration != 0.0,
+        _ => false,
+    }
+}
+
+/// 关闭「媒体集成」时场景订阅要收的复位消息：缓存里不是缺省值的那几类，回到缺省值。
+fn scene_resets(cache: &[Option<WpeMediaMessage>; 4]) -> Vec<WpeMediaMessage> {
+    cache
+        .iter()
+        .flatten()
+        .filter_map(|message| match message {
+            WpeMediaMessage::Properties {
+                title,
+                artist,
+                sub_title,
+                album_title,
+                album_artist,
+                genres,
+                content_type,
+            } if [
+                title,
+                artist,
+                sub_title,
+                album_title,
+                album_artist,
+                genres,
+                content_type,
+            ]
+            .iter()
+            .any(|s| !s.is_empty()) =>
+            {
+                Some(WpeMediaMessage::Properties {
+                    title: String::new(),
+                    artist: String::new(),
+                    sub_title: String::new(),
+                    album_title: String::new(),
+                    album_artist: String::new(),
+                    genres: String::new(),
+                    content_type: String::new(),
+                })
+            }
+            WpeMediaMessage::SceneThumbnail { png, .. } if !png.is_empty() => {
+                Some(WpeMediaMessage::SceneThumbnail {
+                    png: String::new(),
+                    colors: [[0; 3]; 5],
+                })
+            }
+            WpeMediaMessage::Playback { state } if *state != 0 => {
+                Some(WpeMediaMessage::Playback { state: 0 })
+            }
+            WpeMediaMessage::Timeline { position, duration }
+                if *position != 0.0 || *duration != 0.0 =>
+            {
+                Some(WpeMediaMessage::Timeline {
+                    position: 0.0,
+                    duration: 0.0,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// 系统实现：Windows 用 WASAPI 回环与 SMTC，其它平台不产生数据。
 struct SystemSources;
 
@@ -356,8 +500,8 @@ impl MediaSources for SystemSources {
     }
 
     fn start_media(&self) -> Box<dyn Send> {
-        Box::new(media::MediaWatcher::start(|message| {
-            WpeMediaHub::global().broadcast(WpeMediaKind::Media, &message)
+        Box::new(media::MediaWatcher::start(|output| {
+            WpeMediaHub::global().broadcast_media(output.flavor, &output.message)
         }))
     }
 }
@@ -489,12 +633,14 @@ mod tests {
             "wallpaper",
             frame("a"),
             WpeMediaKind::Audio,
+            WpeMediaFlavor::Web,
             Box::new(old.clone()),
         );
         hub.subscribe(
             "wallpaper",
             frame("a"),
             WpeMediaKind::Audio,
+            WpeMediaFlavor::Web,
             Box::new(new.clone()),
         );
         assert_eq!(count(&hub), 1);
@@ -513,24 +659,28 @@ mod tests {
             "main",
             frame("a"),
             WpeMediaKind::Audio,
+            WpeMediaFlavor::Web,
             Box::new(Sink::default()),
         );
         hub.subscribe(
             "main",
             frame("a"),
             WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
             Box::new(Sink::default()),
         );
         hub.subscribe(
             "wallpaper",
             frame("a"),
             WpeMediaKind::Audio,
+            WpeMediaFlavor::Web,
             Box::new(Sink::default()),
         );
         hub.subscribe(
             "main",
             frame("b"),
             WpeMediaKind::Audio,
+            WpeMediaFlavor::Web,
             Box::new(Sink::default()),
         );
         hub.release_frame("main", &frame("a"));
@@ -550,12 +700,14 @@ mod tests {
             "wallpaper",
             frame("a"),
             WpeMediaKind::Audio,
+            WpeMediaFlavor::Web,
             Box::new(Sink::default()),
         );
         hub.subscribe(
             "wallpaper",
             frame("b"),
             WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
             Box::new(Sink::default()),
         );
         hub.release_label("wallpaper");
@@ -572,6 +724,7 @@ mod tests {
             "wallpaper",
             frame("a"),
             WpeMediaKind::Audio,
+            WpeMediaFlavor::Web,
             Box::new(sink.clone()),
         );
         sink.dead.store(true, Ordering::SeqCst);
@@ -591,6 +744,7 @@ mod tests {
             "wallpaper",
             frame("a"),
             WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
             Box::new(first.clone()),
         );
         assert_eq!(counters.media_started.load(Ordering::SeqCst), 1);
@@ -599,8 +753,8 @@ mod tests {
             position: 3.0,
             duration: 10.0,
         };
-        hub.broadcast(WpeMediaKind::Media, &timeline);
-        hub.broadcast(WpeMediaKind::Media, &playback);
+        hub.broadcast_media(WpeMediaFlavor::Web, &timeline);
+        hub.broadcast_media(WpeMediaFlavor::Web, &playback);
         assert_eq!(
             first.received(),
             vec![
@@ -615,6 +769,7 @@ mod tests {
             "main",
             frame("b"),
             WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
             Box::new(late.clone()),
         );
         assert_eq!(
@@ -638,6 +793,7 @@ mod tests {
             "wallpaper",
             frame("a"),
             WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
             Box::new(sink.clone()),
         );
         // 关闭时只收到 enabled: false，不开监视
@@ -649,7 +805,7 @@ mod tests {
 
         hub.set_media_enabled(true);
         assert_eq!(counters.media_started.load(Ordering::SeqCst), 1);
-        hub.broadcast(WpeMediaKind::Media, &WpeMediaMessage::Playback { state: 2 });
+        hub.broadcast_media(WpeMediaFlavor::Web, &WpeMediaMessage::Playback { state: 2 });
 
         hub.set_media_enabled(false);
         assert_eq!(counters.media_stopped.load(Ordering::SeqCst), 1);
@@ -669,6 +825,7 @@ mod tests {
             "main",
             frame("b"),
             WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
             Box::new(late.clone()),
         );
         assert_eq!(
@@ -706,5 +863,299 @@ mod tests {
         assert_eq!(value["contentType"], "music");
         let kind: WpeMediaKind = serde_json::from_value(serde_json::json!("audio")).unwrap();
         assert_eq!(kind, WpeMediaKind::Audio);
+    }
+
+    fn props(title: &str) -> WpeMediaMessage {
+        WpeMediaMessage::Properties {
+            title: title.into(),
+            artist: String::new(),
+            sub_title: String::new(),
+            album_title: String::new(),
+            album_artist: String::new(),
+            genres: String::new(),
+            content_type: "music".into(),
+        }
+    }
+
+    fn scene_thumb(png: &str) -> WpeMediaMessage {
+        WpeMediaMessage::SceneThumbnail {
+            png: png.into(),
+            colors: if png.is_empty() {
+                [[0; 3]; 5]
+            } else {
+                [[1, 2, 3]; 5]
+            },
+        }
+    }
+
+    #[test]
+    fn flavors_get_their_own_messages_and_replays() {
+        let (hub, counters) = hub(true);
+        let web = Sink::default();
+        let scene = Sink::default();
+        hub.subscribe(
+            "main",
+            frame("web"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
+            Box::new(web.clone()),
+        );
+        hub.subscribe(
+            "main",
+            frame("scene"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Scene,
+            Box::new(scene.clone()),
+        );
+        // 两种订阅共用一个监视
+        assert_eq!(counters.media_started.load(Ordering::SeqCst), 1);
+
+        let web_thumb = WpeMediaMessage::Thumbnail {
+            thumbnail: "data:x".into(),
+            primary_color: "rgb(1, 2, 3)".into(),
+            secondary_color: "rgb(1, 2, 3)".into(),
+            tertiary_color: "rgb(1, 2, 3)".into(),
+            text_color: "rgb(1, 2, 3)".into(),
+            high_contrast_color: "rgb(1, 2, 3)".into(),
+        };
+        hub.broadcast_media(WpeMediaFlavor::Web, &props("web title"));
+        hub.broadcast_media(WpeMediaFlavor::Web, &web_thumb);
+        hub.broadcast_media(WpeMediaFlavor::Scene, &props("scene title"));
+        hub.broadcast_media(WpeMediaFlavor::Scene, &scene_thumb("AAAA"));
+        hub.broadcast_media(
+            WpeMediaFlavor::Scene,
+            &WpeMediaMessage::Playback { state: 2 },
+        );
+        // 广播不串
+        assert_eq!(
+            web.received(),
+            vec![
+                WpeMediaMessage::Status { enabled: true },
+                props("web title"),
+                web_thumb.clone()
+            ]
+        );
+        assert_eq!(
+            scene.received(),
+            vec![
+                WpeMediaMessage::Status { enabled: true },
+                props("scene title"),
+                scene_thumb("AAAA"),
+                WpeMediaMessage::Playback { state: 2 }
+            ]
+        );
+
+        // 晚来的订阅各补自己 flavor 的缓存
+        let late_web = Sink::default();
+        hub.subscribe(
+            "w2",
+            frame("a"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
+            Box::new(late_web.clone()),
+        );
+        assert_eq!(
+            late_web.received(),
+            vec![
+                WpeMediaMessage::Status { enabled: true },
+                props("web title"),
+                web_thumb
+            ]
+        );
+        let late_scene = Sink::default();
+        hub.subscribe(
+            "w3",
+            frame("a"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Scene,
+            Box::new(late_scene.clone()),
+        );
+        assert_eq!(
+            late_scene.received(),
+            vec![
+                WpeMediaMessage::Status { enabled: true },
+                props("scene title"),
+                scene_thumb("AAAA"),
+                WpeMediaMessage::Playback { state: 2 }
+            ]
+        );
+    }
+
+    #[test]
+    fn scene_replay_skips_default_values() {
+        let (hub, _) = hub(true);
+        hub.subscribe(
+            "main",
+            frame("first"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Scene,
+            Box::new(Sink::default()),
+        );
+        // title 空不补属性（哪怕别的字段非空）、无封面不补、状态 0 不补、duration 0 不补
+        hub.broadcast_media(
+            WpeMediaFlavor::Scene,
+            &WpeMediaMessage::Properties {
+                title: String::new(),
+                artist: "a".into(),
+                sub_title: String::new(),
+                album_title: String::new(),
+                album_artist: String::new(),
+                genres: String::new(),
+                content_type: "music".into(),
+            },
+        );
+        hub.broadcast_media(WpeMediaFlavor::Scene, &scene_thumb(""));
+        hub.broadcast_media(
+            WpeMediaFlavor::Scene,
+            &WpeMediaMessage::Playback { state: 0 },
+        );
+        hub.broadcast_media(
+            WpeMediaFlavor::Scene,
+            &WpeMediaMessage::Timeline {
+                position: 5.0,
+                duration: 0.0,
+            },
+        );
+        let late = Sink::default();
+        hub.subscribe(
+            "main",
+            frame("late"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Scene,
+            Box::new(late.clone()),
+        );
+        assert_eq!(
+            late.received(),
+            vec![WpeMediaMessage::Status { enabled: true }]
+        );
+        // duration 非 0 才补时间轴
+        let timeline = WpeMediaMessage::Timeline {
+            position: 5.0,
+            duration: 200.0,
+        };
+        hub.broadcast_media(WpeMediaFlavor::Scene, &timeline);
+        let later = Sink::default();
+        hub.subscribe(
+            "main",
+            frame("later"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Scene,
+            Box::new(later.clone()),
+        );
+        assert_eq!(
+            later.received(),
+            vec![WpeMediaMessage::Status { enabled: true }, timeline]
+        );
+    }
+
+    #[test]
+    fn disabling_integration_resets_scene_subscribers_and_clears_cache() {
+        let (hub, _) = hub(true);
+        let scene = Sink::default();
+        let web = Sink::default();
+        hub.subscribe(
+            "main",
+            frame("scene"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Scene,
+            Box::new(scene.clone()),
+        );
+        hub.subscribe(
+            "main",
+            frame("web"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
+            Box::new(web.clone()),
+        );
+        hub.broadcast_media(WpeMediaFlavor::Scene, &props("t"));
+        hub.broadcast_media(WpeMediaFlavor::Scene, &scene_thumb("AAAA"));
+        hub.broadcast_media(
+            WpeMediaFlavor::Scene,
+            &WpeMediaMessage::Playback { state: 0 },
+        );
+        hub.broadcast_media(
+            WpeMediaFlavor::Scene,
+            &WpeMediaMessage::Timeline {
+                position: 0.0,
+                duration: 0.0,
+            },
+        );
+        let before = scene.received().len();
+        hub.set_media_enabled(false);
+        let got = scene.received()[before..].to_vec();
+        // Status{false} 之后只复位缓存里不是缺省值的类别（属性、封面），状态 0 与时间轴 0/0 已是缺省值
+        assert_eq!(
+            got,
+            vec![
+                WpeMediaMessage::Status { enabled: false },
+                WpeMediaMessage::Properties {
+                    title: String::new(),
+                    artist: String::new(),
+                    sub_title: String::new(),
+                    album_title: String::new(),
+                    album_artist: String::new(),
+                    genres: String::new(),
+                    content_type: String::new(),
+                },
+                scene_thumb(""),
+            ]
+        );
+        // 网页订阅只收 Status
+        assert_eq!(
+            web.received().last(),
+            Some(&WpeMediaMessage::Status { enabled: false })
+        );
+        // 重新打开：缓存已清空，新订阅只有 Status
+        hub.set_media_enabled(true);
+        let late = Sink::default();
+        hub.subscribe(
+            "main",
+            frame("late"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Scene,
+            Box::new(late.clone()),
+        );
+        assert_eq!(
+            late.received(),
+            vec![WpeMediaMessage::Status { enabled: true }]
+        );
+    }
+
+    #[test]
+    fn audio_subscription_ignores_flavor() {
+        let (hub, _) = hub(true);
+        let sink = Sink::default();
+        hub.subscribe(
+            "main",
+            frame("scene"),
+            WpeMediaKind::Audio,
+            WpeMediaFlavor::Scene,
+            Box::new(sink.clone()),
+        );
+        hub.broadcast(WpeMediaKind::Audio, &audio(0.5));
+        assert_eq!(sink.received(), vec![audio(0.5)]);
+    }
+
+    #[test]
+    fn scene_thumbnail_serializes_like_the_agreed_shape() {
+        let value = serde_json::to_value(WpeMediaMessage::SceneThumbnail {
+            png: "iVBO".into(),
+            colors: [
+                [1, 2, 3],
+                [4, 5, 6],
+                [7, 8, 9],
+                [10, 11, 12],
+                [255, 255, 255],
+            ],
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "type": "sceneThumbnail",
+                "png": "iVBO",
+                "colors": [[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12], [255, 255, 255]],
+            })
+        );
     }
 }

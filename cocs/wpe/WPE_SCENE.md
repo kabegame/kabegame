@@ -478,7 +478,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
   | `colorBlendMode` | 没有实测，推断属图层结构 | 重编译 |
   | 相机 `eye` / `center` / `up` | 不能绑 | 不登记绑定 |
   | COMBO | 不能绑，写成对象时进程断言中止 | 报 `combo:user-binding` |
-  | `usertextures` | 下一帧开头重跑材质的纹理解析，按当前值换该槽纹理 | 属性来源就地换（解码完的下一帧，P11b，见「用户纹理（P11b）」）；封面、快捷方式照报 `usertextures:system` / `usertextures:usershortcut` |
+  | `usertextures` | 下一帧开头重跑材质的纹理解析，按当前值换该槽纹理 | 属性来源就地换（解码完的下一帧，P11b，见「用户纹理（P11b）」）；封面同一张来源表、同帧换（P11c，见「媒体（P11c）」）；快捷方式照报 `usertextures:usershortcut` |
 
 - **没有任何绑定引用的属性**（只给脚本用、或作者声明了却没绑）：P3a 什么都不做，不再重编译。
 - **目标用 scene.json 坐标做稳定键**（`objects/<i>`、`objects/<i>/effects/<j>/passes/<k>`、`general`），不用 bundle 下标：未启用的 effect 不进 bundle，下标会随属性值移位；3b 的脚本 realm 跨重编译保留，脚本手里的图层对象也要按这个键找回。
@@ -544,7 +544,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 | 图层对象 | `name`、`id`、`size`（只读写入无效）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`（`Vec2`，P5a） |
 | `thisObject` 的其它 owner | general 的 `bloom`、`bloom*` 泛光参数、`GENERAL_FIELDS` 的 17 个字段（含 P5a 的 `zoom`），以及写入走重编译的 `hdr`；effect 的 `visible`；材质 pass 中全部带 `meta.material` 的常量。`fog*`、`wind*`、`gravity*` 等还没有 |
 
-**本机语料里出现、当前未提供的 API**：运行时报错最多的是 `thisLayer.getParent` / `getChildren` / `getTextureAnimation`、声音图层 `play` / `stop` / `isPlaying`、`input.cursorWorldPosition`、图层 `getVideoTexture`；还有 `engine.registerAsset`、`thisObject.getMaterial`。静态扫描另见 `getTransformMatrix`、`thisScene.createLayer` / `sortLayer` / `destroyLayer`、图层 `setFrame` / `getEffect` / `getAnimationLayer`、`input.cursorLeftDown`；文本字段 `text`、`maxwidth`、`horizontalalign`、`verticalalign` 及 `cursor*` / `media*Changed` 回调也未接通。语料中的 `scene.getLayer` 是样本伪代码自身的未定义变量；`localStorage.remove`、`console.warn`、`originalOrigin` 也不是应补的 WPE API。
+**本机语料里出现、当前未提供的 API**：运行时报错最多的是 `thisLayer.getParent` / `getChildren` / `getTextureAnimation`、声音图层 `play` / `stop` / `isPlaying`、`input.cursorWorldPosition`、图层 `getVideoTexture`；还有 `engine.registerAsset`、`thisObject.getMaterial`。静态扫描另见 `getTransformMatrix`、`thisScene.createLayer` / `sortLayer` / `destroyLayer`、图层 `setFrame` / `getEffect` / `getAnimationLayer`、`input.cursorLeftDown`；文本字段 `text`、`maxwidth`、`horizontalalign`、`verticalalign` 及 `cursor*` / `media*Changed` 回调也未接通（`media*Changed` 在 P11c 接通，见「媒体（P11c）」）。语料中的 `scene.getLayer` 是样本伪代码自身的未定义变量；`localStorage.remove`、`console.warn`、`originalOrigin` 也不是应补的 WPE API。
 
 **脚本 API 检查**（2026-11-07 用户改定，提交 `c8ebf098`，`compile/scriptApi.ts`）：改定前不做静态扫描，未实现的 API 在调用时报错、只禁用那个回调，可能画出半成品。工坊 3304642534 就是这样：可视化脚本在 `init` 里调 `thisScene.createLayer` 造另外 63 根音频条，`init` 报错被禁用，`update` 每帧抛错又被脚本自己的 `try/catch` 吞掉，画面静默缺了整组条。现在编译期扫描每段会执行的脚本，用到下表成员就报 `script:api:<分组>.<成员>`、整张退回预览图；运行期的普通错误仍只进脚本诊断。
 
@@ -553,7 +553,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 - **匹配**：词法扫描成员访问（`a.b`、`a?.b`、`a["b"]`，跳过注释、字符串和正则），不是完整解析器。`root` 项只认根对象直接访问（`play`、`stop`、`text`、`volume` 这类通用名字只认 `thisLayer.` / `thisObject.`）；`any` 项任意接收者都算，只收名字足够独特的，每项写明理由。子对象（纹理动画、视频纹理、动画层等）只能经表里的入口方法拿到，不另收。
 - **范围**：只扫 `collectScripts` 收集的 scene.json 脚本；导入说明符无效、整段不会求值的不扫。场景的风、重力字段在能力表里中性，但脚本读写它们照报（脚本读到 `undefined` 会算出 NaN）。
 - **3304642534**：报 `script:api:thisScene.createLayer`、`script:api:thisScene.sortLayer`，整场只剩这两项（加检查之前能渲染）。
-- **导出回调**（P6 前置，2026-11-11）：WPE 按固定的 19 个回调名调脚本的导出函数（`WPE_SCRIPT_CALLBACKS`，报告 C 节），运行时只调 `init`、`update`、`applyUserProperties`、`destroy`、`animationEvent`（`script/runtime.ts` 的 `RUNTIME_CALLBACKS`；`animationEvent` 是 P10b 加的，见「关键帧动画」）。脚本导出了其余回调（`MISSING_SCRIPT_CALLBACKS`：`cursor*` 七个、`media*Changed` 五个、`resizeScreen`、`applyGeneralSettings`）时报 `script:callback:<名>`、整张退回，否则场景会静默缺交互。导出名由 `scriptExports` 用同一套词法认出（函数、类、`const` / `let` / `var` 含解构、`export { … }`，宁可多认；`export default` 与 `export * from` 不认），2026-11-11 对语料 3491 段与 TypeScript 解析器逐段比对，导出名全部一致。实现一个回调就从表里删一个、加进 `RUNTIME_CALLBACKS`，`api.test.ts` 核对两者合起来恰好是 19 个。语料 165 张里 53 张因此多报（光标 45 张、媒体 28 张，这些场景都另有阻塞），能渲染的 36 张不变。
+- **导出回调**（P6 前置，2026-11-11）：WPE 按固定的 19 个回调名调脚本的导出函数（`WPE_SCRIPT_CALLBACKS`，报告 C 节），运行时只调 `init`、`update`、`applyUserProperties`、`destroy`、`animationEvent`（`script/runtime.ts` 的 `RUNTIME_CALLBACKS`；`animationEvent` 是 P10b 加的，见「关键帧动画」）。脚本导出了其余回调（`MISSING_SCRIPT_CALLBACKS`：`cursor*` 七个、`media*Changed` 五个、`resizeScreen`、`applyGeneralSettings`）时报 `script:callback:<名>`、整张退回，否则场景会静默缺交互。导出名由 `scriptExports` 用同一套词法认出（函数、类、`const` / `let` / `var` 含解构、`export { … }`，宁可多认；`export default` 与 `export * from` 不认），2026-11-11 对语料 3491 段与 TypeScript 解析器逐段比对，导出名全部一致。实现一个回调就从表里删一个、加进 `RUNTIME_CALLBACKS`，`api.test.ts` 核对两者合起来恰好是 19 个。语料 165 张里 53 张因此多报（光标 45 张、媒体 28 张，这些场景都另有阻塞），能渲染的 36 张不变。P11c 起五个 `media*Changed` 从表里删掉、由运行时的 `mediaEvent` 调（见「媒体（P11c）」）。
 - **登记顺序**（P10b，2026-11-14 实测 `p10b-order`）：WPE 的脚本列表按「`general` 的字段 → 按 `objects` 数组顺序，每个对象先自己的字段、再它的 `effects`（每个 effect 先 `visible`，再按 pass 顺序的常量）」登记，同一层按键名排序（jsoncpp 的字节序），`init`、`update`、事件派发都按这个顺序；关键帧动画的登记顺序相同。`collectScripts` 与 `collectAnimations` 共用 `compile/registration.ts` 的 `registrationKeys`。WPE 写的 `scene.json` 键本来就按字母序，和按书写顺序遍历的差别只在 effect 的位置（书写顺序里 `effects` 在 `origin`、`visible` 之前）；语料 27 张的脚本先后因此改变。`instanceoverride` 在字段里的位置按字母序是推断。
 - **Unicode 空白**：分词时 U+00A0、U+3000、U+FEFF 等是分隔符、不进标识符。语料有脚本写成 `export` + U+00A0 + `function`（3409595232 等），以前整串被切成一个词，导出与成员访问都认不出。
 
@@ -1551,7 +1551,7 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 
 ## 用户纹理（P11b）
 
-材质 pass 的 `usertextures` 让某个纹理槽在运行中换成场景外的图。WPE 只有一套做法，来源有三种：用户属性（`scenetexture`）、系统伪属性（媒体封面）、快捷方式图标。加载材质时每个有效项登记成「槽号 → 来源」；来源的值变了，下一帧开头重跑这个材质的纹理解析，每个槽按当前值取纹理。P11b 照这个形状做、只接属性来源，封面（P11c）与图标（P11d）以后往同一张来源表里放数据。依据：读码 [rea-p11-textures](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11-textures.md) 第 1、2 节与 [rea-p11b](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11b.md)，实测 [p11-REPORT](../../.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md)「属性纹理」「P11b 补测」（M1–M9），计划、实施记录与走查见 [phase-11b-usertextures.md](../../.claude/plans/wpe-import/3-scene/phase11/phase-11b-usertextures.md)。面板、取值与 `file:` 放行见 [WPE 导入文档](WPE_IMPORT.md)「用户属性」。
+材质 pass 的 `usertextures` 让某个纹理槽在运行中换成场景外的图。WPE 只有一套做法，来源有三种：用户属性（`scenetexture`）、系统伪属性（媒体封面）、快捷方式图标。加载材质时每个有效项登记成「槽号 → 来源」；来源的值变了，下一帧开头重跑这个材质的纹理解析，每个槽按当前值取纹理。P11b 照这个形状做、只接属性来源，封面（P11c）与图标（P11d）以后往同一张来源表里放数据；P11c 已接上封面（见「媒体（P11c）」）。依据：读码 [rea-p11-textures](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11-textures.md) 第 1、2 节与 [rea-p11b](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11b.md)，实测 [p11-REPORT](../../.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md)「属性纹理」「P11b 补测」（M1–M9），计划、实施记录与走查见 [phase-11b-usertextures.md](../../.claude/plans/wpe-import/3-scene/phase11/phase-11b-usertextures.md)。面板、取值与 `file:` 放行见 [WPE 导入文档](WPE_IMPORT.md)「用户属性」。
 
 | 层 | 位置 | 做什么 |
 |---|---|---|
@@ -1584,7 +1584,7 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 - 扩展名转小写再判断（`mediaKind`）。GIF 与视频按值共用一份（引用计数），每个纹理名各一份帧状态；不进按值的解码缓存，换走再选回来从头开始（同 WPE）。
 
 **能力表**：不再整个报 `material:usertextures` / `effect:*:pass:usertextures`，按项细分照报：
-- `usertextures:system`（封面，等 P11c）、`usertextures:usershortcut`（等 P11d）；
+- `usertextures:usershortcut`（等 P11d）；`usertextures:system`（封面）P11c 起不再报，见「媒体（P11c）」；
 - `usertextures:particle-sheet`：粒子材质的槽 0。WPE 的帧表在加载时按槽 0 定一次，运行中换图沿用旧帧表、把用户图当精灵表取格子（M4），语料 2 张 3 项，不做；
 - `usertextures:keepaspect`、`usertextures:reference`：对象项的 `keepaspect: true` 与 `usertexturereference`，读码清楚、已实现，语料 0 处，照报到有实测；
 - `usertextures:rendertarget:placeholder`（缺省是没被依赖的 `_rt_imageLayerComposite_*`，P8 绑棋盘格）、`usertextures:rendertarget:runtime`（缺省是 `_rt_FullFrameBuffer` 或 fbo）：语料 0 处。
@@ -1613,6 +1613,105 @@ pass 级的 `keepaspect` WPE 不读，改中性。
 - 显存：用户纹理按原分辨率、只裁不缩（6000×3000 → 3000×3000），一张 4K 方图约 36 MB；合成 RT 池只增不减，反复换不同尺寸的图时旧尺寸的 RT 不回收。
 
 **语料**（183 个工程）：能渲染 88 → 90（`3462279189`、`3783690410`，原来都只差 `usertextures`），没有场景掉出；去掉 `material:usertextures` 30 张、`effect:*:pass:usertextures` 21 张，新增 `usertextures:system` 19 张、`:usershortcut` 3 张、`:particle-sheet` 2 张。用到 `usertextures` 的场景多数还差媒体回调、脚本 API、文本、关键帧等别的节。
+
+## 媒体（P11c）
+
+场景脚本的五个媒体回调（`mediaStatusChanged` / `mediaPlaybackChanged` / `mediaPropertiesChanged` / `mediaThumbnailChanged` / `mediaTimelineChanged`）与封面纹理（`$mediaThumbnail` / `$mediaPreviousThumbnail`）。WPE 的媒体集成是三段：
+1. 子进程 `winrtutil64.exe` 读系统的当前媒体会话，有变化才发；
+2. 主进程按 `windowupdaterate` 定时合并；
+3. 场景每帧在脚本阶段开头派发。
+
+P11c 照这三段做，每段放在对应的位置。依据：
+- 读码 [rea-p11-media](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11-media.md) 与 [rea-p11-textures](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11-textures.md) 第 3、4 节；
+- 实测 [p11-REPORT](../../.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md)「媒体回调与封面」；
+- 计划、约定与走查见 [phase-11c-media.md](../../.claude/plans/wpe-import/3-scene/phase11/phase-11c-media.md)。
+
+**取数据**（Rust，`src-tauri/kabegame/src/wpe_media/`）：
+- 网页壁纸的 `WpeMediaHub` 与监视线程（Phase 8）一起用：线程读一次系统数据，交给两个投影（`projection.rs`，纯逻辑，单测喂假读数）。
+  - 网页投影保持 Phase 8：时间轴外推、封面缩到 512、`contentType` 缺省 `music`。
+  - 场景投影照 `winrtutil`，见下表。
+- 订阅按调用方文档定投影：场景宿主的入口文档收场景投影，网页壁纸目录里的文档收网页投影，页面不能自己选。
+
+| 项 | 场景投影的取值 |
+|---|---|
+| 属性 | 七个串；`contentType` 只有 `music` / `video` / `image` / `""`（`PlaybackType` 1 / 2 / 3 / 其余）；`genres` 用 `,` 连接；超长整段清空（按 UTF-8 字节：`title` / `artist` / `genres` > 1024，另外三个 > 256） |
+| 封面 | 原尺寸 PNG（base64）加五色（`sceneThumbnail { png, colors }`），Spotify 预处理之后；比较 PNG 字节，不同才发 |
+| 播放 | Playing 1、Paused 2，其余 0 |
+| 时间轴 | `Position`、`EndTime` 各自向零截断到整秒，不外推；只在会话切换与 `TimelinePropertiesChanged` 时读，播放状态变化不重推 |
+| 去重 | 每类和上次发出的值比，初值是缺省值（所以缺省值一开始不发）；没有会话时每类回到缺省值，不同才发 |
+
+- **信号的处理**照 `winrtutil` 主循环（`media.rs` 的 `collect_batch` / `plan_batch`）：
+  - 收到第一个信号后把之后 100 ms 内到的攒成一批；
+  - 会话上的三个事件带挂接代数，旧代数的丢掉，等于「丢掉不是当前会话发来的事件」；
+  - 一批里有会话切换就只重新挂接（挂接会全部重读）。
+  - 依据：走查实测会话退出时它先报一次播放状态，约 17 ms 后系统才切会话，WPE 不发那条。
+- **配色**（`colors.rs`）照 WPE，两个投影共用，在原尺寸、Spotify 预处理之后的像素上算：
+  - 三色：alpha ≥ 16 的像素进 360 格色相直方图，权重 `(int)(M·s·100)`；
+  - `highContrastColor`：主色对黑的对比度 < 2.5 时白、否则黑；
+  - `textColor`：次色（对比度 ≥ 2.5 且大于第三色的）/ 第三色（≥ 2.5）/ 否则同 `highContrastColor`；
+  - 没有封面时五色全 0；有封面但没选中任何格（全透明、全灰）时三色黑、两个黑白色白。
+  - 读码对这两个字段名的对应标反了，以实测为准。
+- **Spotify 预处理**：来源 App ID 以 `spotify` 开头时裁掉透明边或把角标区改灰。两处读码标【推】的细节（判定行、「否则若」的归属）按 `projection.rs` 的注释实现，测试只覆盖裁切分支。
+- **订阅的补发**照 `AddMediaListener`：先发 `status`；监视在跑时再补非空的几类（`title` 非空、有封面、状态非 0、`duration` 非 0）。
+- **「媒体集成」开关**：关掉时场景订阅当场收到 `status { enabled: false }` 和非缺省类的复位。
+- 非 Windows 没有数据源，订阅被拒（`TODO:[WPE_SCENE]`）。
+
+**合并**（宿主 `src/media/pending.ts`）：
+- 消息先进 `MediaPending`，照 WPE 主进程的待发事件：同类只留最后一条，flags 按位或（1 属性、2 封面、4 播放、8 时间轴、0x10 状态）。
+- 封面收到就解码（base64 → `createImageBitmap`），解完才并入，后收到的胜出。
+- 计时器按 WPE `config.json` 的 `windowupdaterate`（钳到 50–5000，读不到用 1000）刷新：先切出 `flags & 0x1d` 的一条，再切出封面一条，只清 flags。
+- 订阅被拒时当场推一条 `{ enabled: false }`。
+
+**派发**（`src/media/scene.ts`、`events.ts`，`script/runtime.ts` 的 `mediaEvent`）：
+- 每帧在 `beforeFrame` 的脚本阶段最开头（光标派发之后、动画之前）取空队列。没有脚本的场景也取（只有封面纹理）；暂停时积压，恢复后第一帧全部派发。
+- 每条事件按 WPE 的固定顺序：
+  1. 有封面先换名：`mediaThumbnail_<N>.system`，计数从 1 起，相同图片、没有封面也换名。增量 `$mediaThumbnail`（有旧名时另带 `$mediaPreviousThumbnail`）走现有的属性路径：绑定表命中 `user-texture` 就地换图，`engine.userProperties` 读到名字字符串，导出了 `applyUserProperties` 的脚本收到 `{}`（增量没有 `type`）。
+  2. 再按 状态 → 播放 → 属性 → 封面 → 时间轴 调回调：发给全部已 `init`、导出了该回调的脚本，按登记顺序，返回值丢弃，出错只禁用这个回调。
+- 事件对象是 realm 里的普通对象，键序照 dll：
+  - 颜色是 `Vec3`，分量 `fround(c / 255)`；`position` / `duration` 是单精度；
+  - 只有 `MediaPlaybackEvent` 是全局类（在 `baseclasses.js` 里）。
+- `init` 之后、首次 `applyUserProperties` 之前，按场景媒体状态补发一轮（`replayAfterInit`），新建时 `enabled` 为真，所以通常是一次 `{ enabled: true }`。
+- `SceneMedia` 与订阅跨重编译保留，`SceneBundle.media`（有脚本导出五个回调之一，或有 `system` 来源的槽）时加载即订阅、只订一次。
+
+**封面纹理**：
+- `system` 来源和属性来源同样登记 `user-texture` 绑定（`isDynamicSource`）。
+- 来源表多一个 `provide(名字, 位图 | null)`：封面名字不读文件，按交来的图当场生效；只留最近两张与仍被引用的；`null` 是缺省纹理。
+- 裁切、纹理名、GPU 侧同属性图片。位图在派发前已解码，换纹理和 WPE 一样同帧完成。
+
+**dev 探针**：
+- `host.media()`：订阅状态、最近的消息、待发 flags、队列长度、场景媒体状态。
+- `renderFrame` 的 `media: [{ frame, messages }]`：第 `frame` 帧之前把这批消息并成一次刷新、派发，不走计时器；配 `scripts: { consoleGrep }` 看回调。
+- vite `/render` 与 MCP `render_scene` 已能转发 `media`，要重启 vite / MCP 才生效。
+
+**实测与走查**（SMTC 夹具同时驱动 WPE 与 Kabegame，`ignore/p11/c/`）：
+- 生成工程 `p11-media` 的回调序列逐行相同：
+  - 封面换名与 previous 轮换；
+  - 超长清空（1025 字节清空、1024 保留、专辑名 257 字节清空）；
+  - 停止、整秒时间轴、视频 / 图片类型；
+  - 切到别的会话、新会话还没数据时的复位（`contentType` 为空串）、清空显示信息；
+  - 颜色逐值相同。
+- 两块封面槽（1:1 当前、1:4 上一张）与 WPE 抓帧逐像素相同。
+- 重设同一张封面：只重设时两边都不发；连同改标题时系统先报一次没有封面、隔约 5 ms 再报原图，WPE 因此再发一次封面，我们合并后同样一次。
+- 三张真实壁纸的复制工程：
+  - `2932157836`：除挂 `spin` 的圆形封面（转角跟 `g_Time`）外整帧逐像素相同；
+  - `3823859141`：除唱片的 `spin` 外只有文字阴影的模糊边缘差 ≤ 8；
+  - `3487328036`：封面对象在复制工程里两边都没画出（缩放挂着音频脚本），背景只差后处理档位。
+
+**已知差异**：
+- 首次拿到会话数据：WPE 的子进程等封面解码完才送属性，属性与封面晚一次刷新；我们同步解码，同一次到。
+- 新订阅的补发：WPE 对「已有别的监听者」的场景同步补发、下一帧就派发；我们和别的消息一样等下一次刷新，最多晚一个间隔。
+- 关掉「媒体集成」：我们当场发 `enabled: false` 与复位；读码推断 WPE 要等重新打开才一起到（未实测）。
+- 隐藏的 iframe 里计时器被 Chromium 节流，合并更粗（那时场景本身也暂停）。
+- 退回预览图期间媒体事件丢掉，之后能渲染时等下一次变化才跟上。
+- 重编译与封面事件撞在一起时，脚本可能多收一次 `applyUserProperties({})`。
+- JPEG 封面的配色：解码库不同（WPE 用 FreeImage），平滑渐变的封面主色可能落到别的格；PNG 逐值相同。
+- 超长字段的去重按清空后的值比：读码没说清 WPE 比哪个，两个不同的超长标题连着来时我们只发一次。
+
+**语料**（219 个工程，2026-11-14）：能渲染 147 → 157，去掉的只有六个键（`script:callback:media*` 五个、`usertextures:system`），没有新增键、没有场景掉出。解锁：
+- `2932157836`、`2974757317`、`3219908811`、`3355291946`、`3470764447`；
+- `3482471820`、`3487328036`、`3823859141`、`3823864170`、`3837699827`。
+
+其余用到媒体的场景还差 `combo:SPRITESHEET`、`tex:animation`、图层层级类脚本 API、puppet、`openUserShortcut`（P11d）等。
 
 ## 相机：视差、抖动与缩放（P5a）
 
@@ -1840,7 +1939,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 | 材质覆盖 | 编译材质前，对象的 `instance` 覆盖每个 pass：`combos` 合并，`textures` 按槽合并，规则同 effect 实例覆盖（`bundle.ts` 的 `instanceOverride`）。语料 167 个对象的 `textures` 都是一个非空字符串（94 个 `util/white`、73 个工程纹理），`combos` 都是 `{"version": 2}` | 实测 `p5b-inst` I2、`p5b-inst2` J2：槽 0 换成覆盖的那张 |
 | 合成 RT | 按槽 0 纹理的图像尺寸，不按 `size`（`compositeSize` 的条件是 `solidLayer && !instanced`）。`util/white` 时是 32×32，fbo 跟着它：多 pass effect 的中间结果在 32×32 上，遮罩变糊；单 pass effect 的末 pass 直接上屏，遮罩按自己的分辨率采样 | 实测 `p5b-inst2`：J1 合成 RT 与 fbo 都是 32×32，对照组 900×1000；`instance.textures` 换成补边纹理时取图像尺寸 48×40。整帧 0 差异 |
 | 内缩与颜色 | 不内缩（`solidlayer` 那一位）；颜色照常进基础 pass | 实测：J1、J2 末 pass UV 0–1，J3 直接上屏 UV 正好是图像 / 纹理；`p5b-inst` 的 `g_Color4` = (1, 0.6, 0.2, 1) |
-| 照报 | `features.ts` 的 `checkInstanceFeatures`：<br>- `usertextures`：P11b 起按槽并进基础 pass，用户属性纹理已实现（参考尺寸取对象 `size`、换图后合成 RT 跟着变、强制 `g_Color4 = 1`），媒体封面与 `usershortcut` 照报 `usertextures:system` / `usertextures:usershortcut`，见「用户纹理（P11b）」；<br>- `instance` 缺失或不是对象 → `model:instanced:instance`；<br>- 对象 `size` 不是字符串 → `model:instanced:size`（WPE 按 `"w h"` 读）；<br>- `textures` 不是非空字符串的数组、`combos` 不是对象、其它键 → `object:instance:<键>`。<br>`id` 是编辑器键，不是 instanced 的对象上 `instance` 不读 | 语料：只有 `usertextures` 出现过 |
+| 照报 | `features.ts` 的 `checkInstanceFeatures`：<br>- `usertextures`：P11b 起按槽并进基础 pass，用户属性纹理已实现（参考尺寸取对象 `size`、换图后合成 RT 跟着变、强制 `g_Color4 = 1`），媒体封面 P11c 起支持（见「媒体（P11c）」），`usershortcut` 照报 `usertextures:usershortcut`，见「用户纹理（P11b）」；<br>- `instance` 缺失或不是对象 → `model:instanced:instance`；<br>- 对象 `size` 不是字符串 → `model:instanced:size`（WPE 按 `"w h"` 读）；<br>- `textures` 不是非空字符串的数组、`combos` 不是对象、其它键 → `object:instance:<键>`。<br>`id` 是编辑器键，不是 instanced 的对象上 `instance` 不读 | 语料：只有 `usertextures` 出现过 |
 
 ### 已知差异与只记不补
 
@@ -2370,7 +2469,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **已知差异与只记不补**：
 - `IAnimation` 的 `rate` 是访问器、原型是 `Object.prototype`（WPE 是原生数据属性、只有 `constructor` 的原型），只在脚本检查描述符或原型时看得出。
-- 媒体回调里的 `getAnimation`（如 `2932157836` 的 `mediaThumbnailChanged`）等 P11 接上回调后再走查。
+- 媒体回调里的 `getAnimation`（如 `2932157836` 的 `mediaThumbnailChanged`）等 P11 接上回调后再走查。P11c 走查了 `2932157836` 的复制工程（含这个回调）：等事件后的动画收敛再抓，除挂 `spin` 的圆形封面外整帧逐像素相同；动画播放过程中的逐帧对照没做。
 - 每帧照写的开销：语料最多的 `3400241651`（23 条）`frame()` 每帧均值 0.053 ms，一半在向量拼字符串再解析。
 - dev 探针 `scriptValues` 仍在回放前写一次：同一目标上有动画时探针里动画赢，WPE 里脚本赢（kbp 的 FR 块不受影响）。
 

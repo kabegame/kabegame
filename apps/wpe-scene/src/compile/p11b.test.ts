@@ -69,8 +69,8 @@ describe("parseUserTextures：写法与槽号（rea-p11-textures 第 1 节）", 
       [4, "usershortcut", "sc"],
       [9, "property", "propC"],
     ]);
-    // `type` 写别的值（含 "user"）都按属性处理
-    expect(issues.sort()).toEqual(["usertextures:system", "usertextures:usershortcut"]);
+    // `type` 写别的值（含 "user"）都按属性处理；封面来源（P11c）不再报
+    expect(issues.sort()).toEqual(["usertextures:usershortcut"]);
   });
 
   it('name 不是字符串、keepaspect 不是 JSON true 都不算（`keepaspect: 1`、"true" 是假）', () => {
@@ -481,12 +481,16 @@ describe("compileScene：用户纹理（P11b 步骤 1）", () => {
     expect(bundle.userTextures).toEqual([{ kind: "property", name: "bg" }]);
   });
 
-  it("封面 / 快捷方式来源报细分键；只有属性来源登记绑定", async () => {
+  it("快捷方式来源报细分键；属性与封面（P11c）来源登记绑定，封面来源让 bundle.media 为真", async () => {
     const system = await compile([image(1)], {
       base: { usertextures: [{ name: "$mediaThumbnail", type: "system" }] },
     });
-    expect(system.unsupported).toEqual(["usertextures:system"]);
-    expect(system.bindings.some((b) => b.target.kind === "user-texture")).toBe(false);
+    expect(system.unsupported).toEqual([]);
+    expect(system.bindings.filter((b) => b.target.kind === "user-texture").map((b) => b.property)).toEqual([
+      "$mediaThumbnail",
+    ]);
+    expect(system.userTextures).toEqual([{ kind: "system", name: "$mediaThumbnail" }]);
+    expect(system.media).toBe(true);
     const shortcut = await compile([image(1)], { base: { usertextures: [{ name: "sc", type: "usershortcut" }] } });
     expect(shortcut.unsupported).toEqual(["usertextures:usershortcut"]);
   });
@@ -529,11 +533,11 @@ describe("compileScene：用户纹理（P11b 步骤 1）", () => {
     expect(only.userTextures).toEqual([{ kind: "property", name: "inst" }]);
   });
 
-  it("effect 实例里的封面来源只报 usertextures:system，不再报 effect:e:pass:usertextures", async () => {
+  it("effect 实例里的封面来源不报（P11c），也不报 effect:e:pass:usertextures", async () => {
     const bundle = await compile([
       image(1, { effects: [effect({ usertextures: [null, { name: "$mediaThumbnail", type: "system" }] })] }),
     ]);
-    expect(bundle.unsupported).toEqual(["usertextures:system"]);
+    expect(bundle.unsupported).toEqual([]);
   });
 
   it("槽 0（planned，渲染图填）与没有 textures 的槽上的用户纹理不生效", async () => {
@@ -577,11 +581,11 @@ describe("compileScene：用户纹理（P11b 步骤 1）", () => {
       expect(basePass(bundle).userTextures?.[0].reference).toEqual({ kind: "size", width: 900, height: 1000 });
     });
 
-    it("instance 里的封面来源：usertextures:system（不再是 material:usertextures）", async () => {
+    it("instance 里的封面来源：不报（P11c；也不是 material:usertextures）", async () => {
       const bundle = await compile([
         solid(1, { ...INSTANCE, usertextures: [{ name: "$mediaThumbnail", type: "system" }] }),
       ]);
-      expect(bundle.unsupported).toEqual(["usertextures:system"]);
+      expect(bundle.unsupported).toEqual([]);
     });
 
     it("非 instanced 图层上的 instance.usertextures 不合并（WPE 只在 instanced 时读它）", async () => {

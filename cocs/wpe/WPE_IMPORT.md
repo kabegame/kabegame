@@ -723,13 +723,25 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
   归入 64 段取最大，得到线性原值；静音标志的包、读取失败立即清零，缺包 1 s 后清零），随同一条消息的 `raw` 字段推出，只给场景宿主用
   （它再照 WPE 做每帧的自适应归一化，见 [WPE_SCENE.md](WPE_SCENE.md)）。网页壁纸仍用上面的自定频谱：WPE 给网页壁纸的其实是这份原值
   （rea 3.4），2026-11-13 用户比较两者后选择保留自定算法的观感。
-- **媒体**（`wpe_media/media.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话，WinRT 事件只发信号，读取与比较在
-  线程里做，变化才推：`Properties`（标题、艺人、副标题、专辑、专辑艺人、逗号拼接的流派、`music` / `video` / `image`）、
-  `Thumbnail`（封面字节哈希变了才解码，长边缩到 512 的 PNG data URL；五个颜色由 64×64 缩图的量化直方图取三个主色，文字色取
-  对比度 ≥ 4.5 的次色 / 第三色否则黑白，高对比色取黑白里对比更高的，格式 `rgb(r, g, b)`）、`Playback`（Playing 1、Paused 2、
-  其余 0）、`Timeline`（秒；播放中每秒按 `LastUpdatedTime` 外推；播放状态切换时不重读时间轴，按旧状态外推的位置作新基准，
-  因为很多播放器的读数停在上次跳转；播放器不给时间轴就不推）。没有会话时推 `Playback 0` 与空属性、
-  空封面。新订阅先收 `Status { enabled }`，监视在运行时再补发快照；关「媒体集成」推 `{ enabled: false }` 并停监视、清快照。
+- **媒体**（`wpe_media/media.rs` + `projection.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话
+  （`CurrentSessionChanged`、`SessionsChanged` 都只是重取当前会话），WinRT 事件只发信号，读取与比较在线程里做。
+  信号照 WPE `winrtutil64.exe` 的主循环处理：收到第一个后把 100 ms 内到的攒成一批，会话上的事件带挂接代数、旧会话的丢掉，
+  批里有会话切换就只重新挂接（P11c，会话退出时那条瞬时的播放状态不再发出）。每次读到的数据交给两个投影（P11c），
+  订阅按调用方文档归属其一：
+  - **网页投影**（网页壁纸目录里的文档）：变化才推。
+    - `Properties`：标题、艺人、副标题、专辑、专辑艺人、逗号拼接的流派、`music` / `video` / `image`，缺省 `music`。
+    - `Thumbnail`：封面字节变了才解码，长边缩到 512 的 PNG data URL，格式 `rgb(r, g, b)` 的五个颜色。
+    - `Playback`：Playing 1、Paused 2、其余 0。
+    - `Timeline`：秒；播放中每秒按 `LastUpdatedTime` 外推；播放状态切换时不重读时间轴，按旧状态外推的位置作新基准，
+      因为很多播放器的读数停在上次跳转；播放器不给时间轴就不推。
+    - 没有会话时推 `Playback 0` 与空属性、空封面。
+  - **场景投影**（场景宿主的入口文档）：照 `winrtutil` 取值，整秒时间轴、不外推，原尺寸封面（`sceneThumbnail`），超长字段清空，
+    每类和上次发出的值比，见 [WPE_SCENE.md](WPE_SCENE.md)「媒体（P11c）」。
+  - **五个颜色**两个投影共用（P11c 起照 WPE，`colors.rs`）：在原尺寸、Spotify 预处理之后的像素上算 360 格色相直方图的三色。
+    `textColor` 取对比度 ≥ 2.5 的次色 / 第三色、否则同 `highContrastColor`；`highContrastColor` 按主色对黑的对比度取黑或白。
+    **没有封面时五色全黑**：Phase 8 原来是深灰底白字，P11c 照 WPE 改了。
+  - 新订阅先收 `Status { enabled }`，监视在运行时再补发快照：网页投影补全部；场景投影照 WPE 只补非空的几类。
+  - 关「媒体集成」：推 `{ enabled: false }`（场景订阅另收复位）并停监视、清快照。
 
 Kabegame 自己的会话不过滤。主窗口预览期间，`usePreviewMediaSession` 在应用页主 frame 把 `navigator.mediaSession` 设成
 当前预览项（标题为图片 `displayName`，封面为左上角应用图标）；预览网页壁纸时声音来自 iframe，但垫片不访问 mediaSession，
@@ -750,7 +762,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 - 导入 `video`、`web` 与 `scene`；`application` 只占位并计入跳过。场景壁纸目前只有少数能实时渲染（P1：eagleflag、deep_space、beach），其余在预览、应用背景与桌面显示作者预览图。
 - 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言（`applyGeneralProperties({ language })`）；
   `fps`、`setPaused` 尚未实现。目录内容不监视，下次状态拉取时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
-  WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`；回环会采到 Kabegame 自己的声音（与 WPE 一致）。
+  WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`（取值算法 P11c 起同 WPE）；回环会采到 Kabegame 自己的声音（与 WPE 一致）。
 - 网页壁纸只能监听四个事件（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开 `wpe_web_pull_state`、
   `wallpaper_pong` 与 `wpe_web_media_subscribe`。
 - 网页壁纸页面里跨源 `http(s)` 请求仍受 CORS 约束（WPE 是全局 `--disable-web-security`，Kabegame 不放开）；

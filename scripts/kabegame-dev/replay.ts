@@ -33,6 +33,7 @@ import type {
   ParticleCornersRequest,
   ParticleReplay,
   ParticleTrackRequest,
+  RenderMediaStep,
   RenderScriptsRequest,
   RenderTraceRequest,
   SceneLayerField,
@@ -80,6 +81,9 @@ export const MAX_SCRIPT_VALUES = 64;
 export const MAX_SCRIPT_TEXT = 4096;
 /** `gifDts` 最多这么多项。 */
 export const MAX_GIF_DTS = 10000;
+/** `media` 最多这么多步、每步最多这么多条消息（P11c）。 */
+export const MAX_MEDIA_STEPS = 10000;
+export const MAX_MEDIA_MESSAGES = 64;
 /** `videoTime` 对象最多这么多项（语料一张场景最多 5 段视频）。 */
 export const MAX_VIDEO_TIMES = 64;
 export const TRACE_FIELDS = ["readback", "maxVertices"] as const;
@@ -501,6 +505,30 @@ export function checkGifDts(value: unknown, field = "gifDts"): number[] {
 }
 
 /**
+ * 系统媒体回放（P11c）：`[{ frame, messages }]`，`frame` 是从 1 起的整数，`messages` 是带字符串 `type` 的对象数组（消息内容由探针按
+ * `MediaPending` 的规则读，不认识的 `type` 忽略）。
+ */
+export function checkMedia(value: unknown, field = "media"): RenderMediaStep[] {
+  if (!Array.isArray(value)) fail(field, `要是数组（每项 { frame, messages }），收到 ${shown(value)}`);
+  if (value.length > MAX_MEDIA_STEPS) fail(field, `有 ${value.length} 步，最多 ${MAX_MEDIA_STEPS} 步`);
+  value.forEach((step, index) => {
+    const at = `${field}[${index}]`;
+    if (!isObject(step)) fail(at, `要是 { frame, messages }，收到 ${shown(step)}`);
+    const { frame, messages } = step as { frame?: unknown; messages?: unknown };
+    if (typeof frame !== "number" || !Number.isInteger(frame) || frame < 1)
+      fail(`${at}.frame`, `要是从 1 起的整数（回放的第几帧之前），收到 ${shown(frame)}`);
+    if (!Array.isArray(messages)) fail(`${at}.messages`, `要是消息数组，收到 ${shown(messages)}`);
+    if (messages.length > MAX_MEDIA_MESSAGES)
+      fail(`${at}.messages`, `有 ${messages.length} 条，最多 ${MAX_MEDIA_MESSAGES} 条`);
+    messages.forEach((message, i) => {
+      if (!isObject(message) || typeof (message as { type?: unknown }).type !== "string")
+        fail(`${at}.messages[${i}]`, `要是带字符串 type 的对象，收到 ${shown(message)}`);
+    });
+  });
+  return value as RenderMediaStep[];
+}
+
+/**
  * 逐 draw 轨迹：`true`，或 `{ readback?, maxVertices? }`。`readback` 选哪些 pass 在结束后读回颜色附件（pass 下标，或 pass / 目标纹理标签的
  * 子串）；`maxVertices` 是每个 draw 解码的顶点数（缺省 64）。不认识的字段 400。选中的 pass 读不了（格式、没提交）由探针在轨迹里写明。
  */
@@ -581,6 +609,7 @@ export function checkRenderReplay(body: {
   scripts?: unknown;
   videoTime?: unknown;
   gifDts?: unknown;
+  media?: unknown;
   trace?: unknown;
 }): ParticleReplay | undefined {
   const particles = body.particles === undefined ? undefined : checkReplay(body.particles, "particles");
@@ -612,6 +641,7 @@ export function checkRenderReplay(body: {
   }
   if (body.videoTime !== undefined) checkVideoTime(body.videoTime);
   if (body.gifDts !== undefined) checkGifDts(body.gifDts);
+  if (body.media !== undefined) checkMedia(body.media);
   if (body.trace !== undefined) checkTrace(body.trace);
   return particles;
 }

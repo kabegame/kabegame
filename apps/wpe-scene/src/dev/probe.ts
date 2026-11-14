@@ -121,7 +121,15 @@ import {
   type ProbeScriptsOptions,
   type ProbeScriptsResult,
 } from "./probeScripts";
+import {
+  createProbeMedia,
+  checkProbeMedia,
+  type ProbeMedia,
+  type ProbeMediaResult,
+  type ProbeMediaStep,
+} from "./probeMedia";
 import { prepareProbeTexts } from "./probeTexts";
+import type { UserProperty } from "../compile/bindings";
 import { checkGifDts, prepareProbeUserTextures, userVideoValues } from "./probeUserTextures";
 import {
   checkCanvas,
@@ -364,6 +372,13 @@ export interface RenderFrameOptions {
    */
   gifDts?: number[];
   /**
+   * 系统媒体回放（P11c，`probeMedia.ts`）：`[{ frame, messages }]`，在第 `frame` 帧（1 起，同 `particles.dts` 的第 i 项是第 i + 1 帧；没有回放时读回帧
+   * 是第 1 帧）之前把这批后端场景投影的消息并进一个 `MediaPending`、立刻 `flush` 进场景队列（不走计时器），这一帧脚本阶段开头取空、逐条派发
+   * （封面先换名并换纹理、再依次调 状态 → 播放 → 属性 → 封面 → 时间轴 回调）。封面（`sceneThumbnail`）先等解码完。回调要同时给 `scripts: true`
+   * （可加 `consoleGrep` 拿回调日志）；只有封面纹理的场景不需要脚本。`init` 之后照宿主补发一轮（`{enabled: true}` 等）。
+   */
+  media?: ProbeMediaStep[];
+  /**
    * 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`true`，或 `{ readback?: (pass 下标 | 标签子串)[], maxVertices?: 1–4096 }`。
    * 给了就把设备换成记录器包过的那个（`render/trace.ts`），读回那一帧记下每个 pass、每个 draw 的管线、绑定、uniform（按反射解码）、
    * 顶点与索引（每个 draw 前 `maxVertices` 个，缺省 64），轨迹存成 `<key>.trace.json`；`readback` 选中的 pass 结束后读回它的颜色附件 0，
@@ -424,6 +439,8 @@ export interface RenderFrameResult {
    * 脚本值写进了状态时给。跑脚本时（第 7 批）是读回帧之后结清的次数，只在场景有文本层时给。
    */
   textSyncs?: number;
+  /** 系统媒体回放的结果（P11c，`ProbeMediaResult`）：只在给了 `media` 时有。 */
+  media?: ProbeMediaResult;
   /** 跑场景脚本的结果（第 7 批，`ProbeScriptsResult`）：只在给了 `scripts` 时有。 */
   scripts?: ProbeScriptsResult;
   /**
@@ -497,6 +514,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   // 视频时刻（P9a 步骤 3）的形状同样先查；路径对不对要编译之后才知道（`ProbeVideos` 里查）
   const videoTime = checkVideoTime(options.videoTime);
   const gifDts = checkGifDts(options.gifDts);
+  const mediaSteps = checkProbeMedia(options.media);
   // 逐 draw 轨迹：形状同样先查；没要时为 null，下面不建记录器、设备不包
   const traceOptions = traceOptionsOf(options.trace);
   // 跑场景脚本（第 7 批）：形状与互斥同样先查；没要时为 null，下面不建脚本环境
@@ -613,6 +631,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const profileCamera = frameCamera(scene, state, sceneHeight, perspective, undefined, cameraObjects);
     // 场景脚本（第 7 批）：建好之后读回之前一直在，出错也在 finally 里释放
     let probeScripts: ProbeScripts | null = null;
+    let probeMedia: ProbeMedia | null = null;
     try {
       // 视频（P9a 步骤 3）：每段都 seek 好、当前帧可用之后才接上，profile 帧与读回那一帧的每个 draw 都拷同一帧；没有视频纹理时
       // 没有 draw 会问它，逐字节同以前。读不到 / 解码失败的那段不交出元素（透明），超过总时限在这里抛错
@@ -648,18 +667,31 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         puppets.refresh(stateSink(state));
         scene.setPuppets(puppets);
       }
-      if (scriptsOptions) {
-        const properties = bundle.scripts.list.length
+      const probeProperties: Map<string, UserProperty> =
+        scriptsOptions && bundle.scripts.list.length
           ? await readProbeUserProperties(reader, options.projectDir, options.sceneAssets, options.userProperties)
           : new Map();
+      // 系统媒体回放（P11c）：脚本之前建（`init` 之后的补发读它），消息按帧序并入、等封面解码完、切成事件存好；回放时按帧取
+      probeMedia = mediaSteps
+        ? await createProbeMedia({
+            steps: mediaSteps,
+            bundle,
+            state,
+            sources: userTextures,
+            properties: probeProperties,
+            scripts: () => probeScripts,
+          })
+        : null;
+      if (scriptsOptions) {
         probeScripts = createProbeScripts({
           bundle,
           state,
           sceneAssets: options.sceneAssets,
-          properties,
+          properties: probeProperties,
           screen: [...(canvas ?? cursorWindow ?? [1920, 1080])],
           options: scriptsOptions,
           ...(animations ? { animations } : {}),
+          ...(probeMedia ? { media: probeMedia } : {}),
         });
         await probeScripts.load();
       }
@@ -752,6 +784,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         puppets: replayed ? (puppets ?? undefined) : undefined,
         perspective: perspective && { ...perspective, path: profileCamera.path },
         cameraObjects,
+        ...(probeMedia ? { media: probeMedia } : {}),
         // 光标交互（P6c）：脚本在跑才有（命中派发给脚本运行时）；窗口像素同脚本的 `engine.screenResolution`
         ...(probeScripts
           ? {
@@ -861,6 +894,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         animations: animations?.probe().list ?? [],
         ...(textSyncs === undefined ? {} : { textSyncs }),
         ...(probeScripts ? { scripts: probeScripts.result() } : {}),
+        ...(probeMedia ? { media: probeMedia.result() } : {}),
         videos: sink.results(),
         ...(userTextures ? { userTextures: userTextures.probe() } : {}),
         key,
@@ -869,6 +903,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     } finally {
       // 脚本环境（第 7 批）：读回之后释放（各段的 destroy、隐藏 iframe），出错也释放
       probeScripts?.dispose();
+      probeMedia?.dispose();
       scene.destroy();
     }
   } finally {

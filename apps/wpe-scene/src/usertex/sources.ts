@@ -13,6 +13,9 @@
  * - **竞态**：同一来源连续改值只认最后一次，后发先至的结果丢弃（关掉位图）。
  * - **缓存**：解码结果按「值」缓存最近 {@link DECODED_CACHE_SIZE} 张（来回切换不重复解码）；裁切矩形按 WPE 的纹理名记在解码结果上，
  *   同一个名字共用一张，按先请求的那个槽的精确比例裁（`crop`）。
+ * - **封面来源**（P11c，`$mediaThumbnail` / `$mediaPreviousThumbnail`）：值是媒体模块起的名字 `mediaThumbnail_<N>.system`，不是文件路径。
+ *   图由媒体模块经 `provide(名字, 位图 | null)` 直接交来（所有权转移）：`setValue` 遇到这种值按它取图、不读文件、当场生效；`null` 或没交过
+ *   = 没有封面，槽用缺省纹理。只留最近交来的两张（当前与上一张）与仍有来源引用的，更旧的没有引用时关掉位图。裁切、纹理名、GPU 侧同属性图片。
  * - **GIF 与视频**（P11b 步骤 4，`.gif`、`.mp4 .wmv .avi .m4v .mov .mkv .webm`，扩展名转小写再判断，`mediaKind`；rea-p11b 第 2、3 节、
  *   p11-REPORT M5、M6）：帧状态也放在这里、跨重编译保留。WPE 的一个纹理名是一张纹理，GIF 的解码状态 / 视频的播放器因此按纹理名各一份
  *   （`MediaTexture`），`GpuScene` 只持有 GPU 纹理，画到时经 `UserTextureAnimation.drawn()` 要新内容、自己上传。
@@ -133,6 +136,16 @@ export interface UserTextureProbe {
 
 /** 解码结果按值缓存的张数上限（正在被来源用着的不算在内，不会被换出）。 */
 export const DECODED_CACHE_SIZE = 4;
+
+/** 封面伪属性的值（`media/scene.ts` 起的名字）：不是文件，来源表只认 `provide` 交来的图。 */
+const SYSTEM_VALUE = /^mediaThumbnail_\d+\.system$/;
+
+export function isSystemValue(value: string): boolean {
+  return SYSTEM_VALUE.test(value);
+}
+
+/** 封面来源最多留这么多张（当前与上一张），再旧的在没有来源引用时释放。 */
+const SYSTEM_KEEP = 2;
 
 /** 视频的扩展名（小写）。 */
 const VIDEO_EXTENSIONS: ReadonlySet<string> = new Set(["mp4", "wmv", "avi", "m4v", "mov", "mkv", "webm"]);
@@ -345,6 +358,8 @@ export class UserTextureSources implements UserTextureProvider {
   private readonly cache = new Map<string, Decoded>();
   /** 值 → GIF / 视频（引用计数）。 */
   private readonly media = new Map<string, Shared>();
+  /** 封面名字 → 解码结果（`provide` 交来的；`null` = 没有封面），按交来的先后；只留最近 `SYSTEM_KEEP` 张与仍被引用的。 */
+  private readonly system = new Map<string, Decoded | null>();
   private readonly inflight = new Set<Promise<void>>();
   /** 帧号、本帧 frametime 与宿主暂停（`beginFrame` / `setPaused`）：动图的帧状态共用。 */
   private readonly clock: Clock = { frame: 0, frametime: 0, paused: false };
@@ -383,6 +398,16 @@ export class UserTextureSources implements UserTextureProvider {
       this.onReady?.(name);
       return;
     }
+    // 封面伪属性的值（P11c）：不读文件，按 `provide` 交来的图当场生效；没交过或 `null` 记成无图（槽用缺省纹理）
+    if (isSystemValue(value)) {
+      const provided = this.system.get(value) ?? null;
+      entry.decoded = provided;
+      entry.status = provided ? "ready" : "empty";
+      entry.decodeMs = 0;
+      this.trimSystem();
+      this.onReady?.(name);
+      return;
+    }
     const kind = mediaKind(value);
     if (kind !== "image") {
       this.attachMedia(name, entry, kind);
@@ -401,6 +426,39 @@ export class UserTextureSources implements UserTextureProvider {
     }
     const task: Promise<void> = this.load(name, entry).finally(() => this.inflight.delete(task));
     this.inflight.add(task);
+  }
+
+  /**
+   * 媒体模块交来一张封面（P11c）：`value` 是它起的名字（`mediaThumbnail_<N>.system`），`image` 是解码后的位图（所有权转移给来源表，
+   * `null` = 没有封面）。之后某个来源 `setValue` 到这个名字时按它取图。先交图、再设值（宿主的顺序）。不是封面名字的 `value` 忽略（位图关掉）。
+   */
+  provide(value: string, image: UserTextureImage | null): void {
+    if (this.disposed || !isSystemValue(value)) {
+      if (image) closeImage(image);
+      return;
+    }
+    const old = this.system.get(value);
+    if (old && old.image !== image) closeImage(old.image);
+    this.system.delete(value);
+    this.system.set(value, image ? { image, rects: new Map(), decodeMs: 0 } : null);
+    this.trimSystem();
+  }
+
+  /** 封面只留最近交来的 `SYSTEM_KEEP` 张与仍被某个来源引用的；其余关掉位图。 */
+  private trimSystem(): void {
+    const inUse = new Set<string>();
+    for (const entry of this.entries.values()) if (isSystemValue(entry.value)) inUse.add(entry.value);
+    let keep = SYSTEM_KEEP;
+    for (const value of [...this.system.keys()].reverse()) {
+      if (keep > 0) {
+        keep--;
+        continue;
+      }
+      if (inUse.has(value)) continue;
+      const decoded = this.system.get(value);
+      this.system.delete(value);
+      if (decoded) closeImage(decoded.image);
+    }
   }
 
   /** 全部在途的解码都结束（成功、失败或被取代）。加载时预解码、确定性回放等它。 */
@@ -534,6 +592,8 @@ export class UserTextureSources implements UserTextureProvider {
     this.onReady = null;
     for (const decoded of this.cache.values()) closeImage(decoded.image);
     this.cache.clear();
+    for (const decoded of this.system.values()) if (decoded) closeImage(decoded.image);
+    this.system.clear();
     for (const shared of this.media.values()) {
       shared.disposed = true;
       this.disposeShared(shared);

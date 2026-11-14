@@ -12,7 +12,7 @@
 
 use crate::wallpaper::wpe_scene_host;
 use crate::wallpaper::wpe_web_dir_index::WpeWebDirIndex;
-use crate::wpe_media::{WpeMediaHub, WpeMediaKind, WpeMediaMessage};
+use crate::wpe_media::{WpeMediaFlavor, WpeMediaHub, WpeMediaKind, WpeMediaMessage};
 use kabegame_core::app_paths::AppPaths;
 use kabegame_core::crawler::downloader::compress::{generate_wallpaper_cover, CoverCrop};
 use kabegame_core::emitter::GlobalEmitter;
@@ -471,21 +471,23 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     }
     let doc = caller_document(&caller.0).ok_or("caller is not a file: document")?;
     let index = WpeWebDirIndex::global();
-    let id = match index.image_id_of(&doc) {
-        Some(id) => id,
+    // 投影由调用方文档决定：场景宿主入口文档收 WPE 的数据（整秒时间轴、原尺寸封面），网页壁纸目录里的文档收
+    // Phase 8 的数据；页面不能自己选
+    let (id, flavor) = match index.image_id_of(&doc) {
+        Some(id) => (id, WpeMediaFlavor::Web),
         None if wpe_scene_host::is_host_document(&doc) => {
             let id = image_id.ok_or("the scene host must pass imageId")?;
             if !index.is_scene(&id) {
                 return Err("not a scene wallpaper in the library".into());
             }
-            id
+            (id, WpeMediaFlavor::Scene)
         }
         None => return Err("not inside a web wallpaper".into()),
     };
     if kind == WpeMediaKind::Audio && !supports_audio_processing(&id).await? {
         return Err("this wallpaper does not process audio".to_string());
     }
-    WpeMediaHub::global().subscribe(webview.label(), frame, kind, Box::new(channel));
+    WpeMediaHub::global().subscribe(webview.label(), frame, kind, flavor, Box::new(channel));
     Ok(())
 }
 

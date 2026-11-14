@@ -9,6 +9,7 @@ import {
   MISSING_SCRIPT_API,
   memberAccesses,
   scanScriptApi,
+  exportsMediaCallback,
   scanScriptCallbacks,
   scriptExports,
   type ScriptApiContext,
@@ -274,9 +275,11 @@ describe("导出回调的扫描", () => {
       "export function cursorClick() {}",
       "export function cursorHitTest() {}",
       "export const resizeScreen = () => {}, helper = 1;",
-      "export { mediaPlaybackChanged } from './m.js';",
+      "export { applyGeneralSettings } from './m.js';",
+      // 五个媒体回调 P11c 已实现，不在缺失表里
+      "export function mediaPlaybackChanged() {}",
     ].join("\n");
-    expect(scanScriptCallbacks(source)).toEqual(["mediaPlaybackChanged", "resizeScreen"]);
+    expect(scanScriptCallbacks(source)).toEqual(["applyGeneralSettings", "resizeScreen"]);
     expect(scanScriptCallbacks("export function update() { return value; }")).toEqual([]);
   });
 });
@@ -311,12 +314,20 @@ describe("能力表：script:api:*", () => {
     const unsupported = new Set<string>();
     checkScriptFeatures(
       [
-        script("export function init() {} export function mediaStatusChanged(event) {}"),
-        script("export function mediaTimelineChanged(event) {}", ["不支持的模块说明符：./x.js"]),
+        script("export function init() {} export function resizeScreen(event) {}"),
+        script("export function applyGeneralSettings(event) {}", ["不支持的模块说明符：./x.js"]),
+        // 媒体回调（P11c）已实现，不报
+        script("export function mediaStatusChanged(event) {} export function mediaTimelineChanged(event) {}"),
       ],
       unsupported,
     );
-    expect([...unsupported]).toEqual(["script:callback:mediaStatusChanged"]);
+    expect([...unsupported]).toEqual(["script:callback:resizeScreen"]);
+  });
+
+  it("exportsMediaCallback：导出了五个媒体回调之一（含 export { … as … }）", () => {
+    expect(exportsMediaCallback("export function init() {}")).toBe(false);
+    expect(exportsMediaCallback("export async function mediaThumbnailChanged(event) {}")).toBe(true);
+    expect(exportsMediaCallback("function f() {} export { f as mediaPropertiesChanged };")).toBe(true);
   });
 
   it("编译：用到未实现 API 的场景整张退回，只用已实现 API 的照常", async () => {

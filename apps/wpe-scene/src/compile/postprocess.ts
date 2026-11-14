@@ -268,6 +268,11 @@ export async function readWpeReflection(reader: SceneReader, sceneAssets: readon
   return (await readWpeUserValue(reader, sceneAssets, "reflection", () => true)) ?? undefined;
 }
 
+/** 读 WPE 用户设置里的 `windowupdaterate`（媒体刷新间隔，P11c；同上的查找方式）；读不到返回 undefined。只读。 */
+export async function readWpeWindowUpdateRate(reader: SceneReader, sceneAssets: readonly string[]): Promise<unknown> {
+  return (await readWpeUserValue(reader, sceneAssets, "windowupdaterate", (v) => typeof v === "number")) ?? undefined;
+}
+
 /** 依次查各安装目录的 `config.json`，第一个取到 `general.user.<键>` 的为准；postprocessing 取不到为 null。 */
 async function readWpeUserValue(
   reader: SceneReader,

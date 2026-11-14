@@ -155,7 +155,7 @@ export interface UserTextureOptions {
  *   goto 缺省），**不登记**；
  * - 采样位：缺省纹理的 `noInterpolation` / `clampUVs`（`FUN_1401556e0` 的请求标志）；缺省是合成 RT 时夹取、线性（M3）；
  * - 名字大小写敏感，同名可以绑多个槽；
- * - 不支持项：`usertextures:system` / `:usershortcut`（P11c、P11d）、`:keepaspect`（语料 0 处）、`:reference`（非 instanced 的有效显式参考，
+ * - 不支持项：`usertextures:usershortcut`（P11d；封面 `system` 来源 P11c 起支持，同属性来源登记）、`:keepaspect`（语料 0 处）、`:reference`（非 instanced 的有效显式参考，
  *   语料 0 处）、`:particle-sheet`、`:rendertarget:placeholder`、`:rendertarget:runtime`。后两种缺省纹理的槽不登记。
  */
 export function parseUserTextures(
@@ -193,7 +193,6 @@ export function parseUserTextures(
       if (base.width === 0 || base.height === 0) continue; // 参考尺寸为 0：这个槽永远是缺省纹理，不登记
       reference = { kind: "size", width: base.width, height: base.height };
     }
-    if (item.kind === "system") issues.add("usertextures:system");
     if (item.kind === "usershortcut") issues.add("usertextures:usershortcut");
     if (item.keepAspect) issues.add("usertextures:keepaspect");
     if (options.particle && slot === 0 && base.kind === "texture" && base.sheet)
@@ -224,4 +223,9 @@ export function mergeUserTextures(base: unknown, override: unknown): unknown[] |
     if (valid) merged[slot] = item;
   }
   return merged;
+}
+
+/** 运行中会换图的来源：属性（P11b）与封面伪属性（P11c）；快捷方式图标（P11d）还不支持。 */
+export function isDynamicSource(kind: UserTextureKind): boolean {
+  return kind === "property" || kind === "system";
 }

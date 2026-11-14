@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { DevError } from "./errors.ts";
 import {
   checkCornersRequest,
+  checkMedia,
   checkRenderReplay,
   checkReplay,
   checkScripts,
@@ -517,5 +518,29 @@ describe("四角请求", () => {
       "pointers[1]",
     );
     rejects400(() => checkCornersRequest({ imageId: "9", window: [0, 1080] }), "window", /两个正数/);
+  });
+});
+
+describe("系统媒体回放（P11c）", () => {
+  test("{ frame, messages } 的数组原样通过，经 checkRenderReplay 也查", () => {
+    const steps = [
+      {
+        frame: 1,
+        messages: [
+          { type: "status", enabled: true },
+          { type: "playback", state: 1 },
+        ],
+      },
+    ];
+    assert.equal(checkMedia(steps), steps);
+    assert.deepEqual(checkMedia([]), []);
+    rejects400(() => checkRenderReplay({ media: [{ frame: 0, messages: [] }] }), "media[0].frame", /从 1 起/);
+  });
+
+  test("形状不对报对应字段", () => {
+    rejects400(() => checkMedia({}), "media", /数组/);
+    rejects400(() => checkMedia([{ frame: 1.5, messages: [] }]), "media[0].frame");
+    rejects400(() => checkMedia([{ frame: 2 }]), "media[0].messages", /消息数组/);
+    rejects400(() => checkMedia([{ frame: 2, messages: [{ enabled: true }] }]), "media[0].messages[0]", /type/);
   });
 });

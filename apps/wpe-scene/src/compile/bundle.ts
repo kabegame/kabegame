@@ -145,6 +145,7 @@ import type { SceneVideoSource } from "../video/player";
 import type { SceneAnimation } from "../animation/types";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
+import { exportsMediaCallback } from "./scriptApi";
 
 export interface SceneGeneral {
   /**
@@ -797,6 +798,11 @@ export interface SceneBundle {
    * 给出；可选只是为了不动各处手写的测试 bundle，缺省按 false。
    */
   audio?: boolean;
+  /**
+   * 场景用系统媒体集成（P11c，rea-p11-media 2.1）：有脚本导出了五个媒体回调之一，或有 `system` 来源的用户纹理槽（`$mediaThumbnail`）。
+   * 宿主加载就订阅 `kind: "media"`（只订一次）。可选：手写的测试 bundle 可以不给，等于假。
+   */
+  media?: boolean;
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -1824,7 +1830,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     for (const { source } of userTextures.slots) {
       if (!(bundle.userTextures ??= []).some((item) => item.kind === source.kind && item.name === source.name))
         bundle.userTextures.push({ ...source });
-      if (source.kind === "property") bindings.bindUserTexture(source.name);
+      // 封面来源（P11c）：伪属性 `$mediaThumbnail` / `$mediaPreviousThumbnail` 同属性来源登记就地目标，值由宿主的媒体模块当增量写进来
+      if (source.kind === "property" || source.kind === "system") bindings.bindUserTexture(source.name);
     }
     // rope 两类系统的 pass 无条件换成 `genericropeparticle`、带 `.geom` 翻译（P4d 步骤 1、2，rea-p4d-rope.md 第 6 节，见 `ROPE_SHADER`）
     const rope = isRopeRenderer(context.particle?.renderer?.kind);
@@ -2648,6 +2655,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     project.general?.supportsaudioprocessing === true &&
     (bundle.layers.some((layer) => layer.particle !== null && particleUsesAudio(layer.particle)) ||
       bundle.programs.some(readsAudioUniforms));
+  // 媒体集成位（P11c，rea-p11-media 2.1）：有脚本导出五个媒体回调之一，或有 system 来源的槽（封面纹理）。只扫会执行的脚本（同能力表）
+  bundle.media =
+    (bundle.userTextures ?? []).some((source) => source.kind === "system") ||
+    bundle.scripts.list.some((script) => !script.errors.length && exportsMediaCallback(script.source));
   return bundle;
 }
 

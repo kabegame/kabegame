@@ -14,7 +14,8 @@ export async function prepareProbeUserTextures(
   reader: Pick<SceneReader, "readWhole">,
 ): Promise<UserTextureSources | undefined> {
   const names = (bundle.userTextures ?? []).filter((source) => source.kind === "property").map((source) => source.name);
-  if (!names.length) return undefined;
+  // 只有封面来源（P11c）也建：封面位图由 `renderFrame` 的 `media` 回放经 `provide` 交来
+  if (!names.length && !(bundle.userTextures ?? []).some((source) => source.kind === "system")) return undefined;
   const sources = new UserTextureSources((path) => reader.readWhole(path));
   // 屏外渲染没有实时帧：视频不按真实时间放（帧来自 `seekVideos`），建好立即按暂停处理（P11b 步骤 4）
   sources.setPaused(true);

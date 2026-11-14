@@ -10,7 +10,7 @@
  *   回放时间；`renderFrame` 读回那一帧的 `g_Daytime` 跟着同一个时钟（`probeDaytime`）。本地时间的换算照本机时区。
  * - `Math.random`：按种子（缺省 `DEFAULT_PROBE_SEED`）的 mulberry32 序列。它本来就和 WPE 对不上，只保证我们两次相同。
  * - `localStorage`：只在内存（`createWpeLocalStorage` 不给后端），不碰持久存储。
- * - 音频缓冲全 0（不交频谱），媒体回调不调；声音层、视频纹理、粒子层的脚本方法落点返回 null（方法空操作），每次被问到都计数。
+ * - 音频缓冲全 0（不交频谱）；媒体回调只在 `renderFrame` 给了 `media` 时调（`probeMedia.ts`）；声音层、视频纹理、粒子层的脚本方法落点返回 null（方法空操作），每次被问到都计数。
  * `Date` 与 `Math.random` 在 realm 建好之后、模块求值之前换掉（`installProbeClock` / `installProbeRandom`）。
  *
  * 要整场重编译的写入（`recompile` 目标、打开带不支持项的 effect、打开没有链的泛光）探针做不了：状态不变，按宿主同一条「值变了才算」
@@ -22,6 +22,8 @@ import { builtinProperties } from "../compile/builtinProperties";
 import type { SceneBundle } from "../compile/bundle";
 import { SceneFs, type SceneReader } from "../compile/fs";
 import { parseProject, type ProjectJson } from "../compile/model";
+import { scriptMediaCallbacks } from "../media/events";
+import type { MediaCallbacks } from "../media/scene";
 import { mulberry32 } from "../particles/random";
 import { CursorSession, emptyCursorInput, type CursorInputSnapshot, type CursorStepInput } from "../render/cursor";
 import type { SceneState } from "../render/state";
@@ -252,6 +254,8 @@ export interface ProbeScriptsInput {
    * 待用播放器）；回放推进的是同一份。不给时 `getAnimation` 的方法空操作。
    */
   animations?: Pick<SceneAnimations, "control">;
+  /** 系统媒体回放（P11c，`probeMedia.ts`）：`init` 之后给刚 `init` 的脚本补发一轮媒体回调（`SceneMedia.replayAfterInit`）。不给时不补发。 */
+  media?: { replayAfterInit(callbacks: MediaCallbacks): void };
   /** 建 realm（缺省 `createIframeRealm`，在当前文档里建隐藏 iframe）：单测换成不碰 DOM 的假 realm。 */
   createRealm?: (setup: ProbeRealmSetup) => Promise<ScriptRealm>;
 }
@@ -269,6 +273,10 @@ export interface ProbeScripts {
   /** 动画事件（P10b）：回放推进动画时越过的事件在这里派发给脚本，同宿主 `runtime.animationEvent`；没有脚本时什么都不做（可选：单测的替身可以不给）。 */
   animationEvent?(object: number | null, json: string): void;
   result(): ProbeScriptsResult;
+  /** 五个媒体回调接到这套脚本运行时（P11c，`probeMedia.ts` 派发用）；脚本没建起来时是空操作。 */
+  mediaCallbacks?(): MediaCallbacks;
+  /** 一批用户属性增量交给脚本的 `applyUserProperties`（P11c：封面换名的伪属性，没有 `type`，脚本收到 `{}`）；`full` 是全集，同宿主 `applyChanges`。 */
+  applyProperties?(delta: Record<string, UserProperty>, full: ReadonlyMap<string, UserProperty>): void;
   /**
    * 光标（P6c，`render/cursor.ts`）：这一帧在设好相机之后、动画与脚本（`enterFrame` / `frame`）之前调一次，同渲染器的 `stepCursor`：更新脚本
    * `input.*` 读到的快照，场景里有脚本导出了光标回调时命中、派发给运行时。可选：单测的替身可以不给。
@@ -416,7 +424,9 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       scriptApi.attachRuntime(runtime);
       // 同宿主：`init` 里 `engine.userProperties` 已是全集（含内置项）
       scriptApi.setProperties(input.properties);
-      await runtime.load(bundle.scripts);
+      // 同宿主：`init` 之后、首次 `applyUserProperties` 之前补发一轮媒体回调（P11c）
+      const loaded = runtime;
+      await loaded.load(bundle.scripts, () => input.media?.replayAfterInit(scriptMediaCallbacks(loaded)));
       // 同宿主：`init` 之后按属性全集给挂脚本又绑属性的字段套一次属性值（`init` 拿的是 JSON `value`）
       applyScriptedProperties(bundle.bindings, bundle.scripts, input.properties, state, runtime, true);
       // 同宿主首帧之前（`beforeFirstFrame`）：整份用户属性交一次，`engine.userProperties` 从这时起读得到
@@ -437,6 +447,11 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     animationEvent(object, json) {
       if (disposed) return;
       runtime?.animationEvent(object, json);
+    },
+    mediaCallbacks: () => scriptMediaCallbacks({ mediaEvent: (callback, make) => runtime?.mediaEvent(callback, make) }),
+    applyProperties(delta, full) {
+      if (disposed) return;
+      runtime?.applyUserProperties(delta, full, bundle.bindings);
     },
     cursor(frameInput) {
       if (disposed) return;
