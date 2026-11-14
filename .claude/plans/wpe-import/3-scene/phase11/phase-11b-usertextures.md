@@ -585,3 +585,35 @@ export function parseUserTextures(pass: MaterialPass, defaults: (slot: number) =
 4. HEAD 的 `compile/pipeline.test.ts` 语料用例失败（3293687972 读取 125 MB 超上限），不含 P11b 改动的 HEAD 同样失败。
 
 **语料**：步骤 4 没改编译，能渲染数同步骤 1（88 → 90），不重扫。
+
+### 收尾（2026-11-14）
+
+**文档：**
+- `cocs/wpe/WPE_SCENE.md`：
+  - 新增「用户纹理（P11b）」一节，放在 P11a 之后，内容包括分层表、取值与纹理、换图时的更新、解码、能力表、dev 探针、验收、已知差异和语料。
+  - 同步改了五处旧描述：P3a 的就地写范围与和 WPE 的对照表、能力表的 `usertextures` 一行、宿主 `file:` 范围（`scene_grants`、拉取状态时覆盖放行）、P5b instanced 的照报。
+- `cocs/README.md`：
+  - 场景条目加「用户纹理」一条和适用场景；
+  - 场景宿主的放行范围、WPE 导入条目的用户属性面板都补了 `scenetexture`。
+- `cocs/wpe/WPE_IMPORT.md`：「用户属性」一节加 `scenetexture` 一段，涵盖过滤、路径整理、校验与放行；面板对场景的说明改正。
+- `versions/latest/regression.md` 新增「场景壁纸用户纹理（P11b）」：U0–U8 已勾。待测的有三项：
+  - U9：实时帧里的 GIF 与暂停；
+  - U10：大图；
+  - U11：非 Windows。
+- `versions/latest/changelog.md`：用户侧 Added 一条，开发侧 Added 一条。
+
+**和总计划验收的出入**（`phase-11-audio-media.md`「P11b」）：
+- 粒子槽按「决定」3 照报 `usertextures:particle-sheet`，没有和 WPE 比。
+- 解锁按 HEAD 的语料是 88 → 90，不是总计划口径的 104 → 110。那个口径假设 P4–P10 都已做完。
+
+**清理：**
+- `ignore/p11/b/wt`（步骤 3）：它改过的 31 个文件都和 HEAD 逐字节相同，联接 25 个逐个 `rmdir`、复查为 0，再 `git checkout -- .` 后 `git worktree remove`。
+- `ignore/p11/a/wt`（P11a）：联接 3 个照上面拆掉，干净，直接 remove。
+- 两个都没用 `--force`。别的会话的 `ignore/p12/a/wt` 没动。
+
+**留给以后：**
+- P11c：封面来源。
+- P11d：快捷方式来源。
+- 标清视频的原色转换已转给 P9。
+- 布尔字段绑数值属性已转给 P5。
+- 合成 RT 池回收。

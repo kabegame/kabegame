@@ -141,6 +141,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | general 的 `gravitydirection` / `gravitystrength` / `windenabled` / `winddirection` / `windstrength` | 实测中性：同一工程只改这 5 个键，两份轨迹对解析模型最大差 6.7e-5、1.9e-5，16 个系统的 y 都不漂移；场景重力若生效每帧会偏约 0.08 像素（`proj/p4a-wind`）。读码也没找到引擎读取点 |
 | general 的 `perspectiveoverridefov` | 不是中性，解析成透视粒子的 fov（`SceneGeneral.perspectiveOverrideFov`，缺省 95°，钳到 [0.1°, 179.9°]），实测 `d` 逐位相符；绑属性时走重编译 |
 | 材质 `alphawriting` | 读码：`default` 映射成 0，绘制时 0 什么都不做（`0x140157201`），等于没写；`enabled` / `disabled` 自 P8 步骤 5 起实现（见「图像层与材质补全（P8）」的写入状态），只有这三个以外的取值报 `material:alphawriting` |
+| 材质 pass、effect 实例 pass、instanced `instance` 的 `usertextures`；pass 级 `keepaspect` | 属性来源已实现（P11b），其余按项照报 `usertextures:*`，见「用户纹理（P11b）」；pass 级 `keepaspect` WPE 不读（rea-p11b） |
 | 粒子 `instanceoverride` 的 `alpha` / `size` / `count` / `speed` / `lifetime` / `rate` / `colorn` / `color` 与 `id`；`controlpoint0..7` / `controlpointangle0..7` 的静态值 | 已实现、就地生效（见「粒子（P4a）」，`colorn` 见「粒子（P4b）」）；控制点的静态值在建系统时生效（P4c，见「粒子（P4c）」的「控制点」），P4f 起绑属性、挂脚本、脚本 `instance` 对象写入也就地生效；`id` 是编辑器键。`brightness` 只在 HDR 且系统 `flags` 没有 bit3 时乘出生颜色（P4f），其余时候中性。这些键挂 `{script}` 也支持（P4f，`rate` 单独一条路，见「粒子（P4f）」） |
 | `.tex` 头标志 alpha-priority（`0x80000`） | P4b 实测中性：同一张 RG88 纹理有无这个标志，图像层与粒子整帧逐像素相同；读码看全二进制只把它放进采样器缓存的哈希键 |
 
@@ -407,13 +408,13 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **P3-0b 加载与 ping**：`WpeSceneView` 首次收到本 iframe 的可信音量请求时才 emit `alive`；`WallpaperStage.delegatesPing()` 此后把桌面 ping 交给场景宿主垫片，换场景或卸载时收回。宿主没起来时仍由应用页应答，避免反复重载；宿主脚本卡死时垫片不再应答，壁纸窗口看门狗会重载。暂停和音量走与网页壁纸共用的消息协议；状态与日志走 `wpe_scene_report`，日志 target 是 `kabegame::wpe_scene_host`。
 - **开发与测试**：dev 构建用 `--mode development`，`vite.config.ts` 的 `__SCENE_DEV__` 只在该模式安装 `window.__kabegameSceneProbe`。CDP 应先按 frame URL 中的 `/wpe-scene/index.html` 选宿主 frame，再调探针。`deno task test -c kabegame --skip cargo` 依次运行 `apps/kabegame` 与 `apps/wpe-scene` 的 Vitest；宿主可单独运行 `deno task --cwd apps/wpe-scene test`，语料测试继续使用 `KABEGAME_WPE_ROOT`。
 - **`file:` 访问范围**（`wallpaper/wpe_scene_host.rs` 的 `access_scope_of`，就是注册给 runtime 的解析器：宿主目录优先，其它路径照旧按网页壁纸目录）：
-  - 宿主目录里的文档：根为宿主目录，另放行 WPE 安装目录（`wpe::discover::engine_dir`）的 `assets/` 与 `config.json`、文本对象要读的系统字体文件（后端按平台把 13 个 WPE 字体名解析成本机文件、逐个放行，P6b 1b / 1d2，见「字体引擎 `wpefont`」），以及库里全部 `x-wpe/scene` 行的目录。
-  - 场景目录由网页壁纸目录索引顺带维护（`WpeWebDirIndex::scene_dir_grants`，随 `images-added` / `images-deleted` / 带 `localPath` 的补丁更新），但**不**构成网页壁纸范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
+  - 宿主目录里的文档：根为宿主目录，另放行 WPE 安装目录（`wpe::discover::engine_dir`）的 `assets/` 与 `config.json`、文本对象要读的系统字体文件（后端按平台把 13 个 WPE 字体名解析成本机文件、逐个放行，P6b 1b / 1d2，见「字体引擎 `wpefont`」），以及库里全部 `x-wpe/scene` 行的目录和用户为各场景选的 `scenetexture` 文件（P11b）。
+  - 场景目录与用户选的纹理文件由网页壁纸目录索引顺带维护（`WpeWebDirIndex::scene_grants`；目录随 `images-added` / `images-deleted` / 带 `localPath` 的补丁更新，纹理文件按这张场景当前的 metadata **覆盖**，`metadataId` 补丁到达时与 `wpe_web_pull_state` 返回前各写一次，同网页壁纸的 `file` 属性），但**不**构成网页壁纸范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
   - 应用页导航 iframe：目标只能落在宿主目录（runtime 对导航目标去掉放行项）。
   - 宿主目录、WPE 安装目录与系统字体在启动时（`init_heavy_globals`）和每次取地址时刷新，闸门只读内存。
   - 范围按文档路径算、不分实例：宿主能读库里所有场景目录与 WPE 资源。按实例收窄要让解析器拿到文档 URL 的 query，以后再做。
 - **IPC**：两份 capability 叠加。
-  - 网页壁纸的 `wpe-web-capability`（`file:///*`）同样匹配宿主，网页壁纸的命令与事件宿主都有：`wallpaper_pong`、`setting-change` / `image-changed` / `images-change` / `wallpaper-ping` 监听。垫片拉 `wpe_web_pull_state` 时带 `kbScene` 的 `imageId`；后端只在调用方是宿主入口且 id 是库内场景壁纸时接受，返回与网页壁纸同形的 `user`，`directories` 为空，不写用户文件 grants。普通网页壁纸仍按文档目录认图，忽略传入的 id。
+  - 网页壁纸的 `wpe-web-capability`（`file:///*`）同样匹配宿主，网页壁纸的命令与事件宿主都有：`wallpaper_pong`、`setting-change` / `image-changed` / `images-change` / `wallpaper-ping` 监听。垫片拉 `wpe_web_pull_state` 时带 `kbScene` 的 `imageId`；后端只在调用方是宿主入口且 id 是库内场景壁纸时接受，返回与网页壁纸同形的 `user`，`directories` 为空；返回前按同一份 metadata 覆盖这张场景的 `scenetexture` 放行（P11b）。普通网页壁纸仍按文档目录认图，忽略传入的 id。
   - 暂停与音量沿用父页面到垫片的 `kabegame:wpe-volume` 消息，新增 `paused`；垫片只在值变化时调 `setPaused`，首次全量属性交付前就已暂停的，交付后补调一次 `setPaused(true)`。`SceneHost` 首次属性包到达后才加载，渲染完成后经 `wpe_scene_report` 报 `ready`，日志经同一命令进入应用日志。
   - 场景专用命令：`init_pre` 里 `add_capability` 注册 `wpe-scene-host-capability`，`remote.urls` 只有宿主 `index.html` 的确切地址（URLPattern 特殊字符逐个转义），不用路径通配；`frames: "sub"`，窗口是 main 与壁纸窗口 label 池（`wallpaper::WALLPAPER_LABELS`，每块屏一个壁纸窗口）；放行 `get_wpe_scene_postprocess`、`wpe_scene_target`（场景目录与 `sceneAssets`）和 `wpe_scene_report`（`ready` / `fallback` 以 `wpe-scene-status` 事件回到调用方窗口，带实例号；`log` 写 tracing）。
 
@@ -422,7 +423,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属性名 → 目标 + condition」，运行时按增量逐键写字段再调改值回调（`p3-script-REPORT.md` I3）。P3a 照这个形状做，先不碰脚本：
 
 - **一个应用函数，两个来源**：垫片入口 `applyUserProperties(δ)` 只转调 `apply(δ)`。加载期传全集、运行时传增量，先并进累计全集（跳过 `group` / `text` / 空值，按值去重、保留 `type`，不学 WPE 的整项覆盖），再按编译期产出的 `bundle.bindings` 分成两组：**就地写**交给 `SceneRenderer.applyBindings`（写之前先问 `SceneState.needsRecompile`：打开带不支持项的 effect、切换不能就地的图层、打开没有泛光链的场景都要重编译，这时一条都不写）；只要**有任意一条重编译目标**，就带全集整场重编译（重新解析、翻译、建 GPU 场景）。
-- **就地写的范围**：材质常量（`usershadervalues` 与 `constantshadervalues` 的 `{user}`）、图层 `origin` / `scale` / `angles` / `alpha` / `color` / `brightness` / `parallaxDepth`（P5a）、图层 `visible`（含条件可见）、effect `visible`、`general.bloom`、泛光参数（含级数）、`GENERAL_FIELDS` 的字段。重编译日志是 `debug`（用户不关心；看探针 `stats()` 判断是否走了快速路径）。
+- **就地写的范围**：材质常量（`usershadervalues` 与 `constantshadervalues` 的 `{user}`）、图层 `origin` / `scale` / `angles` / `alpha` / `color` / `brightness` / `parallaxDepth`（P5a）、图层 `visible`（含条件可见）、effect `visible`、`general.bloom`、泛光参数（含级数）、`GENERAL_FIELDS` 的字段、用户纹理（`scenetexture` 属性，P11b）。重编译日志是 `debug`（用户不关心；看探针 `stats()` 判断是否走了快速路径）。
 - **重编译原因**：
 
   | 原因键 | 触发 | 为什么要重编译 |
@@ -448,7 +449,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
   | `colorBlendMode` | 没有实测，推断属图层结构 | 重编译 |
   | 相机 `eye` / `center` / `up` | 不能绑 | 不登记绑定 |
   | COMBO | 不能绑，写成对象时进程断言中止 | 报 `combo:user-binding` |
-  | `usertextures` | 槽名变了就换该槽纹理 | 报 `material:usertextures`，随 W5 |
+  | `usertextures` | 下一帧开头重跑材质的纹理解析，按当前值换该槽纹理 | 属性来源就地换（解码完的下一帧，P11b，见「用户纹理（P11b）」）；封面、快捷方式照报 `usertextures:system` / `usertextures:usershortcut` |
 
 - **没有任何绑定引用的属性**（只给脚本用、或作者声明了却没绑）：P3a 什么都不做，不再重编译。
 - **目标用 scene.json 坐标做稳定键**（`objects/<i>`、`objects/<i>/effects/<j>/passes/<k>`、`general`），不用 bundle 下标：未启用的 effect 不进 bundle，下标会随属性值移位；3b 的脚本 realm 跨重编译保留，脚本手里的图层对象也要按这个键找回。
@@ -1518,6 +1519,71 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
   两边离精确值的偏差分布相同）。
 - **场景比窗口大时的上屏**：WPE 按窗口分辨率直接画，我们先画场景分辨率再缩（Liberty 3840×2160 场景在 1920×1080 窗口）。
 
+## 用户纹理（P11b）
+
+材质 pass 的 `usertextures` 让某个纹理槽在运行中换成场景外的图。WPE 只有一套做法，来源有三种：用户属性（`scenetexture`）、系统伪属性（媒体封面）、快捷方式图标。加载材质时每个有效项登记成「槽号 → 来源」；来源的值变了，下一帧开头重跑这个材质的纹理解析，每个槽按当前值取纹理。P11b 照这个形状做、只接属性来源，封面（P11c）与图标（P11d）以后往同一张来源表里放数据。依据：读码 [rea-p11-textures](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11-textures.md) 第 1、2 节与 [rea-p11b](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11b.md)，实测 [p11-REPORT](../../.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md)「属性纹理」「P11b 补测」（M1–M9），计划、实施记录与走查见 [phase-11b-usertextures.md](../../.claude/plans/wpe-import/3-scene/phase11/phase-11b-usertextures.md)。面板、取值与 `file:` 放行见 [WPE 导入文档](WPE_IMPORT.md)「用户属性」。
+
+| 层 | 位置 | 做什么 |
+|---|---|---|
+| 编译 | `compile/usertextures.ts`（`parseUserTextures`、`mergeUserTextures`），`compile/bundle.ts` 的 `compilePass` | 每个生效的槽（`textures[i]` 是非空字符串、`i < 10`、项有非空名字）记一条 `UserTextureSlot`：来源、参考尺寸、缺省纹理的点采样 / 夹取位，挂在 `ScenePass.userTextures`；instanced 的 `instance` 与 effect 实例覆盖按槽合并；属性来源在绑定表登记一条就地目标 `{ kind: "user-texture"; name }`，用到的属性名汇总进 `SceneBundle.userTextures`。缺省纹理照旧编进 `ScenePass.textures` |
+| 来源表 | `usertex/sources.ts`（`UserTextureSources`） | 宿主一份、跨重编译保留：按属性名存当前值，异步读文件、解码、裁切；同一来源连续改值只认最后一次，后发先至的结果丢掉；静态图按值缓存最近 4 张，来回切换不重复解码；不存 GPU 资源 |
+| 裁切 | `usertex/crop.ts` | 照 WPE 的取整（`FUN_1401702f0`）在源图正中裁出最大矩形，比例取参考尺寸，像素一比一；纹理名 `值 + "x" + round(比例·10)`，比例四舍五入到 0.1 相同的槽共用一张、按先建的那个槽的精确比例裁 |
+| 解码 | `usertex/png.ts` + `render/userGamma.ts`、`usertex/gif.ts` | 见下「解码」 |
+| GPU | `render/graph.ts`（`TextureRef` 的 `user` 变体，`fallback` 是缺省纹理）、`render/scene.ts`（`syncUserTextures`、`rebindUserDraw`、`ensureUserSizing`） | `sync` 收「来源换好了」：槽 0 在图像层上的整层强制重建，其余只重绑 draw；没有槽引用的用户纹理在 `sync` 末尾销毁 |
+| 宿主 | `host.ts` | 加载时对 `bundle.userTextures` 的当前值预解码（`primeUserTextures`，上限 5 s），解码完才建场景，第一帧就是用户图；运行中 `applyChanges` → `SceneState.write`（`user-texture` 目标，记 `userWritten`）→ 来源表；暂停与文档隐藏转给来源表的 `setPaused`；实时帧开头 `beginFrame(frametime)` |
+
+**取值与纹理**（WPE 实测）：
+- 值是 `/` 分隔的绝对路径。空串、文件不存在、读不出、解码失败都回缺省纹理，不保留上一张，只记一条 debug。属性没声明或不是 `scenetexture`（语料有 `slider`）时值不是字符串，当空串，永远是缺省纹理。
+- 参考尺寸四种：缺省纹理 `.tex` 头的**图像**尺寸（不是补到 2 的幂的纹理尺寸），精灵表取帧尺寸；instanced 取对象 `size`（M2，WPE 把它写进 `instance.usertexturereference`）；显式的 `usertexturereference`；缺省是被依赖图层的合成 RT（`_rt_imageLayerComposite_<id>_a`）时取那张 RT 的尺寸，运行中改值按它裁、替换掉 RT，加载时就有值则不生效（M3、M8），第一次改值之后才生效。
+- 纹理是 `rgba8unorm`、1 级 mip、没有各向异性，`g_Texture<n>Resolution` = 裁后的 `(w, h, w, h)`；寻址与过滤沿用缺省纹理的夹取位与点采样位，GIF 另强制点采样。超过设备的 `maxTextureDimension2D` 时用缺省纹理、记一条 warning（WebGPU 缺省上限 8192，WPE 是 D3D11 的 16384【推】）。
+
+**换图时要更新的**：
+- **任一槽**：这处 draw 的 bind group、`g_Texture<n>Resolution` / `Texel`；组合层（passthrough 模型）与 instanced 在这个 pass 有用户纹理生效时 `g_Color4`、`g_Color`、`g_Alpha` 强制为 1，回到缺省时恢复对象值（WPE 每次绘制现读这一位，rea-p11b 4.3）。
+- **图像层的槽 0**：走文本重排同一条整层强制重建 `rebuildLayer(…, { force: true })`。UV 上界是图像 / 纹理尺寸，用户纹理是 1（M1）；内缩 `0.15 / 新纹理尺寸`；instanced 的合成 RT 是裁后的用户图尺寸（M2）；effect fbo 与被依赖图层的独占 RT 按新尺寸换（`ensureUserSizing`）；`fullscreen` 的尺寸。`autosize` 的图层尺寸取参考尺寸，换图前后不变。
+- **其它槽**（几乎都是 effect 实例 pass 的槽 1）：不重建，只换 bind group 与常量（`rebindUserDraw`）。
+
+**解码**：
+- **静态图**：`createImageBitmap(blob, { premultiplyAlpha: "none", colorSpaceConversion: "none", imageOrientation: "from-image" })` 再 `copyExternalImageToTexture`。8 位 PNG（调色板 + `tRNS`、灰度 + alpha）、16 位 RGBA PNG（取高字节）、BMP、ICO 与 WPE 的 FreeImage 逐像素相同，JPEG 的 EXIF 方向一致（M7）。
+- **PNG 的 `gAMA`**：宿主自己读这一块，`|2.2·g − 1| ≥ 0.05` 时对 RGB 查 libpng 的 8 位表 `floor(255·(i/255)^(1/(2.2·g)) + 0.5)`（M9）。表在上传时由 GPU 逐字节查（`render/userGamma.ts`），不经 2D 画布读回：画布是预乘 alpha，半透明像素有舍入损失。
+- **GIF**（`.gif`）：照 WPE `resourceutil64.dll` 里的 stb 派生解码器逐字节移植，不照 stb 原版：
+  - 调色板按 BGRA 存：disposal 2 把调色板项原样填进上一帧写过的像素（R、B 互换），上一帧不透明时用背景色那一项、否则用 transparent 那一项；
+  - `bgindex` 只在有全局调色板、非 0、不越界时保留；首帧（含重新开始）只在本帧没有透明位时填背景；
+  - disposal 3 恢复两帧之前的画布（没有时按 2 处理），alpha > 128 才写；
+  - 只在被画到时推进、每个渲染帧最多前进一帧：剩余时间按 float32 减本帧 `g_Frametime`，≤ 0 才换下一帧，超出部分带到下一帧；延时 = 10 × GIF 的 delay 毫秒，不设下限；无限循环；图层隐藏、壁纸暂停时不推进、也不补时间。
+- **视频**（`.mp4 .wmv .avi .m4v .mov .mkv .webm`）：P9a 的 `VideoTexturePlayer`，和 WPE 用的是同一个播放器类。循环、不出声、自己的时钟、30 帧没画到就暂停、卡住兜底（P9c）都同场景视频。纹理按裁后尺寸建，裁切写在 `copyExternalImageToTexture` 的源矩形上，几何 UV 不变。第一帧最多等 10 s，建不起来用缺省纹理（不是透明）。面板只给 `.mp4`，别的扩展名只可能来自手输，同样认。
+- 扩展名转小写再判断（`mediaKind`）。GIF 与视频按值共用一份（引用计数），每个纹理名各一份帧状态；不进按值的解码缓存，换走再选回来从头开始（同 WPE）。
+
+**能力表**：不再整个报 `material:usertextures` / `effect:*:pass:usertextures`，按项细分照报：
+- `usertextures:system`（封面，等 P11c）、`usertextures:usershortcut`（等 P11d）；
+- `usertextures:particle-sheet`：粒子材质的槽 0。WPE 的帧表在加载时按槽 0 定一次，运行中换图沿用旧帧表、把用户图当精灵表取格子（M4），语料 2 张 3 项，不做；
+- `usertextures:keepaspect`、`usertextures:reference`：对象项的 `keepaspect: true` 与 `usertexturereference`，读码清楚、已实现，语料 0 处，照报到有实测；
+- `usertextures:rendertarget:placeholder`（缺省是没被依赖的 `_rt_imageLayerComposite_*`，P8 绑棋盘格）、`usertextures:rendertarget:runtime`（缺省是 `_rt_FullFrameBuffer` 或 fbo）：语料 0 处。
+
+pass 级的 `keepaspect` WPE 不读，改中性。
+
+**dev 探针**：
+- `host.userTextures()`：每个属性来源的当前值、状态（`ready` / `empty` / `failed` / `loading`）、解码后的整张尺寸、最近一次解码用时、已登记的纹理名，GIF 的换帧次数。
+- 确定性回放（`renderFrame`）没有宿主，自建一份来源表，按 `userProperties` 预解码、等完，并置为暂停。`gifDts`（每项是一帧的 `g_Frametime`，秒）逐帧推进 GIF；`videoTime` 也作用于用户视频。vite 的 `/render` 与 MCP `render_scene` / `host_render` 收 `gifDts`。
+- 屏外宿主要用视频时，主窗口不能最小化或隐藏：宿主 iframe 的 `document.hidden` 跟着为真，Chromium 推迟媒体加载，`<video>` 停在 `readyState` 0。探针遇到这种情况直接报原因（`checkVideoVisibility`）。
+- `host.renderFrame(time, key)` 给了 `key` 时存读回的 RGBA，用来按区域和 WPE 比运行中改值后的画面。
+
+**验收**（1920×1080，WPE 抓帧 `A:\p11b\`）：
+- 生成工程 `p11-ut-ar`、`p11b-npot`、`p11b-inst`、`p11b-rt`、`p11b-rt-init` 整帧 0 差（屏蔽 FR / CLK）。运行中改值的两条路（重绑 draw、槽 0 整层重建）在真 GPU 上和 WPE 的区域哈希相同，宿主 `applied` +1、不重编译。
+- GIF：三张手写的测试图覆盖 disposal 0–3、局部调色板、交错、透明背景、`bgindex` 0。WPE 导出的 12 张槽纹理与解码器的逐帧画布逐像素相同；96 次换帧都能用 float32 推进模型复现。
+- 真实壁纸的复制工程：3462279189、3351163962（instanced）、3253330537（effect 槽）整帧 0 差；2833017810（HDR，非 2 的幂的槽 0）最大差 1，是 WPE 半精度上屏换算到 8 位的舍入；3783690410 的余差来自场景里的两段视频。
+
+**已知差异**：
+- **解码是异步的**：WPE 在下一帧开头同步读文件、建纹理，同帧画出；我们解码完成后的下一帧才换上，大图晚几帧（6000×3000 解码几十毫秒）。首次加载与确定性回放都等解码完，不受影响。
+- **JPEG 的色度上采样**：WPE 的 FreeImage 3.18 自带的 libjpeg 与浏览器的 libjpeg-turbo 不同，色块边界上差到几十级，照片上很小。
+- **16 位灰度 PNG**：FreeImage 按 `[min(255, 最小值), 最大值]` 拉伸，浏览器只给 8 位。
+- **标清、未标色彩信息的视频整体偏色**：Chromium 识别成 `smpte170m`（矩阵对），`copyExternalImageToTexture` 另做 SMPTE-C → sRGB 的原色转换；WPE 的 Media Foundation 只做矩阵。场景视频纹理（P9a）同样受影响。
+- **视频源矩形落在半像素**：WPE 的视频处理器重采样，我们只按整像素取。HDR 视频（PQ / HLG）不做，照常 RGBA8；槽 0 换成用户视频时 `getVideoTexture()` 不做。
+- 暂停期间改值新建的 GIF，第一次画到时用的是上一个实时帧的 frametime。
+- 几乎不可压缩的大 GIF 解码开销高（1.1 MB 一帧约 29 ms）。
+- 显存：用户纹理按原分辨率、只裁不缩（6000×3000 → 3000×3000），一张 4K 方图约 36 MB；合成 RT 池只增不减，反复换不同尺寸的图时旧尺寸的 RT 不回收。
+
+**语料**（183 个工程）：能渲染 88 → 90（`3462279189`、`3783690410`，原来都只差 `usertextures`），没有场景掉出；去掉 `material:usertextures` 30 张、`effect:*:pass:usertextures` 21 张，新增 `usertextures:system` 19 张、`:usershortcut` 3 张、`:particle-sheet` 2 张。用到 `usertextures` 的场景多数还差媒体回调、脚本 API、文本、关键帧等别的节。
+
 ## 相机：视差、抖动与缩放（P5a）
 
 视差、抖动和缩放都只改相机，不碰几何，也不新增图层种类：
@@ -1560,6 +1626,8 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 | 目标点 | 指针先钳到 0…1、y 翻成向上（`mx = clamp(ptr.x)`、`my = clamp(1 − ptr.y)`），再在场景中心与指针之间按 `mi = cameraparallaxmouseinfluence` 插值：`P* = s + (W·(0.5(1 − mi) + mx·mi), H·(0.5(1 − mi) + my·mi))`。`mi` 不钳制，可以为负（语料有 −2、−0.21、−0.22）。W、H 是场景的正交尺寸，不是渲染目标 | 读码 6；实测 `p5a-ptr`：`mi` 1、0.5 时 P 为 (1920, 0)、(1440, 270)，各层偏移误差 0；`mi −2` 时反推 P = (−960, 1620)，在场景外 |
 | 指针 | 用 `g_PointerPosition`（已按壁纸样式换算，`scenePointer`），和它同源，不是控制点跟随用的反投影。`fill` 下就是窗口归一化坐标，和 WPE 相同；`fit` / `center` / `tile` 换算到场景上，光标落在画面上，留白处被钳到边 | 读码；实测 `2381978484`（8192×5479 的场景放进 16:9 窗口，偏移仍按场景单位）；样式由真机走查 |
 | 平滑 | `delay > 0` 时 `k = min(1, (1 − delay/3)·10·dt)`，`P ← P + (P* − P)·k`。dt 是本帧的帧时间（钳过的 `g_Frametime`），k 钳到 1 的帧照用。`delay ≤ 0` 时 P 直接取目标；补画帧 dt 为 0，P 不动。P 不钳制 | 实测 `p5a-delay27` / `29`：逐帧 k 和公式差 < 1e-5，用上一帧的 dt 对不上 |
+| 精度 | 目标点、k、P 的推进都逐步 float32，结合顺序照汇编：目标 x = `((W·0.5)·(1 − mi) + (W·mx)·mi) + eye.x`（y 项是 `my·H`），`k = ((1 − delay/3)·10)·dt` 再 `1 > k ? k : 1`，`P = ((P* − P)·k) + P`，每步 `fround`（`render/parallax.ts`） | 汇编 `0x140189b67`–`0x140189cea`，常量 0.5、3、1、10 从可执行文件读出；P10b 全屏走查 `clk61-w0` 第 76 帧（平滑途中）在 double 里算时文字 MVP 差 1 ulp、181 个像素 ±1，改后第 76–78 帧逐像素相同 |
+| 开关绑属性 | `cameraparallax` 等布尔 general 字段（及 `bloom` / `hdr`）写成 `{user, value}` 时，加载先按 `value` 的布尔设位，属性值只有布尔才改位，数字、字符串加载与运行中都不改（`compile/postprocess.ts` 的 `flagValue`） | 读码 `0x14019b4e0`（JSON 布尔直接设位、对象读 `value`）；实测 `ignore/p5/pb/` E1–E6（滑块 −0.22 / 0 不关、`value: false` 时滑块 0.5 不开、复选框 false 能关、下拉 `"1"` 不改、运行中改成数字保持原位）；真实样本 3253330537（`newproperty16` 滑块 −0.22，WPE 视差开），复制工程逐像素相同 |
 | `g_ParallaxPosition` | `clamp(P / (W, H), 0, 1)`，只进 uniform，和对象平移无关；在 `ENGINE_UNIFORMS` 里，每帧写 | 实测 `3818481122`：`depthparallax` 读到 (0.75, 0.25)，它的图层深度 0、不动；`mi −2` 时为 (0, 1) |
 | 对象平移 | `o = amount · depth(根) ⊙ (origin(根).xy − P)`，z 为 0。根是沿父链走到顶的对象（`layout.ts` 的 `rootObject`，父对象不在图层表里时当根）；`origin` 取当前值（属性、脚本写回之后）；缺省深度 (1, 1)。指针在中心时，原点不在中心的层也有偏移 | 实测 `p5a-static`（`mi 0`，P 恒为中心）7 个方块误差 0：(1460, 540) 深度 (1, 1) 偏 250，(460, 540) 深度 (−0.7, −0.7) 偏 175；根分组深度 (0, 0) 下深度 (1, 1) 的子方块不动 |
 | 乘在哪 | 一个对象的每次绘制都把视图投影换成 `VP · T(o)`（`GpuScene.viewProjectionOf`）：直接上屏、effect 的中间 pass（它读的效果矩阵也带视差）、上屏 pass、正交与透视粒子。画进合成 RT 的基础 pass 用自己的整面矩阵，本来就不读 VP。粒子模拟与控制点的指针反投影用不带视差的视图 | 实测 `p5a-fx`：`cursorripple` 第一个 pass 读的 `g_EffectTextureProjectionMatrixInverse` 平移 −25，不带视差应为 −16.67；透视粒子的偏移和正交相同。`p5a-kinds`：跟随粒子的出生点正好是不含视差的反投影点 |
@@ -1626,8 +1694,6 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 - **`alignmentfliph`**：水平镜像时 WPE 把 `mx` 换成 `1 − mx`、`g_ParallaxPosition.x` 翻转。没实现，语料 0 张。
 - **命中测试的视差偏移**：WPE 按对象自身（不按根）算，没做，归 W4 的按图层命中。
 - **透视场景开视差**：WPE 不移动对象（读码，语料 0 张）。P5d 步骤 2 已核对：不移动对象，`g_ParallaxPosition` 开视差时是 NaN（不是钳成 0，推翻读码的推断），见「透视相机、相机对象与深度（P5d）」。
-| 精度 | 目标点、k、P 的推进都逐步 float32，结合顺序照汇编：目标 x = `((W·0.5)·(1 − mi) + (W·mx)·mi) + eye.x`（y 项是 `my·H`），`k = ((1 − delay/3)·10)·dt` 再 `1 > k ? k : 1`，`P = ((P* − P)·k) + P`，每步 `fround`（`render/parallax.ts`） | 汇编 `0x140189b67`–`0x140189cea`，常量 0.5、3、1、10 从可执行文件读出；P10b 全屏走查 `clk61-w0` 第 76 帧（平滑途中）在 double 里算时文字 MVP 差 1 ulp、181 个像素 ±1，改后第 76–78 帧逐像素相同 |
-| 开关绑属性 | `cameraparallax` 等布尔 general 字段（及 `bloom` / `hdr`）写成 `{user, value}` 时，加载先按 `value` 的布尔设位，属性值只有布尔才改位，数字、字符串加载与运行中都不改（`compile/postprocess.ts` 的 `flagValue`） | 读码 `0x14019b4e0`（JSON 布尔直接设位、对象读 `value`）；实测 `ignore/p5/pb/` E1–E6（滑块 −0.22 / 0 不关、`value: false` 时滑块 0.5 不开、复选框 false 能关、下拉 `"1"` 不改、运行中改成数字保持原位）；真实样本 3253330537（`newproperty16` 滑块 −0.22，WPE 视差开），复制工程逐像素相同 |
 - **壁纸属性 `cameraparallax`**：WPE 设置里给单张壁纸的开关，只把 `mouseinfluence` 归零，静止偏移不变。Kabegame 没有这个开关，按缺省（开）处理。
 - **首帧的 `g_PointerPositionLast`**：开场指针之后，首帧的 `g_PointerPositionLast` 仍是 (0.5, 0.5)，和初值之间有一次跳变；WPE 首帧没有核对。
 - **P 的精度**：我们用 double 算 P，WPE 存 float32；按 float32 复算差为 0（`fit_delay.py`），接受。
@@ -1744,7 +1810,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 | 材质覆盖 | 编译材质前，对象的 `instance` 覆盖每个 pass：`combos` 合并，`textures` 按槽合并，规则同 effect 实例覆盖（`bundle.ts` 的 `instanceOverride`）。语料 167 个对象的 `textures` 都是一个非空字符串（94 个 `util/white`、73 个工程纹理），`combos` 都是 `{"version": 2}` | 实测 `p5b-inst` I2、`p5b-inst2` J2：槽 0 换成覆盖的那张 |
 | 合成 RT | 按槽 0 纹理的图像尺寸，不按 `size`（`compositeSize` 的条件是 `solidLayer && !instanced`）。`util/white` 时是 32×32，fbo 跟着它：多 pass effect 的中间结果在 32×32 上，遮罩变糊；单 pass effect 的末 pass 直接上屏，遮罩按自己的分辨率采样 | 实测 `p5b-inst2`：J1 合成 RT 与 fbo 都是 32×32，对照组 900×1000；`instance.textures` 换成补边纹理时取图像尺寸 48×40。整帧 0 差异 |
 | 内缩与颜色 | 不内缩（`solidlayer` 那一位）；颜色照常进基础 pass | 实测：J1、J2 末 pass UV 0–1，J3 直接上屏 UV 正好是图像 / 纹理；`p5b-inst` 的 `g_Color4` = (1, 0.6, 0.2, 1) |
-| 照报 | `features.ts` 的 `checkInstanceFeatures`：<br>- `usertextures` → `material:usertextures`（媒体封面、用户属性纹理、`usershortcut`；WPE 绑用户纹理时还强制 `g_Color4 = 1`）；<br>- `instance` 缺失或不是对象 → `model:instanced:instance`；<br>- 对象 `size` 不是字符串 → `model:instanced:size`（WPE 按 `"w h"` 读）；<br>- `textures` 不是非空字符串的数组、`combos` 不是对象、其它键 → `object:instance:<键>`。<br>`id` 是编辑器键，不是 instanced 的对象上 `instance` 不读 | 语料：只有 `usertextures` 出现过 |
+| 照报 | `features.ts` 的 `checkInstanceFeatures`：<br>- `usertextures`：P11b 起按槽并进基础 pass，用户属性纹理已实现（参考尺寸取对象 `size`、换图后合成 RT 跟着变、强制 `g_Color4 = 1`），媒体封面与 `usershortcut` 照报 `usertextures:system` / `usertextures:usershortcut`，见「用户纹理（P11b）」；<br>- `instance` 缺失或不是对象 → `model:instanced:instance`；<br>- 对象 `size` 不是字符串 → `model:instanced:size`（WPE 按 `"w h"` 读）；<br>- `textures` 不是非空字符串的数组、`combos` 不是对象、其它键 → `object:instance:<键>`。<br>`id` 是编辑器键，不是 instanced 的对象上 `instance` 不读 | 语料：只有 `usertextures` 出现过 |
 
 ### 已知差异与只记不补
 

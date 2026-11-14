@@ -2700,3 +2700,22 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | R3 真实壁纸走查 | Windows dev + WPE 抓帧，1920×1080，fps 20 | arsenal、audiophile、fantasticcar 各录 5 帧，`renderFrames.ts` 按日志逐帧回放、`kbp cmp frames` 比、逐 draw 对常量 | 读反射图的地面逐像素相同，差异逐处有解释 | 2026-11-14：地面相同；> 2 级的只有孤立的网格边像素（每帧 0–11 个），常量除相机矩阵差 1e-6 外逐值相同，归「网格边上的覆盖翻转」 |
 | [ ] | R4 设置页切换 | Windows dev（新构建） | 设置页「场景反射」切三档，预览 Arsenal | 跟随 / 关闭能渲染；开启显示预览图；切换时场景重新加载 | 待重启 dev 后真机看（运行中的 dev 构建还没有新命令，宿主按跟随处理） |
 | [ ] | R5 非 Windows | macOS / Linux | 预览 Arsenal | 同 Windows | 本机不能测 |
+
+## 场景壁纸用户纹理（P11b）
+
+2026-11-14。材质 / effect 实例 / instanced `instance` 的 `usertextures` 的属性来源（`scenetexture`）：属性面板选图片、GIF 或 MP4，场景按 WPE 的规则在正中裁切后换上该槽纹理，就地生效、不重编译。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md`「属性纹理」「P11b 补测」与同目录 `rea-p11b.md`，计划、实施记录与走查见 `phase-11b-usertextures.md`；生成工程 `ignore/p11/defs/p11b.py`、`p11b2.py`，测试媒体在 `ignore/p11/texsrc/`，复制工程在 `ignore/p11/proj/*-iso-ut-*`，WPE 抓帧在 `A:\p11b\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | U0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；`kabegame-core` / `kabegame` 的 `user_props`、`wpe_web_dir_index` 单测；`apps/kabegame` 的属性面板单测；`scripts/kabegame-dev` 与 `apps/kabegame-dev-mcp` 的 `deno test` | 0 error；除已知失败外全过 | 2026-11-14：步骤 1–4 合并进工作区后的快照 tsc 0 error、vitest 3573 个全过；Rust 7 + 22 个、面板 9 个通过；步骤 5 的工具改动单测通过。HEAD 原有的 `pipeline.test.ts` 语料用例（`3293687972` 读取超上限）不含 P11b 时同样失败。变异检查：编译期 3 处（1 处等价变异）、GIF 解码器 8 处全部检出 |
+| [x] | U1 语料 | Node，183 个工程 | 前后重扫 `unsupported` | `material:usertextures` / `effect:*:pass:usertextures` 只换成细分键、`material:keepaspect` 去掉，原来能渲染的不掉出 | 2026-11-14：能渲染 88 → 90（`3462279189`、`3783690410`）；去掉 `material:usertextures` 30 张、`effect:*:pass:usertextures` 21 张，新增 `usertextures:system` 19 张、`:usershortcut` 3 张、`:particle-sheet` 2 张；其余键逐张不变 |
+| [x] | U2 生成工程对照 WPE | Windows dev + WPE 抓帧，1920×1080 | `p11-ut-ar`、`p11b-npot`、`p11b-inst`、`p11b-rt`、`p11b-rt-init` 的属性设成 `ut-a.png`，WPE 抓帧，`render_scene` 按同一属性值回放 | 整帧逐像素相同（屏蔽 FR / CLK） | 2026-11-14 Claude：五个工程都 0 差，含非 2 的幂的槽 0、instanced 的合成 RT 与强制白、缺省是合成 RT 时「加载时就有值不生效」 |
+| [x] | U3 运行中换图 | Windows dev + WPE 抓帧 | 屏外宿主打开 `p11b-rt` / `p11b-inst`，改属性（`metadataId` 补丁），`host.renderFrame(time, key)` 读回 | 宿主 `applied` +1、不重编译；画面和 WPE 运行中改值后的相同 | 2026-11-14 Claude：两条路（重绑 draw、槽 0 整层重建，合成 RT 32×32 → 300×200）前 1000 行区域哈希都和 WPE 相同 |
+| [x] | U4 GIF | Windows dev + WPE 抓帧 | `ut-disp.gif`、`-b`、`-c`（disposal 0–3、局部调色板、交错、透明、`bgindex` 0）在 `p11b-npot` 上，WPE 导出槽纹理；`render_scene` 按 `gifDts` 推进 | 每帧合成逐像素相同；换帧时机同 WPE | 2026-11-14 Claude：12 张槽纹理逐像素相同；96 次换帧都能用 float32 推进模型复现；真 GPU 上第 0 帧整帧 0 差，0–6 帧的采样哈希和 WPE 的 7 种画面逐个相同 |
+| [x] | U5 视频裁切 | Windows dev + WPE 抓帧 | `ut-vstripe.mp4`（8 条 40 像素竖条）在 `p11-ut` 上 | 裁切起点与 WPE 相同 | 2026-11-14 Claude：都从 x = 40 起、色带顺序与边界相同，交界 1–2 列是色度上采样；整体偏色是已知差异（标清、未标色彩信息的视频，Chromium 多做一次原色转换，已转 P9） |
+| [x] | U6 真实壁纸走查 | Windows dev + WPE 抓帧，后处理超高 | 3462279189、3351163962、3253330537、2833017810、3783690410 的复制工程（属性设成已知图），WPE 按日志回放 | 差异逐处有解释 | 2026-11-14 Claude：前三张整帧 0 差；2833017810（HDR）最大差 1，是 WPE 半精度上屏换成 8 位的舍入；3783690410 的余差来自场景里的两段视频 |
+| [x] | U7 面板、就地换图与放行 | Windows dev | 场景属性面板上选图、换图、清空；从库里删掉这张场景后再读选过的文件 | 场景就地换上（`recompiled` 不变）；值存成 `/` 分隔；没选的文件与删图后的文件被 `deny file:` | 2026-11-14 Claude：值存成 `D:/…/ut-b.jpg`、`applied` +1、没有重编译；选中的能读、没选的 `ut-d.png` 被拒，删图后同一个文件被拒 |
+| [x] | U8 用户视频 | Windows dev | 在场景属性面板里选一段 MP4 | 视频在场景里播放 | 2026-11-14 用户手测：能工作 |
+| [ ] | U9 预览里的 GIF 与暂停 | Windows dev | 在预览的场景属性面板里选一张 GIF，再点「暂停」与「继续播放」 | GIF 按自己的节奏动；暂停时停住，继续后接着放、不追赶 | 实时帧里的 GIF 推进只在单测与屏外 `gifDts` 回放上验过，待真机确认 |
+| [ ] | U10 大图 | Windows dev | 选一张 6000×3000 的 JPEG，再换回小图 | 解码完成后换上（晚几帧）、不卡死；裁成 3000×3000 | 待真机确认 |
+| [ ] | U11 非 Windows | macOS / Linux | 预览一张带 `scenetexture` 的场景并选图 | 同 Windows | 本机不能测 |
