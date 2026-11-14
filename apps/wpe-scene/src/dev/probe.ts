@@ -500,6 +500,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       let textSyncs = wroteTextValues(scriptValues) ? await texts.settle(scene, state) : undefined;
       // 场景脚本（第 7 批）：建好场景、视频就绪之后搭环境、跑 init，再整份交一次用户属性（同宿主首帧之前）；init 的写入进状态、标脏，
       // 回放第一帧开头的 `sync` 刷进去。脚本的 screenResolution 同透视场景的画布：`canvas ?? window ?? [1920, 1080]`
+      // 关键帧动画（P10a 步骤 3）：没有动画时是空表，下面不建播放器，调用序列同以前。跑脚本时播放器要在 `init` 之前建好（P10b：`init` 里的
+      // `getAnimation().play()` 才有落点，同宿主的待用播放器），回放推进、读回的就是这一份；不跑脚本时仍在回放之前才建，行为不变
+      const animationList = bundle.animations ?? [];
+      const animations = animationList.length ? new SceneAnimations(animationList) : null;
       if (scriptsOptions) {
         const properties = bundle.scripts.list.length
           ? await readProbeUserProperties(reader, options.projectDir, options.sceneAssets, options.userProperties)
@@ -511,14 +515,13 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           properties,
           screen: [...(canvas ?? cursorWindow ?? [1920, 1080])],
           options: scriptsOptions,
+          ...(animations ? { animations } : {}),
         });
         await probeScripts.load();
       }
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
       let particleMs: RenderFrameResult["particleMs"];
-      // 关键帧动画（P10a 步骤 3）：没有动画时是空表，下面不建播放器，调用序列同以前
-      const animationList = bundle.animations ?? [];
       if (options.profile) {
         // 只记 profile 帧：读回那一帧之前取走并关掉
         scene.profileParticles(true);
@@ -577,7 +580,6 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       // 视差点从 profile 帧推进后的状态接着走；逐帧指针（P5a 收尾）第 i 帧用第 i 项，读回帧的 g_PointerPositionLast 是上一帧的。
       // 关键帧动画（P10a 步骤 3）：有回放时沿同一串 dt 推进（每帧在粒子与相机之后写、再 sync）；没有回放时按 `time` 定位、写一次，
       // `replayReadback` 开头的 sync 刷进去
-      const animations = animationList.length ? new SceneAnimations(animationList) : null;
       const replayed = !!options.particles?.dts.length;
       if (animations && !replayed) {
         animations.seek(startTime);

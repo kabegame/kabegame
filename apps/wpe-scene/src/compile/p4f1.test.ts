@@ -171,8 +171,9 @@ describe("compileScene：字段脚本挂在 instanceoverride 上", () => {
     // 控制点（P4f 步骤 3）：初值同样取 value
     expect(bundle.layers[0].particle!.instance.controlpoints[0]).toEqual([1, 2, 0]);
     expect(bundle.layers[0].particle!.instance.controlpointAngles[2]).toEqual([0, 0, 1]);
+    // 脚本按 WPE 的登记顺序（P10b：同层按键名序），不按书写顺序
     expect(bundle.scripts.list.map((item) => item.target)).toEqual(
-      keys.map((field) => ({ kind: "particle-instance", object: 0, field })),
+      [...keys].sort().map((field) => ({ kind: "particle-instance", object: 0, field })),
     );
     // 字段脚本不是用户绑定：绑定表里没有它们
     expect(bundle.bindings.filter((binding) => binding.target.kind === "particle-instance")).toEqual([]);

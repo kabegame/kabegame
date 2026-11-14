@@ -228,3 +228,40 @@
   - 第一版 `p10-script` 把动作排在 14.0–17.6 s，抓帧窗口在 9.3–14.4 s，大部分没录到；改到 10.0–13.6 s 重抓。
   - 一度以为第一版没有触发事件，其实是查看输出时截断了，两版都触发了。
   - 第一版报告草稿把纯二分模型的残差当成了时间噪声；读码的反解一换上，残差就到了 0.001 像素级。
+
+## P10b 补测（2026-11-14）
+
+> 子计划 [phase-10b-script.md](phase-10b-script.md)「步骤 0」。WPE 2.8.42，fps 20，测试窗口 1920×1080，只看 `[kf]` 日志（每行直接 `console.error`）。
+> 工程：`ignore/p10/defs/p10.py` 的 `p10b-api`、`p10b-order`（生成代码的原文在 `ignore/p10/b0/p10b_api_defs.py.txt`、`p10b_order_defs.py.txt`）；日志 `ignore/p10/b0/s0-log.txt`、`s0-order-log.txt`。
+> 动画按 `frameCount` 认（每条的 `length` 都不同）。
+
+| # | 问题 | WPE 结果 | 和读码 / 推断 |
+|---|---|---|---|
+| Q1 | `getAnimation` 的对象范围 | effect 1 的 `kfa` 常量上，`thisObject.getAnimation()` 与 `getAnimation('kfa')` 都拿到**自己那条**（len 42），不是同图层先登记的 effect 0 那条（len 41）；`thisLayer.getAnimation('kfa')`、`thisLayer.getAnimation()` 都是 `undefined`；effect 1 的 `visible` 脚本（`thisObject` 是 effect）和图层 `origin` 脚本按 `kfa` 找也都是 `undefined` | **推翻推断**：范围不是图层，是绑定的属主，同联动（图层字段归图层，effect 常量归它所在的材质 pass，effect 的 `visible` 归 effect）。派发的范围仍是图层（Q3） |
+| Q2 | 联动的属主 | 三种写法子都按自己的时钟走、不跟 `startpaused` 的父停住：同一 effect 的 pass 0 父 / pass 1 子；同一图层两个 effect；图层 `alpha` 子对 effect 常量父 | 和 P10a 的实现（属主按 pass）一致，TODO 可以删 |
+| Q3 | 多个接收者的派发顺序 | 同一图层 `visible`、`origin`、`alpha` 与 effect 常量上的四段脚本都收到；顺序是 `alpha`、`origin`、`visible`、effect 常量（JSON 书写顺序是 `visible`、`origin`、`alpha`、`effects`） | 读码只说遍历脚本绑定链表。顺序见下面「登记顺序」 |
+| Q4 | 包装对象的形状 | 见下面「`IAnimation` 的形状」 | 成员顺序、只读与转换规则读码里没有 |
+| Q5 | 模块顶层调用 | `thisScene.getAnimation('q4')` 抛 `SyntaxError: getAnimation cannot be called from global scope.`；模块顶层 `thisObject` 是 `null` | 同 P3 报告记的 `cannot be called from global scope` |
+| Q6 | 空名字与非字符串 | `thisScene.getAnimation('')` 拿到全场景第一条没写 `name` 的动画；`thisObject.getAnimation('')` 用属性名（`visible` 没有动画，`undefined`；同一对象上没写 `name` 的 `alpha` 动画没被拿到）；`thisScene.getAnimation(5)` 为 `null`；`thisObject.getAnimation(5)` 用属性名 | 吻合读码 |
+| Q7 | 丢弃的动画 | `fps: 0` 与 `length: 0` 两条都能按名字找到：`fps` 读出 1、`frameCount` 是 `length` 截断后的值（52、0）、`duration` 0、`getFrame()` 0、`isPlaying()` 真、`rate` 1；`play()` 后 `getFrame()` 一直 0 | 吻合读码第 5 节（照样登记、`D = 0`）；字段值是新的：时钟没解析，`spf` 保持 1 |
+| Q8 | 回调里控制别的动画 | `q8a` 的 `animationEvent` 里对 `q8b`（排在后面）、`q8c`（排在前面）调 `stop()`：`q8b` 的 `update` 当帧收到第 0 帧的值 100，`q8c` 下一帧才是 100 | 派发是同步的，在动画循环中间 |
+
+**`IAnimation` 的形状**（Q4，`q4`）：
+- 自有、可枚举的成员，`Object.keys` 顺序：`name`、`frameCount`、`duration`、`fps`、`rate`、`play`、`isPlaying`、`stop`、`pause`、`setFrame`、`getFrame`、`getAnimation`。`typeof` 依次是 string、number ×4、function ×7。
+- 描述符：都是数据属性（V8 的原生数据属性）。`fps`、`frameCount`、`duration`、`name` 不可写，严格模式下赋值抛 `TypeError: Cannot assign to read only property 'fps' of object '[object Object]'`、值不变；`rate` 可写、可枚举、可配置。
+- 原型只有 `constructor` 一个自有属性；`String(a)` 是 `[object Object]`。
+- 同一条动画每次拿到同一个对象：`thisObject.getAnimation() === thisObject.getAnimation()`，也 `=== thisScene.getAnimation('q4')`。
+- 初值：`rate` 1（number）、`getFrame()` 0、`isPlaying()` 假（`startpaused`）；`fps` 29.999998092651367、`duration` 1.6666666269302368（float32）。
+- `rate` 只收数字：赋 `'2'`、`{x: 3}` 后读回仍是 1、推进速度不变；赋 `NaN` 照收，之后 `getFrame()` 与值都是 `NaN`。赋 `true` 后读回 1，和原值相同，分不出是忽略还是转成 1。
+- `setFrame` 的参数不是数时按 0：`setFrame('30')`、`setFrame()` 之后 `getFrame()` 都是 0，下一帧从 0 往后走。
+
+**登记顺序**（Q3 与 `p10b-order`）：
+- 脚本：`init` 与第一次 `update` 的顺序相同，都是：
+  1. `general` 的字段，按键名字母序（`ambientcolor`、`clearcolor`，书写顺序相反）；
+  2. 按 `objects` 数组顺序，每个对象：
+     - 先是自己的字段，按键名字母序（`alpha`、`angles`、`color`、`origin`、`scale`、`visible`，书写顺序相反）；
+     - 再是 `effects`，按数组顺序；每个 effect 先 `visible`，再按 pass 顺序、每个 pass 的常量按键名字母序（`kfa` 在 `kfv` 前，书写顺序相反）。
+- 动画：同一规则。`thisScene.getAnimation(名字)` 取到的第一条：`alpha` 先于 `origin`、`kfa` 先于 `kfv`、字段 `scale` 先于 effect 的常量、`general.zoom` 先于排在最前的对象。
+- 本机语料 4381 个对象的键全部按字母序书写（WPE 写文件时排好的），所以和我们按书写顺序遍历的差别只在一处：effect 上的脚本和动画写在 `origin`、`scale`、`visible` 等字段之前，WPE 却登记在它们之后。语料里有 27 张场景的脚本顺序因此不同（`ignore/p10/b0/keyorder.py`）。
+
+**工具**：`log_mark` / `open_wallpaper` 返回的游标里 `created` 超过 JSON 数的精度，原样传回 `log_since` 会被判成「日志被重写」。这次改为开窗前自己记日志字节数、之后按偏移读文件。

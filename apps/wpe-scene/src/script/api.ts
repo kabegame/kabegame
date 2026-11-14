@@ -7,6 +7,9 @@ import {
   type UserProperty,
   type ValueType,
 } from "../compile/bindings";
+import { AnimationClock } from "../animation/clock";
+import type { AnimationControl } from "../animation/player";
+import type { SceneAnimation } from "../animation/types";
 import type { SceneSpectrum } from "../audio/spectrum";
 import { alignmentIndex, alignmentName } from "../compile/alignment";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
@@ -95,6 +98,11 @@ export interface ScriptApiState {
    * `emitParticles` 接到它上面。不传或返回 null（没有场景）时方法什么都不做，`isPlaying` 为假。
    */
   particles?(object: number): ParticleScriptTarget | null;
+  /**
+   * 关键帧动画的落点（P10b，宿主按脚本当前看到的 bundle 取播放器的那一条，`SceneAnimations.control`）：`IAnimation` 的成员接到它上面。
+   * 不传或返回 null（语料诊断、播放器还没建）时方法空操作，只读成员取 bundle 里这一条的定义。
+   */
+  animation?(id: string): AnimationControl | null;
 }
 
 /** `IVideoTexture` 的落点（P9b，`VideoTexturePlayer` 满足它）。 */
@@ -140,6 +148,9 @@ const TEXT_API_TYPES: Record<TextRuntimeField, ValueType | "string"> = {
   blockalign: "bool",
 };
 
+/** 路径的最后一段（`script.id` / 动画 `id` 的属性名）。 */
+const lastSegment = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
+
 const LAYER_FIELDS = ["origin", "scale", "angles", "alpha", "color", "visible", "brightness", "parallaxDepth"] as const;
 
 /**
@@ -157,6 +168,8 @@ export class ScriptApi {
   private readonly videoTextures = new Map<number, ApiObject>();
   private readonly materials = new Map<string, ApiObject>();
   private readonly effects = new Map<string, ApiObject>();
+  /** `IAnimation` 包装对象（P10b）：按动画 `id`（`scene.json` 路径）缓存，同一条每次 `getAnimation` 返回同一个对象。 */
+  private readonly animationApis = new Map<string, ApiObject>();
   private readonly recompileValues = new Map<string, string>();
   /**
    * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applySpectrum` 每帧把场景频谱（归一化后的）
@@ -182,6 +195,8 @@ export class ScriptApi {
     // general 字段在 `thisScene` 上也有（K5），和挂在 general 上的脚本的 `thisObject` 读写同一份
     this.installGeneral(this.general);
     this.installGeneral(this.thisScene);
+    // `getAnimation`（P10b）：general 上的按 general 的属主找；不放进 installGeneral（它也装在 thisScene 上，那边是全场景查找）
+    this.installGetAnimation(this.general, () => "general");
     this.realm.global.engine = this.engine;
     this.realm.global.thisScene = this.thisScene;
     this.define(this.realm.global, "thisLayer", () => {
@@ -279,6 +294,7 @@ export class ScriptApi {
     if (this.findLayer(index)?.text) this.installText(api, index);
     // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
+    this.installGetAnimation(api, () => `objects/${index}`);
     this.layers.set(object, api);
     return api;
   }
@@ -759,6 +775,88 @@ export class ScriptApi {
     );
   }
 
+  /** 模块求值期间调 `getAnimation` 抛 realm 的 SyntaxError，消息照 WPE（P10b 步骤 0 Q5）。 */
+  private requireAnimationContext(): void {
+    if (!this.evaluating) return;
+    const Ctor = (this.realm.global.SyntaxError as ErrorConstructor | undefined) ?? SyntaxError;
+    throw new Ctor("getAnimation cannot be called from global scope.");
+  }
+
+  /**
+   * 对象上的 `getAnimation`（P10b，IObject）：装在图层、effect、材质、general 的 API 对象上（`thisScene` 的另见 `installScene`）。
+   * 只在这个对象的属主里找（`owner` 是动画的属主路径，同联动：图层 `objects/<i>`、effect `objects/<i>/effects/<e>`、材质
+   * `<pass>/constantshadervalues`、`general`；步骤 0 Q1，不是按图层找）。参数是非空字符串时用它，否则（空串、非字符串、不带参数）
+   * 取当前脚本所挂属性的名字（`script.id` 的最后一段，Q6），没有当前脚本时是空串；找不到返回 undefined。
+   */
+  private installGetAnimation(api: ApiObject, owner: () => string): void {
+    this.method(api, "getAnimation", (name?: unknown) => {
+      this.requireAnimationContext();
+      const wanted = typeof name === "string" && name !== "" ? name : this.current ? lastSegment(this.current.id) : "";
+      const def = this.findAnimation(owner(), wanted);
+      return def ? this.animationApi(def) : undefined;
+    });
+  }
+
+  /**
+   * 在脚本看到的 bundle 里按列表顺序（= WPE 的登记顺序）找第一条：`owner` 不为 null 时属主相同，名字等于 `options.name` 或属性名
+   * （`id` 的最后一段）。跳过 WPE 不建绑定的（常量目标在着色器里没有 uniform，`settleConstantAnimation` 已标出）；丢弃的（`inert`）找得到。
+   */
+  private findAnimation(owner: string | null, name: string): SceneAnimation | undefined {
+    for (const def of this.access.bundle().animations ?? []) {
+      if (owner !== null && def.owner !== owner) continue;
+      if (def.target.kind === "constant" && def.target.uniforms.length === 0) continue;
+      if (def.name === name || lastSegment(def.id) === name) return def;
+    }
+    return undefined;
+  }
+
+  /**
+   * `IAnimation` 包装对象（P10b，步骤 0 Q4，rea-p10-keyframes 第 11 节）：按 `id` 缓存。不持有播放器：方法每次经 `access.animation` 现取落点
+   * （重编译换了播放器也控制同一条、`rate` 保留），没有落点时空操作、`isPlaying()` 假、`getFrame()` 0。12 个自有可枚举成员，顺序
+   * `name`、`frameCount`、`duration`、`fps`、`rate`、`play`、`isPlaying`、`stop`、`pause`、`setFrame`、`getFrame`、`getAnimation`：
+   * - 前四个是不可写的数据属性，值在建对象时按这一条的时钟取（不会变），严格模式下赋值抛 V8 自己的 TypeError（WPE 同一条消息）；
+   * - `rate` 是访问器：只收 number（`NaN` 也收，转 float32），别的忽略；描述符和 WPE 的原生数据属性不同，记为已知差异；
+   * - 方法是数据属性（函数对象建一次）；`setFrame(f)` 的 `f` 不是 number 时按 0；`getAnimation()` 返回 undefined（同 IVideoTexture）；
+   * - 原型是普通的 `Object.prototype`（WPE 是只有 `constructor` 的原型），记为已知差异。
+   */
+  private animationApi(def: SceneAnimation): ApiObject {
+    const id = def.id;
+    let api = this.animationApis.get(id);
+    if (api) return api;
+    api = this.object();
+    const target = () => this.access.animation?.(id) ?? null;
+    const info = target();
+    const clock = info ? null : def.inert ? AnimationClock.inert(def.clock.length) : new AnimationClock(def.clock);
+    const Obj = this.realm.global.Object as typeof Object;
+    const constant = (key: string, value: unknown) =>
+      Obj.defineProperty(api, key, { value, enumerable: true, writable: false, configurable: false });
+    const method = (key: string, run: (...args: unknown[]) => unknown) =>
+      Obj.defineProperty(api, key, { value: run, enumerable: true, writable: true, configurable: true });
+    constant("name", info?.name ?? def.name);
+    constant("frameCount", info?.frameCount ?? clock!.length);
+    constant("duration", info?.duration ?? clock!.D);
+    constant("fps", info?.fps ?? Math.fround(1 / clock!.spf));
+    Obj.defineProperty(api, "rate", {
+      enumerable: true,
+      configurable: true,
+      get: () => target()?.rate ?? 1,
+      set: (value: unknown) => {
+        const control = target();
+        // 只收数字，`NaN` 也收（Q4）：别的类型（字符串、对象、布尔）忽略，不做类型转换
+        if (control && typeof value === "number") control.rate = Math.fround(value);
+      },
+    });
+    method("play", () => void target()?.play());
+    method("isPlaying", () => target()?.isPlaying() ?? false);
+    method("stop", () => void target()?.stop());
+    method("pause", () => void target()?.pause());
+    method("setFrame", (frame) => void target()?.setFrame(typeof frame === "number" ? frame : 0));
+    method("getFrame", () => target()?.getFrame() ?? 0);
+    method("getAnimation", () => undefined);
+    this.animationApis.set(id, api);
+    return api;
+  }
+
   private installScene(): void {
     this.method(
       this.thisScene,
@@ -778,6 +876,13 @@ export class ScriptApi {
       },
       true,
     );
+    // 全场景按名字找第一条（P10b，步骤 0 Q6）：参数不是字符串、找不到都是 null；空串照常查（取第一条没写 name 的）
+    this.method(this.thisScene, "getAnimation", (name: unknown) => {
+      this.requireAnimationContext();
+      if (typeof name !== "string") return null;
+      const def = this.findAnimation(null, name);
+      return def ? this.animationApi(def) : null;
+    });
     this.method(this.thisScene, "getLayerCount", () => this.access.bundle().layers.length, true);
     this.method(
       this.thisScene,
@@ -836,6 +941,7 @@ export class ScriptApi {
         },
         (value) => this.write({ kind: "constant", pass, material: name, ...shape }, value, shape.type),
       );
+    this.installGetAnimation(api, () => `${pass}/constantshadervalues`);
     this.materials.set(pass, api);
     return api;
   }
@@ -850,6 +956,7 @@ export class ScriptApi {
       () => this.access.state().effectEnabled(object, effect),
       (value) => this.write({ kind: "effect", object, effect }, value, "bool"),
     );
+    this.installGetAnimation(api, () => `objects/${object}/effects/${effect}`);
     this.effects.set(key, api);
     return api;
   }

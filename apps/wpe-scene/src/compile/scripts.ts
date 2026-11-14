@@ -11,6 +11,7 @@ import {
 } from "./bindings";
 import { isCameraObject, isMixedCameraObject, isSoundObject, isTextObject, objectKind } from "./features";
 import { resolveValue, type SceneJson, type SceneObject, type SceneScalar, type SceneValue } from "./model";
+import { registrationKeys } from "./registration";
 import { instanceControlPoint, SCRIPT_INSTANCE_KEYS, type InstanceKey } from "./particles";
 import { BLOOM_FIELDS } from "./postprocess";
 
@@ -233,7 +234,10 @@ export async function collectScripts(
       });
       return;
     }
-    for (const [key, entry] of Object.entries(value)) {
+    // 键序照 WPE 的登记顺序（P10b 决定 3，`registration.ts`），不按书写顺序
+    const record = value as Record<string, unknown>;
+    for (const key of registrationKeys(path, Object.keys(record))) {
+      const entry = record[key];
       let next = owner;
       let nextLayer = layer;
       if (path === "objects") {

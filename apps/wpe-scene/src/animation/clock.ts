@@ -44,6 +44,17 @@ export class AnimationClock {
   }
 
   /**
+   * 惰性时钟（P10b；`compile/animations.ts` 收进列表的丢弃动画，以及子动画用不到时的占位）：`spf` 1、`t` 0、`D` 0、`flags` 0、
+   * `length` 照收、没有事件。`advance` 因 `D ≤ 0` 直接返回，`getFrame()` 恒为 0，`isPlaying()` 为真，`play()` / `setFrame()` 都改不出
+   * 画面（P10 步骤 0 Q7：WPE 里 `fps` 读出 1、`duration` 0、`getFrame()` 一直 0）。
+   */
+  static inert(length: number): AnimationClock {
+    const clock = new AnimationClock({ fps: 1, length, mode: LOOP, startpaused: false });
+    clock.D = 0; // 构造会算出 length / 1，惰性时钟的一轮时长是 0（`advance` 据此不动）
+    return clock;
+  }
+
+  /**
    * 推进 `d` 秒（`rate × dt`，float32；`FUN_1401a9f60`，读码第 3、8 节），本帧越过的事件追加到 `out`：
    * - 暂停、已结束、`single` 已到头、`D ≤ 0` 时什么都不做；`mirror` 反向段把 `d` 取负；
    * - 事件：`d > 0` 收 `[t0, t1)`，否则收 `(t1, t0]`；

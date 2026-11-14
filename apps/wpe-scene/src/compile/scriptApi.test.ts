@@ -55,14 +55,9 @@ describe("未实现脚本 API 的扫描", () => {
       "  shared.target.getAnimation('a').play();",
       "}",
     ].join("\n");
-    expect(scan(source)).toEqual([
-      "layer.getEffect",
-      "layer.getParent",
-      "layer.getTextureAnimation",
-      "object.getAnimation",
-    ]);
-    // thisScene 自己的 getAnimation 另算一个键
-    expect(scan("thisScene.getAnimation('x');")).toEqual(["thisScene.getAnimation"]);
+    // `getAnimation`（IObject、thisScene 上的）已在 P10b 实现，不再报
+    expect(scan(source)).toEqual(["layer.getEffect", "layer.getParent", "layer.getTextureAnimation"]);
+    expect(scan("thisScene.getAnimation('x');")).toEqual([]);
   });
 
   it("通用名不按名字收：stop / copy / text / lookAt 只认 thisLayer / thisObject（play 已在声音层上实现，P6a 步骤 2）", () => {
@@ -149,9 +144,9 @@ describe("未实现脚本 API 的扫描", () => {
       "effect.getMaterial",
       "effect.name",
     ]);
-    // 材质常量：成员是 pass 的材质常量，同名的图层字段不报；IObject 的 getAnimation 照报
+    // 材质常量：成员是 pass 的材质常量，同名的图层字段不报；IObject 的 getAnimation 已实现（P10b），不报
     expect(scan("thisObject.text = 1; thisObject.speed = 2; thisObject.getAnimation();", { kind: "material" })).toEqual(
-      ["object.getAnimation"],
+      [],
     );
     // general：thisObject / thisLayer 都是场景字段对象，只有字段没有方法（L14）
     expect(

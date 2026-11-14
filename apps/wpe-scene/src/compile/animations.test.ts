@@ -60,11 +60,12 @@ describe("collectAnimations：目标与值类型", () => {
     const layer = (field: string) => ({ kind: "layer", object: 0, field });
     expect(list.map((item) => [item.id, item.target, item.valueType, item.writes])).toEqual([
       ["objects/0/alpha", layer("alpha"), "float", true],
-      ["objects/0/origin", layer("origin"), "vec3", true],
+      // 登记顺序（P10b）：同一层按键名序
       ["objects/0/angles", layer("angles"), "angles", true],
       ["objects/0/color", layer("color"), "vec3", true],
-      ["objects/0/visible", layer("visible"), "other", false],
+      ["objects/0/origin", layer("origin"), "vec3", true],
       ["objects/0/parallaxDepth", layer("parallaxDepth"), "vec2", true],
+      ["objects/0/visible", layer("visible"), "other", false],
     ]);
   });
 
@@ -85,12 +86,13 @@ describe("collectAnimations：目标与值类型", () => {
       ]),
     ).toEqual([
       ["objects/0/alpha", { kind: "layer", object: 0, field: "alpha" }, "float", true],
-      ["objects/0/origin", { kind: "layer", object: 0, field: "origin" }, "vec3", true],
-      ["objects/0/pointsize", { kind: "text", object: 0, field: "pointsize" }, "float", true],
-      ["objects/0/padding", { kind: "text", object: 0, field: "padding" }, "vec2", true],
-      ["objects/0/maxrows", { kind: "text", object: 0, field: "maxrows" }, "other", false],
-      ["objects/0/limitwidth", { kind: "text", object: 0, field: "limitwidth" }, "other", false],
+      // 登记顺序（P10b）：同一层按键名序
       ["objects/0/horizontalalign", { kind: "text", object: 0, field: "horizontalalign" }, "other", false],
+      ["objects/0/limitwidth", { kind: "text", object: 0, field: "limitwidth" }, "other", false],
+      ["objects/0/maxrows", { kind: "text", object: 0, field: "maxrows" }, "other", false],
+      ["objects/0/origin", { kind: "layer", object: 0, field: "origin" }, "vec3", true],
+      ["objects/0/padding", { kind: "text", object: 0, field: "padding" }, "vec2", true],
+      ["objects/0/pointsize", { kind: "text", object: 0, field: "pointsize" }, "float", true],
     ]);
     // 文本的 `text` 本身（字符串）：同样收集、不写
     expect(rows([{ id: 1, text: kf1({}, "Hi") }])).toEqual([
@@ -142,13 +144,14 @@ describe("collectAnimations：目标与值类型", () => {
         clearcolor: kf3({}, "0 0 0"),
       }),
     ).toEqual([
-      ["general/zoom", { kind: "general", key: "zoom" }, "float", true],
+      // 登记顺序（P10b）：general 的字段按键名序
+      ["general/bloom", { kind: "bloom-enabled" }, "other", false],
+      ["general/bloomhdriterations", { kind: "bloom", field: "hdrIterations" }, "other", false],
       ["general/bloomstrength", { kind: "bloom", field: "strength" }, "float", true],
       ["general/bloomtint", { kind: "bloom", field: "tint" }, "vec3", true],
-      ["general/bloomhdriterations", { kind: "bloom", field: "hdrIterations" }, "other", false],
-      ["general/bloom", { kind: "bloom-enabled" }, "other", false],
-      ["general/clearenabled", { kind: "general", key: "clearenabled" }, "other", false],
       ["general/clearcolor", { kind: "general", key: "clearcolor" }, "vec3", true],
+      ["general/clearenabled", { kind: "general", key: "clearenabled" }, "other", false],
+      ["general/zoom", { kind: "general", key: "zoom" }, "float", true],
     ]);
   });
 
@@ -165,8 +168,9 @@ describe("collectAnimations：目标与值类型", () => {
     expect(list.map((item) => [item.id, item.target, item.valueType, item.writes])).toEqual([
       ["objects/1/angles", { kind: "layer", object: 1, field: "angles" }, "angles", true],
       ["objects/1/instanceoverride/alpha", { kind: "particle-instance", object: 1, field: "alpha" }, "float", true],
-      ["objects/1/instanceoverride/count", { kind: "particle-instance", object: 1, field: "count" }, "float", true],
+      // 登记顺序（P10b）：colorn 在 count 前（键名序）
       ["objects/1/instanceoverride/colorn", { kind: "particle-instance", object: 1, field: "colorn" }, "vec3", true],
+      ["objects/1/instanceoverride/count", { kind: "particle-instance", object: 1, field: "count" }, "float", true],
     ]);
     expect(unsupported).toEqual(["value:animation:other"]);
   });
@@ -217,7 +221,7 @@ describe("collectAnimations：目标与值类型", () => {
 });
 
 describe("collectAnimations：丢弃、通道与时钟参数", () => {
-  it("丢弃（读码第 5 节第 1 条）：不进列表、不报键，灯对象上也不报", () => {
+  it("丢弃（读码第 5 节第 1 条）：不报键；P10b 起图层字段上的照样进列表、标 inert，灯对象上与没有就地目标的仍不进", () => {
     const discarded: JsonObject[] = [
       { animation: { c0: CURVE }, value: 1 },
       { animation: { c0: CURVE, options: [] }, value: 1 },
@@ -233,9 +237,37 @@ describe("collectAnimations：丢弃、通道与时钟参数", () => {
       kf1({ length: -5 }),
     ];
     for (const value of discarded) {
-      expect(collect([image({ alpha: value })]), JSON.stringify(value)).toEqual({ list: [], unsupported: [] });
+      const { list, unsupported } = collect([image({ alpha: value })]);
+      expect(unsupported, JSON.stringify(value)).toEqual([]);
+      expect(list, JSON.stringify(value)).toHaveLength(1);
+      expect(list[0], JSON.stringify(value)).toMatchObject({
+        id: "objects/0/alpha",
+        inert: true,
+        writes: false,
+        channels: [],
+        events: [],
+        parent: null,
+        clock: { fps: 1, mode: 0, startpaused: false },
+      });
       expect(collect([{ id: 2, light: "lpoint", intensity: value }])).toEqual({ list: [], unsupported: [] });
+      // 目标解析不了的（图层的 size）丢弃后也不进列表、不报键
+      expect(collect([image({ size: value })]), JSON.stringify(value)).toEqual({ list: [], unsupported: [] });
     }
+  });
+
+  it("惰性动画（Q7）：length 是数时截断、否则 0；options 是对象时照常读 name；读通道与事件的字段不影响", () => {
+    const one = (animation: JsonObject) => collect([image({ alpha: { animation, value: 1 } })]).list[0];
+    expect(one({ c0: CURVE, options: { fps: 0, length: 52.9, name: "dead" } })).toMatchObject({
+      name: "dead",
+      clock: { fps: 1, length: 52, mode: 0, startpaused: false },
+      channels: [],
+    });
+    expect(one({ c0: CURVE, options: { fps: 0, length: "5" } }).clock.length).toBe(0);
+    expect(one({ c0: CURVE, options: { fps: 0, length: -5 } }).clock.length).toBe(-5);
+    expect(one({ c0: CURVE, options: [] })).toMatchObject({ name: "", clock: { length: 0 }, inert: true });
+    expect(one({ c0: CURVE })).toMatchObject({ name: "", inert: true });
+    // 事件不读
+    expect(one({ c0: CURVE, options: { fps: 0, length: 5, events: [{ frame: 0, name: "e" }] } }).events).toEqual([]);
   });
 
   it("时钟参数：length 截断、fps 原值；mode 只认 mirror / single；startpaused 只认 true", () => {
@@ -323,6 +355,63 @@ describe("collectAnimations：relative（读码第 5 节第 3 条）", () => {
     expect(values({ origin: kf([tail, CURVE, CURVE], { wraploop: true }, "300 0 0", { relative: true }) })[0]).toEqual([
       300, 700, 300,
     ]);
+  });
+});
+
+describe("collectAnimations：name / object / owner / inert（P10b）", () => {
+  it("四种来源：图层字段、effect 常量、effect 的 visible、instanceoverride、general", () => {
+    const { list } = collect(
+      [
+        image({
+          alpha: kf1({ name: "fade" }),
+          effects: [{ visible: kf1({ name: "vis" }), passes: [{ constantshadervalues: { multiply: kf1() } }] }],
+        }),
+        { id: 2, particle: "particles/p.json", instanceoverride: { alpha: kf1({ name: "rate", fps: 0 }) } },
+      ],
+      { ...ORTHO, zoom: kf1({ name: 5 }) },
+    );
+    expect(list.map((item) => [item.id, item.name, item.object, item.owner, item.inert])).toEqual([
+      ["general/zoom", "", null, "general", false],
+      ["objects/0/alpha", "fade", 0, "objects/0", false],
+      ["objects/0/effects/0/visible", "vis", 0, "objects/0/effects/0", false],
+      [
+        "objects/0/effects/0/passes/0/constantshadervalues/multiply",
+        "",
+        0,
+        "objects/0/effects/0/passes/0/constantshadervalues",
+        false,
+      ],
+      ["objects/1/instanceoverride/alpha", "rate", 1, "objects/1/instanceoverride", true],
+    ]);
+  });
+
+  it("联动按 owner 比较：同一 pass 的才联动，不同 pass、不同 effect 不联动（Q2）；惰性的也当父", () => {
+    const pass = (constants: JsonObject) => ({ constantshadervalues: constants });
+    const { list } = collect([
+      image({
+        effects: [
+          {
+            passes: [
+              pass({ Opacity: kf1(), Aperture: kf1({ parent: { key: "Opacity" } }) }),
+              pass({ Aperture: kf1({ parent: { key: "Opacity" } }) }),
+            ],
+          },
+          { passes: [pass({ Aperture: kf1({ parent: { key: "Opacity" } }) })] },
+        ],
+        // 父是惰性的：照样联动（读码第 7 节，登记与找父都不看有效位）
+        alpha: kf1({ parent: { key: "brightness" } }),
+        brightness: kf1({ fps: 0 }),
+      }),
+    ]);
+    const parentOf = (id: string) => {
+      const item = list.find((entry) => entry.id === id)!;
+      return item.parent === null ? null : list[item.parent].id;
+    };
+    const base = "objects/0/effects/0/passes/0/constantshadervalues";
+    expect(parentOf(base + "/Aperture")).toBe(base + "/Opacity");
+    expect(parentOf("objects/0/effects/0/passes/1/constantshadervalues/Aperture")).toBeNull();
+    expect(parentOf("objects/0/effects/1/passes/0/constantshadervalues/Aperture")).toBeNull();
+    expect(parentOf("objects/0/alpha")).toBe("objects/0/brightness");
   });
 });
 
@@ -564,8 +653,9 @@ describe("compileScene：bundle.animations 与能力键", () => {
   it("常量动画都不写（通道数不对、uniform 不存在）：同样不报能力键", async () => {
     const bundle = await compile(effect({ point: kf1({}, "0 0"), missing: kf1({}, 1) }));
     expect(bundle.animations!.map((item) => [item.id.split("/").at(-1), item.writes, item.target])).toEqual([
-      ["point", false, expect.objectContaining({ uniforms: ["g_Point"], type: "vec2" })],
+      // 登记顺序（P10b）：常量按键名序，missing 在 point 前
       ["missing", false, expect.objectContaining({ uniforms: [] })],
+      ["point", false, expect.objectContaining({ uniforms: ["g_Point"], type: "vec2" })],
     ]);
     expect(bundle.unsupported).toEqual([]);
   });

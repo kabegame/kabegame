@@ -261,8 +261,9 @@ describe("脚本值：文本字段（P6b 1e-3）", () => {
       [2, "FR", false],
     ]);
     expect(bundle.scripts.list.map((script) => script.target)).toEqual([
-      { kind: "text", object: 0, field: "text" },
+      // 登记顺序（P10b）：同一对象的字段按键名序，pointsize 在 text 前
       { kind: "text", object: 0, field: "pointsize" },
+      { kind: "text", object: 0, field: "text" },
       { kind: "layer", object: 2, field: "color" },
     ]);
     expect(bundle.unsupported.filter((key) => key.startsWith("text:"))).toEqual([]);

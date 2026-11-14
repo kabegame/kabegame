@@ -13,7 +13,7 @@ import { SceneState } from "../render/state";
 import { AnimationClock, BACK, DONE, PAUSED } from "./clock";
 import { Channel, frameValues, type ParsedKey } from "./curve";
 import { EMPTY_ANIMATIONS_PROBE, SceneAnimations, type AnimationSink } from "./player";
-import type { AnimationClockParams, SceneAnimation } from "./types";
+import type { AnimationClockParams, AnimationEventRecord, SceneAnimation } from "./types";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -47,6 +47,10 @@ function anim(
     parent: null,
     events: [],
     writes: true,
+    name: "",
+    object: 0,
+    owner: id.slice(0, Math.max(0, id.lastIndexOf("/"))),
+    inert: false,
     ...rest,
     clock: { ...CLOCK, ...clock },
   };
@@ -229,9 +233,10 @@ describe("SceneAnimations：联动（读码第 7 节）", () => {
     const { writes, state } = recorder();
     const players = new SceneAnimations(list);
     const dts: number[] = [];
+    const got: AnimationEventRecord[] = [];
     for (let i = 0; i < 4; i++) {
       writes.length = 0;
-      players.frame(DT, state);
+      players.frame(DT, state, { event: (event) => got.push(event) });
       dts.push(DT);
       // 子的值按父的时钟（30 fps、length 60）解读自己的关键帧，和父同一帧
       const [child] = oracle(CLOCK, [childKeys], dts);
@@ -241,7 +246,7 @@ describe("SceneAnimations：联动（读码第 7 节）", () => {
         ["layer:0:origin", parent.join(" ")],
       ]);
       // 子的事件永远不触发（子的时钟从不推进）
-      expect(players.events).toEqual([]);
+      expect(got).toEqual([]);
     }
     const probe = players.probe().list;
     // 每个时钟每帧只推进一次：4 帧后正好是 4 个 dt
@@ -308,13 +313,14 @@ describe("SceneAnimations：写不写与事件", () => {
     const players = new SceneAnimations([
       anim("objects/0/visible", { writes: false, events: [{ time: 0, json: '{"frame":0,"name":"e0"}' }] }),
     ]);
-    players.frame(DT, state);
+    const got: AnimationEventRecord[] = [];
+    players.frame(DT, state, { event: (event) => got.push(event) });
     expect(writes).toEqual([]);
-    expect(players.events).toEqual([{ animation: 0, json: '{"frame":0,"name":"e0"}' }]);
+    expect(got).toEqual([{ animation: 0, object: 0, json: '{"frame":0,"name":"e0"}' }]);
     expect(players.probe().list[0]).toMatchObject({ t: f(DT), value: null, writes: false });
   });
 
-  it("事件按主人的下标记、每帧开头清空；loop 回绕后再收", () => {
+  it("事件按主人的下标与对象记、每帧只给本帧的；loop 回绕后再收", () => {
     const spf = f(1 / 30);
     // 子（下标 0）排在父前面：事件记在父（时钟主人）的下标上
     const players = new SceneAnimations([
@@ -332,10 +338,13 @@ describe("SceneAnimations：写不写与事件", () => {
     ]);
     const { state } = recorder();
     const seen: string[][] = [];
+    let current: string[] = [];
+    const hooks = { event: (event: AnimationEventRecord) => void current.push(`${event.animation}:${event.json}`) };
     // D = 6 / 30 = 0.2 s，第 4 帧的事件在 0.133 s；每帧 0.06 s（都离边界远）
     for (let i = 0; i < 6; i++) {
-      players.frame(0.06, state);
-      seen.push(players.events.map((event) => `${event.animation}:${event.json}`));
+      current = [];
+      players.frame(0.06, state, hooks);
+      seen.push(current);
     }
     // [0, 0.06) 收第 0 帧的；[0.06, 0.12) 什么都没有（上一帧的不残留）；[0.12, 0.18) 收第 4 帧的；[0.18, 0.24) 回绕到 0.04、再收
     // [0, 0.04) 的第 0 帧；之后同理
@@ -376,7 +385,7 @@ describe("SceneAnimations：写不写与事件", () => {
     ]);
     const seen: [number, number][] = [];
     const hook = (object: number) => void seen.push([object, volumes.get(object)!]);
-    players.frame(DT, state, hook);
+    players.frame(DT, state, { sound: hook });
     const [expected] = oracle(CLOCK, [keys], [DT]);
     expect(expected).toBeLessThan(1);
     expect(seen).toEqual([[3, expected]]);
@@ -476,13 +485,14 @@ describe("SceneAnimations：carryOver（重编译接回）", () => {
     const renamed = new SceneAnimations([anim("objects/0/brightness")]);
     renamed.carryOver(before);
     expect(renamed.probe().list[0].t).toBe(0);
-    // 原来是主人、现在是子：没有自己的时钟可接，借新父的（新父 other 也接回了）
+    // 原来是主人、现在是子：画面借新父的（新父 other 也接回了）；子自己的时钟（P10b）也接回
     const child = new SceneAnimations([anim("other"), anim("objects/0/alpha", { parent: 0 })]);
     child.carryOver(before);
     expect(child.probe().list.map((item) => [item.owner, item.t])).toEqual([
       [0, f(DT)],
       [0, f(DT)],
     ]);
+    expect(child.control("objects/0/alpha")!.getFrame()).toBe(f(f(DT) / f(1 / 30)));
   });
 
   it("关键帧逐项相同的复用旧的 Channel（整数帧缓存跟着来），不同的用新的", () => {
@@ -569,5 +579,304 @@ describe("SceneAnimations：seek（dev 探针）", () => {
     const out = new Float32Array(1);
     frameValues(clock, [new Channel(LIN)], out);
     expect(writes).toEqual([["layer:0:alpha", out[0]]]);
+  });
+});
+
+/**
+ * P10b 步骤 1：每条都有自己的时钟、事件派发时机、`control(id)`、惰性（丢弃的）动画、`carryOver` 接子的时钟与 `rate`、探针的事件环。
+ * 依据 `phase-10b-script.md` 步骤 1、读码第 7、8、11 节与 `p10-REPORT.md`「P10b 补测」（Q7、Q8）。
+ */
+describe("SceneAnimations：子动画的脚本控制（读码第 7、11 节）", () => {
+  const origin = (id: string, extra: Partial<SceneAnimation> = {}) =>
+    anim(id, {
+      target: { kind: "layer", object: 0, field: "origin" },
+      valueType: "vec3",
+      channels: [LIN, LIN, LIN],
+      ...extra,
+    });
+
+  it("对子 pause / setFrame(0) / rate = 0 都不影响画面，值照父走；子自己的 getFrame 一直是它自己的时钟（0）", () => {
+    const players = new SceneAnimations([anim("objects/0/alpha", { parent: 1 }), origin("objects/0/origin")]);
+    const child = players.control("objects/0/alpha")!;
+    child.pause();
+    child.setFrame(0);
+    child.rate = 0;
+    const { writes, state } = recorder();
+    const dts: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      writes.length = 0;
+      players.frame(DT, state);
+      dts.push(DT);
+      expect(writes[0]).toEqual(["layer:0:alpha", oracle(CLOCK, [LIN], dts)[0]]);
+      expect(child.getFrame()).toBe(0);
+    }
+    // 父的时钟没被子的控制碰过
+    expect(players.control("objects/0/origin")!.getFrame()).toBe(f(accumulated(dts) / f(1 / 30)));
+    expect(players.control("objects/0/origin")!.isPlaying()).toBe(true);
+  });
+
+  it("父 rate = 2 子跟着加速；子 rate 只存着、读得回", () => {
+    const players = new SceneAnimations([anim("objects/0/alpha", { parent: 1 }), origin("objects/0/origin")]);
+    players.control("objects/0/origin")!.rate = 2;
+    players.control("objects/0/alpha")!.rate = 5;
+    const { writes, state } = recorder();
+    players.frame(DT, state);
+    expect(writes[0][1]).toBe(oracle(CLOCK, [LIN], [DT * 2])[0]);
+    expect(players.control("objects/0/alpha")!.rate).toBe(5);
+    expect(players.probe().list.map((item) => item.rate)).toEqual([5, 2]);
+  });
+
+  it("子自己的时钟不推进：play 之后也一直停在 0（事件不触发）", () => {
+    const players = new SceneAnimations([
+      anim("objects/0/alpha", { parent: 1, clock: { startpaused: true }, events: [{ time: 0, json: "c" }] }),
+      origin("objects/0/origin"),
+    ]);
+    const child = players.control("objects/0/alpha")!;
+    child.play();
+    expect(child.isPlaying()).toBe(true);
+    const got: AnimationEventRecord[] = [];
+    for (let i = 0; i < 3; i++) players.frame(DT, recorder().state, { event: (event) => got.push(event) });
+    expect(child.getFrame()).toBe(0);
+    expect(got).toEqual([]);
+  });
+});
+
+describe("SceneAnimations：事件派发（读码第 8 节）", () => {
+  /** 写入与事件按发生顺序记进同一个日志。 */
+  function sequenced() {
+    const log: string[] = [];
+    const state: AnimationSink = {
+      write(binding, raw) {
+        log.push(`w:${label(binding)}=${String(raw).slice(0, 6)}`);
+        return "applied";
+      },
+    };
+    const hooks = { event: (event: AnimationEventRecord) => void log.push(`e:${event.animation}:${event.json}`) };
+    return { log, state, hooks };
+  }
+  const kinds = (log: string[]) => log.map((line) => line.split("=")[0]);
+  const second = (id: string, extra: Partial<SceneAnimation> = {}) =>
+    anim(id, { target: { kind: "layer", object: 1, field: "alpha" }, ...extra });
+
+  it("越过事件的那一条写完之后、下一条写之前调用", () => {
+    const { log, state, hooks } = sequenced();
+    const players = new SceneAnimations([
+      anim("objects/0/alpha", { events: [{ time: 0, json: "a0" }] }),
+      second("objects/1/alpha", { events: [{ time: 0, json: "b0" }] }),
+    ]);
+    players.frame(DT, state, hooks);
+    expect(kinds(log)).toEqual(["w:layer:0:alpha", "e:0:a0", "w:layer:1:alpha", "e:1:b0"]);
+  });
+
+  it("子排在父前面：事件属于父（时钟主人），在子那一条之后、父那一条之前派发", () => {
+    const { log, state, hooks } = sequenced();
+    const players = new SceneAnimations([
+      anim("objects/0/alpha", { parent: 1 }),
+      second("objects/1/alpha", { events: [{ time: 0, json: "p0" }] }),
+    ]);
+    players.frame(DT, state, hooks);
+    expect(kinds(log)).toEqual(["w:layer:0:alpha", "e:1:p0", "w:layer:1:alpha"]);
+  });
+
+  it("writes 为假的也在它那一条处理完之后派发", () => {
+    const { log, state, hooks } = sequenced();
+    const players = new SceneAnimations([
+      anim("objects/0/visible", { writes: false, events: [{ time: 0, json: "v" }] }),
+      second("objects/1/alpha"),
+    ]);
+    players.frame(DT, state, hooks);
+    expect(kinds(log)).toEqual(["e:0:v", "w:layer:1:alpha"]);
+  });
+
+  it("loop 回绕帧：先收回绕前的，再收回绕后的，按数组顺序，一个个同步派发", () => {
+    const spf = f(1 / 30);
+    const { log, state, hooks } = sequenced();
+    const players = new SceneAnimations([
+      anim("objects/0/alpha", {
+        clock: { length: 6 },
+        events: [
+          { time: 0, json: "e0" },
+          { time: f(f(5) * spf), json: "e5" },
+        ],
+      }),
+    ]);
+    // D = 0.2 s：第一帧 [0, 0.19) 收 e0、e5；第二帧 0.19 → 0.25 回绕到 0.05，收 [0, 0.05) 的 e0
+    players.frame(0.19, state, hooks);
+    players.frame(0.06, state, hooks);
+    expect(log.filter((line) => line.startsWith("e:"))).toEqual(["e:0:e0", "e:0:e5", "e:0:e0"]);
+    expect(log.map((line) => line[0])).toEqual(["w", "e", "e", "w", "e"]);
+  });
+
+  it("回调里对排在后面的那条 stop()：它本帧就写第 0 帧的值（Q8）；之后一直是 0；没被碰的照走", () => {
+    const spf = f(1 / 30);
+    const players = new SceneAnimations([
+      anim("objects/0/origin", {
+        target: { kind: "layer", object: 0, field: "origin" },
+        valueType: "vec3",
+        channels: [LIN, LIN, LIN],
+        events: [{ time: f(f(3) * spf), json: "go" }],
+      }),
+      anim("objects/1/alpha", { target: { kind: "layer", object: 1, field: "alpha" } }),
+      anim("objects/2/alpha", { target: { kind: "layer", object: 2, field: "alpha" } }),
+    ]);
+    const { writes, state } = recorder();
+    const hooks = {
+      event: () => {
+        players.control("objects/1/alpha")!.stop();
+      },
+    };
+    const second = () => writes.filter(([target]) => target === "layer:1:alpha").map(([, raw]) => raw);
+    // 帧 0.04 s：第三帧（t 0.08 → 0.12）越过第 3 帧（0.1 s）的事件
+    for (let i = 0; i < 2; i++) players.frame(0.04, state, hooks);
+    expect(second()[1]).not.toBe(0);
+    players.frame(0.04, state, hooks);
+    expect(second()[2]).toBe(0);
+    players.frame(0.04, state, hooks);
+    expect(second()[3]).toBe(0);
+    expect(players.control("objects/2/alpha")!.getFrame()).toBeGreaterThan(3);
+  });
+
+  it("回调里对本条自己 stop / setFrame：已拷出的事件照样全部派发，不被中途改掉", () => {
+    const players = new SceneAnimations([
+      anim("objects/0/alpha", {
+        events: [
+          { time: 0, json: "x" },
+          { time: 0, json: "y" },
+          { time: 0, json: "z" },
+        ],
+      }),
+    ]);
+    const got: string[] = [];
+    players.frame(DT, recorder().state, {
+      event: (event) => {
+        got.push(event.json);
+        players.control("objects/0/alpha")!.stop();
+        players.control("objects/0/alpha")!.setFrame(7);
+      },
+    });
+    expect(got).toEqual(["x", "y", "z"]);
+  });
+
+  it("探针记最近派发的事件（带 frame() 序号与对象），只留最近 100 条", () => {
+    const players = new SceneAnimations([anim("objects/3/alpha", { object: 3, events: [{ time: 0, json: "ev" }] })]);
+    const { state } = recorder();
+    players.frame(DT, state);
+    expect(players.probe().events).toEqual([{ frame: 1, animation: 0, object: 3, json: "ev" }]);
+    // length 1 → D = 1/30 s，帧 0.04 s 每帧跨一轮回绕、每帧都收到事件
+    const many = new SceneAnimations([
+      anim("objects/0/alpha", { clock: { length: 1 }, events: [{ time: 0, json: "ev" }] }),
+    ]);
+    for (let i = 0; i < 130; i++) many.frame(0.04, state);
+    const events = many.probe().events;
+    expect(events).toHaveLength(100);
+    expect(events[0].frame).toBe(31);
+    expect(events[99].frame).toBe(130);
+  });
+});
+
+describe("SceneAnimations：control(id)（读码第 11 节）", () => {
+  it("同一条每次返回同一个对象；没有这一条时 null；成员读出这一条自己的值", () => {
+    const players = new SceneAnimations([anim("objects/0/alpha", { name: "wave", clock: { fps: 30, length: 42 } })]);
+    const control = players.control("objects/0/alpha")!;
+    expect(players.control("objects/0/alpha")).toBe(control);
+    expect(players.control("objects/9/alpha")).toBeNull();
+    expect(control.name).toBe("wave");
+    expect(control.frameCount).toBe(42);
+    expect(control.fps).toBe(f(1 / f(1 / 30)));
+    expect(control.duration).toBe(f(f(42) / 30));
+    expect(control.rate).toBe(1);
+    expect(control.isPlaying()).toBe(true);
+    control.rate = 0.1;
+    expect(control.rate).toBe(f(0.1));
+  });
+
+  it("play / pause / stop / setFrame / getFrame 作用在自己的时钟上（startpaused 的先 play 才走）", () => {
+    const players = new SceneAnimations([anim("objects/0/alpha", { clock: { startpaused: true } })]);
+    const control = players.control("objects/0/alpha")!;
+    const { state } = recorder();
+    expect(control.isPlaying()).toBe(false);
+    players.frame(DT, state);
+    expect(control.getFrame()).toBe(0);
+    control.play();
+    players.frame(DT, state);
+    expect(control.getFrame()).toBe(f(f(DT) / f(1 / 30)));
+    control.pause();
+    const paused = control.getFrame();
+    players.frame(DT, state);
+    expect(control.getFrame()).toBe(paused);
+    control.setFrame(30);
+    expect(control.getFrame()).toBe(f(f(f(1 / 30) * 30) / f(1 / 30)));
+    control.stop();
+    expect(control.getFrame()).toBe(0);
+    expect(control.isPlaying()).toBe(false);
+  });
+
+  it("rate 写进去，推进就按新值（主人）", () => {
+    const players = new SceneAnimations([anim("objects/0/alpha")]);
+    players.control("objects/0/alpha")!.rate = 3;
+    players.frame(DT, recorder().state);
+    expect(players.probe().list[0].t).toBe(f(f(3) * f(DT)));
+  });
+});
+
+describe("SceneAnimations：惰性动画（丢弃的，Q7）", () => {
+  const inert = (id: string, extra: Partial<SceneAnimation> = {}) =>
+    anim(id, {
+      inert: true,
+      writes: false,
+      channels: [],
+      events: [],
+      name: "dead",
+      clock: { fps: 1, length: 52, mode: 0, startpaused: false },
+      ...extra,
+    });
+
+  it("不推进、不写；control 照常返回：fps 1、frameCount 是 length、duration 0、getFrame 0、isPlaying 真；play() 无效", () => {
+    const players = new SceneAnimations([inert("objects/0/alpha")]);
+    const { writes, state } = recorder();
+    const control = players.control("objects/0/alpha")!;
+    expect([control.fps, control.frameCount, control.duration, control.getFrame(), control.isPlaying()]).toEqual([
+      1,
+      52,
+      0,
+      0,
+      true,
+    ]);
+    control.play();
+    for (let i = 0; i < 5; i++) players.frame(DT, state);
+    expect(writes).toEqual([]);
+    expect(control.getFrame()).toBe(0);
+    expect(control.name).toBe("dead");
+    expect(players.probe().list[0]).toMatchObject({ t: 0, writes: false, value: null, name: "dead" });
+  });
+});
+
+describe("SceneAnimations：carryOver 接子的时钟与 rate（P10b）", () => {
+  it("子的 setFrame / pause / rate 跨重编译保留；时钟参数不同的不接", () => {
+    const make = () =>
+      new SceneAnimations([
+        anim("objects/0/alpha", { parent: 1 }),
+        anim("objects/0/origin", {
+          target: { kind: "layer", object: 0, field: "origin" },
+          valueType: "vec3",
+          channels: [LIN, LIN, LIN],
+        }),
+      ]);
+    const before = make();
+    const child = before.control("objects/0/alpha")!;
+    child.setFrame(12);
+    child.pause();
+    child.rate = 4;
+    before.control("objects/0/origin")!.rate = 2;
+    const after = make();
+    after.carryOver(before);
+    const next = after.control("objects/0/alpha")!;
+    expect(next.getFrame()).toBe(12);
+    expect(next.isPlaying()).toBe(false);
+    expect(next.rate).toBe(4);
+    expect(after.control("objects/0/origin")!.rate).toBe(2);
+    const changed = new SceneAnimations([anim("objects/0/alpha", { clock: { fps: 60 } })]);
+    changed.carryOver(before);
+    expect(changed.control("objects/0/alpha")!.rate).toBe(1);
   });
 });

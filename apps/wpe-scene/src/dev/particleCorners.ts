@@ -21,7 +21,7 @@
  * 一个系统多条 renderer（P4f 步骤 4）：每个粒子层按顶层系统的 `draws` 每条各出一项，第 r 项（r ≥ 1）带 `renderer: r`，各用那一条的
  * 变体程序、uniform 与顶点（拖尾那条跳过退化粒子，sprite 那条照写），第 0 项和以前逐字节相同。
  */
-import { SceneAnimations } from "../animation/player";
+import { SceneAnimations, type AnimationHooks } from "../animation/player";
 import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { compileSceneInWorker } from "../compile/client";
 import { particleDraws } from "../compile/particles";
@@ -543,12 +543,22 @@ export interface ReadbackReplayOptions {
    * `sync`，脚本之后那次一起刷），视差点按这一帧开头（动画、脚本之前）的 general 推进，`g_Daytime` 每帧按 `daytime`。只画读回帧时前 n − 1 帧
    * 没有 `setParallax` / `update`，第二次 `sync` 并进下一帧开头的那次。不给时调用序列逐项同以前。
    */
-  scripts?: { frame(dt: number, time: number): void };
+  scripts?: {
+    frame(dt: number, time: number): void;
+    /** 动画事件（P10b）：推进动画时越过的事件在写完那一条之后、下一条之前同步派发（同宿主 `beforeFrame` 的 `event` 钩子）。 */
+    animationEvent?(object: number | null, json: string): void;
+  };
   /**
    * 每一帧的 `g_Daytime`（按这一帧的 `g_Time` 算；第 7 批：跑脚本时跟着脚本的时钟）；缺省 0.5。只画读回帧时只有读回帧用它，每帧都画时
    * 每一帧都用。
    */
   daytime?: (time: number) => number;
+}
+
+/** 动画事件的钩子（P10b）：脚本侧接了 `animationEvent` 才给，把越过的事件原样交给脚本；不接时 `undefined`（`frame` 的调用同以前）。 */
+function eventHooks(scripts: ReadbackReplayOptions["scripts"]): AnimationHooks | undefined {
+  const dispatch = scripts?.animationEvent?.bind(scripts);
+  return dispatch ? { event: ({ object, json }) => dispatch(object, json) } : undefined;
 }
 
 /**
@@ -578,9 +588,11 @@ export function replayReadback(
   // 那次（读回帧）或下一帧开头那次一起刷（同渲染器：`beforeFrame` 里动画、脚本连着跑，之后才 `sync`）
   const animate = (frametime: number) => {
     if (!animations) return;
-    animations.frame(frametime, state);
+    animations.frame(frametime, state, animationHooks);
     if (!scripts) scene.sync(state);
   };
+  // 动画事件的钩子（P10b）：只有跑脚本且脚本侧接了才给；不给时 `frame` 的调用同以前
+  const animationHooks = eventHooks(scripts);
   // 跑脚本时：每一帧开头（这一帧动画、脚本之前）的 general，视差点逐帧按它推进（同渲染器帧开头推进视差点）；不改 general 时每一项都相同
   const generals: SceneState["general"][] = [];
   // 一帧里步进粒子之后的部分（同渲染器）：设这一帧的相机 → 动画 → 脚本（`beforeFrame`）
@@ -658,6 +670,7 @@ function replayEncoded(
   const [width, height] = options.size;
   checkReplay(replay, pointers.cursors);
   const shake = frameCamera(scene, state, height, options.perspective, dts, options.cameraObjects);
+  const animationHooks = eventHooks(scripts);
   let parallax = options.parallax;
   let elapsed = 0;
   let time = 0;
@@ -675,7 +688,7 @@ function replayEncoded(
     scene.stepParticles(frametime, time, state, pointers.cursors[i]);
     const eye = shake.apply(time);
     if (animations) {
-      animations.frame(frametime, state);
+      animations.frame(frametime, state, animationHooks);
       // 跑脚本时不另 sync：同渲染器 `beforeFrame` 里动画、脚本连着跑，脚本之后的 `sync` 一起刷
       if (!scripts) scene.sync(state);
     }

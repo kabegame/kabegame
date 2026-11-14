@@ -46,15 +46,34 @@ export interface SceneAnimation {
   events: AnimationEventDef[];
   /** 通道数等于分量数，且类型是 float / vec2 / vec3 / vec4（`angles` 按 vec3）。为假时不写，字段保持 `value`（读码第 5 节）。 */
   writes: boolean;
+  /** `options.name`：不是字符串（或 `options` 不是对象）时为空串（WPE `B+0x68`）。`getAnimation` 按它或属性名找（P10b）。 */
+  name: string;
+  /** 所属场景对象：`objects` 下标，`general` 的为 null。事件的接收范围（读码第 8 节；P10b 步骤 0 Q3）。 */
+  object: number | null;
+  /**
+   * 属主路径：`id` 去掉最后一段（图层字段 `objects/3`、effect 常量 `…/passes/0/constantshadervalues`、effect 的 `visible`
+   * `objects/3/effects/1`、`general`）。`getAnimation` 的查找范围与联动的父都在同一属主内（P10b 步骤 0 Q1、Q2：联动按 pass 算）。
+   */
+  owner: string;
+  /**
+   * 整条丢弃（`clockOf` 为 null：`options` 不合法、`fps` / `length` 不合格）：WPE 照样登记、`getAnimation` 找得到，时钟不走、不写
+   * （读码第 5 节第 1 条，P10b 步骤 0 Q7）。此时 `writes` 为假、`channels` 与 `events` 为空、`clock` 是惰性时钟的参数。
+   */
+  inert: boolean;
 }
 
-/** 时钟一帧收到的一个事件（P10a 只收不派发，派发在 P10b）。 */
+/**
+ * 时钟一帧收到的一个事件，派发给脚本运行时的内容（P10b：`AnimationHooks.event` 的参数，也是探针记下的事件）。
+ * 在越过它的那一条写完之后、下一条之前同步派发（读码第 1 节第 3 条、第 8 节）。
+ */
 export interface AnimationEventRecord {
   /**
    * 时钟主人在 `bundle.animations` 里的下标：WPE 按它所在的对象（或 `general`）找导出了 `animationEvent` 的脚本（读码第 8 节）。
    * 子动画借父的时钟，事件只来自父自己的 `events`。
    */
   animation: number;
+  /** 主人所属的场景对象（`SceneAnimation.object`）：事件按图层发，`general` 的为 null。 */
+  object: number | null;
   /** 同 `AnimationEventDef.json`，派发时 `JSON.parse` 成 `AnimationEvent`。 */
   json: string;
 }

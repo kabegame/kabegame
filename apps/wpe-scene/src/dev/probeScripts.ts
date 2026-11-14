@@ -16,6 +16,7 @@
  * 要整场重编译的写入（`recompile` 目标、打开带不支持项的 effect、打开没有链的泛光）探针做不了：状态不变，按宿主同一条「值变了才算」
  * （`recordRecompileWrite`）记进结果的 `recompile`，调用方据此判断这一帧不可信。
  */
+import type { SceneAnimations } from "../animation/player";
 import { mergeProperties, type UserProperty } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import { SceneFs, type SceneReader } from "../compile/fs";
@@ -211,6 +212,11 @@ export interface ProbeScriptsInput {
   /** 脚本的 `engine.screenResolution`。 */
   screen: readonly [number, number];
   options: ResolvedProbeScripts;
+  /**
+   * 探针自己的关键帧动画播放器（P10b）：脚本的 `getAnimation()` 落到它上面，`init` 之前就要建好（`init` 里的 `play()` 才有落点，同宿主的
+   * 待用播放器）；回放推进的是同一份。不给时 `getAnimation` 的方法空操作。
+   */
+  animations?: Pick<SceneAnimations, "control">;
   /** 建 realm（缺省 `createIframeRealm`，在当前文档里建隐藏 iframe）：单测换成不碰 DOM 的假 realm。 */
   createRealm?: (setup: ProbeRealmSetup) => Promise<ScriptRealm>;
 }
@@ -220,6 +226,8 @@ export interface ProbeScripts {
   load(): Promise<void>;
   /** 跑一帧（计时器与每段 `update`）：`dt` 是这一帧的 `g_Frametime`，`time` 是 `g_Time`（也是脚本时钟的回放时间）。 */
   frame(dt: number, time: number): void;
+  /** 动画事件（P10b）：回放推进动画时越过的事件在这里派发给脚本，同宿主 `runtime.animationEvent`；没有脚本时什么都不做（可选：单测的替身可以不给）。 */
+  animationEvent?(object: number | null, json: string): void;
   result(): ProbeScriptsResult;
   /** 调各段的 `destroy`、释放 realm；可以重复调。 */
   dispose(): void;
@@ -335,6 +343,8 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
           unconnected.particles++;
           return null;
         },
+        // 关键帧动画（P10b）：探针自己的播放器，每次现取
+        animation: (id) => input.animations?.control(id) ?? null,
       }));
       runtime = new ScriptRuntime(created, {
         report,
@@ -355,6 +365,10 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       clock.frametime = dt;
       frames++;
       runtime?.frame(dt);
+    },
+    animationEvent(object, json) {
+      if (disposed) return;
+      runtime?.animationEvent(object, json);
     },
     result() {
       return {

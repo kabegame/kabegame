@@ -11,8 +11,12 @@ import { SceneAnimations } from "../animation/player";
 import type { SceneAnimation } from "../animation/types";
 import { generalDefaults } from "../compile/bindings";
 import { initialParallaxState } from "../render/parallax";
-import type { SceneState } from "../render/state";
+import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import type { SceneScript } from "../compile/scripts";
+import { SceneState } from "../render/state";
+import type { ScriptRealm } from "../script/runtime";
 import { replayReadback, type ParticleReplay } from "./particleCorners";
+import { createProbeScripts, probeScriptsOptionsOf, type ProbeRealmSetup } from "./probeScripts";
 import { replayPointers } from "./replayPointers";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -132,6 +136,10 @@ describe("回放到读回帧里的关键帧动画（P10a 步骤 3）", () => {
         parent: null,
         events: [],
         writes: true,
+        name: "",
+        object: 0,
+        owner: "objects/0",
+        inert: false,
       },
     ];
     const players = new SceneAnimations(list);
@@ -150,5 +158,197 @@ describe("回放到读回帧里的关键帧动画（P10a 步骤 3）", () => {
     expect(calls.filter((call) => kind(call) === "write")).toEqual(recorded);
     // 去掉动画之后同不给动画
     expect(withoutAnimation(calls)).toEqual(run(PARTICLES, "none").calls);
+  });
+});
+
+describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () => {
+  const ID = "objects/0/alpha";
+  const EVENT_JSON = JSON.stringify({ name: "hit" });
+  const layer = {
+    id: 1,
+    object: 0,
+    parent: null,
+    name: "L0",
+    origin: [0, 0, 0],
+    scale: [1, 1, 1],
+    angles: [0, 0, 0],
+    size: [100, 100],
+    alpha: 1,
+    color: [1, 1, 1],
+    brightness: 1,
+    visible: true,
+    visibleBound: false,
+    parallaxDepth: [1, 1],
+    solidLayer: false,
+    instanced: false,
+    noPadding: false,
+    perspective: false,
+    passthroughModel: false,
+    group: null,
+    subtree: [],
+    groupUpload: null,
+    copyBackground: true,
+    clampUVs: true,
+    noInterpolation: false,
+    fullscreen: false,
+    fullscreenSize: null,
+    passes: [],
+    colorBlendMode: 0,
+    effects: [],
+    passthrough: null,
+    particle: null,
+  } as unknown as SceneLayer;
+  const script: SceneScript = {
+    id: ID,
+    source: "",
+    target: { kind: "layer", object: 0, field: "alpha" },
+    valueType: "float",
+    initial: 1,
+    owner: { kind: "layer", object: 0 },
+    layer: 0,
+    scriptProperties: null,
+    imports: [],
+    errors: [],
+  };
+  /** `startpaused` 的动画：不被脚本播放就永远不推进，事件也就永远不触发；事件时间 0.06 s 落在第二帧（[0.05, 0.1125)）。 */
+  const animation: SceneAnimation = {
+    id: ID,
+    target: { kind: "layer", object: 0, field: "alpha" },
+    valueType: "float",
+    channels: [
+      [
+        { frame: 0, value: 0, flags: 0, bx: 0, by: 0, fx: 0, fy: 0 },
+        { frame: 60, value: 1, flags: 0, bx: 0, by: 0, fx: 0, fy: 0 },
+      ],
+    ],
+    clock: { fps: 30, length: 60, mode: 0, startpaused: true },
+    parent: null,
+    events: [{ time: 0.06, json: EVENT_JSON }],
+    writes: true,
+    name: "Fade",
+    object: 0,
+    owner: "objects",
+    inert: false,
+  };
+  const bundle = {
+    general: {
+      width: 1920,
+      height: 1080,
+      fields: generalDefaults(),
+      clearVariable: false,
+      perspectiveOverrideFov: (95 * Math.PI) / 180,
+      postprocess: { level: "disabled", bloomFlag: false, hdrFlag: false, bloom: false, hdr: false },
+      bloom: {
+        strength: 1,
+        threshold: 1,
+        tint: [1, 1, 1],
+        hdrStrength: 1,
+        hdrThreshold: 1,
+        hdrFeather: 1,
+        hdrScatter: 1,
+        hdrIterations: 1,
+      },
+    },
+    layers: [layer],
+    programs: [],
+    textures: [],
+    bloom: null,
+    unsupported: [],
+    bindings: [],
+    scripts: { list: [script] },
+    animations: [{ ...animation, owner: "objects/0" }],
+  } as unknown as SceneBundle;
+
+  /** 假 realm：模块导出 init（`play` 的开关由 `playInInit` 定）、animationEvent、update，都记进 `log`。 */
+  function fakeRealm(log: string[], playInInit: boolean) {
+    return async (setup: ProbeRealmSetup): Promise<ScriptRealm> => {
+      void setup;
+      const global: Record<string, unknown> = {
+        Object,
+        Array,
+        JSON,
+        Float32Array,
+        Date,
+        Math: Object.create(Math),
+        SyntaxError,
+      };
+      return {
+        global,
+        prototypes: { Vec2: {}, Vec3: {}, Vec4: {}, Mat3: {}, Mat4: {} },
+        internal: { updateScriptProperties() {}, convertUserProperties: () => ({}) },
+        async importModule() {
+          return {
+            init() {
+              log.push("init");
+              if (playInInit) (global.thisObject as { getAnimation(): { play(): void } }).getAnimation().play();
+            },
+            animationEvent(event: { name: string }, value: number) {
+              log.push(`event:${event.name}:${value}`);
+            },
+            update() {
+              log.push("update");
+            },
+          };
+        },
+        dispose() {},
+      };
+    };
+  }
+
+  async function replay(playInInit: boolean) {
+    const log: string[] = [];
+    const calls: unknown[] = [];
+    const state = SceneState.fromBundle(bundle);
+    const players = new SceneAnimations(bundle.animations!);
+    const probe = createProbeScripts({
+      bundle,
+      state,
+      sceneAssets: [],
+      properties: new Map(),
+      screen: SCENE,
+      options: probeScriptsOptionsOf(true)!,
+      animations: players,
+      createRealm: fakeRealm(log, playInInit),
+    });
+    await probe.load();
+    const scene = {
+      stepParticles: () => void calls.push("step"),
+      setCamera: () => void calls.push("camera"),
+      sync: () => void calls.push("sync"),
+      setParallax: () => void calls.push("parallax"),
+      update: () => void calls.push("update"),
+    };
+    replayReadback(scene, state, {
+      particles: PARTICLES,
+      time: 0,
+      pointers: replayPointers({}, SCENE, PARTICLES.dts.length),
+      parallax: initialParallaxState(...SCENE),
+      size: SCENE,
+      animations: players,
+      scripts: probe,
+    });
+    probe.dispose();
+    return { log, players };
+  }
+
+  it("init 里 getAnimation().play() 有落点：回放第一帧起推进；事件在该帧的 update 之前派发给脚本，带上接收者的当前值", async () => {
+    const { log, players } = await replay(true);
+    expect(players.probe().list[0]).toMatchObject({ playing: true });
+    // init → 第 1 帧 update → 第 2 帧（越过 0.06 s）事件在 update 之前 → 第 3、4 帧 update
+    expect(log.slice(0, 2)).toEqual(["init", "update"]);
+    const events = log.filter((line) => line.startsWith("event:"));
+    expect(events).toHaveLength(1);
+    // 事件的第二个参数是接收者属性的当前值：动画刚写进的 alpha（不是 1）
+    expect(events[0]).toMatch(/^event:hit:0\.\d+/);
+    const at = log.indexOf(events[0]);
+    expect(log[at + 1]).toBe("update");
+    expect(log.slice(at - 1, at)).toEqual(["update"]); // 第一帧的 update 在事件之前
+    expect(log.filter((line) => line === "update")).toHaveLength(PARTICLES.dts.length);
+  });
+
+  it("对照：init 里不播放，startpaused 的动画不动、事件不触发", async () => {
+    const { log, players } = await replay(false);
+    expect(players.probe().list[0]).toMatchObject({ playing: false, t: 0 });
+    expect(log.some((line) => line.startsWith("event:"))).toBe(false);
   });
 });

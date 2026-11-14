@@ -368,3 +368,23 @@ describe("事件（读码第 8 节）", () => {
     expect(step(c, DT)).toEqual(["b0"]);
   });
 });
+
+describe("惰性时钟（P10b，丢弃的动画，p10-REPORT「P10b 补测」Q7）", () => {
+  it("spf 1、t 0、D 0、flags 0、length 照收、没有事件；fps 读出 1", () => {
+    const c = AnimationClock.inert(52);
+    expect([c.spf, c.t, c.D, c.flags, c.length, c.events.length]).toEqual([1, 0, 0, 0, 52, 0]);
+    expect(f(1 / c.spf)).toBe(1);
+  });
+
+  it("advance 因 D ≤ 0 不动，play() 之后也一直在第 0 帧；isPlaying 真", () => {
+    const c = AnimationClock.inert(52);
+    expect(c.isPlaying()).toBe(true);
+    c.play();
+    for (let i = 0; i < 5; i++) expect(step(c, 1)).toEqual([]);
+    expect([c.t, c.getFrame()]).toEqual([0, 0]);
+    // 负 length 也不动
+    const negative = AnimationClock.inert(-5);
+    negative.advance(1, []);
+    expect([negative.t, negative.length]).toEqual([0, -5]);
+  });
+});

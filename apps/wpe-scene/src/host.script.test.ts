@@ -28,6 +28,8 @@ let onUpdate: (() => unknown) | null = null;
 /** 脚本 `update` 每次收到的参数（写回目标的当前值）。 */
 let updateArguments: unknown[] = [];
 let onInit: (() => unknown) | null = null;
+/** 脚本导出 `animationEvent` 时（P10b）每次收到的 (事件对象, 当前值)；为 null 时模块不导出这个回调。 */
+let onAnimationEvent: ((event: unknown, value: unknown) => unknown) | null = null;
 let activeGlobal: Record<string, unknown>;
 /** 新场景里图层 0 的可变 effect 备不好（`GpuScene.prepareVariants` 冻结了它）。 */
 let frozen = false;
@@ -48,7 +50,7 @@ class Vec3 {
   ) {}
 }
 function createRealm() {
-  activeGlobal = { Object, Array };
+  activeGlobal = { Object, Array, JSON, SyntaxError };
   return {
     global: activeGlobal,
     prototypes: { Vec2: {}, Vec3: Vec3.prototype, Vec4: {}, Mat3: {}, Mat4: {} },
@@ -80,6 +82,14 @@ function createRealm() {
         destroy() {
           events.push("destroy");
         },
+        ...(onAnimationEvent
+          ? {
+              animationEvent(event: unknown, value: unknown) {
+                events.push("animationEvent");
+                return onAnimationEvent!(event, value);
+              },
+            }
+          : {}),
       };
     },
     dispose() {
@@ -317,6 +327,10 @@ function animation(id: string, target: SceneAnimation["target"], keys: ParsedKey
     parent: null,
     events: [],
     writes: true,
+    name: "",
+    object: Number(id.split("/")[1]),
+    owner: id.slice(0, id.lastIndexOf("/")),
+    inert: false,
   };
 }
 
@@ -404,6 +418,7 @@ describe("SceneHost 脚本接线", () => {
     onUpdate = null;
     updateArguments = [];
     onInit = null;
+    onAnimationEvent = null;
     frozen = false;
     realmGate = null;
     moduleGate = null;
@@ -1736,8 +1751,8 @@ describe("SceneHost 脚本接线", () => {
       const scriptState = () => (host as unknown as { scriptState: SceneState }).scriptState;
       await vi.waitFor(() => expect(scriptState()).not.toBe(fresh));
       expect(scriptState()).toBe(renderer.sceneState);
-      // 换上之后时钟接着走（3 帧 + 新场景首帧）
-      expect(host.animations().list[0].t).toBe(animatedTime(4));
+      // 换上之后动画从头来（P10b 决定 1：清空脚本存储不接旧时钟，等于重开壁纸）：新播放器的第一帧
+      expect(host.animations().list[0].t).toBe(animatedTime(1));
       host.dispose();
     });
 
@@ -1750,6 +1765,154 @@ describe("SceneHost 脚本接线", () => {
       await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledTimes(2));
       expect(host.animations().list[0].t).toBe(animatedTime(1));
       expect(alpha()).toBe(animatedAt(ALPHA_KEYS, 1));
+      host.dispose();
+    });
+  });
+
+  describe("动画的脚本控制与事件（P10b 步骤 3）", () => {
+    /** 图层 0 的 `alpha` 动画：`startpaused`、名字 Fade，带一个在第一帧内触发的事件（可选）。 */
+    function controlBundle(options: { event?: boolean } = {}): SceneBundle {
+      const result = animationBundle(true);
+      const [base] = result.animations!;
+      result.animations = [
+        {
+          ...base,
+          name: "Fade",
+          clock: { ...ANIM_CLOCK, startpaused: true },
+          events: options.event ? [{ time: 0.01, json: JSON.stringify({ name: "hit" }) }] : [],
+        },
+      ];
+      return result;
+    }
+    type Wrapper = {
+      play(): void;
+      pause(): void;
+      rate: number;
+      getFrame(): number;
+      isPlaying(): boolean;
+    };
+    const wrapperNow = () => (activeGlobal.thisObject as { getAnimation(): Wrapper }).getAnimation();
+    /** init 之外（`thisObject` 是 null）用 `thisScene.getAnimation(名字)` 取同一个包装对象。 */
+    const sceneWrapper = () => (activeGlobal.thisScene as { getAnimation(name: string): Wrapper }).getAnimation("Fade");
+    async function start(options: { event?: boolean } = {}) {
+      compile.mockImplementation(async () => controlBundle(options));
+      const reporter = report();
+      const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+      host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
+      await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+      return { host, reporter };
+    }
+    afterEach(() => {
+      onAnimationEvent = null;
+    });
+
+    it("对照：startpaused 的动画没人控制就一直停在第 0 帧", async () => {
+      const { host } = await start();
+      expect(host.animations().list[0]).toMatchObject({ t: 0, playing: false });
+      host.dispose();
+    });
+
+    it("首次加载 init 里 getAnimation().play()：第一帧就推进（播放器在 init 之前建好）", async () => {
+      onInit = () => {
+        wrapperNow().play();
+        return undefined;
+      };
+      const { host } = await start();
+      expect(host.animations().list[0]).toMatchObject({ name: "Fade", playing: true, t: animatedTime(1) });
+      host.dispose();
+    });
+
+    it.each(["realm", "module"] as const)(
+      "%s 还在加载时再来一次重载：init 里的 play() 不丢（落在新 bundle 的待用播放器上，或从上一份接过来）",
+      async (gate) => {
+        compile.mockImplementation(async () => controlBundle());
+        onInit = () => {
+          wrapperNow().play();
+          return undefined;
+        };
+        const host = await overlappingReloads(gate);
+        expect(compile).toHaveBeenCalledTimes(2);
+        expect(events.filter((event) => event === "init")).toHaveLength(1);
+        expect(host.animations().list[0]).toMatchObject({ name: "Fade", playing: true });
+        host.dispose();
+      },
+    );
+
+    it("重编译后同一个包装对象仍控制同一条，rate 保留、控制落在新播放器上", async () => {
+      let wrapper: Wrapper | null = null;
+      onInit = () => {
+        wrapper = wrapperNow();
+        wrapper.play();
+        wrapper.rate = 2;
+        return undefined;
+      };
+      const { host } = await start();
+      const first = host.animations().list[0];
+      expect(first).toMatchObject({ playing: true, rate: 2 });
+      events.length = 0;
+      listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+      await vi.waitFor(() => expect(events).toContain("render"));
+      expect(compile).toHaveBeenCalledTimes(2);
+      // init 没有重跑：包装对象还是原来的，rate 与时钟接着走
+      expect(events).not.toContain("init");
+      expect(sceneWrapper()).toBe(wrapper);
+      expect(host.animations().list[0]).toMatchObject({ rate: 2, playing: true });
+      expect(wrapper!.rate).toBe(2);
+      wrapper!.pause();
+      expect(host.animations().list[0].playing).toBe(false);
+      expect(wrapper!.isPlaying()).toBe(false);
+      host.dispose();
+    });
+
+    it("事件在 update 之前派发给脚本：参数是事件对象与脚本属性的当前值，返回值写回，update 收到它", async () => {
+      const received: { event: unknown; value: unknown }[] = [];
+      onAnimationEvent = (event, value) => {
+        received.push({ event, value });
+        return 0.7;
+      };
+      onInit = () => {
+        wrapperNow().play();
+        return undefined;
+      };
+      const { host } = await start({ event: true });
+      expect(received).toEqual([{ event: { name: "hit" }, value: animatedAt(ALPHA_KEYS, 1) }]);
+      // 顺序：动画写 → animationEvent → update（update 收到事件回调写回的值）
+      const frame = events.slice(events.indexOf("init"));
+      expect(frame.indexOf("animationEvent")).toBeGreaterThan(-1);
+      expect(frame.indexOf("animationEvent")).toBeLessThan(frame.indexOf("update"));
+      expect(updateArguments[0]).toBe(Math.fround(0.7));
+      expect(renderer.sceneState?.layers.get(0)?.alpha).toBe(0.6);
+      host.dispose();
+    });
+
+    it("清空脚本存储后动画从头来：新 init 里的控制生效，不接旧时钟与旧 rate（决定 1）", async () => {
+      let inits = 0;
+      onInit = () => {
+        inits++;
+        const wrapper = wrapperNow();
+        if (inits === 1) wrapper.play();
+        else wrapper.rate = 2; // 第二次 init 只改 rate、不 play
+        return undefined;
+      };
+      const { host } = await start();
+      renderer.tick();
+      renderer.tick();
+      expect(host.animations().list[0]).toMatchObject({ playing: true, t: animatedTime(3) });
+      listeners.get("wpe-scene-clear-storage")!({ payload: { imageId: "1" } });
+      await vi.waitFor(() => expect(inits).toBe(2));
+      await vi.waitFor(() => expect(realmsCreated).toBe(2));
+      // 新场景换上：新播放器是 startpaused 的初态（旧的 play 不接回），第二次 init 里设的 rate 保留
+      await vi.waitFor(() => expect(host.animations().list[0].rate).toBe(2));
+      expect(host.animations().list[0]).toMatchObject({ playing: false, t: 0, rate: 2 });
+      // 新 init 里的 play 照常生效：再清一次、这回 init 播放
+      inits = 0;
+      onInit = () => {
+        wrapperNow().play();
+        return undefined;
+      };
+      listeners.get("wpe-scene-clear-storage")!({ payload: { imageId: "1" } });
+      await vi.waitFor(() => expect(host.animations().list[0]).toMatchObject({ playing: true, rate: 1 }));
+      expect(host.animations().list[0].t).toBe(animatedTime(1));
       host.dispose();
     });
   });

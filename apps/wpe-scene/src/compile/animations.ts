@@ -12,12 +12,16 @@ import type { BindingTarget, ValueType } from "./bindings";
 import { isSoundObject, isTextObject, objectKind } from "./features";
 import { atof, constantTargetFields, type MaterialSlot } from "./materialValues";
 import { isKeyframedValue, type SceneJson, type SceneObject, type SceneScalar } from "./model";
+import { compareKeys, registrationKeys } from "./registration";
 import { targetOf, targetValueType, type ScriptOwner } from "./scripts";
 
 const f = Math.fround;
 
 export interface CollectedAnimations {
-  /** 按遍历顺序（登记顺序，读码第 7 节）：`general` 先，再 `objects`。 */
+  /**
+   * 按遍历顺序（登记顺序，读码第 7 节；P10b 起照 WPE，见 `registration.ts`）：`general` 先，再 `objects`，每个对象先自己的字段、再 effect。
+   * 丢弃的（`options` 不合法）也在里面，`inert` 为真（P10b：WPE 照样登记，`getAnimation` 找得到）。
+   */
   list: SceneAnimation[];
   /**
    * 不进列表、照报的能力键：灯对象上的 `value:animation:light`（P13）、相机对象上的 `value:animation:camera`（P5d）、
@@ -31,7 +35,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 时钟参数（`FUN_1401a96b0` → `FUN_1401a8c10`，读码第 3、5 节）；整条丢弃时返回 null：
+ * 时钟参数（`FUN_1401a96b0` → `FUN_1401a8c10`，读码第 3、5 节）；整条丢弃时返回 null（P10b 起这样的动画仍进列表，标 `inert`）：
  * - `options` 不是对象；`fps`、`length` 不是 JSON 数（类型 1–3，布尔不算）；
  * - `fps ≤ 0`（float32），或 `(float)(int)length / fps ≤ 0`（`length` 截断成 0、为负）。
  * `mode` 只认字符串 `"mirror"` / `"single"`，`startpaused` 只认布尔 `true`。
@@ -84,18 +88,6 @@ function offsetChannel(raw: unknown, offset: number): unknown {
   return raw.map((item) =>
     isRecord(item) && typeof item.value === "number" ? { ...item, value: f(f(item.value) + offset) } : item,
   );
-}
-
-/** 码点序比较：jsoncpp 的对象键按 UTF-8 字节比较（`memcmp` 后比长度），UTF-8 的字节序就是码点序。 */
-function compareKeys(a: string, b: string): number {
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n;) {
-    const x = a.codePointAt(i)!;
-    const y = b.codePointAt(i)!;
-    if (x !== y) return x - y;
-    i += x > 0xffff ? 2 : 1;
-  }
-  return a.length - b.length;
 }
 
 /**
@@ -199,18 +191,21 @@ const isLightObject = (object: SceneObject) => object.light !== undefined && obj
 const isCameraObject = (object: SceneObject) => object.camera !== undefined && object.camera !== null;
 
 /**
- * 收集 `scene.json` 里的关键帧动画。坐标遍历同 `collectScripts`（`general` 先，再 `objects`；effect 实例常量的属主是材质 pass；
- * `instanceoverride` 在对象下）。遇到关键帧值不再往里走；脚本值照常往里走（`scriptproperties` 里的关键帧报 `other`）。其余顶层键里的
+ * 收集 `scene.json` 里的关键帧动画。坐标遍历同 `collectScripts`（`general` 先，再 `objects`；字典内的键序照 WPE 的登记顺序，见
+ * `registration.ts`；effect 实例常量的属主是材质 pass；`instanceoverride` 在对象下）。遇到关键帧值不再往里走；脚本值照常往里走（`scriptproperties` 里的关键帧报 `other`）。其余顶层键里的
  * 关键帧没有就地目标，报 `other`。
  *
  * 每处关键帧依次：
- * 1. 丢弃（`clockOf`）：不进列表、不报键，WPE 什么都不做、属性保持 `value`；
- * 2. 灯 / 相机对象上的：不进列表，报 `value:animation:light` / `camera`；
- * 3. 目标（`targetOf`）没有就地目标：不进列表，报 `value:animation:other`；
+ * 1. 灯 / 相机对象上的：不进列表，报 `value:animation:light` / `camera`（丢弃的这几种不报）；
+ * 2. 目标（`targetOf`）没有就地目标：不进列表，报 `value:animation:other`（丢弃的不报）；
+ * 3. 丢弃（`clockOf`）：WPE 属性保持 `value`、什么都不写，但照样登记、`getAnimation` 找得到（读码第 5 节，P10b 步骤 0 Q7）：进列表、
+ *    标 `inert`，`writes` 假、通道与事件为空，时钟参数 `fps` 1、`mode` 0（惰性时钟，`AnimationClock.inert`），`length` 是数时截断、否则 0；
  * 4. `relative`（先于通道解析）→ `c0`… 连续的数组（最多 `c3`，空数组也算一条）逐个 `parseChannel` → `wraploop: true` 时 `applyWraploop`；
  * 5. 值类型与 `writes`；事件；
- * 6. 全部收完后联动：`options.parent.key` 是非空字符串时，找同一属主、属性名等于它、自己没有 parent key 的第一条作父（读码第 7 节）；
- *    找不到时用自己的时钟。`children` 不读。
+ * 6. 全部收完后联动：`options.parent.key` 是非空字符串时，找同一属主、属性名等于它、自己没有 parent key 的第一条（惰性的也算）作父
+ *    （读码第 7 节）；找不到时用自己的时钟。`children` 不读。
+ *
+ * 每条另记 `name`（`options.name`）、`object`（所属场景对象，事件的接收范围）、`owner`（`getAnimation` 的查找范围，同联动的属主）。
  */
 export function collectAnimations(scene: SceneJson): CollectedAnimations {
   const list: SceneAnimation[] = [];
@@ -222,15 +217,16 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
   function add(raw: Record<string, unknown>, path: string, owner: ScriptOwner | null, layer: number | null): void {
     const animation = raw.animation as Record<string, unknown>;
     const options = animation.options;
-    const clock = clockOf(options);
-    if (!clock || !isRecord(options)) return;
+    const parsed = clockOf(options);
     const object = layer === null ? undefined : objects[layer];
+    // 丢弃的（`parsed` 为 null）照样登记（P10b，读码第 5 节第 1 条）；灯 / 相机对象与没有就地目标的无论丢不丢都不进列表，
+    // 丢弃的这几种也不报键（WPE 本来就什么都不做，和 P10a 一致）
     if (isRecord(object) && isLightObject(object)) {
-      unsupported.add("value:animation:light");
+      if (parsed) unsupported.add("value:animation:light");
       return;
     }
     if (isRecord(object) && isCameraObject(object)) {
-      unsupported.add("value:animation:camera");
+      if (parsed) unsupported.add("value:animation:camera");
       return;
     }
     const key = propertyOf(path);
@@ -247,18 +243,45 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
         )
       : ({ kind: "unsupported", path } as const);
     if (target.kind === "unsupported" || target.kind === "recompile") {
-      unsupported.add("value:animation:other");
+      if (parsed) unsupported.add("value:animation:other");
       return;
     }
+    // `options` 是对象时丢弃的也照常读名字与 parent key（不是对象就都没有）
+    const opts: Record<string, unknown> = isRecord(options) ? options : {};
+    const name = typeof opts.name === "string" ? opts.name : "";
+    const parent = isRecord(opts.parent) ? opts.parent.key : undefined;
+    const parentKey = typeof parent === "string" && parent !== "" ? parent : null;
+    if (!parsed) {
+      // 惰性（P10b，步骤 0 Q7）：时钟没解析，`fps` 读出 1、`D` 0；`length` 是数时截断、否则 0（后者是推断）。不读通道与事件，不写
+      const length = typeof opts.length === "number" ? Math.trunc(opts.length) : 0;
+      list.push({
+        id: path,
+        target,
+        valueType: "other",
+        channels: [],
+        clock: { fps: 1, length, mode: 0, startpaused: false },
+        parent: null,
+        events: [],
+        writes: false,
+        name,
+        object: layer,
+        owner: ownerOf(path),
+        inert: true,
+      });
+      // 惰性的照样参与联动（读码第 7 节：登记无条件，找父不看有效位）：它找父不影响什么（它不写）；它当父时子借到惰性时钟，
+      // 停在自己的第 0 帧（推断，语料 0 处）
+      parentKeys.push(parentKey);
+      return;
+    }
+    const clock = parsed;
     const offsets = "relative" in animation ? relativeOffsets(raw.value) : null;
     const channels: ParsedKey[][] = [];
     for (let i = 0; i < 4 && Array.isArray(animation[`c${i}`]); i++) {
       const source = offsets && i < 3 ? offsetChannel(animation[`c${i}`], offsets[i]) : animation[`c${i}`];
       const keys = parseChannel(source);
-      channels.push(options.wraploop === true ? applyWraploop(keys, clock.length) : keys);
+      channels.push(opts.wraploop === true ? applyWraploop(keys, clock.length) : keys);
     }
     const valueType = valueTypeOf(target, owner!, key);
-    const parent = isRecord(options.parent) ? options.parent.key : undefined;
     list.push({
       id: path,
       target,
@@ -266,11 +289,15 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
       channels,
       clock,
       parent: null,
-      events: eventsOf(options.events, clock.fps),
+      events: eventsOf(opts.events, clock.fps),
       // 常量目标的类型要等编译 pass 后才知道（`settleConstantAnimation`）
       writes: target.kind !== "constant" && animationWrites(valueType, channels.length),
+      name,
+      object: layer,
+      owner: ownerOf(path),
+      inert: false,
     });
-    parentKeys.push(typeof parent === "string" && parent !== "" ? parent : null);
+    parentKeys.push(parentKey);
   }
 
   function visit(value: unknown, path: string, owner: ScriptOwner | null, layer: number | null): void {
@@ -291,7 +318,9 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
       });
       return;
     }
-    for (const [key, entry] of Object.entries(value)) {
+    const record = value as Record<string, unknown>;
+    for (const key of registrationKeys(path, Object.keys(record))) {
+      const entry = record[key];
       let next = owner;
       let nextLayer = layer;
       if (owner && path === "objects") {
@@ -312,17 +341,16 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
   for (const [key, value] of Object.entries(scene))
     if (key !== "general" && key !== "objects") visit(value, key, null, null);
 
-  // 联动（读码第 7 节）：父必须同一属主、属性名等于 parent key、自己没有 parent key，只有一层；先登记的优先
-  // TODO:[WPE_SCENE] effect 常量联动的属主按 pass 算（`…/passes/<k>/constantshadervalues`），没核对：WPE 比的是绑定的目标对象
-  // （`B+8`），它也可能是整个 effect 或图层。语料 `3577990983` 的 `objects/41` 在 pass 2、4、5 上各有一个 `Aperture`（parent key
-  // `Opacity`），`Opacity` 只在 pass 3 上：按 pass 算它们用自己的时钟，按 effect / 图层算会挂到 pass 3 的 `Opacity` 上。两边参数相同
-  // （30 fps、length 120、single），画面无差；要核对就在 WPE 里放一个 effect 的两个 pass 上分别写父、子，看子跟不跟父的暂停
+  // 联动（读码第 7 节）：父必须同一属主、属性名等于 parent key、自己没有 parent key，只有一层；先登记的优先。
+  // 属主按 pass 算（`…/passes/<k>/constantshadervalues`）：P10b 步骤 0 Q2 实测，同一 effect 的两个 pass、同一图层的两个 effect、
+  // 图层字段对 effect 常量，子都按自己的时钟走、不跟 `startpaused` 的父停住。语料 `3577990983` 的 `objects/41` 在 pass 2、4、5 上各有
+  // 一个 `Aperture`（parent key `Opacity`），`Opacity` 只在 pass 3 上：它们用自己的时钟。
   list.forEach((animation, index) => {
     const key = parentKeys[index];
     if (key === null) return;
-    const owner = ownerOf(animation.id);
     const parent = list.findIndex(
-      (candidate, at) => parentKeys[at] === null && ownerOf(candidate.id) === owner && propertyOf(candidate.id) === key,
+      (candidate, at) =>
+        parentKeys[at] === null && candidate.owner === animation.owner && propertyOf(candidate.id) === key,
     );
     animation.parent = parent < 0 ? null : parent;
   });

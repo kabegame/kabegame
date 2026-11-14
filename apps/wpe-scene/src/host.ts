@@ -185,6 +185,13 @@ export class SceneHost {
    */
   private sceneAnimations: SceneAnimations | null = null;
   /**
+   * 首次加载（或「清空脚本存储」后重建脚本环境）时，脚本 `init` 要用的动画播放器（P10b 步骤 3）：WPE 先登记全部动画再跑 `init`，所以
+   * `init(){ thisObject.getAnimation().play() }` 开场就播。`init` 在 `beforeFirstFrame` 建播放器之前跑，这里先按新 bundle 建好，
+   * `ScriptApi.animation` 在它属于脚本当前看到的 bundle 时取它；`beforeFirstFrame` 换上它时**不** `carryOver`（动画从头来，`init` 里的
+   * 控制要保留），不是同一份 bundle（加载期间又重编译了）就作废、照旧新建并接旧时钟。退回预览图、销毁时丢掉。
+   */
+  private pendingAnimations: { bundle: SceneBundle; player: SceneAnimations } | null = null;
+  /**
    * 交给渲染器的 `VideoSink`：同一份转给当前的 `sceneVideos`，没有时空操作。重编译时 `loadVideos` 在新场景换上之前就按新 bundle 的
    * 下标重建了表（好早点读新出现的视频），这期间旧场景还在画、问的是旧下标：按视频区间换算成新下标，换算不到（新 bundle 里没有这段
    * 视频）就不交帧，免得把别的视频拷进旧场景的纹理。
@@ -360,6 +367,8 @@ export class SceneHost {
     // 视频的脚本状态一并复位（P9b）：新脚本的 IVideoTexture 是缺省值（loop 真、rate 1），播放器也要是；旧脚本登记的结束回调不会再调，
     // 留着只会拖住旧的脚本环境
     this.sceneVideos?.resetScriptState();
+    // 动画一起从头来（P10b 决定 1）：重建后 runtime 为 null，`reload` 会走「先按新 bundle 建待用播放器」的分支（`pendingAnimations`），
+    // 新 `init` 里的 play() 落在它上面，`beforeFirstFrame` 换上时不接旧时钟；所以这里不用碰 `sceneAnimations`（旧场景在新场景换上前照常画）
     // 脚本写过的重编译目标一并放弃；用户属性在重建后重新全量交给新脚本
     this.scriptOverrides.clear();
     this.scriptNeedsFullApply = true;
@@ -608,6 +617,13 @@ export class SceneHost {
         },
         // 粒子层的 play / pause / stop / isPlaying / emitParticles（P4f 步骤 3）：同样每次现取
         particles: (object) => this.particleTarget(object),
+        // 关键帧动画的 IAnimation（P10b）：待用播放器属于脚本当前看到的 bundle 时取它（首次加载的 init），否则取正在播的那份；每次现取，
+        // 重编译换了播放器也接得上
+        animation: (id) => {
+          const pending = this.pendingAnimations;
+          const player = pending && pending.bundle === this.scriptBundle ? pending.player : this.sceneAnimations;
+          return player?.control(id) ?? null;
+        },
       });
       const runtime = new ScriptRuntime(realm, {
         report: this.options.report,
@@ -951,7 +967,12 @@ export class SceneHost {
           // 只活到下一帧动画覆盖。不受脚本运行时门控：没有脚本的场景也跑（`scriptState` 在换场景时总会设上）。
           // 写进渲染器正在画的那份状态（`drawnState`），它和这份动画同时换（`beforeFirstFrame`）；平时就是 `scriptState`
           const drawn = this.drawnState;
-          if (drawn) this.sceneAnimations?.frame(dt, drawn, this.pushSoundVolume);
+          // 动画事件（P10b）：越过事件的那一条写完就同步派发给脚本，在 `runtime.frame`（update）之前；返回值写回同 update
+          if (drawn)
+            this.sceneAnimations?.frame(dt, drawn, {
+              sound: this.pushSoundVolume,
+              event: ({ object, json }) => this.runtime?.animationEvent(object, json),
+            });
           this.runtime?.frame(dt);
         }
       },
@@ -1012,6 +1033,7 @@ export class SceneHost {
     this.disposeVideos();
     // 关键帧动画同样丢掉：下次能渲染时从 0 开始
     this.sceneAnimations = null;
+    this.pendingAnimations = null;
     this.bundle = null;
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
@@ -1114,6 +1136,12 @@ export class SceneHost {
       if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
         this.scriptBundle = bundle;
         this.scriptState = SceneState.fromBundle(bundle);
+        // 先按新 bundle 建好动画播放器，`init` 里的 getAnimation().play() 才有落点（见 `pendingAnimations`）
+        const player = new SceneAnimations(bundle.animations ?? []);
+        // 加载期间又来一次加载（重编译）：脚本环境已经建好或正在跑 `init`（`runtime` 已赋值），之前的 `init` 控制的是上一份待用播放器，
+        // 它们不会再跑，接过来；`runtime` 还没赋值时 `init` 还没开始，之后按 `scriptBundle` 落到这一份上，不用接
+        if (this.runtime && this.pendingAnimations) player.carryOver(this.pendingAnimations.player);
+        this.pendingAnimations = { bundle, player };
         await this.ensureRuntime(bundle, target.sceneAssets);
         if (id !== this.generation) return;
       }
@@ -1140,8 +1168,16 @@ export class SceneHost {
           // 关键帧动画（P10a 步骤 3）在这里换，不在编译完就换：换上之前旧场景还在画，要接着用自己的动画；时钟也不能在建 GPU 资源期间
           // 停住再接（`carryOver` 拷的是这一刻的时间）。换上就按当前时钟写一次：暂停中重编译时首帧不跑 `beforeFrame`，不写的话先闪一下
           // 编译期的 `value`。在重放脚本写入之前：一帧里动画先写、脚本后写（rea-p10-keyframes 第 9 节）。手写的测试 bundle 可能没有动画表
-          const animations = new SceneAnimations(bundle.animations ?? []);
-          animations.carryOver(this.sceneAnimations);
+          // 首次加载 / 清空脚本存储后，`init` 已经在待用的播放器上控制过：直接换上、不接旧时钟（P10b 决定 1）；待用的不是这份 bundle
+          // 的（加载期间又重编译了）作废，照旧新建并接上正在播的（没有时接过期的待用播放器）
+          const pending = this.pendingAnimations;
+          this.pendingAnimations = null;
+          let animations: SceneAnimations;
+          if (pending && pending.bundle === bundle) animations = pending.player;
+          else {
+            animations = new SceneAnimations(bundle.animations ?? []);
+            animations.carryOver(this.sceneAnimations ?? pending?.player ?? null);
+          }
           this.sceneAnimations = animations;
           animations.write(state, this.pushSoundVolume);
           this.runtime?.replayWrites();
@@ -1225,6 +1261,7 @@ export class SceneHost {
     this.disposeVideos();
     this.userTextures.dispose();
     this.sceneAnimations = null;
+    this.pendingAnimations = null;
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;

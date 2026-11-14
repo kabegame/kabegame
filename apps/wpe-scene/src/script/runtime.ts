@@ -1,6 +1,6 @@
 import { type TargetKey, type UserProperty } from "../compile/bindings";
 import { scriptToString } from "../text/fields";
-import { type SceneScript, type SceneScripts } from "../compile/scripts";
+import { type SceneScript, type SceneScripts, type ScriptOwner } from "../compile/scripts";
 import { type SceneReporter } from "../report";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 
@@ -25,7 +25,7 @@ export type ScriptValue = number[] | boolean | string;
  * 运行时会调用的导出回调。WPE 的其余回调（`compile/scriptApi.ts` 的 `MISSING_SCRIPT_CALLBACKS`）编译期报
  * `script:callback:*`；实现一个就加到这里、从那张表删掉（`api.test.ts` 核对两者）。
  */
-export const RUNTIME_CALLBACKS = ["init", "update", "applyUserProperties", "destroy"] as const;
+export const RUNTIME_CALLBACKS = ["init", "update", "applyUserProperties", "destroy", "animationEvent"] as const;
 type Callback = (typeof RUNTIME_CALLBACKS)[number];
 /**
  * 宿主代为调用的回调类别（不是导出回调）：`timer` 是 `engine.setTimeout` / `setInterval`，`ended` 是视频纹理的结束回调（P9b，
@@ -48,6 +48,14 @@ interface Timer {
   remaining: number;
   period: number | null;
   cancelled: boolean;
+}
+
+/**
+ * 脚本的接收范围（P10b，读码第 8 节）：图层字段、effect、材质常量（`owner.layer`）归图层，`general` 的归场景（null），同动画的 `object`。
+ */
+export function scriptObject(owner: ScriptOwner): number | null {
+  if (owner.kind === "general") return null;
+  return owner.kind === "material" ? owner.layer : owner.object;
 }
 
 /** 写回目标的路径（重放表的键，同宿主的 `targetPath`）；dev 探针跑脚本时用它记重编译类写入（`dev/probeScripts.ts`）。 */
@@ -193,10 +201,10 @@ export class ScriptRuntime {
     return result;
   }
 
-  private call(record: ScriptRecord, callback: Callback, argument?: unknown): unknown {
+  private call(record: ScriptRecord, callback: Callback, ...args: unknown[]): unknown {
     if (record.disabled.has(callback) || !record.exports || typeof record.exports[callback] !== "function")
       return undefined;
-    return this.invoke(record, callback, () => (record.exports![callback] as (arg?: unknown) => unknown)(argument));
+    return this.invoke(record, callback, () => (record.exports![callback] as (...args: unknown[]) => unknown)(...args));
   }
 
   private value(record: ScriptRecord): unknown {
@@ -411,6 +419,24 @@ export class ScriptRuntime {
       if (record.state !== "inited" || this.halted) continue;
       const result = this.call(record, "update", this.value(record));
       this.writeReturn(record, result);
+    }
+  }
+
+  /**
+   * 关键帧动画的事件（P10b，读码第 8 节）：交给同一对象（`object`，`general` 的为 null）上导出了 `animationEvent` 的全部脚本，按记录顺序
+   * （= WPE 的登记顺序）。只发给已跑完 `init`、没被禁用这个回调的脚本；`event` 是 realm 的 `JSON.parse` 出的作者事件对象（每个接收者各解析
+   * 一次，改它不影响别人），`value` 同 `update` 现读接收者自己的属性，返回值经 `writeReturn` 写回。出错只禁用这个回调（`invoke`）。
+   * 在播放器循环中间同步调用，所以回调里可以对别的动画 `play` / `stop`，排在后面的那条本帧就生效。
+   */
+  animationEvent(object: number | null, json: string): void {
+    if (this.halted) return;
+    for (const record of this.records) {
+      if (record.state !== "inited" || scriptObject(record.script.owner) !== object) continue;
+      if (record.disabled.has("animationEvent") || typeof record.exports?.animationEvent !== "function") continue;
+      const parse = (this.realm.global.JSON as JSON).parse;
+      const result = this.call(record, "animationEvent", parse(json), this.value(record));
+      this.writeReturn(record, result);
+      if (this.halted) break;
     }
   }
 

@@ -76,7 +76,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       "getInitialLayerConfig",
       "getCameraTransforms",
       "setCameraTransforms",
-      "getAnimation",
       "createModelData",
       "destroyModelData",
     ]),
@@ -185,8 +184,11 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ),
     ...fields(["name"]),
   ],
-  /** `IObject`：所有对象（图层、effect、材质、动画层、模型数据）都有。`thisScene.getAnimation` 另在 `thisScene` 组。 */
-  object: methods("any", ["getAnimation"], UNIQUE),
+  /**
+   * `IObject`：所有对象（图层、effect、材质、动画层、模型数据）都有的成员。唯一的 `getAnimation` 已在 P10b 实现（图层、effect、材质、
+   * `general` 与 `thisScene` 上都有，`script/api.ts`），留空组以保持类型与测试的结构。
+   */
+  object: [],
 };
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -502,8 +504,6 @@ export const MISSING_SCRIPT_CALLBACKS: readonly string[] = [
   // 屏幕尺寸变化、general 设置变化 → 后续
   "resizeScreen",
   "applyGeneralSettings",
-  // 关键帧动画的事件 → P10
-  "animationEvent",
   // 光标命中与事件 → P6c
   "cursorHitTest",
   "cursorEnter",

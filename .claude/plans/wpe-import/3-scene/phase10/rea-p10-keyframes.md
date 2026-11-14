@@ -397,6 +397,11 @@ return NULL;
   - 找不到时不设返回值，JS 拿到 `undefined`。
   - 栈为空（不在任何属性脚本的调用里）时名字是空串，会匹配 `options.name` 为空的第一条动画（推断，没有核对何时栈为空）。
 
+**P10b 步骤 0 的补测**（[p10-REPORT](p10-REPORT.md)「P10b 补测」）：
+- `vfunc8()` 的范围不是图层，是绑定的属主（同联动）：effect 常量上找到的是自己那条，图层与 effect 对象上都找不到 effect 常量的动画。派发作用域（第 8 节）仍是图层，两者不同。
+- `thisScene.getAnimation('')` 取到第一条没写 `name` 的动画；模块顶层调用抛 `SyntaxError: getAnimation cannot be called from global scope.`。
+- 动画与脚本的登记顺序：`general` 的字段 → 每个对象自己的字段 → 它的 effect（先 `visible`，再各 pass 的常量），同层按键名字母序。
+
 实测（`names` 用例，脚本挂在没有动画的 `nameB.origin` 上）：`thisObject.getAnimation()` → `undefined`；`thisScene.getAnimation('kfname')` → 找到；`thisLayer.getAnimation('kfname')`（动画在别的层）→ `undefined`；`thisScene.getAnimation('nosuch')` → `null`；`getLayer('nameA').getAnimation()` → 找到 `nameA.origin` 的动画（因为调用者属性名是 `origin`）。全部与上面一致。
 
 ---
