@@ -154,6 +154,12 @@ export interface SceneGeneral {
    * （`rea-p4a.md` C4，实测核对过）。P4a 步骤 4 用。
    */
   perspectiveOverrideFov: number;
+  /**
+   * 透明排序（P5d 步骤 4）：`general.transparentsorting` 是 JSON `true`。只在透视场景起作用（WPE `+0xe0 & 0x1008 == 0x1000`，
+   * rea-p5-mesh 4.2，p5-REPORT `p5d-sort-ortho`），渲染器按它重排顶层绘制顺序（`render/sortOrder.ts`）。绑属性、挂脚本等别的写法这里
+   * 为 false，能力表照报 `general:transparentsorting`（WPE 每帧读这一位，运行中改没实测，语料 0）。缺省（手写的 bundle）为 false。
+   */
+  transparentSorting?: boolean;
 }
 export interface SceneMip {
   width: number;
@@ -572,6 +578,38 @@ export interface SceneLayer {
    * 的对象（`object:camera:mixed`）与其它图层为 null。可选同 `text`：不动各处手写的测试图层，读的地方按 null 处理。
    */
   camera?: { fov: number; zoom: number } | null;
+  /**
+   * 透明排序的类别（P5d 步骤 4，`SortClass`）：编译期照 WPE 加载时的规则定（对象 `+0x120` 的 bit8「进半透明名单」、bit9「键为 −∞」），
+   * 之后不变（WPE 在加载末尾置位，运行中不改）。只在透视场景开了 `transparentsorting` 时被渲染器读（`render/sortOrder.ts`）。
+   * - 粒子：`translucent`（构造即进名单，rea-p5-mesh 4.2）；
+   * - 图像层（含组合层、fullscreen、instanced、被依赖的）：基础材质第一个 pass 的混合（`isOpaqueBlending`），带 effect、走 passthrough
+   *   都只看它；半透明且模型标志 `fullscreen` / `projectlayer` 为 JSON true 时是 `last`（`imageSortClass`，rea-p5-modelflags 1.4、2.1）；
+   * - 模型：任一网格第一个 pass 不透明就是 `opaque`，否则 `translucent`（rea-p5-mesh 2.4）；
+   * - 文本：`translucent`（构造函数无条件置 bit8，rea-p6b-layout 1.1，不看材质）；
+   * - 形状：`opaque`（工厂 `0x14019075e`–`0x1401907de` 只调基类构造，加载 `FUN_14025fac0` → `FUN_1401e6f50` → `FUN_1401de470` 都不置
+   *   bit8，所以不进名单；形状在透视场景照报 `camera:perspective:shape`，只有强制渲染时用到）；
+   * - 不画的对象（分组节点、灯、声音、相机）与读不到模型 / 材质的图层不填。
+   * 可选同 `text`：不动各处手写的测试图层，缺省按不在半透明名单处理。
+   */
+  sortClass?: SortClass;
+}
+/**
+ * 透明排序的类别（P5d 步骤 4，rea-p5-mesh 4.2）：`opaque` 在第一遍按 `objects` 顺序画；`translucent` 在第二遍按「局部 origin · 前向」从大到小
+ * 画；`last` 也在第二遍、键是 −∞（排在最后）。
+ */
+export type SortClass = "opaque" | "translucent" | "last";
+
+/** 不透明的混合（WPE 的 0 normal、3 alphatocoverage）：透明排序的类别与模型的网格顺序（`meshDrawOrder`）共用这一个判定。 */
+export function isOpaqueBlending(blending: string | undefined): boolean {
+  return blending === "normal" || blending === "alphatocoverage";
+}
+/**
+ * 图像层的透明排序类别（P5d 步骤 4，rea-p5-modelflags 2.1、1.4）：基础材质不透明为 `opaque`；否则带模型标志 `fullscreen` / `projectlayer`
+ * （`sortLast`）时为 `last`，不带为 `translucent`。标志只在半透明时起作用：不透明的图层不进名单，键用不到。
+ */
+export function imageSortClass(blending: string | undefined, sortLast: boolean): SortClass {
+  if (isOpaqueBlending(blending)) return "opaque";
+  return sortLast ? "last" : "translucent";
 }
 /** 形状对象（P8 步骤 2，rea-p8-layer §1，p8-REPORT 结论 4、5）：图层的 `passes` 为空，没有合成 RT，渲染图只画最后一个 effect（`planShapeLayer`）。 */
 export interface SceneShape {
@@ -1070,6 +1108,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           recompile("layer-structure", "general/perspectiveoverridefov"),
         ),
       ),
+      // 只认 JSON 布尔（P5d 步骤 4）：绑属性、挂脚本由能力表照报，这里不登记绑定。正交场景也照记，渲染器只在透视场景读
+      transparentSorting: general.transparentsorting === true,
     },
     layers: [],
     programs: [],
@@ -1461,8 +1501,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       if (settled()) break;
       meshes.push(await compileMesh(index, m, mesh, mesh.materials[skin]));
     }
-    const opaque = meshes.map((mesh) => ["normal", "alphatocoverage"].includes(mesh.passes[0]?.blending ?? ""));
+    const opaque = meshes.map((mesh) => isOpaqueBlending(mesh.passes[0]?.blending));
     layer.model = { path, version: file.version, meshes, order: meshDrawOrder(opaque), bounds: file.bounds };
+    // 透明排序（P5d 步骤 4，rea-p5-mesh 2.4）：WPE 先置「半透明」，任一网格的材质不透明就改回不透明，所以只有网格全半透明的模型进名单
+    // （`p5d-sort-a` 的 M1 / M2）。没有网格时保持半透明，同 WPE（反正不画）
+    layer.sortClass = opaque.some(Boolean) ? "opaque" : "translucent";
   }
 
   /**
@@ -1863,6 +1906,11 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         }),
       );
     }
+    // 透明排序的类别（P5d 步骤 4，rea-p5-modelflags 2.1、1.4，`p5d-sort-a` / `-fs`）：只看基础材质（第一个 pass 的混合），effect、
+    // colorBlendMode、`copybackground` 都不参与（WPE 在图像层构造时定，那时 `copybackground` 还是缺省值）。`projectlayer` 在这里单独读：
+    // 它的另一个作用（尺寸）只在 `autosize` 时有（`imageLayerSize`）。材质没有 pass 的图层不画，不填
+    if (layer.passes.length)
+      layer.sortClass = imageSortClass(layer.passes[0].blending, layer.fullscreen || modelFlag(model, "projectlayer"));
     // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸（`projectlayer` 取正交投影宽高，
     // 步骤 2）。deep_space 的 Background 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同
     const base = layer.passes[0]?.textures[0];
@@ -2016,6 +2064,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       }
     }
     if (objectKind(object) === "particle") {
+      // 粒子构造即进半透明名单（P5d 步骤 4，rea-p5-mesh 4.2，`p5d-sort-a` 的粒子在第二遍）
+      layer.sortClass = "translucent";
       await compileParticle(index, object, layer);
       continue;
     }
@@ -2032,12 +2082,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 形状对象（P8 步骤 2）：没有模型和基础 pass，effect 不看开关全编，渲染图只画最后一个（`planShapeLayer`）；colorBlendMode 中性，
     // 不编 passthrough
     if (isShapeObject(object)) {
+      // 形状不进半透明名单（P5d 步骤 4，见 `SceneLayer.sortClass`）：只调基类构造，加载路径不置 bit8
+      layer.sortClass = "opaque";
       await compileShape(index, object, layer);
       continue;
     }
     // 文本对象（P6b 1d）：没有模型，基础 pass 换成文本表里的宿主材质（排版在宿主主线程）；effect 与 colorBlendMode passthrough
     // 走下面图像层那段，文本表在它们之后编（`padding` 看启用的 effect 个数）
     const textObject = isTextObject(object);
+    // 文本的构造函数无条件进半透明名单（P5d 步骤 4，rea-p6b-layout 1.1）：不看材质，没有模型标志，不会是 `last`
+    if (textObject) layer.sortClass = "translucent";
     // 被依赖的文本层（P8 步骤 4）：WPE 同样置 `0x1010`（rea-p8-render 1.2 认类型 1 与 4），但文本层的合成 RT 随重排换尺寸，引用方的绑定要
     // 跟着换，没做（语料 0 个），照报
     if (textObject && isDepended(object)) unsupported.add("dependency:text");

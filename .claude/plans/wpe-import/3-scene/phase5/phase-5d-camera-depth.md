@@ -734,7 +734,7 @@ Claude 独立验收：
 - **场景**：透视；相机 208 的原点脚本用 `Date.now()` 在前 10 s 把 z 从 25 缓到 `wz`（绑属性 `ylensy`，缺省 9），x 读另一个对象写的 `shared.catE`。
 - **复制工程**：留相机、纯色层 302 / 14 与图像 125，去掉三个灯（闭包会把灯和它们的父对象拉进来，带出反射、体积光等不支持项）。125 的透明度、角度、缩放也挂脚本：透明度用 `Date.now()` 在 10–15 s 缓入，角度按 `engine.frametime` 累加，缩放在 `init` 里定。`shared.*` 的写入方删掉了，两边读到的都是 undefined。
 - **结果**：
-  - 抓帧在约 16 s（第 332 帧）。全部 draw 的 MVP 和 WPE 相同。唯一一块差（292 像素）是 125 被黑色纯色层盖住：WPE 开了 `general:transparentsorting`，按深度从远到近画（w = 39 → 9 → 8），我们按对象顺序画，远处的黑层最后画。这一项是能力表照报的不支持项，与相机无关。
+  - 抓帧在约 16 s（第 332 帧）。全部 draw 的 MVP 和 WPE 相同。唯一一块明显的差（292 像素）是 125 被黑色纯色层盖住（步骤 4 实现透明排序后消失，见步骤 4 实施记录）：WPE 开了 `general:transparentsorting`，按深度从远到近画（w = 39 → 9 → 8），我们按对象顺序画，远处的黑层最后画。这一项是能力表照报的不支持项，与相机无关。
   - 对照：同一复制工程把 `transparentsorting` 改成 false，第 328 帧和 WPE 整帧逐像素相同。
 
 **发现、没修**：WPE 交给字段脚本的向量分量是 float32（日志里 z 是 `500.0000305175781`），我们是 double（`500.00003`）。这里只影响深度，看不出差别，归 P3b 的脚本运行时。
@@ -746,3 +746,135 @@ Claude 独立验收：
 - 透视场景里用 `Date.now()` 缓入原点。
 
 剩下的差异有两类：一类是先按场景分辨率画再缩到画布的采样差，FINAL_CHECK 已登记为已知差异；另一类来自别的能力（视频时刻、透明排序）。
+
+## 步骤 4 — 透明排序（`transparentsorting`）
+
+`phase-13-3d-lighting.md` 的「决定」2 把它并进了 P13h。2026-11-14 用户让 P5d 会话先做：P5d 步骤 3 走查的 `3453730450` 正是被它挡住的唯一差异。P13 的计划文件不由这里改，P13h 做时以这里为准。
+
+### 思路
+
+WPE 的场景绘制只有一个开关会改顺序（rea-p5-mesh 4.2，读码已确认的部分）：透视场景开了 `transparentsorting` 时分两遍。
+- 第一遍：按 `objects` 顺序画所有不在「半透明集合」里的对象。
+- 第二遍：把半透明对象按「对象**局部** `origin` · 相机前向」从大到小排序后画，也就是从远到近。`fullscreen` / `projectlayer` 图像的键是 −∞，排在最后。
+- 半透明集合：粒子、灯在构造时就进；图像层看材质 blending 是不是 normal / alphatocoverage 以外的；模型要所有网格都是 translucent / additive。
+- 正交场景、开关关闭时照旧按 `objects` 顺序。
+
+我们的渲染器在 `GpuScene.encode` 末尾按 `objects` 顺序逐层 `runLayer`。实现就落在这一处：编译期给每个顶层图层定好排序类别（不透明 / 半透明 / 排最后），渲染时在透视场景、开关打开时，每帧按当帧相机的前向和状态里的当前 `origin` 重排顶层这一轮。组画子树、模型内部的网格顺序、粒子树的先序都不动。探针用的是同一个 `encode`，回放自动跟上。
+
+读码没查清、要靠步骤 0 实测定的几件事：
+- 前向取视图矩阵哪一轴、正负（「从大到小」是不是由远到近）；
+- 排序是否稳定；
+- 用的是局部 `origin` 还是世界位置；
+- 脚本写过的 `origin` 是否当帧生效；
+- 文本、粒子、模型算不算半透明；
+- 开关能不能运行中改。
+
+### 现状锚点
+
+**a. 顶层按 `objects` 顺序画**（`render/scene.ts` 的 `encode`）
+```ts
+    // 组的子孙（`group` 非空）在顶层不画，由组的 `subtree` op 画（P5b 步骤 4）
+    for (const layer of this.layers) if (layer.layer.group == null) runLayer(layer);   // 现状：不看 transparentsorting
+```
+
+**b. general 里不认识的键照报**（`compile/features.ts` 的 `checkSceneFeatures`）
+```ts
+  for (const [key, value] of Object.entries(g))
+    if (!NEUTRAL_GENERAL.has(key) && !PARSED_GENERAL.has(key) && /* … */ active(value))
+      unsupported.add(`general:${key}`);   // 现状：transparentsorting 为 true 时报 general:transparentsorting
+```
+
+**c. 脚本 API 缺口表**（`compile/scriptApi.ts`）：`thisScene.transparentsorting`、`customsortorder` 在缺口表里，脚本用到就报 `script:api:*`。
+
+**d. 模型的网格顺序已按 blending 分了不透明 / 半透明**（`compile/bundle.ts`）
+```ts
+    const opaque = meshes.map((mesh) => ["normal", "alphatocoverage"].includes(mesh.passes[0]?.blending ?? ""));
+```
+
+### 步骤 0 — 实测（`ignore/p5/d4/gen_d4.py`，抓帧 `A:\p5d\sort\`）
+
+透视工程用步骤 0 的骨架（基准相机 eye (0, 0, 10) 看向原点）。对象都是纯色图像层（`kbcolor`，关深度，按颜色认 draw），抓帧后按 RenderDoc 的绘制顺序读出排序：
+
+| 工程 | 摆法 | 要回答 |
+|---|---|---|
+| `p5d-sort-a` | 不透明 A（z −5）、半透明 B（+2）、C（−8）、不透明 D（+3）、additive E（0）、全半透明网格的模型 M1（−6）、normal 网格的模型 M2（−7）、粒子 P（−4）、半透明 S（存储 z −9，原点脚本返回 +5） | 两遍的划分（normal / additive / 模型 / 粒子）、从大到小的方向、脚本写的 `origin` 是否当帧生效 |
+| `p5d-sort-off` | 同上，开关关 | 对照：按 `objects` 顺序 |
+| `p5d-sort-rot` | 相机 eye (10, 0, 0) 看向原点；半透明 K（x +3）、J（x −5）、L（x 0） | 前向是哪一轴（预测 J、L、K） |
+| `p5d-sort-par` | 分组 G（z +5）下的半透明 F（局部 z −6，世界 −1）、半透明 H（z −3） | 局部还是世界（局部：F、H；世界：H、F） |
+| `p5d-sort-eq` | 三个半透明 I1、I2、I3 同在 z −2 | 稳定性 |
+| `p5d-sort-fs` | 最前面放 `fullscreenlayer`、`projectlayer`，后面放半透明图像 | −∞ 排最后、两者之间的先后 |
+| `p5d-sort-ortho` | 正交场景，开关开，同样的不透明 / 半透明交错 | 正交不排 |
+
+文本对象不测（透视场景里的文本照报 `camera:perspective:text`）。开关绑属性 / 脚本写回、`customsortorder`：语料 0，先看读码；如果要实测，补 `p5d-sort-prop`（运行中改开关）。
+
+**步骤 0 结论（p5-REPORT「步骤 4 步骤 0：透明排序」）**：rea-p5-mesh 4.2 全部成立，「推」的几项也都实测确认了：
+- 前向是视线方向（center − eye），键 = 原点 · 前向，从大到小，也就是由远到近；
+- 用局部 `origin`，而且是脚本写回之后的当帧值；
+- 排序稳定；
+- normal 图像、normal 网格的模型在第一遍；translucent / additive 图像、网格全半透明的模型、粒子在第二遍；
+- `fullscreen` / `projectlayer` 标志的半透明图像键为 −∞；
+- 正交场景、开关关时都按 `objects` 顺序。
+
+### 点 1 — 编译（`compile/bundle.ts`、`compile/features.ts`）
+- **新增** `SceneLayer.sortClass?: "opaque" | "translucent" | "last"`，编译期按 WPE 加载时的规则定，之后不变（WPE 在加载末尾置 `+0x120` 的 bit8 / bit9）：
+  - 粒子：`translucent`；
+  - 图像层（含组合层、文本、形状）：基础材质第一个 pass 的 blending 是 normal / alphatocoverage 时为 `opaque`，否则 `translucent`；模型标志 `fullscreen` 或 `projectlayer` 为真且是 `translucent` 时为 `last`；
+  - 模型：任一网格第一个 pass 的 blending 是 normal / alphatocoverage 时为 `opaque`，否则 `translucent`；
+  - 不画的对象（分组、灯、声音、相机）不填。
+  - 文本、形状按图像层的规则是推断（语料里透视场景的文本照报，形状没有出现在开了排序的场景里）。
+- **新增** `SceneGeneral.transparentSorting: boolean`：只认 JSON 布尔。
+- **修改** 能力表：`transparentsorting` 是布尔时不报。绑属性、挂脚本时照报 `general:transparentsorting`：WPE 每帧读这一位，但语料 0、没实测，先不做运行中改。`customsortorder` 照报。
+
+### 点 2 — 排序（新增 `render/sortOrder.ts`）
+```ts
+/**
+ * 透明排序（rea-p5-mesh 4.2，p5-REPORT 步骤 4 步骤 0）：先按原顺序画不是半透明的，再把半透明的按「局部 origin · 前向」从大到小稳定排序，
+ * `last` 的键是 −∞。`forward` 是视线方向（center − eye，单位向量）；键按 float32 算。
+ */
+export function transparentDrawOrder<T extends { object: number; sortClass?: SortClass }>(
+  layers: readonly T[], state: SceneState, forward: Vec3,
+): T[];
+```
+
+### 点 3 — 渲染（`render/scene.ts`）
+- **修改** `encode` 顶层那一轮：透视场景且 `transparentSorting` 时改成 `transparentDrawOrder(顶层, state, 当帧前向)`，否则逐字不变。前向取当帧透视相机（`setCamera` 记下的帧）的视线方向，带抖动、相机对象、路径。
+- 组画子树、模型网格顺序、粒子树先序、被依赖图层（P8 步骤 4）都不另处理：被依赖的图层跟着它自己在新顺序里的位置画，同 WPE。
+
+### 点 4 — 单测
+- 编译：各类对象的 `sortClass`（含 additive、alphatocoverage、模型混合网格、`fullscreen` / `projectlayer`、粒子）；`transparentSorting` 的取值；能力表在布尔、绑属性、正交下的报法。
+- `transparentDrawOrder`：步骤 0 的 7 组顺序逐个复现（以 WPE 的结果为期望）；键相同时稳定；用当帧状态里的 `origin`；前向任意方向。
+- `encode`（假设备）：开关关、正交场景时调用序列与以前逐项相同。
+
+### 实施方式与验收
+子代理在 HEAD 的独立工作树里实现。Claude 独立验收：
+1. 越界、tsc、vitest、变异。变异包括：不分两遍、键取反、用世界位置、不稳定排序、`last` 不排最后、正交也排、前向取错轴。
+2. 语料：只去掉 3 张的 `general:transparentsorting`，不新增键。
+3. 画面哈希 10 张 × 三档不变。
+4. 真机对 WPE（按日志回放、开 `scripts`，窗口 1600×900）：步骤 0 的 7 个工程整帧逐像素比，FR / CLK 不排除；P5d 步骤 3 走查的 `3453730450-iso-persp`（开着排序）整帧比，预期原来那块 292 像素的差消失。
+
+### 步骤 4 实施记录（2026-11-14）
+
+子代理在 HEAD `9ecaa6fe` 的独立工作树 `ignore/p5/d4/wt` 里实现。改动：
+- `compile/bundle.ts`：新增 `SortClass`、`SceneLayer.sortClass?`、`SceneGeneral.transparentSorting?`、`isOpaqueBlending`、`imageSortClass`；模型网格顺序改用 `isOpaqueBlending`，结果不变。
+- `compile/features.ts`：`transparentsorting` 是布尔时不报。
+- `render/scene.ts`：顶层那一轮的分支。
+- `render/sortOrder.ts`：新增，排序纯函数。
+- 单测三个：`compile/p5d4.test.ts`、`render/sortOrder.test.ts`、`render/p5d4-sort.test.ts`。
+
+**和计划不一致或计划没写到的：**
+- 形状记为 `opaque`：WPE 的形状工厂只调基类构造，加载路径不置 bit8（读码 `factory_14018ff60` 等）。
+- 文本无条件记为 `translucent`：构造函数直接置 `0x100`（rea-p6b-layout 1.1）。两者在透视场景都照报，只影响强制渲染。
+- 组合层、fullscreen、instanced、带 effect 的图层只看基础材质第一个 pass；effect、colorBlendMode、`copybackground` 不参与。
+- `SceneGeneral.transparentSorting` 写成可选，不动约 39 处手写夹具；`compileScene` 总会填。
+- 能力表：除布尔外的写法照报，正交场景也照报（保守）。
+
+**验收：**
+- 越界只有计划内的文件。
+- 工作树：tsc 0 错误，vitest 137 个文件、3256 条全过。
+- 变异：子代理 18 处、我 3 处（前向写死、组的子孙进顶层、`last` 进第一遍，`ignore/p5/d4/mutate_d4.py`），全部检出。
+- 语料（183 张）：只去掉 3 张的 `general:transparentsorting`，不新增键，能渲染 90 → 90。
+- 三方合并进主工作区（基点 `9ecaa6fe`，别的会话在这 3 个文件里有未提交改动，无冲突），两个方向的新增行都在。主工作区 tsc 0 错误，vitest 149 个文件、3456 条全过。
+- **真机对 WPE**（开 `scripts` 按日志回放，宿主产物按主工作区构建 index-CLzLasFu.js，全程没被换掉）：
+  - 7 个补测工程（窗口 1600×900，FR 日志改成每 10 帧落盘后重录）：实现前，需要排序的 5 组有大片差异。实现后，6 个透视工程都只剩同一块 (1376, 832)–(1472, 896)：那是 CLK，颜色取自光标，而这批日志没记光标；关开关的那组本来也只有这一块。正交那组只有 CLK 加先按场景尺寸画再缩的边缘采样差，和实现前相同。
+  - 走查的 `3453730450-iso-persp`（开着排序）：原来那块 292 像素的差消失。剩下 1–7 级的小差是因为录制时 WPE 后处理开着（抓帧里 `1htt` 之后有泛光链的 4 个 draw），按开启档回放后整帧逐像素相同。对照的 `-perspns`（关排序）在两种档位下都是 0 差。
+- **没做**：画面哈希没跑成：共享宿主产物这段时间每一两分钟就被别的会话重建，按用户的意见不再抢。10 张基线场景都没开 `transparentsorting`，关闭时的调用序列有假设备单测锁住。「HEAD + 步骤 4」这棵提交树也没有单独跑测试（用户叫停），它的代码和验过的工作树只差 HEAD 新提交带来的那几个文件的改动，三方合并无冲突。

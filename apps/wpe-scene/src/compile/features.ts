@@ -325,7 +325,7 @@ const MODEL_NEUTRAL_FLAGS = ["skin", "castshadow", "reflected", "disablepropagat
  *   （fullscreenlayer）或没有纹理时取场景尺寸。两者都不内缩。fullscreenlayer 没有 effect、cbm 是 0 / 31 时同普通组合层整层不画。
  *   对象级的 `fullscreen` 键（`OBJECT_FLAGS`）是另一回事，照报。
  * - `projectlayer`：只在 `autosize` 时起作用，尺寸取正交投影宽高（rea-p5-modelflags §3.1，`p5b-proj`）；另一个作用是透明排序键 −∞，
- *   只在透视场景起作用（P5d），正交场景按列表顺序画。
+ *   只在透视场景起作用（P5d 步骤 4 已实现，半透明时 `SceneLayer.sortClass` 为 `last`，`fullscreen` 同），正交场景按列表顺序画。
  * - `cropoffset`：编辑器写的偏移，导入时已加进 `origin`；`wallpaper64.exe` 里没有这个字符串，P5a 步骤 0 实测不改位置。
  */
 const SUPPORTED_MODEL = new Set([
@@ -451,6 +451,9 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
     const zoom = generalValue("zoom", resolveValue(g.zoom as SceneValue | undefined, {}));
     if (typeof zoom === "number" && zoom <= 0) unsupported.add("general:zoom");
   }
+  // `transparentsorting` 的 JSON 布尔已实现（P5d 步骤 4，`SceneGeneral.transparentSorting`，透视场景的顶层绘制顺序，`render/sortOrder.ts`；
+  // 正交场景 WPE 不排，`p5d-sort-ortho`）。绑属性、挂脚本等别的写法照报：WPE 每帧读这一位，运行中改没实测（语料 0），不做。
+  // `customsortorder` 照报（语料 0）
   for (const [key, value] of Object.entries(g))
     if (
       !NEUTRAL_GENERAL.has(key) &&
@@ -459,6 +462,7 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
       !key.startsWith("cameraparallax") &&
       !key.startsWith("camerashake") &&
       !["supportsaudioprocessing", "zoom"].includes(key) &&
+      !(key === "transparentsorting" && typeof value === "boolean") &&
       active(value)
     )
       unsupported.add(`general:${key}`);

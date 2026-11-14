@@ -22,8 +22,9 @@
  *   泛光的 combine 写当前这张，底图含泛光（L20）。第二张只在清屏可能关掉时建（`SceneGeneral.clearVariable`），别的场景资源不变。
  *   HDR 下 WPE 的后备缓冲存 `lin(x)`，累加因此收敛（L21），我们的目标存 `x`，所以开画之前把底图过一次 `lin`（`linearizeBase`）。
  * - 层级（P4a 步骤 1）：模型矩阵是沿父链累乘的世界矩阵（`worldMatrixOf`），`visible` 沿父链继承（`visibleObjects`），
- *   绘制顺序仍是 `objects` 顺序。写死不可见的祖先下面的图层不建资源（`buildableLayers`）。图层画自己（含组的局部正交）另乘自身偏移
- *   （`drawMatrixOf`：文本排版、图像层对齐，P8 步骤 3），子层、粒子、控制点、模型的剔除不带它。
+ *   绘制顺序仍是 `objects` 顺序（透视场景开了透明排序时顶层另排，见下「透明排序」）。写死不可见的祖先下面的图层不建资源
+ *   （`buildableLayers`）。图层画自己（含组的局部正交）另乘自身偏移（`drawMatrixOf`：文本排版、图像层对齐，P8 步骤 3），子层、粒子、
+ *   控制点、模型的剔除不带它。
  * - 粒子（P4a 步骤 4）：粒子层是一个 `particle-tree` op，和图像步骤按 `objects` 顺序混排、画在同一个场景 pass 里。
  *   有子系统时一个粒子层是若干次绘制（P4e 步骤 1、2）：整棵树一个模拟器（根 `ParticleSystem`，子系统与事件实例挂在它下面），只步进根；
  *   编码时沿 `ParticleSystem.forEachDrawn` 的先序每帧现排（`arrangeParticles`）：每个被画的系统按模板路径找到计划里那个步骤预备好的管线，
@@ -154,6 +155,10 @@
  *   - 建资源：`buildableLayers` 不看被依赖图层自身与祖先的可见性（WPE `0x1000`）。
  *   - 编码：不可见（自身或祖先）时照跑它的 op，只跳过画到「场景」的那一步上屏（`layerOpsToRun`），顶层与组画子树两处同一个判断。
  *     语料里的被依赖者都不是组（是组的照报 `dependency:group`），组隐藏时整棵子树照旧不画。
+ * - 透明排序（P5d 步骤 4，`render/sortOrder.ts`，p5-REPORT「步骤 4 步骤 0：透明排序」）：透视场景且 `SceneGeneral.transparentSorting` 时，
+ *   `encode` 顶层那一轮改按 `transparentDrawOrder`：先按原顺序跑不在半透明名单里的图层，再把半透明的（`SceneLayer.sortClass`）按「当帧
+ *   `SceneState` 里的局部 origin · 当帧透视相机的视线方向（`viewVectors.forward`）」从大到小稳定排序后跑，`last` 排在最后。只换图层的先后，
+ *   每个图层自己的 op 不变；组画子树、模型网格、粒子树内部的顺序不动。正交场景、开关关着时走原来那一行，调用序列逐项同以前。
  */
 import { HDR_BLOOM_MATERIALS, LDR_BLOOM_MATERIALS } from "../compile/bloom";
 import type { TargetKey } from "../compile/bindings";
@@ -238,6 +243,7 @@ import {
   SCENE_DEPTH_FORMAT,
   type GpuProgram,
 } from "./programs";
+import { transparentDrawOrder } from "./sortOrder";
 import type { DirtyState, LayerState, SceneState } from "./state";
 import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
 import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
@@ -4147,7 +4153,15 @@ export class GpuScene {
     }
     // 组的子孙（`group` 非空）在顶层不画，由组的 `subtree` op 画（P5b 步骤 4）
     // `group == null`：缺这个字段（手写的图层）也当顶层
-    for (const layer of this.layers) if (layer.layer.group == null) runLayer(layer);
+    const { perspective, transparentSorting } = this.bundle.general;
+    if (perspective && transparentSorting) {
+      // 透明排序（P5d 步骤 4，`render/sortOrder.ts`）：只重排顶层这一轮，先按原顺序画不在半透明名单里的，再把半透明的按「当帧状态里的
+      // 局部 origin · 当帧相机的视线方向」从远到近画（`viewVectors` 是 `setCamera` 交来的透视帧的，含抖动、相机对象、路径）。组画子树、
+      // 模型的网格顺序、粒子树的先序不动；被依赖的图层跟着自己在新顺序里的位置画（同 WPE）
+      const top = this.layers.filter((layer) => layer.layer.group == null).map((runtime) => runtime.layer);
+      for (const layer of transparentDrawOrder(top, state, this.viewVectors.forward))
+        runLayer(this.runtimeByObject.get(layer.object)!);
+    } else for (const layer of this.layers) if (layer.layer.group == null) runLayer(layer);
     if (this.bloom && state.bloomEnabled) {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
       if (!started) begin();

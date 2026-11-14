@@ -192,3 +192,17 @@
 - **抖动加在相机的 eye 上**（`-shake`：相机 (200, 100, 0)，speed 1、amplitude 1、roughness 1）：`g_EyePosition` = (eye.x + s.x + W/2, eye.y + s.y + H/2, 2000)，5 个色块的 MVP 都是视图平移 −(eye + s)，差 ≤ 1.3e-7。
 
 **对 P5d 各步的影响：** 读码的结论全部成立，推翻一处推断（透视开视差时 `g_ParallaxPosition` 是 NaN），正交相机对象的冲突解开（照读码实现），补了两条读码没写到的规则：带 effect 的上屏 pass 剔除取 effect 材质；`clearenabled: false` 时深度也不清。深度与剔除对全部对象同一套规则，正交场景同样生效，所以步骤 1 不分投影；透视场景里的透视粒子与文本对象语料 0 个 / 只在还差 20 项以上的场景里，照报。
+
+**步骤 4 步骤 0：透明排序（2026-11-14）：** `ignore/p5/d4/gen_d4.py` 生成 7 个工程（6 个透视、1 个正交），对象都是关深度的 `kbcolor` 纯色。抓帧在 `A:\p5d\sort\`（窗口 1600×900；1920×1080 被另一会话的测试窗口占着）。`ana_order.py` 按颜色常量 `g_KbColor` 认出每个 draw，读绘制顺序。读码（rea-p5-mesh 4.2）全部成立，「推」的几项也都确认了：
+
+| 工程 | WPE 的绘制顺序 | 结论 |
+|---|---|---|
+| `p5d-sort-a`（开） | FR、CLK、A、D、M2 → C(8)、M1(6)、粒子(4)、E(0)、B(−2)、S(−5) | 两遍：先按 `objects` 顺序画不透明的，再把半透明的按键从大到小画。normal 图像、normal 网格的模型、FR / CLK（normal）在第一遍；translucent、additive 图像，网格全 translucent 的模型，粒子都在第二遍。S 存储的 z 是 −9、原点脚本返回 +5，按 +5 排：用的是脚本写回之后的当帧 `origin` |
+| `p5d-sort-off` | 按 `objects` 顺序 | 开关关时不排 |
+| `p5d-sort-rot`（相机在 +x 看向 −x） | J(x −5)、L(x 0)、K(x +3) | 前向就是视线方向（center − eye）；键 = 原点 · 前向，从大到小 = 由远到近 |
+| `p5d-sort-par` | F、H | 用局部 `origin`：F 在分组 G（z +5）下、局部 z −6、世界 −1，键按局部的 6 算，排在 H（3）前面 |
+| `p5d-sort-eq` | I0、I1、I2、I3 | 稳定：键相同的三个保持原顺序 |
+| `p5d-sort-fs` | FR、CLK、N → T1(3)、T2(0) → FS、PL | 模型标志 `fullscreen` / `projectlayer` 的半透明图像，键是 −∞（原点放在最远处也排最后），两者之间保持原顺序。组合层（`fullscreenlayer` / `projectlayer`）没有 effect 时本来就不画，所以用的是带标志的纯色模型 |
+| `p5d-sort-ortho`（正交，开） | 按 `objects` 顺序 | 正交场景不排 |
+
+没测的：文本对象（透视场景里的文本照报）、运行中改开关（绑属性 / 脚本写，语料 0）、`customsortorder`（语料 0）。
