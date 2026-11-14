@@ -19,7 +19,7 @@ WPE 的矩阵运算全部是 float32 的单步运算：每个乘积舍入一次�
 
 **不在这一步做**（登记为已知差异，走查碰到时再做）：
 - 求逆：WPE 是 `FUN_14005f730` 的标量余子式，我们的 `invert` 运算顺序不同，只影响读 `g_*Inverse` 的着色器；
-- `lookAtRH` 仍在 double 里算：正交场景没有相机对象时它退化成平移，结果精确；有相机对象或透视场景时差几个 ulp；
+- `lookAtRH` 仍在 double 里算：正交场景没有相机对象时它退化成平移，结果精确；有相机对象或透视场景时差几个 ulp；**已修**（2026-11-15，P5d 补修「透视相机矩阵逐步 float32」：lookAt、`XMScalarSinCos` 透视投影、相机路径插值都照汇编逐步 f32，ricepod 逐 draw 0 ULP）；
 - `perspective: true` 图层的透视覆盖、透视粒子那份视图投影（`particleViewProjection`）：WPE 的顺序没读；
 - 组的局部正交（`groupViewProjection`，里面有求逆）、合成 RT 基础 pass 的 `fill` 正交、effect 中间 pass 的单位阵：WPE 的写法另有出入（读码 2.4），这次不动。
 

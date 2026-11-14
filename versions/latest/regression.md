@@ -2615,6 +2615,17 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 真实场景观感 | Windows dev，图库预览与桌面 | 开几张带旋转、视差、文字的场景壁纸 | 画面无缝线、无半像素偏移、不闪烁 | |
 | [ ] | macOS / Linux 三角形带 | macOS / Linux dev | 开一张图层边缘有双线性采样的场景壁纸，与 Windows 同帧对比 | 边缘像素一致；若有末位差别，确认是奇数三角形顶点轮换所致 | 代码里 `layerQuad` 带 `TODO:[WPE_SCENE]` |
 
+## 场景壁纸透视相机矩阵逐步 float32（P5d 补修）
+
+2026-11-15。透视场景的相机路径插值、lookAt、透视投影（含 DirectXMath `XMScalarSinCos` 多项式）照汇编逐步 float32。计划与实施记录见 `phase-5d-camera-depth.md`「补修：透视相机矩阵逐步 float32」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | ricepod 逐 draw | Windows dev，屏外宿主（`renderFrames.ts`） | P13c 的复制工程 `ricepod-iso-sun` 按日志回放第 2223 帧，逐 draw 对 WPE 常量 | `g_ViewProjectionMatrix` / MVP / `g_EyePosition` 0 ULP | 2026-11-15 Claude：全部 0 ULP（改前最多 131 ULP）；sprite 遮挡方块的 `g_ViewUp` 剩 1 ULP，归 P13c |
+| [x] | ricepod 整帧 | 同上 | 第 2221–2225 帧对 WPE 整帧 | 没有差 > 1 的像素 | 2026-11-15 Claude：2221 相同，其余 1–132 个像素差 1（改前每帧 529–6288 个、最大 48） |
+| [x] | P5d 透视工程 | 同上 | `p5d-path` w1 / w6、`p5d-persp`、`p5d-persp-b`、`p5d-tilt` 对 WPE 整帧（屏蔽 FR / CLK） | 逐像素相同（同改前） | 2026-11-15 Claude：全部 0 差 |
+| [ ] | 真实透视场景观感 | Windows dev，图库预览与桌面 | 开 ricepod、techno 等透视场景 | 画面与以前一致、相机运动平滑 | |
+
 ## 场景壁纸视差点 float32 与布尔字段绑非布尔属性（P5a 补修）
 
 2026-11-14。视差点的平滑推进改成逐步 float32（汇编 `0x140189b67`–`0x140189cea` 的结合顺序）；`cameraparallax` 等布尔 general 字段（以及 `bloom` / `hdr`）写成 `{user, value}` 而属性值不是布尔时，取 JSON 的 `value`（WPE 实测：属性值只有布尔才改位）。计划与实施记录见 `phase-5a-parallax.md`「补修：视差点 float32 与布尔字段绑属性」。

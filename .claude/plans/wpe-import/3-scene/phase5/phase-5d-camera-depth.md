@@ -890,3 +890,71 @@ P5d 四步（深度与剔除、透视相机、相机对象、透明排序）全�
 - `versions/latest/regression.md`：新增「场景壁纸 P5d」一节（D0–D16）。记录里做过的（单测、读码核对、对 WPE 的整帧比较、真实壁纸走查、变异、语料、画面哈希、三张样本在预览里实时渲染）标 `[x]` 并写依据；没做的真机项（预览里目视对比三张透视样本、桌面壁纸窗口、改画布尺寸只重载一次、属性切换相机、真实壁纸里的透明排序）标 `[ ]`。
 
 未实测清单放在 `cocs/wpe/WPE_SCENE.md`「未实测与照报清单」一节（按条目、状态、出处各步汇总），regression 的 `[ ]` 项与它对应。
+
+## 补修：透视相机矩阵逐步 float32（2026-11-15，P13c 走查转来）
+
+P13c 按 FINAL_CHECK 走查 ricepod（复制工程 `ignore/p13/proj/ricepod-iso-sun`，相机来自 `camera.paths`）：每个 draw 的 `g_ViewProjectionMatrix` 与 WPE 差最多 131 ULP（接近 0 的项），`g_EyePosition` 差 1 ULP，`g_ModelMatrix` 0；整帧每帧 529–6288 个像素差 1、7 个孤立像素差 > 2（三角形边上覆盖翻转）。5 个静态相机的 P13c 透视工程和 WPE 整帧 0 差。对应 `phase-f32-matrix.md` 登记的已知差异「`lookAtRH` 仍在 double 里算」「透视的顺序没读」。
+
+### 总体设计思路
+
+透视场景的一帧相机是三段：路径插值出 eye / center / up → `LookAtRH`（`FUN_14019d920`）→ 与反向深度透视（`FUN_14009a360`，内联的 `XMMatrixPerspectiveFovRH`）做仿射乘法。仿射乘法 f32 那一步已经照抄，三段的前两段和投影还在 double 里，而且投影的 sin / cos 用的是 `Math.cos/sin`，WPE 用的是 DirectXMath `XMScalarSinCos` 的多项式近似（11 次 sin、10 次 cos），两者不是同一个函数。这次把三段都改成照汇编逐步 `fround`：结果是确定的 f32 值，和 WPE 逐位相同，静态相机原来 0 差的工程不会变（照抄的值本来就是 WPE 的）。视图向量 `g_ViewForward / Right / Up` 取同一份 f32 的 s、u、f，不再另算一遍。
+
+透视覆盖（`perspective: true` 图层，`FUN_1401e5b60`）与透视粒子 / sprite 那份「去平移的 V」视图投影（`particleViewProjection`）不在这一步：先修三段，再拿 ricepod 第 2223 帧逐 draw 看喷口与 sprite 遮挡方块剩多少，剩下的再按同样方法读码。
+
+### 现状锚点
+
+**a. lookAt 在 double 里**（`render/camera.ts:173`–`228`）
+```ts
+function normalize(v: Vec3): Vec3 {
+  const length = Math.sqrt(dot(v, v));                 // 现状：double 平方和与开方
+  return length > 0 ? [v[0] / length, ...] : [0, 0, 0]; // 现状：逐分量除；WPE 是先算 1/len 再乘
+}
+m[12] = -dot(s, eye);                                    // 现状：double 点积
+```
+
+**b. 透视投影用 Math.cos / sin**（`render/camera.ts:235`）
+```ts
+const cot = Math.cos(fovRadians / 2) / Math.sin(fovRadians / 2);   // 现状：不是 XMScalarSinCos
+const range = near / (far - near);                                  // 现状：double
+m[14] = range * far;                                                 // 现状：double 乘 double 的 range
+```
+
+**c. 路径插值是 `a + (b − a)·h`**（`render/camera.ts:78`、`82`）
+```ts
+return -s * s * s + 1.5 * s * s + 0.5 * s;              // 现状：double 的系数
+f(a[0] + (b[0] - a[0]) * h)                              // 现状：WPE 是 Hermite 四项展开（h00·p0 + h10·m0 + h01·p1 + h11·m1）
+```
+
+### 步骤 0 — 读码（已做一部分）
+
+- **lookAt**（`0x14019d920`–`0x14019dba2`，已读完）：f = center − eye（逐分量 `subss`）；`len² = (fx² + fy²) + fz²`，`inv = 1/sqrtss(len²)`，f ×= inv（先倒数再乘）；s = f × up 的三项写成 `uz·fy − uy·fz`、`ux·fz − uz·fx`、`uy·fx − ux·fy`，同样 `1/sqrt` 再乘；u = s × f 为 `sy·fz − sz·fy`、`sz·fx − sx·fz`、`sx·fy − sy·fx`；平移 `−((sx·ex + sy·ey) + sz·ez)`、`−((ux·ex + uy·ey) + uz·ez)`、`(fx·ex + fy·ey) + fz·ez`。长度为 0 时 WPE 得 inf·0 = NaN（我们现在给 0 向量），照 WPE 还是保留，实施时定。
+- **透视**（`0x14009a360`，已读完、常量已从 exe 读出）：`y = 0.5·fov`，`XMScalarSinCos`（`quotient = trunc(y·0.159154937 ± 0.5)`，`y −= 6.283185482·quotient`，大于 π/2 / 小于 −π/2 时折回、符号 −1；sin、cos 多项式常量 `0x1404925d8` 等 10 个）；`Height = cos / sin`，`Width = Height / aspect`；`range = n / (f − n)`，`m32 = range · f`。哪个参数是 n、哪个是 f 实施时从调用方 `FUN_140183a70` 核对（现在的矩阵对静态工程 0 差，说明 n、f 的位置是对的）。
+- **路径插值**（`0x1401894a9`–`0x1401899d2`）：Hermite 四项，eye / center / up 各三分量；顺序用 rea-matrix-order 的符号执行脚本（`symex.py`）出运算树，不靠人工读寄存器。`t` 的除法 `(t − t0) / (t1 − t0)` 是 `divss`。
+- **抖动**（`shake_140199580`）：透视的三维抖动加到 eye / center 的顺序，P5d 步骤 2 已按 f32 写，核一遍。
+
+### 点 1 — lookAt、视图向量（`render/camera.ts`）
+- **修改** `lookAtRH` / `lookAtVectors`：照上面的顺序逐步 `fround`，两者共用一份 f32 的 s、u、f。
+
+### 点 2 — 透视投影（`render/camera.ts`）
+- **新增** `xmScalarSinCos(y)`：逐步 f32 的 DirectXMath 实现，常量按 exe 的位模式写。
+- **修改** `perspectiveRH`：Height、Width、range、m32 逐步 `fround`。
+
+### 点 3 — 路径插值（`render/camera.ts`）
+- **修改** `stepCameraPath` 的段内插值：按运算树逐步 `fround`；`pathEase` 若不再被用到就删。
+
+### 验收
+- 单测：lookAt、`xmScalarSinCos`、`perspectiveRH`、路径插值各加写死期望值的用例（期望值来自 WPE 抓帧里的常量，或按运算树手算，独立于实现）；变异检查。
+- ricepod：P13c 的抓帧 `A:\p13c\ricepod-sun-t110-fps20-1920x1080`（帧 2221–2225）与日志，按 P13c 的回放参数（scripts、cursors log、gap split、canvas 1920×1080、ultra）回放；第 2223 帧逐 draw 比 `g_ViewProjectionMatrix` / `g_EyePosition` / MVP，目标 0 ULP；5 帧整帧逐像素相同或差异逐处解释。
+- 回归：P5d 的透视工程（`p5d-persp*`、`p5d-path`、`p5d-camp-*`、`p5d-sort-*`）与 P13c 的 5 个静态相机工程按原记录重比，不比原来差。
+
+### 实施记录（2026-11-15）
+
+子代理（Sonnet）直接在工作区改 `render/camera.ts`（P6c 在同一文件里未提交的 `OrthographicCameraFrame.zoom` 两处没碰），Claude 独立验收。读码与符号执行（路径段 `prep_path.py` + rea-matrix-order 的 `symex.py`）由 Claude 做，公式照抄给子代理。
+- **lookAt**：新增内部 `lookAtF32`，`lookAtRH` 与 `lookAtVectors` 共用；长度为 0 时照 WPE 得 NaN（以前给 0 向量），`camera.test.ts`「up 与视线平行」一条的期望由 0 改成 NaN。
+- **投影**：新增导出 `xmScalarSinCos`（DirectXMath，13 个常量按 exe 位模式），`perspectiveRH` 的 Height / Width / range / m32 逐步 `fround`。调用方 `0x140183edf` 核对了参数：第 5 个是 nearz（`G+0x14c`）、第 6 个是 farz（`G+0x150`）。
+- **路径**：新增 `hermiteComponent`（运算树原样，切线 (p1 − p0)·0.5、`(p0 − p0)·0.5` 照写不化简），`s = f(f(t − t0) / f(t1 − t0))`；zoom 分量与状态推进不变（`pathEase` 只剩 zoom 与旧测试在用）。我给子代理的提示把切线误写成多乘一次 0.5，子代理按旧测试发现并改对。
+- **测试**：新建 `render/p5d-f32-camera.test.ts`（常量、sin/cos 10 组、lookAt、投影、路径，期望写死、来自独立参考实现）；Claude 补「斜相机 16 项」与「near 0.3 / far 777.7 的 m32」两条，用来区分逐分量除、平方和不取 f、m32 用 double。
+- **变异**（`ignore/p5/pb/mutate_cam.py`，按原字节还原）：归一化逐分量除、平移点积换序、平方和不取 f、投影改回 `Math.cos/sin`、sin 少一项、去掉折回分支、m32 用 double、路径改回 lerp、路径加法换序，9 个全被抓住（补两条用例前 3 个没抓住）。
+- **检查**：提到透视 / 相机的 66 个测试文件里只有 `dev/probe.renderSize.test.ts`、`dev/probe.scripts.test.ts` 共 10 条失败，原因是 P13c 未提交的 `dev/probe.ts` 调了 `scene.spriteSamples`、测试的假场景没有它，与本次无关；tsc 只剩 `uniformInverse.test.ts` 两条（别的会话）；Prettier 通过。
+- **ricepod**（`buildSceneHost.ts` 重建产物 `index-CIjvFYbC.js`；图 15090 是 P13c 导入的、用完没移除）：按 P13c 参数回放 2221–2225 帧。第 2223 帧逐 draw：skybox、orbit、船体、三个喷口、sprite 遮挡方块的 `g_ViewProjectionMatrix` / `g_ModelViewProjectionMatrix` / `g_EyePosition` 全部 0 ULP（改前最多 131 ULP）。sprite 遮挡方块的 `g_ViewUp` 剩 1 ULP（改前 163），WPE 那份是按 sprite 尺寸缩放过的向量，归 P13c；e162 那行的 `g_ViewUp` / `g_ViewRight` / `g_Alpha` 大差改前就有，是配对问题。整帧：第 2221 帧逐像素相同；2222 只有 4 个 alpha 像素；2223 一个像素差 1；2224 有 132 个像素差 1、集中在 x 1146–1315、y 469–766；2225 三个像素差 1。没有差 > 1 的像素（改前每帧 529–6288 个、最大 48）。
+- **回归**（P5d 步骤 2 的抓帧与日志，`ignore/p5/pb/regress_d.py`，屏蔽 FR / CLK）：`p5d-path` w1 第 41–43 帧、w6 第 142–144 帧，`p5d-persp`、`p5d-persp-b`（静态相机，日志不到抓帧那帧，按帧号推时刻），`p5d-tilt`（斜相机）第 197–199 帧，全部逐像素相同。P13c 的 5 个静态透视工程没重跑（同类的 `p5d-persp*` 已覆盖）。测试工程 15091–15094 已移除。

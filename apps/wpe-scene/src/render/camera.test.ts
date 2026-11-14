@@ -132,9 +132,9 @@ describe("lookAtRH 与视图向量（rea-p5-camera 1.2、8，p5d-tilt 实测）"
     expect(frame.viewProjection[5]).toBeCloseTo(2.144507, 5);
   });
 
-  it("up 与视线平行：右向量是 0（XMVector3Normalize 的零长度），不出 NaN", () => {
+  it("up 与视线平行：右向量照 WPE 是 NaN（1/0 再乘 0，不特判）", () => {
     const v = lookAtVectors([0, 5, 0], [0, 0, 0], [0, 1, 0]);
-    expect(v.right).toEqual([0, 0, 0]);
+    expect(v.right.every(Number.isNaN)).toBe(true);
     expect(v.forward).toEqual([0, -1, 0]);
   });
 });

@@ -74,15 +74,35 @@ export function usesCameraPaths(paths: readonly CameraPath[]): boolean {
   return paths.length > 0 && paths[0].keys.length > 0;
 }
 
-/** 段内插值的系数 `−s³ + 1.5s² + 0.5s`（两端切线 (p1 − p0)/2 的 Hermite，rea-p5-camera 3.2）。 */
+/** 旧的 double 系数 `−s³ + 1.5s² + 0.5s`：只剩 zoom 分量（透视场景不用）与旧测试在用。 */
 export function pathEase(s: number): number {
   return -s * s * s + 1.5 * s * s + 0.5 * s;
 }
 
-const lerpVec = (a: Vec3, b: Vec3, h: number): Vec3 => [
-  f(a[0] + (b[0] - a[0]) * h),
-  f(a[1] + (b[1] - a[1]) * h),
-  f(a[2] + (b[2] - a[2]) * h),
+/**
+ * 段内一个分量的 Hermite 插值（WPE `0x1401894b5`–`0x1401899b1` 符号执行出的运算树，逐步 float32）：两端切线 (p1 − p0)/2、
+ * 不乘段长；`s` 是已求好的 (t − t0)/(t1 − t0)。
+ */
+function hermiteComponent(p0: number, p1: number, s: number): number {
+  const s2 = f(s * s);
+  const s3 = f(s2 * s);
+  const h10 = f(f(s3 - f(s2 + s2)) + s);
+  const h00 = f(f(f(s3 + s3) - f(s2 * 3)) + 1);
+  const h11 = f(s3 - s2);
+  const h01 = f(f(s2 * 3) - f(s3 + s3));
+  const a = f(p0);
+  const b = f(p1);
+  const d = f(b - a);
+  const dh = f(d * 0.5);
+  const m0 = f(f(f(a - a) * 0.5) + dh);
+  const m1 = f(f(f(b - b) * 0.5) + dh);
+  return f(f(f(f(m0 * h10) + f(h00 * a)) + f(m1 * h11)) + f(h01 * b));
+}
+
+const lerpVec = (a: Vec3, b: Vec3, s: number): Vec3 => [
+  hermiteComponent(a[0], b[0], s),
+  hermiteComponent(a[1], b[1], s),
+  hermiteComponent(a[2], b[2], s),
 ];
 const keyPose = (key: CameraPath["keys"][number]): CameraPose => ({
   eye: [...key.eye],
@@ -118,15 +138,15 @@ export function stepCameraPath(
     pose = keyPose(k[i]);
     end = current.duration - k[i].t;
   } else {
-    const span = k[i + 1].t - k[i].t;
+    const span = f(f(k[i + 1].t) - f(k[i].t));
     // 两个关键帧同一时刻：WPE 除出 inf / NaN（语料 0），这里直接取后一帧
-    const h = pathEase(span > 0 ? (t - k[i].t) / span : 1);
+    const h = span > 0 ? f(f(t - f(k[i].t)) / span) : 1;
     const [a, b] = [k[i], k[i + 1]];
     pose = {
       eye: lerpVec(a.eye, b.eye, h),
       center: lerpVec(a.center, b.center, h),
       up: lerpVec(a.up, b.up, h),
-      zoom: f(a.zoom + (b.zoom - a.zoom) * h),
+      zoom: f(a.zoom + (b.zoom - a.zoom) * pathEase(h)),
     };
     end = k[i + 1].t;
   }
@@ -170,19 +190,6 @@ export function replayCameraPath(paths: readonly CameraPath[], dts: readonly num
   return state;
 }
 
-const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-const cross = (a: Vec3, b: Vec3): Vec3 => [
-  a[1] * b[2] - a[2] * b[1],
-  a[2] * b[0] - a[0] * b[2],
-  a[0] * b[1] - a[1] * b[0],
-];
-const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-/** `XMVector3Normalize`：长度为 0 时得 0 向量（不是 NaN）。 */
-function normalize(v: Vec3): Vec3 {
-  const length = Math.sqrt(dot(v, v));
-  return length > 0 ? [v[0] / length, v[1] / length, v[2] / length] : [0, 0, 0];
-}
-
 /** 视图的三个世界空间单位向量（`g_ViewForward` / `g_ViewRight` / `g_ViewUp`）。 */
 export interface ViewVectors {
   forward: Vec3;
@@ -197,34 +204,130 @@ export const ORTHO_VIEW_VECTORS: Readonly<ViewVectors> = Object.freeze({
   up: [0, 1, 0] as Vec3,
 });
 
-/** lookAt 的三个轴：f = normalize(center − eye)、s = normalize(f × up)、u = s × f（rea-p5-camera 1.2）。 */
+/** 一份逐步 float32 的 lookAt 结果：三个轴（f、s、u，u 不再归一化）。 */
+function lookAtF32(eye: Vec3, center: Vec3, up: Vec3): { fw: Vec3; s: Vec3; u: Vec3 } {
+  const [ex, ey, ez] = [f(eye[0]), f(eye[1]), f(eye[2])];
+  const [cx, cy, cz] = [f(center[0]), f(center[1]), f(center[2])];
+  const [ux, uy, uz] = [f(up[0]), f(up[1]), f(up[2])];
+  let fx = f(cx - ex);
+  let fy = f(cy - ey);
+  let fz = f(cz - ez);
+  // 先倒数再乘；长度 0 时 1/0 = Infinity、0·Infinity = NaN，照 WPE 不特判
+  let inv = f(1 / f(Math.sqrt(f(f(f(fx * fx) + f(fy * fy)) + f(fz * fz)))));
+  fx = f(fx * inv);
+  fy = f(fy * inv);
+  fz = f(fz * inv);
+  let sx = f(f(uz * fy) - f(uy * fz));
+  let sy = f(f(ux * fz) - f(uz * fx));
+  let sz = f(f(uy * fx) - f(ux * fy));
+  inv = f(1 / f(Math.sqrt(f(f(f(sx * sx) + f(sy * sy)) + f(sz * sz)))));
+  sx = f(sx * inv);
+  sy = f(sy * inv);
+  sz = f(sz * inv);
+  const vx = f(f(sy * fz) - f(sz * fy));
+  const vy = f(f(sz * fx) - f(sx * fz));
+  const vz = f(f(sx * fy) - f(sy * fx));
+  return { fw: [fx, fy, fz], s: [sx, sy, sz], u: [vx, vy, vz] };
+}
+
+/** lookAt 的三个轴：f = normalize(center − eye)、s = normalize(f × up)、u = s × f（rea-p5-camera 1.2；逐步 float32，同 `lookAtRH`）。 */
 export function lookAtVectors(eye: Vec3, center: Vec3, up: Vec3): ViewVectors {
-  const forward = normalize(sub(center, eye));
-  const right = normalize(cross(forward, up));
-  return { forward, right, up: cross(right, forward) };
+  const { fw, s, u } = lookAtF32(eye, center, up);
+  return { forward: fw, right: s, up: u };
 }
 
 /**
  * `LookAtRH`（`FUN_14019d920`，rea-p5-camera 1.2【确】）：行向量下 V 的三列是 (s, u, −f)、平移 (−s·eye, −u·eye, f·eye)；
- * 相机看 −Z。这里是它的转置（列向量约定），列主序存。
+ * 相机看 −Z。这里是它的转置（列向量约定），列主序存。每个二元运算都 float32 舍入（补修，汇编逐步）。
  */
 export function lookAtRH(eye: Vec3, center: Vec3, up: Vec3): Mat4 {
-  const { forward: fw, right: s, up: u } = lookAtVectors(eye, center, up);
+  const { fw, s, u } = lookAtF32(eye, center, up);
+  const [ex, ey, ez] = [f(eye[0]), f(eye[1]), f(eye[2])];
+  const d3 = (a: Vec3) => f(f(f(a[0] * ex) + f(a[1] * ey)) + f(a[2] * ez));
   const m = new Float32Array(16);
   m[0] = s[0];
   m[4] = s[1];
   m[8] = s[2];
-  m[12] = -dot(s, eye);
+  m[12] = -d3(s);
   m[1] = u[0];
   m[5] = u[1];
   m[9] = u[2];
-  m[13] = -dot(u, eye);
+  m[13] = -d3(u);
   m[2] = -fw[0];
   m[6] = -fw[1];
   m[10] = -fw[2];
-  m[14] = dot(fw, eye);
+  m[14] = d3(fw);
   m[15] = 1;
   return m;
+}
+
+/** 按位模式取 float32 常量（WPE exe 里的原值）。 */
+const bits = (u: number): number => new Float32Array(new Uint32Array([u]).buffer)[0];
+const C_1DIV2PI = bits(0x3e22f983);
+const C_2PI = bits(0x40c90fdb);
+const C_PIDIV2 = bits(0x3fc90fdb);
+const C_PI = bits(0x40490fdb);
+const SIN_S6 = bits(0x32cd365b);
+const SIN_S5 = bits(0x3638b88e);
+const SIN_S4 = bits(0x39500bf1);
+const SIN_S3 = bits(0x3c088886);
+const SIN_S2 = bits(0x3e2aaaab);
+const COS_C5 = bits(0x348bdd11);
+const COS_C4 = bits(0x37cfb4c2);
+const COS_C3 = bits(0x3ab609aa);
+const COS_C2 = bits(0x3d2aaaa3);
+/** 导出给测试核对常量。 */
+export const XM_SINCOS_CONSTANTS = {
+  C_1DIV2PI,
+  C_2PI,
+  C_PIDIV2,
+  C_PI,
+  S6: SIN_S6,
+  S5: SIN_S5,
+  S4: SIN_S4,
+  S3: SIN_S3,
+  S2: SIN_S2,
+  C5: COS_C5,
+  C4: COS_C4,
+  C3: COS_C3,
+  C2: COS_C2,
+};
+
+/** DirectXMath `XMScalarSinCos`（WPE `0x14009a360` 内联），逐步 float32：sin 11 次、cos 10 次多项式。 */
+export function xmScalarSinCos(value: number): [number, number] {
+  let y = f(value);
+  let q = f(y * C_1DIV2PI);
+  q = y >= 0 ? Math.trunc(f(q + 0.5)) : Math.trunc(f(q - 0.5));
+  y = f(y - f(C_2PI * q));
+  let sign = 1;
+  if (y > C_PIDIV2) {
+    y = f(C_PI - y);
+    sign = -1;
+  } else if (y < -C_PIDIV2) {
+    y = f(-C_PI - y);
+    sign = -1;
+  }
+  const y2 = f(y * y);
+  let a = f(SIN_S5 - f(y2 * SIN_S6));
+  a = f(a * y2);
+  a = f(a - SIN_S4);
+  a = f(a * y2);
+  a = f(a + SIN_S3);
+  a = f(a * y2);
+  a = f(a - SIN_S2);
+  a = f(a * y2);
+  a = f(a + 1);
+  const sin = f(a * y);
+  let b = f(COS_C4 - f(y2 * COS_C5));
+  b = f(b * y2);
+  b = f(b - COS_C3);
+  b = f(b * y2);
+  b = f(b + COS_C2);
+  b = f(b * y2);
+  b = f(b - 0.5);
+  b = f(b * y2);
+  b = f(b + 1);
+  return [sin, f(b * sign)];
 }
 
 /**
@@ -233,14 +336,17 @@ export function lookAtRH(eye: Vec3, center: Vec3, up: Vec3): Mat4 {
  * ndc.z = −m22 − m32/z_view：z_view = −near 时 1、−far 时 0。WebGPU 的深度范围也是 [0, 1]，原样用。
  */
 export function perspectiveRH(fovRadians: number, aspect: number, near: number, far: number): Mat4 {
-  const cot = Math.cos(fovRadians / 2) / Math.sin(fovRadians / 2);
-  const range = near / (far - near);
+  const [fov, asp, n, fa] = [f(fovRadians), f(aspect), f(near), f(far)];
+  const [sin, cos] = xmScalarSinCos(f(fov * 0.5));
+  const height = f(cos / sin);
+  const width = f(height / asp);
+  const range = f(n / f(fa - n));
   const m = new Float32Array(16);
-  m[0] = cot / aspect;
-  m[5] = cot;
+  m[0] = width;
+  m[5] = height;
   m[10] = range;
   m[11] = -1;
-  m[14] = range * far;
+  m[14] = f(range * fa);
   return m;
 }
 
