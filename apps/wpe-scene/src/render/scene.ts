@@ -2224,6 +2224,9 @@ export class GpuScene {
    * 粒子层脚本方法的落点（P4f 步骤 3，`IParticleSystem`，`script/api.ts` 的 `installParticle`）：接到这一层的根系统（子系统与事件实例
    * 脚本拿不到，rea-p4f-script.md 1.5）。`stop` 与 `emitParticles` 改了粒子，标 `stale`（暂停中补画的帧也重写顶点）；`emitParticles` 带
    * 这一层最近一次交给根系统的控制点输入（`ParticleTree.inputs`）。没有这一层的树（不是粒子层、没有可画的模板）时为 null。
+   *
+   * TODO:[WPE_SCENE] 真实场景没确定：语料里调 `emitParticles` 的两处都在光标回调里（3286859278 的 `Thunderbolt` 要 `input.cursor*`，
+   * 3570560686 的按钮挂在 `cursorClick` 上），这两个 API 实现之后在这两张上看脚本发射与 eventspawn 实例（只用确定性工程对过 WPE）。
    */
   particleScript(object: number): ParticleScriptTarget | null {
     const tree = this.trees.get(object);

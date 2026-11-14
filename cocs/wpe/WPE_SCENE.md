@@ -9,8 +9,9 @@
 > P4b（纹理格式 R8 / RG88 / DXT1 / DXT3、粒子帧表、档 2 模块与发射时序、噪声模块、`REFRACT` / `CUTOUT`、`instanceoverride.colorn`）已落地：新解锁 6 张工坊场景，能渲染的从 14 张到 20 张。见下「粒子（P4b）」。
 > P4c（粒子控制点与指针跟随、`controlpointattract`、世界空间与「粒子先于脚本」的帧顺序、`spritetrail` 拖尾与 `sprite` 的三种朝向）已落地：新解锁工坊 `1838478131`、`3832772446`，能渲染的从 20 张到 22 张，带粒子的场景里粒子用法完全覆盖的从 22 张到 44 张。见下「粒子（P4c）」。
 > P4e（粒子子系统 `children` 的四种类型、事件实例池、`audioprocessing*` 与场景频谱）已落地：解锁工坊 `3778592720`、`3811798465`、`1514925620`（`1333579536` 与 P5b 一起），带粒子的场景里粒子用法完全覆盖的从 61 张到 93 张（165 张口径）。见下「粒子（P4e）」。
+> P4f（实例覆盖挂字段脚本与 `rate` 的单独路径、HDR 下的 `instanceoverride.brightness`、粒子层的 `IParticleSystem` 方法与 `instance` 对象、一个系统多个 renderer）已落地：带粒子的场景里粒子用法全部覆盖（93 → 108 张，165 张口径），不解锁新场景。见下「粒子（P4f）」。
 > 计划：[.claude/plans/wpe-import/3-scene/PLAN.md](../../.claude/plans/wpe-import/3-scene/PLAN.md)；
-> P4 粒子：[phase-4-particles.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4-particles.md)（总计划）、[phase-4a-base.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4a-base.md)（P4a 与实施记录）、[phase-4b-tier2.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4b-tier2.md)（P4b 与实施记录）、[phase-4c-controlpoints.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4c-controlpoints.md)（P4c 与实施记录）、[phase-4d-ropes.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4d-ropes.md)（P4d 与实施记录）、[phase-4e-children.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4e-children.md)（P4e 与实施记录）、[p4-particles-REPORT.md](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)（实测与读码结论）；
+> P4 粒子：[phase-4-particles.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4-particles.md)（总计划）、[phase-4a-base.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4a-base.md)（P4a 与实施记录）、[phase-4b-tier2.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4b-tier2.md)（P4b 与实施记录）、[phase-4c-controlpoints.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4c-controlpoints.md)（P4c 与实施记录）、[phase-4d-ropes.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4d-ropes.md)（P4d 与实施记录）、[phase-4e-children.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4e-children.md)（P4e 与实施记录）、[phase-4f-script.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4f-script.md)（P4f 与实施记录）、[p4-particles-REPORT.md](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)（实测与读码结论）；
 > 格式调研：[RESEARCH.md](../../.claude/plans/wpe-import/3-scene/RESEARCH.md)。
 
 ## 总体形态
@@ -129,7 +130,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | general 的 `gravitydirection` / `gravitystrength` / `windenabled` / `winddirection` / `windstrength` | 实测中性：同一工程只改这 5 个键，两份轨迹对解析模型最大差 6.7e-5、1.9e-5，16 个系统的 y 都不漂移；场景重力若生效每帧会偏约 0.08 像素（`proj/p4a-wind`）。读码也没找到引擎读取点 |
 | general 的 `perspectiveoverridefov` | 不是中性，解析成透视粒子的 fov（`SceneGeneral.perspectiveOverrideFov`，缺省 95°，钳到 [0.1°, 179.9°]），实测 `d` 逐位相符；绑属性时走重编译 |
 | 材质 `alphawriting` | 读码：`default` 映射成 0，绘制时 0 什么都不做（`0x140157201`），等于没写；`enabled` / `disabled` 自 P8 步骤 5 起实现（见「图像层与材质补全（P8）」的写入状态），只有这三个以外的取值报 `material:alphawriting` |
-| 粒子 `instanceoverride` 的 `alpha` / `size` / `count` / `speed` / `lifetime` / `rate` / `colorn` / `color` 与 `id`；`controlpoint0..7` / `controlpointangle0..7` 的静态值 | 已实现、就地生效（见「粒子（P4a）」，`colorn` 见「粒子（P4b）」）；控制点的静态值在建系统时生效（P4c，见「粒子（P4c）」的「控制点」，绑了属性报 `particle:instance:controlpoint:user`）；`id` 是编辑器键。`brightness` 只在 HDR 且系统 `flags` 没有 bit3 时生效，那时取非默认值才报 |
+| 粒子 `instanceoverride` 的 `alpha` / `size` / `count` / `speed` / `lifetime` / `rate` / `colorn` / `color` 与 `id`；`controlpoint0..7` / `controlpointangle0..7` 的静态值 | 已实现、就地生效（见「粒子（P4a）」，`colorn` 见「粒子（P4b）」）；控制点的静态值在建系统时生效（P4c，见「粒子（P4c）」的「控制点」），P4f 起绑属性、挂脚本、脚本 `instance` 对象写入也就地生效；`id` 是编辑器键。`brightness` 只在 HDR 且系统 `flags` 没有 bit3 时乘出生颜色（P4f），其余时候中性。这些键挂 `{script}` 也支持（P4f，`rate` 单独一条路，见「粒子（P4f）」） |
 | `.tex` 头标志 alpha-priority（`0x80000`） | P4b 实测中性：同一张 RG88 纹理有无这个标志，图像层与粒子整帧逐像素相同；读码看全二进制只把它放进采样器缓存的哈希键 |
 
 - **着色器不按名字白名单**：翻译器把材质常量（带 `meta.material` 的 uniform）与 COMBO 都当普通输入。真正依赖引擎的三类逐项核对：没有 `meta.material` 的内置 uniform 必须在 `ENGINE_UNIFORMS`（与 `render/uniforms.ts` 写的值一一对应，单测核对）里，否则报 `uniform:<名字>`；翻译器标了 `unused`（没被读）的不报（P7d：WPE 的反射里没有它）；只在 effect pass 写的 `g_LayerModelMatrix`（`EFFECT_UNIFORMS`，图层世界矩阵，含父链、不含 size、不带视差）只在 effect pass 认，基础材质读到照报（WPE 在基础 pass 里读到的是别的图层的残留值，P7d）；值非 0 的引擎 COMBO（`SPRITESHEET`、`ALPHATOCOVERAGE`、光照 / 反射 / 蒙皮 / 变形 / 预光照）报 `combo:<名字>`；`_rt_*` 纹理只认 `_rt_FullFrameBuffer` 与本 effect 的 fbo，其它报 `texture:rendertarget:<名字>`。
@@ -502,7 +503,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 | 图层对象 | `name`、`id`、`size`（只读写入无效）、`origin`、`scale`、`angles`、`alpha`、`color`、`visible`、`brightness`、`parallaxDepth`（`Vec2`，P5a） |
 | `thisObject` 的其它 owner | general 的 `bloom`、`bloom*` 泛光参数、`GENERAL_FIELDS` 的 17 个字段（含 P5a 的 `zoom`），以及写入走重编译的 `hdr`；effect 的 `visible`；材质 pass 中全部带 `meta.material` 的常量。`fog*`、`wind*`、`gravity*` 等还没有 |
 
-**本机语料里出现、当前未提供的 API**：运行时报错最多的是 `thisLayer.getParent` / `getChildren` / `getTextureAnimation`、声音图层 `play` / `stop` / `isPlaying`、`thisObject.getAnimation`、`input.cursorWorldPosition`、图层 `getVideoTexture`；还有 `engine.registerAsset`、`thisObject.getMaterial`。静态扫描另见 `getTransformMatrix`、`thisScene.createLayer` / `sortLayer` / `destroyLayer`、图层 `setFrame` / `getEffect` / `emitParticles` / `getAnimationLayer`、`input.cursorLeftDown`；文本字段 `text`、`maxwidth`、`horizontalalign`、`verticalalign` 及 `cursor*` / `media*Changed` 回调也未接通。语料中的 `scene.getLayer` 是样本伪代码自身的未定义变量；`localStorage.remove`、`console.warn`、`originalOrigin` 也不是应补的 WPE API。
+**本机语料里出现、当前未提供的 API**：运行时报错最多的是 `thisLayer.getParent` / `getChildren` / `getTextureAnimation`、声音图层 `play` / `stop` / `isPlaying`、`thisObject.getAnimation`、`input.cursorWorldPosition`、图层 `getVideoTexture`；还有 `engine.registerAsset`、`thisObject.getMaterial`。静态扫描另见 `getTransformMatrix`、`thisScene.createLayer` / `sortLayer` / `destroyLayer`、图层 `setFrame` / `getEffect` / `getAnimationLayer`、`input.cursorLeftDown`；文本字段 `text`、`maxwidth`、`horizontalalign`、`verticalalign` 及 `cursor*` / `media*Changed` 回调也未接通。语料中的 `scene.getLayer` 是样本伪代码自身的未定义变量；`localStorage.remove`、`console.warn`、`originalOrigin` 也不是应补的 WPE API。
 
 **脚本 API 检查**（2026-11-07 用户改定，提交 `c8ebf098`，`compile/scriptApi.ts`）：改定前不做静态扫描，未实现的 API 在调用时报错、只禁用那个回调，可能画出半成品。工坊 3304642534 就是这样：可视化脚本在 `init` 里调 `thisScene.createLayer` 造另外 63 根音频条，`init` 报错被禁用，`update` 每帧抛错又被脚本自己的 `try/catch` 吞掉，画面静默缺了整组条。现在编译期扫描每段会执行的脚本，用到下表成员就报 `script:api:<分组>.<成员>`、整张退回预览图；运行期的普通错误仍只进脚本诊断。
 
@@ -582,10 +583,10 @@ development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（�
 | `particle:system:<键>` | 系统级未知键；`emitter` / `initializer` / `operator` 不是数组 |
 | `particle:flags:<位值>` | 系统 `flags` bit8 起的高位；bit0–7 支持（bit1 关混帧，P4b 起；bit0 世界空间，P4c 起，原先报 `particle:flags:world`） |
 | `particle:children` | 子系统（P4e）。P4a、P4b 时控制点有实际内容报 `particle:controlpoint`，P4c 起控制点全部支持或中性，不再报 |
-| `particle:renderers` | 多于一个 renderer（P4c 起仍报，理由见「粒子（P4c）」的「拖尾与 `sprite` 朝向」；P4a 时帧表的 `particle:animationmode`、`particle:sequencemultiplier` 也在这一行，P4b 起支持） |
+| `particle:renderers` | P4f 起只在表内 renderer 多于一个、且其中有 `rope` / `ropetrail` 时报（任意条数的 `sprite` / `spritetrail` 支持，见「粒子（P4f）」）；P4c–P4e 多于一个就报。P4a 时帧表的 `particle:animationmode`、`particle:sequencemultiplier` 也在这一行，P4b 起支持 |
 | `particle:combo:<名字>`、`particle:lighting`、`particle:effects` | 粒子材质放行范围以外的 COMBO（如 `SPECULARMAP`、`DOUBLESIDEDLIGHTING`）；开了光照；带 `effects` 的粒子对象（本机 0 个） |
 | `particle:object:<键>` | 粒子对象上的 `alpha` / `color` / `brightness` 取非默认值或绑了属性 / 脚本（WPE 怎么用没测，语料 0 张） |
-| `particle:instance:<键>`、`particle:binding:instance:<键>` | `instanceoverride` 的 HDR 下非默认的 `brightness` 与未知键；`color` 绑了属性（`particle:instance:color:user`）、`colorn` 带条件（`particle:instance:colorn:condition`）、`controlpoint*` 绑了属性（`particle:instance:controlpoint:user`）；挂了 `{script}`（P4f）。`colorn` 本身 P4b 起支持；`controlpoint*` 的静态值 P4c 起支持（原先整个报 `particle:instance:controlpoint`） |
+| `particle:instance:<键>`、`particle:binding:instance:<键>` | `instanceoverride` 的未知键；`color` 绑了属性（`particle:instance:color:user`）、`colorn` 带条件（`particle:instance:colorn:condition`）；`color` 等 24 个键（`SCRIPT_INSTANCE_KEYS`）以外的键挂了 `{script}`。`colorn` 本身 P4b 起支持；`controlpoint*` 的静态值 P4c 起支持（原先整个报 `particle:instance:controlpoint`）；P4f 起 HDR 下的 `brightness`、`controlpoint*` 绑属性、24 个键挂 `{script}` 都不再报 |
 | `particle:parse:<文件>` | 粒子 JSON 读不出来 |
 
 模块字段写成关键帧报 `value:animation`（见「能力表」）。P4a 收尾时，语料（149 个工程）里挡住场景最多的粒子键：`controlpoint` 48 张、`turbulentvelocityrandom` 41、`animationmode` 38、`boxrandom` 37、`sizechange` 34、`sequencemultiplier` 34、`children` 31、`alpharandom` 31。粒子材质与纹理第一次进编译，在带粒子的场景上另带出 `tex:animation`（49 张）、`tex:alpha-priority`、`tex:format`、深度等非粒子键。
@@ -634,10 +635,10 @@ development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（�
 
 - **绑定**：`alpha`、`size`、`count`、`speed`、`lifetime`、`rate`、`brightness`（`INSTANCE_FIELDS`）的 `{user}` 登记成就地目标 `{ kind: "particle-instance", object, field }`（`compile/bindings.ts`）；值存在 `SceneState.particleInstances`，`GpuScene.sync` 交给 `ParticleSystem.setInstance`，下一帧生效。
 - **从基值重新乘，不累乘**：存活粒子保留出生时的 life、颜色、尺寸、alpha；`size`、`lifetime`、`alpha`、发射速度只影响之后出生的；`rate`、`count` 以及 `speed` 乘的 operator 字段（重力、角力、振荡频率）下一帧就用新值；已结束、新 `rate > 0` 的 emitter 重新打开。实测（`p4a-life`）：已有 54 个仍是旧尺寸、alpha 与出生时的速度，新的 10 个用新值，`rate` 立刻作用于全部粒子。WPE 同样不清粒子。
-- **`brightness`**：只在场景 HDR 且系统 `flags` 没有 bit3 时生效（乘实例颜色，没实现）。这时绑定登记成重编译，取非默认值报 `particle:instance:brightness`；LDR 或有 bit3 时中性，照常就地。
+- **`brightness`**：只在场景 HDR 且系统 `flags` 没有 bit3 时生效，乘出生时的实例颜色（P4f 步骤 2 实现，见「粒子（P4f）」；P4a–P4e 时 HDR 下登记成重编译、非默认值照报）；LDR 或有 bit3 时中性。一律就地。
 - **`colorn` / `color`**：P4b 起实现，就地生效，见「粒子（P4b）」的「`instanceoverride.colorn`」。
-- **控制点**：`controlpoint0..7`、`controlpointangle0..7` 的静态值 P4c 起支持，只在建系统时生效（见「粒子（P4c）」的「控制点」）；绑了属性报 `particle:instance:controlpoint:user`（运行时改值没做，语料 0 处）。P4a 时整个报 `particle:instance:controlpoint`。
-- **报不支持的**：挂 `{script}` 报 `particle:binding:instance:<键>`（P4f）。
+- **控制点**：`controlpoint0..7`、`controlpointangle0..7` 的静态值 P4c 起支持，建系统时生效（见「粒子（P4c）」的「控制点」）；P4f 起运行中改值（绑属性、字段脚本、脚本 `instance.controlpointN`）也就地写进 `cp[N]`（见「粒子（P4f）」）。P4a 时整个报 `particle:instance:controlpoint`。
+- **挂 `{script}`**：P4f 起 24 个键都接到同一个就地目标（`rate` 另有一条不置脏的路），见「粒子（P4f）」；P4a–P4e 时报 `particle:binding:instance:<键>`。
 - **整场重编译时粒子重来，含预热**。重编译只有 `general.hdr`、`colorBlendMode`、`size` 三种原因，都很少见。
 - **真机**：`shimmering_particles` 改 `count`、`glow`、`style` 各一次，`applied` 0 → 3，`recompiled` 0。
 
@@ -793,7 +794,7 @@ P4b 在 P4a 的底座上沿三条线扩展，底座的形状不变：
   - 实测：`p4b-colorp2` 把寿命设成 16 s，让改值前出生的粒子活到抓帧；逐槽和 WPE 相同。
 - **照报**：
   - `color` 绑了属性报 `particle:instance:color:user`，`colorn` 带 `condition` 报 `particle:instance:colorn:condition`。这两种 WPE 怎么处理没读到，语料里都是 0 处。
-  - 挂脚本照报 `particle:binding:instance:colorn`（P4f）；HDR 下的 `brightness` 照报。
+  - 挂脚本、HDR 下的 `brightness`：P4f 起支持（见「粒子（P4f）」），之前照报。
   - 父系统不生效时子系统一律不生效。这条留给子系统（P4e）。
 - **验收**：
   - 确定性工程覆盖了 `version` 3、5、缺键，以及运行中改值：逐粒子最大差 3e-8（限值 2e-6）。
@@ -965,7 +966,7 @@ C  = cp[controlpoint].current.t；ks = k·scale；rT = rcp(threshold)
 | 何时算 | 朝向只在模型矩阵变化时变，变化会标脏，所以放在静态 uniform 里（`particleUniformValues`）；对象变换就地刷新时重写这三个名字（`PARTICLE_REFRESH_UNIFORMS`，材质值照样优先） | — |
 | 退化不画 | WPE 里速度为 0 或平行于视线的拖尾、轴平行于视线的 `upright` 算出 NaN，不画。WGSL 没有可靠的 NaN 判断，`normalize(0)` 各后端不同，都在 CPU 上处理：<br>- 拖尾写顶点时跳过这些粒子（`particles/vertices.ts` 的 `trailDrawable`，照着色器的式子在 float32 里判 `v·v == 0` 或 `c·c == 0`（`c = cross(p − eyeLocal, v)`）；`eyeLocal` 由 `g_EyePosition` 与模型矩阵的逆算，`trailEye`）；<br>- 朝向算出 NaN 时这次绘制整个跳过（draw 的 `hidden`），uniform 照写原值 | 读码 6.4、7.4；实测：速度为 0 的拖尾（`T6`）与轴平行于视线的 `upright`（`S7`），WPE 的 `gs_out` 四角都是 NaN |
 
-- **一个系统多个 renderer 继续报 `particle:renderers`**（2026-11-09 用户定）：
+- **一个系统多个 renderer 继续报 `particle:renderers`**（2026-11-09 用户定；P4f 步骤 4 起支持 sprite / spritetrail 的任意组合，见「粒子（P4f）」）：
   - WPE 对多个 renderer 按数组顺序各画一次，共用一份顶点、各绑自己的变体材质（实测两种顺序都是两次绘制）。
   - 我们一个粒子层只有一次绘制。支持它要拆成一个系统多次绘制：顶点布局能不能共用、每次绘制各自的 uniform、快照「每对象至多一次」、四角探针按绘制输出。
   - 语料里这样的系统一个都没有；步骤 0 抓的 `T8`、`T8r` 留给以后。
@@ -1356,7 +1357,7 @@ f = clamp01(powf(smoothstep(clamp01((v − lo)/(hi − lo))), exponent))   // Na
 
 - **P4e 去掉的键**（165 张口径）：`particle:children` 36 张（步骤 1 先换成 `particle:children:eventfollow` 19、`eventspawn` 7、`eventdeath` 3，步骤 2、3 去掉），`mode 0` 的音频字段 7 个键（步骤 1），各模块的 `audioprocessingmode` 与 `audiophile` 的 `general:supportsaudioprocessing` 12 张（步骤 4）。没有新增的 `particle:*` 键，没有场景不再能渲染。
 - **音频不解锁场景**：开着音频的 11 张都还差别的。
-- **还挡着粒子覆盖的键**（165 张，括号里是只差它的张数）：`particle:binding:instance:rate` 8（2）、`colorn` 5（2）、`count`、`size` 各 3、`speed`、`alpha` 各 2（`alpha` 1）、`lifetime` 1（都是 `{script}`，P4f）；`particle:instance:brightness` 3（3）；`particle:renderers` 1（1，一个系统多个 renderer）。
+- **还挡着粒子覆盖的键**（165 张，括号里是只差它的张数）：`particle:binding:instance:rate` 8（2）、`colorn` 5（2）、`count`、`size` 各 3、`speed`、`alpha` 各 2（`alpha` 1）、`lifetime` 1（都是 `{script}`，P4f）；`particle:instance:brightness` 3（3）；`particle:renderers` 1（1，一个系统多个 renderer）。这些 P4f 全部去掉，见「粒子（P4f）」。
 - **真机对照**：
   - `3778592720`（fps 20）：父系统 36–38 个、子系统各 4 个，WPE 36–39、3–4 个，尺寸与 alpha 的范围一致，整帧目视一致。
   - `3811798465`（fps 20）：绘制结构相同（两个萤火虫父系统各自后面紧跟一串实例），两边都是实例数约等于父粒子数减 1–2，每个实例 5–10 个粒子，世界坐标范围相同，整帧目视一致。
@@ -1377,6 +1378,108 @@ f = clamp01(powf(smoothstep(clamp01((v − lo)/(hi − lo))), exponent))   // Na
 - 回放案例 `cases/e1.json`–`e5.json`（`kbp replay`）：`e1` static、`e2` eventfollow（含 fps 20 的两遍模式）、`e3` eventspawn / eventdeath、`e4` 音频（轨迹帧带 `audio` 时每帧步进前写进系统共用的数组）、`e5` 运行中建实例的预热时间。各步的快照、补丁与变异清单在 `e0/`–`e5/`。
 - WPE 参照在 `A:\p4e\`（wpe-renderdoc MCP 的 `capture_sweep` / `capture_wallpaper`）；`kbp rdc track --points` 读轨迹，同时记下 CLK 读到的 `g_AudioSpectrum*`（WPE 把 `float[n]` 打包成 `float4[n/4]`，从 `members` 展开）；`kbp rdc track` 的 points 认法在连续同系统绘制时另核颜色。步骤 0 的 draws 认法轨迹改名为 `rd-<标签>-draws.json`。
 - 真实场景的测试副本用 `kbp content unpack --instrument` 解包到 `ignore/p4/proj/real-<id>-kbp`（不动工坊原件），导入 dev 库对照，看完用 `projects_remove` 移除。
+
+## 粒子（P4f）
+
+P4f 让脚本能控制粒子系统，顺带补完粒子上剩下的两件事。四块都落在 P4a–P4e 已有的接口上：
+- **字段脚本挂在 `instanceoverride` 上**（`{"rate": {"script": "…", "value": 1}}`）：和用户属性改值是同一件事，写回目标接到就地目标 `particle-instance`；`rate` 另有一条不置脏的路。
+- **HDR 下的 `instanceoverride.brightness`**：乘新粒子出生时的实例颜色。
+- **粒子层的脚本方法**（WPE 的 `IParticleSystem`）：`play` / `pause` / `stop` / `isPlaying` / `emitParticles(n)` 与只读字段 `instance`（24 个字段的代理）。
+- **一个系统多个 renderer**：一个系统按 renderer 数组各画一次。
+
+做完之后带粒子的场景里粒子用法全部覆盖；深度与剔除（`cull:*`、`depthtest:*`、`depthwrite:*`）不在这里，归 P5d（不分图层种类，P4f 已定 1）。
+
+依据：
+- 读码：[rea-p4f-script](../../.claude/plans/wpe-import/3-scene/phase4/rea-p4f-script.md)（方法表、`play` / `pause` / `stop` / `isPlaying`、`emitParticles` 的门与欠账、`instance` 的读写与生效时机、字段脚本、`brightness`、多 renderer 的变体材质与绘制循环）；
+- 确定性工程的实测：[报告](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)「P4f 语义的实测核对」；
+- 逐步的验收数据与没测到的项：[子计划](../../.claude/plans/wpe-import/3-scene/phase4/phase-4f-script.md)「步骤 0–4 实施记录」「没测到的」「P4f 收尾」。
+
+验收照 P4a–P4e：随机范围收成 min = max，按 WPE 日志的 dt 回放、逐粒子和 RenderDoc 抓帧比。回放案例 `ignore/p4/cases/f1`（字段脚本）、`f2`（`brightness`，按「超高」与「关闭」两档编译）、`f3`（脚本方法，钩子按 WPE 日志里 `[kbpx]` 事件的 `engine.runtime` 在对应帧的脚本阶段调产品入口）；多 renderer 用离线四角与整帧。每步 `kbp regress` 现有案例逐字节相同；变异检查每步一组（共 34 处，步骤 3 的 `no-capacity` 是等价变异），只靠单测的几条在子计划里写明。
+
+### 实例覆盖挂字段脚本与 `rate`
+
+WPE 的字段脚本、脚本赋值、用户属性改值走同一个 setter：写进实例覆盖、置脏，下一帧对象更新开头从基值重算（读码 5.2、5.3、6.2）。我们的用户属性早就是这条路（`SceneState` 写 `particle-instance`，下一次 `sync` 在 `stepParticles` 之前调 `ParticleSystem.setInstance`），所以只是把 `instanceoverride/<键>` 的字段脚本写回目标接过来（`compile/scripts.ts` 的 `targetOf`），时机自然对上：第 N 帧写的值第 N + 1 帧生效（实测 `p4f-instance`）。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 能挂脚本的键 | `SCRIPT_INSTANCE_KEYS`：7 个系数（`alpha`、`size`、`count`、`speed`、`lifetime`、`rate`、`brightness`）、`colorn`、`controlpoint0..7`、`controlpointangle0..7`，共 24 个；别的键挂脚本照报 `particle:binding:instance:<键>` | 读码 1.3 |
+| 每帧写 | 字段脚本每帧都写、不比较；重算从基值乘，每帧写同一个值和不写结果相同 | 读码 6.2、6.4；实测 `i-count-const`、`i-count-static` |
+| `rate` | 没有改值回调：单写它不置脏、不钳制，下一帧直接用 `dt′ = dt·rate`（写 0 整棵树冻结）；湍流类的 `timescale` 不跟，要等别的系数被写、置脏重算时才跟上，那时把 `rate` 钳到 0.01 并写回实例覆盖。用户属性改 `rate` 同一条路（`ParticleSystem.setRate`，`sync` 里先于 `setInstance`） | 读码 5.4；实测 `b-rate0`、`rt-1`、`rt-2` |
+| 加载 | 建系统时 `rate` 钳到 0.01 并写回状态（`SceneState.fromBundle`、系统构造、单图层重建三处） | 读码 6.1 |
+| 冻结帧 | `dt′ ≤ 0` 时系统时间与图层时间不动、模拟跳过、控制点不更新；写顶点、子系统照常 | 读码 |
+| 子系统 | 不单独登记，值从根系统递归；子系统构造时实例值取根的当前值 | 同 P4e |
+
+- **控制点**（P4f 步骤 3 起）：运行中写 `controlpointN` / `controlpointangleN`（属性、字段脚本、`instance` 对象）在置脏重算时写进 `cp[N]` 的 base：平移替换、角度按 Z·Y·X 换 3×3，`flags & 0x10005` 的点（指针、父控制点、remap 输出）跳过，递归到 static 子系统与池里的实例（读码 5.5、rea-p4e-children 3.4）。
+- 顺带修掉的 bug：以前 `instanceoverride/alpha`、`brightness` 的字段脚本会落到图层自己的 `alpha` / `brightness` 上。
+
+### HDR 下的 `brightness`
+
+重算实例覆盖时 `k = (HDR && !(flags & 8)) ? brightness : 1`，出生颜色初值 `instColor = colorn·k`（`colorn` 生效时）或 `(k, k, k)`，颜色 initializer 再乘上去（读码第 7 节，`particles/colorn.ts` 的 `instanceBrightness`，乘在 `applyColorn` 里）。
+
+- 只乘颜色三通道、不乘 alpha、不钳制，有没有颜色模块都乘，在 `colorn` 之后（实测 `p4f-bright`：超高档 `b-05` / `b-2` / `b-2-cn` / `b-2-a` 和 WPE 逐粒子相同，`b-2-f8` 与关闭档不变；真机预览与 WPE 超高档上屏画面差 0–2 个色阶）。
+- HDR 只在加载时判定（P3 K3），编译期写进每个系统的 `SceneParticle.hdr`，子系统与事件实例各看自己的 `flags & 8`。
+- 运行中改值就地：置脏、下一帧重算 `instColor`，**只影响之后出生的粒子**（收尾补测 `p4f-bright2`：WPE 里把绑定的属性从 2 改回 1，最近出生的 4 颗是 1 倍、更老的保持 2 倍，`flags 8` 不变；Kabegame 预览里改同一个属性，同样一刀切开）。
+
+### 粒子层的脚本方法与 `instance`
+
+WPE 的粒子对象有一张自己的反射表（读码 1.1，`FUN_14024cb00`）：五个方法和只读字段 `instance`；子系统与事件实例脚本拿不到（1.5）。我们照 P6a 给声音对象登记 `ISoundLayer` 的做法，只在粒子对象的图层代理上登记（`script/api.ts` 的 `installParticle`），落点是渲染器上这一层的根系统（`GpuScene.particleScript`）。编译期的「宁可多报」规则（`PARTICLE_LAYER_METHODS`）随之删掉：粒子层与声音层的同名方法都有了，按对象类型在运行时分派。
+
+| 方法 | 我们的做法 | 依据 |
+|---|---|---|
+| `pause()` | 根上置脚本暂停位，整棵树共用（新建、复用的事件实例同样带上）：发射函数整段不跑，`delay`、`duration`、周期计时、余数都冻结，eventspawn / eventfollow 不建；模拟、判死、eventdeath 照常 | 读码 2.1；实测 `a-pause`、`b-pause-dur` |
+| `stop()` | 根与 static 子孙的发射器标结束、计时复位，图层时间清零，清全部粒子，销毁活跃事件实例（空闲池保留），不清暂停位；当帧不画 | 读码 2.3；实测 `a-stop`、`a-tree` |
+| `play()` | 清暂停位；整棵树不活跃时复位发射计时、清结束位、重开（递归 static），不预热；还活跃时只清暂停位 | 读码 2.2；实测 `a-stop`、`a-emit-stopped` |
+| `isPlaying()` | 没暂停且 `isActive()`（还有没结束的发射器、存活粒子或活跃的子孙） | 读码第 3 节；`f3` 回放和 WPE 日志逐条相同（724 条） |
+| `emitParticles(n)` | 整数原样，0、非整数、缺参数当 1，负数不发（实测 `()`、`(0)`、`(2.7)` 都是 1，`(-3)` 是 0）。脚本阶段当场发：每个发射器各发 n 个，每条现算「容量 − 存活数」、满了丢弃；没被挡的发射器连同待发的 `instantaneous` 记欠账（`acc −= pending + n`），被挡的（结束、暂停、`delay > 0`）不动计时。照常触发 eventspawn / eventfollow | 读码 4.1–4.5；实测 `a-emit*`、`b-debt`、`b-args` |
+| `instance` | 24 个字段的代理：写走和属性、字段脚本同一个 setter（下一帧生效，`rate` 走单独的路），读状态里的覆盖值，当场读得回（没设过的控制点 x 是 3.4028235e38，`colorn` 是 (−1, −1, −1)）；整体赋值忽略 | 读码 1.3、5.1；实测 `a-inst`、`a-inst-cp` |
+
+- **脚本发出的粒子本帧不画**：WPE 写完顶点才跑脚本，它们下一帧先增龄 `dt′` 再画（读码 4.4）。我们的帧序是脚本之后才写顶点，所以给这批粒子记「本帧脚本出生」（`ParticleSystem.scriptBorn`），写顶点、rope / ropetrail 的段、轨迹快照都跳过，下一次 `step` 开头清掉；脚本阶段新建的事件实例连同子孙同样本帧不画。实测 `b-spawn`、`b-emit-alpha`。
+- **首次加载**：脚本 `init` 早于渲染器建场景，这期间调的方法按顺序记下、`beforeFirstFrame` 补调；`isPlaying` 按记下的暂停 / 停止回答。重编译与单图层重建时新树沿用旧树的暂停 / 停止（`adoptScriptControl`），否则重建后会自己重新发射【推】。
+- **和 WPE 有意不同的三处**（P4f 已定 5–7，WPE 的行为按 bug 处理，只有单测）：
+  1. 自然结束后 `play()` 重新发射：WPE 只清结束位、不复位计时，`duration` 型发射器停在 −1 不再发、`isPlaying()` 却恒真；我们先复位计时再重开。
+  2. `stop()` 之后改实例系数不重新发射：WPE 置脏重算会重开 `rate > 0` 的已结束发射器，之后计数下溢、`isPlaying()` 恒真；我们让 `stop` 造成的结束只有 `play()` 能解除（自然结束的照旧会被重算重开）。
+  3. 脚本 `emitParticles` 建事件实例用对象的 `W`：WPE 在脚本阶段的模型栈顶是单位阵，父或子是世界空间时实例偏一个 `W`。
+- **按推断实现的**（只有单测）：参数越出 int32 当 0 再按 1 发；`stop` → `play` 时复位计时（WPE 停止期间 `delay` / `duration` 照样倒数）；「被 stop 停下」只在 `play()` 真的重开时解除。
+
+### 一个系统多个 renderer
+
+WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基础材质按 renderer 类型加宏建一个变体材质，绘制前按这一条的 `orientation` / `axis` 算 `g_Orientation*`，拖尾那条另写 `g_RenderVar0.xyz`；sprite 与 spritetrail 共用一份每帧写一次的顶点缓冲（读码第 8 节）。我们一个系统出几个 draw，各写各的顶点：画面相同（同一批存活粒子、同一个槽序，速度为 0 的粒子 sprite 那次画、拖尾那次照 `trailDrawable` 跳过），单 renderer 的系统逐字节不变，代价是多 renderer 的系统多写一次顶点。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 解析 | `SceneParticle.draws`：表内的每个 renderer 一项（JSON 顺序），`renderer: []` 为空，只有表外类型时按缺省 sprite 一项；`renderer` 改为模拟用的那条（有 rope 类取第一个 rope 类，rope 表与拖尾历史跟它建） | 读码 8.1、8.2 |
+| 变体材质 | 每项一份 pass：第 0 项沿用 `objects/<i>/particle/passes/<k>`，第 r 项（r ≥ 1）是 `…/particle/renderers/<r>/passes/<k>`（子系统接在自己的键后）；材质常量的属性绑定两份都登记 | 读码 8.1 |
+| 厚格式 | 看整个系统：有 spritetrail（或槽 0 是帧表）时同系统的 sprite 变体也写 `THICKFORMAT`、`TEX0FORMAT` 按厚格式规则（`particleThick`），轨迹的 `thick` 列同样 | 读码 8.1；T8：sprite 那次有 `THICKFORMAT`、没有 `TRAILRENDERER` |
+| 绘制 | 计划里一个 renderer 一个步骤；渲染器的模板池每次出现一组 draw，同一系统的整组按数组顺序连着画、再走子系统；快照仍是每对象至多一次 | 读码 8.3、8.4 |
+| `g_RenderVar0` | 每个 draw 自己的；sprite 写 0。WPE 是全局、没写的分量留着上一次绘制的值，sprite 变体不读它，不复刻【推】 | 读码 8.3 |
+| 照报 | rope / ropetrail 和别的 renderer 混挂仍报 `particle:renderers`：rope 类的缓冲、rope 表、拖尾历史是系统级的，多条 rope 类记录各自的参数怎么作用到同一份缓冲上没追、没抓帧，语料 0 处。强制渲染时只画模拟跟着建的那条 rope 类 | 读码 8.2 |
+
+- **验收**：离线四角对 T8、T8r（两种顺序）、`p4f-multi` 的 `m-st-zero`（拖尾那次 WPE 四角是 NaN，我们不写）、`m-ss`（第二个 sprite `fixed`、`axis 1 0 0`）、`m-child-c`（子系统上的两个 renderer），65 个系统全部吻合；真机按 WPE 的帧时间回放，`p4c-trail` 与 `p4f-multi` 整帧 0 差异（时间线不用平分的帧）。
+- **真实场景没确定**：语料里唯一的 `3465215190` 的 `Snow`（sprite + spritetrail）只看了强制渲染的一帧（这张另差 18 项、不能渲染），代码里在 `compile/features.ts` 的规则处标了 `TODO:[WPE_SCENE]`。
+
+### 语料与覆盖
+
+口径同 P4e（带粒子的场景里不报任何 `particle:*` 键的场景数）。
+
+| 口径 | 带粒子 | 粒子用法完全覆盖 | 能渲染 |
+|---|---|---|---|
+| 165 张 | 108 | 93 → 108；步骤 1、2、4 之后依次 104、107、108（步骤 3 不改覆盖） | 不变：P4f 去掉的键在每张场景里都不是最后一项 |
+
+- **去掉的键**：`particle:binding:instance:*` 11 张（步骤 1）、`particle:instance:brightness` 3 张（步骤 2）、`script:api:particle.play` 39、`stop` 30、`pause` 16、`isPlaying` 8 与 `layer.emitParticles` 1（步骤 3）、`particle:renderers` 1 张（步骤 4）。没有新增的键。
+- **用到脚本方法的真实场景测不了**：`emitParticles` 的两处调用都在光标回调里（`3286859278` 的 `Thunderbolt` 要 `input.cursor*`，`3570560686` 的按钮挂在 `cursorClick` 上），这两个 API 还没实现；代码里在粒子层脚本方法的落点标了 `TODO:[WPE_SCENE]`。
+- **真机对照**：`3809965824` 的「鼠标音乐」（`count` / `rate` / `size` / `speed` 挂音频脚本）放同一段音乐时 19–24 个、尺寸 18–36，WPE 14–24 个、16–29，用静态值时只有 7–9 个。
+
+### dev 探针与对比台的增补
+
+| 探针 | P4f 增补 |
+|---|---|
+| `particleCorners` | 每个粒子层按顶层系统的 `draws` 每条各出一项，第 r 项（r ≥ 1）带 `renderer: r` |
+| `GpuScene.particleProbe` | 第 4 个参数 `renderer`（缺省 0） |
+
+对比台在 `ignore/p4/`：
+- 确定性工程：`defs/p4f0.py`（`kbp gen p4f0`）出 `p4f-instance`、`p4f-api`、`p4f-api2`、`p4f-api3`、`p4f-bright`、`p4f-multi` 与收尾的 `p4f-bright2`。脚本事件写进 WPE 的 log.txt：`[kbpx] <对象名> <engine.runtime> <事件>`（FR 的 `[kbp]` 解析不认这个前缀）。
+- 回放案例 `cases/f1.json`–`f3.json`；kbp-tools 的案例多了 `postprocess` 字段（按档位编译），`observe` 钩子多第 6 个参数（这一帧的控制点输入）；`kbp corners offline` 认 `名字#<r + 1>` 为第 r 条 renderer，并按 `forEachDrawn` 比 static 子系统。
+- WPE 参照在 `A:\p4f\`。各步的快照、补丁与变异清单在 `f0/`–`f4/`。
 
 ## 音频频谱 uniform（P11a）
 
@@ -1903,7 +2006,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **脚本控制**（步骤 2）：只有声音对象的图层有 WPE `ISoundLayer` 的 `play`（= `P`：暂停中续播，否则停掉、重新随机选、从头放）、`pause`、`stop`（= `X`：停并回到开头）、`isPlaying()` 和可读写的 `volume`，别的图层调用照旧报 `TypeError`（WPE 的方法按对象类型登记）。`volume` 读 `SceneState.sounds`，写入落到就地目标、不钳制，宿主写完当场交给排期器（暂停时也生效）；声音对象的 `volume` 挂 `{script}` 时，字段脚本的返回值每帧写回同一个目标。没有播放器时（宿主没建、或已退回预览图）方法什么都不做，`isPlaying` 为假。真机和 WPE 逐条对过 `p6a-play` / `p6a-single` 的调用前后 `isPlaying` 与录音段序列（含 `single` 放完后 `pause` 再 `play` 会重放而 `isPlaying` 仍假）。
 
-**能力表**：不再报 `object:sound` 与声音对象自己的键（`muteineditor`、`attenuation`、`mindistance` 中性）。新键：`object:spatialization`（三维声音，语料 0 张打开）、`sound:playbackmode:<值>`、`sound:binding:<键>`（`playbackmode` / `mintime` / `maxtime` / `startsilent` / `spatialization` 绑了属性或脚本，WPE 没有回调）。场景里有粒子层时，任意接收者访问 `play` / `pause` / `stop` / `isPlaying` 都报 `script:api:particle.<名>`（`scriptApi.ts` 的 `PARTICLE_LAYER_METHODS`）：WPE 的粒子系统也有这四个方法（P4f），而语料里这些调用的接收者绝大多数静态认不出类型，所以宁可多报；这张名单不进 `MISSING_SCRIPT_API`，P4f 实现后删掉。
+**能力表**：不再报 `object:sound` 与声音对象自己的键（`muteineditor`、`attenuation`、`mindistance` 中性）。新键：`object:spatialization`（三维声音，语料 0 张打开）、`sound:playbackmode:<值>`、`sound:binding:<键>`（`playbackmode` / `mintime` / `maxtime` / `startsilent` / `spatialization` 绑了属性或脚本，WPE 没有回调）。粒子层的同名方法 P4f 步骤 3 实现之后，`play` / `pause` / `stop` / `isPlaying` 按对象类型在运行时分派，编译期不再报（P6a 到 P4f 之间，场景里有粒子层时任意接收者上的这四个名字都报 `script:api:particle.<名>`，`PARTICLE_LAYER_METHODS` 已删）。
 
 **已知差异**：
 - 开始是异步的：元素拿到元数据才从头放并回报时长，`T` / `Rm` 从那一刻起算；WPE 是同步读完整个文件。等回报期间 `isPlaying` 按 WPE 当场的值（真）。

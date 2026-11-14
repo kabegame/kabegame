@@ -253,7 +253,7 @@ const OBJECT_FLAGS = [
   - P4f：`instanceoverride` 的 `{script}`；
   - P11：`g_AudioSpectrum*` uniform（频谱数据已就位）；
   - 解锁烟花预设之前：spritetrail 写顶点的开销（见风险 8）；
-  - 没有排期：一个系统多个 renderer、`inherit*fromevent`（语料 0）、「音频录制」属性。
+  - 没有排期：一个系统多个 renderer（后来并进 P4f 步骤 4）、`inherit*fromevent`（语料 0）、「音频录制」属性。
 
 ## P4f — 脚本与深度
 
@@ -269,6 +269,14 @@ const OBJECT_FLAGS = [
 **验收：** 语料中粒子用法覆盖达到 70 张；`emitParticles` 和脚本写入的确定性工程和 WPE 一致；深度和剔除的工程和 WPE 逐像素一致；不用深度的场景基线逐张相同。
 
 **2026-11-13 定稿**（子计划 [phase-4f-script.md](phase-4f-script.md)，用户按推荐定）：粒子的深度与剔除移到 P5d（P5 已定 8）；并进 HDR 下的 `instanceoverride.brightness` 与一个系统多个 renderer（P4c 决定 3 改定）；`instance` 对象做全。分四步：实例覆盖挂 `{script}`（粒子覆盖 93 → 104，165 张口径）、`brightness`（→ 107）、`IParticleSystem` 的方法与 `instance`（不改覆盖，去掉 `script:api:particle.*` 的多报）、多 renderer（→ 108，全部）。不解锁场景。
+
+**完成情况（2026-11-14）：** 步骤 0–4 都已提交（步骤 0–1 `ef16dcf1`；2 `a32a8071`；3 `1616bb2b`；4 `79800ab7`），收尾写进了 `cocs/wpe/WPE_SCENE.md`「粒子（P4f）」、changelog 与回归文档，走查了各步「没测到的」（子计划「P4f 收尾」）。
+- 覆盖：165 张口径带粒子的 108 张粒子用法全部覆盖（93 → 104 → 107 → 107 → 108），正好是步骤 0 定的上限；本节验收写的 70 张是旧口径的估计。能渲染不变（每张去掉的键都不是最后一项）。
+- 去掉的键：`particle:binding:instance:*` 11 张、`particle:instance:brightness` 3、`script:api:particle.play` 39 / `stop` 30 / `pause` 16 / `isPlaying` 8、`layer.emitParticles` 1、`particle:renderers` 1（只剩 rope 类混挂才报，语料 0）。没有新增的键。
+- 和 WPE 有意不同的三处（已定 5–7）：自然结束后 `play()` 重新发射、`stop()` 之后改系数不重开、脚本 `emitParticles` 建事件实例用 `W`。
+- 读码被实测补上的：`emitParticles()`、`(0)`、`(2.7)` 都发 1 个；运行中改 `brightness` 只影响之后出生的粒子（收尾补测 `p4f-bright2`）。
+- 真实场景没确定、代码里标了 `TODO:[WPE_SCENE]` 的两处：`emitParticles` 的两张（调用在光标回调里，等光标 API）、多 renderer 的 `3465215190`（这张另差 18 项）。
+- 留给后面各节的：粒子的深度与剔除（P5d）；光标输入 API 与回调（`input.cursor*`、`cursor*`，P6）之后补看 `emitParticles` 的真实场景；解锁烟花预设之前 spritetrail 写顶点的开销（风险 8）。
 
 ## 决定
 

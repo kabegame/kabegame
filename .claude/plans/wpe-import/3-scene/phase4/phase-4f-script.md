@@ -718,6 +718,8 @@ renderer: particleNode(layer.particle, step.node).draws[step.renderer].renderer,
 | 整帧（真机宿主按工作区构建，`render_scene` 确定性回放，和 WPE 的 Present 比） | `p4c-trail` 第 922 帧、`p4f-multi` fps 60 第 789 帧整帧 0 差异。`p4f-multi` fps 20 第 278 帧差 25 个像素（最大 196），都在 `m-ss` 旋转 sprite 的两条斜边上：第 251–275 帧日志与轨迹都没有、时间线只能平分，粒子出生时刻跟着偏，这一帧 x 是 51.84（WPE 52.30），斜边错开一列，和绘制无关 |
 | 真机 | `3465215190`（Rainy Day）强制渲染出图正常，`Snow` 159 颗，不支持项里没有 `particle:renderers`。宿主产物按工作区重建过（`target/debug/resources/wpe-scene`）。测完 `projects_remove` 移除两条测试行（`p4f-multi`、`p4c-trail`），没有设强制渲染开关 |
 
+2026-11-14 用户同意提交 `79800ab7`，并要求用 `TODO:[WPE_SCENE]` 标注没确定的 Rainy Day 测试（`compile/features.ts` 的多 renderer 规则处）。
+
 ### 没测到的（步骤 4，2026-11-14 记）
 
 - `Snow` 只看了强制渲染的一帧，没和 WPE 抓帧比：这张另差 18 项，不能渲染，画面整体本来就和 WPE 不同。代码里在 `compile/features.ts` 的多 renderer 规则处标了 `TODO:[WPE_SCENE]`（2026-11-14 用户），这张能渲染之后抓帧对比。
@@ -726,3 +728,26 @@ renderer: particleNode(layer.particle, step.node).draws[step.renderer].renderer,
 - rope 类与别的 renderer 混挂仍报 `particle:renderers`，强制渲染时只画第一个 rope 类，没有 WPE 对照。
 - `g_RenderVar0` 的残值（WPE 是全局、没写的分量留着上一次绘制的值）不复刻，按读码不影响画面（sprite 变体不读它），没有实测。
 - 多 renderer 系统每帧多写一次顶点，开销没量。
+
+## P4f 收尾（2026-11-14）
+
+**文档**：`cocs/wpe/WPE_SCENE.md` 新增「粒子（P4f）」一节，改掉各节里「P4f 照报」的旧说法（能力表的 `particle:renderers`、`particle:instance:*` 两行，`instanceoverride` 就地生效、`colorn`、P4c 的多 renderer、P4e 的「还挡着的键」、P6a 的 `PARTICLE_LAYER_METHODS`、未实现 API 清单里的 `emitParticles`）；`cocs/README.md` 加 P4f 条目与适用场景；changelog 用户侧、开发侧各一条；回归文档新增「场景壁纸 P4f」一节（F1–F17）；总计划 `phase-4-particles.md` 补「完成情况」。
+
+**「没测到的」走查**：先看语料用不用得到，用得到的补测，用不到或测不了的记下理由。语料扫描脚本 `ignore/p4/f4/scan_unverified.py`、`rate_scripts.py`（只读）。
+
+| 项 | 语料 | 结论 |
+|---|---|---|
+| 负的 `rate`（步骤 1） | 静态值与属性没有负数；挂脚本的 12 处都是「最小值 + 音频 × 区间」或缓动插值，滑块下限不小于 0 | 碰不到，不补测 |
+| 全量 vitest（步骤 1–3 的合并后工作区没跑） | — | HEAD `79800ab7` 快照（含 P4f 全部提交、不含别的会话未提交的改动）跑全量：137 个文件里 135 个通过、2 个跳过，3234 个用例里 3192 个通过、42 个跳过，0 失败 |
+| `brightness` 运行中改值（步骤 2） | `2833017810` 的 12 个粒子对象把 `brightness` 绑了用户属性 | **补测**：生成 `p4f-bright2`（`defs/p4f0.py`，三个系统的 `brightness` 绑同一个属性，粒子匀速右移、越右越老，对照 `flags 8` 与带 `colorn`），WPE 超高档（当时已是超高，是别的会话补测泛光时改的，没动）用 `apply_properties` 改值后抓帧（`A:\p4f\p4f-bright2-*`）：改成 2 后新粒子 0.941、改回 1 时最近出生的 4 颗 0.471、更老的 12 颗仍是 0.941，`flags 8` 始终 0.471，带 `colorn` 的同样切开。Kabegame 预览（应用「场景后处理」超高）用 `set_wpe_web_user_properties` 改同一个属性，截图同样一刀切开（`ignore/p4/f4/out/frames/real-bright2-after.png`）。和读码一致 |
+| `brightness` 的三张真实场景（步骤 2） | 都还差别的项、不能渲染 | 确定性工程已和 WPE 逐像素比过，不补测 |
+| `emitParticles` 的真实场景（步骤 3） | `3286859278`（`Thunderbolt`）、`3570560686`（按钮的 `particles.emitParticles(4)`），调用都在光标回调里 | 测不了：要 `input.cursor*` 与 `cursorClick`（P6）。按 Rainy Day 的先例在 `render/scene.ts` 的 `particleScript` 处标 `TODO:[WPE_SCENE]` |
+| 已定 5–7 有意和 WPE 不同的三处（步骤 3） | 语料里没有对自然结束的系统调 `play`、`stop` 后改系数、脚本发射触发世界空间事件实例的写法（`emitParticles` 只有上面两处，父子都是本地空间） | 不补测，回归文档 F17 留 `[ ]` |
+| 子代理按推断定的几条（步骤 3：参数越界、`stop` → `play` 复位计时、「被 stop 停下」的解除、重建沿用、`init` 里调方法、控制点条件绑定得到布尔值） | 脚本直接读写 `layer.instance.*` 0 处；`emitParticles` 只有字面量 1 与 4 | 碰不到，只有单测 |
+| 控制点覆盖写进子系统与事件实例、`controlpointangleN`、rope 类跳过脚本出生的粒子、暂停中的 eventdeath（步骤 3） | 0 处，或只经上面两张测不了的场景 | 只有单测 |
+| Rainy Day 的 `Snow`（步骤 4） | 唯一的多 renderer 系统 | 这张另差 18 项、不能渲染；用户要求标 `TODO:[WPE_SCENE]`（步骤 4 提交里已标） |
+| 帧表与拖尾混挂、rope 类混挂、`g_RenderVar0` 残值、多写一次顶点的开销（步骤 4） | 0 处（唯一的多 renderer 是 `Snow`：sprite + spritetrail） | 只有单测或读码 |
+
+**过程问题**：收尾时又误跑了一次 `python -X utf8 -I - < /dev/null`（空的 `python -`，没执行代码），违反约定；之前验收时还有一次空的 `python -X utf8 -I -c ""`（步骤 4 实施记录已记）。
+
+**WPE 与应用状态**：WPE 后处理保持超高（进收尾前别的会话已改成超高，本节没有改设置、没有重启）；测试窗口已关。Kabegame「场景后处理」保持用户设的超高；测试行 `p4f-bright2` 已 `projects_remove`，主窗口的预览换回原来的 13586。

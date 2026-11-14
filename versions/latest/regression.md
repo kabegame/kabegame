@@ -851,6 +851,32 @@
 | [ ] | A17 重编译保留视差点 | Windows dev，图库预览 | 改一个会整场重编译的属性；换到另一张再换回来 | 改属性时画面不跳回中心；换回来时从初值重新开始 | 可跳过：上面这些场景没有明显会重编译的属性；渲染器单测 `parallax.test.ts`「重编译保留 P」覆盖 |
 | [x] | A18 暂停与应用背景 | Windows，图库预览与应用背景 | 预览里右键「暂停」后移动鼠标，再恢复；把一张视差场景设成应用背景 | 暂停时图层不动，恢复后接着跟；应用背景不跟鼠标，只有静止偏移 | 2026-11-11 用户：和预期一致 |
 
+## 场景壁纸 P4f：粒子的脚本接口与实例覆盖、多 renderer
+
+2026-11-13 – 11-14 Windows dev。P4f 分 5 步加收尾：步骤 0 调研（读码与三轮确定性工程）；1 `instanceoverride` 挂 `{script}` 与 `rate` 的单独路径；2 HDR 下的 `brightness`；3 粒子层的 `IParticleSystem` 方法与 `instance` 对象；4 一个系统多个 renderer；收尾补测 `brightness` 运行中改值。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「粒子（P4f）」，每步的验收数据与没测到的项见 `.claude/plans/wpe-import/3-scene/phase4/phase-4f-script.md`「实施记录」「没测到的」「P4f 收尾」。验收工具：回放案例 `ignore/p4/cases/f1`–`f3`（`kbp replay`）、`kbp corners offline`，各步的快照、补丁、变异清单在 `ignore/p4/f0/`–`f4/`。确定性工程由 `ignore/p4/defs/p4f0.py`（`kbp gen`）生成，WPE 参照在 `A:\p4f\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | F1 字段脚本挂 `instanceoverride` · 确定性工程 | Node 回放 | `kbp replay f1`：`p4f-instance` fps 20 / 60 的 10 个系统（7 个系数与 `colorn` 按 `engine.runtime` 阶跃、每帧写同一个值） | 第 N 帧写的值第 N + 1 帧生效；在包络内 | 2026-11-13：位置 ≤ 3.1e-4，尺寸、颜色、alpha 差 0 |
+| [x] | F2 `rate` 的单独路径 | Node 回放 | `kbp replay f1` 的 `rt-1`、`rt-2`（单写 `rate`，湍流 `timescale` 要等别的系数被写才跟上） | 在包络内 | 2026-11-13：`rt-1` 7.0e-4（改之前的实现差 18.8 像素）、`rt-2` 4.6e-4 |
+| [x] | F3 HDR 下的 `brightness` · 确定性工程 | Node 回放 + Windows dev 预览（应用「场景后处理」超高） | `kbp replay f2`：`p4f-bright` 超高档与关闭档逐粒子比颜色与 alpha；预览截图与 WPE 超高档上屏画面比 | 两档差 0；画面一致 | 2026-11-13：两档颜色、alpha 差 0；六组粒子带逐点相同或差 1–2 个色阶 |
+| [x] | F4 运行中改 `brightness`（收尾补测） | WPE 抓帧（超高档，`p4f-bright2`）+ Windows dev 预览 | WPE 里用 `apply_properties` 把绑定的属性改成 2 再改回 1，读轨迹颜色；Kabegame 预览里用属性面板的命令改同一个属性截图 | 只有改值之后出生的粒子变色，老粒子不变；`flags 8` 的系统不变 | 2026-11-14：WPE 改回 1 后最近出生的 4 颗是 1 倍、更老的 12 颗保持 2 倍，`flags 8` 始终不变；Kabegame 预览同样一刀切开。测后 `projects_remove`，主窗口原来的预览已换回 |
+| [x] | F5 `play` / `pause` / `stop` / `isPlaying` / `emitParticles` · 确定性工程 | Node 回放 | `kbp replay f3`：`p4f-api` fps 20 / 60、`p4f-api2` fps 20，钩子按 WPE 日志的 `[kbpx]` 事件在脚本阶段调产品入口 | 逐粒子在包络内；`isPlaying` 和 WPE 日志逐条相同 | 2026-11-13：位置 ≤ 6.7e-4、其余差 0；`isPlaying` 724 条全部相同；脚本发射建的 eventspawn 实例对上 |
+| [x] | F6 `instance` 对象 | Node 回放 + 单测 | `f3` 的 `a-inst`、`a-inst-cp`（写系数、写控制点后同帧读回、下一帧生效） | 在包络内；没设过的控制点读到 3.4028235e38、`colorn` 读到 (−1, −1, −1) | 2026-11-13：通过。控制点写进子系统与事件实例、`controlpointangleN` 只有单测 |
+| [x] | F7 一个系统多个 renderer · 四角 | Deno WebGPU 离线 | `kbp corners offline p4c-trail-fps60 p4f-multi-fps20 p4f-multi-fps60`：同一系统的第 r + 1 次绘制对第 r 条 renderer | 全部吻合（≤ 0.01 像素）；速度为 0 的粒子在拖尾那次 WPE 是 NaN、我们不画 | 2026-11-14：65 个系统、不符 0 处；T8、T8r 两种顺序、`m-ss` 的第二个 sprite（`fixed`）、子系统上的两个 renderer 都差 0 |
+| [x] | F8 一个系统多个 renderer · 整帧 | Windows dev 屏外宿主（`render_scene` 按 WPE 的帧时间回放） | `p4c-trail` 第 922 帧、`p4f-multi` fps 60 第 789 帧、fps 20 第 278 帧和 WPE 的 Present 比 | 整帧一致 | 2026-11-14：前两帧 0 差异；fps 20 那帧差 25 个像素，第 251–275 帧日志缺失、时间线平分，粒子位置偏 0.46 像素所致，和绘制无关 |
+| [x] | F9 变异检查 | Node（快照模式） | `kbp mutate`：步骤 1–4 各一组（`ignore/p4/f1/`–`f4/` 的 `mutate_*.py`） | 全部检出，还原后树哈希相同 | 2026-11-13 – 11-14：步骤 1 8 处、2 7 处、3 10 处（`no-capacity` 是等价变异）、4 9 处，其余全部检出；只靠单测检出的几处在子计划里写明 |
+| [x] | F10 现有回放不变 | Node | 每步 `kbp regress` HEAD 快照 ↔ 本步快照 | 现有案例逐字节相同 | 2026-11-13 – 11-14：每步都相同。步骤 4 时 `e4` 两边同样失败：案例要求必须报 `uniform:g_AudioSpectrum*`，P11a 实现之后不再报，案例改成只允许出现这几个 |
+| [x] | F11 语料变化与覆盖 | Node，183 个工程 | 每步前后重扫 `unsupported` | 只去掉对应的键，没有新增的键，原来能渲染的场景不掉出 | 2026-11-13 – 11-14：带粒子的场景粒子用法全部覆盖 93 → 108（165 张口径）；去掉 `particle:binding:instance:*` 11 张、`particle:instance:brightness` 3、`script:api:particle.*` 39、`layer.emitParticles` 1、`particle:renderers` 1；能渲染不变 |
+| [x] | F12 音频字段脚本 `3809965824` | Windows dev 预览（强制渲染），系统循环放测试音乐 | 看「鼠标音乐」（`count` / `rate` / `size` / `speed` 挂音频脚本）的数量与尺寸；停掉音乐 | 随节奏变化、和 WPE 同量级；静音后不再发射 | 2026-11-13：19–24 个、尺寸 18–36（WPE 14–24、16–29；用静态值时只有 7–9 个）；静音后两个带音频的系统都是 0 |
+| [x] | F13 `p4f-api` · 预览 | Windows dev 预览（强制渲染） | 导入后看 8 s 里各系统的存活数 | 按 4 s 周期停止清空、暂停、补发、恢复，和脚本时间表一致 | 2026-11-13：`a-stop` 停止时清成 0、`play` 后从 1 涨到 14，`a-emit-stopped` 停止后补发 2 个，`a-tree` 连子系统一起清空再恢复，`a-emit-cap` 一直是容量 8 |
+| [x] | F14 全量单测 | Node，vitest | HEAD 快照带 `KABEGAME_WPE_ROOT` 跑全部 | 全过（已知的语料请求次数用例除外） | 2026-11-14：HEAD `79800ab7` 快照 135 个文件（2 个跳过）3234 个用例，3192 通过、42 跳过、0 失败 |
+| [ ] | F15 `emitParticles` · 真实场景 | Windows，图库预览 | 打开 `3286859278`（Ghost Rider Skull）与 `3570560686`，触发它们的脚本发射 | 闪电随脚本落下，带 eventspawn 光晕；按钮的补发正常 | 测不了：两处调用都在光标回调里（`input.cursor*`、`cursorClick`），这两个 API 还没实现。代码里标了 `TODO:[WPE_SCENE]` |
+| [ ] | F16 多 renderer · `3465215190`（Rainy Day） | Windows dev 强制渲染 + WPE 抓帧 | 比 `Snow` 的雪花与拖尾 | 和 WPE 一致 | 只看了强制渲染的一帧（159 颗，出图正常）；这张另差人偶、挂接等 18 项、不能渲染，没和 WPE 比。代码里标了 `TODO:[WPE_SCENE]` |
+| [ ] | F17 和 WPE 有意不同的三处 | — | 自然结束后脚本 `play()`；`stop()` 之后改实例系数；脚本 `emitParticles` 触发 eventspawn（父或子是世界空间） | 重新发射；不再自行发射；实例在父粒子处 | 用户定的（P4f 已定 5–7），只有单测；语料里没有场景用到这几种写法 |
+
 ## 场景壁纸 P4e：粒子子系统与音频
 
 2026-11-11 – 11-13 Windows dev。P4e 分 5 步加收尾：步骤 0 调研；1 系统树、多次绘制与 `static` 子系统；2 事件实例池与 `eventfollow`（粒子层改成每帧现排）；3 `eventspawn` 与 `eventdeath`；4 `audioprocessing*`、宿主场景频谱与 Hub 的 WPE 原始频谱（2026-11-13 改为方案 B：网页壁纸仍用自定频谱）；收尾 A 走查按推断实现的几条，收尾 B 文档与覆盖数。
