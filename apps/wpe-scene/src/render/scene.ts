@@ -4086,6 +4086,17 @@ export class GpuScene {
     return this.spriteTarget;
   }
 
+  /**
+   * 各 sprite 计数缓冲里的样本数（dev 探针，P13c 走查）：已提交的帧里最近一次计数 pass 数到的 n，按 `objects` 下标排。还没画到过的 sprite
+   * 没有计数器、不列。
+   */
+  async spriteSamples(): Promise<{ object: number; samples: number }[]> {
+    const out: { object: number; samples: number }[] = [];
+    for (const [object, counter] of [...this.spriteCounters].sort(([a], [b]) => a - b))
+      out.push({ object, samples: await counter.readSamples() });
+    return out;
+  }
+
   /** 平面反射 pass 的视图（P13b2，`views.ts`）：透视场景 S·VP·S，正交场景 VP 不变；两者都翻 eye、right、up 的 y。 */
   private reflectedView(): SceneView {
     return mirroredView(this.view, !this.bundle.general.perspective);

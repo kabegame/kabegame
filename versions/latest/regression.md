@@ -2728,7 +2728,7 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | RC0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、本节相关的 vitest、Prettier；变异检查 | 0 error、全过；变异全部检出 | 2026-11-14 Claude：tsc 0 error（别的会话的 `puppet/player.test.ts` 除外）；相关测试全过；11 处变异全部检出 |
 | [x] | RC1 语料 | Node，238 个工程 | HEAD 与工作区各扫一遍 | 本节只去掉 `object:sprite`、`material:depthtesting` / `depthwriting`；加 `REVERSEDEPTH` 后能力表不变 | 2026-11-14 Claude：ricepod 变干净；其余增减是 P11c / P12 会话的改动；语料工程着色器没有用 `REVERSEDEPTH` 的 |
 | [x] | RC2 生成工程对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 不挡 / 挡一半 / 全挡、相机平移 + sprite 写变换、正交五个工程，回放 3 帧后读回 | 整帧逐像素相同（屏蔽 FR / CLK） | 2026-11-14 Claude：五个都 0 差；挡一半 k = 0.737888 和抓帧逐位相同；平移工程与不挡的像素摘要相同 |
-| [x] | RC3 ricepod 走查 | Windows dev + WPE 抓帧（后处理超高），1920×1080，fps 20 | 去掉粒子的复制工程，开窗 110 s 后（太阳被船体部分挡住）录 5 帧，`renderFrames.ts` 按日志回放 | 光斑位置、大小、渐隐与 WPE 相同 | 2026-11-14 Claude：每帧 > 2 级的像素 ≤ 3 个，孤立的网格边像素 |
+| [x] | RC3 ricepod 走查 | Windows dev + WPE 抓帧（后处理超高），1920×1080，fps 20 | 去掉粒子的复制工程，开窗 110 s 后（太阳被船体部分挡住）录 5 帧，`renderFrames.ts` 按日志回放 | 光斑位置、大小、渐隐与 WPE 相同 | 2026-11-14 Claude：每帧 > 0 的像素 529–6288（当时没解释）。2026-11-15 Claude：差异已解释（2026-11-15 复核，P5d 把透视相机改成逐步 float32 之后）：第 2223 帧各 draw 的常量与 WPE 0 ULP（遮挡方块的轴长改成 float32 的 0.2 之后）；光斑的 k 两边都是 1，光斑在整帧上不引入差异；第 2221 帧逐像素相同，其余 4 帧剩下的都是 1 级：船体主网格（e102）8 个、喷口（e118）1 个孤立像素，归「片元的零星舍入差」（P11a 已知差异），2222 帧泛光模糊 1 个纹素差 1（P2b 已知差异）经上采样成 3 个像素，2224 帧船体 1 个像素经泛光摊成 134 个。逐级比较见 `phase-13c-sprite.md`「走查复核」 |
 | [ ] | RC4 预览 ricepod | Windows dev | 预览 Rice Pod，等相机转到太阳那段（约 80–115 s） | 太阳光斑出现，被船体挡住时渐暗、不闪 | 待真机看 |
 | [ ] | RC5 非 Windows | macOS / Linux | 预览 Rice Pod | 同 Windows（计数不依赖遮挡查询） | 本机不能测 |
 

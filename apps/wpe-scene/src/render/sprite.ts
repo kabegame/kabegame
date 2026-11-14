@@ -17,8 +17,11 @@
 import type { GpuProgram } from "./programs";
 import { multiply, type Mat4 } from "./math";
 
-/** 遮挡方块的两个轴长（WPE 常量 `0x14049267c`）。 */
-export const SPRITE_OCCLUSION_AXIS = 0.2;
+/**
+ * 遮挡方块的两个轴长（WPE 常量 `0x14049267c`）。是 float32 的 0.2（0.20000000298…）：WPE 按 float32 相乘，乘 double 的 0.2 会在个别分量上差
+ * 1 ulp（P13c 走查，ricepod 5 帧 30 个分量里 4 个，见 phase-13c-sprite「走查复核」）。
+ */
+export const SPRITE_OCCLUSION_AXIS = Math.fround(0.2);
 
 /**
  * 光斑的尺寸系数 k（WPE 的公式，float32 逐步）：`samples` 是遮挡方块通过的样本数，`height` 是场景目标高（WPE 的后备缓冲高）。渲染时在 GPU
@@ -152,12 +155,12 @@ export class SpriteCounter {
     own: (buffer: GPUBuffer) => GPUBuffer,
     label: string,
   ) {
-    // 首帧是 0（创建时清零），k = 0，同 WPE
+    // 首帧是 0（创建时清零），k = 0，同 WPE。COPY_SRC 给 dev 探针读回（`readSamples`），产品不读
     this.counter = own(
       device.createBuffer({
         label: `${label} count`,
         size: 4,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
       }),
     );
     this.params = own(
@@ -239,6 +242,27 @@ export class SpriteCounter {
     pass.setBindGroup(0, this.scaleGroup.group);
     pass.dispatchWorkgroups(1);
     pass.end();
+  }
+
+  /**
+   * 读回计数缓冲（dev 探针用，P13c 走查）：已提交的命令执行完之后的样本数，即最近一次计数 pass 数到的 n，也是下一帧算 k 用的值。
+   * 产品不调。
+   */
+  async readSamples(): Promise<number> {
+    const staging = this.device.createBuffer({
+      label: "sprite count readback",
+      size: 4,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    try {
+      const encoder = this.device.createCommandEncoder({ label: "sprite count readback" });
+      encoder.copyBufferToBuffer(this.counter, 0, staging, 0, 4);
+      this.device.queue.submit([encoder.finish()]);
+      await staging.mapAsync(GPUMapMode.READ);
+      return new Uint32Array(staging.getMappedRange())[0];
+    } finally {
+      staging.destroy();
+    }
   }
 
   /**

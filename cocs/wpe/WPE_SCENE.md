@@ -66,12 +66,12 @@
 - **是什么**：WPE 的「带遮挡测试的太阳光斑」，不是图像层。对象的 `sprite` 键（字符串）是光斑材质；工厂只在值是字符串时建（`"sprite": null` 不建），绑属性等写法照报 `object:sprite`。对象的 `origin` / `angles` / `scale` / `parent` 不参与，`visible`（含父链）照常；`effects` 不读（照报 `sprite:effects`）。不进半透明名单。
 - **编译**（`compile/sprite.ts`）：编成两网格的常量模型挂在 `layer.model`（`layer.sprite` 标明它是 sprite），复用模型的网格绘制路径：网格 0 光斑（sprite 材质）、网格 1 遮挡方块（WPE 的 `materials/util/occlusiontest.json`），顺序固定、不做视锥剔除。顶点格式 `0x9`（位置 + 一组 uv，步长 20），四个顶点位置都是 `(−1, 0, 1)`、uv 四角、索引 `0,1,2, 0,2,3`。
 - **矩阵**：MVP = `P · V'`，V' 是场景视图去掉平移（光斑只随相机转、不随相机移），模型矩阵是单位阵（`render/sprite.ts` 的 `spriteViewProjection`）。正交场景视图本来就只有平移，去掉后是单位阵（S6）。
-- **k**：`k = min(512 · ⌊n/2⌋ / Hs², 1)`，n 是上一帧遮挡方块通过深度测试的样本数，`Hs` 是场景目标高（WPE 的后备缓冲高），float32 逐步算（S1 实测逐位成立）。光斑的 `g_ViewUp` / `g_ViewRight` 乘 `2k`、`g_Alpha = k²`；遮挡方块两个轴乘 0.2，只写 alpha（写掩码 8，S3）、测深度 GREATER、不写深度。首帧 k = 0。
+- **k**：`k = min(512 · ⌊n/2⌋ / Hs², 1)`，n 是上一帧遮挡方块通过深度测试的样本数，`Hs` 是场景目标高（WPE 的后备缓冲高），float32 逐步算（S1 实测逐位成立）。光斑的 `g_ViewUp` / `g_ViewRight` 乘 `2k`、`g_Alpha = k²`；遮挡方块两个轴乘 float32 的 0.2（乘 double 的 0.2 个别分量差 1 ulp，走查实测），只写 alpha（写掩码 8，S3）、测深度 GREATER、不写深度。首帧 k = 0。
 - **n 自己数、k 在 GPU 上算**（`render/sprite.ts` 的 `SpriteCounter`）：Chrome 在 Windows 上的 Dawn D3D12 后端只有布尔遮挡查询，给不出个数。每帧画到 sprite 时：计算 pass 从计数缓冲读上一帧的 n、算 k，把三个 uniform 直接写进光斑的 uniform 缓冲（缓冲带 STORAGE；CPU 上传的块按 k = 0 写，在本帧命令执行前落地，计算 pass 盖在上面）→ 画光斑 → 结束场景 pass，计数 pass 清零计数、用遮挡方块同一个顶点着色器与几何光栅化（覆盖的像素逐个相同），片元读场景深度纹理（场景深度在有 sprite 时带 `TEXTURE_BINDING`）按 GREATER 自己比较、通过的 `atomicAdd` → 接着场景 pass 画遮挡方块。用的正好是上一帧的结果，和 WPE 一样（S2 实测 WPE 不闪），产品与 dev 探针的回放都确定、不读回 CPU。比较放在 sprite 这个位置做：深度是「画到 sprite 时」的深度，排在它后面的对象挡不住它。
 - **`REVERSEDEPTH`**：WPE 用反向深度，引擎恒定义这个宏（`engineDefines`）。遮挡方块的顶点着色器靠它把 z 写成 1e−7（不定义时是 `0.999·w`，对任何深度都能通过、k 恒为 1）。语料的工程着色器没有用它的。
 - **照报**：组里的 sprite 报 `model:passthrough:children:sprite`（遮挡测试读哪张深度没测）；反射开时 sprite 在名单里报 `reflection:planar:sprite`（WPE 在反射 pass 里也画、谁先画谁做测试，矩阵怎么镜像没查清）；sprite 材质多 pass 报 `sprite:material-passes`、读快照报 `sprite:framebuffer`。
 - **拼错的深度键**：`depthtesting` / `depthwriting`（ricepod 的 `orbital_*`）中性，WPE 不读，按缺省规整（测深度，S4）。
-- **实测**（2026-11-14）：确定性工程 `ignore/p13/c/gen_c.py`（不挡 / 挡一半 / 全挡、相机平移 + sprite 写变换、正交）和 WPE 整帧 0 差异，挡一半的 k = 0.737888 和抓帧逐位相同；ricepod 去掉粒子的复制工程在太阳被船体部分挡住的时段（约 110 s）按日志逐帧回放，每帧 > 2 级的像素 ≤ 3 个（孤立的网格边像素）。
+- **实测**（2026-11-14）：确定性工程 `ignore/p13/c/gen_c.py`（不挡 / 挡一半 / 全挡、相机平移 + sprite 写变换、正交）和 WPE 整帧 0 差异，挡一半的 k = 0.737888 和抓帧逐位相同。ricepod 去掉粒子的复制工程在太阳被船体部分挡住的时段（约 110 s）按日志逐帧回放的走查差异已解释（2026-11-15 复核，P5d 把透视相机改成逐步 float32 之后）：第 2223 帧各 draw 的常量与 WPE 0 ULP（遮挡方块的轴长改成 float32 的 0.2 之后）；光斑的 k 两边都是 1，光斑在整帧上不引入差异；第 2221 帧逐像素相同，其余 4 帧剩下的都是 1 级：船体主网格（e102）8 个、喷口（e118）1 个孤立像素，归「片元的零星舍入差」（P11a 已知差异），2222 帧泛光模糊 1 个纹素差 1（P2b 已知差异）经上采样成 3 个像素，2224 帧船体 1 个像素经泛光摊成 134 个。dev 探针的结果里 `sprites` 给每个 sprite 读回帧之前那一帧数到的遮挡样本数（`previous`，读回帧的 k 由它算）、k 与读回帧自己数到的样本数（`GpuScene.spriteSamples`，计数缓冲带 `COPY_SRC`，产品不读）。
 
 ## 着色器翻译器 `wpesl2wgsl`
 

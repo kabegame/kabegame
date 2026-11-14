@@ -132,7 +132,29 @@ export class SpriteOcclusion { /* encodeCount(encoder, depthView, draw)、afterS
 2. 变异 11 / 11 检出（`ignore/p13/c/mutations_c.py`，快照模式，结果 `ignore/p13/c/mutate.txt`）。
 3. 语料（238 个工程，`ignore/p13/c/corpus-{head,after,after2}.json`）：属于本节的只去掉 `object:sprite`（ricepod 与 5 个测试工程）、`material:depthtesting` / `depthwriting`（ricepod），ricepod 变干净；其余增减是 P11c / P12 会话的；加 `REVERSEDEPTH` 前后能力表的差全部归 P12（puppet 场景的 attachment）。
 4. 确定性工程对 WPE（`render_scene` 回放 3 帧、画布 1920×1080，`kbp cmp frame --kbp-layers`）：open、half、full、moved、ortho 整帧 0 差异；moved 与 open 的像素摘要相同（S5）。
-5. **按 FINAL_CHECK 走查 ricepod**：`kbp content isolate ricepod --keep 2,3,4,5,6,7,9 --instrument`（去掉粒子，`ignore/p13/proj/ricepod-iso-sun`）；WPE fps 20、后处理超高、1920×1080。第一次在开窗约 9 s 处录的 5 帧太阳不在画面里（比较 0 差但不说明问题）；按相机路径（`ignore/p13/c/sun_times.py`）找到太阳在视野里的第 3 段，开窗 110 s 后再录 5 帧（`A:\p13c\ricepod-sun-t110-fps20-1920x1080`，太阳正被船体部分挡住），`renderFrames.ts` 按日志回放（`--scripts --postprocess ultra --gap split`）：每帧 > 0 的像素 529–6288、> 2 的 0–3 个、最大 48，都是孤立的网格边像素。
+5. **按 FINAL_CHECK 走查 ricepod**：`kbp content isolate ricepod --keep 2,3,4,5,6,7,9 --instrument`（去掉粒子，`ignore/p13/proj/ricepod-iso-sun`）；WPE fps 20、后处理超高、1920×1080。第一次在开窗约 9 s 处录的 5 帧太阳不在画面里（比较 0 差但不说明问题）；按相机路径（`ignore/p13/c/sun_times.py`）找到太阳在视野里的第 3 段，开窗 110 s 后再录 5 帧（`A:\p13c\ricepod-sun-t110-fps20-1920x1080`，太阳正被船体部分挡住），`renderFrames.ts` 按日志回放（`--scripts --postprocess ultra --gap split`）：每帧 > 0 的像素 529–6288、> 2 的 0–3 个、最大 48。当时记成「孤立的网格边像素」，不是 FINAL_CHECK 要的解释，见下面「走查复核」。
 6. 恢复：测试行 15056–15061 已用 `projects_remove` 移除；WPE 设置本节没改。
 
 **没做**：预览 Rice Pod 实时看太阳（回归 RC4）；反射 pass 里的 sprite（照报）。
+
+## 走查复核（2026-11-15）
+
+用户要求照 FINAL_CHECK 逐处解释像素差。第一轮结论是未通过（下面四条），P5d 修完相机后重跑：**差异已解释**（见本节末「P5d 修相机之后」）。
+- **差异**（`ignore/p13/c/diff_locate.py`）：每帧 529–6288 个像素差 1 级，散在整个画面，有的聚成 10–20 像素的小块；5 帧共 7 个像素 > 2（最大 48），都在船体 / 喷口三角形的边上，是覆盖翻转；2224、2225 帧各有一两条整列差 1 的竖线，是光斑横向光芒落在舍入边界上的那一列，两条线关于光斑中心对称、一亮一暗，说明光斑整体有亚像素的平移。
+- **逐 draw 对齐**（WPE `kbp rdc consts --no-clock` → `ignore/p13/c/out/wpe-ricepod-t110-consts.json`，我们 `render_scene` 的 `trace` → `ignore/p13/c/ours/ricepod2/trace2223/`，比较 `ignore/p13/c/cmp_draws.mjs`）：第 2223 帧每个 draw 的 `g_ViewProjectionMatrix` 差 2.4e-7（最多 131 ULP），`g_EyePosition` 差 1 ULP，`g_ModelMatrix` 0 ULP，喷口与遮挡方块的 MVP 差 111 ULP。来源是透视相机的 `lookAtRH`、透视投影、相机路径插值还在 double 里（`../phase-f32-matrix.md` 登记「走查碰到时再做」），不是有依据的不复刻，按 bug 处理；已经发消息请 P5d 的会话照 WPE 的反汇编改成逐步 float32。五个静态相机的确定性工程 0 差，与这个归因一致。
+- **k**：WPE 这 5 帧的 `g_ViewUp` 长度都是 2、`g_Alpha` 1，即 k = 1（样本数 ≥ 4556）。我们的 k 是计算 pass 写进 GPU 的，轨迹只有 CPU 上传的值（k = 0），所以给 dev 探针加了读回：计数缓冲带 `COPY_SRC`、`SpriteCounter.readSamples`、`GpuScene.spriteSamples`，探针结果的 `sprites` 给读回帧之前那一帧的样本数、按它算的 k 与读回帧自己的样本数。5 帧我们的样本数 6204–6395，k 都是 1，与 WPE 相同。
+- 读样本数那一次用的宿主产物带着 P5d 正在改的相机代码（画面的光照变了），样本数只看深度、离 4556 的门槛远，结论不受影响；像素比较要等 P5d 修完重跑。
+- 测试行已移除。
+
+### P5d 修相机之后
+
+P5d 的会话把透视相机（`lookAtRH`、透视投影、相机路径插值）改成逐步 float32（2026-11-15，当时在它的工作区、未提交），宿主产物用它重建的，`renderFrames.ts` 同参数重跑（`ignore/p13/c/ours/ricepod4`–`ricepod7`）。
+- **逐 draw**：第 2223 帧 skybox、orbit FX、船体、喷口的 `g_ViewProjectionMatrix` / `g_EyePosition` / `g_ModelViewProjectionMatrix` 全部 0 ULP。遮挡方块的 `g_ViewUp` 还差 1 ULP：我们乘的是 double 的 0.2，WPE 乘 float32 的 0.2（0.20000000298…）。5 帧 30 个分量按 float32 的 0.2 算全部逐位相同、按 double 算有 4 个差 1 ULP，所以 `SPRITE_OCCLUSION_AXIS` 改成 `Math.fround(0.2)`，单测用抓帧原值钉住。改后遮挡方块 0 ULP；它只写 alpha、样本数不变，画面不变。
+- **k**：我们 5 帧的样本数 5985–6150（dev 探针 `sprites`），k 都是 1，与 WPE 相同。
+- **像素**（`diff_locate.py`）：2221 帧逐像素相同；2222 / 2223 / 2224 / 2225 帧各 4 / 1 / 134 / 3 个像素，全部只差 1 级。
+- **逐级定位**（我们的轨迹读回 pass 0（光斑前）、1（光斑后）、3（泛光前）、4–6（泛光三级），WPE 逐事件存 `38124` 的 e144 / e162 / e177 与 `38151` / `38154` / `38157`，图在 `ignore/p13/c/wpe/ricepod2/ev<帧>/`；`pixel_history.py` 找最后写入的事件）：
+  - 场景 draw：4 帧共 9 个孤立像素，8 个最后由船体主网格 e102 写、1 个由喷口 e118 写（2224 帧 (1233, 487)，光斑在两边加的量相同）。这两个 draw 的常量 0 ULP、网格相同，差的是片元输出量化到 8 位时的 1 级，归 WPE_SCENE「音频频谱 uniform（P11a）」登记的「片元的零星舍入差」（fxc 的 DXBC 与 WGSL 经 Dawn，落在舍入中点附近的像素）。
+  - 光斑：光斑前（pass 0 对 e144）与光斑后（pass 1 对 e162）的差异像素完全相同，光斑在整帧上不引入差异；2222 帧 (1092, 439) 的船体差异被光斑加到 R = 255 后吃掉。
+  - 泛光：2222 帧 1/4、1/8 两级逐像素相同，模糊那一级 (158, 109) 差 1（输入相同），上采样成最终画面 (1263–1267, 869–870) 的 3 个像素，归 P2b 登记的泛光链 1/255 差；2224 帧场景 (1233, 487) 的 1 级差经 1/4 (308, 121)、1/8 与模糊 (152, 60) 摊成最终画面 (1213–1227, 470–498) 的 134 个像素。
+- 另：我们这边有 FR（kbp 日志图层，放在 (−100000, −100000)）的一次绘制，WPE 抓帧里没有这次绘制；它在屏幕外，不影响像素。
+- 判定：**差异已解释**。测试行已移除。

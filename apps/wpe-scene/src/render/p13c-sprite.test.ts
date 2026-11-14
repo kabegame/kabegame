@@ -15,7 +15,7 @@ import { spriteModel } from "../compile/sprite";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { identity, multiply, translation } from "./math";
 import { GpuScene } from "./scene";
-import { spriteScale, spriteViewProjection } from "./sprite";
+import { spriteOverrides, spriteScale, spriteViewProjection } from "./sprite";
 import { SceneState } from "./state";
 import type { FrameInput } from "./uniforms";
 
@@ -35,6 +35,19 @@ describe("spriteScale / spriteViewProjection（S1、S5）", () => {
     const projection = translation(0, 0, 0.5);
     const view = multiply(translation(4, 5, 6), translation(0, 0, 0));
     expect(Array.from(spriteViewProjection({ projection, view }))).toEqual(Array.from(projection));
+  });
+  it("遮挡方块的轴乘 float32 的 0.2（ricepod 抓帧，走查复核）", () => {
+    // `A:\p13c\ricepod-sun-t110-fps20-1920x1080`：k = 1 时光斑的轴是视图向量 × 2；遮挡方块（e177）的值与 × f32(0.2) 逐位相同，乘 double 的 0.2 差 1 ulp
+    const cases: [number, number][] = [
+      [1.9401041269302368 / 2, 0.1940104216337204], // 第 2223 帧 g_ViewUp.y
+      [-0.0017075389623641968 / 2, -0.00017075390496756881], // 第 2221 帧 g_ViewUp.x
+    ];
+    for (const [view, wpe] of cases) {
+      const up = Math.fround(view);
+      const [axis] = spriteOverrides({}, true, { up: [up, 0, 0], right: [0, 0, 0] }).g_ViewUp;
+      expect(Math.fround(axis)).toBe(Math.fround(wpe));
+      expect(Math.fround(up * 0.2)).not.toBe(Math.fround(wpe));
+    }
   });
 });
 
@@ -340,8 +353,8 @@ describe("sprite 的编码（P13c 点 2）", () => {
     for (const buffer of [body, occlusion]) expect(floats(buffer, 0, 16)).toEqual(mvp);
     expect(floats(body, 16, 3)).toEqual([0, 0, 0]);
     expect(floats(body, 23, 1)).toEqual([0]);
-    expect(floats(occlusion, 16, 3)).toEqual(UP.map((x) => Math.fround(x * 0.2)));
-    expect(floats(occlusion, 20, 3)).toEqual(RIGHT.map((x) => Math.fround(x * 0.2)));
+    expect(floats(occlusion, 16, 3)).toEqual(UP.map((x) => Math.fround(x * Math.fround(0.2))));
+    expect(floats(occlusion, 20, 3)).toEqual(RIGHT.map((x) => Math.fround(x * Math.fround(0.2))));
   });
 
   it("不可见时整层不画（不计数、不算 k）", async () => {

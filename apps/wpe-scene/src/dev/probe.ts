@@ -98,6 +98,7 @@ import { scenePlacement } from "../render/layout";
 import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame } from "../render/camera";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene, type ParticleProfile } from "../render/scene";
+import { spriteScale } from "../render/sprite";
 import { SceneState } from "../render/state";
 import type { UserTextureProbe } from "../usertex/sources";
 import { createDrawTracer, type TraceOptions } from "../render/trace";
@@ -394,6 +395,11 @@ export interface RenderFrameResult {
   targetBytes: number;
   /** 泛光链：HDR 级数（LDR 为 0）；没有泛光为 null。 */
   bloomLevels: number | null;
+  /**
+   * sprite 的遮挡计数（P13c 走查，`GpuScene.spriteSamples`）：`previous` 是读回帧之前那一帧数到的 n（读回帧算 k 用它），`k` 按它算
+   * （`spriteScale`，场景目标高），`samples` 是读回帧自己数到的 n。读回帧之前没画过的 sprite 不列；没有 sprite 时没有这一项。
+   */
+  sprites?: { object: number; previous: number; k: number; samples: number }[];
   /** `profile` 帧的耗时（编码 + 提交 + 等 GPU 完成），毫秒。 */
   frameMs?: { mean: number; p95: number; min: number; max: number };
   /**
@@ -773,6 +779,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         if (syncs > 1) scene.update(frame, state);
         if (syncs) textSyncs = syncs;
       }
+      // sprite（P13c 走查）：读回帧之前那一帧数到的 n，读回帧的计算 pass 用它算 k
+      const spritesBefore = await scene.spriteSamples();
       // 逐 draw 轨迹：从读回帧（含读回画布）的编码起记；这一帧的校验错误记进轨迹，不吞掉也不中断（轨迹正是查它用的）
       if (tracer) {
         tracer.startFrame();
@@ -801,6 +809,11 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         device.queue.submit([encoder.finish()]);
         raw = await read();
       }
+      const spritesAfter = await scene.spriteSamples();
+      const sprites = spritesAfter.map(({ object, samples }) => {
+        const previous = spritesBefore.find((item) => item.object === object)?.samples ?? 0;
+        return { object, previous, k: spriteScale(previous, scene.height), samples };
+      });
       const key = options.key ?? `frame-${Date.now()}`;
       let traced: Awaited<ReturnType<typeof traceArtifacts>> | null = null;
       if (tracer) {
@@ -838,6 +851,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         compileMs,
         targetBytes: scene.targetBytes,
         bloomLevels: scene.bloomChain ? scene.bloomChain.plan.levels : null,
+        ...(sprites.length ? { sprites } : {}),
         frameMs,
         particleMs,
         time,
