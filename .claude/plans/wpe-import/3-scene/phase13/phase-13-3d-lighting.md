@@ -11,7 +11,7 @@ P13 是 3D 的最后一块。P5 已经给了网格、深度、透视相机与相
 
 - **主 pass 之外的场景视图：平面反射与阴影。** WPE 的场景绘制函数有三种模式（rea-p5-mesh 4.1）：模式 0 是主 pass；模式 1 把 `reflected` 不为 false 的可画对象用镜像视图画进 `_rt_Reflection`；模式 2 把 `castshadow` 且不透明的对象画进阴影图集。三种模式遍历的是同一份对象表，只是目标、视图、剔除方向和名单不同。我们现在的绘制循环（`render/scene.ts` 的 `encode`）只认一个目标、一个视图，每次绘制的 MVP 在建 draw 时就写死成主视图的。P13 照 WPE 的形状，把它参数化成「场景视图」：目标、视图投影、眼位、剔除是否翻转、名单。主 pass 是其中一个视图，反射 pass 与每盏投影灯的阴影 pass 是另外几个。按视图变的 uniform（矩阵、眼位、视图向量）每个视图各写一份，其余共用。这是 P13 最大的改动，平面反射先建它，阴影接着复用。
 - **主 pass 之后的帧缓冲加工：屏幕空间反射与体积光。** `generic3` / `generic4` / `genericimage2–4` 的 `REFLECTION` 不读 `_rt_Reflection`，读的是 `_rt_MipMappedFrameBuffer`：主 pass 的结果拷出来、生成 mip，着色器按粗糙度取 mip 级（`g_Texture3MipMapInfo`）。这和 `_rt_FullFrameBuffer` 的快照是同一类东西，多一步生成 mip（WebGPU 没有现成的生成函数，要自己写一个缩小 pass）。体积光（`castvolumetrics`）在步骤 0 之前还不知道是不是这一类，读码先回答它在帧里的位置和读什么。
-- **喂给着色器的引擎数据：遗留灯、雾、灯的运行时状态。** 遗留灯（`"light": "point"`）写 `g_LightsPosition[4]` / `g_LightsColorRadius[4]`，只有 `generic` / `generic2` / `genericimage2` 读；雾是 `FOG_DIST` / `FOG_HEIGHT` 两个引擎宏加一组 uniform。灯现在是编译期常量（`lights.ts`），绑属性的字段登记重编译，关键帧照报，挂父对象照报；灯字段上的脚本照常运行，但 `targetOf` 给它的目标是 `unsupported`，返回值不落地，也不报键（`3706286085` 的两盏灯画面会静默不同）。P13 把灯改成和图层一样的运行时状态：编译期给每盏灯一份字段表（类型、字段、绑定目标），渲染器每帧由 `SceneState` 沿父链算世界矩阵、可见性，再算灯光 uniform。属性、关键帧（P10 的运行时）、字段脚本都走就地路径，`object:parent`（灯）与 `value:animation:light` 一起去掉。
+- **喂给着色器的引擎数据：遗留灯、雾、灯的运行时状态。** 遗留灯（`"light": "point"`）写 `g_LightsPosition[4]` 与 `g_LightsColorRadius[4]`（`generic` / `generic2` 读）或 `g_LightsColorPremultiplied[3]`（`genericimage2` 读，步骤 0 更正）；雾是 `FOG_DIST` / `FOG_HEIGHT` 两个引擎宏加一组 uniform。灯现在是编译期常量（`lights.ts`），绑属性的字段登记重编译，关键帧照报，挂父对象照报；灯字段上的脚本照常运行，但 `targetOf` 给它的目标是 `unsupported`，返回值不落地，也不报键（`3706286085` 的两盏灯画面会静默不同）。P13 把灯改成和图层一样的运行时状态：编译期给每盏灯一份字段表（类型、字段、绑定目标），渲染器每帧由 `SceneState` 沿父链算世界矩阵、可见性，再算灯光 uniform。属性、关键帧（P10 的运行时）、字段脚本都走就地路径，`object:parent`（灯）与 `value:animation:light` 一起去掉。
 
 另外三项是零散的：
 - **能力表误报**：`combo:REFLECTION` 按名字报。7 张里有 5 张用了工坊 effect `cursorripple`，它的同名选项是波纹在边界反弹的开关（`cursorripple_simulate_force.frag`）；1 张是 `genericimage2` 不带法线图的 `REFLECTION`。这两种都不读引擎数据。只有误报的 5 张；另 2 张（`3453730450`、`3706286085`）还有真正的屏幕空间反射。真正要引擎数据的两种反射已经由读到的 RT 与 `g_Texture3MipMapInfo` 报出，所以 `REFLECTION` 不该再按名字报。
@@ -344,4 +344,38 @@ const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as
 
 ## 实施记录
 
-（空）
+### 步骤 0 — 调研（2026-11-14）
+
+**读码**：两个代理并行，产出 [rea-p13-passes.md](rea-p13-passes.md)（反射、阴影、体积光、mip 帧缓冲、一帧的顺序）与 [rea-p13-lights.md](rea-p13-lights.md)（遗留灯、雾、灯的运行时、sprite 对象、透视场景余项、材质细节）。两个代理的 REA（Ghidra）都在 330 s 导入期限内超时，全程按地址切片读 `ignore/p4/rea/wp.asm`，二进制哈希核对一致，没有新增标注。代理读码期间我把抓帧事实转给它们，五组抓帧在读码里都找到了对应代码。我抽查了 6 条（density 0.65、mip 数公式、点光阴影近平面、半径 × 0.99、`genericimage2` 的 uniform、雾的参数打包），都对得上。
+
+**实测**：[p13-REPORT.md](p13-REPORT.md)「P13 语义的实测核对」，20 条全部成立。只用了真实样本（5 张默认工程、4 张工坊场景，抓帧 `A:\p13\samples\`、`A:\p13\sweep\`），确定性工程留到各节子计划的步骤 0（清单见报告「没有实测的」）。两次 `capture_sweep` 各重启 WPE 4 次，设置都自动改回、`config.json` 哈希复原；第一次重启关掉了用户开着的 WPE 浏览窗口。
+
+**Claude 自己读的两项**：
+- 翻译器：预处理器保留 `#define` 行、交给 naga 展开，纹理调用的改写（`rewrite.rs` 的 `rewrite_texture_calls`）在展开之前，所以认不出 `#define g_NormalMapSampler g_Texture1` 与 `GRADIENT_SAMPLER`。P13a 在改写时沿对象宏查别名。
+- `combo:REFLECTION` 的误报：5 张只有误报的场景 HEAD 上不报任何 `_rt_*` 或 `g_Texture3MipMapInfo`；`cursorripple` 的 `REFLECTION` 分支要有鼠标移动才会走到，静止帧比不出，整帧对照放进 P13a 的验收。
+
+**对各节的影响**：
+- **决定 3 的设置形状**：WPE 有三项，`reflection`（布尔，同时管平面反射与 mip 帧缓冲）、`shadows`、`volumetrics`（disabled / low / medium / high / ultra）；`resolution` 不影响 `_rt_Reflection`。用户现在是 `reflection: false`、两项 `low`。
+- **P13a**：
+  - 遗留灯按工厂给的槽位写（`lpoint` 也占槽，第 5 盏起落到槽 0，同槽后写覆盖先写，隐藏写 (0, 0, 0, 1)），每帧在对象更新里写、比脚本晚一帧；
+  - 空槽 (0, 100, 0) / (0, 0, 0, 1)；`genericimage2` 读 `g_LightsColorPremultiplied[3]`（颜色 × 半径²，第 4 盏的 rgb 拆进三个 w）；
+  - combo 键名 WPE 加载时转大写，我们已经这样做。
+- **P13b 拆两步**：
+  - b1 设置与「反射关」：`_rt_Reflection` 每帧清成清屏色（alpha 1）、不画。跟随 WPE 且 WPE 关着反射（用户现在的设置）时，audiophile、fantasticcar、arsenal 只要这一步就和 WPE 一致；设置为开而 b2 没做时照报新键（`reflection:enabled` 之类，子计划定名）。
+  - b2「反射开」：场景视图。镜面恒为世界 y = 0，视图 `S·V`、投影 `P[1][1]` 取反，`g_EyePosition` / `g_ViewRight` / `g_ViewUp` 的 y 取反，剔除不变；RT 窗口尺寸 RGBA8（HDR 下也是），借场景深度；只在有模型网格读 `_rt_Reflection` 时画；名单是可画对象缺省进，读 `_rt_Reflection` 的模型整个排除（图像层、粒子不排除）。
+- **P13c**：sprite 对象（类型码 3）不用对象自己的变换，顶点是写死的 (−1, 0, 1)、视图平移清零；本体的两个轴 × 2k，k 来自上一帧的遮挡查询（WebGPU 有 occlusion query，结果异步，按 WPE 用上一帧的）；进反射名单、不进阴影；拼错的 `depthwriting` / `depthtesting` 不读，按中性放行。
+- **P13d**：
+  - 阴影在灯光 uniform 那一步画，排在反射与主 pass 之前；只有模型能投射；剔除实际是 NONE（照抄 WPE 的疏漏）、SlopeScaledDepthBias −4；
+  - 图集按灯打包，点光一块 2 × 3 六面，平行光三级级联；
+  - `shadows: disabled` 时解析期丢掉阴影计数，着色器整个不声明图集。
+- **P13e**：体积光是灯对象自己的绘制，在 `objects` 里灯的位置画进光缓冲，到下一个非灯对象前合成；RT 是 `_rt_volumetricsBack` / `_rt_volumetricsSingle` / `_rt_volumetricsLightBuffer`。
+- **P13f**：
+  - 雾的宏只在材质加载时定，条件是 general 开关为真且组合表里 `FOG` 非 0（着色器的 `[COMBO]` 缺省先并进，`generic4` 缺省 1）；数值就地生效，开关运行中改不重编；
+  - V1 灯每帧在动画与脚本之后算，当帧生效；
+  - 超配排序：类型升序 → `flags & 3` 降序 → 局部 origin 在 `g_ViewForward` 上的投影升序，32 盏内稳定。
+- **P13g 同 P13b 拆两步**：「反射关」时 `_rt_MipMappedFrameBuffer` 只在加载时清成 (0, 0, 0, 1)，mip 数照公式；「反射开」时主 pass 画完、泛光之前拷 0 级再生成 mip，主 pass 读到的是上一帧。
+- **P13h**：
+  - 透视场景里带子层的组合层和正交时一样画（代码不分场景类型），确定性工程核对后 `camera:perspective:group` 可能直接去掉；
+  - `transparentsorting` 按局部 origin 在 `normalize(center − eye)` 上的投影降序、稳定，`fullscreen` / `projectlayer` 排最后；
+  - 文本的 `_depth` 等于测深度、不写。
+- **覆盖**：分节累计不变。按用户现在的 WPE 设置，平面反射与屏幕空间反射在跟随时只需要「关」的路径，P13b、P13g 的第一步成本很低。
