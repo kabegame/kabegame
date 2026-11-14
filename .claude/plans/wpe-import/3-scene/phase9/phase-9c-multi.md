@@ -141,3 +141,22 @@ drawn(frame: number, hostPaused: boolean): HTMLVideoElement | null {
 - 这次 Chromium 的 GPU 进程在 RTX 4090 D 上（上午在 RTX 4070，dev 重启后选的显卡变了）。同一块卡上 WPE（`wallpaper64.exe`，别的会话的测试窗口）占解码器 92%，61 次采样里 36 次整卡解码 100%、多数 ≥ 94%。
 - 30 分钟里卡住 11 次（`readyState` 2），每次原地跳一下就恢复，一次重新加载都没用到；另有 76 次约 1 s 的短暂缺帧（75 次 `DECODER_UNDERFLOW`、1 次 `DEMUXER_UNDERFLOW`）自己恢复。间隔 1–7 分钟，没有越来越密：和「输出缓冲泄漏、池子越用越少」的推测不太吻合，更像是解码器吃紧时卡住的概率上升。根因仍未证实。
 - 解码器满载时的多实例开销数字不可信，等 WPE 空下来再量。
+
+## 步骤 3（候选）— 标清未标视频的原色转换（P11b 实测转来，2026-11-14）
+
+P11b 会话实测（`ignore/p11/texsrc/ut-vstripe.mp4`，生成脚本 `ignore/p11/b4/make_stripe_video.py`；WPE 抓帧 `A:\p11b\vstripe`，工程 `ignore/p11/proj/p11-ut`）：
+- 320×240 libx264 yuv420p，四个色彩标签都未标。Chromium 的 `new VideoFrame(video).colorSpace` 是 `{ matrix, primaries, transfer: smpte170m, fullRange: false }`，`copyTo` 出的 NV12 与按 BT.601 限定范围编码的源色逐值相同：**矩阵是对的**。
+- `copyExternalImageToTexture`（缺省 srgb 目标）的结果整体偏色，例如 (30,200,30) → (57,197,26)，WPE 是 (29,199,30)；灰不变。偏移方向正是 SMPTE-C 原色 → sRGB 的色域转换（另有 170m → sRGB 传递函数），**WPE 不做这一步**，只按 601 矩阵解。
+- 高清未标时 Chromium 认作 BT.709 原色（≈ sRGB），不发生这一步，所以 P9a 在高清语料上没看到偏色（p9-REPORT「P9a 的对照」只对高清成立）。
+- P9 先前回复里「Chromium 一律按 709 解」的推断不对，以此为准。
+
+**影响**：`.tex` 视频与用户纹理视频走同一条拷贝路径。本机语料里未标的 13 段都是高清（≥ 2560×1440），不受影响；要实测的是矩阵标了 `bt470bg`、原色未标的两段：3400241651（960×540）、3812007032（3840×2160），看 Chromium 给的 `primaries` 与是否偏色。
+
+**可能的修法（都没试）**：
+- WebCodecs 取 YUV，按 `VideoFrameBufferInit` 带 `colorSpace { matrix: smpte170m, primaries: bt709, transfer: iec61966-2-1, fullRange: false }` 重建再拷：每帧一次读回，SD 可以，4K 不行。
+- 拷完后在着色器里做逆转换（sRGB 解码 → 逆 3×3 → 170m 编码）：便宜，但色域外被截断的值找不回来。
+- 只在 `VideoFrame(video).colorSpace.primaries` 不是 bt709 / 未标时才走修正路径。
+
+**改标签实验**（2026-11-14，`ignore/p9/p9c/color/`）：`ffmpeg -c copy -bsf:v h264_metadata=video_full_range_flag=0:colour_primaries=1:transfer_characteristics=1:matrix_coefficients=6` 加容器的 `-color_primaries bt709 -color_trc bt709 -colorspace smpte170m -color_range tv`，不重编码。主窗口页面里 `<video>` → WebGPU `copyExternalImageToTexture` → 读回 8 条竖条中心：原片 `VideoFrame.colorSpace` 全是 smpte170m、绿 (30,200,30) → (57,197,26)；改标签后报 `matrix smpte170m / primaries bt709 / transfer bt709`，8 条与源色差 ≤ 1（绿 (29,200,30)、青 (29,220,219)，和 WPE 相同）。即只要让 Chromium 的原色与传递函数是 bt709、矩阵照 MF 的选法，就和 WPE 一致。
+
+2026-11-14 用户：「不只是偏色，而是改成不用 video，也许需要编一个 wasm」——方向改为视频纹理不用 `<video>`，见下一节的讨论。
