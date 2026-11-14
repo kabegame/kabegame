@@ -1688,7 +1688,11 @@ describe("general 字段", () => {
 
     it("探针 host.renderFrame 读回这一帧画的那张，两张目标时也是", async () => {
       const { gpu, scene, state } = await open(lit({}, true));
-      const host = { devScene: { renderer: { currentScene: scene, sceneState: state, device: gpu.device } } };
+      const host = {
+        devScene: { renderer: { currentScene: scene, sceneState: state, device: gpu.device } },
+        // 用户纹理（P11b）：回放先等在途的解码，这里没有
+        settleUserTextures: async () => {},
+      };
       const readback = async () => {
         gpu.trace.length = 0;
         await hostRenderFrame(host as unknown as SceneHost, 1);

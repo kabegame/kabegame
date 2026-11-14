@@ -70,7 +70,8 @@ pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
             String::new(),
         );
 
-        let webpage_var_defs = webpage::var_defs();        validate_var_defs(&webpage_var_defs).expect("webpage 内建插件变量定义校验失败");
+        let webpage_var_defs = webpage::var_defs();
+        validate_var_defs(&webpage_var_defs).expect("webpage 内建插件变量定义校验失败");
         let webpage_vars: Vec<Value> = webpage_var_defs
             .iter()
             .map(var_definition_to_frontend_value)

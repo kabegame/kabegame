@@ -5,13 +5,13 @@ use crate::crawler::task_log_i18n::task_log_i18n;
 use crate::emitter::GlobalEmitter;
 use crate::local_folder::import::LOCAL_FOLDER_PLUGIN_ID;
 use crate::plugin::webpage::WEBPAGE_PLUGIN_ID;
-#[cfg(feature = "wpe")]
-use crate::wpe::WPE_IMPORT_PLUGIN_ID;
 use crate::plugin::{check_min_app_version, PluginManager, VarDefinition, VarOption};
 use crate::schedule_sync::on_crawl_task_reached_terminal;
 use crate::settings::Settings;
 use crate::storage::tasks::TaskStatus;
 use crate::storage::{Storage, TaskInfo};
+#[cfg(feature = "wpe")]
+use crate::wpe::WPE_IMPORT_PLUGIN_ID;
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -962,7 +962,8 @@ pub(crate) async fn run_webview_session(
     if let Err(e) = destroy_result {
         tracing::warn!(
             "Failed to destroy crawler task window {}: {}",
-            run.task_id, e
+            run.task_id,
+            e
         );
     }
     result

@@ -39,7 +39,6 @@ pub fn surf_get_record(host: String) -> Result<Option<SurfRecord>, String> {
     Storage::global().get_surf_record_by_host(&host)
 }
 
-
 pub fn surf_update_root_url(host: String, root_url: String) -> Result<Value, String> {
     let host = normalize_surf_host(&host);
     let Some(record) = Storage::global().get_surf_record_by_host(&host)? else {

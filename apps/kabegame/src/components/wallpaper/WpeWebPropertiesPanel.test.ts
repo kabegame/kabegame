@@ -10,7 +10,7 @@ const success = vi.hoisted(() => vi.fn());
 const failure = vi.hoisted(() => vi.fn());
 const invoke = vi.hoisted(() => vi.fn());
 /** 后端的 `customCover`：面板挂载时与 `reload` 时读取 */
-const cover = vi.hoisted(() => ({ custom: false }));
+const cover = vi.hoisted(() => ({ custom: false, items: [] as Record<string, unknown>[] }));
 
 vi.mock("@/components/ui/toast", () => ({ toast: { success, error: failure } }));
 vi.mock("@/components/ui/messageBox", () => ({
@@ -19,10 +19,10 @@ vi.mock("@/components/ui/messageBox", () => ({
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("@/api", () => ({ invoke }));
 vi.mock("@/composables/useModalBack", () => ({ useModalBack: () => {} }));
-// 作者属性为空：控制卡片不依赖它们
+// 作者属性默认为空：控制卡片不依赖它们；属性显示条件的用例经 `cover.items` 塞条目
 vi.mock("@/composables/useWpeWebProperties", () => ({
   useWpeWebProperties: () => {
-    const read = () => ({ imageId: "7", metadataId: null, customCover: cover.custom, items: [] });
+    const read = () => ({ imageId: "7", metadataId: null, customCover: cover.custom, items: cover.items });
     const view = shallowRef(read());
     return {
       view,
@@ -73,6 +73,7 @@ beforeEach(() => {
   success.mockReset();
   failure.mockReset();
   cover.custom = false;
+  cover.items = [];
 });
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
@@ -87,6 +88,27 @@ describe("WpeWebPropertiesPanel 只管作者属性", () => {
       expect(clearButton(wrapper).exists()).toBe(false);
       expect(wrapper.text()).toContain("gallery.wpePropsEmpty");
     }
+  });
+});
+
+describe("WpeWebPropertiesPanel 按壁纸类型筛属性", () => {
+  const item = (key: string, kind: string) => ({
+    key,
+    kind,
+    label: `label-${key}`,
+    modified: false,
+    options: [],
+    extensions: [],
+  });
+
+  it("场景显示 scenetexture、隐藏 file / directory；网页相反", () => {
+    cover.items = [item("c", "color"), item("f", "file"), item("d", "directory"), item("t", "scenetexture")];
+    const labels = (imageType: string) => {
+      const text = mountPanel({ imageType }).text();
+      return ["c", "f", "d", "t"].filter((key) => text.includes(`label-${key}`)).join("");
+    };
+    expect(labels("x-wpe/scene")).toBe("ct");
+    expect(labels("x-wpe/web")).toBe("cfd");
   });
 });
 

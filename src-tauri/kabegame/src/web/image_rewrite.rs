@@ -106,7 +106,9 @@ mod tests {
     #[test]
     fn encodes_literal_percent_and_unsafe_chars() {
         assert_eq!(
-            rewrite_fs_path("/home/cmtheit/.local/share/Kabegame/images/yande.re%20447155 a#b?.jpg"),
+            rewrite_fs_path(
+                "/home/cmtheit/.local/share/Kabegame/images/yande.re%20447155 a#b?.jpg"
+            ),
             format!("{}/images/yande.re%2520447155%20a%23b%3F.jpg", CDN_BASE),
         );
         assert_eq!(

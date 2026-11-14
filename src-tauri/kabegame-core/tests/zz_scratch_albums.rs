@@ -460,10 +460,26 @@ fn fixture_db() -> Arc<Mutex<Connection>> {
         .unwrap();
     }
     for (id, name, kind) in [
-        ("90000000-0000-0000-0000-000000000001", "literal%mark", "normal"),
-        ("90000000-0000-0000-0000-000000000002", "literal_under_", "normal"),
-        ("90000000-0000-0000-0000-000000000003", r"literal\slash", "normal"),
-        ("90000000-0000-0000-0000-000000000004", "Local root", "local_folder"),
+        (
+            "90000000-0000-0000-0000-000000000001",
+            "literal%mark",
+            "normal",
+        ),
+        (
+            "90000000-0000-0000-0000-000000000002",
+            "literal_under_",
+            "normal",
+        ),
+        (
+            "90000000-0000-0000-0000-000000000003",
+            r"literal\slash",
+            "normal",
+        ),
+        (
+            "90000000-0000-0000-0000-000000000004",
+            "Local root",
+            "local_folder",
+        ),
     ] {
         conn.execute(
             "INSERT INTO albums(id, name, created_at, parent_id, type, ancestor_path)
@@ -485,7 +501,16 @@ fn make_executor(conn: Arc<Mutex<Connection>>) -> Arc<dyn pathql_rs::SqlExecutor
             eprintln!("\n[SQL start] params={:?}\n{}", params, sql);
             conn.progress_handler(100000, Some(move || t0.elapsed().as_secs() > 8));
             struct Log<'a>(&'a str, std::time::Instant, String);
-            impl Drop for Log<'_> { fn drop(&mut self) { eprintln!("\n[SQL {:?}] params={} \n{}\n", self.1.elapsed(), self.2, self.0); } }
+            impl Drop for Log<'_> {
+                fn drop(&mut self) {
+                    eprintln!(
+                        "\n[SQL {:?}] params={} \n{}\n",
+                        self.1.elapsed(),
+                        self.2,
+                        self.0
+                    );
+                }
+            }
             let _log = Log(sql, t0, format!("{:?}", params));
             let mut stmt = conn.prepare(sql).map_err(|e| {
                 EngineError::FactoryFailed("sqlite".into(), "prepare".into(), e.to_string())
@@ -583,7 +608,6 @@ fn ids(rows: Vec<serde_json::Value>) -> Vec<String> {
         .collect()
 }
 
-
 fn snap_db() -> Arc<Mutex<Connection>> {
     let conn = Connection::open(std::env::var("SNAP_DB").unwrap()).unwrap();
     register_fixture_functions(&conn);
@@ -597,9 +621,20 @@ fn scratch_albums_page() {
     let t = std::time::Instant::now();
     if std::env::var("PQ_FETCH").is_ok() {
         let r = rt.fetch(&path);
-        eprintln!("FETCH {path} -> {:?} in {:?}", r.map(|v| v.len()), t.elapsed());
+        eprintln!(
+            "FETCH {path} -> {:?} in {:?}",
+            r.map(|v| v.len()),
+            t.elapsed()
+        );
     } else {
         let r = rt.list_with_count(&path);
-        eprintln!("LIST {path} -> {:?} in {:?}", r.map(|v| v.iter().map(|c| (c.name.clone(), c.total)).collect::<Vec<_>>()), t.elapsed());
+        eprintln!(
+            "LIST {path} -> {:?} in {:?}",
+            r.map(|v| v
+                .iter()
+                .map(|c| (c.name.clone(), c.total))
+                .collect::<Vec<_>>()),
+            t.elapsed()
+        );
     }
 }

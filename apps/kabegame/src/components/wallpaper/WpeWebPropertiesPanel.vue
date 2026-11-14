@@ -143,8 +143,9 @@ import { toast } from "@/components/ui/toast";
 
 /**
  * 网页与场景壁纸共用的属性面板（预览详情与设置页）。`imageType` 传图片的 `type`：场景壁纸（`x-wpe/scene`）不显示
- * `file` / `directory` 属性——场景渲染器不读用户选的文件，这两类的放行也只对网页壁纸生效（网页壁纸目录索引只收
- * `x-wpe/web` 行）。本机语料里场景没有这两类；场景特有的 `scenetexture` / `replacetexture` 后端解析时已跳过，面板看不到。
+ * `file` / `directory` 属性——场景渲染器不读它们，这两类的放行也只对网页壁纸生效（网页壁纸目录索引只收
+ * `x-wpe/web` 行）。场景特有的 `scenetexture`（用户纹理）只在场景上显示，用和 `file` 相同的文件选择与清空按钮，
+ * 网页壁纸上不会出现这个类型；`replacetexture` 后端解析时仍跳过，面板看不到。
  *
  * 面板只管作者属性，外加「恢复默认封面」：`restorableCover` 由预览传，设过封面时显示，恢复不需要实时画面，退回预览图的
  * 场景也能恢复；设置页不传。预览的暂停、设为壁纸封面、清空脚本存储在右键菜单与工具条里（由预览弹窗处理）；
@@ -201,10 +202,12 @@ const canRestoreCover = computed(
 /** 恢复进行中：按钮转圈，也挡住重复触发 */
 const coverBusy = ref(false);
 
-/** 这张壁纸用得上的条目：场景去掉 `file` / `directory`（见 props 注释） */
+/** 这张壁纸用得上的条目：场景去掉 `file` / `directory`，网页去掉 `scenetexture`（见 props 注释） */
 const usableItems = computed(() => {
   const items = view.value?.items ?? [];
-  return isScene.value ? items.filter((item) => item.kind !== "file" && item.kind !== "directory") : items;
+  return isScene.value
+    ? items.filter((item) => item.kind !== "file" && item.kind !== "directory")
+    : items.filter((item) => item.kind !== "scenetexture");
 });
 
 /** 照 WPE 分段：遇到 group 开新段；组条件为假整段隐藏，段内条目再各自按条件隐藏，全隐藏的段不显示 */

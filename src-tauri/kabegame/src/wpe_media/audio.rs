@@ -240,7 +240,11 @@ impl LoopbackStream {
 
     /// 读完当前所有包喂给两份频谱，返回读到的样本帧数与包数（静音包都算）。网页壁纸的频谱把静音包、空数据与不支持的格式按静音补零；
     /// WPE 原始频谱让它们立即清零。
-    fn read(&mut self, spectrum: &mut Spectrum, wpe: &mut WpeSpectrum) -> windows::core::Result<(usize, usize)> {
+    fn read(
+        &mut self,
+        spectrum: &mut Spectrum,
+        wpe: &mut WpeSpectrum,
+    ) -> windows::core::Result<(usize, usize)> {
         let mut total = 0;
         let mut packets = 0;
         unsafe {

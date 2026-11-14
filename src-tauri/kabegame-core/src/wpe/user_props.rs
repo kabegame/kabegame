@@ -15,6 +15,9 @@ use crate::media::image_type::media_format_by_ext;
 /// metadata 顶层的用户属性段：`{ key: 归一后的值 }`，为空时整段去掉。
 pub const USER_PROPERTIES_KEY: &str = "userProperties";
 
+/// `scenetexture` 文件选择的扩展名（WPE 固定的一条过滤）。
+pub const SCENE_TEXTURE_EXTENSIONS: [&str; 6] = ["jpg", "jpeg", "jfif", "png", "gif", "mp4"];
+
 /// 属性类型；`Group` / `Text` 只用于面板展示，不可编辑、不推给页面。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -26,6 +29,8 @@ pub enum WpePropKind {
     TextInput,
     File,
     Directory,
+    /// 场景的「用户纹理」属性：值是本机图片 / GIF / 视频的绝对路径，只在场景壁纸上出现。
+    SceneTexture,
     Group,
     Text,
 }
@@ -76,6 +81,7 @@ pub fn parse_defs(raw: &Value) -> Vec<WpePropDef> {
                 Some("textinput") => WpePropKind::TextInput,
                 Some("file") => WpePropKind::File,
                 Some("directory") => WpePropKind::Directory,
+                Some("scenetexture") => WpePropKind::SceneTexture,
                 Some("group") => WpePropKind::Group,
                 Some("text") | None if prop.get("text").is_some() => WpePropKind::Text,
                 _ => return None,
@@ -107,13 +113,21 @@ pub fn parse_defs(raw: &Value) -> Vec<WpePropDef> {
                         .collect()
                 })
                 .unwrap_or_default();
-            let extensions = prop
-                .get("filter")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .split('|')
-                .filter_map(|part| part.trim().strip_prefix("*.").map(str::to_owned))
-                .collect();
+            // `scenetexture` 的 project.json 里没有 filter，WPE 的文件选择固定只有这一条过滤
+            // （`*.jpg;*.jpeg;*.jfif;*.png;*.gif;*.mp4`）。
+            let extensions = if kind == WpePropKind::SceneTexture {
+                SCENE_TEXTURE_EXTENSIONS
+                    .iter()
+                    .map(|ext| (*ext).to_owned())
+                    .collect()
+            } else {
+                prop.get("filter")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .split('|')
+                    .filter_map(|part| part.trim().strip_prefix("*.").map(str::to_owned))
+                    .collect()
+            };
             Some(WpePropDef {
                 key: key.clone(),
                 kind,
@@ -227,22 +241,51 @@ pub fn normalize_value(def: &WpePropDef, value: &Value) -> Result<Value, String>
             Ok(Value::String(channels?.join(" ")))
         }
         WpePropKind::TextInput => Ok(Value::String(value.as_str().ok_or_else(bad)?.to_owned())),
-        WpePropKind::File | WpePropKind::Directory => {
-            let path = value.as_str().ok_or_else(bad)?;
+        WpePropKind::File | WpePropKind::Directory | WpePropKind::SceneTexture => {
+            let raw_path = value.as_str().ok_or_else(bad)?;
+            // scenetexture 存之前照 WPE 整理分隔符；file / directory 原样存
+            let path = if def.kind == WpePropKind::SceneTexture {
+                wpe_slash_path(raw_path)
+            } else {
+                raw_path.to_owned()
+            };
             if !path.is_empty() {
-                let p = Path::new(path);
+                let p = Path::new(&path);
                 if !p.is_absolute()
                     || p.is_symlink()
-                    || (def.kind == WpePropKind::File && !p.is_file())
+                    || (def.kind != WpePropKind::Directory && !p.is_file())
                     || (def.kind == WpePropKind::Directory && !p.is_dir())
                 {
                     return Err(bad());
                 }
             }
-            Ok(Value::String(path.to_owned()))
+            Ok(Value::String(path))
         }
         WpePropKind::Group | WpePropKind::Text => Err(bad()),
     }
+}
+
+/// 照 WPE 的 `scenetexture` 返回值整理路径：`\` 全换成 `/`，非开头的连续 `/` 合并成一个
+/// （开头的连续 `/` 保留，UNC 路径的 `//` 不能丢）。不拷贝、不改大小写。
+pub fn wpe_slash_path(path: &str) -> String {
+    let path = path.replace(char::from(92), "/");
+    let rest = path.trim_start_matches('/');
+    let lead = &path[..path.len() - rest.len()];
+    let mut out = String::with_capacity(path.len());
+    out.push_str(lead);
+    let mut prev_slash = false;
+    for ch in rest.chars() {
+        if ch == '/' {
+            if !prev_slash {
+                out.push('/');
+            }
+            prev_slash = true;
+        } else {
+            out.push(ch);
+            prev_slash = false;
+        }
+    }
+    out
 }
 
 /// 滑块数值入 JSON：整数存整数，其余存浮点。
@@ -299,8 +342,12 @@ pub fn apply_changes(raw: &Value, changes: &Map<String, Value>) -> Result<Option
             continue;
         }
         let normalized = snap_to_step(def, normalize_value(def, value)?);
-        if matches!(def.kind, WpePropKind::File | WpePropKind::Directory)
-            && normalized == Value::String(String::new())
+        // 清空（空串）且作者没给默认值时直接删键。scenetexture 的作者缺省值全是空串：
+        // 空串归一后等于默认值，下面照常删键；作者给了非空默认值时，空串留作「清空」覆盖。
+        if matches!(
+            def.kind,
+            WpePropKind::File | WpePropKind::Directory | WpePropKind::SceneTexture
+        ) && normalized == Value::String(String::new())
             && def.default.is_none()
         {
             values.remove(key);
@@ -388,7 +435,10 @@ pub fn user_file_grants(raw: &Value) -> Vec<WpeFileGrant> {
     parse_defs(raw)
         .into_iter()
         .filter_map(|def| {
-            if !matches!(def.kind, WpePropKind::File | WpePropKind::Directory) {
+            if !matches!(
+                def.kind,
+                WpePropKind::File | WpePropKind::Directory | WpePropKind::SceneTexture
+            ) {
                 return None;
             }
             let value = values.get(&def.key)?.as_str()?;
@@ -499,6 +549,80 @@ mod tests {
             normalize_value(find("first"), &json!("-1 0.5 2")).unwrap(),
             json!("0 0.5 1")
         );
+    }
+
+    fn texture_raw() -> Value {
+        json!({"general":{"properties":{
+            "tex":{"type":"scenetexture","text":"Tex","value":""}
+        }}})
+    }
+
+    #[test]
+    fn scenetexture_definition_and_slash_path() {
+        let defs = parse_defs(&texture_raw());
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].kind, WpePropKind::SceneTexture);
+        assert_eq!(
+            serde_json::to_value(defs[0].kind).unwrap(),
+            json!("scenetexture")
+        );
+        // 没有 filter 也固定是 WPE 的那一条过滤
+        assert_eq!(
+            defs[0].extensions,
+            ["jpg", "jpeg", "jfif", "png", "gif", "mp4"]
+        );
+        // 反斜杠换成斜杠，非开头的连续斜杠合并，开头的（UNC）保留
+        assert_eq!(wpe_slash_path("C:\\a\\\\b//c.png"), "C:/a/b/c.png");
+        assert_eq!(
+            wpe_slash_path("\\\\srv\\share\\\\x.png"),
+            "//srv/share/x.png"
+        );
+        assert_eq!(wpe_slash_path(""), "");
+        // 空串 = 清空，作者缺省值（空串）也归一得过
+        let def = &defs[0];
+        assert_eq!(normalize_value(def, &json!("")).unwrap(), json!(""));
+        assert!(normalize_value(def, &json!("relative/a.png")).is_err());
+        assert!(normalize_value(def, &json!(1)).is_err());
+    }
+
+    #[test]
+    fn scenetexture_values_are_stored_normalized_and_grant_the_file() {
+        let base = std::env::temp_dir().join(format!("wpe-user-props-tex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let picked = base.join("picked.png");
+        std::fs::write(&picked, "x").unwrap();
+        let source = texture_raw();
+        // 用反斜杠 + 重复分隔符的写法选文件：存下来的是整理后的形式
+        let messy = picked
+            .to_string_lossy()
+            .replace(['/', '\\'], "\\")
+            .replacen("picked", "\\picked", 1);
+        let mut changes = Map::new();
+        changes.insert("tex".into(), json!(messy));
+        let changed = apply_changes(&source, &changes).unwrap().unwrap();
+        let stored = user_values(&changed)["tex"].as_str().unwrap().to_owned();
+        assert_eq!(stored, wpe_slash_path(&picked.to_string_lossy()));
+        assert!(!stored.contains('\\') && !stored.contains("//"));
+        // 放行：文件本身，不是目录
+        let grants = user_file_grants(&changed);
+        assert_eq!(grants.len(), 1);
+        assert!(!grants[0].is_dir);
+        assert!(file_allowed(&base.join("project"), &changed, &picked));
+        // 清空：作者缺省值是空串，归一后等于默认值，键删掉，放行撤销
+        changes.insert("tex".into(), json!(""));
+        let cleared = apply_changes(&changed, &changes).unwrap().unwrap();
+        assert!(cleared.get(USER_PROPERTIES_KEY).is_none());
+        assert!(user_file_grants(&cleared).is_empty());
+        // 不是文件（目录）、不存在的路径被拒
+        changes.insert("tex".into(), json!(base.to_string_lossy()));
+        assert!(apply_changes(&source, &changes).is_err());
+        changes.insert(
+            "tex".into(),
+            json!(base.join("missing.png").to_string_lossy()),
+        );
+        assert!(apply_changes(&source, &changes).is_err());
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

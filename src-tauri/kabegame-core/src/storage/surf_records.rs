@@ -296,7 +296,8 @@ impl Storage {
         drop(conn);
 
         let mut records = Vec::with_capacity(raw.len());
-        for (id, host, name, root_url, cookie, icon, last_visit_at, created_at, desktop_mode) in raw {
+        for (id, host, name, root_url, cookie, icon, last_visit_at, created_at, desktop_mode) in raw
+        {
             records.push(SurfRecord {
                 id,
                 host,
@@ -466,8 +467,7 @@ impl Storage {
         let changed = update_surf_record_desktop_mode_row_if_changed(&conn, id, enabled)?;
         drop(conn);
         if changed {
-            GlobalEmitter::global()
-                .emit_surf_record_changed(id, json!({ "desktopMode": enabled }));
+            GlobalEmitter::global().emit_surf_record_changed(id, json!({ "desktopMode": enabled }));
         }
         Ok(())
     }
@@ -522,12 +522,18 @@ mod tests {
         )
         .unwrap();
 
-        assert!(!super::update_surf_record_cookie_row_if_changed(&conn, "surf-1", "sid=old").unwrap());
-        assert!(super::update_surf_record_cookie_row_if_changed(&conn, "surf-1", "sid=new").unwrap());
+        assert!(
+            !super::update_surf_record_cookie_row_if_changed(&conn, "surf-1", "sid=old").unwrap()
+        );
+        assert!(
+            super::update_surf_record_cookie_row_if_changed(&conn, "surf-1", "sid=new").unwrap()
+        );
         assert_eq!(
-            conn.query_row("SELECT cookie FROM surf_records WHERE id = 'surf-1'", [], |row| {
-                row.get::<_, String>(0)
-            })
+            conn.query_row(
+                "SELECT cookie FROM surf_records WHERE id = 'surf-1'",
+                [],
+                |row| { row.get::<_, String>(0) }
+            )
             .unwrap(),
             "sid=new"
         );

@@ -3245,11 +3245,7 @@ fn wallpaper_rotation_image_only_tail_keeps_view_order() {
         let wide = runtime.fetch(&format!("{view}/_kb_x500x/1")).unwrap();
         let expected: Vec<String> = wide
             .iter()
-            .filter(|row| {
-                !row["type"]
-                    .as_str()
-                    .is_some_and(|t| t.starts_with("video"))
-            })
+            .filter(|row| !row["type"].as_str().is_some_and(|t| t.starts_with("video")))
             .map(|row| ids(vec![row.clone()]).remove(0))
             .collect();
         assert_eq!(
@@ -3257,17 +3253,16 @@ fn wallpaper_rotation_image_only_tail_keeps_view_order() {
             expected.len(),
             "{eff}"
         );
-        assert!(
-            runtime.count(view).unwrap() >= expected.len(),
-            "{view}"
-        );
+        assert!(runtime.count(view).unwrap() >= expected.len(), "{view}");
         let probe: Vec<usize> = (1..=expected.len().min(4))
             .chain(std::iter::once(expected.len()))
             .filter(|n| *n >= 1)
             .collect();
         for n in probe {
             let path = rows_path(&eff, 1, n as u64);
-            let row = ids(runtime.fetch(&path).unwrap_or_else(|e| panic!("{path}: {e}")));
+            let row = ids(runtime
+                .fetch(&path)
+                .unwrap_or_else(|e| panic!("{path}: {e}")));
             assert_eq!(row, [expected[n - 1].clone()], "{path}");
             assert_eq!(
                 rank(&runtime, &eff, &expected[n - 1]),
@@ -3479,9 +3474,7 @@ fn media_type_wpe_lists_subtypes() {
         ["9998"]
     );
     assert_eq!(
-        runtime
-            .count("images://gallery/media-type/x-wpe")
-            .unwrap(),
+        runtime.count("images://gallery/media-type/x-wpe").unwrap(),
         2
     );
     // WPE 不再归图片或视频，图片的格式列表里也没有它们的子类
@@ -3502,10 +3495,7 @@ fn media_type_wpe_lists_subtypes() {
         0
     );
     let formats = listed_counts(&runtime, "images://gallery/media-type/x-wpe");
-    assert_eq!(
-        formats,
-        [("video".to_string(), 1), ("web".to_string(), 1)]
-    );
+    assert_eq!(formats, [("video".to_string(), 1), ("web".to_string(), 1)]);
     // 原生壁纸的有效路径只留图片：WPE 行 rank 查不到
     let native = effective_path("images://gallery/hide/sort/by-time", "native");
     assert_eq!(rank(&runtime, &native, "9999"), None);

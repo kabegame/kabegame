@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use crate::ipc::events::{ArcAppEvent, AppEventKind};
+use crate::ipc::events::{AppEventKind, ArcAppEvent};
 use crate::ipc::server::EventBroadcaster;
 use tokio::sync::{broadcast, mpsc, RwLock};
 

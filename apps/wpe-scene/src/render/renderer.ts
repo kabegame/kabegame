@@ -35,6 +35,7 @@ import { particlePasses } from "../particles/system";
 import type { ParticleScriptTarget } from "../script/api";
 import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
+import type { UserTextureProvider } from "../usertex/sources";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import type { VideoSink } from "../video/sceneVideos";
 import {
@@ -129,6 +130,10 @@ export interface SceneLoadOptions {
    * 运行中重排（P6b 1e）：宿主 `SceneTexts.relayouter()`，绑定排出 `texts` 的那次加载，原样交给 `GpuScene.build`。不给时文本字段变了也不重排。
    */
   relayout?: TextRelayouter;
+  /**
+   * 用户纹理的来源（P11b 步骤 2）：宿主的 `UserTextureSources`，原样交给 `GpuScene.build`；`sync` 换图时同样问它。不给时用户纹理槽都用缺省纹理。
+   */
+  userTextures?: UserTextureProvider;
 }
 
 /** 一条就地写：绑定 + 新值（宿主按 `planApply` 挑出来）。 */
@@ -375,6 +380,7 @@ export class SceneRenderer {
       },
       texts: options.texts,
       relayout: options.relayout,
+      userTextures: options.userTextures,
       size,
     });
     if (this.destroyed || serial !== this.loadSerial) {

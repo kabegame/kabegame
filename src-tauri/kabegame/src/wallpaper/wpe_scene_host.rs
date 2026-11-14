@@ -8,8 +8,8 @@
 //! - **`file:` 闸门**（[`access_scope_of`]，注册给 runtime 的解析器）：宿主目录里的文档以宿主目录为根，另放行
 //!   WPE 安装目录的 `assets` 目录与 `config.json`、文本对象要读的系统字体（按平台解析成本机文件，
 //!   [`platform_system_fonts`]；交给宿主的表 [`system_fonts`] 与放行项是同一次解析的结果），
-//!   以及库里全部 `x-wpe/scene` 行的目录（随图片事件维护，见
-//!   [`WpeWebDirIndex::scene_dir_grants`]）。范围按文档路径算、不分实例。应用页把 iframe 导航到宿主时
+//!   以及库里全部 `x-wpe/scene` 行的目录与用户为它们选的 `scenetexture` 文件（随图片事件维护，见
+//!   [`WpeWebDirIndex::scene_grants`]）。范围按文档路径算、不分实例。应用页把 iframe 导航到宿主时
 //!   按目标路径解析，只认宿主目录本身（runtime 对导航目标去掉放行项）。其它路径照旧按网页壁纸目录。
 //! - **IPC**：场景壁纸是一种特殊的网页壁纸。宿主同样匹配 `wpe-web-capability`（`file:///*`、`frames: "sub"`），
 //!   网页壁纸的命令与事件它都有（应答 ping、按 `image-changed` 跟随用户属性、`setting-change` 等）。
@@ -463,18 +463,18 @@ fn is_within(key: &str, root_key: &str) -> bool {
             .is_some_and(|rest| rest.starts_with(MAIN_SEPARATOR))
 }
 
-/// 宿主目录里的路径的访问范围；不在宿主目录里返回 None。`scene_dirs` 只在命中时才取。
+/// 宿主目录里的路径的访问范围；不在宿主目录里返回 None。`scene_grants` 只在命中时才取。
 fn host_scope_for(
     key: &str,
     host: &HostScope,
-    scene_dirs: impl FnOnce() -> Vec<FileGrant>,
+    scene_grants: impl FnOnce() -> Vec<FileGrant>,
 ) -> Option<FileAccessScope> {
     if !is_within(key, &host.root_key) {
         return None;
     }
     let mut grants = host.engine_grants.clone();
     grants.extend(host.font_grants.iter().cloned());
-    grants.extend(scene_dirs());
+    grants.extend(scene_grants());
     Some(FileAccessScope {
         root: Some(host.root.clone()),
         grants,
@@ -485,9 +485,10 @@ fn host_scope_for(
 pub fn access_scope_of(path: &Path) -> Option<FileAccessScope> {
     let key = file_path_key(path)?;
     if let Ok(slot) = HOST_SCOPE.read() {
-        if let Some(scope) = slot.as_ref().and_then(|host| {
-            host_scope_for(&key, host, || WpeWebDirIndex::global().scene_dir_grants())
-        }) {
+        if let Some(scope) = slot
+            .as_ref()
+            .and_then(|host| host_scope_for(&key, host, || WpeWebDirIndex::global().scene_grants()))
+        {
             return Some(scope);
         }
     }

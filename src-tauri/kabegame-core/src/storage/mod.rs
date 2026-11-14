@@ -22,9 +22,9 @@ pub mod page_snapshot;
 pub mod plugin_data;
 pub mod plugin_sources;
 pub mod run_configs;
-pub mod search_terms;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod safe_delete;
+pub mod search_terms;
 pub mod source_purge;
 mod sql_debug;
 pub mod startup_state;

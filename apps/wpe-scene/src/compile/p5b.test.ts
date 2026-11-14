@@ -1194,12 +1194,8 @@ describe("能力表：instanced（P5b 步骤 5）", () => {
       expect(instanceKeys({ instance: { combos } }), JSON.stringify(combos)).toEqual([]);
   });
 
-  it("usertextures 取值有效：material:usertextures", () => {
-    for (const usertextures of [["$mediaThumbnail"], "usershortcut", [null]])
-      expect(instanceKeys({ instance: { usertextures } }), JSON.stringify(usertextures)).toEqual([
-        "material:usertextures",
-      ]);
-    for (const usertextures of [null, false, ""])
+  it("usertextures 不在这里报（P11b）：合并进材质 pass，按项报 usertextures:*，见 p11b.test.ts", () => {
+    for (const usertextures of [["$mediaThumbnail"], "usershortcut", [null], null, false, ""])
       expect(instanceKeys({ instance: { usertextures } }), JSON.stringify(usertextures)).toEqual([]);
   });
 

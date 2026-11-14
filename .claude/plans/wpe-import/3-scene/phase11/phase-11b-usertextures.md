@@ -398,3 +398,87 @@ export function parseUserTextures(pass: MaterialPass, defaults: (slot: number) =
 - **改正**：
   - M7 原写「`gAMA` 被忽略」，测试图只有 0 / 255、测不出，M9 改正；
   - 读码改正上一轮三处：视频失败回缺省纹理、扩展名不分大小写、GIF 不是 FreeImage 解的（rea-p11b 末尾）。
+
+### 步骤 1–3（2026-11-14，三个 Sonnet 代理并行，按「决定」）
+
+**分工与目录：**
+- 步骤 1、2 在快照副本里做：`ignore/p11/b/ov-a`、`ov-b`，基线 `7cbde3c6`。开工前我先写了两边共用的约定 `ignore/p11/b/contract.patch`：
+  - `compile/usertextures.ts` 的类型；
+  - `ScenePass.userTextures?`、`SceneBundle.userTextures?`；
+  - 绑定目标 `user-texture`，以及三处穷举分支的占位。
+- 步骤 3 在独立 worktree `ignore/p11/b/wt` 里做：子模块、`bin/` 下的子目录、`node_modules` 用目录联接指回主仓库。原因是 `cargo tauri dev` 监视主工作区，改 Rust 就重编重启。
+
+**步骤 1（编译期）：**
+- `compile/usertextures.ts` 的 `parseUserTextures`、`mergeUserTextures`、`instanceReferenceSize`、`defaultOfTexture`；
+- `compilePass` 按缺省纹理分流（静态纹理 / 被依赖图层的合成 RT / 棋盘格占位 / 运行时 RT）；
+- instanced 与 effect 实例覆盖合并 `usertextures`，`BindingCollector.bindUserTexture`；
+- 能力表按项报细分键，pass 级 `keepaspect` 改中性。
+
+语料（`ignore/p11/b/corpus-head.json` 对 `corpus-ov-a.json`，HEAD 重扫，183 个工程）：
+- 能渲染 88 → 90，新增 `3462279189`、`3783690410`，原来都只差 `usertextures`；没有场景掉出；
+- 去掉 `material:usertextures` 30 张、`effect:*:pass:usertextures` 21 张；
+- 新增 `usertextures:system` 19 张、`:usershortcut` 3 张、`:particle-sheet` 2 张；
+- 其余键逐张不变。
+
+我核对：tsc 0 error，vitest 3173 个全过（基线 3137，加 36）。变异检查三处：两处被测试抓到；第三处（删掉 `!names[slot]`）是等价变异，解析发生在注解缺省绑定之前。
+
+**步骤 2（运行时，静态图）：**
+- `src/usertex/`：
+  - `crop.ts`：裁切取整、纹理名；
+  - `png.ts`：`gAMA` 表；
+  - `sources.ts`：来源表、按值缓存 4 张、后发先至丢弃。
+- 渲染器：
+  - `render/graph.ts`：`TextureRef` 的 `user` 变体、`planLayer` 的 `userBase`；
+  - `render/scene.ts`：
+    - 槽 0 整层强制重建（`ensureUserSizing` 换合成 RT、独占 fbo、被依赖图层的 RT）；
+    - 其它槽只重建 bind group 与 `g_Texture<n>Resolution`；
+    - 组合层 / instanced 的强制白（`g_Alpha`、`g_Color`、`g_Color4`）；
+    - 采样器按槽位、1 级 mip、无各向异性。
+- `render/state.ts`：`user-texture` 写入、`userWritten`；
+- 宿主：加载时预解码，上限 5 s；dev 探针 `host.userTextures()`。
+
+返工三处（我审查后要求）：
+- gamma 原来经 2D 画布读回（预乘 alpha 有舍入损失），改成上传 GPU 时查表（`render/userGamma.ts`）。我在 dev 应用的真 GPU 上用同一份 WGSL 处理 `ut-gm100` / `ut-gm060`：编译没有任何消息，和 WPE 导出的纹理逐字节相同。
+- 预解码加 5 s 上限。
+- M8 的门闸改读 `SceneState.userWritten`（只在属性写入时记），解码完成不再算写入。
+
+我核对：tsc 0 error，vitest 3208 个全过。
+
+**步骤 3（后端、面板、放行）：**
+- `user_props.rs`：
+  - `WpePropKind::SceneTexture`；
+  - 过滤固定为 WPE 那一条；
+  - `wpe_slash_path` 照 WPE 统一成 `/`，UNC 保留开头 `//`；
+  - `user_file_grants` 收它。
+- 放行：
+  - `wpe_web_dir_index.rs` 的场景条目带用户选的文件，`metadataId` 补丁时重算；
+  - `scene_dir_grants` 改名 `scene_grants`；
+  - `wpe_web_pull_state` 的场景分支在返回前覆盖写一次。
+- 面板：`scenetexture` 和 `file` 共用文件选择与清空，只在场景上显示。
+
+我核对：Rust 测试 7 + 22 个、面板测试 9 个通过，Prettier 通过。代理对两个 crate 跑了 `cargo fmt`，另有 22 个无关文件是 HEAD 原本就不合 rustfmt 的换行（照约定保留）。`deno.lock` 被顺手改了，不进补丁。
+
+**合并：**
+- 步骤 1、2 改的文件没有重叠，三方合并（`ignore/p11/b/a/merge3.py`）后 tsc 0 error、vitest 3244 个全过。
+- 开发期间 HEAD 先后多了 P4f 步骤 4、P6b 步骤 2 等提交，只有 `render/graph.ts` 一行 import 冲突。
+- 以 HEAD 为祖先合并进工作区（`a/merge_wt.py`，写前核对文件没被同时改）：工作区里别的会话未提交的改动全部保留。叠上去前后的工作区快照 tsc 都是 0 error。
+- 步骤 3 的补丁 `ignore/p11/b/p11b-step3.patch`（30 个文件）经用户同意（2026-11-14：「好，移动吧」）打进主工作区，dev 重编重启（352 s）。
+
+**真机冒烟**（dev 应用 + WPE，测试行 14660–14663 测完已用 `projects_remove` 移除）：
+- 后端：`get_wpe_web_properties` 认出 `scenetexture`、扩展名是 WPE 那一条；面板命令写入 `D:\…\ut-b.jpg`，存成 `D:/…/ut-b.jpg`。
+- 渲染（`render_scene`，1920×1080 画布，PNG `ut-a.png`），和 WPE 抓帧（`A:\p11b\npot-a-1080`、`inst-a-1080`）整帧比：
+  - `p11b-npot`（非 2 的幂的槽 0）**0 差**；
+  - `p11b-inst`（instanced + tint，合成 RT 300×200、强制白）**0 差**。
+
+  均不含 FR / CLK 两个时钟块。
+- 1600×900 窗口、JPEG `ut-b.jpg` 的那组有差，两类都是已知差异：
+  - 条纹边界：每条边界 4 列，是 JPEG 色度上采样；
+  - 图层上下边缘各 1 行：WPE 按窗口分辨率光栅化，我们先画场景再缩，即「场景比窗口大时的上屏」。
+- 运行中改值：宿主统计 `applied` +1、`recompiled` 为空，来源表解码出新值。
+- `file:` 放行：选中的文件能读，没选的 `ut-d.png` 被拒；从库里删掉图片后同一个文件被拒，日志 `deny file: … ut-a.png`。
+
+**没验到：**
+- 帧循环里 GPU 换纹理那条路（`syncUserTextures` → `rebuildLayer` / `rebindUserDraw`）只在假设备上测过：屏外宿主不跑帧循环，`render_scene` 是探针按当前值重建场景。要在主窗口预览里改属性看，或步骤 5 走查时补。
+- 合成 RT 池只增不减：反复换不同尺寸的图时，旧尺寸的 RT 不回收。
+
+**工具问题：**共用的 dev 宿主产物 `target/debug/resources/wpe-scene` 被几个会话轮流从各自的源码重建。冒烟期间被换回不含 P11b 的旧产物两次，表现为渲染结果报 `material:usertextures`，或旧宿主 `t.onerror`（它的 worker 文件被删了）。每次渲染前要核对 `宿主产物` 那一行。

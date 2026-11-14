@@ -210,13 +210,7 @@ impl Filesystem for KabegameFuseFs {
         }
     }
 
-    fn getattr(
-        &self,
-        _req: &Request,
-        ino: INodeNo,
-        _fh: Option<FileHandle>,
-        reply: ReplyAttr,
-    ) {
+    fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         let Some(path) = self.get_path(ino.0) else {
             reply.error(Errno::ENOENT);
             return;
@@ -449,13 +443,7 @@ impl Filesystem for KabegameFuseFs {
         reply.error(Errno::EACCES);
     }
 
-    fn unlink(
-        &self,
-        _req: &Request,
-        _parent: INodeNo,
-        _name: &OsStr,
-        reply: ReplyEmpty,
-    ) {
+    fn unlink(&self, _req: &Request, _parent: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
         // VD 只读——不允许删除文件
         reply.error(Errno::EACCES);
     }

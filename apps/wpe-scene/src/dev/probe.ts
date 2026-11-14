@@ -81,6 +81,7 @@ import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame } from "..
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene, type ParticleProfile } from "../render/scene";
 import { SceneState } from "../render/state";
+import type { UserTextureProbe } from "../usertex/sources";
 import { createDrawTracer, type TraceOptions } from "../render/trace";
 import type { SceneHost } from "../host";
 import {
@@ -102,6 +103,7 @@ import {
   type ProbeScriptsResult,
 } from "./probeScripts";
 import { prepareProbeTexts } from "./probeTexts";
+import { prepareProbeUserTextures } from "./probeUserTextures";
 import { checkCanvas, pointerWindow, replayPointers, sceneCursors } from "./replayPointers";
 import { applyScriptValues, wroteTextValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
 import { checkVideoTime, ProbeVideos, type ProbeVideoResult, type VideoTimeOption } from "./videoProbe";
@@ -356,6 +358,8 @@ export interface RenderFrameResult {
    * `width` / `height` 是视频尺寸；`failed` 的那段保持透明（同产品），原因在 `error`。没有视频纹理时空数组。
    */
   videos: ProbeVideoResult[];
+  /** 用户纹理属性来源的解码结果（P11b 步骤 2，`UserTextureProbe`）：值、状态、尺寸、解码用时与已登记的纹理名；没有属性来源时不给。 */
+  userTextures?: UserTextureProbe[];
   /** PNG 的存放键是 `<key>.png`，原始 RGBA 是 `<key>.rgba`，都用 `chunk` 取（base64 分块）。 */
   key: string;
   /** 逐 draw 轨迹的键与摘要（`drawTrace.ts` 的 `RenderFrameTrace`）：只在给了 `trace` 时有。 */
@@ -437,6 +441,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const compileMs = performance.now() - started;
   // 文本层（P6b 1d）：同宿主，建场景前排好；没有文本层时不碰 wasm
   const texts = await prepareProbeTexts(bundle, reader, options.sceneAssets);
+  // 用户纹理（P11b 步骤 2）：按 `userProperties` 预先解码并等完，读回的就是用户图；没有属性来源时不建
+  const userTextures = await prepareProbeUserTextures(bundle, options.userProperties, reader);
   const gpu = await acquireGpu();
   // 逐 draw 轨迹：建场景、编码都用包过的设备（返回的仍是真对象）；没要轨迹时就是 `gpu.device` 本身
   const tracer = traceOptions ? createDrawTracer(gpu.device, traceOptions) : null;
@@ -469,6 +475,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
       texts: texts.texts,
       relayout: texts.relayout,
+      userTextures,
       size: target,
     });
     // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器；profile 帧用第 0 项的指针
@@ -678,6 +685,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         ...(textSyncs === undefined ? {} : { textSyncs }),
         ...(probeScripts ? { scripts: probeScripts.result() } : {}),
         videos: sink.results(),
+        ...(userTextures ? { userTextures: userTextures.probe() } : {}),
         key,
         ...(traced ? { trace: traced.summary } : {}),
       };
@@ -689,6 +697,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   } finally {
     // 视频元素与对象地址（P9a 步骤 3）：读回之后释放，出错也释放
     videos?.dispose();
+    userTextures?.dispose();
     for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();
     cache.clear();
     texts.dispose();
@@ -760,6 +769,8 @@ export async function hostRenderFrame(
   const scene = renderer?.currentScene;
   const state = renderer?.sceneState;
   if (!renderer || !scene || !state) throw new Error("当前没有可渲染的场景");
+  // 用户纹理（P11b 步骤 2）：在途的解码先等完（完成时已把来源标进状态，下面的 `sync` 换上），读回的才是确定的画面
+  await host.settleUserTextures();
   const device = renderer.device;
   const encoder = device.createCommandEncoder({ label: "probe host frame" });
   // 视差点的单位是场景的正交尺寸（`bundle.general`），没有 bundle 时退回场景目标尺寸

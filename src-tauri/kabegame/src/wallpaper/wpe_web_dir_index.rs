@@ -14,9 +14,11 @@
 //! 页面重拉）；`wpe_web_pull_state` 在把状态交给页面之前按同一份 metadata 覆盖（页面拿到新路径时闸门一定
 //! 已经认它）。两条路写的都是「这张壁纸当前 metadata 算出的放行」，先后到达结果相同。
 //!
-//! 同一张表还顺带记着库内每张场景壁纸（`x-wpe/scene`）的目录：场景宿主（[`super::wpe_scene_host`]）的
-//! `file:` 访问范围放行库里全部场景壁纸目录，要和网页壁纸目录一样随图片事件维护。场景目录**不**构成网页壁纸
-//! 范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
+//! 同一张表还顺带记着库内每张场景壁纸（`x-wpe/scene`）的目录与用户选的文件（`scenetexture` 属性）：
+//! 场景宿主（[`super::wpe_scene_host`]）的 `file:` 访问范围放行库里全部场景壁纸目录与这些文件，
+//! 要和网页壁纸目录一样随图片事件维护（`metadataId` 补丁到达时按新 metadata 重算，宿主拉取状态前再写一次）。
+//! 场景目录**不**构成网页壁纸范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
+//! 宿主是一份文档、范围按文档路径算：用户为某张场景选的文件对全部场景宿主实例可读（总计划已接受）。
 //!
 //! 只随 `wpe` feature 编译，三个桌面平台都有。
 
@@ -43,8 +45,15 @@ struct DirIndexMaps {
     entry_by_dir_key: HashMap<String, WpeWebDirEntry>,
     /// 图片 id → 目录键：删除事件只带 id。
     dir_key_by_image_id: HashMap<String, String>,
-    /// 场景壁纸：图片 id → 目录放行项（已规范化）。只供场景宿主的访问范围使用。
-    scene_dir_by_image_id: HashMap<String, FileGrant>,
+    /// 场景壁纸：图片 id → 目录与用户选的文件。只供场景宿主的访问范围使用。
+    scene_by_image_id: HashMap<String, SceneEntry>,
+}
+
+/// 一张库内场景壁纸：目录放行项（已规范化）+ 按当前用户属性算出的文件放行（`scenetexture`）。
+#[derive(Debug, Clone)]
+struct SceneEntry {
+    dir: FileGrant,
+    grants: Vec<FileGrant>,
 }
 
 /// 一次全量扫描的结果。
@@ -52,8 +61,8 @@ struct DirIndexMaps {
 struct LibraryRows {
     /// 网页壁纸：`(id, local_path, metadata)`。
     web: Vec<(String, String, Option<Value>)>,
-    /// 场景壁纸：`(id, local_path)`。
-    scenes: Vec<(String, String)>,
+    /// 场景壁纸：`(id, local_path, metadata)`。
+    scenes: Vec<(String, String, Option<Value>)>,
 }
 
 /// 一张库内网页壁纸：图片 id、壁纸目录、按当前用户属性算出的放行（已转成闸门比较用的形式）。
@@ -98,7 +107,7 @@ impl DirIndexMaps {
     }
 
     fn remove(&mut self, image_id: &str) {
-        self.scene_dir_by_image_id.remove(image_id);
+        self.scene_by_image_id.remove(image_id);
         let Some(key) = self.dir_key_by_image_id.remove(image_id) else {
             return;
         };
@@ -168,7 +177,7 @@ impl WpeWebDirIndex {
             .read()
             .map(|maps| {
                 maps.dir_key_by_image_id.contains_key(image_id)
-                    || maps.scene_dir_by_image_id.contains_key(image_id)
+                    || maps.scene_by_image_id.contains_key(image_id)
             })
             .unwrap_or(false)
     }
@@ -177,25 +186,36 @@ impl WpeWebDirIndex {
     pub fn is_scene(&self, image_id: &str) -> bool {
         self.inner
             .read()
-            .map(|maps| maps.scene_dir_by_image_id.contains_key(image_id))
+            .map(|maps| maps.scene_by_image_id.contains_key(image_id))
             .unwrap_or(false)
     }
 
-    /// 库内全部场景壁纸目录的放行项（目录，顺序不定）。场景宿主的访问范围每次请求现取。
-    pub fn scene_dir_grants(&self) -> Vec<FileGrant> {
+    /// 库内全部场景壁纸的放行项：每张的目录 + 用户为它选的文件（顺序不定）。场景宿主的访问范围每次请求现取。
+    pub fn scene_grants(&self) -> Vec<FileGrant> {
         self.inner
             .read()
-            .map(|maps| maps.scene_dir_by_image_id.values().cloned().collect())
+            .map(|maps| {
+                maps.scene_by_image_id
+                    .values()
+                    .flat_map(|scene| {
+                        std::iter::once(scene.dir.clone()).chain(scene.grants.clone())
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
-    /// 用这张壁纸当前 metadata 算出的用户选择**覆盖**它的放行（不是追加：改了目录属性，旧目录立即不可读）。
+    /// 用这张壁纸（网页或场景）当前 metadata 算出的用户选择**覆盖**它的放行（不是追加：改了目录属性，旧目录立即不可读）。
     /// 表里没有这张壁纸时什么都不做。
     pub fn replace_grants(&self, image_id: &str, grants: Vec<WpeFileGrant>) {
         let grants = to_file_grants(grants);
         let Ok(mut maps) = self.inner.write() else {
             return;
         };
+        if let Some(scene) = maps.scene_by_image_id.get_mut(image_id) {
+            scene.grants = grants;
+            return;
+        }
         let Some(key) = maps.dir_key_by_image_id.get(image_id).cloned() else {
             return;
         };
@@ -227,16 +247,19 @@ impl WpeWebDirIndex {
         }
     }
 
-    /// 登记 / 更新一张场景壁纸的目录。目录已不存在、不是目录或是符号链接时不登记，原有条目一并删除。
-    fn upsert_scene(&self, image_id: &str, local_path: &str) {
-        let grant = FileGrant::new(Path::new(local_path), true);
+    /// 登记 / 更新一张场景壁纸的目录与用户选的文件。目录已不存在、不是目录或是符号链接时不登记，原有条目一并删除。
+    fn upsert_scene(&self, image_id: &str, local_path: &str, metadata: Option<&Value>) {
+        let dir = FileGrant::new(Path::new(local_path), true);
+        let grants = metadata
+            .map(|raw| to_file_grants(user_file_grants(raw)))
+            .unwrap_or_default();
         let Ok(mut maps) = self.inner.write() else {
             return;
         };
         maps.remove(image_id);
-        if let Some(grant) = grant {
-            maps.scene_dir_by_image_id
-                .insert(image_id.to_string(), grant);
+        if let Some(dir) = dir {
+            maps.scene_by_image_id
+                .insert(image_id.to_string(), SceneEntry { dir, grants });
         }
     }
 
@@ -249,9 +272,14 @@ impl WpeWebDirIndex {
     /// 用一次全量扫描的结果整张替换。
     fn replace_all(&self, rows: LibraryRows) {
         let mut maps = DirIndexMaps::default();
-        for (image_id, local_path) in rows.scenes {
-            if let Some(grant) = FileGrant::new(Path::new(&local_path), true) {
-                maps.scene_dir_by_image_id.insert(image_id, grant);
+        for (image_id, local_path, metadata) in rows.scenes {
+            if let Some(dir) = FileGrant::new(Path::new(&local_path), true) {
+                let grants = metadata
+                    .as_ref()
+                    .map(|raw| to_file_grants(user_file_grants(raw)))
+                    .unwrap_or_default();
+                maps.scene_by_image_id
+                    .insert(image_id, SceneEntry { dir, grants });
             }
         }
         for (image_id, local_path, metadata) in rows.web {
@@ -290,10 +318,15 @@ fn scan_library() -> Result<LibraryRows, String> {
             (image_id, local_path, metadata)
         })
         .collect();
-    Ok(LibraryRows {
-        web,
-        scenes: storage.list_wpe_scene_rows()?,
-    })
+    let scenes = storage
+        .list_wpe_scene_rows()?
+        .into_iter()
+        .map(|(image_id, local_path)| {
+            let metadata = storage.get_metadata(&image_id).ok().flatten();
+            (image_id, local_path, metadata)
+        })
+        .collect();
+    Ok(LibraryRows { web, scenes })
 }
 
 const FOLLOWED_KINDS: [AppEventKind; 4] = [
@@ -401,12 +434,12 @@ async fn on_patch(patch: &ImageFieldPatch) {
 /// 按 id 重读的一行。
 enum RefreshedRow {
     Web(String, Option<Value>),
-    Scene(String),
+    Scene(String, Option<Value>),
     /// 行已不存在，或不再是网页 / 场景壁纸。
     Gone,
 }
 
-/// 读这一行（网页壁纸连同 metadata）后 upsert；行已不存在或不再是 x-wpe/web、x-wpe/scene 就 remove。
+/// 读这一行（网页、场景壁纸连同 metadata）后 upsert；行已不存在或不再是 x-wpe/web、x-wpe/scene 就 remove。
 async fn refresh(image_id: String) {
     let read = tokio::task::spawn_blocking(move || {
         let row = match Storage::find_image_by_id(&image_id)? {
@@ -415,7 +448,8 @@ async fn refresh(image_id: String) {
                 RefreshedRow::Web(info.local_path, metadata)
             }
             Some(info) if is_wpe_scene(info.media_type.as_deref()) => {
-                RefreshedRow::Scene(info.local_path)
+                let metadata = Storage::global().get_metadata(&info.id).ok().flatten();
+                RefreshedRow::Scene(info.local_path, metadata)
             }
             _ => RefreshedRow::Gone,
         };
@@ -427,8 +461,8 @@ async fn refresh(image_id: String) {
         Ok(Ok((image_id, RefreshedRow::Web(local_path, metadata)))) => {
             index.upsert(&image_id, &local_path, metadata.as_ref())
         }
-        Ok(Ok((image_id, RefreshedRow::Scene(local_path)))) => {
-            index.upsert_scene(&image_id, &local_path)
+        Ok(Ok((image_id, RefreshedRow::Scene(local_path, metadata)))) => {
+            index.upsert_scene(&image_id, &local_path, metadata.as_ref())
         }
         Ok(Ok((image_id, RefreshedRow::Gone))) => index.remove(&image_id),
         Ok(Err(error)) => tracing::trace!("网页壁纸目录索引读行失败: {error}"),
@@ -594,15 +628,15 @@ mod tests {
         let base = fixture("replace-all");
         let index = WpeWebDirIndex::new();
         index.upsert("old", &path_str(&base.join("wp-b")), None);
-        index.upsert_scene("old-scene", &path_str(&base.join("picked-a")));
+        index.upsert_scene("old-scene", &path_str(&base.join("picked-a")), None);
         index.replace_all(LibraryRows {
             web: vec![
                 ("1".into(), path_str(&base.join("wp-a")), None),
                 ("gone".into(), path_str(&base.join("missing")), None),
             ],
             scenes: vec![
-                ("s".into(), path_str(&base.join("picked-b"))),
-                ("s-gone".into(), path_str(&base.join("missing"))),
+                ("s".into(), path_str(&base.join("picked-b")), None),
+                ("s-gone".into(), path_str(&base.join("missing")), None),
             ],
         });
         assert!(index.contains_image("1"));
@@ -622,8 +656,8 @@ mod tests {
         let base = fixture("scenes");
         let index = WpeWebDirIndex::new();
         let scene = base.join("wp-b");
-        index.upsert_scene("s", &path_str(&scene));
-        let grants = index.scene_dir_grants();
+        index.upsert_scene("s", &path_str(&scene), None);
+        let grants = index.scene_grants();
         assert_eq!(grants.len(), 1);
         assert!(grants[0].is_dir);
         assert_eq!(file_path_key(&grants[0].path), file_path_key(&scene));
@@ -632,14 +666,68 @@ mod tests {
         assert!(index.image_id_of(&scene.join("index.html")).is_none());
         assert!(index.contains_image("s"));
         index.remove("s");
-        assert!(index.scene_dir_grants().is_empty());
+        assert!(index.scene_grants().is_empty());
         assert!(!index.contains_image("s"));
         assert!(!index.is_scene("s"));
-        index.upsert_scene("missing", &path_str(&base.join("missing")));
+        index.upsert_scene("missing", &path_str(&base.join("missing")), None);
         assert!(!index.contains_image("missing"));
         // 不是目录（文件）也不登记
-        index.upsert_scene("file", &path_str(&base.join("wp-b/index.html")));
+        index.upsert_scene("file", &path_str(&base.join("wp-b/index.html")), None);
         assert!(!index.contains_image("file"));
+        let _ = fs::remove_dir_all(base);
+    }
+
+    /// 带一个 `scenetexture` 属性、用户选了 `picked` 的 project.json 原文。
+    fn metadata_picking_texture(picked: &Path) -> Value {
+        json!({
+            "general": { "properties": {
+                "tex": { "type": "scenetexture", "text": "Tex", "value": "" }
+            } },
+            "userProperties": { "tex": picked.to_string_lossy() }
+        })
+    }
+
+    /// 场景条目带用户选的文件：放行跟随 metadata、覆盖而不是追加、清空后只剩目录、删除条目一并撤销。
+    #[test]
+    fn scene_grants_include_scenetexture_files_and_follow_metadata() {
+        let base = fixture("scene-textures");
+        let index = WpeWebDirIndex::new();
+        let scene = base.join("wp-b");
+        let pick_a = base.join("picked-a/1.jpg");
+        let pick_b = base.join("picked-b/2.jpg");
+        let keys = |index: &WpeWebDirIndex| {
+            let mut keys: Vec<_> = index
+                .scene_grants()
+                .iter()
+                .map(|grant| (file_path_key(&grant.path).unwrap(), grant.is_dir))
+                .collect();
+            keys.sort();
+            keys
+        };
+        let expect = |files: &[&Path]| {
+            let mut want: Vec<_> = vec![(file_path_key(&scene).unwrap(), true)];
+            want.extend(files.iter().map(|f| (file_path_key(f).unwrap(), false)));
+            want.sort();
+            want
+        };
+        index.upsert_scene(
+            "s",
+            &path_str(&scene),
+            Some(&metadata_picking_texture(&pick_a)),
+        );
+        assert_eq!(keys(&index), expect(&[&pick_a]));
+        // 换文件：覆盖，旧文件立即不在放行里（metadataId 补丁路径与拉取前路径都走 replace_grants）
+        index.replace_grants("s", user_file_grants(&metadata_picking_texture(&pick_b)));
+        assert_eq!(keys(&index), expect(&[&pick_b]));
+        // 清空：只剩目录
+        index.replace_grants("s", Vec::new());
+        assert_eq!(keys(&index), expect(&[]));
+        // 场景文件不构成网页壁纸范围
+        assert!(index.access_scope_of(&pick_b).is_none());
+        // 删除条目连同文件放行一起撤销
+        index.replace_grants("s", user_file_grants(&metadata_picking_texture(&pick_a)));
+        index.remove("s");
+        assert!(index.scene_grants().is_empty());
         let _ = fs::remove_dir_all(base);
     }
 

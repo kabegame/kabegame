@@ -112,6 +112,15 @@ import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
 import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import { materialCombos, passAlphaWriting, type AlphaWriting } from "./writeState";
+import {
+  defaultOfTexture,
+  instanceReferenceSize,
+  mergeUserTextures,
+  parseUserTextures,
+  type UserTextureDefault,
+  type UserTextureSlot,
+  type UserTextureSource,
+} from "./usertextures";
 import type { SceneVideoSource } from "../video/player";
 import type { SceneAnimation } from "../animation/types";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
@@ -348,6 +357,11 @@ export interface ScenePass {
    * 解析不到的名字绑棋盘格（`textures` 里的静态纹理，`compile/dependencies.ts` 的 `checkerTexture`）。没有这种槽时不写这个键。
    */
   layerComposites?: Record<number, number>;
+  /**
+   * 用户纹理槽（P11b，`compile/usertextures.ts`）：运行中可以换成场景外的图。缺省纹理照旧在 `textures` / `layerComposites` 里，没有图时用它。
+   * 没有生效的槽时不写这个键。
+   */
+  userTextures?: UserTextureSlot[];
   uniforms: Record<string, number[]>;
   /** 是否需要 `_rt_FullFrameBuffer` 快照（`needsFramebuffer`，决定快照时机）。 */
   framebuffer: boolean;
@@ -599,6 +613,11 @@ export interface SceneBundle {
   layers: SceneLayer[];
   programs: TranslateResult[];
   textures: SceneTexture[];
+  /**
+   * 用到的用户纹理来源（P11b）：全部 `ScenePass.userTextures` 的来源去重，按首次出现的顺序。宿主加载时对属性来源的当前值预先解码，
+   * 第一帧就是用户图。缺省（测试夹具、旧 bundle）等于空。
+   */
+  userTextures?: UserTextureSource[];
   /**
    * 泛光链（`bloom.ts`）；档位关闭、场景没有对象，或 `general.bloom` 写死 false（没绑属性、没挂脚本）时为 null，渲染路径与 P2a 相同。
    * 有链不等于开着：当前开不开看 `SceneState.bloomEnabled`，关着时渲染路径同样与 P2a 相同。
@@ -883,19 +902,24 @@ function mergeTextures(base: unknown[] | undefined, override: unknown[] | undefi
   }
   return slots;
 }
+/** 合并后的 `usertextures` 有就写进 pass，没有就不加这个键（`mergeUserTextures` 两边都不是数组时返回 undefined）。 */
+function userTexturesOf(merged: unknown[] | undefined): { usertextures?: unknown[] } {
+  return merged ? { usertextures: merged } : {};
+}
 /**
  * instanced 对象的 `instance`（P5b 步骤 5）里参与合并的两个键：`combos` 是对象才合并、`textures` 是数组才按槽合并；整个不是对象时
  * 为 null（不合并）。取值不合规的由 `checkInstanceFeatures` 照报。
  */
-function instanceOverride(raw: unknown): Pick<MaterialPass, "combos" | "textures"> | null {
+function instanceOverride(raw: unknown): Pick<MaterialPass, "combos" | "textures" | "usertextures"> | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const { combos, textures } = raw as Record<string, unknown>;
+  const { combos, textures, usertextures } = raw as Record<string, unknown>;
   return {
     combos:
       combos && typeof combos === "object" && !Array.isArray(combos)
         ? (combos as Record<string, number | boolean>)
         : undefined,
     textures: Array.isArray(textures) ? textures : undefined,
+    usertextures: Array.isArray(usertextures) ? usertextures : undefined,
   };
 }
 export { shaderUniforms };
@@ -925,6 +949,8 @@ interface PassContext {
    * 能力检查只扫材质 JSON 自己的（`checkPassFeatures` 的 `sceneConstants`，P10a 步骤 2）。
    */
   sceneConstants?: Readonly<Record<string, unknown>>;
+  /** instanced 图层（P11b）：对象 `size` 解析出的用户纹理参考尺寸；非 instanced 不传（`parseUserTextures` 的 `options.instanceSize`）。 */
+  instanceSize?: { width: number; height: number } | null;
 }
 
 /**
@@ -1048,6 +1074,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     layers: [],
     programs: [],
     textures: [],
+    userTextures: [],
     bloom: null,
     unsupported: [],
     // 同一个数组随编译继续填充，最后就是全部登记项
@@ -1498,6 +1525,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     };
     /** 别的图层的独占 RT（P8 步骤 4）：槽位 → 被依赖图层的 `objects` 下标。 */
     const composites: Record<number, number> = {};
+    /** 绑了棋盘格占位的槽（`_rt_imageLayerComposite_*` 没被依赖）：用户纹理的缺省是占位时照报（P11b）。 */
+    const placeholders = new Set<number>();
     const owner = passObject(context.key);
     /**
      * `_rt_imageLayerComposite_*`（P8 步骤 4，rea-p8-render 2.1、2.6，p8-REPORT 结论 7、8、12）：返回 false 表示不是这种名字。
@@ -1521,6 +1550,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       } else {
         if (entry?.ownComposite) issues.add("dependency:passthrough-undeclared");
         slots[slot] = checkerIndex();
+        placeholders.add(slot);
       }
       if (withFormat) formats.push({ slot, format });
       return true;
@@ -1541,6 +1571,26 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         slots[slot] = texture.index;
         formats.push({ slot, format: texture.format });
       }
+    }
+    // 用户纹理（P11b 步骤 1）：缺省纹理解析完才能定参考尺寸。只有 `textures[slot]` 是非空字符串且这一槽由材质自己绑的才生效
+    // （`planned` 的槽由渲染图填、`names` 为空的槽什么都不绑，`defaultOf` 都返回 undefined）
+    const defaultOf = (slot: number): UserTextureDefault | undefined => {
+      if (!names[slot] || planned.has(slot)) return undefined;
+      if (slot in composites) return { kind: "layer", object: composites[slot] };
+      if (placeholders.has(slot)) return { kind: "placeholder" };
+      if (slot in runtime) return { kind: "runtime", name: runtime[slot] };
+      const texture = slots[slot] === undefined ? undefined : bundle.textures[slots[slot]];
+      return texture ? defaultOfTexture(texture) : undefined;
+    };
+    const userTextures = parseUserTextures(pass, defaultOf, {
+      instanceSize: context.instanceSize,
+      particle: !!context.particle,
+    });
+    for (const key of userTextures.issues) issues.add(key);
+    for (const { source } of userTextures.slots) {
+      if (!(bundle.userTextures ??= []).some((item) => item.kind === source.kind && item.name === source.name))
+        bundle.userTextures.push({ ...source });
+      if (source.kind === "property") bindings.bindUserTexture(source.name);
     }
     // rope 两类系统的 pass 无条件换成 `genericropeparticle`、带 `.geom` 翻译（P4d 步骤 1、2，rea-p4d-rope.md 第 6 节，见 `ROPE_SHADER`）
     const rope = isRopeRenderer(context.particle?.renderer?.kind);
@@ -1618,6 +1668,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       textures: slots,
       runtime,
       ...(Object.keys(composites).length ? { layerComposites: composites } : {}),
+      ...(userTextures.slots.length ? { userTextures: userTextures.slots } : {}),
       uniforms: {
         ...shaderUniforms(result, pass, properties, context.key, bindings, issues),
         ...(result?.ok && usesLighting(result) ? sceneLights() : {}),
@@ -1719,6 +1770,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
           combos: { ...materialPass.combos, ...override?.combos, ...(options.shape ? { DIRECTDRAW: 1 } : {}) },
           constantshadervalues: { ...materialPass.constantshadervalues, ...override?.constantshadervalues },
           textures: mergeTextures(materialPass.textures, override?.textures),
+          // 实例 pass 的 `usertextures` 按槽覆盖材质的（P11b 步骤 1，rea-p11-textures 2.1：effect pass 也是材质对象、走同一套解析）
+          ...userTexturesOf(mergeUserTextures(materialPass.usertextures, override?.usertextures)),
         };
         // 有 bind 时材质槽 0 的 null 不再自动填（B6）：不在 planned 里的 null 槽位就保持空
         const compiled = await compilePass(merged, {
@@ -1799,9 +1852,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             ...raw,
             combos: { ...raw.combos, ...instance.combos },
             textures: mergeTextures(raw.textures, instance.textures),
+            ...userTexturesOf(mergeUserTextures(raw.usertextures, instance.usertextures)),
           }
         : raw;
-      layer.passes.push(await compilePass(pass, { key: `objects/${index}/passes/${k}` }));
+      layer.passes.push(
+        await compilePass(pass, {
+          key: `objects/${index}/passes/${k}`,
+          // instanced 的参考尺寸取对象 `size`（P11b，WPE 把它写进 `instance.usertexturereference`，p11-REPORT M2）
+          ...(instance ? { instanceSize: instanceReferenceSize(object.size) } : {}),
+        }),
+      );
     }
     // 尺寸照 WPE 的顺序（P5b 步骤 1，`imageLayerSize`）：只有 `autosize` 才取槽 0 纹理的图像尺寸（`projectlayer` 取正交投影宽高，
     // 步骤 2）。deep_space 的 Background 模型写 1920×1080、没有 `autosize`，槽 0 是 480×270 的流向遮罩，按模型取，和 P1 相同

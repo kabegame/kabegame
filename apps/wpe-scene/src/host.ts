@@ -33,6 +33,7 @@ import { readScriptState, recordRecompileWrite, writeScriptState } from "./scrip
 import { browserStorage, clearSceneStorage } from "./script/storage";
 import { SceneTexts, type TextRelayouter } from "./text/host";
 import type { TextLayout } from "./text/layout";
+import { UserTextureSources, type UserTextureProbe } from "./usertex/sources";
 import { videoSourceKey } from "./video/player";
 import { layerVideoSource, SceneVideos, type SceneVideoProbe, type VideoSink } from "./video/sceneVideos";
 
@@ -100,6 +101,12 @@ function visibleVideoTextures(bundle: SceneBundle, state: SceneState | null | un
   const used = uploadableTextures({ layers: bundle.layers.filter((layer) => visible.has(layer.object)) });
   return all.filter((index) => used.has(index));
 }
+
+/**
+ * 加载时等用户纹理预解码的上限（毫秒）：同视频第一帧的等待思路（`FIRST_VIDEO_FRAME_TIMEOUT_MS`）——要等到第一帧就是用户图，但不能让读不出 /
+ * 很慢的文件无限拖住加载。超时后照常建场景、这些槽先用缺省纹理，解码完成后走运行时的换图路径换上。
+ */
+export const USER_TEXTURE_PRIME_TIMEOUT_MS = 5000;
 
 /** 每个 iframe 只有一个 SceneHost；属性由垫片推送，实例随 iframe 一同销毁。 */
 export class SceneHost {
@@ -209,14 +216,28 @@ export class SceneHost {
   readonly stats: SceneHostStats = { applied: 0, recompiled: [] };
   private receivedProperties = false;
   private readonly reader = new FetchSceneReader();
+  /**
+   * 用户纹理的来源表（P11b 步骤 2，`usertex/sources.ts`）：属性来源的当前值与解码结果，宿主一份、跨重编译保留（重编译不重新解码），销毁时释放。
+   * 加载时对 bundle 的属性来源预先解码（`primeUserTextures`），运行中经 `SceneState.onUserTexture` 收新值、解码完成回调 `onUserTextureReady`。
+   * `read` 与 `log` 是闭包：构造函数里的 `options` 在字段初始化时还没赋值。
+   */
+  private readonly userTextures = new UserTextureSources((path) => this.reader.readWhole(path), {
+    log: (message) => this.options.report.debug(`场景壁纸 ${this.options.imageId} ${message}`),
+  });
   private readonly textureCache = new TextureDecodeCache(this.reader);
   private targetTask: Promise<SceneTarget> | null = null;
   private readonly unlisteners: UnlistenFn[] = [];
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
-    private readonly options: { imageId: string | null; report: SceneReporter },
+    private readonly options: {
+      imageId: string | null;
+      report: SceneReporter;
+      /** 加载时等用户纹理预解码的上限（毫秒），缺省 `USER_TEXTURE_PRIME_TIMEOUT_MS`；单测用。 */
+      userTexturePrimeTimeoutMs?: number;
+    },
   ) {
+    this.userTextures.onReady = (name) => this.onUserTextureReady(name);
     this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理设置", (raw) => {
       if (this.disposed || !this.receivedProperties) return;
       const delta = (raw && typeof raw.changes === "object" ? raw.changes : raw) as Record<string, unknown> | null;
@@ -372,6 +393,8 @@ export class SceneHost {
     // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
     if (target.kind === "camera") return `objects/${target.object}/${target.field}`;
     if (target.kind === "recompile") return target.path;
+    // 用户纹理（P11b）：同脚本运行时的 `targetKey`
+    if (target.kind === "user-texture") return `usertextures/${target.name}`;
     return `${target.script}/scriptproperties/${target.key}`;
   }
 
@@ -756,6 +779,59 @@ export class SceneHost {
   }
 
   /**
+   * 用户纹理的一个来源解码完成（或值清空 / 读不出回到缺省，P11b 步骤 2，`UserTextureSources.onReady`）：把它标进渲染器正在画的那份状态，
+   * 下一次 `sync` 换上；暂停时循环不跑，补画一帧（同属性就地写）。没有渲染器 / 状态时（加载期间、退回预览图）不做事：加载由 `primeUserTextures` 等。
+   */
+  private onUserTextureReady(name: string): void {
+    if (this.disposed) return;
+    const renderer = this.renderer;
+    const state = renderer?.sceneState;
+    if (!renderer || !state) return;
+    state.touchUserTexture(name);
+    if (this.paused) renderer.redraw();
+  }
+
+  /**
+   * 加载时对 bundle 的属性来源按当前属性值预先解码，全部完成（或失败、回缺省）才建场景，第一帧就是用户图（P11b 步骤 2）。值只认字符串，别的
+   * 类型（`slider` 之类）当空串（缺省纹理）。没有用户纹理的 bundle 不碰来源表。快捷方式与封面来源归 P11c、P11d，这里只处理属性。
+   */
+  private async primeUserTextures(bundle: SceneBundle): Promise<boolean> {
+    // 手写的测试 bundle 可能没有这个表
+    const sources = (bundle.userTextures ?? []).filter((source) => source.kind === "property");
+    if (!sources.length) return true;
+    const limit = this.options.userTexturePrimeTimeoutMs ?? USER_TEXTURE_PRIME_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const done = this.userTextures
+      .prime(
+        sources.map((source) => {
+          const value = this.properties.get(source.name)?.value;
+          return [source.name, typeof value === "string" ? value : ""] as const;
+        }),
+      )
+      .then(() => true);
+    const timeout = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), limit);
+    });
+    const finished = await Promise.race([done, timeout]);
+    clearTimeout(timer);
+    if (!finished)
+      this.options.report.warn(
+        `场景壁纸 ${this.options.imageId} 的用户纹理 ${limit} ms 内没解码完，先用缺省纹理建场景，解码完成后换上`,
+      );
+    return finished;
+  }
+
+  /** dev 探针（P11b 步骤 2）：每个用户纹理属性来源的当前值、状态、尺寸与最近一次解码用时；没有来源时为空。 */
+  userTextureProbe(): UserTextureProbe[] {
+    return this.userTextures.probe();
+  }
+
+  /** dev 探针与确定性回放：等全部用户纹理解码结束（成功、失败或被取代）。 */
+  settleUserTextures(): Promise<void> {
+    return this.userTextures.settled();
+  }
+
+  /**
    * 换上 bundle 的声音表：没有声音的场景不建播放器。宿主收到 bundle 就开始，不等 GPU 资源（WPE 加载时就开始放，不等第一帧）。
    * 同一对象的排期器跨重编译保留（`SceneSounds.load`）。
    */
@@ -1031,6 +1107,9 @@ export class SceneHost {
       if (bundle.audio) this.subscribeAudio();
       // 视频纹理同样在脚本与 GPU 资源之前开始读、开始放（P9a）
       this.loadVideos(bundle);
+      // 用户纹理（P11b 步骤 2）：按当前属性值预先解码，建场景时第一帧就是用户图
+      const primed = await this.primeUserTextures(bundle);
+      if (id !== this.generation) return;
       // runtime 已赋值但脚本还在加载时也要等，否则会抢在 init 之前进入首帧
       if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
         this.scriptBundle = bundle;
@@ -1045,7 +1124,15 @@ export class SceneHost {
         ignoreUnsupported: force,
         texts,
         relayout,
+        userTextures: this.userTextures,
         beforeFirstFrame: (state) => {
+          // 运行中属性写进状态时同步交给来源表解码（P11b 步骤 2）；解码完成再经 `onUserTextureReady` 标脏
+          state.onUserTexture = (name, value) => this.userTextures.setValue(name, value);
+          // 预解码超时：建场景时这些槽用的是缺省纹理，超时后才解完的那几个在建场景前的 `onReady` 找不到状态、没标脏，这里补标，第一次 `sync` 换上
+          if (!primed)
+            for (const source of bundle.userTextures ?? [])
+              if (source.kind === "property" && this.userTextures.status(source.name) === "ready")
+                state.touchUserTexture(source.name);
           // 渲染器从这一帧起画这份 bundle：视频的下标按它换算（`videoSink`）
           this.drawingBundle = bundle;
           this.scriptBundle = bundle;
@@ -1136,6 +1223,7 @@ export class SceneHost {
     this.sceneTexts?.dispose();
     this.sceneTexts = null;
     this.disposeVideos();
+    this.userTextures.dispose();
     this.sceneAnimations = null;
     this.runtime?.destroy();
     this.runtime = null;

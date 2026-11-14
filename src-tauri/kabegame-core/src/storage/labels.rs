@@ -209,7 +209,13 @@ mod tests {
     fn validate_label_rejects_missing_or_invalid_keys() {
         assert!(validate_label(&input(None, None, None), "pixiv").is_err());
         for key in [
-            "has.tune", "has/tune", "a,b", "初音", " lead", "trail ", "two  spaces",
+            "has.tune",
+            "has/tune",
+            "a,b",
+            "初音",
+            " lead",
+            "trail ",
+            "two  spaces",
         ] {
             assert!(
                 validate_label(&input(Some(key), None, None), "pixiv").is_err(),
@@ -227,7 +233,11 @@ mod tests {
             assert!(!is_plugin_ident(key), "{key}");
         }
         let spec = validate_label(
-            &input(Some("sua (alien stage)"), Some("anime pictures/character (x)"), None),
+            &input(
+                Some("sua (alien stage)"),
+                Some("anime pictures/character (x)"),
+                None,
+            ),
             "pixiv",
         )
         .unwrap();

@@ -130,7 +130,12 @@ fn raw_body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, String> {
         tauri::ipc::InvokeBody::Raw(data) => Ok(data.clone()),
         tauri::ipc::InvokeBody::Json(serde_json::Value::Array(items)) => items
             .iter()
-            .map(|value| value.as_u64().filter(|byte| *byte <= 255).map(|byte| byte as u8))
+            .map(|value| {
+                value
+                    .as_u64()
+                    .filter(|byte| *byte <= 255)
+                    .map(|byte| byte as u8)
+            })
             .collect::<Option<Vec<u8>>>()
             .ok_or_else(|| "Invalid byte array in IPC body".to_string()),
         tauri::ipc::InvokeBody::Json(serde_json::Value::Object(map)) => match map.get("base64") {

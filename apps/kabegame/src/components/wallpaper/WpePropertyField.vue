@@ -27,7 +27,7 @@
     @update:model-value="emit('update:modelValue', hexToWpeColor($event))"
   />
   <KbPath
-    v-else-if="item.kind === 'file'"
+    v-else-if="item.kind === 'file' || item.kind === 'scenetexture'"
     type="file"
     :model-value="modelValue"
     :file-extensions="item.extensions"

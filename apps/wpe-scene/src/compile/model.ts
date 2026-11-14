@@ -90,6 +90,8 @@ export interface SceneEffectInstance extends JsonObject {
     combos?: Record<string, number | boolean>;
     constantshadervalues?: Record<string, SceneValue>;
     textures?: unknown[];
+    /** 用户纹理（P11b）：按槽合并进材质 pass 的同名键（`mergeUserTextures`）。 */
+    usertextures?: unknown[];
     usershadervalues?: Record<string, string>;
   }[];
 }

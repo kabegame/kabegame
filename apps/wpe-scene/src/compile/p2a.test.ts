@@ -396,7 +396,7 @@ describe("能力表裁决", () => {
       ).toEqual([]);
     }
   });
-  it("effect：逐项检查实例、effect.json、fbo 与命令", () => {
+  it("effect：逐项检查实例、effect.json、fbo 与命令（实例 pass 的 usertextures 放行，按项报见 p11b.test.ts）", () => {
     const keys = new Set<string>();
     checkEffectFeatures(
       { file: "effects/x/effect.json", id: 1, passes: [{ id: 2, combos: {}, usertextures: ["a"] } as never] },
@@ -417,7 +417,6 @@ describe("能力表裁决", () => {
     );
     expect([...keys].sort()).toEqual([
       "effect:x:command:blit",
-      "effect:x:pass:usertextures",
       "effect:x:swap-operands",
       "effect:x:target:_rt_Missing",
     ]);

@@ -6,7 +6,7 @@ import { useI18n } from "@kabegame/i18n";
 
 export interface WpeWebPropertyItem {
   key: string;
-  kind: "color" | "slider" | "bool" | "combo" | "textinput" | "file" | "directory" | "group" | "text";
+  kind: "color" | "slider" | "bool" | "combo" | "textinput" | "file" | "directory" | "scenetexture" | "group" | "text";
   label: string;
   condition?: string | null;
   default?: unknown;

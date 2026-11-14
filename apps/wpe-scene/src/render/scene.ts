@@ -141,6 +141,16 @@
  *     场景格式、采样 `compositeSampling`，同它的合成 RT），随场景销毁；它就是本层的合成 RT 0（`ensureComposites`），其余从池里借。跨帧、
  *     跨 effect 开关的重建都保留、不清（WPE 帧之间不清；被依赖者排在引用方后面时引用方读到上一帧，结论 9）。引用方的
  *     `{ kind: "layer" }` 解析到它（`resolveTexture`），几个引用方共用同一张，采样器与 `g_Texture<n>Resolution` 随它。
+ * - **用户纹理**（P11b 步骤 2，`{ kind: "user" }`，`resolveUser`）：槽上登记了用户纹理、来源（宿主的 `UserTextureProvider`）当前有图时，用那张图
+ *   （按 WPE 的纹理名 `值 x round(比例·10)` 缓存的 `rgba8unorm`、直通 alpha、1 级 mip，裁切写在 `copyExternalImageToTexture` 的源矩形上，
+ *   采样按槽的 `nearest` / `clamp`、线性或点、无各向异性）；否则用缺省纹理（`fallback`）。换图都在 `sync` 里做（帧开头，同 WPE 在帧函数开头消费
+ *   待刷新集合；写入当场与解码完成各标一次脏）：
+ *   - 其它槽：只给用到这个来源的 draw 重建 bind group、重写 `g_Texture<n>Resolution` 与 `g_Color4` / `g_Alpha`，不重建图层；
+ *   - 图像层基础 pass 的槽 0：整层强制重建（`rebuildLayer(…, { force: true })`），UV 上界与内缩按新纹理（`planLayer` 的 `userBase`），合成 RT 与
+ *     effect fbo 由本层独占、按新尺寸换（同文本层，`ensureUserSizing`），被依赖图层的独占 RT 也按新尺寸重建，引用它的 draw 重绑；
+ *   - 组合层 / instanced 的 pass 有任一槽用户纹理生效时 `g_Color4` = (1, 1, 1, 1)、`g_Alpha` = 1，回到缺省时恢复对象的值（rea-p11b 4.3）；
+ *   - RT 参考尺寸的槽（`reference.kind === "layer"`）加载时属性就有值的不生效，第一次写入之后才生效（M8）；
+ *   - 没有槽引用的用户纹理在 `sync` 末尾销毁。
  *   - 建资源：`buildableLayers` 不看被依赖图层自身与祖先的可见性（WPE `0x1000`）。
  *   - 编码：不可见（自身或祖先）时照跑它的 op，只跳过画到「场景」的那一步上屏（`layerOpsToRun`），顶层与组画子树两处同一个判断。
  *     语料里的被依赖者都不是组（是组的照报 `dependency:group`），组隐藏时整棵子树照旧不画。
@@ -177,6 +187,8 @@ import type { ParticleScriptTarget } from "../script/api";
 import type { GlyphAtlas } from "../text/atlas";
 import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
+import type { UserTextureSlot } from "../compile/usertextures";
+import type { UserTextureCrop, UserTextureProvider } from "../usertex/sources";
 import type { VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
@@ -198,6 +210,7 @@ import {
   type TargetRef,
   type TextStep,
   type TextureRef,
+  type UserBase,
 } from "./graph";
 import {
   drawMatrixOf,
@@ -226,6 +239,7 @@ import {
   type GpuProgram,
 } from "./programs";
 import type { DirtyState, LayerState, SceneState } from "./state";
+import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
 import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
 import { traceUniforms } from "./trace";
@@ -642,8 +656,10 @@ interface Draw {
    * 材质没覆盖时为真。
    */
   trailRenderVar: boolean;
-  /** 按槽位的纹理尺寸（就地刷新时复用，纹理不随属性变化）。 */
+  /** 按槽位的纹理尺寸（就地刷新时复用；用户纹理换图时 `rebindUserDraw` 重算）。 */
   textureSizes: readonly (TextureSize | undefined)[];
+  /** 这个 draw 的输入里用到的用户纹理属性来源（P11b 步骤 2，去重）：来源标脏时 `sync` 按它找 draw。 */
+  userNames: string[];
   /**
    * 着色器绑定的视频纹理（bundle 纹理下标，去重，P9a）：建 draw 时算一次，编码时逐个问 `VideoSink`（`encode` 的 `draw`）。
    * 没有视频时为空。
@@ -660,6 +676,31 @@ interface Draw {
 
 /** 纹理尺寸（与 `render/uniforms.ts` 的 `TextureSize` 同形）。 */
 type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
+
+/** 一张用户纹理的 GPU 资源（P11b 步骤 2，`GpuScene.userGpu`）：裁后宽高就是纹理尺寸。 */
+interface UserGpu {
+  texture: GPUTexture;
+  view: GPUTextureView;
+  width: number;
+  height: number;
+}
+
+type UserRef = Extract<TextureRef, { kind: "user" }>;
+
+/** 一个用户引用此刻用的图：GPU 纹理与采样器。 */
+interface UserResolved {
+  gpu: UserGpu;
+  sampler: GPUSampler;
+}
+
+/** 图层基础 pass 槽 0 的用户纹理槽（图像层）：它换图要整层重建；没有时 null。 */
+function baseUserSlot(layer: SceneLayer): UserTextureSlot | null {
+  if (layer.text || layer.particle || layer.model || layer.shape) return null;
+  const pass = layer.passes[0];
+  const slot = pass?.userTextures?.find((item) => item.slot === 0 && item.source.kind === "property");
+  // 要有缺省（静态纹理或被依赖图层的 RT）才会包成用户引用（`graph.ts` 的 `passInputs`）
+  return slot && (pass.textures[0] !== undefined || pass.layerComposites?.[0] !== undefined) ? slot : null;
+}
 
 /** 一个图层的全部步骤与 draw：不可见时整段跳过（含它的快照），泛光的 op 单独放在最后（P3a）。 */
 interface LayerRuntime {
@@ -870,9 +911,12 @@ function planProblems(
       else problems.push(...meshVertexLayout(program.attributes ?? [], mesh.format).problems);
     }
     // 视频纹理（P9a）没有 mip：渲染器建空纹理、运行时拷帧，不算缺
-    for (const ref of Object.values(step.inputs))
+    for (const input of Object.values(step.inputs)) {
+      // 用户纹理（P11b）：缺省纹理照查，用户图是运行时的事
+      const ref = input.kind === "user" ? input.fallback : input;
       if (ref.kind === "texture" && !bundle.textures[ref.index]?.mips.length && !bundle.textures[ref.index]?.video)
         problems.push(`render:texture-missing:${ref.index}`);
+    }
   }
   return problems;
 }
@@ -1130,6 +1174,19 @@ export class GpuScene {
   private readonly textCounts = { syncs: 0, relayouts: 0, waiting: 0, rebuilds: 0 };
   /** 每次有重排或重建的 `sync` 的样本（最近 600 次）：重排的层数、重排与重建的用时（毫秒）。 */
   private readonly textTimings = { layers: [] as number[], relayoutMs: [] as number[], rebuildMs: [] as number[] };
+  /** 用户纹理的来源（P11b，`build` 的 `userTextures`）；null 时全部槽用缺省纹理。 */
+  private userProvider: UserTextureProvider | null = null;
+  /** 用户纹理的 GPU 纹理，按 WPE 的纹理名缓存：几个槽共用同一张，没有槽引用时 `sync` 末尾销毁。 */
+  private readonly userGpu = new Map<string, UserGpu>();
+  /** 已经记过 warning 的用户纹理（超出设备上限、拷贝失败），每个纹理名只记一次。 */
+  private readonly userWarned = new Set<string>();
+  /**
+   * 加载之后真正写过的属性来源（`SceneState.userWritten` 同一个集合，只增，`build` 时接上）：RT 参考的槽从第一次写入起才生效（M8）。
+   * 解码完成只标脏、不进这个集合，所以加载期晚到的解码不会让槽提前生效。
+   */
+  private userWritten: ReadonlySet<string> = new Set();
+  /** PNG gamma 校正的渲染管线（`render/userGamma.ts`）：第一次遇到带表的图时建，随场景销毁。 */
+  private gammaPass: GammaPass | null = null;
   /** 视频纹理的帧来源（P9a，`setVideoSink`）；null 时视频纹理保持全 0。 */
   private videoSink: VideoSink | null = null;
   /** 已经记过 warning 的视频纹理（`size:<下标>` / `copy:<下标>`）：每张纹理每种只记一次。 */
@@ -1232,6 +1289,11 @@ export class GpuScene {
        */
       relayout?: TextRelayouter;
       /**
+       * 用户纹理的来源（P11b 步骤 2，宿主的 `UserTextureSources`）：建场景与每次 `sync` 换图都问它「这个属性现在的图、按这个参考尺寸裁成什么」。
+       * 不给时所有用户纹理槽都用缺省纹理。
+       */
+      userTextures?: UserTextureProvider;
+      /**
        * 场景目标尺寸（P5d 步骤 2）：透视场景必给（按画布尺寸渲染，已定 6；渲染器传 `fullResolution`），经 `sceneTargetSize` 钳设备上限；
        * 正交场景不给，照旧按 `general.width/height`。透视场景没给时按 1920×1080。
        */
@@ -1243,6 +1305,8 @@ export class GpuScene {
     if (reasons.length) throw new SceneRenderError(reasons);
     const scene = new GpuScene(device, bundle, warnings, options.particles ?? {});
     scene.relayouter = options.relayout ?? null;
+    scene.userProvider = options.userTextures ?? null;
+    scene.userWritten = state.userWritten;
     // 加载时（宿主排版期间）的图集重置不算：运行中重置了才连带重排
     for (const atlas of layoutAtlases(...state.texts.values())) scene.atlasResets.set(atlas, atlas.resets);
     device.pushErrorScope("out-of-memory");
@@ -1520,7 +1584,8 @@ export class GpuScene {
    */
   private createLayerTarget(layer: SceneLayer): void {
     const baseTexture = this.baseTexture(layer);
-    const [width, height] = compositeSize(layer, baseTexture);
+    // 槽 0 的用户纹理有图时按它的尺寸（P11b 步骤 2）
+    const [width, height] = this.compositeSizeOf(layer);
     const { clamp, nearest } = compositeSampling(layer, baseTexture);
     const address: GPUAddressMode = clamp ? "clamp-to-edge" : "repeat";
     const filter: GPUFilterMode = nearest ? "nearest" : "linear";
@@ -1622,7 +1687,7 @@ export class GpuScene {
       fbo,
       [fw, fh],
       format,
-      `text ${layer.id}|${effect}|${fbo.name}|${fw}x${fh}|${format}|${fbo.repeat}`,
+      `${layer.text ? "text" : "owned"} ${layer.id}|${effect}|${fbo.name}|${fw}x${fh}|${format}|${fbo.repeat}`,
       encoder,
     );
   }
@@ -1695,7 +1760,126 @@ export class GpuScene {
       (e) => state.effectEnabled(layer.object, layer.effects[e].source),
       state.texts.get(layer.object) ?? null,
       [this.width, this.height],
+      this.userBaseOf(layer),
     );
+  }
+
+  /** 解析一个槽的用户纹理的裁切（不碰 GPU）：没有图、来源不是属性、RT 参考的槽还没生效（M8）时 null。 */
+  private userCrop(slot: UserTextureSlot): UserTextureCrop | null {
+    const provider = this.userProvider;
+    if (!provider || slot.source.kind !== "property") return null;
+    let reference: { width: number; height: number } | null;
+    if (slot.keepAspect) reference = null;
+    else if (slot.reference.kind === "size") reference = slot.reference;
+    else {
+      // 缺省是被依赖图层的合成 RT：参考尺寸取那张 RT（M3）；加载时属性就有值的不生效（M8，rea-p11b 5.2），第一次写入之后才生效
+      if (!this.userWritten.has(slot.source.name)) return null;
+      const target = this.layerTargets.get(slot.reference.object);
+      if (!target) return null;
+      reference = target;
+    }
+    return provider.crop(slot.source.name, reference);
+  }
+
+  /**
+   * 用户纹理的 GPU 纹理：按 WPE 的纹理名缓存，第一次用到时建并上传（裁切写在拷贝的源矩形上，不读回）。尺寸超过设备上限、拷贝失败时记一条
+   * warning（每个名字一次）、返回 null，槽用缺省纹理。
+   */
+  private userGpuOf(crop: UserTextureCrop): UserGpu | null {
+    const found = this.userGpu.get(crop.key);
+    if (found) return found;
+    const { rect, image, key } = crop;
+    const limit = this.device.limits.maxTextureDimension2D;
+    if (rect.width > limit || rect.height > limit) {
+      this.warnUser(key, `用户纹理 ${key} 的尺寸 ${rect.width}×${rect.height} 超过设备上限 ${limit}，用缺省纹理`);
+      return null;
+    }
+    // copyExternalImageToTexture 要求目标带 RENDER_ATTACHMENT
+    const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT;
+    const size = { width: rect.width, height: rect.height };
+    const texture = this.own(this.device.createTexture({ label: `user ${key}`, size, format: "rgba8unorm", usage }));
+    let temp: GPUTexture | null = null;
+    try {
+      // 带 gamma 表（PNG `gAMA`）时先拷进同尺寸的临时纹理，再用 GPU 逐字节查表画进最终纹理（`render/userGamma.ts`）；不带表直接拷
+      if (image.gamma)
+        temp = this.device.createTexture({ label: `user ${key} gamma source`, size, format: "rgba8unorm", usage });
+      this.device.queue.copyExternalImageToTexture(
+        { source: image.source, origin: { x: rect.x, y: rect.y } },
+        { texture: temp ?? texture, premultipliedAlpha: false },
+        size,
+      );
+      if (temp && image.gamma) {
+        this.gammaPass ??= createGammaPass(this.device);
+        encodeGamma(this.device, this.gammaPass, image.gamma, temp, texture).destroy();
+      }
+    } catch (error) {
+      this.release(texture);
+      this.warnUser(key, `用户纹理 ${key} 拷进纹理失败：${oneLine(String(error))}，用缺省纹理`);
+      return null;
+    } finally {
+      temp?.destroy();
+    }
+    const gpu: UserGpu = { texture, view: texture.createView(), width: rect.width, height: rect.height };
+    this.userGpu.set(key, gpu);
+    this.targetBytes += rect.width * rect.height * 4;
+    return gpu;
+  }
+
+  private warnUser(key: string, message: string): void {
+    if (this.userWarned.has(key)) return;
+    this.userWarned.add(key);
+    this.warnings.push(message);
+  }
+
+  /** 用户纹理的采样：线性或点（槽的 `nearest`）、寻址按槽的 `clamp`、1 级 mip、无各向异性（p11-REPORT「属性纹理」第 4 条）。 */
+  private userSampler(slot: UserTextureSlot): GPUSampler {
+    const address: GPUAddressMode = slot.clamp ? "clamp-to-edge" : "repeat";
+    const filter: GPUFilterMode = slot.nearest ? "nearest" : "linear";
+    return this.sampler({
+      addressModeU: address,
+      addressModeV: address,
+      magFilter: filter,
+      minFilter: filter,
+      mipmapFilter: "nearest",
+      maxAnisotropy: 1,
+    });
+  }
+
+  /** 一个用户引用此刻用的图（GPU 纹理与采样器）；没有图时 null，调用方用 `ref.fallback`。 */
+  private resolveUser(ref: UserRef): UserResolved | null {
+    const crop = this.userCrop(ref.slot);
+    const gpu = crop ? this.userGpuOf(crop) : null;
+    return gpu ? { gpu, sampler: this.userSampler(ref.slot) } : null;
+  }
+
+  /** 图像层基础 pass 槽 0 此刻的用户纹理尺寸（`planLayer` 的 `userBase`）；没有图时 null。 */
+  private userBaseOf(layer: SceneLayer): UserBase | null {
+    const slot = baseUserSlot(layer);
+    const crop = slot ? this.userCrop(slot) : null;
+    if (!crop) return null;
+    const { width, height } = crop.rect;
+    return { width, height, textureWidth: width, textureHeight: height };
+  }
+
+  /**
+   * 合成 RT 的尺寸（`compositeSize` + 槽 0 的用户纹理，P11b 步骤 2）：有图时取裁后尺寸（instanced、fullscreen 也是，rea-p11b 4.2），
+   * 没有图时同以前。
+   */
+  private compositeSizeOf(layer: SceneLayer, sceneSize?: readonly [number, number]): [number, number] {
+    const user = this.userBaseOf(layer);
+    const sizing =
+      user && Array.isArray(layer.fullscreenSize)
+        ? { ...layer, fullscreenSize: [user.width, user.height] as [number, number] }
+        : layer;
+    return compositeSize(sizing, user ?? this.baseTexture(layer), sceneSize);
+  }
+
+  /**
+   * 图层的合成 RT 与 effect fbo 由本层独占、按槽 0 的尺寸换（P11b 步骤 2）：文本层（排版尺寸）与基础 pass 槽 0 有用户纹理的图像层。
+   * 后者的 fbo 在 `populate` 里就建成独占的（`createTextFbos`），换图后 `ensureUserSizing` 原地换尺寸。
+   */
+  private ownsSizing(layer: SceneLayer): boolean {
+    return !!layer.text || baseUserSlot(layer) !== null;
   }
 
   private pipelineOf(step: DrawLike, { layer, resources }: Pick<LayerRuntime, "layer" | "resources">): PipelineSpec {
@@ -2014,10 +2198,9 @@ export class GpuScene {
       const layer = built[index];
       // fbo 一律按真实合成尺寸：全部 effect 关着时也是，打开时不用重建。文本层取排版的合成 RT 尺寸（P6b 1d），fbo 由本层独占（1e）
       const textLayout = layer.text ? state.texts.get(layer.object) : undefined;
-      const size = textLayout
-        ? textCompositeSize(textLayout)
-        : compositeSize(layer, this.baseTexture(layer), [width, height]);
-      const maps = layer.text
+      const size = textLayout ? textCompositeSize(textLayout) : this.compositeSizeOf(layer, [width, height]);
+      // 槽 0 有用户纹理的图像层同样独占 fbo（P11b 步骤 2）：换图后合成 RT 的尺寸变了，fbo 要跟着换，共享池里的不能动
+      const maps = this.ownsSizing(layer)
         ? this.createTextFbos(layer, size, setup)
         : layer.effects.map(
             (effect) =>
@@ -2124,6 +2307,30 @@ export class GpuScene {
       sampler: device.createSampler({ addressModeU: "repeat", addressModeV: "repeat" }),
       comparison: device.createSampler({ compare: "less-equal" }),
     };
+  }
+
+  /**
+   * 一个纹理输入的尺寸（`g_Texture<n>Resolution`）：静态纹理取 bundle 里的，RT 与图集取目标的，用户纹理有图时取裁后尺寸（图像尺寸 = 纹理尺寸，
+   * p11-REPORT 第 5 条）、没有图取缺省纹理的。
+   */
+  private inputSize(ref: TextureRef | undefined, resources: LayerResources): TextureSize | undefined {
+    if (!ref) return undefined;
+    if (ref.kind === "user") {
+      const user = this.resolveUser(ref);
+      if (user)
+        return {
+          width: user.gpu.width,
+          height: user.gpu.height,
+          textureWidth: user.gpu.width,
+          textureHeight: user.gpu.height,
+        };
+      return this.inputSize(ref.fallback, resources);
+    }
+    if (ref.kind === "texture") return this.bundle.textures[ref.index];
+    const target = this.resolveTexture(ref, resources);
+    return target
+      ? { width: target.width, height: target.height, textureWidth: target.width, textureHeight: target.height }
+      : undefined;
   }
 
   private resolveTexture(ref: TextureRef, resources: LayerResources): RenderTarget | null {
@@ -2442,14 +2649,7 @@ export class GpuScene {
       device.queue.writeBuffer(vertexBuffer, 0, vertexData);
     }
 
-    const sizeOf = (ref: TextureRef | undefined) => {
-      if (!ref) return undefined;
-      if (ref.kind === "texture") return bundle.textures[ref.index];
-      const target = this.resolveTexture(ref, resources);
-      return target
-        ? { width: target.width, height: target.height, textureWidth: target.width, textureHeight: target.height }
-        : undefined;
-    };
+    const sizeOf = (ref: TextureRef | undefined) => this.inputSize(ref, resources);
 
     // uniform：内置值打底，材质常量 / 用户属性覆盖（与就地刷新共用 `drawUniformValues`）
     let block: UniformBlock | null = null;
@@ -2491,7 +2691,9 @@ export class GpuScene {
     const videos = [
       ...new Set(
         program.textures.flatMap((binding) => {
-          const ref = step.inputs[binding.slot];
+          const input = step.inputs[binding.slot];
+          // 用户纹理（P11b）的缺省是视频时照样推进（缺省纹理回来时要接得上）
+          const ref = input?.kind === "user" ? input.fallback : input;
           return ref?.kind === "texture" && bundle.textures[ref.index]?.video ? [ref.index] : [];
         }),
       ),
@@ -2501,10 +2703,21 @@ export class GpuScene {
       const list: GPUBindGroupEntry[] = [];
       if (uniformBuffer) list.push({ binding: 0, resource: { buffer: uniformBuffer } });
       for (const binding of program.textures) {
-        const ref = step.inputs[binding.slot];
+        let ref = step.inputs[binding.slot];
         let view: GPUTextureView;
         let sampler: GPUSampler;
-        if (!ref) {
+        // 用户纹理（P11b）：有图用那张，没有图落到缺省纹理（下面照缺省的种类解析）
+        let user: UserResolved | null = null;
+        if (ref?.kind === "user") {
+          user = this.resolveUser(ref);
+          if (!user) ref = ref.fallback;
+        }
+        if (user) {
+          if (binding.kind !== "2d")
+            throw new SceneRenderError([`render:texture-kind:${binding.slot}:${binding.kind}`]);
+          view = user.gpu.view;
+          sampler = user.sampler;
+        } else if (!ref) {
           view = this.dummies.views[binding.kind];
           sampler = binding.kind === "2d-comparison" ? this.dummies.comparison : this.dummies.sampler;
         } else {
@@ -2549,6 +2762,9 @@ export class GpuScene {
       frameNames,
       trailRenderVar,
       textureSizes,
+      userNames: [
+        ...new Set(Object.values(step.inputs).flatMap((ref) => (ref.kind === "user" ? [ref.slot.source.name] : []))),
+      ],
       videos,
       dirty: false,
       bindGroup,
@@ -2630,7 +2846,9 @@ export class GpuScene {
     }
     if (step.kind === "particles") {
       // 帧表（P4b 步骤 2）：槽 0 的纹理带帧表时写 `g_RenderVar1`
-      const base = step.inputs[0];
+      const input = step.inputs[0];
+      // 槽 0 是用户纹理时帧表仍按缺省纹理（p11-REPORT M4：运行中换图沿用缺省的帧表）
+      const base = input?.kind === "user" ? input.fallback : input;
       return particleUniformValues({
         ...common,
         // 世界空间系统（P4c 步骤 4）是单位阵，对象变换改了照样走这里重写，仍是单位阵（`particleModel`）；子系统与事件实例按树算
@@ -2668,28 +2886,59 @@ export class GpuScene {
     // 单位阵、投影是 NDC 正交，不经 `viewProjectionOf`：`origin` / `scale` / `angles`、视差、抖动、透视都不起作用，2×2 的四边形
     // 正好铺满全屏。效果矩阵跟着是单位阵（`size` 是 (2, 2)，`scale(w/2, h/2)` 也是单位阵）。直接上屏照常（下面）
     if (layer.fullscreen && step.role !== "direct")
-      return drawUniformValues({
+      return this.userWhiteout(
+        step,
+        layer,
+        common.constants,
+        drawUniformValues({
+          ...common,
+          world: identity(),
+          step,
+          layer: { ...layerState, size: this.layerSize(layer, state) },
+          viewProjection: FULLSCREEN_VIEW_PROJECTION,
+        }),
+      );
+    return this.userWhiteout(
+      step,
+      layer,
+      common.constants,
+      drawUniformValues({
         ...common,
-        world: identity(),
         step,
         layer: { ...layerState, size: this.layerSize(layer, state) },
-        viewProjection: FULLSCREEN_VIEW_PROJECTION,
-      });
-    return drawUniformValues({
-      ...common,
-      step,
-      layer: { ...layerState, size: this.layerSize(layer, state) },
-      // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
-      // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
-      // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
-      viewProjection:
-        groupVp ??
-        this.viewProjectionOf(
-          layer,
-          state,
-          layer.perspective && step.target.kind === "scene" ? this.perspectiveViewProjection : this.viewProjection,
-        ),
-    });
+        // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
+        // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
+        // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
+        viewProjection:
+          groupVp ??
+          this.viewProjectionOf(
+            layer,
+            state,
+            layer.perspective && step.target.kind === "scene" ? this.perspectiveViewProjection : this.viewProjection,
+          ),
+      }),
+    );
+  }
+
+  /**
+   * 组合层与 instanced 的颜色强制为白（P11b 步骤 2，rea-p11b 4.3，p11-REPORT M2）：WPE 每次绘制现读材质的标志位，这个 pass 任一槽的用户纹理
+   * 生效时 `g_Alpha` = 1、`g_Color` = (1, 1, 1)（`g_Color4` = (1, 1, 1, 1)，HDR 下也不乘 `brightness`），对象的 alpha 一起被换成 1；
+   * 回到缺省纹理的下一次绘制恢复对象的值。材质自己写了这几个名字（`constants`）的不动，`g_UserAlpha` 不是 WPE 写的那两个，也不动。
+   */
+  private userWhiteout(
+    step: DrawLike,
+    layer: SceneLayer,
+    constants: Record<string, number[]>,
+    values: Record<string, number[]>,
+  ): Record<string, number[]> {
+    if (!layer.passthroughModel && !layer.instanced) return values;
+    let active = false;
+    for (const ref of Object.values(step.inputs)) if (ref.kind === "user" && this.userCrop(ref.slot)) active = true;
+    if (!active) return values;
+    if (!("g_Alpha" in constants)) values.g_Alpha = [1];
+    if (!("g_Color" in constants)) values.g_Color = [1, 1, 1];
+    if (!("g_Color4" in constants)) values.g_Color4 = [1, 1, 1, 1];
+    return values;
   }
 
   /**
@@ -2838,6 +3087,8 @@ export class GpuScene {
     const worlds = new Map<number, Mat4>();
     // 文本最先（P6b 1e）：重排、换进状态、图集纹理、强制重建本层；偏移变了的本层与子孙并进这次的 `dirty.layers`，下面照常刷
     this.syncTexts(dirty, state, worlds);
+    // 用户纹理（P11b 步骤 2）：来源写过或解码完成的，换 bind group / 整层重建，在结构与刷新之前，新 draw 照当前状态写 uniform
+    this.syncUserTextures(dirty, state, worlds);
     // 结构先处理：新 draw 按当前状态写 uniform，后面的刷新也落在新 draw 上
     this.rebuildStructures(dirty.structures, state, worlds);
     for (const object of dirty.layers)
@@ -2863,6 +3114,117 @@ export class GpuScene {
     }
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
     if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();
+  }
+
+  /**
+   * 用户纹理换图（P11b 步骤 2，`sync` 里文本之后调）：`dirty.userTextures` 里的属性来源（写入当场、解码完成各标一次）：
+   * 1. （RT 参考的槽从第一次真正写入起才生效，M8：`state.userWritten`，解码完成不算）；
+   * 2. 槽 0 在图像层基础 pass 上的图层整层强制重建（`ensureUserSizing` 换合成 RT 与 fbo，UV 与合成尺寸随 `planLayer`），清它的 fbo；
+   *    被依赖图层的独占 RT 换了尺寸，引用它的 draw 重绑；
+   * 3. 其余用到这些来源的 draw 只重建 bind group、重写 `g_Texture<n>Resolution` 与颜色组（`rebindUserDraw`）；
+   * 4. 没有槽引用的用户纹理销毁（来回切换时 CPU 侧的解码结果还在来源表里，不重复解码）。
+   * 没有标脏的来源时什么都不做，非用户纹理场景的行为不变。
+   */
+  private syncUserTextures(dirty: DirtyState, state: SceneState, worlds: Map<number, Mat4>): void {
+    const names = dirty.userTextures;
+    if (!names.size) return;
+    const rebuilt = new Set<number>();
+    const resized = new Set<number>();
+    let encoder: GPUCommandEncoder | null = null;
+    for (const runtime of this.layers) {
+      const slot = baseUserSlot(runtime.layer);
+      if (!slot || !names.has(slot.source.name)) continue;
+      const before = this.layerTargets.get(runtime.object);
+      this.rebuildLayer(runtime, state, worlds, { force: true });
+      rebuilt.add(runtime.object);
+      if (before && this.layerTargets.get(runtime.object) !== before) resized.add(runtime.object);
+      // WPE 重建合成 RT 与 fbo（内容丢失），带 `clear` 的 fbo 回到清屏色
+      encoder ??= this.device.createCommandEncoder({ label: "user texture clear" });
+      this.clearLayerFbos(encoder, runtime);
+    }
+    if (encoder) this.device.queue.submit([encoder.finish()]);
+    for (const draw of this.draws) {
+      if (draw.step.kind !== "draw" || rebuilt.has(draw.object)) continue;
+      const named = draw.userNames.some((name) => names.has(name));
+      const referencing =
+        resized.size > 0 && Object.values(draw.step.inputs).some((ref) => this.refersToLayer(ref, resized));
+      if (named || referencing) this.rebindUserDraw(draw, state, worlds);
+    }
+    this.releaseUnusedUserTextures();
+  }
+
+  /** 这个输入是不是被依赖图层 `objects` 之一的独占 RT（直接引用，或用户纹理的缺省）。 */
+  private refersToLayer(ref: TextureRef, objects: ReadonlySet<number>): boolean {
+    if (ref.kind === "user") return this.refersToLayer(ref.fallback, objects);
+    return ref.kind === "layer" && objects.has(ref.object);
+  }
+
+  /**
+   * 一个 draw 的用户纹理换了图（不重建图层）：重算按槽的纹理尺寸，重建 bind group，重写 `g_Texture<n>Resolution` / `g_Texture<n>Texel`
+   * 与颜色组（组合层 / instanced 的强制白）。粒子与网格的 draw 不处理（粒子槽编译期照报，P11b 不做）。
+   */
+  private rebindUserDraw(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
+    const { step, program } = draw;
+    if (step.kind !== "draw") return;
+    const slots = Math.max(10, ...program.textures.map((t) => t.slot + 1));
+    draw.textureSizes = Array.from({ length: slots }, (_, slot) => this.inputSize(step.inputs[slot], draw.resources));
+    // 引用 fbo 的 draw 按 swap 状态各缓存一份 bind group，一起作废；静态的重建一份
+    draw.bindGroups.clear();
+    if (draw.bindGroup)
+      draw.bindGroup = this.device.createBindGroup({
+        label: draw.label,
+        layout: draw.layout,
+        entries: draw.entries((effect, name) => this.targets[draw.resources.fbos.resolve(effect, name)]),
+      });
+    const layerState = state.layers.get(draw.object);
+    if (!draw.block || !layerState) return;
+    const values = this.uniformValues(step, draw.layer, layerState, draw.textureSizes, state, worlds, null);
+    const names = [
+      ...layerRefreshNames(step.pass.uniforms),
+      ...Object.keys(values).filter((name) => /^g_Texture\d+(?:Resolution|Texel)$/.test(name)),
+    ];
+    for (const name of names) {
+      const value = values[name];
+      if (value) draw.block.set(name, value);
+    }
+    draw.dirty = true;
+  }
+
+  /** 销毁没有槽引用的用户纹理：按全场 draw 的用户引用当前解析出的纹理名算「在用」。 */
+  private releaseUnusedUserTextures(): void {
+    if (!this.userGpu.size) return;
+    const used = new Set<string>();
+    for (const draw of this.draws)
+      for (const ref of Object.values(draw.step.inputs)) {
+        const crop = ref.kind === "user" ? this.userCrop(ref.slot) : null;
+        if (crop) used.add(crop.key);
+      }
+    for (const [key, gpu] of this.userGpu)
+      if (!used.has(key)) {
+        this.targetBytes -= gpu.width * gpu.height * 4;
+        this.release(gpu.texture);
+        this.userGpu.delete(key);
+      }
+  }
+
+  /**
+   * 槽 0 换图后本层独占的尺寸相关资源换新尺寸（P11b 步骤 2，`rebuildLayer` 在建 draw 之前调，同文本层的 `ensureTextResources`）：
+   * 合成 RT（来自共享池，尺寸变了就丢掉引用、`ensureComposites` 按新尺寸重借；共享池只增不减、没有「没人用就释放」的办法，旧尺寸的留在池里，
+   * 只在换图频繁且尺寸各异时多占显存）、effect fbo（独占，原地换尺寸）、被依赖图层的
+   * 独占 RT（释放旧的、按新尺寸建，`ensureComposites` 再接回第 0 张；引用它的 draw 由 `syncUserTextures` 重绑）。
+   */
+  private ensureUserSizing(runtime: LayerRuntime): void {
+    const { layer, resources } = runtime;
+    const [width, height] = this.compositeSizeOf(layer, [this.width, this.height]);
+    if (resources.composites.some((target) => target.width !== width || target.height !== height))
+      resources.composites.length = 0;
+    const own = this.layerTargets.get(runtime.object);
+    if (own && (own.width !== width || own.height !== height)) {
+      this.releaseTarget(own);
+      this.createLayerTarget(layer);
+      resources.composites.length = 0;
+    }
+    this.resizeTextFbos(runtime.object, [width, height]);
   }
 
   /**
@@ -3073,6 +3435,7 @@ export class GpuScene {
     // 先取管线（缺了就抛，这时什么都还没换）；文本层再按新排版换独占的合成 RT、fbo 与图集，新 draw 才绑得到
     const prepared = this.preparedOf(plan, runtime);
     if (runtime.layer.text) this.ensureTextResources(runtime, plan, state);
+    else if (baseUserSlot(runtime.layer)) this.ensureUserSizing(runtime);
     const built = this.buildLayer(runtime, plan, prepared, state, worlds);
     for (const draw of runtime.draws) {
       this.draws.delete(draw);

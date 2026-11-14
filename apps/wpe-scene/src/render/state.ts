@@ -120,6 +120,11 @@ export interface DirtyState {
    * 只改模拟器的步进率（`ParticleSystem.setRate`），先于 `particles` 的重算。同一个对象可以两边都有。
    */
   rates: Set<number>;
+  /**
+   * 写过（或解码完成）的用户纹理属性来源（P11b 步骤 2，属性名）：`GpuScene.sync` 重新解析用到它的槽——换 bind group 与
+   * `g_Texture<n>Resolution`，槽 0 整层重建。写入当场进来（RT 参考的槽从第一次写入起才生效，M8），解码完成再进一次。
+   */
+  userTextures: Set<string>;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -291,6 +296,21 @@ export class SceneState {
   private dirtyParticles = new Set<number>();
   private dirtyTexts = new Set<number>();
   private rateParticles = new Set<number>();
+  private dirtyUserTextures = new Set<string>();
+  /**
+   * 用户纹理属性来源的当前值（P11b 步骤 2，属性名 → 路径）：只存值，不存 GPU 资源。运行中写入才有项；加载时的初值在宿主的来源表里
+   * （`usertex/sources.ts`）。值只认字符串，别的类型当空串（缺省纹理，p11-REPORT / rea-p11-textures：属性不是 `scenetexture` 时永远缺省）。
+   */
+  readonly userTextures = new Map<string, string>();
+  /**
+   * 加载之后真正写过的用户纹理属性来源（只增）：`write` 的 `user-texture` 分支记，解码完成（`touchUserTexture`）不记。`GpuScene` 的 RT 参考槽
+   * 以它为门闸（M8：加载时就有值的不生效，运行中第一次写入之后才生效）。
+   */
+  readonly userWritten = new Set<string>();
+  /**
+   * 宿主登记的监听：用户纹理属性来源写入时同步调（名字与规整后的值），宿主交给来源表异步解码。`write` 不等解码，解码完成由宿主 `touchUserTexture`。
+   */
+  onUserTexture: ((name: string, value: string) => void) | null = null;
   /** 可变 effect 加载时没备好的图层：切换走整场重编译。 */
   private readonly frozenLayers = new Set<number>();
 
@@ -411,6 +431,13 @@ export class SceneState {
    */
   touchText(object: number): void {
     if (this.textFields.has(object)) this.dirtyTexts.add(object);
+  }
+
+  /**
+   * 把一个用户纹理来源标进 `dirtyUserTextures`（P11b 步骤 2）：宿主的来源表解码完成（或回到缺省）时调，下一次 `sync` 换上。
+   */
+  touchUserTexture(name: string): void {
+    this.dirtyUserTextures.add(name);
   }
 
   /**
@@ -607,6 +634,16 @@ export class SceneState {
       this.writeText(target.object, target.field, textFieldFromJson(target.field, conditioned(binding, raw)));
       return "applied";
     }
+    // 用户纹理（P11b 步骤 2）：值只认字符串，别的类型当空串；记下、标脏（RT 参考的槽从这里起才生效，M8），同步交给宿主的来源表解码，
+    // 解码完成时宿主再 `touchUserTexture`。条件无意义，不看
+    if (target.kind === "user-texture") {
+      const value = typeof raw === "string" ? raw : "";
+      this.userTextures.set(target.name, value);
+      this.userWritten.add(target.name);
+      this.dirtyUserTextures.add(target.name);
+      this.onUserTexture?.(target.name, value);
+      return "applied";
+    }
     this.bloom = writeBloomParam(this.bloom, target.field, raw, binding.condition);
     this.bloomDirty = true;
     return "applied";
@@ -623,6 +660,7 @@ export class SceneState {
       particles: this.dirtyParticles,
       texts: this.dirtyTexts,
       rates: this.rateParticles,
+      userTextures: this.dirtyUserTextures,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
@@ -632,6 +670,7 @@ export class SceneState {
     this.dirtyParticles = new Set();
     this.dirtyTexts = new Set();
     this.rateParticles = new Set();
+    this.dirtyUserTextures = new Set();
     return dirty;
   }
 }

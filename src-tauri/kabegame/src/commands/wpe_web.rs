@@ -411,7 +411,7 @@ async fn build_wpe_web_state_with_raw(
 /// 网页壁纸页面（`file:` iframe，wpe-web-capability，`frames: "sub"`）拉取状态。普通网页壁纸不看传入的 id：
 /// 按调用方自己的文档 URL（CEF runtime 把 `file:` frame 的 `Origin` 改写成完整文档 URL，页面伪造不了）
 /// 在网页壁纸目录索引里找到它所在的那张，页面拿不到别的图片的 metadata。场景宿主的确切入口文档
-/// 则必须传库内场景壁纸的 id；不写用户文件 grants。
+/// 则必须传库内场景壁纸的 id；场景的 `scenetexture` 文件放行同样在这里覆盖。
 ///
 /// 返回之前用同一份 metadata 覆盖这张壁纸的 `file:` 放行：页面只能从拉取结果得知用户新选的路径，拿到时
 /// 闸门一定已经认它；撤销旧选择由目录索引跟随 `metadataId` 补丁完成。
@@ -434,9 +434,12 @@ pub async fn wpe_web_pull_state(
         if !index.is_scene(&id) {
             return Err("not a scene wallpaper in the library".into());
         }
-        return build_wpe_web_state(&id)
+        let (state, raw) = build_wpe_web_state_with_raw(&id)
             .await?
-            .ok_or_else(|| "scene wallpaper row missing".into());
+            .ok_or_else(|| "scene wallpaper row missing".to_string())?;
+        // 场景的 `scenetexture` 文件放行与网页壁纸同两个时机：这里在交出状态前覆盖，`metadataId` 补丁时由目录索引重算
+        index.replace_grants(&id, user_file_grants(&raw));
+        return Ok(state);
     }
     Err("not inside a web wallpaper".into())
 }

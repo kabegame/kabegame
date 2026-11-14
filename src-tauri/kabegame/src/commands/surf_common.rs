@@ -142,9 +142,13 @@ pub(crate) fn surf_toast_for_host<R: Runtime>(
     let Some(webview) = app.get_webview(&label) else {
         return;
     };
-    let message_json = serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
+    let message_json =
+        serde_json::to_string(message).unwrap_or_else(|_| "\"下载失败\"".to_string());
     let kind_json = serde_json::to_string(kind).unwrap_or_else(|_| "\"failed\"".to_string());
-    let script = format!("window.__kabegame_toast?.({}, {});", message_json, kind_json);
+    let script = format!(
+        "window.__kabegame_toast?.({}, {});",
+        message_json, kind_json
+    );
     let _ = webview.eval(script.as_str());
 }
 
@@ -176,7 +180,11 @@ pub(crate) fn is_archive_download(name: Option<&str>, mime_type: Option<&str>) -
     let by_name = name
         .and_then(|name| std::path::Path::new(name).extension())
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(ext)));
+        .is_some_and(|ext| {
+            EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(ext))
+        });
     let by_mime = mime_type
         .and_then(|mime| mime.split(';').next())
         .map(str::trim)
@@ -195,7 +203,11 @@ pub(crate) fn is_app_package_download(name: Option<&str>, mime_type: Option<&str
     let by_name = name
         .and_then(|name| std::path::Path::new(name).extension())
         .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(ext)));
+        .is_some_and(|ext| {
+            EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(ext))
+        });
     let by_mime = mime_type
         .and_then(|mime| mime.split(';').next())
         .map(str::trim)
@@ -321,7 +333,10 @@ mod tests {
             surf_host_candidates("WWW.XiaoHongShu.com"),
             vec!["www.xiaohongshu.com", "xiaohongshu.com"]
         );
-        assert_eq!(surf_host_candidates("weibo.com"), vec!["weibo.com", "www.weibo.com"]);
+        assert_eq!(
+            surf_host_candidates("weibo.com"),
+            vec!["weibo.com", "www.weibo.com"]
+        );
     }
 
     #[test]
@@ -339,18 +354,33 @@ mod tests {
             Some("application/vnd.android.package-archive; charset=binary")
         ));
         // 媒体与压缩包都不算安装包，各自走原逻辑。
-        assert!(!is_app_package_download(Some("photo.png"), Some("image/png")));
-        assert!(!is_app_package_download(Some("probe.zip"), Some("application/zip")));
+        assert!(!is_app_package_download(
+            Some("photo.png"),
+            Some("image/png")
+        ));
+        assert!(!is_app_package_download(
+            Some("probe.zip"),
+            Some("application/zip")
+        ));
         assert!(!is_app_package_download(None, None));
     }
 
     #[test]
     fn archive_download_detected_by_name_or_mime() {
         assert!(is_archive_download(Some("probe.zip"), None));
-        assert!(is_archive_download(Some("a.TAR.GZ"), Some("application/octet-stream")));
-        assert!(is_archive_download(None, Some("application/x-7z-compressed; charset=binary")));
+        assert!(is_archive_download(
+            Some("a.TAR.GZ"),
+            Some("application/octet-stream")
+        ));
+        assert!(is_archive_download(
+            None,
+            Some("application/x-7z-compressed; charset=binary")
+        ));
         // 认不出类型的不算压缩包，交给后处理按字节判定
-        assert!(!is_archive_download(Some("octet.bin"), Some("application/octet-stream")));
+        assert!(!is_archive_download(
+            Some("octet.bin"),
+            Some("application/octet-stream")
+        ));
         assert!(!is_archive_download(Some("photo.png"), Some("image/png")));
         assert!(!is_archive_download(None, None));
     }
@@ -374,7 +404,10 @@ mod tests {
             host_from_surf_label("surf-example_com:7").as_deref(),
             Some("example.com")
         );
-        assert_eq!(host_from_surf_label("surf-example_com:").as_deref(), Some("example.com"));
+        assert_eq!(
+            host_from_surf_label("surf-example_com:").as_deref(),
+            Some("example.com")
+        );
     }
 
     #[test]

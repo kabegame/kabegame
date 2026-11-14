@@ -64,8 +64,7 @@ fn main() {
     // 变化——不加这条,前端产物更新后增量编译会沿用旧资产(混合构建流程里宿主重出
     // dist 后,容器 cargo 必须感知;见 scripts/build-web.ts)。
     if std::env::var_os("CARGO_FEATURE_WEB").is_some() {
-        let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../dist-kabegame-web");
+        let dist = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dist-kabegame-web");
         println!("cargo:rerun-if-changed={}", dist.display());
     }
 
@@ -118,8 +117,7 @@ fn main() {
         // Localizing `sqlite3_*` makes softokn resolve to the system libsqlite3;
         // our own rusqlite calls are resolved at static-link time and unaffected.
         // (This was the real cause of the CEF crash — NOT the tao runtime.)
-        if std::env::var("CARGO_FEATURE_STANDARD").is_ok()
-        {
+        if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
             let out = std::env::var("OUT_DIR").unwrap();
             let map = std::path::Path::new(&out).join("hide-sqlite-symbols.map");
             std::fs::write(&map, "{\n  local:\n    sqlite3_*;\n};\n")
@@ -134,9 +132,7 @@ fn main() {
         println!("cargo:rustc-link-arg-bin=kabegame=-Wl,-rpath,@executable_path/../Frameworks");
         if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
             println!("cargo:rustc-link-arg-bin=kabegame-cef-helper=-Wl,-rpath,@executable_path/../Frameworks");
-            println!(
-                "cargo:rustc-link-arg-examples=-Wl,-rpath,@executable_path/../Frameworks"
-            );
+            println!("cargo:rustc-link-arg-examples=-Wl,-rpath,@executable_path/../Frameworks");
         }
         // Give bare dev executables an embedded Info.plist for Retina, process
         // naming and automatic GPU switching. An app bundle's plist takes

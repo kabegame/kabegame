@@ -72,9 +72,14 @@
  *   不可见时照画、只跳过上屏，在渲染器里（`render/scene.ts` 的 `layerOpsToRun`）。
  *   引用方材质里 `_rt_imageLayerComposite_<id>_a` 的槽（`ScenePass.layerComposites`）给出纹理来源 `{ kind: "layer", object }`，各种图层的
  *   计划都认（`passInputs`）。
+ * - **用户纹理**（P11b 步骤 2，`ScenePass.userTextures`）：槽上登记了用户纹理时，纹理来源是 `{ kind: "user" }`，带缺省纹理（`fallback`，静态纹理或
+ *   被依赖图层的 RT），渲染器按来源当前的值解析：有图用那张（图像尺寸 = 纹理尺寸 = 裁后宽高），没有图用缺省。槽 0 换图后 UV 上界、UV 内缩、
+ *   合成 RT 与 effect fbo 都按新纹理重算（WPE 的就绪回调 `FUN_140209360`，rea-p11b 4.2）：`planLayer` 的 `userBase` 是这一刻基础材质槽 0
+ *   的用户纹理尺寸（`UserBase`），没有图时不传、与没有用户纹理时逐字节相同。
  */
 import { FRAMEBUFFER_RT, type SceneFbo, type SceneLayer, type ScenePass, type SceneTexture } from "../compile/bundle";
 import { isRopeRenderer, MAX_CHILD_DEPTH, particleDraws, type SceneParticle } from "../compile/particles";
+import type { UserTextureSlot } from "../compile/usertextures";
 import { NO_INSET, textureUvExtent, uvInset } from "./layout";
 
 export type TextureRef =
@@ -91,7 +96,13 @@ export type TextureRef =
    * 别的图层的独占 RT（P8 步骤 4，`ScenePass.layerComposites`，rea-p8-render 2.1）：被依赖图层（`objects` 下标 `object`）合成链的第 0 张，
    * 跨帧保留。采样器随那张 RT（同它自己的合成 RT，`compositeSampling`），`g_Texture<n>Resolution` 是 RT 的尺寸。
    */
-  | { kind: "layer"; object: number };
+  | { kind: "layer"; object: number }
+  /**
+   * 用户纹理（P11b 步骤 2，`ScenePass.userTextures` 的一个槽）：运行中可以换成场景外的图。渲染器（`GpuScene.resolveUser`）按来源当前的值
+   * 解析，有图用那张（`rgba8unorm`、直通 alpha、1 级 mip、按槽的 `nearest` / `clamp` 采样、无各向异性），没有图（值为空、读不出、还在解码、
+   * 加载时就有值的 RT 参考槽）用 `fallback`：编译期的缺省纹理（`{ kind: "texture" }` 或被依赖图层的 `{ kind: "layer" }`），同没有用户纹理时。
+   */
+  | { kind: "user"; slot: UserTextureSlot; fallback: TextureRef };
 export type TargetRef =
   { kind: "scene" } | { kind: "composite"; index: number } | { kind: "fbo"; effect: number; name: string };
 
@@ -374,13 +385,26 @@ export function isPassthroughBlend(colorBlendMode: number): boolean {
  * 一个 pass 的静态输入：材质静态纹理，与别的图层的独占 RT（P8 步骤 4，`ScenePass.layerComposites` → `{ kind: "layer" }`）。图像层、形状、
  * 粒子、模型的计划都从这里起，运行时纹理（快照、fbo）各自再加。
  */
-function passInputs(pass: Pick<ScenePass, "textures" | "layerComposites">): Record<number, TextureRef> {
+function passInputs(
+  pass: Pick<ScenePass, "textures" | "layerComposites"> & { userTextures?: ScenePass["userTextures"] },
+): Record<number, TextureRef> {
   const inputs: Record<number, TextureRef> = {};
   for (const [slot, index] of Object.entries(pass.textures)) inputs[Number(slot)] = { kind: "texture", index };
   for (const [slot, object] of Object.entries(pass.layerComposites ?? {}))
     inputs[Number(slot)] = { kind: "layer", object };
+  // 用户纹理（P11b 步骤 2）：只有缺省是静态纹理或被依赖图层 RT 的槽才包（`fallback` 要有）；属性来源以外的（封面 P11c、快捷方式 P11d）现在不处理
+  for (const slot of pass.userTextures ?? []) {
+    const fallback = inputs[slot.slot];
+    if (slot.source.kind === "property" && fallback) inputs[slot.slot] = { kind: "user", slot, fallback };
+  }
   return inputs;
 }
+
+/**
+ * 基础材质槽 0 的用户纹理这一刻的尺寸（P11b 步骤 2）：`GpuScene` 解析来源当前的值后传给 `planLayer`。用户纹理的图像尺寸 = 纹理尺寸 = 裁后宽高，
+ * 所以 UV 上界是 1，UV 内缩按它的尺寸。
+ */
+export type UserBase = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
 
 /**
  * 合成 RT 引用的 0 ↔ 1 对调（P8 步骤 4）：被依赖图层排完后最后一次写入落在 1 时，整份计划对调，让它落在 0（独占的 `_a`，rea-p8-render 2.3）。
@@ -594,6 +618,11 @@ export function planLayer(
   text: TextPlanLayout | null = null,
   /** 场景目标尺寸：fullscreen 合成 RT 的 `"scene"` 取它（`compositeSize`）。只看 `reasons` 的调用方可以不给。 */
   sceneSize?: readonly [number, number],
+  /**
+   * 基础材质槽 0 此刻的用户纹理尺寸（P11b 步骤 2）：有图时代替槽 0 静态纹理，UV 上界、UV 内缩、合成 RT 尺寸（含 instanced、fullscreen）都按它算
+   * （rea-p11b 4.2 `FUN_140209360`）。没有图 / 没有用户纹理时不传，结果逐字节同以前。
+   */
+  userBase?: UserBase | null,
 ): LayerPlan {
   // 粒子对象没有图像 pass，也不编 effect（`compileScene`）
   if (layer.particle) return planParticleLayer(layer);
@@ -612,7 +641,10 @@ export function planLayer(
   const mesh = text?.mesh ?? null;
   if (sceneText && !mesh) return { composite: null, steps, reasons };
   if (layer.passes.length > 1) reasons.push("render:multi-pass");
-  const baseTexture = sceneText || base.textures[0] === undefined ? undefined : textures[base.textures[0]];
+  // 槽 0 的用户纹理有图时代替缺省纹理（P11b 步骤 2）：缺省不是静态纹理（RT）的槽也一样，所以不看 `base.textures[0]`
+  const baseTexture: TextureSize | undefined = sceneText
+    ? undefined
+    : (userBase ?? (base.textures[0] === undefined ? undefined : textures[base.textures[0]]));
   // 文本层的图层尺寸来自排版（`TextLayout.size`），不来自 JSON 的 `size`（rea-p6b-layout 1.4）
   const size = sceneText ? text!.size : layer.size;
   const uv = textureUvExtent(baseTexture);
@@ -923,7 +955,12 @@ export function planLayer(
   } else if (finalEffect < 0) reasons.push("render:no-final-pass");
 
   // 文本层的合成 RT 取排版的 `compositeSize` 再两维 `max(4, ·)`（P6b 1e，`textCompositeSize`）
-  const [width, height] = sceneText ? textCompositeSize(text!) : compositeSize(layer, baseTexture, sceneSize);
+  // fullscreen 的合成 RT 取新纹理的图像尺寸（rea-p11b 4.2：`fullscreen` 尺寸 = 新纹理的图像尺寸）
+  const sizing =
+    userBase && Array.isArray(layer.fullscreenSize)
+      ? { ...layer, fullscreenSize: [userBase.width, userBase.height] as [number, number] }
+      : layer;
+  const [width, height] = sceneText ? textCompositeSize(text!) : compositeSize(sizing, baseTexture, sceneSize);
   // 被依赖（P8 步骤 4）：最后一次写入要落在合成 RT 0（独占的 `_a`，rea-p8-render 2.3 按奇偶选起点；`p8-dep` 的 A2：基础 pass → 池化、
   // effect → 独占）。落在 1 时整份计划对调
   const planned = depended && current === 1 ? swapCompositeIndices(steps) : steps;

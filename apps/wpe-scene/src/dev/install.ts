@@ -46,6 +46,11 @@ export function installSceneDevProbe(host: SceneHost): void {
       /** P9a 步骤 2：每段视频纹理的位置、`currentTime`、`paused`、`lastDrawn`、`fresh`、`failed`、尺寸与丢帧数、当前帧号。 */
       videos: () => host.videos(),
       /**
+       * P11b 步骤 2：每个用户纹理属性来源（`scenetexture`）的当前值、状态（`ready` / `empty` / `failed` / `unsupported`…）、解码后的整张尺寸、
+       * 最近一次解码用时与已登记的纹理名（`值x比例·10`）。
+       */
+      userTextures: () => host.userTextureProbe(),
+      /**
        * P10a 步骤 3：每条关键帧动画的 `id`、时钟主人、`t`、`getFrame()`、`isPlaying()`、标志、最后写入的值，以及最近 600 帧 `frame()`
        * 的耗时（`frameMs`）。
        */

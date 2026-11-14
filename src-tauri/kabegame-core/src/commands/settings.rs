@@ -69,9 +69,7 @@ pub fn get_auto_deduplicate() -> Result<Value, String> {
 }
 
 pub fn get_dedup_update_metadata() -> Result<Value, String> {
-    Ok(Value::Bool(
-        Settings::global().get_dedup_update_metadata(),
-    ))
+    Ok(Value::Bool(Settings::global().get_dedup_update_metadata()))
 }
 
 /// 写入 + 同步运行时调度器。调度器从设置里读新值，故必须写在前。

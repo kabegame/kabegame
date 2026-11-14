@@ -132,7 +132,11 @@ struct PinShortcutResponse {
 }
 
 #[derive(serde::Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum SurfContentEvent {
     // Kotlin 仍会附 `url`（地址同步用的旧协议字段）；serde 默认忽略未知字段。
     PageFinished {
@@ -287,16 +291,16 @@ fn on_content_event<R: Runtime>(
             if !is_current_session(&session.label) {
                 return;
             }
-            let _ = Storage::global()
-                .update_surf_record_cookie_if_changed(&session.record_id, &cookie);
+            let _ =
+                Storage::global().update_surf_record_cookie_if_changed(&session.record_id, &cookie);
         }
         SurfContentEvent::Closed { cookie } => {
             // 同站重开时旧 Activity 的 closed 可能晚于新会话：只有仍是当前会话才落库。
             if !is_current_session(&session.label) {
                 return;
             }
-            let _ = Storage::global()
-                .update_surf_record_cookie_if_changed(&session.record_id, &cookie);
+            let _ =
+                Storage::global().update_surf_record_cookie_if_changed(&session.record_id, &cookie);
             let cleared = SESSION
                 .lock()
                 .map(|mut current| {
@@ -373,8 +377,14 @@ fn on_content_event<R: Runtime>(
         } => {
             let (app, session) = (app.clone(), session.clone());
             tauri::async_runtime::spawn(async move {
-                on_page_download(&app, &session, &url, suggested_name.as_deref(), mime_type.as_deref())
-                    .await;
+                on_page_download(
+                    &app,
+                    &session,
+                    &url,
+                    suggested_name.as_deref(),
+                    mime_type.as_deref(),
+                )
+                .await;
             });
         }
     }
@@ -408,9 +418,8 @@ async fn on_page_download<R: Runtime>(
             let url_json = serde_json::to_string(url).unwrap_or_default();
             let options = serde_json::to_string(&serde_json::json!({ "name": name }))
                 .unwrap_or_else(|_| "{}".to_string());
-            let _ = webview.eval(
-                format!("window.__kb_media_download__?.({url_json}, {options});").as_str(),
-            );
+            let _ = webview
+                .eval(format!("window.__kb_media_download__?.({url_json}, {options});").as_str());
         }
         "http" | "https" => {
             // 安装包既不是媒体也不在压缩包名单：提前拒绝，否则会入队、下载完才报「格式不受支持」。
@@ -435,8 +444,7 @@ async fn on_page_download<R: Runtime>(
                 collect_run_id: None,
                 source_url: webview.url().ok().map(|url| url.to_string()),
             };
-            if let Err(error) =
-                super::surf_receive::enqueue_surf_download(&webview, request).await
+            if let Err(error) = super::surf_receive::enqueue_surf_download(&webview, request).await
             {
                 surf_toast_for_host(app, &session.host, &error, "failed");
             }
@@ -534,12 +542,13 @@ pub async fn surf_start_session<R: Runtime>(
     let desktop_user_agent = kabegame_core::plugin::v8::android_desktop_user_agent();
     // builder 放进块作用域：泛型 runtime 下它不是 Send，不能活过后面的 await（快捷方式入口在 spawn 里调用本函数）。
     let window = {
-        let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed.clone()))
-            .activity_name("SurfActivity")
-            .created_by_activity_name(creator_activity)
-            // 超过阈值（JSON 8 KiB / raw 1 KiB）的 invoke 响应与 Channel 消息要靠 fetch
-            // `<scheme>://ipc.localhost` 取。安卓默认 http，在 https 页面里属于混合内容，改用 https。
-            .use_https_scheme(true);
+        let mut builder =
+            WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed.clone()))
+                .activity_name("SurfActivity")
+                .created_by_activity_name(creator_activity)
+                // 超过阈值（JSON 8 KiB / raw 1 KiB）的 invoke 响应与 Channel 消息要靠 fetch
+                // `<scheme>://ipc.localhost` 取。安卓默认 http，在 https 页面里属于混合内容，改用 https。
+                .use_https_scheme(true);
         for script in surf_initialization_scripts() {
             builder = builder.initialization_script(script);
         }
@@ -612,10 +621,7 @@ pub async fn surf_start_session<R: Runtime>(
     match attached {
         Ok(Ok(response)) => {
             if let Ok(mut current) = SESSION.lock() {
-                if let Some(active) = current
-                    .as_mut()
-                    .filter(|active| active.label == label)
-                {
+                if let Some(active) = current.as_mut().filter(|active| active.label == label) {
                     active.ipc_available = response.ipc_available;
                 }
             }
@@ -665,7 +671,11 @@ fn shortcut_args(record: &kabegame_core::storage::SurfRecord) -> ShortcutArgs {
     let name = record.name.trim();
     ShortcutArgs {
         host: record.host.clone(),
-        label: if name.is_empty() { record.host.clone() } else { name.to_string() },
+        label: if name.is_empty() {
+            record.host.clone()
+        } else {
+            name.to_string()
+        },
         icon: record
             .icon
             .as_deref()

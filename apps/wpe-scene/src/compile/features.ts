@@ -405,7 +405,8 @@ const SUPPORTED_BIND = new Set(["name", "index", "conditions"]);
 // 顶层 `combos`（P7d 步骤 3）：只给 `conditions` 求值，不并进各 pass 的 COMBO（p7-REPORT「流体 effect 的条件」）；写成对象
 // （绑用户属性）时 WPE 在条件里当 0（`combos` 不是 effect 对象的属性，不经属性框架展开，rea-p7d-fluid 第 1 节「补」），照做、不报
 const SUPPORTED_EFFECT_INSTANCE = new Set(["file", "id", "name", "passes", "visible", "combos"]);
-const SUPPORTED_INSTANCE_PASS = new Set(["id", "combos", "constantshadervalues", "textures"]);
+// `usertextures`（P11b）：按槽合并进材质 pass，由 `compilePass` 按项报（`parseUserTextures`），这里放行
+const SUPPORTED_INSTANCE_PASS = new Set(["id", "combos", "constantshadervalues", "textures", "usertextures"]);
 
 /**
  * 递归扫描一个 JSON 值：属性关键帧 `{animation: {…}, value}` 报 `value:animation`（`isKeyframedValue`，P4a 步骤 5，
@@ -863,8 +864,8 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
  *   null 槽在 instance 上什么意思没测）；
  * - `combos` 不是对象：`object:instance:combos`（值绑属性由合并后 pass 的 `checkPassFeatures` 报 `combo:user-binding`；语料都是
  *   `{"version": 2}`，和材质本身相同）；
- * - `usertextures` 取值有效：`material:usertextures`（`$mediaThumbnail`、用户属性纹理、`usershortcut`，同材质 pass 上的这个键；WPE
- *   绑了用户纹理时还强制 `g_Color4 = (1, 1, 1, 1)`，一起照报）；
+ * - `usertextures`（P11b）：按槽合并进材质 pass（`mergeUserTextures`），合并后的 pass 在 `compilePass` 里按项报
+ *   `usertextures:*`（`parseUserTextures`；属性来源已实现，封面 / 快捷方式 / 参考尺寸等照报）。这里不再整个报 `material:usertextures`；
  * - 其它键取值有效：`object:instance:<键>`。
  */
 export function checkInstanceFeatures(object: SceneObject, unsupported: Set<string>): void {
@@ -882,7 +883,7 @@ export function checkInstanceFeatures(object: SceneObject, unsupported: Set<stri
     } else if (key === "combos") {
       if (typeof value !== "object" || Array.isArray(value)) unsupported.add("object:instance:combos");
     } else if (key === "usertextures") {
-      if (active(value)) unsupported.add("material:usertextures");
+      // 按项报：见上，由 compilePass 处理
     } else if (active(value)) unsupported.add(`object:instance:${key}`);
   }
 }
@@ -1194,8 +1195,10 @@ export function checkPassFeatures(
   for (const value of Object.values(pass.combos ?? {}))
     if (value && typeof value === "object") unsupported.add("combo:user-binding");
   if (alphaWritingUsed(pass.alphawriting)) unsupported.add("material:alphawriting");
-  for (const key of ["keepaspect", "usertextures", "usertexturereference"])
-    if (active(pass[key])) unsupported.add(`material:${key}`);
+  // `usertextures` / `usertexturereference`（P11b）不在这里报：按项报的 `usertextures:*` 要知道缺省纹理解析成什么，由 `compilePass`
+  // 调 `parseUserTextures` 给出（有效属性来源不再报，封面 `:system`、快捷方式 `:usershortcut` 等 P11c、P11d）。
+  // pass 级 `keepaspect` 中性：WPE 材质 pass 不读这个键，`keepaspect` 只在 `usertextures` 的对象项上读（rea-p11-textures 第 1 节，
+  // rea-p11b「顺带」），对象项上的 `keepaspect: true` 报 `usertextures:keepaspect`
   for (const [key, value] of Object.entries(pass))
     if (
       !SUPPORTED_PASS.has(key) &&

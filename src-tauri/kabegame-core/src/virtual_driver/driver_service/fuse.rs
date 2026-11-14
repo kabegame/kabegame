@@ -195,8 +195,7 @@ impl VirtualDriveServiceTrait for VirtualDriveService {
         ];
 
         // 挂载文件系统
-        let session =
-            spawn_mount(fs, &mount_path, &cfg).map_err(|e| format!("挂载失败: {}", e))?;
+        let session = spawn_mount(fs, &mount_path, &cfg).map_err(|e| format!("挂载失败: {}", e))?;
 
         // 保存状态
         let mount_point_arc: Arc<str> = Arc::from(mount_path.to_string_lossy().to_string());

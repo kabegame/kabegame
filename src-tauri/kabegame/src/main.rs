@@ -6,10 +6,7 @@
 )]
 
 fn main() {
-    #[cfg(all(
-        feature = "standard",
-        not(target_os = "android"),
-    ))]
+    #[cfg(all(feature = "standard", not(target_os = "android"),))]
     {
         // 单例检测：若已有实例在运行则转发请求并退出（必须在 init_shortcut 之前，避免第二实例注册快捷键失败导致 panic）
         kabegame::startup::try_forward_to_existing_instance_and_exit();

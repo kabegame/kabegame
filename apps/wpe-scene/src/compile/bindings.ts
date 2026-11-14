@@ -195,6 +195,12 @@ export type BindingTarget =
    * 不标脏，渲染器每帧选相机时读（`render/camera.ts` 的 `activeCameraObject`）。取值规则 `cameraValue`。`object` 是 `objects` 下标。
    */
   | { kind: "camera"; object: number; field: CameraField }
+  /**
+   * 用户纹理的属性来源（P11b，`compile/usertextures.ts`）：属性 `name` 换了值，就地记进 `SceneState`，宿主的 `usertex` 读文件、解码、裁切，
+   * 下一帧换上用到它的槽，不重编译（WPE 的 setter 只在值变了时把材质记进待刷新集合，rea-p11-textures 2.1）。每个属性只登记一条，
+   * 不管它绑在几个槽上。值只认字符串，别的类型当空串（缺省纹理）。
+   */
+  | { kind: "user-texture"; name: string }
   | { kind: "recompile"; reason: RecompileReason; path: string };
 
 /** 相机对象的就地字段（P5d 步骤 3）。 */
@@ -270,6 +276,15 @@ export class BindingCollector {
     const binding = userBindingOf(value);
     if (binding) this.list.push({ ...binding, target });
     return resolveValue(value, properties);
+  }
+
+  /**
+   * 登记用户纹理的属性来源（P11b）：目标是 `{ kind: "user-texture"; name }`，不带 condition。同一个属性绑在多个槽、多个 pass 上也只登记一条
+   * （运行时按属性名一份当前值，再分发给用到它的槽）。
+   */
+  bindUserTexture(name: string): void {
+    const exists = this.list.some((item) => item.target.kind === "user-texture" && item.target.name === name);
+    if (!exists) this.list.push({ property: name, target: { kind: "user-texture", name } });
   }
 }
 

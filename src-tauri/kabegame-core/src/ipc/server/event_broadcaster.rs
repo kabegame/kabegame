@@ -4,7 +4,7 @@
 
 use std::sync::OnceLock;
 
-use crate::ipc::events::{ArcAppEvent, AppEventKind};
+use crate::ipc::events::{AppEventKind, ArcAppEvent};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 /// 全局事件广播器单例
