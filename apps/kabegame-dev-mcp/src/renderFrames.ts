@@ -6,7 +6,7 @@
  *   [--timeline-log <日志> [--timeline-track <轨迹>] [--cursors log|track] [--cursor x,y] [--window WxH] [--gap error|split]
  *    [--audio <录制>] [--seed N] [--passes 1|2] [--no-fr]]
  *   [--fps N | --time 秒]                           不给日志时：每帧 g_Time = 帧号 / fps（名义时间），或每帧同一个时刻
- *   [--canvas WxH] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON] [--gif-dts 秒,秒…|JSON]
+ *   [--canvas WxH [--style fill|fit|stretch|center] [--render-mode target|scene]] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON] [--gif-dts 秒,秒…|JSON]
  *   [--user-properties <JSON 文件或 JSON 串>] [--scripts [--clock 毫秒] [--script-seed N]]
  *   [--trace-frames 250 [--trace-readback 0,"text glyphs"] [--trace-max-vertices N]]
  *   [--reuse-host] [--timeout 秒] [--overwrite]
@@ -64,6 +64,10 @@ export interface RenderFramesOptions {
   /** 时刻模式：每帧同一个 g_Time。 */
   time?: number;
   canvas?: Point;
+  /** 壁纸样式（只在按指定尺寸画时有效，要和 `canvas` 一起给）；不给时不传（工具缺省 fill）。 */
+  style?: "fill" | "fit" | "stretch" | "center";
+  /** 给了 `canvas` 时怎么画：`target`（缺省）或 `scene`（旧的读回画布）；不给时不传。 */
+  renderMode?: "target" | "scene";
   postprocess?: "disabled" | "enabled" | "ultra" | "follow";
   pointer?: Point;
   videoTime?: number | Record<string, number>;
@@ -167,6 +171,8 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
         fps: { type: "string" },
         time: { type: "string" },
         canvas: { type: "string" },
+        style: { type: "string" },
+        "render-mode": { type: "string" },
         postprocess: { type: "string" },
         pointer: { type: "string" },
         "video-time": { type: "string" },
@@ -238,6 +244,29 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
     if (str("time") !== undefined) options.time = parseNumber(str("time")!, "--time");
   }
   if (str("canvas")) options.canvas = parseSize(str("canvas")!, "--canvas");
+  // 样式与画法（phase-render-size）：形状与和 --canvas 的关系先查，参数错不开宿主
+  const style = str("style");
+  if (style !== undefined) {
+    if (style === "tile")
+      throw new ArgError("--style 不收 tile：WPE 的对齐方式只有 fill / fit / stretch / center 四种能对上");
+    if (!["fill", "fit", "stretch", "center"].includes(style)) {
+      throw new ArgError(`--style 只收 fill / fit / stretch / center：${style}`);
+    }
+    if (!options.canvas)
+      throw new ArgError("--style 要和 --canvas 一起给（样式做进投影的裁切边距，没有窗口尺寸就没有裁切）");
+    options.style = style as RenderFramesOptions["style"];
+  }
+  const renderMode = str("render-mode");
+  if (renderMode !== undefined) {
+    if (renderMode !== "target" && renderMode !== "scene")
+      throw new ArgError(`--render-mode 只收 target / scene：${renderMode}`);
+    if (renderMode === "target" && !options.canvas)
+      throw new ArgError("--render-mode target 要和 --canvas 一起给（按它的尺寸画）");
+    if (renderMode === "scene" && options.style !== undefined && options.style !== "fill") {
+      throw new ArgError(`--render-mode scene 读回固定按 fill 铺放，不能同时指定 --style ${options.style}`);
+    }
+    options.renderMode = renderMode;
+  }
   const postprocess = str("postprocess");
   if (postprocess !== undefined) {
     if (!["disabled", "enabled", "ultra", "follow"].includes(postprocess)) {
@@ -326,6 +355,8 @@ export function renderArgs(options: RenderFramesOptions, frame: number, host?: s
     args.time = options.time ?? frame / options.fps!;
   }
   if (options.canvas) args.canvas = options.canvas;
+  if (options.style !== undefined) args.style = options.style;
+  if (options.renderMode !== undefined) args.renderMode = options.renderMode;
   if (options.postprocess) args.postprocess = options.postprocess;
   if (options.pointer) args.pointer = options.pointer;
   if (options.videoTime !== undefined) args.videoTime = options.videoTime;

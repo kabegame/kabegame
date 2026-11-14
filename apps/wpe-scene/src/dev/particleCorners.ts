@@ -35,6 +35,7 @@ import type { ParticleSystem } from "../particles/system";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
 import { CORNER_UVS, trailDrawable } from "../particles/vertices";
 import type { CursorStepInput } from "../render/cursor";
+import type { ProjectionCrop } from "../render/layout";
 import { acquireGpu } from "../render/device";
 import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
 import {
@@ -429,6 +430,8 @@ export function probePerspective(
 export interface ProbeCameraObjects {
   layers: readonly SceneLayer[];
   general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">;
+  /** 投影的裁切（`renderFrame` 按指定尺寸画时给，同 `GpuScene.build` 的 `target`）：带进相机对象帧的投影；缺省不裁。 */
+  crop?: ProjectionCrop;
 }
 
 /** 探针的相机对象（`cameraObjectLayers`）；场景没有相机对象时为 undefined。 */
@@ -472,6 +475,7 @@ export function frameCamera(
         cameraLayers: objects.layers,
         state,
         general: objects.general,
+        ...(objects.crop ? { crop: objects.crop } : {}),
         time,
         perspective: perspective
           ? { camera: perspective.camera, path, dt: step, width: perspective.size[0], height: perspective.size[1] }

@@ -479,6 +479,37 @@ describe("粒子回放、轨迹与四角", () => {
     });
   });
 
+  test("render 的 style / renderMode（phase-render-size）：原样转给后端；不合法回 400，field 指到那一项", async () => {
+    const { backend, calls } = fakeBackend();
+    await withServer(backend, async (base) => {
+      const ok = await post(`${base}/__kabegame_dev/hosts/h-1/render`, {
+        imageId: 14312,
+        canvas: [1920, 800],
+        style: "fit",
+        renderMode: "target",
+      });
+      assert.equal(ok.status, 200);
+      await ok.body?.cancel();
+      assert.deepEqual(calls, [
+        ["hostRender", "h-1", { imageId: "14312", canvas: [1920, 800], style: "fit", renderMode: "target" }],
+      ]);
+      for (const [body, field] of [
+        [{ imageId: "1", canvas: [1920, 800], style: "tile" }, "style"],
+        [{ imageId: "1", style: "fit" }, "style"],
+        [{ imageId: "1", canvas: [1920, 800], renderMode: "both" }, "renderMode"],
+        [{ imageId: "1", renderMode: "target" }, "renderMode"],
+        [{ imageId: "1", canvas: [1920, 800], renderMode: "scene", style: "fit" }, "renderMode"],
+      ] as const) {
+        const res = await post(`${base}/__kabegame_dev/hosts/h-1/render`, body);
+        assert.equal(res.status, 400, JSON.stringify(body));
+        const error = await res.json();
+        assert.equal(error.layer, "rest");
+        assert.equal(error.field, field, error.error);
+      }
+      assert.equal(calls.length, 1, "参数错时不调后端");
+    });
+  });
+
   test("render 的脚本值（第 6 批）：scriptValues 原样转给后端；不合法回 400，field 指到那一项", async () => {
     const { backend, calls } = fakeBackend();
     await withServer(backend, async (base) => {

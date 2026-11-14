@@ -230,8 +230,9 @@ describe("renderFrame 跑场景脚本的接线（第 7 批）", () => {
   });
 
   it("screenResolution 是 canvas ?? window ?? [1920, 1080]；scripts: true 用缺省时钟", async () => {
-    // 替身设备没有读回画布要的纹理与管线，读回时失败；脚本环境在那之前已经建好（失败时照样释放）
-    await expect(renderFrame({ ...BASE, scripts: true, canvas: [1280, 720] })).rejects.toThrow();
+    // 替身设备没有读回画布要的纹理与管线，读回时失败；脚本环境在那之前已经建好（失败时照样释放）。
+    // 给了 canvas 缺省按指定尺寸画、直接读回场景目标（不失败），要走读回画布得给 renderMode: scene
+    await expect(renderFrame({ ...BASE, scripts: true, canvas: [1280, 720], renderMode: "scene" })).rejects.toThrow();
     expect(log.slice(-2)).toEqual(["dispose", "destroy"]);
     await renderFrame({ ...BASE, scripts: true, window: [800, 600] });
     const inputs = vi.mocked(createProbeScripts).mock.calls.map(([input]) => input);

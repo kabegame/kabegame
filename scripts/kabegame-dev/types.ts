@@ -496,11 +496,22 @@ export interface RenderRequest {
    */
   window?: [number, number];
   /**
-   * 读回画布尺寸 `[宽, 高]`（第 5 批，两个正整数，各不超过 16384）：探针在读回那一帧编码完场景之后，用产品上屏的同一份着色器与
-   * 线性采样器按 `fill`（居中盖满裁切）把场景目标铺进这么大的 `rgba8unorm` 纹理，读回它；不给时读回场景目标（逐字节同以前）。
-   * 光标按它换算（`window ?? canvas`）。只改读回、不改渲染：`g_Screen` 等内置 uniform 仍按场景目标算。
+   * 窗口（画布）尺寸 `[宽, 高]`（两个正整数，各不超过 16384），模拟的壁纸窗口，光标按它换算（`window ?? canvas`）：
+   * - 正交场景缺省**按这个尺寸画**（`renderMode: "target"`，phase-render-size）：场景目标就是它，壁纸样式 `style` 照 WPE 做进正交投影的四个
+   *   裁切边距，读回场景目标本身；`g_Screen`、快照、泛光、反射、深度、fullscreen 合成 RT 随它走；
+   * - `renderMode: "scene"` 是旧的读回画布（第 5 批）：场景按场景分辨率画，读回那一帧用产品上屏的同一份着色器与线性采样器按 `fill`（居中盖满
+   *   裁切）铺进这么大的 `rgba8unorm` 纹理；只改读回、不改渲染；
+   * - 透视场景本来就按它画。
+   * 不给时读回场景目标（逐字节同以前）。
    */
   canvas?: [number, number];
+  /**
+   * 壁纸样式（只在按指定尺寸画时有效，要和 `canvas` 一起给）：`fill`（缺省，WPE 对齐方式 0）、`fit`（1，对齐方式 1 / 3 清屏用 `schemecolor`）、
+   * `stretch`（2）、`center`（3）；`tile` 不收。
+   */
+  style?: "fill" | "fit" | "stretch" | "center";
+  /** 给了 `canvas` 时怎么画：`target`（缺省）或 `scene`（旧的读回画布，字节同以前）。 */
+  renderMode?: "target" | "scene";
   /**
    * 脚本值（第 6 批，最多 64 项）：原样交给探针，探针在建好场景之后、回放之前经字段脚本的绑定目标写进状态。用途：kbp 测试工程的 FR
    * 帧号块（MCP 按读回帧号算颜色，带 `optional: true`）。结果的 `meta.scriptValues` 逐项写明写没写。P6b 1e-3 起也收文本层的运行中
@@ -726,6 +737,17 @@ export interface RenderMeta {
   /** 读回图片的尺寸：给了 `canvas` 时是画布，否则是场景目标。 */
   width: number;
   height: number;
+  /**
+   * 这次的画法（phase-render-size）：`mode`（`target` 按指定尺寸画 / `scene` 场景分辨率 / `perspective` 透视场景按画布）、样式、WPE 对齐方式、
+   * 投影裁切边距 `[E0 左, E1 上, E2 右, E3 下]`（场景单位）与清屏色（`schemecolor`，用 `clearcolor` 时 null）；之前的宿主产物没有这一项。
+   */
+  render?: {
+    mode: "target" | "scene" | "perspective";
+    style: "fill" | "fit" | "stretch" | "center" | null;
+    alignment: number | null;
+    edges: [number, number, number, number] | null;
+    clear: [number, number, number] | null;
+  };
   /** 读回的画布 `[宽, 高]`，没给 `canvas` 时为 null（第 5 批；之前的宿主产物没有这一项）。 */
   canvas?: [number, number] | null;
   /** 场景目标（离屏渲染目标）的尺寸（第 5 批；之前的宿主产物没有这一项）。 */

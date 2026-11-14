@@ -193,6 +193,31 @@ describe("参数", () => {
     bad(["--frames", "1", "--out", "o", "--fps", "20"], /--image/);
   });
 
+  test("按指定尺寸画（phase-render-size）：--style / --render-mode 要和 --canvas 一起给、形状不对报错，每帧参数原样带上", () => {
+    const cwd = path.resolve("/repo");
+    const head = ["--image", "13", "--frames", "1", "--out", "o", "--fps", "20"];
+    const fit = parseCli([...head, "--canvas", "1920x800", "--style", "fit", "--render-mode", "target"], cwd);
+    assert.equal(fit.style, "fit");
+    assert.equal(fit.renderMode, "target");
+    const plain = parseCli([...head, "--canvas", "1920x800"], cwd);
+    assert.equal(plain.style, undefined);
+    assert.equal(plain.renderMode, undefined);
+    assert.equal(parseCli([...head, "--canvas", "1920x800", "--render-mode", "scene"], cwd).renderMode, "scene");
+    const bad = (args: string[], re: RegExp) => assert.throws(() => parseCli([...head, ...args], cwd), re);
+    bad(["--canvas", "1920x800", "--style", "tile"], /不收 tile/);
+    bad(["--canvas", "1920x800", "--style", "cover"], /fill \/ fit \/ stretch \/ center/);
+    bad(["--style", "fit"], /要和 --canvas 一起给/);
+    bad(["--canvas", "1920x800", "--render-mode", "both"], /target \/ scene/);
+    bad(["--render-mode", "target"], /要和 --canvas 一起给/);
+    bad(["--canvas", "1920x800", "--render-mode", "scene", "--style", "center"], /固定按 fill 铺放/);
+    const out = path.resolve("/o");
+    const args = renderArgs({ ...base(out), canvas: [1920, 800], style: "center", renderMode: "target" }, 2);
+    assert.equal(args.style, "center");
+    assert.equal(args.renderMode, "target");
+    const none = renderArgs({ ...base(out), canvas: [1920, 800] }, 2);
+    assert.equal("style" in none || "renderMode" in none, false, "不给时每帧参数和以前一样");
+  });
+
   test("跑场景脚本（第 7 批）：--scripts 两种模式都收；--clock / --script-seed 只跟着 --scripts、范围不对报错", () => {
     const cwd = path.resolve("/repo");
     const head = ["--image", "13", "--frames", "1", "--out", "o"];

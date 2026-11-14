@@ -228,6 +228,7 @@ import {
   type UserBase,
 } from "./graph";
 import {
+  type Edges,
   drawMatrixOf,
   effectiveVisible,
   everyAncestor,
@@ -235,6 +236,7 @@ import {
   groupViewProjection,
   layerQuad,
   particleViewProjection,
+  type ProjectionCrop,
   rootObject,
   sceneTargetSize,
   sceneViewProjection,
@@ -1237,6 +1239,13 @@ export class GpuScene {
   private shake: [number, number] = [0, 0];
   /** 当前的正交缩放（P5a 步骤 4，`setCamera`）：建场景时取编译期的 `general.zoom`，两份基准矩阵按它算。 */
   private zoom = 1;
+  /**
+   * 按指定尺寸画（dev 探针，`build` 的 `target`，只对正交场景）：投影的裁切边距与窗口（= 场景目标）尺寸，所有正交投影与透视粒子投影都带它
+   * （建场景、`setCamera` 的 zoom 重算）。产品不传，恒为 null，字节不变。
+   */
+  private crop: ProjectionCrop | null = null;
+  /** 按指定尺寸画时主场景目标每帧的清屏色（对齐方式 1 / 3 的 `schemecolor`）；null 用 `clearcolor`。反射 pass 不用它，见 `encode`。 */
+  private targetClear: readonly [number, number, number] | null = null;
   /** `setCamera` 改了相机、draw 还没按新相机重写：下一次 `setParallax` 整体刷一遍（与视差的刷新合成一次）。 */
   private cameraDirty = false;
   /**
@@ -1462,6 +1471,13 @@ export class GpuScene {
        * 正交场景不给，照旧按 `general.width/height`。透视场景没给时按 1920×1080。
        */
       size?: readonly [number, number];
+      /**
+       * 按指定尺寸画（dev 探针，`.claude/plans/wpe-import/3-scene/phase-render-size.md`，只对正交场景）：场景目标就是 `size`（超过设备上限时报错、
+       * 不缩），样式做进正交投影的四个裁切边距（`edges`，`alignEdges`，照 WPE），`clear` 非空时主场景目标每帧清成它而不是 `clearcolor`
+       * （对齐方式 1 / 3 的 `schemecolor`；`clearenabled` 仍决定清不清）。视差、`g_EyePosition`、抖动是场景单位，不受影响；
+       * `g_Screen`、快照、泛光、反射、深度、fullscreen 合成 RT 随场景目标走。产品不传，字节不变；透视场景传了也忽略（本来就按 `size` 画）。
+       */
+      target?: { size: readonly [number, number]; edges: Edges; clear: readonly [number, number, number] | null };
     } = {},
   ): Promise<GpuScene> {
     if (options.texts) state.setTexts(options.texts);
@@ -1478,7 +1494,7 @@ export class GpuScene {
     device.pushErrorScope("validation");
     let failure: unknown = null;
     try {
-      await scene.populate(state, options.size);
+      await scene.populate(state, options.size, options.target);
     } catch (error) {
       failure = error;
     }
@@ -2448,13 +2464,28 @@ export class GpuScene {
     };
   }
 
-  private async populate(state: SceneState, size?: readonly [number, number]): Promise<void> {
+  private async populate(
+    state: SceneState,
+    size?: readonly [number, number],
+    target?: { size: readonly [number, number]; edges: Edges; clear: readonly [number, number, number] | null },
+  ): Promise<void> {
     const { device, bundle } = this;
     const { general } = bundle;
+    // 按指定尺寸画（dev 探针）：正交场景的场景目标 = 指定尺寸，超设备上限直接报错、不缩（缩了就不是指定的尺寸）
+    const sized = !general.perspective && target ? target : null;
+    if (sized) {
+      const max = device.limits.maxTextureDimension2D;
+      if (sized.size[0] > max || sized.size[1] > max)
+        throw new SceneRenderError([`render:target-size:${sized.size[0]}x${sized.size[1]}>${max}`]);
+      this.crop = { edges: sized.edges, window: [sized.size[0], sized.size[1]] };
+      this.targetClear = sized.clear;
+    }
     // 透视场景按画布尺寸（P5d 步骤 2，已定 6）；正交场景按场景尺寸
-    const [width, height] = general.perspective
-      ? sceneTargetSize(size?.[0] ?? 1920, size?.[1] ?? 1080, device.limits.maxTextureDimension2D)
-      : sceneTargetSize(general.width, general.height, device.limits.maxTextureDimension2D);
+    const [width, height] = sized
+      ? [sized.size[0], sized.size[1]]
+      : general.perspective
+        ? sceneTargetSize(size?.[0] ?? 1920, size?.[1] ?? 1080, device.limits.maxTextureDimension2D)
+        : sceneTargetSize(general.width, general.height, device.limits.maxTextureDimension2D);
     const hdr = (this.hdr = general.postprocess.hdr);
     const format = (this.format = sceneTargetFormat(hdr));
     this.width = width;
@@ -2522,12 +2553,14 @@ export class GpuScene {
     const setup = device.createCommandEncoder({ label: "scene setup" });
     // 建场景时 s 是 (0, 0)：两份相同，`setCamera` 换成带抖动的。缩放取编译期的值（P5a 步骤 4），预热的指针反投影就带上它
     this.zoom = general.fields.zoom;
-    const sceneProjection = sceneViewProjection(general, this.zoom);
+    const sceneProjection = sceneViewProjection(general, this.zoom, this.crop?.edges);
     this.view.viewProjection = this.baseViewProjection = sceneProjection;
     this.view.sceneCamera = { projection: sceneProjection, view: identity() };
     this.view.perspectiveViewProjection = this.basePerspectiveViewProjection = particleViewProjection(
       general,
       this.zoom,
+      undefined,
+      this.crop ?? undefined,
     );
     // 透视场景（P5d 步骤 2）：建场景时取加载时的相机（路径从头、g_Time 0），渲染器第一帧就用 `setCamera` 换成当帧的；预热的指针
     // 反投影用它。透视粒子那一份（`perspectiveViewProjection`）照旧（透视场景里的透视粒子照报 `camera:perspective:particle`）
@@ -3438,8 +3471,13 @@ export class GpuScene {
     }
     if (zoomed) {
       this.zoom = zoom;
-      this.baseViewProjection = sceneViewProjection(this.bundle.general, zoom);
-      this.basePerspectiveViewProjection = particleViewProjection(this.bundle.general, zoom);
+      this.baseViewProjection = sceneViewProjection(this.bundle.general, zoom, this.crop?.edges);
+      this.basePerspectiveViewProjection = particleViewProjection(
+        this.bundle.general,
+        zoom,
+        undefined,
+        this.crop ?? undefined,
+      );
     }
     this.shake = [x, y];
     const still = x === 0 && y === 0;
@@ -4670,6 +4708,9 @@ export class GpuScene {
     // 粒子层现排时的世界矩阵（P4e 步骤 2）：这一刻的状态下，一条父链只算一次
     const worlds = new Map<number, Mat4>();
     const [r, g, b] = clearcolor;
+    // 按指定尺寸画时主场景目标改用 `schemecolor`（对齐方式 1 / 3）；反射 pass 仍用 `clearcolor`（下面 r、g、b）
+    // TODO:[WPE_SCENE] WPE 的设备清屏色是共享状态，读码推断反射 RT 也会拿到 `schemecolor`，没测；测过再让反射 pass 也用 `targetClear`
+    const [mr, mg, mb] = this.targetClear ?? clearcolor;
     // 平面反射 RT（P13b1）：反射关时每帧清成清屏色，在主 pass 之前，不看 clearenabled（rea-p13-passes 1.1）
     // 反射开（P13b2）时改由下面的反射 pass 清屏并作画
     const reflectionTarget = this.reflectionList ? (this.reflectionTargets?.reflection ?? null) : null;
@@ -4700,7 +4741,7 @@ export class GpuScene {
         label: scene ? "scene" : "group",
         colorAttachments: [
           scene
-            ? { view, clearValue: { r, g, b, a: 1 }, loadOp, storeOp: "store" }
+            ? { view, clearValue: { r: mr, g: mg, b: mb, a: 1 }, loadOp, storeOp: "store" }
             : { view, loadOp: "load", storeOp: "store" },
         ],
         // 深度附件（P5d 步骤 1）只挂在真正的场景目标上（组的合成 RT 不挂）：和颜色一起清成 0（反向 Z），其余 load；`clearenabled` 为

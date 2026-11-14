@@ -155,6 +155,29 @@ describe("checkReplay", () => {
     rejects400(() => checkRenderReplay({ window: [0, 1080], canvas: [1280, 720] }), "window", /两个正数/);
   });
 
+  test("渲染的 style 与 renderMode（phase-render-size）：形状，以及和 canvas 的关系", () => {
+    const canvas = [1920, 800];
+    for (const style of ["fill", "fit", "stretch", "center"]) {
+      assert.equal(checkRenderReplay({ canvas, style }), undefined, style);
+    }
+    assert.equal(checkRenderReplay({ canvas, renderMode: "target" }), undefined);
+    assert.equal(checkRenderReplay({ canvas, renderMode: "scene" }), undefined);
+    assert.equal(checkRenderReplay({ canvas, renderMode: "scene", style: "fill" }), undefined);
+    // 不给 canvas 的 renderMode: scene 无害（探针读回场景目标），不拦
+    assert.equal(checkRenderReplay({ renderMode: "scene" }), undefined);
+    rejects400(() => checkRenderReplay({ canvas, style: "tile" }), "style", /不收 tile/);
+    rejects400(() => checkRenderReplay({ canvas, style: "cover" }), "style", /fill \/ fit \/ stretch \/ center 之一/);
+    rejects400(() => checkRenderReplay({ canvas, style: 1 }), "style");
+    rejects400(() => checkRenderReplay({ style: "fit" }), "style", /要和 canvas 一起给/);
+    rejects400(() => checkRenderReplay({ canvas, renderMode: "both" }), "renderMode", /target \/ scene 之一/);
+    rejects400(() => checkRenderReplay({ renderMode: "target" }), "renderMode", /要和 canvas 一起给/);
+    rejects400(
+      () => checkRenderReplay({ canvas, renderMode: "scene", style: "center" }),
+      "renderMode",
+      /scene 读回固定按 fill 铺放/,
+    );
+  });
+
   test("渲染的脚本值（第 6 批）：数组、最多 64 项；object / field / value / optional 的形状，错在哪项报哪项", () => {
     const fr = { object: "FR", field: "color", value: [173 / 255, 3 / 255, 1], optional: true };
     assert.equal(checkRenderReplay({ scriptValues: [fr] }), undefined);

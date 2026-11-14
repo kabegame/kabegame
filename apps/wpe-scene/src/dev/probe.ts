@@ -19,9 +19,14 @@
  *   `GpuScene.setCamera`（同渲染器与 WPE），视差点带同一帧的 s 推进；读回的那一帧先 `setCamera` 再 `setParallax`，矩阵与眼位跟着变。
  * - 缩放（P5a 步骤 4）：`general.zoom` 随 s 一起交给 `setCamera`（`frameCamera`），取当时的 `state.general.zoom`；`particleTrack` 的
  *   跟随点同样按带缩放的投影反投影。
- * - 读回画布（kabegame-chromium 第 5 批）：`renderFrame` 收 `canvas: [宽, 高]` 时，读回那一帧编码完场景之后，用产品上屏的同一份
- *   着色器与采样器（`render/blit.ts`）按 `fill` 把场景目标铺进这么大的 `rgba8unorm` 纹理、读回它；光标的换算窗口是 `window ?? canvas`。
- *   只改读回、不改渲染（`g_Screen` 等仍按场景目标算）。不给 `canvas` 时读回场景目标，逐字节同以前。
+ * - 按指定尺寸画（phase-render-size）：正交场景给了 `canvas: [宽, 高]`（且没给 `renderMode: "scene"`）时，场景目标就是 `canvas`，壁纸样式
+ *   `style`（缺省 fill，tile 不收）照 WPE 的对齐方式做进正交投影的四个裁切边距（`alignEdges`），对齐方式 1 / 3 的清屏色是 `schemecolor`；
+ *   读回场景目标本身，不再经上屏铺放；`g_Screen`、快照、泛光、反射、深度、fullscreen 合成 RT 随目标走，视差、`g_EyePosition`、抖动是场景单位。
+ *   光标按窗口坐标：`g_PointerPosition` 原样，控制点跟随点与光标命中按裁切后的 VP 反投影窗口坐标，视差的指针是窗口归一化坐标 × 场景尺寸。
+ *   决定在 `renderTarget.ts`，结果的 `render` 说明这次的画法。
+ * - 读回画布（kabegame-chromium 第 5 批，现为 `renderMode: "scene"`）：`renderFrame` 收 `canvas: [宽, 高]` 且 `renderMode: "scene"` 时，读回那一帧
+ *   编码完场景之后，用产品上屏的同一份着色器与采样器（`render/blit.ts`）按 `fill` 把场景目标铺进这么大的 `rgba8unorm` 纹理、读回它；
+ *   光标的换算窗口是 `window ?? canvas`。只改读回、不改渲染（`g_Screen` 等仍按场景目标算）。不给 `canvas` 时读回场景目标，逐字节同以前。
  * - 透视相机（P5d 步骤 2）：透视场景按画布尺寸渲染，场景目标取 `canvas ?? window ?? [1920, 1080]`；回放按 `particles.dts` 推路径
  *   状态（同渲染器，没给 dts 时 t = 0），读回的那一帧按推到那时的状态求相机，抖动按它的 `g_Time`（`times` 的最后一项）；视差点
  *   W = H = 0、不移动对象（`particleCorners.ts` 的 `frameCamera` / `replayReadback`）。`hostRenderFrame` 按路径起点求相机。
@@ -67,6 +72,17 @@ import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting, SceneReflectionSetting } from "../compile/postprocess";
 import { reflectionOverride } from "./reflectionOverride";
+import { schemeColor } from "../sceneStyle";
+import {
+  checkRenderMode,
+  checkRenderStyle,
+  checkStyleUnused,
+  otherRender,
+  planSizedTarget,
+  styleNeedsSchemeColor,
+  wantsSizedTarget,
+  type RenderDescription,
+} from "./renderTarget";
 import type { ParticleAudioFrame } from "../particles/audio";
 import { particleTrack, type ParticleTrack } from "../particles/track";
 import {
@@ -278,13 +294,26 @@ export interface RenderFrameOptions {
    */
   window?: [number, number];
   /**
-   * 读回画布尺寸 `[宽, 高]`（像素，两个正整数，各不超过设备的 `maxTextureDimension2D`，否则抛错）：读回那一帧编码完场景之后，用产品
-   * 上屏的同一份着色器与线性采样器（`render/blit.ts`），按 `fill`（`scenePlacement("fill", …)`，居中盖满裁切，同 WPE 测试窗口）把
-   * 场景目标铺进这么大的 `rgba8unorm` 纹理（留白色黑，`fill` 没有留白），读回它；PNG 与 `.rgba` 都是画布尺寸。画布就是模拟的壁纸
-   * 窗口，没给 `window` 时光标按它换算。只改读回、不改渲染：内置 uniform（`g_Screen`、`g_TexelSize`）仍按场景目标算，同产品。
-   * 不给时读回场景目标，逐字节同以前。
+   * 窗口（画布）尺寸 `[宽, 高]`（像素，两个正整数，各不超过设备的 `maxTextureDimension2D`，否则抛错），模拟的壁纸窗口：
+   * - 正交场景缺省**按这个尺寸画**（`renderMode: "target"`）：场景目标就是它，`style` 做进正交投影的裁切边距，读回场景目标本身；
+   *   `g_Screen`、快照、泛光、反射、深度、fullscreen 合成 RT 随它走；光标按窗口坐标（见 `style`）。
+   * - `renderMode: "scene"` 时是旧的读回画布：场景按场景分辨率画，读回那一帧用产品上屏的同一份着色器与线性采样器（`render/blit.ts`）
+   *   按 `fill` 铺进这么大的 `rgba8unorm` 纹理；只改读回、不改渲染，`g_Screen` 等仍按场景目标算，同产品。
+   * - 透视场景本来就按它画（P5d 步骤 2）。
+   * PNG 与 `.rgba` 都是这个尺寸；没给 `window` 时光标按它换算。不给时读回场景目标，逐字节同以前。
    */
   canvas?: [number, number];
+  /**
+   * 壁纸样式（只在按指定尺寸画时有效）：`fill` 等比盖满裁溢出（WPE 对齐方式 0，缺省，WPE 测试窗口的缺省）、`fit` 等比放进留白（1，WPE 叫 fill）、
+   * `stretch` 拉满（2）、`center` 一个场景像素对一个窗口像素（3）；`tile` 没有对应的对齐方式，报错。对齐方式 1 / 3 整个目标清成 `schemecolor`
+   * （用户属性已并进，工程没声明时 0.5 灰），0 / 2 用 `clearcolor`。其它画法（`scene`、透视、没给 `canvas`）下给了非 fill 的值报错。
+   */
+  style?: "fill" | "fit" | "stretch" | "center";
+  /**
+   * 给了 `canvas` 时怎么画：`target`（缺省，正交场景按 `canvas` 尺寸画）或 `scene`（旧的读回画布：场景分辨率 + 读回时按 fill 铺放，字节同以前）。
+   * 显式要 `target` 而没给 `canvas` 报错；透视场景不看它。
+   */
+  renderMode?: "target" | "scene";
   /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（读回的尺寸，alpha 置 255）存 `<key>.rgba`。 */
   key?: string;
   /** 有不支持项也渲染（同 dev 强制渲染）。默认 true。 */
@@ -343,12 +372,14 @@ export interface RenderFrameOptions {
 }
 
 export interface RenderFrameResult {
-  /** 读回图片的尺寸：给了 `canvas` 时是画布，否则是场景目标。 */
+  /** 读回图片的尺寸：给了 `canvas` 时是画布，否则是场景目标（按指定尺寸画时两者相同）。 */
   width: number;
   height: number;
+  /** 这次的画法（`renderTarget.ts`）：模式、样式、对齐方式、投影裁切边距与清屏色。 */
+  render: RenderDescription;
   /** 读回的画布 `[宽, 高]`；没给 `canvas`（读回场景目标）时为 null。 */
   canvas: [number, number] | null;
-  /** 场景目标（离屏渲染目标）的尺寸：场景分辨率，超过设备上限时等比缩小。 */
+  /** 场景目标（离屏渲染目标）的尺寸：场景分辨率（超过设备上限时等比缩小）；按指定尺寸画时是 `canvas`。 */
   sceneTarget: [number, number];
   /** 场景目标的格式（`rgba16float` 是 HDR 场景）；读回的画布总是 `rgba8unorm`。 */
   format: string;
@@ -453,6 +484,10 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   // 先查读回画布与光标窗口（`window ?? canvas`，两个都给而不同时抛错），参数错时不编译；纹理上限要等取到设备再查
   const canvas = options.canvas === undefined ? undefined : checkCanvas(options.canvas);
   const cursorWindow = pointerWindow(options.window, canvas);
+  // 样式与画法（phase-render-size）的形状同样先查；用不用得上要等编译出场景才知道（透视或正交）
+  const style = checkRenderStyle(options.style);
+  const renderMode = checkRenderMode(options.renderMode);
+  if (renderMode === "target" && !canvas) throw new Error("renderMode: target 要同时给 canvas（按它的尺寸画）");
   // 视频时刻（P9a 步骤 3）的形状同样先查；路径对不对要编译之后才知道（`ProbeVideos` 里查）
   const videoTime = checkVideoTime(options.videoTime);
   const gifDts = checkGifDts(options.gifDts);
@@ -504,6 +539,25 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     videosReady.catch(() => {});
     const state = SceneState.fromBundle(bundle);
     const { width: sceneWidth, height: sceneHeight } = bundle.general;
+    // 按指定尺寸画（phase-render-size）：正交场景给了 `canvas` 且没要 `scene` 时，场景目标 = 画布，样式做进投影裁切边距；清屏色只在
+    // 对齐方式 1 / 3 时要，从属性全集（用户值已并入）取
+    const perspectiveScene = !!bundle.general.perspective;
+    const sized = wantsSizedTarget({ renderMode, hasCanvas: !!canvas, perspective: perspectiveScene })
+      ? planSizedTarget(
+          [sceneWidth, sceneHeight],
+          canvas!,
+          style,
+          styleNeedsSchemeColor(style)
+            ? schemeColor(
+                await readProbeUserProperties(reader, options.projectDir, options.sceneAssets, options.userProperties),
+              )
+            : undefined,
+        )
+      : null;
+    const render = sized?.render ?? otherRender(perspectiveScene ? "perspective" : "scene");
+    if (!sized) checkStyleUnused(style, options.style !== undefined, render.mode as "scene" | "perspective");
+    // 裁切（相机对象帧与 `GpuScene` 的投影都带它）；窗口就是画布
+    const crop = sized ? { edges: sized.target.edges, window: sized.target.size } : undefined;
     // 透视场景（P5d 步骤 2）按画布尺寸渲染：场景目标取 `canvas ?? window ?? [1920, 1080]`（同渲染器的 `fullResolution`）
     const target: [number, number] | undefined = bundle.general.perspective
       ? [...(canvas ?? cursorWindow ?? [1920, 1080])]
@@ -529,7 +583,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     }
     const pointers = replayPointers(
       { pointer: options.pointer, pointers: timeline?.pointers ?? options.pointers, window: cursorWindow },
-      target ?? [sceneWidth, sceneHeight],
+      // 按指定尺寸画时窗口就是场景目标：光标原样（`windowPointer` 的同尺寸分支），反投影交给带裁切的 VP
+      target ?? (sized ? sized.target.size : [sceneWidth, sceneHeight]),
       options.particles?.dts.length,
     );
     const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
@@ -539,6 +594,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       relayout: texts.relayout,
       userTextures,
       size: target,
+      ...(sized ? { target: sized.target } : {}),
     });
     // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器；profile 帧用第 0 项的指针
     const pointer = pointers.pointers[0];
@@ -546,7 +602,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const parallaxFrame = { pointer, width: sceneWidth, height: sceneHeight };
     let parallax = initialParallaxState(sceneWidth, sceneHeight, !!perspective);
     // profile 帧的相机（透视场景的路径状态接着交给回放，同视差点）；相机对象（P5d 步骤 3）每帧按状态选，同渲染器
-    const cameraObjects = probeCameraObjects(bundle);
+    const baseCameraObjects = probeCameraObjects(bundle);
+    const cameraObjects = baseCameraObjects && crop ? { ...baseCameraObjects, crop } : baseCameraObjects;
     const profileCamera = frameCamera(scene, state, sceneHeight, perspective, undefined, cameraObjects);
     // 场景脚本（第 7 批）：建好之后读回之前一直在，出错也在 finally 里释放
     let probeScripts: ProbeScripts | null = null;
@@ -725,7 +782,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       scene.encode(encoder, state);
       const format = scene.targetTexture!.format as ReadbackFormat;
       let raw: Uint8Array | Float32Array;
-      if (canvas) {
+      // 按指定尺寸画时场景目标就是画布，直接读回它；`scene` 模式才经上屏铺放
+      if (canvas && !sized) {
         // 读回画布（第 5 批）：场景之后在同一个编码器里按 fill 上屏到画布纹理再读回。校验错误（比如管线建不出来）不静默读回空图
         device.pushErrorScope("validation");
         const blit = encodeCanvasBlit(device, encoder, scene, canvas);
@@ -751,7 +809,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         if (error) (frame.trace.errors ??= []).push(`读回帧 WebGPU 校验出错：${error.message}`);
         traced = await traceArtifacts(key, frame);
       }
-      const [width, height] = canvas ?? [scene.width, scene.height];
+      const [width, height] = canvas && !sized ? canvas : [scene.width, scene.height];
       const rgba = raw instanceof Uint8Array ? raw : quantize8(raw);
       for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
       storeProbeBytes(`${key}.png`, await encodePng(rgba, width, height));
@@ -769,6 +827,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       return {
         width,
         height,
+        render,
         canvas: canvas ? [canvas[0], canvas[1]] : null,
         sceneTarget: [scene.width, scene.height],
         format,

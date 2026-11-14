@@ -252,6 +252,37 @@ export function checkCanvas(value: unknown, window?: [number, number], field = "
   return canvas;
 }
 
+/** 渲染的壁纸样式（按指定尺寸画时有效）：照 WPE 的对齐方式，tile 没有对应、不收。 */
+export const RENDER_STYLES = ["fill", "fit", "stretch", "center"] as const;
+/** 渲染的画法：`target` 按 `canvas` 尺寸画（缺省），`scene` 是旧的场景分辨率 + 读回时按 fill 铺放。 */
+export const RENDER_MODES = ["target", "scene"] as const;
+
+/**
+ * 渲染的 `style` 与 `renderMode`（phase-render-size）：形状校验加上和 `canvas` 的关系。
+ * - `style` 是 fill / fit / stretch / center；tile 单独报错（WPE 没有对应的对齐方式）；要和 `canvas` 一起给（没有尺寸就没有裁切）；
+ * - `renderMode` 是 target / scene；`target` 要和 `canvas` 一起给；
+ * - `renderMode: "scene"` 读回固定按 fill 铺放，不能同时指定别的 `style`。
+ */
+export function checkRenderStyleMode(body: { style?: unknown; renderMode?: unknown; canvas?: unknown }): void {
+  if (body.style !== undefined) {
+    if (body.style === "tile") fail("style", "不收 tile：WPE 的对齐方式只有 fill / fit / stretch / center 四种能对上");
+    if (!(RENDER_STYLES as readonly unknown[]).includes(body.style)) {
+      fail("style", `要是 ${RENDER_STYLES.join(" / ")} 之一，收到 ${shown(body.style)}`);
+    }
+    if (body.canvas === undefined) fail("style", "要和 canvas 一起给：样式做进投影的裁切边距，没有窗口尺寸就没有裁切");
+  }
+  if (body.renderMode !== undefined) {
+    if (!(RENDER_MODES as readonly unknown[]).includes(body.renderMode)) {
+      fail("renderMode", `要是 ${RENDER_MODES.join(" / ")} 之一，收到 ${shown(body.renderMode)}`);
+    }
+    if (body.renderMode === "target" && body.canvas === undefined)
+      fail("renderMode", "target 要和 canvas 一起给（按它的尺寸画）");
+    if (body.renderMode === "scene" && body.style !== undefined && body.style !== "fill") {
+      fail("renderMode", `scene 读回固定按 fill 铺放，不能同时指定 style ${shown(body.style)}`);
+    }
+  }
+}
+
 /** 渲染与四角的逐帧指针 `pointers`：要有 `particles`，和 `particles.dts` 等长。 */
 function checkPointers(value: unknown, particles: ParticleReplay | undefined): [number, number][] {
   if (!particles) fail("pointers", "要和 particles 一起给（逐帧指针是回放的每一帧）");
@@ -531,8 +562,8 @@ export function checkScripts(value: unknown, field = "scripts"): RenderScriptsRe
  * 渲染请求里的回放：给了 `particles` 就校验它，并拒绝同时给 `time`（探针此时忽略 `time`，读回那一帧的 `g_Time` 取
  * `particles.times` 的末项或 dt 累计值）。没给时原样返回 undefined。
  * 光标一并校验（P5a 收尾）：`pointer` 是一个点；`pointers` 要有 `particles`、和 `particles.dts` 等长、不和 `pointer` 同给；`window` 是
- * `[宽, 高]`。读回画布 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。脚本值 `scriptValues`（第 6 批）
- * 见 `checkScriptValues`，不要求有 `particles`。视频时刻 `videoTime`（P9a 步骤 3）见 `checkVideoTime`，同样不要求有 `particles`。
+ * `[宽, 高]`。窗口（画布）尺寸 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。脚本值 `scriptValues`（第 6 批）
+ * 见 `checkScriptValues`，不要求有 `particles`。壁纸样式 `style` 与画法 `renderMode`（phase-render-size）见 `checkRenderStyleMode`。视频时刻 `videoTime`（P9a 步骤 3）见 `checkVideoTime`，同样不要求有 `particles`。
  * 逐 draw 轨迹 `trace` 见 `checkTrace`。跑场景脚本 `scripts`（第 7 批）见 `checkScripts`，不和 `scriptValues` 同给（一个让脚本自己算，
  * 一个把脚本的结果塞进去）。
  * 校验过的值原样留在请求里转给探针。
@@ -544,6 +575,8 @@ export function checkRenderReplay(body: {
   pointers?: unknown;
   window?: unknown;
   canvas?: unknown;
+  style?: unknown;
+  renderMode?: unknown;
   scriptValues?: unknown;
   scripts?: unknown;
   videoTime?: unknown;
@@ -566,6 +599,7 @@ export function checkRenderReplay(body: {
   }
   const window = body.window === undefined ? undefined : checkWindow(body.window);
   if (body.canvas !== undefined) checkCanvas(body.canvas, window);
+  checkRenderStyleMode(body);
   if (body.scriptValues !== undefined) checkScriptValues(body.scriptValues);
   if (body.scripts !== undefined) {
     checkScripts(body.scripts);

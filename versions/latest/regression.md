@@ -2780,3 +2780,16 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | PP6 运行中改动画层属性 | Windows dev，图库预览 | 在 `2896608544` 的属性面板改动画层的速度与显隐类属性 | 当帧生效、不整场重编译、动画不从头开始 | 只有单测；生成工程 `p12-bind` 的 WPE 对照没做 |
 | [ ] | PP7 实时预览与桌面 | Windows dev，图库预览与桌面 | 预览并设为桌面壁纸：`3203778110`、`2896608544`、`3354366708`；暂停再继续 | 骨骼动画流畅；暂停时停住、继续后接着播 | 只在探针回放里比过，实时播放待用户看 |
 | [ ] | PP8 非 Windows | macOS / Linux | 预览 `3203778110` | 同 Windows | 本机不能测 |
+
+## 场景 dev 探针按指定尺寸渲染
+
+2026-11-14。dev 探针 `renderFrame` 给了 `canvas` 时，正交场景按这个尺寸直接画，和 WPE 测试窗口同一种画法：样式照 WPE 的对齐方式做进正交投影的四个裁切边距，`fit` / `center` 整屏清成 `schemecolor`，读回场景目标本身。`renderMode: "scene"` 取旧的「场景分辨率 + 读回时铺进画布」。产品的预览、桌面、应用背景都不变（用户定）。计划与记录见 `.claude/plans/wpe-import/3-scene/phase-render-size.md`，读码 `rea-render-size.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | RS1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`），kabegame-dev 与 MCP 的 deno 测试，Prettier | 0 error、全过 | 2026-11-14：tsc 0 error；vitest 168 个文件 3941 条全过；deno 55 个全过。新增 `render/renderSize.test.ts`（含 15 段 MVP 对 WPE 抓帧逐位相同、`GpuScene` 假设备的目标尺寸与清屏色）、`dev/probe.renderSize.test.ts` |
+| [x] | RS2 生成工程和 WPE 逐像素比 | Windows dev 屏外宿主 + WPE 测试窗口，ultra、fps 20 | `ignore/prs` 的 `prs-grid` / `prs-small` / `prs-fx`，窗口 1920×1080、1280×720、1920×800、1440×1080 × 对齐方式 0–3（`apply_properties` 设 `alignment`），`python -X utf8 -I ignore/prs/cmp_target.py` | 遮掉帧号 / 时钟两层后逐像素相同 | 2026-11-14：18 段全部相同（`prs-fx` 两段的残差是帧号 / 时钟两层被泛光晕开，遮罩外扩 80 像素后为 0）。改动前的画法在 `prs-fx` 1280×720 下差 61684 个像素、最大 110 |
+| [x] | RS3 旧路径字节不变 | Windows dev 屏外宿主 | `renderMode: "scene"`（3 段带画布）与不给画布（1 段）和改动前记的读回逐像素比（`ignore/prs/scene_mode_check.py`）；产品路径 `hash_baseline` 前后比 | 相同 | 2026-11-14：4 段逐像素相同、sha256 相同。产品路径 10 张里 beach、deep_space、razer_vortex 的哈希变了，来自同期别的会话改的纹理采样器（P12a 的 B1，`textures.ts` 12:37Z，晚于基线）：这 3 张都有「单级 mip + 8 倍各向异性」的绑定，eagleflag 没有、没变；产品路径不走本次新代码 |
+| [x] | RS4 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate` | 8 处（铺满 / 装下的分支、居中的差、`orthoWpe` 的平移、`schemecolor` 规则、目标宽高、主目标清屏色、光标窗口），清单 `ignore/prs/mutations.py` | 全部检出，快照还原 | 2026-11-14：8 / 8 |
+| [x] | RS5 dev 重启后的工具参数 | Windows dev | 重启 dev 与会话后，`render_scene` / `host_render` 带 `style`、`renderMode`，`renderFrames.ts --style` | 和经宿主求值调探针的结果相同；旧探针时 409 | 2026-11-14（dev 22:48 重启后）：`render_scene` 的 `style: "fit"`、`renderMode: "scene"` 与 `renderFrames.ts --style center` 三段，和步骤 1 经宿主求值得到的图文件 sha256 相同；错误组合在本地拒绝。409 没法现场造（要换回旧产物），只有单测 |
+| [x] | RS6 重跑各节的「按窗口分辨率画」样本 | Windows dev + WPE 抓帧 | phase-render-size.md「0c」的清单 | 能逐像素相同的从已知差异里删掉 | 2026-11-14（步骤 2）：用当时的录制按窗口尺寸重跑 13 节。逐像素相同的：P10a `intro`（7680×2160）、`rings`、`post`，P5d 三个相机，P6b `3429-text`、`2391389126` 文字区域、`e3clock` 三份，P6c `clockv` 1080p，P10b 两张时钟 24 帧与 `2887099508` 书页 5 帧，P11a Liberty 4 帧，P12a `3203778110` 6 帧中 5 帧。其余剩 ±1–4 的都另有解释：求逆写法（`sun`、`tmpl2`，`invertF32` 复现 WPE）、着色器舍入（`gradt`、`frostp` 已定位到单次绘制）、`rsqrtps`、8 位反馈 RT、JPEG 色度上采样。P5a 真实样本、P7 流体画布、P9a 视频、P2 超宽场景没重跑（原因见计划）。`WPE_SCENE.md` 各节已知差异已按结果改写 |

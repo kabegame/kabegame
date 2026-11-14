@@ -457,8 +457,9 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
  * 在宿主里渲染一帧（`__kabegameSceneProbe.renderFrame`），再按 chunk 取回 PNG。场景目录由 `wpe_scene_target` 按图片 id 取。
  * 给了 `particles` 时原样交给探针做确定性回放（不收 `time`：读回那一帧的 `g_Time` 取 `times` 末项或 dt 累计值）；逐帧光标
  * `pointers` 与窗口尺寸 `window`（P5a 收尾）校验后同样原样转给探针。
- * 读回画布 `canvas`（第 5 批）校验后原样转给探针，探针按 `fill` 上屏到这么大的画布再读回；结果的 `meta.canvas` 对不上时（宿主产物
- * 不认识这一项，静默读回了场景目标）报 409。
+ * 窗口尺寸 `canvas`（第 5 批）校验后原样转给探针：正交场景缺省按这个尺寸画（phase-render-size），`style` / `renderMode` 同样原样转，
+ * `renderMode: "scene"` 才是旧的「按 `fill` 上屏到这么大的画布再读回」；结果的 `meta.canvas` 对不上时（宿主产物不认识这一项，静默读回了
+ * 场景目标）报 409，给了 canvas / style / renderMode 而结果没有 `meta.render` 时（宿主产物早于按指定尺寸画）同样报 409。
  * 脚本值 `scriptValues`（第 6 批）校验后原样转给探针；给了而结果没有逐项的 `meta.scriptValues` 时（宿主产物不认识这一项，静默没写）
  * 同样报 409。
  * 跑场景脚本 `scripts`（第 7 批）校验后原样转给探针（不和 `scriptValues` 同给）；给了而结果没有 `meta.scripts` 时（宿主产物不认识这一项，
@@ -501,6 +502,9 @@ export async function renderFrame(
     ...(request.window ? { window: request.window } : {}),
     // 读回画布（第 5 批）：checkRenderReplay 已校验（两个正整数、不超过上限、和 window 相同）
     ...(request.canvas ? { canvas: request.canvas } : {}),
+    // 壁纸样式与画法（phase-render-size）：checkRenderReplay 已校验（形状、和 canvas 的关系）
+    ...(request.style !== undefined ? { style: request.style } : {}),
+    ...(request.renderMode !== undefined ? { renderMode: request.renderMode } : {}),
     // 脚本值（第 6 批）：checkRenderReplay 已校验（形状、项数）；对象与字段脚本由探针解析
     ...(request.scriptValues ? { scriptValues: request.scriptValues } : {}),
     // 跑场景脚本（第 7 批）：checkRenderReplay 已校验（true 或 { clock?, seed? }、不和 scriptValues 同给）
@@ -528,6 +532,16 @@ export async function renderFrame(
         canvas,
         meta: { width: meta.width, height: meta.height, canvas: meta.canvas ?? null },
       },
+    );
+  }
+  // 给了 canvas 的结果要带 `render`（按指定尺寸画之后的新字段）：没有说明宿主产物是旧的，会静默按旧画法（场景分辨率 + 读回时 fill 铺放）读回，
+  // 样式与画法也被丢掉，不能把它当按指定尺寸画的结果交回去
+  if ((canvas || request.style !== undefined || request.renderMode !== undefined) && !meta.render) {
+    throw new DevError(
+      409,
+      "host",
+      `宿主产物没有回 render（按指定尺寸画的说明）：探针不认识 style / renderMode，会静默按旧的读回画布处理，重建宿主（--mode development）`,
+      { imageId: request.imageId, canvas, style: request.style, renderMode: request.renderMode },
     );
   }
   const scriptValues = request.scriptValues;

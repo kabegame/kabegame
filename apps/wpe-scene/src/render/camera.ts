@@ -31,7 +31,14 @@
 import type { GeneralValues } from "../compile/bindings";
 import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { DEFAULT_CAMERA, type CameraPath, type SceneCameraJson, type Vec3 } from "../compile/camera";
-import { effectiveVisible, eyePosition, particleViewProjection, sceneViewProjection, worldMatrixOf } from "./layout";
+import {
+  effectiveVisible,
+  eyePosition,
+  particleViewProjection,
+  sceneViewProjection,
+  worldMatrixOf,
+  type ProjectionCrop,
+} from "./layout";
 import type { Mat4 } from "./math";
 import { mulAffine } from "./math";
 import type { SceneCamera } from "./scene";
@@ -364,6 +371,8 @@ export interface OrthographicCameraInput {
   /** 总缩放 `general.zoom × camera.zoom`（float32，`orthographicCameraZoom`）。 */
   zoom: number;
   general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">;
+  /** 投影的裁切（dev 探针按指定尺寸画，`GpuScene.build` 的 `target`）：给了就带进正交投影与透视覆盖；缺省不裁，字节同以前。 */
+  crop?: ProjectionCrop;
 }
 
 /** 正交场景带相机对象的一帧（交给 `GpuScene.setCamera` 的正交那种的 `cameraObject`）。 */
@@ -403,12 +412,12 @@ export function orthographicCameraObjectFrame(input: OrthographicCameraInput): O
   const vectors = lookAtVectors(eye, center, pose.up);
   // `+ 0` 把 −0 换成 +0（同 `perspectiveCamera`）
   const round = (v: Vec3): Vec3 => [f(v[0]) + 0, f(v[1]) + 0, f(v[2]) + 0];
-  const projection = sceneViewProjection(general, zoom);
+  const projection = sceneViewProjection(general, zoom, input.crop?.edges);
   return {
     view,
     projection,
     viewProjection: mulAffine(projection, view),
-    perspectiveViewProjection: particleViewProjection(general, zoom, view),
+    perspectiveViewProjection: particleViewProjection(general, zoom, view, input.crop),
     eye: eyePosition(general, [eye[0], eye[1]]),
     parallaxEye: [eye[0], eye[1]],
     vectors: { forward: round(vectors.forward), right: round(vectors.right), up: round(vectors.up) },
@@ -428,6 +437,8 @@ export interface SceneCameraInput {
   state: Pick<SceneState, "layers" | "cameras" | "general">;
   /** 场景的 general：正交的 W、H（抖动按 H 算）与透视覆盖的 fov。 */
   general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">;
+  /** 投影的裁切（dev 探针按指定尺寸画）：只对正交场景的相机对象有用，交给 `orthographicCameraObjectFrame`；缺省不裁。 */
+  crop?: ProjectionCrop;
   /** 本帧的 `g_Time`（抖动用）。 */
   time: number;
   /** 透视场景：基准与路径、路径状态、本帧推进路径的 dt（补画帧 0）、场景目标尺寸；正交场景为 null。 */
@@ -476,6 +487,12 @@ export function sceneCameraFrame(input: SceneCameraInput): SceneCameraResult {
   const shake = shakeOffset(state.general, input.time, input.general.height);
   if (!active) return { camera: { shake, zoom: state.general.zoom }, eye: shake, path: null };
   const zoom = orthographicCameraZoom(state.general.zoom, active.zoom);
-  const frame = orthographicCameraObjectFrame({ pose: active.pose, shake, zoom, general: input.general });
+  const frame = orthographicCameraObjectFrame({
+    pose: active.pose,
+    shake,
+    zoom,
+    general: input.general,
+    ...(input.crop ? { crop: input.crop } : {}),
+  });
   return { camera: { shake, zoom, cameraObject: frame }, eye: frame.parallaxEye, path: null };
 }

@@ -103,8 +103,10 @@ const handler: Handler = (req, body, res) => {
   if (req.method === "DELETE") return sendJson(res, 200, { handle: "h-1", previewHostsLeft: 0 });
   if (url.endsWith("/render")) {
     // 读回画布（第 5 批）：给了 canvas 时像新探针那样按它回尺寸
-    const { canvas, scriptValues, imageId, videoTime } = body as {
+    const { canvas, scriptValues, imageId, videoTime, style, renderMode } = body as {
       canvas?: [number, number];
+      style?: string;
+      renderMode?: string;
       scriptValues?: Array<Record<string, unknown>>;
       imageId?: string;
       videoTime?: number | Record<string, number>;
@@ -112,6 +114,23 @@ const handler: Handler = (req, body, res) => {
     let meta: Record<string, unknown> = canvas
       ? { ...META, width: canvas[0], height: canvas[1], canvas, sceneTarget: [3840, 2160] }
       : META;
+    // 按指定尺寸画（phase-render-size）：给了 style / renderMode 时像新探针那样回 render 说明（fit 的清屏用 schemecolor）
+    if (canvas && (style !== undefined || renderMode !== undefined)) {
+      const target = renderMode !== "scene";
+      meta = {
+        ...meta,
+        ...(target ? { sceneTarget: canvas } : {}),
+        render: target
+          ? {
+              mode: "target",
+              style: style ?? "fill",
+              alignment: style === "fit" ? 1 : 0,
+              edges: [0, 135, 0, 135],
+              clear: style === "fit" ? [0.5, 0.5, 0.5] : null,
+            }
+          : { mode: "scene", style: null, alignment: null, edges: null, clear: null },
+      };
+    }
     // 脚本值（第 6 批）：像新探针那样逐项回结果；图片 8 当作不是 kbp 工程（没有 FR，optional 跳过）
     if (scriptValues) {
       meta = {
@@ -552,6 +571,51 @@ describe("读回画布（第 5 批）", () => {
     });
   });
 
+  test("style / renderMode 原样转给 REST；结果写明按指定尺寸画的样式、对齐方式、裁切边距与清屏色；scene 仍是旧的读回说明", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const fit = await call("render_scene", { imageId: "9", canvas: [1920, 800], style: "fit" });
+      assert.notEqual(fit.isError, true, textOf(fit));
+      assert.deepEqual(bodiesOf(rest, "/render"), [{ imageId: "9", canvas: [1920, 800], style: "fit" }]);
+      assert.match(
+        textOf(fit),
+        /读回：窗口 1920×800 按指定尺寸画（样式 fit，WPE 对齐方式 1，裁切边距 \[0, 135, 0, 135\]，清屏 schemecolor \[0.5, 0.5, 0.5\]），读回场景目标本身，不经上屏/,
+      );
+      const scene = await call("render_scene", { imageId: "9", canvas: [1920, 800], renderMode: "scene" });
+      assert.notEqual(scene.isError, true, textOf(scene));
+      assert.deepEqual(bodiesOf(rest, "/render")[1], { imageId: "9", canvas: [1920, 800], renderMode: "scene" });
+      assert.match(textOf(scene), /读回：画布 1920×800，场景目标 3840×2160 按 fill（居中盖满裁切）铺进去/);
+      const host = await call("host_render", {
+        handle: "h-7",
+        imageId: "9",
+        canvas: [1080, 1080],
+        renderMode: "target",
+      });
+      assert.notEqual(host.isError, true, textOf(host));
+      assert.deepEqual(bodiesOf(rest, "/hosts/h-7/render"), [
+        { imageId: "9", canvas: [1080, 1080], renderMode: "target" },
+      ]);
+    });
+  });
+
+  test("style / renderMode 与 canvas 的关系不合法报 [local]、不发请求；tile 与未知值由 SDK 参数校验拒绝", async () => {
+    await withMcp(async (call, _root, rest) => {
+      for (const args of [
+        { style: "fit" },
+        { renderMode: "target" },
+        { canvas: [1920, 800], renderMode: "scene", style: "center" },
+      ]) {
+        const bad = await call("render_scene", { imageId: "9", ...args });
+        assert.equal(bad.isError, true, JSON.stringify(args));
+        assert.match(textOf(bad), /^\[local\]/, JSON.stringify(args));
+      }
+      for (const args of [{ style: "tile" }, { style: "cover" }, { renderMode: "both" }]) {
+        const bad = await call("render_scene", { imageId: "9", canvas: [1920, 800], ...args });
+        assert.equal(bad.isError, true, JSON.stringify(args));
+      }
+      assert.deepEqual(rest.seen, [], "参数错时不发请求");
+    });
+  });
+
   test("canvas 的形状由 SDK 参数校验拒绝：非整数、0、超过 16384、长度不对", async () => {
     await withMcp(async (call, _root, rest) => {
       for (const canvas of [[1920.5, 1080], [0, 1080], [16385, 1080], [1920], "1920x1080"]) {
@@ -560,6 +624,54 @@ describe("读回画布（第 5 批）", () => {
       }
       assert.deepEqual(rest.seen, [], "参数错时不发请求");
     });
+  });
+
+  test("readbackLines：按 meta.render 区分按指定尺寸画、透视与旧画法", () => {
+    const target = {
+      mode: "target" as const,
+      style: "center" as const,
+      alignment: 3,
+      edges: [320, 180, 320, 180] as [number, number, number, number],
+      clear: [0.2, 0.3, 0.4] as [number, number, number],
+    };
+    assert.deepEqual(
+      readbackLines(
+        { width: 1280, height: 720, canvas: [1280, 720], sceneTarget: [1280, 720], render: target },
+        [1280, 720],
+        undefined,
+      ),
+      [
+        "读回：窗口 1280×720 按指定尺寸画（样式 center，WPE 对齐方式 3，裁切边距 [320, 180, 320, 180]，清屏 schemecolor [0.2, 0.3, 0.4]），读回场景目标本身，不经上屏",
+      ],
+    );
+    assert.match(
+      readbackLines(
+        {
+          width: 1280,
+          height: 720,
+          canvas: [1280, 720],
+          sceneTarget: [1280, 720],
+          render: { ...target, style: "fill", alignment: 0, clear: null },
+        },
+        [1280, 720],
+        undefined,
+      )[0],
+      /清屏 clearcolor/,
+    );
+    assert.deepEqual(
+      readbackLines(
+        {
+          width: 1280,
+          height: 720,
+          canvas: [1280, 720],
+          sceneTarget: [1280, 720],
+          render: { mode: "perspective", style: null, alignment: null, edges: null, clear: null },
+        },
+        [1280, 720],
+        undefined,
+      ),
+      ["读回：透视场景按画布尺寸 1280×720 画，读回场景目标本身"],
+    );
   });
 
   test("readbackLines：旧宿主产物没有 canvas / sceneTarget 时按场景目标；读回尺寸等于窗口时不提示", () => {

@@ -297,7 +297,11 @@ describe("粒子接口的参数透传", () => {
           width: canvas?.[0] ?? 3840,
           height: canvas?.[1] ?? 2160,
           canvas: canvas ?? null,
-          sceneTarget: [3840, 2160],
+          sceneTarget: canvas ?? [3840, 2160],
+          // 按指定尺寸画之后的新字段（模拟新探针）：给了 canvas 才有说明
+          ...(canvas
+            ? { render: { mode: "target", style: "fill", alignment: 0, edges: [0, 0, 0, 0], clear: null } }
+            : {}),
           sha256: "x",
           time: 1.5,
           frametime: 0,
@@ -312,8 +316,13 @@ describe("粒子接口的参数透传", () => {
       f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
     const response = await renderFrame(f.s, "h-1", { imageId: "14312", canvas: [1920, 1080], userProperties: {} });
     assert.deepEqual(response.meta.canvas, [1920, 1080]);
-    assert.deepEqual(response.meta.sceneTarget, [3840, 2160]);
+    assert.deepEqual(response.meta.sceneTarget, [1920, 1080]);
     assert.deepEqual(calls()[0].canvas, [1920, 1080]);
+    assert.equal(
+      "style" in calls()[0] || "renderMode" in calls()[0],
+      false,
+      "不给 style / renderMode 时请求和以前一样",
+    );
     assert.equal(calls()[0].time, 1.5);
     await renderFrame(f.s, "h-1", { imageId: "14312", userProperties: {} });
     assert.equal("canvas" in calls()[1], false, "不给 canvas 时请求和以前一样");
@@ -356,6 +365,91 @@ describe("粒子接口的参数透传", () => {
         error.status === 409 &&
         error.layer === "host" &&
         /探针不认识 canvas/.test(error.message),
+    );
+  });
+
+  test("按指定尺寸画（phase-render-size）：style / renderMode 原样交给探针；形状与关系不合法回 400 不碰页面；旧宿主产物没有 render 回 409", async () => {
+    const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
+    const f = await fixture({
+      renderFrame: (args: unknown) => {
+        const { canvas, style, renderMode } = args as {
+          canvas?: [number, number];
+          style?: string;
+          renderMode?: string;
+        };
+        // canvas 宽为 7 时模拟旧探针：认识 canvas（有 canvas 字段）、不认识 style / renderMode（没有 render）
+        const old = canvas?.[0] === 7;
+        return {
+          width: canvas?.[0] ?? 3840,
+          height: canvas?.[1] ?? 2160,
+          canvas: canvas ?? null,
+          sceneTarget: [3840, 2160],
+          ...(old
+            ? {}
+            : {
+                render: {
+                  mode: renderMode === "scene" ? "scene" : "target",
+                  style: style ?? "fill",
+                  alignment: 0,
+                  edges: null,
+                  clear: null,
+                },
+              }),
+          sha256: "x",
+          time: 1.5,
+          frametime: 0,
+        };
+      },
+    });
+    vm.runInContext(
+      `window.__kabegameSceneProbe.chunk = (key, index) => (index === 0 ? ${JSON.stringify(png)} : null)`,
+      f.host,
+    );
+    const calls = () =>
+      f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
+    const fit = await renderFrame(f.s, "h-1", {
+      imageId: "14312",
+      canvas: [1920, 800],
+      style: "fit",
+      userProperties: {},
+    });
+    assert.equal(fit.meta.render?.mode, "target");
+    assert.equal(calls()[0].style, "fit");
+    assert.equal("renderMode" in calls()[0], false);
+    await renderFrame(f.s, "h-1", {
+      imageId: "14312",
+      canvas: [1920, 800],
+      renderMode: "scene",
+      userProperties: {},
+    });
+    assert.equal(calls()[1].renderMode, "scene");
+    assert.equal("style" in calls()[1], false);
+
+    const before = f.conn.evaluated.length;
+    for (const [request, field] of [
+      [{ imageId: "14312", canvas: [1920, 800], style: "tile" }, "style"],
+      [{ imageId: "14312", canvas: [1920, 800], style: "cover" }, "style"],
+      [{ imageId: "14312", style: "fit" }, "style"],
+      [{ imageId: "14312", canvas: [1920, 800], renderMode: "both" }, "renderMode"],
+      [{ imageId: "14312", renderMode: "target" }, "renderMode"],
+      [{ imageId: "14312", canvas: [1920, 800], renderMode: "scene", style: "center" }, "renderMode"],
+    ] as const) {
+      await assert.rejects(
+        renderFrame(f.s, "h-1", request as never),
+        (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === field,
+        JSON.stringify(request),
+      );
+    }
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    // 旧宿主产物：认识 canvas 但没有 render，静默按旧画法读回，不能当按指定尺寸画的结果交回去
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14312", canvas: [7, 7], style: "fit", userProperties: {} }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 409 &&
+        error.layer === "host" &&
+        /没有回 render/.test(error.message),
     );
   });
 

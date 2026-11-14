@@ -342,9 +342,12 @@ export function drawMatrixOf(
  * 读到的线性项正好是 `f32(zoom) · f32(2/W)`（换成 `2/(W/zoom)` 的取整对不上），视差与抖动的平移是场景单位、在缩放之前加
  * （`VP · T(o − s)`，实测差 1e-7）。zoom 为 1 时原样返回，字节同以前。
  */
-export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">, zoom = 1): Mat4 {
+export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "height">, zoom = 1, edges?: Edges): Mat4 {
   const f = Math.fround;
   const { width: w, height: h } = general;
+  // 给了裁切边距（dev 探针按指定尺寸画，`alignEdges`）：投影边界是 `ortho(E0, W − E2, E3, H − E1)`，每步 f32，zoom 的三步照抄、
+  // 不因 zoom 为 1 而跳过（l ≠ 0 时三步会带来舍入，rea-matrix-order 2.2）。不给时走下面的原路径，字节同以前
+  if (edges) return zoomed(orthoWpe(edges[0], f(w - edges[2]), edges[3], f(h - edges[1])), w, h, zoom);
   const projection = orthographic(0, w, 0, h, ORTHO_DEPTH, -ORTHO_DEPTH);
   if (zoom === 1) return projection; // z = 1、l = 0 时三步逐位不变（rea-matrix-order 2.2 数值核对）
   // 帧函数的三步 glm 内联（rea-matrix-order 2.2）：translate(W/2, H/2) → scale(z, z, 1) → translate(−W/2, −H/2)
@@ -352,6 +355,135 @@ export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "heigh
   const moved = translateGlm(projection, [f(w * 0.5), f(h * 0.5), 0]);
   const scaled = Float32Array.from(moved);
   for (let i = 0; i < 8; i++) scaled[i] = f(moved[i] * z); // glm::scale：第 0、1 列 ×z，第 2 列 ×1
+  return translateGlm(scaled, [f(w * -0.5), f(h * -0.5), -0]);
+}
+
+/**
+ * 正交裁切边距 `[E0 左, E1 上, E2 右, E3 下]`（场景单位，正为裁掉、负为留出）。WPE 的对齐方式只改投影的四个边界
+ * `ortho(E0, W − E2, E3, H − E1, ±2000)`（rea-render-size 第 1 节），没有单独的视口。
+ */
+export type Edges = readonly [number, number, number, number];
+
+/** 投影的裁切：边距与窗口（渲染目标）尺寸，透视粒子的相机由它算（`particleViewProjection`，rea-render-size 第 5 节）。 */
+export interface ProjectionCrop {
+  edges: Edges;
+  window: readonly [number, number];
+}
+
+/** 壁纸样式 → WPE 的对齐方式（`alignment`）：fill = 0（cover）、fit = 1（WPE 叫 fill）、stretch = 2、center = 3。tile 没有对应，不在表里。 */
+export const ALIGNMENT_OF_STYLE: Readonly<Partial<Record<SceneStyle, 0 | 1 | 2 | 3>>> = {
+  fill: 0,
+  fit: 1,
+  stretch: 2,
+  center: 3,
+};
+
+/** 对齐方式是否用 `schemecolor` 清屏（`(mode & ~2) != 0`，p3-script-REPORT 4g 实测：对齐方式 1 / 3 整个目标清成它，0 / 2 是 `clearcolor`）。 */
+export function clearsWithSchemeColor(mode: number): boolean {
+  return (mode & ~2) !== 0;
+}
+
+/**
+ * 对齐方式 → 裁切边距（WPE `FUN_140183a70` 的缩放模式 switch，rea-render-size 第 1 节伪代码，每步 f32）。`Ws/Hs` 是场景尺寸、
+ * `Ww/Hw` 是窗口客户区。只做 0–3（4 自由不做），`alignmentposition` / `x` / `y` 取缺省 0.5（Kabegame 没有这些属性）；
+ * 0 与 1–3 以外的值都是铺满裁切。
+ */
+export function alignEdges(
+  mode: number,
+  Ws: number,
+  Hs: number,
+  Ww: number,
+  Hw: number,
+): [number, number, number, number] {
+  const f = Math.fround;
+  const ax = 0.5,
+    ay = 0.5,
+    ap = 0.5;
+  const sa = f(Ws / Hs),
+    wa = f(Ww / Hw);
+  let E0 = 0,
+    E1 = 0,
+    E2 = 0,
+    E3 = 0;
+  const halfX = () => f(f(Ws - f(f(Hs / Hw) * Ww)) * 0.5); // 横向半差：可见宽 = Hs / Hw · Ww
+  const halfY = () => f(f(Hs - f(f(Ws / Ww) * Hw)) * 0.5); // 纵向半差：可见高 = Ws / Ww · Hw
+  const t = f(f(1 - ap) + f(1 - ap));
+  switch (mode) {
+    case 1: {
+      // 装下，留边
+      if (wa > sa) {
+        const h = halfX(),
+          a = f(ap * h);
+        E0 = f(a + a);
+        E2 = f(t * h);
+      } else {
+        const h = halfY(),
+          a = f(ap * h);
+        E1 = f(a + a);
+        E3 = f(t * h);
+      }
+      break;
+    }
+    case 2: // 拉伸：全 0
+      break;
+    case 3: {
+      // 居中：一个场景单位对一个窗口像素
+      const dx = f(Ws - Ww),
+        dy = f(Hs - Hw);
+      E0 = f(ax * dx);
+      E2 = f(f(1 - ax) * dx);
+      E1 = f(ay * dy);
+      E3 = f(f(1 - ay) * dy);
+      break;
+    }
+    default: {
+      // 0 与其它值：铺满裁切
+      if (sa > wa) {
+        const h = halfX(),
+          a = f(ap * h);
+        E2 = f(a + a);
+        E0 = f(t * h);
+      } else {
+        const h = halfY(),
+          a = f(ap * h);
+        E1 = f(a + a);
+        E3 = f(t * h);
+      }
+    }
+  }
+  return [E0, E1, E2, E3];
+}
+
+/**
+ * WPE 的正交投影构造（`FUN_14009a630`，rea-matrix-order 第 7 节）：近远面固定 −2000 / 2000，每个加减除都是 f32
+ * （`P[10] = −1 / (n − f)`、`P[14] = −f / (n − f)`）。和 `math.ts` 的 `orthographic`（double 算完再存 f32）只在 E ≠ 0 时可能差 1 ulp，
+ * 所以带裁切边距的路径用这一个。
+ */
+function orthoWpe(l: number, r: number, b: number, t: number): Mat4 {
+  const f = Math.fround;
+  const n = -ORTHO_DEPTH,
+    far = ORTHO_DEPTH;
+  const m = new Float32Array(16);
+  const dx = f(r - l),
+    dy = f(t - b),
+    dz = f(n - far);
+  m[0] = f(2 / dx);
+  m[5] = f(2 / dy);
+  m[10] = f(-1 / dz);
+  m[12] = f(-f(l + r) / dx);
+  m[13] = f(-f(b + t) / dy);
+  m[14] = f(-far / dz);
+  m[15] = 1;
+  return m;
+}
+
+/** 帧函数对 P 的 zoom 三步（`sceneViewProjection` 的原路径同一串，rea-matrix-order 2.2），无条件执行。 */
+function zoomed(projection: Mat4, w: number, h: number, zoom: number): Mat4 {
+  const f = Math.fround;
+  const z = f(zoom);
+  const moved = translateGlm(projection, [f(w * 0.5), f(h * 0.5), 0]);
+  const scaled = Float32Array.from(moved);
+  for (let i = 0; i < 8; i++) scaled[i] = f(moved[i] * z);
   return translateGlm(scaled, [f(w * -0.5), f(h * -0.5), -0]);
 }
 
@@ -368,12 +500,17 @@ export function sceneViewProjection(general: Pick<SceneGeneral, "width" | "heigh
  * `view` 是正交场景里相机对象的视图 V（P5d 步骤 3，`render/camera.ts` 的 `orthographicCameraObjectFrame`；rea-p5-camera 7.2：WPE 改的是
  * 当前 V 的拷贝）：旋转不变，平移换成 `(t.x − W/2, t.y − H/2, −d)`（补测 `p5d-camo-pp` / `-ppr`，旋转与 zoom 都保留）。不给时是单位视图，
  * 同以前（字节不变）。
+ *
+ * `crop`（dev 探针按指定尺寸画，rea-render-size 第 5 节）：投影带裁切边距时 WPE 的透视粒子相机跟着变，见 `croppedParticleViewProjection`。
+ * 不给时字节同以前。
  */
 export function particleViewProjection(
   general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">,
   zoom = 1,
   view?: Mat4,
+  crop?: ProjectionCrop,
 ): Mat4 {
+  if (crop) return croppedParticleViewProjection(general, zoom, view, crop);
   const { width, height } = general;
   const focal = 1 / Math.tan(general.perspectiveOverrideFov / 2);
   const d = (height / (2 * zoom)) * focal;
@@ -389,6 +526,48 @@ export function particleViewProjection(
   const moved = new Float32Array(view);
   moved[12] = view[12] - width / 2;
   moved[13] = view[13] - height / 2;
+  moved[14] = -d;
+  return multiply(projection, moved);
+}
+
+/**
+ * 裁切下的透视粒子相机（`FUN_1401e5b60`，rea-render-size 第 5 节，每步 f32）：
+ * - `d = 1 / (tan(fov/2) / (1/P[5]))`，P 是裁切并乘过 zoom 的正交投影（`sceneViewProjection(general, zoom, edges)`），`1/P[5]` 是可见高的一半 / zoom；
+ * - 相机 xy 在可见区中心：`(Wi·R108, Hi·R10c)`，`R108 = (Ws/2 − (E2 − E0)/2) / Ws`、`R10c = (Hs/2 − (E1 − E3)/2) / Hs`，Wi / Hi 是场景尺寸的整数部分；
+ * - 投影宽高比取窗口 `Ww / Hw`（旧读码 rea-p5-camera 7.2 的「场景比例」不对），near 5、far `max(15000, d + 1000)`。
+ * 窗口与可见区同比例（模式 0、1、3）且 zoom 的支点与可见区中心重合时，z = 0 平面与正交画面重合；边距为 0 且窗口 = 场景时等同未裁切的结果。
+ */
+function croppedParticleViewProjection(
+  general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">,
+  zoom: number,
+  view: Mat4 | undefined,
+  crop: ProjectionCrop,
+): Mat4 {
+  const f = Math.fround;
+  const { width: Ws, height: Hs } = general;
+  const [E0, E1, E2, E3] = crop.edges;
+  const [Ww, Hw] = crop.window;
+  const fov = f(general.perspectiveOverrideFov);
+  const projectionP5 = sceneViewProjection(general, zoom, crop.edges)[5];
+  const tn = f(Math.tan(f(fov * 0.5)));
+  const d = f(1 / f(tn / f(1 / projectionP5)));
+  const near = PARTICLE_NEAR;
+  const far = Math.max(PARTICLE_FAR_MIN, f(d + 1000));
+  const r108 = f(f(f(Ws * 0.5) - f(f(E2 - E0) * 0.5)) / Ws);
+  const r10c = f(f(f(Hs * 0.5) - f(f(E1 - E3) * 0.5)) / Hs);
+  const cx = f(Math.trunc(Ws) * r108),
+    cy = f(Math.trunc(Hs) * r10c);
+  const focal = f(1 / tn);
+  const projection = new Float32Array(16);
+  projection[0] = f(focal / f(Ww / Hw));
+  projection[5] = focal;
+  projection[10] = f(near / f(far - near));
+  projection[11] = -1;
+  projection[14] = f(f(far * near) / f(far - near));
+  if (!view) return multiply(projection, translation(-cx, -cy, -d));
+  const moved = new Float32Array(view);
+  moved[12] = f(view[12] - cx);
+  moved[13] = f(view[13] - cy);
   moved[14] = -d;
   return multiply(projection, moved);
 }

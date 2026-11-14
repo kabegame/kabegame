@@ -335,13 +335,14 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **显存**（`GpuScene.targetBytes`，渲染目标类资源，不含纹理）：bedroom 4K 关闭 / 开启 / 超高约 70 / 73 / 161 MiB，HDR 多出的主要是 FP16 的场景目标与快照（各 63 MiB）和金字塔（约 21 MiB）。
 - **链路隔离验证（dev 探针）**：`apps/wpe-scene/src/dev/` 在 dev 构建挂 `window.__kabegameSceneProbe`（`vite.config.ts` 的模式常量门控，生产构建里整块被摇掉，已用生产构建确认）：
   - `bloom({ assets, hdr, params, input, references })`：输入 RenderDoc 导出的整帧快照（RGBA16F `.dds` 或 RGBA8 `.png`），跑同一份 `BloomChain`，读回第一步、泛光结果（`_rt_Bloom` / L0）与最终输出，和 WPE 的对应纹理逐像素比（HDR 中间结果按浮点、最终输出把 WPE 的线性后备缓冲按 sRGB 编码成 8 位再比）。图片一律经 GPU 纹理上传、读回，不走 2D 画布（RenderDoc 存的 RT alpha 常为 0，过画布会因预乘丢掉 RGB）。
-  - `renderFrame({ projectDir, sceneAssets, postprocess, time, profile, canvas })`：按固定 `g_Time` 渲染一帧、同步读回场景目标，给 SHA-256、PNG、显存估算与逐帧耗时；`chunk(key, i)` 分块取回存下的 PNG。给 `canvas: [宽, 高]`（正整数，不超过 `maxTextureDimension2D`）时，读回那一帧编码完场景之后用渲染器上屏的同一份着色器与线性采样器（`render/blit.ts`）按 `fill` 把场景目标铺进这么大的 `rgba8unorm` 纹理、读回它（和 WPE 抓帧窗口同尺寸比，不用再缩放），光标的换算窗口是 `window ?? canvas`（两个都给而不同时抛错），结果另带 `canvas`、`sceneTarget`；只改读回、不改渲染，`g_Screen` 等仍按场景目标算。不给时逐字节同以前（kabegame-chromium 第 5 批）。给 `scriptValues: [{ object, field, value, optional? }]`（`objects` 下标或对象名、图层字段、1–4 个数或布尔）时，探针不跑脚本，按它找到 bundle 里挂在该字段上的字段脚本，建好场景之后、回放之前用绑定目标经 `SceneState.write` 写进状态（同宿主的脚本写回，`dev/scriptValues.ts`），结果的 `scriptValues` 逐项回 `applied`；名字重名、或不带 `optional` 时找不到对象 / 没挂字段脚本抛错。kabegame-dev 回放时用它把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色（第 6 批）。给 `scripts: true | { clock?, seed? }` 时探针照宿主跑场景脚本（`dev/probeScripts.ts`：同一个 `createIframeRealm`、`ScriptApi`、`ScriptRuntime`，写回与读取和宿主共用 `script/stateWrite.ts`）：建好场景、视频就绪之后跑 `init` 并整份交一次用户属性，回放的每一帧（含读回帧）设好相机、推进完关键帧动画之后跑一帧（同渲染器 `beforeFrame` 里动画之后的位置；有回放时每一帧都画，每帧都是渲染器的完整顺序 `sync` → 步进 → 相机 → 动画 → 脚本 → `setParallax` → `sync` → `update` → 编码，视差点按帧开头的 general 推进），profile 帧不跑；外部值都来自请求：`engine.runtime` / `frametime` 是回放的这一帧，`screenResolution` 是 `canvas ?? window ?? [1920, 1080]`（`canvasSize` 仍是场景尺寸），`Date` 与 `engine.timeOfDay` 是 `clock`（缺省 2026-01-01T00:00:00Z）加回放时间、`g_Daytime` 跟着它（每帧都画时每一帧），`Math.random` 按 `seed` 的 mulberry32 序列，`localStorage` 只在内存，音频缓冲全 0，声音 / 视频 / 粒子层的脚本方法空操作并计数；要整场重编译的写入做不了、记进结果的 `scripts.recompile`。不和 `scriptValues` 同给；不给时逐字节同以前（kabegame-chromium 第 7 批）。给 `trace: true | { readback?, maxVertices? }` 时，探针把设备换成记录器包过的那个（`render/trace.ts`：设备与队列是转发代理，建出来的纹理、缓冲、编码器、pass 都是真对象、只在实例上加记录用的方法），读回那一帧逐个 pass、逐个 draw 记下目标、管线、绑定、uniform（建 uniform 缓冲处 `traceUniforms` 登记反射，按名字解码，取提交那一刻的值）、索引与顶点，选中的 pass 结束后读回它的颜色附件，存成 `<key>.trace.json` 与 `<key>.pass<下标>.png` / `.f32`（`dev/drawTrace.ts`），用来和 WPE 的 RenderDoc 抓帧逐 draw 对照；`traceUniforms` 在生产构建里是空操作（用宿主的 vite 按 `__SCENE_DEV__ = false` 构建一个只调它的入口核对过：调用处被内联掉、不留 `WeakMap`，记录器整块被摇掉），不给 `trace` 时设备不包、逐字节同以前（`.claude/plans/tools/scene-draw-trace.md`）。
+  - `renderFrame({ projectDir, sceneAssets, postprocess, time, profile, canvas })`：按固定 `g_Time` 渲染一帧、同步读回场景目标，给 SHA-256、PNG、显存估算与逐帧耗时；`chunk(key, i)` 分块取回存下的 PNG。给 `canvas: [宽, 高]`（正整数，不超过 `maxTextureDimension2D`）时，正交场景按这个尺寸直接画（2026-11-14，[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)，同 WPE 测试窗口）：场景目标就是 `canvas`，`style`（缺省 `fill`）照 WPE 的对齐方式做进正交投影的四个裁切边距（`render/layout.ts` 的 `alignEdges`，读码 [rea-render-size](../../.claude/plans/wpe-import/3-scene/rea-render-size.md)），`fit` / `center` 整个目标清成 `schemecolor`，读回场景目标本身；`g_Screen` / `g_TexelSize` / 快照 / 泛光 / 深度按窗口，视差、`g_EyePosition` 仍是场景单位，光标是窗口坐标、跟随点按裁切后的 VP 反投影，透视粒子相机照读码第 5 节；结果的 `render` 写明画法。`renderMode: "scene"` 取旧的「场景分辨率画、读回时用上屏同一份着色器按 `fill` 铺进画布」（kabegame-chromium 第 5 批，逐字节同以前）。光标的换算窗口是 `window ?? canvas`（两个都给而不同时抛错）。不给 `canvas` 时逐字节同以前。给 `scriptValues: [{ object, field, value, optional? }]`（`objects` 下标或对象名、图层字段、1–4 个数或布尔）时，探针不跑脚本，按它找到 bundle 里挂在该字段上的字段脚本，建好场景之后、回放之前用绑定目标经 `SceneState.write` 写进状态（同宿主的脚本写回，`dev/scriptValues.ts`），结果的 `scriptValues` 逐项回 `applied`；名字重名、或不带 `optional` 时找不到对象 / 没挂字段脚本抛错。kabegame-dev 回放时用它把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色（第 6 批）。给 `scripts: true | { clock?, seed? }` 时探针照宿主跑场景脚本（`dev/probeScripts.ts`：同一个 `createIframeRealm`、`ScriptApi`、`ScriptRuntime`，写回与读取和宿主共用 `script/stateWrite.ts`）：建好场景、视频就绪之后跑 `init` 并整份交一次用户属性，回放的每一帧（含读回帧）设好相机、推进完关键帧动画之后跑一帧（同渲染器 `beforeFrame` 里动画之后的位置；有回放时每一帧都画，每帧都是渲染器的完整顺序 `sync` → 步进 → 相机 → 动画 → 脚本 → `setParallax` → `sync` → `update` → 编码，视差点按帧开头的 general 推进），profile 帧不跑；外部值都来自请求：`engine.runtime` / `frametime` 是回放的这一帧，`screenResolution` 是 `canvas ?? window ?? [1920, 1080]`（`canvasSize` 仍是场景尺寸），`Date` 与 `engine.timeOfDay` 是 `clock`（缺省 2026-01-01T00:00:00Z）加回放时间、`g_Daytime` 跟着它（每帧都画时每一帧），`Math.random` 按 `seed` 的 mulberry32 序列，`localStorage` 只在内存，音频缓冲全 0，声音 / 视频 / 粒子层的脚本方法空操作并计数；要整场重编译的写入做不了、记进结果的 `scripts.recompile`。不和 `scriptValues` 同给；不给时逐字节同以前（kabegame-chromium 第 7 批）。给 `trace: true | { readback?, maxVertices? }` 时，探针把设备换成记录器包过的那个（`render/trace.ts`：设备与队列是转发代理，建出来的纹理、缓冲、编码器、pass 都是真对象、只在实例上加记录用的方法），读回那一帧逐个 pass、逐个 draw 记下目标、管线、绑定、uniform（建 uniform 缓冲处 `traceUniforms` 登记反射，按名字解码，取提交那一刻的值）、索引与顶点，选中的 pass 结束后读回它的颜色附件，存成 `<key>.trace.json` 与 `<key>.pass<下标>.png` / `.f32`（`dev/drawTrace.ts`），用来和 WPE 的 RenderDoc 抓帧逐 draw 对照；`traceUniforms` 在生产构建里是空操作（用宿主的 vite 按 `__SCENE_DEV__ = false` 构建一个只调它的入口核对过：调用处被内联掉、不留 `WeakMap`，记录器整块被摇掉），不给 `trace` 时设备不包、逐字节同以前（`.claude/plans/tools/scene-draw-trace.md`）。
 
 **铺放与帧循环**
 - **铺放**：
   - 场景按图层顺序画进场景分辨率的离屏目标（超过 `maxTextureDimension2D` 时等比缩小），清屏色取 `clearcolor`（`clearenabled` 为 false 时黑色）。
   - 再用全屏三角形按 **cover**（等比盖满、居中裁切）铺到画布，输出不透明（`alphaMode: "opaque"`）。
   - 宽高比差很多的场景（如三屏 5760×1080）在 WPE 里怎么处理还没对照，P1 统一 cover。
+  - **和 WPE 的差别（产品，不复刻，2026-11-14 用户定）**：WPE 按窗口分辨率直接画，对齐方式只改正交投影的四个边距、整屏清屏（[rea-render-size](../../.claude/plans/wpe-import/3-scene/rea-render-size.md)）。所以场景 ≠ 窗口时两边的边缘、缩放采样、泛光与`_rt_FullFrameBuffer` 的分辨率不同；fit / center 下 WPE 整屏（含场景区域）清成 `schemecolor`、越出场景边界的图层在留白里看得见，我们场景区域是 `clearcolor`、越界部分被上屏裁掉。验收不受影响：dev 探针给了 `canvas` 时按 WPE 的画法画（「链路隔离验证（dev 探针）」的 `renderFrame`）。
 - **帧循环**：
   - `requestAnimationFrame`，默认上限 60 fps；节拍固定前进，144 Hz 屏上平均 60 fps。
   - 帧时间钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值（P4a，同 WPE）；粒子每个实时帧步进一次，补画帧不步进。
@@ -1545,7 +1546,7 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 - **片元的零星舍入差**：和顶点无关，最大 1 级、每帧 0 到几十个像素，出在落在舍入中点附近的像素上（Liberty 的音频条 pass 用 numpy 复算过，
   两边离精确值的偏差分布相同）。陡边上能见到 2 级：P6c 走查 `3810092560` 的水波 effect（waterwaves）按 `sin` / `pow` 扰动 UV 再双线性采样，
   WPE 是 fxc 的 DXBC、我们是 WGSL 经 Dawn，UV 在 float 舍入量级上不同，偶尔跨过 GPU 双线性 1/256 子纹素权重的台阶（依据 `ignore/p6/cw/cmp/`）。
-- **场景比窗口大时的上屏**：WPE 按窗口分辨率直接画，我们先画场景分辨率再缩（Liberty 3840×2160 场景在 1920×1080 窗口）。
+- **场景比窗口大时的上屏**：产品先画场景分辨率再缩，WPE 按窗口分辨率直接画（不复刻，见「铺放与帧循环」）。dev 探针按窗口尺寸画时没有这一项：Liberty（3840×2160 场景、1920×1080 窗口）4 帧和 WPE 逐像素相同，音频条与模糊 pass 的零星舍入差在这个分辨率下也没出现（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）。
 
 ## 用户纹理（P11b）
 
@@ -1815,7 +1816,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 |---|---|---|
 | 直接上屏 | 没有启用的 effect、cbm 是 0 / 31、不是组合层：几何是 2×2 的 NDC 四边形，MVP 照常算。着色器不乘 MVP 就铺满全屏（neon_sunset 的 `cloudsbg`），乘了是一块被 `W` 变换的 2×2 方块 | 实测 `p5b-fsmvp`，0 差异 |
 | 合成路径 | 不画基础材质：先拍快照，再整张拷进合成 RT 0（`copy`，源是 `framebuffer`），之后照常跑 effect 链。上屏与 effect pass 的模型、视图是单位阵，投影是 `ortho(−1, 1, −1, 1, 1, −1)`（`FULLSCREEN_VIEW_PROJECTION`），`origin` / `scale` / `angles`、视差、抖动都不起作用 | 实测 `p5b-fs`，最大差 1 |
-| 合成 RT 尺寸 | `fullscreenSize` 取槽 0 静态纹理的图像尺寸；槽 0 是 `_rt_FullFrameBuffer`（fullscreenlayer 都是）或没有纹理时取场景目标尺寸。WPE 取的是窗口尺寸，我们离屏按场景分辨率渲染，对应的是场景目标；两份都不内缩 | 实测 `p5b-fs-1344`（1344×756 窗口） |
+| 合成 RT 尺寸 | `fullscreenSize` 取槽 0 静态纹理的图像尺寸；槽 0 是 `_rt_FullFrameBuffer`（fullscreenlayer 都是）或没有纹理时取场景目标尺寸。WPE 取的是窗口尺寸；产品离屏按场景分辨率渲染，对应的是场景目标，dev 探针按窗口尺寸画时就是窗口尺寸；两份都不内缩 | 实测 `p5b-fs-1344`（1344×756 窗口）；按指定尺寸复核：合成 RT 1344×756，四个绘制的常量和 WPE 逐位相同 |
 | fullscreenlayer | 组合层加 `fullscreen`：没有 effect、cbm 是 0 / 31 时同组合层整层不画；带子层照报 `model:fullscreen:children`（WPE 这时子层按场景相机画进全屏 RT，没测，语料 0 个） | 读码 §2.5 |
 
 ### 组（带子层的组合层）
@@ -2044,7 +2045,7 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 
 ### 已知差异与只记不补
 
-- **先按场景分辨率画再缩到画布的采样差**（`FINAL_CHECK.md` 已登记）：正交场景里场景分辨率 ≠ 窗口分辨率时，锐利边缘（月亮轮廓、图层硬边）缩小采样有差，最大差 35–90；放大采样（`zoom` 2 / 2.87）时最大差只有 12。几何与内置量逐位相同。
+- **产品先按场景分辨率画再缩**（`FINAL_CHECK.md` 已登记，不复刻）：正交场景里场景分辨率 ≠ 窗口分辨率时，锐利边缘（月亮轮廓、图层硬边）缩小采样有差，最大差 35–90；放大采样（`zoom` 2 / 2.87）时最大差只有 12。dev 探针按窗口尺寸画时（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）：`3605722997` 三个相机整帧 0 差异；`3462279189` 四组每帧剩 49–117 个像素差 1，其中地板 effect 的 `g_EffectTextureProjectionMatrixInverse` 差 1 ulp，来自求逆的写法（WPE `FUN_14005f730` 的单精度余子式，我们 `math.ts` 的 `invert` 在 double 里算，`invertF32` 对同一个矩阵求逆和 WPE 逐位相同；`phase-f32-matrix.md` 登记的「求逆」），其余没有逐像素分开。
 - **透视场景里图像层的视锥剔除只记不补**：WPE 在透视场景对图像层做视锥剔除（相机背后与视野两侧外的剔掉，远过 farz 的照样画），正交场景不剔；着色器乘 MVP 时这些图层本来就不在画面里，没有画面差别（`p5d-imgcull`、`-imgcull-p`）。只在不乘 MVP 的着色器（如插桩 FR / CLK、`p5d-imgcull-p`）下看得出来，真实壁纸走查里 `p5d-camp-1` 的 FR / CLK 块就是这一条。
 - **槽 0 没有纹理的 fullscreen 模型**：几何不改成 2×2，WPE 用对象 `size`（`p5d-2d` 的探针层，±960 × ±540）；语料里 fullscreen 模型的槽 0 全是 `_rt_FullFrameBuffer`，没做。
 - **画布分辨率变化时重新加载**：粒子重新预热，WPE 只重建 RT、粒子接着跑。
@@ -2068,8 +2069,8 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 
 - **确定性工程逐像素相同（差 0）**：步骤 1 的 `p5d-depth-o`、`p5d-cull`、`p5c-depth`；步骤 2 的 `p5d-persp`（含 1280×1024）、`-persp-b`、`-depth2`、`-path` w1 / w6、`-shakep-r`、`-tilt`、`-2d-nofs`；步骤 3 的 `p5d-camo-c` / `-o` / `-r` / `-pp` / `-ppr` / `-par` / `-shake`、`p5d-camp-2`（`-camo-0` 只有 CLK 块差 34，CLK 取自光标、回放用缺省光标，排除后 0；`-camp-1` 只有 FR / CLK 两块不同，是上面的视锥剔除）；步骤 4 的 7 个工程（窗口 1600×900）除 CLK 块（颜色取自光标，这批日志没记光标）外相同。
 - **真实壁纸复制工程走查**（步骤 3 补充，`kbp content isolate`，脚本照常跑，WPE 窗口 1920×1080 与 1600×900）：
-  - `3462279189`（模板：原点脚本按 `canvasSize` 定位、`zoom` 绑属性、开视差）：全部 draw 的 MVP、视差点、`g_Time` 逐位相同；缺省属性、`zoom` 2、镜头位置改后相机原点与 WPE 相同。整帧差只在锐利边缘（上面的采样差）。
-  - `3605722997`（三个相机按属性切换、`zoom` 2.87、原点不在零点）：三个相机各录一段，最大差 12–35，超过 32 的 1 像素。
+  - `3462279189`（模板：原点脚本按 `canvasSize` 定位、`zoom` 绑属性、开视差）：全部 draw 的 MVP、视差点、`g_Time` 逐位相同；缺省属性、`zoom` 2、镜头位置改后相机原点与 WPE 相同。整帧差只在锐利边缘（上面的采样差），按窗口尺寸画时只剩上面那几十个 ±1。
+  - `3605722997`（三个相机按属性切换、`zoom` 2.87、原点不在零点）：三个相机各录一段，最大差 12–35，超过 32 的 1 像素；按窗口尺寸画时三段整帧 0 差异。
   - `3453730450`（透视，相机原点脚本用 `Date.now()` 缓入）：全部 draw 的 MVP 和 WPE 相同；步骤 4 实现透明排序后，原来黑色纯色层盖住 125 的 292 像素差消失（录制时 WPE 后处理开着，按开启档回放后整帧逐像素相同；关排序的对照在两种档位下都是 0 差）。
   - 脚本自己跑（工具第 7 批）：挂脚本相机的五组和塞值逐字节相同；`p5d-camo-s`、`p5d-camo-s4k`（场景 3840×2160、窗口 1920×1080，脚本日志 `canvasSize 3840 2160 screen 1920 1080 origin 1920 1080` 与 WPE 相同）整帧不排除任何区域逐像素相同。
 - **语料真实样本**：techno、dna_fragment、neon_sunset 解包加日志按 WPE 回放（见「已知差异」）；预览里三张都实时渲染，场景目标 3840×2160（主屏全分辨率）、铺满。
@@ -2304,7 +2305,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 - 暂停时机：WPE 由工作线程判断，实测第 32 帧冻住，我们是第 31 帧。
 - 预览、桌面、应用背景同时播同一张场景时各解各的；674 MiB 级的视频每次加载都整段写进 Chromium 的 Blob 存储（约 0.8 s），P9c 再看要不要换成缓存文件。
 - 视频尺寸和纹理尺寸不同时只拷重叠部分、记一条 warning（WPE 缩放到纹理尺寸；语料 0 段）。
-- 和 WPE 抓帧做整帧对照时，WPE 按窗口分辨率直接画，我们先画场景分辨率再缩到画布（`render_scene` 的 `canvas`），锐利边缘会多出十几级差，这是所有图层共有的读回差异，不是视频的。
+- 和 WPE 抓帧做整帧对照时，以前的读回是先画场景分辨率再缩到画布，锐利边缘多出十几级差，这是所有图层共有的读回差异，不是视频的。2026-11-14 起 `render_scene` 给 `canvas` 时按窗口尺寸直接画（同 WPE），这一项不再出现；P9a 的视频对照没有按新画法重跑（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）。
 
 **语料**（173 个工程）：能渲染 47 → 50（`3822149301`（HEVC）、`3824550659`、`3828359750`）；报 `tex:video` 的 41 张只去掉这个键。三张解锁场景的视频纹理和 WPE 抓帧逐像素比：HEVC 那张平均差 0.19、最大 5；两段没标颜色的 H.264 平均差 1.2–1.7、99 分位 ≤ 10（WPE 与 ffmpeg 之间也是这个量级）。P9b：用到 `getVideoTexture` 的 6 张（3243449890、3276911872、3326873240、3361965869、3470764447、3605722997）只去掉 `script:api:layer.getVideoTexture`，能渲染数不变，它们还差别的节（人偶、相机、`input`、粒子层的 `play` 等）；强制渲染下按时段切换、改速度、自写控制都和脚本逻辑一致，没有和视频有关的报错。
 
@@ -2356,13 +2357,13 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **走查**（FINAL_CHECK，2026-11-14）：
 - 四个生成测试工程（`ignore/p10/proj/`，窗口与场景同为 1920×1080）：不受脚本控制的动画整帧逐像素相同（`p10-curves`、`p10-zoom` 18 帧含 FR、CLK）；`p10-zoom` 的缩放和 WPE 一样晚一帧。
-- 真实壁纸的复制工程（`kbp content isolate`）7 张：`3577990983`（转场 effect）15 帧逐像素相同；其余动画写进的值（effect 常量、`alpha`、`color`、`angles`、`origin`、组缩放、文本层 alpha 与 `origin`）和 WPE 逐位相同，像素差都归「窗口与场景不同高」（WPE 按窗口分辨率画）。
+- 真实壁纸的复制工程（`kbp content isolate`）7 张：`3577990983`（转场 effect）15 帧逐像素相同；其余动画写进的值（effect 常量、`alpha`、`color`、`angles`、`origin`、组缩放、文本层 alpha 与 `origin`）和 WPE 逐位相同。当时的像素差归「窗口与场景不同高」（WPE 按窗口分辨率画）；按窗口尺寸重跑（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）后 `intro`（7680×2160，场景比窗口大）、`rings` 全部逐像素相同，`frostp` / `sun` / `gradt` / `whale` 每帧剩 0–3507 个 ±1，逐 draw 查过都和尺寸无关：`sun` 是 `g_ModelViewProjectionMatrixInverse` 的求逆写法，`gradt`、`frostp` 出在输入与常量都和 WPE 相同的那一次绘制里（着色器求值的舍入）。
 - 依据与逐 draw 对照见子计划「步骤 3 走查」「步骤 4」。
-- P10b：`p10-script`、`p10-edge`（不再排除受脚本控制的对象）与补测工程 `p10b-api` 共 23 段 69 帧，带脚本回放后全部逐像素相同，`[kf]` 日志的逐帧条目与事件条目（含回调里读到的 `engine.runtime`）和 WPE 相同。真实壁纸 `3336377291`、`3427691867` 的时钟（`init` 里 `play()`）复制工程 8 段：逐 draw 的 MVP 与 alpha 0 ulp，动画中途那帧两边 alpha 都是 0.7435418367385864；像素差只在文字上，顶点与图集两边相同，归「按窗口分辨率画」。走查里修了两处：经字符串写回的 `NaN` 被读成 0（`atof` 补上 UCRT 的 `inf` / `nan`）、dev 探针里事件回调读到的 `engine.runtime` 晚一帧（`ProbeScripts.enterFrame`）。
+- P10b：`p10-script`、`p10-edge`（不再排除受脚本控制的对象）与补测工程 `p10b-api` 共 23 段 69 帧，带脚本回放后全部逐像素相同，`[kf]` 日志的逐帧条目与事件条目（含回调里读到的 `engine.runtime`）和 WPE 相同。真实壁纸 `3336377291`、`3427691867` 的时钟（`init` 里 `play()`）复制工程 8 段：逐 draw 的 MVP 与 alpha 0 ulp，动画中途那帧两边 alpha 都是 0.7435418367385864；当时像素差只在文字上，顶点与图集两边相同，归「按窗口分辨率画」，按窗口尺寸重跑后 24 帧逐像素相同。走查里修了两处：经字符串写回的 `NaN` 被读成 0（`atof` 补上 UCRT 的 `inf` / `nan`）、dev 探针里事件回调读到的 `engine.runtime` 晚一帧（`ProbeScripts.enterFrame`）。
 - P10b 补走查（P6c 之后）：`2887099508` 的翻页复制工程。WPE 用 `input_play` 点击，我们用探针 `inputTimeline` 按同一串帧时间与光标回放。
   - 事件链：点击 → `900` → `houye` → `111` → `yeshu`。逐帧日志（两条动画的帧号与是否在播、两层可见）1220 帧逐项相同；
   - 播完的 `single` 再 `play()` 从头播，事件每轮都派发；
-  - 抓帧上书页那次绘制的 `g_Point0–3` 与 MVP 0 ulp，像素差归「按窗口分辨率画」。
+  - 抓帧上书页那次绘制的 `g_Point0–3` 与 MVP 0 ulp，当时的像素差归「按窗口分辨率画」；按窗口尺寸重跑（6080×3420 场景、1920×1080 窗口、`ultra`）5 帧逐像素相同。
   - 27 张用 `getAnimation` 的场景按网格点击跑脚本，没有 `getAnimation` / `IAnimation` 相关的错误（回归 K11）。
 
 **已知差异与只记不补**：
@@ -2418,7 +2419,7 @@ puppet 在 WPE 里是图像层的一种画法，不是新的对象种类。图�
 
 **已知差异与只记不补**：
 - **`rsqrtps`**：WPE 归一化四元数用 `rsqrtps` 硬件近似加一次牛顿，我们用精确倒数平方根加同一次牛顿。骨骼旋转差 1 ulp 量级，乘上上千像素的绑定平移后，平移分量差 1e-4 量级；单位旋转 WPE 是 0.9999995，我们是 1.0。硬件表随 CPU 变，不复刻（同 P4「近似倒数不复刻」）。
-- **窗口与场景不同尺寸**：WPE 按窗口建投影直接画，我们按场景画再上屏。只差高度、缩放正好为 1 时（4K 屏上 3840×2160 被压成 3840×2130）也会有 ≤ 2 级的差和偶发的边缘覆盖翻转；泛光链 RT 的尺寸同理。是已登记的分辨率差异的特例。
+- **窗口与场景不同尺寸**：WPE 按窗口建投影直接画，产品按场景画再上屏。只差高度、缩放正好为 1 时（4K 屏上 3840×2160 被压成 3840×2130）也会有 ≤ 2 级的差和偶发的边缘覆盖翻转；泛光链 RT 的尺寸同理。是已登记的分辨率差异的特例。dev 探针按窗口尺寸画时没有这一项：3840×2130 窗口那组复制工程重跑后 `3203778110` 只剩第 280 帧 32 个像素差 1（`rsqrtps`），`2896608544` 每帧 178–1990 个 ≤ 2 级，和走查时「只换骨骼」的预测同量级（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）。
 - **写死不可见的 effect**：编译期不进 effect 列表，判合成路径时不算；WPE 的 effect 个数可能不同。语料里没有「puppet 的 effect 全部写死不可见」的。
 - **精灵表与纹理通道**：WPE 也会让它们走合成路径；它们本来就在 `tex:animation` / `puppet:texture-channels` 下照报。
 - **性能**：一张场景最多 21 个 puppet、单个最多 86 根骨骼，每帧在 CPU 上采样、混合、算矩阵，可见与否都算。
@@ -2544,7 +2545,7 @@ puppet 在 WPE 里是图像层的一种画法，不是新的对象种类。图�
   - `p6b-api-rt` 用探针跑脚本，和 WPE 整帧比：除每帧变的帧号文字与 FR / CLK，0 差异；
   - `p6b-api` 在预览里重编译后，s3 的字体、背景、文字框（310×168）和 WPE 一致；
   - `3824424509` 的日历格子和 WPE 同一天的画面 0 差异；
-  - 语料 183 张干净 88 → 90，解锁 `2861028294`、`3429479356`（后者带 4K 视频纹理，探针等第一帧超时；改用去掉视频层的复制工程，3840×2130 窗口下整帧 0 差异）。
+  - 语料 183 张干净 88 → 90，解锁 `2861028294`、`3429479356`（后者带 4K 视频纹理，探针等第一帧超时；改用去掉视频层的复制工程，3840×2130 窗口下整帧 0 差异；1920×1080 窗口按窗口尺寸画也是 0 差异，以前两个 `blurprecise` 层的差来自先画再缩）。
 
 **已知差异与后续**：`anchor: center` 当中性是按「居中盖满时裁边相等」推的，留白样式（`fit` / `center`）下没查；回退链里的 Twemoji 只查 WPE `assets`；普通字形为 0 个时不出 `glyphs` 步骤（WPE 画不画空网格没查）；系统字体在 macOS / Linux 上换成本机的同款或替代字体（1d2，候选路径待真机核对，`TODO:[WPE_SCENE]`），画面和 WPE 不会逐像素相同。1e 起：
 - 缺字体时晚一到几帧：WPE 同步读字体，我们读完下一帧才补上，中间照画旧文字（已定 4）；

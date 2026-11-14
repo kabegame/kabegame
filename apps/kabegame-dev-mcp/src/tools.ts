@@ -6,8 +6,9 @@
  *   一步，长任务等完成并报 MCP 进度），以及不需要 vite 的 `hash_compare`、`app_log`。
  * - 粒子回放（第 4 批）：WPE 的一次抓帧（日志 + RenderDoc 轨迹）在 MCP 里经 `timeline.ts` 组成探针要的 `dts` / `times` /
  *   逐帧光标，工具只收文件路径与回放到的帧号。
- * - 读回画布（第 5 批）：`render_scene` / `host_render` 的 `canvas` 原样交给探针，探针按 `fill` 上屏到这么大的画布再读回；和时间线
- *   交给探针的窗口不同时在 MCP 里报 `[local]`，结果里写明读回的是什么。
+ * - 窗口尺寸 `canvas`（第 5 批，phase-render-size 起改语义）：`render_scene` / `host_render` 的 `canvas` 原样交给探针，正交场景缺省按这个尺寸
+ *   画（`style` 缺省 fill，照 WPE 的对齐方式做进投影的裁切边距），`renderMode: "scene"` 才是旧的「场景分辨率 + 读回时按 fill 铺放」；
+ *   和时间线交给探针的窗口不同时在 MCP 里报 `[local]`，结果里写明这次的画法。
  * - 视频时刻（P9a 步骤 3）：`render_scene` / `host_render` 的 `videoTime` 原样交给探针（每段视频 seek 到这个时刻再渲染），结果里写一行
  *   每段实际取的时刻（`meta.videos`）；也作用于用户纹理里的视频。
  * - 用户 GIF（`gifDts`）：每项一帧 g_Frametime，探针读回前逐项推进用户纹理里的 GIF；结果写一行用户纹理（`userTexturesLine`）。
@@ -389,11 +390,25 @@ const CANVAS_SIDE = z.number().int().positive().max(MAX_CANVAS);
 const CANVAS = z
   .tuple([CANVAS_SIDE, CANVAS_SIDE])
   .describe(
-    `读回画布 [宽, 高]（像素，正整数，各不超过 ${MAX_CANVAS}）：把读回那一帧用产品上屏的同一份着色器与线性采样器，按 fill（居中盖满裁切，` +
-      "同 WPE 测试窗口）铺进这么大的画布，读回画布，PNG 就是这个尺寸；不给时读回场景目标（场景分辨率，和以前逐字节相同）。" +
-      "画布就是模拟的壁纸窗口，光标按它换算，所以要和时间线交给探针的窗口（逐帧光标的 timeline.window）相同，不同时报 [local]。" +
-      "和 WPE 抓帧比时传抓帧窗口的尺寸，比较前不用再缩放。只改读回、不改渲染：g_Screen 等内置 uniform 仍按场景目标算（同产品）；" +
-      "WPE 场景比窗口大时按窗口分辨率直接画，我们先按场景分辨率画再缩，细节会有差",
+    `窗口（画布）尺寸 [宽, 高]（像素，正整数，各不超过 ${MAX_CANVAS}），模拟的壁纸窗口，PNG 就是这个尺寸：正交场景按这个尺寸直接画（场景目标就是它，` +
+      "壁纸样式 style 做进正交投影的裁切边距，照 WPE；g_Screen、快照、泛光、反射、深度、fullscreen 合成 RT 随它走，读回场景目标本身，同 WPE 测试窗口），" +
+      "场景比窗口大或小都行，不用再缩放；透视场景本来就按它画。不给时读回场景目标（场景分辨率，和以前逐字节相同）。" +
+      "光标按它换算，所以要和时间线交给探针的窗口（逐帧光标的 timeline.window）相同，不同时报 [local]。" +
+      'renderMode: "scene" 取旧的画法：场景分辨率画完、读回时按 fill 铺进这么大的画布（只改读回，g_Screen 等仍按场景目标）。' +
+      "产品（预览、桌面）不按这个画，它们是场景分辨率 + 上屏缩放",
+  );
+const RENDER_STYLE = z
+  .enum(["fill", "fit", "stretch", "center"])
+  .describe(
+    "壁纸样式（只在按指定尺寸画时有效，要和 canvas 一起给），照 WPE 的对齐方式：fill = 0（缺省，等比盖满裁溢出，WPE 测试窗口的缺省）、" +
+      "fit = 1（等比放进留白，WPE 叫 fill）、stretch = 2、center = 3（一个场景像素对一个窗口像素）；对齐方式 1 / 3 整个目标清成 schemecolor，" +
+      "0 / 2 用 clearcolor。不收 tile",
+  );
+const RENDER_MODE = z
+  .enum(["target", "scene"])
+  .describe(
+    "给了 canvas 时怎么画：target（缺省，正交场景按 canvas 尺寸画）或 scene（旧的读回画布：场景分辨率 + 读回时按 fill 铺放，字节同以前，" +
+      "此时 style 只能是 fill）。target 要和 canvas 一起给；透视场景不看它",
   );
 /** 视频时刻（P9a 步骤 3）：秒，非负有限数；对象的项数上限（64）由 vite 的 `checkVideoTime` 查。 */
 const VIDEO_SECONDS = z.number().finite().nonnegative();
@@ -477,6 +492,8 @@ const RENDER_FIELDS = {
   ),
   replay: RENDER_REPLAY.optional(),
   canvas: CANVAS.optional(),
+  style: RENDER_STYLE.optional(),
+  renderMode: RENDER_MODE.optional(),
   videoTime: VIDEO_TIME.optional(),
   gifDts: GIF_DTS.optional(),
   trace: TRACE.optional(),
@@ -672,20 +689,50 @@ export function checkCanvasWindow(
 }
 
 /**
- * 结果里说明读回的是什么（第 5 批）：给了 canvas 时「画布 W×H，场景目标 SW×SH 按 fill 铺进去」，否则「场景目标 SW×SH」。
+ * 渲染参数里 `style` / `renderMode` 与 `canvas` 的关系（phase-render-size）：没有 canvas 就没有尺寸可指定，样式也无从裁切。
+ * `scene` 读回固定按 fill 铺放，不能同时指定别的 style。发请求（开宿主）之前报 `[local]`，REST 侧同样会查（400）。
+ */
+export function checkRenderModeArgs(args: {
+  canvas?: readonly [number, number];
+  style?: string;
+  renderMode?: string;
+}): void {
+  if (args.style !== undefined && !args.canvas) {
+    throw new ToolError("local", "style 要和 canvas 一起给：样式做进投影的裁切边距，没有窗口尺寸就没有裁切");
+  }
+  if (args.renderMode === "target" && !args.canvas) {
+    throw new ToolError("local", "renderMode: target 要和 canvas 一起给（按它的尺寸画）");
+  }
+  if (args.renderMode === "scene" && args.style !== undefined && args.style !== "fill") {
+    throw new ToolError("local", `renderMode: scene 读回固定按 fill 铺放，不能同时指定 style ${args.style}`);
+  }
+}
+
+/**
+ * 结果里说明读回的是什么（第 5 批，phase-render-size 起按 `meta.render`）：
+ * - 按指定尺寸画：「窗口 W×H 按指定尺寸画（样式、对齐方式、裁切边距、清屏色），读回场景目标本身」；
+ * - 旧画法（`scene`，或之前的宿主产物没有 `render` 而有 `canvas`）：「画布 W×H，场景目标 SW×SH 按 fill 铺进去」；
+ * - 否则「场景目标 SW×SH」。
  * 没给 canvas、时间线推得出窗口而读回尺寸和它不同时，再提示一行该传的 canvas。之前的宿主产物没有 `canvas` / `sceneTarget`，
  * 按读回尺寸就是场景目标处理。
  */
 export function readbackLines(
-  meta: Pick<RenderMeta, "width" | "height" | "canvas" | "sceneTarget">,
+  meta: Pick<RenderMeta, "width" | "height" | "canvas" | "sceneTarget" | "render">,
   canvas: readonly [number, number] | undefined,
   timelineWindow: readonly [number, number] | null | undefined,
 ): string[] {
   const target = meta.sceneTarget ?? [meta.width, meta.height];
+  const render = meta.render;
+  const sized = render?.mode === "target";
   const lines = [
-    meta.canvas
-      ? `读回：画布 ${sizeText(meta.canvas)}，场景目标 ${sizeText(target)} 按 fill（居中盖满裁切）铺进去，同产品上屏`
-      : `读回：场景目标 ${sizeText(target)}（没给 canvas，不经过上屏）`,
+    sized
+      ? `读回：窗口 ${sizeText(target)} 按指定尺寸画（样式 ${render.style}，WPE 对齐方式 ${render.alignment}，裁切边距 [${render.edges!.join(", ")}]，` +
+        `清屏 ${render.clear ? `schemecolor [${render.clear.join(", ")}]` : "clearcolor"}），读回场景目标本身，不经上屏`
+      : render?.mode === "perspective"
+        ? `读回：透视场景按画布尺寸 ${sizeText(target)} 画，读回场景目标本身`
+        : meta.canvas
+          ? `读回：画布 ${sizeText(meta.canvas)}，场景目标 ${sizeText(target)} 按 fill（居中盖满裁切）铺进去，同产品上屏`
+          : `读回：场景目标 ${sizeText(target)}（没给 canvas，不经过上屏）`,
   ];
   if (!canvas && timelineWindow && (timelineWindow[0] !== meta.width || timelineWindow[1] !== meta.height)) {
     lines.push(
@@ -1221,6 +1268,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
    */
   const renderBody = (imageId: string, render: Args<typeof RENDER_FIELDS>) => {
     const { replay, trace, scripts, ...base } = render;
+    checkRenderModeArgs(base);
     const rest = {
       ...base,
       ...(trace ? { trace: traceRequestOf(trace) } : {}),
@@ -1306,7 +1354,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       description:
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
         "replay、canvas、videoTime 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回（replay.fr 缺省 true，把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色）；" +
-        "给 canvas 时读回按 fill 上屏到这么大的画布；videoTime 定视频纹理的时刻（也作用于用户视频）；gifDts 逐帧推进用户 GIF；trace 同 render_scene，把这一帧的逐 draw 轨迹写进 trace.save 目录；" +
+        "给 canvas 时正交场景按这个尺寸直接画（style 缺省 fill，照 WPE 的对齐方式做进投影裁切边距，读回场景目标本身；renderMode: scene 取旧的读回时按 fill 铺放）；videoTime 定视频纹理的时刻（也作用于用户视频）；gifDts 逐帧推进用户 GIF；trace 同 render_scene，把这一帧的逐 draw 轨迹写进 trace.save 目录；" +
         "scripts 同 render_scene：探针照宿主跑场景脚本（外部值来自请求、可重复），FR 由脚本自己画、不再涂色。",
       inputSchema: {
         handle: z.string().min(1),
@@ -1422,8 +1470,10 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "给 replay 时按 WPE 的 dt 序列确定性回放粒子（种子固定），再读回最后一帧，用来和 WPE 抓帧逐像素比；时间线用 { timeline: { log, track, frame } } 从 WPE 日志与 RenderDoc 轨迹组，" +
         'passes 缺省按标签里的 fps<N> 推。抓帧期间光标在动时给 timeline.cursors（"log" 按每一帧的光标复现，要 cursor=True 生成的工程），' +
         "探针第 i 帧用第 i 帧的光标、读回帧的 g_PointerPositionLast 是上一帧的，窗口和场景不同尺寸时按 fill 换到场景上；不给时光标固定为 pointer（不能同给）。" +
-        "不给 canvas 时读回场景目标（场景分辨率）；给 canvas: [宽, 高] 时用产品上屏的同一份着色器按 fill 铺进这么大的画布再读回，" +
-        "和 WPE 抓帧比时传抓帧窗口的尺寸（要和时间线交给探针的窗口相同），比较前不用再缩放；只改读回、不改渲染。" +
+        "不给 canvas 时读回场景目标（场景分辨率）；给 canvas: [宽, 高] 时正交场景按这个尺寸直接画（场景目标 = 窗口，壁纸样式 style 缺省 fill、照 WPE 的对齐方式做进投影的" +
+        "裁切边距，对齐方式 1 / 3 清屏用 schemecolor，读回场景目标本身；g_Screen、泛光、快照、反射、深度、fullscreen 合成 RT 随它走），" +
+        "和 WPE 抓帧比时传抓帧窗口的尺寸（要和时间线交给探针的窗口相同），场景比窗口大或小都不用再缩放；产品（预览、桌面）不按这个画；" +
+        'renderMode: "scene" 取旧画法（场景分辨率画完、读回时按 fill 铺放，只改读回）。' +
         "不给 scripts 时探针不跑场景脚本，回放时 replay.fr（缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧（第 N 帧，N = 回放的帧数）的颜色，" +
         "同 WPE 里它的颜色脚本，比较时不用再屏蔽 FR；不是 kbp 工程（没有挂颜色脚本的 FR）时跳过，结果里写一行涂了没有。" +
         "给 scripts: true | { clock?, seed? } 时探针照宿主跑场景脚本：建好场景之后跑 init，回放的每一帧设好相机之后跑一帧；Date、Math.random、" +

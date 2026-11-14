@@ -187,24 +187,35 @@ render_scene     { imageId: <id>, replay: { timeline: { log: "<数据目录>/out
 `ignore/p4/c1/out/replay-cp.txt` 逐系统相同；`render_scene` 回放 `p4b-refract` 到 907 帧，RGBA 摘要等于 `b5v/out/real-summary.json`；
 `particle_corners` 对 `p4a` 和 `step4/out/ours-p4a-corners.json` 逐位相同（记录见 `.claude/plans/tools/kabegame-chromium-lib.md` 第 4 批）。
 
-### 读回画布（`render_scene` / `host_render` 的 `canvas`）
+### 读回画布（`render_scene` / `host_render` 的 `canvas`、`style`、`renderMode`）
 
 不给 `canvas` 时读回的是场景目标（场景分辨率，比如 3840×2160），和加这一项之前逐字节相同。给 `canvas: [宽, 高]`（两个正整数，各不超过
-16384）时，探针在读回那一帧编码完场景之后，用产品上屏的**同一份**着色器与线性采样器（`apps/wpe-scene/src/render/blit.ts`，渲染器也用它）
-按 `fill`（`scenePlacement("fill", …)`，居中盖满裁切，同 WPE 测试窗口）把场景目标铺进这么大的 `rgba8unorm` 纹理，读回它：PNG 与
-`meta.sha256` 都是画布的，`meta.width` / `height` 是画布尺寸，另有 `meta.canvas`（不给时 null）与 `meta.sceneTarget`（场景目标尺寸）。
-结果第一段写明读回的是什么。
+16384、不超过设备的纹理上限）时，正交场景**按这个尺寸直接画**（2026-11-14，`.claude/plans/wpe-import/3-scene/phase-render-size.md`），
+和 WPE 测试窗口同一种画法：
+- 场景目标就是 `canvas`；壁纸样式照 WPE 的对齐方式做进正交投影的四个裁切边距（`render/layout.ts` 的 `alignEdges`，读码
+  `rea-render-size.md` 第 1 节逐步 f32），没有上屏缩放，读回的就是场景目标本身。
+- `style`：`fill`（缺省，= WPE 对齐方式 0 cover，测试窗口的缺省）、`fit`（= 1，WPE 叫「fill」）、`stretch`（= 2）、`center`（= 3，
+  一个场景单位对一个窗口像素）；`tile` 报错（WPE 没有）。`fit` / `center` 时整个目标清成 `schemecolor`（场景区域的底色也是），
+  越出场景边界的图层在留白里看得见，同 WPE（0b 实测）。
+- `g_Screen`、`g_TexelSize`、`_rt_FullFrameBuffer`、泛光链、深度都按窗口尺寸；视差、`g_EyePosition`、`engine.canvasSize` 仍是场景单位；
+  `g_PointerPosition` 是窗口归一化坐标（不随对齐方式变），跟随点与光标命中按裁切后的 VP 反投影；透视粒子的相机按读码第 5 节。
+- 结果的 `meta.render` 写明画法：`{ mode: "target" | "scene" | "perspective", style, alignment, edges, clear }`；`meta.width` / `height` 是
+  画布尺寸，`meta.sceneTarget` 等于它。
+- `renderMode: "scene"`：旧的「场景分辨率画、读回时用产品上屏的同一份着色器按 `fill` 铺进画布」，和改动前逐字节相同（只在要和旧结果
+  对照时用；它和 WPE 在场景 ≠ 窗口时有分辨率差异，产品的预览与桌面仍是这种画法）。
+- 透视场景本来就按 `canvas` 画，不受 `style` / `renderMode` 影响；给了非 fill 的 `style` 报错。
 
-- **和 WPE 抓帧比时传抓帧窗口的尺寸**，比较前不用再缩放。场景是窗口的 2 倍（3840×2160 对 1920×1080）时线性采样正好落在 2×2 的中点，
-  输出就是 2×2 平均（实测和浮点平均最大差 0.5，和四舍五入后的平均最大差 1）。
+- **和 WPE 抓帧比时传抓帧窗口的尺寸**，比较前不用再缩放；样式与 WPE 测试窗口的 `alignment` 属性对应（`apply_properties` 改的那个）。
+  2026-11-14 验收：`ignore/prs` 的三个生成工程在 1920×1080、1280×720、1920×800、1440×1080 与 960×540 场景 × 四种对齐方式下 18 段，
+  遮掉帧号 / 时钟两层后全部和 WPE 逐像素相同（`ignore/prs/cmp_target.py`）。
 - **画布就是模拟的壁纸窗口，光标按它换算**：探针用 `window ?? canvas`。时间线交给探针的窗口（有逐帧光标时才交）和 `canvas` 不同时报
   `[local]`、不开宿主；REST 同时给 `window` 与 `canvas` 而不同回 400（`field: "canvas"`）。没给逐帧光标时窗口不交给探针，不比较。
 - 没给 `canvas`、时间线推得出窗口（标签末尾的 `-<宽>x<高>`）而读回尺寸和它不同时，结果里提示该传的 `canvas`。`canvas` 不反过来喂给
   时间线，也不默认取时间线的窗口（老调用的读回尺寸不变）。
-- **只改读回、不改渲染**：`g_Screen`、`g_TexelSize` 等内置 uniform 仍按场景目标算，同产品。**已知差异**：WPE 场景比窗口大时按窗口分辨率
-  直接画图层（`3830255100-kbp` 的抓帧：图层画进 1920×1080 的后备缓冲，只有图层合成 RT 是 3840×2160），我们先按场景分辨率画、上屏再缩，
-  这部分差别会留在比较结果里（是产品的差异）。
-- 宿主产物不认识 `canvas`（改了探针没重建）时 vite 报 409 `[host]`，不会把场景目标当画布交回。
+- 参数关系：`style` 要和 `canvas` 一起给；`renderMode: "target"` 要有 `canvas`；`renderMode: "scene"` 不收非 fill 的 `style`
+  （REST 回 400，MCP 报 `[local]`，`renderFrames.ts` 的 `--style` / `--render-mode` 同规则）。
+- 宿主产物不认识这些参数（改了探针没重建）时 vite 报 409 `[host]`，不会按旧画法交回。vite 插件与 MCP 是 dev / 会话启动时加载的，
+  它们的新参数要等重启后才生效；在那之前可以经 `host_eval` 直接调 `__kabegameSceneProbe.renderFrame({ …, canvas, style })`。
 
 ```text
 render_scene { imageId: <id>, replay: { timeline: { log: "ignore/p5/inst/out/3830255100-kbp-fps20-1920x1080-log.txt", frame: 173, cursors: "log" } },
