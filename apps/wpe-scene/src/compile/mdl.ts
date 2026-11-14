@@ -2,8 +2,12 @@
  * mdl（静态网格）的解析（P5c 步骤 1）。读码见 rea-p5-mesh 第 1 节，实测见 p5-REPORT「P5c 语义的实测核对」。
  *
  * WPE 所有版本的 mdl 都走同一个加载函数 `FUN_140261880`，各段按版本号门槛读（rea 1.2、1.3、1.7），所以这里也只有一个函数
- * `parseMdl`：读文件头、逐个网格读材质表、标志、包围盒、顶点格式、顶点块与索引块，再按标签跳过尾部段。顶点与索引字节是文件缓冲上
- * 的视图，不拷贝、不在 CPU 上逐顶点重排，GPU 上直接当顶点缓冲、索引缓冲用（步骤 2）。
+ * `parseMdl`：读文件头、逐个网格读材质表、标志、包围盒、顶点格式、顶点块与索引块，再按标签读或跳过尾部段。顶点与索引字节是文件
+ * 缓冲上的视图，不拷贝、不在 CPU 上逐顶点重排，GPU 上直接当顶点缓冲、索引缓冲用（步骤 2）。
+ *
+ * P12a 步骤 1 起，puppet 用到的部分也读出来（`.claude/plans/wpe-import/3-scene/phase12/phase-12a-mesh-animation.md`「步骤 1」点 1，
+ * 格式照 rea-p12-mdl 第 1、2、4、7 节，与 `ignore/p12/rea/mdl/mdl12.py` 一一对应）：网格的绘制组（可选块 2）、v23 记录表、标志 bit1
+ * 多读的 u32；尾部段里的 `MDLS`（骨骼）与 `MDLA`（动画）。`MDLE`、`MDAT`、`MDMP` 照旧整段跳过（P12a 不用）。
  *
  * 另有两张表的事实来源：顶点格式的属性表 `MDL_ATTRIBUTES`（rea 1.4，`p5c-layout` 实测偏移逐项相同），以及网格的绘制顺序
  * `meshDrawOrder`（MSVC STL `std::sort` 的移植，`p5c-order` 实测逐个复现）。
@@ -135,6 +139,97 @@ export interface MdlMesh {
   bounds: number[] | null;
   /** v ≥ 21 的两个可选块、v ≥ 23 的记录表非空（木偶数据，rea 1.3：语料只出现在 puppet mdl，模型对象用的都是空的）。 */
   puppet: boolean;
+  /**
+   * 标志 bit1 时多读的 u32（rea-p12-mdl 8.2：纹理通道网格的 `BLENDROWCOUNT`，`mesh+0x1c`）；没有 bit1 时为 0。语料 1 个网格
+   * （`3811424158` 的 `01_z` 网格 1，值 1）。
+   */
+  blendRowCount: number;
+  /**
+   * v ≥ 21 的可选块 2：绘制组（rea-p12-mdl 7.2），每项 16 字节 `{u32 骨骼, i32 顺序偏移, u32 索引起点, u32 索引数}`，项数 = 字节数 >> 4。
+   * 语料 92 个网格，正好把 u16 索引缓冲切成首尾相接的段。没有绘制顺序轨道时 WPE 不重排（p12-REPORT 用例 7），P12a 只解析。
+   * 可选块 1（每顶点的图像空间坐标，图像层运行时没有读者，rea 7.1）照旧读过即丢。
+   */
+  drawGroups: MdlDrawGroup[];
+  /** v ≥ 23 的记录表（rea-p12-mdl 7.3：裁切遮罩，两组下标指向绘制组）。P12b 用；P12a 只看有没有（`puppet:clipping`）。 */
+  records: MdlRecord[];
+}
+
+/** 一个绘制组（可选块 2 的一项，rea-p12-mdl 7.2）。 */
+export interface MdlDrawGroup {
+  bone: number;
+  /** 同一骨骼下各段的排序细分（i32），排序键 = 骨骼绘制顺序基数 + 它。 */
+  order: number;
+  start: number;
+  count: number;
+}
+
+/** v23 记录表的一项（rea-p12-mdl 7.3；`list1` / `list2` 哪组是遮罩见 p12-REPORT「更正读码」，P12b 定）。 */
+export interface MdlRecord {
+  /** u64，按 number 存（语料都 < 2³²）。 */
+  id: number;
+  /** 裁切遮罩纹理路径（`masks/clipping_mask_*`，推断）。 */
+  name: string;
+  flags: number;
+  list1: number[];
+  list2: number[];
+}
+
+/** `MDLS` 的一根骨骼（rea-p12-mdl 1.2）。 */
+export interface MdlBone {
+  name: string;
+  /** 文件里的 u32（`bone+0x64`；只有 bit1 有运行时作用：物理，语料 0 根）。 */
+  flags: number;
+  /** `0xFFFFFFFF` 为根，读成 −1；其余照文件的 u32。 */
+  parent: number;
+  /**
+   * 局部 4×4 的 16 个 f32，按文件顺序原样：glm 的列主序、列向量约定，平移在 `[12..14]`（按 rea-p12-mdl 的说法就是「行主序、行向量
+   * 约定，平移在第 4 行」，同一块内存）。长度前缀 L < 64 时只覆盖前 L 字节，其余保持构造缺省的单位阵（`0x14026b860`，语料全是 64）。
+   */
+  local: Float32Array;
+  /** 骨骼 JSON 原文（`FUN_140265c30` 的输入；P12d 解析物理，P12a 只用它判断 `puppet:physics`）。 */
+  json: string;
+}
+
+/** `MDLS` 段（rea-p12-mdl 1.1–1.3）。 */
+export interface MdlSkeleton {
+  /** `atoi(标签 + 4)`。 */
+  version: number;
+  /** 段里的骨骼数。大于 `MAX_BONES` 时 WPE `int 0x29` 直接终止进程（rea 1.1），这里不读骨骼（`bones` 为空），由 puppet 报键。 */
+  count: number;
+  bones: MdlBone[];
+  /** v ≥ 2 的可选骨骼矩阵（mdl+0x48，静止姿势的来源，rea-p12-runtime 7）；没有为 null（语料 0 个有）。 */
+  restMatrices: Float32Array[] | null;
+  /** v ≥ 3 每骨骼绘制顺序基数（mdl+0x1e8，按 i32 用；语料 92 个有）。 */
+  drawOrder: number[] | null;
+  /** v ≥ 2 的记录、约束、键表、链表个数（rea 1.3 第 1、3、4、5 项；语料全 0，非 0 报 `puppet:ik`）。命中盒与命中顺序读过即丢。 */
+  extras: { records: number; constraints: number; keyMaps: number; chains: number };
+}
+
+/** `MDLA` 段的一条动画（rea-p12-mdl 4.2）。 */
+export interface MdlAnimation {
+  /** u64（`animationlayers[].animation` 指的就是它），语料高 32 位全是 0：按 number 存，≥ 2³² 时 puppet 报 `mdl:animation-id`。 */
+  id: number;
+  name: string;
+  /** 模式串：`mirror` / `single`，其它都是循环（`FUN_1401a8c10`，rea-p12-runtime 3.1）。 */
+  mode: "loop" | "mirror" | "single";
+  fps: number;
+  /** 文件里的长度；帧数 = length + 1，首尾就是第 0 / 第 length 帧。 */
+  length: number;
+  /** 动画 flags（bit0：引用别的动画，语料 0 处）。 */
+  flags: number;
+  /**
+   * 每条一个轨道（语料轨道数都 = 骨骼数）：轨道 flags（bit0 = 不参与动画，rea 4.3）与 `9 × (length + 1)` 个 f32，每帧依次平移 xyz、
+   * 欧拉角 xyz（弧度）、缩放 xyz，不稀疏（rea 4.4）。字节 4 对齐时是原文件缓冲上的视图，否则拷一份。
+   */
+  tracks: { flags: number; frames: Float32Array }[];
+  /** v ≥ 3 的每骨骼透明度轨道（rea 4.7 第 12 项）：P12a 只记有没有，内容由 P12b 读。 */
+  boneAlpha: boolean;
+  /** v ≥ 6 的每骨骼绘制顺序轨道（rea 4.7 第 15 项）：同上。 */
+  drawOrderTrack: boolean;
+  /** 事件：f32 秒 + 事件 JSON（rea 4.7 第 17 项）。P12c 派发。 */
+  events: { time: number; json: string }[];
+  /** flags bit0 的引用块、v ≥ 2 的记录轨道或约束轨道（语料 0 处，puppet 报 `puppet:animation-ref`）。 */
+  unsupported: boolean;
 }
 
 export interface MdlFile {
@@ -148,13 +243,32 @@ export interface MdlFile {
   sections: string[];
   /** 读越界（文件被截断）：已读出的部分照留，能力表整个报 `mdl:truncated`。 */
   truncated: boolean;
+  /** 最后一个 `MDLS` 段；没有为 null（静态 puppet、模型对象）。 */
+  skeleton: MdlSkeleton | null;
+  /** `MDLA` 段的动画（按文件顺序）；没有为空。 */
+  animations: MdlAnimation[];
+  /**
+   * 读了内容却没恰好读到段末的段标签（`MDLS` / `MDLA`：读多、读少、段内读出文件末尾、长度检查不过）。WPE 的读取上限是整个文件，
+   * 段内读多了会读进下一段（rea-p12-mdl 1.1），长度检查不过时 `int 0x29` 终止进程（4.2）；语料 137 个文件 0 处，puppet 报
+   * `mdl:section:<标签>`。和 `truncated` 无关：段外的结构照旧，模型对象的能力表结果不变。
+   */
+  sectionIssues: string[];
 }
+
+/** 骨骼数上限（rea-p12-mdl 1.1：`> 0x80` 时 `int 0x29`）。 */
+export const MAX_BONES = 0x80;
 
 /** 并集退化时的包围盒（`0xc8000000` / `0x48000000`，rea 1.6）：等于不剔除。 */
 const UNBOUNDED = [-131072, -131072, -131072, 131072, 131072, 131072];
 
 /** 读越界：WPE 的读取原语这时返回 0 / 空串（rea 1.1），语料全部恰好读到末尾、没有截断的样本，所以不猜，整个文件报截断。 */
 class Truncated extends Error {}
+
+/** 段内容不合格式（WPE 在这里 `int 0x29` 终止进程，或行为未定义；语料 0 处）：只记这一段（`sectionIssues`）。 */
+class Malformed extends Error {}
+
+/** 单位阵的 16 个 f32（骨骼局部矩阵的构造缺省，`0x14026b860`）。 */
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
 /** 小端、无对齐填充的顺序读取（rea 1.1 的读取原语）。 */
 class MdlReader {
@@ -175,11 +289,41 @@ class MdlReader {
   u8(): number {
     return this.bytes[this.take(1)];
   }
+  u16(): number {
+    return this.view.getUint16(this.take(2), true);
+  }
   u32(): number {
     return this.view.getUint32(this.take(4), true);
   }
+  i32(): number {
+    return this.view.getInt32(this.take(4), true);
+  }
+  /** u64（`FUN_1402616b0`）：按 number 返回，超过 2⁵³ 会丢精度（语料都 < 2³²，调用方据此报键）。 */
+  u64(): number {
+    const at = this.take(8);
+    return this.view.getUint32(at + 4, true) * 2 ** 32 + this.view.getUint32(at, true);
+  }
   f32(): number {
     return this.view.getFloat32(this.take(4), true);
+  }
+  /** 裸 64 字节的 4×4（`FUN_140261710` / 内联读）：拷一份，免得对齐问题。 */
+  matrix(): Float32Array {
+    const at = this.take(64);
+    return new Float32Array(this.bytes.slice(at, at + 64).buffer);
+  }
+  /**
+   * `FUN_1400d3ef0(r, dst, 64)`（rea-p12-mdl「方法」）：u32 长度 L + 拷 min(L, 64) 字节，只前进拷贝的字节数；没拷到的部分保持单位阵。
+   * 剩余不足 64 + 4 字节时 WPE 不读（语料 0 处，按越界）；L 为负（≥ 2³¹）时也不读（语料 0 处，按格式错误报这一段）。
+   */
+  lengthMatrix(): Float32Array {
+    if (this.pos + 64 + 4 > this.bytes.length) throw new Truncated();
+    const length = this.u32();
+    if (length >= 2 ** 31) throw new Malformed();
+    const n = Math.min(length, 64);
+    const at = this.take(n);
+    const out = new Float32Array(IDENTITY);
+    new Uint8Array(out.buffer).set(this.bytes.subarray(at, at + n));
+    return out;
   }
   /** 以 `\0` 结尾的字符串；到文件末尾还没有 `\0` 算越界。 */
   cstr(): string {
@@ -197,6 +341,16 @@ class MdlReader {
   }
 }
 
+/**
+ * 按文件里的个数逐个读：个数是坏的（很大）时读到文件末尾抛 `Truncated`，不会先按个数分配一个巨大的数组（`Array.from({ length })` 会抛
+ * `RangeError`）。
+ */
+function repeat<T>(count: number, read: () => T): T[] {
+  const out: T[] = [];
+  for (let i = 0; i < count; i++) out.push(read());
+  return out;
+}
+
 /** C 的 `atoi`：跳过前导空白，可带符号，读到第一个非数字为止；没有数字时为 0。 */
 function atoi(text: string): number {
   return Number.parseInt(text, 10) || 0;
@@ -209,10 +363,22 @@ function atoi(text: string): number {
  *   包围盒；v ≥ 15 时 u32 格式；顶点块、索引块；v ≥ 21 时两个可选块（u8 为真时才有）；v ≥ 23 时记录表；
  * - v > 12 时尾部段：标签串 + u32 段末绝对偏移 + 数据，下一个标签从段末读，所以不认识的段整段跳过（`p5c-ver` 的 S14 / S23），
  *   读到空标签结束。段末不在当前位置与文件末尾之间时算越界（WPE 把读取上限设成 `min(段末, 文件长)`，倒退的段末会重读，不猜）。
+ *   `MDLS`、`MDLA`（只比前 4 个字符，版本 = `atoi(标签 + 4)`，rea-p12-mdl 1.1、4.1）读出内容（`readSkeleton` / `readAnimations`），
+ *   读完核对恰好到段末，不一致只记进 `sectionIssues`；无论读成怎样，下一个标签都从段头写的段末读（同 WPE）。
  */
 export function parseMdl(bytes: Uint8Array): MdlFile {
   const reader = new MdlReader(bytes);
-  const file: MdlFile = { version: 0, skins: 0, meshes: [], bounds: UNBOUNDED, sections: [], truncated: false };
+  const file: MdlFile = {
+    version: 0,
+    skins: 0,
+    meshes: [],
+    bounds: UNBOUNDED,
+    sections: [],
+    truncated: false,
+    skeleton: null,
+    animations: [],
+    sectionIssues: [],
+  };
   try {
     file.version = atoi(reader.cstr().slice(4));
     const version = file.version;
@@ -222,7 +388,7 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
     for (let m = 0; m < count; m++) {
       const materials = Array.from({ length: file.skins }, () => reader.cstr());
       const flags = version >= 4 ? reader.u32() : 0;
-      if (flags & 2) reader.u32();
+      const blendRowCount = flags & 2 ? reader.u32() : 0;
       const bounds = version >= 17 ? Array.from({ length: 6 }, () => reader.f32()) : null;
       const format = version >= 15 ? reader.u32() : headerFormat;
       const stride = mdlStride(format);
@@ -230,30 +396,31 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
       const indices = reader.block();
       const indexFormat = flags & 1 ? "uint32" : "uint16";
       let puppet = false;
+      let drawGroups: MdlDrawGroup[] = [];
+      const records: MdlRecord[] = [];
       if (version >= 21) {
+        // 可选块 1：u32（`0x140261b79` 的返回值没存，语料恒 1）+ 字节块（rea-p12-mdl 7.1），读过即丢
         if (reader.u8()) {
           reader.u32();
           reader.block();
           puppet = true;
         }
         if (reader.u8()) {
-          reader.block();
+          drawGroups = readDrawGroups(reader.block());
           puppet = true;
         }
       }
       if (version >= 23) {
-        const records = reader.u32();
-        // 每项：u64、名字、u32 标志、两组「u32 个数 + 个数 × u32」（rea 1.3 第 10 行）
-        for (let r = 0; r < records; r++) {
-          reader.skip(8);
-          reader.cstr();
-          reader.u32();
-          for (let list = 0; list < 2; list++) {
-            const length = reader.u32();
-            for (let k = 0; k < length; k++) reader.u32();
-          }
+        const length = reader.u32();
+        // 每项：u64 id、名字、u32 标志、两组「u32 个数 + 个数 × u32」（rea-p5-mesh 1.3 第 10 行、rea-p12-mdl 7.3）
+        for (let r = 0; r < length; r++) {
+          const id = reader.u64();
+          const name = reader.cstr();
+          const recordFlags = reader.u32();
+          const lists = [0, 1].map(() => repeat(reader.u32(), () => reader.u32()));
+          records.push({ id, name, flags: recordFlags, list1: lists[0], list2: lists[1] });
         }
-        if (records > 0) puppet = true;
+        if (length > 0) puppet = true;
       }
       file.meshes.push({
         materials,
@@ -267,6 +434,9 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
         indexCount: Math.floor(indices.length / (indexFormat === "uint32" ? 4 : 2)),
         bounds,
         puppet,
+        blendRowCount,
+        drawGroups,
+        records,
       });
     }
     file.bounds = unionBounds(file.meshes);
@@ -277,6 +447,7 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
         file.sections.push(tag);
         const end = reader.u32();
         if (end < reader.pos || end > bytes.length) throw new Truncated();
+        readSection(reader, tag, end, file);
         reader.pos = end;
       }
   } catch (error) {
@@ -284,6 +455,201 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
     file.truncated = true;
   }
   return file;
+}
+
+/**
+ * 读一个尾部段的内容（只认 `MDLS`、`MDLA`，其余不动）。段内读出文件末尾、格式不合、没恰好读到段末，都只把标签记进 `sectionIssues`，
+ * 不影响 `truncated` 与之后的段（读取器的位置由调用方拨回段末）。骨骼数超过 `MAX_BONES` 时 WPE 直接终止进程，这里停在骨骼数之后、
+ * 不核对段末（由 puppet 报 `mdl:skeleton:bones`，不重复报 `mdl:section:MDLS`）。
+ */
+function readSection(reader: MdlReader, tag: string, end: number, file: MdlFile): void {
+  const kind = tag.slice(0, 4);
+  if (kind !== "MDLS" && kind !== "MDLA") return;
+  const version = atoi(tag.slice(4));
+  try {
+    if (kind === "MDLS") {
+      const skeleton = readSkeleton(reader, version);
+      file.skeleton = skeleton;
+      if (skeleton.count > MAX_BONES) return;
+    } else file.animations = readAnimations(reader, version, file.skeleton, file.meshes.length);
+    if (reader.pos !== end) file.sectionIssues.push(tag);
+  } catch (error) {
+    if (!(error instanceof Truncated) && !(error instanceof Malformed)) throw error;
+    file.sectionIssues.push(tag);
+  }
+}
+
+/** 可选块 2 的绘制组（rea-p12-mdl 7.2）：项数 = 字节数 >> 4，零头不读。 */
+function readDrawGroups(block: Uint8Array): MdlDrawGroup[] {
+  const view = new DataView(block.buffer, block.byteOffset, block.byteLength);
+  return Array.from({ length: block.length >> 4 }, (_, i) => ({
+    bone: view.getUint32(i * 16, true),
+    order: view.getInt32(i * 16 + 4, true),
+    start: view.getUint32(i * 16 + 8, true),
+    count: view.getUint32(i * 16 + 12, true),
+  }));
+}
+
+/**
+ * `MDLS` v1–v4（`0x1402624c1`–`0x140263963`，rea-p12-mdl 1.1–1.3，照 `mdl12.py` 的 `parse_mdls`）：
+ * - u32 骨骼数（> 128 时停，见 `readSection`）；每骨骼：名字、u32 文件 flags、u32 父、长度前缀的局部矩阵、JSON 串；
+ * - v ≥ 2：u16 个记录（名字、u32 id、u32 类型、裸矩阵）；u8 开关的可选矩阵（骨骼数个 → 静止姿势来源，记录数个读过即丢）；u32 个约束
+ *   （骨骼、a、b，v ≥ 4 多一个 flags，flags bit1 再多两个 f32）；u16 个键（先 n 个 u32，再每个一张 `u16 个 {u32, 12 字节}`）；u16 个链
+ *   （骨骼、u32 个记录下标、u16 个子项，每个子项：骨骼、u16 个孙项，每个孙项：骨骼、flags、两个 f32、u16 个骨骼下标）；u8 开关的命中盒
+ *   （每骨骼 vec3 + 矩阵）、u8 开关的命中顺序（每骨骼 u32）——这几样语料全 0 / 只用于光标命中，读过即丢，只记个数；
+ * - v ≥ 3：u8 开关的每骨骼绘制顺序（u32，按 i32 用）。
+ * WPE 对链表的下标做越界检查（`int 0x29`）；这里不查，链表非空本来就报 `puppet:ik`。
+ */
+function readSkeleton(reader: MdlReader, version: number): MdlSkeleton {
+  const count = reader.u32();
+  const skeleton: MdlSkeleton = {
+    version,
+    count,
+    bones: [],
+    restMatrices: null,
+    drawOrder: null,
+    extras: { records: 0, constraints: 0, keyMaps: 0, chains: 0 },
+  };
+  if (count > MAX_BONES) return skeleton;
+  for (let i = 0; i < count; i++) {
+    const name = reader.cstr();
+    const flags = reader.u32();
+    const parent = reader.u32();
+    const local = reader.lengthMatrix();
+    const json = reader.cstr();
+    skeleton.bones.push({ name, flags, parent: parent === 0xffffffff ? -1 : parent, local, json });
+  }
+  if (version >= 2) {
+    const records = reader.u16();
+    for (let r = 0; r < records; r++) {
+      reader.cstr();
+      reader.skip(8 + 64);
+    }
+    if (reader.u8()) {
+      skeleton.restMatrices = skeleton.bones.map(() => reader.matrix());
+      reader.skip(records * 64);
+    }
+    const constraints = reader.u32();
+    for (let c = 0; c < constraints; c++) {
+      reader.skip(12);
+      const flags = version >= 4 ? reader.u32() : 0;
+      if (flags & 2) reader.skip(8);
+    }
+    const keyMaps = reader.u16();
+    reader.skip(keyMaps * 4);
+    for (let k = 0; k < keyMaps; k++) reader.skip(reader.u16() * 16);
+    const chains = reader.u16();
+    for (let j = 0; j < chains; j++) {
+      reader.u32();
+      reader.skip(reader.u32() * 4);
+      const items = reader.u16();
+      for (let p = 0; p < items; p++) {
+        reader.u32();
+        const subs = reader.u16();
+        for (let q = 0; q < subs; q++) {
+          reader.skip(16);
+          reader.skip(reader.u16() * 4);
+        }
+      }
+    }
+    if (reader.u8()) reader.skip(count * (12 + 64));
+    if (reader.u8()) reader.skip(count * 4);
+    skeleton.extras = { records, constraints, keyMaps, chains };
+  }
+  if (version >= 3 && reader.u8()) skeleton.drawOrder = Array.from({ length: count }, () => reader.i32());
+  return skeleton;
+}
+
+/**
+ * 一条 f32 轨道的字节块要恰好是 `size × (length + 1)` 字节（WPE 不满足时 `int 0x29`，rea-p12-mdl 4.2；语料 12187 条骨骼轨道全部满足）。
+ */
+function checkTrack(block: Uint8Array, size: number, frames: number): Uint8Array {
+  if (block.length % size !== 0 || block.length / size !== frames) throw new Malformed();
+  return block;
+}
+
+/** f32 数组：字节 4 对齐时是原缓冲上的视图（不拷贝），否则拷一份（`Float32Array` 视图要求偏移对齐）。 */
+function floatView(block: Uint8Array): Float32Array {
+  return block.byteOffset % 4 === 0
+    ? new Float32Array(block.buffer, block.byteOffset, block.length >> 2)
+    : new Float32Array(block.slice().buffer);
+}
+
+/**
+ * `MDLA` v1–v6（`0x140263968`–`0x140265577`，rea-p12-mdl 4.2，照 `mdl12.py` 的 `parse_mdla`）。每条动画按顺序：u64 id、名字、模式串、
+ * f32 fps、u32 长度、u32 flags、u32 个骨骼轨道（u32 flags + 字节块）；v ≥ 2 每个 MDLS 记录一条同样的轨道、每个约束一条 f32 轨道；
+ * v ≥ 3 u32 条「u32 + f32 轨道」（纹理通道权重）、u8 开关的每轨道 f32 轨道（骨骼透明度）；v ≥ 4 u8 开关的每网格变形权重；v ≥ 5 六个
+ * f32；v ≥ 6 u8 开关的每轨道 f32 轨道（绘制顺序）；flags bit0 时引用块（u16 + 4 × u32）；最后 u32 个事件（f32 秒 + JSON 串）。
+ * 「读了不用」的 u32（rea 4.2 第 11、12、15 项）照读。记录数、约束数取此前读到的 `MDLS`（没有就是 0，同 WPE 用 mdl 的当前状态）。
+ */
+function readAnimations(
+  reader: MdlReader,
+  version: number,
+  skeleton: MdlSkeleton | null,
+  meshes: number,
+): MdlAnimation[] {
+  const records = skeleton?.extras.records ?? 0;
+  const constraints = skeleton?.extras.constraints ?? 0;
+  const count = reader.u32();
+  const out: MdlAnimation[] = [];
+  for (let a = 0; a < count; a++) {
+    const id = reader.u64();
+    const name = reader.cstr();
+    const modeText = reader.cstr();
+    const mode = modeText === "mirror" ? "mirror" : modeText === "single" ? "single" : "loop";
+    const fps = reader.f32();
+    const length = reader.u32();
+    const flags = reader.u32();
+    const frames = length + 1;
+    const trackCount = reader.u32();
+    const tracks = repeat(trackCount, () => {
+      const trackFlags = reader.u32();
+      return { flags: trackFlags, frames: floatView(checkTrack(reader.block(), 36, frames)) };
+    });
+    let unsupported = (flags & 1) !== 0;
+    const scalars = (n: number) => {
+      for (let k = 0; k < n; k++) {
+        reader.u32();
+        checkTrack(reader.block(), 4, frames);
+      }
+    };
+    if (version >= 2) {
+      for (let r = 0; r < records; r++) {
+        reader.u32();
+        checkTrack(reader.block(), 36, frames);
+      }
+      scalars(constraints);
+      if (records > 0 || constraints > 0) unsupported = true;
+    }
+    let boneAlpha = false;
+    if (version >= 3) {
+      scalars(reader.u32());
+      if (reader.u8()) {
+        boneAlpha = true;
+        scalars(trackCount);
+      }
+    }
+    if (version >= 4 && reader.u8())
+      for (let m = 0; m < meshes; m++) {
+        if (!(reader.u32() & 1)) continue;
+        reader.u32();
+        const targets = reader.u16();
+        for (let t = 0; t < targets; t++) {
+          reader.u16();
+          checkTrack(reader.block(), 4, frames);
+        }
+      }
+    if (version >= 5) reader.skip(24);
+    let drawOrderTrack = false;
+    if (version >= 6 && reader.u8()) {
+      drawOrderTrack = true;
+      scalars(trackCount);
+    }
+    if (flags & 1) reader.skip(2 + 16);
+    const events = repeat(reader.u32(), () => ({ time: reader.f32(), json: reader.cstr() }));
+    out.push({ id, name, mode, fps, length, flags, tracks, boneAlpha, drawOrderTrack, events, unsupported });
+  }
+  return out;
 }
 
 /**

@@ -57,8 +57,16 @@ P12 另有三条：
 - **mdl**（按图层计）：
   - 版本 v23 109、v19 28、v21 12、v16 10、v13 1。PLAN 写的只有 v21 / v23；LWE 也只认这两个，只画静态网格；
   - 网格格式 `0x180000f` 138（位置、法线、切线、uv、骨骼下标与权重）、`0x1800009` 11、`0x181000e` 6（多 `a_PositionVec4`，变形用 `w` 存下标）、`0xf` 5（没有骨骼数据）、`0x800021` 1；
-  - 网格标志：0 有 144 个，`0x4` 10、`0x1000` 5、`0x100c` 1、`0x2` 1。bit2 的含义没查（5 张）；bit10–13 决定变形段多读哪些块（rea-p5-mesh 1.7）；
-  - v21 起的两个可选块：可选块 1 有 45 个网格、可选块 2 有 116 个；v23 的记录表非空 5 个网格（4 张），名字形如 `masks/clipping_mask_<hash>`，推测是裁切遮罩（`clippingmaskimage4`）。
+  - 网格标志：0 有 144 个，`0x4` 10、`0x1000` 5、`0x100c` 1、`0x2` 1。步骤 0 查明（rea-p12-mdl 第 8 节）：
+    - bit1 是纹理通道网格；
+    - bit2 是 `SKINNING_ALPHA`（6 张）；
+    - bit3 是绘制组加动态索引缓冲；
+    - bit12 是变形目标的每顶点透明度，没有它时一个变形目标都不写；
+    - bit13 加 `MORPHING_MODIFIERS`；
+  - v21 起的两个可选块：可选块 1 有 45 个网格、可选块 2 有 116 个；v23 的记录表非空 5 个网格（4 张），名字形如 `masks/clipping_mask_<hash>`。步骤 0 查明：
+    - 可选块 1 是每顶点的图像空间坐标，运行时没找到读者；
+    - 可选块 2 是绘制组；
+    - 记录表就是裁切遮罩，记录名是遮罩纹理。
 - **段**（按图层计）：
   - `MDLS0001–0004` 155 个，即 5 个图层没有骨骼，是静态 puppet 网格（`3354366708`、`3811769317` 只有这种）；
   - `MDLA0001/0003/0005/0006` 143 个；`MDLE0002` 45、`MDAT0001` 34、`MDMP0001` 6。
@@ -68,7 +76,7 @@ P12 另有三条：
     - 795 根都有 `a`、`s`、`tp`，691 根有 `lamin` / `lamax` / `tm`，685 根有 `rax` / `ray` / `raz`；
     - 物理参数（`m`、`gd`、`ge`、`r`、`re`、`rf`、`ri`、`rs`、`t`、`tf`、`ti`、`ts`、`la`、`lt`、`ltmax`、`se`）15 根；
     - IK 参数（`ik*`、`tax` / `tay` / `taz`）9 根，`ik` 全是假。
-  - 开着物理（`r` 或 `t` 为真）的 14 根骨骼在 5 张场景：`2345214324`（5 根）、`3426865175`（4）、`3577990983`（3）、`3554161528`（1，`t`）、`3829467967`（1）。
+  - `r` 或 `t` 为真的骨骼 14 根，在 5 张场景。步骤 0 查明，物理要 `(r‖t) && (se‖re)` 才开，真正开物理的是 8 根骨骼、4 张场景：`2345214324`（4 根）、`3577990983`（2）、`3426865175`（1）、`3554161528`（1，`t`）。`3829467967` 的那根骨骼不开物理。
 - **动画层**（`animationlayers`）：
   - 142 个对象、219 项；每个对象 1 项的 95 个，2 项 31、3 项 8、4 项 6，最多 9 项；
   - 每项都有 `id`、`animation`（整数，指 `MDLA` 里的动画）、`name`、`additive`；`blend` 203、`rate` 175、`visible` 167、`blendin` / `blendout` / `blendtime` 165；
@@ -87,18 +95,23 @@ P12 另有三条：
 
 | 节 | 内容 | 只做 P12 时累计能渲染 | P4–P11 先做完时累计 |
 |---|---|---|---|
-| P12a puppet 网格与骨骼动画 | puppet 网格代替四边形（直接上屏、合成 RT 的基础 pass）、`MDLS` / `MDLA` / `MDLE`、动画层的时钟与混合、`SKINNING` / `BONECOUNT` 蒙皮、动画层字段的属性与脚本绑定、可选块；去掉 `model:puppet`、`object:animationlayers` | 88 → 97 | 135 → 150 |
-| P12b 挂点、变形与裁切遮罩 | `MDAT` 与对象 `attachment`、`MDMP` 与变形纹理（`MORPHING*`）、`SKINNING_ALPHA`、v23 记录表（裁切遮罩）；去掉 `object:attachment` | 99 | 155 |
-| P12c 脚本 | `getAnimationLayerCount` / `getAnimationLayer`、`IAnimationLayer` 的全部成员 | 99 | 162 |
-| P12d 骨骼物理 | 骨骼 JSON 的物理参数、每帧求解 | 101 | 167 |
+| P12a puppet 网格与骨骼动画 | puppet 网格 0 代替四边形（直接上屏，以及带 effect 时用 puppet 网格采样合成 RT 上屏）、`MDLS` / `MDLA`、动画层的时钟与混合、`SKINNING` / `BONECOUNT` 蒙皮、绘制组与绘制顺序（可选块 2、网格标志 bit3）、动画层字段的属性与脚本绑定；去掉 `model:puppet`、`object:animationlayers` | 88 → 97 | 135 → 148 |
+| P12b 挂点、变形、骨骼透明度、裁切遮罩、纹理通道 | `MDAT` 与对象 `attachment`、`MDMP` 与变形纹理（`MORPHING`）、`SKINNING_ALPHA`（网格标志 bit2）、v23 记录表（裁切遮罩）、纹理通道（bit1，`puppettexturechannels`）；去掉 `object:attachment` | 100 | 156 |
+| P12c 脚本 | `getAnimationLayerCount` / `getAnimationLayer`、`IAnimationLayer` 的全部成员、动画层字段上的脚本、`addEndedCallback`、`MDLA` 事件 | 100 | 163 |
+| P12d 骨骼物理 | 骨骼 JSON 的物理参数（`(r‖t) && (se‖re)` 才开）、每帧求解 | 101 | 167 |
 
-口径：
-- **只做 P12**：HEAD 上 13 张只差 P12，按 a → b → c → d 依次解锁 9、2、0、2 张。
+口径（步骤 0 之后按读码与实测重算，`ignore/p12/ana_sub2.py`）：
+- **只做 P12**：HEAD 上 13 张只差 P12，按 a → b → c → d 依次解锁 9、3、0、1 张。
 - **P4–P11 先做完**：
   - P4–P6 的键沿用 `ana_phases.py`，另把进行中的 P4f（`script:api:particle.*`）、P5c（`model:pending`）、P5d（`value:animation:camera`）、P6b（`text:script*`、`text:anchor:*`）算作做完，能渲染 108 张；P8 之后 111、P10 之后 114、P11 之后 135。
-  - 之后只差 P12 的 32 张，按 a → b → c → d 依次解锁 15、5、7、5 张。
-  - 每张按它要的子类归到最后一节：要挂点、变形或记录表的归 b，要脚本的归 c，要物理的归 d。
-  - 有 5 张用到网格标志 bit2 或 bit12（`2964778792`、`3253330537`、`3361965869`、`3577990983`、`3832133196`），上面先按「这两位不需要另做」算；步骤 0 查清后再归节。
+  - 之后只差 P12 的 32 张，按 a → b → c → d 依次解锁 13、8、7、4 张。
+  - 每张按它要的子类归到最后一节：
+    - 要挂点、变形、骨骼透明度（bit2）、记录表或纹理通道（任一网格带 bit1）的归 b；
+    - 要脚本的归 c，要物理的归 d。
+  - 写总计划时这里是 15、5、7、5，步骤 0 后有三处改动：
+    - 网格标志 bit2 原来是骨骼透明度、bit12 是变形的每顶点透明度，用到它们的 5 张从 a 挪进 b；
+    - `3811424158` 有纹理通道网格，从 a 挪进 b；
+    - 物理的门比原来算的严，`3829467967` 的那根骨骼不开物理，从 d 挪进 b。
 - **P12 场景还差别的节**（P4–P11 做完之后）：32 张只差 P12；2 张还差 P13（`3465215190`、`3706286085`）；3 张还差没归属的键（`model:passthrough:children:framebuffer` 2 张、`uniform:g_Texture3MipMapInfo` 1 张），不归 P12。
 - P12 场景同时依赖别的节（HEAD 上）：18 张还差 P11，11 张还差 P10。用 `getAnimationLayer` 的脚本都在光标回调里，要 P6c。上面的「P4–P11 先做完」都假设它们先做完。
 - PLAN 的表是 165 张口径（用到 35、只差它 5、累计 154），这里按 183 张重算，累计的假设也不同。
@@ -106,7 +119,9 @@ P12 另有三条：
 **P12 不做，继续报不支持：**
 - **模型对象的骨骼**：`3706286085` 的 `BoostModel` / `FBX3`，报 `mdl:skeleton` / `mdl:animation` / `mdl:morph`。只这 1 张，还差 P13 的雾、反射、阴影；`src/puppet/` 的骨骼运行时写成模型路径也能用，接线随 P13 做（见「决定」2）。
 - **语料 0 处的脚本 API**：骨骼、混合形状、挂点的读写，`createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`，`transformAttachmentToTexture`，照报原来的 `script:api:layer.*`。
-- **IK**：语料 9 根骨骼带 IK 参数，`ik` 全是假。步骤 0 确认 `ik` 为假时中性；为真的照报细分键。
+- **IK 与骨骼约束**：WPE 的 IK 只看 `MDLS` v≥2 里的 IK 链记录，和骨骼 JSON 的 `ik` 无关。语料里一条 IK 链记录都没有，`ik` 也全是假。所以骨骼 JSON 的 IK 键中性，有 IK 链、约束、键表、链表记录的 mdl 照报 `puppet:ik`（步骤 0）。
+- **`MORPHING_MODIFIERS`**（网格标志 bit13）、变形的法线与切线差（bit10 / bit11）：语料 0 个 puppet，照报细分键。
+- **WPE 会崩溃的两种组合**：有骨骼透明度轨道但网格 0 没有 bit2、有绘制顺序轨道但没有 bit3。WPE 在这两种情况下写空指针，进程退出（前者实测，后者读码推断），所以没有可照着画的结果。语料 0 个，照报 `puppet:alpha-track` / `puppet:order-track`。
 
 ## 现状锚点
 
@@ -218,7 +233,7 @@ const OBJECT_FLAGS = [
 1. **语料**：PLAN 写「33 张」「`animationlayers` 31 张」，现在是 37 张、32 张；累计数按 183 张、P4–P11 先做完重算。
 2. **mdl 版本**：PLAN 写 MDLV0021 / MDLV0023，语料还有 v13、v16、v19（50 个图层）。P5c 的解析器本来就照 WPE 认全部版本，P12 不按版本限制。
 3. **着色器的组合键**：PLAN 只提 `BONECOUNT`；`genericimage4` 还有 `SKINNING_ALPHA`、`MORPHING`、`MORPHING_NORMALS`、`MORPHING_MODIFIERS`，以及裁切遮罩的 `clippingmaskimage4`，P12b 一起做。
-4. **骨骼物理**：PLAN 没提。骨骼 JSON 带物理参数，5 张场景开着，单列 P12d。
+4. **骨骼物理**：PLAN 没提。骨骼 JSON 带物理参数，步骤 0 查明 4 张场景、8 根骨骼真正开着，单列 P12d。
 5. **分节**：PLAN 没分节，这里按「网格与动画 → 挂点与变形 → 脚本 → 物理」分四节。
 6. **模型对象的骨骼**：PLAN 把它算在 P12 里，这里定为随 P13 接线（「决定」2）。
 
@@ -267,42 +282,94 @@ const OBJECT_FLAGS = [
 
 ## P12a — puppet 网格与骨骼动画
 
+子计划见 [phase-12a-mesh-animation.md](phase-12a-mesh-animation.md)（2026-11-14）：mdl 解析与 puppet 数据 → 运行时 → 编译期接线 → 渲染接线 → 真机对照 → 收尾。下面是写子计划之前的范围。
+
+语义依据见 [rea-p12-mdl](rea-p12-mdl.md) 第 1–4、7、9 节、[rea-p12-runtime](rea-p12-runtime.md) 与 [p12-REPORT](p12-REPORT.md) 第一部分用例 1–4、7、8。
+
 - **编译期**：
-  - `parseMdl` 读出 `MDLS`、`MDLA`、`MDLE` 与可选块（`compile/mdl.ts`）；
-  - 图像层读模型 JSON 的 `puppet`，`layer.puppet` 带网格、骨骼、动画（`compile/bundle.ts` 接线，解析与打包放 `compile/puppet.ts`）；
-  - 材质 pass 照 WPE 加组合键；动画层的字段登记成绑定（用户属性、脚本）；
-  - 能力表：去掉 `model:puppet`、`object:animationlayers`；没查清或没实现的用法报细分键 `puppet:*`。
-- **主线程**（`src/puppet/`）：
-  - 动画层时钟、轨道采样、层混合、蒙皮矩阵都是纯 TS，float32 照 WPE；
-  - 每帧写图层的骨骼 uniform，帧里的位置照步骤 0；
+  - `parseMdl` 读出 `MDLS`（骨骼、可选骨骼矩阵、绘制顺序基数）、`MDLA`（动画、轨道、各版本的附加轨道、事件）与可选块 2（绘制组）（`compile/mdl.ts`）。`MDLE` 只跳过：图像层的加载、更新、绘制都不读它。
+  - 图像层读模型 JSON 的 `puppet`（字符串，且对象不是 fullscreen、不是组合层），`layer.puppet` 带网格 0、骨骼、动画、绘制组。`compile/bundle.ts` 只接线，解析与打包放 `compile/puppet.ts`。
+    - 只用网格 0；puppet 的索引一律按 u16 读。
+    - 顶点坐标是图层局部像素，不按 `size` 缩放。
+  - 组合键：有骨骼时加 `SKINNING` 与 `BONECOUNT` = 真实骨骼数（不取 2 的幂，和模型路径不同）。静态 puppet（没有 `MDLS`）不加组合键。
+  - 动画层：`animation` 找不到时整层丢掉；`rate` / `blend` / `visible` / `additive` / `blendin` / `blendout` / `blendtime` / `name` 的缺省值照读码。
+  - 能力表：去掉 `model:puppet`、`object:animationlayers`；P12b–d 的用法和没查清的报细分键 `puppet:*`。
+- **主线程**（`src/puppet/`，纯 TS，float32 照 WPE）：
+  - 时钟和 P10 关键帧同一套：每帧加 `rate × dt`，帧号 = `t / spf`。模式在 `MDLA` 的动画记录里。`visible` 为假的层时钟不走、也不参与混合。
+  - 采样：平移和缩放线性插值，旋转按最短路径 nlerp。静止姿势用 `MDLS` 的可选骨骼矩阵，没有时用局部矩阵。
+  - 混合：按层序逐层叠，有覆盖、权重、加法三种。权重和不归一化。淡入时长 `min(D/2, blendtime)`，非 single 只淡一次，淡出只在 single 有效。
+  - 蒙皮矩阵 = 父链世界矩阵 × 绑定姿势的逆。绑定姿势的逆由 `MDLS` 局部矩阵沿父链相乘再求逆得到。
+  - 绘制组：只有绘制顺序轨道写入时，才按 `trunc(基数 + 轨道) + 组偏移` 升序重写索引；没有轨道时保持文件顺序。
+  - 帧里的位置：和粒子在同一个更新循环里，在相机、P10 关键帧、脚本之前。图层隐藏时照样推进，壁纸暂停时冻结。
+  - 绑定字段的生效：用户属性当帧生效，脚本写回下一帧生效。
   - 重编译时保留时钟（同 P10）。
-- **渲染**：图像层画自己的几何换成 puppet 网格（直接上屏与合成 RT 的基础 pass），翻译器出 `g_bufAnimation` 的绑定。
-- **确定性回放**：dev 探针 `renderFrame` 与 kbp 回放按帧时间序列推进动画层时钟。
+- **渲染**：
+  - 不带 effect：图像层直接上屏的四边形换成 puppet 网格。UV 乘「图像宽高 / GPU 纹理宽高」：DXT 纹理会缩放，PNG / JPG 纹理按图像尺寸上传、比例为 1。
+  - 带 effect：基础 pass 照旧画四边形进合成 RT（按图像尺寸）。effect 在平面图像上做完后，最后用 puppet 网格采样合成 RT 上屏，UV 不缩放。
+  - `g_Bones` 按翻译器给的 uniform 布局写（每骨骼 64 字节），不照搬 WPE 的 48 字节布局。
+- **确定性回放**：dev 探针 `renderFrame` 与 kbp 回放按帧时间序列推进动画层时钟，从第 1 帧起。
 - **验收**：
-  - 确定性工程逐帧比 `g_Bones` 与顶点输出，残差到 float32 舍入级；
+  - 生成工程 `p12-modes` / `-fade` / `-mix` / `-bind` / `-order` / `-fx` / `-fx2` 与语料 `3203778110`、`3463520581` 逐帧比 `g_Bones` 与顶点输出，残差到 float32 舍入级（步骤 0 的读码模型已做到 ≤ 5 ulp）；
   - 解锁的场景和 WPE 同一时刻比整帧；
   - 语料：去掉的键只落在 puppet 场景上，别的场景逐张不变。
 
-## P12b — 挂点、变形与裁切遮罩
+## P12b — 挂点、变形、骨骼透明度、裁切遮罩、纹理通道
 
-- **挂点**：`MDAT` 与对象 `attachment`，子对象（图像、粒子、别的）的世界矩阵跟骨骼走；层级（P4a）里的父链按步骤 0 的公式接上。
-- **变形**：`MDMP` 打包成变形纹理，`g_MorphOffsets` / `g_MorphWeights` 每帧写；`MORPHING_NORMALS`、`MORPHING_MODIFIERS` 照读码。
-- **`SKINNING_ALPHA`** 与 v23 记录表（裁切遮罩）：按步骤 0 的结论定做法。
-- **验收**：挂点子对象的四角、变形顶点逐帧和 WPE 比；`3253330537` 的眼睛与嘴整帧比。
+语义依据见 [rea-p12-mdl](rea-p12-mdl.md) 第 5–8 节、[rea-p12-attach-physics](rea-p12-attach-physics.md) 第 1 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 5、6、11、第二部分第 2、3 节。
+
+- **挂点**：对象 `attachment` 在父 puppet 的 `MDAT` 里按全名查第一个。子对象的世界矩阵是 `W_父 · Pose[骨骼] · Att · T·R·S`，其中 `W_父` 是基类矩阵（不含 alignment）、`Pose` 是本帧动画之后的骨骼矩阵。
+  - 挂点退成普通父子的情况：查不到、父不是 puppet、子排在父前面。
+  - 粒子、文本、分组子对象都走同一个世界矩阵。
+  - 接进层级（P4a）的父链：父的 puppet 更新要排在子之前。
+- **变形**：
+  - `MDMP` 打成 `R16G16B16A16_SNORM` 变形纹理放槽 5，纹素 0 = (0, 0, 0, 1)，目标 t 第 v 个变形顶点在 `1 + t·nv + v`；
+  - 每帧写 `g_MorphOffsets` / `g_MorphWeights`：最多 11 个生效目标，按权重从大到小排；
+  - 网格标志没有 bit12 时一个目标都不写，但仍按权重把变形顶点的透明度乘 (1 − w)；
+  - 图像层不加 `MORPHING_NORMALS`。
+- **骨骼透明度**：网格标志 bit2 加 `SKINNING_ALPHA`，`g_BonesAlpha` 来自动画的每骨骼透明度轨道，覆盖、权重、加法三种合成照实测。
+- **裁切遮罩**（v23 记录表）：照 p12-REPORT 第二部分 3.4 的步骤画。
+  - 记录的 `list2` 是遮罩，画进半分辨率的 R8 遮罩 RT，用 `clippingmaskimage4`；遮罩组照常也作为普通组画一次。
+  - `list1` 是被裁切的组，只用 `CLIPPINGUVS` + `CLIPPINGTARGET` 变体画。
+  - 每条记录各清一次、画一次遮罩。
+- **纹理通道**（任一网格带 bit1，`3811424158`）：`puppettexturechannels` 加 `BLENDROWCOUNT` 能翻译；合成出的 RT 怎么替换图层的槽 0，步骤 0 没查清，P12b 子计划先补读码。
+- **验收**：挂点子对象的四角、变形顶点、`g_BonesAlpha` 逐帧和 WPE 比（生成工程 `p12-att` / `p12-am`、语料 `3463520581`）；`3253330537` 的眼睛与嘴、`3491865410` 的裁切遮罩整帧比。
 
 ## P12c — 脚本
 
-- `getAnimationLayerCount`、`getAnimationLayer`（名字或下标）返回包装对象，直接调 puppet 播放器，做法同 P10b 的 `IAnimation`；非 puppet 图层上照 WPE 的返回值。
-- `IAnimationLayer` 的全部成员（`fps`、`frameCount`、`duration`、`name`、`rate`、`blend`、`visible`、`play` / `pause` / `stop` / `isPlaying`、`setFrame` / `getFrame` 等，以步骤 0 读到的为准）；从 `scriptApi.ts` 的缺失表删掉这两个方法。
-- puppet 动画如果发 `AnimationEvent`，接到 P10b 已有的 `animationEvent` 派发。
-- **验收**：脚本工程每一步和 WPE 的日志、抓帧一致；8 张用到的场景在 dev 强制渲染下脚本不报错。点击触发要等 P6c。
+语义依据见 [rea-p12-attach-physics](rea-p12-attach-physics.md) 第 4 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 9。
+
+- `getAnimationLayerCount`、`getAnimationLayer`。
+  - 参数：整数按下标；字符串按层的 `name`，同名取最后一个。
+  - 找不到时返回 `null`：非整数、数字字符串、非 puppet 图层、静态 puppet 都算找不到。计数在这些情况下是 0。
+  - 返回的包装对象直接调 puppet 播放器，做法同 P10b 的 `IAnimation`，同一层每次返回同一个对象。
+- `IAnimationLayer` 的成员以实测为准：
+  - 可写：`blend`、`name`、`rate`、`visible`、`additive`、`blendin`、`blendout`、`blendtime`；
+  - 方法：`play` / `pause` / `stop` / `isPlaying`、`setFrame` / `getFrame`、`addEndedCallback`、`getAnimation`；
+  - 只读的 `fps` / `frameCount` / `duration`，赋值抛 TypeError；
+  - 方法调用下一帧生效；`setFrame` 抑制紧接着那次播完回调；`play()` 不重新淡入。
+- `addEndedCallback`：loop 每次回绕、mirror 每次换向、single 一次时调，回调不带参数。
+- `MDLA` 的事件：层时钟越过事件时间时，调同一图层上脚本的 `animationEvent`，`event` 是事件 JSON 的全部字段。接到 P10b 已有的派发。
+- 动画层字段上挂的脚本：`thisObject` 是那个 `IAnimationLayer`，`thisLayer` 是图像层。
+- 从 `scriptApi.ts` 的缺失表删掉这两个方法。
+- **验收**：生成工程 `p12-script` 每一步和 WPE 的日志、抓帧一致；8 张用到的场景在 dev 强制渲染下脚本不报错（`3326873240` 照 WPE 抛 TypeError）。点击触发要等 P6c。
 
 ## P12d — 骨骼物理
 
-- 骨骼 JSON 的物理参数解析进 bundle，`src/puppet/physics.ts` 每帧求解，位置照步骤 0（推测在动画采样之后、蒙皮矩阵之前）。
-- 求解器是有状态的：重编译保留状态，对象隐藏、壁纸暂停时的行为照 WPE。
-- 确定性回放喂同一串帧时间；如果 WPE 用固定步长，回放照抄步长。
-- **验收**：物理工程逐帧比骨骼矩阵（误差包络按步骤 0 的实测定）；5 张物理场景和 WPE 同一时刻比整帧。
+语义依据见 [rea-p12-attach-physics](rea-p12-attach-physics.md) 第 2 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 10、第二部分第 1 节。
+
+- 开关：骨骼 JSON 要 `(r‖t) && (se‖re)` 同时成立才开物理，否则标志清零。语料 4 张场景、8 根骨骼。
+- 求解：
+  - 位置：动画采样与父链之后、蒙皮之前，按骨骼下标逐根算。
+  - 步长：dt 就是帧时间，没有子步，积分比例 `min(60·dt, 1)`。
+  - 惯性：用上一帧物理之后的世界骨骼矩阵。图层移动会带动骨骼；脚本移动图层时，物理用的是上一帧脚本写的位置。
+  - 回弹：`re` 没有回弹，`se` 有弹簧。
+  - 另有重力、角度限制、平移弹簧与距离钳制；`rotTo` 的点积阈值要照抄。
+  - 首帧不算物理，隐藏照算，暂停冻结。
+- 状态：重编译保留；确定性回放喂同一串帧时间。
+- **验收**：
+  - 误差包络：`rotTo` 阈值附近差 1 ulp 就翻转、`re` 不回弹，逐位一致做不到。包络按「200 帧内物理转角误差 ≤ 2e-5 rad」量级定（p12-REPORT 第二部分 1.3）。
+  - 生成工程 `p12-phys` / `p12-phys2` 与语料 `2345214324`、`3426865175` 逐帧比骨骼矩阵，在包络以内；
+  - 4 张物理场景和 WPE 同一时刻比整帧。
 
 ## 和其它节的交界
 
@@ -317,21 +384,82 @@ const OBJECT_FLAGS = [
 - **P8**：puppet 图层上的 effect、对齐、依赖，走 P8 已有的合成 RT 路径，只换基础 pass 的几何。
 - **P10**：动画层的 `rate` / `visible` / `blend` 挂脚本时走 P3b / P10 的写回；puppet 动画的 `AnimationEvent` 接 P10b 的派发；动画层时钟和 P10 的时钟可能是同一种 float32 累加（步骤 0 比对），能共用就共用。
 - **P11**：P12 的 37 张里 18 张还差 P11，主要是音频 uniform 与媒体回调。
-- **P13**：模型对象的骨骼（`3706286085`）随 P13 接线。
+- **P13**：模型对象的骨骼（`3706286085`）随 P13 接线。P13 总计划（`be03b279`）把这张的骨骼算在 P12 里，两边的说法要对齐（见步骤 0 实施记录）。
 - **工具**：kbp-tools 的 puppet mdl 编码与 b2 常量读取，按它的协议加（在 SKILL 里登记）。
 
 ## 决定（2026-11-14 用户：按推荐开始）
 
 1. **蒙皮在哪做**：推荐 GPU，用翻译后的 WPE 着色器（`SKINNING` 等组合键），理由见「总体设计思路」。另一种是 CPU 蒙皮后当静态网格画：不用改翻译器，但 `SKINNING_ALPHA`、`MORPHING_MODIFIERS` 的公式要在 TS 里重写一遍，每帧还要重传顶点。
 2. **模型对象的骨骼**：推荐 P12 只接 puppet 图层，骨骼运行时写成模型路径也能用，模型对象的接线随 P13 做。只影响 `3706286085` 1 张，它还差 P13 的雾、反射与阴影。
-3. **分节**：推荐 P12a → P12b → P12c → P12d。物理放最后、单独一节：只 5 张，求解器的形状要等步骤 0；如果读出来很重，P12d 可以再拆，先照报 `puppet:physics`。
+3. **分节**：推荐 P12a → P12b → P12c → P12d。物理放最后、单独一节：只 5 张（步骤 0 后是 4 张），求解器的形状要等步骤 0；如果读出来很重，P12d 可以再拆，先照报 `puppet:physics`。
 4. **顺序**：步骤 0 现在就做（只读码、只实测）。P12a 要改图像层几何、帧循环、能力表和翻译器，和 P5、P6、P8、P10、P11 的会话错开。
 
 ## 风险
 
-1. **段格式与插值**：`MDLA` 四个版本、骨骼 JSON 的键都只能靠读码，没有公开资料（LWE 只画静态网格）。步骤 0 先读格式，再用编码出来的测试工程逐帧核对。
-2. **翻译器**：带骨骼组合键的 `genericimage4` 从来没真正编过，`mat4x3` 数组、`uint` 数组、顶点着色器采样纹理、单独的常量缓冲都可能要补规则。步骤 0 先预检。
-3. **物理的确定性**：有状态、可能依赖帧时间，和 WPE 逐帧比时误差会累积。步骤 0 定误差包络和回放方式。
+1. ~~**段格式与插值**~~：步骤 0 读出全部段的格式（语料 137 个 mdl 逐段读到段末、编码器往返 136 个逐字节相同），动画的时钟、采样、混合和 WPE 差 ≤ 5 ulp。
+2. ~~**翻译器**~~：步骤 0 预检四个 puppet 着色器在全部组合下都能翻译（`puppettexturechannels` 要给 `BLENDROWCOUNT`），不用改翻译器；还没在真 WebGPU 上建过管线，P12a 第一步补。
+3. **物理的确定性**：步骤 0 定了做法：dt 就是帧时间，回放喂同一串帧时间。`rotTo` 的阈值附近差 1 ulp 就翻转判定，`re` 又不回弹，所以逐位一致做不到，按误差包络验收（见 P12d）。
 4. **性能**：一张场景最多 21 个 puppet、单个最多 86 根骨骼，每帧在 CPU 上采样、混合、算矩阵。P12a 实测每帧开销，必要时把不可见、没有动画层的 puppet 跳过。
-5. **测试工程**：要先能编码 puppet mdl，比 P10 多一层工具活。编码器照读码写，先用语料里的 puppet 往返解析核对。
+5. ~~**测试工程**~~：编码器 `ignore/p12/defs/puppet.py` 已写好、往返核对通过，13 个生成工程在 `ignore/p12/defs/p12.py`。还没并进 kbp-tools，别的会话也在改它，等它们空下来再并。
 6. **共享文件**：和多个会话同时改图像层、帧循环与能力表。按块暂存，必要时在 HEAD 快照里实现再三方合并。
+
+## 实施记录
+
+### 步骤 0 — 调研（2026-11-14）
+
+读码三份（代理读 `wallpaper64.exe` 2.8.42 与 `scenescript64.dll`；REA 在本机三次都卡在启动分析超时，改读全量反汇编 `ignore/p4/rea/wp.asm`）：
+- [rea-p12-mdl](rea-p12-mdl.md)：段格式与图像层的 puppet 加载；
+- [rea-p12-runtime](rea-p12-runtime.md)：动画层时钟、采样、混合、蒙皮与上传；
+- [rea-p12-attach-physics](rea-p12-attach-physics.md)：挂点、骨骼物理、IK、脚本 API。
+
+实测见 [p12-REPORT](p12-REPORT.md)，分三部分：
+- 主会话：翻译器预检、6 张语料场景的真值、复核；
+- 第一部分：13 个生成工程、11 类用例；
+- 第二部分：语料里的物理、挂点、裁切遮罩与绘制组。
+
+工具与数据在 `ignore/p12/`：
+- mdl 解析器 `rea/mdl/mdl12.py`、编码器 `defs/puppet.py`、工程定义 `defs/p12.py`；
+- 读码模型 `rea/runtime/posemodel.py`、`rea/attach/physmodel.py`，组合模型 `meas/combo.py`；
+- 翻译器预检 `pre/`，分节统计 `ana_sub2.py`。
+
+结论（逐条见三份读码与报告）：
+- **动画**：时钟和 P10 关键帧同一套，采样、三种混合、淡入淡出、绑定字段的生效帧都实测过。读码模型和 WPE 的骨骼矩阵差 ≤ 5 ulp，多数逐位相同。
+- **画法**：
+  - puppet 只画网格 0，`BONECOUNT` 等于真实骨骼数；
+  - 不带 effect 时直接上屏，UV 按 GPU 纹理尺寸缩放；
+  - 带 effect 时，基础 pass 照旧画四边形进合成 RT（按图像尺寸），最后用 puppet 网格采样合成 RT 上屏；
+  - 静止姿势不用 `MDLE`。
+- **网格标志**：bit1 纹理通道、bit2 骨骼透明度、bit3 可变绘制顺序、bit12 变形的每顶点透明度、bit13 变形修正。
+- **挂点、物理、裁切遮罩**：公式和画法都对上。物理按误差包络验收。
+- **脚本**：查找规则、成员、播完回调、`MDLA` 事件都实测过。动画层字段脚本里的 `thisObject` 是动画层。
+- **IK**：语料里中性。
+- **翻译器**：不用改。
+
+对后面各节的影响已改进上文：
+- 分节表与口径重算：a → b → c → d 依次解锁 13、8、7、4 张，只做 P12 时是 9、3、0、1 张；
+- 骨骼透明度、变形的每顶点透明度、纹理通道挪进 P12b，物理改为 4 张、8 根骨骼；
+- P12a–d 按读码与实测写明做法和验收样本；
+- 「P12 不做」补上 IK 链、`MORPHING_MODIFIERS`、会让 WPE 崩溃的两种组合；
+- 风险 1、2、5 划掉，3 改成按误差包络。
+
+**WPE 崩溃一次。** 实测代理的生成工程里有一个 puppet，带骨骼透明度轨道、网格却没开 bit2。打开它时，用户常驻的 WPE 往空指针写、进程退出，桌面壁纸和别的会话的测试窗口一起断了。之后 WPE 被重新拉起（`-silent`），主会话核过：已重新注入，桌面壁纸窗口在。肇事的 puppet 已经从工程定义和生成的工程里删掉；「有绘制顺序轨道、没有 bit3」读码推断同样会崩，没有跑。实现时这两种组合照报不支持，不照抄。
+
+**和 P13 总计划的出入**：本计划按「决定」2 把模型对象的骨骼（`3706286085`）留给 P13 接线；P13 总计划（`be03b279`）的「P4–P12 先做完」把这张的骨骼算作 P12 做完。两边要统一，由用户定。骨骼运行时本来就写成两边都能用，差别只在模型路径的接线归哪一节。
+
+没查清、留给各节子计划：
+- 纹理通道合成出的 RT 怎么替换槽 0（P12b）；
+- 同一条裁切记录的 `list1` 有多个组时怎么画；
+- 遮罩 RT 的一半是对窗口还是对场景 RT；
+- 带 effect 的 puppet 上的裁切；
+- 变形的负权重与并列排序；
+- 物理的 `la` 限位、`lt`、轴锁、不可见时照算；
+- 挂点父有 `alignment`、挂在物理骨骼上；
+- 对象整体隐藏与壁纸暂停时动画推不推进的实测；
+- `blend` 绑用户属性的生效帧；
+- 语料 0 处的脚本 API。
+
+我的失误：
+- 第一次试抓的 `3351072238`，puppet 默认被用户属性隐藏，没画；
+- 总计划把 `3811424158` 当作「1 根骨骼的简单样本」，其实它带纹理通道；
+- 给两个实测代理的简报没说明回放进程是本会话共用的：一个代理收尾时关掉了另一个代理打开的抓帧，被关的那两项已重读、逐字节相同；
+- 给生成工程的代理的简报只限制了「卡死、忙等、死循环」，没要求先避开读码里可疑的组合，结果弄崩了共享的 WPE。

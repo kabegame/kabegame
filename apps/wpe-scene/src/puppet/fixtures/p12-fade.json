@@ -1,0 +1,434 @@
+{
+  "source": "ignore/p12/proj/p12-fade，WPE 抓帧 ignore/p12/out/wpe-p12-fade-fps20-1856x1044-consts.json，日志 p12-fade-fps20-1856x1044-log.txt；生成 ignore/p12/a/fix/mkfix.py",
+  "project": "p12-fade",
+  "dt": [
+    0.000195000001, 0.0704907998, 0.0513264984, 0.0507692993, 0.0510612987, 0.0515578985, 0.0518844984, 0.0517342985,
+    0.0520392992, 0.051884599, 0.0510746986, 0.0519975983, 0.0516019017, 0.0509657003, 0.0516120009, 0.0515786,
+    0.0518264994, 0.0515993014, 0.0520322993, 0.0512785017, 0.0501252003, 0.0493956991, 0.0504143015, 0.0508886985,
+    0.0497609004, 0.0494177006, 0.0502110012, 0.0501808003, 0.0498576015, 0.0500443988, 0.0499771982, 0.0495974012,
+    0.0507165007, 0.0494183004, 0.0509700999, 0.0494934991, 0.0500269011, 0.0492832996, 0.0502775013, 0.0493214987,
+    0.049052801, 0.0500721, 0.0504742004, 0.0500929989, 0.0495687984, 0.0495553985, 0.0498363003, 0.0497420989,
+    0.0505419001, 0.0496935993, 0.0506343991, 0.0494142994, 0.0500628985, 0.0494945012, 0.0506404005, 0.0504972003,
+    0.0505831018, 0.049421899, 0.0500834994, 0.0508119985, 0.0505505018, 0.0496203005, 0.0501956008, 0.049183201,
+    0.0508241989, 0.049144201, 0.0504035987, 0.0492602997, 0.0503741018, 0.0501849987, 0.0502292998, 0.0494889989,
+    0.0509056002, 0.0498001985, 0.0509153008, 0.0493854992, 0.0491905995, 0.0508251004, 0.0494773984, 0.0504750982,
+    0.0497343987, 0.0500536002, 0.0495638996, 0.0507612005, 0.0491588004, 0.0500347987, 0.0504597984, 0.0506278016,
+    0.0502143018, 0.0492901988, 0.0504309982, 0.0504182018, 0.0507247001, 0.0498320013, 0.0495674014, 0.0490382984,
+    0.0508290008, 0.0492039993, 0.0503755994, 0.0491451994, 0.0506757013, 0.0494385995, 0.0496428981, 0.050444901,
+    0.049984999, 0.0503467992, 0.0493776985, 0.0506316982, 0.0494538993, 0.0505736992, 0.0501271002, 0.0498320982,
+    0.0495584011, 0.0498281009, 0.0508014001, 0.0489871018, 0.0492655002, 0.0510443002, 0.0498115011, 0.0495404005,
+    0.0499395989, 0.0494913012, 0.0505807996, 0.0496403016, 0.0509281009, 0.0492715985, 0.0491347015, 0.0505524985,
+    0.0506847017, 0.0491067991, 0.0500814989, 0.0507880002, 0.0503595993, 0.0507825986, 0.0493527986, 0.0504118018,
+    0.0502882004, 0.0495413989, 0.0492790006, 0.0508015007, 0.0499307998, 0.0504164994, 0.049397599, 0.0504343994,
+    0.0503402986, 0.0508400984, 0.0497828014, 0.0489754006, 0.0499715991, 0.0502991006, 0.0494455993, 0.0497878008,
+    0.0503045991, 0.0504755005, 0.0505954996, 0.0495770015, 0.0493326001, 0.0491435006, 0.0509734005, 0.0502776988,
+    0.0510682985, 0.0495010018, 0.0494051017, 0.0503371991, 0.0499618016, 0.0501433983, 0.0498773009, 0.0505247004,
+    0.0493609011, 0.0849552006, 0.0464869998, 0.0466189012, 0.0466360003, 0.0836803988, 0.0914215967, 0.106943898,
+    0.0923186019, 0.103475899, 0.102047302, 0.0985291004, 0.100469202, 0.1006971, 0.100818597, 0.0995429978,
+    0.0973614007, 0.0966629013, 0.104809403, 0.0992301032, 0.0902023986, 0.0922695026, 0.0781520978, 0.123149499,
+    0.0855968967, 0.089304097, 0.0901594982, 0.0992014036, 0.0973379016, 0.096958302, 0.106289901, 0.0976653025,
+    0.0993368998, 0.1030901, 0.0946101993, 0.0885683969, 0.0829403996, 0.0980992019, 0.0991500989, 0.100812502,
+    0.101791702, 0.0933604985, 0.0945945978, 0.0974958017, 0.105412699, 0.0945044979, 0.101808101, 0.0968459994,
+    0.100756198, 0.0998691991, 0.0993620977, 0.104969002, 0.0967193022, 0.0979117006, 0.103799, 0.0968680978,
+    0.0980528966, 0.103012003, 0.0973979011, 0.0979012027, 0.104788996, 0.102602199, 0.0976648033, 0.096078299,
+    0.104297303, 0.104228802, 0.0929799974, 0.101516001, 0.103961103, 0.0938332006, 0.100916602, 0.102236897,
+    0.101453602, 0.0951028988, 0.106385, 0.0999476016, 0.0957624987, 0.0972253978, 0.101544298, 0.0986912996,
+    0.105388097, 0.0964087024, 0.105543502, 0.0950822979, 0.106639899, 0.0994789004, 0.0983465984, 0.0938922986,
+    0.1047704, 0.093286097, 0.100701302, 0.107357197, 0.0936999992, 0.101293497, 0.0988641009, 0.110169403, 0.153473496,
+    0.0911118984, 0.0997650996, 0.103393398, 0.0952226967, 0.106605403, 0.0910070017, 0.102375403
+  ],
+  "frames": [173, 185, 200, 215, 230, 245, 260, 272],
+  "puppets": [
+    {
+      "name": "sgl_inout",
+      "object": 2,
+      "path": "models/sgl_inout_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC/63RcWiMcRjA8d97G4azHYbh2GEYZnttZ4Zx73s77I9brUj+UDa55jh31+5W/vDHm6Ql6ZK0JF2SlqQlaUm6SbokLUlL0iVpSbokLQl37+vsptX71Xnqed/f+3s/7/O8z/u2ebx7Zbm+QZQJTZKEENk81hn1dfs7A5G6owfDPeHaI5FQUBiRHjJSX6tGCv1hRfpzXxUTQnMZmX/9d0y2N7FHYfVy13q9of9TL5v536PQeTWXVT9LwpI5WkTR7/02j3e3LMtO4bMY/6c7FIrqi5+ZUP6xh9lepq5DHc/CCku5AdTMAI2itNIYIGbsi0hX4IA/GOqJiog/2BXwiWzP5PiL6OGx5+ol3ZP3zU8zIxRzowCjARMHJgFMChihmhsbMA5gZGAUYNqB6QAmDIwGTC8wMWD6gIkD0w/MADCDwCSASQIzDMwIMClgRoFJAzMGjHCbm2JgSoCxAmMDphyYCmDswDiAqQKmGpgaYGRgnMA0AdMMjAKMB5hWYLzAtAOzB5h9wOwHpgOYQ8AcBiYATBiYKDDHgTkBjAbMSWBOAXMamF5gzgBzFphzwMSAOQ/MBWAuAtMHzCVgLgNzBZg4MFeBuQbMdWD6gbkBzE1gbgEzAMxtYO4AcxeYQWDuAXMfmAfAJIB5CMwjYB4DkwTmCTBPgXkGzDAwz4F5AcxLYEaAeQXMa2DeAJMC5i0w74B5D8woMB+A+QjMJ2DSwHwG5gswX4EZA+YbMN+B+QGMaDE3EjAWYIqAKQZmCjBTgZkGTAkw04GZAcxMYKzAzAKmFJgyYGzAzAZmDjBzgSkHZh4w84FZAEwFMAuBWQTMYmDswCwBZikwlcA4gFkGzHJgVgBTBcxKYFYBsxqYamDWALMWmHXA1ACzHphaYOqAkYHZAEw9MA3AOIHZCEwjMJuAaQJmMzBbgNkKTDMw24DZDowLGAUYFRg3MC3AeIDZAcxOYHYB0wqMefwCOrNPHQ8fAAA=",
+      "layers": [
+        {
+          "id": 2000,
+          "animation": 400,
+          "name": "sgl_inout",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendin": true,
+          "blendout": true,
+          "blendtime": 15
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 75.23172, 86.7362213, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 97.0407715, 98.5092773, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 98.3154144, 87.0208435, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.4182816, 72.4650879, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 81.9005203, 57.4565239, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 66.9292984, 42.4928665, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 47.3639374, 27.4492836, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 27.7151051, 14.9794769, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 75.23172, 86.7362213, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 97.0407715, 98.5092773, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 98.3154144, 87.0208435, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.4182816, 72.4650879, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 81.9005203, 57.4565239, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 66.9292984, 42.4928665, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 47.3639374, 27.4492836, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 27.7151051, 14.9794769, 0.0]
+      }
+    },
+    {
+      "name": "loop_in",
+      "object": 3,
+      "path": "models/loop_in_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC//N18QkzMDAyZuBnaGBkZGBgAOHcxJLUoszEnGL97KSC0gK9rOL8PAYI+HAQgsFsRwhmAGt2YITLOzKggAZ7CEbmowNsYqh2UGYejA827yB1zANh5PCg1L8N9jxgmpGBCUgyMTBDxX1dfIINDAxMGFKZIPFTlJ9fAmb8BwIHEu0gJAY0V8ERgSkzmBHmAUegB8wYdrFCPDARIs6Qk59fEJ+ZB6YZQPaJIBwBBl+YYGadcMJuJzImpIbBgbAaByLUNBChZgERag4QoeYBEWoYHAmrESBCjQIRagyIUONAhJoAItQkEKGmgAg1DUSo6SBCzQQi1MwgQs0CItQQBgCQ9n4CuwUAAA==",
+      "layers": [
+        {
+          "id": 2001,
+          "animation": 401,
+          "name": "loop_in",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendin": true,
+          "blendtime": 0.5
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 6.73623848, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 18.5093021, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.9791937, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.53495216, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.54351091, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 17.5071564, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.5507202, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.02053308, 100.0, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 6.73623848, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 18.5093021, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.9791937, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.53495216, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.54351091, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 17.5071564, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.5507202, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.02053308, 100.0, 0.0]
+      }
+    },
+    {
+      "name": "loop_out",
+      "object": 4,
+      "path": "models/loop_out_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC//N18QkzMDAyZuBnaGBkZGBgAOHcxJLUoszEnGL97KSC0gK9rOL8PAYI+HAQgsFsRwhmAGt2YITLOzKggAZ7CEbmowNsYqh2UGYejA827yB1zANh5PCg1L8N9jxgmpGBCUgyMTBDxX1dfIINDAxMGFKZIPFTlJ9fAmb8BwIHEu0gJAY0V8ERgSkzmBHmAUegB8wYdrNCPDAJIs6Qk59fEJ9fWgJmMIAsFEG4Agy+MMEMO+GE3VJkTEgNgwNhNQ5EqGkgQs0CItQcIELNAyLUMDgSViNAhBoFItQYEKHGgQg1AUSoSSBCTQERahqIUNNBhJoJRKiZQYSaBUSoIQwA2jvh37wFAAA=",
+      "layers": [
+        {
+          "id": 2002,
+          "animation": 402,
+          "name": "loop_out",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendout": true,
+          "blendtime": 0.5
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 6.73623848, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 18.5093021, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.9791937, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.53495216, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.54351091, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 17.5071564, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.5507202, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.02053308, 100.0, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 6.73623848, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 18.5093021, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.9791937, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.53495216, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.54351091, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 17.5071564, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.5507202, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.02053308, 100.0, 0.0]
+      }
+    },
+    {
+      "name": "mir_in",
+      "object": 5,
+      "path": "models/mir_in_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC//N18QkzMDAyZuBnaGBkZGBgAOHcxJLUoszEnGL97KSC0gK9rOL8PAYI+HAQgsFsRwhmAGt2YITLOzKggAZ7CEbmowNsYqh2UGYejA827yB1zANh5PCg1L8N9jxgmpGBCUgyMTBDxX1dfIINDAxMGFKZIPFTlJ9fAmb8BwIHEu0gJAY0V8ERgSkzmBHmAUegB8wYdrNCPDAZIs6Qm1kUn5kHooryixhAFoogXAEGX5hghp1wwm4pMiakhsGBsBoHItQ0EKFmARFqDhCh5gERahgcCasRIEKNAhFqDIhQ40CEmgAi1CQQoaaACDUNRKjpIELNBCLUzCBCzQIi1BAGABYTbUq8BQAA",
+      "layers": [
+        {
+          "id": 2003,
+          "animation": 403,
+          "name": "mir_in",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendin": true,
+          "blendtime": 0.5
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 6.73623991, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 18.5093021, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.02080536, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.53495216, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 17.4564877, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.49284172, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.5507202, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 14.9794636, 100.0, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 6.73623991, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 18.5093021, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.02080536, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.53495216, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 17.4564877, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.49284172, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.5507202, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 14.9794636, 100.0, 0.0]
+      }
+    },
+    {
+      "name": "loop_in_long",
+      "object": 6,
+      "path": "models/loop_in_long_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC/63RAWzcUxzA8d91w1BWDMNYMcx029lqhtG7rhhaymqG0XZWW7euV23HMJyZqZmpqWURkUZEFhFZRGQRkU5EGhFZRGQRkUZEFhFpRGQRQXun08mS+8i85N39/+//ue+7d1dTVb0omZw1O8ZHNpGIiOG5urGzqb25saVj5qqlbWvaZqzsyLRGfgzuzs/cdTo/I/fhVOLA83QcNLIV+Tn6/t/jUGsH73F4vZH7XG/3/9MbnqN/j8M9b7aiOPeeiKKh16IY8/d6TVX1wmQyWR5NRfn/pz2T6cxd/Dk0Uv9xj0JrQ93S9D/z8MKJkQOkhw4wJyZPzx+gJ78eLZlMW31za31LpnV57iaGNy1LHPgmuVE3bSTYX3nojUfPQiZShU0KTBZML5g+MANgIl3YlIApBZMEkwJTC6YBTBuYLJguMN1gtoPpBbMDzE4wu8D0gekHswfMXjADYPaBGQSzH0xUFjZjwYwDUwymBMwEMBPBTAJTCmYKmKlgysAkwZSDmQtmHpgUmCowC8BUg6kFUwdmMZglYBrALAOzAkwLmDYwnWDWglkHJgtmPZgNYDaC6QKzCcxmMFvAdIPZCqYHzDYw28G8BOZlMK+A6QXzKpjXwLwOZgeYN8C8CeYtMDvBvA3mHTDvgtkF5j0w74P5AEwfmA/BfATmYzD9YD4B8ymYz8DsAfM5mC/AfAlmL5ivwHwN5hswA2C+BfMdmO/B7APzA5gfwfwEZhDMz2B+AfMrmP1gfgPzO5g/wMT8wiYBpgjMGDBjwRwB5kgwR4EZB+ZoMMeAORZMMZjjwBwPZjyYEjAngDkRzElgJoA5GcwpYE4FMxHMaWBOB3MGmElgzgRzFpjJYErBnA3mHDDngpkC5jww54O5AMxUMBeCmQbmIjBlYKaDmQFmJpgkmIvBzAIzG0w5mEvAzAFzKZi5YC4DczmYK8DMA3MlmKvAVIBJgUmDqQQzH0wVmKvBXAPmWjALwFwH5nowN4CpBlMD5kYwN4GpBXMzmFvALARTB+ZWMIvA3AZmMZjbwdwB5k4wS8DcBeZuMPVgGsA0glkK5h4wy8A0gbkXzHIwK8A0g1kJZhWYFjCrwbSCyYBpA3MfmHYwHWA6wawBcz+YB8CsBfMgmIfAPAxmHZhHwDwK5jEw2cImCyYehw6YWA8dMPEEdMDEBuiAiSehAyY2QgdMPAUdMNEFHTDxNHTAxCbogIlnoAMmNkMHTDwLHTCxBTpg4jnogIlu6ICJ56EDJrZCB0y8AB0w0QMdMPEidMDENjCFx19R+SeUIC0AAA==",
+      "layers": [
+        {
+          "id": 2004,
+          "animation": 404,
+          "name": "loop_in_long",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendin": true,
+          "blendtime": 20
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 50.15448, 57.8241463, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 64.6938477, 65.6728516, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 85.0952682, 75.3194427, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 108.434364, 85.0232773, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 135.457611, 95.0289841, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 157.507141, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 172.55072, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 185.020508, 100.0, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 50.15448, 57.8241463, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 64.6938477, 65.6728516, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 85.0952682, 75.3194427, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 108.434364, 85.0232773, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 135.457611, 95.0289841, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 157.507141, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 172.55072, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 185.020508, 100.0, 0.0]
+      }
+    },
+    {
+      "name": "sgl_out",
+      "object": 7,
+      "path": "models/sgl_out_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC/63RP0gCcRTA8XfW0FDk0NDQ4NDQEHWUREPgXTg0KAhFNARlJPbHVNKgoeGIiIgIiQqJCImIiAiJCImI3BobGx0bHdtK77IsgvuGPXh3v/vd5967d+f3+kZVtadXmsVQFBEp50IwGVqcDUYS3fNT8aV411wiFhUrinkrzbVupZgPa8rnfV2+heGxsvr6Z/y2971HbfUq12a9/P/UK2f196h1XsPTaJ4VcZSODqn72Pd7fcOqqrol5LD+z2IsljQXb6XQ/tjDbq9U16V/ZW2FlcoAemmAPhlyWgPsWfuSCEcmYktJScxGw5GQlDtOfL2GVaOpUu1x8Peu1WlnRLM3GjAGMBlgHoApACO6vXEC4wJGBUYDJgDMJDBxYAxgNoBJAZMGJgPMGTBZYHLAPADzCMwTMM/AFIB5AaYIzCswMmhv6oFpAKYRGCcwLcC0AtMGjAuYdmA6gOkERgXGDUw/MAPAaMB4gRkCxgdMAJgRYMaAGQdmEphpYGaAiQATByYJzDIwK8AYwKwCswbMOjAbwGwCswXMNjApYHaA2QVmH5g0MAfAHAJzBEwGmGNgToA5BeYMmHNgLoC5BCYLzBUw18DcAJMD5haYO2DugbGPdwNOOLtJEAAA",
+      "layers": [
+        {
+          "id": 2005,
+          "animation": 405,
+          "name": "sgl_out",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendout": true,
+          "blendtime": 1
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 71.6768951, 82.6377869, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 71.6768951, 82.6377869, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+      }
+    },
+    {
+      "name": "sgl_in_b06",
+      "object": 8,
+      "path": "models/sgl_in_b06_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC/63Rf2iMcRzA8e9zG4bjhmE4dhiG2R7bmWHc89wO++NWK5I/1H7kmuPcXbtT/vDHk6QlaUlrSbokLUlrSUvSTdIlaUlaki5JS9IlaUm4ex5nN62et86nPs/z/fF6Pt/n8zzNHu8BWa6pFTahSZIQIpPH26O+Ln97IFJ9rCN8Ilx1NBIKCiNSw0bqY9VIoT+sSH/2VTEpNJeRufO/Y6q1yWfkVy871+sN/596mcz9Hvn2q7ms+l0SlvTVIgp+rzd7vPtkWXYKn8X4P12hUFQf/EyH8o9nmK2l6zrUicyvsJRtQE03UCdsZUYDvca6iHQGWv3B1o70VsQf7Az4RObQxMSb6OGxZwsm3FMfnJtmRijmRgFGAyYGTByYJDBCNTfFwDiAkYFRgGkBpg2YMDAaMN3A9ADTB0wMmH5gBoAZAiYOTAKYEWBGgUkCMwZMCphxYITb3BQCUwSMFZhiYEqAKQXGDowDmHJgKoCpBEYGxglMPTANwCjAeIBpAsYLTAsw+4E5CMwhYNqAOQzMEWACwISBiQJzEphTwGjAnAbmDDBngekG5hww54G5AEwPMBeBuQRMLzB9wFwG5gowV4GJAXMNmOvA3ACmH5ibwNwC5jYwA8AMAnMHmLvADAFzD5j7wDwAJg7MQ2AeAfMYmAQwT4B5CswzYEaAeQ7MC2BeAjMKzCtgXgPzBpgkMG+BeQfMe2DGgPkAzEdgPgGTAuYzMF+A+QrMODDfgPkOzA9gRKO5kYCxAFMATCEw04CZDswMYIqAmQnMLGBmA2MFZg4wc4GxAVMMzDxg5gOzAJgSYBYCswiYxcCUArMEmKXALAPGDsxyYFYAUwaMA5iVwKwCZjUw5cCsAWYtMOuAqQBmPTAbgNkITCUwm4CpAqYaGBmYzcDUAFMLjBOYLcDUAbMVmHpgtgGzHZgdwDQAsxOYXcC4gFGAUYFxA9MIjAeY3cDsAWYvME3AmMcvsxIsuRAfAAA=",
+      "layers": [
+        {
+          "id": 2006,
+          "animation": 406,
+          "name": "sgl_in_b06",
+          "additive": false,
+          "blend": 0.6,
+          "rate": 1.0,
+          "visible": true,
+          "blendin": true,
+          "blendtime": 15
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 45.1390343, 52.0417328, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 58.2244644, 59.1055679, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 67.7874985, 60.0000038, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 76.5209503, 60.0000038, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 85.5260849, 60.0000038, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5042877, 60.0000038, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 103.530434, 60.0000038, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 111.012306, 60.0000038, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 45.1390343, 52.0417328, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 58.2244644, 59.1055679, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 67.7874985, 60.0000038, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 76.5209503, 60.0000038, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 85.5260849, 60.0000038, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5042877, 60.0000038, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 103.530434, 60.0000038, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 111.012306, 60.0000038, 0.0]
+      }
+    },
+    {
+      "name": "loop_in_bt0",
+      "object": 9,
+      "path": "models/loop_in_bt0_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC//N18QkzMDAyZuBnaGBkZGBgAOHcxJLUoszEnGL97KSC0gK9rOL8PAYI+HAQgsFsRwhmAGt2YITLOzKggAZ7CEbmowNsYqh2UGYejA827yB1zANh5PCg1L8N9jxgmpGBCUgyMTBDxX1dfIINDAxMGFKZIPFTlJ9fAmb8BwIHEu0gJAY0V8ERgSkzmBHmAUegB8wY9rFCPDAdIs6Qk59fEJ+ZF59UYgBmM4DsFEE4BAy+MMHMO+GE3V5kTEgNgwNhNQ5EqGkgQs0CItQcIELNAyLUMDgSViNAhBoFItQYEKHGgQg1AUSoSSBCTQERahqIUNNBhJoJRKiZQYSaBUSoIQwA/wYosr8FAAA=",
+      "layers": [
+        {
+          "id": 2007,
+          "animation": 407,
+          "name": "loop_in_bt0",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendin": true,
+          "blendtime": 0
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 6.73623848, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 18.5093021, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.9791937, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.53495216, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.54351091, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 17.5071564, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.5507202, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.02053308, 100.0, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 6.73623848, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 18.5093021, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.9791937, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 7.53495216, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 2.54351091, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 17.5071564, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 12.5507202, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 5.02053308, 100.0, 0.0]
+      }
+    },
+    {
+      "name": "sgl_inout_def",
+      "object": 10,
+      "path": "models/sgl_inout_def_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC/63RcWiMcRjA8d97G4ZjZ4bh2GEYZnttZ4Zx790O++NWK5I/1DbtzHHurt2t/OGPN0lL0pJ0SbokLWktSUvSTdIlaUlaki5JS9IlaUm4e19nN63er85Tz/v+3t/7eZ/nfd63xe3ZL8u1daJYqJIkhMjk8Y6It9vX4Q/XHDsU6glVHw0HA0KP1LCe2tqpp9AeVqQ/951iUqgOPXOv/46p9ib3yK9e9lqrN/x/6mUy93vkO6/qMGtnSZjSR5Mo+L3f4vbslWXZLrwm/f90B4MRbfEzHco/9jDaS9e1OScyv8JSdgBneoB6UVKuDxDV90W4y9/mCwR7Im2d3sMi7At0+b0i0zcx8TJauK3ZmgnX1L1z08gIxdgowKjAxICJA5MERjiNjQUYGzAyMAowrcC0AxMCRgWmF5g+YKLAxIDpB2YQmCFg4sAkgBkBZhSYJDBjwKSAGQdGuIxNITBFwJiBsQBTCkwZMFZgbMBUAFMJTBUwMjB2YBqAaQRGAcYNTDMwHmBagdkHzAFgDgLTDkwnMEeA8QMTAiYCzAlgTgKjAnMKmNPAnAGmF5izwJwD5jwwfcBcAOYiMJeAiQJzGZgrwFwFJgbMNWCuA3MDmH5gbgJzC5gBYAaBuQ3MHWDuAjMEzD1g7gPzAJg4MA+BeQTMY2ASwDwB5ikwz4AZAeY5MC+AeQnMKDCvgHkNzBtgksC8BeYdMO+BGQPmAzAfgfkETAqYz8B8AeYrMOPAfAPmOzA/gBFNxkYCxgRMATCFwEwDZjowM4ApAmYmMLOAmQ2MGZg5wMwFphgYCzDzgCkBZj4wpcAsAGYhMIuAKQNmMTBLgFkKjBWYZcAsB6YcGBswK4BZCcwqYCqAWQ3MGmDWAlMJzDpg1gOzAZgqYDYCUw1MDTAyMJuAqQWmDhg7MJuBqQdmCzANwGwFZhsw24FpBGYHMDuBcQCjAOMExgVMEzBuYHYBsxuYPcA0A2McvwBqniHfEx8AAA==",
+      "layers": [
+        {
+          "id": 2008,
+          "animation": 408,
+          "name": "sgl_inout_def",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendin": true,
+          "blendout": true
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 86.7362213, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 98.5092697, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 112.979156, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 127.534912, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 142.543472, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 157.507141, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 172.55072, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 185.020508, 100.0, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 86.7362213, 100.0, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 98.5092697, 100.0, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 112.979156, 100.0, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 127.534912, 100.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 142.543472, 100.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 157.507141, 100.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 172.55072, 100.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 185.020508, 100.0, 0.0]
+      }
+    },
+    {
+      "name": "sgl_out_bt20",
+      "object": 11,
+      "path": "models/sgl_out_bt20_puppet.mdl",
+      "mdlGzip": "H4sIAAAAAAAC/63RT0jbcBTA8ZfOgwdBZR48eOhhBw9jC07Eg2AiPXioUFDEw8A/rPivs8VG8LBDGENEZBQRcSJSRIYMGTLGkDFGlTGKiKjIEBEpIiIio0dvrk2sbUch39E9eMkvv3zyXl7S5vF2qmrdMykXU1FEJJ0vew3/6GBvIPx0uC80FnoyFA6OiB3JTTuttW6nWA9ryv19XfLCbLYz9/rvKLSX36O4eplrq97m/6mXztzvUey8ZnOZdVbElTq65MHdfpvH266qar34Xfb/GQ0GDWtxmwrtH3s47aXquvVsFldYyQygpwZokP2H9gDv7H0J9we6g2NGd59Rp0p4cKQ/4Jd02/Hsu1hRUpkpGW8p3Do3nYxozkYDxgQmCkwMmAQwojubCmDcwKjAaMD4gOkBJgSMCcwkMBFg5oGJArMKzDowG8DEgIkDswfMETAJYC6BSQJzA4y0OJsSYEqBKQOmApgqYKqBqQHGDcwjYGqBeQyMCkw9MI3ANAGjAeMBphUYLzA+YDqA6QLmOTA9wLwAZgCYADAhYAxgxoF5BYwJzGtg3gAzAcwkMFPATAPzFpgIMDPAzAIzB8w8MAvALAKzBEwUmGVgVoB5D8wqMB+AWQPmIzDrwHwC5jMwX4DZAOYrMN+A+Q5MDJgtYH4A8xOYODDbwOwAswvMHjAHwBwC8wuYI2COgTkB5hSYBDBnwJwDcwHMJTBXwFwD8xuYJDDO8QdzoNxS0hMAAA==",
+      "layers": [
+        {
+          "id": 2009,
+          "animation": 409,
+          "name": "sgl_out_bt20",
+          "additive": false,
+          "blend": 1.0,
+          "rate": 1.0,
+          "visible": true,
+          "blendout": true,
+          "blendtime": 20
+        }
+      ],
+      "wpe": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 48.0862427, 55.4396324, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 35.2839279, 35.8178749, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 13.2201529, 11.7014084, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+      },
+      "model": {
+        "173": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 48.0862427, 55.4396324, 0.0],
+        "185": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 35.2839279, 35.8178749, 0.0],
+        "200": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 13.2201529, 11.7014084, 0.0],
+        "215": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "230": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "245": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "260": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        "272": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+      }
+    }
+  ]
+}
