@@ -80,6 +80,19 @@ export interface SceneText {
    * （`backgroundcolor` × (HDR ? `backgroundbrightness` : 1)）。直接上屏的背景 pass 与合成路径的清屏色读同一份值。
    */
   background: { key: TargetKey; color: [number, number, number] };
+  /**
+   * 脚本 API 读回与写入用的非运行中字段（P6b 步骤 2 点 5）：生效值（绑了属性取当前值），`backgroundTarget` 同属性绑定的目标
+   * （就地的背景常量，或 `recompile("backgroundcolor")`）。编译器总会填；可选只为手写的测试夹具（别的测试文件）不必都补，API 读不到时按没有处理。
+   */
+  script?: {
+    /** 按 WPE 枚举规整后的名字。 */
+    anchor: string;
+    /** 原始 rgb，不乘 brightness。 */
+    backgroundcolor: [number, number, number];
+    /** LDR 下不读（不影响画面），绑了属性时取属性默认值；HDR 下是生效值。 */
+    backgroundbrightness: number;
+    backgroundTarget: BindingTarget;
+  };
 }
 
 /** 编一个宿主指定材质的 pass：读不到材质时由它报 `material:missing:<路径>` 并返回 null。 */
@@ -187,13 +200,14 @@ export async function compileText(
     colorBlendMode: ctx.colorBlendMode,
   };
   // 只影响能力判断的键：绑了属性同样登记成重编译（改了重编译后按新值重新判断）
+  const anchor = textEnum(read("anchor"), TEXT_ANCHORS, "none");
   checkTextOptions(
     {
       msdf: flag("msdf"),
       outline: flag("outline"),
       blur: flag("blur"),
       dropshadow: flag("dropshadow"),
-      anchor: textEnum(read("anchor"), TEXT_ANCHORS, "none"),
+      anchor,
     },
     ctx.unsupported,
   );
@@ -222,6 +236,11 @@ export async function compileText(
   const colorTarget: BindingTarget = inPlace
     ? { kind: "constant", pass: backgroundKey, material: "backgroundcolor", uniforms: ["g_Color"], type: "vec3" }
     : recompile("backgroundcolor");
+  // LDR 下 brightness 不读（读属性要登记绑定），API 读回取字面值或属性默认值
+  const rawBrightness = object.backgroundbrightness as unknown;
+  const literalBrightness =
+    rawBrightness && typeof rawBrightness === "object" ? (rawBrightness as { value?: unknown }).value : rawBrightness;
+  const scriptBrightness = ctx.hdr ? brightness : textFloat(literalBrightness, 1);
   const rgb = numbers(read("backgroundcolor", colorTarget) as SceneScalar | undefined, [0, 0, 0]);
   const color: [number, number, number] = [
     (rgb[0] ?? 0) * brightness,
@@ -257,5 +276,11 @@ export async function compileText(
     backgroundPass,
     clearAlphaPass,
     background: { key: backgroundKey, color },
+    script: {
+      anchor,
+      backgroundcolor: [rgb[0] ?? 0, rgb[1] ?? 0, rgb[2] ?? 0],
+      backgroundbrightness: scriptBrightness,
+      backgroundTarget: colorTarget,
+    },
   };
 }

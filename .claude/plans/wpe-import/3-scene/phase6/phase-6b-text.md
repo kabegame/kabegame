@@ -1646,9 +1646,268 @@ foliagesway 的 pass 和「先画再裁」那条路径都没有新的差异，�
 
 每小步在 HEAD 快照里实现（`kbp snapshot`），交子代理，我核对、独立复跑验证后按块合进工作区，提交前等你同意。1b 不碰 P4e 在改的文件，可以先做；1c 只新增 `text/`；1d、1e 动共享文件，动工前对一次工作区。
 
-## 步骤 2 — 脚本 API（细节待步骤 0 后补写）
+## 步骤 2 — 脚本 API（2026-11-14 写，读码 `rea-p6b-layout.md` 第 6 节 + WPE 实测 `p6b-api` / `p6b-api-enum`）
 
-`ITextLayer` 的字段装进文本层的脚本对象（照 `installSound` 的样板），写入落到就地目标、触发重排；从 `scriptApi.ts` 的缺口表里删掉实现了的字段。
+### 总体设计思路
+
+文本层的脚本对象装上 `ITextLayer` 的 12 个运行中字段（`TEXT_RUNTIME_FIELDS`）。写法照图像层的 `alignment`（P8 步骤 3）：只装在文本层上，别的图层上照旧是普通属性。
+- **读**：从 `SceneState.textFields` 取当前值，按 WPE 读回的形状交出：字符串、枚举名、f32 数字、`{x, y}`、布尔。
+- **写**：走现成的 `write()`，按字段给类型，落到 1e 已有的 `{ kind: "text" }` 就地目标。宿主的 `writeScript` 用 `textFieldFromScript` 规整后写进 `textFields`，同一帧的 `sync` 里重排。
+
+所以这一步**没有新的写入通道**，只是给 API 开个入口。WPE 的写入规则（下面的实测表）和 `write()` 现有的类型过滤一致：float 只收数字，向量收数字或带齐分量的对象，布尔位只收布尔，字符串类 ToString，枚举查不到取表里第一项。
+
+运行中字段以外的 `font`、`opaquebackground`、`backgroundcolor`、`anchor` 继续留在缺口表里照报（待定 1）。这几项运行中改要整场重编译，语料里没有脚本经 API 用它们。
+
+`thisScene.getLayer` 收到图层对象时返回同一个对象（WPE 实测 `same=true`）。这一条修 `3824424509` 的日历：它的 `update` 现在因为 `getLayer(图层对象)` 返回 null 而抛错、被禁用。
+
+语料（`ignore/p6/b1e/corpus3-o3.json`）里经 API 用文本字段的有 16 张，只用到 `text`（10 张）、`horizontalalign`（6 张）、`verticalalign`（4 张）、`maxwidth`（1 张），都是运行中字段。只差这些键的有 `3429479356`；`2861028294` 另外只差音频频谱 uniform，P11a 步骤 1 已提交，预计一起解锁。
+
+### WPE 实测（2026-11-14，`ignore/p6/b2/make_api.mjs`，1280×720，`A:\p6b\p6b-api-720\`、`A:\p6b\p6b-api-enum\`）
+
+s2 的脚本在第一帧对 s3（`text "abc"`、`pointsize 32`、`padding 32`）读写，`[kbp6]` 日志逐条读回：
+
+| 操作 | WPE 读回 |
+|---|---|
+| `getLayer(t)`（`t` 是 `getLayer('s3')`） | 同一个对象（`=== t`） |
+| `getLayer('nope')`、`getLayer({})` | `null` |
+| 读：`text`、`font` / `pointsize`、`maxwidth`、`maxrows` / `padding`、`spacing` / `backgroundcolor` / 布尔位 / 枚举 | 字符串 / 数字 / `{x, y}` / `{x, y, z}` / 布尔 / 名字（`"center"`、`"none"`、`"enabled"`） |
+| `text = 12`、`= ['a','b']`、`= null`、`= undefined` | `"12"`、`"a,b"`、不变、不变（`p6b-script` 另测） |
+| `maxrows = 2.7`、`3.99`、`-1`、`"3"`、`true` | 2、3、−1、不变、不变 |
+| `pointsize = 20.5`、`0`、`"40"`；`maxwidth = -5`、`"300"` | 20.5、0、不变；−5、不变 |
+| `padding = 10`、`"5 6"`、`[1, 2]`、`{x: 7}`；`spacing = 2`、`{x: 3, y: 4}` | (10, 10)、不变、不变、不变；(2, 2)、(3, 4) |
+| `limitwidth = 1`；`limitrows = true`；`opaquebackground = "true"`、`1` | 不变；true；不变、不变 |
+| `verticalalign = 2`、`0`、`-1`、`"TOP"`；`= "top"` | 都是 `"center"`（表里第一项，大小写敏感）；`"top"` |
+| `horizontalalign = 2`、`true`、`"1"`、`"nope"`；`= "right"` | 都是 `"left"`（表里第一项）；`"right"` |
+| `anchor = 3`；`= "topleft"` | `"none"`；`"topleft"` |
+| `backgroundcolor = 0.5`、`"0.1 0.2 0.3"`；`font = 12` | (0.5, 0.5, 0.5)、不变；`"12"` |
+
+### 现状锚点
+
+**a. 文本层的脚本对象没有 `ITextLayer` 字段**（`script/api.ts` `layer()`）
+```ts
+if (this.isSoundLayer(index)) this.installSound(api, index);
+if (this.findLayer(index)?.particle) this.installParticle(api, index);
+if (this.findLayer(index)?.alignment !== undefined) this.installAlignment(api, index);   // 现状：文本层什么都不装
+```
+
+**b. `getLayer` 只认数字与名字**（`script/api.ts`）
+```ts
+(name: unknown) => {
+  const layers = this.access.bundle().layers;
+  const layer =
+    typeof name === "number"
+      ? layers.find((item) => item.object === name)
+      : layers.find((item) => item.name === name);   // 现状：图层对象落到这里，名字对不上，返回 null
+  return layer ? this.layer(layer.object) : null;
+},
+```
+
+**c. 缺口表把 13 个文本字段都报成 `script:api:layer.<字段>`**（`compile/scriptApi.ts` 的 `layer` 组，`root` 匹配）
+```ts
+...fields([
+  "perspective", "solid", "rootmotion", "fov", "zoom",
+  "text", "opaquebackground", "backgroundcolor", "pointsize", "font", "padding",
+  "horizontalalign", "verticalalign", "anchor", "limitrows", "maxrows", "limitwidth", "maxwidth",
+]),
+```
+
+**d. 宿主已经能收文本目标的写入**（`host.ts` `writeScript`，1e）
+```ts
+if (target.kind === "text") {
+  state.writeText(target.object, target.field, textFieldFromScript(target.field, scriptWriteValue(value)));
+  return true;
+}
+```
+
+### 点 1 — 文本层的 `ITextLayer` 字段（`script/api.ts`）
+
+- **新增** 字段写入类型表与 `installText`；**修改** `layer()` 在文本层上调它。
+```ts
+/** `ITextLayer` 运行中字段在 API 写入时的类型（rea-p6b-layout 6.2；p6b-api / p6b-api-enum 实测，步骤 2 的表）。 */
+const TEXT_API_TYPES: Record<TextRuntimeField, ValueType | "string"> = {
+  text: "string",
+  horizontalalign: "string", // 枚举：ToString 后查表，查不到取表里第一项（宿主 `textFieldFromScript`）
+  verticalalign: "string",
+  pointsize: "float",
+  maxwidth: "float",
+  maxrows: "float", // 宿主截断取整
+  padding: "vec2",
+  spacing: "vec2",
+  limitwidth: "bool",
+  limitrows: "bool",
+  limituseellipsis: "bool",
+  blockalign: "bool",
+};
+
+/**
+ * 文本层的 `ITextLayer`（P6b 步骤 2）：只装在文本层上（WPE 的描述符只在文本对象的表里），12 个运行中字段。读 `textFields` 的当前值，
+ * 按 WPE 读回的形状交出（float 按 f32、`padding` / `spacing` 是 Vec2）；写经 `write()` 落到 `{ kind: "text" }`，宿主规整后当帧重排。
+ * `font`、`opaquebackground`、`backgroundcolor`、`anchor` 不装，缺口表照报。
+ */
+private installText(api: ApiObject, object: number): void {
+  for (const field of TEXT_RUNTIME_FIELDS)
+    this.define(
+      api,
+      field,
+      () => {
+        const value = this.access.state().textFields.get(object)?.[field];
+        if (Array.isArray(value)) return this.vector(value, 2);
+        return typeof value === "number" ? Math.fround(value) : value;
+      },
+      (value) => this.write({ kind: "text", object, field }, value, TEXT_API_TYPES[field]),
+    );
+}
+```
+```ts
+if (this.findLayer(index)?.text) this.installText(api, index);   // 新增
+```
+  > 说明：实现时核对 `write()` 交给宿主的形状经 `scriptWriteValue` → `textFieldFromScript` 后是否和上表逐条一致（`maxrows` 的 `[2.7]` → 2、`padding` 的 `[10, 10]` → (10, 10)），不一致就改宿主那一侧，不在 API 层另写一套规则。
+
+### 点 2 — `getLayer` 认图层对象（`script/api.ts`）
+
+- **修改**
+```ts
+(name: unknown) => {
+  // 图层对象（P6b 步骤 2，p6b-api 实测：`getLayer(layer) === layer`）：是本场景发出的图层对象就原样返回，别的对象返回 null
+  if (name !== null && typeof name === "object") {
+    for (const [object, api] of this.layers) if (api === name && this.findLayer(object)) return api;
+    return null;
+  }
+  const layers = this.access.bundle().layers;
+  … // 数字、名字照旧
+},
+```
+
+### 点 3 — 缺口表（`compile/scriptApi.ts`）
+
+- **删除** `text`、`pointsize`、`padding`、`horizontalalign`、`verticalalign`、`limitrows`、`maxrows`、`limitwidth`、`maxwidth`。
+- 保留 `font`、`opaquebackground`、`backgroundcolor`、`anchor`。注释写明：这几项是文本层的非运行中字段，运行中改要整场重编译，语料里 0 处经 API 使用（待定 1）。
+- `spacing`、`limituseellipsis`、`blockalign` 不在 WPE 的声明里，原来就不在表里；点 1 照样装上（WPE 按描述符名字找，脚本能访问）。
+
+### 点 5 — 非运行中字段：`font`、`opaquebackground`、`backgroundcolor`、`backgroundbrightness`、`anchor`（待定 1 用户选第二种，2026-11-14）
+
+WPE 写入这几项也是当场生效（`font`、`opaquebackground` 重排，背景两项每次绘制读，`anchor` 每次绘制读）。我们这边的做法：
+- **`backgroundcolor`**：用和用户属性绑定**同一个目标**。LDR（或 HDR 下亮度为 1 且没绑属性）就地写背景常量，当帧生效；否则重编译。
+- **其余四项**：走整场重编译。
+
+读回在重编译完成前取 API 层记下的待生效值，所以写完立刻读得到新值，和 WPE 一样。
+
+- **新增** `SceneText.script`（`compile/texts.ts`，编译期填）：
+```ts
+/** 脚本 API 读回与写入用的非运行中字段（P6b 步骤 2 点 5）：生效值（绑了属性取当前值），`backgroundTarget` 同属性绑定的目标。 */
+script: {
+  anchor: string;                                // 按 WPE 枚举规整后的名字
+  backgroundcolor: [number, number, number];     // 原始 rgb，不乘 brightness
+  backgroundbrightness: number;
+  backgroundTarget: BindingTarget;               // 就地的背景常量，或 `recompile("backgroundcolor")`
+};
+```
+- **修改** `installText`（`script/api.ts`）：再装 5 个访问器。
+  - **写**：
+    - `font`：ToString 后写重编译目标 `{ kind: "recompile", reason: "layer-structure", path: "objects/<i>/font" }`；
+    - `anchor`：ToString 后按 `TEXT_ANCHORS` 规整（查不到取 `none`），再写重编译目标；
+    - `opaquebackground`：`bool`，写重编译目标；
+    - `backgroundbrightness`：`float`，写重编译目标；
+    - `backgroundcolor`：`vec3`，写 `script.backgroundTarget`。
+  - **读**：
+    - 重编译类字段：先查 `recompileValues` 里这个路径的待生效值，没有再取编译期的值（`font`、`opaquebackground` 取 `textFields`）；
+    - `backgroundcolor`：就地目标读 `SceneState` 里背景常量的当前值，Vec3；
+    - 形状同点 1：字符串、布尔、f32、Vec3。
+- **修改** `write()`：`"string"` 类型同时接受重编译目标（现在只给文本目标）。
+- **点 3 跟着改**：这 4 个名字也从缺口表删掉，文本的 13 个字段全部不再报。
+- **已知**：`anchor` 写成 `none` / `center` 以外的值，重编译后编译期照报 `text:anchor:<值>`，场景退回。这和 JSON 里直接写这个值时一样，语料 0 处。
+- **单测**：实测表里 `font`、`opaquebackground`、`backgroundcolor`、`anchor` 各行（写完立刻读回）；
+  - `font` 写入调一次重编译、路径与值对、同值不重复；
+  - LDR 下 `backgroundcolor` 不重编译、背景常量变了；
+  - HDR 且亮度不为 1 时 `backgroundcolor` 重编译；
+  - 重编译后读回新值。
+- **真机**：`p6b-api` 的脚本同时写了 `font`、`opaquebackground`、`backgroundcolor`。预览里重编译一次，之后整帧和 WPE 比。
+
+### 点 4 — 文档（Claude）
+
+`cocs/wpe/WPE_SCENE.md` 文本对象一条补「步骤 2：`ITextLayer` 运行中字段、`getLayer` 认图层对象」；`versions/latest/regression.md` 加本步一节；changelog 不加（同 1e，用户 2026-11-14）。
+
+### 单测
+
+- `script/api.test.ts`：
+  - 文本层：12 个字段的读回形状。上面实测表**逐行**写成用例，期望值照 WPE 读回，不要按我们的实现推。
+  - 非文本层上没有这些访问器，赋值是普通属性。
+  - `getLayer(图层对象) === 图层对象`；`getLayer({})`、`getLayer('nope')` 是 `null`；重编译后同一图层对象仍认。
+  - 缺口表的双向核对随点 3 更新。
+- `host.script.test.ts`：
+  - `update` 里写 `thisLayer.text`、`thisScene.getLayer('x').horizontalalign` 后，`textFields` 改了、`dirtyTexts` 标上、没有重编译；
+  - 重编译后 `replayWrites` 恢复这些写入；
+  - 值没变不标脏。
+- `compile/scriptApi.test.ts`：删掉的 9 个名字不再报；`font` 等 4 个照报。
+
+### 验证（Claude）
+
+1. `git status` 查越界；tsc、vitest 自跑；变异检查：
+   - `installText` 的装载条件去掉；
+   - `getLayer` 的对象分支去掉；
+   - `TEXT_API_TYPES` 的 `maxrows` 改成 `vec2`；
+   - 读回不按 f32。
+2. 语料：重扫 `unsupported`，和 `corpus3-o3.json` 比，只少了删掉的键；`3429479356`（与 `2861028294`）变成能渲染。
+3. 真机：
+   - `p6b-api` 在预览里实时跑，用预览宿主读回一帧，和 WPE 1920×1080 的上屏帧整帧比（WPE 窗口空出来时补抓）；
+   - `3824424509` 在预览里打开：应用日志不再有 `objects/8/visible` 的脚本错误，日历的日期与颜色和 WPE 同一时刻的画面一致；
+   - `3429479356`（与 `2861028294`）各在预览里打开，和 WPE 并排看。
+4. 测试行用 `projects_remove` 移除；WPE 只开关本会话的测试窗口。
+
+### 已定
+
+1. **`font`、`opaquebackground`、`backgroundcolor`、`anchor` 经 API 写：实现**（2026-11-14 用户选第二种，推荐的是照报）。
+   - `backgroundcolor` 用属性绑定的同一目标，LDR 下就地；
+   - 另外四项走整场重编译，见点 5。
+
+### 步骤 2 实施记录（2026-11-14）
+
+- **点 1**：`script/api.ts` 新增 `TEXT_API_TYPES` 与 `installText`，`layer()` 在 `findLayer(index)?.text` 时调用；读 `SceneState.textFields`，数字按 `Math.fround`、`padding` / `spacing` 用 `this.vector(…, 2)`，写经 `write()` 落到 `{ kind: "text" }`。
+- **点 2**：`getLayer` 的对象分支只认 `this.layers` 里的值（且图层仍在 bundle 里），别的对象、`null` 返回 `null`。
+- **点 3**：缺口表里文本的 13 个字段全部删掉（点 5 起 `font`、`opaquebackground`、`backgroundcolor`、`anchor` 也实现）。
+- **点 5**：
+  - `compile/texts.ts`：`SceneText.script`（`anchor`、`backgroundcolor`、`backgroundbrightness`、`backgroundTarget`）编译期填；声明成可选，只为别的测试文件里手写的夹具不必补，编译器总会填。`anchor` 只读一次（原来 `checkTextOptions` 里读）。LDR 下 `backgroundbrightness` 不读属性（读属性要登记绑定、会多出重编译绑定），绑了属性时取字面默认值，只影响 API 读回。
+  - `script/api.ts`：`installText` 再装 5 个访问器。`font` / `anchor` / `opaquebackground` / `backgroundbrightness` 写重编译目标 `objects/<i>/<键>`，读回先查 `recompileValues` 的待生效值；`anchor` 先按 `TEXT_ANCHORS` 规整；`backgroundcolor` 写 `script.backgroundTarget`，读回就地目标取 `SceneState.constants` 的 `g_Color`、重编译目标取待生效值。`write()` 的 `"string"` 同时接受重编译目标。
+- **单测**：
+  - `script/api.test.ts`：夹具加文本层（objects 下标 4，名字 Label；`text: "hdr"` 时背景目标是重编译），测试里文本目标的写入走 `writeScriptState`（和宿主同一条脚本侧规整路径）。WPE 实测表逐行写成用例（`font = 12` → `"12"`、`opaquebackground` 的 `"true"` / `1` 不变、`backgroundcolor` 的 0.5 与字符串、`anchor` 的 3 与 `"topleft"`），另有重编译路径与值、同值不重复、LDR 就地、HDR 重编译、非文本层没有访问器、标脏、`getLayer` 认对象；双向核对的 `objects()` 带上文本层。
+  - `compile/scriptApi.test.ts`：13 个名字都不再报；原来用 `.text` 的两处改用别的字段。
+  - `host.script.test.ts`：`update` 里写 `thisLayer.text` / `getLayer('one').horizontalalign`，`textFields` 改了、标脏、不重编译；值没变不标脏；重编译后 `replayWrites` 恢复并标脏。
+- **跳过**：没有。实测表里没有和宿主规整结果对不上的条目。
+- **没测**：`font` / `anchor` / `opaquebackground` / `backgroundbrightness` 的值在整场重编译后经 `scriptOverrides` 进编译结果，依赖 `bundle.ts` 按路径改 scene.json 的现有机制，这一步没有端到端用例（`SceneText.script` 的编译期填充也没有单测）。真机验收补上了，见下。
+
+### 步骤 2 验收（Claude，2026-11-14）
+
+- **核对**：
+  - diff 只在 `script/api.ts`、`compile/texts.ts`、`compile/scriptApi.ts` 与三个测试文件；
+  - `installText` 的注释还写着「`font` 等不装」，已改；
+  - tsc 0 error，vitest 134 个文件、3203 个用例全过；
+  - 6 个变异全被抓到（`scratchpad\p6b2\mutate.mjs`）。
+- **语料**（`ignore/p6/b2/corpus/`）：同一份工作区快照只换这一步的 3 个文件，各扫一次。
+  - 干净 88 → 90，解锁 `2861028294`、`3429479356`，没有掉出；
+  - 只去掉 `script:api:layer.{text, horizontalalign, verticalalign, maxwidth}`，没有新增的键。
+- **WPE 实测 `p6b-api-rt`**（运行中字段 + 就地背景色，其中一项经 `getLayer(图层对象)` 写）：探针 `scripts: true` 渲染。
+  - 和 WPE 上屏帧（`A:\p6b\p6b-api-rt2\`）比，除每帧变的帧号文字 s1 与 FR / CLK 外 0 差异；
+  - 第一次生成的变体里 `\n` 被写成了真的换行，脚本语法错误，修正后重抓。
+- **整场重编译的字段**：`p6b-api` 在主窗口预览里实时跑 611 帧，`font`、`opaquebackground`、`backgroundbrightness` 各触发一次重编译，脚本没有错误。
+  - 重编译后 s3 是「Api ok」、Cambria、灰底；文字框 310×168，和 WPE 抓帧（`A:\p6b\p6b-api\`）的灰底框同尺寸；
+  - 探针在预览宿主上读回时，是按编译结果新建状态（不带脚本运行后的状态），所以这一项只能截预览画面对照，预览画布缩放过，没有逐像素比。
+- **`3824424509` 日历**：主窗口不可见时预览不走帧，改用探针 `scripts: { clock }` 渲染，和 WPE 同一时刻的抓帧比。
+  - 日历格子区域 0 差异（2026 年 11 月、14 号标红），差异只在时钟秒数；
+  - 脚本不再报 `objects/8/visible` 的错误。
+- **解锁的两张**（解包到 `ignore/p6/b2/real/`）：
+  - `2861028294`：日期、星期、时间与位置和 WPE 一致，差异是随机粒子。
+    - 期间本机系统时间往前跳了约 7 小时，WPE 进程里的时间没跟着跳；
+    - 第一次按系统时间给的时钟和 WPE 画面差了 6 小时 50 分，按 WPE 画面上的时间重给时钟后一致。
+  - `3429479356`：带 4K 视频纹理（约 700 MB），探针等第一帧超过 10 s 上限（`dev/videoProbe.ts` 的 `VIDEO_PREPARE_TIMEOUT_MS`，读 Blob 也算在内），三次都超时。
+    - 改做复制工程 `ignore/p6/b2/real/3429-text`（`kbp content isolate --keep 99,27,237,49,110,48,52`，去掉视频层 64），WPE 抓帧在 `A:\p6b\p6b2-3429-text\`。
+    - 结果：时钟文字「12:01 PM」与位置和 WPE 一致，脚本没有报错。
+    - 剩下的差异只在两个挂 `blurprecise` 的图层：时钟发光层 1493 个像素、logo 阴影 9059 个像素，最大差 58 / 50。`pulse` 绑属性 `flashingclock`、缺省关，两边都没画。
+    - logo 阴影是图像层，不经文本 API，所以这部分差异归模糊 effect，不是本步的问题；还没定位到 draw。
+    - 回归 Y7 留着在预览里看原工程。
+- **收尾**：
+  - 测试行都用 `projects_remove` 移除；
+  - WPE 只开关了本会话的测试窗口，设置没动（仍是用户切的 `ultra`）；
+  - 抓帧中途 WPE 的桌面壁纸窗口曾经不见、之后被重建，不是本会话的操作。
 
 ## 风险
 
@@ -1674,4 +1933,6 @@ foliagesway 的 pass 和「先画再裁」那条路径都没有新的差异，�
    - **入口与产物：** 照 `build:wpesl2wgsl` 加 `deno task build:wpefont`，产物进 `bin/wasm/wpefont/` 再拷进场景宿主，不入库；缺失时文本对象照报不支持、不影响别的。
    - 1a 探针里的 C 胶水叫 `kbfont.c`，进仓库时一并改名。
 
-**待定：** 无。步骤 1 的子计划细节（点、现状锚点、目标代码）动工前补写。
+7. 步骤 2：`font`、`opaquebackground`、`backgroundcolor`、`anchor` 经 API 写也实现（2026-11-14 用户选第二种），见「步骤 2」点 5。
+
+**待定：** 无。

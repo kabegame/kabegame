@@ -2572,3 +2572,23 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | K4 真实壁纸复制工程 | Windows dev + WPE 抓帧，3840×2130 | 7 张复制工程（`kbp content isolate`）逐帧比、逐 draw 对常量 | 动画写进的值和 WPE 逐位相同，像素差逐处有解释 | 2026-11-14：`3577990983` 15 帧逐像素相同；其余动画值逐位相同，像素差都是「窗口与场景不同高」（WPE 按窗口分辨率画），另有组节点子层平移 1 ulp 的残留记给 f32 矩阵 |
 | [ ] | K5 实时预览 | Windows dev，图库预览与桌面 | 打开 `2251857160`（冬季，等 10 s 看霜冻漫上来）与 `3818053626`（片头文字淡入） | 动画流畅、改属性时不从头开始；暂停时停 | 只在探针回放里比过，实时播放待用户看 |
 | [ ] | K6 非 Windows | macOS / Linux | 预览 `2251857160` | 同 Windows | 本机不能测 |
+
+## 场景壁纸 P6b 步骤 2：`ITextLayer` 脚本 API
+
+2026-11-14。文本层的脚本对象装上 WPE 文本描述符的 17 个字段（`script/api.ts` 的 `installText`），读写规则照 WPE 实测（`ignore/p6/b2/make_api.mjs` 的 `p6b-api`、`p6b-api-enum`）。
+- 12 个运行中字段当帧重排；
+- `backgroundcolor` 用属性绑定的同一目标（LDR 下就地）；
+- `font`、`opaquebackground`、`backgroundbrightness`、`anchor` 整场重编译；
+- `thisScene.getLayer` 认本场景的图层对象。
+
+计划与实施记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md`「步骤 2」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Y1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；变异检查 | 0 error，全过 | 2026-11-14 Claude：tsc 0 error，vitest 134 个文件、3203 个用例全过；6 个变异全被抓到（文本层不装访问器、`getLayer` 不认对象、`maxrows` 类型、读回不按 f32、`anchor` 查不到不取 none、字符串不交给重编译目标） |
+| [x] | Y2 语料 | Node，183 个工程 | 同一份工作区快照、只换这一步的 3 个文件，各扫一次 `unsupported` 再比（`kbp corpus diff`） | 只去掉 `script:api:layer.<文本字段>`，没有新增的键 | 2026-11-14 Claude：干净 88 → 90，解锁 `2861028294`、`3429479356`，没有掉出；去掉 `text` 10 张、`horizontalalign` 6 张、`verticalalign` 4 张、`maxwidth` 1 张 |
+| [x] | Y3 运行中字段与就地背景色 · 确定性工程 | Windows dev 屏外宿主 + WPE 抓帧（1920×1080） | `p6b-api-rt`（多行文字、字号、间距、`maxrows`、`padding`、两个对齐，其中一项经 `getLayer(图层对象)` 写，背景色 0.5）用探针 `scripts: true` 渲染，和 WPE 上屏整帧比 | 除每帧变的帧号文字 s1 与 FR / CLK 外 0 差异 | 2026-11-14 Claude：0 差异（`A:\p6b\p6b-api-rt2\`） |
+| [x] | Y4 整场重编译的字段 | Windows dev，图库预览 | `p6b-api` 在预览里实时跑（脚本写 `font`、`opaquebackground`、`backgroundbrightness` 等） | 重编译之后 s3 的字体、背景、文字框和 WPE 一致；脚本没有报错 | 2026-11-14 Claude：重编译 3 次，s3 是「Api ok」、Cambria、灰底，文字框 310×168 和 WPE 抓帧的灰底框同尺寸；脚本 611 帧没有错误。预览画布缩放过，没有逐像素比 |
+| [x] | Y5 日历（`getLayer(图层对象)`） | Windows dev 屏外宿主 + WPE 抓帧 | `3824424509` 用探针 `scripts: { clock }` 渲染，和 WPE 同一天的抓帧比日历区域 | 日历格子相同；脚本不再报 `objects/8/visible` 的错误 | 2026-11-14 Claude：日历格子区域 0 差异（2026 年 11 月、14 号标红）；差异只在时钟秒数（两边时刻不同） |
+| [x] | Y6 解锁场景 | 同上 | `2861028294`、`3429479356` 各抓 WPE 一帧，探针按同一时刻渲染并排看 | 文字内容与位置一致 | 2026-11-14 Claude：`2861028294` 的日期、星期、时间与位置一致（差异是随机粒子）。`3429479356` 带 4K 视频纹理（约 700 MB），探针等第一帧超过 10 s 上限（三次都超时）。改做复制工程 `ignore/p6/b2/real/3429-text`（`kbp content isolate` 去掉视频层，留文字、logo、音频控制器）：时钟文字「12:01 PM」与位置和 WPE 一致，脚本没有报错；剩下的差异只在两个挂 `blurprecise` 的图层（时钟发光层 1493 个像素、logo 阴影 9059 个像素，最大差 58 / 50），logo 阴影是图像层，和文本 API 无关，归模糊 effect 另查 |
+| [ ] | Y7 解锁场景实时运行 | Windows dev，预览与桌面 | `3429479356`、`2861028294`、`3824424509` 在图库预览里打开、设为桌面壁纸 | 时钟走、日历是当天、提示文字轮换，没有脚本错误 | 待测 |

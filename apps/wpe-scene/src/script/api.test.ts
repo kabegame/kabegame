@@ -12,6 +12,7 @@ import {
 } from "../compile/scriptApi";
 import { collectScripts, type SceneScript } from "../compile/scripts";
 import { SceneState, scriptWriteValue } from "../render/state";
+import { TEXT_DEFAULTS } from "../text/fields";
 import {
   createWpeLocalStorage,
   ScriptApi,
@@ -19,6 +20,7 @@ import {
   type SoundScriptTarget,
   type VideoScriptTarget,
 } from "./api";
+import { writeScriptState } from "./stateWrite";
 import { alignScriptEnvironment } from "./environment";
 import { RUNTIME_CALLBACKS, ScriptRuntime, type ScriptRealm } from "./runtime";
 import { createMemoryStorage } from "./storage";
@@ -69,9 +71,10 @@ class FakeRealm implements ScriptRealm {
 
 /**
  * `sound`：多一个声音对象的图层（objects 下标 2，名字 Music，声音表里 volume 0.5）。`particle`：多一个粒子对象的图层（objects 下标 3，
- * 名字 Sparks，P4f 步骤 3），实例覆盖是缺省值（控制点都没设）。
+ * 名字 Sparks，P4f 步骤 3），实例覆盖是缺省值（控制点都没设）。`text`：多一个文本层（objects 下标 4，名字 Label，P6b 步骤 2），
+ * 文字 "abc"、`pointsize` 32、`padding` 32（同 WPE 实测 p6b-api 的 s3）。
  */
-function scene(sound = false, particle = false): SceneBundle {
+function scene(sound = false, particle = false, text: boolean | "hdr" = false): SceneBundle {
   const layer = (object: number, name: string): SceneLayer => ({
     id: object + 10,
     object,
@@ -141,6 +144,37 @@ function scene(sound = false, particle = false): SceneBundle {
             },
           ]
         : []),
+      ...(text
+        ? [
+            {
+              ...layer(4, "Label"),
+              text: {
+                fields: { ...TEXT_DEFAULTS, text: "abc", pointsize: 32, padding: [32, 32], spacing: [0, 0] },
+                glyphPass: { key: "objects/4/text/glyphs", program: null, uniforms: {} },
+                colorPass: { key: "objects/4/text/color", program: null, uniforms: {} },
+                backgroundPass: null,
+                clearAlphaPass: null,
+                background: { key: "objects/4/text/background", color: [0, 0, 0] },
+                // 非运行中字段（点 5）：LDR 下 backgroundcolor 就地写背景常量；"hdr"（亮度不为 1）时重编译
+                script: {
+                  anchor: "none",
+                  backgroundcolor: [0, 0, 0],
+                  backgroundbrightness: 1,
+                  backgroundTarget:
+                    text === "hdr"
+                      ? { kind: "recompile", reason: "layer-structure", path: "objects/4/backgroundcolor" }
+                      : {
+                          kind: "constant",
+                          pass: "objects/4/text/background",
+                          material: "backgroundcolor",
+                          uniforms: ["g_Color"],
+                          type: "vec3",
+                        },
+                },
+              } as unknown as SceneLayer["text"],
+            },
+          ]
+        : []),
     ],
     programs: [],
     textures: [],
@@ -179,9 +213,10 @@ function setup(
   audioRegistered?: () => void,
   sound?: { target: SoundScriptTarget | null },
   particle?: { target: ParticleScriptTarget | null },
+  text: boolean | "hdr" = false,
 ) {
   const realm = new FakeRealm();
-  let bundle = scene(!!sound, !!particle);
+  let bundle = scene(!!sound, !!particle, text);
   let state = SceneState.fromBundle(bundle);
   let resolution: [number, number] = [800, 600];
   const recompiles: { path: string; value: number[] | boolean | string }[] = [];
@@ -198,6 +233,8 @@ function setup(
         return true;
       }
       if (target.kind === "unsupported" || target.kind === "script-property") return false;
+      // 文本字段走宿主同一条路径（`writeScriptState`：脚本侧规整，不是属性侧）
+      if (target.kind === "text") return writeScriptState(state, target, value) === "applied";
       state.write({ property: "test", target }, scriptWriteValue(value));
       return true;
     },
@@ -216,7 +253,7 @@ function setup(
       return state;
     },
     recompile() {
-      bundle = scene(!!sound, !!particle);
+      bundle = scene(!!sound, !!particle, text);
       state = SceneState.fromBundle(bundle);
     },
     resetState() {
@@ -227,6 +264,27 @@ function setup(
     },
   };
 }
+
+/** `ITextLayer` 的 12 个运行中字段（非文本层上都没有）。 */
+const TEXT_FIELD_NAMES = [
+  "text",
+  "pointsize",
+  "padding",
+  "spacing",
+  "maxwidth",
+  "maxrows",
+  "limitwidth",
+  "limitrows",
+  "limituseellipsis",
+  "blockalign",
+  "horizontalalign",
+  "verticalalign",
+  "font",
+  "opaquebackground",
+  "backgroundcolor",
+  "backgroundbrightness",
+  "anchor",
+];
 
 describe("SceneScript API（FakeRealm）", () => {
   it("engine 取值、作用域和用户属性全集缓存", () => {
@@ -311,6 +369,222 @@ describe("SceneScript API（FakeRealm）", () => {
     h.recompile();
     expect(getLayer(0)).toBe(first);
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(first)).toBe(true);
+  });
+
+  describe("文本层（P6b 步骤 2，ITextLayer；期望值照 WPE 实测 p6b-api / p6b-api-enum）", () => {
+    type TextLayer = Record<string, unknown>;
+    const open = (initial: Partial<Record<string, unknown>> = {}, text: boolean | "hdr" = true) => {
+      const h = setup(undefined, undefined, undefined, text);
+      Object.assign(h.state.textFields.get(4)!, initial);
+      const layer = (h.api.thisScene.getLayer as (name: string) => TextLayer)("Label");
+      return { h, layer };
+    };
+    /** 在新状态上写一次 `field = value`，返回读回的值。 */
+    const written = (field: string, value: unknown, initial: Partial<Record<string, unknown>> = {}) => {
+      const { layer } = open(initial);
+      layer[field] = value;
+      return layer[field];
+    };
+
+    it("读：字符串 / f32 数字 / Vec2 / 布尔 / 枚举名", () => {
+      const { layer } = open();
+      expect(layer.text).toBe("abc");
+      expect(layer.pointsize).toBe(32);
+      expect(layer.padding).toEqual(new Vec2(32, 32));
+      expect(layer.padding).toBeInstanceOf(Vec2);
+      expect(layer.spacing).toEqual(new Vec2(0, 0));
+      expect(layer.maxwidth).toBe(500);
+      expect(layer.maxrows).toBe(1);
+      for (const field of ["limitwidth", "limitrows", "limituseellipsis", "blockalign"])
+        expect(layer[field], field).toBe(false);
+      expect(layer.horizontalalign).toBe("center");
+      expect(layer.verticalalign).toBe("center");
+    });
+
+    it("读回的向量是拷贝：改它不动状态", () => {
+      const { h, layer } = open();
+      (layer.padding as Vec2).x = 9;
+      expect(h.state.textFields.get(4)!.padding).toEqual([32, 32]);
+    });
+
+    it("读回的 float 按 f32", () => {
+      const { h, layer } = open();
+      h.state.textFields.get(4)!.pointsize = 0.1;
+      expect(layer.pointsize).toBe(Math.fround(0.1));
+    });
+
+    it("text：数字转字符串、数组转 'a,b'，null / undefined 不变", () => {
+      expect(written("text", 12)).toBe("12");
+      expect(written("text", ["a", "b"])).toBe("a,b");
+      expect(written("text", null)).toBe("abc");
+      expect(written("text", undefined)).toBe("abc");
+      expect(written("text", "xyz")).toBe("xyz");
+    });
+
+    it("maxrows：小数截断取整（2.7 → 2、3.99 → 3、−1 → −1），字符串与布尔不变", () => {
+      expect(written("maxrows", 2.7)).toBe(2);
+      expect(written("maxrows", 3.99)).toBe(3);
+      expect(written("maxrows", -1)).toBe(-1);
+      expect(written("maxrows", "3")).toBe(1);
+      expect(written("maxrows", true)).toBe(1);
+    });
+
+    it("pointsize / maxwidth：数字原样（含 0、负数），数字串不变", () => {
+      expect(written("pointsize", 20.5)).toBe(20.5);
+      expect(written("pointsize", 0)).toBe(0);
+      expect(written("pointsize", "40")).toBe(32);
+      expect(written("maxwidth", -5)).toBe(-5);
+      expect(written("maxwidth", "300")).toBe(500);
+    });
+
+    it("padding / spacing：数字铺满，带齐分量的对象照写，字符串、数组、缺分量的对象不变", () => {
+      expect(written("padding", 10)).toEqual(new Vec2(10, 10));
+      expect(written("padding", "5 6")).toEqual(new Vec2(32, 32));
+      expect(written("padding", [1, 2])).toEqual(new Vec2(32, 32));
+      expect(written("padding", { x: 7 })).toEqual(new Vec2(32, 32));
+      expect(written("spacing", 2)).toEqual(new Vec2(2, 2));
+      expect(written("spacing", { x: 3, y: 4 })).toEqual(new Vec2(3, 4));
+      expect(written("padding", new Vec2(1, 2))).toEqual(new Vec2(1, 2));
+    });
+
+    it("布尔位只收布尔：limitwidth = 1 不变，limitrows = true 写入", () => {
+      expect(written("limitwidth", 1)).toBe(false);
+      expect(written("limitrows", true)).toBe(true);
+      expect(written("limituseellipsis", true)).toBe(true);
+      expect(written("blockalign", "true")).toBe(false);
+    });
+
+    it("verticalalign：查不到取表里第一项 center（大小写敏感），top 照写", () => {
+      // 起始值取表里非第一项，才分得出「写成第一项」与「没写」
+      const start = { verticalalign: "bottom" };
+      for (const value of [2, 0, -1, "TOP"])
+        expect(written("verticalalign", value, start), String(value)).toBe("center");
+      expect(written("verticalalign", "top", start)).toBe("top");
+    });
+
+    it("horizontalalign：查不到取表里第一项 left，right 照写", () => {
+      const start = { horizontalalign: "center" };
+      for (const value of [2, true, "1", "nope"])
+        expect(written("horizontalalign", value, start), String(value)).toBe("left");
+      expect(written("horizontalalign", "right", start)).toBe("right");
+    });
+
+    it("font（点 5）：ToString 后写重编译目标，写完立刻读回；同值不重复", () => {
+      const { h, layer } = open();
+      expect(layer.font).toBe(TEXT_DEFAULTS.font);
+      layer.font = 12;
+      expect(layer.font).toBe("12");
+      expect(h.recompiles).toEqual([{ path: "objects/4/font", value: "12" }]);
+      layer.font = 12;
+      layer.font = "fonts/a.ttf";
+      expect(layer.font).toBe("fonts/a.ttf");
+      expect(h.recompiles.map((item) => item.value)).toEqual(["12", "fonts/a.ttf"]);
+      layer.font = null;
+      expect(layer.font).toBe("fonts/a.ttf");
+    });
+
+    it("opaquebackground（点 5）：只收布尔，'true' 与 1 不变；写 true 重编译并读回", () => {
+      const { h, layer } = open();
+      layer.opaquebackground = "true";
+      layer.opaquebackground = 1;
+      expect(layer.opaquebackground).toBe(false);
+      expect(h.recompiles).toEqual([]);
+      layer.opaquebackground = true;
+      expect(layer.opaquebackground).toBe(true);
+      expect(h.recompiles).toEqual([{ path: "objects/4/opaquebackground", value: true }]);
+    });
+
+    it("backgroundbrightness（点 5）：float，只收数字；读回按 f32", () => {
+      const { h, layer } = open();
+      expect(layer.backgroundbrightness).toBe(1);
+      layer.backgroundbrightness = "2";
+      expect(layer.backgroundbrightness).toBe(1);
+      layer.backgroundbrightness = 0.1;
+      expect(layer.backgroundbrightness).toBe(Math.fround(0.1));
+      expect(h.recompiles).toEqual([{ path: "objects/4/backgroundbrightness", value: [0.1] }]);
+    });
+
+    it("anchor（点 5）：数字 3 → none，'topleft' 照写，查不到取 none；写重编译目标", () => {
+      const { h, layer } = open();
+      expect(layer.anchor).toBe("none");
+      layer.anchor = 3;
+      expect(layer.anchor).toBe("none");
+      layer.anchor = "topleft";
+      expect(layer.anchor).toBe("topleft");
+      expect(h.recompiles).toEqual([
+        { path: "objects/4/anchor", value: "none" },
+        { path: "objects/4/anchor", value: "topleft" },
+      ]);
+      layer.anchor = "nope";
+      expect(layer.anchor).toBe("none");
+    });
+
+    it("backgroundcolor（点 5，LDR）：就地写背景常量、不重编译；0.5 铺满，字符串不变", () => {
+      const { h, layer } = open();
+      expect(layer.backgroundcolor).toEqual(new Vec3(0, 0, 0));
+      layer.backgroundcolor = 0.5;
+      expect(layer.backgroundcolor).toEqual(new Vec3(0.5, 0.5, 0.5));
+      expect(h.state.constants.get("objects/4/text/background")!.g_Color).toEqual([0.5, 0.5, 0.5]);
+      layer.backgroundcolor = "0.1 0.2 0.3";
+      expect(layer.backgroundcolor).toEqual(new Vec3(0.5, 0.5, 0.5));
+      layer.backgroundcolor = new Vec3(0.1, 0.2, 0.3);
+      expect(layer.backgroundcolor).toEqual(new Vec3(0.1, 0.2, 0.3));
+      expect(h.recompiles).toEqual([]);
+    });
+
+    it("backgroundcolor（点 5，HDR 且亮度不为 1）：重编译，写完立刻读回", () => {
+      const { h, layer } = open({}, "hdr");
+      layer.backgroundcolor = 0.5;
+      expect(h.recompiles).toEqual([{ path: "objects/4/backgroundcolor", value: [0.5, 0.5, 0.5] }]);
+      expect(layer.backgroundcolor).toEqual(new Vec3(0.5, 0.5, 0.5));
+      layer.backgroundcolor = 0.5;
+      expect(h.recompiles).toHaveLength(1);
+    });
+
+    it("写进 textFields 并标脏重排；值没变不标脏", () => {
+      const { h, layer } = open();
+      layer.text = "new";
+      expect(h.state.textFields.get(4)!.text).toBe("new");
+      expect(h.state.takeDirty().texts).toEqual(new Set([4]));
+      layer.text = "new";
+      layer.padding = new Vec2(32, 32);
+      expect(h.state.takeDirty().texts).toEqual(new Set());
+    });
+
+    it("非文本层没有这些访问器，赋值是普通属性", () => {
+      const h = setup(undefined, undefined, undefined, true);
+      const first = (h.api.thisScene.getLayer as (name: string) => TextLayer)("First");
+      for (const field of TEXT_FIELD_NAMES) expect(field in first, field).toBe(false);
+      first.text = "x";
+      first.pointsize = 9;
+      expect(first.text).toBe("x");
+      expect(first.pointsize).toBe(9);
+      expect(h.state.textFields.has(0)).toBe(false);
+      expect(h.state.textFields.get(4)!.text).toBe("abc");
+    });
+
+    it("重编译后同一个文本层对象读新状态", () => {
+      const { h, layer } = open();
+      layer.text = "changed";
+      h.recompile();
+      expect(layer.text).toBe("abc");
+      expect((h.api.thisScene.getLayer as (name: string) => unknown)("Label")).toBe(layer);
+    });
+  });
+
+  it("getLayer 认图层对象（P6b 步骤 2，p6b-api 实测）：同一个对象返回自己，别的对象与没有的名字返回 null，重编译后仍认", () => {
+    const h = setup();
+    const getLayer = h.api.thisScene.getLayer as (name: unknown) => Record<string, unknown> | null;
+    const first = getLayer("First")!;
+    expect(getLayer(first)).toBe(first);
+    expect(getLayer({})).toBeNull();
+    expect(getLayer("nope")).toBeNull();
+    expect(getLayer(null)).toBeNull();
+    // 不是图层对象的 API 对象（general、thisScene）也不认
+    expect(getLayer(h.api.general)).toBeNull();
+    expect(getLayer(h.api.thisScene)).toBeNull();
+    h.recompile();
+    expect(getLayer(first)).toBe(first);
   });
 
   describe("声音层（P6a 步骤 2，ISoundLayer）", () => {
@@ -1220,7 +1494,7 @@ describe("视频纹理（P9b，IVideoTexture）", () => {
 describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () => {
   /** 各分组在 realm 里对应的真实对象：表项必须不在上面，上面已有的成员必须不在表里。 */
   function objects(): Record<ScriptApiGroup, Record<string, unknown>[]> {
-    const h = setup(undefined, { target: null }, { target: null });
+    const h = setup(undefined, { target: null }, { target: null }, true);
     h.api.enterScript(script("e", { kind: "effect", object: 0, effect: 0 }, 0));
     const effect = h.realm.global.thisObject as Record<string, unknown>;
     h.api.enterScript(script("m", { kind: "material", pass: "objects/0/passes/0", layer: 0 }, 0));
@@ -1239,6 +1513,8 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
     const sound = h.api.layer(2)!;
     // 粒子层（P4f 步骤 3）多 play / pause / stop / isPlaying / emitParticles / instance：同样逐成员核对
     const particle = h.api.layer(3)!;
+    // 文本层（P6b 步骤 2）多 12 个运行中字段：逐成员核对，缺口表里留着的 `font` 等四项不在上面
+    const text = h.api.layer(4)!;
     return {
       thisScene: [h.api.thisScene, h.api.general],
       engine: [h.api.engine],
@@ -1246,9 +1522,9 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
       input: [(h.realm.global.input as Record<string, unknown> | undefined) ?? {}],
       localStorage: [localStorage],
       console: [(frame as unknown as Record<string, Record<string, unknown>>).console],
-      layer: [layer, sound, particle],
+      layer: [layer, sound, particle, text],
       effect: [effect],
-      object: [layer, sound, particle, effect, material, h.api.general, h.api.thisScene],
+      object: [layer, sound, particle, effect, material, h.api.general, h.api.thisScene, text],
     };
   }
 

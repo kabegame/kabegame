@@ -69,7 +69,7 @@ describe("未实现脚本 API 的扫描", () => {
     const source = [
       "export function update() {",
       "  sound.play(); anim.stop(); song.isPlaying(); v.copy();",
-      "  label.text = 'x'; bar.alignment = 'center';",
+      "  label.text = 'x'; label.font = 'a'; bar.alignment = 'center';",
       "  let m = Mat4.lookAt(eye, center, up);",
       "  return value;",
       "}",
@@ -77,8 +77,26 @@ describe("未实现脚本 API 的扫描", () => {
     expect(scan(source)).toEqual([]);
     expect(scan("export function init() { thisLayer.play(); thisObject.text = 'a'; thisLayer.lookAt(p); }")).toEqual([
       "layer.lookAt",
-      "layer.text",
     ]);
+  });
+
+  it("文本层字段（P6b 步骤 2）：13 个字段（含 font / opaquebackground / backgroundcolor / anchor）都不再报", () => {
+    const done = [
+      "text",
+      "pointsize",
+      "padding",
+      "horizontalalign",
+      "verticalalign",
+      "limitrows",
+      "maxrows",
+      "limitwidth",
+      "maxwidth",
+      "font",
+      "opaquebackground",
+      "backgroundcolor",
+      "anchor",
+    ];
+    expect(scan(`export function init() { ${done.map((name) => `thisLayer.${name} = 1;`).join(" ")} }`)).toEqual([]);
   });
 
   it("注释、字符串、模板文字与正则里的不算；模板插值照常扫", () => {
@@ -140,7 +158,7 @@ describe("未实现脚本 API 的扫描", () => {
       scan("thisObject.fogheight = 1; thisLayer.windstrength; thisObject.createLayer('a');", { kind: "general" }, null),
     ).toEqual(["thisScene.fogheight", "thisScene.windstrength"]);
     // 材质 / effect 上的脚本，thisLayer 是所在图层
-    expect(scan("thisLayer.text = 'a';", { kind: "material" }, 2)).toEqual(["layer.text"]);
+    expect(scan("thisLayer.perspective = 1;", { kind: "material" }, 2)).toEqual(["layer.perspective"]);
   });
 
   it('成员访问的词法：可选链、["成员"]、数组字面量与条件运算', () => {

@@ -2032,7 +2032,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 ## 文本对象（P6b 1d 起）
 
-文本对象在 WPE 里是一种图层：变换、可见性、`color` / `alpha` / `brightness`、effect 链和图像层一样，只是基础 pass 画的是逐字四边形，四边形来自排版（`text/layout.ts`，1c）。1d 做静态文字（加载时排一次）；1e 让文字在运行中变：字段脚本的返回值（时钟、计数）与用户属性（`textinput` 改文字、`slider` 改字号）就地重排，不整场重编译。`ITextLayer` 脚本 API（`thisLayer.text = …`、`getLayer(…).text`）是步骤 2。计划与读码依据见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「1d」「1e」。
+文本对象在 WPE 里是一种图层：变换、可见性、`color` / `alpha` / `brightness`、effect 链和图像层一样，只是基础 pass 画的是逐字四边形，四边形来自排版（`text/layout.ts`，1c）。1d 做静态文字（加载时排一次）；1e 让文字在运行中变：字段脚本的返回值（时钟、计数）与用户属性（`textinput` 改文字、`slider` 改字号）就地重排，不整场重编译。步骤 2 加上 `ITextLayer` 脚本 API（`thisLayer.text = …`、`getLayer(…).text`）。计划与读码依据见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「1d」「1e」「步骤 2」。
 
 **动态文字的流向**（1e）：WPE 改文本字段时先和上次排版用的值逐项比较，变了才重排（`FUN_140256f20` 开头的比较表，rea-p6b-layout 3.5）；我们照这个做。
 - **字段与通道**：运行中可改的是比较表里除 `font`、`opaquebackground` 以外的 12 个字段（`compile/bindings.ts` 的 `TEXT_RUNTIME_FIELDS`：`text`、`pointsize`、`padding`、`spacing`、`maxwidth`、`maxrows`、`limitwidth`、`limitrows`、`limituseellipsis`、`blockalign`、`horizontalalign`、`verticalalign`）。它们挂脚本或绑属性时，绑定目标是 `{ kind: "text", object, field }`，字符串只在这种目标上流通。
@@ -2065,8 +2065,29 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **语料**（1e-3，去掉 `text:script`）：只有 `text:script`（88 张）与 `text:script:maxwidth`（6 张）消失，没有新增的键。1e-2 那份 173 张的语料干净 57 → 66，解锁 9 张：`2304304373`、`2391389126`、`2903412088`、`3813887347`、`3819179413`、`3824424509`、`3825103811`、`3826727460`、`3836725625`；本机语料扩到 183 张后是 66 → 75，解锁的是同样 9 张（新增的 10 张里 9 张本来就干净，`2861028294` 还缺 `script:api:layer.text` 等）。这 9 张的文本脚本都是 `new Date()` 的取值拼字符串，不用 `toLocale*` / `Intl`，不涉及本地化格式差异。去掉一个早报的项以后，快速路径（确定退回就停）要编到更后面才遇到第一个不支持项：`3413921910`（剩 `combo:REFLECTION`、`material:alphawriting`）从 4 次请求变成 335 次，超过 `compile/pipeline.test.ts` 的 200 次上限。
 
+**脚本 API**（步骤 2，`script/api.ts` 的 `installText`）：
+
+- **装在哪**：文本层的脚本对象装上 WPE 文本描述符的 17 个字段，只装在文本层上，别的图层上同名属性是普通属性。
+- **规则**：读回的形状与写入规则照 WPE 实测（`p6b-api`、`p6b-api-enum`，计划里有逐条表）：
+  - float 只收数字、按 f32 读回；
+  - 向量收一个数字（铺满）或带齐分量的对象；
+  - 布尔位只收布尔；
+  - 字符串类 ToString；
+  - 枚举大小写敏感，查不到取表里第一项；
+  - `maxrows` 截断取整。
+- **生效**：
+  - 12 个运行中字段落到 1e 的文本目标，当帧重排；
+  - `backgroundcolor` 用和属性绑定同一个目标，LDR 下就地写背景常量；
+  - `font`、`opaquebackground`、`backgroundbrightness`、`anchor` 整场重编译，重编译完成前读回待生效的值（WPE 当场生效、不重载）。
+- **`getLayer`**：收到本场景的图层对象时原样返回（WPE 实测 `getLayer(layer) === layer`）。
+- **对照**：
+  - `p6b-api-rt` 用探针跑脚本，和 WPE 整帧比：除每帧变的帧号文字与 FR / CLK，0 差异；
+  - `p6b-api` 在预览里重编译后，s3 的字体、背景、文字框（310×168）和 WPE 一致；
+  - `3824424509` 的日历格子和 WPE 同一天的画面 0 差异；
+  - 语料 183 张干净 88 → 90，解锁 `2861028294`、`3429479356`（后者带 4K 视频纹理，探针等第一帧超时，没有画面对照）。
+
 **已知差异与后续**：`anchor: center` 当中性是按「居中盖满时裁边相等」推的，留白样式（`fit` / `center`）下没查；回退链里的 Twemoji 只查 WPE `assets`；普通字形为 0 个时不出 `glyphs` 步骤（WPE 画不画空网格没查）；系统字体在 macOS / Linux 上换成本机的同款或替代字体（1d2，候选路径待真机核对，`TODO:[WPE_SCENE]`），画面和 WPE 不会逐像素相同。1e 起：
 - 缺字体时晚一到几帧：WPE 同步读字体，我们读完下一帧才补上，中间照画旧文字（已定 4）；
-- `3824424509` 的日历格子经 `getLayer(…).text` 写，要等步骤 2 的 `ITextLayer`。现在判成能渲染、时钟走，日历停在初值（已定 1）；
 - 不再用的图集不释放：GPU 纹理与 CPU 侧的 `TextAtlases` 留到场景销毁，拖字号滑块会攒新的「字体 + 字号」图集（每张至少 512²）。WPE 的字体管理器也按字体键留着，释不释放没查；
-- `font` / `opaquebackground` 运行中改整场重编译（已定 3），挂脚本报 `text:script:<键>`。
+- `font` / `opaquebackground` 运行中改整场重编译（已定 3），挂脚本报 `text:script:<键>`；经 API 写同样整场重编译（步骤 2），`anchor` 写成 none / center 以外的值后照报 `text:anchor:<值>`、场景退回；
+- 经 API 写过的重编译类字段，之后读回一直取那次写入的值（`recompileValues`），用户再改同一属性时读回可能和画面不一致（语料没有这种用法）。

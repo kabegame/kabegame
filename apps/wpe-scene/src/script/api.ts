@@ -1,7 +1,9 @@
 import {
   GENERAL_FIELDS,
+  TEXT_RUNTIME_FIELDS,
   type BindingTarget,
   type GeneralKey,
+  type TextRuntimeField,
   type UserProperty,
   type ValueType,
 } from "../compile/bindings";
@@ -12,6 +14,7 @@ import { constantTargetFields, materialSlots, type MaterialMember } from "../com
 import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlPoint } from "../compile/particles";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
+import { TEXT_ANCHORS } from "../compile/texts";
 import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
 import type { VideoTexturePlayer } from "../video/player";
@@ -121,6 +124,22 @@ export interface ParticleScriptTarget {
 }
 
 const DEGREE = 0.017453292;
+/** `ITextLayer` 运行中字段在 API 写入时的类型（rea-p6b-layout 6.2；p6b-api / p6b-api-enum 实测，步骤 2 的表）。 */
+const TEXT_API_TYPES: Record<TextRuntimeField, ValueType | "string"> = {
+  text: "string",
+  horizontalalign: "string", // 枚举：ToString 后查表，查不到取表里第一项（宿主 `textFieldFromScript`）
+  verticalalign: "string",
+  pointsize: "float",
+  maxwidth: "float",
+  maxrows: "float", // 宿主截断取整
+  padding: "vec2",
+  spacing: "vec2",
+  limitwidth: "bool",
+  limitrows: "bool",
+  limituseellipsis: "bool",
+  blockalign: "bool",
+};
+
 const LAYER_FIELDS = ["origin", "scale", "angles", "alpha", "color", "visible", "brightness", "parallaxDepth"] as const;
 
 /**
@@ -256,6 +275,7 @@ export class ScriptApi {
     if (this.isSoundLayer(index)) this.installSound(api, index);
     if (this.findLayer(index)?.particle) this.installParticle(api, index);
     if (this.findLayer(index)?.alignment !== undefined) this.installAlignment(api, index);
+    if (this.findLayer(index)?.text) this.installText(api, index);
     // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
     this.layers.set(object, api);
@@ -274,6 +294,81 @@ export class ScriptApi {
       "alignment",
       () => alignmentName(this.access.state().layers.get(object)?.alignment),
       (value) => this.write({ kind: "layer", object, field: "alignment" }, alignmentIndex(value), "float"),
+    );
+  }
+
+  /**
+   * 文本层的 `ITextLayer`（P6b 步骤 2）：只装在文本层上（WPE 的描述符只在文本对象的表里），12 个运行中字段。读 `textFields` 的当前值，
+   * 按 WPE 读回的形状交出（float 按 f32、`padding` / `spacing` 是 Vec2）；写经 `write()` 落到 `{ kind: "text" }`，宿主规整后当帧重排。
+   * 另装非运行中的 `font`、`opaquebackground`、`backgroundbrightness`、`anchor`（整场重编译）与 `backgroundcolor`（同属性绑定的目标，
+   * LDR 下就地），见下（点 5）。
+   */
+  private installText(api: ApiObject, object: number): void {
+    for (const field of TEXT_RUNTIME_FIELDS)
+      this.define(
+        api,
+        field,
+        () => {
+          const value = this.access.state().textFields.get(object)?.[field];
+          if (Array.isArray(value)) return this.vector(value, 2);
+          return typeof value === "number" ? Math.fround(value) : value;
+        },
+        (value) => this.write({ kind: "text", object, field }, value, TEXT_API_TYPES[field]),
+      );
+    // 非运行中字段（点 5）：WPE 里写入当场生效，我们走整场重编译（`backgroundcolor` 就地时除外）。读回先看这个路径待生效的写入值
+    const target = (key: string): ApiTarget => ({
+      kind: "recompile",
+      reason: "layer-structure",
+      path: `objects/${object}/${key}`,
+    });
+    const pending = (path: string): unknown => {
+      const encoded = this.recompileValues.get(path);
+      return encoded === undefined ? undefined : JSON.parse(encoded);
+    };
+    const script = () => this.findLayer(object)?.text?.script;
+    const recompiled = (key: string, compiled: () => unknown, type: "string" | "bool" | "float") =>
+      this.define(
+        api,
+        key,
+        () => {
+          const value = pending(`objects/${object}/${key}`);
+          if (value === undefined) return compiled();
+          return type === "float" ? Math.fround((value as number[])[0]) : value;
+        },
+        (value) => this.write(target(key), value, type),
+      );
+    const fields = () => this.access.state().textFields.get(object);
+    recompiled("font", () => fields()?.font, "string");
+    recompiled("opaquebackground", () => fields()?.opaquebackground, "bool");
+    recompiled("backgroundbrightness", () => Math.fround(script()?.backgroundbrightness ?? 1), "float");
+    this.define(
+      api,
+      "anchor",
+      () => pending(`objects/${object}/anchor`) ?? script()?.anchor,
+      (value) => {
+        // 枚举先在这里规整（ToString，查不到取表里第一项 none），重编译读到的就是名字
+        const text = scriptToString(value);
+        if (text === undefined) return;
+        this.write(target("anchor"), (TEXT_ANCHORS as readonly string[]).includes(text) ? text : "none", "string");
+      },
+    );
+    // `backgroundcolor` 的目标同属性绑定（编译期定）：就地的背景常量，或（HDR 下亮度不为 1）重编译
+    this.define(
+      api,
+      "backgroundcolor",
+      () => {
+        const info = script();
+        if (!info) return undefined;
+        const goal = info.backgroundTarget;
+        let value: unknown;
+        if (goal.kind === "recompile") value = pending(goal.path);
+        else if (goal.kind === "constant") value = this.access.state().constants.get(goal.pass)?.[goal.uniforms[0]];
+        return this.vector((value as number[] | undefined) ?? info.backgroundcolor, 3);
+      },
+      (value) => {
+        const goal = script()?.backgroundTarget;
+        if (goal) this.write(goal, value, "vec3");
+      },
     );
   }
 
@@ -523,8 +618,9 @@ export class ScriptApi {
       if (typeof raw !== "boolean") return;
       value = raw;
     } else if (type === "string") {
-      // 字符串只交给文本目标（P6b 1e，同运行时的 `writeReturn`）：WPE 类型 5 的 `ToString`，`null` / `undefined` 与抛错的不写
-      if (target.kind !== "text") return;
+      // 字符串只交给文本目标与重编译目标（`font`、`anchor`，P6b 步骤 2 点 5；1e 起同运行时的 `writeReturn`）：WPE 类型 5 的 `ToString`，
+      // `null` / `undefined` 与抛错的不写
+      if (target.kind !== "text" && target.kind !== "recompile") return;
       const text = scriptToString(raw);
       if (text === undefined) return;
       value = text;
@@ -661,6 +757,11 @@ export class ScriptApi {
       this.thisScene,
       "getLayer",
       (name: unknown) => {
+        // 图层对象（P6b 步骤 2，p6b-api 实测：`getLayer(layer) === layer`）：是本场景发出的图层对象就原样返回，别的对象返回 null
+        if (name !== null && typeof name === "object") {
+          for (const [object, api] of this.layers) if (api === name && this.findLayer(object)) return api;
+          return null;
+        }
         const layers = this.access.bundle().layers;
         const layer =
           typeof name === "number"

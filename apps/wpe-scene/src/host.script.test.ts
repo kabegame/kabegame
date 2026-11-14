@@ -1047,6 +1047,81 @@ describe("SceneHost 脚本接线", () => {
       host.dispose();
     });
 
+    describe("脚本 API 写文本层（P6b 步骤 2）", () => {
+      type TextApi = { text: string; horizontalalign: string; maxrows: number };
+      const api = () => activeGlobal.thisLayer as TextApi;
+      const byName = () => (activeGlobal.thisScene as { getLayer: (name: string) => TextApi }).getLayer("one");
+
+      it("update 里写 thisLayer.text 与 getLayer('one').horizontalalign：textFields 改了、标脏、不重编译", async () => {
+        compile.mockImplementation(async () => textBundle());
+        // thisLayer / thisScene 只在脚本回调里有值：回调里把对象带出来，之后直接读写
+        let self: TextApi | null = null;
+        let named: TextApi | null = null;
+        onUpdate = () => {
+          onUpdate = () => undefined;
+          self = api();
+          named = byName();
+          self.text = "Hello";
+          named.horizontalalign = "right";
+          return undefined;
+        };
+        const host = await start();
+        expect(fields()).toMatchObject({ text: "Hello", horizontalalign: "right" });
+        expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set([0]));
+        // 读回的是写进去的值，同一个图层对象
+        expect(self).toBe(named);
+        expect(self!.text).toBe("Hello");
+        expect(named!.horizontalalign).toBe("right");
+        await settled();
+        expect(compile).toHaveBeenCalledTimes(1);
+        expect(host.stats.recompiled).toEqual([]);
+        host.dispose();
+      });
+
+      it("值没变不标脏；换了值再标", async () => {
+        compile.mockImplementation(async () => textBundle());
+        onUpdate = () => {
+          onUpdate = () => undefined;
+          api().text = "Same";
+          return undefined;
+        };
+        const host = await start();
+        renderer.sceneState!.takeDirty();
+        onUpdate = () => {
+          api().text = "Same";
+          api().maxrows = 1; // 编译期就是 1
+          return undefined;
+        };
+        renderer.tick();
+        expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set());
+        onUpdate = () => {
+          api().maxrows = 2.7;
+          return undefined;
+        };
+        renderer.tick();
+        expect(fields().maxrows).toBe(2);
+        expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set([0]));
+        host.dispose();
+      });
+
+      it("重编译后 replayWrites 把这些写入放回新状态并标脏", async () => {
+        compile.mockImplementation(async () => textBundle());
+        onUpdate = () => {
+          onUpdate = () => undefined;
+          api().text = "Kept";
+          byName().horizontalalign = "right";
+          return undefined;
+        };
+        const host = await start();
+        const before = renderer.sceneState;
+        await recompile(host);
+        expect(renderer.sceneState).not.toBe(before);
+        expect(fields()).toMatchObject({ text: "Kept", horizontalalign: "right" });
+        expect(renderer.sceneState!.takeDirty().texts).toEqual(new Set([0]));
+        host.dispose();
+      });
+    });
+
     it("返回值按 ToString 写：数字转字符串，null 不写，同值不标脏", async () => {
       compile.mockImplementation(async () => textBundle());
       const results: unknown[] = [12, null, "12"];
