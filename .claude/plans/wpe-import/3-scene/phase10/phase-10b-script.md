@@ -393,7 +393,7 @@ export function scriptObject(owner: ScriptOwner): number | null {
 2. **首次加载的时序**：为了让 `init` 里的控制有落点，播放器提前到 `init` 之前建，换上时不再 `carryOver`。如果加载期间（`init` 之后、首帧之前）又来一次重编译，待用的播放器要跟着作废，否则会拿错 bundle：按 `bundle` 身份比对，单测覆盖。
 3. **同步派发的重入**：`animationEvent` 回调里可以 `play` / `stop` / `setFrame` 任意动画、写任意属性，这些都发生在播放器循环中间。播放器在派发时不能持有会被改掉的中间状态（`scratch` 先拷出来再派发）。
 4. **共享文件**：和 P6b 的未提交改动同一批文件，按「交界」一节处理。
-5. **走查样本少**：事件只有 `2887099508` 一张，`init` 播放的 3–5 张；光标、媒体回调里的大头要等 P6c / P11 合入后再走一遍。
+5. **走查样本少**：事件只有 `2887099508` 一张，`init` 播放的 3–5 张；光标、媒体回调里的大头要等 P6c / P11 合入后再走一遍。P6c 那一半见步骤 6（`2887099508` 点击触发的事件链与 WPE 逐帧相同，27 张跑脚本没有 `getAnimation` 相关的错误）；媒体回调等 P11。
 
 ## 实施记录
 
@@ -554,3 +554,48 @@ Sonnet 子代理实现，主会话独立验收。
   - 结论：这 1 ulp 来自视差点的平滑推进还在 double 里算（`phase-f32-matrix.md` 点 3 只改了偏移 `parallaxOffset`），和 P10b 无关。WPE 的确切
     运算顺序没读码，这次的顺序在这一帧上对上了；正式修要另读码确认，归 f32 那一步。
 - 测试工程已移除，本会话的 WPE 窗口都已关闭，没改 WPE 设置。
+
+### 步骤 6 — P6c 之后的补走查（2026-11-14，用户：继续 P10）
+
+前提：P6c 步骤 1、2（光标命中与派发、宿主左键、探针 `inputTimeline`）在工作区里，别的会话还没提交；dev 的宿主产物 `index-0KeAvZOE.js` 比源码新，已带上这些代码，没有重建。工具与数据在 `ignore/p10/b6/`。
+
+**`2887099508` 的事件链（点击播放）：**
+- **脚本**：混淆过，静态扫不出调用。在 Node 的 vm 里用记录访问的 Proxy 当宿主对象，逐个调导出函数（`trace.mjs`，带超时），解出链路：
+  - 点 `page首`：它 `point1` 上的脚本在 `cursorClick` 里 `thisLayer.visible = true`、`thisObject.getAnimation("900").play()`，并播翻页音效；
+  - `900` 第 30 帧的事件 `houye` 发给 `page首` 的两段脚本（登记顺序：先 `visible` 字段、后 effect 常量）：`visible` 脚本把 `page` 显出来，`point1` 脚本藏起自己、`thisScene.getAnimation("111").play()`；
+  - `111`（`page` 的 `point1`，联动 `point0` / `point2` / `point3`）第 30 帧的事件 `yeshu`：`page` 的 `visible` 脚本把 `page` 藏起。
+- **复制工程**：
+  - 用 `kbp content isolate --keep page,page首,翻页mp3,"hand book" --instrument` 生成。`hand book` 用 `--fix` 固定隐藏：`page首` 的 `visible` 脚本在 `cursorClick` 里按名字找它、调 puppet 的 `playSingleAnimation`。
+  - 另加一个只写日志的对象 `kbp-P10`（`add_logger.py`）。它每帧打一行 `[kbp10]`：两条动画的 `getFrame()` / `isPlaying()`、两层的 `visible`、`input.cursorLeftDown`。
+- **WPE**：1920×1080，fps 20，`ultra` 档，用 `input_play` / `input_start` 喂光标与左键。
+  - 第一轮点一次，日志 874 帧。
+  - 第二轮每 3 s 点一次，日志 1226 帧；中途抓 40 帧，放在 `A:\p10b\s6\`。
+- **我们**：dev 探针 `renderFrame`（`run_ours.py`）。帧时间和 `runtime` 取 WPE 日志，逐帧光标取 FR 日志，左键取 `[kbp10]`，用 `consoleGrep` 收日志。
+- **结果**：
+  - **日志**：第一轮 600 帧、第二轮 1220 帧，逐项相同（动画帧号 float 逐位、是否在播、两层可见、左键；`cmp10.py`）。WPE 的时序：
+    - 抬起那一帧派发 `cursorClick`，`900` 当帧开播并推进；
+    - `900` 播完那一帧派发 `houye`。`111` 当帧 `play()`，但停在第 0 帧：它登记在 `page` 上，这一帧已经推进过了。下一帧起走；
+    - 播完的 `single` 动画再 `play()` 从第 0 帧重播，事件每一轮都派发。
+  - **整帧**：40 帧比下来，没画书页的 11 帧逐像素相同。画了书页的 29 帧有差：
+    - 每帧大于 2 的像素约 200 个，最大差 55–70；
+    - 逐 draw：第 1025 帧（`900`）与第 1040 帧（`111` 与联动的子）书页那次绘制，`g_Point0–3` 与 MVP 都是 0 ulp（`draws.py`）；
+    - 差在书页边缘：WPE 是硬边，外接框里没有中间值；我们有 160 个过渡像素（`edge.py`）。书页周围另有一圈 ±1，是泛光；
+    - 归「按窗口分辨率画」：场景 6080×3420，比显示器大，没法像步骤 4b 那样全屏重录。
+  - **脚本诊断**：只有 `page首` 的 `visible` 脚本，在 `cursorClick` 里调 `playSingleAnimation` 报「不是函数」（P12 的 puppet API）。这个回调被禁用，同一段脚本的 `animationEvent` 照常。
+- 测试工程用完已移除；本会话的 WPE 窗口都已关闭，没改 WPE 设置（`ultra` 是之前别的会话改的）。
+
+**回归 K11（27 张用 `getAnimation` 的场景跑脚本）：**
+- **做法**：`k11.py`。宿主借上面那个测试工程开，`renderFrame` 直接读工坊目录，`force`、带脚本，共 260 帧。
+  - 先在中心停 60 帧；再按 5×4 网格逐点「移过去 3 帧、按下 2 帧、抬起 3 帧」；最后停 40 帧。
+  - 收每段脚本的诊断、各回调的调用次数、被禁用的回调（`k11/summary.json`），再按缺的 API 归类（`k11_classify.py`）。
+- **结果**：24 张跑完。光标回调都调到了，`2887099508` 的 `animationEvent` 调了 12 次。诊断里没有一条出在 `getAnimation` / `IAnimation` 本身。和动画沾边的报错另有原因：
+  - `3219908811` 的 objects/14、`3427691867` 的 objects/6：`getLayer(名字)` 是 null，接着 `.play()` / `.getAnimation()` 出错。场景里根本没有这个名字的图层，WPE 同样拿到 null。
+  - `3219908811` 的 objects/3：`getAnimation` 拿到 undefined，同步骤 0 的实测（WPE 也是 undefined）。
+  - `3400241651`、`3492627662` 的 `animationlayers/*`：库脚本先判断 `'addEndedCallback' in thisObject`，不成立才退到 `thisObject.getAnimation()`。puppet 动画层的脚本对象还没有，所以退到了后者，拿到 undefined。归 P12。
+  - `3560756264` 的 `getFrame` 读 undefined：前面的 `getTextureAnimation` 没实现，归 P6e。
+  - 其余都是能力表里登记过的缺口：`getParent` / `getTransformMatrix` / `getChildren` 91 条、`getTextureAnimation` 38 条、puppet 7 条、`getLayerIndex` / `destroyLayer` / `layer.getEffect` / `registerAsset`。另有它们引起的连锁报错：`init` 出错后 `update` 里的变量是 undefined。
+  - 还有两种是作者脚本自己的问题，和 P10 无关：
+    - `visible` 字段上挂了给 `origin` 写的拖拽脚本，`value.x = …` 写到布尔上，4 张；
+    - `3326873240` 引用不存在的全局 `scene`。
+- **没跑成的 3 张**：`3000562427`、`3486806915` 报 `render:texture-missing`，`3830665420` 的纹理宽 9787、超过 8192。都在建 GPU 资源时失败，脚本没跑到，是强制渲染不支持的场景带出来的。
+- **没覆盖**：媒体回调（P11 还没做），这类场景里媒体回调中的 `getAnimation().play()` 没调到。

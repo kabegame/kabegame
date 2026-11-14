@@ -2664,9 +2664,10 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | K8 语料 | Node，183 个工程 | 前后重扫 `unsupported` | 只去掉 `script:api:object.getAnimation` / `thisScene.getAnimation`、`script:callback:animationEvent` | 2026-11-14：27 / 1 / 1 张，没有新增键，能渲染 92 → 92（这 27 张都还差光标、媒体回调或人偶） |
 | [x] | K9 生成工程带脚本回放 | Windows dev + WPE 抓帧，1920×1080 | `p10-script`、`p10-edge`、`p10b-api` 共 23 段，`renderFrames.ts --scripts` 逐帧回放、`kbp cmp frames` 比，`[kf]` 日志对照 | 整帧逐像素相同，脚本日志相同 | 2026-11-14：69 帧全部相同（修了 `NaN` 写回与探针事件时刻两处之后）；不排除任何对象 |
 | [x] | K10 真实壁纸复制工程 | Windows dev + WPE 抓帧，1920×1080 | `3336377291`、`3427691867` 的时钟（`init` 里 `play()`）各 4 段，逐帧比、逐 draw 对常量 | 动画值与开播时刻和 WPE 逐位相同，像素差逐处有解释 | 2026-11-14：MVP 与 alpha 8 段 0 ulp（动画中途那帧 alpha 都是 0.7435418367385864）；像素差只在文字上，顶点与图集相同，归「按窗口分辨率画」 |
-| [ ] | K11 用 `getAnimation` 的场景跑脚本 | Windows dev，强制渲染 | 27 张场景在 dev 强制渲染下各跑一会儿 | 脚本诊断里没有 `getAnimation` / `IAnimation` 相关的错误 | 没做：这些场景的调用多在光标、媒体回调里，随 P6c / P11 一起看 |
+| [x] | K11 用 `getAnimation` 的场景跑脚本 | Windows dev 屏外宿主，强制渲染 | 27 张场景用探针 `renderFrame`（`force`、`scripts`）各跑 260 帧，期间按 5×4 网格移动光标并逐点点击（`ignore/p10/b6/k11.py`），收脚本诊断后归类（`k11_classify.py`） | 脚本诊断里没有 `getAnimation` / `IAnimation` 相关的错误 | 2026-11-14（P6c 在工作区，未提交）：24 张跑完，光标回调都调到了，没有一条出在 `getAnimation` / `IAnimation` 本身。和动画沾边的几条：按名字找的图层场景里没有（WPE 同样是 null）；`animationlayers` 上的脚本对象缺 puppet 动画层的成员（P12）；`getTextureAnimation`（P6e）。其余是能力表登记过的缺口及其连锁报错。3 张（`3000562427`、`3486806915`、`3830665420`）建 GPU 资源时就失败，脚本没跑到。媒体回调没调到（P11） |
 | [ ] | K12 清空脚本存储 | Windows dev，图库预览 | 在 `init` 里播放动画的场景上「清空脚本存储」 | 动画从头播一遍 | 只有单测；要动图库界面，待用户看 |
 | [ ] | K13 非 Windows | macOS / Linux | 同 K12 | 同 Windows | 本机不能测 |
+| [x] | K14 点击触发的事件链 | Windows dev 屏外宿主 + WPE 测试窗口（`input_play` / `input_start`，1920×1080，fps 20） | `2887099508` 的复制工程（`ignore/p10/b6/proj/2887099508-iso-p10b6-page`，翻页两层 + 逐帧日志对象）：点 `page首` → `900` 播完发 `houye` → `111` 播完发 `yeshu`；两边按同一串帧时间与光标回放，比 `[kbp10]` 日志（`cmp10.py`）与抓帧（`A:\p10b\s6\`） | 动画帧号、是否在播、两层可见逐帧相同；整帧像素差逐处有解释 | 2026-11-14（P6c 在工作区，未提交）：单击 600 帧、每 3 s 点一次 1220 帧，日志逐项相同（播完的 `single` 再 `play()` 从头播，事件每轮都发）。抓帧 40 帧：没画书页的 11 帧逐像素相同；画了书页的帧逐 draw `g_Point0–3` 与 MVP 0 ulp，像素差在书页边缘与泛光，归「按窗口分辨率画」。唯一的脚本诊断是 puppet 的 `playSingleAnimation` 没实现（P12） |
 
 ## 场景壁纸 P6b 步骤 2：`ITextLayer` 脚本 API
 

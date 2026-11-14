@@ -2331,10 +2331,15 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 - 真实壁纸的复制工程（`kbp content isolate`）7 张：`3577990983`（转场 effect）15 帧逐像素相同；其余动画写进的值（effect 常量、`alpha`、`color`、`angles`、`origin`、组缩放、文本层 alpha 与 `origin`）和 WPE 逐位相同，像素差都归「窗口与场景不同高」（WPE 按窗口分辨率画）。
 - 依据与逐 draw 对照见子计划「步骤 3 走查」「步骤 4」。
 - P10b：`p10-script`、`p10-edge`（不再排除受脚本控制的对象）与补测工程 `p10b-api` 共 23 段 69 帧，带脚本回放后全部逐像素相同，`[kf]` 日志的逐帧条目与事件条目（含回调里读到的 `engine.runtime`）和 WPE 相同。真实壁纸 `3336377291`、`3427691867` 的时钟（`init` 里 `play()`）复制工程 8 段：逐 draw 的 MVP 与 alpha 0 ulp，动画中途那帧两边 alpha 都是 0.7435418367385864；像素差只在文字上，顶点与图集两边相同，归「按窗口分辨率画」。走查里修了两处：经字符串写回的 `NaN` 被读成 0（`atof` 补上 UCRT 的 `inf` / `nan`）、dev 探针里事件回调读到的 `engine.runtime` 晚一帧（`ProbeScripts.enterFrame`）。
+- P10b 补走查（P6c 之后）：`2887099508` 的翻页复制工程。WPE 用 `input_play` 点击，我们用探针 `inputTimeline` 按同一串帧时间与光标回放。
+  - 事件链：点击 → `900` → `houye` → `111` → `yeshu`。逐帧日志（两条动画的帧号与是否在播、两层可见）1220 帧逐项相同；
+  - 播完的 `single` 再 `play()` 从头播，事件每轮都派发；
+  - 抓帧上书页那次绘制的 `g_Point0–3` 与 MVP 0 ulp，像素差归「按窗口分辨率画」。
+  - 27 张用 `getAnimation` 的场景按网格点击跑脚本，没有 `getAnimation` / `IAnimation` 相关的错误（回归 K11）。
 
 **已知差异与只记不补**：
 - `IAnimation` 的 `rate` 是访问器、原型是 `Object.prototype`（WPE 是原生数据属性、只有 `constructor` 的原型），只在脚本检查描述符或原型时看得出。
-- 用到 `animationEvent` 的唯一一张（`2887099508`）靠点击播放，等 P6c 才能走查；语料里多数 `getAnimation` 在光标、媒体回调里（P6c / P11）。
+- 媒体回调里的 `getAnimation`（如 `2932157836` 的 `mediaThumbnailChanged`）等 P11 接上回调后再走查。
 - 每帧照写的开销：语料最多的 `3400241651`（23 条）`frame()` 每帧均值 0.053 ms，一半在向量拼字符串再解析。
 - dev 探针 `scriptValues` 仍在回放前写一次：同一目标上有动画时探针里动画赢，WPE 里脚本赢（kbp 的 FR 块不受影响）。
 
