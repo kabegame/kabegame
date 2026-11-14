@@ -259,6 +259,39 @@
 | [x] | T6 黑字层合成 RT 对 WPE RT 7128 | 同 T5 | `trace.readback` 选黑字层的合成 pass，`pass-<下标>.png` 和 WPE 的 RT 逐像素比 | 能比；差异落到具体的 draw | 2026-11-14 Claude：pass 2（黑字层画字形）读回和 WPE RT 7128（事件 59）RGBA 逐像素 0 差异，差异因此只在上屏的 draw |
 | [ ] | T7 护栏 | 同 T2 | 读回很多个 4K 浮点 pass（超过 64 MB）；旧宿主产物带 `trace` | 413 不取；409 `[host]` | |
 
+## 场景壁纸 P5d：透视相机、相机对象、深度与剔除、透明排序
+
+2026-11-13–14 Windows dev。P5d 分步骤 0 调研加 4 步：
+- 步骤 0：20 个确定性工程实测核对读码（`gen_d.py`，抓帧 `A:\p5d\`）；
+- 1 深度与剔除：场景目标挂 `depth32float`（GREATER、每帧清 0），pass 的深度 / 剔除缺键规则对所有对象一套，管线按目标有无深度各建一份；
+- 2 透视相机：`PerspectiveFovRH`、基准相机与路径、三维抖动、按画布尺寸渲染（分辨率变了整场重新加载）、视图向量、粒子 sprite 面向相机，解锁 dna_fragment、techno、neon_sunset；
+- 3 相机对象：选相机、正交 / 透视下的视图、透视覆盖、视差点与抖动跟相机，另加真实写法走查（`3462279189`、`3605722997`、`3453730450`）；
+- 4 透明排序：透视场景里 `transparentsorting` 分两遍、按局部 `origin` · 视线由远到近稳定排序。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「透视相机、相机对象与深度（P5d）」（含「未实测与照报清单」）；每步的验收数据见 `.claude/plans/wpe-import/3-scene/phase5/phase-5d-camera-depth.md`，实测结论见同目录 `p5-REPORT.md`「P5d 语义的实测核对」。
+
+验收工具在 `ignore/p5/`：确定性工程由 `d0/gen_d.py`（以及 `d2/`–`d4/` 的 `gen_d*.py`）生成，放在 `proj/p5d-*`；各步的快照、补丁、变异清单、语料比较与整帧比对在 `d1/`–`d4/`；WPE 参照在 `A:\p5d\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | D0 单测与检查 | Windows | 每步：子代理在 HEAD 快照里跑 `apps/wpe-scene` 的 tsc、vitest、Prettier；Claude 在快照与合并后的树上复跑（带 `KABEGAME_WPE_ROOT`） | 0 error；除已知失败外全过 | 2026-11-13–14 Claude：步骤 1 合并树 vitest 2607 过；步骤 2 变基后 2858 过；步骤 3 `5889b490` + 步骤 3 上 2996 全过；步骤 4 主工作区 149 个文件 3456 条全过；各步 tsc 0 错误。已知失败 `3830255100: 219 次请求`，步骤 3 合并后工作区另有 `2251857160: 553 次请求`（P10a 去掉 `value:animation:pending` 后这张能编完、请求变多，与本节无关） |
+| [x] | D1 读码 · 实测核对 | WPE 抓帧（1920×1080 窗口，宽高比另抓 1280×1024，透明排序 1600×900） | 20 个确定性工程加三张目标样本与模板相机场景 3462279189；补测 `p5d-tilt`、`p5d-camo-{pp,ppr,par,shake}`、7 个 `p5d-sort-*` | 读码结论逐条成立，或写明推翻处 | 2026-11-13–14：读码全部成立，推翻一处（透视开视差时 `g_ParallaxPosition` 是 NaN，不钳成 0）、更正一处（粒子 sprite 面向相机）、补两条（带 effect 的上屏 pass 剔除取 effect 材质、`clearenabled: false` 时深度也不清）；正交相机对象的「冲突」解开（模板场景的图层本来摆在 W/2…3W/2） |
+| [x] | D2 深度与剔除 · 对 WPE | Windows dev 屏外宿主 + WPE 抓帧 | `p5d-depth-o`、`p5d-cull`、`p5c-depth` 按 WPE 日志回放，`kbp cmp frame --kbp-layers` 整帧比 | 逐像素一致 | 2026-11-13 Claude：三个都差 0。`p5d-noclear` 没比（WPE 不清屏的后备缓冲在回放里未定义），「不清深度、第二帧起不再画」由单测锁住 |
+| [x] | D3 透视相机 · 对 WPE | 同 D2，窗口 1920×1080 | `p5d-persp`（含 1280×1024）、`-persp-b`、`-depth2`、`-path` w1 / w6、`-shakep-r`、`-tilt`、`-2d-nofs` 按日志回放整帧比 | 逐像素一致 | 2026-11-13 Claude：全部差 0。路径状态机按 `p5d-path` 日志逐帧推，能核对的 6 帧 `g_EyePosition` 差 ≤ 3.7e-6；`p5d-shakep` 没比（日志到第 150 帧、抓帧在 180），`p5d-shakep-r` 与单测已覆盖三维抖动 |
+| [x] | D4 透视样本 · 对 WPE | 同 D2，`kbp content unpack --instrument` 解包加日志 | techno、dna_fragment（去粒子）、neon_sunset（去粒子）按日志回放整帧比 | 差别只在已知的采样与哈希噪声处 | 2026-11-13 Claude：techno 最大差 4；dna_fragment 去粒子最大差 8（1 个像素超过 2）；neon_sunset 去粒子超过 2 的像素 0.13%、超过 32 的 20 个，逐层拆开（12 个变体）太阳单层 0 差，残差只在带 neongrid（顶点着色器哈希）或 filmgrain 的图层，没有继续查 |
+| [x] | D5 相机对象 · 对 WPE | 同 D2 | `p5d-camo-c` / `-o` / `-r` / `-pp` / `-ppr` / `-par` / `-shake`、`p5d-camp-2`、`-camo-0`、`-camp-1`；`p5d-camo-s`、`-s4k`（开 `scripts`）按日志回放整帧比 | 逐像素一致，或差别只在 FR / CLK | 2026-11-14 Claude：前七个与 `-camp-2` 差 0；`-camo-0` 只有 CLK 块差 34（回放用缺省光标）、排除后 0；`-camp-1` 只有 FR / CLK 不同（WPE 在透视场景对图像层做视锥剔除，只记不补）；`-camo-s`、`-camo-s4k`（场景 3840×2160、窗口 1920×1080）整帧不排除任何区域逐像素相同，脚本日志与 WPE 相同 |
+| [x] | D6 相机对象真实写法走查 | WPE 抓帧 + 复制工程（`kbp content isolate`），窗口 1920×1080 / 1600×900 | `3462279189`（模板：原点脚本、`zoom` 绑属性、开视差）、`3605722997`（三个相机按属性切换）、`3453730450`（透视、`Date.now()` 缓入）各录一段，脚本照常跑，逐帧比 | 全部 draw 的 MVP、视差点、`g_Time` 与 WPE 相同；整帧差能解释 | 2026-11-14 Claude：`3462279189` 各组 MVP 逐位相同，整帧差只在锐利边缘（先按场景分辨率画再缩的采样差，放大采样时最大差 12）；`3605722997` 三个相机最大差 12–35、超过 32 的 1 像素；`3453730450` MVP 相同，开透明排序后整帧逐像素相同（录制时按 WPE 后处理开启档回放）。`3706286085` 做不了（相机挂在带骨骼动画的模型下，`mdl:skeleton` / `mdl:animation` 没实现），换成 `3453730450` |
+| [x] | D7 透明排序 · 对 WPE | 同 D2，窗口 1600×900 | `p5d-sort-a` / `-off` / `-rot` / `-par` / `-eq` / `-fs` / `-ortho` 按日志回放整帧比（开 `scripts`，FR / CLK 不排除） | 除 CLK 块外逐像素一致；正交与关开关按 `objects` 顺序 | 2026-11-14 Claude：实现前需要排序的 5 组有大片差异；实现后 6 个透视工程只剩 CLK 块（颜色取自光标，日志没记光标），关开关那组本来也只有这一块；正交那组只有 CLK 加采样边缘差，和实现前相同 |
+| [x] | D8 变异检查 | Node | `kbp mutate`（快照模式）逐处改坏实现，跑相关单测 | 每处都有用例失败，源码原样还原 | 2026-11-13–14 Claude：步骤 1 16 处、步骤 2 32 处、步骤 3 21 处、步骤 4 3 处（子代理另有 13 / 28 / 31 / 18 处）全部检出，还原后整树哈希一致；步骤 2「宿主不重新加载」、步骤 3「离开相机对象时提前返回」补用例后检出 |
+| [x] | D9 语料变化 | Node，173 → 183 个工程 | 每步前后重扫 `unsupported`（`kbp corpus diff`，同一份翻译器 wasm） | 只去掉本步的键，原来能渲染的场景不掉出 | 2026-11-13–14 Claude：步骤 1 去掉 `cull:normal` 12、`depthwrite:enabled` 10、`depthtest:enabled` 6；步骤 2 去掉 `camera:perspective` 11 与透视的 `general:camerashake` 3，新增 `camera:perspective:text` 2、`:group` 1，能渲染 66 → 69（dna_fragment、techno、neon_sunset）；步骤 3 去掉 18 张的相机五个键，69 → 69（`5889b490` 上 78 → 78）；步骤 4 去掉 3 张的 `general:transparentsorting`，90 → 90 |
+| [x] | D10 原有场景画面不变 | Windows dev，屏外宿主 | 10 张原本能渲染的场景 × 三档后处理，读回画面哈希 | 和之前的基线相同 | 2026-11-13–14 Claude：步骤 1（另加 retro、shimmering_particles，`targetBytes` 正好多一张深度）、步骤 2（变基前后各一次）、步骤 3（变基前后）都相同。步骤 3 的提交树（`5889b490` + 步骤 3）没重测、步骤 4 没跑成（共享宿主产物被别的会话反复重建；10 张基线都没开 `transparentsorting`，关闭时的调用序列有假设备单测锁住） |
+| [x] | D11 预览 · 三张透视样本实时渲染 | Windows，图库预览 | 打开 techno、dna_fragment、neon_sunset | 实时渲染、不退回预览图 | 2026-11-13 Claude：三张都实时渲染，场景目标 3840×2160（主屏全分辨率）、铺满；没有逐一目视对比作者预览（见 D12） |
+| [ ] | D12 预览 · 画面与作者预览一致 | Windows，图库预览 | 打开 dna_fragment、techno、neon_sunset，看相机视角、深度遮挡、粒子朝向 | 与 Wallpaper Engine 里的画面一致，不卡 | 待用户确认 |
+| [ ] | D13 桌面壁纸窗口 | Windows，窗口模式 | 把三张透视场景设为桌面壁纸 | 和预览一致；铺满壁纸窗口 | 桌面壁纸窗口没看 |
+| [ ] | D14 改画布尺寸只重载一次 | Windows，预览 / 桌面 | 打开透视场景后拖动主窗口改大小，或改系统分辨率 | 尺寸稳定约 300 ms 后只整场重新加载一次，没有反复重载、残留画布或多个 GPU 设备 | 只有 `host.test.ts` 的单测，没在真机上拖窗口；重载后粒子重新预热 |
+| [ ] | D15 属性切换相机 | Windows，图库预览 | 打开 `3605722997` 一类按属性切换相机的场景（还缺别的能力，用 dev 强制渲染） ，在预览右栏切换相机属性 | 画面跟着换到对应相机，不整场重编译 | 复制工程已逐帧对过 WPE；实时预览里切属性没看 |
+| [ ] | D16 透明排序在真实壁纸里 | Windows，图库预览 | 打开开着 `transparentsorting` 的场景（`3453730450` 一类，还缺别的能力，用 dev 强制渲染） | 远处的黑色层不再盖住近处的半透明层 | 复制工程已对过 WPE；原版场景没实时看 |
+
 ## 场景壁纸 P8：图像层与材质补全（合成 RT 的采样、形状、对齐、图层依赖、写入状态）
 
 2026-11-13–14。图像层上五处对齐 WPE：合成 RT 按对象的 `clampuvs` / `nointerpolation` 采样；形状对象按第一个 effect 的四个点画四边形；图像层 `alignment` 的偏移只进图层画自己的矩阵；`dependencies` 让被依赖的图层出独占的合成 RT、材质按名字 `_rt_imageLayerComposite_<id>_a` 引用；材质的 `alphawriting` 与 `alphatocoverage`（单采样下在着色器里丢弃 alpha ≤ 0.5 的片元）。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase8/p8-REPORT.md`，逐步的验收数据见 `phase-8-image-material.md`「实施记录」。
