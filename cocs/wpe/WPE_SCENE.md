@@ -2389,7 +2389,7 @@ puppet 在 WPE 里是图像层的一种画法，不是新的对象种类。图�
 | 接线 | `compile/bundle.ts`（`compileImageModel`、`finalizePuppet`）、`compile/features.ts`、`compile/bindings.ts` | 图像层读模型 JSON 的 `puppet`；effect 编完后定上屏路径；有骨骼时组合键加 `SKINNING` 与 `BONECOUNT`；`g_Bones` 进引擎 uniform 表；动画层字段绑用户属性时登记成就地目标 `animation-layer` |
 | 运行时 | `puppet/pose.ts`、`puppet/player.ts`（`ScenePuppets`）、`puppet/math.ts` | 纯 TS，逐步 `Math.fround`，Node 单测、dev 探针、宿主共用。每个动画层一个 P10 的 `AnimationClock`；采样、三种混合、淡入淡出、父链；蒙皮矩阵 K = 世界 · 绑定姿势的逆，每根骨骼 12 个数（K 的 4 行 × xyz，和 WPE 的 `g_Bones` 同序） |
 | 渲染 | `render/graph.ts`、`render/scene.ts`、`render/puppet.ts` | 上屏步骤的几何 `"puppet"`，网格缓冲与顶点布局复用 P5c；每帧在 `update` 里把蒙皮矩阵写进 `g_Bones`。翻译器把 `g_Bones` 出成普通 uniform 块里的 `array<mat4x3<f32>, N>`（每项 64 字节，WGSL 第 c 列就是 K 的第 c 行），12 个数原样写、不转置；WPE 是单独的 b2 缓冲、每项 48 字节，数据相同 |
-| 宿主 | `host.ts`、`render/renderer.ts` | 加载时新建 `ScenePuppets`，重编译时按 `(对象下标, 动画层下标)` `carryOver` 接回时钟，建 GPU 资源前先 `refresh` 一次（不闪绑定姿势）；实时帧在粒子之后、相机之前调 `stepPuppets` |
+| 宿主 | `host.ts`、`render/renderer.ts` | 加载时新建 `ScenePuppets`，重编译时按 `(对象下标, 动画层下标)` `carryOver` 接回时钟，建 GPU 资源前先 `refresh` 一次（不闪绑定姿势）；实时帧在粒子与相机之前调 `stepPuppets`（P12b1 起先于粒子） |
 
 **规则**（读码与实测）：
 - **两条上屏路径**，编译期定：
@@ -2400,7 +2400,7 @@ puppet 在 WPE 里是图像层的一种画法，不是新的对象种类。图�
 - **时钟**：和 P10 关键帧同一个函数，每帧 `t += rate · dt`（float32），模式（`loop` / `mirror` / `single`）在 `MDLA` 的动画记录里，帧号 `t / spf`。`visible` 为假的动画层时钟不走，也不参与混合。
 - **采样与混合**：平移、缩放线性插值，旋转按最短路径 nlerp；按层序逐层叠，有覆盖、权重、加法三种，权重和不归一化；淡入时长 `min(D/2, blendtime)`，非 `single` 只淡一次，淡出只在 `single` 有效。
 - **绘制组**：没有绘制顺序轨道时保持文件顺序，可选块 2 只解析、不起作用。
-- **一帧里的位置**：和粒子在同一个对象更新循环里，在粒子之后、相机 / 关键帧 / 脚本之前。用户属性在两帧之间写进状态，当帧生效；脚本写回晚一帧（实测 K+0 / K+1）。图层隐藏时照样推进，壁纸暂停时冻结，补画的帧不推进。
+- **一帧里的位置**：和粒子在同一个对象更新循环里，在相机 / 关键帧 / 脚本之前；P12b1 起改在粒子之前（按 `objects` 顺序，挂点上的粒子读本帧姿势）。用户属性在两帧之间写进状态，当帧生效；脚本写回晚一帧（实测 K+0 / K+1）。图层隐藏时照样推进，壁纸暂停时冻结，补画的帧不推进。
 - **动画层字段**：`rate`、`blend`、`visible` 绑用户属性时就地改，不重编译。
 
 **能力表**：去掉 `model:puppet`、`object:animationlayers`。P12a 不做、照报的细分键：
@@ -2426,7 +2426,125 @@ puppet 在 WPE 里是图像层的一种画法，不是新的对象种类。图�
 
 **语料**（192 张，2026-11-14）：能渲染 100 → 110，解锁 `2896608544`、`3203778110`、`3351072238`、`3354366708`、`3409595232`、`3811769317`、`3813473025`、`3814576310`、`3818986268`、`3828324728`；去掉 `model:puppet` 36 张、`object:animationlayers` 32 张，新增的只有细分键（`puppet:alpha` 6、`puppet:layer-script` 5、`puppet:physics` 5、`puppet:clipping` 4、`puppet:morph` 2、`puppet:draw-order` 1、`puppet:texture-channels` 1），别的场景逐张不变。其余 26 张还差挂点、光标与媒体回调、`getAnimationLayer` 等（P12b、P12c、P6c、P11）。
 
-**dev 探针**：`renderFrame` 有 `particles.dts` 时 puppet 沿同一串 dt 从第 1 帧推进（粒子之后、相机之前，同渲染器），没有时按 `time` `seek` 再按当前状态 `refresh`；没有 puppet 图层时不建，调用序列和以前逐字节相同。逐 draw 轨迹（`trace`）里 puppet 的 draw 带 `g_Bones`，可以按 MVP 配对 `kbp rdc consts` 导出的 WPE 常量逐分量比。
+**dev 探针**：`renderFrame` 有 `particles.dts` 时 puppet 沿同一串 dt 从第 1 帧推进（P12b1 起在粒子之前、相机之前，同渲染器），没有时按 `time` `seek` 再按当前状态 `refresh`；没有 puppet 图层时不建，调用序列和以前逐字节相同。逐 draw 轨迹（`trace`）里 puppet 的 draw 带 `g_Bones`，可以按 MVP 配对 `kbp rdc consts` 导出的 WPE 常量逐分量比。
+
+## puppet 的挂点、骨骼透明度、变形与裁切（P12b1）
+
+P12b1 在 P12a 的 puppet 上再接四样东西，四样都是 WPE 图像层 puppet 的一部分：
+- 挂点：子对象挂在父 puppet 的骨骼上；
+- 骨骼透明度（`SKINNING_ALPHA`）；
+- 顶点变形（`MORPHING`）；
+- 裁切遮罩：mdl v23 的记录表。
+
+数据仍全部在编译期（Worker）定好，`ScenePuppet` 多四个字段：`attachments`、`boneAlpha`、`morph`、`clipping`。运行时 `src/puppet/` 仍是纯 TS，`ScenePuppets` 多交出三样：`pose`、`boneAlpha`、`morph`。渲染侧多四样：
+- 每帧多写几个 uniform；
+- 每个变形 puppet 一张变形纹理；
+- 全场共用一张半分辨率 R8 遮罩 RT；
+- 一份照 WPE 缓存戳的世界矩阵影子（`render/worldStamps.ts`）。
+
+纹理通道与模型对象的骨骼归 P12b2。
+
+依据：读码 `ignore/p12/b/rea/clip-morph-attach.txt` 与 [rea-p12-attach-physics](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12-attach-physics.md) 第 1 节；计划、实测与走查见 [phase-12b-attach-morph-clip.md](../../.claude/plans/wpe-import/3-scene/phase12/phase-12b-attach-morph-clip.md)。
+
+| 层 | 位置 | 做什么 |
+|---|---|---|
+| mdl | `compile/mdl.ts` | 读 `MDAT`（挂点：名字、骨骼、64 字节矩阵）、`MDMP`（每网格的变形：缩放、变形顶点数、目标的 i16 位置差与 bit12 时的透明度）、动画的每骨骼透明度轨道与每目标权重轨道 |
+| 整理 | `compile/puppet.ts` | 组合键：网格 0 标志 bit2 → `SKINNING_ALPHA`，格式含 `a_PositionVec4` → `MORPHING`（不看有没有目标）；变形纹理在编译期打好；裁切命令表（照 `FUN_14020b720`） |
+| 运行时 | `puppet/pose.ts`、`puppet/player.ts` | 透明度与变形权重的三种叠法；变形上传的取舍与排序（`morphUniforms`）；`pose` 交出模型空间骨骼矩阵给挂点 |
+| 接线 | `compile/bundle.ts`（`resolveAttachment`）、`compile/features.ts` | 挂点在编译期解析成 `{ 父, 骨骼, 矩阵 }`；放行表加 `g_BonesAlpha` / `g_MorphOffsets` / `g_MorphWeights` 与两个组合键；遮罩 pass 另有放行表 `PUPPET_CLIP_MASK_UNIFORMS`（`g_RenderVar0`） |
+| 渲染 | `render/layout.ts`、`render/scene.ts`、`render/graph.ts`、`render/puppet.ts`、`render/worldStamps.ts` | 世界矩阵的挂点钩子；变形纹理与遮罩 RT；puppet 上屏按裁切命令拆成多次绘制；挂点子树的绘制矩阵按缓存戳 |
+
+**挂点**：
+- 子对象的世界矩阵 `W = W_父 · ((Pose[骨骼] · Att) · L)`：
+  - `W_父` 是父的基类世界矩阵，不含对齐偏移；
+  - `Pose` 是父 puppet 本帧动画之后的模型空间骨骼矩阵；
+  - `Att` 取自 mdl。
+  
+  `worldMatrixOf` / `drawMatrixOf` 多一个钩子，图像、粒子、文本、分组子对象都经它。
+- 挂点只在这几个条件都满足时成立，否则按普通父子，不报键：
+  - `attachment` 是字符串；
+  - 父有蒙皮 puppet，且在 `objects` 里排在子前面；
+  - 父 mdl 的 `MDAT` 里有同名项（区分大小写，取第一个）。
+- 挂点子树每帧标脏重算（姿势每帧变）。
+- **帧里的顺序**：WPE 的对象更新循环按 `objects` 顺序跑，所以 puppet 改在粒子之前推进，挂点上的粒子读本帧姿势；这对 P12a 中性，走查复核过。
+- **父被脚本或关键帧动画移动时**（B1，`p12-lag` 实测）：WPE 的世界矩阵函数（`FUN_1401850a0`）带缓存，每个对象记一个戳（帧号），命中时不重新记戳。挂点对象要求戳等于本帧号，所以在更新循环里每帧重算。渲染时被写过的祖先先画、重算后戳也是本帧号，挂点对象就判成缓存有效，于是：
+  - **晚一帧**（用更新循环里的值：祖先的变换是上一帧的，姿势是本帧的）：
+    - 挂点的 puppet，有没有动画层都算；
+    - 挂点的局部空间粒子的绘制；
+    - 它们的子孙。
+  - **不晚**：
+    - 挂点的图像；
+    - 不挂点的 puppet（更新时命中、渲染时因为父的戳更新而重算）；
+    - 自己的变换也被写的对象。
+  - 世界空间粒子的绘制不乘 `W`。
+  
+  `render/worldStamps.ts` 照读码移植这个缓存，跨帧保留戳，在两个时刻求值：
+  - 更新阶段（`stepParticles` 开头）：蒙皮 puppet 与粒子层各一次；
+  - 渲染阶段（`drawPhase`，脚本之后）：画出来的对象各一次，都按 `objects` 顺序。
+  
+  变换写入（`SceneState.takeTransformWrites`）在下一个求值时刻之前清戳。结果只用于挂点子树的绘制：预置进脚本之后那次 `sync` 的世界矩阵缓存。别的对象照旧现算，没有挂点的场景不建影子。
+
+**骨骼透明度**：
+- 每帧先全置 1，再按动画层逐层叠：
+  - 覆盖：`lerp(lo, hi, f)`；
+  - 混合：`lerp(cur, v, w)`；
+  - 加法：`clamp(cur + (v − 1)·w, min(cur, v), max(cur, v))`。
+- 轨道标志 `flags & 3 == 1` 的骨骼跳过。
+- 直接上屏、合成上屏、裁切的遮罩段与目标段都写 puppet 自己的 `g_BonesAlpha`。
+
+**变形**：
+- **纹理**：`side = ⌊√(目标数·nv + 1)⌋`，不够再加 1；纹素 0 = (0, 0, 0, 1)；目标 t 的第 v 个变形顶点放在 `1 + t·nv + v`；网格 0 没有 bit12 时只有纹素 0。格式一律 `rgba32float`，值为 `max(c / 32767, −1)`，要 `float32-filterable`，没有时报 `render:morph-texture`。不用 WPE 的 `rgba16snorm`：它在 Dawn 上只能当 unfilterable 采样，翻译出的着色器用不了。
+- **权重**：每帧清 0；生效条件是 `|v| ≥ FLT_EPSILON`，负权重也算生效。三种叠法：
+  - 覆盖：生效时写值，不生效清位；
+  - 混合：总是 `lerp(cur, v, w)`；
+  - 加法：`a = v·w`，`max(min(cur, a), min(max(cur, a), cur + a))`。
+- **上传**（`FUN_14020cff0`）：按目标号升序取前 11 个生效目标，按带符号权重稳定降序；`g_MorphOffsets = [n, t·nv, …]`，`g_MorphWeights = [缩放, w, …]`。
+- 合成路径的上屏用 puppet 自己的值。读码推断是「残留」，步骤 0b 实测推翻了。
+
+**裁切遮罩**：
+- **命令表**（编译期）：绘制组按组表顺序，加载时不排序。普通组（含遮罩组本身）累积成普通段；走到某条记录的末遮罩位置时，先落普通段，再发射这条记录：遮罩段 + 目标段，一条记录的多个 `list1` 组合成一个目标段。遮罩段 = 首末遮罩位置之间的全部位置减去本记录的目标，夹在中间的普通组也画进遮罩，在 0 处擦掉。每段一份 u16 索引。
+- **遮罩 RT**：全场一张 `r8unorm`。WPE 是后备缓冲宽、高各整除 2；我们按场景分辨率画，取场景目标的一半。每条记录先清 0 再画。
+- **遮罩 pass**：`clippingmaskimage4`，缺省剔背面（顺时针网格的遮罩会被整片剔掉，WPE 一样）。槽 0 同普通段（直接上屏是反照率，合成路径是合成 RT），槽 1 是 `materials/masks/clipping_mask_*.tex`（在 `scene.pkg` 里），槽 5 是变形纹理；`g_RenderVar0.x = 0`。
+- **目标 pass**：基础材质的着色器加 `CLIPPINGUVS` + `CLIPPINGTARGET`，`g_Texture8` 是遮罩 RT（线性、钳制）。混合固定 translucent，不用基础材质的 blending。
+- 带 effect 的 puppet 走同一套命令，槽 0 换成合成 RT。
+
+**能力表**：去掉 `object:attachment`、`puppet:alpha`、`puppet:morph`、`puppet:clipping`，`attachment` 改为中性。新增语料 0 处的照报键：
+- `puppet:morph:modifiers`（bit13）；
+- `puppet:clipping:flags`（记录标志非 0）；
+- `puppet:clipping:nested`（遮罩被另一条记录裁切）；
+- `puppet:clipping:groups`。
+
+会让 WPE 崩溃的组合照旧照报，生成测试工程时也不要做：
+- 有透明度轨道、网格 0 没有 bit2；
+- 有绘制顺序轨道、没有 bit3；
+- 记录下标越界；
+- 骨骼数 > 128。
+
+**走查**（FINAL_CHECK，2026-11-15，报告 `ignore/p12/b/final/report.txt`、`ignore/p12/b/lag/report.txt`）：
+- **生成工程全部逐像素相同**：
+  - `p12-am`（透明度与变形的三种叠法）、`p12-att`（挂点，含粒子子对象）；
+  - 两版裁切工程（`p12-clip2` 覆盖单条记录、共用遮罩、一条记录多组、遮罩之间夹普通组、合成路径、透明度 + 变形 + 裁切）；
+  - P12a 的 5 个工程，换序之后。
+- **6 张解锁场景的复制工程**：差异全部 ≤ 2 级，逐 draw 解释为 waterwaves 的零星舍入与 `rsqrtps`；变形值、透明度、挂点矩阵在不移动父的样本里逐位相同。`2964778792` 有两帧各 1 个像素 1 级没能定位。
+- **`p12-lag`** 核对了「父被移动」的 16 种组合，就是上面的规则。修之后 16 个对象的 MVP 与 WPE 逐位相同，整帧逐像素相同。`3491865410` 的父移动变体（`clipmove`）从最大 241 级降到 ≤ 2 级。
+
+**已知差异与只记不补**：
+- **`rsqrtps` 传到挂点**：父 `Pose` 的末位差原样传给挂点子对象，`3253330537` 右手的 MVP 差 64 ulp。
+- **遮罩 RT 的分辨率**：随场景而不是窗口，窗口与场景不同尺寸时会不同。属于已登记的「WPE 按窗口分辨率画」。
+- **缓存戳的求值时刻**：只建模更新与渲染两个时刻。WPE 在光标命中、相机对象、灯光取世界矩阵时也会记戳，这些没建模。绘制顺序按 `objects`，不看透明排序与组的子层顺序。首帧与「同帧属性和脚本都写同一个祖先」的例外只在影子里算，不用于不挂点的对象。
+- **没接挂点钩子**（语料都没有这种组合）：光标命中（`cursor.ts`）、相机对象、`particles/track.ts` 的加载期静态世界矩阵；平面反射 pass 对带裁切的 puppet 只画目标段。
+- **性能**：挂点子树每帧刷新两次，帧时间没量。
+
+**语料**（2026-11-15，提交前后的快照各扫一遍）：233 个工程能渲染 156 → 162（提交时的 226 个工程口径 151 → 157）。去掉 `object:attachment` 13 张、`puppet:alpha` 9 张、`puppet:clipping` 5 张、`puppet:morph` 3 张，没有新增的键。解锁：
+- `3463520581`、`3829467967`（挂点）；
+- `2964778792`、`3500648585`（透明度）；
+- `3491865410`（挂点 + 裁切）；
+- `3253330537`（挂点 + 加法透明度 + 负权重变形 + 合成路径变形）。
+
+别的场景逐张不变。还差 P12c / P12d 的：
+- `3426865175`（物理）；
+- `3830665420`（动画层脚本）；
+- `3346715292`（动画层脚本 + `getAnimationLayer`）。
 
 ## 交互（P6c）
 

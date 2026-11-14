@@ -267,6 +267,7 @@ import { mirroredView, type SceneView } from "./views";
 import { SPRITE_COUNT_TARGET_FORMAT, SpriteCounter, spriteOverrides, spriteViewProjection } from "./sprite";
 import { transparentDrawOrder } from "./sortOrder";
 import type { DirtyState, LayerState, SceneState } from "./state";
+import { WorldStamps } from "./worldStamps";
 import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
 import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
 import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
@@ -1346,6 +1347,16 @@ export class GpuScene {
   private attachedLayers: number[] | null = null;
   /** `worldMatrixOf` / `drawMatrixOf` 的挂点钩子（P12b1 步骤 3）：稳定的闭包，没有挂点时恒返回 null。 */
   private readonly attachHook = (object: number): Mat4 | null => this.attachPose(object);
+  /**
+   * WPE 世界矩阵缓存的影子（B1，`WorldStamps`）：有挂点时才建，没有挂点的场景为 null（调用序列不变）。更新阶段（`stepParticles` 开头）与
+   * 渲染阶段（`drawPhase`）各求值一次，渲染阶段里挂点子树的结果留在 `drawSeeds`，由 `sync` 与 `encode` 预置进 `worlds`。
+   */
+  private stamps: WorldStamps | null = null;
+  /** 本帧走过更新阶段（`drawPhase` 据此区分补画帧，取走即清）。 */
+  private stampUpdated = false;
+  /** 渲染阶段挂点子树的世界矩阵（B1）：`sync` 与 `encode` 经 `liveSeeds` 读，不取走；更新阶段开头清空，之后又有变换写入时作废。 */
+  private drawSeeds: Map<number, Mat4> | null = null;
+  private readonly hasAttachment = (object: number): boolean => this.attachments.has(object);
   /** 没有透明度来源时 `g_BonesAlpha` 的全 1（按骨骼数缓存，P12b1 步骤 4）。 */
   private readonly onesCache = new Map<number, Float32Array>();
   /** 每个带变形的 puppet（`objects` 下标）的变形纹理（P12b1 步骤 4）：建场景时上传一次，`morph` 引用解析到这里。 */
@@ -2514,6 +2525,7 @@ export class GpuScene {
     // puppet 的变形纹理与裁切遮罩 RT（P12b1 步骤 4、5）：要在建任何 draw 之前就位（`resolveTexture`）
     this.createPuppetResources(built);
     for (const layer of bundle.layers) if (layer.attachment) this.attachments.set(layer.object, layer.attachment);
+    if (this.attachments.size) this.stamps = new WorldStamps();
     const plans = built.map((layer) => this.planOf(layer, state));
     // 深度附件（P5d 步骤 1）：按全部可能用到的计划判定（加载时的计划与预建的变体），要在建任何管线之前定下来，管线的深度状态跟着它
     if (
@@ -3571,7 +3583,8 @@ export class GpuScene {
     if (this.attachments.size && this.puppets?.pose)
       for (const object of this.attachedList(state)) dirty.layers.add(object);
     // 本次的状态快照下的世界矩阵：重建与刷新共用，一条父链只算一次。父的变换写过时子孙已在 `dirty.layers` 里（`SceneState.write`）
-    const worlds = new Map<number, Mat4>();
+    // 预置渲染阶段的挂点子树世界矩阵（B1，`drawPhase`）：WPE 里挂点子树绘制沿用更新阶段的缓存；不取走，到下一次更新阶段才清
+    const worlds = new Map<number, Mat4>(this.liveSeeds(state) ?? []);
     // 文本最先（P6b 1e）：重排、换进状态、图集纹理、强制重建本层；偏移变了的本层与子孙并进这次的 `dirty.layers`，下面照常刷
     this.syncTexts(dirty, state, worlds);
     // 用户纹理（P11b 步骤 2）：来源写过或解码完成的，换 bind group / 整层重建，在结构与刷新之前，新 draw 照当前状态写 uniform
@@ -4244,6 +4257,18 @@ export class GpuScene {
   ): void {
     this.particleCursor = cursor;
     if (!(frametime > 0)) return;
+    // 对象更新循环（WPE `FUN_1401891a0`，p12-lag，B1）：本帧号加一，蒙皮 puppet 与粒子层按 objects 顺序各取一次世界矩阵（不看可见性：
+    // 隐藏的 puppet 照推进、粒子照更新控制点）；挂点对象在这里每帧重算、戳 = 本帧号，渲染阶段（`drawPhase`）据此沿用这里的值
+    if (this.stamps && state) {
+      this.drawSeeds = null; // 上一帧渲染阶段的预置到此作废（`liveSeeds`）
+      this.stamps.invalidate(state.takeTransformWrites());
+      this.stamps.nextFrame();
+      const updated = new Set<number>(this.trees.keys());
+      for (const layer of this.bundle.layers) if (layer.puppet?.skeleton) updated.add(layer.object);
+      for (const object of [...updated].sort((a, b) => a - b))
+        this.stamps.evaluate(object, state.layers, this.hasAttachment, this.attachHook);
+      this.stampUpdated = true;
+    }
     const worlds = new Map<number, Mat4>();
     let pointer: [number, number] | null = null;
     // 一个粒子层若干次绘制共用一棵系统树（P4e 步骤 1、2）：只步进根（子系统与事件实例由它递归），每棵树一次，图层顺序；步进后这一层的
@@ -4292,6 +4317,41 @@ export class GpuScene {
    */
   setPuppets(puppets: PuppetSource | null): void {
     this.puppets = puppets;
+  }
+
+  /**
+   * 渲染阶段（WPE `FUN_140190c80`，B1）：关键帧动画与脚本之后调。消费变换写入，画出来的对象（自身与父链可见、有 draw）按 objects 顺序各取
+   * 一次世界矩阵；挂点子树里画出来的对象的结果留给下一次 `sync` 预置（绘制沿用更新阶段的缓存，见 `WorldStamps`）。返回是否有预置（调用方据此
+   * 决定要不要再 `sync`）。没有挂点、本帧没走过更新阶段（补画帧）时返回 false。绘制顺序取 objects 顺序，透视场景的透明排序与组的子层顺序不管
+   * （挂点父必定排在子前面，顺序只影响更深的祖先，语料没有这种组合）。
+   */
+  drawPhase(state: SceneState): boolean {
+    const stamps = this.stamps;
+    if (!stamps || !this.stampUpdated) return false;
+    this.stampUpdated = false;
+    stamps.invalidate(state.takeTransformWrites());
+    const attached = new Set(this.attachedList(state));
+    const seeds = new Map<number, Mat4>();
+    for (const object of [...state.layers.keys()].sort((a, b) => a - b)) {
+      if (!this.drawsByLayer.get(object)?.length || !effectiveVisible(object, state.layers)) continue;
+      const world = stamps.evaluate(object, state.layers, this.hasAttachment, this.attachHook);
+      if (attached.has(object)) seeds.set(object, world);
+    }
+    this.drawSeeds = seeds.size ? seeds : null;
+    return seeds.size > 0;
+  }
+
+  /**
+   * 渲染阶段预置的有效值（B1）：`sync` 与 `encode` 共用，不取走（暂停时的补画帧不走 `drawPhase`，仍要沿用，否则画面从滞后跳成不滞后）。
+   * `drawPhase` 之后又有变换写入（两帧之间或暂停时改了祖先的属性）时作废、退回现算：WPE 里写过的对象戳为 0、渲染时重算，同此。
+   */
+  private liveSeeds(state: SceneState): ReadonlyMap<number, Mat4> | null {
+    if (!this.drawSeeds) return null;
+    if (state.hasTransformWrites()) {
+      this.drawSeeds = null;
+      return null;
+    }
+    return this.drawSeeds;
   }
 
   /** 挂点子对象与全部子孙（按状态里的父子关系，只算一次）。 */
@@ -4705,8 +4765,9 @@ export class GpuScene {
     const { view: sceneView, texture: sceneTexture } = this.current;
     const { clearcolor, clearenabled } = state.general;
     const depthView = this.depthTarget?.view ?? null;
-    // 粒子层现排时的世界矩阵（P4e 步骤 2）：这一刻的状态下，一条父链只算一次
-    const worlds = new Map<number, Mat4>();
+    // 粒子层现排时的世界矩阵（P4e 步骤 2）：这一刻的状态下，一条父链只算一次。同 `sync` 预置渲染阶段的挂点子树世界矩阵（B1）：
+    // 挂点子树里粒子层的事件实例（`arrangeParticles` 的模型矩阵）与视锥剔除（`modelCulled`）要和本体用同一份 W，否则实例按新 W、本体按旧 W
+    const worlds = new Map<number, Mat4>(this.liveSeeds(state) ?? []);
     const [r, g, b] = clearcolor;
     // 按指定尺寸画时主场景目标改用 `schemecolor`（对齐方式 1 / 3）；反射 pass 仍用 `clearcolor`（下面 r、g、b）
     // TODO:[WPE_SCENE] WPE 的设备清屏色是共享状态，读码推断反射 RT 也会拿到 `schemecolor`，没测；测过再让反射 pass 也用 `targetClear`

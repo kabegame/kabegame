@@ -596,7 +596,7 @@ function eventHooks(scripts: ReadbackReplayOptions["scripts"]): AnimationHooks |
  */
 export function replayReadback(
   scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
-    Partial<Pick<GpuScene, "particleAudio">>,
+    Partial<Pick<GpuScene, "particleAudio" | "drawPhase">>,
   state: SceneState,
   options: ReadbackReplayOptions,
 ): { time: number; frametime: number; parallax: ParallaxState; frame: FrameInput } {
@@ -617,6 +617,8 @@ export function replayReadback(
   // 跑脚本时：每一帧开头（这一帧动画、脚本之前）的 general，视差点逐帧按它推进（同渲染器帧开头推进视差点）；不改 general 时每一项都相同
   const generals: SceneState["general"][] = [];
   // 一帧里步进粒子之后的部分（同渲染器）：设这一帧的相机 → 动画 → 脚本（`beforeFrame`）
+  // 最近一帧的渲染阶段（B1，`drawPhase`）是否预置了挂点子树的世界矩阵：读回帧据此决定要不要脚本之后的 `sync`
+  let drawSeeded = false;
   const afterStep = (at: number, dt: number, animated: boolean) => {
     if (scripts) generals.push(state.general);
     // puppet 不在这里：P12b1 步骤 3 起先于粒子推进（`beforeStep` 与读回帧的步进之前，同渲染器 `stepPuppets`）
@@ -625,6 +627,8 @@ export function replayReadback(
     scripts?.enterFrame?.(dt, at);
     if (animated) animate(dt);
     scripts?.frame(dt, at);
+    // 渲染阶段（WPE `FUN_140190c80`，B1）：脚本之后；中间帧的预置被下一帧开头的 `sync` 取走（那些帧不编码），读回帧的最后一次 `sync` 重新预置
+    drawSeeded = scene.drawPhase?.(state) ?? false;
   };
   const { time, frametime } = replayParticles(
     scene,
@@ -662,7 +666,8 @@ export function replayReadback(
   scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
   // 跑脚本时：这一帧脚本写回的状态刷进 uniform 块 / 可见性 / 泛光链（渲染器 `beforeFrame` 之后的第二次 `sync`）。没有脚本时两次 `sync`
   // 之间没有改动，省掉
-  if (scripts) scene.sync(state);
+  // 挂点子树的渲染阶段预置（B1）要靠这次 `sync` 刷进 draw：只有关键帧动画移动祖先时也要刷
+  if (scripts || drawSeeded) scene.sync(state);
   // 读回那一帧的音频 uniform（P11a）：同一帧的粒子频谱上面已经写过
   const audio = readbackSpectrum(particles);
   const frame: FrameInput = {
@@ -689,7 +694,7 @@ export function replayReadback(
  */
 function replayEncoded(
   scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
-    Partial<Pick<GpuScene, "particleAudio" | "cursorCamera">>,
+    Partial<Pick<GpuScene, "particleAudio" | "cursorCamera" | "drawPhase">>,
   state: SceneState,
   options: ReadbackReplayOptions,
   encodeFrame: (index: number) => void,
@@ -745,6 +750,8 @@ function replayEncoded(
     }
     // 脚本（第 7 批）：动画之后、`setParallax` 之前（同渲染器 `beforeFrame`）
     scripts?.frame(frametime, time);
+    // 渲染阶段（B1）：脚本之后；有预置时脚本之后那次 `sync` 也要做（没有脚本、只有关键帧动画移动祖先时）
+    const drawSeeded = scene.drawPhase?.(state) ?? false;
     parallax = advanceParallax(
       parallax,
       parallaxInput(scripts ? general : state.general, {
@@ -757,7 +764,8 @@ function replayEncoded(
     );
     scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
     // 跑脚本时：动画与脚本写回的状态刷进 uniform 块 / 可见性 / 泛光链（渲染器 `beforeFrame` 之后的第二次 `sync`）
-    if (scripts) scene.sync(state);
+    // 挂点子树的渲染阶段预置（B1）同样要刷
+    if (scripts || drawSeeded) scene.sync(state);
     const audio = spectrumAt(replay, i);
     frame = {
       time,

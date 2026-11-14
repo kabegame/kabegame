@@ -2781,6 +2781,33 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | PP7 实时预览与桌面 | Windows dev，图库预览与桌面 | 预览并设为桌面壁纸：`3203778110`、`2896608544`、`3354366708`；暂停再继续 | 骨骼动画流畅；暂停时停住、继续后接着播 | 只在探针回放里比过，实时播放待用户看 |
 | [ ] | PP8 非 Windows | macOS / Linux | 预览 `3203778110` | 同 Windows | 本机不能测 |
 
+## 场景壁纸 puppet 的挂点、骨骼透明度、变形与裁切（P12b1）
+
+2026-11-15。P12a 的 puppet 再接四样：
+- 挂点：子对象挂在父 puppet 的骨骼上；
+- 骨骼透明度（`SKINNING_ALPHA`）；
+- 顶点变形（`MORPHING`，变形纹理 + 每帧权重）；
+- 裁切遮罩：mdl v23 记录表照 WPE 的命令表拆段，全场一张半分辨率 R8 遮罩 RT。
+
+父对象在本帧被脚本或关键帧动画移动时，挂点的 puppet 与局部空间粒子照 WPE 的世界矩阵缓存晚一帧（`render/worldStamps.ts`）。依据与记录：
+- 计划、实施记录与走查：`.claude/plans/wpe-import/3-scene/phase12/phase-12b-attach-morph-clip.md`；
+- 读码：`ignore/p12/b/rea/`；
+- 走查报告：`ignore/p12/b/final/report.txt`、`ignore/p12/b/lag/report.txt`；
+- WPE 抓帧：`A:\p12\b\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PB0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、相关 vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error，相关测试全过 | 2026-11-15：tsc 0 error；`worldStamps`、`p12b`、`p12a`、`compile/p12b`、`rebuild` 与粒子、回放相关的 14 个文件全过（`probe.renderSize` / `probe.scripts` 的 `spriteSamples` 失败来自别的会话 P13c 未提交的改动）；6 处变异都被抓住 |
+| [x] | PB1 语料 | Node，233 个工程 | `74701936^` 与 `74701936` 的快照各扫一遍、`kbp corpus diff` | 去掉的键只有 `object:attachment`、`puppet:alpha` / `morph` / `clipping`，只解锁预期的 6 张，别的场景逐张不变 | 2026-11-15：能渲染 156 → 162（提交时的 226 张口径 151 → 157），新解锁正好 6 张；去掉 `object:attachment` 13 张、`puppet:alpha` 9、`puppet:clipping` 5、`puppet:morph` 3，没有新增的键（四个细分键全语料 0 处）；19 张有变化，其余 214 张整行相同。报告 `ignore/p12/b/corpus2/report.txt` |
+| [x] | PB2 生成工程对照 WPE | Windows dev + WPE 抓帧，1920×1080，fps 20，后处理超高 | `p12-am`（透明度与变形的三种叠法）、`p12-att`（挂点含粒子子对象）、`p12-clip`、`p12-clip2`（单条记录、共用遮罩、一条记录多组、遮罩之间夹普通组、合成路径、透明度 + 变形 + 裁切）各录 8 帧，`renderFrames.ts` 逐帧回放比 | 整帧逐像素相同 | 2026-11-15 走查：全部 0 差异。`p12-clip` 的三角形是顺时针，遮罩被缺省背面剔除整片剔掉，目标段全透明，WPE 一样 |
+| [x] | PB3 真实壁纸复制工程 | Windows dev + WPE 抓帧，窗口与场景同尺寸 | `kbp content isolate`：`3463520581`、`3829467967`、`2964778792`、`3500648585`、`3491865410`、`3253330537`、`3426865175`，各 6 帧逐帧比、逐 draw 对常量 | 差异逐处有解释 | 2026-11-15 走查：全部 ≤ 2 级，归 waterwaves 的零星舍入与 `rsqrtps`；变形值、透明度、挂点矩阵逐位相同；`3491865410` 两个裁切目标段最终可见的 2256 个像素全部相同；`2964778792` 两帧各 1 个像素 1 级没能定位 |
+| [x] | PB4 P12a 不变 | Windows dev + WPE 抓帧 | P12a 的 5 个生成工程与两张复制工程重渲 | 和 P12a 时逐像素相同（puppet 改在粒子之前推进） | 2026-11-15 走查：40 帧仍和旧 WPE 抓帧逐像素相同；两张复制工程和当时我们的帧逐像素相同 |
+| [x] | PB5 父被移动时的挂点时机 | Windows dev + WPE 抓帧，1920×1080 | 生成工程 `p12-lag`（16 种组合：挂点 / 不挂点的 puppet、图像、局部 / 世界空间粒子，祖先被脚本、关键帧动画移动，纯分组祖先，子排在父前）与 `3491865410-iso-clipmove` 用同一份抓帧重渲 | `p12-lag` 每个对象的 MVP 与 WPE 逐位相同、整帧逐像素相同；`clipmove` 只剩 ≤ 2 级差 | 2026-11-15：修之前滞后对象差到约 148 像素（B1）。修之后：`p12-lag` 16 个对象 8 帧 MVP 与 WPE 差 0，整帧 8 帧逐像素相同；`clipmove` 每帧 477–1138 个像素、全部 ≤ 2 级，最差一帧归属到 waterwaves 与 `rsqrtps`；父不动的工程（`p12-am` / `p12-att` / `p12-clip2`、P12a 5 个、`3463520581` / `3253330537` / `3491865410-iso-clip`）和修之前逐字节相同 |
+| [x] | PB6 解锁场景整张 | Windows dev 屏外宿主 | 6 张解锁的场景开脚本各渲染一帧 | 能画、不支持项为空、没有退回、脚本 `init` 成功 | 2026-11-15：全部通过（修了变形纹理格式、裁切纹理上传、遮罩 pass 的 `g_RenderVar0` 三个 bug 之后）。`3500648585` 的一条脚本告警是作者把拖拽脚本挂在 `visible` 上，不属于 P12 |
+| [ ] | PB7 实时预览与桌面 | Windows dev，图库预览与桌面 | 预览并设为桌面壁纸：`3463520581`、`3491865410`、`3253330537`；暂停再继续 | 挂点跟着骨骼动、眼睛的裁切与表情变形正常；暂停时停住 | 只在探针回放里比过，实时播放待用户看 |
+| [ ] | PB8 帧时间 | Windows dev | `3463520581`（挂点三层、200 多个子对象）实时播放，看帧时间 | 挂点子树每帧刷新两次，帧时间没有明显上升、没有周期性卡顿 | 没量 |
+| [ ] | PB9 非 Windows | macOS / Linux | 预览 `3253330537` | 同 Windows（变形要 `float32-filterable`） | 本机不能测 |
+
 ## 场景 dev 探针按指定尺寸渲染
 
 2026-11-14。dev 探针 `renderFrame` 给了 `canvas` 时，正交场景按这个尺寸直接画，和 WPE 测试窗口同一种画法：样式照 WPE 的对齐方式做进正交投影的四个裁切边距，`fit` / `center` 整屏清成 `schemecolor`，读回场景目标本身。`renderMode: "scene"` 取旧的「场景分辨率 + 读回时铺进画布」。产品的预览、桌面、应用背景都不变（用户定）。计划与记录见 `.claude/plans/wpe-import/3-scene/phase-render-size.md`，读码 `rea-render-size.md`。

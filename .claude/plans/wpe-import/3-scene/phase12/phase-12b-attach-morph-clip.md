@@ -305,6 +305,7 @@ export function worldMatrixOf(
   - 图像子对象在渲染时现算世界矩阵：用脚本写过的新 `W_父` 与本帧姿势，没有滞后。我们的脚本写入会把子树标脏、`sync` 现算，同样没有滞后。
   - 粒子子对象模拟时取更新阶段的旧 `W`（上一帧脚本写的 origin、本帧姿势），绘制时再现算一次。我们的粒子本来就在脚本之前步进、绘制时读 `worldMatrixOf`，换序后自然对上。
   - 语料里 `3491865410` 的挂点父 #74 的 `origin` 挂脚本，步骤 6 用它核对。
+  - **更正（步骤 6 走查，B1）**：上面两条只对挂点的**图像**子对象、不挂点的对象成立。挂点的 puppet 与挂点的局部空间粒子在更新循环里每帧重算、戳是本帧号，祖先渲染时重算后戳也是本帧号，于是绘制沿用更新阶段的 `W`（滞后一帧，姿势是本帧的），子孙随之滞后。`p12-lag` 实测，修法见步骤 6b。
 
 ## 步骤 4 — 骨骼透明度与变形的渲染（`compile/features.ts`、`render/scene.ts`、`render/device.ts`）
 
@@ -361,6 +362,147 @@ export interface PuppetClipping {
   - 加核：`3426865175`（粒子挂在透视 puppet 上）、`3577990983` 或 `3808922316`（合成路径裁切）。
 - **P12a 不变**：P12a 的 5 个生成工程与两张复制工程逐像素不变（帧序换了）。
 - **解锁场景整张**：能画、不退回、脚本 `init` 成功。
+
+## 步骤 6b — 走查修复：挂点子树的绘制矩阵照 WPE 的缓存戳（B1）
+
+### 总体设计思路
+
+走查找到的 B1：父对象在本帧被脚本或关键帧动画移动时，WPE 里挂点的 puppet、挂点的局部空间粒子，以及它们的子孙，绘制用的是更新循环里算的世界矩阵（祖先的变换是上一帧的，姿势是本帧的）；我们用的是脚本之后现算的。根源是 WPE 世界矩阵函数 `FUN_1401850a0` 的缓存：每个对象记一个「戳」，戳是帧号，命中缓存时不重新记戳。挂点对象要求自己的戳等于本帧号，所以更新循环里每帧都重算，戳 = K；渲染时被写过的祖先先画、重算后戳也是 K，`K ≥ K` 判成缓存有效，子对象就沿用了更新阶段的值。不挂点的 puppet 在更新循环里一般命中（戳 K−1），渲染时父重算成 K，`K−1 < K` 就重算，所以没有滞后。生成工程 `p12-lag` 把这套推导的 16 条预测在 WPE 上逐条核过，全部成立（实施记录「步骤 6」）。
+
+所以照着移植这个缓存，不按种类写特例。新模块 `render/worldStamps.ts` 是一个纯 TS 的影子缓存：每个对象一个戳和一份缓存矩阵，跨帧保留，规则逐条照读码。它只在帧里的两个时刻求值。
+
+- **更新阶段**：WPE 的 `FUN_1401891a0`，在 `stepParticles` 开头。本帧号加一，全部蒙皮 puppet 与粒子层按 `objects` 顺序各取一次，不看可见性。
+- **渲染阶段**：WPE 的 `FUN_140190c80`，在脚本之后由新方法 `drawPhase` 触发。画出来的对象按 `objects` 顺序各取一次。
+
+变换写入（`origin` / `angles` / `scale`，不论来自属性、关键帧还是脚本）由 `SceneState` 记下，在下一个求值时刻之前把那些对象的戳清 0。影子缓存的乘法和 `worldMatrixOf` 逐步相同，所以没有写入时，它的值和现算逐字节相同。
+
+影子缓存的结果只用在一处：脚本之后的那次 `sync` 里，挂点子树（挂点对象与全部子孙，`attachedList`）的 draw 用渲染阶段的值，做法是预先放进那次 `sync` 的 `worlds` 缓存（`drawMatrixOf` 与粒子的模型矩阵都经它）。别的对象照旧现算，没有挂点的场景不建影子缓存、调用序列不变。不全面换用影子值的理由：
+- 稳态下只有挂点子树会和现算不同；
+- 其余情形只在首帧、或同一帧里属性与脚本都写了同一个祖先时才出现，`p12-lag` 都没测到；
+- 范围收窄，也让「影子缓存漏了一种写入」这类错误只影响挂点子树。
+
+粒子模拟仍在更新阶段用现算的 `W`（就是更新阶段的值），世界空间系统的绘制不乘 `W`，都不用改。
+
+### 现状锚点
+
+**a. 一帧里两次 `sync`，第二次对挂点子树现算**（`render/renderer.ts:780`，`render/scene.ts:3611`）
+```ts
+if (live) this.options.stepPuppets?.(frametime);
+scene.sync(state);
+scene.stepParticles(frametime, wrapped, state, cursor);   // 现状：粒子模拟按此刻现算的 W（= WPE 更新阶段）
+// … 相机、光标、声音
+if (live) this.options.beforeFrame?.(frametime, this.spectrum);   // 关键帧动画 + 脚本写变换
+scene.setParallax(drawParallax(this.parallax, state.general, this.perspective), state);
+scene.sync(state);   // 现状：挂点子树按脚本之后的状态现算
+```
+```ts
+sync(state: SceneState): void {
+  const dirty = state.takeDirty();
+  if (this.attachments.size && this.puppets?.pose)
+    for (const object of this.attachedList(state)) dirty.layers.add(object);   // 现状：每次 sync 都现算挂点子树
+  const worlds = new Map<number, Mat4>();   // 现状：空缓存，全部现算
+```
+
+**b. 变换写入只标脏、不区分直接写的对象**（`render/state.ts:664`）
+```ts
+if (INHERITED_FIELDS.has(field)) for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);   // 现状：自身与子孙一起进 dirtyLayers
+```
+
+**c. dev 回放的两条帧循环**（`dev/particleCorners.ts` 的 `replayReadback` 的 `afterStep` 与读回帧、`replayEncoded` 的逐帧循环）
+```ts
+scripts?.frame(frametime, time);
+// …
+scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
+if (scripts || options.media) scene.sync(state);   // 现状：没有脚本与媒体时不做脚本之后的 sync
+```
+
+### 点 1 — 影子缓存 `render/worldStamps.ts`（新增）
+
+- **新增**
+```ts
+/**
+ * WPE 世界矩阵缓存的影子（`FUN_1401850a0` / `FUN_140185040`，clip-morph-attach 6(2)，`p12-lag` 实测）：每个对象一个戳（帧号）与一份缓存矩阵，跨帧保留。
+ * 命中 ⇔ 戳 ≠ 0 且（没有挂点 ‖ 戳 == 本帧号）且（没有父 ‖（戳 ≥ 父.戳 且 父链有效(父, 自己有挂点)））；
+ * 父链有效(P, 子有挂点) ⇔ P.戳 ≠ 0 且（!子有挂点 ‖ P.戳 == 本帧号）且（P 没有父 ‖（P.戳 ≥ 祖父.戳 且 父链有效(祖父, P 有挂点)））。
+ * 命中返回缓存、不改戳；不命中按 `W = 父的求值 · ((Pose·Att) · L)` 现算（父也走这条规则递归），戳记成本帧号。乘法顺序与 `worldMatrixOf` 逐步相同。
+ * 父对象不在表里时当根；环在编译期已断开，递归按走过的节点兜底。
+ */
+export class WorldStamps {
+  /** 当前帧号（更新阶段开头加一）；从 1 起，0 留给「没算过 / 写过」 */
+  get frame(): number;
+  nextFrame(): void;
+  /** 变换写入：戳清 0（WPE 描述符回调 `0x1401e0520`） */
+  invalidate(objects: Iterable<number>): void;
+  evaluate(
+    object: number,
+    layers: ReadonlyMap<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "parent">>,
+    attached: (object: number) => boolean,   // 子的挂点 ≥ 0：`GpuScene.attachments.has`
+    attach: (object: number) => Mat4 | null, // 同 `worldMatrixOf` 的钩子
+  ): Mat4;
+}
+```
+  > 说明：「父链有效」递归时传父自己的挂点（读码只写了「递归」，`p12-lag` 的情形区分不了两种读法，照自然递归）。
+
+### 点 2 — 记下直接写变换的对象（`render/state.ts`）
+
+- **新增** `SceneState` 记直接写过 `origin` / `angles` / `scale` 的对象，供影子缓存清戳：
+```ts
+/** 直接写过变换的对象（不含子孙）：影子缓存在下一个求值时刻清它们的戳（`GpuScene` 取走） */
+private transformWrites = new Set<number>();
+takeTransformWrites(): Set<number>;
+```
+  在 `write` 的图层分支里，`origin` / `angles` / `scale` 写进字段之后加入 `target.object`；向量值写不进（`layerVectorValue` 返回 null）时不加。集合的元素是对象下标，大小有上界，不用担心没人取。
+
+### 点 3 — 两个求值时刻与预置（`render/scene.ts`）
+
+- **新增** 字段：`stamps: WorldStamps | null`（`attachments` 非空时建）、`stampUpdated: boolean`（本帧走过更新阶段）、`drawSeeds: Map<number, Mat4> | null`。
+- **修改** `stepParticles`：`frametime > 0` 且给了 `state` 时，在开头做更新阶段：
+```ts
+// 对象更新循环（WPE `FUN_1401891a0`，p12-lag）：本帧号加一，蒙皮 puppet 与粒子层按 objects 顺序各取一次世界矩阵（不看可见性：隐藏的 puppet 照推进、
+// 粒子照更新控制点）；挂点对象在这里每帧重算、戳 = 本帧号，这是 B1 的来源
+if (this.stamps && state) {
+  this.stamps.invalidate(state.takeTransformWrites());
+  this.stamps.nextFrame();
+  for (const object of this.updateObjects) this.stamps.evaluate(object, state.layers, this.attached, this.attachHook);
+  this.stampUpdated = true;
+}
+```
+  `updateObjects`：有骨骼的 puppet 图层（`layer.puppet?.skeleton`，`p12-lag` 的 A7：没有动画层也算）与粒子树的对象，升序，建场景时定。
+- **新增** `drawPhase(state): boolean`：
+```ts
+/**
+ * 渲染阶段（WPE `FUN_140190c80`）：关键帧动画与脚本之后调。消费变换写入，画出来的对象（自身与父链可见、有 draw）按 objects 顺序各取一次世界矩阵；
+ * 挂点子树里画出来的对象的结果留给下一次 `sync` 预置。返回是否有预置（调用方据此决定要不要再 `sync`）。没有挂点、本帧没走过更新阶段（补画帧）时返回 false
+ */
+drawPhase(state: SceneState): boolean;
+```
+  > 说明：绘制顺序取 `objects` 顺序，透视场景的透明排序、组的子层顺序不管（挂点父必定排在子前面，顺序只影响更深的祖先，语料没有这种组合）。
+- **修改** `sync` 与 `encode`（复核时补上 `encode`，`arrangeParticles` 的事件实例与 `modelCulled` 也读世界矩阵）：`worlds` 先放进有效的预置，挂点子树照旧并进 `dirty.layers`，所以这次刷新用渲染阶段的值：
+```ts
+const worlds = new Map<number, Mat4>(this.liveSeeds(state) ?? []);   // 修改：预置渲染阶段的挂点子树世界矩阵（B1）
+```
+  `liveSeeds`：`drawPhase` 之后又有变换写入（`SceneState.hasTransformWrites`）就作废、回到现算（暂停补画、两帧之间的属性写入；WPE 里写过的对象戳为 0、渲染时重算）。预置不取走，更新阶段开头清空。
+
+### 点 4 — 接到帧循环（`render/renderer.ts`、`dev/particleCorners.ts`）
+
+- **修改** `renderer.ts`：`beforeFrame` 之后、`setParallax` 之前 `scene.drawPhase(state)`；之后那次 `sync` 原本就有。
+- **修改** `particleCorners.ts`：`replayReadback` 的 `afterStep` 与 `replayEncoded` 的逐帧循环，在 `scripts?.frame` 之后 `drawPhase`；脚本之后那次 `sync` 的条件加上 `drawPhase` 的返回值（没有脚本、只有关键帧动画移动祖先时也要刷）。
+  > 说明：`replayReadback` 跑脚本时，中间帧的预置被下一帧开头那次 `sync` 取走，是没有编码的帧，读回帧的最后一次 `sync` 重新预置。不另加调用，没有挂点的场景调用序列不变。
+
+### 点 5 — 单测
+
+- `render/worldStamps.test.ts`：照 `p12-lag` 的对象表（R / Q / A1 / A5 / A7 / A2 / A3 / A6 / G / Q2 / B1 / R2 / Q3 / C1 / X / R3）逐帧模拟「更新 → 写 → 渲染」，断言每个对象渲染阶段的值是新是旧，A5 继承 A1、旧值的姿势是本帧的；没有写入时和 `worldMatrixOf` 逐字节相同；首帧例外（不挂点的 puppet 在第 1 帧取旧值）照规则断言。
+- `render/p12b.test.ts`（假设备）：
+  - 挂点 puppet、挂点局部空间粒子在更新阶段之后父被写，`drawPhase` 之后的 `sync` 写进 draw 的 `g_ModelViewProjectionMatrix` / 粒子模型矩阵是写之前的；
+  - 挂点图像与不挂点 puppet 是写之后的；
+  - 没有挂点的场景 `drawPhase` 返回 false、draw 字节和现在相同。
+
+### 验收
+
+1. 宿主 tsc 0 error；相关 vitest 全过；变异检查：命中条件去掉「== 本帧号」、`sync` 不预置、`stepParticles` 不重算 puppet、`transformWrites` 不记。
+2. `p12-lag` 用同一份抓帧重渲：16 个对象的 MVP 与 WPE 逐位相同（滞后对象残差 0），整帧逐像素相同。
+3. `3491865410-iso-clipmove` 用同一份抓帧重渲：只剩和 `3491865410-iso-clip` 同类的 ≤ 2 级差（waterwaves、K2）。
+4. 不变：`p12-am` / `p12-att` / `p12-clip2`、P12a 的 5 个生成工程与语料复制工程重渲后和修之前我们的帧逐字节相同（父不被脚本移动时影子缓存与现算相同）。
 
 ## 步骤 7 — 收尾
 
@@ -471,4 +613,61 @@ export interface PuppetClipping {
 - 平面反射 pass 对带裁切的 puppet 只画目标段、没画遮罩；
 - 挂点子树每帧刷新两次（`sync` 每帧调两次）。
 
-**还没做**：步骤 6（逐像素走查）与步骤 7（收尾）。
+### 步骤 6 — 真机走查（2026-11-15，报告 `ignore/p12/b/final/report.txt`、`ignore/p12/b/lag/report.txt`）
+
+走查代理只取证、不改代码。所有对照都用和场景同尺寸的窗口，生成工程 1920×1080，4K 复制工程 3840×2160 无边框；后处理超高、fps 20。抓帧在 `A:\p12\b\final\`、`A:\p12\b\lag\`。
+
+- **生成工程全部逐像素相同**：
+  - `p12-am`、`p12-att`（含粒子子对象）各 8 帧。
+  - 新做的裁切工程有两版：
+    - `p12-clip`：三角形顺时针。遮罩材质缺省剔背面，遮罩整片被剔，目标段全透明；WPE 也是这样，记作语义确认。
+    - `p12-clip2`：三角形逆时针，覆盖一条记录、两条记录共用遮罩、一条记录的 `list1` 两组、遮罩之间夹普通组擦遮罩、带 effect 的合成路径、透明度 + 变形 + 裁切。
+  - P12a 的 5 个生成工程 40 帧仍和旧抓帧逐像素相同，换序无影响。
+- **复制工程**（`kbp content isolate`），差异全部 ≤ 2 级，逐 draw 解释：
+  - `3500648585`：逐像素相同。
+  - `2964778792`：两帧各 1 个像素差 1 级，记为未解释 U1，全部输入逐位相同。
+  - `3463520581`：三层挂点的 MVP 与 `g_Bones` 逐位相同，差异全在 waterwaves。
+  - `3829467967`：一身体上屏的差异来自 K2；只换骨骼的 GPU 回放预测到约一半，剩下的在回放器噪声量级。
+  - `3491865410`：两个裁切目标段最终可见的 2256 个像素全部相同。
+  - `3253330537`：5 个变形 puppet（含负权重与合成路径）的变形值与加法透明度逐位相同。
+  - `3426865175`：粒子带音频系数，测试窗口没音频，两边都不发射；去掉音频系数的变体里挂点模型矩阵只差父 Pose 的 1 ulp。
+- **新的已知差异**：K2 延伸。挂点子对象继承父 `Pose` 的 `rsqrtps` 末位差，`3253330537` 右手的 MVP 差 64 ulp。
+- **B1**：变体 `3491865410-iso-clipmove` 让 #74 的 `origin` 逐帧移动，6 个挂点 puppet 与挂在 puppet 100 上的 3 张图滞后一帧（直接比差到 7.7e−2 NDC；按「#74 取上一帧」预测残差 ≤ 2.4e−7，Claude 重跑核过）。我按缓存戳规则推了 16 条预测，生成工程 `p12-lag` 在 WPE 上全部成立：
+  - 滞后：A1 / A7 / B1 / C1（挂点 puppet，A7 没有动画层，B1 的祖先是纯分组对象，C1 的祖先由关键帧动画移动）、A3（挂点局部空间粒子的绘制，推翻 rea 6(4)「绘制时重算」）、A5（A1 的子图像）。
+  - 不滞后：R / Q / A2 / A6 / Q2 / R2 / Q3 / X / R3。
+  - 「新」的对象和我们逐位相同；「滞后」的按预测残差 1.19e−7，姿势是本帧的。Claude 重跑比对脚本核过。修法见步骤 6b。
+- **没走成**：
+  - 我们的 r8 遮罩 RT 读不回，只有目标段像素这个间接证据；
+  - 语料里的合成路径裁切场景还不能渲染，由 `p12-clip2` 覆盖；
+  - 挂点子树每帧刷新的帧时间没量。
+
+### 步骤 6b — B1 修复（2026-11-15，执行代理，主工作区，报告 `ignore/p12/b/impl/step6b.txt`）
+
+- **实现**：`render/worldStamps.ts`、`SceneState.transformWrites`、`GpuScene` 的更新阶段（`stepParticles` 开头）、`drawPhase` 与预置，渲染器与 dev 回放的两条帧循环都接上，照设计没有改动。和设计的出入：
+  - 更新阶段的对象集合每次现算，不在建场景时定：粒子树会随单图层重建变；
+  - 首帧例外：Q、Q3 的父在它们之前画，首帧取旧值；Q2 的父 G 不画、戳停在 0，首帧就是新值。第 2 帧滞后对象带首帧残留（滞后两帧），从第 3 帧起是稳态。这些都是照规则推的，WPE 没测首帧。
+- **Claude 复核**：规则移植与乘法顺序逐条核过。发现 `encode` 另建世界矩阵缓存，`arrangeParticles`（事件实例）与 `modelCulled` 会用现算值；预置取走即清，暂停补画会跳回现算。改成：
+  - `liveSeeds`：`sync` 与 `encode` 共用，`drawPhase` 之后又有变换写入就作废（回到现算，和 WPE 里写过的对象戳为 0、渲染时重算一致）；
+  - 更新阶段开头清空。
+  
+  补了两个用例。`encode` 里实例化粒子没有假设备用例，它和 `sync` 共用 `liveSeeds`。
+- **检查**：
+  - 宿主 tsc 0 error；
+  - `worldStamps` / `p12b` / `p12a` / `compile/p12b` / `rebuild` 与粒子、回放相关 14 个文件全过；`probe.renderSize` / `probe.scripts` 的失败是别的会话 P13c 未提交的 `spriteSamples`，与本步无关。
+- **变异**（执行代理 5 处，Claude 自做 1 处，都被抓住）：
+  - 去掉「== 本帧号」；
+  - `sync` 不预置；
+  - 更新阶段不对 puppet 求值；
+  - 不记 `transformWrites`；
+  - `liveSeeds` 不判写入；
+  - 命中不比父戳（Claude）。
+
+- **抓帧复核**（走查代理，宿主产物 `index-BbUEx3uf.js`，沿用旧抓帧，报告 `ignore/p12/b/final/recheck-b1.txt`）：
+  - `p12-lag`：16 个对象 8 帧的 MVP（粒子比 GS 常量）与 WPE 直接比全部为 0，整帧 8 帧逐像素相同（修之前每帧 3074–4540 个像素、最大 255）。Claude 用修复后的轨迹重跑 `lagrules.py` 核过。
+  - `3491865410-iso-clipmove`：
+    - 修之后每帧 477–1138 个像素、全部 ≤ 2 级（修之前 59–75 万、最大 241）；
+    - 原先滞后的 9 个对象的 MVP 只在近零项上差 ≤ 2.3e−13；
+    - 最差一帧逐 draw 归属到 waterwaves 与 K2，裁切 puppet 0 个像素。
+  - 不变：`p12-am`、`p12-att`、`p12-clip2` 24 帧，`3463520581-iso-att`、`3253330537-iso-amm` 各 2 帧，`3491865410-iso-clip` 6 帧，PNG 和修之前逐字节相同；P12a 的 5 个生成工程 40 帧仍和 WPE 逐像素相同。
+
+**还没做**：步骤 7（收尾）的提交。文档、回归、changelog、PLAN 与总计划进度已写好。

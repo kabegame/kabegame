@@ -306,6 +306,8 @@ export class SceneState {
   /** 图像层（`SceneLayer.alignment` 有值）的 `size`（P8 步骤 3）：脚本写 `alignment` 时按它重算偏移；尺寸只在重编译时变。 */
   private readonly alignmentSizes = new Map<number, readonly number[]>();
   private dirtyLayers = new Set<number>();
+  /** 直接写过变换的对象（不含子孙，B1）：影子缓存（`WorldStamps`）在下一个求值时刻清它们的戳（`GpuScene` 取走）。 */
+  private transformWrites = new Set<number>();
   private dirtyPasses = new Set<TargetKey>();
   private bloomDirty = false;
   private dirtyStructures = new Set<number>();
@@ -660,6 +662,8 @@ export class SceneState {
           if (field === "visible" && typeof conditioned(binding, raw) !== "boolean") return "applied";
           writeLayer(layer, field, bindingValue(raw, binding.condition, field));
         }
+        // 变换写入（属性、关键帧、脚本同一条路；向量写不进时上面已返回）：影子缓存清戳（WPE 描述符回调 `0x1401e0520`，B1）
+        if (field === "origin" || field === "angles" || field === "scale") this.transformWrites.add(target.object);
         // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的
         if (INHERITED_FIELDS.has(field)) for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
         else this.dirtyLayers.add(target.object);
@@ -700,6 +704,18 @@ export class SceneState {
     this.bloom = writeBloomParam(this.bloom, target.field, raw, binding.condition);
     this.bloomDirty = true;
     return "applied";
+  }
+
+  /** 是否有未取走的变换写入（只读，B1：渲染阶段预置据此作废）。 */
+  hasTransformWrites(): boolean {
+    return this.transformWrites.size > 0;
+  }
+
+  /** 取走直接写过变换的对象（取走即清空，B1）。 */
+  takeTransformWrites(): Set<number> {
+    const writes = this.transformWrites;
+    this.transformWrites = new Set();
+    return writes;
   }
 
   /** 渲染器每帧取走脏项（取走即清空）。 */

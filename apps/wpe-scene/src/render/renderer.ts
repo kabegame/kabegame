@@ -786,6 +786,8 @@ export class SceneRenderer {
     if (live) this.options.beforeFrame?.(frametime, this.spectrum);
     const encoder = device.createCommandEncoder({ label: "scene frame" });
     try {
+      // 渲染阶段（WPE `FUN_140190c80`，B1）：脚本之后、下面的 `sync` 之前；挂点子树的绘制矩阵照 WPE 的缓存戳预置（没有挂点时什么都不做）
+      scene.drawPhase(state);
       // 绘制用的视差取脚本之后的开关与 amount（WPE 绘制时才读，rea-p5-camera.md 6.3）：脚本写 `cameraparallax*` 同帧生效
       // 透视场景不移动对象（rea-p5-camera 6.1，P5d 步骤 2）
       scene.setParallax(drawParallax(this.parallax, state.general, this.perspective), state);

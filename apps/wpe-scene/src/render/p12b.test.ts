@@ -961,3 +961,113 @@ describe("uploadableTextures：裁切遮罩的 pass（P12b1 步骤 5）", () => 
     );
   });
 });
+
+describe("GpuScene：挂点子树的绘制矩阵照 WPE 的缓存戳（步骤 6b，B1）", () => {
+  const att = translation(2, 3);
+  /**
+   * 0：R 图像根（每帧被脚本写 origin）；1：Q 不挂点的 puppet（父 R）；2：A1 挂 Q 骨骼 1 的 puppet；3：A2 挂 Q 骨骼 1 的图像；
+   * 4：A5 是 A1 的普通子图像。姿势只有 Q（对象 1）有。
+   */
+  const build = async (withAttachment: boolean) => {
+    const attachment = withAttachment ? { attachment: { parent: 1, bone: 1, matrix: att } } : {};
+    const puppetAt = (object: number) => puppetOf({ passes: [pass(`objects/${object}/passes/0`, { program: 1 })] });
+    const layers = [
+      layerOf(0, { origin: [400, 300, 0] }),
+      layerOf(1, { parent: 0, origin: [10, 20, 0], puppet: puppetAt(1) }),
+      layerOf(2, { parent: 1, origin: [5, 5, 0], puppet: puppetAt(2), ...attachment }),
+      layerOf(3, { parent: 1, origin: [7, 7, 0], ...attachment }),
+      layerOf(4, { parent: 2, origin: [1, 1, 0] }),
+    ];
+    const bundle = bundleOf(layers);
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), []);
+    const { source, puppets } = fakePuppets();
+    puppets.pose = (object) => (object === 1 ? source.poseValue : null);
+    scene.setPuppets(puppets);
+    return { scene, state, source };
+  };
+  type Item = Awaited<ReturnType<typeof build>>;
+  // 向量属性值按字符串写（同用户属性 / 脚本写回的取值规则）
+  const originOf = (f: number) => [400 + f * 40, 300 - f * 15, 0];
+  const writeOrigin = (state: SceneState, f: number) =>
+    state.write({ property: "p", target: { kind: "layer", object: 0, field: "origin" } }, originOf(f).join(" "));
+  const mvp = (scene: GpuScene, object: number) => floats(drawsOf(scene, object)[0].uniformBuffer!, 0, 16);
+  const poseAt = (item: Item, f: number) => item.source.poseValue!.set(translation(f * 10, f), 16);
+
+  /** 一帧：姿势 → sync → 更新阶段 → 脚本写 R 的 origin → 渲染阶段 → sync → update（同 `SceneRenderer.render`）。 */
+  const frame = (item: Item, f: number, drawPhase = true) => {
+    poseAt(item, f);
+    item.scene.sync(item.state);
+    item.scene.stepParticles(0.05, f * 0.05, item.state);
+    writeOrigin(item.state, f);
+    const seeded = drawPhase ? item.scene.drawPhase(item.state) : false;
+    item.scene.sync(item.state);
+    item.scene.update(FRAME, item.state);
+    return seeded;
+  };
+  /** 参照：同一份 bundle，不走更新 / 渲染阶段，R 的 origin 取 `at` 帧、姿势取 `f` 帧，现算出的各对象 MVP。 */
+  const reference = async (at: number, f: number) => {
+    const ref = await build(true);
+    poseAt(ref, f);
+    writeOrigin(ref.state, at);
+    ref.scene.sync(ref.state);
+    ref.scene.update(FRAME, ref.state);
+    return ref.scene;
+  };
+
+  it("挂点 puppet 与它的子图像滞后一帧（祖先 origin 取上一帧、姿势取本帧），不挂点 puppet 与挂点图像是新值", async () => {
+    const item = await build(true);
+    for (let f = 1; f <= 4; f++) {
+      expect(frame(item, f)).toBe(true);
+      // 首帧与第 2 帧带着首帧例外（Q 在第 1 帧取旧值），从第 3 帧起验收
+      if (f < 3) continue;
+      const fresh = await reference(f, f);
+      const lag = await reference(f - 1, f);
+      expect(mvp(item.scene, 1), `Q ${f}`).toEqual(mvp(fresh, 1));
+      expect(mvp(item.scene, 3), `A2 ${f}`).toEqual(mvp(fresh, 3));
+      expect(mvp(item.scene, 2), `A1 ${f}`).toEqual(mvp(lag, 2));
+      expect(mvp(item.scene, 4), `A5 ${f}`).toEqual(mvp(lag, 4));
+      // 滞后确实不同于新值
+      expect(mvp(item.scene, 2)).not.toEqual(mvp(fresh, 2));
+      expect(mvp(item.scene, 4)).not.toEqual(mvp(fresh, 4));
+    }
+  });
+
+  it("没有挂点的场景：drawPhase 返回 false，draw 的字节与不调它时相同", async () => {
+    const plain = await build(false);
+    const control = await build(false);
+    for (let f = 1; f <= 3; f++) {
+      expect(frame(plain, f, true)).toBe(false);
+      frame(control, f, false);
+      for (const object of [0, 1, 2, 3, 4])
+        expect(Array.from(drawsOf(plain.scene, object)[0].uniformBuffer!.bytes)).toEqual(
+          Array.from(drawsOf(control.scene, object)[0].uniformBuffer!.bytes),
+        );
+    }
+  });
+
+  it("预置不取走：drawPhase 之后连续两次 sync 仍是滞后值（暂停时的补画帧）", async () => {
+    const item = await build(true);
+    for (let f = 1; f <= 3; f++) frame(item, f);
+    const lag = await reference(2, 3);
+    item.scene.sync(item.state);
+    item.scene.update(FRAME, item.state);
+    expect(mvp(item.scene, 2)).toEqual(mvp(lag, 2));
+    item.scene.sync(item.state);
+    item.scene.update(FRAME, item.state);
+    expect(mvp(item.scene, 2)).toEqual(mvp(lag, 2));
+  });
+
+  it("drawPhase 之后又有变换写入（不走更新阶段）：预置作废，sync 取现算的新值", async () => {
+    const item = await build(true);
+    for (let f = 1; f <= 3; f++) frame(item, f);
+    // 暂停时改祖先的属性：下一次 sync 按现算（写过的对象戳为 0，渲染时重算）
+    writeOrigin(item.state, 4);
+    item.scene.sync(item.state);
+    item.scene.update(FRAME, item.state);
+    const fresh = await reference(4, 3);
+    expect(mvp(item.scene, 2)).toEqual(mvp(fresh, 2));
+    expect(mvp(item.scene, 4)).toEqual(mvp(fresh, 4));
+  });
+});
