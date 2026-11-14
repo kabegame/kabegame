@@ -2737,3 +2737,19 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | U9 预览里的 GIF 与暂停 | Windows dev | 在预览的场景属性面板里选一张 GIF，再点「暂停」与「继续播放」 | GIF 按自己的节奏动；暂停时停住，继续后接着放、不追赶 | 实时帧里的 GIF 推进只在单测与屏外 `gifDts` 回放上验过，待真机确认 |
 | [ ] | U10 大图 | Windows dev | 选一张 6000×3000 的 JPEG，再换回小图 | 解码完成后换上（晚几帧）、不卡死；裁成 3000×3000 | 待真机确认 |
 | [ ] | U11 非 Windows | macOS / Linux | 预览一张带 `scenetexture` 的场景并选图 | 同 Windows | 本机不能测 |
+
+## 场景壁纸 puppet 骨骼动画（P12a）
+
+2026-11-14。图像层的 puppet（模型 JSON 的 `puppet`）用 mdl 的网格 0 代替四边形上屏，动画层按 WPE 的时钟、采样、混合与淡入淡出每帧求骨骼姿势，蒙皮矩阵写进 `g_Bones`；带 effect 的 puppet 先在合成链里做完 effect，再用网格采样合成 RT 上屏。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase12/rea-p12-mdl.md`、`rea-p12-runtime.md` 与 `p12-REPORT.md`，计划、实施记录与按 FINAL_CHECK 的走查见同目录 `phase-12a-mesh-animation.md`；生成工程 `ignore/p12/defs/p12.py`，复制工程 `ignore/p12/a/final/proj/*-iso-pup`，走查报告 `ignore/p12/a/final/report.txt`，WPE 抓帧在 `A:\p12\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PP0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error；除已知失败外全过 | 2026-11-14：步骤 1–4 的提交快照 tsc 0 error；`mdl` / `puppet` / `src/puppet` / `p12a` / `p5a` / `p5c` 等相关单测全过；全量 vitest 只有 HEAD 原有的 `pipeline.test.ts` 语料用例（`3293687972` 读取超上限）失败，和本步无关。运行时的 `g_Bones` 单测按 dt 序列对 WPE 抓帧的值：`p12-fade` 逐位相同，`p12-modes` / `p12-mix` / `3203778110` 最大 2 / 5 / 3 ulp |
+| [x] | PP1 语料 | Node，192 个工程 | 前后重扫 `unsupported` | 去掉的键只落在 puppet 场景上，新增的只有 `puppet:*` 细分键，别的场景逐张不变 | 2026-11-14：能渲染 100 → 110；去掉 `model:puppet` 36 张、`object:animationlayers` 32 张；新增 `puppet:alpha` 6、`puppet:layer-script` 5、`puppet:physics` 5、`puppet:clipping` 4、`puppet:morph` 2、`puppet:draw-order` 1、`puppet:texture-channels` 1 张 |
+| [x] | PP2 真 WebGPU 上的管线与常量 | Windows dev 屏外宿主 + WPE 抓帧 | `p12-modes`、`p12-fx`、`p12-fx2`、`3203778110` 共 11 帧，探针逐 draw 轨迹对 WPE 的常量、顶点与合成 RT | 带 `SKINNING` 的管线建得出、不退回；`g_Bones`、顶点、UV、合成 RT 与 WPE 相同或差在 `rsqrtps` 量级 | 2026-11-14：61 次 puppet draw 按 MVP 配上 WPE，`g_Bones` 最大 3 ulp；索引、位置、骨骼下标、权重、UV 逐个相同；合成 RT 36 张里 34 张 0 差异，另 2 张各 1 个像素 1 级（waterwaves，已转 P7） |
+| [x] | PP3 生成工程对照 WPE | Windows dev + WPE 抓帧，1920×1080，fps 20，后处理超高 | `p12-modes`、`-fade`、`-mix`、`-fx`、`-fx2` 各录 8 帧，`renderFrames.ts` 按日志逐帧回放（逐帧光标）、`kbp cmp frames` 比 | 整帧逐像素相同 | 2026-11-14：40 帧全部 0 差异（含 FR、CLK），覆盖直接上屏（DXT、非 2 的幂、静态 puppet）与合成路径；错一帧比的阴性对照上万个像素差 |
+| [x] | PP4 真实壁纸复制工程 | Windows dev + WPE 抓帧，fps 20，后处理超高 | `kbp content isolate` 只留 puppet 与父链、effect、绑定：`3354366708`、`3203778110`、`2896608544`（3840×2160 无边框窗口）、`3409595232`、`3828324728`、`3814576310`、`3811769317`，各 6 帧逐帧比、逐 draw 对常量 | 差异逐处有解释 | 2026-11-14：`3354366708`、`3203778110` 逐像素相同；`2896608544` 每帧 34–477 个像素 ≤ 2 级，输入除 `g_Bones` 外逐位相同，归顶点位置 1e-4 像素量级的舍入（部分证实来自 `rsqrtps`）；另三张解释到 draw 级；`3811769317` 的 cloudmotion 边缘差到 204 级，是单级 mip 纹理没开各向异性（不属于 P12a，已转 P7） |
+| [x] | PP5 解锁场景整张 | Windows dev 屏外宿主 | 10 张解锁的场景开脚本各渲染一帧 | 能画、不支持项为空、没有退回、脚本 `init` 成功 | 2026-11-14：9 张走查时全部通过；`3351072238` 在 P3 修了属性缺省（`896e7f1c`）后核对，缺省属性下背景视频、人物与日期文字都在 WPE 的位置上 |
+| [ ] | PP6 运行中改动画层属性 | Windows dev，图库预览 | 在 `2896608544` 的属性面板改动画层的速度与显隐类属性 | 当帧生效、不整场重编译、动画不从头开始 | 只有单测；生成工程 `p12-bind` 的 WPE 对照没做 |
+| [ ] | PP7 实时预览与桌面 | Windows dev，图库预览与桌面 | 预览并设为桌面壁纸：`3203778110`、`2896608544`、`3354366708`；暂停再继续 | 骨骼动画流畅；暂停时停住、继续后接着播 | 只在探针回放里比过，实时播放待用户看 |
+| [ ] | PP8 非 Windows | macOS / Linux | 预览 `3203778110` | 同 Windows | 本机不能测 |

@@ -2353,6 +2353,58 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **dev 探针**：`renderFrame` 有 `particles.dts` 时动画沿同一串 dt 逐帧推进（每帧在粒子与相机之后、第二次 `sync` 之前），没有时 `seek(time)` 再写一次；结果的 `animations` 给每条的 `id`、时钟主人、`t`、帧号、`playing`、标志与最后写入的值；`host.animations()` 报宿主正在播的那份与最近 600 次 `frame()` 的耗时。跑脚本（`scripts`）时播放器在 `init` 之前建好、交给探针的脚本环境，事件派发给探针的脚本；每帧推进动画之前先 `enterFrame` 把本帧时间交给脚本时钟，事件回调读到本帧的 `engine.runtime`。
 
+## puppet 与骨骼动画（P12a）
+
+puppet 在 WPE 里是图像层的一种画法，不是新的对象种类。图像层的模型 JSON 写了 `puppet: <mdl>` 时，WPE 用 mdl 的网格 0 代替图层上屏的四边形，每帧推进动画层、求出骨骼姿势，画的时候把蒙皮矩阵交给着色器的 `g_Bones`；着色器、材质、effect、合成 RT 都还是图像层那一套。所以我们不建新的图层类型，只给图像层加三样东西：puppet 数据（`SceneLayer.puppet`）、一个每帧求姿势的运行时、一种上屏几何 `"puppet"`。模型对象（P5c）上的骨骼不在这一节（`3706286085`，随 P13 接线）。
+
+依据：读码 [rea-p12-mdl](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12-mdl.md)、[rea-p12-runtime](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12-runtime.md)；实测 [p12-REPORT](../../.claude/plans/wpe-import/3-scene/phase12/p12-REPORT.md)；计划、实施记录与走查见 [phase-12a-mesh-animation.md](../../.claude/plans/wpe-import/3-scene/phase12/phase-12a-mesh-animation.md)。挂点、变形、脚本与骨骼物理（P12b–d）见 [总计划](../../.claude/plans/wpe-import/3-scene/phase12/phase-12-puppet.md)。
+
+| 层 | 位置 | 做什么 |
+|---|---|---|
+| mdl | `compile/mdl.ts`（`parseMdl`） | 在 P5c 的基础上读出 `MDLS` v1–v4（骨骼父链、局部矩阵、可选的绑定姿势矩阵）、`MDLA` v1–v6（动画、轨道、事件）、可选块 2（绘制组）与 v23 记录表；`MDLE` 跳过（图像层的加载、更新、绘制都不读它）。段没恰好读到段末时记进 `sectionIssues`，不置 `truncated` |
+| 整理 | `compile/puppet.ts`（`buildPuppet`） | 网格 0、骨骼、静止姿势（`MDLS` v ≥ 2 的可选矩阵，没有时用局部矩阵）、转好四元数的轨道、动画层（`animation` 在 `MDLA` 里找不到的整层丢掉，字段缺省照读码）与字段的属性绑定，以及细分键 |
+| 接线 | `compile/bundle.ts`（`compileImageModel`、`finalizePuppet`）、`compile/features.ts`、`compile/bindings.ts` | 图像层读模型 JSON 的 `puppet`；effect 编完后定上屏路径；有骨骼时组合键加 `SKINNING` 与 `BONECOUNT`；`g_Bones` 进引擎 uniform 表；动画层字段绑用户属性时登记成就地目标 `animation-layer` |
+| 运行时 | `puppet/pose.ts`、`puppet/player.ts`（`ScenePuppets`）、`puppet/math.ts` | 纯 TS，逐步 `Math.fround`，Node 单测、dev 探针、宿主共用。每个动画层一个 P10 的 `AnimationClock`；采样、三种混合、淡入淡出、父链；蒙皮矩阵 K = 世界 · 绑定姿势的逆，每根骨骼 12 个数（K 的 4 行 × xyz，和 WPE 的 `g_Bones` 同序） |
+| 渲染 | `render/graph.ts`、`render/scene.ts`、`render/puppet.ts` | 上屏步骤的几何 `"puppet"`，网格缓冲与顶点布局复用 P5c；每帧在 `update` 里把蒙皮矩阵写进 `g_Bones`。翻译器把 `g_Bones` 出成普通 uniform 块里的 `array<mat4x3<f32>, N>`（每项 64 字节，WGSL 第 c 列就是 K 的第 c 行），12 个数原样写、不转置；WPE 是单独的 b2 缓冲、每项 48 字节，数据相同 |
+| 宿主 | `host.ts`、`render/renderer.ts` | 加载时新建 `ScenePuppets`，重编译时按 `(对象下标, 动画层下标)` `carryOver` 接回时钟，建 GPU 资源前先 `refresh` 一次（不闪绑定姿势）；实时帧在粒子之后、相机之前调 `stepPuppets` |
+
+**规则**（读码与实测）：
+- **两条上屏路径**，编译期定：
+  - 合成：图层有 effect、`colorBlendMode` 不是 0 / 31、或被依赖时，WPE 加载时就走合成。基础 pass 用不带 puppet 组合键的基础材质画四边形进合成 RT（按图像尺寸），effect 全部留在合成链；最后用 P8 的 passthrough 材质加 puppet 组合键与 `BLENDMODE`，以 puppet 网格采样合成 RT 上屏，UV 不缩放，`g_Color4` 置 1。
+  - 直接上屏：基础材质的第一个 pass 加 puppet 组合键画网格（稳定键同基础 pass，常量、属性绑定、关键帧共用），UV 乘「图像宽高 / GPU 纹理宽高」（DXT 纹理会缩放，FreeImage 纹理比例 1），不内缩（`scaledPuppetVertices`）。
+  - 只画网格 0；顶点坐标是图层局部像素，不按 `size` 缩放。静态 puppet（没有 `MDLS`）不加组合键、不进运行时。
+- **`BONECOUNT`** 等于真实骨骼数，不取 2 的幂（和模型路径不同）。
+- **时钟**：和 P10 关键帧同一个函数，每帧 `t += rate · dt`（float32），模式（`loop` / `mirror` / `single`）在 `MDLA` 的动画记录里，帧号 `t / spf`。`visible` 为假的动画层时钟不走，也不参与混合。
+- **采样与混合**：平移、缩放线性插值，旋转按最短路径 nlerp；按层序逐层叠，有覆盖、权重、加法三种，权重和不归一化；淡入时长 `min(D/2, blendtime)`，非 `single` 只淡一次，淡出只在 `single` 有效。
+- **绘制组**：没有绘制顺序轨道时保持文件顺序，可选块 2 只解析、不起作用。
+- **一帧里的位置**：和粒子在同一个对象更新循环里，在粒子之后、相机 / 关键帧 / 脚本之前。用户属性在两帧之间写进状态，当帧生效；脚本写回晚一帧（实测 K+0 / K+1）。图层隐藏时照样推进，壁纸暂停时冻结，补画的帧不推进。
+- **动画层字段**：`rate`、`blend`、`visible` 绑用户属性时就地改，不重编译。
+
+**能力表**：去掉 `model:puppet`、`object:animationlayers`。P12a 不做、照报的细分键：
+- P12b：`object:attachment`、`puppet:alpha`（网格 0 标志 bit2 → `SKINNING_ALPHA`）、`puppet:morph`（格式含 `a_PositionVec4`）、`puppet:clipping`（v23 记录）、`puppet:texture-channels`（任一网格标志 bit1）；
+- P12c：`puppet:layer-script`（动画层字段挂脚本，脚本里的 `thisObject` 是动画层）；
+- P12d：`puppet:physics`（骨骼 JSON 满足 `(r ‖ t) && (se ‖ re)`）；
+- 绘制顺序轨道：`puppet:draw-order`（动画带绘制顺序轨道且网格 0 有 bit3，1 张，同场景还有别的键）；
+- 语料 0 处：`puppet:ik`、`puppet:animation-ref`、`puppet:index32`、`mdl:animation:tracks`、`mdl:animation-id`、`mdl:section:<标签>`；
+- 会让 WPE 崩溃的组合照报、不照抄：`puppet:alpha-track`（有骨骼透明度轨道、网格 0 没有 bit2，实测崩溃）、`puppet:order-track`（有绘制顺序轨道、没有 bit3，读码推断）、`mdl:skeleton:bones`（骨骼数 > 128，WPE 终止进程）。
+
+**走查**（FINAL_CHECK，2026-11-14，报告 `ignore/p12/a/final/report.txt`）：
+- 5 个生成工程（`p12-modes` / `-fade` / `-mix` / `-fx` / `-fx2`，窗口与场景同为 1920×1080）各 8 帧，整帧逐像素相同（含 FR、CLK），覆盖直接上屏（DXT、非 2 的幂、静态）与合成路径。
+- 真实壁纸复制工程（`kbp content isolate`）：`3354366708`、`3203778110` 6 帧逐像素相同（后者用和场景同尺寸的 3840×2160 无边框窗口）；`2896608544` 每帧几十到几百个像素差 ≤ 2 级，输入除 `g_Bones` 外逐位相同，差异是顶点位置在 1e-4 像素量级上的舍入，一部分已证实来自 `rsqrtps`；`3409595232`、`3828324728`、`3814576310` 解释到 draw 级，`g_Bones` 逐位相同或在 `rsqrtps` 量级。
+- 10 张解锁的场景整张能画，没有不支持项、没有退回，脚本 `init` 全部成功。
+- 走查里发现两处不属于 P12a 的问题，已转给 P7：单级 mip 的文件纹理没开各向异性（`3811769317` 的 cloudmotion 边缘差到 204 级）；waterwaves 输出的零星 1 级差缩到翻译出的着色器算术。
+
+**已知差异与只记不补**：
+- **`rsqrtps`**：WPE 归一化四元数用 `rsqrtps` 硬件近似加一次牛顿，我们用精确倒数平方根加同一次牛顿。骨骼旋转差 1 ulp 量级，乘上上千像素的绑定平移后，平移分量差 1e-4 量级；单位旋转 WPE 是 0.9999995，我们是 1.0。硬件表随 CPU 变，不复刻（同 P4「近似倒数不复刻」）。
+- **窗口与场景不同尺寸**：WPE 按窗口建投影直接画，我们按场景画再上屏。只差高度、缩放正好为 1 时（4K 屏上 3840×2160 被压成 3840×2130）也会有 ≤ 2 级的差和偶发的边缘覆盖翻转；泛光链 RT 的尺寸同理。是已登记的分辨率差异的特例。
+- **写死不可见的 effect**：编译期不进 effect 列表，判合成路径时不算；WPE 的 effect 个数可能不同。语料里没有「puppet 的 effect 全部写死不可见」的。
+- **精灵表与纹理通道**：WPE 也会让它们走合成路径；它们本来就在 `tex:animation` / `puppet:texture-channels` 下照报。
+- **性能**：一张场景最多 21 个 puppet、单个最多 86 根骨骼，每帧在 CPU 上采样、混合、算矩阵，可见与否都算。
+
+**语料**（192 张，2026-11-14）：能渲染 100 → 110，解锁 `2896608544`、`3203778110`、`3351072238`、`3354366708`、`3409595232`、`3811769317`、`3813473025`、`3814576310`、`3818986268`、`3828324728`；去掉 `model:puppet` 36 张、`object:animationlayers` 32 张，新增的只有细分键（`puppet:alpha` 6、`puppet:layer-script` 5、`puppet:physics` 5、`puppet:clipping` 4、`puppet:morph` 2、`puppet:draw-order` 1、`puppet:texture-channels` 1），别的场景逐张不变。其余 26 张还差挂点、光标与媒体回调、`getAnimationLayer` 等（P12b、P12c、P6c、P11）。
+
+**dev 探针**：`renderFrame` 有 `particles.dts` 时 puppet 沿同一串 dt 从第 1 帧推进（粒子之后、相机之前，同渲染器），没有时按 `time` `seek` 再按当前状态 `refresh`；没有 puppet 图层时不建，调用序列和以前逐字节相同。逐 draw 轨迹（`trace`）里 puppet 的 draw 带 `g_Bones`，可以按 MVP 配对 `kbp rdc consts` 导出的 WPE 常量逐分量比。
+
 ## 交互（P6c）
 
 场景脚本的光标交互：六个导出回调 `cursorEnter` / `Leave` / `Move` / `Down` / `Up` / `Click`、全局 `input`、图层 `solid`。规则读码在 `.claude/plans/wpe-import/3-scene/phase6/rea-p6c-dispatch.md` 与 `rea-p6c-script.md`（含 REA 重核），0c 用 wpe-renderdoc 的 `input_play` 逐帧喂光标实测，结论全部成立。实现是纯逻辑的 `render/cursor.ts`（命中、追踪器、可拾取对象表），渲染器每个实时帧在相机更新之后、脚本之前调一次（`SceneRenderer.stepCursor`），把回调交给宿主，宿主调 `ScriptRuntime.cursorEvent`。
