@@ -2716,8 +2716,22 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | R1 语料 | Node，197 个工程 | 前后重扫 `unsupported` | 只去掉 `_rt_Reflection`、`_rt_MipMappedFrameBuffer` 与对应的 `MipMapInfo` | 2026-11-14：干净 100 → 108（arsenal、audiophile、fantasticcar 与 5 个测试工程），没有新增键 |
 | [x] | R2 生成工程对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 清屏色、只有图像层读、`clearenabled: false`、属性改清屏色、HDR、mip 帧缓冲各一个工程 | 整帧逐像素相同 | 2026-11-14：4 个工程 0 差异；`clearenabled: false` 只差 RenderDoc 叠在没画到区域的文字；HDR 那张反射图与泛光前的场景目标逐值相同，上屏只差泛光链 ≤ 4 级 |
 | [x] | R3 真实壁纸走查 | Windows dev + WPE 抓帧，1920×1080，fps 20 | arsenal、audiophile、fantasticcar 各录 5 帧，`renderFrames.ts` 按日志逐帧回放、`kbp cmp frames` 比、逐 draw 对常量 | 读反射图的地面逐像素相同，差异逐处有解释 | 2026-11-14：地面相同；> 2 级的只有孤立的网格边像素（每帧 0–11 个），常量除相机矩阵差 1e-6 外逐值相同，归「网格边上的覆盖翻转」 |
-| [ ] | R4 设置页切换 | Windows dev（新构建） | 设置页「场景反射」切三档，预览 Arsenal | 跟随 / 关闭能渲染；开启显示预览图；切换时场景重新加载 | 待重启 dev 后真机看（运行中的 dev 构建还没有新命令，宿主按跟随处理） |
+| [ ] | R4 设置页切换 | Windows dev（新构建） | 设置页「场景反射」切三档，预览 Arsenal | 三档都能渲染（开启见 P13b2 的 RB4）；切换时场景重新加载 | 待重启 dev 后真机看（运行中的 dev 构建还没有新命令，宿主按跟随处理） |
 | [ ] | R5 非 Windows | macOS / Linux | 预览 Arsenal | 同 Windows | 本机不能测 |
+
+## 场景壁纸平面反射开（P13b2）
+
+2026-11-14。反射开时在主 pass 之前画平面反射 pass：编译期定名单（`reflected` 不为 false、去掉读反射图的模型，绑属性时重编译），透视场景 `S·VP·S`、正交场景视图投影不变、eye / right / up 的 y 取反，深度共用、`clearenabled` 决定清不清；支持模型、直接上屏的图像层与文本层、普通粒子，别的种类报 `reflection:planar:<种类>`。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md`「P13b2 的实测」，计划、实施记录与走查见同目录 `phase-13b2-reflection-on.md`；测试工程 `ignore/p13/proj/p13b2-*`（`ignore/p13/b2/gen_b2.py`），WPE 抓帧在 `A:\p13b2\`。dev 下验收用 `localStorage["kabegame-dev-scene-reflection"] = "enabled"` 强制反射开，测完删掉。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | RB0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier；变异检查 | 0 error、全过；变异全部检出 | 2026-11-14 Claude：tsc 0 error；返工（五个相机字段收成主视图、粒子一帧只排一次）后在 HEAD + 本节改动的快照上跑本节相关的 11 个文件 249 个全过；16 处变异全部检出；返工前后真机渲染逐字节相同 |
+| [x] | RB1 语料 | Node，201 个工程 | 跟随（WPE 反射关）与强制开各扫一遍，和 HEAD 比 | 跟随时 `unsupported` 不变；开时不新增 `reflection:planar:*` | 2026-11-14 Claude：跟随 0 变化；强制开时干净 139 不变，只有读 mip 帧缓冲的 2 张（3453730450、3706286085）新增 `reflection:screen`（P13g） |
+| [x] | RB2 生成工程对照 WPE | Windows dev + WPE 抓帧（反射开），1920×1080 | 透视、`clearenabled: false`、正交 + 图像层、视锥剔除、透视粒子、正交粒子 + 文本六个工程，`render_scene` 按抓帧时刻渲染 | 上屏逐像素相同（屏蔽 FR / CLK） | 2026-11-14 Claude：六个都 0 差；`clearenabled: false` 只差 RenderDoc 叠加文字；透视工程的反射图只差帧号块；剔除工程画出了只在镜像视锥里的品红片 |
+| [x] | RB3 真实壁纸走查 | Windows dev + WPE 抓帧（反射开、后处理超高），1920×1080，fps 20 | arsenal、audiophile、fantasticcar 各 5 帧，`renderFrames.ts` 按日志回放（audiophile 带频谱录制）、`kbp cmp frames` | 倒影与 WPE 相同，余差逐处有解释 | 2026-11-14 Claude：倒影相同；每帧 > 8 级的像素 ≤ 11 个、孤立单像素、不在反射区域；arsenal 的反射名单实际为空（只清屏） |
+| [ ] | RB4 设置页开启 | Windows dev（新构建） | 设置页「场景反射」切到开启，预览 Fantastic Car 与 Arsenal | 地面有车 / 物体的倒影，切换时场景重新加载、不退回预览图 | 待重启 dev 后真机看 |
+| [ ] | RB5 绑属性的 `reflected` | Windows dev | 一个 `reflected` 绑用户属性的工程，属性面板切换 | 整场重编译后倒影出现 / 消失 | 单测覆盖重编译登记，待真机确认 |
+| [ ] | RB6 非 Windows | macOS / Linux | 反射开时预览 Fantastic Car | 同 Windows | 本机不能测 |
 
 ## 场景壁纸用户纹理（P11b）
 

@@ -287,8 +287,9 @@ const OBJECT_FLAGS = ["fullscreen", "passthrough", "attachment", "castshadow", "
  * 模型对象上中性的 `OBJECT_FLAGS`（P5c 步骤 1，rea-p5-mesh 2.2，p5-REPORT「P5c 语义的实测核对」）：
  * - `skin`：选材质（`mdl.ts` 的 `meshSkin`，`p5c-skin` 实测）；
  * - `castshadow`、`reflected`：只决定是不是阴影 pass 的投射者、在不在反射 pass 的名单里。没有消费者时不改变画面，而消费者现在都照报
- *   （读 `_rt_Reflection` 报 `texture:rendertarget:_rt_Reflection`，`REFLECTION` 非 0 报 `combo:REFLECTION`，投影灯报 `lightconfig:*`）；
- * 图像、粒子等对象上这几个键照旧报。
+ *   （投影灯报 `lightconfig:*`）；
+ * 图像、粒子等对象上 `castshadow` 等照旧报。`reflected` 自 P13b2 起对任何对象都中性：反射名单读它（`compile/reflection.ts`），见
+ * `checkObjectFeatures` 的标志循环。
  * `disablepropagation`（P6c）不在这两张表里：任何对象上它都是光标命中的开关（`SceneLayer.disablePropagation`，只认 JSON 布尔），
  * 见 `checkObjectFeatures`；模型对象（P6c 不做命中）上可见且为真时报 `cursor:model`。
  */
@@ -845,8 +846,10 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   const camera = isCameraObject(object);
   if (isMixedCameraObject(object)) unsupported.add("object:camera:mixed");
   const cameraKey = (key: string) => camera && CAMERA_KEYS.has(key);
+  // `reflected`（P13b2）：任何可画对象上都由反射名单读（`compile/reflection.ts`，p13-REPORT C1），反射关时不影响画面，中性
   for (const key of OBJECT_FLAGS)
-    if (active(object[key]) && !lightKey(key) && !modelKey(key)) unsupported.add(`object:${key}`);
+    if (active(object[key]) && !lightKey(key) && !modelKey(key) && key !== "reflected")
+      unsupported.add(`object:${key}`);
   // 光标命中（P6c）：`disablepropagation` 只认 JSON 布尔（任何对象类型都读它，只有图像层与文本层参与命中，别的类型上中性）；绑属性、挂脚本
   // 的取值运行中会变，没有就地路径，照报。模型对象（类型 5）P6c 不做命中：可见（JSON 不是 false）且为真时它会挡住下面的对象，照报 `cursor:model`
   const stop = object.disablepropagation;

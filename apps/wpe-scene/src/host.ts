@@ -25,6 +25,7 @@ import {
   type SceneReflectionSetting,
   type ScenePostprocessSetting,
 } from "./compile/postprocess";
+import { reflectionOverride } from "./dev/reflectionOverride";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import { emptyCursorInput, type CursorInputSnapshot } from "./render/cursor";
 import type { SceneStyle } from "./render/layout";
@@ -1161,6 +1162,8 @@ export class SceneHost {
   }
 
   private async readReflection(): Promise<SceneReflectionSetting> {
+    const override = reflectionOverride();
+    if (override) return override;
     try {
       return asReflection(await invoke<string>("get_wpe_scene_reflection"));
     } catch (error) {

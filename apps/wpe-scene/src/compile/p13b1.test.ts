@@ -218,26 +218,26 @@ describe("平面反射：模型读 _rt_Reflection（点 3）", () => {
     expect(bundle.layers[0].model!.meshes[0].passes[0].runtime).toEqual({ 1: REFLECTION_RT });
   });
 
-  it("反射开：报 reflection:planar（P13b2 前整张退回），bundle.reflection 仍记", async () => {
+  it("反射开（P13b2 起实现）：不再报，bundle.reflection 带 enabled 与名单（读反射图的模型自己不在名单里）", async () => {
     for (const model of [{ shader: "s", textures: ["", REFLECTION_RT] }, { shader: "refl" }]) {
       const bundle = await compile({ model }, { reflection: "enabled" });
-      expect(bundle.unsupported).toEqual(["reflection:planar"]);
-      expect(bundle.reflection).toEqual({ planar: true });
+      expect(bundle.unsupported).toEqual([]);
+      expect(bundle.reflection).toEqual({ planar: true, enabled: true, list: [] });
     }
   });
 
-  it("跟随 WPE：config.json 的 reflection 为 false 不报，true / 缺键 / 没有 config.json / 非布尔都按开", async () => {
+  it("跟随 WPE：config.json 的 reflection 为 false 时关，true / 缺键 / 没有 config.json / 非布尔都按开", async () => {
     const model = { shader: "refl" };
-    expect((await compile({ model }, { config: userConfig(false) })).unsupported).toEqual([]);
+    const enabled = async (options: Parameters<typeof compile>[1]) =>
+      (await compile({ model }, options)).reflection?.enabled === true;
+    expect(await enabled({ config: userConfig(false) })).toBe(false);
     for (const config of [userConfig(true), userConfig(), userConfig("no"), undefined, "不是 JSON"])
-      expect((await compile({ model }, { config })).unsupported).toEqual(["reflection:planar"]);
+      expect(await enabled({ config })).toBe(true);
     // 默认设置就是跟随
-    expect((await compile({ model }, { config: userConfig(false), reflection: "follow" })).unsupported).toEqual([]);
+    expect(await enabled({ config: userConfig(false), reflection: "follow" })).toBe(false);
     // 固定的设置不看 config.json
-    expect((await compile({ model }, { config: userConfig(true), reflection: "disabled" })).unsupported).toEqual([]);
-    expect((await compile({ model }, { config: userConfig(false), reflection: "enabled" })).unsupported).toEqual([
-      "reflection:planar",
-    ]);
+    expect(await enabled({ config: userConfig(true), reflection: "disabled" })).toBe(false);
+    expect(await enabled({ config: userConfig(false), reflection: "enabled" })).toBe(true);
   });
 
   it("模型与图像层都读：图像层那一槽保持运行时 RT（planar 为真，RT 是建了的）", async () => {

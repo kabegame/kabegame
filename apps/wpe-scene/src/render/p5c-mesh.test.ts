@@ -8,6 +8,7 @@
  * - 管线键：已有规格的键逐字不变，`mesh` / `cull` 各加后缀；
  * - GpuScene 假设备：op、管线（三角形列表、顶点布局、剔除）、共用的网格缓冲与补齐的索引、占位缓冲、编码轨迹、视锥剔除、uniform
  *   （颜色组固定 1、MVP、透视、视差、法线矩阵、材质常量）；
+ * - 平面反射 pass（P13b2）：模型的视锥剔除用反射视图的 VP（p13-REPORT C8）；
  * - 本机有 WPE 时：retro 编译后渲染器自查通过。
  */
 import { existsSync, readFileSync } from "node:fs";
@@ -22,7 +23,7 @@ import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { Wpesl2wgsl, type InterfaceVariable, type TranslateResult } from "../wpesl2wgsl";
 import { planLayer, planModelLayer, planSignature } from "./graph";
 import { particleViewProjection, sceneViewProjection, worldMatrixOf, type LayerTransform } from "./layout";
-import { multiply, normalMatrix, translation, type Mat4 } from "./math";
+import { identity, multiply, normalMatrix, translation, type Mat4 } from "./math";
 import { alignedBytes, frustumCulled, frustumPlanes, meshVertexLayout } from "./mesh";
 import { parallaxOffset } from "./parallax";
 import { checkRenderable, GpuScene, pipelineKey, stepPipeline } from "./scene";
@@ -915,6 +916,48 @@ describe("GpuScene：模型层（P5c 步骤 2 点 3）", () => {
         expect(floatsOf(draw, 128, 3).map((v) => Math.round(v * 100) / 100)).toEqual([0.72, 0.64, 0.42]);
       }
     }
+  });
+
+  it("平面反射 pass（P13b2，p13-REPORT C8）：视锥剔除用反射视图的 VP——只在镜像视锥里的模型只画进反射 pass", async () => {
+    const other = new ArrayBuffer(256);
+    const mirrored = meshOf(other, 0, 0x9, 4, [0, 1, 2, 0, 2, 3], [pass("objects/0/meshes/0/passes/0")]);
+    // 包围盒中心在世界 (0, 5, 0)：主视图 VP = T(0, 5, 0) 把它放到裁剪 y = 10（视锥外），反射 VP = S·VP·S = T(0, −5, 0) 放到 y = 0
+    const bundle = bundleOf([
+      modelLayer(0, "M", { meshes: [mirrored.mesh], bounds: [-0.1, -0.1, -0.1, 0.1, 0.1, 0.1], origin: [0, 5, 0] }),
+    ]);
+    bundle.general.perspective = true;
+    bundle.reflection = { planar: true, enabled: true, list: [0] };
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], {
+      particles: { seed: 1 },
+      size: [1920, 1080],
+    } as never);
+    const vp = translation(0, 5, 0);
+    scene.setCamera({
+      kind: "perspective",
+      frame: {
+        view: vp,
+        projection: identity(),
+        viewProjection: vp,
+        eye: [0, 3, 8],
+        center: [0, 0, 0],
+        vectors: { forward: [0, 0, -1], right: [1, 0, 0], up: [0, 1, 0] },
+      },
+    } as never);
+    scene.setParallax(null, state);
+    scene.update(FRAME, state);
+    gpu.trace.length = 0;
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    const passes = gpu.trace.reduce<{ label: string; draws: number }[]>((list, line) => {
+      if (line.startsWith("pass ")) list.push({ label: line, draws: 0 });
+      else if (line.startsWith("  drawIndexed")) list[list.length - 1].draws++;
+      return list;
+    }, []);
+    expect(passes).toEqual([
+      { label: "pass _rt_Reflection clear", draws: 1 },
+      { label: "pass scene target clear", draws: 0 },
+    ]);
   });
 
   it("perspective: true 换透视那一份视图投影（同 P5b 透视图层）；视差同图像层按根对象平移", async () => {

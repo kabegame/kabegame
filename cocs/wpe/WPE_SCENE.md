@@ -41,15 +41,22 @@
 - **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，阴影 / cookie 报 `lightconfig:*`，体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
 - 本机语料没有一张真的开 `LIGHTING`，这条路径靠 `ignore/lighting/` 的测试工程和 WPE 1:1 对比（最大差 1）。普通图层带法线图时另有 UV 内缩的差异（已知，最大 10）。
 
-## 反射（P13b1：设置与「反射关」）
+## 反射（P13b1：设置与「反射关」；P13b2：平面反射开）
 
-读码与实测见 [rea-p13-passes](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md) 第 1、4 节与 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13b1 的实测」，计划与走查见 [phase-13b1-reflection-off](../../.claude/plans/wpe-import/3-scene/phase13/phase-13b1-reflection-off.md)。
+读码与实测见 [rea-p13-passes](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md) 第 1、4 节与 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13b1 的实测」「P13b2 的实测」，计划与走查见 [phase-13b1-reflection-off](../../.claude/plans/wpe-import/3-scene/phase13/phase-13b1-reflection-off.md)、[phase-13b2-reflection-on](../../.claude/plans/wpe-import/3-scene/phase13/phase-13b2-reflection-on.md)。
 
 - **设置「场景反射」**（`wpeSceneReflection`：`follow` 缺省 / `disabled` / `enabled`，`get_wpe_scene_reflection` 场景宿主可读）：跟随时读 WPE `config.json` 的 `general.user.reflection`（缺键、读不到、不是布尔都当开，`compile/postprocess.ts` 的 `resolveReflection`）。WPE 这一个设置同时管平面反射与屏幕空间反射；宿主随 `setting-change` 整场重新加载。只在场景里有读者时才读 `config.json`。
 - **两张运行时 RT**（`compile/bundle.ts` 的 `REFLECTION_RT` / `MIP_FRAMEBUFFER_RT` 进 `bindRuntime`，渲染图的纹理来源 `{ kind: "reflection" }` / `{ kind: "mip-framebuffer" }`，`render/graph.ts` 的 `runtimeInput` 统一翻译；RT 在 `render/reflection.ts` 的 `ReflectionTargets`）：
   - `_rt_Reflection`：只有**模型**的网格材质读它时才建（WPE 的触发条件），`bundle.reflection.planar`。场景目标尺寸（WPE 是窗口尺寸）、`rgba8unorm`（HDR 下也是），Clamp + Linear；反射关时每帧在主 pass 之前清成 `(clearcolor, 1)`，不看 `clearenabled`，HDR 的大于 1 的清屏色在 8 位上截到 1。同一场景里图像层 / 粒子读它绑同一张。**没有模型读、只有图像层或粒子读**时 WPE 不建，那一槽绑 6×6 黄黑棋盘格占位（编译期在全部对象编完后回改成静态纹理 `checkerIndex()`）。
   - `_rt_MipMappedFrameBuffer`：任何对象读到就建，`bundle.mipFramebuffer`。场景目标尺寸、格式跟场景目标（HDR 时 `rgba16float`），mip 数 `max(1, min(log2(npot(w)/2), log2(npot(h)/2)) − 2)`（1920×1080 为 8、1600×900 为 7），Clamp + 三线性；反射关时建好后各级清成 `(0, 0, 0, 1)` 一次、之后不动。绑它的槽的 `g_Texture<n>MipMapInfo`（float）是引擎 uniform，值为 mip 数（`features.ts` 的 `isMipMapInfoOf`），别的槽照报 `uniform:*`。
-- **照报**：设置为开（或跟随且 WPE 开着）时，有平面反射的场景报 `reflection:planar`、有 mip 帧缓冲的报 `reflection:screen`，整张退回预览图（「开」分别是 P13b2、P13g）。
+- **照报**：设置为开（或跟随且 WPE 开着）时，有 mip 帧缓冲的报 `reflection:screen`，整张退回预览图（「开」是 P13g）；平面反射开见下一条，只有名单里反射 pass 画不了的种类照报。
+- **平面反射开**（P13b2，`compile/reflection.ts`、`render/views.ts`、`render/scene.ts` 的反射 pass）：
+  - **名单**（C1，编译期定、`bundle.reflection = { planar, enabled, list }`）：可画对象里 `reflected` 不为 false、且不是「读 `_rt_Reflection` 的模型」（一个网格读就整个对象排除）的，按 `objects` 顺序；反射 pass 只画名单，不做透明排序。`reflected` 绑用户属性时登记成重编译（`layer-structure`，已定 2），对所有对象中性、不再报 `object:reflected`。
+  - **支持的种类**（已定 1）：模型、直接上屏的图像层与文本层、普通粒子。名单里别的种类报 `reflection:planar:<种类>`（`reflectionKind`）：`group`（组与组里的图层）、`shape`、`perspective`（`perspective: true` 的图层 / 模型）、`effect`（带 effect）、`composite`（不带 effect 但走合成路径：colorBlendMode 混合、被依赖、组合层）、`particle-perspective`（树里有 `flags & 4` 的系统）、`particle-framebuffer`（树里有要快照的材质）。这些在反射 pass 里重跑会改合成链或快照的状态，WPE 的行为没测，本机语料 0 处。
+  - **视图**（`mirroredView`，C2、C3、C7）：透视场景 `VP' = S·VP·S`（`S = diag(1, −1, 1, 1)`，透视覆盖的视图投影同样镜像，分开的 P、V 为 `S·P`、`V·S`，视差平移照常）；**正交场景视图投影不变**（读码以为同样镜像，实测反射 pass 的 MVP 与主 pass 逐值相同）。两种场景都把 `g_EyePosition`、`g_ViewRight`、`g_ViewUp` 的 y 取反，`g_ViewForward` 不变。粒子 sprite 的朝向 `g_Orientation*` 保持主视图的值（C9，WPE 在对象更新时写），拖尾宽度用本 pass 的 `g_EyePosition`（C10）。没有裁剪平面（C4）。视锥剔除用镜像后的视图投影（C8）。
+  - **pass**（C5、C6）：反射 pass 在主 pass 之前、画进 `_rt_Reflection`，深度共用场景目标的深度附件；`clearenabled` 时颜色清成 `(clearcolor, 1)`、深度清 0，否则两者都 load；写掩码 RGB。逐 draw 有一份反射副本（`ReflectionCopy`：自己的 uniform 缓冲与绑定组，只换 binding 0），每帧拷主块再盖相机项（`REFLECTION_CAMERA_UNIFORMS`：MVP 及逆、VP、effect 矩阵、eye、视图向量），相机项在 `refreshLayer` 里按镜像视图现算：渲染器的五个相机量收成主视图 `GpuScene.view`（`SceneView`），`uniformValues` / `viewProjectionOf` 收视图参数，主 pass 与反射 pass 走同一套规则。HDR 场景的目标是 `rgba16float`、反射图是 `rgba8unorm`，名单里的图层另备一条 `rgba8unorm` 管线（`prepareLayer`）。粒子层一帧只排一次（`arrangeParticles` 返回排好的列表，`encode` 按树缓存），反射 pass 与主 pass 画同一次排列；模型的视锥剔除两个 pass 共用 `modelCulled`，各传自己视图的 VP。不可见的名单对象不画。
+  - **dev 覆盖**：`localStorage["kabegame-dev-scene-reflection"]` 为 `follow` / `disabled` / `enabled` 时宿主加载与 dev 探针都用它（`dev/reflectionOverride.ts`，生产构建摇掉），验收不改用户设置就能按反射开渲染；用完要删掉，它对同源的全部场景宿主生效。
+  - **实测**（2026-11-14）：确定性工程 `ignore/p13/b2/gen_b2.py`（透视、`clearenabled: false`、正交 + 图像层、剔除、透视粒子、正交粒子 + 文本）按 WPE 抓帧时刻渲染，上屏与 WPE 逐像素相同（不清屏工程只差 RenderDoc 叠加文字，它不清屏时留在后备缓冲里），透视工程的反射图只差帧号块；arsenal、audiophile、fantasticcar 按日志逐帧回放（后处理 ultra，audiophile 带频谱录制），读反射图的地面相同，余下是孤立的单像素（每帧 > 8 的 ≤ 11 个，不在反射区域）。语料按反射开扫描：没有场景报 `reflection:planar:*`，干净数不变，读 mip 帧缓冲的 2 张仍报 `reflection:screen`。
 - **实测**：确定性工程（`ignore/p13/b1/gen_b1.py`）和 WPE 整帧逐像素相同（HDR 那张反射图与泛光前的场景目标逐值相同，最后只差泛光链的 ≤ 4 级）；arsenal、audiophile、fantasticcar 按日志逐帧回放，读反射图的地面逐像素相同，余下的是孤立的网格边像素（相机矩阵 1e-6 量级的差导致的覆盖翻转）。能渲染 +3 张（这三张）。
 
 ## 着色器翻译器 `wpesl2wgsl`

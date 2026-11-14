@@ -79,7 +79,8 @@ export class ReflectionTargets {
         label: "_rt_Reflection",
         size: { width, height },
         format: REFLECTION_FORMAT,
-        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+        // COPY_SRC 同场景目标、合成 RT、泛光 RT：dev 探针按标签读回反射 pass 的目标（P13b2，`trace.readback`）
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
       });
       this.owned.push(texture);
       this.reflection = {

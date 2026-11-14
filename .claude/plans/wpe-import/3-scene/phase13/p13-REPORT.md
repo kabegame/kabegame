@@ -74,3 +74,22 @@ WPE 2.8.42，窗口 1920×1080。用户设置（`config.json` 的 `general.user`
 | B5 | 清屏色运行中改了，反射图跟着变 | r5：`p_cc` → (0.8, 0.1, 0.3)，反射图 (204, 25, 76)/255 | 成立 |
 | B6 | HDR 下仍是 RGBA8，清屏色截到 [0, 1] | r6：场景目标 RGBA16F；反射图 (255, 127, 64)/255（清屏色 2 0.5 0.25） | 成立 |
 | B7 | `_rt_MipMappedFrameBuffer` 图像层读也建；整张 (0, 0, 0, 1)；mip 数 = max(1, min(log2(npot(w)/2), log2(npot(h)/2)) − 2)，`g_Texture<n>MipMapInfo`（float）= mip 数 | r7：1920×1080 8 级、1600×900 7 级，各级全黑 alpha 1，ClampEdge + 三线性；MipMapInfo 8.0 / 7.0 | 成立 |
+
+## P13b2 的实测：反射开（2026-11-14）
+
+「反射开」时反射 pass 画什么、怎么画。工程 `ignore/p13/b2/gen_b2.py` → `ignore/p13/proj/p13b2-{persp,noclear,ortho,cull,ptc,ptco}`（地面网格读 `_rt_Reflection`、按屏幕 UV 直接输出），抓帧 `A:\p13b2\<名>-on\`（`capture_sweep` 临时 `reflection: true`，每次扫完改回、哈希复原），常量 `ignore/p13/b2/out/wpe-*-consts.json`，顶点 `ignore/p13/b2/out/*.json`，核对脚本 `ignore/p13/b2/{reproject,trail_axis,mesh_diff}.py`。
+
+| # | 预测（读码） | 抓帧 | 结果 |
+|---|---|---|---|
+| C1 | 名单 = 可画对象 − `reflected: false` − 读反射图的模型，创建顺序 | persp：反射 pass 画 FR、CLK（图像层）、红、绿、蓝、探针，不画地面与黄片 | 成立 |
+| C2 | 透视：VP' = S·VP·S | persp：反射 pass 的 MVP / VP 第 1 行、第 1 列取反，逐值 | 成立 |
+| C3 | eye、`g_ViewRight`、`g_ViewUp` 的 y 取反，`g_ViewForward` 不变 | persp 探针：eye (0, 3, 8) → (0, −3, 8)，up、right 取反，forward 不变 | 成立 |
+| C4 | 没有斜裁剪面 | 地面以下的蓝片画进反射图 | 成立 |
+| C5 | 借后备缓冲的深度，`clearenabled` 时清颜色与深度 | 两段 pass 共用一张 D32F；反射 pass 开头清（清屏色、alpha 1；深度 0），主 pass 再清；写掩码 RGB | 成立 |
+| C6 | `clearenabled: false` 时反射图不清 | noclear：一帧里没有任何清屏 | 成立（颜色与深度都不清） |
+| C7 | 正交场景走同一段代码 | ortho / ortho2：反射 pass 的 MVP（模型与图像层）和主 pass **逐值相同**，只有 eye、up 的 y 取反 | **不成立**：正交不镜像 VP |
+| C8 | 视锥剔除平面由当前 VP 现算（推） | cull：主视图视锥外、镜像后在视锥内的品红片，反射 pass 画、主 pass 剔 | 成立：按镜像 VP 剔 |
+| C9 | sprite 粒子 | ptc：反射 pass 四角 = 按**主视图**的 `g_Orientation*` 在世界里展开、再乘镜像 VP（w 8.9714 / 8.6866 手算逐位） | 新事实：朝向不按镜像视图重算 |
+| C10 | 拖尾粒子 | ptc：宽度方向与 cross(速度, 中心 − 本 pass 眼位) 平行（|cos| = 1，另一个眼位 0.836），反射 pass 用镜像眼位（`ComputeParticleTrailTangents` 读 `g_EyePosition`） | 新事实 |
+| C11 | 正交的粒子与文本 | ptco：反射 pass 与主 pass 的 sprite、文本顶点逐值相同，拖尾差 0.0026（眼位翻了） | 与 C7、C10 一致 |
+| C12 | 真实场景 | arsenal（反射开）：反射 pass 没有绘制（名单里两个空模型对象、FR 在透视场景画面外），反射图只是清屏色 | 名单为空的路径在语料里会走到 |

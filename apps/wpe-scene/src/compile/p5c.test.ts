@@ -617,10 +617,10 @@ describe("checkObjectFeatures：模型对象（点 4）", () => {
     ).toEqual([]);
   });
 
-  it("这几个键在图像层上照报；模型上 perspective 绑属性、attachment、animationlayers 照报", () => {
+  it("这几个键在图像层上照报（`reflected` 自 P13b2 起中性）；模型上 perspective 绑属性、attachment、animationlayers 照报", () => {
     expect(
       keys({ id: 1, image: "models/i.json", castshadow: true, reflected: true, skin: 1, disablepropagation: true }),
-    ).toEqual(["object:castshadow", "object:reflected", "object:skin"]);
+    ).toEqual(["object:castshadow", "object:skin"]);
     expect(keys({ id: 1, model: "models/a.mdl", perspective: { user: "p", value: true } })).toEqual([
       "object:perspective",
     ]);

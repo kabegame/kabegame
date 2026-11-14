@@ -65,7 +65,8 @@ import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
-import type { ScenePostprocessSetting } from "../compile/postprocess";
+import type { ScenePostprocessSetting, SceneReflectionSetting } from "../compile/postprocess";
+import { reflectionOverride } from "./reflectionOverride";
 import type { ParticleAudioFrame } from "../particles/audio";
 import { particleTrack, type ParticleTrack } from "../particles/track";
 import {
@@ -240,6 +241,8 @@ export interface RenderFrameOptions {
   projectDir: string;
   sceneAssets: string[];
   postprocess?: ScenePostprocessSetting;
+  /** 「场景反射」设置（P13b2）：缺省取 dev 覆盖（`dev/reflectionOverride.ts`），再缺省跟随 WPE。 */
+  reflection?: SceneReflectionSetting;
   userProperties?: Record<string, unknown>;
   /** `g_Time`（秒）；`g_Daytime` 固定 0.5，保证可复现。传了 `particles` 时改用 dt 的累计值。 */
   time?: number;
@@ -468,6 +471,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     sceneAssets: options.sceneAssets,
     userProperties: options.userProperties,
     postprocess: options.postprocess ?? "disabled",
+    reflection: options.reflection ?? reflectionOverride() ?? undefined,
     force,
     textureCache: cache,
     reader,

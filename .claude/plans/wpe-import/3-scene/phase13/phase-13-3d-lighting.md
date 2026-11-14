@@ -387,3 +387,7 @@ const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as
 ### P13b1 — 反射设置与「反射关」（2026-11-14）
 
 子计划与实施记录见 [phase-13b1-reflection-off.md](phase-13b1-reflection-off.md)。三条待定按推荐（2026-11-14 用户：「按你的推荐开始」）：P13g 的「反射关」并进本节、设置只加反射一项、`_rt_Reflection` 用整张 RT。步骤 0 的 7 个确定性工程推翻一处预测：没有模型读 `_rt_Reflection` 时 WPE 给读它的图像层绑 6×6 棋盘格，照做。语料干净 100 → 108（arsenal、audiophile、fantasticcar 加测试工程）；三张按日志逐帧回放和 WPE 比，读反射图的地面逐像素相同，余下的是网格边的覆盖翻转。
+
+### P13b2 — 平面反射开（2026-11-14）
+
+子计划与实施记录见 [phase-13b2-reflection-on.md](phase-13b2-reflection-on.md)。两条已定（2026-11-14 用户：「粒子、文本也支持。同意用户属性重新编译。」）：反射 pass 支持模型、直接上屏的图像层与文本层、普通粒子，别的种类报 `reflection:planar:<种类>`；`reflected` 绑属性时重编译。步骤 0 的确定性工程推翻一处读码：正交场景的反射 pass 视图投影不变（只翻 eye / right / up 的 y）。执行代理撞额度，由 Claude 在独立工作树实现。语料跟随时不变、强制开时没有场景报 `reflection:planar:*`；六个确定性工程与 WPE 整帧 0 差（不清屏工程只差 RenderDoc 叠字），三张壁纸反射开按日志逐帧回放，余下是网格边的孤立单像素。

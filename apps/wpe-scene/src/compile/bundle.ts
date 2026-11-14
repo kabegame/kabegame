@@ -22,6 +22,7 @@ import {
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
 import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
+import { reflectionKind, reflectionList } from "./reflection";
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
@@ -718,8 +719,10 @@ export interface SceneBundle {
   /**
    * 平面反射 RT（P13b1，`_rt_Reflection`）：只有模型的网格材质读它时 WPE 才建这张 RT，才有反射 pass（rea-p13-passes 1.1、1.4）；
    * 只有图像层 / 粒子读它时 WPE 不建，那一槽绑的是棋盘格占位（编译期已改成静态纹理，不记这个键）。`compileScene` 在有模型读时才写。
+   * P13b2：`enabled` 是编译期解析好的「反射开」（设置与 WPE `config.json`），渲染器只看它；`list` 是反射 pass 的名单（`objects` 下标，
+   * 按顺序；`compile/reflection.ts`），只在反射开时写。反射关时两者缺省，渲染器只每帧清屏（P13b1）。
    */
-  reflection?: { planar: boolean };
+  reflection?: { planar: boolean; enabled?: boolean; list?: number[] };
   /** `_rt_MipMappedFrameBuffer` 被任何对象读到（P13b1〔g1〕，rea-p13-passes 4.1）：渲染器建带 mip 的 RT，反射关时加载时清成 (0, 0, 0, 1)。 */
   mipFramebuffer?: boolean;
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
@@ -1261,6 +1264,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     slots: Record<number, number>;
     slot: number;
     model: boolean;
+    /** 所属对象（`objects` 下标，P13b2：读反射图的模型整个不进反射名单）。 */
+    object: number | null;
   }[] = [];
   /** 有 pass 读 `_rt_MipMappedFrameBuffer`（P13b1〔g1〕）。 */
   let mipReaders = false;
@@ -1663,7 +1668,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       else if (context.fbos?.has(name)) runtime[slot] = name;
       else if (name === REFLECTION_RT) {
         runtime[slot] = name;
-        reflectionReaders.push({ runtime, slots, slot, model: !!context.model });
+        reflectionReaders.push({ runtime, slots, slot, model: !!context.model, object: passObject(context.key) });
       } else if (name === MIP_FRAMEBUFFER_RT) {
         runtime[slot] = name;
         mipReaders = true;
@@ -2443,7 +2448,30 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     if (reflectionReaders.some((reader) => reader.model)) {
       // 平面反射（rea-p13-passes 1.1、1.4）：只有模型的网格读 `_rt_Reflection` 时 WPE 才建这张 RT、才有反射 pass
       bundle.reflection = { planar: true };
-      if (reflectionOn) unsupported.add("reflection:planar"); // 反射开：P13b2 再做，照报
+      if (reflectionOn) {
+        // 反射开（P13b2）：名单 = 图层里 `reflected` 不为 false、不是读反射图的模型（整个对象排除）的那些，按 `objects` 顺序。
+        // `reflected` 绑用户属性登记重编译（已定 2：名单在加载时定）。名单里反射 pass 画不了的种类照报（`reflectionKind`）
+        const excluded = new Set(
+          reflectionReaders.flatMap((reader) => (reader.model && reader.object !== null ? [reader.object] : [])),
+        );
+        const list = reflectionList(
+          bundle.layers,
+          excluded,
+          (object) =>
+            flagValue(
+              scene.objects[object]?.reflected,
+              properties,
+              bindings,
+              recompile("layer-structure", `objects/${object}/reflected`),
+            ) !== false,
+        );
+        for (const object of list) {
+          const layer = bundle.layers.find((item) => item.object === object);
+          const kind = layer ? reflectionKind(layer) : null;
+          if (kind) unsupported.add(`reflection:planar:${kind}`);
+        }
+        bundle.reflection = { planar: true, enabled: true, list };
+      }
     } else {
       // RT 不建：WPE 把那一槽绑 6×6 黄黑棋盘格占位（步骤 0 R3）
       for (const reader of reflectionReaders) {

@@ -182,7 +182,6 @@ import {
   ORTHO_VIEW_VECTORS,
   type OrthographicCameraFrame,
   type PerspectiveCameraFrame,
-  type ViewVectors,
 } from "./camera";
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
@@ -256,6 +255,7 @@ import {
   type GpuProgram,
 } from "./programs";
 import { ReflectionTargets } from "./reflection";
+import { mirroredView, type SceneView } from "./views";
 import { transparentDrawOrder } from "./sortOrder";
 import type { DirtyState, LayerState, SceneState } from "./state";
 import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
@@ -466,6 +466,9 @@ interface ParticleTemplate {
  * 一个粒子层的系统树（P4e 步骤 1、2）：根系统（static 子系统与事件实例挂在它下面）、加载时对象的世界矩阵，以及按模板路径
  * （`step.node.join("/")`）索引的模板。整个粒子层是一个 `particle-tree` op。
  */
+/** 粒子层一帧的绘制顺序（`arrangeParticles`）：draw，或「先序里第一个需要帧缓冲的系统之前拍一次快照」。 */
+type ParticleArrangement = (Draw | "snapshot")[];
+
 interface ParticleTree {
   object: number;
   layer: SceneLayer;
@@ -717,6 +720,41 @@ interface Draw {
   entries: (resolveFbo: (effect: number, name: string) => RenderTarget) => GPUBindGroupEntry[];
   layout: GPUBindGroupLayout;
 }
+
+/**
+ * 一个 draw 在平面反射 pass 里的副本（P13b2，`GpuScene.reflectionCopyOf`）：自己的 uniform 缓冲与 bind group。每帧编码时块 = 主块的拷贝
+ * 再盖上 `overlay`（反射视图下的相机项），所以每帧量、材质常量、光照都和主块一致，只有相机不同。
+ */
+interface ReflectionCopy {
+  block: UniformBlock;
+  buffer: GPUBuffer;
+  /** 反射视图下的相机项（`REFLECTION_CAMERA_UNIFORMS` 里块有、材质没覆盖的），`refreshReflection` 随主 draw 的刷新重算。 */
+  overlay: Record<string, number[]>;
+  /** 建 bind group 时主 draw 用的那一个：主 draw 换了（用户纹理换图）就重建。 */
+  source: GPUBindGroup | null;
+  bindGroup: GPUBindGroup | null;
+}
+
+/**
+ * 反射视图要改的 uniform（P13b2，p13-REPORT C2、C3、C9）：矩阵、眼位与视图向量。粒子的 `g_Orientation*` 不在里面：WPE 在对象更新时按主视图
+ * 写，反射 pass 不重算（C9）；拖尾的宽度方向在着色器里按 `g_EyePosition` 算，换了眼位就跟着变（C10）。
+ */
+const REFLECTION_CAMERA_UNIFORMS = [
+  "g_ModelViewProjectionMatrix",
+  "g_ModelViewProjectionMatrixInverse",
+  "g_ViewProjectionMatrix",
+  "g_EffectModelViewProjectionMatrix",
+  "g_EffectModelViewProjectionMatrixInverse",
+  "g_EffectTextureProjectionMatrix",
+  "g_EffectTextureProjectionMatrixInverse",
+  "g_EyePosition",
+  "g_ViewForward",
+  "g_ViewRight",
+  "g_ViewUp",
+] as const;
+
+/** 平面反射 RT 的格式（P13b1，HDR 下也是 RGBA8）：HDR 场景的反射副本另建这个格式的管线。 */
+const REFLECTION_TARGET_FORMAT: GPUTextureFormat = "rgba8unorm";
 
 /** 纹理尺寸（与 `render/uniforms.ts` 的 `TextureSize` 同形）。 */
 type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight"> & {
@@ -1149,15 +1187,25 @@ export class GpuScene {
   /** 真正重建图层的次数与用时（毫秒）：计划签名没变的切换不算。dev 探针读。 */
   readonly rebuildStats = { count: 0, totalMs: 0, maxMs: 0 };
   private bloom: BloomChain | null = null;
-  /** 就地刷新 uniform 时复用的场景级视图投影：`baseViewProjection · T(−s)`，s 是本帧的抖动（`setCamera`）。 */
-  private viewProjection: Float32Array = new Float32Array(16);
-  /** 透视粒子（`flags & 4`）的视图投影：`basePerspectiveViewProjection · T(−s)`。 */
-  private perspectiveViewProjection: Float32Array = new Float32Array(16);
   /**
-   * 本帧场景相机的投影与视图（WPE 分开存：每次 draw 先在 V 上做视差平移，再 `P ⊗ V`；rea-matrix-order 2.1、2.3）。
-   * 正交、无相机对象时 V 是单位阵或抖动的 `T(−s)`（lookAt 在这种输入下正好是平移）。`viewProjection` 恒等于 `mulAffine(projection, view)`。
+   * 本帧的主视图（`render/views.ts` 的 `SceneView`）。平面反射 pass 的视图由它现算（`reflectedView`，P13b2），两者走同一套 uniform 规则
+   * （`uniformValues` 的 `view` 参数）。
+   * - `viewProjection`：场景级视图投影，`baseViewProjection · T(−s)`，s 是本帧的抖动（`setCamera`）；
+   * - `perspectiveViewProjection`：透视覆盖（透视粒子 `flags & 4`、`perspective: true` 的图层）的视图投影，
+   *   `basePerspectiveViewProjection · T(−s)`；
+   * - `sceneCamera`：场景相机的投影与视图（WPE 分开存：每次 draw 先在 V 上做视差平移，再 `P ⊗ V`；rea-matrix-order 2.1、2.3）。
+   *   正交、无相机对象时 V 是单位阵或抖动的 `T(−s)`（lookAt 在这种输入下正好是平移）。`viewProjection` 恒等于 `mulAffine(projection, view)`；
+   * - `eye`：`g_EyePosition`；
+   * - `viewVectors`（P5d 步骤 2）：`g_ViewForward` / `g_ViewRight` / `g_ViewUp` 与粒子朝向的视线、上方向。正交场景恒为常量，透视场景随
+   *   `setCamera` 换。
    */
-  private sceneCamera: { projection: Mat4; view: Mat4 } = { projection: new Float32Array(16), view: identity() };
+  private view: SceneView = {
+    viewProjection: new Float32Array(16),
+    perspectiveViewProjection: new Float32Array(16),
+    sceneCamera: { projection: new Float32Array(16), view: identity() },
+    eye: [],
+    viewVectors: ORTHO_VIEW_VECTORS,
+  };
   /** 不带抖动的场景视图投影（`sceneViewProjection(general, zoom)`，建场景时算，zoom 变了重算）。 */
   private baseViewProjection: Float32Array = new Float32Array(16);
   /** 不带抖动的透视粒子视图投影（`particleViewProjection(general, zoom)`，建场景时算，zoom 变了重算）。 */
@@ -1173,11 +1221,6 @@ export class GpuScene {
    * `shake` / 两份基准矩阵还是上一次没有相机对象时的。回到没有相机对象时要整套重算（不能按 zoom 与 s 没变提前返回）。
    */
   private objectCamera = false;
-  /**
-   * 场景当前的视图向量（P5d 步骤 2）：`g_ViewForward` / `g_ViewRight` / `g_ViewUp` 与粒子朝向的视线、上方向。正交场景恒为常量；
-   * 透视场景随 `setCamera` 换。
-   */
-  private viewVectors: ViewVectors = ORTHO_VIEW_VECTORS;
   /** 本帧的视差（P5a 步骤 2，`setParallax`）：null 为关着，绘制不加平移。 */
   private parallax: SceneParallax | null = null;
   /** 粒子层全场共用的索引缓冲（`quadIndices`），按最大的 `maxcount` 建一次；没有粒子层时为 null。 */
@@ -1211,7 +1254,6 @@ export class GpuScene {
   private frameValues: Record<string, ArrayLike<number>> | null = null;
   /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
   private hdr = false;
-  private eye: readonly number[] = [];
   /** 上传后的场景纹理，下标同 `bundle.textures`；没上传的为 null（`uploadableTextures`）。 */
   private textures: (GPUTexture | null)[] = [];
   private dummies!: ReturnType<GpuScene["createDummies"]>;
@@ -1270,6 +1312,10 @@ export class GpuScene {
   private readonly meshBuffers = new Map<ArrayBufferLike, Map<string, GPUBuffer>>();
   /** 网格的占位顶点缓冲（全零，`MESH_PLACEHOLDER_BYTES`）：第一个有占位属性的网格建，全场共用。 */
   private meshPlaceholder: GPUBuffer | null = null;
+  /** 平面反射 pass 的名单（P13b2，`bundle.reflection.list`，`objects` 下标）：反射开时才有，否则 null（只清屏，P13b1）。 */
+  private readonly reflectionList: ReadonlySet<number> | null;
+  /** 参加反射 pass 的 draw 的副本（P13b2）：第一次画到时建（`reflectionCopyOf`），draw 被重建时释放。 */
+  private readonly reflectionCopies = new Map<Draw, ReflectionCopy>();
 
   private constructor(
     private readonly device: GPUDevice,
@@ -1286,6 +1332,8 @@ export class GpuScene {
     let ordinal = 0;
     for (const layer of bundle.layers) if (layer.particle) this.particleOrdinals.set(layer.object, ordinal++);
     for (const layer of bundle.layers) this.layerByObject.set(layer.object, layer);
+    const reflection = bundle.reflection;
+    this.reflectionList = reflection?.planar && reflection.enabled ? new Set(reflection.list ?? []) : null;
   }
 
   /** 替这个图层作画的组（P5b 步骤 4）；顶层图层，或组不在 bundle 里时为 null。 */
@@ -2064,6 +2112,26 @@ export class GpuScene {
           runtime,
         );
         const mesh = drawsMesh(step) ? this.meshLayoutOf(runtime.layer, step) : undefined;
+        // 反射副本的管线（P13b2）：HDR 场景目标是 rgba16float，反射图是 rgba8unorm，名单里画到场景的步骤另建一份（其余键相同），
+        // 编码时同步取（`reflectionPipeline`）。LDR 两者同格式，直接用主管线
+        if (
+          this.hdr &&
+          this.reflectionList?.has(runtime.layer.object) &&
+          step.target.kind === "scene" &&
+          runtime.layer.group == null
+        )
+          await this.pipelineFor(
+            program,
+            blending,
+            REFLECTION_TARGET_FORMAT,
+            alpha,
+            topology,
+            alphaMax,
+            mesh,
+            cull,
+            depth,
+            alphaToCoverage,
+          );
         prepared.set(step, {
           program,
           pipeline: await this.pipelineFor(
@@ -2277,7 +2345,7 @@ export class GpuScene {
     const format = (this.format = sceneTargetFormat(hdr));
     this.width = width;
     this.height = height;
-    this.eye = eyePosition(general);
+    this.view.eye = eyePosition(general);
     this.current = this.createSceneTarget("scene target");
     // 两张都是空的：不清屏时初始底色就是黑，`clearcolor` 不出现（L11）
     if (general.clearVariable) this.alternate = this.createAlternateTarget();
@@ -2338,9 +2406,12 @@ export class GpuScene {
     // 建场景时 s 是 (0, 0)：两份相同，`setCamera` 换成带抖动的。缩放取编译期的值（P5a 步骤 4），预热的指针反投影就带上它
     this.zoom = general.fields.zoom;
     const sceneProjection = sceneViewProjection(general, this.zoom);
-    this.viewProjection = this.baseViewProjection = sceneProjection;
-    this.sceneCamera = { projection: sceneProjection, view: identity() };
-    this.perspectiveViewProjection = this.basePerspectiveViewProjection = particleViewProjection(general, this.zoom);
+    this.view.viewProjection = this.baseViewProjection = sceneProjection;
+    this.view.sceneCamera = { projection: sceneProjection, view: identity() };
+    this.view.perspectiveViewProjection = this.basePerspectiveViewProjection = particleViewProjection(
+      general,
+      this.zoom,
+    );
     // 透视场景（P5d 步骤 2）：建场景时取加载时的相机（路径从头、g_Time 0），渲染器第一帧就用 `setCamera` 换成当帧的；预热的指针
     // 反投影用它。透视粒子那一份（`perspectiveViewProjection`）照旧（透视场景里的透视粒子照报 `camera:perspective:particle`）
     if (general.perspective)
@@ -2580,7 +2651,7 @@ export class GpuScene {
     // 频谱（P4e 步骤 4）：预热之前换上，预热读到的是当时的值（首次加载为 0，rea-p4e-audio.md 3.5【推】）
     system.setAudio(this.particleAudio);
     const world = worldMatrixOf(layer.object, state.layers, new Map());
-    const inputs = { world, pointer: pointerScenePoint(this.viewProjection, this.particleCursor) };
+    const inputs = { world, pointer: pointerScenePoint(this.view.viewProjection, this.particleCursor) };
     system.prewarm(inputs);
     // 单图层重建：旧树还在 `trees` 里（`install` 之后才换）
     const previous = this.trees.get(layer.object);
@@ -2704,8 +2775,9 @@ export class GpuScene {
     particles.hidden =
       particles.rope && renderer.orientation.mode === 0
         ? false
-        : orientationBasis(renderer.orientation, model, this.viewVectors.forward, this.viewVectors.up) === null;
-    const eye = renderer.kind === "spritetrail" ? trailEye(this.eye, model) : null;
+        : orientationBasis(renderer.orientation, model, this.view.viewVectors.forward, this.view.viewVectors.up) ===
+          null;
+    const eye = renderer.kind === "spritetrail" ? trailEye(this.view.eye, model) : null;
     const previous = particles.trailEye;
     if (eye && (!previous || eye.some((value, i) => !Object.is(value, previous[i])))) particles.stale = true;
     particles.trailEye = eye;
@@ -3013,6 +3085,8 @@ export class GpuScene {
     worlds: Map<number, Mat4>,
     /** 粒子绘制的模型矩阵（`particleModel`，调用方算好、同时记进 `ParticleDraw.model`）；图像层不用。 */
     model: Mat4 | null = null,
+    /** 这次绘制所在 pass 的视图：主 pass 用主视图，平面反射 pass 用反射视图（P13b2，`refreshReflection`）。 */
+    view: SceneView = this.view,
   ): Record<string, number[]> {
     const common = {
       // 图层画自己的矩阵（P8 步骤 3）：世界矩阵再乘自身偏移（文本排版、图像层对齐），直接上屏、合成链各角色、效果矩阵、
@@ -3023,9 +3097,9 @@ export class GpuScene {
       colorScale: this.hdr ? layerState.brightness : 1,
       screenSize: [this.width, this.height] as [number, number],
       textures,
-      eye: this.eye,
+      eye: view.eye,
       // 视图向量（P5d 步骤 2）：全部 pass 都写，正交场景是常量
-      view: this.viewVectors,
+      view: view.viewVectors,
       // 读状态，不读编译结果：单图层重建新建的 draw 要拿到当前值
       ambient: state.general.ambientcolor,
       skylight: state.general.skylightcolor,
@@ -3047,7 +3121,7 @@ export class GpuScene {
         step,
         layer: layerState,
         layout: state.texts.get(layer.object)!,
-        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, this.viewProjection),
+        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, false),
       });
     }
     if (step.kind === "particles") {
@@ -3063,9 +3137,7 @@ export class GpuScene {
         layer: layerState,
         // 透视粒子同样带视差：平移加在世界坐标里，z = 0 平面上和正交一致（p5-REPORT `p5a-fx`）；组里的透视粒子照报
         // （`model:passthrough:children:perspective`），强制渲染时按组的局部正交画
-        viewProjection:
-          groupVp ??
-          this.viewProjectionOf(layer, state, step.perspective ? this.perspectiveViewProjection : this.viewProjection),
+        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, step.perspective),
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
         // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）：这次绘制的系统自己的 renderer（P4e 步骤 1）里这一步的那一条（P4f 步骤 4，
         // rea-p4f-script.md 8.3：每条按自己的 `rec+4` 算朝向；拖尾那条写 RV0.xyz，sprite 那条照旧写 0，不复刻上一次绘制的残值）
@@ -3084,9 +3156,7 @@ export class GpuScene {
         colorScale: 1,
         step: { role: "direct", inputs: step.inputs },
         layer: { ...layerState, color: [1, 1, 1], alpha: 1, size: layer.size },
-        viewProjection:
-          groupVp ??
-          this.viewProjectionOf(layer, state, layer.perspective ? this.perspectiveViewProjection : this.viewProjection),
+        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, !!layer.perspective),
       });
     // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs` 事件 76）：直接上屏以外的角色（effect、末 pass、passthrough 上屏）模型与视图都是
     // 单位阵、投影是 NDC 正交，不经 `viewProjectionOf`：`origin` / `scale` / `angles`、视差、抖动、透视都不起作用，2×2 的四边形
@@ -3116,12 +3186,7 @@ export class GpuScene {
         // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
         // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
         viewProjection:
-          groupVp ??
-          this.viewProjectionOf(
-            layer,
-            state,
-            layer.perspective && step.target.kind === "scene" ? this.perspectiveViewProjection : this.viewProjection,
-          ),
+          groupVp ?? this.viewProjectionOf(layer, state, view, !!layer.perspective && step.target.kind === "scene"),
       }),
     );
   }
@@ -3150,20 +3215,21 @@ export class GpuScene {
   /**
    * 一次绘制的视图投影（P5a 步骤 2）：开着视差时是 `base · T(o)`（列向量约定：先把世界坐标平移 o，再投影；WPE 行向量下的
    * `V′ = T(o)·V`，rea-p5-camera.md 6.3），o 由 draw 所属对象的根对象的当前 `origin` 字段与 `parallaxDepth` 算；关着、根不在表里或
-   * o 为 0 时原样返回 `base`，字节不变。`base` 是 `viewProjection` / `perspectiveViewProjection`，已带抖动的 `T(−s)`（步骤 3），
-   * 两个平移相乘就是 `VP · T(o − s)`。
+   * o 为 0 时原样返回 `base`，字节不变。`base` 是 `view` 的 `viewProjection`，`perspective` 时是 `perspectiveViewProjection`（透视覆盖），
+   * 已带抖动的 `T(−s)`（步骤 3），两个平移相乘就是 `VP · T(o − s)`。
    */
-  private viewProjectionOf(layer: SceneLayer, state: SceneState, base: Mat4): Mat4 {
+  private viewProjectionOf(layer: SceneLayer, state: SceneState, view: SceneView, perspective: boolean): Mat4 {
+    const base = perspective ? view.perspectiveViewProjection : view.viewProjection;
     const parallax = this.parallax;
     if (!parallax) return base;
     const root = state.layers.get(rootObject(layer.object, state.layers));
     if (!root) return base;
     const [x, y] = parallaxOffset(parallax.amount, root.parallaxDepth, root.origin, parallax.point);
     if (x === 0 && y === 0) return base;
-    // 场景视图投影：照 WPE 在 V 上平移再 P ⊗ V（rea-matrix-order 2.3）；透视粒子那一份没有分开的 V，照旧右乘
-    if (base === this.viewProjection) {
-      const { projection, view } = this.sceneCamera;
-      return mulAffine(projection, translateGlm(view, [x, y, 0]));
+    // 场景视图投影：照 WPE 在 V 上平移再 P ⊗ V（rea-matrix-order 2.3）；透视覆盖那一份没有分开的 V，照旧右乘
+    if (!perspective) {
+      const { projection, view: camera } = view.sceneCamera;
+      return mulAffine(projection, translateGlm(camera, [x, y, 0]));
     }
     return multiply(base, translation(x, y, 0));
   }
@@ -3177,15 +3243,15 @@ export class GpuScene {
     const general = this.bundle.general;
     const perspective = !!general.perspective;
     return {
-      viewProjection: this.viewProjection,
-      eye: this.eye,
+      viewProjection: this.view.viewProjection,
+      eye: this.view.eye,
       perspective,
-      forward: this.viewVectors.forward,
+      forward: this.view.viewVectors.forward,
       override: perspective
         ? null
         : {
-            view: this.sceneCamera.view,
-            projection: this.sceneCamera.projection,
+            view: this.view.sceneCamera.view,
+            projection: this.view.sceneCamera.projection,
             fov: general.perspectiveOverrideFov,
             width: general.width,
             height: general.height,
@@ -3220,7 +3286,7 @@ export class GpuScene {
     // 刚离开相机对象（P5d 步骤 3，相机对象被隐藏）：视图向量回到正交常量，下面按 zoom 与 s 整套重算
     if (this.objectCamera) {
       this.objectCamera = false;
-      this.viewVectors = ORTHO_VIEW_VECTORS;
+      this.view.viewVectors = ORTHO_VIEW_VECTORS;
     }
     if (zoomed) {
       this.zoom = zoom;
@@ -3230,12 +3296,12 @@ export class GpuScene {
     this.shake = [x, y];
     const still = x === 0 && y === 0;
     const view = still ? identity() : translation(-x, -y, 0);
-    this.sceneCamera = { projection: this.baseViewProjection, view };
-    this.viewProjection = still ? this.baseViewProjection : mulAffine(this.baseViewProjection, view);
-    this.perspectiveViewProjection = still
+    this.view.sceneCamera = { projection: this.baseViewProjection, view };
+    this.view.viewProjection = still ? this.baseViewProjection : mulAffine(this.baseViewProjection, view);
+    this.view.perspectiveViewProjection = still
       ? this.basePerspectiveViewProjection
       : multiply(this.basePerspectiveViewProjection, translation(-x, -y, 0));
-    this.eye = eyePosition(this.bundle.general, [x, y]);
+    this.view.eye = eyePosition(this.bundle.general, [x, y]);
     this.cameraDirty = true;
   }
 
@@ -3246,19 +3312,19 @@ export class GpuScene {
    */
   private applyPerspective(frame: PerspectiveCameraFrame): void {
     // P、V 分开记（视差在 V 上平移，`viewProjectionOf`）；放在「没变就返回」之前，保证它们始终和 `viewProjection` 对得上
-    this.sceneCamera = { projection: frame.projection, view: frame.view };
-    const vectors = this.viewVectors;
+    this.view.sceneCamera = { projection: frame.projection, view: frame.view };
+    const vectors = this.view.viewVectors;
     if (
-      same(frame.viewProjection, this.viewProjection) &&
-      same(frame.eye, this.eye) &&
+      same(frame.viewProjection, this.view.viewProjection) &&
+      same(frame.eye, this.view.eye) &&
       same(frame.vectors.forward, vectors.forward) &&
       same(frame.vectors.right, vectors.right) &&
       same(frame.vectors.up, vectors.up)
     )
       return;
-    this.viewProjection = this.baseViewProjection = frame.viewProjection;
-    this.eye = [...frame.eye];
-    this.viewVectors = frame.vectors;
+    this.view.viewProjection = this.baseViewProjection = frame.viewProjection;
+    this.view.eye = [...frame.eye];
+    this.view.viewVectors = frame.vectors;
     this.cameraDirty = true;
   }
 
@@ -3268,23 +3334,23 @@ export class GpuScene {
    * `orthographicCameraObjectFrame` 里算好）。有变化才标记相机变了（draw 的重写同正交，留给随后的 `setParallax`）。
    */
   private applyCameraObject(frame: OrthographicCameraFrame): void {
-    this.sceneCamera = { projection: frame.projection, view: frame.view }; // 同 applyPerspective
-    const vectors = this.viewVectors;
+    this.view.sceneCamera = { projection: frame.projection, view: frame.view }; // 同 applyPerspective
+    const vectors = this.view.viewVectors;
     if (
       this.objectCamera &&
-      same(frame.viewProjection, this.viewProjection) &&
-      same(frame.perspectiveViewProjection, this.perspectiveViewProjection) &&
-      same(frame.eye, this.eye) &&
+      same(frame.viewProjection, this.view.viewProjection) &&
+      same(frame.perspectiveViewProjection, this.view.perspectiveViewProjection) &&
+      same(frame.eye, this.view.eye) &&
       same(frame.vectors.forward, vectors.forward) &&
       same(frame.vectors.right, vectors.right) &&
       same(frame.vectors.up, vectors.up)
     )
       return;
     this.objectCamera = true;
-    this.viewProjection = frame.viewProjection;
-    this.perspectiveViewProjection = frame.perspectiveViewProjection;
-    this.eye = [...frame.eye];
-    this.viewVectors = frame.vectors;
+    this.view.viewProjection = frame.viewProjection;
+    this.view.perspectiveViewProjection = frame.perspectiveViewProjection;
+    this.view.eye = [...frame.eye];
+    this.view.viewVectors = frame.vectors;
     this.cameraDirty = true;
   }
 
@@ -3678,6 +3744,11 @@ export class GpuScene {
       if (!draw.mesh || draw.mesh.privateVertices) this.release(draw.vertexBuffer);
       if (draw.uniformBuffer) this.release(draw.uniformBuffer);
       if (draw.text) this.release(draw.text.indexBuffer);
+      const copy = this.reflectionCopies.get(draw);
+      if (copy) {
+        this.release(copy.buffer);
+        this.reflectionCopies.delete(draw);
+      }
     }
     this.install(runtime, built);
     runtime.signature = signature;
@@ -3726,6 +3797,96 @@ export class GpuScene {
       if (value) draw.block.set(name, value);
     }
     draw.dirty = true;
+    this.refreshReflection(draw, state, worlds, model);
+  }
+
+  /** 平面反射 pass 的视图（P13b2，`views.ts`）：透视场景 S·VP·S，正交场景 VP 不变；两者都翻 eye、right、up 的 y。 */
+  private reflectedView(): SceneView {
+    return mirroredView(this.view, !this.bundle.general.perspective);
+  }
+
+  /**
+   * 这个 draw 进不进平面反射 pass（P13b2）：对象在名单里、画到场景目标、不在组里、不读反射图（同一纹理不能既采样又作附件），而且是模型网格、
+   * 粒子、文本，或图像层的直接上屏（`direct`）。名单里别的种类编译期已照报（`compile/reflection.ts`）。
+   */
+  private reflects(draw: Draw): boolean {
+    if (!this.reflectionList?.has(draw.object)) return false;
+    const { step } = draw;
+    if (step.target.kind !== "scene" || draw.layer.group != null) return false;
+    if (Object.values(step.inputs).some((ref) => ref.kind === "reflection")) return false;
+    if (step.kind === "mesh" || step.kind === "particles" || step.kind === "text") return true;
+    return step.kind === "draw" && step.role === "direct";
+  }
+
+  /** 按反射视图重算副本的相机项（P13b2）：主 draw 刷新时调（`refreshLayer`）；还没有副本的 draw 不算，建副本时再算。 */
+  private refreshReflection(draw: Draw, state: SceneState, worlds: Map<number, Mat4>, model: Mat4 | null): void {
+    const copy = this.reflectionCopies.get(draw);
+    const layerState = state.layers.get(draw.object);
+    if (!copy || !draw.block || !layerState) return;
+    const values = this.uniformValues(
+      draw.step,
+      draw.layer,
+      layerState,
+      draw.textureSizes,
+      state,
+      worlds,
+      model,
+      this.reflectedView(),
+    );
+    const overlay: Record<string, number[]> = {};
+    for (const name of REFLECTION_CAMERA_UNIFORMS) {
+      const value = values[name];
+      if (value && draw.block.has(name) && !(name in draw.step.pass.uniforms)) overlay[name] = value;
+    }
+    copy.overlay = overlay;
+  }
+
+  /**
+   * 一个 draw 的反射副本（P13b2）：第一次画到时建（块与主块同布局，相机项按反射视图算），之后复用；bind group 与主 draw 相同、只换
+   * binding 0，主 draw 换了 bind group 就重建。每次调用把主块拷过来、盖上相机项、上传。没有 uniform 块的 draw 返回 null（直接用主
+   * draw 的 bind group）。
+   */
+  private reflectionCopyOf(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): ReflectionCopy | null {
+    if (!draw.block || !draw.program.uniformSize) return null;
+    let copy = this.reflectionCopies.get(draw);
+    if (!copy) {
+      const block = new UniformBlock((draw.program.result.uniforms ?? []) as UniformEntry[], draw.program.uniformSize);
+      const buffer = this.own(
+        this.device.createBuffer({
+          label: `${draw.label} reflection`,
+          size: block.data.byteLength,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        }),
+      );
+      traceUniforms(buffer, (draw.program.result.uniforms ?? []) as UniformEntry[]);
+      copy = { block, buffer, overlay: {}, source: null, bindGroup: null };
+      this.reflectionCopies.set(draw, copy);
+      this.refreshReflection(draw, state, worlds, draw.particles?.model ?? null);
+    }
+    const main = this.bindGroupOf(draw);
+    if (copy.source !== main) {
+      const buffer = copy.buffer;
+      const entries = draw
+        .entries((effect, name) => this.targets[draw.resources.fbos.resolve(effect, name)])
+        .map((entry) => (entry.binding === 0 ? { binding: 0, resource: { buffer } } : entry));
+      copy.bindGroup = this.device.createBindGroup({ label: `${draw.label} reflection`, layout: draw.layout, entries });
+      copy.source = main;
+    }
+    // 每帧：主块（已含这一帧的每帧量与刷新）拷过来，盖上反射视图的相机项，排在本帧提交之前上传
+    new Uint8Array(copy.block.data).set(new Uint8Array(draw.block.data));
+    for (const [name, value] of Object.entries(copy.overlay)) copy.block.set(name, value);
+    this.device.queue.writeBuffer(copy.buffer, 0, copy.block.data);
+    return copy;
+  }
+
+  /** 反射副本的管线（P13b2）：LDR 用主管线；HDR 取加载时备好的 rgba8unorm 那份（`prepareLayer`），缺了说明备漏了。 */
+  private reflectionPipeline(draw: Draw): GPURenderPipeline {
+    if (!this.hdr) return draw.pipeline;
+    const pipeline = this.readyPipelines.get(
+      pipelineKey({ ...this.pipelineOf(draw.step, draw), format: REFLECTION_TARGET_FORMAT }),
+    );
+    if (!pipeline) throw new SceneRenderError(["render:variant-missing"]);
+    return pipeline;
   }
 
   /** 材质常量变化：重写本 pass 的全部材质常量（含用户属性写进 `constantshadervalues` 的那些）。 */
@@ -3824,7 +3985,7 @@ export class GpuScene {
       if (state && !effectiveVisible(object, state.layers)) {
         // 不可见时控制点照常更新（P4d 步骤 5，rea-p4d-modules.md 5.3）：`W` 与跟随点照可见时的算法算
         const world = worldMatrixOf(object, state.layers, worlds);
-        pointer ??= pointerScenePoint(this.viewProjection, cursor);
+        pointer ??= pointerScenePoint(this.view.viewProjection, cursor);
         tree.inputs = { world, pointer };
         // 系统时间在不可见的帧上照常累加（P4d 收尾 A），所以把帧时间也交给它；子系统与事件实例这时以 `emit = false` 照常步进
         // （rea-p4e-children 3.6），所以有子系统时每帧都要重写
@@ -3836,7 +3997,7 @@ export class GpuScene {
       const timing = first ? this.particleTimings?.get(first) : undefined;
       const started = timing ? performance.now() : 0;
       const world = state ? worldMatrixOf(object, state.layers, worlds) : tree.world;
-      pointer ??= pointerScenePoint(this.viewProjection, cursor);
+      pointer ??= pointerScenePoint(this.view.viewProjection, cursor);
       tree.inputs = { world, pointer };
       root.step(frametime, time, tree.inputs);
       if (timing) {
@@ -3988,38 +4149,47 @@ export class GpuScene {
    * 编码一个粒子层（`particle-tree` op，P4e 步骤 2）：沿 `walkParticles` 的先序逐个系统取一组 draw、画。非实例化的模板用建场景时建好的
    * 第 0 组（顺序、uniform、顶点与 P4e 步骤 1 逐字节相同）；实例化的模板第 k 次出现用池里第 k 组，没有就现建（`addPooledGroup`），已有的
    * 换了实例或模型矩阵变了就整组重写随它变的 uniform（`assignParticles`）。uniform 与顶点都在本帧提交之前经队列写入，每个 draw 每帧至多用
-   * 一次，所以互不覆盖。`snapshot` 在先序里第一个需要帧缓冲的系统之前调。
+   * 一次，所以互不覆盖。先序里第一个需要帧缓冲的系统之前放一个 `"snapshot"` 标记。
    * 一个系统多条 renderer（P4f 步骤 4，rea-p4f-script.md 8.3、8.4）：一组按 renderer 顺序连着画完，`walkParticles` 才往下走子系统（WPE 的
    * renderer 循环在递归之前），所以先序是「父 r0、父 r1、static 子 r0、r1、实例……」。
+   * 一帧只排一次（`encode` 按树缓存）：平面反射 pass 与主 pass 画同一次排列（P13b2），池的分配与 uniform 改写只做一遍。
    */
-  private arrangeParticles(
-    tree: ParticleTree,
-    state: SceneState,
-    worlds: Map<number, Mat4>,
-    snapshot: () => void,
-    draw: (item: Draw) => void,
-  ): void {
+  private arrangeParticles(tree: ParticleTree, state: SceneState, worlds: Map<number, Mat4>): ParticleArrangement {
+    const items: ParticleArrangement = [];
     const object = worldMatrixOf(tree.object, state.layers, worlds);
     this.walkParticles(
       tree,
       object,
       (system, template, occurrence, model) => {
         if (!template.instanced) {
-          for (const item of template.pool[0]) draw(item);
+          items.push(...template.pool[0]);
           return;
         }
         const group = template.pool[occurrence];
         if (!group) {
-          for (const item of this.addPooledGroup(tree, template, system, state, worlds)) draw(item);
+          items.push(...this.addPooledGroup(tree, template, system, state, worlds));
           return;
         }
         for (const item of group) {
           this.assignParticles(item, system, model, state, worlds);
-          draw(item);
+          items.push(item);
         }
       },
-      snapshot,
+      () => items.push("snapshot"),
     );
+    return items;
+  }
+
+  /**
+   * 模型被视锥剔除（P5c 步骤 2，p5-REPORT `p5c-frustum`，rea-p5-mesh 4.4）：被剔就整个模型不画。`viewProjection` 是这个 pass 的场景级视图
+   * 投影：主 pass 是带抖动与缩放、不带每个对象的视差的那一份（WPE 在场景绘制开头从相机算一次平面），平面反射 pass 是反射视图的（P13b2，
+   * p13-REPORT C8）。世界矩阵不含视差；`perspective: true` 的模型也按它判（WPE 先剔除、后换透视投影，rea 2.6）。组里的模型照报
+   * （`model:passthrough:children:model`），强制渲染时不剔：组的局部正交下 WPE 用哪组平面没有实测。
+   */
+  private modelCulled(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>, viewProjection: Mat4): boolean {
+    const model = layer.model;
+    if (!model || layer.group != null) return false;
+    return frustumCulled(model.bounds, worldMatrixOf(layer.object, state.layers, worlds), viewProjection);
   }
 
   /**
@@ -4212,7 +4382,9 @@ export class GpuScene {
     const worlds = new Map<number, Mat4>();
     const [r, g, b] = clearcolor;
     // 平面反射 RT（P13b1）：反射关时每帧清成清屏色，在主 pass 之前，不看 clearenabled（rea-p13-passes 1.1）
-    this.reflectionTargets?.encode(encoder, clearcolor);
+    // 反射开（P13b2）时改由下面的反射 pass 清屏并作画
+    const reflectionTarget = this.reflectionList ? (this.reflectionTargets?.reflection ?? null) : null;
+    if (!reflectionTarget) this.reflectionTargets?.encode(encoder, clearcolor);
     if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);
     const snapshot = () => {
       if (this.snapshot)
@@ -4263,7 +4435,12 @@ export class GpuScene {
       open?.pass.end();
       open = null;
     };
-    const draw = (pass: GPURenderPassEncoder, item: Draw) => {
+    /** `reflection`（P13b2）：反射 pass 里换成副本的管线与 bind group，其余（视频、粒子顶点、几何）同主 pass。 */
+    const draw = (
+      pass: GPURenderPassEncoder,
+      item: Draw,
+      reflection?: { pipeline: GPURenderPipeline; bindGroup: GPUBindGroup },
+    ) => {
       // 视频纹理（P9a）：画到它就记下帧号；有新帧就拷进来，排在本帧提交之前（同 WPE 绑定时 TransferVideoFrame，rea-p9-video
       // 第 2 节第 4 条）。视频尺寸和纹理不同时只拷重叠部分并记一条 warn（决定 3，语料 0 段）
       for (const index of item.videos) {
@@ -4283,8 +4460,8 @@ export class GpuScene {
         this.uploadParticles(item, particles);
         if (!particles.count || (!particles.rope && !this.particleIndices)) return;
       }
-      pass.setPipeline(item.pipeline);
-      pass.setBindGroup(0, this.bindGroupOf(item));
+      pass.setPipeline(reflection?.pipeline ?? item.pipeline);
+      pass.setBindGroup(0, reflection?.bindGroup ?? this.bindGroupOf(item));
       pass.setVertexBuffer(0, item.vertexBuffer);
       if (item.mesh) {
         // 模型网格（P5c 步骤 2）：mdl 的索引，三角形列表；网格没有的属性从槽 1 的全零占位缓冲读
@@ -4306,6 +4483,13 @@ export class GpuScene {
     };
     // 不可见图层整段跳过（含它的快照与 copy / swap）；运行时可见性由 `SceneState` 决定（P3a），沿父链继承（组隐藏时子孙也不可见）
     const visible = new Set(visibleObjects(this.layers, state));
+    // 粒子层这一帧的排列（`arrangeParticles`）：第一次画到时排，平面反射 pass 与主 pass 共用
+    const arrangements = new Map<ParticleTree, ParticleArrangement>();
+    const arranged = (tree: ParticleTree): ParticleArrangement => {
+      let items = arrangements.get(tree);
+      if (!items) arrangements.set(tree, (items = this.arrangeParticles(tree, state, worlds)));
+      return items;
+    };
     /** `sceneTarget`：「画到场景」的绘制落在哪；缺省是真正的场景目标，组画子树时是组的合成 RT（P5b 步骤 4）。 */
     const runOps = (ops: readonly Op[], sceneTarget: GPUTextureView = sceneView) => {
       for (const op of ops) {
@@ -4331,30 +4515,18 @@ export class GpuScene {
           end();
           snapshot();
         } else if (op.kind === "particle-tree") {
-          // 粒子层（P4e 步骤 2）：沿系统树每帧现排，快照插在先序里第一个需要帧缓冲的系统之前（同上面的快照操作）
-          this.arrangeParticles(
-            op.tree,
-            state,
-            worlds,
-            () => {
+          // 粒子层（P4e 步骤 2）：按本帧的排列画，快照插在先序里第一个需要帧缓冲的系统之前（同上面的快照操作）
+          for (const item of arranged(op.tree)) {
+            if (item !== "snapshot") draw(begin(sceneTarget), item);
+            else {
               if (!started) begin();
               end();
               snapshot();
-            },
-            (item) => draw(begin(sceneTarget), item),
-          );
+            }
+          }
         } else if (op.kind === "model") {
-          // 模型（P5c 步骤 2）：先做视锥剔除（p5-REPORT `p5c-frustum`，rea-p5-mesh 4.4），被剔就整个模型不画。平面取场景级的视图投影
-          // （带抖动与缩放、不带每个对象的视差：WPE 在场景绘制开头从相机算一次平面），世界矩阵不含视差；`perspective: true` 的模型也按它
-          // 判（WPE 先剔除、后换透视投影，rea 2.6）。组里的模型照报（`model:passthrough:children:model`），强制渲染时不剔：组的局部
-          // 正交下 WPE 用哪组平面没有实测
-          const model = op.layer.model;
-          if (
-            model &&
-            op.layer.group == null &&
-            frustumCulled(model.bounds, worldMatrixOf(op.layer.object, state.layers, worlds), this.viewProjection)
-          )
-            continue;
+          // 模型（P5c 步骤 2）：先做视锥剔除，被剔就整个模型不画
+          if (this.modelCulled(op.layer, state, worlds, this.view.viewProjection)) continue;
           for (const item of op.draws) draw(begin(sceneTarget), item);
         } else if (op.kind === "subtree") {
           // 组画子树（P5b 步骤 4）：子孙按先序画，「画到场景」的绘制改画进组当前的合成 RT（嵌套组递归，它的上屏画进这一张）。
@@ -4396,6 +4568,46 @@ export class GpuScene {
       const ops = layerOpsToRun(runtime.ops, runtime.layer, visible.has(runtime.object));
       if (ops.length) runOps(ops, sceneTarget);
     }
+    if (reflectionTarget) {
+      // 平面反射 pass（P13b2，rea-p13-passes 1.3，p13-REPORT C1–C12）：主 pass 之前，名单里的对象按 `objects` 顺序、用反射视图画进
+      // `_rt_Reflection`，不做透明排序。和主 pass 共用场景深度；`clearenabled` 开时颜色清成 (clearcolor, 1)、深度清 0，关时都接着上一帧（C6）。
+      // 模型的视锥剔除用反射视图的 VP（C8）；粒子树用本帧的同一次排列（`arranged`，名单里没有要快照的粒子，跳过快照标记）
+      const mirrored = this.reflectedView();
+      const loadOp: GPULoadOp = clearenabled ? "clear" : "load";
+      const pass = encoder.beginRenderPass({
+        label: "_rt_Reflection reflection",
+        colorAttachments: [{ view: reflectionTarget.view, clearValue: { r, g, b, a: 1 }, loadOp, storeOp: "store" }],
+        ...(depthView
+          ? {
+              depthStencilAttachment: {
+                view: depthView,
+                depthClearValue: 0,
+                depthLoadOp: loadOp,
+                depthStoreOp: "store",
+              },
+            }
+          : {}),
+      });
+      const reflect = (item: Draw) => {
+        if (!this.reflects(item)) return;
+        const copy = this.reflectionCopyOf(item, state, worlds);
+        draw(pass, item, {
+          pipeline: this.reflectionPipeline(item),
+          bindGroup: copy?.bindGroup ?? this.bindGroupOf(item),
+        });
+      };
+      for (const runtime of this.layers) {
+        if (!this.reflectionList!.has(runtime.object) || !visible.has(runtime.object)) continue;
+        for (const op of runtime.ops) {
+          if (op.kind === "draw") reflect(op.draw);
+          else if (op.kind === "particle-tree") {
+            for (const item of arranged(op.tree)) if (item !== "snapshot") reflect(item);
+          } else if (op.kind === "model" && !this.modelCulled(op.layer, state, worlds, mirrored.viewProjection))
+            for (const item of op.draws) reflect(item);
+        }
+      }
+      pass.end();
+    }
     // 组的子孙（`group` 非空）在顶层不画，由组的 `subtree` op 画（P5b 步骤 4）
     // `group == null`：缺这个字段（手写的图层）也当顶层
     const { perspective, transparentSorting } = this.bundle.general;
@@ -4404,7 +4616,7 @@ export class GpuScene {
       // 局部 origin · 当帧相机的视线方向」从远到近画（`viewVectors` 是 `setCamera` 交来的透视帧的，含抖动、相机对象、路径）。组画子树、
       // 模型的网格顺序、粒子树的先序不动；被依赖的图层跟着自己在新顺序里的位置画（同 WPE）
       const top = this.layers.filter((layer) => layer.layer.group == null).map((runtime) => runtime.layer);
-      for (const layer of transparentDrawOrder(top, state, this.viewVectors.forward))
+      for (const layer of transparentDrawOrder(top, state, this.view.viewVectors.forward))
         runLayer(this.runtimeByObject.get(layer.object)!);
     } else for (const layer of this.layers) if (layer.layer.group == null) runLayer(layer);
     if (this.bloom && state.bloomEnabled) {
