@@ -34,6 +34,7 @@ dispatch2 = "0.3"
 objc2 = { version = "0.6", default-features = false }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
+  "NSApplication",
   "NSEvent",
   "NSWindow",
   "NSResponder",

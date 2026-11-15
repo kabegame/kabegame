@@ -324,6 +324,7 @@
 
 ### Fixed
 - `rebind_deduped_metadata` 对 WPE 行直接返回：去重命中不再改挂它的 metadata 与 `plugin_id`。
+- `tauri-plugin-cursor` 的 macOS 探针按窗口内容区算视图坐标，并且每次采样都现查窗口位置（同 Windows 每次现算 `ScreenToClient`）。原来直接把 `kCGWindowBounds`（整个窗口框）当视图原点、每秒才刷新一次：带原生标题栏的主窗口里，注入预览壁纸 iframe 的鼠标位置比光标低一个标题栏高度（macOS 26 为 32pt），拖动窗口时落点停在旧位置。现在窗口框每轮从窗口服务现查（约 0.1 ms，不上主线程），标题栏等内缩每秒在主线程上读一次 `contentRectForFrameRect(frame)`；`position_in_window`（场景开场光标）同样修正。
 - 新增 CEF 补丁 10：建窗 `extra_info` 带 `kabegame.disable_wheel_zoom` 的 browser 忽略 Ctrl+滚轮缩放（`AlloyBrowserHostImpl::ContentsZoomChange` 提前返回），主窗口与壁纸窗口登记（`tauri_runtime_kbcef::disable_wheel_zoom`）。子 frame 里没被页面取消的 Ctrl+滚轮会缩放整个 WebContents，主文档的 `wheel` 监听收不到子 frame 的事件；这两个窗口的主 frame 加载完时，缩放不是默认值就复位，清掉以前按 host 存进 profile 的缩放。需要重新构建 CEF（`deno task build:chromium`）。
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 12：`ipc-protocol.js` 的自定义协议 IPC fetch 固定 `referrerPolicy: 'origin'`（Windows 上 https 页面请求 `http://ipc.localhost` 时 CEF 把 `Origin` 发成 `null`，Tauri 回 500 且不回退 postMessage）；`tauri-runtime-kbcef` 的 `cef-ipc` 回退 shim 同样设置。
