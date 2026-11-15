@@ -159,6 +159,16 @@ fn wpe_import_plugin() -> Plugin {
             "name.zhtw": "額外的資料夾",
             "name.ja": "追加フォルダ",
             "name.ko": "추가 폴더"
+        },
+        {
+            // 「从 Steam 拉取」：已在对话框里登录的账号名。有值时先下载 / 更新 WPE 再导入；token 存在插件数据私有区，不进任务参数
+            "key": "steamAccount",
+            "type": "string",
+            "name": "Steam account",
+            "name.zh": "Steam 账号",
+            "name.zhtw": "Steam 帳號",
+            "name.ja": "Steam アカウント",
+            "name.ko": "Steam 계정"
         }
     ]))
     .expect("wpe-import 内建插件变量定义必须合法");
@@ -177,11 +187,11 @@ fn wpe_import_plugin() -> Plugin {
             "ko": "월페이퍼 가져오기",
         }),
         json!({
-            "default": "Import Wallpaper Engine wallpapers (video only in this phase)",
-            "zh": "导入本机 Wallpaper Engine 壁纸（当前阶段仅视频）",
-            "zhtw": "匯入本機 Wallpaper Engine 桌布（目前僅影片）",
-            "ja": "ローカルの Wallpaper Engine 壁紙をインポート（現段階は動画のみ）",
-            "ko": "로컬 Wallpaper Engine 월페이퍼 가져오기(현재 동영상만)",
+            "default": "Import Wallpaper Engine wallpapers, or download Wallpaper Engine from Steam",
+            "zh": "导入本机 Wallpaper Engine 壁纸，或从 Steam 拉取 Wallpaper Engine",
+            "zhtw": "匯入本機 Wallpaper Engine 桌布，或從 Steam 下載 Wallpaper Engine",
+            "ja": "ローカルの Wallpaper Engine 壁紙をインポート、または Steam から Wallpaper Engine を取得",
+            "ko": "로컬 Wallpaper Engine 월페이퍼 가져오기 또는 Steam에서 Wallpaper Engine 받기",
         }),
         HashMap::from([("vars".to_string(), Value::Array(wpe_import_vars))]),
         wpe_import_var_defs,

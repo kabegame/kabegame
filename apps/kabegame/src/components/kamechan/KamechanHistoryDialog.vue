@@ -1,5 +1,5 @@
 <template>
-  <Dialog v-model:open="open" :title="t('kamechan.historyTitle')" :width="640">
+  <Dialog v-model:open="open" :title="t('kamechan.historyTitle')" :width="640" layer-owner="kamechan">
     <div class="kb-selectable flex max-h-[420px] flex-col gap-2 overflow-y-auto">
       <div v-if="messages.length === 0" class="py-6 text-center text-[13px] text-kb-fg-muted">
         {{ t("kamechan.historyEmpty") }}

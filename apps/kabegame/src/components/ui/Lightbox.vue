@@ -126,7 +126,7 @@ const { t } = useI18n();
 const NO_DESCRIPTION = { "aria-describedby": undefined };
 
 useModalBack(open);
-const zIndex = useLayerZIndex(open);
+const zIndex = useLayerZIndex(open, { modal: true });
 
 const ROUND_BUTTON =
   "grid size-10 cursor-pointer place-items-center rounded-full border-0 bg-[rgba(255,255,255,0.1)] p-0 text-white outline-none " +

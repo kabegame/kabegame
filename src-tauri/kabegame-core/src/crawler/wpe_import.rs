@@ -80,6 +80,68 @@ fn parse_sources(config: &HashMap<String, serde_json::Value>) -> Vec<WpeRootKind
         .collect()
 }
 
+/// 「从 Steam 拉取」的账号名（对话框登录过的）；缺失或空串表示不拉取。
+fn parse_steam_account(config: &HashMap<String, serde_json::Value>) -> Option<String> {
+    config
+        .get("steamAccount")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|account| !account.is_empty())
+        .map(str::to_string)
+}
+
+/// 拉取 WPE 占任务进度的前这么多，导入占剩下的。
+const STEAM_PULL_PROGRESS: f64 = 80.0;
+
+/// 下载 / 更新 / 跳过 WPE（见 [`crate::wpe::steam::install`]），返回之后要导入官方默认壁纸的 WPE 安装目录。
+async fn pull_engine(run: &Task, account: &str) -> Result<Option<PathBuf>, String> {
+    use crate::wpe::steam::install::{ensure_engine, EngineOutcome, PullHooks};
+
+    let task_id = run.task_id.clone();
+    if run.params.is_dry_run {
+        emit_log(&task_id, "info", "taskLogWpeSteamDryRun", json!({ "account": account }));
+        return Ok(crate::wpe::discover::engine_dir());
+    }
+    let progress = |fraction: f64| {
+        run.set_progress(fraction.clamp(0.0, 1.0) * STEAM_PULL_PROGRESS);
+    };
+    let log = |level: &str, key: &str, params: serde_json::Value| emit_log(&task_id, level, key, params);
+    let hooks = PullHooks {
+        cancel: &run.cancel,
+        progress: &progress,
+        log: &log,
+    };
+    let outcome = ensure_engine(account, &hooks).await.map_err(|error| {
+        emit_log(&task_id, "error", "taskLogWpeSteamFailed", json!({ "reason": error }));
+        error
+    })?;
+    let dir = match outcome {
+        EngineOutcome::SkippedExisting(dir) => {
+            emit_log(&task_id, "info", "taskLogWpeSteamSkipExisting", json!({ "path": dir.to_string_lossy() }));
+            dir
+        }
+        EngineOutcome::UpToDate(dir) => {
+            emit_log(&task_id, "info", "taskLogWpeSteamUpToDate", json!({ "path": dir.to_string_lossy() }));
+            dir
+        }
+        EngineOutcome::Installed { dir, files, bytes } => {
+            emit_log(
+                &task_id,
+                "info",
+                "taskLogWpeSteamInstalled",
+                json!({
+                    "path": dir.to_string_lossy(),
+                    "files": files,
+                    "sizeMb": format!("{:.1}", bytes as f64 / 1048576.0),
+                }),
+            );
+            dir
+        }
+    };
+    run.set_progress(STEAM_PULL_PROGRESS);
+    Ok(Some(dir))
+}
+
 fn parse_extra_dirs(config: &HashMap<String, serde_json::Value>) -> Vec<String> {
     config
         .get("extraDirs")
@@ -524,11 +586,25 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
     let task_id = run.task_id.clone();
     let config = run.params.config.clone();
     let sources = parse_sources(&config);
-    let extra_dirs = parse_extra_dirs(&config);
+    let mut extra_dirs = parse_extra_dirs(&config);
+    let steam_account = parse_steam_account(&config);
 
-    if sources.is_empty() && extra_dirs.is_empty() {
+    if sources.is_empty() && extra_dirs.is_empty() && steam_account.is_none() {
         return Err("未选择任何壁纸来源".to_string());
     }
+
+    // 从 Steam 拉取：先保证有 WPE，再把它的官方默认壁纸并进本次导入（目录去重由 collect_selected_dirs 负责）
+    let progress_base = if let Some(account) = steam_account.as_deref() {
+        if let Some(engine) = pull_engine(&run, account).await? {
+            let defaults = engine.join("projects").join("defaultprojects");
+            if defaults.is_dir() {
+                extra_dirs.push(defaults.to_string_lossy().into_owned());
+            }
+        }
+        STEAM_PULL_PROGRESS
+    } else {
+        0.0
+    };
 
     let (dirs, errors) = collect_selected_dirs(&sources, &extra_dirs);
     for (path, reason) in errors {
@@ -540,11 +616,16 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
         );
     }
     if dirs.is_empty() {
+        // 只拉取 WPE、没有可导入的壁纸目录（例如 dry-run 时还没装）：拉取本身已完成
+        if steam_account.is_some() {
+            run.set_progress(100.0);
+            return Ok(());
+        }
         return Err("没有找到任何 Wallpaper Engine 壁纸目录".to_string());
     }
 
     let total = dirs.len();
-    run.set_progress(0.0);
+    run.set_progress(progress_base);
     emit_log(
         &task_id,
         "info",
@@ -660,7 +741,7 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
         }
 
         // 已入库的目录在文件系统层面无需再做任何事；`ingest_wpe_dir` 按 local_path 幂等。
-        run.set_progress(((index + 1) as f64 / total as f64) * 100.0);
+        run.set_progress(progress_base + ((index + 1) as f64 / total as f64) * (100.0 - progress_base));
     }
 
     emit_log(
@@ -685,6 +766,32 @@ mod tests {
     use super::*;
     use crate::crawler::task_scheduler::build_effective_user_config_from_var_defs;
     use crate::plugin::builtin::builtin_plugins;
+
+    #[test]
+    fn steam_account_is_optional_and_trimmed() {
+        assert_eq!(parse_steam_account(&HashMap::new()), None);
+        let blank = HashMap::from([("steamAccount".to_string(), json!("  "))]);
+        assert_eq!(parse_steam_account(&blank), None);
+        let set = HashMap::from([("steamAccount".to_string(), json!(" alice "))]);
+        assert_eq!(parse_steam_account(&set).as_deref(), Some("alice"));
+    }
+
+    /// 只选「从 Steam 拉取」时的配置：要过校验，自动来源为空、账号保留。
+    #[test]
+    fn steam_only_config_passes_validation() {
+        let plugin = builtin_plugins().get(WPE_IMPORT_PLUGIN_ID).unwrap();
+        let config = build_effective_user_config_from_var_defs(
+            &plugin.var_defs,
+            HashMap::from([
+                ("sources".to_string(), serde_json::Value::Null),
+                ("steamAccount".to_string(), json!("alice")),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(parse_sources(&config).is_empty());
+        assert_eq!(parse_steam_account(&config).as_deref(), Some("alice"));
+    }
 
     #[test]
     fn missing_sources_means_all() {

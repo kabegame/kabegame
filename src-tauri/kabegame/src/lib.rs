@@ -961,6 +961,22 @@ pub(crate) fn configure_app(
             #[cfg(feature = "wpe")]
             set_wpe_engine_dir,
             #[cfg(feature = "wpe")]
+            wpe_steam_status,
+            #[cfg(feature = "wpe")]
+            wpe_steam_verify_session,
+            #[cfg(feature = "wpe")]
+            wpe_steam_forget_session,
+            #[cfg(feature = "wpe")]
+            wpe_steam_login_qr,
+            #[cfg(feature = "wpe")]
+            wpe_steam_login_credentials,
+            #[cfg(feature = "wpe")]
+            wpe_steam_login_submit_code,
+            #[cfg(feature = "wpe")]
+            wpe_steam_login_poll,
+            #[cfg(feature = "wpe")]
+            wpe_steam_login_cancel,
+            #[cfg(feature = "wpe")]
             get_wpe_web_properties,
             #[cfg(feature = "wpe")]
             set_wpe_web_user_properties,

@@ -14,6 +14,8 @@ CREATE TABLE plugin_data (
 
 `data` 的顶层必须是 JSON object。内部 key 由插件自己管理，宿主不解释它的 schema。
 
+例外是顶层键 `__private`：宿主私有区，放插件脚本与界面都不该看到的东西（例如 `wpe-import` 的 Steam refresh token，见 [../wpe/WPE_STEAM.md](../wpe/WPE_STEAM.md)）。`PluginDataStorage::get` 一律剥掉它，`set` 写入时保留库里原有的私有区、忽略传入值里的同名键，只有 `get_private` / `update_private` 能读写。下文所有读写出口（脚本 API、EJS bridge、`get_plugin_data` 命令与 web 调度）都经过 `get` / `set`，所以插件读不到、也覆盖不掉它。
+
 ## Rhai API
 
 爬虫脚本可以读写当前插件自己的数据：

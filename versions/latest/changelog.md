@@ -3,6 +3,7 @@
 ## 用户侧
 
 ### Added
+- 「壁纸」收集新增来源「从 Steam」，用来拉取 Wallpaper Engine：在导入对话框顶部把来源从「本机」切到「从 Steam」，扫码或用账号密码登录购买了 Wallpaper Engine 的 Steam 账号（邮箱 / 令牌验证码直接在表单里填），Kabegame 会把 Wallpaper Engine 下载到自己的数据目录并自动设为「Wallpaper Engine 目录」，同时导入官方默认壁纸，macOS / Linux 上不用再从 Windows 电脑复制。之后再拉取只下载有变化的文件。登录在有效期内可以直接复用，密码不会保存；设置里已有 Wallpaper Engine 目录时不会下载。
 - macOS 窗口模式支持多显示器：每块显示器都有壁纸（原来只有主屏）。设置页「显示器模式」可选「各屏复制」（所有显示器同一张，视频只有主屏出声）或「逐屏独立」：点显示器布局图里的一块屏，就能给它单独设当前壁纸、轮播路径、显示方式与过渡；轮播到点时每块屏各换一张。显示器拔掉后它的设置会保留，接回来自动恢复，用不上了可以在布局图下方「忘记」。
 - macOS 原生模式支持多显示器逐屏独立：每块显示器各设当前壁纸、轮播路径与显示方式，轮播到点时各换一张；新接上的显示器自动换成它该显示的壁纸。窗口模式与原生模式互切时「逐屏独立」会保留。
 - macOS 原生模式的壁纸显示方式新增「适应」「拉伸」「居中」（原来只有填充，铺法由系统决定），改了立即生效，每块显示器可以不同。
@@ -72,6 +73,7 @@
 - 按视频筛选和视频计数在大图库下明显更快；应用启动时会刷新数据库的查询统计，启动页显示「正在优化数据库」，图库越大这一步越久。
 
 ### Fixed
+- 看板娘被对话框压在下面：打开任何对话框、确认框、侧边面板或看图时，看板娘都被盖在遮罩下面（界面重构之后的问题）。现在它重新浮在这些弹层之上，点它也不会关掉底下的对话框；之后打开的菜单仍在它上面，它自己的消息历史对话框也不会被它挡住。
 - 主窗口缩到很窄时，设置页「当前轮播路径」「当前壁纸」两行的标题不再被长路径挤成一列字。
 - 修改壁纸轮播间隔后，从修改的那一刻起按新间隔切换，不用再多等一轮。
 - 窗口模式与原生模式的显示方式、过渡各记各的：窗口 → 原生 → 窗口来回切换后，窗口模式原来的显示方式与过渡不再被原生模式的值覆盖（第一次切到另一个模式时仍沿用当前的值）。
@@ -130,6 +132,7 @@
 ## 插件开发侧
 
 ### Changed
+- 插件私有数据（`pluginData` / `setPluginData`、详情模板的 `__bridge.getPluginData`）的顶层键 `__private` 归宿主保留：读取时不返回，插件写入这个键会被忽略，原有内容保留。
 - kabegame-server（0.3.0）：`x-wpe/*` 行改为先请求 `/file/<目录>` 取文件清单，再经 SDK 的 `downloadWpeWallpaper` 整目录复制；`engines.kabegame` 提到 `>=4.7.0`。
 - 图片详情的插件模板（`description.ejs`）iframe 不再与应用同源（去掉 `allow-same-origin`），并在文档最前带内层 CSP（`connect-src 'none'`、`frame-src about:` 等）：模板里直接 `fetch` / XHR / WebSocket、`<link>` 外链样式、远程字体、嵌套 http(s) 或 `file:` iframe 都会被拒，网络请求一律经 `__bridge.fetch`；`<img>`、CSS 背景等元素级远程图片与嵌套 `srcdoc` iframe 不受影响；`window.parent`、`localStorage` 不可访问（跨次缓存用 `__bridge.getCache` / `setCache`）。
 
@@ -145,6 +148,7 @@
 ## 开发侧
 
 ### Added
+- `kabegame-core::wpe::steam`（`wpe` feature）：对话框分步登录（HTTPS 上的 `IAuthenticationService`，扫码 / 账号密码 / Steam Guard，`SteamClient` 平台类型）、会话存 `wpe-import` 插件数据私有区、`steam-vent` 连 CM（PICS、depot 密钥、manifest request code、CDN 服务器与授权 token）、CDN manifest / chunk 的解密解压校验与增量安装；`PluginDataStorage` 新增宿主私有区 `__private`（`get_private` / `update_private`）；`AppPaths::try_global`；`discover` 的 VDF 解析器支持 `\"` 转义并导出 `parse_vdf`，`discover_roots` 把插件数据目录当作一个 Steam 库补登。新增 Tauri 命令 `wpe_steam_status` / `wpe_steam_verify_session` / `wpe_steam_forget_session` / `wpe_steam_login_qr` / `wpe_steam_login_credentials` / `wpe_steam_login_submit_code` / `wpe_steam_login_poll` / `wpe_steam_login_cancel`（只给主窗口）。新依赖：`steam-vent`、`steam-vent-proto-*`、`ruzstd`、`qrcode`（其余复用锁文件里已有的版本）。
 - 界面重构 P2：`apps/kabegame/src/components/ui/` 新增弹层（Dialog、AlertDialog、Sheet、ContextMenu）、下拉与右键共用的菜单项（`MenuItem` / `MenuSub` / `MenuCheckboxItem` / `MenuRadioGroup` / `MenuLabel` / `MenuSeparator`）、表单（Field、Input、Textarea、NumberField、Checkbox、CheckboxGroup、RadioGroup、Select、Slider、Combobox）、展示（Tag、Skeleton、Separator、ScrollArea、DescriptionList、Alert、Spinner），Button 加 `danger` 变体；反馈门面 `toast`（签名同 `ElMessage`）、`messageBox`（签名同 `ElMessageBox`，内部仍是 EP）、`vLoading`；dev 陈列页 `/dev/ui`。混用期垫片 `components/ui/compat.ts` + `styles/kb-compat.css`：新浮层打开时向 EP 的 z-index 计数器取号（`--kb-z-popover` / `--kb-z-tooltip` 删除）、打开期间暂停 EP 的焦点陷阱、触发器在 EP 对话框里时挂进去、旧浮层在新模态层下可点且不触发关闭。混用期代码统一标 `TODO:[REF_UI]`。
 - 场景壁纸 P5d：透视相机、相机对象、深度与剔除、透明排序。
   - 深度与剔除：场景目标挂 `depth32float`（`render/scene.ts`，每帧清 0、GREATER，`clearenabled: false` 时不清），`normalizeDepthKeys` 规整三个材质键（缺键测深度、`depthwrite` 只在 normal / alphatocoverage 写、缺 `cullmode` 剔背面），`programs.ts` 的 `depthFlags` / `SCENE_DEPTH_FORMAT`，管线键与标签带 `depth:`，合成 RT、fbo、泛光不挂深度；删 `PassContext.model`；删 `cull:normal`、`depthtest:enabled`、`depthwrite:enabled`。

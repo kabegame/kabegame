@@ -183,8 +183,13 @@ token map、`el-` 前缀、`KbTab` / `KbFilterDropdown` 放进 vendored 包等�
 - 浮层不用固定 z-index。打开时 `useLayerZIndex(open)` 向全局计数器取号（3000 起、只增不减），后打开的总在上面；提示消息每推
   一条取一次（`nextLayerZIndex()`）。直接用 Reka 原语写新弹层时也要接它。
 - 例外是桌面图片预览：沿用 `useModal` 的栈位（2000 起），吉祥物按栈位浮在预览之上；预览里再弹出的浮层照常取号（3000 起）在它之上。
+- 模态层（`Dialog`、`AlertDialog`、`Sheet`、`MessageBoxHost`、`Lightbox`）取号时传 `{ modal: true }`，打开期间登记自己的层级号；
+  吉祥物取 `useModal` 栈位与 `topModalLayerZIndex("kamechan")` + 1 的高者，浮在所有模态层之上，之后打开的菜单、气泡取到更大的号照样盖住它。
+  吉祥物自己的对话框（消息历史）传 `layer-owner="kamechan"`，排层级时被排除，不会被吉祥物盖住。P9 之后到这条之前，Reka 对话框
+  不在 `useModal` 栈位里，吉祥物一直被压在所有对话框下面。新写的模态层也要传 `{ modal: true }`。
 - 层的 `@pointer-down-outside` / `@focus-outside` / `@interact-outside` 接 `keepOpenOnToast`：点提示消息（关闭按钮、滑动关闭）
-  不关当前层——提示挂在 body 下、不属于任何层。层与层之间的「层内」由 Reka 按层栈自己判断，不需要额外处理。
+  或常驻浮层（带 `data-kb-persistent`，即吉祥物）不关当前层——它们挂在 body 下、不属于任何层。层与层之间的「层内」由 Reka
+  按层栈自己判断，不需要额外处理。
 
 **滚轮选择**（`PickerSheet` + `WheelColumn`，P9 起取代 `van-picker`）：
 

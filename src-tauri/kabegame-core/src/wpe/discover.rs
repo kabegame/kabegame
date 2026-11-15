@@ -105,10 +105,9 @@ fn windows_steam_path() -> Option<PathBuf> {
 ///
 /// 兼容两种格式：新格式每个库是对象（`path` + `apps`），旧格式直接是 `"1" "D:\\..."`。
 pub fn parse_library_folders(text: &str) -> Vec<(PathBuf, bool)> {
-    let tokens = tokenize_vdf(text);
     // VDF 顶层没有花括号，是裸的「键 值」序列（通常只有一个 "libraryfolders" 键），
     // 所以按隐式对象体解析，不能要求首 token 是 `{`。
-    let Some(root) = parse_vdf_body(&tokens, &mut 0usize, false) else {
+    let Some(root) = parse_vdf(text) else {
         return Vec::new();
     };
     // 旧格式写作 "LibraryFolders"，键名不区分大小写。
@@ -156,6 +155,12 @@ pub fn parse_library_folders(text: &str) -> Vec<(PathBuf, bool)> {
     out
 }
 
+/// 解析文本 VDF（KeyValues）成 JSON 对象：顶层是隐式对象，值只有字符串与对象两种。
+/// 字符串保留原文（不反转义）。Steam 库清单与 PICS 应用信息共用。
+pub(crate) fn parse_vdf(text: &str) -> Option<Map<String, Value>> {
+    parse_vdf_body(&tokenize_vdf(text), &mut 0usize, false)
+}
+
 fn normalize_vdf_path(raw: &str) -> Option<PathBuf> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -188,8 +193,10 @@ fn tokenize_vdf(text: &str) -> Vec<VdfToken> {
                 index += 1;
                 let start = index;
                 while index < bytes.len() && bytes[index] != b'"' {
-                    index += 1;
+                    // `\x` 连同下一个字符跳过，`\"` 不结束字符串；原文保留（路径的 `\\` 由调用方处理）
+                    index += if bytes[index] == b'\\' { 2 } else { 1 };
                 }
+                index = index.min(bytes.len());
                 tokens.push(VdfToken::Str(
                     String::from_utf8_lossy(&bytes[start..index]).into_owned(),
                 ));
@@ -330,6 +337,16 @@ pub fn discover_roots() -> Vec<WpeRoot> {
         }
         // libraryfolders.vdf 可能不列 Steam 自身所在的库；补上安装根。
         push_library(&steam_root, true);
+    }
+    // 「从 Steam 拉取」装到的目录照 Steam 库排（`<库>/steamapps/common/wallpaper_engine`），当作一个库补登。
+    if let Some(library) = super::steam::managed_library().filter(|library| {
+        library
+            .join("steamapps")
+            .join("common")
+            .join("wallpaper_engine")
+            .is_dir()
+    }) {
+        push_library(&library, true);
     }
 
     let mut roots: Vec<WpeRoot> = Vec::new();

@@ -75,7 +75,7 @@ const { t } = useI18n();
 
 const open = defineModel<boolean>("open", { default: false });
 useModalBack(open);
-const zIndex = useLayerZIndex(open);
+const zIndex = useLayerZIndex(open, { modal: true });
 const busy = ref(false);
 
 async function onConfirm() {

@@ -6,7 +6,7 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defineComponent, h, nextTick, ref, withDirectives } from "vue";
+import { defineComponent, effectScope, h, nextTick, ref, withDirectives } from "vue";
 
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 // Android：useModalBack 只在 Android 上接返回栈
@@ -22,7 +22,7 @@ import { useModalStackStore } from "@/stores/modalStack";
 import { closeToast, toast, toastEntries } from "./toast";
 import { messageBox, messageBoxQueue } from "./messageBox";
 import { vLoading } from "./loading";
-import { isInAnyLayer, keepOpenOnToast, nextLayerZIndex } from "./layer";
+import { isInAnyLayer, keepOpenOnToast, nextLayerZIndex, topModalLayerZIndex, useLayerZIndex } from "./layer";
 
 const wrappers: { unmount: () => void }[] = [];
 
@@ -240,6 +240,44 @@ describe("层级工具", () => {
     const elsewhere = new CustomEvent("x", { cancelable: true, detail: { originalEvent: { target: document.body } } });
     keepOpenOnToast(elsewhere as unknown as Event);
     expect(elsewhere.defaultPrevented).toBe(false);
+  });
+
+  it("点到常驻浮层（data-kb-persistent，看板娘）时也不关当前层", () => {
+    const host = document.createElement("div");
+    host.setAttribute("data-kb-persistent", "");
+    const img = document.createElement("img");
+    host.appendChild(img);
+    document.body.appendChild(host);
+    const fromMascot = new CustomEvent("x", { cancelable: true, detail: { originalEvent: { target: img } } });
+    keepOpenOnToast(fromMascot as unknown as Event);
+    expect(fromMascot.defaultPrevented).toBe(true);
+  });
+
+  it("模态层打开期间登记层级号：topModalLayerZIndex 取最高的、可排除打开方，关掉或卸载后撤销", async () => {
+    const before = topModalLayerZIndex();
+    const a = ref(false);
+    const b = ref(false);
+    const menu = ref(false);
+    const scope = effectScope();
+    const [za, zb] = scope.run(() => [
+      useLayerZIndex(a, { modal: true }),
+      useLayerZIndex(b, { modal: true, owner: "kamechan" }),
+      useLayerZIndex(menu),
+    ])!;
+    a.value = true;
+    await nextTick();
+    expect(topModalLayerZIndex()).toBe(za.value);
+    b.value = true;
+    menu.value = true;
+    await nextTick();
+    // 非模态的菜单不登记；排除 kamechan 自己的对话框后，最高的是 a
+    expect(topModalLayerZIndex()).toBe(zb.value);
+    expect(topModalLayerZIndex("kamechan")).toBe(za.value);
+    a.value = false;
+    await nextTick();
+    expect(topModalLayerZIndex("kamechan")).toBe(before);
+    scope.stop();
+    expect(topModalLayerZIndex()).toBe(before);
   });
 
   it("isInAnyLayer：对话框、菜单、提示里算层内，页面上不算", () => {

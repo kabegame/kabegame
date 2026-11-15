@@ -89,7 +89,7 @@ const confirmRef = ref<{ $el?: HTMLElement } | null>(null);
 let switching = false;
 
 useModalBack(open);
-const zIndex = useLayerZIndex(open);
+const zIndex = useLayerZIndex(open, { modal: true });
 
 const showCancel = computed(() => current.value?.kind !== "alert" && current.value?.options.showCancelButton !== false);
 const html = computed(() => DOMPurify.sanitize(current.value?.message ?? ""));

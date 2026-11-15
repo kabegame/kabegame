@@ -47,6 +47,19 @@ uuid = { workspace = true }
 walkdir = "2"
 zip = { workspace = true }
 
+# 从 Steam 拉取 WPE（`wpe::steam`，只随 `wpe` feature）：CM 连接用 steam-vent（MIT，自带 WebSocket 与 protobuf），
+# 登录经 HTTPS 调 IAuthenticationService；CDN 的解密 / 解压 / 校验自己做。zstd 用纯 Rust 的 ruzstd（仓库禁止链 C 的 zstd）。
+steam-vent = { version = "0.5", optional = true }
+steam-vent-proto-steam = { version = "0.5.2", optional = true }
+steam-vent-proto-common = { version = "0.5.1", optional = true }
+rsa = { version = "0.9", features = ["getrandom"], optional = true }
+aes = { version = "0.8", optional = true }
+sha1 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+lzma-rust2 = { version = "0.16", optional = true }
+ruzstd = { version = "0.8", optional = true }
+qrcode = { version = "0.14", default-features = false, features = ["image"], optional = true }
+
 # 桌面端与移动端实际都用 native-tls（移动端原因见下方移动端 reqwest 说明）。
 # native-tls-alpn：握手时声明 h2，让桌面请求能与 rustls 一样协商 HTTP/2（native-tls 默认不带 ALPN，
 # 只能走 HTTP/1.1；插件设桌面 Chrome UA 时，Cloudflare 对「Chrome UA + HTTP/1.1」会下发 challenge，
@@ -144,7 +157,18 @@ windows-sys = { version = "0.52", features = [
 default = ["ipc-client", "plugin-runtime", "wpe"]
 # Wallpaper Engine 壁纸的发现、导入与内建插件 wpe-import。桌面主程序与 CLI 开启，Android / Web 不开；
 # 依赖方都是 default-features = false，放进 default 只为让 core 单独测试时覆盖这部分。
-wpe = []
+wpe = [
+  "dep:steam-vent",
+  "dep:steam-vent-proto-steam",
+  "dep:steam-vent-proto-common",
+  "dep:rsa",
+  "dep:aes",
+  "dep:sha1",
+  "dep:hex",
+  "dep:lzma-rust2",
+  "dep:ruzstd",
+  "dep:qrcode",
+]
 ipc-client = []
 ipc-server = []
 virtual-driver = ["dep:fuser", "dep:dokan"]

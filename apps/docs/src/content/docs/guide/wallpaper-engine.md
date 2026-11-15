@@ -65,7 +65,7 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 | 你的情况 | 要做什么 |
 |---|---|
 | 在 Windows 上通过 Steam 安装了 WPE | 什么都不用做，Kabegame 自动找到 |
-| 在 macOS、Linux 上，或者不想在这台电脑上装 WPE | 自己把资源放到本机，见下文 |
+| 在 macOS、Linux 上，或者不想在这台电脑上装 WPE | 在 Kabegame 里从 Steam 拉取（推荐），或自己把资源放到本机，见下文 |
 
 :::note
 场景壁纸目前只能渲染一小部分。用到尚未支持的特性时（例如文字、粒子、声音）显示作者的预览图，这是正常现象。
@@ -76,14 +76,29 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 ## 拿到 WPE 资源
 
 :::caution[付费与版权前提]
-WPE 是 Steam 上的付费应用（app id 431960）。Kabegame 不附带它的文件，也不提供下载，你需要自己购买。
+WPE 是 Steam 上的付费应用（app id 431960）。Kabegame 不附带它的文件，只能用你自己已购买的 Steam 账号下载。
 
 默认壁纸（比如 Razer Bedroom）是 WPE 自带的，不是创意工坊条目，没有单独的公开下载。
 
 不要用第三方转存包：那是付费软件里的内容，来源也不可靠。
 :::
 
-### 方法一：从装了 WPE 的 Windows 电脑复制（推荐）
+### 方法一：在 Kabegame 里从 Steam 拉取（推荐）
+
+1. 在画廊的「开始收集」里选「壁纸」，对话框顶部的来源切到「从 Steam」。
+2. 登录购买了 WPE 的 Steam 账号，二选一：
+   - **扫码**：打开 Steam 手机 App 的「Steam 令牌 → 扫描二维码」，扫对话框里的二维码，再在手机上确认。不需要输密码。
+   - **账号密码**：输入账号和密码。需要邮箱验证码或 Steam 令牌验证码时，对话框里会出现输入框；开着手机确认的账号在手机上点确认即可。
+3. 点「开始导入」。任务把 WPE 下载到 Kabegame 的数据目录，自动写进「Wallpaper Engine 目录」设置，并导入官方默认壁纸。
+
+说明：
+
+- 第一次下载约 380 MB，占用约 800 MB 磁盘。之后再拉取只下载有变化的文件，WPE 没更新时什么都不下载。
+- 密码只用于这次登录，不会保存。Kabegame 保存的是登录凭证，有效期内再打开对话框会显示「以 <账号> 继续」，不用重新登录。要收回授权，在 Steam 的「已授权的设备」里删掉 Kabegame。
+- 设置里已经有「Wallpaper Engine 目录」（比如 Windows 上 Steam 装的 WPE）时不会下载。想改用拉取的版本，先到设置的壁纸分区点「恢复默认」清空。
+- 拉取过程在任务抽屉里看进度和日志，可以随时取消，下次接着下载。
+
+### 方法二：从装了 WPE 的 Windows 电脑复制
 
 Steam 上的默认位置是 `<Steam 库>\steamapps\common\wallpaper_engine\`，例如 `D:\Applications\Steam\steamapps\common\wallpaper_engine\`。
 
@@ -108,7 +123,7 @@ wallpaper_engine/
 
 创意工坊壁纸在 `<Steam 库>\steamapps\workshop\content\431960\`，要用的话也复制过来，放在别处也行，用「添加文件夹」导入。它们和默认壁纸共用同一份 `assets`。
 
-### 方法二：没有 Windows 电脑时用 DepotDownloader
+### 方法三：用 DepotDownloader 手动下载
 
 [DepotDownloader](https://github.com/SteamRE/DepotDownloader) 是开源命令行工具，可以用你自己已购买 WPE 的 Steam 账号，在其它系统上下载 Windows 版文件。
 
@@ -133,7 +148,7 @@ depotdownloader -app 431960 -os windows -username <你的账号> -dir ~/wpe/wall
 
 ### 目录要求
 
-无论用哪种方法，放好的目录都要满足：
+方法二、方法三放好的目录都要满足（方法一由 Kabegame 自己放好，不用管）：
 
 - 目录里必须有 `assets/shaders/common.h`，否则选择时会报错。自动查找也用这条判断。
 - 目录名不要求必须叫 `wallpaper_engine`，里面的结构要保留。

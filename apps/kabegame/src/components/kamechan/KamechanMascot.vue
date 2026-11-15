@@ -5,6 +5,7 @@
       v-show="!kamechanHidden"
       ref="hostEl"
       class="kamechan-host"
+      data-kb-persistent
       :class="{ 'is-minimized': minimized, 'is-dragging': isDragging }"
       :style="hostStyle"
       @contextmenu.prevent="showMenu"
@@ -77,6 +78,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type CSSProperties } from "vue";
 import { useModal } from "@/composables/useModal";
 import { useModalStackStore } from "@/stores/modalStack";
+import { topModalLayerZIndex } from "@/components/ui/layer";
 import { storeToRefs } from "pinia";
 import { EyeOff, History, Maximize2, Minus } from "@lucide/vue";
 import ActionRenderer from "@/components/ActionRenderer.vue";
@@ -114,7 +116,16 @@ const historyOpen = ref(false);
 const toolboxModal = useModal({ owner: KAMECHAN_MODAL_OWNER });
 const modalStack = useModalStackStore();
 /** 始终浮在其它弹层之上：消息气泡（如设置弹窗里的报错）不能被弹窗压住 */
-const hostZIndex = computed(() => modalStack.topZIndex(KAMECHAN_MODAL_OWNER) ?? KAMECHAN_BASE_Z_INDEX);
+/**
+ * 常驻在所有弹层之上（不含自己打开的）：useModal 栈位（预览等，2000 起）与 layer.ts 登记的模态层
+ * （Reka 对话框 / 侧边面板 / 确认框 / 看图，3000 起）取高者。之后打开的菜单、气泡取到更大的号，照样盖住它；
+ * 点它不会关掉底下的模态层（data-kb-persistent，见 layer.ts 的 keepOpenOnToast）。
+ */
+const hostZIndex = computed(() => {
+  const stackZ = modalStack.topZIndex(KAMECHAN_MODAL_OWNER) ?? KAMECHAN_BASE_Z_INDEX;
+  const layerZ = topModalLayerZIndex(KAMECHAN_MODAL_OWNER);
+  return layerZ === null ? stackZ : Math.max(stackZ, layerZ + 1);
+});
 const { count: busyCount, hasUnseenFailure, markFailuresSeen } = useBusyTasks();
 const badgeVisible = computed(() => busyCount.value > 0 || hasUnseenFailure.value);
 const hostEl = ref<HTMLElement | null>(null);

@@ -95,6 +95,8 @@ const props = withDefaults(
     height?: number | string;
     /** 铺满窗口、去掉圆角（紧凑档的大对话框） */
     fullscreen?: boolean;
+    /** 打开方标记（如看板娘自己的对话框传 "kamechan"），常驻浮层排层级时据此排除自己打开的，见 layer.ts */
+    layerOwner?: string;
   }>(),
   { width: 480, closeOnOverlay: true, closeOnEsc: true },
 );
@@ -127,7 +129,7 @@ const { t } = useI18n();
 
 const open = defineModel<boolean>("open", { default: false });
 useModalBack(open);
-const zIndex = useLayerZIndex(open);
+const zIndex = useLayerZIndex(open, { modal: true, owner: props.layerOwner });
 
 function onPointerDownOutside(e: Event) {
   if (!props.closeOnOverlay) e.preventDefault();

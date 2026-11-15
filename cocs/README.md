@@ -170,6 +170,14 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     排查在预览的网页 / 场景壁纸上右键不弹菜单或菜单位置不对；排查「设为壁纸封面」「暂停」菜单项不出现、一直置灰或过早可用、封面截到残缺画面或带上看板娘、截取时窗口跳变、恢复后封面不对；
     排查导入后缺标签或标签与 WPE 显示不一致、标签名称没翻译或语言不对。
 
+- [wpe/WPE_STEAM.md](wpe/WPE_STEAM.md)
+  - 主题：内建插件 `wpe-import` 的「从 Steam 拉取 Wallpaper Engine」。
+    - **登录**：对话框分步、每步一次 HTTPS 调 `IAuthenticationService`（扫码 / 账号密码 / Steam Guard，`SteamClient` 平台类型，`aud` 含 `client`）；网页 Cookie 为什么不能用；复用前连一次 CM 验证（HTTPS 的 `GenerateAccessTokenForApp` 对客户端 token 返回 63）。
+    - **会话与插件数据私有区**：token 存 `wpe-import` 插件数据的 `__private`，`PluginDataStorage::get` 剥掉、`set` 保留，任务参数只带账号名。
+    - **CM 与 CDN**：`steam-vent` 登录 CM、PICS 取 public 分支 depot、depot 密钥、manifest request code（public 时 `app_branch` 留空）、CDN 服务器（vhost、`mandatory` 才 https）与按 `host` 申请的 CDN 授权 token（403 时申请）；manifest 分段与文件名解密（base64 带换行）、chunk 的三种封装与 SHA-1 校验。
+    - **安装**：只在「Wallpaper Engine 目录」为空时下载、是应用管理目录时增量更新；目录照 Steam 库排在 `plugins-data/wpe-import/` 下、被 `discover_roots` 当作一个库；安装状态、`.kbpart` 与续传、并发与 `Send` 的写法、进度分配。
+  - 适用场景：改 Steam 登录或会话、排查拉取失败（登录失效、没买、CDN 403、manifest / chunk 解析失败）、拉取后场景壁纸仍找不到 `assets`、插件数据里的私有键、接入创意工坊订阅。
+
 - [wpe/WPE_SCENE.md](wpe/WPE_SCENE.md)
   - 主题：场景壁纸（`x-wpe/scene`）的前端渲染路线：WebGPU 在 `WallpaperStage` 的 scene 层、前端 `fetch(file:)` 读资源、前端编译，Rust 只做导入；以及着色器翻译器 `wpesl2wgsl` 的摘要。翻译器的完整契约见 [../src-tauri/wpesl2wgsl/README.md](../src-tauri/wpesl2wgsl/README.md)：
     - **构建**：编成 wasm、不链进应用；`deno task build:wpesl2wgsl` 产出到 `bin/wasm/wpesl2wgsl/`，kabegame 命令不带 `--skip vue` 时拷进前端，缺失只告警。

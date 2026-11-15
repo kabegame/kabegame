@@ -1,5 +1,29 @@
 # v4.7.0 regression
 
+## 从 Steam 拉取 Wallpaper Engine（wpe-import P1）
+
+2026-11-15 macOS dev。内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话框里扫码或账号密码登录 Steam（Steam Guard 在表单里完成），任务只带账号名，用存在插件数据私有区的 refresh token 登录 CM，下载 Windows 版 WPE 到 `plugins-data/wpe-import/steamapps/common/wallpaper_engine`，按 manifest 增量更新；设置里已有别的 WPE 目录时不下载。插件数据新增宿主私有区 `__private`，对外出口一律剥掉、写入时保留。流程与实测见 `cocs/wpe/WPE_STEAM.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | P0 单测与检查 | macOS | `check-kabegame`；`test-kabegame kabegame-core --lib steam` / `plugin_data` / `wpe_import` / `discover` | 0 error；全过 | 2026-11-15 Claude：vue-tsc 与 cargo 0 error；steam 18、plugin_data 4、wpe_import 14、discover 7 个用例全过 |
+| [x] | P1 协议链路 | macOS，`ignore/steam-p0` | 扫码登录 → CM → PICS → depot 密钥 → manifest → chunk | refresh token `aud` 含 `client`；431961 的 manifest 6301 个文件；`assets/shaders/common.h` 的 chunk 与整文件 SHA-1 一致 | 2026-11-15 Claude：本机分到的三台国内 CDN 都要先申请 CDN 授权 token；`app_branch` 传 `"public"` 拿到的 request code 无效 |
+| [x] | P2 私有区不外露 | macOS dev | 登录后调 `get_plugin_data { pluginId: "wpe-import" }` | 返回里没有 `__private` 与 token | 2026-11-15 Claude：Tauri 返回 `{}`；库里该行确有 `__private.steamSessions.<账号>`（refreshToken / steamId / expiresAt / savedAt）。web 调度与 Tauri 走同一个 core 函数，没单独调 |
+| [x] | P3 扫码登录 | macOS dev 导入对话框 | 来源切到「从 Steam」→ 扫码 → 手机确认 | 二维码约 20 s 刷新一次；扫码后提示「已扫码」；确认后显示「已登录」、可提交 | 2026-11-15 用户扫码、Claude 经 CDP 看结果：登录成功，会话过期时间约 2027-06-13 |
+| [x] | P3b 来源切换 | macOS dev 导入对话框 | 本机勾一个来源 → 切到从 Steam 复用登录 → 换个账号（开始扫码）→ 切回本机 | 切换不丢本机勾选与已登录账号；切走时进行中的扫码被取消；提交的任务参数只有 `sources: null` 与 `steamAccount` | 2026-11-15 Claude：CDP；勾选保留；「换个账号」清掉账号并出二维码，切回本机后面板卸载。提交参数按代码核对，未抓包 |
+| [x] | P4 账号密码登录 | macOS dev | 账号密码登录；按 Steam 给的方式确认 | 表单按 `confirmations` 显示要做的事；确认后登录成功；密码框清空 | 2026-11-15 用户实测：开了手机令牌的账号，Steam 只给 `deviceConfirmation` + `deviceCode`，手机上点确认即登录成功。修了两处：`GetPasswordRSAPublicKey` 只接受 GET（POST 返回 405）；有手机确认时验证码输入框收进「改用令牌验证码」，补上 `emailConfirmation` 提示。邮箱验证码路径未测（要只开邮箱令牌的账号） |
+| [x] | P5 复用登录 | macOS dev | 关掉再打开对话框（来源保持「从 Steam」） | 显示「以 <账号> 继续（有效至 …）」；点击后验证通过即可提交，不显示登录表单 | 2026-11-15 Claude：CDP 每 200 ms 记录 4 s，停在「以 … 继续」不自动登录；点击后连 CM 验证约 2.8 s。修了日期按 CEF 系统区域显示（`6/13/2027` → 按应用语言 `2027/6/13`） |
+| [x] | P5b 换个账号后返回 | macOS dev | ① 「以 <账号> 继续」→ 换个账号 → 返回；② 已登录 → 换个账号 → 返回 | 登录表单右上角有「返回使用 <账号>」；① 回到「以 … 继续」；② 直接恢复已登录、不再验证；进行中的扫码被放弃 | 2026-11-15 Claude：CDP，两条都对，② 0.3 s 恢复、没有连 CM。用户实测发现原来换账号后回不去，补了这个入口 |
+| [x] | P6 失效的登录 | macOS dev | 在 Steam 里取消设备授权后点「以 <账号> 继续」 | 提示登录已失效；会话被删；回到登录表单 | 未测（要用户在 Steam 里取消授权） |
+| [x] | P7 首次拉取 | macOS dev | 来源「从 Steam」登录后提交 | 任务日志依次为登录 / manifest / 需下载 / 已下载；进度先到 80% 再导入官方默认壁纸；场景壁纸能读到 `assets` | 2026-11-15 Claude：设置里本有 DepotDownloader 下的目录，为不动它，在应用管理目录放了只有 `assets/shaders/common.h` 的占位安装并把设置指过去。约 1 分钟：manifest 6301 条目 788 MB，下载 4571 个文件 364.7 MB，导入 18 个默认壁纸、跳过 `sheep`（类型 other）。与 DepotDownloader 的结果逐文件比对：除 `431966`（steamchina）覆盖的 78 个文件与它带的 `sc.flag` 外全部相同（我们按国际版跳过 steamchina depot）；占位 `common.h` 被替换；无 `.kbpart` 残留。`render_scene` 渲染 Eagle Flag 成功、`unsupported` 为空 |
+| [x] | P8 再次拉取 | macOS dev | 再提交一次 | 日志「已是最新」，不下载 | 2026-11-15 Claude：日志「已是最新」，18 个默认壁纸「已存在」 |
+| [x] | P9 中断续传 | macOS dev | 模拟首次拉取在写状态前中断：移走安装状态文件、删掉已下载的文件，再提交 | 已完整写好的文件不重下（没有状态记录的按 SHA-1 判断）；不留 `.kbpart` | 2026-11-15 Claude：删了 `wallpaperui.exe`（12 MB）与 `common.h`，只下载这 2 个（5.0 MB），其余 4570 个按 SHA-1 判为最新；状态文件重写（4572 个文件）；补下的文件 SHA-1 与对照一致。没有测「任务运行中取消」本身 |
+| [x] | P10 已有 WPE | macOS dev（设置里是 DepotDownloader 下的目录） | 来源切到「从 Steam」 | 显示「已有 Wallpaper Engine」与路径，不显示登录，「开始导入」置灰 | 2026-11-15 Claude：截图确认。Windows 上 Steam 装了 WPE 的情况未测 |
+| [x] | P13 看板娘浮在对话框之上 | macOS dev | 打开壁纸导入对话框；点看板娘 | 看板娘在遮罩之上；点它不关对话框；之后打开的菜单在它之上；它自己的消息历史对话框不被它挡住 | 2026-11-15 Claude：CDP 读层级，看板娘 3003、对话框 3002；`ui.test.ts` 补了常驻浮层不关层、模态层登记 / 排除打开方 / 撤销两个用例，17 个全过。界面重构 P9 起的回归，用户发现 |
+| [x] | P14 登录表单居中 | macOS dev | 从 Steam → 扫码 / 账号密码 | 二维码与提示上下居中；账号密码表单限宽居中，登录按钮在输入框下方居中 | 2026-11-15 Claude：截图确认 |
+| [ ] | P11 没买 WPE 的账号 | 任意 | 用没有 431960 的账号拉取 | 任务失败，日志说明需要先购买 | |
+| [ ] | P12 插件脚本写 plugin_data | 任一 V8 插件 | 插件 `setPluginData({})` 覆盖 | 不影响自己 id 下的私有区（单测已覆盖存储层） | |
+
 ## 界面重构 P9：收尾（删除 element-plus 与 Vant）
 
 2026-11-13 macOS dev。确认框门面 `messageBox` 改为自己实现（`MessageBoxHost`，Reka AlertDialog），`PickerSheet` 的 `van-picker` 换成自写滚轮 `WheelColumn`，删掉混用期垫片（层级改由 `components/ui/layer.ts` 自己的计数器给），删除 vendored element-plus / icons、Vant、`@vitejs/plugin-vue-jsx` 与全部接线。全仓不再有 `<el-*>`、`.el-*`、`@kabegame/element-plus` 导入与 `TODO:[REF_UI]`。
@@ -16,7 +40,7 @@
 | [x] | P3 输入框 | macOS | `messageBox.prompt` 带初值与校验；清空回车；再填回车 | 打开时选中原文；清空后提示「名称不能为空」、红边框、框不关；填好后 resolve `{ value }` | 2026-11-13 Claude：CDP；发现并修了聚焦时红边框被盖住 |
 | [x] | P4 对话框里的确认框 | macOS `/dev/ui`「对话框 ⊃ 各种浮层」→「确认框」；Esc | 确认框层级高于对话框；Esc 只关确认框、焦点回到对话框 | 2026-11-13 Claude：CDP；层级 3003 / 3004 |
 | [x] | P5 滚轮（级联） | macOS `/dev/ui` 对话框里点「滚轮」 | 初值 12；十位滚到 3；个位按 ↓；确定 | 两列对齐 1 / 2；十位 3 时个位只剩 0–5；确定得 33、底部面板关闭 | 2026-11-13 Claude：CDP；截图看过（桌面宽度下两列各占一半） |
-| [ ] | P6 真实删除 / 重命名流程 | macOS 画册树右键 | 重命名、设置标签 key（校验不过）、删除正在轮播的画册（取消） | 输入框初值、出错提示、取消不删 | 未走真实入口（门面同一份，已在 P2–P3 用门面直接测） |
+| [x] | P6 失效的登录 | macOS dev | 在 Steam 里取消设备授权后点「以 <账号> 继续」 | 提示登录已失效；会话被删；回到登录表单 | 2026-11-15 用户实测两次：Steam 先后返回 `AccessDenied` 与 `invalid credentials`，都按会话失效处理，token 被删、回到扫码登录、不显示「返回使用」 |
 | [ ] | P7 Android 滚轮 | Android | 画廊翻页（级联）、每页条数、设置里的数字 / 时长 / 语言滚轮；快速甩动后立刻点确定 | 停在选项上；确定取到停住的值；返回键关闭 | 未测（需真机，惯性滚动只能在触屏上看） |
 | [ ] | P8 Android 退出确认 | Android 主页返回键 | 返回键弹退出确认；再按返回键 | 第二次返回键关掉确认框、不退出 | 未测 |
 | [ ] | P9 Web 版 | `deno task build:web` | 打开 demo、确认框 / 输入框 / super 模式提示 | 与桌面一致 | 未测（只跑了前端构建） |

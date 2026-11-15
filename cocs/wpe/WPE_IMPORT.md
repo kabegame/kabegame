@@ -740,7 +740,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 ## 七、已知边界
 
 - **Android / Web 没有 WPE**（`wpe` feature 不开）：不发现、不导入、不渲染，`x-wpe/*` 行只显示作者预览图。
-- **macOS / Linux 的限制**：Steam 上装不了 WPE，`libraryfolders.vdf` 通常不含 431960，自动发现大概率为空，主要靠手选文件夹。
+- **macOS / Linux 的限制**：Steam 上装不了 WPE，`libraryfolders.vdf` 通常不含 431960，自动发现大概率为空，主要靠手选文件夹，或用「从 Steam 拉取」把 WPE 下载到 `plugins-data/wpe-import/`（`discover_roots` 把它当作一个 Steam 库，见 [WPE_STEAM.md](WPE_STEAM.md)）。
   场景壁纸依赖 WPE 安装目录的 `assets`，找不到时退回预览图（`assets:missing`）。Linux 的 CEF 未启用 WebGPU 时同样退回（`webgpu:unavailable`）。
   macOS 窗口壁纸没有鼠标转发，网页壁纸在桌面上不可交互。Linux 没有窗口壁纸模式，设为壁纸直接报错。
 - **WPE 安装目录**：只有一个，存在设置 `wpeEngineDir`（`wpe::discover::engine_dir`），三个桌面平台通用，场景的 `assets`、`config.json` 与 `ui_` 词条都读它。

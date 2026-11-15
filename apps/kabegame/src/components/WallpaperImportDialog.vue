@@ -1,111 +1,121 @@
 <template>
   <Dialog v-model:open="open" :title="$t('gallery.wallpaperImportTitle')" :width="640">
     <div class="flex flex-col gap-3">
-      <div class="flex items-start justify-between gap-3">
-        <p class="m-0 text-[12.5px] leading-[1.6] text-kb-fg-muted">
-          {{ $t("gallery.wpeScanHint") }}
-        </p>
-        <Button variant="ghost" size="sm" :disabled="scanning" @click="refreshScan">
-          <RefreshCw :class="{ 'animate-spin': scanning }" />
-          {{ $t("gallery.wpeRescan") }}
-        </Button>
-      </div>
+      <!-- 来源：本机（Steam 库自动发现 + 手选文件夹）/ 从 Steam（登录后拉取 Wallpaper Engine） -->
+      <SegmentedControl v-model="importSource" :options="importSourceOptions" class="max-w-[320px]" />
 
-      <SectionTitle>{{ $t("gallery.wpeSectionSources") }}</SectionTitle>
+      <template v-if="importSource === 'steam'">
+        <SectionTitle>{{ $t("gallery.wpeSteamTitle") }}</SectionTitle>
+        <WpeSteamPanel :key="openCount" v-model:account="steamAccount" v-model:blocked="steamBlocked" />
+      </template>
 
-      <div class="flex max-h-[46vh] flex-col gap-2 overflow-y-auto pr-1">
-        <!-- 扫描中：骨架卡片，避免整块 loading 遮罩 -->
-        <template v-if="scanning && !sources.length">
-          <div v-for="n in 3" :key="`sk-${n}`" :class="CARD_CLASS" class="pointer-events-none border-kb-line">
-            <Skeleton class="size-9 shrink-0" />
-            <div class="flex flex-1 flex-col gap-2 py-0.5">
-              <Skeleton class="h-3.5 w-1/3" />
-              <Skeleton class="h-3 w-2/3" />
+      <template v-else>
+        <div class="flex items-start justify-between gap-3">
+          <p class="m-0 text-[12.5px] leading-[1.6] text-kb-fg-muted">
+            {{ $t("gallery.wpeScanHint") }}
+          </p>
+          <Button variant="ghost" size="sm" :disabled="scanning" @click="refreshScan">
+            <RefreshCw :class="{ 'animate-spin': scanning }" />
+            {{ $t("gallery.wpeRescan") }}
+          </Button>
+        </div>
+
+        <SectionTitle>{{ $t("gallery.wpeSectionSources") }}</SectionTitle>
+
+        <div class="flex max-h-[46vh] flex-col gap-2 overflow-y-auto pr-1">
+          <!-- 扫描中：骨架卡片，避免整块 loading 遮罩 -->
+          <template v-if="scanning && !sources.length">
+            <div v-for="n in 3" :key="`sk-${n}`" :class="CARD_CLASS" class="pointer-events-none border-kb-line">
+              <Skeleton class="size-9 shrink-0" />
+              <div class="flex flex-1 flex-col gap-2 py-0.5">
+                <Skeleton class="h-3.5 w-1/3" />
+                <Skeleton class="h-3 w-2/3" />
+              </div>
             </div>
-          </div>
-        </template>
+          </template>
 
-        <!-- 自动发现的来源：整张卡片可点选 -->
-        <div
-          v-for="source in sources"
-          :key="source.kind"
-          :class="[CARD_CLASS, isSelected(source) ? CARD_SELECTED_CLASS : CARD_IDLE_CLASS]"
-          class="cursor-pointer"
-          role="checkbox"
-          :aria-checked="isSelected(source)"
-          tabindex="0"
-          @click="toggle(source)"
-          @keydown.space.prevent="toggle(source)"
-          @keydown.enter.prevent="toggle(source)"
-        >
-          <span :class="ICON_CLASS">
-            <component :is="iconForKind(source.kind)" />
-          </span>
-          <div class="flex min-w-0 flex-1 flex-col gap-1">
-            <span class="text-[13.5px] font-600 leading-5 text-kb-fg">{{ sourceLabel(source) }}</span>
-            <span class="truncate text-[12px] text-kb-fg-muted" :title="source.paths.join('\n')">
-              {{ pathText(source) }}
-            </span>
-            <div class="mt-0.5 flex flex-wrap gap-1.5">
-              <span v-for="chip in statChips(source)" :key="chip.tone" :class="[CHIP_CLASS, CHIP_TONES[chip.tone]]">
-                {{ chip.text }}
-              </span>
-            </div>
-          </div>
-          <span
-            class="mt-0.5 box-border grid size-[18px] shrink-0 place-items-center rounded-full border-[1.5px] border-solid transition-colors duration-150"
-            :class="isSelected(source) ? 'border-kb-accent bg-kb-accent text-white' : 'border-kb-line-strong'"
-            aria-hidden="true"
+          <!-- 自动发现的来源：整张卡片可点选 -->
+          <div
+            v-for="source in sources"
+            :key="source.kind"
+            :class="[CARD_CLASS, isSelected(source) ? CARD_SELECTED_CLASS : CARD_IDLE_CLASS]"
+            class="cursor-pointer"
+            role="checkbox"
+            :aria-checked="isSelected(source)"
+            tabindex="0"
+            @click="toggle(source)"
+            @keydown.space.prevent="toggle(source)"
+            @keydown.enter.prevent="toggle(source)"
           >
-            <Check v-if="isSelected(source)" class="size-3" :stroke-width="3" />
-          </span>
-        </div>
-
-        <!-- 没扫到时的说明（仍可手动添加文件夹） -->
-        <Alert v-if="!scanning && !sources.length" tone="warning">
-          {{ $t("gallery.wpeNoSources") }}
-        </Alert>
-
-        <!-- 手动添加的文件夹 -->
-        <div v-for="(source, idx) in extraDirs" :key="source.paths[0]" :class="[CARD_CLASS, CARD_SELECTED_CLASS]">
-          <span :class="ICON_CLASS">
-            <Folder />
-          </span>
-          <div class="flex min-w-0 flex-1 flex-col gap-1">
-            <span class="text-[13.5px] font-600 leading-5 text-kb-fg">{{ $t("gallery.wpeSourceCustom") }}</span>
-            <span class="truncate text-[12px] text-kb-fg-muted" :title="source.paths[0]">
-              {{ source.paths[0] }}
+            <span :class="ICON_CLASS">
+              <component :is="iconForKind(source.kind)" />
             </span>
-            <div class="mt-0.5 flex flex-wrap gap-1.5">
-              <span v-for="chip in statChips(source)" :key="chip.tone" :class="[CHIP_CLASS, CHIP_TONES[chip.tone]]">
-                {{ chip.text }}
+            <div class="flex min-w-0 flex-1 flex-col gap-1">
+              <span class="text-[13.5px] font-600 leading-5 text-kb-fg">{{ sourceLabel(source) }}</span>
+              <span class="truncate text-[12px] text-kb-fg-muted" :title="source.paths.join('\n')">
+                {{ pathText(source) }}
               </span>
+              <div class="mt-0.5 flex flex-wrap gap-1.5">
+                <span v-for="chip in statChips(source)" :key="chip.tone" :class="[CHIP_CLASS, CHIP_TONES[chip.tone]]">
+                  {{ chip.text }}
+                </span>
+              </div>
             </div>
-          </div>
-          <Tooltip :content="$t('common.remove')">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              class="-mr-1 -mt-0.5"
-              :aria-label="$t('common.remove')"
-              @click="extraDirs.splice(idx, 1)"
+            <span
+              class="mt-0.5 box-border grid size-[18px] shrink-0 place-items-center rounded-full border-[1.5px] border-solid transition-colors duration-150"
+              :class="isSelected(source) ? 'border-kb-accent bg-kb-accent text-white' : 'border-kb-line-strong'"
+              aria-hidden="true"
             >
-              <X />
-            </Button>
-          </Tooltip>
-        </div>
+              <Check v-if="isSelected(source)" class="size-3" :stroke-width="3" />
+            </span>
+          </div>
 
-        <button
-          type="button"
-          class="box-border flex w-full shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-kb-lg border border-dashed border-kb-line-strong bg-transparent p-2.5 [font:inherit] text-[13px] text-kb-fg-muted outline-none transition-colors duration-150 hover:border-kb-fg-subtle hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring disabled:cursor-progress [&_svg]:size-4"
-          :disabled="adding"
-          @click="handleAddFolder"
-        >
-          <Spinner v-if="adding" :size="16" />
-          <FolderPlus v-else />
-          <span>{{ $t("gallery.wpeAddFolder") }}</span>
-        </button>
-      </div>
+          <!-- 没扫到时的说明（仍可手动添加文件夹） -->
+          <Alert v-if="!scanning && !sources.length" tone="warning">
+            {{ $t("gallery.wpeNoSources") }}
+          </Alert>
+
+          <!-- 手动添加的文件夹 -->
+          <div v-for="(source, idx) in extraDirs" :key="source.paths[0]" :class="[CARD_CLASS, CARD_SELECTED_CLASS]">
+            <span :class="ICON_CLASS">
+              <Folder />
+            </span>
+            <div class="flex min-w-0 flex-1 flex-col gap-1">
+              <span class="text-[13.5px] font-600 leading-5 text-kb-fg">{{ $t("gallery.wpeSourceCustom") }}</span>
+              <span class="truncate text-[12px] text-kb-fg-muted" :title="source.paths[0]">
+                {{ source.paths[0] }}
+              </span>
+              <div class="mt-0.5 flex flex-wrap gap-1.5">
+                <span v-for="chip in statChips(source)" :key="chip.tone" :class="[CHIP_CLASS, CHIP_TONES[chip.tone]]">
+                  {{ chip.text }}
+                </span>
+              </div>
+            </div>
+            <Tooltip :content="$t('common.remove')">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                class="-mr-1 -mt-0.5"
+                :aria-label="$t('common.remove')"
+                @click="extraDirs.splice(idx, 1)"
+              >
+                <X />
+              </Button>
+            </Tooltip>
+          </div>
+
+          <button
+            type="button"
+            class="box-border flex w-full shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-kb-lg border border-dashed border-kb-line-strong bg-transparent p-2.5 [font:inherit] text-[13px] text-kb-fg-muted outline-none transition-colors duration-150 hover:border-kb-fg-subtle hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring disabled:cursor-progress [&_svg]:size-4"
+            :disabled="adding"
+            @click="handleAddFolder"
+          >
+            <Spinner v-if="adding" :size="16" />
+            <FolderPlus v-else />
+            <span>{{ $t("gallery.wpeAddFolder") }}</span>
+          </button>
+        </div>
+      </template>
 
       <SectionTitle class="mt-1">{{ $t("gallery.webpageSectionSaveTo") }}</SectionTitle>
 
@@ -131,7 +141,11 @@
     <template #footer>
       <span class="mr-auto text-[12px] text-kb-fg-muted">{{ footerText }}</span>
       <Button @click="open = false">{{ $t("common.cancel") }}</Button>
-      <Button variant="primary" :disabled="!canSubmit || scanning || submitting" @click="handleSubmit">
+      <Button
+        variant="primary"
+        :disabled="!canSubmit || (importSource === 'local' && scanning) || submitting"
+        @click="handleSubmit"
+      >
         <Spinner v-if="submitting" :size="14" />
         {{ $t("albums.startImport") }}
       </Button>
@@ -143,7 +157,7 @@
 import { computed, reactive, ref, watch, type Component } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Box, Check, Folder, FolderPlus, RefreshCw, Store, User, X } from "@lucide/vue";
-import { Alert, Button, Dialog, Field, Skeleton, Spinner, Switch, Tooltip } from "@/components/ui";
+import { Alert, Button, Dialog, Field, SegmentedControl, Skeleton, Spinner, Switch, Tooltip } from "@/components/ui";
 import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
@@ -152,6 +166,7 @@ import { HIDDEN_ALBUM_ID } from "@/services/albums";
 import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import SectionTitle from "@/components/ui/SectionTitle.vue";
+import WpeSteamPanel from "@/components/WpeSteamPanel.vue";
 
 /** 与后端 `WpeSourceInfo` 对应。 */
 interface WpeSourceInfo {
@@ -211,6 +226,17 @@ const selected = reactive<Record<string, boolean>>({});
 const extraDirs = ref<WpeSourceInfo[]>([]);
 const outputAlbumId = ref<string | null>(null);
 const isDryRun = ref(false);
+/** 导入来源。关掉对话框不重置：上次选的来源下次打开还在 */
+const importSource = ref<"local" | "steam">("local");
+const importSourceOptions = computed(() => [
+  { label: t("gallery.wpeSourceLocal"), value: "local" as const },
+  { label: t("gallery.wpeSourceSteam"), value: "steam" as const },
+]);
+/** 「从 Steam」：面板登录好的账号（有账号才可提交）；设置里已有别的 WPE 目录时不能提交 */
+const steamAccount = ref<string | null>(null);
+const steamBlocked = ref(false);
+/** 每次打开 +1，让 Steam 面板重新挂载、重新读状态 */
+const openCount = ref(0);
 
 const labelForKind: Record<string, string> = {
   workshop: "gallery.wpeSourceWorkshop",
@@ -269,12 +295,20 @@ function statChips(source: WpeSourceInfo): { tone: "plain" | "primary" | "muted"
 }
 
 const selectedSources = computed(() => sources.value.filter(isSelected));
-const canSubmit = computed(() => selectedSources.value.length > 0 || extraDirs.value.length > 0);
+const canSubmit = computed(() =>
+  importSource.value === "steam"
+    ? !!steamAccount.value && !steamBlocked.value
+    : selectedSources.value.length > 0 || extraDirs.value.length > 0,
+);
 const importableCount = computed(() =>
   [...selectedSources.value, ...extraDirs.value].reduce((sum, source) => sum + source.pending, 0),
 );
 
 const footerText = computed(() => {
+  if (importSource.value === "steam") {
+    if (steamBlocked.value) return t("gallery.wpeSteamExisting");
+    return steamAccount.value ? t("gallery.wpeSteamSummary") : t("gallery.wpeSteamNeedLogin");
+  }
   if (canSubmit.value) return t("gallery.wpeSummary", { n: importableCount.value });
   // 扫到了来源但一个待导入的都没有：说明都已入库，而不是让用户「至少选一个」。
   if (!scanning.value && sources.value.length && sources.value.every((source) => source.pending === 0)) {
@@ -327,16 +361,14 @@ function resetState() {
   extraDirs.value = [];
   outputAlbumId.value = null;
   isDryRun.value = false;
+  steamAccount.value = null;
+  steamBlocked.value = false;
+  openCount.value++;
   for (const key of Object.keys(selected)) delete selected[key];
 }
 
-async function handleSubmit() {
-  if (!canSubmit.value) {
-    kameMessage.warning(t("gallery.wpeNoSelection"));
-    return;
-  }
-  if (await guardDesktopOnly("localImport", { needSuper: true })) return;
-
+/** 本机来源的任务参数：勾选的自动来源与手选文件夹。 */
+function localConfig(): Record<string, unknown> {
   const sourceFlags = {
     workshop: sources.value.some((s) => s.kind === "workshop" && isSelected(s)),
     defaultprojects: sources.value.some((s) => s.kind === "defaultprojects" && isSelected(s)),
@@ -348,6 +380,20 @@ async function handleSubmit() {
   const userConfig: Record<string, unknown> = { sources: hasAutoSource ? sourceFlags : null };
   // `extraDirs` 是 list 变量：空数组会被校验拒绝，未选时省略（后端按缺失处理）。
   if (extraPaths.length > 0) userConfig.extraDirs = extraPaths;
+  return userConfig;
+}
+
+async function handleSubmit() {
+  if (!canSubmit.value) {
+    kameMessage.warning(importSource.value === "steam" ? footerText.value : t("gallery.wpeNoSelection"));
+    return;
+  }
+  if (await guardDesktopOnly("localImport", { needSuper: true })) return;
+
+  // 从 Steam：不用本机自动来源（sources 传 null），只带账号名；token 在后端插件数据的私有区里，任务按账号取。
+  // 拉取完成后任务会顺带导入这份 WPE 的官方默认壁纸。
+  const userConfig =
+    importSource.value === "steam" ? { sources: null, steamAccount: steamAccount.value } : localConfig();
 
   submitting.value = true;
   try {
