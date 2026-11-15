@@ -294,6 +294,7 @@ const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as
 
 **实现：**
 - **雾**：`general.fog*` 解析成编译期数据，`FOG_DIST` / `FOG_HEIGHT` 进 `engineDefines`，数值 uniform 每帧写；开关绑属性重编译、数值绑属性就地（照步骤 0 的 WPE 行为）。`thisScene` 的 `fog*` 脚本字段（`scriptApi.ts` 的缺失表）语料没人用，照报。
+  - 同时补加载期组合键 `ADDITIVE = 1`（P6d1b 发现，[rea-p6d1-matstate.md](../phase6/rea-p6d1-matstate.md) 第 4 节）：WPE 在材质加载时按 JSON `blending == additive` 给主 pass 加它（`0x140154c5a`，同 `ALPHATOCOVERAGE`，运行中改 `blending` 不加），我们没加（`compile/writeState.ts` 的 `materialCombos` 只加 A2C）。WPE 自带着色器只在雾分支读它（`generic4` / `chroma4` / `foliage4` / `fur4` 的 `#if FOG_HEIGHT || FOG_DIST` 段），语料的工坊着色器没有读它的，所以和雾一起做；`p6d1-a2c` 的 C3 是对照（WPE (255, 255, 0)、现在 (255, 0, 0)）。
 - **灯的运行时**（`render/lights.ts`）：编译期给每盏灯一份字段表（类型、字段原值、绑定目标），绑定表（P3a）加「灯字段」目标；渲染器每帧由 `SceneState` 算世界矩阵（沿父链，同图层）、可见性（沿父链）、灯光 uniform（V1 与遗留灯）。属性、关键帧（P10a 的运行时加灯目标）、字段脚本都写进 `SceneState`。超配时的选灯顺序照步骤 0。
 - **能力表**：去掉灯的 `object:parent`、`value:animation:light`、`general:fog*`。
 

@@ -109,6 +109,8 @@ function fakeScene() {
     profileParticles: () => {},
     particleProfile: () => [],
     particleStats: () => [],
+    // 材质状态字段（P6d1b）：没有待换的图层，探针不补 sync
+    settlePassStates: async () => false,
     destroy: () => void log.push("destroy"),
   };
 }
@@ -354,6 +356,25 @@ describe("renderFrame 跑场景脚本的接线（第 7 批）", () => {
       if (syncs) expect(once.result.textSyncs).toBe(1);
       else expect("textSyncs" in once.result).toBe(false);
     }
+  });
+
+  it("读回前结清材质状态字段（P6d1b）：有备好待换的图层时补一次 sync，再用同一份帧输入 update；没有时什么都不调", async () => {
+    vi.mocked(GpuScene.build).mockImplementationOnce(async () => {
+      log.push("build");
+      return {
+        ...fakeScene(),
+        settlePassStates: async () => {
+          log.push("settlePassStates");
+          return true;
+        },
+      } as unknown as GpuScene;
+    });
+    await renderFrame({ ...BASE, particles: PARTICLES, scripts: true });
+    const tail = log.slice(log.lastIndexOf("parallax"));
+    expect(tail.slice(0, 7)).toEqual(["parallax", "sync", "update", "settlePassStates", "sync", "update", "encode"]);
+    // 三帧各一次，读回帧换上新管线之后用同一份帧输入再一次
+    expect(updateFrames).toHaveLength(4);
+    expect(updateFrames[3]).toBe(updateFrames[2]);
   });
 
   it("回放中途抛错（真的脚本出错由运行时接住，这里让替身直接抛）：renderFrame 失败，脚本环境照样释放、场景照样销毁", async () => {

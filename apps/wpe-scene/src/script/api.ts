@@ -15,6 +15,7 @@ import type { SceneSpectrum } from "../audio/spectrum";
 import { alignmentIndex, alignmentName } from "../compile/alignment";
 import type { SceneBundle, SceneEffect, SceneLayer, ScenePass } from "../compile/bundle";
 import { constantTargetFields, materialSlots, type MaterialMember } from "../compile/materialValues";
+import { isPassStateField, type PassStateField } from "../compile/passState";
 import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlPoint } from "../compile/particles";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
@@ -797,7 +798,7 @@ export class ScriptApi {
     } else if (type === "string") {
       // 字符串只交给文本目标与重编译目标（`font`、`anchor`，P6b 步骤 2 点 5；1e 起同运行时的 `writeReturn`）：WPE 类型 5 的 `ToString`，
       // `null` / `undefined` 与抛错的不写
-      if (target.kind !== "text" && target.kind !== "recompile") return;
+      if (target.kind !== "text" && target.kind !== "recompile" && target.kind !== "pass-state") return;
       const text = scriptToString(raw);
       if (text === undefined) return;
       value = text;
@@ -1355,18 +1356,17 @@ export class ScriptApi {
     api = this.object();
     const current = this.findPass(pass);
     const constants = this.materialConstants(pass);
-    // 五个 pass 状态字段（静态表，rea-p6d1-xform 4.2）：字符串，可读。写入本段什么都不做（运行中换管线是 P6d1b）
-    const states = new Map<string, string>(
-      current
-        ? [
-            ["depthwrite", current.depthwrite],
-            ["depthtest", current.depthtest],
-            ["cullmode", current.cullmode],
-            ["alphawriting", current.alphaWriting ?? "default"],
-            ["blending", current.blending],
-          ]
-        : [],
-    );
+    // 五个 pass 状态字段（静态表，rea-p6d1-xform 4.2）：字符串，读到的是当前有效值（脚本写过的覆盖 ?? bundle，`alphawriting` 缺省 default）；
+    // 写入走 `pass-state` 目标：规整、记进 `SceneState.passStates`，渲染器下一次同步时换管线（P6d1b）
+    const bundled: Record<PassStateField, string> | null = current
+      ? {
+          depthwrite: current.depthwrite,
+          depthtest: current.depthtest,
+          cullmode: current.cullmode,
+          alphawriting: current.alphaWriting ?? "default",
+          blending: current.blending,
+        }
+      : null;
     // 键顺序照 WPE（`materialKeyOrder.ts`）：常量与状态字段按算出的顺序交错定义；`getAnimation` 在末尾单独装
     for (const name of materialObjectKeys(constants.keys())) {
       if (name === "getAnimation") continue;
@@ -1391,13 +1391,14 @@ export class ScriptApi {
           },
           (value) => this.writeConstant(pass, name, shape, rad2deg, value),
         );
-      } else if (states.has(name)) {
-        const value = states.get(name);
+      } else if (bundled && isPassStateField(name)) {
+        const field = name;
+        const target: ApiTarget = { kind: "pass-state", pass, field };
         this.define(
           api,
           name,
-          () => value,
-          () => undefined,
+          () => this.access.state().passStates.get(pass)?.[field] ?? bundled[field],
+          (value) => this.write(target, value, "string"),
         );
       }
     }

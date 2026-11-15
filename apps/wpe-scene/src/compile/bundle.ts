@@ -2347,6 +2347,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         }
       }
     }
+    // TODO:[WPE_SCENE] 运行中改 blending 后 WPE 是否重新分类没读码（P6d1b：脚本写 `blending` 只换管线，分类保持这里的编译期结果）
     // 透明排序的类别（P5d 步骤 4，rea-p5-modelflags 2.1、1.4，`p5d-sort-a` / `-fs`）：只看基础材质（第一个 pass 的混合），effect、
     // colorBlendMode、`copybackground` 都不参与（WPE 在图像层构造时定，那时 `copybackground` 还是缺省值）。`projectlayer` 在这里单独读：
     // 它的另一个作用（尺寸）只在 `autosize` 时有（`imageLayerSize`）。材质没有 pass 的图层不画，不填

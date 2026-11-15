@@ -206,6 +206,7 @@ import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextu
 import type { VideoFrameSource, VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
+import { applyPassStates } from "./passState";
 import type { CursorCamera } from "./cursor";
 import { oneLine, SceneRenderError } from "./errors";
 import {
@@ -1325,6 +1326,13 @@ export class GpuScene {
   private readonly samplers = new Map<string, GPUSampler>();
   private readonly programs = new Map<number, Promise<GpuProgram>>();
   private readonly pipelines = new Map<string, Promise<GPURenderPipeline>>();
+  /**
+   * 脚本写过材质状态字段后，新状态的管线还没备好的图层（P6d1b，`objects` 下标）：`deferPassStatePipelines` 在后台建管线，建好（`passStateReady`）
+   * 后 `sync` 对它们强制重建。加载时只备了 bundle 值的管线，运行中写出的新组合（混合、剔除、深度）要现建，WebGPU 的建管线是异步的。
+   */
+  private readonly passStateWaiting = new Set<number>();
+  private readonly passStateReady = new Set<number>();
+  private readonly passStateJobs = new Set<Promise<void>>();
   /** 已建好的程序与管线：切换时同步取（`preparedOf`）。 */
   private readonly readyPrograms = new Map<number, GpuProgram>();
   private readonly readyPipelines = new Map<string, GPURenderPipeline>();
@@ -1990,7 +1998,8 @@ export class GpuScene {
   /** 这个图层在当前开关下的计划：`planLayer` 的回调给 `layer.effects` 下标，状态按 scene.json 坐标（`source`）存。 */
   private planOf(layer: SceneLayer, state: SceneState): LayerPlan {
     return planLayer(
-      layer,
+      // 脚本写过的材质状态字段（P6d1b）：基础材质与 effect 的 pass 取「bundle 值 + 覆盖」，没写过时就是原图层
+      applyPassStates(layer, state.passStates),
       this.bundle.textures,
       (e) => state.effectEnabled(layer.object, layer.effects[e].source),
       state.texts.get(layer.object) ?? null,
@@ -2593,8 +2602,11 @@ export class GpuScene {
     for (const layer of bundle.layers) if (layer.attachment) this.attachments.set(layer.object, layer.attachment);
     if (this.attachments.size) this.stamps = new WorldStamps();
     const plans = built.map((layer) => this.planOf(layer, state));
-    // 深度附件（P5d 步骤 1）：按全部可能用到的计划判定（加载时的计划与预建的变体），要在建任何管线之前定下来，管线的深度状态跟着它
+    // 深度附件（P5d 步骤 1）：按全部可能用到的计划判定（加载时的计划与预建的变体），要在建任何管线之前定下来，管线的深度状态跟着它。
+    // 脚本拿得到材质对象（用到 `getEffect`，P6d1b）时也建：运行中可能写 `depthtest = 'enabled'`，WPE 的场景目标恒有深度缓冲；
+    // 加载时没有一个 pass 测深度，比较恒为 always、不写深度（`rasterState` 的写要先测），画面不变
     if (
+      bundle.scripts.usesEffectAccess ||
       wantsDepth(
         built.map((layer, index) => ({
           layer,
@@ -3709,6 +3721,8 @@ export class GpuScene {
     this.syncTexts(dirty, state, worlds);
     // 用户纹理（P11b 步骤 2）：来源写过或解码完成的，换 bind group / 整层重建，在结构与刷新之前，新 draw 照当前状态写 uniform
     this.syncUserTextures(dirty, state, worlds);
+    // 材质状态字段（P6d1b）：写过的与管线刚备好的图层按有效 pass 强制重建
+    this.syncPassStates(dirty, state, worlds);
     // 结构先处理：新 draw 按当前状态写 uniform，后面的刷新也落在新 draw 上
     this.rebuildStructures(dirty.structures, state, worlds);
     for (const object of dirty.layers)
@@ -3734,6 +3748,55 @@ export class GpuScene {
     }
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
     if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();
+  }
+
+  /**
+   * 材质状态字段运行中换管线（P6d1b，`rea-p6d1-matstate.md`）：WPE 每次绑定现读五个字节，写入当帧就画出新状态，没有重取着色器。这里对
+   * 写过的图层（`dirty.passStates`）与管线刚备好的图层（`passStateReady`）`rebuildLayer(…, { force: true })`：规划取有效 pass，程序不换。
+   * 新组合的管线加载时没备（`prepareVariants` 只按 bundle 值备），`rebuildLayer` 取不到时转后台建（`deferPassStatePipelines`），建好后的下一次
+   * `sync` 换上；建的这几帧里画面保持旧状态。
+   */
+  private syncPassStates(dirty: DirtyState, state: SceneState, worlds: Map<number, Mat4>): void {
+    const objects = new Set<number>(dirty.passStates);
+    for (const object of this.passStateReady) objects.add(object);
+    this.passStateReady.clear();
+    for (const object of objects) {
+      const runtime = this.layers.find((layer) => layer.object === object);
+      if (!runtime) continue;
+      this.passStateWaiting.delete(object);
+      this.rebuildLayer(runtime, state, worlds, { force: true });
+    }
+  }
+
+  /**
+   * 后台建管线的任务都结束了（单测与 dev 探针等「写完马上要看到新状态」的调用方先等它，再 `sync`）。返回有没有备好、等着下一次 `sync`
+   * 换上的图层（调用方据此决定要不要补一次 `sync`）。
+   */
+  async settlePassStates(): Promise<boolean> {
+    while (this.passStateJobs.size) await Promise.all([...this.passStateJobs]);
+    return this.passStateReady.size > 0;
+  }
+
+  /**
+   * 状态覆盖后这份计划的管线没备好：后台建（失败记 warning、这一层保持旧状态），建好把图层记进 `passStateReady`，下一次 `sync` 换上。
+   * 同一个图层有新写入时 `sync` 会重新规划、再来一遍，旧任务建好的管线留在缓存里复用。
+   */
+  private deferPassStatePipelines(runtime: LayerRuntime, plan: LayerPlan): void {
+    const object = runtime.object;
+    this.passStateWaiting.add(object);
+    const job: Promise<void> = this.prepareLayer(plan, runtime).then(
+      () => {
+        if (this.passStateWaiting.has(object)) this.passStateReady.add(object);
+      },
+      (error: unknown) => {
+        this.passStateWaiting.delete(object);
+        this.warnings.push(
+          `图层 ${object} 的材质状态改变后管线备不好，保持原状态：${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+    );
+    this.passStateJobs.add(job);
+    void job.finally(() => this.passStateJobs.delete(job));
   }
 
   /**
@@ -4055,7 +4118,21 @@ export class GpuScene {
     const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model, runtime.layer.puppet);
     if (problems.length) throw new SceneRenderError(problems);
     // 先取管线（缺了就抛，这时什么都还没换）；文本层再按新排版换独占的合成 RT、fbo 与图集，新 draw 才绑得到
-    const prepared = this.preparedOf(plan, runtime);
+    let prepared: Map<DrawLike, PreparedDraw>;
+    try {
+      prepared = this.preparedOf(plan, runtime);
+    } catch (error) {
+      // 脚本写过材质状态字段的图层：新组合的管线运行中现建（P6d1b），建好之前保持当前画面
+      if (
+        error instanceof SceneRenderError &&
+        error.reasons.includes("render:variant-missing") &&
+        this.stateHasPassOverrides(state, runtime.layer)
+      ) {
+        this.deferPassStatePipelines(runtime, plan);
+        return;
+      }
+      throw error;
+    }
     if (runtime.layer.text) this.ensureTextResources(runtime, plan, state);
     else if (baseUserSlot(runtime.layer)) this.ensureUserSizing(runtime);
     const built = this.buildLayer(runtime, plan, prepared, state, worlds);
@@ -4079,6 +4156,11 @@ export class GpuScene {
     this.rebuildStats.count++;
     this.rebuildStats.totalMs += elapsed;
     this.rebuildStats.maxMs = Math.max(this.rebuildStats.maxMs, elapsed);
+  }
+
+  /** 状态里有这个图层的 pass 的材质状态覆盖（P6d1b）。 */
+  private stateHasPassOverrides(state: SceneState, layer: SceneLayer): boolean {
+    return applyPassStates(layer, state.passStates) !== layer;
   }
 
   /**

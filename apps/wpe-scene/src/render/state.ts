@@ -47,6 +47,7 @@ import {
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
+import { normalizePassState, type PassStateField } from "../compile/passState";
 import {
   INSTANCE_RATE_MIN,
   instanceColorn,
@@ -138,6 +139,11 @@ export interface DirtyState {
    * `g_Texture<n>Resolution`，槽 0 整层重建。写入当场进来（RT 参考的槽从第一次写入起才生效，M8），解码完成再进一次。
    */
   userTextures: Set<string>;
+  /**
+   * 写过材质状态字段（`blending` 等五个）的图层（`objects` 下标，P6d1b）：`GpuScene.sync` 强制重建，规划时取 bundle 值加 `passStates` 的覆盖。
+   * 只在写入时进来（WPE 每次绑定现读字节、没有「变没变」的判断，同值也重建一次无妨，但不每帧重建）。
+   */
+  passStates: Set<number>;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -323,6 +329,12 @@ export class SceneState {
   private dirtyTexts = new Set<number>();
   private rateParticles = new Set<number>();
   private dirtyUserTextures = new Set<string>();
+  private dirtyPassStates = new Set<number>();
+  /**
+   * 脚本写过的材质状态字段（P6d1b，pass 稳定键 → 字段 → 规范名）：只存写过的字段，没写过的取 bundle 的 `ScenePass`（`render/passState.ts` 的
+   * `applyPassStates` 拼出有效的 pass）。值已按字段的表规整。
+   */
+  readonly passStates = new Map<TargetKey, Partial<Record<PassStateField, string>>>();
   /**
    * 用户纹理属性来源的当前值（P11b 步骤 2，属性名 → 路径）：只存值，不存 GPU 资源。运行中写入才有项；加载时的初值在宿主的来源表里
    * （`usertex/sources.ts`）。值只认字符串，别的类型当空串（缺省纹理，p11-REPORT / rea-p11-textures：属性不是 `scenetexture` 时永远缺省）。
@@ -746,9 +758,31 @@ export class SceneState {
       this.onUserTexture?.(target.name, value);
       return "applied";
     }
+    // 材质状态字段（P6d1b）：值按字段的表规整（`null` / `undefined` 不写，其余先 `ToString`，查不到取表的第一项），条件无意义、不看；
+    // 写入当场把图层记进「要重建」，同值也记（WPE 每次绑定现读，没有变没变的判断）
+    if (target.kind === "pass-state") {
+      this.writePassState(target.pass, target.field, raw);
+      return "applied";
+    }
     this.bloom = writeBloomParam(this.bloom, target.field, raw, binding.condition);
     this.bloomDirty = true;
     return "applied";
+  }
+
+  /**
+   * 写一个 pass 的状态字段（P6d1b）：`pass` 不在 bundle 里（不是 `objects/<i>/…` 的 pass、没登记常量）或值不合法（`null` / `undefined`）时什么都不做。
+   * 返回是否写进了状态。
+   */
+  writePassState(pass: TargetKey, field: PassStateField, raw: unknown): boolean {
+    const value = normalizePassState(field, raw);
+    if (value === undefined || !this.constants.has(pass)) return false;
+    const match = /^objects\/(\d+)\//.exec(pass);
+    if (!match) return false;
+    const fields = this.passStates.get(pass);
+    if (fields) fields[field] = value;
+    else this.passStates.set(pass, { [field]: value });
+    this.dirtyPassStates.add(Number(match[1]));
+    return true;
   }
 
   /** 是否有未取走的变换写入（只读，B1：渲染阶段预置据此作废）。 */
@@ -775,6 +809,7 @@ export class SceneState {
       texts: this.dirtyTexts,
       rates: this.rateParticles,
       userTextures: this.dirtyUserTextures,
+      passStates: this.dirtyPassStates,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
@@ -785,6 +820,7 @@ export class SceneState {
     this.dirtyTexts = new Set();
     this.rateParticles = new Set();
     this.dirtyUserTextures = new Set();
+    this.dirtyPassStates = new Set();
     return dirty;
   }
 }

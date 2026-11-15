@@ -291,7 +291,7 @@ describe("材质对象的键（p6d1-round2 S0 / S7keys / S7val）", () => {
     expect(Object.keys(h.l.getEffect(4).getMaterial(0))).toEqual(["scale", "offset", "angle", ...tail]);
   });
 
-  it("五个状态字段是 pass 上的字符串，写入什么都不做（P6d1b 再接）；alphawriting 缺省 default", () => {
+  it("五个状态字段是 pass 上的字符串；alphawriting 缺省 default；写入规整后读回规范名（P6d1b）", () => {
     const h = setup();
     const m = h.l.getEffect(3).getMaterial(0);
     expect([m.depthwrite, m.depthtest, m.cullmode, m.alphawriting, m.blending]).toEqual([
@@ -302,9 +302,12 @@ describe("材质对象的键（p6d1-round2 S0 / S7keys / S7val）", () => {
       "normal",
     ]);
     m.blending = "additive";
-    m.cullmode = 7;
-    expect(m.blending).toBe("normal");
-    expect(m.cullmode).toBe("nocull");
+    m.cullmode = 7; // 数字先 ToString，不在表里取第一项 normal
+    expect(m.blending).toBe("additive");
+    expect(m.cullmode).toBe("normal");
+    // 脚本写的不动 bundle，渲染器按 SceneState 里的覆盖拼有效 pass
+    const step = h.bundle.layers[0].effects[3].steps[0];
+    if (step.kind === "draw") expect(step.pass.blending).toBe("normal");
   });
 
   it("alphawriting 取 pass 上的值（enabled / disabled）", () => {
@@ -436,5 +439,113 @@ describe("setMaterialProperty（p6d1-round2 S1–S7）", () => {
     h.state.takeDirty();
     h.l.getEffect(0).setMaterialProperty("alpha", 0.5);
     expect(h.state.takeDirty().passes.has(`${E(0)}/0`)).toBe(true);
+  });
+});
+
+// P6d1b：五个状态字段的取值规则（`p6d1-mat8`，tint 的 pass 0 上依次写；规则同 `compile/passState.test.ts`）
+describe("材质状态字段的写入与读回（p6d1-mat8）", () => {
+  /** 依次写入 `values`，每次写后读回。 */
+  const run = (m: O, field: string, values: unknown[]): string[] =>
+    values.map((value) => {
+      m[field] = value;
+      return m[field] as string;
+    });
+
+  it("blending：非法值复位成 normal，null / undefined 不写（保持上一个）", () => {
+    const m = setup().l.getEffect(0).getMaterial(0);
+    expect(
+      run(m, "blending", ["additive", "bogus", "translucent", "Additive", "disabled", "normal", "additive", 3]),
+    ).toEqual(["additive", "normal", "translucent", "normal", "normal", "normal", "additive", "normal"]);
+    // 上一个是 normal 时 null 看不出来，换成 additive 再写 null
+    m.blending = "additive";
+    m.blending = null;
+    expect(m.blending).toBe("additive");
+    m.blending = undefined;
+    expect(m.blending).toBe("additive");
+    m.blending = "alphatocoverage";
+    expect(m.blending).toBe("alphatocoverage");
+  });
+
+  it("alphawriting：非法值（含 Enabled、true）复位成 default", () => {
+    const m = setup().l.getEffect(0).getMaterial(0);
+    expect(run(m, "alphawriting", ["enabled", "bogus", "disabled", "default", "Enabled", "enabled", true])).toEqual([
+      "enabled",
+      "default",
+      "disabled",
+      "default",
+      "default",
+      "enabled",
+      "default",
+    ]);
+  });
+
+  it("depthtest / depthwrite：非法值（含 less、Disabled）复位成 disabled", () => {
+    const m = setup().l.getEffect(0).getMaterial(0);
+    expect(run(m, "depthtest", ["enabled", "bogus", "disabled", "enabled", "less", "Disabled"])).toEqual([
+      "enabled",
+      "disabled",
+      "disabled",
+      "enabled",
+      "disabled",
+      "disabled",
+    ]);
+    expect(run(m, "depthwrite", ["enabled", "bogus", "disabled", "enabled", "Disabled"])).toEqual([
+      "enabled",
+      "disabled",
+      "disabled",
+      "enabled",
+      "disabled",
+    ]);
+  });
+
+  it("cullmode：非法值（back / front / Normal / none）复位成 normal", () => {
+    const m = setup().l.getEffect(0).getMaterial(0);
+    expect(run(m, "cullmode", ["normal", "bogus", "nocull", "normal", "back", "front", "Normal", "none"])).toEqual([
+      "normal",
+      "normal",
+      "nocull",
+      "normal",
+      "normal",
+      "normal",
+      "normal",
+      "normal",
+    ]);
+  });
+
+  it("区分大小写、空白也算字符；对象 / 布尔先 ToString；抛错的转换（Symbol）不写", () => {
+    const m = setup().l.getEffect(0).getMaterial(0);
+    m.depthtest = "enabled";
+    m.depthtest = " enabled";
+    expect(m.depthtest).toBe("disabled");
+    m.depthtest = "enabled";
+    m.depthtest = { toString: () => "disabled" };
+    expect(m.depthtest).toBe("disabled");
+    m.depthtest = "enabled";
+    m.depthtest = Symbol("x");
+    expect(m.depthtest).toBe("enabled");
+    m.cullmode = true;
+    expect(m.cullmode).toBe("normal");
+  });
+
+  it("写入记进 SceneState.passStates 并把图层记进 dirty.passStates；不动 bundle 与别的 pass；键顺序不变", () => {
+    const h = setup();
+    h.state.takeDirty();
+    const before = Object.keys(h.l.getEffect(0).getMaterial(0));
+    h.l.getEffect(1).getMaterial(2).blending = "additive";
+    expect(h.state.passStates.get(`${E(1)}/2`)).toEqual({ blending: "additive" });
+    expect(h.state.passStates.has(`${E(1)}/1`)).toBe(false);
+    expect([...h.state.takeDirty().passStates]).toEqual([0]);
+    expect(h.l.getEffect(1).getMaterial(1).blending).toBe("normal");
+    expect(Object.keys(h.l.getEffect(0).getMaterial(0))).toEqual(before);
+  });
+
+  it("同值也照写：每次写入都把图层记进「要重建」；只读不标脏", () => {
+    const h = setup();
+    h.l.getEffect(0).getMaterial(0).blending = "additive";
+    h.state.takeDirty();
+    h.l.getEffect(0).getMaterial(0).blending = "additive";
+    expect([...h.state.takeDirty().passStates]).toEqual([0]);
+    void h.l.getEffect(0).getMaterial(0).blending;
+    expect(h.state.takeDirty().passStates.size).toBe(0);
   });
 });

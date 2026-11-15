@@ -826,6 +826,12 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         const syncs = await texts.settle(scene, state);
         if (syncs > 1) scene.update(frame, state);
         if (syncs) textSyncs = syncs;
+        // 材质状态字段（P6d1b）：脚本写出的新组合，管线在后台现建（宿主晚几帧换上），探针没有之后的帧，读回之前结清：等建好、`sync`
+        // 换上，重建的 draw 再写一次这一帧的帧输入（同 WPE 写入当帧生效）。没有待换的图层时什么都不做，逐字节同以前
+        if (await scene.settlePassStates()) {
+          scene.sync(state);
+          scene.update(frame, state);
+        }
       }
       // sprite（P13c 走查）：读回帧之前那一帧数到的 n，读回帧的计算 pass 用它算 k
       const spritesBefore = await scene.spriteSamples();

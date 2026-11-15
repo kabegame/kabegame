@@ -2959,13 +2959,26 @@ WPE 每个对象存角度与 3×3 两份旋转，画面、子孙、`getTransform
 - `getEffectCount()` 数 JSON 里全部 effect（含写死关闭的）；`getEffect(i | 名字)`：整数按 JSON 下标，名字按当前 `name` **区分大小写**、同名取最后一个，空串、越界、别的类型 `null`。返回的就是挂在 effect `visible` 上的脚本的 `thisObject`。
 - **编译期**：场景里会执行的脚本有 `getEffect` 成员访问时（`SceneScripts.usesEffectAccess`，词法同能力表），写死关闭的 effect 也按「`visible` 可变」编进 bundle（WPE 加载时全部 effect 都在列表里，脚本能当帧打开），`SceneLayer.effectCount` 记 JSON 个数；没有时维持跳过（B11），bundle 不变。
 - effect 对象：`name` 可读写（只存在脚本 API 这边，没有改值回调，跨重编译保留）、`getMaterialCount()`（条件过滤后的绘制 pass 数）、`getMaterial(i | 文件名)`（无参 = 0；文件名按 `ScenePass.material` 不分大小写全等，空串匹配每一个，最后一个胜出），返回的就是挂在材质常量上的脚本的 `thisObject`。`executeMaterialFunction` 照报（`script:api:effect.executeMaterialFunction`）。
-- 材质对象的键：编译后着色器**实际读到的**材质常量（`MaterialSlot.used`；chromaticaberration 缺省 `MODE 0` 没有方向键），然后是五个状态字段 `depthwrite, depthtest, cullmode, alphawriting, blending`（字符串，P6d1a 只读，写入在 P6d1b 接管线），再是 `getAnimation`。常量键的顺序照 WPE（`script/materialKeyOrder.ts`，读码 `rea-p6d1-keyorder.md`）：材质键按 UTF-8 字节序（WPE 的合并常量表是有序 `std::map`）依次插入 MSVC `std::unordered_map`（FNV-1a、8 桶起、`(size+1)/桶数 > 1` 扩容、非空桶插在桶首），取链表顺序，前面拼上静态表的链表顺序，再整串倒序（V8 装访问器时倒了一次）、同名去重，末尾 `getAnimation`。tint、transform、chromaticaberration 两种组合键、fire / pulse（9 个键，触发扩容）、lightshafts（12 个键）七组和 WPE 逐项相同。
+- 材质对象的键：编译后着色器**实际读到的**材质常量（`MaterialSlot.used`；chromaticaberration 缺省 `MODE 0` 没有方向键），然后是五个状态字段 `depthwrite, depthtest, cullmode, alphawriting, blending`（字符串，可读写，写入见下面「材质状态字段的写入（P6d1b）」），再是 `getAnimation`。常量键的顺序照 WPE（`script/materialKeyOrder.ts`，读码 `rea-p6d1-keyorder.md`）：材质键按 UTF-8 字节序（WPE 的合并常量表是有序 `std::map`）依次插入 MSVC `std::unordered_map`（FNV-1a、8 桶起、`(size+1)/桶数 > 1` 扩容、非空桶插在桶首），取链表顺序，前面拼上静态表的链表顺序，再整串倒序（V8 装访问器时倒了一次）、同名去重，末尾 `getAnimation`。tint、transform、chromaticaberration 两种组合键、fire / pulse（9 个键，触发扩容）、lightshafts（12 个键）七组和 WPE 逐项相同。
 - `setMaterialProperty(名, 值)`：值按 dll 归三类——数；任何对象（`Vec2/3/4`、`{x, y}`、数组）只取 x、y（非有限数当 0）当 Vec2；其余（字符串、布尔、`null`、不传）当整数 0。对这个 effect 的**每个 pass** 按名字全等（区分大小写，`g_` uniform 名不收，状态字段不收）找常量：数写 float 常量（不钳），Vec2 写 vec2 常量，别的组合跳过，所以 vec3 / vec4 常量永远写不进、非数值把 float 写成 0。和字段写入同一个 setter，当帧生效。返回 `undefined`。
 - **`rad2deg` 常量的单位**（注解 `"conversion": "rad2deg"`，`MaterialSlot.rad2deg`）：状态与 uniform 是弧度；JSON 值、用户属性原样当弧度；脚本一侧一律度——材质对象字段读写、`setMaterialProperty`、常量上字段脚本收到的 `value` 与返回值（`p6d1-mat6`：JSON 0.5 读回 28.647890°，属性 30 读回 1718.8734°，字段脚本收到 28.647890、返回 45 读回 45）。度 → 弧度存 `f32(f32(度) · f32(0.017453292))`，同图层 `angles`。
+
+### 材质状态字段的写入（P6d1b）
+
+读码 `rea-p6d1-matstate.md`；实测工程 `p6d1-mat7`（blur 四个 pass 各写一项）、`p6d1-mat8`（五个字段的取值）由 `make_p6d1b.py` 生成，`p6d1-a2c`（自写的探针 effect，八组）由 `make_p6d1c.py` 生成。
+
+- **取值**：一张表（`compile/passState.ts` 的 `PASS_STATE_TABLES`），编译期的 `normalizeDepthKeys`、`SUPPORTED.blending` 与运行中的写入共用。`blending` normal / translucent / additive / alphatocoverage，`alphawriting` default / disabled / enabled，`depthtest`、`depthwrite` disabled / enabled，`cullmode` normal / nocull。脚本写入先 `ToString`、按全等查（区分大小写，空白也算），查不到复位成**表的第一项**（所以 `depthtest` / `depthwrite` 写错会关深度）；`null` / `undefined` 不写。读回是当前的规范名。
+- **状态**：写入目标 `{ kind: "pass-state", pass, field }` 进 `SceneState.passStates`（只存写过的字段），写入当场把图层记进 `dirty.passStates`（同值也记、不每帧）；脚本写入表的键 `<pass>/state/<字段>`，重编译后重放。没有改值回调（WPE 每次绑定材质现读这五个字节）。
+- **渲染**：`GpuScene.planOf` 先 `applyPassStates`（`render/passState.ts`）把基础材质与 effect 绘制 pass 换成「bundle 值 + 覆盖」，现有的角色规则一条不改：中间 pass 的 normal 是不混合，最后一个 effect 的上屏 pass 借基础材质的混合与深度、剔除用自己的，translucent / additive 不写深度，写掩码与 A2C 入口照 `writeState.ts` / `alphaToCoverageEntry`。所以在上屏 pass 上写 `blending` / `depthtest` / `depthwrite` 不影响画面（读回是写的值），写基础材质的这三项上屏 pass 跟着变。`sync` 对写过的图层 `rebuildLayer(…, { force: true })`。**程序不换**：组合键 `ALPHATOCOVERAGE`（与 WPE 的 `ADDITIVE`）只在加载时按 JSON 拼，运行中切到 A2C 只开丢弃、着色器不锐化（`p6d1-a2c` 的 M1、M2a / M2b）。
+- **新组合的管线**：加载时只备了 bundle 值的管线，运行中写出的新组合在后台建（`createRenderPipelineAsync`），建好之后的下一次 `sync` 换上，期间这一层保持旧状态；已备好的组合（写回加载时的值）当帧换上。和 WPE 当帧生效不同（已知差异，语料 233 张没有脚本写这五个字段）。dev 探针读回前结清（`settlePassStates`，同文本重排），所以探针的画面是当帧生效的。
+- **深度附件**：脚本用到 `getEffect`（拿得到材质对象）时场景目标加载就挂深度附件（WPE 恒有），运行中写 `depthtest = 'enabled'` 才有效；加载时没有 pass 测深度，比较恒为 always、不写，画面不变。
+- **透明排序**：透视场景的透明排序类别仍按编译期的 `blending`，运行中改了不重新分类（WPE 怎么做没读码，`TODO:[WPE_SCENE]`）。
 
 ### 对比结果
 
 dev 探针跑 `p6d1-xform`、`p6d1-xform2`、`p6d1-cam`、`p6d1-mat`、`p6d1-mat2/3/4/6` 的脚本，`[kbp6d]` 读回和 WPE 逐位相同（材质对象键的顺序另用 `p6d1-keys` 核对扩容）；`p6d1-mat` 八块颜色与 `p6d1-xform`、`p6d1-xform2` 的画面和 WPE 抓帧一致。语料能渲染 +1（`3243449890`）。
+
+P6d1b：`p6d1-mat8` 五个字段 36 次写入的读回和 WPE 实测的规则逐项一致；`p6d1-mat7` blur 四个 pass 的混合、写掩码、剔除、深度和 WPE 抓帧相同；`p6d1-a2c` 八组中心像素 7 组相同，C3（加载时 additive）WPE 是 (255, 255, 0)、我们 (255, 0, 0)：加载期没加 `ADDITIVE` 组合键，WPE 自带着色器只在雾效里读它，雾效现在照报，语料的工坊着色器没有读它的，随雾效一起补。语料不变（干净 160 → 160）。
 
 ## 字体引擎 `wpefont`（P6b 1b 起）
 

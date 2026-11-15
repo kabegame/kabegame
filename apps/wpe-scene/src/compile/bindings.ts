@@ -13,6 +13,7 @@ import { numbers, resolveValue, userCondition, type SceneScalar, type SceneValue
 import { setterValue, type MaterialMember } from "./materialValues";
 import type { InstanceKey } from "./particles";
 import type { BloomParams } from "./postprocess";
+import type { PassStateField } from "./passState";
 
 /** 目标的稳定键：scene.json 里的坐标。 */
 export type TargetKey = string;
@@ -223,6 +224,12 @@ export type BindingTarget =
    * 不管它绑在几个槽上。值只认字符串，别的类型当空串（缺省纹理）。
    */
   | { kind: "user-texture"; name: string }
+  /**
+   * 材质 pass 的五个状态字段（P6d1b，只由脚本 API 产生，`script/api.ts` 材质对象的 `blending` 等）：写进 `SceneState.passStates`，
+   * 值按字段的表规整（`passState.ts` 的 `normalizePassState`）；`GpuScene.sync` 对这个 pass 所属的图层强制重建，规划时取「bundle 值 +
+   * 覆盖」，程序（着色器）不换。`pass` 是 pass 的稳定键（`objects/<i>/…`）。
+   */
+  | { kind: "pass-state"; pass: TargetKey; field: PassStateField }
   /**
    * puppet 动画层的 `rate` / `blend` / `visible`（P12a 步骤 3 点 3，rea-p12-runtime 1.5：三个描述符可绑定，用户属性在两帧之间写进去、puppet
    * 当帧就读到，p12-REPORT 用例 4）：就地写进 `SceneState.animationLayers`，不标脏，`ScenePuppets.frame` 每帧读。`object` 是 `objects` 下标，

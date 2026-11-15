@@ -157,10 +157,19 @@ export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles"
   - `cullmode`：`normal` / `nocull`；非法（`back` / `front` / `none` / `Normal`）→ `normal`。
 - **还要读码**：五个字段的 setter（`FUN_1401577e0` 一带）的完整枚举表（`blending` 有没有第 5 项以后的名字）、改值回调做什么——特别是写成 `alphatocoverage` 时着色器的 `ALPHATOCOVERAGE` 组合键（P8 编译期加）会不会重编着色器，还是只改管线。读完再定实现。
 
-方向：
-- 状态字段写入成为 `SceneState` 里按 pass 键的覆盖（只收 WPE 认得的值，`bogus`、数字不改，实测 `M2`）；
-- `GpuScene.sync` 发现某 pass 的覆盖变了，就给用到它的绘制换管线（按状态组合缓存，WebGPU `createRenderPipeline` 同步可用）；哪个 pass 的哪个字段真正进哪次绘制，照现有规则（上屏混合借基础材质、剔除取 effect 材质，P2a / P5d）。
-- 重编译重放同普通字段写入。
+**读码**（[rea-p6d1-matstate.md](rea-p6d1-matstate.md)）与 **A2C 实测**（`ignore/p6/d0/make_p6d1c.py` → `p6d1-a2c`，抓帧 `A:\p6d\p6d1-a2c`，像素在 `ignore/p6/d0/out/p6d1-round2.log` 末段）：
+- 五个字段没有改值回调；材质每次绑定都现读这五个字节设设备状态，所以当帧生效。effect pass 的材质逐实例新建，改一个不连带别的图层。
+- 字符串表（区分大小写，空白也算字符；`null` / `undefined` 不写，数字 / 布尔 / 对象先 `ToString`，不在表里取**首项**）：`blending` normal / translucent / additive / alphatocoverage；`alphawriting` default / disabled / enabled；`depthtest`、`depthwrite` disabled / enabled（写错会关深度）；`cullmode` normal / nocull。读回按当前值反查规范名。
+- **运行中切到 / 切离 `alphatocoverage` 不换着色器变体**：组合键 `ALPHATOCOVERAGE`、`ADDITIVE` 只在材质加载时按 JSON 拼。实测八组全部符合：`normal → A2C` 的 0.5002 不覆盖（黑），加载时 A2C 覆盖（红）；`A2C → translucent` 的 0.3 / 0.7 是黑 / 纯红（着色器仍锐化）；`normal → additive` 没有 `ADDITIVE`（绿通道不加）；`alphawriting → disabled` 不写 alpha。
+- 最后一个 effect 的上屏 pass 绑定前把基础材质的 `blending` / `depthtest` / `depthwrite` 写进 effect 材质、画完恢复，所以脚本在它上面写这三项不影响画面、读回是脚本写的值；`cullmode` 用自己的（`p6d1-mat7` 的 pass 3 同）。translucent / additive 强制关深度写，每次绘制按当前 `blending` 现算。
+- 顺带：编译期 `blending: additive` 要给着色器加 `ADDITIVE = 1`，我们没加。WPE 自带着色器只在雾效里用它（`generic4` / `chroma4` / `foliage4` / `fur4` 的 `#if FOG_HEIGHT || FOG_DIST` 段），雾效现在整体照报，做雾效时一起补（记在 [P13f](../phase13/phase-13-3d-lighting.md)「雾与灯的运行时」的雾那一条下）。
+
+**实现**：
+- **状态**：`SceneState` 加按 pass 键的状态覆盖（只存写过的字段，没写过的取 bundle 的 `ScenePass`）；写入目标 `{ kind: "pass-state", pass, field }`，值按上面的表规整（`normalizePassState`，一个函数、一张表，编译期 `normalizeDepthKeys` 能复用就复用），`alphawriting` 的 `default` 对应 `ScenePass.alphaWriting` 缺省。写入把这个 pass 所属图层记进「要重建」；脚本写入表的键 `<pass>/state/<字段>`，重编译重放。
+- **脚本 API**：材质对象五个状态字段的 getter 读当前状态（覆盖 ?? bundle），setter 写上面的目标；getter 返回规范名（WPE 读回反查）。
+- **渲染**：`GpuScene.sync` 对这些图层 `rebuildLayer(…, { force: true })`；规划这一层时每个 pass 取「bundle 值 + 覆盖」的有效值，现有的角色规则（上屏混合与深度借基础材质、剔除用自己、中间 pass 的 normal 是不混合、translucent / additive 关深度写、写掩码 `writesAlpha`、A2C 用程序已有的 `alphaToCoverageEntry`）照旧，所以不用新写规则。程序不换（同 WPE）。
+- **没把握的**：透视场景的透明排序（`imageSortClass` 按编译期 `blending` 分类）运行中改 `blending` 后 WPE 重不重新分类，没读码；先保持编译期分类，标 `TODO:[WPE_SCENE]`。
+- **验收**：规整表单测（`p6d1-mat8` 的全部情形）；状态写入、重放；规划取有效值（中间 pass、上屏 pass 的借用、剔除）；假设备上改状态后重建、管线描述符与整场按新值编译相同；真机 `p6d1-mat7`、`p6d1-a2c` 的读回与画面和 WPE 比（A2C 八组的像素）。
 
 ## 验收
 
@@ -177,7 +186,9 @@ export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles"
   3. 真机：`p6d1-xform`、`p6d1-xform2`、`p6d1-mat`、`p6d1-mat2/3/4` 导入 dev 库，`render_scene` 跑同一份脚本，`[kbp6d]` 读回与 WPE 日志逐行相同（`kabegame-dev` 的应用日志），`p6d1-mat` 的八块颜色与 WPE 抓帧相同；`p6d1-xform` 的画面和 WPE 抓帧比（三个转向方法真的改了画面）。测完 `projects_remove`。
   4. 过后才请用户提交。
 
-**P6d1b** 在补测之后补写。
+**P6d1b**（点 8 的「验收」）
+- 子代理：宿主 tsc、相关 vitest、Prettier。
+- Claude 独立验收：`git status` 查越界；tsc、相关 vitest 自跑；变异检查（非法值不复位、不分大小写、规划不取覆盖、sync 不重建、getter / setter、重放键等）；改了编译期的 `features.ts`，语料扫描与基点比；合并进主工作区；真机 `p6d1-mat8` 读回、`p6d1-mat7` 管线状态（逐 draw 轨迹对 WPE 抓帧）、`p6d1-a2c` 八组像素。过后才请用户提交。
 
 ## 待定
 
@@ -220,3 +231,21 @@ export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles"
 - 读码 [rea-p6d1-keyorder.md](rea-p6d1-keyorder.md)：模型（FNV-1a + MSVC `unordered_map`）本身对，错在两处——插入顺序是材质键的 **UTF-8 字节序**（合并常量表 `+0x20` 是 `std::map`，`FUN_140154480` 中序遍历），V8 装访问器（`AppendUniqueCallbacks` 从后往前收、同名留后一个）又把整串**倒序**。静态表链表顺序 `blending, alphawriting, cullmode, depthtest, depthwrite`，倒过来正是实测。复刻脚本 `ignore/p6/rea/layers/keyorder/`。
 - WPE 实测扩容（`p6d1-keys`：fire、pulse 9 个键，lightshafts 12 个键）：三组和读码预测逐项相同（fire 以 `threshold` 开头，不扩容会以 `scale` 开头）。读回在 `ignore/p6/d0/out/p6d1-round2.log` 末段。
 - 实现 `script/materialKeyOrder.ts`（`materialConstantOrder` / `materialObjectKeys`），`material()` 按它交错定义常量与状态字段。单测七组逐项相同；变异 3 处全部检出；真机 `p6d1-mat2/3/4`、`p6d1-keys` 的 `Object.keys` 和 WPE 相同（回归 F10）。
+
+### P6d1b 实施（2026-11-15，独立工作树 `ignore/p6/d1/wt`，基点 `637530bd`，sonnet 一段）
+
+- 新增 `compile/passState.ts`（五张表、`normalizePassState` / `normalizeJsonPassState`，编译期 `normalizeDepthKeys`、`SUPPORTED.blending` 改读它，行为不变）、`render/passState.ts`（`withPassState` / `applyPassStates`，没有覆盖时返回原对象）；`BindingTarget` 加 `pass-state`；`SceneState.passStates` / `writePassState` / `dirty.passStates`；材质对象五个字段的 getter 读覆盖 ?? bundle、setter 经 `ToString` 写目标；重放键 `<pass>/state/<字段>`（`runtime.ts` 的 `targetKey`、宿主 `targetPath`）；`GpuScene.planOf` 先 `applyPassStates`，`sync` 的 `syncPassStates` 对写过的图层强制重建；透明排序类别保持编译期，标 `TODO:[WPE_SCENE]`。
+- **和计划不同的一处**：计划写「当帧生效」，但加载时只备了 bundle 值的管线，运行中写出的新组合要现建，WebGPU 的建管线是异步的。代理做成 `rebuildLayer` 取不到管线（`render:variant-missing`）且图层有覆盖时转后台建（`deferPassStatePipelines`），建好之后的下一次 `sync` 换上，期间保持旧状态；已备好的组合当帧换上。语料 233 张没有脚本写这五个字段（`kbp content grep` 五个字段的赋值 0 处，`getMaterial(` 2 处），接受为已知差异（同 P6d「运行中第一次出现的模型晚几帧」）。
+- **Claude 验收时补的两处**：
+  - dev 探针读回前结清（`settlePassStates` 返回有没有待换的图层，有就再 `sync` 并用同一份帧输入 `update`，同文本重排），所以探针的画面是当帧生效的；`probe.scripts.test.ts` 的替身加 `settlePassStates`、补一条用例。
+  - 深度附件：原先只在加载时有 pass 测深度才建，运行中写 `depthtest = 'enabled'` 无效。改成脚本用到 `getEffect`（`usesEffectAccess`）时也建（WPE 的场景目标恒有深度缓冲）；加载时没有 pass 测深度，比较恒为 always、不写，画面不变。`p6d1b.test.ts` 补两条。
+- 验证（回归 G1–G7）：
+  - 合并进主工作区（HEAD 已到 `fb9c2bc2`，祖先取 `637530bd`，16 个文件无冲突，合并前的文件在 `ignore/p6/d1/merge/pre2/`）后 tsc 0 error，相关 15 个文件 609 条全过；
+  - 变异 14 处全部检出；
+  - 语料两边同一份 wasm，干净 160 → 160、没有键的增减；
+  - 真机：
+    - `p6d1-mat8` 读回和 WPE 规则逐项一致；
+    - `p6d1-mat7` 四个 pass 的管线和 WPE 抓帧一致（上屏那次逐项对过 WPE event 110）；
+    - `p6d1-a2c` 八组 7 组像素相同，C3 是加载期 `ADDITIVE` 的已知缺口（转 P13f）。
+  - 工作树基点 `637530bd` 本身缺 `scriptPropertyEntries` 的导出（P9d 2a 只提交了引用方），工作树里的那条 tsc 错误与本步无关，合并后消失。
+  - 提交前工作树对齐到 `f26e8de9`（P12c 把宿主与探针的脚本写回收进 `script/stateWrite.ts` 的 `writeScriptState`，`pass-state` 走它的通用分支 `SceneState.write`，字符串经 `scriptWriteValue` 原样传过；材质对象读的是 `passStates`、不经 `readScriptState`），6 个重叠文件自动合并无冲突；`a74a21f4` 补上了上面那个导出。工作树里 tsc 0 error，相关 26 个文件 514 条全过（另 5 条要语料，带上 `KABEGAME_WPE_ROOT` 后 `p3a` / `runtime` 46 条全过），Prettier 通过。

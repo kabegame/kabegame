@@ -31,6 +31,7 @@ import {
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
 import { hasNonNumericDependency } from "./dependencies";
+import { normalizeJsonPassState, PASS_STATE_TABLES, type PassStateField } from "./passState";
 import { resolveParents } from "./hierarchy";
 import { LEGACY_LIGHT_UNIFORMS } from "./lights";
 import {
@@ -69,7 +70,7 @@ export const SUPPORTED = {
    * `alphatocoverage`（P8 步骤 5，rea-p8-render 第 5 节）：混合关、写掩码与深度同 normal，着色器加 `ALPHATOCOVERAGE = 1`
    * （`writeState.ts` 的 `materialCombos`），渲染器在 A2C 管线的片元入口里丢弃锐化后 alpha 小于 0.5 + 2⁻¹² 的片元（`render/programs.ts`）。
    */
-  blending: ["normal", "translucent", "additive", "alphatocoverage"],
+  blending: PASS_STATE_TABLES.blending,
   /** 按原格式上传的 `.tex` 格式（0、4、6–9），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
   textureFormats: Object.keys(TEXTURE_FORMATS).map(Number),
   /** FreeImage 形态 `.tex`（mip 是整份图片文件）：2 JPEG、13 PNG，主线程 `createImageBitmap` 解码。 */
@@ -1231,12 +1232,13 @@ export function normalizeDepthKeys(pass: Pick<MaterialPass, "cullmode" | "deptht
   depthtest: PassDepthMode;
   depthwrite: PassDepthMode;
 } {
-  const pick = <T extends string>(value: unknown, on: T, off: T, fallback: T): T =>
-    value === undefined ? on : value === on || value === off ? (value as T) : fallback;
+  // 缺键取「材质构造清零」的缺省；写了的值查共用的表（`passState.ts`，非字符串、`null` 也落到第一项）
+  const pick = <T extends string>(field: PassStateField, value: unknown, on: T): T =>
+    value === undefined ? on : (normalizeJsonPassState(field, value) as T);
   return {
-    cullmode: pick<PassCullMode>(pass.cullmode, "normal", "nocull", "normal"),
-    depthtest: pick<PassDepthMode>(pass.depthtest, "enabled", "disabled", "disabled"),
-    depthwrite: pick<PassDepthMode>(pass.depthwrite, "enabled", "disabled", "disabled"),
+    cullmode: pick<PassCullMode>("cullmode", pass.cullmode, "normal"),
+    depthtest: pick<PassDepthMode>("depthtest", pass.depthtest, "enabled"),
+    depthwrite: pick<PassDepthMode>("depthwrite", pass.depthwrite, "enabled"),
   };
 }
 

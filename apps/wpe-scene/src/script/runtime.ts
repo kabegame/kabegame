@@ -134,6 +134,9 @@ export function targetKey(target: ScriptTarget): string {
     // puppet 动画层字段（P12a 步骤 3 点 3）：只有用户属性写它，脚本写不到（`puppet:layer-script`）；同宿主 `targetPath`
     case "animation-layer":
       return `objects/${target.object}/animationlayers/${target.layer}/${target.field}`;
+    // 材质状态字段（P6d1b）：同宿主 `targetPath`，重编译后按它重放
+    case "pass-state":
+      return `${target.pass}/state/${target.field}`;
     default:
       return target.path;
   }

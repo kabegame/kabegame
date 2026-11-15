@@ -293,6 +293,29 @@
 | [x] | F9 解锁场景的实时画面 | Windows，真机 | 实时看 `3243449890` | 时钟与音频条照常动，和 WPE 观感一致 | 2026-11-15 用户手测：和 WPE 差不多 |
 | [x] | F10 材质对象键的顺序（补提交） | Node，vitest；Windows dev，屏外宿主；WPE | `script/materialKeyOrder.test.ts` 七组；`p6d1-mat2/3/4`、`p6d1-keys`（fire / pulse / lightshafts，9–12 个键，触发扩容）导入 dev 库跑脚本，`Object.keys` 的结果和 WPE 日志比 | 逐项相同 | 2026-11-15 Claude：WPE 侧 `p6d1-keys` 的三组和读码预测逐项相同（证实扩容路径）；单测与真机读回七组全部相同；变异 3 处（不排序、非空桶追加到尾、不倒序）全部检出 |
 
+## 场景壁纸 P6d1b：材质状态字段运行中改管线
+
+2026-11-15 Windows dev。脚本写材质对象的 `blending` / `alphawriting` / `depthtest` / `depthwrite` / `cullmode`：
+- 取值按一张表规整（编译期共用），非法值复位成第一项；
+- 写进 `SceneState.passStates`，重编译重放；
+- 写过的图层强制重建，规划取「bundle 值 + 覆盖」，角色规则照旧，着色器不换；
+- 新组合的管线后台建、晚几帧换上，dev 探针读回前结清；
+- 用到 `getEffect` 时场景目标加载就挂深度附件。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「层级、转向与 effect / 材质访问（P6d1a）」的「材质状态字段的写入（P6d1b）」；计划与实施记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d1-hierarchy-effects.md` 点 8，读码 `rea-p6d1-matstate.md`。
+- 验收文件在 `ignore/p6/d1/`：变异清单 `mutations4.json`、`mutations5.json`，语料 `corpus-base2.json` / `corpus-wt2.json`，真机图与轨迹 `real/p6d1-mat7*`、`real/p6d1-a2c*`，像素脚本 `a2c_pixels.py`。
+- 测试工程由 `ignore/p6/d0/make_p6d1b.py`（`p6d1-mat7`、`p6d1-mat8`）与 `make_p6d1c.py`（`p6d1-a2c`）生成；WPE 像素在 `ignore/p6/d0/out/p6d1-round2.log` 末段，抓帧在 `A:\p6d\p6d1-mat7\`、`p6d1-mat8\`、`p6d1-a2c\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | G1 类型与格式 | Windows | 宿主 `tsc --noEmit`；Prettier `--check` 本步改动的 TS 文件 | 0 error、格式通过 | 2026-11-15 Claude：合并进主工作区后 tsc 0 error、16 个文件格式通过。工作树基点 `637530bd` 本身缺 `scriptPropertyEntries` 的导出（别的提交只提交了引用方），工作树里那一条 tsc 错误与本步无关 |
+| [x] | G2 宿主 vitest（相关文件） | Node，vitest | `render/p6d1b`、`compile/passState`、`script/effectMaterialApi`、`render/p3a`、`dev/probe.scripts`、`render/rebuild`、`render/p5d-depth`、`render/p8`、`compile/p5c`、`compile/p5d`、`script/api`、`script/runtime`、`host.script`、`script/materialKeyOrder`、`script/hierarchyApi` | 全过 | 2026-11-15 Claude：主工作区 15 个文件 609 条全过（6 条本来就跳过） |
+| [x] | G3 变异检查 | Node，工作区模式 | `mutations4.json` 13 处（工作树）、`mutations5.json` 1 处（主工作区，探针结清） | 每处都有用例失败，原样还原 | 2026-11-15 Claude：14 处全部检出、全部还原（非法值不复位、不分大小写、编译期不查表、规划不取覆盖、sync 不重建、建好不换上、不建深度附件、default 留键、不标脏、getter 只读 bundle、setter 空、字符串不放行、重放键、探针不结清） |
+| [x] | G4 语料编译 | Node，`kbp corpus scan` / `diff` | 基点 `637530bd` 快照与工作树各扫一次，同一份翻译器 wasm | 不变 | 2026-11-15 Claude：233 张，0 出错，干净 160 → 160，没有键的增减 |
+| [x] | G5 取值规则的读回 | Windows dev，屏外宿主（`render_scene`，`scripts: true`） | `p6d1-mat8` 在 tint 的 pass 0 上依次写五个字段（36 次，含 `bogus`、`Additive`、`3`、`null`、`less`、`back` 等），读回和 WPE 实测比 | 逐项一致 | 2026-11-15 Claude：非法值复位成表的第一项、`null` 不写、区分大小写，全部一致 |
+| [x] | G6 管线状态 | Windows dev，屏外宿主 + 逐 draw 轨迹；WPE 抓帧 | `p6d1-mat7` 在 blur 四个 pass 各写一项，轨迹里每次绘制的混合、写掩码、剔除、深度和 WPE 抓帧比 | 相同 | 2026-11-15 Claude：pass 0 additive 进了中间 pass；pass 1 剔除 Back；pass 2 测写深度（fbo 没有深度附件，不起作用，同 WPE）；pass 3 上屏 SrcAlpha / InvSrcAlpha、写掩码 7、深度关（借基础材质）、剔除 Back（用自己的），和 WPE event 110 逐项相同 |
+| [x] | G7 A2C 与 additive 的画面 | Windows dev，屏外宿主（回放 70 帧，第 60 帧写入）；WPE 抓帧 | `p6d1-a2c` 八组的中心像素和 WPE 比 | 7 组相同；C3 是已知差异 | 2026-11-15 Claude：N、M1（normal → A2C 不锐化，黑）、C1、M2a / M2b（A2C → translucent 仍锐化）、M3（运行中 additive 没有 `ADDITIVE`）、M7（不写 alpha）相同；C3（加载时 additive）WPE (255, 255, 0)、我们 (255, 0, 0)：加载期没加 `ADDITIVE` 组合键，WPE 自带着色器只在雾效读它、语料工坊着色器没有，随雾效补 |
+
 ## 场景渲染器的逐 draw 轨迹（dev 工具）
 
 2026-11-13，只在 dev 构建：dev 探针 `renderFrame`、vite `/render`、MCP `render_scene` / `host_render` 收 `trace`，记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform、顶点，可选读回 pass 的目标，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。计划见 `.claude/plans/tools/scene-draw-trace.md`，用法见 `.claude/skills/kabegame-chromium/SKILL.md`「逐 draw 轨迹」，实施记录在 `ignore/tools/draw-trace/record.md`。

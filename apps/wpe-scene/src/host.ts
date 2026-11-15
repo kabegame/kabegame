@@ -534,6 +534,8 @@ export class SceneHost {
     // puppet 动画层字段（P12a 步骤 3 点 3）：同脚本运行时的 `targetKey`
     if (target.kind === "animation-layer")
       return `objects/${target.object}/animationlayers/${target.layer}/${target.field}`;
+    // 材质状态字段（P6d1b）：同脚本运行时的 `targetKey`
+    if (target.kind === "pass-state") return `${target.pass}/state/${target.field}`;
     return `${target.script}/scriptproperties/${target.key}`;
   }
 
