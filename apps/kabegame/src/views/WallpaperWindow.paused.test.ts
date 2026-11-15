@@ -27,11 +27,11 @@ vi.mock("@/stores/frameMonitor", () => ({
   getFrameMonitorLevel: () => "good",
   useFrameMonitorStore: () => ({ registerHook: () => 1, unregisterHook: () => {} }),
 }));
-vi.mock("@/components/wallpaper/WallpaperStage.vue", async () => {
+vi.mock("@/components/wallpaper/Wallpaper.vue", async () => {
   const { defineComponent, h } = await import("vue");
   return {
     default: defineComponent({
-      name: "WallpaperStage",
+      name: "Wallpaper",
       props: { target: Object, paused: Boolean },
       setup(_props, { expose }) {
         expose({ debugState: () => null, delegatesPing: () => false });
@@ -52,8 +52,7 @@ async function mountWindow(type: string, paused: boolean) {
   return wrapper;
 }
 
-const stagePaused = (wrapper: ReturnType<typeof mount>) =>
-  wrapper.findComponent({ name: "WallpaperStage" }).props("paused");
+const stagePaused = (wrapper: ReturnType<typeof mount>) => wrapper.findComponent({ name: "Wallpaper" }).props("paused");
 
 function settingChange(changes: Record<string, unknown>) {
   backend.listeners.get("setting-change")?.({ payload: { changes } });

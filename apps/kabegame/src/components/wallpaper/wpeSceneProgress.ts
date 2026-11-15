@@ -3,9 +3,9 @@
  * `{ type: WPE_SCENE_PROGRESS, stage, done, total }`，`WpeSceneView` 核对来源后往上报，这里把它换成 0…1 的总进度。
  *
  * - 阶段与权重（一处常量，宿主不关心）：`page` 是应用页自己的阶段（挂上 iframe 到第一条消息：宿主启动、拉属性、等设置），其余四个
- *   来自宿主；`gpu` 是「准备渲染」，编译、解码完就进入，含文本、脚本 `init`、取设备与建 GPU 场景。权重按本机实测的用时定（2026-11-15：
- *   82 层的大场景 页面 / 编译 / 解码 / 准备与 GPU / 首帧 ≈ 5 / 49 / 8 / 37 / 1 %，小场景编译占得更多），「开始渲染」日志里有各段
- *   用时，可以照着调。
+ *   来自宿主：`prepare` 是编译、解码之后的文本、脚本 `init`、取 WebGPU 设备，`gpu` 是建着色器程序与管线。权重按本机实测的用时定
+ *   （2026-11-15：82 层的大场景 页面 / 编译 / 解码 / 准备 / GPU / 首帧 ≈ 5 / 49 / 8 / 27 / 10 / 1 %，小场景编译占得更多），
+ *   「开始渲染」日志里有各段用时，可以照着调。
  * - **单调**：一次加载里总进度只增不减（被取代的加载、阶段内乱序都不会让它倒退），由使用方用 `Math.max` 保证。
  * - **不停**：宿主同步阻塞（粒子预热、排版、建图层）时发不出消息，`creepProgress` 在当前阶段的区间里按时间逼近区间上沿的 90%，
  *   下一条真实消息一到就以它为准。
@@ -15,7 +15,7 @@
 
 export const WPE_SCENE_PROGRESS = "kabegame:wpe-scene-progress";
 
-export const WPE_SCENE_PROGRESS_STAGES = ["page", "compile", "decode", "gpu", "frame"] as const;
+export const WPE_SCENE_PROGRESS_STAGES = ["page", "compile", "decode", "prepare", "gpu", "frame"] as const;
 export type WpeSceneProgressStage = (typeof WPE_SCENE_PROGRESS_STAGES)[number];
 
 /** 各阶段占总进度的份额（和为 100）。 */
@@ -23,7 +23,8 @@ export const WPE_SCENE_PROGRESS_WEIGHTS: Readonly<Record<WpeSceneProgressStage, 
   page: 5,
   compile: 50,
   decode: 10,
-  gpu: 30,
+  prepare: 20,
+  gpu: 10,
   frame: 5,
 };
 

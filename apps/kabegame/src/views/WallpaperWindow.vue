@@ -2,7 +2,7 @@
 /**
  * 壁纸窗口根组件（`index.html?window=wallpaper`）：承担原 `src/wallpaper.ts` 里 `init()` 的全部职责——
  * 看门狗、`setting-change` 监听、启动时并行拉取设置与当前壁纸、`wallpaper_window_ready` 握手、dev 调试面板，
- * 再把结果作为 props 交给纯渲染组件 `WallpaperStage`。后端仍是唯一属主，本窗口是「自驱动」的观察方。
+ * 再把结果作为 props 交给纯渲染组件 `Wallpaper`（铺放与过渡，媒体交给 `ImageContent`）。后端仍是唯一属主，本窗口是「自驱动」的观察方。
  *
  * 窗口模式下每块在线屏一个这样的窗口。后端只告诉每个窗口一条布置（显示哪个壁纸目标、出不出声），
  * 样式、过渡与当前壁纸由窗口自己从 `wallpaperTargets[布置的目标]` 读。
@@ -10,8 +10,9 @@
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
+import { resolveLanguage, setLocale } from "@kabegame/i18n";
 import { IS_DEV } from "@/env";
-import WallpaperStage from "@/components/wallpaper/WallpaperStage.vue";
+import Wallpaper from "@/components/wallpaper/Wallpaper.vue";
 import { isPausableTarget } from "@/components/wallpaper/targetKind";
 import type { Mode, Transition, WallpaperTarget } from "@/components/wallpaper/types";
 import type { WallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
@@ -36,9 +37,9 @@ import {
 } from "@/stores/frameMonitor";
 import "@/styles/debug-panel.css";
 
-const stage = ref<InstanceType<typeof WallpaperStage> | null>(null);
+const stage = ref<InstanceType<typeof Wallpaper> | null>(null);
 
-/** 直接作为 WallpaperStage 的 props。初值与原实现的模块级默认值一致。 */
+/** 直接作为 Wallpaper 的 props。初值与原实现的模块级默认值一致。 */
 const state = reactive<{
   target: WallpaperTarget | null;
   styleMode: Mode;
@@ -57,7 +58,7 @@ const state = reactive<{
   playbackRate: 1,
   /** 设置 `wallpaperPaused`；是否真的暂停看 `stagePaused` */
   paused: false,
-  /** 全局「壁纸设置」的场景四项原值（可能是 follow）；交给 Stage 前按能否跟随 WPE 换算（`stageSceneSettings`） */
+  /** 全局「壁纸设置」的场景四项原值（可能是 follow）；交给 Wallpaper 前按能否跟随 WPE 换算（`stageSceneSettings`） */
   sceneSettings: { ...WPE_FOLLOW_SCENE_SETTINGS },
 });
 
@@ -131,7 +132,7 @@ function applyTargetConfig(): boolean {
   return imageChanged;
 }
 
-/** 交给 Stage 的音量：布置不出声时为 0（同一张壁纸各屏各播一份，只让主屏窗口出声）。 */
+/** 交给 Wallpaper 的音量：布置不出声时为 0（同一张壁纸各屏各播一份，只让主屏窗口出声）。 */
 const stageVolume = computed(() => (assignment.value?.audible === false ? 0 : state.volume));
 
 /** 交给场景宿主的四项：不能跟随 WPE 时 follow 换成 Kabegame 默认值 */
@@ -146,17 +147,25 @@ const readyInvoked = ref(false);
 const lastImageTs = ref("");
 const lastStyleTs = ref("");
 const lastTransitionTs = ref("");
-/** 窗口侧错误；与 WallpaperStage 的 lastError 按赋值时刻「后写者胜」合并显示（原实现两者共用一个变量）。 */
+/** 窗口侧错误；与 Wallpaper 的 lastError 按赋值时刻「后写者胜」合并显示（原实现两者共用一个变量）。 */
 const windowError = ref("");
 const windowErrorAt = ref(0);
 
 /**
- * 接收当前壁纸目标，交给 `WallpaperStage` 渲染。网页壁纸（`x-wpe/web`）同样在这里渲染：它是 web 层里的
+ * 接收当前壁纸目标，交给 `Wallpaper` 渲染。网页壁纸（`x-wpe/web`）同样在这里渲染：它是 `WpeWallpaperContent` 里的
  * `file:` iframe（与图库预览同一套），窗口本身不导航；后端只按当前壁纸开关桌面鼠标转发。
  */
 function acceptTarget(target: WallpaperTarget | null) {
   if (!target?.path) return;
   state.target = target;
+}
+
+/**
+ * 应用语言：壁纸窗口不装设置 store，自己读 `language` 并跟 `setting-change`。规则同主窗口（`App.vue`）：存的值为空或不合法时英语。
+ * 桌面上看得到的文字（加载进度、失败原因）都靠它。
+ */
+function applyLanguage(raw: unknown) {
+  setLocale(resolveLanguage(typeof raw === "string" ? raw : null));
 }
 
 function setWindowError(message: string) {
@@ -283,11 +292,13 @@ async function init() {
     if ("wallpaperPaused" in changes && typeof changes.wallpaperPaused === "boolean") {
       state.paused = changes.wallpaperPaused;
     }
-    // 场景四项（全局「壁纸设置」）：交给 Stage → WpeSceneView 推给宿主，宿主比较后决定要不要重载
+    // 场景四项（全局「壁纸设置」）：交给 Wallpaper → WpeSceneView 推给宿主，宿主比较后决定要不要重载
     for (const [settingKey, field] of SCENE_SETTING_KEYS) {
       if (settingKey in changes && typeof changes[settingKey] === "string")
         state.sceneSettings = { ...state.sceneSettings, [field]: changes[settingKey] as string };
     }
+    // 语言：桌面的加载进度、失败原因等文字跟应用语言（规则同主窗口 App.vue）
+    if ("language" in changes) applyLanguage(changes.language);
   });
 
   // 布置变化（切显示器模式、主屏换了）：换目标后样式 / 过渡 / 当前壁纸都改读新目标。
@@ -311,7 +322,7 @@ async function init() {
 
     // 能力表只用来归一化样式 / 过渡，读不到就直接用存下来的值，不让它连累整个初始化
     const requested = targetId.value;
-    const [targetsRes, capabilitiesRes, volumeRes, playbackRateRes, pausedRes, targetRes, ...sceneRes] =
+    const [targetsRes, capabilitiesRes, volumeRes, playbackRateRes, pausedRes, targetRes, languageRes, ...sceneRes] =
       await Promise.all([
         invoke<WallpaperTargets>("get_wallpaper_targets"),
         invoke<WallpaperCapabilities>("get_wallpaper_capabilities").catch(() => null),
@@ -319,16 +330,18 @@ async function init() {
         invoke<number>("get_wallpaper_video_playback_rate"),
         invoke<boolean>("get_wallpaper_paused"),
         invoke<WallpaperTarget | null>("get_current_wallpaper_target", { target: requested }),
+        // 语言读不到不连累初始化：按默认语言
+        invoke<string | null>("get_language").catch(() => null),
         // 场景四项读不到不连累初始化：按跟随
         ...SCENE_SETTING_GETTERS.map((command) => invoke<string>(command).catch(() => null)),
       ]);
+    applyLanguage(languageRes);
     const sceneSettings = { ...state.sceneSettings };
     SCENE_SETTING_KEYS.forEach(([, field], index) => {
       if (typeof sceneRes[index] === "string") sceneSettings[field] = sceneRes[index] as string;
     });
     state.sceneSettings = sceneSettings;
-    // 赋值顺序即 WallpaperStage 各 watch 的执行顺序：样式 → 过渡 → 音量 → 倍速 → 暂停 → 目标，
-    // 与原实现「先应用样式 / 音量 / 循环，再 setTarget」一致。
+    // 先样式 / 过渡 / 音量 / 倍速 / 暂停，最后目标：新层挂上时拿到的就是这一份（Wallpaper 按 props 渲染）。
     targetSource.targets = targetsRes && typeof targetsRes === "object" ? targetsRes : {};
     targetSource.combos = capabilitiesRes?.displayModes?.[WINDOW_MODE] ?? [];
     // 读取期间布置换了目标：事件那一次重算时目标表还没到，这里按现在的目标再算一遍并自己取壁纸
@@ -376,7 +389,7 @@ function cleanup() {
   unlistenAssignment = null;
 }
 
-// 子组件 WallpaperStage 的 onMounted 先于这里执行，等价于原实现 init() 开头的 initDOM()。
+// 子组件 Wallpaper 先于这里挂好。
 onMounted(() => {
   void listenPing();
   void init();
@@ -406,7 +419,7 @@ onBeforeUnmount(() => {
   <div class="wallpaper-root relative w-screen h-screen overflow-hidden bg-transparent">
     <!-- interactive：网页 / 场景壁纸的 iframe 登记鼠标注入，Rust 把桌面上的鼠标直接注入 iframe（点击只认落在桌面上的） -->
     <!-- 音量：布置不出声的窗口（各屏复制时的副屏）恒为 0，其余 props 各窗口相同 -->
-    <WallpaperStage
+    <Wallpaper
       ref="stage"
       :target="state.target"
       :style-mode="state.styleMode"

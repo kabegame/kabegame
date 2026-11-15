@@ -1,6 +1,6 @@
 # Wallpaper Engine 场景壁纸（`x-wpe/scene`）
 
-> 状态：阶段 3 P1-0（着色器翻译器 `wpesl2wgsl` 与 wasm 构建链）、`scene.pkg` 读取、P1-1 导入、P1-2 `sceneAssets`、P1-3 前端编译管线、P1-4 渲染器（`wpe-scene/render/` + `WpeSceneView.vue`）、P1-5 接进 `WallpaperStage`（scene 层）已落地：图库预览与桌面壁纸窗口都实时渲染能渲染的场景，其余显示作者预览图。
+> 状态：阶段 3 P1-0（着色器翻译器 `wpesl2wgsl` 与 wasm 构建链）、`scene.pkg` 读取、P1-1 导入、P1-2 `sceneAssets`、P1-3 前端编译管线、P1-4 渲染器（`wpe-scene/render/` + `WpeSceneView.vue`）、P1-5 接进 `WallpaperStage`（scene 层；2026-11-15 起改由 `WpeWallpaperContent` 挂宿主，见「显示」）已落地：图库预览与桌面壁纸窗口都实时渲染能渲染的场景，其余显示作者预览图。
 > P2a（图层渲染图、effect 链、colorBlendMode、`_rt_FullFrameBuffer` 快照、FreeImage `.tex`、设置「场景后处理」与 `disabled` 档）已落地：本机当时 29 张里新解锁 razer_vortex；随后 P3b 解锁 razer_bedroom，见下「场景脚本」。
 > P2b（泛光与 HDR，「开启」/「超高」档）已落地：LDR 泛光链、HDR 8 级金字塔与收尾都用 WPE assets 原件翻译，链路隔离验证与 WPE 抓帧逐像素一致（见下「泛光与 HDR」）；bedroom 开启或超高档可见光晕。
 > P3-0b：编译、渲染与 dev 探针已迁进 `apps/wpe-scene`，应用页只承载 iframe；画面与 ping 的真机回归待验收。
@@ -16,7 +16,7 @@
 
 ## 总体形态
 
-- **渲染**：场景壁纸在前端渲染，用 WebGPU 跑在 `WallpaperStage` 的 scene 层，壁纸窗口与图库预览共用；资源由前端 `fetch(file:)` 读取。
+- **渲染**：场景壁纸在前端渲染，用 WebGPU 跑在 `WpeWallpaperContent` 挂的场景宿主里，壁纸窗口与图库预览共用；资源由前端 `fetch(file:)` 读取。
 - **编译**：资源依次查项目目录散文件、项目的 `scene.pkg`、WPE 安装目录的 `assets/`。场景 JSON、`.tex` 解码都在前端 TypeScript。
 - **着色器**：WPE 着色器交给 wasm 版翻译器 `wpesl2wgsl`。
 - **Rust 侧**：只有导入，以及把 WPE 安装目录交给前端；`kabegame-core` 不出现 scene 模块。
@@ -24,7 +24,7 @@
     没有 `type` 但入口是 `.json` 的按场景处理。
   - 壁纸目标的 `sceneAssets`：`<WPE 安装目录>/assets` 绝对路径列表（`wpe::discover::scene_asset_dirs`，安装目录只有一个，来自设置 `wpeEngineDir`），只对场景行计算，其它类型、Android、没找到 WPE 安装目录时为空。
   - 壁纸目标的 `previewPath`：场景行的 `thumbnail_path`（导入时就是作者的 `preview.*`），不能渲染时 scene 层显示它；缩略图为空或回落成壁纸目录本身时不填，其它类型不填。
-  - `isWpeWallpaperContentType` 认网页与场景：两者的图库预览都走 `WpeWallpaperContent` → `WallpaperStage`；网格缩略位仍是作者预览图；应用背景与预览同一条 `ImageContent` 原图形态，也实时渲染（见下「接入 `WallpaperStage`」）。
+  - `isWpeWallpaperContentType` 认网页与场景：两者都走 `ImageContent` 的 wallpaper 形态 → `WpeWallpaperContent`；网格缩略位仍是作者预览图；应用背景与预览同一条 `ImageContent` 原图形态，也实时渲染（见下「显示」）。
 - **平台**：随 `wpe` feature，与网页壁纸相同：三个桌面平台都走场景宿主，Android / Web 的 scene 行显示预览图。没有 WPE 安装目录或 WebGPU 不可用时退回预览图。本文的真机数据都来自 Windows。
 
 ## 光照（`#require LightingV1`）
@@ -259,7 +259,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | `clock.ts` | 可暂停的时钟、帧时钟（帧时间钳到 `[0.0001, 0.25]`，P4a）、帧节流 |
 | `bloom.ts` | 泛光链：`planBloom`（纯函数：RT、步骤、`g_RenderVar0`、HDR 参数换算）与 `BloomChain`（建 RT / 管线 / uniform，逐步编码） |
 
-组件 `apps/kabegame/src/components/wallpaper/WpeSceneView.vue` 是自取数据的子组件，地位等同 web 层的 iframe（接进 `WallpaperStage` 的方式见下一节）：
+组件 `apps/kabegame/src/components/wallpaper/WpeSceneView.vue` 是自取数据的子组件，地位等同网页壁纸的 iframe（怎么挂上来见「显示」一节）：
 - **props**：`target`、`paused`、`interactive`。
 - **数据**：宿主的 `SceneHost` 接收垫片 `applyUserProperties`（`user[key].value` 组成 `userProperties`）、在 Worker 里编译、建渲染器。
 - **重载**：垫片监听本张图的 `metadataId` 字段补丁并只交付变化键，`SceneHost` 的**应用函数**按绑定表分成就地写与重编译（P3a，见「属性与快速路径」）；只有重编译才在同一设备上换场景，时钟不重置。父页面下发的后处理 / 反射 / 阴影 / 体积光变了也重新加载（见「场景后处理档位」的「设置来源」）。
@@ -404,31 +404,31 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - 渲染器自查（`checkRenderable`，按 `planLayer` 的步骤逐个核对，只查 `buildableLayers`）：基础材质多 pass `render:multi-pass`、缺程序 `render:no-program`（粒子程序同样）、粒子着色器有渲染器写不了的顶点输入 `render:particle-attribute:<名字>`、不认识的顶点属性类型 `render:attribute:…`、缺纹理数据 `render:texture-missing:<下标>`、`_rt_*` 名字解析不到 `render:texture-rt:<名字>`、colorBlendMode 混合但 passthrough 没编出来 `render:no-passthrough`、effect 里没有绘制 pass `render:no-final-pass`；建资源时 copy 两端格式不同 `render:copy-format:<图层>`、swap 两端尺寸 / 格式不同 `render:swap-mismatch:…`；泛光链缺 pass 或程序 `render:bloom:<pass>`、着色器声明了渲染图没给的槽位 `render:bloom-slot:<pass>:<槽>`。
 - dev 强制渲染（`SceneRenderer.load(bundle, { ignoreUnsupported: true })`）只跳过 `bundle.unsupported`，上面的自查照常生效。
 
-## 接入 `WallpaperStage`（scene 层）
+## 显示：`ImageContent` → `WpeWallpaperContent` → `WpeSceneView`
 
-`apps/kabegame/src/components/wallpaper/WallpaperStage.vue` 对 `type === "x-wpe/scene"` 的目标（判定在 `targetKind.ts`）走独立的 **scene 层**，切入切出照 web 层：
+2026-11-15 壁纸显示重构（`.claude/plans/wpe-import/phase-wallpaper-refactor.md`）之后，场景和网页壁纸在桌面、图库预览、应用背景走同一条
+路：`ImageContent` 的 wallpaper 形态（判定 `isWpeWallpaperContentType`，在 `targetKind.ts` / `mediaMime.ts`）挂 `WpeWallpaperContent`，
+它挂 `WpeSceneView`（宿主 iframe）。桌面外面再套 `Wallpaper`，只管铺放与过渡（[WPE_IMPORT.md](WPE_IMPORT.md)「图库接入」「WPE 显示组件」）。
 
-- **一次只有一个场景**：层里挂一个 `WpeWallpaperContent`（key 每次挂载递增；里面是 `WpeSceneView`，见 [WPE_IMPORT.md](WPE_IMPORT.md)「WPE 显示组件」），宿主自己读属性、编译、持有 GPU 设备。切走、换场景、target 置 null、组件卸载都先卸载它（终止编译、销毁设备）再做别的。
-- **层级**：z-index 3，盖在 web 层（2）之上。
-  - 网页 → 场景：场景淡入盖住网页后再销毁 iframe。
-  - 场景 → 网页：网页先在场景层下面加载、淡入，场景层再淡出卸载。
-  - 场景 → 图片 / 视频：新媒体先直设到 base，场景层淡出后卸载。
-- **状态流转 loading → live / fallback**：
-  - `loading`：从挂上开始，读属性、编译、建设备期间什么都不显示，也不 emit `ready`。桌面保留上一张壁纸，照 web 层「等 load 再淡入」。图库不经 Stage：`ImageContent` 的 wallpaper 形态先显示缩略图，实时画面出来再揭开（见 [WPE_IMPORT.md](WPE_IMPORT.md)「图库接入」）。
-  - `live`：出首帧（`WpeWallpaperContent` 的 `live`）就整层淡入实时画面，同时 emit `ready`，中间不出现预览图。
-  - `fallback`：`WpeWallpaperContent` 报 `fail(reasons)`，这时才挂上作者预览图（目标的 `previewPath`，按壁纸样式显示），预览图加载完才淡入并 emit `ready`。原因记进调试快照 `sceneFallback`（`; ` 连接），不是错误。没有预览图或预览图加载失败时 emit `error`。
-  - **超时**（在 `WpeWallpaperContent`，2026-11-15 由 10 s 改 30 s）：挂上宿主后 `SCENE_RESULT_TIMEOUT_MS = 30s` 内既没首帧也没退回（Worker 卡住、取设备挂起）时报 `fail(["render:timeout"])` 并 **卸载宿主**，Stage 按退回显示预览图并 emit `ready`。**每收到一条加载进度重新计时**（见下「加载进度」），大场景慢慢加载但一直在动时不会被提前判失败。本机实测编译到首帧 0.3–0.6 s，大场景几秒；壁纸窗口 init 看门狗只等设置与目标、不等画面。编译类退回宿主仍挂着，只有超时卸载，所以超时后不会再切回实时画面。
+- **一张壁纸一个宿主**：`WpeWallpaperContent` 按图片 id 挂载，宿主自己读属性、编译、持有 GPU 设备；换壁纸、卸载都先卸载它（终止编译、
+  销毁设备）。桌面换场景时新旧两层在过渡期间短暂并存（两个宿主），过渡结束卸载旧层（用户定）。
+- **状态流转 loading → live / failed**（`ImageContent` 管显示）：
+  - `loading`：缩略图（目标的 `previewPath`，即行的 `thumbnail_path`）打底并模糊，正中是阶段、计数与进度条（见下「加载进度」）。
+    `ImageContent` 在缩略图出来时发 `ready`：桌面的 `Wallpaper` 据此开始过渡，所以桌面也看得到加载过程（以前保留上一张直到出结果）。
+  - `live`：出首帧（`WpeWallpaperContent` 的 `live`）且挂上满 300 ms 才淡入揭开实时画面（`wallpaperLive`）。
+  - `failed`：`WpeWallpaperContent` 报 `fail(reasons)`（编译类退回、宿主不可用、超时），当原图加载失败：实时层收起，停在清晰的缩略图上，
+    底部留一行红字原因；缩略图也坏了才丢失。原因进桌面调试快照 `sceneFallback`（`; ` 连接）。
+  - **超时**（在 `WpeWallpaperContent`，2026-11-15 由 10 s 改 30 s）：挂上宿主后 `SCENE_RESULT_TIMEOUT_MS = 30s` 内既没首帧也没退回（Worker 卡住、取设备挂起）时报 `fail(["render:timeout"])` 并 **卸载宿主**。**每收到一条加载进度重新计时**（见下「加载进度」），大场景慢慢加载但一直在动时不会被提前判失败。本机实测编译到首帧 0.3–0.6 s，大场景几秒；壁纸窗口 init 看门狗只等设置与目标、不等画面。编译类退回宿主仍挂着（改属性后可能重新可渲染），只有超时卸载，所以超时后不会再切回实时画面。
 - **加载进度**（壁纸显示重构步骤 2，宿主 `src/progress.ts`、应用页 `wpeSceneProgress.ts`）：宿主只在**首次加载**时按阶段经 postMessage 报 `{ type: "kabegame:wpe-scene-progress", stage, done, total }`（不走 `wpe_scene_report`：只给同一页面里的父组件，每条不用过 Rust），重编译（改属性、改设置）时旧画面一直在画、不报，被新的加载取代后旧加载不再报。同一阶段 100 ms 内只发一条（阶段最后一条 `done >= total` 照发），阶段变化立即发。字面量两边各一份，测试比对。
-  - 阶段：`compile`（Worker 的对象循环，每个对象之前报已处理的权重，权重 = 1 + 它的 effect 数，读完 scene.json 就知道总数；Worker 协议多一种 `progress` 消息，`client.ts` 先认它、不当读文件请求）→ `decode`（主线程解 mip，开解前报 `0 / 总数`）→ `gpu`（准备渲染：编译、解码完就进入 `0 / 1`，文本、声音、脚本 `init`、取设备期间没有计数；建 GPU 场景时按着色器程序计数）→ `frame`（画第一帧之前 `0 / 1`，等完视频首帧报 `1 / 1`，紧接着报 ready）。之后的管线、粒子预热、排版是同步的，发不出消息。
-  - 应用页：`WpeSceneView` 只认自己 iframe 发的、格式对的消息，原样 emit `progress`；`WpeWallpaperContent` 在出结果之前转发并重新计时；`ImageContent` 的 wallpaper 形态画进度（见 [WPE_IMPORT.md](WPE_IMPORT.md)「图库接入」）。桌面（Stage）不画进度。总进度按 `WPE_SCENE_PROGRESS_WEIGHTS`（页面 5 / 编译 50 / 解码 10 / 准备与 GPU 30 / 首帧 5，`page` 是挂上 iframe 到第一条消息）换算；一次加载里只增不减、阶段只往前走；没有消息时按 150 ms 一拍在当前阶段区间里逼近上沿的 90%（时间常数 3 s），宿主阻塞时条也在动。
+  - 阶段：`compile`（Worker 的对象循环，每个对象之前报已处理的权重，权重 = 1 + 它的 effect 数，读完 scene.json 就知道总数；Worker 协议多一种 `progress` 消息，`client.ts` 先认它、不当读文件请求）→ `decode`（主线程解 mip，开解前报 `0 / 总数`）→ `prepare`（编译、解码完就进入 `0 / 1`：文本排版、声音、媒体、用户纹理、脚本 `init`、取 WebGPU 设备，期间没有计数）→ `gpu`（建 GPU 场景，按着色器程序计数）→ `frame`（画第一帧之前 `0 / 1`，等完视频首帧报 `1 / 1`，紧接着报 ready）。之后的管线、粒子预热、排版是同步的，发不出消息。
+  - 应用页：`WpeSceneView` 只认自己 iframe 发的、格式对的消息，原样 emit `progress`；`WpeWallpaperContent` 在出结果之前转发并重新计时；`ImageContent` 的 wallpaper 形态画进度（见 [WPE_IMPORT.md](WPE_IMPORT.md)「图库接入」），桌面同样画（新层的缩略图出来后可见）。总进度按 `WPE_SCENE_PROGRESS_WEIGHTS`（页面 5 / 编译 50 / 解码 10 / 准备 20 / GPU 10 / 首帧 5，`page` 是挂上 iframe 到第一条消息）换算；一次加载里只增不减、阶段只往前走；没有消息时按 150 ms 一拍在当前阶段区间里逼近上沿的 90%（时间常数 3 s），宿主阻塞时条也在动。
   - 「开始渲染」日志末尾带各段用时（`SceneLoadProgress.summary`）：`（等目标与设置 / 编译 / 解码 / 准备 / 取设备 / 建 GPU 场景 / 首帧 各 N ms）`，重新加载的 debug 日志同样带；权重照它调。2026-11-15 实测：3 层的小场景 931 ms 里编译 632 ms；82 层、33 个 mip 的大场景 2.4–5.9 s 里编译约一半、准备与取设备约 1/3。
-  - 之后的变化：同一张场景改属性重编译时宿主在同一设备上换场景，画面一直是旧场景直到新场景就绪，Stage 不回到 loading，也不闪预览图。改属性后不能渲染了就退回预览图，退回后又能渲染了就切回实时画面。`ready` 每个目标只发一次。
-- **场景 → 场景**：因为同时只能有一个宿主，先淡出并卸载旧场景，再走新场景的 loading，中间会露出场景层下面的内容（桌面上是窗口背后的东西，与 web → web 相同）。实测空档约 0.2–0.4 s（transition `none`）。
+  - 之后的变化：同一张场景改属性重编译时宿主在同一设备上换场景，画面一直是旧场景直到新场景就绪，`ImageContent` 不回到加载态，也不闪缩略图。改属性后不能渲染了就退回预览图，退回后又能渲染了就切回实时画面。`ready` 每个目标只发一次。
 - **样式**：壁纸样式按 Kabegame 语义生效，几何同图片层（`render/layout.ts` 的 `scenePlacement`）：`fill` 等比盖满、`fit` 等比放进、`stretch` 拉满、`center` 一个场景像素对一个布局 CSS 像素（iframe 里的 CSS 像素，按画布的 `pixelRatio` 换算；放不下就居中裁，预览缩小显示时构图与桌面相同）、`tile` 等比放进后居中重复。WPE 的 Free 不做。宿主画布始终铺满 iframe，只有上屏这一步变（视口加 `offset + uv * scale`，`tile` 换重复采样器），场景本身不重画，改样式不重编译、暂停时也会补画一帧。样式走 postMessage（`wpeSceneStyle.ts`，字面量在宿主 `sceneStyle.ts` 另有一份，测试比对）：宿主启动时请求一次，变化时 `WpeSceneView` 主动推。
 - **留白颜色**：`fit` / `center` 空出的区域整屏清成 `schemecolor`，不是 `clearcolor`，这和 WPE 一致：对齐为 fill(1) / center(3) / free(4) 时用它代替清屏色（`(alignment & ~2) != 0`，`0x14017fc4c`，实测 `alignment=1` + `schemecolor="1 0 0"` 背景整片变红）。WPE 的优先级是用户值 > `config.json` 的 `general.defaultproperties.schemecolor` > 工程值 > 灰色 `0.5 0.5 0.5`；我们从宿主的属性全集取，用户值已并入，`defaultproperties` 不读（本机没有这个键），灰色兜底照搬。值原样当 0…1 的 RGB，不做颜色空间转换，alpha 为 1。作者建工程时编辑器按素材主色填 `schemecolor`（`getDominantColorFromFile`），所以留白通常和画面配套。用户改色走属性增量，就地生效。退回预览图时留白不是这个颜色，Stage 没有它。
 - **指针**：`fill` / `stretch` 仍取窗口归一化坐标（同 WPE；P4c 步骤 2 补测确认窗口和场景比例不同、WPE 居中盖满裁切时，`g_PointerPosition` 仍是窗口坐标）；其余样式画面不跟窗口对齐，`scenePointer` 换算到场景上，光标效果才落在画面上，留白处的值在 0…1 之外，`tile` 按所在那一块算。WPE 在这些对齐下怎么算没有查过。粒子控制点的跟随点在所有样式下都按铺放反算（`sceneCursor`），和 `g_PointerPosition` 只在 `fill` 下不同，见「粒子（P4c）」的「指针」。过渡（fade / slide / zoom）对 scene 层整层生效，曲线与 web 层相同。
 - **`paused` / `interactive`**：由 `WpeSceneView` 经音量消息的 `paused` 交给垫片，垫片调用宿主的 `setPaused`（停帧冻结时钟）；`interactive` 控制 iframe 指针事件。
-- **调试快照**：`media` 增加 `"scene"`，`sceneFallback` 是当前退回原因。`delegatesPing()` 在宿主垫片首次请求音量后把 ping 交给宿主；未启动时仍由应用页应答。
+- **调试快照**（桌面 `Wallpaper.debugState()`）：`media` 增加 `"scene"`，`sceneFallback` 是当前层显示不了的原因。`delegatesPing()` 逐层转问（`ImageContent` → `WpeWallpaperContent`），宿主垫片首次请求音量后把 ping 交给宿主；未启动时仍由应用页应答。
 
 图库与设置的接入：
 - **图库预览**：`ImageContent` 的 `wallpaper` 形态与网页壁纸相同（`isWpeWallpaperContentType` 认 scene）。预览不看壁纸样式，和单独的图片一样完整显示：`WallpaperPreviewCanvas` 按场景分辨率布局再整体缩放，没有背景。分辨率是图片行的 `width` / `height`：导入时读入口 json 的 `general.orthogonalprojection`（`WpeProject::scene_resolution`，入口在 `scene.pkg` 里时 Rust 读包里这一个条目），所以预览一打开就是正确比例，网格、宽高比筛选与详情面板读的也是它。透视场景没有这个字段，宽高留空，画布按主屏比例。退回时预览图在这块画布里按 contain 显示。作者更新壁纸改了分辨率时行不会跟着变，这时预览多一点留白。样式由调用方的 `fit` 决定（预览 `contain` → `fit`，应用背景 `cover` → `fill`），`WpeWallpaperContent` 不读壁纸目标里存的样式（过渡取默认壁纸目标在当前壁纸模式下的有效过渡，见 [../wallpaper/MULTI_SCREEN.md](../wallpaper/MULTI_SCREEN.md)）。
@@ -449,7 +449,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 三张都在动；eagleflag 传 `flagcolor2: "0 0 1"` 后星形变蓝。
 - **Tint**：在应用页用 wasm 翻译本机语料 167 对，其中 153 对成功；306 个模块经 `createProgram` 全部通过，0 error / 0 warning。不加前言时只有 `depthparallax` 片元 1 个 error。
 - **scene 层（P1-5）**：
-  - 单测 `components/wallpaper/WallpaperStage.scene.test.ts`（`WpeSceneView` 用替身）覆盖类型判定、loading 期间不显示也不发 `ready`、首帧直接淡入、退回才挂预览图、超时、迟到的首帧、没有预览图报错、场景与图片 / 场景互切（同一时间一个实例）、带过渡的淡入淡出、target 置 null。
+  - 单测（当时）`components/wallpaper/WallpaperStage.scene.test.ts`（`WpeSceneView` 用替身；2026-11-15 随 Stage 删除，场景的用例现在在 `WpeWallpaperContent.test.ts`、`ImageContent.wallpaper.test.ts` 与桌面的 `Wallpaper.test.ts`）覆盖类型判定、loading 期间不显示也不发 `ready`、首帧直接淡入、退回才挂预览图、超时、迟到的首帧、没有预览图报错、场景与图片 / 场景互切（同一时间一个实例）、带过渡的淡入淡出、target 置 null。
   - 图库预览：eagleflag、deep_space、beach 实时渲染。其余默认场景与工坊场景（12906，以及预览图是 gif 的 12900，gif 照常动）显示预览图，没有报错。场景 / 网页 / WPE 视频 / 普通图片之间来回切，50 ms 采样始终最多 1 个场景实例、1 个画布，切走后画布清零。
   - 时间线：能渲染的场景从切换到首帧之间只有加载态，没有预览图。eagleflag 改旗帜颜色立即生效，重编译期间画面状态不变。
   - 桌面壁纸窗口：eagleflag 实时渲染、在动；工坊场景显示预览图；图片 → 场景期间保留原图片直到首帧。当时 Wallpaper Engine 也在跑，WorkerW 下 Kabegame 的窗口在 WPE 窗口之上，桌面上看到的是 Kabegame。
@@ -473,8 +473,8 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 为什么 dev 不走 tauri-build 复制：它只在 `build.rs` 重跑时把 `src-tauri/kabegame/resources/**` 复制进 `target/<profile>/resources`，而 resources 目录有变化本身就会让 `build.rs` 重跑、主 crate 重编、dev 重启应用。dev 同时删掉 `src-tauri/kabegame/resources/wpe-scene` 里上次 prod 构建的残留，免得 `build.rs` 重跑时盖掉 dev 产物。
   - prod：`deno task b` 时构建到 `src-tauri/kabegame/resources/wpe-scene`（gitignore），经 tauri.conf.json 的 `resources/**/*` 打进安装包，安装后同样在 exe 旁的 `resources/wpe-scene`。
   - 只在桌面 standard 模式、不带 `--skip vue` 时构建；Android / Web 不构建。
-- **地址**：`get_wpe_scene_host_url`（只给主窗口 / 壁纸窗口的应用页，它们免 ACL）返回 `index.html` 的 `file:///` 地址，盘符大写（Chromium 规范化后的形式，文档 URL 与 IPC 来源因此逐字相同）；宿主没构建时报错。应用页加载时附加 `kbScene=<图片 id>`、`kbInstance=<实例号>`，sandbox 同网页壁纸（`WallpaperStage` 的 `WEB_SANDBOX`）。实例号区分同一窗口中的预览与应用背景。
-- **P3-0b 加载与 ping**：`WpeSceneView` 首次收到本 iframe 的可信音量请求时才 emit `alive`；`WallpaperStage.delegatesPing()` 此后把桌面 ping 交给场景宿主垫片，换场景或卸载时收回。宿主没起来时仍由应用页应答，避免反复重载；宿主脚本卡死时垫片不再应答，壁纸窗口看门狗会重载。暂停和音量走与网页壁纸共用的消息协议；状态与日志走 `wpe_scene_report`，日志 target 是 `kabegame::wpe_scene_host`。
+- **地址**：`get_wpe_scene_host_url`（只给主窗口 / 壁纸窗口的应用页，它们免 ACL）返回 `index.html` 的 `file:///` 地址，盘符大写（Chromium 规范化后的形式，文档 URL 与 IPC 来源因此逐字相同）；宿主没构建时报错。应用页加载时附加 `kbScene=<图片 id>`、`kbInstance=<实例号>`，sandbox 同网页壁纸（`webSandbox.ts` 的 `WEB_SANDBOX`）。实例号区分同一窗口中的预览与应用背景。
+- **P3-0b 加载与 ping**：`WpeSceneView` 首次收到本 iframe 的可信音量请求时才 emit `alive`；`WpeWallpaperContent.delegatesPing()`（桌面经 `Wallpaper` → `ImageContent` 转问）此后把桌面 ping 交给场景宿主垫片，换场景或卸载时收回。宿主没起来时仍由应用页应答，避免反复重载；宿主脚本卡死时垫片不再应答，壁纸窗口看门狗会重载。暂停和音量走与网页壁纸共用的消息协议；状态与日志走 `wpe_scene_report`，日志 target 是 `kabegame::wpe_scene_host`。
 - **开发与测试**：dev 构建用 `--mode development`，`vite.config.ts` 的 `__SCENE_DEV__` 只在该模式安装 `window.__kabegameSceneProbe`。CDP 应先按 frame URL 中的 `/wpe-scene/index.html` 选宿主 frame，再调探针。`deno task test -c kabegame --skip cargo` 依次运行 `apps/kabegame` 与 `apps/wpe-scene` 的 Vitest；宿主可单独运行 `deno task --cwd apps/wpe-scene test`，语料测试继续使用 `KABEGAME_WPE_ROOT`。
 - **`file:` 访问范围**（`wallpaper/wpe_scene_host.rs` 的 `access_scope_of`，就是注册给 runtime 的解析器：宿主目录优先，其它路径照旧按网页壁纸目录）：
   - 宿主目录里的文档：根为宿主目录，另放行 WPE 安装目录（`wpe::discover::engine_dir`）的 `assets/` 与 `config.json`、文本对象要读的系统字体文件（后端按平台把 13 个 WPE 字体名解析成本机文件、逐个放行，P6b 1b / 1d2，见「字体引擎 `wpefont`」），以及库里全部 `x-wpe/scene` 行的目录和用户为各场景选的 `scenetexture` 文件（P11b）。

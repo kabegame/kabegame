@@ -32,9 +32,11 @@ describe("useWpeLoadProgress", () => {
     expect(value.value).toBeLessThan(stageRange("page")[1]);
   });
 
-  it("宿主进度按阶段换算；只增不减、阶段只往前走", () => {
-    const { value, stage, report } = setup();
+  it("宿主进度按阶段换算；只增不减、阶段只往前走；记下当前阶段的计数", () => {
+    const { value, stage, count, report } = setup();
+    expect(count.value).toBeNull();
     report({ stage: "compile", done: 5, total: 10 });
+    expect(count.value).toEqual({ done: 5, total: 10 });
     const half = value.value;
     expect(stage.value).toBe("compile");
     expect(half).toBeCloseTo(0.3);

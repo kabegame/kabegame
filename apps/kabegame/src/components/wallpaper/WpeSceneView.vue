@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * WPE 场景壁纸（`x-wpe/scene`）的视图：场景宿主（`apps/wpe-scene`，P3-0）的 `file:` iframe 外壳，地位等同
- * `WallpaperStage` web 层的网页壁纸 iframe。编译、渲染、用户属性与后处理档位都在宿主里，这里不碰。
+ * `WpeWallpaperContent` 里的网页壁纸 iframe。编译、渲染、用户属性与后处理档位都在宿主里，这里不碰。
  *
  * - 地址：`get_wpe_scene_host_url` + `kbScene=<图片 id>` + `kbInstance=<实例号>`；换目标就换实例号、重建 iframe。
  * - 状态：宿主经 `wpe_scene_report` 报 `ready` / `fallback`，后端以 `wpe-scene-status` 发回本窗口，这里只认本实例号，

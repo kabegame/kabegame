@@ -21,6 +21,8 @@ export function useWpeLoadProgress(active: Ref<boolean>) {
   /** 0…1 */
   const value = ref(0);
   const stage = ref<WpeSceneProgressStage>("page");
+  /** 当前阶段最近一次的真实计数（覆盖层显示「done / total」）；还没有消息时为 null */
+  const count = ref<{ done: number; total: number } | null>(null);
   /** 最近一次真实进度（开始时是 0）与那一刻：逼近从这里算 */
   let base = 0;
   let baseAt = performance.now();
@@ -48,6 +50,7 @@ export function useWpeLoadProgress(active: Ref<boolean>) {
   function start() {
     value.value = 0;
     stage.value = "page";
+    count.value = null;
     base = 0;
     baseAt = performance.now();
   }
@@ -55,6 +58,7 @@ export function useWpeLoadProgress(active: Ref<boolean>) {
   function report(progress: WpeSceneProgress) {
     if (WPE_SCENE_PROGRESS_STAGES.indexOf(progress.stage) < WPE_SCENE_PROGRESS_STAGES.indexOf(stage.value)) return;
     stage.value = progress.stage;
+    count.value = { done: progress.done, total: progress.total };
     base = Math.max(value.value, overallProgress(progress));
     baseAt = performance.now();
     value.value = base;
@@ -64,5 +68,5 @@ export function useWpeLoadProgress(active: Ref<boolean>) {
     value.value = 1;
   }
 
-  return { value, stage, start, report, complete };
+  return { value, stage, count, start, report, complete };
 }

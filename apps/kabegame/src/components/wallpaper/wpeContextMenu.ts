@@ -6,7 +6,7 @@
  * `{ type: WPE_CONTEXT_MENU, x, y }`（iframe 视口里的 CSS 像素）。场景宿主也加载这份垫片，两种壁纸同一条路。
  * 页面自己取消右键或停止冒泡也照发：菜单是应用的功能，和工具条一样总能用；页面里再嵌的 iframe 没有垫片，管不到。
  *
- * 父页面（`WallpaperStage` 的 web 层、`WpeSceneView`）只认 `isTrusted` 且 `source` 是自己当前 iframe 的消息，按 iframe
+ * 父页面（`WpeWallpaperContent` 的网页 iframe、`WpeSceneView`）只认 `isTrusted` 且 `source` 是自己当前 iframe 的消息，按 iframe
  * 的显示矩形把坐标换算到自己的视口（预览画布带 CSS `scale`），再往上抛给预览弹窗。页面脚本自己也能发这条消息，最多就是
  * 弹出菜单，不能代用户点菜单项。
  *

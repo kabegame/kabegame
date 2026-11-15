@@ -123,6 +123,9 @@ if (mode.value === "wallpaper") return [];
 
 ## 步骤 4 — `ImageContent` 补齐桌面要的能力
 
+> 2026-11-15 已做：`variant="wallpaper"`（ready 每张一次只在壁纸变体里：图库的图片 / 视频照旧可能发多次，预览与网格靠它，不动）、
+> `fit` 四种、`displaySource()`、`WallpaperPlayback` 加 `playbackRate` / `style`、WPE 视频作者属性（`wpeVideoStyle.ts`，图库按 id 取）。
+
 - **新增** `variant="wallpaper"`：不显示骨架与丢失图、不允许拖出、视频 `autoplay muted`，进度覆盖层照显示。
 - **修改** `fit`：`"contain" | "cover" | "fill" | "none"`；**新增** expose `displaySource()`（当前图源与固有尺寸，给 tile 用）。
 - **新增** 播放参数对象（`volume` 0–1、`playbackRate`、`paused`、`sceneSettings`、`style`）：视频「先静音 play、成功后恢复音量」、倍速
@@ -131,6 +134,11 @@ if (mode.value === "wallpaper") return [];
 - **修改** `ready` 每个图片行只发一次。
 
 ## 步骤 5 — `Wallpaper` 取代 `WallpaperStage`
+
+> 2026-11-15 已做：`Wallpaper.vue` + `Wallpaper.test.ts`，`WallpaperStage.vue` 与两份测试删除（`targetKind` 的用例挪到 `targetKind.test.ts`），
+> `ImageContent` 加 `wallpaperTarget`（后端目标原样交给 `WpeWallpaperContent`，不再按 id 取）、`delegatesPing`、`wallpaperFail`；
+> 场景进度另拆出 `prepare` 阶段，覆盖层加计数与两位小数的百分比、阶段名用技术名词（用户 2026-11-15）。文档全部改完。
+> 没改：桌面网页壁纸的目标没有 `previewPath`（后端只给场景填），所以网页切换时仍等实时画面出来才过渡。
 
 - **新增** `components/wallpaper/Wallpaper.vue`：层列表（当前 + 正在进来的）；每层 = 样式包装 + `ImageContent variant="wallpaper"`；
   新层 `ready` 后加过渡类，`transitionend`（兜底 1400 ms）后卸载旧层；进来的层在 ready 前报错就放弃、保留旧层；过渡中来了新目标替换
@@ -168,3 +176,14 @@ if (mode.value === "wallpaper") return [];
 - 步骤 2：屏外宿主收一次加载的全部进度消息，核对顺序、单调、最后一条是 `frame`；大场景看各段用时。
 - 步骤 3–5：预览、应用背景、桌面各换一遍图片 / 视频 / 网页 / 场景 / 不能渲染的场景，看缩略图打底、进度、揭开、回退与过渡（桌面与预览的
   观感由用户看）；fill / fit / stretch / center / tile 与 none / fade / slide / zoom 组合；WPE 视频属性；多屏两个窗口各自交接。
+
+## 步骤 5 之后的修改（2026-11-15，用户定）
+
+- **视频之后切图片不换**：壁纸变体的 `<img>` 原来是 `loading="lazy"`，新层透明、当前层是播放中的视频时懒加载一直不开始（实测 8 s 以上），
+  新层等不到 `ready`。改为壁纸变体 `eager`，网格照旧懒加载。
+- **滑入改成推走**：新层从右侧整屏滑进来（`translateX(100%) → 0`），旧层同时推出左边（`is-leaving`，`0 → -100%`），1.5 s，不淡入；
+  淡入 800 ms、缩放 900 ms 不变。时长只在 `Wallpaper.vue` 的 `TRANSITION_MS`，经 `--wallpaper-transition-ms` 交给样式，兜底为时长 + 600 ms；
+  提交认进来那层的 `opacity` 或 `transform` 过渡结束。
+- **加载与报错同预览**：壁纸变体去掉三处特例（不画骨架、不画丢失图、图片等原图才 ready）。`ready` 改成「有东西可看了」：画面（缩略图或
+  原图、视频首帧、网页 / 场景的缩略图或实时画面）、加载超过 300 ms 的骨架、丢失图，先到的那个；桌面出错不再丢掉新层、保留上一张，而是
+  过渡到丢失图，`error` 只进调试快照。图片先出缩略图再盖原图，平铺靠新事件 `displayChange` 从缩略图换成原图。

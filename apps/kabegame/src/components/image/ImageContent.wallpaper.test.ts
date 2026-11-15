@@ -39,7 +39,7 @@ const WallpaperStub = defineComponent({
 /** 进度覆盖层桩（真件要 i18n 插件）：只看 props */
 const OverlayStub = defineComponent({
   name: "WpeLoadingOverlay",
-  props: { scene: Boolean, value: Number, stage: String, failure: Array, placement: String },
+  props: { scene: Boolean, value: Number, stage: String, failure: Array, placement: String, count: Object },
   setup: () => () => h("div", { class: "overlay-stub" }),
 });
 
@@ -211,6 +211,7 @@ describe("ImageContent 的壁纸形态：缩略层打底，实时画面当原图
     await emitLive(wrapper, "progress", { stage: "compile", done: 1, total: 2 });
     expect(overlay().props("stage")).toBe("compile");
     expect(overlay().props("value")).toBeCloseTo(0.3);
+    expect(overlay().props("count")).toEqual({ done: 1, total: 2 });
     await advance(400);
     await emitLive(wrapper, "live");
     expect(overlay().props("value")).toBe(1);

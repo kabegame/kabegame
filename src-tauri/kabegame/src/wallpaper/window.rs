@@ -25,7 +25,7 @@ fn ready_notify() -> &'static ReadyNotify {
 /// 一个壁纸窗口。窗口模式下每块在线屏一个（见 `manager::window`），各有各的就绪握手与 ping 看门狗。
 ///
 /// 窗口始终停在应用页（`index.html?window=wallpaper`，`WallpaperWindow.vue`），图片 / 视频 / 网页壁纸
-/// 都由 `WallpaperStage` 自驱动渲染：网页壁纸（`x-wpe/web`）是 web 层里的 `file:` iframe，与图库预览
+/// 都由 `Wallpaper` 自驱动渲染：网页壁纸（`x-wpe/web`）是 `WpeWallpaperContent` 里的 `file:` iframe，与图库预览
 /// 同一套组件与代码路径，窗口本身不再导航。后端只负责挂载与 ping 看门狗；桌面鼠标由网页壁纸 / 场景宿主的
 /// iframe 自己向 `tauri-plugin-cursor` 登记（点击规则：光标下是桌面）。
 pub struct WallpaperWindow<R: Runtime> {

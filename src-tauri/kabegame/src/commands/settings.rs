@@ -498,7 +498,7 @@ pub fn set_wpe_scene_volumetrics(value: String) -> Result<(), String> {
 }
 
 /// 暂停桌面上的壁纸：壁纸窗口经 `setting-change` 收到，只对网页与场景生效；暂停期间桌面鼠标也不再注入壁纸
-/// （`WallpaperStage` 把暂停交给 iframe 里的垫片，垫片解除鼠标登记）。
+/// （`WpeWallpaperContent` 把暂停交给 iframe 里的垫片，垫片解除鼠标登记）。
 #[tauri::command]
 pub fn set_wallpaper_paused(paused: bool) -> Result<(), String> {
     Settings::global().set_wallpaper_paused(paused)

@@ -17,7 +17,7 @@ Kabegame 把整个目录作为一行 `images`：
 | 列 | 值 |
 |---|---|
 | `local_path` | 壁纸目录的绝对路径（规范化、无 `\\?\`、无尾斜杠） |
-| `type` | `x-wpe/video` / `x-wpe/web` / `x-wpe/scene` 都已入库；场景壁纸由 `WallpaperStage` 的 scene 层实时渲染，渲染器还不支持的场景显示作者预览图（见 [WPE_SCENE.md](WPE_SCENE.md)） |
+| `type` | `x-wpe/video` / `x-wpe/web` / `x-wpe/scene` 都已入库；场景壁纸由 `WpeWallpaperContent` 挂的场景宿主实时渲染，渲染器还不支持的场景显示作者预览图（见 [WPE_SCENE.md](WPE_SCENE.md)） |
 | `thumbnail_path` | `<目录>/<preview>`，直接引用 WPE 自带预览图，不生成缩略图 |
 | `compatible_path` | 视频行**始终有值**：浏览器能播时就是入口视频本身（`<目录>/<file>` 绝对路径）；解不了的编码在 `compatibles_dir` 生成 H.264 MP4，生成失败也回落到入口视频。**网页行为空**（没有可播放媒体，页面以入口的 `file://` 加载，见第六节） |
 | `hash` / `size` | **目录哈希**与目录内全部文件的总字节数（`wpe::dir_hash`，见第四节「目录哈希」）；v051 之前入库的行取的是入口文件，由回填作业 `wpe_dir_hash` 重算 |
@@ -41,7 +41,7 @@ Kabegame 把整个目录作为一行 `images`：
 - `/file/{*path}`（桌面应用 Web 服务器）对 `x-wpe/*` 行返回目录的**文件清单**，对目录内的文件返回文件内容
   （见第四节「经 Web 服务器传输」）；非 `wpe` 构建仍是 404；
 - 视频播放（预览大图、应用背景、壁纸窗口）一律走 `compatible_path` → `/compatible/{*path}`；
-- 网页壁纸以入口的 `file://` 直接加载（预览与桌面都是 `WallpaperStage` web 层里的 `file:` iframe，见第五、六节），
+- 网页壁纸以入口的 `file://` 直接加载（预览与桌面都是 `WpeWallpaperContent` 里的 `file:` iframe，见第五、六节），
   页面能读的文件边界是运行时按网页壁纸目录索引做的 `file:` 请求拦截；没有 HTTP 目录服务；
 - 缩略图删除只删 `thumbnails_dir` 内、由 Kabegame 生成的文件（否则会删掉作者的 `preview.gif`）；
 - 整理流程对 `x-wpe/*` 跳过缩略图重建、兼容副本、哈希去重与「无法识别媒体」清理；
@@ -274,7 +274,7 @@ Rust 不解析场景）推导不出来，只有缓存里才有。
   frame 分档的闸门」），Android 等仍经 `/compatible` 按库里的 `compatible_path` 授权、直出文件、无跳转。第一阶段曾有
   `/wpe/<id>/` 目录服务，CEF 的 `<video>` 跟随它的 307 后报 `MEDIA_ELEMENT_ERROR: Format error`（直接请求入口文件可正常
   播放，2026-10-25 真机 4K H.264 实测），所以视频从没用过它。
-- **网页**：桌面壁纸窗口与图库预览都以 `WallpaperStage` web 层里的 `file:` iframe 加载入口（第六节「网页壁纸 iframe」），
+- **网页**：桌面壁纸窗口与图库预览都以 `WpeWallpaperContent` 里的 `file:` iframe 加载入口（第六节「网页壁纸 iframe」），
   页面相对资源自然落在壁纸目录里；文件边界是 `tauri-runtime-kbcef` 的 `file:` 闸门按网页壁纸目录索引裁决（文档只能访问它自己
   所在的壁纸目录与这张壁纸的用户选择，第六节「网页壁纸目录索引」），两个窗口同一份机制。MIME 由 Chromium 按扩展名判定；
   `file:` 不走 HTTP 缓存，壁纸目录里的文件原地变化（创意工坊更新、作者或用户手改）后重新加载即读到新内容。
@@ -302,18 +302,20 @@ Rust 不解析场景）推导不出来，只有缓存里才有。
 壁纸窗口与主窗口加载同一个 `index.html`，URL 为 `index.html?window=wallpaper&slot=<label 在池里的序号>`（`slot` 页面不读，
 只为让调试工具按 URL 分清窗口）。
 `main.ts` 只做分发：按 `windowKind.ts` 的 `WINDOW_KIND` 动态导入 `bootstrap/app.ts`（主界面，原 `main.ts` 全部内容）
-或 `bootstrap/wallpaper.ts`（只装 pinia、i18n、UnoCSS 与主题变量，不装 router 与主界面组件，不 `loadAll` 设置）。
+或 `bootstrap/wallpaper.ts`（只装 pinia、i18n、UnoCSS 与主题变量，不装 router 与主界面组件，不 `loadAll` 设置）。壁纸窗口也要导入
+`styles/tokens.css`：桌面的 `ImageContent` 画加载进度、骨架与丢失图都用 `--kb-*` 与 `kb-*` 关键帧，缺了文字退回黑色、进度条与骨架
+看不见（2026-11-16 修）；它只有 `:root` 变量与关键帧，不碰窗口背景。
 Web 发布版与 Android 硬门控为主窗口。
 
 - `views/WallpaperWindow.vue`：壁纸窗口根，负责 init 看门狗（`sessionStorage.wallpaperInitRetry` + reload）、挂载即监听并按 label 应答 `wallpaper-ping`、`setting-change`
   监听、启动时先取本窗口的布置（`get_wallpaper_window_assignment`，之后跟 `wallpaper-assignment`）再并行拉目标表 / 能力表 /
-  音量 / 倍速 / 暂停 / 当前壁纸、`wallpaper_window_ready` 握手与 dev 调试面板，结果作为 props 交给渲染组件；样式、过渡、
-  当前壁纸取自布置的目标，布置不出声时音量传 0。
-- `components/wallpaper/WallpaperStage.vue`：纯渲染组件（不 invoke / listen / 读 store；web 层 iframe 也只是把目标里的
-  `webEntry` 赋给 `src`，页面里的垫片自己做 IPC，见「网页壁纸 iframe」「运行时垫片与宿主协议」），base / top 双层、
-  prep → enter → commit 过渡（两帧 rAF、1400ms 兜底）、去重与严格串行、tile、base 图退避重试、视频 base / top 元素交换、
-  音量 / 倍速 / 循环，以及下表的 WPE 作者属性；铺满父元素，额外支持 `paused` / `interactive`（供后续预览内嵌）。
-  DOM 仍按原实现命令式操作（模板 ref 只在挂载时取一次），过渡组合类放在 scoped `<style>`。
+  音量 / 倍速 / 暂停 / 当前壁纸 / 语言、`wallpaper_window_ready` 握手与 dev 调试面板，结果作为 props 交给渲染组件；样式、过渡、
+  当前壁纸取自布置的目标，布置不出声时音量传 0。语言（`get_language`，之后跟 `setting-change` 的 `language`）按主窗口的规则
+  `resolveLanguage` 设给 i18n，桌面的加载进度与失败原因才跟应用语言（以前壁纸窗口一直是英语）。
+- `components/wallpaper/Wallpaper.vue`（2026-11-15 取代 `WallpaperStage.vue`）：纯渲染组件（不 invoke / listen / 读 store），只管铺放与
+  过渡：每个壁纸一层 `ImageContent`（壁纸变体），新层 `ready`（有东西可看）后按过渡进来、过渡结束（时长 + 600 ms 兜底）卸载旧层，
+  加载中的层被新目标直接替换、过渡中的先定下来；样式换成 `fit`，tile 时图片画重复背景；媒体（图片 / 视频 / 网页 / 场景）、音量 /
+  倍速 / 循环与下表的 WPE 作者属性都在 `ImageContent` 里（`wpeVideoStyle.ts`）。
 - 后端组装目标的逻辑在 `commands/wallpaper.rs` 的 `build_wallpaper_target(info)`，`get_current_wallpaper_target`
   与 `get_wallpaper_target_for_image(imageId)`（图库预览 / 背景按 id 取）复用它，所以预览与桌面拿到同一份目标结构。
   WPE 视频的作者属性取自**图片 metadata**（导入时写入的 `project.json` 原文，`resolve_video_props_from_raw`），
@@ -329,28 +331,33 @@ Web 发布版与 Android 硬门控为主窗口。
 |---|---|
 | 对齐 | Kabegame 壁纸样式：`fill`→cover、`fit`→contain、`stretch`→fill、`center`→none、`tile`→cover |
 | 位置 `position` | 作者 `alignmentposition` × 0.01（cover / contain 时作用于溢出轴） |
-| 偏移 / 缩放 | 作者 `alignmentx` / `alignmenty` / `alignmentz`（center / free 时作用于 stage） |
+| 偏移 / 缩放 | 作者 `alignmentx` / `alignmenty` / `alignmentz`（center 时整体位移；free 走不到，不做） |
 | 翻转 / 背景 / 颜色 | 作者 `alignmentfliph` / `schemecolor` / `wec_*` |
 | 速率 / 音量 | Kabegame 全局设置（覆盖作者值） |
 
+作者属性落到画面上的规则在 `components/wallpaper/wpeVideoStyle.ts`（`wpeVideoPresentation`，壁纸显示重构步骤 4 从 Stage 搬出）：
+`ImageContent` 用在自己的 `<video>` 上（翻转、位移、滤镜写在元素上，留边色写在根上），**桌面、图库预览、应用背景都生效**（2026-11-15
+用户定；以前只有桌面）。桌面给后端算好的 `wpeVideo`（`wpeVideo` prop）；图库不给时 `ImageContent` 按图片 id 调
+`get_wallpaper_target_for_image` 取（只在桌面端），取不到按普通视频放。
+
 - `x-wpe/web`：`compatiblePath` 与 `wpeVideo` 为空，`webEntry` 是入口的 `file://`，由 `build_wallpaper_target` 用
   `wallpaper::web_entry` 现算（`read_project` 校验入口在目录内且存在，放 blocking 线程；Android、读不了 `project.json`
-  时为 `null`）。图库预览与**桌面壁纸窗口**拿同一份目标，都由 `WallpaperStage` 的独立 **web 层**建一个 iframe、直接赋
+  时为 `null`）。图库预览与**桌面壁纸窗口**拿同一份目标，都由 `WpeWallpaperContent` 建一个 iframe、直接赋
   `src = webEntry`（见下「网页壁纸 iframe」）；`webEntry` 为空时报「无法加载网页壁纸」，预览退回作者预览图、桌面保持原画面。
 - `x-wpe/scene`：`sceneAssets` 是 WPE 安装目录的 `assets`，`previewPath` 是退回用的作者预览图（行的 `thumbnail_path`，缩略图为空或
-  回落成目录本身时不填），其它类型两者都为空。`WallpaperStage` 的 **scene 层**挂 `WpeSceneView` 编译渲染；loading → live / fallback 的
-  状态流转、超时与过渡见 [WPE_SCENE.md](WPE_SCENE.md)「接入 `WallpaperStage`」。
+  回落成目录本身时不填），其它类型两者都为空。`WpeWallpaperContent` 挂 `WpeSceneView` 编译渲染；loading → live / failed 的
+  状态流转、超时与过渡见 [WPE_SCENE.md](WPE_SCENE.md)「显示」。
 
 不生成任何按屏幕分辨率缩放的壁纸副本（WPE 也不做），不复刻 WPE 的解码后端选择。
 
 ### 网页壁纸 iframe
 
 WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://` 从壁纸目录直接加载，靠关掉同源策略读同目录文件。Kabegame 在
-两个地方显示网页壁纸，**都是 `WallpaperStage` web 层里的 `file:` iframe**，组件与代码路径同一套：图库预览在主窗口（`main`），
+两个地方显示网页壁纸，**都是 `WpeWallpaperContent` 里的 `file:` iframe**，组件与代码路径同一套：图库预览在主窗口（`main`），
 桌面在壁纸窗口（label 池里的任一个，每块屏一个；同一张网页壁纸显示在几块屏上就是几个独立的页面实例）。tauri 补丁 18 / 19 之前，子 frame 没有 IPC，预览 iframe 只能 `postMessage` 请主窗口代办、
 桌面则把整个壁纸窗口导航到 `file://`；现在 frame 是 IPC 的基本单位，两种宿主合成一种（见 [ACL 文档](../tauri/TAURI_ACL_PERMISSION_SYSTEM.md)「子 frame IPC」）。
 
-- **加载**：`WallpaperStage` 建 iframe、插入 DOM 后直接 `frame.src = target.webEntry`，没有命令往返、没有要维护的状态
+- **加载**：`WpeWallpaperContent` 建 iframe、插入 DOM 后直接 `frame.src = target.webEntry`，没有命令往返、没有要维护的状态
   （入口由 `build_wallpaper_target` 现算，见上）。壁纸窗口本身始终停在应用页，不再导航。
 - **能力登记**：主窗口（`startup.rs`）与壁纸窗口（`wallpaper/manager/window.rs`）建窗前都
   `tauri_runtime_kbcef::allow_file_documents(label)`（CEF 补丁 [`04`](../../third-patches/cef/README.md)：建窗 `extra_info` 带
@@ -370,12 +377,12 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
   iframe 的 `file:` 导航与 `file:` 文档的请求由运行时闸门按网页壁纸目录索引裁决（见下）。
   > 历史：Phase 6a 曾由运行时从浏览器进程对命名子 frame 调 `CefFrame::LoadURL` 绕开 `CanDisplay`，真机上渲染进程被杀并被
   > `on_render_process_terminated` 的无条件 `reload()` 放大成整窗刷新循环。不要再从后端导航子 frame。
-- **前端时序**（`WallpaperStage`）：`createWebFrame(entry)`：没有入口直接抛「无法加载网页壁纸」（Web 版、Android
-  都走这条，`ImageContent` 退回作者预览图）；否则建 iframe、插入 DOM、赋 `src`。`load` 时 `isInitialBlank`（仍可读且是
-  `about:blank`）的初始空文档忽略；仍可读却不是初始文档（例如浏览器侧缺授权时改写出的 `about:blank#blocked`）记
-  `wpe web entry blocked: <href>`；读 `location` 抛错（已是跨源 `file:` 页面）才算加载完成。8s 超时仍停在初始 `about:blank`
-  记 `wpe web entry not navigated (CEF patch 05/07 missing?)`，否则记 `wpe web entry load timeout`。切换壁纸一律
-  `teardownWeb`（先 `about:blank` 再移除，frame 销毁）后重建 iframe，不在原 iframe 上改 `src`：闸门把「原 iframe 的 `file:`
+- **前端时序**（`WpeWallpaperContent`，2026-11-15 前在 Stage）：`startWeb`：没有入口报 `fail(["web:no-entry"])`、不建 iframe（Web 版、
+  Android 不挂实时画面，只有缩略图）；否则建 iframe、插入 DOM、赋 `src`。`load` 时 `isInitialBlank`（仍可读且是 `about:blank`）的
+  初始空文档忽略；仍可读却不是初始文档（例如浏览器侧缺授权时改写出的 `about:blank#blocked`）报 `fail(["web:blocked"])`；读 `location`
+  抛错（已是跨源 `file:` 页面）才算加载完成（`live`）。8 s 超时仍停在初始 `about:blank` 报 `fail(["web:not-navigated"])`（多半没带 CEF
+  补丁 05），导航了只是慢就照样 `live`。换壁纸一律 `teardownWeb`（先 `about:blank` 再移除，frame 销毁）后重建 iframe，不在原 iframe 上
+  改 `src`：闸门把「原 iframe 的 `file:`
   文档发起的导航」算作这个文档发起，跨到另一张壁纸会被拒。
 - **CSP**：`tauri.conf.json.handlebars` 的 `frame-src 'self' blob: data: about: file:`（生成的 `tauri.conf.json` 被 gitignore）。
 - **IPC**：CEF 给每个子 frame 注入桥；CEF 补丁 07 在建子资源工厂时捕获文档 URL 与父文档 URL，运行时按 initiator 与完整文档 URL 合成 `Origin`。`file:` iframe 只匹配绑定 `main` 与壁纸窗口 label 池、且 `frames: "sub"` 的 `wpe-web-capability`。回退通道来源不合法时用占位来源交给 ACL 拒绝。历史上按 `frame.url()` 读取会遇到首批请求竞态。
@@ -398,7 +405,7 @@ reset 通道关闭，任务退出。后端用 sleep 循环每 10s 探测，页�
 
 往返使用两个全局事件种类：默认种类 `wallpaper-ping { label, seq }` 经 `GlobalEmitter` 广播、主事件循环 `app.emit`
 送到窗口；应用页 `WallpaperWindow.vue` 与网页壁纸 iframe 里的垫片都 `listen`，只应答 label 等于自己窗口的事件，再调用
-`wallpaper_pong(seq)`。**网页壁纸显示期间应用页不应答**（`WallpaperStage.delegatesPing()` 转问 `WpeWallpaperContent`：网页 iframe 存在即算，含加载中；场景在宿主垫片发过音量请求之后），交给
+`wallpaper_pong(seq)`。**网页壁纸显示期间应用页不应答**（`Wallpaper.delegatesPing()` 逐层转问 `ImageContent` → `WpeWallpaperContent`：网页 iframe 存在即算，含加载中；场景在宿主垫片发过音量请求之后），交给
 iframe 里的垫片：页面卡死就不应答，照样触发整页重载。切换的短暂间隙最多漏一两次（阈值 3 次），不会误触发重载。预览在主窗口里，
 垫片读到的 label 是 `main`，过滤掉。命令从调用方 webview 取 label，页面不能替其它窗口应答；`wallpaper-pong { label, seq }`
 是 opt-in，默认不转发给窗口、SSE 或「订阅全部」的 IPC 客户端，只有显式订阅它的后端看门狗接收。
@@ -519,7 +526,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   - 乱序：垫片给每次拉取编号，某次结果落地后丢弃编号更早、返回更晚的结果（同 pathql 的 pending 窗口）。
   - 页面回调抛错只记 `console.error("[kb-wpe] …")`，不影响后续投递。
 - **监听随 frame 清理**：监听按「webview → frame → 事件」登记，iframe 销毁时 runtime 报 `SubframeDestroyed`，Tauri 删掉该
-  frame 的全部监听。同一 frame 内重新导航后旧条目还在、投递进新文档时找不到 id 等于空操作，直到 frame 销毁；`WallpaperStage`
+  frame 的全部监听。同一 frame 内重新导航后旧条目还在、投递进新文档时找不到 id 等于空操作，直到 frame 销毁；`WpeWallpaperContent`
   每次切换都销毁重建 iframe，不会积累。补丁 11 的 `clear_js_listeners()` 只剩看门狗整页重载时调用。
 - **可见事件**：网页壁纸只能监听 `wpe-web.json` 作用域里的四个事件（`wallpaper-ping`、`setting-change`、`image-changed`、
   `images-change`，tauri 补丁 15），其它事件名（如 `images-added`）`listen` 被 ACL 拒绝；垫片新增监听要同步改 capability。
@@ -531,7 +538,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 #### 音量
 
 网页壁纸的声音由垫片按**宿主音量**缩放：页面的生效音量 = 页面自己设的音量 × 宿主音量。宿主音量不走 IPC，经
-`postMessage` 从父页面（`WallpaperStage`）拿：它本来就有 `volume` prop，桌面与预览是设置里的 `wallpaperVolume`，应用背景是 0，
+`postMessage` 从父页面（`WpeWallpaperContent`）拿：它本来就有 `volume` prop，桌面与预览是设置里的 `wallpaperVolume`，应用背景是 0，
 不必新增命令。不用 CEF 的 `SetAudioMuted`（整个 browser 静音，会连主窗口的预览视频一起静掉）；Chromium 也没有逐 iframe 的
 静音 / 音量接口。
 
@@ -543,9 +550,9 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   | 垫片 → 父页面 | `{ type: "kabegame:wpe-volume-request" }` | 垫片启动时发一次 |
   | 父页面 → 垫片 | `{ type: "kabegame:wpe-volume", volume }`，`volume` 为 0…1 | 回复请求；`volume` / `paused` 变化时主动推 |
 
-- **父页面怎么答**：`WallpaperStage` 挂载时（先于任何 iframe）在 `window` 上监听 `message`，只理会
+- **父页面怎么答**：`WpeWallpaperContent` 挂载时（先于 iframe）在 `window` 上监听 `message`，只理会
   `event.source === 当前 web iframe 的 contentWindow` 的请求，回 `webHostVolume(volume, paused)`：`paused`（web 层被隐藏、
-  脚本仍在跑）时为 0，否则是 `volume` prop 钳到 0…1。主窗口里应用背景与预览各有一个 Stage，各答各的 iframe；换壁纸重建
+  脚本仍在跑）时为 0，否则是 `volume` prop 钳到 0…1。主窗口里应用背景与预览各有一个 `WpeWallpaperContent`，各答各的 iframe；换壁纸重建
   iframe 后旧 iframe 不再是当前的，新页面的请求照常回复。`volume` / `paused` 变化时把同一条消息推给当前 iframe（还停在初始
   `about:blank` 时也照发，那份文档没有垫片、收下即丢，页面起来后垫片会自己再要）。`targetOrigin` 为 `*`：对方是跨源 `file:`，
   消息里只有一个数。数据来源：桌面 `WallpaperWindow.vue` 的 `state.volume`（全局「壁纸设置」，`get_wallpaper_volume` +
@@ -588,7 +595,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   `components/wallpaper/wpeContextMenu.ts`，`wpeWebVolume.test.ts` 读垫片原文核对。
 - **垫片**：在 `window` 捕获阶段、页面脚本之前登记 `contextmenu` 监听，只转发 `isTrusted` 的事件；页面取消右键或停止冒泡也照发
   （菜单是应用的功能，总能用）。原生菜单 CEF 已全局关掉（`DisabledContextMenuHandler`），不必 `preventDefault`。
-- **父页面**：网页层由 `WallpaperStage`、场景层由 `WpeSceneView` 收，只认 `isTrusted` 且 `source` 是自己当前 iframe 的消息，
+- **父页面**：网页由 `WpeWallpaperContent`、场景由 `WpeSceneView` 收，只认 `isTrusted` 且 `source` 是自己当前 iframe 的消息，
   按 iframe 的显示矩形换算到本页面视口（预览画布带 CSS `scale`：坐标 × 显示矩形 ÷ 布局尺寸 + 左上角），经
   `WpeWallpaperContent` → `ImageContent` 的 `wallpaperContextmenu` 交给预览弹窗，在那个位置弹出与右键容器同一份菜单。应用背景
   不接收指针、桌面不注入右键，都不会触发。
@@ -599,7 +606,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
 2026-11-15 第二版起，网页壁纸与场景宿主的 iframe 收到的鼠标是 Rust 直接注入进这个 frame 的原生事件，页面里没有任何合成。图库预览
 （主窗口）与桌面壁纸窗口走同一条路。计划见 `.claude/plans/wpe-import/phase-preview-pointer.md`。
 
-- **登记**：iframe 里的垫片看父页面的音量消息（`kabegame:wpe-volume`，`WallpaperStage` / `WpeSceneView` 发）：
+- **登记**：iframe 里的垫片看父页面的音量消息（`kabegame:wpe-volume`，`WpeWallpaperContent` / `WpeSceneView` 发）：
   - `interactive && !paused` 时调 `plugin:cursor|attach_frame`，否则调 `detach_frame`。调用排队，不会乱序落地。
   - 预览与桌面传 `interactive`；应用背景不传，所以不登记。
   - 两个命令只给子 frame（`tauri::ipc::CallerFrame::Sub`），权限在 `wpe-web-capability`（场景宿主也匹配）。
@@ -707,8 +714,8 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
 ### WPE 显示组件（`WpeWallpaperContent`）
 
 `components/wallpaper/WpeWallpaperContent.vue` 只管一张网页 / 场景壁纸的实时画面跑没跑起来，不管过渡、打底与退回画面，
-也不读设置：音量、暂停、可交互、场景样式与场景设置都由参数给。桌面经 `WallpaperStage` 给后端算好的 `target`，图库经
-`ImageContent` 的 wallpaper 形态只给图片 id（`get_wallpaper_target_for_image`，同一个 `build_wallpaper_target`）。
+也不读设置：音量、暂停、可交互、场景样式与场景设置都由参数给。都经 `ImageContent` 的 wallpaper 形态挂上来：桌面（`Wallpaper`）给后端算好的
+`target`，图库只给图片 id（`get_wallpaper_target_for_image`，同一个 `build_wallpaper_target`）。
 
 - **网页**：在自己的容器里命令式创建 **`file:` iframe**（插入后直接赋 `src = webEntry`，见上「网页壁纸 iframe」），与应用前端
   不同源，拿不到父页面 DOM；IPC 来自 CEF 注入的子 frame 桥，权限只有 `wpe-web-capability`。
@@ -716,7 +723,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   downloads）、`allow="autoplay; fullscreen"`、`referrerpolicy="no-referrer"`。换目标、卸载时 **销毁** iframe（先 `about:blank`
   再移除），frame 销毁后它的监听随 `SubframeDestroyed` 清掉。`volume` / `paused` / `interactive` 经音量消息交给垫片（见上「音量」
   「鼠标」），暂停由垫片冻结页面、iframe 保持可见；iframe 的 `pointer-events` 一律 `none`（Linux 退回时可交互才收）。
-- **场景**：挂一个 `WpeSceneView`（见 [WPE_SCENE.md](WPE_SCENE.md)「接入 `WallpaperStage`」）。
+- **场景**：挂一个 `WpeSceneView`（见 [WPE_SCENE.md](WPE_SCENE.md)「显示」）。
 - **事件**：
   - `live`：网页 `load`（导航了但 8 s 没 load 也算，页面已在画，只记 warn）；场景出首帧，退回后又能渲染时再发。
   - `fail(reasons)`：显示不了，调用方当「原图加载失败」。网页：`web:no-entry`（`webEntry` 为空，不建 iframe）、
@@ -729,18 +736,28 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
 - **ping**：`delegatesPing()` 在网页 iframe 存在（含加载中），或场景宿主的垫片发过音量请求后为真，壁纸窗口据此把 ping 交给垫片
   应答。
 
-### web 层与 scene 层（`WallpaperStage`，桌面）
+### 桌面（`Wallpaper`）
 
-- 网页与场景各占一层（z-index 2 / 3，在 base / top 双层之上），各挂一个 `WpeWallpaperContent`，**不参与 base / top 双层过渡**：
-  同一时间每层只有一个。切入时等它的结果再整层淡入（none 直接显示；fade / slide / zoom 用与媒体层相同的曲线）盖住媒体层，淡入
-  完成再清空媒体层；切走时新媒体先按「首帧直设」放到 base，层淡出后卸载它；web → web、scene → scene 先淡出卸载旧的再挂新的。
-  target 置 null、组件卸载时立即卸载。
-- web 层：`live` 后淡入、发 `ready`；`fail` 时放弃切入、保留当前画面并上报错误（记进调试快照的 `lastError`）。
-- scene 层：结果出来前不显示、不发 `ready`（桌面保留上一张壁纸），能渲染就直接淡入实时画面，不能渲染（含 30 s 超时）才显示
-  `previewPath` 预览图；壁纸样式由宿主铺放（留白是 `schemecolor`，见 [WPE_SCENE.md](WPE_SCENE.md)「样式」「留白颜色」）。细节见
-  [WPE_SCENE.md](WPE_SCENE.md)「接入 `WallpaperStage`」。
-- `paused` / `volume` / `interactive` / 场景设置原样交给 `WpeWallpaperContent`；`styleMode` 只给场景，`playbackRate` 与 WPE 视频的
-  stage 样式不作用于这两层。调试快照 `media` 为 `"web"` / `"scene"`。
+2026-11-15 壁纸显示重构步骤 5 起，桌面不再有单独的 web 层与 scene 层：`Wallpaper` 每个壁纸一层 `ImageContent`（壁纸变体），网页与场景就是
+它的 wallpaper 形态（下一节），和图库同一套显示。
+- **层的进出**：新层 `ready` 之前不可见；`ready` 是「有东西可看了」（同预览的显示，见下「壁纸变体」：图片的缩略图或原图、视频首帧、
+  网页 / 场景的缩略图或实时画面、加载超过 300 ms 的骨架、丢失图，先到的那个）后按过渡进来，过渡结束（`transitionend`，时长 + 600 ms
+  兜底）后卸载旧层；第一张或过渡为 none 时直接换上。还在加载的那层被新目标直接替换，过渡中的先定下来；场景 → 场景时新旧两个宿主在
+  过渡期间短暂并存（用户定）。新层显示不了时同预览换上丢失图（用户定，2026-11-15；以前丢掉新层、保留当前层），`error` 只进调试快照。
+- **过渡**（时长在 `Wallpaper.vue` 的 `TRANSITION_MS`，经 `--wallpaper-transition-ms` 交给样式）：淡入 800 ms；缩放 900 ms（从 1.06 倍
+  缩回并淡入）；滑入 1.5 s，新层从右侧整屏滑进来、同时把旧层推出左边（`is-leaving`），不淡入（用户定，2026-11-15；以前是右移 32 px
+  并淡入 800 ms，4K 屏上只有 1% 多的位移，看上去就是淡入）。
+- **图片立即加载**：壁纸变体的 `<img>` 是 `eager`。懒加载的图在新层还透明、当前层是播放中的视频时一直不开始（实测 8 s 以上），新层等
+  不到 `ready`，看上去就是没换。
+- **样式**：fill / fit / stretch / center → `fit` 的 cover / contain / fill / none；tile 时图片用 `displaySource()` 画重复背景（等比放进、
+  居中重复），视频按 cover，网页忽略样式，场景把样式交给宿主（`playback.style`，留白是 `schemecolor`，见 [WPE_SCENE.md](WPE_SCENE.md)
+  「样式」「留白颜色」）。
+- **参数**：`volume` / `playbackRate` / 场景设置 / 样式合成 `playback` 交给每层，`paused` 反过来给 `videoPlaying`，`interactive` 原样，
+  WPE 视频的作者属性经 `wpeVideo`、后端目标经 `wallpaperTarget` 下传（网页 / 场景不用再按 id 取一次）。
+- **调试快照**（`debugState()`）：`media` 是当前层的类型（`targetKind`），`sceneFallback` 是当前层显示不了的原因，`lastError` 含新层失败；
+  `delegatesPing()` 逐层转问。
+- 和以前的不同：网页 / 场景加载期间桌面显示新壁纸的缩略图与进度（以前保留上一张直到出结果；网页壁纸的目标没有 `previewPath`，仍是等实时
+  画面出来才换）；平铺的图片也有过渡（以前硬切）；不同类型之间的切换都按过渡交接（以前网页 / 场景整层淡入淡出、图片视频互切硬切）。
 
 ### 图库接入
 
@@ -759,10 +776,12 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   - Android / Web 没有 `wpe` feature，不挂实时画面，只有缩略层。
 
   - **加载进度**（步骤 3，`WpeLoadingOverlay.vue` + `useWpeLoadProgress`）：从挂上就盖在缩略层上，缩略图整体模糊（`backdrop-filter`），
-    正中是阶段文字「启动 / 编译场景 / 解码纹理 / 准备渲染 / 绘制首帧」（五种语言）与细进度条，预览、应用背景都显示（用户定：只看到
+    正中是阶段文字（技术名词，用户定：「初始化场景宿主 / 解析场景并编译着色器（WPESL → WGSL） / 解码纹理 mipmap / 初始化 WebGPU 设备、
+    场景脚本与字体排版 / 创建 GPU 渲染管线 / 提交首帧」，五种语言）、细进度条与一行「当前阶段的 done / total · 总百分比（两位小数）」
+    （计数只在编译、解码、建管线这几个有计数的阶段），预览、应用背景都显示（用户定：只看到
     清晰的缩略图、没有文字，就是没加载出来）；场景按宿主上报的进度画（规则见 [WPE_SCENE.md](WPE_SCENE.md)「加载进度」），网页壁纸
     只有不定进度条与「加载中」。实时画面出来时走满、停 200 ms 再淡出（模糊一起淡掉）；换一张从头再来。Android / Web 没有。
-    **显示不了**（`fail(reasons)`，用户定）：文字与进度条变红、走满，标题「无法实时渲染」（超时是「加载超时」），下面一行是原因（宿主报的键，
+    **显示不了**（`fail(reasons)`，用户定）：文字与进度条变红、走满，标题「喵呜，这张壁纸渲染失败了呢」（用户定；超时是「加载超时」），下面一行是原因（宿主报的键，
     `; ` 连接，最多两行；超时不列）；停 200 ms 后模糊与中间那块淡出，红字原因换到缩略图底部（`placement="bottom"`，不模糊、没有进度条）
     留着，直到实时画面出来（改属性后又能渲染）或换图。
     **屏幕上的大小固定**：预览画布按壁纸分辨率排版再整体缩放（3840×2160 缩到约 0.25 倍），覆盖层按 200 ms 量自己的显示缩放
@@ -770,6 +789,13 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
     一两个像素。覆盖层必须是单根组件，调用方的定位类才落得到。
 
   `x-wpe/video` 不走这里，仍是 `<video>` 链。
+- `ImageContent` 的 **壁纸变体**（`variant="wallpaper"`，步骤 4，给桌面的 `Wallpaper.vue` 用）：加载与报错的显示同预览（用户定，
+  2026-11-15；以前不画骨架与丢失图、图片等原图才 ready）：加载超过 300 ms 显示骨架、图片先出缩略图再盖原图、丢失画丢失图（照常报
+  `error`）；不能拖出，图片 `eager`；`fit` 多了 `fill`（拉伸）与 `none`（居中）；`ready` 每张一次、意思是「有东西可看了」（画面、骨架、
+  丢失图先到的那个），默认变体的 `ready` 不变（骨架、丢失不发）；视频静音起播、成功后按 `playback.volume` 出声，倍速取
+  `playback.playbackRate`（钳到 0.25…3）；wallpaper 形态的场景铺放取 `playback.style`（桌面的壁纸样式，含 tile）。`displaySource()`
+  交出当前画面（已出来的原图层、否则缩略层，或视频）的地址与固有尺寸，给平铺用，画面换了（缩略层、原图层、视频出来）发
+  `displayChange`，平铺据此从缩略图换成原图。图库（`variant` 缺省）的行为不变。
 - 网格（`ImageItem`）对所有 WPE 行固定用缩略形态，不悬停加载原图形态；角标「WPE · 视频」/「WPE · 网页」。
 - 预览弹窗对非视频 WPE 行渲染 `components/wallpaper/WallpaperPreviewCanvas.vue`：给一块固定尺寸的画布，整体
   `scale` 进可用区域并居中，没有背景，和单独的图片一样显示。尺寸取图片行的 `width` / `height`（场景入库时写的分辨率）；
@@ -976,7 +1002,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
   `tauri.conf.json.handlebars`（CSP `frame-src … file:`）
 - 网页壁纸 iframe：`src-tauri/kabegame/src/startup.rs` 与 `wallpaper/manager/window.rs`（`allow_file_documents` +
   `allow_app_local_resources`）、`apps/kabegame/src/components/wallpaper/WpeWallpaperContent.vue`（`startWeb` 赋 `src` /
-  `teardownWeb` / `isInitialBlank` / `delegatesPing`）、`WallpaperStage.vue`（web / scene 层的进出）、`views/WallpaperWindow.vue`（`acceptTarget`、ping 让给垫片）
+  `teardownWeb` / `isInitialBlank` / `delegatesPing`）、`Wallpaper.vue`（桌面的层与过渡）、`views/WallpaperWindow.vue`（`acceptTarget`、ping 让给垫片）
 - 网页壁纸目录索引：`src-tauri/kabegame/src/wallpaper/wpe_web_dir_index.rs`、`core_init.rs`（建表时机）、
   `kabegame-core/src/storage/images.rs`（`list_wpe_web_rows`）
 - `src-tauri/tauri-runtime-kbcef/src/{protocol.rs,ipc.rs}`（`IpcFrame` / `SubframeId`、`IpcResourceRequestHandler`、`ipc_origin`、07 文档头与回退通道占位来源）、`file_access.rs` / `webview.rs` / `subprocess.rs` / `runtime.rs`（两项能力 + 按发起方分档的闸门、
@@ -1016,4 +1042,4 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
   `commands/window.rs`（`wallpaper_pong`）、`src-tauri/kabegame-core/src/{ipc/events.rs,emitter.rs}`（ping / pong 事件）
 - 壁纸窗口：`src-tauri/kabegame/src/wallpaper/manager/window.rs`、`apps/kabegame/src/main.ts`、`windowKind.ts`、
   `bootstrap/{app,wallpaper}.ts`、`views/WallpaperWindow.vue`、
-  `components/wallpaper/{WallpaperStage.vue,targetKind.ts,types.ts,WpeWallpaperContent.vue,WallpaperPreviewCanvas.vue,WpeSceneView.vue,wpeSceneStyle.ts}`
+  `components/wallpaper/{Wallpaper.vue,targetKind.ts,types.ts,WpeWallpaperContent.vue,WallpaperPreviewCanvas.vue,WpeSceneView.vue,wpeSceneStyle.ts}`

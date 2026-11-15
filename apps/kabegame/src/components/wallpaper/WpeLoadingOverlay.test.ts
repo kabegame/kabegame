@@ -9,16 +9,33 @@ describe("WpeLoadingOverlay", () => {
   it("场景：按进度画条、按阶段显示文字", async () => {
     const wrapper = mount(WpeLoadingOverlay, { props: { scene: true, value: 0.42, stage: "compile" } });
     expect(wrapper.findComponent({ name: "Progress" }).props("value")).toBeCloseTo(42);
-    expect(wrapper.text()).toBe("gallery.wpeLoadStageCompile");
+    expect(wrapper.find('[data-testid="wpe-loading-label"]').text()).toBe("gallery.wpeLoadStageCompile");
     for (const [stage, key] of [
       ["page", "gallery.wpeLoadStagePage"],
       ["decode", "gallery.wpeLoadStageDecode"],
+      ["prepare", "gallery.wpeLoadStagePrepare"],
       ["gpu", "gallery.wpeLoadStageGpu"],
       ["frame", "gallery.wpeLoadStageFrame"],
     ] as const) {
       await wrapper.setProps({ stage });
-      expect(wrapper.text()).toBe(key);
+      expect(wrapper.find('[data-testid="wpe-loading-label"]').text()).toBe(key);
     }
+  });
+
+  it("场景加载中：有计数的阶段显示「done / total · 总百分比」（两位小数），其余阶段只有百分比；失败、网页不显示", async () => {
+    const wrapper = mount(WpeLoadingOverlay, {
+      props: { scene: true, value: 0.42178, stage: "compile", count: { done: 37, total: 142 } },
+    });
+    const meta = () => wrapper.find('[data-testid="wpe-loading-meta"]');
+    expect(meta().text()).toBe("37 / 142 · 42.18%");
+    await wrapper.setProps({ stage: "prepare", count: { done: 0, total: 1 }, value: 0.7 });
+    expect(meta().text()).toBe("70.00%");
+    await wrapper.setProps({ stage: "gpu", count: { done: 12, total: 33 } });
+    expect(meta().text()).toBe("12 / 33 · 70.00%");
+    await wrapper.setProps({ failure: ["x"] });
+    expect(meta().exists()).toBe(false);
+    await wrapper.setProps({ failure: null, scene: false });
+    expect(meta().exists()).toBe(false);
   });
 
   it("网页壁纸：不定进度条与「加载中」", () => {
@@ -27,7 +44,7 @@ describe("WpeLoadingOverlay", () => {
     expect(wrapper.text()).toBe("gallery.wpeLoadStageWeb");
   });
 
-  it("失败：文字与进度条变红，标题是「无法实时渲染」，下面列原因；超时是「加载超时」、不列原因", async () => {
+  it("失败：文字与进度条变红，标题是「喵呜，这张壁纸渲染失败了呢」，下面列原因；超时是「加载超时」、不列原因", async () => {
     const wrapper = mount(WpeLoadingOverlay, {
       props: { scene: true, value: 0.3, stage: "compile", failure: ["object:particle", "script:api:x"] },
     });
@@ -72,14 +89,14 @@ describe("WpeLoadingOverlay", () => {
     vi.advanceTimersByTime(250);
     await flushPromises();
     expect(pill().style.transform).toBe("scale(4)");
-    expect(pill().style.width).toBe("240px");
+    expect(pill().style.width).toBe("320px");
     expect(root.style.backdropFilter).toBe("blur(64px)");
     // 显示得很小时宽度跟着显示宽度
     root.getBoundingClientRect = () => ({ width: 200, height: 112.5 }) as DOMRect;
     vi.advanceTimersByTime(250);
     await flushPromises();
     expect(pill().style.transform).toBe("scale(19.2)");
-    expect(pill().style.width).toBe("120px");
+    expect(pill().style.width).toBe("140px");
     wrapper.unmount();
     vi.useRealTimers();
   });

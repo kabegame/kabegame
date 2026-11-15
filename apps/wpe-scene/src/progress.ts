@@ -6,8 +6,8 @@
  * 阶段（顺序即加载顺序）：
  * - `compile`：Worker 编译，`done / total` 是已处理对象的权重（每个对象 1 + 它的 effect 数，读完 scene.json 就知道总数）；
  * - `decode`：主线程解 PNG / JPG 的 mip（有缓存时瞬间完成）；
- * - `gpu`：准备渲染。编译、解码完就进入（`0 / 1`，不记分段点）：文本排版、声音、脚本 `init`、取设备期间没有计数；建 GPU 场景时
- *   `done / total` 是已建好的着色器程序；之后的管线、粒子预热、排版是同步的，发不出消息；
+ * - `prepare`：编译、解码完就进入（`0 / 1`）：文本排版、声音、媒体、用户纹理、脚本 `init`、取 WebGPU 设备，期间没有计数；
+ * - `gpu`：建 GPU 场景，`done / total` 是已建好的着色器程序；之后的管线、粒子预热、排版是同步的，发不出消息；
  * - `frame`：首帧（等 GPU 交完第一帧、等视频出第一帧），报一次 `0 / 1`、出来时 `1 / 1`。
  * 开头的「宿主启动、拉属性、等设置」没有消息，应用页从挂上 iframe 到第一条消息之间自己算 `page` 阶段。
  *
@@ -16,7 +16,7 @@
 
 export const SCENE_PROGRESS_MESSAGE = "kabegame:wpe-scene-progress";
 
-export type SceneProgressStage = "compile" | "decode" | "gpu" | "frame";
+export type SceneProgressStage = "compile" | "decode" | "prepare" | "gpu" | "frame";
 
 export interface SceneProgressMessage {
   type: typeof SCENE_PROGRESS_MESSAGE;
@@ -41,6 +41,7 @@ export function postSceneProgress(stage: SceneProgressStage, done: number, total
 const SEGMENT_LABELS: Record<SceneProgressStage, string> = {
   compile: "编译",
   decode: "解码",
+  prepare: "准备",
   gpu: "建 GPU 场景",
   frame: "首帧",
 };

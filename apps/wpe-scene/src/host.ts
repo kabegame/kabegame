@@ -1648,9 +1648,8 @@ export class SceneHost {
         }
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 强制渲染（dev），不支持项：`, bundle.unsupported);
       }
-      // 文本、声音、媒体、视频、用户纹理、脚本 init：进度条已进入「准备渲染」（`gpu`，取设备、建 GPU 场景同一段），日志另记一段
-      load.mark("准备");
-      load.report("gpu", 0, 1, { mark: false });
+      // 文本、声音、媒体、视频、用户纹理、脚本 init、取设备：进度的 `prepare` 阶段（日志里「准备」「取设备」两段）
+      load.report("prepare", 0, 1);
       // 文本（P6b 1d）：排版要 wasm 与字体字节，在声音、脚本与 GPU 资源之前排好（读字体是异步的，之后比代数）。wasm 不在或排版
       // 出错时抛 `text:engine`，由下面的 catch 退回预览图
       let texts: Map<number, TextLayout> | undefined;

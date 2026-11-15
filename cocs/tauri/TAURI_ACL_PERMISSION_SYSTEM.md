@@ -56,7 +56,7 @@
 - `capabilities/surf.json`：畅游内容页（远程站点），只有 `surf` 命令组，没有事件权限。
 - `capabilities/surf-navbar.json`：畅游导航栏（本地页面），`surf` + `surf-navbar` 两组命令，`listen` 只能听
   `surf-url-changed` / `surf-collect-state`，外加 `allow-unlisten`。
-- `capabilities/wpe-web.json`：WPE 网页壁纸页面，即 `WallpaperStage` web 层里的 `file:` iframe（`wpe-web-capability`，
+- `capabilities/wpe-web.json`：WPE 网页壁纸页面，即 `WpeWallpaperContent` 里的 `file:` iframe（`wpe-web-capability`，
   `windows` 是 `main` 加整个壁纸窗口 label 池——图库预览在主窗口、桌面在各壁纸窗口，同一份；`frames: "sub"`——只给 iframe，
   这些窗口的主 frame 都是应用页、靠特赦；`local: false`、`remote.urls: ["file:///*"]`）。`listen` 只能听 `wallpaper-ping` /
   `setting-change` / `image-changed` / `images-change`，外加 `allow-unlisten` 与 `permissions/wpe-web.toml` 的

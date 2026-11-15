@@ -80,13 +80,13 @@ pub struct WallpaperTarget {
     /// 目录型 WPE 视频壁纸的作者默认播放属性；其它类型为 null。
     pub wpe_video: Option<WpeVideoProps>,
     /// 网页壁纸（`x-wpe/web`）的入口 `file://`，由 `wallpaper::web_entry` 现算：图库预览与桌面壁纸窗口的
-    /// `WallpaperStage` 直接把它赋给 web 层 iframe 的 `src`。其它类型、Android、读 `project.json` 失败为 None。
+    /// `WpeWallpaperContent` 直接把它赋给 iframe 的 `src`。其它类型、Android、读 `project.json` 失败为 None。
     pub web_entry: Option<String>,
     /// 场景壁纸（`x-wpe/scene`）解析内置资源的 `<WPE 安装目录>/assets` 绝对路径，按顺序查找
     /// （`wpe::discover::scene_asset_dirs`，来自设置 `wpeEngineDir`）。其它类型、Android、没找到安装目录为空。
     pub scene_assets: Vec<String>,
     /// 场景壁纸（`x-wpe/scene`）退回用的预览图：行的 `thumbnail_path`（导入时就是作者的 `preview.*`）。
-    /// 不能渲染（含超时）时 `WallpaperStage` 才显示它，编译期间保持加载态；其它类型、缩略图为空时为 None。
+    /// 桌面（`Wallpaper` → `ImageContent` 的 wallpaper 形态）拿它当缩略层打底与退回画面；其它类型、缩略图为空时为 None。
     pub preview_path: Option<String>,
 }
 

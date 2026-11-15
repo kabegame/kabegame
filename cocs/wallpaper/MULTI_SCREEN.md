@@ -553,7 +553,7 @@ app IPC 的对应变体（协议 v5）见 [../cli/CLI_IPC.md](../cli/CLI_IPC.md)
   - 显示哪个目标由后端的布置决定：启动时先登记 `wallpaper-assignment` 再调 `get_wallpaper_window_assignment`，取不到时按 `multiple` 目标、出声处理。它不再读显示器模式、默认屏与在线屏。
   - 启动时再拉 `get_wallpaper_targets` 与能力表，之后随 `setting-change` 更新自己留的一份目标表，只看 `wallpaperTargets[布置的目标]`：样式、过渡按能力归一化后就地更新（用哪个组合的能力由目标 id 推出，`utils/wallpaperTargets.ts` 的 `displayModeOfTarget`）；这个目标的 `currentImageId` 变了才重新调 `get_current_wallpaper_target`，并明确带上目标 id。别的目标换壁纸、轮播位置等其它字段的写入都不触发；当前壁纸被清空时保留画面上的那张。
   - 布置换了目标时改读新目标；新目标的当前壁纸与画面上的相同就不重新取（从 `multiple` 切到逐屏独立时各屏的目标是从它复制的，画面不闪）。
-  - 布置的 `audible` 为 `false` 时传给 `WallpaperStage` 的音量恒为 0，其余 props 各窗口相同。`WallpaperStage` 与场景宿主没有为多窗口改动。
+  - 布置的 `audible` 为 `false` 时传给 `Wallpaper` 的音量恒为 0，其余 props 各窗口相同。`Wallpaper` 与场景宿主没有为多窗口改动。
   - dev 调试面板显示本窗口的 label 与目标。
 - **Web 版**：没有壁纸后端。`wallpaperTargets` 走 localStorage，只用 `multiple.currentImageId` 记应用背景图（`utils/wallpaperMode.ts` 的 `setWallpaperOrBackground` / `clearWebBackgroundIfRemoved`）；`wallpaperDisplayMode`、`wallpaperDefaultScreen` 是只读占位；`useWallpaperTarget` 的写操作被拦下并提示桌面版。本地迁移把旧的 `kabegame-setting-currentWallpaperImageId` 并入本地的 `wallpaperTargets` 后删除旧键。
 

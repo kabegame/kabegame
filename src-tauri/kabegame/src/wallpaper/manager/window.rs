@@ -130,7 +130,7 @@ struct Slot<R: Runtime> {
 /// 变化后重新对齐（同一块屏保留原窗口、屏矩形变了重铺、布置变了推一条新的、多的销毁、缺的新建），`cleanup()`
 /// 销毁全部窗口。窗口一旦建立即常显，中途不 hide/show。
 ///
-/// 窗口的**内容**：图片 / 视频 / 网页壁纸都由壁纸页面（`WallpaperWindow.vue` → `WallpaperStage`）自驱动渲染。
+/// 窗口的**内容**：图片 / 视频 / 网页壁纸都由壁纸页面（`WallpaperWindow.vue` → `Wallpaper`）自驱动渲染。
 /// 后端只给每个窗口一条布置 [`WindowAssignment`]（显示哪个目标、出不出声），样式、过渡与当前壁纸由页面从
 /// `setting-change` 里的 `wallpaperTargets[targetId]` 自己读；网页壁纸（`x-wpe/web`）是 web 层里的 `file:` iframe，
 /// 窗口不导航，`set_wallpaper` 在后端没有要做的事。桌面鼠标由网页壁纸 / 场景宿主的 iframe 自己向

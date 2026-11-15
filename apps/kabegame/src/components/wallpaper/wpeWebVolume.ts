@@ -1,5 +1,5 @@
 /**
- * 网页壁纸（`x-wpe/web`）音量的父页面 ↔ 垫片消息协议（`postMessage`），父页面一侧是 `WallpaperStage` 的 web 层。
+ * 网页壁纸（`x-wpe/web`）音量的父页面 ↔ 垫片消息协议（`postMessage`），父页面一侧是 `WpeWallpaperContent`（网页壁纸 iframe）与 `WpeSceneView`（场景宿主）。
  *
  * - 垫片启动时向父页面发 `{ type: WPE_VOLUME_REQUEST }`；父页面只理会来自自己当前 iframe 的请求，回
  *   `{ type: WPE_VOLUME_MESSAGE, volume, paused, interactive }`；`volume` / `paused` / `interactive` 变化时父页面再主动推

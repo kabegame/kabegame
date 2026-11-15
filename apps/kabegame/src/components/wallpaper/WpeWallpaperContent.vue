@@ -2,8 +2,8 @@
 /**
  * 一张 WPE 网页 / 场景壁纸的实时画面：网页壁纸是 `file:` iframe，场景是 `WpeSceneView`（场景宿主 iframe）。只管这一张怎么
  * 跑起来、跑没跑起来，不管铺放之外的显示（过渡、打底的缩略图、退回画面都是调用方的事），也不读任何设置：音量、暂停、可交互、
- * 场景样式与场景设置全部由参数给。桌面经 `WallpaperStage`（给 `target`），图库经 `ImageContent` 的 wallpaper 形态（不给
- * `target`，按 `imageId` 经 `get_wallpaper_target_for_image` 取，和桌面共用后端 `build_wallpaper_target`）。`x-wpe/video` 不走这里。
+ * 场景样式与场景设置全部由参数给。都经 `ImageContent` 的 wallpaper 形态挂上来：桌面（`Wallpaper`）给后端算好的 `target`，图库不给，
+ * 按 `imageId` 经 `get_wallpaper_target_for_image` 取（和桌面共用后端 `build_wallpaper_target`）。`x-wpe/video` 不走这里。
  *
  * 事件：
  * - `live`：实时画面出来了。网页是 iframe load（导航了但 {@link WEB_LOAD_TIMEOUT_MS} 内没 load 也算，页面已在画，只记 warn）；
@@ -16,7 +16,7 @@
  * - `contextmenu(point)`：壁纸里点了右键（`wpeContextMenu.ts`），坐标已换算到本页面视口。
  * - `progress(progress)`：场景首次加载的进度（`wpeSceneProgress.ts`），出结果之前原样转发；网页壁纸没有。
  *
- * 网页壁纸 iframe（从 `WallpaperStage` 搬来，规则不变）：
+ * 网页壁纸 iframe（壁纸显示重构步骤 1 从原 `WallpaperStage` 搬来，规则不变）：
  * - 直接赋入口 `file://` 的 `src`：应用页是 http / tauri 源，Chromium 默认在渲染进程用 `SecurityOrigin::CanDisplay` 拦下
  *   （`Not allowed to load local resource`，iframe 停在 about:blank），主窗口与壁纸窗口靠 CEF 补丁 05（建窗前
  *   `allow_app_local_resources`）放行。补丁只开门，能加载哪些文件由运行时闸门按库内网页壁纸目录裁决，所以换壁纸一律销毁重建
@@ -50,8 +50,8 @@ import WpeSceneView from "./WpeSceneView.vue";
 const WEB_LOAD_TIMEOUT_MS = 8_000;
 /**
  * 场景迟迟没有结果（既没首帧也没退回，例如 Worker 卡住、取设备挂起）时判失败、卸载宿主的时限：挂上宿主起算，**每收到一条加载进度
- * 重新计时**，大场景慢慢加载但一直在动时不会被提前判失败。本机实测编译到首帧 0.3–0.6 s，大场景几秒；桌面在这期间保留上一张壁纸，
- * 图库显示缩略图，所以给得宽。壁纸窗口的 init 看门狗只等设置与目标、不等画面，ping 看门狗在宿主起来之前由应用页应答，和这个时限无关。
+ * 重新计时**，大场景慢慢加载但一直在动时不会被提前判失败。本机实测编译到首帧 0.3–0.6 s，大场景几秒；这期间桌面与图库都显示
+ * 模糊的缩略图与进度，所以给得宽。壁纸窗口的 init 看门狗只等设置与目标、不等画面，ping 看门狗在宿主起来之前由应用页应答，和这个时限无关。
  */
 const SCENE_RESULT_TIMEOUT_MS = 30_000;
 

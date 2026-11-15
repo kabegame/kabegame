@@ -3,6 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WallpaperTarget } from "@/components/wallpaper/types";
 import type { WallpaperTargetConfig, WallpaperTargets } from "@/utils/wallpaperTargets";
+import { i18n, setLocale } from "@kabegame/i18n";
 import WallpaperWindow from "./WallpaperWindow.vue";
 
 const backend = vi.hoisted(() => ({
@@ -15,6 +16,8 @@ const backend = vi.hoisted(() => ({
   /** 后端给本窗口的布置；undefined 表示命令失败（没有这个窗口的记录） */
   assignment: undefined as unknown,
   calls: [] as string[],
+  /** `get_language` 的返回值 */
+  language: null as string | null,
   /** `get_current_wallpaper_target` 每次调用带的 target 参数 */
   targetArgs: [] as unknown[],
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
@@ -34,6 +37,7 @@ vi.mock("@/api/rpc", () => ({
       return backend.capabilities;
     }
     if (command === "get_wallpaper_volume") return 0.8;
+    if (command === "get_language") return backend.language;
     if (command === "get_current_wallpaper_target") {
       const target = args?.target;
       backend.targetArgs.push(target);
@@ -53,11 +57,11 @@ vi.mock("@/stores/frameMonitor", () => ({
   getFrameMonitorLevel: () => "good",
   useFrameMonitorStore: () => ({ registerHook: () => 1, unregisterHook: () => {} }),
 }));
-vi.mock("@/components/wallpaper/WallpaperStage.vue", async () => {
+vi.mock("@/components/wallpaper/Wallpaper.vue", async () => {
   const { defineComponent, h } = await import("vue");
   return {
     default: defineComponent({
-      name: "WallpaperStage",
+      name: "Wallpaper",
       props: { target: Object, styleMode: String, transition: String, volume: Number },
       setup(_props, { expose }) {
         expose({ debugState: () => null, delegatesPing: () => false });
@@ -101,7 +105,7 @@ async function mountWindow(targets: WallpaperTargets) {
   return wrapper;
 }
 
-const stage = (wrapper: ReturnType<typeof mount>) => wrapper.findComponent({ name: "WallpaperStage" });
+const stage = (wrapper: ReturnType<typeof mount>) => wrapper.findComponent({ name: "Wallpaper" });
 
 async function settingChange(changes: Record<string, unknown>) {
   backend.listeners.get("setting-change")?.({ payload: { changes } });
@@ -129,7 +133,7 @@ afterEach(() => {
 });
 
 describe("WallpaperWindow 读布置给它的壁纸目标", () => {
-  it("启动：样式 / 过渡取 multiple 目标在窗口模式名下的值，当前壁纸交给 Stage", async () => {
+  it("启动：样式 / 过渡取 multiple 目标在窗口模式名下的值，当前壁纸交给 Wallpaper", async () => {
     const wrapper = await mountWindow({
       multiple: target({
         style: { native: "center", window: "fit" },
@@ -339,5 +343,22 @@ describe("WallpaperWindow 的布置", () => {
     expect(stage(wrapper).props("volume")).toBe(0.8);
     expect(stage(wrapper).props("target")).toMatchObject({ id: "1" });
     expect(backend.calls).toContain("wallpaper_window_ready");
+  });
+});
+
+describe("WallpaperWindow 的语言", () => {
+  afterEach(() => {
+    backend.language = null;
+    setLocale("en");
+  });
+
+  it("启动按设置的语言，之后跟 setting-change；为空或不合法时英语（同主窗口）", async () => {
+    backend.language = "zh";
+    await mountWindow({ multiple: target({}) });
+    expect(i18n.global.locale.value).toBe("zh");
+    await settingChange({ language: "ja" });
+    expect(i18n.global.locale.value).toBe("ja");
+    await settingChange({ language: "xx" });
+    expect(i18n.global.locale.value).toBe("en");
   });
 });

@@ -1,7 +1,7 @@
 //! WPE 网页壁纸（`x-wpe/web`）与场景宿主的状态协议：页面里的垫片（`webview_js/wpe_shim.js`）向宿主
 //! **拉取**完整状态，自己订阅应用事件、看到相关变化就重拉，差异与投递时机全由垫片决定。
 //!
-//! 网页壁纸一律是 `WallpaperStage` web 层里的 `file:` iframe（图库预览在主窗口，桌面在壁纸窗口），垫片只有
+//! 网页壁纸一律是 `WpeWallpaperContent` 里的 `file:` iframe（图库预览在主窗口，桌面在壁纸窗口），垫片只有
 //! 一种传输：iframe 里有 Tauri 的 IPC 桥（runtime 无条件注入每个子 frame），直接调 [`wpe_web_pull_state`]
 //! 与 `plugin:event|listen`。权限只来自 `wpe-web-capability`（绑定 `main` 与 `wallpaper`、`frames: "sub"`、
 //! 来源 `file:///*`），事件只投递到这个 iframe，iframe 销毁时它的监听随 `SubframeDestroyed` 清掉。
