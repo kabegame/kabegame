@@ -4,6 +4,7 @@
 //! - **登录**（[`auth`]）：对话框分步完成，每一步一次 HTTPS 调用 `IAuthenticationService`（扫码或账号密码 +
 //!   Steam Guard），以 `SteamClient` 平台类型拿到能登录 CM 的 refresh token。token 存在 `wpe-import` 插件数据的
 //!   宿主私有区（[`sessions`]），任务参数里只有账号名。
+//! - **创意工坊**（[`workshop`]）：列订阅、按选中的条目下载进 `<WPE>/projects/myprojects/<条目 id>/`，下载核心与本体共用。
 //! - **下载**（[`cm`]、[`cdn`]、[`install`]）：任务用 refresh token 登录 CM（`steam-vent`），查 PICS、取 depot
 //!   密钥与 manifest request code，再从 CDN 下载 manifest 与 chunk，解密、解压、校验后写进
 //!   [`managed_engine_dir`]，按 manifest 增量更新。
@@ -18,6 +19,7 @@ pub mod cm;
 pub mod crypto;
 pub mod install;
 pub mod sessions;
+pub mod workshop;
 
 use std::path::PathBuf;
 
@@ -42,4 +44,10 @@ pub fn managed_engine_dir() -> Option<PathBuf> {
             .join("common")
             .join("wallpaper_engine")
     })
+}
+
+/// 工坊条目要落到的 WPE 目录：设置里可用的 WPE 目录（先自动查找一次），没有就是 Kabegame 管理的那份
+/// （任务里会先下载它）。阻塞调用。
+pub fn target_engine_dir() -> Option<PathBuf> {
+    super::discover::engine_dir().or_else(managed_engine_dir)
 }

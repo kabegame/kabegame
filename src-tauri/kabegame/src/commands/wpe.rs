@@ -62,11 +62,36 @@ pub async fn wpe_steam_verify_session(account: String) -> Result<Value, String> 
 
 #[tauri::command]
 pub async fn wpe_steam_forget_session(account: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        kabegame_core::commands::wpe::wpe_steam_forget_session(account)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    kabegame_core::commands::wpe::wpe_steam_forget_session(account).await
+}
+
+/// 「从 Steam 导入」的订阅列表：一页订阅与每条的本地状态。
+#[tauri::command]
+pub async fn wpe_steam_subscriptions(
+    account: String,
+    page: u32,
+    per_page: u32,
+    sort: Option<String>,
+    ratings: Option<Vec<String>>,
+) -> Result<Value, String> {
+    kabegame_core::commands::wpe::wpe_steam_subscriptions(account, page, per_page, sort, ratings).await
+}
+
+/// 「从 Steam 导入」的工坊发现：一页创意工坊条目与每条的本地状态。
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn wpe_steam_workshop_query(
+    account: String,
+    page: u32,
+    per_page: u32,
+    sort: Option<String>,
+    days: Option<u32>,
+    text: Option<String>,
+    ratings: Option<Vec<String>>,
+    kinds: Option<Vec<String>>,
+) -> Result<Value, String> {
+    kabegame_core::commands::wpe::wpe_steam_workshop_query(account, page, per_page, sort, days, text, ratings, kinds)
+        .await
 }
 
 #[tauri::command]

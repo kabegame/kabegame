@@ -1,6 +1,8 @@
 //! CM（Steam 客户端协议）上的调用：用 refresh token 登录（`steam-vent`），查 PICS、取 depot 密钥、
 //! manifest request code、CDN 服务器列表与 CDN 授权 token。照 SteamKit2 `SteamContent` / DepotDownloader。
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Map, Value};
@@ -56,9 +58,12 @@ fn is_session_rejected(error: &ConnectionError) -> bool {
     )
 }
 
+/// 一次连 CM 最多等多久：WebSocket 偶尔连不上时系统要等 75 秒才超时，不如换一台服务器再试。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// 用已保存的会话登录 CM。会话不存在或被 Steam 拒绝时返回 [`CmError::SessionInvalid`] 并删掉会话；
-/// 网络错误重试三次（连 CM 的 WebSocket 偶有超时）。
-pub async fn connect(account: &str) -> Result<Connection, CmError> {
+/// 网络错误与超时重试三次（每次重新取服务器列表）。只由 [`shared_connection`] 调用。
+async fn connect(account: &str) -> Result<Connection, CmError> {
     let session = sessions::load(account).ok_or_else(|| {
         CmError::SessionInvalid(format!("账号 {account} 没有可用的 Steam 登录，请重新登录"))
     })?;
@@ -74,31 +79,120 @@ pub async fn connect(account: &str) -> Result<Connection, CmError> {
                 continue;
             }
         };
-        match Connection::access(&servers, &session.account, &session.refresh_token).await {
-            Ok(connection) => {
+        let login = Connection::access(&servers, &session.account, &session.refresh_token);
+        match tokio::time::timeout(CONNECT_TIMEOUT, login).await {
+            Ok(Ok(connection)) => {
                 sessions::touch(account);
                 return Ok(connection);
             }
-            Err(error) if is_session_rejected(&error) => {
+            Ok(Err(error)) if is_session_rejected(&error) => {
                 tracing::warn!("Steam 拒绝了账号 {account} 的登录：{error}");
                 let _ = sessions::remove(account);
                 return Err(CmError::SessionInvalid(format!(
                     "账号 {account} 的 Steam 登录已失效，请重新登录"
                 )));
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 tracing::warn!("连接 Steam 失败（第 {} 次）：{error}", attempt + 1);
                 last_error = format!("连接 Steam 失败：{error}");
+            }
+            Err(_) => {
+                tracing::warn!("连接 Steam 超时（第 {} 次）", attempt + 1);
+                last_error = "连接 Steam 超时".to_string();
             }
         }
     }
     Err(CmError::Other(last_error))
 }
 
-/// 复用前的验证：连一次 CM（HTTPS 的 `GenerateAccessTokenForApp` 对客户端 token 返回 AccountLogonDenied，不可用）。
+/// 没人在用的连接空闲多久后断开。
+const IDLE: Duration = Duration::from_secs(5 * 60);
+
+struct CachedConnection {
+    connection: Arc<Connection>,
+    last_used: std::time::Instant,
+}
+
+static SHARED: std::sync::LazyLock<tokio::sync::Mutex<HashMap<String, CachedConnection>>> =
+    std::sync::LazyLock::new(Default::default);
+static SWEEPER: std::sync::Once = std::sync::Once::new();
+
+/// 账号的 CM 连接：每个账号只有一条，浏览订阅、复用前的验证、下载本体、下载工坊条目都用它。
+///
+/// steam-vent 登录时 login id（`obfuscated_private_ip`）固定为 0，同一账号再登录一条连接会把前一条踢下线，
+/// 所以不能各连各的。还有人持有（任务在下载）时不回收；没人持有且空闲 [`IDLE`] 后断开。
+/// 调用失败时由调用方 [`invalidate`] 再取，会重新登录。
+pub async fn shared_connection(account: &str) -> Result<Arc<Connection>, CmError> {
+    let mut cache = SHARED.lock().await;
+    if let Some(cached) = cache.get_mut(account) {
+        cached.last_used = std::time::Instant::now();
+        return Ok(Arc::clone(&cached.connection));
+    }
+    let connection = Arc::new(connect(account).await?);
+    cache.insert(
+        account.to_string(),
+        CachedConnection {
+            connection: Arc::clone(&connection),
+            last_used: std::time::Instant::now(),
+        },
+    );
+    SWEEPER.call_once(|| {
+        tokio::spawn(async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                SHARED.lock().await.retain(|_, cached| {
+                    Arc::strong_count(&cached.connection) > 1 || cached.last_used.elapsed() < IDLE
+                });
+            }
+        });
+    });
+    Ok(connection)
+}
+
+/// 这条连接不能用了（调用失败、被踢下线）：从缓存里拿掉，下次 [`shared_connection`] 重新登录。
+/// 只拿掉同一条，已经换成新连接的不动。
+pub async fn invalidate(connection: &Connection) {
+    SHARED
+        .lock()
+        .await
+        .retain(|_, cached| !std::ptr::eq(Arc::as_ptr(&cached.connection), connection));
+}
+
+/// 取共享连接并查 PICS（任务的第一步）。缓存里的连接可能已经断了：查询失败就作废它、重新登录再查一次。
+pub async fn connect_and_build(account: &str, app_id: u32) -> Result<(Arc<Connection>, AppBuild), CmError> {
+    let connection = shared_connection(account).await?;
+    match app_build(&connection, app_id).await {
+        Ok(build) => Ok((connection, build)),
+        Err(CmError::Other(error)) => {
+            tracing::info!("Steam 连接不可用（{error}），重新登录");
+            invalidate(&connection).await;
+            let connection = shared_connection(account).await?;
+            let build = app_build(&connection, app_id).await?;
+            Ok((connection, build))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// 拿掉某个账号的连接（换账号、删会话时）。
+pub async fn forget_account(account: &str) {
+    SHARED.lock().await.remove(account);
+}
+
+/// 复用前的验证：拿一次共享连接（HTTPS 的 `GenerateAccessTokenForApp` 对客户端 token 返回 AccountLogonDenied，不可用）。
+/// 已有连接时再查一次 PICS 访问令牌，确认它还活着；死了就重新登录。
 pub async fn verify_session(account: &str) -> Result<SessionInfo, CmError> {
-    let connection = connect(account).await?;
-    drop(connection);
+    let connection = shared_connection(account).await?;
+    let alive: Result<CMsgClientPICSAccessTokenResponse, _> = connection
+        .job(CMsgClientPICSAccessTokenRequest {
+            appids: vec![super::WPE_APP_ID],
+            ..Default::default()
+        })
+        .await;
+    if alive.is_err() {
+        invalidate(&connection).await;
+        shared_connection(account).await?;
+    }
     sessions::list()
         .into_iter()
         .find(|info| info.account == account)
@@ -121,6 +215,8 @@ pub struct DepotInfo {
 pub struct AppBuild {
     pub build_id: String,
     pub depots: Vec<DepotInfo>,
+    /// 创意工坊条目所在的 depot（`depots.workshopdepot`）；没写时照 DepotDownloader 用 app id 本身。
+    pub workshop_depot: Option<u32>,
 }
 
 fn map_err<E: std::fmt::Display>(what: &str) -> impl FnOnce(E) -> CmError + '_ {
@@ -190,6 +286,11 @@ pub(crate) fn parse_app_build(text: &str) -> Option<AppBuild> {
         }
         value.as_str().map(str::to_string)
     };
+    let workshop_depot = depots
+        .get("workshopdepot")
+        .and_then(Value::as_str)
+        .and_then(|id| id.parse::<u32>().ok())
+        .filter(|id| *id != 0);
     let mut out = Vec::new();
     for (key, entry) in depots {
         let (Ok(depot_id), Some(entry)) = (key.parse::<u32>(), entry.as_object()) else {
@@ -227,6 +328,7 @@ pub(crate) fn parse_app_build(text: &str) -> Option<AppBuild> {
     Some(AppBuild {
         build_id,
         depots: out,
+        workshop_depot,
     })
 }
 
@@ -378,6 +480,7 @@ mod tests {
     fn picks_public_windows_depots_only() {
         let build = parse_app_build(SAMPLE).unwrap();
         assert_eq!(build.build_id, "26168761");
+        assert_eq!(build.workshop_depot, Some(431960));
         assert_eq!(
             build.depots,
             vec![DepotInfo {

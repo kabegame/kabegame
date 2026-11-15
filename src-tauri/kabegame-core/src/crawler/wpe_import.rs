@@ -90,10 +90,51 @@ fn parse_steam_account(config: &HashMap<String, serde_json::Value>) -> Option<St
         .map(str::to_string)
 }
 
-/// 拉取 WPE 占任务进度的前这么多，导入占剩下的。
-const STEAM_PULL_PROGRESS: f64 = 80.0;
+/// 「从 Steam 导入」里 WPE 本体（按需下载 / 顺带检查更新）占任务进度的前这么多，工坊条目占剩下的。
+const ENGINE_PROGRESS: f64 = 20.0;
 
-/// 下载 / 更新 / 跳过 WPE（见 [`crate::wpe::steam::install`]），返回之后要导入官方默认壁纸的 WPE 安装目录。
+/// 「从 Steam 导入」要导入哪些创意工坊条目：两者取并集。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SteamSelection {
+    /// 对话框里勾选的条目 id（订阅与工坊发现共用）。
+    ids: Vec<u64>,
+    /// 「全部订阅」时要导入的分级（任务运行时重新列）。
+    all_subscriptions: Option<Vec<String>>,
+}
+
+fn string_list(config: &HashMap<String, serde_json::Value>, key: &str) -> Vec<String> {
+    config
+        .get(key)
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `steamItems`（条目 id，去重）与 `steamAllSubscriptions`（分级列表）；两者都没有时为 None。
+fn parse_steam_selection(config: &HashMap<String, serde_json::Value>) -> Option<SteamSelection> {
+    let ratings = string_list(config, "steamAllSubscriptions");
+    let mut ids: Vec<u64> = string_list(config, "steamItems")
+        .iter()
+        .filter_map(|id| id.parse().ok())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    ids.retain(|id| seen.insert(*id));
+    let selection = SteamSelection {
+        ids,
+        all_subscriptions: (!ratings.is_empty()).then_some(ratings),
+    };
+    (selection != SteamSelection::default()).then_some(selection)
+}
+
+/// 下载 / 更新 / 跳过 WPE（见 [`crate::wpe::steam::install`]），返回工坊条目要落到的 WPE 目录。
 async fn pull_engine(run: &Task, account: &str) -> Result<Option<PathBuf>, String> {
     use crate::wpe::steam::install::{ensure_engine, EngineOutcome, PullHooks};
 
@@ -103,7 +144,7 @@ async fn pull_engine(run: &Task, account: &str) -> Result<Option<PathBuf>, Strin
         return Ok(crate::wpe::discover::engine_dir());
     }
     let progress = |fraction: f64| {
-        run.set_progress(fraction.clamp(0.0, 1.0) * STEAM_PULL_PROGRESS);
+        run.set_progress(fraction.clamp(0.0, 1.0) * ENGINE_PROGRESS);
     };
     let log = |level: &str, key: &str, params: serde_json::Value| emit_log(&task_id, level, key, params);
     let hooks = PullHooks {
@@ -138,7 +179,7 @@ async fn pull_engine(run: &Task, account: &str) -> Result<Option<PathBuf>, Strin
             dir
         }
     };
-    run.set_progress(STEAM_PULL_PROGRESS);
+    run.set_progress(ENGINE_PROGRESS);
     Ok(Some(dir))
 }
 
@@ -577,6 +618,204 @@ async fn insert_wpe_row(
     Ok(WpeIngested::Imported(inserted))
 }
 
+/// 入库一个壁纸目录：与 local-import 一样走下载后处理的目录分支，计数 / 去重 / 失败记录由它统一处理。
+/// `Ok(true)` 新入库，`Ok(false)` 库里已有。
+async fn ingest_project_dir(run: &Task, dir: &Path, download_start_time: u64) -> Result<bool, String> {
+    let url = Url::from_file_path(dir).map_err(|()| format!("无效的目录路径：{}", dir.display()))?;
+    let download_queue = crate::crawler::TaskScheduler::global().download_queue();
+    postprocess_downloaded_image(
+        &download_queue,
+        next_download_id(),
+        PostprocessSource::Path {
+            path: dir,
+            relocate_to: None,
+        },
+        false,
+        &url,
+        WPE_IMPORT_PLUGIN_ID,
+        Some(&run.task_id),
+        None,
+        None,
+        download_start_time,
+        run.params.output_album_id.as_deref(),
+        &HashMap::new(),
+        None,
+        None,
+        None,
+        &[],
+    )
+    .await
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// 「从 Steam 导入」：按需下载 WPE 本体，再把选中的创意工坊条目逐个下载进 `<WPE>/projects/myprojects/<id>/`
+/// 并立即入库（取消时保留已完成的条目）。不导入官方默认壁纸，那是「本机」来源的事。
+async fn run_steam_import(run: Arc<Task>, account: String) -> Result<(), String> {
+    use crate::wpe::steam::workshop::{self, log_params, ItemOutcome, WorkshopDownloader};
+    use crate::wpe::steam::install::PullHooks;
+
+    let task_id = run.task_id.clone();
+    let selection = parse_steam_selection(&run.params.config)
+        .ok_or_else(|| "没有选择要导入的创意工坊壁纸".to_string())?;
+    let dry_run = run.params.is_dry_run;
+
+    pull_engine(&run, &account).await?;
+    // 设置指向的目录失效时 ensure_engine 也只是跳过：不往失效的目录里写
+    let engine = tokio::task::spawn_blocking(crate::wpe::discover::engine_dir)
+        .await
+        .map_err(|e| e.to_string())?;
+    if engine.is_none() && !dry_run {
+        let error = "设置里的 Wallpaper Engine 目录不可用，先在设置的壁纸分区改正或清空它".to_string();
+        emit_log(&task_id, "error", "taskLogWpeSteamFailed", json!({ "reason": error }));
+        return Err(error);
+    }
+
+    let fail = |error: String| {
+        emit_log(&task_id, "error", "taskLogWpeSteamFailed", json!({ "reason": error }));
+        error
+    };
+    let mut downloader = WorkshopDownloader::open(&account).await.map_err(|e| fail(e.to_string()))?;
+    let mut items = Vec::new();
+    if let Some(ratings) = &selection.all_subscriptions {
+        items = workshop::all_subscriptions(downloader.connection(), ratings)
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+    }
+    let known: std::collections::HashSet<String> = items.iter().map(|item| item.id.clone()).collect();
+    let ids: Vec<u64> = selection
+        .ids
+        .iter()
+        .copied()
+        .filter(|id| !known.contains(&id.to_string()))
+        .collect();
+    if !ids.is_empty() {
+        let found = workshop::details(downloader.connection(), &ids)
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        if found.len() < ids.len() {
+            emit_log(
+                &task_id,
+                "warn",
+                "taskLogWpeWorkshopMissing",
+                json!({ "count": ids.len() - found.len() }),
+            );
+        }
+        items.extend(found);
+    }
+    let (supported, unsupported): (Vec<_>, Vec<_>) = items.into_iter().partition(|item| item.supported);
+    emit_log(
+        &task_id,
+        "info",
+        "taskLogWpeWorkshopListed",
+        json!({ "count": supported.len() + unsupported.len(), "supported": supported.len() }),
+    );
+    let mut skipped = 0usize;
+    for item in &unsupported {
+        skipped += 1;
+        let mut params = log_params(item);
+        params["kind"] = json!(item.kind);
+        emit_log(&task_id, "info", "taskLogWpeWorkshopUnsupported", params);
+    }
+
+    let total = supported.len() + unsupported.len();
+    let (mut imported, mut existing, mut failed) = (0usize, 0usize, 0usize);
+    if dry_run {
+        for item in &supported {
+            let mut params = log_params(item);
+            params["sizeMb"] = json!(format!("{:.1}", item.file_size as f64 / 1048576.0));
+            emit_log(&task_id, "info", "taskLogWpeWorkshopDryRun", params);
+            run.record_dry_run_skip();
+        }
+    } else if let Some(engine) = engine.as_deref() {
+        let download_start_time = now_millis();
+        let total_bytes: u64 = supported.iter().map(|item| item.file_size.max(1)).sum();
+        let span = 100.0 - ENGINE_PROGRESS;
+        let mut done_bytes = 0u64;
+        for item in &supported {
+            if run.cancel.is_cancelled() {
+                return Err("Task canceled".to_string());
+            }
+            let size = item.file_size.max(1);
+            let base = done_bytes;
+            let progress = |fraction: f64| {
+                let done = base as f64 + fraction.clamp(0.0, 1.0) * size as f64;
+                run.set_progress(ENGINE_PROGRESS + span * done / total_bytes as f64);
+            };
+            let log = |level: &str, key: &str, params: serde_json::Value| emit_log(&task_id, level, key, params);
+            let hooks = PullHooks {
+                cancel: &run.cancel,
+                progress: &progress,
+                log: &log,
+            };
+            emit_log(&task_id, "info", "taskLogWpeWorkshopDownloading", {
+                let mut params = log_params(item);
+                params["sizeMb"] = json!(format!("{:.1}", item.file_size as f64 / 1048576.0));
+                params
+            });
+            match downloader.download(engine, item, &hooks).await {
+                Ok(outcome) => {
+                    let dir = match outcome {
+                        ItemOutcome::UpToDate(dir) => {
+                            emit_log(&task_id, "info", "taskLogWpeWorkshopUpToDate", log_params(item));
+                            dir
+                        }
+                        ItemOutcome::Downloaded { dir, .. } => dir,
+                    };
+                    match ingest_project_dir(&run, &dir, download_start_time).await {
+                        Ok(true) => imported += 1,
+                        Ok(false) => existing += 1,
+                        Err(reason) => {
+                            skipped += 1;
+                            emit_log(
+                                &task_id,
+                                "warn",
+                                "taskLogWpeSkip",
+                                json!({ "path": dir.to_string_lossy(), "reason": reason }),
+                            );
+                        }
+                    }
+                }
+                Err(_) if run.cancel.is_cancelled() => return Err("Task canceled".to_string()),
+                Err(reason) => {
+                    failed += 1;
+                    let mut params = log_params(item);
+                    params["reason"] = json!(reason);
+                    emit_log(&task_id, "warn", "taskLogWpeWorkshopFailed", params);
+                    // 连接可能已断（被踢下线、网络）：作废它重新登录，后面的条目不跟着失败；重连不上就停
+                    crate::wpe::steam::cm::invalidate(downloader.connection()).await;
+                    downloader = WorkshopDownloader::open(&account).await.map_err(|e| fail(e.to_string()))?;
+                }
+            }
+            done_bytes += size;
+            run.set_progress(ENGINE_PROGRESS + span * done_bytes as f64 / total_bytes as f64);
+        }
+    }
+
+    emit_log(
+        &task_id,
+        "info",
+        "taskLogWpeImportSummary",
+        json!({
+            "total": total,
+            "imported": imported,
+            "existing": existing,
+            "skipped": skipped + failed,
+            "dryRun": dry_run,
+        }),
+    );
+    run.set_progress(100.0);
+    if failed > 0 && failed == supported.len() {
+        return Err(format!("{failed} 个创意工坊条目全部下载失败"));
+    }
+    Ok(())
+}
+
 fn skip_reason(project_result: &Result<WpeProject, WpeSkip>) -> Option<&WpeSkip> {
     project_result.as_ref().err()
 }
@@ -586,25 +825,16 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
     let task_id = run.task_id.clone();
     let config = run.params.config.clone();
     let sources = parse_sources(&config);
-    let mut extra_dirs = parse_extra_dirs(&config);
+    let extra_dirs = parse_extra_dirs(&config);
     let steam_account = parse_steam_account(&config);
 
-    if sources.is_empty() && extra_dirs.is_empty() && steam_account.is_none() {
+    // 「从 Steam 导入」是单独的一条路：只导入选中的创意工坊条目
+    if let Some(account) = steam_account {
+        return run_steam_import(run, account).await;
+    }
+    if sources.is_empty() && extra_dirs.is_empty() {
         return Err("未选择任何壁纸来源".to_string());
     }
-
-    // 从 Steam 拉取：先保证有 WPE，再把它的官方默认壁纸并进本次导入（目录去重由 collect_selected_dirs 负责）
-    let progress_base = if let Some(account) = steam_account.as_deref() {
-        if let Some(engine) = pull_engine(&run, account).await? {
-            let defaults = engine.join("projects").join("defaultprojects");
-            if defaults.is_dir() {
-                extra_dirs.push(defaults.to_string_lossy().into_owned());
-            }
-        }
-        STEAM_PULL_PROGRESS
-    } else {
-        0.0
-    };
 
     let (dirs, errors) = collect_selected_dirs(&sources, &extra_dirs);
     for (path, reason) in errors {
@@ -616,16 +846,10 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
         );
     }
     if dirs.is_empty() {
-        // 只拉取 WPE、没有可导入的壁纸目录（例如 dry-run 时还没装）：拉取本身已完成
-        if steam_account.is_some() {
-            run.set_progress(100.0);
-            return Ok(());
-        }
         return Err("没有找到任何 Wallpaper Engine 壁纸目录".to_string());
     }
 
     let total = dirs.len();
-    run.set_progress(progress_base);
     emit_log(
         &task_id,
         "info",
@@ -636,8 +860,6 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
         }),
     );
 
-    let download_queue = crate::crawler::TaskScheduler::global().download_queue();
-    let headers: HashMap<String, String> = HashMap::new();
     let download_start_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -665,34 +887,8 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
                     );
                     run.record_dry_run_skip();
                 } else {
-                    // 与 local-import 一样走下载后处理：目录分支负责入库，计数 / 去重 / 失败记录由它统一处理
-                    let result = match Url::from_file_path(&project.dir) {
-                        Ok(url) => {
-                            postprocess_downloaded_image(
-                                &download_queue,
-                                next_download_id(),
-                                PostprocessSource::Path {
-                                    path: &project.dir,
-                                    relocate_to: None,
-                                },
-                                false,
-                                &url,
-                                WPE_IMPORT_PLUGIN_ID,
-                                Some(&task_id),
-                                None,
-                                None,
-                                download_start_time,
-                                run.params.output_album_id.as_deref(),
-                                &headers,
-                                None,
-                                None,
-                                None,
-                                &[],
-                            )
-                            .await
-                        }
-                        Err(()) => Err(format!("无效的目录路径：{}", project.dir.display())),
-                    };
+                    let result =
+                        ingest_project_dir(&run, &project.dir, download_start_time).await;
                     match result {
                         Ok(true) => imported += 1,
                         Ok(false) => already += 1,
@@ -741,7 +937,7 @@ pub async fn run_builtin_wpe_import(run: Arc<Task>) -> Result<(), String> {
         }
 
         // 已入库的目录在文件系统层面无需再做任何事；`ingest_wpe_dir` 按 local_path 幂等。
-        run.set_progress(progress_base + ((index + 1) as f64 / total as f64) * (100.0 - progress_base));
+        run.set_progress(((index + 1) as f64 / total as f64) * 100.0);
     }
 
     emit_log(
@@ -776,7 +972,7 @@ mod tests {
         assert_eq!(parse_steam_account(&set).as_deref(), Some("alice"));
     }
 
-    /// 只选「从 Steam 拉取」时的配置：要过校验，自动来源为空、账号保留。
+    /// 「从 Steam 导入」对话框提交的配置：要过校验，自动来源为空、账号与选中的条目保留。
     #[test]
     fn steam_only_config_passes_validation() {
         let plugin = builtin_plugins().get(WPE_IMPORT_PLUGIN_ID).unwrap();
@@ -785,12 +981,45 @@ mod tests {
             HashMap::from([
                 ("sources".to_string(), serde_json::Value::Null),
                 ("steamAccount".to_string(), json!("alice")),
+                ("steamItems".to_string(), json!(["3830255100", "12"])),
+                ("steamAllSubscriptions".to_string(), serde_json::Value::Null),
             ]),
             None,
         )
         .unwrap();
         assert!(parse_sources(&config).is_empty());
         assert_eq!(parse_steam_account(&config).as_deref(), Some("alice"));
+        assert_eq!(
+            parse_steam_selection(&config),
+            Some(SteamSelection {
+                ids: vec![3830255100, 12],
+                all_subscriptions: None,
+            })
+        );
+    }
+
+    #[test]
+    fn steam_selection_keeps_both_and_dedups_ids() {
+        assert_eq!(parse_steam_selection(&HashMap::new()), None);
+        let ids = HashMap::from([("steamItems".to_string(), json!(["5", " 5 ", "x", "7"]))]);
+        assert_eq!(
+            parse_steam_selection(&ids),
+            Some(SteamSelection {
+                ids: vec![5, 7],
+                all_subscriptions: None,
+            })
+        );
+        let both = HashMap::from([
+            ("steamItems".to_string(), json!(["5"])),
+            ("steamAllSubscriptions".to_string(), json!(["Everyone", "Questionable"])),
+        ]);
+        assert_eq!(
+            parse_steam_selection(&both),
+            Some(SteamSelection {
+                ids: vec![5],
+                all_subscriptions: Some(vec!["Everyone".into(), "Questionable".into()]),
+            })
+        );
     }
 
     #[test]

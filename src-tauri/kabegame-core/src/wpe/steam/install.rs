@@ -64,9 +64,9 @@ struct InstallState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct FileState {
-    size: u64,
-    sha: String,
+pub(super) struct FileState {
+    pub(super) size: u64,
+    pub(super) sha: String,
 }
 
 /// 对话框展示用的安装信息。
@@ -108,7 +108,7 @@ pub fn managed_install_info() -> Option<ManagedInstallInfo> {
     })
 }
 
-fn now_secs() -> u64 {
+pub(super) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -188,11 +188,12 @@ pub async fn ensure_engine(account: &str, hooks: &PullHooks<'_>) -> Result<Engin
     }
 
     (hooks.log)("info", "taskLogWpeSteamConnecting", json!({ "account": account }));
-    let connection = cm::connect(account).await.map_err(|error| match error {
-        CmError::SessionInvalid(message) => message,
-        CmError::Other(message) => message,
-    })?;
-    let build = cm::app_build(&connection, WPE_APP_ID).await?;
+    let (connection, build) = cm::connect_and_build(account, WPE_APP_ID)
+        .await
+        .map_err(|error| match error {
+            CmError::SessionInvalid(message) => message,
+            CmError::Other(message) => message,
+        })?;
     if build.depots.is_empty() {
         return Err("Steam 没有返回可下载的 Wallpaper Engine 内容".to_string());
     }
@@ -227,7 +228,7 @@ pub async fn ensure_engine(account: &str, hooks: &PullHooks<'_>) -> Result<Engin
     }
 
     let servers = cm::cdn_servers(&connection, WPE_APP_ID).await?;
-    let pool = Arc::new(CdnPool::new(WPE_APP_ID, connection.clone(), servers));
+    let pool = Arc::new(CdnPool::new(WPE_APP_ID, (*connection).clone(), servers));
     // 后面的 depot 覆盖前面的同名文件（与 Steam 一致）
     let mut files: BTreeMap<String, (u32, ManifestFile)> = BTreeMap::new();
     let mut keys: HashMap<u32, Vec<u8>> = HashMap::new();
@@ -328,12 +329,13 @@ fn set_engine_dir_if_empty(engine: &Path) {
     }
 }
 
-struct Plan {
+pub(super) struct Plan {
     /// 要下载的文件（depot id、文件）。
-    downloads: Vec<(u32, ManifestFile)>,
+    pub(super) downloads: Vec<(u32, ManifestFile)>,
 }
 
-fn plan_downloads(
+/// 规划下载：建目录、跳过已是最新的文件。`root` 是安装根（WPE 本体目录或工坊条目目录）。
+pub(super) fn plan_downloads(
     engine: &Path,
     files: &[(u32, ManifestFile)],
     recorded: &BTreeMap<String, FileState>,
@@ -364,7 +366,7 @@ fn plan_downloads(
 
 /// 并发下载 chunk。每个 chunk 的 future 只持有自己的数据（Arc 与克隆），不借用外部引用：
 /// `stream.map(|..| async { 借用 })` 会让 rustc 证明不了 future 对所有生命周期都是 Send。
-async fn download_files(
+pub(super) async fn download_files(
     pool: &Arc<CdnPool>,
     engine: &Path,
     downloads: &[(u32, ManifestFile)],

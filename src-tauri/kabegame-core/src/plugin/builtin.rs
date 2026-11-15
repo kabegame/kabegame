@@ -161,7 +161,8 @@ fn wpe_import_plugin() -> Plugin {
             "name.ko": "추가 폴더"
         },
         {
-            // 「从 Steam 拉取」：已在对话框里登录的账号名。有值时先下载 / 更新 WPE 再导入；token 存在插件数据私有区，不进任务参数
+            // 「从 Steam 导入」：已在对话框里登录的账号名。有值时导入选中的创意工坊条目（缺 WPE 时顺带下载）；
+            // token 存在插件数据私有区，不进任务参数
             "key": "steamAccount",
             "type": "string",
             "name": "Steam account",
@@ -169,6 +170,26 @@ fn wpe_import_plugin() -> Plugin {
             "name.zhtw": "Steam 帳號",
             "name.ja": "Steam アカウント",
             "name.ko": "Steam 계정"
+        },
+        {
+            // 「从 Steam 导入」里勾选的创意工坊条目 id（订阅与工坊发现共用）；与 steamAllSubscriptions 取并集
+            "key": "steamItems",
+            "type": "list",
+            "name": "Workshop items",
+            "name.zh": "创意工坊条目",
+            "name.zhtw": "工作坊項目",
+            "name.ja": "ワークショップのアイテム",
+            "name.ko": "창작마당 항목"
+        },
+        {
+            // 「选中当前筛选下的全部订阅」：要导入的分级（Everyone / Questionable / Mature），任务运行时按它重新列订阅
+            "key": "steamAllSubscriptions",
+            "type": "list",
+            "name": "All subscriptions with ratings",
+            "name.zh": "全部订阅（按分级）",
+            "name.zhtw": "全部訂閱（依分級）",
+            "name.ja": "すべての購読（レーティング別）",
+            "name.ko": "모든 구독(등급별)"
         }
     ]))
     .expect("wpe-import 内建插件变量定义必须合法");
@@ -187,11 +208,11 @@ fn wpe_import_plugin() -> Plugin {
             "ko": "월페이퍼 가져오기",
         }),
         json!({
-            "default": "Import Wallpaper Engine wallpapers, or download Wallpaper Engine from Steam",
-            "zh": "导入本机 Wallpaper Engine 壁纸，或从 Steam 拉取 Wallpaper Engine",
-            "zhtw": "匯入本機 Wallpaper Engine 桌布，或從 Steam 下載 Wallpaper Engine",
-            "ja": "ローカルの Wallpaper Engine 壁紙をインポート、または Steam から Wallpaper Engine を取得",
-            "ko": "로컬 Wallpaper Engine 월페이퍼 가져오기 또는 Steam에서 Wallpaper Engine 받기",
+            "default": "Import Wallpaper Engine wallpapers from this computer or from your Steam Workshop subscriptions",
+            "zh": "导入本机的 Wallpaper Engine 壁纸，或从 Steam 导入创意工坊订阅",
+            "zhtw": "匯入本機的 Wallpaper Engine 桌布，或從 Steam 匯入工作坊訂閱",
+            "ja": "ローカルの Wallpaper Engine 壁紙、または Steam ワークショップの購読をインポート",
+            "ko": "로컬 Wallpaper Engine 월페이퍼 또는 Steam 창작마당 구독 가져오기",
         }),
         HashMap::from([("vars".to_string(), Value::Array(wpe_import_vars))]),
         wpe_import_var_defs,

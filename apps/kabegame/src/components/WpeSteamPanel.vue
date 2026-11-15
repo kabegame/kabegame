@@ -7,23 +7,7 @@
       <Skeleton class="h-[148px] w-full" />
     </template>
 
-    <!-- 设置里已有别的 WPE 目录：不需要下载，只给说明 -->
-    <Alert v-else-if="hasOtherEngine" :tone="status.engineValid ? 'info' : 'warning'">
-      <div>{{ status.engineValid ? $t("gallery.wpeSteamExisting") : $t("gallery.wpeSteamExistingInvalid") }}</div>
-      <div class="mt-1 break-all text-[12px] text-kb-fg-subtle">{{ status.engineDir }}</div>
-    </Alert>
-
     <template v-else>
-      <div class="flex flex-wrap gap-1.5">
-        <span :class="[CHIP_CLASS, status.managedInstall ? CHIP_PLAIN : CHIP_MUTED]">
-          {{
-            status.managedInstall
-              ? $t("gallery.wpeSteamInstalled", { build: status.managedInstall.buildId })
-              : $t("gallery.wpeSteamNotInstalled")
-          }}
-        </span>
-      </div>
-
       <!-- 已就绪 -->
       <div v-if="readyAccount" :class="BOX_CLASS" class="flex items-center gap-2 text-[13px] text-kb-fg">
         <CircleCheck class="size-4 shrink-0 text-kb-accent" />
@@ -152,22 +136,28 @@
 
         <Alert v-if="loginError" tone="danger">{{ loginError }}</Alert>
       </div>
+
+      <!-- Wallpaper Engine 只是顺带：一行小字说明会不会下载 -->
+      <div class="flex min-w-0 items-center gap-1.5 text-[11.5px] leading-[1.5] text-kb-fg-subtle">
+        <component :is="engineNote.warn ? TriangleAlert : Info" class="size-3.5 shrink-0" />
+        <span class="min-w-0 truncate" :title="engineNote.title">{{ engineNote.text }}</span>
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 /**
- * 壁纸导入对话框「从 Steam」来源的面板：登录 Steam，准备好拉取 Wallpaper Engine 的账号。
+ * 壁纸导入对话框「从 Steam」来源的面板：登录 Steam，准备好导入用的账号。
  *
  * 只在选中「从 Steam」时挂载：挂载即读状态，有未过期的登录就先问要不要复用，否则直接进登录（缺省扫码）；
  * 卸载时放弃进行中的登录。登录分步完成（扫码 / 账号密码 + Steam Guard），每一步一次后端调用；token 由后端
  * 存进插件数据的私有区，这里只拿到账号名。已登录的账号由对话框持有（`v-model:account`），来回切换来源不丢。
- * 设置里已有别的 WPE 目录时不下载，只显示说明，并经 `v-model:blocked` 告诉对话框不能提交。
+ * 登录区始终显示；Wallpaper Engine 只是顺带（缺了才下载、Kabegame 下载的那份顺带更新），状态在底部一行小字。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ArrowLeft, CircleCheck, RefreshCw } from "@lucide/vue";
+import { ArrowLeft, CircleCheck, Info, RefreshCw, TriangleAlert } from "@lucide/vue";
 import { Alert, Button, Input, SegmentedControl, Skeleton, Spinner } from "@/components/ui";
 import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api";
@@ -201,19 +191,26 @@ type LoginPoll =
   { status: "pending"; scanned: boolean; qrDataUrl: string | null } | { status: "done"; session: SteamSession };
 
 const readyAccount = defineModel<string | null>("account", { default: null });
-/** 设置里已有别的 WPE 目录：不下载、不能提交 */
-const blocked = defineModel<boolean>("blocked", { default: false });
 
 const { t, locale } = useI18n();
 
 const BOX_CLASS = "box-border rounded-kb-lg border border-solid border-kb-line-strong bg-kb-surface-raised px-3 py-2.5";
-const CHIP_CLASS = "rounded-full px-2 text-[11px] leading-[18px]";
-const CHIP_PLAIN = "bg-kb-fill text-kb-fg-muted";
-const CHIP_MUTED = "bg-kb-fill-light text-kb-fg-subtle";
 
 const status = ref<SteamStatus | null>(null);
-/** 设置里有 WPE 目录、且不是 Kabegame 管理的那份：不下载 */
-const hasOtherEngine = computed(() => !!status.value?.engineDir && !status.value.engineIsManaged);
+
+/** 底部那行 Wallpaper Engine 状态：设置里有别的目录就用它（不下载），否则用 Kabegame 下载的那份 / 导入时下载 */
+const engineNote = computed(() => {
+  const s = status.value;
+  if (s?.engineDir && !s.engineIsManaged) {
+    return s.engineValid
+      ? { text: t("gallery.wpeSteamEngineExisting", { path: s.engineDir }), title: s.engineDir, warn: false }
+      : { text: t("gallery.wpeSteamExistingInvalid"), title: s.engineDir, warn: true };
+  }
+  if (s?.managedInstall) {
+    return { text: t("gallery.wpeSteamInstalled", { build: s.managedInstall.buildId }), title: undefined, warn: false };
+  }
+  return { text: t("gallery.wpeSteamEngineMissing"), title: undefined, warn: false };
+});
 const reusable = computed(() => status.value?.sessions[0] ?? null);
 
 const mode = ref<"reuse" | "login">("reuse");
@@ -280,7 +277,6 @@ async function loadStatus() {
       sessions: [],
     };
   }
-  blocked.value = hasOtherEngine.value;
 }
 
 function stopLogin() {
@@ -442,7 +438,7 @@ watch(tab, (next) => {
 
 onMounted(async () => {
   await loadStatus();
-  if (unmounted || readyAccount.value || hasOtherEngine.value) return;
+  if (unmounted || readyAccount.value) return;
   mode.value = reusable.value ? "reuse" : "login";
   if (mode.value === "login" && tab.value === "qr") void startQr();
 });

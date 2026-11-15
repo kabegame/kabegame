@@ -995,6 +995,10 @@ pub(crate) fn configure_app(
             #[cfg(feature = "wpe")]
             wpe_steam_forget_session,
             #[cfg(feature = "wpe")]
+            wpe_steam_subscriptions,
+            #[cfg(feature = "wpe")]
+            wpe_steam_workshop_query,
+            #[cfg(feature = "wpe")]
             wpe_steam_login_qr,
             #[cfg(feature = "wpe")]
             wpe_steam_login_credentials,

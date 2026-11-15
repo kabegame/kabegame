@@ -90,23 +90,27 @@ fn parse_workshop_cache(text: &str) -> Result<WorkshopTags, serde_json::Error> {
     Ok(tags)
 }
 
-/// 读 WPE 的工坊缓存。这是 WPE 的内部文件，读不到或格式变了都当作没有，壁纸走 `project.json` 推导。
+/// 读工坊标签：Kabegame 从 Steam 下载的条目记下的标签，加上 WPE 的工坊缓存（同一条以 WPE 为准）。
+/// WPE 的缓存是它的内部文件，读不到或格式变了都当作没有；两处都没有的壁纸走 `project.json` 推导。
 pub fn read_workshop_tags() -> WorkshopTags {
     let Some(engine) = super::discover::engine_dir() else {
         return WorkshopTags::new();
     };
+    // Kabegame 从 Steam 下载的工坊条目记着 Steam 标签；WPE 自己的缓存有同一条时以它为准
+    let mut tags = super::steam::workshop::recorded_tags(&engine);
     let path = engine.join(WORKSHOP_CACHE_FILE);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) => {
             tracing::debug!("读不到工坊缓存 {}: {error}", path.display());
-            return WorkshopTags::new();
+            return tags;
         }
     };
-    parse_workshop_cache(&text).unwrap_or_else(|error| {
-        tracing::warn!("工坊缓存格式无法识别 {}: {error}", path.display());
-        WorkshopTags::new()
-    })
+    match parse_workshop_cache(&text) {
+        Ok(cache) => tags.extend(cache),
+        Err(error) => tracing::warn!("工坊缓存格式无法识别 {}: {error}", path.display()),
+    }
+    tags
 }
 
 /// 从 `project.json` 推导 WPE 发布时会打的标签。

@@ -1,12 +1,33 @@
 <template>
   <Dialog v-model:open="open" :title="$t('gallery.wallpaperImportTitle')" :width="640">
     <div class="flex flex-col gap-3">
-      <!-- 来源：本机（Steam 库自动发现 + 手选文件夹）/ 从 Steam（登录后拉取 Wallpaper Engine） -->
+      <!-- 来源：本机（Steam 库自动发现 + 手选文件夹）/ 从 Steam（登录后挑创意工坊订阅，缺 WPE 时顺带下载） -->
       <SegmentedControl v-model="importSource" :options="importSourceOptions" class="max-w-[320px]" />
 
       <template v-if="importSource === 'steam'">
         <SectionTitle>{{ $t("gallery.wpeSteamTitle") }}</SectionTitle>
-        <WpeSteamPanel :key="openCount" v-model:account="steamAccount" v-model:blocked="steamBlocked" />
+        <WpeSteamPanel :key="openCount" v-model:account="steamAccount" />
+        <template v-if="steamAccount">
+          <SectionTitle>{{ $t("gallery.wpeSteamPickTitle") }}</SectionTitle>
+          <!-- 我的订阅 / 工坊发现：两个页签都留着（v-show），切换不丢页码与筛选；已选条目共用一份 -->
+          <SegmentedControl v-model="steamTab" :options="steamTabOptions" size="sm" class="max-w-[280px]" />
+          <WpeSteamWorkshopList
+            v-show="steamTab === 'subscriptions'"
+            :key="`subs:${openCount}:${steamAccount}`"
+            v-model:selected-ids="steamSelectedIds"
+            v-model:all-subscriptions="steamAllSubscriptions"
+            source="subscriptions"
+            :account="steamAccount"
+          />
+          <WpeSteamWorkshopList
+            v-if="steamDiscoverOpened"
+            v-show="steamTab === 'discover'"
+            :key="`discover:${openCount}:${steamAccount}`"
+            v-model:selected-ids="steamSelectedIds"
+            source="discover"
+            :account="steamAccount"
+          />
+        </template>
       </template>
 
       <template v-else>
@@ -167,6 +188,7 @@ import { guardDesktopOnly } from "@/utils/desktopOnlyGuard";
 import AlbumPicker from "@/components/albums/AlbumPicker.vue";
 import SectionTitle from "@/components/ui/SectionTitle.vue";
 import WpeSteamPanel from "@/components/WpeSteamPanel.vue";
+import WpeSteamWorkshopList, { type SteamAllSubscriptions } from "@/components/WpeSteamWorkshopList.vue";
 
 /** 与后端 `WpeSourceInfo` 对应。 */
 interface WpeSourceInfo {
@@ -232,9 +254,27 @@ const importSourceOptions = computed(() => [
   { label: t("gallery.wpeSourceLocal"), value: "local" as const },
   { label: t("gallery.wpeSourceSteam"), value: "steam" as const },
 ]);
-/** 「从 Steam」：面板登录好的账号（有账号才可提交）；设置里已有别的 WPE 目录时不能提交 */
+/** 「从 Steam」：面板登录好的账号 */
 const steamAccount = ref<string | null>(null);
-const steamBlocked = ref(false);
+/** 「从 Steam」：两个页签共用的已选条目 id */
+const steamSelectedIds = ref<string[]>([]);
+/** 「从 Steam」：订阅页签勾了「全部 N 个」时的分级与总数 */
+const steamAllSubscriptions = ref<SteamAllSubscriptions | null>(null);
+const steamTab = ref<"subscriptions" | "discover">("subscriptions");
+const steamTabOptions = computed(() => [
+  { label: t("gallery.wpeSteamSubsTitle"), value: "subscriptions" as const },
+  { label: t("gallery.wpeSteamDiscoverTitle"), value: "discover" as const },
+]);
+/** 工坊发现第一次切过去才挂载（才开始查），之后一直留着 */
+const steamDiscoverOpened = ref(false);
+watch(steamTab, (tab) => {
+  if (tab === "discover") steamDiscoverOpened.value = true;
+});
+// 换账号（或登出）时已选的条目不再算数
+watch(steamAccount, () => {
+  steamSelectedIds.value = [];
+  steamAllSubscriptions.value = null;
+});
 /** 每次打开 +1，让 Steam 面板重新挂载、重新读状态 */
 const openCount = ref(0);
 
@@ -297,7 +337,7 @@ function statChips(source: WpeSourceInfo): { tone: "plain" | "primary" | "muted"
 const selectedSources = computed(() => sources.value.filter(isSelected));
 const canSubmit = computed(() =>
   importSource.value === "steam"
-    ? !!steamAccount.value && !steamBlocked.value
+    ? !!steamAccount.value && (steamSelectedIds.value.length > 0 || !!steamAllSubscriptions.value)
     : selectedSources.value.length > 0 || extraDirs.value.length > 0,
 );
 const importableCount = computed(() =>
@@ -306,8 +346,16 @@ const importableCount = computed(() =>
 
 const footerText = computed(() => {
   if (importSource.value === "steam") {
-    if (steamBlocked.value) return t("gallery.wpeSteamExisting");
-    return steamAccount.value ? t("gallery.wpeSteamSummary") : t("gallery.wpeSteamNeedLogin");
+    const all = steamAllSubscriptions.value;
+    const picked = steamSelectedIds.value.length;
+    if (!steamAccount.value) return t("gallery.wpeSteamNeedLogin");
+    if (all) {
+      return picked
+        ? t("gallery.wpeSteamSubsSummaryAllPlus", { n: all.total, m: picked })
+        : t("gallery.wpeSteamSubsSummaryAll", { n: all.total });
+    }
+    if (!picked) return t("gallery.wpeSteamSubsNeedSelect");
+    return t("gallery.wpeSteamSubsSummaryItems", { n: picked });
   }
   if (canSubmit.value) return t("gallery.wpeSummary", { n: importableCount.value });
   // 扫到了来源但一个待导入的都没有：说明都已入库，而不是让用户「至少选一个」。
@@ -356,13 +404,26 @@ async function handleAddFolder() {
   }
 }
 
+/** 订阅的「全部」与勾选的条目（两个页签）由任务取并集 */
+function steamConfig() {
+  return {
+    sources: null,
+    steamAccount: steamAccount.value,
+    steamItems: steamSelectedIds.value.length ? steamSelectedIds.value : null,
+    steamAllSubscriptions: steamAllSubscriptions.value?.ratings ?? null,
+  };
+}
+
 function resetState() {
   sources.value = [];
   extraDirs.value = [];
   outputAlbumId.value = null;
   isDryRun.value = false;
   steamAccount.value = null;
-  steamBlocked.value = false;
+  steamSelectedIds.value = [];
+  steamAllSubscriptions.value = null;
+  steamTab.value = "subscriptions";
+  steamDiscoverOpened.value = false;
   openCount.value++;
   for (const key of Object.keys(selected)) delete selected[key];
 }
@@ -390,10 +451,9 @@ async function handleSubmit() {
   }
   if (await guardDesktopOnly("localImport", { needSuper: true })) return;
 
-  // 从 Steam：不用本机自动来源（sources 传 null），只带账号名；token 在后端插件数据的私有区里，任务按账号取。
-  // 拉取完成后任务会顺带导入这份 WPE 的官方默认壁纸。
-  const userConfig =
-    importSource.value === "steam" ? { sources: null, steamAccount: steamAccount.value } : localConfig();
+  // 从 Steam：不用本机自动来源（sources 传 null），带账号名与选中的条目（或「全部」时的分级）；
+  // token 在后端插件数据的私有区里，任务按账号取。缺 WPE 时任务先顺带下载，不导入官方默认壁纸。
+  const userConfig = importSource.value === "steam" ? steamConfig() : localConfig();
 
   submitting.value = true;
   try {
