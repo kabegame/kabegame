@@ -483,5 +483,19 @@
   "wpeSetCoverFailed": "設為封面失敗",
   "wpeRestoreCover": "恢復預設封面",
   "wpeRestoreCoverDone": "已恢復預設封面",
-  "wpeRestoreCoverFailed": "恢復預設封面失敗"
+  "wpeRestoreCoverFailed": "恢復預設封面失敗",
+  "wpeShortcutKindFile": "檔案",
+  "wpeShortcutKindDirectory": "資料夾",
+  "wpeShortcutKindWeb": "網址",
+  "wpeShortcutKindCmd": "命令",
+  "wpeShortcutPathFile": "程式或檔案的路徑",
+  "wpeShortcutPathDirectory": "資料夾路徑",
+  "wpeShortcutPathWeb": "網址，如 https://example.com",
+  "wpeShortcutPathCmd": "命令列，如 notepad readme.txt",
+  "wpeShortcutArgs": "啟動參數（選填）",
+  "wpeShortcutBrowse": "瀏覽",
+  "wpeShortcutTest": "測試",
+  "wpeShortcutTestStarted": "已請求啟動",
+  "wpeShortcutTestRejected": "無法啟動這個捷徑",
+  "wpeShortcutTestFailed": "啟動捷徑失敗"
 }

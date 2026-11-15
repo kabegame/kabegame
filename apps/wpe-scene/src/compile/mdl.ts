@@ -169,6 +169,11 @@ export interface MdlMorphTarget {
   name: string;
   position: Int16Array;
   alpha: Int16Array | null;
+  /**
+   * 网格标志 bit10 的法线差（i16 × 3nv，P12b2-1：模型的变形纹理按它排「位置、法线」交错，rea-texchan-model 5）；没有 bit10 为 null。
+   * 可选只是为了不动各处手写的测试夹具，读的地方按 null 处理。
+   */
+  normal?: Int16Array | null;
 }
 
 /**
@@ -259,6 +264,21 @@ export interface MdlAnimation {
    * u16，值 `length + 1` 个 f32）。没有这一段、条目缺失或 flags 没有 bit0 为 null；其它网格的轨道读过即丢（图像层只看网格 0）。
    */
   morphWeights: { target: number; values: Float32Array }[] | null;
+  /**
+   * v ≥ 4 的变形权重轨道，按 mdl 网格下标（P12b2-1，模型对象每网格一份）：只收 flags 带 bit0 的条目，其余网格为 null；每个目标一条
+   * （目标下标取文件里的 u16，值 `length + 1` 个 f32）。没有这一段时为空数组。可选同 `MdlMorphTarget.normal`。
+   */
+  meshMorphs?: ({ target: number; values: Float32Array }[] | null)[];
+  /**
+   * v ≥ 5 的动画包围盒（min xyz、max xyz，模型空间，rea-texchan-model 7.6 的 `A+0x54..+0x68`）；v < 5 为 null（WPE 的这几个 float 是 0，
+   * 模型的剔除盒按「max.x > min.x」判有效，所以全 0 等于没有）。可选同上。
+   */
+  bounds?: number[] | null;
+  /**
+   * v ≥ 3 的纹理通道轨道（P12b2-2，rea-texchan-model 3 第 11 项，WPE `A+0xd8`）：n3 条，每条 `length + 1` 个 f32（原缓冲上的视图，字节 4 对齐时）；第 i 条写
+   * `g_BlendMap` 的第 i 个 float。没有这一段或 n3 为 0 时为空数组。可选同上（手写夹具不动）。
+   */
+  channels?: Float32Array[];
   /** v ≥ 6 的每骨骼绘制顺序轨道（rea 4.7 第 15 项）：P12a 只记有没有。 */
   drawOrderTrack: boolean;
   /** 事件：f32 秒 + 事件 JSON（rea 4.7 第 17 项）。P12c 派发。 */
@@ -558,7 +578,12 @@ function readMorphs(reader: MdlReader, meshes: MdlMesh[]): void {
       const position = reader.block();
       count = Math.min(count, Math.floor(position.length / 6));
       if (position.length !== count * 6) throw new Malformed();
-      if (mesh.flags & 0x400 && reader.block().length !== count * 6) throw new Malformed();
+      let normal: Int16Array | null = null;
+      if (mesh.flags & 0x400) {
+        const block = reader.block();
+        if (block.length !== count * 6) throw new Malformed();
+        normal = shortView(block);
+      }
       if (mesh.flags & 0x800 && reader.block().length !== count * 6) throw new Malformed();
       let alpha: Int16Array | null = null;
       if (mesh.flags & 0x1000) {
@@ -572,7 +597,7 @@ function readMorphs(reader: MdlReader, meshes: MdlMesh[]): void {
         reader.f32();
         reader.f32();
       }
-      targets.push({ id, name, position: shortView(position), alpha });
+      targets.push({ id, name, position: shortView(position), alpha, normal });
     }
     mesh.morph = { scale, count, targets };
   }
@@ -721,8 +746,13 @@ function readAnimations(
       if (records > 0 || constraints > 0) unsupported = true;
     }
     let boneAlpha: Float32Array | null = null;
+    const channels: Float32Array[] = [];
     if (version >= 3) {
-      scalars(reader.u32());
+      // 纹理通道轨道（P12b2-2，rea-texchan-model 3）：n3 条「u32 读了不用 + f32 块」，第 i 条写 `g_BlendMap` 的第 i 个 float
+      for (let n = reader.u32(), k = 0; k < n; k++) {
+        reader.u32();
+        channels.push(floatView(checkTrack(reader.block(), 4, frames)));
+      }
       if (reader.u8()) {
         // 每条骨骼轨道一条标量轨道（u32 读了不用 + f32 块），排成「帧 × 轨道」
         const alpha = new Float32Array(frames * trackCount);
@@ -735,8 +765,10 @@ function readAnimations(
       }
     }
     let morphWeights: MdlAnimation["morphWeights"] = null;
+    const meshMorphs: NonNullable<MdlAnimation["meshMorphs"]> = [];
     if (version >= 4 && reader.u8())
       for (let m = 0; m < meshes; m++) {
+        meshMorphs.push(null);
         const meshFlags = reader.u32();
         if (!(meshFlags & 1)) continue;
         reader.u32(); // f32 缩放（和 MDMP 的相同，不用）
@@ -745,11 +777,13 @@ function readAnimations(
         for (let t = 0; t < targets; t++) {
           const target = reader.u16();
           const values = floatView(checkTrack(reader.block(), 4, frames));
-          if (m === 0) list.push({ target, values });
+          list.push({ target, values });
         }
+        meshMorphs[m] = list;
         if (m === 0) morphWeights = list;
       }
-    if (version >= 5) reader.skip(24);
+    // v5 的动画包围盒：六个 f32（min xyz、max xyz）
+    const bounds = version >= 5 ? Array.from({ length: 6 }, () => reader.f32()) : null;
     let drawOrderTrack = false;
     if (version >= 6 && reader.u8()) {
       drawOrderTrack = true;
@@ -767,6 +801,9 @@ function readAnimations(
       tracks,
       boneAlpha,
       morphWeights,
+      meshMorphs,
+      channels,
+      bounds,
       drawOrderTrack,
       events,
       unsupported,

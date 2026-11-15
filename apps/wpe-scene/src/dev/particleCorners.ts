@@ -22,7 +22,7 @@
  * 变体程序、uniform 与顶点（拖尾那条跳过退化粒子，sprite 那条照写），第 0 项和以前逐字节相同。
  */
 import { SceneAnimations, type AnimationHooks } from "../animation/player";
-import { stateSink, type ScenePuppets } from "../puppet/player";
+import { stateSink, type PuppetHooks, type ScenePuppets } from "../puppet/player";
 import type { SceneBundle, SceneGeneral, SceneLayer } from "../compile/bundle";
 import { compileSceneInWorker } from "../compile/client";
 import { particleDraws } from "../compile/particles";
@@ -311,7 +311,7 @@ export function replayParticles(
   time = 0,
   cursor: readonly [number, number] | readonly (readonly [number, number])[] = [0.5, 0.5],
   afterStep?: (time: number, frametime: number) => void,
-  beforeStep?: (frametime: number) => void,
+  beforeStep?: (frametime: number, time: number) => void,
 ): { time: number; frametime: number } {
   if (!replay?.dts.length) return { time, frametime: 0 };
   const { dts, times } = replay;
@@ -320,7 +320,7 @@ export function replayParticles(
   const timeAt = (i: number) => (times ? times[i] : (elapsed += dts[i]));
   for (let i = 0; i < dts.length - 1; i++) {
     const at = timeAt(i);
-    beforeStep?.(dts[i]);
+    beforeStep?.(dts[i], at);
     replayAudio(scene, replay, i);
     scene.stepParticles(dts[i], at, state, perFrame ? perFrame[i] : (cursor as readonly [number, number]));
     afterStep?.(at, dts[i]);
@@ -570,6 +570,11 @@ export interface ReadbackReplayOptions {
    */
   cursor?: { buttons: readonly boolean[]; window: readonly [number, number] };
   /**
+   * 系统媒体回放（P11c，`probeMedia.ts`）：每一帧设好相机（与光标派发）之后、动画与脚本之前调一次 `beforeFrame(frame)`（`frame` 从 1 起，
+   * 没有回放时读回帧是第 1 帧），同宿主 `beforeFrame` 里 `drainMedia` 的位置。不给时调用序列同以前。
+   */
+  media?: { beforeFrame(frame: number): void };
+  /**
    * 每一帧的 `g_Daytime`（按这一帧的 `g_Time` 算；第 7 批：跑脚本时跟着脚本的时钟）；缺省 0.5。只画读回帧时只有读回帧用它，每帧都画时
    * 每一帧都用。
    */
@@ -580,6 +585,30 @@ export interface ReadbackReplayOptions {
 function eventHooks(scripts: ReadbackReplayOptions["scripts"]): AnimationHooks | undefined {
   const dispatch = scripts?.animationEvent?.bind(scripts);
   return dispatch ? { event: ({ object, json }) => dispatch(object, json) } : undefined;
+}
+
+/**
+ * puppet 推进的派发钩子（P12c）：脚本侧接了 `animationEvent` 才给，把 MDLA 事件交给脚本运行时（同宿主 `stepPuppets`）；播完回调由登记方包好、
+ * 在 `ScenePuppets.frame` 里直接调，不经钩子。不接时 `undefined`（`frame` 的调用同以前）。
+ */
+function puppetHooks(scripts: ReadbackReplayOptions["scripts"]): PuppetHooks | undefined {
+  const dispatch = scripts?.animationEvent?.bind(scripts);
+  return dispatch ? { event: (object, json) => dispatch(object, json) } : undefined;
+}
+
+/**
+ * 推进这一帧的 puppet（P12c，同宿主 `stepPuppets`）：MDLA 事件交给脚本的 `animationEvent`，播完回调由登记方包好直接调。回调与事件读到的
+ * `engine.runtime` 是本帧的（宿主的帧时钟在帧开头就推进了），所以有 puppet 时先把这一帧的时间交给脚本时钟；没有 puppet 时不多调一次 `enterFrame`。
+ */
+export function stepPuppets(
+  options: Pick<ReadbackReplayOptions, "puppets" | "scripts">,
+  state: SceneState,
+  dt: number,
+  time: number,
+): void {
+  if (!options.puppets) return;
+  options.scripts?.enterFrame?.(dt, time);
+  options.puppets.frame(dt, stateSink(state), puppetHooks(options.scripts));
 }
 
 /**
@@ -617,6 +646,7 @@ export function replayReadback(
   // 跑脚本时：每一帧开头（这一帧动画、脚本之前）的 general，视差点逐帧按它推进（同渲染器帧开头推进视差点）；不改 general 时每一项都相同
   const generals: SceneState["general"][] = [];
   // 一帧里步进粒子之后的部分（同渲染器）：设这一帧的相机 → 动画 → 脚本（`beforeFrame`）
+  let frameNumber = 0;
   // 最近一帧的渲染阶段（B1，`drawPhase`）是否预置了挂点子树的世界矩阵：读回帧据此决定要不要脚本之后的 `sync`
   let drawSeeded = false;
   const afterStep = (at: number, dt: number, animated: boolean) => {
@@ -625,6 +655,8 @@ export function replayReadback(
     shake.apply(at);
     // 先把本帧时间交给脚本时钟（P10b）：动画事件的回调读到本帧的 `engine.runtime`（同渲染器帧开头就推进 `frameClock`）
     scripts?.enterFrame?.(dt, at);
+    // 系统媒体（P11c）：相机之后、动画与脚本之前（脚本时钟之后：同渲染器的媒体段在帧开头推进时钟之后）
+    options.media?.beforeFrame(++frameNumber);
     if (animated) animate(dt);
     scripts?.frame(dt, at);
     // 渲染阶段（WPE `FUN_140190c80`，B1）：脚本之后；中间帧的预置被下一帧开头的 `sync` 取走（那些帧不编码），读回帧的最后一次 `sync` 重新预置
@@ -638,14 +670,15 @@ export function replayReadback(
     particles?.dts.length ? pointers.cursors : pointers.cursors[0],
     (at, dt) => afterStep(at, dt, true),
     // puppet 先于粒子（P12b1 步骤 3：WPE 对象更新循环按 `objects` 顺序，挂点子对象排在父 puppet 之后，粒子读本帧姿势）；
-    // 跑脚本时每帧步进之前再 `sync`：上一帧动画与脚本写的（`instanceoverride`、变换、可见性……）这一帧就进模拟器
-    (dt) => {
-      options.puppets?.frame(dt, stateSink(state));
-      if (scripts) scene.sync(state);
+    // 跑脚本或回放媒体时每帧步进之前再 `sync`：上一帧动画与脚本写的（`instanceoverride`、变换、可见性……）这一帧就进模拟器，
+    // 封面换名写的用户纹理目标（P11c）也要刷进去
+    (dt, at) => {
+      stepPuppets(options, state, dt, at);
+      if (scripts || options.media) scene.sync(state);
     },
   );
   // 读回帧的 puppet 同样在步进粒子之前；没有回放的读回帧不推进（调用方已 `seek`）
-  if (particles?.dts.length) options.puppets?.frame(frametime, stateSink(state));
+  if (particles?.dts.length) stepPuppets(options, state, frametime, time);
   scene.sync(state);
   // 读回那一帧的频谱（P4e 步骤 4）：没有回放时不写
   if (particles?.dts.length) replayAudio(scene, particles, particles.dts.length - 1);
@@ -664,10 +697,10 @@ export function replayReadback(
       )
     : replayParallax(options.parallax, state.general, parallaxFrame, frametimes, shake.eyes, pointers.pointers);
   scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
-  // 跑脚本时：这一帧脚本写回的状态刷进 uniform 块 / 可见性 / 泛光链（渲染器 `beforeFrame` 之后的第二次 `sync`）。没有脚本时两次 `sync`
-  // 之间没有改动，省掉
+  // 跑脚本时：这一帧脚本写回的状态刷进 uniform 块 / 可见性 / 泛光链（渲染器 `beforeFrame` 之后的第二次 `sync`）。回放媒体（P11c）时
+  // 读回帧的封面换名同样要刷（封面写的是用户纹理目标）。两样都没有时两次 `sync` 之间没有改动，省掉
   // 挂点子树的渲染阶段预置（B1）要靠这次 `sync` 刷进 draw：只有关键帧动画移动祖先时也要刷
-  if (scripts || drawSeeded) scene.sync(state);
+  if (scripts || options.media || drawSeeded) scene.sync(state);
   // 读回那一帧的音频 uniform（P11a）：同一帧的粒子频谱上面已经写过
   const audio = readbackSpectrum(particles);
   const frame: FrameInput = {
@@ -719,7 +752,7 @@ function replayEncoded(
     const general = state.general;
     // 顺序同渲染器与读回帧：两帧之间写进状态的改值先刷进去，粒子用上一帧的相机步进，再设这一帧的；动画在粒子与相机之后写、再 sync
     // puppet（P12a 步骤 4 点 5）：P12b1 步骤 3 起在步进粒子之前，同渲染器 `stepPuppets`
-    options.puppets?.frame(frametime, stateSink(state));
+    stepPuppets(options, state, frametime, time);
     scene.sync(state);
     replayAudio(scene, replay, i);
     scene.stepParticles(frametime, time, state, pointers.cursors[i]);
@@ -743,6 +776,8 @@ function replayEncoded(
         parallax: drawParallax(early, general, !!options.perspective),
       });
     }
+    // 系统媒体（P11c）：光标派发之后、动画与脚本之前（同渲染器 `beforeFrame` 的位置；脚本时钟已在帧开头推进）
+    options.media?.beforeFrame(i + 1);
     if (animations) {
       animations.frame(frametime, state, animationHooks);
       // 跑脚本时不另 sync：同渲染器 `beforeFrame` 里动画、脚本连着跑，脚本之后的 `sync` 一起刷
@@ -763,9 +798,10 @@ function replayEncoded(
       }),
     );
     scene.setParallax(drawParallax(parallax, state.general, !!options.perspective), state);
-    // 跑脚本时：动画与脚本写回的状态刷进 uniform 块 / 可见性 / 泛光链（渲染器 `beforeFrame` 之后的第二次 `sync`）
+    // 跑脚本时：动画与脚本写回的状态刷进 uniform 块 / 可见性 / 泛光链（渲染器 `beforeFrame` 之后的第二次 `sync`）；回放媒体（P11c）时
+    // 封面换名写的用户纹理目标同样要刷
     // 挂点子树的渲染阶段预置（B1）同样要刷
-    if (scripts || drawSeeded) scene.sync(state);
+    if (scripts || options.media || drawSeeded) scene.sync(state);
     const audio = spectrumAt(replay, i);
     frame = {
       time,

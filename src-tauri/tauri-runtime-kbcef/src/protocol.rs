@@ -500,7 +500,10 @@ pub(crate) fn web_origin(url: &url::Url) -> Option<String> {
         return None;
     }
     let host = url.host_str()?;
-    let port = url.port().map(|port| format!(":{port}")).unwrap_or_default();
+    let port = url
+        .port()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
     Some(format!("{}://{host}{port}", url.scheme()))
 }
 
@@ -618,7 +621,10 @@ mod tests {
             web_origin(&url::Url::parse("file:///D:/wallpaper/index.html").unwrap()),
             None
         );
-        assert_eq!(web_origin(&url::Url::parse("file://server/share").unwrap()), None);
+        assert_eq!(
+            web_origin(&url::Url::parse("file://server/share").unwrap()),
+            None
+        );
     }
 
     #[test]

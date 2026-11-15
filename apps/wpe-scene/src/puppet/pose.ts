@@ -228,12 +228,16 @@ export const SKIN_STRIDE = 12;
  * `world` 是每骨骼 16 个 f32 的工作区（跨帧保留），`out` 每骨骼 `SKIN_STRIDE` = 12 个：K 的前三列各自的 xyz、再第四列的 xyz，即
  * `(c0.xyz, c1.xyz, c2.xyz, c3.xyz)`。按 WPE 的行向量说法就是「4 行 × 前 3 列，行主序」，和 RenderDoc 读到的 `g_Bones` 同序
  * （`ignore/p12/out/wpe-3203778110-kbp-fps20-1920x1080-consts.json` 的 `draws[*].vs.g_Bones`）。
+ *
+ * `afterBone`（P12d-1，骨骼物理的插入点）：每根骨骼的模型空间矩阵 `world[i]` 算完之后调一次（`i` 是骨骼下标），回调可以就地改写
+ * `world[i × 16 .. +15]`，之后的子骨骼与蒙皮矩阵都用改过的值（WPE 在 `Pose[i]` 上右乘物理增量，rea-AP 2.5）。不给时逐字节同以前。
  */
 export function skinMatrices(
   pose: Float32Array | null,
   skeleton: SkinSkeleton,
   world: Float32Array,
   out: Float32Array,
+  afterBone?: (bone: number) => void,
 ): void {
   const { parents, inverseBind, restMatrices } = skeleton;
   const bones = parents.length;
@@ -248,6 +252,7 @@ export function skinMatrices(
       mulAffine(world, parent * 16, local, 0, temp, 0);
       world.set(temp, i * 16);
     }
+    afterBone?.(i);
   }
   for (let i = 0; i < bones; i++) {
     mulAffine(world, i * 16, inverseBind, i * 16, temp, 0);
@@ -314,6 +319,37 @@ export function blendScalarAlpha(
   }
 }
 
+/** `g_BlendMap` 的 float 数（WPE `P+0x350` 起 16 个，到 `P+0x390`）：纹理通道的轨道最多写这么多条。 */
+export const BLEND_MAP_FLOATS = 16;
+
+/**
+ * 把一层的纹理通道轨道叠进 `g_BlendMap`（P12b2-2，rea-texchan-model 3，`FUN_1401fdf90` 里的三处写，`0x1401ff098` / `0x1401ff554` /
+ * `0x1401ffa03`；p12b2-tc 实测：覆盖逐位相同、混合收敛到 v、加法每帧累加 `fround(v·w)` 且不钳制）。第 i 条轨道写第 i 个 float，超出 16 条的丢掉
+ * （WPE 越界写，语料 0）。**每帧不复位**：`map` 是 puppet 跨帧保留的状态，没有可见层时保持上一帧的值。`lo` / `hi` / `frac` / `w` 同别的标量轨道。
+ * - `w == 1`（精确相等）且非加法：**覆盖** `lerp(lo, hi, frac)`；
+ * - 非加法其它 w：**混合** `lerp(cur, v, w)`；
+ * - 加法：`cur + fround(v·w)`（`map` 是 Float32Array，存入时再舍入一次，同 `addss`）。
+ */
+export function blendChannels(
+  map: Float32Array,
+  tracks: readonly Float32Array[],
+  lo: number,
+  hi: number,
+  frac: number,
+  w: number,
+  additive: boolean,
+): void {
+  const override = !additive && w === 1;
+  const n = Math.min(tracks.length, BLEND_MAP_FLOATS);
+  for (let i = 0; i < n; i++) {
+    const track = tracks[i];
+    const v = lerp(track[lo], track[hi], frac);
+    if (override) map[i] = v;
+    else if (!additive) map[i] = lerp(map[i], v, w);
+    else map[i] = f(f(v * w) + map[i]);
+  }
+}
+
 /** 变形权重每帧先全清 0、生效位全清（`FUN_1401fdf90`，`0x1401fecb2`）。 */
 export function resetMorph(weights: Float32Array, active: Uint8Array): void {
   weights.fill(0);
@@ -357,6 +393,48 @@ export function blendMorphWeights(
       const cur = weights[t];
       const a = f(v * w);
       weights[t] = Math.max(Math.min(cur, a), Math.min(Math.max(cur, a), f(cur + a)));
+    }
+  }
+}
+
+/**
+ * 模型对象一个网格的变形权重叠法（P12b2-1，rea-texchan-model 5「变形权重的来源」，`0x14021c806`–`0x14021cbef`；p12b2-morph 实测 66 处预测全部一致）。和图像层的
+ * `blendMorphWeights` 的差别：生效阈值是 `|v| > FLT_EPSILON`（不是 `≥`），混合钳 [0, 1] 且只在生效时置位，加法是 `glm::clamp(cur + d, min(cur, d), max(cur, d))`。
+ * - `w == 1`（精确相等）且非加法：**覆盖**，生效置位并写 v（不钳制：1.5、−0.3 原样），不生效只清位、权重不动；
+ * - 非加法其它 w：**混合**，生效置位（从不清位），权重 `clamp(lerp(cur, v, w), 0, 1)`（cur 从 0 起）；
+ * - 加法：不生效整条跳过，否则置位，`d = v·w`，权重 `clamp(cur + d, min(cur, d), max(cur, d))`（同号取绝对值大的，不相加：0.4 加 0.3 得 0.4）。
+ * `tracks[t]` 为 null 的目标这一层不碰；位图是 u64 按 t 取模 64（WPE），这里每目标一个字节，语料没有 64 个以上的目标。
+ */
+export function blendModelMorphWeights(
+  weights: Float32Array,
+  active: Uint8Array,
+  tracks: readonly (Float32Array | null)[],
+  lo: number,
+  hi: number,
+  frac: number,
+  w: number,
+  additive: boolean,
+): void {
+  const override = !additive && w === 1;
+  for (let t = 0; t < tracks.length && t < weights.length; t++) {
+    const track = tracks[t];
+    if (!track) continue;
+    const v = lerp(track[lo], track[hi], frac);
+    const on = Math.abs(v) > FLT_EPSILON;
+    if (override) {
+      if (on) {
+        active[t] = 1;
+        weights[t] = v;
+      } else active[t] = 0;
+    } else if (!additive) {
+      if (on) active[t] = 1;
+      weights[t] = Math.min(Math.max(lerp(weights[t], v, w), 0), 1);
+    } else {
+      if (!on) continue;
+      active[t] = 1;
+      const cur = weights[t];
+      const d = f(v * w);
+      weights[t] = Math.min(Math.max(f(cur + d), Math.min(cur, d)), Math.max(cur, d));
     }
   }
 }

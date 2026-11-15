@@ -6,6 +6,7 @@ members = [
   "src-tauri/kabegame",
   "src-tauri/kabegame-cli",
   "src-tauri/tauri-runtime-kbcef",
+  "src-tauri/tauri-plugin-cursor",
   "src-tauri/tauri-plugin-picker",
   "src-tauri/tauri-plugin-pathes",
   "src-tauri/tauri-plugin-share",
@@ -78,6 +79,7 @@ rsmpeg = { version = "0.18.0", default-features = false, features = ["ffmpeg8_1"
 percent-encoding = "2"
 sha2 = "0.10"
 tauri-build = {version = "2.7.3", features = []}
+tauri-plugin-cursor = {path = "./src-tauri/tauri-plugin-cursor"}
 tauri-plugin-pathes = {path = "./src-tauri/tauri-plugin-pathes"}
 tauri-plugin-picker = {path = "./src-tauri/tauri-plugin-picker"}
 tauri-plugin-share = {path = "./src-tauri/tauri-plugin-share"}

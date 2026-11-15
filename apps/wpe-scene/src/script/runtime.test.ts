@@ -1,3 +1,6 @@
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
+import { vmRealm } from "./testing/vmRealm";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -6,7 +9,8 @@ import { collectScripts, type SceneScript } from "../compile/scripts";
 import { parseScene } from "../compile/model";
 import type { SceneReader } from "../compile/fs";
 import { Wpesl2wgsl } from "../wpesl2wgsl";
-import { ScriptRuntime, type ScriptRealm } from "./runtime";
+import { messageOf, ScriptRuntime, type ScriptRealm } from "./runtime";
+import { radiansToScript } from "./f32";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -56,12 +60,12 @@ class FakeRealm implements ScriptRealm {
       );
     },
   };
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
     this.imports.push(label);
     this.events.push(`import:${label}`);
     const result = this.modules.get(label);
     if (result instanceof Error) throw result;
-    return result ?? {};
+    return fakeModule(result ?? {});
   }
   dispose(): void {
     this.disposed = true;
@@ -194,6 +198,25 @@ describe("脚本运行时（FakeRealm）", () => {
       'convert:{"speed":{"type":"slider","value":9}}',
     ]);
     expect(init).toBe(1);
+  });
+
+  it("applyUserProperties 的参数键按字节序（p11 转来；WPE 2.8.42 p3am-order：大写 < _ < 小写，与给的顺序无关）", async () => {
+    const h = harness();
+    h.realm.modules.set("one", { applyUserProperties: () => {} });
+    await h.runtime.load({ list: [script("one")] });
+    h.realm.events.length = 0;
+    const slider = (value: number) => ({ type: "slider", value });
+    const delta = { zz: slider(1), wec_sa: slider(2), Zb: slider(3), a_b: slider(4), _u: slider(5), aB: slider(6) };
+    h.runtime.applyUserProperties(delta, new Map(Object.entries(delta)));
+    const convert = h.realm.events.find((event) => event.startsWith("convert:"))!;
+    expect(Object.keys(JSON.parse(convert.slice("convert:".length)))).toEqual([
+      "Zb",
+      "_u",
+      "aB",
+      "a_b",
+      "wec_sa",
+      "zz",
+    ]);
   });
 
   it("返回值按标量、向量、布尔和角度转换，错误类型及其它回调的返回值忽略", async () => {
@@ -543,9 +566,9 @@ describe("脚本运行时的销毁", () => {
     const { runtime } = harness(realm);
     const init = vi.fn();
     let finish!: (module: Record<string, unknown>) => void;
-    realm.importModule = () =>
+    realm.prepareModule = () =>
       new Promise((resolve) => {
-        finish = resolve;
+        finish = (module) => resolve(fakeModule(module));
       });
     const loading = runtime.load({ list: [script("a")] });
     runtime.destroy();
@@ -684,5 +707,120 @@ describe("说明符与全量遍历", () => {
     expect(scripts.list).toHaveLength(1);
     expect(scripts.list[0].imports).toEqual(["WEColor"]);
     expect(scripts.list[0].errors).toHaveLength(1);
+  });
+});
+
+describe("rad2deg 材质常量上的字段脚本（P6d1b，p6d1-mat6）", () => {
+  const constant = (material: string, rad2deg: boolean) =>
+    script(`c-${material}`, {
+      target: {
+        kind: "constant",
+        pass: "objects/0/effects/0/passes/0",
+        material,
+        uniforms: ["g_Angle"],
+        type: "float",
+        ...(rad2deg ? { rad2deg: true as const } : {}),
+      },
+      owner: { kind: "material", pass: "objects/0/effects/0/passes/0", layer: 0 },
+      valueType: "float",
+      initial: 0.5,
+    });
+
+  async function run(item: SceneScript, state: number, returns: number) {
+    const realm = new FakeRealm();
+    const seen: unknown[] = [];
+    realm.modules.set(item.id, {
+      init: (value: unknown) => void seen.push(value),
+      update: (value: unknown) => {
+        seen.push(value);
+        return returns;
+      },
+    });
+    const written: unknown[] = [];
+    const runtime = new ScriptRuntime(realm, {
+      report: { ready() {}, fallback() {}, debug() {}, info() {}, warn() {}, error() {} },
+      now: () => 0,
+      write(_target, value) {
+        written.push(value);
+        return true;
+      },
+      read: () => [state],
+      enterScript() {},
+      setProperties() {},
+    });
+    await runtime.load({ list: [item] });
+    runtime.frame(0.1);
+    return { seen, written };
+  }
+
+  it("入参按度、返回值按度写回弧度（f32(f32(45)·f32(0.017453292))）", async () => {
+    const { seen, written } = await run(constant("angle", true), 0.5, 45);
+    expect(seen).toEqual([28.647890090942383, 28.647890090942383]);
+    const radians = Math.fround(Math.fround(45) * Math.fround(0.017453292));
+    expect(written).toEqual([[radians]]);
+    // 经材质对象读回：弧度 → 度
+    expect(radiansToScript(radians)).toBe(45);
+  });
+
+  it("非 rad2deg 的常量照旧不换算", async () => {
+    const { seen, written } = await run(constant("alpha", false), 0.5, 45);
+    expect(seen).toEqual([0.5, 0.5]);
+    expect(written).toEqual([[45]]);
+  });
+});
+
+describe("工厂模块的加载（vmRealm）", () => {
+  class VmFakeRealm extends FakeRealm {
+    readonly vm = vmRealm();
+    constructor() {
+      super();
+      this.global = this.vm.global;
+    }
+    override prepareModule(source: string, label: string): Promise<ScriptModule> {
+      return this.vm.prepareModule(source, label);
+    }
+  }
+
+  it("messageOf：认 kabegame-script 的行列（行减工厂前言）与 blob 行列", () => {
+    expect(messageOf({ message: "boom", stack: "Error: boom\n    at f (kabegame-script:7:5:3)" })).toBe(
+      "boom (line 3, col 3)",
+    );
+    expect(messageOf({ message: "boom", stack: "Error: boom\n    at f (blob:null/abc-def:4:9)" })).toBe(
+      "boom (line 4, col 9)",
+    );
+    expect(messageOf({ message: "boom", stack: "Error: boom" })).toBe("boom");
+  });
+
+  it("同一源码的两段脚本各自一份模块状态", async () => {
+    const realm = new VmFakeRealm();
+    realm.vm.run("globalThis.seen = []");
+    const source = "let n = 0; export function update() { n++; globalThis.seen.push(n); return n; }";
+    const h = harness(realm);
+    await h.runtime.load({
+      list: [
+        script("a", { source, target: { kind: "layer", object: 0, field: "alpha" } }),
+        script("b", { source, target: { kind: "layer", object: 1, field: "brightness" } }),
+      ],
+    });
+    h.runtime.frame(0.1);
+    h.runtime.frame(0.1);
+    expect(realm.vm.run("globalThis.seen")).toEqual(expect.objectContaining({ length: 4 }));
+    expect(Array.from(realm.vm.run<number[]>("globalThis.seen"))).toEqual([1, 1, 2, 2]);
+  });
+
+  it("回调里的 this 是模块命名空间", async () => {
+    const realm = new VmFakeRealm();
+    const h = harness(realm);
+    await h.runtime.load({
+      list: [
+        script("a", {
+          source:
+            "export const marker = 7; export function init() { globalThis.seenThis = { marker: this.marker, keys: Object.keys(this).join(',') }; return 1; }",
+        }),
+      ],
+    });
+    expect(realm.vm.run("globalThis.seenThis.marker")).toBe(7);
+    expect(realm.vm.run("globalThis.seenThis.keys")).toBe("init,marker");
+    expect(h.runtime.diagnostics[0]).toMatchObject({ exports: ["init", "marker"] });
   });
 });

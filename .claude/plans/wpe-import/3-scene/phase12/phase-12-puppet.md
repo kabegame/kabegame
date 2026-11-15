@@ -334,6 +334,11 @@ const OBJECT_FLAGS = [
   - 走查找到 B1：父被脚本 / 关键帧移动时，挂点的 puppet 与局部空间粒子在 WPE 里晚一帧（世界矩阵缓存戳），`p12-lag` 实测 16 种组合，已照缓存戳修。
 - 和下面原始范围的出入：变形纹理不用 `R16G16B16A16_SNORM`，改用 `rgba32float`（Dawn 上 snorm 只能 unfilterable 采样）；绘制组加载时不排序。
 
+**进度**（2026-11-15）：**P12b2 完成**，详见子计划 [phase-12b2-texchan-model.md](phase-12b2-texchan-model.md)。
+- **P12b2-1 模型对象的骨骼**（`6d46439b`）：复用运行时，加「模型」模式；WPE 的两处模型变形缺陷不照抄（用户：语料依赖的缺陷才复现）。
+- **P12b2-2 纹理通道**。
+- 不解锁场景；模型动画层的字段脚本归 P12c。
+
 下面是拆分之前写的范围。
 
 语义依据见 [rea-p12-mdl](rea-p12-mdl.md) 第 5–8 节、[rea-p12-attach-physics](rea-p12-attach-physics.md) 第 1 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 5、6、11、第二部分第 2、3 节。
@@ -357,6 +362,16 @@ const OBJECT_FLAGS = [
 
 ## P12c — 脚本
 
+**进度**（2026-11-15）：**P12c 完成**，子计划 [phase-12c-script.md](phase-12c-script.md)。
+- **语料**：233 张能渲染 160 → 164（含随 P12c 修的设备纹理上限 F2 解锁的 `3830665420`）。
+- **不做**：建删层三个方法照报。
+- **和下面的范围的出入**：
+  - 回调的 `this` 是登记脚本的模块命名空间，更正了 p12-REPORT 用例 9 的读法；
+  - 模型对象的 `getAnimationLayer` 与图像层同一套；
+  - 点击触发的语料场景，整帧对照换成按抓帧逐 draw 比 `g_Bones`。
+
+下面是写子计划之前的范围。
+
 语义依据见 [rea-p12-attach-physics](rea-p12-attach-physics.md) 第 4 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 9。
 
 - `getAnimationLayerCount`、`getAnimationLayer`。
@@ -375,6 +390,15 @@ const OBJECT_FLAGS = [
 - **验收**：生成工程 `p12-script` 每一步和 WPE 的日志、抓帧一致；8 张用到的场景在 dev 强制渲染下脚本不报错（`3326873240` 照 WPE 抛 TypeError）。点击触发要等 P6c。
 
 ## P12d — 骨骼物理
+
+**进度**（2026-11-15）：**P12d 完成**，子计划 [phase-12d-physics.md](phase-12d-physics.md)。
+- **语料**：233 张能渲染 182 → 185。
+- **和下面范围的出入**：
+  - 加了骨骼脚本 API 的 5 个方法（P12d-2，用户定），解锁 `3359451610`；
+  - `lt`、平移轴锁、`t + re` 照读码实现、只对 python 模型验证；
+  - 只做图像层 puppet，模型对象开物理照报。
+
+下面是写子计划之前的范围。
 
 语义依据见 [rea-p12-attach-physics](rea-p12-attach-physics.md) 第 2 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 10、第二部分第 1 节。
 

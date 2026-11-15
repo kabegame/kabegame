@@ -25,8 +25,7 @@ fn to_cocoa_frame(main_height: f64, (x, y, width, height): TopLeftRect) -> TopLe
     (x, main_height - (y + height), width, height)
 }
 
-/// 将 wallpaper WebView 窗口放到 macOS 桌面层（图标下方）并铺满 `screen`，返回窗口号
-/// （`NSWindow.windowNumber`，桌面鼠标转发凭它向窗口服务查边界）。
+/// 将 wallpaper WebView 窗口放到 macOS 桌面层（图标下方）并铺满 `screen`，返回窗口号（`NSWindow.windowNumber`）。
 ///
 /// `screen` 为 `None`（没有屏幕信息）时铺满窗口所在的屏，否则铺满指定的屏——每屏一窗时各窗口各自
 /// frame 到各自的屏，不受「显示器具有单独的空间」设置影响。可以重复调用：屏的位置 / 尺寸变了之后
@@ -60,7 +59,8 @@ pub fn mount_to_desktop<R: tauri::Runtime>(
 
 /// 实际设置 NSWindow 属性（必须在主线程调用，由 run_on_main 保证）。
 /// 与 LiveWallpaperMacOS 一致：无边框（无红绿灯）、铺满目标屏幕、桌面下层、透明、忽略鼠标。
-/// 窗口忽略鼠标，真实点击穿透给 Finder 的桌面；网页 / 场景壁纸的交互由 `input_forward` 旁路观察后注入。
+/// 窗口忽略鼠标，真实点击穿透给 Finder 的桌面；网页 / 场景壁纸的 iframe 自己向 `tauri-plugin-cursor` 登记，
+/// 由插件旁路观察光标后直接注入那个 frame。
 #[cfg(target_os = "macos")]
 fn apply_desktop_window_props(
     ns_window_ptr: *mut std::ffi::c_void,

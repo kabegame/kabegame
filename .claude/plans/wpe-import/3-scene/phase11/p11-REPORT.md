@@ -152,4 +152,75 @@
 
 ## 快捷方式
 
-没有实测：门禁要在测试窗口里真的点鼠标，MCP 没有给 WPE 窗口发点击的工具，靠注入鼠标事件又会动用户的光标。以读码为准，P11d 动工时请用户手动点一次核对。
+步骤 0（2026-11-13）没有实测：当时门禁要在测试窗口里真的点鼠标，MCP 没有给 WPE 窗口发点击的工具，靠注入鼠标事件又会动用户的光标。P11d 的步骤 0 补上了，见下一节。
+
+## P11d 补测：门禁、脚本看到的值、图标（2026-11-15）
+
+**工具。**
+- 工程 `ignore/p11/defs/p11d.py`：
+  - `p11-shortcut`：属性全空；
+  - `p11-shortcut-v`：值写成工程缺省值。
+- 测试窗口 1280×720。点击用 wpe-renderdoc 的 `input_play`：只改测试窗口渲染线程上的光标与左键，不动真实鼠标。
+- 值的哈希段一律给错的 `000000`：门禁与令牌照常走完，到启动这一步被 WPE 拦下，日志写 `User shortcut blocked.`，不真的启动。
+- 抓帧 `A:\p11\d-icons\d-icons-frame443.rdc`，图标纹理存在 `ignore/p11/d/wpe-icons/`。
+
+**脚本看到的值。** 用 `-control applyProperties` 改值时，增量不带 `type`，脚本的 `applyUserProperties` 收到 `{}`（P11b 同样）。所以加载时交给脚本的形状要靠工程缺省值看：
+
+| 值 | `applyUserProperties` 里 |
+|---|---|
+| `file:…:C:\Windows\System32\notepad.exe` | `{isbound: true, commandtype: "file", file: "notepad.exe"}` |
+| `file:…:…\Remote Desktop Connection.lnk` | `file: "Remote Desktop Connection.lnk"` |
+| `file:…:…\kbtest.url` | `file: "kbtest.url"` |
+| `directory:…:…\launch-target` | `{isbound: true, commandtype: "directory", file: "launch-target"}` |
+| `cmd:…:calc /x` | `{isbound: true, commandtype: "command", file: "calc"}`：只有程序部分，不含参数 |
+| `web:…:https://www.wikipedia.org` | `{isbound: true, commandtype: "website", file: "https://www.wikipedia.org"}` |
+| `""`、哈希段只有 5 位 | `{isbound: false}`：没有另外两个键 |
+
+另外两点：
+- 哈希段不对不影响 `isbound`。
+- `engine.userProperties` 里的快捷方式属性始终是 `{}`：三个字段都是 `undefined`，`init` 里、改值之后都一样。用 `-control` 改值后，这里变成原始字符串，那是控制命令不带 `type` 的结果，不算。
+
+**门禁**（按钮图层的脚本，每个用例点一次：移入 → 按下 5 帧 → 松开 → 移出）：
+
+| 用例 | 结果 |
+|---|---|
+| `cursorDown` 调一次、`cursorClick` 再调 | Down：走到启动（blocked），返回 `false`；Click：抛错 |
+| `cursorClick` 连调两次 | 第一次 `false`（blocked），第二次抛错 |
+| `cursorUp` 调一次、`cursorClick` 再调 | Up：`false`（blocked）；Click 抛错。Down / Up / Click 共用一个令牌 |
+| `open()`、`open(123)` 之后再调 `'s1'` 两次 | 前两个直接 `false`、不消耗令牌；之后同上 |
+| `open('nope')` 之后再调 `'s1'` | `false`，令牌已消耗，第二次抛错 |
+| `update`、`cursorEnter` 里调 | 抛错 |
+| `cursorMove` 里不捕获地抛 | 日志 `Uncaught SyntaxError: …`，之后再移动不再调 `cursorMove`（这个回调被禁用） |
+| `textinput` 属性的值是合法格式 | 走到启动（blocked）：WPE 不查属性类型 |
+| 值为空串的快捷方式 | `false`，令牌已消耗 |
+
+两条异常的文本与读码相同：
+- `Cannot execute more than one user command per cursor click.`
+- `Cannot execute user command outside of cursor callbacks.`
+
+**更正读码一处**：抛出的是 `SyntaxError`（`e.constructor.name === "SyntaxError"`，`instanceof Error` 为真），不是 `Error`。P6c 的 `input` 顶层读也是这样。
+
+**图标纹理**（全部 `R8G8B8A8_UNORM`、1 级 mip、线性过滤、各向异性 1、寻址 `ClampEdge`；缺省纹理 `util/clouds_256` 本来是重复寻址，图标槽一律夹取）：
+
+| 目标 | 纹理 |
+|---|---|
+| `notepad.exe`、`.lnk`、`.url`（`IconFile` 指向 `shell32.dll`）、文件夹、`calc`（没扩展名） | 256×256 |
+| `https://www.wikipedia.org` | 160×160：网站图标按原尺寸，不缩放到 256 |
+| `https://example.com`（页面里没有图标链接） | 300×300 的蓝色地球，应是 `webthumbnailfallback.png` |
+| 2:1 的槽（缺省 `particle/nature/leaves5`）绑 notepad | 426×256 |
+| 1:4 的槽（缺省 `particle/drop`）绑 notepad | 256×1024 |
+
+`leaves5` 是精灵表（`TEXS0003`，帧 85.334×51.2）。比例取帧尺寸 1.66668，`(int)(256 × 1.66668) = 426`，补边规则和 P11b「精灵表取帧尺寸」都对得上。左右各补 `(426 − 256) >> 1 = 85` 列透明。
+
+`calc` 取到的是 Windows 11 计算器存根的深灰底图标，说明不带扩展名时 `SearchPathW` 补了 `.exe`。
+
+**用户激活（Kabegame，dev 应用，CEF 149）。** 方法：开屏外宿主，临时挪到主窗口左上角 80×80，两边各挂一个 `pointerdown` 计数，等激活过期后用 CDP 点它。
+- 点击只进了 iframe：宿主计数加 1，主页面计数仍是 0。宿主被激活，主页面（祖先 frame）也被激活。
+- 主页面的激活约 5.0 s 后过期（实测 5039 ms）。
+- 主窗口被别的窗口挡住时，`visibilityState` 是 `hidden`，浏览器不给跨进程的 iframe 做命中测试，CDP 的点击会落到主页面上。真实用户点不到被挡住的窗口，所以不影响产品；只是测试时窗口要可见。
+- 桌面壁纸窗口的点击由后端经 CEF 的 `send_mouse_*_event` 注入，和 CDP 一样是浏览器侧的输入，按同一规则也会激活【推：没在壁纸窗口上实测】。
+
+**走查补测（2026-11-15，P11d 步骤 3）。**
+- **本机哈希**：按读码算两个候选（`MachineGuid` 的 UTF-16LE 带 / 不带结尾 NUL，再接盐 `14 27 db 88 1d`），带 NUL 的那个通过。读码的【推】（`pcbData` 含结尾 NUL）证实。
+- **哈希正确时**：`cursorDown` 里 `openUserShortcut('s1')` 返回 `true`、日志没有 `User shortcut blocked.`，`launch-target` 的资源管理器窗口打开；同一次点击的 `cursorClick` 照样抛「more than one」。哈希不对时返回 `false`（上表的 blocked）。
+- **门禁 9 个用例重跑**（`case` 0–8，输入「移入 15 帧 → 按下 5 帧 → 松开 → 移出」）：结论同上表，逐行日志与 Kabegame 的比对见 phase-11d 的走查与回归 D3。用例 7 的未捕获异常 WPE 报 `(line 54, col 9)`。

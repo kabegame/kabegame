@@ -10,7 +10,7 @@
  *   回放时间；`renderFrame` 读回那一帧的 `g_Daytime` 跟着同一个时钟（`probeDaytime`）。本地时间的换算照本机时区。
  * - `Math.random`：按种子（缺省 `DEFAULT_PROBE_SEED`）的 mulberry32 序列。它本来就和 WPE 对不上，只保证我们两次相同。
  * - `localStorage`：只在内存（`createWpeLocalStorage` 不给后端），不碰持久存储。
- * - 音频缓冲全 0（不交频谱），媒体回调不调；声音层、视频纹理、粒子层的脚本方法落点返回 null（方法空操作），每次被问到都计数。
+ * - 音频缓冲全 0（不交频谱）；媒体回调只在 `renderFrame` 给了 `media` 时调（`probeMedia.ts`）；声音层、视频纹理、粒子层的脚本方法落点返回 null（方法空操作），每次被问到都计数。
  * `Date` 与 `Math.random` 在 realm 建好之后、模块求值之前换掉（`installProbeClock` / `installProbeRandom`）。
  *
  * 要整场重编译的写入（`recompile` 目标、打开带不支持项的 effect、打开没有链的泛光）探针做不了：状态不变，按宿主同一条「值变了才算」
@@ -22,13 +22,17 @@ import { builtinProperties } from "../compile/builtinProperties";
 import type { SceneBundle } from "../compile/bundle";
 import { SceneFs, type SceneReader } from "../compile/fs";
 import { parseProject, type ProjectJson } from "../compile/model";
+import { scriptMediaCallbacks } from "../media/events";
+import type { MediaCallbacks } from "../media/scene";
 import { mulberry32 } from "../particles/random";
+import type { ScenePuppets } from "../puppet/player";
 import { CursorSession, emptyCursorInput, type CursorInputSnapshot, type CursorStepInput } from "../render/cursor";
 import type { SceneState } from "../render/state";
 import { daytimeOf } from "../render/uniforms";
 import type { SceneReporter } from "../report";
 import { createWpeLocalStorage, ScriptApi } from "../script/api";
 import { createIframeRealm, getJsModuleIndex } from "../script/realm";
+import { ShortcutToken } from "../shortcut/token";
 import {
   ScriptRuntime,
   scriptDiagnostics,
@@ -171,7 +175,16 @@ export function probeUserProperties(
   const add = (key: string, type: string, fallback: unknown) => {
     const raw = Object.hasOwn(overrides, key) ? overrides[key] : fallback;
     const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
-    delta[key] = { type, value };
+    const property: UserProperty = { type, value };
+    // 快捷方式（P11d）：请求可以直接给后端形状 `{ value, isbound, commandtype?, file? }`（`value` 是键，`mergeProperties` 只留已给出的字段）。
+    // 没给后端形状（裸字符串，含工程缺省值）时同后端「没配」：`isbound: false`，WPE 对缺省空串也是 `{isbound: false}`
+    if (type === "usershortcut") {
+      if (raw && typeof raw === "object") {
+        const { isbound, commandtype, file } = raw as Partial<UserProperty>;
+        Object.assign(property, { isbound, commandtype, file });
+      } else property.isbound = false;
+    }
+    delta[key] = property;
   };
   for (const [key, builtin] of Object.entries(builtinProperties())) add(key, builtin.type, builtin.value);
   for (const [key, declared] of Object.entries(project?.general?.properties ?? {})) {
@@ -203,6 +216,13 @@ export interface ProbeRecompileWrite {
   value: ScriptValue;
 }
 
+/** 一次 `engine.openUserShortcut` 调用（P11d）：回放第几帧（0 起，同 `frames` 的计数）、属性名、宿主返回码（0 失败 / 1 受理 / 2 没有令牌，2 时脚本收到异常）。 */
+export interface ProbeShortcutCall {
+  frame: number;
+  name: string;
+  result: 0 | 1 | 2;
+}
+
 export interface ProbeScriptsResult {
   /** 实际用的起点时刻（毫秒时间戳）；`clockDefault` 为真时是 `DEFAULT_PROBE_CLOCK`。 */
   clock: number;
@@ -222,6 +242,8 @@ export interface ProbeScriptsResult {
   unconnected: { sound: number; video: number; particles: number };
   /** 脚本注册过的音频缓冲分辨率（缓冲一直全 0）。 */
   audioResolutions: number[];
+  /** `engine.openUserShortcut` 经门禁（回调类别、参数类型）之后的调用，按发生顺序（P11d）：探针不真的启动，也不发消息。 */
+  shortcuts: ProbeShortcutCall[];
   /** 运行时的告警与错误（脚本出错、写回目标不支持……），最多 `MAX_MESSAGES` 条（前面的）。 */
   messages: string[];
   /**
@@ -252,6 +274,22 @@ export interface ProbeScriptsInput {
    * 待用播放器）；回放推进的是同一份。不给时 `getAnimation` 的方法空操作。
    */
   animations?: Pick<SceneAnimations, "control">;
+  /**
+   * 探针自己的 puppet 运行时（P12c）：脚本的 `getAnimationLayer` 落到它上面（`probe.ts` 在脚本之前建好，`init` 里的 `setFrame` / `play` 才有落点，
+   * 回放推进的是同一份）。不给时按 bundle 的层定义回答，方法空操作。
+   */
+  puppets?: Pick<
+    ScenePuppets,
+    | "layerCount"
+    | "layer"
+    | "findLayer"
+    | "boneTransform"
+    | "setBoneTransform"
+    | "applyBonePhysicsImpulse"
+    | "resetBonePhysicsSimulation"
+  >;
+  /** 系统媒体回放（P11c，`probeMedia.ts`）：`init` 之后给刚 `init` 的脚本补发一轮媒体回调（`SceneMedia.replayAfterInit`）。不给时不补发。 */
+  media?: { replayAfterInit(callbacks: MediaCallbacks): void };
   /** 建 realm（缺省 `createIframeRealm`，在当前文档里建隐藏 iframe）：单测换成不碰 DOM 的假 realm。 */
   createRealm?: (setup: ProbeRealmSetup) => Promise<ScriptRealm>;
 }
@@ -269,6 +307,10 @@ export interface ProbeScripts {
   /** 动画事件（P10b）：回放推进动画时越过的事件在这里派发给脚本，同宿主 `runtime.animationEvent`；没有脚本时什么都不做（可选：单测的替身可以不给）。 */
   animationEvent?(object: number | null, json: string): void;
   result(): ProbeScriptsResult;
+  /** 五个媒体回调接到这套脚本运行时（P11c，`probeMedia.ts` 派发用）；脚本没建起来时是空操作。 */
+  mediaCallbacks?(): MediaCallbacks;
+  /** 一批用户属性增量交给脚本的 `applyUserProperties`（P11c：封面换名的伪属性，没有 `type`，脚本收到 `{}`）；`full` 是全集，同宿主 `applyChanges`。 */
+  applyProperties?(delta: Record<string, UserProperty>, full: ReadonlyMap<string, UserProperty>): void;
   /**
    * 光标（P6c，`render/cursor.ts`）：这一帧在设好相机之后、动画与脚本（`enterFrame` / `frame`）之前调一次，同渲染器的 `stepCursor`：更新脚本
    * `input.*` 读到的快照，场景里有脚本导出了光标回调时命中、派发给运行时。可选：单测的替身可以不给。
@@ -299,6 +341,9 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
   let matchedDropped = 0;
   /** 光标会话与最近一帧的 `input.*` 快照（P6c）：同宿主，快照由 `cursor` 每帧更新、`input` 每次现读。 */
   const cursorSession = new CursorSession();
+  /** 快捷方式的点击令牌（P11d）：同宿主，`cursor` 里按下沿在派发之前发、松开沿在派发之后收。 */
+  const shortcutToken = new ShortcutToken();
+  const shortcutCalls: ProbeShortcutCall[] = [];
   let cursorInput: CursorInputSnapshot = emptyCursorInput();
 
   const message = (level: string, text: string, detail?: unknown) => {
@@ -402,8 +447,35 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         },
         // 关键帧动画（P10b）：探针自己的播放器，每次现取
         animation: (id) => input.animations?.control(id) ?? null,
+        // puppet 动画层（P12c）：探针自己的运行时，每次现取
+        puppetLayers: (object) => {
+          const puppets = input.puppets;
+          return puppets
+            ? {
+                count: () => puppets.layerCount(object),
+                find: (name) => puppets.findLayer(object, name),
+                control: (index) => puppets.layer(object, index),
+                // 骨骼脚本方法（P12d-2）
+                boneTransform: (bone) => puppets.boneTransform(object, bone),
+                setBoneTransform: (bone, matrix) => puppets.setBoneTransform(object, bone, matrix),
+                applyBonePhysicsImpulse: (bone, dir, ang) => puppets.applyBonePhysicsImpulse(object, bone, dir, ang),
+                resetBonePhysicsSimulation: (bone) => puppets.resetBonePhysicsSimulation(object, bone),
+              }
+            : null;
+        },
         // 全局 `input`（P6c）：最近一帧的光标快照
         cursorInput: () => cursorInput,
+        // 快捷方式（P11d）：同宿主的门禁与令牌；属性检查读探针的属性全集，不发消息、不启动，只记一条
+        activeCallback: () => runtime?.activeCallback ?? null,
+        openUserShortcut: (name) => {
+          let result: 0 | 1 | 2 = 2;
+          if (shortcutToken.take()) {
+            const property = input.properties.get(name);
+            result = property?.type === "usershortcut" && property.isbound === true ? 1 : 0;
+          }
+          shortcutCalls.push({ frame: frames, name, result });
+          return result;
+        },
       }));
       runtime = new ScriptRuntime(created, {
         report,
@@ -416,7 +488,9 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       scriptApi.attachRuntime(runtime);
       // 同宿主：`init` 里 `engine.userProperties` 已是全集（含内置项）
       scriptApi.setProperties(input.properties);
-      await runtime.load(bundle.scripts);
+      // 同宿主：`init` 之后、首次 `applyUserProperties` 之前补发一轮媒体回调（P11c）
+      const loaded = runtime;
+      await loaded.load(bundle.scripts, () => input.media?.replayAfterInit(scriptMediaCallbacks(loaded)));
       // 同宿主：`init` 之后按属性全集给挂脚本又绑属性的字段套一次属性值（`init` 拿的是 JSON `value`）
       applyScriptedProperties(bundle.bindings, bundle.scripts, input.properties, state, runtime, true);
       // 同宿主首帧之前（`beforeFirstFrame`）：整份用户属性交一次，`engine.userProperties` 从这时起读得到
@@ -438,12 +512,20 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       if (disposed) return;
       runtime?.animationEvent(object, json);
     },
+    mediaCallbacks: () => scriptMediaCallbacks({ mediaEvent: (callback, make) => runtime?.mediaEvent(callback, make) }),
+    applyProperties(delta, full) {
+      if (disposed) return;
+      runtime?.applyUserProperties(delta, full, bundle.bindings);
+    },
     cursor(frameInput) {
       if (disposed) return;
       const active = runtime?.hasCursorCallbacks ?? false;
+      // 令牌（P11d）：按下沿在派发之前发、松开沿在派发之后收（同渲染器 `stepCursor` 与宿主）
+      shortcutToken.beginFrame(frameInput.down);
       const { snapshot, dispatches } = cursorSession.frame(frameInput, { layers: bundle.layers, state }, active);
       cursorInput = snapshot;
       for (const item of dispatches) runtime?.cursorEvent(item.object, item.callback, item.world, item.local);
+      shortcutToken.endFrame(frameInput.down);
     },
     result() {
       return {
@@ -457,6 +539,7 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         recompile: [...recompile.values()].map((item) => ({ ...item })),
         unconnected: { ...unconnected },
         audioResolutions: api?.audioResolutions ?? [],
+        shortcuts: shortcutCalls.map((call) => ({ ...call })),
         messages: [...messages],
         console: {
           count: consoleCount,

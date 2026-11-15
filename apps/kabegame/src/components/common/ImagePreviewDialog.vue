@@ -187,25 +187,20 @@
               >
                 <X />
               </button>
-              <!-- 网页壁纸是跨源 iframe，指针在它上面时容器收不到 mousemove；照底部工具条的常驻热区，
-               在箭头所在的竖向中段各放一条常驻热区唤出箭头 -->
-              <template v-if="isPreviewWallpaper">
-                <div v-if="props.canPrev" class="preview-nav-hotzone left" @mouseenter="previewHoverSide = 'left'" />
-                <div v-if="props.canNext" class="preview-nav-hotzone right" @mouseenter="previewHoverSide = 'right'" />
-              </template>
-              <!-- 箭头的有无直接表达上层意图：没有下一张就不渲染，不做置灰态 -->
-              <div
-                v-if="props.canPrev"
-                class="preview-nav-zone left"
-                :class="{ visible: previewHoverSide === 'left' }"
-                @click.stop="goPrev"
-                @mouseleave="handleNavZoneLeave"
-              >
+              <!-- 箭头的有无直接表达上层意图：没有下一张就不渲染，不做置灰态。两侧区域只负责摆放与显隐（显隐看鼠标
+               横坐标，见 handlePreviewMouseMove），本身不拦鼠标：只有点箭头才切图，区域里别处的点击落到下面的图片 / 壁纸上 -->
+              <div v-if="props.canPrev" class="preview-nav-zone left" :class="{ visible: previewHoverSide === 'left' }">
                 <div class="preview-nav-stack">
-                  <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="上一张">
+                  <button
+                    class="preview-nav-btn"
+                    type="button"
+                    :class="{ disabled: navPending }"
+                    aria-label="上一张"
+                    @click.stop="goPrev"
+                  >
                     <ChevronLeft />
                   </button>
-                  <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
+                  <!-- 幻灯片播放：与箭头同显隐 -->
                   <button
                     class="preview-slideshow-btn"
                     type="button"
@@ -227,14 +222,18 @@
                 v-if="props.canNext"
                 class="preview-nav-zone right"
                 :class="{ visible: previewHoverSide === 'right' }"
-                @click.stop="goNext"
-                @mouseleave="handleNavZoneLeave"
               >
                 <div class="preview-nav-stack">
-                  <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="下一张">
+                  <button
+                    class="preview-nav-btn"
+                    type="button"
+                    :class="{ disabled: navPending }"
+                    aria-label="下一张"
+                    @click.stop="goNext"
+                  >
                     <ChevronRight />
                   </button>
-                  <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
+                  <!-- 幻灯片播放：与箭头同显隐 -->
                   <button
                     class="preview-slideshow-btn"
                     type="button"
@@ -252,8 +251,8 @@
                   </button>
                 </div>
               </div>
-              <!-- 非视频 WPE 壁纸（web / scene）：和单独的图片一样按内容比例显示，可交互；页面接收指针事件，
-               不走 Panzoom，也不挂 VideoControls -->
+              <!-- 非视频 WPE 壁纸（web / scene）：和单独的图片一样按内容比例显示，可交互；画布上的覆盖层接住真实鼠标，
+               页面里的鼠标由 Rust 直接注入 iframe。不走 Panzoom，也不挂 VideoControls -->
               <div v-if="previewImage && isPreviewWallpaper" class="preview-wallpaper-wrapper absolute inset-0">
                 <WallpaperPreviewCanvas ref="wallpaperCanvasRef" :content-size="previewWallpaperSize">
                   <ImageContent
@@ -306,7 +305,7 @@
                     <span class="zoom-progress-text">{{ zoomPercentText }}</span>
                   </div>
                 </template>
-                <!-- 壁纸的右键菜单项按原顺序平铺成图标按钮（壁纸里的右键由垫片转发，见 wpeContextMenu.ts） -->
+                <!-- 壁纸的右键菜单项按原顺序平铺成图标按钮（壁纸上的右键落在覆盖层上，由预览容器的 @contextmenu 弹菜单） -->
                 <template v-if="isPreviewWallpaper && wallpaperBarActions.length > 0">
                   <template v-for="action in wallpaperBarActions" :key="action.key">
                     <span v-if="action.divider" class="control-bar-divider" />
@@ -1273,11 +1272,6 @@ const handlePreviewMouseLeave = () => {
   previewHoverSide.value = null;
 };
 
-// 从箭头区移进网页壁纸 iframe 后容器再也收不到 mousemove，只能在离开时收起
-const handleNavZoneLeave = (event: MouseEvent) => {
-  if ((event.relatedTarget as Element | null)?.tagName === "IFRAME") previewHoverSide.value = null;
-};
-
 const handlePreviewWheel = (event: WheelEvent) => {
   if (isPreviewVideo.value || isPreviewWallpaper.value) return;
   handlePanzoomWheel(event);
@@ -1934,12 +1928,17 @@ defineExpose({
     align-items: center;
     z-index: 2;
     opacity: 0;
+    // 区域本身一律不拦鼠标，只有显示时的按钮可点（点箭头才切图）
     pointer-events: none;
     transition: opacity 0.12s ease;
 
     &.visible {
       opacity: 1;
-      pointer-events: auto;
+
+      .preview-nav-btn,
+      .preview-slideshow-btn {
+        pointer-events: auto;
+      }
     }
 
     &.left {
@@ -1966,23 +1965,6 @@ defineExpose({
 
     &.disabled {
       opacity: 0.45;
-    }
-  }
-
-  // 只在网页壁纸预览时渲染：叠在 iframe 上、低于箭头区，只占箭头所在的中段以少挡页面交互
-  .preview-nav-hotzone {
-    position: absolute;
-    top: 30%;
-    bottom: 30%;
-    width: min(20%, 96px);
-    z-index: 1;
-
-    &.left {
-      left: 0;
-    }
-
-    &.right {
-      right: 0;
     }
   }
 

@@ -5,6 +5,7 @@
  *   `targetPath` 相同；
  * - `ScriptApi.write` 的 `"string"` 分支（步骤 2 的 `ITextLayer` 用）：同一条规则，只给文本目标。
  */
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import type { BindingTarget } from "../compile/bindings";
 import { collectScripts, type SceneScript } from "../compile/scripts";
@@ -31,8 +32,8 @@ function realmWith(modules: Map<string, Record<string, unknown>>): ScriptRealm {
     global: { Object, Array },
     prototypes: { Vec2: Vec2.prototype, Vec3: Vec3.prototype, Vec4: {}, Mat3: {}, Mat4: {} },
     internal: { updateScriptProperties() {}, convertUserProperties: (json: string) => JSON.parse(json) },
-    async importModule(_source: string, label: string) {
-      return modules.get(label) ?? {};
+    async prepareModule(_source: string, label: string) {
+      return fakeModule(modules.get(label) ?? {});
     },
     dispose() {},
   };

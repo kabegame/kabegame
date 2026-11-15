@@ -8,15 +8,15 @@ pub mod screens;
 pub mod window;
 #[cfg(target_os = "macos")]
 pub mod window_mount_macos;
-// 桌面网页 / 场景壁纸的桌面鼠标转发
-#[cfg(any(target_os = "windows", target_os = "macos"))]
-pub mod input_forward;
 // 网页壁纸目录索引：file: 闸门与 wpe_web_pull_state 的数据源
 #[cfg(feature = "wpe")]
 pub mod wpe_web_dir_index;
 // 场景宿主（apps/wpe-scene 的 file: iframe）：地址、file: 访问范围与运行时 capability
 #[cfg(feature = "wpe")]
 pub mod wpe_scene_host;
+// 场景快捷方式（usershortcut，P11d）：取图标与启动
+#[cfg(feature = "wpe")]
+pub mod wpe_shortcut;
 
 // 轮播器
 pub use rotator::WallpaperRotator;

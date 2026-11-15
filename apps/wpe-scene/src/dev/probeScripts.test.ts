@@ -4,6 +4,7 @@
  * 模块按脚本 id 取一个工厂，工厂在「模块求值」时拿到 realm 的全局（脚本读的 `Date`、`Math`、`engine` 都经它），所以能核对替换发生在
  * 模块求值之前。脚本都是有限步的同步函数，不会卡住。
  */
+import { fakeModule } from "../script/testing/fakeModule";
 import { describe, expect, it, vi } from "vitest";
 import { builtinProperties } from "../compile/builtinProperties";
 import { compileScene, type SceneBundle } from "../compile/bundle";
@@ -135,9 +136,9 @@ function fakeRealm(factories: Record<string, Factory>, log: string[] = []) {
             ]),
           ),
       },
-      async importModule(_source: string, label: string) {
+      async prepareModule(_source: string, label: string) {
         log.push(`evaluate ${label}`);
-        return factories[label]?.(global) ?? {};
+        return fakeModule(factories[label]?.(global) ?? {});
       },
       dispose() {
         made.disposed++;
@@ -284,6 +285,32 @@ describe("用户属性全集（probeUserProperties）", () => {
     });
     expect(Object.fromEntries(probeUserProperties(null, { speed: 1 }))).toEqual(builtinProperties());
   });
+
+  it("快捷方式（P11d）：给后端形状时照收；裸字符串与工程缺省值同后端没配，isbound 为 false", () => {
+    const project = {
+      general: {
+        properties: {
+          a: { type: "usershortcut", value: "" },
+          b: { type: "usershortcut", value: "file:000000:C:\\x.exe" },
+          c: { type: "usershortcut", value: "" },
+        },
+      },
+    } as unknown as Parameters<typeof probeUserProperties>[0];
+    const properties = probeUserProperties(project, {
+      a: { value: "k", isbound: true, commandtype: "file", file: "x.exe" },
+      c: "file:C:\\x.exe",
+    });
+    expect(properties.get("a")).toEqual({
+      type: "usershortcut",
+      value: "k",
+      isbound: true,
+      commandtype: "file",
+      file: "x.exe",
+    });
+    expect(properties.get("b")).toMatchObject({ type: "usershortcut", isbound: false });
+    expect(properties.get("b")).not.toHaveProperty("commandtype");
+    expect(properties.get("c")).toMatchObject({ type: "usershortcut", isbound: false });
+  });
 });
 
 describe("createProbeScripts", () => {
@@ -386,12 +413,16 @@ describe("createProbeScripts", () => {
     expect(log).toEqual([]);
     await scripts.load();
     for (let i = 1; i <= 3; i++) scripts.frame(0.1, i * 0.1);
-    // 全集：WPE 的 14 个内置项加工程声明的（P3a 修复）
-    const full = JSON.stringify({
-      ...Object.fromEntries(Object.entries(builtinProperties()).map(([key, item]) => [key, item.value])),
-      speed: 5,
-      tint: "1 0 0",
-    });
+    // 全集：WPE 的 14 个内置项加工程声明的（P3a 修复），键按字节序（p3am-order）
+    const full = JSON.stringify(
+      Object.fromEntries(
+        Object.entries({
+          ...Object.fromEntries(Object.entries(builtinProperties()).map(([key, item]) => [key, item.value])),
+          speed: 5,
+          tint: "1 0 0",
+        }).sort(([a], [b]) => (a < b ? -1 : 1)),
+      ),
+    );
     expect(log).toEqual([
       "evaluate objects/0/color",
       "evaluate objects/1/alpha",

@@ -552,6 +552,7 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     expect(bundle.unsupported).toEqual([]);
     expect(requests.map((request) => request.defines)).toEqual([
       {
+        REVERSEDEPTH: "1",
         SCENE_ORTHO: "1",
         THICKFORMAT: "1",
         SPRITESHEET: "1",
@@ -618,7 +619,9 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     expect(slot1.layers[0].particle!.passes[0].textures).toEqual({ 0: 0, 1: 1 });
     // 帧表语义只按槽 0：spriteSheet 为 false，宏只有槽 0 的 TEX0FORMAT
     expect(slot1.layers[0].particle!.spriteSheet).toBe(false);
-    expect(requests.map((request) => request.defines)).toEqual([{ SCENE_ORTHO: "1", TEX0FORMAT: "8" }]);
+    expect(requests.map((request) => request.defines)).toEqual([
+      { REVERSEDEPTH: "1", SCENE_ORTHO: "1", TEX0FORMAT: "8" },
+    ]);
     const image = await compile(
       memoryReader(
         files({
@@ -647,6 +650,7 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     expect(bundle.unsupported).toEqual([]);
     expect(requests.map((request) => request.defines)).toEqual([
       {
+        REVERSEDEPTH: "1",
         SCENE_ORTHO: "1",
         THICKFORMAT: "1",
         TRAILRENDERER: "1",
@@ -675,7 +679,14 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     );
     expect(bundle.unsupported).toEqual([]);
     expect(requests.map((request) => request.defines)).toEqual([
-      { SCENE_ORTHO: "1", THICKFORMAT: "1", TRAILSUBDIVISION: "3", ORIENTATION: "0", TEX0FORMAT: "9" },
+      {
+        REVERSEDEPTH: "1",
+        SCENE_ORTHO: "1",
+        THICKFORMAT: "1",
+        TRAILSUBDIVISION: "3",
+        ORIENTATION: "0",
+        TEX0FORMAT: "9",
+      },
     ]);
     // WPE 照样因槽 0 的帧表置 0x1000000（rope 着色器不读帧号），模拟器照算 frame
     expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
@@ -693,8 +704,10 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
       translator,
     );
     expect(bundle.unsupported).toEqual([]);
-    // 场景级的 SCENE_ORTHO 之外只有步骤 1 的 TEX0FORMAT
-    expect(requests.map((request) => request.defines)).toEqual([{ SCENE_ORTHO: "1", TEX0FORMAT: "8" }]);
+    // 场景级的 REVERSEDEPTH（P13c）、SCENE_ORTHO 之外只有步骤 1 的 TEX0FORMAT
+    expect(requests.map((request) => request.defines)).toEqual([
+      { REVERSEDEPTH: "1", SCENE_ORTHO: "1", TEX0FORMAT: "8" },
+    ]);
     expect(bundle.textures[0].sheet).toBeUndefined();
     expect("sheet" in bundle.textures[0]).toBe(false);
     expect(bundle.layers[0].particle!.spriteSheet).toBe(false);

@@ -44,7 +44,7 @@ Windows/Linux 使用 `Ctrl+Shift+D`。
 | 文件访问：两项能力与文档闸门 | 建窗前按 label 登记 `allow_file_documents`（CEF 04）和 `allow_app_local_resources`（05/06）；CEF 07 在建工厂时捕获文档与父文档 URL。应用页主 frame 的图库媒体子资源免检；`file:` 文档按自身路径、应用页发起的子 frame 导航按目标路径向应用注册的 `set_file_scope_resolver` 取访问范围。未知归属拒绝；worker 的 `file:` 工厂已由 07 移除。 |
 | `file:` 文档的 IPC 来源 | `GetResourceRequestHandler` 读取 07 文档头，按 initiator 与文档 URL 经 `ipc_origin` 算一次 `Origin`，`IpcResourceRequestHandler::GetResourceHandler` 直接交出 Tauri 协议 handler；认不出为 `null`。scheme factory 只兜底未归属 IPC，并以 `null` 失败关闭；`cef-ipc` 不合法 Origin 用 `kabegame-unattributed://ipc/` 交给 ACL 拒绝。 |
 | 子 frame IPC（tauri 补丁 18–19） | CEF 给每个子 frame 注入 Tauri 桥，请求带 `IpcFrame::Sub` 与 `SubframeId`，响应、监听、事件与 Channel 送回调用方；销毁时清监听。回退通道 `Origin` 不合法时所有 frame 使用 `kabegame-unattributed://ipc/`，由 ACL 拒绝。 |
-| 鼠标注入（公开 API） | `inject_mouse(label, MouseInjection::{Move, Leave, LeftDown, LeftUp} { x, y })`：坐标是视图 DIP，经 `CefBrowserHost::SendMouseMoveEvent` / `SendMouseClickEvent(LEFT, click_count=1)` 直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序。只 `post_task` 到 UI 线程、不等回执（移动是高频的），找不到 browser 静默返回 `Ok`；`Move` / `Leave` 一律不带按键标志（同 WE 的 `modifiers=0`）：Blink 只对带左键的移动做拖动处理，带上会让拖动页面图片启动阻塞 UI 线程的 Win32 OLE 拖放，而真实抬起发生在 Explorer、本线程收不到，拖放挂住。Kabegame 用它做 Windows 桌面鼠标转发（`kabegame/src/wallpaper/input_forward.rs`） |
+| 子 frame 鼠标注入（公开 API） | `frame_mouse(label, frame_id, FrameMouse::{Move, Down, Up} { x, y } \| Release)`：坐标是浏览器视图 DIP（窗口客户区，可越界），`frame_id` 是 `SubframeId` 的字符串。在 CEF UI 线程上按 label 找 browser、按标识找 frame，先比 `_cef_frame_t` 的 `base.size`（旧 libcef 没有补丁 11，结构体短，只 warn 一次、不注入），再经补丁 11 的 `ConvertPointFromView` 换到 frame 坐标、钳进 frame（`frame_mouse.rs` 的 `clamp_to_frame`：框外取中心到该点的连线与边界的交点），经 `SendMouseMoveEventToFrame` / `SendMouseClickEventToFrame` 交给 frame 自己 widget 的 `ForwardMouseEvent`：绕过根视图命中测试（父页面的覆盖层挡不住）、原生捕获与焦点窗口，页面收到可信事件。按 `(label, frame)` 记按下：按下点（钳制前）不在 frame 里就作废、之后的抬起不发；`Release` 补未配对的抬起与一次离开，再清状态。只 `post_task`、不等回执；移动不带按键标志（同 WPE 的 `modifiers=0`：带左键会让拖动页面图片启动阻塞 UI 线程的原生拖放）。Kabegame 经 `tauri-plugin-cursor` 的注入器用它给网页壁纸 / 场景宿主 iframe 注入鼠标 |
 | 截图（公开 API） | `capture_screenshot(label)`：经 `CefBrowserHost::ExecuteDevToolsMethod` 调 `Page.captureScreenshot`，返回整个内容区的 JPEG，不依赖远程调试端口，10 s 超时；WebGPU 画布与跨源 iframe 都在合成结果里。故意不提供 `clip`：Chromium 靠临时改视口实现它，改动画在屏幕正在显示的表面上，整个窗口跳变约 150 ms，`scale: 1` 也一样，要局部就截完自己裁。iframe target 不能截（`Command can only be executed on top-level targets`） |
 | 渲染进程看门狗 | `TauriCefRequestHandler` 对所有 webview 无条件挂载（导航闸门为可选字段）。`on_render_process_unresponsive`（渲染进程 5s 未回执输入、再 1s 主线程 ping 无应答；`runtime.rs` 以 `--enable-features=RendererHangWatcher:delay/5s` 把 Chromium 桌面默认的 15s 改为 5s）直接 `terminate()`；只对可见窗口、且有待回执输入时计时，DevTools / CDP 附着期间 Chromium 会忽略；`on_render_process_terminated`（含真崩溃）自动 `browser.reload()` 恢复。`crawler-*` 标签的隐藏爬虫窗口在两个回调中均被排除——其卡死由 kabegame-core 调度器的 60s/120s 心跳看门狗判定并结束任务（见 `cocs/crawler/CRAWLER_JS_FLOW.md` 3.6） |
 
@@ -187,6 +187,9 @@ submodule 的 gitlink 永远不提交本地改动：
     新增的两个起手侧 API，以保持 CEF struct 布局一致。
   - `08-drag-source-bindings-macos.patch`：macOS aarch64/x86_64 bindings，同步 03
     新增的两个起手侧 API。
+  - `09-frame-mouse-injection-bindings.patch`：四套目标的 bindings，同步 `third-patches/cef/11`
+    给 `CefFrame` 加的三个方法（`_cef_frame_t` 248 → 272 字节）。`_cef_frame_t` 由 libcef 分配，调用前
+    必须按 `base.size` 判断 libcef 带不带补丁 11（`frame_mouse` 已做）。
 
   根 `Cargo.toml` 以 `[patch.crates-io]` 同时接入 `cef-dll-sys = { path = "third/cef-rs/sys" }`
   与 `cef = { path = "third/cef-rs/cef" }`——**两层必须同源**：只 patch sys 而让安全层走
@@ -216,6 +219,11 @@ submodule 的 gitlink 永远不提交本地改动：
     收得到文件，Chrome 与所有 Electron 应用一概无反应。其 Chromium
     内层 patch 与 CEF API 是同一功能的两半，必须同进同退；生成的 C API 与胶水同样
     由构建流程产出。
+  - `11-frame-mouse-injection.patch`：给 `CefFrame` 加三个实验版方法：`ConvertPointFromView`
+    （UI 线程，浏览器视图 DIP → frame 坐标，并给出 frame 视口尺寸，用合成器命中测试的变换）与
+    `SendMouseMoveEventToFrame` / `SendMouseClickEventToFrame`（直接交给 frame 自己 widget 的
+    `ForwardMouseEvent`）。只改 `//cef`，只支持自己有 widget 的 frame（主 frame 与跨进程子 frame）。
+    其余编号（04–10）见 `third-patches/cef/README.md`。
 
 `scripts/build-chromium.ts` 在构建前以仓库内 `third/cef` 为本地源码引用:
 把它的路径和当前提交分别传给 `automate-git.py --url` / `--checkout`。首次或

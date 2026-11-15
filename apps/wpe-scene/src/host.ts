@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { EMPTY_ANIMATIONS_PROBE, SceneAnimations, type AnimationsProbe } from "./animation/player";
-import { ScenePuppets, stateSink } from "./puppet/player";
+import { puppetEntries, ScenePuppets, stateSink } from "./puppet/player";
 import { ScenePlayer } from "./audio/player";
 import { SceneSounds, type SceneSoundProbe } from "./audio/sceneSounds";
 import {
@@ -20,12 +20,21 @@ import { FetchSceneReader } from "./compile/fs";
 import type { BindingTarget } from "./compile/bindings";
 import type { SceneScalar } from "./compile/model";
 import {
+  readWpeWindowUpdateRate,
   SCENE_POSTPROCESS_SETTINGS,
   SCENE_REFLECTION_SETTINGS,
+  SCENE_SHADOW_SETTINGS,
   type SceneReflectionSetting,
   type ScenePostprocessSetting,
+  type SceneShadowSetting,
 } from "./compile/postprocess";
 import { reflectionOverride } from "./dev/reflectionOverride";
+import { shadowsOverride } from "./dev/shadowsOverride";
+import { scriptMediaCallbacks } from "./media/events";
+import { MEDIA_DEFAULT_INTERVAL_MS, mediaIntervalOf } from "./media/interval";
+import { MediaPending } from "./media/pending";
+import { SceneMedia, type MediaDelta, type SceneMediaSnapshot } from "./media/scene";
+import { closeCover, FLAG_STATUS, EMPTY_PROPS } from "./media/types";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import { emptyCursorInput, type CursorInputSnapshot } from "./render/cursor";
 import type { SceneStyle } from "./render/layout";
@@ -43,7 +52,9 @@ import { readScriptState, recordRecompileWrite, writeScriptState } from "./scrip
 import { browserStorage, clearSceneStorage } from "./script/storage";
 import { SceneTexts, type TextRelayouter } from "./text/host";
 import type { TextLayout } from "./text/layout";
-import { UserTextureSources, type UserTextureProbe } from "./usertex/sources";
+import { shortcutRequest } from "./shortcut/message";
+import { ShortcutToken } from "./shortcut/token";
+import { parseShortcutIcon, UserTextureSources, type ShortcutIcon, type UserTextureProbe } from "./usertex/sources";
 import { videoSourceKey } from "./video/player";
 import { layerVideoSource, SceneVideos, type SceneVideoProbe, type VideoSink } from "./video/sceneVideos";
 
@@ -61,6 +72,13 @@ interface SceneTarget {
 export interface SceneProperty {
   type: string;
   value: unknown;
+  /**
+   * 快捷方式项（`usershortcut`，P11d）：后端给的形状，`value` 是原值哈希的键（空 = 没配）。`isbound` / `commandtype` / `file` 只进脚本
+   * `applyUserProperties` 的增量，`engine.userProperties` 里不带（`script/api.ts` 的 `scriptUserProperties`）；别的类型没有。
+   */
+  isbound?: boolean;
+  commandtype?: string;
+  file?: string;
 }
 
 /** 宿主计数（dev 探针读）：就地应用次数与每次重编译的原因 / 键。 */
@@ -93,6 +111,10 @@ function asReflection(value: unknown): SceneReflectionSetting {
   return SCENE_REFLECTION_SETTINGS.includes(value as SceneReflectionSetting)
     ? (value as SceneReflectionSetting)
     : "follow";
+}
+
+function asShadows(value: unknown): SceneShadowSetting {
+  return SCENE_SHADOW_SETTINGS.includes(value as SceneShadowSetting) ? (value as SceneShadowSetting) : "follow";
 }
 
 function isAbort(error: unknown): boolean {
@@ -151,6 +173,8 @@ export class SceneHost {
   private postprocess: ScenePostprocessSetting | null = null;
   /** 设置「场景反射」（P13b1）：最近一次加载用的值；还没加载过为 null。 */
   private reflection: SceneReflectionSetting | null = null;
+  /** 设置「场景阴影」（P13d）：最近一次加载用的值；还没加载过为 null。 */
+  private shadows: SceneShadowSetting | null = null;
   /**
    * 累计全集（WPE 渲染器 `+0x1728`，I1）：键 → `{ type, value }`。保留 `type`，不学 WPE 的整项覆盖（I4）。
    * 加载传全集、运行时传增量，两条路都走 `apply`。
@@ -181,6 +205,19 @@ export class SceneHost {
   private audioSubscribed = false;
   private audioError: string | null = null;
   private audioFrames = 0;
+  /**
+   * 系统媒体集成（P11c，`media/`）：`bundle.media` 时第一次加载建，重编译保留（订阅只订一次、被拒也不重试；`SceneMedia` 的状态、队列与
+   * 脚本 realm 一样跨重编译），销毁时释放。消息先进 `MediaPending`（按 WPE 合并），一个 `windowupdaterate` 间隔的计时器把它切成事件推进
+   * `SceneMedia` 的队列，每帧脚本阶段开头取空（`drainMedia`）。
+   */
+  private sceneMedia: SceneMedia | null = null;
+  private mediaPending: MediaPending | null = null;
+  private mediaTimer: ReturnType<typeof setInterval> | null = null;
+  private mediaInterval = MEDIA_DEFAULT_INTERVAL_MS;
+  private mediaSubscribed = false;
+  private mediaError: string | null = null;
+  /** dev 探针：最近收到的消息（封面只记 PNG 的 base64 长度），带 `performance.now()`。 */
+  private readonly mediaMessages: { t: number; message: unknown }[] = [];
   /**
    * Hub 最近一次推来的原始频谱（128 个值，左 64 + 右 64，P4e 步骤 4）：宿主只存最近一份，渲染器每帧开头取它推进场景频谱
    * （`SceneRendererOptions.audioFrame`）。还没收到时为 null。
@@ -226,6 +263,12 @@ export class SceneHost {
    */
   private pendingAnimations: { bundle: SceneBundle; player: SceneAnimations } | null = null;
   /**
+   * 首次加载时脚本 `init` 要用的 puppet 运行时（P12c，同 `pendingAnimations`）：语料里 50 处「相位偏移」脚本在 `init` 里对动画层 `setFrame`，
+   * 所以在 `ensureRuntime` 之前按新 bundle 先建好。`ScriptApi.puppetLayers` 在它属于脚本当前看到的 bundle 时取它；`load` 里属于这份 bundle 时
+   * 直接交给渲染器、`beforeFirstFrame` 里**不** `carryOver`（`init` 里的控制要保留），否则作废、照旧新建并接上正在播的。退回预览图、销毁时丢掉。
+   */
+  private pendingPuppets: { bundle: SceneBundle; puppets: ScenePuppets } | null = null;
+  /**
    * 交给渲染器的 `VideoSink`：同一份转给当前的 `sceneVideos`，没有时空操作。重编译时 `loadVideos` 在新场景换上之前就按新 bundle 的
    * 下标重建了表（好早点读新出现的视频），这期间旧场景还在画、问的是旧下标：按视频区间换算成新下标，换算不到（新 bundle 里没有这段
    * 视频）就不交帧，免得把别的视频拷进旧场景的纹理。
@@ -266,7 +309,14 @@ export class SceneHost {
     log: (message) => this.options.report.debug(`场景壁纸 ${this.options.imageId} ${message}`),
     // 用户视频的播放器 warning（P11b 步骤 4）
     report: { warn: (message, detail) => this.options.report.warn(message, detail) },
+    // 快捷方式图标（P11d）：按图片 id 与属性名向后端要，非 Windows、没配、取不到都是 0 字节（= 缺省纹理）
+    shortcutIcon: (name) => this.fetchShortcutIcon(name),
   });
+  /**
+   * 快捷方式的点击令牌（P11d，`shortcut/token.ts`）：渲染器每个实时帧在光标派发之前 `beginFrame`、之后 `endFrame`（`ensureRenderer` 的 `cursor`），
+   * `engine.openUserShortcut` 经 `openUserShortcut` 取它。
+   */
+  private readonly shortcutToken = new ShortcutToken();
   private readonly textureCache = new TextureDecodeCache(this.reader);
   private targetTask: Promise<SceneTarget> | null = null;
   private readonly unlisteners: UnlistenFn[] = [];
@@ -278,12 +328,14 @@ export class SceneHost {
       report: SceneReporter;
       /** 加载时等用户纹理预解码的上限（毫秒），缺省 `USER_TEXTURE_PRIME_TIMEOUT_MS`；单测用。 */
       userTexturePrimeTimeoutMs?: number;
+      /** 把快捷方式启动请求交给父页面（P11d）；缺省 `window.parent.postMessage(消息, "*")`，单测用。 */
+      postToParent?: (message: unknown) => void;
     },
   ) {
     this.userTextures.onReady = (name) => this.onUserTextureReady(name);
     // 来源表建好后按当前暂停状态设一次（P11b 步骤 4，用户视频与 GIF 的时钟）
     this.userTextures.setPaused(this.paused || this.hidden);
-    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理与反射设置", (raw) => {
+    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理、反射与阴影设置", (raw) => {
       if (this.disposed || !this.receivedProperties) return;
       const delta = (raw && typeof raw.changes === "object" ? raw.changes : raw) as Record<string, unknown> | null;
       if (!delta) return;
@@ -301,6 +353,14 @@ export class SceneHost {
         if (this.reflection === null || next !== this.reflection) {
           keys.push("wpeSceneReflection");
           options.report.debug(`场景壁纸 ${options.imageId} 反射设置 ${this.reflection} → ${next}，重新判定`);
+        }
+      }
+      // 阴影（P13d）：档位决定编不编投射变体、图集尺寸与 `LIGHTS_SHADOW_*` 宏，只能整场重载；同一条里几项一起变只重载一次
+      if ("wpeSceneShadows" in delta) {
+        const next = asShadows(delta.wpeSceneShadows);
+        if (this.shadows === null || next !== this.shadows) {
+          keys.push("wpeSceneShadows");
+          options.report.debug(`场景壁纸 ${options.imageId} 阴影设置 ${this.shadows} → ${next}，重新判定`);
         }
       }
       if (!keys.length) return;
@@ -454,6 +514,8 @@ export class SceneHost {
 
   private targetPath(target: BindingTarget): string {
     if (target.kind === "layer") return `objects/${target.object}/${target.field}`;
+    // `rotateObjectSpace`（P6d1a）：与 `angles` 同键
+    if (target.kind === "rotation") return `objects/${target.object}/angles`;
     if (target.kind === "effect") return `objects/${target.object}/effects/${target.effect}/visible`;
     if (target.kind === "constant") return `${target.pass}/constantshadervalues/${target.material}`;
     if (target.kind === "bloom") return `general/bloom/${target.field}`;
@@ -472,6 +534,8 @@ export class SceneHost {
     // puppet 动画层字段（P12a 步骤 3 点 3）：同脚本运行时的 `targetKey`
     if (target.kind === "animation-layer")
       return `objects/${target.object}/animationlayers/${target.layer}/${target.field}`;
+    // 材质状态字段（P6d1b）：同脚本运行时的 `targetKey`
+    if (target.kind === "pass-state") return `${target.pass}/state/${target.field}`;
     return `${target.script}/scriptproperties/${target.key}`;
   }
 
@@ -624,6 +688,146 @@ export class SceneHost {
   }
 
   /**
+   * 接入系统媒体集成（P11c）：第一次见到 `bundle.media` 时建 `SceneMedia` 与 `MediaPending`、订阅 `kind: "media"`、起刷新计时器；之后什么都不做
+   * （重编译保留，订阅只订一次）。计时器间隔取 WPE `config.json` 的 `windowupdaterate`（钳到 50–5000），读不到用 1000 并记一条 debug。
+   * 先同步建好对象再等读配置，并发的第二次加载直接返回。
+   */
+  private async loadMedia(bundle: SceneBundle, sceneAssets: string[]): Promise<void> {
+    if (!bundle.media || this.sceneMedia || this.disposed) return;
+    this.sceneMedia = new SceneMedia();
+    this.mediaPending = new MediaPending({
+      log: (message) => this.options.report.debug(`场景壁纸 ${this.options.imageId} ${message}`),
+    });
+    this.subscribeMedia();
+    let rate: unknown;
+    try {
+      rate = await readWpeWindowUpdateRate(this.reader, sceneAssets);
+    } catch {
+      rate = undefined;
+    }
+    if (this.disposed) return;
+    const interval = mediaIntervalOf(rate);
+    if (interval === null)
+      this.options.report.debug(
+        `场景壁纸 ${this.options.imageId} 读不到 WPE 的 windowupdaterate，媒体刷新间隔用 ${MEDIA_DEFAULT_INTERVAL_MS} ms`,
+      );
+    this.mediaInterval = interval ?? MEDIA_DEFAULT_INTERVAL_MS;
+    this.mediaTimer = setInterval(() => this.flushMedia(), this.mediaInterval);
+  }
+
+  /**
+   * 向 `WpeMediaHub` 订阅媒体（后端按调用方文档是场景宿主入口认成场景投影，约定见子计划）。订阅归属宿主 frame，frame 销毁时由 Phase 8 的
+   * `SubframeDestroyed` 释放，没有退订命令。收到的消息进 `MediaPending`；被拒（非 Windows 等）时当场把 `{flags: 0x10, enabled: false}`
+   * 推进场景队列、不经合并，脚本照 WPE「媒体集成不可用」收到 `{ enabled: false }`，封面槽是缺省纹理。「媒体集成」开关关着不算被拒，
+   * 那是后端发 `status { enabled: false }`。
+   */
+  private subscribeMedia(): void {
+    const imageId = this.options.imageId;
+    if (this.mediaSubscribed || !imageId) return;
+    this.mediaSubscribed = true;
+    const channel = new Channel<{ type: string } & Record<string, unknown>>();
+    channel.onmessage = (message) => {
+      this.recordMediaMessage(message);
+      this.mediaPending?.push(message);
+    };
+    // TODO:[WPE_SCENE] 在 macOS / Linux 上测试：场景媒体集成。后端还没有这两个系统的媒体会话数据源，订阅总被拒（脚本收到 `{ enabled: false }`、
+    // 封面槽是缺省纹理）；后端接上后这里不用改，核对标题与封面随播放器变化。
+    invoke("wpe_web_media_subscribe", { kind: "media", channel, imageId }).catch((error: unknown) => {
+      this.mediaError = String(error);
+      this.sceneMedia?.push({
+        flags: FLAG_STATUS,
+        enabled: false,
+        state: 0,
+        props: { ...EMPTY_PROPS },
+        position: 0,
+        duration: 0,
+        cover: null,
+      });
+      this.options.report.debug(`场景壁纸 ${imageId} 媒体订阅被拒：${this.mediaError}`);
+    });
+  }
+
+  private recordMediaMessage(message: { type: string } & Record<string, unknown>): void {
+    const shown =
+      message.type === "sceneThumbnail"
+        ? { ...message, png: typeof message.png === "string" ? `${message.png.length} 字符 base64` : message.png }
+        : message;
+    this.mediaMessages.push({ t: performance.now(), message: shown });
+    if (this.mediaMessages.length > 20) this.mediaMessages.shift();
+  }
+
+  /** 刷新计时器：把待发切成事件推进场景队列；退回预览图期间不派发，事件直接丢掉（位图关掉）。 */
+  private flushMedia(): void {
+    const pending = this.mediaPending;
+    const media = this.sceneMedia;
+    if (!pending || !media || this.disposed) return;
+    for (const event of pending.flush()) {
+      if (this.state === "fallback") closeCover(event.cover);
+      else media.push(event);
+    }
+  }
+
+  /**
+   * 每帧取空媒体队列（P11c，脚本阶段最开头）：事件逐条按 WPE 的顺序处理（`media/scene.ts`）。封面先把位图交给来源表（`provide`，当场生效）、
+   * 名字当一次属性增量走属性路径；五个回调发给导出了它的全部已 `init` 的脚本。
+   */
+  private drainMedia(): void {
+    const media = this.sceneMedia;
+    if (!media?.queued) return;
+    media.drain({
+      ...scriptMediaCallbacks(this.runtime),
+      cover: (name, image, delta) => {
+        this.userTextures.provide(name, image);
+        this.applyMediaProperties(delta);
+      },
+    });
+  }
+
+  /**
+   * 封面换名的属性增量（`$mediaThumbnail` / `$mediaPreviousThumbnail`，只有 `value`、没有 `type`）：并进累计全集后走 `applyChanges`——绑定表命中
+   * `user-texture` 就地换图、导出了 `applyUserProperties` 的脚本收到 `{}`（运行时只收同时带 `type` 与 `value` 的项）、`engine.userProperties` 读得到
+   * 名字字符串。和 `apply` 不同：没有场景（加载中、退回预览图）时不触发重编译，加载落地后靠 `pendingChanges` 补上。
+   */
+  private applyMediaProperties(delta: MediaDelta): void {
+    const changes = mergeProperties(this.properties, delta as unknown as Record<string, UserProperty>);
+    if (!changes.size || this.state !== "ready" || !this.bundle) return;
+    this.applyChanges(changes);
+  }
+
+  private disposeMedia(): void {
+    if (this.mediaTimer !== null) clearInterval(this.mediaTimer);
+    this.mediaTimer = null;
+    this.mediaPending?.dispose();
+    this.mediaPending = null;
+    this.sceneMedia?.discard();
+    this.sceneMedia = null;
+  }
+
+  /**
+   * dev 探针（P11c）：媒体订阅状态（`error` 是被拒的原因）、刷新间隔、最近收到的消息（带时间戳）、待发 flags、队列长度与 `SceneMedia` 的当前值；
+   * 场景没有接入媒体集成时 `active` 为假。
+   */
+  media(): {
+    active: boolean;
+    subscribed: boolean;
+    error: string | null;
+    intervalMs: number;
+    messages: { t: number; message: unknown }[];
+    pendingFlags: number;
+    scene: SceneMediaSnapshot | null;
+  } {
+    return {
+      active: this.sceneMedia !== null,
+      subscribed: this.mediaSubscribed && this.mediaError === null,
+      error: this.mediaError,
+      intervalMs: this.mediaInterval,
+      messages: this.mediaMessages.map((item) => ({ ...item })),
+      pendingFlags: this.mediaPending?.pendingFlags ?? 0,
+      scene: this.sceneMedia?.snapshot() ?? null,
+    };
+  }
+
+  /**
    * 建脚本环境。并发的重载要排队：不排队会建出第二个 realm、`init` 跑两次，`localStorage` 的写入也跟着多一次。
    * 等完再判断：在途的那次可能已被「清空脚本存储」作废，这时要重建。
    */
@@ -685,14 +889,40 @@ export class SceneHost {
         },
         // 粒子层的 play / pause / stop / isPlaying / emitParticles（P4f 步骤 3）：同样每次现取
         particles: (object) => this.particleTarget(object),
+        // getTransformMatrix（P6d1a）：有渲染器场景时用它的挂点钩子现算，否则（首次加载的 init）api 退回纯状态现算
+        transformMatrix: (object) => {
+          const renderer = this.renderer;
+          const state = renderer?.sceneState;
+          return renderer && state ? renderer.transformMatrix(object, state) : null;
+        },
         // 全局 `input`（P6c）：每次读都取渲染器最近一帧给的光标快照
         cursorInput: () => this.cursorInput,
+        // 快捷方式（P11d）：回调名取自运行时，令牌与属性检查在 `openUserShortcut`
+        activeCallback: () => this.runtime?.activeCallback ?? null,
+        openUserShortcut: (name) => this.openUserShortcut(name),
         // 关键帧动画的 IAnimation（P10b）：待用播放器属于脚本当前看到的 bundle 时取它（首次加载的 init），否则取正在播的那份；每次现取，
         // 重编译换了播放器也接得上
         animation: (id) => {
           const pending = this.pendingAnimations;
           const player = pending && pending.bundle === this.scriptBundle ? pending.player : this.sceneAnimations;
           return player?.control(id) ?? null;
+        },
+        // puppet 动画层（P12c）：同上，待用运行时属于脚本当前看到的 bundle 时取它（首次加载的 init），否则取正在播的那份；每次现取
+        puppetLayers: (object) => {
+          const pending = this.pendingPuppets;
+          const puppets = pending && pending.bundle === this.scriptBundle ? pending.puppets : this.scenePuppets;
+          return puppets
+            ? {
+                count: () => puppets.layerCount(object),
+                find: (name) => puppets.findLayer(object, name),
+                control: (index) => puppets.layer(object, index),
+                // 骨骼脚本方法（P12d-2）
+                boneTransform: (bone) => puppets.boneTransform(object, bone),
+                setBoneTransform: (bone, matrix) => puppets.setBoneTransform(object, bone, matrix),
+                applyBonePhysicsImpulse: (bone, dir, ang) => puppets.applyBonePhysicsImpulse(object, bone, dir, ang),
+                resetBonePhysicsSimulation: (bone) => puppets.resetBonePhysicsSimulation(object, bone),
+              }
+            : null;
         },
       });
       const runtime = new ScriptRuntime(realm, {
@@ -708,7 +938,8 @@ export class SceneHost {
       api.setProperties(this.properties);
       this.scriptApi = api;
       this.runtime = runtime;
-      await runtime.load(bundle.scripts);
+      // `init` 之后、首次 `applyUserProperties` 之前，按场景媒体状态给刚 `init` 的脚本补一轮媒体回调（P11c，rea-p11-media 2.5）
+      await runtime.load(bundle.scripts, () => this.sceneMedia?.replayAfterInit(scriptMediaCallbacks(runtime)));
     } catch (error) {
       this.scriptUnavailable = true;
       this.options.report.error(`场景脚本 baseclasses.js 或 realm 加载失败：${String(error)}`);
@@ -883,11 +1114,11 @@ export class SceneHost {
 
   /**
    * 加载时对 bundle 的属性来源按当前属性值预先解码，全部完成（或失败、回缺省）才建场景，第一帧就是用户图（P11b 步骤 2）。值只认字符串，别的
-   * 类型（`slider` 之类）当空串（缺省纹理）。没有用户纹理的 bundle 不碰来源表。快捷方式与封面来源归 P11c、P11d，这里只处理属性。
+   * 类型（`slider` 之类）当空串（缺省纹理）。没有用户纹理的 bundle 不碰来源表。封面来源（P11c）不在这里（媒体模块交图），快捷方式（P11d）的值是键、图标经 `shortcutIcon` 取。
    */
   private async primeUserTextures(bundle: SceneBundle): Promise<boolean> {
-    // 手写的测试 bundle 可能没有这个表
-    const sources = (bundle.userTextures ?? []).filter((source) => source.kind === "property");
+    // 手写的测试 bundle 可能没有这个表；封面来源（P11c）由媒体模块经 `provide` 交图，不在这里。快捷方式（P11d）的值是后端给的键，图标经 `shortcutIcon` 取
+    const sources = (bundle.userTextures ?? []).filter((source) => source.kind !== "system");
     if (!sources.length) return true;
     const limit = this.options.userTexturePrimeTimeoutMs ?? USER_TEXTURE_PRIME_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -895,7 +1126,7 @@ export class SceneHost {
       .prime(
         sources.map((source) => {
           const value = this.properties.get(source.name)?.value;
-          return [source.name, typeof value === "string" ? value : ""] as const;
+          return [source.name, typeof value === "string" ? value : "", source.kind] as const;
         }),
       )
       .then(() => true);
@@ -909,6 +1140,29 @@ export class SceneHost {
         `场景壁纸 ${this.options.imageId} 的用户纹理 ${limit} ms 内没解码完，先用缺省纹理建场景，解码完成后换上`,
       );
     return finished;
+  }
+
+  /** 向后端要快捷方式的图标（P11d）：没有图片 id、没配、取不到、非 Windows 都是 null；失败抛错（来源表记成失败，用缺省纹理）。 */
+  private async fetchShortcutIcon(name: string): Promise<ShortcutIcon | null> {
+    const imageId = this.options.imageId;
+    if (!imageId) return null;
+    return parseShortcutIcon(await invoke<ArrayBuffer>("wpe_scene_shortcut_icon", { imageId, name }));
+  }
+
+  /**
+   * `engine.openUserShortcut` 的宿主一侧（P11d，WPE 宿主的三种返回）：先取点击令牌（没有 → 2，调用方抛错；令牌在查属性之前就消耗，同 WPE），再查属性全集：
+   * `type === "usershortcut"` 且 `isbound === true` 时把属性名 `postMessage` 给父页面（`shortcut/message.ts`，真正启动由应用页核对用户激活后调
+   * `wpe_open_user_shortcut`）并返回 1，否则 0。这里的门禁只约束守规矩的脚本（脚本 realm 同源、能拿到 `parent`），安全边界在应用页与后端。
+   *
+   * 非 Windows：后端给的 `isbound` 一律为 false，这里恒返回 0。TODO:[WPE_SCENE] macOS / Linux 的快捷方式（本机测不了）。
+   */
+  private openUserShortcut(name: string): 0 | 1 | 2 {
+    if (!this.shortcutToken.take()) return 2;
+    const property = this.properties.get(name);
+    if (property?.type !== "usershortcut" || property.isbound !== true) return 0;
+    const post = this.options.postToParent ?? ((message: unknown) => window.parent.postMessage(message, "*"));
+    post(shortcutRequest(name));
+    return 1;
   }
 
   /** dev 探针（P11b 步骤 2）：每个用户纹理属性来源的当前值、状态、尺寸与最近一次解码用时；没有来源时为空。 */
@@ -986,6 +1240,31 @@ export class SceneHost {
     return this.sceneAnimations?.probe() ?? EMPTY_ANIMATIONS_PROBE;
   }
 
+  /**
+   * dev 探针（P12c）：正在播的 puppet 运行时（还没换上时取待用的那份）里每个对象每个动画层的名字、帧号、是否在播；`pending` 为真表示取的是待用的。
+   * 用来在不跑帧循环的屏外宿主里看 `init` 对动画层的控制有没有落到运行时上。
+   */
+  puppetProbe(): {
+    pending: boolean;
+    objects: { object: number; layers: { name: string; frame: number; playing: boolean }[] }[];
+  } {
+    const pending = !this.scenePuppets && !!this.pendingPuppets;
+    const puppets = this.scenePuppets ?? this.pendingPuppets?.puppets ?? null;
+    const bundle = this.drawingBundle ?? this.pendingPuppets?.bundle ?? null;
+    if (!puppets || !bundle) return { pending, objects: [] };
+    const objects = bundle.layers
+      .map((layer) => layer.object)
+      .filter((object) => puppets.layerCount(object) > 0)
+      .map((object) => ({
+        object,
+        layers: Array.from({ length: puppets.layerCount(object) }, (_, index) => {
+          const control = puppets.layer(object, index)!;
+          return { name: control.name, frame: control.getFrame(), playing: control.isPlaying() };
+        }),
+      }));
+    return { pending, objects };
+  }
+
   /** dev 探针：每个声音对象的模式、当前文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的元素与 context。 */
   sounds(): {
     hostVolume: number;
@@ -1051,21 +1330,32 @@ export class SceneHost {
         active: () => this.state !== "fallback" && (this.runtime?.hasCursorCallbacks ?? false),
         input: (snapshot) => {
           this.cursorInput = snapshot;
+          // 快捷方式的点击令牌（P11d）：左键按下沿在本帧派发之前发（渲染器先 `input`、再 `events`、最后 `end`）
+          this.shortcutToken.beginFrame(snapshot.leftDown);
         },
         events: (dispatches) => {
           for (const item of dispatches) this.runtime?.cursorEvent(item.object, item.callback, item.world, item.local);
         },
+        // 松开沿在本帧派发之后收（没有派发的帧也要调，所以不放在 `events` 里）
+        end: (snapshot) => this.shortcutToken.endFrame(snapshot.leftDown),
       },
       // puppet（P12a 步骤 4）：用户属性写进状态后这一帧就读到（读的是渲染器正在画的那份状态）
       stepPuppets: (dt) => {
         const drawn = this.drawnState;
-        if (drawn) this.scenePuppets?.frame(dt, stateSink(drawn));
+        // 事件（MDLA）与播完回调在每个 puppet 推进完之后派发（P12c）：事件交给脚本运行时的 `animationEvent`，回调里的写入下一帧生效
+        if (drawn)
+          this.scenePuppets?.frame(dt, stateSink(drawn), {
+            event: (object, json) => this.runtime?.animationEvent(object, json),
+          });
       },
       videos: this.videoSink,
       beforeFrame: (dt, spectrum) => {
         // 脚本的音频缓冲改读归一化频谱（P4e 步骤 4，「决定」5）：渲染器这一帧推进之后、脚本之前拷一次
         this.scriptApi?.applySpectrum(spectrum);
         if (this.state !== "fallback" && this.scriptState) {
+          // 系统媒体事件（P11c）：脚本阶段最开头，光标派发（渲染器 `stepCursor`）之后、动画之前（rea-p11-media 2.3、2.4）。没有脚本的场景也跑
+          // （只有封面纹理）：封面增量照走属性路径、换图同帧画出，回调只在有脚本运行时才调
+          this.drainMedia();
           // 关键帧动画（P10a 步骤 3）先于脚本写（rea-p10-keyframes 第 1、9 节）：脚本 `update(value)` 收到的是本帧的动画值，脚本写回
           // 只活到下一帧动画覆盖。不受脚本运行时门控：没有脚本的场景也跑（`scriptState` 在换场景时总会设上）。
           // 写进渲染器正在画的那份状态（`drawnState`），它和这份动画同时换（`beforeFirstFrame`）；平时就是 `scriptState`
@@ -1135,10 +1425,13 @@ export class SceneHost {
     // 退回预览图：场景不显示，声音也停（下次能渲染时重新开始）
     this.disposeSounds();
     this.disposeVideos();
+    // 媒体事件不派发了：队列清掉（订阅与状态保留，计时器在退回期间把新事件直接丢掉）
+    this.sceneMedia?.discard();
     // 关键帧动画同样丢掉：下次能渲染时从 0 开始
     this.sceneAnimations = null;
     this.scenePuppets = null;
     this.pendingAnimations = null;
+    this.pendingPuppets = null;
     this.bundle = null;
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
@@ -1172,6 +1465,17 @@ export class SceneHost {
     }
   }
 
+  private async readShadows(): Promise<SceneShadowSetting> {
+    const override = shadowsOverride();
+    if (override) return override;
+    try {
+      return asShadows(await invoke<string>("get_wpe_scene_shadows"));
+    } catch (error) {
+      this.options.report.warn("读取场景阴影设置失败，按跟随 WPE 处理：", error);
+      return "follow";
+    }
+  }
+
   /** 属性、档位或设备变化时重新编译；代数确保过期结果不能覆盖新场景。 */
   private async reload(): Promise<void> {
     if (!this.options.imageId) {
@@ -1194,14 +1498,16 @@ export class SceneHost {
         this.targetTask = null;
         throw error;
       }));
-      const [target, setting, reflection] = await Promise.all([
+      const [target, setting, reflection, shadows] = await Promise.all([
         targetTask,
         this.readPostprocess(),
         this.readReflection(),
+        this.readShadows(),
       ]);
       if (id !== this.generation) return;
       this.postprocess = setting;
       this.reflection = reflection;
+      this.shadows = shadows;
       const force = forceRender();
       const userProperties = Object.fromEntries(
         [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
@@ -1214,6 +1520,7 @@ export class SceneHost {
         scriptOverrides: Object.fromEntries(this.scriptOverrides),
         postprocess: setting,
         reflection,
+        shadows,
         force,
         textureCache: this.textureCache,
         reader: this.reader,
@@ -1249,6 +1556,9 @@ export class SceneHost {
       this.loadSounds(bundle);
       // 场景用音频（P4e 步骤 4）：声明了开关且有带音频的粒子模块，加载就订阅（只订一次）
       if (bundle.audio) this.subscribeAudio();
+      // 系统媒体集成（P11c）：脚本导出了媒体回调、或有封面纹理槽；要在脚本 `init` 之前建好（`init` 之后的补发读 `SceneMedia`）
+      await this.loadMedia(bundle, target.sceneAssets);
+      if (id !== this.generation) return;
       // 视频纹理同样在脚本与 GPU 资源之前开始读、开始放（P9a）
       this.loadVideos(bundle);
       // 用户纹理（P11b 步骤 2）：按当前属性值预先解码，建场景时第一帧就是用户图
@@ -1264,6 +1574,10 @@ export class SceneHost {
         // 它们不会再跑，接过来；`runtime` 还没赋值时 `init` 还没开始，之后按 `scriptBundle` 落到这一份上，不用接
         if (this.runtime && this.pendingAnimations) player.carryOver(this.pendingAnimations.player);
         this.pendingAnimations = { bundle, player };
+        // puppet 运行时同理（P12c）：`init` 里对动画层的 setFrame / play 要有落点
+        const pendingPuppets = new ScenePuppets(puppetEntries(bundle.layers));
+        if (this.runtime && this.pendingPuppets) pendingPuppets.carryOver(this.pendingPuppets.puppets);
+        this.pendingPuppets = { bundle, puppets: pendingPuppets };
         await this.ensureRuntime(bundle, target.sceneAssets);
         if (id !== this.generation) return;
       }
@@ -1271,9 +1585,11 @@ export class SceneHost {
       if (id !== this.generation) return;
       current.setPaused(this.paused);
       // puppet（P12a 步骤 4）：新建，在 `beforeFirstFrame` 里接回旧时钟并算一次姿势；没有 puppet 的场景是空运行时（`frame` 什么都不做）
-      const puppets = new ScenePuppets(
-        bundle.layers.flatMap((layer) => (layer.puppet ? [{ object: layer.object, puppet: layer.puppet }] : [])),
-      );
+      // 图像层 puppet 与带骨骼的模型对象（P12b2-1）都进运行时
+      // 首次加载时 `init` 已经在待用的运行时上控制过：属于这份 bundle 就直接用（P12c）
+      const pendingPuppets = this.pendingPuppets?.bundle === bundle ? this.pendingPuppets : null;
+      const stalePuppets = pendingPuppets ? null : this.pendingPuppets;
+      const puppets = pendingPuppets?.puppets ?? new ScenePuppets(puppetEntries(bundle.layers));
       await current.load(bundle, {
         ignoreUnsupported: force,
         texts,
@@ -1283,15 +1599,18 @@ export class SceneHost {
         beforeFirstFrame: (state) => {
           // 新建 → carryOver → refresh（同 P10 的 `write`）：重编译时动画层时钟与 blendin 的清位接着走，换上就按当前时钟与当前状态算一次蒙皮，
           // 不闪出绑定姿势；之后每帧由 `stepPuppets` 推进
-          puppets.carryOver(this.scenePuppets);
+          // 待用的（`init` 里的控制要保留）不接旧时钟；否则接上正在播的，没有时接过期的待用运行时（P12c）
+          this.pendingPuppets = null;
+          if (!pendingPuppets) puppets.carryOver(this.scenePuppets ?? stalePuppets?.puppets ?? null);
           puppets.refresh(stateSink(state));
           this.scenePuppets = puppets;
           // 运行中属性写进状态时同步交给来源表解码（P11b 步骤 2）；解码完成再经 `onUserTextureReady` 标脏
-          state.onUserTexture = (name, value) => this.userTextures.setValue(name, value);
+          const kinds = new Map((bundle.userTextures ?? []).map((source) => [source.name, source.kind] as const));
+          state.onUserTexture = (name, value) => this.userTextures.setValue(name, value, kinds.get(name));
           // 预解码超时：建场景时这些槽用的是缺省纹理，超时后才解完的那几个在建场景前的 `onReady` 找不到状态、没标脏，这里补标，第一次 `sync` 换上
           if (!primed)
             for (const source of bundle.userTextures ?? [])
-              if (source.kind === "property" && this.userTextures.status(source.name) === "ready")
+              if (source.kind !== "system" && this.userTextures.status(source.name) === "ready")
                 state.touchUserTexture(source.name);
           // 渲染器从这一帧起画这份 bundle：视频的下标按它换算（`videoSink`）
           this.drawingBundle = bundle;
@@ -1401,10 +1720,12 @@ export class SceneHost {
     this.sceneTexts?.dispose();
     this.sceneTexts = null;
     this.disposeVideos();
+    this.disposeMedia();
     this.userTextures.dispose();
     this.sceneAnimations = null;
     this.scenePuppets = null;
     this.pendingAnimations = null;
+    this.pendingPuppets = null;
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;

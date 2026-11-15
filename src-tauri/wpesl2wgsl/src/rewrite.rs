@@ -563,6 +563,11 @@ fn split_stage(stage: Stage, lines: &[Line]) -> Result<StageParts, RewriteError>
         if keyword == "in" && trimmed.contains(" gl_") {
             continue;
         }
+        // `gl_ViewportIndex = gl_InstanceID;`（阴影投射着色器，P13d）：WPE 一次实例化画进多个视口，WebGPU 没有视口数组，
+        // 宿主逐个视图设视口、用 firstInstance 选视图矩阵，这条赋值去掉
+        if keyword == "gl_ViewportIndex" && trimmed[keyword.len()..].trim_start().starts_with('=') {
+            continue;
+        }
         let storage = match keyword {
             "uniform" => Storage::Uniform,
             "attribute" => Storage::Attribute,
@@ -1190,6 +1195,9 @@ fn render(
     if calls(&body, "kb_smoothstep0") {
         out.push_str(SMOOTHSTEP0_HELPERS);
     }
+    if calls(&body, "kb_shadowCompare") {
+        out.push_str(SHADOW_COMPARE_HELPER);
+    }
     out.push_str(&broadcast_helpers(&body));
     out.push_str(&body);
     out.push('\n');
@@ -1636,7 +1644,14 @@ fn rewrite_texture_calls_with(
                 format!("texture({combined}, {})", arg(1)?)
             }
             "texSample2DLod" => format!("textureLod({combined}, {}, {})", arg(1)?, arg(2)?),
-            "texSample2DCompare" => format!("texture({combined}, vec3({}, {}))", arg(1)?, arg(2)?),
+            // 比较采样（阴影图集，P13d）：边框由 kb_shadowCompare 处理（[`SHADOW_COMPARE_HELPER`]）
+            "texSample2DCompare" => format!(
+                "kb_shadowCompare({}, {}, {}, {})",
+                texture.name,
+                sampler_name(&texture.name),
+                arg(1)?,
+                arg(2)?
+            ),
             // texLoad2D(t, uv, resolution)：按分辨率换算成整数像素坐标取 mip 0
             _ => format!(
                 "texelFetch({combined}, ivec2(({}) * ({})), 0)",
@@ -1749,6 +1764,40 @@ fn number_literal(text: &str) -> Option<(bool, f64)> {
 /// [`rewrite_zero_edge_smoothstep`] 换上的函数：照 fxc 的 `saturate((x - lo) * (1 / -lo))`，分母为 ±0 时不靠无穷大，按符号直接取值
 /// （lo 为 +0：倒数 -inf，x < lo 得 1、否则 0；lo 为 -0：倒数 +inf，x > lo 得 1、否则 0；x == lo 时 0 · inf 是 NaN，saturate 成 0）。
 /// 向量逐分量；重载由 naga 的 HLSL 内置规则选（`naga_stage::INTRINSIC_WRAPPERS`），标量与向量混用时铺满。
+/// 比较采样（P13d，rea-p13-passes 2.9）：WPE 的比较采样器是 `COMPARISON_MIN_MAG_MIP_LINEAR`、三轴 BORDER、边框 0、GREATER。
+/// WebGPU 没有 BORDER：2×2 足迹全在纹理内时用硬件比较采样（同一种硬件过滤）；越出时四个纹素各在中心比较一次（线性过滤在纹素正中心
+/// 只取这一个纹素），越界的换成边框 0 的比较结果（参考值大于 0 才通过），按足迹内的位置手算双线性。naga 的 GLSL 前端不认
+/// `textureGather`，所以不用它。一律 `textureLod(…, 0.0)`：阴影图集只有一级，和隐式 LOD 相同，越界分支里也不涉及导数。
+/// 宿主的采样器是 clamp + 线性 + `greater`。
+///
+/// 坐标是 NaN 时（空的阴影槽：WPE 给没有灯的槽写全 0，`CalculateProjectedCoordsPoint` 的 `xyz /= w` 是 0/0，`p13d-hide` 运行中隐藏一盏）
+/// 硬件比较采样把 NaN 坐标当 0、NaN 参考值比较不通过，结果是有限值，再乘这个槽的颜色 0 没有贡献；手算的双线性权重 `p − floor(p)` 却是
+/// NaN，`mix` 把它带进整个光照和，画面全黑。权重写成 `w >= 0 ? w : 0`（NaN 的比较为假，落到 0），有限坐标的权重本来就在 [0, 1)、不变。
+/// 不用 `isnan` / `x != x`：编译器可能把后者当恒假优化掉。
+const SHADOW_COMPARE_HELPER: &str = "
+float kb_shadowCompare(texture2D t, samplerShadow s, vec2 uv, float z) {
+    vec2 size = vec2(textureSize(sampler2DShadow(t, s), 0));
+    vec2 p = uv * size - 0.5;
+    vec2 f = floor(p);
+    if (f.x >= 0.0 && f.y >= 0.0 && f.x + 1.0 < size.x && f.y + 1.0 < size.y) {
+        return textureLod(sampler2DShadow(t, s), vec3(uv, z), 0.0);
+    }
+    float border = z > 0.0 ? 1.0 : 0.0;
+    bool x0 = f.x >= 0.0 && f.x < size.x;
+    bool x1 = f.x + 1.0 >= 0.0 && f.x + 1.0 < size.x;
+    bool y0 = f.y >= 0.0 && f.y < size.y;
+    bool y1 = f.y + 1.0 >= 0.0 && f.y + 1.0 < size.y;
+    float c00 = (x0 && y0) ? textureLod(sampler2DShadow(t, s), vec3((f + vec2(0.5, 0.5)) / size, z), 0.0) : border;
+    float c10 = (x1 && y0) ? textureLod(sampler2DShadow(t, s), vec3((f + vec2(1.5, 0.5)) / size, z), 0.0) : border;
+    float c01 = (x0 && y1) ? textureLod(sampler2DShadow(t, s), vec3((f + vec2(0.5, 1.5)) / size, z), 0.0) : border;
+    float c11 = (x1 && y1) ? textureLod(sampler2DShadow(t, s), vec3((f + vec2(1.5, 1.5)) / size, z), 0.0) : border;
+    vec2 w = p - f;
+    float wx = w.x >= 0.0 ? w.x : 0.0;
+    float wy = w.y >= 0.0 ? w.y : 0.0;
+    return mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);
+}
+";
+
 const SMOOTHSTEP0_HELPERS: &str = "\
 float kb_smoothstep0(float lo, float x) {
     float t;
@@ -1866,9 +1915,19 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(
             out,
-            "textureLod(sampler2D(g_Texture0, kb_sampler_g_Texture0), uv + texture(sampler2D(g_Texture0, kb_sampler_g_Texture0), uv).xy, 0.0) + texture(sampler2DShadow(g_Texture6, kb_sampler_g_Texture6), vec3(uv, d))"
+            "textureLod(sampler2D(g_Texture0, kb_sampler_g_Texture0), uv + texture(sampler2D(g_Texture0, kb_sampler_g_Texture0), uv).xy, 0.0) + kb_shadowCompare(g_Texture6, kb_sampler_g_Texture6, uv, d)"
         );
         assert!(rewrite_texture_calls("texSample2D(tex, uv)", &textures).is_err());
+    }
+
+    #[test]
+    fn shadow_compare_weights_ignore_nan() {
+        // 空阴影槽的坐标是 NaN（p13d-hide）：双线性权重不能直接用 `p − floor(p)`，否则 NaN 进 mix、整个光照和变 NaN
+        assert!(SHADOW_COMPARE_HELPER.contains("float wx = w.x >= 0.0 ? w.x : 0.0;"));
+        assert!(SHADOW_COMPARE_HELPER.contains("float wy = w.y >= 0.0 ? w.y : 0.0;"));
+        assert!(
+            SHADOW_COMPARE_HELPER.contains("return mix(mix(c00, c10, wx), mix(c01, c11, wx), wy);")
+        );
     }
 
     fn alias_textures() -> [TextureDecl; 2] {

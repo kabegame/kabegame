@@ -92,21 +92,21 @@ export function planBitmapUpload(
   return texture.mips.length;
 }
 
-export function samplerDescriptor(
-  texture: Pick<SceneTexture, "clampUVs" | "noInterpolation">,
-  mipmapped: boolean,
-): GPUSamplerDescriptor {
+/**
+ * 文件纹理（`.tex`，含视频）的采样器，同 WPE `FUN_140099980`（rea-p8-layer 3.2）：寻址看 ClampUVs，NoInterpolation 时点采样，
+ * 否则 8 倍各向异性，不看 mip 级数（单级 mip 的 effect 遮罩、视频同样是各向异性，p12a 报告 B1、p9-REPORT）。WebGPU 的各向异性
+ * 要求三个过滤都是 linear，单级 mip 时 mipmap 过滤不改变取样层级，只是让各向异性能开。
+ */
+export function samplerDescriptor(texture: Pick<SceneTexture, "clampUVs" | "noInterpolation">): GPUSamplerDescriptor {
   const address: GPUAddressMode = texture.clampUVs ? "clamp-to-edge" : "repeat";
   const filter: GPUFilterMode = texture.noInterpolation ? "nearest" : "linear";
-  const mipmapFilter: GPUMipmapFilterMode = texture.noInterpolation || !mipmapped ? "nearest" : "linear";
   return {
     addressModeU: address,
     addressModeV: address,
     magFilter: filter,
     minFilter: filter,
-    mipmapFilter,
-    // 各向异性要求三个过滤都是 linear
-    maxAnisotropy: filter === "linear" && mipmapFilter === "linear" ? 8 : 1,
+    mipmapFilter: filter,
+    maxAnisotropy: texture.noInterpolation ? 1 : 8,
   };
 }
 

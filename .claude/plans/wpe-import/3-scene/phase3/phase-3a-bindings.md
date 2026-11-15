@@ -759,3 +759,25 @@ WPE 九格只和 H1 一致（V1、V6 排除 H2，V2、V4、V5 与 E4 排除三�
 - 脚本属性的空串条件：按「没写条件」推断，取属性原值。
 
 **环境**：没改 WPE 设置；测试窗口 `kb-509904-8` 已关；`p3am-num` 里 WPE 写的 `shaders/blobsSM40` 已用 `cleanup_project` 删掉。
+
+### 修复：脚本看到的属性键序（2026-11-15，Claude）
+
+wpe p11 会话走查 P11c 时发现（用户让它转来）：`p11-media` 的脚本在首次 `applyUserProperties` 里 `JSON.stringify(参数)`，WPE 的键按字母序、`schemecolor` 夹在内置项中间，我们是内置项在前、工程声明的在后。
+
+**WPE 实测**（`p3am-order`，`defs/p3am.py`；日志 `out/wpe-p3amo-log.txt`）：工程按非字典序声明 10 个属性（`zz_last`、`Zb`、`mid`、`a_b`、`aB`、`ab`、`a1`、`_u`、`b`、`wec_hue`），`order` 字段倒着写，脚本打 `Object.keys`：
+- `init` 里的 `engine.userProperties`、首次 `applyUserProperties` 的参数与之后的 `engine.userProperties`、第 1 帧的 `engine.userProperties` 都是 `Zb,_u,a1,aB,a_b,ab,alignment,…,b,mid,rate,schemecolor,wcc_amt,…,wec_sa,zz_last`：按键的字节序（大写 < `_` < 小写），和声明顺序、`order` 字段、是不是内置项都无关。
+- 运行中的增量没测到：`-control applyProperties` 把每个键包成 `{value}`、不带 `type`（I4），脚本收到空对象；改成带 `type` 的对象也一样是空的。增量的键序按「同一张有序表」推断为字节序。
+- 顺带看到：运行中改值后 `engine.userProperties` 只剩工程声明的、这次没带的内置项和 `schemecolor` 都不在了（已知缺陷，不照搬）。
+
+**我们改前**：探针是内置项在前、工程属性按声明顺序；真实宿主收到的工程属性来自 Rust `serde_json`（没开 `preserve_order`，是 BTreeMap、本来有序），但 `withBuiltins` 把内置项放在了前面。
+
+**改动**（只在 `apps/wpe-scene/src/`）：
+- `compile/bindings.ts` 新增 `scriptPropertyEntries`：按键排序（UTF-16 码元，和字节序只在增补平面字符与 U+E000–U+FFFF 之间不同）。
+- 交给脚本的两个出口都经它：`script/runtime.ts` 的 `applyUserProperties`（参数）、`script/api.ts` 的 `engine.userProperties`。宿主的累计全集 `this.properties` 不排，只在出口排，宿主、探针、语料扫描都走这两处。
+- 单测：`script/runtime.test.ts`、`script/api.test.ts` 各一条；`dev/probeScripts.test.ts` 的全集期望改成字节序。
+
+**验证**：
+- 宿主 tsc 0 error，Prettier 通过；相关目录（`script`、`dev`、`host*`、P3a）36 个文件 556 条全过。变异 2 / 2 抓到（分别去掉两处排序，各 2 条失败），按原字节还原。
+- 真机：`buildSceneHost.ts` 重建宿主（`index-LwxbD9_J.js`），导入 `p3am-order`（15072）。改前 `render_scene` 带 `scripts` 是内置项在前；改后探针 4 行与 WPE 逐行相同（`out/ours-p3amo-log-fix.txt`），屏外真宿主（`host_open`）应用日志里的 4 行也相同。测后已 `projects_remove`。
+
+**环境**：没改 WPE 设置；测试窗口 `kb-509904-9` 已关；`shaders/blobsSM40` 已用 `cleanup_project` 删掉。

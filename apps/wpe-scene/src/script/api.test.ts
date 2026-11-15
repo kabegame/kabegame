@@ -1,3 +1,5 @@
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it, vi } from "vitest";
 import { SceneSpectrum } from "../audio/spectrum";
 import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
@@ -64,8 +66,8 @@ class FakeRealm implements ScriptRealm {
       ),
   };
   modules = new Map<string, Record<string, unknown>>();
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
-    return this.modules.get(label) ?? {};
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
+    return fakeModule(this.modules.get(label) ?? {});
   }
   dispose() {}
 }
@@ -334,10 +336,37 @@ describe("SceneScript API（FakeRealm）", () => {
     );
     expect(engine.userProperties).not.toBe(first);
     expect(engine.userProperties).toEqual({ tint: new Vec3(0, 1, 0), speed: 2 });
-    for (const name of ["registerAsset", "openUserShortcut", "requestFeatures"])
+    for (const name of ["registerAsset", "requestFeatures"])
       expect(() => (engine[name] as () => void)()).toThrow(TypeError);
     // `input`（P6c）已装上：成员见下面的「光标交互」一节
     expect(h.realm.global.input).toBeDefined();
+  });
+
+  it("engine.userProperties 的键按字节序（p11 转来；WPE 2.8.42 p3am-order：与全集的插入顺序无关）", () => {
+    const h = setup();
+    const slider = (value: number) => ({ type: "slider", value });
+    h.api.setProperties(
+      new Map<string, { type: string; value: unknown }>([
+        ["rate", slider(100)],
+        ["wec_sa", slider(50)],
+        ["schemecolor", { type: "color", value: "0 0 0" }],
+        ["zz", slider(1)],
+        ["Zb", slider(2)],
+        ["a_b", slider(3)],
+        ["_u", slider(4)],
+        ["aB", slider(5)],
+      ]),
+    );
+    expect(Object.keys(h.api.engine.userProperties as object)).toEqual([
+      "Zb",
+      "_u",
+      "aB",
+      "a_b",
+      "rate",
+      "schemecolor",
+      "wec_sa",
+      "zz",
+    ]);
   });
 
   it("图层查询、对象身份、向量复制、角度和只读 size", () => {
@@ -356,7 +385,9 @@ describe("SceneScript API（FakeRealm）", () => {
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(first)).toBe(true);
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)({})).toBe(false);
     expect(first.name).toBe("First");
-    expect(first.id).toBe(10);
+    // 图层对象没有 `id`（P6d1a：WPE 的 ILayer 不暴露，按 id 找用 getLayerByID）
+    expect(Object.keys(first)).not.toContain("id");
+    expect("id" in first).toBe(false);
     expect(first.origin).toBeInstanceOf(Vec3);
     (first.origin as Vec3).x = 9;
     expect(h.state.layers.get(0)?.origin).toEqual([1, 2, 3]);
@@ -988,8 +1019,8 @@ describe("SceneScript API（FakeRealm）", () => {
     h.bundle.bloom = { hdr: false, passes: {} };
     h.resetState();
     const { thisScene: scene, general } = h.api;
-    // 成员就是 general 的全部字段加四个查询方法：fog*、wind* 这轮不加（zoom 在 P5a 步骤 4 进了 general 字段表）
-    const methods = ["enumerateLayers", "getLayer", "getLayerCount", "getLayerIndex"];
+    // 成员就是 general 的全部字段加五个查询方法：fog*、wind* 这轮不加（zoom 在 P5a 步骤 4 进了 general 字段表）
+    const methods = ["enumerateLayers", "getLayer", "getLayerByID", "getLayerCount", "getLayerIndex"];
     expect(Object.keys(scene).sort()).toEqual([...Object.keys(general), ...methods].sort());
     expect(Object.keys(general)).toEqual(
       expect.arrayContaining(["bloom", "hdr", "clearenabled", "clearcolor", ...Object.keys(BLOOM_FIELDS)]),

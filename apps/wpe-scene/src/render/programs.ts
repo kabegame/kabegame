@@ -236,6 +236,15 @@ export interface GpuProgram {
   alphaToCoverage(): Promise<ShaderEntry>;
 }
 
+/**
+ * 主 pass 一次绘制画几个实例（P13d，rea-p13-shadows R6）：程序的 COMBO `INSTANCECOUNT` 非 0 时 WPE 给程序置标志 0x20、绑材质时把实例数
+ * 设成它（`0x1400d5abc`、`0x140157106`），`fur4` 靠它一次画 N 层毛发壳（实例号做层号）；其余程序 1。阴影 pass 的投射变体不继承它。
+ */
+export function programInstances(result: TranslateResult): number {
+  const count = result.combos?.find((combo) => combo.name === "INSTANCECOUNT")?.value ?? 0;
+  return count > 0 ? count : 1;
+}
+
 /** 一个着色器模块里的一个入口。 */
 export interface ShaderEntry {
   module: GPUShaderModule;
@@ -248,6 +257,12 @@ const PRELUDE_LINES = 1;
 
 /** A2C 入口的名字前缀：翻译器自己的名字以 `kb_` 开头（`kb_FragColor`、`kb_sampler_*`），再加一段避开。 */
 const A2C_PREFIX = "kb_a2c_";
+
+/**
+ * 单采样 A2C 的覆盖阈值（P13d 实测，见 {@link alphaToCoverageEntry}）：alpha ≥ 0.5 + 2⁻¹² = 2049 / 4096 才画，等价于「乘 4096 截断后
+ * 大于 2048」。f32 精确可表示。
+ */
+export const A2C_THRESHOLD = 0.5 + 2 ** -12;
 
 /** 从 `open` 处的开括号（`(` 或 `{`）找到匹配的闭括号。 */
 function matchBracket(source: string, open: number): number {
@@ -299,11 +314,14 @@ function isColorOutput(attributes: Map<string, string>, type: string): boolean {
 
 /**
  * 给翻译出的片元 WGSL 追加 A2C 入口 `kb_a2c_<入口>`（rea-p8-render 第 5 节，p8-REPORT 结论 11）：原入口的逐字副本，每个 `return X;`
- * 换成「X 的位置 0 输出的 alpha 不大于 0.5（含 NaN）就 discard，否则返回 X」。原入口与主体不动。
+ * 换成「X 的位置 0 输出的 alpha 小于 {@link A2C_THRESHOLD}（含 NaN）就 discard，否则返回 X」。原入口与主体不动。
  *
  * - 返回只认两种（翻译器 naga GLSL 前端的输出，`ignore/p8/s5/dump-entry.txt`）：结构（取带 `@location(0)` 的成员，跳过 `@builtin`），
  *   或直接 `-> @location(0) vec4<f32>`；位置 0 的类型要是 vec4<f32>。
- * - 丢弃条件写成 `!(a > 0.5)`：`p8-a2c` 实测 alpha 0.4995 不画、0.5005 画，对象 alpha 0.5（锐化后最大正好 0.5）一列都没画；NaN 也丢。
+ * - 丢弃条件写成 `!(a >= 0.500244140625)`，即 alpha ≥ 0.5 + 2⁻¹² 才画（{@link A2C_THRESHOLD}）。`p8-a2c` 只测到 0.4995 不画、
+ *   0.5005 画；P13d 的 `p13d-a2cth*` 逐段细分：0.5 + 2⁻¹² 画，0.5 + 2⁻¹² − 2⁻²² 与更小的都不画，100×100 的段内整片一致，不按像素抖动
+ *   （本机 NVIDIA、D3D11 单采样）。这个差别在格子边界上才看得出：双线性过滤在 0 / 1 两个纹素正中返回 0.5 ± 2⁻¹⁷（两边同一块硬件，
+ *   `p13d-a2cth` 的 C 条），锐化后约 0.500015，`> 0.5` 会画、WPE 不画（p13d-spec 图集第 127 行，p13-REPORT P13d）。NaN 也丢。
  * - 丢弃在入口里、主体（`main_1()`）之后，导数不受影响；WebGPU 的 alpha-to-coverage 只能用在多重采样目标上，WPE 的 `msaa: none`
  *   单采样下 A2C 实测就是这个硬阈值。
  * - 每处 `return` 换成一个块（`{ let kb_a2c_out = X; if … { discard; } return kb_a2c_out; }`），多个 `return` 互不冲突。
@@ -367,7 +385,7 @@ export function alphaToCoverageEntry(wgsl: string, entryPoint: string): { code: 
     if (!value) throw new Error("片元入口的 return 没有值");
     rewritten +=
       body.slice(at, start) +
-      `{ let ${A2C_PREFIX}out = ${value}; if !(${alpha} > 0.5) { discard; } return ${A2C_PREFIX}out; }`;
+      `{ let ${A2C_PREFIX}out = ${value}; if !(${alpha} >= ${A2C_THRESHOLD}) { discard; } return ${A2C_PREFIX}out; }`;
     at = semicolon + 1;
   }
   if (!at) throw new Error("片元入口里没有 return");
@@ -466,6 +484,48 @@ export const SCENE_DEPTH_FORMAT: GPUTextureFormat = "depth32float";
 /** 深度状态的两位标记（管线键与标签共用）：测 `t` / 不测 `-`，写 `w` / 不写 `-`。 */
 export function depthFlags(depth: { test: boolean; write: boolean }): string {
   return `${depth.test ? "t" : "-"}${depth.write ? "w" : "-"}`;
+}
+
+/**
+ * 阴影 pass 投射者的管线（P13d，rea-p13-passes 2.6）：没有颜色附件，深度 `depth32float`（阴影图集）GREATER、写深度，
+ * `depthBias` 0、`depthBiasSlopeScale` −4、`depthBiasClamp` 0；剔除照 WPE 的光栅序号 4：材质缺省剔除时实际不剔（建状态时 CullMode 停在 NONE），
+ * 帧级剔正面（`alignmentfliph`）时剔正面。没有 A2C 时不挂片元阶段（投射着色器的片元是空的或只输出 alpha）；A2C 时用 `alphaToCoverageEntry`
+ * 的丢弃入口（单采样下 alpha 小于 0.5 + 2⁻¹² 就丢弃，P8、P13d 实测；阴影 pass 没有颜色附件，WPE 的 A2C 照样生效，p13-REPORT D8）。
+ */
+export async function createShadowPipeline(
+  device: GPUDevice,
+  program: GpuProgram,
+  vertexBuffers: GPUVertexBufferLayout[],
+  cull: "none" | "front",
+  alphaToCoverage: boolean,
+  depthFormat: GPUTextureFormat,
+): Promise<GPURenderPipeline> {
+  const fragment = alphaToCoverage ? await program.alphaToCoverage() : null;
+  try {
+    return await device.createRenderPipelineAsync({
+      label: `shadow caster ${program.index}${cull === "front" ? " front" : ""}${alphaToCoverage ? " a2c" : ""}`,
+      layout: program.pipelineLayout,
+      vertex: {
+        module: program.vertex,
+        entryPoint: program.result.vertex?.entryPoint ?? "main",
+        buffers: vertexBuffers,
+      },
+      ...(fragment ? { fragment: { module: fragment.module, entryPoint: fragment.entryPoint, targets: [] } } : {}),
+      primitive: { topology: "triangle-list", cullMode: cull, frontFace: "ccw" },
+      depthStencil: {
+        format: depthFormat,
+        depthCompare: "greater",
+        depthWriteEnabled: true,
+        depthBias: 0,
+        depthBiasSlopeScale: -4,
+        depthBiasClamp: 0,
+      },
+    });
+  } catch (error) {
+    throw new SceneRenderError([
+      `webgpu:pipeline:${program.index}:shadow:${oneLine(error instanceof Error ? error.message : String(error))}`,
+    ]);
+  }
 }
 
 /**

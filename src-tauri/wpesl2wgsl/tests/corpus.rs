@@ -155,6 +155,7 @@ fn run_full(
             .map(|(slot, format)| BoundTexture {
                 slot: *slot,
                 format: Some(*format),
+                ..Default::default()
             })
             .collect(),
         lit_defines: lit
@@ -166,6 +167,24 @@ fn run_full(
     };
     for _ in 0..16 {
         let result = translate(&request);
+        // 注解缺省纹理要格式（P13d，`phase: "texture"`）：照前端读 `materials/<名>.tex` 头里的格式，读不到给 null
+        if result.phase == Some("texture") {
+            for missing in &result.missing_textures {
+                let format = program
+                    .include_roots
+                    .iter()
+                    .filter_map(|root| root.parent())
+                    .map(|assets| {
+                        assets
+                            .join("materials")
+                            .join(format!("{}.tex", missing.name))
+                    })
+                    .find(|path| path.is_file())
+                    .and_then(|path| tex_format(&path));
+                request.default_formats.insert(missing.slot, format);
+            }
+            continue;
+        }
         if result.phase != Some("include") {
             return result;
         }
@@ -180,6 +199,15 @@ fn run_full(
         }
     }
     translate(&request)
+}
+
+/// `.tex` 头里的格式枚举（`TEXV0005\0TEXI0001\0` 之后第一个 u32）。
+fn tex_format(path: &Path) -> Option<u32> {
+    let bytes = fs::read(path).ok()?;
+    let head = bytes.get(18..22)?;
+    bytes
+        .starts_with(b"TEXV")
+        .then(|| u32::from_le_bytes(head.try_into().unwrap()))
 }
 
 /// 目录下（递归）所有带同名 `.frag` 的 `.vert`。

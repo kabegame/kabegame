@@ -89,7 +89,8 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 | --- | --- | --- | --- |
 | 导入、图库预览、应用背景 | 有 | 有 | 有 |
 | 桌面壁纸（窗口模式） | 有 | 有 | 没有窗口模式，设为壁纸直接报错 |
-| 桌面鼠标转发 | 有 | 无 | 无 |
+| 桌面壁纸的鼠标 | 有 | 有（第二版未实测） | 无 |
+| 图库预览的鼠标：光标在画面外、应用外也跟随 | 有 | 有（未实测） | 无：iframe 直接收真实鼠标，只在 iframe 上 |
 | 音频与媒体数据 | 有 | 无 | 无 |
 
 `kabegame_core::wpe`：
@@ -293,7 +294,8 @@ Rust 不解析场景）推导不出来，只有缓存里才有。
 ## 六、壁纸窗口
 
 窗口模式下**每块在线屏一个壁纸窗口**（`wallpaper/manager/window.rs`）：label 取自固定的池 `wallpaper`、`wallpaper-1` …
-`wallpaper-7`，各有各的就绪握手、ping 看门狗与桌面鼠标转发，后端给每个窗口一条布置（显示哪个壁纸目标、出不出声）。
+`wallpaper-7`，各有各的就绪握手与 ping 看门狗（桌面鼠标由各窗口的 iframe 自己登记，见「鼠标」），后端给每个窗口一条布置
+（显示哪个壁纸目标、出不出声）。
 窗口集合如何随显示器模式与热插拔对齐见 [多显示器壁纸](../wallpaper/MULTI_SCREEN.md)「窗口模式：每屏一窗」；没有显示器枚举的
 平台（Windows）仍只有 `wallpaper` 一个窗口、铺主屏。本文其余部分说「壁纸窗口」时，对池里每个窗口都成立。
 
@@ -383,9 +385,8 @@ WPE 让每个网页壁纸跑在自己的浏览器进程里，页面以 `file://`
   `file://`，那时桌面里存下的页面数据不会带过来。
 - **触发点**：图库预览随预览打开 / 切图；桌面随 `WallpaperWindow.vue` 收到的当前壁纸目标（`setting-change` 的
   `wallpaperTargets` 里默认壁纸目标的 `currentImageId` 变了 → `get_current_wallpaper_target`，见
-  [../wallpaper/MULTI_SCREEN.md](../wallpaper/MULTI_SCREEN.md)）。后端 `WindowWallpaperManager::set_wallpaper` 不导航，只按
-  `web_entry(path).is_some()` 开关 Windows 的桌面鼠标转发（`WallpaperWindow::set_mouse_forwarding`，见下）；设壁纸、轮播、
-  启动恢复、切换到窗口模式、重新开启壁纸、改样式都会走到它。
+  [../wallpaper/MULTI_SCREEN.md](../wallpaper/MULTI_SCREEN.md)）。后端 `WindowWallpaperManager::set_wallpaper` 不导航，也没有
+  别的要做：桌面鼠标由 iframe 自己登记（见下「鼠标」）。
 - **过渡**：桌面与预览一样，图片 / 视频与网页壁纸之间走 web 层的淡入淡出；壁纸样式、倍速对页面不生效。
 - **音量**：桌面与预览按设置里的壁纸音量出声，应用背景静音；由垫片接管页面的出声路径，见下「运行时垫片与宿主协议」的「音量」。
 
@@ -578,8 +579,10 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 
 #### 右键
 
-iframe 里的右键到不了父页面（DOM 事件不跨 frame），预览的上下文菜单靠垫片转发。工具条是父页面里一条常驻热区唤出的，右键菜单
-不能照做：热区要盖住整块页面，页面就收不到指针了。场景宿主也加载这份垫片，网页与场景同一条路。
+iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片把它转给父页面。场景宿主也加载这份垫片，网页与场景同一条路。
+
+2026-11-15 起 Windows / macOS 上 iframe 不收真实鼠标（见下「鼠标」），预览里的右键落在画布的覆盖层上、冒泡到预览容器的
+`@contextmenu` 弹菜单，这条路不再触发。Linux 退回 iframe 直接收真实鼠标，仍走这条路。
 
 - **消息**：`{ type: "kabegame:wpe-contextmenu", x, y }`，垫片 → 父页面，`x` / `y` 是 iframe 视口里的 CSS 像素。字面量集中在
   `components/wallpaper/wpeContextMenu.ts`，`wpeWebVolume.test.ts` 读垫片原文核对。
@@ -588,26 +591,65 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），预览的上
 - **父页面**：网页层由 `WallpaperStage`、场景层由 `WpeSceneView` 收，只认 `isTrusted` 且 `source` 是自己当前 iframe 的消息，
   按 iframe 的显示矩形换算到本页面视口（预览画布带 CSS `scale`：坐标 × 显示矩形 ÷ 布局尺寸 + 左上角），经
   `WpeWallpaperContent` → `ImageContent` 的 `wallpaperContextmenu` 交给预览弹窗，在那个位置弹出与右键容器同一份菜单。应用背景
-  不接收指针、桌面窗口不转发右键，都不会触发。
+  不接收指针、桌面不注入右键，都不会触发。
 - **覆盖不到**：页面里再嵌的 iframe 没有垫片；页面脚本自己也能发这条消息，最多就是弹出菜单，不能代用户点菜单项。
 
-### 桌面鼠标转发（Windows）
+### 鼠标（原生注入 iframe）
 
-`wallpaper/input_forward.rs`：照 WPE 的做法不装鼠标钩子，由后台线程每 16ms 轮询 `GetCursorPos` 与
-`GetAsyncKeyState(VK_LBUTTON)`，只在「窗口模式 + 当前是网页壁纸」运行：窗口后端的 `set_wallpaper` 按 `web_entry` 调
-`WallpaperWindow::set_mouse_forwarding(true / false)` 启停（幂等），窗口对象丢弃时由 `InputForwarder` 的 `Drop` 停止。注入落到
-窗口里的 web 层 iframe，所以壁纸窗口给 `WallpaperStage` 传 `interactive`，iframe 接收指针事件。
+2026-11-15 第二版起，网页壁纸与场景宿主的 iframe 收到的鼠标是 Rust 直接注入进这个 frame 的原生事件，页面里没有任何合成。图库预览
+（主窗口）与桌面壁纸窗口走同一条路。计划见 `.claude/plans/wpe-import/phase-preview-pointer.md`。
 
-- 光标在壁纸窗口客户区内：`ScreenToClient` 得物理坐标，除以 `GetDpiForWindow / 96` 得视图坐标，坐标变化就经
-  `tauri_runtime_kbcef::inject_mouse` 注入 `Move`（不带按键标志，与 WE 一致：带左键会让页面图片拖动启动 OLE 拖放并挂住 UI 线程）；离开客户区时注入一次 `Leave`。
-- 左键按下沿：光标在客户区内，且 `WindowFromPoint` 命中窗口的根窗口（`GetAncestor(GA_ROOT)`）类名是 `Progman` /
-  `WorkerW`（桌面图标层或壁纸层本身，即点在桌面空白处或图标上）才注入 `LeftDown`；抬起沿只要按下被转发过就注入
-  `LeftUp`，停止转发时也会补发，保证成对。点在别的应用窗口上不转发。
-- 设置「暂停壁纸」（`wallpaperPaused`）打开时不转发：线程照跑，每轮读设置，暂停期间什么都不注入；进入暂停时补一次
-  `Leave` 与未配对的 `LeftUp`，页面不会停在悬停 / 按住状态。按键状态照常跟踪，恢复时左键还按着不会被当成新的按下。
-- 不拦截、不吞掉任何输入：Explorer 照常收到点击（桌面图标选中状态会变，与 WPE 一致）。
-- 注入走 `CefBrowserHost::SendMouse*Event`，直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序；只投递不等回执。
-- 不做：键盘、滚轮、右键、设置开关；macOS / Linux 不转发。
+- **登记**：iframe 里的垫片看父页面的音量消息（`kabegame:wpe-volume`，`WallpaperStage` / `WpeSceneView` 发）：
+  - `interactive && !paused` 时调 `plugin:cursor|attach_frame`，否则调 `detach_frame`。调用排队，不会乱序落地。
+  - 预览与桌面传 `interactive`；应用背景不传，所以不登记。
+  - 两个命令只给子 frame（`tauri::ipc::CallerFrame::Sub`），权限在 `wpe-web-capability`（场景宿主也匹配）。
+- **轮询**：`tauri-plugin-cursor` 给每个登记的 frame 挂一个订阅，按它所在窗口每 16 ms 读一次全局光标与左键（窗口客户区的 CSS
+  像素，光标在窗口外也照给）。
+  - 移动：位置变了就发。
+  - 按下：左键按下沿按窗口的点击规则发。登记时左键已按着不算。
+  - 抬起：只在按下发过时发。
+- **点击规则**：
+
+  | 窗口 | 规则 | 判定 |
+  |---|---|---|
+  | 壁纸窗口池（`WALLPAPER_LABELS`） | `OverDesktop` | 光标在窗口内，且光标下是桌面。Windows：`WindowFromPoint` 的根窗口是 `Progman` / `WorkerW`；macOS：`windowNumberAtPoint` 命中窗口层级不高于桌面图标层 |
+  | 其它窗口（主窗口的预览） | `OverWindow` | 光标下的顶层窗口就是本窗口，应用外的点击不算 |
+
+  预览里浮在壁纸上的应用界面（工具条、箭头）不挡注入：点在上面时也会同时传进页面，这是有意允许的重叠。
+- **注入**：应用在 setup 时给插件设注入器（`lib.rs`），转给 `tauri_runtime_kbcef::frame_mouse`。运行时在 CEF UI 线程上：
+  1. 按 label 找 browser、按标识找 frame。
+  2. 比 `_cef_frame_t` 的 `base.size`。旧 libcef 没有补丁 11，结构体短，读新字段会越界，所以只记一次 warn、不注入。
+  3. 用 CEF 补丁 11 的 `ConvertPointFromView` 换到 frame 坐标。换算用合成器命中测试的变换，已含父页面的 CSS 变换、缩放与滚动，
+     以后的放大平移也照算。
+  4. 钳进 frame，经 `SendMouseMoveEventToFrame` / `SendMouseClickEventToFrame` 交给 frame 自己 widget 的 `ForwardMouseEvent`。
+
+  这条路绕过根视图的命中测试、原生捕获、焦点窗口与光标管理：父页面盖在 iframe 上的覆盖层挡不住，不抢真实鼠标的捕获，页面收到
+  `isTrusted` 的事件，`:hover` 与原生控件照常。
+- **钳制**（`frame_mouse.rs` 的 `clamp_to_frame`）：点在 frame 外时取「frame 中心到该点的连线」与边界的交点，右、下边界向内收
+  半个像素。视差与跟随鼠标的粒子因此停在边缘，不再外推。按下点（钳制前）不在 frame 里时这次按下作废，抬起也不发。
+- **收尾**：解除登记、frame 销毁（`SubframeDestroyed`）、主文档开始加载新文档、窗口销毁时，插件发 `Release`；运行时补未配对的
+  抬起与一次离开，再清掉这个 frame 的状态。
+- **移动不带按键标志**（同 WPE 的 `modifiers=0`）：Blink 只对带左键的移动做拖动处理，带上会让拖动页面图片启动原生拖放。Windows 上
+  那是阻塞 UI 线程的模态循环，而真实的抬起本线程收不到，拖放就挂住。所以按住拖动时，页面收到的 `mousemove` 的 `buttons` 为 0。
+- **预览**：
+  - iframe 一律 `pointer-events: none`，真实鼠标进不了 frame。
+  - `WallpaperPreviewCanvas` 在画布上盖一层只拦截、不转发的透明覆盖层。鼠标在壁纸上移动时预览容器照常收到 `mousemove`（翻页
+    箭头），右键冒泡到预览容器弹菜单，滚轮与拖动留给以后的放大。只为「iframe 吞掉 mousemove」设的翻页热区已删。
+- **焦点**：注入的按下会把键盘焦点切进 iframe；键盘还不支持，焦点留在里面时预览的 Esc、方向键失灵。但不能一按下就还：iframe
+  失焦时页面会当成松开（场景宿主把 `blur` 当左键抬起），拖动就断了。预览画布用 `framePointer.ts` 的 `keepFocusOutOfFrames`：父页面的
+  真实左键按着时不动，松开后等 100 ms（注入的抬起先到），`document.activeElement` 是画布里的 iframe 就 `blur()` 它。桌面壁纸窗口
+  不在前台，不管焦点；Linux 退回时也不管。
+- **暂停**：「暂停壁纸」经音量消息的 `paused` 到垫片，垫片解除登记（补抬起与离开），恢复时再登记。
+- **多屏**：每个壁纸窗口里的 frame 各自登记、各有订阅，全部共用插件的一条轮询线程。光标在另一块屏时，各窗口的 frame 都钳在自己
+  靠近光标的那条边上。
+- **局限**：
+  - 页面里的光标形状与 tooltip 显示不出来（注入不经光标管理）。
+  - 网页壁纸里再嵌的跨源 iframe 收不到事件（只注入登记的 frame）。
+  - 同进程的子 frame 不支持（换算失败）。我们的 `file:` iframe 与应用页跨站，都是独立进程。frame 刚登记、还没合成时第一次
+    采样也会换算失败，之后就好，所以连续失败 30 次（`MAPPING_WARN_AFTER`）才记一次 warn。
+  - 不做键盘、滚轮、右键。
+- **Linux**：拿不到全局光标，`attach_frame` 返回 `false`。前端（`framePointer.ts` 的 `NATIVE_FRAME_POINTER`）退回原来的做法：
+  可交互的 iframe 直接收真实鼠标，预览不盖覆盖层，光标在 iframe 外不跟随。Linux 也没有窗口壁纸模式。
 
 ### web 层（`WallpaperStage`）
 
@@ -620,8 +662,8 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），预览的上
   仍停在初始 `about:blank` 时记 `wpe web entry not navigated (CEF patch 05/07 missing?)`，都不销毁）后整层淡入（none 直接显示；fade / slide / zoom 用与媒体层相同的曲线）盖住媒体层，淡入完成再清空媒体层；
   切走时新媒体先按「首帧直设」放到 base，web 层淡出后 **销毁** iframe（先 `about:blank` 再移除），让渲染进程回收；
   web → web 先淡出销毁旧页面再加载新页面。target 置 null、组件卸载时立即销毁；frame 销毁后它的监听随 `SubframeDestroyed` 清掉。
-- `paused` 对 web 层只做 `visibility: hidden`（省合成，不冻结脚本；冻结留给后续垫片），页面音量随之按 0；`interactive` 决定 iframe 的
-  `pointer-events`（预览与桌面壁纸窗口都传，桌面靠它接收注入的鼠标；应用背景不传）；`volume` 经 `postMessage` 交给垫片（见上
+- `paused` 对 web 层只做 `visibility: hidden`（省合成，不冻结脚本；冻结留给后续垫片），页面音量随之按 0；`interactive` 经音量消息交给垫片，决定登不登记鼠标注入
+  （预览与桌面壁纸窗口都传；应用背景不传），iframe 的 `pointer-events` 一律 `none`（Linux 退回时可交互才收，见「鼠标」）；`volume` 经 `postMessage` 交给垫片（见上
   「音量」）；`styleMode` / `playbackRate` 对页面无意义，WPE 视频的 stage 样式也不作用于它。
 - `ready` 在 iframe `load` 时发；调试快照 `media` 为 `"web"`；对外暴露 `isShowingWeb()`（壁纸窗口据此把 ping 交给垫片）。
 
@@ -675,7 +717,18 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 `file` 与 `directory` 仅使用用户所选路径；无作者默认值时清空路径会删除该用户键，垫片向页面补发空路径以撤销旧值。core 生成文件 / 目录放行项（`user_file_grants`），网页壁纸目录索引按这张壁纸当前的 metadata **覆盖**它的放行（`metadataId` 补丁到达时、`wpe_web_pull_state` 返回前各写一次，见上「网页壁纸目录索引」）：改了目录属性，旧目录立即不可读；另一张网页壁纸读不到这张的用户选择。预览与桌面共用这套闸门。目录属性递归列举浏览器安全的媒体文件，最多 10000 个；垫片对 `fetchall` 发送文件增删回调，对 `ondemand` 随机返回一个文件。
 
-场景的 `scenetexture`（用户纹理，P11b；渲染一侧见 [WPE_SCENE.md](WPE_SCENE.md)「用户纹理（P11b）」）：`WpePropKind::SceneTexture`，面板用和 `file` 相同的文件选择与清空按钮。`project.json` 里没有 `filter`，过滤固定为 WPE 那一条（`jpg jpeg jfif png gif mp4`，`SCENE_TEXTURE_EXTENSIONS`），所以没有「WPE 收、浏览器解不了」的格式。校验同 `file`（绝对路径、是文件、不是符号链接，空串表示清空）；存之前照 WPE 整理路径（`wpe_slash_path`：`\` 换成 `/`、非开头的连续 `/` 合并，UNC 的开头 `//` 保留，不拷贝、不改大小写）。`user_file_grants` 同样收它：网页壁纸目录索引的场景条目除目录外再存这些文件，`scene_grants` 一起返回给场景宿主的访问范围，覆盖时机同上两处（`wpe_web_pull_state` 的场景分支返回前也写）。宿主是一份文档，放行对全部场景宿主实例生效；文件都是用户自己选的。`usershortcut` 仍跳过（P11d）。
+场景的 `scenetexture`（用户纹理，P11b；渲染一侧见 [WPE_SCENE.md](WPE_SCENE.md)「用户纹理（P11b）」）：`WpePropKind::SceneTexture`，面板用和 `file` 相同的文件选择与清空按钮。`project.json` 里没有 `filter`，过滤固定为 WPE 那一条（`jpg jpeg jfif png gif mp4`，`SCENE_TEXTURE_EXTENSIONS`），所以没有「WPE 收、浏览器解不了」的格式。校验同 `file`（绝对路径、是文件、不是符号链接，空串表示清空）；存之前照 WPE 整理路径（`wpe_slash_path`：`\` 换成 `/`、非开头的连续 `/` 合并，UNC 的开头 `//` 保留，不拷贝、不改大小写）。`user_file_grants` 同样收它：网页壁纸目录索引的场景条目除目录外再存这些文件，`scene_grants` 一起返回给场景宿主的访问范围，覆盖时机同上两处（`wpe_web_pull_state` 的场景分支返回前也写）。宿主是一份文档，放行对全部场景宿主实例生效；文件都是用户自己选的。`usershortcut` 不进放行：它不读文件，图标与启动都在后端。
+
+场景的 `usershortcut`（快捷方式，P11d；图标、门禁与启动见 [WPE_SCENE.md](WPE_SCENE.md)「快捷方式（P11d）」）：
+- **面板**：`WpePropKind::UserShortcut`，只在场景、只在 Windows 上显示（`WpeShortcutField.vue`）。
+  - 先选类型：文件、文件夹、网址、命令；再填路径，文件与文件夹可以浏览选取；文件类型另有参数输入框。
+  - 「测试」按钮先 `saveNow()` 存下，再调启动命令 `wpe_open_user_shortcut`。主窗口里的点击本身就是用户激活。
+- **值**：格式是 `<类型>:<路径>`，类型 `file` / `directory` / `web` / `cmd`，空串表示清空。
+  - 拆参数照 WPE（`parse_user_shortcut`）：`file` 在第一个 `|` 处拆成「路径 | 参数」，`cmd` 在第一个空格处拆成「程序 参数」；拆完路径为空不收。
+  - `web` 不以 `http://`、`https://`、`www.`、`steam://` 开头时，存之前补 `https://`（区分大小写，照 WPE 面板的 JS）。
+  - WPE 的值中间还有一段 6 位本机哈希，用来拒绝别的机器上配的值。我们的值只来自本机面板，不复刻这一段。
+- **交给场景宿主的**：`wpe_web_pull_state` 的场景分支不给原值，给 `{ value: 原值 SHA-256 的前 16 位十六进制, isbound, commandtype?, file? }`（`scene_user_from_view`）。完整路径不离开后端；非 Windows 时 `isbound` 一律为假。
+- **网页壁纸**不读这类属性，面板也不显示。
 
 ### 封面
 
@@ -723,13 +776,25 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
   归入 64 段取最大，得到线性原值；静音标志的包、读取失败立即清零，缺包 1 s 后清零），随同一条消息的 `raw` 字段推出，只给场景宿主用
   （它再照 WPE 做每帧的自适应归一化，见 [WPE_SCENE.md](WPE_SCENE.md)）。网页壁纸仍用上面的自定频谱：WPE 给网页壁纸的其实是这份原值
   （rea 3.4），2026-11-13 用户比较两者后选择保留自定算法的观感。
-- **媒体**（`wpe_media/media.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话，WinRT 事件只发信号，读取与比较在
-  线程里做，变化才推：`Properties`（标题、艺人、副标题、专辑、专辑艺人、逗号拼接的流派、`music` / `video` / `image`）、
-  `Thumbnail`（封面字节哈希变了才解码，长边缩到 512 的 PNG data URL；五个颜色由 64×64 缩图的量化直方图取三个主色，文字色取
-  对比度 ≥ 4.5 的次色 / 第三色否则黑白，高对比色取黑白里对比更高的，格式 `rgb(r, g, b)`）、`Playback`（Playing 1、Paused 2、
-  其余 0）、`Timeline`（秒；播放中每秒按 `LastUpdatedTime` 外推；播放状态切换时不重读时间轴，按旧状态外推的位置作新基准，
-  因为很多播放器的读数停在上次跳转；播放器不给时间轴就不推）。没有会话时推 `Playback 0` 与空属性、
-  空封面。新订阅先收 `Status { enabled }`，监视在运行时再补发快照；关「媒体集成」推 `{ enabled: false }` 并停监视、清快照。
+- **媒体**（`wpe_media/media.rs` + `projection.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话
+  （`CurrentSessionChanged`、`SessionsChanged` 都只是重取当前会话），WinRT 事件只发信号，读取与比较在线程里做。
+  信号照 WPE `winrtutil64.exe` 的主循环处理：收到第一个后把 100 ms 内到的攒成一批，会话上的事件带挂接代数、旧会话的丢掉，
+  批里有会话切换就只重新挂接（P11c，会话退出时那条瞬时的播放状态不再发出）。每次读到的数据交给两个投影（P11c），
+  订阅按调用方文档归属其一：
+  - **网页投影**（网页壁纸目录里的文档）：变化才推。
+    - `Properties`：标题、艺人、副标题、专辑、专辑艺人、逗号拼接的流派、`music` / `video` / `image`，缺省 `music`。
+    - `Thumbnail`：封面字节变了才解码，长边缩到 512 的 PNG data URL，格式 `rgb(r, g, b)` 的五个颜色。
+    - `Playback`：Playing 1、Paused 2、其余 0。
+    - `Timeline`：秒；播放中每秒按 `LastUpdatedTime` 外推；播放状态切换时不重读时间轴，按旧状态外推的位置作新基准，
+      因为很多播放器的读数停在上次跳转；播放器不给时间轴就不推。
+    - 没有会话时推 `Playback 0` 与空属性、空封面。
+  - **场景投影**（场景宿主的入口文档）：照 `winrtutil` 取值，整秒时间轴、不外推，原尺寸封面（`sceneThumbnail`），超长字段清空，
+    每类和上次发出的值比，见 [WPE_SCENE.md](WPE_SCENE.md)「媒体（P11c）」。
+  - **五个颜色**两个投影共用（P11c 起照 WPE，`colors.rs`）：在原尺寸、Spotify 预处理之后的像素上算 360 格色相直方图的三色。
+    `textColor` 取对比度 ≥ 2.5 的次色 / 第三色、否则同 `highContrastColor`；`highContrastColor` 按主色对黑的对比度取黑或白。
+    **没有封面时五色全黑**：Phase 8 原来是深灰底白字，P11c 照 WPE 改了。
+  - 新订阅先收 `Status { enabled }`，监视在运行时再补发快照：网页投影补全部；场景投影照 WPE 只补非空的几类。
+  - 关「媒体集成」：推 `{ enabled: false }`（场景订阅另收复位）并停监视、清快照。
 
 Kabegame 自己的会话不过滤。主窗口预览期间，`usePreviewMediaSession` 在应用页主 frame 把 `navigator.mediaSession` 设成
 当前预览项（标题为图片 `displayName`，封面为左上角应用图标）；预览网页壁纸时声音来自 iframe，但垫片不访问 mediaSession，
@@ -742,7 +807,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 - **Android / Web 没有 WPE**（`wpe` feature 不开）：不发现、不导入、不渲染，`x-wpe/*` 行只显示作者预览图。
 - **macOS / Linux 的限制**：Steam 上装不了 WPE，`libraryfolders.vdf` 通常不含 431960，自动发现大概率为空，主要靠手选文件夹，或用「从 Steam 拉取」把 WPE 下载到 `plugins-data/wpe-import/`（`discover_roots` 把它当作一个 Steam 库，见 [WPE_STEAM.md](WPE_STEAM.md)）。
   场景壁纸依赖 WPE 安装目录的 `assets`，找不到时退回预览图（`assets:missing`）。Linux 的 CEF 未启用 WebGPU 时同样退回（`webgpu:unavailable`）。
-  macOS 窗口壁纸没有鼠标转发，网页壁纸在桌面上不可交互。Linux 没有窗口壁纸模式，设为壁纸直接报错。
+  Linux 没有窗口壁纸模式，设为壁纸直接报错；图库预览里壁纸只在 iframe 上收鼠标（拿不到全局光标）。
 - **WPE 安装目录**：只有一个，存在设置 `wpeEngineDir`（`wpe::discover::engine_dir`），三个桌面平台通用，场景的 `assets`、`config.json` 与 `ui_` 词条都读它。
   设置为空时先看 Steam 库，再把库里的场景 / 网页壁纸逐张从上一级往上找，判据是 `assets/shaders/common.h`（壁纸自身不算，作者的项目可以自带 `assets`；不能只看 `assets` 目录名，这个目录会放行给场景宿主），找到就写入设置。
   设置里的目录失效时不另找，清空才重新查找；找不到时 `scene_assets_of` 打 warn，场景退回预览图。用户在壁纸设置里覆盖（`set_wpe_engine_dir` 校验同一判据、刷新宿主范围，传空时立即重新查找）。
@@ -750,11 +815,11 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 - 导入 `video`、`web` 与 `scene`；`application` 只占位并计入跳过。场景壁纸目前只有少数能实时渲染（P1：eagleflag、deep_space、beach），其余在预览、应用背景与桌面显示作者预览图。
 - 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言（`applyGeneralProperties({ language })`）；
   `fps`、`setPaused` 尚未实现。目录内容不监视，下次状态拉取时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
-  WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`；回环会采到 Kabegame 自己的声音（与 WPE 一致）。
+  WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`（取值算法 P11c 起同 WPE）；回环会采到 Kabegame 自己的声音（与 WPE 一致）。
 - 网页壁纸只能监听四个事件（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开 `wpe_web_pull_state`、
   `wallpaper_pong` 与 `wpe_web_media_subscribe`。
 - 网页壁纸页面里跨源 `http(s)` 请求仍受 CORS 约束（WPE 是全局 `--disable-web-security`，Kabegame 不放开）；
-  壁纸样式 / 倍速对网页壁纸不生效；桌面只转发鼠标移动与左键（Windows），无键盘 / 滚轮 / 右键。
+  壁纸样式 / 倍速对网页壁纸不生效；桌面与预览都只注入鼠标移动与左键，无键盘 / 滚轮 / 右键（预览里右键弹应用的菜单），见「鼠标」。
 - 图库预览与桌面的网页壁纸 iframe 顶层都是应用页，Chromium 按顶层站点分区存储，两处 `localStorage` / `indexedDB` 是**同一分区、
   互通**，跨重启稳定。iframe 统一之前桌面顶层是 `file://`，那时桌面里存下的页面数据不会带过来。
 - 网页壁纸的音量（桌面与预览跟随壁纸音量、应用背景静音）靠垫片接管 `HTMLMediaElement` 与 Web Audio，尽力而为：壁纸里再嵌套的
@@ -809,8 +874,15 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
   音量：`wpe_shim.js` 的 `installVolume`、`apps/kabegame/src/components/wallpaper/wpeWebVolume.ts`（消息协议）与
   `WallpaperStage.vue` 的 `onWindowMessage` / `postWebVolume`，单测 `wpeWebVolume.test.ts`（node:vm 里跑垫片原文）与
   `WallpaperStage.webVolume.test.ts`
-- 桌面网页壁纸：`src-tauri/kabegame/src/wallpaper/manager/window.rs`（`set_wallpaper` 开关鼠标转发、`WALLPAPER_LABEL`）、
-  `wallpaper/window.rs`（`WallpaperWindow`：`set_mouse_forwarding`、看门狗）、`wallpaper/input_forward.rs`
+- 桌面网页壁纸：`src-tauri/kabegame/src/wallpaper/manager/window.rs`（`WALLPAPER_LABELS`）、`wallpaper/window.rs`
+  （`WallpaperWindow`：挂载、看门狗）
+- 鼠标：
+  - 插件 `src-tauri/tauri-plugin-cursor/`（轮询中心、平台探针、`frames.rs` 的登记与点击规则）；
+  - `src-tauri/kabegame/src/lib.rs`（注入器与壁纸窗口的点击规则）；
+  - `src-tauri/tauri-runtime-kbcef/src/frame_mouse.rs`（钳制与配对）与 `webview.rs` 的 `frame_mouse`；
+  - `third-patches/cef/11-frame-mouse-injection.patch`、`third-patches/cef-rs/09-frame-mouse-injection-bindings.patch`；
+  - `wpe_shim.js` 的 `setPointerAttached`；
+  - `apps/kabegame/src/components/wallpaper/framePointer.ts`、`WallpaperPreviewCanvas.vue`（覆盖层）。
 - `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
   `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`App.vue`（背景层）、`utils/mediaMime.ts`
 - 壁纸窗口 ping 看门狗：`src-tauri/kabegame/src/wallpaper/ping.rs`、`wallpaper/window.rs`（生命周期与重载清理）、

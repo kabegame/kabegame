@@ -381,6 +381,14 @@
 
                 <SettingRow
                   v-if="!IS_ANDROID && !IS_WEB"
+                  :label="$t('settings.wpeSceneShadows')"
+                  :description="$t('settings.wpeSceneShadowsDesc')"
+                >
+                  <WpeSceneShadowsSetting />
+                </SettingRow>
+
+                <SettingRow
+                  v-if="!IS_ANDROID && !IS_WEB"
                   :label="$t('settings.wpeEngineDir')"
                   :description="$t('settings.wpeEngineDirDesc')"
                 >
@@ -511,6 +519,7 @@ import SettingSliderControl from "@/components/settings/controls/SettingSliderCo
 import SettingRadioControl from "@/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@/components/settings/items/DefaultDownloadDirSetting.vue";
 import WpeEngineDirSetting from "@/components/settings/items/WpeEngineDirSetting.vue";
+import WpeSceneShadowsSetting from "@/components/settings/items/WpeSceneShadowsSetting.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";

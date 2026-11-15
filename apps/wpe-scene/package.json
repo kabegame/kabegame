@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
+    "acorn": "8.18.0",
     "es-module-lexer": "1.7.0"
   },
   "devDependencies": {

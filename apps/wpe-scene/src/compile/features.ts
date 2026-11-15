@@ -31,6 +31,7 @@ import {
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
 import { hasNonNumericDependency } from "./dependencies";
+import { normalizeJsonPassState, PASS_STATE_TABLES, type PassStateField } from "./passState";
 import { resolveParents } from "./hierarchy";
 import { LEGACY_LIGHT_UNIFORMS } from "./lights";
 import {
@@ -67,9 +68,9 @@ export const SUPPORTED = {
   objects: ["image"],
   /**
    * `alphatocoverage`（P8 步骤 5，rea-p8-render 第 5 节）：混合关、写掩码与深度同 normal，着色器加 `ALPHATOCOVERAGE = 1`
-   * （`writeState.ts` 的 `materialCombos`），渲染器在 A2C 管线的片元入口里丢弃锐化后 alpha 不大于 0.5 的片元（`render/programs.ts`）。
+   * （`writeState.ts` 的 `materialCombos`），渲染器在 A2C 管线的片元入口里丢弃锐化后 alpha 小于 0.5 + 2⁻¹² 的片元（`render/programs.ts`）。
    */
-  blending: ["normal", "translucent", "additive", "alphatocoverage"],
+  blending: PASS_STATE_TABLES.blending,
   /** 按原格式上传的 `.tex` 格式（0、4、6–9），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
   textureFormats: Object.keys(TEXTURE_FORMATS).map(Number),
   /** FreeImage 形态 `.tex`（mip 是整份图片文件）：2 JPEG、13 PNG，主线程 `createImageBitmap` 解码。 */
@@ -138,14 +139,21 @@ export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
 ]);
 /** 光照路径声明了、只有 PRELIGHTING 才读的 uniform（`genericimage4.vert`）：渲染器不写，PRELIGHTING 另报。 */
 const UNREAD_UNIFORMS = new Set(["g_AltModelMatrix", "g_AltNormalModelMatrix", "g_AltViewProjectionMatrix"]);
+/**
+ * 阴影 pass 投射者的视图投影数组（P13d，`shadowcaster*.vert` 按实例号取）：只有投射者的绘制写，`GpuScene.shadowCasterOf` 每个图集条目
+ * 写一份（这一条的全部视图），所以不在 `ENGINE_UNIFORMS` 里（那张表与 `staticBuiltins` / `frameBuiltins` 一一对应）。
+ */
+export const SHADOW_CASTER_UNIFORM = "g_ViewportViewProjectionMatrices";
+
 export function isEngineUniform(name: string): boolean {
-  // 灯光数组由 `lights.ts` 随材质常量写入：V1 四种灯，与遗留灯的三个数组（P13a）
+  // 灯光数组（V1 四种灯与阴影的 `g_LFeature_*`）由渲染器每帧按 `bundle.lights` 写（P13d），遗留灯的三个数组（P13a）随材质常量写入
   return (
     ENGINE_UNIFORMS.has(name) ||
+    name === SHADOW_CASTER_UNIFORM ||
     UNREAD_UNIFORMS.has(name) ||
     LEGACY_LIGHT_UNIFORMS.has(name) ||
     /^g_Texture\d+(?:Resolution|Texel)$/.test(name) ||
-    /^g_L(?:Point|Spot|Tube|Directional)_/.test(name)
+    /^g_L(?:Point|Spot|Tube|Directional|Feature)_/.test(name)
   );
 }
 
@@ -813,7 +821,7 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
  * 模型对象（P5c 步骤 1）不再整个报 `object:model`：mdl 与网格的用法由 `bundle.ts` 读到文件后按 `checkMdlFeatures`、
  * `checkMeshAttributes` 与模型 pass 的 `checkPassFeatures` 报（P5c 步骤 2 接上绘制后去掉了过渡键 `model:pending`）。对象上：
  * - `MODEL_NEUTRAL_FLAGS` 中性，`perspective: true` 中性（和 P5b 的透视图层同一套，`p5c-matrix` 实测）；
- * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers`（W6）等照未知键报；
+ * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers` 与 `rootmotion`（P12b2-1）由 `buildModelSkeleton` 报，别的照未知键报；
  * - `dependencies` 中性（P8 步骤 4）：同别的对象只进并集，模型列的图像层照样被依赖、画进 RT（`3509243656` 的两个，模型材质没读这个名字）。
  *
  * 相机对象（P5d 步骤 3，`isCameraObject`）：`CAMERA_KEYS` 不报；同时带别的内容报 `object:camera:mixed`（`isMixedCameraObject`）。
@@ -858,8 +866,9 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   if (isMixedCameraObject(object)) unsupported.add("object:camera:mixed");
   const cameraKey = (key: string) => camera && CAMERA_KEYS.has(key);
   // `reflected`（P13b2）：任何可画对象上都由反射名单读（`compile/reflection.ts`，p13-REPORT C1），反射关时不影响画面，中性
+  // `castshadow`（P13d）：只有不透明的模型投射（`obj+0x120` 的 0xc00，rea-p13-passes 2.7），图像层、粒子等写了也不进阴影 pass（D4 实测），中性
   for (const key of OBJECT_FLAGS)
-    if (active(object[key]) && !lightKey(key) && !modelKey(key) && key !== "reflected")
+    if (active(object[key]) && !lightKey(key) && !modelKey(key) && key !== "reflected" && key !== "castshadow")
       unsupported.add(`object:${key}`);
   // 光标命中（P6c）：`disablepropagation` 只认 JSON 布尔（任何对象类型都读它，只有图像层与文本层参与命中，别的类型上中性）；绑属性、挂脚本
   // 的取值运行中会变，没有就地路径，照报。模型对象（类型 5）P6c 不做命中：可见（JSON 不是 false）且为真时它会挡住下面的对象，照报 `cursor:model`
@@ -909,8 +918,10 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !(kind === "particle" && key === "instanceoverride") &&
       !(shape && key === "shape") &&
       // 动画层（P12a）：图像层上 WPE 在加载模型 JSON 的 puppet 时读它（`FUN_1401fcc20`，rea-p12-runtime 1.4）；用法由 `buildPuppet` 报
-      // `puppet:*`。模型对象上 WPE 的读法没查（`3706286085`，P13），照报
-      !(kind === "image" && key === "animationlayers") &&
+      // `puppet:*`。模型对象（P12b2-1，`FUN_1402230c0`，rea-texchan-model 4）同样读，用法由 `buildModelSkeleton` 报；`rootmotion` 也是模型的
+      // 键（`FUN_140227470`），只在用到的动画 flags & 0x1f800 时才有作用，由它报 `model:rootmotion`
+      !((kind === "image" || kind === "model") && key === "animationlayers") &&
+      !(kind === "model" && key === "rootmotion") &&
       active(value)
     )
       unsupported.add(`object:${key}`);
@@ -1020,37 +1031,24 @@ export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): 
 const hex = (value: number) => `0x${(value >>> 0).toString(16)}`;
 
 /**
- * 尾部段的标签 → 能力键（rea-p5-mesh 1.7 的识别规则：`MDLS`、`MDLA` 只比较前 4 个字符，`MDAT0001`、`MDMP0001` 比较 8 个字符，
- * `MDLE0002` 全串比较）。其余标签 WPE 整段跳过，中性（`p5c-ver` 的 S14、S23 带 `ZZZZ0001`、`MDLX0001` 照常显示）。
- */
-function sectionIssue(tag: string): string | undefined {
-  if (tag.startsWith("MDLS") || tag === "MDLE0002") return "mdl:skeleton";
-  if (tag.startsWith("MDLA")) return "mdl:animation";
-  if (tag.startsWith("MDMP0001")) return "mdl:morph";
-  if (tag.startsWith("MDAT0001")) return "mdl:attachment";
-  return undefined;
-}
-
-/**
  * 一个 mdl 文件（`mdl.ts` 的 `parseMdl`，P5c 步骤 1）还不支持的用法。静态网格（无段或只有不认识的段、无木偶数据）都不报。
  * - `mdl:truncated`：读越界（语料 0 个，WPE 的读取原语越界返回 0，不猜）；
- * - `mdl:skeleton` / `mdl:animation` / `mdl:morph` / `mdl:attachment`：骨骼、动画层、变形目标、挂点段（W6，语料只在 3706286085）；
+ * - `mdl:section:<标签>`：`MDLS` / `MDLA` / `MDMP` / `MDAT` 段没恰好读到段末（格式错误，WPE 读进下一段或终止进程，语料 0 处）；
+ * - 骨骼、动画层、变形目标、挂点段本身不报（P12b2-1：模型对象的骨骼由 `compile/puppet.ts` 的 `buildModelSkeleton` 整理，用法报 `puppet:*` / `mdl:morph:*`；
+ *   没有 `MDLS` 时 WPE 不建骨骼运行时，这些段都不读，中性；`MDLE` 模型不读，中性，rea-texchan-model 7.3）；
  * - `mdl:puppet`：网格带可选块或记录表（木偶数据，语料只在 puppet mdl，模型对象用的都是空的）；
- * - `mdl:flags:<十六进制>`：网格标志除 bit0（u32 索引）、bit1（多一个 u32）外还有位，值是多出来的位（bit10 是 `MORPHING_NORMALS`，
- *   bit2、bit12 含义没查，rea 1.3）；
+ * - `mdl:flags:<十六进制>`：网格标志除 bit0（u32 索引）、bit1（多一个 u32）、bit10（`MORPHING_NORMALS`，P12b2-1 已做）、bit11（切线差，
+ *   有变形目标时由 `buildModelSkeleton` 报 `mdl:morph:tangent`）外还有位，值是多出来的位（bit2、bit12 含义没查，rea 1.3）；
  * - `mdl:format:<十六进制>`：格式有表外的位，或同一个语义出现两次（如 `a_Position` 与 `a_PositionVec4`，语料 0 个，WPE 的输入布局
  *   怎么建没测），值是整个格式。
  * 材质多于一个 pass 在编译材质时报（`bundle.ts` 的 `compileMesh`，`mdl:material-passes`）。
  */
 export function checkMdlFeatures(file: MdlFile, unsupported: Set<string>): void {
   if (file.truncated) unsupported.add("mdl:truncated");
-  for (const tag of file.sections) {
-    const issue = sectionIssue(tag);
-    if (issue) unsupported.add(issue);
-  }
+  for (const tag of file.sectionIssues) unsupported.add(`mdl:section:${tag}`);
   for (const mesh of file.meshes) {
     if (mesh.puppet) unsupported.add("mdl:puppet");
-    if (mesh.flags & ~3) unsupported.add(`mdl:flags:${hex(mesh.flags & ~3)}`);
+    if (mesh.flags & ~0xc03) unsupported.add(`mdl:flags:${hex(mesh.flags & ~0xc03)}`);
     const semantics = meshAttributes(mesh.format).map(semanticKey);
     if (mesh.format & ~MDL_FORMAT_BITS || new Set(semantics).size !== semantics.length)
       unsupported.add(`mdl:format:${hex(mesh.format)}`);
@@ -1234,12 +1232,13 @@ export function normalizeDepthKeys(pass: Pick<MaterialPass, "cullmode" | "deptht
   depthtest: PassDepthMode;
   depthwrite: PassDepthMode;
 } {
-  const pick = <T extends string>(value: unknown, on: T, off: T, fallback: T): T =>
-    value === undefined ? on : value === on || value === off ? (value as T) : fallback;
+  // 缺键取「材质构造清零」的缺省；写了的值查共用的表（`passState.ts`，非字符串、`null` 也落到第一项）
+  const pick = <T extends string>(field: PassStateField, value: unknown, on: T): T =>
+    value === undefined ? on : (normalizeJsonPassState(field, value) as T);
   return {
-    cullmode: pick<PassCullMode>(pass.cullmode, "normal", "nocull", "normal"),
-    depthtest: pick<PassDepthMode>(pass.depthtest, "enabled", "disabled", "disabled"),
-    depthwrite: pick<PassDepthMode>(pass.depthwrite, "enabled", "disabled", "disabled"),
+    cullmode: pick<PassCullMode>("cullmode", pass.cullmode, "normal"),
+    depthtest: pick<PassDepthMode>("depthtest", pass.depthtest, "enabled"),
+    depthwrite: pick<PassDepthMode>("depthwrite", pass.depthwrite, "enabled"),
   };
 }
 
@@ -1264,7 +1263,7 @@ export function checkPassFeatures(
     if (value && typeof value === "object") unsupported.add("combo:user-binding");
   if (alphaWritingUsed(pass.alphawriting)) unsupported.add("material:alphawriting");
   // `usertextures` / `usertexturereference`（P11b）不在这里报：按项报的 `usertextures:*` 要知道缺省纹理解析成什么，由 `compilePass`
-  // 调 `parseUserTextures` 给出（有效属性来源不再报，封面 `:system`、快捷方式 `:usershortcut` 等 P11c、P11d）。
+  // 调 `parseUserTextures` 给出（有效来源不再报：属性、封面 `:system`、快捷方式 `:usershortcut`）。
   // pass 级 `keepaspect` 中性：WPE 材质 pass 不读这个键，`keepaspect` 只在 `usertextures` 的对象项上读（rea-p11-textures 第 1 节，
   // rea-p11b「顺带」），对象项上的 `keepaspect: true` 报 `usertextures:keepaspect`
   for (const [key, value] of Object.entries(pass))
@@ -1334,6 +1333,8 @@ export const PUPPET_UNIFORMS: ReadonlySet<string> = new Set([
   "g_BonesAlpha",
   "g_MorphOffsets",
   "g_MorphWeights",
+  // 纹理通道（P12b2-2）：`puppettexturechannels` 的 `g_BlendMap`（`ScenePuppets.blendMap` 每帧写）
+  "g_BlendMap",
 ]);
 /**
  * puppet 的 pass 放行的引擎 COMBO：`SKINNING`、`SKINNING_ALPHA`（网格 0 标志 bit2）、`MORPHING`（格式含 `a_PositionVec4`），P12b1 步骤 4

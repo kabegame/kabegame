@@ -4,11 +4,7 @@ import type { SceneBundle } from "../compile/bundle";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { FetchSceneReader, SceneFs } from "../compile/fs";
 import { SceneState } from "../render/state";
-import type { SceneReporter } from "../report";
-import { createWpeLocalStorage, ScriptApi } from "../script/api";
-import { createIframeRealm, getJsModuleIndex } from "../script/realm";
-import { ScriptRuntime } from "../script/runtime";
-import { browserStorage, clearStoragePrefix, SCENE_STORAGE_PREFIX } from "../script/storage";
+import { createProbeScripts, probeScriptsOptionsOf, readProbeUserProperties, type ProbeScripts } from "./probeScripts";
 import { classifyScriptError, type ScriptErrorKind } from "./scriptErrors";
 
 interface Target {
@@ -16,12 +12,13 @@ interface Target {
   sceneAssets: string[];
 }
 
-/** 诊断里与语料统计相关的字段（`runtime.diagnostics` 的子集）。 */
+/** 诊断里与语料统计相关的字段（`ProbeScriptsResult.diagnostics` 的子集）。 */
 interface ScriptDiagnostic {
   id: string;
   errors: string[];
   targetKind: string;
   recompileWrites: number;
+  calls?: Record<string, { count: number; maxMs?: number }>;
 }
 
 interface MissingApiGroup {
@@ -32,194 +29,183 @@ interface MissingApiGroup {
   errors: number;
 }
 
+export interface ScriptCorpusOptions {
+  frames?: number;
+  dt?: number;
+  clock?: number;
+  seed?: number;
+  postprocess?: ScenePostprocessSetting;
+}
+
 /** 残留的测试 realm：数 DOM 里的 iframe，而不是数 120 帧循环的倒计数。 */
 function realmFrameCount(): number {
   return document.querySelectorAll('iframe[data-kb-script-realm="1"]').length;
 }
 
-/** 逐张场景在独立 realm 中运行有限的 120 帧；没有 GPU 或 rAF。 */
-export async function scriptCorpus(
-  imageIds: string[],
-  { postprocess = "follow" }: { postprocess?: ScenePostprocessSetting } = {},
-): Promise<unknown> {
+const byKey = (a: [string, unknown], b: [string, unknown]) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+
+/**
+ * 把任意值整理成键排序、可 JSON 化的普通数据：Map 转按键排序的 `[key, value]` 数组，Set 转排序数组，
+ * 对象键排序，类型化数组转普通数组，非有限数转字符串（JSON 会把它们都写成 null），函数与 undefined 丢弃。
+ */
+function canonical(value: unknown): unknown {
+  if (typeof value === "number") return Number.isFinite(value) ? value : String(value);
+  if (value === null || typeof value !== "object") return typeof value === "function" ? undefined : value;
+  if (ArrayBuffer.isView(value)) return Array.from(value as unknown as ArrayLike<number>, (item) => canonical(item));
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value instanceof Map)
+    return [...value.entries()].map(([key, item]): [string, unknown] => [String(key), canonical(item)]).sort(byKey);
+  if (value instanceof Set)
+    return [...value]
+      .map((item) => canonical(item))
+      .sort((a, b) => {
+        const x = JSON.stringify(a);
+        const y = JSON.stringify(b);
+        return x < y ? -1 : x > y ? 1 : 0;
+      });
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) {
+    const item = canonical((value as Record<string, unknown>)[key]);
+    if (item !== undefined) result[key] = item;
+  }
+  return result;
+}
+
+/**
+ * `SceneState` 里脚本能写到的数据部分，整理成键排序、可 JSON 化的普通对象（`canonical`）。
+ * 跳过：`texts`（排版结果含字形网格与图集，是 GPU 侧产物；脚本能写的排版字段在 `textFields`）、
+ * 各 `dirty*` 脏集合、`transformWrites`、`shadowPasses`、`frozenLayers`、`alignmentSizes` 等派生 / 内部簿记、
+ * `onUserTexture` 回调。
+ */
+export function stateSnapshot(state: SceneState): unknown {
+  // `effects` 是私有成员：开关表只有这里要整表读，不为它改 state.ts
+  const effects = (state as unknown as { effects: Map<string, unknown> }).effects;
+  return canonical({
+    layers: state.layers,
+    constants: state.constants,
+    effects,
+    general: state.general,
+    bloom: state.bloom,
+    bloomEnabled: state.bloomEnabled,
+    textFields: state.textFields,
+    cameras: state.cameras,
+    sounds: state.sounds,
+    particleInstances: state.particleInstances,
+    animationLayers: state.animationLayers,
+    passStates: state.passStates,
+    userTextures: state.userTextures,
+    userWritten: state.userWritten,
+  });
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** 去掉每个回调的 `maxMs`（计时，不确定），只留 `count`。 */
+function stripTiming(diagnostics: unknown[]): unknown[] {
+  return diagnostics.map((item) => {
+    const diagnostic = item as ScriptDiagnostic;
+    if (!diagnostic.calls) return diagnostic;
+    const calls: Record<string, { count: number }> = {};
+    for (const [name, stats] of Object.entries(diagnostic.calls)) calls[name] = { count: stats.count };
+    return { ...diagnostic, calls };
+  });
+}
+
+/** 逐张场景在独立 realm 中确定地运行有限帧（缺省 120 帧）；没有 GPU 或 rAF。 */
+export async function scriptCorpus(imageIds: string[], options: ScriptCorpusOptions = {}): Promise<unknown> {
+  const { frames = 120, dt = 1 / 60, postprocess = "follow" } = options;
+  const resolved = probeScriptsOptionsOf({
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
+    ...(options.seed === undefined ? {} : { seed: options.seed }),
+    consoleGrep: ".*",
+  })!;
   const rows: unknown[] = [];
   const groups = new Map<string, MissingApiGroup>();
   const framesBefore = realmFrameCount();
-  // 每次调用一个唯一的临时图片 id 前缀：脚本写 localStorage 只会落在这个前缀下，跑完清掉，不碰真实场景存的东西。
-  const runId = `corpus-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const backend = browserStorage();
-  try {
-    for (const imageId of imageIds) {
-      let runtime: ScriptRuntime | null = null;
-      let api: ScriptApi | null = null;
-      let realm: Awaited<ReturnType<typeof createIframeRealm>> | null = null;
-      let bundle: SceneBundle | null = null;
-      const warnings: string[] = [];
-      try {
-        const target = await invoke<Target>("wpe_scene_target", { imageId });
-        const reader = new FetchSceneReader();
-        const fs = new SceneFs(target.path, target.sceneAssets, reader);
-        const project = JSON.parse((await fs.text("project.json")) ?? "{}") as {
-          general?: { properties?: Record<string, { type: string; value: unknown }> };
-        };
-        const properties = new Map(Object.entries(project.general?.properties ?? {}));
-        bundle = await compileSceneInWorker({
-          projectDir: target.path,
-          sceneAssets: target.sceneAssets,
-          postprocess,
-          userProperties: Object.fromEntries([...properties].map(([key, value]) => [key, value.value])),
-          force: true,
-          exhaustive: true,
-          reader,
-        });
-        const compiled = bundle;
-        const state = SceneState.fromBundle(bundle);
-        const report: SceneReporter = {
-          ready() {},
-          fallback() {},
-          info() {},
-          debug() {},
-          warn(message) {
-            warnings.push(message);
-          },
-          error(message) {
-            warnings.push(message);
-          },
-        };
-        realm = await createIframeRealm({
-          document,
-          scripts: bundle.scripts,
-          sceneAssets: target.sceneAssets,
-          modules: getJsModuleIndex(target.sceneAssets),
-          console: { log() {}, error: (message) => warnings.push(message) },
-          localStorage: (global) =>
-            createWpeLocalStorage({
-              global,
-              backend,
-              sceneKey: `${runId}/${imageId}`,
-              isEvaluating: () => api?.moduleEvaluating ?? false,
-              debug: (message) => warnings.push(message),
-            }),
-        });
-        let elapsed = 0;
-        const current = (api = new ScriptApi(realm, {
-          bundle: () => compiled,
-          state: () => state,
-          // 透视场景（P5d 步骤 2）的场景尺寸是 0，脚本的 screenResolution 取画布：语料扫描没有画布，按 1920×1080
-          screenResolution: () =>
-            compiled.general.perspective ? [1920, 1080] : [compiled.general.width, compiled.general.height],
-          frametime: () => 1 / 60,
-          runtime: () => elapsed,
-          timeOfDay: () => 0.5,
-          write(target, value) {
-            if (target.kind === "unsupported" || target.kind === "script-property") return false;
-            if (target.kind === "recompile") return true;
-            state.write({ property: "corpus", target }, Array.isArray(value) ? value.join(" ") : value);
-            return true;
-          },
-          read(target) {
-            if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
-            if (target.kind === "bloom-enabled") return state.bloomEnabled;
-            if (target.kind === "general") {
-              const value = state.general[target.key];
-              return typeof value === "number" ? [value] : value;
-            }
-            if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
-            if (target.kind === "layer") {
-              const value = state.layers.get(target.object)?.[target.field];
-              return value === undefined ? null : typeof value === "number" ? [value] : value;
-            }
-            if (target.kind === "bloom") {
-              const value = state.bloom[target.field];
-              return Array.isArray(value) ? value : [value];
-            }
-            // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
-            if (target.kind === "camera") {
-              const value = state.cameras.get(target.object)?.[target.field];
-              return value === undefined ? null : [value];
-            }
-            return null;
-          },
-        }));
-        runtime = new ScriptRuntime(realm, {
-          report,
-          write(target, value) {
-            if (target.kind === "unsupported" || target.kind === "script-property") return false;
-            if (target.kind === "recompile") return true;
-            state.write({ property: "corpus", target }, Array.isArray(value) ? value.join(" ") : value);
-            return true;
-          },
-          read(target) {
-            if (target.kind === "effect") return state.effectEnabled(target.object, target.effect);
-            if (target.kind === "bloom-enabled") return state.bloomEnabled;
-            if (target.kind === "general") {
-              const value = state.general[target.key];
-              return typeof value === "number" ? [value] : value;
-            }
-            if (target.kind === "constant") return state.constants.get(target.pass)?.[target.uniforms[0]] ?? null;
-            if (target.kind === "layer") {
-              const value = state.layers.get(target.object)?.[target.field];
-              return value === undefined ? null : typeof value === "number" ? [value] : value;
-            }
-            if (target.kind === "bloom") {
-              const value = state.bloom[target.field];
-              return Array.isArray(value) ? value : [value];
-            }
-            // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
-            if (target.kind === "camera") {
-              const value = state.cameras.get(target.object)?.[target.field];
-              return value === undefined ? null : [value];
-            }
-            return null;
-          },
-          enterScript: (script) => current.enterScript(script),
-          setProperties: (full) => current.setProperties(full),
-          setModuleEvaluating: (value) => current.setModuleEvaluating(value),
-        });
-        current.attachRuntime(runtime);
-        await runtime.load(bundle.scripts);
-        runtime.applyUserProperties(Object.fromEntries(properties), properties, bundle.bindings);
-        for (let frame = 0; frame < 120; frame++) {
-          elapsed += 1 / 60;
-          runtime.frame(1 / 60);
-        }
-        const diagnostics = (runtime.diagnostics as ScriptDiagnostic[]).map((item) => ({
-          ...item,
-          // 两路写重编译目标：回调返回值（runtime）与 API 直接赋值（ScriptApi）
-          recompileWrites: item.recompileWrites + (current.recompileWrites.get(item.id) ?? 0),
-        }));
-        for (const item of diagnostics) {
-          for (const error of item.errors) {
-            const { kind, name } = classifyScriptError(error);
-            const key = `${kind}:${name}`;
-            const group = groups.get(key) ?? {
-              kind,
-              name,
-              scenes: new Set<string>(),
-              segments: new Set<string>(),
-              errors: 0,
-            };
-            group.scenes.add(imageId);
-            group.segments.add(`${imageId}|${item.id}`);
-            group.errors++;
-            groups.set(key, group);
-          }
-        }
-        runtime.destroy();
-        runtime = null;
-        realm = null;
-        api = null;
-        rows.push({ imageId, unsupported: bundle.unsupported, scripts: diagnostics, warnings });
-      } catch (error) {
-        rows.push({ imageId, error: String(error) });
-      } finally {
-        runtime?.destroy();
-        if (!runtime) realm?.dispose();
-        if (bundle) for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();
+  for (const imageId of imageIds) {
+    let scripts: ProbeScripts | null = null;
+    let bundle: SceneBundle | null = null;
+    try {
+      const target = await invoke<Target>("wpe_scene_target", { imageId });
+      const reader = new FetchSceneReader();
+      const fs = new SceneFs(target.path, target.sceneAssets, reader);
+      const project = JSON.parse((await fs.text("project.json")) ?? "{}") as {
+        general?: { properties?: Record<string, { type: string; value: unknown }> };
+      };
+      const defaults = Object.entries(project.general?.properties ?? {});
+      bundle = await compileSceneInWorker({
+        projectDir: target.path,
+        sceneAssets: target.sceneAssets,
+        postprocess,
+        userProperties: Object.fromEntries(defaults.map(([key, value]) => [key, value.value])),
+        force: true,
+        exhaustive: true,
+        reader,
+      });
+      const state = SceneState.fromBundle(bundle);
+      // 同 `renderFrame`：全部用户属性（含 WPE 内置项）
+      const properties = await readProbeUserProperties(reader, target.path, target.sceneAssets, undefined);
+      // 透视场景没有场景尺寸，脚本的 screenResolution 取画布：语料扫描没有画布，按 1920×1080
+      const screen: [number, number] = bundle.general.perspective
+        ? [1920, 1080]
+        : [bundle.general.width, bundle.general.height];
+      scripts = createProbeScripts({
+        bundle,
+        state,
+        sceneAssets: target.sceneAssets,
+        properties,
+        screen,
+        options: resolved,
+      });
+      await scripts.load();
+      for (let frame = 1; frame <= frames; frame++) {
+        const time = frame * dt;
+        scripts.enterFrame?.(dt, time);
+        scripts.frame(dt, time);
       }
+      const result = scripts.result();
+      const diagnostics = stripTiming(result.diagnostics);
+      for (const item of diagnostics as ScriptDiagnostic[]) {
+        for (const error of item.errors) {
+          const { kind, name } = classifyScriptError(error);
+          const key = `${kind}:${name}`;
+          const group = groups.get(key) ?? {
+            kind,
+            name,
+            scenes: new Set<string>(),
+            segments: new Set<string>(),
+            errors: 0,
+          };
+          group.scenes.add(imageId);
+          group.segments.add(`${imageId}|${item.id}`);
+          group.errors++;
+          groups.set(key, group);
+        }
+      }
+      rows.push({
+        imageId,
+        unsupported: bundle.unsupported,
+        scripts: diagnostics,
+        stateDigest: await sha256Hex(JSON.stringify(stateSnapshot(state))),
+        console: {
+          count: result.console.count,
+          digest: await sha256Hex((result.console.matched ?? []).join("\n")),
+          tail: result.console.tail,
+        },
+        messages: result.messages,
+        recompile: result.recompile,
+        unconnected: result.unconnected,
+        ...(result.console.matchedDropped ? { matchedDropped: result.console.matchedDropped } : {}),
+      });
+    } catch (error) {
+      rows.push({ imageId, error: String(error) });
+    } finally {
+      scripts?.dispose();
+      if (bundle) for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();
     }
-  } finally {
-    if (backend) clearStoragePrefix(backend, `${SCENE_STORAGE_PREFIX}${runId}`);
   }
   const missingApis = [...groups.values()]
     .map((group) => ({
@@ -230,5 +216,10 @@ export async function scriptCorpus(
       errors: group.errors,
     }))
     .sort((a, b) => b.errors - a.errors || b.segments - a.segments || a.name.localeCompare(b.name));
-  return { rows, missingApis, remainingTestFrames: { before: framesBefore, after: realmFrameCount() } };
+  return {
+    rows,
+    missingApis,
+    remainingTestFrames: { before: framesBefore, after: realmFrameCount() },
+    options: { frames, dt, clock: resolved.clock, seed: resolved.seed },
+  };
 }

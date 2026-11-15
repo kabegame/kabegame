@@ -1,3 +1,5 @@
+import type { ScriptModule } from "./script/moduleFactory";
+import { fakeModule } from "./script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SceneSpectrum } from "./audio/spectrum";
 import { builtinProperties } from "./compile/builtinProperties";
@@ -7,8 +9,8 @@ import type { VideoSink } from "./video/sceneVideos";
 
 const subscribeAudio = vi.fn<(args: Record<string, unknown>) => Promise<void>>();
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
-/** 替身的 `get_wpe_scene_reflection` 返回值（P13b1）。 */
-const settings = { reflection: "follow" };
+/** 替身的 `get_wpe_scene_reflection`（P13b1）与 `get_wpe_scene_shadows`（P13d）返回值。 */
+const settings = { reflection: "follow", shadows: "follow" };
 
 // 宿主依赖 IPC、Worker 编译与 WebGPU：都换成替身，只核对加载状态机（P3a 退回路径）与音频订阅（3c 点 0）
 vi.mock("@tauri-apps/api/core", () => ({
@@ -19,6 +21,7 @@ vi.mock("@tauri-apps/api/core", () => ({
     if (command === "wpe_scene_target") return { path: "P:/p", sceneAssets: [] };
     if (command === "get_wpe_scene_postprocess") return "disabled";
     if (command === "get_wpe_scene_reflection") return settings.reflection;
+    if (command === "get_wpe_scene_shadows") return settings.shadows;
     if (command === "wpe_web_media_subscribe") return subscribeAudio(args);
     return undefined;
   }),
@@ -275,6 +278,75 @@ describe("SceneHost：场景反射设置（P13b1）", () => {
   });
 });
 
+describe("SceneHost：场景阴影设置（P13d）", () => {
+  const compiledShadows = () => compile.mock.calls.map(([input]) => (input as { shadows?: string }).shadows);
+  const pushed = (value: unknown) => listeners.get("setting-change")!({ payload: { wpeSceneShadows: value } });
+
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    settings.reflection = "follow";
+    settings.shadows = "follow";
+    compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function load() {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    return { host, report };
+  }
+
+  it("加载时读设置并交给编译（不认识的值按跟随）", async () => {
+    settings.shadows = "high";
+    const { host } = await load();
+    expect(compiledShadows()).toEqual(["high"]);
+    host.dispose();
+    compile.mockClear();
+    settings.shadows = "bogus";
+    const second = await load();
+    expect(compiledShadows()).toEqual(["follow"]);
+    second.host.dispose();
+  });
+
+  it("推 wpeSceneShadows：值变了重新加载一次，值不变、别的键不加载", async () => {
+    const { host } = await load();
+    pushed("follow");
+    listeners.get("setting-change")!({ payload: { wallpaperPaused: true } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).toHaveBeenCalledTimes(1);
+    settings.shadows = "disabled";
+    pushed("disabled");
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect(compiledShadows()).toEqual(["follow", "disabled"]);
+    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["wpeSceneShadows"] });
+    pushed("disabled");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).toHaveBeenCalledTimes(2);
+    host.dispose();
+  });
+
+  it("三项设置同一条里一起变：只加载一次，键都记进探针", async () => {
+    const { host } = await load();
+    settings.reflection = "disabled";
+    settings.shadows = "ultra";
+    listeners.get("setting-change")!({
+      payload: { wpeSceneReflection: "disabled", wpeScenePostprocess: "enabled", wpeSceneShadows: "ultra" },
+    });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(compiledShadows()).toEqual(["follow", "ultra"]);
+    expect(host.stats.recompiled.at(-1)).toEqual({
+      reason: "settings",
+      keys: ["wpeScenePostprocess", "wpeSceneReflection", "wpeSceneShadows"],
+    });
+    host.dispose();
+  });
+});
+
 type AudioBuffers = Record<"left" | "right" | "average", Float32Array>;
 type Register = (resolution: number) => AudioBuffers;
 
@@ -284,9 +356,9 @@ class FakeRealm implements ScriptRealm {
   prototypes = { Vec2: {}, Vec3: {}, Vec4: {}, Mat3: {}, Mat4: {} };
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
   constructor(private readonly body: (register: Register) => void) {}
-  async importModule(): Promise<Record<string, unknown>> {
+  async prepareModule(): Promise<ScriptModule> {
     this.body((this.global.engine as { registerAudioBuffers: Register }).registerAudioBuffers);
-    return {};
+    return fakeModule({});
   }
   dispose() {}
 }

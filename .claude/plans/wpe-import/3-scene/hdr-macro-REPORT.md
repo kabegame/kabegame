@@ -45,6 +45,7 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 `40e2ce02…93b0`（与 p2-REPORT、light
 | `HLSL_SM30` / `GLSL` / `PLATFORM_ANDROID` | 不定义 | 不定义 | 无差异。23 张的自带着色器读 `HLSL_SM30` | 不改 | 探针 | 已确认 |
 | 材质与 `[COMBO]` 的 COMBO | 名字转大写，值为 0 也写 `#define X 0`，所以 `#ifdef` 成立、`#if` 不成立 | 同 | 无差异 | 不改 | 探针 `KBZERO` / `KBDEF0` / `KBLOWER`，`FUN_14016c400` | 已确认 |
 | 采样器 `combo` | 绑了纹理才 `#define X 1`，没绑不定义 | 同 | 无差异 | 不改 | 探针 `KBSAMP` / `KBSAMPU`，`FUN_14016c800` | 已确认 |
+| 采样器 `components` 的 `combo` | 绑了纹理且纹理标志带 `0x100000 << i` 时第 i 个对象条目 `#define X 1` | 2026-11-15 前不推（F1） | 3706286085 等 8 张，都不能渲染 | 翻译器按 `BoundTexture.flags` 推，已改 | `FUN_14016c800`、`FUN_14016ce60`；复制工程对照 WPE | 已确认 |
 | `BLENDMODE` | passthrough 的 JSON 写，0 与 31 写 0 | 同 | 无差异 | 不改 | `FUN_1401ebbc0`、`FUN_140206ae0`，p2-REPORT | 已确认 |
 | `LIGHTING`、`REFLECTION`、`PRELIGHTING`、`SKINNING`、`SKINNING_ALPHA`、`MORPHING`、`SPRITESHEET` | 图层路径按对象状态写进材质 JSON | 能力表 `ENGINE_COMBOS` 报，`LIGHTING` 已实现 | 被能力表挡住 | 不改 | `FUN_140206ae0`、`FUN_140209540` | 静态 |
 | `BONECOUNT`、`MORPHING_MODIFIERS`、`MORPHING_NORMALS`、`PRELIGHTINGDUALVERTEX`、`BLENDROWCOUNT`、`CLIPPINGUVS`、`CLIPPINGTARGET` | 同上，跟随上一行的状态，或来自 `.mdl` | 不写，也不在 `ENGINE_COMBOS` | 随上一行或模型能力被挡；`CLIPPING*` 只有 `3286859278` 出现相关键，该场景本身不能渲染 | 做相应能力时补 | `FUN_140206ae0`、`FUN_140209540`、`FUN_140224c70` | 静态 |

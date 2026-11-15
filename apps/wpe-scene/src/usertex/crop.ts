@@ -49,3 +49,21 @@ export function roundf(value: number): number {
 export function textureKey(value: string, ratio: number): string {
   return `${value}x${roundf(Math.fround(Math.fround(ratio) * 10))}`;
 }
+
+/**
+ * 快捷方式图标补透明边后的尺寸与图标的摆放（P11d，p11-REPORT「P11d 补测」图标纹理）：补到槽的比例 `a`（宽 / 高，float32），居中、不裁切；
+ * 取整照 WPE：`(int)` 截断、`>> 1` 居中。`w / h ≤ a` 时宽补到 `trunc(h·a)`、左右各 `(宽' − w) >> 1`，否则高补到 `trunc(w / a)`、上下居中。
+ * `a` 为 0（`keepaspect`、没有参考尺寸）时原样。补的边全 0（透明）；算出的边比图标还小（float32 截断的边界）时取图标的边，不裁。
+ *
+ * 例：256×256 配 2:1 → 512×256、x = 128；配精灵表帧比例 1.66668 → 426×256、x = 85；配 1:4 → 256×1024、y = 384。
+ */
+export function padRect(w: number, h: number, a: number): CropRect {
+  if (!(a > 0)) return { x: 0, y: 0, width: w, height: h };
+  const f32 = Math.fround;
+  if (f32(f32(w) / f32(h)) <= a) {
+    const width = Math.max(w, Math.trunc(f32(f32(h) * a)));
+    return { x: (width - w) >> 1, y: 0, width, height: h };
+  }
+  const height = Math.max(h, Math.trunc(f32(f32(w) / a)));
+  return { x: 0, y: (height - h) >> 1, width: w, height };
+}

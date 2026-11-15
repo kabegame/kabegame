@@ -1,0 +1,405 @@
+diff --git a/include/cef_frame.h b/include/cef_frame.h
+index 083c9fd06f1ce91be5a1c68fc7960ab58b109225..3a88092ea020553ea862c52389e9c68550042b1c 100644
+--- a/include/cef_frame.h
++++ b/include/cef_frame.h
+@@ -256,6 +256,68 @@ class CefFrame : public virtual CefBaseRefCounted {
+   /*--cef()--*/
+   virtual void SendProcessMessage(CefProcessId target_process,
+                                   CefRefPtr<CefProcessMessage> message) = 0;
++
++#if CEF_API_ADDED(CEF_EXPERIMENTAL)
++  ///
++  /// Maps a point from the browser view coordinate space into this frame's own
++  /// widget coordinate space and returns this frame's viewport size.
++  /// |view_x|/|view_y| use the same space as the x/y members of the
++  /// CefMouseEvent passed to CefBrowserHost::SendMouseMoveEvent/
++  /// SendMouseClickEvent: device-independent pixels (DIP) relative to the
++  /// upper-left corner of the browser view. On success |frame_x|/|frame_y|
++  /// receive the point in DIP relative to the upper-left corner of this
++  /// frame's viewport, after every transform between the browser view and this
++  /// frame (scrolling, CSS transform, CSS zoom, page scale), and
++  /// |frame_width|/|frame_height| receive the viewport size in the same space.
++  /// The point is not clamped and may lie outside the viewport. The mapping
++  /// comes from compositor hit-test data and may lag by a frame.
++  /// Only frames that own a widget (the main frame and out-of-process
++  /// subframes) are supported. Returns false for same-process subframes,
++  /// detached frames, or when no hit-test data exists for the frame (e.g.
++  /// display:none, not yet composited). This method can only be called on the
++  /// browser process UI thread.
++  ///
++  /*--cef(added=experimental)--*/
++  virtual bool ConvertPointFromView(double view_x,
++                                    double view_y,
++                                    double& frame_x,
++                                    double& frame_y,
++                                    double& frame_width,
++                                    double& frame_height) = 0;
++
++  ///
++  /// Sends a mouse move (or leave, if |mouse_leave| is true) event directly to
++  /// this frame's widget. Hit testing in the browser view and in all ancestor
++  /// documents is bypassed, so content drawn over this frame by an ancestor
++  /// does not receive it. |x|/|y| are DIP in this frame's widget coordinate
++  /// space (see ConvertPointFromView). |modifiers| are cef_event_flags_t.
++  /// Unlike CefBrowserHost::SendMouseMoveEvent this does not go through the
++  /// native view: it never takes native mouse capture or keyboard focus, never
++  /// changes the displayed cursor or tooltip, and leaves the browser-side
++  /// hover/capture state of real mouse input untouched. Out-of-process frames
++  /// nested inside this frame are not targeted. Ignored for frames that do not
++  /// own a widget. May be called on any browser process thread; runs on the UI
++  /// thread (synchronously when called there).
++  ///
++  /*--cef(added=experimental)--*/
++  virtual void SendMouseMoveEventToFrame(double x,
++                                         double y,
++                                         uint32_t modifiers,
++                                         bool mouse_leave) = 0;
++
++  ///
++  /// Sends a mouse button event directly to this frame's widget. Same
++  /// coordinate space, threading and side-effect rules as
++  /// SendMouseMoveEventToFrame.
++  ///
++  /*--cef(added=experimental)--*/
++  virtual void SendMouseClickEventToFrame(double x,
++                                          double y,
++                                          uint32_t modifiers,
++                                          cef_mouse_button_type_t type,
++                                          bool mouse_up,
++                                          int click_count) = 0;
++#endif
+ };
+ 
+ #endif  // CEF_INCLUDE_CEF_FRAME_H_
+diff --git a/libcef/browser/frame_host_impl.cc b/libcef/browser/frame_host_impl.cc
+index 26d56167673a7baaca80da660bc4d4e495f7749c..e86c53eaee00415193d1aedd84dd9af012067fbb 100644
+--- a/libcef/browser/frame_host_impl.cc
++++ b/libcef/browser/frame_host_impl.cc
+@@ -18,14 +18,76 @@
+ #include "cef/libcef/common/string_util.h"
+ #include "cef/libcef/common/task_runner_impl.h"
+ #include "content/browser/renderer_host/frame_tree_node.h"
++#include "content/browser/renderer_host/render_widget_host_view_base.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/render_view_host.h"
++#include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "services/service_manager/public/cpp/interface_provider.h"
++#include "third_party/blink/public/common/input/web_mouse_event.h"
++#include "ui/events/base_event_utils.h"
++#include "ui/gfx/geometry/point_f.h"
++#include "ui/gfx/geometry/size_f.h"
+ 
+ namespace {
+ 
++// kabegame: the browser view and this frame's own view, for
++// ConvertPointFromView / SendMouse*EventToFrame. Only frames that own a widget
++// qualify: the main frame and out-of-process subframes (local roots).
++// RenderFrameHost::GetView() returns the nearest local root's view, so a
++// same-process subframe would resolve to its parent's view; it is rejected
++// instead of injecting into the wrong widget.
++bool GetFrameViews(content::RenderFrameHost* rfh,
++                   content::WebContents* web_contents,
++                   content::RenderWidgetHostViewBase** root_view,
++                   content::RenderWidgetHostViewBase** frame_view) {
++  if (!rfh || !web_contents || !rfh->IsActive() || !rfh->IsRenderFrameLive()) {
++    return false;
++  }
++  content::RenderFrameHost* parent = rfh->GetParent();
++  if (parent && parent->GetRenderWidgetHost() == rfh->GetRenderWidgetHost()) {
++    return false;
++  }
++  auto* frame = static_cast<content::RenderWidgetHostViewBase*>(rfh->GetView());
++  auto* root = static_cast<content::RenderWidgetHostViewBase*>(
++      web_contents->GetRenderWidgetHostView());
++  if (!frame || !root || frame->GetRootView() != root) {
++    return false;
++  }
++  *root_view = root;
++  *frame_view = frame;
++  return true;
++}
++
++// kabegame: the subset of CefBrowserPlatformDelegate::TranslateWebEventModifiers
++// (protected) that applies to injected mouse events.
++int TranslateFrameMouseModifiers(uint32_t cef_modifiers) {
++  int result = 0;
++  if (cef_modifiers & EVENTFLAG_SHIFT_DOWN) {
++    result |= blink::WebInputEvent::kShiftKey;
++  }
++  if (cef_modifiers & EVENTFLAG_CONTROL_DOWN) {
++    result |= blink::WebInputEvent::kControlKey;
++  }
++  if (cef_modifiers & EVENTFLAG_ALT_DOWN) {
++    result |= blink::WebInputEvent::kAltKey;
++  }
++  if (cef_modifiers & EVENTFLAG_COMMAND_DOWN) {
++    result |= blink::WebInputEvent::kMetaKey;
++  }
++  if (cef_modifiers & EVENTFLAG_LEFT_MOUSE_BUTTON) {
++    result |= blink::WebInputEvent::kLeftButtonDown;
++  }
++  if (cef_modifiers & EVENTFLAG_MIDDLE_MOUSE_BUTTON) {
++    result |= blink::WebInputEvent::kMiddleButtonDown;
++  }
++  if (cef_modifiers & EVENTFLAG_RIGHT_MOUSE_BUTTON) {
++    result |= blink::WebInputEvent::kRightButtonDown;
++  }
++  return result;
++}
++
+ void StringVisitCallback(CefRefPtr<CefStringVisitor> visitor,
+                          base::ReadOnlySharedMemoryRegion response) {
+   string_util::ExecuteWithScopedCefString(
+@@ -304,6 +366,140 @@ void CefFrameHostImpl::SendProcessMessage(
+   }
+ }
+ 
++bool CefFrameHostImpl::ConvertPointFromView(double view_x,
++                                             double view_y,
++                                             double& frame_x,
++                                             double& frame_y,
++                                             double& frame_width,
++                                             double& frame_height) {
++  CEF_REQUIRE_UIT_RETURN(false);
++  auto browser = GetBrowserHostBase();
++  if (!browser) {
++    return false;
++  }
++  content::RenderWidgetHostViewBase* root_view = nullptr;
++  content::RenderWidgetHostViewBase* frame_view = nullptr;
++  if (!GetFrameViews(GetRenderFrameHost(), browser->GetWebContents(),
++                     &root_view, &frame_view)) {
++    return false;
++  }
++
++  // Inverse of the compositor's screen-space transform between the two views,
++  // so ancestor CSS transforms, scrolling, CSS zoom and page scale are all
++  // included. Points outside the frame are mapped as well (no clamping).
++  gfx::PointF point;
++  if (frame_view == root_view) {
++    point = gfx::PointF(static_cast<float>(view_x), static_cast<float>(view_y));
++  } else if (!root_view->TransformPointToCoordSpaceForView(
++                 gfx::PointF(static_cast<float>(view_x),
++                             static_cast<float>(view_y)),
++                 frame_view, &point)) {
++    return false;
++  }
++
++  // The frame's own (untransformed) viewport size in DIP. GetViewBounds() is
++  // integral for child frames, so derive it from the pixel size instead.
++  gfx::SizeF size;
++  if (frame_view == root_view) {
++    size = gfx::SizeF(root_view->GetViewBounds().size());
++  } else {
++    const float scale = frame_view->GetDeviceScaleFactor();
++    size = gfx::ScaleSize(gfx::SizeF(frame_view->GetCompositorViewportPixelSize()),
++                          scale > 0 ? 1.f / scale : 1.f);
++  }
++
++  frame_x = point.x();
++  frame_y = point.y();
++  frame_width = size.width();
++  frame_height = size.height();
++  return true;
++}
++
++void CefFrameHostImpl::SendMouseMoveEventToFrame(double x,
++                                                 double y,
++                                                 uint32_t modifiers,
++                                                 bool mouse_leave) {
++  if (!CEF_CURRENTLY_ON_UIT()) {
++    CEF_POST_TASK(CEF_UIT,
++                  base::BindOnce(&CefFrameHostImpl::SendMouseMoveEventToFrame,
++                                 this, x, y, modifiers, mouse_leave));
++    return;
++  }
++  ForwardMouseEventToFrame(
++      static_cast<int>(mouse_leave ? blink::WebInputEvent::Type::kMouseLeave
++                                   : blink::WebInputEvent::Type::kMouseMove),
++      x, y, modifiers,
++      static_cast<int>(blink::WebPointerProperties::Button::kNoButton), 0);
++}
++
++void CefFrameHostImpl::SendMouseClickEventToFrame(double x,
++                                                  double y,
++                                                  uint32_t modifiers,
++                                                  cef_mouse_button_type_t type,
++                                                  bool mouse_up,
++                                                  int click_count) {
++  if (!CEF_CURRENTLY_ON_UIT()) {
++    CEF_POST_TASK(
++        CEF_UIT,
++        base::BindOnce(&CefFrameHostImpl::SendMouseClickEventToFrame, this, x,
++                       y, modifiers, type, mouse_up, click_count));
++    return;
++  }
++  blink::WebPointerProperties::Button button;
++  switch (type) {
++    case MBT_LEFT:
++      button = blink::WebPointerProperties::Button::kLeft;
++      break;
++    case MBT_MIDDLE:
++      button = blink::WebPointerProperties::Button::kMiddle;
++      break;
++    case MBT_RIGHT:
++      button = blink::WebPointerProperties::Button::kRight;
++      break;
++    default:
++      return;
++  }
++  ForwardMouseEventToFrame(
++      static_cast<int>(mouse_up ? blink::WebInputEvent::Type::kMouseUp
++                                : blink::WebInputEvent::Type::kMouseDown),
++      x, y, modifiers, static_cast<int>(button), click_count);
++}
++
++void CefFrameHostImpl::ForwardMouseEventToFrame(int type,
++                                                double x,
++                                                double y,
++                                                uint32_t modifiers,
++                                                int button,
++                                                int click_count) {
++  CEF_REQUIRE_UIT();
++  auto browser = GetBrowserHostBase();
++  if (!browser) {
++    return;
++  }
++  content::RenderWidgetHostViewBase* root_view = nullptr;
++  content::RenderWidgetHostViewBase* frame_view = nullptr;
++  if (!GetFrameViews(GetRenderFrameHost(), browser->GetWebContents(),
++                     &root_view, &frame_view)) {
++    return;
++  }
++
++  const gfx::PointF position(static_cast<float>(x), static_cast<float>(y));
++  // Same as DevTools' Input.dispatchMouseEvent for a frame target
++  // (ConvertWidgetPointToScreenPoint in input_handler.cc).
++  const gfx::PointF screen_position =
++      position + frame_view->GetViewBounds().OffsetFromOrigin();
++  blink::WebMouseEvent event(
++      static_cast<blink::WebInputEvent::Type>(type), position, screen_position,
++      static_cast<blink::WebPointerProperties::Button>(button), click_count,
++      TranslateFrameMouseModifiers(modifiers), ui::EventTimeForNow());
++
++  // Straight to the frame's own widget, like DevTools' InputInjector but
++  // without Focus(): this bypasses the input event router (and therefore any
++  // ancestor content covering the frame), native capture and keyboard focus,
++  // and the cursor manager.
++  frame_view->GetRenderWidgetHost()->ForwardMouseEvent(event);
++}
++
+ void CefFrameHostImpl::SetFocused(bool focused) {
+   CEF_REQUIRE_UIT();
+   base::AutoLock lock_scope(state_lock_);
+diff --git a/libcef/browser/frame_host_impl.h b/libcef/browser/frame_host_impl.h
+index 04127166299fe7eba8159f1ceff1b81685925c23..94b57edbd5b2f66248dd47db48ff9c583b0cee61 100644
+--- a/libcef/browser/frame_host_impl.h
++++ b/libcef/browser/frame_host_impl.h
+@@ -81,6 +81,22 @@ class CefFrameHostImpl : public CefFrame, public cef::mojom::BrowserFrame {
+       CefRefPtr<CefURLRequestClient> client) override;
+   void SendProcessMessage(CefProcessId target_process,
+                           CefRefPtr<CefProcessMessage> message) override;
++  bool ConvertPointFromView(double view_x,
++                            double view_y,
++                            double& frame_x,
++                            double& frame_y,
++                            double& frame_width,
++                            double& frame_height) override;
++  void SendMouseMoveEventToFrame(double x,
++                                 double y,
++                                 uint32_t modifiers,
++                                 bool mouse_leave) override;
++  void SendMouseClickEventToFrame(double x,
++                                  double y,
++                                  uint32_t modifiers,
++                                  cef_mouse_button_type_t type,
++                                  bool mouse_up,
++                                  int click_count) override;
+ 
+   void SetFocused(bool focused);
+   void RefreshAttributes();
+@@ -186,6 +202,15 @@ class CefFrameHostImpl : public CefFrame, public cef::mojom::BrowserFrame {
+ 
+   void DetachRenderFrame();
+ 
++  // Forwards a mouse event directly to this frame's own widget (see
++  // SendMouseMoveEventToFrame). Must be called on the UI thread.
++  void ForwardMouseEventToFrame(int type,
++                                double x,
++                                double y,
++                                uint32_t modifiers,
++                                int button,
++                                int click_count);
++
+   std::string GetDebugString() const;
+ 
+   const bool is_main_frame_;
+diff --git a/libcef/renderer/frame_impl.cc b/libcef/renderer/frame_impl.cc
+index a91adcc41c996f99531e135d70241ad48cfdd34c..90b62d3851a4ae75c92fc14de698331d2ef4497e 100644
+--- a/libcef/renderer/frame_impl.cc
++++ b/libcef/renderer/frame_impl.cc
+@@ -281,6 +281,35 @@ CefRefPtr<CefURLRequest> CefFrameImpl::CreateURLRequest(
+   return nullptr;
+ }
+ 
++bool CefFrameImpl::ConvertPointFromView(double view_x,
++                                        double view_y,
++                                        double& frame_x,
++                                        double& frame_y,
++                                        double& frame_width,
++                                        double& frame_height) {
++  DCHECK(false)
++      << "ConvertPointFromView cannot be called from the render process";
++  return false;
++}
++
++void CefFrameImpl::SendMouseMoveEventToFrame(double x,
++                                             double y,
++                                             uint32_t modifiers,
++                                             bool mouse_leave) {
++  DCHECK(false)
++      << "SendMouseMoveEventToFrame cannot be called from the render process";
++}
++
++void CefFrameImpl::SendMouseClickEventToFrame(double x,
++                                              double y,
++                                              uint32_t modifiers,
++                                              cef_mouse_button_type_t type,
++                                              bool mouse_up,
++                                              int click_count) {
++  DCHECK(false)
++      << "SendMouseClickEventToFrame cannot be called from the render process";
++}
++
+ void CefFrameImpl::SendProcessMessage(CefProcessId target_process,
+                                       CefRefPtr<CefProcessMessage> message) {
+   CEF_REQUIRE_RT_RETURN_VOID();
+diff --git a/libcef/renderer/frame_impl.h b/libcef/renderer/frame_impl.h
+index 91fe050da1faa66acae038de0e737c02650adfb8..7473255dba606905860c0a75debef67eee602fbf 100644
+--- a/libcef/renderer/frame_impl.h
++++ b/libcef/renderer/frame_impl.h
+@@ -79,6 +79,22 @@ class CefFrameImpl
+       CefRefPtr<CefURLRequestClient> client) override;
+   void SendProcessMessage(CefProcessId target_process,
+                           CefRefPtr<CefProcessMessage> message) override;
++  bool ConvertPointFromView(double view_x,
++                            double view_y,
++                            double& frame_x,
++                            double& frame_y,
++                            double& frame_width,
++                            double& frame_height) override;
++  void SendMouseMoveEventToFrame(double x,
++                                 double y,
++                                 uint32_t modifiers,
++                                 bool mouse_leave) override;
++  void SendMouseClickEventToFrame(double x,
++                                  double y,
++                                  uint32_t modifiers,
++                                  cef_mouse_button_type_t type,
++                                  bool mouse_up,
++                                  int click_count) override;
+ 
+   // Forwarded from CefRenderFrameObserver.
+   void OnWasShown();

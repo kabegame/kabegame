@@ -720,6 +720,12 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
   - `editable`：`wallpaper64.exe` 里没有这个字符串，推断是编辑器键，按中性放开。
 - **varying 的布局（P7e，2026-11-14 加）**：WebGPU 缺省 16 个阶段间变量，语料 5 张超过（`auto_sway` 4 张、示波器 3585875739），运行时建管线失败。照 WPE 的数组长度（`vec3` / `vec4` 数组只剩 `ceil(n / 4)` 个元素）并在超过时打包进 vec4，见 [phase-7e-varyings.md](phase7/phase-7e-varyings.md)。2026-11-14 完成：改后最多 13 个 location，确定性工程与 WPE 逐格一致，3585875739 运行时能画了；不解锁别的场景。收尾另修上界是字面量 0 的 `smoothstep`（fxc 把 `0.0 - lo` 化成 `-lo`，示波器没有声音时整张提亮）。
 - **验收：** 翻译器的语料测试覆盖 pkg 里的工坊着色器；解锁的场景和 WPE 同一时刻的画面比。
+- **单级 mip 纹理的采样器（2026-11-14，P12a 走查转来的 B1）**：`samplerDescriptor` 原先只给多级 mip 的纹理开 8 倍各向异性，单级 mip 的（effect 遮罩、视频）只用双线性；WPE 对文件纹理一律是 Anisotropic 8x、只有 NoInterpolation 点采样（`FUN_140099980`，rea-p8-layer 3.2；视频见 p9-REPORT）。改成不看 mip 级数。依据与复核：
+  - 3811769317 的 cloudmotion 用带噪声偏移的第二次采样读遮罩，导数被拉长，双线性和各向异性差到 204 级。复制工程 `ignore/p12/a/final/proj/3811769317-iso-pup` 的 275–280 帧和 WPE 比：改前每帧约 4900 个像素、最大 98–204，改后 10–417 个、最大 1–2（`ignore/p12/a/final/cmp/3811769317-iso-b1.txt`）。
+  - 10 张场景的画面哈希（`ignore/p7e/hash-b1*.json`）：beach、deep_space、razer_vortex 变了，临时退回旧规则的 A 组和旧基线逐个相同，变化全部来自这一处；其余 7 张不变。p2-REPORT J1 记的 razer_vortex `wave`（64×8、无 mip）当时认为「WebGPU 复刻不了各向异性」，现在能开了，但这几张没有再和 WPE 重比。
+- **采样器注解 `components` 的组合键（2026-11-15，P12b2 走查转来的 F1）**：`generic4` / `genericimage2/4` 的 PBR 遮罩槽注解带 `components`（METALLIC / ROUGHNESS / REFLECTION / EMISSIVE_MAP），翻译器原先只置顶层 `combo`，3706286085 的 Sonic 手套等少了自发光那一项（WPE 亮 1.15–1.31 倍），静默的画面差。WPE 的规则（`FUN_14016c800`，解析在 `FUN_14016ce60`）：槽绑了纹理时，纹理标志（`.tex` 头、纹理对象 `+0x1c`）带 `0x100000 << i` 就置第 i 个对象条目的组合键；编辑器画的遮罩把用了哪些通道记在 bit 20–23（这张的遮罩是 `0x00800002`，只置 EMISSIVE）。翻译器 `BoundTexture` 加 `flags`，宿主给文件纹理传头标志，缓存键只收 bit 20 起。依据与复核：
+  - 复制工程 `ignore/p12/b2/check1/proj/3706286085-iso-boost(-nl)` 按 WPE 日志回放、和 WPE 抓帧逐帧比（`ignore/f1/cmp-*.txt`）：> 32 的像素 nl 变体每帧 1.5–2.0 万降到 0.12–0.29 万，第 403 帧从 54589 个 / 最大 64 降到 45 个 / 最大 1；原样副本 0.7–1.1 万降到 0.15–0.21 万。剩下的是 P12b2 报告里的 K2 等。
+  - 语料（`ignore/f1/`，同一份 wasm、只差宿主传不传 `flags`）：unsupported 逐场景不变（干净 175 → 175）；1299 个翻译请求里 20 个置了子组合键，涉及 8 张，四个子组合键都有，8 张目前都被别的能力挡着。
 
 ## P8 — 图像层与材质补全
 
@@ -784,7 +790,31 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
   - 生成工程整帧逐像素相同；
   - 6 张复制工程差异 ≤ 2 级，归 waterwaves 与 `rsqrtps`。
 - 走查找到的 B1：父被脚本或关键帧移动时，挂点的 puppet 与局部空间粒子在 WPE 里晚一帧，原因是世界矩阵缓存戳，`p12-lag` 实测 16 种组合。已照缓存戳修（`render/worldStamps.ts`）。
-- 待做：P12b2（纹理通道、模型对象骨骼）、P12c、P12d。
+- 待做：P12c、P12d。
+
+**进度**（2026-11-15）：**P12b2 完成**（[phase-12b2-texchan-model.md](phase12/phase-12b2-texchan-model.md)，`6d46439b` 与 P12b2-2 / 收尾提交）。
+- **模型骨骼**：复用图像层 puppet 的运行时。模型模式的不同：隐藏冻结、权重 0 跳过、变形按网格、剔除盒取动画包围盒。
+- **纹理通道**：在合成 RT 里补画通道网格，`g_BlendMap` 帧首不复位。
+- **WPE 的两处模型变形缺陷不照抄**（2026-11-15 用户：语料依赖的缺陷才复现）。
+- **语料**：不解锁场景。`3706286085` 还差 P13 的雾、阴影与 P12c 的动画层脚本；`3811424158` 还差精灵表帧动画。
+- **走查**：生成工程整帧逐像素相同；`3706286085` 复制工程的骨骼矩阵逐位相同。顺带发现 `generic4` 的 PBR 遮罩少了 emissive 子组合键（F1，静默的画面差），已转 P7。
+
+**进度**（2026-11-15）：**P12c 完成**（[phase-12c-script.md](phase12/phase-12c-script.md)）：动画层的脚本 API。
+- **范围**：`getAnimationLayerCount` / `getAnimationLayer`、`IAnimationLayer` 全部成员、动画层字段脚本（新属主 `animation-layer`）、`addEndedCallback`、MDLA 事件；宿主在 `init` 之前建待用 puppet 运行时。
+- **不做**：建删层三个方法照报（用户定）。
+- **F2**：走查发现设备纹理上限是 WebGPU 缺省的 8192，改为按适配器最大值申请（WPE 16384），随 P12c 修。
+- **语料**：233 张能渲染 160 → 164，解锁 `3346715292`、`3361965869`、`3492627662`、`3830665420`（后者靠 F2）。
+- **走查**：
+  - `p12-script` 642 行脚本日志与 WPE 逐行相同、整帧最大差 1 级；
+  - 三张解锁场景的 puppet `g_Bones` 只差 `rsqrtps`；
+  - P12a / P12b 生成工程逐字节不变。
+- **待做**：P12d（骨骼物理）。
+
+**进度**（2026-11-15）：**P12d 完成**（[phase-12d-physics.md](phase12/phase-12d-physics.md)）：骨骼物理与骨骼脚本 API。
+- **物理**：照读码 2.4 改写 python 模型，在父链里逐根求解；夹具对 WPE 在 python 模型量级以内。
+- **骨骼 API**：先补读码（`rea-p12d-bones`）再实测 `p12-bones`，脚本日志与 `g_Bones` 与 WPE 逐位相同。
+- **语料**：233 张能渲染 182 → 185，解锁 `2345214324`、`3359451610`、`3426865175`。
+- **P12 全部完成**。照报的有：模型对象的物理，语料 0 处的骨骼局部读写、混合形状、建删动画层。
 
 - MDLV0021 / MDLV0023 的骨骼（MDLS）、动画（MDLA）、变形（MDMP），skinning（翻译器经 `defines` 传 `BONECOUNT`），puppet warp。语料 33 张。
 - 对象 `animationlayers`（31 张）、`attachment` 挂点（10 张）；脚本 `getAnimationLayer*`、骨骼与混合形状的 API。
@@ -814,6 +844,10 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
   - 另有几处小差异：透视图层换相机的范围、非 final pass 的 `g_ViewProjectionMatrix`、`g_EffectModelMatrixInverse`（WPE 没有这个内置名）。
   - 语料 0 处受影响：150 个这类 pass 都不读这些矩阵。等出现受影响的 effect 再做。
   - 规则、证据与修法见 [effect-matrices-REPORT](effect-matrices-REPORT.md)；工程 `ignore/p7d/proj/p7d-mvp`，抓帧 `A:\p7d\mvp`。
+- **waterwaves 的零星 1 级差**（2026-11-14 P12a 走查的 K4 / U1，用户定为后续项）：
+  - 输入 RT、常量、遮罩逐位相同时，waterwaves 输出仍有一百多个像素差 1 级（3828324728 头发 159 个、3409595232 165 个），全部在遮罩 > 0 处。
+  - 把 WPE 原文直译成 WGSL 回放，对 WPE 只差 8 个像素，用我们翻译器的输出差 87 个，所以差在翻译出的片元算术上（`sin` 参数的乘加、`pow` 的 log / exp 段），还没对 DXBC 与 WGSL 逐指令定位。
+  - 收益只是零星 1 级差。数据在 `ignore/p12/a/final/`（`report.txt` 第三节 K4、第四节 U1，回放器 `scripts/gpuwaves.ts`）。
 
 ## 旧名对照表（D15）
 

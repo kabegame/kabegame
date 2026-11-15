@@ -1,8 +1,10 @@
-import { type TargetKey, type UserProperty } from "../compile/bindings";
+import { scriptPropertyEntries, type TargetKey, type UserProperty } from "../compile/bindings";
 import { scriptToString } from "../text/fields";
 import { type SceneScript, type SceneScripts, type ScriptOwner } from "../compile/scripts";
 import { type CursorCallback } from "../render/cursor";
 import { type SceneReporter } from "../report";
+import type { ModuleInstance, ScriptModule } from "./moduleFactory";
+import { FACTORY_LINE_OFFSET } from "./moduleRewrite";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 
 export interface ScriptRealm {
@@ -12,7 +14,11 @@ export interface ScriptRealm {
     updateScriptProperties(script: Record<string, unknown>, vars: string): void;
     convertUserProperties(json: string): Record<string, unknown>;
   };
-  importModule(source: string, label: string): Promise<Record<string, unknown>>;
+  /**
+   * 加载期：每种源码一次（按源码文本缓存 Promise，同一源码的两段脚本共用一个 ScriptModule、各自 instantiate）。
+   * 失败时 reject，错误要和以前 importModule 同一份源码给出的错误一样（文字与行列）。
+   */
+  prepareModule(source: string, label: string): Promise<ScriptModule>;
   dispose(): void;
 }
 
@@ -40,8 +46,23 @@ export const RUNTIME_CALLBACKS = [
   "cursorClick",
   "cursorDown",
   "cursorUp",
+  // 系统媒体集成（P11c）：宿主按 WPE 的固定顺序派发（`media/scene.ts`），返回值丢弃
+  "mediaStatusChanged",
+  "mediaPlaybackChanged",
+  "mediaPropertiesChanged",
+  "mediaThumbnailChanged",
+  "mediaTimelineChanged",
 ] as const;
 type Callback = (typeof RUNTIME_CALLBACKS)[number];
+/** 五个系统媒体回调的名字（`ScriptRuntime.mediaEvent`）。 */
+export type MediaCallback = Extract<
+  Callback,
+  | "mediaStatusChanged"
+  | "mediaPlaybackChanged"
+  | "mediaPropertiesChanged"
+  | "mediaThumbnailChanged"
+  | "mediaTimelineChanged"
+>;
 /** 打开拾取的导出：六个光标回调加 `cursorHitTest`（WPE 绑定时 `mask & 0x3f80`，rea-p6c-dispatch 3.1）。 */
 const CURSOR_EXPORTS = [
   "cursorHitTest",
@@ -59,6 +80,11 @@ const CURSOR_EXPORTS = [
 type HostCallback = "timer" | "ended";
 interface ScriptRecord {
   script: SceneScript;
+  /** 加载期编好的模块（同源码的脚本共用）；P6d3 要用，现在只存不用 */
+  module: ScriptModule | null;
+  /** 这段脚本自己的模块状态 */
+  instance: ModuleInstance | null;
+  /** = `instance.namespace`：回调的 this、诊断的导出名、updateScriptProperties 的参数 */
   exports: Record<string, unknown> | null;
   state: "pending" | "loaded" | "inited" | "failed";
   disabled: Set<Callback>;
@@ -88,6 +114,9 @@ export function targetKey(target: ScriptTarget): string {
   switch (target.kind) {
     case "layer":
       return `objects/${target.object}/${target.field}`;
+    // `rotateObjectSpace`（P6d1a）：与 `angles` 同一个键，后写的覆盖先写的
+    case "rotation":
+      return `objects/${target.object}/angles`;
     case "effect":
       return `objects/${target.object}/effects/${target.effect}/visible`;
     case "constant":
@@ -116,6 +145,9 @@ export function targetKey(target: ScriptTarget): string {
     // puppet 动画层字段（P12a 步骤 3 点 3）：只有用户属性写它，脚本写不到（`puppet:layer-script`）；同宿主 `targetPath`
     case "animation-layer":
       return `objects/${target.object}/animationlayers/${target.layer}/${target.field}`;
+    // 材质状态字段（P6d1b）：同宿主 `targetPath`，重编译后按它重放
+    case "pass-state":
+      return `${target.pass}/state/${target.field}`;
     default:
       return target.path;
   }
@@ -139,8 +171,11 @@ export function messageOf(error: unknown): string {
   const object = error as { message?: unknown; stack?: unknown } | null;
   const message = typeof object?.message === "string" ? object.message : String(error);
   const stack = typeof object?.stack === "string" ? object.stack : "";
-  const location = /blob:[^\s)]+:(\d+):(\d+)/.exec(stack);
-  return location ? `${message} (line ${location[1]}, col ${location[2]})` : message;
+  // 栈里第一处 blob 行列或工厂脚本（`kabegame-script:<序号>`）行列；工厂源码在原文前有包装头与前言，行要减掉
+  const location = /(?:blob:[^\s)]+|(kabegame-script):\d+):(\d+):(\d+)/.exec(stack);
+  if (!location) return message;
+  const line = location[1] ? Number(location[2]) - FACTORY_LINE_OFFSET : Number(location[2]);
+  return `${message} (line ${line}, col ${location[3]})`;
 }
 
 export class ScriptRuntime {
@@ -151,6 +186,11 @@ export class ScriptRuntime {
   private unsupported = new Set<string>();
   private halted = false;
   private active: ScriptRecord | null = null;
+  /**
+   * 正在跑的回调名（P11d，WPE 的 `G+0x62c`）：`invoke` 进入时记下、结束时恢复成进入前的（嵌套时还原上一个，如光标回调里的 `callFor`）。
+   * 只有 API 读（`engine.openUserShortcut` 只许在光标回调里调）；不在任何回调里（模块求值、宿主直接调）为 null。
+   */
+  private activeCallbackName: string | null = null;
 
   constructor(
     private readonly realm: ScriptRealm,
@@ -173,6 +213,10 @@ export class ScriptRuntime {
   }
   get stopped(): boolean {
     return this.halted;
+  }
+  /** 正在跑的回调名（P11d）；不在回调里为 null。 */
+  get activeCallback(): string | null {
+    return this.activeCallbackName;
   }
   get diagnostics(): unknown[] {
     return this.records.map((record) => ({
@@ -203,7 +247,9 @@ export class ScriptRuntime {
   private invoke(record: ScriptRecord, callback: Callback | HostCallback, fn: () => unknown): unknown {
     if (this.halted) return undefined;
     const previous = this.active;
+    const previousCallback = this.activeCallbackName;
     this.active = record;
+    this.activeCallbackName = callback;
     this.options.enterScript?.(record.script);
     const now = this.options.now ?? performance.now.bind(performance);
     const start = now();
@@ -220,6 +266,7 @@ export class ScriptRuntime {
       stats.count++;
       stats.maxMs = Math.max(stats.maxMs, elapsed);
       this.active = previous;
+      this.activeCallbackName = previousCallback;
       this.options.enterScript?.(previous?.script ?? null);
       if (elapsed > 15_000 && !this.halted) {
         this.halted = true;
@@ -229,10 +276,17 @@ export class ScriptRuntime {
     return result;
   }
 
+  /** 取一段脚本导出的函数（经 `instance.read`，不经命名空间 Proxy）；不是函数返回 undefined。 */
+  private exported(record: ScriptRecord, name: string): ((...args: unknown[]) => unknown) | undefined {
+    const value = record.instance?.read(name);
+    return typeof value === "function" ? (value as (...args: unknown[]) => unknown) : undefined;
+  }
+
   private call(record: ScriptRecord, callback: Callback, ...args: unknown[]): unknown {
-    if (record.disabled.has(callback) || !record.exports || typeof record.exports[callback] !== "function")
-      return undefined;
-    return this.invoke(record, callback, () => (record.exports![callback] as (...args: unknown[]) => unknown)(...args));
+    if (record.disabled.has(callback)) return undefined;
+    const fn = this.exported(record, callback);
+    if (!fn) return undefined;
+    return this.invoke(record, callback, () => fn.call(record.exports, ...args));
   }
 
   /**
@@ -252,7 +306,12 @@ export class ScriptRuntime {
       : typeof input === "string"
         ? input.trim().split(/\s+/).map(Number)
         : [input];
-    if (type === "float") return scriptNumber(values[0]);
+    if (type === "float") {
+      // rad2deg 的材质常量：状态存弧度、脚本读度（与材质对象字段读同一个换算）
+      if (record.script.target.kind === "constant" && record.script.target.rad2deg && typeof values[0] === "number")
+        return radiansToScript(values[0]);
+      return scriptNumber(values[0]);
+    }
     const size = type === "vec2" ? 2 : type === "vec4" ? 4 : 3;
     const prototype = this.realm.prototypes[`Vec${size}` as "Vec2" | "Vec3" | "Vec4"];
     const ctor = (prototype as { constructor: new (...args: number[]) => unknown }).constructor;
@@ -291,7 +350,8 @@ export class ScriptRuntime {
         value = parts as number[];
       } else return;
       // 角度按 WPE 的 f32 乘法换成弧度（`f32.ts`）；其余数原样交给宿主（下一次读时再取 f32，同 WPE 存下的值）
-      if (type === "angles") value = value.map((part) => degreesFromScript(part));
+      if (type === "angles" || (record.script.target.kind === "constant" && record.script.target.rad2deg))
+        value = value.map((part) => degreesFromScript(part));
     }
     if (record.script.target.kind === "recompile") record.recompileWrites++;
     if (this.options.write(record.script.target, value, record.script.id))
@@ -302,9 +362,15 @@ export class ScriptRuntime {
     }
   }
 
-  async load(scripts: SceneScripts): Promise<void> {
+  /**
+   * @param afterInit 全部脚本跑完 `init` 之后调一次（P11c：WPE 在这一步按场景媒体状态给刚 `init` 的脚本补发一轮媒体回调，
+   *   `media/scene.ts` 的 `replayAfterInit`，经 `mediaEvent`；在首次 `applyUserProperties` 之前）。
+   */
+  async load(scripts: SceneScripts, afterInit?: () => void): Promise<void> {
     this.records = scripts.list.map((script) => ({
       script,
+      module: null,
+      instance: null,
       exports: null,
       state: "pending",
       disabled: new Set(),
@@ -325,7 +391,13 @@ export class ScriptRuntime {
         this.active = record;
         this.options.enterScript?.(record.script);
         this.options.setModuleEvaluating?.(true);
-        record.exports = await this.realm.importModule(record.script.source, record.script.id);
+        record.module = await this.realm.prepareModule(record.script.source, record.script.id);
+        const made = record.module.instantiate();
+        record.instance =
+          typeof (made as { then?: unknown }).then === "function"
+            ? await (made as Promise<ModuleInstance>)
+            : (made as ModuleInstance);
+        record.exports = record.instance.namespace;
         record.state = "loaded";
         this.options.report.debug(`场景脚本 ${record.script.id} 导出：${Object.keys(record.exports).join(",")}`);
       } catch (error) {
@@ -352,6 +424,7 @@ export class ScriptRuntime {
       record.state = "inited";
       if (this.halted) break;
     }
+    if (!this.halted) afterInit?.();
     this.options.report.info(
       `场景脚本加载完成：${this.records.length} 段，成功 ${this.records.filter((r) => r.state === "inited").length} 段，失败 ${this.records.filter((r) => r.state === "failed").length} 段，用时 ${Math.round((this.options.now ?? performance.now.bind(performance))() - start)} ms`,
     );
@@ -365,7 +438,8 @@ export class ScriptRuntime {
     if (this.halted) return;
     this.options.setProperties?.(full);
     const converted: Record<string, UserProperty> = {};
-    for (const [key, property] of Object.entries(delta))
+    // 键按 WPE 的字节序（`scriptPropertyEntries`）：宿主首包是内置项在前、工程属性在后
+    for (const [key, property] of scriptPropertyEntries(Object.entries(delta)))
       if (property && typeof property.type === "string" && "value" in property) converted[key] = property;
     const json = JSON.stringify(converted);
     for (const record of this.records) {
@@ -388,7 +462,7 @@ export class ScriptRuntime {
     }
     for (const record of this.records) {
       if (record.state !== "inited" || this.halted) continue;
-      if (typeof record.exports?.applyUserProperties === "function")
+      if (this.exported(record, "applyUserProperties"))
         this.call(record, "applyUserProperties", this.realm.internal.convertUserProperties(json));
     }
   }
@@ -398,10 +472,11 @@ export class ScriptRuntime {
    * `thisObject` 是它的），计时、出错记进它的诊断（类别 `ended`），不禁用任何回调，同计时器。记录不在（脚本表已换、`owner` 不认识）
    * 或运行时已停止时不调。
    */
-  callFor(owner: string, fn: () => unknown): void {
+  callFor(owner: string, fn: (exports: Record<string, unknown>) => unknown): void {
     const record = this.byId.get(owner);
     if (!record || this.halted) return;
-    this.invoke(record, "ended", fn);
+    // `fn` 多收一个参数：那段脚本的模块命名空间（P12c，动画层播完回调的 `this`，读码 3.2）
+    this.invoke(record, "ended", () => fn(record.exports ?? {}));
   }
 
   setTimeout(callback: () => void, ms: number, owner = this.active?.script.id): () => void {
@@ -460,7 +535,7 @@ export class ScriptRuntime {
     if (this.halted) return;
     for (const record of this.records) {
       if (record.state !== "inited" || scriptObject(record.script.owner) !== object) continue;
-      if (record.disabled.has("animationEvent") || typeof record.exports?.animationEvent !== "function") continue;
+      if (record.disabled.has("animationEvent") || !this.exported(record, "animationEvent")) continue;
       const parse = (this.realm.global.JSON as JSON).parse;
       const result = this.call(record, "animationEvent", parse(json), this.value(record));
       this.writeReturn(record, result);
@@ -479,7 +554,7 @@ export class ScriptRuntime {
     if (this.halted) return;
     for (const record of this.records) {
       if (record.state !== "inited" || scriptObject(record.script.owner) !== object) continue;
-      if (record.disabled.has(callback) || typeof record.exports?.[callback] !== "function") continue;
+      if (record.disabled.has(callback) || !this.exported(record, callback)) continue;
       this.call(record, callback, this.cursorEventObject(world, local));
       if (this.halted) break;
     }
@@ -497,11 +572,24 @@ export class ScriptRuntime {
     return event;
   }
 
+  /**
+   * 系统媒体回调（P11c，rea-p11-media 2.3）：发给全部已跑完 `init`、导出了该回调且没被禁用的脚本，按记录顺序（= WPE 的登记顺序，全场景广播、
+   * 不分对象）。`makeEvent` 每个接收者各调一次（事件对象是普通对象，改它不影响别人），参数是脚本所在的 realm（对象与 `Vec3` 要在里面建）。
+   * 回调只有一个参数、返回值丢弃（WPE 只写回 `init` / `update` / `animationEvent`）；出错只禁用这个回调（`invoke`）。
+   */
+  mediaEvent(callback: MediaCallback, makeEvent: (realm: ScriptRealm) => unknown): void {
+    if (this.halted) return;
+    for (const record of this.records) {
+      if (record.state !== "inited" || record.disabled.has(callback) || !this.exported(record, callback)) continue;
+      this.call(record, callback, makeEvent(this.realm));
+      if (this.halted) break;
+    }
+  }
+
   /** 某个对象上有没有脚本导出了光标回调（`cursorHitTest` 也算：它只打开拾取）：渲染器据此决定每帧要不要做命中测试。 */
   get hasCursorCallbacks(): boolean {
     return this.records.some(
-      (record) =>
-        record.state === "inited" && CURSOR_EXPORTS.some((name) => typeof record.exports?.[name] === "function"),
+      (record) => record.state === "inited" && CURSOR_EXPORTS.some((name) => this.exported(record, name)),
     );
   }
 

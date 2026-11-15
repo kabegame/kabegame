@@ -1,6 +1,8 @@
 /**
  * P10b 步骤 2：`ScriptRuntime.animationEvent`（关键帧动画的事件派发给脚本）。假 realm，同 `runtime.test.ts` 的写法。
  */
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import type { SceneScript } from "../compile/scripts";
 import { ScriptRuntime, scriptObject, type ScriptRealm, type ScriptTarget } from "./runtime";
@@ -17,10 +19,10 @@ class FakeRealm implements ScriptRealm {
   prototypes = { Vec2: Vec.prototype, Vec3: Vec.prototype, Vec4: Vec.prototype, Mat3: {}, Mat4: {} };
   modules = new Map<string, Record<string, unknown> | Error>();
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
     const result = this.modules.get(label);
     if (result instanceof Error) throw result;
-    return result ?? {};
+    return fakeModule(result ?? {});
   }
   dispose() {}
 }
@@ -192,11 +194,11 @@ describe("ScriptRuntime.animationEvent（P10b）", () => {
     const calls: string[] = [];
     let open!: () => void;
     const gate = new Promise<void>((resolve) => (open = resolve));
-    const importModule = h.realm.importModule.bind(h.realm);
+    const prepareModule = h.realm.prepareModule.bind(h.realm);
     // 第二段的模块求值卡住：第一段这时是「已求值、init 还没跑」
-    h.realm.importModule = async (source: string, label: string) => {
+    h.realm.prepareModule = async (source: string, label: string) => {
       if (label === "b") await gate;
-      return importModule(source, label);
+      return prepareModule(source, label);
     };
     h.realm.modules.set("a", { animationEvent: () => void calls.push("a") });
     h.realm.modules.set("b", { animationEvent: () => void calls.push("b") });

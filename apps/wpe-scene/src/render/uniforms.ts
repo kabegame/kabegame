@@ -356,6 +356,12 @@ export function drawMatrices(
   const hw = (size[0] ?? 0) / 2,
     hh = (size[1] ?? 0) / 2;
   const half = scaling(hw, hh, 1);
+  // puppet 的纹理通道网格（P12b2-2，rea-texchan-model 2，p12b2-tc 实测 MVP = `ortho(0, W, 0, H)`、M = I）：W、H 是合成 RT 的尺寸（`size` 参数就是它），
+  // 深度范围同文本画进合成 RT（z 系数 1/2000、平移 0.5）；模型矩阵是 `diag(1/s, 1/s, 1, 1)`，我们的纹理降级系数 s 恒为 1
+  if (step.geometry === "texchan") {
+    const projection = orthographic(0, size[0] ?? 0, 0, size[1] ?? 0, TEXT_RT_DEPTH, -TEXT_RT_DEPTH);
+    return { modelViewProjection: projection, model: identity(), viewProjection: projection };
+  }
   if (step.geometry === "shape")
     return {
       modelViewProjection: layerMvp,

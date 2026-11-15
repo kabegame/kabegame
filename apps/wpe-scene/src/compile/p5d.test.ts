@@ -3,7 +3,7 @@
  * p5-REPORT「P5d 语义的实测核对」的深度、非法值、缺键三行：
  * - `normalizeDepthKeys`：缺键为开（`cullmode` normal、`depthtest` / `depthwrite` enabled），合法值原样，写了但不是表里的串（含非字符串、
  *   `null`）取表的第一项（`depthtest` / `depthwrite` 落到 disabled、`cullmode` 落到 normal）；
- * - 能力表不再报 `cull:*`、`depthtest:*`、`depthwrite:*`（模型的也去掉）；拼错的键（ricepod 的 `depthtesting`）照报 `material:<键>`；
+ * - 能力表不再报 `cull:*`、`depthtest:*`、`depthwrite:*`（模型的也去掉）；拼错的键（ricepod 的 `depthtesting`）P13c 起中性；
  * - `compileScene`：图像层、模型的 `ScenePass` 一套规则，非法值不报、规整后写进 pass。
  */
 import { describe, expect, it, vi } from "vitest";
@@ -67,11 +67,8 @@ describe("checkPassFeatures：深度与剔除三个键都不报（P5d 步骤 1�
           }
   });
 
-  it("拼错的键（ricepod 的 depthtesting / depthwriting，WPE 不认、等于缺键）照报 material:<键>", () => {
-    expect(keys({ shader: "s", depthtesting: "enabled", depthwriting: "enabled" } as MaterialPass)).toEqual([
-      "material:depthtesting",
-      "material:depthwriting",
-    ]);
+  it("拼错的键（ricepod 的 depthtesting / depthwriting，WPE 不认、等于缺键）中性（P13c）", () => {
+    expect(keys({ shader: "s", depthtesting: "enabled", depthwriting: "enabled" } as MaterialPass)).toEqual([]);
   });
 });
 

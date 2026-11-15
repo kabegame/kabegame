@@ -481,5 +481,19 @@
   "wpeSetCoverFailed": "カバーを設定できませんでした",
   "wpeRestoreCover": "既定のカバーに戻す",
   "wpeRestoreCoverDone": "既定のカバーに戻しました",
-  "wpeRestoreCoverFailed": "既定のカバーに戻せませんでした"
+  "wpeRestoreCoverFailed": "既定のカバーに戻せませんでした",
+  "wpeShortcutKindFile": "ファイル",
+  "wpeShortcutKindDirectory": "フォルダー",
+  "wpeShortcutKindWeb": "Web サイト",
+  "wpeShortcutKindCmd": "コマンド",
+  "wpeShortcutPathFile": "プログラムまたはファイルのパス",
+  "wpeShortcutPathDirectory": "フォルダーのパス",
+  "wpeShortcutPathWeb": "アドレス（例: https://example.com）",
+  "wpeShortcutPathCmd": "コマンドライン（例: notepad readme.txt）",
+  "wpeShortcutArgs": "引数（省略可）",
+  "wpeShortcutBrowse": "参照",
+  "wpeShortcutTest": "テスト",
+  "wpeShortcutTestStarted": "起動を要求しました",
+  "wpeShortcutTestRejected": "このショートカットは起動できません",
+  "wpeShortcutTestFailed": "ショートカットを起動できませんでした"
 }

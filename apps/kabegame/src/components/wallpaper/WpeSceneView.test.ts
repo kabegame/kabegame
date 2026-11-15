@@ -4,15 +4,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WpeSceneView from "./WpeSceneView.vue";
 import { WPE_SCENE_DISPLAY, WPE_SCENE_POINTER, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
 import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
+import { WPE_SCENE_SHORTCUT } from "./wpeSceneShortcut";
+import { WPE_VOLUME_MESSAGE, WPE_VOLUME_REQUEST } from "./wpeWebVolume";
+import { framePointerEvents } from "./framePointer";
 
 /** `wpe_scene_cursor` 的返回（开场指针）；其余命令都当取宿主地址。 */
 const cursor = vi.hoisted(() => ({ value: null as { x: number; y: number } | null }));
 /** 本组件订阅的 `wpe-scene-status` 处理函数（测试里模拟宿主报 ready）。 */
 const status = vi.hoisted(() => ({ handler: null as ((event: { payload: unknown }) => void) | null }));
+/** 记下每次 `invoke`（P11d 的快捷方式用例读）；`reject` 为真时 `wpe_open_user_shortcut` 失败。 */
+const invokes = vi.hoisted(() => ({ list: [] as { command: string; args: unknown }[], reject: false }));
 vi.mock("@/api", () => ({
-  invoke: async (command: string) => (command === "wpe_scene_cursor" ? cursor.value : "file:///D:/host/index.html"),
+  invoke: async (command: string, args?: unknown) => {
+    invokes.list.push({ command, args });
+    if (command === "wpe_open_user_shortcut") {
+      if (invokes.reject) throw new Error("启动失败");
+      return true;
+    }
+    return command === "wpe_scene_cursor" ? cursor.value : "file:///D:/host/index.html";
+  },
 }));
-vi.mock("@/utils/logger", () => ({ logger: { warn: vi.fn(), debug: vi.fn() } }));
+const loggerMock = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
+vi.mock("@/utils/logger", () => ({ logger: loggerMock }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: async (_name: string, handler: (event: { payload: unknown }) => void) => {
     status.handler = handler;
@@ -241,5 +254,98 @@ describe("WpeSceneView 开场指针（P5a 收尾）", () => {
     ready(frame);
     await flushPromises();
     expect(pointerPosts(post)).toEqual([{ type: WPE_SCENE_POINTER, x: 0.75, y: 0.75 }]);
+  });
+});
+
+describe("WpeSceneView 快捷方式（P11d）：应用页是安全边界", () => {
+  const launches = () => invokes.list.filter((item) => item.command === "wpe_open_user_shortcut");
+  const activation = (isActive: boolean | undefined) =>
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: isActive === undefined ? undefined : { isActive },
+    });
+
+  beforeEach(() => {
+    invokes.list.length = 0;
+    invokes.reject = false;
+    loggerMock.warn.mockClear();
+    loggerMock.debug.mockClear();
+    activation(true);
+  });
+  afterEach(() => activation(undefined));
+
+  it("可交互 + 用户激活：以本组件的图片 id 调 wpe_open_user_shortcut，消息里别的字段不进命令", async () => {
+    const { fromHost } = await mountView("fit", true);
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "Chrome", imageId: "999", path: "C:/evil.exe" });
+    await flushPromises();
+    expect(launches()).toEqual([{ command: "wpe_open_user_shortcut", args: { imageId: "7", name: "Chrome" } }]);
+  });
+
+  it("不可交互的实例（应用背景等）不启动，记一条 debug", async () => {
+    const { fromHost } = await mountView("fit", false);
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "Chrome" });
+    await flushPromises();
+    expect(launches()).toEqual([]);
+    expect(loggerMock.debug).toHaveBeenCalledWith(expect.stringContaining("不可交互"));
+  });
+
+  it("没有用户激活（isActive 为假、浏览器没有这个接口）不启动", async () => {
+    const { fromHost } = await mountView("fit", true);
+    activation(false);
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "Chrome" });
+    activation(undefined);
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "Chrome" });
+    await flushPromises();
+    expect(launches()).toEqual([]);
+    expect(loggerMock.debug).toHaveBeenCalledWith(expect.stringContaining("没有用户激活"));
+  });
+
+  it("来源不是自己的 iframe、isTrusted 为假的消息不启动", async () => {
+    const { fromHost } = await mountView("fit", true);
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "Chrome" }, window);
+    window.dispatchEvent(new MessageEvent("message", { data: { type: WPE_SCENE_SHORTCUT, name: "Chrome" } }));
+    await flushPromises();
+    expect(launches()).toEqual([]);
+  });
+
+  it("名字不合法（空、过长、不是字符串）不启动；按名字 1 秒节流", async () => {
+    const { fromHost } = await mountView("fit", true);
+    for (const name of ["", "a".repeat(257), 5, null]) fromHost({ type: WPE_SCENE_SHORTCUT, name });
+    await flushPromises();
+    expect(launches()).toEqual([]);
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "a" });
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "a" });
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "b" });
+    await flushPromises();
+    expect(launches().map((item) => (item.args as { name: string }).name)).toEqual(["a", "b"]);
+    expect(loggerMock.debug).toHaveBeenCalledWith(expect.stringContaining("1 秒内重复"));
+  });
+
+  it("命令失败只记 warn，不抛", async () => {
+    invokes.reject = true;
+    const { fromHost } = await mountView("fit", true);
+    fromHost({ type: WPE_SCENE_SHORTCUT, name: "Chrome" });
+    await flushPromises();
+    expect(loggerMock.warn).toHaveBeenCalledWith(expect.stringContaining("启动快捷方式失败"));
+  });
+});
+
+describe("WpeSceneView 鼠标", () => {
+  it("音量消息带 interactive，变化时主动推；iframe 按平台收不收真实鼠标", async () => {
+    const { wrapper, post, fromHost, frame } = await mountView("fit", true);
+    const volumePosts = () =>
+      post.mock.calls.filter(([data]) => (data as { type?: unknown }).type === WPE_VOLUME_MESSAGE);
+    fromHost({ type: WPE_VOLUME_REQUEST });
+    expect(frame.style.pointerEvents).toBe(framePointerEvents(true));
+    expect(volumePosts().at(-1)?.[0]).toEqual({
+      type: WPE_VOLUME_MESSAGE,
+      volume: 1,
+      paused: false,
+      interactive: true,
+    });
+    await wrapper.setProps({ interactive: false });
+    expect((volumePosts().at(-1)?.[0] as { interactive: boolean }).interactive).toBe(false);
+    // 不交互时任何平台都不收真实鼠标
+    expect(frame.style.pointerEvents).toBe("none");
   });
 });

@@ -1,5 +1,6 @@
 import {
   GENERAL_FIELDS,
+  scriptPropertyEntries,
   TEXT_RUNTIME_FIELDS,
   type BindingTarget,
   type GeneralKey,
@@ -12,24 +13,47 @@ import type { AnimationControl } from "../animation/player";
 import type { SceneAnimation } from "../animation/types";
 import type { SceneSpectrum } from "../audio/spectrum";
 import { alignmentIndex, alignmentName } from "../compile/alignment";
-import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import type { SceneBundle, SceneEffect, SceneLayer, ScenePass } from "../compile/bundle";
 import { constantTargetFields, materialSlots, type MaterialMember } from "../compile/materialValues";
+import { isPassStateField, type PassStateField } from "../compile/passState";
 import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlPoint } from "../compile/particles";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import { TEXT_ANCHORS } from "../compile/texts";
+import { animationLayerKey, puppetEntries, type PuppetLayerControl, type PuppetRig } from "../puppet/player";
 import type { CursorInputSnapshot } from "../render/cursor";
+import { anglesRotation, drawMatrixOf } from "../render/layout";
+import { extractEulerZYX, lookAtAngles, lookAtYawAngles, rotateObjectSpace } from "../render/rotation";
 import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
-import type { VideoTexturePlayer } from "../video/player";
 import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
+import { materialObjectKeys } from "./materialKeyOrder";
 import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStorage } from "./storage";
 
 type ApiObject = Record<string, unknown>;
+
+/** 单位矩阵（列主序，`getBoneTransform` 失败的返回值与 `setBoneTransform` 缺省的底）。 */
+const IDENTITY_4: readonly number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
+/** 向量参数的 f32 分量（P6d1a）：对象取 `x / y / z`（`Number()` 后非有限数当 0），否则用缺省。 */
+function vec3Arg(value: unknown, fallback: [number, number, number]): [number, number, number] {
+  if (value === null || typeof value !== "object") return fallback;
+  const part = (key: string): number => {
+    const n = Number((value as ApiObject)[key]);
+    return Number.isFinite(n) ? Math.fround(n) : 0;
+  };
+  return [part("x"), part("y"), part("z")];
+}
 type ApiTarget = BindingTarget | { kind: "unsupported"; path: string };
+
+/** 材质对象上登记的一个常量键（P6d1a）：形状同 `constantTargetFields`，`rad2deg` 的 float 键脚本里用度。 */
+interface MaterialConstant {
+  shape: { uniforms: string[]; type: ValueType; members?: MaterialMember[] };
+  rad2deg: boolean;
+}
 
 /** 模块求值期间调用 scoped 方法 / 访问 scoped 属性时抛错（`ScriptApi` 与 WPE `localStorage` 共用）。 */
 export function requireCallbackContext(name: string, evaluating: boolean): void {
@@ -72,6 +96,25 @@ export function createWpeLocalStorage(input: {
   return api;
 }
 
+/**
+ * 一个对象的 puppet 动画层视图（P12c，宿主从 `ScenePuppets` 现取）：`getAnimationLayerCount` / `getAnimationLayer` 与 `IAnimationLayer` 接到它上面。
+ * 不是 skinned puppet / 没有骨骼的对象不给（`puppetLayers` 返回 null 或 `count()` 为 0）。
+ */
+export interface PuppetLayersView {
+  count(): number;
+  /** 按当前名字找，最后一个匹配，空串不匹配，找不到 −1。 */
+  find(name: string): number;
+  control(index: number): PuppetLayerControl | null;
+  /**
+   * 骨骼脚本方法的落点（P12d-2，`ScenePuppets` 的同名方法；骨骼选择器已由 API 规整成 Int32 数或字符串）。可选：语料诊断、单测的最小视图不给时，
+   * `getBoneTransform` 返回单位阵、其余空操作。
+   */
+  boneTransform?(bone: number | string): Float32Array | null;
+  setBoneTransform?(bone: number | string, matrix: ArrayLike<number>): void;
+  applyBonePhysicsImpulse?(bone: number | string, dir: ArrayLike<number>, ang: ArrayLike<number>): void;
+  resetBonePhysicsSimulation?(bone: number | string): void;
+}
+
 export interface ScriptApiState {
   bundle(): SceneBundle;
   state(): SceneState;
@@ -100,22 +143,53 @@ export interface ScriptApiState {
    */
   particles?(object: number): ParticleScriptTarget | null;
   /**
+   * 图层的绘制矩阵（P6d1a，`getTransformMatrix`）：宿主按渲染器当前状态与挂点钩子现算。不传或返回 null（单测的假 access、首次加载的
+   * `init`）时退回按 `state().layers` 纯状态现算（没有挂点）。
+   */
+  transformMatrix?(object: number): Float32Array | null;
+  /**
    * 关键帧动画的落点（P10b，宿主按脚本当前看到的 bundle 取播放器的那一条，`SceneAnimations.control`）：`IAnimation` 的成员接到它上面。
    * 不传或返回 null（语料诊断、播放器还没建）时方法空操作，只读成员取 bundle 里这一条的定义。
    */
   animation?(id: string): AnimationControl | null;
   /**
+   * puppet 动画层（P12c，宿主按脚本当前看到的 bundle 取 `ScenePuppets`，首次加载的 `init` 取待用的那份）：每次现取，重编译换了运行时也接得上。
+   * 不传或返回 null（语料诊断、`realmCheck`）时退回按 bundle 的层定义回答：计数、名字查找、只读三项照算，方法空操作，`isPlaying()` 为假，`getFrame()` 为 0。
+   */
+  puppetLayers?(object: number): PuppetLayersView | null;
+  /**
    * 全局 `input` 读到的本帧光标（P6c，宿主存渲染器每个实时帧给的 `CursorInputSnapshot`）：每次读都现取，所以回调里读到的和 `update` 里同一帧的相同。
    * 不传（语料诊断、`realmCheck`）时读到全 0、左键松开。
    */
   cursorInput?(): CursorInputSnapshot;
+  /**
+   * 正在跑的回调名（P11d，`ScriptRuntime.activeCallback`）：`engine.openUserShortcut` 只许在 `cursorClick` / `cursorDown` / `cursorUp` 里调。
+   * 不传（语料诊断、`realmCheck`）时当不在任何回调里，调用抛错。
+   */
+  activeCallback?(): string | null;
+  /**
+   * 脚本调 `engine.openUserShortcut(name)`（P11d，门禁里参数已核对为字符串）：宿主先取点击令牌，再查属性全集。返回码同 WPE 宿主：
+   * 0 = 失败（属性不是已配好的快捷方式），1 = 成功（宿主已把属性名交给父页面），2 = 没有令牌（同一次点击已用过 / 没有点击）。
+   * 不传时当 0（语料诊断没有宿主）。
+   */
+  openUserShortcut?(name: string): 0 | 1 | 2;
 }
 
-/** `IVideoTexture` 的落点（P9b，`VideoTexturePlayer` 满足它）。 */
-export type VideoScriptTarget = Pick<
-  VideoTexturePlayer,
-  "rate" | "loop" | "currentTime" | "duration" | "play" | "pause" | "stop" | "isPlaying" | "addEndedCallback"
->;
+/**
+ * `IVideoTexture` 的落点（P9b）：视频纹理的两种播放器（`video/player.ts` 的 `VideoTexturePlayer`、P9d 的 `video/codecPlayer.ts`
+ * `CodecVideoPlayer`）都满足它。
+ */
+export interface VideoScriptTarget {
+  rate: number;
+  loop: boolean;
+  currentTime: number;
+  readonly duration: number;
+  play(): void;
+  pause(): void;
+  stop(): void;
+  isPlaying(): boolean;
+  addEndedCallback(callback: () => void): void;
+}
 
 /** 声音层脚本方法的落点（`audio/scheduler.ts` 的 `SoundScheduler` 满足它）：WPE `ISoundLayer` 的四个方法。 */
 export interface SoundScriptTarget {
@@ -154,6 +228,18 @@ const TEXT_API_TYPES: Record<TextRuntimeField, ValueType | "string"> = {
   blockalign: "bool",
 };
 
+/**
+ * `engine.userProperties` 交给 `convertUserProperties` 的全集（P11d）：快捷方式项只带 `type` 与 `value`，脚本读到 `{}`（三个字段都是 undefined，
+ * p11-REPORT「P11d 补测」：WPE 的 `engine.userProperties` 里始终如此，`init` 里、改值之后都一样）。`isbound` / `commandtype` / `file` 只在
+ * `applyUserProperties` 的增量里给（宿主把全集项原样交过去），所以全集保留着它们，这里剥掉。
+ */
+export function scriptUserProperties(properties: ReadonlyMap<string, UserProperty>): Record<string, UserProperty> {
+  const out: Record<string, UserProperty> = {};
+  for (const [key, property] of properties)
+    out[key] = property.type === "usershortcut" ? { type: property.type, value: property.value } : property;
+  return out;
+}
+
 /** 路径的最后一段（`script.id` / 动画 `id` 的属性名）。 */
 const lastSegment = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
 
@@ -185,8 +271,17 @@ export class ScriptApi {
   private readonly videoTextures = new Map<number, ApiObject>();
   private readonly materials = new Map<string, ApiObject>();
   private readonly effects = new Map<string, ApiObject>();
+  /**
+   * effect 的 `name`（P6d1a）：WPE 里 effect 描述符的 `name` 字段可读写、没有改值回调，只影响 `getEffect(名字)`。存在 API 这边，
+   * API 对象跨重编译保留，所以名字也保留；没写过的取 `SceneEffect.name`。键同 `effects`：`<对象>/<JSON 下标>`。
+   */
+  private readonly effectNames = new Map<string, string>();
   /** `IAnimation` 包装对象（P10b）：按动画 `id`（`scene.json` 路径）缓存，同一条每次 `getAnimation` 返回同一个对象。 */
   private readonly animationApis = new Map<string, ApiObject>();
+  /** `IAnimationLayer` 包装对象（P12c）：按 `<对象>:<层下标>` 缓存，`get(0) === get("walk")`。 */
+  private readonly animationLayerApis = new Map<string, ApiObject>();
+  /** 没有宿主视图时（语料诊断）的控制口替身：按 `<对象>:<层下标>` 缓存，保住脚本写过的名字等。 */
+  private readonly fallbackLayerControls = new Map<string, PuppetLayerControl>();
   private readonly recompileValues = new Map<string, string>();
   /**
    * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applySpectrum` 每帧把场景频谱（归一化后的）
@@ -266,7 +361,6 @@ export class ScriptApi {
     api = this.object();
     const index = object;
     this.define(api, "name", () => this.findLayer(index)?.name ?? "");
-    this.define(api, "id", () => this.findLayer(index)?.id ?? -1);
     // 图层字段与 `size` 的读取按 WPE 取单精度、角度按 f32 算法换成度（`f32.ts`，P3b 补测 `ignore/p3b-f32`）；状态照旧存 double
     this.define(
       api,
@@ -312,11 +406,65 @@ export class ScriptApi {
     if (this.findLayer(index)?.particle) this.installParticle(api, index);
     if (this.findLayer(index)?.alignment !== undefined) this.installAlignment(api, index);
     if (this.findLayer(index)?.text) this.installText(api, index);
+    this.installHierarchy(api, index);
+    this.installEffectAccess(api, index);
     // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
     this.installGetAnimation(api, () => `objects/${index}`);
+    this.installAnimationLayers(api, index);
+    if (this.findLayer(index)?.alignment !== undefined) this.installBones(api, index);
     this.layers.set(object, api);
     return api;
+  }
+
+  /**
+   * 层级与变换（P6d1a 点 2，rea-p6d1-xform、`p6d1-xform.log` / `p6d1-round2.log` 实测）：装在每个图层对象上。
+   * - `getParent()`：父图层对象，根返回 `null`；`getChildren()`：每次新数组，`objects` 顺序。
+   * - `getTransformMatrix()`：新 `Mat4`（自有键 `m`，16 个 f32），值 = 当前状态的 `drawMatrixOf`（世界矩阵 · 自身偏移），现算不读渲染器缓存。
+   * - `rotateObjectSpace(v)` / `lookAt` / `lookAtYaw`：写 3×3 与角度（弧度原样），写入走普通 `angles` 同一个 `SceneState.write` 分支。
+   */
+  private installHierarchy(api: ApiObject, object: number): void {
+    this.method(api, "getParent", () => {
+      const parent = this.findLayer(object)?.parent ?? null;
+      return parent === null ? null : this.layer(parent);
+    });
+    this.method(api, "getChildren", () =>
+      this.array(
+        this.access
+          .bundle()
+          .layers.filter((layer) => layer.parent === object)
+          .map((layer) => this.layer(layer.object)),
+      ),
+    );
+    this.method(api, "getTransformMatrix", () => {
+      const state = this.access.state();
+      const m = this.access.transformMatrix?.(object) ?? drawMatrixOf(object, state.layers, new Map());
+      const mat = (this.realm.global.Object as typeof Object).create(this.realm.prototypes.Mat4) as ApiObject;
+      mat.m = this.array(Array.from(m));
+      return mat;
+    });
+    this.method(api, "rotateObjectSpace", (v?: unknown) => {
+      const layer = this.access.state().layers.get(object);
+      if (!layer) return undefined;
+      const R = layer.rotation ?? anglesRotation(layer.angles);
+      const next = rotateObjectSpace(R, vec3Arg(v, [0, 0, 0]));
+      this.access.write({ kind: "rotation", object, rotation: next, angles: extractEulerZYX(next) }, next);
+      return undefined;
+    });
+    const lookAt = (name: "lookAt" | "lookAtYaw", compute: typeof lookAtAngles) =>
+      this.method(api, name, (target?: unknown, up?: unknown) => {
+        const layer = this.access.state().layers.get(object);
+        if (!layer) return undefined;
+        const eye = vec3Arg({ x: layer.origin[0], y: layer.origin[1], z: layer.origin[2] }, [0, 0, 0]);
+        const camera = this.findLayer(object)?.camera != null;
+        const angles = compute(eye, vec3Arg(target, [0, 0, 0]), vec3Arg(up, [0, 1, 0]), camera);
+        // 结果是弧度，照 WPE 的角度 setter 原样写进（不经脚本的度 → 弧度换算，那会改末位）：走 `rotation` 目标、3×3 为 null（按角度
+        // 重建）。视线与 up 平行时角度是 NaN（`p6d1-round2` 的 L3b、KN：WPE 读回 NaN），普通图层字段写入（`layerVectorValue`）会丢掉它
+        if (angles) this.access.write({ kind: "rotation", object, rotation: null, angles: [...angles] }, [...angles]);
+        return undefined;
+      });
+    lookAt("lookAt", lookAtAngles);
+    lookAt("lookAtYaw", lookAtYawAngles);
   }
 
   /**
@@ -662,7 +810,7 @@ export class ScriptApi {
     } else if (type === "string") {
       // 字符串只交给文本目标与重编译目标（`font`、`anchor`，P6b 步骤 2 点 5；1e 起同运行时的 `writeReturn`）：WPE 类型 5 的 `ToString`，
       // `null` / `undefined` 与抛错的不写
-      if (target.kind !== "text" && target.kind !== "recompile") return;
+      if (target.kind !== "text" && target.kind !== "recompile" && target.kind !== "pass-state") return;
       const text = scriptToString(raw);
       if (text === undefined) return;
       value = text;
@@ -691,6 +839,8 @@ export class ScriptApi {
     const owner = this.current?.owner;
     if (!owner) return null;
     if (owner.kind === "layer") return this.layer(owner.object);
+    // 动画层字段脚本（P12c）：`thisObject` 是那个 IAnimationLayer（`thisLayer` 仍是所属图层，取 `current.layer`）
+    if (owner.kind === "animation-layer") return this.animationLayerApi(owner.object, owner.layer);
     if (owner.kind === "general") return this.general;
     if (owner.kind === "effect") return this.effect(owner.object, owner.effect);
     return this.material(owner.pass);
@@ -711,10 +861,25 @@ export class ScriptApi {
     scoped("screenResolution", () => this.vector(this.access.screenResolution(), 2));
     scoped("userProperties", () => {
       if (!this.convertedProperties)
+        // 键按 WPE 的字节序（`scriptPropertyEntries`），同 `applyUserProperties` 的参数
         this.convertedProperties = this.realm.internal.convertUserProperties(
-          JSON.stringify(Object.fromEntries(this.properties)),
+          JSON.stringify(
+            Object.fromEntries(scriptPropertyEntries(Object.entries(scriptUserProperties(this.properties)))),
+          ),
         );
       return this.convertedProperties;
+    });
+    // 快捷方式（P11d，p11-REPORT「P11d 补测」门禁表）：只在三个光标回调里能调，否则抛 realm 的 `SyntaxError`；参数不是字符串原始值
+    // 返回 false 且不消耗令牌；之后取令牌，没有就抛；然后查属性（令牌在查属性之前就消耗了）。方法本身不是 scoped：模块求值期间调同样落到
+    // 「不在光标回调里」。`true` 只表示宿主受理（WPE 的 `true` 是 `ShellExecuteW` 成功，我们的启动在应用页异步完成，已知差异）
+    this.method(this.engine, "openUserShortcut", (...args: unknown[]) => {
+      const callback = this.access.activeCallback?.() ?? null;
+      if (callback !== "cursorClick" && callback !== "cursorDown" && callback !== "cursorUp")
+        throw this.syntaxError("Cannot execute user command outside of cursor callbacks.");
+      if (args.length < 1 || typeof args[0] !== "string") return false;
+      const result = this.access.openUserShortcut?.(args[0]) ?? 0;
+      if (result === 2) throw this.syntaxError("Cannot execute more than one user command per cursor click.");
+      return result === 1;
     });
     this.method(this.engine, "isRunningInEditor", () => false);
     this.method(this.engine, "isMobileDevice", () => false);
@@ -820,6 +985,12 @@ export class ScriptApi {
     this.realm.global.input = input;
   }
 
+  /** realm 里的 `SyntaxError`（WPE 的宿主抛的就是它，`instanceof Error` 为真；同 `input` 与 `getAnimation`）。 */
+  private syntaxError(message: string): Error {
+    const Ctor = (this.realm.global.SyntaxError as ErrorConstructor | undefined) ?? SyntaxError;
+    return new Ctor(message);
+  }
+
   /** 模块求值期间调 `getAnimation` 抛 realm 的 SyntaxError，消息照 WPE（P10b 步骤 0 Q5）。 */
   private requireAnimationContext(): void {
     if (!this.evaluating) return;
@@ -902,11 +1073,250 @@ export class ScriptApi {
     return api;
   }
 
+  /** 对象的 puppet 运行时数据（bundle 里的定义）：skinned puppet 或带骨骼的模型，别的为 null（P12c）。 */
+  private puppetRig(object: number): PuppetRig | null {
+    const layer = this.findLayer(object);
+    const rig = layer ? puppetEntries([layer])[0]?.puppet : undefined;
+    return rig?.skeleton ? rig : null;
+  }
+
+  /**
+   * 对象的动画层视图（P12c）：宿主给的优先；没有时（语料诊断、`realmCheck`）按 bundle 的层定义现造，名字、只读三项照算，方法空操作。
+   */
+  private puppetView(object: number): PuppetLayersView {
+    const hosted = this.access.puppetLayers?.(object);
+    if (hosted) return hosted;
+    const defs = () => this.puppetRig(object)?.layers ?? [];
+    return {
+      count: () => defs().length,
+      find: (name) => {
+        if (name === "") return -1;
+        for (let index = defs().length - 1; index >= 0; index--)
+          if (this.fallbackControl(object, index)?.name === name) return index;
+        return -1;
+      },
+      control: (index) => this.fallbackControl(object, index),
+    };
+  }
+
+  /** 没有宿主视图时的控制口替身：值取自层定义，名字与四个可写项存在替身上，方法空操作。 */
+  private fallbackControl(object: number, index: number): PuppetLayerControl | null {
+    const key = `${object}:${index}`;
+    const cached = this.fallbackLayerControls.get(key);
+    if (cached) return cached;
+    const rig = this.puppetRig(object);
+    const def = rig?.layers[index];
+    const animation = def ? rig!.animations[def.animation] : undefined;
+    if (!def || !animation) return null;
+    const fps = Math.fround(animation.fps);
+    const frames = Math.trunc(animation.length);
+    const control: PuppetLayerControl = {
+      fps: fps > 0 ? fps : 1,
+      frameCount: frames,
+      duration: fps > 0 ? Math.fround(Math.fround(frames) / fps) : 0,
+      name: def.name,
+      additive: def.additive,
+      blendin: def.blendin,
+      blendout: def.blendout,
+      blendtime: def.blendtime,
+      play: () => {},
+      pause: () => {},
+      stop: () => {},
+      isPlaying: () => false,
+      setFrame: () => {},
+      getFrame: () => 0,
+      addEndedCallback: () => {},
+    };
+    this.fallbackLayerControls.set(key, control);
+    return control;
+  }
+
+  /**
+   * 图像层上的骨骼方法（P12d-2，rea-p12d-bones；模型对象、声音 / 粒子 / 文本层没有，`alignment` 有值即图像层）：
+   * - `getBoneCount()`：mdl 骨骼数（静态 puppet 也有），非 puppet 为 0；
+   * - `getBoneTransform(bone)`：每次新建 `Mat4`，选骨失败（越界、非整数、空串、没推进过、静态 puppet）返回单位阵、不返回 `null`；
+   * - `setBoneTransform(bone, mat)`：`mat` 不是对象 / 没有数组 `m` 时当单位阵，`m` 里不是数的元素取单位阵对应位的值（dll 的 Mat4 实参转换）；
+   * - `applyBonePhysicsImpulse(bone, dir, ang?)`：`dir` / `ang` 读 `x y z`，不是对象（含缺省）当 `(0, 0, 0)`，不抛错；
+   * - `resetBonePhysicsSimulation(bone)`。
+   * `bone` 先按 dll 的规则规整：Int32 数 → 下标，字符串 → 名字，其余（`1.5`、对象、缺省）→ 空串。
+   */
+  private installBones(api: ApiObject, object: number): void {
+    const bone = (value: unknown): number | string =>
+      typeof value === "number" && Number.isInteger(value) && value >= -2147483648 && value <= 2147483647
+        ? value
+        : typeof value === "string"
+          ? value
+          : "";
+    const view = () => this.access.puppetLayers?.(object) ?? null;
+    this.method(api, "getBoneCount", () => {
+      const puppet = this.findLayer(object)?.puppet;
+      return puppet ? (puppet.boneCount ?? puppet.skeleton?.parents.length ?? 0) : 0;
+    });
+    this.method(api, "getBoneTransform", (b?: unknown) => {
+      const m = view()?.boneTransform?.(bone(b)) ?? IDENTITY_4;
+      const mat = (this.realm.global.Object as typeof Object).create(this.realm.prototypes.Mat4) as ApiObject;
+      mat.m = this.array(Array.from(m));
+      return mat;
+    });
+    this.method(api, "setBoneTransform", (b?: unknown, mat?: unknown) => {
+      const m = Array.from(IDENTITY_4);
+      const source = mat !== null && typeof mat === "object" ? (mat as ApiObject).m : undefined;
+      if (Array.isArray(source))
+        for (let i = 0; i < 16; i++) if (typeof source[i] === "number") m[i] = Math.fround(source[i] as number);
+      view()?.setBoneTransform?.(bone(b), m);
+      return undefined;
+    });
+    this.method(api, "applyBonePhysicsImpulse", (b?: unknown, dir?: unknown, ang?: unknown) => {
+      view()?.applyBonePhysicsImpulse?.(bone(b), vec3Arg(dir, [0, 0, 0]), vec3Arg(ang, [0, 0, 0]));
+      return undefined;
+    });
+    this.method(api, "resetBonePhysicsSimulation", (b?: unknown) => {
+      view()?.resetBonePhysicsSimulation?.(bone(b));
+      return undefined;
+    });
+  }
+
+  /**
+   * 图层对象上的动画层入口（P12c，rea-p12c-script 1，p12-REPORT 用例 9）：所有图层都装，不是 puppet 的计数 0、查找返回 `null`。
+   * `getAnimationLayer(x)` 按 x 的类型：number 只认 `0 ≤ x < count` 的整数（`1.5`、`-1` 为 null）；非空字符串按当前名字找、最后一个匹配
+   * （`"1"` 也是按名字）；其余（空串、无参、对象）为 null。
+   */
+  private installAnimationLayers(api: ApiObject, object: number): void {
+    this.method(api, "getAnimationLayerCount", () => this.puppetView(object).count());
+    this.method(api, "getAnimationLayer", (x?: unknown) => {
+      const view = this.puppetView(object);
+      let index = -1;
+      if (typeof x === "number") {
+        if (Number.isInteger(x) && x >= 0 && x < view.count()) index = x;
+      } else if (typeof x === "string" && x !== "") index = view.find(x);
+      return index < 0 ? null : this.animationLayerApi(object, index);
+    });
+  }
+
+  /**
+   * `IAnimationLayer` 包装对象（P12c，p12-REPORT 用例 9、rea-p12c-script 5）：按 `<对象>:<层下标>` 缓存，不持有运行时，每次经 `puppetView` 现取控制口
+   * （重编译换了 `ScenePuppets` 也接得上）。19 个自有可枚举成员，顺序照实测：
+   * - `duration` / `frameCount` / `fps`：不可写的数据属性，值在建对象时取，严格模式赋值抛 V8 的 TypeError；
+   * - `rate` / `blend` / `visible`：访问器，读写 `SceneState.animationLayers`（用户属性、字段脚本、API 三方共写的字段，写走 `animation-layer` 目标，
+   *   下一帧生效）；`rate` / `blend` 只收 number（`NaN`、`Infinity` 也收，转 float32，不钳制），`visible` 只收布尔，别的静默忽略；
+   * - `name` / `additive` / `blendin` / `blendout` / `blendtime`：访问器，读写控制口；`name` 忽略 `null` / `undefined`、其余 `ToString`（在第一个
+   *   NUL 处截断，WPE 的 setter 用 `strlen`），三个布尔只收布尔，`blendtime` 只收 number；
+   * - 方法是数据属性；`setFrame(x)` 的 x 不是 number 时按 0；`addEndedCallback(fn)` 非函数抛 `TypeError`（WPE 会存空指针、播完时崩溃，有意不同），
+   *   登记的回调经运行时 `callFor` 进入登记它的那段脚本、`this` 是它的模块命名空间、不带参数；
+   * - `getAnimation`：对象上通用的那个，属主路径 `objects/<i>/animationlayers/<entry>`（语料下总是 `undefined`）。
+   * 原型照 WPE：只有一个不可枚举 `constructor` 的自有原型（`IAnimation` 那边仍是普通原型，已知差异）。
+   */
+  private animationLayerApi(object: number, index: number): ApiObject | null {
+    const key = `${object}:${index}`;
+    const cached = this.animationLayerApis.get(key);
+    if (cached) return cached;
+    const first = this.puppetView(object).control(index);
+    if (!first) return null;
+    const Obj = this.realm.global.Object as typeof Object;
+    // 原型照 WPE（实测 `Object.getOwnPropertyNames(Object.getPrototypeOf(layer))` 只有 `constructor`）：自己的原型，只有一个不可枚举的 `constructor`，再往上是 Object.prototype
+    const proto = Obj.create(Obj.prototype, {
+      constructor: {
+        value: new (this.realm.global.Function as FunctionConstructor)("return function IAnimationLayer() {}")(),
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      },
+    });
+    const api = Obj.create(proto) as ApiObject;
+    const control = () => this.puppetView(object).control(index);
+    const def = () => this.puppetRig(object)?.layers[index];
+    const fields = () => this.access.state().animationLayers.get(animationLayerKey(object, index));
+    const constant = (name: string, value: unknown) =>
+      Obj.defineProperty(api, name, { value, enumerable: true, writable: false, configurable: false });
+    const method = (name: string, run: (...args: unknown[]) => unknown) =>
+      Obj.defineProperty(api, name, { value: run, enumerable: true, writable: true, configurable: true });
+    // rate / blend / visible：状态里的字段（读取时没有状态项就取编译期的值）
+    const stateField = (name: "rate" | "blend" | "visible") => {
+      const target = (): ApiTarget => ({ kind: "animation-layer", object, layer: index, field: name });
+      this.define(
+        api,
+        name,
+        () => {
+          const value = fields()?.[name] ?? def()?.[name] ?? (name === "visible" ? true : 1);
+          return typeof value === "number" ? Math.fround(value) : value;
+        },
+        (value) => {
+          if (name === "visible") {
+            if (typeof value === "boolean") this.write(target(), value, "bool");
+          } else if (typeof value === "number") this.write(target(), value, "float");
+        },
+      );
+    };
+    // 控制口上的三个布尔项
+    const controlBoolean = (name: "additive" | "blendin" | "blendout") =>
+      this.define(
+        api,
+        name,
+        () => control()?.[name] ?? false,
+        (value) => {
+          const c = control();
+          if (c && typeof value === "boolean") c[name] = value;
+        },
+      );
+    constant("duration", first.duration);
+    constant("frameCount", first.frameCount);
+    constant("fps", first.fps);
+    stateField("blend");
+    this.define(
+      api,
+      "name",
+      () => control()?.name ?? "",
+      (value) => {
+        const c = control();
+        const text = scriptToString(value);
+        if (!c || text === undefined) return;
+        const end = text.indexOf("\0");
+        c.name = end < 0 ? text : text.slice(0, end);
+      },
+    );
+    controlBoolean("blendout");
+    controlBoolean("blendin");
+    stateField("rate");
+    controlBoolean("additive");
+    stateField("visible");
+    this.define(
+      api,
+      "blendtime",
+      () => control()?.blendtime ?? 0,
+      (value) => {
+        const c = control();
+        if (c && typeof value === "number") c.blendtime = Math.fround(value);
+      },
+    );
+    method("addEndedCallback", (callback) => {
+      if (typeof callback !== "function") throw new TypeError("addEndedCallback 需要回调函数");
+      // 登记时取当前脚本；没有控制口（运行时还没建）或没有当前脚本时没有东西会播完，不登记
+      const owner = this.current?.id;
+      const c = control();
+      if (!c || owner === undefined) return;
+      c.addEndedCallback(() =>
+        this.runtime?.callFor(owner, (exports) => (callback as (this: unknown) => unknown).call(exports)),
+      );
+    });
+    method("play", () => void control()?.play());
+    method("isPlaying", () => control()?.isPlaying() ?? false);
+    method("stop", () => void control()?.stop());
+    method("pause", () => void control()?.pause());
+    method("setFrame", (frame) => void control()?.setFrame(typeof frame === "number" ? frame : 0));
+    method("getFrame", () => control()?.getFrame() ?? 0);
+    this.installGetAnimation(api, () => `objects/${object}/animationlayers/${def()?.entry ?? index}`);
+    this.animationLayerApis.set(key, api);
+    return api;
+  }
+
   private installScene(): void {
     this.method(
       this.thisScene,
       "getLayer",
-      (name: unknown) => {
+      (...args: unknown[]) => {
+        // 不传参数返回 undefined（0c 实测）；传了 undefined 的行为不变（按名字找、找不到 null）
+        if (args.length === 0) return undefined;
+        const name = args[0];
         // 图层对象（P6b 步骤 2，p6b-api 实测：`getLayer(layer) === layer`）：是本场景发出的图层对象就原样返回，别的对象返回 null
         if (name !== null && typeof name === "object") {
           for (const [object, api] of this.layers) if (api === name && this.findLayer(object)) return api;
@@ -917,6 +1327,22 @@ export class ScriptApi {
           typeof name === "number"
             ? layers.find((item) => item.object === name)
             : layers.find((item) => item.name === name);
+        return layer ? this.layer(layer.object) : null;
+      },
+      true,
+    );
+    // 只收字符串（P6d0c 实测：数字全是 null，无参 undefined），照 C `strtol` 解析（十进制、前导空白、可带 ±、取到第一个非数字为止，没有数字得 0）
+    this.method(
+      this.thisScene,
+      "getLayerByID",
+      (...args: unknown[]) => {
+        if (args.length === 0) return undefined; // 只区分没传参数（传了 undefined 当非字符串，得 null）
+        const id = args[0];
+        if (typeof id !== "string") return null;
+        // 前导空白照 C `isspace`：空格与 \t \n \v \f \r（不是 JS 的 `\s`，后者还含 NBSP、U+FEFF、各种 Unicode 空格）
+        const match = /^[ \t\n\v\f\r]*([+-]?)(\d*)/.exec(id)!;
+        const value = match[2] ? Number(match[1] + match[2]) : 0;
+        const layer = this.access.bundle().layers.find((item) => item.id === value);
         return layer ? this.layer(layer.object) : null;
       },
       true,
@@ -945,51 +1371,194 @@ export class ScriptApi {
     );
   }
 
-  private material(pass: string): ApiObject {
-    let api = this.materials.get(pass);
-    if (api) return api;
-    api = this.object();
-    const names = new Map<string, { uniforms: string[]; type: ValueType; members?: MaterialMember[] }>();
+  /** bundle 里某个 pass（基础材质或 effect 绘制 pass），按稳定键找。 */
+  private findPass(pass: string): ScenePass | undefined {
+    for (const layer of this.access.bundle().layers) {
+      for (const item of layer.passes) if (item.key === pass) return item;
+      for (const effect of layer.effects)
+        for (const step of effect.steps) if (step.kind === "draw" && step.pass.key === pass) return step.pass;
+    }
+    return undefined;
+  }
+
+  /**
+   * 一个 pass 的材质对象上登记的常量键（P6d1a）：只收编译后着色器实际读到的键（`slot.used`，p6d1-mat3 实测：chromaticaberration 缺省
+   * `MODE 0` 不用方向键，材质对象里就没有它）；Map 顺序是声明顺序、不影响别处；材质对象上的键顺序由 `materialKeyOrder.ts` 定（照 WPE 的 MSVC `unordered_map` 迭代顺序）。
+   * `rad2deg`：脚本里这个键用度、状态里存弧度。
+   */
+  private materialConstants(pass: string): Map<string, MaterialConstant> {
+    const names = new Map<string, MaterialConstant>();
     const bundle = this.access.bundle();
-    const passes = bundle.layers.flatMap((layer) => [
-      ...layer.passes,
-      ...layer.effects.flatMap((effect) => effect.steps.flatMap((step) => (step.kind === "draw" ? [step.pass] : []))),
-    ]);
-    const current = passes.find((item) => item.key === pass);
+    const current = this.findPass(pass);
     const program =
       current?.program === null || current?.program === undefined ? null : bundle.programs[current.program];
     // 每个材质键一个字段：形状取这个键 setter 的类型，写回按各格的取值方式（`materialValues.ts`）
     for (const slot of materialSlots(program?.uniforms ?? []))
-      if (slot.material) names.set(slot.material, constantTargetFields(slot));
+      if (slot.material && slot.used)
+        names.set(slot.material, { shape: constantTargetFields(slot), rad2deg: slot.rad2deg });
     // FakeRealm 单测没有翻译器结果；真实 bundle 以 meta.material 为准。
     if (!program)
       for (const script of bundle.scripts.list)
         if (script.owner.kind === "material" && script.owner.pass === pass && script.target.kind === "constant")
           names.set(script.target.material, {
-            uniforms: script.target.uniforms,
-            type: script.target.type,
-            members: script.target.members,
+            shape: { uniforms: script.target.uniforms, type: script.target.type, members: script.target.members },
+            rad2deg: false,
           });
-    for (const [name, shape] of names)
-      this.define(
-        api,
-        name,
-        () => {
-          const target: ApiTarget = { kind: "constant", pass, material: name, ...shape };
-          const values = this.access.read?.(target) ?? this.access.state().constants.get(pass)?.[shape.uniforms[0]];
-          // 同图层字段按 WPE 取单精度（P3b 补测 `ignore/p3b-f32`：`thisObject.alpha` 读出 0.30000001192092896）
-          return Array.isArray(values)
-            ? values.length === 1
-              ? scriptNumber(values[0])
-              : this.vector(scriptNumbers(values), values.length as 2 | 3 | 4)
-            : values;
-        },
-        (value) => this.write({ kind: "constant", pass, material: name, ...shape }, value, shape.type),
-      );
+    return names;
+  }
+
+  private material(pass: string): ApiObject {
+    let api = this.materials.get(pass);
+    if (api) return api;
+    api = this.object();
+    const current = this.findPass(pass);
+    const constants = this.materialConstants(pass);
+    // 五个 pass 状态字段（静态表，rea-p6d1-xform 4.2）：字符串，读到的是当前有效值（脚本写过的覆盖 ?? bundle，`alphawriting` 缺省 default）；
+    // 写入走 `pass-state` 目标：规整、记进 `SceneState.passStates`，渲染器下一次同步时换管线（P6d1b）
+    const bundled: Record<PassStateField, string> | null = current
+      ? {
+          depthwrite: current.depthwrite,
+          depthtest: current.depthtest,
+          cullmode: current.cullmode,
+          alphawriting: current.alphaWriting ?? "default",
+          blending: current.blending,
+        }
+      : null;
+    // 键顺序照 WPE（`materialKeyOrder.ts`）：常量与状态字段按算出的顺序交错定义；`getAnimation` 在末尾单独装
+    for (const name of materialObjectKeys(constants.keys())) {
+      if (name === "getAnimation") continue;
+      const constant = constants.get(name);
+      if (constant) {
+        const { shape, rad2deg } = constant;
+        this.define(
+          api,
+          name,
+          () => {
+            const target: ApiTarget = { kind: "constant", pass, material: name, ...shape };
+            const values = this.access.read?.(target) ?? this.access.state().constants.get(pass)?.[shape.uniforms[0]];
+            // 带 `rad2deg` 的 float 键读成度（`p6d1-mat4`：chromaticaberration 方向缺省读 90）
+            if (rad2deg && Array.isArray(values) && values.length === 1 && typeof values[0] === "number")
+              return radiansToScript(values[0]);
+            // 同图层字段按 WPE 取单精度（P3b 补测 `ignore/p3b-f32`：`thisObject.alpha` 读出 0.30000001192092896）
+            return Array.isArray(values)
+              ? values.length === 1
+                ? scriptNumber(values[0])
+                : this.vector(scriptNumbers(values), values.length as 2 | 3 | 4)
+              : values;
+          },
+          (value) => this.writeConstant(pass, name, shape, rad2deg, value),
+        );
+      } else if (bundled && isPassStateField(name)) {
+        const field = name;
+        const target: ApiTarget = { kind: "pass-state", pass, field };
+        this.define(
+          api,
+          name,
+          () => this.access.state().passStates.get(pass)?.[field] ?? bundled[field],
+          (value) => this.write(target, value, "string"),
+        );
+      }
+    }
     this.installGetAnimation(api, () => `${pass}/constantshadervalues`);
     this.materials.set(pass, api);
     return api;
   }
+
+  /** 材质常量的字段写入：带 `rad2deg` 的 float 键收度（`f32(f32(度) × f32(0.017453292))` 存弧度），别的原样走 `write`。 */
+  private writeConstant(
+    pass: string,
+    material: string,
+    shape: MaterialConstant["shape"],
+    rad2deg: boolean,
+    value: unknown,
+  ): void {
+    const target: ApiTarget = { kind: "constant", pass, material, ...shape };
+    if (rad2deg && shape.type === "float") {
+      if (typeof value !== "number") return; // float 只收数（`write` 对别的类型本来也不收）
+      value = degreesFromScript(value);
+    }
+    this.write(target, value, shape.type);
+  }
+
+  /**
+   * `setMaterialProperty(名, 值)`（`FUN_1401ee1d0` + dll `0x7c` 转换，rea-p6d1-xform 4.1–4.3，`p6d1-round2.log` S1–S7）：值按 dll 归三类
+   * （数 → number；任何对象含数组 → Vec2，`x` / `y` 取 `Number()`、非有限数当 0；其余 → 整数 0）。名字不是字符串什么都不做；对 effect 的
+   * 每个 pass 按名字全等（区分大小写）找已登记的常量键（状态字段不收），数配 float、Vec2 配 vec2，别的组合跳过；
+   * 带 `rad2deg` 的 float 收度。写入走和字段写入同一个 `writeConstant`。
+   */
+  private setMaterialProperty(object: number, effect: number, name: unknown, value: unknown): void {
+    if (typeof name !== "string") return;
+    let kind: "number" | "vec2" | "zero";
+    let number = 0;
+    let vec2 = { x: 0, y: 0 };
+    if (typeof value === "number") {
+      kind = "number";
+      number = value;
+    } else if ((typeof value === "object" && value !== null) || typeof value === "function") {
+      kind = "vec2";
+      const part = (key: string): number => {
+        let n: number;
+        try {
+          n = Number((value as ApiObject)[key]);
+        } catch {
+          n = NaN;
+        }
+        return Number.isFinite(n) ? Math.fround(n) : 0;
+      };
+      vec2 = { x: part("x"), y: part("y") };
+    } else {
+      kind = "zero"; // 字符串、布尔、`null`、`undefined`：整数 0，float 常量被写成 0
+    }
+    for (const pass of this.effectPasses(object, effect)) {
+      const entry = this.materialConstants(pass.key).get(name);
+      if (!entry) continue;
+      const { shape, rad2deg } = entry;
+      if (shape.type === "float" && kind !== "vec2")
+        this.writeConstant(pass.key, name, shape, rad2deg, kind === "number" ? number : 0);
+      else if (shape.type === "vec2" && kind === "vec2") this.writeConstant(pass.key, name, shape, rad2deg, vec2);
+    }
+  }
+
+  /** effect（JSON 下标）的绘制 pass，按 bundle 里的顺序（条件过滤之后，同 WPE `effect+0xd0` 向量）。 */
+  private effectPasses(object: number, effect: number): ScenePass[] {
+    const item = this.findEffect(object, effect);
+    return item ? item.steps.flatMap((step) => (step.kind === "draw" ? [step.pass] : [])) : [];
+  }
+
+  private findEffect(object: number, effect: number): SceneEffect | undefined {
+    return this.findLayer(object)?.effects.find((item) => item.source === effect);
+  }
+
+  private effectName(object: number, effect: number): string {
+    return this.effectNames.get(`${object}/${effect}`) ?? this.findEffect(object, effect)?.name ?? "";
+  }
+
+  /**
+   * 图层的 `getEffectCount()` / `getEffect(i | 名字)`（P6d1a，rea-p6d-layers 10.1，p6d1 0c 实测）：全部 effect（含写死关闭的，
+   * 编译期脚本用到 `getEffect` 时都进 bundle）。整数取第 i 个（JSON 下标，越界 / 负数 `null`）；字符串按当前名字**区分大小写**全等，
+   * 同名取最后一个，空串 `null`；别的类型 `null`。
+   */
+  private installEffectAccess(api: ApiObject, object: number): void {
+    this.method(api, "getEffectCount", () => {
+      const layer = this.findLayer(object);
+      return layer?.effectCount ?? layer?.effects.length ?? 0;
+    });
+    this.method(api, "getEffect", (key?: unknown) => {
+      const layer = this.findLayer(object);
+      if (!layer) return null;
+      if (typeof key === "number" && Number.isInteger(key)) {
+        const item = layer.effects.find((effect) => effect.source === key);
+        return item ? this.effect(object, item.source) : null;
+      }
+      if (typeof key === "string" && key !== "") {
+        let found: SceneEffect | null = null;
+        for (const item of layer.effects) if (this.effectName(object, item.source) === key) found = item;
+        return found ? this.effect(object, found.source) : null;
+      }
+      return null;
+    });
+  }
+
   private effect(object: number, effect: number): ApiObject {
     const key = `${object}/${effect}`;
     let api = this.effects.get(key);
@@ -1001,6 +1570,37 @@ export class ScriptApi {
       () => this.access.state().effectEnabled(object, effect),
       (value) => this.write({ kind: "effect", object, effect }, value, "bool"),
     );
+    // `name`（P6d1a）：可读写字符串，只存在 API 这边；写入照类型 5 的 `ToString`，`null` / `undefined` / 抛错的不写
+    this.define(
+      api,
+      "name",
+      () => this.effectName(object, effect),
+      (value) => {
+        const text = scriptToString(value);
+        if (text !== undefined) this.effectNames.set(key, text);
+      },
+    );
+    this.method(api, "getMaterialCount", () => this.effectPasses(object, effect).length);
+    // 整数取第 i 个 pass 的材质（越界、负数 `null`，无参 = 0）；字符串按 pass 的材质文件路径不分大小写全等、空串匹配每一个，最后一个胜出
+    this.method(api, "getMaterial", (...args: unknown[]) => {
+      const passes = this.effectPasses(object, effect);
+      const arg = args.length === 0 ? 0 : args[0];
+      if (typeof arg === "number" && Number.isInteger(arg)) {
+        const pass = passes[arg];
+        return pass ? this.material(pass.key) : null;
+      }
+      if (typeof arg === "string") {
+        const lower = arg.toLowerCase();
+        let found: ScenePass | null = null;
+        for (const pass of passes) if (lower === "" || (pass.material ?? "").toLowerCase() === lower) found = pass;
+        return found ? this.material(found.key) : null;
+      }
+      return null;
+    });
+    this.method(api, "setMaterialProperty", (name?: unknown, value?: unknown) => {
+      this.setMaterialProperty(object, effect, name, value);
+      return undefined;
+    });
     this.installGetAnimation(api, () => `objects/${object}/effects/${effect}`);
     this.effects.set(key, api);
     return api;

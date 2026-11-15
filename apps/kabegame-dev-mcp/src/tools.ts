@@ -426,6 +426,19 @@ const GIF_DTS = z
     "用户纹理里 GIF 的逐帧 g_Frametime（秒）：每项一帧，探针读回前逐项推进用户纹理里的 GIF（相当于每帧都被画到）；不给时 GIF 停在第 0 帧。" +
       "和 WPE 抓帧比时填抓帧的逐帧 dt。结果里的「用户纹理」行写各 GIF 换过几帧",
   );
+/** 系统媒体消息的回放（P11c）：步数与每步条数的上限由 vite 的 `checkMedia` 查。 */
+const MEDIA = z
+  .array(
+    z.object({
+      frame: z.number().int().min(1),
+      messages: z.array(z.object({ type: z.string() }).passthrough()),
+    }),
+  )
+  .describe(
+    "系统媒体消息的回放（P11c）：[{ frame, messages }]，frame 从 1 起（回放的第几帧之前），messages 是 WpeMediaHub 发给场景宿主的消息" +
+      "（status / properties / sceneThumbnail（png 是不带前缀的 base64、colors 五个 [r,g,b]）/ playback / timeline）。" +
+      "同一项的消息并成一次刷新（照 WPE 的合并：至多 0x1d 一个事件 + 封面一个），在那一帧的脚本阶段开头派发；要看回调就同时给 scripts: true，配 consoleGrep",
+  );
 /** 逐 draw 轨迹：`readback` 的项数上限同 vite 的 `MAX_TRACE_READBACKS`，`maxVertices` 同 `MAX_TRACE_VERTICES`。 */
 const TRACE = z
   .object({
@@ -496,6 +509,7 @@ const RENDER_FIELDS = {
   renderMode: RENDER_MODE.optional(),
   videoTime: VIDEO_TIME.optional(),
   gifDts: GIF_DTS.optional(),
+  media: MEDIA.optional(),
   trace: TRACE.optional(),
   scripts: SCRIPTS.optional(),
 };

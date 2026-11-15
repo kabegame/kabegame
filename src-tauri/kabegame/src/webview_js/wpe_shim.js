@@ -6,6 +6,8 @@
 // 宿主经 Channel 推（「音频与媒体集成」）。音量也是例外：不走 IPC，垫片经 postMessage 向父页面
 // （WallpaperStage）要宿主音量，父页面回复、变化时再推，垫片把它乘到页面的媒体元素与 Web Audio 上（「音量」），
 // 另放成只读的 window.__kabegameHostVolume 并派发 kabegame-host-volume，给场景宿主的声音播放器用（WPE_SCENE.md「声音」）。
+// 鼠标不经垫片合成：同一条音量消息里父页面说可交互且没暂停时，本 frame 向 tauri-plugin-cursor 登记，Rust 轮询全局
+// 光标、把原生事件直接注入本 frame（钳进视口），页面收到的是可信事件（WPE_IMPORT.md「鼠标」）。
 (function () {
   "use strict";
   var direct = window !== window.top && window.parent === window.top && location.protocol === "file:";
@@ -16,6 +18,9 @@
   // 宿主的暂停状态（音量消息里的 paused）：页面起来时默认在播，只在状态变化时冻结 / 恢复并调 setPaused
   var hostPaused = false;
   var freezer = null;
+  // 本 frame 是否已向 tauri-plugin-cursor 登记原生鼠标注入（见 setPointerAttached）
+  var pointerAttached = false;
+  var pointerQueue = Promise.resolve();
 
   // ---- 音量：宿主音量乘到页面的两条出声路径上（HTMLMediaElement、Web Audio）----
   // 要在页面脚本之前改好原型，所以放在最前面，出错也不影响后面的属性投递。消息类型的字面量与
@@ -37,6 +42,21 @@
     installContextMenu();
   } catch (error) {
     console.warn("[kb-wpe] contextmenu", error);
+  }
+
+  // ---- 鼠标：登记 / 解除原生注入 ----
+  // 登记后插件按本 frame 所在窗口轮询光标，移动照发（光标在 frame 外时钳到「frame 中心到光标的连线」与边界的
+  // 交点），左键按窗口的点击规则（预览：光标下是本窗口；桌面：光标下是桌面）。解除时补抬起与一次离开。
+  // 调用排队：登记要等窗口句柄，先后两次不能乱序落地。frame 销毁时插件自己清掉，不必在卸载时解除。
+  function setPointerAttached(want) {
+    if (pointerAttached === want) return;
+    pointerAttached = want;
+    var command = want ? "plugin:cursor|attach_frame" : "plugin:cursor|detach_frame";
+    pointerQueue = pointerQueue.then(function () {
+      return internals.invoke(command, {}).catch(function (error) {
+        console.warn("[kb-wpe] pointer", error);
+      });
+    });
   }
 
   // ---- 右键：iframe 里的事件到不了父页面，发消息给它（WallpaperStage / WpeSceneView）弹菜单 ----
@@ -461,6 +481,8 @@
           // 首次投递之前到达的留给 deliverFull 补
           if (delivered) call("setPaused", paused);
         }
+        // 可交互（预览、桌面）且没暂停才收鼠标；应用背景不交互
+        setPointerAttached(data.interactive === true && !paused);
         if (media) media.refresh();
         if (audio) audio.refresh();
         // 只是通知：页面能伪造这个事件，读的一方总从只读的 __kabegameHostVolume 取值

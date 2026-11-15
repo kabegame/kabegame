@@ -6,7 +6,22 @@ import { useI18n } from "@kabegame/i18n";
 
 export interface WpeWebPropertyItem {
   key: string;
-  kind: "color" | "slider" | "bool" | "combo" | "textinput" | "file" | "directory" | "scenetexture" | "group" | "text";
+  /**
+   * `usershortcut`（P11d，只在 Windows 的场景壁纸上编辑）：`value` 是原值字符串 `<类型>:<路径>[|<参数>]`（`utils/wpeShortcut.ts`），
+   * 面板里是它自己的编辑器（`WpeShortcutField.vue`）。
+   */
+  kind:
+    | "color"
+    | "slider"
+    | "bool"
+    | "combo"
+    | "textinput"
+    | "file"
+    | "directory"
+    | "scenetexture"
+    | "usershortcut"
+    | "group"
+    | "text";
   label: string;
   condition?: string | null;
   default?: unknown;
@@ -37,6 +52,8 @@ export function useWpeWebProperties(imageId: Ref<string | null | undefined>): {
   reset(key: string): void;
   resetAll(): void;
   reload(): void;
+  /** 把待写的草稿立刻写完并等到结束（快捷方式的「测试」读的是已保存的值，P11d）。 */
+  saveNow(): Promise<void>;
 } {
   const { t } = useI18n();
   const view = shallowRef<WpeWebPropertiesView | null>(null);
@@ -128,6 +145,15 @@ export function useWpeWebProperties(imageId: Ref<string | null | undefined>): {
     draft.value = { ...draft.value, [key]: value };
     schedule();
   }
+  /** 跳过 300ms 防抖立即写；有写入在途时草稿排在它后面，等队列清空才返回 */
+  async function saveNow() {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+    await flush(activeId, true);
+    while (writing || queued.length) await new Promise((resolve) => setTimeout(resolve, 25));
+  }
   function reset(key: string) {
     set(key, null);
   }
@@ -188,5 +214,5 @@ export function useWpeWebProperties(imageId: Ref<string | null | undefined>): {
     changes.unsubscribe();
     language.unsubscribe();
   });
-  return { view, loading, error, valueOf, isModified, set, reset, resetAll, reload };
+  return { view, loading, error, valueOf, isModified, set, reset, resetAll, reload, saveNow };
 }

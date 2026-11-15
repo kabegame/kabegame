@@ -13,6 +13,7 @@ import { numbers, resolveValue, userCondition, type SceneScalar, type SceneValue
 import { setterValue, type MaterialMember } from "./materialValues";
 import type { InstanceKey } from "./particles";
 import type { BloomParams } from "./postprocess";
+import type { PassStateField } from "./passState";
 
 /** 目标的稳定键：scene.json 里的坐标。 */
 export type TargetKey = string;
@@ -163,6 +164,13 @@ export function isTextRuntimeField(key: string): key is TextRuntimeField {
 export type BindingTarget =
   | { kind: "script-property"; script: string; key: string }
   | { kind: "layer"; object: number; field: LayerField }
+  /**
+   * 脚本转向（P6d1a，只由脚本 API 产生），角度（弧度）原样写进 `LayerState`，不经图层向量字段的取值规则（NaN 也写）：
+   * - `rotateObjectSpace`：`rotation` 是乘出来的 3×3（列主序 9 个 f32），角度是反算的；
+   * - `lookAt` / `lookAtYaw`：`rotation` 为 `null`（同 WPE 的角度 setter：存角度、3×3 按角度重建），视线与 up 平行时角度是 NaN（`p6d1-round2` 的 L3b）。
+   * 路径键与 `angles` 相同（`objects/<i>/angles`），后写的胜出：之后的 `angles` 写入清掉 3×3。
+   */
+  | { kind: "rotation"; object: number; rotation: number[] | null; angles: number[] }
   /** effect 可见性：`effect` 是 `effects[]` 的 JSON 下标（`SceneEffect.source`），开关后只重建该图层（3c）。 */
   | { kind: "effect"; object: number; effect: number }
   /**
@@ -176,6 +184,11 @@ export type BindingTarget =
       uniforms: string[];
       type: ValueType;
       members?: MaterialMember[];
+      /**
+       * 着色器注解 `conversion: rad2deg` 的 float 键（P6d1b）：状态里是弧度，字段脚本的入参与返回值按度
+       * （`p6d1-mat6`：JSON 0.5 弧度 → 脚本收 28.647890090942383）。只由字段脚本目标带上（`bundle.ts`，取 `MaterialSlot.rad2deg`）。
+       */
+      rad2deg?: true;
     }
   | { kind: "bloom"; field: keyof BloomParams }
   /** `general.bloom`：每帧读（A1），写的是场景位。 */
@@ -211,6 +224,12 @@ export type BindingTarget =
    * 不管它绑在几个槽上。值只认字符串，别的类型当空串（缺省纹理）。
    */
   | { kind: "user-texture"; name: string }
+  /**
+   * 材质 pass 的五个状态字段（P6d1b，只由脚本 API 产生，`script/api.ts` 材质对象的 `blending` 等）：写进 `SceneState.passStates`，
+   * 值按字段的表规整（`passState.ts` 的 `normalizePassState`）；`GpuScene.sync` 对这个 pass 所属的图层强制重建，规划时取「bundle 值 +
+   * 覆盖」，程序（着色器）不换。`pass` 是 pass 的稳定键（`objects/<i>/…`）。
+   */
+  | { kind: "pass-state"; pass: TargetKey; field: PassStateField }
   /**
    * puppet 动画层的 `rate` / `blend` / `visible`（P12a 步骤 3 点 3，rea-p12-runtime 1.5：三个描述符可绑定，用户属性在两帧之间写进去、puppet
    * 当帧就读到，p12-REPORT 用例 4）：就地写进 `SceneState.animationLayers`，不标脏，`ScenePuppets.frame` 每帧读。`object` 是 `objects` 下标，
@@ -249,6 +268,23 @@ export interface SceneBinding {
 export interface UserProperty {
   type: string;
   value: unknown;
+  /**
+   * 快捷方式项（`type === "usershortcut"`，P11d）的另三个字段，后端给的形状：`value` 是原值哈希的键（空 = 没配），`isbound` 值配好了没有，
+   * `commandtype`（`file` / `directory` / `website` / `command`）与 `file` 只在已配好时有。只进 `applyUserProperties` 的增量，
+   * `engine.userProperties` 里不带（`scriptUserProperties`）。别的类型没有这三个字段。
+   */
+  isbound?: boolean;
+  commandtype?: string;
+  file?: string;
+}
+
+/**
+ * 交给脚本的属性对象（`engine.userProperties`、`applyUserProperties` 的参数）的键序：WPE 的属性表按键的字节序排（大写 < `_` < 小写），
+ * 和 project.json 的声明顺序、`order` 字段、内置项都无关（2.8.42 `p3am-order` 实测，`init`、首次 `applyUserProperties`、首帧都是）。
+ * 按 UTF-16 码元比，非 ASCII 的键只在增补平面字符与 U+E000–U+FFFF 之间和字节序不同；整数形式的键 V8 总排在最前，两边相同。
+ */
+export function scriptPropertyEntries<T>(entries: Iterable<[string, T]>): [string, T][] {
+  return [...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** `value` 是不是 `{user: …}` 绑定（含 `{user: {name, condition}}`）。 */
@@ -339,6 +375,16 @@ export function valueTypeOf(uniform: { type?: string; declared?: string }): Valu
   return read(declared) ?? read(wgsl.replace(/<[^>]*>/g, "")) ?? "float";
 }
 
+/** 并进全集的一项：`type` 与 `value`；快捷方式（P11d）再带 `isbound` / `commandtype` / `file`（只有已给出的字段，不补 undefined 键）。 */
+function retainedProperty(property: UserProperty): UserProperty {
+  const kept: UserProperty = { type: property.type, value: property.value };
+  if (property.type !== "usershortcut") return kept;
+  if (typeof property.isbound === "boolean") kept.isbound = property.isbound;
+  if (typeof property.commandtype === "string") kept.commandtype = property.commandtype;
+  if (typeof property.file === "string") kept.file = property.file;
+  return kept;
+}
+
 /**
  * 把一个属性增量并进累计全集（I1 的 `+0x1728`），返回真正变了的键 → 新值。
  * 跳过 `group` / `text` 与空值；不比较 `type`（类型变了值没变对绑定没有影响），也不因增量没给而丢掉已有键（I4）。
@@ -352,7 +398,7 @@ export function mergeProperties(
     if (!property || property.type === "group" || property.type === "text") continue;
     if (property.value === undefined || property.value === null) continue;
     const previous = properties.get(key);
-    properties.set(key, { type: property.type, value: property.value });
+    properties.set(key, retainedProperty(property));
     if (!previous || !Object.is(previous.value, property.value)) changes.set(key, property.value as SceneScalar);
   }
   return changes;

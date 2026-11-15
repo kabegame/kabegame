@@ -457,19 +457,24 @@ describe("纹理上传布局", () => {
     expect(() => planTextureUpload(texture({ format: 4 }))).toThrow("texture-empty");
   });
   it("采样器与所需特性", () => {
-    expect(samplerDescriptor({ clampUVs: true, noInterpolation: false }, true)).toMatchObject({
+    expect(samplerDescriptor({ clampUVs: true, noInterpolation: false })).toMatchObject({
       addressModeU: "clamp-to-edge",
       magFilter: "linear",
       mipmapFilter: "linear",
       maxAnisotropy: 8,
     });
-    expect(samplerDescriptor({ clampUVs: false, noInterpolation: true }, true)).toMatchObject({
+    expect(samplerDescriptor({ clampUVs: false, noInterpolation: true })).toMatchObject({
       addressModeV: "repeat",
       minFilter: "nearest",
       mipmapFilter: "nearest",
       maxAnisotropy: 1,
     });
-    expect(samplerDescriptor({ clampUVs: false, noInterpolation: false }, false).maxAnisotropy).toBe(1);
+    // 单级 mip 的纹理（effect 遮罩、视频）同样是各向异性：采样器不看 mip 级数（p12a B1）
+    expect(samplerDescriptor({ clampUVs: false, noInterpolation: false })).toMatchObject({
+      magFilter: "linear",
+      mipmapFilter: "linear",
+      maxAnisotropy: 8,
+    });
     expect(requiredFeatures([{ format: 0 }, { format: 4 }, { format: 4 }])).toEqual(["texture-compression-bc"]);
     expect(requiredFeatures([{ format: 7 }])).toEqual(["texture-compression-bc"]);
     expect(requiredFeatures([{ format: 6 }])).toEqual(["texture-compression-bc"]);

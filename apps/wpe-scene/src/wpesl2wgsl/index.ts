@@ -26,8 +26,16 @@ export interface TranslateRequest {
   includes?: Record<string, string>;
   /** 材质 / effect 指定的 COMBO（名字不分大小写）。 */
   combos?: Record<string, number | boolean>;
-  /** 已绑定的纹理槽位与 `.tex` 格式枚举：决定采样器注释里的 `combo` 与 `TEX<n>FORMAT`。 */
-  textures?: { slot: number; format?: number }[];
+  /**
+   * 已绑定的纹理槽位与 `.tex` 格式枚举：决定采样器注释里的 `combo` 与 `TEX<n>FORMAT`。`flags` 是 `.tex` 头的标志，
+   * bit `20 + i` 置注解 `components` 第 i 项的组合键（F1）。
+   */
+  textures?: { slot: number; format?: number; flags?: number }[];
+  /**
+   * 着色器注解缺省纹理的格式（P13d）：槽位 → `.tex` 格式（读不到为 null）。翻译器对声明了 `formatcombo`、材质没绑、注解带
+   * `default` 且 `require` 成立的槽先返回 `phase: "texture"` 与 `missingTextures`，补上再译（同头文件）；不进 `textures`。
+   */
+  defaultFormats?: Record<number, number | null>;
   /** 额外的宏，最后应用。 */
   defines?: Record<string, string>;
   /** 只在最终 `LIGHTING` 非 0 时生效的宏：`LIGHTS_*` 与光照路径的 `HDR` / `SCENE_ORTHO`。 */
@@ -105,7 +113,7 @@ export interface Diagnostic {
 }
 
 export type TranslatePhase =
-  "request" | "include" | "require" | "preprocess" | "rewrite" | "parse" | "validate" | "write" | "trap";
+  "request" | "include" | "texture" | "require" | "preprocess" | "rewrite" | "parse" | "validate" | "write" | "trap";
 
 export interface TranslateResult {
   ok: boolean;
@@ -131,6 +139,8 @@ export interface TranslateResult {
   stage?: ShaderStage | "geometry";
   errors?: Diagnostic[];
   missing?: string[];
+  /** `phase: "texture"` 时要格式的注解缺省纹理（`name` 是注解的 `default`，如 `util/fur`）。 */
+  missingTextures?: { slot: number; name: string }[];
   requires?: string[];
 }
 
@@ -193,16 +203,24 @@ export class Wpesl2wgsl {
 
 /**
  * 翻译并按需补头文件：每次结果缺头文件就调 `readInclude` 读出来再翻译，读不到（返回 null）时原样返回缺失结果。
+ * 缺注解缺省纹理的格式时（`phase: "texture"`）调 `readTextureFormat`，同样补上再译。
  */
 export async function translateWithIncludes(
   translator: Wpesl2wgsl,
   request: TranslateRequest,
   readInclude: (name: string) => Promise<string | null>,
   maxRounds = 16,
+  readTextureFormat?: (name: string) => Promise<number | null>,
 ): Promise<TranslateResult> {
   const includes = { ...request.includes };
+  const defaultFormats = { ...request.defaultFormats };
   for (let round = 0; round < maxRounds; round++) {
-    const result = await translator.translate({ ...request, includes });
+    const result = await translator.translate({ ...request, includes, defaultFormats });
+    // 注解缺省纹理要格式（P13d）：读不到给 null，翻译器不再问（宏照旧未定义）；没有读取函数时原样返回
+    if (result.phase === "texture" && readTextureFormat) {
+      for (const { slot, name } of result.missingTextures ?? []) defaultFormats[slot] = await readTextureFormat(name);
+      continue;
+    }
     if (result.phase !== "include") return result;
     for (const name of result.missing ?? []) {
       const source = await readInclude(name);
@@ -210,7 +228,7 @@ export async function translateWithIncludes(
       includes[name] = source;
     }
   }
-  return translator.translate({ ...request, includes });
+  return translator.translate({ ...request, includes, defaultFormats });
 }
 
 let loading: Promise<Wpesl2wgsl | null> | null = null;

@@ -55,3 +55,46 @@ describe("useWpeWebProperties 的重读时机", () => {
     expect(reads()).toBe(2);
   });
 });
+
+describe("useWpeWebProperties.saveNow（P11d：快捷方式的「测试」要读已保存的值）", () => {
+  const writes = () => invoke.mock.calls.filter(([command]) => command === "set_wpe_web_user_properties");
+
+  it("跳过 300ms 防抖立即写，写完才返回；没有草稿时什么都不写", async () => {
+    let finished = false;
+    invoke.mockImplementation(async (command: string) => {
+      if (command === "set_wpe_web_user_properties") {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        finished = true;
+      }
+      return { imageId: "7", metadataId: 3, customCover: false, items: [] };
+    });
+    const api = scope.run(() => useWpeWebProperties(ref("7")))!;
+    await settle();
+    await api.saveNow();
+    expect(writes()).toHaveLength(0);
+    api.set("sc", "file:C:\a.exe");
+    await api.saveNow();
+    expect(finished).toBe(true);
+    expect(writes()).toEqual([["set_wpe_web_user_properties", { imageId: "7", changes: { sc: "file:C:\a.exe" } }]]);
+  });
+
+  it("有写入在途时，新草稿排在它后面写，saveNow 等到全部写完", async () => {
+    const done: string[] = [];
+    invoke.mockImplementation(async (command: string, args: { changes?: Record<string, unknown> }) => {
+      if (command === "set_wpe_web_user_properties") {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        done.push(JSON.stringify(args.changes));
+      }
+      return { imageId: "7", metadataId: 3, customCover: false, items: [] };
+    });
+    const api = scope.run(() => useWpeWebProperties(ref("7")))!;
+    await settle();
+    api.set("sc", "file:C:\a.exe");
+    const first = api.saveNow();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    api.set("sc", "file:C:\b.exe");
+    await api.saveNow();
+    await first;
+    expect(done).toEqual([JSON.stringify({ sc: "file:C:\a.exe" }), JSON.stringify({ sc: "file:C:\b.exe" })]);
+  });
+});

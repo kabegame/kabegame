@@ -165,26 +165,20 @@ export function shapeQuad(
 }
 
 /**
- * 图层在父对象空间里的本地矩阵：`T(origin) · Rz(az) · Ry(ay) · Rx(ax) · S(scale)`，角度是弧度（2026-11-07 对 WPE 实测，
- * 含三轴旋转与非均匀缩放，四角差 0.0001 像素）。实现不做矩阵连乘，照 WPE 按元素填（`FUN_1401850a0` + 旋转 `FUN_1401dd630`，
- * rea-matrix-order 3.1、3.2）：`L[c][r] = scale[c] · R[c][r]`，每个括号一次 f32 运算；`sinf` / `cosf` 用 `Math.sin` / `Math.cos` 再舍入，
- * 角度为 0 时精确是 0、1（和 CRT 一致），非零角度个别参数可能差 1 ulp（读码 3.2 未确认）。
- * `scale.z` 为 0 时按 1：WPE 在这种输入下的行为没有测过，保留 P1 的兜底。
- * 不含图层的自身偏移（`LayerTransform.offset`，P8 步骤 3）：那段平移只在图层画自己时乘（`drawMatrixOf`），子孙的世界矩阵不带它。
+ * 角度（弧度）→ 3×3 旋转，列主序 `R[3c + r]`，`Rz·Ry·Rx`（FUN_1401dd630，每个括号一次 f32 运算）。
+ * 从 `layerLocalMatrix` 抽出，运算顺序一个都没变；`rotateObjectSpace` 也用它取起点。
  */
-export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles" | "scale">): Mat4 {
-  const [x = 0, y = 0, z = 0] = layer.origin;
-  const [sx = 1, sy = 1, sz = 1] = layer.scale;
-  const [ax = 0, ay = 0, az = 0] = layer.angles;
+export function anglesRotation(angles: readonly number[]): number[] {
+  const [ax = 0, ay = 0, az = 0] = angles;
   const f = Math.fround;
-  // 参数是 f32 的角度；R 的第 k 列是 R[3k..3k+2]（FUN_1401dd630，每个括号一次 f32 运算）
+  // 参数是 f32 的角度；R 的第 k 列是 R[3k..3k+2]
   const cz = f(Math.cos(f(az))),
     szn = f(Math.sin(f(az)));
   const cy = f(Math.cos(f(ay))),
     syn = f(Math.sin(f(ay)));
   const cx = f(Math.cos(f(ax))),
     sxn = f(Math.sin(f(ax)));
-  const R = [
+  return [
     f(cy * cz),
     f(cy * szn),
     f(-syn),
@@ -195,6 +189,22 @@ export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles"
     f(f(f(cx * szn) * syn) - f(sxn * cz)),
     f(cx * cy),
   ];
+}
+
+/**
+ * 图层在父对象空间里的本地矩阵：`T(origin) · Rz(az) · Ry(ay) · Rx(ax) · S(scale)`，角度是弧度（2026-11-07 对 WPE 实测，
+ * 含三轴旋转与非均匀缩放，四角差 0.0001 像素）。实现不做矩阵连乘，照 WPE 按元素填（`FUN_1401850a0` + 旋转 `FUN_1401dd630`，
+ * rea-matrix-order 3.1、3.2）：`L[c][r] = scale[c] · R[c][r]`，每个括号一次 f32 运算；`sinf` / `cosf` 用 `Math.sin` / `Math.cos` 再舍入，
+ * 角度为 0 时精确是 0、1（和 CRT 一致），非零角度个别参数可能差 1 ulp（读码 3.2 未确认）。
+ * `scale.z` 为 0 时按 1：WPE 在这种输入下的行为没有测过，保留 P1 的兜底。
+ * 不含图层的自身偏移（`LayerTransform.offset`，P8 步骤 3）：那段平移只在图层画自己时乘（`drawMatrixOf`），子孙的世界矩阵不带它。
+ */
+export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles" | "scale" | "rotation">): Mat4 {
+  const [x = 0, y = 0, z = 0] = layer.origin;
+  const [sx = 1, sy = 1, sz = 1] = layer.scale;
+  const f = Math.fround;
+  // rotateObjectSpace 写过 3×3 就用它（P6d1a，rea-p6d1-xform 2.5：画面与世界矩阵只读 3×3）；否则照角度现算
+  const R = layer.rotation ?? anglesRotation(layer.angles);
   const scale = [sx, sy, sz === 0 ? 1 : sz]; // `sz === 0` 按 1 的兜底保留（P1，WPE 没测过）
   const m = new Float32Array(16);
   for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) m[c * 4 + r] = f(f(scale[c]) * R[c * 3 + r]);
@@ -210,6 +220,8 @@ export interface LayerTransform {
   origin: readonly number[];
   angles: readonly number[];
   scale: readonly number[];
+  /** 3×3 旋转（9 个 f32，列主序）；`null` / 缺省 = 按 `angles` 现算（P6d1a，只有 `rotateObjectSpace` 会写）。 */
+  rotation?: readonly number[] | null;
   /**
    * 自身偏移（P8 步骤 3）：文本层是排版的对齐偏移 `TextLayout.offset`（P6b 1d），图像层是对齐 `alignmentOffset`。只作用在这一层自己的
    * 绘制上（`drawMatrixOf` 右乘 `T(offset)`，同 WPE 的世界矩阵虚函数 `+0x80`），子孙不带（WPE 子层走非虚的基类函数，rea-p8-layer 2.3；
@@ -326,9 +338,15 @@ export function drawMatrixOf(
   cache: Map<number, Mat4>,
   attach?: (object: number) => Mat4 | null,
 ): Mat4 {
-  const world = worldMatrixOf(object, layers, cache, attach);
-  const [ox = 0, oy = 0] = layers.get(object)?.offset ?? [];
-  // 对齐偏移只改平移列，`((a.x·W0 + W12) + a.y·W4) + a.z·W8`（rea-matrix-order 3.3）；偏移为 0 时原样返回
+  return withSelfOffset(worldMatrixOf(object, layers, cache, attach), layers.get(object)?.offset);
+}
+
+/**
+ * `drawMatrixOf` 的最后一步（世界矩阵右乘自身偏移）：脚本 `getTransformMatrix` 用带戳缓存求出世界矩阵后走同一个函数，字节与绘制一致。
+ * 对齐偏移只改平移列，`((a.x·W0 + W12) + a.y·W4) + a.z·W8`（rea-matrix-order 3.3）；偏移为 0 或没有时原样返回世界矩阵。
+ */
+export function withSelfOffset(world: Mat4, offset: readonly number[] | undefined): Mat4 {
+  const [ox = 0, oy = 0] = offset ?? [];
   return ox === 0 && oy === 0 ? world : alignOffset(world, [ox, oy, 0]);
 }
 

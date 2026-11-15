@@ -132,6 +132,11 @@ export interface SceneRendererOptions {
     active(): boolean;
     input(snapshot: CursorInputSnapshot): void;
     events(dispatches: readonly CursorDispatch[]): void;
+    /**
+     * 本帧派发之后（P11d，每个实时帧调一次，不管有没有派发）：快捷方式的点击令牌在这里按松开沿收回（`shortcut/token.ts`）；
+     * 按下沿在派发之前、`input` 里发。
+     */
+    end?(snapshot: CursorInputSnapshot): void;
   };
 }
 
@@ -347,6 +352,11 @@ export class SceneRenderer {
   /** 当前 GPU 场景；dev 探针按固定 `g_Time` 读回时用。 */
   get currentScene(): GpuScene | null {
     return this.scene;
+  }
+
+  /** 脚本 `getTransformMatrix` 的落点（P6d1a，`GpuScene.transformMatrix`）；没有场景时为 null。 */
+  transformMatrix(object: number, state: SceneState): Float32Array | null {
+    return this.scene?.transformMatrix(object, state) ?? null;
   }
 
   /** 粒子层脚本方法的落点（P4f 步骤 3，`GpuScene.particleScript`）；没有场景或不是粒子层时为 null。 */
@@ -707,6 +717,7 @@ export class SceneRenderer {
     );
     options.input(snapshot);
     if (dispatches.length) options.events(dispatches);
+    options.end?.(snapshot);
   }
 
   private render(runScripts = false): void {

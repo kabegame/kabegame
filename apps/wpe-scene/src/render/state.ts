@@ -47,6 +47,7 @@ import {
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
+import { normalizePassState, type PassStateField } from "../compile/passState";
 import {
   INSTANCE_RATE_MIN,
   instanceColorn,
@@ -72,6 +73,12 @@ export interface LayerState {
   origin: number[];
   scale: number[];
   angles: number[];
+  /**
+   * 3×3 旋转（9 个 f32，列主序 `R[3c + r]`；P6d1a，rea-p6d1-xform 2.5）：WPE 画面与世界矩阵只读它，角度写入先存角度再按 `Rz·Ry·Rx` 重建；
+   * 只有 `rotateObjectSpace` 直接乘它并把角度反算回去，两份在末位上分开。`null` / 缺省 = 按 `angles` 现算（`layerLocalMatrix`），
+   * 任何 `angles` 写入都清成 `null`。
+   */
+  rotation?: number[] | null;
   alpha: number;
   color: number[];
   brightness: number;
@@ -132,6 +139,11 @@ export interface DirtyState {
    * `g_Texture<n>Resolution`，槽 0 整层重建。写入当场进来（RT 参考的槽从第一次写入起才生效，M8），解码完成再进一次。
    */
   userTextures: Set<string>;
+  /**
+   * 写过材质状态字段（`blending` 等五个）的图层（`objects` 下标，P6d1b）：`GpuScene.sync` 强制重建，规划时取 bundle 值加 `passStates` 的覆盖。
+   * 只在写入时进来（WPE 每次绑定现读字节、没有「变没变」的判断，同值也重建一次无妨，但不每帧重建）。
+   */
+  passStates: Set<number>;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -186,6 +198,7 @@ function layerStateOf(layer: SceneLayer): LayerState {
     origin: [...layer.origin],
     scale: [...layer.scale],
     angles: [...layer.angles],
+    rotation: null, // 按角度现算；只有 rotateObjectSpace 会写（P6d1a）
     alpha: layer.alpha,
     color: [...layer.color],
     brightness: layer.brightness,
@@ -316,6 +329,12 @@ export class SceneState {
   private dirtyTexts = new Set<number>();
   private rateParticles = new Set<number>();
   private dirtyUserTextures = new Set<string>();
+  private dirtyPassStates = new Set<number>();
+  /**
+   * 脚本写过的材质状态字段（P6d1b，pass 稳定键 → 字段 → 规范名）：只存写过的字段，没写过的取 bundle 的 `ScenePass`（`render/passState.ts` 的
+   * `applyPassStates` 拼出有效的 pass）。值已按字段的表规整。
+   */
+  readonly passStates = new Map<TargetKey, Partial<Record<PassStateField, string>>>();
   /**
    * 用户纹理属性来源的当前值（P11b 步骤 2，属性名 → 路径）：只存值，不存 GPU 资源。运行中写入才有项；加载时的初值在宿主的来源表里
    * （`usertex/sources.ts`）。值只认字符串，别的类型当空串（缺省纹理，p11-REPORT / rea-p11-textures：属性不是 `scenetexture` 时永远缺省）。
@@ -332,6 +351,8 @@ export class SceneState {
   onUserTexture: ((name: string, value: string) => void) | null = null;
   /** 可变 effect 加载时没备好的图层：切换走整场重编译。 */
   private readonly frozenLayers = new Set<number>();
+  /** 模型网格第一个 pass 的键 → 它的阴影投射变体的键（P13d，`SceneMesh.shadow`）：基础常量写入时同步写变体。 */
+  private shadowPasses = new Map<TargetKey, TargetKey>();
 
   private constructor(
     layers: Map<number, LayerState>,
@@ -355,6 +376,7 @@ export class SceneState {
   static fromBundle(bundle: SceneBundle): SceneState {
     const layers = new Map<number, LayerState>();
     const constants = new Map<TargetKey, Record<string, number[]>>();
+    const shadowOf = new Map<TargetKey, TargetKey>();
     const effects = new Map<string, EffectState>();
     const children = new Map<number, number[]>();
     const instances = new Map<number, ParticleInstanceValues>();
@@ -377,8 +399,14 @@ export class SceneState {
       };
       if (layer.particle) addParticle(layer.particle);
       // 模型网格材质的常量（P5c 步骤 2）：网格 draw 的 uniform 同样从这里取（retro 的 `g_Tint`），属性绑定按 pass 键就地写
-      for (const mesh of layer.model?.meshes ?? [])
+      for (const mesh of layer.model?.meshes ?? []) {
         for (const pass of mesh.passes) constants.set(pass.key, { ...pass.uniforms });
+        // 阴影投射变体（P13d）：常量照 WPE 从基础程序按名字拷（编译期已拷好初值），基础 pass 的常量写入同时写它（`shadowOf`）
+        if (mesh.shadow && mesh.passes[0]) {
+          constants.set(mesh.shadow.key, { ...mesh.shadow.uniforms });
+          shadowOf.set(mesh.passes[0].key, mesh.shadow.key);
+        }
+      }
       for (const effect of layer.effects) {
         effects.set(effectKey(layer.object, effect.source), {
           enabled: effect.enabled,
@@ -387,6 +415,9 @@ export class SceneState {
         for (const step of effect.steps)
           if (step.kind === "draw") constants.set(step.pass.key, { ...step.pass.uniforms });
       }
+      // puppet 纹理通道网格的材质常量（P12b2-2）：该 draw 的 uniform 同样从这里取
+      if (layer.puppet?.textureChannels?.pass)
+        constants.set(layer.puppet.textureChannels.pass.key, { ...layer.puppet.textureChannels.pass.uniforms });
       if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
       // 组的上屏（P5b 步骤 4）：同 passthrough，g_Color4 由材质值置 1
       if (layer.groupUpload) constants.set(layer.groupUpload.key, { ...layer.groupUpload.uniforms });
@@ -411,6 +442,7 @@ export class SceneState {
       { ...fields },
       children,
     );
+    state.shadowPasses = shadowOf;
     // 加载时 `rate` 钳到 0.01 并写回（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，rea-p4f-script.md 6.1）：脚本 `init` 读到的就是钳过的
     // 值，和建系统时（`ParticleSystem` 构造）的钳制一致
     for (const [object, values] of instances)
@@ -422,9 +454,9 @@ export class SceneState {
     // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
     for (const layer of bundle.layers)
       if (layer.camera) state.cameras.set(layer.object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
-    // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle
+    // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle；模型对象的骨骼（P12b2-1）同样
     for (const layer of bundle.layers)
-      layer.puppet?.layers.forEach((def, slot) =>
+      (layer.puppet ?? layer.model?.skeleton)?.layers.forEach((def, slot) =>
         state.animationLayers.set(animationLayerKey(layer.object, slot), {
           rate: def.rate,
           blend: def.blend,
@@ -630,6 +662,19 @@ export class SceneState {
       }
       return "applied";
     }
+    // 脚本转向（P6d1a）：`rotateObjectSpace` 带乘出来的 3×3，`lookAt` / `lookAtYaw` 带 null（按角度重建）；角度原样存进状态（NaN 也存），
+    // 记变换写入、子树标脏，同 `angles`。
+    // 值（`raw`）不看：目标自己带着两份数据
+    if (target.kind === "rotation") {
+      const layer = this.layers.get(target.object);
+      if (layer) {
+        layer.rotation = target.rotation ? [...target.rotation] : null;
+        layer.angles = [...target.angles];
+        this.transformWrites.add(target.object);
+        for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
+      }
+      return "applied";
+    }
     if (target.kind === "layer") {
       const layer = this.layers.get(target.object);
       const { field } = target;
@@ -662,6 +707,8 @@ export class SceneState {
           if (field === "visible" && typeof conditioned(binding, raw) !== "boolean") return "applied";
           writeLayer(layer, field, bindingValue(raw, binding.condition, field));
         }
+        // 角度写入一律按新角度重建 3×3（WPE 的角度 setter `FUN_1401dd630`），乘出来的那份丢掉（P6d1a）
+        if (field === "angles") layer.rotation = null;
         // 变换写入（属性、关键帧、脚本同一条路；向量写不进时上面已返回）：影子缓存清戳（WPE 描述符回调 `0x1401e0520`，B1）
         if (field === "origin" || field === "angles" || field === "scale") this.transformWrites.add(target.object);
         // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的
@@ -683,7 +730,17 @@ export class SceneState {
         constants[member.name] = memberValue(member, written);
         changed = true;
       }
-      if (changed) this.dirtyPasses.add(target.pass);
+      if (changed) {
+        this.dirtyPasses.add(target.pass);
+        // 投射变体（P13d）：同名的常量跟着改
+        const shadowKey = this.shadowPasses.get(target.pass);
+        const shadow = shadowKey ? this.constants.get(shadowKey) : undefined;
+        if (shadowKey && shadow) {
+          for (const member of constantMembers(target))
+            if (member.name in shadow) shadow[member.name] = constants[member.name];
+          this.dirtyPasses.add(shadowKey);
+        }
+      }
       return "applied";
     }
     if (target.kind === "text") {
@@ -701,9 +758,31 @@ export class SceneState {
       this.onUserTexture?.(target.name, value);
       return "applied";
     }
+    // 材质状态字段（P6d1b）：值按字段的表规整（`null` / `undefined` 不写，其余先 `ToString`，查不到取表的第一项），条件无意义、不看；
+    // 写入当场把图层记进「要重建」，同值也记（WPE 每次绑定现读，没有变没变的判断）
+    if (target.kind === "pass-state") {
+      this.writePassState(target.pass, target.field, raw);
+      return "applied";
+    }
     this.bloom = writeBloomParam(this.bloom, target.field, raw, binding.condition);
     this.bloomDirty = true;
     return "applied";
+  }
+
+  /**
+   * 写一个 pass 的状态字段（P6d1b）：`pass` 不在 bundle 里（不是 `objects/<i>/…` 的 pass、没登记常量）或值不合法（`null` / `undefined`）时什么都不做。
+   * 返回是否写进了状态。
+   */
+  writePassState(pass: TargetKey, field: PassStateField, raw: unknown): boolean {
+    const value = normalizePassState(field, raw);
+    if (value === undefined || !this.constants.has(pass)) return false;
+    const match = /^objects\/(\d+)\//.exec(pass);
+    if (!match) return false;
+    const fields = this.passStates.get(pass);
+    if (fields) fields[field] = value;
+    else this.passStates.set(pass, { [field]: value });
+    this.dirtyPassStates.add(Number(match[1]));
+    return true;
   }
 
   /** 是否有未取走的变换写入（只读，B1：渲染阶段预置据此作废）。 */
@@ -730,6 +809,7 @@ export class SceneState {
       texts: this.dirtyTexts,
       rates: this.rateParticles,
       userTextures: this.dirtyUserTextures,
+      passStates: this.dirtyPassStates,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
@@ -740,6 +820,7 @@ export class SceneState {
     this.dirtyTexts = new Set();
     this.rateParticles = new Set();
     this.dirtyUserTextures = new Set();
+    this.dirtyPassStates = new Set();
     return dirty;
   }
 }

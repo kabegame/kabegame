@@ -513,6 +513,8 @@ export async function renderFrame(
     ...(request.videoTime !== undefined ? { videoTime: request.videoTime } : {}),
     // 用户 GIF 逐帧时间：checkRenderReplay 已校验；空数组也转
     ...(request.gifDts !== undefined ? { gifDts: request.gifDts } : {}),
+    // 系统媒体回放（P11c）：checkRenderReplay 已校验（形状、步数）；消息内容由探针按 `MediaPending` 的规则读
+    ...(request.media !== undefined ? { media: request.media } : {}),
     // 逐 draw 轨迹：checkRenderReplay 已校验（true 或 { readback?, maxVertices? }）
     ...(request.trace !== undefined ? { trace: request.trace } : {}),
   };

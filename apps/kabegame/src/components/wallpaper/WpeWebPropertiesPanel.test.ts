@@ -9,6 +9,8 @@ const confirm = vi.hoisted(() => vi.fn());
 const success = vi.hoisted(() => vi.fn());
 const failure = vi.hoisted(() => vi.fn());
 const invoke = vi.hoisted(() => vi.fn());
+/** `IS_WINDOWS` 在用例里可切（快捷方式只在 Windows 的场景上显示，P11d） */
+const envState = vi.hoisted(() => ({ windows: true }));
 /** 后端的 `customCover`：面板挂载时与 `reload` 时读取 */
 const cover = vi.hoisted(() => ({ custom: false, items: [] as Record<string, unknown>[] }));
 
@@ -18,6 +20,15 @@ vi.mock("@/components/ui/messageBox", () => ({
 }));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock("@/api", () => ({ invoke }));
+vi.mock("@/env", async (original) => {
+  const actual = await original<typeof import("@/env")>();
+  return {
+    ...actual,
+    get IS_WINDOWS() {
+      return envState.windows;
+    },
+  };
+});
 vi.mock("@/composables/useModalBack", () => ({ useModalBack: () => {} }));
 // 作者属性默认为空：控制卡片不依赖它们；属性显示条件的用例经 `cover.items` 塞条目
 vi.mock("@/composables/useWpeWebProperties", () => ({
@@ -74,6 +85,7 @@ beforeEach(() => {
   failure.mockReset();
   cover.custom = false;
   cover.items = [];
+  envState.windows = true;
 });
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
@@ -109,6 +121,33 @@ describe("WpeWebPropertiesPanel 按壁纸类型筛属性", () => {
     };
     expect(labels("x-wpe/scene")).toBe("ct");
     expect(labels("x-wpe/web")).toBe("cfd");
+  });
+});
+
+describe("WpeWebPropertiesPanel 快捷方式（P11d）", () => {
+  const item = (key: string, kind: string) => ({
+    key,
+    kind,
+    label: `label-${key}`,
+    modified: false,
+    options: [],
+    extensions: [],
+  });
+  const shown = (imageType: string) => mountPanel({ imageType }).text().includes("label-sc");
+
+  it("只在 Windows 的场景壁纸上显示；其它平台的场景、网页壁纸都滤掉", () => {
+    cover.items = [item("c", "color"), item("sc", "usershortcut")];
+    expect(shown("x-wpe/scene")).toBe(true);
+    expect(shown("x-wpe/web")).toBe(false);
+    envState.windows = false;
+    expect(shown("x-wpe/scene")).toBe(false);
+    expect(mountPanel({ imageType: "x-wpe/scene" }).text()).toContain("label-c");
+  });
+
+  it("场景上只剩快捷方式、又不是 Windows 时按没有属性处理", () => {
+    envState.windows = false;
+    cover.items = [item("sc", "usershortcut")];
+    expect(mountPanel({ imageType: "x-wpe/scene" }).text()).toContain("gallery.wpePropsEmpty");
   });
 });
 

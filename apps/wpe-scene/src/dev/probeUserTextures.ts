@@ -6,24 +6,55 @@
  */
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
-import { mediaKind, UserTextureSources } from "../usertex/sources";
+import { mediaKind, UserTextureSources, type ShortcutIcon } from "../usertex/sources";
+
+/** 请求里给的快捷方式图标（P11d）：`rgba` 是 base64 的直通 alpha RGBA（宽·高·4 字节）；探针没有后端，图标只能由请求给。 */
+export interface ProbeShortcutIconInput {
+  width: number;
+  height: number;
+  rgba: string;
+}
+
+/** 请求给的快捷方式值：裸字符串，或后端形状 `{ value, isbound, … }` 里的 `value`（键）。 */
+function shortcutKeyOf(raw: unknown): string {
+  const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
+  return typeof value === "string" ? value : "";
+}
+
+function shortcutIconOf(input: ProbeShortcutIconInput): ShortcutIcon {
+  const rgba = Uint8Array.from(atob(input.rgba), (char) => char.charCodeAt(0));
+  if (!(input.width > 0) || !(input.height > 0) || rgba.length !== input.width * input.height * 4)
+    throw new RangeError(`快捷方式图标的 rgba 长度 ${rgba.length} 不是 ${input.width}×${input.height}×4`);
+  return { width: input.width, height: input.height, rgba };
+}
 
 export async function prepareProbeUserTextures(
   bundle: Pick<SceneBundle, "userTextures">,
   userProperties: Record<string, unknown> | undefined,
   reader: Pick<SceneReader, "readWhole">,
+  shortcutIcons?: Record<string, ProbeShortcutIconInput>,
 ): Promise<UserTextureSources | undefined> {
+  const shortcuts = (bundle.userTextures ?? []).filter((source) => source.kind === "usershortcut");
   const names = (bundle.userTextures ?? []).filter((source) => source.kind === "property").map((source) => source.name);
-  if (!names.length) return undefined;
-  const sources = new UserTextureSources((path) => reader.readWhole(path));
+  // 只有封面来源（P11c）也建：封面位图由 `renderFrame` 的 `media` 回放经 `provide` 交来
+  if (!names.length && !shortcuts.length && !(bundle.userTextures ?? []).some((source) => source.kind === "system"))
+    return undefined;
+  const sources = new UserTextureSources((path) => reader.readWhole(path), {
+    // 快捷方式（P11d）：图标取请求里按属性名给的，没给 = 没有图标（缺省纹理）
+    shortcutIcon: async (name) => {
+      const given = shortcutIcons?.[name];
+      return given ? shortcutIconOf(given) : null;
+    },
+  });
   // 屏外渲染没有实时帧：视频不按真实时间放（帧来自 `seekVideos`），建好立即按暂停处理（P11b 步骤 4）
   sources.setPaused(true);
-  await sources.prime(
-    names.map((name) => {
+  await sources.prime([
+    ...names.map((name) => {
       const value = userProperties?.[name];
       return [name, typeof value === "string" ? value : ""] as const;
     }),
-  );
+    ...shortcuts.map((source) => [source.name, shortcutKeyOf(userProperties?.[source.name]), "usershortcut"] as const),
+  ]);
   return sources;
 }
 

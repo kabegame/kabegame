@@ -200,12 +200,13 @@ import type { ParticleScriptTarget } from "../script/api";
 import type { GlyphAtlas } from "../text/atlas";
 import type { TextRelayouter } from "../text/host";
 import type { TextLayout } from "../text/layout";
-import type { UserTextureSlot } from "../compile/usertextures";
+import { isDynamicSource, type UserTextureSlot } from "../compile/usertextures";
 import type { CropRect } from "../usertex/crop";
 import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextureProvider } from "../usertex/sources";
-import type { VideoSink } from "../video/sceneVideos";
+import type { VideoFrameSource, VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
+import { applyPassStates } from "./passState";
 import type { CursorCamera } from "./cursor";
 import { oneLine, SceneRenderError } from "./errors";
 import {
@@ -221,6 +222,8 @@ import {
   type DrawStep,
   type LayerPlan,
   type MeshStep,
+  rasterState,
+  shadowCasterInputs,
   type ParticleStep,
   type TargetRef,
   type TextStep,
@@ -230,6 +233,7 @@ import {
 import {
   type Edges,
   drawMatrixOf,
+  withSelfOffset,
   effectiveVisible,
   everyAncestor,
   eyePosition,
@@ -250,6 +254,7 @@ import {
   clipMaskSize,
   morphTexelData,
   needsScaledVertices,
+  morphKey,
   scaledPuppetVertices,
   type PuppetSource,
 } from "./puppet";
@@ -257,12 +262,18 @@ import { parallaxOffset, type SceneParallax } from "./parallax";
 import {
   createPipeline,
   createProgram,
+  createShadowPipeline,
   depthFlags,
+  programInstances,
   programVertexPacking,
   SCENE_DEPTH_FORMAT,
   type GpuProgram,
 } from "./programs";
 import { ReflectionTargets } from "./reflection";
+import { SHADOW_ATLAS_FORMAT, ShadowAtlas, type ShadowCasterDraw } from "./shadows";
+import type { ShadowView } from "./shadowMath";
+import { LIGHT_FRAME_UNIFORMS, lightFrame, lightFrameUniforms } from "../compile/lights";
+import { SHADOW_CASTER_UNIFORM } from "../compile/features";
 import { mirroredView, type SceneView } from "./views";
 import { SPRITE_COUNT_TARGET_FORMAT, SpriteCounter, spriteOverrides, spriteViewProjection } from "./sprite";
 import { transparentDrawOrder } from "./sortOrder";
@@ -369,9 +380,14 @@ type PuppetDrawStep = DrawStep & { geometry: "puppet" };
 function isPuppetDraw(step: DrawLike): step is PuppetDrawStep {
   return step.kind === "draw" && step.geometry === "puppet";
 }
-/** 画网格的步骤：模型的网格步骤与 puppet 的上屏绘制。 */
-function drawsMesh(step: DrawLike): step is MeshStep | PuppetDrawStep {
-  return step.kind === "mesh" || isPuppetDraw(step);
+/** puppet 的纹理通道绘制（P12b2-2）：几何是通道网格（`ScenePuppet.textureChannels`），画进合成 RT，同样按网格格式配顶点布局。 */
+type TexchanDrawStep = DrawStep & { geometry: "texchan" };
+function isTexchanDraw(step: DrawLike): step is TexchanDrawStep {
+  return step.kind === "draw" && step.geometry === "texchan";
+}
+/** 画网格的步骤：模型的网格步骤、puppet 的上屏绘制与纹理通道绘制。 */
+function drawsMesh(step: DrawLike): step is MeshStep | PuppetDrawStep | TexchanDrawStep {
+  return step.kind === "mesh" || isPuppetDraw(step) || isTexchanDraw(step);
 }
 
 /** 文本层一次绘制的索引（P6b 1d）：三角形列表，每四边形 6 个。 */
@@ -390,6 +406,8 @@ interface MeshDraw {
   indexFormat: GPUIndexFormat;
   count: number;
   placeholder: GPUBuffer | null;
+  /** 实例数（P13d 点 8，`programInstances`）：程序的 `INSTANCECOUNT`，`fur4` 的毛发层数；其余 1。只在模型网格上。 */
+  instances?: number;
   /**
    * 顶点缓冲是本 draw 私有的（P12a：直接上屏的 puppet 把 `a_TexCoord` 乘了 `step.uv`，不能和 mdl 视图共用），图层重建时要释放；
    * 共用的（模型网格、UV 为 (1, 1) 的 puppet）为假。
@@ -676,7 +694,7 @@ export interface PerspectiveSceneCamera {
 export type SceneCamera = OrthographicSceneCamera | PerspectiveSceneCamera;
 
 /** puppet 绘制每帧要写的 uniform 名（`writePuppetUniforms`）：块里有任何一个，这个 draw 每帧都写。 */
-const PUPPET_BLOCK_NAMES = ["g_Bones", "g_BonesAlpha", "g_MorphOffsets", "g_MorphWeights"];
+const PUPPET_BLOCK_NAMES = ["g_Bones", "g_BonesAlpha", "g_MorphOffsets", "g_MorphWeights", "g_BlendMap"];
 
 interface Draw {
   label: string;
@@ -807,7 +825,7 @@ interface UserResolved {
 function baseUserSlot(layer: SceneLayer): UserTextureSlot | null {
   if (layer.text || layer.particle || layer.model || layer.shape) return null;
   const pass = layer.passes[0];
-  const slot = pass?.userTextures?.find((item) => item.slot === 0 && item.source.kind === "property");
+  const slot = pass?.userTextures?.find((item) => item.slot === 0 && isDynamicSource(item.source.kind));
   // 要有缺省（静态纹理或被依赖图层的 RT）才会包成用户引用（`graph.ts` 的 `passInputs`）
   return slot && (pass.textures[0] !== undefined || pass.layerComposites?.[0] !== undefined) ? slot : null;
 }
@@ -1010,7 +1028,7 @@ function planProblems(
   particle?: SceneParticle | null,
   model?: SceneModel | null,
   /** 图层的 puppet（P12a 步骤 4）：上屏绘制按网格 0 的格式查程序的输入。 */
-  puppet?: Pick<ScenePuppetLayer, "mesh"> | null,
+  puppet?: Pick<ScenePuppetLayer, "mesh" | "textureChannels"> | null,
 ): string[] {
   const problems = [...plan.reasons];
   for (const step of plan.steps) {
@@ -1031,6 +1049,10 @@ function planProblems(
     } else if (step.kind === "draw" && step.geometry === "puppet") {
       if (!puppet) problems.push("render:puppet");
       else problems.push(...meshVertexLayout(program.attributes ?? [], puppet.mesh.format).problems);
+    } else if (step.kind === "draw" && step.geometry === "texchan") {
+      // 纹理通道网格（P12b2-2）：按通道网格自己的格式查
+      if (!puppet?.textureChannels) problems.push("render:puppet");
+      else problems.push(...meshVertexLayout(program.attributes ?? [], puppet.textureChannels.mesh.format).problems);
     }
     // 视频纹理（P9a）没有 mip：渲染器建空纹理、运行时拷帧，不算缺
     for (const input of Object.values(step.inputs)) {
@@ -1071,7 +1093,10 @@ export function checkRenderable(
       if (!pass || pass.program === null || !bundle.programs[pass.program]) reasons.add(`render:bloom:${name}`);
     }
   // puppet 的变形纹理（P12b1 步骤 4）：`rgba32float`（要 float32-filterable；rgba16snorm 在 Dawn 上不可过滤），没有就退回
-  if (buildableLayers(bundle).some((layer) => layer.puppet?.morph) && !features.has("float32-filterable"))
+  if (
+    buildableLayers(bundle).some((layer) => layer.puppet?.morph || layer.model?.skeleton?.morphs.some(Boolean)) &&
+    !features.has("float32-filterable")
+  )
     reasons.add("render:morph-texture");
   for (const layer of buildableLayers(bundle))
     for (const reason of planProblems(
@@ -1153,6 +1178,8 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
     // puppet 的材质变体（P12a 步骤 4）：纹理同基础材质，照样过一遍
     layer.puppet?.passes.forEach(add);
     if (layer.puppet?.upload) add(layer.puppet.upload);
+    // 纹理通道网格的材质（P12b2-2）：槽 1 是基础图（DOUBLEBUFFERED），照样过一遍
+    if (layer.puppet?.textureChannels?.pass) add(layer.puppet.textureChannels.pass);
     // 裁切遮罩的材质（P12b1 步骤 5）：遮罩 pass 的槽 1 是记录的遮罩纹理，目标 pass 同基础材质
     layer.puppet?.clip?.masks.forEach(add);
     if (layer.puppet?.clip) add(layer.puppet.clip.target);
@@ -1199,6 +1226,12 @@ export class GpuScene {
   private snapshot: RenderTarget | null = null;
   /** `_rt_Reflection` 与 `_rt_MipMappedFrameBuffer`（P13b1，`reflection.ts`）；bundle 里没有读者时为 null。 */
   private reflectionTargets: ReflectionTargets | null = null;
+  /** 阴影图集（P13d，`render/shadows.ts`）：有阴影档位与阴影计数时才有 */
+  private shadowAtlas: ShadowAtlas | null = null;
+  /** 阴影 pass 的投射者绘制（P13d）：不透明且 castshadow 的模型网格，按加载时的 bundle 建 */
+  private shadowCasters: ShadowCasterDraw[] = [];
+  /** 正在编码的这一帧的状态（P13d）：投射者每帧按它取模型的世界矩阵（脚本、关键帧可能移动了模型） */
+  private encodingState: SceneState | null = null;
   /**
    * 场景目标的深度附件（P5d 步骤 1，`depth32float`，`wantsDepth`）：有测深度的绘制画进场景目标才建，尺寸同场景目标；两张交替的场景目标
    * 共用这一张（同 WPE 后备缓冲的深度不随交换链翻转）。没有时为 null，管线与 render pass 都不带深度。
@@ -1293,6 +1326,13 @@ export class GpuScene {
   private readonly samplers = new Map<string, GPUSampler>();
   private readonly programs = new Map<number, Promise<GpuProgram>>();
   private readonly pipelines = new Map<string, Promise<GPURenderPipeline>>();
+  /**
+   * 脚本写过材质状态字段后，新状态的管线还没备好的图层（P6d1b，`objects` 下标）：`deferPassStatePipelines` 在后台建管线，建好（`passStateReady`）
+   * 后 `sync` 对它们强制重建。加载时只备了 bundle 值的管线，运行中写出的新组合（混合、剔除、深度）要现建，WebGPU 的建管线是异步的。
+   */
+  private readonly passStateWaiting = new Set<number>();
+  private readonly passStateReady = new Set<number>();
+  private readonly passStateJobs = new Set<Promise<void>>();
   /** 已建好的程序与管线：切换时同步取（`preparedOf`）。 */
   private readonly readyPrograms = new Map<number, GpuProgram>();
   private readonly readyPipelines = new Map<string, GPURenderPipeline>();
@@ -1360,7 +1400,7 @@ export class GpuScene {
   /** 没有透明度来源时 `g_BonesAlpha` 的全 1（按骨骼数缓存，P12b1 步骤 4）。 */
   private readonly onesCache = new Map<number, Float32Array>();
   /** 每个带变形的 puppet（`objects` 下标）的变形纹理（P12b1 步骤 4）：建场景时上传一次，`morph` 引用解析到这里。 */
-  private readonly morphTargets = new Map<number, RenderTarget>();
+  private readonly morphTargets = new Map<string, RenderTarget>();
   /** 裁切遮罩 RT（P12b1 步骤 5）：有裁切的 puppet 才建，场景目标宽高各一半。 */
   private clipMask: RenderTarget | null = null;
   /** 已经记过 warning 的视频纹理（`size:<下标>` / `copy:<下标>`）：每张纹理每种只记一次。 */
@@ -1521,6 +1561,7 @@ export class GpuScene {
     }
     // 必须在上面的错误作用域之外：`createShaderModule` 遇到坏 WGSL 会报校验错误，留在里面会让整场失败
     await scene.prepareVariants(state);
+    await scene.buildShadowCasters(state);
     return scene;
   }
 
@@ -1633,7 +1674,7 @@ export class GpuScene {
   }
 
   private samplerFor(texture: SceneTexture): GPUSampler {
-    return this.sampler(samplerDescriptor(texture, texture.mips.length > 1));
+    return this.sampler(samplerDescriptor(texture));
   }
 
   /**
@@ -1691,9 +1732,14 @@ export class GpuScene {
    * 网格步骤的顶点布局（P5c 步骤 2）：程序的属性按网格格式配对（`meshVertexLayout`）。管线键、建管线与建 draw 都从这里取。
    * 网格不在图层上（手写的计划）时报 `render:mesh:<下标>`，自查（`planProblems`）已先挡下。
    */
-  private meshLayoutOf(layer: SceneLayer, step: MeshStep | PuppetDrawStep): MeshVertexLayout {
-    // puppet 的上屏绘制（P12a 步骤 4）用网格 0 的格式，其余是模型的网格
-    const format = step.kind === "mesh" ? layer.model?.meshes[step.mesh]?.format : layer.puppet?.mesh.format;
+  private meshLayoutOf(layer: SceneLayer, step: MeshStep | PuppetDrawStep | TexchanDrawStep): MeshVertexLayout {
+    // puppet 的上屏绘制（P12a 步骤 4）用网格 0 的格式，纹理通道绘制（P12b2-2）用通道网格的格式，其余是模型的网格
+    const format =
+      step.kind === "mesh"
+        ? layer.model?.meshes[step.mesh]?.format
+        : step.geometry === "texchan"
+          ? layer.puppet?.textureChannels?.mesh.format
+          : layer.puppet?.mesh.format;
     if (format === undefined)
       throw new SceneRenderError([step.kind === "mesh" ? `render:mesh:${step.mesh}` : "render:puppet"]);
     const program = step.pass.program === null ? undefined : this.bundle.programs[step.pass.program];
@@ -1952,7 +1998,8 @@ export class GpuScene {
   /** 这个图层在当前开关下的计划：`planLayer` 的回调给 `layer.effects` 下标，状态按 scene.json 坐标（`source`）存。 */
   private planOf(layer: SceneLayer, state: SceneState): LayerPlan {
     return planLayer(
-      layer,
+      // 脚本写过的材质状态字段（P6d1b）：基础材质与 effect 的 pass 取「bundle 值 + 覆盖」，没写过时就是原图层
+      applyPassStates(layer, state.passStates),
       this.bundle.textures,
       (e) => state.effectEnabled(layer.object, layer.effects[e].source),
       state.texts.get(layer.object) ?? null,
@@ -1964,7 +2011,7 @@ export class GpuScene {
   /** 解析一个槽的用户纹理的裁切（不碰 GPU）：没有图、来源不是属性、RT 参考的槽还没生效（M8）时 null。 */
   private userCrop(slot: UserTextureSlot): UserTextureCrop | null {
     const provider = this.userProvider;
-    if (!provider || slot.source.kind !== "property") return null;
+    if (!provider || !isDynamicSource(slot.source.kind)) return null;
     let reference: { width: number; height: number } | null;
     if (slot.keepAspect) reference = null;
     else if (slot.reference.kind === "size") reference = slot.reference;
@@ -1983,7 +2030,7 @@ export class GpuScene {
    * warning（每个名字一次）、返回 null，槽用缺省纹理。
    */
   private userGpuOf(crop: UserTextureCrop): UserGpu | null {
-    const { rect, image, key, animation } = crop;
+    const { rect, image, key, animation, pad } = crop;
     const found = this.userGpu.get(key);
     if (found) {
       // GIF / 视频换了帧来源对象（值换过，WPE 从头开始）：旧的释放、按新的重建；同一个对象继续用
@@ -2009,6 +2056,19 @@ export class GpuScene {
       // 初始内容：GIF 是当前画布，视频没有（全 0，等第一次 `drawn` 交帧，同 WPE 的初始数据）
       const initial = animation.current();
       if (initial) this.uploadUserFrame(key, texture, rect, initial);
+    } else if (image && pad) {
+      // 快捷方式图标（P11d）：纹理是补透明边后的尺寸（`rect`），整张图标拷到 `pad` 偏移处，其余保持建纹理时的全 0（WebGPU 保证）；不带 gamma 表
+      try {
+        this.device.queue.copyExternalImageToTexture(
+          { source: image.source },
+          { texture, origin: { x: pad.x, y: pad.y }, premultipliedAlpha: false },
+          { width: image.width, height: image.height },
+        );
+      } catch (error) {
+        this.release(texture);
+        this.warnUser(key, `用户纹理 ${key} 拷进纹理失败：${oneLine(String(error))}，用缺省纹理`);
+        return null;
+      }
     } else if (image) {
       let temp: GPUTexture | null = null;
       try {
@@ -2106,9 +2166,11 @@ export class GpuScene {
 
   /** 用户纹理的采样：线性或点（槽的 `nearest`）、寻址按槽的 `clamp`、1 级 mip、无各向异性（p11-REPORT「属性纹理」第 4 条）。 */
   private userSampler(slot: UserTextureSlot, forceNearest = false): GPUSampler {
-    const address: GPUAddressMode = slot.clamp ? "clamp-to-edge" : "repeat";
+    // 快捷方式图标（P11d，p11-REPORT「P11d 补测」）：寻址一律夹取、过滤一律线性，不看缺省纹理的标志位（缺省纹理 `util/clouds_256` 本来是重复寻址）
+    const shortcut = slot.source.kind === "usershortcut";
+    const address: GPUAddressMode = slot.clamp || shortcut ? "clamp-to-edge" : "repeat";
     // GIF 强制点采样（p11-REPORT M5，WPE 的 GIF 纹理不走线性）；视频与静态图按槽的 `nearest`
-    const filter: GPUFilterMode = forceNearest || slot.nearest ? "nearest" : "linear";
+    const filter: GPUFilterMode = forceNearest || (slot.nearest && !shortcut) ? "nearest" : "linear";
     return this.sampler({
       addressModeU: address,
       addressModeV: address,
@@ -2420,8 +2482,15 @@ export class GpuScene {
       const morph = layer.puppet?.morph;
       if (!morph) continue;
       if (!this.features.has("float32-filterable")) throw new SceneRenderError(["render:morph-texture"]);
-      this.morphTargets.set(layer.object, this.uploadMorph(layer, morph));
+      this.morphTargets.set(morphKey(layer.object), this.uploadMorph(layer, morph));
     }
+    // 模型对象的变形纹理（P12b2-1）：每个有变形目标的网格一张
+    for (const layer of layers)
+      layer.model?.skeleton?.morphs.forEach((morph, m) => {
+        if (!morph) return;
+        if (!this.features.has("float32-filterable")) throw new SceneRenderError(["render:morph-texture"]);
+        this.morphTargets.set(morphKey(layer.object, m), this.uploadMorph(layer, morph, m));
+      });
     if (layers.some((layer) => layer.puppet?.clipping)) {
       const [width, height] = clipMaskSize(this.width, this.height);
       this.clipMask = this.createTarget(
@@ -2439,13 +2508,17 @@ export class GpuScene {
     }
   }
 
-  /** 一个 puppet 的变形纹理上传（`morphTexelData` 转好数据，`writeTexture` 一次）。 */
-  private uploadMorph(layer: SceneLayer, morph: NonNullable<ScenePuppetLayer["morph"]>): RenderTarget {
+  /** 一个 puppet（或模型网格 `mesh`）的变形纹理上传（`morphTexelData` 转好数据，`writeTexture` 一次）。 */
+  private uploadMorph(
+    layer: SceneLayer,
+    morph: Pick<NonNullable<ScenePuppetLayer["morph"]>, "side" | "texels">,
+    mesh?: number,
+  ): RenderTarget {
     const { device } = this;
     const side = morph.side;
     const texture = this.own(
       device.createTexture({
-        label: `morph ${layer.object}`,
+        label: `morph ${layer.object}${mesh === undefined ? "" : ` mesh ${mesh}`}`,
         size: { width: side, height: side },
         format: "rgba32float",
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
@@ -2514,6 +2587,8 @@ export class GpuScene {
     // 反射的两张常量 RT（P13b1）：场景目标尺寸，只在有读者时建；要在建任何 draw 之前就位（`resolveTexture`）
     this.reflectionTargets = ReflectionTargets.create(device, bundle, width, height, hdr);
     if (this.reflectionTargets) this.targetBytes += this.reflectionTargets.bytes;
+    this.shadowAtlas = ShadowAtlas.create(device, bundle);
+    if (this.shadowAtlas) this.targetBytes += this.shadowAtlas.width * this.shadowAtlas.height * 4;
     this.atlasTextures = new TextAtlasTextures(
       device,
       this.sampler(ATLAS_SAMPLER),
@@ -2527,8 +2602,11 @@ export class GpuScene {
     for (const layer of bundle.layers) if (layer.attachment) this.attachments.set(layer.object, layer.attachment);
     if (this.attachments.size) this.stamps = new WorldStamps();
     const plans = built.map((layer) => this.planOf(layer, state));
-    // 深度附件（P5d 步骤 1）：按全部可能用到的计划判定（加载时的计划与预建的变体），要在建任何管线之前定下来，管线的深度状态跟着它
+    // 深度附件（P5d 步骤 1）：按全部可能用到的计划判定（加载时的计划与预建的变体），要在建任何管线之前定下来，管线的深度状态跟着它。
+    // 脚本拿得到材质对象（用到 `getEffect`，P6d1b）时也建：运行中可能写 `depthtest = 'enabled'`，WPE 的场景目标恒有深度缓冲；
+    // 加载时没有一个 pass 测深度，比较恒为 always、不写深度（`rasterState` 的写要先测），画面不变
     if (
+      bundle.scripts.usesEffectAccess ||
       wantsDepth(
         built.map((layer, index) => ({
           layer,
@@ -2740,11 +2818,13 @@ export class GpuScene {
     // 反射的两张 RT（P13b1）：没建（bundle 没记读者）时为 null，建 draw 时报 `render:texture-rt:<kind>`
     if (ref.kind === "reflection") return this.reflectionTargets?.reflection ?? null;
     if (ref.kind === "mip-framebuffer") return this.reflectionTargets?.mipFramebuffer ?? null;
+    // 阴影图集（P13d）：没建（没有阴影档位或计数）时为 null，建 draw 时报 `render:texture-rt:shadow-atlas`
+    if (ref.kind === "shadow-atlas") return this.shadowAtlas;
     if (ref.kind === "atlas") return (ref.color ? resources.atlases?.color : resources.atlases?.main) ?? null;
     // 别的图层的独占 RT（P8 步骤 4）；那一层没建资源时为 null，建 draw 时报 `render:texture-rt:layer`
     if (ref.kind === "layer") return this.layerTargets.get(ref.object) ?? null;
     // puppet 的变形纹理与裁切遮罩 RT（P12b1 步骤 4、5）
-    if (ref.kind === "morph") return this.morphTargets.get(ref.object) ?? null;
+    if (ref.kind === "morph") return this.morphTargets.get(morphKey(ref.object, ref.mesh)) ?? null;
     if (ref.kind === "clip-mask") return this.clipMask;
     return null;
   }
@@ -2831,6 +2911,24 @@ export class GpuScene {
       templates: new Map(),
       framebuffer: particleTreeWantsFramebuffer(compiled),
     };
+  }
+
+  /**
+   * 脚本 `getTransformMatrix`（P6d1a）：WPE 调的就是带戳的世界矩阵函数（`FUN_1401850a0`），脚本调用当场按戳规则求值并改写戳与缓存，
+   * 之后的绘制沿用。我们的变换写入先记在 `SceneState.transformWrites`、等 `stepParticles` / `drawPhase` 才清戳，所以这里先把已记的写入
+   * 清戳（等价于 WPE 的写入当场清戳），再走 `WorldStamps.evaluate`，最后乘自身偏移（`withSelfOffset`，与 `drawMatrixOf` 同一个函数）。
+   * 取走写入后，`drawPhase` 的预置（`drawSeeds`）不能再靠 `hasTransformWrites` 判作废，所以取到了写入就直接作废它（WPE 里写过的对象
+   * 戳为 0、渲染时重算，同此）；`drawPhase` 自己随后仍会 `invalidate` 本帧新写入，不受影响。没有挂点（没有 `stamps`）时与以前一样现算。
+   */
+  transformMatrix(object: number, state: SceneState): Mat4 {
+    const stamps = this.stamps;
+    if (!stamps) return drawMatrixOf(object, state.layers, new Map(), this.attachHook);
+    if (state.hasTransformWrites()) {
+      stamps.invalidate(state.takeTransformWrites());
+      this.drawSeeds = null;
+    }
+    const world = stamps.evaluate(object, state.layers, this.hasAttachment, this.attachHook);
+    return withSelfOffset(world, state.layers.get(object)?.offset);
   }
 
   /**
@@ -2973,7 +3071,7 @@ export class GpuScene {
           ? `layer ${layer.id} ${layer.name} text ${step.part}`
           : step.kind === "mesh"
             ? `layer ${layer.id} ${layer.name} mesh ${step.mesh}`
-            : `layer ${layer.id} ${layer.name} ${step.role}${step.segment === undefined ? "" : ` segment ${step.segment}`}`;
+            : `layer ${layer.id} ${layer.name} ${step.role}${step.geometry === "texchan" ? " texchan" : ""}${step.segment === undefined ? "" : ` segment ${step.segment}`}`;
 
     let vertexBuffer: GPUBuffer;
     let particles: ParticleDraw | null = null;
@@ -2990,6 +3088,19 @@ export class GpuScene {
         indexBuffer: this.meshBuffer(mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
         indexFormat: mesh.indexFormat,
         count: mesh.indexCount,
+        placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
+        instances: programInstances(program.result),
+      };
+    } else if (isTexchanDraw(step)) {
+      // puppet 的纹理通道网格（P12b2-2，rea-texchan-model 2：顶点原样、u16 索引、静态缓冲）：mdl 视图按视图共用，位置、`a_BlendIndices`、`a_TexCoordVec4` 都不动
+      const channels = layer.puppet?.textureChannels;
+      if (!layer.puppet || !channels) throw new SceneRenderError(["render:puppet"]);
+      const name = `${layer.puppet.path}#texchan`;
+      vertexBuffer = this.meshBuffer(channels.mesh.vertices, GPUBufferUsage.VERTEX, `${name} vertices`);
+      meshDraw = {
+        indexBuffer: this.meshBuffer(channels.mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
+        indexFormat: "uint16",
+        count: channels.mesh.indexCount,
         placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
       };
     } else if (isPuppetDraw(step)) {
@@ -3108,9 +3219,13 @@ export class GpuScene {
           this.uniformValues(step, layer, layerState, textureSizes, state, worlds, model),
         ))
           block.set(name, values);
-      frameNames = Object.keys(
-        frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0], cursor: [0, 0] }),
-      ).filter((name) => block!.has(name) && !(name in pass.uniforms));
+      frameNames = [
+        ...Object.keys(
+          frameBuiltins({ time: 0, frametime: 0, daytime: 0, pointer: [0, 0], pointerLast: [0, 0], cursor: [0, 0] }),
+        ),
+        // 灯光数组（P13d）：每帧由 `frameLightValues` 排序写整块缓冲后切出来
+        ...(this.bundle.lights ? LIGHT_FRAME_UNIFORMS : []),
+      ].filter((name) => block!.has(name) && !(name in pass.uniforms));
       // ropetrail（P4d 步骤 2）的 g_RenderVar0 随计时器每帧变（建 draw 时的值是计时器初值 0 的，`particleBuiltins`）。只有 ropetrail 那次
       // 绘制写（P4f 步骤 4：强制渲染混挂时同系统的 sprite 那次照旧是 0）
       trailRenderVar =
@@ -3122,9 +3237,15 @@ export class GpuScene {
       // 第一帧不会闪出绑定姿势）。矩阵数组按翻译器反射的布局写（`UniformBlock.set` 对 `array<mat4x3<f32>, N>`：每元素 12 个数、列主序、
       // 列步长 16），`skinMatrices` 的输出原样传入，见 `render/p12a.test.ts`
       // P12b1 步骤 4：同一批还有骨骼透明度与变形的 uniform（`writePuppetUniforms`）
-      if (isPuppetDraw(step) && layer.puppet && PUPPET_BLOCK_NAMES.some((name) => block!.has(name))) {
+      // 模型网格（P12b2-1）：对象有骨骼时同样每帧写，变形的 uniform 按网格（`step.mesh`）
+      if (
+        ((isPuppetDraw(step) && layer.puppet) ||
+          (isTexchanDraw(step) && layer.puppet) ||
+          (step.kind === "mesh" && layer.model?.skeleton)) &&
+        PUPPET_BLOCK_NAMES.some((name) => block!.has(name))
+      ) {
         puppetObject = layer.object;
-        this.writePuppetUniforms(block, layer);
+        this.writePuppetUniforms(block, layer, step);
       }
       uniformBuffer = this.own(
         device.createBuffer({
@@ -3175,7 +3296,8 @@ export class GpuScene {
           view = this.dummies.views[binding.kind];
           sampler = binding.kind === "2d-comparison" ? this.dummies.comparison : this.dummies.sampler;
         } else {
-          if (binding.kind !== "2d")
+          // 比较采样的槽（`sampler2DComparison`）只认阴影图集（P13d），别的槽只认 2d
+          if (binding.kind === "2d-comparison" ? ref.kind !== "shadow-atlas" : binding.kind !== "2d")
             throw new SceneRenderError([`render:texture-kind:${binding.slot}:${binding.kind}`]);
           if (ref.kind === "texture") {
             view = this.textures[ref.index]!.createView();
@@ -3324,6 +3446,16 @@ export class GpuScene {
           : undefined,
       });
     }
+    if (isTexchanDraw(step))
+      // puppet 的纹理通道网格（P12b2-2，rea-texchan-model 2，p12b2-tc 实测）：MVP 是合成 RT 的 `ortho(0, W, 0, H)`、模型矩阵单位阵，不经图层变换、视差、视图投影；
+      // g_Color4 与基础四边形相同（图层颜色 × brightness、alpha），所以颜色组照基础 pass 取图层状态；`g_BlendMap` 每帧由 `writePuppetUniforms` 写
+      return drawUniformValues({
+        ...common,
+        world: identity(),
+        step,
+        layer: { ...layerState, size: step.rtSize ?? layer.size },
+        viewProjection: identity(),
+      });
     if (step.kind === "mesh" && layer.sprite)
       // sprite（P13c，`render/sprite.ts`）：模型矩阵是单位阵、视图去平移（对象变换与视差都不参与，S5），颜色组同网格；遮挡方块的两个轴
       // 乘 0.2；光斑的两个轴与 `g_Alpha` 按 k = 0 写，真正的值由计算 pass 每帧盖上（`encodeSprite`）
@@ -3589,6 +3721,8 @@ export class GpuScene {
     this.syncTexts(dirty, state, worlds);
     // 用户纹理（P11b 步骤 2）：来源写过或解码完成的，换 bind group / 整层重建，在结构与刷新之前，新 draw 照当前状态写 uniform
     this.syncUserTextures(dirty, state, worlds);
+    // 材质状态字段（P6d1b）：写过的与管线刚备好的图层按有效 pass 强制重建
+    this.syncPassStates(dirty, state, worlds);
     // 结构先处理：新 draw 按当前状态写 uniform，后面的刷新也落在新 draw 上
     this.rebuildStructures(dirty.structures, state, worlds);
     for (const object of dirty.layers)
@@ -3614,6 +3748,55 @@ export class GpuScene {
     }
     if (dirty.bloom) this.bloom?.setParams(state.bloom);
     if (!state.general.clearenabled && !this.alternate) this.addAlternateTarget();
+  }
+
+  /**
+   * 材质状态字段运行中换管线（P6d1b，`rea-p6d1-matstate.md`）：WPE 每次绑定现读五个字节，写入当帧就画出新状态，没有重取着色器。这里对
+   * 写过的图层（`dirty.passStates`）与管线刚备好的图层（`passStateReady`）`rebuildLayer(…, { force: true })`：规划取有效 pass，程序不换。
+   * 新组合的管线加载时没备（`prepareVariants` 只按 bundle 值备），`rebuildLayer` 取不到时转后台建（`deferPassStatePipelines`），建好后的下一次
+   * `sync` 换上；建的这几帧里画面保持旧状态。
+   */
+  private syncPassStates(dirty: DirtyState, state: SceneState, worlds: Map<number, Mat4>): void {
+    const objects = new Set<number>(dirty.passStates);
+    for (const object of this.passStateReady) objects.add(object);
+    this.passStateReady.clear();
+    for (const object of objects) {
+      const runtime = this.layers.find((layer) => layer.object === object);
+      if (!runtime) continue;
+      this.passStateWaiting.delete(object);
+      this.rebuildLayer(runtime, state, worlds, { force: true });
+    }
+  }
+
+  /**
+   * 后台建管线的任务都结束了（单测与 dev 探针等「写完马上要看到新状态」的调用方先等它，再 `sync`）。返回有没有备好、等着下一次 `sync`
+   * 换上的图层（调用方据此决定要不要补一次 `sync`）。
+   */
+  async settlePassStates(): Promise<boolean> {
+    while (this.passStateJobs.size) await Promise.all([...this.passStateJobs]);
+    return this.passStateReady.size > 0;
+  }
+
+  /**
+   * 状态覆盖后这份计划的管线没备好：后台建（失败记 warning、这一层保持旧状态），建好把图层记进 `passStateReady`，下一次 `sync` 换上。
+   * 同一个图层有新写入时 `sync` 会重新规划、再来一遍，旧任务建好的管线留在缓存里复用。
+   */
+  private deferPassStatePipelines(runtime: LayerRuntime, plan: LayerPlan): void {
+    const object = runtime.object;
+    this.passStateWaiting.add(object);
+    const job: Promise<void> = this.prepareLayer(plan, runtime).then(
+      () => {
+        if (this.passStateWaiting.has(object)) this.passStateReady.add(object);
+      },
+      (error: unknown) => {
+        this.passStateWaiting.delete(object);
+        this.warnings.push(
+          `图层 ${object} 的材质状态改变后管线备不好，保持原状态：${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+    );
+    this.passStateJobs.add(job);
+    void job.finally(() => this.passStateJobs.delete(job));
   }
 
   /**
@@ -3935,7 +4118,21 @@ export class GpuScene {
     const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model, runtime.layer.puppet);
     if (problems.length) throw new SceneRenderError(problems);
     // 先取管线（缺了就抛，这时什么都还没换）；文本层再按新排版换独占的合成 RT、fbo 与图集，新 draw 才绑得到
-    const prepared = this.preparedOf(plan, runtime);
+    let prepared: Map<DrawLike, PreparedDraw>;
+    try {
+      prepared = this.preparedOf(plan, runtime);
+    } catch (error) {
+      // 脚本写过材质状态字段的图层：新组合的管线运行中现建（P6d1b），建好之前保持当前画面
+      if (
+        error instanceof SceneRenderError &&
+        error.reasons.includes("render:variant-missing") &&
+        this.stateHasPassOverrides(state, runtime.layer)
+      ) {
+        this.deferPassStatePipelines(runtime, plan);
+        return;
+      }
+      throw error;
+    }
     if (runtime.layer.text) this.ensureTextResources(runtime, plan, state);
     else if (baseUserSlot(runtime.layer)) this.ensureUserSizing(runtime);
     const built = this.buildLayer(runtime, plan, prepared, state, worlds);
@@ -3959,6 +4156,11 @@ export class GpuScene {
     this.rebuildStats.count++;
     this.rebuildStats.totalMs += elapsed;
     this.rebuildStats.maxMs = Math.max(this.rebuildStats.maxMs, elapsed);
+  }
+
+  /** 状态里有这个图层的 pass 的材质状态覆盖（P6d1b）。 */
+  private stateHasPassOverrides(state: SceneState, layer: SceneLayer): boolean {
+    return applyPassStates(layer, state.passStates) !== layer;
   }
 
   /**
@@ -4206,19 +4408,137 @@ export class GpuScene {
   }
 
   /**
+   * 阴影 pass 的投射者（P13d，rea-p13-passes 2.6、2.7，rea-p13-shadows R5、R6）：`castShadow` 的模型的每个网格的投射变体（`SceneMesh.shadow`）
+   * 建一个 draw，走 `createDraw`（顶点布局、索引、纹理、材质常量、骨骼同网格步骤），管线是只写深度的 `createShadowPipeline`。draw 经 `indexDraw` 进索引，
+   * 每帧的量（`g_Time`、骨骼）随 `update` 写；按图集条目各一份 uniform 副本（`g_ModelMatrix` 每帧按当前状态、`g_ViewportViewProjectionMatrices`
+   * 是这一条的视图），逐视图 `firstInstance` 取视图号。`fur4` 的投射变体不带 `INSTANCECOUNT`，只画基础网格一层（R6）。
+   * 帧级剔正面（`alignmentfliph`）在我们这里没有接，剔除一律 NONE（WPE 材质缺省剔除时的实际状态）。
+   */
+  async buildShadowCasters(state: SceneState): Promise<void> {
+    if (!this.shadowAtlas) return;
+    const worlds = new Map<number, Mat4>();
+    for (const runtime of this.layers) {
+      const layer = runtime.layer;
+      const model = layer.model;
+      if (!model?.castShadow) continue;
+      for (const [m, mesh] of model.meshes.entries()) {
+        const pass = mesh.shadow;
+        if (!pass || pass.program === null || !mesh.indexCount) continue;
+        const program = await this.ensureProgram(pass.program);
+        const morphSlot = program.result.textures?.find((t) => t.meta?.material === "morph")?.slot;
+        const { inputs, reasons } = shadowCasterInputs(
+          pass,
+          model.skeleton?.morphs[m] && morphSlot !== undefined
+            ? { slot: morphSlot, object: layer.object, mesh: m }
+            : null,
+        );
+        if (reasons.length) throw new SceneRenderError(reasons);
+        const step: MeshStep = {
+          kind: "mesh",
+          mesh: m,
+          pass,
+          target: { kind: "scene" },
+          inputs,
+          blending: pass.blending,
+          raster: rasterState(pass, pass, pass.blending),
+        };
+        const layout = this.meshLayoutOf(layer, step);
+        const pipeline = await createShadowPipeline(
+          this.device,
+          program,
+          layout.buffers,
+          "none",
+          pass.blending === "alphatocoverage",
+          SHADOW_ATLAS_FORMAT,
+        );
+        const draw = this.createDraw(layer, step, runtime.resources, { program, pipeline }, state, worlds);
+        this.indexDraw(draw);
+        this.shadowCasters.push(this.shadowCasterOf(draw, layer.object));
+      }
+    }
+  }
+
+  /** 一个投射者 draw 的逐条目副本（同反射副本的做法，`reflectionCopyOf`）。 */
+  private shadowCasterOf(draw: Draw, object: number): ShadowCasterDraw {
+    const copies = new Map<number, { block: UniformBlock; buffer: GPUBuffer; bindGroup: GPUBindGroup }>();
+    return {
+      prepare: (entry: number, views: readonly ShadowView[]) => {
+        if (!draw.block) return;
+        let copy = copies.get(entry);
+        if (!copy) {
+          const block = new UniformBlock(
+            (draw.program.result.uniforms ?? []) as UniformEntry[],
+            draw.program.uniformSize,
+          );
+          const buffer = this.own(
+            this.device.createBuffer({
+              label: `${draw.label} shadow ${entry}`,
+              size: block.data.byteLength,
+              usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            }),
+          );
+          traceUniforms(buffer, (draw.program.result.uniforms ?? []) as UniformEntry[]);
+          const entries = draw
+            .entries((effect, name) => this.targets[draw.resources.fbos.resolve(effect, name)])
+            .map((item) => (item.binding === 0 ? { binding: 0, resource: { buffer } } : item));
+          const bindGroup = this.device.createBindGroup({
+            label: `${draw.label} shadow ${entry}`,
+            layout: draw.layout,
+            entries,
+          });
+          copy = { block, buffer, bindGroup };
+          copies.set(entry, copy);
+        }
+        new Uint8Array(copy.block.data).set(new Uint8Array(draw.block.data));
+        const state = this.encodingState;
+        if (state && copy.block.has("g_ModelMatrix"))
+          copy.block.set("g_ModelMatrix", worldMatrixOf(object, state.layers, new Map()));
+        const matrices = new Float32Array(16 * 6);
+        views.forEach((view, index) => matrices.set(view.viewProjection, index * 16));
+        if (copy.block.has(SHADOW_CASTER_UNIFORM)) copy.block.set(SHADOW_CASTER_UNIFORM, matrices);
+        this.device.queue.writeBuffer(copy.buffer, 0, copy.block.data);
+      },
+      draw: (pass: GPURenderPassEncoder, entry: number, view: number) => {
+        const mesh = draw.mesh;
+        if (!mesh) return;
+        pass.setPipeline(draw.pipeline);
+        pass.setBindGroup(0, copies.get(entry)?.bindGroup ?? this.bindGroupOf(draw));
+        pass.setVertexBuffer(0, draw.vertexBuffer);
+        if (mesh.placeholder) pass.setVertexBuffer(1, mesh.placeholder);
+        pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
+        pass.drawIndexed(mesh.count, 1, 0, 0, view);
+      },
+    };
+  }
+
+  /**
+   * 这一帧的灯光数组（P13d，`compile/lights.ts` 的 `lightFrame`）：按当前视图的 `g_ViewForward` 给灯排序、照 WPE 写整块灯光缓冲；有阴影
+   * 图集时打包、算阴影视图并把投影与方块变换写进同一块（`ShadowAtlas.frame`）。WPE 在相机与脚本之后、反射与主 pass 之前算（帧函数
+   * `0x14018031a`），我们的 `update` 在 `setCamera` 之后，同序。没有灯（`bundle.lights` 缺）时为空。
+   */
+  private frameLightValues(): Record<string, number[]> {
+    const lights = this.bundle.lights;
+    if (!lights) return {};
+    const forward = this.view.viewVectors.forward;
+    const frame = lightFrame(lights.records, lights.counts, lights.quality, forward);
+    this.shadowAtlas?.frame(frame, forward, this.view.eye);
+    return lightFrameUniforms(frame);
+  }
+
+  /**
    * 写每帧变化的 uniform（`g_Time` 等）；被就地改过的 draw 整块重写一次。不步进粒子：粒子由调用方在脚本之前先
    * `stepParticles`（P4c 步骤 4，见那里），这里只写 uniform。`state` 不读，留着和调用方的写法对称。
    * ropetrail（P4d 步骤 2）的 `g_RenderVar0` 每帧按系统当时的计时器写（`trailRenderVar0`，WPE 每次绘制前写，rea-p4d-rope.md
    * 第 4 节）：步进在前，所以是本帧采样之后的计时器。
    */
   update(frame: FrameInput, _state?: SceneState): void {
-    const values = (this.frameValues = frameBuiltins(frame));
+    const values = (this.frameValues = { ...frameBuiltins(frame), ...this.frameLightValues() });
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
       if (!draw.frameNames.length && !draw.dirty && !draw.trailRenderVar && draw.puppet === null) continue;
       this.applyFrame(draw, values);
       // skinned puppet（P12a 步骤 4）：每帧把当前蒙皮矩阵写进 `g_Bones`（同 `trailRenderVar` 的做法，这类 draw 每帧都写）
-      if (draw.puppet !== null) this.writePuppetUniforms(draw.block, draw.layer);
+      if (draw.puppet !== null) this.writePuppetUniforms(draw.block, draw.layer, draw.step);
       this.device.queue.writeBuffer(draw.uniformBuffer, 0, draw.block.data);
       draw.dirty = false;
     }
@@ -4230,7 +4550,11 @@ export class GpuScene {
    */
   private applyFrame(draw: Draw, values: Record<string, ArrayLike<number>> | null): void {
     if (!draw.block) return;
-    if (values) for (const name of draw.frameNames) draw.block.set(name, values[name]);
+    if (values)
+      for (const name of draw.frameNames) {
+        const value = values[name];
+        if (value) draw.block.set(name, value);
+      }
     const particles = draw.trailRenderVar ? draw.particles : null;
     // 这次绘制自己的 ropetrail（P4f 步骤 4）；计时器是系统的
     const ropetrail = particles?.renderer?.ropetrail;
@@ -4275,7 +4599,8 @@ export class GpuScene {
       this.stamps.invalidate(state.takeTransformWrites());
       this.stamps.nextFrame();
       const updated = new Set<number>(this.trees.keys());
-      for (const layer of this.bundle.layers) if (layer.puppet?.skeleton) updated.add(layer.object);
+      for (const layer of this.bundle.layers)
+        if (layer.puppet?.skeleton || layer.model?.skeleton) updated.add(layer.object);
       for (const object of [...updated].sort((a, b) => a - b))
         this.stamps.evaluate(object, state.layers, this.hasAttachment, this.attachHook);
       this.stampUpdated = true;
@@ -4380,23 +4705,29 @@ export class GpuScene {
    * `g_MorphOffsets`（u32）/ `g_MorphWeights`。直接上屏、合成上屏与裁切的遮罩 / 目标段都用 puppet 自己的值（p12b 步骤 0b 实测：合成路径
    * 不借别的 puppet 的残留值）。没有透明度来源时 `g_BonesAlpha` 写全 1（块是 0 会让整个 puppet 透明）；没有变形来源时保持 0（不变形）。
    */
-  private writePuppetUniforms(block: UniformBlock, layer: SceneLayer): void {
+  private writePuppetUniforms(block: UniformBlock, layer: SceneLayer, step?: DrawLike): void {
     const puppets = this.puppets;
     if (!puppets) return;
     const object = layer.object;
     const skin = puppets.skin(object);
+    // 模型（P12b2-1）：每个对象一份 `g_Bones`，所有网格共用；数组按 `BONECOUNT` 定长，只写前 n 根（`UniformBlock.set` 值不足的分量保持原值，初始 0）
     if (skin && block.has("g_Bones")) block.set("g_Bones", skin);
     if (block.has("g_BonesAlpha")) {
       let alpha = puppets.boneAlpha?.(object) ?? null;
       if (!alpha) {
-        const bones = layer.puppet?.skeleton?.parents.length ?? 0;
+        const bones = (layer.puppet?.skeleton ?? layer.model?.skeleton?.skeleton)?.parents.length ?? 0;
         alpha = this.onesCache.get(bones) ?? null;
         if (!alpha) this.onesCache.set(bones, (alpha = new Float32Array(bones).fill(1)));
       }
       block.set("g_BonesAlpha", alpha);
     }
+    // 纹理通道（P12b2-2）：16 个 float，`UniformBlock.set` 按数组长度（`BLENDROWCOUNT`）取前 `4 × 行数` 个
+    if (block.has("g_BlendMap")) {
+      const map = puppets.blendMap?.(object);
+      if (map) block.set("g_BlendMap", map);
+    }
     if (block.has("g_MorphOffsets") || block.has("g_MorphWeights")) {
-      const morph = puppets.morph?.(object);
+      const morph = puppets.morph?.(object, step?.kind === "mesh" ? step.mesh : undefined);
       if (morph) {
         block.set("g_MorphOffsets", morph.offsets);
         block.set("g_MorphWeights", morph.weights);
@@ -4422,11 +4753,13 @@ export class GpuScene {
    * 把视频元素当前的帧拷进第 `index` 张纹理（P9a）。拷的尺寸取视频与纹理的较小者：WPE 是缩放到纹理尺寸（rea-p9-video 第 2 节第 3 条），
    * 语料 60 段两者都相同，不同时只拷重叠部分并记一条 warning（决定 3）。还没有尺寸（`videoWidth` 为 0）时跳过；拷贝抛错（元素状态
    * 不对等）时记一条 warning，不让这一帧失败。两种 warning 每张纹理各记一次。
+   * P9d 起来源也可以是 WebCodecs 解出的 `VideoFrame`（尺寸取显示尺寸），拷完由播放器释放。
    */
-  private copyVideo(index: number, source: HTMLVideoElement): void {
+  private copyVideo(index: number, source: VideoFrameSource): void {
     const texture = this.textures[index];
     const info = this.bundle.textures[index];
-    const { videoWidth, videoHeight } = source;
+    const videoWidth = "displayWidth" in source ? source.displayWidth : source.videoWidth;
+    const videoHeight = "displayHeight" in source ? source.displayHeight : source.videoHeight;
     if (!texture || !info || !videoWidth || !videoHeight) return;
     if (videoWidth !== info.textureWidth || videoHeight !== info.textureHeight)
       this.warnVideo(
@@ -4583,8 +4916,9 @@ export class GpuScene {
   private modelCulled(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>, viewProjection: Mat4): boolean {
     const model = layer.model;
     if (!model || layer.group != null) return false;
+    // 带骨骼的模型（P12b2-1）：剔除盒随动画变（可见层动画包围盒的并，没有有效的退回 mdl 的，`ScenePuppets.bounds`）
     return frustumCulled(
-      model.bounds,
+      this.puppets?.bounds?.(layer.object) ?? model.bounds,
       worldMatrixOf(layer.object, state.layers, worlds, this.attachHook),
       viewProjection,
     );
@@ -4785,6 +5119,9 @@ export class GpuScene {
     const [mr, mg, mb] = this.targetClear ?? clearcolor;
     // 平面反射 RT（P13b1）：反射关时每帧清成清屏色，在主 pass 之前，不看 clearenabled（rea-p13-passes 1.1）
     // 反射开（P13b2）时改由下面的反射 pass 清屏并作画
+    // 阴影 pass（P13d）：在反射与主 pass 之前（帧函数 `0x14018031a`），每帧清图集、画投射者
+    this.encodingState = state;
+    this.shadowAtlas?.encode(encoder, this.shadowCasters);
     const reflectionTarget = this.reflectionList ? (this.reflectionTargets?.reflection ?? null) : null;
     if (!reflectionTarget) this.reflectionTargets?.encode(encoder, clearcolor);
     if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);
@@ -4869,7 +5206,7 @@ export class GpuScene {
         // 模型网格（P5c 步骤 2）：mdl 的索引，三角形列表；网格没有的属性从槽 1 的全零占位缓冲读
         if (item.mesh.placeholder) pass.setVertexBuffer(1, item.mesh.placeholder);
         pass.setIndexBuffer(item.mesh.indexBuffer, item.mesh.indexFormat);
-        pass.drawIndexed(item.mesh.count);
+        pass.drawIndexed(item.mesh.count, item.mesh.instances ?? 1);
       } else if (item.text) {
         // 文本（P6b 1d）：逐字四边形，带索引的三角形列表
         pass.setIndexBuffer(item.text.indexBuffer, item.text.indexFormat);
@@ -5056,6 +5393,9 @@ export class GpuScene {
     this.snapshot = null;
     this.reflectionTargets?.destroy();
     this.reflectionTargets = null;
+    this.shadowAtlas?.destroy();
+    this.shadowAtlas = null;
+    this.shadowCasters = [];
     this.depthTarget = null;
     this.bloom = null;
     this.particleIndices = null;

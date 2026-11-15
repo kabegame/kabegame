@@ -4,11 +4,10 @@ use super::{
 };
 use crate::wallpaper::screens::ScreenInfo;
 use crate::wallpaper::window::WallpaperWindow;
-use crate::wallpaper::{web_entry, WALLPAPER_LABELS};
+use crate::wallpaper::WALLPAPER_LABELS;
 use async_trait::async_trait;
 use kabegame_i18n::t;
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 use tauri::{
     AppHandle, Emitter, Manager, Runtime, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
@@ -116,15 +115,6 @@ fn diff_windows(current: &[(String, Option<String>)], plans: &[WindowPlan]) -> W
     diff
 }
 
-/// 这个布置的输出是否落在铺 `screen` 的窗口上。
-fn placement_covers(placement: &Placement, screen: Option<&ScreenInfo>) -> bool {
-    match placement {
-        Placement::All { .. } => true,
-        Placement::One { screen: target } => screen.is_some_and(|screen| screen.id == target.id),
-        Placement::Span => false,
-    }
-}
-
 /// 窗口表里的一项。
 struct Slot<R: Runtime> {
     /// 已挂载的窗口；建窗后、页面就绪并挂载完成之前为 `None`（这期间页面已经可以来取布置）。
@@ -143,8 +133,8 @@ struct Slot<R: Runtime> {
 /// 窗口的**内容**：图片 / 视频 / 网页壁纸都由壁纸页面（`WallpaperWindow.vue` → `WallpaperStage`）自驱动渲染。
 /// 后端只给每个窗口一条布置 [`WindowAssignment`]（显示哪个目标、出不出声），样式、过渡与当前壁纸由页面从
 /// `setting-change` 里的 `wallpaperTargets[targetId]` 自己读；网页壁纸（`x-wpe/web`）是 web 层里的 `file:` iframe，
-/// 窗口不导航。`set_wallpaper` 只按壁纸类型给显示该目标的窗口开关桌面鼠标转发
-/// （[`WallpaperWindow::set_mouse_forwarding`]）。
+/// 窗口不导航，`set_wallpaper` 在后端没有要做的事。桌面鼠标由网页壁纸 / 场景宿主的 iframe 自己向
+/// `tauri-plugin-cursor` 登记（`attach_frame`），不经这里。
 ///
 /// 两把锁：`active` 让 init / reconcile / cleanup 串行（对齐期间要等页面就绪，可能持有数秒）；`slots` 只在读写
 /// 窗口表的瞬间持有，持有期间不调用会同步等主线程的窗口接口——页面初始化时的命令、轮播线程都要读它。
@@ -258,7 +248,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
     }
 
     /// 销毁 `label` 的窗口本体（不存在则只撤销 ready 标记）。调用前先把它的 [`Slot`] 从表里摘掉并丢弃
-    /// （看门狗、鼠标转发随之停止）。
+    /// （看门狗随之停止）。
     fn destroy_window(&self, label: &str) -> Result<(), String> {
         let result = match self.app.get_webview_window(label) {
             Some(window) => {
@@ -353,7 +343,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         let mut first_error: Option<String> = None;
         for (label, slot) in removed {
             tracing::info!("壁纸窗口 {label} 的显示器已不在线，销毁");
-            // 丢弃 WallpaperWindow：ping 看门狗与鼠标转发线程随之停止
+            // 丢弃 WallpaperWindow：ping 看门狗随之停止
             drop(slot);
             if let Err(e) = self.destroy_window(&label) {
                 tracing::warn!("{e}");
@@ -485,31 +475,15 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
 
     async fn set_wallpaper(
         &self,
-        file_path: &str,
+        _file_path: &str,
         _style: &str,
         _transition: &str,
-        placement: &Placement,
+        _placement: &Placement,
     ) -> Result<(), String> {
-        // 窗口在 init() / reconcile() 时已挂载且常显。图片 / 视频 / 网页壁纸都由壁纸页面按自己的布置
+        // 窗口在 init() / reconcile() 时已挂载且常显。图片 / 视频 / 网页 / 场景壁纸都由壁纸页面按自己的布置
         // 监听 setting-change 自驱动渲染（样式由页面铺放，场景交给宿主，对网页壁纸不生效；过渡同样由页面做），
-        // 这里只按这张壁纸的类型，给显示该目标的窗口开关桌面鼠标转发。设图、轮播、启动恢复、切换模式、
-        // 重新开启壁纸、改样式、显示器模式或在线屏变化后的重新输出都会走到这里。
+        // 桌面鼠标由 iframe 自己登记，后端没有要做的事。
         self.warn_if_window_missing("set_wallpaper");
-        // 判定在窗口锁外做（读 project.json），开关在锁内同步完成；锁内不调会同步等主线程的 getter。
-        let path = Path::new(file_path);
-        let is_web = web_entry(path)?.is_some();
-        let is_scene = path.is_dir()
-            && kabegame_core::wpe::read_project(path)
-                .is_ok_and(|project| project.kind == kabegame_core::wpe::WpeKind::Scene);
-        for slot in self.lock_slots().values_mut() {
-            if !placement_covers(placement, slot.screen.as_ref()) {
-                continue;
-            }
-            // 还在等页面就绪的窗口跳过：对齐完成后调用方会把各目标重新输出一次
-            if let Some(window) = slot.window.as_mut() {
-                window.set_mouse_forwarding(is_web || is_scene);
-            }
-        }
         Ok(())
     }
 
@@ -534,7 +508,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
         // 再挂一次。
         let mut active = self.lock_active();
         *active = false;
-        // 丢弃全部 WallpaperWindow：ping 看门狗与鼠标转发线程随之停止（`Pinger` / `InputForwarder` 的 Drop）。
+        // 丢弃全部 WallpaperWindow：ping 看门狗随之停止（`Pinger` 的 Drop）。
         let slots = std::mem::take(&mut *self.lock_slots());
         drop(slots);
         // 池里每个 label 都查一遍，而不只是在册的：异常路径留下的窗口也一并销毁，不留孤儿。
@@ -767,27 +741,6 @@ mod tests {
         let diff = diff_windows(&current(&[("wallpaper", None)]), &plans);
         assert_eq!(diff.remove, vec!["wallpaper".to_string()]);
         assert_eq!(diff.create, vec![0]);
-    }
-
-    #[test]
-    fn placement_picks_the_windows_showing_that_target() {
-        let main = screen("main", true, 0, 0);
-        let side = screen("side", false, 1920, 0);
-        let all = Placement::All {
-            screens: vec![main.clone(), side.clone()],
-        };
-        assert!(placement_covers(&all, Some(&main)));
-        assert!(placement_covers(&all, Some(&side)));
-        // 没有屏幕信息时的那一个窗口也属于「所有显示器」
-        assert!(placement_covers(&Placement::All { screens: vec![] }, None));
-
-        let one = Placement::One {
-            screen: side.clone(),
-        };
-        assert!(placement_covers(&one, Some(&side)));
-        assert!(!placement_covers(&one, Some(&main)));
-        assert!(!placement_covers(&one, None));
-        assert!(!placement_covers(&Placement::Span, Some(&main)));
     }
 
     #[test]

@@ -49,6 +49,7 @@ export async function realmCheck(host: SceneHost, extraSources: readonly string[
           debug: (text) => console.debug(text),
         }),
     });
+    const created = realm;
     const bundle = host.devScene.bundle!;
     const state = SceneState.fromBundle(bundle);
     const current = (api = new ScriptApi(realm, {
@@ -67,6 +68,13 @@ export async function realmCheck(host: SceneHost, extraSources: readonly string[
         return true;
       },
     }));
+    // 加载期编模块、再实例化一份（顶层 await 的等它结束）
+    const loadNamespace = async (source: string, id: string): Promise<Record<string, unknown>> => {
+      const module = await created.prepareModule(source, id);
+      const made = module.instantiate();
+      const instance = typeof (made as { then?: unknown }).then === "function" ? await made : made;
+      return (instance as { namespace: Record<string, unknown> }).namespace;
+    };
     const results: { id: string; status: "成功" | "失败"; exports?: string[]; error?: string }[] = [];
     const sources = [
       ...scripts.list.map((script) => ({ id: script.id, source: script.source })),
@@ -75,7 +83,7 @@ export async function realmCheck(host: SceneHost, extraSources: readonly string[
     for (const { id, source } of sources) {
       try {
         current.setModuleEvaluating(true);
-        const exports = await realm.importModule(source, id);
+        const exports = await loadNamespace(source, id);
         results.push({ id, status: "成功", exports: Object.keys(exports) });
       } catch (error) {
         results.push({ id, status: "失败", error: messageOf(error) });
@@ -83,7 +91,7 @@ export async function realmCheck(host: SceneHost, extraSources: readonly string[
         current.setModuleEvaluating(false);
       }
     }
-    const environment = await realm.importModule(
+    const environment = await loadNamespace(
       `export const consoleMembers = Object.keys(console).sort();
        export const localStorageMembers = Object.keys(localStorage).sort();
        export const localStorageHasRemove = "remove" in localStorage;
@@ -95,7 +103,7 @@ export async function realmCheck(host: SceneHost, extraSources: readonly string[
       "realmCheck 环境",
     );
     current.setModuleEvaluating(true);
-    const apiModule = await realm.importModule(
+    const apiModule = await loadNamespace(
       `export const topLevelFrametimeThrows = (() => { try { void engine.frametime; return false; } catch { return true; } })();
        export const topLevelLocalStorageThrows = (() => { try { localStorage.get("probe"); return false; } catch { return true; } })();
        export function check() {

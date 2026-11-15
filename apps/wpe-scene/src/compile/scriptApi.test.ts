@@ -8,7 +8,9 @@ import { parseProject, parseScene } from "./model";
 import {
   MISSING_SCRIPT_API,
   memberAccesses,
+  usesEffectAccess,
   scanScriptApi,
+  exportsMediaCallback,
   scanScriptCallbacks,
   scriptExports,
   type ScriptApiContext,
@@ -49,14 +51,14 @@ describe("未实现脚本 API 的扫描", () => {
     const source = [
       "export function init() {",
       "  let bar = thisScene.getLayer('bar');",
-      "  let parent = bar.getParent();",
+      "  let parent = bar.setParent(null);",
       "  layers[0].getTextureAnimation().play();",
       "  thisScene.getLayer(1)?.getEffect('tint').visible = false;",
       "  shared.target.getAnimation('a').play();",
       "}",
     ].join("\n");
-    // `getAnimation`（IObject、thisScene 上的）已在 P10b 实现，不再报
-    expect(scan(source)).toEqual(["layer.getEffect", "layer.getParent", "layer.getTextureAnimation"]);
+    // `getAnimation`（IObject、thisScene 上的）已在 P10b 实现，不再报；`getEffect` 在 P6d1a 实现
+    expect(scan(source)).toEqual(["layer.getTextureAnimation", "layer.setParent"]);
     expect(scan("thisScene.getAnimation('x');")).toEqual([]);
   });
 
@@ -70,9 +72,10 @@ describe("未实现脚本 API 的扫描", () => {
       "}",
     ].join("\n");
     expect(scan(source)).toEqual([]);
-    expect(scan("export function init() { thisLayer.play(); thisObject.text = 'a'; thisLayer.lookAt(p); }")).toEqual([
-      "layer.lookAt",
-    ]);
+    // `lookAt` 已在 P6d1a 实现，不再报
+    expect(scan("export function init() { thisLayer.play(); thisObject.text = 'a'; thisLayer.lookAt(p); }")).toEqual(
+      [],
+    );
   });
 
   it("文本层字段（P6b 步骤 2）：13 个字段（含 font / opaquebackground / backgroundcolor / anchor）都不再报", () => {
@@ -97,22 +100,22 @@ describe("未实现脚本 API 的扫描", () => {
   it("注释、字符串、模板文字与正则里的不算；模板插值照常扫", () => {
     const source = [
       "// thisScene.createLayer('a');",
-      "/* bar.getParent(); engine.registerAsset('x'); */",
+      "/* bar.setParent(); engine.registerAsset('x'); */",
       "const a = 'thisScene.createLayer()';",
       'const b = "layer.getTextureAnimation()";',
       "const c = `input.cursorWorldPosition ${'}'} and ${`thisScene.sortLayer`}`;",
-      "const d = /x.getParent\\/()/g.test(s) ? 1 : 2;",
+      "const d = /x.setParent\\/()/g.test(s) ? 1 : 2;",
       "const e = n / 2 / thisLayer.origin.x;",
       "export function update() { return value; }",
     ].join("\n");
     expect(scan(source)).toEqual([]);
-    expect(scan("const s = `${bar.getParent().name} / ${`${thisScene.createLayer('a')}`}`;")).toEqual([
-      "layer.getParent",
+    expect(scan("const s = `${bar.setParent(null).name} / ${`${thisScene.createLayer('a')}`}`;")).toEqual([
+      "layer.setParent",
       "thisScene.createLayer",
     ]);
     // 除号之后不是正则：后面的调用照常扫到
-    expect(scan("const k = width / 2; const p = bar.getChildren(); const q = (a) / b.getChildren();")).toEqual([
-      "layer.getChildren",
+    expect(scan("const k = width / 2; const p = bar.setParent(); const q = (a) / b.setParent();")).toEqual([
+      "layer.setParent",
     ]);
   });
 
@@ -138,11 +141,23 @@ describe("未实现脚本 API 的扫描", () => {
     expect(scan(source)).toEqual([]);
   });
 
+  it("usesEffectAccess：任意接收者上的 getEffect 成员访问（P6d1a）", () => {
+    expect(usesEffectAccess("thisLayer.getEffect(0).visible = true;")).toBe(true);
+    expect(usesEffectAccess("let l = thisScene.getLayer('a'); l?.getEffect('x');")).toBe(true);
+    expect(usesEffectAccess("l['getEffect'](1);")).toBe(true);
+    // 注释、字符串、没有成员访问的同名标识符不算；getEffectCount 是另一个名字
+    expect(usesEffectAccess("// thisLayer.getEffect(0)\nconst s = 'x.getEffect(0)'; getEffect(1);")).toBe(false);
+    expect(usesEffectAccess("thisLayer.getEffectCount();")).toBe(false);
+  });
+
   it("thisObject 按脚本挂在哪里解析", () => {
     // effect：IEffect 的方法
-    expect(scan("thisObject.getMaterial(0); thisObject.name;", { kind: "effect" })).toEqual([
-      "effect.getMaterial",
-      "effect.name",
+    // `getMaterial` / `getMaterialCount` / `setMaterialProperty` / `name` 在 P6d1a 实现，`executeMaterialFunction` 照报
+    expect(
+      scan("thisObject.getMaterial(0); thisObject.name; thisObject.setMaterialProperty('a', 1);", { kind: "effect" }),
+    ).toEqual([]);
+    expect(scan("thisObject.executeMaterialFunction('f');", { kind: "effect" })).toEqual([
+      "effect.executeMaterialFunction",
     ]);
     // 材质常量：成员是 pass 的材质常量，同名的图层字段不报；IObject 的 getAnimation 已实现（P10b），不报
     expect(scan("thisObject.text = 1; thisObject.speed = 2; thisObject.getAnimation();", { kind: "material" })).toEqual(
@@ -274,9 +289,11 @@ describe("导出回调的扫描", () => {
       "export function cursorClick() {}",
       "export function cursorHitTest() {}",
       "export const resizeScreen = () => {}, helper = 1;",
-      "export { mediaPlaybackChanged } from './m.js';",
+      "export { applyGeneralSettings } from './m.js';",
+      // 五个媒体回调 P11c 已实现，不在缺失表里
+      "export function mediaPlaybackChanged() {}",
     ].join("\n");
-    expect(scanScriptCallbacks(source)).toEqual(["mediaPlaybackChanged", "resizeScreen"]);
+    expect(scanScriptCallbacks(source)).toEqual(["applyGeneralSettings", "resizeScreen"]);
     expect(scanScriptCallbacks("export function update() { return value; }")).toEqual([]);
   });
 });
@@ -311,12 +328,20 @@ describe("能力表：script:api:*", () => {
     const unsupported = new Set<string>();
     checkScriptFeatures(
       [
-        script("export function init() {} export function mediaStatusChanged(event) {}"),
-        script("export function mediaTimelineChanged(event) {}", ["不支持的模块说明符：./x.js"]),
+        script("export function init() {} export function resizeScreen(event) {}"),
+        script("export function applyGeneralSettings(event) {}", ["不支持的模块说明符：./x.js"]),
+        // 媒体回调（P11c）已实现，不报
+        script("export function mediaStatusChanged(event) {} export function mediaTimelineChanged(event) {}"),
       ],
       unsupported,
     );
-    expect([...unsupported]).toEqual(["script:callback:mediaStatusChanged"]);
+    expect([...unsupported]).toEqual(["script:callback:resizeScreen"]);
+  });
+
+  it("exportsMediaCallback：导出了五个媒体回调之一（含 export { … as … }）", () => {
+    expect(exportsMediaCallback("export function init() {}")).toBe(false);
+    expect(exportsMediaCallback("export async function mediaThumbnailChanged(event) {}")).toBe(true);
+    expect(exportsMediaCallback("function f() {} export { f as mediaPropertiesChanged };")).toBe(true);
   });
 
   it("编译：用到未实现 API 的场景整张退回，只用已实现 API 的照常", async () => {

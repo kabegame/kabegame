@@ -69,7 +69,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
   thisScene: [
     // 建层删层与排序、模型数据 → P6；相机变换本机语料 0 处（L15）
     ...methods("root", [
-      "getLayerByID",
       "createLayer",
       "destroyLayer",
       "sortLayer",
@@ -105,7 +104,7 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ]),
   ],
   /** `requestFeatures` 声明里没有，DLL 有（报告 C）；`isObjectValid`、`clearTimeout` 已实现。 */
-  engine: methods("root", ["registerAsset", "openUserShortcut", "requestFeatures"]),
+  engine: methods("root", ["registerAsset", "requestFeatures"]),
   /** `input` 的三个只读成员（`cursorWorldPosition` / `cursorScreenPosition` / `cursorLeftDown`）P6c 已实现（`script/api.ts` 的 `installInput`）。 */
   input: [],
   localStorage: [],
@@ -118,34 +117,23 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
    */
   layer: [
     // 层级与变换（W1 / W5）
-    ...methods("any", ["getTransformMatrix", "rotateObjectSpace", "lookAtYaw"], UNIQUE),
-    ...methods("any", ["setParent", "getParent", "getChildren"], `${UNIQUE}；DOM 用的是 \`parentNode\` / \`children\``),
+    // `getTransformMatrix` / `rotateObjectSpace` / `lookAt` / `lookAtYaw` / `getParent` / `getChildren` 已实现（P6d1a）
+    ...methods("any", ["setParent"], UNIQUE),
     ...methods(
       "any",
       ["getAttachmentIndex", "getAttachmentMatrix", "getAttachmentOrigin", "getAttachmentAngles"],
       UNIQUE,
     ),
-    // `Mat4.lookAt` 是 `baseclasses.js` 的静态方法（1112 行），只按名字会误报
-    ...methods("root", ["lookAt"]),
-    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b）
+    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b），`getAnimationLayer` / `getAnimationLayerCount` 已实现（P12c），
+    // 骨骼的 `getBoneCount` / `getBoneTransform` / `setBoneTransform` / `applyBonePhysicsImpulse` / `resetBonePhysicsSimulation` 已实现（P12d-2，只图像层）
     ...methods(
       "any",
-      [
-        "getTextureAnimation",
-        "getAnimationLayerCount",
-        "getAnimationLayer",
-        "createAnimationLayer",
-        "playSingleAnimation",
-        "destroyAnimationLayer",
-      ],
+      ["getTextureAnimation", "createAnimationLayer", "playSingleAnimation", "destroyAnimationLayer"],
       UNIQUE,
     ),
     ...methods(
       "any",
       [
-        "getBoneCount",
-        "getBoneTransform",
-        "setBoneTransform",
         "getLocalBoneTransform",
         "setLocalBoneTransform",
         "getLocalBoneAngles",
@@ -154,16 +142,14 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
         "setLocalBoneOrigin",
         "getBoneIndex",
         "getBoneParentIndex",
-        "applyBonePhysicsImpulse",
-        "resetBonePhysicsSimulation",
         "getBlendShapeIndex",
         "getBlendShapeWeight",
         "setBlendShapeWeight",
       ],
       UNIQUE,
     ),
-    // effect 访问（3c 待定 3）
-    ...methods("any", ["getEffect", "getEffectCount", "transformAttachmentToTexture"], UNIQUE),
+    // `getEffect` / `getEffectCount` 已实现（P6d1a）
+    ...methods("any", ["transformAttachmentToTexture"], UNIQUE),
     // 字段：写入在我们这边落成普通属性、不报错也不生效。名字大多通用，只认根对象。`alignment` 已在图像层上实现（P8 步骤 3，
     // `script/api.ts`）；别的图层上 WPE 读回什么由脚本 dll 决定，没查，不再静态报。粒子层的 `instance` 已实现（P4f 步骤 3）
     ...fields([
@@ -174,14 +160,10 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       // 文本层的 13 个字段都已实现（P6b 步骤 2，`script/api.ts` `installText`），不在表里
     ]),
   ],
-  /** `IEffect`：已实现 `visible`。 */
+  /** `IEffect`：已实现 `visible`、`name`、`getMaterialCount`、`getMaterial`、`setMaterialProperty`（P6d1a）。 */
   effect: [
-    ...methods(
-      "any",
-      ["getMaterial", "getMaterialCount", "setMaterialProperty", "executeMaterialFunction"],
-      `${UNIQUE}；材质常量在我们这边是材质对象上的字段，不经这些方法`,
-    ),
-    ...fields(["name"]),
+    // `getMaterial` / `getMaterialCount` / `setMaterialProperty` / `name` 已实现（P6d1a）；`executeMaterialFunction` 照报
+    ...methods("any", ["executeMaterialFunction"], UNIQUE),
   ],
   /**
    * `IObject`：所有对象（图层、effect、材质、动画层、模型数据）都有的成员。唯一的 `getAnimation` 已在 P10b 实现（图层、effect、材质、
@@ -394,10 +376,15 @@ export function memberAccesses(source: string): MemberAccess[] {
   return out;
 }
 
+/** 脚本里有没有 `getEffect` 成员访问（任意接收者，P6d1a）：场景里写死关闭的 effect 要不要编进 bundle。 */
+export function usesEffectAccess(source: string): boolean {
+  return memberAccesses(source).some((access) => access.name === "getEffect");
+}
+
 /** 扫描用到的脚本信息（`SceneScript` 的子集）。 */
 export interface ScriptApiContext {
   source: string;
-  owner: { kind: "layer" | "material" | "effect" | "general" };
+  owner: { kind: "layer" | "animation-layer" | "material" | "effect" | "general" };
   /** 所在图层的 objects 下标；general 上的脚本为 null。 */
   layer: number | null;
 }
@@ -417,7 +404,8 @@ function rootGroup(root: string, script: ScriptApiContext): ResolvedGroup | null
     case "thisLayer":
       return script.layer === null ? "general" : "layer";
     case "thisObject":
-      return script.owner.kind;
+      // 动画层字段脚本（P12c）：`thisObject` 是 IAnimationLayer，是图层的子对象、成员不收进表，不按分组查（只剩 `any` 项）
+      return script.owner.kind === "animation-layer" ? null : script.owner.kind;
     default:
       return null;
   }
@@ -504,13 +492,22 @@ export const MISSING_SCRIPT_CALLBACKS: readonly string[] = [
   "resizeScreen",
   "applyGeneralSettings",
   // 光标回调已在 P6c 实现（`script/runtime.ts` 的 `cursorEvent`；`cursorHitTest` WPE 自己也不调，导出它只打开拾取）
-  // 系统媒体集成 → P11
+  // 系统媒体集成五个回调已在 P11c 实现（`script/runtime.ts` 的 `mediaEvent`，名字见 `MEDIA_CALLBACKS`）
+];
+
+/** 五个系统媒体回调（`WPE_SCRIPT_CALLBACKS` 编号 14–18，按 WPE 的派发顺序无关，只是名单）：导出了其中任一个，场景就要接入媒体集成。 */
+export const MEDIA_CALLBACKS: ReadonlySet<string> = new Set([
   "mediaStatusChanged",
   "mediaPlaybackChanged",
   "mediaPropertiesChanged",
   "mediaThumbnailChanged",
   "mediaTimelineChanged",
-];
+]);
+
+/** 一段脚本有没有导出五个媒体回调之一（WPE 绑定时 `mask & 0x7c000`，rea-p11-media 2.1）。 */
+export function exportsMediaCallback(source: string): boolean {
+  return scriptExports(source).some((name) => MEDIA_CALLBACKS.has(name));
+}
 
 function isPunct(token: Token | undefined, value: string): boolean {
   return token?.type === "punct" && token.value === value;

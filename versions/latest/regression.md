@@ -269,6 +269,105 @@
 | [ ] | U8 插件版本不兼容提示 | macOS 插件详情 | 打开一个要求更高应用版本的未安装插件，悬停安装按钮 | 按钮置灰，悬停提示所需版本 | 未测 |
 | [ ] | U9 Web 版 | Web | 打开画廊 | 收集菜单只有「网络」，其余同 U1 | 未测 |
 
+## 场景壁纸快捷方式（P11d）
+
+2026-11-15 Windows dev。场景的 `usershortcut` 属性：
+- 面板（类型 + 路径 + 参数、「测试」按钮）；
+- 图标纹理（后端照 WPE 取图，OpenCV 4.4.0 的三处移植进 Rust；宿主补透明边、夹取）；
+- `engine.openUserShortcut`：宿主照 WPE 的门禁，应用页核对用户激活后用自己的图片 id 调启动命令，后端只启动用户配过的快捷方式。
+
+依据与资料：
+- WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md`「P11d 补测」与同目录 `rea-p11d.md`；
+- 计划、约定与走查见 `phase-11d-shortcuts.md`；
+- 生成工程 `ignore/p11/proj/p11-shortcut`、`p11-shortcut-v`（`ignore/p11/defs/p11d.py`），WPE 的图标纹理 `ignore/p11/d/wpe-icons/`，dev 应用里取到的图标 `ignore/p11/d/kb-icons-app/`；
+- 语料 `ignore/p11/d/corpus-*.json`。
+
+真实启动会在桌面上开资源管理器窗口，目标是空文件夹 `ignore/p11/d/launch-target`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | D0 单测与检查 | Windows | `kabegame-core` 的 `user_props`、`kabegame` 的 `wpe` 过滤；宿主 tsc 与相关 vitest；应用 vue-tsc 与相关 vitest；Prettier、rustfmt | 全过 | 2026-11-15 Claude（合并进主工作区后）：Rust 14 + 135 个通过（1 个是手动跑的取图标测试）；宿主 tsc 0 error，相关 130 个文件 2972 个用例里 2970 个通过，失败的两个见 D8；应用 6 个文件 50 个通过；vue-tsc 只有别的会话未入库的 `WpeSceneShadowsSetting.vue` 1 个错误。变异：OpenCV 2 处、前端 4 处全部检出。提交内容单独检出核对：vue-tsc 0 error；宿主 tsc 剩 1 个错误，4 个测试报 `scriptPropertyEntries is not a function`，来自之前的提交 `637530bd` 带进的 P3 会话未提交的调用，与本步无关 |
+| [x] | D1 OpenCV 移植 | Node / Rust | `cv.rs` 的单测；另换种子和 OpenCV 比 680 个用例；圆形遮罩作用于 WPE 的 `webthumbnailfallback.png` | 逐字节相同 | 2026-11-15 Claude：30 个单测、680 个用例逐字节相同，遮罩结果和 WPE 纹理逐像素相同。参照用 4.5.5，与 4.4.0 在这三处没有行为差别 |
+| [x] | D2 图标对 WPE | Windows dev | 工程 `p11-shortcut` 导入 dev 库，配 7 种目标，应用页调 `wpe_scene_shortcut_icon`，和 WPE 抓帧存下的纹理比 | 逐像素相同 | 2026-11-15 Claude：notepad.exe、`.lnk`、`.url`、文件夹、`calc`、维基百科（160×160）、`example.com` 的缺省图（300×300）全部逐像素相同。测试程序里 exe 取不到缩略图（`0x8004B200`）、差几级，dev 应用里没有这个问题 |
+| [x] | D3 门禁对 WPE | Windows dev + WPE 测试窗口 1280×720 | 9 个用例（按钮脚本的 `case` 0–8）用同一串输入：WPE 用 `input_play`，Kabegame 用屏外宿主的探针（`inputTimeline`）；s1 在 WPE 用错的哈希、在 Kabegame 设成没配 | 脚本日志逐行相同 | 2026-11-15 Claude：9 个用例逐行相同（相对帧号、返回值、两种异常文本、`cursorMove` 没捕获后被禁用）。未捕获异常的位置 WPE 报 col 9、我们报 col 10，是 P3b 的通用报错格式，与本步无关 |
+| [x] | D4 宿主拿到的形状 | Windows dev | 屏外宿主里调 `wpe_web_pull_state` | 配过的是 `{ value: 16 位哈希, isbound: true, commandtype, file }`，没配的只有 `isbound: false`；脚本里 `engine.userProperties` 是 `{}` | 2026-11-15 Claude：3660962877 的 `launcher1–3`（文件、网址、文件夹）与 `launcher4`（没配）都符合；`p11-shortcut` 的 `init` 日志里快捷方式属性是 `{}` |
+| [x] | D5 真实启动 | Windows dev + WPE 测试窗口 | WPE：s1 设成 `directory:<本机哈希>:…\launch-target`，按下时调用；Kabegame：应用页调 `wpe_open_user_shortcut(15174, "s4")` | 打开 `launch-target`，返回 `true` | 2026-11-15 Claude：WPE 返回 `true`、没有 `User shortcut blocked.`、文件夹窗口打开；本机哈希含 UTF-16 结尾 NUL（读码推断得到证实）。Kabegame 返回 `true`（`ShellExecuteW` > 32），但同一文件夹的窗口还开着，系统复用了它，画面上没新窗口 |
+| [x] | D6 反向用例 | Windows dev | 场景宿主调 `wpe_open_user_shortcut`；应用页对没配、`textinput`、`combo`、不存在的属性、只有工程缺省值、非场景图片、不存在的图片调启动命令 | 都不启动 | 2026-11-15 Claude：宿主被 ACL 拒绝（取图标命令放行）；没配与只有缺省值返回 `false`，其余报错 |
+| [x] | D7 语料 | Node，233 个工程 | 合并前后各扫一次（`kbp corpus scan` / `diff`） | 只去掉 `script:api:engine.openUserShortcut` 与 `usertextures:usershortcut`，原来能渲染的不掉出 | 2026-11-15 Claude：能渲染 175 → 176（`3660962877`），去掉的两个键 6 张、5 张，没有新增键。`3660962877` 解包导入后脚本 252 段都没有报错，三个图标就绪 |
+| [x] | D8 语料测试的两处失败 | Node | `compile/pipeline.test.ts` 的快速路径上限；`compile/p3a.test.ts` 的绑定表完整性 | 与本步无关 | 2026-11-15 Claude：`3253330537` 648 次请求、`3543014965` 读 104 MB，合并前的快照同样失败（后者 P11c 时已有）；绑定表完整性那条在机器同时编 Rust 时超时（600 s），单独重跑 13 个全过，整个文件用时约 9 分钟，离上限不远 |
+| [ ] | D9 预览里点击启动 | Windows dev | 预览 `3660962877`，打开「用户栏设置」的功能开关，给 #1–#3 配程序、网址、文件夹；看应用栏图标，点一个图标；再点面板上的「测试」 | 图标与目标一致；每次点击打开一次所配的目标 | 待用户手测 |
+| [ ] | D10 非 Windows | macOS / Linux | 预览一张带快捷方式的场景 | 面板不显示快捷方式属性，图标槽是缺省纹理，`openUserShortcut` 返回 `false` | 本机不能测 |
+
+## 场景壁纸 P6d1a：层级、转向与 effect / 材质访问
+
+2026-11-15 Windows dev。场景脚本的 `getParent` / `getChildren` / `getTransformMatrix`、`rotateObjectSpace` / `lookAt` / `lookAtYaw`、`getEffect` / `getEffectCount` / effect `name` / `getMaterial` / `getMaterialCount` / `setMaterialProperty`、`getLayerByID`，删掉图层对象的 `id`；旋转存角度与 3×3 两份（`LayerState.rotation`）；用到 `getEffect` 时写死关闭的 effect 也编进 bundle；材质对象只登记读到的常量、加五个只读状态字段；`rad2deg` 材质常量脚本一侧按度。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「层级、转向与 effect / 材质访问（P6d1a）」；计划与实施记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d1-hierarchy-effects.md`。验收文件在 `ignore/p6/d1/`（独立工作树 `wt/`、HEAD 快照 `head/`、变异清单 `mutations*.json`、语料 `corpus-*.json`、真机读图 `real/`），测试工程由 `ignore/p6/d0/make_p6d1.py`、`make_p6d1b.py` 生成在 `ignore/p6/d0/proj/p6d1-*`，WPE 读回在 `ignore/p6/d0/out/p6d1-xform.log`、`p6d1-round2.log`，抓帧在 `A:\p6d\p6d1-*\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | F1 类型与格式 | Windows | 宿主 `tsc --noEmit`；Prettier `--check` 本步改动的 TS 文件 | 0 error、格式通过 | 2026-11-15 Claude：工作树与合并后的主工作区 tsc 都是 0 error |
+| [x] | F2 宿主 vitest（相关文件） | Node，vitest | 带 `KABEGAME_WPE_ROOT` 跑 `render/rotation`、`render/hierarchy`、`render/p12b`、`script/hierarchyApi`、`script/effectMaterialApi`、`script/api`、`script/runtime`、`compile/scriptApi`、`compile/p3c`、`host.script` | 全过 | 2026-11-15 Claude：工作树 361 条全过；合并进主工作区后 372 条全过（多出的是 P12b2-1 的用例）。`rotation.test.ts` 对 WPE 读回逐位比（−0 与 0 视同，WPE 日志印不出符号） |
+| [x] | F3 变异检查 | Node，工作区模式 | `ignore/p6/d1/mutations.json` 12 处、`mutations2.json` 1 处（`kbp mutate --mode workspace`，工作树里） | 每处都有用例失败，原样还原 | 2026-11-15 Claude：12 处检出 11 处；没检出的「Vec2 写进 vec3」是等价变异（对象没有 z，vec3 写入本来就不收），改成带 z 并放开 vec3 后检出；整树哈希前后一致 |
+| [x] | F4 语料编译 | Node，`kbp corpus scan` / `diff` | HEAD 快照（`868d1711`）与工作树各扫一次，两边用同一份翻译器 wasm | 只去掉本步实现的键，没有新增的键 | 2026-11-15 Claude：233 张，0 出错，干净 159 → 160（`3243449890`）；去掉 `layer.getParent` 11 张、`getTransformMatrix` 6、`getChildren` 4、`getEffect` 4、`effect.getMaterial` 2，没有新增。第一次比时工作树还是旧 wasm，多出 22 张 `shader:*:texture` 的差别，换成主工作区当天重建的 wasm 后消失（与本步无关） |
+| [x] | F5 转向的读回 | Windows dev，屏外宿主（`render_scene`，`scripts: true`） | `p6d1-xform`、`p6d1-xform2`、`p6d1-cam` 导入 dev 库跑脚本，`[kbp6d]` 读回和 WPE 日志逐行比 | 逐位相同 | 2026-11-15 Claude：43 + 23 + 2 行逐位相同。第一次跑 `p6d1-xform2` 时 L3b、KN（视线与 up 平行）读回 `0 0 0`、WPE 是 NaN：NaN 角度走图层向量字段的写入被丢掉，改成经 `rotation` 写入目标（3×3 为 null）后相同，补了单测 |
+| [x] | F6 effect / 材质的读回 | Windows dev，屏外宿主 | `p6d1-mat`（回放 8 帧）、`p6d1-mat2`、`p6d1-mat3`、`p6d1-mat4`、`p6d1-mat6`（回放 8 帧）跑脚本 | 数值逐位相同 | 2026-11-15 Claude：`setMaterialProperty` 的全部情形（S1–S7、E1–E8）、`rad2deg` 的四种来源（T1–T4）、`getEffect` / `getMaterial` 读回都相同。材质对象的键顺序当时不同（WPE `color, alpha`、我们 `alpha, color` 等），由 F10 补上 |
+| [x] | F7 画面 | Windows dev，屏外宿主；WPE 抓帧 | `p6d1-mat` 八块的中心像素；`p6d1-xform`、`p6d1-xform2` 整帧和 WPE 上屏图（`save_texture` 取 Present 那一事件）看布局 | 颜色相同、布局相同 | 2026-11-15 Claude：E1–E8 与 WPE 一致（E2 191/255 即 0.749）；三种转向转出的条形、侧对镜头不可见的层、NaN 的层不画都一致 |
+| [x] | F8 解锁场景 `3243449890` | Windows dev，屏外宿主 | `kbp content unpack` 解包后导入，`render_scene` 跑脚本回放 30 帧 | 能渲染，没有不支持项；脚本没有与本步相关的报错 | 2026-11-15 Claude：100 段脚本全部 `init`，画面完整；只有 `objects/48/visible` 的 `update` 报 `Cannot create property 'x' on boolean 'true'` 被禁用：作者把拖拽脚本挂在了 `visible` 上，`init` 把 `value`（布尔）存进 `weizhi`，严格模式下 WPE 也会抛，与本步无关 |
+| [x] | F9 解锁场景的实时画面 | Windows，真机 | 实时看 `3243449890` | 时钟与音频条照常动，和 WPE 观感一致 | 2026-11-15 用户手测：和 WPE 差不多 |
+| [x] | F10 材质对象键的顺序（补提交） | Node，vitest；Windows dev，屏外宿主；WPE | `script/materialKeyOrder.test.ts` 七组；`p6d1-mat2/3/4`、`p6d1-keys`（fire / pulse / lightshafts，9–12 个键，触发扩容）导入 dev 库跑脚本，`Object.keys` 的结果和 WPE 日志比 | 逐项相同 | 2026-11-15 Claude：WPE 侧 `p6d1-keys` 的三组和读码预测逐项相同（证实扩容路径）；单测与真机读回七组全部相同；变异 3 处（不排序、非空桶追加到尾、不倒序）全部检出 |
+
+## 场景壁纸 P6d1b：材质状态字段运行中改管线
+
+2026-11-15 Windows dev。脚本写材质对象的 `blending` / `alphawriting` / `depthtest` / `depthwrite` / `cullmode`：
+- 取值按一张表规整（编译期共用），非法值复位成第一项；
+- 写进 `SceneState.passStates`，重编译重放；
+- 写过的图层强制重建，规划取「bundle 值 + 覆盖」，角色规则照旧，着色器不换；
+- 新组合的管线后台建、晚几帧换上，dev 探针读回前结清；
+- 用到 `getEffect` 时场景目标加载就挂深度附件。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「层级、转向与 effect / 材质访问（P6d1a）」的「材质状态字段的写入（P6d1b）」；计划与实施记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d1-hierarchy-effects.md` 点 8，读码 `rea-p6d1-matstate.md`。
+- 验收文件在 `ignore/p6/d1/`：变异清单 `mutations4.json`、`mutations5.json`，语料 `corpus-base2.json` / `corpus-wt2.json`，真机图与轨迹 `real/p6d1-mat7*`、`real/p6d1-a2c*`，像素脚本 `a2c_pixels.py`。
+- 测试工程由 `ignore/p6/d0/make_p6d1b.py`（`p6d1-mat7`、`p6d1-mat8`）与 `make_p6d1c.py`（`p6d1-a2c`）生成；WPE 像素在 `ignore/p6/d0/out/p6d1-round2.log` 末段，抓帧在 `A:\p6d\p6d1-mat7\`、`p6d1-mat8\`、`p6d1-a2c\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | G1 类型与格式 | Windows | 宿主 `tsc --noEmit`；Prettier `--check` 本步改动的 TS 文件 | 0 error、格式通过 | 2026-11-15 Claude：合并进主工作区后 tsc 0 error、16 个文件格式通过。工作树基点 `637530bd` 本身缺 `scriptPropertyEntries` 的导出（别的提交只提交了引用方），工作树里那一条 tsc 错误与本步无关 |
+| [x] | G2 宿主 vitest（相关文件） | Node，vitest | `render/p6d1b`、`compile/passState`、`script/effectMaterialApi`、`render/p3a`、`dev/probe.scripts`、`render/rebuild`、`render/p5d-depth`、`render/p8`、`compile/p5c`、`compile/p5d`、`script/api`、`script/runtime`、`host.script`、`script/materialKeyOrder`、`script/hierarchyApi` | 全过 | 2026-11-15 Claude：主工作区 15 个文件 609 条全过（6 条本来就跳过） |
+| [x] | G3 变异检查 | Node，工作区模式 | `mutations4.json` 13 处（工作树）、`mutations5.json` 1 处（主工作区，探针结清） | 每处都有用例失败，原样还原 | 2026-11-15 Claude：14 处全部检出、全部还原（非法值不复位、不分大小写、编译期不查表、规划不取覆盖、sync 不重建、建好不换上、不建深度附件、default 留键、不标脏、getter 只读 bundle、setter 空、字符串不放行、重放键、探针不结清） |
+| [x] | G4 语料编译 | Node，`kbp corpus scan` / `diff` | 基点 `637530bd` 快照与工作树各扫一次，同一份翻译器 wasm | 不变 | 2026-11-15 Claude：233 张，0 出错，干净 160 → 160，没有键的增减 |
+| [x] | G5 取值规则的读回 | Windows dev，屏外宿主（`render_scene`，`scripts: true`） | `p6d1-mat8` 在 tint 的 pass 0 上依次写五个字段（36 次，含 `bogus`、`Additive`、`3`、`null`、`less`、`back` 等），读回和 WPE 实测比 | 逐项一致 | 2026-11-15 Claude：非法值复位成表的第一项、`null` 不写、区分大小写，全部一致 |
+| [x] | G6 管线状态 | Windows dev，屏外宿主 + 逐 draw 轨迹；WPE 抓帧 | `p6d1-mat7` 在 blur 四个 pass 各写一项，轨迹里每次绘制的混合、写掩码、剔除、深度和 WPE 抓帧比 | 相同 | 2026-11-15 Claude：pass 0 additive 进了中间 pass；pass 1 剔除 Back；pass 2 测写深度（fbo 没有深度附件，不起作用，同 WPE）；pass 3 上屏 SrcAlpha / InvSrcAlpha、写掩码 7、深度关（借基础材质）、剔除 Back（用自己的），和 WPE event 110 逐项相同 |
+| [x] | G7 A2C 与 additive 的画面 | Windows dev，屏外宿主（回放 70 帧，第 60 帧写入）；WPE 抓帧 | `p6d1-a2c` 八组的中心像素和 WPE 比 | 7 组相同；C3 是已知差异 | 2026-11-15 Claude：N、M1（normal → A2C 不锐化，黑）、C1、M2a / M2b（A2C → translucent 仍锐化）、M3（运行中 additive 没有 `ADDITIVE`）、M7（不写 alpha）相同；C3（加载时 additive）WPE (255, 255, 0)、我们 (255, 0, 0)：加载期没加 `ADDITIVE` 组合键，WPE 自带着色器只在雾效读它、语料工坊着色器没有，随雾效补 |
+
+## 场景壁纸 P6d2：脚本改成同步工厂加载
+
+2026-11-15 Windows dev。用户脚本不再各自作 blob 模块求值：
+- 加载期每种源码按真模块检查一次（哨兵模块，不执行用户代码），用 acorn 原地改写成工厂、间接 `eval` 编一次；
+- 每段脚本调一次工厂，同步得到自己的模块状态；
+- 命名空间、动态 `import()`（一律 reject）、`import.meta`（空对象）照 WPE 实测；
+- 报错文字与行列和以前逐字相同；
+- dev 工具 `scriptCorpus` 改成确定的，用来在改动前后跑全库比对。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「场景脚本（P3b）」的「用户脚本的加载（P6d2，同步工厂）」；计划与实施记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d2-script-factory.md`。
+- 验收文件在 `ignore/p6/d2/`：
+  - WPE 实测 `wpe-forms.log`，改前 / 改后的输出 `forms-before.log` / `forms-after.log`；
+  - 语料基线 `base/`、`base2/` 与改后 `after/`，驱动 `corpus_run.mjs`、比较 `corpus_diff.mjs`；
+  - `realmCheck` 的错误源码 `realmcheck-sources.json` 与前后结果 `realmcheck-before.json` / `realmcheck-after.json`；
+  - 变异清单 `mutations.json`（结果 `mutate.txt`），加载用时 `loadtime.mjs` / `loadtime.json`，语料写法统计 `forms.mjs`。
+- 测试工程由 `ignore/p6/d0/make_p6d2.py`（`p6d2-forms`）生成。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | H1 类型与格式 | Windows | 宿主 `tsc --noEmit`；Prettier `--check` 本步改动的 TS 文件 | 0 error、格式通过 | 2026-11-15 Claude：工作树与主工作区 tsc 都是 0 error；格式通过 |
+| [x] | H2 宿主 vitest（相关文件） | Node，vitest | `src/script/`、`src/dev/`、`src/puppet/`、`host.script`、`host.test`、改过的 24 个测试文件、新增的 `moduleRewrite` / `moduleFactory` / `compile/scriptImports` | 全过 | 2026-11-15 Claude：主工作区 53 个文件 918 条全过。本机语料下 `compile/pipeline.test.ts`「请求次数有界」失败，主工作区不含本步的代码同样失败，与本步无关 |
+| [x] | H3 变异检查 | Node，工作区模式 | `mutations.json` 13 处 | 每处都有用例失败，原样还原 | 2026-11-15 Claude：13 处全部检出、全部还原（命名空间不排序、多变量导出漏名、顶层 this 不换、行偏移错一行、动态导入 resolve、实例共用状态、星号歧义不去掉、default 名字不改、报错不减偏移、回调 this 不对、编译期又扫动态导入、顶层 await 不判 async、写入报错文字不同） |
+| [x] | H4 模块写法与 WPE 逐行比 | Windows dev，屏外宿主（`render_scene`，`scripts: true`，6 帧）；WPE 测试窗口 | `p6d2-forms` 五段脚本的 `[kbp6d]` 输出与 WPE `log.txt` 逐行比 | 26 行相同 | 2026-11-15 Claude：改后 26 行与 WPE 逐行相同；改前有 3 行不同（`import.meta` 带 `url`、两次动态导入能 resolve） |
+| [x] | H5 报错文字与行列 | Windows dev，屏外宿主（`host.realmCheck`，场景 `3146703458`） | 14 段错误源码（语法、链接、缺库、顶层 `return`、HTML 注释、`await` 作变量名、求值期报错、多变量 / 解构导出、再导出、`import.meta`、默认导出、顶层 `this` / `arguments`）改前改后各跑一次 | 逐字相同 | 2026-11-15 Claude：14 段的状态、导出名、报错文字与行列全部相同 |
+| [x] | H6 全语料脚本诊断 | Windows dev，屏外宿主（`scriptCorpus`，120 帧、固定时钟与种子） | 改前连跑两遍、改后一遍，逐张比各段诊断、状态摘要、console 摘要 | 相同 | 2026-11-15 Claude：改前两遍 236 张逐张相同（工具确定）；改后能比的 236 张里 231 张相同，另 5 张只有编译期能力键不同（`object:castvolumetrics`，别的会话未提交的体积光改动），脚本诊断、状态与 console 都相同；10 张是基线之后才导入的，不比 |
+| [x] | H7 加载用时 | Windows dev，屏外宿主 | 能渲染、脚本最多的 `3660962877`（252 段、27 种源码）：`realmCheck` 的 `elapsedMs`，与同一宿主里照旧方式逐段 `import(blob)` 交替各三次 | 不慢于旧方式 | 2026-11-15 Claude：新 176–189 ms，旧约 1 s |
+| [ ] | H8 预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开几张带脚本、能渲染的场景（灯带、时钟、音频条类） | 画面与改前一致，动画在走，日志里没有「场景脚本改写失败」 | 需要用户在界面上看 |
+
 ## 场景渲染器的逐 draw 轨迹（dev 工具）
 
 2026-11-13，只在 dev 构建：dev 探针 `renderFrame`、vite `/render`、MCP `render_scene` / `host_render` 收 `trace`，记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform、顶点，可选读回 pass 的目标，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。计划见 `.claude/plans/tools/scene-draw-trace.md`，用法见 `.claude/skills/kabegame-chromium/SKILL.md`「逐 draw 轨迹」，实施记录在 `ignore/tools/draw-trace/record.md`。
@@ -805,6 +904,27 @@
 | [x] | V8 上界是字面量 0 的 `smoothstep` | Windows，cargo + dev + WPE 抓帧 | 翻译器换成照 fxc 算的 `kb_smoothstep0`；确定性工程 `p7e-ss0`（下界 +0 / -0 / 整数 0 / 向量 / 非零 / 字面量对照）1600×900 和 WPE 逐像素比；示波器静态底图复制工程按 WPE 帧时间回放，逐 pass 比 | 一致；其余着色器输出不变 | 2026-11-14 Claude：六个图层最大差 0 / 0 / 0 / 0 / 1 / 1（差只在图层边缘，是已知的上屏缩放）；示波器 pass 与 shake pass 四帧 0 差，整帧平均差 78.1 → 0.88；语料基线只有 12 个片元着色器变（示波器、swing、vhs、流体 advection），Tint 0 错；变异 6 / 6 检出 |
 | [ ] | V9 预览里看示波器 | Windows，窗口模式 | 图库预览打开 3585875739，放一段音乐 | 示波器随音乐跳动，和 WPE 打开同一张观感一致 | 可选，待用户确认 |
 
+## 场景壁纸：单级 mip 纹理的各向异性过滤
+
+2026-11-14 Windows。`samplerDescriptor` 原先只给多级 mip 的文件纹理开 8 倍各向异性，单级 mip 的（effect 遮罩、视频）只用双线性。WPE 对文件纹理一律 Anisotropic 8x，只有 NoInterpolation 时点采样（rea-p8-layer 3.2，视频见 p9-REPORT）。改成不看 mip 级数。问题由 P12a 走查发现（`ignore/p12/a/final/report.txt` B1）：3811769317 的 cloudmotion 用带噪声偏移的第二次采样读遮罩，导数被拉长，两种过滤差到 204 级。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | A1 单测 | Node | `render.test.ts`「采样器与所需特性」 | 单级 mip、非点采样得 linear mip + 各向异性 8；点采样仍是 1 | 2026-11-14：44 个通过 |
+| [x] | A2 复制工程对照 | Windows dev + WPE 抓帧 | `ignore/p12/a/final/proj/3811769317-iso-pup` 按 WPE 日志回放 275–280 帧（2560×1046、超高档、跑脚本），和 P12a 走查时的 WPE 抓帧逐帧比 | cloudmotion 的大差消失 | 2026-11-14 Claude：改前每帧约 4900 个像素、最大 98–204；改后 10–417 个、最大 1–2（剩下的是走查已登记的 waterripple 末位与泛光链）。`cmp/3811769317-iso-b1.txt` |
+| [x] | A3 画面哈希 | Windows dev，屏外宿主 | 10 张场景三档各渲染两次；变了的 3 张临时退回旧规则再记一份 | 只有用到单级纹理缩小 / 斜向采样的场景变，变化全部来自本改动 | 2026-11-14 Claude：30 组全部稳定、`unsupported` 不变；beach、deep_space、razer_vortex 的哈希变了，退回旧规则的 A 组与旧基线逐个相同，其余 7 张不变。`ignore/p7e/hash-b1*.json`。这 3 张没有再和 WPE 重比 |
+| [ ] | A4 预览观感 | Windows，窗口模式 | 图库预览打开 3811769317 | cloudmotion 扭曲区域的边缘没有闪烁的硬边 | 可选，待用户确认 |
+
+## 场景壁纸：材质遮罩的通道组合键（F1）
+
+2026-11-15 Windows。`generic4` / `genericimage2/4` 的 PBR 遮罩槽注解带 `components`（METALLIC / ROUGHNESS / REFLECTION / EMISSIVE_MAP），WPE 按遮罩纹理头标志的 bit 20–23 逐项置这几个组合键（`FUN_14016c800`），翻译器原先只置顶层 `PBRMASKS`。翻译器 `BoundTexture` 加 `flags`，宿主给文件纹理传头标志。依据见 `.claude/plans/wpe-import/3-scene/PLAN.md` P7 节 F1 条；对方的取证在 `ignore/p12/b2/check1/F1-emissive.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | F1-1 单测 | Rust / Node | 翻译器 `component_combos_follow_texture_flags`；宿主 `particles.test.ts` 的缓存键用例 | 只置标志里对应的对象条目、非对象条目不计序号、没绑不推、请求值最后覆盖；低位不进缓存键 | 2026-11-15：翻译器 107 个、宿主相关 156 个全过 |
+| [x] | F1-2 复制工程对照 WPE | Windows dev + WPE 抓帧，1920×1080，后处理超高 | `ignore/p12/b2/check1/proj/3706286085-iso-boost-nl` 回放 401–406 帧、原样副本 412–417 帧，和 WPE 逐帧比 | Sonic 的手套、鞋、扣子亮度和 WPE 一致 | 2026-11-15：> 32 的像素 nl 每帧 1.5–2.0 万 → 0.12–0.29 万，第 403 帧 45 个、最大 1；原样副本 0.7–1.1 万 → 0.15–0.21 万（`ignore/f1/cmp-*.txt`），剩下的归 P12b2 的 K2 |
+| [x] | F1-3 语料 | Node，`kbp corpus scan` 两份快照（同一 wasm，只差传不传 `flags`） | 比 unsupported，统计置了子组合键的请求 | unsupported 不变 | 2026-11-15：干净 175 → 175、没有键增减；20 个请求、8 张场景用到，目前都被别的能力挡着 |
+
 ## 场景壁纸 P7d：流体 effect 的条件结构、没被读的 uniform、`g_LayerModelMatrix`
 
 2026-11-13 Windows。四项改动：
@@ -1340,6 +1460,7 @@
 | [ ] | D10 壁纸窗口 | Windows dev，窗口模式 | 桌面场景改属性 | 同预览 | 未测：本次 CDP 只有主窗口一个 page，没有壁纸窗口 target |
 | [x] | D11 属性不存在时保持 value、`alpha` / `brightness` 不收布尔、WPE 内置属性（2026-11-14 修复） | Windows dev 屏外宿主（kabegame-dev `render_scene`，脚本用例 `scripts: true`；`host_open` 一次）+ WPE 测试窗口（wpe-renderdoc，1920×1080，各抓 2 帧） | 生成 `ignore/p3a-missing/` 的 `p3am-builtin` / `p3am-bright` / `p3am-empty`（`kbp gen p3am …`）并在 WPE 抓帧；`projects_import` 五个工程（加上原来的 `p3am-missing` / `p3am-extra`），重建 dev 宿主产物后 `render_scene`，`judge_ours.py` / `judge_pos.py` 判读，和 `out/wpe-judge*.txt` 逐项比；语料前后各跑 `fields.test.ts`，`fields_diff.py` 比较；单测 `compile/p3a-missing.test.ts` 等，变异 `mutate.py` | 缺失属性的可见性、数值、脚本属性都保持 `value`；`alpha` / `brightness` 收布尔不写；14 个内置项在编译期、宿主、`init` 里的 `engine.userProperties` 与首次 apply 都有，工程同名的优先；语料 `unsupported` 不变，3351072238 背景视频显示 | 2026-11-14 Claude：`p3am-missing` 26 项、`p3am-extra` 10 项、`p3am-bright` 9 项与 WPE 逐项相同；`p3am-builtin` 17 项 16 项相同（改动前 10 项错），B5（`wcc_v` 条件 `""`）不同，`p3am-empty` W1 / W2 / W5 不同，都是空串 condition 与 `visible` 收字符串两处既有偏差（语料 0 处 / 1 处，未修，见 phase-3a「修复」）；`engine.userProperties` 在 `init` / apply / 第 1 帧的键与值和 WPE 相同（宿主产物 `index-DT87CM1t.js`，屏外真宿主的应用日志同样）。语料 192 张 `unsupported` 不变、能渲染 130 → 130，图层 `visible` 4 张 7 处 false → true（含 3351072238 objects/1）。宿主 tsc 0 error、Prettier 通过；全量 vitest 163 个文件 3866 条全过（改动前 162 / 3850 全过）；变异 9 / 9 抓到并按原字节还原。测试行 14866–14870 已移除并核对；WPE 设置没改 |
 | [x] | D12 空串条件算没写、可见性只收布尔（2026-11-14 修复） | Windows dev 屏外宿主（kabegame-dev `render_scene`）+ WPE 测试窗口（wpe-renderdoc，1920×1080，抓 2 帧） | 生成 `ignore/p3a-missing/` 的 `p3am-num`（`kbp gen p3am p3am-num`），WPE 里抓帧、`kbp rdc consts` 取常量；`buildSceneHost.ts` 重建宿主后导入 `p3am-empty` / `p3am-builtin` / `p3am-num`，`render_scene` 带 `trace`，`judge_pos.py` 判读、与 WPE 的 `wpe-judge-*.txt` 逐项比；测后 `projects_remove`。单测 `compile/p3a-missing.test.ts` 第 4 组、`render/p3a.test.ts`「值换算同编译期」 | `condition: ""` 当成没写；图层与 effect 的 `visible` 不带条件绑数字、字符串属性时保持 `value`，就地写不改、不标脏 | 2026-11-14 Claude：WPE 实测 U1–U3（滑块 0 / 1 / 0.25）与 F1–F3（effect 绑字符串 / 数字）都写不进、留 `value`，U4 / F4 布尔对照照写。我们这边 `p3am-empty` 8 / 8、`p3am-builtin` 17 / 17、`p3am-num` 8 / 8 与 WPE 相同（之前 W1、W2、W5、B5 不同）。变异 4 / 4 抓到。语料 192 张 `unsupported` 不变、能渲染 130 → 130，编译期字段 0 处变化；3276911872 的 objects/158 差在运行时套属性（`"A3"` 不再被写成显示），这张场景目前退回预览图。`solid` 没实测（TODO）。测试行 14959–14961 已移除 |
+| [x] | D13 脚本看到的属性键按字节序（2026-11-15 修复） | Windows dev 屏外宿主（kabegame-dev `render_scene` 带 `scripts`，`host_open` 一次）+ WPE 测试窗口（wpe-renderdoc，900×500，不抓帧） | `kbp gen p3am p3am-order --data ignore/p3a-missing`，WPE 里开窗读 `[p3amo]` 日志；`buildSceneHost.ts` 重建宿主后 `projects_import` 该工程，`render_scene` 带 `scripts: true` 看 console，再 `host_open` 读应用日志；测后 `projects_remove`。单测 `script/runtime.test.ts`、`script/api.test.ts` 名字含「字节序」的 2 条 | `init` 里的 `engine.userProperties`、首次 `applyUserProperties` 的参数、第 1 帧的 `engine.userProperties` 键按字节序（大写 < `_` < 小写），与声明顺序、`order`、内置项无关 | 2026-11-15 Claude：WPE 三处都是 `Zb,_u,a1,aB,a_b,ab,alignment,…,zz_last`；改前我们是内置项在前、工程属性在后；改后探针与屏外真宿主的 4 行都和 WPE 逐行相同（宿主产物 `index-LwxbD9_J.js`）。运行中增量的键序没测到（`-control applyProperties` 不带 `type`，脚本收到空对象），按推断同样排序。变异 2 / 2 抓到；相关 36 个文件 556 条单测全过 |
 
 ## 场景宿主 P3-0c：子 frame 不跨窗口复用进程与 rAF 去重
 
@@ -2800,6 +2921,35 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | U10 大图 | Windows dev | 选一张 6000×3000 的 JPEG，再换回小图 | 解码完成后换上（晚几帧）、不卡死；裁成 3000×3000 | 待真机确认 |
 | [ ] | U11 非 Windows | macOS / Linux | 预览一张带 `scenetexture` 的场景并选图 | 同 Windows | 本机不能测 |
 
+## 场景壁纸系统媒体（P11c）
+
+2026-11-14 至 11-15。场景脚本的五个 `media*Changed` 回调与封面纹理 `$mediaThumbnail` / `$mediaPreviousThumbnail`：
+- 后端的媒体监视分出一份照 WPE 取值的场景投影；
+- 场景宿主照 WPE 按 `windowupdaterate` 合并、每帧派发；
+- 封面经 P11b 的来源表同帧换图；
+- 网页壁纸的封面配色同时换成 WPE 的算法。
+
+依据与资料：
+- WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md`「媒体回调与封面」与同目录 `rea-p11-media.md`、`rea-p11-textures.md`；
+- 计划、约定与走查见 `phase-11c-media.md`；
+- SMTC 夹具 `ignore/p11/smtc/fixture.ps1`，步骤表 `ignore/p11/c/steps-c*.json`；
+- 生成工程 `ignore/p11/proj/p11-media`，复制工程 `ignore/p11/c/proj/`，WPE 抓帧 `A:\p11\c-thumb`、`A:\p11\c-iso`。
+
+媒体实测会在系统里发布测试媒体会话，测之前请先暂停自己的播放器。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | M0 单测与检查 | Windows | `kabegame` 的 `wpe_` 过滤（配色、两个投影、Hub、攒批）；`apps/wpe-scene` 的 tsc、vitest、Prettier；`scripts/kabegame-dev` 的 `deno test`、`deno check` | 全过 | 2026-11-14：Rust 92 个全过；宿主快照 vitest 3963 个，只有 `pipeline.test.ts` 的读取上限（`3543014965` 读 104 MB）失败，HEAD 快照同样失败；合并进工作区的快照 tsc 0 error、相关 646 个全过。变异检查：Rust 4 处、宿主 5 处全部检出 |
+| [x] | M1 语料 | Node，219 个工程 | 前后重扫 `unsupported` | 只去掉 `script:callback:media*` 与 `usertextures:system`，原来能渲染的不掉出 | 2026-11-14：能渲染 147 → 157，没有新增键 |
+| [x] | M2 回调序列对 WPE | Windows dev + WPE 测试窗口 + SMTC 夹具 | 夹具按步骤改属性、封面、播放状态、时间轴、类型，清空显示信息，退出；WPE 开 `p11-media`；Kabegame 屏外宿主记下收到的消息，按批用探针回放、取 `[p11m]` 行 | 回调与参数逐行相同 | 2026-11-14 Claude：四轮逐行相同，含超长清空（1025 / 1024 字节、专辑名 257 字节）、`contentType` 空串、会话切换与复位；首个会话的「属性、封面」WPE 晚一次刷新，是它的子进程等封面解码，记为已知差异 |
+| [x] | M3 封面纹理 | 同上 | 封面 m1 → 改标题换 m2，抓 WPE 一帧；探针按同样两批消息回放 | `TH-CUR`（1:1，m2）、`TH-PREV`（1:4，m1）逐像素相同 | 2026-11-14 Claude：两块都 0 差，整帧只差 FR / CLK |
+| [x] | M4 重设同一张封面 | 同上 | 只重设同一张；重设并改标题 | 只重设：不发；连同改标题：再发一次封面 | 2026-11-14 Claude：两边相同；改标题时系统先报一次没有封面、约 5 ms 后再报原图 |
+| [x] | M5 会话退出 | 同上 | 夹具从暂停状态退出，系统切回另一个已暂停的会话 | 场景只收到属性、时间轴、封面，没有播放回调（同 WPE） | 2026-11-15 Claude：照 WPE 100 ms 攒批、丢旧会话事件之后相同；修之前多一条 `playback` |
+| [x] | M6 真实壁纸走查 | Windows dev + WPE 抓帧 1920×1080 | 2932157836、3823859141、3487328036 的复制工程，夹具给已知标题与三色封面，播放中，稳定后抓帧 | 差异逐处有解释 | 2026-11-15 Claude：2932157836 除挂 `spin` 的圆形封面外整帧 0 差；3823859141 除唱片 `spin` 外只有文字阴影模糊边缘 ≤ 8；3487328036 的封面对象两边都没画出（缩放挂音频脚本），背景差来自 WPE 后处理档位 ultra |
+| [x] | M7 真机预览 | Windows dev | 预览一张媒体场景（如 3823859141），用自己的播放器放歌、切歌、暂停；再关掉设置里的「媒体集成」 | 标题、封面、唱片颜色跟着变；关掉后封面回到缺省、脚本收到 `enabled: false` | 待用户手测 |
+| [x] | M8 网页壁纸配色 | Windows dev | 打开一张用到媒体监听的网页壁纸，放一首有封面的歌，再放一段没有封面的 | 颜色按 WPE 的算法（`textColor` 是对比度够的次色 / 第三色）；没有封面时五色全黑 | 待用户手测；Phase 8 原来没有封面时是深灰底白字 |
+| [ ] | M9 非 Windows | macOS / Linux | 预览一张媒体场景 | 订阅被拒，脚本收到 `enabled: false`，封面槽是缺省纹理 | 本机不能测 |
+
 ## 场景壁纸 puppet 骨骼动画（P12a）
 
 2026-11-14。图像层的 puppet（模型 JSON 的 `puppet`）用 mdl 的网格 0 代替四边形上屏，动画层按 WPE 的时钟、采样、混合与淡入淡出每帧求骨骼姿势，蒙皮矩阵写进 `g_Bones`；带 effect 的 puppet 先在合成链里做完 effect，再用网格采样合成 RT 上屏。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase12/rea-p12-mdl.md`、`rea-p12-runtime.md` 与 `p12-REPORT.md`，计划、实施记录与按 FINAL_CHECK 的走查见同目录 `phase-12a-mesh-animation.md`；生成工程 `ignore/p12/defs/p12.py`，复制工程 `ignore/p12/a/final/proj/*-iso-pup`，走查报告 `ignore/p12/a/final/report.txt`，WPE 抓帧在 `A:\p12\`。
@@ -2843,6 +2993,80 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | PB8 帧时间 | Windows dev | `3463520581`（挂点三层、200 多个子对象）实时播放，看帧时间 | 挂点子树每帧刷新两次，帧时间没有明显上升、没有周期性卡顿 | 没量 |
 | [ ] | PB9 非 Windows | macOS / Linux | 预览 `3253330537` | 同 Windows（变形要 `float32-filterable`） | 本机不能测 |
 
+## 场景壁纸模型对象的骨骼与纹理通道（P12b2）
+
+2026-11-15。两项内容：
+- 模型对象（P5c）带骨骼、动画、变形、挂点时，复用图像层 puppet 的运行时。模型模式的不同：隐藏时冻结、权重 0 的层跳过、变形按网格且混合钳 [0, 1]、剔除盒取动画包围盒。
+- 图像层 puppet 的纹理通道：在合成 RT 里补画通道网格，`g_BlendMap` 由动画轨道驱动、帧首不复位。
+
+WPE 的两处模型变形缺陷不照抄（语料不依赖）。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase12/phase-12b2-texchan-model.md`；
+- 读码：`ignore/p12/b/rea/texchan-model.txt`；
+- 实测与对照：`ignore/p12/b2/meas/`、`check1/`、`check2/`；
+- 生成工程定义：`ignore/p12/b2/gen/defs/p12b2.py`；
+- 抓帧：`A:\p12\b2\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PC0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、相关 vitest、Prettier | 0 error，相关测试全过 | 2026-11-15：tsc 0 error；`puppet/model.test.ts`、`puppet/texchan.test.ts`、`compile/p12b2*.test.ts` 按 WPE 抓帧常量逐位回放，相关文件全过（`probe.*` 的 `spriteSamples` 失败在 HEAD 上就有，`p5c` 的 `castshadow` 一例来自 P13d 未提交的改动）；变异 10 处全部被抓住 |
+| [x] | PC1 语料 | Node | 编译 `3706286085`、`3811424158`、`3662790108` | 只去掉对应的键 | `3706286085` 只剩 P13 的雾与阴影、`object:parent`、`puppet:layer-script`；`3811424158` 只剩 `combo:SPRITESHEET`、`tex:animation`；不解锁场景 |
+| [x] | PC2 模型骨骼对照 WPE | Windows dev + WPE 抓帧，1920×1080，fps 20，后处理超高 | 生成工程 `p12b2-mdl`、`mdl2`、`vis`、`att`、`cull`、`rest`、`deimos`、`morph` 按日志回放，逐帧逐像素、逐 draw 比 | 整帧逐像素相同；`morph` 只在两处有意不同的 draw 上不同 | 2026-11-15：前 7 个整帧逐像素相同（`vis` 30 帧，含重新可见的第一帧）；`morph` 只差 3 个 draw，数值是正确做法（偏移 [2, 8, 16]，WPE [2, 4, 8]；缩放与权重按真实网格） |
+| [x] | PC3 真实壁纸复制工程 | Windows dev + WPE 抓帧 | `3706286085` 只留模型，雾与阴影关闭、脚本字段换固定值 | 骨骼矩阵逐位相同 | 2026-11-15：61 个带骨骼的 draw 矩阵逐位相同，`g_Bones` 在 K2 量级；画面差来自 `generic4` 的 emissive 遮罩（F1，不属 P12b2，已转 P7） |
+| [x] | PC4 纹理通道对照 WPE | Windows dev + WPE 抓帧 | `p12b2-tc` 按日志回放，逐帧逐像素比，读回合成 RT；`3811424158` 的 `01_z` 复制工程 | 整帧逐像素相同或只剩着色器舍入 1 级；`01_z` 的通道 draw 存在、`g_BlendMap` 全 0、合成 RT 不变 | 2026-11-15（`check2`）：`p12b2-tc` 8 帧整帧逐像素相同；10 个 puppet 的 `g_BlendMap`（含加法层的累加值）、通道 draw 的 MVP 与 `g_Color4` 逐位相同；合成 RT 在基础 pass 后、通道 pass 后都 0 差。`01_z`：通道 draw 存在、`g_BlendMap` 全 0、合成 RT 前后不变，同 WPE；合成 RT 是整张精灵表大小而 WPE 是单帧，属精灵表还没支持的连带 |
+| [x] | PC5 P12a / P12b1 不变 | Windows dev | P12a、P12b1 与 P12b2-1 的生成工程各重渲 2 帧 | 和之前我们的帧逐字节相同 | 2026-11-15：P12b2-1 之后（`check1`）与 P12b2-2 之后（`check2`：`p12b2-mdl` / `morph` / `att`、`p12-modes` / `fx` / `am` / `clip2`）都逐字节相同 |
+| [x] | PC6 实时预览 | Windows dev，图库预览 | `3706286085`（强制渲染）看 Sonic 跑动 | 骨骼动画流畅，BoostModel 的加法层动画正常 | 2026-11-15 用户看过：「我看可以」。强制渲染下没有雾，动画层脚本用的是 JSON 初值，手套鞋的 emissive 见 F1 |
+| [ ] | PC7 非 Windows | macOS / Linux | 同 PC6 | 同 Windows | 本机不能测 |
+
+## 场景壁纸 puppet 动画层的脚本 API（P12c）
+
+2026-11-15。脚本能拿到 puppet（图像层与带骨骼的模型）的动画层并控制它：
+- `getAnimationLayerCount` / `getAnimationLayer`、`IAnimationLayer` 的全部成员；
+- 动画层字段（`rate` / `blend` / `visible`）上的脚本；
+- `addEndedCallback`、MDLA 事件派发给 `animationEvent`；
+- 首次加载时在 `init` 之前建好 puppet 运行时。
+
+另外设备按适配器支持的最大值申请二维纹理上限（F2，WebGPU 缺省 8192，WPE 16384）。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase12/phase-12c-script.md`；
+- 读码：`rea-p12-attach-physics.md` 第 4 节、`rea-p12c-script.md`；
+- 语料与对照：`ignore/p12/c/corpus/`、`ignore/p12/c/check/`；
+- 抓帧：`A:\p12\p12-script-fps20-1856x1044\`、`A:\p12c\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PD0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc 与相关 vitest | 0 error，相关测试全过 | 2026-11-15：tsc 0 error；`puppet`、`script`、`compile/p12c` 等 48 个文件全过；`puppet/p12script.test.ts` 按 WPE 日志回放 266 帧、642 行逐行相同，`g_Bones` 在 `rsqrtps` 容差内；变异两轮共 32 个，单测可覆盖的全部杀死（宿主两处由 PD4 真机验） |
+| [x] | PD1 语料 | Node | `kbp corpus scan` 工作区快照对 HEAD | 只去掉 P12c 的键，没有场景变成退回 | 2026-11-15：`getAnimationLayer` 10 张、`puppet:layer-script` 8 张、`getAnimationLayerCount` 3 张全部消失；`clean_lost` 0；233 张口径解锁 `3346715292`、`3361965869`、`3492627662`、`3830665420`（后者靠 F2） |
+| [x] | PD2 `p12-script` 对照 WPE | Windows dev + WPE 抓帧，1856×1044，fps 20 | dev 按 WPE 帧时间回放到第 201 帧、跑脚本，整帧比 | 最大差 ≤ 2 级 | 2026-11-15：最大差 1 级（边缘 0.23%，`rsqrtps`）；5 段脚本 0 出错，字段脚本收到事件，播完回调照常 |
+| [x] | PD3 解锁场景对照 WPE | Windows dev + WPE 抓帧，1920×1080，fps 20，后处理超高 | 四张 `content unpack --instrument` 复制工程，回放到 WPE 抓到的那一帧，比 puppet 的 `g_Bones` 与整帧 | `g_Bones` 只差 `rsqrtps`（平移分量 ≈ 1e-5），脚本报错与 WPE 相同 | 2026-11-15：`3346715292` / `3492627662` / `3830665420` 全部对上，超出 P12a 容差的都在平移分量；`3346715292` 两边都是 6 段 `init` 因缺 NSL 抛错；`3361965869` 点击才播的两个 puppet 逐位相同，另两个 `rate` 跟系统声音，不能确定性对照；整帧差在光束、音频条、时钟文字、粒子 |
+| [x] | PD4 宿主帧循环与 `init` 落点 | Windows dev，图库预览 | `p12-script` 实时预览看事件与回调计数；`3492627662` 开场看各层帧号（`host.puppets()`） | 事件、回调照常派发；`init` 的 `setFrame` 生效 | 2026-11-15：6 秒内事件 10 次、播完回调 19 次、0 出错；`3492627662` 开场 1.85 s 时同一 puppet 三层帧号 55.42 / 43.42 / 24.22，偏移来自 `init` |
+| [x] | PD5 P12a / P12b 不变 | Windows dev | P12a / P12b1 / P12b2 的 8 个生成工程重渲 22 帧（P12c 之后、F2 之后各一次） | 和之前我们的帧逐字节相同 | 2026-11-15：两次都逐字节相同 |
+| [ ] | PD6 点击播放 | Windows dev，图库预览 | `3361965869`（或别的 `cursorClick` 里 `getAnimationLayer("dianji").play()` 的场景）点人物下方的圆环 | 下一帧开始播放点击动画；对象 5「鼓点光环」点击时控制台有一条 `TypeError`（层名是 222，WPE 同样） | 需要人点 |
+| [ ] | PD7 非 Windows | macOS / Linux | 同 PD4、PD6 | 同 Windows | 本机不能测 |
+
+## 场景壁纸 puppet 骨骼物理与骨骼脚本 API（P12d）
+
+2026-11-15。两项内容：
+- 图像层 puppet 的骨骼物理：骨骼 JSON `(r‖t) && (se‖re)` 才开，每帧在父链里逐根求解，图层世界矩阵由宿主交进来；
+- 图像层上的 `getBoneCount` / `getBoneTransform` / `setBoneTransform` / `applyBonePhysicsImpulse` / `resetBonePhysicsSimulation`。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase12/phase-12d-physics.md`；
+- 读码：`rea-p12-attach-physics.md` 第 2 节、`rea-p12d-bones.md`；
+- 实测与对照：`ignore/p12/out/`（物理）、`ignore/p12/d/`（`p12-bones`、语料、对照）；
+- 抓帧：`A:\p12\`、`A:\p12d\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PE0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc 与相关 vitest | 0 error，相关测试全过 | 2026-11-15：tsc 0 error，P12 相关 56 个文件全过；物理夹具对 WPE 在 python 模型量级以内（多数逐位）；`p12-bones` 脚本日志与 `g_Bones` 与 WPE 逐位相同；变异 P12d-1 21 个、P12d-2 8 个，除两个等价变异外全部杀死 |
+| [x] | PE1 语料 | Node | `kbp corpus scan` 工作区快照对 HEAD | 只去掉 P12d 的键，没有场景变成退回 | 2026-11-15：233 张能渲染 182 → 185，解锁 `2345214324`、`3359451610`、`3426865175`；去掉的只有 `puppet:physics` 与 4 个骨骼方法的键 |
+| [x] | PE2 物理整帧对照 WPE | Windows dev + WPE 抓帧 | `p12-phys2`、`2345214324`、`3426865175` 复制工程按 WPE 帧时间回放，比 `g_Bones` 与整帧 | `g_Bones` 在误差包络内，画面差 ≤ 2 级 | 2026-11-15：`p12-phys2` 第 200 帧最大 1 级；`2345214324` 第 220 帧只有 5 个像素差、最大 2 级；`3426865175` 第 192 帧带物理的「苍月草2」`g_Bones` 与 WPE 逐位相同，整帧差在随机粒子、泛光与文字上。`p12-phys` 的日志里有两次运行、时间线解析不了，由夹具逐帧覆盖 |
+| [ ] | PE3 拖动骨骼 | Windows dev，图库预览 | `3359451610`：在角色上按下拖动再松手 | 被拖的部位跟手，松手后弹回 | 需要人拖 |
+| [x] | PE4 P12a–c 不变 | Windows dev | P12 的 8 个生成工程重渲 22 帧 | 和之前逐字节相同 | 2026-11-15：22 帧逐字节相同 |
+| [ ] | PE5 非 Windows | macOS / Linux | 同 PE3 | 同 Windows | 本机不能测 |
+
 ## 场景 dev 探针按指定尺寸渲染
 
 2026-11-14。dev 探针 `renderFrame` 给了 `canvas` 时，正交场景按这个尺寸直接画，和 WPE 测试窗口同一种画法：样式照 WPE 的对齐方式做进正交投影的四个裁切边距，`fit` / `center` 整屏清成 `schemecolor`，读回场景目标本身。`renderMode: "scene"` 取旧的「场景分辨率 + 读回时铺进画布」。产品的预览、桌面、应用背景都不变（用户定）。计划与记录见 `.claude/plans/wpe-import/3-scene/phase-render-size.md`，读码 `rea-render-size.md`。
@@ -2867,3 +3091,66 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | FI3 画面哈希 | Windows dev 屏外宿主 | `hash_baseline` 10 张 × 3 档，改动前后比 | 不读逆矩阵的场景不变 | 2026-11-15：30 组全部相同 |
 | [x] | FI4 和 WPE 比 | Windows dev + 已有的 WPE 抓帧 | 重跑 `sun`、`whale`（P10a）、`tmpl2` 四组（P5d）、`3822495444`（P7c）、`3498150384`（P13a）的按窗口尺寸对照 | 读逆矩阵的常量和 WPE 逐位相同；反馈 RT 的差异缩小 | 2026-11-15：`sun` 光晕那次绘制 14 个常量全部相同，但像素差和改前一样（归着色器舍入）；`tmpl2`、`whale`、`3822495444` 不变；P13a 229、230 帧逐像素相同、其余帧最大差 4 → 1，只把求逆换回 double 就回到原来的数字 |
 | [ ] | FI5 实时预览 | Windows dev，图库预览 | 预览 `3498150384`（鼠标波纹），在画面上拖动 | 波纹正常，没有闪烁或发散 | 只做了屏外回放 |
+
+## 壁纸 iframe 的原生鼠标注入（图库预览与桌面）
+
+2026-11-15 第二版。网页壁纸与场景宿主的 iframe 自己向 `tauri-plugin-cursor` 登记（`attach_frame`），插件轮询全局光标，经 CEF 补丁 11 把原生鼠标事件直接注入那个 frame。
+- 光标在 frame 外时，钳到「frame 中心到光标的连线」与边界的交点。
+- 点击规则按窗口：预览要求光标下是本窗口，桌面要求光标下是桌面。
+- 预览画布盖一层只拦截、不转发的覆盖层；iframe 不收真实鼠标；点过壁纸后，真实左键松开时把焦点还给父页面。
+- Linux 退回 iframe 直接收真实鼠标。
+- 删掉了第一版的 JS 转发（`kabegame:wpe-pointer`、垫片合成事件）、桌面的 `input_forward.rs` 与运行时的整窗注入。
+
+计划与记录见 `.claude/plans/wpe-import/phase-preview-pointer.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PN1 单测与检查 | Windows（dev 停着） | `cargo test -p tauri-plugin-cursor`；`frame_mouse.rs` 用 rustc 单独编成测试跑；`src/components/wallpaper` 下相关 6 个 vitest 文件；`check-kabegame`；Prettier、`cargo fmt` | 0 error、全过 | 2026-11-15 Claude：插件 17 条、钳制 7 条、vitest 82 条全过；`check-kabegame` 0 error；运行时 crate 的测试要现编 CEF 包装库（环境不齐），钳制规则不依赖 CEF，所以单独编 |
+| [x] | PN2 Rust 变异检查 | rustc + cargo，按原字节还原 | 钳制取逐轴最近点、不向内收；frame 外的按下也注入、没按下也发抬起、收尾不补；插件按下不要求在窗口内、两种规则对调、丢弃订阅不发收尾、登记时已按着算按下 | 全部检出 | 2026-11-15 Claude：9 / 9 |
+| [x] | PN3 前端变异检查 | vitest，按原字节还原 | 垫片暂停时也登记、调用不排队；Stage 消息不带 `interactive`；场景视图 `interactive` 变了不推；焦点按着也还、松开后不等；画布没有覆盖层；注入时 iframe 也收真实鼠标 | 全部检出 | 2026-11-15 Claude：8 / 8 |
+| [x] | PN4 新 CEF 构建 | Windows，MSYS2 + VS | 带补丁 11 跑 `deno task build:chromium`，再用新 CEF 启动 dev | 编过；`_cef_frame_t` 是 272 字节（运行时不报「libcef 不带 frame 鼠标注入」） | 2026-11-15 用户编好、重启 dev；日志没有「libcef 不带」，注入生效（见 PN6、PN7）。每个新登记的 frame 第一次采样都换算失败（frame 还没合成），之后正常；2026-11-15 改成连续失败 30 次才记 warn（见 PN13） |
+| [ ] | PN5 旧 libcef | Windows dev，没有补丁 11 的 CEF | 打开预览里的网页 / 场景壁纸、桌面设网页壁纸 | 不崩，日志只有一条「libcef 不带 frame 鼠标注入」，壁纸收不到鼠标 | 没测到：dev 重启时已换上新 CEF |
+| [ ] | PN6 桌面跟随与点击 | Windows，窗口模式 | 桌面设一张跟随鼠标的网页壁纸、一张 P6c 场景（光标回调）；在桌面上移动、点空白处与图标、点别的窗口；光标移到别的窗口上、别的显示器上 | 跟随与点击正常，`isTrusted` 为真；点别的窗口不进页面；光标在窗口外时效果停在画面边缘 | 2026-11-15 Claude：桌面场景宿主（14297）里临时挂计数 8 s，收到 218 个 `pointermove`、全部可信；点击没测（要在桌面上点） |
+| [ ] | PN7 预览里画面外跟随 | Windows dev，图库预览 | 预览开了视差或有跟随鼠标粒子的场景，光标移到留白、详情栏、应用窗口外 | 景物继续跟随，停在画面边缘，移回画面没有跳变 | 2026-11-15 Claude：用户开着的预览（13617）里临时挂计数 8 s，收到 3 个可信 `pointermove`，`x` 都是 2559.5（宽 2560，钳在右边界内收半个像素处）；画面效果要用户看 |
+| [ ] | PN8 预览里的点击、拖动、菜单与键盘 | Windows dev，图库预览 | P6c 测试工程上点击、按住拖出画面再松开；留白处点击；右键；鼠标移到两侧；点过壁纸后按 Esc、方向键 | 点击触发光标回调；拖动中途不断（按下到松开之间没有提前的抬起），拖出后松开照样收到抬起；留白处点击不进页面；右键弹预览菜单；两侧出现翻页箭头；Esc、方向键照常 | 待新 CEF，要打开预览，由用户勾 |
+| [ ] | PN9 预览里的网页壁纸 | Windows dev，图库预览 | 预览跟随鼠标的网页壁纸，悬停按钮、点按钮、拖页面里的原生滑块 | 悬停样式显示，点击生效；滑块能不能拖记下来（移动不带按键标志，同 WPE） | 待新 CEF，要打开预览，由用户勾 |
+| [ ] | PN10 暂停与应用背景 | Windows dev | 预览里暂停后移动、点击，再恢复；同一张设为应用背景 | 暂停期间不跟随、不点，恢复后照常；应用背景不收鼠标 | 待新 CEF |
+| [ ] | PN11 macOS | macOS | 桌面与预览同 PN6–PN8 | 同 Windows | 本机不能测；插件的 `over_window` 是新写的（`TODO:[WPE_SCENE]`） |
+| [ ] | PN12 Linux | Linux | 预览里网页 / 场景壁纸 | 和改动前一样：光标在壁纸上时跟随、点击生效，画面外不跟随 | 本机不能测（`TODO:[WPE_SCENE]`） |
+| [x] | PN13 换算失败不误报 | Windows dev | dev 重启后打开 / 切换几张网页与场景壁纸的预览，桌面壁纸照常 | 日志里不再出现「frame 坐标…换算失败」的 warn，鼠标照常注入；单测与变异（成功不清零、第一次就 warn、每次都 warn）全部检出 | 2026-11-15 Claude：单测 1 条、变异 3 / 3；dev 重启后桌面与预览两个宿主都登记了，日志没有这条 warn，桌面宿主 6 s 收到 266 个可信 `pointermove` |
+
+## 预览翻页只认箭头
+
+2026-11-15。图库预览两侧各 20% 的区域原来整条可点（箭头显示时点哪都切图），改成区域只管摆放与显隐、本身不拦鼠标，只有点箭头才切图；区域里别处的点击落到下面的图片（拖动）或壁纸上。幻灯片按钮不变。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | NA1 单测与检查 | Windows | `ImagePreviewDialog.events.test.ts`（新增「只有点箭头才切图」）、vue-tsc、Prettier；变异：把点击挪回区域上 | 全过；变异被抓住 | 2026-11-15 Claude：10 条全过，变异 1 / 1 |
+| [ ] | NA2 图片 | Windows dev，图库预览 | 鼠标移到右侧 1/5，点箭头；点箭头上下的空白处；在右侧拖动放大后的图片 | 点箭头切到下一张；点空白处不切；能拖动 | 待用户 |
+| [ ] | NA3 壁纸 | Windows dev，图库预览 | 预览网页 / 场景壁纸，在两侧 1/5 里点画面 | 不切图，点击传进壁纸；点箭头照常切图 | 待用户 |
+| [ ] | NA4 幻灯片 | Windows dev，图库预览 | 点箭头下面的幻灯片按钮，再点一次停 | 开始 / 停止播放，不额外切一张 | 待用户 |
+
+## 场景壁纸：单采样 A2C 的阈值（P13d 附带）
+
+2026-11-15。`alphatocoverage` 的丢弃条件从 `!(a > 0.5)` 改成 `!(a >= 0.500244140625)`（`render/programs.ts` 的 `A2C_THRESHOLD`），主 pass 与之后的阴影投射者共用。WPE 的实测与推理见 `.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md`「单采样 A2C 的阈值」；测试工程 `ignore/p13/proj/p13d-a2cth*`（`ignore/p13/d/gen_d10.py`），抓帧 `A:\p13d\a2cth*\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | AT1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`p8.test.ts` | 0 error、全过 | 2026-11-15：tsc 0 error，`p8.test.ts` 96 个全过（A2C 入口的期望改成新阈值） |
+| [x] | AT2 WPE 阈值 | WPE 抓帧，1920×1080 | 自写着色器输出 alpha = 0.5 + d，d 逐段细分到 2⁻²² | 找到画与不画的分界 | 2026-11-15：0.5 + 2⁻¹² 画，再小 2⁻²² 不画，段内整片一致；格子边界上的双线性过滤值是 0.5 ± 2⁻¹⁷ |
+| [x] | AT3 P8 回归 | Windows dev + 已有的 WPE 抓帧 | `p8-a2c` 第 162 帧、`p8-misc` 第 155 帧按日志回放 | 和 WPE 逐像素相同（屏蔽 FR / CLK） | 2026-11-15：两个都 0 差异；测试行测完已移除 |
+| [x] | AT4 镂空材质 | Windows dev + WPE 抓帧（`p13d-spec-ns`，chroma4 / foliage4 棋盘格 A2C） | 渲染抓帧那一刻，和 WPE 比 | 格子边上不再多画 | 2026-11-15：差异 54 → 11，剩下的都是 1 级孤立像素（在 P13d 进行中的工作区上测，`fur4` 的主 pass 要 P13d） |
+| [ ] | AT5 非 Windows / 别的显卡 | macOS / Linux / AMD / Intel | 预览用 A2C 的场景 | 同 Windows | 阈值是本机 NVIDIA、D3D11 单采样的实测，别的驱动可能不同 |
+
+## 场景壁纸阴影（P13d）
+
+2026-11-15。设置「场景阴影」（`wpeSceneShadows`，跟随 WPE 的 `shadows`，缺键 medium）；灯光数组改成每帧按 WPE 的规则排序、写整块缓冲；点光与平行光的阴影图集与阴影 pass（投射变体照 `[PASS] shadow` 注解，COMBO / A2C / 纹理 / 常量从基础材质继承，逐视图 `firstInstance` 代替视口数组）；翻译器展开点光 / 平行光阴影、`kb_shadowCompare` 处理没有 BORDER 与 NaN 坐标、新增「缺纹理格式」回合（`fur4`）、去掉 `gl_ViewportIndex` 的赋值；`fur4` 主 pass 按 `INSTANCECOUNT` 画多层。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/rea-p13-shadows.md`、`rea-p13-passes.md` 第 2 节与 `p13-REPORT.md`「P13d 的实测：阴影」，计划与实施记录见 `phase-13d-shadows.md`；测试工程 `ignore/p13/proj/p13d-*`（`ignore/p13/d/gen_d0.py`、`gen_d8.py`、`gen_d9.py`），WPE 抓帧在 `A:\p13d\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | SH0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、P13d 相关的 vitest（直接导入改动模块的 106 个文件）；`wpesl2wgsl` 单测与语料；`kabegame-core` 设置单测 | 0 error、全过 | 2026-11-15：tsc 0 error；翻译器 108 个单测过、语料 165/167（剩 `puppettexturechannels`、`volumetricsfront`，与本节无关）、几何门槛 27/27；vitest 的失败里 16 条在 HEAD 上同样失败（P13c 留下的探针替身、`REVERSEDEPTH` 宏、拼错的深度键），已一并修好；`pipeline.test.ts` 两张工坊场景的请求 / 字节上限在 HEAD 上同样超 |
+| [x] | SH1 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate` | 20 处（偏移、排序、打包、宏、计数、投射判定、COMBO / A2C / 注解 / 常量 / 纹理继承、引擎 uniform、宿主设置） | 都被单测抓到 | 2026-11-15：19 / 20，剩下的 `casts-ignore-quality` 是等价变异（档位 0 时阴影计数已是 0）；`ignore/p13/d/mut/mutations.py` |
+| [x] | SH2 语料 | Node，233 个工程 | HEAD 与工作区各扫一遍 | 只去掉 `lightconfig:pointshadow` / `directionalshadow` | 2026-11-15：去掉这两个键 4 张（都还有别的键）；`3455121165` 另报 `shader:generic4:require:LightingV1/spot-shadow`（本来就报 `lightconfig:spotshadow`）；其余增减是别的会话的改动 |
+| [x] | SH3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 29 次抓帧（五档 × 点光正交 / 透视 / 平行光，多灯、投射者判定、剔除、改级联距离、相机微移、两盏平行光、投射灯超配、运行中隐藏、毛发层数、三种专用投射者），按抓帧时刻渲染，档位用 dev 覆盖 | 整帧只差零星 1 级 | 2026-11-15：每张最多 32 个孤立像素、都只差 1 级；`p13d-who` 的粒子方块是探针不步进粒子；`p13d-hide` 隐藏后原先整帧发黑（空槽 NaN），修后 2 个像素差 1；`p13d-spec` 的格子边差异来自 A2C 阈值（见「场景壁纸：单采样 A2C 的阈值（P13d 附带）」） |
+| [ ] | SH4 设置页切换 | Windows dev（新构建） | 设置页「场景阴影」切六档，预览带阴影的场景 | 每次切换场景重新加载、影子随档位变化，关闭时没有影子 | 待真机看 |
+| [ ] | SH5 非 Windows | macOS / Linux | 预览带阴影的场景 | 同 Windows | 本机不能测 |

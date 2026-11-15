@@ -1,0 +1,4 @@
+# 默认权限：登记与解除登记成对启用。只给子 frame 用（网页壁纸 / 场景宿主经 wpe-web-capability 引用这两项）。
+[default]
+description = "Allows a subframe to attach itself to (and detach from) native mouse injection."
+permissions = ["allow-attach-frame", "allow-detach-frame"]

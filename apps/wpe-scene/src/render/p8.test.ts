@@ -38,6 +38,7 @@
  * - `alphaToCoverageEntry`：导出的真实入口逐字比对、直接返回 `@location(0)`、多个 `return`、认不出时抛错；
  * - GpuScene 假设备：A2C 管线键、A2C 模块按程序建一次、入口与写掩码，没有 A2C 的场景不建模块，改写或 Tint 失败时的原因键。
  */
+import { fakeModule } from "../script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ALIGNMENTS, alignmentIndex, type AlignmentName } from "../compile/alignment";
 import { generalDefaults } from "../compile/bindings";
@@ -1032,7 +1033,7 @@ function alignRealm(): ScriptRealm {
     global: { Object, Array, JSON, Float32Array },
     prototypes: { Vec2: AlignVec.prototype, Vec3: AlignVec.prototype, Vec4: AlignVec.prototype, Mat3: {}, Mat4: {} },
     internal: { updateScriptProperties() {}, convertUserProperties: () => ({}) },
-    importModule: async () => ({}),
+    prepareModule: async () => fakeModule({}),
     dispose() {},
   };
 }
@@ -2031,7 +2032,7 @@ const A2C_FRAGMENT = [
 ].join("\n");
 
 describe("alphaToCoverageEntry（P8 步骤 5 点 4，p8-REPORT 结论 11）", () => {
-  it("导出的真实入口：原文不动，追加逐字副本 kb_a2c_main，return 换成「alpha 不大于 0.5 就 discard」", () => {
+  it("导出的真实入口：原文不动，追加逐字副本 kb_a2c_main，return 换成「alpha 小于 0.5 + 2⁻¹² 就 discard」", () => {
     const { code, entryPoint } = alphaToCoverageEntry(A2C_FRAGMENT, "main");
     expect(entryPoint).toBe("kb_a2c_main");
     expect(code.slice(0, A2C_FRAGMENT.length)).toBe(A2C_FRAGMENT);
@@ -2043,7 +2044,7 @@ describe("alphaToCoverageEntry（P8 步骤 5 点 4，p8-REPORT 结论 11）", ()
         "    v_TexCoord_1 = v_TexCoord;",
         "    main_1();",
         "    let _e25 = kb_FragColor;",
-        "    { let kb_a2c_out = FragmentOutput(_e25); if !(kb_a2c_out.kb_FragColor.a > 0.5) { discard; } return kb_a2c_out; }",
+        "    { let kb_a2c_out = FragmentOutput(_e25); if !(kb_a2c_out.kb_FragColor.a >= 0.500244140625) { discard; } return kb_a2c_out; }",
         "}",
         "",
       ].join("\n"),
@@ -2057,7 +2058,7 @@ describe("alphaToCoverageEntry（P8 步骤 5 点 4，p8-REPORT 结论 11）", ()
     expect(entryPoint).toBe("kb_a2c_fs");
     expect(code).toBe(
       `${wgsl}\n@fragment\nfn kb_a2c_fs(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {\n` +
-        "    { let kb_a2c_out = vec4<f32>(uv, 0.0, 0.25); if !(kb_a2c_out.a > 0.5) { discard; } return kb_a2c_out; }\n}\n",
+        "    { let kb_a2c_out = vec4<f32>(uv, 0.0, 0.25); if !(kb_a2c_out.a >= 0.500244140625) { discard; } return kb_a2c_out; }\n}\n",
     );
   });
 
@@ -2084,9 +2085,9 @@ describe("alphaToCoverageEntry（P8 步骤 5 点 4，p8-REPORT 结论 11）", ()
         "@fragment @early_depth_test(force)",
         "fn kb_a2c_main(@builtin(position) p: vec4<f32>, @location(1) @interpolate(flat) id: u32) -> Out {",
         "    if (id == 0u) {",
-        "        { let kb_a2c_out = Out(0.5, vec4<f32>(1.0, 0.0, 0.0, 1.0)); if !(kb_a2c_out.color.a > 0.5) { discard; } return kb_a2c_out; }",
+        "        { let kb_a2c_out = Out(0.5, vec4<f32>(1.0, 0.0, 0.0, 1.0)); if !(kb_a2c_out.color.a >= 0.500244140625) { discard; } return kb_a2c_out; }",
         "    }",
-        "    { let kb_a2c_out = Out(p.z, vec4<f32>(p.xy, 0.0, f(p, id))); if !(kb_a2c_out.color.a > 0.5) { discard; } return kb_a2c_out; }",
+        "    { let kb_a2c_out = Out(p.z, vec4<f32>(p.xy, 0.0, f(p, id))); if !(kb_a2c_out.color.a >= 0.500244140625) { discard; } return kb_a2c_out; }",
         "}",
         "",
       ].join("\n"),

@@ -1,6 +1,7 @@
 import { init, parse } from "es-module-lexer";
 import {
   GENERAL_FIELDS,
+  type AnimationLayerField,
   isTextRuntimeField,
   type BindingTarget,
   type GeneralKey,
@@ -19,11 +20,17 @@ import {
   type SceneValue,
 } from "./model";
 import { registrationKeys } from "./registration";
+import { usesEffectAccess } from "./scriptApi";
 import { instanceControlPoint, SCRIPT_INSTANCE_KEYS, type InstanceKey } from "./particles";
 import { BLOOM_FIELDS } from "./postprocess";
 
 export type ScriptOwner =
   | { kind: "layer"; object: number }
+  /**
+   * puppet 动画层的字段脚本（P12c）：路径 `objects/<i>/animationlayers/<k>/<字段>`。`entry` 是 JSON 里的下标 k，`layer` 是 `ScenePuppet.layers`
+   * 的下标（收集时填 -1，bundle 编完 puppet 后按 `entry` 回填；回填不到的脚本从列表里删掉）。`thisLayer` 是所属图层，`thisObject` 是这个动画层。
+   */
+  | { kind: "animation-layer"; object: number; entry: number; layer: number }
   | { kind: "material"; pass: TargetKey; layer: number }
   | { kind: "effect"; object: number; effect: number }
   | { kind: "general" };
@@ -43,6 +50,11 @@ export interface SceneScript {
 
 export interface SceneScripts {
   list: SceneScript[];
+  /**
+   * 会执行的脚本里有 `getEffect` 成员访问（P6d1a，词法同 `scriptApi.ts` 的 `memberAccesses`，任意接收者）：为真时写死关闭的 effect
+   * 也编进 bundle（`visibleBound`），脚本才拿得到、打得开。可选：测试里手写的 `{ list: [] }` 视同 false。
+   */
+  usesEffectAccess?: boolean;
 }
 
 const layerTypes: Record<string, ValueType> = {
@@ -91,6 +103,10 @@ function valueType(initial: SceneScalar): ValueType | "string" {
   return "string";
 }
 
+function isAnimationLayerField(key: string): key is AnimationLayerField {
+  return key === "rate" || key === "blend" || key === "visible";
+}
+
 /**
  * 字段脚本的写回目标。`sound`：声音对象自己的 `volume`（P6a 步骤 2）写回到就地目标 `{ kind: "sound" }`，返回值每帧写回、
  * 当场交给排期器（同 API 写 `thisLayer.volume`）。只认对象顶层的 `objects/<i>/volume`。
@@ -134,6 +150,11 @@ export function targetOf(
     return particle && (SCRIPT_INSTANCE_KEYS as readonly string[]).includes(key)
       ? { kind: "particle-instance", object: owner.object, field: key as InstanceKey }
       : { kind: "unsupported", path };
+  // 动画层字段脚本（P12c）：只有 rate / blend / visible 有目标；其余字段 unsupported（`layerDefs` 另报 `puppet:layer-script`）
+  if (owner.kind === "animation-layer")
+    return path === `objects/${owner.object}/animationlayers/${owner.entry}/${key}` && isAnimationLayerField(key)
+      ? { kind: "animation-layer", object: owner.object, layer: owner.layer, field: key }
+      : { kind: "unsupported", path };
   if (owner.kind === "layer" && key in layerTypes)
     return { kind: "layer", object: owner.object, field: key as Extract<BindingTarget, { kind: "layer" }>["field"] };
   if (owner.kind === "effect" && key === "visible")
@@ -164,6 +185,7 @@ export function targetValueType(
   key: string,
 ): ValueType | "string" | null {
   if (target.kind === "sound" || target.kind === "camera") return "float";
+  if (target.kind === "animation-layer") return target.field === "visible" ? "bool" : "float";
   if (target.kind === "text") return textTypes[target.field];
   if (target.kind === "particle-instance")
     return target.field === "colorn" || instanceControlPoint(target.field) ? "vec3" : "float";
@@ -190,6 +212,8 @@ export async function collectScripts(
       const errors: string[] = [];
       try {
         for (const item of parse(raw.script)[0]) {
+          // 只看静态导入与再导出（t 为 1 / 4 / 6）：动态导入（2 / 5 / 7）在 WPE 里一律 reject、不影响加载，import.meta（3）无关
+          if (item.t !== 1 && item.t !== 4 && item.t !== 6) continue;
           if (item.n === undefined) continue;
           if (item.n === null) continue; // 变量动态 import 无法在编译期确定
           if (/^(?![./]|[a-z][\w+.-]*:)[\w-]+$/i.test(item.n)) imports.push(item.n);
@@ -240,7 +264,9 @@ export async function collectScripts(
             ? { kind: "layer" as const, object: index }
             : /^objects\/\d+\/effects$/.test(path)
               ? { kind: "effect" as const, object: layer!, effect: index }
-              : owner;
+              : /^objects\/\d+\/animationlayers$/.test(path)
+                ? { kind: "animation-layer" as const, object: layer!, entry: index, layer: -1 }
+                : owner;
         visit(entry, `${path}/${index}`, next, path === "objects" ? index : layer);
       });
       return;
@@ -256,6 +282,8 @@ export async function collectScripts(
         nextLayer = Number(key);
       } else if (/^objects\/\d+\/effects$/.test(path)) {
         next = { kind: "effect", object: layer!, effect: Number(key) };
+      } else if (/^objects\/\d+\/animationlayers$/.test(path)) {
+        next = { kind: "animation-layer", object: layer!, entry: Number(key), layer: -1 };
       } else if (key === "constantshadervalues" && /\/passes\/\d+$/.test(path)) {
         next = { kind: "material", pass: path, layer: layer! };
       }
@@ -264,5 +292,6 @@ export async function collectScripts(
   }
   if (scene.general) visit(scene.general, "general", { kind: "general" }, null);
   visit(scene.objects, "objects", { kind: "general" }, null);
-  return { list };
+  // 导入说明符无效的整段不求值（`ScriptRuntime.load`），同能力表只看会执行的脚本
+  return { list, usesEffectAccess: list.some((script) => !script.errors.length && usesEffectAccess(script.source)) };
 }

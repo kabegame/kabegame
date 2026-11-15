@@ -533,6 +533,32 @@ pub(crate) fn configure_app(
         builder = builder.plugin(tauri_plugin_wemt::init());
     }
 
+    // 网页壁纸 / 场景宿主 iframe 的原生鼠标（图库预览与桌面壁纸窗口同一条路）：iframe 自己登记
+    // （`plugin:cursor|attach_frame`），插件轮询全局光标，这里经 CEF 补丁 11 把事件直接注入那个 frame（钳进
+    // frame），父页面盖在 iframe 上的覆盖层挡不住。壁纸窗口的点击只认落在桌面上的，其它窗口只认落在本窗口上的。
+    // Linux 上插件不轮询，登记返回 false。
+    #[cfg(feature = "standard")]
+    {
+        tauri_plugin_cursor::set_frame_injector(|label, frame, input| {
+            use tauri_plugin_cursor::FrameInput;
+            use tauri_runtime_kbcef::FrameMouse;
+            let input = match input {
+                FrameInput::Move { x, y } => FrameMouse::Move { x, y },
+                FrameInput::Down { x, y } => FrameMouse::Down { x, y },
+                FrameInput::Up { x, y } => FrameMouse::Up { x, y },
+                FrameInput::Release => FrameMouse::Release,
+            };
+            // 只在 CEF 已退出时失败（退出时轮询线程可能还剩一两轮）
+            if let Err(error) = tauri_runtime_kbcef::frame_mouse(label, frame, input) {
+                tracing::debug!("注入 frame 鼠标事件失败: {error}");
+            }
+        });
+        for label in crate::wallpaper::WALLPAPER_LABELS {
+            tauri_plugin_cursor::set_click_rule(label, tauri_plugin_cursor::ClickRule::OverDesktop);
+        }
+        builder = builder.plugin(tauri_plugin_cursor::init());
+    }
+
     #[cfg(target_os = "android")]
     {
         builder = builder.plugin(tauri_plugin_picker::init());
@@ -793,6 +819,8 @@ pub(crate) fn configure_app(
             set_wpe_scene_postprocess,
             get_wpe_scene_reflection,
             set_wpe_scene_reflection,
+            get_wpe_scene_shadows,
+            set_wpe_scene_shadows,
             #[cfg(not(target_os = "android"))]
             get_web_server_enabled,
             #[cfg(not(target_os = "android"))]
@@ -998,6 +1026,10 @@ pub(crate) fn configure_app(
             wpe_scene_clear_storage,
             #[cfg(feature = "wpe")]
             wpe_scene_cursor,
+            #[cfg(feature = "wpe")]
+            wpe_scene_shortcut_icon,
+            #[cfg(feature = "wpe")]
+            wpe_open_user_shortcut,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
             is_plasma_wallpaper_plugin_installed,

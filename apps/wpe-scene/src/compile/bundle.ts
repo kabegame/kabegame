@@ -27,17 +27,27 @@ import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
-import { buildPuppet, type ScenePuppet } from "./puppet";
+import {
+  buildModelSkeleton,
+  buildPuppet,
+  modelMeshCombos,
+  type ModelSkeleton,
+  type PuppetLayerDef,
+  type PuppetTextureChannels,
+  type ScenePuppet,
+} from "./puppet";
 import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
 import {
   bindingReader,
+  collectSceneLights,
   engineDefines,
   legacyLightUniforms,
   lightConfigIssues,
   lightCounts,
-  lightUniforms,
   litDefines,
   readsLegacyLights,
+  type LightCounts,
+  type SceneLight,
 } from "./lights";
 import {
   checkEffectFeatures,
@@ -117,11 +127,14 @@ import {
   flagValue,
   readWpePostprocessing,
   readWpeReflection,
+  readWpeShadows,
   resolvePostprocessLevel,
   resolveReflection,
+  resolveShadows,
   scenePostprocessState,
   type BloomParams,
   type SceneReflectionSetting,
+  type SceneShadowSetting,
   type ScenePostprocessSetting,
   type ScenePostprocessState,
 } from "./postprocess";
@@ -145,6 +158,7 @@ import type { SceneVideoSource } from "../video/player";
 import type { SceneAnimation } from "../animation/types";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
+import { exportsMediaCallback } from "./scriptApi";
 
 export interface SceneGeneral {
   /**
@@ -357,6 +371,11 @@ export function particleSheetDefines(
   };
 }
 export interface ScenePass {
+  /**
+   * pass 的材质文件路径（P6d1a：effect pass 取 effect.json 里的 `material`，基础材质取模型的 `material`，网格材质取网格的）；
+   * 脚本 `effect.getMaterial(名字)` 按它不分大小写全等查找。没有来源路径的 pass（passthrough、组上屏、粒子、泛光）不写这个键。
+   */
+  material?: string;
   /** 本 pass 的稳定键（基础材质 `objects/<i>/passes/<k>`、effect `objects/<i>/effects/<j>/passes/<k>`、`objects/<i>/passthrough`、`bloom/<pass>`）。 */
   key: TargetKey;
   program: number | null;
@@ -439,6 +458,11 @@ export interface SceneEffect {
 }
 export interface SceneLayer {
   id: number;
+  /**
+   * JSON 里这个对象的 effect 个数（含写死关闭的）：只在场景脚本用到 `getEffect` 时写（P6d1a），`getEffectCount()` 读它；
+   * 其余场景不写这个键，bundle 与以前相同。
+   */
+  effectCount?: number;
   /** scene.json 的 `objects` 下标（稳定键；`layers` 下标会随被跳过的对象移位）。 */
   object: number;
   /**
@@ -656,13 +680,13 @@ export interface SceneAttachment {
 /**
  * 解析一个对象的挂点（P12b1 步骤 3）：`attachment` 必须是字符串；`parent` 指向有 skinned puppet 的图层、排在子前面（`objects` 下标更小，
  * 否则加载时挂点丢失，rea-AP 1.1）、`MDAT` 里有同名项（区分大小写，取第一个）、骨骼下标在骨骼表内。任一不满足为 null（按普通父子，不报键）。
- * `puppetOf` 返回父对象的 puppet（不是 puppet 或没有图层时 null）。
+ * `puppetOf` 返回父对象的 puppet（不是 puppet 或没有图层时 null）；父是带骨骼的模型对象时（P12b2-1）返回它的 `ModelSkeleton`，同一套规则。
  */
 export function resolveAttachment(
   object: number,
   parent: number | null,
   name: unknown,
-  puppetOf: (object: number) => ScenePuppet | null | undefined,
+  puppetOf: (object: number) => Pick<ScenePuppet, "skeleton" | "attachments"> | null | undefined,
 ): SceneAttachment | null {
   if (typeof name !== "string" || parent === null || parent >= object) return null;
   const puppet = puppetOf(parent);
@@ -689,6 +713,11 @@ export interface ScenePuppetLayer extends ScenePuppet {
    */
   clip?: { masks: ScenePass[]; target: ScenePass } | null;
   composite: boolean;
+  /**
+   * 纹理通道网格（P12b2-2）加上它编好的材质 pass：网格自己的材质 + `BLENDROWCOUNT`（`DOUBLEBUFFERED` 照纹理组合键规则），稳定键 `objects/<i>/texchan`。
+   * 有它就强制合成路径（`composite` 恒真）；材质读不到时 `pass` 为 null（报 `material:missing`，整场退回）。
+   */
+  textureChannels?: (PuppetTextureChannels & { pass?: ScenePass | null }) | null;
   /** 直接上屏的 pass（基础材质 + puppet 组合键）；composite 时为空。 */
   passes: ScenePass[];
   /** 合成路径的上屏 pass（passthrough 材质 + puppet 组合键 + `BLENDMODE`）；直接上屏时为 null。 */
@@ -735,6 +764,12 @@ export interface SceneMesh {
   /** 按 `skin` 选中的材质路径与它的 pass（语料都是一个 pass，多于一个报 `mdl:material-passes`）。 */
   material: string;
   passes: ScenePass[];
+  /**
+   * 阴影 pass 的投射变体（P13d，rea-p13-shadows R5）：场景有阴影（档位 ≠ 0、有点光 / 平行光阴影计数）时按第一个 pass 建。着色器取基础着色器
+   * 片元首行的 `// [PASS] shadow <名>`，没有用 `shadowcaster`；COMBO 只取投射着色器自己声明的，值取基础程序的（没有为 0），基础材质 blending
+   * 为 alphatocoverage 时另加 `ALPHATOCOVERAGE = 1` 并带 A2C；纹理按 `{"material": 键}` 对槽；材质常量原样拷；剔除、深度不继承。
+   */
+  shadow?: ScenePass;
 }
 /** 模型对象（P5c 步骤 1，rea-p5-mesh 第 2 节）。 */
 export interface SceneModel {
@@ -744,8 +779,21 @@ export interface SceneModel {
   meshes: SceneMesh[];
   /** 绘制顺序（网格下标，`meshDrawOrder`：不透明的在前，MSVC `std::sort`）。 */
   order: number[];
-  /** 视锥剔除用的包围盒并集（`MdlFile.bounds`，min xyz、max xyz；v < 17 是 ±131072，等于不剔）。 */
+  /**
+   * 视锥剔除用的包围盒并集（`MdlFile.bounds`，min xyz、max xyz；v < 17 是 ±131072，等于不剔）。带骨骼的模型（`skeleton`）运行中改用动画包围盒
+   * （`ScenePuppets.bounds`，没有可见层时退回这一份，rea-texchan-model 7.6）。
+   */
   bounds: number[];
+  /**
+   * 投射阴影（P13d，rea-p13-passes 2.7）：对象的 `castshadow`（模型缺省开，只认 JSON 布尔与绑属性的当前值）且不透明（任一网格第一个 pass 的
+   * blending 是 normal / alphatocoverage，`0x140225252`）。为真时阴影 pass 画它全部网格的 `shadow` 变体。
+   */
+  castShadow?: boolean;
+  /**
+   * 模型对象的骨骼（P12b2-1，`buildModelSkeleton`）：mdl 有 `MDLS`（且骨骼数在 1–128）时有，网格的组合键带 `SKINNING` / `BONECOUNT` 等，每帧写
+   * `g_Bones` 与变形的 uniform（`ScenePuppets` 的 `"model"` 模式）。没有骨骼的模型不写这一项（字节同以前）。
+   */
+  skeleton?: ModelSkeleton;
 }
 export interface SceneBundle {
   general: SceneGeneral;
@@ -771,6 +819,11 @@ export interface SceneBundle {
   reflection?: { planar: boolean; enabled?: boolean; list?: number[] };
   /** `_rt_MipMappedFrameBuffer` 被任何对象读到（P13b1〔g1〕，rea-p13-passes 4.1）：渲染器建带 mip 的 RT，反射关时加载时清成 (0, 0, 0, 1)。 */
   mipFramebuffer?: boolean;
+  /**
+   * 灯光（P13d）：有开了光照的程序时才有。渲染器每帧按当时的 `g_ViewForward` 排序、照 WPE 写整块灯光缓冲（`lightFrame`）并生成阴影条目，
+   * 读灯光数组的绘制每帧取它的切片（同 `g_Time`）。`quality` 是解析好的阴影档位（设置「场景阴影」与 WPE `config.json`），为 0 时没有阴影。
+   */
+  lights?: { records: SceneLight[]; counts: LightCounts; quality: number };
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
   unsupported: string[];
   /**
@@ -797,6 +850,11 @@ export interface SceneBundle {
    * 给出；可选只是为了不动各处手写的测试 bundle，缺省按 false。
    */
   audio?: boolean;
+  /**
+   * 场景用系统媒体集成（P11c，rea-p11-media 2.1）：有脚本导出了五个媒体回调之一，或有 `system` 来源的用户纹理槽（`$mediaThumbnail`）。
+   * 宿主加载就订阅 `kind: "media"`（只订一次）。可选：手写的测试 bundle 可以不给，等于假。
+   */
+  media?: boolean;
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -810,6 +868,8 @@ export interface CompileSceneInput {
   postprocess?: ScenePostprocessSetting;
   /** 设置「场景反射」（P13b1）；缺省跟随 WPE 的 `general.user.reflection`（缺键当开）。 */
   reflection?: SceneReflectionSetting;
+  /** 设置「场景阴影」（P13d）；缺省跟随 WPE 的 `general.user.shadows`（缺键按 medium）。 */
+  shadows?: SceneShadowSetting;
   /** dev 强制渲染：有不支持项也照常解码 mip，好让渲染器画出半成品（D4）。 */
   force?: boolean;
   /**
@@ -824,6 +884,8 @@ export const FRAMEBUFFER_RT = "_rt_FullFrameBuffer";
 /** 平面反射 RT（P13b1）：反射关时每帧清成场景清屏色。 */
 export const REFLECTION_RT = "_rt_Reflection";
 /** 屏幕空间反射用的 mip 帧缓冲（P13b1〔g1〕）：反射关时加载时清成 (0, 0, 0, 1)、之后不更新。 */
+/** 阴影图集（P13d，rea-p13-passes 2.2）：深度 RT，`generic4` / `genericimage4` 的 `g_Texture6` 注解缺省。 */
+export const SHADOW_ATLAS_RT = "_rt_shadowAtlas";
 export const MIP_FRAMEBUFFER_RT = "_rt_MipMappedFrameBuffer";
 
 /**
@@ -1082,6 +1144,8 @@ export { shaderUniforms };
 interface PassContext {
   /** 本 pass 的稳定键（绑定表的目标键），见 `bindings.ts`。 */
   key: TargetKey;
+  /** 材质文件路径，原样写进 `ScenePass.material`（P6d1a）。 */
+  material?: string;
   scope?: ResourceScope | null;
   /** 本 effect 的 fbo 表：只有 effect 的绘制 pass 带它（可能为空表），基础 pass、passthrough、组上屏、粒子都没有。 */
   fbos?: ReadonlyMap<string, SceneFbo>;
@@ -1245,23 +1309,43 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     sounds,
     animations: animations.list,
   };
-  const counts = lightCounts(general);
-  for (const issue of lightConfigIssues(general)) unsupported.add(issue);
+  // 阴影档位（P13d）：决定阴影计数与宏，要在编译着色器之前定。只在 `lightconfig` 写了阴影 / cookie 计数时才去读 WPE 的设置
+  const shadowSetting = input.shadows ?? "follow";
+  const asked = lightCounts(general, 1);
+  const wantsShadows =
+    asked.pointShadow + asked.directionalShadow + asked.spotShadow + asked.spotCookie + asked.spotShadowCookie > 0;
+  const shadowQuality = !wantsShadows
+    ? 0
+    : resolveShadows(
+        shadowSetting,
+        shadowSetting === "follow" ? await readWpeShadows(input.reader, input.sceneAssets) : undefined,
+      );
+  const counts = lightCounts(general, shadowQuality);
+  for (const issue of lightConfigIssues(general, shadowQuality)) unsupported.add(issue);
   const shader = new ShaderCompiler(
     fs,
     input.translator,
     unsupported,
-    litDefines(counts),
+    litDefines(counts, shadowQuality),
     engineDefines(postprocess.hdr, orthographic),
+    // 注解缺省纹理的格式（P13d）：同绑定缺省纹理时的解析（之后照样按注解绑它，那时才上报缺失），这里不上报
+    async (name, scope) => (await getTexture(name, scope, new Set()))?.format ?? null,
   );
-  /** 开了光照的程序才读；没人用时不解析灯对象，也不登记它们的绑定。 */
-  let lights: Record<string, number[]> | null = null;
-  const sceneLights = () =>
-    (lights ??= lightUniforms(
-      scene.objects,
+  /** 场景有阴影（P13d）：档位 ≠ 0 且有点光 / 平行光阴影计数；为真时模型网格编投射变体、渲染器建阴影图集。 */
+  const castsShadows = shadowQuality !== 0 && counts.pointShadow + counts.directionalShadow > 0;
+  /**
+   * 开了光照的程序才读；没人用时不解析灯对象，也不登记它们的绑定（P13d 起灯光数组不进材质常量，渲染器每帧按 `bundle.lights` 写）。
+   */
+  const sceneLights = () => {
+    bundle.lights ??= {
+      records: collectSceneLights(
+        scene.objects,
+        bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
+      ),
       counts,
-      bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
-    ));
+      quality: shadowQuality,
+    };
+  };
   /** 遗留灯（P13a）：程序读到三个数组之一才算；同 `sceneLights` 只解析一次。 */
   let legacy: Record<string, number[]> | null = null;
   const legacyLights = () =>
@@ -1607,6 +1691,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     number,
     { passes: MaterialPass[]; instanceSize: { width: number; height: number } | null }
   >();
+  /** 有运行时（skinned puppet / 带骨骼的模型）的对象的动画层定义，按 `objects` 下标（P12c：回填动画层字段脚本的属主）。 */
+  const animationLayerDefs = new Map<number, readonly PuppetLayerDef[]>();
   /** 解析过的 mdl，按规范化后的路径；读不到为 null。同一个 mdl 被多个对象引用时只读、只解析一次（3354366708 的两个圆环）。 */
   const mdls = new Map<string, MdlFile | null>();
   async function readMdl(path: string): Promise<MdlFile | null> {
@@ -1643,14 +1729,46 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       return;
     }
     checkMdlFeatures(file, unsupported);
+    // 骨骼（P12b2-1）：有 `MDLS` 时每个网格的材质多 `SKINNING` / `BONECOUNT` 等组合键，对象的 `animationlayers` 在这里整理
+    const built = buildModelSkeleton(file, object.animationlayers, object, properties);
+    for (const key of built.issues) unsupported.add(key);
+    const skeleton = built.skeleton;
+    const bones = skeleton?.skeleton.parents.length ?? 0;
     const skin = meshSkin(object.skin, file.skins);
     const meshes: SceneMesh[] = [];
     for (const [m, mesh] of file.meshes.entries()) {
       if (settled()) break;
-      meshes.push(await compileMesh(index, m, mesh, mesh.materials[skin]));
+      meshes.push(
+        await compileMesh(index, m, mesh, mesh.materials[skin], skeleton ? modelMeshCombos(mesh, bones) : undefined),
+      );
     }
     const opaque = meshes.map((mesh) => isOpaqueBlending(mesh.passes[0]?.blending));
-    layer.model = { path, version: file.version, meshes, order: meshDrawOrder(opaque), bounds: file.bounds };
+    // 投射阴影（P13d）：模型缺省开；绑属性登记重编译（投射者名单在加载时定）
+    const castSetting = bindings.bind(
+      object.castshadow as SceneValue | undefined,
+      properties,
+      recompile("layer-structure", `objects/${index}/castshadow`),
+    );
+    const castShadow = castsShadows && castSetting !== false && opaque.some(Boolean);
+    if (skeleton) animationLayerDefs.set(index, skeleton.layers);
+    layer.model = {
+      path,
+      version: file.version,
+      meshes,
+      order: meshDrawOrder(opaque),
+      bounds: file.bounds,
+      ...(castShadow ? { castShadow } : {}),
+      ...(skeleton ? { skeleton } : {}),
+    };
+    // 动画层的 `{user}` 绑定（同图像层 puppet：`rate` / `blend` / `visible` 就地写进 `SceneState.animationLayers`）
+    if (skeleton)
+      for (const [slot, def] of skeleton.layers.entries())
+        for (const { field, property, condition } of def.bindings)
+          bindings.list.push({
+            property,
+            ...(condition === undefined ? {} : { condition }),
+            target: { kind: "animation-layer", object: index, layer: slot, field },
+          });
     // 透明排序（P5d 步骤 4，rea-p5-mesh 2.4）：WPE 先置「半透明」，任一网格的材质不透明就改回不透明，所以只有网格全半透明的模型进名单
     // （`p5d-sort-a` 的 M1 / M2）。没有网格时保持半透明，同 WPE（反正不画）
     layer.sortClass = opaque.some(Boolean) ? "opaque" : "translucent";
@@ -1695,6 +1813,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     m: number,
     mesh: MdlMesh,
     material: string | undefined,
+    /** 模型有骨骼时这个网格的组合键（`modelMeshCombos`）：并进材质 pass 的 `combos`，程序检查放行 `g_Bones` 等（`PUPPET_UNIFORMS`）。 */
+    combos?: Record<string, number>,
   ): Promise<SceneMesh> {
     const out: SceneMesh = {
       format: mesh.format,
@@ -1719,16 +1839,85 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const { passes } = parseMaterial(text);
     // 语料的模型材质都是一个 pass；多 pass 的网格 WPE 怎么画没测
     if (passes.length > 1) unsupported.add("mdl:material-passes");
-    for (const [k, pass] of passes.entries()) {
+    for (const [k, raw] of passes.entries()) {
+      const pass: MaterialPass = combos ? { ...raw, combos: { ...raw.combos, ...combos } } : raw;
       const compiled = await compilePass(pass, {
         key: `objects/${index}/meshes/${m}/passes/${k}`,
+        material,
         model: true,
+        ...(combos ? { puppet: true } : {}),
       });
       if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], mesh.format, unsupported);
       if (compiled.framebuffer) unsupported.add("mdl:framebuffer");
       out.passes.push(compiled);
+      if (k === 0 && castsShadows && compiled.program !== null) {
+        const shadow = await compileShadowCaster(index, m, pass, compiled, combos);
+        if (shadow) {
+          if (shadow.program !== null) checkMeshAttributes(bundle.programs[shadow.program], mesh.format, unsupported);
+          out.shadow = shadow;
+        }
+      }
     }
     return out;
+  }
+
+  /**
+   * 投射变体（P13d，rea-p13-shadows R5，`FUN_140155fc0` 阴影模式）：见 `SceneMesh.shadow`。投射着色器先不带 COMBO 译一次，取它声明的 COMBO
+   * （注解不看条件分支）；再按最终的 COMBO 译一次取纹理注解（`ALPHATOCOVERAGE` 下才声明 albedo）、按 `material` 键对上基础材质的纹理，
+   * 最后照常 `compilePass`。基础的变形纹理（`morph`，运行时纹理）由渲染器按键换槽，这里不填。稳定键 `objects/<i>/meshes/<m>/shadow`。
+   */
+  async function compileShadowCaster(
+    index: number,
+    m: number,
+    base: MaterialPass,
+    compiled: ScenePass,
+    combos?: Record<string, number>,
+  ): Promise<ScenePass | null> {
+    if (!base.shader || compiled.program === null) return null;
+    const fragment = await fs.text(`shaders/${base.shader}.frag`);
+    const casterShader =
+      /^[ \t]*\/\/[ \t]*\[PASS\][ \t]+shadow[ \t]+(\S+)/m.exec(fragment ?? "")?.[1] ?? "shadowcaster";
+    const declared = await shader.compile(casterShader, {}, [], null, new Set());
+    if (!declared?.ok) {
+      unsupported.add(`shadow:caster:${casterShader}`);
+      return null;
+    }
+    const baseResult = bundle.programs[compiled.program];
+    const baseValue = (name: string) => baseResult.combos?.find((combo) => combo.name === name)?.value ?? 0;
+    const casterCombos: Record<string, number> = {};
+    for (const combo of declared.combos ?? []) casterCombos[combo.name] = baseValue(combo.name);
+    const a2c = (base.blending ?? "normal") === "alphatocoverage";
+    if (a2c) casterCombos.ALPHATOCOVERAGE = 1;
+    const shaped = await shader.compile(casterShader, casterCombos, [], null, new Set());
+    // 纹理：两份程序的纹理注解里 `material` 键相同的配对，基础那一槽的纹理名（材质写的，或注解缺省）给投射那一槽
+    const textures: unknown[] = [];
+    for (const binding of shaped?.textures ?? []) {
+      const key = binding.meta?.material;
+      if (typeof key !== "string" || key === "morph") continue;
+      const source = baseResult.textures?.find((t) => t.meta?.material === key);
+      if (!source) continue;
+      const name = base.textures?.[source.slot] ?? source.meta?.default;
+      if (typeof name === "string" && name) textures[binding.slot] = name;
+    }
+    const casterPass: MaterialPass = {
+      shader: casterShader,
+      blending: a2c ? "alphatocoverage" : "normal",
+      combos: casterCombos,
+      textures: Array.from(textures, (name) => name ?? null),
+      ...(base.constantshadervalues ? { constantshadervalues: base.constantshadervalues } : {}),
+    };
+    const caster = await compilePass(casterPass, {
+      key: `objects/${index}/meshes/${m}/shadow`,
+      model: true,
+      ...(combos ? { puppet: true } : {}),
+    });
+    // 材质常量照 WPE 从基础程序的常量存储按名字拷（`0x140156cb5`）：基础那边的值含它自己注解的缺省（投射着色器的注解只有 `material` 键、
+    // 没有缺省，比如 foliage 的风），所以拿基础 pass 解析好的值盖上，名字两边一样
+    const casterResult = caster.program === null ? null : bundle.programs[caster.program];
+    for (const uniform of casterResult?.uniforms ?? [])
+      if (typeof uniform.meta?.material === "string" && uniform.name in compiled.uniforms)
+        caster.uniforms[uniform.name] = compiled.uniforms[uniform.name];
+    return caster;
   }
 
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
@@ -1750,6 +1939,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       } else if (name === MIP_FRAMEBUFFER_RT) {
         runtime[slot] = name;
         mipReaders = true;
+      } else if (name === SHADOW_ATLAS_RT) {
+        // 阴影图集（P13d）：着色器只在 LIGHTS_SHADOW_MAPPING 时声明它（比较采样器），渲染器按帧打包的尺寸建
+        runtime[slot] = name;
       } else return false;
       return true;
     };
@@ -1803,7 +1995,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       const texture = await getTexture(name, scope, issues, !!context.particle);
       if (texture) {
         slots[slot] = texture.index;
-        formats.push({ slot, format: texture.format });
+        // 标志的 bit 20 起决定注解 `components` 的组合键（F1，`FUN_14016c800`）
+        formats.push({ slot, format: texture.format, flags: bundle.textures[texture.index].flags });
       }
     }
     // 用户纹理（P11b 步骤 1）：缺省纹理解析完才能定参考尺寸。只有 `textures[slot]` 是非空字符串且这一槽由材质自己绑的才生效
@@ -1824,7 +2017,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     for (const { source } of userTextures.slots) {
       if (!(bundle.userTextures ??= []).some((item) => item.kind === source.kind && item.name === source.name))
         bundle.userTextures.push({ ...source });
-      if (source.kind === "property") bindings.bindUserTexture(source.name);
+      // 封面来源（P11c）：伪属性 `$mediaThumbnail` / `$mediaPreviousThumbnail` 同属性来源登记就地目标，值由宿主的媒体模块当增量写进来；
+      // 快捷方式（P11d）：属性值是后端给的键（原值的哈希），宿主据它取图标
+      bindings.bindUserTexture(source.name);
     }
     // rope 两类系统的 pass 无条件换成 `genericropeparticle`、带 `.geom` 翻译（P4d 步骤 1、2，rea-p4d-rope.md 第 6 节，见 `ROPE_SHADER`）
     const rope = isRopeRenderer(context.particle?.renderer?.kind);
@@ -1847,6 +2042,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         if (slot) Object.assign(script.target, constantTargetFields(slot));
         else script.target.uniforms = [];
         script.valueType = script.target.type;
+        // 角度常量：脚本一侧按度（P6d1a，`p6d1-mat6` 实测：字段脚本收发都是度），只对 float 生效
+        if (slot?.rad2deg && script.target.type === "float") script.target.rad2deg = true;
       }
       // 关键帧的常量目标（P10a 步骤 2）：同样补，补完按主格类型定写不写（关着的 effect 的常量动画同样每帧写）
       for (const animation of animations.list) {
@@ -1909,6 +2106,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 深度 / 剔除三个键照 WPE 规整（P5d 步骤 1）：缺键为开、非法值取表的第一项，所有 pass 一套规则
     return {
       key: context.key,
+      ...(context.material !== undefined ? { material: context.material } : {}),
       program,
       blending: pass.blending ?? "normal",
       ...passAlphaWriting(pass),
@@ -1919,7 +2117,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ...(userTextures.slots.length ? { userTextures: userTextures.slots } : {}),
       uniforms: {
         ...shaderUniforms(result, pass, properties, context.key, bindings, issues),
-        ...(result?.ok && usesLighting(result) ? sceneLights() : {}),
+        ...(result?.ok && usesLighting(result) ? (sceneLights(), {}) : {}),
         ...(result?.ok && readsLegacyLights(result) ? legacyLights() : {}),
       },
       framebuffer: needsFramebuffer(names, result?.ok ? result : null),
@@ -2025,6 +2223,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         // 有 bind 时材质槽 0 的 null 不再自动填（B6）：不在 planned 里的 null 槽位就保持空
         const compiled = await compilePass(merged, {
           key: `objects/${index}/effects/${shell.source}/passes/${passIndex++}`,
+          material: pass.material,
           scope,
           fbos,
           planned,
@@ -2110,6 +2309,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       layer.passes.push(
         await compilePass(pass, {
           key: `objects/${index}/passes/${k}`,
+          material: model.material,
           // instanced 的参考尺寸取对象 `size`（P11b，WPE 把它写进 `instance.usertexturereference`，p11-REPORT M2）
           ...(instance ? { instanceSize: instanceReferenceSize(object.size) } : {}),
         }),
@@ -2124,7 +2324,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         const built = buildPuppet(file, (object as Record<string, unknown>).animationlayers, model.puppet, properties);
         for (const key of built.issues) unsupported.add(key);
         if (built.puppet) {
-          layer.puppet = { ...built.puppet, composite: false, passes: [], upload: null };
+          if (built.puppet.skeleton) animationLayerDefs.set(index, built.puppet.layers);
+          layer.puppet = {
+            ...built.puppet,
+            composite: false,
+            passes: [],
+            upload: null,
+            textureChannels: built.puppet.textureChannels && { ...built.puppet.textureChannels, pass: null },
+          };
           puppetMaterials.set(index, {
             passes: merged,
             instanceSize: instance ? instanceReferenceSize(object.size) : null,
@@ -2140,6 +2347,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         }
       }
     }
+    // TODO:[WPE_SCENE] 运行中改 blending 后 WPE 是否重新分类没读码（P6d1b：脚本写 `blending` 只换管线，分类保持这里的编译期结果）
     // 透明排序的类别（P5d 步骤 4，rea-p5-modelflags 2.1、1.4，`p5d-sort-a` / `-fs`）：只看基础材质（第一个 pass 的混合），effect、
     // colorBlendMode、`copybackground` 都不参与（WPE 在图像层构造时定，那时 `copybackground` 还是缺省值）。`projectlayer` 在这里单独读：
     // 它的另一个作用（尺寸）只在 `autosize` 时有（`imageLayerSize`）。材质没有 pass 的图层不画，不填
@@ -2180,8 +2388,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   ): Promise<void> {
     const puppet = layer.puppet!;
     puppet.composite = composite;
-    const checkAttributes = (pass: ScenePass) => {
-      if (pass.program !== null) checkMeshAttributes(bundle.programs[pass.program], puppet.mesh.format, unsupported);
+    const checkAttributes = (pass: ScenePass, format = puppet.mesh.format) => {
+      if (pass.program !== null) checkMeshAttributes(bundle.programs[pass.program], format, unsupported);
     };
     if (composite) {
       const path = passthroughMaterial(scene.version);
@@ -2199,6 +2407,21 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       if (Object.keys(puppet.combos).length && layer.passes[0]) upload.cullmode = layer.passes[0].cullmode;
       checkAttributes(upload);
       puppet.upload = upload;
+    }
+    // 纹理通道网格的材质（P12b2-2，rea-texchan-model 2：网格自己的材质 + `BLENDROWCOUNT` = 网格多读的 u32 的低字节；`DOUBLEBUFFERED` 由槽 1 有无纹理照纹理组合键规则推导）
+    const channels = puppet.textureChannels;
+    if (channels) {
+      const text = channels.material ? await fs.text(channels.material) : null;
+      const raw = text ? parseMaterial(text).passes[0] : undefined;
+      if (!raw) unsupported.add(`material:missing:${channels.material}`);
+      else {
+        const compiled = await compilePass(
+          { ...raw, combos: { ...raw.combos, BLENDROWCOUNT: channels.rows } },
+          { key: `objects/${index}/texchan`, material: channels.material, puppet: true },
+        );
+        checkAttributes(compiled, channels.mesh.format);
+        channels.pass = compiled;
+      }
     }
     const source = puppetMaterials.get(index);
     const raw = source?.passes[0];
@@ -2466,10 +2689,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 组的局部正交在透视场景里没测过（P5d 步骤 2），照报
     if (hasChildren && bundle.general.perspective) unsupported.add("camera:perspective:group");
 
+    if (bundle.scripts.usesEffectAccess) layer.effectCount = Array.isArray(object.effects) ? object.effects.length : 0;
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;
       const instance = (raw ?? {}) as SceneEffectInstance;
-      const visibleBound = isUserBinding(instance.visible) || isScriptValue(instance.visible);
+      // 场景脚本里有 `getEffect`（P6d1a）：脚本可能把写死关闭的 effect 打开，WPE 的 effect 列表含全部 effect，所以都按「可变」编进来
+      const visibleBound =
+        isUserBinding(instance.visible) || isScriptValue(instance.visible) || !!bundle.scripts.usesEffectAccess;
       // 同图层 `visible` 的 bool setter（`p3am-num` F1–F3 实测）：数字、字符串属性写不进，留 `value`
       const enabled = boolFieldValue(
         instance.visible as SceneValue | undefined,
@@ -2515,8 +2741,24 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
     if (depended && hasChildren) unsupported.add("dependency:group");
     // puppet 的上屏路径与材质变体（步骤 3 点 1）：composite 时 passthrough 上屏由 puppet 自己的 `upload` 承担，不再编 `layer.passthrough`
+    // 纹理通道网格（P12b2-2）强制合成路径（rea-texchan-model 2：UV 不缩放、`0x10`）；基础材质带光照 / 反射时 WPE 要另建 RT 预光照，照报
+    if (layer.puppet?.textureChannels) {
+      const preLit = layer.passes.some(
+        (pass) =>
+          pass.program !== null &&
+          (bundle.programs[pass.program].combos ?? []).some(
+            (combo) => /^(?:LIGHTING|REFLECTION)$/i.test(combo.name) && combo.value !== 0,
+          ),
+      );
+      if (preLit) unsupported.add("puppet:texture-channels:prelighting");
+    }
     if (layer.puppet)
-      await finalizePuppet(index, layer, layer.effects.length > 0 || blended || depended, blended ? cbm : 0);
+      await finalizePuppet(
+        index,
+        layer,
+        layer.effects.length > 0 || blended || depended || !!layer.puppet.textureChannels,
+        blended ? cbm : 0,
+      );
     if ((blended || depended) && !layer.puppet) {
       const path = passthroughMaterial(scene.version);
       const text = await fs.text(path);
@@ -2564,7 +2806,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
   // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
   // 挂点（P12b1 步骤 3）：父的 puppet 编完才解析，只在找得到时才写字段（找不到按普通父子）
-  const puppetsByObject = new Map(bundle.layers.map((layer) => [layer.object, layer.puppet ?? null]));
+  const puppetsByObject = new Map(
+    bundle.layers.map((layer) => [layer.object, layer.puppet ?? layer.model?.skeleton ?? null]),
+  );
   for (const layer of bundle.layers) {
     const attachment = resolveAttachment(
       layer.object,
@@ -2641,6 +2885,17 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   )
     bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
   if (!input.sceneAssets.length) unsupported.add("assets:missing");
+  // 动画层字段脚本的属主回填（P12c）：按 JSON 下标 `entry` 找 `layerDefs` 保留下来的层。对象没有运行时（不是 skinned puppet、不是带骨骼的模型），
+  // 或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
+  scripts.list = scripts.list.filter((script) => {
+    const owner = script.owner;
+    if (owner.kind !== "animation-layer") return true;
+    const slot = animationLayerDefs.get(owner.object)?.findIndex((def) => def.entry === owner.entry) ?? -1;
+    if (slot < 0) return false;
+    owner.layer = slot;
+    if (script.target.kind === "animation-layer") script.target.layer = slot;
+    return true;
+  });
   bundle.unsupported = [...unsupported].sort();
   // 「场景用音频」位（P4e 步骤 4）：开关只看 `project.json`（`scene.json` 的同名键 WPE 不读，rea-p4e-audio.md 第 6 节），不会因为场景里
   // 有音频粒子就自动开启（4.3）。读音频频谱 uniform 的程序同样要订阅才有数据（P11a）；读了却没声明开关时 uniform 全 0，同 WPE
@@ -2648,6 +2903,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     project.general?.supportsaudioprocessing === true &&
     (bundle.layers.some((layer) => layer.particle !== null && particleUsesAudio(layer.particle)) ||
       bundle.programs.some(readsAudioUniforms));
+  // 媒体集成位（P11c，rea-p11-media 2.1）：有脚本导出五个媒体回调之一，或有 system 来源的槽（封面纹理）。只扫会执行的脚本（同能力表）
+  bundle.media =
+    (bundle.userTextures ?? []).some((source) => source.kind === "system") ||
+    bundle.scripts.list.some((script) => !script.errors.length && exportsMediaCallback(script.source));
   return bundle;
 }
 
@@ -2665,12 +2924,26 @@ export function transferableBuffers(bundle: SceneBundle): ArrayBuffer[] {
             layer.puppet.mesh.vertices.buffer,
             layer.puppet.mesh.indices.buffer,
             ...layer.puppet.animations.map((animation) => animation.frames.buffer),
+            // P12b2-2：纹理通道轨道（自有缓冲）
+            ...layer.puppet.animations.flatMap((animation) => animation.channels?.map((track) => track.buffer) ?? []),
             // P12b1：变形纹理与裁切分段索引是编译期自有缓冲
             ...(layer.puppet.morph ? [layer.puppet.morph.texels.buffer] : []),
             ...(layer.puppet.clipping?.segments.map((segment) => segment.buffer) ?? []),
           ]
         : [],
     ),
+    // 模型的骨骼（P12b2-1）：动画帧数据、变形权重轨道与变形纹理都是编译期自有缓冲
+    ...bundle.layers.flatMap((layer) => {
+      const skeleton = layer.model?.skeleton;
+      if (!skeleton) return [];
+      return [
+        ...skeleton.animations.flatMap((animation) => [
+          animation.frames.buffer,
+          ...(animation.meshMorph?.flatMap((list) => list?.map((track) => track?.buffer) ?? []) ?? []),
+        ]),
+        ...skeleton.morphs.map((morph) => morph?.texels.buffer),
+      ];
+    }),
   ];
   return [...new Set(buffers.filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer))];
 }

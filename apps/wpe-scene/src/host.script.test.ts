@@ -1,3 +1,4 @@
+import { fakeModule } from "./script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnimationClock } from "./animation/clock";
 import { Channel, frameValues, type ParsedKey } from "./animation/curve";
@@ -64,11 +65,11 @@ function createRealm() {
         return JSON.parse(json);
       },
     },
-    async importModule() {
+    async prepareModule() {
       await moduleGate;
       imports++;
       events.push("evaluate");
-      return {
+      return fakeModule({
         init() {
           events.push("init");
           return onInit ? onInit() : 0.8;
@@ -92,7 +93,7 @@ function createRealm() {
               },
             }
           : {}),
-      };
+      });
     },
     dispose() {
       destroyed++;

@@ -3,6 +3,8 @@
  * 子对象（24 个字段）只登记在粒子对象的图层代理上（rea-p4f-script.md 1.1–1.3），方法接到宿主给的落点，`instance` 读写
  * `SceneState.particleInstances`（WPE 的 `io`，5.1），写入经就地目标 `particle-instance`（`rate` 走 P4f 步骤 1 的单独路径）。
  */
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import { generalDefaults } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
@@ -37,8 +39,8 @@ class FakeRealm implements ScriptRealm {
   global: Record<string, unknown> = { Object, Array, JSON, Float32Array };
   prototypes = { Vec2: Vec2.prototype, Vec3: Vec3.prototype, Vec4: Vec4.prototype, Mat3: {}, Mat4: {} };
   internal = { updateScriptProperties() {}, convertUserProperties: (json: string) => JSON.parse(json) };
-  async importModule(): Promise<Record<string, unknown>> {
-    return {};
+  async prepareModule(): Promise<ScriptModule> {
+    return fakeModule({});
   }
   dispose() {}
 }

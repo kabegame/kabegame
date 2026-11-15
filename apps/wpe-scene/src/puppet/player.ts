@@ -9,14 +9,31 @@
  * - `visible` 为假的层整层跳过：时钟不走、不采样、不算淡入淡出（rea-RT 3.2）；第一个可见层的来源是静止姿势，之后是上一层的结果
  *   （5.2）；一个可见层都没有时局部矩阵直接取静止来源矩阵（6.1）。
  * - 图层隐藏也推进（这里不看图层可见性，rea-RT 2）；暂停冻结、补画帧不推进由调用方决定是否调 `frame`。
- * - P12a 不派发事件与播完回调（P12c）：时钟收集的事件丢掉。
+ * - P12c：事件与「播完」回调。每个 puppet 推进完全部层（采样、混合都做完）之后才派发：先把本帧越过的 MDLA 事件按收集顺序（层序 × 事件表顺序）
+ *   交给 `PuppetHooks.event`，再按层序调带 `ENDED` 位的层的播完回调表；所以回调里的写入都是下一帧生效。播完检测照 rea-p12-runtime 3.1：
+ *   在推进那一步里、权重判断之前做（模型里权重为 0 的层照样检测）。控制口 `PuppetLayerControl` 是脚本 `IAnimationLayer` 的落点。
  * - P12b1：同一个层循环里再叠骨骼透明度（`g_BonesAlpha`）与变形权重（`g_MorphOffsets` / `g_MorphWeights`），规则在 `pose.ts`；`pose` 交出模型空间骨骼矩阵（挂点用）。
+ * - P12b2-1：同一套运行时再服务带骨骼的模型对象（`kind: "model"`，rea-texchan-model 4–7，实测 `ignore/p12/b2/meas/report.txt`）。模式只改这几处：
+ *   对象或父链不可见时整段跳过（时钟、权重、姿势都冻结）；权重 0 的层整层跳过（全部跳过就是没有层，局部矩阵取 `MDLS` 局部矩阵）；没有透明度轨道；
+ *   变形按网格（`morphs[m]`，每网格自己的顶点数与缩放，权重混合钳 [0, 1]）；剔除盒取可见层动画包围盒的并。图像层的行为与字节不变。
+ * - P12d-1：骨骼物理（只图像层 puppet，参数在 `skeleton.physics`，求解在 `physics.ts`）。`frame` 推进时在 `skinMatrices` 的每根骨骼回调里解：算完 `Pose[i]` 就
+ *   `Mw = W·Pose[i]`、解物理、`Pose[i] ← Pose[i]·D`，后面的子骨骼与蒙皮都用改过的值；`W` 由宿主经 `PuppetSink.world` 交进来（上一帧脚本写下的图层世界矩阵含对齐偏移，
+ *   正是 WPE 的时序，p12-REPORT 第二部分 1.5）。世界骨骼矩阵两份缓冲 `prev` / `cur` 在推进开头交换，`cur` 对**全部**骨骼各写一次（物理骨骼在物理之后写，不再拷贝，脚本 `setBoneTransform` 直接改它，同 WPE `P+0x340` / `P+0x348`），
+ *   首帧 `prev` 为空不解；`refresh` 不是 WPE 的更新，不解也不动状态；隐藏照算（图像层不看可见性）；有物理骨骼的运行时不走「静止捷径」（状态每帧在变）。
+ * - P12b2-2：图像层 puppet 多一份 `g_BlendMap`（16 个 float，初值 0，**帧首不复位**），每个可见层按纹理通道轨道写（`blendChannels`）；只在推进时写
+ *   （`refresh` 不是 WPE 的更新，加法层会被重复累加）；模型不处理通道轨道。
  */
 import { AnimationClock, BACK, DONE, MIRROR, PAUSED, SINGLE } from "../animation/clock";
-import type { AnimationMode } from "../animation/types";
-import type { PuppetAnimation, PuppetLayerDef, ScenePuppet } from "../compile/puppet";
+import type { AnimationEventDef, AnimationMode } from "../animation/types";
+import type { SceneLayer } from "../compile/bundle";
+import type { ModelSkeleton, PuppetAnimation, PuppetLayerDef, ScenePuppet } from "../compile/puppet";
+import type { BonePhysics } from "../compile/puppet";
+import { drawMatrixOf, effectiveVisible, type LayerTransform } from "../render/layout";
 import {
+  BLEND_MAP_FLOATS,
+  blendChannels,
   blendInto,
+  blendModelMorphWeights,
   blendMorphWeights,
   blendScalarAlpha,
   frameIndex,
@@ -35,8 +52,14 @@ import {
   type FrameIndex,
   type MorphUniforms,
 } from "./pose";
+import { inverse4, mulAffine, mulFull } from "./math";
+import { applyBoneImpulse, createBoneState, resetBoneState, solveBone, type BoneState } from "./physics";
 
 const f = Math.fround;
+
+/** 时钟运行时位（P12c，WPE 同位）：`setFrame` 那一帧不判播完；本帧播完（loop 回绕、mirror 换向、single 结束）。 */
+export const SETFRAME = 0x02000000;
+export const ENDED = 0x04000000;
 
 /** 动画层的三个可变字段（WPE `AL+0xc8` / `+0xcc` / `+0xd0` bit0，rea-RT 1.5）。 */
 export interface PuppetLayerFields {
@@ -51,16 +74,77 @@ export interface PuppetLayerFields {
  */
 export interface PuppetSink {
   animationLayer(object: number, layer: number): PuppetLayerFields | undefined;
+  /**
+   * 对象自身与父链都可见吗（模型的更新门，P12b2-1）。看的是调用那一刻状态里的可见性：每帧更新在脚本之前，所以是上一帧脚本写下的（p12b2-vis 实测）。
+   * 没有这个方法或对象不在状态里时当作可见；图像层 puppet 不看（隐藏也推进）。
+   */
+  visible?(object: number): boolean;
+  /**
+   * 图层本帧的世界矩阵（16 个 f32，列主序）含对齐偏移（WPE 图层的世界矩阵虚函数 `+0x80`，骨骼物理的 `W`，P12d-1）；对象不在状态里、不给这个方法时为 null，
+   * 物理不跑（单测、`refresh`）。读的是调用那一刻的状态：每帧更新在脚本之前，所以是上一帧脚本写下的。
+   */
+  world?(object: number): Float32Array | null;
 }
 
-/** 把 `SceneState` 接成 `PuppetSink`（用户属性写进 `animationLayers`，puppet 当帧就读到）。 */
-export function stateSink(state: { readonly animationLayers: ReadonlyMap<string, PuppetLayerFields> }): PuppetSink {
-  return { animationLayer: (object, layer) => state.animationLayers.get(animationLayerKey(object, layer)) };
+/** 把 `SceneState` 接成 `PuppetSink`（用户属性写进 `animationLayers`，puppet 当帧就读到；`layers` 给模型的可见性门）。 */
+export function stateSink(state: {
+  readonly animationLayers: ReadonlyMap<string, PuppetLayerFields>;
+  readonly layers?: ReadonlyMap<number, Pick<LayerTransform, "parent" | "visible"> & Partial<LayerTransform>>;
+}): PuppetSink {
+  const layers = state.layers;
+  return {
+    animationLayer: (object, layer) => state.animationLayers.get(animationLayerKey(object, layer)),
+    ...(layers
+      ? {
+          visible: (object: number) => !layers.has(object) || effectiveVisible(object, layers),
+          // 物理的 `W`：`drawMatrixOf`（世界矩阵 · 自身偏移，不走挂点：语料没有挂在物理骨骼上的 puppet，挂在别的骨骼上的 puppet 的 `W` 退成普通父子，
+          // 与 WPE 差一个挂点矩阵；要做时在这里接渲染器的 `attachHook`）。条目没有变换字段（单测的最小状态）时为 null
+          world: (object: number) => {
+            const layer = layers.get(object);
+            if (!layer?.origin || !layer.angles || !layer.scale) return null;
+            return drawMatrixOf(object, layers as ReadonlyMap<number, LayerTransform>, new Map());
+          },
+        }
+      : {}),
+  };
 }
 
 /** `SceneState.animationLayers` 的键：对象下标与层下标。 */
 export function animationLayerKey(object: number, layer: number): string {
   return `${object}:${layer}`;
+}
+
+/**
+ * IAnimationLayer 的落点（P12c）：一个动画层的运行时，读写都直接作用在层上。`rate` / `blend` / `visible` 不在这里（在 `SceneState.animationLayers`，
+ * 用户属性、字段脚本、API 三方共写）。方法照 `AnimationClock`；`stop` 的掩码 `0x3fffffff` 不清 `SETFRAME`，同 WPE。
+ */
+export interface PuppetLayerControl {
+  /** `f32(1 / spf)`。 */
+  readonly fps: number;
+  /** 动画的 `length`（帧号上限）。 */
+  readonly frameCount: number;
+  /** 一轮的时长 `D`。 */
+  readonly duration: number;
+  name: string;
+  additive: boolean;
+  blendin: boolean;
+  blendout: boolean;
+  blendtime: number;
+  play(): void;
+  pause(): void;
+  stop(): void;
+  isPlaying(): boolean;
+  /** `t = f32(spf × f32(frame))`，另置 `SETFRAME`（本帧不判播完）。 */
+  setFrame(frame: number): void;
+  getFrame(): number;
+  /** 播完回调（调用由登记方包好，这里只存、只调）。 */
+  addEndedCallback(callback: () => void): void;
+}
+
+/** `frame` 的派发钩子（P12c）。 */
+export interface PuppetHooks {
+  /** 本帧越过的 MDLA 事件：每个 puppet 推进完全部层之后，按收集顺序（层序 × 事件表顺序）调。 */
+  event?(object: number, json: string): void;
 }
 
 /** 一个动画层的运行时。 */
@@ -75,13 +159,64 @@ interface LayerRuntime {
   readonly length: number;
   /** additive / blendin / blendout 位（visible 每帧从状态读）；blendin 第一次淡入完成后清掉（非 single）。 */
   flags: number;
-  readonly blendtime: number;
+  /** 可写（`IAnimationLayer.blendtime`，P12c）。 */
+  blendtime: number;
+  /** 当前名字（可写，`IAnimationLayer.name`，P12c；`findLayer` 按它找）。 */
+  name: string;
+  /** 播完回调表（P12c）；重编译时同一个数组接回。 */
+  callbacks: (() => void)[];
+  /** 控制口（懒建）。 */
+  control: PuppetLayerControl | null;
 }
 
-/** 一个 skinned puppet 的运行时。 */
+/**
+ * 运行时要的数据：`ScenePuppet`（图像层）与 `ModelSkeleton`（模型对象）都满足。`morph` 是图像层网格 0 的变形、`morphs` 是模型每网格的变形，
+ * `boneAlpha` 只有图像层有。
+ */
+export interface PuppetRig {
+  skeleton: ScenePuppet["skeleton"];
+  animations: PuppetAnimation[];
+  layers: PuppetLayerDef[];
+  boneAlpha?: boolean;
+  morph?: ScenePuppet["morph"];
+  morphs?: ModelSkeleton["morphs"];
+}
+
+/**
+ * 场景里要进运行时的对象（图像层 puppet 与带骨骼的模型，按图层顺序）：宿主与探针的 `new ScenePuppets(...)` 共用这一处，模型不会漏掉（P12b2-1）。
+ * 一个图层只会是其中一种。
+ */
+export function puppetEntries(
+  layers: readonly Pick<SceneLayer, "object" | "puppet" | "model">[],
+): { object: number; puppet: PuppetRig; kind: "image" | "model" }[] {
+  return layers.flatMap((layer): { object: number; puppet: PuppetRig; kind: "image" | "model" }[] =>
+    layer.puppet
+      ? [{ object: layer.object, puppet: layer.puppet, kind: "image" }]
+      : layer.model?.skeleton
+        ? [{ object: layer.object, puppet: layer.model.skeleton, kind: "model" }]
+        : [],
+  );
+}
+
+/** 模型一个网格的变形运行时：权重与生效位按该网格的目标数，uniform 用该网格自己的顶点数与缩放（决定 1，WPE 两处缺陷不照抄）。 */
+interface MeshMorphRuntime {
+  readonly weights: Float32Array;
+  readonly active: Uint8Array;
+  readonly uniforms: MorphUniforms;
+  readonly vertices: number;
+  readonly scale: number;
+}
+
+/** 剔除盒累加的起点（`FLT_MAX`，rea-texchan-model 7.6）。 */
+const FLT_MAX = 3.4028234663852886e38;
+/** 没有动画包围盒（MDLA v < 5）时并进剔除盒的全 0 盒子。 */
+const ZERO_BOX: readonly number[] = [0, 0, 0, 0, 0, 0];
+
+/** 一个 skinned puppet（或带骨骼的模型）的运行时。 */
 interface PuppetRuntime {
   readonly object: number;
-  readonly puppet: ScenePuppet;
+  readonly kind: "image" | "model";
+  readonly puppet: PuppetRig;
   readonly skeleton: NonNullable<ScenePuppet["skeleton"]>;
   readonly bones: number;
   readonly layers: LayerRuntime[];
@@ -99,40 +234,160 @@ interface PuppetRuntime {
   readonly alpha: Float32Array | null;
   /** 变形：每目标权重、生效位与交给渲染的 uniform；没有 `morph` 为 null。 */
   readonly morph: { weights: Float32Array; active: Uint8Array; uniforms: MorphUniforms } | null;
+  /** 模型每网格的变形（下标 = mdl 网格下标，没有目标的网格为 null）；图像层为 null。 */
+  readonly meshMorphs: (MeshMorphRuntime | null)[] | null;
+  /** 模型的剔除盒（min xyz、max xyz，模型空间）：可见层动画包围盒的并；还没有有效的就是 null（用 mdl 包围盒）。 */
+  bounds: number[] | null;
+  /** 时钟收集的 MDLA 事件（P12c）：每个 puppet 一份，推进完全部层之后派发并清空。 */
+  readonly events: AnimationEventDef[];
+  /** `g_BlendMap`（P12b2-2，WPE `P+0x350` 起 16 个 float，构造时清 0、跨帧保留）；模型为 null。 */
+  readonly blendMap: Float32Array | null;
+  /** 骨骼物理（P12d-1）；没有物理骨骼（含模型对象）为 null。 */
+  readonly physics: PhysicsRuntime | null;
+}
+
+/** 一个 puppet 的物理运行时。 */
+interface PhysicsRuntime {
+  /** 每骨骼的参数（`skeleton.physics`），null = 这根骨骼没开物理。 */
+  readonly params: readonly (BonePhysics | null)[];
+  /** 有骨骼开了物理（没有时只写 `cur`，不走物理、静止捷径照旧）。 */
+  readonly active: boolean;
+  /** 每骨骼的状态（没开物理的为 null）。 */
+  readonly states: (BoneState | null)[];
+  /** 上一帧物理之后的世界骨骼矩阵（`P+0x348`，每骨骼 16 个 f32）；`hasPrev` 为假时还没有。 */
+  prev: Float32Array;
+  /** 本帧的世界骨骼矩阵（`P+0x340`）；帧末与 `prev` 交换。 */
+  cur: Float32Array;
+  hasPrev: boolean;
+  /** 这一帧推进时用的图层世界矩阵 `W`（16 个 f32；脚本 `setBoneTransform` 求 `W⁻¹·M` 用，P12d-2）。 */
+  readonly layerWorld: Float32Array;
+  /** 工作格：物理之前的 `W·Pose[i]`、物理增量 `D`、`Pose[i]·D` 的结果。 */
+  readonly mw: Float32Array;
+  readonly delta: Float32Array;
+  readonly temp: Float32Array;
 }
 
 /**
  * 按 `FUN_1401a8c10` 建时钟（rea-RT 3.1）：fps 或一轮时长不是正数时早退，`spf` 1、`D` 0、模式位 0（python 模型的 `Clock` 同样）。
  * 只用 `AnimationClock` 的构造与 `D` 字段（P10b 在改它，接口以那边为准）。
  */
-function layerClock(fps: number, length: number, mode: AnimationMode): AnimationClock {
+function layerClock(
+  fps: number,
+  length: number,
+  mode: AnimationMode,
+  events: readonly AnimationEventDef[],
+): AnimationClock {
   const fps32 = f(fps);
   const D = f(f(Math.trunc(length)) / fps32);
   if (!(fps32 > 0) || !(D > 0)) {
-    const clock = new AnimationClock({ fps: 1, length, mode: 0, startpaused: false });
+    const clock = new AnimationClock({ fps: 1, length, mode: 0, startpaused: false }, events);
     clock.D = 0;
     return clock;
   }
-  return new AnimationClock({ fps, length, mode, startpaused: false });
+  return new AnimationClock({ fps, length, mode, startpaused: false }, events);
+}
+
+/** 物理运行时（P12d-1）：每根开物理的骨骼一份状态，`prev` 首帧为空。 */
+function physicsRuntime(params: readonly (BonePhysics | null)[], bones: number): PhysicsRuntime {
+  return {
+    params,
+    active: params.some((item) => item),
+    states: params.map((item) => (item ? createBoneState() : null)),
+    prev: new Float32Array(bones * 16),
+    cur: new Float32Array(bones * 16),
+    hasPrev: false,
+    layerWorld: new Float32Array(16),
+    mw: new Float32Array(16),
+    delta: new Float32Array(16),
+    temp: new Float32Array(16),
+  };
+}
+
+/** 一层的控制口（P12c）：读写直接作用在层的运行时上。 */
+function layerControl(layer: LayerRuntime): PuppetLayerControl {
+  const clock = layer.clock;
+  const bit = (mask: number) => ({
+    get: () => (layer.flags & mask) !== 0,
+    set: (value: boolean) => {
+      layer.flags = value ? layer.flags | mask : layer.flags & ~mask;
+    },
+  });
+  const additive = bit(LAYER_ADDITIVE);
+  const blendin = bit(LAYER_BLENDIN);
+  const blendout = bit(LAYER_BLENDOUT);
+  return {
+    get fps() {
+      return f(1 / clock.spf);
+    },
+    get frameCount() {
+      return layer.length;
+    },
+    get duration() {
+      return clock.D;
+    },
+    get name() {
+      return layer.name;
+    },
+    set name(value: string) {
+      layer.name = value;
+    },
+    get additive() {
+      return additive.get();
+    },
+    set additive(value: boolean) {
+      additive.set(value);
+    },
+    get blendin() {
+      return blendin.get();
+    },
+    set blendin(value: boolean) {
+      blendin.set(value);
+    },
+    get blendout() {
+      return blendout.get();
+    },
+    set blendout(value: boolean) {
+      blendout.set(value);
+    },
+    get blendtime() {
+      return layer.blendtime;
+    },
+    set blendtime(value: number) {
+      layer.blendtime = value;
+    },
+    play: () => clock.play(),
+    pause: () => clock.pause(),
+    stop: () => clock.stop(),
+    isPlaying: () => clock.isPlaying(),
+    setFrame: (frame: number) => {
+      clock.setFrame(frame);
+      clock.flags = (clock.flags | SETFRAME) >>> 0;
+    },
+    getFrame: () => clock.getFrame(),
+    addEndedCallback: (callback: () => void) => {
+      layer.callbacks.push(callback);
+    },
+  };
 }
 
 export class ScenePuppets {
   /** skinned puppet，按 `list` 的顺序。 */
   private readonly runtimes: PuppetRuntime[] = [];
   private readonly byObject = new Map<number, PuppetRuntime>();
-  /** 时钟收集的事件（P12a 丢掉）。 */
-  private readonly events: { time: number; json: string }[] = [];
   private readonly at: FrameIndex = { lo: 0, hi: 0, frac: 0 };
 
-  /** 只收 skinned 的（`skeleton` 不为 null）；静态 puppet 不进运行时，`skin` 给 null。建好后按 t = 0 算一次姿势（不推进）。 */
-  constructor(list: readonly { object: number; puppet: ScenePuppet }[]) {
-    for (const { object, puppet } of list) {
+  /**
+   * 只收 skinned 的（`skeleton` 不为 null）；静态 puppet 不进运行时，`skin` 给 null。建好后按 t = 0 算一次姿势（不推进）。`kind` 缺省 `"image"`
+   * （图像层 puppet）；带骨骼的模型对象交 `"model"` 和它的 `SceneModel.skeleton`（P12b2-1）。
+   */
+  constructor(list: readonly { object: number; puppet: PuppetRig; kind?: "image" | "model" }[]) {
+    for (const { object, puppet, kind = "image" } of list) {
       const skeleton = puppet.skeleton;
       if (!skeleton) continue;
       const bones = skeleton.parents.length;
       const layers = puppet.layers.map((def): LayerRuntime => {
         const animation = puppet.animations[def.animation];
-        const clock = layerClock(animation.fps, animation.length, animation.mode);
+        const clock = layerClock(animation.fps, animation.length, animation.mode, animation.events);
         let flags = (def.additive ? LAYER_ADDITIVE : 0) | (def.blendin ? LAYER_BLENDIN : 0);
         // blendout 只在 single 有效：加载时非 single 直接清掉（`0x1401fd068`，rea-RT 1.4）
         if (def.blendout && clock.flags & SINGLE) flags |= LAYER_BLENDOUT;
@@ -145,10 +400,14 @@ export class ScenePuppets {
           length: Math.trunc(animation.length),
           flags,
           blendtime: def.blendtime,
+          name: def.name,
+          callbacks: [],
+          control: null,
         };
       });
       const runtime: PuppetRuntime = {
         object,
+        kind,
         puppet,
         skeleton,
         bones,
@@ -166,6 +425,25 @@ export class ScenePuppets {
               uniforms: { offsets: new Uint32Array(MORPH_SLOTS), weights: new Float32Array(MORPH_SLOTS) },
             }
           : null,
+        meshMorphs:
+          kind === "model" && puppet.morphs
+            ? puppet.morphs.map((morph) =>
+                morph
+                  ? {
+                      weights: new Float32Array(morph.targets),
+                      active: new Uint8Array(morph.targets),
+                      uniforms: { offsets: new Uint32Array(MORPH_SLOTS), weights: new Float32Array(MORPH_SLOTS) },
+                      vertices: morph.vertices,
+                      scale: morph.scale,
+                    }
+                  : null,
+              )
+            : null,
+        bounds: null,
+        events: [],
+        blendMap: kind === "image" ? new Float32Array(BLEND_MAP_FLOATS) : null,
+        // 图像层 puppet 都有两份世界骨骼缓冲（脚本读写的 `P+0x340`，P12d-2）；有没有物理骨骼看 `active`
+        physics: kind === "image" ? physicsRuntime(skeleton.physics ?? [], bones) : null,
       };
       this.runtimes.push(runtime);
       this.byObject.set(object, runtime);
@@ -177,9 +455,132 @@ export class ScenePuppets {
    * 一帧（对象更新那一步，和粒子同一循环、相机与脚本之前，rea-RT 2）：逐层推进时钟、求姿势、算蒙皮矩阵。`dt` 是已钳到
    * [0.0001, 0.25] 的帧时间（`g_Frametime`）；图层隐藏也推进。
    */
-  frame(dt: number, state?: PuppetSink | null): void {
+  frame(dt: number, state?: PuppetSink | null, hooks?: PuppetHooks | null): void {
     const d = f(dt);
-    for (const runtime of this.runtimes) this.evaluate(runtime, d, state ?? null);
+    for (const runtime of this.runtimes) {
+      this.evaluate(runtime, d, state ?? null);
+      this.dispatch(runtime, hooks ?? null);
+    }
+  }
+
+  /**
+   * 静止捷径（没有可见层、上次也是静止、没有物理骨骼）下的世界骨骼矩阵：蒙皮不重算，但有 `W` 的推进帧照样交换缓冲、对全部骨骼写 `W·world[i]`。
+   * `refresh`（`d` 为 null）与没有 `W` 的帧什么都不做。
+   */
+  private restWorldBones(runtime: PuppetRuntime, d: number | null, state: PuppetSink | null): void {
+    const physics = runtime.physics;
+    const layerWorld = physics && d !== null ? (state?.world?.(runtime.object) ?? null) : null;
+    if (!physics || !layerWorld) return;
+    physics.layerWorld.set(layerWorld);
+    [physics.prev, physics.cur] = [physics.cur, physics.prev];
+    for (let bone = 0; bone < runtime.bones; bone++)
+      mulFull(layerWorld, 0, runtime.world, bone * 16, physics.cur, bone * 16);
+    physics.hasPrev = true;
+  }
+
+  /**
+   * 脚本选骨（rea-p12d-bones 3、5）：数字按下标（整数、`0 ≤ i < 骨骼数`），字符串按名字取第一个全名匹配；第一次更新之前（还没有世界骨骼矩阵）一律失败。
+   * 空串：`emptyIsFirst` 为真（冲量与复位）落到骨骼 0，否则（读写矩阵）失败。失败返回 −1。
+   */
+  private selectBone(runtime: PuppetRuntime, bone: number | string, emptyIsFirst: boolean): number {
+    if (!runtime.physics?.hasPrev) return -1;
+    if (typeof bone === "number") return Number.isInteger(bone) && bone >= 0 && bone < runtime.bones ? bone : -1;
+    if (bone === "") return emptyIsFirst && runtime.bones > 0 ? 0 : -1;
+    // 骨骼名只图像层 puppet（`ScenePuppet.names`）有；模型对象没有这些脚本方法，`physics` 为 null 时到不了这里
+    const names = (runtime.puppet as Partial<Pick<ScenePuppet, "names">>).names ?? [];
+    for (let i = 0; i < runtime.bones && i < names.length; i++) if (names[i] === bone) return i;
+    return -1;
+  }
+
+  /**
+   * 脚本 `getBoneTransform`（WPE `P+0x340[i]`，`W·Pose`，物理之后）：16 个 f32 的拷贝；不是图像层 puppet、没推进过、选骨失败时为 null（API 换成单位阵）。
+   */
+  boneTransform(object: number, bone: number | string): Float32Array | null {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return null;
+    const i = this.selectBone(runtime, bone, false);
+    return i < 0 ? null : runtime.physics.cur.slice(i * 16, i * 16 + 16);
+  }
+
+  /**
+   * 脚本 `setBoneTransform`（rea-p12d-bones 4）：写三处，`cur[i] = M`、模型空间 `world[i] = W⁻¹·M`（`W` 取这一帧推进时用的）、蒙皮 `skin[i] = world[i]·绑定逆`
+   * （WPE 这里两次都是完整 4×4 乘法）。子骨骼与物理状态不动，所以当帧只有这根骨骼的画面变，下一帧全部重算、`M` 只作为物理的 `prev` 留下。
+   * 选骨失败、`m` 不足 16 个数时什么都不做。
+   */
+  setBoneTransform(object: number, bone: number | string, m: ArrayLike<number>): void {
+    const runtime = this.byObject.get(object);
+    const physics = runtime?.physics;
+    if (!runtime || !physics || m.length < 16) return;
+    const i = this.selectBone(runtime, bone, false);
+    if (i < 0) return;
+    const matrix = Float32Array.from(m as ArrayLike<number>).subarray(0, 16);
+    physics.cur.set(matrix, i * 16);
+    const inverse = new Float32Array(16);
+    inverse4(physics.layerWorld, 0, inverse, 0);
+    mulFull(inverse, 0, matrix, 0, physics.temp, 0);
+    runtime.world.set(physics.temp, i * 16);
+    mulFull(runtime.world, i * 16, runtime.skeleton.inverseBind, i * 16, physics.temp, 0);
+    const t = physics.temp;
+    runtime.skin.set([t[0], t[1], t[2], t[4], t[5], t[6], t[8], t[9], t[10], t[12], t[13], t[14]], i * SKIN_STRIDE);
+    // 蒙皮被改过：静止捷径不能再跳过下一帧的重算（WPE 下一帧交换后全部重算）
+    runtime.restSkin = false;
+  }
+
+  /**
+   * 脚本 `applyBonePhysicsImpulse`（rea-p12d-bones 5）：`vel += dir`、`q ⊗= eulerQuat(ang·DEG·0.5)`；不看物理开关，但没开物理的骨骼没有状态，空操作
+   * （WPE 写了也不起作用）。空串落到骨骼 0；第一次更新之前、越界什么都不做。
+   */
+  applyBonePhysicsImpulse(object: number, bone: number | string, dir: ArrayLike<number>, ang: ArrayLike<number>): void {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return;
+    const i = this.selectBone(runtime, bone, true);
+    const state = i < 0 ? null : runtime.physics.states[i];
+    if (state) applyBoneImpulse(state, dir, ang);
+  }
+
+  /** 脚本 `resetBonePhysicsSimulation`：选骨同冲量（空串 = 骨骼 0，不是全部），状态置初值，不清 `prev`。 */
+  resetBonePhysicsSimulation(object: number, bone: number | string): void {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return;
+    const i = this.selectBone(runtime, bone, true);
+    const state = i < 0 ? null : runtime.physics.states[i];
+    if (state) resetBoneState(state);
+  }
+
+  /**
+   * 一个 puppet 推进完之后的派发（P12c，rea-p12c-script 3）：先把收集的事件逐个交给 `hooks.event`（交出去之前拷走并清空，回调里再推进也不会重复），
+   * 再按层序处理带 `ENDED` 的层：清掉这一位，拷一份回调表逐个调。没有事件、没有 ENDED 层时什么都不做。
+   */
+  private dispatch(runtime: PuppetRuntime, hooks: PuppetHooks | null): void {
+    if (runtime.events.length) {
+      const events = runtime.events.splice(0);
+      if (hooks?.event) for (const event of events) hooks.event(runtime.object, event.json);
+    }
+    for (const layer of runtime.layers) {
+      if (!(layer.clock.flags & ENDED)) continue;
+      layer.clock.flags = (layer.clock.flags & ~ENDED) >>> 0;
+      for (const callback of [...layer.callbacks]) callback();
+    }
+  }
+
+  /** skinned puppet / 带骨骼模型的动画层数；别的对象为 0（P12c）。 */
+  layerCount(object: number): number {
+    return this.byObject.get(object)?.layers.length ?? 0;
+  }
+
+  /** 第 `index` 层的控制口；不是 puppet 或 index 越界为 null（P12c）。 */
+  layer(object: number, index: number): PuppetLayerControl | null {
+    const layer = this.byObject.get(object)?.layers[index];
+    if (!layer) return null;
+    return (layer.control ??= layerControl(layer));
+  }
+
+  /** 按**当前**名字找层：最后一个匹配，空串不匹配，找不到 −1（P12c，`getAnimationLayer("名字")`）。 */
+  findLayer(object: number, name: string): number {
+    const layers = this.byObject.get(object)?.layers;
+    if (!layers || name === "") return -1;
+    for (let index = layers.length - 1; index >= 0; index--) if (layers[index].name === name) return index;
+    return -1;
   }
 
   /**
@@ -212,8 +613,43 @@ export class ScenePuppets {
    * `g_MorphOffsets`（12 个 u32：[0] 生效数，[1+k] 目标号 × nv）与 `g_MorphWeights`（12 个 f32：[0] 缩放，[1+k] 权重）；没有 `morph` 的为 null。
    * 每帧原地改写：权重与生效位先清 0，再逐可见层叠，最后取前 11 个生效目标按权重降序写 uniform（`pose.ts` 的 `morphUniforms`）；没有可见层时生效数 0。
    */
-  morph(object: number): { offsets: Uint32Array; weights: Float32Array } | null {
-    return this.byObject.get(object)?.morph?.uniforms ?? null;
+  morph(object: number, mesh?: number): { offsets: Uint32Array; weights: Float32Array } | null {
+    const runtime = this.byObject.get(object);
+    // 模型：每网格一份（`mesh` 是 mdl 网格下标），偏移用该网格自己的顶点数、`g_MorphWeights[0]` 是该网格的 `MDMP` 缩放（决定 1：WPE 用最后一个变形网格的
+    // 顶点数、按排序后的绘制记录下标取缩放与权重，那是缺陷，不照抄）
+    if (runtime?.meshMorphs) return mesh === undefined ? null : (runtime.meshMorphs[mesh]?.uniforms ?? null);
+    return runtime?.morph?.uniforms ?? null;
+  }
+
+  /**
+   * `g_BlendMap`（P12b2-2，16 个 float，纹理通道网格的混合权重，rea-texchan-model 3）：每个图像层 puppet 一份，初值 0、帧首不复位，推进时按可见层的通道轨道
+   * 叠写（覆盖 / 混合 / 加法，不钳制）；模型与不是 puppet 的对象为 null。每帧原地改写；上传取前 `4 × BLENDROWCOUNT` 个。
+   */
+  blendMap(object: number): Float32Array | null {
+    return this.byObject.get(object)?.blendMap ?? null;
+  }
+
+  /**
+   * 模型的剔除盒（min xyz、max xyz，模型空间）：每次更新末尾取可见层（动画层的 `visible`，不看权重）动画包围盒的并，至少一个盒子有效（max.x > min.x）才用
+   * （rea-texchan-model 7.6，p12b2-cull 实测）；没有有效的、不是模型、没有动画层时为 null，调用方用 mdl 的包围盒。图像层 puppet 不用。
+   */
+  bounds(object: number): readonly number[] | null {
+    return this.byObject.get(object)?.bounds ?? null;
+  }
+
+  /**
+   * 本帧的世界骨骼矩阵 `W·Pose[i]`（物理之后，每骨骼 16 个 f32，WPE 的 `P+0x340`；脚本 `getBoneTransform` 读它、`setBoneTransform` 写它，写进去的在下一帧
+   * 交换后成为物理的 `prev`，P12d-2）。每帧推进时对**全部**骨骼写；不是图像层 puppet 的对象为 null；宿主没给 `W` 的帧保持上一帧的值。返回的数组每帧原地改写（交换时换底层缓冲，
+   * 不要长期持有）。
+   */
+  worldBones(object: number): Float32Array | null {
+    return this.byObject.get(object)?.physics?.cur ?? null;
+  }
+
+  /** 骨骼物理状态（每骨骼一份，没开物理的为 null）；没有物理骨骼的对象为 null（P12d-1，测试与探针读）。 */
+  physicsStates(object: number): readonly (BoneState | null)[] | null {
+    const physics = this.byObject.get(object)?.physics;
+    return physics?.active ? physics.states : null;
   }
 
   /**
@@ -226,6 +662,25 @@ export class ScenePuppets {
     for (const runtime of this.runtimes) {
       const before = previous.byObject.get(runtime.object);
       if (!before) continue;
+      // `g_BlendMap` 是跨帧的持久状态（WPE 改属性不重载，`P+0x350` 不变），重编译时保留这 16 个 float
+      if (runtime.blendMap && before.blendMap) runtime.blendMap.set(before.blendMap);
+      // 物理状态与 `prev`（P12d-1，同样是跨帧的持久状态）：骨骼数相同时按下标接回
+      const physics = runtime.physics;
+      const old = before.physics;
+      if (physics && old && physics.states.length === old.states.length) {
+        physics.states.forEach((state, bone) => {
+          const was = old.states[bone];
+          if (!state || !was) return;
+          state.q.set(was.q);
+          state.ang.set(was.ang);
+          state.off.set(was.off);
+          state.vel.set(was.vel);
+        });
+        physics.prev.set(old.prev);
+        physics.cur.set(old.cur);
+        physics.hasPrev = old.hasPrev;
+        physics.layerWorld.set(old.layerWorld);
+      }
       runtime.layers.forEach((layer, index) => {
         const old = before.layers[index];
         if (!old) return;
@@ -233,8 +688,15 @@ export class ScenePuppets {
         const b = old.clock;
         if (a.spf !== b.spf || a.D !== b.D || layer.length !== old.length || (a.flags & 3) !== (b.flags & 3)) return;
         a.t = b.t;
-        a.flags = ((a.flags & ~(PAUSED | DONE | BACK)) | (b.flags & (PAUSED | DONE | BACK))) >>> 0;
-        if (!(old.flags & LAYER_BLENDIN)) layer.flags &= ~LAYER_BLENDIN;
+        a.flags =
+          ((a.flags & ~(PAUSED | DONE | BACK | SETFRAME)) | (b.flags & (PAUSED | DONE | BACK | SETFRAME))) >>> 0;
+        // 五个可写字段与回调表（P12c，WPE 改属性不重载，脚本写过的都还在）：additive / blendin / blendout 三位原样接回（blendin 是否已清也在里面）
+        const writable = LAYER_ADDITIVE | LAYER_BLENDIN | LAYER_BLENDOUT;
+        layer.flags = (layer.flags & ~writable) | (old.flags & writable);
+        layer.name = old.name;
+        layer.blendtime = old.blendtime;
+        layer.callbacks = old.callbacks;
+        layer.control = null;
       });
       runtime.restSkin = false;
     }
@@ -286,27 +748,52 @@ export class ScenePuppets {
     this.refresh();
   }
 
-  /** 一个 puppet：`d` 为 null 时不推进（`refresh`）。 */
+  /**
+   * 一个 puppet：`d` 为 null 时不推进（`refresh`）。模型（`kind === "model"`）：推进时对象或父链不可见就整段跳过；每帧开头清全部网格的变形权重；
+   * 权重 0 的层整层跳过（时钟照推进，不算「已有层」）；末尾更新剔除盒。
+   */
   private evaluate(runtime: PuppetRuntime, d: number | null, state: PuppetSink | null): void {
-    const { bones, pose, sample, skeleton, alpha, morph } = runtime;
+    const { bones, pose, sample, skeleton, alpha, morph, meshMorphs } = runtime;
+    const model = runtime.kind === "model";
+    // 更新门（rea-texchan-model 4：`FUN_14021c480` 开头；p12b2-vis 实测：模型自己或父链隐藏时时钟冻结，重新可见的第一帧照画但那一帧的更新已被跳过）。
+    // 只在推进时判：`refresh` 是按当前时钟重算（建场景、探针 `seek`），不是 WPE 的更新
+    if (model && d !== null && state?.visible && !state.visible(runtime.object)) return;
     let posed = false;
-    /** 骨骼透明度与变形权重每帧复位一次：第一个可见层之前，或者没有可见层且上次不是静止时。 */
+    /** 骨骼透明度与变形权重每帧复位一次：第一个可见层之前，或者没有可见层且上次不是静止时。模型是每帧开头无条件清（`0x14021c574`）。 */
     const reset = () => {
       if (alpha) resetBoneAlpha(alpha);
       if (morph) resetMorph(morph.weights, morph.active);
+      if (meshMorphs) for (const item of meshMorphs) if (item) resetMorph(item.weights, item.active);
     };
+    if (model) reset();
     for (let index = 0; index < runtime.layers.length; index++) {
       const layer = runtime.layers[index];
       const fields = state?.animationLayer(runtime.object, index) ?? layer.def;
       if (!fields.visible) continue;
-      if (!posed) reset();
+      if (!model && !posed) reset();
       if (d !== null) {
-        // 推进量 `dt × rate`（`0x1401fed7d`：`mulss`，float32）
-        layer.clock.advance(f(d * f(fields.rate)), this.events);
-        this.events.length = 0;
+        const clock = layer.clock;
+        const old = clock.flags >>> 0;
+        const t0 = clock.t;
+        // 推进量 `dt × rate`（`0x1401fed7d`：`mulss`，float32）；越过的事件收进本 puppet 的列表，推进完全部层后派发
+        clock.advance(f(d * f(fields.rate)), runtime.events);
+        // 播完检测（rea-p12-runtime 3.1）：暂停 / 已结束 / setFrame 那一帧不判
+        if (!(old & (PAUSED | DONE | SETFRAME))) {
+          const ended =
+            clock.flags & SINGLE
+              ? (clock.flags & DONE) !== 0 // single：本帧刚结束
+              : clock.flags & MIRROR
+                ? ((old ^ clock.flags) & BACK) !== 0 // mirror：换向
+                : t0 > clock.t; // loop：回绕（负 rate 每帧都成立，照抄）
+          if (ended) clock.flags = (clock.flags | ENDED) >>> 0;
+        }
+        // 只在可见、推进的层上清（不可见的层保留到下次推进）
+        clock.flags = (clock.flags & ~SETFRAME) >>> 0;
       }
       const at = frameIndex(layer.clock, layer.length, this.at);
       const w = layerWeight(layer, layer.clock, fields.blend);
+      // 模型：权重 0 的层整层跳过，也不置「已有层」（p12b2-mdl 实测：与去掉这一层逐位相同；图像层不跳过）
+      if (model && w === 0) continue;
       sampleLayer(layer.frames, layer.mask, bones, at.lo, at.hi, at.frac, sample);
       blendInto(
         pose,
@@ -324,11 +811,26 @@ export class ScenePuppets {
         blendScalarAlpha(alpha, track.alpha, track.alphaMask, bones, at.lo, at.hi, at.frac, w, additive);
       if (morph && track.morph)
         blendMorphWeights(morph.weights, morph.active, track.morph, at.lo, at.hi, at.frac, w, additive);
+      // 纹理通道（P12b2-2）：只在推进时写（`refresh` 不是 WPE 的更新，加法层会重复累加）；不复位，没有可见层时保持上一帧
+      if (runtime.blendMap && d !== null && track.channels?.length)
+        blendChannels(runtime.blendMap, track.channels, at.lo, at.hi, at.frac, w, additive);
+      if (meshMorphs && track.meshMorph)
+        meshMorphs.forEach((item, m) => {
+          const tracks = track.meshMorph![m];
+          if (item && tracks)
+            blendModelMorphWeights(item.weights, item.active, tracks, at.lo, at.hi, at.frac, w, additive);
+        });
       posed = true;
     }
+    if (model) this.updateBounds(runtime, state);
+    // 有物理骨骼的运行时不走静止捷径：状态每帧在变（P12d-1）
     if (!posed) {
-      if (runtime.restSkin) return;
-      reset();
+      if (runtime.restSkin && !runtime.physics?.active) {
+        // 静止捷径只省掉蒙皮重算：世界骨骼矩阵每帧照写（脚本 `getBoneTransform` 要跟着图层移动，P12d-2）
+        this.restWorldBones(runtime, d, state);
+        return;
+      }
+      if (!model) reset();
     }
     if (morph)
       morphUniforms(
@@ -338,7 +840,90 @@ export class ScenePuppets {
         runtime.puppet.morph!.scale,
         morph.uniforms,
       );
-    skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin);
+    if (meshMorphs)
+      for (const item of meshMorphs)
+        if (item) morphUniforms(item.weights, item.active, item.vertices, item.scale, item.uniforms);
+    // 骨骼物理（P12d-1）：只在推进时（`refresh` 不是 WPE 的更新），且宿主给了图层的世界矩阵
+    const physics = runtime.physics;
+    const layerWorld = physics && d !== null ? (state?.world?.(runtime.object) ?? null) : null;
+    if (physics && layerWorld) {
+      const scale = layerScale(layerWorld);
+      physics.layerWorld.set(layerWorld);
+      // 推进开头交换 `P+0x340` / `P+0x348`：上一帧的 `cur`（含脚本 `setBoneTransform` 之后的写入）成了这一帧的 `prev`；`cur` 之后每根骨骼各写一次，
+      // 不再拷贝。`W` 为 null（sink 没给、`refresh`）时整段不做：不交换、不写 `cur`、物理不跑
+      [physics.prev, physics.cur] = [physics.cur, physics.prev];
+      skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin, (bone) =>
+        this.physicsBone(runtime, physics, layerWorld, scale, d!, bone),
+      );
+      physics.hasPrev = true;
+    } else skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin);
     runtime.restSkin = !posed;
   }
+
+  /**
+   * 一根骨骼的物理（`skinMatrices` 的回调，`world[bone]` 刚算完、还是动画姿势，rea-AP 2.2 第 5 步）：`cur[bone] = W·Pose[bone]`；开了物理且有 `prev`
+   * 时解一次，`Pose[bone] ← Pose[bone]·D`，`cur[bone]` 取改过之后的。
+   */
+  private physicsBone(
+    runtime: PuppetRuntime,
+    physics: PhysicsRuntime,
+    layerWorld: Float32Array,
+    scale: number,
+    dt: number,
+    bone: number,
+  ): void {
+    const { world } = runtime;
+    const { mw, delta, temp, cur, prev } = physics;
+    mulFull(layerWorld, 0, world, bone * 16, mw, 0);
+    const params = physics.params[bone];
+    const state = physics.states[bone];
+    if (
+      params &&
+      state &&
+      physics.hasPrev &&
+      solveBone(params, state, mw, prev.subarray(bone * 16, bone * 16 + 16), scale, dt, delta)
+    ) {
+      mulAffine(world, bone * 16, delta, 0, temp, 0);
+      world.set(temp, bone * 16);
+      mulFull(layerWorld, 0, world, bone * 16, mw, 0);
+    }
+    cur.set(mw, bone * 16);
+  }
+
+  /**
+   * 模型的剔除盒（`FUN_140226a10`，rea-texchan-model 7.6；p12b2-cull 实测）：层表非空时，从 ±`FLT_MAX` 起把每个可见层（`visible`，不看权重）的动画包围盒逐分量
+   * min / max 并起来；有一个可见层的盒子有效（max.x > min.x）才用这个并集（其余可见层全 0 的盒子也并进去，所以至少含原点），否则退回 mdl 的包围盒（null）。
+   * 层表空时 WPE 不更新（保持原值）。
+   */
+  private updateBounds(runtime: PuppetRuntime, state: PuppetSink | null): void {
+    if (!runtime.layers.length) return;
+    const box = [FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX];
+    let valid = false;
+    runtime.layers.forEach((layer, index) => {
+      const fields = state?.animationLayer(runtime.object, index) ?? layer.def;
+      if (!fields.visible) return;
+      // MDLA v < 5 没有包围盒：WPE 动画记录里这 6 个 float 是构造时的 0（推断，语料的动画全是 v5），全 0 的盒子照样并进去（同上）
+      const own = layer.animation.bounds ?? ZERO_BOX;
+      for (let axis = 0; axis < 3; axis++) {
+        box[axis] = Math.min(box[axis], own[axis]);
+        box[axis + 3] = Math.max(box[axis + 3], own[axis + 3]);
+      }
+      if (own[3] > own[0]) valid = true;
+    });
+    runtime.bounds = valid ? box : null;
+  }
+}
+
+/** 图层世界矩阵三列长度的平均（`((|c1| + |c0|) + |c2|) / 3`，z 列也算，`0x1402004d2`，p12-REPORT 1.4 实测）。 */
+function layerScale(world: Float32Array): number {
+  const column = (c: number) =>
+    f(
+      Math.sqrt(
+        f(
+          f(f(world[4 * c] * world[4 * c]) + f(world[4 * c + 1] * world[4 * c + 1])) +
+            f(world[4 * c + 2] * world[4 * c + 2]),
+        ),
+      ),
+    );
+  return f(f(f(column(1) + column(0)) + column(2)) / 3);
 }

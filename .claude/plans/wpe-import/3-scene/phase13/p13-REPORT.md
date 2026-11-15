@@ -128,3 +128,106 @@ WPE 2.8.42，窗口 1920×1080。用户设置（`config.json` 的 `general.user`
 
 P5d 把透视相机改成逐步 float32、遮挡方块的轴长改成 float32 的 0.2 之后：第 2223 帧各 draw 0 ULP；2221 帧逐像素相同，2222–2225 帧各剩 4 / 1 / 134 / 3 个像素、都只差 1 级，
 逐级定位到船体 / 喷口的片元舍入（9 个孤立像素）与泛光模糊的 1/255 差（1 个纹素），以及它们经泛光的摊开，归已知差异（详见 `phase-13c-sprite.md`「走查复核」）。
+
+## P13d 的实测：阴影（2026-11-15）
+
+读码 [rea-p13-shadows.md](rea-p13-shadows.md)；工程 `ignore/p13/d/gen_d0.py`、`gen_d8.py`、`gen_d9.py` → `ignore/p13/proj/p13d-*`；抓帧 `A:\p13d\sweep\`（`capture_sweep` 扫 `shadows` 五档，重启 WPE 4 次后改回 `low`，`config.json` 哈希回到 `cc5081…`）、`A:\p13d\spec\`、`A:\p13d\sweep2\`；常量 `ignore/p13/out/wpe-p13d-*-consts.json`。
+
+| # | 预测 | 抓帧 | 结果 |
+|---|---|---|---|
+| D1 | 点光：方块 256 / 256 / 512 / 1024，fov 94 / 94 / 92 / 91.2°，近平面正交 1、透视 `max(0.05, lightsourcesize)`，远平面 `max(radius, near + 0.01)`；阴影 pass 不偏移 | po / pp / pp-ls 五档：`P11` 0.932515 → 0.979272，`g_LFeature_ShadowPointProjection` = (n/(f−n), n·f/(f−n), −1, 0)；阴影 pass 的 `VP[3][2]` 比 uniform 推算的少 0.00333 | 偏移那条推翻：投影 `P32 − 0.00333f`（读码补上，三组 float32 逐位相同），其余成立 |
+| D2 | 平行光三级 `(3, 40)`、`(10, 40)`、`(100, 150)`，防抖，阴影 pass `m32 − 0.0005` | dir / dir-b / dir-cd / dir-high / dir-ultra：uniform 0.5109016、阴影 pass 0.5104015；三块横排（low 768×256） | 成立（R3 的算式复算到 1–2 ULP） |
+| D3 | 阴影 pass 不剔除 | cull：主 pass 剔掉的单面平面在地面上有影子 | 成立 |
+| D4 | 只有不透明且 castshadow 的模型投射 | who：阴影 pass 只有地面与 CAST 立方体 | 成立；地面本身也是投射者 |
+| D5 | 打包一行 `8192/S` 块 | multi-ultra：5 块，5120×1024 | 成立 |
+| D6 | 没有投射者时图集照清、不画 | none：只有清图集 | 成立 |
+| D7 | `disabled` 不画阴影 | po / pp-disabled：没有阴影 pass | 成立 |
+| D8 | 专用投射着色器、A2C、fur 只投一层 | spec：棋盘格孔、影子随风动、fur 主 pass 9 实例 / 阴影 1 层 | 成立（无颜色附件时 A2C 仍生效） |
+| 补测 | 配置不一致与图集 | over：投射灯多于 pointshadow 时被普通灯覆盖；hide：隐藏后图集不缩；dir2：6 级 6 块；fur5 / fur21 阴影相同 | 成立 |
+
+另：WPE 对每个模型只给通过视锥测试的视图发实例，视口数组一起压紧（who event 30 视口 0 是 −X 面）。
+
+### 和 WPE 的整帧对照（low 档，进行中）
+
+我们用 `render_scene` 按抓帧的 `g_Time` 渲一帧，WPE 取同一帧，排除右下角 FR / CLK。差异位置图由 `ignore/p13/d/ana/overlay.py` 生成，内容是：WPE 画面压暗作底，差异像素黄（1–2 级）/ 橙（3–32）/ 红（> 32），青框是聚集区，图下方按框放大成「我们 | WPE | 差 ×16」三栏。
+
+| 工程 | 差异像素（> 2 / > 32） | 位置图 | 说明 |
+|---|---|---|---|
+| p13d-none（只有接收者） | 0 | [none.png](../../../../../ignore/p13/d/overlay/none.png) | |
+| p13d-po（正交点光） | 3（0 / 0） | [po.png](../../../../../ignore/p13/d/overlay/po.png) | 三个孤立像素，各差 1 级，不在影子边缘 |
+| p13d-pp（透视点光） | 3（0 / 0） | [pp.png](../../../../../ignore/p13/d/overlay/pp.png) | 同上 |
+| p13d-dir（平行光三级联） | 4（0 / 0） | [dir.png](../../../../../ignore/p13/d/overlay/dir.png) | 同上 |
+| p13d-spec-ns（专用投射者，关阴影，只比主 pass） | 54（43 / 43） | [specns.png](../../../../../ignore/p13/d/overlay/specns.png) | 43 个大差全在两块 A2C 棋盘格平面的格子边上（框 #1–#5）：我们画了，WPE 没画；其余 11 个 1 级 |
+| p13d-spec（专用投射者，开阴影） | 12342（11410 / 6285） | [spec.png](../../../../../ignore/p13/d/overlay/spec.png) | 主体是地面上两条横带（#1 7092、#2 5196）：图集第 127 行是 chroma4 棋盘格的格子边界，我们的 A2C 让平面写了深度、WPE 没写，这一行纹素放大到屏幕上成了约 30 像素高的影带；#3–#9 同 spec-ns 的主 pass 像素 |
+
+## 单采样 A2C 的阈值是 0.5 + 2⁻¹²（P13d 附带，2026-11-15）
+
+图集逐行对照（`ignore/p13/d/ana/atlas_rows.py`）：棋盘格在 −Y 面里约 1.8 行一格，第 127 行的纹素中心正好落在 z = 0 那条格子边界上（纹理 v = 0.5）。WPE 这一行整行都没画平面，我们整行都画了，而且两种奇偶的格子都画了。若只是 uv 插值偏了一点，偏差的符号会随格子奇偶翻转，只会画一半，所以差别在「正好在边界上」时的判定。
+
+工程 `ignore/p13/d/gen_d10.py` → `p13d-a2cth` / `a2cth2` / `a2cth3`（只在 WPE 里跑，抓帧 `A:\p13d\a2cth*\`，读数 `ignore/p13/d/ana/a2cth_read.py`）：
+
+| 条 | 内容 | WPE（本机 NVIDIA，D3D11 单采样） |
+|---|---|---|
+| A | 自写着色器输出 alpha = 0.5 + d，blending alphatocoverage；d = 2⁻²⁴ … 2⁻⁸ 逐段翻倍 | 2⁻¹² 起画，2⁻¹³ 及以下不画 |
+| A（a2cth2） | d = i·2⁻¹⁶，i = 0…17 | i = 16（= 2⁻¹²）起画，15 不画 |
+| A（a2cth3） | d = 2⁻¹² − j·2⁻²²，j = 0…17 | 只有 j = 0 画 |
+| B | alpha = 0.5 − d | 全不画 |
+| C | 同一张 64×64 棋盘格在 v 正好 0.5 处采样，输出 (a − 0.5)·2¹⁷ | 读出 ±1（饱和），即过滤值是 0.5 ± 2⁻¹⁷，不是 0.5 |
+
+每段 100×100 像素整片一致，不按像素位置抖动。结论：**单采样 A2C 在 alpha ≥ 0.5 + 2⁻¹² = 2049/4096 时才覆盖**，等价于「乘 4096 截断后大于 2048」；P8 测到的「0.4995 不画、0.5005 画」落在这个阈值两侧，所以当时定成 `> 0.5`。
+
+同一块 GPU 上我们也拿到 0.5 + 2⁻¹⁷（宿主里的 WebGPU 实验，`ignore/p13/d/ana/a2c_probe.js`）。锐化 `(a − 0.5)/max(fwidth(a), 1e-4) + 0.5` 之后约 0.500015：`> 0.5` 判成画，WPE 判成不画。这就是第 127 行，也是 spec-ns 主 pass 里那 43 个格子边像素。
+
+改法：A2C 入口的丢弃条件从 `!(a > 0.5)` 改成 `!(a >= 0.500244140625)`（`render/programs.ts` 的 `A2C_THRESHOLD`，NaN 仍丢），主 pass 与阴影投射者共用。
+
+改后重比（同一时刻、同一张 WPE 帧，宿主产物 `index-DMF0Ix6j.js`）：
+
+| 工程 | 改前 | 改后 | 位置图 |
+|---|---|---|---|
+| p13d-spec | 12342（> 32：6285） | 14，全部差 1 级 | [spec-a2c.png](../../../../../ignore/p13/d/overlay/spec-a2c.png) |
+| p13d-spec-ns | 54（> 32：43） | 11，全部差 1 级 | [specns-a2c.png](../../../../../ignore/p13/d/overlay/specns-a2c.png) |
+| p13d-spec 阴影图集 | 35 个纹素差 > 1e-4 | 0 | — |
+| p8-a2c 第 162 帧（P8 回归，按日志回放） | 0 | 0 | [p8-a2c.png](../../../../../ignore/p13/d/overlay/p8-a2c.png) |
+| p8-misc 第 155 帧（同上） | 0 | 0 | [p8-misc.png](../../../../../ignore/p13/d/overlay/p8-misc.png) |
+
+剩下的 1 级差异是零散的孤立像素（地面光照的舍入），和 po / pp / dir 同一类。P8 两个工程临时导入 dev 库（15140、15141），测完已用 `projects_remove` 移除。
+
+### 五个档位与全部补测工程对照 WPE（2026-11-15）
+
+计划 `ignore/p13/d/ana/plan_cmp.py`（抓帧标签 → 工程、库里的行号、档位、第一帧的 `g_Time`）→ `ignore/p13/d/cmp-plan.json`；WPE 的帧 `kbp rdc frame --present` → `ignore/p13/d/wpe/frames/`；我们的帧按抓帧时刻 `render_scene`（画布 1920×1080），档位用 dev 覆盖 `localStorage["kabegame-dev-scene-shadows"]`（结果里 `shadows.quality` 核对过，测完已删）→ `ignore/p13/d/ours/cmp/`；比较 `ignore/p13/d/ana/cmp_all.py`（排除 FR / CLK，> 2 的出位置图 `ignore/p13/d/overlay/cmp-<标签>.png`）。`hide` 一个目录两次抓帧：`hide-on` 第 151 帧两盏都亮，`hide-off` 第 182 帧运行中把 `p_v` 改成 false 之后。
+
+| 抓帧 | 档位 | > 0 | > 2 | > 32 | 最大差 |
+|---|---|---|---|---|---|
+| cull-low | low | 9 | 0 | 0 | 1 |
+| dir-high | high | 5 | 0 | 0 | 1 |
+| dir-low | low | 4 | 0 | 0 | 1 |
+| dir-ultra | ultra | 4 | 0 | 0 | 1 |
+| dir2-low | low | 28 | 0 | 0 | 1 |
+| dirb-low | low | 5 | 0 | 0 | 1 |
+| dircd-low | low | 5 | 0 | 0 | 1 |
+| fur21-low | low | 3 | 0 | 0 | 1 |
+| fur5-low | low | 3 | 0 | 0 | 1 |
+| multi-low | low | 29 | 0 | 0 | 1 |
+| multi-ultra | ultra | 32 | 0 | 0 | 1 |
+| none-low | low | 0 | 0 | 0 | 0 |
+| over-low | low | 8 | 0 | 0 | 1 |
+| po-disabled | disabled | 4 | 0 | 0 | 1 |
+| po-high | high | 4 | 0 | 0 | 1 |
+| po-low | low | 3 | 0 | 0 | 1 |
+| po-medium | medium | 4 | 0 | 0 | 1 |
+| po-ultra | ultra | 5 | 0 | 0 | 1 |
+| pp-disabled | disabled | 4 | 0 | 0 | 1 |
+| pp-high | high | 3 | 0 | 0 | 1 |
+| pp-low | low | 3 | 0 | 0 | 1 |
+| pp-medium | medium | 3 | 0 | 0 | 1 |
+| pp-ultra | ultra | 3 | 0 | 0 | 1 |
+| ppls-low | low | 3 | 0 | 0 | 1 |
+| spec-low | low | 14 | 0 | 0 | 1 |
+| specgen-low | low | 10 | 0 | 0 | 1 |
+| who-low | low | 6403 | 6400 | 6400 | 142 |
+| hide-on | low | 10 | 0 | 0 | 1 |
+| hide-off | low | 2 | 0 | 0 | 1 |
+
+- 除 `who-low` 外每张最多 32 个像素、都只差 1 级（孤立的光照舍入）。`ppls-low` 与 `pp-low` 我们的像素摘要相同，各自和 WPE 都只差 3 个像素：光源尺寸只改近平面，影子在画面上不变。
+- `who-low` 的 6400 个像素是一个 80×80 的白色粒子方块：屏外探针不步进粒子（存活数 0），与阴影无关，方块周围没有影子差异（D4：粒子不投影）。
+- `hide-off` 最初整帧发黑（平均亮度 7）：WPE 给没有灯的第 2 个槽写全 0（常量文件逐值核对，我们写的也是全 0），投影 `w` 为 0，坐标是 0/0 的 NaN。硬件比较采样吃掉 NaN、结果有限；`kb_shadowCompare` 越界分支手算双线性的权重 `p − floor(p)` 是 NaN，经 `mix` 进了整个光照和。权重改成 `w >= 0 ? w : 0` 后只剩 2 个像素差 1。WPE 运行中隐藏时图集不缩（方块变换 `(0, 0, 0.5, 1)`），我们整场重编译按一盏灯建图集（`(0, 0, 1, 1)`），画面相同。

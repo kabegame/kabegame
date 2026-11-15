@@ -440,6 +440,12 @@ export interface ScriptValueResult {
  */
 export type VideoTime = number | Record<string, number>;
 
+/** 系统媒体回放的一步（P11c，探针 `dev/probeMedia.ts` 的 `ProbeMediaStep`）：第 `frame` 帧之前派发的一批场景消息。 */
+export interface RenderMediaStep {
+  frame: number;
+  messages: ({ type: string } & Record<string, unknown>)[];
+}
+
 /** 探针每段视频纹理实际取的时刻（`videoProbe.ts` 的 `ProbeVideoResult`），顺序同 bundle 纹理。 */
 export interface RenderVideo {
   /** bundle 纹理的 path（`videoTime` 对象的键）。 */
@@ -537,6 +543,12 @@ export interface RenderRequest {
    * 不给时 GIF 停在第 0 帧。空数组也原样转给探针。结果的 `meta.userTextures` 不是数组或项里没有 `kind` 时（宿主产物不认识）409。
    */
   gifDts?: number[];
+  /**
+   * 系统媒体消息的回放（P11c）：每项 `{ frame, messages }`，`frame` 从 1 起（回放的第几帧之前），`messages` 是 `WpeMediaHub` 的场景消息
+   * （`status` / `properties` / `sceneThumbnail` / `playback` / `timeline`，形状见 P11c 子计划的「约定」）。探针把同一项的消息并进一个
+   * pending、立刻切成事件，在那一帧的脚本阶段开头派发（不走计时器）；配合 `scripts: true` 与 `consoleGrep` 看回调。最多 `MAX_MEDIA_STEPS` 项。
+   */
+  media?: RenderMediaStep[];
   /**
    * 逐 draw 轨迹（`.claude/plans/tools/scene-draw-trace.md`）：`true`，或 `{ readback?, maxVertices? }`，原样交给探针。探针把设备换成
    * 记录器包过的那个，读回那一帧记下每个 pass、每个 draw 的管线、绑定、uniform、顶点；`readback` 选中的 pass 结束后读回它的颜色

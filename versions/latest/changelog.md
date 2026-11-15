@@ -29,9 +29,12 @@
 - 场景壁纸能编译创意工坊作者手写的全部着色器：Wallpaper Engine 能接受、以前被判为不支持的写法（向量宽度不一致的赋值与运算、数字当条件、多出来的 `#endif`、同名宏重复定义等）现在按 Wallpaper Engine 的规则编译，本机全部场景用到的着色器都能编译通过，画面与 Wallpaper Engine 逐像素一致（相差不超过 2/255）。创意工坊 3822495444、3831518461、3837598414 现在可实时渲染；其余用到这些效果的场景大多还缺视频、关键帧动画、音频频谱等别的能力。
 - 场景壁纸支持 Wallpaper Engine 自带的流体模拟效果，以及效果里按选项开关的步骤与贴图：按 Wallpaper Engine 的规则处理，流体逐帧对照过它的输出。按图层缩放修正形状的创意工坊效果（如圆角遮罩）现在能用，画面与 Wallpaper Engine 逐像素一致。着色器里声明了却没用到的参数，不再让场景被误判为不支持。用到这些效果的场景大多还缺文本、音频、视频等别的能力，暂时仍显示预览图。
 - 场景壁纸能画用到大量插值变量的创意工坊效果（如摆动效果 auto_sway、音频示波器）：这些变量按 Wallpaper Engine 的方式排布，不再因为超出显卡的接口数量上限而整张退回预览图，画面与 Wallpaper Engine 对照过。创意工坊 3585875739（音频示波器）现在可实时渲染；用到摆动效果的场景还缺别的能力，暂时仍显示预览图。效果里边缘宽度为 0 的平滑过渡（如示波器没有声音时的线条、VHS 干扰带宽度或摆动羽化调到 0）按 Wallpaper Engine 的结果计算，不再整张变亮或反相。
+- 场景壁纸里只有一级的纹理（效果遮罩、视频等）改用和 Wallpaper Engine 相同的各向异性过滤：纹理被斜向拉伸采样时（如云层流动效果）边缘不再出现明显色差。
+- 场景壁纸的 3D 模型按 Wallpaper Engine 的规则读取编辑器里画的材质遮罩用了哪些通道（自发光、金属度、粗糙度、反射）：以前这几项被忽略，带自发光遮罩的部位（如创意工坊 3706286085 里角色的手套和鞋）比 Wallpaper Engine 暗。用到它的场景还缺雾、阴影等别的能力，暂时仍显示预览图。
 - 场景壁纸支持视频：作为图层画面的视频（包括创意工坊打包在场景里的 4K 视频与 HEVC 视频）会循环播放，被隐藏的视频图层自动暂停解码，暂停壁纸时一起停；和 Wallpaper Engine 一样不出声。画面与 Wallpaper Engine 对照过，只在颜色剧烈变化的边缘有细微差别。创意工坊 3822149301、3824550659、3828359750 现在可实时渲染；其余带视频的场景大多还缺文本、音频频谱、关键帧动画等别的能力。HEVC 视频需要显卡支持硬件解码，不支持时这个图层显示为透明。
 - 场景壁纸支持音频频谱：声明了音频处理的场景里，读系统声音频谱的效果（频谱条、随音乐跳动的光圈等）会跟着正在播放的声音动，和 Wallpaper Engine 用的是同一份数据，测试场景逐帧逐像素一致。创意工坊 3502090109、3585875739、3825170583 现在可实时渲染；其余用到音频频谱的场景大多还缺文本、关键帧动画、媒体信息等别的能力。只在 Windows 上有声音数据，其它系统上频谱保持为 0。
-- 场景壁纸支持作者开放的自定义图片属性：在属性面板里给这类属性选一张图片、GIF 或 MP4 视频，场景里对应的图层或效果贴图就换成它，按 Wallpaper Engine 的规则从正中裁成需要的比例，改了立即生效、不重新加载场景；清空后回到作者的贴图。图片的解码、GIF 的合成与播放节奏都逐像素对照过 Wallpaper Engine 的输出，只有 JPEG 的颜色边缘和标清视频的色彩有细微差别。创意工坊 3462279189、3783690410 现在可实时渲染；系统媒体封面、快捷方式图标这两类贴图来源还没实现，用到它们的场景仍显示预览图。
+- 场景壁纸支持作者开放的自定义图片属性：在属性面板里给这类属性选一张图片、GIF 或 MP4 视频，场景里对应的图层或效果贴图就换成它，按 Wallpaper Engine 的规则从正中裁成需要的比例，改了立即生效、不重新加载场景；清空后回到作者的贴图。图片的解码、GIF 的合成与播放节奏都逐像素对照过 Wallpaper Engine 的输出，只有 JPEG 的颜色边缘和标清视频的色彩有细微差别。创意工坊 3462279189、3783690410 现在可实时渲染；快捷方式图标这类贴图来源还没实现，用到它的场景仍显示预览图（系统媒体封面见下一条）。
+- Windows 上的场景壁纸支持系统媒体集成：显示正在播放的歌名、歌手、专辑封面，并随播放状态变化的场景（音乐卡片、唱片机一类）现在可实时渲染。标题、封面、颜色与刷新节奏都按 Wallpaper Engine 的规则，用同一个测试媒体会话逐项对照过它的回调和封面画面。创意工坊 2932157836、2974757317、3219908811、3355291946、3470764447、3482471820、3487328036、3823859141、3823864170、3837699827 现在可实时渲染。在设置里关掉「媒体集成」后，这些场景按没有媒体处理；macOS 和 Linux 上暂时没有媒体数据。
 - 场景壁纸支持形状光束、图层对齐、图层互相引用与透明写入设置：编辑器里的光束形状图层按 Wallpaper Engine 的规则画出；图片图层的对齐方式（如左上、底部居中）生效，子图层不受影响，场景脚本也能读写；遮罩、混合类效果可以引用别的图层（包括隐藏的图层）的画面；图层叠加效果时的边缘处理、像素风图层的不插值、材质的透明通道写入与「透明度覆盖」混合也按 Wallpaper Engine 的规则处理（以前个别图层叠加效果时边缘会露出另一侧的画面）。测试场景逐像素对照过 Wallpaper Engine 的输出，只在纹理缩小处有细微差别。创意工坊 3656079027、3668499717、3811764016、3812887609、3819646765、3821678218 现在可实时渲染；其余用到这些功能的场景大多还缺场景脚本、关键帧动画、木偶动画等别的能力。
 - 场景壁纸支持关键帧动画：编辑器里给位置、旋转、缩放、颜色、透明度、效果参数、缩放镜头等属性打的关键帧会按 Wallpaper Engine 的规则播放（循环、往返、只播一次，子动画跟随父动画），改属性时动画接着走、不从头开始；动画值逐帧对照过 Wallpaper Engine 的输出。创意工坊 2251857160 现在可实时渲染。脚本也能控制动画（播放、暂停、停止、跳帧、调速）并收到动画事件，规则对照过 Wallpaper Engine；用到它们的创意工坊场景多数还要等光标与媒体交互，暂时仍显示预览图。
 - 场景壁纸支持透视 3D 场景、相机对象、深度与透明排序：用透视相机的场景（相机路径、相机抖动）按屏幕分辨率实时渲染，对象之间的遮挡（深度测试、背面剔除）和半透明物体由远到近的绘制顺序都按 Wallpaper Engine 的规则处理；场景里的相机对象（含脚本移动相机、按属性切换多个相机、缩放镜头）能控制视角，粒子也会面向相机。测试场景逐像素对照过 Wallpaper Engine 的输出，几张真实壁纸的相机与矩阵也逐项对过，只在纹理缩小处有细微差别。创意工坊 dna_fragment、techno、neon_sunset 现在可实时渲染；其余带相机对象的场景还缺文本、骨骼动画等别的能力，暂时仍显示预览图。
@@ -39,6 +42,14 @@
 - 场景壁纸支持太阳光斑（sprite 对象）：光斑随相机转动，被前景物体挡住时按 Wallpaper Engine 的规则逐渐变小变暗，和它的输出逐像素一致。Wallpaper Engine 自带的 Rice Pod 现在可实时渲染。
 - 场景壁纸支持木偶（puppet）骨骼动画：编辑器里做的木偶图层按 Wallpaper Engine 的规则播放骨骼动画，多个动画层的循环 / 往返 / 单次播放、覆盖 / 按权重 / 叠加三种混合与淡入淡出都按实测实现；动画层的速度、显隐等属性改了立即生效、不重新加载；带效果的木偶图层先做完效果再贴到木偶网格上。骨骼矩阵逐帧对照过 Wallpaper Engine 的输出（多数逐位相同），测试场景与两张真实壁纸逐像素一致。创意工坊 2896608544、3203778110、3351072238、3354366708、3409595232、3811769317、3813473025、3814576310、3818986268、3828324728 现在可实时渲染；木偶的挂点、变形、骨骼透明度、裁切遮罩、脚本控制与骨骼物理还没实现，用到它们的场景仍显示预览图。
 - 场景壁纸的木偶（puppet）支持挂点、骨骼透明度、表情变形与裁切遮罩：挂在骨骼上的头发、饰品、粒子跟着骨骼动；眨眼淡入淡出、嘴型表情变形（含负权重）按 Wallpaper Engine 的规则叠加；眼睛等部位的裁切遮罩按它的绘制顺序画。父图层被脚本或关键帧移动时，挂件晚一帧跟上，和 Wallpaper Engine 一致。测试场景与真实壁纸逐帧对照过它的输出。创意工坊 2964778792、3253330537、3463520581、3491865410、3500648585、3829467967 现在可实时渲染。
+- 场景壁纸的 3D 模型支持骨骼动画、表情变形与挂点：模型的多个动画层按 Wallpaper Engine 的规则混合，隐藏时动画暂停；挂件可以挂在模型骨骼上。木偶的纹理通道（按动画在图上叠加通道贴图）也按它的规则绘制。测试场景逐像素对照过它的输出。用到这些功能的创意工坊场景还差雾、阴影、精灵表动画等别的能力，暂时仍显示预览图。
+- 场景壁纸的场景脚本能控制木偶（puppet）与 3D 模型的动画层：
+  - 点击播放动作、错开各动画的起始帧、随音乐调节动画速度；
+  - 动画层播完一轮时通知脚本；
+  - 动画里的事件交给脚本。
+  
+  规则和生效时机都照 Wallpaper Engine 实测（脚本的操作在下一帧生效）。另外放宽了场景纹理的尺寸上限，和 Wallpaper Engine 一样到 16384，以前特别宽的文字图层会让整张场景退回预览图。创意工坊 3346715292、3361965869、3492627662、3830665420 现在可实时渲染。
+- 场景壁纸的木偶（puppet）支持骨骼物理：头发、尾巴、草叶等随动画和图层移动甩动、回弹或被重力拉下，按 Wallpaper Engine 的规则计算。场景脚本也能读写骨骼位置并给骨骼施加冲量，比如拖动角色后松手弹回。测试场景与真实壁纸的骨骼矩阵逐帧对照过它的输出。创意工坊 2345214324、3359451610、3426865175 现在可实时渲染。
 - 新增应用日志：运行日志分级并按天保存到数据目录下的 `logs` 文件夹（保留 14 天），工具箱新增「查看日志」，可按级别、前端 / 后端、模块和关键字筛选，实时滚动，支持复制与打开日志目录。Web 版仅 super 模式可用。
 - 网页壁纸可在预览详情栏与设置页调整作者提供的属性，桌面壁纸实时生效；支持文件与目录属性。
 - 场景壁纸现在跟随壁纸样式（填充、适应、拉伸、居中、平铺），适应和居中时空白处用壁纸的主题色填充，和 Wallpaper Engine 一样；图库预览里场景壁纸按自身比例完整显示，和单独的图片一样；详情面板显示场景分辨率，宽高比筛选与排序也包含场景壁纸。
@@ -59,6 +70,8 @@
 - 新增按颜色排序：画廊、画册、任务和畅游的排序菜单多了「颜色」，点开选一个色块（红橙黄绿青蓝紫粉棕黑白灰），画面最接近这个颜色的排在前面；也可以点「＋」自己取色，直接按它排序，或把常用的颜色保存下来（最多 24 个，保存后排序更快）。Wallpaper Engine 壁纸与视频同样参与。
 - 图片详情的「基本信息」里新增代表色：一条按占比分段的色带，鼠标停在上面显示色值与百分比，点其中一段可以让当前页面按这个颜色排序（过滤条件不变）。升级后会在后台为已有图片计算一次代表色，期间可正常使用，还没算到的图片按颜色排序时暂时排在最后。
 - 整理新增「重新计算代表色」：为整理范围内的每张图片重新计算代表色（换了文件、当初没算出来，或者想按新的算法更新时用），算不出来的保留原来的代表色；进度和完成提示里会显示更新了多少张。
+- 图库预览里的网页与场景壁纸，鼠标移到画面外的空白处、详情栏，甚至应用窗口外时，景物（视差、跟随鼠标的粒子等）也继续跟着鼠标，停在画面边缘；在画面上点击照常传给壁纸。Linux 上仍只在壁纸画面上跟随。
+- 场景壁纸支持点光与平行光的实时阴影：3D 模型按 Wallpaper Engine 的方式投下影子，镂空的树叶、棋盘格等贴图投出带孔的影子，随风摆动的植物影子也跟着动；设置页壁纸分区新增「场景阴影」（跟随 WPE / 关闭 / 低 / 中 / 高 / 超高，默认跟随 Wallpaper Engine 自己的阴影设置），各档的画面与 Wallpaper Engine 逐像素对照过（相差不超过 1/255）。聚光灯的阴影暂不支持。
 
 ### Optimized
 - 场景壁纸改颜色、透明度、位置、亮度与滑块类属性时即时生效，不再整场重新加载；按属性条件显示 / 隐藏的图层也能正确切换。
@@ -84,7 +97,7 @@
 - 场景壁纸的材质参数按 Wallpaper Engine 的规则取值：单个数字填满颜色 / 向量的每个分量，用逗号分隔的数值也能读到，类型不对的值（如给数值参数写了文字或开关）不再被硬塞进去，运行中改属性也不会残留旧分量；两个着色器阶段共用的同名参数取片元着色器的默认值。目前能渲染的场景画面不变，模糊、滚动等以后开放的效果不会再缺一个方向。
 - 在图库预览的网页或场景壁纸上按住 Ctrl 滚动滚轮，不再把整个应用一起放大缩小；以前这样缩放过的，下次打开时自动恢复原大小。
 - 图库预览场景壁纸时，画面不再多出主题色留边、整体缩小，也不再按远大于显示的尺寸渲染。
-- 场景壁纸的开关类设置（如相机视差）关联到滑块等非开关属性时，按作者在场景里写的开关值生效，和 Wallpaper Engine 相同；以前会被当成关闭。相机视差跟随鼠标的平滑过程与 Wallpaper Engine 逐像素一致。场景里关联的属性在壁纸里不存在时，图层的显示 / 隐藏、数值与脚本参数也按作者写的值生效（以前创意工坊 3351072238 的背景视频会被藏起来）；图层透明度、亮度关联到开关或按条件显示的属性时同样保持作者的值；显示开关关联到数字或文字属性时也保持作者的值；Wallpaper Engine 自带的对齐、播放速度、颜色校正等属性，场景与脚本也能读到（对齐跟随壁纸样式）。
+- 场景壁纸的开关类设置（如相机视差）关联到滑块等非开关属性时，按作者在场景里写的开关值生效，和 Wallpaper Engine 相同；以前会被当成关闭。相机视差跟随鼠标的平滑过程与 Wallpaper Engine 逐像素一致。场景里关联的属性在壁纸里不存在时，图层的显示 / 隐藏、数值与脚本参数也按作者写的值生效（以前创意工坊 3351072238 的背景视频会被藏起来）；图层透明度、亮度关联到开关或按条件显示的属性时同样保持作者的值；显示开关关联到数字或文字属性时也保持作者的值；Wallpaper Engine 自带的对齐、播放速度、颜色校正等属性，场景与脚本也能读到（对齐跟随壁纸样式）；脚本拿到的全部属性按 Wallpaper Engine 的顺序排列。
 - 三维（透视）场景壁纸的相机按 Wallpaper Engine 的单精度算法计算视角、投影与镜头路径，沿路径运动的场景（如 ricepod）不再在模型边缘出现零星的错色像素。
 - 「壁纸」导入只添加文件夹、没有勾选自动来源时不再提示「壁纸导入任务创建失败」。
 - 预览视频后切到其它图片或关闭预览，立即释放视频播放器：系统媒体浮窗不再停在已经切走的视频，也不再盖住桌面壁纸正在放的歌。
@@ -103,8 +116,13 @@
 - 网页壁纸带步长的滑块属性，在输入框直接键入的数值也会对齐到步长（例如步长 0.25 时键入 1.3 得到 1.25），与拖动滑块一致。
 - 安全加固：畅游导航栏、桌面网页壁纸等页面只能监听为它们开放的应用事件，发给某个窗口的事件不会再被其它窗口收到；页面里嵌入的子页面（iframe）不再沿用所在页面的应用权限。
 - 场景壁纸里鼠标波纹这类逐帧累积的效果和 Wallpaper Engine 的细微色差变小：内置的逆矩阵改用和 Wallpaper Engine 相同的单精度算法。
+- 场景壁纸里用「透明度转覆盖」（alpha to coverage）的镂空贴图（如棋盘格、树叶）在格子边上不再多画出一条线：覆盖的阈值改成实测 Wallpaper Engine 得出的 0.5 + 1/4096。
 
 ### Changed
+- 桌面上的网页与场景壁纸，光标移到别的窗口或别的显示器上时，跟随鼠标的效果停在画面边缘、继续跟着光标的方向，不再停在光标离开时的位置。
+- 图库预览的壁纸画面两侧中段不再有挡住点击的翻页热区，翻页箭头和图片一样靠鼠标移到两侧唤出；点过预览里的壁纸后，Esc 与方向键照常可用。
+- 图库预览只有点左右箭头才切到上一张 / 下一张；点画面两侧的其它地方不再切图，图片照常拖动，壁纸照常收到点击。
+- Windows 上网页壁纸收到的专辑封面配色改用和 Wallpaper Engine 相同的算法（主色、次色、第三色，以及按对比度选的文字色与黑白色）；没有封面时五个颜色都是黑色，原来是深灰底白字。
 - Wallpaper Engine 壁纸的「大小」改为整个壁纸目录的总大小（原来只算入口文件），按大小筛选和排序随之变化；判断两张壁纸是否相同也改为比较整个目录的内容。升级后会在后台为已有的壁纸重新计算一次，「我正在忙这些」里能看到进度；算完之前，下载到本机已有的壁纸可能多存一份。
 - 「壁纸」收集任务重新运行时，已经在库里的壁纸计入任务的「去重」数；开着「自动去重」时，内容完全相同的两个壁纸目录只导入一个。
 - 壁纸设置的「关闭壁纸」改为「打开壁纸」，默认开启；升级时原来的开关状态自动换算，关着壁纸的仍是关着。
@@ -186,6 +204,34 @@
   - 运行时：新增 `src/usertex/`（`crop.ts` 裁切与纹理名、`png.ts` 的 `gAMA` 表、`gif.ts` 照 WPE `resourceutil64.dll` 逐字节移植的 GIF 解码器、`sources.ts` 的来源表 `UserTextureSources`，GIF / 视频按值引用计数）与 `render/userGamma.ts`（上传时在 GPU 上查 gamma 表）；`render/graph.ts` 的 `TextureRef` 加 `user`；`render/scene.ts` 的 `syncUserTextures`（槽 0 整层强制重建、其它槽 `rebindUserDraw`、组合层 / instanced 强制白、`ensureUserSizing`、GIF / 视频画到时上传）；宿主加载时预解码（`primeUserTextures`，5 s）。
   - 后端与面板：`user_props.rs` 的 `WpePropKind::SceneTexture`（WPE 的固定过滤、`wpe_slash_path`），`wpe_web_dir_index.rs` 的场景条目带用户选的文件、`scene_dir_grants` 改名 `scene_grants`，`wpe_web_pull_state` 场景分支返回前覆盖放行；`WpePropertyField.vue` / `WpeWebPropertiesPanel.vue` 只在场景上显示 `scenetexture`。
   - dev 工具：探针 `host.userTextures()`、`renderFrame` 的 `gifDts`（vite `/render` 与 MCP `render_scene` / `host_render` 转发）、`host.renderFrame(time, key)` 存读回；屏外宿主要用视频而主窗口最小化时直接报原因（`checkVideoVisibility`）。计划、实施记录与走查见 `.claude/plans/wpe-import/3-scene/phase11/phase-11b-usertextures.md`，文档见 `cocs/wpe/WPE_SCENE.md`「用户纹理（P11b）」。
+- 场景壁纸 P11c：系统媒体（五个 `media*Changed` 回调与封面纹理）。
+  - 后端 `wpe_media/`：
+    - 新增 `projection.rs`（纯逻辑）。监视线程读一次系统数据（`RawProperties` / `RawTimeline`），交给网页投影（Phase 8 原样）与场景投影（照 `winrtutil64.exe` 取值、超长清空、整秒时间轴、原尺寸封面、每类去重、没有会话时复位）；Spotify 预处理在这里。
+    - `colors.rs` 换成 WPE 的 360 格色相直方图与对比度规则，输出 `[[u8; 3]; 5]`，两个投影共用。
+    - `media.rs` 另订阅 `SessionsChanged`，信号照 `winrtutil` 主循环 100 ms 攒批（`collect_batch` / `plan_batch`），带挂接代数、丢掉旧会话的事件。
+    - `mod.rs` 新增 `WpeMediaMessage::SceneThumbnail { png, colors }` 与 `WpeMediaFlavor`：订阅按 flavor 路由、各一份缓存，场景补发照 `AddMediaListener`，关「媒体集成」时场景订阅另收复位。
+    - `wpe_web_media_subscribe` 按调用方文档（场景宿主入口 / 网页壁纸目录）定 flavor。
+  - 宿主编译期：
+    - 五个回调从 `MISSING_SCRIPT_CALLBACKS` 移到 `RUNTIME_CALLBACKS`（`exportsMediaCallback`）；
+    - `usertextures:system` 不再报，`system` 来源同属性来源登记 `user-texture` 绑定（`isDynamicSource`）；
+    - 新增 `SceneBundle.media`；`postprocess.ts` 新增 `readWpeWindowUpdateRate`。
+  - 宿主运行时：
+    - 新增 `src/media/`：`pending.ts` 的 `MediaPending` 照 WPE 合并、封面先解码；`scene.ts` 的 `SceneMedia`（`drain`、`replayAfterInit`）；`events.ts` 的事件对象；`interval.ts`。
+    - `UserTextureSources.provide`：封面名字不读文件、只留两张。
+    - `ScriptRuntime.mediaEvent`，`load` 的 `afterInit`。
+    - `host.ts` 订阅 `kind: "media"`、`windowupdaterate` 计时器、每帧脚本阶段开头 `drainMedia`（没有脚本也跑）。
+  - dev 工具：
+    - 探针 `host.media()`，`renderFrame` 的 `media: [{ frame, messages }]`（`dev/probeMedia.ts`；回放媒体时读回帧前也 `sync`）；
+    - vite `/render` 的 `checkMedia` 与转发、MCP `render_scene` 的 `media` 字段；
+    - SMTC 夹具 `ignore/p11/smtc/fixture.ps1` 可选 `type` 键。
+  - 计划、约定与走查见 `.claude/plans/wpe-import/3-scene/phase11/phase-11c-media.md`，文档见 `cocs/wpe/WPE_SCENE.md`「媒体（P11c）」与 `cocs/wpe/WPE_IMPORT.md`「音频与媒体集成」。
+- 场景壁纸 P11d：快捷方式（`usershortcut` 属性的图标纹理与 `engine.openUserShortcut`，只做 Windows）。
+  - 值与面板：`user_props.rs` 的 `WpePropKind::UserShortcut`、`parse_user_shortcut`（照 WPE 拆参数）、网址补 `https://`、`shortcut_key`；`wpe_web.rs` 的 `scene_user_from_view` 给场景宿主 `{ value: 原值哈希, isbound, commandtype?, file? }`。新增 `WpeShortcutField.vue`、`utils/wpeShortcut.ts`，面板只在场景、只在 Windows 上显示，「测试」按钮先 `saveNow()` 再调启动命令；五种语言各加 14 个词条。
+  - 图标：新增 `wallpaper/wpe_shortcut/`（`windows.rs` 照 `winrtutil` 取缩略图与图标、去预乘；`web.rs` 取网站图标、缺省图；`cv.rs` 是 OpenCV 4.4.0 `resize` / `inpaint` TELEA / `circle` 抗锯齿的逐行移植，只用 std）与命令 `wpe_scene_shortcut_icon`（进 `wpe-scene-host.toml`，返回原始 RGBA）。宿主 `usertex/sources.ts` 加 `usershortcut` 来源，`crop.ts` 的 `padRect` 照 WPE 补透明边，`render/scene.ts` 上传时补边、快捷方式槽一律夹取。
+  - 启动：宿主新增 `shortcut/token.ts`（按下沿发、松开沿收的点击令牌）与 `shortcut/message.ts`；`script/api.ts` 的 `openUserShortcut` 照 WPE 门禁、抛 realm 的 `SyntaxError`，`scriptUserProperties` 让 `engine.userProperties` 里的快捷方式是 `{}`；`script/runtime.ts` 记当前回调；渲染器加 `cursor.end` 钩子。应用页 `wpeSceneShortcut.ts` 与 `WpeSceneView` 核对来源、可交互、用户激活、每属性 1 秒一次后调 `wpe_open_user_shortcut`（只进 `generate_handler!`，宿主调不到），后端 `ShellExecuteW`。
+  - 能力表删 `usertextures:usershortcut`、`script:api:engine.openUserShortcut`。语料能渲染 175 → 176（233 张）。
+  - dev 工具：探针 `renderFrame` 收 `shortcutIcons`、结果多 `scripts.shortcuts`；没给后端形状的快捷方式属性按没配（`isbound: false`）。
+  - 计划、约定与走查见 `.claude/plans/wpe-import/3-scene/phase11/phase-11d-shortcuts.md`，文档见 `cocs/wpe/WPE_SCENE.md`「快捷方式（P11d）」与 `cocs/wpe/WPE_IMPORT.md`「用户属性」。
 - 场景壁纸 P8：图像层与材质补全。
   - 合成 RT 的采样：寻址只看对象 `clampuvs`（缺省钳制），过滤看对象 `nointerpolation` 或纹理的 NoInterpolation（`render/graph.ts` 的 `compositeSampling`，`SceneLayer.clampUVs` / `noInterpolation`），文本层同一规则；删 `object:clampuvs`、`object:nointerpolation`。
   - 形状对象：`features.ts` 的 `isShapeObject`、`shapeIssues`（`shape:effects` / `shape:effect-passes` / `shape:uniform:<名字>` / `shape:texture0`，`textureSlotRead` 看 WGSL 判断槽有没有被读）；`bundle.ts` 的 `shapePoints` / `shapeLayerSize`（effect 改写 `DIRECTDRAW = 1`、槽 0 不预留）；`render/layout.ts` 的 `shapeQuad`；`render/graph.ts` 的 `planShapeLayer`（只画最后一个 effect、强制 additive）。删 `object:shape`。

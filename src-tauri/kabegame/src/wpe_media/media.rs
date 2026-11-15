@@ -1,43 +1,106 @@
-//! 系统媒体会话（SMTC，`GlobalSystemMediaTransportControlsSessionManager`）监视：把「当前会话」的属性、封面、
-//! 播放状态、时间轴翻译成 WPE 的媒体回调数据，变化时才推。
+//! 系统媒体会话（SMTC，`GlobalSystemMediaTransportControlsSessionManager`）监视：只负责读系统数据，
+//! 翻译成网页 / 场景两个投影（`projection.rs`，纯逻辑）并按 flavor 推出，变化时才推。
 //!
-//! 一个专用线程（COM MTA）持有管理器与当前会话：WinRT 事件只往通道里发一个信号，读取、比较、封面解码都在这个线程里做；
-//! 每秒醒一次给播放中的时间轴按 `LastUpdatedTime` 外推（很多播放器只在跳转时更新时间轴）。
-//! 播放状态切换时不重读时间轴，按旧状态外推的位置作新基准。
-//! 播放器不提供时间轴（`EndTime` 为 0）就不推，页面要能接受永不回调（官方文档）。
+//! 一个专用线程（COM MTA）持有管理器与当前会话：WinRT 事件只往通道里发一个信号，读取、解码都在这个线程里做；
+//! 每秒醒一次给网页投影的播放中时间轴按 `LastUpdatedTime` 外推（场景投影不外推）。
+//! 当前会话的来源是 `CurrentSessionChanged` 与 `SessionsChanged`（WPE 里两个事件都只是重取当前会话）。
+//! 播放器不提供时间轴（`EndTime` 为 0）网页投影就不推，页面要能接受永不回调（官方文档）。
+//!
+//! 信号照 `winrtutil64.exe` 的主循环处理（rea-p11-media 1.2–1.4）：它每 100 ms 取一次自己的队列，丢掉不是当前会话发来的事件。
+//! 这里收到第一个信号后把之后 100 ms 内到的攒成一批（[`collect_batch`]），会话上的三个事件带着挂接时的代数，
+//! 批里有会话切换就只重新挂接（挂接会全部重读），旧代数的信号丢掉（[`plan_batch`]）。
+//! 实测（P11c 走查）：会话退出时它先报一次播放状态，约 17 ms 后系统才切到别的会话，WPE 不发那条状态，不攒批就会多发一条。
 
-use super::colors::{default_colors, thumbnail_colors, ThumbnailColors};
-use super::{ComGuard, WpeMediaMessage};
-use base64::Engine;
-use std::hash::{Hash, Hasher};
+use super::projection::{Output, Projections, RawProperties, RawTimeline};
+use super::ComGuard;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use windows::Foundation::{EventRegistrationToken, TypedEventHandler};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as Session,
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as PlaybackStatus,
 };
-use windows::Media::MediaPlaybackType;
 use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 
 const TICK: Duration = Duration::from_secs(1);
-/// 封面长边上限（WPE 同样推缩过的 PNG，API.md §3.2）。
-const THUMBNAIL_MAX_SIDE: u32 = 512;
-/// 算颜色用的缩略尺寸。
-const COLOR_SAMPLE_SIDE: u32 = 64;
+/// 攒批的时长：winrtutil 主循环取队列的间隔（`Sleep(100)`，rea-p11-media 1.4）。
+const POLL: Duration = Duration::from_millis(100);
 /// 读封面流的上限，防止异常大的流。
 const THUMBNAIL_MAX_BYTES: u64 = 16 * 1024 * 1024;
 /// `DateTime.UniversalTime`（1601 起的 100ns）与 Unix 纪元之差。
 const FILETIME_UNIX_OFFSET: i64 = 116_444_736_000_000_000;
 
+/// 监视线程的信号。会话上的三个事件带着挂接时的代数（[`Watcher::generation`]），换会话之后旧会话迟到的信号据此丢掉。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Signal {
     Session,
-    Properties,
-    Playback,
-    Timeline,
+    Properties(u64),
+    Playback(u64),
+    Timeline(u64),
     Stop,
+}
+
+/// 一批信号要做的事。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct BatchPlan {
+    stop: bool,
+    /// 重取当前会话并重新挂接（挂接会重读三类，本批别的读取不再单做）
+    reattach: bool,
+    properties: bool,
+    playback: bool,
+    timeline: bool,
+}
+
+/// 照 winrtutil：一批里有停止就停；有会话切换就只重新挂接；否则只认当前代数（当前会话）发来的信号，同类只读一次。
+fn plan_batch(batch: &[Signal], generation: u64) -> BatchPlan {
+    let mut plan = BatchPlan::default();
+    for signal in batch {
+        match *signal {
+            Signal::Stop => plan.stop = true,
+            Signal::Session => plan.reattach = true,
+            Signal::Properties(g) if g == generation => plan.properties = true,
+            Signal::Playback(g) if g == generation => plan.playback = true,
+            Signal::Timeline(g) if g == generation => plan.timeline = true,
+            // 不是当前会话发来的（旧代数）：丢掉
+            _ => {}
+        }
+    }
+    if plan.stop || plan.reattach {
+        plan.properties = false;
+        plan.playback = false;
+        plan.timeline = false;
+    }
+    plan
+}
+
+/// 以 `first` 开头，把之后 [`POLL`] 内到的信号攒成一批；收到停止或通道断开立即返回（停止不等）。
+fn collect_batch(first: Signal, receiver: &Receiver<Signal>) -> Vec<Signal> {
+    let mut batch = vec![first];
+    if first == Signal::Stop {
+        return batch;
+    }
+    let deadline = Instant::now() + POLL;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return batch;
+        }
+        match receiver.recv_timeout(left) {
+            Ok(signal) => {
+                batch.push(signal);
+                if signal == Signal::Stop {
+                    return batch;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => return batch,
+            Err(RecvTimeoutError::Disconnected) => {
+                batch.push(Signal::Stop);
+                return batch;
+            }
+        }
+    }
 }
 
 /// 运行中的媒体会话监视；丢弃即停止。
@@ -47,7 +110,7 @@ pub struct MediaWatcher {
 }
 
 impl MediaWatcher {
-    pub fn start(emit: impl Fn(WpeMediaMessage) + Send + 'static) -> Self {
+    pub fn start(emit: impl Fn(Output) + Send + 'static) -> Self {
         let (signals, receiver) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("kabegame-wpe-media".to_string())
@@ -73,20 +136,31 @@ impl Drop for MediaWatcher {
     }
 }
 
-fn run(signals: Sender<Signal>, receiver: Receiver<Signal>, emit: &dyn Fn(WpeMediaMessage)) {
+fn run(signals: Sender<Signal>, receiver: Receiver<Signal>, emit: &dyn Fn(Output)) {
     let _com = ComGuard::init();
     let manager = match SessionManager::RequestAsync().and_then(|op| op.get()) {
         Ok(manager) => manager,
         Err(error) => {
             tracing::warn!("获取系统媒体会话失败，网页壁纸媒体集成不可用: {error}");
-            emit(WpeMediaMessage::Playback { state: 0 });
+            for output in Projections::default().playback(0, now_filetime()) {
+                emit(output);
+            }
             // 等停止信号，不再做任何事
             while !matches!(receiver.recv(), Ok(Signal::Stop) | Err(_)) {}
             return;
         }
     };
-    let session_token = manager
+    let current_token = manager
         .CurrentSessionChanged(&TypedEventHandler::new({
+            let signals = signals.clone();
+            move |_, _| {
+                let _ = signals.send(Signal::Session);
+                Ok(())
+            }
+        }))
+        .ok();
+    let sessions_token = manager
+        .SessionsChanged(&TypedEventHandler::new({
             let signals = signals.clone();
             move |_, _| {
                 let _ = signals.send(Signal::Session);
@@ -98,65 +172,49 @@ fn run(signals: Sender<Signal>, receiver: Receiver<Signal>, emit: &dyn Fn(WpeMed
     let mut watcher = Watcher::new(emit, signals);
     watcher.attach(manager.GetCurrentSession().ok());
     loop {
-        match receiver.recv_timeout(TICK) {
-            Ok(Signal::Stop) | Err(RecvTimeoutError::Disconnected) => break,
-            Ok(Signal::Session) => watcher.attach(manager.GetCurrentSession().ok()),
-            Ok(Signal::Properties) => watcher.refresh_properties(),
-            Ok(Signal::Playback) => watcher.refresh_playback(),
-            Ok(Signal::Timeline) => watcher.refresh_timeline(),
-            Err(RecvTimeoutError::Timeout) => watcher.tick(),
+        let first = match receiver.recv_timeout(TICK) {
+            Ok(signal) => signal,
+            Err(RecvTimeoutError::Timeout) => {
+                watcher.tick();
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
+        let plan = plan_batch(&collect_batch(first, &receiver), watcher.generation);
+        if plan.stop {
+            break;
+        }
+        if plan.reattach {
+            watcher.attach(manager.GetCurrentSession().ok());
+            continue;
+        }
+        if plan.properties {
+            watcher.refresh_properties();
+        }
+        if plan.playback {
+            watcher.refresh_playback();
+        }
+        if plan.timeline {
+            watcher.refresh_timeline();
         }
     }
     watcher.detach();
-    if let Some(token) = session_token {
+    if let Some(token) = current_token {
         let _ = manager.RemoveCurrentSessionChanged(token);
     }
-}
-
-/// 时间轴的最后一次读数，用来在播放中外推位置。
-#[derive(Clone, Copy)]
-struct Timeline {
-    position: f64,
-    duration: f64,
-    /// 读数时间（1601 起的 100ns）；0 表示播放器没给
-    updated: i64,
-}
-
-impl Timeline {
-    /// `now` 时刻的位置：播放中按读数时间外推；读数时间在未来或过于久远都不可信，不外推。
-    fn position_at(&self, playing: bool, now: i64) -> f64 {
-        if !playing || self.updated <= 0 {
-            return self.position;
-        }
-        let elapsed = (now - self.updated) as f64 / 1e7;
-        if (0.0..86_400.0).contains(&elapsed) {
-            (self.position + elapsed).min(self.duration)
-        } else {
-            self.position
-        }
-    }
-
-    /// 以 `now` 为新读数时间，位置取按 `playing` 外推到 `now` 的值。
-    fn rebased(self, playing: bool, now: i64) -> Self {
-        Self {
-            position: self.position_at(playing, now),
-            updated: now,
-            ..self
-        }
+    if let Some(token) = sessions_token {
+        let _ = manager.RemoveSessionsChanged(token);
     }
 }
 
 struct Watcher<'a> {
-    emit: &'a dyn Fn(WpeMediaMessage),
+    emit: &'a dyn Fn(Output),
     signals: Sender<Signal>,
     session: Option<Session>,
     tokens: Vec<(EventKind, EventRegistrationToken)>,
-    last_properties: Option<WpeMediaMessage>,
-    /// 上次推送的封面字节哈希；外层 None 表示还没推过
-    last_thumbnail: Option<Option<u64>>,
-    last_playback: Option<u8>,
-    timeline: Option<Timeline>,
-    last_timeline: Option<(f64, f64)>,
+    projections: Projections,
+    /// 挂接代数：每次挂接加一，挂在会话上的事件发的信号带着它（[`plan_batch`] 只认当前代数）
+    generation: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -167,23 +225,22 @@ enum EventKind {
 }
 
 impl<'a> Watcher<'a> {
-    fn new(emit: &'a dyn Fn(WpeMediaMessage), signals: Sender<Signal>) -> Self {
+    fn new(emit: &'a dyn Fn(Output), signals: Sender<Signal>) -> Self {
         Self {
             emit,
             signals,
             session: None,
             tokens: Vec::new(),
-            last_properties: None,
-            last_thumbnail: None,
-            last_playback: None,
-            timeline: None,
-            last_timeline: None,
+            projections: Projections::default(),
+            generation: 0,
         }
     }
 
-    /// 换到新的当前会话（可能为空）并全量刷新。
+    /// 换到新的当前会话（可能为空）并全量刷新。代数加一：旧会话上已发出、还没处理的信号从此作废。
     fn attach(&mut self, session: Option<Session>) {
         self.detach();
+        self.generation += 1;
+        let generation = self.generation;
         if let Some(session) = &session {
             for kind in [
                 EventKind::Properties,
@@ -195,19 +252,19 @@ impl<'a> Watcher<'a> {
                 let token = match kind {
                     EventKind::Properties => {
                         session.MediaPropertiesChanged(&TypedEventHandler::new(move |_, _| {
-                            let _ = signals.send(Signal::Properties);
+                            let _ = signals.send(Signal::Properties(generation));
                             Ok(())
                         }))
                     }
                     EventKind::Playback => {
                         session.PlaybackInfoChanged(&TypedEventHandler::new(move |_, _| {
-                            let _ = signals.send(Signal::Playback);
+                            let _ = signals.send(Signal::Playback(generation));
                             Ok(())
                         }))
                     }
                     EventKind::Timeline => {
                         session.TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
-                            let _ = signals.send(Signal::Timeline);
+                            let _ = signals.send(Signal::Timeline(generation));
                             Ok(())
                         }))
                     }
@@ -219,6 +276,12 @@ impl<'a> Watcher<'a> {
             }
         }
         self.session = session;
+        if self.session.is_none() {
+            // 没有会话：网页投影推空属性 / 状态 0，场景投影各类回到缺省值
+            let outputs = self.projections.no_session(now_filetime());
+            self.send_all(outputs);
+            return;
+        }
         self.refresh_properties();
         self.refresh_playback();
         self.refresh_timeline();
@@ -236,86 +299,26 @@ impl<'a> Watcher<'a> {
         }
         self.tokens.clear();
         self.session = None;
-        self.timeline = None;
+        self.projections.detach();
     }
 
-    fn send(&self, message: WpeMediaMessage) {
-        (self.emit)(message);
+    fn send_all(&self, outputs: Vec<Output>) {
+        for output in outputs {
+            (self.emit)(output);
+        }
     }
 
-    /// 属性与封面：没有会话时都清空。
+    /// 属性与封面（一次读取，交给两个投影）。
     fn refresh_properties(&mut self) {
-        let props = self.session.as_ref().and_then(|session| {
-            session
-                .TryGetMediaPropertiesAsync()
-                .and_then(|op| op.get())
-                .ok()
-        });
-        let message = match &props {
-            Some(props) => {
-                let text = |value: windows::core::Result<windows::core::HSTRING>| {
-                    value.map(|s| s.to_string()).unwrap_or_default()
-                };
-                let genres = props
-                    .Genres()
-                    .map(|list| {
-                        let count = list.Size().unwrap_or(0);
-                        (0..count)
-                            .filter_map(|i| list.GetAt(i).ok())
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-                    .unwrap_or_default();
-                let content_type = match props.PlaybackType().and_then(|t| t.Value()) {
-                    Ok(MediaPlaybackType::Video) => "video",
-                    Ok(MediaPlaybackType::Image) => "image",
-                    _ => "music",
-                };
-                WpeMediaMessage::Properties {
-                    title: text(props.Title()),
-                    artist: text(props.Artist()),
-                    sub_title: text(props.Subtitle()),
-                    album_title: text(props.AlbumTitle()),
-                    album_artist: text(props.AlbumArtist()),
-                    genres,
-                    content_type: content_type.to_string(),
-                }
-            }
-            None => empty_properties(),
-        };
-        if self.last_properties.as_ref() != Some(&message) {
-            self.last_properties = Some(message.clone());
-            self.send(message);
-        }
-        self.refresh_thumbnail(props.and_then(|props| props.Thumbnail().ok()));
-    }
-
-    /// 封面：按字节哈希判断是否变化，变了才解码、缩小、编码并算颜色。
-    fn refresh_thumbnail(&mut self, reference: Option<IRandomAccessStreamReference>) {
-        let bytes = reference
-            .and_then(|reference| read_stream(&reference).ok())
-            .filter(|bytes| !bytes.is_empty());
-        let hash = bytes.as_ref().map(|bytes| {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            bytes.hash(&mut hasher);
-            hasher.finish()
-        });
-        if self.last_thumbnail == Some(hash) {
+        let Some(session) = &self.session else {
             return;
-        }
-        self.last_thumbnail = Some(hash);
-        let message = match bytes {
-            Some(bytes) => encode_thumbnail(&bytes).unwrap_or_else(|error| {
-                tracing::debug!("封面解码失败，按无封面处理: {error}");
-                thumbnail_message(String::new(), default_colors())
-            }),
-            None => thumbnail_message(String::new(), default_colors()),
         };
-        self.send(message);
+        let raw = read_properties(session);
+        let outputs = self.projections.properties(raw.as_ref());
+        self.send_all(outputs);
     }
 
-    /// 播放状态：Playing → 1、Paused → 2，其余（含没有会话）→ 0。
+    /// 播放状态：Playing → 1、Paused → 2，其余 → 0。
     fn refresh_playback(&mut self) {
         let status = self
             .session
@@ -327,115 +330,79 @@ impl<'a> Watcher<'a> {
             Some(PlaybackStatus::Paused) => 2,
             _ => 0,
         };
-        if self.last_playback != Some(state) {
-            // 播放器的时间轴读数常停在上次跳转。状态切换时按旧状态把当前位置定成新基准，
-            // 避免暂停推回旧读数、恢复时把暂停时长也外推进去。
-            let was_playing = self.last_playback == Some(1);
-            if let Some(timeline) = self.timeline.as_mut() {
-                *timeline = timeline.rebased(was_playing, now_filetime());
-            }
-            self.last_playback = Some(state);
-            self.send(WpeMediaMessage::Playback { state });
-            self.push_timeline();
-        }
+        let outputs = self.projections.playback(state, now_filetime());
+        self.send_all(outputs);
     }
 
-    /// 重新读时间轴；播放器不提供（`EndTime` 不大于 `StartTime`）就不推。
+    /// 重新读时间轴。
     fn refresh_timeline(&mut self) {
         let read = self
             .session
             .as_ref()
             .and_then(|session| session.GetTimelineProperties().ok())
             .and_then(|props| {
-                let start = props.StartTime().ok()?.Duration;
-                let end = props.EndTime().ok()?.Duration;
-                let position = props.Position().ok()?.Duration;
-                let updated = props
-                    .LastUpdatedTime()
-                    .map(|t| t.UniversalTime)
-                    .unwrap_or(0);
-                let duration = (end - start) as f64 / 1e7;
-                (duration > 0.0).then(|| Timeline {
-                    position: ((position - start) as f64 / 1e7).clamp(0.0, duration),
-                    duration,
-                    updated,
+                Some(RawTimeline {
+                    start: props.StartTime().ok()?.Duration,
+                    end: props.EndTime().ok()?.Duration,
+                    position: props.Position().ok()?.Duration,
+                    updated: props
+                        .LastUpdatedTime()
+                        .map(|t| t.UniversalTime)
+                        .unwrap_or(0),
                 })
             });
-        self.timeline = read;
-        self.push_timeline();
+        let outputs = self.projections.timeline(read, now_filetime());
+        self.send_all(outputs);
     }
 
-    /// 每秒：播放中按读数时间外推位置并推送。
+    /// 每秒：网页投影按读数时间外推播放中的位置。
     fn tick(&mut self) {
-        if self.last_playback == Some(1) {
-            self.push_timeline();
-        }
-    }
-
-    fn push_timeline(&mut self) {
-        let Some(timeline) = self.timeline else {
-            return;
-        };
-        let position = timeline.position_at(self.last_playback == Some(1), now_filetime());
-        let current = (position, timeline.duration);
-        let changed = match self.last_timeline {
-            Some((last_position, last_duration)) => {
-                (last_position - position).abs() >= 0.05 || last_duration != timeline.duration
-            }
-            None => true,
-        };
-        if changed {
-            self.last_timeline = Some(current);
-            self.send(WpeMediaMessage::Timeline {
-                position,
-                duration: timeline.duration,
-            });
-        }
+        let outputs = self.projections.tick(now_filetime());
+        self.send_all(outputs);
     }
 }
 
-fn empty_properties() -> WpeMediaMessage {
-    WpeMediaMessage::Properties {
-        title: String::new(),
-        artist: String::new(),
-        sub_title: String::new(),
-        album_title: String::new(),
-        album_artist: String::new(),
-        genres: String::new(),
-        content_type: "music".to_string(),
-    }
-}
-
-fn thumbnail_message(thumbnail: String, colors: ThumbnailColors) -> WpeMediaMessage {
-    WpeMediaMessage::Thumbnail {
+/// 读一次属性与封面原始字节；读取失败返回 `None`。
+fn read_properties(session: &Session) -> Option<RawProperties> {
+    let props = session
+        .TryGetMediaPropertiesAsync()
+        .and_then(|op| op.get())
+        .ok()?;
+    let text = |value: windows::core::Result<windows::core::HSTRING>| {
+        value.map(|s| s.to_string()).unwrap_or_default()
+    };
+    let genres = props
+        .Genres()
+        .map(|list| {
+            let count = list.Size().unwrap_or(0);
+            (0..count)
+                .filter_map(|i| list.GetAt(i).ok())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // 空引用 / 读不出都按 0（未知）
+    let playback_type = props
+        .PlaybackType()
+        .and_then(|t| t.Value())
+        .map(|t| t.0)
+        .unwrap_or(0);
+    let thumbnail = props
+        .Thumbnail()
+        .ok()
+        .and_then(|reference| read_stream(&reference).ok())
+        .filter(|bytes| !bytes.is_empty());
+    Some(RawProperties {
+        app_id: text(session.SourceAppUserModelId()),
+        title: text(props.Title()),
+        artist: text(props.Artist()),
+        sub_title: text(props.Subtitle()),
+        album_title: text(props.AlbumTitle()),
+        album_artist: text(props.AlbumArtist()),
+        genres,
+        playback_type,
         thumbnail,
-        primary_color: colors.primary,
-        secondary_color: colors.secondary,
-        tertiary_color: colors.tertiary,
-        text_color: colors.text,
-        high_contrast_color: colors.high_contrast,
-    }
-}
-
-/// 封面字节 → 长边不超过 512 的 PNG data URL 与五个颜色。
-fn encode_thumbnail(bytes: &[u8]) -> Result<WpeMediaMessage, image::ImageError> {
-    let mut image = image::load_from_memory(bytes)?;
-    if image.width().max(image.height()) > THUMBNAIL_MAX_SIDE {
-        image = image.thumbnail(THUMBNAIL_MAX_SIDE, THUMBNAIL_MAX_SIDE);
-    }
-    let sample = image::imageops::resize(
-        &image.to_rgba8(),
-        COLOR_SAMPLE_SIDE,
-        COLOR_SAMPLE_SIDE,
-        image::imageops::FilterType::Triangle,
-    );
-    let mut png = Vec::new();
-    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)?;
-    let url = format!(
-        "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(&png)
-    );
-    Ok(thumbnail_message(url, thumbnail_colors(&sample)))
+    })
 }
 
 fn read_stream(reference: &IRandomAccessStreamReference) -> windows::core::Result<Vec<u8>> {
@@ -461,43 +428,103 @@ fn now_filetime() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::Timeline;
-
-    const SECOND: i64 = 10_000_000;
+    use super::*;
 
     #[test]
-    fn pause_and_resume_keep_the_position() {
-        let start = 100 * SECOND;
-        let timeline = Timeline {
-            position: 0.0,
-            duration: 15.0,
-            updated: start,
-        };
-        let paused = timeline.rebased(true, start + 7 * SECOND);
-        assert_eq!(paused.position_at(false, start + 30 * SECOND), 7.0);
-        let resumed = paused.rebased(false, start + 30 * SECOND);
-        assert_eq!(resumed.position_at(true, start + 30 * SECOND), 7.0);
-        assert_eq!(resumed.position_at(true, start + 32 * SECOND), 9.0);
+    fn session_switch_in_the_batch_drops_the_old_session_signals() {
+        // P11c 走查：夹具退出时它先报播放状态，约 17 ms 后才切会话；同一批里只重新挂接，旧会话那条状态不读
+        let plan = plan_batch(&[Signal::Playback(3), Signal::Session], 3);
+        assert_eq!(
+            plan,
+            BatchPlan {
+                reattach: true,
+                ..BatchPlan::default()
+            }
+        );
     }
 
     #[test]
-    fn extrapolation_is_clamped_and_untrusted_times_ignored() {
-        let start = 100 * SECOND;
-        let timeline = Timeline {
-            position: 12.0,
-            duration: 15.0,
-            updated: start,
-        };
-        assert_eq!(timeline.position_at(true, start + 7 * SECOND), 15.0);
-        assert_eq!(
-            Timeline {
-                updated: 0,
-                ..timeline
-            }
-            .position_at(true, start),
-            12.0
+    fn signals_from_an_old_generation_are_dropped() {
+        // 挂接之后旧会话迟到的信号（WPE 丢掉不是当前会话发来的事件）
+        let plan = plan_batch(
+            &[
+                Signal::Properties(1),
+                Signal::Playback(1),
+                Signal::Timeline(1),
+            ],
+            2,
         );
-        assert_eq!(timeline.position_at(true, start - SECOND), 12.0);
-        assert_eq!(timeline.position_at(true, start + 86_400 * SECOND), 12.0);
+        assert_eq!(plan, BatchPlan::default());
+    }
+
+    #[test]
+    fn current_signals_are_read_once_per_kind() {
+        let plan = plan_batch(
+            &[
+                Signal::Properties(2),
+                Signal::Playback(2),
+                Signal::Properties(2),
+                Signal::Timeline(1),
+            ],
+            2,
+        );
+        assert_eq!(
+            plan,
+            BatchPlan {
+                properties: true,
+                playback: true,
+                ..BatchPlan::default()
+            }
+        );
+    }
+
+    #[test]
+    fn stop_wins_over_everything() {
+        let plan = plan_batch(&[Signal::Playback(2), Signal::Session, Signal::Stop], 2);
+        assert_eq!(
+            plan,
+            BatchPlan {
+                stop: true,
+                reattach: true,
+                ..BatchPlan::default()
+            }
+        );
+    }
+
+    #[test]
+    fn batch_collects_what_arrives_within_the_poll_window() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Signal::Session).unwrap();
+        let late = std::thread::spawn(move || {
+            std::thread::sleep(POLL * 3);
+            let _ = sender.send(Signal::Timeline(1));
+        });
+        let start = Instant::now();
+        let batch = collect_batch(Signal::Playback(1), &receiver);
+        assert_eq!(batch, vec![Signal::Playback(1), Signal::Session]);
+        assert!(start.elapsed() >= POLL);
+        late.join().unwrap();
+        // 窗口之后到的留给下一批
+        assert_eq!(receiver.recv().unwrap(), Signal::Timeline(1));
+    }
+
+    #[test]
+    fn stop_returns_without_waiting() {
+        let (sender, receiver) = mpsc::channel::<Signal>();
+        let start = Instant::now();
+        assert_eq!(collect_batch(Signal::Stop, &receiver), vec![Signal::Stop]);
+        assert!(start.elapsed() < POLL);
+        sender.send(Signal::Stop).unwrap();
+        let start = Instant::now();
+        assert_eq!(
+            collect_batch(Signal::Session, &receiver),
+            vec![Signal::Session, Signal::Stop]
+        );
+        assert!(start.elapsed() < POLL);
+        drop(sender);
+        assert_eq!(
+            collect_batch(Signal::Session, &receiver),
+            vec![Signal::Session, Signal::Stop]
+        );
     }
 }

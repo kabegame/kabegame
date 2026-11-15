@@ -1801,7 +1801,7 @@ describe.skipIf(!root || !existsSync(wasm) || !existsSync(genericImage4))(
       expect(entry.code.startsWith(a2cWgsl)).toBe(true);
       const added = entry.code.slice(a2cWgsl.length);
       expect(added).toContain(`fn ${entry.entryPoint}(`);
-      expect(added).toMatch(/if !\(kb_a2c_out\.\w+\.a > 0\.5\) \{ discard; \} return kb_a2c_out;/);
+      expect(added).toMatch(/if !\(kb_a2c_out\.\w+\.a >= 0\.500244140625\) \{ discard; \} return kb_a2c_out;/);
     });
   },
 );

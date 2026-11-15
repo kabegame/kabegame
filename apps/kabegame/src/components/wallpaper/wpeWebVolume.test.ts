@@ -36,7 +36,13 @@ describe("wpeWebVolume 协议", () => {
     expect(clampWallpaperVolume(Number.NaN)).toBe(1);
     expect(webHostVolume(0.6, false)).toBe(0.6);
     expect(webHostVolume(0.6, true)).toBe(0);
-    expect(wpeVolumeMessage(0.3, true)).toEqual({ type: WPE_VOLUME_MESSAGE, volume: 0.3, paused: true });
+    expect(wpeVolumeMessage(0.3, true)).toEqual({
+      type: WPE_VOLUME_MESSAGE,
+      volume: 0.3,
+      paused: true,
+      interactive: false,
+    });
+    expect(wpeVolumeMessage(1, false, true).interactive).toBe(true);
   });
 });
 
@@ -703,6 +709,57 @@ describe("wpe_shim 暂停冻结", () => {
     env.runFrame();
     env.runFrame();
     expect(media.paused).toBe(false);
+  });
+});
+
+describe("wpe_shim 原生鼠标登记", () => {
+  const ATTACH = "plugin:cursor|attach_frame";
+  const DETACH = "plugin:cursor|detach_frame";
+  function cursorCalls(env: ReturnType<typeof createShimEnv>): string[] {
+    const invoke = (env.sandbox.__TAURI_INTERNALS__ as { invoke: ReturnType<typeof vi.fn> }).invoke;
+    return invoke.mock.calls.map((call) => call[0] as string).filter((command) => command.startsWith("plugin:cursor|"));
+  }
+
+  it("可交互且没暂停时登记，暂停或不交互时解除，只在变化时调", async () => {
+    const env = createShimEnv(null);
+    // 应用背景：不交互，不登记
+    env.sendFromHost(wpeVolumeMessage(1, false, false));
+    await tick();
+    expect(cursorCalls(env)).toEqual([]);
+    env.sendFromHost(wpeVolumeMessage(1, false, true));
+    // 只是音量变了：不重复登记
+    env.sendFromHost(wpeVolumeMessage(0.5, false, true));
+    await tick();
+    expect(cursorCalls(env)).toEqual([ATTACH]);
+    // 暂停：解除；恢复：再登记
+    env.sendFromHost(wpeVolumeMessage(0.5, true, true));
+    env.sendFromHost(wpeVolumeMessage(0.5, false, true));
+    await tick();
+    expect(cursorCalls(env)).toEqual([ATTACH, DETACH, ATTACH]);
+    // 伪造的消息不改登记；缺 interactive 按不交互
+    env.sendFromHost(wpeVolumeMessage(1, false, false), { isTrusted: false });
+    await tick();
+    expect(cursorCalls(env)).toEqual([ATTACH, DETACH, ATTACH]);
+    env.sendFromHost({ type: WPE_VOLUME_MESSAGE, volume: 1, paused: false });
+    await tick();
+    expect(cursorCalls(env)).toEqual([ATTACH, DETACH, ATTACH, DETACH]);
+  });
+
+  it("前一次调用返回之前不发下一次，失败只警告", async () => {
+    const env = createShimEnv(null);
+    const invoke = (env.sandbox.__TAURI_INTERNALS__ as { invoke: ReturnType<typeof vi.fn> }).invoke;
+    let finishAttach: (value: unknown) => void = () => {};
+    invoke.mockImplementation((command: string) =>
+      command === ATTACH ? new Promise((resolve) => (finishAttach = resolve)) : Promise.reject(new Error("denied")),
+    );
+    env.sendFromHost(wpeVolumeMessage(1, false, true));
+    env.sendFromHost(wpeVolumeMessage(1, true, true));
+    await tick();
+    expect(cursorCalls(env)).toEqual([ATTACH]);
+    finishAttach(true);
+    await tick();
+    expect(cursorCalls(env)).toEqual([ATTACH, DETACH]);
+    expect(env.consoleSpy.warn).toHaveBeenCalledWith("[kb-wpe] pointer", expect.any(Error));
   });
 });
 
