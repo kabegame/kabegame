@@ -334,7 +334,7 @@ describe("SceneScript API（FakeRealm）", () => {
     );
     expect(engine.userProperties).not.toBe(first);
     expect(engine.userProperties).toEqual({ tint: new Vec3(0, 1, 0), speed: 2 });
-    for (const name of ["registerAsset", "openUserShortcut", "requestFeatures"])
+    for (const name of ["registerAsset", "requestFeatures"])
       expect(() => (engine[name] as () => void)()).toThrow(TypeError);
     // `input`（P6c）已装上：成员见下面的「光标交互」一节
     expect(h.realm.global.input).toBeDefined();

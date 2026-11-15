@@ -52,7 +52,9 @@ import { readScriptState, recordRecompileWrite, writeScriptState } from "./scrip
 import { browserStorage, clearSceneStorage } from "./script/storage";
 import { SceneTexts, type TextRelayouter } from "./text/host";
 import type { TextLayout } from "./text/layout";
-import { UserTextureSources, type UserTextureProbe } from "./usertex/sources";
+import { shortcutRequest } from "./shortcut/message";
+import { ShortcutToken } from "./shortcut/token";
+import { parseShortcutIcon, UserTextureSources, type ShortcutIcon, type UserTextureProbe } from "./usertex/sources";
 import { videoSourceKey } from "./video/player";
 import { layerVideoSource, SceneVideos, type SceneVideoProbe, type VideoSink } from "./video/sceneVideos";
 
@@ -70,6 +72,13 @@ interface SceneTarget {
 export interface SceneProperty {
   type: string;
   value: unknown;
+  /**
+   * 快捷方式项（`usershortcut`，P11d）：后端给的形状，`value` 是原值哈希的键（空 = 没配）。`isbound` / `commandtype` / `file` 只进脚本
+   * `applyUserProperties` 的增量，`engine.userProperties` 里不带（`script/api.ts` 的 `scriptUserProperties`）；别的类型没有。
+   */
+  isbound?: boolean;
+  commandtype?: string;
+  file?: string;
 }
 
 /** 宿主计数（dev 探针读）：就地应用次数与每次重编译的原因 / 键。 */
@@ -294,7 +303,14 @@ export class SceneHost {
     log: (message) => this.options.report.debug(`场景壁纸 ${this.options.imageId} ${message}`),
     // 用户视频的播放器 warning（P11b 步骤 4）
     report: { warn: (message, detail) => this.options.report.warn(message, detail) },
+    // 快捷方式图标（P11d）：按图片 id 与属性名向后端要，非 Windows、没配、取不到都是 0 字节（= 缺省纹理）
+    shortcutIcon: (name) => this.fetchShortcutIcon(name),
   });
+  /**
+   * 快捷方式的点击令牌（P11d，`shortcut/token.ts`）：渲染器每个实时帧在光标派发之前 `beginFrame`、之后 `endFrame`（`ensureRenderer` 的 `cursor`），
+   * `engine.openUserShortcut` 经 `openUserShortcut` 取它。
+   */
+  private readonly shortcutToken = new ShortcutToken();
   private readonly textureCache = new TextureDecodeCache(this.reader);
   private targetTask: Promise<SceneTarget> | null = null;
   private readonly unlisteners: UnlistenFn[] = [];
@@ -306,6 +322,8 @@ export class SceneHost {
       report: SceneReporter;
       /** 加载时等用户纹理预解码的上限（毫秒），缺省 `USER_TEXTURE_PRIME_TIMEOUT_MS`；单测用。 */
       userTexturePrimeTimeoutMs?: number;
+      /** 把快捷方式启动请求交给父页面（P11d）；缺省 `window.parent.postMessage(消息, "*")`，单测用。 */
+      postToParent?: (message: unknown) => void;
     },
   ) {
     this.userTextures.onReady = (name) => this.onUserTextureReady(name);
@@ -871,6 +889,9 @@ export class SceneHost {
         },
         // 全局 `input`（P6c）：每次读都取渲染器最近一帧给的光标快照
         cursorInput: () => this.cursorInput,
+        // 快捷方式（P11d）：回调名取自运行时，令牌与属性检查在 `openUserShortcut`
+        activeCallback: () => this.runtime?.activeCallback ?? null,
+        openUserShortcut: (name) => this.openUserShortcut(name),
         // 关键帧动画的 IAnimation（P10b）：待用播放器属于脚本当前看到的 bundle 时取它（首次加载的 init），否则取正在播的那份；每次现取，
         // 重编译换了播放器也接得上
         animation: (id) => {
@@ -1068,11 +1089,11 @@ export class SceneHost {
 
   /**
    * 加载时对 bundle 的属性来源按当前属性值预先解码，全部完成（或失败、回缺省）才建场景，第一帧就是用户图（P11b 步骤 2）。值只认字符串，别的
-   * 类型（`slider` 之类）当空串（缺省纹理）。没有用户纹理的 bundle 不碰来源表。快捷方式与封面来源归 P11c、P11d，这里只处理属性。
+   * 类型（`slider` 之类）当空串（缺省纹理）。没有用户纹理的 bundle 不碰来源表。封面来源（P11c）不在这里（媒体模块交图），快捷方式（P11d）的值是键、图标经 `shortcutIcon` 取。
    */
   private async primeUserTextures(bundle: SceneBundle): Promise<boolean> {
-    // 手写的测试 bundle 可能没有这个表
-    const sources = (bundle.userTextures ?? []).filter((source) => source.kind === "property");
+    // 手写的测试 bundle 可能没有这个表；封面来源（P11c）由媒体模块经 `provide` 交图，不在这里。快捷方式（P11d）的值是后端给的键，图标经 `shortcutIcon` 取
+    const sources = (bundle.userTextures ?? []).filter((source) => source.kind !== "system");
     if (!sources.length) return true;
     const limit = this.options.userTexturePrimeTimeoutMs ?? USER_TEXTURE_PRIME_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1080,7 +1101,7 @@ export class SceneHost {
       .prime(
         sources.map((source) => {
           const value = this.properties.get(source.name)?.value;
-          return [source.name, typeof value === "string" ? value : ""] as const;
+          return [source.name, typeof value === "string" ? value : "", source.kind] as const;
         }),
       )
       .then(() => true);
@@ -1094,6 +1115,29 @@ export class SceneHost {
         `场景壁纸 ${this.options.imageId} 的用户纹理 ${limit} ms 内没解码完，先用缺省纹理建场景，解码完成后换上`,
       );
     return finished;
+  }
+
+  /** 向后端要快捷方式的图标（P11d）：没有图片 id、没配、取不到、非 Windows 都是 null；失败抛错（来源表记成失败，用缺省纹理）。 */
+  private async fetchShortcutIcon(name: string): Promise<ShortcutIcon | null> {
+    const imageId = this.options.imageId;
+    if (!imageId) return null;
+    return parseShortcutIcon(await invoke<ArrayBuffer>("wpe_scene_shortcut_icon", { imageId, name }));
+  }
+
+  /**
+   * `engine.openUserShortcut` 的宿主一侧（P11d，WPE 宿主的三种返回）：先取点击令牌（没有 → 2，调用方抛错；令牌在查属性之前就消耗，同 WPE），再查属性全集：
+   * `type === "usershortcut"` 且 `isbound === true` 时把属性名 `postMessage` 给父页面（`shortcut/message.ts`，真正启动由应用页核对用户激活后调
+   * `wpe_open_user_shortcut`）并返回 1，否则 0。这里的门禁只约束守规矩的脚本（脚本 realm 同源、能拿到 `parent`），安全边界在应用页与后端。
+   *
+   * 非 Windows：后端给的 `isbound` 一律为 false，这里恒返回 0。TODO:[WPE_SCENE] macOS / Linux 的快捷方式（本机测不了）。
+   */
+  private openUserShortcut(name: string): 0 | 1 | 2 {
+    if (!this.shortcutToken.take()) return 2;
+    const property = this.properties.get(name);
+    if (property?.type !== "usershortcut" || property.isbound !== true) return 0;
+    const post = this.options.postToParent ?? ((message: unknown) => window.parent.postMessage(message, "*"));
+    post(shortcutRequest(name));
+    return 1;
   }
 
   /** dev 探针（P11b 步骤 2）：每个用户纹理属性来源的当前值、状态、尺寸与最近一次解码用时；没有来源时为空。 */
@@ -1236,10 +1280,14 @@ export class SceneHost {
         active: () => this.state !== "fallback" && (this.runtime?.hasCursorCallbacks ?? false),
         input: (snapshot) => {
           this.cursorInput = snapshot;
+          // 快捷方式的点击令牌（P11d）：左键按下沿在本帧派发之前发（渲染器先 `input`、再 `events`、最后 `end`）
+          this.shortcutToken.beginFrame(snapshot.leftDown);
         },
         events: (dispatches) => {
           for (const item of dispatches) this.runtime?.cursorEvent(item.object, item.callback, item.world, item.local);
         },
+        // 松开沿在本帧派发之后收（没有派发的帧也要调，所以不放在 `events` 里）
+        end: (snapshot) => this.shortcutToken.endFrame(snapshot.leftDown),
       },
       // puppet（P12a 步骤 4）：用户属性写进状态后这一帧就读到（读的是渲染器正在画的那份状态）
       stepPuppets: (dt) => {
@@ -1493,11 +1541,12 @@ export class SceneHost {
           puppets.refresh(stateSink(state));
           this.scenePuppets = puppets;
           // 运行中属性写进状态时同步交给来源表解码（P11b 步骤 2）；解码完成再经 `onUserTextureReady` 标脏
-          state.onUserTexture = (name, value) => this.userTextures.setValue(name, value);
+          const kinds = new Map((bundle.userTextures ?? []).map((source) => [source.name, source.kind] as const));
+          state.onUserTexture = (name, value) => this.userTextures.setValue(name, value, kinds.get(name));
           // 预解码超时：建场景时这些槽用的是缺省纹理，超时后才解完的那几个在建场景前的 `onReady` 找不到状态、没标脏，这里补标，第一次 `sync` 换上
           if (!primed)
             for (const source of bundle.userTextures ?? [])
-              if (source.kind === "property" && this.userTextures.status(source.name) === "ready")
+              if (source.kind !== "system" && this.userTextures.status(source.name) === "ready")
                 state.touchUserTexture(source.name);
           // 渲染器从这一帧起画这份 bundle：视频的下标按它换算（`videoSink`）
           this.drawingBundle = bundle;

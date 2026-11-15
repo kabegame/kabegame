@@ -122,6 +122,30 @@ pub async fn wpe_scene_cursor<R: tauri::Runtime>(
     }
 }
 
+/// 场景宿主取快捷方式图标（P11d）：按图片 id 读 metadata 里这一项的值，Windows 上照 winrtutil 取正方形图标，
+/// 回 `[宽 u32 LE][高 u32 LE][RGBA，直通 alpha]`；没配置、取不到、非 Windows 回 0 字节。图片要是库内场景、
+/// 属性类型要是 `usershortcut`，值只取用户配的（不取工程缺省值）。进 `wpe-scene-host.toml`。
+#[tauri::command]
+pub async fn wpe_scene_shortcut_icon(
+    image_id: String,
+    name: String,
+) -> Result<tauri::ipc::Response, String> {
+    let bytes = crate::wallpaper::wpe_shortcut::icon(&image_id, &name)
+        .await?
+        .map(|icon| icon.to_ipc_bytes())
+        .unwrap_or_default();
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// 启动场景的快捷方式（P11d）。只登记进 `generate_handler!`、不进任何 `permissions/*.toml`：只有主窗口与壁纸窗口的
+/// 应用页（免 ACL）调得到，场景宿主与网页壁纸都调不到；应用页负责核对用户激活并传自己持有的图片 id。
+/// 图片要是库内场景；属性在 `project.json` 里要是 `usershortcut`；值只取用户配过的。Windows 上
+/// `ShellExecuteW` 返回值 > 32 为成功（`true`），没配返回 `false`，其它平台报错。
+#[tauri::command]
+pub async fn wpe_open_user_shortcut(image_id: String, name: String) -> Result<bool, String> {
+    crate::wallpaper::wpe_shortcut::launch(&image_id, &name).await
+}
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum WpeSceneReport {

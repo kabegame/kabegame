@@ -26,10 +26,15 @@
  *     第一个请求的纹理名，后来的纹理名各自再开（同一份字节 / Blob）。
  *   - **推进**：GIF 只在画到时推进、每个渲染帧最多一次（帧号由 `beginFrame` 走，宿主暂停时不走）；视频的 30 帧规则与暂停同 `SceneVideos`。
  *     已知小差异：暂停期间改值新建的 GIF 第一次画到时用的是上一个实时帧的 frametime。HDR 视频（PQ / HLG，WPE 用 `rgba16float`）不做，照常 RGBA8。
+ * - **快捷方式图标**（P11d，`setValue(名字, 键, "usershortcut")`）：值是后端给的键（原值哈希，空串 = 没配），不是路径。键变了经注入的依赖
+ *   `shortcutIcon(名字)` 取图标（宿主实现为 `wpe_scene_shortcut_icon`，`parseShortcutIcon` 解字节），没有图标（0 字节、非 Windows、取不到）记成
+ *   「无图」、槽用缺省纹理。图标是整张直通 alpha 的 RGBA，不按参考尺寸裁，而是补透明边到槽的比例（`padRect`，居中、不裁）：`crop` 给出补边后的
+ *   纹理尺寸与图标的摆放（`UserTextureCrop.pad`），纹理名 `usershortcut_<键>x<round(比例·10)>`。解码结果按键缓存（同静态图）。
  */
 import { fileToUrl } from "../fileUrl";
 import { GifAnimation } from "./gif";
-import { cropRect, referenceRatio, textureKey, type CropRect } from "./crop";
+import type { UserTextureKind } from "../compile/usertextures";
+import { cropRect, padRect, referenceRatio, textureKey, type CropRect } from "./crop";
 import { pngGammaTable } from "./png";
 import {
   SEEK_END_MARGIN,
@@ -73,6 +78,11 @@ export interface UserTextureCrop {
   rect: CropRect;
   /** 静态图的整张源图；GIF 与视频为 null（内容由 `animation` 给）。 */
   image: UserTextureImage | null;
+  /**
+   * 快捷方式图标（P11d）：不裁切，`rect` 是补透明边后的纹理尺寸（`x` / `y` 为 0），整张 `image` 拷到纹理的 `pad` 偏移处，其余保持 0（透明）。
+   * 别的来源没有。
+   */
+  pad?: { x: number; y: number };
   /** GIF 与视频：同一个值、同一个纹理名在值没换过时是同一个对象；值换过之后是新对象（WPE 从头开始）。静态图没有。 */
   animation?: UserTextureAnimation;
 }
@@ -89,6 +99,30 @@ export interface UserTextureProvider {
    * GIF 不在这里推进，只在画到时推进（`UserTextureAnimation.drawn`）。
    */
   beginFrame?(frametime: number): void;
+}
+
+/** 后端给的快捷方式图标：宽高与直通 alpha 的 RGBA（`wpe_scene_shortcut_icon` 的约定格式，`parseShortcutIcon`）。 */
+export interface ShortcutIcon {
+  width: number;
+  height: number;
+  rgba: Uint8Array;
+}
+
+/**
+ * 解 `wpe_scene_shortcut_icon` 的返回字节：`[宽 u32 LE][高 u32 LE][RGBA，宽·高·4 字节]`。0 字节（没配、取不到、非 Windows）、头不全、宽高为 0、
+ * 长度对不上都返回 null（用缺省纹理）。
+ */
+export function parseShortcutIcon(bytes: ArrayBuffer | ArrayBufferView): ShortcutIcon | null {
+  const data =
+    bytes instanceof ArrayBuffer
+      ? new Uint8Array(bytes)
+      : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (data.length < 8) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const width = view.getUint32(0, true);
+  const height = view.getUint32(4, true);
+  if (width === 0 || height === 0 || data.length !== 8 + width * height * 4) return null;
+  return { width, height, rgba: data.subarray(8) };
 }
 
 export type UserTextureStatus = "none" | "loading" | "ready" | "empty" | "failed";
@@ -110,6 +144,13 @@ export interface UserTextureDeps {
   videoFactories: VideoFactories;
   /** 视频播放器的 warning 出口（宿主传它的 report）。 */
   report: VideoReport;
+  /**
+   * 向后端要快捷方式图标（P11d，参数是属性名）：宿主实现为 `invoke("wpe_scene_shortcut_icon", { imageId, name })` 再 `parseShortcutIcon`；
+   * 没有图标时 null，失败抛错（记成失败，用缺省纹理）。缺省没有图标。
+   */
+  shortcutIcon(name: string): Promise<ShortcutIcon | null>;
+  /** 把图标 RGBA 变成位图（`createImageBitmap(ImageData, { premultiplyAlpha: "none", colorSpaceConversion: "none" })`）。 */
+  bitmapFromIcon(icon: ShortcutIcon): Promise<ImageBitmap>;
 }
 
 /** `GifAnimation` 里来源表用到的部分（单测注入假的）。 */
@@ -175,6 +216,8 @@ interface Decoded {
   image: UserTextureImage;
   /** 纹理名 → 矩形：先请求的槽定比例。 */
   rects: Map<string, CropRect>;
+  /** 快捷方式图标（P11d）：纹理名 → 补边后的矩形（`x` / `y` 是图标的摆放）；先请求的槽定比例。 */
+  pads?: Map<string, CropRect>;
   decodeMs: number;
 }
 
@@ -287,6 +330,8 @@ interface Shared {
 
 interface Entry {
   value: string;
+  /** 来源种类（`setValue` 的第三个参数）：`usershortcut` 的值是键，图标经 `shortcutIcon` 取。 */
+  kind: UserTextureKind;
   status: UserTextureStatus;
   /** 当前值的解码结果（静态图 ready 时有）。 */
   decoded: Decoded | null;
@@ -316,8 +361,17 @@ function defaultDeps(read: (path: string) => Promise<Uint8Array>): UserTextureDe
     },
     videoFactories: {},
     report: { warn: () => {} },
+    shortcutIcon: () => Promise.resolve(null),
+    bitmapFromIcon: (icon) =>
+      createImageBitmap(
+        new ImageData(new Uint8ClampedArray(icon.rgba) as Uint8ClampedArray<ArrayBuffer>, icon.width, icon.height),
+        { premultiplyAlpha: "none", colorSpaceConversion: "none" },
+      ),
   };
 }
+
+/** 快捷方式图标在按值缓存里的键（和路径不会相撞）。 */
+const shortcutCacheKey = (value: string): string => `shortcut-icon:${value}`;
 
 /**
  * `seekVideos` 的目标时刻：超过时长按时长取模（视频纹理缺省循环），再钳到 `[0, duration − SEEK_END_MARGIN]`；时长未知时只钳下界。
@@ -386,16 +440,42 @@ export class UserTextureSources implements UserTextureProvider {
    * 设来源的值并开始异步解码。值没变什么都不做；变了：旧请求作废、旧值的 GIF / 视频放掉一份引用，空串当场记成无图，缓存命中当场换上，
    * 其余异步读文件解码（GIF / 视频同样，共用同一个值的已加载好的当场换上）。首次设空串也记一条（`status` 为 `empty`），不通知时机以外的差别。
    */
-  setValue(name: string, value: string): void {
+  setValue(name: string, value: string, sourceKind: UserTextureKind = "property"): void {
     if (this.disposed) return;
+    // 只分快捷方式与其它（属性、封面伪属性的取值路径相同），免得同一个值换种写法就重做
+    const kind: UserTextureKind = sourceKind === "usershortcut" ? "usershortcut" : "property";
     const previous = this.entries.get(name);
-    if (previous && previous.value === value) return;
-    const entry: Entry = { value, status: "loading", decoded: null, shared: null, seq: (previous?.seq ?? 0) + 1 };
+    if (previous && previous.value === value && previous.kind === kind) return;
+    const entry: Entry = {
+      value,
+      kind,
+      status: "loading",
+      decoded: null,
+      shared: null,
+      seq: (previous?.seq ?? 0) + 1,
+    };
     this.entries.set(name, entry);
     if (previous?.shared) this.releaseShared(previous.shared);
     if (value === "") {
       entry.status = "empty";
       this.onReady?.(name);
+      return;
+    }
+    // 快捷方式（P11d）：值是键，不是路径；按键缓存，没有就向后端要图标
+    if (kind === "usershortcut") {
+      const cacheKey = shortcutCacheKey(value);
+      const cached = this.cache.get(cacheKey);
+      if (cached) {
+        this.cache.delete(cacheKey);
+        this.cache.set(cacheKey, cached);
+        entry.decoded = cached;
+        entry.status = "ready";
+        entry.decodeMs = 0;
+        this.onReady?.(name);
+        return;
+      }
+      const task: Promise<void> = this.loadShortcut(name, entry).finally(() => this.inflight.delete(task));
+      this.inflight.add(task);
       return;
     }
     // 封面伪属性的值（P11c）：不读文件，按 `provide` 交来的图当场生效；没交过或 `null` 记成无图（槽用缺省纹理）
@@ -408,9 +488,9 @@ export class UserTextureSources implements UserTextureProvider {
       this.onReady?.(name);
       return;
     }
-    const kind = mediaKind(value);
-    if (kind !== "image") {
-      this.attachMedia(name, entry, kind);
+    const media = mediaKind(value);
+    if (media !== "image") {
+      this.attachMedia(name, entry, media);
       return;
     }
     const cached = this.cache.get(value);
@@ -467,14 +547,15 @@ export class UserTextureSources implements UserTextureProvider {
   }
 
   /** 批量设值并等全部结束：宿主加载时用，第一帧就是用户图。 */
-  async prime(values: Iterable<readonly [string, string]>): Promise<void> {
-    for (const [name, value] of values) this.setValue(name, value);
+  async prime(values: Iterable<readonly [string, string, UserTextureKind?]>): Promise<void> {
+    for (const [name, value, kind] of values) this.setValue(name, value, kind);
     await this.settled();
   }
 
   crop(name: string, reference: { width: number; height: number } | null): UserTextureCrop | null {
     const entry = this.entries.get(name);
     if (!entry || entry.status !== "ready") return null;
+    if (entry.kind === "usershortcut") return this.shortcutCrop(entry, reference);
     const ratio = reference ? referenceRatio(reference.width, reference.height) : 0;
     const key = textureKey(entry.value, ratio);
     const shared = entry.shared;
@@ -501,6 +582,29 @@ export class UserTextureSources implements UserTextureProvider {
       decoded.rects.set(key, rect);
     }
     return { key, image: decoded.image, rect };
+  }
+
+  /**
+   * 快捷方式图标的取法（P11d）：不裁切，补透明边到槽的比例（`padRect`）；纹理名 `usershortcut_<键>x<round(比例·10)>`，比例四舍五入到 0.1 相同的槽共用
+   * 一张、按先请求的槽的精确比例补。`reference` 为 null（`keepaspect`）时不补。
+   */
+  private shortcutCrop(entry: Entry, reference: { width: number; height: number } | null): UserTextureCrop | null {
+    const decoded = entry.decoded;
+    if (!decoded) return null;
+    const ratio = reference ? referenceRatio(reference.width, reference.height) : 0;
+    const key = textureKey(`usershortcut_${entry.value}`, ratio);
+    const pads = (decoded.pads ??= new Map());
+    let padded = pads.get(key);
+    if (!padded) {
+      padded = padRect(decoded.image.width, decoded.image.height, ratio);
+      pads.set(key, padded);
+    }
+    return {
+      key,
+      image: decoded.image,
+      rect: { x: 0, y: 0, width: padded.width, height: padded.height },
+      pad: { x: padded.x, y: padded.y },
+    };
   }
 
   /**
@@ -632,6 +736,42 @@ export class UserTextureSources implements UserTextureProvider {
       entry.decoded = decoded;
       entry.decodeMs = decoded.decodeMs;
       this.remember(entry.value, decoded);
+    }
+    this.onReady?.(name);
+  }
+
+  /** 向后端要快捷方式的图标、转成位图（P11d）：没有图标记成无图（`empty`），失败记 `failed`，都用缺省纹理；后发先至的结果丢掉。 */
+  private async loadShortcut(name: string, entry: Entry): Promise<void> {
+    const started = this.deps.now();
+    let decoded: Decoded | null = null;
+    let failure = "";
+    try {
+      const icon = await this.deps.shortcutIcon(name);
+      if (icon) {
+        const bitmap = await this.deps.bitmapFromIcon(icon);
+        decoded = {
+          image: { width: bitmap.width, height: bitmap.height, source: bitmap, gamma: null },
+          rects: new Map(),
+          decodeMs: this.deps.now() - started,
+        };
+      }
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    if (this.disposed || this.entries.get(name) !== entry) {
+      if (decoded) closeImage(decoded.image);
+      return;
+    }
+    if (decoded) {
+      entry.status = "ready";
+      entry.decoded = decoded;
+      entry.decodeMs = decoded.decodeMs;
+      this.remember(shortcutCacheKey(entry.value), decoded);
+    } else if (failure) {
+      entry.status = "failed";
+      this.deps.log(`用户纹理 ${name}：取快捷方式图标失败（${failure}），用缺省纹理`);
+    } else {
+      entry.status = "empty";
     }
     this.onReady?.(name);
   }

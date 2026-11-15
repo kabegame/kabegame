@@ -31,6 +31,8 @@ pub enum WpePropKind {
     Directory,
     /// 场景的「用户纹理」属性：值是本机图片 / GIF / 视频的绝对路径，只在场景壁纸上出现。
     SceneTexture,
+    /// 场景的快捷方式（P11d）：值是 `<类型>:<路径>[|<参数>]`（见 [`parse_user_shortcut`]），类型 file / directory / web / cmd。
+    UserShortcut,
     Group,
     Text,
 }
@@ -82,6 +84,7 @@ pub fn parse_defs(raw: &Value) -> Vec<WpePropDef> {
                 Some("file") => WpePropKind::File,
                 Some("directory") => WpePropKind::Directory,
                 Some("scenetexture") => WpePropKind::SceneTexture,
+                Some("usershortcut") => WpePropKind::UserShortcut,
                 Some("group") => WpePropKind::Group,
                 Some("text") | None if prop.get("text").is_some() => WpePropKind::Text,
                 _ => return None,
@@ -261,8 +264,109 @@ pub fn normalize_value(def: &WpePropDef, value: &Value) -> Result<Value, String>
             }
             Ok(Value::String(path))
         }
+        WpePropKind::UserShortcut => {
+            let text = value.as_str().ok_or_else(bad)?;
+            // 空串 = 清空（作者缺省值全是空串）
+            if text.is_empty() {
+                return Ok(Value::String(String::new()));
+            }
+            let shortcut = parse_user_shortcut(text).ok_or_else(bad)?;
+            if shortcut.kind != ShortcutKind::Web {
+                return Ok(Value::String(text.to_owned()));
+            }
+            // 照 WPE 面板的 JS：网址不以这四个前缀（区分大小写）开头时补 https://
+            let url = if ["http://", "https://", "www.", "steam://"]
+                .iter()
+                .any(|prefix| shortcut.path.starts_with(prefix))
+            {
+                shortcut.path
+            } else {
+                format!("https://{}", shortcut.path)
+            };
+            Ok(Value::String(format!("web:{url}")))
+        }
         WpePropKind::Group | WpePropKind::Text => Err(bad()),
     }
+}
+
+/// 快捷方式的目标类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShortcutKind {
+    File,
+    Directory,
+    Web,
+    Cmd,
+}
+
+/// 解析后的快捷方式值：`path` 是启动或取图标用的路径段（`cmd` 只有程序部分，`file` 不含 `|` 后的参数），
+/// `args` 是拆出的参数（`directory` / `web` 恒为空）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserShortcut {
+    pub kind: ShortcutKind,
+    pub path: String,
+    pub args: String,
+}
+
+/// 照 WPE `FUN_1401708c0` 拆值：第一个 `:` 之前是类型（`file` / `directory` / `web` / `cmd`），之后是内容；
+/// `file` 在第一个 `|` 处拆成「路径 | 参数」，`cmd` 在第一个空格处拆成「程序 参数」，另外两种不拆。
+/// 类型不认识、没有 `:` 或拆完路径为空时返回 `None`。
+pub fn parse_user_shortcut(value: &str) -> Option<UserShortcut> {
+    let (kind_text, rest) = value.split_once(':')?;
+    let kind = match kind_text {
+        "file" => ShortcutKind::File,
+        "directory" => ShortcutKind::Directory,
+        "web" => ShortcutKind::Web,
+        "cmd" => ShortcutKind::Cmd,
+        _ => return None,
+    };
+    let split_at = |separator: char| match rest.split_once(separator) {
+        Some((path, args)) => (path, args),
+        None => (rest, ""),
+    };
+    let (path, args) = match kind {
+        ShortcutKind::File => split_at('|'),
+        ShortcutKind::Cmd => split_at(' '),
+        ShortcutKind::Directory | ShortcutKind::Web => (rest, ""),
+    };
+    if path.is_empty() {
+        return None;
+    }
+    Some(UserShortcut {
+        kind,
+        path: path.to_owned(),
+        args: args.to_owned(),
+    })
+}
+
+impl UserShortcut {
+    /// 脚本看到的 `(commandtype, file)`（WPE 实测）：`commandtype` 是 file / directory / website / command；
+    /// 文件与文件夹把 `\` 换成 `/` 后只给最后一段名字，网址给整串，命令只给程序部分。
+    pub fn script_fields(&self) -> (&'static str, String) {
+        let last_segment = |path: &str| {
+            let path = path.replace(char::from(92), "/");
+            path.rsplit('/').next().unwrap_or("").to_owned()
+        };
+        match self.kind {
+            ShortcutKind::File => ("file", last_segment(&self.path)),
+            ShortcutKind::Directory => ("directory", last_segment(&self.path)),
+            ShortcutKind::Web => ("website", self.path.clone()),
+            ShortcutKind::Cmd => ("command", self.path.clone()),
+        }
+    }
+}
+
+/// 快捷方式原值的不可逆键：空串返回空串，否则 SHA-256 前 16 位小写十六进制。推给场景宿主代替原值，
+/// 宿主靠它判断值变了没有、缓存图标；完整路径不离开后端。
+pub fn shortcut_key(value: &str) -> String {
+    use sha2::{Digest, Sha256};
+    if value.is_empty() {
+        return String::new();
+    }
+    Sha256::digest(value.as_bytes())
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// 照 WPE 的 `scenetexture` 返回值整理路径：`\` 全换成 `/`，非开头的连续 `/` 合并成一个
@@ -346,7 +450,10 @@ pub fn apply_changes(raw: &Value, changes: &Map<String, Value>) -> Result<Option
         // 空串归一后等于默认值，下面照常删键；作者给了非空默认值时，空串留作「清空」覆盖。
         if matches!(
             def.kind,
-            WpePropKind::File | WpePropKind::Directory | WpePropKind::SceneTexture
+            WpePropKind::File
+                | WpePropKind::Directory
+                | WpePropKind::SceneTexture
+                | WpePropKind::UserShortcut
         ) && normalized == Value::String(String::new())
             && def.default.is_none()
         {
@@ -623,6 +730,145 @@ mod tests {
         );
         assert!(apply_changes(&source, &changes).is_err());
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn shortcut_values_split_like_wpe() {
+        let parse = |value: &str| parse_user_shortcut(value);
+        // file 在第一个 `|` 拆；cmd 在第一个空格拆
+        assert_eq!(
+            parse(r"file:C:\a b\x.exe|-x | y"),
+            Some(UserShortcut {
+                kind: ShortcutKind::File,
+                path: r"C:\a b\x.exe".into(),
+                args: "-x | y".into()
+            })
+        );
+        assert_eq!(
+            parse("cmd:calc /x").unwrap(),
+            UserShortcut {
+                kind: ShortcutKind::Cmd,
+                path: "calc".into(),
+                args: "/x".into()
+            }
+        );
+        // directory / web 不拆，web 里的 `:` 与 `|` 原样
+        let dir = parse(r"directory:D:\a|b c").unwrap();
+        assert_eq!((dir.path.as_str(), dir.args.as_str()), (r"D:\a|b c", ""));
+        let web = parse("web:https://x.com/a b|c").unwrap();
+        assert_eq!(web.path, "https://x.com/a b|c");
+        // 类型不认识、空串、没有冒号、拆完路径为空
+        for bad in [
+            "",
+            r"File:C:\a",
+            "x:y",
+            r"C:\a",
+            "file:",
+            "file:|arg",
+            "cmd: calc",
+            "web:",
+        ] {
+            assert_eq!(parse(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn shortcut_script_fields_match_wpe() {
+        let fields = |value: &str| parse_user_shortcut(value).unwrap().script_fields();
+        // `.lnk` 带扩展名；反斜杠与斜杠混用都取最后一段
+        assert_eq!(
+            fields(r"file:C:\Users\a/b\App.lnk|--x"),
+            ("file", "App.lnk".to_owned())
+        );
+        assert_eq!(
+            fields(r"file:C:\Windows\System32\notepad.exe"),
+            ("file", "notepad.exe".to_owned())
+        );
+        assert_eq!(
+            fields(r"directory:D:\Codes\launch-target"),
+            ("directory", "launch-target".to_owned())
+        );
+        assert_eq!(
+            fields("web:https://example.com/a?b=1"),
+            ("website", "https://example.com/a?b=1".to_owned())
+        );
+        // 实测：`calc /x` 的 file 只有程序部分
+        assert_eq!(fields("cmd:calc /x"), ("command", "calc".to_owned()));
+    }
+
+    #[test]
+    fn shortcut_key_is_a_stable_16_hex_prefix_of_sha256() {
+        assert_eq!(shortcut_key(""), "");
+        // sha256("abc") = ba7816bf8f01cfea…
+        assert_eq!(shortcut_key("abc"), "ba7816bf8f01cfea");
+        assert_eq!(shortcut_key(r"file:C:\a.exe").len(), 16);
+        assert_ne!(shortcut_key("cmd:a"), shortcut_key("cmd:b"));
+    }
+
+    #[test]
+    fn shortcut_definition_and_normalization() {
+        let raw = json!({"general":{"properties":{
+            "app":{"type":"usershortcut","text":"App","value":""}
+        }}});
+        let defs = parse_defs(&raw);
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].kind, WpePropKind::UserShortcut);
+        assert_eq!(
+            serde_json::to_value(defs[0].kind).unwrap(),
+            json!("usershortcut")
+        );
+        let def = &defs[0];
+        // 空串 = 清空，格式不对报错，非字符串报错
+        assert_eq!(normalize_value(def, &json!("")).unwrap(), json!(""));
+        assert!(normalize_value(def, &json!("nope")).is_err());
+        assert!(normalize_value(def, &json!("file:")).is_err());
+        assert!(normalize_value(def, &json!(1)).is_err());
+        // 合法值原样存
+        assert_eq!(
+            normalize_value(def, &json!("cmd:calc /x")).unwrap(),
+            json!("cmd:calc /x")
+        );
+        assert_eq!(
+            normalize_value(def, &json!(r"file:C:\a.exe|-x")).unwrap(),
+            json!(r"file:C:\a.exe|-x")
+        );
+        // web：四个前缀（区分大小写）不补，其余补 https://
+        for (input, expected) in [
+            ("web:example.com", "web:https://example.com"),
+            ("web:http://a.com", "web:http://a.com"),
+            ("web:https://a.com", "web:https://a.com"),
+            ("web:www.a.com", "web:www.a.com"),
+            ("web:steam://run/1", "web:steam://run/1"),
+            ("web:HTTPS://a.com", "web:https://HTTPS://a.com"),
+        ] {
+            assert_eq!(
+                normalize_value(def, &json!(input)).unwrap(),
+                json!(expected)
+            );
+        }
+        // 写入与清空：写入后存键，清空（空串等于缺省值）删键
+        let mut changes = Map::new();
+        changes.insert("app".into(), json!("web:example.com"));
+        let changed = apply_changes(&raw, &changes).unwrap().unwrap();
+        assert_eq!(
+            user_values(&changed)["app"],
+            json!("web:https://example.com")
+        );
+        changes.insert("app".into(), json!(""));
+        let cleared = apply_changes(&changed, &changes).unwrap().unwrap();
+        assert!(cleared.get(USER_PROPERTIES_KEY).is_none());
+        // 作者没给缺省值时空串也直接删键
+        let no_default = json!({"general":{"properties":{"app":{"type":"usershortcut"}}}});
+        let mut stored = no_default.clone();
+        stored[USER_PROPERTIES_KEY] = json!({"app": "cmd:calc"});
+        assert!(apply_changes(&stored, &changes)
+            .unwrap()
+            .unwrap()
+            .get(USER_PROPERTIES_KEY)
+            .is_none());
+        // 格式不对整个请求报错
+        changes.insert("app".into(), json!("bad"));
+        assert!(apply_changes(&raw, &changes).is_err());
     }
 
     #[test]

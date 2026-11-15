@@ -17,6 +17,9 @@ pub mod wpe_web_dir_index;
 // 场景宿主（apps/wpe-scene 的 file: iframe）：地址、file: 访问范围与运行时 capability
 #[cfg(feature = "wpe")]
 pub mod wpe_scene_host;
+// 场景快捷方式（usershortcut，P11d）：取图标与启动
+#[cfg(feature = "wpe")]
+pub mod wpe_shortcut;
 
 // 轮播器
 pub use rotator::WallpaperRotator;

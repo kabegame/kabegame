@@ -245,6 +245,35 @@
 | [ ] | U8 插件版本不兼容提示 | macOS 插件详情 | 打开一个要求更高应用版本的未安装插件，悬停安装按钮 | 按钮置灰，悬停提示所需版本 | 未测 |
 | [ ] | U9 Web 版 | Web | 打开画廊 | 收集菜单只有「网络」，其余同 U1 | 未测 |
 
+## 场景壁纸快捷方式（P11d）
+
+2026-11-15 Windows dev。场景的 `usershortcut` 属性：
+- 面板（类型 + 路径 + 参数、「测试」按钮）；
+- 图标纹理（后端照 WPE 取图，OpenCV 4.4.0 的三处移植进 Rust；宿主补透明边、夹取）；
+- `engine.openUserShortcut`：宿主照 WPE 的门禁，应用页核对用户激活后用自己的图片 id 调启动命令，后端只启动用户配过的快捷方式。
+
+依据与资料：
+- WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md`「P11d 补测」与同目录 `rea-p11d.md`；
+- 计划、约定与走查见 `phase-11d-shortcuts.md`；
+- 生成工程 `ignore/p11/proj/p11-shortcut`、`p11-shortcut-v`（`ignore/p11/defs/p11d.py`），WPE 的图标纹理 `ignore/p11/d/wpe-icons/`，dev 应用里取到的图标 `ignore/p11/d/kb-icons-app/`；
+- 语料 `ignore/p11/d/corpus-*.json`。
+
+真实启动会在桌面上开资源管理器窗口，目标是空文件夹 `ignore/p11/d/launch-target`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | D0 单测与检查 | Windows | `kabegame-core` 的 `user_props`、`kabegame` 的 `wpe` 过滤；宿主 tsc 与相关 vitest；应用 vue-tsc 与相关 vitest；Prettier、rustfmt | 全过 | 2026-11-15 Claude（合并进主工作区后）：Rust 14 + 135 个通过（1 个是手动跑的取图标测试）；宿主 tsc 0 error，相关 130 个文件 2972 个用例里 2970 个通过，失败的两个见 D8；应用 6 个文件 50 个通过；vue-tsc 只有别的会话未入库的 `WpeSceneShadowsSetting.vue` 1 个错误。变异：OpenCV 2 处、前端 4 处全部检出。提交内容单独检出核对：vue-tsc 0 error；宿主 tsc 剩 1 个错误，4 个测试报 `scriptPropertyEntries is not a function`，来自之前的提交 `637530bd` 带进的 P3 会话未提交的调用，与本步无关 |
+| [x] | D1 OpenCV 移植 | Node / Rust | `cv.rs` 的单测；另换种子和 OpenCV 比 680 个用例；圆形遮罩作用于 WPE 的 `webthumbnailfallback.png` | 逐字节相同 | 2026-11-15 Claude：30 个单测、680 个用例逐字节相同，遮罩结果和 WPE 纹理逐像素相同。参照用 4.5.5，与 4.4.0 在这三处没有行为差别 |
+| [x] | D2 图标对 WPE | Windows dev | 工程 `p11-shortcut` 导入 dev 库，配 7 种目标，应用页调 `wpe_scene_shortcut_icon`，和 WPE 抓帧存下的纹理比 | 逐像素相同 | 2026-11-15 Claude：notepad.exe、`.lnk`、`.url`、文件夹、`calc`、维基百科（160×160）、`example.com` 的缺省图（300×300）全部逐像素相同。测试程序里 exe 取不到缩略图（`0x8004B200`）、差几级，dev 应用里没有这个问题 |
+| [x] | D3 门禁对 WPE | Windows dev + WPE 测试窗口 1280×720 | 9 个用例（按钮脚本的 `case` 0–8）用同一串输入：WPE 用 `input_play`，Kabegame 用屏外宿主的探针（`inputTimeline`）；s1 在 WPE 用错的哈希、在 Kabegame 设成没配 | 脚本日志逐行相同 | 2026-11-15 Claude：9 个用例逐行相同（相对帧号、返回值、两种异常文本、`cursorMove` 没捕获后被禁用）。未捕获异常的位置 WPE 报 col 9、我们报 col 10，是 P3b 的通用报错格式，与本步无关 |
+| [x] | D4 宿主拿到的形状 | Windows dev | 屏外宿主里调 `wpe_web_pull_state` | 配过的是 `{ value: 16 位哈希, isbound: true, commandtype, file }`，没配的只有 `isbound: false`；脚本里 `engine.userProperties` 是 `{}` | 2026-11-15 Claude：3660962877 的 `launcher1–3`（文件、网址、文件夹）与 `launcher4`（没配）都符合；`p11-shortcut` 的 `init` 日志里快捷方式属性是 `{}` |
+| [x] | D5 真实启动 | Windows dev + WPE 测试窗口 | WPE：s1 设成 `directory:<本机哈希>:…\launch-target`，按下时调用；Kabegame：应用页调 `wpe_open_user_shortcut(15174, "s4")` | 打开 `launch-target`，返回 `true` | 2026-11-15 Claude：WPE 返回 `true`、没有 `User shortcut blocked.`、文件夹窗口打开；本机哈希含 UTF-16 结尾 NUL（读码推断得到证实）。Kabegame 返回 `true`（`ShellExecuteW` > 32），但同一文件夹的窗口还开着，系统复用了它，画面上没新窗口 |
+| [x] | D6 反向用例 | Windows dev | 场景宿主调 `wpe_open_user_shortcut`；应用页对没配、`textinput`、`combo`、不存在的属性、只有工程缺省值、非场景图片、不存在的图片调启动命令 | 都不启动 | 2026-11-15 Claude：宿主被 ACL 拒绝（取图标命令放行）；没配与只有缺省值返回 `false`，其余报错 |
+| [x] | D7 语料 | Node，233 个工程 | 合并前后各扫一次（`kbp corpus scan` / `diff`） | 只去掉 `script:api:engine.openUserShortcut` 与 `usertextures:usershortcut`，原来能渲染的不掉出 | 2026-11-15 Claude：能渲染 175 → 176（`3660962877`），去掉的两个键 6 张、5 张，没有新增键。`3660962877` 解包导入后脚本 252 段都没有报错，三个图标就绪 |
+| [x] | D8 语料测试的两处失败 | Node | `compile/pipeline.test.ts` 的快速路径上限；`compile/p3a.test.ts` 的绑定表完整性 | 与本步无关 | 2026-11-15 Claude：`3253330537` 648 次请求、`3543014965` 读 104 MB，合并前的快照同样失败（后者 P11c 时已有）；绑定表完整性那条在机器同时编 Rust 时超时（600 s），单独重跑 13 个全过，整个文件用时约 9 分钟，离上限不远 |
+| [ ] | D9 预览里点击启动 | Windows dev | 预览 `3660962877`，打开「用户栏设置」的功能开关，给 #1–#3 配程序、网址、文件夹；看应用栏图标，点一个图标；再点面板上的「测试」 | 图标与目标一致；每次点击打开一次所配的目标 | 待用户手测 |
+| [ ] | D10 非 Windows | macOS / Linux | 预览一张带快捷方式的场景 | 面板不显示快捷方式属性，图标槽是缺省纹理，`openUserShortcut` 返回 `false` | 本机不能测 |
+
 ## 场景壁纸 P6d1a：层级、转向与 effect / 材质访问
 
 2026-11-15 Windows dev。场景脚本的 `getParent` / `getChildren` / `getTransformMatrix`、`rotateObjectSpace` / `lookAt` / `lookAtYaw`、`getEffect` / `getEffectCount` / effect `name` / `getMaterial` / `getMaterialCount` / `setMaterialProperty`、`getLayerByID`，删掉图层对象的 `id`；旋转存角度与 3×3 两份（`LayerState.rotation`）；用到 `getEffect` 时写死关闭的 effect 也编进 bundle；材质对象只登记读到的常量、加五个只读状态字段；`rad2deg` 材质常量脚本一侧按度。

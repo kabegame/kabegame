@@ -14,6 +14,9 @@
  *   大小。预览画布（`WallpaperPreviewCanvas`）按内容尺寸布局、再整体 `scale`，这个 transform 在 iframe 里量不到，
  *   只能在这里量。宿主请求时必回；iframe 尺寸变化（ResizeObserver）、窗口尺寸变化时量一次；只有祖先 transform
  *   变了时（弹窗缩放、预览弹窗动画）布局尺寸不变、哪个 observer 都不触发，所以再按 250ms 轮询比较，只在值变时推。
+ * - 快捷方式（P11d）：脚本的 `engine.openUserShortcut` 经宿主门禁后 `postMessage` 属性名（`wpeSceneShortcut.ts`）。这里是安全边界：
+ *   只认可交互实例、`navigator.userActivation.isActive`（真实用户输入）、同一属性 1 秒一次，以本组件持有的图片 id 调
+ *   `wpe_open_user_shortcut`（只开给应用页，宿主调不到）；消息里除属性名外的东西都不信。
  * - 指针：`interactive` 时 iframe 接收指针事件，宿主自己算 `g_PointerPosition`。开场（P5a 收尾）宿主还没收到过事件，
  *   iframe 建好（`load`）与宿主报 ready 时各问一次 Rust 光标在本窗口里的位置（`wpe_scene_cursor`，桌面壁纸窗口的页面
  *   收不到鼠标事件，只能问 Rust），按 iframe 显示矩形换成归一化坐标交给宿主当初值；命令返回 null（非 Windows）或
@@ -36,6 +39,7 @@ import {
 } from "./wpeSceneStyle";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
+import { createShortcutThrottle, wpeShortcutName } from "./wpeSceneShortcut";
 
 /**
  * 祖先 transform 变化不触发任何 observer，按这个间隔核对显示缩放。不用 rAF：桌面壁纸窗口里场景一直在，
@@ -140,6 +144,9 @@ function onWindowResize() {
   window.setTimeout(() => postDisplay(), 0);
 }
 
+/** 快捷方式请求按属性名的节流（P11d）：本实例一份。 */
+const shortcutThrottle = createShortcutThrottle();
+
 function onWindowMessage(event: MessageEvent) {
   const target = frame.value?.contentWindow;
   if (!target || !event.isTrusted || event.source !== target) return;
@@ -151,6 +158,18 @@ function onWindowMessage(event: MessageEvent) {
   const point = frame.value ? wpeContextMenuPoint(event.data, frame.value) : null;
   if (point) {
     emit("contextmenu", point);
+    return;
+  }
+  const shortcut = wpeShortcutName(event.data);
+  if (shortcut !== null) {
+    // 来源已核对是自己的 iframe。只认可交互的实例与真实的用户输入；图片 id 用本组件持有的，不用消息里的
+    if (!props.interactive) logger.debug(`快捷方式 ${shortcut} 未启动：本实例不可交互`);
+    else if (!navigator.userActivation?.isActive) logger.debug(`快捷方式 ${shortcut} 未启动：没有用户激活`);
+    else if (!shortcutThrottle.take(shortcut)) logger.debug(`快捷方式 ${shortcut} 未启动：1 秒内重复`);
+    else
+      void invoke<boolean>("wpe_open_user_shortcut", { imageId: props.target.id, name: shortcut }).catch((error) =>
+        logger.warn(`启动快捷方式失败: ${error}`),
+      );
     return;
   }
   if (!isWpeVolumeRequest(event.data)) return;

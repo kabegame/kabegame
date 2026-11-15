@@ -210,6 +210,13 @@
     - vite `/render` 的 `checkMedia` 与转发、MCP `render_scene` 的 `media` 字段；
     - SMTC 夹具 `ignore/p11/smtc/fixture.ps1` 可选 `type` 键。
   - 计划、约定与走查见 `.claude/plans/wpe-import/3-scene/phase11/phase-11c-media.md`，文档见 `cocs/wpe/WPE_SCENE.md`「媒体（P11c）」与 `cocs/wpe/WPE_IMPORT.md`「音频与媒体集成」。
+- 场景壁纸 P11d：快捷方式（`usershortcut` 属性的图标纹理与 `engine.openUserShortcut`，只做 Windows）。
+  - 值与面板：`user_props.rs` 的 `WpePropKind::UserShortcut`、`parse_user_shortcut`（照 WPE 拆参数）、网址补 `https://`、`shortcut_key`；`wpe_web.rs` 的 `scene_user_from_view` 给场景宿主 `{ value: 原值哈希, isbound, commandtype?, file? }`。新增 `WpeShortcutField.vue`、`utils/wpeShortcut.ts`，面板只在场景、只在 Windows 上显示，「测试」按钮先 `saveNow()` 再调启动命令；五种语言各加 14 个词条。
+  - 图标：新增 `wallpaper/wpe_shortcut/`（`windows.rs` 照 `winrtutil` 取缩略图与图标、去预乘；`web.rs` 取网站图标、缺省图；`cv.rs` 是 OpenCV 4.4.0 `resize` / `inpaint` TELEA / `circle` 抗锯齿的逐行移植，只用 std）与命令 `wpe_scene_shortcut_icon`（进 `wpe-scene-host.toml`，返回原始 RGBA）。宿主 `usertex/sources.ts` 加 `usershortcut` 来源，`crop.ts` 的 `padRect` 照 WPE 补透明边，`render/scene.ts` 上传时补边、快捷方式槽一律夹取。
+  - 启动：宿主新增 `shortcut/token.ts`（按下沿发、松开沿收的点击令牌）与 `shortcut/message.ts`；`script/api.ts` 的 `openUserShortcut` 照 WPE 门禁、抛 realm 的 `SyntaxError`，`scriptUserProperties` 让 `engine.userProperties` 里的快捷方式是 `{}`；`script/runtime.ts` 记当前回调；渲染器加 `cursor.end` 钩子。应用页 `wpeSceneShortcut.ts` 与 `WpeSceneView` 核对来源、可交互、用户激活、每属性 1 秒一次后调 `wpe_open_user_shortcut`（只进 `generate_handler!`，宿主调不到），后端 `ShellExecuteW`。
+  - 能力表删 `usertextures:usershortcut`、`script:api:engine.openUserShortcut`。语料能渲染 175 → 176（233 张）。
+  - dev 工具：探针 `renderFrame` 收 `shortcutIcons`、结果多 `scripts.shortcuts`；没给后端形状的快捷方式属性按没配（`isbound: false`）。
+  - 计划、约定与走查见 `.claude/plans/wpe-import/3-scene/phase11/phase-11d-shortcuts.md`，文档见 `cocs/wpe/WPE_SCENE.md`「快捷方式（P11d）」与 `cocs/wpe/WPE_IMPORT.md`「用户属性」。
 - 场景壁纸 P8：图像层与材质补全。
   - 合成 RT 的采样：寻址只看对象 `clampuvs`（缺省钳制），过滤看对象 `nointerpolation` 或纹理的 NoInterpolation（`render/graph.ts` 的 `compositeSampling`，`SceneLayer.clampUVs` / `noInterpolation`），文本层同一规则；删 `object:clampuvs`、`object:nointerpolation`。
   - 形状对象：`features.ts` 的 `isShapeObject`、`shapeIssues`（`shape:effects` / `shape:effect-passes` / `shape:uniform:<名字>` / `shape:texture0`，`textureSlotRead` 看 WGSL 判断槽有没有被读）；`bundle.ts` 的 `shapePoints` / `shapeLayerSize`（effect 改写 `DIRECTDRAW = 1`、槽 0 不预留）；`render/layout.ts` 的 `shapeQuad`；`render/graph.ts` 的 `planShapeLayer`（只画最后一个 effect、强制 additive）。删 `object:shape`。

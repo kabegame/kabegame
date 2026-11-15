@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cropRect, referenceRatio, roundf, textureKey } from "./crop";
+import { cropRect, padRect, referenceRatio, roundf, textureKey } from "./crop";
 
 /** 按参考尺寸 `rw × rh` 裁 `w × h`。 */
 const crop = (w: number, h: number, rw: number, rh: number) => cropRect(w, h, referenceRatio(rw, rh));
@@ -51,5 +51,48 @@ describe("textureKey：WPE 的纹理名 = 值 + x + round(比例·10)", () => {
     expect(textureKey("p", referenceRatio(178, 100))).toBe("px18");
     expect(textureKey("p", referenceRatio(5, 3))).toBe("px17");
     expect(textureKey("p", 0)).toBe("px0");
+  });
+});
+
+describe("padRect（P11d：快捷方式图标补透明边，p11-REPORT「P11d 补测」图标纹理）", () => {
+  it("1:1 槽原样", () => {
+    expect(padRect(256, 256, 1)).toEqual({ x: 0, y: 0, width: 256, height: 256 });
+  });
+
+  it("2:1 槽：256×256 → 512×256，左右各补 128（WPE 实测）", () => {
+    expect(padRect(256, 256, 2)).toEqual({ x: 128, y: 0, width: 512, height: 256 });
+  });
+
+  it("精灵表帧比例 1.66668：426×256、左右各补 85（WPE 实测 leaves5）", () => {
+    const ratio = referenceRatio(85.334, 51.2);
+    expect(padRect(256, 256, ratio)).toEqual({ x: 85, y: 0, width: 426, height: 256 });
+  });
+
+  it("1:4 槽：256×1024、上下各补 384（WPE 实测 drop）", () => {
+    expect(padRect(256, 256, 0.25)).toEqual({ x: 0, y: 384, width: 256, height: 1024 });
+  });
+
+  it("网站图标 160×160、300×300 同理（宽高比 1 的图标放进 2:1 与 1:2 的槽）", () => {
+    expect(padRect(160, 160, 2)).toEqual({ x: 80, y: 0, width: 320, height: 160 });
+    expect(padRect(160, 160, 0.5)).toEqual({ x: 0, y: 80, width: 160, height: 320 });
+    expect(padRect(300, 300, 2)).toEqual({ x: 150, y: 0, width: 600, height: 300 });
+    expect(padRect(300, 300, 0.5)).toEqual({ x: 0, y: 150, width: 300, height: 600 });
+  });
+
+  it("取整照 WPE：宽高用截断、偏移用右移（奇数差向下取）", () => {
+    // 100×100 配 1.5 → 宽 150、偏移 25；配 1.55 → 宽 155、偏移 27（(155−100)>>1）
+    expect(padRect(100, 100, 1.5)).toEqual({ x: 25, y: 0, width: 150, height: 100 });
+    expect(padRect(100, 100, Math.fround(1.55))).toEqual({ x: 27, y: 0, width: 155, height: 100 });
+  });
+
+  it("图标本身就比槽宽：补高、不裁（256×128 配 1:1 → 256×256，上下各 64）", () => {
+    expect(padRect(256, 128, 1)).toEqual({ x: 0, y: 64, width: 256, height: 256 });
+  });
+
+  it("比例 0（keepaspect / 没有参考尺寸）原样；float32 截断落在图标边之下时取图标的边，不裁", () => {
+    expect(padRect(256, 256, 0)).toEqual({ x: 0, y: 0, width: 256, height: 256 });
+    const result = padRect(7, 7, Math.fround(1.0000001));
+    expect(result.width).toBeGreaterThanOrEqual(7);
+    expect(result.x).toBeGreaterThanOrEqual(0);
   });
 });

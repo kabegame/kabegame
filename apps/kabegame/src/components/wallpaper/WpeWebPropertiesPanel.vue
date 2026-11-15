@@ -117,6 +117,8 @@
                 <WpePropertyField
                   :item="item"
                   :model-value="valueOf(item.key)"
+                  :image-id="imageId"
+                  :save="saveNow"
                   @update:model-value="set(item.key, $event)"
                 />
               </div>
@@ -134,6 +136,7 @@ import { useI18n } from "@kabegame/i18n";
 import { ChevronRight, RotateCcw } from "@lucide/vue";
 import { Button, Spinner, Tooltip } from "@/components/ui";
 import { invoke } from "@/api";
+import { IS_WINDOWS } from "@/env";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
 import { hasWpeUserProperties, isWpeSceneType } from "@/utils/mediaMime";
@@ -166,7 +169,7 @@ const props = withDefaults(
   },
 );
 const { t } = useI18n();
-const { view, loading, error, valueOf, isModified, set, reset, resetAll, reload } = useWpeWebProperties(
+const { view, loading, error, valueOf, isModified, set, reset, resetAll, reload, saveNow } = useWpeWebProperties(
   toRef(props, "imageId"),
 );
 
@@ -202,12 +205,17 @@ const canRestoreCover = computed(
 /** 恢复进行中：按钮转圈，也挡住重复触发 */
 const coverBusy = ref(false);
 
-/** 这张壁纸用得上的条目：场景去掉 `file` / `directory`，网页去掉 `scenetexture`（见 props 注释） */
+/**
+ * 这张壁纸用得上的条目：场景去掉 `file` / `directory`，网页去掉 `scenetexture`（见 props 注释）。
+ * `usershortcut`（P11d）只在场景、且只在 Windows 上显示：别的平台后端给宿主的快捷方式一律未绑定、也没有启动实现；网页壁纸不读它。
+ */
 const usableItems = computed(() => {
   const items = view.value?.items ?? [];
   return isScene.value
-    ? items.filter((item) => item.kind !== "file" && item.kind !== "directory")
-    : items.filter((item) => item.kind !== "scenetexture");
+    ? items.filter(
+        (item) => item.kind !== "file" && item.kind !== "directory" && (item.kind !== "usershortcut" || IS_WINDOWS),
+      )
+    : items.filter((item) => item.kind !== "scenetexture" && item.kind !== "usershortcut");
 });
 
 /** 照 WPE 分段：遇到 group 开新段；组条件为假整段隐藏，段内条目再各自按条件隐藏，全隐藏的段不显示 */

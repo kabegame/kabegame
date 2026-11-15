@@ -169,6 +169,11 @@ export class ScriptRuntime {
   private unsupported = new Set<string>();
   private halted = false;
   private active: ScriptRecord | null = null;
+  /**
+   * 正在跑的回调名（P11d，WPE 的 `G+0x62c`）：`invoke` 进入时记下、结束时恢复成进入前的（嵌套时还原上一个，如光标回调里的 `callFor`）。
+   * 只有 API 读（`engine.openUserShortcut` 只许在光标回调里调）；不在任何回调里（模块求值、宿主直接调）为 null。
+   */
+  private activeCallbackName: string | null = null;
 
   constructor(
     private readonly realm: ScriptRealm,
@@ -191,6 +196,10 @@ export class ScriptRuntime {
   }
   get stopped(): boolean {
     return this.halted;
+  }
+  /** 正在跑的回调名（P11d）；不在回调里为 null。 */
+  get activeCallback(): string | null {
+    return this.activeCallbackName;
   }
   get diagnostics(): unknown[] {
     return this.records.map((record) => ({
@@ -221,7 +230,9 @@ export class ScriptRuntime {
   private invoke(record: ScriptRecord, callback: Callback | HostCallback, fn: () => unknown): unknown {
     if (this.halted) return undefined;
     const previous = this.active;
+    const previousCallback = this.activeCallbackName;
     this.active = record;
+    this.activeCallbackName = callback;
     this.options.enterScript?.(record.script);
     const now = this.options.now ?? performance.now.bind(performance);
     const start = now();
@@ -238,6 +249,7 @@ export class ScriptRuntime {
       stats.count++;
       stats.maxMs = Math.max(stats.maxMs, elapsed);
       this.active = previous;
+      this.activeCallbackName = previousCallback;
       this.options.enterScript?.(previous?.script ?? null);
       if (elapsed > 15_000 && !this.halted) {
         this.halted = true;

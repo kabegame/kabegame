@@ -22,8 +22,8 @@ use kabegame_core::storage::{ImageInfo, Storage};
 use kabegame_core::wpe::project::read_project;
 use kabegame_core::wpe::properties::{resolve_web_user_props, wpe_language_code};
 use kabegame_core::wpe::user_props::{
-    apply_changes, list_directory_files, localize, normalize_value, parse_defs, user_file_grants,
-    user_values, WpeComboOption, WpePropKind,
+    apply_changes, list_directory_files, localize, normalize_value, parse_defs,
+    parse_user_shortcut, shortcut_key, user_file_grants, user_values, WpeComboOption, WpePropKind,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -161,11 +161,24 @@ fn properties_view_for_language(
 }
 
 /// 场景宿主的属性值直接取面板同一份归一化结果，避免作者默认值与面板形态分叉。
+///
+/// `usershortcut` 例外（P11d）：宿主拿不到原值（完整路径不离开后端），给 `{ type, value, isbound, commandtype?, file? }`：
+/// `value` 是原值的不可逆键（`shortcut_key`，没配为 `""`），`isbound` 是用户配的值能不能解析，`commandtype` / `file`
+/// 只在 `isbound` 时有（WPE 脚本看到的就这三个字段）。只认用户在面板里配过的值（启动命令同规则），作者缺省值不算。
+/// 面板读的是 [`properties_view`] 的原值视图，不经这里。
 fn scene_user_from_view(view: WpeWebPropertiesView) -> serde_json::Map<String, Value> {
     view.items
         .into_iter()
         .filter(|item| !matches!(item.kind, WpePropKind::Group | WpePropKind::Text))
         .filter_map(|item| {
+            if item.kind == WpePropKind::UserShortcut {
+                let raw = if item.modified {
+                    item.value.as_ref().and_then(Value::as_str).unwrap_or("")
+                } else {
+                    ""
+                };
+                return Some((item.key, scene_shortcut_entry(raw)));
+            }
             item.value.map(|value| {
                 (
                     item.key,
@@ -174,6 +187,24 @@ fn scene_user_from_view(view: WpeWebPropertiesView) -> serde_json::Map<String, V
             })
         })
         .collect()
+}
+
+/// 一个快捷方式属性给场景宿主的形状，`raw` 是用户配的原值（没配为空串）。
+fn scene_shortcut_entry(raw: &str) -> Value {
+    // TODO:[WPE_SCENE] macOS / Linux 上做快捷方式（取图标与启动）：目前只有 Windows，其它平台一律未绑定，
+    // 脚本的 `openUserShortcut` 返回 false、图标槽用缺省纹理。
+    let parsed = cfg!(windows).then(|| parse_user_shortcut(raw)).flatten();
+    let mut entry = serde_json::json!({
+        "type": "usershortcut",
+        "value": shortcut_key(raw),
+        "isbound": parsed.is_some(),
+    });
+    if let Some(shortcut) = parsed {
+        let (commandtype, file) = shortcut.script_fields();
+        entry["commandtype"] = commandtype.into();
+        entry["file"] = file.into();
+    }
+    entry
 }
 
 /// 属性面板读视图；行不存在或不是 `x-wpe/web` / `x-wpe/scene` 返回 None。只给主窗口（不进 `wpe-web.toml`）。
@@ -661,5 +692,73 @@ mod tests {
         assert_eq!(state_user["enabled"]["value"], json!(true));
         assert_eq!(state_user["default_bool"]["value"], json!(false));
         assert!(!state_user.contains_key("label"));
+    }
+
+    /// 快捷方式属性给宿主的形状：只有键与三个字段，没有原值；没绑定时只有 `isbound`。
+    #[test]
+    fn scene_shortcut_entries_hide_the_raw_value() {
+        use serde_json::json;
+        let raw = json!({
+            "general": { "properties": {
+                "app": { "type": "usershortcut", "text": "App", "value": "" },
+                "other": { "type": "usershortcut", "text": "Other", "value": "" },
+                "empty": { "type": "usershortcut", "text": "Empty", "value": "" },
+                "bad": { "type": "usershortcut", "text": "Bad", "value": "" },
+                "textinput": { "type": "textinput", "value": "file:C:/a.exe" }
+            } },
+            "userProperties": {
+                "app": "cmd:calc /x",
+                "other": "file:C:/Users/me/Secret.lnk|-x",
+                "bad": "garbage"
+            }
+        });
+        let user = super::scene_user_from_view(super::properties_view_for_language(
+            "scene".into(),
+            None,
+            &raw,
+            "en-us",
+        ));
+        let app = &user["app"];
+        assert_eq!(app["type"], json!("usershortcut"));
+        assert_eq!(app["value"], json!(super::shortcut_key("cmd:calc /x")));
+        // 没配、格式不对：只有 isbound（`value` 是空串或键）
+        let empty = user["empty"].as_object().unwrap();
+        assert_eq!(empty["value"], json!(""));
+        assert_eq!(empty["isbound"], json!(false));
+        assert!(!empty.contains_key("commandtype") && !empty.contains_key("file"));
+        let bad = user["bad"].as_object().unwrap();
+        assert_eq!(bad["isbound"], json!(false));
+        assert!(!bad.contains_key("commandtype") && !bad.contains_key("file"));
+        if cfg!(windows) {
+            assert_eq!(app["isbound"], json!(true));
+            assert_eq!(app["commandtype"], json!("command"));
+            assert_eq!(app["file"], json!("calc"));
+            assert_eq!(user["other"]["commandtype"], json!("file"));
+            assert_eq!(user["other"]["file"], json!("Secret.lnk"));
+        } else {
+            assert_eq!(app["isbound"], json!(false));
+            assert!(app.get("file").is_none());
+        }
+        // 原值（路径、参数）任何字段里都没有
+        let dump = serde_json::to_string(&user).unwrap();
+        assert!(!dump.contains("calc /x") && !dump.contains("Users") && !dump.contains("-x"));
+        // 同名的 textinput 属性不受影响，照旧给 { type, value }
+        assert_eq!(user["textinput"]["type"], json!("textinput"));
+        // 面板的视图仍然是原值
+        let view = super::properties_view_for_language("scene".into(), None, &raw, "en-us");
+        let item = view.items.iter().find(|item| item.key == "app").unwrap();
+        assert_eq!(item.value, Some(json!("cmd:calc /x")));
+        // 只有作者缺省值（用户没配）不算绑定，即使缺省值本身合法
+        let mut only_default = raw.clone();
+        only_default["general"]["properties"]["app"]["value"] = json!("cmd:calc");
+        only_default["userProperties"] = json!({});
+        let user = super::scene_user_from_view(super::properties_view_for_language(
+            "scene".into(),
+            None,
+            &only_default,
+            "en-us",
+        ));
+        assert_eq!(user["app"]["isbound"], json!(false));
+        assert_eq!(user["app"]["value"], json!(""));
     }
 }

@@ -261,6 +261,14 @@ export interface SceneBinding {
 export interface UserProperty {
   type: string;
   value: unknown;
+  /**
+   * 快捷方式项（`type === "usershortcut"`，P11d）的另三个字段，后端给的形状：`value` 是原值哈希的键（空 = 没配），`isbound` 值配好了没有，
+   * `commandtype`（`file` / `directory` / `website` / `command`）与 `file` 只在已配好时有。只进 `applyUserProperties` 的增量，
+   * `engine.userProperties` 里不带（`scriptUserProperties`）。别的类型没有这三个字段。
+   */
+  isbound?: boolean;
+  commandtype?: string;
+  file?: string;
 }
 
 /** `value` 是不是 `{user: …}` 绑定（含 `{user: {name, condition}}`）。 */
@@ -351,6 +359,16 @@ export function valueTypeOf(uniform: { type?: string; declared?: string }): Valu
   return read(declared) ?? read(wgsl.replace(/<[^>]*>/g, "")) ?? "float";
 }
 
+/** 并进全集的一项：`type` 与 `value`；快捷方式（P11d）再带 `isbound` / `commandtype` / `file`（只有已给出的字段，不补 undefined 键）。 */
+function retainedProperty(property: UserProperty): UserProperty {
+  const kept: UserProperty = { type: property.type, value: property.value };
+  if (property.type !== "usershortcut") return kept;
+  if (typeof property.isbound === "boolean") kept.isbound = property.isbound;
+  if (typeof property.commandtype === "string") kept.commandtype = property.commandtype;
+  if (typeof property.file === "string") kept.file = property.file;
+  return kept;
+}
+
 /**
  * 把一个属性增量并进累计全集（I1 的 `+0x1728`），返回真正变了的键 → 新值。
  * 跳过 `group` / `text` 与空值；不比较 `type`（类型变了值没变对绑定没有影响），也不因增量没给而丢掉已有键（I4）。
@@ -364,7 +382,7 @@ export function mergeProperties(
     if (!property || property.type === "group" || property.type === "text") continue;
     if (property.value === undefined || property.value === null) continue;
     const previous = properties.get(key);
-    properties.set(key, { type: property.type, value: property.value });
+    properties.set(key, retainedProperty(property));
     if (!previous || !Object.is(previous.value, property.value)) changes.set(key, property.value as SceneScalar);
   }
   return changes;

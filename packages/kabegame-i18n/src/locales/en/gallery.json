@@ -445,5 +445,19 @@
   "wpeSetCoverFailed": "Failed to set cover",
   "wpeRestoreCover": "Restore Default Cover",
   "wpeRestoreCoverDone": "Default cover restored",
-  "wpeRestoreCoverFailed": "Failed to restore default cover"
+  "wpeRestoreCoverFailed": "Failed to restore default cover",
+  "wpeShortcutKindFile": "File",
+  "wpeShortcutKindDirectory": "Folder",
+  "wpeShortcutKindWeb": "Website",
+  "wpeShortcutKindCmd": "Command",
+  "wpeShortcutPathFile": "Path of a program or file",
+  "wpeShortcutPathDirectory": "Folder path",
+  "wpeShortcutPathWeb": "Address, e.g. https://example.com",
+  "wpeShortcutPathCmd": "Command line, e.g. notepad readme.txt",
+  "wpeShortcutArgs": "Arguments (optional)",
+  "wpeShortcutBrowse": "Browse",
+  "wpeShortcutTest": "Test",
+  "wpeShortcutTestStarted": "Launch requested",
+  "wpeShortcutTestRejected": "This shortcut can't be launched",
+  "wpeShortcutTestFailed": "Failed to launch the shortcut"
 }

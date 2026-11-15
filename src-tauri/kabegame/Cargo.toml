@@ -24,6 +24,8 @@ dirs = "5.0"
 tokio = {workspace = true}
 axum = { version = "0.8", features = ["multipart"] }
 url = "2"
+# 场景快捷方式的网址图标：在页面里找 <link> 图标（wallpaper/wpe_shortcut/web.rs）
+regex = { workspace = true }
 uuid = {workspace = true}
 # 页面 VFS 命令（`crawl_fs_*` / `crawl_ffmpeg_*`）桌面与安卓共用；core 的 plugin-runtime 在安卓上
 # 已编译这两个 crate，app 直接依赖只是把同一套版本提到共用依赖段。
@@ -164,6 +166,16 @@ wpe = [
     "windows/Media",
     "windows/Media_Control",
     "windows/Storage_Streams",
+    # 场景快捷方式（wallpaper/wpe_shortcut/windows.rs）：Shell 缩略图缓存、已知文件夹、系统图像列表、图标画成位图、ShellExecute
+    "windows/Win32_Graphics_Gdi",
+    "windows/Win32_Storage_FileSystem",
+    "windows/Win32_System_Environment",
+    "windows/Win32_System_LibraryLoader",
+    "windows/Win32_System_WindowsProgramming",
+    "windows/Win32_UI_Controls",
+    "windows/Win32_UI_Shell_Common",
+    "windows/Win32_UI_Shell_PropertiesSystem",
+    "windows/Win32_UI_WindowsAndMessaging",
 ]
 
 # Standard desktop build: shared Tauri stack + virtual driver + video ingestion

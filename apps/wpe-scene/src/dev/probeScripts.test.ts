@@ -284,6 +284,32 @@ describe("用户属性全集（probeUserProperties）", () => {
     });
     expect(Object.fromEntries(probeUserProperties(null, { speed: 1 }))).toEqual(builtinProperties());
   });
+
+  it("快捷方式（P11d）：给后端形状时照收；裸字符串与工程缺省值同后端没配，isbound 为 false", () => {
+    const project = {
+      general: {
+        properties: {
+          a: { type: "usershortcut", value: "" },
+          b: { type: "usershortcut", value: "file:000000:C:\\x.exe" },
+          c: { type: "usershortcut", value: "" },
+        },
+      },
+    } as unknown as Parameters<typeof probeUserProperties>[0];
+    const properties = probeUserProperties(project, {
+      a: { value: "k", isbound: true, commandtype: "file", file: "x.exe" },
+      c: "file:C:\\x.exe",
+    });
+    expect(properties.get("a")).toEqual({
+      type: "usershortcut",
+      value: "k",
+      isbound: true,
+      commandtype: "file",
+      file: "x.exe",
+    });
+    expect(properties.get("b")).toMatchObject({ type: "usershortcut", isbound: false });
+    expect(properties.get("b")).not.toHaveProperty("commandtype");
+    expect(properties.get("c")).toMatchObject({ type: "usershortcut", isbound: false });
+  });
 });
 
 describe("createProbeScripts", () => {

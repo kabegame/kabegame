@@ -31,6 +31,7 @@ import { daytimeOf } from "../render/uniforms";
 import type { SceneReporter } from "../report";
 import { createWpeLocalStorage, ScriptApi } from "../script/api";
 import { createIframeRealm, getJsModuleIndex } from "../script/realm";
+import { ShortcutToken } from "../shortcut/token";
 import {
   ScriptRuntime,
   scriptDiagnostics,
@@ -173,7 +174,16 @@ export function probeUserProperties(
   const add = (key: string, type: string, fallback: unknown) => {
     const raw = Object.hasOwn(overrides, key) ? overrides[key] : fallback;
     const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
-    delta[key] = { type, value };
+    const property: UserProperty = { type, value };
+    // 快捷方式（P11d）：请求可以直接给后端形状 `{ value, isbound, commandtype?, file? }`（`value` 是键，`mergeProperties` 只留已给出的字段）。
+    // 没给后端形状（裸字符串，含工程缺省值）时同后端「没配」：`isbound: false`，WPE 对缺省空串也是 `{isbound: false}`
+    if (type === "usershortcut") {
+      if (raw && typeof raw === "object") {
+        const { isbound, commandtype, file } = raw as Partial<UserProperty>;
+        Object.assign(property, { isbound, commandtype, file });
+      } else property.isbound = false;
+    }
+    delta[key] = property;
   };
   for (const [key, builtin] of Object.entries(builtinProperties())) add(key, builtin.type, builtin.value);
   for (const [key, declared] of Object.entries(project?.general?.properties ?? {})) {
@@ -205,6 +215,13 @@ export interface ProbeRecompileWrite {
   value: ScriptValue;
 }
 
+/** 一次 `engine.openUserShortcut` 调用（P11d）：回放第几帧（0 起，同 `frames` 的计数）、属性名、宿主返回码（0 失败 / 1 受理 / 2 没有令牌，2 时脚本收到异常）。 */
+export interface ProbeShortcutCall {
+  frame: number;
+  name: string;
+  result: 0 | 1 | 2;
+}
+
 export interface ProbeScriptsResult {
   /** 实际用的起点时刻（毫秒时间戳）；`clockDefault` 为真时是 `DEFAULT_PROBE_CLOCK`。 */
   clock: number;
@@ -224,6 +241,8 @@ export interface ProbeScriptsResult {
   unconnected: { sound: number; video: number; particles: number };
   /** 脚本注册过的音频缓冲分辨率（缓冲一直全 0）。 */
   audioResolutions: number[];
+  /** `engine.openUserShortcut` 经门禁（回调类别、参数类型）之后的调用，按发生顺序（P11d）：探针不真的启动，也不发消息。 */
+  shortcuts: ProbeShortcutCall[];
   /** 运行时的告警与错误（脚本出错、写回目标不支持……），最多 `MAX_MESSAGES` 条（前面的）。 */
   messages: string[];
   /**
@@ -307,6 +326,9 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
   let matchedDropped = 0;
   /** 光标会话与最近一帧的 `input.*` 快照（P6c）：同宿主，快照由 `cursor` 每帧更新、`input` 每次现读。 */
   const cursorSession = new CursorSession();
+  /** 快捷方式的点击令牌（P11d）：同宿主，`cursor` 里按下沿在派发之前发、松开沿在派发之后收。 */
+  const shortcutToken = new ShortcutToken();
+  const shortcutCalls: ProbeShortcutCall[] = [];
   let cursorInput: CursorInputSnapshot = emptyCursorInput();
 
   const message = (level: string, text: string, detail?: unknown) => {
@@ -412,6 +434,17 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         animation: (id) => input.animations?.control(id) ?? null,
         // 全局 `input`（P6c）：最近一帧的光标快照
         cursorInput: () => cursorInput,
+        // 快捷方式（P11d）：同宿主的门禁与令牌；属性检查读探针的属性全集，不发消息、不启动，只记一条
+        activeCallback: () => runtime?.activeCallback ?? null,
+        openUserShortcut: (name) => {
+          let result: 0 | 1 | 2 = 2;
+          if (shortcutToken.take()) {
+            const property = input.properties.get(name);
+            result = property?.type === "usershortcut" && property.isbound === true ? 1 : 0;
+          }
+          shortcutCalls.push({ frame: frames, name, result });
+          return result;
+        },
       }));
       runtime = new ScriptRuntime(created, {
         report,
@@ -456,9 +489,12 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     cursor(frameInput) {
       if (disposed) return;
       const active = runtime?.hasCursorCallbacks ?? false;
+      // 令牌（P11d）：按下沿在派发之前发、松开沿在派发之后收（同渲染器 `stepCursor` 与宿主）
+      shortcutToken.beginFrame(frameInput.down);
       const { snapshot, dispatches } = cursorSession.frame(frameInput, { layers: bundle.layers, state }, active);
       cursorInput = snapshot;
       for (const item of dispatches) runtime?.cursorEvent(item.object, item.callback, item.world, item.local);
+      shortcutToken.endFrame(frameInput.down);
     },
     result() {
       return {
@@ -472,6 +508,7 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         recompile: [...recompile.values()].map((item) => ({ ...item })),
         unconnected: { ...unconnected },
         audioResolutions: api?.audioResolutions ?? [],
+        shortcuts: shortcutCalls.map((call) => ({ ...call })),
         messages: [...messages],
         console: {
           count: consoleCount,

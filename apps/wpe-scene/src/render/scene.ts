@@ -2021,7 +2021,7 @@ export class GpuScene {
    * warning（每个名字一次）、返回 null，槽用缺省纹理。
    */
   private userGpuOf(crop: UserTextureCrop): UserGpu | null {
-    const { rect, image, key, animation } = crop;
+    const { rect, image, key, animation, pad } = crop;
     const found = this.userGpu.get(key);
     if (found) {
       // GIF / 视频换了帧来源对象（值换过，WPE 从头开始）：旧的释放、按新的重建；同一个对象继续用
@@ -2047,6 +2047,19 @@ export class GpuScene {
       // 初始内容：GIF 是当前画布，视频没有（全 0，等第一次 `drawn` 交帧，同 WPE 的初始数据）
       const initial = animation.current();
       if (initial) this.uploadUserFrame(key, texture, rect, initial);
+    } else if (image && pad) {
+      // 快捷方式图标（P11d）：纹理是补透明边后的尺寸（`rect`），整张图标拷到 `pad` 偏移处，其余保持建纹理时的全 0（WebGPU 保证）；不带 gamma 表
+      try {
+        this.device.queue.copyExternalImageToTexture(
+          { source: image.source },
+          { texture, origin: { x: pad.x, y: pad.y }, premultipliedAlpha: false },
+          { width: image.width, height: image.height },
+        );
+      } catch (error) {
+        this.release(texture);
+        this.warnUser(key, `用户纹理 ${key} 拷进纹理失败：${oneLine(String(error))}，用缺省纹理`);
+        return null;
+      }
     } else if (image) {
       let temp: GPUTexture | null = null;
       try {
@@ -2144,9 +2157,11 @@ export class GpuScene {
 
   /** 用户纹理的采样：线性或点（槽的 `nearest`）、寻址按槽的 `clamp`、1 级 mip、无各向异性（p11-REPORT「属性纹理」第 4 条）。 */
   private userSampler(slot: UserTextureSlot, forceNearest = false): GPUSampler {
-    const address: GPUAddressMode = slot.clamp ? "clamp-to-edge" : "repeat";
+    // 快捷方式图标（P11d，p11-REPORT「P11d 补测」）：寻址一律夹取、过滤一律线性，不看缺省纹理的标志位（缺省纹理 `util/clouds_256` 本来是重复寻址）
+    const shortcut = slot.source.kind === "usershortcut";
+    const address: GPUAddressMode = slot.clamp || shortcut ? "clamp-to-edge" : "repeat";
     // GIF 强制点采样（p11-REPORT M5，WPE 的 GIF 纹理不走线性）；视频与静态图按槽的 `nearest`
-    const filter: GPUFilterMode = forceNearest || slot.nearest ? "nearest" : "linear";
+    const filter: GPUFilterMode = forceNearest || (slot.nearest && !shortcut) ? "nearest" : "linear";
     return this.sampler({
       addressModeU: address,
       addressModeV: address,

@@ -69,8 +69,8 @@ describe("parseUserTextures：写法与槽号（rea-p11-textures 第 1 节）", 
       [4, "usershortcut", "sc"],
       [9, "property", "propC"],
     ]);
-    // `type` 写别的值（含 "user"）都按属性处理；封面来源（P11c）不再报
-    expect(issues.sort()).toEqual(["usertextures:usershortcut"]);
+    // `type` 写别的值（含 "user"）都按属性处理；封面（P11c）、快捷方式（P11d）来源都不再报
+    expect(issues.sort()).toEqual([]);
   });
 
   it('name 不是字符串、keepaspect 不是 JSON true 都不算（`keepaspect: 1`、"true" 是假）', () => {
@@ -492,7 +492,11 @@ describe("compileScene：用户纹理（P11b 步骤 1）", () => {
     expect(system.userTextures).toEqual([{ kind: "system", name: "$mediaThumbnail" }]);
     expect(system.media).toBe(true);
     const shortcut = await compile([image(1)], { base: { usertextures: [{ name: "sc", type: "usershortcut" }] } });
-    expect(shortcut.unsupported).toEqual(["usertextures:usershortcut"]);
+    // 快捷方式来源（P11d）：同属性来源登记就地目标，不再报 `usertextures:usershortcut`
+    expect(shortcut.unsupported).toEqual([]);
+    expect(shortcut.bindings.filter((b) => b.target.kind === "user-texture").map((b) => b.property)).toEqual(["sc"]);
+    expect(shortcut.userTextures).toEqual([{ kind: "usershortcut", name: "sc" }]);
+    expect(shortcut.media).toBe(false);
   });
 
   it("pass 级 keepaspect 中性；对象项 keepaspect: true 报 usertextures:keepaspect；非 instanced 的显式参考报 usertextures:reference", async () => {

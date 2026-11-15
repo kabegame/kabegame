@@ -104,7 +104,7 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ]),
   ],
   /** `requestFeatures` 声明里没有，DLL 有（报告 C）；`isObjectValid`、`clearTimeout` 已实现。 */
-  engine: methods("root", ["registerAsset", "openUserShortcut", "requestFeatures"]),
+  engine: methods("root", ["registerAsset", "requestFeatures"]),
   /** `input` 的三个只读成员（`cursorWorldPosition` / `cursorScreenPosition` / `cursorLeftDown`）P6c 已实现（`script/api.ts` 的 `installInput`）。 */
   input: [],
   localStorage: [],

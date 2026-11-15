@@ -41,6 +41,14 @@
     allow-unset
     @update:model-value="emit('update:modelValue', $event)"
   />
+  <WpeShortcutField
+    v-else-if="item.kind === 'usershortcut'"
+    :name="item.key"
+    :model-value="modelValue"
+    :image-id="imageId"
+    :save="save"
+    @update:model-value="emit('update:modelValue', $event)"
+  />
   <KbText v-else :model-value="modelValue" allow-unset @update:model-value="emit('update:modelValue', $event)" />
 </template>
 
@@ -52,10 +60,17 @@ import KbSelect from "@/components/common/form/KbSelect.vue";
 import KbColor from "@/components/common/form/KbColor.vue";
 import KbPath from "@/components/common/form/KbPath.vue";
 import KbText from "@/components/common/form/KbText.vue";
+import WpeShortcutField from "./WpeShortcutField.vue";
 import type { WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
 import { hexToWpeColor, wpeColorToHex, wpeLabelText } from "@/utils/wpeProperties";
 
-const props = defineProps<{ item: WpeWebPropertyItem; modelValue: unknown }>();
+/** `imageId` 与 `save` 只给快捷方式的「测试」用（P11d）：按这张图的这个属性启动，点之前先把草稿写完 */
+const props = defineProps<{
+  item: WpeWebPropertyItem;
+  modelValue: unknown;
+  imageId?: string;
+  save?: () => Promise<void>;
+}>();
 const emit = defineEmits<{ "update:modelValue": [value: unknown] }>();
 const sliderStep = computed(
   () => props.item.step ?? (Number.isInteger(props.item.min) && Number.isInteger(props.item.max) ? 1 : undefined),

@@ -2013,8 +2013,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     for (const { source } of userTextures.slots) {
       if (!(bundle.userTextures ??= []).some((item) => item.kind === source.kind && item.name === source.name))
         bundle.userTextures.push({ ...source });
-      // 封面来源（P11c）：伪属性 `$mediaThumbnail` / `$mediaPreviousThumbnail` 同属性来源登记就地目标，值由宿主的媒体模块当增量写进来
-      if (source.kind === "property" || source.kind === "system") bindings.bindUserTexture(source.name);
+      // 封面来源（P11c）：伪属性 `$mediaThumbnail` / `$mediaPreviousThumbnail` 同属性来源登记就地目标，值由宿主的媒体模块当增量写进来；
+      // 快捷方式（P11d）：属性值是后端给的键（原值的哈希），宿主据它取图标
+      bindings.bindUserTexture(source.name);
     }
     // rope 两类系统的 pass 无条件换成 `genericropeparticle`、带 `.geom` 翻译（P4d 步骤 1、2，rea-p4d-rope.md 第 6 节，见 `ROPE_SHADER`）
     const rope = isRopeRenderer(context.particle?.renderer?.kind);

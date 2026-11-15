@@ -1261,7 +1261,7 @@ export function checkPassFeatures(
     if (value && typeof value === "object") unsupported.add("combo:user-binding");
   if (alphaWritingUsed(pass.alphawriting)) unsupported.add("material:alphawriting");
   // `usertextures` / `usertexturereference`（P11b）不在这里报：按项报的 `usertextures:*` 要知道缺省纹理解析成什么，由 `compilePass`
-  // 调 `parseUserTextures` 给出（有效属性来源不再报，封面 `:system`、快捷方式 `:usershortcut` 等 P11c、P11d）。
+  // 调 `parseUserTextures` 给出（有效来源不再报：属性、封面 `:system`、快捷方式 `:usershortcut`）。
   // pass 级 `keepaspect` 中性：WPE 材质 pass 不读这个键，`keepaspect` 只在 `usertextures` 的对象项上读（rea-p11-textures 第 1 节，
   // rea-p11b「顺带」），对象项上的 `keepaspect: true` 报 `usertextures:keepaspect`
   for (const [key, value] of Object.entries(pass))

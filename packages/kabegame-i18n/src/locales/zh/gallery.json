@@ -448,5 +448,19 @@
   "wpeSetCoverFailed": "设为封面失败",
   "wpeRestoreCover": "恢复默认封面",
   "wpeRestoreCoverDone": "已恢复默认封面",
-  "wpeRestoreCoverFailed": "恢复默认封面失败"
+  "wpeRestoreCoverFailed": "恢复默认封面失败",
+  "wpeShortcutKindFile": "文件",
+  "wpeShortcutKindDirectory": "文件夹",
+  "wpeShortcutKindWeb": "网址",
+  "wpeShortcutKindCmd": "命令",
+  "wpeShortcutPathFile": "程序或文件的路径",
+  "wpeShortcutPathDirectory": "文件夹路径",
+  "wpeShortcutPathWeb": "网址，如 https://example.com",
+  "wpeShortcutPathCmd": "命令行，如 notepad readme.txt",
+  "wpeShortcutArgs": "启动参数（可选）",
+  "wpeShortcutBrowse": "浏览",
+  "wpeShortcutTest": "测试",
+  "wpeShortcutTestStarted": "已请求启动",
+  "wpeShortcutTestRejected": "无法启动这个快捷方式",
+  "wpeShortcutTestFailed": "启动快捷方式失败"
 }

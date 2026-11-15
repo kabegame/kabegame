@@ -492,7 +492,7 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
   | `colorBlendMode` | 没有实测，推断属图层结构 | 重编译 |
   | 相机 `eye` / `center` / `up` | 不能绑 | 不登记绑定 |
   | COMBO | 不能绑，写成对象时进程断言中止 | 报 `combo:user-binding` |
-  | `usertextures` | 下一帧开头重跑材质的纹理解析，按当前值换该槽纹理 | 属性来源就地换（解码完的下一帧，P11b，见「用户纹理（P11b）」）；封面同一张来源表、同帧换（P11c，见「媒体（P11c）」）；快捷方式照报 `usertextures:usershortcut` |
+  | `usertextures` | 下一帧开头重跑材质的纹理解析，按当前值换该槽纹理 | 属性来源就地换（解码完的下一帧，P11b，见「用户纹理（P11b）」）；封面同一张来源表、同帧换（P11c，见「媒体（P11c）」）；快捷方式图标同一张来源表，取到图标的下一帧换（P11d，见「快捷方式（P11d）」） |
 
 - **没有任何绑定引用的属性**（只给脚本用、或作者声明了却没绑）：P3a 什么都不做，不再重编译。
 - **目标用 scene.json 坐标做稳定键**（`objects/<i>`、`objects/<i>/effects/<j>/passes/<k>`、`general`），不用 bundle 下标：未启用的 effect 不进 bundle，下标会随属性值移位；3b 的脚本 realm 跨重编译保留，脚本手里的图层对象也要按这个键找回。
@@ -1598,7 +1598,7 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 - 扩展名转小写再判断（`mediaKind`）。GIF 与视频按值共用一份（引用计数），每个纹理名各一份帧状态；不进按值的解码缓存，换走再选回来从头开始（同 WPE）。
 
 **能力表**：不再整个报 `material:usertextures` / `effect:*:pass:usertextures`，按项细分照报：
-- `usertextures:usershortcut`（等 P11d）；`usertextures:system`（封面）P11c 起不再报，见「媒体（P11c）」；
+- `usertextures:system`（封面）P11c 起不再报，见「媒体（P11c）」；`usertextures:usershortcut`（快捷方式图标）P11d 起不再报，见「快捷方式（P11d）」；
 - `usertextures:particle-sheet`：粒子材质的槽 0。WPE 的帧表在加载时按槽 0 定一次，运行中换图沿用旧帧表、把用户图当精灵表取格子（M4），语料 2 张 3 项，不做；
 - `usertextures:keepaspect`、`usertextures:reference`：对象项的 `keepaspect: true` 与 `usertexturereference`，读码清楚、已实现，语料 0 处，照报到有实测；
 - `usertextures:rendertarget:placeholder`（缺省是没被依赖的 `_rt_imageLayerComposite_*`，P8 绑棋盘格）、`usertextures:rendertarget:runtime`（缺省是 `_rt_FullFrameBuffer` 或 fbo）：语料 0 处。
@@ -1725,7 +1725,96 @@ P11c 照这三段做，每段放在对应的位置。依据：
 - `2932157836`、`2974757317`、`3219908811`、`3355291946`、`3470764447`；
 - `3482471820`、`3487328036`、`3823859141`、`3823864170`、`3837699827`。
 
-其余用到媒体的场景还差 `combo:SPRITESHEET`、`tex:animation`、图层层级类脚本 API、puppet、`openUserShortcut`（P11d）等。
+其余用到媒体的场景还差 `combo:SPRITESHEET`、`tex:animation`、图层层级类脚本 API、puppet 等（`openUserShortcut` 在 P11d 实现，见下节）。
+
+## 快捷方式（P11d）
+
+快捷方式是用户在属性面板里给场景配的「点一下就打开」的目标（`usershortcut` 属性）：程序、文件、文件夹、网址或命令行。场景里有两处用到它：
+- 图层的 `usertextures` 槽显示它的图标。这是 P11b 来源表的第三种来源，前两种是属性文件和封面。
+- 脚本在光标回调里调 `engine.openUserShortcut(属性名)` 启动它。
+
+只做 Windows。其它平台面板不显示这类属性，宿主拿到的一律未绑定，`openUserShortcut` 返回 `false`，图标槽用缺省纹理。非 Windows 的代码处标 `TODO:[WPE_SCENE]`。
+
+依据：
+- 读码 [rea-p11d](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11d.md)；
+- 实测 [p11-REPORT](../../.claude/plans/wpe-import/3-scene/phase11/p11-REPORT.md)「P11d 补测」；
+- 计划、约定与走查见 [phase-11d-shortcuts.md](../../.claude/plans/wpe-import/3-scene/phase11/phase-11d-shortcuts.md)。
+
+面板与值的格式见 [WPE 导入文档](WPE_IMPORT.md)「用户属性」。
+
+**宿主拿到的形状。** 后端（`wpe_web.rs` 的 `scene_user_from_view`）把快捷方式属性给成 `{ type: "usershortcut", value, isbound, commandtype?, file? }`：
+- `value` 不是原值，是原值 SHA-256 的前 16 位十六进制，没配时是空串。宿主只用它判断值变了没有，并按它缓存图标；完整路径不离开后端。
+- 另外三项是 WPE 给脚本看的字段（`baseclasses.js` 的 `convertUserProperties`，实测）：
+  - `commandtype` 是 `file` / `directory` / `website` / `command`；
+  - `file`：文件与文件夹只给最后一段名字，网址给整串，命令只给程序部分；
+  - 没配时只有 `isbound: false`。
+- 宿主把这一项原样放进 `applyUserProperties` 的增量。`engine.userProperties` 出口由 `scriptUserProperties` 剥掉这三项，脚本读到 `{}`，同 WPE。
+
+**图标。** 宿主经 `wpe_scene_shortcut_icon(imageId, name)` 取，这条命令登记在 `wpe-scene-host.toml`：
+- 返回 `[宽 u32 LE][高 u32 LE][直通 alpha 的 RGBA]`；没配、取不到、非 Windows 时是 0 字节。值只取 metadata 的 `userProperties`，不取工程缺省值。
+- 取法照 `winrtutil`（`wallpaper/wpe_shortcut/`）：
+  - **文件、文件夹、命令**：
+    - `SearchPathW` 补 `.exe`，再取 Shell 缩略图缓存（`IThumbnailCache`，256）；
+    - 取不到时依次退到：目录的已知文件夹图标、`.url` 的 `IconFile`（`PrivateExtractIconsW`）、按扩展名取系统图像列表（从 JUMBO 起，跳过补了边的假大图）；
+    - 后几种是图标句柄，画出来再去预乘：float32，`cvttss2si` 取低字节，`a = 0` 得 0；
+    - 最后照 OpenCV 填色：线性缩到 64×64 → `inpaint` TELEA 半径 8 → 放回原尺寸，只改 alpha ≤ 1 的像素的 RGB。
+  - **网址**：
+    - 带 iPhone Safari 的 User-Agent 请求页面，按 `<link>` 规则挑图标：看 apple-touch-icon 的 `sizes`，再加 `/favicon.ico`，按宽降序稳定排序；
+    - 边长不超过 512 的正方形图标保持原尺寸；
+    - 乘抗锯齿的圆形遮罩：`r = (min(w, h) >> 1) − 2`，`a = (mask·a) >> 8`；
+    - 取不到时用 WPE 的 `webthumbnailfallback.png`（300×300），同样乘遮罩；
+    - 缩放的滤镜没读清，先用 Catmull-Rom，标了 `TODO:[WPE_SCENE]`。
+  - OpenCV 4.4.0 的三处（8 位定点线性 `resize`、`inpaint` TELEA、`circle` 抗锯齿）逐行移植进 `cv.rs`，只依赖标准库。4.13 重写过 `inpaint`，结果不同，以 4.4.0 为准。
+- 宿主侧是 `usertex/sources.ts` 的 `usershortcut` 来源：
+  - 键变了才取，解码结果按键缓存；
+  - 照 WPE 补透明边到槽的比例（`crop.ts` 的 `padRect`）：比例按 float32，`(int)` 截断，`>> 1` 居中，不裁切；精灵表槽取帧的比例；
+  - 纹理名 `usershortcut_<键>x<round(比例·10)>`，格式 `rgba8unorm`、1 级 mip、线性过滤，寻址一律夹取（缺省纹理本来是重复寻址也一样）；
+  - 之后走 P11b 的换纹理通路；没有图标时用缺省纹理。
+
+**`engine.openUserShortcut(name)`** 的门禁照 WPE 实测：
+1. 只在 `cursorClick` / `cursorDown` / `cursorUp` 里能调（`ScriptRuntime.activeCallback`），否则抛 realm 的 `SyntaxError("Cannot execute user command outside of cursor callbacks.")`。没捕获时照 P3b 禁用这个回调。
+2. 参数缺失或不是字符串原始值：返回 `false`，不消耗令牌。
+3. 先取令牌（`shortcut/token.ts`），没有就抛 `SyntaxError("Cannot execute more than one user command per cursor click.")`。令牌在左键按下沿、本帧派发之前发，在松开沿、本帧派发之后收（渲染器的 `cursor.end` 钩子），所以同一次点击的 Down / Up / Click 共用一个。
+4. 再查属性全集：`type` 为 `usershortcut` 且 `isbound` 时返回 `true`，并把 `{ type: "kabegame:wpe-scene-shortcut", name }` `postMessage` 给父页面；否则返回 `false`。不存在的名字、空值也已经消耗了令牌。
+
+**启动：安全边界在应用页。** 场景脚本跑在宿主页里一个同源、没加沙箱的 realm（P3b），能拿到宿主的 `__TAURI_INTERNALS__`。所以宿主里的门禁只约束守规矩的脚本，不是安全边界。真正的边界有三层：
+- **`WpeSceneView`**（`wpeSceneShortcut.ts`）收到消息后核对：
+  - 来源是自己的 iframe，`name` 是长度 1–256 的字符串；
+  - 自己是可交互的（预览或桌面壁纸）；
+  - `navigator.userActivation.isActive` 为真。这是浏览器给真实用户输入的标记，页面伪造不了；点在 iframe 里，祖先 frame 也会被激活，约 5 s 有效。
+  - 同一属性 1 秒内至多一次。
+- **启动命令**：`WpeSceneView` 用**自己持有的**图片 id 调 `wpe_open_user_shortcut(imageId, name)`。这条命令只登记进 `generate_handler!`，不进任何 `permissions/*.toml`，只有主窗口与壁纸窗口的应用页（免 ACL）调得到；场景宿主调它被 ACL 拒绝（走查实测）。
+- **后端**只启动这张图（必须是库内场景）上 `project.json` 类型为 `usershortcut`、且用户在面板里配过的那一项：
+  - 调 `ShellExecuteW(NULL, NULL, 路径, 参数, NULL, SW_SHOWNORMAL)`，返回值 > 32 时返回 `true`；
+  - 没配返回 `false`；
+  - 属性不是快捷方式、属性不存在、图片不是场景都报错。
+
+这样一来，恶意脚本最多在用户刚点过壁纸的几秒内，重复打开用户自己给这张壁纸配的目标。
+
+**能力表**：删 `usertextures:usershortcut` 与 `script:api:engine.openUserShortcut`。
+
+**dev 探针**：
+- `renderFrame` 收 `shortcutIcons`（属性名 → `{ width, height, rgba }`，`rgba` 是 base64 的直通 alpha 像素）。
+- 结果的 `scripts.shortcuts` 按发生顺序列出经过门禁的调用：帧、属性名、返回码（0 失败、1 受理、2 没有令牌）。探针不启动、不发消息。
+- 快捷方式属性的 `userProperties` 可以直接给后端形状；裸字符串（含库里的面板值与工程缺省值）当作没配，`isbound: false`。
+- MCP `render_scene` 还不转发 `shortcutIcons`，所以缺省的库内用户属性里配过的快捷方式在探针里也当作没配。要看图标，就在屏外宿主里调 `wpe_web_pull_state` 与 `wpe_scene_shortcut_icon`，再自己调 `renderFrame`。
+
+**走查**（2026-11-15，生成工程 `p11-shortcut` / `p11-shortcut-v`，`ignore/p11/d/`）：
+- **图标**：dev 应用里取到的 7 张和 WPE 的纹理逐像素相同：notepad.exe、`.lnk`、`.url`、文件夹、`calc`、维基百科，以及 `example.com` 取不到图标时的缺省图。
+- **门禁**：同一串输入下 9 个用例的脚本日志逐行相同，包括相对帧号、返回值、两种异常的文本。9 个用例是：Down / Up / Click 共用令牌、参数不对、不存在的名字、回调之外、没捕获后禁用、`textinput`、空值。
+- **启动**：
+  - WPE 用正确的本机哈希时，`cursorDown` 里返回 `true`，打开目标文件夹；
+  - Kabegame 应用页调启动命令返回 `true`；
+  - 场景宿主调启动命令被 ACL 拒绝；
+  - 没配、不是快捷方式、不是场景、只有工程缺省值时都不启动。
+
+**已知差异**：
+- **返回值**：WPE 的 `true` 表示 `ShellExecuteW` 成功；我们的启动是异步的，`true` 只表示值已配好，启动失败只记日志。
+- **类型**：WPE 不查属性类型，`textinput` 里写合法格式的值也能启动；我们只认 `usershortcut`，也只认用户配过的值，不认工程缺省值。
+- **本机哈希**：WPE 的值中间有 6 位本机哈希，用来拒绝别的机器上配的值。哈希是 `sha256(MachineGuid 的 UTF-16 连结尾 NUL ‖ 14 27 db 88 1d)` 的前 6 位，走查实测。我们的值只来自本机面板，不带这一段。
+- **应用页的两道检查**：用户激活与 1 秒限频，WPE 没有。
+
+**语料**（233 个工程，2026-11-15）：能渲染 175 → 176，解锁 `3660962877`（24 格应用栏）。只去掉两个键：`script:api:engine.openUserShortcut`（6 张）、`usertextures:usershortcut`（5 张）。没有新增键，没有场景掉出。其余 5 张还差 `combo:SPRITESHEET`、`tex:animation`、`thisScene.createLayer` 等。
 
 ## 相机：视差、抖动与缩放（P5a）
 
@@ -1953,7 +2042,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 | 材质覆盖 | 编译材质前，对象的 `instance` 覆盖每个 pass：`combos` 合并，`textures` 按槽合并，规则同 effect 实例覆盖（`bundle.ts` 的 `instanceOverride`）。语料 167 个对象的 `textures` 都是一个非空字符串（94 个 `util/white`、73 个工程纹理），`combos` 都是 `{"version": 2}` | 实测 `p5b-inst` I2、`p5b-inst2` J2：槽 0 换成覆盖的那张 |
 | 合成 RT | 按槽 0 纹理的图像尺寸，不按 `size`（`compositeSize` 的条件是 `solidLayer && !instanced`）。`util/white` 时是 32×32，fbo 跟着它：多 pass effect 的中间结果在 32×32 上，遮罩变糊；单 pass effect 的末 pass 直接上屏，遮罩按自己的分辨率采样 | 实测 `p5b-inst2`：J1 合成 RT 与 fbo 都是 32×32，对照组 900×1000；`instance.textures` 换成补边纹理时取图像尺寸 48×40。整帧 0 差异 |
 | 内缩与颜色 | 不内缩（`solidlayer` 那一位）；颜色照常进基础 pass | 实测：J1、J2 末 pass UV 0–1，J3 直接上屏 UV 正好是图像 / 纹理；`p5b-inst` 的 `g_Color4` = (1, 0.6, 0.2, 1) |
-| 照报 | `features.ts` 的 `checkInstanceFeatures`：<br>- `usertextures`：P11b 起按槽并进基础 pass，用户属性纹理已实现（参考尺寸取对象 `size`、换图后合成 RT 跟着变、强制 `g_Color4 = 1`），媒体封面 P11c 起支持（见「媒体（P11c）」），`usershortcut` 照报 `usertextures:usershortcut`，见「用户纹理（P11b）」；<br>- `instance` 缺失或不是对象 → `model:instanced:instance`；<br>- 对象 `size` 不是字符串 → `model:instanced:size`（WPE 按 `"w h"` 读）；<br>- `textures` 不是非空字符串的数组、`combos` 不是对象、其它键 → `object:instance:<键>`。<br>`id` 是编辑器键，不是 instanced 的对象上 `instance` 不读 | 语料：只有 `usertextures` 出现过 |
+| 照报 | `features.ts` 的 `checkInstanceFeatures`：<br>- `usertextures`：P11b 起按槽并进基础 pass，用户属性纹理已实现（参考尺寸取对象 `size`、换图后合成 RT 跟着变、强制 `g_Color4 = 1`），媒体封面 P11c 起支持（见「媒体（P11c）」），快捷方式图标 P11d 起支持（见「快捷方式（P11d）」）；<br>- `instance` 缺失或不是对象 → `model:instanced:instance`；<br>- 对象 `size` 不是字符串 → `model:instanced:size`（WPE 按 `"w h"` 读）；<br>- `textures` 不是非空字符串的数组、`combos` 不是对象、其它键 → `object:instance:<键>`。<br>`id` 是编辑器键，不是 instanced 的对象上 `instance` 不读 | 语料：只有 `usertextures` 出现过 |
 
 ### 已知差异与只记不补
 
@@ -2778,7 +2867,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 ### 对比结果与已知差异
 
-五个确定性工程（`ignore/p6/c0/proj/p6c-*`）：`hit` 回调 98 / 98 与 `upd` 169 / 169 逐字相同，`par` 13 / 13；`shake` 回调序列 42 / 42 相同，数值差 ≤ 0.13（WPE 当时的 `g_Time` 取不到，用 `(帧 + 偏移) × 0.05`）；`zoom`（`perspective: true` 图层）35 / 49 逐字相同，其余 `localPosition` 差 ≤ 4.6e-5（覆盖相机的 float32 链没有逐步搬）；`persp` 序列相同，世界坐标差 ≤ 1e-3（远平面上 1 ulp，来自透视相机矩阵的 float32 组合）。已知没做：模型命中、木偶 `hitBox`、`openUserShortcut`（P11）、透视场景里 bit9 层的命中排序（`TODO:[WPE_SCENE]`）。语料能渲染 +11（`3146703458`、`3173418061`、`3340707146`、`3451555874`、`3460973721`、`3605722997`、`3637191856`、`3809965824`、`3810092560`、`3817779853`、`3832004152`）。
+五个确定性工程（`ignore/p6/c0/proj/p6c-*`）：`hit` 回调 98 / 98 与 `upd` 169 / 169 逐字相同，`par` 13 / 13；`shake` 回调序列 42 / 42 相同，数值差 ≤ 0.13（WPE 当时的 `g_Time` 取不到，用 `(帧 + 偏移) × 0.05`）；`zoom`（`perspective: true` 图层）35 / 49 逐字相同，其余 `localPosition` 差 ≤ 4.6e-5（覆盖相机的 float32 链没有逐步搬）；`persp` 序列相同，世界坐标差 ≤ 1e-3（远平面上 1 ulp，来自透视相机矩阵的 float32 组合）。已知没做：模型命中、木偶 `hitBox`、透视场景里 bit9 层的命中排序（`TODO:[WPE_SCENE]`）；`openUserShortcut` 在 P11d 实现，见「快捷方式（P11d）」。语料能渲染 +11（`3146703458`、`3173418061`、`3340707146`、`3451555874`、`3460973721`、`3605722997`、`3637191856`、`3809965824`、`3810092560`、`3817779853`、`3832004152`）。
 
 ## 层级、转向与 effect / 材质访问（P6d1a）
 

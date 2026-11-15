@@ -826,7 +826,9 @@ export class ScriptApi {
       if (!this.convertedProperties)
         // 键按 WPE 的字节序（`scriptPropertyEntries`），同 `applyUserProperties` 的参数
         this.convertedProperties = this.realm.internal.convertUserProperties(
-          JSON.stringify(Object.fromEntries(scriptPropertyEntries(Object.entries(scriptUserProperties(this.properties))))),
+          JSON.stringify(
+            Object.fromEntries(scriptPropertyEntries(Object.entries(scriptUserProperties(this.properties)))),
+          ),
         );
       return this.convertedProperties;
     });

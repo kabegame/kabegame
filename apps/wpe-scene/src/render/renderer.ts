@@ -132,6 +132,11 @@ export interface SceneRendererOptions {
     active(): boolean;
     input(snapshot: CursorInputSnapshot): void;
     events(dispatches: readonly CursorDispatch[]): void;
+    /**
+     * 本帧派发之后（P11d，每个实时帧调一次，不管有没有派发）：快捷方式的点击令牌在这里按松开沿收回（`shortcut/token.ts`）；
+     * 按下沿在派发之前、`input` 里发。
+     */
+    end?(snapshot: CursorInputSnapshot): void;
   };
 }
 
@@ -712,6 +717,7 @@ export class SceneRenderer {
     );
     options.input(snapshot);
     if (dispatches.length) options.events(dispatches);
+    options.end?.(snapshot);
   }
 
   private render(runScripts = false): void {

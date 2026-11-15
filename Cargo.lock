@@ -4553,6 +4553,7 @@ dependencies = [
  "pathql-rs",
  "percent-encoding",
  "realfft",
+ "regex",
  "reqwest 0.11.27",
  "rmcp",
  "rustfft",

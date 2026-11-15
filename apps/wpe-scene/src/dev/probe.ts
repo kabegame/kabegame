@@ -131,7 +131,12 @@ import {
 } from "./probeMedia";
 import { prepareProbeTexts } from "./probeTexts";
 import type { UserProperty } from "../compile/bindings";
-import { checkGifDts, prepareProbeUserTextures, userVideoValues } from "./probeUserTextures";
+import {
+  checkGifDts,
+  prepareProbeUserTextures,
+  userVideoValues,
+  type ProbeShortcutIconInput,
+} from "./probeUserTextures";
 import {
   checkCanvas,
   expandInputTimeline,
@@ -272,6 +277,11 @@ export interface RenderFrameOptions {
   /** 「场景阴影」设置（P13d）：缺省取 dev 覆盖（`dev/shadowsOverride.ts`），再缺省跟随 WPE。 */
   shadows?: SceneShadowSetting;
   userProperties?: Record<string, unknown>;
+  /**
+   * 快捷方式图标（P11d）：属性名 → 宽高与 base64 的直通 alpha RGBA。探针没有后端，快捷方式槽的图标只能由请求给（没给 = 没有图标，用缺省纹理）；
+   * 属性的 `userProperties` 值可以给后端形状 `{ value, isbound, commandtype?, file? }`，`value` 是键（图标不取决于它，只按属性名取）。
+   */
+  shortcutIcons?: Record<string, ProbeShortcutIconInput>;
   /** `g_Time`（秒）；`g_Daytime` 固定 0.5，保证可复现。传了 `particles` 时改用 dt 的累计值。 */
   time?: number;
   /**
@@ -549,7 +559,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     bundle.textures.some((texture) => !!texture.video) || userVideoValues(bundle, options.userProperties).length > 0,
   );
   // 用户纹理（P11b 步骤 2）：按 `userProperties` 预先解码并等完，读回的就是用户图；没有属性来源时不建
-  const userTextures = await prepareProbeUserTextures(bundle, options.userProperties, reader);
+  const userTextures = await prepareProbeUserTextures(bundle, options.userProperties, reader, options.shortcutIcons);
   const gpu = await acquireGpu();
   // 逐 draw 轨迹：建场景、编码都用包过的设备（返回的仍是真对象）；没要轨迹时就是 `gpu.device` 本身
   const tracer = traceOptions ? createDrawTracer(gpu.device, traceOptions) : null;
