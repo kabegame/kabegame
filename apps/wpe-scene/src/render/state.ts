@@ -394,6 +394,9 @@ export class SceneState {
         for (const step of effect.steps)
           if (step.kind === "draw") constants.set(step.pass.key, { ...step.pass.uniforms });
       }
+      // puppet 纹理通道网格的材质常量（P12b2-2）：该 draw 的 uniform 同样从这里取
+      if (layer.puppet?.textureChannels?.pass)
+        constants.set(layer.puppet.textureChannels.pass.key, { ...layer.puppet.textureChannels.pass.uniforms });
       if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
       // 组的上屏（P5b 步骤 4）：同 passthrough，g_Color4 由材质值置 1
       if (layer.groupUpload) constants.set(layer.groupUpload.key, { ...layer.groupUpload.uniforms });

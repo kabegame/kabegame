@@ -27,7 +27,14 @@ import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
-import { buildModelSkeleton, buildPuppet, modelMeshCombos, type ModelSkeleton, type ScenePuppet } from "./puppet";
+import {
+  buildModelSkeleton,
+  buildPuppet,
+  modelMeshCombos,
+  type ModelSkeleton,
+  type PuppetTextureChannels,
+  type ScenePuppet,
+} from "./puppet";
 import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
 import {
   bindingReader,
@@ -700,6 +707,11 @@ export interface ScenePuppetLayer extends ScenePuppet {
    */
   clip?: { masks: ScenePass[]; target: ScenePass } | null;
   composite: boolean;
+  /**
+   * 纹理通道网格（P12b2-2）加上它编好的材质 pass：网格自己的材质 + `BLENDROWCOUNT`（`DOUBLEBUFFERED` 照纹理组合键规则），稳定键 `objects/<i>/texchan`。
+   * 有它就强制合成路径（`composite` 恒真）；材质读不到时 `pass` 为 null（报 `material:missing`，整场退回）。
+   */
+  textureChannels?: (PuppetTextureChannels & { pass?: ScenePass | null }) | null;
   /** 直接上屏的 pass（基础材质 + puppet 组合键）；composite 时为空。 */
   passes: ScenePass[];
   /** 合成路径的上屏 pass（passthrough 材质 + puppet 组合键 + `BLENDMODE`）；直接上屏时为 null。 */
@@ -2184,7 +2196,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         const built = buildPuppet(file, (object as Record<string, unknown>).animationlayers, model.puppet, properties);
         for (const key of built.issues) unsupported.add(key);
         if (built.puppet) {
-          layer.puppet = { ...built.puppet, composite: false, passes: [], upload: null };
+          layer.puppet = {
+            ...built.puppet,
+            composite: false,
+            passes: [],
+            upload: null,
+            textureChannels: built.puppet.textureChannels && { ...built.puppet.textureChannels, pass: null },
+          };
           puppetMaterials.set(index, {
             passes: merged,
             instanceSize: instance ? instanceReferenceSize(object.size) : null,
@@ -2240,8 +2258,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   ): Promise<void> {
     const puppet = layer.puppet!;
     puppet.composite = composite;
-    const checkAttributes = (pass: ScenePass) => {
-      if (pass.program !== null) checkMeshAttributes(bundle.programs[pass.program], puppet.mesh.format, unsupported);
+    const checkAttributes = (pass: ScenePass, format = puppet.mesh.format) => {
+      if (pass.program !== null) checkMeshAttributes(bundle.programs[pass.program], format, unsupported);
     };
     if (composite) {
       const path = passthroughMaterial(scene.version);
@@ -2259,6 +2277,21 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       if (Object.keys(puppet.combos).length && layer.passes[0]) upload.cullmode = layer.passes[0].cullmode;
       checkAttributes(upload);
       puppet.upload = upload;
+    }
+    // 纹理通道网格的材质（P12b2-2，rea-texchan-model 2：网格自己的材质 + `BLENDROWCOUNT` = 网格多读的 u32 的低字节；`DOUBLEBUFFERED` 由槽 1 有无纹理照纹理组合键规则推导）
+    const channels = puppet.textureChannels;
+    if (channels) {
+      const text = channels.material ? await fs.text(channels.material) : null;
+      const raw = text ? parseMaterial(text).passes[0] : undefined;
+      if (!raw) unsupported.add(`material:missing:${channels.material}`);
+      else {
+        const compiled = await compilePass(
+          { ...raw, combos: { ...raw.combos, BLENDROWCOUNT: channels.rows } },
+          { key: `objects/${index}/texchan`, material: channels.material, puppet: true },
+        );
+        checkAttributes(compiled, channels.mesh.format);
+        channels.pass = compiled;
+      }
     }
     const source = puppetMaterials.get(index);
     const raw = source?.passes[0];
@@ -2578,8 +2611,24 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
     if (depended && hasChildren) unsupported.add("dependency:group");
     // puppet 的上屏路径与材质变体（步骤 3 点 1）：composite 时 passthrough 上屏由 puppet 自己的 `upload` 承担，不再编 `layer.passthrough`
+    // 纹理通道网格（P12b2-2）强制合成路径（rea-texchan-model 2：UV 不缩放、`0x10`）；基础材质带光照 / 反射时 WPE 要另建 RT 预光照，照报
+    if (layer.puppet?.textureChannels) {
+      const preLit = layer.passes.some(
+        (pass) =>
+          pass.program !== null &&
+          (bundle.programs[pass.program].combos ?? []).some(
+            (combo) => /^(?:LIGHTING|REFLECTION)$/i.test(combo.name) && combo.value !== 0,
+          ),
+      );
+      if (preLit) unsupported.add("puppet:texture-channels:prelighting");
+    }
     if (layer.puppet)
-      await finalizePuppet(index, layer, layer.effects.length > 0 || blended || depended, blended ? cbm : 0);
+      await finalizePuppet(
+        index,
+        layer,
+        layer.effects.length > 0 || blended || depended || !!layer.puppet.textureChannels,
+        blended ? cbm : 0,
+      );
     if ((blended || depended) && !layer.puppet) {
       const path = passthroughMaterial(scene.version);
       const text = await fs.text(path);
@@ -2734,6 +2783,8 @@ export function transferableBuffers(bundle: SceneBundle): ArrayBuffer[] {
             layer.puppet.mesh.vertices.buffer,
             layer.puppet.mesh.indices.buffer,
             ...layer.puppet.animations.map((animation) => animation.frames.buffer),
+            // P12b2-2：纹理通道轨道（自有缓冲）
+            ...layer.puppet.animations.flatMap((animation) => animation.channels?.map((track) => track.buffer) ?? []),
             // P12b1：变形纹理与裁切分段索引是编译期自有缓冲
             ...(layer.puppet.morph ? [layer.puppet.morph.texels.buffer] : []),
             ...(layer.puppet.clipping?.segments.map((segment) => segment.buffer) ?? []),

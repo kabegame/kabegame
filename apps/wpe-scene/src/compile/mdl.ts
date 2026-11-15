@@ -274,6 +274,11 @@ export interface MdlAnimation {
    * 模型的剔除盒按「max.x > min.x」判有效，所以全 0 等于没有）。可选同上。
    */
   bounds?: number[] | null;
+  /**
+   * v ≥ 3 的纹理通道轨道（P12b2-2，rea-texchan-model 3 第 11 项，WPE `A+0xd8`）：n3 条，每条 `length + 1` 个 f32（原缓冲上的视图，字节 4 对齐时）；第 i 条写
+   * `g_BlendMap` 的第 i 个 float。没有这一段或 n3 为 0 时为空数组。可选同上（手写夹具不动）。
+   */
+  channels?: Float32Array[];
   /** v ≥ 6 的每骨骼绘制顺序轨道（rea 4.7 第 15 项）：P12a 只记有没有。 */
   drawOrderTrack: boolean;
   /** 事件：f32 秒 + 事件 JSON（rea 4.7 第 17 项）。P12c 派发。 */
@@ -741,8 +746,13 @@ function readAnimations(
       if (records > 0 || constraints > 0) unsupported = true;
     }
     let boneAlpha: Float32Array | null = null;
+    const channels: Float32Array[] = [];
     if (version >= 3) {
-      scalars(reader.u32());
+      // 纹理通道轨道（P12b2-2，rea-texchan-model 3）：n3 条「u32 读了不用 + f32 块」，第 i 条写 `g_BlendMap` 的第 i 个 float
+      for (let n = reader.u32(), k = 0; k < n; k++) {
+        reader.u32();
+        channels.push(floatView(checkTrack(reader.block(), 4, frames)));
+      }
       if (reader.u8()) {
         // 每条骨骼轨道一条标量轨道（u32 读了不用 + f32 块），排成「帧 × 轨道」
         const alpha = new Float32Array(frames * trackCount);
@@ -792,6 +802,7 @@ function readAnimations(
       boneAlpha,
       morphWeights,
       meshMorphs,
+      channels,
       bounds,
       drawOrderTrack,
       events,

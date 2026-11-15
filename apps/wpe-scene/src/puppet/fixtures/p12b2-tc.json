@@ -1,0 +1,877 @@
+{
+  "source": "ignore/p12/b2/gen/proj/p12b2-tc，WPE 抓帧 ignore/p12/b2/gen/out/wpe-p12b2-tc-fps20-1920x1080-consts.json，日志 p12b2-tc-fps20-1920x1080-log.txt；生成 ignore/p12/b2/impl/mkfix_texchan.py",
+  "project": "p12b2-tc",
+  "dt": [
+    0.000177299997, 0.0802737027, 0.0505091995, 0.0514515005, 0.0515866987, 0.0508079007, 0.0508323014, 0.0511920005,
+    0.0508971997, 0.0506468005, 0.050188899, 0.0512522012, 0.0510791019, 0.0511754006, 0.0521220006, 0.0508855991,
+    0.0511357002, 0.0516912006, 0.0515989996, 0.0493241996, 0.0502788983, 0.0493787006, 0.0500398017, 0.0504789017,
+    0.0493086986, 0.0496658012, 0.0495296009, 0.0500569008, 0.0514907017, 0.0495003983, 0.0499133989, 0.0496465005,
+    0.0501228012, 0.0503248982, 0.0496744998, 0.0494095013, 0.0505988002, 0.0500781015, 0.0509268008, 0.050306201,
+    0.0493589006, 0.0493582003, 0.0496592, 0.0500423014, 0.0514988005, 0.0503429994, 0.0499926992, 0.0505915992,
+    0.0492043011, 0.0497436002, 0.0495878011, 0.0496932007, 0.0500939004, 0.0500526018, 0.0493227988, 0.0495112017,
+    0.0481883995, 0.0514943004, 0.0516243987, 0.0503391996, 0.0498716012, 0.0496699996, 0.0499894992, 0.0495913997,
+    0.0501752011, 0.0495218001, 0.0509223007, 0.0494848005, 0.0501406007, 0.050789699, 0.0496818982, 0.0502462015,
+    0.0497413017, 0.0511641018, 0.0495788008, 0.0513886996, 0.0503990017, 0.0506551005, 0.0484218001, 0.0491308011,
+    0.0504538007, 0.0494528003, 0.0496965982, 0.0499926992, 0.0504295006, 0.0506734997, 0.0493277982, 0.0505113006,
+    0.0505588986, 0.0493160002, 0.0494585, 0.0501987003, 0.0507804006, 0.0498473011, 0.0500526987, 0.0495793,
+    0.0496688001, 0.0494756997, 0.0518712997, 0.0471687987, 0.0520910993, 0.0492575988, 0.0545778982, 0.0501949005,
+    0.0500839986, 0.0510591008, 0.0495719984, 0.0495848991, 0.0510575995, 0.0494977012, 0.0500455014, 0.0545088984,
+    0.0582172982, 0.0466407984, 0.0471399985, 0.0501695983, 0.0466810986, 0.0551871993, 0.0523497015, 0.0362876989,
+    0.0506322011, 0.064279601, 0.0503489003, 0.0478018001, 0.0499292016, 0.0501638986, 0.0671994984, 0.0484529994,
+    0.0476320982, 0.0481623001, 0.0478724018, 0.0509710982, 0.0482132994, 0.0543214008, 0.0477688015, 0.0465307012,
+    0.0523566008, 0.0567929, 0.0354717001, 0.0366532989, 0.0527837984, 0.0520411991, 0.0566847995, 0.050539501,
+    0.0500125997, 0.0496222004, 0.0526234992, 0.0493730009, 0.0497649014, 0.0490550995, 0.0492926985, 0.0482450016,
+    0.0523782, 0.0519419983, 0.0499675982, 0.0515305996, 0.0651191995, 0.0495840013, 0.0366965011, 0.0280300006,
+    0.0508171991, 0.0565371998, 0.0498086996, 0.0521775, 0.0512205996, 0.051709, 0.0495135002, 0.0508952998,
+    0.0481890999, 0.0494651012, 0.0515668988, 0.0503297001, 0.0490145013, 0.0488251001, 0.0477957986, 0.0490505993,
+    0.0486295, 0.048262801, 0.0455251001, 0.101789802, 0.0975658968, 0.0941834003, 0.101897202, 0.0990708023,
+    0.0996252969, 0.0928914994
+  ],
+  "runtime": [
+    0.00017729999672155827, 0.08045100420713425, 0.13096019625663757, 0.18241170048713684, 0.2339984029531479,
+    0.2848063111305237, 0.3356386125087738, 0.386830598115921, 0.43772780895233154, 0.48837459087371826,
+    0.5385634899139404, 0.5898156762123108, 0.6408948302268982, 0.6920701861381531, 0.7441921830177307,
+    0.7950778007507324, 0.8462135195732117, 0.8979046940803528, 0.9495037198066711, 0.9988279342651367,
+    1.0491068363189697, 1.0984854698181152, 1.148525357246399, 1.1990041732788086, 1.2483129501342773,
+    1.2979787588119507, 1.3475083112716675, 1.397565245628357, 1.4490559101104736, 1.4985562562942505,
+    1.5484696626663208, 1.598116159439087, 1.648239016532898, 1.6985639333724976, 1.748238444328308, 1.7976479530334473,
+    1.848246693611145, 1.8983248472213745, 1.949251651763916, 1.9995578527450562, 2.048916816711426, 2.0982749462127686,
+    2.1479341983795166, 2.1979763507843018, 2.2494752407073975, 2.299818277359009, 2.349810838699341, 2.400402545928955,
+    2.4496068954467773, 2.4993503093719482, 2.548938274383545, 2.5986313819885254, 2.6487252712249756,
+    2.698777914047241, 2.748100757598877, 2.797611951828003, 2.8458003997802734, 2.897294521331787, 2.9489190578460693,
+    2.999258279800415, 3.0491297245025635, 3.098799705505371, 3.148789405822754, 3.198380708694458, 3.248555898666382,
+    3.2980778217315674, 3.3489999771118164, 3.398484706878662, 3.448625326156616, 3.499415159225464, 3.5490970611572266,
+    3.5993432998657227, 3.6490845680236816, 3.7002487182617188, 3.7498273849487305, 3.8012161254882812,
+    3.8516151905059814, 3.9022703170776367, 3.9506919384002686, 3.9998228549957275, 4.050276756286621,
+    4.099729537963867, 4.149425983428955, 4.199418544769287, 4.249848365783691, 4.3005218505859375, 4.349849700927734,
+    4.400361061096191, 4.4509196281433105, 4.500235557556152, 4.549694061279297, 4.599893093109131, 4.6506733894348145,
+    4.7005205154418945, 4.75057315826416, 4.800152778625488, 4.8498215675354, 4.89929723739624, 4.951168537139893,
+    4.998337268829346, 5.05042839050293, 5.099686145782471, 5.154263973236084, 5.204458713531494, 5.254542827606201,
+    5.305601596832275, 5.355173587799072, 5.404758930206299, 5.455816268920898, 5.505313873291016, 5.555359363555908,
+    5.60986852645874, 5.66808557510376, 5.714726448059082, 5.761866569519043, 5.812036037445068, 5.858717441558838,
+    5.913904190063477, 5.966254234313965, 6.002542018890381, 6.053174018859863, 6.117453575134277, 6.167802333831787,
+    6.215604305267334, 6.265533447265625, 6.315697193145752, 6.382896900177002, 6.431349754333496, 6.478981971740723,
+    6.527144432067871, 6.575016498565674, 6.625988006591797, 6.674201011657715, 6.728522300720215, 6.776291370391846,
+    6.822822093963623, 6.875178813934326, 6.931971549987793, 6.967442989349365, 7.004096508026123, 7.056880474090576,
+    7.108921527862549, 7.165606498718262, 7.216145992279053, 7.266158580780029, 7.3157806396484375, 7.368403911590576,
+    7.417777061462402, 7.4675421714782715, 7.516597270965576, 7.565889835357666, 7.614134788513184, 7.666512966156006,
+    7.718454837799072, 7.768422603607178, 7.819953441619873, 7.885072231292725, 7.934656620025635, 7.971353054046631,
+    7.999382972717285, 8.050200462341309, 8.10673713684082, 8.156545639038086, 8.208723068237305, 8.259943962097168,
+    8.311653137207031, 8.361166954040527, 8.41206169128418, 8.460250854492188, 8.509716033935547, 8.561283111572266,
+    8.611612319946289, 8.660627365112305, 8.709452629089355, 8.757247924804688, 8.80629825592041, 8.854928016662598,
+    8.903190612792969, 8.948716163635254, 9.050505638122559, 9.148072242736816, 9.242255210876465, 9.344152450561523,
+    9.443222999572754, 9.542848587036133, 9.635740280151367
+  ],
+  "frames": [179, 180, 181, 182, 183, 184, 185, 186],
+  "mdls": {
+    "models/tc_ovr_puppet.mdl": "H4sIAAAAAAAC/+3YX2hbVRwH8JO7dpuxdhMDKoyuYyIdjvW6VBnSe056V2mRDNc5nIMgS7OFauua2RRK1XKRRGYRM6TINmQUW6TICENFgqiUdMw9dKBP8cGH5UWE9mEvGSID/d0/J8naNP1qfahyDpyc5OST8z03hxva35Hu8Mu6fjDIdjDL52OMadTfiCbPvPladGikfbA/MZpoT8b6oyNnDrw+MnyWeW2BMSvvPT9Mz037ib1GyFd+32T3NUu4vfr1ylZr7v6Mja1Xfn24av8bXM+ZW/h31nPnmpxxi3MWGvN589Wnkoy1xwaedk/EVp4JMdba5T6doCtcdr6xPcxi85p8f9lc4xvuZGzaqIxj5tp2jHuGV6zMrWWHRGWs3mOtPTjGG1PlPfhW0ZSXLcd7dew9aaqsu4fa1s6WY6qOTUnjjVr5O9dWWU242XLkdSyXpsq6e6ht7Ww5anWsJo03muU9bFllTS9bjhN17IQ0VdbdQ21rZ09U7WEta0rjjPqKu6KBbWNb6XEra2Tb2YPMT49+9gBrot+hZnpsZg956xzpDr+k63oHm210j7Ffd4Y/qYVq34fW37lfq1/53MuR/Z8tIud8cvtdtP1n2VS7e6rvP+KCZIwNDQ8nmB11upLvtI5mVqfJ36aVv1FrGRZa34QAYwFmGjDzgLkNGNa1vtkJmFbA6IAJAeYoYE4BJgEYCzDnAXMBMBcBMw2YOcBcA0wOMPOAuQmYHwHzM2BuA+Y3wNwBzO+AYeb6pgEw2wHTBJidgAkA5jHA7AJMK2CeAEwbYPYDRgdMB2AOAaYTMCHAdAOmFzBhwBwFzHHAvAKYCGBOAeY0YAYAMwSYBGCSgBkDzNuAsQDzLmBSgHkPMOcBMwmYDwDzIWAuAOYjwEwB5mPAXATMZcB8ApgrgJkGzKeAmQXMZ4CZA8zngLkKmCxgrgHmC8B8BZivAZMDzDeA+RYw3wNmHjB5wFwHzA3A3FzXNHgzU84/khZXfbN1eTaM+Qt7O/2Fmc5MvkTjXuPWYtjI5EeNfZGMQfPGcl+O5haNbE+R5ktGrqWR74vs4JcvPc7J87cCB/hy3yEeyZicPssN/wme7Yny3elBTus4ebmWND9nTNLnMrw4PkWfvcSP5a7Q52f4QmmO1sjyYPBLWifHZxPf0Vp5Hsj+QOst8vTST7Rmgd9t+4XWLfJ4/Fdae4kXZu7Q+iXeW/zDvh4RyWiC9iYC2W3inOEXtxabBO1TpJceFsXxgDD8jwras7jbtkscy7WIbM8eQfsX8fiTYqHUJnannxJ0LaIwo4tgMCgy+WcEXZfoLT4nZhOG/XckZZiU8Txl9FDGC5QRpowXKaOPMo5TxgnKOEkZEcp4lTKilBGjjDhlDFDGIGWcpYwEZYxQxihljFHGOGW8U66jePeNUH2z9cp9o9p/qk2Wy50HVb1T1TtVvVPVO1W9U9U7Vb1T1TtVvVPVO1W9U9U7Vb1T1Ts3Xu+0a2Wqb66uzkadjerqbP5vZ1Ov/QXktOWqlS8AAA==",
+    "models/tc_mix_puppet.mdl": "H4sIAAAAAAAC/+3YP2gTURwH8N9d01prrAUdHBwiODiIOWsQh/ZyuWZwSKGgiINDk7RQNTXBRMgg4ZAgtYgUCVJEJEiRIiJFRIqIhFakQwRHx44OHRwdCnr/3uWaXC5fbcEg78HvfnfvPrz3co87yG88nrgsScNn6RBpgkBEoh6zycL0rWvJTD58I5W7nQsX0qlkfvr09Xz2JtltnUhbs8/H9HPVODHGUATnvko7mha1wn3d3Lz6ds6xu/Gc6zHX+nc5ntm3vjfjWX1BM/eYeyGSYPe7d6WQDqdnzlg7YijbKEShmHVa0n/hlvnEjpNGNZHd31LbPOERoupoIxfV9rYo20ZuWDavl81EG9m9Rq81mMbOZWcNQgst23OzvO1jt5lxWWsN3taYm+Wyjy0zY2fReeZiixWj1twsyz5WZsZlrTV4W2NulkUfKzJjZ9VZQ0+LVe25WS752BIzLmutwdsac5dca2hnVWbMLDW9FQHaR336sY96qZ8O0IB+HKD9FNS/Q4P6cZAO2uOMxxMXJUmK0FKvtY0pyUy/9KZ4v4fan7yv7ivB+jks/m4Q1iew5cf05Z+jStja1fuHLVBIUyabzZEx1VRjfrNFBsmnsW9T8zeqnSGls1EAowGmCpgaYDYBQ7HOZggwIcBIgFEAMwGYScDkAKMBZg4wC4BZBEwVMMuAWQHMKmBqgNkAzFfAfAPMJmC+A+YHYH4ChtTOJgCYfsAEATMEmCOAOQqYY4AJAeYEYE4C5hRgJMBEAHMeMCOAUQATB8wFwCQAMwGYS4C5ApirgJkEzBRgZgCTAUwOMAXAFAFzBzAaYO4CpgyYe4CZA8w8YB4A5iFgFgDzCDAVwDwGzCJgngDmKWCeAaYKmOeAWQLMC8AsA+YlYF4B5jVgVgDzBjBvAfMOMKuAeQ+YD4D5CJgaYNYA8wkwnwGz0dEE7J6K/kfySz0R5dFd0dibusyju4LtTWt9hce/D+ebJvPoriD/Nu+UO4d5vZPXO3m9k9c7eb2T1zt5vZPXO3m9k9c7eb2T1zt5vZPXO/ei3lkf5dFdwfeG7w0Pvjf/2974td8d5m3TlS8AAA==",
+    "models/tc_add_puppet.mdl": "H4sIAAAAAAAC/+3YP2gTURwH8N9d01pjjEUdHBwiOjiIOWsQkTS5XDM4pFBQxMGhaVpoNZpgImSQcGiQWkSKBCkiErRIEZEiIkVEQivSoYKbjh0dOjg6FPT+veSaXC5fjUOQ9+B3v7vLh/de8uMO8huJJy5I0uBJ2kOqIBCRqMXVZH7y+nQynQteGc/eyAbzqfFkbvL45VzmGlljlUhdsc6HtXNFP9HnkIXa5wptG2rUDPt143C6t32NzuarXQ/b9t/hfMa91X8zn3nPZ+QeoxYiCdZ9e1XyqWBq6oRZEV1ZRiYKxMzTovYNN41f7BCpVBXZ55tKi184TFQZqueC0toWIpaJ1C1b18mmo/Vs36PTHgxj5VJtD0ITLVlrs7zlYreYsVlzD85WX5vlkostMWNlsfabi01WjJprsxxxsRFmbNbcg7PV12ZZdLEiM1ZWanvoabKKtTbLRRdbZMZmzT04W33tom0PrazCjJGlhqfCQzuoTzv2US/10y7yakcv7SSf9h7ya0c/7bbmGYknzkmSFKKFXrOM45KRfmlDdn4O1T95Xu1Xgvl1WPzdJOyewLYf07Z/ispBs6p395kgn6J0JpMlfamJ+vrGCPnJZbB3U+M7qpUhub2RAaMCpgKYKmA2AEOx9mYAMAHASICRATMKmDHAZAGjAmYGMHOAmQdMBTCLgFkCzDJgqoBZA8wXwHwDzAZgvgPmB2B+AoaU9sYDmH7A+AAzAJj9gDkAmIOACQDmCGCOAuYYYCTAhABzGjBhwMiAiQPmLGASgBkFzHnAXATMJcCMAWYCMFOASQMmC5g8YAqAuQkYFTC3AFMCzB3AzABmFjD3AHMfMHOAeQCYMmAeAmYeMI8A8xgwTwBTAcxTwCwA5jlgFgHzAjAvAfMKMEuAeQ2YN4B5C5hlwLwDzHvAfABMFTArgPkImE+AWWtrPNadsvZH0vv1cJhHd0W9Ns/CPLorWG346M6h1yaz9/YZHt0Vbco2W2t3DvJ+J+938n4n73fyfifvd/J+J+938n4n73fyfifvd/J+J+93dt7v/Ly+PsSju4LXhteGB6/N/1Ybt/EbG0qFp5UvAAA=",
+    "models/tc_ovradd_puppet.mdl": "H4sIAAAAAAAC/+3YMWgTURgH8O+uaa011oIODg4RHBzEnDWIQ5tcrhkcUigo4uDQJC1UTU0wETJIOCRILSJFgrRFJEiRIiJFRIqIhFakQwVHx44OHRwdCnp3715yTS6Xv8ahlPfg3Xf37sd7L/dxB/lGY/GrijJ4no6QLklEJBt9OpGfvHMjkc4FbyWzd7PBfCqZyE2evZnL3Ca7rRPpa/b5iHGumSfmHKpUu6/RrqZHWHdeNza3sd1rdDZf7XrEsf8O57PG1v/PfGzMb8UuKxcySfa4Myv5VDA1dY5lxFS2UYkCUXZaNH7htvXETpJOVZnf39ZaPOEhospwPRa01rYQtk24bvm6bjYdqUfnHt32YBk7lmp7kJpoyV6bxx0Pu8ONw7I9uFtzbR5LHrbEjR3l2jOXm6wcYWvzGPawYW4clu3B3Zpr8yh7WJkbO2q1PXQ1Wc1em8eihy1y47BsD+7WXLvo2EMrq3FjRaXhrfDRAeoxjj3UTb10iPqMYx8dJL/xHeo3jv102J5nNBa/rChKiJa6WRqTihV+G011fw/1v3lfnVcS+zm8/9skfEzi248a279A5SDL6sOjDORTlM5ksmQuNVFf32qhfvJo/NvU+I1qZUhtb1TA6ICpAKYKmC3AULS9GQBMADAKYFTAjAFmHDBZwOiAmQHMHGDmAVMBzDJgVgCzCpgqYDYA8w0w3wGzBZgfgPkJmF+AIa298QGmFzB+wAwA5hhgjgPmBGACgDkFmNOAOQMYBTAhwFwEzBBgVMDEAHMJMHHAjAHmCmCuAeY6YMYBMwGYKcCkAZMFTB4wBcDcA4wOmPuAKQHmAWBmADMLmEeAeQyYOcA8AUwZME8BMw+YRcA8A8xzwFQA8wIwS4B5CZhlwLwCzGvAvAHMCmDeAuYdYN4DZhUwHwDzETCfAFMFzBpgPgPmC2A22hqfPVI2/kguLiyERd9bXeRG5EZ0kZv9lhuPNlsrdw6Keqeod4p6p6h3inqnqHeKeqeod4p6p6h3inqnqHeKeqeod3Ze7/y6uTks+t7qIjciN6KL3Oy33Hi1P+vg6zaVLwAA",
+    "models/tc_r2_puppet.mdl": "H4sIAAAAAAAC/+3ZTUhUURQH8DOj2WRm9v1lZtKiReSgEi10ZpxctFAQimgRoqOBleWQE7gIeYSESUSEREWEREREhESEhISohIuCli1btmjhsoVQ9829583NefP897EY4lw478w8f75znCvvKaejrf1UNNrQSBvJCYWIKKziYk/m7OVzPQND9RdS6Svp+kxvqmfo7OHzQ4OXyKx5ImfOvD6mXifdF+41EiHv60n6ZTlxHfb7lcvv3K81/u563vtjVv9/eb3sufl/cz19riKbS7J7EaaQOW/vSqa3vre/Qe9I2OyaWgmi2lb9ckT9hN+yn9h+cshZw1//lizwCTcTTbbk8lJrYbvUYkxLznJdPzsQz2W7R78essbkSJJ7COXRSEzX5jwcYIfZWFb34G/d2pwjATbCxuRRr4dwnh01tTnPBNgZNpbVPfhbt/aM1UMhO8rG5AWvh5I8u2Bqc14OsMtsLKt78Ldu7WWrh0J2gY3JYe93ujTPhuO6NueaAFvDxrK6B3/r1uYcDrBhNibXeT2sybN1pjbnWICNsbGs7sHfurVjVg+FbB0bk5NeD2V5Nmlqc+4KsF1sLKt78Ldu7S6rh0I2ycbklNfD2jybMrU5jwTYETaW1T34W7f2iNVDIZtik83dK+7qpeo7ytSxTO1MhNZTuTqW0zqqUM/RSnWspA1URVtoszpupk20lXbQdnXcTttoJ+2h3eq4m3ZRNe2jGnWsob2mbkdb+4loNNpEExF920pFs+mHWgn/547zO88n+11I//gcf3YRPhfi9ltV+0eoL67vYje2aJDppYHBwTS5pfpy9bOrqZICFj+LVz6TCxlKrG4SgHEAMwmYWcB8AQy1rm6qAFMLmChgEoDpBEw3YNKAcQAzBpjbgLkHmEnAPAPMFGCmATMLmEXAfALMZ8B8AcxXwCwB5jtgKLm6KQVMBDAVgKkCzFbA7ARMNWBqAXMAMAcBcwgwUcA0AeYoYJoBkwBMG2COA6YdMJ2AOQmY04A5A5huwPQBph8wA4BJAyYDmGHAXAWMA5hrgBkFzHXAjAFmHDA3AXMLMLcBcwcwE4C5C5h7gHkAmIeAeQSYScA8BswTwDwFzDPAPAfMC8C8BMwUYF4B5jVg3gBmGjBvATMDmHeAmQXMHGAWAPMeMIurmog5M6H+kfz44UOLRHFFbm/aYxLFFbw3D+7fj0kUV1j3tJhEcQXvjVpxiaILc0/bFZcoruC9aWxsjEsUV1h/p8UliisoeI1747UGma/JfE3mazJfk/mazNdkvibzNZmvyXxN5msyX5P5mszXZL72f8/X5LOQvZGQvZG9kZC9kb2RkL2RQPcmaP0Egz8+WmU/AAA=",
+    "models/tc_r3_puppet.mdl": "H4sIAAAAAAAC/+3aT2gcdRQH8LdpjDGNMWm7tdZa11rXutZkaIMI6e7sbnPwkOKCSenBQ5N0oanRLGYFCR6WUKQWkSBFgogECVJikCIii4iEVqSHGrwYPPbYQw8ec6u/mfm92V8zf/LVeJjDG3i/tzv5dN/Lvu7sBH5nhkfOWtaJk/QENVIpImpT8c54vfre1Pj07MDbE7X3awP1yYnx2Wr/pdmZd0kft4gaN/Xj0+px2XngvEYx5f+8TA8dDdsL8/nWI+zcwzV29nr+89NG/zt8Pffcrf/n9bxz3W7e5c6ijVL6vDmV+uTA5MWT3kTaXOseRaJMyXs4p37D++479hw1qNjJP79fjniHTxEt5Vt5sRRtF/Pa5FuW64bZabuVzR7DenCNzk2/h1SANnVtzplytM0UtCm0rNdDuHVqc26Wom1T/06cLb+HtoC1dG3O9RhbZ2NYr4dw69TmbMVYi43O834PuwJ2XtfmvBxjl9kY1ush3Dq1l40eouw8G51X/R7aA3ZV1+a8HmPX2RjW6yHcOrXXjR6i7CobnTf8Hh4J2A1dm/NmjN1kY1ivh3Dr1N40eoiyG2x0Jv+a0RH8bNr6+qBzX4ztY2NYr4dw69TmTDGW2Oic9nt4NEDTujbnbIzNsjGs10O4dWpnjR6ibJqNzjm/h86AzenanIdi7BAbw3o9hFun9pDRQ5TNsdHZ9nt4LDgKXZtzJcZW2BjW6yHcOrUrRg9R1maj86jfQ1fAjuranKsxtsrGsF4P4dapXTV6iLKjbHSe8nvYHbBTujbnuRg7x8awXg/h1qk9Z/QQZafYuHlhy11Ju/of36HWDnVl6VT/ukutXWpK3eo+sEetPfQ49dJe2qPWPdRH++hJ2q/W/ZSmA/Q0HVTrQXqKDtGzdFith+kZytDzdEStR9Rdy1F6kbJqzdILdIxeppxac/QSHacB6ldrP72i+zwzPPKmZVmDdHm39zU9YbnpgTqK4fdZjX9zP2Y+S3lvF8d/exE+l+L2S6r9V2nwDe9b++O9+rt9kqZnZmrOXUnpQqu+ewz2UMzB955b70GjDBW3N0XANACzBJg1wNwFDJW2N72AyQDGAkwRMBXAnAdMDTANwFwBzAJgFgGzBJjrgLkBmCZg1gBzGzB/AOYvwNwFzD3A/A2YTcBQeXvTDphOwHQDphcw+wBzADCHAJMBzFHAHAPMccBYgBkEzGuAOQWYImCGAfM6YEYAUwHMKGDOAeYtwJwHzAXAXATMNGBqgKkD5gPAfAiYBmDmAXMZMB8B5gpgrgLmE8B8CpgFwHwGmGuA+Rwwi4D5AjBfAuYrwCwB5mvALAPmG8BcB8wKYFYB8x1gbgDme8D8AJgfAdMEzE+A+RkwvwBmDTA3AfMrYH4DzO1tTbc+c039IfntykpeIlnRmk2uIJGs4Nmoz1FBImnhX9MKEskKns3Y2J8FiWRF65pGtkTiQn9u0rZEssK4T7MlkhWta1rRlkha8DVtzJZIVrSuaZdsiWSF8benLZG0iD2u+ts5Tsh+DtnPIfs5ZD+H7OeQ/Ryyn0P2c8h+DtnPIfs5ZD+H7OeQ/Rw738/x+507eYlkhcxGZiMhs5HZSMhsZDYyG5mNhMxGZiMhs5HZyHuRzNnEHf8AgmmxcjVPAAA=",
+    "models/tc_r4_puppet.mdl": "H4sIAAAAAAAC/+3aT2gcdRQH8LfbGNc0bmNaa601xlhrrXWzbmOMtdnZbHPIIQ0hiniQmGxaqBqTJYmQg4RFgtQiEqRIkSBBghQRKSJSJEhog/RQwaOHHHLIwUMPOXoI6G/293uTXzN/8tV4GPANvN/bnXyY97IvbGfK71x37+vZbO4U7aNKIkFESRXvDU9dmHh7eHSy9d1S+f1y69RIaXjyQuadyfExMsctospN8/qsel10X7jXKCS8nxfpnqPi6LDfbz+Czt1bY3fX896ftfrf5fWq5279N9fT5+qreU91FklKmPP2VKZGWkcutumJuKpGkwJRc5d+OaN+w7vVT+xJqhDt5Z/fLYZ8wmeIFjq38lBXuB3qNKZzy3LdIDvqbGW7x6AeqsbkOa+HhI/OmdqcNyLsBhvL6h6CrVub81yEnWNjcqrIPSR9NpXXtTl3RNgONpbVPQRbtzbnVIRNsTG5x+thj8/2mNqcpyPsNBvL6h6CrVt72uohzPawMXnW66HGZ2dNbc7zEXaejWV1D8HWrT1v9RBmZ9mYvOj1cJ/PLpranJci7BIby+oegq1be8nqIcwusjF5xeuh1mdXTG3OqxF2lY1ldQ/B1q29avUQZlfYmLzu9XC/z66b2pw3I+wmG8vqHoKtW3vT6iHMrrMxOel9J6d8Nuno2pzTETbNxrK6h2Dr1uacjLBJNiY3ej084LONpjbnpgjbxMayuodg69ZusnoIs41sTG7xeqjz2RZTm3MmwmbYWFb3EGzd2hmrhzDbwsbknNfDXp/Nmdqc8xE2z8ayuodg69bOWz2E2Rwbk4teD/U+WzS1OfdF2D42ltU9BFu3dp/VQ5gtsjF5wOvhQZ8dMLU5D0bYQTaW1T0EW7f2oNVDmB1gY3LJ6yHtsyVTm/NYhB1jY1ndQ7B1a49ZPYTZEhuTJ7we9vnshKnNeSbCzrCxrO4h2Lq1Z6wewuwEm2pe3nZXXaO+sWvVWqv+ZUypv/46tdapb5l6daW0WtNqYg20nxrV2kgP0QF6hA6q9SA9TIfoMTqs1sP0KB2hJ6hJrU30ODXTU9Si1hZ1132UnqFjaj1GT9Nxeo5OqPUEPUsnqZUyas3Q85SlU5RTa45eoDZ6idrV2k4vUge9QqfVeppeVjfDDuXVmqdO83ud6+59NZvNttFUWt+WlrLV9Jc6CsHPFZV/8vxhv0voj5fj312EzyW4/S7VfjvVvKXvUj/er8HUCI2Oj5fJLXV+q371aEtTxMHPWtufucIMFXY2BcBUALMAmGXArAGGunY2DYBpBkwWMAXA9ANmCDBlwFQAcwkwc4C5CpgFwFwDzHXA3ADMMmBuA+Y3wPwOmDXA/AGYDcD8CRgq7mxqAJMCTD1gGgBzADCHAHMEMM2AOQqY44A5CZgsYNoA0wGYM4ApAKYbMD2A6QVMP2BeA8wbgHkTMEOAOQ+Yi4AZBUwZMFOAmQbMB4CpAOZDwMwC5iPAXALMZcB8AphPATMHmM8AcwUwnwPmKmC+AMw8YL4EzAJgvgLMImC+Bsw1wHwDmG8B8x1grgPme8D8AJgfAXMDMD8BZgkwPwNmGTA3AbMCmF8Ac3tH02DOXKk+SFY6JeIWPBvKS8QuzGwKeYm4hfedlpeIW/BsFvIScQuezXJeIm7Bs1nLS8QtvPs0RyJ2YWbT4EjELXg2zY5E3IJnk3Uk4hbes6cjEbfg2fQ7EnELns2QIxG34NmUHYm4hff/aY5E3CLyuOxtH8zJ/kHZPyj7B2X/oOwflP2Dsn9Q9g/K/kHZPyj7B2X/oOwflP2Du98/+OudO50S8QqZjcxGQmYjs5GQ2chsZDYyGwmZjcxGQmYjs5HPQmYjIbOR2UjIbP6/s4k6/gbnWmeABV8AAA==",
+    "models/tc_db0_puppet.mdl": "H4sIAAAAAAAC/+3YQWjTUBgH8C9ZN+ecc6AHDx4qePAgNs4hHrY2y3bw0MFAEQ+Ca7vhNutWbIUdpAQpMofIkCFDRYqIDBUZIjJEpGwiO0zw6HFHDzt49DDQJO+9NGvT9K8TLPIefPmSlx/vveaRQL/Bgfh5Tes6SfvIVBQiUq24msiNXhtPpLORK8nM9Uwkl0omsqPHJ7JTk8TbKpG5ws/7rXPDPrHH0BX3vkHbmhlj4b2ubH592+fY2Xjudb9n/Tscz+lb/Tvjsb52Jzc5e6GSwvu9u5JLRVJjJy5lxycvp/nG2JhTnSjcx07z1g/ddB7cYTKppIr7m0aNB91DVOwt52mjtp2OchMtWzGvn03Hytm7Rr81OIbngrsGpYoW+NwibwXYLWE8lq3B39pzi1wIsAVheFbdZ65WWTXG5hY5GmCjwngsW4O/tecWWQ2wqjA8G+4amqqswecWOR9g88J4LFuDv7XnznvWUMsawjhZq3g5QrSLWqxjCzVTK+2hNuvYRrup3focdVjHDtrLxxkciJ/VNK2bXjSzbUxqTvppNd3/dTR/57X1Xins54j4s0FEnyKW32ct/xQ9jLBdvb2fgVyK0lNTGbKnGinP77TuDgpo4hNV+amqZUivb3TAmIApAqYEmA3AUF990wmYMGA0wOiAGQLMMGAygDEBMwOYOcAsAKYImEXALAFmGTAlwKwB5gtgvgJmAzDfAPMdMD8AQ0Z9EwJMK2DaAdMJmAOAOQiYQ4AJA+YIYI4C5hhgNMB0A+Y0YHoAowNmADBnABMHzBBgzgHmAmAuAmYYMCOAGQNMGjAZwOQAMw2YG4AxAXMTMAXA3ALMDGBmAXMHMHcBMweYe4CZB8x9wCwA5gFgHgHmMWCKgHkCmKeAeQaYRcA8B8xLwLwCzBJgXgPmDWDeAmYZMO8A8x4wHwBTAswKYD4C5hNg1uqaEO+ZZ38kYzIaLvjelGIyGi3c90a2BmxsbyprXzL+fQS2Wbfc2SXrnbLeKeudst4p652y3inrnbLeKeudst4p652y3inrnbLeufN65+f19V4ZjRVyb+TeyJB787/tTVD7BX3FAA2cLwAA",
+    "models/tc_zero_puppet.mdl": "H4sIAAAAAAAC/+3YP2gTURwH8N9d01prrAUdHBwiODiIOWsQhza5XDM4pFBQxMGhSVqoGk0wETJIOCRILSJFghQRCVKkiEgRkSIioRXpUMHRsaNDB0eHgt6f9y7X5HL5ahyKvgfvfneXD+/9cj/uht94InlRUYZP0wHSJYmIZGNeTxWnb15JZQvha+n8rXy4mEmnCtMnrxZyN4iNNSJ9lZ2PGeeaeWKuoUrO7xrtGHrMnu7r5uF1b+ce3a3nXI+58u9yPeve2t9Zz74XtGKPVQuZJHbfXZViJpyZOWVXxFTMqEShuH1aNv7hlvXEjpJOdZn/vqW1ecIjRLXRRixp7W0pyky0Yfm+XjYba0R3jl45WIbFipOD1EIrbG8et33sNjcua+fgbc29eaz42Ao3LMrOM5dbrByz9+Yx6mOj3LisnYO3NffmUfaxMjcsak4OPS1WY3vzWPaxZW5c1s7B25p7l105tLMaN1ZUmt6KAO2hPuPYR73UT/towDgO0F4KGt+hQeM4SPvZOuOJ5HlFUSK02GuXMa1Y4acxVO/3UP+d99V9Jdl/h88/W4Tfk3j6cSP9M1QN21W9d9AGxQxlc7k8mVtNNfa3RmSQfAb/NjV/o9oZUjsbFTA6YGqAqQNmEzAU72yGABMCjAIYFTATgJkETB4wOmBmATMPmAXA1ACzBJhlwKwApg6YdcB8AcxXwGwC5htgvgPmB2BI62wCgOkHTBAwQ4A5BJjDgDkCmBBgjgHmOGBOAEYBTAQwZwEzAhgVMAnAnANMEjATgLkAmEuAuQyYScBMAWYGMFnA5AFTBEwJMLcBowPmDmAqgLkLmFnAzAHmPmAeAGYeMA8BUwXMI8AsAOYxYJ4A5ilgaoB5BphFwDwHzBJgXgDmJWBeAWYZMK8B8wYwbwGzAph3gHkPmA+AqQNmFTAfAfMJMOsdTYDdqUokxi4dojaiNmKI2vwnY85pdw6Lfqfod4p+p+h3in6n6HeKfqfod4p+p+h3in6n6HeKfqfod3bf7/y8sTEq5u6aojaiNmKK2vxrtfEbvwByswC5lS8AAA==",
+    "models/tc_nolayer_puppet.mdl": "H4sIAAAAAAAC/+3YQWjTUBgH8C9ZN+esdaAHDx4qePAgNs4iHrY2zXrw0MFAEQ8e1nWDqdUWW6EHKUGKzCEypMgQkSJDhogMERkiUjaRHSZ49Lijhx08ehhokpeXZm2a/rUexngPXr7k5cd7r/lIoN9YMnVZUYbO0iHSJYmIZKPfTBenb19LZwuRG5P5O/lIMTOZLkyfvl7I3SK7rRHpq/b5qHGumSfmHKrk3NdoR9PjrLuvm5vX2M41upvPuR517b/L+ayxtf8zHxsLWrHHyoVMkj3uzkoxE8nMnGEZMZVtVKJwgp2WjV+4ZT2x46RTXeb3t7Q2T3iYqDbSiCWtvS3FbBNrWL6ul83GG9G9R689WMaOFWcPUgut2GvzuO1jt7lxWbYHb2uuzWPFx1a4saPsPHO5xcpxtjaPMR8b48Zl2R68rbk2j7KPlbmxo+bsoafFavbaPJZ9bJkbl2V78Lbm2mXXHtpZjRsrKk1vRYD2UZ9x7KNe6qcDNGAcB2g/BY3vUMg4huigPc9YMnVRUZQoLfayNE4qVvhtNNX7PdT/5n11X0ns5/D+b5PwMYlvP2Fs/xxVIyyrDw4zUMxQNpfLk7nUVGN9q0VD5NP4t6n5G9XOkNrZqIDRAVMDTB0wm4ChRGczCJgwYBTAqIAZB8wEYPKA0QEzC5h5wCwApgaYJcAsA2YFMHXArAPmG2C+A2YTMD8A8xMwvwBDWmcTAEw/YIKAGQTMEcAcBcwxwIQBcwIwJwFzCjAKYKKAOQ+YYcCogEkC5gJgUoAZB8wlwFwBzFXATABmCjAzgMkCJg+YImBKgLkLGB0w9wBTAcx9wMwCZg4wDwHzCDDzgHkMmCpgngBmATBPAfMMMM8BUwPMC8AsAuYlYJYA8wowrwHzBjDLgHkLmHeAeQ+YFcB8AMxHwHwCTB0wq4D5DJgvgFnvaAL2SJX9kYyLvuu6yI3IjegiN3sqNz5tzil3Dol6p6h3inqnqHeKeqeod4p6p6h3inqnqHeKeqeod4p6p6h3dl/v/LqxMSL67uoiNyI3oovc7LXc+LU/Uorf9JUvAAA="
+  },
+  "objects": [
+    {
+      "name": "tc_ovr",
+      "object": 2,
+      "path": "models/tc_ovr_puppet.mdl",
+      "layers": [
+        { "id": 2000, "animation": 5001, "name": "tc", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "rows": 1,
+      "draws": {
+        "179": {
+          "blendMap": [0.25, 0.894871712, 1.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [0.25, 0.905050755, 1.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [0.25, 0.91480732, 1.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [0.25, 0.924225628, 1.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [0.25, 0.93441534, 1.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [0.25, 0.944322407, 1.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [0.25, 0.954284906, 1.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [0.25, 0.963574171, 1.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_mix",
+      "object": 3,
+      "path": "models/tc_mix_puppet.mdl",
+      "layers": [
+        { "id": 2001, "animation": 5001, "name": "tc", "additive": false, "blend": 0.5, "rate": 1.0, "visible": true }
+      ],
+      "rows": 1,
+      "draws": {
+        "179": {
+          "blendMap": [0.799999952, 0.399999976, 1.0, 0.199999988],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [0.799999952, 0.399999976, 1.0, 0.199999988],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [0.799999952, 0.399999976, 1.0, 0.199999988],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [0.799999952, 0.399999976, 1.0, 0.199999988],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [0.800000012, 0.400000006, 1.0, 0.200000003],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [0.800000072, 0.400000036, 1.0, 0.200000018],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [0.800000072, 0.400000036, 1.0, 0.200000018],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [0.800000072, 0.400000036, 1.0, 0.200000018],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_add",
+      "object": 4,
+      "path": "models/tc_add_puppet.mdl",
+      "layers": [
+        { "id": 2002, "animation": 5001, "name": "tc", "additive": true, "blend": 0.5, "rate": 1.0, "visible": true }
+      ],
+      "rows": 1,
+      "draws": {
+        "179": {
+          "blendMap": [0.894999325, 1.78999865, 0.0, 0.089500092],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [0.899999321, 1.79999864, 0.0, 0.090000093],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [0.904999316, 1.80999863, 0.0, 0.090500094],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [0.909999311, 1.81999862, 0.0, 0.091000095],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [0.914999306, 1.82999861, 0.0, 0.091500096],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [0.919999301, 1.8399986, 0.0, 0.092000097],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [0.924999297, 1.84999859, 0.0, 0.092500098],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [0.929999292, 1.85999858, 0.0, 0.0930000991],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_ovradd",
+      "object": 5,
+      "path": "models/tc_ovradd_puppet.mdl",
+      "layers": [
+        { "id": 2003, "animation": 5001, "name": "tc", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true },
+        { "id": 2004, "animation": 5002, "name": "tc2", "additive": true, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "rows": 1,
+      "draws": {
+        "179": {
+          "blendMap": [0.400000006, 0.400000006, 0.400000006, 0.400000006],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [0.400000006, 0.400000006, 0.400000006, 0.400000006],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [0.400000006, 0.400000006, 0.400000006, 0.400000006],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [0.400000006, 0.400000006, 0.400000006, 0.400000006],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [0.400000036, 0.400000036, 0.400000036, 0.400000036],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [0.400000036, 0.400000036, 0.400000036, 0.400000036],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [0.400000006, 0.400000006, 0.400000006, 0.400000006],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [0.400000006, 0.400000006, 0.400000006, 0.400000006],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_r2",
+      "object": 6,
+      "path": "models/tc_r2_puppet.mdl",
+      "layers": [
+        { "id": 2005, "animation": 5001, "name": "tc", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "rows": 2,
+      "draws": {
+        "179": {
+          "blendMap": [0.099999994, 0.199999988, 0.300000012, 0.399999976, 0.5, 0.600000024, 0.699999988, 0.799999952],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [0.100000001, 0.200000003, 0.300000012, 0.400000006, 0.5, 0.600000024, 0.699999988, 0.800000012],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [0.100000001, 0.200000003, 0.300000012, 0.400000006, 0.5, 0.600000024, 0.699999988, 0.800000012],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [0.100000001, 0.200000003, 0.300000012, 0.400000006, 0.5, 0.600000024, 0.699999988, 0.800000012],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [0.100000009, 0.200000018, 0.300000012, 0.400000036, 0.5, 0.600000024, 0.700000048, 0.800000072],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [0.100000009, 0.200000018, 0.300000012, 0.400000036, 0.5, 0.600000024, 0.699999988, 0.800000072],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [0.100000001, 0.200000003, 0.300000012, 0.400000006, 0.5, 0.600000024, 0.699999988, 0.800000012],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [0.100000001, 0.200000003, 0.300000012, 0.400000006, 0.5, 0.600000024, 0.699999988, 0.800000012],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_r3",
+      "object": 7,
+      "path": "models/tc_r3_puppet.mdl",
+      "layers": [
+        { "id": 2006, "animation": 5001, "name": "tc", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "rows": 3,
+      "draws": {
+        "179": {
+          "blendMap": [
+            0.0833333284, 0.166666657, 0.25, 0.333333313, 0.416666627, 0.5, 0.583333254, 0.666666627, 0.75, 0.833333254,
+            0.916666627, 1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [
+            0.0833333358, 0.166666672, 0.25, 0.333333343, 0.416666657, 0.5, 0.583333313, 0.666666687, 0.75, 0.833333313,
+            0.916666687, 1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [
+            0.0833333358, 0.166666672, 0.25, 0.333333343, 0.416666657, 0.5, 0.583333313, 0.666666687, 0.75, 0.833333313,
+            0.916666687, 1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [
+            0.0833333358, 0.166666672, 0.25, 0.333333343, 0.416666657, 0.5, 0.583333313, 0.666666687, 0.75, 0.833333313,
+            0.916666687, 1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [
+            0.0833333358, 0.166666672, 0.25, 0.333333343, 0.416666687, 0.5, 0.583333373, 0.666666687, 0.75, 0.833333373,
+            0.916666746, 1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [
+            0.0833333433, 0.166666687, 0.25, 0.333333373, 0.416666687, 0.5, 0.583333373, 0.666666746, 0.75, 0.833333373,
+            0.916666746, 1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [
+            0.0833333358, 0.166666672, 0.25, 0.333333343, 0.416666657, 0.5, 0.583333313, 0.666666687, 0.75, 0.833333313,
+            0.916666687, 1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [
+            0.0833333358, 0.166666672, 0.25, 0.333333343, 0.416666627, 0.5, 0.583333313, 0.666666687, 0.75, 0.833333254,
+            0.916666746, 1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_r4",
+      "object": 8,
+      "path": "models/tc_r4_puppet.mdl",
+      "layers": [
+        { "id": 2007, "animation": 5001, "name": "tc", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "rows": 4,
+      "draws": {
+        "179": {
+          "blendMap": [
+            0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+            1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [
+            0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+            1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [
+            0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+            1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [
+            0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+            1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [
+            0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+            1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [
+            0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+            1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [
+            0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+            1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [
+            0.0625, 0.125, 0.1875, 0.25, 0.3125, 0.375, 0.4375, 0.5, 0.5625, 0.625, 0.6875, 0.75, 0.8125, 0.875, 0.9375,
+            1.0
+          ],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_db0",
+      "object": 9,
+      "path": "models/tc_db0_puppet.mdl",
+      "layers": [
+        { "id": 2008, "animation": 5001, "name": "tc", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "rows": 1,
+      "draws": {
+        "179": {
+          "blendMap": [0.5, 1.5, 0.0, 1.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [2.0, 2.0, 2.0, 2.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [0.5, 1.5, 0.0, 1.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [2.0, 2.0, 2.0, 2.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [0.5, 1.5, 0.0, 1.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [2.0, 2.0, 2.0, 2.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [0.5, 1.5, 0.0, 1.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [2.0, 2.0, 2.0, 2.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [0.5, 1.5, 0.0, 1.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [2.0, 2.0, 2.0, 2.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [0.5, 1.5, 0.0, 1.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [2.0, 2.0, 2.0, 2.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [0.5, 1.5, 0.0, 1.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [2.0, 2.0, 2.0, 2.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [0.5, 1.5, 0.0, 1.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [2.0, 2.0, 2.0, 2.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_zero",
+      "object": 10,
+      "path": "models/tc_zero_puppet.mdl",
+      "layers": [
+        { "id": 2009, "animation": 5001, "name": "tc", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "rows": 1,
+      "draws": {
+        "179": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    },
+    {
+      "name": "tc_nolayer",
+      "object": 11,
+      "path": "models/tc_nolayer_puppet.mdl",
+      "layers": [],
+      "rows": 1,
+      "draws": {
+        "179": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "180": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "181": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "182": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "183": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "184": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "185": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        },
+        "186": {
+          "blendMap": [0.0, 0.0, 0.0, 0.0],
+          "mvp": [
+            0.0078125, 0.0, 0.0, 0.0, 0.0, 0.015625, 0.0, 0.0, 0.0, 0.0, 0.000500000024, 0.0, -1.0, -1.0, 0.5, 1.0
+          ],
+          "texture1Resolution": [256.0, 128.0, 256.0, 128.0],
+          "color4": [1.0, 1.0, 1.0, 1.0]
+        }
+      }
+    }
+  ]
+}

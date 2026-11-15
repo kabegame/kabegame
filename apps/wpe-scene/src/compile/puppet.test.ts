@@ -406,8 +406,13 @@ describe("buildPuppet：P12a 不做、照报的细分键", () => {
       ["puppet:clipping:groups"],
     ],
     [
-      "任一网格标志 bit1：纹理通道",
+      "skinned 的 puppet 有 bit1 网格：纹理通道不再报（P12b2-2，textureChannels）",
       { meshes: [mesh(), mesh({ flags: 2, blendRowCount: 1 })] },
+      [],
+    ],
+    [
+      "不是 skinned 的 puppet 有 bit1 网格：WPE 怎么画没查清，仍报 puppet:texture-channels",
+      { meshes: [mesh({ format: FMT_SKIN & ~0x800000 }), mesh({ flags: 2, blendRowCount: 1 })] },
       ["puppet:texture-channels"],
     ],
     [
@@ -745,8 +750,8 @@ describe.skipIf(!corpusRoot || !existsSync(mdlIndex) || !existsSync(cmOut))(
         if (puppet.clipping) withClipping++;
         alphaAnimations += puppet.animations.filter((item) => item.alpha).length;
       }
-      // 语料里剩下的键：绘制顺序轨道（3577990983）、物理、纹理通道（3811424158）；P12b1 的四样没有新增键
-      expect([...keys].sort()).toEqual(["puppet:draw-order", "puppet:physics", "puppet:texture-channels"]);
+      // 语料里剩下的键：绘制顺序轨道（3577990983）、物理；P12b1 的四样没有新增键，纹理通道（3811424158）P12b2-2 起不再报
+      expect([...keys].sort()).toEqual(["puppet:draw-order", "puppet:physics"]);
       // 挂点 38 项（MDAT：1 个文件 14、2 个 5、3 个 2、8 个 1）；bit2 的 puppet 8 个、带透明度轨道的动画 15 条；MORPHING 6 个；裁切 5 个
       expect([attachments, withAlpha, alphaAnimations, withMorph, withClipping]).toEqual([38, 8, 15, 6, 5]);
     });

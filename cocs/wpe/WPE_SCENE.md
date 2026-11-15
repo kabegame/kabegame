@@ -2647,6 +2647,85 @@ P12b1 在 P12a 的 puppet 上再接四样东西，四样都是 WPE 图像层 pup
 - `3830665420`（动画层脚本）；
 - `3346715292`（动画层脚本 + `getAnimationLayer`）。
 
+## 模型对象的骨骼与纹理通道（P12b2）
+
+P12b2 有两样东西，在 WPE 里走两条不相干的代码路径：
+- 模型对象（P5c）带骨骼、动画、变形、挂点；
+- 图像层 puppet 的纹理通道。
+
+依据：
+- 读码 `ignore/p12/b/rea/texchan-model.txt`；
+- 实测 `ignore/p12/b2/meas/report.txt`，读码的各项全部成立；
+- 计划与记录见 [phase-12b2-texchan-model.md](../../.claude/plans/wpe-import/3-scene/phase12/phase-12b2-texchan-model.md)。
+
+### 模型对象的骨骼（P12b2-1）
+
+WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、蒙皮函数（实测逐位相同），所以运行时复用 `src/puppet/`。`ScenePuppets` 的每个运行时带一个模式 `"image" | "model"`，下面几处按模式分支；宿主与探针都经 `puppetEntries` 建立，模型不会漏。
+
+| 规则 | 图像层 puppet | 模型 |
+|---|---|---|
+| 更新门 | 隐藏照推进 | 对象或父链不可见时整段跳过、时钟冻结；看的是推进那一刻的可见性，即上一帧脚本写下的。重新可见的第一帧照画，但那一帧的更新已被跳过 |
+| 权重 0 的层 | 照常参与 | 整层跳过，时钟照推进；全部跳过等于没有层，局部矩阵直接用 MDLS 局部矩阵、不经分解 |
+| 静止姿势 | MDLS 可选矩阵优先 | 只用 MDLS 局部矩阵 |
+| 标量轨道 | 透明度、变形（网格 0）、纹理通道 | 只有变形，按网格 |
+| 变形权重 | 覆盖 `\|v\| ≥ ε` 置位；混合不钳 | 覆盖 `\|v\| > ε` 置位、不钳；混合钳 [0, 1]、`\|v\| > ε` 时置位；加法同式（夹在 [min(cur, d), max(cur, d)]） |
+| 剔除盒 | — | 可见层（不看权重）动画包围盒的并，至少一个有效（max.x > min.x）才用，否则 mdl 包围盒；MDLA v < 5 的动画按全 0 盒子并进去 |
+
+- **组合键**（每网格，只在 mdl 有骨骼时加）：
+  - `SKINNING` = 格式含 `a_BlendIndices` ? 1 : 0（0 也写）；
+  - `BONECOUNT` = `min(128, pow2ceil(max(16, n)))`；
+  - `MORPHING` = 网格有 MDMP 目标；
+  - `MORPHING_NORMALS` = 网格标志 bit10。
+- **`g_Bones`**：每个对象一份，所有网格共用，写前 n 根。
+- **变形**：
+  - **纹理**：每网格一张 `rgba32float`（同 P12b1，值 `max(c / 32767, −1)`）。内容是 WPE 的 i16 分量流，按「目标 → 顶点 → 位置 xyz（bit10 时接法线 xyz）」紧排；边长 `floor(sqrt(ceil(3K / 4)))`，不够加 1。
+  - **uniform**：按目标号取前 11 个生效目标，再按权重降序。
+- **挂点**：子对象可以挂在模型骨骼上，矩阵来源是模型空间骨骼矩阵（没有层时是绑定姿势）。B1 的缓存戳影子把带骨骼的模型放进更新阶段。
+- **和 WPE 有意不同**（语料不依赖，2026-11-15 用户定「语料依赖的缺陷才复现」）：
+  - **偏移**：WPE 的变形偏移用最后一个变形网格的顶点数，我们用各网格自己的。多个变形网格顶点数不同、且有 t ≥ 1 的目标权重非 0 时才不同。
+  - **缩放与权重**：WPE 按「不透明在前」排序后的绘制记录下标取，我们按真实网格下标。有半透明网格排在不透明网格前面时才不同。
+- **能力表**：
+  - 去掉模型上的 `mdl:skeleton` / `animation` / `morph` / `attachment`、`object:animationlayers`、`mdl:flags:0x400`；模型上的 `MDLE0002` 中性（模型不读它）。
+  - 照报（语料 0 处）：`mdl:morph:tangent`（bit11）、`mdl:morph:vertices`（MDMP 的 nv ≠ 网格顶点数）、`model:rootmotion`。
+  - 动画层字段挂脚本照报 `puppet:layer-script`（P12c），物理骨骼照报 `puppet:physics`（P12d）。
+
+### 纹理通道（P12b2-2）
+
+- **判定**：图像层 puppet 是 skinned 的，第一个标志 bit1 的网格是纹理通道网格。有它就强制走合成路径（UV 不缩放）。
+- **绘制**：在合成 RT 里画完基础四边形之后，用通道网格自己的材质再画一次（几何 `"texchan"`）：
+  - 材质加 `BLENDROWCOUNT` = 网格多读的 u32 的低字节，`DOUBLEBUFFERED` 照纹理组合键规则；
+  - MVP 是合成 RT 的 `ortho(0, W, 0, H)`，模型矩阵是单位阵（WPE 是 `diag(1/s, 1/s, 1, 1)`，我们的 s 恒为 1）；
+  - `g_Color4` 与基础四边形相同。
+- **`g_BlendMap`**：每个 puppet 一份 16 个 float，初值 0，**帧首不复位**。可见层按 MDLA v≥3 的通道轨道写（第 i 条写第 i 个 float，超出 16 的丢掉，WPE 会越界）：
+  - 覆盖：`lerp(lo, hi, f)`；
+  - 混合：`lerp(cur, v, w)`；
+  - 加法：`cur + fround(v·w)`，不钳制，会一直涨。
+  
+  只在推进时写，重编译时保留；上传取前 `4 × BLENDROWCOUNT` 个。`DOUBLEBUFFERED` 下全 0 时通道片元全被 `clip` 掉。
+- **照报**：预光照（基础材质带 LIGHTING / REFLECTION 且走合成）`puppet:texture-channels:prelighting`；不是 skinned 的 puppet 带 bit1 网格仍报 `puppet:texture-channels`。
+
+### 走查
+
+- **生成工程**用步骤 0 的同一份 WPE 抓帧：
+  - `p12b2-mdl` / `mdl2` / `vis` / `att` / `cull` / `rest` / `deimos` 整帧逐像素相同；
+  - `g_Bones` 逐位相同或只差 `rsqrtps`（K2，模型和同层的图像层 puppet 差得一样）；
+  - `p12b2-morph` 只在两处有意不同的 3 个 draw 上不同，数值是正确做法。
+- **复制工程 `3706286085`**（只留模型，雾与阴影关闭，脚本字段换成固定值）：
+  - 61 个带骨骼的 draw 矩阵逐位相同，组合键与变形 uniform 相同；
+  - 城市边缘的细碎差是 K2 被 −161200 的绑定平移放大；
+  - Sonic 手套、鞋、扣子的颜色差是 `generic4` 的 PBR 遮罩少了 emissive 那一项，与骨骼无关、属材质（F1，已转 P7，证据 `ignore/p12/b2/check1/F1-emissive.md`）。
+- **纹理通道**：
+  - `p12b2-tc` 8 帧整帧逐像素相同；
+  - 10 个 puppet 的 `g_BlendMap`（含加法层的累加值）、通道 draw 的 MVP 与 `g_Color4` 逐位相同；
+  - 合成 RT 在基础 pass 后、通道 pass 后都 0 差。
+  - `3811424158` 的 `01_z`：通道 draw 存在、`g_BlendMap` 全 0、合成 RT 前后不变，同 WPE。它的合成 RT 是整张精灵表大小（WPE 是单帧），属精灵表还没支持的连带。
+- **不变**：P12a、P12b1 与 P12b2-1 的生成工程在两半之后都和之前逐字节相同。
+
+**语料**：不解锁任何场景。
+- `3811424158` 只剩精灵表帧动画（`combo:SPRITESHEET`、`tex:animation`）。
+- `3706286085` 只剩 P13 的雾与方向光阴影、挂在模型下的点光（`object:parent`）与动画层脚本（`puppet:layer-script`）。
+- `3662790108` 还差预光照、透视文本等十几项。
+
 ## 交互（P6c）
 
 场景脚本的光标交互：六个导出回调 `cursorEnter` / `Leave` / `Move` / `Down` / `Up` / `Click`、全局 `input`、图层 `solid`。规则读码在 `.claude/plans/wpe-import/3-scene/phase6/rea-p6c-dispatch.md` 与 `rea-p6c-script.md`（含 REA 重核），0c 用 wpe-renderdoc 的 `input_play` 逐帧喂光标实测，结论全部成立。实现是纯逻辑的 `render/cursor.ts`（命中、追踪器、可拾取对象表），渲染器每个实时帧在相机更新之后、脚本之前调一次（`SceneRenderer.stepCursor`），把回调交给宿主，宿主调 `ScriptRuntime.cursorEvent`。

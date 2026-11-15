@@ -76,6 +76,11 @@ export interface PuppetAnimation {
    * 目标为 null；网格没有变形目标或这条动画没有该网格的条目时 `meshMorph[m]` 为 null。图像层 puppet 不填。
    */
   meshMorph?: ((Float32Array | null)[] | null)[];
+  /**
+   * 纹理通道轨道（P12b2-2，`ScenePuppet.textureChannels` 非空时有，rea-texchan-model 3）：MDLA v ≥ 3 的 n3 条轨道，每条 `length + 1` 个 f32（自有缓冲）；第 i 条写
+   * `g_BlendMap` 的第 i 个 float，超出 16 条的丢掉（WPE 越界写，语料 0）。图像层之外与没有纹理通道的 puppet 不填。
+   */
+  channels?: Float32Array[];
   /** 模型对象的动画包围盒（MDLA v5，min xyz、max xyz，模型空间；v < 5 全 0）；剔除盒用（`ScenePuppets.bounds`）。图像层 puppet 不填。 */
   bounds?: number[];
 }
@@ -99,6 +104,19 @@ export interface PuppetMorph {
   targets: number;
   side: number;
   texels: Int16Array;
+}
+
+/**
+ * 纹理通道网格（P12b2-2，rea-texchan-model 2、3）：mdl 里第一个带标志 bit1 的网格，只在 skinned 的图像层 puppet 上认。它在合成 RT 里、基础四边形之后
+ * 用自己的材质（`mesh.materials[0]`，加 `BLENDROWCOUNT` = 网格多读的那个 u32 的低字节）再画一遍：顶点原样、u16 索引，按 `g_BlendMap` 把通道图混进原图。
+ */
+export interface PuppetTextureChannels {
+  /** 通道网格：顶点格式（语料 `a_Position` + `a_BlendIndices` + `a_TexCoordVec4`）与顶点 / 索引视图（原文件缓冲上的，索引一律 u16）。 */
+  mesh: ScenePuppet["mesh"];
+  /** 网格自己的材质路径（`mesh.materials[0]`；没有时为空串，编译期报 `material:missing`）。 */
+  material: string;
+  /** `BLENDROWCOUNT`：`blendRowCount & 0xff`（WPE 取 `mesh+0x1c` 的低字节），`g_BlendMap` 上传取前 `4 × 行数` 个 float。 */
+  rows: number;
 }
 
 /** 裁切命令表（P12b1 步骤 5 点 1，WPE `FUN_14020b720` 建的 `P+0x430`，`ignore/p12/b/rea/cm_cmdlist.py`）。 */
@@ -176,6 +194,8 @@ export interface ScenePuppet {
   morph: PuppetMorph | null;
   /** 网格 0 有 v23 记录（P12b1）：按命令表分段画。 */
   clipping: PuppetClipping | null;
+  /** 纹理通道网格（P12b2-2）：skinned 且 mdl 有 bit1 网格时有；它强制合成路径（UV 不缩放，同 effect、精灵表）。 */
+  textureChannels?: PuppetTextureChannels | null;
 }
 
 /** 动画层的描述符字段（rea-RT 1.5 的属性表 `0x1404e8a60`，只读的 `fps` / `frameCount` / `duration` 不在 JSON 里写）。 */
@@ -396,8 +416,8 @@ function skeletonIssues(
  * `issues`（P12a 不做、照报的细分键，子计划「总体设计思路」）：
  * - 文件：`mdl:truncated`（同模型对象）、`mdl:section:<标签>`（`MDLS` / `MDLA` 没恰好读到段末）、`mdl:skeleton:bones`（骨骼数 > 128，WPE
  *   直接终止进程）、`mdl:animation-id`（动画 id ≥ 2³²）；
- * - 网格（只看网格 0，纹理通道看全部网格）：`puppet:index32`（标志 bit0）、`puppet:texture-channels`（任一网格 bit1），不论 skinned 都报（静态 puppet 上
- *   WPE 怎么画没查清，语料的静态 puppet 都没有它们）；P12b1 起 bit2（`SKINNING_ALPHA`）、`a_PositionVec4`（`MORPHING`）、v23 记录（裁切）不再报，
+ * - 网格（只看网格 0，纹理通道看第一个 bit1 网格）：`puppet:index32`（标志 bit0）；P12b2-2 起 skinned 的纹理通道网格（bit1）不再报（`textureChannels`），
+ *   不是 skinned 时仍报 `puppet:texture-channels`（静态 puppet 上 WPE 怎么画没查清，语料的静态 puppet 都没有它）；P12b1 起 bit2（`SKINNING_ALPHA`）、`a_PositionVec4`（`MORPHING`）、v23 记录（裁切）不再报，
  *   只剩没做的细节：`puppet:morph:modifiers`（bit13，`MORPHING_MODIFIERS`）、`puppet:clipping:flags`（记录 flags 非 0）、`puppet:clipping:nested`
  *   （遮罩被别的记录裁切）、`puppet:clipping:groups`（记录下标越界）；
  * - 动画层：`puppet:layer-script`（字段挂脚本，P12c）；
@@ -422,12 +442,14 @@ export function buildPuppet(
 
   if (mesh.flags & 1) issues.add("puppet:index32");
   if (mesh.flags & 0x2000) issues.add("puppet:morph:modifiers");
-  if (file.meshes.some((item) => item.flags & 2)) issues.add("puppet:texture-channels");
 
   const skeleton = file.skeleton;
   if (skeleton && skeleton.count > MAX_BONES) issues.add("mdl:skeleton:bones");
   const bones = skeleton && skeleton.count <= MAX_BONES ? skeleton.bones : [];
   const skinned = (mesh.format & BLEND_INDICES) !== 0 && bones.length > 0;
+  // 纹理通道网格（P12b2-2，rea-texchan-model 2：只认第一个 bit1 网格，且要 skinned）。不是 skinned 时 WPE 怎么画没查清（语料的纹理通道 puppet 都是 skinned），照报
+  const channelMesh = skinned ? file.meshes.find((item) => item.flags & 2) : undefined;
+  if (!skinned && file.meshes.some((item) => item.flags & 2)) issues.add("puppet:texture-channels");
   const withAlpha = skinned && (mesh.flags & 4) !== 0;
   const morph = skinned && (mesh.format & POSITION_VEC4) !== 0 ? buildMorph(mesh) : null;
   const clipping = buildClipping(mesh, issues);
@@ -443,6 +465,20 @@ export function buildPuppet(
     }
   }
 
+  const textureChannels: PuppetTextureChannels | null = channelMesh
+    ? {
+        mesh: {
+          format: channelMesh.format,
+          stride: channelMesh.stride,
+          vertices: channelMesh.vertices,
+          indices: channelMesh.indices,
+          vertexCount: channelMesh.vertexCount,
+          indexCount: channelMesh.indices.length >> 1,
+        },
+        material: channelMesh.materials[0] ?? "",
+        rows: channelMesh.blendRowCount & 0xff,
+      }
+    : null;
   const puppet: ScenePuppet = {
     path,
     mesh: {
@@ -462,9 +498,20 @@ export function buildPuppet(
         }
       : {},
     skeleton: skinned ? buildSkeleton(file) : null,
-    animations: used.map((index) =>
-      convertAnimation(file.animations[index], file, bones.length, skinned, withAlpha, morph?.targets ?? 0),
-    ),
+    animations: used.map((index) => {
+      const converted = convertAnimation(
+        file.animations[index],
+        file,
+        bones.length,
+        skinned,
+        withAlpha,
+        morph?.targets ?? 0,
+      );
+      // 自有缓冲（`Float32Array.from`）：mdl 文件缓冲上的视图不跟着 puppet 一起转移
+      if (textureChannels)
+        converted.channels = (file.animations[index].channels ?? []).map((track) => Float32Array.from(track));
+      return converted;
+    }),
     layers: defs,
     attachments: file.attachments.map((item) => ({
       name: item.name,
@@ -474,6 +521,7 @@ export function buildPuppet(
     boneAlpha: withAlpha,
     morph,
     clipping,
+    textureChannels,
   };
   return { puppet, issues };
 }

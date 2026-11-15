@@ -11,7 +11,7 @@ import { alignedBytes } from "./mesh";
  * （P12b1）可以没有（手写的假来源、旧的调用方）：没有姿势时挂点按普通父子，没有透明度时全 1，没有变形时不变形。
  */
 export type PuppetSource = Pick<ScenePuppets, "skin"> &
-  Partial<Pick<ScenePuppets, "pose" | "boneAlpha" | "morph" | "bounds">>;
+  Partial<Pick<ScenePuppets, "pose" | "boneAlpha" | "morph" | "bounds" | "blendMap">>;
 
 /**
  * 直接上屏的 puppet 顶点（rea-p12-mdl 9.2 `FUN_14020ae00`）：WPE 拷一份网格 0 的顶点字节，把每个顶点的 `a_TexCoord`（表序 7，只有这一项，

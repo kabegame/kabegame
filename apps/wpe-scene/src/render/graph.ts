@@ -168,8 +168,11 @@ export type DrawRole = "direct" | "base" | "effect" | "final" | "passthrough" | 
  * - `puppet`（P12a 步骤 4，rea-p12-mdl 9.2、9.4）：puppet 的网格 0 代替图层四边形，只用在上屏那一步（直接上屏与 passthrough 上屏），矩阵同
  *   `layer`（图层世界矩阵，画自己、带对齐偏移与视差，不乘 `size`：网格顶点本来就是图层局部像素）。`uv` 是直接上屏时 `a_TexCoord` 乘的比例
  *   （图像 / GPU 纹理），上屏时是 (1, 1)；不内缩（`inset` 恒为 `NO_INSET`）。
+ * - `texchan`（P12b2-2，rea-texchan-model 2）：puppet 的纹理通道网格（`ScenePuppet.textureChannels`），画进合成 RT、在基础四边形之后（角色 `base`）。
+ *   顶点原样（图像像素坐标，原点左下、y 向上）、u16 索引；MVP = 合成 RT 的 `ortho(0, W, 0, H)`、模型矩阵单位阵（WPE 的 `diag(1/s, 1/s, 1, 1)`，我们的 s 恒为 1），
+ *   W、H 是步骤的 `rtSize`；`uv` / `inset` 不用。
  */
-export type Geometry = "layer" | "fill" | "fullscreen" | "shape" | "puppet";
+export type Geometry = "layer" | "fill" | "fullscreen" | "shape" | "puppet" | "texchan";
 
 /**
  * 一个绘制步骤的光栅状态（P5d 步骤 1，p5-REPORT「P5d 语义的实测核对」）：`test` 对场景的深度做 GREATER 测试，`write` 写深度，`cull` 剔背面
@@ -223,6 +226,8 @@ export interface DrawStep {
   blending: string | null;
   /** 光栅状态（`rasterState`）：上屏角色的深度借图层基础 pass、剔除用自己；形状层两项都取自己；其余都取自己。 */
   raster: RasterState;
+  /** 几何 `texchan`（P12b2-2）用：合成 RT 的宽高（`plan.composite` 的同一份，`drawMatrices` 取它做正交投影）；别的几何没有这个字段。 */
+  rtSize?: [number, number];
   /**
    * puppet 的裁切分段（P12b1 步骤 5，`ScenePuppet.clipping.segments` 的下标）：只画这一段的索引（每段自己一块 u16 索引缓冲）。没有裁切的
    * puppet 与别的几何没有这个字段，整张网格一次画完。
@@ -1020,6 +1025,26 @@ export function planLayer(
       blending: null,
       raster: rasterState(base, base, null),
     });
+  // puppet 的纹理通道（P12b2-2，rea-texchan-model 2：`FUN_140207b50` 在画完基础四边形之后直接画进合成 RT）：用通道网格自己的材质，混合按材质（语料 normal，
+  // p12b2-tc 实测混合关），g_Color4 同基础四边形；puppet 恒走合成路径（`puppetComposite`），所以一定是上面的基础 pass 那一支。尺寸在末尾补
+  let texchanStep: DrawStep | null = null;
+  const texchanPass = puppet?.textureChannels?.pass;
+  if (texchanPass) {
+    texchanStep = {
+      kind: "draw",
+      role: "base",
+      pass: texchanPass,
+      effect: null,
+      target: { kind: "composite", index: current },
+      inputs: staticInputs(texchanPass, null),
+      geometry: "texchan",
+      uv: [1, 1],
+      inset: NO_INSET,
+      blending: texchanPass.blending,
+      raster: rasterState(texchanPass, texchanPass, texchanPass.blending),
+    };
+    steps.push(texchanStep);
+  }
   // 组画子树（P5b 步骤 4，`p5b-grp-*`：子层画进基础 pass 写的那张合成 RT）：不占合成链的写入，之后的 effect 读的就是这张
   if (group) steps.push({ kind: "subtree", target: { kind: "composite", index: current } });
 
@@ -1173,6 +1198,7 @@ export function planLayer(
       ? { ...layer, fullscreenSize: [userBase.width, userBase.height] as [number, number] }
       : layer;
   const [width, height] = sceneText ? textCompositeSize(text!) : compositeSize(sizing, baseTexture, sceneSize);
+  if (texchanStep) texchanStep.rtSize = [width, height];
   // 被依赖（P8 步骤 4）：最后一次写入要落在合成 RT 0（独占的 `_a`，rea-p8-render 2.3 按奇偶选起点；`p8-dep` 的 A2：基础 pass → 池化、
   // effect → 独占）。落在 1 时整份计划对调
   const planned = depended && current === 1 ? swapCompositeIndices(steps) : steps;

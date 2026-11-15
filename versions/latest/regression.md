@@ -2877,6 +2877,32 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | PB8 帧时间 | Windows dev | `3463520581`（挂点三层、200 多个子对象）实时播放，看帧时间 | 挂点子树每帧刷新两次，帧时间没有明显上升、没有周期性卡顿 | 没量 |
 | [ ] | PB9 非 Windows | macOS / Linux | 预览 `3253330537` | 同 Windows（变形要 `float32-filterable`） | 本机不能测 |
 
+## 场景壁纸模型对象的骨骼与纹理通道（P12b2）
+
+2026-11-15。两项内容：
+- 模型对象（P5c）带骨骼、动画、变形、挂点时，复用图像层 puppet 的运行时。模型模式的不同：隐藏时冻结、权重 0 的层跳过、变形按网格且混合钳 [0, 1]、剔除盒取动画包围盒。
+- 图像层 puppet 的纹理通道：在合成 RT 里补画通道网格，`g_BlendMap` 由动画轨道驱动、帧首不复位。
+
+WPE 的两处模型变形缺陷不照抄（语料不依赖）。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase12/phase-12b2-texchan-model.md`；
+- 读码：`ignore/p12/b/rea/texchan-model.txt`；
+- 实测与对照：`ignore/p12/b2/meas/`、`check1/`、`check2/`；
+- 生成工程定义：`ignore/p12/b2/gen/defs/p12b2.py`；
+- 抓帧：`A:\p12\b2\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PC0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、相关 vitest、Prettier | 0 error，相关测试全过 | 2026-11-15：tsc 0 error；`puppet/model.test.ts`、`puppet/texchan.test.ts`、`compile/p12b2*.test.ts` 按 WPE 抓帧常量逐位回放，相关文件全过（`probe.*` 的 `spriteSamples` 失败在 HEAD 上就有，`p5c` 的 `castshadow` 一例来自 P13d 未提交的改动）；变异 10 处全部被抓住 |
+| [x] | PC1 语料 | Node | 编译 `3706286085`、`3811424158`、`3662790108` | 只去掉对应的键 | `3706286085` 只剩 P13 的雾与阴影、`object:parent`、`puppet:layer-script`；`3811424158` 只剩 `combo:SPRITESHEET`、`tex:animation`；不解锁场景 |
+| [x] | PC2 模型骨骼对照 WPE | Windows dev + WPE 抓帧，1920×1080，fps 20，后处理超高 | 生成工程 `p12b2-mdl`、`mdl2`、`vis`、`att`、`cull`、`rest`、`deimos`、`morph` 按日志回放，逐帧逐像素、逐 draw 比 | 整帧逐像素相同；`morph` 只在两处有意不同的 draw 上不同 | 2026-11-15：前 7 个整帧逐像素相同（`vis` 30 帧，含重新可见的第一帧）；`morph` 只差 3 个 draw，数值是正确做法（偏移 [2, 8, 16]，WPE [2, 4, 8]；缩放与权重按真实网格） |
+| [x] | PC3 真实壁纸复制工程 | Windows dev + WPE 抓帧 | `3706286085` 只留模型，雾与阴影关闭、脚本字段换固定值 | 骨骼矩阵逐位相同 | 2026-11-15：61 个带骨骼的 draw 矩阵逐位相同，`g_Bones` 在 K2 量级；画面差来自 `generic4` 的 emissive 遮罩（F1，不属 P12b2，已转 P7） |
+| [x] | PC4 纹理通道对照 WPE | Windows dev + WPE 抓帧 | `p12b2-tc` 按日志回放，逐帧逐像素比，读回合成 RT；`3811424158` 的 `01_z` 复制工程 | 整帧逐像素相同或只剩着色器舍入 1 级；`01_z` 的通道 draw 存在、`g_BlendMap` 全 0、合成 RT 不变 | 2026-11-15（`check2`）：`p12b2-tc` 8 帧整帧逐像素相同；10 个 puppet 的 `g_BlendMap`（含加法层的累加值）、通道 draw 的 MVP 与 `g_Color4` 逐位相同；合成 RT 在基础 pass 后、通道 pass 后都 0 差。`01_z`：通道 draw 存在、`g_BlendMap` 全 0、合成 RT 前后不变，同 WPE；合成 RT 是整张精灵表大小而 WPE 是单帧，属精灵表还没支持的连带 |
+| [x] | PC5 P12a / P12b1 不变 | Windows dev | P12a、P12b1 与 P12b2-1 的生成工程各重渲 2 帧 | 和之前我们的帧逐字节相同 | 2026-11-15：P12b2-1 之后（`check1`）与 P12b2-2 之后（`check2`：`p12b2-mdl` / `morph` / `att`、`p12-modes` / `fx` / `am` / `clip2`）都逐字节相同 |
+| [x] | PC6 实时预览 | Windows dev，图库预览 | `3706286085`（强制渲染）看 Sonic 跑动 | 骨骼动画流畅，BoostModel 的加法层动画正常 | 2026-11-15 用户看过：「我看可以」。强制渲染下没有雾，动画层脚本用的是 JSON 初值，手套鞋的 emissive 见 F1 |
+| [ ] | PC7 非 Windows | macOS / Linux | 同 PC6 | 同 Windows | 本机不能测 |
+
 ## 场景 dev 探针按指定尺寸渲染
 
 2026-11-14。dev 探针 `renderFrame` 给了 `canvas` 时，正交场景按这个尺寸直接画，和 WPE 测试窗口同一种画法：样式照 WPE 的对齐方式做进正交投影的四个裁切边距，`fit` / `center` 整屏清成 `schemecolor`，读回场景目标本身。`renderMode: "scene"` 取旧的「场景分辨率 + 读回时铺进画布」。产品的预览、桌面、应用背景都不变（用户定）。计划与记录见 `.claude/plans/wpe-import/3-scene/phase-render-size.md`，读码 `rea-render-size.md`。

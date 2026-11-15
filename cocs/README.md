@@ -227,6 +227,17 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
       - **骨骼透明度**（`SKINNING_ALPHA`）与**变形**（`MORPHING`）：三种叠法；变形纹理 `rgba32float`；负权重也生效；按目标号取前 11 个、按带符号权重排；合成路径用自己的值。
       - **裁切遮罩**：v23 记录表照 `FUN_14020b720` 建命令表，全场一张场景目标一半大小的 R8 遮罩 RT；遮罩 pass 用 `clippingmaskimage4`（缺省剔背面），目标 pass 用基础着色器加 `CLIPPINGUVS` + `CLIPPINGTARGET`。
       - **结果**：生成工程整帧逐像素相同；复制工程 ≤ 2 级；能渲染 156 → 162（233 张；提交时 226 张口径 151 → 157）。
+    - **模型对象的骨骼与纹理通道**（P12b2，`puppet/player.ts` 的 `"model"` 模式 + `compile/puppet.ts` 的 `buildModelSkeleton` / `PuppetTextureChannels`）：
+      - **模型**：带 `MDLS` / `MDLA` / `MDMP` / `MDAT` 的模型复用图像层 puppet 的运行时。不同处：
+        - 不可见时冻结（看上一帧脚本写下的可见性）；
+        - 权重 0 的层跳过，全部跳过时直接用 MDLS 局部矩阵；
+        - 静止姿势只用 MDLS 局部矩阵；
+        - 变形按网格，混合钳 [0, 1]；
+        - 剔除盒取可见层动画包围盒的并。
+        
+        组合键 `SKINNING`（0 / 1）、`BONECOUNT` 取 2 的幂（最小 16）、`MORPHING`、`MORPHING_NORMALS`；每网格一张变形纹理（i16 分量流）；挂点可挂模型骨骼。WPE 两处变形缺陷（最后一个变形网格的顶点数、排序后的记录下标）不照抄。
+      - **纹理通道**：第一个 bit1 网格在合成 RT 里补画一次（强制合成、`BLENDROWCOUNT` 取低字节），`g_BlendMap` 16 个 float 帧首不复位、加法不钳制。
+      - **结果**：不解锁场景，生成工程整帧逐像素相同；`3706286085` 复制工程的骨骼矩阵逐位相同，颜色差是 `generic4` 的 emissive 遮罩（F1，转 P7）。
     - **scene 层**（`WallpaperStage`，P1-5）：web 层之上独立一层、同一时间一个 `WpeSceneView`；loading → live / fallback（结果出来前不显示、不发 `ready`，桌面保留上一张；能渲染直接淡入，退回或 10s 超时才显示壁纸目标的 `previewPath`）；场景 → 场景有短暂空档；壁纸样式由宿主铺放；属性面板对场景隐藏 `file` / `directory`；应用背景与预览同走原图形态、实时渲染且不交互；壁纸窗口实测不被判为隐藏（rAF 144 Hz）。
     - **预览画布尺寸**（`canvasSize`）：画布像素 = 布局 × DPR × 父页面量的显示缩放（`kabegame:wpe-scene-display`，iframe 里量不到祖先 transform），超上限等比缩、250 ms 核对；脚本 `engine.screenResolution` 按缩放 1 算；`center` 是一个场景像素对一个布局 CSS 像素。
     - **交互**（P6c，`render/cursor.ts`）：图像 / 文本层的射线命中（不看可见性、`solid` 缺省真、全部命中的都收事件、`disablepropagation` 才挡）、六个光标回调的派发规则（`Enter → Move → Down` / `Up → Click` / 没命中 `Up → Leave`、按下集合与拖动、`moved` 比世界坐标）、全局 `input` 三个只读成员（顶层读抛 `SyntaxError`）、`solid` 读写、float32 反投影（`inverseF32.ts`）、宿主左键与 dev 探针的 `inputTimeline` / `consoleGrep`；见 `WPE_SCENE.md`「交互（P6c）」。

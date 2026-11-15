@@ -329,7 +329,38 @@ HEAD `2fc14669` 快照重扫 233 张，能渲染 163 张。P12b2 不解锁任何
   - **范围**：只留 RioSonic、BoostModel、FBX_Stage；脚本字段换成固定值，关雾、关方向光阴影。
   - **骨骼**：61 个带骨骼的 draw 的矩阵逐位相同，`g_Bones` 在 K2 量级，组合键与变形 uniform 逐位相同。
   - **城市边缘的细碎差**：FBX 骨骼 1 的旋转 33 ulp 被绑定平移 −161200 的力臂放大，K2；它逐位相同的那一帧城市 0 差。
-  - **Sonic 手套、鞋、扣子的颜色差，与骨骼无关**：WPE 亮 1.15–1.31 倍，像素着色器多一项 `albedo · tint · emissive · mask.a · 0.35`。推断我们 `generic4` 的 PBRMASKS 遮罩少了 emissive 那一项，而且没照报（F1，不属 P12b2，已报告用户）。
+  - **Sonic 手套、鞋、扣子的颜色差，与骨骼无关**：WPE 亮 1.15–1.31 倍，像素着色器多一项 `albedo · tint · emissive · mask.a · 0.35`。推断我们 `generic4` 的 PBRMASKS 遮罩少了 emissive 那一项，而且没照报（F1，不属 P12b2）。2026-11-15 用户让整理给负责的会话：证据写在 `ignore/p12/b2/check1/F1-emissive.md`，已转给 P7 会话（翻译器按纹理注解推导组合键，`components` 的子组合键没推导）。
+
+**提交**：P12b2-1 `6d46439b`（用户同意）。用临时索引只提交本步的块：`bundle.ts`、`scene.ts`、`features.ts`、`graph.ts`、`state.ts`、`probe.ts` 里别的会话（P13d 阴影、P6c 光标裁切等）未提交的改动留在工作区。提交快照在独立工作树里 tsc 0 error、相关 12 个文件全过；`probe.renderSize` / `probe.scripts` 的 `spriteSamples` 失败在 HEAD 上就有（P13c 的 `da019f40`）。
+
+### P12b2-2 — 实现（2026-11-15，执行代理，主工作区，报告 `ignore/p12/b2/impl/step2.txt`）
+
+- **实现**：照点 1–4，设计没有缺口。
+  - **编译**：`PuppetTextureChannels`（网格视图、材质、`BLENDROWCOUNT` 取低字节）；通道材质的键是 `objects/<i>/texchan`。
+  - **强制合成**：`finalizePuppet` 的合成条件加纹理通道。
+  - **运行时**：`blendChannels`；`ScenePuppets.blendMap` 只在推进时写，`refresh` 不写，避免加法层重复累加。
+  - **渲染**：几何 `"texchan"` 复用 `DrawStep`，接在合成路径基础 pass 之后，MVP 取合成 RT 的 `ortho(0, W, 0, H)`。
+  - 不是 skinned 的 puppet 带 bit1 网格仍报 `puppet:texture-channels`。
+- **检查**：
+  - tsc 0 error；
+  - `p12b2-tc` 8 帧 × 10 个 puppet 的 `g_BlendMap` 按日志 dt 逐位对 WPE，通道 draw 的 MVP 逐位相同；
+  - 真翻译器：`BLENDROWCOUNT` 等于行数，`DOUBLEBUFFERED` 按槽 1；
+  - 语料 `3811424158` 只剩 `combo:SPRITESHEET`、`tex:animation`；
+  - 相关文件全过。`compile/p5c.test.ts` 有 1 个失败，来自 P13d 未提交的 `castshadow` 中性化。
+- **变异**：执行代理 4 处（帧首复位、加法钳制、不强制合成、`BLENDROWCOUNT` 取整个 u32），Claude 1 处（加法不累加），全部被抓住。
+- **Claude 复核**：叠法与 texchan-model 3 逐条对过；tsc 与 12 个相关文件自跑全过。
+
+### P12b2-2 — 真机对照（2026-11-15，代理，宿主产物 `index-Dm1Sg0tS.js`，报告 `ignore/p12/b2/check2/report.txt`）
+
+- **`p12b2-tc`**（步骤 0 的同一份抓帧）：
+  - 整帧 8 / 8 逐像素相同（Claude 看过比较输出）；
+  - 两边都是 30 个 draw，每个 puppet「基础四边形 → 通道网格 → 上屏」；
+  - 通道 draw 的 `g_BlendMap`（4 / 8 / 12 / 16 个 float，含加法层的累加值）、MVP、`g_Color4`、`g_Texture1Resolution` 逐位相同；
+  - 合成 RT 在基础 pass 后、通道 pass 后都 0 差。步骤 0c 说的「最大差 1」是预测脚本自己的舍入。
+- **`3811424158` 的 `01_z`**：
+  - 通道 draw 存在、`g_BlendMap` 全 0、合成 RT 前后不变，同 WPE；
+  - 合成 RT 是整张精灵表大小（3504×6660），WPE 是单帧（1167×333），属精灵表还没支持的连带。
+- **不变**：`p12b2-mdl` / `morph` / `att`、`p12-modes` / `fx` / `am` / `clip2` 各 2 帧，逐字节相同。
 
 ## 风险
 

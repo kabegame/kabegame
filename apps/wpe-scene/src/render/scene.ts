@@ -371,9 +371,14 @@ type PuppetDrawStep = DrawStep & { geometry: "puppet" };
 function isPuppetDraw(step: DrawLike): step is PuppetDrawStep {
   return step.kind === "draw" && step.geometry === "puppet";
 }
-/** 画网格的步骤：模型的网格步骤与 puppet 的上屏绘制。 */
-function drawsMesh(step: DrawLike): step is MeshStep | PuppetDrawStep {
-  return step.kind === "mesh" || isPuppetDraw(step);
+/** puppet 的纹理通道绘制（P12b2-2）：几何是通道网格（`ScenePuppet.textureChannels`），画进合成 RT，同样按网格格式配顶点布局。 */
+type TexchanDrawStep = DrawStep & { geometry: "texchan" };
+function isTexchanDraw(step: DrawLike): step is TexchanDrawStep {
+  return step.kind === "draw" && step.geometry === "texchan";
+}
+/** 画网格的步骤：模型的网格步骤、puppet 的上屏绘制与纹理通道绘制。 */
+function drawsMesh(step: DrawLike): step is MeshStep | PuppetDrawStep | TexchanDrawStep {
+  return step.kind === "mesh" || isPuppetDraw(step) || isTexchanDraw(step);
 }
 
 /** 文本层一次绘制的索引（P6b 1d）：三角形列表，每四边形 6 个。 */
@@ -678,7 +683,7 @@ export interface PerspectiveSceneCamera {
 export type SceneCamera = OrthographicSceneCamera | PerspectiveSceneCamera;
 
 /** puppet 绘制每帧要写的 uniform 名（`writePuppetUniforms`）：块里有任何一个，这个 draw 每帧都写。 */
-const PUPPET_BLOCK_NAMES = ["g_Bones", "g_BonesAlpha", "g_MorphOffsets", "g_MorphWeights"];
+const PUPPET_BLOCK_NAMES = ["g_Bones", "g_BonesAlpha", "g_MorphOffsets", "g_MorphWeights", "g_BlendMap"];
 
 interface Draw {
   label: string;
@@ -1012,7 +1017,7 @@ function planProblems(
   particle?: SceneParticle | null,
   model?: SceneModel | null,
   /** 图层的 puppet（P12a 步骤 4）：上屏绘制按网格 0 的格式查程序的输入。 */
-  puppet?: Pick<ScenePuppetLayer, "mesh"> | null,
+  puppet?: Pick<ScenePuppetLayer, "mesh" | "textureChannels"> | null,
 ): string[] {
   const problems = [...plan.reasons];
   for (const step of plan.steps) {
@@ -1033,6 +1038,10 @@ function planProblems(
     } else if (step.kind === "draw" && step.geometry === "puppet") {
       if (!puppet) problems.push("render:puppet");
       else problems.push(...meshVertexLayout(program.attributes ?? [], puppet.mesh.format).problems);
+    } else if (step.kind === "draw" && step.geometry === "texchan") {
+      // 纹理通道网格（P12b2-2）：按通道网格自己的格式查
+      if (!puppet?.textureChannels) problems.push("render:puppet");
+      else problems.push(...meshVertexLayout(program.attributes ?? [], puppet.textureChannels.mesh.format).problems);
     }
     // 视频纹理（P9a）没有 mip：渲染器建空纹理、运行时拷帧，不算缺
     for (const input of Object.values(step.inputs)) {
@@ -1158,6 +1167,8 @@ export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<num
     // puppet 的材质变体（P12a 步骤 4）：纹理同基础材质，照样过一遍
     layer.puppet?.passes.forEach(add);
     if (layer.puppet?.upload) add(layer.puppet.upload);
+    // 纹理通道网格的材质（P12b2-2）：槽 1 是基础图（DOUBLEBUFFERED），照样过一遍
+    if (layer.puppet?.textureChannels?.pass) add(layer.puppet.textureChannels.pass);
     // 裁切遮罩的材质（P12b1 步骤 5）：遮罩 pass 的槽 1 是记录的遮罩纹理，目标 pass 同基础材质
     layer.puppet?.clip?.masks.forEach(add);
     if (layer.puppet?.clip) add(layer.puppet.clip.target);
@@ -1696,9 +1707,14 @@ export class GpuScene {
    * 网格步骤的顶点布局（P5c 步骤 2）：程序的属性按网格格式配对（`meshVertexLayout`）。管线键、建管线与建 draw 都从这里取。
    * 网格不在图层上（手写的计划）时报 `render:mesh:<下标>`，自查（`planProblems`）已先挡下。
    */
-  private meshLayoutOf(layer: SceneLayer, step: MeshStep | PuppetDrawStep): MeshVertexLayout {
-    // puppet 的上屏绘制（P12a 步骤 4）用网格 0 的格式，其余是模型的网格
-    const format = step.kind === "mesh" ? layer.model?.meshes[step.mesh]?.format : layer.puppet?.mesh.format;
+  private meshLayoutOf(layer: SceneLayer, step: MeshStep | PuppetDrawStep | TexchanDrawStep): MeshVertexLayout {
+    // puppet 的上屏绘制（P12a 步骤 4）用网格 0 的格式，纹理通道绘制（P12b2-2）用通道网格的格式，其余是模型的网格
+    const format =
+      step.kind === "mesh"
+        ? layer.model?.meshes[step.mesh]?.format
+        : step.geometry === "texchan"
+          ? layer.puppet?.textureChannels?.mesh.format
+          : layer.puppet?.mesh.format;
     if (format === undefined)
       throw new SceneRenderError([step.kind === "mesh" ? `render:mesh:${step.mesh}` : "render:puppet"]);
     const program = step.pass.program === null ? undefined : this.bundle.programs[step.pass.program];
@@ -3007,7 +3023,7 @@ export class GpuScene {
           ? `layer ${layer.id} ${layer.name} text ${step.part}`
           : step.kind === "mesh"
             ? `layer ${layer.id} ${layer.name} mesh ${step.mesh}`
-            : `layer ${layer.id} ${layer.name} ${step.role}${step.segment === undefined ? "" : ` segment ${step.segment}`}`;
+            : `layer ${layer.id} ${layer.name} ${step.role}${step.geometry === "texchan" ? " texchan" : ""}${step.segment === undefined ? "" : ` segment ${step.segment}`}`;
 
     let vertexBuffer: GPUBuffer;
     let particles: ParticleDraw | null = null;
@@ -3024,6 +3040,18 @@ export class GpuScene {
         indexBuffer: this.meshBuffer(mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
         indexFormat: mesh.indexFormat,
         count: mesh.indexCount,
+        placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
+      };
+    } else if (isTexchanDraw(step)) {
+      // puppet 的纹理通道网格（P12b2-2，rea-texchan-model 2：顶点原样、u16 索引、静态缓冲）：mdl 视图按视图共用，位置、`a_BlendIndices`、`a_TexCoordVec4` 都不动
+      const channels = layer.puppet?.textureChannels;
+      if (!layer.puppet || !channels) throw new SceneRenderError(["render:puppet"]);
+      const name = `${layer.puppet.path}#texchan`;
+      vertexBuffer = this.meshBuffer(channels.mesh.vertices, GPUBufferUsage.VERTEX, `${name} vertices`);
+      meshDraw = {
+        indexBuffer: this.meshBuffer(channels.mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
+        indexFormat: "uint16",
+        count: channels.mesh.indexCount,
         placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
       };
     } else if (isPuppetDraw(step)) {
@@ -3158,7 +3186,9 @@ export class GpuScene {
       // P12b1 步骤 4：同一批还有骨骼透明度与变形的 uniform（`writePuppetUniforms`）
       // 模型网格（P12b2-1）：对象有骨骼时同样每帧写，变形的 uniform 按网格（`step.mesh`）
       if (
-        ((isPuppetDraw(step) && layer.puppet) || (step.kind === "mesh" && layer.model?.skeleton)) &&
+        ((isPuppetDraw(step) && layer.puppet) ||
+          (isTexchanDraw(step) && layer.puppet) ||
+          (step.kind === "mesh" && layer.model?.skeleton)) &&
         PUPPET_BLOCK_NAMES.some((name) => block!.has(name))
       ) {
         puppetObject = layer.object;
@@ -3362,6 +3392,16 @@ export class GpuScene {
           : undefined,
       });
     }
+    if (isTexchanDraw(step))
+      // puppet 的纹理通道网格（P12b2-2，rea-texchan-model 2，p12b2-tc 实测）：MVP 是合成 RT 的 `ortho(0, W, 0, H)`、模型矩阵单位阵，不经图层变换、视差、视图投影；
+      // g_Color4 与基础四边形相同（图层颜色 × brightness、alpha），所以颜色组照基础 pass 取图层状态；`g_BlendMap` 每帧由 `writePuppetUniforms` 写
+      return drawUniformValues({
+        ...common,
+        world: identity(),
+        step,
+        layer: { ...layerState, size: step.rtSize ?? layer.size },
+        viewProjection: identity(),
+      });
     if (step.kind === "mesh" && layer.sprite)
       // sprite（P13c，`render/sprite.ts`）：模型矩阵是单位阵、视图去平移（对象变换与视差都不参与，S5），颜色组同网格；遮挡方块的两个轴
       // 乘 0.2；光斑的两个轴与 `g_Alpha` 按 k = 0 写，真正的值由计算 pass 每帧盖上（`encodeSprite`）
@@ -4434,6 +4474,11 @@ export class GpuScene {
         if (!alpha) this.onesCache.set(bones, (alpha = new Float32Array(bones).fill(1)));
       }
       block.set("g_BonesAlpha", alpha);
+    }
+    // 纹理通道（P12b2-2）：16 个 float，`UniformBlock.set` 按数组长度（`BLENDROWCOUNT`）取前 `4 × 行数` 个
+    if (block.has("g_BlendMap")) {
+      const map = puppets.blendMap?.(object);
+      if (map) block.set("g_BlendMap", map);
     }
     if (block.has("g_MorphOffsets") || block.has("g_MorphWeights")) {
       const morph = puppets.morph?.(object, step?.kind === "mesh" ? step.mesh : undefined);

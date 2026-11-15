@@ -1323,6 +1323,8 @@ export const PUPPET_UNIFORMS: ReadonlySet<string> = new Set([
   "g_BonesAlpha",
   "g_MorphOffsets",
   "g_MorphWeights",
+  // 纹理通道（P12b2-2）：`puppettexturechannels` 的 `g_BlendMap`（`ScenePuppets.blendMap` 每帧写）
+  "g_BlendMap",
 ]);
 /**
  * puppet 的 pass 放行的引擎 COMBO：`SKINNING`、`SKINNING_ALPHA`（网格 0 标志 bit2）、`MORPHING`（格式含 `a_PositionVec4`），P12b1 步骤 4

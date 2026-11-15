@@ -14,6 +14,8 @@
  * - P12b2-1：同一套运行时再服务带骨骼的模型对象（`kind: "model"`，rea-texchan-model 4–7，实测 `ignore/p12/b2/meas/report.txt`）。模式只改这几处：
  *   对象或父链不可见时整段跳过（时钟、权重、姿势都冻结）；权重 0 的层整层跳过（全部跳过就是没有层，局部矩阵取 `MDLS` 局部矩阵）；没有透明度轨道；
  *   变形按网格（`morphs[m]`，每网格自己的顶点数与缩放，权重混合钳 [0, 1]）；剔除盒取可见层动画包围盒的并。图像层的行为与字节不变。
+ * - P12b2-2：图像层 puppet 多一份 `g_BlendMap`（16 个 float，初值 0，**帧首不复位**），每个可见层按纹理通道轨道写（`blendChannels`）；只在推进时写
+ *   （`refresh` 不是 WPE 的更新，加法层会被重复累加）；模型不处理通道轨道。
  */
 import { AnimationClock, BACK, DONE, MIRROR, PAUSED, SINGLE } from "../animation/clock";
 import type { AnimationMode } from "../animation/types";
@@ -21,6 +23,8 @@ import type { SceneLayer } from "../compile/bundle";
 import type { ModelSkeleton, PuppetAnimation, PuppetLayerDef, ScenePuppet } from "../compile/puppet";
 import { effectiveVisible, type LayerTransform } from "../render/layout";
 import {
+  BLEND_MAP_FLOATS,
+  blendChannels,
   blendInto,
   blendModelMorphWeights,
   blendMorphWeights,
@@ -165,6 +169,8 @@ interface PuppetRuntime {
   readonly meshMorphs: (MeshMorphRuntime | null)[] | null;
   /** 模型的剔除盒（min xyz、max xyz，模型空间）：可见层动画包围盒的并；还没有有效的就是 null（用 mdl 包围盒）。 */
   bounds: number[] | null;
+  /** `g_BlendMap`（P12b2-2，WPE `P+0x350` 起 16 个 float，构造时清 0、跨帧保留）；模型为 null。 */
+  readonly blendMap: Float32Array | null;
 }
 
 /**
@@ -251,6 +257,7 @@ export class ScenePuppets {
               )
             : null,
         bounds: null,
+        blendMap: kind === "image" ? new Float32Array(BLEND_MAP_FLOATS) : null,
       };
       this.runtimes.push(runtime);
       this.byObject.set(object, runtime);
@@ -306,6 +313,14 @@ export class ScenePuppets {
   }
 
   /**
+   * `g_BlendMap`（P12b2-2，16 个 float，纹理通道网格的混合权重，rea-texchan-model 3）：每个图像层 puppet 一份，初值 0、帧首不复位，推进时按可见层的通道轨道
+   * 叠写（覆盖 / 混合 / 加法，不钳制）；模型与不是 puppet 的对象为 null。每帧原地改写；上传取前 `4 × BLENDROWCOUNT` 个。
+   */
+  blendMap(object: number): Float32Array | null {
+    return this.byObject.get(object)?.blendMap ?? null;
+  }
+
+  /**
    * 模型的剔除盒（min xyz、max xyz，模型空间）：每次更新末尾取可见层（动画层的 `visible`，不看权重）动画包围盒的并，至少一个盒子有效（max.x > min.x）才用
    * （rea-texchan-model 7.6，p12b2-cull 实测）；没有有效的、不是模型、没有动画层时为 null，调用方用 mdl 的包围盒。图像层 puppet 不用。
    */
@@ -323,6 +338,8 @@ export class ScenePuppets {
     for (const runtime of this.runtimes) {
       const before = previous.byObject.get(runtime.object);
       if (!before) continue;
+      // `g_BlendMap` 是跨帧的持久状态（WPE 改属性不重载，`P+0x350` 不变），重编译时保留这 16 个 float
+      if (runtime.blendMap && before.blendMap) runtime.blendMap.set(before.blendMap);
       runtime.layers.forEach((layer, index) => {
         const old = before.layers[index];
         if (!old) return;
@@ -432,6 +449,9 @@ export class ScenePuppets {
         blendScalarAlpha(alpha, track.alpha, track.alphaMask, bones, at.lo, at.hi, at.frac, w, additive);
       if (morph && track.morph)
         blendMorphWeights(morph.weights, morph.active, track.morph, at.lo, at.hi, at.frac, w, additive);
+      // 纹理通道（P12b2-2）：只在推进时写（`refresh` 不是 WPE 的更新，加法层会重复累加）；不复位，没有可见层时保持上一帧
+      if (runtime.blendMap && d !== null && track.channels?.length)
+        blendChannels(runtime.blendMap, track.channels, at.lo, at.hi, at.frac, w, additive);
       if (meshMorphs && track.meshMorph)
         meshMorphs.forEach((item, m) => {
           const tracks = track.meshMorph![m];

@@ -314,6 +314,37 @@ export function blendScalarAlpha(
   }
 }
 
+/** `g_BlendMap` 的 float 数（WPE `P+0x350` 起 16 个，到 `P+0x390`）：纹理通道的轨道最多写这么多条。 */
+export const BLEND_MAP_FLOATS = 16;
+
+/**
+ * 把一层的纹理通道轨道叠进 `g_BlendMap`（P12b2-2，rea-texchan-model 3，`FUN_1401fdf90` 里的三处写，`0x1401ff098` / `0x1401ff554` /
+ * `0x1401ffa03`；p12b2-tc 实测：覆盖逐位相同、混合收敛到 v、加法每帧累加 `fround(v·w)` 且不钳制）。第 i 条轨道写第 i 个 float，超出 16 条的丢掉
+ * （WPE 越界写，语料 0）。**每帧不复位**：`map` 是 puppet 跨帧保留的状态，没有可见层时保持上一帧的值。`lo` / `hi` / `frac` / `w` 同别的标量轨道。
+ * - `w == 1`（精确相等）且非加法：**覆盖** `lerp(lo, hi, frac)`；
+ * - 非加法其它 w：**混合** `lerp(cur, v, w)`；
+ * - 加法：`cur + fround(v·w)`（`map` 是 Float32Array，存入时再舍入一次，同 `addss`）。
+ */
+export function blendChannels(
+  map: Float32Array,
+  tracks: readonly Float32Array[],
+  lo: number,
+  hi: number,
+  frac: number,
+  w: number,
+  additive: boolean,
+): void {
+  const override = !additive && w === 1;
+  const n = Math.min(tracks.length, BLEND_MAP_FLOATS);
+  for (let i = 0; i < n; i++) {
+    const track = tracks[i];
+    const v = lerp(track[lo], track[hi], frac);
+    if (override) map[i] = v;
+    else if (!additive) map[i] = lerp(map[i], v, w);
+    else map[i] = f(f(v * w) + map[i]);
+  }
+}
+
 /** 变形权重每帧先全清 0、生效位全清（`FUN_1401fdf90`，`0x1401fecb2`）。 */
 export function resetMorph(weights: Float32Array, active: Uint8Array): void {
   weights.fill(0);

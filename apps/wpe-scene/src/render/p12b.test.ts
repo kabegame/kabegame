@@ -1426,3 +1426,154 @@ describe("GpuScene：模型父的挂点（P12b2-1 点 3，同图像层 puppet）
     }
   });
 });
+
+// ———— 纹理通道网格的绘制（P12b2-2 点 3） ————
+
+describe("GpuScene：纹理通道网格的绘制（P12b2-2 点 3，rea-texchan-model 2、3，p12b2-tc 实测）", () => {
+  const CHANNEL_PROGRAM = 4;
+  const ROWS = 2;
+  /** `puppettexturechannels` 的假程序：MVP、g_ModelMatrix、`g_BlendMap`（`array<vec4<f32>, BLENDROWCOUNT>`），属性 a_Position / a_BlendIndices（uvec4）/ a_TexCoordVec4。 */
+  function channelProgram(): TranslateResult {
+    return {
+      ok: true,
+      vertex: { wgsl: "// tc v", entryPoint: "main" },
+      fragment: { wgsl: "// tc f", entryPoint: "main" },
+      attributes: [
+        attribute("a_Position", "vec3", 0),
+        attribute("a_BlendIndices", "uvec4", 1),
+        attribute("a_TexCoordVec4", "vec4", 2),
+      ],
+      uniforms: [
+        UNIFORMS.mvp,
+        UNIFORMS.model,
+        {
+          name: "g_BlendMap",
+          type: `array<vec4<f32>, ${ROWS}>`,
+          declared: "vec4",
+          offset: 128,
+          size: 16 * ROWS,
+          array: ROWS,
+          stride: 16,
+        },
+      ],
+      uniformBlockSize: 128 + 16 * ROWS,
+      textures: [],
+    } as unknown as TranslateResult;
+  }
+  const channels = () => ({
+    // a_Position + a_BlendIndices + a_TexCoordVec4（语料的格式 0x800021，stride 44）
+    mesh: {
+      format: 0x800021,
+      stride: 44,
+      vertices: new Uint8Array(44 * 4),
+      indices: new Uint8Array(new Uint16Array([0, 1, 2, 0, 2, 3]).buffer),
+      vertexCount: 4,
+      indexCount: 6,
+    },
+    material: "materials/tc.json",
+    rows: ROWS,
+    pass: pass("objects/0/texchan", { program: CHANNEL_PROGRAM, blending: "normal" }),
+  });
+  const layers = (withChannels = true) => [
+    layerOf(0, {
+      puppet: puppetOf({
+        composite: true,
+        upload: pass("objects/0/puppetupload", { program: PROGRAMS.direct }),
+        passes: [],
+        ...(withChannels ? { textureChannels: channels() } : {}),
+      }),
+    }),
+  ];
+  const build = async (withChannels = true) => {
+    const bundle = bundleOf(layers(withChannels));
+    bundle.programs.push(channelProgram());
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(["float32-filterable"]), []);
+    return { gpu, scene, state };
+  };
+  const blendMap = Float32Array.from({ length: 16 }, (_, i) => (i + 1) / 10);
+  const puppetsWith = (map: () => Float32Array | null): PuppetSource => ({
+    ...fakePuppets().puppets,
+    blendMap: map,
+  });
+  const channelDraw = (scene: GpuScene) => drawsOf(scene, 0).find((item) => item.label.includes("texchan"))!;
+
+  it("基础四边形 → 纹理通道网格（同一个合成 RT）→ puppet 网格上屏：一帧的 pass 与绘制序列", async () => {
+    const { gpu, scene, state } = await build();
+    scene.setPuppets(puppetsWith(() => blendMap));
+    scene.update(FRAME, state);
+    gpu.trace.length = 0;
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    const lines = gpu.trace.filter((line) => !line.startsWith("  pipeline") && !line.startsWith("  indices"));
+    // 合成 RT 里先画基础四边形（triangle-strip，4 个顶点），再画通道网格的 u16 索引（6 个），最后 puppet 网格回场景
+    // （网格与四边形不共用 render pass：同一张合成 RT 上各开一个 load 的 pass，和别的网格绘制一样）
+    expect(lines).toEqual([
+      expect.stringMatching(/^pass composite .+ #0 load$/),
+      "  draw 4",
+      expect.stringMatching(/^pass composite .+ #0 load$/),
+      "  drawIndexed 6",
+      "pass scene target clear",
+      "  drawIndexed 6",
+    ]);
+    expect(lines[0].split(" ")[2]).toBe(lines[2].split(" ")[2]);
+    expect(drawsOf(scene, 0).map((item) => item.label.split(" ").slice(3).join(" "))).toEqual([
+      "base",
+      "base texchan",
+      "passthrough",
+    ]);
+  });
+
+  it("通道网格的 draw：顶点 / 索引是 mdl 视图（u16）、puppet 标记 = 对象号；MVP 是合成 RT 的 ortho(0, W, 0, H)、g_ModelMatrix 单位阵", async () => {
+    const { scene } = await build();
+    const draw = channelDraw(scene);
+    expect(draw.puppet).toBe(0);
+    expect(draw.mesh!.count).toBe(6);
+    // 合成 RT 是 200×100（图层 size）：z 系数 1/2000、平移 0.5（p12b2-tc 抓帧同形）
+    const f = Math.fround;
+    expect(floats(draw.uniformBuffer!, 0, 16)).toEqual(
+      [f(2 / 200), 0, 0, 0, 0, f(2 / 100), 0, 0, 0, 0, 0.0005, 0, -1, -1, 0.5, 1].map(f),
+    );
+    expect(floats(draw.uniformBuffer!, 64, 16)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  });
+
+  it("每帧写 g_BlendMap：数组长度 = BLENDROWCOUNT，只写前 4 × 行数个 float（多出来的轨道值不上传）；换值下一帧就跟上", async () => {
+    const { scene, state } = await build();
+    let map: Float32Array | null = blendMap;
+    scene.setPuppets(puppetsWith(() => map));
+    scene.update(FRAME, state);
+    const buffer = channelDraw(scene).uniformBuffer!;
+    expect(floats(buffer, 128, 8)).toEqual(Array.from(blendMap.subarray(0, 8)));
+    expect(buffer.bytes.byteLength).toBe(160);
+    map = Float32Array.from({ length: 16 }, (_, i) => 1.5 + i);
+    scene.update(FRAME, state);
+    expect(floats(buffer, 128, 8)).toEqual(Array.from(map.subarray(0, 8)));
+    // 没有 blendMap 来源（旧的调用方）：保持 0，不抛
+    const none = await build();
+    none.scene.setPuppets(fakePuppets().puppets);
+    none.scene.update(FRAME, none.state);
+    expect(floats(channelDraw(none.scene).uniformBuffer!, 128, 8)).toEqual(new Array(8).fill(0));
+  });
+
+  it("没有纹理通道的 puppet：没有 texchan 的 draw，draw 序列与以前相同（基础、上屏），g_BlendMap 不碰", async () => {
+    const { scene } = await build(false);
+    expect(drawsOf(scene, 0).map((item) => item.label.split(" ").slice(3).join(" "))).toEqual(["base", "passthrough"]);
+  });
+
+  it("uploadableTextures：通道材质的纹理（槽 1 是基础图）也要上传；没有 pass 时不报", () => {
+    const [layer] = layers();
+    layer.puppet!.textureChannels!.pass = pass("objects/0/texchan", {
+      program: CHANNEL_PROGRAM,
+      textures: { 0: 7, 1: 8 },
+    });
+    expect([...uploadableTextures({ layers: [layer] })].sort()).toEqual([7, 8]);
+    layer.puppet!.textureChannels!.pass = null;
+    expect([...uploadableTextures({ layers: [layer] })]).toEqual([]);
+  });
+
+  it("checkRenderable 自查：通道网格的格式按程序的属性配对（缺属性会报 render:*），能画时没有额外的原因", async () => {
+    const bundle = bundleOf(layers());
+    bundle.programs.push(channelProgram());
+    expect(checkRenderable(bundle, new Set(["float32-filterable"]))).toEqual([]);
+  });
+});
