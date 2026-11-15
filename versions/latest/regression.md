@@ -2872,3 +2872,15 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | FI3 画面哈希 | Windows dev 屏外宿主 | `hash_baseline` 10 张 × 3 档，改动前后比 | 不读逆矩阵的场景不变 | 2026-11-15：30 组全部相同 |
 | [x] | FI4 和 WPE 比 | Windows dev + 已有的 WPE 抓帧 | 重跑 `sun`、`whale`（P10a）、`tmpl2` 四组（P5d）、`3822495444`（P7c）、`3498150384`（P13a）的按窗口尺寸对照 | 读逆矩阵的常量和 WPE 逐位相同；反馈 RT 的差异缩小 | 2026-11-15：`sun` 光晕那次绘制 14 个常量全部相同，但像素差和改前一样（归着色器舍入）；`tmpl2`、`whale`、`3822495444` 不变；P13a 229、230 帧逐像素相同、其余帧最大差 4 → 1，只把求逆换回 double 就回到原来的数字 |
 | [ ] | FI5 实时预览 | Windows dev，图库预览 | 预览 `3498150384`（鼠标波纹），在画面上拖动 | 波纹正常，没有闪烁或发散 | 只做了屏外回放 |
+
+## 场景壁纸：单采样 A2C 的阈值（P13d 附带）
+
+2026-11-15。`alphatocoverage` 的丢弃条件从 `!(a > 0.5)` 改成 `!(a >= 0.500244140625)`（`render/programs.ts` 的 `A2C_THRESHOLD`），主 pass 与之后的阴影投射者共用。WPE 的实测与推理见 `.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md`「单采样 A2C 的阈值」；测试工程 `ignore/p13/proj/p13d-a2cth*`（`ignore/p13/d/gen_d10.py`），抓帧 `A:\p13d\a2cth*\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | AT1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`p8.test.ts` | 0 error、全过 | 2026-11-15：tsc 0 error，`p8.test.ts` 96 个全过（A2C 入口的期望改成新阈值） |
+| [x] | AT2 WPE 阈值 | WPE 抓帧，1920×1080 | 自写着色器输出 alpha = 0.5 + d，d 逐段细分到 2⁻²² | 找到画与不画的分界 | 2026-11-15：0.5 + 2⁻¹² 画，再小 2⁻²² 不画，段内整片一致；格子边界上的双线性过滤值是 0.5 ± 2⁻¹⁷ |
+| [x] | AT3 P8 回归 | Windows dev + 已有的 WPE 抓帧 | `p8-a2c` 第 162 帧、`p8-misc` 第 155 帧按日志回放 | 和 WPE 逐像素相同（屏蔽 FR / CLK） | 2026-11-15：两个都 0 差异；测试行测完已移除 |
+| [x] | AT4 镂空材质 | Windows dev + WPE 抓帧（`p13d-spec-ns`，chroma4 / foliage4 棋盘格 A2C） | 渲染抓帧那一刻，和 WPE 比 | 格子边上不再多画 | 2026-11-15：差异 54 → 11，剩下的都是 1 级孤立像素（在 P13d 进行中的工作区上测，`fur4` 的主 pass 要 P13d） |
+| [ ] | AT5 非 Windows / 别的显卡 | macOS / Linux / AMD / Intel | 预览用 A2C 的场景 | 同 Windows | 阈值是本机 NVIDIA、D3D11 单采样的实测，别的驱动可能不同 |
