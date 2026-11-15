@@ -1,6 +1,7 @@
 import { init, parse } from "es-module-lexer";
 import {
   GENERAL_FIELDS,
+  type AnimationLayerField,
   isTextRuntimeField,
   type BindingTarget,
   type GeneralKey,
@@ -25,6 +26,11 @@ import { BLOOM_FIELDS } from "./postprocess";
 
 export type ScriptOwner =
   | { kind: "layer"; object: number }
+  /**
+   * puppet 动画层的字段脚本（P12c）：路径 `objects/<i>/animationlayers/<k>/<字段>`。`entry` 是 JSON 里的下标 k，`layer` 是 `ScenePuppet.layers`
+   * 的下标（收集时填 -1，bundle 编完 puppet 后按 `entry` 回填；回填不到的脚本从列表里删掉）。`thisLayer` 是所属图层，`thisObject` 是这个动画层。
+   */
+  | { kind: "animation-layer"; object: number; entry: number; layer: number }
   | { kind: "material"; pass: TargetKey; layer: number }
   | { kind: "effect"; object: number; effect: number }
   | { kind: "general" };
@@ -97,6 +103,10 @@ function valueType(initial: SceneScalar): ValueType | "string" {
   return "string";
 }
 
+function isAnimationLayerField(key: string): key is AnimationLayerField {
+  return key === "rate" || key === "blend" || key === "visible";
+}
+
 /**
  * 字段脚本的写回目标。`sound`：声音对象自己的 `volume`（P6a 步骤 2）写回到就地目标 `{ kind: "sound" }`，返回值每帧写回、
  * 当场交给排期器（同 API 写 `thisLayer.volume`）。只认对象顶层的 `objects/<i>/volume`。
@@ -140,6 +150,11 @@ export function targetOf(
     return particle && (SCRIPT_INSTANCE_KEYS as readonly string[]).includes(key)
       ? { kind: "particle-instance", object: owner.object, field: key as InstanceKey }
       : { kind: "unsupported", path };
+  // 动画层字段脚本（P12c）：只有 rate / blend / visible 有目标；其余字段 unsupported（`layerDefs` 另报 `puppet:layer-script`）
+  if (owner.kind === "animation-layer")
+    return path === `objects/${owner.object}/animationlayers/${owner.entry}/${key}` && isAnimationLayerField(key)
+      ? { kind: "animation-layer", object: owner.object, layer: owner.layer, field: key }
+      : { kind: "unsupported", path };
   if (owner.kind === "layer" && key in layerTypes)
     return { kind: "layer", object: owner.object, field: key as Extract<BindingTarget, { kind: "layer" }>["field"] };
   if (owner.kind === "effect" && key === "visible")
@@ -170,6 +185,7 @@ export function targetValueType(
   key: string,
 ): ValueType | "string" | null {
   if (target.kind === "sound" || target.kind === "camera") return "float";
+  if (target.kind === "animation-layer") return target.field === "visible" ? "bool" : "float";
   if (target.kind === "text") return textTypes[target.field];
   if (target.kind === "particle-instance")
     return target.field === "colorn" || instanceControlPoint(target.field) ? "vec3" : "float";
@@ -246,7 +262,9 @@ export async function collectScripts(
             ? { kind: "layer" as const, object: index }
             : /^objects\/\d+\/effects$/.test(path)
               ? { kind: "effect" as const, object: layer!, effect: index }
-              : owner;
+              : /^objects\/\d+\/animationlayers$/.test(path)
+                ? { kind: "animation-layer" as const, object: layer!, entry: index, layer: -1 }
+                : owner;
         visit(entry, `${path}/${index}`, next, path === "objects" ? index : layer);
       });
       return;
@@ -262,6 +280,8 @@ export async function collectScripts(
         nextLayer = Number(key);
       } else if (/^objects\/\d+\/effects$/.test(path)) {
         next = { kind: "effect", object: layer!, effect: Number(key) };
+      } else if (/^objects\/\d+\/animationlayers$/.test(path)) {
+        next = { kind: "animation-layer", object: layer!, entry: Number(key), layer: -1 };
       } else if (key === "constantshadervalues" && /\/passes\/\d+$/.test(path)) {
         next = { kind: "material", pass: path, layer: layer! };
       }

@@ -705,6 +705,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           screen: [...(canvas ?? cursorWindow ?? [1920, 1080])],
           options: scriptsOptions,
           ...(animations ? { animations } : {}),
+          ...(puppets ? { puppets } : {}),
           ...(probeMedia ? { media: probeMedia } : {}),
         });
         await probeScripts.load();

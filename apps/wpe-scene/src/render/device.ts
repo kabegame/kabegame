@@ -37,9 +37,12 @@ export async function acquireGpu(): Promise<Gpu> {
   }
   if (!adapter) throw new SceneRenderError(["webgpu:no-adapter"]);
   const requiredFeatures = OPTIONAL_FEATURES.filter((feature) => adapter.features.has(feature));
+  // 二维纹理上限取适配器支持的最大值（P12c 走查 F2）：WebGPU 缺省只给 8192，WPE（D3D11）是 16384。语料 3830665420 有个文本层 `size`
+  // 9787×199 带 effect，合成 RT 按缺省上限建不出、整张退回。场景目标、用户纹理等按 `device.limits` 钳的地方随之放宽到同一个值
+  const requiredLimits = { maxTextureDimension2D: adapter.limits.maxTextureDimension2D };
   let device: GPUDevice;
   try {
-    device = await adapter.requestDevice({ label: "kabegame scene", requiredFeatures });
+    device = await adapter.requestDevice({ label: "kabegame scene", requiredFeatures, requiredLimits });
   } catch (error) {
     throw new SceneRenderError([`webgpu:device-failed:${oneLine(String(error))}`]);
   }

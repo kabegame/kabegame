@@ -9,7 +9,9 @@
  * - `visible` 为假的层整层跳过：时钟不走、不采样、不算淡入淡出（rea-RT 3.2）；第一个可见层的来源是静止姿势，之后是上一层的结果
  *   （5.2）；一个可见层都没有时局部矩阵直接取静止来源矩阵（6.1）。
  * - 图层隐藏也推进（这里不看图层可见性，rea-RT 2）；暂停冻结、补画帧不推进由调用方决定是否调 `frame`。
- * - P12a 不派发事件与播完回调（P12c）：时钟收集的事件丢掉。
+ * - P12c：事件与「播完」回调。每个 puppet 推进完全部层（采样、混合都做完）之后才派发：先把本帧越过的 MDLA 事件按收集顺序（层序 × 事件表顺序）
+ *   交给 `PuppetHooks.event`，再按层序调带 `ENDED` 位的层的播完回调表；所以回调里的写入都是下一帧生效。播完检测照 rea-p12-runtime 3.1：
+ *   在推进那一步里、权重判断之前做（模型里权重为 0 的层照样检测）。控制口 `PuppetLayerControl` 是脚本 `IAnimationLayer` 的落点。
  * - P12b1：同一个层循环里再叠骨骼透明度（`g_BonesAlpha`）与变形权重（`g_MorphOffsets` / `g_MorphWeights`），规则在 `pose.ts`；`pose` 交出模型空间骨骼矩阵（挂点用）。
  * - P12b2-1：同一套运行时再服务带骨骼的模型对象（`kind: "model"`，rea-texchan-model 4–7，实测 `ignore/p12/b2/meas/report.txt`）。模式只改这几处：
  *   对象或父链不可见时整段跳过（时钟、权重、姿势都冻结）；权重 0 的层整层跳过（全部跳过就是没有层，局部矩阵取 `MDLS` 局部矩阵）；没有透明度轨道；
@@ -18,7 +20,7 @@
  *   （`refresh` 不是 WPE 的更新，加法层会被重复累加）；模型不处理通道轨道。
  */
 import { AnimationClock, BACK, DONE, MIRROR, PAUSED, SINGLE } from "../animation/clock";
-import type { AnimationMode } from "../animation/types";
+import type { AnimationEventDef, AnimationMode } from "../animation/types";
 import type { SceneLayer } from "../compile/bundle";
 import type { ModelSkeleton, PuppetAnimation, PuppetLayerDef, ScenePuppet } from "../compile/puppet";
 import { effectiveVisible, type LayerTransform } from "../render/layout";
@@ -47,6 +49,10 @@ import {
 } from "./pose";
 
 const f = Math.fround;
+
+/** 时钟运行时位（P12c，WPE 同位）：`setFrame` 那一帧不判播完；本帧播完（loop 回绕、mirror 换向、single 结束）。 */
+export const SETFRAME = 0x02000000;
+export const ENDED = 0x04000000;
 
 /** 动画层的三个可变字段（WPE `AL+0xc8` / `+0xcc` / `+0xd0` bit0，rea-RT 1.5）。 */
 export interface PuppetLayerFields {
@@ -85,6 +91,39 @@ export function animationLayerKey(object: number, layer: number): string {
   return `${object}:${layer}`;
 }
 
+/**
+ * IAnimationLayer 的落点（P12c）：一个动画层的运行时，读写都直接作用在层上。`rate` / `blend` / `visible` 不在这里（在 `SceneState.animationLayers`，
+ * 用户属性、字段脚本、API 三方共写）。方法照 `AnimationClock`；`stop` 的掩码 `0x3fffffff` 不清 `SETFRAME`，同 WPE。
+ */
+export interface PuppetLayerControl {
+  /** `f32(1 / spf)`。 */
+  readonly fps: number;
+  /** 动画的 `length`（帧号上限）。 */
+  readonly frameCount: number;
+  /** 一轮的时长 `D`。 */
+  readonly duration: number;
+  name: string;
+  additive: boolean;
+  blendin: boolean;
+  blendout: boolean;
+  blendtime: number;
+  play(): void;
+  pause(): void;
+  stop(): void;
+  isPlaying(): boolean;
+  /** `t = f32(spf × f32(frame))`，另置 `SETFRAME`（本帧不判播完）。 */
+  setFrame(frame: number): void;
+  getFrame(): number;
+  /** 播完回调（调用由登记方包好，这里只存、只调）。 */
+  addEndedCallback(callback: () => void): void;
+}
+
+/** `frame` 的派发钩子（P12c）。 */
+export interface PuppetHooks {
+  /** 本帧越过的 MDLA 事件：每个 puppet 推进完全部层之后，按收集顺序（层序 × 事件表顺序）调。 */
+  event?(object: number, json: string): void;
+}
+
 /** 一个动画层的运行时。 */
 interface LayerRuntime {
   readonly def: PuppetLayerDef;
@@ -97,7 +136,14 @@ interface LayerRuntime {
   readonly length: number;
   /** additive / blendin / blendout 位（visible 每帧从状态读）；blendin 第一次淡入完成后清掉（非 single）。 */
   flags: number;
-  readonly blendtime: number;
+  /** 可写（`IAnimationLayer.blendtime`，P12c）。 */
+  blendtime: number;
+  /** 当前名字（可写，`IAnimationLayer.name`，P12c；`findLayer` 按它找）。 */
+  name: string;
+  /** 播完回调表（P12c）；重编译时同一个数组接回。 */
+  callbacks: (() => void)[];
+  /** 控制口（懒建）。 */
+  control: PuppetLayerControl | null;
 }
 
 /**
@@ -169,6 +215,8 @@ interface PuppetRuntime {
   readonly meshMorphs: (MeshMorphRuntime | null)[] | null;
   /** 模型的剔除盒（min xyz、max xyz，模型空间）：可见层动画包围盒的并；还没有有效的就是 null（用 mdl 包围盒）。 */
   bounds: number[] | null;
+  /** 时钟收集的 MDLA 事件（P12c）：每个 puppet 一份，推进完全部层之后派发并清空。 */
+  readonly events: AnimationEventDef[];
   /** `g_BlendMap`（P12b2-2，WPE `P+0x350` 起 16 个 float，构造时清 0、跨帧保留）；模型为 null。 */
   readonly blendMap: Float32Array | null;
 }
@@ -177,23 +225,93 @@ interface PuppetRuntime {
  * 按 `FUN_1401a8c10` 建时钟（rea-RT 3.1）：fps 或一轮时长不是正数时早退，`spf` 1、`D` 0、模式位 0（python 模型的 `Clock` 同样）。
  * 只用 `AnimationClock` 的构造与 `D` 字段（P10b 在改它，接口以那边为准）。
  */
-function layerClock(fps: number, length: number, mode: AnimationMode): AnimationClock {
+function layerClock(
+  fps: number,
+  length: number,
+  mode: AnimationMode,
+  events: readonly AnimationEventDef[],
+): AnimationClock {
   const fps32 = f(fps);
   const D = f(f(Math.trunc(length)) / fps32);
   if (!(fps32 > 0) || !(D > 0)) {
-    const clock = new AnimationClock({ fps: 1, length, mode: 0, startpaused: false });
+    const clock = new AnimationClock({ fps: 1, length, mode: 0, startpaused: false }, events);
     clock.D = 0;
     return clock;
   }
-  return new AnimationClock({ fps, length, mode, startpaused: false });
+  return new AnimationClock({ fps, length, mode, startpaused: false }, events);
+}
+
+/** 一层的控制口（P12c）：读写直接作用在层的运行时上。 */
+function layerControl(layer: LayerRuntime): PuppetLayerControl {
+  const clock = layer.clock;
+  const bit = (mask: number) => ({
+    get: () => (layer.flags & mask) !== 0,
+    set: (value: boolean) => {
+      layer.flags = value ? layer.flags | mask : layer.flags & ~mask;
+    },
+  });
+  const additive = bit(LAYER_ADDITIVE);
+  const blendin = bit(LAYER_BLENDIN);
+  const blendout = bit(LAYER_BLENDOUT);
+  return {
+    get fps() {
+      return f(1 / clock.spf);
+    },
+    get frameCount() {
+      return layer.length;
+    },
+    get duration() {
+      return clock.D;
+    },
+    get name() {
+      return layer.name;
+    },
+    set name(value: string) {
+      layer.name = value;
+    },
+    get additive() {
+      return additive.get();
+    },
+    set additive(value: boolean) {
+      additive.set(value);
+    },
+    get blendin() {
+      return blendin.get();
+    },
+    set blendin(value: boolean) {
+      blendin.set(value);
+    },
+    get blendout() {
+      return blendout.get();
+    },
+    set blendout(value: boolean) {
+      blendout.set(value);
+    },
+    get blendtime() {
+      return layer.blendtime;
+    },
+    set blendtime(value: number) {
+      layer.blendtime = value;
+    },
+    play: () => clock.play(),
+    pause: () => clock.pause(),
+    stop: () => clock.stop(),
+    isPlaying: () => clock.isPlaying(),
+    setFrame: (frame: number) => {
+      clock.setFrame(frame);
+      clock.flags = (clock.flags | SETFRAME) >>> 0;
+    },
+    getFrame: () => clock.getFrame(),
+    addEndedCallback: (callback: () => void) => {
+      layer.callbacks.push(callback);
+    },
+  };
 }
 
 export class ScenePuppets {
   /** skinned puppet，按 `list` 的顺序。 */
   private readonly runtimes: PuppetRuntime[] = [];
   private readonly byObject = new Map<number, PuppetRuntime>();
-  /** 时钟收集的事件（P12a 丢掉）。 */
-  private readonly events: { time: number; json: string }[] = [];
   private readonly at: FrameIndex = { lo: 0, hi: 0, frac: 0 };
 
   /**
@@ -207,7 +325,7 @@ export class ScenePuppets {
       const bones = skeleton.parents.length;
       const layers = puppet.layers.map((def): LayerRuntime => {
         const animation = puppet.animations[def.animation];
-        const clock = layerClock(animation.fps, animation.length, animation.mode);
+        const clock = layerClock(animation.fps, animation.length, animation.mode, animation.events);
         let flags = (def.additive ? LAYER_ADDITIVE : 0) | (def.blendin ? LAYER_BLENDIN : 0);
         // blendout 只在 single 有效：加载时非 single 直接清掉（`0x1401fd068`，rea-RT 1.4）
         if (def.blendout && clock.flags & SINGLE) flags |= LAYER_BLENDOUT;
@@ -220,6 +338,9 @@ export class ScenePuppets {
           length: Math.trunc(animation.length),
           flags,
           blendtime: def.blendtime,
+          name: def.name,
+          callbacks: [],
+          control: null,
         };
       });
       const runtime: PuppetRuntime = {
@@ -257,6 +378,7 @@ export class ScenePuppets {
               )
             : null,
         bounds: null,
+        events: [],
         blendMap: kind === "image" ? new Float32Array(BLEND_MAP_FLOATS) : null,
       };
       this.runtimes.push(runtime);
@@ -269,9 +391,48 @@ export class ScenePuppets {
    * 一帧（对象更新那一步，和粒子同一循环、相机与脚本之前，rea-RT 2）：逐层推进时钟、求姿势、算蒙皮矩阵。`dt` 是已钳到
    * [0.0001, 0.25] 的帧时间（`g_Frametime`）；图层隐藏也推进。
    */
-  frame(dt: number, state?: PuppetSink | null): void {
+  frame(dt: number, state?: PuppetSink | null, hooks?: PuppetHooks | null): void {
     const d = f(dt);
-    for (const runtime of this.runtimes) this.evaluate(runtime, d, state ?? null);
+    for (const runtime of this.runtimes) {
+      this.evaluate(runtime, d, state ?? null);
+      this.dispatch(runtime, hooks ?? null);
+    }
+  }
+
+  /**
+   * 一个 puppet 推进完之后的派发（P12c，rea-p12c-script 3）：先把收集的事件逐个交给 `hooks.event`（交出去之前拷走并清空，回调里再推进也不会重复），
+   * 再按层序处理带 `ENDED` 的层：清掉这一位，拷一份回调表逐个调。没有事件、没有 ENDED 层时什么都不做。
+   */
+  private dispatch(runtime: PuppetRuntime, hooks: PuppetHooks | null): void {
+    if (runtime.events.length) {
+      const events = runtime.events.splice(0);
+      if (hooks?.event) for (const event of events) hooks.event(runtime.object, event.json);
+    }
+    for (const layer of runtime.layers) {
+      if (!(layer.clock.flags & ENDED)) continue;
+      layer.clock.flags = (layer.clock.flags & ~ENDED) >>> 0;
+      for (const callback of [...layer.callbacks]) callback();
+    }
+  }
+
+  /** skinned puppet / 带骨骼模型的动画层数；别的对象为 0（P12c）。 */
+  layerCount(object: number): number {
+    return this.byObject.get(object)?.layers.length ?? 0;
+  }
+
+  /** 第 `index` 层的控制口；不是 puppet 或 index 越界为 null（P12c）。 */
+  layer(object: number, index: number): PuppetLayerControl | null {
+    const layer = this.byObject.get(object)?.layers[index];
+    if (!layer) return null;
+    return (layer.control ??= layerControl(layer));
+  }
+
+  /** 按**当前**名字找层：最后一个匹配，空串不匹配，找不到 −1（P12c，`getAnimationLayer("名字")`）。 */
+  findLayer(object: number, name: string): number {
+    const layers = this.byObject.get(object)?.layers;
+    if (!layers || name === "") return -1;
+    for (let index = layers.length - 1; index >= 0; index--) if (layers[index].name === name) return index;
+    return -1;
   }
 
   /**
@@ -347,8 +508,15 @@ export class ScenePuppets {
         const b = old.clock;
         if (a.spf !== b.spf || a.D !== b.D || layer.length !== old.length || (a.flags & 3) !== (b.flags & 3)) return;
         a.t = b.t;
-        a.flags = ((a.flags & ~(PAUSED | DONE | BACK)) | (b.flags & (PAUSED | DONE | BACK))) >>> 0;
-        if (!(old.flags & LAYER_BLENDIN)) layer.flags &= ~LAYER_BLENDIN;
+        a.flags =
+          ((a.flags & ~(PAUSED | DONE | BACK | SETFRAME)) | (b.flags & (PAUSED | DONE | BACK | SETFRAME))) >>> 0;
+        // 五个可写字段与回调表（P12c，WPE 改属性不重载，脚本写过的都还在）：additive / blendin / blendout 三位原样接回（blendin 是否已清也在里面）
+        const writable = LAYER_ADDITIVE | LAYER_BLENDIN | LAYER_BLENDOUT;
+        layer.flags = (layer.flags & ~writable) | (old.flags & writable);
+        layer.name = old.name;
+        layer.blendtime = old.blendtime;
+        layer.callbacks = old.callbacks;
+        layer.control = null;
       });
       runtime.restSkin = false;
     }
@@ -424,9 +592,23 @@ export class ScenePuppets {
       if (!fields.visible) continue;
       if (!model && !posed) reset();
       if (d !== null) {
-        // 推进量 `dt × rate`（`0x1401fed7d`：`mulss`，float32）
-        layer.clock.advance(f(d * f(fields.rate)), this.events);
-        this.events.length = 0;
+        const clock = layer.clock;
+        const old = clock.flags >>> 0;
+        const t0 = clock.t;
+        // 推进量 `dt × rate`（`0x1401fed7d`：`mulss`，float32）；越过的事件收进本 puppet 的列表，推进完全部层后派发
+        clock.advance(f(d * f(fields.rate)), runtime.events);
+        // 播完检测（rea-p12-runtime 3.1）：暂停 / 已结束 / setFrame 那一帧不判
+        if (!(old & (PAUSED | DONE | SETFRAME))) {
+          const ended =
+            clock.flags & SINGLE
+              ? (clock.flags & DONE) !== 0 // single：本帧刚结束
+              : clock.flags & MIRROR
+                ? ((old ^ clock.flags) & BACK) !== 0 // mirror：换向
+                : t0 > clock.t; // loop：回绕（负 rate 每帧都成立，照抄）
+          if (ended) clock.flags = (clock.flags | ENDED) >>> 0;
+        }
+        // 只在可见、推进的层上清（不可见的层保留到下次推进）
+        clock.flags = (clock.flags & ~SETFRAME) >>> 0;
       }
       const at = frameIndex(layer.clock, layer.length, this.at);
       const w = layerWeight(layer, layer.clock, fields.blend);

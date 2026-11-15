@@ -265,9 +265,12 @@ describe("buildModelSkeleton 的键（语料 0 处的写法照报，WPE 不处�
     expect(issues(file({ animations: [animation(2 ** 32 + 1, 1)] }))).toEqual(["mdl:animation-id"]);
   });
 
-  it("动画层字段挂 {script}：puppet:layer-script（P12c）；{user} 绑定不报，登记在层上", () => {
+  it("动画层字段挂 {script}：rate / blend / visible 不报（P12c 接 animation-layer 目标），其余五个可写字段报 puppet:layer-script；{user} 绑定不报，登记在层上", () => {
     const withAnimation = file({ animations: [animation(1, 1)] });
-    expect(issues(withAnimation, [layerOf(1, { rate: { script: "x", value: 1 } })])).toEqual(["puppet:layer-script"]);
+    expect(issues(withAnimation, [layerOf(1, { rate: { script: "x", value: 1 } })])).toEqual([]);
+    expect(issues(withAnimation, [layerOf(1, { blendtime: { script: "x", value: 1 } })])).toEqual([
+      "puppet:layer-script",
+    ]);
     const built = buildModelSkeleton(
       withAnimation,
       [layerOf(1, { rate: { user: "speed", value: 2 } })],
@@ -576,9 +579,9 @@ describe.skipIf(!existsSync(join(workshop, "3706286085")) || !existsSync(wasm))(
           ),
         );
         expect(gone).toEqual([]);
-        // 剩下的：P13 的雾（general:fog*）与方向光阴影（lightconfig:directionalshadow）、动画层字段脚本（P12c）、挂在模型下的点光（object:parent，P13f）
+        // 剩下的：P13 的雾（general:fog*）与方向光阴影（lightconfig:directionalshadow）、挂在模型下的点光（object:parent，P13f）；动画层字段脚本 P12c 起不再报
         const rest = bundle.unsupported.filter((key) => !/^(general:fog|lightconfig:)/.test(key));
-        expect(rest.sort()).toEqual(["object:parent", "puppet:layer-script"]);
+        expect(rest.sort()).toEqual(["object:parent"]);
         const skeletons = bundle.layers.filter((layer) => layer.model?.skeleton);
         // FBX_Stage、RioSonic、BoostModel1/2/3
         expect(skeletons.length).toBe(5);

@@ -799,6 +799,17 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 - **语料**：不解锁场景。`3706286085` 还差 P13 的雾、阴影与 P12c 的动画层脚本；`3811424158` 还差精灵表帧动画。
 - **走查**：生成工程整帧逐像素相同；`3706286085` 复制工程的骨骼矩阵逐位相同。顺带发现 `generic4` 的 PBR 遮罩少了 emissive 子组合键（F1，静默的画面差），已转 P7。
 
+**进度**（2026-11-15）：**P12c 完成**（[phase-12c-script.md](phase12/phase-12c-script.md)）：动画层的脚本 API。
+- **范围**：`getAnimationLayerCount` / `getAnimationLayer`、`IAnimationLayer` 全部成员、动画层字段脚本（新属主 `animation-layer`）、`addEndedCallback`、MDLA 事件；宿主在 `init` 之前建待用 puppet 运行时。
+- **不做**：建删层三个方法照报（用户定）。
+- **F2**：走查发现设备纹理上限是 WebGPU 缺省的 8192，改为按适配器最大值申请（WPE 16384），随 P12c 修。
+- **语料**：233 张能渲染 160 → 164，解锁 `3346715292`、`3361965869`、`3492627662`、`3830665420`（后者靠 F2）。
+- **走查**：
+  - `p12-script` 642 行脚本日志与 WPE 逐行相同、整帧最大差 1 级；
+  - 三张解锁场景的 puppet `g_Bones` 只差 `rsqrtps`；
+  - P12a / P12b 生成工程逐字节不变。
+- **待做**：P12d（骨骼物理）。
+
 - MDLV0021 / MDLV0023 的骨骼（MDLS）、动画（MDLA）、变形（MDMP），skinning（翻译器经 `defines` 传 `BONECOUNT`），puppet warp。语料 33 张。
 - 对象 `animationlayers`（31 张）、`attachment` 挂点（10 张）；脚本 `getAnimationLayer*`、骨骼与混合形状的 API。
 - **依赖：** P5c 的 mdl 解析。P5c 对带这些段的模型报 `mdl:skeleton` / `mdl:animation` / `mdl:morph`。

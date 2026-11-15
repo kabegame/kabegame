@@ -124,17 +124,10 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       ["getAttachmentIndex", "getAttachmentMatrix", "getAttachmentOrigin", "getAttachmentAngles"],
       UNIQUE,
     ),
-    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b）
+    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b），`getAnimationLayer` / `getAnimationLayerCount` 已实现（P12c）
     ...methods(
       "any",
-      [
-        "getTextureAnimation",
-        "getAnimationLayerCount",
-        "getAnimationLayer",
-        "createAnimationLayer",
-        "playSingleAnimation",
-        "destroyAnimationLayer",
-      ],
+      ["getTextureAnimation", "createAnimationLayer", "playSingleAnimation", "destroyAnimationLayer"],
       UNIQUE,
     ),
     ...methods(
@@ -395,7 +388,7 @@ export function usesEffectAccess(source: string): boolean {
 /** 扫描用到的脚本信息（`SceneScript` 的子集）。 */
 export interface ScriptApiContext {
   source: string;
-  owner: { kind: "layer" | "material" | "effect" | "general" };
+  owner: { kind: "layer" | "animation-layer" | "material" | "effect" | "general" };
   /** 所在图层的 objects 下标；general 上的脚本为 null。 */
   layer: number | null;
 }
@@ -415,7 +408,8 @@ function rootGroup(root: string, script: ScriptApiContext): ResolvedGroup | null
     case "thisLayer":
       return script.layer === null ? "general" : "layer";
     case "thisObject":
-      return script.owner.kind;
+      // 动画层字段脚本（P12c）：`thisObject` 是 IAnimationLayer，是图层的子对象、成员不收进表，不按分组查（只剩 `any` 项）
+      return script.owner.kind === "animation-layer" ? null : script.owner.kind;
     default:
       return null;
   }

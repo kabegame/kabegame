@@ -2944,6 +2944,33 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PC6 实时预览 | Windows dev，图库预览 | `3706286085`（强制渲染）看 Sonic 跑动 | 骨骼动画流畅，BoostModel 的加法层动画正常 | 2026-11-15 用户看过：「我看可以」。强制渲染下没有雾，动画层脚本用的是 JSON 初值，手套鞋的 emissive 见 F1 |
 | [ ] | PC7 非 Windows | macOS / Linux | 同 PC6 | 同 Windows | 本机不能测 |
 
+## 场景壁纸 puppet 动画层的脚本 API（P12c）
+
+2026-11-15。脚本能拿到 puppet（图像层与带骨骼的模型）的动画层并控制它：
+- `getAnimationLayerCount` / `getAnimationLayer`、`IAnimationLayer` 的全部成员；
+- 动画层字段（`rate` / `blend` / `visible`）上的脚本；
+- `addEndedCallback`、MDLA 事件派发给 `animationEvent`；
+- 首次加载时在 `init` 之前建好 puppet 运行时。
+
+另外设备按适配器支持的最大值申请二维纹理上限（F2，WebGPU 缺省 8192，WPE 16384）。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase12/phase-12c-script.md`；
+- 读码：`rea-p12-attach-physics.md` 第 4 节、`rea-p12c-script.md`；
+- 语料与对照：`ignore/p12/c/corpus/`、`ignore/p12/c/check/`；
+- 抓帧：`A:\p12\p12-script-fps20-1856x1044\`、`A:\p12c\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PD0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc 与相关 vitest | 0 error，相关测试全过 | 2026-11-15：tsc 0 error；`puppet`、`script`、`compile/p12c` 等 48 个文件全过；`puppet/p12script.test.ts` 按 WPE 日志回放 266 帧、642 行逐行相同，`g_Bones` 在 `rsqrtps` 容差内；变异两轮共 32 个，单测可覆盖的全部杀死（宿主两处由 PD4 真机验） |
+| [x] | PD1 语料 | Node | `kbp corpus scan` 工作区快照对 HEAD | 只去掉 P12c 的键，没有场景变成退回 | 2026-11-15：`getAnimationLayer` 10 张、`puppet:layer-script` 8 张、`getAnimationLayerCount` 3 张全部消失；`clean_lost` 0；233 张口径解锁 `3346715292`、`3361965869`、`3492627662`、`3830665420`（后者靠 F2） |
+| [x] | PD2 `p12-script` 对照 WPE | Windows dev + WPE 抓帧，1856×1044，fps 20 | dev 按 WPE 帧时间回放到第 201 帧、跑脚本，整帧比 | 最大差 ≤ 2 级 | 2026-11-15：最大差 1 级（边缘 0.23%，`rsqrtps`）；5 段脚本 0 出错，字段脚本收到事件，播完回调照常 |
+| [x] | PD3 解锁场景对照 WPE | Windows dev + WPE 抓帧，1920×1080，fps 20，后处理超高 | 四张 `content unpack --instrument` 复制工程，回放到 WPE 抓到的那一帧，比 puppet 的 `g_Bones` 与整帧 | `g_Bones` 只差 `rsqrtps`（平移分量 ≈ 1e-5），脚本报错与 WPE 相同 | 2026-11-15：`3346715292` / `3492627662` / `3830665420` 全部对上，超出 P12a 容差的都在平移分量；`3346715292` 两边都是 6 段 `init` 因缺 NSL 抛错；`3361965869` 点击才播的两个 puppet 逐位相同，另两个 `rate` 跟系统声音，不能确定性对照；整帧差在光束、音频条、时钟文字、粒子 |
+| [x] | PD4 宿主帧循环与 `init` 落点 | Windows dev，图库预览 | `p12-script` 实时预览看事件与回调计数；`3492627662` 开场看各层帧号（`host.puppets()`） | 事件、回调照常派发；`init` 的 `setFrame` 生效 | 2026-11-15：6 秒内事件 10 次、播完回调 19 次、0 出错；`3492627662` 开场 1.85 s 时同一 puppet 三层帧号 55.42 / 43.42 / 24.22，偏移来自 `init` |
+| [x] | PD5 P12a / P12b 不变 | Windows dev | P12a / P12b1 / P12b2 的 8 个生成工程重渲 22 帧（P12c 之后、F2 之后各一次） | 和之前我们的帧逐字节相同 | 2026-11-15：两次都逐字节相同 |
+| [ ] | PD6 点击播放 | Windows dev，图库预览 | `3361965869`（或别的 `cursorClick` 里 `getAnimationLayer("dianji").play()` 的场景）点人物下方的圆环 | 下一帧开始播放点击动画；对象 5「鼓点光环」点击时控制台有一条 `TypeError`（层名是 222，WPE 同样） | 需要人点 |
+| [ ] | PD7 非 Windows | macOS / Linux | 同 PD4、PD6 | 同 Windows | 本机不能测 |
+
 ## 场景 dev 探针按指定尺寸渲染
 
 2026-11-14。dev 探针 `renderFrame` 给了 `canvas` 时，正交场景按这个尺寸直接画，和 WPE 测试窗口同一种画法：样式照 WPE 的对齐方式做进正交投影的四个裁切边距，`fit` / `center` 整屏清成 `schemecolor`，读回场景目标本身。`renderMode: "scene"` 取旧的「场景分辨率 + 读回时铺进画布」。产品的预览、桌面、应用背景都不变（用户定）。计划与记录见 `.claude/plans/wpe-import/3-scene/phase-render-size.md`，读码 `rea-render-size.md`。

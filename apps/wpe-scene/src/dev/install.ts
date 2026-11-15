@@ -60,6 +60,8 @@ export function installSceneDevProbe(host: SceneHost): void {
        * 的耗时（`frameMs`）。
        */
       animations: () => host.animations(),
+      /** P12c：每个 puppet 每个动画层的名字、帧号、是否在播（`pending` 为真时取的是还没换上的待用运行时）。 */
+      puppets: () => host.puppetProbe(),
       read: (path: string) => host.readTarget(path),
       /** P4a 步骤 5：粒子数量与分布、开销记录（`{ profile: true }` 开始，`false` 停止）、当前 instanceoverride。 */
       particles: (options?: { profile?: boolean }) => hostParticles(host, options),

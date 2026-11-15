@@ -25,6 +25,7 @@ import { parseProject, type ProjectJson } from "../compile/model";
 import { scriptMediaCallbacks } from "../media/events";
 import type { MediaCallbacks } from "../media/scene";
 import { mulberry32 } from "../particles/random";
+import type { ScenePuppets } from "../puppet/player";
 import { CursorSession, emptyCursorInput, type CursorInputSnapshot, type CursorStepInput } from "../render/cursor";
 import type { SceneState } from "../render/state";
 import { daytimeOf } from "../render/uniforms";
@@ -273,6 +274,11 @@ export interface ProbeScriptsInput {
    * 待用播放器）；回放推进的是同一份。不给时 `getAnimation` 的方法空操作。
    */
   animations?: Pick<SceneAnimations, "control">;
+  /**
+   * 探针自己的 puppet 运行时（P12c）：脚本的 `getAnimationLayer` 落到它上面（`probe.ts` 在脚本之前建好，`init` 里的 `setFrame` / `play` 才有落点，
+   * 回放推进的是同一份）。不给时按 bundle 的层定义回答，方法空操作。
+   */
+  puppets?: Pick<ScenePuppets, "layerCount" | "layer" | "findLayer">;
   /** 系统媒体回放（P11c，`probeMedia.ts`）：`init` 之后给刚 `init` 的脚本补发一轮媒体回调（`SceneMedia.replayAfterInit`）。不给时不补发。 */
   media?: { replayAfterInit(callbacks: MediaCallbacks): void };
   /** 建 realm（缺省 `createIframeRealm`，在当前文档里建隐藏 iframe）：单测换成不碰 DOM 的假 realm。 */
@@ -432,6 +438,17 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         },
         // 关键帧动画（P10b）：探针自己的播放器，每次现取
         animation: (id) => input.animations?.control(id) ?? null,
+        // puppet 动画层（P12c）：探针自己的运行时，每次现取
+        puppetLayers: (object) => {
+          const puppets = input.puppets;
+          return puppets
+            ? {
+                count: () => puppets.layerCount(object),
+                find: (name) => puppets.findLayer(object, name),
+                control: (index) => puppets.layer(object, index),
+              }
+            : null;
+        },
         // 全局 `input`（P6c）：最近一帧的光标快照
         cursorInput: () => cursorInput,
         // 快捷方式（P11d）：同宿主的门禁与令牌；属性检查读探针的属性全集，不发消息、不启动，只记一条

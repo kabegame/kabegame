@@ -263,6 +263,12 @@ export class SceneHost {
    */
   private pendingAnimations: { bundle: SceneBundle; player: SceneAnimations } | null = null;
   /**
+   * 首次加载时脚本 `init` 要用的 puppet 运行时（P12c，同 `pendingAnimations`）：语料里 50 处「相位偏移」脚本在 `init` 里对动画层 `setFrame`，
+   * 所以在 `ensureRuntime` 之前按新 bundle 先建好。`ScriptApi.puppetLayers` 在它属于脚本当前看到的 bundle 时取它；`load` 里属于这份 bundle 时
+   * 直接交给渲染器、`beforeFirstFrame` 里**不** `carryOver`（`init` 里的控制要保留），否则作废、照旧新建并接上正在播的。退回预览图、销毁时丢掉。
+   */
+  private pendingPuppets: { bundle: SceneBundle; puppets: ScenePuppets } | null = null;
+  /**
    * 交给渲染器的 `VideoSink`：同一份转给当前的 `sceneVideos`，没有时空操作。重编译时 `loadVideos` 在新场景换上之前就按新 bundle 的
    * 下标重建了表（好早点读新出现的视频），这期间旧场景还在画、问的是旧下标：按视频区间换算成新下标，换算不到（新 bundle 里没有这段
    * 视频）就不交帧，免得把别的视频拷进旧场景的纹理。
@@ -899,6 +905,18 @@ export class SceneHost {
           const player = pending && pending.bundle === this.scriptBundle ? pending.player : this.sceneAnimations;
           return player?.control(id) ?? null;
         },
+        // puppet 动画层（P12c）：同上，待用运行时属于脚本当前看到的 bundle 时取它（首次加载的 init），否则取正在播的那份；每次现取
+        puppetLayers: (object) => {
+          const pending = this.pendingPuppets;
+          const puppets = pending && pending.bundle === this.scriptBundle ? pending.puppets : this.scenePuppets;
+          return puppets
+            ? {
+                count: () => puppets.layerCount(object),
+                find: (name) => puppets.findLayer(object, name),
+                control: (index) => puppets.layer(object, index),
+              }
+            : null;
+        },
       });
       const runtime = new ScriptRuntime(realm, {
         report: this.options.report,
@@ -1215,6 +1233,31 @@ export class SceneHost {
     return this.sceneAnimations?.probe() ?? EMPTY_ANIMATIONS_PROBE;
   }
 
+  /**
+   * dev 探针（P12c）：正在播的 puppet 运行时（还没换上时取待用的那份）里每个对象每个动画层的名字、帧号、是否在播；`pending` 为真表示取的是待用的。
+   * 用来在不跑帧循环的屏外宿主里看 `init` 对动画层的控制有没有落到运行时上。
+   */
+  puppetProbe(): {
+    pending: boolean;
+    objects: { object: number; layers: { name: string; frame: number; playing: boolean }[] }[];
+  } {
+    const pending = !this.scenePuppets && !!this.pendingPuppets;
+    const puppets = this.scenePuppets ?? this.pendingPuppets?.puppets ?? null;
+    const bundle = this.drawingBundle ?? this.pendingPuppets?.bundle ?? null;
+    if (!puppets || !bundle) return { pending, objects: [] };
+    const objects = bundle.layers
+      .map((layer) => layer.object)
+      .filter((object) => puppets.layerCount(object) > 0)
+      .map((object) => ({
+        object,
+        layers: Array.from({ length: puppets.layerCount(object) }, (_, index) => {
+          const control = puppets.layer(object, index)!;
+          return { name: control.name, frame: control.getFrame(), playing: control.isPlaying() };
+        }),
+      }));
+    return { pending, objects };
+  }
+
   /** dev 探针：每个声音对象的模式、当前文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的元素与 context。 */
   sounds(): {
     hostVolume: number;
@@ -1292,7 +1335,11 @@ export class SceneHost {
       // puppet（P12a 步骤 4）：用户属性写进状态后这一帧就读到（读的是渲染器正在画的那份状态）
       stepPuppets: (dt) => {
         const drawn = this.drawnState;
-        if (drawn) this.scenePuppets?.frame(dt, stateSink(drawn));
+        // 事件（MDLA）与播完回调在每个 puppet 推进完之后派发（P12c）：事件交给脚本运行时的 `animationEvent`，回调里的写入下一帧生效
+        if (drawn)
+          this.scenePuppets?.frame(dt, stateSink(drawn), {
+            event: (object, json) => this.runtime?.animationEvent(object, json),
+          });
       },
       videos: this.videoSink,
       beforeFrame: (dt, spectrum) => {
@@ -1377,6 +1424,7 @@ export class SceneHost {
     this.sceneAnimations = null;
     this.scenePuppets = null;
     this.pendingAnimations = null;
+    this.pendingPuppets = null;
     this.bundle = null;
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
@@ -1519,6 +1567,10 @@ export class SceneHost {
         // 它们不会再跑，接过来；`runtime` 还没赋值时 `init` 还没开始，之后按 `scriptBundle` 落到这一份上，不用接
         if (this.runtime && this.pendingAnimations) player.carryOver(this.pendingAnimations.player);
         this.pendingAnimations = { bundle, player };
+        // puppet 运行时同理（P12c）：`init` 里对动画层的 setFrame / play 要有落点
+        const pendingPuppets = new ScenePuppets(puppetEntries(bundle.layers));
+        if (this.runtime && this.pendingPuppets) pendingPuppets.carryOver(this.pendingPuppets.puppets);
+        this.pendingPuppets = { bundle, puppets: pendingPuppets };
         await this.ensureRuntime(bundle, target.sceneAssets);
         if (id !== this.generation) return;
       }
@@ -1527,7 +1579,10 @@ export class SceneHost {
       current.setPaused(this.paused);
       // puppet（P12a 步骤 4）：新建，在 `beforeFirstFrame` 里接回旧时钟并算一次姿势；没有 puppet 的场景是空运行时（`frame` 什么都不做）
       // 图像层 puppet 与带骨骼的模型对象（P12b2-1）都进运行时
-      const puppets = new ScenePuppets(puppetEntries(bundle.layers));
+      // 首次加载时 `init` 已经在待用的运行时上控制过：属于这份 bundle 就直接用（P12c）
+      const pendingPuppets = this.pendingPuppets?.bundle === bundle ? this.pendingPuppets : null;
+      const stalePuppets = pendingPuppets ? null : this.pendingPuppets;
+      const puppets = pendingPuppets?.puppets ?? new ScenePuppets(puppetEntries(bundle.layers));
       await current.load(bundle, {
         ignoreUnsupported: force,
         texts,
@@ -1537,7 +1592,9 @@ export class SceneHost {
         beforeFirstFrame: (state) => {
           // 新建 → carryOver → refresh（同 P10 的 `write`）：重编译时动画层时钟与 blendin 的清位接着走，换上就按当前时钟与当前状态算一次蒙皮，
           // 不闪出绑定姿势；之后每帧由 `stepPuppets` 推进
-          puppets.carryOver(this.scenePuppets);
+          // 待用的（`init` 里的控制要保留）不接旧时钟；否则接上正在播的，没有时接过期的待用运行时（P12c）
+          this.pendingPuppets = null;
+          if (!pendingPuppets) puppets.carryOver(this.scenePuppets ?? stalePuppets?.puppets ?? null);
           puppets.refresh(stateSink(state));
           this.scenePuppets = puppets;
           // 运行中属性写进状态时同步交给来源表解码（P11b 步骤 2）；解码完成再经 `onUserTextureReady` 标脏
@@ -1661,6 +1718,7 @@ export class SceneHost {
     this.sceneAnimations = null;
     this.scenePuppets = null;
     this.pendingAnimations = null;
+    this.pendingPuppets = null;
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;

@@ -19,6 +19,7 @@ import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlP
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import { TEXT_ANCHORS } from "../compile/texts";
+import { animationLayerKey, puppetEntries, type PuppetLayerControl, type PuppetRig } from "../puppet/player";
 import type { CursorInputSnapshot } from "../render/cursor";
 import { anglesRotation, drawMatrixOf } from "../render/layout";
 import { extractEulerZYX, lookAtAngles, lookAtYawAngles, rotateObjectSpace } from "../render/rotation";
@@ -91,6 +92,17 @@ export function createWpeLocalStorage(input: {
   return api;
 }
 
+/**
+ * 一个对象的 puppet 动画层视图（P12c，宿主从 `ScenePuppets` 现取）：`getAnimationLayerCount` / `getAnimationLayer` 与 `IAnimationLayer` 接到它上面。
+ * 不是 skinned puppet / 没有骨骼的对象不给（`puppetLayers` 返回 null 或 `count()` 为 0）。
+ */
+export interface PuppetLayersView {
+  count(): number;
+  /** 按当前名字找，最后一个匹配，空串不匹配，找不到 −1。 */
+  find(name: string): number;
+  control(index: number): PuppetLayerControl | null;
+}
+
 export interface ScriptApiState {
   bundle(): SceneBundle;
   state(): SceneState;
@@ -128,6 +140,11 @@ export interface ScriptApiState {
    * 不传或返回 null（语料诊断、播放器还没建）时方法空操作，只读成员取 bundle 里这一条的定义。
    */
   animation?(id: string): AnimationControl | null;
+  /**
+   * puppet 动画层（P12c，宿主按脚本当前看到的 bundle 取 `ScenePuppets`，首次加载的 `init` 取待用的那份）：每次现取，重编译换了运行时也接得上。
+   * 不传或返回 null（语料诊断、`realmCheck`）时退回按 bundle 的层定义回答：计数、名字查找、只读三项照算，方法空操作，`isPlaying()` 为假，`getFrame()` 为 0。
+   */
+  puppetLayers?(object: number): PuppetLayersView | null;
   /**
    * 全局 `input` 读到的本帧光标（P6c，宿主存渲染器每个实时帧给的 `CursorInputSnapshot`）：每次读都现取，所以回调里读到的和 `update` 里同一帧的相同。
    * 不传（语料诊断、`realmCheck`）时读到全 0、左键松开。
@@ -249,6 +266,10 @@ export class ScriptApi {
   private readonly effectNames = new Map<string, string>();
   /** `IAnimation` 包装对象（P10b）：按动画 `id`（`scene.json` 路径）缓存，同一条每次 `getAnimation` 返回同一个对象。 */
   private readonly animationApis = new Map<string, ApiObject>();
+  /** `IAnimationLayer` 包装对象（P12c）：按 `<对象>:<层下标>` 缓存，`get(0) === get("walk")`。 */
+  private readonly animationLayerApis = new Map<string, ApiObject>();
+  /** 没有宿主视图时（语料诊断）的控制口替身：按 `<对象>:<层下标>` 缓存，保住脚本写过的名字等。 */
+  private readonly fallbackLayerControls = new Map<string, PuppetLayerControl>();
   private readonly recompileValues = new Map<string, string>();
   /**
    * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applySpectrum` 每帧把场景频谱（归一化后的）
@@ -378,6 +399,7 @@ export class ScriptApi {
     // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
     this.installGetAnimation(api, () => `objects/${index}`);
+    this.installAnimationLayers(api, index);
     this.layers.set(object, api);
     return api;
   }
@@ -804,6 +826,8 @@ export class ScriptApi {
     const owner = this.current?.owner;
     if (!owner) return null;
     if (owner.kind === "layer") return this.layer(owner.object);
+    // 动画层字段脚本（P12c）：`thisObject` 是那个 IAnimationLayer（`thisLayer` 仍是所属图层，取 `current.layer`）
+    if (owner.kind === "animation-layer") return this.animationLayerApi(owner.object, owner.layer);
     if (owner.kind === "general") return this.general;
     if (owner.kind === "effect") return this.effect(owner.object, owner.effect);
     return this.material(owner.pass);
@@ -1033,6 +1057,197 @@ export class ScriptApi {
     method("getFrame", () => target()?.getFrame() ?? 0);
     method("getAnimation", () => undefined);
     this.animationApis.set(id, api);
+    return api;
+  }
+
+  /** 对象的 puppet 运行时数据（bundle 里的定义）：skinned puppet 或带骨骼的模型，别的为 null（P12c）。 */
+  private puppetRig(object: number): PuppetRig | null {
+    const layer = this.findLayer(object);
+    const rig = layer ? puppetEntries([layer])[0]?.puppet : undefined;
+    return rig?.skeleton ? rig : null;
+  }
+
+  /**
+   * 对象的动画层视图（P12c）：宿主给的优先；没有时（语料诊断、`realmCheck`）按 bundle 的层定义现造，名字、只读三项照算，方法空操作。
+   */
+  private puppetView(object: number): PuppetLayersView {
+    const hosted = this.access.puppetLayers?.(object);
+    if (hosted) return hosted;
+    const defs = () => this.puppetRig(object)?.layers ?? [];
+    return {
+      count: () => defs().length,
+      find: (name) => {
+        if (name === "") return -1;
+        for (let index = defs().length - 1; index >= 0; index--)
+          if (this.fallbackControl(object, index)?.name === name) return index;
+        return -1;
+      },
+      control: (index) => this.fallbackControl(object, index),
+    };
+  }
+
+  /** 没有宿主视图时的控制口替身：值取自层定义，名字与四个可写项存在替身上，方法空操作。 */
+  private fallbackControl(object: number, index: number): PuppetLayerControl | null {
+    const key = `${object}:${index}`;
+    const cached = this.fallbackLayerControls.get(key);
+    if (cached) return cached;
+    const rig = this.puppetRig(object);
+    const def = rig?.layers[index];
+    const animation = def ? rig!.animations[def.animation] : undefined;
+    if (!def || !animation) return null;
+    const fps = Math.fround(animation.fps);
+    const frames = Math.trunc(animation.length);
+    const control: PuppetLayerControl = {
+      fps: fps > 0 ? fps : 1,
+      frameCount: frames,
+      duration: fps > 0 ? Math.fround(Math.fround(frames) / fps) : 0,
+      name: def.name,
+      additive: def.additive,
+      blendin: def.blendin,
+      blendout: def.blendout,
+      blendtime: def.blendtime,
+      play: () => {},
+      pause: () => {},
+      stop: () => {},
+      isPlaying: () => false,
+      setFrame: () => {},
+      getFrame: () => 0,
+      addEndedCallback: () => {},
+    };
+    this.fallbackLayerControls.set(key, control);
+    return control;
+  }
+
+  /**
+   * 图层对象上的动画层入口（P12c，rea-p12c-script 1，p12-REPORT 用例 9）：所有图层都装，不是 puppet 的计数 0、查找返回 `null`。
+   * `getAnimationLayer(x)` 按 x 的类型：number 只认 `0 ≤ x < count` 的整数（`1.5`、`-1` 为 null）；非空字符串按当前名字找、最后一个匹配
+   * （`"1"` 也是按名字）；其余（空串、无参、对象）为 null。
+   */
+  private installAnimationLayers(api: ApiObject, object: number): void {
+    this.method(api, "getAnimationLayerCount", () => this.puppetView(object).count());
+    this.method(api, "getAnimationLayer", (x?: unknown) => {
+      const view = this.puppetView(object);
+      let index = -1;
+      if (typeof x === "number") {
+        if (Number.isInteger(x) && x >= 0 && x < view.count()) index = x;
+      } else if (typeof x === "string" && x !== "") index = view.find(x);
+      return index < 0 ? null : this.animationLayerApi(object, index);
+    });
+  }
+
+  /**
+   * `IAnimationLayer` 包装对象（P12c，p12-REPORT 用例 9、rea-p12c-script 5）：按 `<对象>:<层下标>` 缓存，不持有运行时，每次经 `puppetView` 现取控制口
+   * （重编译换了 `ScenePuppets` 也接得上）。19 个自有可枚举成员，顺序照实测：
+   * - `duration` / `frameCount` / `fps`：不可写的数据属性，值在建对象时取，严格模式赋值抛 V8 的 TypeError；
+   * - `rate` / `blend` / `visible`：访问器，读写 `SceneState.animationLayers`（用户属性、字段脚本、API 三方共写的字段，写走 `animation-layer` 目标，
+   *   下一帧生效）；`rate` / `blend` 只收 number（`NaN`、`Infinity` 也收，转 float32，不钳制），`visible` 只收布尔，别的静默忽略；
+   * - `name` / `additive` / `blendin` / `blendout` / `blendtime`：访问器，读写控制口；`name` 忽略 `null` / `undefined`、其余 `ToString`（在第一个
+   *   NUL 处截断，WPE 的 setter 用 `strlen`），三个布尔只收布尔，`blendtime` 只收 number；
+   * - 方法是数据属性；`setFrame(x)` 的 x 不是 number 时按 0；`addEndedCallback(fn)` 非函数抛 `TypeError`（WPE 会存空指针、播完时崩溃，有意不同），
+   *   登记的回调经运行时 `callFor` 进入登记它的那段脚本、`this` 是它的模块命名空间、不带参数；
+   * - `getAnimation`：对象上通用的那个，属主路径 `objects/<i>/animationlayers/<entry>`（语料下总是 `undefined`）。
+   * 原型照 WPE：只有一个不可枚举 `constructor` 的自有原型（`IAnimation` 那边仍是普通原型，已知差异）。
+   */
+  private animationLayerApi(object: number, index: number): ApiObject | null {
+    const key = `${object}:${index}`;
+    const cached = this.animationLayerApis.get(key);
+    if (cached) return cached;
+    const first = this.puppetView(object).control(index);
+    if (!first) return null;
+    const Obj = this.realm.global.Object as typeof Object;
+    // 原型照 WPE（实测 `Object.getOwnPropertyNames(Object.getPrototypeOf(layer))` 只有 `constructor`）：自己的原型，只有一个不可枚举的 `constructor`，再往上是 Object.prototype
+    const proto = Obj.create(Obj.prototype, {
+      constructor: {
+        value: new (this.realm.global.Function as FunctionConstructor)("return function IAnimationLayer() {}")(),
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      },
+    });
+    const api = Obj.create(proto) as ApiObject;
+    const control = () => this.puppetView(object).control(index);
+    const def = () => this.puppetRig(object)?.layers[index];
+    const fields = () => this.access.state().animationLayers.get(animationLayerKey(object, index));
+    const constant = (name: string, value: unknown) =>
+      Obj.defineProperty(api, name, { value, enumerable: true, writable: false, configurable: false });
+    const method = (name: string, run: (...args: unknown[]) => unknown) =>
+      Obj.defineProperty(api, name, { value: run, enumerable: true, writable: true, configurable: true });
+    // rate / blend / visible：状态里的字段（读取时没有状态项就取编译期的值）
+    const stateField = (name: "rate" | "blend" | "visible") => {
+      const target = (): ApiTarget => ({ kind: "animation-layer", object, layer: index, field: name });
+      this.define(
+        api,
+        name,
+        () => {
+          const value = fields()?.[name] ?? def()?.[name] ?? (name === "visible" ? true : 1);
+          return typeof value === "number" ? Math.fround(value) : value;
+        },
+        (value) => {
+          if (name === "visible") {
+            if (typeof value === "boolean") this.write(target(), value, "bool");
+          } else if (typeof value === "number") this.write(target(), value, "float");
+        },
+      );
+    };
+    // 控制口上的三个布尔项
+    const controlBoolean = (name: "additive" | "blendin" | "blendout") =>
+      this.define(
+        api,
+        name,
+        () => control()?.[name] ?? false,
+        (value) => {
+          const c = control();
+          if (c && typeof value === "boolean") c[name] = value;
+        },
+      );
+    constant("duration", first.duration);
+    constant("frameCount", first.frameCount);
+    constant("fps", first.fps);
+    stateField("blend");
+    this.define(
+      api,
+      "name",
+      () => control()?.name ?? "",
+      (value) => {
+        const c = control();
+        const text = scriptToString(value);
+        if (!c || text === undefined) return;
+        const end = text.indexOf("\0");
+        c.name = end < 0 ? text : text.slice(0, end);
+      },
+    );
+    controlBoolean("blendout");
+    controlBoolean("blendin");
+    stateField("rate");
+    controlBoolean("additive");
+    stateField("visible");
+    this.define(
+      api,
+      "blendtime",
+      () => control()?.blendtime ?? 0,
+      (value) => {
+        const c = control();
+        if (c && typeof value === "number") c.blendtime = Math.fround(value);
+      },
+    );
+    method("addEndedCallback", (callback) => {
+      if (typeof callback !== "function") throw new TypeError("addEndedCallback 需要回调函数");
+      // 登记时取当前脚本；没有控制口（运行时还没建）或没有当前脚本时没有东西会播完，不登记
+      const owner = this.current?.id;
+      const c = control();
+      if (!c || owner === undefined) return;
+      c.addEndedCallback(() =>
+        this.runtime?.callFor(owner, (exports) => (callback as (this: unknown) => unknown).call(exports)),
+      );
+    });
+    method("play", () => void control()?.play());
+    method("isPlaying", () => control()?.isPlaying() ?? false);
+    method("stop", () => void control()?.stop());
+    method("pause", () => void control()?.pause());
+    method("setFrame", (frame) => void control()?.setFrame(typeof frame === "number" ? frame : 0));
+    method("getFrame", () => control()?.getFrame() ?? 0);
+    this.installGetAnimation(api, () => `objects/${object}/animationlayers/${def()?.entry ?? index}`);
+    this.animationLayerApis.set(key, api);
     return api;
   }
 

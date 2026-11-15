@@ -362,6 +362,16 @@ const OBJECT_FLAGS = [
 
 ## P12c — 脚本
 
+**进度**（2026-11-15）：**P12c 完成**，子计划 [phase-12c-script.md](phase-12c-script.md)。
+- **语料**：233 张能渲染 160 → 164（含随 P12c 修的设备纹理上限 F2 解锁的 `3830665420`）。
+- **不做**：建删层三个方法照报。
+- **和下面的范围的出入**：
+  - 回调的 `this` 是登记脚本的模块命名空间，更正了 p12-REPORT 用例 9 的读法；
+  - 模型对象的 `getAnimationLayer` 与图像层同一套；
+  - 点击触发的语料场景，整帧对照换成按抓帧逐 draw 比 `g_Bones`。
+
+下面是写子计划之前的范围。
+
 语义依据见 [rea-p12-attach-physics](rea-p12-attach-physics.md) 第 4 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 9。
 
 - `getAnimationLayerCount`、`getAnimationLayer`。

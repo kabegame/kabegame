@@ -2790,7 +2790,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 - **能力表**：
   - 去掉模型上的 `mdl:skeleton` / `animation` / `morph` / `attachment`、`object:animationlayers`、`mdl:flags:0x400`；模型上的 `MDLE0002` 中性（模型不读它）。
   - 照报（语料 0 处）：`mdl:morph:tangent`（bit11）、`mdl:morph:vertices`（MDMP 的 nv ≠ 网格顶点数）、`model:rootmotion`。
-  - 动画层字段挂脚本照报 `puppet:layer-script`（P12c），物理骨骼照报 `puppet:physics`（P12d）。
+  - 动画层字段的 `rate` / `blend` / `visible` 挂脚本 P12c 起支持（见「puppet 动画层的脚本 API」），物理骨骼照报 `puppet:physics`（P12d）。
 
 ### 纹理通道（P12b2-2）
 
@@ -2826,8 +2826,76 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 **语料**：不解锁任何场景。
 - `3811424158` 只剩精灵表帧动画（`combo:SPRITESHEET`、`tex:animation`）。
-- `3706286085` 只剩 P13 的雾与方向光阴影、挂在模型下的点光（`object:parent`）与动画层脚本（`puppet:layer-script`）。
+- `3706286085` 只剩 P13 的雾与方向光阴影、挂在模型下的点光（`object:parent`）与动画层脚本（`puppet:layer-script`，P12c 已支持）。
 - `3662790108` 还差预光照、透视文本等十几项。
+
+## puppet 动画层的脚本 API（P12c）
+
+脚本拿到 puppet 的动画层并控制它：`getAnimationLayerCount` / `getAnimationLayer`、`IAnimationLayer`、动画层字段上的脚本、`addEndedCallback`、MDLA 事件。
+
+依据：
+- 读码 [rea-p12-attach-physics](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12-attach-physics.md) 第 4 节、[rea-p12c-script](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12c-script.md)；
+- 实测 p12-REPORT 用例 9（`p12-script`）；
+- 计划与记录见 [phase-12c-script.md](../../.claude/plans/wpe-import/3-scene/phase12/phase-12c-script.md)。
+
+### 分层
+
+- **运行时**（`puppet/player.ts`）：
+  - `ScenePuppets.layerCount` / `layer` / `findLayer` 给出每层的控制口 `PuppetLayerControl`；
+  - 每层一张播完回调表；
+  - 时钟带 MDLA 事件；
+  - `frame(dt, state, hooks)` 在每个 puppet 推进完全部层之后派发：先事件（交给 `hooks.event` → 脚本运行时的 `animationEvent`），再按层序调带 `ENDED` 位的层的回调。所以回调里的任何写入都是下一帧生效。
+- **脚本 API**（`script/api.ts`）：
+  - 包装对象按「对象:层下标」缓存，不持有运行时，每次经宿主现取控制口，重编译换了运行时也接得上，同 `IAnimation`。
+  - `rate` / `blend` / `visible` 是用户属性、字段脚本、API 三方共写的字段，在 `SceneState.animationLayers`，写入走 `animation-layer` 目标，会记进重放表。
+  - `name` / `additive` / `blendin` / `blendout` / `blendtime` 只有 API 写，直接落在运行时的层上，重编译时随 `carryOver` 接回（连同回调表）。
+- **宿主**（`host.ts`）：首次加载时 `init` 先于 `beforeFirstFrame`，所以照 P10b 的 `pendingAnimations` 在跑 `init` 之前建好待用的 `ScenePuppets`（`pendingPuppets`）。语料里约 50 处「相位偏移」脚本在 `init` 里 `setFrame`，靠它才有落点。
+
+### 规则
+
+| 项 | 规则 |
+|---|---|
+| 入口 | 所有图层对象都有（图像层与带骨骼的模型都是同一套）。不是 skinned puppet / 骨骼模型时计数 0、查找 `null` |
+| `getAnimationLayer(x)` | number 只认 `0 ≤ x < 计数` 的整数（`1.5`、`-1` 为 `null`）；非空字符串按**当前**名字找，最后一个匹配（`"1"` 也按名字）；其余 `null`。同一层每次返回同一个对象 |
+| 成员 | 19 个自有可枚举成员，顺序 `duration、frameCount、fps、blend、name、blendout、blendin、rate、additive、visible、blendtime、addEndedCallback、play、isPlaying、stop、pause、setFrame、getFrame、getAnimation`；原型只有一个不可枚举 `constructor` |
+| 只读三项 | `fps` = f32(1 / spf)、`frameCount` = length、`duration` = D，不可写的数据属性，严格模式赋值抛 `TypeError` |
+| 写入转换 | 照 WPE 的通用写入函数：`rate` / `blend` / `blendtime` 只收 number（`NaN`、`±Infinity` 也收）；四个布尔只收 `true` / `false`；`name` 忽略 `null` / `undefined`，其余 `ToString`；别的类型静默忽略。不钳制、没有改值回调 |
+| `blendin` / `blendout` | 脚本可以重新置位：`blendin` 按当前 `t` 淡入（`t` 大时看不出）；`blendout` 写成真后循环层每轮末尾也淡出（加载时只对 single 保留） |
+| 方法 | `play` / `pause` / `stop` / `isPlaying` / `getFrame` 同 `IAnimation`；`setFrame(f)` 是 `t = f32(spf × f32(f))` 并置 `SETFRAME`（本帧不判播完）；都是下一帧进画面 |
+| 播完 | 推进前没有暂停、结束、`SETFRAME` 位时判：single 刚结束、mirror 换向、loop 的 `t` 变小（负 rate 每帧都成立）。`SETFRAME` 只在可见并推进的层上清 |
+| 回调 | `addEndedCallback(fn)` 可加多个。调用时进入登记它的那段脚本（`thisObject` / `thisLayer` 是它的），`this` 是它的模块命名空间，不带参数；抛错只记诊断，不禁用 |
+| 事件 | 层时钟越过 MDLA 事件时，交给同一图层上导出了 `animationEvent` 的脚本（含动画层字段上的脚本）；`event` 是事件 JSON 的全部字段 |
+| 字段脚本 | `animationlayers[k]` 的 `rate` / `blend` / `visible` 上的 `{script}` 是新属主 `animation-layer`：`thisObject` 是那个 `IAnimationLayer`，`thisLayer` 是所属图层；`update(value)` 收到状态里的当前值，返回值写回，下一帧生效。按所属图层派发光标回调、`animationEvent`、`applyUserProperties`。对象没有骨骼运行时或这一项被丢掉时，脚本不登记 |
+| 模型 | 和图像层一样派发事件与回调；对象或父链不可见时整段不推进，也就不发 |
+
+**和 WPE 有意不同**：`addEndedCallback` 传入不是函数时，WPE 会把空指针存进回调表、播完时解引用（推断会崩溃），我们抛 `TypeError`、不登记。
+
+**照报**：
+- 动画层的 `name` / `additive` / `blendin` / `blendout` / `blendtime` 挂脚本：`puppet:layer-script`（语料 0 处）；
+- 建删层的 `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`：`script:api:layer.*`。语料里 `playSingleAnimation` 2 张用到，都还差别的键（精灵表、`destroyLayer`），不靠它解锁。
+
+**dev 探针**：
+- `host.puppets()`：每个 puppet 每层的名字、帧号、是否在播（还没换上时取待用的那份）；
+- 确定性回放带脚本时，`puppets.frame` 也带事件钩子，回调读到本帧的 `engine.runtime`。
+
+### 设备纹理上限（P12c 走查 F2）
+
+`acquireGpu` 申请设备时按适配器支持的最大值要 `maxTextureDimension2D`。WebGPU 缺省只有 8192，WPE（D3D11）是 16384。`3830665420` 的一个带 effect 的文本层是 9787×199，按缺省上限合成 RT 建不出、整张退回。按 `device.limits` 钳的地方（场景目标、用户纹理、探针画布）随之放宽到同一个值。
+
+### 走查
+
+- **`p12-script` 夹具**（`puppet/p12script.test.ts`）：266 帧、642 行脚本日志与 WPE 逐行相同；`g_Bones` 100 帧最大 4 ulp（`rsqrtps`）。
+- **`p12-script` 整帧**：dev 回放到第 201 帧，和 WPE 比最大差 1 级。
+- **解锁的 4 张**（复制工程，WPE 各抓 1 帧，按 WPE 帧时间回放、脚本时钟设到开窗时刻）：
+  - `3346715292`、`3492627662`、`3830665420` 的 puppet `g_Bones` 全部对上。超出 P12a 容差的数都在平移分量上（≈ 1e-5，`rsqrtps` 被平移放大），说明各层的帧号、`init` 里设的起始帧与 WPE 一致。整帧差在光束、音频条、时钟文字与粒子上，不在 puppet 上。
+  - `3346715292` 缺 NSL 脚本库，WPE 与我们都是 6 段 `init` 抛 `TypeError`。
+  - `3361965869` 点击才播的两个 puppet 逐位相同；另两个的 `rate` 跟系统声音走，不能确定性对照。
+- **宿主路径**：
+  - 实时预览里 MDLA 事件与播完回调照常派发、各层推进；
+  - 首次加载时 `init` 的 `setFrame` 落在待用运行时上（`3492627662` 开场各层帧号不同）。
+- **不变**：P12a / P12b 的 8 个生成工程 22 帧，P12c 之后与修 F2 之后都逐字节相同。
+
+**语料**：233 张能渲染 160 → 164，解锁 `3346715292`、`3361965869`、`3492627662`、`3830665420`（后者靠 F2）。工作区快照的语料扫描里，P12c 的三个键全部消失，没有场景变成退回。
 
 ## 交互（P6c）
 

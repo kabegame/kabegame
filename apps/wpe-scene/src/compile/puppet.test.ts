@@ -278,6 +278,7 @@ describe("buildPuppet：动画与动画层（rea-p12-runtime 1.4、1.5）", () =
     expect(puppet!.layers.map((layer) => layer.animation)).toEqual([0, 1, 0]);
     expect(puppet!.layers[1]).toEqual({
       animation: 1,
+      entry: 1,
       name: "w",
       rate: 1,
       blend: 1,
@@ -453,11 +454,14 @@ describe("buildPuppet：P12a 不做、照报的细分键", () => {
     expect(keys(file({ animations: [anim({})], ...extra }))).toEqual(expected);
   });
 
-  it("动画层字段挂脚本：puppet:layer-script（任一描述符字段；丢掉的层不算）", () => {
+  it("动画层字段挂脚本：rate / blend / visible 不报（P12c），其余五个可写字段报 puppet:layer-script；丢掉的层不算", () => {
     const source = file({ animations: [anim({})] });
-    expect(
-      keys(source, [{ animation: 1, blend: { script: "export function update(v) { return v; }", value: 1 } }]),
-    ).toEqual(["puppet:layer-script"]);
+    for (const key of ["rate", "blend", "visible"])
+      expect(
+        keys(source, [{ animation: 1, [key]: { script: "export function update(v) { return v; }", value: 1 } }]),
+      ).toEqual([]);
+    for (const key of ["additive", "blendin", "blendout", "blendtime"])
+      expect(keys(source, [{ animation: 1, [key]: { script: "x", value: 1 } }])).toEqual(["puppet:layer-script"]);
     expect(keys(source, [{ animation: 1, name: { script: "x", value: "n" } }])).toEqual(["puppet:layer-script"]);
     expect(keys(source, [{ animation: 5, blend: { script: "x", value: 1 } }])).toEqual([]);
   });

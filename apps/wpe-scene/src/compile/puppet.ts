@@ -32,6 +32,8 @@ export type PuppetLayerField = "rate" | "blend" | "visible";
 export interface PuppetLayerDef {
   /** `ScenePuppet.animations` 的下标。 */
   animation: number;
+  /** 这一层在 JSON `animationlayers` 数组里的下标（P12c：字段脚本按它找层；`layerDefs` 会丢项，所以不假设等于层下标）。 */
+  entry: number;
   name: string;
   rate: number;
   blend: number;
@@ -58,6 +60,8 @@ export interface PuppetAnimation {
   fps: number;
   /** 文件里的长度；帧数 = length + 1。 */
   length: number;
+  /** `MDLA` 里的事件（P12c，秒；图像层与模型都填）：时钟推进时收集越过的，按表顺序派发。 */
+  events: { time: number; json: string }[];
   /** 每骨骼 1 = 有轨道（轨道 flags bit0 为 0）、0 = 保持来源（rea-mdl 4.3、rea-RT 4）。静态 puppet 为空。 */
   mask: Uint8Array;
   /** 第 f 帧第 b 根骨骼在 `(f × 骨骼数 + b) × 10`：T(3) q(4，w x y z) S(3)。静态 puppet 不转换，为空。 */
@@ -200,6 +204,8 @@ export interface ScenePuppet {
 
 /** 动画层的描述符字段（rea-RT 1.5 的属性表 `0x1404e8a60`，只读的 `fps` / `frameCount` / `duration` 不在 JSON 里写）。 */
 const LAYER_KEYS = ["visible", "additive", "blendin", "blendout", "name", "rate", "blend", "blendtime"] as const;
+/** 挂脚本仍报 `puppet:layer-script` 的五个可写字段（P12c：`rate` / `blend` / `visible` 接 `animation-layer` 目标，语料 65 处全在这三个上，其余 0 处）。 */
+const UNSCRIPTED_LAYER_KEYS = ["additive", "blendin", "blendout", "name", "blendtime"] as const;
 
 /** float 描述符的 JSON 取值（同图层字段的 `asNumber`：数字原样、布尔 1 / 0、能解析的字符串；其余取缺省），存 float32。 */
 function floatField(value: SceneScalar | undefined, fallback: number): number {
@@ -229,6 +235,8 @@ export function animationLayerValue(
     return undefined;
   }
   if (typeof value === "boolean") return value ? 1 : 0;
+  // 数字原样收（P12c：脚本 `layer.rate = NaN` / `Infinity` 照存，rea-p12c-script 5.2）；字符串才要求是有限数
+  if (typeof value === "number") return f(value);
   const parsed = typeof value === "number" || (typeof value === "string" && value.trim() !== "") ? Number(value) : NaN;
   return Number.isFinite(parsed) ? f(parsed) : undefined;
 }
@@ -336,6 +344,7 @@ function convertAnimation(
     alpha,
     alphaMask,
     morph,
+    events: animation.events.map((event) => ({ time: event.time, json: event.json })),
   };
 }
 
@@ -352,7 +361,7 @@ function layerDefs(
 ): { used: number[]; defs: PuppetLayerDef[] } {
   const used: number[] = [];
   const defs: PuppetLayerDef[] = [];
-  for (const entry of Array.isArray(layers) ? layers : []) {
+  for (const [entryIndex, entry] of (Array.isArray(layers) ? layers : []).entries()) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
     const json = entry as Record<string, unknown>;
     if (typeof json.animation !== "number" || !Number.isFinite(json.animation)) continue;
@@ -361,7 +370,8 @@ function layerDefs(
     if (index < 0) continue;
     let slot = used.indexOf(index);
     if (slot < 0) slot = used.push(index) - 1;
-    if (LAYER_KEYS.some((key) => isScriptValue(json[key]))) issues.add("puppet:layer-script");
+    // 字段脚本（P12c）：rate / blend / visible 接 `animation-layer` 目标；其余五个可写字段语料 0 处，照报
+    if (UNSCRIPTED_LAYER_KEYS.some((key) => isScriptValue(json[key]))) issues.add("puppet:layer-script");
     const value = (key: (typeof LAYER_KEYS)[number]) => resolveValue(json[key] as SceneValue | undefined, properties);
     const bindings: PuppetLayerDef["bindings"] = [];
     for (const field of ["rate", "blend", "visible"] as const) {
@@ -371,6 +381,7 @@ function layerDefs(
     const name = value("name");
     defs.push({
       animation: slot,
+      entry: entryIndex,
       name: typeof name === "string" ? name : "",
       rate: floatField(value("rate"), 1),
       blend: floatField(value("blend"), 1),

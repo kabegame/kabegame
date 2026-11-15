@@ -32,6 +32,7 @@ import {
   buildPuppet,
   modelMeshCombos,
   type ModelSkeleton,
+  type PuppetLayerDef,
   type PuppetTextureChannels,
   type ScenePuppet,
 } from "./puppet";
@@ -1690,6 +1691,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     number,
     { passes: MaterialPass[]; instanceSize: { width: number; height: number } | null }
   >();
+  /** 有运行时（skinned puppet / 带骨骼的模型）的对象的动画层定义，按 `objects` 下标（P12c：回填动画层字段脚本的属主）。 */
+  const animationLayerDefs = new Map<number, readonly PuppetLayerDef[]>();
   /** 解析过的 mdl，按规范化后的路径；读不到为 null。同一个 mdl 被多个对象引用时只读、只解析一次（3354366708 的两个圆环）。 */
   const mdls = new Map<string, MdlFile | null>();
   async function readMdl(path: string): Promise<MdlFile | null> {
@@ -1747,6 +1750,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       recompile("layer-structure", `objects/${index}/castshadow`),
     );
     const castShadow = castsShadows && castSetting !== false && opaque.some(Boolean);
+    if (skeleton) animationLayerDefs.set(index, skeleton.layers);
     layer.model = {
       path,
       version: file.version,
@@ -2320,6 +2324,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         const built = buildPuppet(file, (object as Record<string, unknown>).animationlayers, model.puppet, properties);
         for (const key of built.issues) unsupported.add(key);
         if (built.puppet) {
+          if (built.puppet.skeleton) animationLayerDefs.set(index, built.puppet.layers);
           layer.puppet = {
             ...built.puppet,
             composite: false,
@@ -2879,6 +2884,17 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   )
     bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
   if (!input.sceneAssets.length) unsupported.add("assets:missing");
+  // 动画层字段脚本的属主回填（P12c）：按 JSON 下标 `entry` 找 `layerDefs` 保留下来的层。对象没有运行时（不是 skinned puppet、不是带骨骼的模型），
+  // 或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
+  scripts.list = scripts.list.filter((script) => {
+    const owner = script.owner;
+    if (owner.kind !== "animation-layer") return true;
+    const slot = animationLayerDefs.get(owner.object)?.findIndex((def) => def.entry === owner.entry) ?? -1;
+    if (slot < 0) return false;
+    owner.layer = slot;
+    if (script.target.kind === "animation-layer") script.target.layer = slot;
+    return true;
+  });
   bundle.unsupported = [...unsupported].sort();
   // 「场景用音频」位（P4e 步骤 4）：开关只看 `project.json`（`scene.json` 的同名键 WPE 不读，rea-p4e-audio.md 第 6 节），不会因为场景里
   // 有音频粒子就自动开启（4.3）。读音频频谱 uniform 的程序同样要订阅才有数据（P11a）；读了却没声明开关时 uniform 全 0，同 WPE

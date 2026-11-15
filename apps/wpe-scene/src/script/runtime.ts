@@ -440,10 +440,11 @@ export class ScriptRuntime {
    * `thisObject` 是它的），计时、出错记进它的诊断（类别 `ended`），不禁用任何回调，同计时器。记录不在（脚本表已换、`owner` 不认识）
    * 或运行时已停止时不调。
    */
-  callFor(owner: string, fn: () => unknown): void {
+  callFor(owner: string, fn: (exports: Record<string, unknown>) => unknown): void {
     const record = this.byId.get(owner);
     if (!record || this.halted) return;
-    this.invoke(record, "ended", fn);
+    // `fn` 多收一个参数：那段脚本的模块命名空间（P12c，动画层播完回调的 `this`，读码 3.2）
+    this.invoke(record, "ended", () => fn(record.exports ?? {}));
   }
 
   setTimeout(callback: () => void, ms: number, owner = this.active?.script.id): () => void {
