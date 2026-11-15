@@ -371,6 +371,36 @@
 | [ ] | I7 解锁的两张在预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开 `2887099508`、`3570755196` | 正常渲染、不退回预览图，脚本没有报错（日志） | 2026-11-15 用户：`2887099508` 不通过，缺开场镜头滑动。原因是混淆脚本调 `getCameraTransforms` / `setCameraTransforms`（我们没有，编译期扫描认不出），已转交 P5 会话实现；`3570755196` 待看 |
 | [ ] | I8 删组与换进组的重编译 | Windows dev，预览 | 预览打开 `ignore/p6/d3/proj/p6d3-struct` 与 `p6d3-parent`（已导入，库里 15302 / 15301），看到第 4 阶段（约 8 s）之后 | 删组后剩下的红块在重编译后出现在左下；换进组的蓝块在重编译后被组裁掉；日志有「场景脚本删除了图层」「换父改了组或挂点」，没有报错 | 需要用户在界面上看 |
 
+## 场景壁纸 P6d3b：运行时建层（`createLayer`）
+
+2026-11-16 Windows dev。`thisScene.createLayer(...)`：
+
+- 参数照 dll 整理成配置：缺省模型正交 / 透视各一个，对象过 `stringifyConfig`，路径按目录定键；
+- 资源路径按当前脚本的 `__workshopId` 改写，编译期 assets 名单里有的不改；
+- 当场建出待编对象，追加到对象表尾，配置里带的脚本在返回前跑完 `init`；
+- 新建对象作编译输入：`init` 里建的放弃本次加载、带结构重编后再画首帧，运行中建的走重编译（晚一段，P6d4 改同步）。
+
+顺带改了两处：图层 `name` 可写；effect 对象的键序是 `name`、`visible`。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「运行时建层（P6d3b）」；计划与 WPE 实测见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d3-runtime-layers.md`「P6d3b」。
+- 验收文件在 `ignore/p6/d3/`：
+  - 测试工程生成 `make_step0b.py`（`proj/p6d3b-*`），另用 `ignore/p6/d0/proj/p6d-asset`、`p6d-order`；WPE 日志夹具 `out/wpe-{bars,clone,default,asset,order}.log`，我们的输出 `out/kb-*.log`（`logrun.mjs`），画面 `out/{wpe,kb}-bars.png`；
+  - 语料 `corpus-b-all/`（与 `corpus-after/` 比，`unsupported_diff.py`）；编译产物哈希 `hash-{head,mine}.json`（`bundlehash.test.ts`）；
+  - 变异清单 `mutations-b.json`（结果 `mutate-b.txt`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | J1 类型与格式 | Windows | 宿主 `tsc --noEmit`（独立工作树与主工作区）；Prettier 本步改动的文件 | 0 error、格式通过 | 2026-11-16 Claude：两边 tsc 0 error；格式通过 |
+| [x] | J2 宿主 vitest（相关文件） | Node，vitest | `src/script`、`src/host*`、`src/dev`、`src/compile`、`src/render` | 全过 | 2026-11-16 Claude：工作树（HEAD + 本步）156 个文件 3340 条全过，主工作区（含别的会话未提交的改动）159 个文件全过 |
+| [x] | J3 变异检查 | Node，工作区模式（独立工作树） | `mutations-b.json` 13 处 | 每处都有用例失败，原样还原 | 2026-11-16 Claude：13 处全部检出、全部还原（id 不写进配置、缺省模型被改写、图层名只读、待编图像层没骨骼方法、effect 键序、克隆脚本晚 init、不读 `__workshopId`、`init` 里建层不重编、运行中建层不重编、下标复用、编译不带新建对象、新建对象置被依赖、探针不补编）。原有一处「按 id 找父不认待编对象」未检出，查明是冗余代码（`createdIds` 已覆盖），删掉后不再列 |
+| [x] | J4 脚本输出与 WPE 逐行比 | Windows dev，屏外宿主（dev 探针 `renderFrame`，`scripts.consoleGrep`，dt 1/60）；WPE 测试窗口 | `p6d3b-bars`（40 帧）、`p6d3b-clone`（130 帧）、`p6d3b-default`（10 帧）、`p6d-order` / `p6d-asset`（120 帧）的输出与 WPE `log.txt` 逐行比 | 除已知差异外相同 | 2026-11-16 Claude：clone 42/42、order 48/48 相同；bars 24 行差 2 行（图层对象自有键数 59 / 30，已编译图层同样如此、P6d1 起就有；`size` 编译前读不到自动尺寸，已知差异）；asset 36 行差 1 行（自有键数 21 / 24，同上）；default WPE 的 4 行相同，我们多 2 行（WPE 透视场景对数组配置取 `getInitialLayerConfig` 时整段 `init` 中止，不复刻） |
+| [x] | J5 画面与 WPE 逐像素比 | Windows dev，屏外宿主，窗口 1280×720 | `p6d3b-bars` 跑 30 帧读回，和 WPE 抓帧比 | 相同 | 2026-11-16 Claude：0 / 921600 像素不同 |
+| [x] | J6 全语料能力键与脚本诊断 | Windows dev，屏外宿主（`scriptCorpus`，120 帧） | 与 P6d3a 的 `corpus-after/` 逐张比 | 变化只来自去掉的 `createLayer` 缺口键 | 2026-11-16 Claude：14 张去掉 `script:api:thisScene.createLayer`，解锁 4 张音频条（`3304642534`、`3549863808`、`3570308528`、`3812487163`），没有新增的键。另有雾的键与 `14998` 的解锁，来自别的会话未提交的 P13f。状态摘要全部变化，因为摘要含 `general`（P13f 加了雾字段），编译产物另见 J7 |
+| [x] | J7 编译产物不变 | Node，vitest（`bundlehash.test.ts`） | 本机全语料在 HEAD 与 HEAD + 本步两份源码上各编一次（同一个翻译器 wasm），比规范化后的 bundle 哈希（新字段 `assetPaths` 不计） | 除去掉缺口键的场景外逐张相同；那些场景只差 `unsupported` 及其连带项 | 2026-11-16 Claude：233 张中 219 张相同；另 14 张正是去掉 `createLayer` 缺口键的，差别只在 `unsupported`，以及因此才解码的纹理 `mips` 与视频时长（编译只在 `unsupported` 为空时解码纹理，改前这些场景一开始就判了退回） |
+| [x] | J8 首次加载多编一次的用时 | Windows dev，屏外宿主 | 打开 `init` 里建层的音频条壁纸，按应用日志的时间戳量从开宿主到开始渲染 | 记下数值 | 2026-11-16 Claude：`3304642534`（`init` 里建 64 根条）开宿主到开始渲染 2.3 s；第二次加载 734 ms，其中编译 151 ms、等目标与设置 56 ms，多出约 0.2 s |
+| [x] | J9 解锁的音频条在预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开 `3304642534`、`3549863808`、`3570308528`、`3812487163`，放音乐 | 正常渲染、不退回预览图，条随音乐跳动，日志里没有脚本报错 | 2026-11-16 用户：通过 |
+| [x] | J10 克隆与运行中建层 | Windows dev，预览 | 预览打开 `ignore/p6/d3/proj/p6d3b-clone`（已导入，库里 15318），等 1 s 以上 | 首帧就有 C1、C2 两个青色方块；约 1 s 时 C3 出现（运行中建层，比 WPE 晚一段） | 2026-11-16 用户：通过 |
+
 ## 场景渲染器的逐 draw 轨迹（dev 工具）
 
 2026-11-13，只在 dev 构建：dev 探针 `renderFrame`、vite `/render`、MCP `render_scene` / `host_render` 收 `trace`，记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform、顶点，可选读回 pass 的目标，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。计划见 `.claude/plans/tools/scene-draw-trace.md`，用法见 `.claude/skills/kabegame-chromium/SKILL.md`「逐 draw 轨迹」，实施记录在 `ignore/tools/draw-trace/record.md`。

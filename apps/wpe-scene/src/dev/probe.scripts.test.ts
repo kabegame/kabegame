@@ -386,3 +386,65 @@ describe("renderFrame 跑场景脚本的接线（第 7 批）", () => {
     expect(log).not.toContain("result");
   });
 });
+
+describe("renderFrame 的补编（P6d3b，init 里 createLayer）", () => {
+  const structure = { destroyed: [], parents: [], created: [{ object: 1, config: '{"image":"models/a.json"}' }] };
+
+  it("init 里建了层：放弃第一遍（释放场景、不释放脚本环境），带结构再编译、重建场景，swap 换上新 bundle / 状态后照常跑帧", async () => {
+    let made = 0;
+    let disposed = false;
+    vi.mocked(createProbeScripts).mockImplementation(() => {
+      made++;
+      let frames = 0;
+      return {
+        load: async () => void log.push("load"),
+        needsRestart: () => made === 1 && !log.includes("swap"),
+        structure: () => structure,
+        swap: () => void log.push("swap"),
+        frame: (dt: number, time: number) => void (log.push(`script ${dt} ${time}`), frames++),
+        result: () => {
+          log.push("result");
+          return { frames } as never;
+        },
+        dispose: () => {
+          // 同真实现：可以重复调
+          if (disposed) return;
+          disposed = true;
+          log.push("dispose");
+        },
+      };
+    });
+    const result = await renderFrame({ ...BASE, scripts: true });
+    expect(made).toBe(1);
+    expect(compileSceneInWorker).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(compileSceneInWorker).mock.calls[0][0].structure).toBeUndefined();
+    expect(vi.mocked(compileSceneInWorker).mock.calls[1][0].structure).toEqual(structure);
+    // 第一遍：编译 → 建场景 → load（init）→ 发现要补编，释放场景（不 dispose 脚本）；第二遍：编译 → 建场景 → swap → 一帧 → 结果 → 释放
+    expect(log).toEqual([
+      "compile",
+      "build",
+      "videoSink",
+      "properties",
+      "load",
+      "destroy",
+      "compile",
+      "build",
+      "videoSink",
+      "properties",
+      "swap",
+      "sync",
+      "step 0 0",
+      "camera",
+      "script 0 0",
+      "parallax",
+      "sync",
+      "update",
+      "encode",
+      "submit",
+      "result",
+      "dispose",
+      "destroy",
+    ]);
+    expect(result.scripts).toEqual({ frames: 1 });
+  });
+});

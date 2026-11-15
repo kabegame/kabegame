@@ -1021,6 +1021,7 @@ describe("SceneScript API（FakeRealm）", () => {
     const { thisScene: scene, general } = h.api;
     // 成员就是 general 的全部字段加五个查询方法：fog*、wind* 这轮不加（zoom 在 P5a 步骤 4 进了 general 字段表）
     const methods = [
+      "createLayer",
       "destroyLayer",
       "enumerateLayers",
       "getInitialLayerConfig",

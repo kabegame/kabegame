@@ -5,7 +5,10 @@
  */
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneStructure } from "../compile/protocol";
-import type { SceneState } from "../render/state";
+import { layerShellValues } from "../compile/layerShell";
+import type { SceneObject } from "../compile/model";
+import { layerStateFromShell, type SceneState } from "../render/state";
+import { createdLayerKind } from "./createConfig";
 import type { ScriptRuntime } from "./runtime";
 
 export interface SettleHooks {
@@ -112,4 +115,44 @@ export function recordReparent(
 ): void {
   structure.parents = structure.parents.filter(([item]) => item !== object);
   structure.parents.push([object, parent, bone]);
+}
+
+/**
+ * 新建对象的下标分配器（P6d3b）：宿主 / 探针各持一份，只增不减、跨重编译保留，「清空脚本存储」时清零。`next` 是下一个可用的 `objects` 下标。
+ */
+export interface ObjectAllocator {
+  next: number;
+}
+
+/** 编译出新 bundle 后同步分配器：不小于 `bundle.configs.length`（加载时的对象数加上已建的，下标在它之后）。 */
+export function syncAllocator(allocator: ObjectAllocator, bundle: SceneBundle | null | undefined): void {
+  allocator.next = Math.max(allocator.next, bundle?.configs?.length ?? 0);
+}
+
+/**
+ * `createLayer` 当场建出待编对象（宿主与 dev 探针共用，P6d3b）：分配下标、按配置的字段值建图层状态并追加到对象表尾（`SceneState.addLayer`）、
+ * 记进结构（`structure.created`，之后每次编译带上）。`parent` 是已解析好的父 `objects` 下标（当时存在、没待删的才传）；不在状态里的当根。
+ * 配置不是合法 JSON 返回 null（调用方已经整理过，正常不会发生）。数组配置建出空名分组节点（取值全缺省）。
+ */
+export function createStructureObject(
+  state: SceneState,
+  structure: SceneStructure,
+  allocator: ObjectAllocator,
+  configText: string,
+  parent: number | null,
+): number | null {
+  let config: unknown;
+  try {
+    config = JSON.parse(configText);
+  } catch {
+    return null;
+  }
+  if (config === null || typeof config !== "object") return null;
+  const kind = createdLayerKind(config as Record<string, unknown> | unknown[]);
+  const shell = layerShellValues((Array.isArray(config) ? {} : config) as SceneObject);
+  const object = allocator.next++;
+  const root = parent === null || !state.layers.has(parent) || state.pendingDestroy.has(parent) ? null : parent;
+  state.addLayer(object, layerStateFromShell(shell, root, { imageLayer: kind === "image" }));
+  structure.created.push({ object, config: configText });
+  return object;
 }

@@ -22,6 +22,8 @@ function normalize(value: unknown): unknown {
 
 /** 一个对象的加载原文（JSON 文本）。 */
 export function normalizeConfig(object: object): string {
+  // 数组配置（`createLayer([…])` 建出的分组节点，P6d3b）：没有 `id` 可去，元素照规整
+  if (Array.isArray(object)) return JSON.stringify(normalize(object));
   const { id: _id, ...rest } = object as Record<string, unknown>;
   return JSON.stringify(normalize(rest));
 }

@@ -142,6 +142,8 @@ export interface CreateIframeRealmInput {
 export async function createIframeRealm(
   input: CreateIframeRealmInput,
 ): Promise<ScriptRealm & { readonly importMap: Readonly<Record<string, string>> }> {
+  // 词法分析器在主线程也要备好（P6d3b：`createLayer` 同步收集脚本条目，`collectObjectScriptsSync`）
+  await init;
   const frame = input.document.createElement("iframe");
   frame.style.display = "none";
   frame.dataset.kbScriptRealm = "1";
@@ -197,6 +199,8 @@ export async function createIframeRealm(
     let heldFrame: HTMLIFrameElement | null = frame;
     // ---- prepareModule 的实现 ----
     const modules = new Map<string, Promise<ScriptModule>>();
+    // 落定过的模块（P6d3b）：`preparedModule` 同步取，`createLayer` 克隆脚本时用
+    const ready = new Map<string, ScriptModule>();
     const libs = new Map<string, Promise<object>>();
     let sequence = 0;
     // 「哨兵」模块：求值即抛。检查源码时把它作为第一条导入，整张图链接成功后才会求值到它，
@@ -295,13 +299,23 @@ ${source}`,
         if (cached) return cached;
         const task = prepare(source);
         modules.set(source, task);
+        task.then(
+          (module) => {
+            if (modules.get(source) === task) ready.set(source, module);
+          },
+          () => {},
+        );
         return task;
+      },
+      preparedModule(source: string): ScriptModule | null {
+        return ready.get(source) ?? null;
       },
       dispose(): void {
         if (sentinelUrl) child?.URL.revokeObjectURL(sentinelUrl);
         sentinelUrl = null;
         sentinel = null;
         modules.clear();
+        ready.clear();
         libs.clear();
         heldFrame?.remove();
         heldFrame = null;

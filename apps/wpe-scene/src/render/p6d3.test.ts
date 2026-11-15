@@ -58,7 +58,7 @@ function compile(destroyed: number[] = []): Promise<SceneBundle> {
     translator: null,
     postprocess: "disabled",
     exhaustive: true,
-    structure: { destroyed, parents: [] },
+    structure: { destroyed, parents: [], created: [] },
   });
 }
 

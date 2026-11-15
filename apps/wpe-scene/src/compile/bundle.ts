@@ -28,6 +28,8 @@ import { compileVolumetrics, wantsVolumetrics, type SceneVolumetrics } from "./v
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { breakCycles, childLists, resolveParents } from "./hierarchy";
 import { normalizeConfig } from "./config";
+import { asNumber, layerShellValues } from "./layerShell";
+import { scriptAssetCandidates } from "./assetPaths";
 import type { SceneStructure } from "./protocol";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
 import {
@@ -880,6 +882,11 @@ export interface SceneBundle {
    * 结构之前的 `scene.json` 原文，按 WPE 的 jsoncpp 规整（`config.ts`：去掉顶层 `id`、键按字典序、非整数 8 位有效数字）。
    */
   configs?: (string | null)[];
+  /**
+   * 脚本源码里的资源路径字面量中、在 WPE `assets` 里存在的（P6d3b，`compile/assetPaths.ts`；排序，没有时省略）：运行时 `createLayer` 的
+   * `__workshopId` 改写据此判断「是不是 WPE 自带资源」（在就不改）。
+   */
+  assetPaths?: string[];
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -1112,11 +1119,6 @@ function parseFbo(raw: EffectFboJson, hdr: boolean): SceneFbo {
   };
 }
 
-const asNumber = (value: SceneScalar | undefined, fallback: number): number => {
-  if (value === null || value === undefined) return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
 /** 解析后的 `colorBlendMode` → 图层字段的值（缺省 0、取整）。图层字段与依赖的名字表（P8 步骤 4）共用。 */
 const colorBlendModeOf = (value: SceneScalar | undefined): number => Math.trunc(asNumber(value, 0));
 
@@ -1262,7 +1264,7 @@ class EffectIssues extends Set<string> {
 }
 
 /** 没有运行中改过的结构（P6d3）。 */
-export const EMPTY_STRUCTURE: SceneStructure = { destroyed: [], parents: [] };
+export const EMPTY_STRUCTURE: SceneStructure = { destroyed: [], parents: [], created: [] };
 
 export async function compileScene(input: CompileSceneInput): Promise<SceneBundle> {
   const fs = new SceneFs(input.projectDir, input.sceneAssets, input.reader);
@@ -1282,9 +1284,34 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const scene = parseScene(sceneText);
   // HDR 判定读文件里的 `general.bloom`（K3），脚本覆盖不算，要在套用之前取。缺键写成 null：undefined 会落到缺省参数，读到覆盖后的值
   const fileBloom = scene.general?.bloom ?? null;
-  // 加载原文（P6d3）：在套用写入覆盖与结构之前取，`getInitialLayerConfig` 不反映运行中的改动
-  const configs = scene.objects.map((object) => (isSceneObject(object) ? normalizeConfig(object) : null));
   const structure = input.structure ?? EMPTY_STRUCTURE;
+  // 运行中新建的对象（P6d3b，`createLayer`）：配置原文就是它自己，放到 `scene.objects[object]`（中间空位补 null），之后和 `scene.json` 的对象走同一
+  // 条路径。配置是数组的（建出空名分组节点，rea-p6d-script 1.2）不当图层：这一项放 `{}`（编成分组节点），`configs[下标]` 仍是数组原文。
+  // 依赖标记只看加载时的对象（rea-p6d-layers 11：新建层不重算），`loadedLength` 记下加载时的个数
+  const loadedLength = scene.objects.length;
+  const createdConfigs = new Map<number, string>();
+  for (const { object: at, config } of structure.created) {
+    if (!Number.isInteger(at) || at < loadedLength) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(config);
+    } catch {
+      continue;
+    }
+    const objects = scene.objects as unknown[];
+    while (objects.length <= at) objects.push(null);
+    if (Array.isArray(parsed)) {
+      // 数组配置：编成一个分组节点（`{}`，照常进 `layers`），配置原文仍是数组
+      createdConfigs.set(at, normalizeConfig(parsed));
+      objects[at] = {};
+    } else if (isSceneObject(parsed)) {
+      objects[at] = parsed;
+    }
+  }
+  // 加载原文（P6d3）：在套用写入覆盖与删除之前取，`getInitialLayerConfig` 不反映运行中的改动（新建对象取它建出时的配置）
+  const configs = scene.objects.map(
+    (object, at) => createdConfigs.get(at) ?? (isSceneObject(object) ? normalizeConfig(object) : null),
+  );
   for (const [path, value] of Object.entries(input.scriptOverrides ?? {})) {
     const parts = path.split("/");
     let parent: unknown = scene;
@@ -1302,6 +1329,14 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       (scene.objects as unknown[])[index] = null;
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
+  // 脚本里的资源路径字面量里，在 WPE assets 中存在的名单（P6d3b，`createLayer` 的 `__workshopId` 改写用）
+  const assetPaths = (
+    await Promise.all(
+      scriptAssetCandidates(scripts.list.map((script) => script.source)).map(async (path) =>
+        (await fs.existsInAssets(path)) ? path : null,
+      ),
+    )
+  ).filter((path): path is string => path !== null);
   // 属性关键帧（P10a 步骤 2）：没有就地目标的照报细分键（`value:animation:light` / `camera` / `other`）；其余进 bundle，
   // 由宿主每帧写（P10a 步骤 3，`animation/player.ts`）
   const animations = collectAnimations(scene);
@@ -1362,6 +1397,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     sounds,
     animations: animations.list,
     configs,
+    ...(assetPaths.length ? { assetPaths } : {}),
   };
   // 阴影档位（P13d）：决定阴影计数与宏，要在编译着色器之前定。只在 `lightconfig` 写了阴影 / cookie 计数时才去读 WPE 的设置
   const shadowSetting = input.shadows ?? "follow";
@@ -1429,7 +1465,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const attachOverrides = new Set(parentOverrides.filter(([, , bone]) => bone !== null).map(([object]) => object));
   // 图层依赖（P8 步骤 4，rea-p8-render 第 1、2 节）：WPE 在全部对象加载完之后才按并集给图像层置 `0x1010`、建独占 RT，材质却在创建时就按
   // 名字绑纹理表里的对象（RT 建立时接管同名对象），所以引用方排在被依赖者前后都绑得上。我们在开头一次定下并集与名字表，编到哪个 pass 都查得到
-  const dependedIds = dependencyIds(scene.objects);
+  const dependedIds = dependencyIds(scene.objects.slice(0, loadedLength));
   const isDepended = (object: SceneObject): boolean => {
     const id = jsonId(object);
     return id !== null && dependedIds.has(id);
@@ -1441,7 +1477,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    */
   const layerComposites = new Map<string, { object: number; depended: boolean; ownComposite: boolean }>();
   scene.objects.forEach((object, index) => {
-    if (!isSceneObject(object)) return;
+    if (!isSceneObject(object) || index >= loadedLength) return;
     const id = jsonId(object);
     if (id === null || !isImageLayerObject(object)) return;
     const cbm = colorBlendModeOf(resolveValue(object.colorBlendMode as SceneValue, properties));
@@ -2629,41 +2665,33 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     progressDone += progressWeight(object);
     /** 图层字段的就地目标（场景坐标里的 objects 下标，不随 bundle 下标变）。 */
     const at = (field: LayerField): BindingTarget => ({ kind: "layer", object: index, field });
-    // 图层的向量字段照 WPE 的向量 setter 取值（`layerVectorValue`：数字铺满、字符串少写的分量为 0，P6b 1e-3 复核）。绑定的属性值
-    // 写不进（布尔、条件换成的布尔）时 WPE 不改字段，留着加载 JSON 时写进的 `value`；那个也写不进就是构造时的缺省
-    const vector = (field: LayerVectorField, fallback: number[]): number[] => {
-      const raw = object[field] as SceneValue | undefined;
-      return (
-        layerVectorValue(field, bindings.bind(raw, properties, at(field))) ??
-        layerVectorValue(field, unwrapValue(raw)) ?? [...fallback]
-      );
-    };
-    // 图层的标量字段（alpha / brightness）照 WPE 的 float setter：不收布尔（条件换成的、布尔属性本身、JSON 里直接写的布尔），写不进就留着
-    // 加载 JSON 时写进的 `value`，那个也是布尔就是构造时的缺省 1（P3a 补测 NC1–NC5，`p3am-bright` R1–R8 / A1）。就地写同一规则
-    // （`render/state.ts` 的 `SceneState.write`）
-    const scalar = (field: "alpha" | "brightness"): number => {
-      const raw = object[field] as SceneValue | undefined;
-      const bound = bindings.bind(raw, properties, at(field));
-      if (typeof bound !== "boolean") return asNumber(bound, 1);
-      const own = unwrapValue(raw);
-      return typeof own === "boolean" ? 1 : asNumber(own as SceneScalar | undefined, 1);
-    };
+    // 图层壳的取值抽成纯函数 `layerShellValues`（P6d3b，运行时 `createLayer` 共用）：向量 / 标量 setter 的规则见 `layerShell.ts`。绑定的属性值
+    // 经这里解析并登记就地目标（`size` 是重编译目标）；`solid` 的绑定留在建图层之后登记，保持登记顺序
+    const shell = layerShellValues(object, (field, raw) =>
+      field === "solid"
+        ? (unwrapValue(raw) as SceneScalar | undefined)
+        : bindings.bind(
+            raw,
+            properties,
+            field === "size" ? recompile("layer-structure", `objects/${index}/size`) : at(field),
+          ),
+    );
     const layer: SceneLayer = {
       id: object.id ?? bundle.layers.length,
       object: index,
       parent: parents[index],
-      name: object.name ?? "",
-      origin: vector("origin", [0, 0, 0]),
-      scale: vector("scale", [1, 1, 1]),
-      angles: numbers(bindings.bind(object.angles, properties, at("angles")), [0, 0, 0]),
-      size: numbers(bindings.bind(object.size, properties, recompile("layer-structure", `objects/${index}/size`))),
-      alpha: scalar("alpha"),
-      color: vector("color", [1, 1, 1]),
-      brightness: scalar("brightness"),
+      name: shell.name,
+      origin: shell.origin,
+      scale: shell.scale,
+      angles: shell.angles,
+      size: shell.size,
+      alpha: shell.alpha,
+      color: shell.color,
+      brightness: shell.brightness,
       // bool setter 不收数字、字符串属性，留 `value`（`boolFieldValue`，运行时同 `SceneState.write`）
-      visible: boolFieldValue(object.visible, bindings.bind(object.visible, properties, at("visible"))),
-      visibleBound: isUserBinding(object.visible),
-      parallaxDepth: vector("parallaxDepth", [1, 1]),
+      visible: shell.visible,
+      visibleBound: shell.visibleBound,
+      parallaxDepth: shell.parallaxDepth,
       solidLayer: false,
       instanced: false,
       noPadding: false,

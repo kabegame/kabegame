@@ -19,7 +19,10 @@ import { isPassStateField, type PassStateField } from "../compile/passState";
 import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlPoint } from "../compile/particles";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneStructure } from "../compile/protocol";
-import type { SceneScript } from "../compile/scripts";
+import { normalizeConfig } from "../compile/config";
+import { layerShellValues } from "../compile/layerShell";
+import type { SceneObject, SceneScalar } from "../compile/model";
+import { collectObjectScriptsSync, type SceneScript } from "../compile/scripts";
 import { TEXT_ANCHORS } from "../compile/texts";
 import { animationLayerKey, puppetEntries, type PuppetLayerControl, type PuppetRig } from "../puppet/player";
 import type { CursorInputSnapshot } from "../render/cursor";
@@ -30,6 +33,7 @@ import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
 import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
+import { createdLayerKind, createLayerConfig, type CreatedLayerKind, type CreateConfigContext } from "./createConfig";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
 import { materialObjectKeys } from "./materialKeyOrder";
@@ -197,6 +201,24 @@ export interface ScriptApiState {
    * 不传时当 0（语料诊断没有宿主）。
    */
   openUserShortcut?(name: string): 0 | 1 | 2;
+  /** 当前正在调用的脚本的 `__workshopId`（P6d3b，`ScriptRuntime.currentWorkshopId`）；没有是 null。不传当没有。 */
+  workshopId?(): string | null;
+  /**
+   * `createLayer` 的落点（P6d3b）：宿主分配下标、建出待编对象（`createStructureObject`：状态、对象表尾、结构）、安排重编译，返回新下标；
+   * 建不出来返回 null。`parent` 是 API 已按配置的父 id 解析好的 `objects` 下标（当时存在、没待删的；没有是 null）。不传时 `createLayer` 返回 null。
+   */
+  createLayer?(config: string, parent: number | null): number | null;
+  /** 配置里带的脚本（克隆）当场追加进运行时并在返回前跑完 `init`（`ScriptRuntime.addScripts`）。不传时新对象上的脚本不跑。 */
+  addScripts?(scripts: SceneScript[]): void;
+}
+
+/** `createLayer` 建出、还没有编译产物的对象（待编对象，P6d3b）：新 bundle 换上后删掉（`ScriptApi.adoptBundle`）。 */
+interface PendingLayer {
+  name: string;
+  id: number;
+  kind: CreatedLayerKind;
+  /** 整理后的配置对象（数组配置是数组）；`getInitialLayerConfig` 取它的规整。 */
+  config: Record<string, unknown> | unknown[];
 }
 
 /**
@@ -300,6 +322,11 @@ export class ScriptApi {
    * API 对象跨重编译保留，所以名字也保留；没写过的取 `SceneEffect.name`。键同 `effects`：`<对象>/<JSON 下标>`。
    */
   private readonly effectNames = new Map<string, string>();
+  /**
+   * 图层的 `name`（P6d3b，`wpe-clone.log`：克隆体 `c.name = 'C1'` 之后 `enumerateLayers` 与 `thisLayer.name` 都是新名字）：同 effect 的 `name`，
+   * 可读写字符串、存在 API 这边、跨重编译保留，影响之后按名字的查找（`lookup`）；没写过的取 `SceneLayer.name` / 待编对象建出时的名字。
+   */
+  private readonly layerNames = new Map<number, string>();
   /** `IAnimation` 包装对象（P10b）：按动画 `id`（`scene.json` 路径）缓存，同一条每次 `getAnimation` 返回同一个对象。 */
   private readonly animationApis = new Map<string, ApiObject>();
   /** `IAnimationLayer` 包装对象（P12c）：按 `<对象>:<层下标>` 缓存，`get(0) === get("walk")`。 */
@@ -307,7 +334,15 @@ export class ScriptApi {
   /** 没有宿主视图时（语料诊断）的控制口替身：按 `<对象>:<层下标>` 缓存，保住脚本写过的名字等。 */
   private readonly fallbackLayerControls = new Map<string, PuppetLayerControl>();
   private readonly recompileValues = new Map<string, string>();
-  /** `engine.registerAsset` 的登记表：脚本条目 id → 路径（P6d3a 只记，P6d3b 的 `__workshopId` 改写读）。 */
+  /**
+   * `createLayer` 的待编对象（P6d3b）：`objects` 下标 → 名字 / id / 类别 / 配置。没有 `SceneLayer`，所以存在性、名字、按类别装的成员
+   * （声音、粒子、对齐、文本）读它；编进 bundle 后（`adoptBundle`）删掉。已知差异：自动尺寸的 `size`、`getEffect`、材质这些编译期字段，
+   * 编译前读到的是缺省（WPE 当场就有，步骤 0：`bar.size` 是 `{4, 4}`）。
+   */
+  private readonly pending = new Map<number, PendingLayer>();
+  /** 建出的对象的 id → `objects` 下标（整个会话保留，编进 bundle 后 `getLayerByID` 仍按建出时发的 id 找得到）。 */
+  private readonly createdIds = new Map<number, number>();
+  /** `engine.registerAsset` 的登记表：脚本条目 id → 路径，只用来判同一段脚本重复登记（P6d3b 的 `__workshopId` 改写不读它，查的是编译期的 `bundle.assetPaths`）。 */
   private readonly registeredAssetsById = new Map<string, Set<string>>();
   /**
    * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applySpectrum` 每帧把场景频谱（归一化后的）
@@ -381,13 +416,22 @@ export class ScriptApi {
   }
   /** 同一 objects 下标对应同一 API 对象，重编译只替换访问层里的 bundle 与 state。 */
   layer(object: number): ApiObject | null {
-    if (!this.findLayer(object)) return null;
+    if (!this.findLayer(object) && !this.pending.has(object)) return null;
     let api = this.layers.get(object);
     if (api) return api;
     api = this.object();
     this.ownerOf.set(api, object);
     const index = object;
-    this.define(api, "name", () => this.findLayer(index)?.name ?? "");
+    // `name`：可读写字符串（同 effect 的 `name`），写入照类型 5 的 `ToString`，`null` / `undefined` / 抛错的不写
+    this.define(
+      api,
+      "name",
+      () => this.nameOf(index) ?? "",
+      (value) => {
+        const text = scriptToString(value);
+        if (text !== undefined) this.layerNames.set(index, text);
+      },
+    );
     // 图层字段与 `size` 的读取按 WPE 取单精度、角度按 f32 算法换成度（`f32.ts`，P3b 补测 `ignore/p3b-f32`）；状态照旧存 double
     this.define(
       api,
@@ -429,17 +473,20 @@ export class ScriptApi {
         },
       );
     }
-    if (this.isSoundLayer(index)) this.installSound(api, index);
-    if (this.findLayer(index)?.particle) this.installParticle(api, index);
-    if (this.findLayer(index)?.alignment !== undefined) this.installAlignment(api, index);
-    if (this.findLayer(index)?.text) this.installText(api, index);
+    // 按类别装的成员：已编译的看 `SceneLayer`，待编对象（P6d3b）看配置的类别。图像层的骨骼方法照装（WPE 建出就有，`wpe-bars` 的键数），
+    // 编译前没有 puppet：计数 0、其余空操作
+    const kind = this.pending.get(index)?.kind;
+    if (this.isSoundLayer(index) || kind === "sound") this.installSound(api, index);
+    if (this.findLayer(index)?.particle || kind === "particle") this.installParticle(api, index);
+    if (this.findLayer(index)?.alignment !== undefined || kind === "image") this.installAlignment(api, index);
+    if (this.findLayer(index)?.text || kind === "text") this.installText(api, index);
     this.installHierarchy(api, index);
     this.installEffectAccess(api, index);
     // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
     this.installGetAnimation(api, () => `objects/${index}`);
     this.installAnimationLayers(api, index);
-    if (this.findLayer(index)?.alignment !== undefined) this.installBones(api, index);
+    if (this.findLayer(index)?.alignment !== undefined || kind === "image") this.installBones(api, index);
     this.layers.set(object, api);
     return api;
   }
@@ -1415,9 +1462,9 @@ export class ScriptApi {
       return pending && reject ? null : { object, pending };
     };
     if (typeof value === "string") {
-      for (const object of order) if (this.findLayer(object)?.name === value) return hit(object, rejectPendingName);
+      for (const object of order) if (this.nameOf(object) === value) return hit(object, rejectPendingName);
       const id = this.strtol(value);
-      for (const object of order) if (this.findLayer(object)?.id === id) return hit(object, rejectPending);
+      for (const object of order) if (this.idOf(object) === id) return hit(object, rejectPending);
       return null;
     }
     if (typeof value === "number") {
@@ -1451,6 +1498,7 @@ export class ScriptApi {
    */
   private installLayerTable(): void {
     const state = () => this.access.state();
+    this.installCreateLayer();
     // 不传参数返回 undefined（0c 实测）；传了 undefined 的行为不变（按名字找、找不到 null）。数字、名字、图层对象都按 `R`
     this.sceneMethod("getLayer", (...args) => {
       if (args.length === 0) return undefined;
@@ -1466,8 +1514,10 @@ export class ScriptApi {
         if (typeof id !== "string") return null;
         const value = this.strtol(id);
         const layer = this.access.bundle().layers.find((item) => item.id === value);
-        if (!layer || !this.alive(layer.object) || state().pendingDestroy.has(layer.object)) return null;
-        return this.layer(layer.object);
+        // 没有编译产物的待编对象（以及编进 bundle 后 id 被重新发过的）按建出时发的 id 找（P6d3b）
+        const object = layer?.object ?? this.createdIds.get(value);
+        if (object === undefined || !this.alive(object) || state().pendingDestroy.has(object)) return null;
+        return this.layer(object);
       },
       "getLayer",
     );
@@ -1506,11 +1556,98 @@ export class ScriptApi {
       "getInitialLayerConfig",
       (...args) => {
         const hit = this.lookup(args[0], false, true);
-        const text = hit ? this.access.bundle().configs?.[hit.object] : null;
+        const pending = hit ? this.pending.get(hit.object) : undefined;
+        const text = hit
+          ? (this.access.bundle().configs?.[hit.object] ?? (pending ? normalizeConfig(pending.config) : null))
+          : null;
         return text ? (this.realm.global.JSON as JSON).parse(text) : null;
       },
       "destroyLayer",
     );
+  }
+
+  /** 图层名（脚本写过的优先，否则已编译的取 `SceneLayer`、待编对象取建出时的）；没有对象是 undefined。 */
+  private nameOf(object: number): string | undefined {
+    return this.layerNames.get(object) ?? this.findLayer(object)?.name ?? this.pending.get(object)?.name;
+  }
+  /** 图层 id（同 `nameOf`）。 */
+  private idOf(object: number): number | undefined {
+    return this.findLayer(object)?.id ?? this.pending.get(object)?.id;
+  }
+
+  /**
+   * 新 bundle 换上后（宿主 `beforeFirstFrame`，P6d3b）：已经有编译产物的待编对象不再待编（名字、id、类别以后看 `SceneLayer`）。
+   * `createdIds` 保留，建出时发的 id 仍能 `getLayerByID`。
+   */
+  adoptBundle(): void {
+    for (const object of [...this.pending.keys()]) if (this.findLayer(object)) this.pending.delete(object);
+  }
+
+  /** 当前存在的对象里按 JSON `id` 找（编译的图层，再按 `createdIds` 找建出的对象，含待编的；待删与已删的不算）；找不到 null。 */
+  private objectById(id: number): number | null {
+    const state = this.access.state();
+    const alive = (object: number) => state.layers.has(object) && !state.pendingDestroy.has(object);
+    for (const layer of this.access.bundle().layers) if (layer.id === id && alive(layer.object)) return layer.object;
+    const created = this.createdIds.get(id);
+    return created !== undefined && alive(created) ? created : null;
+  }
+
+  /** 配置里有非 0 的数字 `id` 照用（不查重）；否则取「全部图层与已建对象的 id 最大值 + 1」起第一个没被占的。WPE 是渲染器级计数器，值复刻不了。 */
+  private newLayerId(config: Record<string, unknown> | unknown[]): number {
+    const own = Array.isArray(config) ? 0 : config.id;
+    if (typeof own === "number" && own !== 0) return own;
+    const used = new Set<number>(this.createdIds.keys());
+    for (const layer of this.access.bundle().layers) used.add(layer.id);
+    for (const item of this.pending.values()) used.add(item.id);
+    let id = Math.max(0, ...used) + 1;
+    while (used.has(id)) id++;
+    return id;
+  }
+
+  /**
+   * `thisScene.createLayer(...args)`（P6d3b，rea-p6d-script 1.2、1.3，rea-p6d-layers 3–5）：参数整理成配置（`createLayerConfig`）→ 宿主分配下标、建待编
+   * 对象 → 配置里带的脚本当场实例化并跑完 `init` → 返回新图层对象。整个过程同步，返回时 `before` → 新层各段 `init` → `after` 的顺序与 WPE 一致。
+   * 不能在模块顶层调用（`SyntaxError`）；整理不出配置（`Vec3` 等）返回 null。
+   */
+  private installCreateLayer(): void {
+    this.sceneMethod("createLayer", (...args) => {
+      const create = this.access.createLayer;
+      if (!create) return null;
+      const bundle = this.access.bundle();
+      const assets = new Set(bundle.assetPaths ?? []);
+      const internal = this.realm.internal;
+      const context: CreateConfigContext = {
+        // 读调用那一刻的 `_Internal.stringifyConfig`（脚本可以改写它，rea-p6d-script 5.5），`this` 是 `_Internal`
+        stringify: (value) =>
+          typeof internal.stringifyConfig === "function"
+            ? internal.stringifyConfig.call(internal, value)
+            : JSON.stringify(value),
+        orthographic: !bundle.general.perspective,
+        workshopId: this.access.workshopId?.() ?? null,
+        inAssets: (path) => assets.has(path),
+      };
+      const config = createLayerConfig(args, context);
+      if (config === null) return null;
+      // id 先定、写进结构里的配置原文：编译按它发 `SceneLayer.id`（缺省会取图层个数，和已有的撞号），重编译前后按 id 找到的是同一个；
+      // `getInitialLayerConfig` 的规整去掉顶层 `id`，读不到它。数组配置没处写，编成分组节点后按编译的规则发
+      const id = this.newLayerId(config);
+      const text = JSON.stringify(Array.isArray(config) ? config : { ...config, id });
+      const parentId = Array.isArray(config) ? undefined : config.parent;
+      const parent = typeof parentId === "number" ? this.objectById(parentId) : null;
+      const object = create.call(this.access, text, parent);
+      if (object === null) return null;
+      const shell = layerShellValues((Array.isArray(config) ? {} : config) as SceneObject);
+      this.pending.set(object, { name: shell.name, id, kind: createdLayerKind(config), config });
+      this.createdIds.set(id, object);
+      if (!Array.isArray(config)) {
+        const properties: Record<string, SceneScalar> = Object.fromEntries(
+          [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
+        );
+        const scripts = collectObjectScriptsSync(config, object, properties);
+        if (scripts.length) this.access.addScripts?.(scripts);
+      }
+      return this.layer(object);
+    });
   }
 
   /** 对象当前的挂点名：运行中换过父的取结构里最后一条，否则取编译期的（对象 JSON 的 `attachment`，只在 bundle 里解析成功时算）。 */
@@ -1814,12 +1951,7 @@ export class ScriptApi {
     if (api) return api;
     api = this.object();
     this.ownerOf.set(api, object);
-    this.define(
-      api,
-      "visible",
-      () => this.access.state().effectEnabled(object, effect),
-      (value) => this.write({ kind: "effect", object, effect }, value, "bool"),
-    );
+    // 键序 `name`、`visible`（`wpe-asset.log` 的 `fx name write`：`JSON.stringify(effect)` 是 `{"name":…,"visible":…}`）
     // `name`（P6d1a）：可读写字符串，只存在 API 这边；写入照类型 5 的 `ToString`，`null` / `undefined` / 抛错的不写
     this.define(
       api,
@@ -1829,6 +1961,12 @@ export class ScriptApi {
         const text = scriptToString(value);
         if (text !== undefined) this.effectNames.set(key, text);
       },
+    );
+    this.define(
+      api,
+      "visible",
+      () => this.access.state().effectEnabled(object, effect),
+      (value) => this.write({ kind: "effect", object, effect }, value, "bool"),
     );
     this.method(api, "getMaterialCount", () => this.effectPasses(object, effect).length);
     // 整数取第 i 个 pass 的材质（越界、负数 `null`，无参 = 0）；字符串按 pass 的材质文件路径不分大小写全等、空串匹配每一个，最后一个胜出

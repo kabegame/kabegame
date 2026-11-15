@@ -357,30 +357,171 @@ export interface SceneStructure {
 - **保留**：`createLayer`（P6d3b），`createModelData` / `destroyModelData`、`getCameraTransforms` / `setCameraTransforms`（语料 0 处，照报）。
 - **修改**：文档与能力表注释同步。
 
-## P6d3b 概要（P6d3a 提交后补写成点）
+## P6d3b — `createLayer`（2026-11-15 补写，P6d3a 已提交 `423122d4`）
 
-- **参数整理**（rea-p6d-script 1.2、1.3，0c 的 p6d-asset 实测）：
-  - 不是 1 个参数时，配置是 `{"image": 缺省模型}`；
-  - 对象参数经 realm 里 WPE 自带的 `_Internal.stringifyConfig`（`Vec` → `"x y z"`），再解析；有 `color` 却没有类型键时，补 `image: 缺省模型`；
-  - 字符串参数先当 JSON；不是 JSON 就当路径，按第一段目录与扩展名定键；
-  - 数字、`undefined`、`Vec3`、别的目录返回 `null`；
-  - 模块顶层调用时抛 `SyntaxError`。
+### 设计
 
-  缺省模型在 `solidlayer.json` 与 `solidlayer_depthtest.json` 之间按 `G+0xe0` bit3 选，含义待测：正交场景实测是 depthtest。
-- **`__workshopId`**：
-  - 只认导出的字符串，在模块求值完读一次；
-  - 改写的键是 `particle`、`sprite`、`image`、`font`、`path`、`sound`、`effects[].file`、`passes[].textures[]`；
-  - WPE `assets` 里存在的路径保持原样，其余一律改写（0c 实测：工程目录里有也改）。
+`createLayer` 当场把参数整理成一段配置 JSON、分到一个新下标，建出一个**待编对象**并返回它的脚本对象：
+- 状态、对象表里的位置、脚本对象都当场就有；
+- 配置里带的脚本当场实例化、跑 `init`；
+- 只是还没有编译产物（`SceneLayer`、pass、GPU 资源）。
 
-  「在不在 `assets` 里」要在 `createLayer` 里同步判断。拟在编译期扫描脚本源码里形如资源路径的字符串字面量，在 Worker 里逐个查 `assets`，结果随 bundle 带回；不在名单里的按「不在」处理。
-- **待编对象**：分配下标（`objects.length` 起、只增不复用）、追加到 `order` 尾、状态按配置里的字段值建（和编译期建图层壳同一个取值函数，从 `bundle.ts` 抽出来），之后再建脚本对象。对象的类型（声音、粒子、文本、对齐等）按配置的类型键定。编译前读到的编译期字段与 WPE 不同，是已知差异：
-  - `size` 的自动尺寸；
-  - `getEffectCount` / `getEffect`；
-  - 材质。
-- **克隆带脚本**：配置里的脚本用 `collectScripts` 的同一套规则，按 `objects/<新下标>/…` 建条目。源码已经加载过的直接 `instantiate`，在 `createLayer` 返回前跑 `init`（0c：`before` → `init` → `after`），同一帧收到第一次 `update`。没加载过的源码不能同步编，就在之后补跑 `init`，记为已知差异（语料 0 处）。
-- **结构里的新建对象**：编译把配置放到 `objects[新下标]`，和场景对象一起编。逐实例的属性绑定（`bar.json` 材质的 `color` 绑 `newproperty`）、动画、脚本常量目标都由编译自动按新下标登记。重编译后，用新 bundle 里同 id 的条目刷新运行时里这些条目的目标。
-- **首帧**：`runtime.load` 跑完 `init` 之后，结构里有新建对象就再编一次，然后才 `current.load`。
-- **能力表**：删 `createLayer`。
+新建对象记进结构（`SceneStructure.created`），之后的编译把它当成 `scene.json` 的 `objects` 在这个下标上多出的一项，和场景对象走同一条编译路径：
+- 模型、材质、effect、属性绑定、关键帧、脚本常量目标都按 `objects/<新下标>/…` 登记；
+- 所以 `bar.json` 材质的颜色绑用户属性，63 根条每根各有一个就地目标，不用另写「逐实例」的代码。
+
+**什么时候编**：
+
+| 建层的时机 | 怎么编 | 和 WPE 比 |
+|---|---|---|
+| 首次加载的 `init` 里 | 这次加载在 `init` 跑完之后发现结构多了新建对象，就放弃本次、带着结构重新加载。脚本环境保留（`ensureRuntime` 发现已有运行时就跳过），第二次编译完才建 GPU 资源、画第一帧 | 画面相同，代价是加载时多一次整场编译。四张音频条都是这种 |
+| `update`、回调、计时器里 | 请求一次重编译，多次请求合并 | 晚一段才画出来，是已知差异。P6d4 改成「编过的配置同步实例化」 |
+
+**编译前读到的编译期字段**与 WPE 不同，是已知差异：自动尺寸的 `size`、`getEffectCount` / `getEffect`、材质。图层字段（`origin`、`scale`、`alignment` 等）照常读写；写进状态与写入重放表，编完重放到新状态上。
+
+### 现状锚点（P6d3a 之后）
+
+**i. 首次加载：脚本 `init` 跑完就建 GPU 资源**（`host.ts` 约 1684–1717 行）
+```ts
+      if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
+        this.scriptBundle = bundle;
+        this.scriptState = SceneState.fromBundle(bundle);
+        // …
+        await this.ensureRuntime(bundle, target.sceneAssets);   // 现状：init 在这里跑
+        // …
+      }
+      // …
+      await current.load(bundle, { … });   // 现状：init 里建的层这时还没有编译产物
+```
+
+**ii. 编译输入的结构只有删除与换父**（`compile/protocol.ts`）
+```ts
+export interface SceneStructure {
+  destroyed: number[];
+  parents: [number, number | null, string | null][];
+  // 现状：没有新建对象
+}
+```
+
+**iii. 脚本条目只从 `scene.json` 收集**（`compile/scripts.ts:198`）
+```ts
+export async function collectScripts(scene: SceneJson, properties: …, bindings: SceneBinding[]): Promise<SceneScripts> {
+  // 现状：遍历 scene.general 与 scene.objects；没有「只收一个对象」的入口
+```
+
+### 点 9 — 参数整理与 `__workshopId`（新 `script/createConfig.ts`、`script/api.ts`）
+
+- **新增**：纯函数 `createLayerConfig(args, ctx): Record<string, unknown> | null`。照 dll 的流程（rea-p6d-script 1.2、1.3，0c 的 p6d-asset 实测），逐条：
+  - 参数个数不是 1：`{ image: 缺省模型 }`。
+  - 对象：
+    - 经 realm 的 `_Internal.stringifyConfig`（`Vec` → `"x y z"`），再 `JSON.parse`；
+    - 结果不是对象返回 `null`，所以 `Vec3` 作参数是 `null`；
+    - 数组按 0c 实测建出一个空名对象（照抄实测，类型待步骤 0 再核）；
+    - 抛异常吞掉，返回 `null`。
+  - 字符串：先当 JSON，是对象同上；否则当资源路径：
+    - 去掉开头的 `/` `\`；
+    - 按第一段目录（区分大小写）与小写扩展名定键：`models/*.json` → `image`，`models/` 其它 → `model`，`particles/` → `particle`，`materials/` → `sprite`，`sounds/` → `sound`；
+    - 别的目录返回 `null`；
+    - 路径先经 `RP`（键为空，一般规则）。
+  - 其它类型返回 `null`。
+  - 整理（对象与 JSON 字符串分支）：
+    - 有 `color` 却没有 `model`、`particle`、`sprite`、`image`、`text`、`light`、`sound`、`camera` 任何一个键时，补 `image: 缺省模型`；
+    - 再对 `particle`、`sprite`、`image`、`font`、`path`（字符串）、`sound`（字符串或字符串数组）、`effects[].file`、`effects[].passes[].textures[]`（textures 规则）做 `RP`。
+- **缺省模型**：正交场景 `models/util/solidlayer_depthtest.json`，透视 `models/util/solidlayer.json`。读码说宿主 `+0x90` 是场景 `G+0xe0` bit3（正交），0c 在正交场景实测是 depthtest。透视那一半由步骤 0 实测。
+- **`RP(path, key)`**（rea-p6d-script 2.2）：
+  - 「当前脚本」（运行时正在调用的条目）没有字符串 `__workshopId` 就不改；
+  - 路径在 WPE `assets` 里存在就不改；
+  - 否则改写。一般规则是 `第一段/workshop/<id>/其余`，第二段已经是 `workshop` 时先去掉旧的 `workshop/<旧 id>`；`textures` 规则是 `workshop/<id>/<路径>`；最后 `\` 换成 `/`、合并 `//`。
+- **`__workshopId` 的读取**：运行时在每段模块求值完（`instantiate` 之后）读一次导出的 `__workshopId`，只认字符串，记在条目上；之后再改导出变量不生效。
+- **「在不在 `assets` 里」**：编译期在 Worker 里做。
+  - 扫全部脚本源码里形如资源路径的字符串字面量：以 `models/`、`particles/`、`materials/`、`sounds/`、`fonts/`、`effects/`、`shaders/`、`textures/` 开头。
+  - 逐个只在 `sceneAssets` 根目录下查存在（`SceneFs` 新增一个只查 assets 的入口）。
+  - 存在的随 bundle 带回（`bundle.assetPaths: string[]`）。
+  - 不在名单里的按「不在」处理（拼出来的路径会被改写；只有拼出的恰好是 WPE 自带资源时与 WPE 不同）。
+- **作用域门**：模块顶层调用抛 `SyntaxError: createLayer cannot be called from global scope.`。
+
+### 点 10 — 待编对象（`render/state.ts`、`script/api.ts`、`host.ts`）
+
+- **下标**：宿主分配，从 `max(objects.length, 已建的最大下标 + 1)` 起，只增不复用。记进 `structure.created`，每项是 `{ object, config }`，`config` 是整理后的 JSON 文本。
+- **状态**：`SceneState.addLayer(object, layerState, parent)` 追加到 `order` 尾、写 `layers`，挂到父的子表尾。
+  - 父按配置的 `parent`（数字 id）在**当时存在**的对象里找；找不到、待删的当根（rea-p6d-layers 3.2：`createLayer` 不跑加载末的补挂）。
+  - 图层壳的取值和编译期同一个函数：从 `bundle.ts` 建 `SceneLayer` 的那段抽出纯函数 `layerShellValues(object)`，只取值；绑定对象取它的 `value`。
+  - `structureVersion++`。
+- **脚本对象**：API 维护一张 `pending: Map<下标, PendingLayer>`，编进 bundle 之后就不再用。
+  - 内容：`name`、`id`、类型键、配置；
+  - 用途：给 `layer(object)` 判存在和装按类型的成员（声音、粒子、对齐、文本按配置的类型键；骨骼一类编译期才知道的不装）。
+- **`id`**：配置里有非 0 的数字 `id` 就照用（不查重），否则取「现有最大 id + 1」起第一个没被占的。WPE 用的是渲染器级计数器（effect、动画层也从它发号），具体值没法复刻，是已知差异。语料里没有对新建层用 `getLayerByID` 的。
+- **`getInitialLayerConfig(新层)`**：返回整理后的配置，经 `normalizeConfig`（去 `id`、键排序、8 位有效数字），编译前后相同。
+
+### 点 11 — 新建对象上的脚本（`compile/scripts.ts`、`script/runtime.ts`）
+
+- **收集**：新增 `collectObjectScripts(config, object, properties)`，和 `collectScripts` 同一套遍历、键序（`registrationKeys`）、属主与写回目标，只收这一个对象，路径 `objects/<下标>/…`。从 `collectScripts` 抽出共用的单对象遍历，不复制一份。
+- **运行时**：新增 `addScripts(scripts)`，在 `createLayer` 返回前按条目顺序做：
+  1. 取 realm 里同源码已备好的模块（`prepareModule` 的缓存），同步 `instantiate`；
+  2. 读 `__workshopId`；
+  3. 追加进 `records` / `byId`；
+  4. `updateScriptProperties`；
+  5. 调 `init`，写回返回值。
+
+  效果是 0c 实测的 `before` → 新层 `init` → `after`，新条目同一轮 `update` 能遍历到（数组迭代器每步看长度）。
+  - 源码没备过的：异步 `prepareModule`，备好之后补跑 `init`（晚一段，已知差异，语料 0 处）。
+  - 导入的库必须已在 import map 里，克隆的源码就是现有的，不会缺；缺的照现有的「说明符无效」处理。
+- **编完之后**：新 bundle 换上时（`beforeFirstFrame`），按 id 用新 bundle 的 `scripts.list` 刷新这些条目的 `script`，常量目标的 uniform 信息由 `compilePass` 填好。
+
+### 点 12 — 结构里的新建对象与首帧（`compile/protocol.ts`、`compile/bundle.ts`、`host.ts`）
+
+- **修改**：`SceneStructure` 加 `created: { object: number; config: string }[]`。
+- **编译**：
+  - 套用 `scriptOverrides` 之前，把每个新建对象的配置放到 `scene.objects[object]`，中间的空位补 `null`；
+  - `destroyed` 照旧在之后置空，所以建了又删的不编；
+  - `configs[object]` 取这份配置的规整；
+  - **依赖标记**（`dependencies` → 被依赖层）只看加载时的对象（rea-p6d-layers 11：新建层不重算依赖标记）。灯、反射名单照常收新对象，因为 WPE 工厂会把它们放进灯表与反射表。
+- **宿主，首次加载**：`ensureRuntime` 跑完 `init` 之后比较 `structure.created` 与这次编译用的结构；多了就放弃本次加载、立刻重新加载。见锚点 i。
+  - 重新加载时：脚本环境已在，`init` 不重跑；`pendingAnimations` / `pendingPuppets` 按现有的「加载期间又来一次加载」接过来；
+  - 首帧前 `adoptStructure` 接过对象表（新建对象在原来的位置）、待删、父子，再重放写入。
+- **宿主，运行中**：建层后请求重编译（`requestScriptReload`），同一轮的多次建层合并成一次；编译期间又有新建的，编完再来一次。
+- **能力表**：删 `createLayer`。`createModelData` / `destroyModelData` 照报，所以 `{ model: IModelData }` 走不到。
+
+### 步骤 0（P6d3b）— 补测与夹具
+
+- **`p6d3b-default`**：透视场景里 `createLayer()`、`createLayer({ color })` 的配置用哪个缺省模型。
+- **`p6d3b-bars`**：照音频条的写法，用正交场景，`__workshopId = '123'`：
+  - 模型放 `models/workshop/123/kbbar.json`，在 `init` 里 `createLayer('models/kbbar.json')` 建 8 根；
+  - 每根 `sortLayer(bar, getLayerIndex(thisLayer))`，再设 `alignment` / `origin` / `scale` / `color`；
+  - 材质颜色绑一个用户属性（逐实例绑定）。
+
+  记 `enumerateLayers`、每根的下标与 `getInitialLayerConfig`；抓帧看绘制顺序与位置。
+- **`p6d3b-clone`**：带两段字段脚本的模板层 T（模块级计数器、`init` / `update` 记日志），在 `init` 里克隆两次、在第 60 帧的 `update` 里再克隆一次。记：
+  - `before` / `init` / `after` 的顺序；
+  - 各实例的模块状态互不相干；
+  - 同一帧的 `update` 顺序；
+  - 克隆的 `getInitialLayerConfig`。
+- **重抓 0c 的 `p6d-order`、`p6d-asset` 的 WPE 日志全文**当夹具。0c 只摘了结论；这两个工程用 `createLayer` 的各种参数形态与 `__workshopId`。
+- **`p6d-frame` / `p6d-cycle`**：运行中建删，要等 P6d4 的同步实例化才能逐帧对上。这一步只核对日志里结构类的行（计数、下标、作废）。
+
+### 步骤 0（P6d3b）实测记录（2026-11-15）
+
+工程 `ignore/p6/d3/make_step0b.py` → `proj/p6d3b-{default,bars,clone}`。`p6d3b-bars` 拷了工坊 3304642534 的 bar 模型、材质、tint 着色器、纹理，只读工坊。日志夹具 `out/wpe-{bars,clone,default,asset,order}.log`（后两个是 0c 工程的全文），抓帧 `A:\p6d3\{bars,clone,default,asset,order}\`，画面 `out/wpe-bars.png`。
+
+- **缺省模型**：透视场景 `createLayer()`、`createLayer(1, 2)`、`{ color }` 都是 `models/util/solidlayer.json`；正交场景是 `solidlayer_depthtest.json`（`p6d-asset` 重测同 0c）。确认宿主 `+0x90` 就是「正交」。
+- **音频条写法（`p6d3b-bars`）**：
+  - 新层追加在表尾、名字为空串；每次 `sortLayer(bar, thisIndex)` 后新层在 `thisIndex`、自己的下标 +1；
+  - 新层的配置原文是改写后的 `{"image":"models/workshop/2652493753/bar.json"}`；
+  - **`init` 里当场读到 `bar.size` 为 `{4, 4}`**（自动尺寸 = 纹理尺寸），我们编译前读不到，是已知差异；
+  - 新层图层对象有 59 个自有键（P6d1 起的键集合差异）；
+  - 画面：7 根新条与 SV 都是用户属性的红色（逐实例绑定生效）、底边对齐，排在 TOP 之前画。
+- **克隆（`p6d3b-clone`）**：
+  - A 的 `init` 里克隆，是 `before` → 新层 `T.alpha init` → `T.origin init` → `after`。同一对象内的字段脚本按登记键序（alpha 在 origin 前），新层 `init` 里读到的名字是原名 `T`、下标是表尾。
+  - 原来的 T 的 `init` 在 A 的 `init` 之后才跑（条目顺序）。
+  - 每个实例的模块计数器各自从头开始。
+  - 第 1 帧 `update` 顺序：T、C1、C2，每个对象 alpha 在前、origin 在后。
+  - 第 60 帧在 A 的 `update` 里克隆的 C3，同一帧收到第一次 `update`，排在已有条目之后。
+  - 克隆的配置原文带着两段字段脚本对象、没有 `id`、键按字典序。
+- **数组参数**：
+  - 正交场景 `createLayer([1])` 建出一个对象（名字空）；
+  - 透视场景的 `p6d3b-default` 里，对它取 `getInitialLayerConfig` 让这段 `init` 静默中止（多半是 jsoncpp 对数组 `removeMember` 出错）。
+  - 语料 0 处。我们按「建出分组节点、配置原文是这个数组」处理，`getInitialLayerConfig` 返回数组；中止不复刻，是边角差异。
+- **路径不存在**的模型（`models/nothere.json`）：WPE 日志一条 `Material error … Syntax error`，层照样建出（不画）。
 
 ## 验收
 
@@ -453,4 +594,45 @@ export interface SceneStructure {
   - **影响面**：全库运行时撞到没实现 API、又判为能渲染的只有这一张。
   - **WPE 对照**：抓帧 `A:\p6d3\2887\`，整帧图与我们的回放在 `ignore/p6/d3/out/2887/`。
   - **处理**：用户定为 P5（相机）的范围，已转交 `wpe p5 d/d` 会话（2026-11-15）。P6d 这边不做。
+  - **点击报错**：用户又报点书时 `objects/18/visible` 的 `cursorClick` 出错。解码后是 `thisScene.getLayer("hand book").playSingleAnimation("hand turn")`，puppet 动画层 API，没实现。
+    - 用户定为 P12 的范围，已转交 `wpe p12 d/d (fork)` 会话（2026-11-15）。
+    - 全部脚本解码（`ignore/p6/d3/scene_missing.py`，结果 `ignore/p6/d3/out/2887/all/`）后对照缺口表，这张场景没实现的只剩它一个。
 - **测试工程**：`p6d3-struct` / `p6d3-parent` / `p6d3-attach` / `p6d-tree` 留在 dev 库里（清单 `ignore/p6/d3/import.json`，图片 15299–15302），给用户看 I8，之后用 `projects_remove` 移除。
+
+### P6d3b（2026-11-16）
+
+- **执行**：同一个工作树（基点 `18dc5475`），两个 sonnet 执行代理分两段做：
+  - **C**：点 9 的纯函数（`createConfig.ts`）、图层壳取值（`layerShell.ts`）、assets 名单（`assetPaths.ts`）、点 11 的脚本收集、点 12 的编译侧；
+  - **D**：运行时（`addScripts`、`__workshopId`）、API（`createLayer`、待编对象、id）、宿主（`init` 里建层放弃重编、运行中建层重编）、dev 探针的两遍渲染。
+- **执行代理自己定的**：
+  - **`createdIds`**：建出时发的 id 整个会话保留，编进 bundle 后 `getLayerByID` 仍找得到；
+  - **父的解析位置**：API 先按 JSON id 解析出父的下标，再交给宿主；
+  - **`alignmentSizes`**：待编图像层也登记，否则脚本写 `alignment` 不生效；
+  - **探针写入**：API 写入也进重放表（`apiWrite`），补编后 `swap` 才有可重放的写入。
+- **我审阅时改的**：
+  - **重编条件**：宿主只在 `init` 在跑（`runtimeTask`）时只记结构，原来是「状态不是 ready」。首帧之后、ready 之前（等视频首帧最多 2 s）的 `update` 里建的层原来会一直不编；
+  - **id 进配置原文**：编译按 `object.id ?? 图层个数` 发号，不写进去就和已有图层撞号（bars 工程里 BG 是 3），重编译前后按字符串 id 查也不一致。`normalizeConfig` 去掉顶层 `id`，`getInitialLayerConfig` 不受影响。
+- **对照后改的**（WPE 日志逐行比时发现）：
+  - **图层 `name` 可写**（`wpe-clone`）：原来只有 getter，`c1.name = 'C1'` 在严格模式下抛错，整段 `init` 中止。现在同 effect 的 `name`：存在 API 这边、跨重编译保留；
+  - **待编图像层装骨骼方法**（`wpe-bars` 的键数）：原来只看已编译的 `alignment`，少 5 个方法；
+  - **缺省模型不过 RP**（`wpe-asset` 的 `arg color`）：assets 名单只收脚本里的路径字面量、查不到缺省模型，原来被改写成 `models/workshop/123/util/…`。单测之前把缺省模型放进了 `inAssets`，所以没发现；
+  - **effect 键序 `name`、`visible`**（`wpe-asset` 的 `fx name write`）；
+  - **删掉冗余**：`objectById` 里遍历待编对象的循环（`createdIds` 已覆盖），变异检查查出来的。
+- **合并**：`merge_into_main.py` 三方合并（备份 `ignore/p6/d3/merge/pre2`）：
+  - 22 个文件直接拷入，6 个三方合并；
+  - 4 个冲突是 P5 会话未提交的 P5e（`getCameraTransforms` / `setCameraTransforms`、`beginScriptInit` / `finishScriptInit`），手工合并成两边都留：
+    - 缺口表两边删的都删；
+    - 探针在 `finishScriptInit` 后把被 `scene.json` 覆盖的相机基准写入从重放表去掉，同宿主（补编后 `swap` 重放时不复活）。这一行依赖 P5e，所以只在主工作区里，不进 P6d3b 的提交；
+  - 合并后在主工作区改的（上面「对照后改的」）同步回工作树，`ignore/p6/d3/check_sync.py` 核对：工作树（HEAD + 本步）与主工作区只差这 4 个手工合并的文件。
+- **验证**：结果见回归文档「场景壁纸 P6d3b」J1–J8：
+  - 逐行比：clone 42/42、order 48/48；bars、asset 只差图层对象的自有键数（已编译图层同样如此）与编译前的自动尺寸；default 只差 WPE 中止的那段；
+  - 逐像素比：`p6d3b-bars` 0 像素不同；
+  - 语料：解锁 4 张音频条，没有新增的键；编译产物在没有结构变化时与 HEAD 逐字节相同（差别只在去掉缺口键的 14 张的 `unsupported` 及其连带的纹理解码）；
+  - 变异检查：13/13；
+  - 首次加载多编一次约 0.2 s。
+- **留下的已知差异**：
+  - 编译前读不到自动尺寸、effect、材质、骨骼；
+  - 运行中建的层晚一段才画（P6d4）；
+  - WPE 对数组配置取 `getInitialLayerConfig` 时中止 `init`，不复刻。
+- **另记**：图层对象的自有键数 WPE 比我们多（图像层 59 / 30，普通对象 21 / 24），P6d1 起就有、和建层无关，要补得先在 WPE 里列出键名。
+- **测试工程**：`p6d3b-bars` / `p6d3b-clone` / `p6d3b-default` / `p6d-order` / `p6d-asset` 留在 dev 库里（清单 `ignore/p6/d3/import-b.json`，图片 15315–15319），给用户看 J10，之后用 `projects_remove` 移除。

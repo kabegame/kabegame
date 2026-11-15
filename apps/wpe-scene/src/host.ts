@@ -51,7 +51,15 @@ import { schemeColor } from "./sceneStyle";
 import { instanceControlPoint, type InstanceField } from "./compile/particles";
 import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
 import { applyScriptedProperties } from "./script/initialApply";
-import { recordDestroyed, recordReparent, reparentNeedsRecompile, settleDestroyed } from "./script/structure";
+import {
+  createStructureObject,
+  recordDestroyed,
+  recordReparent,
+  reparentNeedsRecompile,
+  settleDestroyed,
+  syncAllocator,
+  type ObjectAllocator,
+} from "./script/structure";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, scriptDiagnostics, type ScriptTarget, type ScriptValue } from "./script/runtime";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "./script/stateWrite";
@@ -237,7 +245,9 @@ export class SceneHost {
    * 运行中改过的场景结构（P6d3a）：删掉的对象、换过的父。每次 `reload` 交给编译（删掉的不回来、换过的父保留），跨重编译保留；
    * 「清空脚本存储」时清空，回到 `scene.json` 原样。
    */
-  private readonly structure: SceneStructure = { destroyed: [], parents: [] };
+  private readonly structure: SceneStructure = { destroyed: [], parents: [], created: [] };
+  /** 新建对象的下标分配器（P6d3b）：只增不减、跨重编译保留，「清空脚本存储」时清零；每份新 bundle 换上 / 编出时 `syncAllocator`。 */
+  private readonly allocator: ObjectAllocator = { next: 0 };
   private scriptReloadPending = false;
   private scriptReloadRunning = false;
   private reloading = false;
@@ -509,6 +519,8 @@ export class SceneHost {
     this.scriptOverrides.clear();
     this.structure.destroyed = [];
     this.structure.parents = [];
+    this.structure.created = [];
+    this.allocator.next = 0;
     this.scriptNeedsFullApply = true;
     const backend = browserStorage();
     if (backend) clearSceneStorage(backend, imageId);
@@ -654,6 +666,26 @@ export class SceneHost {
     this.stats.recompiled.push({ reason: `script（setParent ${change.object}）`, keys: [] });
     this.options.report.debug(`场景脚本换父改了组或挂点：${change.object}`);
     this.requestScriptReload();
+  }
+
+  /**
+   * `createLayer` 的落点（P6d3b）：在脚本状态上建出待编对象并记进结构（`createStructureObject`），然后安排重编译。
+   * - `init` 还在跑（`runtimeTask`，首次加载或清空脚本存储后）只记结构：`reload` 在脚本环境建好之后比较编译用的结构与现在的，多了就放弃本次、
+   *   带结构重新加载，首帧画的就是带新对象的 bundle；
+   * - 其余时候请求一次重编译（`requestScriptReload` 合并多次请求；加载进行中只挂起，这次加载结束、状态 ready 时再来一次，所以首帧之后、
+   *   ready 之前的 `update` 里建的也不丢）。已知差异：新对象晚一段才画出来。
+   */
+  private onCreateLayer(config: string, parent: number | null): number | null {
+    const state = this.scriptState;
+    if (!state) return null;
+    syncAllocator(this.allocator, this.scriptBundle);
+    const object = createStructureObject(state, this.structure, this.allocator, config, parent);
+    if (object === null) return null;
+    this.options.report.debug(`场景脚本建了图层：${object}`);
+    if (this.runtimeTask) return object;
+    this.stats.recompiled.push({ reason: `script（createLayer ${object}）`, keys: [] });
+    this.requestScriptReload();
+    return object;
   }
 
   /**
@@ -945,6 +977,10 @@ export class SceneHost {
         attachPose: (object) => this.renderer?.attachMatrix(object) ?? null,
         structure: () => this.structure,
         reparented: (change) => this.onReparented(change),
+        // `createLayer`（P6d3b）：当前脚本的 `__workshopId` 取自运行时；建层与新对象上的脚本经宿主落到状态与运行时
+        workshopId: () => this.runtime?.currentWorkshopId() ?? null,
+        createLayer: (config, parent) => this.onCreateLayer(config, parent),
+        addScripts: (scripts) => this.runtime?.addScripts(scripts),
         warn: (message) => this.options.report.warn(message),
         // 全局 `input`（P6c）：每次读都取渲染器最近一帧给的光标快照
         cursorInput: () => this.cursorInput,
@@ -1619,6 +1655,8 @@ export class SceneHost {
         [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
       );
       compiledWith = { ...userProperties };
+      // 这次编译用的新建对象个数（P6d3b）：脚本 `init` 之后结构里的更多，说明 `init` 里建了层，这份 bundle 不带它们
+      const createdAtCompile = this.structure.created.length;
       const bundle = await compileSceneInWorker({
         projectDir: target.path,
         sceneAssets: target.sceneAssets,
@@ -1627,6 +1665,7 @@ export class SceneHost {
         structure: {
           destroyed: [...this.structure.destroyed],
           parents: this.structure.parents.map((item) => [...item]) as SceneStructure["parents"],
+          created: this.structure.created.map((item) => ({ ...item })),
         },
         postprocess: setting,
         reflection,
@@ -1682,6 +1721,7 @@ export class SceneHost {
       if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
         this.scriptBundle = bundle;
         this.scriptState = SceneState.fromBundle(bundle);
+        syncAllocator(this.allocator, bundle);
         // 先按新 bundle 建好动画播放器，`init` 里的 getAnimation().play() 才有落点（见 `pendingAnimations`）
         const player = new SceneAnimations(bundle.animations ?? []);
         // 加载期间又来一次加载（重编译）：脚本环境已经建好或正在跑 `init`（`runtime` 已赋值），之前的 `init` 控制的是上一份待用播放器，
@@ -1694,6 +1734,15 @@ export class SceneHost {
         this.pendingPuppets = { bundle, puppets: pendingPuppets };
         await this.ensureRuntime(bundle, target.sceneAssets);
         if (id !== this.generation) return;
+        // `init` 里建了层（P6d3b，rea-p6d-layers 5）：放弃本次加载、带着结构立刻重编。脚本环境保留（`init` 不重跑），第二次编完才建 GPU 资源、
+        // 画首帧，画面与 WPE 一样；不画旧 bundle 的首帧。`pendingAnimations` / `pendingPuppets` 走上面「加载期间又来一次加载」的接续
+        if (this.structure.created.length > createdAtCompile) {
+          this.options.report.debug(
+            `场景脚本 init 里建了 ${this.structure.created.length - createdAtCompile} 个图层，带结构重新编译`,
+          );
+          void this.reload();
+          return;
+        }
       }
       load.mark("取设备");
       const current = await this.ensureRenderer();
@@ -1735,6 +1784,10 @@ export class SceneHost {
           this.drawingBundle = bundle;
           this.scriptBundle = bundle;
           this.scriptState = state;
+          // 新建对象编进了 bundle（P6d3b）：脚本条目换成新 bundle 里的（常量目标等由编译填好）、API 的待编对象清掉、分配器对齐
+          syncAllocator(this.allocator, bundle);
+          this.runtime?.refreshScripts(bundle.scripts.list);
+          this.scriptApi?.adoptBundle();
           // 关键帧动画（P10a 步骤 3）在这里换，不在编译完就换：换上之前旧场景还在画，要接着用自己的动画；时钟也不能在建 GPU 资源期间
           // 停住再接（`carryOver` 拷的是这一刻的时间）。换上就按当前时钟写一次：暂停中重编译时首帧不跑 `beforeFrame`，不写的话先闪一下
           // 编译期的 `value`。在重放脚本写入之前：一帧里动画先写、脚本后写（rea-p10-keyframes 第 9 节）。手写的测试 bundle 可能没有动画表

@@ -47,6 +47,7 @@ import {
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
+import type { LayerShellValues } from "../compile/layerShell";
 import { normalizePassState, type PassStateField } from "../compile/passState";
 import {
   INSTANCE_RATE_MIN,
@@ -212,6 +213,38 @@ function layerStateOf(layer: SceneLayer): LayerState {
     state.alignment = layer.alignment;
     const offset = alignmentOffset(layer.alignment, layer.size);
     if (offset[0] !== 0 || offset[1] !== 0) state.offset = offset;
+  }
+  return state;
+}
+
+/**
+ * 按图层壳的取值建图层状态（P6d3b，运行时 `createLayer` 的待编对象）：字段与 `layerStateOf` 同一份。`imageLayer` 为真时带 `alignment`
+ * （图像层才有）；偏移要尺寸，编译前 `shell.size` 为空就不写（已知差异：编完用编译产物的状态重放）。
+ */
+export function layerStateFromShell(
+  shell: LayerShellValues,
+  parent: number | null,
+  options: { imageLayer?: boolean } = {},
+): LayerState {
+  const state: LayerState = {
+    origin: [...shell.origin],
+    scale: [...shell.scale],
+    angles: [...shell.angles],
+    rotation: null,
+    alpha: shell.alpha,
+    color: [...shell.color],
+    brightness: shell.brightness,
+    visible: shell.visible,
+    parallaxDepth: [...shell.parallaxDepth],
+    solid: shell.solid,
+    parent,
+  };
+  if (options.imageLayer) {
+    state.alignment = shell.alignment;
+    if (shell.size.length >= 2) {
+      const offset = alignmentOffset(shell.alignment, shell.size);
+      if (offset[0] !== 0 || offset[1] !== 0) state.offset = offset;
+    }
   }
   return state;
 }
@@ -571,6 +604,23 @@ export class SceneState {
     this.order.splice(target, 0, object);
     this.structureVersion++;
     return true;
+  }
+
+  /**
+   * 新建对象（P6d3b，`createLayer` 的待编对象）：写 `layers`、追加到 `order` 尾、父不为空时追加到父的子表尾（WPE 的 `createLayer` 不跑加载末的
+   * 补挂，父的存在性由调用方查）。`size` 是图像层的尺寸（缺省未知 0×0）。键沿用 `objects` 下标空间，所以调用方给的下标必须是新的。
+   */
+  addLayer(object: number, layer: LayerState, size: readonly number[] = [0, 0]): void {
+    this.layers.set(object, layer);
+    // 图像层脚本写 `alignment` 要按尺寸重算偏移（`writeAlignment`）；编译前尺寸未知给 0×0（偏移为 0，编完由重放补上）
+    if (layer.alignment !== undefined) this.alignmentSizes.set(object, [...size]);
+    this.order.push(object);
+    if (layer.parent !== null) {
+      const list = this.children.get(layer.parent);
+      if (list) list.push(object);
+      else this.children.set(layer.parent, [object]);
+    }
+    this.structureVersion++;
   }
 
   /**

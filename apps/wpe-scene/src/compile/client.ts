@@ -113,7 +113,7 @@ async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> 
       sceneAssets: input.sceneAssets,
       userProperties: input.userProperties ?? {},
       scriptOverrides: input.scriptOverrides ?? {},
-      structure: input.structure ?? { destroyed: [], parents: [] },
+      structure: input.structure ?? { destroyed: [], parents: [], created: [] },
       postprocess: input.postprocess ?? "follow",
       reflection: input.reflection ?? "follow",
       shadows: input.shadows ?? "follow",

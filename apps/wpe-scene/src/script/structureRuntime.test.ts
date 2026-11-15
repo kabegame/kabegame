@@ -313,6 +313,7 @@ describe("结构记录", () => {
   it("recordDestroyed 追加去重，并去掉被删对象自己的换父记录", () => {
     const structure: SceneStructure = {
       destroyed: [],
+      created: [],
       parents: [
         [1, 0, null],
         [2, 0, "tip"],
@@ -325,7 +326,7 @@ describe("结构记录", () => {
   });
 
   it("recordReparent：同一个对象只留最后一条，位置在最后", () => {
-    const structure: SceneStructure = { destroyed: [], parents: [] };
+    const structure: SceneStructure = { destroyed: [], parents: [], created: [] };
     recordReparent(structure, 1, 0, null);
     recordReparent(structure, 2, 0, "tip");
     recordReparent(structure, 1, null, null);

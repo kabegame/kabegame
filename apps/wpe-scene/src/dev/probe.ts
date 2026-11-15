@@ -68,6 +68,7 @@ import { puppetEntries, ScenePuppets, stateSink } from "../puppet/player";
 import type { SceneBundle } from "../compile/bundle";
 import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker } from "../compile/client";
+import type { SceneStructure } from "../compile/protocol";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type {
@@ -525,10 +526,46 @@ function encodeCanvasBlit(
 }
 
 /**
+ * 脚本 `init` 里 `createLayer` 建了对象（P6d3b）时，第一遍留给补编那一遍的东西：已经 `init` 过的脚本环境（不重跑 `init`）、新建对象的结构、
+ * 第一遍的状态（补编后的状态要从它 `adoptStructure`）、第一遍的动画 / puppet 运行时（`init` 里的控制要接过去）。
+ */
+interface ProbeCarry {
+  scripts: ProbeScripts;
+  structure: SceneStructure;
+  state: SceneState;
+  animations: SceneAnimations | null;
+  puppets: ScenePuppets | null;
+}
+interface ProbeRestart {
+  restart: ProbeCarry;
+}
+
+/**
  * 编译并按固定时刻渲染一帧，读回离屏场景目标（不经过页面上的画布、不做铺放）；给了 `canvas` 时读回按 `fill` 上屏到这么大的画布
  * （`encodeCanvasBlit`）。
+ *
+ * 脚本 `init` 里建了层（P6d3b，`createLayer`）时探针和宿主一样要补编：第一遍编译、建场景、跑 `init`，发现结构里多了新建对象就放弃这一遍
+ * （释放场景与设备，脚本环境留下），带着结构再编译、重建场景，`swap` 换上新 bundle / 状态后照常逐帧。回放中途（`update` 里）建的层探针
+ * 补编不了，记进结果 `scripts.recompile`。
  */
 export async function renderFrame(options: RenderFrameOptions): Promise<RenderFrameResult> {
+  const first = await renderFramePass(options, null);
+  if (!("restart" in first)) return first;
+  try {
+    const second = await renderFramePass(options, first.restart);
+    // 第二遍带着 carry，不会再要求补编
+    if ("restart" in second) throw new Error("探针补编之后又要求补编");
+    return second;
+  } finally {
+    // 第二遍里脚本环境交给了它自己的 finally；这里兜底（出错发生在接手之前），`dispose` 可以重复调
+    first.restart.scripts.dispose();
+  }
+}
+
+async function renderFramePass(
+  options: RenderFrameOptions,
+  carry: ProbeCarry | null,
+): Promise<RenderFrameResult | ProbeRestart> {
   // 先查读回画布与光标窗口（`window ?? canvas`，两个都给而不同时抛错），参数错时不编译；纹理上限要等取到设备再查
   const canvas = options.canvas === undefined ? undefined : checkCanvas(options.canvas);
   const cursorWindow = pointerWindow(options.window, canvas);
@@ -554,6 +591,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     projectDir: options.projectDir,
     sceneAssets: options.sceneAssets,
     userProperties: options.userProperties,
+    ...(carry ? { structure: carry.structure } : {}),
     postprocess: options.postprocess ?? "disabled",
     reflection: options.reflection ?? reflectionOverride() ?? undefined,
     shadows: options.shadows ?? shadowsOverride() ?? undefined,
@@ -589,6 +627,8 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     const videosReady = sink.prepare();
     videosReady.catch(() => {});
     const state = SceneState.fromBundle(bundle);
+    // 补编的那一遍（P6d3b）：新状态接过第一遍状态里的对象表 / 待删 / 父子（同宿主 `beforeFirstFrame`）
+    if (carry) state.adoptStructure(carry.state);
     const { width: sceneWidth, height: sceneHeight } = bundle.general;
     // 按指定尺寸画（phase-render-size）：正交场景给了 `canvas` 且没要 `scene` 时，场景目标 = 画布，样式做进投影裁切边距；清屏色只在
     // 对齐方式 1 / 3 时要，从属性全集（用户值已并入）取
@@ -688,6 +728,11 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       // （`replayReadback` 的 `puppets`，粒子之后、相机之前），没有回放时按 `time` 定位（`seek`）；profile 帧另用一份
       const puppetList = puppetEntries(bundle.layers);
       const puppets = puppetList.length ? new ScenePuppets(puppetList) : null;
+      // 补编的那一遍：`init` 里对动画 / puppet 的控制在第一遍的运行时上，接过来（同宿主「加载期间又来一次加载」）
+      if (carry) {
+        animations?.carryOver(carry.animations);
+        puppets?.carryOver(carry.puppets);
+      }
       if (puppets) {
         puppets.refresh(stateSink(state));
         scene.setPuppets(puppets);
@@ -707,7 +752,16 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
             scripts: () => probeScripts,
           })
         : null;
-      if (scriptsOptions) {
+      if (scriptsOptions && carry) {
+        // 补编的那一遍：脚本环境是第一遍留下的（`init` 已跑过），换上新 bundle / 状态，写入重放到新状态上
+        probeScripts = carry.scripts;
+        probeScripts.swap?.({
+          bundle,
+          state,
+          ...(animations ? { animations } : {}),
+          ...(puppets ? { puppets } : {}),
+        });
+      } else if (scriptsOptions) {
         probeScripts = createProbeScripts({
           bundle,
           state,
@@ -715,11 +769,24 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
           properties: probeProperties,
           screen: [...(canvas ?? cursorWindow ?? [1920, 1080])],
           options: scriptsOptions,
+          deferOnCreate: true,
           ...(animations ? { animations } : {}),
           ...(puppets ? { puppets } : {}),
           ...(probeMedia ? { media: probeMedia } : {}),
         });
         await probeScripts.load();
+        // `init` 里建了层：放弃这一遍，脚本环境交给补编那一遍（置空让 finally 不释放它）
+        if (probeScripts.needsRestart?.()) {
+          const handoff: ProbeCarry = {
+            scripts: probeScripts,
+            structure: probeScripts.structure!(),
+            state,
+            animations,
+            puppets,
+          };
+          probeScripts = null;
+          return { restart: handoff };
+        }
       }
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];

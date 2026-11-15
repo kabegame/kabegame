@@ -20,6 +20,7 @@ import type { SceneAnimations } from "../animation/player";
 import { mergeProperties, type UserProperty } from "../compile/bindings";
 import { builtinProperties } from "../compile/builtinProperties";
 import type { SceneBundle } from "../compile/bundle";
+import type { SceneStructure } from "../compile/protocol";
 import { SceneFs, type SceneReader } from "../compile/fs";
 import { parseProject, type ProjectJson } from "../compile/model";
 import { scriptMediaCallbacks } from "../media/events";
@@ -43,7 +44,7 @@ import {
 } from "../script/runtime";
 import { applyScriptedProperties } from "../script/initialApply";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "../script/stateWrite";
-import { settleDestroyed } from "../script/structure";
+import { createStructureObject, settleDestroyed, syncAllocator, type ObjectAllocator } from "../script/structure";
 
 /** `renderFrame` 的 `scripts` 给对象时的选项：`clock` 是起点时刻（毫秒时间戳），`seed` 是 `Math.random` 的种子。 */
 export interface ProbeScriptsOptions {
@@ -243,6 +244,8 @@ export interface ProbeScriptsResult {
   unconnected: { sound: number; video: number; particles: number };
   /** 脚本注册过的音频缓冲分辨率（缓冲一直全 0）。 */
   audioResolutions: number[];
+  /** `createLayer` 建出的对象数（P6d3b；`init` 里建的由 `renderFrame` 补编，回放中途建的记进 `recompile`，探针做不了）。 */
+  created: number;
   /** `engine.openUserShortcut` 经门禁（回调类别、参数类型）之后的调用，按发生顺序（P11d）：探针不真的启动，也不发消息。 */
   shortcuts: ProbeShortcutCall[];
   /** 运行时的告警与错误（脚本出错、写回目标不支持……），最多 `MAX_MESSAGES` 条（前面的）。 */
@@ -293,6 +296,21 @@ export interface ProbeScriptsInput {
   media?: { replayAfterInit(callbacks: MediaCallbacks): void };
   /** 建 realm（缺省 `createIframeRealm`，在当前文档里建隐藏 iframe）：单测换成不碰 DOM 的假 realm。 */
   createRealm?: (setup: ProbeRealmSetup) => Promise<ScriptRealm>;
+  /**
+   * `init` 里 `createLayer` 建了对象时，`load()` 在 `init` 之后停下（不套属性值、不交 `applyUserProperties`），等调用方带结构补编后 `swap()`
+   * 换上新 bundle / 状态再补做（同宿主：这两步在最终那份场景的 `beforeFirstFrame`）。`renderFrame` 第一遍给真；补编后的那一遍与单测不给，`load()` 一气做完。
+   */
+  deferOnCreate?: boolean;
+  /** 上一遍（补编前）留下的新建对象结构与分配器：这一遍编译用的就是它，`createLayer` 接着分配下标。 */
+  structure?: SceneStructure;
+}
+
+/** `swap()` 换上的新场景（补编之后）：bundle、状态，以及用新 bundle 重建的动画 / puppet 运行时。 */
+export interface ProbeScriptsSwap {
+  bundle: SceneBundle;
+  state: SceneState;
+  animations?: ProbeScriptsInput["animations"];
+  puppets?: ProbeScriptsInput["puppets"];
 }
 
 export interface ProbeScripts {
@@ -317,12 +335,39 @@ export interface ProbeScripts {
    * `input.*` 读到的快照，场景里有脚本导出了光标回调时命中、派发给运行时。可选：单测的替身可以不给。
    */
   cursor?(input: CursorStepInput): void;
+  /** `createLayer` 建出的对象数（P6d3b）；单测的替身可以不给。 */
+  createdCount?(): number;
+  /** 运行中的新建对象结构（`SceneStructure.created` 有内容）：补编时交给 `compileSceneInWorker`。 */
+  structure?(): SceneStructure;
+  /** `deferOnCreate` 生效、`load()` 停在 `init` 之后：调用方要带结构补编，再 `swap`。 */
+  needsRestart?(): boolean;
+  /**
+   * 补编之后换上新 bundle / 状态（P6d3b，同宿主 `beforeFirstFrame`）：API 与运行时读的 bundle / 状态换成新的、脚本条目换成新 bundle 里的、
+   * 待编对象清掉、分配器对齐，把运行时的写入重放到新状态；`load()` 停过的话补做属性值套用与首次 `applyUserProperties`。
+   * 新状态要先 `adoptStructure(旧状态)`。
+   */
+  swap?(next: ProbeScriptsSwap): void;
   /** 调各段的 `destroy`、释放 realm；可以重复调。 */
   dispose(): void;
 }
 
 export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
-  const { bundle, state, options } = input;
+  const { options } = input;
+  // bundle / 状态 / 动画 / puppet 在 `swap()` 里换（补编之后，P6d3b），闭包都读这几个变量
+  let bundle = input.bundle;
+  let state = input.state;
+  let animations = input.animations;
+  let puppets = input.puppets;
+  /** `createLayer` 的结构与下标分配器（P6d3b）：探针自己持有，补编那一遍从上一遍接过来。 */
+  const structure: SceneStructure = input.structure
+    ? {
+        destroyed: [...input.structure.destroyed],
+        parents: input.structure.parents.map((item) => [...item]) as SceneStructure["parents"],
+        created: input.structure.created.map((item) => ({ ...item })),
+      }
+    : { destroyed: [], parents: [], created: [] };
+  const allocator: ObjectAllocator = { next: 0 };
+  let deferred = false;
   const screen: [number, number] = [input.screen[0], input.screen[1]];
   /** 当前的回放时间与帧时间：`init` 时都是 0。 */
   const clock = { time: 0, frametime: 0 };
@@ -387,6 +432,25 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     return true;
   };
   const read = (target: ScriptTarget) => readScriptState(state, target);
+  /** API 的直接写入：同宿主，写进状态之后记进运行时的重放表（`swap` 把它们重放到新状态上）。 */
+  const apiWrite = (target: ScriptTarget, value: ScriptValue): boolean => {
+    const applied = write(target, value);
+    if (applied) runtime?.rememberWrite(target, value);
+    return applied;
+  };
+  /** `createLayer` 的落点（P6d3b）：建待编对象、记结构；回放中途（`frame` 里）建的探针补编不了，记进 `recompile`。 */
+  const createLayer = (config: string, parent: number | null): number | null => {
+    syncAllocator(allocator, bundle);
+    const object = createStructureObject(state, structure, allocator, config, parent);
+    if (object !== null && frames > 0)
+      recompile.set(`createLayer/${object}`, {
+        path: `createLayer/${object}`,
+        count: 1,
+        firstFrame: frames,
+        value: config,
+      });
+    return object;
+  };
 
   const createRealm =
     input.createRealm ??
@@ -431,8 +495,12 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         frametime: () => clock.frametime,
         runtime: () => clock.time,
         timeOfDay: () => daytimeOf(new Date(now())),
-        write,
+        write: apiWrite,
         read,
+        // `createLayer`（P6d3b）：当前脚本的 `__workshopId` 取自运行时，建层与新对象上的脚本落到状态与运行时
+        workshopId: () => runtime?.currentWorkshopId() ?? null,
+        createLayer,
+        addScripts: (scripts) => runtime?.addScripts(scripts),
         // 声音层、视频纹理、粒子层的方法：落点返回 null（方法空操作），只计数
         sound: () => {
           unconnected.sound++;
@@ -447,20 +515,20 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
           return null;
         },
         // 关键帧动画（P10b）：探针自己的播放器，每次现取
-        animation: (id) => input.animations?.control(id) ?? null,
+        animation: (id) => animations?.control(id) ?? null,
         // puppet 动画层（P12c）：探针自己的运行时，每次现取
         puppetLayers: (object) => {
-          const puppets = input.puppets;
-          return puppets
+          const current = puppets;
+          return current
             ? {
-                count: () => puppets.layerCount(object),
-                find: (name) => puppets.findLayer(object, name),
-                control: (index) => puppets.layer(object, index),
+                count: () => current.layerCount(object),
+                find: (name) => current.findLayer(object, name),
+                control: (index) => current.layer(object, index),
                 // 骨骼脚本方法（P12d-2）
-                boneTransform: (bone) => puppets.boneTransform(object, bone),
-                setBoneTransform: (bone, matrix) => puppets.setBoneTransform(object, bone, matrix),
-                applyBonePhysicsImpulse: (bone, dir, ang) => puppets.applyBonePhysicsImpulse(object, bone, dir, ang),
-                resetBonePhysicsSimulation: (bone) => puppets.resetBonePhysicsSimulation(object, bone),
+                boneTransform: (bone) => current.boneTransform(object, bone),
+                setBoneTransform: (bone, matrix) => current.setBoneTransform(object, bone, matrix),
+                applyBonePhysicsImpulse: (bone, dir, ang) => current.applyBonePhysicsImpulse(object, bone, dir, ang),
+                resetBonePhysicsSimulation: (bone) => current.resetBonePhysicsSimulation(object, bone),
               }
             : null;
         },
@@ -491,7 +559,14 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       scriptApi.setProperties(input.properties);
       // 同宿主：`init` 之后、首次 `applyUserProperties` 之前补发一轮媒体回调（P11c）
       const loaded = runtime;
+      syncAllocator(allocator, bundle);
+      const createdBefore = structure.created.length;
       await loaded.load(bundle.scripts, () => input.media?.replayAfterInit(scriptMediaCallbacks(loaded)));
+      // `init` 里建了层（P6d3b）：停在这里，等调用方带结构补编、`swap` 换上新场景后再套属性值（同宿主在最终那份场景的 `beforeFirstFrame`）
+      if (input.deferOnCreate && structure.created.length > createdBefore) {
+        deferred = true;
+        return;
+      }
       // 同宿主：`init` 之后按属性全集给挂脚本又绑属性的字段套一次属性值（`init` 拿的是 JSON `value`）
       applyScriptedProperties(bundle.bindings, bundle.scripts, input.properties, state, runtime, true);
       // 同宿主首帧之前（`beforeFirstFrame`）：整份用户属性交一次，`engine.userProperties` 从这时起读得到
@@ -514,6 +589,26 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         bundle,
         removed: (objects) => cursorSession.forgetObjects(objects),
       });
+    },
+    createdCount: () => structure.created.length,
+    structure: () => structure,
+    needsRestart: () => deferred,
+    swap(next) {
+      if (disposed) return;
+      bundle = next.bundle;
+      state = next.state;
+      animations = next.animations;
+      puppets = next.puppets;
+      syncAllocator(allocator, bundle);
+      // 新建对象编进了 bundle：脚本条目换成新 bundle 里的、API 的待编对象清掉；写入重放到新状态（同宿主 `beforeFirstFrame`）
+      runtime?.refreshScripts(bundle.scripts.list);
+      api?.adoptBundle();
+      runtime?.replayWrites();
+      if (deferred && runtime) {
+        deferred = false;
+        applyScriptedProperties(bundle.bindings, bundle.scripts, input.properties, state, runtime, true);
+        runtime.applyUserProperties(Object.fromEntries(input.properties), input.properties, bundle.bindings);
+      }
     },
     animationEvent(object, json) {
       if (disposed) return;
@@ -546,6 +641,7 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         recompile: [...recompile.values()].map((item) => ({ ...item })),
         unconnected: { ...unconnected },
         audioResolutions: api?.audioResolutions ?? [],
+        created: structure.created.length,
         shortcuts: shortcutCalls.map((call) => ({ ...call })),
         messages: [...messages],
         console: {

@@ -119,7 +119,7 @@ function setup(specs: LayerSpec[], configs?: (string | null)[]) {
   const state = SceneState.fromBundle(bundle);
   const changes: Change[] = [];
   const warns: string[] = [];
-  const structure: SceneStructure = { destroyed: [], parents: [] };
+  const structure: SceneStructure = { destroyed: [], parents: [], created: [] };
   const access: ScriptApiState = {
     bundle: () => bundle,
     state: () => state,

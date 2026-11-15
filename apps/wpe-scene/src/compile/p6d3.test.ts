@@ -130,7 +130,7 @@ describe("compileScene：结构（点 2）", () => {
 
   it("没有结构时 bundle 与空结构相同，子表是按 objects 的自然顺序", async () => {
     const without = await compile(base());
-    const empty = await compile(base(), { destroyed: [], parents: [] });
+    const empty = await compile(base(), { destroyed: [], parents: [], created: [] });
     expect(empty).toEqual(without);
     expect(without.children).toEqual([[0, [1, 2]]]);
     expect(without.layers.map((layer) => [layer.object, layer.parent])).toEqual([
@@ -142,7 +142,7 @@ describe("compileScene：结构（点 2）", () => {
   });
 
   it("destroyed 的项不进 bundle.layers，下标仍对齐；它的子对象变根、不进子表", async () => {
-    const bundle = await compile(base(), { destroyed: [0], parents: [] });
+    const bundle = await compile(base(), { destroyed: [0], parents: [], created: [] });
     expect(bundle.layers.map((layer) => [layer.object, layer.parent])).toEqual([
       [1, null],
       [2, null],
@@ -168,7 +168,7 @@ describe("compileScene：结构（点 2）", () => {
     const full = await compile(objects);
     expect(full.scripts.list.map((item) => item.layer)).toEqual([0, 1]);
     expect(full.animations?.length).toBe(1);
-    const cut = await compile(objects, { destroyed: [1, 3], parents: [] });
+    const cut = await compile(objects, { destroyed: [1, 3], parents: [], created: [] });
     expect(cut.scripts.list.map((item) => item.layer)).toEqual([0]);
     expect(cut.animations).toEqual([]);
     expect(cut.layers.map((layer) => layer.object)).toEqual([0, 2]);
@@ -188,6 +188,7 @@ describe("compileScene：结构（点 2）", () => {
     // d（3）挂到 a（0）下：a 的子表 [b, c, d]；b（1）挂到 d 下：a 的子表 [c, d]，d 的子表 [b]
     const bundle = await compile(base(), {
       destroyed: [],
+      created: [],
       parents: [
         [3, 0, null],
         [1, 3, null],
@@ -201,13 +202,13 @@ describe("compileScene：结构（点 2）", () => {
   });
 
   it("换父到根（null）与到已删对象都当根；成环的覆盖被断开", async () => {
-    const toRoot = await compile(base(), { destroyed: [], parents: [[1, null, null]] });
+    const toRoot = await compile(base(), { destroyed: [], parents: [[1, null, null]], created: [] });
     expect(toRoot.layers.map((layer) => layer.parent)).toEqual([null, null, 0, null]);
     expect(toRoot.children).toEqual([[0, [2]]]);
-    const toDestroyed = await compile(base(), { destroyed: [3], parents: [[1, 3, null]] });
+    const toDestroyed = await compile(base(), { destroyed: [3], parents: [[1, 3, null]], created: [] });
     expect(toDestroyed.layers.find((layer) => layer.object === 1)?.parent).toBeNull();
     // a 本来是 b 的父；把 a 挂到 b 下成环，断开 a 的父那条边之外的一条
-    const cycle = await compile(base(), { destroyed: [], parents: [[0, 1, null]] });
+    const cycle = await compile(base(), { destroyed: [], parents: [[0, 1, null]], created: [] });
     const parents = cycle.layers.map((layer) => layer.parent);
     expect(parents.some((parent, i) => parent === null && i <= 1)).toBe(true);
     expect(new Set(cycle.layers.map((layer) => layer.object)).size).toBe(4);
@@ -215,7 +216,7 @@ describe("compileScene：结构（点 2）", () => {
 
   it("挂点：改写对象 JSON 的 attachment；null 就删掉", async () => {
     // 没有 puppet 父时 resolveAttachment 找不到，layer.attachment 不写；这里只验证不抛错且父换了
-    const bundle = await compile(base(), { destroyed: [], parents: [[3, 0, "tip"]] });
+    const bundle = await compile(base(), { destroyed: [], parents: [[3, 0, "tip"]], created: [] });
     expect(bundle.layers[3].parent).toBe(0);
     expect(bundle.layers[3].attachment).toBeUndefined();
   });
@@ -287,7 +288,7 @@ describe("normalizeConfig 与 bundle.configs（点 7）", () => {
 
   it("bundle.configs：不是对象的项为 null；取套用 scriptOverrides 与结构之前的原文", async () => {
     const objects = [image({ id: 1, alpha: 0.5 }), null, image({ id: 2, alpha: 0.25 })];
-    const bundle = await compile(objects, { destroyed: [2], parents: [] }, { "objects/0/alpha": [0.9] });
+    const bundle = await compile(objects, { destroyed: [2], parents: [], created: [] }, { "objects/0/alpha": [0.9] });
     expect(bundle.configs).toHaveLength(3);
     expect(bundle.configs![1]).toBeNull();
     expect(JSON.parse(bundle.configs![0]!).alpha).toBe(0.5);

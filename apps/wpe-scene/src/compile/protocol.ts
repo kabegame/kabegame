@@ -21,6 +21,12 @@ export interface FileError {
 export interface SceneStructure {
   destroyed: number[];
   parents: [number, number | null, string | null][];
+  /**
+   * 运行中 `createLayer` 建出的对象（P6d3b）：`object` 是宿主分配的 `objects` 下标（接在加载时的对象之后、只增不复用），`config` 是
+   * `createLayerConfig` 整理后的配置 JSON 文本（对象，或数组 = 空名分组节点）。编译时先把它放到 `scene.objects[object]`（中间空位补 null），
+   * 之后和 `scene.json` 里的对象走同一条路径；`destroyed` 在其后套用，所以建了又删的不编。
+   */
+  created: { object: number; config: string }[];
 }
 
 export type WorkerRequest =
