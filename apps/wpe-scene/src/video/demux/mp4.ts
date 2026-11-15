@@ -40,9 +40,9 @@ export interface VideoTrackIndex {
   /** 视觉样本项里的宽高。 */
   codedWidth: number;
   codedHeight: number;
-  /** `mdhd` 的 timescale。 */
+  /** `mdhd` 的 timescale（Matroska：1e9 / TimecodeScale，每秒的时间码数）。播放器只用 `times`。 */
   timescale: number;
-  /** 容器时长（秒，mvhd，和 containerDuration 一致）。 */
+  /** 容器时长（秒，mvhd / Matroska 的 Info.Duration，和 containerDuration 一致）。 */
   duration: number;
   /** 每个样本按解码顺序：相对视频起点的字节偏移、长度、显示时间（秒，已扣编辑列表）、是否关键帧（1 / 0）。 */
   offsets: Float64Array;
@@ -51,7 +51,10 @@ export interface VideoTrackIndex {
   keys: Uint8Array;
   /** `colr` 盒（nclx / nclc）的标签，没有为 null。 */
   colr: Mp4Colr | null;
-  /** 编辑列表扣掉的 `media_time`（mdhd 时间单位），没有编辑列表为 0。 */
+  /**
+   * 编辑列表扣掉的 `media_time`（mdhd 时间单位），没有编辑列表为 0。Matroska：扣掉的最早显示时间（时间码单位），
+   * `editMediaTime / timescale` 都是扣掉的秒数。
+   */
   editMediaTime: number;
 }
 

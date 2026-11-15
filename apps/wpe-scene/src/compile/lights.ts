@@ -9,7 +9,7 @@
  */
 import type { BindingCollector, BindingTarget } from "./bindings";
 import type { TranslateResult } from "../wpesl2wgsl";
-import { numbers, type SceneObject, type SceneScalar, type SceneValue } from "./model";
+import { isSceneObject, numbers, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 import { layerLocalMatrix } from "../render/layout";
 
 export interface LightCounts {
@@ -186,6 +186,7 @@ export function collectSceneLights(
 ): SceneLight[] {
   const out: SceneLight[] = [];
   objects.forEach((object, index) => {
+    if (!isSceneObject(object)) return;
     const type = object.light;
     const kind: LightKind | null =
       type === "lpoint"
@@ -494,7 +495,7 @@ export function legacyLightUniforms(
   const taken = new Array<boolean>(LEGACY_SLOTS).fill(false);
   const f = Math.fround;
   objects.forEach((object, index) => {
-    if (typeof object.light !== "string") return;
+    if (!isSceneObject(object) || typeof object.light !== "string") return;
     const free = taken.indexOf(false);
     const slot = free < 0 ? 0 : free;
     if (free >= 0) taken[free] = true;

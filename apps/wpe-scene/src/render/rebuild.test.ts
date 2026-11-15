@@ -1487,6 +1487,37 @@ describe("general 字段", () => {
       expect(capture(live)).toEqual(capture(await fresh(lit())));
     });
 
+    it("雾的数值字段（P13f）：就地写与整场重编译逐字节相同，写进声明了雾 uniform 的块", async () => {
+      // 程序另声明 `g_FogDistanceColor`（vec3）与 `g_FogDistanceParams`（vec4），跟在 `litProgram` 的成员后面
+      const fogged = (fields: Partial<GeneralValues> = {}) => {
+        const bundle = lit(fields);
+        bundle.programs = bundle.programs.map((item) => {
+          const base = item as unknown as { uniforms: object[] };
+          return {
+            ...base,
+            uniforms: [
+              ...base.uniforms,
+              { name: "g_FogDistanceColor", type: "vec3<f32>", declared: "vec3", offset: 176, size: 12 },
+              { name: "g_FogDistanceParams", type: "vec4<f32>", declared: "vec4", offset: 192, size: 16 },
+            ],
+            uniformBlockSize: 208,
+          } as unknown as TranslateResult;
+        });
+        return bundle;
+      };
+      const live = await open(fogged());
+      setGeneral(live.state, "fogdistanceend", 9);
+      setGeneral(live.state, "fogdistancecolor", "0.5 0.25 0.125");
+      advance(live);
+      const fields = { fogdistanceend: 9, fogdistancecolor: [0.5, 0.25, 0.125] };
+      expect(capture(live)).toEqual(capture(await fresh(fogged(fields))));
+      for (const draw of internals(live.scene).layers[0].draws) {
+        expect(vec3At(draw, 176)).toEqual([0.5, 0.25, 0.125]);
+        // (start 1, end − start = 8, …)
+        expect(vec3At(draw, 192).slice(0, 2)).toEqual([1, 8]);
+      }
+    });
+
     it("clearenabled 关再开（声明了可变）", async () => {
       const live = await open(lit({ clearcolor: [0.1, 0.2, 0.3] }, true));
       setGeneral(live.state, "clearenabled", false);

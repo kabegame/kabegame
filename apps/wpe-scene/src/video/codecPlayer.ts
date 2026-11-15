@@ -1,13 +1,13 @@
 /**
  * 场景视频纹理的 WebCodecs 播放器（P9d 步骤 2a，phase-9d「总体设计思路」与「步骤 2a」）：一段视频一个 `CodecVideoPlayer`，不经过
- * `<video>`——宿主自己从磁盘区间拆出每一帧的压缩数据（`demux/mp4.ts`），交给 WebCodecs 的 `VideoDecoder` 解码，解出的 `VideoFrame`
- * 由这里按自己的媒体时钟挑出当前帧，GpuScene 画到视频纹理时 `copyExternalImageToTexture(VideoFrame)`。对外语义和 `player.ts` 的
- * `VideoTexturePlayer` 完全相同（WPE 依据见那边的文件头、p9-REPORT「结论」与 rea-p9-video 第 3、4、6、7 节），只换内部：
+ * `<video>`——宿主自己从磁盘区间拆出每一帧的压缩数据（`demux/`，MP4 与 Matroska），交给 WebCodecs 的 `VideoDecoder` 解码，解出的
+ * `VideoFrame` 由这里按自己的媒体时钟挑出当前帧，GpuScene 画到视频纹理时 `copyExternalImageToTexture(VideoFrame)`。对外语义和
+ * `player.ts` 的 `VideoTexturePlayer` 完全相同（WPE 依据见那边的文件头、p9-REPORT「结论」与 rea-p9-video 第 3、4、6、7 节），只换内部：
  *
  * - **读**：`ReadRange`（相对视频起点；缺省按 `source.path` 带 Range 头 `fetch(file:)`，偏移加 `source.start`，核对长度）。先
- *   `indexMp4` 拿帧表；拆不了（Matroska 等）时交给 `onUnsupported`，由 `SceneVideos` 换成旧的 `<video>` 播放器；读本身失败（文件不在、
- *   长度不符）不退回、直接失败，退回去也一样读不到。之后按解码顺序连续读约 4 MiB 一块（`BLOCK_BYTES`），至多两块在手：正在喂的一块与
- *   预读的下一块，喂过去的丢掉。
+ *   `indexVideo` 拿帧表（MP4 / Matroska 按魔数分派）；拆不了（分片 MP4、编码不支持、Matroska 的 lacing 等）时交给 `onUnsupported`，
+ *   由 `SceneVideos` 换成旧的 `<video>` 播放器；读本身失败（文件不在、长度不符）不退回、直接失败，退回去也一样读不到。之后按解码
+ *   顺序连续读约 4 MiB 一块（`BLOCK_BYTES`），至多两块在手：正在喂的一块与预读的下一块，喂过去的丢掉。
  * - **解码**：`decoderConfig(track)`（codec 串、description、照 WPE 的色彩空间，步骤 1 点 2）；`isConfigSupported` 不支持、解码器
  *   `error`、`decode` 抛错 → 失败。解码器只解不播（决策「解码器只解不播」）：按解码顺序吃进、按显示顺序吐出，时钟与挑帧都在这里。
  * - **流控**：解码队列（`decodeQueueSize`）+ 已解出未显示的帧合计不超过 `MAX_AHEAD`（8）。硬件解码的输出帧来自一个有限的池子，
@@ -33,7 +33,8 @@
  */
 import { fileToUrl } from "../fileUrl";
 import { decoderConfig, wpeColor } from "./demux/config";
-import { indexMp4, type ReadRange, type VideoTrackIndex } from "./demux/mp4";
+import { indexVideo } from "./demux/index";
+import type { ReadRange, VideoTrackIndex } from "./demux/mp4";
 import {
   IDLE_FRAMES,
   SEEK_END_MARGIN,
@@ -79,7 +80,7 @@ export interface CodecFactories {
 export interface CodecPlayerOptions extends CodecFactories {
   report: VideoReport;
   /**
-   * 拆包失败（不是 MP4、Matroska、编码不支持等，`indexMp4` 的原因）时调：`SceneVideos` 换成旧的 `<video>` 播放器。之后这个播放器什么
+   * 拆包失败（封装不认识、编码不支持、lacing 等，`indexVideo` 的原因）时调：`SceneVideos` 换成旧的 `<video>` 播放器。之后这个播放器什么
    * 都不做，等着被 `takeScriptState` 收走。不给时按失败处理。
    */
   onUnsupported?: (reason: string) => void;
@@ -253,14 +254,14 @@ export class CodecVideoPlayer {
     // 注入的读取函数同步抛错也当作 reject
     this.read = (start, end) => new Promise<Uint8Array>((resolve) => resolve(base(start, end)));
 
-    // `indexMp4` 不抛错、读失败也变成 `{ error }`：自己记下读的错误，读失败不退回旧播放器（它一样读不到），直接失败
+    // `indexVideo` 不抛错、读失败也变成 `{ error }`：自己记下读的错误，读失败不退回旧播放器（它一样读不到），直接失败
     let readError: unknown = undefined;
     const readForIndex: ReadRange = (start, end) =>
       this.read(start, end).catch((error: unknown) => {
         readError ??= error;
         throw error;
       });
-    void indexMp4(readForIndex, source.end - source.start).then((result) => {
+    void indexVideo(readForIndex, source.end - source.start).then((result) => {
       if (this.disposed || this.failed) return;
       if ("error" in result) {
         if (readError !== undefined) this.fail("场景视频读取失败", readError);

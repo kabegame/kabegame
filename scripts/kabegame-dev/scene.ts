@@ -135,6 +135,24 @@ export async function openHost(s: DevSession, options: { hidden?: boolean; scene
         frame.style.cssText = "position:fixed;left:-20000px;top:0;width:1920px;height:1080px;border:0;pointer-events:none";
         frame.src = url.href;
         document.body.append(frame);
+        // 宿主首次加载等父页面下发场景设置（kabegame:wpe-scene-settings）：这个屏外宿主没有 WpeSceneView 替它回，
+        // 照桌面的全局「壁纸设置」回（follow 原样交给宿主解析，同以前宿主自己读设置）
+        const onRequest = async (event) => {
+          if (!frame.isConnected) return window.removeEventListener("message", onRequest);
+          if (event.source !== frame.contentWindow || event.data?.type !== "kabegame:wpe-scene-style-request") return;
+          const read = (command) => window.__TAURI_INTERNALS__.invoke(command, {}).catch(() => "follow");
+          const [postprocess, reflection, shadows, volumetrics] = await Promise.all([
+            read("get_wpe_scene_postprocess"),
+            read("get_wpe_scene_reflection"),
+            read("get_wpe_scene_shadows"),
+            read("get_wpe_scene_volumetrics"),
+          ]);
+          frame.contentWindow?.postMessage(
+            { type: "kabegame:wpe-scene-settings", postprocess, reflection, shadows, volumetrics },
+            "*",
+          );
+        };
+        window.addEventListener("message", onRequest);
         return true;
       })()`,
     );

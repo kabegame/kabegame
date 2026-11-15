@@ -9,8 +9,6 @@ import type { VideoSink } from "./video/sceneVideos";
 
 const subscribeAudio = vi.fn<(args: Record<string, unknown>) => Promise<void>>();
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
-/** 替身的 `get_wpe_scene_reflection`（P13b1）与 `get_wpe_scene_shadows`（P13d）返回值。 */
-const settings = { reflection: "follow", shadows: "follow" };
 
 // 宿主依赖 IPC、Worker 编译与 WebGPU：都换成替身，只核对加载状态机（P3a 退回路径）与音频订阅（3c 点 0）
 vi.mock("@tauri-apps/api/core", () => ({
@@ -19,9 +17,6 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
   invoke: vi.fn(async (command: string, args: Record<string, unknown>) => {
     if (command === "wpe_scene_target") return { path: "P:/p", sceneAssets: [] };
-    if (command === "get_wpe_scene_postprocess") return "disabled";
-    if (command === "get_wpe_scene_reflection") return settings.reflection;
-    if (command === "get_wpe_scene_shadows") return settings.shadows;
     if (command === "wpe_web_media_subscribe") return subscribeAudio(args);
     return undefined;
   }),
@@ -208,141 +203,100 @@ describe("SceneHost：退回预览图后的属性变化", () => {
   });
 });
 
-describe("SceneHost：场景反射设置（P13b1）", () => {
-  const compiledReflections = () => compile.mock.calls.map(([input]) => (input as { reflection?: string }).reflection);
-  const pushed = (value: unknown) => listeners.get("setting-change")!({ payload: { wpeSceneReflection: value } });
+describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴影 / 体积光）", () => {
+  const compiledWith = () =>
+    compile.mock.calls.map(([input]) => {
+      const { postprocess, reflection, shadows, volumetrics } = input as {
+        postprocess?: string;
+        reflection?: string;
+        shadows?: string;
+        volumetrics?: string;
+      };
+      return [postprocess, reflection, shadows, volumetrics];
+    });
+  const FOLLOW = { postprocess: "follow", reflection: "follow", shadows: "follow", volumetrics: "follow" };
 
   beforeEach(() => {
     vi.stubGlobal("__SCENE_DEV__", false);
     compile.mockReset();
-    settings.reflection = "follow";
     compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  async function load() {
+  async function load(settings?: Record<string, unknown>) {
     const report = reporter();
     const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    if (settings) host.setSceneSettings(settings as never);
     host.applyUserProperties(fx(false));
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
     return { host, report };
   }
 
-  it("加载时读设置并交给编译（读失败 / 不认识的值按跟随）", async () => {
-    settings.reflection = "disabled";
-    const { host } = await load();
-    expect(compiledReflections()).toEqual(["disabled"]);
-    host.dispose();
+  it("加载用父页面先给的值；不认识的值按跟随；没有父页面时不等、按跟随", async () => {
+    const first = await load({ postprocess: "enabled", reflection: "disabled", shadows: "high", volumetrics: "low" });
+    expect(compiledWith()).toEqual([["enabled", "disabled", "high", "low"]]);
+    first.host.dispose();
     compile.mockClear();
-    settings.reflection = "bogus";
-    const second = await load();
-    expect(compiledReflections()).toEqual(["follow"]);
+    // 缺了的项（旧的父页面没有体积光）同不认识的值，按跟随
+    const second = await load({ postprocess: 1, reflection: "bogus", shadows: null });
+    expect(compiledWith()).toEqual([["follow", "follow", "follow", "follow"]]);
     second.host.dispose();
+    compile.mockClear();
+    const third = await load();
+    expect(compiledWith()).toEqual([["follow", "follow", "follow", "follow"]]);
+    third.host.dispose();
   });
 
-  it("推 wpeSceneReflection：值变了重新加载一次（编译带新值、探针记 settings），值不变、别的键不加载", async () => {
-    const { host } = await load();
-    expect(compile).toHaveBeenCalledTimes(1);
-    // 值没变（加载时是 follow）
-    pushed("follow");
-    // 别的键、非法 payload
-    listeners.get("setting-change")!({ payload: { wallpaperPaused: true } });
-    listeners.get("setting-change")!({ payload: null });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(compile).toHaveBeenCalledTimes(1);
-    // 变了
-    settings.reflection = "enabled";
-    pushed("enabled");
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(compiledReflections()).toEqual(["follow", "enabled"]);
-    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["wpeSceneReflection"] });
-    // 再推同一个值：不加载
-    pushed("enabled");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(compile).toHaveBeenCalledTimes(2);
-    host.dispose();
-  });
-
-  it("同一条 setting-change 带两项设置：只加载一次，键都记进探针", async () => {
-    const { host } = await load();
-    settings.reflection = "disabled";
-    listeners.get("setting-change")!({ payload: { wpeSceneReflection: "disabled", wpeScenePostprocess: "enabled" } });
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(compile).toHaveBeenCalledTimes(2);
-    expect(host.stats.recompiled.at(-1)).toEqual({
-      reason: "settings",
-      keys: ["wpeScenePostprocess", "wpeSceneReflection"],
-    });
-    host.dispose();
-  });
-});
-
-describe("SceneHost：场景阴影设置（P13d）", () => {
-  const compiledShadows = () => compile.mock.calls.map(([input]) => (input as { shadows?: string }).shadows);
-  const pushed = (value: unknown) => listeners.get("setting-change")!({ payload: { wpeSceneShadows: value } });
-
-  beforeEach(() => {
-    vi.stubGlobal("__SCENE_DEV__", false);
-    compile.mockReset();
-    settings.reflection = "follow";
-    settings.shadows = "follow";
-    compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
-  });
-  afterEach(() => vi.unstubAllGlobals());
-
-  async function load() {
+  it("在 iframe 里：等父页面的第一条设置再编译", async () => {
+    vi.stubGlobal("window", { parent: {} });
     const report = reporter();
     const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
     host.applyUserProperties(fx(false));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).not.toHaveBeenCalled();
+    host.setSceneSettings({ postprocess: "disabled", reflection: "enabled", shadows: "low", volumetrics: "ultra" });
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
-    return { host, report };
-  }
-
-  it("加载时读设置并交给编译（不认识的值按跟随）", async () => {
-    settings.shadows = "high";
-    const { host } = await load();
-    expect(compiledShadows()).toEqual(["high"]);
+    expect(compiledWith()).toEqual([["disabled", "enabled", "low", "ultra"]]);
+    expect(host.stats.recompiled).toEqual([]);
     host.dispose();
-    compile.mockClear();
-    settings.shadows = "bogus";
-    const second = await load();
-    expect(compiledShadows()).toEqual(["follow"]);
-    second.host.dispose();
   });
 
-  it("推 wpeSceneShadows：值变了重新加载一次，值不变、别的键不加载", async () => {
-    const { host } = await load();
-    pushed("follow");
-    listeners.get("setting-change")!({ payload: { wallpaperPaused: true } });
+  it("运行中值变了重新加载一次（编译带新值、探针记 settings），值不变不加载", async () => {
+    const { host } = await load(FOLLOW);
+    expect(compile).toHaveBeenCalledTimes(1);
+    host.setSceneSettings(FOLLOW);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(1);
-    settings.shadows = "disabled";
-    pushed("disabled");
+    host.setSceneSettings({ ...FOLLOW, reflection: "enabled" });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(compiledShadows()).toEqual(["follow", "disabled"]);
-    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["wpeSceneShadows"] });
-    pushed("disabled");
+    expect(compiledWith().at(-1)).toEqual(["follow", "enabled", "follow", "follow"]);
+    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["reflection"] });
+    host.setSceneSettings({ ...FOLLOW, reflection: "enabled" });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(2);
     host.dispose();
   });
 
-  it("三项设置同一条里一起变：只加载一次，键都记进探针", async () => {
-    const { host } = await load();
-    settings.reflection = "disabled";
-    settings.shadows = "ultra";
-    listeners.get("setting-change")!({
-      payload: { wpeSceneReflection: "disabled", wpeScenePostprocess: "enabled", wpeSceneShadows: "ultra" },
-    });
+  it("四项一起变：只加载一次，键都记进探针", async () => {
+    const { host } = await load(FOLLOW);
+    host.setSceneSettings({ postprocess: "enabled", reflection: "disabled", shadows: "ultra", volumetrics: "high" });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(2);
-    expect(compiledShadows()).toEqual(["follow", "ultra"]);
+    expect(compiledWith().at(-1)).toEqual(["enabled", "disabled", "ultra", "high"]);
     expect(host.stats.recompiled.at(-1)).toEqual({
       reason: "settings",
-      keys: ["wpeScenePostprocess", "wpeSceneReflection", "wpeSceneShadows"],
+      keys: ["postprocess", "reflection", "shadows", "volumetrics"],
     });
+    host.dispose();
+  });
+
+  it("只改体积光：重新加载一次（P13e，档位决定 RT 与 QUALITY）", async () => {
+    const { host } = await load(FOLLOW);
+    host.setSceneSettings({ ...FOLLOW, volumetrics: "disabled" });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect(compiledWith().at(-1)).toEqual(["follow", "follow", "follow", "disabled"]);
+    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["volumetrics"] });
     host.dispose();
   });
 });
@@ -948,7 +902,8 @@ describe("SceneHost：视频纹理（P9a 步骤 2）", () => {
     let gate: Promise<void> = Promise.resolve();
     rendererPointer.load.mockImplementation(async (_bundle: unknown, options?: unknown) => {
       await gate;
-      (options as { beforeFirstFrame?: (state: unknown) => void }).beforeFirstFrame?.({});
+      // 替身状态要有 `adoptStructure`（P6d3a：宿主在首帧前接旧状态的结构）
+      (options as { beforeFirstFrame?: (state: unknown) => void }).beforeFirstFrame?.({ adoptStructure() {} });
     });
     const report = reporter();
     const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
@@ -974,6 +929,86 @@ describe("SceneHost：视频纹理（P9a 步骤 2）", () => {
     log.length = 0;
     sink.drawn(0);
     expect(log).toEqual(["drawn 0"]);
+    host.dispose();
+  });
+});
+
+describe("SceneHost：加载进度（壁纸显示重构步骤 2）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    compile.mockImplementation(async (input) => {
+      const { onProgress } = input as { onProgress?: (stage: string, done: number, total: number) => void };
+      onProgress?.("compile", 0, 3);
+      onProgress?.("compile", 3, 3);
+      onProgress?.("decode", 0, 0);
+      return { ...bundleFor(input.userProperties), bindings: [] };
+    });
+    rendererPointer.load.mockImplementation(async (_bundle, options) => {
+      const { onProgress } = options as { onProgress?: (stage: string, done: number, total: number) => void };
+      onProgress?.("gpu", 0, 2);
+      onProgress?.("gpu", 2, 2);
+      onProgress?.("frame", 0, 1);
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rendererPointer.load.mockReset();
+    rendererPointer.load.mockImplementation(async () => {});
+  });
+
+  it("首次加载按阶段报进度、最后报首帧；开始渲染的日志带分段用时；之后的重新加载不报", async () => {
+    const report = { ...reporter(), progress: vi.fn() };
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(report.progress.mock.calls).toEqual([
+      ["compile", 0, 3],
+      ["compile", 3, 3],
+      ["decode", 0, 0],
+      ["prepare", 0, 1],
+      ["gpu", 0, 2],
+      ["gpu", 2, 2],
+      ["frame", 0, 1],
+      ["frame", 1, 1],
+    ]);
+    const started = report.info.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes("开始渲染"));
+    expect(started).toMatch(
+      /（等目标与设置 \d+ ms、编译 \d+ ms、解码 \d+ ms、准备 \d+ ms、取设备 \d+ ms、建 GPU 场景 \d+ ms、首帧 \d+ ms）/,
+    );
+
+    report.progress.mockClear();
+    host.setSceneSettings({ postprocess: "disabled", reflection: "follow", shadows: "follow", volumetrics: "follow" });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(report.progress).not.toHaveBeenCalled();
+    host.dispose();
+  });
+
+  it("被新的加载取代后，旧加载的进度不再报", async () => {
+    let release!: () => void;
+    compile.mockImplementationOnce(async (input) => {
+      const { onProgress } = input as { onProgress?: (stage: string, done: number, total: number) => void };
+      onProgress?.("compile", 0, 4);
+      await new Promise<void>((resolve) => (release = resolve));
+      onProgress?.("compile", 4, 4);
+      return { ...bundleFor(input.userProperties), bindings: [] };
+    });
+    const report = { ...reporter(), progress: vi.fn() };
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(1));
+    // 加载中设置变了：起第二次加载，第一次作废
+    host.setSceneSettings({ postprocess: "disabled", reflection: "follow", shadows: "follow", volumetrics: "follow" });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    const before = report.progress.mock.calls.length;
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(report.progress.mock.calls.length).toBe(before);
+    expect(report.progress.mock.calls).not.toContainEqual(["compile", 4, 4]);
     host.dispose();
   });
 });

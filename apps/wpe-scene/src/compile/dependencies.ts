@@ -7,7 +7,7 @@
  * - 材质槽里写的这个名字在材质创建时按名字绑到那张 RT（`ScenePass.layerComposites`），绑不上的一直是 6×6 的黄黑棋盘格（`checkerTexture`）。
  */
 import type { SceneTexture } from "./bundle";
-import type { SceneObject } from "./model";
+import { isSceneObject, type SceneObject } from "./model";
 
 /** 合成 RT 的名字前缀（rea-p8-render 2.1，字符串 `0x1404906f8`）。 */
 export const LAYER_COMPOSITE_PREFIX = "_rt_imageLayerComposite_";
@@ -36,8 +36,9 @@ function dependencyElements(value: unknown): unknown[] {
 export function dependencyIds(objects: readonly SceneObject[]): Set<number> {
   const ids = new Set<number>();
   for (const object of objects)
-    for (const element of dependencyElements(object.dependencies))
-      if (typeof element === "number" && Number.isInteger(element) && element >= 0) ids.add(element);
+    if (isSceneObject(object))
+      for (const element of dependencyElements(object.dependencies))
+        if (typeof element === "number" && Number.isInteger(element) && element >= 0) ids.add(element);
   return ids;
 }
 

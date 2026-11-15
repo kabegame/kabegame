@@ -63,17 +63,28 @@ export class TextureDecodeCache {
 /**
  * 把 bundle 里 FreeImage 纹理的 mip 解成位图填进 `mips`（就地修改）。解码失败抛错，由调用方按编译失败退回。
  * 之后只保留本 bundle 用到的缓存项。`unsupported` 非空（且不是强制渲染）时调用方不必调用：渲染器不会用这些纹理。
+ * `onProgress`：加载进度（`progress.ts` 的 `decode` 阶段），开解前报一次 `0 / 总 mip 数`，之后每解完一个 mip 报一次。
  */
-export async function decodeEncodedTextures(bundle: SceneBundle, cache: TextureDecodeCache): Promise<void> {
+export async function decodeEncodedTextures(
+  bundle: SceneBundle,
+  cache: TextureDecodeCache,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
   const used = new Set<string>();
+  const pending = bundle.textures.filter((texture) => texture.encoded && !texture.mips.length);
+  const total = pending.reduce((sum, texture) => sum + texture.encoded!.mips.length, 0);
+  let done = 0;
+  onProgress?.(0, total);
   await Promise.all(
-    bundle.textures.map(async (texture) => {
-      const encoded = texture.encoded;
-      if (!encoded || texture.mips.length) return;
+    pending.map(async (texture) => {
+      const encoded = texture.encoded!;
       const bitmaps = await Promise.all(
         encoded.mips.map((mip) => {
           used.add(`${encoded.path}|${mip.start}|${mip.end}`);
-          return cache.get(encoded.path, mip.start, mip.end, encoded.mime);
+          return cache.get(encoded.path, mip.start, mip.end, encoded.mime).then((bitmap) => {
+            onProgress?.(++done, total);
+            return bitmap;
+          });
         }),
       );
       texture.mips = bitmaps.map((bitmap) => ({ width: bitmap.width, height: bitmap.height, bitmap }));

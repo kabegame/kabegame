@@ -1629,9 +1629,9 @@ describe("passAlphaWriting / materialCombos（P8 步骤 5，rea-p8-render 4.3、
     for (const pass of neutral) expect(passAlphaWriting(pass), JSON.stringify(pass)).toEqual({});
   });
 
-  it("materialCombos：别的混合原样返回材质的 combos（同一个对象，翻译请求与缓存键不变），缺省时空对象", () => {
+  it("materialCombos：别的混合原样返回材质的 combos（同一个对象，翻译请求与缓存键不变），缺省时空对象；additive 见 p13f-fog.test.ts", () => {
     const combos = { LIGHTING: 1 };
-    for (const blending of [undefined, "normal", "translucent", "additive", "AlphaToCoverage"])
+    for (const blending of [undefined, "normal", "translucent", "Additive", "AlphaToCoverage"])
       expect(materialCombos({ blending, combos }), String(blending)).toBe(combos);
     expect(materialCombos({ blending: "normal" })).toEqual({});
   });

@@ -88,6 +88,10 @@ pub struct TranslateRequest {
     /// 材质默认开光照的情况调用方翻译前不知道，所以由这里按最终取值裁决。
     #[serde(default, rename = "litDefines")]
     pub lit_defines: BTreeMap<String, String>,
+    /// 只在最终组合表里有 `FOG` 且不为 0 时生效的宏：`FOG_DIST` / `FOG_HEIGHT`（P13f，WPE 在材质加载时按 general 的雾开关与
+    /// 组合表里的 `FOG` 定，`FUN_1401a5c40` 的 `0x1401a64a0` 段）。`FOG` 常来自着色器注解的缺省值，同 `litDefines` 由这里裁决。
+    #[serde(default, rename = "fogDefines")]
+    pub fog_defines: BTreeMap<String, String>,
     /// 成功时也带上生成的 GLSL 450，便于排查。
     #[serde(default)]
     pub debug: bool,
@@ -378,6 +382,9 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
     defines.extend(request.defines.clone());
     if defines.get("LIGHTING").is_some_and(|value| value != "0") {
         defines.extend(request.lit_defines.clone());
+    }
+    if defines.get("FOG").is_some_and(|value| value != "0") {
+        defines.extend(request.fog_defines.clone());
     }
 
     // 3. 预处理两段
@@ -1213,6 +1220,30 @@ vec3 PointSegmentDelta(vec3 p, vec3 a, vec3 b) { return a - p; }
         let result = translate(&req);
         assert!(result.ok, "{:?}", result.errors);
         assert!(!result.uniforms.iter().any(|u| u.name == "g_Marker"));
+    }
+
+    /// 雾的宏（P13f，p13-REPORT「P13f 的实测」F2）：只在最终 `FOG` 非 0 时生效，`FOG` 可以来自着色器注解的缺省值；
+    /// 组合表里没有 `FOG`（着色器不声明、材质没写）或为 0 时不生效。
+    #[test]
+    fn fog_defines_follow_final_fog_combo() {
+        let marker = "#if FOG_DIST\nuniform vec4 g_Marker;\n#endif\n";
+        let has_marker = |req: &TranslateRequest| {
+            let result = translate(req);
+            assert!(result.ok, "{:?}", result.errors);
+            result.uniforms.iter().any(|u| u.name == "g_Marker")
+        };
+        let mut req = request();
+        req.fragment = format!("// [COMBO] {{\"combo\":\"FOG\",\"default\":1}}\n{marker}{FRAG}");
+        req.fog_defines.insert("FOG_DIST".into(), "1".into());
+        assert!(has_marker(&req), "着色器缺省 FOG 1");
+        req.combos.insert("FOG".into(), Value::from(0));
+        assert!(!has_marker(&req), "材质写 FOG 0");
+        let mut bare = request();
+        bare.fragment = format!("{marker}{FRAG}");
+        bare.fog_defines.insert("FOG_DIST".into(), "1".into());
+        assert!(!has_marker(&bare), "组合表里没有 FOG");
+        bare.combos.insert("FOG".into(), Value::from(1));
+        assert!(has_marker(&bare), "材质自己写 FOG 1");
     }
 
     #[test]

@@ -557,6 +557,7 @@ describe("场景脚本用到 getEffect 时写死关闭的 effect 也进 bundle�
     const rest = (bundle: SceneBundle) => ({
       ...bundle,
       scripts: undefined,
+      configs: undefined, // 加载原文：两份 scene.json 的脚本源码本来就不同（P6d3）
       layers: bundle.layers.map((layer) => ({
         ...layer,
         effects: layer.effects

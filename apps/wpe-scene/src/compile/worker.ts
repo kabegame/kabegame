@@ -46,13 +46,19 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       sceneAssets: message.sceneAssets,
       userProperties: message.userProperties,
       scriptOverrides: message.scriptOverrides,
+      structure: message.structure,
       postprocess: message.postprocess,
       reflection: message.reflection,
       shadows: message.shadows,
+      volumetrics: message.volumetrics,
       force: message.force,
       exhaustive: message.exhaustive,
       reader,
       translator,
+      onProgress: (done, total) => {
+        const progress: WorkerResponse = { type: "progress", done, total };
+        self.postMessage(progress);
+      },
     });
     const response: WorkerResponse = { type: "done", bundle };
     self.postMessage(response, { transfer: transferableBuffers(bundle) });

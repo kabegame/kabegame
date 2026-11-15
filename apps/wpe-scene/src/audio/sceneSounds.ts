@@ -119,6 +119,20 @@ export class SceneSounds {
     for (const { scheduler } of this.entries.values()) scheduler.setGlobalVolume(volume);
   }
 
+  /**
+   * 对象被删（`destroyLayer` 生效，P6d3a）：停掉这些声音对象的播放（`stop`：停掉全部实例、回到开头）、释放播放器并从表里摘掉，之后不再排期。
+   * 不是声音对象的忽略。
+   */
+  remove(objects: Iterable<number>): void {
+    for (const object of objects) {
+      const entry = this.entries.get(object);
+      if (!entry) continue;
+      entry.scheduler.stop();
+      this.entries.delete(object);
+      this.player.release(object);
+    }
+  }
+
   /** 按对象取排期器（步骤 2 的脚本 API 用）。 */
   scheduler(object: number): SoundScheduler | null {
     return this.entries.get(object)?.scheduler ?? null;

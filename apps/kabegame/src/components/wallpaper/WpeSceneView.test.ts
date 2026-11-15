@@ -1,8 +1,17 @@
 // @vitest-environment happy-dom
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nextTick, ref, type Ref } from "vue";
 import WpeSceneView from "./WpeSceneView.vue";
-import { WPE_SCENE_DISPLAY, WPE_SCENE_POINTER, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
+import { WPE_SCENE_PROGRESS } from "./wpeSceneProgress";
+import {
+  WALLPAPER_PREVIEW_ZOOM,
+  WPE_SCENE_DISPLAY,
+  WPE_SCENE_POINTER,
+  WPE_SCENE_SETTINGS,
+  WPE_SCENE_STYLE,
+  WPE_SCENE_STYLE_REQUEST,
+} from "./wpeSceneStyle";
 import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
 import { WPE_SCENE_SHORTCUT } from "./wpeSceneShortcut";
 import { WPE_VOLUME_MESSAGE, WPE_VOLUME_REQUEST } from "./wpeWebVolume";
@@ -77,6 +86,32 @@ describe("WpeSceneView 样式", () => {
     expect(post).toHaveBeenLastCalledWith({ type: WPE_SCENE_STYLE, style: "center" }, "*");
   });
 
+  it("宿主请求时回场景设置（缺省都跟随），设置变了主动推", async () => {
+    const { wrapper, post, fromHost } = await mountView("fit");
+    fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+    const follow = {
+      type: WPE_SCENE_SETTINGS,
+      postprocess: "follow",
+      reflection: "follow",
+      shadows: "follow",
+      volumetrics: "follow",
+    };
+    expect(post).toHaveBeenCalledWith(follow, "*");
+    post.mockClear();
+    const next = { postprocess: "enabled", reflection: "follow", shadows: "low", volumetrics: "follow" };
+    await wrapper.setProps({ sceneSettings: next });
+    expect(post).toHaveBeenCalledExactlyOnceWith({ ...follow, postprocess: "enabled", shadows: "low" }, "*");
+    // 同值的新对象不推
+    await wrapper.setProps({ sceneSettings: { ...next } });
+    expect(post).toHaveBeenCalledOnce();
+    // 只改体积光也推（P13e）
+    await wrapper.setProps({ sceneSettings: { ...next, volumetrics: "ultra" } });
+    expect(post).toHaveBeenLastCalledWith(
+      { ...follow, postprocess: "enabled", shadows: "low", volumetrics: "ultra" },
+      "*",
+    );
+  });
+
   it("别的窗口发来的消息不理", async () => {
     const { post, fromHost } = await mountView();
     fromHost({ type: WPE_SCENE_STYLE_REQUEST }, window);
@@ -130,8 +165,10 @@ describe("WpeSceneView 显示缩放", () => {
   it("挂载：宿主启动时请求，回样式的同时回显示缩放；量不出来时不推", async () => {
     const { post, fromHost, frame } = await mountView("fit");
     fromHost({ type: WPE_SCENE_STYLE_REQUEST });
-    // happy-dom 没有布局：量不出来，只回样式
-    expect(post).toHaveBeenCalledExactlyOnceWith({ type: WPE_SCENE_STYLE, style: "fit" }, "*");
+    // happy-dom 没有布局：量不出来，只回样式（场景设置另算）
+    expect(post.mock.calls.filter(([data]) => (data as { type?: unknown }).type !== WPE_SCENE_SETTINGS)).toEqual([
+      [{ type: WPE_SCENE_STYLE, style: "fit" }, "*"],
+    ]);
     layout(frame, 5760, 1080, 0.18);
     fromHost({ type: WPE_SCENE_STYLE_REQUEST });
     expect(post).toHaveBeenLastCalledWith(displayMessage(0.18), "*");
@@ -183,6 +220,90 @@ describe("WpeSceneView 显示缩放", () => {
     expect(clear).toHaveBeenCalledWith(intervals.findIndex((item) => item.delay === 250) + 1);
     expect(observers.every((item) => !item.targets.has(frame))).toBe(true);
   });
+
+  describe("预览放大", () => {
+    /** 手动推进的 rAF 队列 */
+    let frames: Map<number, FrameRequestCallback>;
+    let nextFrameId: number;
+    const runFrames = () => {
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach((callback) => callback(0));
+    };
+
+    beforeEach(() => {
+      frames = new Map();
+      nextFrameId = 0;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++nextFrameId, callback);
+        return nextFrameId;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    });
+
+    /** 挂在预览画布里：画布提供放大倍数 */
+    async function mountZoomed(zoom: Ref<number>) {
+      const wrapper = mount(WpeSceneView, {
+        props: { target: { id: "7", path: "D:/wpe/7" }, styleMode: "fit", volume: 1 } as never,
+        attachTo: document.body,
+        global: { provide: { [WALLPAPER_PREVIEW_ZOOM as symbol]: zoom } },
+      });
+      wrappers.push(wrapper);
+      await flushPromises();
+      const frame = wrapper.find("iframe").element as HTMLIFrameElement;
+      const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+      return { wrapper, post, frame };
+    }
+
+    it("放大时按 sceneDisplayScale 封顶：画布跟着放大到 1 为止", async () => {
+      const zoom = ref(2);
+      const { post, frame } = await mountZoomed(zoom);
+      // 适应时 0.4，放大 2 倍量到 0.8
+      layout(frame, 2560, 1440, 0.8);
+      poll();
+      expect(post).toHaveBeenLastCalledWith(displayMessage(0.8), "*");
+      // 放大 5 倍量到 2：封顶到 1
+      zoom.value = 5;
+      layout(frame, 2560, 1440, 2);
+      poll();
+      expect(post).toHaveBeenLastCalledWith(displayMessage(1), "*");
+    });
+
+    it("放大倍数一变就在下一帧补量一次，同一帧内多次变化只量一次", async () => {
+      const zoom = ref(1);
+      const { post, frame } = await mountZoomed(zoom);
+      layout(frame, 2560, 1440, 0.4);
+      poll();
+      post.mockClear();
+      zoom.value = 1.5;
+      await nextTick();
+      zoom.value = 2;
+      await nextTick();
+      layout(frame, 2560, 1440, 0.8);
+      expect(displayPosts(post)).toHaveLength(0);
+      expect(frames.size).toBe(1);
+      runFrames();
+      expect(displayPosts(post)).toEqual([[displayMessage(0.8), "*"]]);
+    });
+
+    it("卸载时取消还没跑的那一帧", async () => {
+      const zoom = ref(1);
+      const { wrapper } = await mountZoomed(zoom);
+      zoom.value = 3;
+      await nextTick();
+      expect(frames.size).toBe(1);
+      wrappers.splice(wrappers.indexOf(wrapper), 1);
+      wrapper.unmount();
+      expect(frames.size).toBe(0);
+    });
+
+    it("没有提供方（桌面、应用背景）时就是实测值", async () => {
+      const { post, fromHost, frame } = await mountView();
+      layout(frame, 1000, 500, 2);
+      fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+      expect(post).toHaveBeenLastCalledWith(displayMessage(2), "*");
+    });
+  });
 });
 
 describe("WpeSceneView 右键", () => {
@@ -195,6 +316,18 @@ describe("WpeSceneView 右键", () => {
     expect(wrapper.emitted("contextmenu")).toEqual([[{ x: 300, y: 150 }]]);
     fromHost({ type: WPE_CONTEXT_MENU, x: 1, y: 1 }, window);
     expect(wrapper.emitted("contextmenu")).toHaveLength(1);
+  });
+});
+
+describe("WpeSceneView 加载进度（壁纸显示重构步骤 2）", () => {
+  it("自己 iframe 发的进度原样往上报；别的窗口发的、格式不对的、page 阶段不理", async () => {
+    const { wrapper, fromHost } = await mountView();
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "compile", done: 2, total: 5 });
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "gpu", done: 1, total: 4 }, window);
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "page", done: 0, total: 1 });
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "bogus", done: 0, total: 1 });
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "decode", done: "1", total: 2 });
+    expect(wrapper.emitted("progress")).toEqual([[{ stage: "compile", done: 2, total: 5 }]]);
   });
 });
 

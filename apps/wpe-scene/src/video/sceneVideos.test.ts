@@ -385,9 +385,8 @@ describe("WebCodecs 播放器与退回（P9d 步骤 2a）", () => {
     movie: [1000, 1000],
   }).bytes;
   const clip: SceneVideoSource = { path: "P:/p/materials/clip.tex", start: 0, end: mp4.length };
-  /** Matroska 的头：`indexMp4` 拆不了。 */
-  const mkv = new Uint8Array(64);
-  mkv.set([0x1a, 0x45, 0xdf, 0xa3]);
+  /** 不认识的封装（全 0：不是 EBML 魔数、第一个盒子头也不认识）：`indexVideo` 拆不了。Matroska 自步骤 3 起能拆，不再退回。 */
+  const unknown = new Uint8Array(64);
 
   /** 解码器替身：每个 chunk 在微任务里吐出一帧；记打开的帧数。 */
   function codecSetup() {
@@ -425,7 +424,7 @@ describe("WebCodecs 播放器与退回（P9d 步骤 2a）", () => {
       ...env.factories,
       readRange: (source) => async (start, end) => {
         counter.reads++;
-        return (source.path === clip.path ? mp4 : mkv).slice(start, end);
+        return (source.path === clip.path ? mp4 : unknown).slice(start, end);
       },
       createDecoder,
       isConfigSupported: async () => ({ supported: true }),
@@ -477,7 +476,7 @@ describe("WebCodecs 播放器与退回（P9d 步骤 2a）", () => {
     await flush();
     expect(env.warnings).toHaveLength(1);
     expect(env.warnings[0][0]).toContain("退回 <video>");
-    expect(env.warnings[0][1]).toMatch(/Matroska/);
+    expect(env.warnings[0][1]).toMatch(/不是 MP4/);
     const player = env.videos.player(0)!;
     expect(player).not.toBe(codec);
     expect(env.videos.playerFor(source)).toBe(player);

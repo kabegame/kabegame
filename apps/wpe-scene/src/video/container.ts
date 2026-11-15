@@ -23,7 +23,7 @@ const MAX_MOOV_CHILDREN = 64;
 /** Matroska 只在 `Segment` 内容开头这么多字节里找 `Info`（mkvmerge / FFmpeg 都把它写在 `SeekHead` 之后的前几百字节）。 */
 const MATROSKA_WINDOW = 64 * 1024;
 /** EBML 头（文件开头、`Segment` 之前）的上限，只防畸形大小把一次读放大。 */
-const MAX_EBML_HEADER = 4096;
+export const MAX_EBML_HEADER = 4096;
 
 const EBML_HEADER = 0x1a45dfa3;
 const MATROSKA_SEGMENT = 0x18538067;
@@ -31,7 +31,7 @@ const MATROSKA_INFO = 0x1549a966;
 const MATROSKA_TIMECODE_SCALE = 0x2ad7b1;
 const MATROSKA_DURATION = 0x4489;
 /** `TimecodeScale` 缺省：1 ms（单位纳秒）。 */
-const DEFAULT_TIMECODE_SCALE = 1_000_000;
+export const DEFAULT_TIMECODE_SCALE = 1_000_000;
 
 /**
  * 容器头里的时长（秒）：MP4 的 `mvhd`、Matroska 的 `Info.Duration`。`read` 的区间相对视频数据开头，`length` 是视频数据总长。
@@ -152,7 +152,7 @@ async function isoDuration(read: ContainerRead, length: number, head: Uint8Array
 
 // ———— Matroska / EBML ————
 
-interface Vint {
+export interface Vint {
   value: number;
   length: number;
   /** 大小的值位全为 1：未知长度。 */
@@ -160,7 +160,7 @@ interface Vint {
 }
 
 /** EBML 元素 ID：首字节前导 0 的个数 + 1 是长度（1–4），保留标记位。越界或长度不合法时 null。 */
-function elementId(bytes: Uint8Array, at: number): { value: number; length: number } | null {
+export function elementId(bytes: Uint8Array, at: number): { value: number; length: number } | null {
   if (at >= bytes.length) return null;
   const first = bytes[at];
   const length = first & 0x80 ? 1 : first & 0x40 ? 2 : first & 0x20 ? 3 : first & 0x10 ? 4 : 0;
@@ -171,7 +171,7 @@ function elementId(bytes: Uint8Array, at: number): { value: number; length: numb
 }
 
 /** EBML 变长大小：长度 1–8，去掉标记位；值位全 1 是未知长度。越界、长度不合法、超过安全整数时 null。 */
-function elementSize(bytes: Uint8Array, at: number): Vint | null {
+export function elementSize(bytes: Uint8Array, at: number): Vint | null {
   if (at >= bytes.length) return null;
   const first = bytes[at];
   if (first === 0) return null;

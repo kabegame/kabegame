@@ -14,9 +14,10 @@
       </Button>
     </template>
 
-    <!-- 外框 / 标题栏由 CollapsibleDrawerPanel 提供；视觉对齐 ImageNativeMetadataPanel：分组卡片 + 卡片内无边框条目 -->
+    <!-- 外框 / 标题栏由 CollapsibleDrawerPanel 提供；视觉对齐 ImageNativeMetadataPanel：分组卡片 + 卡片内无边框条目。
+         细滚动条留着（同上面的预览设置面板）：和预览设置分高度后常被压矮，要看得出下面还有 -->
     <div
-      class="kb-selectable flex min-h-0 flex-auto flex-col gap-3 overflow-y-auto px-3 pb-3 pt-0.5 [scrollbar-width:none]"
+      class="kb-selectable flex min-h-0 flex-auto flex-col gap-3 overflow-y-auto px-3 pb-3 pt-0.5 [scrollbar-width:thin]"
     >
       <!-- 恢复默认封面：设过封面才出现，作者属性为空时也在（暂停、设为壁纸封面、清空脚本存储在预览的右键菜单与工具条里） -->
       <section v-if="canRestoreCover" :class="CARD_CLASS" data-testid="wpe-controls">

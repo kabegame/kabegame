@@ -1096,4 +1096,32 @@ describe("读回", () => {
     ]);
     expect(Array.from(convertReadback(raw, "bgra8unorm", 2, 1, 256).data)).toEqual([3, 2, 1, 4, 7, 6, 5, 8]);
   });
+
+  it("convertReadback：r32float 同 depth32float，每纹素一个 f32 摊进 r（P13e 体积光的 Back / Single）", () => {
+    const raw = new Uint8Array(512);
+    const view = new DataView(raw.buffer);
+    view.setFloat32(0, 0.020852185785770416, true);
+    view.setFloat32(4, 1, true);
+    view.setFloat32(256, -2.5, true);
+    const out = convertReadback(raw, "r32float", 2, 2, 256);
+    expect(out.kind).toBe("f32");
+    expect(Array.from(out.data)).toEqual([
+      Math.fround(0.020852185785770416),
+      0,
+      0,
+      1,
+      1,
+      0,
+      0,
+      1,
+      -2.5,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      1,
+    ]);
+  });
 });

@@ -13,12 +13,19 @@ export interface ScriptRealm {
   readonly internal: {
     updateScriptProperties(script: Record<string, unknown>, vars: string): void;
     convertUserProperties(json: string): Record<string, unknown>;
+    /** WPE 的 `JSON.stringify(obj, stringifyAdapter)`（`Vec` → "x y z"，P6d3b `createLayer` 的对象分支）；`this` 是 `_Internal`。可选：假 realm 没有。 */
+    stringifyConfig?(value: unknown): string;
   };
   /**
    * 加载期：每种源码一次（按源码文本缓存 Promise，同一源码的两段脚本共用一个 ScriptModule、各自 instantiate）。
    * 失败时 reject，错误要和以前 importModule 同一份源码给出的错误一样（文字与行列）。
    */
   prepareModule(source: string, label: string): Promise<ScriptModule>;
+  /**
+   * 已经备好的模块（`prepareModule` 落定过的同源码，P6d3b）；没有返回 null。`createLayer` 克隆带脚本的对象时要同步实例化，不能等 Promise。
+   * 可选：没有就当都没备过（脚本晚一段才 `init`）。
+   */
+  preparedModule?(source: string): ScriptModule | null;
   dispose(): void;
 }
 
@@ -92,6 +99,11 @@ interface ScriptRecord {
   calls: Record<string, { count: number; maxMs: number }>;
   /** 回调返回值写到重编译目标的次数（API 直接写入由 `ScriptApi` 另计，探针合并）。 */
   recompileWrites: number;
+  /**
+   * 模块求值完（`instantiate` 之后）读一次的导出 `__workshopId`（P6d3b）：只认字符串，之后再改导出变量不生效。`createLayer` 的路径改写用
+   * 当前脚本的这个值（rea-p6d-script 2.2）。
+   */
+  workshopId: string | null;
 }
 interface Timer {
   owner: ScriptRecord;
@@ -210,6 +222,10 @@ export class ScriptRuntime {
 
   get currentScript(): SceneScript | null {
     return this.active?.script ?? null;
+  }
+  /** 当前正在调用的脚本的 `__workshopId`（P6d3b）；没有当前脚本、或它的导出不是字符串时为 null。 */
+  currentWorkshopId(): string | null {
+    return this.active?.workshopId ?? null;
   }
   get stopped(): boolean {
     return this.halted;
@@ -362,12 +378,8 @@ export class ScriptRuntime {
     }
   }
 
-  /**
-   * @param afterInit 全部脚本跑完 `init` 之后调一次（P11c：WPE 在这一步按场景媒体状态给刚 `init` 的脚本补发一轮媒体回调，
-   *   `media/scene.ts` 的 `replayAfterInit`，经 `mediaEvent`；在首次 `applyUserProperties` 之前）。
-   */
-  async load(scripts: SceneScripts, afterInit?: () => void): Promise<void> {
-    this.records = scripts.list.map((script) => ({
+  private makeRecord(script: SceneScript): ScriptRecord {
+    return {
       script,
       module: null,
       instance: null,
@@ -377,7 +389,136 @@ export class ScriptRuntime {
       errors: [],
       calls: {},
       recompileWrites: 0,
-    }));
+      workshopId: null,
+    };
+  }
+
+  /** 求值完一份模块状态：记下实例、导出、`__workshopId`（只认字符串；暂时性死区等读不出来当没有）。 */
+  private adoptInstance(record: ScriptRecord, instance: ModuleInstance): void {
+    record.instance = instance;
+    record.exports = instance.namespace;
+    record.state = "loaded";
+    let id: unknown;
+    try {
+      id = instance.read("__workshopId");
+    } catch {
+      id = undefined;
+    }
+    record.workshopId = typeof id === "string" ? id : null;
+    this.options.report.debug(`场景脚本 ${record.script.id} 导出：${Object.keys(record.exports).join(",")}`);
+  }
+
+  /** 第二轮：脚本属性初始化、`init`、写回返回值（`load` 与 `addScripts` 共用）。 */
+  private initRecord(record: ScriptRecord): void {
+    if (record.state !== "loaded") return;
+    if (record.script.scriptProperties && record.exports) {
+      try {
+        this.realm.internal.updateScriptProperties(record.exports, JSON.stringify(record.script.scriptProperties));
+      } catch (error) {
+        this.options.report.warn(`场景脚本 ${record.script.id} 属性初始化失败：${messageOf(error)}`);
+      }
+    }
+    const result = this.call(record, "init", this.value(record));
+    this.writeReturn(record, result);
+    record.state = "inited";
+  }
+
+  /**
+   * 运行中追加脚本（P6d3b 点 11，`createLayer` 建出的对象上的脚本）：在 `createLayer` 返回前按条目顺序同步做完，效果是 WPE 的
+   * `before` → 新层各段 `init` → `after`（步骤 0 实测 `wpe-clone.log`）。条目追加在 `records` 尾，所以同一轮 `update` 遍历得到它。
+   * 模块已备好（realm 的 `preparedModule`，克隆的源码都是加载时备过的）就同步求值；没备过的异步 `prepareModule`，备好后补求值与 `init`
+   * （已知差异：晚一段；语料 0 处）。async 模块（顶层 await）同样等 Promise 落定后再 `init`。
+   */
+  addScripts(scripts: readonly SceneScript[]): void {
+    if (this.halted || scripts.length === 0) return;
+    const fresh = scripts.map((script) => this.makeRecord(script));
+    for (const record of fresh) {
+      this.records.push(record);
+      this.byId.set(record.script.id, record);
+    }
+    // 第一轮：求值
+    for (const record of fresh) {
+      if (record.script.errors.length) {
+        record.state = "failed";
+        record.errors.push(...record.script.errors);
+        this.options.report.warn(`场景脚本 ${record.script.id} 导入说明符无效：${record.script.errors.join("；")}`);
+        continue;
+      }
+      const module = this.realm.preparedModule?.(record.script.source) ?? null;
+      if (module) this.evaluateRecord(record, module);
+      else {
+        this.options.report.debug(`场景脚本 ${record.script.id} 的源码没备过，晚一段 init`);
+        this.realm.prepareModule(record.script.source, record.script.id).then(
+          (prepared) => {
+            if (this.halted) return;
+            this.evaluateRecord(record, prepared);
+            this.initRecord(record);
+          },
+          (error) => {
+            record.state = "failed";
+            record.errors.push(messageOf(error));
+            this.options.report.warn(`场景脚本 ${record.script.id} 求值失败：${messageOf(error)}`);
+          },
+        );
+      }
+    }
+    // 第二轮：属性初始化 + init + 写回（还没求值完的在 then 里补）
+    for (const record of fresh) {
+      this.initRecord(record);
+      if (this.halted) break;
+    }
+  }
+
+  /** 同步求值一份备好的模块；async 模块在 Promise 落定后接上并补 `init`。出错记失败。当前脚本 / 求值标志还原成调用前的（不是 null）。 */
+  private evaluateRecord(record: ScriptRecord, module: ScriptModule): void {
+    const previous = this.active;
+    try {
+      this.active = record;
+      this.options.enterScript?.(record.script);
+      this.options.setModuleEvaluating?.(true);
+      record.module = module;
+      const made = module.instantiate();
+      if (typeof (made as { then?: unknown }).then === "function") {
+        (made as Promise<ModuleInstance>).then(
+          (instance) => {
+            this.adoptInstance(record, instance);
+            this.initRecord(record);
+          },
+          (error) => {
+            record.state = "failed";
+            record.errors.push(messageOf(error));
+            this.options.report.warn(`场景脚本 ${record.script.id} 求值失败：${messageOf(error)}`);
+          },
+        );
+      } else this.adoptInstance(record, made as ModuleInstance);
+    } catch (error) {
+      record.state = "failed";
+      record.errors.push(messageOf(error));
+      this.options.report.warn(`场景脚本 ${record.script.id} 求值失败：${messageOf(error)}`);
+    } finally {
+      this.active = previous;
+      this.options.enterScript?.(previous?.script ?? null);
+      this.options.setModuleEvaluating?.(false);
+    }
+  }
+
+  /**
+   * 新 bundle 换上时（P6d3b）：按 id 把条目的 `script` 换成新 bundle 里的同 id 项（`createLayer` 建出的对象编译后，常量目标的 uniform 信息等
+   * 由编译填好）；运行时里没有的 id 不加、新 bundle 里没有的不删。
+   */
+  refreshScripts(list: readonly SceneScript[]): void {
+    for (const script of list) {
+      const record = this.byId.get(script.id);
+      if (record) record.script = script;
+    }
+  }
+
+  /**
+   * @param afterInit 全部脚本跑完 `init` 之后调一次（P11c：WPE 在这一步按场景媒体状态给刚 `init` 的脚本补发一轮媒体回调，
+   *   `media/scene.ts` 的 `replayAfterInit`，经 `mediaEvent`；在首次 `applyUserProperties` 之前）。
+   */
+  async load(scripts: SceneScripts, afterInit?: () => void): Promise<void> {
+    this.records = scripts.list.map((script) => this.makeRecord(script));
     this.byId = new Map(this.records.map((record) => [record.script.id, record]));
     const start = (this.options.now ?? performance.now.bind(performance))();
     for (const record of this.records) {
@@ -397,9 +538,7 @@ export class ScriptRuntime {
           typeof (made as { then?: unknown }).then === "function"
             ? await (made as Promise<ModuleInstance>)
             : (made as ModuleInstance);
-        record.exports = record.instance.namespace;
-        record.state = "loaded";
-        this.options.report.debug(`场景脚本 ${record.script.id} 导出：${Object.keys(record.exports).join(",")}`);
+        this.adoptInstance(record, record.instance);
       } catch (error) {
         record.state = "failed";
         record.errors.push(messageOf(error));
@@ -410,18 +549,10 @@ export class ScriptRuntime {
         this.options.setModuleEvaluating?.(false);
       }
     }
+    // 迭代器每步重看长度：`init` 里 `createLayer` 追加的条目已由 `addScripts` 自己 init 过（状态 inited），这里跳过
     for (const record of this.records) {
       if (record.state !== "loaded") continue;
-      if (record.script.scriptProperties && record.exports) {
-        try {
-          this.realm.internal.updateScriptProperties(record.exports, JSON.stringify(record.script.scriptProperties));
-        } catch (error) {
-          this.options.report.warn(`场景脚本 ${record.script.id} 属性初始化失败：${messageOf(error)}`);
-        }
-      }
-      const result = this.call(record, "init", this.value(record));
-      this.writeReturn(record, result);
-      record.state = "inited";
+      this.initRecord(record);
       if (this.halted) break;
     }
     if (!this.halted) afterInit?.();
@@ -606,6 +737,35 @@ export class ScriptRuntime {
   forgetWrite(target: TargetKey): void {
     this.writes.delete(target);
   }
+  /**
+   * `destroyLayer` 生效（P6d3a，rea-p6d-layers 6.3 第 4 条）：属主是这些对象的条目（`scriptObject(owner)` 在集合里：图层字段、effect、
+   * 材质常量、动画层）按条目顺序先收 `destroy`（导出了、已 `init` 才调），再从 `records` / `byId` 摘掉；它们的计时器去掉；
+   * 写入重放表里以 `objects/<i>/` 开头的项去掉（重编译后不重放到不存在的对象上）。只在脚本阶段之后调：`records` 换成新数组，
+   * 不影响正在进行的遍历。
+   */
+  destroyObjects(objects: ReadonlySet<number>): void {
+    if (objects.size === 0) return;
+    const owned = (record: ScriptRecord): boolean => {
+      const object = scriptObject(record.script.owner);
+      return object !== null && objects.has(object);
+    };
+    for (const record of this.records) {
+      if (!owned(record)) continue;
+      if (record.state === "inited" && !this.halted) this.call(record, "destroy");
+    }
+    const gone = new Set(this.records.filter(owned));
+    if (gone.size > 0) {
+      this.records = this.records.filter((record) => !gone.has(record));
+      for (const record of gone) this.byId.delete(record.script.id);
+      for (const timer of this.timers) if (gone.has(timer.owner)) timer.cancelled = true;
+      this.timers = this.timers.filter((timer) => !timer.cancelled);
+    }
+    for (const key of [...this.writes.keys()]) {
+      const match = /^objects\/(\d+)\//.exec(key);
+      if (match && objects.has(Number(match[1]))) this.writes.delete(key);
+    }
+  }
+
   destroy(): void {
     for (const record of this.records) if (record.state === "inited" && !this.halted) this.call(record, "destroy");
     this.timers = [];

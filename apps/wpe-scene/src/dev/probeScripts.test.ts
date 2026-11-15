@@ -194,6 +194,35 @@ const frFactory: Factory = () => {
   };
 };
 
+describe("删除生效与宿主同一套接线（P6d3a）", () => {
+  it("同一帧里后面的脚本照收 update，帧末删除生效后收 destroy、状态里摘掉；下一帧不再收它的 update", async () => {
+    const log: string[] = [];
+    const { scripts, state } = await setup({
+      "objects/0/color": (g) => ({
+        update: (value: unknown) => {
+          log.push("update:0");
+          g.thisScene.destroyLayer("T");
+          return value;
+        },
+      }),
+      "objects/1/alpha": () => ({
+        update: () => void log.push("update:1"),
+        destroy: () => void log.push("destroy:1"),
+      }),
+    });
+    await scripts.load();
+    scripts.frame(0.1, 0.1);
+    expect(log).toEqual(["update:0", "update:1", "destroy:1"]);
+    expect(state.layers.has(1)).toBe(false);
+    expect(state.order).toEqual([0, 2]);
+    log.length = 0;
+    scripts.frame(0.1, 0.2);
+    expect(log).toEqual(["update:0"]);
+    // 诊断里也只剩没被删的那段脚本
+    expect(scripts.result().diagnostics.map((item) => (item as { id: string }).id)).toEqual(["objects/0/color"]);
+  });
+});
+
 describe("scripts 选项（probeScriptsOptionsOf）", () => {
   it("不给为 null；true 与 {} 用缺省并写明；给了的原样", () => {
     expect(probeScriptsOptionsOf(undefined)).toBeNull();
@@ -616,5 +645,101 @@ describe("scripts.consoleGrep（P6c）", () => {
     expect(resolved?.consoleGrep?.test("[kbp6c] f=1")).toBe(true);
     expect(() => probeScriptsOptionsOf({ consoleGrep: 5 })).toThrow("consoleGrep 要是正则源码");
     expect(() => probeScriptsOptionsOf({ consoleGrep: "(" })).toThrow("不是合法的正则");
+  });
+});
+
+describe("createLayer 与补编（P6d3b）", () => {
+  const props = () => probeUserProperties(PROJECT, { speed: 5 });
+  const create = (g: Global) => g.thisScene.createLayer("models/a.json");
+
+  async function setupCreate(factories: Record<string, Factory>, deferOnCreate: boolean) {
+    const bundle = await compile();
+    const state = SceneState.fromBundle(bundle);
+    const realm = fakeRealm(factories);
+    const scripts = createProbeScripts({
+      bundle,
+      state,
+      sceneAssets: ["A:/assets"],
+      properties: props(),
+      screen: [1280, 720],
+      options: OPTIONS,
+      deferOnCreate,
+      createRealm: realm.createRealm,
+    });
+    return { bundle, state, scripts };
+  }
+
+  it("init 里建层且 deferOnCreate：load 停在 init 之后（不套属性值、不交 applyUserProperties），结构里有新对象；swap 换上新场景后补做，写入重放到新状态", async () => {
+    const log: string[] = [];
+    const factories: Record<string, Factory> = {
+      "objects/1/alpha": (g) => ({
+        // 不返回值（返回值会写回同一个目标、盖过直接写入，同 WPE）
+        init: () => {
+          log.push("init");
+          create(g);
+          g.thisLayer.alpha = 0.3;
+        },
+        applyUserProperties: () => void log.push("apply"),
+        update: (value: unknown) => value,
+      }),
+    };
+    const { scripts, state } = await setupCreate(factories, true);
+    await scripts.load();
+    expect(log).toEqual(["init"]);
+    expect(scripts.needsRestart?.()).toBe(true);
+    expect(scripts.createdCount?.()).toBe(1);
+    expect(scripts.structure?.().created).toEqual([{ object: 3, config: '{"image":"models/a.json","id":4}' }]);
+    expect(state.order).toEqual([0, 1, 2, 3]);
+    // 补编：新 bundle / 新状态，新状态接过旧状态的结构，写入重放进去
+    const bundle2 = await compile();
+    const state2 = SceneState.fromBundle(bundle2);
+    state2.adoptStructure(state);
+    expect(state2.layers.get(1)?.alpha).toBe(1);
+    scripts.swap?.({ bundle: bundle2, state: state2 });
+    expect(state2.layers.get(1)?.alpha).toBe(0.3);
+    expect(log).toEqual(["init", "apply"]);
+    expect(scripts.needsRestart?.()).toBe(false);
+    scripts.frame(0.1, 0.1);
+    expect(scripts.result().created).toBe(1);
+    scripts.dispose();
+  });
+
+  it("不给 deferOnCreate 时 load 一气做完；init 里建的层也进结构", async () => {
+    const log: string[] = [];
+    const { scripts } = await setupCreate(
+      {
+        "objects/1/alpha": (g) => ({
+          init: (value: unknown) => (create(g), value),
+          applyUserProperties: () => void log.push("apply"),
+        }),
+      },
+      false,
+    );
+    await scripts.load();
+    expect(scripts.needsRestart?.()).toBe(false);
+    expect(log).toEqual(["apply"]);
+    expect(scripts.createdCount?.()).toBe(1);
+    scripts.dispose();
+  });
+
+  it("回放中途（update 里）建层：探针补编不了，记进 recompile（createLayer/<下标>），不报错", async () => {
+    const { scripts } = await setupCreate(
+      {
+        "objects/1/alpha": (g) => ({
+          update: (value: unknown) => (create(g), value),
+        }),
+      },
+      true,
+    );
+    await scripts.load();
+    expect(scripts.needsRestart?.()).toBe(false);
+    scripts.frame(0.1, 0.1);
+    const result = scripts.result();
+    expect(result.created).toBe(1);
+    expect(result.recompile).toEqual([
+      { path: "createLayer/3", count: 1, firstFrame: 1, value: '{"image":"models/a.json","id":4}' },
+    ]);
+    expect(result.messages).toEqual([]);
+    scripts.dispose();
   });
 });

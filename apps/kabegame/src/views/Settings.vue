@@ -323,69 +323,8 @@
                   <WallpaperTransitionSetting :target-id="selectedTargetId" />
                 </SettingRow>
 
-                <!-- 以下回到全局设置 -->
-                <!-- 视频、网页、场景共用：只有窗口模式的桌面上有在播放的实例 -->
-                <SettingRow
-                  v-if="desktopWallpaperLive"
-                  :label="$t('settings.wallpaperPaused')"
-                  :description="$t('settings.wallpaperPausedDesc')"
-                >
-                  <SettingSwitchControl setting-key="wallpaperPaused" />
-                </SettingRow>
-
-                <SettingRow
-                  v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)"
-                  :label="$t('settings.wallpaperVolume')"
-                  :description="$t('settings.wallpaperVolumeDesc')"
-                >
-                  <SettingSliderControl setting-key="wallpaperVolume" :min="0" :max="1" :step="0.1" :precision="1" />
-                </SettingRow>
-
-                <SettingRow
-                  v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)"
-                  :label="$t('settings.wallpaperVideoPlaybackRate')"
-                  :description="$t('settings.wallpaperVideoPlaybackRateDesc')"
-                >
-                  <SettingSliderControl
-                    setting-key="wallpaperVideoPlaybackRate"
-                    :min="0.25"
-                    :max="3"
-                    :step="0.25"
-                    :precision="2"
-                  />
-                </SettingRow>
-
-                <SettingRow
-                  v-if="IS_WINDOWS"
-                  :label="$t('settings.wpeMediaIntegration')"
-                  :description="$t('settings.wpeMediaIntegrationDesc')"
-                >
-                  <SettingSwitchControl setting-key="wpeMediaIntegration" />
-                </SettingRow>
-
-                <SettingRow
-                  v-if="!IS_ANDROID && !IS_WEB"
-                  :label="$t('settings.wpeScenePostprocess')"
-                  :description="$t('settings.wpeScenePostprocessDesc')"
-                >
-                  <SettingRadioControl setting-key="wpeScenePostprocess" :options="wpeScenePostprocessOptions" />
-                </SettingRow>
-
-                <SettingRow
-                  v-if="!IS_ANDROID && !IS_WEB"
-                  :label="$t('settings.wpeSceneReflection')"
-                  :description="$t('settings.wpeSceneReflectionDesc')"
-                >
-                  <SettingRadioControl setting-key="wpeSceneReflection" :options="wpeSceneReflectionOptions" />
-                </SettingRow>
-
-                <SettingRow
-                  v-if="!IS_ANDROID && !IS_WEB"
-                  :label="$t('settings.wpeSceneShadows')"
-                  :description="$t('settings.wpeSceneShadowsDesc')"
-                >
-                  <WpeSceneShadowsSetting />
-                </SettingRow>
+                <!-- 以下回到全局设置：桌面的「壁纸设置」，所有壁纸共用、字段全部显示；预览用每张壁纸自己的预览设置（预览右栏） -->
+                <WpeWallpaperSettings :fields="wpeWallpaperSettingFields" />
 
                 <SettingRow
                   v-if="!IS_ANDROID && !IS_WEB"
@@ -513,13 +452,14 @@ import WpeWebPropertiesDialog from "@/components/wallpaper/WpeWebPropertiesDialo
 import { fetchImageById } from "@/utils/imageRow";
 import { hasWpeUserProperties } from "@/utils/mediaMime";
 import { defaultScreenId, screenIdOfTarget } from "@/utils/wallpaperTargets";
+import { WPE_SETTING_KEYS, type WpeSettingKey } from "@/utils/wpeSettings";
 import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
 import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
 import SettingRadioControl from "@/components/settings/controls/SettingRadioControl.vue";
 import DefaultDownloadDirSetting from "@/components/settings/items/DefaultDownloadDirSetting.vue";
 import WpeEngineDirSetting from "@/components/settings/items/WpeEngineDirSetting.vue";
-import WpeSceneShadowsSetting from "@/components/settings/items/WpeSceneShadowsSetting.vue";
+import WpeWallpaperSettings from "@/components/settings/items/WpeWallpaperSettings.vue";
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";
@@ -582,17 +522,6 @@ const galleryLayoutDirectionOptions = computed(() => [
 const imageFitOptions = computed(() => [
   { label: t("settings.imageFitContain"), value: "fit" },
   { label: t("settings.imageFitCover"), value: "fill" },
-]);
-const wpeScenePostprocessOptions = computed(() => [
-  { label: t("settings.wpeScenePostprocessFollow"), value: "follow" },
-  { label: t("settings.wpeScenePostprocessDisabled"), value: "disabled" },
-  { label: t("settings.wpeScenePostprocessEnabled"), value: "enabled" },
-  { label: t("settings.wpeScenePostprocessUltra"), value: "ultra" },
-]);
-const wpeSceneReflectionOptions = computed(() => [
-  { label: t("settings.wpeSceneReflectionFollow"), value: "follow" },
-  { label: t("settings.wpeSceneReflectionDisabled"), value: "disabled" },
-  { label: t("settings.wpeSceneReflectionEnabled"), value: "enabled" },
 ]);
 const linkOpenModeOptions = computed(() => [
   { label: t("settings.linkOpenSurf"), value: "surf" },
@@ -813,6 +742,18 @@ watch([currentWallpaperImageId, selectedTargetId], () => {
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
 /** 只有窗口模式的桌面上有在播放的视频、网页与场景（原生模式交给系统，Android / Web 没有窗口壁纸），暂停只在这时显示 */
 const desktopWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && wallpaperMode.value === "window");
+/** 桌面「壁纸设置」按平台显示的字段：暂停只在窗口模式（只有那时桌面上有在播放的实例），音量 / 倍速同原来的条件，
+ *  媒体集成只有 Windows 有数据源，场景三项只在桌面端 */
+const wpeWallpaperSettingFields = computed<WpeSettingKey[]>(() => {
+  const playback = IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma.value);
+  const desktop = !IS_ANDROID && !IS_WEB;
+  return WPE_SETTING_KEYS.filter((key) => {
+    if (key === "paused") return desktopWallpaperLive.value;
+    if (key === "volume" || key === "playbackRate") return playback;
+    if (key === "mediaIntegration") return IS_WINDOWS;
+    return desktop;
+  });
+});
 // 「打开壁纸」关掉期间将其余壁纸控件置灰（还没读到值时按开启处理）
 const wallpaperDisabled = computed(() => settingsStore.values.wallpaperEnabled === false);
 // native 模式下关掉「打开壁纸」时提示用户系统壁纸保持现状、无法自动还原

@@ -1288,6 +1288,21 @@ describe("planLayer：被依赖的图层（P8 步骤 4，rea-p8-render 2.3、2.4
     ]);
   });
 
+  it("开雾强制 passthrough（P13f F7，`fogPassthrough`）：没有 effect 也走合成 RT、passthrough 上屏；有 effect 时最后一个 effect 不上屏", () => {
+    const fogged = depLayer(0, "fog", { dependedOn: false, fogPassthrough: true });
+    expect(skeleton(planLayer(fogged, DEP_TEXTURES))).toEqual(["base texture → c0", "passthrough c0 → scene"]);
+    const withFx = depLayer(0, "fogfx", {
+      dependedOn: false,
+      fogPassthrough: true,
+      effects: [depEffect(0, 0, "kbtime")],
+    });
+    expect(skeleton(planLayer(withFx, DEP_TEXTURES))).toEqual([
+      "base texture → c0",
+      "effect c0 → c1",
+      "passthrough c1 → scene",
+    ]);
+  });
+
   it("上屏（A2、A9）：passthrough 材质、图层四边形、UV 0–1 内缩 0.15 / 64（同末 pass）、混合取基础材质的 translucent，深度借基础 pass", () => {
     const layer = depLayer(0, "A9");
     expect(lastDraw(planLayer(layer, DEP_TEXTURES))).toEqual({

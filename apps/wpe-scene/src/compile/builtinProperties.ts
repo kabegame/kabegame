@@ -38,8 +38,9 @@ export const WPE_BUILTIN_PROPERTIES: Readonly<Record<string, BuiltinProperty>> =
 });
 
 /**
- * Kabegame 壁纸样式 → WPE 的 `alignment`。照用视频壁纸已有的对应，不另定：`apps/kabegame/src/components/wallpaper/WallpaperStage.vue` 的
- * `effectiveAlignment`（fill → cover、fit → fill、stretch → stretch、center → center、tile → cover）与
+ * Kabegame 壁纸样式 → WPE 的 `alignment`。照用视频壁纸已有的对应，不另定：原 `WallpaperStage.vue` 的 `effectiveAlignment`（现在是
+ * `apps/kabegame/src/components/wallpaper/wpeVideoStyle.ts` 头注释里的对应；fill → cover、fit → fill、stretch → stretch、center → center、
+ * tile → cover）与
  * `src-tauri/kabegame-core/src/wpe/properties.rs` 的 `WpeAlignment::from_value`（0 cover、1 fill、2 stretch、3 center、4 free）。
  * 其余对齐项（`alignmentposition` / `x` / `y` / `z` / `fliph`）Kabegame 没有对应的设置，取 WPE 默认值；`rate` 与 `wec_*` / `wcc_*` 同样。
  */

@@ -242,6 +242,8 @@ describe("getEffectCount / getEffect / effect.name", () => {
     expect(ca.name).toBe("renamed");
     expect(h.l.getEffect("renamed")).toBe(ca);
     expect(h.l.getEffect("ca")).toBeNull();
+    // 键序 name、visible（wpe-asset.log 的 fx name write：JSON.stringify(effect) 是 {"name":…,"visible":…}）
+    expect(JSON.stringify(ca)).toBe('{"name":"renamed","visible":' + String(ca.visible) + "}");
     ca.name = 7;
     expect(ca.name).toBe("7");
     ca.name = null;

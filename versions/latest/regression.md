@@ -385,6 +385,63 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | H7 加载用时 | Windows dev，屏外宿主 | 能渲染、脚本最多的 `3660962877`（252 段、27 种源码）：`realmCheck` 的 `elapsedMs`，与同一宿主里照旧方式逐段 `import(blob)` 交替各三次 | 不慢于旧方式 | 2026-11-15 Claude：新 176–189 ms，旧约 1 s |
 | [ ] | H8 预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开几张带脚本、能渲染的场景（灯带、时钟、音频条类） | 画面与改前一致，动画在走，日志里没有「场景脚本改写失败」 | 需要用户在界面上看 |
 
+## 场景壁纸 P6d3a：对象表与结构 API
+
+2026-11-15 Windows dev。场景脚本改结构：
+- `SceneState.order` 是 WPE 的对象表，决定绘制顺序与脚本下标，相机对象取表里最后一个可见的；
+- `sortLayer` 先摘再插；
+- `destroyLayer` 记待删、全部脚本之后一次生效，生效后对象作废、挂着的脚本收 `destroy`；
+- `setParent` 照读码逐位复刻 adjust、组深度检查、成环拒绝；
+- 结构跨重编译保留，改组归属或挂点的走重编译；
+- `getInitialLayerConfig` 取加载原文，`registerAsset` 只能在模块顶层调。
+
+建层（`createLayer`）是 P6d3b。说明见 `cocs/wpe/WPE_SCENE.md`「对象表与结构 API（P6d3a）」；计划与 WPE 实测见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d3-runtime-layers.md`，adjust 的读码见同目录 `rea-p6d3-adjust.md`。
+- 验收文件在 `ignore/p6/d3/`：
+  - 测试工程生成 `make_step0.py`，WPE 日志夹具 `out/wpe-*.log`（`cut_log.py` 截取），我们的输出 `out/kb-*.log`（`logrun.mjs`），画面 `out/{wpe,kb}-s*.png`（`renderstage.mjs`、`cmp_png.py`）；
+  - 语料 `corpus-after/`（与 `ignore/p6/d2/after/` 比，`unsupported_diff.py`）；
+  - 变异清单 `mutations.json`（结果 `mutate.txt`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | I1 类型与格式 | Windows | 宿主 `tsc --noEmit`；`deno task check -c kabegame`；Prettier `--check` 本步改动的文件 | 0 error、格式通过 | 2026-11-15 Claude：工作树与主工作区 tsc 0 error；vue-tsc 通过，cargo 那半被跑着的 dev 占用 CEF 文件（os error 32）没跑完；格式通过 |
+| [x] | I2 宿主 vitest（相关文件） | Node，vitest | `src/script`、`src/host*`、`src/dev/probe*`、`src/render`、`compile/p6d3`、`compile/scriptApi` | 全过 | 2026-11-15 Claude：主工作区 86 个文件 1894 条全过（24 条跳过） |
+| [x] | I3 变异检查 | Node，工作区模式 | `mutations.json` 12 处 | 每处都有用例失败，原样还原 | 2026-11-15 Claude：12 处全部检出、全部还原（负数下标到表头、删除当场生效、计数不扣待删、作废后仍可读、对象参数看待删、adjust 不反算、组深度不查、重编译丢结构、组内按下标、配置原文不取 8 位、相机取第一个、换父插在表头） |
+| [x] | I4 脚本输出与 WPE 逐行比 | Windows dev，屏外宿主（dev 探针 `renderFrame`，`scripts.consoleGrep`，dt 1/60）；WPE 测试窗口 | `p6d3-struct`（900 帧）、`p6d3-parent`（900 帧）、`p6d-tree`（150 帧）、`p6d3-attach`（500 帧）的 `[kbp6d3]` / `[kbp6d]` 输出与 WPE `log.txt` 逐行比 | struct 全同；parent 只差成环那一步；tree 只差 P6d1 起就有的三行；attach 只差挂点与骨骼姿势 | 2026-11-15 Claude：struct 27/27 相同；parent 前 40 行相同，第 41 行起是我们拒绝成环后继续跑（WPE 在这里整个进程崩溃）；tree 51 行中 48 行相同（图层 / effect 对象的自有键与原型，改前就不同）；attach 换父的结构与字段相同，挂点要等重编译、puppet 姿势在探针里不推进，矩阵不同 |
+| [x] | I5 画面与 WPE 逐像素比 | Windows dev，屏外宿主，窗口 1280×720；WPE 抓帧 `A:\p6d3\struct\` | `p6d3-struct` 回放到 WPE 抓帧的帧号（162 / 318 / 654 / 779）读回 | 组内排序两阶段相同；相机两阶段除删组后的子层外相同 | 2026-11-15 Claude：第 1、2 阶段 0 像素不同；第 5、6 阶段只差左下角的 G1（删组后 WPE 当帧由顶层画，我们等重编译，已知差异） |
+| [x] | I6 全语料脚本诊断与能力键 | Windows dev，屏外宿主（`scriptCorpus`，120 帧） | 与 P6d2 的 `after/` 逐张比 | 变化只来自去掉的缺口键 | 2026-11-15 Claude：能比的 236 张里 15 张不同，全是去掉 `registerAsset` / `sortLayer` / `getInitialLayerConfig` / `destroyLayer` 四个键带来的（原先求值失败或报 not a function 的脚本现在跑起来），没有新增的键与新报错；解锁 `2887099508`、`3570755196` |
+| [ ] | I7 解锁的两张在预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开 `2887099508`、`3570755196` | 正常渲染、不退回预览图，脚本没有报错（日志） | 2026-11-15 用户：`2887099508` 不通过，缺开场镜头滑动。原因是混淆脚本调 `getCameraTransforms` / `setCameraTransforms`（我们没有，编译期扫描认不出），已转交 P5 会话实现；`3570755196` 待看 |
+| [ ] | I8 删组与换进组的重编译 | Windows dev，预览 | 预览打开 `ignore/p6/d3/proj/p6d3-struct` 与 `p6d3-parent`（已导入，库里 15302 / 15301），看到第 4 阶段（约 8 s）之后 | 删组后剩下的红块在重编译后出现在左下；换进组的蓝块在重编译后被组裁掉；日志有「场景脚本删除了图层」「换父改了组或挂点」，没有报错 | 需要用户在界面上看 |
+
+## 场景壁纸 P6d3b：运行时建层（`createLayer`）
+
+2026-11-16 Windows dev。`thisScene.createLayer(...)`：
+
+- 参数照 dll 整理成配置：缺省模型正交 / 透视各一个，对象过 `stringifyConfig`，路径按目录定键；
+- 资源路径按当前脚本的 `__workshopId` 改写，编译期 assets 名单里有的不改；
+- 当场建出待编对象，追加到对象表尾，配置里带的脚本在返回前跑完 `init`；
+- 新建对象作编译输入：`init` 里建的放弃本次加载、带结构重编后再画首帧，运行中建的走重编译（晚一段，P6d4 改同步）。
+
+顺带改了两处：图层 `name` 可写；effect 对象的键序是 `name`、`visible`。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「运行时建层（P6d3b）」；计划与 WPE 实测见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d3-runtime-layers.md`「P6d3b」。
+- 验收文件在 `ignore/p6/d3/`：
+  - 测试工程生成 `make_step0b.py`（`proj/p6d3b-*`），另用 `ignore/p6/d0/proj/p6d-asset`、`p6d-order`；WPE 日志夹具 `out/wpe-{bars,clone,default,asset,order}.log`，我们的输出 `out/kb-*.log`（`logrun.mjs`），画面 `out/{wpe,kb}-bars.png`；
+  - 语料 `corpus-b-all/`（与 `corpus-after/` 比，`unsupported_diff.py`）；编译产物哈希 `hash-{head,mine}.json`（`bundlehash.test.ts`）；
+  - 变异清单 `mutations-b.json`（结果 `mutate-b.txt`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | J1 类型与格式 | Windows | 宿主 `tsc --noEmit`（独立工作树与主工作区）；Prettier 本步改动的文件 | 0 error、格式通过 | 2026-11-16 Claude：两边 tsc 0 error；格式通过 |
+| [x] | J2 宿主 vitest（相关文件） | Node，vitest | `src/script`、`src/host*`、`src/dev`、`src/compile`、`src/render` | 全过 | 2026-11-16 Claude：工作树（HEAD + 本步）156 个文件 3340 条全过，主工作区（含别的会话未提交的改动）159 个文件全过 |
+| [x] | J3 变异检查 | Node，工作区模式（独立工作树） | `mutations-b.json` 13 处 | 每处都有用例失败，原样还原 | 2026-11-16 Claude：13 处全部检出、全部还原（id 不写进配置、缺省模型被改写、图层名只读、待编图像层没骨骼方法、effect 键序、克隆脚本晚 init、不读 `__workshopId`、`init` 里建层不重编、运行中建层不重编、下标复用、编译不带新建对象、新建对象置被依赖、探针不补编）。原有一处「按 id 找父不认待编对象」未检出，查明是冗余代码（`createdIds` 已覆盖），删掉后不再列 |
+| [x] | J4 脚本输出与 WPE 逐行比 | Windows dev，屏外宿主（dev 探针 `renderFrame`，`scripts.consoleGrep`，dt 1/60）；WPE 测试窗口 | `p6d3b-bars`（40 帧）、`p6d3b-clone`（130 帧）、`p6d3b-default`（10 帧）、`p6d-order` / `p6d-asset`（120 帧）的输出与 WPE `log.txt` 逐行比 | 除已知差异外相同 | 2026-11-16 Claude：clone 42/42、order 48/48 相同；bars 24 行差 2 行（图层对象自有键数 59 / 30，已编译图层同样如此、P6d1 起就有；`size` 编译前读不到自动尺寸，已知差异）；asset 36 行差 1 行（自有键数 21 / 24，同上）；default WPE 的 4 行相同，我们多 2 行（WPE 透视场景对数组配置取 `getInitialLayerConfig` 时整段 `init` 中止，不复刻） |
+| [x] | J5 画面与 WPE 逐像素比 | Windows dev，屏外宿主，窗口 1280×720 | `p6d3b-bars` 跑 30 帧读回，和 WPE 抓帧比 | 相同 | 2026-11-16 Claude：0 / 921600 像素不同 |
+| [x] | J6 全语料能力键与脚本诊断 | Windows dev，屏外宿主（`scriptCorpus`，120 帧） | 与 P6d3a 的 `corpus-after/` 逐张比 | 变化只来自去掉的 `createLayer` 缺口键 | 2026-11-16 Claude：14 张去掉 `script:api:thisScene.createLayer`，解锁 4 张音频条（`3304642534`、`3549863808`、`3570308528`、`3812487163`），没有新增的键。另有雾的键与 `14998` 的解锁，来自别的会话未提交的 P13f。状态摘要全部变化，因为摘要含 `general`（P13f 加了雾字段），编译产物另见 J7 |
+| [x] | J7 编译产物不变 | Node，vitest（`bundlehash.test.ts`） | 本机全语料在 HEAD 与 HEAD + 本步两份源码上各编一次（同一个翻译器 wasm），比规范化后的 bundle 哈希（新字段 `assetPaths` 不计） | 除去掉缺口键的场景外逐张相同；那些场景只差 `unsupported` 及其连带项 | 2026-11-16 Claude：233 张中 219 张相同；另 14 张正是去掉 `createLayer` 缺口键的，差别只在 `unsupported`，以及因此才解码的纹理 `mips` 与视频时长（编译只在 `unsupported` 为空时解码纹理，改前这些场景一开始就判了退回） |
+| [x] | J8 首次加载多编一次的用时 | Windows dev，屏外宿主 | 打开 `init` 里建层的音频条壁纸，按应用日志的时间戳量从开宿主到开始渲染 | 记下数值 | 2026-11-16 Claude：`3304642534`（`init` 里建 64 根条）开宿主到开始渲染 2.3 s；第二次加载 734 ms，其中编译 151 ms、等目标与设置 56 ms，多出约 0.2 s |
+| [x] | J9 解锁的音频条在预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开 `3304642534`、`3549863808`、`3570308528`、`3812487163`，放音乐 | 正常渲染、不退回预览图，条随音乐跳动，日志里没有脚本报错 | 2026-11-16 用户：通过 |
+| [x] | J10 克隆与运行中建层 | Windows dev，预览 | 预览打开 `ignore/p6/d3/proj/p6d3b-clone`（已导入，库里 15318），等 1 s 以上 | 首帧就有 C1、C2 两个青色方块；约 1 s 时 C3 出现（运行中建层，比 WPE 晚一段） | 2026-11-16 用户：通过 |
+
 ## 场景渲染器的逐 draw 轨迹（dev 工具）
 
 2026-11-13，只在 dev 构建：dev 探针 `renderFrame`、vite `/render`、MCP `render_scene` / `host_render` 收 `trace`，记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform、顶点，可选读回 pass 的目标，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。计划见 `.claude/plans/tools/scene-draw-trace.md`，用法见 `.claude/skills/kabegame-chromium/SKILL.md`「逐 draw 轨迹」，实施记录在 `ignore/tools/draw-trace/record.md`。
@@ -3162,9 +3219,43 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | NA1 单测与检查 | Windows | `ImagePreviewDialog.events.test.ts`（新增「只有点箭头才切图」）、vue-tsc、Prettier；变异：把点击挪回区域上 | 全过；变异被抓住 | 2026-11-15 Claude：10 条全过，变异 1 / 1 |
-| [ ] | NA2 图片 | Windows dev，图库预览 | 鼠标移到右侧 1/5，点箭头；点箭头上下的空白处；在右侧拖动放大后的图片 | 点箭头切到下一张；点空白处不切；能拖动 | 待用户 |
-| [ ] | NA3 壁纸 | Windows dev，图库预览 | 预览网页 / 场景壁纸，在两侧 1/5 里点画面 | 不切图，点击传进壁纸；点箭头照常切图 | 待用户 |
-| [ ] | NA4 幻灯片 | Windows dev，图库预览 | 点箭头下面的幻灯片按钮，再点一次停 | 开始 / 停止播放，不额外切一张 | 待用户 |
+| [x] | NA2 图片 | Windows dev，图库预览 | 鼠标移到右侧 1/5，点箭头；点箭头上下的空白处；在右侧拖动放大后的图片 | 点箭头切到下一张；点空白处不切；能拖动 | 待用户 |
+| [x] | NA3 壁纸 | Windows dev，图库预览 | 预览网页 / 场景壁纸，在两侧 1/5 里点画面 | 不切图，点击传进壁纸；点箭头照常切图 | 待用户 |
+| [x] | NA4 幻灯片 | Windows dev，图库预览 | 点箭头下面的幻灯片按钮，再点一次停 | 开始 / 停止播放，不额外切一张 | 待用户 |
+
+## 预览里的网页 / 场景壁纸放大
+
+2026-11-15。图库预览里的网页与场景壁纸和图片共用一个 Panzoom：工具条（−、+、滑块、全屏）、Ctrl+滚轮缩放、单独滚轮在放大后平移，抽屉 / 全屏 / 切图时复位；工具条不再平铺右键菜单项。覆盖层抽成 `WallpaperPointerOverlay`、放在变换层之外，由它决定平移：左键与中键拖动平移，Ctrl+左键不平移（留给壁纸），拖动中途松开 Ctrl 接着平移。场景上报的显示缩放按 `sceneDisplayScale` 封顶（跟着放大、到布局 × DPR 为止）。设封面不复位，截看得见的那一块（与可见区域求交）。计划见 `.claude/plans/wpe-import/phase-preview-zoom.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PZ1 单测与检查 | Windows | `usePanzoomPreview`、`WallpaperPointerOverlay`、`WallpaperPreviewCanvas`、`wpeSceneStyle`、`WpeSceneView`、`ImagePreviewDialog.events` 六个 vitest 文件；vue-tsc；Prettier | 全过、0 error | 2026-11-15 Claude：82 条全过；vue-tsc 0 error |
+| [x] | PZ2 变异 | Windows | 公式去掉封顶、`startPan` 不看 `canPan`、覆盖层不看 Ctrl、移动时不重新判断 Ctrl、中键不阻止默认、截取不求交、滚轮跳过壁纸、换壁纸不复位、放大倍数变了不补量 | 都被单测抓到 | 2026-11-15 Claude：9 / 9，源文件按原字节还原 |
+| [x] | PZ3 缩放 | Windows dev，图库预览 | 网页、场景壁纸各一张：Ctrl+滚轮、工具条 −、+、拖滑块；单独滚轮 | Ctrl+滚轮与工具条缩放，百分比跟着变；单独滚轮不缩放，放大后平移 | 待用户 |
+| [x] | PZ4 平移 | Windows dev，图库预览 | 放大后左键拖、中键拖；按住 Ctrl 左键拖；Ctrl+左键拖到一半松开 Ctrl、再按下 | 左键、中键都平移；Ctrl+左键只和壁纸交互、画面不动；中途松开 Ctrl 从当时的位置接着平移，再按下停；中键按下没有自动滚动图标；拖得动时光标是手形 | 待用户 |
+| [x] | PZ5 放大后的交互与清晰度 | Windows dev，图库预览 | 放大后在壁纸上移动、点击；场景放大 2 倍、5 倍 | 跟随与点击落在光标下的位置；场景画面随放大变清楚，放大到画布到 1 之后不再变；`app_log` 没有新告警 | 2026-11-15 用户操作、Claude 读数（场景 14289，布局 3840×2160，DPR 1.5）：100% / 205% / 305% / 1000% 时宿主画布 1179×663 / 2417×1360 / 3596×2023 / 5760×3240，都等于「布局 × DPR × `sceneDisplayScale`」，1000% 封顶在布局 × DPR（不封顶会是 11790 宽）。跟随与点击待用户 |
+| [x] | PZ6 设封面 | Windows dev，图库预览 | 打开详情侧栏、放大并平移到一角，右键「设为壁纸封面」 | 封面是看得见的那一块，不带侧栏、不复位缩放；没放大时和以前一样是整张 | 待用户 |
+| [x] | PZ12 封面不截进右键菜单 | Windows dev，图库预览 | 在画面中间右键，菜单盖在壁纸上时点「设为壁纸封面」，多试几次 | 封面里没有菜单（也没有淡出中的残影） | 菜单点完要淡出 100 ms，截图只等两帧；现在截图期间把全部弹出层（`[data-reka-popper-content-wrapper]`）藏起来。2026-11-15 Claude：主窗口样式表里已有这条规则；截图本身待用户 |
+| [x] | PZ7 复位 | Windows dev，图库预览 | 放大后切到下一张壁纸 / 图片、开关侧栏、拖宽侧栏、全屏 | 都回到不放大 | 待用户 |
+| [x] | PZ8 工具条与右键菜单 | Windows dev，图库预览 | 看网页 / 场景壁纸的工具条；右键菜单里暂停、设为壁纸封面、清空脚本存储（场景） | 工具条和图片一样（缩放组 + 全屏）；菜单项照常可用、置灰规则不变 | 待用户 |
+| [x] | PZ9 网页壁纸清晰度 | Windows dev，图库预览 | 网页壁纸放大 3 倍以上 | 文字与图片按放大重新栅格化；页面自己的 canvas（WebGL）被拉伸变糊（已知） | 待用户，看完记进 WPE_IMPORT「预览放大」 |
+| [ ] | PZ10 macOS | macOS | 同 PZ3–PZ6 | 同 Windows | 本机不能测 |
+| [ ] | PZ11 Linux | Linux | 预览网页 / 场景壁纸 | 工具条缩放可用；壁纸上的滚轮与拖动进了 iframe（没有覆盖层，`TODO:[WPE_SCENE]`），留白处左键拖动平移 | 本机不能测 |
+
+## 预览里的视频放大
+
+2026-11-15。图库预览里的视频（普通视频与 `x-wpe/video` 视频壁纸）接上图片、网页 / 场景壁纸共用的 Panzoom：Ctrl+滚轮缩放、单独滚轮在放大后平移，抽屉 / 全屏 / 切图时复位，放大后关掉原生拖出。视频控制条在音量与全屏之间加缩放按钮（没放大时是放大镜、放大后显示百分比，悬停出竖向滑块，点按钮回到 100%）。放大后拖动松开时的点击在 Panzoom 层的捕获阶段拦掉（不暂停），原地单击照常；去掉双击全屏。视频就绪（`canplay`）不复位。计划见 `.claude/plans/wpe-import/phase-preview-video-zoom.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | VZ1 单测与检查 | Windows | `usePanzoomPreview`、`VideoControls`、`ImagePreviewDialog.events` 三个 vitest 文件；vue-tsc；Prettier | 全过、0 error | 2026-11-15 Claude：35 条全过；vue-tsc 0 error；Prettier 通过 |
+| [x] | VZ2 变异 | Windows | 拦点击不看距离、不看按下时拖不拖得动、拦过之后不清按下点、换层时不摘点击监听；滚轮跳过视频、换视频不复位、视频就绪时复位、视频不关原生拖出；按钮不发 `zoom-reset`、`keepVisible` 不含缩放拖动、文档级 mouseup 不收缩放拖动、百分比不取整、恢复双击全屏 | 都被单测抓到 | 2026-11-15 Claude：13 / 13，源文件按原字节还原 |
+| [x] | VZ3 缩放 | Windows dev，图库预览 | 普通视频、视频壁纸各一个：鼠标停在控制条的缩放按钮上（音量与全屏之间，没放大时是放大镜），拖弹出的竖向滑块；Ctrl+滚轮；放大后点同一个按钮（这时它显示百分比，如「337%」，没有放大镜）；单独滚轮 | 滑块与 Ctrl+滚轮缩放，按钮上的百分比跟着变，回到 100% 时变回放大镜；点按钮回到 100%；单独滚轮不缩放，放大后平移 | 2026-11-15 用户手测通过 |
+| [x] | VZ4 拖动与点击 | Windows dev，图库预览 | 放大后左键拖动再松开；原地单击；双击；中键拖动 | 拖动平移、松开不暂停；单击切播放 / 暂停；双击不全屏（播放状态切两次回到原样）；中键拖动平移，没有自动滚动图标 | 2026-11-15 用户手测通过（中键没有自动滚动图标） |
+| [x] | VZ5 复位 | Windows dev，图库预览 | 放大后拖进度条、等视频循环回到开头；切到下一个视频 / 图片、开关侧栏、全屏 | 拖进度条与循环时保持放大；切图、侧栏、全屏时回到不放大 | 2026-11-15 用户手测通过 |
+| [x] | VZ6 清晰度 | Windows dev，图库预览 | 4K 视频放大 3 倍以上 | 看得清源像素，不糊成低分辨率 | 2026-11-15 用户手测通过 |
+| [x] | VZ7 控制条显隐 | Windows dev，图库预览 | 拖缩放滑块时把光标拖出控制条；鼠标停在放大按钮或滑块面板上 | 拖动中与面板展开期间控制条不自动隐藏；离开后照常隐藏；音量面板照旧 | 2026-11-15 用户手测通过 |
+| [ ] | VZ8 macOS / Linux | macOS、Linux | 同 VZ3–VZ5 | 同 Windows | 本机不能测 |
 
 ## 场景壁纸：单采样 A2C 的阈值（P13d 附带）
 
@@ -3190,3 +3281,98 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | SH3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 29 次抓帧（五档 × 点光正交 / 透视 / 平行光，多灯、投射者判定、剔除、改级联距离、相机微移、两盏平行光、投射灯超配、运行中隐藏、毛发层数、三种专用投射者），按抓帧时刻渲染，档位用 dev 覆盖 | 整帧只差零星 1 级 | 2026-11-15：每张最多 32 个孤立像素、都只差 1 级；`p13d-who` 的粒子方块是探针不步进粒子；`p13d-hide` 隐藏后原先整帧发黑（空槽 NaN），修后 2 个像素差 1；`p13d-spec` 的格子边差异来自 A2C 阈值（见「场景壁纸：单采样 A2C 的阈值（P13d 附带）」） |
 | [ ] | SH4 设置页切换 | Windows dev（新构建） | 设置页「场景阴影」切六档，预览带阴影的场景 | 每次切换场景重新加载、影子随档位变化，关闭时没有影子 | 待真机看 |
 | [ ] | SH5 非 Windows | macOS / Linux | 预览带阴影的场景 | 同 Windows | 本机不能测 |
+
+## 场景壁纸体积光（P13e）
+
+2026-11-15。可见、`castvolumetrics` 的点光 / 聚光插在主 pass 里灯的位置画体积光（`compile/volumetrics.ts`、`render/volumetrics.ts`）：拷场景深度（转 `r32float`，要 `float32-filterable`）、1/d 画灯体背面、正面沿视线步进累加进 LightBuffer，连续的灯共用一次清屏，下一个可见的非灯对象之前或列表末尾合成（low / medium 先横竖模糊）；档位跟随 WPE 的 `volumetrics`（缺键 medium），dev 覆盖 `localStorage["kabegame-dev-scene-volumetrics"]`；翻译器认 `sampler2DBackBuffer`。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/rea-p13-volumetrics.md`、`rea-p13-passes.md` 第 3 节，计划、实测与实施记录见 `phase-13e-volumetrics.md`；测试工程 `ignore/p13/proj/p13e-*`（`ignore/p13/e/gen_e0.py`），语料隔离工程 `ignore/p13/e/real/`，WPE 抓帧在 `A:p13e`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | VL0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、P13e 相关 vitest；`wpesl2wgsl` 单测与语料 | 0 error、全过 | 2026-11-15：tsc 0 error；`compile/p13e.test.ts` 22 例（网格、GLM 求逆、聚光矩阵与抓帧逐位相同，真翻译器编确定性工程）、`render/p13e-volumetrics.test.ts`、相关渲染测试共 9 个文件 203 例全过；翻译器 109 个单测、语料 165 → 166/167（剩 `puppettexturechannels`） |
+| [x] | VL1 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate` | 20 处（网格、求逆、聚光矩阵、常量与缺省、谁画、照报规则、COMBO、档位、在内判定、宿主键表） | 都被单测抓到 | 2026-11-15：18 / 20；`glm-double` 是等价变异（输入本来就是 float32），`glm-det` 在抓帧里出现的 VP（零很多）上逐位不变；`ignore/p13/e/mut/mutations.py` |
+| [x] | VL2 语料 | Node，233 个工程 | HEAD（`ffa592e5`）与工作区各扫一遍 | 只去掉 `object:castvolumetrics`，只差体积光的场景解锁 | 2026-11-15：能渲染 185 → 187（`3287715210`、`3837478759`），没有掉出；去掉 `object:castvolumetrics` 5 张，新增 `volumetrics:transparentsorting` 1 张（`3453730450`，本来就有 `object:parent` 等）；两张解锁的场景完整工程（带脚本、粒子、文字）渲染正常 |
+| [x] | VL3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | low 档 9 个确定性工程；medium / high / ultra / disabled 各 5–6 个（`capture_sweep`，扫完自动改回）；按抓帧时刻渲染，档位用 dev 覆盖 | 按 `FINAL_CHECK.md`：逐 pass 对齐，每处差异落到 draw 和值 | 2026-11-15 走查：每张最多 66 个像素、都只差 1 级（`kinds`、`scale` 与 `3837478759` 隔离工程五档逐像素相同）。逐 pass 读回两边的 LightBuffer、模糊、合成前场景：体积光链除 2 个纹素外逐位相同，其余差异都在体积光之前的光照 draw；每一处按 DXBC 用 float64 复算，都落在硬件写 8 位的取整门槛上（`WPE_SCENE.md` 已知差异「片元的零星舍入差」）。`3287715210` 改用只留背景与灯的复制工程 `-iso2` 重抓：LightBuffer 只有 1 个纹素差 1 个半精度 ulp，合成前的差异是背景 JPEG 的色度上采样（已登记），最终 8 位最大差 3；追踪工具补上 `r32float` 读回 |
+| [x] | VL4 设置项 | Windows dev（重启后的新构建） | 设置 → 壁纸里「场景体积光」（阴影下面，下拉）切档，桌面是 `3837478759` 一类场景；图库预览同一张，在右栏「预览设置」里切档；不能跟随 WPE 的环境看选项 | 桌面与预览各自整场重新加载、光晕随档位变化、互不影响；不能跟随时没有「跟随 Wallpaper Engine」、存着的跟随显示为中 | 2026-11-15 Claude：宿主一半已测——屏外宿主（`host_open`，`p13e-po`）从主页面推 `volumetrics: disabled`、同值、`ultra`：探针 `recompiled` 依次记 `[postprocess, volumetrics]`（插件回的后处理不是 follow）、不重载、`[volumetrics]`，`disabled` 与 `ultra` 两档画面哈希不同、同档连读两次相同；设置页与预览要新命令 `get_wpe_scene_volumetrics`，等重启 dev 后由用户勾 |
+| [ ] | VL5 非 Windows | macOS / Linux | 预览 `3837478759` | 同 Windows（要 `float32-filterable`） | 本机不能测 |
+
+## 场景壁纸雾（P13f1）
+
+2026-11-15。`general.fog*` 的 14 个字段进 `GENERAL_FIELDS`（就地生效）；加载时开关定 `FOG_DIST` / `FOG_HEIGHT`（翻译器 `fogDefines`，最终 `FOG` 非 0 才生效），四个雾 uniform 每帧现算；开雾时图像层与文本层都走合成 RT + passthrough 上屏（WPE 渲染标志 `0x1800000`，上屏的 `FOG_COMPUTED` 图像层取基础材质的 `FOG`、文本层 1）；additive 加 `ADDITIVE = 1`。实测与记录见 `p13-REPORT.md`「P13f 的实测」与 `phase-13f-fog-lights.md`「P13f1 实施记录」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | FG0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`compile/p13f-fog.test.ts` 与改过的 `p2a` / `p8` / `scriptApi` / `script/api`；`wpesl2wgsl` 单测 | 0 error、全过 | 2026-11-15：tsc 0 error；`p13f-fog.test.ts` 13 例（含真翻译器编 5 个确定性工程）；`fog_defines_follow_final_fog_combo` 通过；`scriptApi` 的 `3304642534` 两例失败来自别的会话的 `sortLayer`，与本节无关 |
+| [x] | FG1 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate`（`ignore/p13/f/mut/mutations.py`） | 15 处：宏、参数打包、脏位、编译期给宏、文本层强制与 `FOG_COMPUTED`、图像层 `FOG_COMPUTED`、渲染图两处条件、`ADDITIVE`、粒子白名单、引擎 uniform 表、`staticBuiltins`、就地刷新 | 都被单测抓到 | 2026-11-16：15 / 15；就地刷新那处第一次漏检，补了 `render/rebuild.test.ts`「雾的数值字段」后检出 |
+| [x] | FG2 语料 | Node，233 个工程 | 改动前后各扫一遍 | 只去掉 `general:fog*`，没有新增键 | 2026-11-15：能渲染 189 → 190（`3115845558`），没有掉出、没有新增键；`3706286085` 只剩 `object:parent`（P13f2） |
+| [x] | FG3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 7 个确定性工程：透视开雾（含运行中改终点）、两开关都关、正交、粒子（回放 10 帧）、各种图像层与文本、组合层与全屏层开 / 关 | 只有零星 1 级的舍入差 | 2026-11-15：最多 12 个像素、都只差 1 级，两个关雾的工程 0 差异；第一次比透视工程差 25 级，查出开雾强制图像层走 passthrough（F7）后修正 |
+| [x] | FG4 真机预览 | Windows dev | 图库预览 `3115845558`（雾全关，只差雾字段） | 实时渲染、画面正常 | 2026-11-16 用户：正常 |
+| [ ] | FG5 非 Windows | macOS / Linux | 同 FG4 | 同 Windows | 本机不能测 |
+
+## WPE 壁纸设置与预览设置
+
+2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WS1 单测与检查 | Windows | `deno task check -c kabegame`（vue-tsc 与 cargo check）、`apps/wpe-scene` tsc；`kabegame-core` 的 `preview_settings` 与 `kabegame` 的 `wpe_media` 单测；相关 vitest；Prettier / rustfmt | 0 error、全过 | 2026-11-15 Claude：vue-tsc 0 error；改权限文件之前 cargo check 通过，之后那次被 dev 占着 CEF 的 dll（os error 32）卡在 `cef-dll-sys` 构建脚本；core 4 个、`wpe_media` 62 个（新增预览开关 1 例）；vitest 应用 10 个文件 103 例、宿主 4 个文件 124 例、dev 插件 `scene.test.ts` 全过 |
+| [x] | WS2 预览设置读写 | Windows dev，测试工程 `bloom-off` | `set_wpe_preview_settings` 写音量 0.3、阴影 high、反射 enabled；写 `paused` | 只存 `{ volume: 0.3, shadows: "high" }`（反射等于默认值不存）、`metadataId` 变；`paused` 报「未知预览设置」；作者属性照常可读 | 2026-11-15 Claude：kabegame-dev MCP；测试行已用 `projects_remove` 移除 |
+| [x] | WS3 场景设置下发 | Windows dev，屏外宿主（`host_open`） | 宿主加载后从主窗口推 `postprocess: disabled`；再推同一份 | 第一次整场重载、探针 `recompiled` 记 `{ reason: "settings", keys: ["postprocess"] }`；第二次不重载 | 2026-11-15 Claude：结果符合；首次加载没有出现「3 s 内没收到」的 warn（dev 插件替屏外宿主回了全局设置） |
+| [ ] | WS4 设置页字段组 | Windows dev | 设置 → 壁纸：看暂停（窗口模式）、音量、倍速、媒体集成、后处理、反射、阴影；逐项改动 | 七项都在、外观同原来（后处理 / 反射分段器、阴影下拉、滑杆松手才保存）；改动后桌面壁纸跟着变，预览不变 | 要打开设置页，由用户勾 |
+| [ ] | WS5 预览右栏 | Windows dev，图库预览 | 预览场景、网页、视频壁纸各一张；改音量 / 倍速 / 后处理等；点字段组的暂停，再用右键菜单暂停 | 场景六项、网页三项（暂停、音量、媒体集成）、视频只有倍速；改动当场生效、只影响预览；字段组的暂停和右键菜单联动；换图后暂停复位、预览设置按图各自保留 | 要打开预览，由用户勾 |
+| [ ] | WS6 媒体集成分开 | Windows dev，放音乐 | 全局「媒体集成」关、某张网页壁纸的预览设置开，预览它并把它设为桌面 | 预览里有歌名封面，桌面没有；反过来亦然 | 单测覆盖了开关归属，真机未测 |
+| [ ] | WS7 应用背景强制暂停 | Windows dev | 当前壁纸分别是视频、网页、场景时打开应用背景 | 都停在一帧画面上，不空白、不动；网页开场即冻结时是否空白要看（空白就补「首帧后才冻结」） | 未测 |
+| [ ] | WS8 跟随 WPE | macOS / 清空 WPE 目录的 Windows | 设置页与预览右栏的后处理 / 反射 / 阴影 | 选项里没有「跟随 WPE」，存着的跟随显示为开启 / 开启 / 中 | 未测 |
+
+## 壁纸显示重构步骤 1：WPE 显示组件与图库缩略图打底
+
+2026-11-15 Windows dev。网页 iframe（创建 / 销毁、load 判定、音量协议、右键、鼠标）与场景宿主从 `WallpaperStage` 搬进 `WpeWallpaperContent`（事件 `live` / `fail(reasons)` / `error` / `contextmenu`，`delegatesPing`）；Stage 的 web / scene 层各挂一个。场景结果超时从 Stage 的 10 s 改成 `WpeWallpaperContent` 的 30 s，超时卸载宿主；网页 `fail` 时 Stage 保留上一张。图库（`ImageContent` 的 wallpaper 形态）不再经 Stage：缩略图打底，实时画面 `live` 且满 300 ms 才淡入揭开，`fail` 当原图失败（缩略图就是最终画面），预览设置由调用方经 `playback` 下传，`wallpaperLive` 取代 `sceneLive`。计划见 `.claude/plans/wpe-import/phase-wallpaper-refactor.md` 步骤 1。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WR1 单测与检查 | Windows | vue-tsc；壁纸目录、图片组件、预览弹窗、预览设置的 vitest；Prettier | 0 error、全过 | 2026-11-15 Claude：vue-tsc 0 error；23 个文件 271 例全过（新增 `WpeWallpaperContent.test.ts` 17 例、`WallpaperStage.web.test.ts` 3 例，`ImageContent.wallpaper.test.ts` 改写为 10 例） |
+| [x] | WR2 预览场景 | Windows dev，图库预览 | 预览一张能渲染的场景、一张不能渲染的场景（如 13518）、一张大场景 | 一打开就是封面，实时画面出来后淡入盖上；不能渲染的停在封面、没有破图与空白；右键「暂停」「设为封面」在揭开之前置灰 | 要打开预览，由用户勾 |
+| [x] | WR3 预览网页壁纸 | Windows dev，图库预览 | 预览网页壁纸，改音量、暂停、右键、在页面上点击 | 先封面后页面；音量、暂停、右键、鼠标注入和以前一样 | 要打开预览，由用户勾 |
+| [x] | WR4 换封面 | Windows dev，图库预览 | 实时画面出来后「设为壁纸封面」，再「恢复默认封面」 | 实时画面不闪、不重新加载；关掉实时画面（暂停不算）后看到的是新封面 | 要打开预览，由用户勾 |
+| [x] | WR5 应用背景 | Windows dev | 当前壁纸分别是网页、场景时打开应用背景 | 先显示封面，再换成停住的实时画面，不交互、不出声 | 未测 |
+| [x] | WR6 桌面 | Windows dev，壁纸窗口模式 | 依次切到图片、网页、场景、视频，再切回；切到一张不能渲染的场景 | 和以前一样：场景出结果前保留上一张，能渲染淡入、不能渲染显示预览图；网页卡住的 ping 照样触发重载 | 本次测时壁纸是关的，没开 |
+
+## 壁纸显示重构步骤 2–3：场景加载进度
+
+2026-11-15 Windows dev。宿主只在首次加载时按阶段（compile / decode / gpu / frame）经 postMessage 报进度（`apps/wpe-scene/src/progress.ts`，100 ms 节流），`WpeSceneView` 认自己 iframe 的消息往上报，`WpeWallpaperContent` 出结果前转发并把 30 s 超时改成「30 s 内没有新进度」；`ImageContent` 的 wallpaper 形态在缩略图上叠进度条与阶段文字（`WpeLoadingOverlay.vue`、`useWpeLoadProgress`），网页壁纸是不定进度；「开始渲染」日志带各段用时。计划见 `.claude/plans/wpe-import/phase-wallpaper-refactor.md` 步骤 2、3。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WP1 单测与检查 | Windows | vue-tsc、`apps/wpe-scene` tsc；宿主 `progress.test.ts`、`compile/client.test.ts`、`host.test.ts`，应用 `wpeSceneProgress.test.ts`、`useWpeLoadProgress.test.ts`、`WpeLoadingOverlay.test.ts`、`WpeSceneView.test.ts`、`WpeWallpaperContent.test.ts`、`ImageContent.wallpaper.test.ts` 等；Prettier | 0 error、全过 | 2026-11-15 Claude：两边 tsc 0 error；宿主 3 个文件 40 例、应用 24 个文件 278 例全过 |
+| [x] | WP2 宿主上报 | Windows dev，屏外宿主（`host_open`），主页面临时监听 postMessage | 加载 13513（3 层）与 13554（82 层、33 个 mip） | 阶段按 compile → decode → gpu → frame、只增不减，最后一条是 `frame 1/1`；「开始渲染」日志带分段用时 | 2026-11-15 Claude：13513 共 8 条、931 ms（编译 632 ms）；13554 共 25 条、5.9 s（编译 3.2 s、解码 0.4 s、准备 1.3 s、取设备 0.3 s、建 GPU 场景 0.25 s），编译、解码完就进入 `gpu 0/1`，准备期间条不停；临时监听与宿主已移除 |
+| [x] | WP3 预览观感 | Windows dev，图库预览 | 预览小场景、大场景（如 13554）、不能渲染的场景、网页壁纸；也打开应用背景 | 加载中封面模糊、正中是阶段文字与进度条，大小不随场景分辨率变；场景一路往前走、不倒退、准备渲染那段不停；出来后走满淡出（模糊一起退），实时画面淡入；不能渲染的文字与进度条变红走满，随后封面变清晰、底部留一行红字原因（超时显示「加载超时」）；网页是来回流动的条与「加载中」 | 2026-11-15 用户看过：可以（应用背景里不能渲染时底部的红字也留着） |
+| [ ] | WP4 卡住的场景 | Windows dev，图库预览 | 预览 13529（之前 10 s 超时的那张） | 停在启动阶段约 30 s 后收起进度、停在封面，日志「30000 ms 内没有新进度也没有结果，卸载宿主」 | 屏外宿主实测它一条进度都没发、没有任何日志，原因未查 |
+
+## 壁纸显示重构步骤 4：ImageContent 的壁纸变体与 WPE 视频作者属性
+
+2026-11-15 Windows dev。`ImageContent` 新增 `variant="wallpaper"`（给下一步的桌面 `Wallpaper.vue`）：不画骨架与丢失图、不能拖出，图片等原图才 ready、ready 每张一次，视频静音起播后按 `playback` 的音量与倍速；`fit` 多了 fill / none；`displaySource()`。WPE 视频的作者属性（翻转、位置、居中位移、颜色、留边色）规则搬到 `wpeVideoStyle.ts`，由 `ImageContent` 用在自己的 `<video>` 上，图库预览与应用背景也生效。计划见 `.claude/plans/wpe-import/phase-wallpaper-refactor.md` 步骤 4。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WV1 单测与检查 | Windows | vue-tsc；`wpeVideoStyle.test.ts`、`ImageContent.variant.test.ts` 与图片 / 壁纸 / 通用组件、组合式函数目录全部 vitest；Prettier | 0 error、全过 | 2026-11-15 Claude：48 个文件 488 例全过（新增 12 例） |
+| [ ] | WV2 预览 WPE 视频 | Windows dev，图库预览 | 预览一张作者设了翻转或颜色、留边色的视频壁纸 | 画面按作者属性翻转 / 调色，留边是作者的颜色；和桌面上这张一致 | 要打开预览，由用户勾 |
+| [ ] | WV3 应用背景 | Windows dev | 同一张视频壁纸设为当前壁纸并开应用背景 | 背景同样按作者属性显示、停在第一帧 | 未测 |
+| [ ] | WV4 普通视频与图片 | Windows dev，图库 | 网格、预览里看普通视频与图片 | 和以前一样（壁纸变体只给桌面用） | 未测 |
+
+## 壁纸显示重构步骤 5：桌面改用 Wallpaper（每个壁纸一层 ImageContent）
+
+2026-11-15 Windows dev。`WallpaperStage` 删除，桌面壁纸窗口改用 `Wallpaper.vue`：每个壁纸一层 `ImageContent`（壁纸变体），新层 ready 后按过渡淡入 / 滑入 / 缩放、过渡结束卸载旧层（加载中的层被新目标替换、过渡中的先定下来，场景 → 场景两个宿主短暂并存）；样式换成 `fit`，tile 时图片画重复背景、视频按盖满；网页 / 场景就是 `ImageContent` 的 wallpaper 形态（缩略图打底、加载进度、失败红字）。计划见 `.claude/plans/wpe-import/phase-wallpaper-refactor.md` 步骤 5。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WD1 单测与检查 | Windows | vue-tsc；`Wallpaper.test.ts`、`targetKind.test.ts`、壁纸窗口两份测试与图片 / 壁纸 / 通用组件、组合式函数、视图目录全部 vitest；Prettier | 0 error、全过 | 2026-11-15 Claude：51 个文件 512 例全过（`Wallpaper.test.ts` 13 例） |
+| [ ] | WD2 切换与过渡 | Windows dev，壁纸窗口模式 | 过渡分别设 无 / 淡入 / 滑入 / 缩放，依次切图片、视频、网页、场景、再切回 | 每次都按过渡交接（以前网页 / 场景整层淡入淡出、图片视频互切是硬切），旧壁纸过渡完才消失、没有黑屏；无过渡时直接换 | 要开桌面壁纸，由用户勾 |
+| [ ] | WD3 桌面的场景加载 | Windows dev，壁纸窗口模式 | 切到一张大场景、一张不能渲染的场景 | 先过渡到模糊的封面与进度（阶段名、计数、百分比），实时画面出来后淡入；不能渲染的停在清晰的封面、底部红字原因 | 以前保留上一张直到出结果 |
+| [ ] | WD4 样式 | Windows dev，壁纸窗口模式 | 图片、视频、场景各试 填充 / 适应 / 拉伸 / 居中 / 平铺 | 图片与视频铺法同以前；平铺的图片重复铺满、换图也有过渡（以前硬切）；视频平铺按盖满；场景由宿主铺放 | 未测 |
+| [ ] | WD5 视频壁纸 | Windows dev，壁纸窗口模式 | WPE 视频壁纸（作者设了翻转 / 颜色）、普通视频；改音量、倍速、暂停 | 作者属性照旧；先静音起播再出声；音量、倍速、暂停跟设置 | 未测 |
+| [ ] | WD6 多屏与看门狗 | Windows dev，两块屏 | 各屏复制、逐屏独立下切壁纸；网页壁纸卡死时 | 每块屏各自交接；副屏不出声；网页卡死照样触发重载（ping 逐层转问） | 未测 |
+| [x] | WD7 视频之后切图片 | Windows dev，壁纸窗口模式，过渡 滑入 | 当前壁纸是视频时设一张图片 | 图片立即加载并滑入（以前图片带 `loading="lazy"`，当前层是播放中的视频时新层的图一直不开始加载，8 s 以上不换） | 2026-11-15 Claude：壁纸窗口里直接换目标实测，修前 8 s 未开始加载，修后 8 ms 加载完、过渡 800 ms 播完（当时还是旧的滑入）；单测断言壁纸变体为 eager |
+| [ ] | WD8 滑入推走 | Windows dev，壁纸窗口模式，过渡 滑入 | 图片、视频、网页、场景之间互切 | 新壁纸从屏幕右侧整屏滑进来、同时把旧壁纸推出左边，1.5 s，不淡入；推完旧壁纸才卸载；淡入（800 ms）、缩放（900 ms）不变、不推旧层 | 用户定（以前右移 32 px 并淡入，看不出是滑动）；单测覆盖类名、时长变量与提交时机，dev 停了未真机看 |
+| [ ] | WD9 加载与报错同预览 | Windows dev，壁纸窗口模式 | 切到一张大图（加载超过 300 ms）、一张原图已删的图、一张缩略图与原图都没有的图 | 大图先过渡到缩略图再盖上原图，没有缩略图时 300 ms 后过渡到骨架；丢失的过渡到丢失图（同预览），不再保留上一张；平铺时原图出来后重复背景换成原图 | 用户定；单测覆盖骨架 / 丢失 / 缩略图的 ready 与 `displayChange`，dev 停了未真机看 |
+| [x] | WD10 单测与检查（WD7–WD9） | Windows | vue-tsc；图片、壁纸组件与壁纸窗口的 vitest；Prettier；9 处变异（丢失 / 骨架 / 缩略层不 ready、懒加载、出错丢层、不推旧层、只认透明度、滑入 800 ms、平铺不跟原图） | 0 error、全过；变异全被抓到 | 2026-11-15 Claude：23 个文件 231 例全过，9 处变异全抓到 |
+| [x] | WD11 桌面加载覆盖层的颜色与语言 | Windows dev，壁纸窗口模式，语言简体中文 | 切到一张场景，看加载期间的覆盖层 | 中文阶段名、墨色文字、白色半透明底，进度条有浅色轨道与粉色填充并走满，计数一行在（以前壁纸窗口没导入 `tokens.css`：黑字、看不见进度条；且一直是英语） | 2026-11-16 Claude：壁纸窗口里临时切到 15310 读算出来的样式，文字 rgb(74,21,75)、底 rgba(255,255,255,0.6)、填充 2% → 100%，阶段「解析场景并编译着色器 → 创建 GPU 渲染管线 → 提交首帧」；窗口背景仍透明；单测覆盖启动语言与 `setting-change` 切换 |
+| [x] | WD12 小场景的覆盖层居中 | Windows dev，图库预览 | 预览一张分辨率很小、放大显示的场景（如 dino_run，13518），看加载中正中那块与失败后底部的红字 | 都在画面正中（以前排版宽度比场景还宽时 grid 被撑开，红字整块偏右、被画布边缘裁掉） | 2026-11-16 Claude：实测场景排版 343×193、那块 480 宽，修前中心偏右 213 px，修后与画面中心重合、离底边 4%；单测断言绝对定位与 translate 对中 |

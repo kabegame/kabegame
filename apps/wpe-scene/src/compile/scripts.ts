@@ -1,4 +1,4 @@
-import { init, parse } from "es-module-lexer";
+import { init, initSync, parse } from "es-module-lexer";
 import {
   GENERAL_FIELDS,
   type AnimationLayerField,
@@ -194,14 +194,16 @@ export function targetValueType(
   return null;
 }
 
-/** 原始 JSON 坐标扫描；不受可见性、effect 开关或编译快速回退影响。 */
-export async function collectScripts(
-  scene: SceneJson,
+/**
+ * 脚本遍历的共用部分（`collectScripts` 与 `collectObjectScripts`）：`objectAt` 按 `objects` 下标给出对象（声音 / 文本 / 粒子 / 相机的目标判定要看它），
+ * 返回的 `visit` 把找到的脚本条目追加进 `list`。键序、属主、写回目标只有这一份。
+ */
+function scriptVisitor(
+  objectAt: (index: number) => unknown,
   properties: Record<string, SceneScalar>,
   bindings: SceneBinding[],
-): Promise<SceneScripts> {
-  await init;
-  const list: SceneScript[] = [];
+  list: SceneScript[],
+): (value: unknown, path: string, owner: ScriptOwner, layer: number | null) => void {
   function visit(value: unknown, path: string, owner: ScriptOwner, layer: number | null): void {
     if (!value || typeof value !== "object") return;
     if (!Array.isArray(value) && "script" in value && typeof value.script === "string") {
@@ -237,7 +239,7 @@ export async function collectScripts(
           });
         }
       }
-      const object = owner.kind === "layer" ? (scene.objects as SceneObject[])[owner.object] : undefined;
+      const object = owner.kind === "layer" ? (objectAt(owner.object) as SceneObject | undefined) : undefined;
       const sound = !!object && typeof object === "object" && isSoundObject(object);
       const text = !!object && typeof object === "object" && isTextObject(object);
       const particle = !!object && typeof object === "object" && objectKind(object) === "particle";
@@ -290,8 +292,55 @@ export async function collectScripts(
       visit(entry, path ? `${path}/${key}` : key, next, nextLayer);
     }
   }
+  return visit;
+}
+
+/** 原始 JSON 坐标扫描；不受可见性、effect 开关或编译快速回退影响。 */
+export async function collectScripts(
+  scene: SceneJson,
+  properties: Record<string, SceneScalar>,
+  bindings: SceneBinding[],
+): Promise<SceneScripts> {
+  await init;
+  const list: SceneScript[] = [];
+  const visit = scriptVisitor((index) => (scene.objects as unknown[])[index], properties, bindings, list);
   if (scene.general) visit(scene.general, "general", { kind: "general" }, null);
   visit(scene.objects, "objects", { kind: "general" }, null);
   // 导入说明符无效的整段不求值（`ScriptRuntime.load`），同能力表只看会执行的脚本
   return { list, usesEffectAccess: list.some((script) => !script.errors.length && usesEffectAccess(script.source)) };
+}
+
+/**
+ * 只收一个对象上的脚本（P6d3b，`createLayer` 的新建对象）：路径 `objects/<index>/…`，属主、写回目标、键序与 `collectScripts` 同一套遍历。
+ * `bindings` 缺省不登记属性绑定（运行时当场建层时由编译那一次登记）。
+ */
+export async function collectObjectScripts(
+  object: unknown,
+  index: number,
+  properties: Record<string, SceneScalar>,
+  bindings: SceneBinding[] = [],
+): Promise<SceneScript[]> {
+  await init;
+  return collectObjectScriptsSync(object, index, properties, bindings);
+}
+
+/**
+ * 同步版（P6d3b）：运行时 `createLayer` 要在返回前拿到条目。调用前词法分析器必须已初始化——主线程在建 realm 时已 `await init`；没有就退回
+ * `initSync()`（同步编译 wasm，主线程可能被浏览器拒绝，所以只当兜底）。
+ */
+export function collectObjectScriptsSync(
+  object: unknown,
+  index: number,
+  properties: Record<string, SceneScalar>,
+  bindings: SceneBinding[] = [],
+): SceneScript[] {
+  try {
+    initSync();
+  } catch {
+    // 已经初始化、或这里不允许同步编译：照常往下走，真没初始化时 parse 自己会抛
+  }
+  const list: SceneScript[] = [];
+  const visit = scriptVisitor((at) => (at === index ? object : undefined), properties, bindings, list);
+  visit(object, `objects/${index}`, { kind: "layer", object: index }, index);
+  return list;
 }

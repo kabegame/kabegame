@@ -27,13 +27,23 @@ export const ALPHA_TO_COVERAGE_COMBO = "ALPHATOCOVERAGE";
  * `combos`（同一个对象，缺省时空对象），翻译请求与着色器缓存键和改前逐字相同。
  * 组合键只看本 pass 自己的混合：WPE 上屏时把基础材质的混合拷给最后一个 effect pass，组合键可能也带上，但 WPE 自带 effect 与语料的着色器
  * 没有一处读它，加不加结果相同。
+ * `additive` 同理加 `ADDITIVE = 1`（P13f，rea-p6d1-matstate 第 4 节 `0x140154c5a`，加载时定、运行中改混合不加）：WPE 自带着色器只在
+ * 雾分支里读它（`generic4` 等的 `#if ADDITIVE` 把雾因子乘进 alpha），语料的工坊着色器没有读它的。
  */
 export function materialCombos(pass: Pick<MaterialPass, "blending" | "combos">): Record<string, number | boolean> {
   const combos = pass.combos ?? {};
-  if (pass.blending !== "alphatocoverage") return combos;
+  const added =
+    pass.blending === "alphatocoverage"
+      ? ALPHA_TO_COVERAGE_COMBO
+      : pass.blending === "additive"
+        ? ADDITIVE_COMBO
+        : null;
+  if (!added) return combos;
   const out: Record<string, number | boolean> = {};
-  for (const [name, value] of Object.entries(combos))
-    if (name.toUpperCase() !== ALPHA_TO_COVERAGE_COMBO) out[name] = value;
-  out[ALPHA_TO_COVERAGE_COMBO] = 1;
+  for (const [name, value] of Object.entries(combos)) if (name.toUpperCase() !== added) out[name] = value;
+  out[added] = 1;
   return out;
 }
+
+/** additive 的组合键名（P13f，WPE 加载时加的，`0x140154c5a`）。 */
+export const ADDITIVE_COMBO = "ADDITIVE";

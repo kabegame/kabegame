@@ -52,6 +52,7 @@ interface TranslateRequest {
   defaultFormats?: Record<number, number | null>;  // 没绑定、按注解缺省纹理定格式的槽位：slot → 缺省纹理的格式（读不到为 null），见「缺纹理格式」
   defines?: Record<string, string>;                // 额外的宏，最后应用（可覆盖平台宏与 COMBO）
   litDefines?: Record<string, string>;             // 只在最终 LIGHTING 非 0 时生效的宏（LIGHTS_* 等，见下）
+  fogDefines?: Record<string, string>;             // 只在最终组合表里 FOG 非 0 时生效的宏（FOG_DIST / FOG_HEIGHT，见下）
   debug?: boolean;                                 // 成功时也带上生成的 GLSL 450
 }
 ```
@@ -59,6 +60,7 @@ interface TranslateRequest {
 - **头文件按需提供**：结果为 `phase: "include"` 时，读出 `missing` 里的文件、放进 `includes` 后再调一次。只有处于有效分支的 `#include` 才要求提供。
   头文件的查找顺序（项目 `shaders/` → WPE `assets/shaders/`，effect 自己的 `shaders/` 优先）由调用方决定。
 - **`litDefines`**：WPE 只在最终 `LIGHTING` 非 0 时写 `LIGHTS_*`，而 COMBO 的最终值（可能来自着色器注解的默认值）要到这里才算得出，所以由翻译器裁决。
+- **`fogDefines`**（P13f）：WPE 在材质加载时，general 的雾开关为真且组合表（并进着色器注解的缺省值之后）里有 `FOG`、值不为 0 时才定义 `FOG_DIST` / `FOG_HEIGHT`；调用方按开关给出这两个宏，`FOG` 的最终值由翻译器裁决。着色器不声明、材质也没写 `FOG` 时不生效。
 - **`textures` 有两个作用**：一是采样器注释里写了 `"combo": "NORMALMAP"` 的槽位绑定了纹理时，该 COMBO 置 1；二是给声明了 `formatcombo` 的槽位定义 `TEX<slot>FORMAT = format`，和 WPE 一样；没声明的不定义，在 `#if` 里按 0。
   格式枚举与 WPE 一致：0 RGBA8888、1 RGB888、2 RGB565、4 DXT5、6 DXT3、7 DXT1、8 RG88、9 R8、10 RG1616F、11 R16F、12 BC7。
   采样器注释还可以带 `components`（如 `generic4` 的 PBR 遮罩 `{"combo":"PBRMASKS","components":[{"combo":"METALLIC_MAP"},…,{"combo":"EMISSIVE_MAP"}]}`）：槽位绑定了纹理、且 `flags`（`.tex` 头的标志，WPE 纹理对象 `+0x1c`）带 `0x100000 << i` 时，第 i 个**对象**条目的 `combo` 置 1，非对象条目不计序号，`flags` 缺省按 0（`FUN_14016c800`；编辑器画的遮罩用这几位记用了哪些通道）。请求里的同名 COMBO 照样最后覆盖。
@@ -319,7 +321,8 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
        WebGPU 没有 BORDER。2×2 足迹全在纹理内时用硬件比较采样；越出时四个纹素各在中心比较一次、越界的换成边框的比较结果，手算双线性。
        权重写成 `w >= 0 ? w : 0`：空阴影槽的坐标是 NaN（WPE 给没有灯的槽写全 0，`xyz /= w` 是 0/0），硬件把 NaN 坐标当 0、结果有限，
        手算的权重不能把 NaN 带进光照和（`p13d-hide`）；
-     - `texSample3D`、`texSample2DBackBuffer` 改成 `texture`；
+     - `texSample3D`、`texSample2DBackBuffer` 改成 `texture`。`sampler2DBackBuffer`（体积光 `volumetricsfront` 读场景深度的拷贝，P13e）按普通
+       `sampler2D` 声明：WPE 不开 MSAA 时 `texSample2DBackBuffer(s, uv, r)` 就是 `texSample2D(s, uv)`（exe 里两种宏定义都读到了），我们没有 MSAA；
      - `texLoad2D(t, uv, res)` 改成 `texelFetch(…, ivec2(uv * res), 0)`。
 
      参数里嵌套的调用一并改写，第一个参数必须是已声明的纹理，或按正文顺序 `#define` 成已声明纹理的对象宏（追多层，`#undef` 生效）。
@@ -466,7 +469,6 @@ void main() {
 |---|---|
 | `phase: "require"`，`LightingV1/spot-shadow` | 聚光的阴影与 cookie 要聚光投影与 `_alias_lightCookie`，渲染器没有（语料 0 张） |
 | `Array size must be greater than zero` | `BONECOUNT` 等引擎宏未定义（骨骼蒙皮），可经 `defines` 传入 |
-| `不支持的采样器类型 sampler2DBackBuffer` | 体积光专用采样器类型 |
 
 另外，glsl-in 只认 Vulkan 语义的 GLSL 450，这正是改写这一步存在的原因；naga 的 `glsl-in` / `wgsl-out` 在其支持表里是二档（维护但测试较少）。
 如果以后遇到 naga 接不住的写法，备选方案是 glslang → SPIR-V → Tint（Babylon.js 的路线）。
@@ -555,5 +557,7 @@ CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapt
 以及 WPE 安装目录部分的 swing、vhs、advection 原件。每个程序变 GLSL 与 WGSL 两个文件，`ok` 与夹具全部一致，12 份 WGSL 过 Tint 0 error 0 warning。
 
 2026-11-07 结果：167 对通过 158 对（94.6%），WGSL 回读失败 0；2026-11-10 加几何着色器展开后不变，几何门槛 27/27。失败的 9 对见「已知不支持」；`fur4` 在基线里失败是因为基线只绑槽 0，缺 `TEX8FORMAT`，绑了毛发图就能过（上面的门槛绑了）。
+
+2026-11-15（P13e，`sampler2DBackBuffer` 按 `sampler2D`）：WPE 安装目录 165 → 166/167（新通过 `volumetricsfront`，剩 `puppettexturechannels`），几何门槛 27/27；单测 109 个。
 
 浏览器自己的 WGSL 编译器（Tint）是否接受这些输出，要在 dev app 里实测：用 `createShaderModule` + `getCompilationInfo` 跑一遍语料。见 `versions/latest/regression.md` 的场景壁纸 P1-0 节。

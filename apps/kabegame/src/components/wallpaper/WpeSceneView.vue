@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /**
  * WPE 场景壁纸（`x-wpe/scene`）的视图：场景宿主（`apps/wpe-scene`，P3-0）的 `file:` iframe 外壳，地位等同
- * `WallpaperStage` web 层的网页壁纸 iframe。编译、渲染、用户属性与后处理档位都在宿主里，这里不碰。
+ * `WpeWallpaperContent` 里的网页壁纸 iframe。编译、渲染、用户属性与后处理档位都在宿主里，这里不碰。
  *
  * - 地址：`get_wpe_scene_host_url` + `kbScene=<图片 id>` + `kbInstance=<实例号>`；换目标就换实例号、重建 iframe。
  * - 状态：宿主经 `wpe_scene_report` 报 `ready` / `fallback`，后端以 `wpe-scene-status` 发回本窗口，这里只认本实例号，
  *   照旧 emit `ready` / `fallback(reasons)`；取不到宿主地址时 emit `fallback(["host:unavailable"])`。
+ * - 加载进度：宿主首次加载时经 postMessage 按阶段报（`wpeSceneProgress.ts`），只认自己的 iframe，原样 emit `progress`。
  * - 暂停与音量：回应本 iframe 里垫片的音量请求（`wpeWebVolume.ts` 的协议，消息带 `paused`，垫片转成
  *   `setPaused`），`volume` / `paused` / `interactive` 变化时主动推。第一次收到请求说明垫片已在跑，emit `alive`：
  *   壁纸窗口从此把 ping 交给宿主里的垫片应答。
@@ -14,6 +15,8 @@
  *   大小。预览画布（`WallpaperPreviewCanvas`）按内容尺寸布局、再整体 `scale`，这个 transform 在 iframe 里量不到，
  *   只能在这里量。宿主请求时必回；iframe 尺寸变化（ResizeObserver）、窗口尺寸变化时量一次；只有祖先 transform
  *   变了时（弹窗缩放、预览弹窗动画）布局尺寸不变、哪个 observer 都不触发，所以再按 250ms 轮询比较，只在值变时推。
+ *   预览放大时（预览画布提供的 `WALLPAPER_PREVIEW_ZOOM` > 1）按 `sceneDisplayScale` 封顶：画布跟着放大到布局 × DPR 为止；
+ *   放大倍数一变就在下一帧补量一次（Panzoom 也在 rAF 里写 transform），不等轮询。
  * - 快捷方式（P11d）：脚本的 `engine.openUserShortcut` 经宿主门禁后 `postMessage` 属性名（`wpeSceneShortcut.ts`）。这里是安全边界：
  *   只认可交互实例、`navigator.userActivation.isActive`（真实用户输入）、同一属性 1 秒一次，以本组件持有的图片 id 调
  *   `wpe_open_user_shortcut`（只开给应用页，宿主调不到）；消息里除属性名外的东西都不信。
@@ -29,21 +32,26 @@ import { invoke } from "@/api";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { logger } from "@/utils/logger";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Mode, WallpaperTarget } from "./types";
 import { WEB_SANDBOX } from "./webSandbox";
 import {
+  WALLPAPER_PREVIEW_ZOOM,
   displayScaleOf,
   isWpeSceneStyleRequest,
+  sceneDisplayScale,
   scenePointerIn,
   wpeSceneDisplayMessage,
   wpeScenePointerMessage,
+  wpeSceneSettingsMessage,
   wpeSceneStyleMessage,
 } from "./wpeSceneStyle";
+import { WPE_FOLLOW_SCENE_SETTINGS, type WpeSceneSettings } from "@/utils/wpeSettings";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 import { framePointerEvents } from "./framePointer";
 import { createShortcutThrottle, wpeShortcutName } from "./wpeSceneShortcut";
+import { isWpeSceneProgressMessage, type WpeSceneProgress } from "./wpeSceneProgress";
 
 /**
  * 祖先 transform 变化不触发任何 observer，按这个间隔核对显示缩放。不用 rAF：桌面壁纸窗口里场景一直在，
@@ -60,8 +68,10 @@ const props = withDefaults(
     paused?: boolean;
     volume: number;
     interactive?: boolean;
+    /** 场景后处理 / 反射 / 阴影 / 体积光：桌面传全局「壁纸设置」，预览传这张壁纸的「预览设置」（`wpeSceneSettingsOf`） */
+    sceneSettings?: WpeSceneSettings;
   }>(),
-  { paused: false, interactive: false },
+  { paused: false, interactive: false, sceneSettings: () => WPE_FOLLOW_SCENE_SETTINGS },
 );
 const emit = defineEmits<{
   ready: [];
@@ -69,6 +79,8 @@ const emit = defineEmits<{
   alive: [];
   /** 宿主里点了右键（垫片转发，`wpeContextMenu.ts`），坐标已换算到本页面视口 */
   contextmenu: [point: ViewportPoint];
+  /** 首次加载的进度（宿主的 `compile` / `decode` / `gpu` / `frame`） */
+  progress: [progress: WpeSceneProgress];
 }>();
 const frame = ref<HTMLIFrameElement | null>(null);
 const src = ref("");
@@ -83,6 +95,10 @@ let resizeObserver: ResizeObserver | null = null;
 let displayTimer: number | undefined;
 /** 本页最近一次 `pointermove` / `pointerdown` 的视口坐标（CSS 像素）：问不到 Rust 时的开场指针。 */
 let pagePointer: { x: number; y: number } | null = null;
+/** 预览的放大倍数（预览画布提供）；桌面、应用背景没有提供方，按 1。 */
+const previewZoom = inject(WALLPAPER_PREVIEW_ZOOM, null);
+/** 放大倍数变了之后补量的那一帧（合并成一次）。 */
+let displayFrame = 0;
 
 function onPagePointer(event: PointerEvent) {
   pagePointer = { x: event.clientX, y: event.clientY };
@@ -105,16 +121,22 @@ function postStyle() {
   frame.value?.contentWindow?.postMessage(wpeSceneStyleMessage(props.styleMode), "*");
 }
 
+/** 场景设置：宿主请求时回、变了再推；宿主和上一次加载用的值比，变了才整场重载 */
+function postSceneSettings() {
+  frame.value?.contentWindow?.postMessage(wpeSceneSettingsMessage(props.sceneSettings), "*");
+}
+
 /**
  * 量显示缩放，变了才推；`force`（宿主请求）时照推。量不出来（还没布局、`scale(0)`）就不推，宿主保持上次的值
- * （起初是 1），轮询会在量得出来时补上。
+ * （起初是 1），轮询会在量得出来时补上。预览放大时按 `sceneDisplayScale` 封顶。
  */
 function postDisplay(force = false) {
   const element = frame.value;
   const target = element?.contentWindow;
   if (!element || !target) return;
-  const scale = displayScaleOf(element);
-  if (scale === null) return;
+  const measured = displayScaleOf(element);
+  if (measured === null) return;
+  const scale = sceneDisplayScale(measured, previewZoom?.value ?? 1);
   if (!force && postedScale !== null && Math.abs(scale - postedScale) <= postedScale * DISPLAY_SCALE_EPSILON) return;
   postedScale = scale;
   target.postMessage(wpeSceneDisplayMessage(scale), "*");
@@ -158,8 +180,14 @@ function onWindowMessage(event: MessageEvent) {
   const target = frame.value?.contentWindow;
   if (!target || !event.isTrusted || event.source !== target) return;
   if (isWpeSceneStyleRequest(event.data)) {
+    postSceneSettings();
     postStyle();
     postDisplay(true);
+    return;
+  }
+  if (isWpeSceneProgressMessage(event.data)) {
+    const { stage, done, total } = event.data;
+    emit("progress", { stage, done, total });
     return;
   }
   const point = frame.value ? wpeContextMenuPoint(event.data, frame.value) : null;
@@ -241,6 +269,27 @@ watch(
 );
 watch(() => [props.volume, props.paused, props.interactive], postVolume);
 watch(() => props.styleMode, postStyle);
+// 预览放大倍数变了：下一帧补量（Panzoom 在 rAF 里写 transform，排在它后面才量得到新值），同一帧里多次变化合并
+watch(
+  () => previewZoom?.value,
+  () => {
+    if (displayFrame || disposed) return;
+    displayFrame = requestAnimationFrame(() => {
+      displayFrame = 0;
+      postDisplay();
+    });
+  },
+);
+watch(
+  () =>
+    [
+      props.sceneSettings.postprocess,
+      props.sceneSettings.reflection,
+      props.sceneSettings.shadows,
+      props.sceneSettings.volumetrics,
+    ].join("\n"),
+  postSceneSettings,
+);
 // 换宿主时 iframe 元素随之重建：观察新元素（observe 时会先回调一次）
 watch(
   frame,
@@ -261,6 +310,8 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   resizeObserver = null;
   window.clearInterval(displayTimer);
+  if (displayFrame) cancelAnimationFrame(displayFrame);
+  displayFrame = 0;
   unlisten?.();
   src.value = "";
 });

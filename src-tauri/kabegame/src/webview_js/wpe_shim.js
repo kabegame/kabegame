@@ -1,10 +1,10 @@
 // WPE 网页壁纸运行时垫片：all-frames 初始化脚本，桌面壁纸窗口与主窗口共用。
-// 只在一种文档里启用：顶层的直接子 frame、且是 file:（WallpaperStage web 层的网页壁纸 iframe，图库预览与
+// 只在一种文档里启用：顶层的直接子 frame、且是 file:（WpeWallpaperContent 里的网页壁纸 iframe，图库预览与
 // 桌面同一份）。其它文档（应用页、更深的嵌套 iframe）第一行就返回，不定义任何全局。
 // 协议见 cocs/wpe/WPE_IMPORT.md「运行时垫片与宿主协议」：垫片向宿主拉取完整状态、订阅事件后重拉，
 // 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。音频与媒体是例外：页面登记监听后垫片向宿主订阅，
 // 宿主经 Channel 推（「音频与媒体集成」）。音量也是例外：不走 IPC，垫片经 postMessage 向父页面
-// （WallpaperStage）要宿主音量，父页面回复、变化时再推，垫片把它乘到页面的媒体元素与 Web Audio 上（「音量」），
+// （WpeWallpaperContent）要宿主音量，父页面回复、变化时再推，垫片把它乘到页面的媒体元素与 Web Audio 上（「音量」），
 // 另放成只读的 window.__kabegameHostVolume 并派发 kabegame-host-volume，给场景宿主的声音播放器用（WPE_SCENE.md「声音」）。
 // 鼠标不经垫片合成：同一条音量消息里父页面说可交互且没暂停时，本 frame 向 tauri-plugin-cursor 登记，Rust 轮询全局
 // 光标、把原生事件直接注入本 frame（钳进视口），页面收到的是可信事件（WPE_IMPORT.md「鼠标」）。
@@ -59,7 +59,7 @@
     });
   }
 
-  // ---- 右键：iframe 里的事件到不了父页面，发消息给它（WallpaperStage / WpeSceneView）弹菜单 ----
+  // ---- 右键：iframe 里的事件到不了父页面，发消息给它（WpeWallpaperContent / WpeSceneView）弹菜单 ----
   // 字面量与 apps/kabegame/src/components/wallpaper/wpeContextMenu.ts 一致（单测核对）。坐标是本视口的 CSS 像素，
   // 父页面按 iframe 的显示矩形换算。页面取消右键或停止冒泡也照发：菜单和工具条一样总能用。原生菜单 CEF 已全局关掉。
   function installContextMenu() {

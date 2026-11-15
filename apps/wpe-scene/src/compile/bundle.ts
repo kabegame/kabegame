@@ -24,8 +24,13 @@ import { conditionsHold, removedFbos } from "./conditions";
 import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
 import { reflectionKind, reflectionList } from "./reflection";
 import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from "./sprite";
+import { compileVolumetrics, wantsVolumetrics, type SceneVolumetrics } from "./volumetrics";
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
-import { resolveParents } from "./hierarchy";
+import { breakCycles, childLists, resolveParents } from "./hierarchy";
+import { normalizeConfig } from "./config";
+import { asNumber, layerShellValues } from "./layerShell";
+import { scriptAssetCandidates } from "./assetPaths";
+import type { SceneStructure } from "./protocol";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
 import {
   buildModelSkeleton,
@@ -88,6 +93,7 @@ import {
 import {
   boolFieldValue,
   currentProperties,
+  isSceneObject,
   numbers,
   parseEffect,
   parseMaterial,
@@ -128,17 +134,21 @@ import {
   readWpePostprocessing,
   readWpeReflection,
   readWpeShadows,
+  readWpeVolumetrics,
   resolvePostprocessLevel,
   resolveReflection,
   resolveShadows,
+  resolveVolumetrics,
   scenePostprocessState,
   type BloomParams,
   type SceneReflectionSetting,
   type SceneShadowSetting,
+  type SceneVolumetricsSetting,
   type ScenePostprocessSetting,
   type ScenePostprocessState,
 } from "./postprocess";
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
+import { fogDefines } from "./fog";
 import { collectScripts, type SceneScripts } from "./scripts";
 import { checkCameraObjectPath, compileCamera, type SceneCameraJson } from "./camera";
 import { compileSound, type SceneSound } from "./sounds";
@@ -636,6 +646,13 @@ export interface SceneLayer {
    */
   dependedOn?: boolean;
   /**
+   * 开雾强制的 passthrough（P13f，WPE 渲染标志 `0x1800000` = `fogdistance` | `fogheight`，p2-REPORT「渲染标志」与 passthrough 标志的条件，
+   * p13-REPORT「P13f」F7）：场景加载时任一雾开关为真，普通图像层与文本层都置 passthrough 标志，同 colorBlendMode 混合走「基础 pass → 合成 RT →
+   * `passthrough` 上屏」，没有 effect 的也走；雾在上屏 pass 里算（`FOG_COMPUTED` 取基础材质最终的 `FOG`）。编译期定下、运行中改开关不变。
+   * 可选同 `alignment`：不动各处手写的测试图层。
+   */
+  fogPassthrough?: true;
+  /**
    * puppet（P12a 步骤 3，rea-p12-mdl 第 9 节）：图像层的模型 JSON 带 `puppet`（字符串、不是 fullscreen、不是组合层）且 mdl 有网格时有；
    * 网格 0 代替上屏的四边形。`layer.passes` 保持不带 puppet 组合键（合成路径的基础 pass 画四边形进合成 RT，要用它）。读不到 mdl 或网格
    * 为空时为 null（WPE 销毁 P、照常画四边形，不报）。可选同 `alignment`：不动各处手写的测试图层。
@@ -687,8 +704,10 @@ export function resolveAttachment(
   parent: number | null,
   name: unknown,
   puppetOf: (object: number) => Pick<ScenePuppet, "skeleton" | "attachments"> | null | undefined,
+  /** 运行中换父带挂点（`SceneStructure.parents`，P6d3a）：父早已存在、可以排在子后面（`objects` 下标更大）；加载时的规则不变。 */
+  allowLaterParent = false,
 ): SceneAttachment | null {
-  if (typeof name !== "string" || parent === null || parent >= object) return null;
+  if (typeof name !== "string" || parent === null || (!allowLaterParent && parent >= object)) return null;
   const puppet = puppetOf(parent);
   if (!puppet?.skeleton) return null;
   const found = puppet.attachments.find((item) => item.name === name);
@@ -824,6 +843,11 @@ export interface SceneBundle {
    * 读灯光数组的绘制每帧取它的切片（同 `g_Time`）。`quality` 是解析好的阴影档位（设置「场景阴影」与 WPE `config.json`），为 0 时没有阴影。
    */
   lights?: { records: SceneLight[]; counts: LightCounts; quality: number };
+  /**
+   * 体积光（P13e，`compile/volumetrics.ts`）：有会画的灯（可见、`castvolumetrics` 的点光 / 聚光）且档位不为 0 时才有。渲染器按 `lights` 的
+   * `objects` 下标把灯插进图层序列，连续的灯共用一次清屏、在下一个可见的非灯对象之前合成（`render/volumetrics.ts`）。
+   */
+  volumetrics?: SceneVolumetrics;
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
   unsupported: string[];
   /**
@@ -855,6 +879,22 @@ export interface SceneBundle {
    * 宿主加载就订阅 `kind: "media"`（只订一次）。可选：手写的测试 bundle 可以不给，等于假。
    */
   media?: boolean;
+  /**
+   * 子表（P6d3，WPE `O+0x198`）：父的 `objects` 下标 → 直接子（只放非空的、只含进了 `layers` 的对象）。顺序：没换过父的按 `objects` 下标，
+   * 运行中换过父的按挂上的先后追加在尾（`structure.parents`）。`SceneState` 用它建子表，`assignGroups` 的组内先序也按它。缺省（手写测试
+   * bundle）时 `SceneState` 按 `layers` 的 `parent` 现推。
+   */
+  children?: [number, number[]][];
+  /**
+   * 每个对象加载时的配置原文（P6d3，`getInitialLayerConfig` 用）：`objects` 下标 → JSON 文本，不是对象的项为 null。取套用 `scriptOverrides` 与
+   * 结构之前的 `scene.json` 原文，按 WPE 的 jsoncpp 规整（`config.ts`：去掉顶层 `id`、键按字典序、非整数 8 位有效数字）。
+   */
+  configs?: (string | null)[];
+  /**
+   * 脚本源码里的资源路径字面量中、在 WPE `assets` 里存在的（P6d3b，`compile/assetPaths.ts`；排序，没有时省略）：运行时 `createLayer` 的
+   * `__workshopId` 改写据此判断「是不是 WPE 自带资源」（在就不改）。
+   */
+  assetPaths?: string[];
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -862,6 +902,8 @@ export interface CompileSceneInput {
   userProperties?: Record<string, unknown>;
   /** 脚本写入的重编译目标，按 scene.json 坐标覆盖编译输入。 */
   scriptOverrides?: Record<string, number[] | boolean | string>;
+  /** 运行中改过的场景结构（P6d3）；缺省空结构（`EMPTY_STRUCTURE`）。 */
+  structure?: SceneStructure;
   reader: SceneReader;
   translator: Wpesl2wgsl | null;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
@@ -870,6 +912,8 @@ export interface CompileSceneInput {
   reflection?: SceneReflectionSetting;
   /** 设置「场景阴影」（P13d）；缺省跟随 WPE 的 `general.user.shadows`（缺键按 medium）。 */
   shadows?: SceneShadowSetting;
+  /** 设置「场景体积光」（P13e）；缺省跟随 WPE 的 `general.user.volumetrics`（缺键按 medium）。 */
+  volumetrics?: SceneVolumetricsSetting;
   /** dev 强制渲染：有不支持项也照常解码 mip，好让渲染器画出半成品（D4）。 */
   force?: boolean;
   /**
@@ -877,6 +921,11 @@ export interface CompileSceneInput {
    * 预览图越早显示（翻译工坊场景的几十个 effect 着色器要上百次读取和不少 wasm 时间），这时 `unsupported` 只是部分清单。
    */
   exhaustive?: boolean;
+  /**
+   * 加载进度（`progress.ts` 的 `compile` 阶段）：对象循环每处理一个对象之前报一次，`done / total` 是已处理对象的权重 / 总权重（每个对象
+   * 1 + 它的 effect 数，effect 着色器是编译的大头），循环结束报 `total / total`。
+   */
+  onProgress?: (done: number, total: number) => void;
 }
 
 /** 场景目标的整帧快照（B8）。 */
@@ -898,9 +947,19 @@ export function passthroughMaterial(sceneVersion: unknown): string {
   const version = sceneVersionOf(sceneVersion);
   return version > 2 ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json";
 }
-/** passthrough 的 COMBO（B8）：`BLENDMODE = colorBlendMode`、`FOG_COMPUTED = 1`。组的上屏（P5b 步骤 4）用 `BLENDMODE` 0。 */
-export function passthroughCombos(colorBlendMode: number): Record<string, number> {
-  return { BLENDMODE: colorBlendMode, FOG_COMPUTED: 1 };
+/**
+ * passthrough 的 COMBO（B8）：`BLENDMODE = colorBlendMode`、`FOG_COMPUTED`。组的上屏（P5b 步骤 4）用 `BLENDMODE` 0。
+ * 开雾时图像层的 `FOG_COMPUTED` 取基础材质最终的 `FOG`（P13f，`p13f-fog-img`：基础材质 `FOG: 0`、不声明 `FOG` 的着色器，上屏都不上雾），文本层是 1；只在开雾时有区别
+ * （不开雾时 `FOG_DIST` / `FOG_HEIGHT` 不定义，这个键不起作用），不开雾的调用方照旧传 1，请求与以前逐字节相同。
+ */
+export function passthroughCombos(colorBlendMode: number, fogComputed = 1): Record<string, number> {
+  return { BLENDMODE: colorBlendMode, FOG_COMPUTED: fogComputed };
+}
+
+/** 程序最终的 `FOG`（含着色器注解缺省值，翻译结果的 `combos`）；没有这个组合键为 0。 */
+export function programFog(result: Pick<TranslateResult, "combos"> | undefined): number {
+  const value = result?.combos?.find((combo) => combo.name.toUpperCase() === "FOG")?.value;
+  return typeof value === "number" ? value : value === true ? 1 : 0;
 }
 
 /**
@@ -912,6 +971,8 @@ export function passthroughCombos(colorBlendMode: number): Record<string, number
  */
 export function assignGroups(
   layers: Pick<SceneLayer, "object" | "parent" | "passthroughModel" | "group" | "subtree">[],
+  /** 子表顺序（P6d3，`childLists`）：给了就按它排组内先序，缺省按 `objects` 下标。 */
+  order?: ReadonlyMap<number, readonly number[]>,
 ): void {
   const byObject = new Map(layers.map((layer) => [layer.object, layer]));
   const children = new Map<number, number[]>();
@@ -921,7 +982,14 @@ export function assignGroups(
     if (list) list.push(layer.object);
     else children.set(layer.parent, [layer.object]);
   }
-  for (const list of children.values()) list.sort((a, b) => a - b);
+  for (const [parent, list] of children) {
+    list.sort((a, b) => a - b);
+    const ordered = order?.get(parent);
+    if (!ordered) continue;
+    // 子表里有的按子表顺序，子表没有的（理论上不会）仍按下标排在后面
+    const rank = new Map(ordered.map((child, position) => [child, position]));
+    list.sort((a, b) => (rank.get(a) ?? Infinity) - (rank.get(b) ?? Infinity) || a - b);
+  }
   for (const layer of layers) {
     layer.group = null;
     layer.subtree = [];
@@ -1069,11 +1137,6 @@ function parseFbo(raw: EffectFboJson, hdr: boolean): SceneFbo {
   };
 }
 
-const asNumber = (value: SceneScalar | undefined, fallback: number): number => {
-  if (value === null || value === undefined) return fallback;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
 /** 解析后的 `colorBlendMode` → 图层字段的值（缺省 0、取整）。图层字段与依赖的名字表（P8 步骤 4）共用。 */
 const colorBlendModeOf = (value: SceneScalar | undefined): number => Math.trunc(asNumber(value, 0));
 
@@ -1218,6 +1281,9 @@ class EffectIssues extends Set<string> {
   }
 }
 
+/** 没有运行中改过的结构（P6d3）。 */
+export const EMPTY_STRUCTURE: SceneStructure = { destroyed: [], parents: [], created: [] };
+
 export async function compileScene(input: CompileSceneInput): Promise<SceneBundle> {
   const fs = new SceneFs(input.projectDir, input.sceneAssets, input.reader);
   const unsupported = new Set<string>();
@@ -1236,6 +1302,34 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const scene = parseScene(sceneText);
   // HDR 判定读文件里的 `general.bloom`（K3），脚本覆盖不算，要在套用之前取。缺键写成 null：undefined 会落到缺省参数，读到覆盖后的值
   const fileBloom = scene.general?.bloom ?? null;
+  const structure = input.structure ?? EMPTY_STRUCTURE;
+  // 运行中新建的对象（P6d3b，`createLayer`）：配置原文就是它自己，放到 `scene.objects[object]`（中间空位补 null），之后和 `scene.json` 的对象走同一
+  // 条路径。配置是数组的（建出空名分组节点，rea-p6d-script 1.2）不当图层：这一项放 `{}`（编成分组节点），`configs[下标]` 仍是数组原文。
+  // 依赖标记只看加载时的对象（rea-p6d-layers 11：新建层不重算），`loadedLength` 记下加载时的个数
+  const loadedLength = scene.objects.length;
+  const createdConfigs = new Map<number, string>();
+  for (const { object: at, config } of structure.created) {
+    if (!Number.isInteger(at) || at < loadedLength) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(config);
+    } catch {
+      continue;
+    }
+    const objects = scene.objects as unknown[];
+    while (objects.length <= at) objects.push(null);
+    if (Array.isArray(parsed)) {
+      // 数组配置：编成一个分组节点（`{}`，照常进 `layers`），配置原文仍是数组
+      createdConfigs.set(at, normalizeConfig(parsed));
+      objects[at] = {};
+    } else if (isSceneObject(parsed)) {
+      objects[at] = parsed;
+    }
+  }
+  // 加载原文（P6d3）：在套用写入覆盖与删除之前取，`getInitialLayerConfig` 不反映运行中的改动（新建对象取它建出时的配置）
+  const configs = scene.objects.map(
+    (object, at) => createdConfigs.get(at) ?? (isSceneObject(object) ? normalizeConfig(object) : null),
+  );
   for (const [path, value] of Object.entries(input.scriptOverrides ?? {})) {
     const parts = path.split("/");
     let parent: unknown = scene;
@@ -1247,8 +1341,20 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     (parent as Record<string, unknown>)[key] =
       old && typeof old === "object" && "value" in old ? { ...old, value: next } : next;
   }
+  // 运行中删掉的对象（P6d3）：这一项当作不存在，保持下标对齐；之后所有读 `scene.objects` 的地方都跳过不是对象的项
+  for (const index of structure.destroyed)
+    if (Number.isInteger(index) && index >= 0 && index < scene.objects.length)
+      (scene.objects as unknown[])[index] = null;
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
+  // 脚本里的资源路径字面量里，在 WPE assets 中存在的名单（P6d3b，`createLayer` 的 `__workshopId` 改写用）
+  const assetPaths = (
+    await Promise.all(
+      scriptAssetCandidates(scripts.list.map((script) => script.source)).map(async (path) =>
+        (await fs.existsInAssets(path)) ? path : null,
+      ),
+    )
+  ).filter((path): path is string => path !== null);
   // 属性关键帧（P10a 步骤 2）：没有就地目标的照报细分键（`value:animation:light` / `camera` / `other`）；其余进 bundle，
   // 由宿主每帧写（P10a 步骤 3，`animation/player.ts`）
   const animations = collectAnimations(scene);
@@ -1271,6 +1377,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ? (general.orthogonalprojection as { width?: number; height?: number })
       : {};
   const fields = generalFields(general, properties, bindings);
+  /** 加载时任一雾开关为真（P13f，WPE 渲染标志 `0x1800000`）：定 `FOG_DIST` / `FOG_HEIGHT`，并强制图像层走 passthrough（`SceneLayer.fogPassthrough`）。 */
+  const fogForced = fields.fogdistance || fields.fogheight;
   /** 声音表（P6a 步骤 1）：对象循环里按 `objects` 顺序填。 */
   const sounds: SceneSound[] = [];
   /** 投影类型只在这里判一次（P5d 步骤 2）：能力表、`SCENE_ORTHO`、粒子缺省值、渲染器都读 `general.perspective`。 */
@@ -1308,6 +1416,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     scripts,
     sounds,
     animations: animations.list,
+    configs,
+    ...(assetPaths.length ? { assetPaths } : {}),
   };
   // 阴影档位（P13d）：决定阴影计数与宏，要在编译着色器之前定。只在 `lightconfig` 写了阴影 / cookie 计数时才去读 WPE 的设置
   const shadowSetting = input.shadows ?? "follow";
@@ -1330,6 +1440,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     engineDefines(postprocess.hdr, orthographic),
     // 注解缺省纹理的格式（P13d）：同绑定缺省纹理时的解析（之后照样按注解绑它，那时才上报缺失），这里不上报
     async (name, scope) => (await getTexture(name, scope, new Set()))?.format ?? null,
+    // 雾的宏（P13f）：按加载时的开关定，运行中改开关不重编（p13-REPORT F3）
+    fogDefines(fields),
   );
   /** 场景有阴影（P13d）：档位 ≠ 0 且有点光 / 平行光阴影计数；为真时模型网格编投射变体、渲染器建阴影图集。 */
   const castsShadows = shadowQuality !== 0 && counts.pointShadow + counts.directionalShadow > 0;
@@ -1355,9 +1467,27 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     ));
   // 父对象下标；环已断开，`object:parent-cycle` 由能力表报
   const { parents } = resolveParents(scene.objects);
+  // 运行中的换父（P6d3）：在 JSON 父之后依次套用；挂点改写对象 JSON 的 `attachment`，后面的 `resolveAttachment` 按新父与新骨骼名算
+  const parentOverrides: [number, number | null, string | null][] = [];
+  const lastOverride = new Map<number, number>();
+  structure.parents.forEach(([object], position) => lastOverride.set(object, position));
+  for (const [position, entry] of structure.parents.entries()) {
+    const [object, parent, bone] = entry;
+    if (lastOverride.get(object) !== position) continue;
+    if (!isSceneObject(scene.objects[object])) continue;
+    const valid = parent !== null && isSceneObject(scene.objects[parent]) && parent !== object ? parent : null;
+    parents[object] = valid;
+    parentOverrides.push([object, valid, bone]);
+    const json = scene.objects[object] as Record<string, unknown>;
+    if (bone !== null && valid !== null) json.attachment = bone;
+    else delete json.attachment;
+  }
+  if (parentOverrides.length > 0) breakCycles(parents);
+  // 带挂点覆盖的对象（P6d3a）：`resolveAttachment` 不要求父的下标小于子
+  const attachOverrides = new Set(parentOverrides.filter(([, , bone]) => bone !== null).map(([object]) => object));
   // 图层依赖（P8 步骤 4，rea-p8-render 第 1、2 节）：WPE 在全部对象加载完之后才按并集给图像层置 `0x1010`、建独占 RT，材质却在创建时就按
   // 名字绑纹理表里的对象（RT 建立时接管同名对象），所以引用方排在被依赖者前后都绑得上。我们在开头一次定下并集与名字表，编到哪个 pass 都查得到
-  const dependedIds = dependencyIds(scene.objects);
+  const dependedIds = dependencyIds(scene.objects.slice(0, loadedLength));
   const isDepended = (object: SceneObject): boolean => {
     const id = jsonId(object);
     return id !== null && dependedIds.has(id);
@@ -1369,6 +1499,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    */
   const layerComposites = new Map<string, { object: number; depended: boolean; ownComposite: boolean }>();
   scene.objects.forEach((object, index) => {
+    if (!isSceneObject(object) || index >= loadedLength) return;
     const id = jsonId(object);
     if (id === null || !isImageLayerObject(object)) return;
     const cbm = colorBlendModeOf(resolveValue(object.colorBlendMode as SceneValue, properties));
@@ -2544,45 +2675,45 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     return compilePass(pass, { key, planned, text: options.text });
   };
 
+  // 加载进度：对象的权重 = 1 + effect 数（读完 scene.json 就知道），每处理一个对象之前报已处理的部分
+  const progressWeight = (object: unknown): number =>
+    isSceneObject(object) ? 1 + (Array.isArray(object.effects) ? object.effects.length : 0) : 0;
+  const progressTotal = scene.objects.reduce((sum: number, object) => sum + progressWeight(object), 0);
+  let progressDone = 0;
   for (const [index, object] of scene.objects.entries()) {
     if (settled()) break;
+    if (!isSceneObject(object)) continue; // 不是对象的项（含运行中删掉的）：不进 `bundle.layers`，下标留空
+    input.onProgress?.(progressDone, progressTotal);
+    progressDone += progressWeight(object);
     /** 图层字段的就地目标（场景坐标里的 objects 下标，不随 bundle 下标变）。 */
     const at = (field: LayerField): BindingTarget => ({ kind: "layer", object: index, field });
-    // 图层的向量字段照 WPE 的向量 setter 取值（`layerVectorValue`：数字铺满、字符串少写的分量为 0，P6b 1e-3 复核）。绑定的属性值
-    // 写不进（布尔、条件换成的布尔）时 WPE 不改字段，留着加载 JSON 时写进的 `value`；那个也写不进就是构造时的缺省
-    const vector = (field: LayerVectorField, fallback: number[]): number[] => {
-      const raw = object[field] as SceneValue | undefined;
-      return (
-        layerVectorValue(field, bindings.bind(raw, properties, at(field))) ??
-        layerVectorValue(field, unwrapValue(raw)) ?? [...fallback]
-      );
-    };
-    // 图层的标量字段（alpha / brightness）照 WPE 的 float setter：不收布尔（条件换成的、布尔属性本身、JSON 里直接写的布尔），写不进就留着
-    // 加载 JSON 时写进的 `value`，那个也是布尔就是构造时的缺省 1（P3a 补测 NC1–NC5，`p3am-bright` R1–R8 / A1）。就地写同一规则
-    // （`render/state.ts` 的 `SceneState.write`）
-    const scalar = (field: "alpha" | "brightness"): number => {
-      const raw = object[field] as SceneValue | undefined;
-      const bound = bindings.bind(raw, properties, at(field));
-      if (typeof bound !== "boolean") return asNumber(bound, 1);
-      const own = unwrapValue(raw);
-      return typeof own === "boolean" ? 1 : asNumber(own as SceneScalar | undefined, 1);
-    };
+    // 图层壳的取值抽成纯函数 `layerShellValues`（P6d3b，运行时 `createLayer` 共用）：向量 / 标量 setter 的规则见 `layerShell.ts`。绑定的属性值
+    // 经这里解析并登记就地目标（`size` 是重编译目标）；`solid` 的绑定留在建图层之后登记，保持登记顺序
+    const shell = layerShellValues(object, (field, raw) =>
+      field === "solid"
+        ? (unwrapValue(raw) as SceneScalar | undefined)
+        : bindings.bind(
+            raw,
+            properties,
+            field === "size" ? recompile("layer-structure", `objects/${index}/size`) : at(field),
+          ),
+    );
     const layer: SceneLayer = {
       id: object.id ?? bundle.layers.length,
       object: index,
       parent: parents[index],
-      name: object.name ?? "",
-      origin: vector("origin", [0, 0, 0]),
-      scale: vector("scale", [1, 1, 1]),
-      angles: numbers(bindings.bind(object.angles, properties, at("angles")), [0, 0, 0]),
-      size: numbers(bindings.bind(object.size, properties, recompile("layer-structure", `objects/${index}/size`))),
-      alpha: scalar("alpha"),
-      color: vector("color", [1, 1, 1]),
-      brightness: scalar("brightness"),
+      name: shell.name,
+      origin: shell.origin,
+      scale: shell.scale,
+      angles: shell.angles,
+      size: shell.size,
+      alpha: shell.alpha,
+      color: shell.color,
+      brightness: shell.brightness,
       // bool setter 不收数字、字符串属性，留 `value`（`boolFieldValue`，运行时同 `SceneState.write`）
-      visible: boolFieldValue(object.visible, bindings.bind(object.visible, properties, at("visible"))),
-      visibleBound: isUserBinding(object.visible),
-      parallaxDepth: vector("parallaxDepth", [1, 1]),
+      visible: shell.visible,
+      visibleBound: shell.visibleBound,
+      parallaxDepth: shell.parallaxDepth,
       solidLayer: false,
       instanced: false,
       noPadding: false,
@@ -2731,13 +2862,30 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const blended = cbm !== 0 && cbm !== 31;
     // 被依赖（P8 步骤 4）：WPE 的 `0x10` 同 colorBlendMode 混合，全部 effect 留在合成链、passthrough 上屏
     const depended = !!layer.dependedOn;
+    // 开雾（P13f，WPE 渲染标志 `0x1800000`）：图像层与文本层都置 passthrough 标志（`SceneLayer.fogPassthrough`）。实测：`p13f-fog-img` 的 FR / CLK、
+    // `FOG: 0`、`genericimage2`、文本、带 effect、colorBlendMode 31 / 1 的，`p13f-fog-fs` 的组合层与全屏层（不带 effect 的全屏层也画：拷屏 → 上屏），
+    // 全都画进合成 RT 再上屏。带子层的组、形状层、puppet 开雾时怎么画没测过（语料 0），照报
+    // TODO:[WPE_SCENE] 开雾时的组 / 形状层 / puppet 没实测，照报 `fog:<种类>`
+    const fogLayer = fogForced && (objectKind(object) === "image" || textObject);
+    const fogKind = !fogLayer
+      ? null
+      : hasChildren
+        ? "group"
+        : isShapeObject(object)
+          ? "shape"
+          : layer.puppet
+            ? "puppet"
+            : null;
+    if (fogKind) unsupported.add(`fog:${fogKind}`);
+    if (fogLayer && !fogKind) layer.fogPassthrough = true;
+    const fogged = !!layer.fogPassthrough;
     // 带 effect 或走 passthrough 时，WPE 把光照挪到基础 pass（PRELIGHTING=1，世界坐标改用 g_Alt*），上屏 pass 关光照（FUN_140209540）；
     // 被依赖的图层同样是 `0x10`（P8 步骤 4，rea-p8-render 第 1 节）
     const lit = layer.passes.some((pass) => pass.program !== null && usesLighting(bundle.programs[pass.program]));
     // TODO:[WPE_SCENE] PRELIGHTING 没实现，照报：要给基础 pass 加 `PRELIGHTING=1` 并写 `g_AltModelMatrix` / `g_AltNormalModelMatrix` /
     // `g_AltViewProjectionMatrix`（现在在 `features.ts` 的 `UNREAD_UNIFORMS` 里放行、渲染器不写），上屏 pass 关光照。语料 0 张，P13 总计划定为
     // 按需实现（phase13/phase-13-3d-lighting.md「决定」4）
-    if (lit && (layer.effects.length > 0 || blended || depended)) unsupported.add("lighting:prelighting");
+    if (lit && (layer.effects.length > 0 || blended || depended || fogged)) unsupported.add("lighting:prelighting");
     // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
     if (depended && hasChildren) unsupported.add("dependency:group");
     // puppet 的上屏路径与材质变体（步骤 3 点 1）：composite 时 passthrough 上屏由 puppet 自己的 `upload` 承担，不再编 `layer.passthrough`
@@ -2759,22 +2907,6 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         layer.effects.length > 0 || blended || depended || !!layer.puppet.textureChannels,
         blended ? cbm : 0,
       );
-    if ((blended || depended) && !layer.puppet) {
-      const path = passthroughMaterial(scene.version);
-      const text = await fs.text(path);
-      const pass = text ? parseMaterial(text).passes[0] : undefined;
-      if (!pass) unsupported.add(`material:missing:${path}`);
-      else {
-        // `BLENDMODE` = colorBlendMode ∉ {0, 31} ? colorBlendMode : 0（rea-p8-render 第 1 节 `FUN_1401ebbc0`：被依赖、cbm 0 / 31 时编法同
-        // 组的上屏 `groupUpload`）
-        layer.passthrough = await compilePass(
-          { ...pass, combos: { ...pass.combos, ...passthroughCombos(blended ? cbm : 0) } },
-          { key: `objects/${index}/passthrough`, planned: [{ slot: 0 }] },
-        );
-        // passthrough 上屏颜色置 (1, 1, 1, 1)（B8 / B10）
-        layer.passthrough.uniforms.g_Color4 = [1, 1, 1, 1];
-      }
-    }
     if (hasChildren) {
       // 组的上屏（P5b 步骤 4，p5-REPORT `p5b-grp-nofx` / `nofx0`）：无 effect、colorBlendMode ∈ {0, 31} 时用。effect 运行时可能全关，
       // 所以有子层就编。同 colorBlendMode 混合的 passthrough 材质，`BLENDMODE` 0（不读快照），槽 0 是合成 RT
@@ -2799,11 +2931,35 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         hdr: postprocess.hdr,
         visibleEffects: layer.effects.filter((effect) => effect.enabled).length,
         colorBlendMode: cbm,
-        mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31),
+        mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31) || fogged,
         hostPass: compileHostPass,
         unsupported,
       });
+    // passthrough 上屏（B8）：在文本之后编（文本层编完才有 `layer.text`，开雾时它的上屏另按规则定 `FOG_COMPUTED`）
+    if ((blended || depended || fogged) && !layer.puppet && !settled()) {
+      const path = passthroughMaterial(scene.version);
+      const text = await fs.text(path);
+      const pass = text ? parseMaterial(text).passes[0] : undefined;
+      if (!pass) unsupported.add(`material:missing:${path}`);
+      else {
+        // 开雾时图像层上屏的 `FOG_COMPUTED` = 基础材质最终的 `FOG`（P13f，图像层路径 `FUN_140206b3a` 写的，rea-p13-lights 2.4；`p13f-fog-img`：
+        // `FOG: 0`、不声明 `FOG` 的 `genericimage2` 与自定着色器都不上雾）。文本层不经这条路径，按 passthrough JSON 原样的 1（`font` 不声明
+        // `FOG`，实测照样上雾）。不开雾时照旧 1
+        const baseProgram = layer.passes[0]?.program ?? null;
+        const fogComputed =
+          fogForced && !layer.text ? programFog(baseProgram === null ? undefined : bundle.programs[baseProgram]) : 1;
+        // `BLENDMODE` = colorBlendMode ∉ {0, 31} ? colorBlendMode : 0（rea-p8-render 第 1 节 `FUN_1401ebbc0`：被依赖、cbm 0 / 31 时编法同
+        // 组的上屏 `groupUpload`）
+        layer.passthrough = await compilePass(
+          { ...pass, combos: { ...pass.combos, ...passthroughCombos(blended ? cbm : 0, fogComputed) } },
+          { key: `objects/${index}/passthrough`, planned: [{ slot: 0 }] },
+        );
+        // passthrough 上屏颜色置 (1, 1, 1, 1)（B8 / B10）
+        layer.passthrough.uniforms.g_Color4 = [1, 1, 1, 1];
+      }
+    }
   }
+  input.onProgress?.(progressTotal, progressTotal);
   // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
   // 挂点（P12b1 步骤 3）：父的 puppet 编完才解析，只在找得到时才写字段（找不到按普通父子）
   const puppetsByObject = new Map(
@@ -2815,10 +2971,20 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       layer.parent,
       (scene.objects[layer.object] as Record<string, unknown> | undefined)?.attachment,
       (object) => puppetsByObject.get(object),
+      attachOverrides.has(layer.object),
     );
     if (attachment) layer.attachment = attachment;
   }
-  assignGroups(bundle.layers);
+  // 子表（P6d3）：只含进了 bundle 的对象；组内先序与 `SceneState` 的子表都按它
+  const present = new Set(bundle.layers.map((layer) => layer.object));
+  const lists = childLists(parents, scene.objects.length, parentOverrides);
+  const children: [number, number[]][] = [];
+  for (const [parent, list] of lists) {
+    const kept = list.filter((child) => present.has(child));
+    if (present.has(parent) && kept.length > 0) children.push([parent, kept]);
+  }
+  bundle.children = children;
+  assignGroups(bundle.layers, new Map(children));
   for (const layer of bundle.layers) {
     if (layer.group === null) continue;
     for (const key of groupChildIssues(layer)) unsupported.add(key);
@@ -2872,6 +3038,46 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       // 屏幕空间反射（rea-p13-passes 4.1）：任何对象读到就建
       bundle.mipFramebuffer = true;
       if (reflectionOn) unsupported.add("reflection:screen"); // 反射开：P13g 再做，照报
+    }
+  }
+  // 体积光（P13e）：有会画的灯才去读档位（跟随时读 WPE 的 `config.json`）。带阴影的点光每帧要取自己的阴影条目，灯光记录在没有光照程序时也要建
+  {
+    const lightRead = bindingReader(bindings, properties, (path) => recompile("layer-structure", path));
+    if (!settled() && wantsVolumetrics(scene.objects, lightRead)) {
+      const setting = input.volumetrics ?? "follow";
+      const quality = resolveVolumetrics(
+        setting,
+        setting === "follow" ? await readWpeVolumetrics(input.reader, input.sceneAssets) : undefined,
+      );
+      // `SHADOW` 与 `LIGHTS_SHADOW_MAPPING_QUALITY` 取用户的阴影档（`ctx+0x1ac`，V6、V9），不看 `lightconfig` 有没有阴影计数（`p13e-pns` 实测）
+      const volumetricShadows = wantsShadows
+        ? shadowQuality
+        : resolveShadows(
+            shadowSetting,
+            shadowSetting === "follow" ? await readWpeShadows(input.reader, input.sceneAssets) : undefined,
+          );
+      const groups = new Map(bundle.layers.map((layer) => [layer.object, layer.group]));
+      const volumetrics = await compileVolumetrics(
+        { fs, shader, unsupported, addProgram },
+        {
+          objects: scene.objects,
+          read: lightRead,
+          quality,
+          shadowQuality: volumetricShadows,
+          counts,
+          orthographic,
+          inGroup: (object) => groups.get(object) != null,
+        },
+      );
+      if (volumetrics) {
+        bundle.volumetrics = volumetrics;
+        // 透视场景的透明排序（P5d 步骤 4）把顶层重排成两轮，灯在两轮里落在哪、合成时机怎么变没测过（语料两张都是正交），照报
+        if (!orthographic && bundle.general.transparentSorting) unsupported.add("volumetrics:transparentsorting");
+        // 雾（P13f）：`volumetricsfront` 声明 `FOG`（缺省 1），开雾时它读四个雾 uniform，体积光的 uniform 是 `render/volumetrics.ts` 自己写的、
+        // 没有接雾，也没和 WPE 比过（语料 0 张），照报
+        if (fogForced) unsupported.add("volumetrics:fog");
+        if (volumetrics.lights.some((light) => light.shadow)) sceneLights();
+      }
     }
   }
   // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光且对象列表非空（A1）。当前开着，或运行中可能打开（绑了属性或挂了脚本）才建；

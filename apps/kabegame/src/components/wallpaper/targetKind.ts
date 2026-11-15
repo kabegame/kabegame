@@ -1,9 +1,10 @@
 /**
- * `WallpaperStage` 按目标类型分层的判定（纯函数，供单测）：
- * - `x-wpe/web` → web 层（`file:` iframe）；
- * - `x-wpe/scene` → scene 层（`WpeSceneView`，WebGPU）；
- * - 视频（含目录型 `x-wpe/video`）→ base / top 双层 `<video>`；
- * - 其余 → base / top 双层图片。
+ * 壁纸目标按类型的判定（纯函数，供单测）：
+ * - `x-wpe/web` → 网页（`WpeWallpaperContent` 的 `file:` iframe）；
+ * - `x-wpe/scene` → 场景（`WpeSceneView`，WebGPU）；
+ * - 视频（含目录型 `x-wpe/video`）→ `<video>`；
+ * - 其余 → 图片。
+ * `Wallpaper` 用它给没有类型的旧目标定图片行的类型、给平铺定铺法，调试快照的 `media` 也取它。
  */
 import type { WallpaperTarget } from "./types";
 
@@ -47,7 +48,7 @@ export function isPausableTarget(target: WallpaperTarget): boolean {
   return isWebTarget(target) || isSceneTarget(target) || isVideoTarget(target);
 }
 
-/** 目标落在哪一层（与 `WallpaperStage` 的 `currentMediaType` / 调试快照 `media` 同一套取值）。 */
+/** 目标是哪类媒体（调试快照 `media` 的取值）。 */
 export function stageMediaOf(target: WallpaperTarget): "image" | "video" | "web" | "scene" {
   if (isWebTarget(target)) return "web";
   if (isSceneTarget(target)) return "scene";

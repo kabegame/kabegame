@@ -21,7 +21,8 @@
         fit="cover"
         class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
         :style="bgImageStyle"
-        :video-playing="bgVisible"
+        :video-playing="false"
+        :playback="bgPlayback"
         video-muted
         video-loop
         reset-video-on-pause
@@ -181,7 +182,7 @@ import { fetchImageById } from "@/utils/imageRow";
 import { IS_MACOS, IS_ANDROID, IS_WEB } from "@/env";
 import { initHttpServerBaseUrl } from "@/utils/fileUrl";
 import type { ImageInfo } from "@/types/image";
-import { isVideoPlaybackType } from "@/utils/mediaMime";
+import { isVideoPlaybackType, isWpeWallpaperContentType } from "@/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { usePluginMarketStore } from "./stores/pluginMarket";
 import { useFailedImagesStore } from "./stores/failedImages";
@@ -190,6 +191,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@/stores/modalStack";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
+import { useWpePreviewPlayback } from "@/composables/useWpePreviewPlayback";
 import { kbFilterDropdownContextKey } from "@/components/ui/filterDropdown";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
@@ -376,10 +378,14 @@ let bgResolveToken = 0;
 const isVideoBackground = (image: ImageInfo | undefined) => isVideoPlaybackType(image?.type);
 
 /**
- * 背景与预览走同一个 `ImageContent`（原图形态），不按类型分支：图片 / 视频照常显示，网页与场景壁纸
- * 由 `ImageContent` 的 wallpaper 形态实时渲染，与桌面一致（不交互）。`video-muted` 让 `WallpaperStage` 的音量为 0：
+ * 背景与预览走同一个 `ImageContent`（原图形态），不按类型分支：图片照常显示，网页与场景壁纸由 `ImageContent` 的
+ * wallpaper 形态渲染（缩略图打底、实时画面不交互），场景设置取这张壁纸的「预览设置」（`bgPlayback`）。背景强制暂停
+ * （`video-playing` 恒为 false）：视频停在第一帧，网页由垫片冻结、场景停在加载时画的第一帧。`video-muted` 让音量为 0：
  * 视频静音，网页壁纸经垫片的音量协议静音（见 cocs/wpe/WPE_IMPORT.md「音量」）。
  */
+const bgPlayback = useWpePreviewPlayback(
+  computed(() => (bgImage.value && isWpeWallpaperContentType(bgImage.value.type) ? bgImage.value.id : null)),
+);
 const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
   !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
 
@@ -393,23 +399,17 @@ const syncBgVisible = () => {
   bgVisible.value = shouldShowAppBackground();
 };
 
-const getBgVideoPlaybackRate = () => {
-  const raw = settingsStore.values.wallpaperVideoPlaybackRate ?? 1;
-  return Math.min(3, Math.max(0.25, Number.isFinite(raw) ? raw : 1));
-};
-
-const applyBgVideoPlaybackRate = () => {
+/** 背景视频只保证静音；强制暂停，不播放、不设倍速 */
+const muteBgVideo = () => {
   const video = bgContentRef.value?.videoEl;
   if (!video) return;
   video.muted = true;
   video.volume = 0;
-  video.playbackRate = getBgVideoPlaybackRate();
-  void video.play().catch(() => {});
 };
 
 const handleBgMediaReady = () => {
   if (bgMediaType.value === "video") {
-    applyBgVideoPlaybackRate();
+    muteBgVideo();
   }
 };
 
@@ -440,7 +440,7 @@ watch(
       bgImageToken.value = token;
       syncBgVisible();
       if (mediaType === "video") {
-        requestAnimationFrame(() => applyBgVideoPlaybackRate());
+        requestAnimationFrame(() => muteBgVideo());
       }
     } catch (error) {
       if (token !== bgResolveToken) return;
@@ -468,11 +468,6 @@ const bgImageStyle = computed(() => ({
   opacity: bgOpacity.value,
   filter: bgBlurPx.value > 0 ? `blur(${bgBlurPx.value}px)` : "none",
 }));
-
-watch(
-  () => settingsStore.values.wallpaperVideoPlaybackRate,
-  () => applyBgVideoPlaybackRate(),
-);
 
 // 设置变更事件监听器
 let unlistenSettingChange: UnlistenFn | null = null;

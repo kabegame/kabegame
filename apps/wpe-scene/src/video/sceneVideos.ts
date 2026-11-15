@@ -12,7 +12,8 @@
  * - **脚本**（P9b）：`IVideoTexture` 经 `layerVideoSource` 从脚本当前看到的 bundle 找图层槽 0 的视频，再经 `playerFor` 按区间键取播放器，
  *   不经纹理下标：重编译期间脚本还在用旧 bundle、这里已按新 bundle 重建下标表，区间键照样对得上。
  * - **两种播放器**（P9d 步骤 2a）：有 WebCodecs 时先建 `CodecVideoPlayer`（自己拆包、`VideoDecoder` 解码、自己的媒体时钟）。它拆包是
- *   异步的，`load` 仍同步建好播放器、立即按当前状态开始，外部时序不变。拆不了（Matroska 等，`indexMp4` 给出原因）时它经
+ *   异步的，`load` 仍同步建好播放器、立即按当前状态开始，外部时序不变。拆不了（`indexVideo` 给出原因：不是 MP4 / Matroska、编码不是
+ *   H.264 / HEVC、表不一致等；Matroska 自 P9d 步骤 3 起也自己拆）时它经
  *   `onUnsupported` 回到这里，`fallBack` 记一条 warn、建旧的 `VideoTexturePlayer` 顶替同一个区间键与下标：拆包期间脚本只可能改过
  *   想放、loop、rate、结束回调与 currentTime（还没有帧，时钟没走过），`takeScriptState` 把它们原样交给旧播放器，脚本下一次经
  *   `playerFor` 现取就拿到新的；`firstFrames` 按区间键等，被顶替时接着等新的。没有 WebCodecs（`VideoDecoder` 不存在、也没注入

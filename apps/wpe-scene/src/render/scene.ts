@@ -271,12 +271,15 @@ import {
 } from "./programs";
 import { ReflectionTargets } from "./reflection";
 import { SHADOW_ATLAS_FORMAT, ShadowAtlas, type ShadowCasterDraw } from "./shadows";
+import { VolumetricsRenderer } from "./volumetrics";
 import type { ShadowView } from "./shadowMath";
-import { LIGHT_FRAME_UNIFORMS, lightFrame, lightFrameUniforms } from "../compile/lights";
+import { LIGHT_FRAME_UNIFORMS, lightFrame, lightFrameUniforms, type LightFrame } from "../compile/lights";
+import { FOG_UNIFORMS, fogUniforms } from "../compile/fog";
 import { SHADOW_CASTER_UNIFORM } from "../compile/features";
 import { mirroredView, type SceneView } from "./views";
 import { SPRITE_COUNT_TARGET_FORMAT, SpriteCounter, spriteOverrides, spriteViewProjection } from "./sprite";
 import { transparentDrawOrder } from "./sortOrder";
+import { byPosition, layerStructure } from "./structure";
 import type { DirtyState, LayerState, SceneState } from "./state";
 import { WorldStamps } from "./worldStamps";
 import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
@@ -1098,6 +1101,19 @@ export function checkRenderable(
     !features.has("float32-filterable")
   )
     reasons.add("render:morph-texture");
+  // 体积光（P13e）：Back / Single 转成 `r32float` 后线性采样，要 float32-filterable；材质缺了也退回
+  if (bundle.volumetrics) {
+    if (!features.has("float32-filterable")) reasons.add("render:volumetrics");
+    const { lights, blurH, blurV, combine } = bundle.volumetrics;
+    for (const pass of [
+      ...lights.flatMap((light) => [light.back, light.front, light.fullscreen]),
+      blurH,
+      blurV,
+      combine,
+    ])
+      if (pass && (pass.program === null || !bundle.programs[pass.program]))
+        reasons.add(`render:volumetrics:${pass.key}`);
+  }
   for (const layer of buildableLayers(bundle))
     for (const reason of planProblems(
       planLayer(layer, bundle.textures, undefined, options.texts?.get(layer.object) ?? null),
@@ -1230,6 +1246,8 @@ export class GpuScene {
   private shadowAtlas: ShadowAtlas | null = null;
   /** 阴影 pass 的投射者绘制（P13d）：不透明且 castshadow 的模型网格，按加载时的 bundle 建 */
   private shadowCasters: ShadowCasterDraw[] = [];
+  /** 投射者 draw → 所属对象（P6d3：对象被删时把它的投射者从 `shadowCasters` 去掉）。 */
+  private readonly shadowCasterOwners = new Map<ShadowCasterDraw, number>();
   /** 正在编码的这一帧的状态（P13d）：投射者每帧按它取模型的世界矩阵（脚本、关键帧可能移动了模型） */
   private encodingState: SceneState | null = null;
   /**
@@ -1246,6 +1264,10 @@ export class GpuScene {
   /** 真正重建图层的次数与用时（毫秒）：计划签名没变的切换不算。dev 探针读。 */
   readonly rebuildStats = { count: 0, totalMs: 0, maxMs: 0 };
   private bloom: BloomChain | null = null;
+  /** 体积光（P13e，`render/volumetrics.ts`）：bundle 有 `volumetrics` 时才有。 */
+  private volumetrics: VolumetricsRenderer | null = null;
+  /** 最近一帧的灯光缓冲与阴影条目（`frameLightValues`）：带阴影的体积光点光取自己的阴影投影与方块变换。 */
+  private lightFrameCache: LightFrame | null = null;
   /**
    * 本帧的主视图（`render/views.ts` 的 `SceneView`）。平面反射 pass 的视图由它现算（`reflectedView`，P13b2），两者走同一套 uniform 规则
    * （`uniformValues` 的 `view` 参数）。
@@ -1347,6 +1369,14 @@ export class GpuScene {
   private readonly layerByObject = new Map<number, SceneLayer>();
   /** 建了资源的图层按 `objects` 下标：组的 `subtree` op 按它找子孙的 op（P5b 步骤 4）。 */
   private readonly runtimeByObject = new Map<number, LayerRuntime>();
+  /**
+   * 运行时对象表的派生（P6d3）：顶层绘制顺序与对象 → 位置，按 `SceneState.structureVersion` 缓存（`structure`）。
+   */
+  private structureCache: { version: number; top: LayerRuntime[]; position: Map<number, number> } | null = null;
+  /** `sync` 已清理到的结构代数（`releaseRemoved`）；-1 表示还没扫过。 */
+  private structureSeen = -1;
+  /** 已被删除并释放了资源的对象（P6d3）：灯与体积光的灯表跳过它们。 */
+  private readonly removedObjects = new Set<number>();
   /** 文本层的字形图集纹理（P6b 1d，`render/text.ts`），按图集对象共享；`populate` 里建。 */
   private atlasTextures: TextAtlasTextures | null = null;
   /** 运行中重排的重排器（P6b 1e，`build` 的 `relayout`）；没有时文本字段变了也不重排（dev 探针、单测）。 */
@@ -1440,6 +1470,80 @@ export class GpuScene {
     this.reflectionList = reflection?.planar && reflection.enabled ? new Set(reflection.list ?? []) : null;
   }
 
+  /** 顶层绘制顺序（按 `state.order`）与位置表（P6d3），随 `structureVersion` 重建。 */
+  private structure(state: SceneState): { top: LayerRuntime[]; position: Map<number, number> } {
+    const cache = this.structureCache;
+    if (cache && cache.version === state.structureVersion) return cache;
+    const fresh = { version: state.structureVersion, ...layerStructure(state.order, this.runtimeByObject) };
+    this.structureCache = fresh;
+    return fresh;
+  }
+
+  /**
+   * 对象被删（`SceneState.flushDestroy`，P6d3）后的清理：`state.layers` 里已经没有的对象，释放它独有的 GPU 资源（各 draw 的顶点 / uniform
+   * 缓冲、文本索引缓冲、反射副本、被依赖层的独占 RT、文本层独占的合成 RT 与 fbo、变形纹理），从 `layers`、`runtimeByObject`、
+   * `drawsByLayer`、`drawsByPass`、`trees`、投射者表、挂点缓存里摘掉。共享的程序、管线、纹理、池化合成 RT 不动；`layerByObject` 是 bundle
+   * 的静态数据（子层的 `group` 仍指向它），也不动。
+   */
+  private releaseRemoved(state: SceneState): void {
+    this.structureCache = null;
+    const gone = this.layers.filter((runtime) => !state.layers.has(runtime.object));
+    if (gone.length === 0) return;
+    const objects = new Set(gone.map((runtime) => runtime.object));
+    for (const runtime of gone) {
+      const object = runtime.object;
+      this.removedObjects.add(object);
+      for (const draw of runtime.draws) {
+        this.draws.delete(draw);
+        const byPass = this.drawsByPass.get(draw.passKey);
+        if (byPass) {
+          const rest = byPass.filter((item) => item !== draw);
+          if (rest.length) this.drawsByPass.set(draw.passKey, rest);
+          else this.drawsByPass.delete(draw.passKey);
+        }
+        if (!draw.mesh || draw.mesh.privateVertices) this.release(draw.vertexBuffer);
+        if (draw.uniformBuffer) this.release(draw.uniformBuffer);
+        if (draw.text) this.release(draw.text.indexBuffer);
+        const copy = this.reflectionCopies.get(draw);
+        if (copy) {
+          this.release(copy.buffer);
+          this.reflectionCopies.delete(draw);
+        }
+      }
+      runtime.draws = [];
+      runtime.ops = [];
+      runtime.tree = null;
+      this.drawsByLayer.delete(object);
+      this.runtimeByObject.delete(object);
+      this.trees.delete(object);
+      const own = this.layerTargets.get(object);
+      if (own) {
+        this.releaseTarget(own);
+        this.layerTargets.delete(object);
+      }
+      if (runtime.layer.text) for (const target of runtime.resources.composites.splice(0)) this.releaseTarget(target);
+      for (const record of this.textFbos.get(object) ?? []) this.releaseTarget(this.targets[record.id]);
+      this.textFbos.delete(object);
+      for (const key of [...this.morphTargets.keys()])
+        if (key === morphKey(object) || key.startsWith(`${object}:`)) {
+          this.releaseTarget(this.morphTargets.get(key)!);
+          this.morphTargets.delete(key);
+        }
+      this.spriteCounters.delete(object);
+      this.passStateWaiting.delete(object);
+      this.passStateReady.delete(object);
+    }
+    this.layers.splice(0, this.layers.length, ...this.layers.filter((runtime) => !objects.has(runtime.object)));
+    this.shadowCasters = this.shadowCasters.filter((caster) => {
+      const keep = !objects.has(this.shadowCasterOwners.get(caster) ?? -1);
+      if (!keep) this.shadowCasterOwners.delete(caster);
+      return keep;
+    });
+    for (const [object, attachment] of [...this.attachments])
+      if (objects.has(object) || objects.has(attachment.parent)) this.attachments.delete(object);
+    this.attachedLayers = null;
+  }
+
   /** 替这个图层作画的组（P5b 步骤 4）；顶层图层，或组不在 bundle 里时为 null。 */
   private groupOf(layer: SceneLayer): SceneLayer | null {
     return layer.group === null ? null : (this.layerByObject.get(layer.group) ?? null);
@@ -1529,6 +1633,8 @@ export class GpuScene {
        * `g_Screen`、快照、泛光、反射、深度、fullscreen 合成 RT 随场景目标走。产品不传，字节不变；透视场景传了也忽略（本来就按 `size` 画）。
        */
       target?: { size: readonly [number, number]; edges: Edges; clear: readonly [number, number, number] | null };
+      /** 加载进度（`progress.ts` 的 `gpu` 阶段）：着色器程序开建前报 `0 / 总数`，之后每建好（或失败）一个报一次。 */
+      onProgress?: (done: number, total: number) => void;
     } = {},
   ): Promise<GpuScene> {
     if (options.texts) state.setTexts(options.texts);
@@ -1545,7 +1651,7 @@ export class GpuScene {
     device.pushErrorScope("validation");
     let failure: unknown = null;
     try {
-      await scene.populate(state, options.size, options.target);
+      await scene.populate(state, options.size, options.target, options.onProgress);
     } catch (error) {
       failure = error;
     }
@@ -1599,10 +1705,12 @@ export class GpuScene {
         label: "scene depth",
         size: { width, height },
         format: SCENE_DEPTH_FORMAT,
-        // 有 sprite 时（P13c）计数 pass 把深度当纹理读
+        // 有 sprite 时（P13c）计数 pass 把深度当纹理读；有体积光时（P13e）每盏灯把它转成 `r32float`
         usage:
           GPUTextureUsage.RENDER_ATTACHMENT |
-          (this.bundle.layers.some((layer) => layer.sprite) ? GPUTextureUsage.TEXTURE_BINDING : 0),
+          (this.bundle.layers.some((layer) => layer.sprite) || this.bundle.volumetrics
+            ? GPUTextureUsage.TEXTURE_BINDING
+            : 0),
       }),
     );
     this.targetBytes += width * height * 4;
@@ -2552,6 +2660,7 @@ export class GpuScene {
     state: SceneState,
     size?: readonly [number, number],
     target?: { size: readonly [number, number]; edges: Edges; clear: readonly [number, number, number] | null },
+    onProgress?: (done: number, total: number) => void,
   ): Promise<void> {
     const { device, bundle } = this;
     const { general } = bundle;
@@ -2607,6 +2716,7 @@ export class GpuScene {
     // 加载时没有一个 pass 测深度，比较恒为 always、不写深度（`rasterState` 的写要先测），画面不变
     if (
       bundle.scripts.usesEffectAccess ||
+      bundle.volumetrics !== undefined ||
       wantsDepth(
         built.map((layer, index) => ({
           layer,
@@ -2627,7 +2737,21 @@ export class GpuScene {
           used.add(step.pass.program);
     for (const pass of Object.values(bundle.bloom?.passes ?? {}))
       if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
-    const settled = await Promise.allSettled([...used].map((index) => this.ensureProgram(index)));
+    if (bundle.volumetrics) {
+      const { lights, blurH, blurV, combine } = bundle.volumetrics;
+      for (const pass of [
+        ...lights.flatMap((light) => [light.back, light.front, light.fullscreen]),
+        blurH,
+        blurV,
+        combine,
+      ])
+        if (pass && pass.program !== null) used.add(pass.program);
+    }
+    let programsBuilt = 0;
+    onProgress?.(0, used.size);
+    const settled = await Promise.allSettled(
+      [...used].map((index) => this.ensureProgram(index).finally(() => onProgress?.(++programsBuilt, used.size))),
+    );
     const failed = settled.flatMap((result) =>
       result.status === "rejected"
         ? result.reason instanceof SceneRenderError
@@ -2705,6 +2829,7 @@ export class GpuScene {
       };
       this.layers.push(runtime);
       this.runtimeByObject.set(layer.object, runtime);
+      this.structureCache = null;
       return runtime;
     });
     // 被依赖图层的独占 RT（P8 步骤 4）：在任何 `buildLayer` 之前建好，引用方排在被依赖者前面时建 draw 也解析得到（`resolveTexture`）
@@ -2727,6 +2852,22 @@ export class GpuScene {
       });
       this.bloom = chain;
       this.targetBytes += chain.bytes;
+    }
+    // 体积光（P13e）：场景目标、深度、阴影图集都已就位
+    if (bundle.volumetrics && this.depthTarget) {
+      this.volumetrics = await VolumetricsRenderer.create({
+        device,
+        volumetrics: bundle.volumetrics,
+        programs,
+        width,
+        height,
+        hdr,
+        sceneFormat: format,
+        depth: this.depthTarget.texture,
+        shadowAtlas: this.shadowAtlas ? { view: this.shadowAtlas.view, sampler: this.shadowAtlas.sampler } : null,
+        own: (resource) => this.own(resource),
+      });
+      this.targetBytes += this.volumetrics.bytes;
     }
     // 世界矩阵按这一刻的状态算，全部图层共用一份缓存
     const worlds = new Map<number, Mat4>();
@@ -2911,6 +3052,11 @@ export class GpuScene {
       templates: new Map(),
       framebuffer: particleTreeWantsFramebuffer(compiled),
     };
+  }
+
+  /** 挂点钩子的公开入口（P6d3a，`ScriptApiState.attachPose`）：父 puppet 骨骼的 `Pose · Att`，没有挂点为 null。 */
+  attachMatrix(object: number): Mat4 | null {
+    return this.attachPose(object);
   }
 
   /**
@@ -3403,6 +3549,8 @@ export class GpuScene {
       // 读状态，不读编译结果：单图层重建新建的 draw 要拿到当前值
       ambient: state.general.ambientcolor,
       skylight: state.general.skylightcolor,
+      // 雾（P13f）：同环境光，读状态现算
+      fog: fogUniforms(state.general),
     };
     // 组里的图层（P5b 步骤 4，p5-REPORT `p5b-grp-*`、`p5b-grpptc`）：视图投影换成组的局部正交 `ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，
     // 不经 `viewProjectionOf`（组里没有视差、抖动、缩放、透视，它们只作用在组本身，`p5b-grp-par`）。嵌套组自己的 compose 基础 pass
@@ -3710,6 +3858,11 @@ export class GpuScene {
    * 脏 draw 由 `update` 整块重写。结构脏当场处理，返回时新结构已换上。
    */
   sync(state: SceneState): void {
+    // 对象被删（P6d3）：先释放被删对象的资源，后面的刷新与重建就不会再碰它们
+    if (state.structureVersion !== this.structureSeen) {
+      this.structureSeen = state.structureVersion;
+      this.releaseRemoved(state);
+    }
     const dirty = state.takeDirty();
     // 挂点子对象（P12b1 步骤 3）：姿势每帧变，它们与全部子孙的世界矩阵每次都要重算（脚本写父的变换也在 `dirty.layers` 里，不重复）
     if (this.attachments.size && this.puppets?.pose)
@@ -4396,13 +4549,19 @@ export class GpuScene {
     draw.dirty = true;
   }
 
-  /** 环境光变化：只写块里有、材质没覆盖的名字；都没有时不标脏，脚本逐帧写时不重传无关的缓冲。 */
+  /** 环境光与雾（P13f）变化：只写块里有、材质没覆盖的名字；都没有时不标脏，脚本逐帧写时不重传无关的缓冲。 */
   private refreshLights(draw: Draw, state: SceneState): void {
     const { block, step } = draw;
     if (!block) return;
     for (const [name, key] of Object.entries(LIGHT_UNIFORMS)) {
       if (!block.has(name) || name in step.pass.uniforms) continue;
       block.set(name, state.general[key]);
+      draw.dirty = true;
+    }
+    if (!FOG_UNIFORMS.some((name) => block.has(name))) return;
+    for (const [name, value] of Object.entries(fogUniforms(state.general))) {
+      if (!block.has(name) || name in step.pass.uniforms) continue;
+      block.set(name, value);
       draw.dirty = true;
     }
   }
@@ -4453,7 +4612,9 @@ export class GpuScene {
         );
         const draw = this.createDraw(layer, step, runtime.resources, { program, pipeline }, state, worlds);
         this.indexDraw(draw);
-        this.shadowCasters.push(this.shadowCasterOf(draw, layer.object));
+        const caster = this.shadowCasterOf(draw, layer.object);
+        this.shadowCasters.push(caster);
+        this.shadowCasterOwners.set(caster, layer.object);
       }
     }
   }
@@ -4516,12 +4677,20 @@ export class GpuScene {
    * 图集时打包、算阴影视图并把投影与方块变换写进同一块（`ShadowAtlas.frame`）。WPE 在相机与脚本之后、反射与主 pass 之前算（帧函数
    * `0x14018031a`），我们的 `update` 在 `setCamera` 之后，同序。没有灯（`bundle.lights` 缺）时为空。
    */
-  private frameLightValues(): Record<string, number[]> {
+  private frameLightValues(state?: SceneState): Record<string, number[]> {
     const lights = this.bundle.lights;
     if (!lights) return {};
     const forward = this.view.viewVectors.forward;
-    const frame = lightFrame(lights.records, lights.counts, lights.quality, forward);
+    // 被删的灯不再参与排序与写缓冲（P6d3）
+    const records =
+      state || this.removedObjects.size
+        ? lights.records.filter((light) =>
+            state ? state.layers.has(light.object) : !this.removedObjects.has(light.object),
+          )
+        : lights.records;
+    const frame = lightFrame(records, lights.counts, lights.quality, forward);
     this.shadowAtlas?.frame(frame, forward, this.view.eye);
+    this.lightFrameCache = frame;
     return lightFrameUniforms(frame);
   }
 
@@ -4531,8 +4700,8 @@ export class GpuScene {
    * ropetrail（P4d 步骤 2）的 `g_RenderVar0` 每帧按系统当时的计时器写（`trailRenderVar0`，WPE 每次绘制前写，rea-p4d-rope.md
    * 第 4 节）：步进在前，所以是本帧采样之后的计时器。
    */
-  update(frame: FrameInput, _state?: SceneState): void {
-    const values = (this.frameValues = { ...frameBuiltins(frame), ...this.frameLightValues() });
+  update(frame: FrameInput, state?: SceneState): void {
+    const values = (this.frameValues = { ...frameBuiltins(frame), ...this.frameLightValues(state) });
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
       if (!draw.frameNames.length && !draw.dirty && !draw.trailRenderVar && draw.puppet === null) continue;
@@ -4601,7 +4770,8 @@ export class GpuScene {
       const updated = new Set<number>(this.trees.keys());
       for (const layer of this.bundle.layers)
         if (layer.puppet?.skeleton || layer.model?.skeleton) updated.add(layer.object);
-      for (const object of [...updated].sort((a, b) => a - b))
+      const byOrder = byPosition(this.structure(state).position);
+      for (const object of [...updated].sort(byOrder))
         this.stamps.evaluate(object, state.layers, this.hasAttachment, this.attachHook);
       this.stampUpdated = true;
     }
@@ -4610,7 +4780,12 @@ export class GpuScene {
     // 一个粒子层若干次绘制共用一棵系统树（P4e 步骤 1、2）：只步进根（子系统与事件实例由它递归），每棵树一次，图层顺序；步进后这一层的
     // 全部粒子绘制都标 `stale`（实例化的 draw 每帧都可能换实例，一起标）。交给根的控制点输入记进 `tree.inputs`，本帧脚本
     // `emitParticles` 用同一份（P4f 步骤 3）
-    for (const tree of this.trees.values()) {
+    // 按对象表顺序（P6d3：`sortLayer` 之后与 WPE 一致；没排过序时就是 `objects` 顺序，与建树顺序相同）
+    const treeOrder = state ? byPosition(this.structure(state).position) : null;
+    const trees = treeOrder
+      ? [...this.trees.values()].sort((a, b) => treeOrder(a.object, b.object))
+      : this.trees.values();
+    for (const tree of trees) {
       const root = tree.system;
       const object = tree.object;
       if (state && !effectiveVisible(object, state.layers)) {
@@ -4668,7 +4843,7 @@ export class GpuScene {
     stamps.invalidate(state.takeTransformWrites());
     const attached = new Set(this.attachedList(state));
     const seeds = new Map<number, Mat4>();
-    for (const object of [...state.layers.keys()].sort((a, b) => a - b)) {
+    for (const object of [...state.layers.keys()].sort(byPosition(this.structure(state).position))) {
       if (!this.drawsByLayer.get(object)?.length || !effectiveVisible(object, state.layers)) continue;
       const world = stamps.evaluate(object, state.layers, this.hasAttachment, this.attachHook);
       if (attached.has(object)) seeds.set(object, world);
@@ -5222,6 +5397,15 @@ export class GpuScene {
     };
     // 不可见图层整段跳过（含它的快照与 copy / swap）；运行时可见性由 `SceneState` 决定（P3a），沿父链继承（组隐藏时子孙也不可见）
     const visible = new Set(visibleObjects(this.layers, state));
+    // 运行时对象表的派生（P6d3）：顶层绘制顺序与位置表
+    const { top: topLayers, position } = this.structure(state);
+    // 反射 pass 的遍历顺序：对象表里有运行时的全部图层（名单里组内的也在，同以前遍历 `this.layers`，只是改按对象表顺序）
+    const reflectionOrder = this.reflectionList
+      ? state.order.flatMap((object) => {
+          const runtime = this.runtimeByObject.get(object);
+          return runtime ? [runtime] : [];
+        })
+      : [];
     // 粒子层这一帧的排列（`arrangeParticles`）：第一次画到时排，平面反射 pass 与主 pass 共用
     const arrangements = new Map<ParticleTree, ParticleArrangement>();
     const arranged = (tree: ParticleTree): ParticleArrangement => {
@@ -5344,7 +5528,7 @@ export class GpuScene {
           bindGroup: copy?.bindGroup ?? this.bindGroupOf(item),
         });
       };
-      for (const runtime of this.layers) {
+      for (const runtime of reflectionOrder) {
         if (!this.reflectionList!.has(runtime.object) || !visible.has(runtime.object)) continue;
         for (const op of runtime.ops) {
           if (op.kind === "draw") reflect(op.draw);
@@ -5356,6 +5540,62 @@ export class GpuScene {
       }
       pass.end();
     }
+    // 体积光（P13e，V5）：灯不是图层，按 `objects` 下标插进顶层序列。画到一盏灯就拷深度、画进 LightBuffer（一段连续的灯共用一次清屏）；
+    // 下一个可见的非灯对象画之前（不可见的不触发）、或列表末尾（泛光之前）合成。组里的灯照报，这里不会有
+    const volumetrics = this.volumetrics;
+    // 灯按对象表顺序插进顶层序列；被删的灯跳过（P6d3）
+    const lightObjects = (volumetrics?.objects ?? [])
+      .filter((object) => state.layers.has(object))
+      .sort(byPosition(position));
+    let nextLight = 0;
+    let pendingComposite = false;
+    if (volumetrics) {
+      const lights = this.lightFrameCache;
+      volumetrics.frame((object) => {
+        const layer = this.bundle.layers.find((item) => item.object === object);
+        const entry = lights?.entries.find((item) => item.cascade === null && item.light.object === object);
+        const slice = (start: number) => lights!.buffer.subarray(start + entry!.slot * 4, start + entry!.slot * 4 + 4);
+        return {
+          viewProjection: layer ? this.viewProjectionOf(layer, state, this.view, false) : this.view.viewProjection,
+          eye: this.view.eye,
+          forward: this.view.viewVectors.forward,
+          ...(entry
+            ? {
+                shadow: {
+                  transform: slice(lights!.layout.pointProjectionTransform),
+                  projection: slice(lights!.layout.pointProjection),
+                },
+              }
+            : {}),
+        };
+      });
+    }
+    const composite = () => {
+      if (!volumetrics || !pendingComposite) return;
+      if (!started) begin();
+      end();
+      volumetrics.encodeComposite(encoder, sceneView);
+      pendingComposite = false;
+    };
+    const lightsBefore = (object: number) => {
+      while (
+        volumetrics &&
+        nextLight < lightObjects.length &&
+        (position.get(lightObjects[nextLight]) ?? Infinity) < (position.get(object) ?? Infinity)
+      ) {
+        // 读场景深度：本帧还没画过场景就先清一次（同快照）
+        if (!started) begin();
+        end();
+        volumetrics.encodeLight(encoder, lightObjects[nextLight], !pendingComposite);
+        pendingComposite = true;
+        nextLight++;
+      }
+    };
+    const runTop = (runtime: LayerRuntime) => {
+      lightsBefore(runtime.object);
+      if (visible.has(runtime.object)) composite();
+      runLayer(runtime);
+    };
     // 组的子孙（`group` 非空）在顶层不画，由组的 `subtree` op 画（P5b 步骤 4）
     // `group == null`：缺这个字段（手写的图层）也当顶层
     const { perspective, transparentSorting } = this.bundle.general;
@@ -5363,10 +5603,12 @@ export class GpuScene {
       // 透明排序（P5d 步骤 4，`render/sortOrder.ts`）：只重排顶层这一轮，先按原顺序画不在半透明名单里的，再把半透明的按「当帧状态里的
       // 局部 origin · 当帧相机的视线方向」从远到近画（`viewVectors` 是 `setCamera` 交来的透视帧的，含抖动、相机对象、路径）。组画子树、
       // 模型的网格顺序、粒子树的先序不动；被依赖的图层跟着自己在新顺序里的位置画（同 WPE）
-      const top = this.layers.filter((layer) => layer.layer.group == null).map((runtime) => runtime.layer);
+      const top = topLayers.map((runtime) => runtime.layer);
       for (const layer of transparentDrawOrder(top, state, this.view.viewVectors.forward))
-        runLayer(this.runtimeByObject.get(layer.object)!);
-    } else for (const layer of this.layers) if (layer.layer.group == null) runLayer(layer);
+        runTop(this.runtimeByObject.get(layer.object)!);
+    } else for (const layer of topLayers) runTop(layer);
+    lightsBefore(Infinity);
+    composite();
     if (this.bloom && state.bloomEnabled) {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
       if (!started) begin();
@@ -5396,6 +5638,8 @@ export class GpuScene {
     this.shadowAtlas?.destroy();
     this.shadowAtlas = null;
     this.shadowCasters = [];
+    this.volumetrics = null;
+    this.lightFrameCache = null;
     this.depthTarget = null;
     this.bloom = null;
     this.particleIndices = null;

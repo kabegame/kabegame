@@ -15,6 +15,8 @@ import {
 import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
 import { compileSceneInWorker } from "./compile/client";
+import { SceneLoadProgress } from "./progress";
+import type { SceneStructure } from "./compile/protocol";
 import { TextureDecodeCache } from "./compile/decode";
 import { FetchSceneReader } from "./compile/fs";
 import type { BindingTarget } from "./compile/bindings";
@@ -24,12 +26,15 @@ import {
   SCENE_POSTPROCESS_SETTINGS,
   SCENE_REFLECTION_SETTINGS,
   SCENE_SHADOW_SETTINGS,
+  SCENE_VOLUMETRICS_SETTINGS,
   type SceneReflectionSetting,
   type ScenePostprocessSetting,
   type SceneShadowSetting,
+  type SceneVolumetricsSetting,
 } from "./compile/postprocess";
 import { reflectionOverride } from "./dev/reflectionOverride";
 import { shadowsOverride } from "./dev/shadowsOverride";
+import { volumetricsOverride } from "./dev/volumetricsOverride";
 import { scriptMediaCallbacks } from "./media/events";
 import { MEDIA_DEFAULT_INTERVAL_MS, mediaIntervalOf } from "./media/interval";
 import { MediaPending } from "./media/pending";
@@ -46,6 +51,15 @@ import { schemeColor } from "./sceneStyle";
 import { instanceControlPoint, type InstanceField } from "./compile/particles";
 import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
 import { applyScriptedProperties } from "./script/initialApply";
+import {
+  createStructureObject,
+  recordDestroyed,
+  recordReparent,
+  reparentNeedsRecompile,
+  settleDestroyed,
+  syncAllocator,
+  type ObjectAllocator,
+} from "./script/structure";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, scriptDiagnostics, type ScriptTarget, type ScriptValue } from "./script/runtime";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "./script/stateWrite";
@@ -117,6 +131,30 @@ function asShadows(value: unknown): SceneShadowSetting {
   return SCENE_SHADOW_SETTINGS.includes(value as SceneShadowSetting) ? (value as SceneShadowSetting) : "follow";
 }
 
+function asVolumetrics(value: unknown): SceneVolumetricsSetting {
+  return SCENE_VOLUMETRICS_SETTINGS.includes(value as SceneVolumetricsSetting)
+    ? (value as SceneVolumetricsSetting)
+    : "follow";
+}
+
+/** 父页面下发的四项设置（已规整） */
+interface SceneSettings {
+  postprocess: ScenePostprocessSetting;
+  reflection: SceneReflectionSetting;
+  shadows: SceneShadowSetting;
+  volumetrics: SceneVolumetricsSetting;
+}
+
+const FOLLOW_SCENE_SETTINGS: SceneSettings = {
+  postprocess: "follow",
+  reflection: "follow",
+  shadows: "follow",
+  volumetrics: "follow",
+};
+
+/** 首次加载等父页面场景设置的上限：父页面在宿主请求后同一轮事件里就回，正常是几毫秒 */
+const SCENE_SETTINGS_WAIT_MS = 3000;
+
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -170,11 +208,20 @@ export class SceneHost {
   private lastLostAt = -Infinity;
   private disposed = false;
   private paused = false;
+  /** 设置「场景后处理」：最近一次加载用的值；还没加载过为 null。 */
   private postprocess: ScenePostprocessSetting | null = null;
+  /**
+   * 父页面下发的后处理 / 反射 / 阴影 / 体积光（`kabegame:wpe-scene-settings`，`setSceneSettings`）：桌面是全局「壁纸设置」，预览是这张壁纸的
+   * 「预览设置」，宿主不分。收到第一条之前为 null，`reload` 等它（最多 `SCENE_SETTINGS_WAIT_MS`，等不到按跟随 WPE）。
+   */
+  private sceneSettings: SceneSettings | null = null;
+  private readonly sceneSettingsWaiters: (() => void)[] = [];
   /** 设置「场景反射」（P13b1）：最近一次加载用的值；还没加载过为 null。 */
   private reflection: SceneReflectionSetting | null = null;
   /** 设置「场景阴影」（P13d）：最近一次加载用的值；还没加载过为 null。 */
   private shadows: SceneShadowSetting | null = null;
+  /** 设置「场景体积光」（P13e）：最近一次加载用的值；还没加载过为 null。 */
+  private volumetrics: SceneVolumetricsSetting | null = null;
   /**
    * 累计全集（WPE 渲染器 `+0x1728`，I1）：键 → `{ type, value }`。保留 `type`，不学 WPE 的整项覆盖（I4）。
    * 加载传全集、运行时传增量，两条路都走 `apply`。
@@ -194,6 +241,13 @@ export class SceneHost {
   private runtime: ScriptRuntime | null = null;
   private scriptApi: ScriptApi | null = null;
   private readonly scriptOverrides = new Map<string, ScriptValue>();
+  /**
+   * 运行中改过的场景结构（P6d3a）：删掉的对象、换过的父。每次 `reload` 交给编译（删掉的不回来、换过的父保留），跨重编译保留；
+   * 「清空脚本存储」时清空，回到 `scene.json` 原样。
+   */
+  private readonly structure: SceneStructure = { destroyed: [], parents: [], created: [] };
+  /** 新建对象的下标分配器（P6d3b）：只增不减、跨重编译保留，「清空脚本存储」时清零；每份新 bundle 换上 / 编出时 `syncAllocator`。 */
+  private readonly allocator: ObjectAllocator = { next: 0 };
   private scriptReloadPending = false;
   private scriptReloadRunning = false;
   private reloading = false;
@@ -335,39 +389,6 @@ export class SceneHost {
     this.userTextures.onReady = (name) => this.onUserTextureReady(name);
     // 来源表建好后按当前暂停状态设一次（P11b 步骤 4，用户视频与 GIF 的时钟）
     this.userTextures.setPaused(this.paused || this.hidden);
-    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理、反射与阴影设置", (raw) => {
-      if (this.disposed || !this.receivedProperties) return;
-      const delta = (raw && typeof raw.changes === "object" ? raw.changes : raw) as Record<string, unknown> | null;
-      if (!delta) return;
-      const keys: string[] = [];
-      if ("wpeScenePostprocess" in delta) {
-        const next = asPostprocess(delta.wpeScenePostprocess);
-        if (this.postprocess === null || next !== this.postprocess) {
-          keys.push("wpeScenePostprocess");
-          options.report.debug(`场景壁纸 ${options.imageId} 后处理设置 ${this.postprocess} → ${next}，重新判定`);
-        }
-      }
-      // 反射（P13b1）：值变才重载；两项设置同时变（一条 setting-change 带两个键）只重载一次
-      if ("wpeSceneReflection" in delta) {
-        const next = asReflection(delta.wpeSceneReflection);
-        if (this.reflection === null || next !== this.reflection) {
-          keys.push("wpeSceneReflection");
-          options.report.debug(`场景壁纸 ${options.imageId} 反射设置 ${this.reflection} → ${next}，重新判定`);
-        }
-      }
-      // 阴影（P13d）：档位决定编不编投射变体、图集尺寸与 `LIGHTS_SHADOW_*` 宏，只能整场重载；同一条里几项一起变只重载一次
-      if ("wpeSceneShadows" in delta) {
-        const next = asShadows(delta.wpeSceneShadows);
-        if (this.shadows === null || next !== this.shadows) {
-          keys.push("wpeSceneShadows");
-          options.report.debug(`场景壁纸 ${options.imageId} 阴影设置 ${this.shadows} → ${next}，重新判定`);
-        }
-      }
-      if (!keys.length) return;
-      // 设置变化引起的重载也计入探针的 recompiled（原因记 settings）
-      this.stats.recompiled.push({ reason: "settings", keys });
-      void this.reload();
-    });
     // 应用页与这份存储不同来源，由后端广播：同一张图的全部宿主（预览、桌面）都停脚本、删前缀、重建
     this.listenEvent<{ imageId?: string }>("wpe-scene-clear-storage", "清空脚本存储", (payload) => {
       const imageId = options.imageId;
@@ -496,6 +517,10 @@ export class SceneHost {
     // 新 `init` 里的 play() 落在它上面，`beforeFirstFrame` 换上时不接旧时钟；所以这里不用碰 `sceneAnimations`（旧场景在新场景换上前照常画）
     // 脚本写过的重编译目标一并放弃；用户属性在重建后重新全量交给新脚本
     this.scriptOverrides.clear();
+    this.structure.destroyed = [];
+    this.structure.parents = [];
+    this.structure.created = [];
+    this.allocator.next = 0;
     this.scriptNeedsFullApply = true;
     const backend = browserStorage();
     if (backend) clearSceneStorage(backend, imageId);
@@ -622,6 +647,59 @@ export class SceneHost {
     this.options.report.debug(`场景脚本重编译目标变化：${path}`);
     this.requestScriptReload();
     return true;
+  }
+
+  /**
+   * `setParent` 改完状态（P6d3a）：记进结构（之后每次编译带上）；会改编译产物（组归属、挂点）的才请求一次重编译，别的换父只改状态、
+   * 渲染侧每帧读状态。组深度检查失败后父被置空的也走这里。
+   */
+  private onReparented(change: {
+    object: number;
+    oldParent: number | null;
+    oldBone: string | null;
+    parent: number | null;
+    bone: string | null;
+  }): void {
+    recordReparent(this.structure, change.object, change.parent, change.bone);
+    if (!this.scriptState || !reparentNeedsRecompile({ state: this.scriptState, bundle: this.scriptBundle, ...change }))
+      return;
+    this.stats.recompiled.push({ reason: `script（setParent ${change.object}）`, keys: [] });
+    this.options.report.debug(`场景脚本换父改了组或挂点：${change.object}`);
+    this.requestScriptReload();
+  }
+
+  /**
+   * `createLayer` 的落点（P6d3b）：在脚本状态上建出待编对象并记进结构（`createStructureObject`），然后安排重编译。
+   * - `init` 还在跑（`runtimeTask`，首次加载或清空脚本存储后）只记结构：`reload` 在脚本环境建好之后比较编译用的结构与现在的，多了就放弃本次、
+   *   带结构重新加载，首帧画的就是带新对象的 bundle；
+   * - 其余时候请求一次重编译（`requestScriptReload` 合并多次请求；加载进行中只挂起，这次加载结束、状态 ready 时再来一次，所以首帧之后、
+   *   ready 之前的 `update` 里建的也不丢）。已知差异：新对象晚一段才画出来。
+   */
+  private onCreateLayer(config: string, parent: number | null): number | null {
+    const state = this.scriptState;
+    if (!state) return null;
+    syncAllocator(this.allocator, this.scriptBundle);
+    const object = createStructureObject(state, this.structure, this.allocator, config, parent);
+    if (object === null) return null;
+    this.options.report.debug(`场景脚本建了图层：${object}`);
+    if (this.runtimeTask) return object;
+    this.stats.recompiled.push({ reason: `script（createLayer ${object}）`, keys: [] });
+    this.requestScriptReload();
+    return object;
+  }
+
+  /**
+   * 删除生效之后（P6d3a）：记进结构、声音停播并摘掉、光标的悬停 / 按下集合摘掉（不发 Leave / Up）；删除改了组归属时请求重编译。
+   * puppet、关键帧动画对不存在的对象写入本来就是空操作（`SceneState.write` 按 `layers.get` 判断），不用另外清。
+   */
+  private onDestroyed(objects: number[], regroup: boolean): void {
+    recordDestroyed(this.structure, objects);
+    this.sceneSounds?.remove(objects);
+    this.renderer?.forgetObjects(objects);
+    this.options.report.debug(`场景脚本删除了图层：${objects.join(",")}`);
+    if (!regroup) return;
+    this.stats.recompiled.push({ reason: `script（destroyLayer ${objects.join(",")}）`, keys: [] });
+    this.requestScriptReload();
   }
 
   private requestScriptReload(): void {
@@ -895,6 +973,15 @@ export class SceneHost {
           const state = renderer?.sceneState;
           return renderer && state ? renderer.transformMatrix(object, state) : null;
         },
+        // 挂点钩子与运行中结构（P6d3a）：`setParent` 的 adjust 数学与挂点名读它们，换父成功后经 `reparented` 记进结构
+        attachPose: (object) => this.renderer?.attachMatrix(object) ?? null,
+        structure: () => this.structure,
+        reparented: (change) => this.onReparented(change),
+        // `createLayer`（P6d3b）：当前脚本的 `__workshopId` 取自运行时；建层与新对象上的脚本经宿主落到状态与运行时
+        workshopId: () => this.runtime?.currentWorkshopId() ?? null,
+        createLayer: (config, parent) => this.onCreateLayer(config, parent),
+        addScripts: (scripts) => this.runtime?.addScripts(scripts),
+        warn: (message) => this.options.report.warn(message),
         // 全局 `input`（P6c）：每次读都取渲染器最近一帧给的光标快照
         cursorInput: () => this.cursorInput,
         // 快捷方式（P11d）：回调名取自运行时，令牌与属性检查在 `openUserShortcut`
@@ -1367,6 +1454,12 @@ export class SceneHost {
               event: ({ object, json }) => this.runtime?.animationEvent(object, json),
             });
           this.runtime?.frame(dt);
+          // 删除生效（P6d3a，rea-p6d-layers 4.2 第 7.5 步）：全部脚本之后、绘制之前
+          settleDestroyed(this.scriptState, {
+            runtime: this.runtime,
+            bundle: this.scriptBundle,
+            removed: (objects, regroup) => this.onDestroyed(objects, regroup),
+          });
         }
       },
       onError: (reasons) => {
@@ -1445,35 +1538,77 @@ export class SceneHost {
     this.options.report.fallback(reasons);
   }
 
-  private async readPostprocess(): Promise<ScenePostprocessSetting> {
-    try {
-      return asPostprocess(await invoke<string>("get_wpe_scene_postprocess"));
-    } catch (error) {
-      this.options.report.warn("读取场景后处理设置失败，按跟随 WPE 处理：", error);
-      return "follow";
-    }
+  /**
+   * 父页面下发四项设置（`kabegame:wpe-scene-settings`）。第一条叫醒等着的 `reload`；之后和最近一次加载用的值比，变了才整场重载
+   * （四项都决定编译结果：泛光链 / HDR、反射名单、阴影变体与图集、体积光的 RT 与 `QUALITY`），几项一起变只重载一次，记进探针的
+   * recompiled（原因 settings）。缺了的项（旧的父页面）按跟随。
+   */
+  setSceneSettings(next: { postprocess: unknown; reflection: unknown; shadows: unknown; volumetrics?: unknown }): void {
+    if (this.disposed) return;
+    this.sceneSettings = {
+      postprocess: asPostprocess(next.postprocess),
+      reflection: asReflection(next.reflection),
+      shadows: asShadows(next.shadows),
+      volumetrics: asVolumetrics(next.volumetrics),
+    };
+    for (const wake of this.sceneSettingsWaiters.splice(0)) wake();
+    // 还没加载过：在等的 reload 会读到这份
+    if (!this.receivedProperties || this.postprocess === null) return;
+    const resolved = this.resolvedSceneSettings();
+    const keys: string[] = [];
+    if (resolved.postprocess !== this.postprocess) keys.push("postprocess");
+    if (resolved.reflection !== this.reflection) keys.push("reflection");
+    if (resolved.shadows !== this.shadows) keys.push("shadows");
+    if (resolved.volumetrics !== this.volumetrics) keys.push("volumetrics");
+    if (!keys.length) return;
+    const before = [this.postprocess, this.reflection, this.shadows, this.volumetrics].join("/");
+    const after = [resolved.postprocess, resolved.reflection, resolved.shadows, resolved.volumetrics].join("/");
+    this.options.report.debug(
+      `场景壁纸 ${this.options.imageId} 设置变化（${keys.join("、")}）：${before} → ${after}，重新判定`,
+    );
+    this.stats.recompiled.push({ reason: "settings", keys });
+    void this.reload();
   }
 
-  private async readReflection(): Promise<SceneReflectionSetting> {
-    const override = reflectionOverride();
-    if (override) return override;
-    try {
-      return asReflection(await invoke<string>("get_wpe_scene_reflection"));
-    } catch (error) {
-      this.options.report.warn("读取场景反射设置失败，按跟随 WPE 处理：", error);
-      return "follow";
-    }
+  /** 编译用的四项：父页面的值，反射、阴影与体积光再叠 dev 覆盖（`localStorage`，生产构建摇掉） */
+  private resolvedSceneSettings(): SceneSettings {
+    const settings = this.sceneSettings ?? FOLLOW_SCENE_SETTINGS;
+    return {
+      postprocess: settings.postprocess,
+      reflection: reflectionOverride() ?? settings.reflection,
+      shadows: shadowsOverride() ?? settings.shadows,
+      volumetrics: volumetricsOverride() ?? settings.volumetrics,
+    };
   }
 
-  private async readShadows(): Promise<SceneShadowSetting> {
-    const override = shadowsOverride();
-    if (override) return override;
-    try {
-      return asShadows(await invoke<string>("get_wpe_scene_shadows"));
-    } catch (error) {
-      this.options.report.warn("读取场景阴影设置失败，按跟随 WPE 处理：", error);
-      return "follow";
+  /**
+   * 等父页面的第一条设置；没有父页面回应（dev 工具直接开的宿主没替它回）时等满上限按跟随 WPE，记一条 warn。
+   * 不在 iframe 里（没有父页面，单测在 node 里）不等，直接按跟随。
+   */
+  private async readSceneSettings(): Promise<SceneSettings> {
+    const framed = typeof window !== "undefined" && window.parent !== window;
+    if (!this.sceneSettings && !framed) this.sceneSettings = FOLLOW_SCENE_SETTINGS;
+    if (!this.sceneSettings) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          const index = this.sceneSettingsWaiters.indexOf(wake);
+          if (index >= 0) this.sceneSettingsWaiters.splice(index, 1);
+          if (!this.sceneSettings) {
+            this.options.report.warn(
+              `场景壁纸 ${this.options.imageId}：${SCENE_SETTINGS_WAIT_MS} ms 内没收到父页面的场景设置，按跟随 WPE 处理`,
+            );
+            this.sceneSettings = FOLLOW_SCENE_SETTINGS;
+          }
+          resolve();
+        }, SCENE_SETTINGS_WAIT_MS);
+        const wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        this.sceneSettingsWaiters.push(wake);
+      });
     }
+    return this.resolvedSceneSettings();
   }
 
   /** 属性、档位或设备变化时重新编译；代数确保过期结果不能覆盖新场景。 */
@@ -1488,6 +1623,14 @@ export class SceneHost {
     const abort = (this.controller = new AbortController());
     if (this.state !== "ready") this.state = "loading";
     const started = performance.now();
+    // 加载进度（`progress.ts`）：只在首次加载时报给父页面（重编译时旧画面一直在画）、被新的加载取代后不再报；分段计时两种都记，进日志
+    const load = new SceneLoadProgress(
+      this.state === "ready"
+        ? null
+        : (stage, done, total) => {
+            if (id === this.generation) this.options.report.progress?.(stage, done, total);
+          },
+    );
     // 编译用的裸值快照：属性只作为编译输入，同时记下来供场景换上（或退回）后补差
     let compiledWith: Record<string, unknown> | null = null;
     try {
@@ -1498,33 +1641,41 @@ export class SceneHost {
         this.targetTask = null;
         throw error;
       }));
-      const [target, setting, reflection, shadows] = await Promise.all([
+      const [target, { postprocess: setting, reflection, shadows, volumetrics }] = await Promise.all([
         targetTask,
-        this.readPostprocess(),
-        this.readReflection(),
-        this.readShadows(),
+        this.readSceneSettings(),
       ]);
       if (id !== this.generation) return;
       this.postprocess = setting;
       this.reflection = reflection;
       this.shadows = shadows;
+      this.volumetrics = volumetrics;
       const force = forceRender();
       const userProperties = Object.fromEntries(
         [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
       );
       compiledWith = { ...userProperties };
+      // 这次编译用的新建对象个数（P6d3b）：脚本 `init` 之后结构里的更多，说明 `init` 里建了层，这份 bundle 不带它们
+      const createdAtCompile = this.structure.created.length;
       const bundle = await compileSceneInWorker({
         projectDir: target.path,
         sceneAssets: target.sceneAssets,
         userProperties,
         scriptOverrides: Object.fromEntries(this.scriptOverrides),
+        structure: {
+          destroyed: [...this.structure.destroyed],
+          parents: this.structure.parents.map((item) => [...item]) as SceneStructure["parents"],
+          created: this.structure.created.map((item) => ({ ...item })),
+        },
         postprocess: setting,
         reflection,
         shadows,
+        volumetrics,
         force,
         textureCache: this.textureCache,
         reader: this.reader,
         signal: abort.signal,
+        onProgress: (stage, done, total) => load.report(stage, done, total),
       }).catch((error: unknown) => {
         throw isAbort(error) ? error : new SceneRenderError(reasonsOf(error, "compile"));
       });
@@ -1536,6 +1687,8 @@ export class SceneHost {
         }
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 强制渲染（dev），不支持项：`, bundle.unsupported);
       }
+      // 文本、声音、媒体、视频、用户纹理、脚本 init、取设备：进度的 `prepare` 阶段（日志里「准备」「取设备」两段）
+      load.report("prepare", 0, 1);
       // 文本（P6b 1d）：排版要 wasm 与字体字节，在声音、脚本与 GPU 资源之前排好（读字体是异步的，之后比代数）。wasm 不在或排版
       // 出错时抛 `text:engine`，由下面的 catch 退回预览图
       let texts: Map<number, TextLayout> | undefined;
@@ -1568,6 +1721,7 @@ export class SceneHost {
       if ((!this.runtime || this.runtimeTask) && bundle.scripts.list.length && !this.scriptUnavailable) {
         this.scriptBundle = bundle;
         this.scriptState = SceneState.fromBundle(bundle);
+        syncAllocator(this.allocator, bundle);
         // 先按新 bundle 建好动画播放器，`init` 里的 getAnimation().play() 才有落点（见 `pendingAnimations`）
         const player = new SceneAnimations(bundle.animations ?? []);
         // 加载期间又来一次加载（重编译）：脚本环境已经建好或正在跑 `init`（`runtime` 已赋值），之前的 `init` 控制的是上一份待用播放器，
@@ -1580,7 +1734,17 @@ export class SceneHost {
         this.pendingPuppets = { bundle, puppets: pendingPuppets };
         await this.ensureRuntime(bundle, target.sceneAssets);
         if (id !== this.generation) return;
+        // `init` 里建了层（P6d3b，rea-p6d-layers 5）：放弃本次加载、带着结构立刻重编。脚本环境保留（`init` 不重跑），第二次编完才建 GPU 资源、
+        // 画首帧，画面与 WPE 一样；不画旧 bundle 的首帧。`pendingAnimations` / `pendingPuppets` 走上面「加载期间又来一次加载」的接续
+        if (this.structure.created.length > createdAtCompile) {
+          this.options.report.debug(
+            `场景脚本 init 里建了 ${this.structure.created.length - createdAtCompile} 个图层，带结构重新编译`,
+          );
+          void this.reload();
+          return;
+        }
       }
+      load.mark("取设备");
       const current = await this.ensureRenderer();
       if (id !== this.generation) return;
       current.setPaused(this.paused);
@@ -1596,7 +1760,11 @@ export class SceneHost {
         relayout,
         userTextures: this.userTextures,
         puppets,
+        onProgress: (stage, done, total) => load.report(stage, done, total),
         beforeFirstFrame: (state) => {
+          // 结构接续（P6d3a）：旧脚本状态里的对象表 / 待删 / 父子（首次加载时是 `init` 里 `sortLayer` / `setParent` / `destroyLayer` 落下的，
+          // bundle 是 `init` 之前编的、不含它们）；重编译后 bundle 已带结构，照搬是幂等的。在重放脚本写入之前
+          if (this.scriptState && this.scriptState !== state) state.adoptStructure(this.scriptState);
           // 新建 → carryOver → refresh（同 P10 的 `write`）：重编译时动画层时钟与 blendin 的清位接着走，换上就按当前时钟与当前状态算一次蒙皮，
           // 不闪出绑定姿势；之后每帧由 `stepPuppets` 推进
           // 待用的（`init` 里的控制要保留）不接旧时钟；否则接上正在播的，没有时接过期的待用运行时（P12c）
@@ -1616,6 +1784,10 @@ export class SceneHost {
           this.drawingBundle = bundle;
           this.scriptBundle = bundle;
           this.scriptState = state;
+          // 新建对象编进了 bundle（P6d3b）：脚本条目换成新 bundle 里的（常量目标等由编译填好）、API 的待编对象清掉、分配器对齐
+          syncAllocator(this.allocator, bundle);
+          this.runtime?.refreshScripts(bundle.scripts.list);
+          this.scriptApi?.adoptBundle();
           // 关键帧动画（P10a 步骤 3）在这里换，不在编译完就换：换上之前旧场景还在画，要接着用自己的动画；时钟也不能在建 GPU 资源期间
           // 停住再接（`carryOver` 拷的是这一刻的时间）。换上就按当前时钟写一次：暂停中重编译时首帧不跑 `beforeFrame`，不写的话先闪一下
           // 编译期的 `value`。在重放脚本写入之前：一帧里动画先写、脚本后写（rea-p10-keyframes 第 9 节）。手写的测试 bundle 可能没有动画表
@@ -1678,14 +1850,15 @@ export class SceneHost {
         }
         this.state = "ready";
         this.lastFallback = "";
+        load.report("frame", 1, 1);
         this.options.report.info(
           `场景壁纸 ${this.options.imageId} 开始渲染：${bundle.layers.length} 层、${bundle.programs.length} 个程序，` +
-            `${detail}，用时 ${Math.round(performance.now() - started)} ms`,
+            `${detail}，用时 ${Math.round(performance.now() - started)} ms（${load.summary()}）`,
         );
         this.options.report.ready();
       } else
         this.options.report.debug(
-          `场景壁纸 ${this.options.imageId} 重新加载：${detail}，用时 ${Math.round(performance.now() - started)} ms`,
+          `场景壁纸 ${this.options.imageId} 重新加载：${detail}，用时 ${Math.round(performance.now() - started)} ms（${load.summary()}）`,
         );
       // 加载期间到达的增量不丢：与编译用的快照比较，差异再走一次应用函数（P3a）
       const pending = pendingChanges(this.properties, this.compiledWith);

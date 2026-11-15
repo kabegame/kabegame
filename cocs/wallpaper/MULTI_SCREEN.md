@@ -515,7 +515,7 @@ app IPC 的对应变体（协议 v5）见 [../cli/CLI_IPC.md](../cli/CLI_IPC.md)
 
   逐屏独立下第二、三层才真正分屏：点布局图里的一块屏，第三层就是那块屏的目标；「已断开」列表里是配置还在、屏不在线的目标，「忘记」后那块屏再接回来时从默认目标重新复制一份。
 
-  之后是其余全局项：暂停、音量、倍速、媒体集成、场景后处理、WPE 目录。**选中的目标是页面本地状态**，记在 `localStorage`（`kabegame-settings-wallpaper-target`），不进设置；记下的目标不在当前活跃集合里（换了显示器模式、那块屏断开）时显示默认目标，记录本身不动，屏接回来还是它。第三层的写命令都带选中目标的 id。
+  之后是其余全局项：桌面的「壁纸设置」字段组（暂停、音量、倍速、媒体集成、场景后处理 / 反射 / 阴影，`WpeWallpaperSettings.vue`，全部字段都显示；预览用每张壁纸自己的「预览设置」，见 [WPE_IMPORT.md](../wpe/WPE_IMPORT.md)「壁纸设置与预览设置」）、WPE 目录。**选中的目标是页面本地状态**，记在 `localStorage`（`kabegame-settings-wallpaper-target`），不进设置；记下的目标不在当前活跃集合里（换了显示器模式、那块屏断开）时显示默认目标，记录本身不动，屏接回来还是它。第三层的写命令都带选中目标的 id。
 - **目标选择弹窗**：设置页以外凡是要落到某个目标的操作都先经它。
   - 入口是命令式函数 `pickWallpaperTarget({ action })`（`composables/useWallpaperTargetPicker.ts`，写法同 `askSettingChoice`）：模块级的待处理请求，加挂在 `App.vue` 的宿主 `components/wallpaper/WallpaperTargetPickerHost.vue`，调用方 `await` 结果。`action` 是 `"setWallpaper"` 或 `"setRotation"`，只决定标题。
   - 返回值是目标 id，可以直接当命令的 `target`；用户取消返回 `null`，调用方此时什么都不做。
@@ -553,7 +553,7 @@ app IPC 的对应变体（协议 v5）见 [../cli/CLI_IPC.md](../cli/CLI_IPC.md)
   - 显示哪个目标由后端的布置决定：启动时先登记 `wallpaper-assignment` 再调 `get_wallpaper_window_assignment`，取不到时按 `multiple` 目标、出声处理。它不再读显示器模式、默认屏与在线屏。
   - 启动时再拉 `get_wallpaper_targets` 与能力表，之后随 `setting-change` 更新自己留的一份目标表，只看 `wallpaperTargets[布置的目标]`：样式、过渡按能力归一化后就地更新（用哪个组合的能力由目标 id 推出，`utils/wallpaperTargets.ts` 的 `displayModeOfTarget`）；这个目标的 `currentImageId` 变了才重新调 `get_current_wallpaper_target`，并明确带上目标 id。别的目标换壁纸、轮播位置等其它字段的写入都不触发；当前壁纸被清空时保留画面上的那张。
   - 布置换了目标时改读新目标；新目标的当前壁纸与画面上的相同就不重新取（从 `multiple` 切到逐屏独立时各屏的目标是从它复制的，画面不闪）。
-  - 布置的 `audible` 为 `false` 时传给 `WallpaperStage` 的音量恒为 0，其余 props 各窗口相同。`WallpaperStage` 与场景宿主没有为多窗口改动。
+  - 布置的 `audible` 为 `false` 时传给 `Wallpaper` 的音量恒为 0，其余 props 各窗口相同。`Wallpaper` 与场景宿主没有为多窗口改动。
   - dev 调试面板显示本窗口的 label 与目标。
 - **Web 版**：没有壁纸后端。`wallpaperTargets` 走 localStorage，只用 `multiple.currentImageId` 记应用背景图（`utils/wallpaperMode.ts` 的 `setWallpaperOrBackground` / `clearWebBackgroundIfRemoved`）；`wallpaperDisplayMode`、`wallpaperDefaultScreen` 是只读占位；`useWallpaperTarget` 的写操作被拦下并提示桌面版。本地迁移把旧的 `kabegame-setting-currentWallpaperImageId` 并入本地的 `wallpaperTargets` 后删除旧键。
 

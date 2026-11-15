@@ -14,7 +14,10 @@ export interface CoverRegion {
 /** 包住一次按区域截图：区域在这里量，隐藏与恢复也都在这里，调用方只管在回调里截。 */
 export type CoverRegionScope = <T>(run: (region: CoverRegion) => Promise<T>) => Promise<T>;
 
-/** 截图期间 `<html>` 上的属性：盖在画布上的 UI 按它隐藏（`KamechanMascot.vue`）。 */
+/**
+ * 截图期间 `<html>` 上的属性：盖在画布上的 UI 按它隐藏（看板娘 `KamechanMascot.vue`、预览容器里的工具条与箭头
+ * `ImagePreviewDialog.vue`、弹出层见本文件末尾的样式）。
+ */
 const COVER_CAPTURE_ATTR = "data-kb-cover-capture";
 /** 等这一帧时窗口可能被遮挡，rAF 不触发，等不到就按超时往下走。 */
 const FRAME_TIMEOUT_MS = 100;
@@ -28,6 +31,18 @@ function nextFrame(): Promise<void> {
     });
   });
 }
+
+/** 两个矩形的交集；不相交时宽高为 0。 */
+export function intersectRect(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number },
+): CoverRegion {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  return { x, y, width: Math.max(0, right - x), height: Math.max(0, bottom - y) };
+}
 </script>
 
 <script setup lang="ts">
@@ -35,17 +50,30 @@ function nextFrame(): Promise<void> {
  * 预览弹窗里的壁纸画布（纯布局）：给插槽一块固定尺寸的画布，再整体 `scale` 进可用区域并居中，没有背景，
  * 看起来和单独一张图一样。尺寸取 `contentSize`，也就是图片行的宽高；网页壁纸没有固有尺寸，透视场景读不到分辨率，
  * 这时按主显示器逻辑分辨率，页面照这个尺寸排版。
- * 画布之上盖一层透明覆盖层，只接住真实鼠标、不转发：壁纸 iframe 本来就不收真实鼠标，页面里的鼠标由 Rust 直接注入
- * iframe（`framePointer.ts`），覆盖层挡不住它。有了覆盖层，鼠标在壁纸上移动时预览容器照常收到 `mousemove`
- * （翻页箭头），右键冒泡到预览容器弹菜单，滚轮与拖动留给以后的放大。透明、不写 z-index，箭头与工具条照常在它上面。
+ * 预览放大时，Panzoom 变换的是包住本组件的那一层（`ImagePreviewDialog`），本组件的布局不变；接住真实鼠标的覆盖层在
+ * 变换层之外（`WallpaperPointerOverlay`）。放大倍数经 `zoom` 提供给画布里的场景（`WALLPAPER_PREVIEW_ZOOM`），它按
+ * `sceneDisplayScale` 定画布分辨率。
  * 注入的点击会把键盘焦点切进壁纸 iframe：等真实左键松开后还给父页面（`keepFocusOutOfFrames`），预览的 Esc、方向键才照常。
- * Linux 退回 iframe 直接收真实鼠标，不盖覆盖层，也不管焦点。
+ * Linux 退回 iframe 直接收真实鼠标，不管焦点。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, provide, ref } from "vue";
 import { primaryMonitor } from "@tauri-apps/api/window";
 import { NATIVE_FRAME_POINTER, keepFocusOutOfFrames } from "./framePointer";
+import { WALLPAPER_PREVIEW_ZOOM } from "./wpeSceneStyle";
 
-const props = defineProps<{ contentSize?: { width: number; height: number } | null }>();
+const props = withDefaults(
+  defineProps<{
+    contentSize?: { width: number; height: number } | null;
+    /** 预览的 Panzoom 缩放（没放大为 1） */
+    zoom?: number;
+  }>(),
+  { contentSize: null, zoom: 1 },
+);
+// 画布里的场景按它定画布分辨率（`sceneDisplayScale`）
+provide(
+  WALLPAPER_PREVIEW_ZOOM,
+  computed(() => props.zoom),
+);
 
 function fallbackDesktopSize(): { width: number; height: number } {
   return {
@@ -142,10 +170,16 @@ onBeforeUnmount(() => {
 });
 
 /**
- * 隐藏看板娘、等两帧让它从合成结果里消失、量画布矩形，`run` 结束后恢复，出错也恢复。
- * 量的是实际画布，外层容器带留白。窗口被完全遮挡时矩形可能量得出来，但截到的是残缺的画面，所以也报错，不截。
+ * 隐藏看板娘、弹出层等盖在画布上的东西，等两帧让它们从合成结果里消失、量画布矩形，`run` 结束后恢复，出错也恢复。
+ * 弹出层是直接藏，不是等它关完：右键菜单点完还要淡出 100 ms，Reka 等退场动画放完才移除，等多久都和帧率、动画时长绑在一起。
+ * 量的是实际画布，外层容器带留白。给了 `viewport`（预览里壁纸的可见区域，Panzoom 的父元素）时只截两者的交集：放大后
+ * 画布超出可见区域，截看得见的那一块，不截进侧栏（后端只按整张截图钳制）。窗口被完全遮挡时矩形可能量得出来，但截到的
+ * 是残缺的画面，所以也报错，不截。
  */
-const withCaptureRegion: CoverRegionScope = async (run) => {
+const withCaptureRegion = async <T,>(
+  run: (region: CoverRegion) => Promise<T>,
+  viewport?: Element | null,
+): Promise<T> => {
   const root = document.documentElement;
   root.setAttribute(COVER_CAPTURE_ATTR, "");
   try {
@@ -155,7 +189,8 @@ const withCaptureRegion: CoverRegionScope = async (run) => {
     // 壁纸层出画面后还要淡入，这时截到的是黑底。只等过渡：页面里可能有循环动画，等不到头
     const fading = canvas?.getAnimations({ subtree: true }).filter((item) => item instanceof CSSTransition) ?? [];
     await Promise.allSettled(fading.map((item) => item.finished));
-    const rect = canvas?.getBoundingClientRect();
+    const canvasRect = canvas?.getBoundingClientRect();
+    const rect = canvasRect && viewport ? intersectRect(canvasRect, viewport.getBoundingClientRect()) : canvasRect;
     if (document.visibilityState !== "visible" || !rect || rect.width <= 0 || rect.height <= 0) {
       throw new Error("wallpaper canvas is not visible");
     }
@@ -179,6 +214,15 @@ defineExpose({ withCaptureRegion });
     <div ref="canvasRef" class="absolute origin-top-left overflow-hidden" :style="canvasStyle">
       <slot />
     </div>
-    <div v-if="NATIVE_FRAME_POINTER" class="absolute inset-0" data-wallpaper-pointer-overlay />
   </div>
 </template>
+
+<style>
+/*
+ * 截壁纸封面时藏起全部弹出层（右键菜单、提示、气泡都包在 Reka 的这个外层里，传送到 body 下，不在预览容器里）。
+ * 设为封面多半从右键菜单点：菜单关掉后还要淡出 100 ms（`kb-pop-out`），截图只等两帧，不藏就会截进去。
+ */
+html[data-kb-cover-capture] [data-reka-popper-content-wrapper] {
+  visibility: hidden;
+}
+</style>

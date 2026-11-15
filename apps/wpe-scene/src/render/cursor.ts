@@ -307,6 +307,17 @@ export class CursorTracker {
   private lastY = 0;
   private lastDown = false;
 
+  /**
+   * 对象被删（`destroyLayer` 生效，P6d3a，rea-p6d-layers 6.2）：从悬停与按下集合里摘掉，不发 `cursorLeave` / `cursorUp`
+   * （被删的对象不再收回调，脚本条目也已摘掉）。
+   */
+  forget(objects: Iterable<number>): void {
+    for (const object of objects) {
+      this.hover.delete(object);
+      this.pressed.delete(object);
+    }
+  }
+
   step(frame: CursorFrame, pickables: readonly Pickable[]): CursorDispatch[] {
     const out: CursorDispatch[] = [];
     const [wx, wy] = frame.world;
@@ -379,11 +390,13 @@ export type PickLayer = Pick<
 export interface PickState {
   readonly layers: ReadonlyMap<number, LayerState>;
   readonly texts: ReadonlyMap<number, Pick<TextLayout, "size">>;
+  /** 对象表（`SceneState.order`，P6d3）：命中候选按它的顺序排（`sortLayer` 之后与 WPE 一致）；缺省按传入图层的顺序（`objects` 顺序）。 */
+  readonly order?: readonly number[];
 }
 
 /**
  * 本帧的可拾取对象表，已是命中顺序（最上面的在前）。从图层与状态现算，不从 GPU 的 draw 取：隐藏图层、写死不可见的祖先下面的图层也要参与。
- * 遍历顺序：正交场景是 `objects` 顺序的倒序；透视场景把全部可拾取对象按 `transparentSortKey(本地 origin, 视线方向)` 从大到小稳定排序
+ * 遍历顺序：正交场景是对象表（`state.order`，缺省 `objects` 顺序）的倒序；透视场景把全部可拾取对象按 `transparentSortKey(本地 origin, 视线方向)` 从大到小稳定排序
  * （`FUN_1401865c0` 的插入排序，`fullscreen` / `projectlayer` 的半透明层键是 −∞），再倒序：离相机近的先。`forward` 是当帧相机的视线方向（单位向量）。
  * 图层不在 `state.layers` 里（还没建）的跳过。
  *
@@ -397,7 +410,18 @@ export function pickablesOf(
   forward: readonly number[] = [0, 0, -1],
   cache = new Map<number, Mat4>(),
 ): Pickable[] {
-  const picked = layers.filter((layer) => layer.pick && state.layers.has(layer.object));
+  let picked = layers.filter((layer) => layer.pick && state.layers.has(layer.object));
+  if (state.order) {
+    // 按对象表顺序（稳定；不在表里的排最后，保持原有相对顺序）
+    const position = new Map(state.order.map((object, index) => [object, index]));
+    picked = picked
+      .map((layer, index) => ({ layer, index }))
+      .sort(
+        (a, b) =>
+          (position.get(a.layer.object) ?? Infinity) - (position.get(b.layer.object) ?? Infinity) || a.index - b.index,
+      )
+      .map((entry) => entry.layer);
+  }
   let order = picked;
   if (perspective) {
     const keyed = picked.map((layer) => ({
@@ -488,6 +512,11 @@ export function emptyCursorInput(): CursorInputSnapshot {
  */
 export class CursorSession {
   private readonly tracker = new CursorTracker();
+
+  /** 被删对象摘出悬停 / 按下集合（`CursorTracker.forget`）。 */
+  forgetObjects(objects: Iterable<number>): void {
+    this.tracker.forget(objects);
+  }
 
   frame(
     input: CursorStepInput,

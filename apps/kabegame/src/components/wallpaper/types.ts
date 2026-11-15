@@ -1,3 +1,5 @@
+import type { WpeSceneSettings } from "@/utils/wpeSettings";
+
 /** 壁纸样式：与壁纸目标配置里的 `style.window`（窗口模式）一致。 */
 export type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
 /** 壁纸切换过渡：与壁纸目标配置里的 `transition.window`（窗口模式）一致。 */
@@ -40,13 +42,29 @@ export interface WallpaperTarget {
   sceneAssets?: string[];
   /**
    * 场景壁纸退回用的预览图（行的缩略图，导入时就是作者的 `preview.*`）：不能渲染（含超时）时
-   * `WallpaperStage` 才显示它，编译期间保持加载态。其它类型、缩略图为空时为空。
+   * 桌面（`Wallpaper` → `ImageContent` 的 wallpaper 形态）拿它当缩略层打底与退回画面。其它类型、缩略图为空时为空。
    */
   previewPath?: string | null;
 }
 
-/** `WallpaperStage` 暴露给调试面板的只读状态。 */
-export interface WallpaperStageDebugState {
+/**
+ * 一张 WPE 网页 / 场景壁纸的播放参数，由调用方算好下传：`ImageContent` 的 wallpaper 形态与 `WpeWallpaperContent` 都不读设置。
+ * 图库预览与应用背景传这张壁纸的「预览设置」（`useWpePreviewPlayback`），桌面传全局「壁纸设置」。暂停与静音仍走
+ * `ImageContent` 的 `videoPlaying` / `videoMuted`。
+ */
+export interface WallpaperPlayback {
+  /** 0…1：网页壁纸经垫片乘到页面音量上，场景交给宿主 */
+  volume: number;
+  /** 场景后处理 / 反射 / 阴影 / 体积光，已按能否跟随 WPE 换算（`wpeSceneSettingsOf`） */
+  sceneSettings: WpeSceneSettings;
+  /** 视频倍速（0.25…3，越界钳制）：只在 `ImageContent` 的 `variant="wallpaper"` 用（桌面）；图库的视频倍速由预览弹窗自己设 */
+  playbackRate?: number;
+  /** 场景的铺放（桌面传壁纸样式，含 tile）；不给时按 `ImageContent` 的 `fit` 换算 */
+  style?: Mode;
+}
+
+/** `Wallpaper` 暴露给壁纸窗口调试面板的只读状态。 */
+export interface WallpaperDebugState {
   mode: Mode;
   transition: Transition;
   phase: "idle" | "prep" | "enter";

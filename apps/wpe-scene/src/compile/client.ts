@@ -2,20 +2,29 @@ import { WPESL2WGSL_WASM_URL } from "../wpesl2wgsl";
 import { FetchSceneReader, type SceneReader } from "./fs";
 import type { SceneBundle } from "./bundle";
 import { decodeEncodedTextures, type TextureDecodeCache } from "./decode";
-import type { SceneReflectionSetting, ScenePostprocessSetting, SceneShadowSetting } from "./postprocess";
-import { encodeFileError, type WorkerRequest, type WorkerResponse } from "./protocol";
+import type {
+  SceneReflectionSetting,
+  ScenePostprocessSetting,
+  SceneShadowSetting,
+  SceneVolumetricsSetting,
+} from "./postprocess";
+import { encodeFileError, type SceneStructure, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 export interface WorkerCompileInput {
   projectDir: string;
   sceneAssets: string[];
   userProperties?: Record<string, unknown>;
   scriptOverrides?: Record<string, number[] | boolean | string>;
+  /** 运行中改过的场景结构（P6d3）；缺省空结构。 */
+  structure?: SceneStructure;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
   postprocess?: ScenePostprocessSetting;
   /** 设置「场景反射」（P13b1）；缺省跟随 WPE。 */
   reflection?: SceneReflectionSetting;
   /** 设置「场景阴影」（P13d）；缺省跟随 WPE。 */
   shadows?: SceneShadowSetting;
+  /** 设置「场景体积光」（P13e）；缺省跟随 WPE。 */
+  volumetrics?: SceneVolumetricsSetting;
   /** dev 强制渲染（D4）：有不支持项也解码纹理。 */
   force?: boolean;
   exhaustive?: boolean;
@@ -26,6 +35,8 @@ export interface WorkerCompileInput {
   textureCache?: TextureDecodeCache;
   signal?: AbortSignal;
   reader?: SceneReader;
+  /** 加载进度（`progress.ts`）：Worker 编译报 `compile`，主线程解码报 `decode`。 */
+  onProgress?: (stage: "compile" | "decode", done: number, total: number) => void;
 }
 let modulePromise: Promise<WebAssembly.Module | null> | null = null;
 async function getModule(): Promise<WebAssembly.Module | null> {
@@ -44,7 +55,7 @@ export async function compileSceneInWorker(input: WorkerCompileInput): Promise<S
   const bundle = await compileInWorker(input);
   if (input.signal?.aborted) throw new DOMException("已取消", "AbortError");
   if (input.textureCache && (input.force || !bundle.unsupported.length))
-    await decodeEncodedTextures(bundle, input.textureCache);
+    await decodeEncodedTextures(bundle, input.textureCache, (done, total) => input.onProgress?.("decode", done, total));
   if (input.signal?.aborted) throw new DOMException("已取消", "AbortError");
   return bundle;
 }
@@ -79,6 +90,11 @@ async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> 
       const message = event.data;
       if (message.type === "done") return finish(message.bundle);
       if (message.type === "error") return finish(undefined, new Error(message.message));
+      // 进度不是读文件请求：其余消息才是
+      if (message.type === "progress") {
+        input.onProgress?.("compile", message.done, message.total);
+        return;
+      }
       try {
         const bytes =
           message.operation === "whole"
@@ -97,9 +113,11 @@ async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> 
       sceneAssets: input.sceneAssets,
       userProperties: input.userProperties ?? {},
       scriptOverrides: input.scriptOverrides ?? {},
+      structure: input.structure ?? { destroyed: [], parents: [], created: [] },
       postprocess: input.postprocess ?? "follow",
       reflection: input.reflection ?? "follow",
       shadows: input.shadows ?? "follow",
+      volumetrics: input.volumetrics ?? "follow",
       force: input.force === true,
       exhaustive: input.exhaustive === true,
       module,

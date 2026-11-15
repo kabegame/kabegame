@@ -57,7 +57,7 @@ pub fn is_wallpaper_label(label: &str) -> bool {
 /// `path` 若是网页壁纸（`x-wpe/web`）目录，解析出规范化目录与入口的 `file://` URL；其它路径返回 `None`。
 ///
 /// 壁纸目标（`commands::wallpaper::build_wallpaper_target` 据此给出 `webEntry`，图库预览与桌面壁纸窗口的
-/// `WallpaperStage` 拿同一份目标给 `file:` iframe 赋 `src`）与窗口模式壁纸管理器（据此开关鼠标转发）共用
+/// `WpeWallpaperContent` 拿同一份目标给 `file:` iframe 赋 `src`）与窗口模式壁纸管理器（据此开关鼠标转发）共用
 /// 这一份算法。关闭 `wpe` feature 的构建（Android）恒为 `Ok(None)`，预览退回作者预览图。
 ///
 /// 只读一个小的 `project.json`，不 await，调用方可在锁内同步执行。

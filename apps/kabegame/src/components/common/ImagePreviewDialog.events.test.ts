@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 import { flushPromises, shallowMount } from "@vue/test-utils";
-import { ref } from "vue";
+import { ref, type Ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImagePreviewDialog from "./ImagePreviewDialog.vue";
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
 import ImageContent from "../image/ImageContent.vue";
 import WpeWebPropertiesPanel from "../wallpaper/WpeWebPropertiesPanel.vue";
 import { createImageActions } from "@/actions/imageActions";
+import type { ActionContext, ActionItem } from "@/actions/types";
+import type { ImageInfo } from "@/types/image";
 
 const listeners = vi.hoisted(() => new Map<string, (event: { payload: unknown }) => void>());
 const fetchImageById = vi.hoisted(() => vi.fn());
@@ -52,23 +54,40 @@ vi.mock("@vueuse/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@vueuse/core")>()),
   useLocalStorage: (_key: string, value: unknown) => ref(value),
 }));
+/** 缩放的桩：几个方法是共用的 spy，用例里读；缩放倍数与拖不拖得动每个用例新建（beforeEach），用例里改 */
+const panzoom = vi.hoisted(() => ({
+  handleWheel: vi.fn(),
+  reset: vi.fn(),
+  zoomTo: vi.fn(),
+  startPan: vi.fn(() => false),
+  endPan: vi.fn(),
+  scale: null as unknown as Ref<number>,
+  canPan: null as unknown as Ref<boolean>,
+}));
 vi.mock("@/composables/usePanzoomPreview", () => ({
   usePanzoomPreview: () => ({
     wrapperRef: ref(null),
-    scale: ref(1),
-    canPan: ref(false),
-    handleWheel: vi.fn(),
-    reset: vi.fn(),
+    scale: panzoom.scale,
+    canPan: panzoom.canPan,
+    handleWheel: panzoom.handleWheel,
+    reset: panzoom.reset,
     destroy: vi.fn(),
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
-    zoomTo: vi.fn(),
+    zoomTo: panzoom.zoomTo,
+    startPan: panzoom.startPan,
+    endPan: panzoom.endPan,
   }),
 }));
 const wrappers: ReturnType<typeof shallowMount>[] = [];
 const emit = (name: string, payload: unknown) => listeners.get(name)?.({ payload });
 beforeEach(() => {
   vi.useFakeTimers();
+  panzoom.handleWheel.mockReset();
+  panzoom.reset.mockReset();
+  panzoom.zoomTo.mockReset();
+  panzoom.scale = ref(1);
+  panzoom.canPan = ref(false);
   fetchImageById.mockReset().mockImplementation(async (id: string) => ({ id, localPath: `/${id}.jpg` }));
   invoke.mockReset().mockResolvedValue(undefined);
   confirm.mockReset().mockResolvedValue("confirm");
@@ -184,42 +203,74 @@ describe("裸 id 预览的事件保鲜", () => {
 describe("WPE 壁纸预览的右键菜单与工具条", () => {
   const region = { x: 0, y: 0, width: 1, height: 1 };
   const slot = { template: "<div><slot /></div>" };
-  /** 画布桩：截取区域固定，回调直接执行 */
+  /** 画布桩：截取区域固定，回调直接执行；记下调用方给的可见区域 */
+  const viewports: unknown[] = [];
   const canvas = {
     template: "<div><slot /></div>",
     setup(_: unknown, { expose }: { expose: (exposed: Record<string, unknown>) => void }) {
-      expose({ withCaptureRegion: (run: (value: typeof region) => Promise<unknown>) => run(region) });
+      expose({
+        withCaptureRegion: (run: (value: typeof region) => Promise<unknown>, viewport?: unknown) => {
+          viewports.push(viewport);
+          return run(region);
+        },
+      });
     },
   };
   async function sceneFixture() {
+    viewports.splice(0);
     fetchImageById.mockImplementation(async (id: string) => ({ id, localPath: `/${id}`, type: "x-wpe/scene" }));
     return fixture(
       { KbResizable: slot, WallpaperPreviewCanvas: canvas, PreviewControlBar: slot },
       { actions: createImageActions() },
     );
   }
-  const button = (wrapper: ReturnType<typeof shallowMount>, label: string) =>
-    wrapper.find(`button.control-btn[aria-label="${label}"]`);
-  async function goLive(wrapper: ReturnType<typeof shallowMount>) {
-    wrapper.findComponent(ImageContent).vm.$emit("sceneLive", true);
+  type Wrapper = ReturnType<typeof shallowMount>;
+  const button = (wrapper: Wrapper, label: string) => wrapper.find(`button.control-btn[aria-label="${label}"]`);
+  const menu = (wrapper: Wrapper) =>
+    wrapper.findAllComponents({ name: "ActionRenderer" }).find((item) => item.props("mode") === "contextmenu")!;
+  /** 右键菜单里可见的项（按菜单给的上下文求值），带求好的文字与置灰 */
+  const menuItems = (wrapper: Wrapper) => {
+    const context = menu(wrapper).props("context") as ActionContext<ImageInfo>;
+    return (menu(wrapper).props("actions") as ActionItem<ImageInfo>[])
+      .filter((action) => action.visible === undefined || action.visible(context))
+      .map((action) => ({
+        key: action.key,
+        label: typeof action.label === "function" ? action.label(context) : action.label,
+        disabled: typeof action.disabled === "function" ? action.disabled(context) : !!action.disabled,
+      }));
+  };
+  const item = (wrapper: Wrapper, key: string) => menuItems(wrapper).find((entry) => entry.key === key)!;
+  /** 在右键菜单里点一项 */
+  async function choose(wrapper: Wrapper, command: string) {
+    menu(wrapper).vm.$emit("command", command);
+    await flushPromises();
+  }
+  async function goLive(wrapper: Wrapper) {
+    wrapper.findComponent(ImageContent).vm.$emit("wallpaperLive", true);
     await flushPromises();
   }
 
-  it("暂停排第一，画面出来之前置灰；切换的是预览这一份，切图时复位", async () => {
+  it("工具条和图片一样：缩放组与全屏，没有右键菜单的映射", async () => {
+    const wrapper = await sceneFixture();
+    const labels = wrapper.findAll("button.control-btn").map((item) => item.attributes("aria-label"));
+    expect(labels).toEqual(["gallery.zoomOut", "gallery.zoomIn", "gallery.fullscreen"]);
+    expect(wrapper.findComponent({ name: "PreviewRangeSlider" }).exists()).toBe(true);
+  });
+
+  it("暂停在右键菜单里排第一，画面出来之前置灰；切换的是预览这一份，切图时复位", async () => {
     const wrapper = await sceneFixture();
     const playing = () => wrapper.findComponent(ImageContent).props("videoPlaying");
-    expect(wrapper.findAll("button.control-btn")[0].attributes("aria-label")).toBe("gallery.wpePause");
-    expect(button(wrapper, "gallery.wpePause").attributes("disabled")).toBeDefined();
-    expect(button(wrapper, "gallery.wpeSetCover").attributes("disabled")).toBeDefined();
+    expect(menuItems(wrapper)[0]).toEqual({ key: "pauseWallpaper", label: "gallery.wpePause", disabled: true });
+    expect(item(wrapper, "setCover").disabled).toBe(true);
     await goLive(wrapper);
-    expect(button(wrapper, "gallery.wpePause").attributes("disabled")).toBeUndefined();
-    await button(wrapper, "gallery.wpePause").trigger("click");
+    expect(item(wrapper, "pauseWallpaper").disabled).toBe(false);
+    await choose(wrapper, "pauseWallpaper");
     expect(playing()).toBe(false);
-    expect(button(wrapper, "gallery.wpeResume").exists()).toBe(true);
+    expect(item(wrapper, "pauseWallpaper").label).toBe("gallery.wpeResume");
     await wrapper.setProps({ image: "next" });
     await flushPromises();
     expect(playing()).toBe(true);
-    expect(button(wrapper, "gallery.wpePause").attributes("disabled")).toBeDefined();
+    expect(item(wrapper, "pauseWallpaper").disabled).toBe(true);
     expect(wrapper.emitted("contextCommand")).toBeUndefined();
   });
 
@@ -232,18 +283,28 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
   it("设为封面与清空脚本存储由弹窗处理，不交给上层；其它命令照常上报", async () => {
     const wrapper = await sceneFixture();
     await goLive(wrapper);
-    await button(wrapper, "gallery.wpeSetCover").trigger("click");
-    await flushPromises();
+    // 挂载时读这张的预览设置等调用不算
+    invoke.mockClear();
+    await choose(wrapper, "setCover");
     expect(invoke).toHaveBeenCalledExactlyOnceWith("capture_wallpaper_cover", { imageId: "current", region });
-    await button(wrapper, "gallery.wpeClearStorage").trigger("click");
-    await flushPromises();
+    await choose(wrapper, "clearStorage");
     expect(confirm).toHaveBeenCalledOnce();
     expect(invoke).toHaveBeenLastCalledWith("wpe_scene_clear_storage", { imageId: "current" });
     expect(wrapper.emitted("contextCommand")).toBeUndefined();
-    await button(wrapper, "contextMenu.wallpaper").trigger("click");
+    await choose(wrapper, "wallpaper");
     expect(wrapper.emitted("contextCommand")).toEqual([
       [{ command: "wallpaper", image: expect.objectContaining({ id: "current" }) }],
     ]);
+  });
+
+  it("设为封面截看得见的那一块：把壁纸的可见区域（Panzoom 的父元素）交给画布求交，不复位缩放", async () => {
+    const wrapper = await sceneFixture();
+    await goLive(wrapper);
+    panzoom.reset.mockClear();
+    await choose(wrapper, "setCover");
+    expect(viewports).toHaveLength(1);
+    expect((viewports[0] as Element).classList.contains("preview-wallpaper-wrapper")).toBe(true);
+    expect(panzoom.reset).not.toHaveBeenCalled();
   });
 
   it("设为封面进行中置灰、不重复触发", async () => {
@@ -251,25 +312,96 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
     invoke.mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)));
     const wrapper = await sceneFixture();
     await goLive(wrapper);
-    await button(wrapper, "gallery.wpeSetCover").trigger("click");
-    await flushPromises();
-    expect(button(wrapper, "gallery.wpeSetCover").attributes("disabled")).toBeDefined();
+    invoke.mockClear();
+    await choose(wrapper, "setCover");
+    expect(item(wrapper, "setCover").disabled).toBe(true);
+    await choose(wrapper, "setCover");
     finish();
     await flushPromises();
     expect(invoke).toHaveBeenCalledOnce();
-    expect(button(wrapper, "gallery.wpeSetCover").attributes("disabled")).toBeUndefined();
+    expect(item(wrapper, "setCover").disabled).toBe(false);
+  });
+
+  it("壁纸上的滚轮交给缩放（同图片：Ctrl+滚轮缩放、滚轮平移）", async () => {
+    const wrapper = await sceneFixture();
+    await wrapper.find(".preview-container").trigger("wheel", { deltaY: -100, ctrlKey: true });
+    expect(panzoom.handleWheel).toHaveBeenCalledOnce();
+  });
+
+  it("切到另一张壁纸时复位缩放（画布元素没换，实例还在）", async () => {
+    const wrapper = await sceneFixture();
+    panzoom.reset.mockClear();
+    await wrapper.setProps({ image: "next" });
+    await flushPromises();
+    expect(panzoom.reset).toHaveBeenCalled();
+  });
+
+  it("覆盖层拿缩放的平移起止", async () => {
+    const wrapper = await sceneFixture();
+    const overlay = wrapper.findComponent({ name: "WallpaperPointerOverlay" });
+    expect(overlay.props("startPan")).toBe(panzoom.startPan);
+    expect(overlay.props("endPan")).toBe(panzoom.endPan);
+    expect(overlay.props("pannable")).toBe(false);
   });
 
   it("壁纸里转发的右键在那个位置弹出同一份菜单", async () => {
     const wrapper = await sceneFixture();
-    const menu = () =>
-      wrapper.findAllComponents({ name: "ActionRenderer" }).find((item) => item.props("mode") === "contextmenu")!;
-    expect(menu().props("visible")).toBe(false);
+    expect(menu(wrapper).props("visible")).toBe(false);
     wrapper.findComponent(ImageContent).vm.$emit("wallpaperContextmenu", { x: 320, y: 180 });
     await flushPromises();
-    expect(menu().props("visible")).toBe(true);
-    expect(menu().props("position")).toEqual({ x: 320, y: 180 });
-    expect(menu().props("actions")).toBe(wrapper.props("actions"));
+    expect(menu(wrapper).props("visible")).toBe(true);
+    expect(menu(wrapper).props("position")).toEqual({ x: 320, y: 180 });
+    expect(menu(wrapper).props("actions")).toBe(wrapper.props("actions"));
+  });
+});
+
+describe("视频预览的缩放", () => {
+  const slot = { template: "<div><slot /></div>" };
+  async function videoFixture() {
+    fetchImageById.mockImplementation(async (id: string) => ({ id, localPath: `/${id}.mp4`, type: "video/mp4" }));
+    return fixture({ KbResizable: slot, PreviewControlBar: slot });
+  }
+  const controls = (wrapper: ReturnType<typeof shallowMount>) => wrapper.findComponent({ name: "VideoControls" });
+
+  it("视频上的滚轮交给缩放（同图片：Ctrl+滚轮缩放、滚轮平移）", async () => {
+    const wrapper = await videoFixture();
+    await wrapper.find(".preview-container").trigger("wheel", { deltaY: -100, ctrlKey: true });
+    expect(panzoom.handleWheel).toHaveBeenCalledOnce();
+  });
+
+  it("切到另一个视频时复位；视频就绪（拖进度条、循环都会再触发）不复位", async () => {
+    const wrapper = await videoFixture();
+    panzoom.reset.mockClear();
+    wrapper.findComponent(ImageContent).vm.$emit("ready");
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(panzoom.reset).not.toHaveBeenCalled();
+    await wrapper.setProps({ image: "next" });
+    await flushPromises();
+    expect(panzoom.reset).toHaveBeenCalled();
+  });
+
+  it("放大后关掉原生拖出（同图片）", async () => {
+    const wrapper = await videoFixture();
+    expect(wrapper.findComponent(ImageContent).props("nativeDrag")).toBe(true);
+    panzoom.canPan.value = true;
+    await flushPromises();
+    expect(wrapper.findComponent(ImageContent).props("nativeDrag")).toBe(false);
+  });
+
+  it("控制条拿缩放百分比，滑块与按钮的事件接到缩放", async () => {
+    const wrapper = await videoFixture();
+    expect(controls(wrapper).props("zoom")).toBe(100);
+    panzoom.scale.value = 2.5;
+    await flushPromises();
+    expect(controls(wrapper).props("zoom")).toBe(250);
+    controls(wrapper).vm.$emit("zoom-drag-start");
+    controls(wrapper).vm.$emit("zoom-input", 300);
+    controls(wrapper).vm.$emit("zoom-commit", 400);
+    expect(panzoom.zoomTo.mock.calls).toEqual([[3], [4]]);
+    panzoom.reset.mockClear();
+    controls(wrapper).vm.$emit("zoom-reset");
+    expect(panzoom.reset).toHaveBeenCalledOnce();
   });
 });
 

@@ -513,6 +513,8 @@ const READBACK_FORMATS: Record<string, { texel: number; kind: "rgba8" | "f32" }>
   rgba32float: { texel: 16, kind: "f32" },
   // 只有深度附件的 pass（P13d 阴影图集）：按 depth-only 拷，每纹素一个 f32，转换时摊进 rgba 的 r（g、b 为 0，a 为 1）
   depth32float: { texel: 4, kind: "f32" },
+  // 单通道浮点目标（P13e 体积光的 Back / Single 深度拷贝）：同上摊进 r
+  r32float: { texel: 4, kind: "f32" },
 };
 
 const isDepthFormat = (format: string) => format.startsWith("depth") || format.startsWith("stencil");
@@ -1353,7 +1355,7 @@ class Tracer {
     }
     const format = READBACK_FORMATS[texture.format];
     if (!format) {
-      json.readbackError = `格式 ${texture.format} 不读回（只读 rgba8 / bgra8 / rgba16float / rgba32float）`;
+      json.readbackError = `格式 ${texture.format} 不读回（只读 rgba8 / bgra8 / rgba16float / rgba32float / r32float）`;
       return;
     }
     if (!(texture.actualUsage & TEXTURE_COPY_SRC)) {
@@ -1588,7 +1590,7 @@ export function convertReadback(
   }
   const out = new Float32Array(width * height * 4);
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-  if (format === "depth32float") {
+  if (format === "depth32float" || format === "r32float") {
     for (let y = 0; y < height; y++)
       for (let x = 0; x < width; x++) {
         const o = (y * width + x) * 4;

@@ -143,6 +143,11 @@ export interface SceneRendererOptions {
 export interface SceneLoadOptions {
   /** dev 强制渲染（D4）：不因 `bundle.unsupported` 拒绝，渲染器自查仍然生效。 */
   ignoreUnsupported?: boolean;
+  /**
+   * 加载进度（`progress.ts`）：建 GPU 场景时按着色器程序报 `gpu`，画第一帧之前报 `frame` 的 `0 / 1`（出来的 `1 / 1` 由宿主在等完
+   * 视频首帧之后报）。
+   */
+  onProgress?: (stage: "gpu" | "frame", done: number, total: number) => void;
   /** 新状态建好后、首帧绘制前同步执行。 */
   beforeFirstFrame?: (state: SceneState) => void;
   /**
@@ -354,6 +359,16 @@ export class SceneRenderer {
     return this.scene;
   }
 
+  /** 被删对象（`destroyLayer` 生效，P6d3a）：从光标的悬停 / 按下集合摘掉，不发 Leave / Up。 */
+  forgetObjects(objects: Iterable<number>): void {
+    this.cursorSession.forgetObjects(objects);
+  }
+
+  /** 挂点钩子（P6d3a，`setParent` 的 adjust 数学用）：父 puppet 骨骼的 `Pose · Att`；没有场景或没有挂点为 null。 */
+  attachMatrix(object: number): Float32Array | null {
+    return this.scene?.attachMatrix(object) ?? null;
+  }
+
   /** 脚本 `getTransformMatrix` 的落点（P6d1a，`GpuScene.transformMatrix`）；没有场景时为 null。 */
   transformMatrix(object: number, state: SceneState): Float32Array | null {
     return this.scene?.transformMatrix(object, state) ?? null;
@@ -426,6 +441,7 @@ export class SceneRenderer {
       relayout: options.relayout,
       userTextures: options.userTextures,
       size,
+      onProgress: (done, total) => options.onProgress?.("gpu", done, total),
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();
@@ -471,6 +487,7 @@ export class SceneRenderer {
     options.beforeFirstFrame?.(state);
     old?.destroy();
     this.failed = false;
+    options.onProgress?.("frame", 0, 1);
     this.render(true);
     await this.gpu.device.queue.onSubmittedWorkDone();
     if (this.failed) throw new SceneRenderError(["webgpu:first-frame"]);

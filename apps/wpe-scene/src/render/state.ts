@@ -31,6 +31,7 @@
  * `setText` 换上新排版。
  */
 import { ALIGNMENTS } from "../compile/alignment";
+import { isFogUniformField } from "../compile/fog";
 import {
   bindingValue,
   cameraValue,
@@ -47,6 +48,7 @@ import {
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
+import type { LayerShellValues } from "../compile/layerShell";
 import { normalizePassState, type PassStateField } from "../compile/passState";
 import {
   INSTANCE_RATE_MIN,
@@ -105,8 +107,8 @@ export interface LayerState {
    * 都能读写，但只有图像层与文本层参与命中。脚本写 `thisLayer.solid`、字段脚本写回、用户属性绑定都落在这里，不标脏（不影响绘制）。
    */
   solid?: boolean;
-  /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中不变。 */
-  readonly parent: number | null;
+  /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中由 `setParent` / 删父（`flushDestroy`）改。 */
+  parent: number | null;
 }
 
 /**
@@ -123,7 +125,7 @@ export interface DirtyState {
   bloom: boolean;
   /** effect 开关变了的图层（`objects` 下标）：渲染图可能要重排（3c）。 */
   structures: Set<number>;
-  /** `ambientcolor` / `skylightcolor` 写过：刷进声明了这两个 uniform 的 draw（L5）。 */
+  /** `ambientcolor` / `skylightcolor`（L5）与雾的数值字段（P13f）写过：刷进声明了对应 uniform 的 draw。 */
   lights: boolean;
   /** `instanceoverride` 改过的粒子层（`objects` 下标）：交给模拟器从基值重新乘（P4a 步骤 5）。 */
   particles: Set<number>;
@@ -216,6 +218,38 @@ function layerStateOf(layer: SceneLayer): LayerState {
   return state;
 }
 
+/**
+ * 按图层壳的取值建图层状态（P6d3b，运行时 `createLayer` 的待编对象）：字段与 `layerStateOf` 同一份。`imageLayer` 为真时带 `alignment`
+ * （图像层才有）；偏移要尺寸，编译前 `shell.size` 为空就不写（已知差异：编完用编译产物的状态重放）。
+ */
+export function layerStateFromShell(
+  shell: LayerShellValues,
+  parent: number | null,
+  options: { imageLayer?: boolean } = {},
+): LayerState {
+  const state: LayerState = {
+    origin: [...shell.origin],
+    scale: [...shell.scale],
+    angles: [...shell.angles],
+    rotation: null,
+    alpha: shell.alpha,
+    color: [...shell.color],
+    brightness: shell.brightness,
+    visible: shell.visible,
+    parallaxDepth: [...shell.parallaxDepth],
+    solid: shell.solid,
+    parent,
+  };
+  if (options.imageLayer) {
+    state.alignment = shell.alignment;
+    if (shell.size.length >= 2) {
+      const offset = alignmentOffset(shell.alignment, shell.size);
+      if (offset[0] !== 0 || offset[1] !== 0) state.offset = offset;
+    }
+  }
+  return state;
+}
+
 /** 就地写一条泛光绑定；值与编译期 `bloomParams` 同一规则（取不到合法数字时回默认值，级数截断小数）。 */
 export function writeBloomParam(
   params: BloomParams,
@@ -274,6 +308,15 @@ function writeLayer(
 export class SceneState {
   /** 按 `objects` 下标（稳定键）；只含进了 bundle 的图层。 */
   readonly layers = new Map<number, LayerState>();
+  /**
+   * WPE 的对象表（`G+0x158`，P6d3）：全部对象键（含灯、声音、相机、分组节点、子对象），顺序 = 绘制顺序 = 脚本的原始下标。
+   * 加载时 = `bundle.layers` 的顺序。`sortLayer` 改它；`flushDestroy` 生效时摘掉；P6d3b 起新建的追加在尾。
+   */
+  readonly order: number[] = [];
+  /** `destroyLayer` 标记、还没生效的对象（rea-p6d-layers 第 5 节）；按标记先后。下标 API 按它扣减。 */
+  readonly pendingDestroy = new Set<number>();
+  /** 结构代数：`order`、父子、存活每变一次加一。渲染侧按它重建派生表（顶层顺序、位置表、命中表）并清理被删对象的资源。 */
+  structureVersion = 0;
   /** pass 稳定键 → 材质常量覆盖（uniform 名 → 分量）；起始值 = 编译期的 `pass.uniforms`。 */
   readonly constants = new Map<TargetKey, Record<string, number[]>>();
   bloom: BloomParams;
@@ -363,7 +406,7 @@ export class SceneState {
     /** 档位允许但没有编泛光链：打开要整场重编译。 */
     private readonly bloomMissing: boolean,
     general: GeneralValues,
-    /** 父 → 直接子（都是 `objects` 下标，只含进了 bundle 的图层）：写父的变换或可见性时子孙一起标脏。 */
+    /** 子表（WPE `O+0x198`）：父 → 直接子（都是 `objects` 下标，只含进了 bundle 的图层）。写父的变换或可见性时子孙一起标脏；换父挂上的追加在尾。 */
     private readonly children: Map<number, number[]>,
   ) {
     this.layers = layers;
@@ -380,10 +423,12 @@ export class SceneState {
     const effects = new Map<string, EffectState>();
     const children = new Map<number, number[]>();
     const instances = new Map<number, ParticleInstanceValues>();
+    // 子表以编译产物为准（P6d3：带换父的先后）；手写的测试 bundle 没有时按 `layers` 的 `parent` 现推
+    if (bundle.children) for (const [parent, list] of bundle.children) children.set(parent, [...list]);
     for (const layer of bundle.layers) {
       layers.set(layer.object, layerStateOf(layer));
       if (layer.particle) instances.set(layer.object, instanceValues(layer.particle.instance));
-      if (layer.parent !== null) {
+      if (!bundle.children && layer.parent !== null) {
         const list = children.get(layer.parent);
         if (list) list.push(layer.object);
         else children.set(layer.parent, [layer.object]);
@@ -443,6 +488,7 @@ export class SceneState {
       children,
     );
     state.shadowPasses = shadowOf;
+    for (const layer of bundle.layers) state.order.push(layer.object);
     // 加载时 `rate` 钳到 0.01 并写回（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，rea-p4f-script.md 6.1）：脚本 `init` 读到的就是钳过的
     // 值，和建系统时（`ParticleSystem` 构造）的钳制一致
     for (const [object, values] of instances)
@@ -546,6 +592,154 @@ export class SceneState {
     if (px !== x || py !== y) for (const item of this.subtree(object)) this.dirtyLayers.add(item);
   }
 
+  /**
+   * 对象表里排序（WPE 宿主 `+0x38`，P6d3）：先摘掉再插到 `index`（u32 比较：越界与负数到末尾）；`index` 由调用方给整数（API 侧 ToInt32）。
+   * 不在表里返回 false。不改子表（组内顺序跟子表走）。
+   */
+  sortLayer(object: number, index: number): boolean {
+    const at = this.order.indexOf(object);
+    if (at < 0) return false;
+    this.order.splice(at, 1);
+    const count = this.order.length;
+    const target = index >>> 0 >= count ? count : index >>> 0;
+    this.order.splice(target, 0, object);
+    this.structureVersion++;
+    return true;
+  }
+
+  /**
+   * 新建对象（P6d3b，`createLayer` 的待编对象）：写 `layers`、追加到 `order` 尾、父不为空时追加到父的子表尾（WPE 的 `createLayer` 不跑加载末的
+   * 补挂，父的存在性由调用方查）。`size` 是图像层的尺寸（缺省未知 0×0）。键沿用 `objects` 下标空间，所以调用方给的下标必须是新的。
+   */
+  addLayer(object: number, layer: LayerState, size: readonly number[] = [0, 0]): void {
+    this.layers.set(object, layer);
+    // 图像层脚本写 `alignment` 要按尺寸重算偏移（`writeAlignment`）；编译前尺寸未知给 0×0（偏移为 0，编完由重放补上）
+    if (layer.alignment !== undefined) this.alignmentSizes.set(object, [...size]);
+    this.order.push(object);
+    if (layer.parent !== null) {
+      const list = this.children.get(layer.parent);
+      if (list) list.push(object);
+      else this.children.set(layer.parent, [object]);
+    }
+    this.structureVersion++;
+  }
+
+  /**
+   * 标记待删（WPE 宿主 `+0x28`）：在表里就记进待删集合（已在也照样）返回 true，否则 false。待删不影响绘制，所以不动 `structureVersion`；
+   * 生效在脚本阶段之后（`flushDestroy`）。
+   */
+  markDestroy(object: number): boolean {
+    if (!this.order.includes(object)) return false;
+    this.pendingDestroy.add(object);
+    return true;
+  }
+
+  /**
+   * 待删生效（脚本阶段之后）：按标记先后逐个从 `order`、`layers`、父的子表摘掉；它的每个子对象变根（`parent = null`，本地字段不动，世界变换
+   * 随之跳变），这些子对象及其子树标成变换脏（世界矩阵与影子缓存失效，同写 `origin`）；删掉自己的子表。返回实际删掉的对象（按顺序），
+   * 交给运行时与渲染侧清理。
+   */
+  flushDestroy(): number[] {
+    const removed: number[] = [];
+    for (const object of this.pendingDestroy) {
+      const at = this.order.indexOf(object);
+      if (at < 0) continue;
+      this.order.splice(at, 1);
+      const parent = this.layers.get(object)?.parent ?? null;
+      this.layers.delete(object);
+      if (parent !== null) this.detachChild(parent, object);
+      for (const child of this.children.get(object) ?? []) {
+        const state = this.layers.get(child);
+        if (state) state.parent = null;
+        this.markTransformDirty(child);
+      }
+      this.children.delete(object);
+      removed.push(object);
+    }
+    this.pendingDestroy.clear();
+    if (removed.length > 0) this.structureVersion++;
+    return removed;
+  }
+
+  /**
+   * 换父（`adjust` 的数学在 API 一侧，这里只改结构）：从旧父的子表摘掉，改 `parent`，非空时追加在新父子表的末尾（步骤 0 实测：挂上的追加在尾），
+   * 把这个对象的子树标成变换脏。不做任何检查（环、组深度归 API）。
+   */
+  setParent(object: number, parent: number | null): void {
+    const layer = this.layers.get(object);
+    if (!layer) return;
+    if (layer.parent !== null) this.detachChild(layer.parent, object);
+    layer.parent = parent;
+    if (parent !== null) {
+      const list = this.children.get(parent);
+      if (list) list.push(object);
+      else this.children.set(parent, [object]);
+    }
+    this.markTransformDirty(object);
+    this.structureVersion++;
+  }
+
+  /** 直接子（子表顺序）；没有就空数组。 */
+  childrenOf(object: number): readonly number[] {
+    return this.children.get(object) ?? [];
+  }
+
+  /**
+   * 重编译后新状态接过旧状态的结构（P6d3）：`order` 滤掉新状态里没有的、新状态里有而旧表没有的按新状态原顺序追加在尾；待删集合滤掉不存在的。
+   * 父与子表：双方都有的对象照搬旧状态的（首次加载时 `init` 里的 `setParent` 落在宿主自建的脚本状态上，bundle 是 `init` 之前编的、不含它；
+   * 重编译后 bundle 已带结构，照搬是幂等的）。旧父不在这个状态里时当根；改了父的对象把子树标成变换脏。只在新状态首帧前调。
+   */
+  adoptStructure(previous: SceneState): void {
+    const shared = new Set<number>();
+    for (const object of this.layers.keys()) if (previous.layers.has(object)) shared.add(object);
+    const changed: number[] = [];
+    for (const object of shared) {
+      const own = this.layers.get(object)!;
+      const old = previous.layers.get(object)!.parent;
+      const parent = old !== null && this.layers.has(old) ? old : null;
+      if (own.parent !== parent) {
+        own.parent = parent;
+        changed.push(object);
+      }
+    }
+    const lists = new Map<number, number[]>();
+    for (const [parent, list] of previous.children) {
+      const kept = list.filter((child) => shared.has(child) && this.layers.get(child)!.parent === parent);
+      if (kept.length > 0 && this.layers.has(parent)) lists.set(parent, kept);
+    }
+    for (const [object, layer] of this.layers) {
+      if (shared.has(object) || layer.parent === null) continue;
+      const list = lists.get(layer.parent);
+      if (list) list.push(object);
+      else lists.set(layer.parent, [object]);
+    }
+    this.children.clear();
+    for (const [parent, list] of lists) this.children.set(parent, list);
+    for (const object of changed) this.markTransformDirty(object);
+    const kept = previous.order.filter((object) => this.layers.has(object));
+    const seen = new Set(kept);
+    const added = this.order.filter((object) => !seen.has(object));
+    this.order.length = 0;
+    this.order.push(...kept, ...added);
+    this.pendingDestroy.clear();
+    for (const object of previous.pendingDestroy) if (this.layers.has(object)) this.pendingDestroy.add(object);
+    this.structureVersion++;
+  }
+
+  private detachChild(parent: number, child: number): void {
+    const list = this.children.get(parent);
+    if (!list) return;
+    const at = list.indexOf(child);
+    if (at >= 0) list.splice(at, 1);
+    if (list.length === 0) this.children.delete(parent);
+  }
+
+  /** 与写 `origin` 同一机制：对象本身记直接写过变换（影子缓存清戳），整棵子树标脏（世界矩阵重算）。 */
+  private markTransformDirty(object: number): void {
+    this.transformWrites.add(object);
+    for (const item of this.subtree(object)) this.dirtyLayers.add(item);
+  }
+
   /** 自身与全部子孙（`objects` 下标，自身在前）。环在编译期已断开，这里按走过的节点兜底。 */
   subtree(object: number): number[] {
     const out = [object];
@@ -616,7 +810,9 @@ export class SceneState {
       const value = generalValue(target.key, conditioned(binding, raw));
       if (value === undefined) return "applied";
       this.general = { ...this.general, [target.key]: value };
-      if (target.key === "ambientcolor" || target.key === "skylightcolor") this.lightsDirty = true;
+      // 环境光与雾（P13f）的字段进 uniform：刷进声明了它们的 draw
+      if (target.key === "ambientcolor" || target.key === "skylightcolor" || isFogUniformField(target.key))
+        this.lightsDirty = true;
       return "applied";
     }
     if (target.kind === "particle-instance") {

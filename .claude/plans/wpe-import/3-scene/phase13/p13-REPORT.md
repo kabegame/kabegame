@@ -231,3 +231,31 @@ P5d 把透视相机改成逐步 float32、遮挡方块的轴长改成 float32 �
 - 除 `who-low` 外每张最多 32 个像素、都只差 1 级（孤立的光照舍入）。`ppls-low` 与 `pp-low` 我们的像素摘要相同，各自和 WPE 都只差 3 个像素：光源尺寸只改近平面，影子在画面上不变。
 - `who-low` 的 6400 个像素是一个 80×80 的白色粒子方块：屏外探针不步进粒子（存活数 0），与阴影无关，方块周围没有影子差异（D4：粒子不投影）。
 - `hide-off` 最初整帧发黑（平均亮度 7）：WPE 给没有灯的第 2 个槽写全 0（常量文件逐值核对，我们写的也是全 0），投影 `w` 为 0，坐标是 0/0 的 NaN。硬件比较采样吃掉 NaN、结果有限；`kb_shadowCompare` 越界分支手算双线性的权重 `p − floor(p)` 是 NaN，经 `mix` 进了整个光照和。权重改成 `w >= 0 ? w : 0` 后只剩 2 个像素差 1。WPE 运行中隐藏时图集不缩（方块变换 `(0, 0, 0.5, 1)`），我们整场重编译按一盏灯建图集（`(0, 0, 1, 1)`），画面相同。
+
+## P13f 的实测：雾与灯的运行时（2026-11-15）
+
+工程 `ignore/p13/f/gen_f0.py` → `ignore/p13/proj/p13f-*`，抓帧 `A:\p13f\<名>\`，常量 `ignore/p13/f/out/wpe-p13f-*-consts.json`（`kbp rdc consts --no-clock`），打印 `ignore/p13/f/show_fog.py`、`show_lights.py`、`show_vol.py`，整帧比 `imgdiff.py`。WPE 设置没动（反射关、阴影 low、体积光 low）。
+
+**雾**
+
+| # | 问题 | 抓帧 | 结果 |
+|---|---|---|---|
+| F1 | 四个 uniform 的打包 | `p13f-fog`（透视，`generic4` 地面 + 方块） | `(start, end − start, startdensity, enddensity − startdensity)`，差值按 float32 减法（0.8 − 0.1 = 0.699999988），`end < start` 时 `.y` 为负；颜色原值 |
+| F2 | 宏的条件 | 同工程：缺省 `FOG`、`FOG: 1`、additive、`FOG: 0`、`generic2`；`p13f-fog-off` 两开关都关 | 前三个有雾 uniform，`FOG: 0` 与 `generic2`（不声明 `FOG`）没有；两开关都关时没有任何绘制带雾 uniform |
+| F3 | 运行中改开关 | `fogdistance` 绑属性，改成 false | 雾 uniform 照写，整帧与改之前逐像素相同（宏不变） |
+| F4 | 运行中改数值 | `fogdistanceend` 改 9 | 下一次抓帧 `.y` = 5，画面跟着变 |
+| F5 | 正交场景 | `p13f-fog-ortho` | `g_EyePosition` = (960, 540, 2000)，打包同上 |
+| F6 | 粒子 | `p13f-fog-ptc`：translucent、additive、`FOG: 0` 三个 `genericparticle` | 前两个上雾，`FOG: 0` 不上 |
+| F7 | 图像层（**新事实**） | `p13f-fog`（FR / CLK）、`p13f-fog-img`、`p13f-fog-fs` | 任一雾开关为真时，**每个**图像层与文本层都走「基础 pass → 合成 RT → passthrough 上屏」，没有 effect 的、FR / CLK 这种自定着色器的、组合层、不带 effect 的全屏层都是（即 p2-REPORT 的「渲染标志 `0x1800000` 强制所有图层走 passthrough」，`0x1800000` 就是两个雾开关）。上屏 pass 的 `FOG_COMPUTED`：图像层取基础材质最终的 `FOG`（缺省 1 的上雾；`FOG: 0`、`genericimage2`、自定着色器、`composelayer` 不声明 `FOG`，上屏定义了 `FOG_DIST` 却不读雾 uniform）；文本层（`font` 不声明 `FOG`）照样上雾，即 passthrough JSON 原样的 1 |
+
+F7 是我们第一次对照时整帧差 25 级的原因：透视工程里 FR 的上屏四边形（80×60 个世界单位）盖住整个画面、关混合写回合成 RT 的透明黑，天空成了 (0, 0, 0)。
+
+**灯的运行时**
+
+| # | 问题 | 抓帧 | 结果 |
+|---|---|---|---|
+| L1 | V1 与遗留灯的时序 | `p13f-light`（5 帧连抓）：`lpoint` LV 与 `point` LG 挂在 `origin` 关键帧平移的模型下，`intensity` 挂同一条关键帧 | LV 的位置 = 本帧模型平移 + 本地 (0, 1.5, 0)、强度 = 本帧关键帧值；LG 的位置与强度都是**上一帧**的（含循环回绕那一帧） |
+| L2 | 字段脚本、脚本对象 | 同工程：LR 的 `radius` 字段脚本、LS 的 `getLayer('LS').intensity = …` | 都当帧进 uniform；写入读回是 float32。灯的脚本对象：`light` 是字符串（`lpoint`），`color` / `controlpoint` / `origin` / `angles` / `scale` 是 Vec3，`castshadow` / `castvolumetrics` / `usecookie` / `visible` 布尔，其余数值，`alpha` / `brightness` 是 undefined |
+| L2′ | 排序键 | 同工程 | 局部 origin：挂在父下的 LV 按本地 (0, 1.5, 0) 排在两盏 z = 2 的灯之后 |
+| L3 | 超配排序 | `p13f-sort`：`point: 2`、A 带 `castshadow`、B 的 `origin` 绑属性 | 同 P13d 的 `lightFrame`：A 先写槽 0、被后面 key 较小的普通灯覆盖，槽 1 空；B 挪到相机前后留下的换成 B |
+| L4 | 体积光灯在运行中变 | `p13f-vol`：L1 挂在 `origin` / `visible` 绑属性的空对象下，两盏灯之间的立方体 `visible` 绑属性 | 隐藏立方体 → 两段并成一段、合成一次；隐藏父对象 → L1 不画、没有它那一段；挪父对象 → L1 的位置 = 父 + 本地 |

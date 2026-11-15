@@ -439,7 +439,8 @@ export interface ActiveCameraObject {
 }
 
 /**
- * 本帧生效的相机对象（rea-p5-camera 4.2【确】，步骤 0 `p5d-camp-1` / `-2` 实测）：按 `objects` 下标从大到小找第一个自身与父链都可见
+ * 本帧生效的相机对象（rea-p5-camera 4.2【确】，步骤 0 `p5d-camp-1` / `-2` 实测）：按对象表（`SceneState.order`，P6d3：`sortLayer` 会改它，
+ * 步骤 0 `p6d3-struct` 实测当前相机随表重排；没有 `order` 时按 `objects` 下标）从后往前找第一个自身与父链都可见
  * （`effectiveVisible`）的相机图层（`SceneLayer.camera` 非空），取它的世界矩阵（`worldMatrixOf`，含父链）：eye = 平移（列主序缓冲的
  * [12..14]）、center = eye − 第 2 列（[8..10]）、up = 第 1 列（[4..6]）。都不可见或没有相机对象时为 null（回到路径 / 基准，正交场景是
  * 单位视图）。`fov` / `zoom` 读 `SceneState.cameras`（就地写之后的值），状态里没有时取编译期的。`worlds` 是 `worldMatrixOf` 的缓存，
@@ -447,14 +448,18 @@ export interface ActiveCameraObject {
  */
 export function activeCameraObject(
   bundle: { readonly layers: readonly SceneLayer[] },
-  state: Pick<SceneState, "layers" | "cameras">,
+  state: Pick<SceneState, "layers" | "cameras"> & { readonly order?: readonly number[] },
   worlds: Map<number, Mat4> = new Map(),
 ): ActiveCameraObject | null {
   let best: { object: number; fov: number; zoom: number } | null = null;
-  for (const layer of bundle.layers) {
-    if (!layer.camera || (best && layer.object < best.object) || !state.layers.has(layer.object)) continue;
-    if (!effectiveVisible(layer.object, state.layers)) continue;
-    best = { object: layer.object, ...(state.cameras.get(layer.object) ?? layer.camera) };
+  // 对象表顺序：靠后的胜出（相机表随对象表重排，取最后一个可见的）
+  const byObject = new Map(bundle.layers.map((layer) => [layer.object, layer]));
+  const order = state.order ?? bundle.layers.map((layer) => layer.object).sort((a, b) => a - b);
+  for (const object of order) {
+    const layer = byObject.get(object);
+    if (!layer?.camera || !state.layers.has(object)) continue;
+    if (!effectiveVisible(object, state.layers)) continue;
+    best = { object, ...(state.cameras.get(object) ?? layer.camera) };
   }
   if (!best) return null;
   const w = worldMatrixOf(best.object, state.layers, worlds);

@@ -97,6 +97,20 @@ export const GENERAL_FIELDS = {
   cameraparallaxdelay: { type: "float", fallback: 0.1 },
   cameraparallaxmouseinfluence: { type: "float", fallback: 0.5 },
   zoom: { type: "float", fallback: 1 },
+  // 雾（P13f，rea-p13-lights 2.1 的缺省值）：数值与颜色由渲染器每帧打包成四个 `g_Fog*`（`compile/fog.ts` 的 `fogUniforms`）；两个开关只在
+  // 编译期定 `FOG_DIST` / `FOG_HEIGHT`（`fogDefines`），运行中改只改字段、画面不变（p13-REPORT F3）
+  fogdistance: { type: "bool", fallback: false },
+  fogheight: { type: "bool", fallback: false },
+  fogdistancecolor: { type: "vec3", fallback: [0, 0, 0] },
+  fogheightcolor: { type: "vec3", fallback: [0, 0, 0] },
+  fogdistancestart: { type: "float", fallback: 1 },
+  fogdistanceend: { type: "float", fallback: 5 },
+  fogdistancestartdensity: { type: "float", fallback: 0 },
+  fogdistanceenddensity: { type: "float", fallback: 1 },
+  fogheightstart: { type: "float", fallback: 1 },
+  fogheightend: { type: "float", fallback: -3 },
+  fogheightstartdensity: { type: "float", fallback: 0 },
+  fogheightenddensity: { type: "float", fallback: 1 },
 } as const satisfies Record<string, GeneralField>;
 
 export type GeneralKey = keyof typeof GENERAL_FIELDS;

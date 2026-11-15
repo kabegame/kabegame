@@ -3,11 +3,14 @@ import type { SceneStyle } from "./render/layout";
 
 /**
  * 场景宿主与父页面（`WpeSceneView`）的 postMessage 协议：宿主启动时发 `{ type: SCENE_STYLE_REQUEST }`，
- * 父页面回两条：
+ * 父页面回三条：
  * - `{ type: SCENE_STYLE_MESSAGE, style }`：壁纸样式，变化时再主动推；
  * - `{ type: SCENE_DISPLAY_MESSAGE, scale }`：显示缩放，iframe 在父页面里实际显示的大小 ÷ 布局大小（预览画布按内容尺寸
  *   布局、再整体 `scale`，这个 transform 在 iframe 里量不到）。父页面量到变化时再主动推，桌面等不缩放的地方是 1。
  *   宿主按它把画布缩到实际显示大小（`canvasSize`）。
+ * - `{ type: SCENE_SETTINGS_MESSAGE, postprocess, reflection, shadows, volumetrics }`：场景后处理 / 反射 / 阴影 / 体积光，变化时再主动推。桌面是全局
+ *   「壁纸设置」、预览是这张壁纸的「预览设置」，宿主不分；不能跟随 WPE 时父页面已把 `follow` 换成默认值。首次加载等它
+ *   （`SceneHost.setSceneSettings`）。
  *
  * 另有一条不经请求、父页面主动发的：
  * - `{ type: SCENE_POINTER_MESSAGE, x, y }`：开场指针（P5a 收尾），光标在 iframe 里的归一化坐标（0…1 为 iframe 内，
@@ -20,6 +23,7 @@ export const SCENE_STYLE_REQUEST = "kabegame:wpe-scene-style-request";
 export const SCENE_STYLE_MESSAGE = "kabegame:wpe-scene-style";
 export const SCENE_DISPLAY_MESSAGE = "kabegame:wpe-scene-display";
 export const SCENE_POINTER_MESSAGE = "kabegame:wpe-scene-pointer";
+export const SCENE_SETTINGS_MESSAGE = "kabegame:wpe-scene-settings";
 
 const SCENE_STYLES: readonly string[] = ["fill", "fit", "stretch", "center", "tile"] satisfies SceneStyle[];
 
@@ -43,18 +47,37 @@ export interface SceneParentHandlers {
   displayScale(scale: number): void;
   /** 开场指针：两个有限数，iframe 里的归一化坐标（不钳制）。 */
   pointer(x: number, y: number): void;
+  /** 场景设置：四项原样交出，由宿主规整（不认识的值、缺了的项按跟随）。 */
+  settings(settings: { postprocess: unknown; reflection: unknown; shadows: unknown; volumetrics: unknown }): void;
 }
 
-/** 收父页面的样式、显示缩放与开场指针消息，然后请求一次样式与显示缩放的当前值。只认父窗口发来的可信消息。 */
+/** 收父页面的样式、显示缩放、场景设置与开场指针消息，然后请求一次样式、显示缩放与场景设置的当前值。只认父窗口发来的可信消息。 */
 export function listenSceneParent(handlers: SceneParentHandlers): void {
   window.addEventListener("message", (event) => {
     if (!event.isTrusted || event.source !== window.parent) return;
-    const data = event.data as { type?: unknown; style?: unknown; scale?: unknown; x?: unknown; y?: unknown } | null;
+    const data = event.data as {
+      type?: unknown;
+      style?: unknown;
+      scale?: unknown;
+      x?: unknown;
+      y?: unknown;
+      postprocess?: unknown;
+      reflection?: unknown;
+      shadows?: unknown;
+      volumetrics?: unknown;
+    } | null;
     if (data?.type === SCENE_STYLE_MESSAGE) {
       if (typeof data.style === "string" && SCENE_STYLES.includes(data.style)) handlers.style(data.style as SceneStyle);
     } else if (data?.type === SCENE_DISPLAY_MESSAGE) {
       const scale = data.scale;
       if (typeof scale === "number" && Number.isFinite(scale) && scale > 0) handlers.displayScale(scale);
+    } else if (data?.type === SCENE_SETTINGS_MESSAGE) {
+      handlers.settings({
+        postprocess: data.postprocess,
+        reflection: data.reflection,
+        shadows: data.shadows,
+        volumetrics: data.volumetrics,
+      });
     } else if (data?.type === SCENE_POINTER_MESSAGE) {
       const { x, y } = data;
       if (typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y))

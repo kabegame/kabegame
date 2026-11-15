@@ -27,24 +27,31 @@ function scan(source: string, owner: ScriptApiContext["owner"] = { kind: "layer"
 
 describe("未实现脚本 API 的扫描", () => {
   it('根对象成员：thisScene / engine / input，含可选链与 ["成员"]', () => {
-    expect(scan("export function init() { let bar = thisScene.createLayer('models/bar.json'); }")).toEqual([
-      "thisScene.createLayer",
+    expect(scan("export function init() { let bar = thisScene.createModelData('models/bar.json'); }")).toEqual([
+      "thisScene.createModelData",
     ]);
-    expect(scan("export function init() { thisScene?.sortLayer(x, 1); thisScene['destroyLayer'](x); }")).toEqual([
-      "thisScene.destroyLayer",
-      "thisScene.sortLayer",
+    // destroyLayer / sortLayer / getInitialLayerConfig / registerAsset（P6d3a）与 createLayer（P6d3b）已实现，不再报
+    expect(scan("export function init() { thisScene?.sortLayer(x, 1); thisScene['destroyLayer'](x); }")).toEqual([]);
+    expect(scan("export function init() { thisScene.createLayer('a'); }")).toEqual([]);
+    expect(scan("const asset = engine.registerAsset('materials/x.json', true);")).toEqual([]);
+    expect(scan("thisScene?.createModelData(x); engine.requestFeatures([]);")).toEqual([
+      "engine.requestFeatures",
+      "thisScene.createModelData",
     ]);
-    expect(scan("const asset = engine.registerAsset('materials/x.json', true);")).toEqual(["engine.registerAsset"]);
     // `input` 的三个成员 P6c 已实现，不再报
     expect(scan("export function update() { return input.cursorWorldPosition.x + input?.cursorLeftDown; }")).toEqual(
       [],
     );
     // 场景字段（L1）只认 thisScene
-    expect(scan("export function update() { thisScene.fogdistance = 2; }")).toEqual(["thisScene.fogdistance"]);
+    expect(scan("export function update() { thisScene.windstrength = 2; }")).toEqual(["thisScene.windstrength"]);
+    // 雾的 14 个字段 P13f 起在 `GENERAL_FIELDS` 里
+    expect(scan("export function update() { thisScene.fogdistance = false; }")).toEqual([]);
   });
 
   it("根对象的成员只认裸全局名：属性链上的同名对象不算", () => {
-    expect(scan("shared.thisScene.createLayer(); foo.engine.registerAsset('a'); my.input.cursorLeftDown;")).toEqual([]);
+    expect(
+      scan("shared.thisScene.createModelData(); foo.engine.requestFeatures('a'); my.input.cursorLeftDown;"),
+    ).toEqual([]);
   });
 
   it("图层的独特方法名：任意接收者都算", () => {
@@ -58,7 +65,8 @@ describe("未实现脚本 API 的扫描", () => {
       "}",
     ].join("\n");
     // `getAnimation`（IObject、thisScene 上的）已在 P10b 实现，不再报；`getEffect` 在 P6d1a 实现
-    expect(scan(source)).toEqual(["layer.getTextureAnimation", "layer.setParent"]);
+    // setParent 在 P6d3a 实现
+    expect(scan(source)).toEqual(["layer.getTextureAnimation"]);
     expect(scan("thisScene.getAnimation('x');")).toEqual([]);
   });
 
@@ -99,9 +107,9 @@ describe("未实现脚本 API 的扫描", () => {
 
   it("注释、字符串、模板文字与正则里的不算；模板插值照常扫", () => {
     const source = [
-      "// thisScene.createLayer('a');",
-      "/* bar.setParent(); engine.registerAsset('x'); */",
-      "const a = 'thisScene.createLayer()';",
+      "// thisScene.createModelData('a');",
+      "/* bar.getTextureAnimation(); engine.requestFeatures('x'); */",
+      "const a = 'thisScene.createModelData()';",
       'const b = "layer.getTextureAnimation()";',
       "const c = `input.cursorWorldPosition ${'}'} and ${`thisScene.sortLayer`}`;",
       "const d = /x.setParent\\/()/g.test(s) ? 1 : 2;",
@@ -109,14 +117,13 @@ describe("未实现脚本 API 的扫描", () => {
       "export function update() { return value; }",
     ].join("\n");
     expect(scan(source)).toEqual([]);
-    expect(scan("const s = `${bar.setParent(null).name} / ${`${thisScene.createLayer('a')}`}`;")).toEqual([
-      "layer.setParent",
-      "thisScene.createLayer",
-    ]);
+    expect(scan("const s = `${bar.getTextureAnimation(null).name} / ${`${thisScene.createModelData('a')}`}`;")).toEqual(
+      ["layer.getTextureAnimation", "thisScene.createModelData"],
+    );
     // 除号之后不是正则：后面的调用照常扫到
-    expect(scan("const k = width / 2; const p = bar.setParent(); const q = (a) / b.setParent();")).toEqual([
-      "layer.setParent",
-    ]);
+    expect(
+      scan("const k = width / 2; const p = bar.getTextureAnimation(); const q = (a) / b.getTextureAnimation();"),
+    ).toEqual(["layer.getTextureAnimation"]);
   });
 
   it("已实现的不报", () => {
@@ -165,8 +172,12 @@ describe("未实现脚本 API 的扫描", () => {
     );
     // general：thisObject / thisLayer 都是场景字段对象，只有字段没有方法（L14）
     expect(
-      scan("thisObject.fogheight = 1; thisLayer.windstrength; thisObject.createLayer('a');", { kind: "general" }, null),
-    ).toEqual(["thisScene.fogheight", "thisScene.windstrength"]);
+      scan(
+        "thisObject.gravitystrength = 1; thisLayer.windstrength; thisObject.createModelData('a');",
+        { kind: "general" },
+        null,
+      ),
+    ).toEqual(["thisScene.gravitystrength", "thisScene.windstrength"]);
     // 材质 / effect 上的脚本，thisLayer 是所在图层
     expect(scan("thisLayer.perspective = 1;", { kind: "material" }, 2)).toEqual(["layer.perspective"]);
   });
@@ -224,7 +235,7 @@ describe("导出回调的扫描", () => {
       "cursorDown",
       "update",
     ]);
-    expect(scan("export function init() { thisScene.createLayer ('a'); }")).toEqual(["thisScene.createLayer"]);
+    expect(scan("export function init() { thisScene.createModelData ('a'); }")).toEqual(["thisScene.createModelData"]);
     // 中文标识符照旧是一个词
     expect(memberAccesses("脚本对象.名字").map((access) => access.name)).toEqual(["名字"]);
   });
@@ -316,12 +327,12 @@ describe("能力表：script:api:*", () => {
     const unsupported = new Set<string>();
     checkScriptFeatures(
       [
-        script("export function init() { thisScene.createLayer('a'); }"),
+        script("export function init() { thisScene.createModelData('a'); }"),
         script("export function init() { engine.registerAsset('b'); }", ["不支持的模块说明符：./x.js"]),
       ],
       unsupported,
     );
-    expect([...unsupported]).toEqual(["script:api:thisScene.createLayer"]);
+    expect([...unsupported]).toEqual(["script:api:thisScene.createModelData"]);
   });
 
   it("报 script:callback:<名>；不会执行的脚本不扫", () => {
@@ -372,8 +383,8 @@ describe("能力表：script:api:*", () => {
         postprocess: "disabled",
         exhaustive: true,
       });
-    const blocked = await compile("export function init() { let bar = thisScene.createLayer('models/bar.json'); }");
-    expect(blocked.unsupported).toEqual(["script:api:thisScene.createLayer"]);
+    const blocked = await compile("export function init() { let bar = thisScene.createModelData('models/bar.json'); }");
+    expect(blocked.unsupported).toEqual(["script:api:thisScene.createModelData"]);
     expect(blocked.scripts.list).toHaveLength(1);
     const fine = await compile("export function update() { return thisScene.getLayer(0).visible; }");
     expect(fine.unsupported).toEqual([]);
@@ -402,7 +413,7 @@ const nodeReader: SceneReader = {
 describe.skipIf(!root)("本机：未实现脚本 API", () => {
   const sample = root ? join(root, "..", "..", "workshop", "content", "431960", "3304642534") : "";
 
-  it.skipIf(!root || !existsSync(sample))("3304642534 的音频条脚本报 createLayer / sortLayer", async () => {
+  it.skipIf(!root || !existsSync(sample))("3304642534 的音频条脚本报 createModelData / sortLayer", async () => {
     const fs = new SceneFs(sample, [join(root!, "assets")], nodeReader);
     const project = parseProject((await fs.text("project.json"))!);
     const scene = parseScene((await fs.text(project.file))!);
@@ -410,7 +421,7 @@ describe.skipIf(!root)("本机：未实现脚本 API", () => {
     expect(list.map((item) => item.id)).toEqual(["objects/1/visible"]);
     const unsupported = new Set<string>();
     checkScriptFeatures(list, unsupported);
-    expect([...unsupported].sort()).toEqual(["script:api:thisScene.createLayer", "script:api:thisScene.sortLayer"]);
+    expect([...unsupported].sort()).toEqual(["script:api:thisScene.createModelData", "script:api:thisScene.sortLayer"]);
   });
 
   it.skipIf(!root || !existsSync(sample) || !existsSync(wasm))(
@@ -424,7 +435,7 @@ describe.skipIf(!root)("本机：未实现脚本 API", () => {
         postprocess: "ultra",
         exhaustive: true,
       });
-      expect(bundle.unsupported).toEqual(["script:api:thisScene.createLayer", "script:api:thisScene.sortLayer"]);
+      expect(bundle.unsupported).toEqual(["script:api:thisScene.createModelData", "script:api:thisScene.sortLayer"]);
     },
     120000,
   );

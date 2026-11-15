@@ -4,13 +4,16 @@ import { describe, expect, it } from "vitest";
 import {
   WPE_SCENE_DISPLAY,
   WPE_SCENE_POINTER,
+  WPE_SCENE_SETTINGS,
   WPE_SCENE_STYLE,
   WPE_SCENE_STYLE_REQUEST,
   displayScaleOf,
   isWpeSceneStyleRequest,
+  sceneDisplayScale,
   scenePointerIn,
   wpeSceneDisplayMessage,
   wpeScenePointerMessage,
+  wpeSceneSettingsMessage,
   wpeSceneStyleMessage,
 } from "./wpeSceneStyle";
 
@@ -27,6 +30,22 @@ describe("wpeSceneStyle", () => {
   it("宿主的开场指针字面量与这里一致（P5a 收尾）", () => {
     const source = readFileSync(path.resolve(__dirname, "../../../../wpe-scene/src/sceneStyle.ts"), "utf8");
     expect(source).toContain(`SCENE_POINTER_MESSAGE = "${WPE_SCENE_POINTER}"`);
+  });
+
+  it("宿主的场景设置字面量与字段名与这里一致", () => {
+    const source = readFileSync(path.resolve(__dirname, "../../../../wpe-scene/src/sceneStyle.ts"), "utf8");
+    expect(source).toContain(`SCENE_SETTINGS_MESSAGE = "${WPE_SCENE_SETTINGS}"`);
+    for (const field of ["postprocess", "reflection", "shadows", "volumetrics"])
+      expect(source).toContain(`data.${field}`);
+    expect(
+      wpeSceneSettingsMessage({ postprocess: "enabled", reflection: "disabled", shadows: "low", volumetrics: "high" }),
+    ).toEqual({
+      type: WPE_SCENE_SETTINGS,
+      postprocess: "enabled",
+      reflection: "disabled",
+      shadows: "low",
+      volumetrics: "high",
+    });
   });
 
   it("识别样式请求", () => {
@@ -83,5 +102,26 @@ describe("displayScaleOf", () => {
     expect(displayScaleOf(element(0, 0, 0, 0))).toBeNull();
     expect(displayScaleOf(element(1000, 0, 100, 0))).toBeNull();
     expect(displayScaleOf(element(1000, 500, 0, 0))).toBeNull();
+  });
+});
+
+describe("sceneDisplayScale", () => {
+  it("没放大（zoom 1）时就是实测值", () => {
+    expect(sceneDisplayScale(0.4, 1)).toBe(0.4);
+    expect(sceneDisplayScale(1.5, 1)).toBe(1.5);
+  });
+
+  it("放大时画布跟着放大", () => {
+    // 适应时显示 0.4，放大 2 倍量到 0.8
+    expect(sceneDisplayScale(0.8, 2)).toBeCloseTo(0.8, 12);
+  });
+
+  it("到布局 × DPR（1）封顶：再大只是浏览器放大", () => {
+    expect(sceneDisplayScale(2, 5)).toBe(1);
+    expect(sceneDisplayScale(4, 10)).toBe(1);
+  });
+
+  it("没放大前就超过 1 的（小场景放大显示）保持原值", () => {
+    expect(sceneDisplayScale(3, 2)).toBe(1.5);
   });
 });

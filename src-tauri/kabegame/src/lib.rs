@@ -821,6 +821,8 @@ pub(crate) fn configure_app(
             set_wpe_scene_reflection,
             get_wpe_scene_shadows,
             set_wpe_scene_shadows,
+            get_wpe_scene_volumetrics,
+            set_wpe_scene_volumetrics,
             #[cfg(not(target_os = "android"))]
             get_web_server_enabled,
             #[cfg(not(target_os = "android"))]
@@ -1012,6 +1014,12 @@ pub(crate) fn configure_app(
             get_wpe_web_properties,
             #[cfg(feature = "wpe")]
             set_wpe_web_user_properties,
+            #[cfg(feature = "wpe")]
+            get_wpe_preview_settings,
+            #[cfg(feature = "wpe")]
+            set_wpe_preview_settings,
+            #[cfg(feature = "wpe")]
+            get_wpe_follow_available,
             #[cfg(feature = "wpe")]
             capture_wallpaper_cover,
             #[cfg(feature = "wpe")]

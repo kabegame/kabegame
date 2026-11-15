@@ -9,6 +9,7 @@
  * 这三类逐项核对（`checkProgramFeatures`，默认纹理在 `bundle.ts` 里随绑定一起核对）。
  */
 import {
+  isSceneObject,
   numbers,
   resolveValue,
   staticCombos,
@@ -34,6 +35,7 @@ import { hasNonNumericDependency } from "./dependencies";
 import { normalizeJsonPassState, PASS_STATE_TABLES, type PassStateField } from "./passState";
 import { resolveParents } from "./hierarchy";
 import { LEGACY_LIGHT_UNIFORMS } from "./lights";
+import { FOG_UNIFORMS } from "./fog";
 import {
   INSTANCE_FIELDS,
   instanceControlPoint,
@@ -128,6 +130,8 @@ export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_Texture0Translation",
   "g_LightAmbientColor",
   "g_LightSkylightColor",
+  // 雾（P13f，`compile/fog.ts`）：由 `general.fog*` 现算，场景没开雾时着色器不声明它们
+  ...FOG_UNIFORMS,
   "g_Time",
   "g_Frametime",
   "g_Daytime",
@@ -228,8 +232,26 @@ const NEUTRAL_GENERAL = new Set([
   "winddirection",
   "windstrength",
 ]);
-/** 编译期解析、由渲染器使用的 general 键（不进中性表）：`perspectiveoverridefov` → `SceneGeneral.perspectiveOverrideFov`（步骤 4 用）。 */
-const PARSED_GENERAL = new Set(["perspectiveoverridefov"]);
+/**
+ * 编译期解析、由渲染器使用的 general 键（不进中性表）：`perspectiveoverridefov` → `SceneGeneral.perspectiveOverrideFov`（步骤 4 用）；
+ * 雾的 14 个字段（P13f）在 `GENERAL_FIELDS` 里，开关定 `FOG_DIST` / `FOG_HEIGHT`、其余每帧打包成 `g_Fog*`（`compile/fog.ts`），属性、关键帧、
+ * 脚本都就地。
+ */
+const PARSED_GENERAL = new Set([
+  "perspectiveoverridefov",
+  "fogdistance",
+  "fogheight",
+  "fogdistancecolor",
+  "fogheightcolor",
+  "fogdistancestart",
+  "fogdistanceend",
+  "fogdistancestartdensity",
+  "fogdistanceenddensity",
+  "fogheightstart",
+  "fogheightend",
+  "fogheightstartdensity",
+  "fogheightenddensity",
+]);
 
 /**
  * 支持或中性的对象键。
@@ -479,9 +501,12 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
       unsupported.add(`general:${key}`);
   const { parents, cycle } = resolveParents(scene.objects);
   if (cycle) unsupported.add("object:parent-cycle");
-  scene.objects.forEach((object, index) => checkObjectFeatures(object, unsupported, parents[index]));
+  scene.objects.forEach((object, index) => {
+    if (isSceneObject(object)) checkObjectFeatures(object, unsupported, parents[index]);
+  });
   if (!orthographic)
-    for (const object of scene.objects) for (const key of perspectiveObjectIssues(object)) unsupported.add(key);
+    for (const object of scene.objects)
+      if (isSceneObject(object)) for (const key of perspectiveObjectIssues(object)) unsupported.add(key);
   // 关键帧不在这里报：由 `collectAnimations`（`animations.ts`，P10a 步骤 2）按目标报细分键
 }
 
@@ -557,7 +582,8 @@ export function cursorPickKind(object: SceneObject): "image" | "text" | undefine
 }
 
 /**
- * 灯对象自己的键（`FUN_14025da80`）。灯不画东西，这些键只影响 `lights.ts` 算出的 uniform，`density` 之后的项只给体积光与阴影用。
+ * 灯对象自己的键（`FUN_14025da80`）。这些键只影响 `lights.ts` 算出的 uniform 与体积光（`volumetrics.ts`，P13e：`castvolumetrics`、`density`、
+ * `volumetricsexponent`；不支持的组合由那里照报 `volumetrics:*`），`cascadedistance*` 之后的项给阴影用。
  * `castshadow` / `usecookie` 单独不起作用：要 `lightconfig` 里的阴影灯数才生效，那时报 `lightconfig:*`。
  */
 const LIGHT_KEYS = new Set([
@@ -568,6 +594,7 @@ const LIGHT_KEYS = new Set([
   "innercone",
   "outercone",
   "controlpoint",
+  "castvolumetrics",
   "density",
   "volumetricsexponent",
   "cascadedistance0",
@@ -1458,8 +1485,18 @@ export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([
  *   （语料 `2903412088`）；法线按 `TEX1FORMAT` 解码，翻译器按 `formatcombo` 写这个宏。
  * - `ALPHATOCOVERAGE`：P8 步骤 5，混合 `alphatocoverage` 时编译期加的（`writeState.ts` 的 `materialCombos`），`genericparticle` 只做
  *   alpha 锐化，丢弃由渲染器的 A2C 入口做（同图像层，`ENGINE_COMBOS` 的说明）。
+ * - `ADDITIVE`：P13f，混合 `additive` 时编译期加的（同上，WPE 加载时同样加）。WPE 自带着色器里只有 `generic4` / `chroma4` / `foliage4` /
+ *   `fur4` 的雾分支读它，粒子着色器与语料的工坊着色器都不读，加不加画面相同。
  */
-const PARTICLE_COMBOS = new Set(["WORLDBLUR", "USERCOLORBLEND", "REFRACT", "CUTOUT", "NORMALMAP", "ALPHATOCOVERAGE"]);
+const PARTICLE_COMBOS = new Set([
+  "WORLDBLUR",
+  "USERCOLORBLEND",
+  "REFRACT",
+  "CUTOUT",
+  "NORMALMAP",
+  "ALPHATOCOVERAGE",
+  "ADDITIVE",
+]);
 
 /**
  * 粒子材质 pass 的 COMBO 与光照（混合由 `checkPassFeatures` 照常检查，剔除、深度按 `normalizeDepthKeys` 规整，引擎 uniform /
@@ -1467,7 +1504,8 @@ const PARTICLE_COMBOS = new Set(["WORLDBLUR", "USERCOLORBLEND", "REFRACT", "CUTO
  * - 材质写的、以及纹理槽注解带出的 COMBO（翻译结果 `source` 为 `request` / `texture`），值非 0 的只允许
  *   `PARTICLE_COMBOS` 里的，其余报 `particle:combo:<名字>`。
  * - 着色器注解的缺省值（`source: "default"`）不算：WPE 同样按缺省值编，翻译器照办。`genericparticle` 的 `FOG` 缺省为 1，
- *   但它只在引擎的 `FOG_DIST` / `FOG_HEIGHT` 下起作用，渲染器不定义这两个宏。
+ *   它只在引擎的 `FOG_DIST` / `FOG_HEIGHT` 下起作用：P13f 起场景开雾时定义这两个宏（`compile/fog.ts`），粒子读的四个雾 uniform 同图层
+ *   （`staticBuiltins`），`p13f-fog` 的粒子与 WPE 逐像素比过。
  * - 最终开了 `LIGHTING`（含着色器缺省值）报 `particle:lighting`：粒子的光照路径没有和 WPE 比过，本机 0 张。
  */
 export function checkParticleProgram(

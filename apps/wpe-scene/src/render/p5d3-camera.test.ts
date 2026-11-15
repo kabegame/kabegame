@@ -280,11 +280,14 @@ function orthoFrame(origin: number[], options: { angles?: number[]; zoom?: numbe
 }
 
 describe("activeCameraObject：按 objects 倒序找第一个自身与父链都可见的（rea-p5-camera 4.2）", () => {
-  it("两个都可见取下标大的（与 bundle 里的顺序无关）；没有相机对象为 null", () => {
+  it("两个都可见取对象表里靠后的（P6d3）；没有相机对象为 null", () => {
     const a = cameraLayer(3, [0, 0, 8], { camera: { fov: 40, zoom: 1 } });
     const b = cameraLayer(5, [2, 0, 8], { camera: { fov: 60, zoom: 1 } });
     expect(pick([layer(0), a, b])?.object).toBe(5);
-    expect(pick([b, a, layer(0)])?.object).toBe(5);
+    // P6d3：取对象表（`state.order`，加载时 = bundle 里的顺序）里靠后的；`sortLayer` 之后随表重排
+    expect(pick([b, a, layer(0)])?.object).toBe(3);
+    expect(pick([layer(0), a, b], (state) => state.sortLayer(3, 99))?.object).toBe(3);
+    expect(pick([layer(0), a, b], (state) => state.sortLayer(5, 0))?.object).toBe(3);
     expect(pick([layer(0)])).toBeNull();
   });
 

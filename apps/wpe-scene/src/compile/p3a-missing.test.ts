@@ -321,7 +321,7 @@ describe("3. WPE 注入的内置属性", () => {
     });
   });
 
-  it("alignment 照用视频壁纸的样式对应（WallpaperStage.vue 的 effectiveAlignment）", () => {
+  it("alignment 照用视频壁纸的样式对应（原 WallpaperStage.vue 的 effectiveAlignment，现 wpeVideoStyle.ts）", () => {
     expect(["fill", "fit", "stretch", "center", "tile"].map((style) => wpeAlignmentOf(style as never))).toEqual([
       0, 1, 2, 3, 0,
     ]);
