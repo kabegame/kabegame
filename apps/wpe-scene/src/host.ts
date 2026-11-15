@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { EMPTY_ANIMATIONS_PROBE, SceneAnimations, type AnimationsProbe } from "./animation/player";
-import { ScenePuppets, stateSink } from "./puppet/player";
+import { puppetEntries, ScenePuppets, stateSink } from "./puppet/player";
 import { ScenePlayer } from "./audio/player";
 import { SceneSounds, type SceneSoundProbe } from "./audio/sceneSounds";
 import {
@@ -1439,9 +1439,8 @@ export class SceneHost {
       if (id !== this.generation) return;
       current.setPaused(this.paused);
       // puppet（P12a 步骤 4）：新建，在 `beforeFirstFrame` 里接回旧时钟并算一次姿势；没有 puppet 的场景是空运行时（`frame` 什么都不做）
-      const puppets = new ScenePuppets(
-        bundle.layers.flatMap((layer) => (layer.puppet ? [{ object: layer.object, puppet: layer.puppet }] : [])),
-      );
+      // 图像层 puppet 与带骨骼的模型对象（P12b2-1）都进运行时
+      const puppets = new ScenePuppets(puppetEntries(bundle.layers));
       await current.load(bundle, {
         ignoreUnsupported: force,
         texts,

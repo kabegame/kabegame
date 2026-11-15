@@ -64,7 +64,7 @@
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
 import { SceneAnimations, type AnimationProbeEntry } from "../animation/player";
-import { ScenePuppets, stateSink } from "../puppet/player";
+import { puppetEntries, ScenePuppets, stateSink } from "../puppet/player";
 import type { SceneBundle } from "../compile/bundle";
 import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker } from "../compile/client";
@@ -659,9 +659,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
       const animations = animationList.length ? new SceneAnimations(animationList) : null;
       // puppet 的骨骼动画（P12a 步骤 4 点 5）：没有 puppet 图层时不建，调用序列逐字节同以前。有回放时沿同一串 dt 从第 1 帧推进
       // （`replayReadback` 的 `puppets`，粒子之后、相机之前），没有回放时按 `time` 定位（`seek`）；profile 帧另用一份
-      const puppetList = bundle.layers.flatMap((layer) =>
-        layer.puppet ? [{ object: layer.object, puppet: layer.puppet }] : [],
-      );
+      const puppetList = puppetEntries(bundle.layers);
       const puppets = puppetList.length ? new ScenePuppets(puppetList) : null;
       if (puppets) {
         puppets.refresh(stateSink(state));

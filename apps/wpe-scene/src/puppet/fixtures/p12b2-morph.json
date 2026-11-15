@@ -1,0 +1,790 @@
+{
+  "source": "ignore/p12/b2/gen/proj/p12b2-morph，WPE 抓帧 ignore/p12/b2/gen/out/wpe-p12b2-morph-fps20-1920x1080-consts.json，日志 p12b2-morph-fps20-1920x1080-log.txt；生成 ignore/p12/b2/impl/mkfix_model.py",
+  "project": "p12b2-morph",
+  "dt": [
+    0.000172700005, 0.0701987967, 0.0514971986, 0.0512535982, 0.0527679995, 0.0522487983, 0.0570427999, 0.0512830988,
+    0.0501422994, 0.0517133996, 0.0516722985, 0.0511786006, 0.0539071001, 0.0517148003, 0.0507982001, 0.0502360985,
+    0.0506239012, 0.0518518984, 0.0490811989, 0.0489947982, 0.0509346016, 0.0496222004, 0.0498109981, 0.0491763018,
+    0.0504080988, 0.0504030995, 0.0499047004, 0.0499195009, 0.0502405986, 0.0511067994, 0.0500319004, 0.0492342003,
+    0.0506610014, 0.0491010994, 0.0552330017, 0.0517822988, 0.0473163985, 0.0485607982, 0.0484156013, 0.0482898988,
+    0.0502534993, 0.0500607006, 0.0502470993, 0.0506693982, 0.0507196002, 0.0496358015, 0.0491882004, 0.0503218994,
+    0.0638239011, 0.0499682985, 0.0492790006, 0.0481132008, 0.0484806001, 0.0492670015, 0.0481508002, 0.0483669005,
+    0.0519029982, 0.0464106016, 0.0475373007, 0.0546123981, 0.0508061014, 0.051055599, 0.0492343009, 0.0504782982,
+    0.0502595007, 0.0496742018, 0.0499842018, 0.0500184, 0.0497419983, 0.0496111996, 0.0500546992, 0.0513980016,
+    0.0508418009, 0.0497541018, 0.0492934994, 0.0496228002, 0.0492351018, 0.0502687991, 0.0500089005, 0.0577731989,
+    0.0513793007, 0.0501907989, 0.0500818007, 0.0533724986, 0.064872399, 0.0604800992, 0.0534541011, 0.0545131005,
+    0.0611643009, 0.0517509989, 0.0448657013, 0.0444392003, 0.0458831005, 0.0447273999, 0.0451815017, 0.0445992015,
+    0.0447238982, 0.0473461002, 0.0439270996, 0.0445047989, 0.0503416993, 0.0502834991, 0.0507268012, 0.0536745004,
+    0.0502151996, 0.0489954017, 0.049188599, 0.0489706993, 0.0493020006, 0.0490734987, 0.0504286997, 0.0507615991,
+    0.0487295985, 0.0499648005, 0.0509676002, 0.050616499, 0.0489170998, 0.0510701984, 0.0491665006, 0.0488207005,
+    0.0504928008, 0.0512814, 0.0502861999, 0.0499559008, 0.0499664992, 0.0507073998, 0.0501062982, 0.0493028983,
+    0.0493154004, 0.0502834991, 0.0495099984, 0.0496583991, 0.0489751995, 0.0506803989, 0.050247699, 0.0497387014,
+    0.0502316989, 0.0504591018, 0.0500353985, 0.0478994995, 0.0501126014, 0.0500617996, 0.0506845005, 0.0499343015,
+    0.050559599, 0.0501848012, 0.0507767014, 0.0497323982, 0.0496071018, 0.0506981984, 0.0502712987, 0.0494671986,
+    0.049425099, 0.0489799008, 0.050235901, 0.0511665009, 0.0494032986, 0.0492594987, 0.0495963991, 0.0494677015,
+    0.0518041998, 0.0498990007, 0.0498697013, 0.0499816984, 0.0517857, 0.0505620986, 0.050058201, 0.0495968983,
+    0.0499119982, 0.0498838983, 0.0490810983, 0.0491481014, 0.0507800989, 0.0493079014, 0.0500886999, 0.0493896008,
+    0.0490184017, 0.0500948988, 0.0497867018, 0.0464450009, 0.0894035995, 0.0883150026, 0.0894351006, 0.0921946019,
+    0.0798287019
+  ],
+  "runtime": [
+    0.00017270000535063446, 0.07037149369716644, 0.12186869233846664, 0.17312228679656982, 0.22589029371738434,
+    0.2781390845775604, 0.3351818919181824, 0.3864649832248688, 0.436607301235199, 0.4883206784725189,
+    0.5399929881095886, 0.5911715626716614, 0.6450786590576172, 0.6967934966087341, 0.7475916743278503,
+    0.7978277802467346, 0.8484516739845276, 0.9003036022186279, 0.9493848085403442, 0.9983795881271362,
+    1.0493141412734985, 1.0989364385604858, 1.1487473249435425, 1.1979236602783203, 1.2483317852020264,
+    1.2987349033355713, 1.3486396074295044, 1.3985590934753418, 1.448799729347229, 1.4999065399169922,
+    1.549938440322876, 1.599172592163086, 1.6498335599899292, 1.6989346742630005, 1.7541676759719849,
+    1.8059499263763428, 1.8532663583755493, 1.9018272161483765, 1.9502427577972412, 1.9985326528549194,
+    2.048786163330078, 2.098846912384033, 2.1490938663482666, 2.199763298034668, 2.2504830360412598, 2.3001186847686768,
+    2.349307060241699, 2.3996288776397705, 2.4634528160095215, 2.513421058654785, 2.562700033187866, 2.6108133792877197,
+    2.6592938899993896, 2.7085609436035156, 2.756711721420288, 2.8050785064697266, 2.8569815158843994,
+    2.9033920764923096, 2.9509294033050537, 3.0055418014526367, 3.0563480854034424, 3.107403516769409,
+    3.1566379070281982, 3.20711612701416, 3.257375717163086, 3.3070499897003174, 3.3570339679718018, 3.407052516937256,
+    3.456794500350952, 3.5064055919647217, 3.556460380554199, 3.607858419418335, 3.6587002277374268, 3.7084543704986572,
+    3.7577478885650635, 3.807370662689209, 3.8566057682037354, 3.906874418258667, 3.956883430480957, 4.0146565437316895,
+    4.066035747528076, 4.116226673126221, 4.166308403015137, 4.2196807861328125, 4.284553527832031, 4.345033645629883,
+    4.398487567901611, 4.453000545501709, 4.514164924621582, 4.565916061401367, 4.610781669616699, 4.655220985412598,
+    4.701104164123535, 4.745831489562988, 4.791012763977051, 4.8356122970581055, 4.880335807800293, 4.927681922912598,
+    4.971609115600586, 5.016113758087158, 5.066455841064453, 5.116739273071289, 5.167466163635254, 5.221140384674072,
+    5.271355628967285, 5.3203511238098145, 5.369539737701416, 5.418510437011719, 5.467812538146973, 5.516885757446289,
+    5.567314624786377, 5.618076324462891, 5.666805744171143, 5.716770648956299, 5.767738342285156, 5.818354606628418,
+    5.867271900177002, 5.918342113494873, 5.967508316040039, 6.016329288482666, 6.066822052001953, 6.118103504180908,
+    6.168389797210693, 6.218345642089844, 6.268311977386475, 6.319019317626953, 6.369125843048096, 6.418428421020508,
+    6.467743873596191, 6.518027305603027, 6.567537307739258, 6.617196083068848, 6.666171073913574, 6.716851711273193,
+    6.767099380493164, 6.816837787628174, 6.867069721221924, 6.9175286293029785, 6.967564105987549, 7.015463352203369,
+    7.065576076507568, 7.11563777923584, 7.166322708129883, 7.216256618499756, 7.266816139221191, 7.3170013427734375,
+    7.3677778244018555, 7.417510509490967, 7.4671173095703125, 7.517815589904785, 7.568087100982666, 7.617554187774658,
+    7.6669793128967285, 7.715959072113037, 7.766194820404053, 7.817361354827881, 7.866764545440674, 7.916024208068848,
+    7.965620517730713, 8.015088081359863, 8.066892623901367, 8.116791725158691, 8.166661262512207, 8.216643333435059,
+    8.268428802490234, 8.318990707397461, 8.369049072265625, 8.418645858764648, 8.468558311462402, 8.518442153930664,
+    8.567523002624512, 8.616670608520508, 8.667450904846191, 8.716758728027344, 8.766847610473633, 8.816237449645996,
+    8.865255355834961, 8.915350914001465, 8.965137481689453, 9.011582374572754, 9.100985527038574, 9.189300537109375,
+    9.278736114501953, 9.370930671691895, 9.450758934020996
+  ],
+  "frames": [180, 181, 182, 183, 184, 185],
+  "mdls": {
+    "models/mo_ovr.mdl": "H4sIAAAAAAAC/+3YX2hbVRwH8F+yrosx9g+GtcPSRSbSomx3u1WG9J6ThEqLpNjW4hSCrLO9drZbsrXT0SkEMTLGMEOKLEFGtWUUkTBUNIiOLhXdQy/oU3zwYXkRoRODLrUMTfzdexc7x1y/ah72sAOnNzn3c37fk3MvoTe9XaGnFWWXSvUUcziIyOwHhiZHDu8fGp/YMbbvQGR4ZHzHy6P7J0e2vzgROUh2m7lgd7OdDPLrgPnKLBJz/nU+QH9rMWn369/f2G42ZtULVKde5b1V70J16pn9+v34v5/XHCsEqrt/a9eoOvtn1avi/hUC1dy/Zuu4gcxb0cm3dA1tolr+W0sbr5nertBTiqJ00Kcb7Ht+n2Idytz8N68c+3dXcK1xXV9grf+3IpUxR2X5AV7+o+Rrspf/br0NIi8dpvFIJEpm1vDaAqzWUUe3aJXtvnHb/8mQf33jB0wMMDOAWQDMJcBQYH3TABgfYBTA+AHTB5i9gIkCJgaY44A5BZjTgJkBzDxgzgEmA5gFwFwEzDeA+Q4wlwDzI2AKgFkFDAXXNzWAcQHGA5gGwHgB0wyYFsD4APMAYNoA8zBgFMB0AGY3YDoB4wdMF2B6ABMCTB9gBgHzDGDCgNkLmGHAjAJmHDBRwEwC5ihgXgFMDDCvAeZ1wLwBmOOAOQGYk4B5EzCnAPMWYKYB8zZgTgMmBZh3AHMGMDOAeQ8wc4A5C5h5wLwPmA8AkwbMOcB8CJiPAfMJYDKA+QwwnwPmPGAWAJMFzJeA+QowFwFjPkTaT5G+ID8w0/S1R0p3blunOzfbmcgW+bhNM5ZCWiJ7RGsPJzQe1y73Z3hsSUt353m8qGVaN4r2cL1IJbcI9uKYd7u43L9bhBNBwXOF5t4j0t1DYmt8THAdweki0xoXh7QTPC8h8lPTPDcpBjJneP6sWCzOc420UNWPuE5GzEW/4FpZ4U1/zfWWRHz5W66ZEytt33PdvND1H7j2ssjNFrh+UfTkr3IGyXDCKXlt0pveJA9pbmkseSSvU8aXG2V+yis1d5PkNcuVthY5kGmV6e77Ja9f6vqDcrHYJrfGH5L8WWRuVpGqqspE9hHJn0v25B+Tc1HN/K+FM4Kc8ThndHPGE5wR4ownOaOfMwY5Yw9nPMsZYc54jjOGOON5ztA5Y5QzxjjjIGdEOWOCM45wxlHOmOKMV6X964B9ZRbknX57dad1ZfjePX+n3179Vr+JUW9Xb5+iKDvpSpP5g6L5/ecyx/vs04MKKXzQa1XznIt+T5dTdxk14bJ6t37VXTY8em2mpNcZq3qJGsjlLSUb1d8W/3BUpu+0phseWjWImesYP47qK+2UbNTdubJ6r3ElXja85FHL+mb113yJmpP3JErOyvRd1nRmnpTD8L7wS49D36zXrfCzqFGYo+QWahgg9T71Z45oSTamy3pr6qdwmf4Etwk+i/UXAAA=",
+    "models/mo_mix.mdl": "H4sIAAAAAAAC/+3ab0gTYRwH8N9NW8uWThqiJLEXvegfeXoSvYi2k72Q2GCURC98oaJPWrNJSn+oFyMqJKQkJNyIGCYhESIRJRGlFeGLDnpXL+1db6JRYRK167m7rpn451vdi714fvDb7e4+99z23DG4L4uGI4dkuU6hMkpKEhEZ3d3a13GiqzXeW3OsrTvR3hGvOdXZ1dex62hv4jhZlZm22qiBBv5eNd4ZgyRdv/er9Eclg1YvXF9cS20zx1OdGc9eN8ebdmY8oxfOx/9+X2NbVnV2/vLXyJn5M8dzcP6yqpPzV2kui8i4FV38li6mteTmr25a88tEw5GDsizX08Mi655vk82Fziu09MjJv7uC+eLjBtR8/9sg9jbJ/vgq//i76eR2Mr/lSJkFztRSPJHoIeNU7fnzm1VfSiuUPduLZ305Q6HVTQgwScBkADMFmFnAkLq68QEmABgZMCHAxADTApgewCQB0w+YQcAMAyYDmDHATABmEjBTgJkBzGvAvAXMLGDeAyYLmHnAUMPqphgwHsB4AeMDjB8wlYCpBkwAMFsAsxUwOwEjA6YeMHsAsxcwIcCEAdMImAhgYoBpAsxhwDQDpgUw7YDpBEwcMD2A6QPMacCcA0wSMOcBcwEwlwDTD5jLgBkAzBXADALmGmCGAHMdMMOASQPmBmBuAiYDmBHAjALmNmDGAHMHMHcBMw6YCcDcA8x9wDwAzCRgHgHmMWCeAGYKMM8A8wIwLwEzAxjjIdJ6igw08OdlGuIr2qvIPtGF1ZJ5Zfg9FhRdWO0yrwxjLCi6sHqlTIxu2bFanYjVRKwmYjURq4lYTcRqIlYTsZqI1USsJmI1EauJWE3Eak7GaulUVVB0YbWI1Qo7VuP1VHTB9fIVDUdjsizX0v4dxt/0jN8/j7E9Zu1ukknmC+ZWjH0e+j6up9dpxc26sp59K9E1L3NP5lipNs9y5COPP5cqV74+/yHZh9eah2temteIM89Z/jjK5rZRqpyVvNGVjdqXi7rmJ6+iswrl87scVaY2XM257MPrzMM586YlzX/kU6PEKljpHH8W1bKjlKoi3wFSNikf+SmqU+XjOtuc/tCs00+FRNqMSysAAA==",
+    "models/mo_add.mdl": "H4sIAAAAAAAC/+3aT0gUcRQH8DerbZttutIiShJ76NA/cnQkOoTuyB4kdmEpiQ4eVHTSWltJqagOQ1RISElIOEvEEhYSIRJREiFaER4c6FZHu3WJlgqTqJ1+M+O0Jqbfag4b/B68nX+febP7m9mF32NjkehhUayRqIRUQSAiM7tb+zpOdrUmequOt3Un2zsSVac7u/o69hzrTZ4gO9LTdpox0MDWZXPNLKJ6fh6X6ZdQ6+1cur08Vtpn1ZPdqedsW/Wm3aln5tLx+NfPa+7LyO6OX+4euTN+Vj0Xxy8juzl+5daygMxH0cMe6UJaT1726qV1iyYWiR4SRbGWHhfYz3ybaC0MFuGVK6t/dgdzweqG5Fz+XRFnn+C8fZm9/b10aidZn3KkxAZnqymRTPaQean23PWtqC2mVcIZ7eWj/jtD4bVNGDAqYNKAmQLMHGBIXtsEABMCjAiYMGDigGkBTA9gVMD0A2YQMMOASQNmFDDjgJkAzBRgZgDzCjBvADMHmHeAyQBmATDUsLYpBIwPMH7ABAATBEw5YCoBEwLMNsBsB8xuwIiAqQXMPsDsB0wYMBHANAImCpg4YJoAcwQwzYBpAUw7YDoBkwBMD2D6AHMGMOcBowLmAmAuAuYyYPoBcwUwA4C5CphBwFwHzBBgbgBmGDApwNwEzC3ApAFzGzAjgLkLmFHA3APMfcCMAWYcMA8A8xAwjwAzAZgngHkKmEnATAHmGWBeAOYlYGYAY04i7VlkqIHNl2mIbeizs3U88yuFxTsTneSZX+mx7gyP/yzuOG21Gt5W42013lbjbTXeVuNtNd5W42013lbjbTXeVuNtNd5W4201N9tqKU2r45lfKTjNm3qe+ZWexe9MRT3P/MpV22qxSCwuimI1Hdhl/k3P/P3zmfvj9uEmkUS2ULySecxH38aM1Aa9sNmQNipfiwzdr3gnskqxvqBkKUC+YFYrlb48/y44p1dbp+t+WtCJMd85Nh1V5neQVqoUvTakzfrnS4YeJL9kKGXSp7dZKtc2Xct6nNNrrNMZ86cEPXj0Y6OglCnF82wuqmdGSKugwEGStkgf2CUqtdIxQ9maet9s0A/M8WMKSysAAA==",
+    "models/mo_add05.mdl": "H4sIAAAAAAAC/+3aT0gUcRQH8DerbZttutIiShJ76NA/cnQkOoTuyB4kdmEpiQ4eVHTSWltJqagOQ1RISElIOEvEEhYSIRJREiFaER4c6FZHu3WJlgqTqJ1+M+O0Jqbfag4b/B68nX+febP7m9mF32NjkehhUayRqIRUQSAiM7tb+zpOdrUmequOt3Un2zsSVac7u/o69hzrTZ4gO9LTdpox0MDWZXPNLKJ6fh6X6ZdQ6+1cur08Vtpn1ZPdqedsW/Wm3aln5tLx+NfPa+7LyO6OX+4euTN+Vj0Xxy8juzl+5daygMxH0cMe6UJaT1726qV1iyYWiR4SRbGWHhfYz3ybaC0MFuGVK6t/dgdzweqG5Fz+XRFnn+C8fZm9/b10aidZn3KkxAZnqymRTPaQean23PWtqC2mVcIZ7eWj/jtD4bVNGDAqYNKAmQLMHGBIXtsEABMCjAiYMGDigGkBTA9gVMD0A2YQMMOASQNmFDDjgJkAzBRgZgDzCjBvADMHmHeAyQBmATDUsLYpBIwPMH7ABAATBEw5YCoBEwLMNsBsB8xuwIiAqQXMPsDsB0wYMBHANAImCpg4YJoAcwQwzYBpAUw7YDoBkwBMD2D6AHMGMOcBowLmAmAuAuYyYPoBcwUwA4C5CphBwFwHzBBgbgBmGDApwNwEzC3ApAFzGzAjgLkLmFHA3APMfcCMAWYcMA8A8xAwjwAzAZgngHkKmEnATAHmGWBeAOYlYGYAY04i7VlkqIHNl2mIbeizs3U88yuFxTsTneSZX+mx7gyP/yzuOG21Gt5W42013lbjbTXeVuNtNd5W42013lbjbTXeVuNtNd5W4201N9tqKU2r45lfKTjNm3qe+ZWexe9MRT3P/MpV22qxSCwuimI1Hdhl/k3P/P3zmfvj9uEmkUS2ULySecxH38aM1Aa9sNmQNipfiwzdr3gnskqxvqBkKUC+YFYrlb48/y44p1dbp+t+WtCJMd85Nh1V5neQVqoUvTakzfrnS4YeJL9kKGXSp7dZKtc2Xct6nNNrrNMZ86cEPXj0Y6OglCnF82wuqmdGSKugwEGStkgf2CUqtdIxQ9maet9s0A/M8WMKSysAAA==",
+    "models/mo_addonly.mdl": "H4sIAAAAAAAC/+3aT0gUcRQH8DerbZttutIiShJ76NA/cnQkOoTuyB4kdmEpiQ4eVHTSWltJqagOQ1RISElIOEvEEhYSIRJREiFaER4c6FZHu3WJlgqTqJ1+M+O0Jqbfag4b/B68nX+febP7m9mF32NjkehhUayRqIRUQSAiM7tb+zpOdrUmequOt3Un2zsSVac7u/o69hzrTZ4gO9LTdpox0MDWZXPNLKJ6fh6X6ZdQ6+1cur08Vtpn1ZPdqedsW/Wm3aln5tLx+NfPa+7LyO6OX+4euTN+Vj0Xxy8juzl+5daygMxH0cMe6UJaT1726qV1iyYWiR4SRbGWHhfYz3ybaC0MFuGVK6t/dgdzweqG5Fz+XRFnn+C8fZm9/b10aidZn3KkxAZnqymRTPaQean23PWtqC2mVcIZ7eWj/jtD4bVNGDAqYNKAmQLMHGBIXtsEABMCjAiYMGDigGkBTA9gVMD0A2YQMMOASQNmFDDjgJkAzBRgZgDzCjBvADMHmHeAyQBmATDUsLYpBIwPMH7ABAATBEw5YCoBEwLMNsBsB8xuwIiAqQXMPsDsB0wYMBHANAImCpg4YJoAcwQwzYBpAUw7YDoBkwBMD2D6AHMGMOcBowLmAmAuAuYyYPoBcwUwA4C5CphBwFwHzBBgbgBmGDApwNwEzC3ApAFzGzAjgLkLmFHA3APMfcCMAWYcMA8A8xAwjwAzAZgngHkKmEnATAHmGWBeAOYlYGYAY04i7VlkqIHNl2mIbeizs3U88yuFxTsTneSZX+mx7gyP/yzuOG21Gt5W42013lbjbTXeVuNtNd5W42013lbjbTXeVuNtNd5W4201N9tqKU2r45lfKTjNm3qe+ZWexe9MRT3P/MpV22qxSCwuimI1Hdhl/k3P/P3zmfvj9uEmkUS2ULySecxH38aM1Aa9sNmQNipfiwzdr3gnskqxvqBkKUC+YFYrlb48/y44p1dbp+t+WtCJMd85Nh1V5neQVqoUvTakzfrnS4YeJL9kKGXSp7dZKtc2Xct6nNNrrNMZ86cEPXj0Y6OglCnF82wuqmdGSKugwEGStkgf2CUqtdIxQ9maet9s0A/M8WMKSysAAA==",
+    "models/mo_nrm.mdl": "H4sIAAAAAAAC/+3Yb2gbZRwH8F+y/jPGpcGwtVjaykRalO22qzKk9zxNqbRIi20tTiHIOtuzs92arZ2OTiGIkTGGV6TIEmRUW6SIHENFg+joWtG96IG+ii98sbwRIROLtbUd2vh7kmWdY65fNS/2Yg88veSXz/2+T+6OkruOlvanNW2PTj6KuFxEpOah3tH+owd7h0Z2DR44NNzXP7Tr5YGDo/07XxwZPkxUxIImL+SmGqeb+XVQvVJNIu5rnwfpbyMic/P69zeOm9Wy/YKF6Zd/n+13oTD91Lz+ePzf76tqi8HCHr+Nc1SY45ftV8Djtxgs5PGryG63kLoU3XxJF1EplfDfEiq+ajpa2p/SNK2BPtuSu+YPaNlNhkfTzTtH/t0Z3Bjctza4Mf9bk3zNlV9+kJf/KNVuzy3/XV8ODL90lIaGh8Oksvo2FpAdDVvpFiN/uG887P9kqGlz0wSYCGAmATMLmEuAoeDmphwwtYDRANMEmE7A7AdMGDARwJwEzDhgzgBmEjAzgDkHmARgZgFzETDfAuZ7wFwCzE+AWQTMKmCoeXNTBJgywHgBUw6YAGAqAFMFmFrAPACYOsA8DBgNMA2A2QuYRsA0AaYFMG2AaQdMJ2B6APMMYEKA2Q+YPsAMAGYIMGHAjALmOGBeAUwEMK8B5nXAvAGYk4A5BZjTgHkTMOOAeQswE4B5GzBnABMHzDuAOQuYScC8B5hpwLwPmBnAfACYDwFjA+YcYD4CzCeA+RQwCcB8DpgvAHMeMLOAmQPMV4D5GjAXAaNuInN3kbXNfMNME1dvKT3JHY2e5FSjNbfM2x2Gs9BuWHPHjPqQZXDduNyV4NqCYbemuL5sJKqLRX3IJ+KxSsFenAjsFJe79oqQ1Sx4X2F49gm7tVfURAcF9xGcLhLVUXHEOMX7WSI1NsH7xkR34izvPyXml2e4hy10/WPukxDT4S+515wI2N9wvwURTX/HPZNipe4H7psSpvkj906L5NQi918WbakrnEEyZLklr00G7FJ5xPBIZ8EreZ0ymvbL1FhAGp7tktcsV+qqZHeiWtqt90tevzTNB+X8cp2siT4k+bvI5JQmdV2X1twjkr+XbEs9JqfDhvrVwhnNnPE4Z7RyxhOc0c4ZT3JGF2f0cMY+zniWM0Kc8Rxn9HLG85xhcsYAZwxyxmHOCHPGCGcc44zjnDHGGa/K3NOB3JmZlXfm7TXd2TPD1+75O/P2mrd6JkYdLR2dmqbtpvEK9UBR/f8rU/XO3Mc9Gmm8MUt09VkZ/WFn4nc5RaGMfrd5xZNxvGZJYt3c6qya61ROZYH1mF//ff5P7Vp/x0tkuWOVRDXZR5N2qaoYHlVRr/gnv09t035XPnJ3NpKLqw5x67ITfAtrrtRTzG96khn9Xue3aMYJkFfPmNv0pdQ6VcTusdZz+8TXiGKV8TXLzdfiWk2xqtilqmJ4VMXxqkrIpyppvzsfuScbya29cZcTeOHXNpe5zdy6wve8zuI0N6TybtLv03/hiKqY386Y1fGfQxm1T6xSX1It9CXL7Xj1pZpiVbFLVcXwqIrjVZWQT1XSfvoL2rKvbpEYAAA=",
+    "models/mo_two.mdl": "H4sIAAAAAAAC/+3Zb0gTcRgH8OfOqcuWThoy0UwpQi3y9CR6EbnbBvlCY5REL3yhopfWbJIDgwpGZEhISUi4ETFiiESIRIREhPYPX3jQO3tp73oTjcw/Se26P81NMf1W92Iv9sCz2373ued++z2302mju+EMx9XwlEcBhiEiVsnuVn/Hpa5Wb2/VhbZuX3uHt6qvs8vfcfh8r+8i6RGe1lONQafyXFCfqUUC7Np+gdZFoE7P5NcbY7MxrZ5gTL34a63etDH11Exej/99v+pYVDB2/RI9Mmb9tHoGrl9UMHL97No2Q7uYWWLIRNmUpTxmUeZvA1zirCsxpUpX8iXuYNb2G9iiSpexLap0Gdsi1mVkiywbWqRHo7vhNMdxtXRSaZQ62MZpG1kJx+bVAn/3wUqEUrdUSOS/FYmPMfHpC8r0j9BikT790Twd+Pt85PX5ekg9V3tiAlrU5tIWEV/ijUv9J0OO7Y0DMAHAhAEzBZh5wJCwvbECphQwHGAcgPEApgUwPYAJAGYAMEOAGQFMGDBjgJkAzCRgpgAzA5j3gPkAmHnAfAJMFDArgCHn9sYEGDNgLICxAsYGGDtgigFTCpj9gCkHzCHAcICpBcxRwBwDjAMwbsDUA6YBMB7ANAHmLGCaAdMCmHbAdALGC5gewPgBcxkwVwETAMx1wNwAzE3ADADmFmAGAXMbMEOAuQuYYcDcA8wIYEKAuQ+YB4AJA+YhYCKAGQXMGGAeAeYxYMYBMwGYJ4B5CphngJkEzHPAvADMS8BMAeYVYN4A5h1gZgCjfonUv0WWOjOUx2GG0pGCwWid4Xm+Lp2plazWGWl29ng6Uyv1W9mMwCbua3XpTK3U72uiKNalM7Vyyx9Hje5GD8dx1VS2R/0TvPrbg1kd9+i7mzjilI2Yxav7zPRjXA7tkEzNMr9TXM2RJYuYNRkTc6UVMUZWMttiwXx++fVPJn54tXa4ZKEViRRmvkJkFZcqKJgv5szJ/G7pW78s2cjCy2IBv/AxRvbgrjsxNn54jXa4wiwhRrKd+1rPiAVi7hKRXYpGKFhI1lPEF/FflFMUB/PHZbEk9LlZZrWbhWn921D/DxQs3JtJVFEc+n5NniwZz16NnSjLWe6LJU1XZXP7+AXlTAdsuW9psTwSdVL/wYj1pUy/ANsqDYkiHQAA",
+    "models/mo_sort.mdl": "H4sIAAAAAAAC/+3ZUWhSURgH8O86V2biLIQmjDKKaBDtLCV6qLz3IrQHBaERPQzaxpStXIoKC1ZwiYgRESNGTImQkBoRMiJCIoaLivswqbf1uMceB0GtEbvpvTOdufmvGfjggY/jOffHd4734zwc9bo9Fxg74aA2kjiOiHT5GB2I+SMjA8Fo15XB0dCQP9g1NjwS81+KRY5fjoauktaS81qonwUtSM3Dc7+fC7ShSS4tyseVrdrcxjW2l684VvPN1ydfIcrfx3a/r+QyqX2LWg8dcevzm1SmvCxhsbQNWfyzLGGxvmWRxfqWRRbrW5aw+P/L4nV7zjPGnNSqJ3VykKmdkm989WzS36xaPsrntQul+LckxTmuuH0hv/2TtNembf9pmwaikRgFQ6EwFdYaKm1AbU4zbdGKr7jyVW9miK9teMBIgEkCJguYJcCQUNtYAGMHDAMMDxgfYPoBEwaMBJgJwEwCZhowScDMAGYWMBnAZAEjA+YTYD4DZgkwXwCzDJgVwJBY2+gBYwCMCTAWwFgB0w6YDsDYAXMYMEcBcwwwDDBOwJwCzGnA8IBxA6YHMB7A+ADTC5iLgOkDTD9ghgAzDJggYMKAiQHmGmCuA0YCzE3A3ALMbcBMAOYOYO4C5h5gJgFzHzBTgHkAmGnAJADzEDCPAJMEzGPApADzBDAzgHkGmOeASQNmFjAvAPMSMK8AkwHMa8C8AcwcYLKAeQuYd4D5ABgZMIVLpHaLtIuFi/SUOpDONqOxgluvDO9qRmOFdnpkoXh6EnGbqxmNFdrpyS0snGlGY8VWv1uS1+31Mca66aNN+zfELuoL8z7tcS+j9nwX2OFoyXcG+plWErty+j7FsTuwalS4IutWWc5EKzkKmHOGcSJL4FsnxfcEjIuKTj29VfKOWw+0Ehn3JX7cUOK29M7Vtc4O4/extYq8mf2Orz3cuYNW83taPJRaFilwJGWZU+gX87NALdAZAAA=",
+    "models/mo_many.mdl": "H4sIAAAAAAAC/+3acWgbVRwH8N9dLsklzbqqYVSskrHNLWys171YO82tyQyuYqodK9M/8sc62pfNtWtnKyr1jyAiQ8QOGbI7RIqWUUTCEJEiIl0no8gdTFDqEHFFwf0xxhAsQ4SYvMt13ZjrV+cf98c9+Obl7j68u/d+cNyFdOfy+zVtB6O1VJIkIqplqG9s4MXDfYOjrUcODg33Dwy2vnzo8NjA9hdGh4+S0ybPOhHfs05IDJKRlo9n6aZW6nSycvvWdrt9N5/j7sZzt8V4Z/+f8WpZuR53O99SZ0z0AZKrn7IoSa115/L7NE1L0RHZqdNBTXSVasvcfrTSvznryq3quInsjfy3Qdx9knv52erlt9PFTc7lT691wFDf0VdpcHh4hGon679xBaKlGukOzV3jW9f6nwxlVjcZwJQAMwmYWcBcAgxlVzdNgEkARgNMBjA9gDkAmBHAlABzHDAnAHMKMJOAmQbMGcDMAGYWMPOAuQCYHwBzCTCXAXMNMNcBQ7tXNwpgVMDEANMEmDhgmgHTApgEYDYCZgtgtgFGA0wKMB2ASQMmA5gcYLoAkwdMD2B6AfM8YAqAOQCYfsAcAswgYEYAMwaYVwDzGmBKgHkdMG8A5k3AHAfMW4B5GzDvAOYEYN4FzEnAvAeYU4AxAfM+YD4AzCRgPgTMFGBOA2YaMB8D5hPAlAFzBjCfAuYzwHwOmBnAfAGYLwHzFWBmATMHmK8Bcx4w84CpvUQ6b5GJ3WuqnyerG9GFDWk/3opUr8xHaT/eiiwqMzH3R9qPtxJw72a6H29FEZWxrbzux1sJ1u9mL+l+vJWQqEyyMKH78VbC7rOZ7sdbUUVlruyd0f14K5H6E4Cl+/FWoqIy5T2Luh9vpUFUhnPe6cdbiYnKMDba6cdbudP/Yqg7192jaVobXd1MtEb8BqrU9vc4h3s1aq52PMQC1U6lv8oVM2IrhQpr4H9GK5LL2gSzY3TdJt5oq+NETXwpScY9PLpQkV22QzB2nx0zJTte/L1L4ut44xJRs31tigIuY4IZ9xevcpk9wO+Ny3aLfeWcxB+i+DFJcVlKMErwdSxgrLcvL8psAzVPyPZG9psuB132iDOFh+1fSaEt1FIOGEn2SyHAthoPRgMhl7ULZm2jhK3w7ezncYU0Y31SMdrMnxYCYZc96kyBsR/NoJUyNnUFebt5cUmhDrZ5SlFd1uFMYaeRrK7d4+b38ZCVZlvPBfku+u5YMOKync4UMua3LGxkWetiiD1BFyZCVs7S9FB0eXnrZXiSMVIre8gqh42nrFQhzJ4ufhMNNyw7pw5WnuZtlT9jdYyrlWeL55OqsZc/thCOLbt6IfZZaTNi9RbnuiJ8P9+1pFaes2enVPob20Bg3u8nAAA=",
+    "models/mo_eps.mdl": "H4sIAAAAAAAC/+3YT0iTYRzA8d87R5iNaWTiocMOHYoiH92IDtE22cHDBoMkOnhQcW+as40cGNThJSIkIiQkdESMkLAIkYiQiJgR4aEXOgR19NhROoiEsN4/TKeYfssOO+wHv/fZ+zwffu+z54EXnjcRi19SqiMojWJomojYOdKXS10f6kuPtg33j2QGUum2scGhXOrM1dHMNXGjsOim8zvqpjhFItrGeFS2hBF2s/J+e+zUt/UZ+6tXvnfqLf6fenZWrsd+/68R9jltnXisq8fZEjsSsfhFpVRIhj3uPvUrpylZEdm5mvE3T628s+oGopv5b0XKfVp5+lFr+mfl61F3+s8bXZDKjko6k8mK/ayBzQk4EfLLLlFe4u1L/Scjkb1NBBgDmAIwRWCWgZHo3qYJmAAwCpgIMElgeoHJAmMAMw7MBDBTwBSAmQVmHpgFYIrALAHzBZjvwCwD8wOYFWDWgJHOvY0XmHpgfMA0AdMMTCswx4AJAHMcmBPAnAZGARMC5hww54GJABMDpguYODBJYLqBuQxMDzC9wAwAMwhMGpgsMDlgbgBzCxgDmNvA3AHmLjDjwNwD5j4wD4CZAOYhMJPAPAJmCpg8MI+BeQJMAZinwMwA8wyYWWBeAPMSmDlg5oF5BcxrYN4AswDMW2DeAfMemCIwH4D5CMwnYJaAsQ+R7iky0FlnXSe1DRautdXTas7OjH0+1VHL6kqPszP56ekLtayu3O2bmCRiiaRSql16W+yPiPb7z2v3J93hbiWtVqMfCNpj9bI+V8ofNL09peAh/VdDSSuzdoeZPlkzRfeb9TetY6e+elKmD+sN30qeMutwWPCI6ctrZvOVn12a3qL7V62zpbkyI/Ibs83Of2EWAAA="
+  },
+  "objects": [
+    {
+      "name": "mo_ovr",
+      "object": 2,
+      "path": "models/mo_ovr.mdl",
+      "layers": [
+        { "id": 2000, "animation": 4001, "name": "ovr", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [200.0, 800.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.49999988, 0.901158273, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.910098672, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.918930173, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.927873611, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.937093019, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.94507587, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ]
+      },
+      "texels": [
+        1638, 819, 0, 2048, -1024, -82, 2458, 1229, -164, 2867, -1434, -246, 3277, 1638, -328, 3686, -1843, -410, 4096,
+        2048, -492, 4505, -2253, -573, 3277, -2048, 205, 3686, 2253, 123, 4096, -2458, 41, 4505, 2662, -41, 4915, -2867,
+        -123, 5325, 3072, -205, 5734, -3277, -287, 6144, 3481, -369, 4915, 3277, 410, 5325, -3481, 328, 5734, 3686, 246,
+        6144, -3891, 164, 6553, 4096, 82, 6963, -4301, 0, 7373, 4505, -82, 7782, -4710, -164, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+      ]
+    },
+    {
+      "name": "mo_mix",
+      "object": 3,
+      "path": "models/mo_mix.mdl",
+      "layers": [
+        { "id": 2001, "animation": 4002, "name": "y1", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true },
+        { "id": 2002, "animation": 4003, "name": "y2", "additive": false, "blend": 0.5, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [500.0, 800.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.0, 0.400000006, 0.199999988, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.0, 0.400000006, 0.199999988, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.0, 0.400000006, 0.199999988, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.0, 0.400000006, 0.199999988, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.0, 0.400000006, 0.199999988, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.0, 0.400000006, 0.199999988, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mo_add",
+      "object": 4,
+      "path": "models/mo_add.mdl",
+      "layers": [
+        { "id": 2003, "animation": 4004, "name": "z1", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true },
+        { "id": 2004, "animation": 4005, "name": "z2", "additive": true, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [800.0, 800.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 180.231659, 0.0, 0.0],
+            "offsets": [3, 16, 0, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.600000024, 0.400000006, 0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 182.01973, 0.0, 0.0],
+            "offsets": [3, 16, 0, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.600000024, 0.400000006, 0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 183.786026, 0.0, 0.0],
+            "offsets": [3, 16, 0, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.600000024, 0.400000006, 0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 185.574707, 0.0, 0.0],
+            "offsets": [3, 16, 0, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.600000024, 0.400000006, 0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 187.41861, 0.0, 0.0],
+            "offsets": [3, 16, 0, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.600000024, 0.400000006, 0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 189.015167, 0.0, 0.0],
+            "offsets": [3, 16, 0, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.600000024, 0.400000006, 0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mo_add05",
+      "object": 5,
+      "path": "models/mo_add05.mdl",
+      "layers": [
+        { "id": 2005, "animation": 4004, "name": "z1", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true },
+        { "id": 2006, "animation": 4005, "name": "z2", "additive": true, "blend": 0.5, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [1100.0, 800.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 135.173737, 0.0, 0.0],
+            "offsets": [3, 0, 16, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.400000006, 0.300000012, 0.049999997, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 136.514801, 0.0, 0.0],
+            "offsets": [3, 0, 16, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.400000006, 0.300000012, 0.049999997, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 137.839523, 0.0, 0.0],
+            "offsets": [3, 0, 16, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.400000006, 0.300000012, 0.049999997, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 139.18103, 0.0, 0.0],
+            "offsets": [3, 0, 16, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.400000006, 0.300000012, 0.049999997, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 140.563965, 0.0, 0.0],
+            "offsets": [3, 0, 16, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.400000006, 0.300000012, 0.049999997, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 141.761383, 0.0, 0.0],
+            "offsets": [3, 0, 16, 8, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.400000006, 0.300000012, 0.049999997, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mo_addonly",
+      "object": 6,
+      "path": "models/mo_addonly.mdl",
+      "layers": [
+        { "id": 2007, "animation": 4005, "name": "z2", "additive": true, "blend": 0.5, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [1400.0, 800.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 45.0579147, 0.0, 0.0],
+            "offsets": [3, 16, 8, 0, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.25, 0.150000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 45.5049324, 0.0, 0.0],
+            "offsets": [3, 16, 8, 0, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.25, 0.150000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 45.9465065, 0.0, 0.0],
+            "offsets": [3, 16, 8, 0, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.25, 0.150000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 46.3936768, 0.0, 0.0],
+            "offsets": [3, 16, 8, 0, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.25, 0.150000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 46.8546524, 0.0, 0.0],
+            "offsets": [3, 16, 8, 0, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.25, 0.150000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 47.2537918, 0.0, 0.0],
+            "offsets": [3, 16, 8, 0, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.25, 0.150000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mo_nrm",
+      "object": 7,
+      "path": "models/mo_nrm.mdl",
+      "layers": [
+        { "id": 2008, "animation": 4001, "name": "ovr", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [1700.0, 800.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.49999988, 0.901158273, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [6.0, 6.0, 6.0, 6.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.910098672, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [6.0, 6.0, 6.0, 6.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.918930173, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [6.0, 6.0, 6.0, 6.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.927873611, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [6.0, 6.0, 6.0, 6.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.937093019, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [6.0, 6.0, 6.0, 6.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [3, 8, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 1.5, 0.94507587, -0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [6.0, 6.0, 6.0, 6.0]
+          }
+        ]
+      },
+      "texels": [
+        1638, 819, 0, 0, 0, 0, 2048, -1024, -82, 3277, 0, 655, 2458, 1229, -164, 6553, 0, 1311, 2867, -1434, -246, 0, 0,
+        1966, 3277, 1638, -328, 3277, 0, 2621, 3686, -1843, -410, 6553, 0, 3277, 4096, 2048, -492, 0, 0, 3932, 4505,
+        -2253, -573, 3277, 0, 4587, 3277, -2048, 205, 3277, -1638, 0, 3686, 2253, 123, 6553, -1638, 655, 4096, -2458,
+        41, 0, -1638, 1311, 4505, 2662, -41, 3277, -1638, 1966, 4915, -2867, -123, 6553, -1638, 2621, 5325, 3072, -205,
+        0, -1638, 3277, 5734, -3277, -287, 3277, -1638, 3932, 6144, 3481, -369, 6553, -1638, 4587, 4915, 3277, 410,
+        6553, -3277, 0, 5325, -3481, 328, 0, -3277, 655, 5734, 3686, 246, 3277, -3277, 1311, 6144, -3891, 164, 6553,
+        -3277, 1966, 6553, 4096, 82, 0, -3277, 2621, 6963, -4301, 0, 3277, -3277, 3277, 7373, 4505, -82, 6553, -3277,
+        3932, 7782, -4710, -164, 0, -3277, 4587
+      ]
+    },
+    {
+      "name": "mo_two",
+      "object": 8,
+      "path": "models/mo_two.mdl",
+      "layers": [
+        { "id": 2009, "animation": 4006, "name": "two", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [200.0, 450.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [2, 4, 8, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.699999928, 0.400000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.899999976, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [2, 4, 8, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.699999988, 0.400000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.899999976, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [2, 4, 8, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.700000048, 0.400000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.899999976, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [2, 4, 8, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.699999988, 0.400000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.899999976, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [2, 4, 8, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.699999988, 0.400000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.899999976, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [2, 4, 8, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.699999988, 0.400000006, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [5.0, 5.0, 5.0, 5.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.899999976, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mo_sort",
+      "object": 9,
+      "path": "models/mo_sort.mdl",
+      "layers": [
+        { "id": 2010, "animation": 4007, "name": "srt", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [600.0, 450.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.74999994, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [2, 0, 4, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.600000024, 0.100000001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.75, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [2, 0, 4, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.600000024, 0.100000001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.75, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [2, 0, 4, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.600000024, 0.100000001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.75, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [2, 0, 4, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.600000024, 0.100000001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.75, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [2, 0, 4, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.600000024, 0.100000001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [2, 4, 0, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.75, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          },
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [2, 0, 4, 16, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [25.0, 0.600000024, 0.100000001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mo_many",
+      "object": 10,
+      "path": "models/mo_many.mdl",
+      "layers": [
+        { "id": 2011, "animation": 4008, "name": "many", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [1000.0, 450.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [11, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [
+              40.0, 0.109999999, 0.100000001, 0.0900000036, 0.0799999982, 0.0699999928, 0.0599999987, 0.0500000007,
+              0.0399999991, 0.0299999993, 0.0199999996, 0.00999999978
+            ],
+            "res": [7.0, 7.0, 7.0, 7.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [11, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [
+              40.0, 0.109999999, 0.100000001, 0.090000011, 0.0799999982, 0.0700000077, 0.0599999987, 0.0500000007,
+              0.0399999991, 0.0299999993, 0.0199999996, 0.00999999978
+            ],
+            "res": [7.0, 7.0, 7.0, 7.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [11, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [
+              40.0, 0.109999999, 0.100000001, 0.0900000036, 0.0799999982, 0.0700000003, 0.0599999949, 0.0500000007,
+              0.0399999991, 0.0299999975, 0.0199999996, 0.00999999978
+            ],
+            "res": [7.0, 7.0, 7.0, 7.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [11, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [
+              40.0, 0.109999999, 0.100000001, 0.0900000036, 0.0799999982, 0.0700000003, 0.0600000024, 0.0500000007,
+              0.0399999991, 0.0300000012, 0.0199999996, 0.00999999978
+            ],
+            "res": [7.0, 7.0, 7.0, 7.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [11, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [
+              40.0, 0.109999999, 0.100000001, 0.0900000036, 0.0799999982, 0.0700000003, 0.0599999987, 0.0500000007,
+              0.0399999991, 0.0299999993, 0.0199999996, 0.00999999978
+            ],
+            "res": [7.0, 7.0, 7.0, 7.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [11, 40, 36, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [
+              40.0, 0.109999999, 0.100000001, 0.0900000036, 0.0799999982, 0.0700000003, 0.0599999987, 0.0500000007,
+              0.0399999991, 0.0299999993, 0.0199999996, 0.00999999978
+            ],
+            "res": [7.0, 7.0, 7.0, 7.0]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mo_eps",
+      "object": 11,
+      "path": "models/mo_eps.mdl",
+      "layers": [
+        { "id": 2012, "animation": 4009, "name": "eps", "additive": false, "blend": 1.0, "rate": 1.0, "visible": true }
+      ],
+      "bones": 1,
+      "origin": [1400.0, 450.0],
+      "draws": {
+        "180": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 90.1158295, 0.0, 0.0],
+            "offsets": [2, 8, 0, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.0579159707, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "181": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.0098648, 0.0, 0.0],
+            "offsets": [2, 0, 8, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.495068282, 0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "182": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 91.893013, 0.0, 0.0],
+            "offsets": [2, 8, 0, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.0534932315, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "183": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 92.7873535, 0.0, 0.0],
+            "offsets": [2, 0, 8, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.393679887, 0.300000012, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "184": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 93.7093048, 0.0, 0.0],
+            "offsets": [2, 8, 0, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.145347327, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ],
+        "185": [
+          {
+            "bones": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 94.5075836, 0.0, 0.0],
+            "offsets": [2, 8, 0, 32, 28, 24, 20, 16, 12, 8, 4, 0],
+            "weights": [40.0, 0.300000012, 0.253793955, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "res": [3.0, 3.0, 3.0, 3.0]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -156,6 +156,8 @@ describe("compileScene：模型对象进 layer.model（P5c 步骤 1 点 3）", (
     expect(layer.passes).toEqual([]);
     expect(layer.perspective).toBe(false);
     expect(layer.model).toMatchObject({ path: "models/a.mdl", version: 23, order: [0], bounds: [-1, -1, 0, 1, 1, 0] });
+    // 没有骨骼的模型不写 skeleton 键（P12b2-1）
+    expect(layer.model).not.toHaveProperty("skeleton");
     const mesh = layer.model!.meshes[0];
     expect(mesh).toMatchObject({
       format: 0x9,
@@ -175,7 +177,7 @@ describe("compileScene：模型对象进 layer.model（P5c 步骤 1 点 3）", (
     expect(mixed.layers[1].model).not.toBeNull();
   });
 
-  it("快速路径：静态网格照常编完；mdl 带骨骼段时确定退回，网格不再编、后面的对象不再编", async () => {
+  it("快速路径：静态网格照常编完；mdl 带格式错误的骨骼段时确定退回，网格不再编、后面的对象不再编", async () => {
     const statics = await compileModels([modelObject(1), modelObject(2)], {}, { exhaustive: false });
     expect(statics.unsupported).toEqual([]);
     expect(statics.layers.map((layer) => layer.model?.meshes.length)).toEqual([1, 1]);
@@ -184,7 +186,7 @@ describe("compileScene：模型对象进 layer.model（P5c 步骤 1 点 3）", (
       { "models/a.mdl": mdl([{ materials: ["materials/a.json"] }], { sections: ["MDLS0004"] }) },
       { exhaustive: false },
     );
-    expect(skeleton.unsupported).toEqual(["mdl:skeleton"]);
+    expect(skeleton.unsupported).toEqual(["mdl:section:MDLS0004"]);
     expect(skeleton.layers).toHaveLength(1);
     expect(skeleton.layers[0].model?.meshes).toEqual([]);
   });
@@ -501,12 +503,13 @@ describe("checkMdlFeatures：mdl 的细分键", () => {
     expect(keys(mdl(quad({ flags: 3 })))).toEqual([]);
   });
 
-  it("段：MDLS* / MDLE0002 骨骼，MDLA* 动画，MDMP0001 变形，MDAT0001 挂点（按 WPE 的比较长度）", () => {
-    expect(keys(mdl(quad(), { sections: ["MDLS0004"] }))).toEqual(["mdl:skeleton"]);
-    expect(keys(mdl(quad(), { sections: ["MDLS0001", "MDLA0006"] }))).toEqual(["mdl:animation", "mdl:skeleton"]);
-    expect(keys(mdl(quad(), { sections: ["MDMP0001"] }))).toEqual(["mdl:morph"]);
-    expect(keys(mdl(quad(), { sections: ["MDAT0001"] }))).toEqual(["mdl:attachment"]);
-    expect(keys(mdl(quad(), { sections: ["MDLE0002"] }))).toEqual(["mdl:skeleton"]);
+  it("段：MDLS* / MDLA* / MDMP0001 / MDAT0001 读不到段末报 mdl:section:<标签>（按 WPE 的比较长度）；段本身与 MDLE0002 中性（P12b2-1）", () => {
+    expect(keys(mdl(quad(), { sections: ["MDLS0004"] }))).toEqual(["mdl:section:MDLS0004"]);
+    expect(keys(mdl(quad(), { sections: ["MDLA0006"] }))).toEqual(["mdl:section:MDLA0006"]);
+    expect(keys(mdl(quad(), { sections: ["MDMP0001"] }))).toEqual(["mdl:section:MDMP0001"]);
+    expect(keys(mdl(quad(), { sections: ["MDAT0001"] }))).toEqual(["mdl:section:MDAT0001"]);
+    // MDLE 模型不读（rea-texchan-model 7.3）
+    expect(keys(mdl(quad(), { sections: ["MDLE0002"] }))).toEqual([]);
     // MDLE 全串比较、MDMP / MDAT 比较 8 个字符：别的版本号是不认识的段
     expect(keys(mdl(quad(), { sections: ["MDLE0001", "MDMP0002", "MDAT0002"] }))).toEqual([]);
   });
@@ -515,8 +518,10 @@ describe("checkMdlFeatures：mdl 的细分键", () => {
     const bytes = mdl(quad());
     expect(keys(bytes.subarray(0, bytes.length - 1))).toEqual(["mdl:truncated"]);
     expect(keys(mdl(quad({ records: 1 })))).toEqual(["mdl:puppet"]);
-    expect(keys(mdl(quad({ flags: 0x400 })))).toEqual(["mdl:flags:0x400"]);
+    // bit10（MORPHING_NORMALS）与 bit11（切线差，有变形目标时由 buildModelSkeleton 报 mdl:morph:tangent）自 P12b2-1 起不在这里报
+    expect(keys(mdl(quad({ flags: 0xc00 })))).toEqual([]);
     expect(keys(mdl(quad({ flags: 0x1005 })))).toEqual(["mdl:flags:0x1004"]);
+    expect(keys(mdl(quad({ flags: 0x1c05 })))).toEqual(["mdl:flags:0x1004"]);
     expect(keys(mdl(quad({ format: 0x4000009 })))).toEqual(["mdl:format:0x4000009"]);
     // a_Position 与 a_PositionVec4 都是 POSITION0；a_TexCoord 与 a_TexCoordVec4 都是 TEXCOORD0
     expect(keys(mdl(quad({ format: 0x10009 })))).toEqual(["mdl:format:0x10009"]);
@@ -525,14 +530,14 @@ describe("checkMdlFeatures：mdl 的细分键", () => {
 });
 
 describe("compileScene：模型的细分键（点 3、点 4）", () => {
-  it("骨骼段：mdl:skeleton；材质多于一个 pass：mdl:material-passes", async () => {
+  it("格式错误的骨骼段：mdl:section:<标签>；材质多于一个 pass：mdl:material-passes", async () => {
     expect(
       (
         await compileModels([modelObject(1)], {
           "models/a.mdl": mdl([{ materials: ["materials/a.json"] }], { sections: ["MDLS0004"] }),
         })
       ).unsupported,
-    ).toEqual(["mdl:skeleton"]);
+    ).toEqual(["mdl:section:MDLS0004"]);
     const twoPasses = JSON.stringify({
       passes: [
         { shader: "s", blending: "translucent" },
@@ -617,7 +622,7 @@ describe("checkObjectFeatures：模型对象（点 4）", () => {
     ).toEqual([]);
   });
 
-  it("这几个键在图像层上照报（`reflected` 自 P13b2 起中性）；模型上 perspective 绑属性、animationlayers 照报（attachment 自 P12b1 起中性）", () => {
+  it("这几个键在图像层上照报（`reflected` 自 P13b2 起中性）；模型上 perspective 绑属性照报（attachment 自 P12b1、animationlayers 与 rootmotion 自 P12b2-1 起中性）", () => {
     expect(
       keys({ id: 1, image: "models/i.json", castshadow: true, reflected: true, skin: 1, disablepropagation: true }),
     ).toEqual(["object:castshadow", "object:skin"]);
@@ -625,9 +630,7 @@ describe("checkObjectFeatures：模型对象（点 4）", () => {
       "object:perspective",
     ]);
     expect(keys({ id: 1, model: "models/a.mdl", attachment: "head" })).toEqual([]);
-    expect(keys({ id: 1, model: "models/a.mdl", animationlayers: [{ animation: 1 }] })).toEqual([
-      "object:animationlayers",
-    ]);
+    expect(keys({ id: 1, model: "models/a.mdl", animationlayers: [{ animation: 1 }], rootmotion: true })).toEqual([]);
   });
 
   it("模型对象可见且 disablepropagation 为真时报 cursor:model（P6c 不做模型命中，它会挡住下面的对象）；隐藏的不报", () => {

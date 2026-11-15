@@ -71,6 +71,13 @@ export interface PuppetAnimation {
   alphaMask: Uint8Array;
   /** 变形权重轨道（P12b1）：每个目标一条（`length + 1` 个 f32），这条动画没给的目标为 null；没有 `ScenePuppet.morph` 或这条动画没有变形轨道时为 null。 */
   morph: (Float32Array | null)[] | null;
+  /**
+   * 模型对象的变形权重轨道，按 mdl 网格下标（P12b2-1，`ModelSkeleton`）：`meshMorph[m][t]` 是网格 m 目标 t 的一条（`length + 1` 个 f32），这条动画没给的
+   * 目标为 null；网格没有变形目标或这条动画没有该网格的条目时 `meshMorph[m]` 为 null。图像层 puppet 不填。
+   */
+  meshMorph?: ((Float32Array | null)[] | null)[];
+  /** 模型对象的动画包围盒（MDLA v5，min xyz、max xyz，模型空间；v < 5 全 0）；剔除盒用（`ScenePuppets.bounds`）。图像层 puppet 不填。 */
+  bounds?: number[];
 }
 
 /** `MDAT` 的一项（P12b1 步骤 1，rea-p12-mdl 5.1）：名字、骨骼下标、矩阵（16 个 f32，同 `Mat4` 的列主序布局，和 `ScenePuppets.pose` 一致）。 */
@@ -102,6 +109,35 @@ export interface PuppetClipping {
   segments: Uint16Array[];
   /** 每条记录的遮罩纹理路径 `materials/<记录名>.tex`（在 `scene.pkg` 里）。 */
   records: { mask: string }[];
+}
+
+/**
+ * 模型对象一个网格的变形（P12b2-1，rea-texchan-model 5「变形纹理」）：和图像层 puppet 的 `PuppetMorph` 是两套布局。
+ * 纹理是 `side × side` 个纹素、每纹素 4 个 i16，按「目标 → 顶点 → 位置 xyz（网格标志 bit10 时再接法线 xyz）」把 i16 分量流紧排（不按纹素对齐），
+ * 清 0 补齐；着色器按 `(顶点号 + g_MorphOffsets[1+k]) × (bit10 ? 6 : 3)` 取分量。
+ */
+export interface ModelMorph {
+  /** `MDMP` 的差值缩放（`g_MorphWeights[0]`，每网格自己的）。 */
+  scale: number;
+  /** 网格的顶点数（偏移 = 目标号 × 它；WPE 用最后一个变形网格的，决定 1 不照抄）。 */
+  vertices: number;
+  targets: number;
+  side: number;
+  /** `side × side × 4` 个 i16，`render/puppet.ts` 的 `morphTexelData` 转成 float32 上传。 */
+  texels: Int16Array;
+}
+
+/**
+ * 模型对象的骨骼（P12b2-1，`SceneModel.skeleton`）：字段与 `ScenePuppet` 同名同形，运行时 `ScenePuppets` 以 `"model"` 模式共用。和图像层的差别：
+ * 静止姿势只用 `MDLS` 局部矩阵（`skeleton.restMatrices` 就是局部矩阵，不读可选骨骼矩阵）；动画只留 TRS 与变形权重（没有透明度、纹理通道）；
+ * 变形按网格（`morphs[m]`，下标 = mdl 网格下标，没有目标的网格为 null）。
+ */
+export interface ModelSkeleton {
+  skeleton: NonNullable<ScenePuppet["skeleton"]>;
+  animations: PuppetAnimation[];
+  layers: PuppetLayerDef[];
+  attachments: PuppetAttachment[];
+  morphs: (ModelMorph | null)[];
 }
 
 export interface ScenePuppet {
@@ -284,6 +320,76 @@ function convertAnimation(
 }
 
 /**
+ * 动画层（`FUN_1401fcc20`，rea-RT 1.4；模型对象 `FUN_1402230c0` 与它逐条相同，rea-texchan-model 4）：只认数组里的对象；`animation` 不是数或在
+ * MDLA 里找不到就整层丢掉、不报。`used` 是用到的动画（`file.animations` 的下标，按首次出现排），`defs[i].animation` 指它的下标。字段挂 `{script}`
+ * 报 `puppet:layer-script`（P12c）。图像层与模型共用（P12b2-1 从 `buildPuppet` 抽出）。
+ */
+function layerDefs(
+  file: MdlFile,
+  layers: unknown,
+  properties: Record<string, SceneScalar>,
+  issues: Set<string>,
+): { used: number[]; defs: PuppetLayerDef[] } {
+  const used: number[] = [];
+  const defs: PuppetLayerDef[] = [];
+  for (const entry of Array.isArray(layers) ? layers : []) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const json = entry as Record<string, unknown>;
+    if (typeof json.animation !== "number" || !Number.isFinite(json.animation)) continue;
+    const id = Math.trunc(json.animation);
+    const index = file.animations.findIndex((animation) => animation.id === id);
+    if (index < 0) continue;
+    let slot = used.indexOf(index);
+    if (slot < 0) slot = used.push(index) - 1;
+    if (LAYER_KEYS.some((key) => isScriptValue(json[key]))) issues.add("puppet:layer-script");
+    const value = (key: (typeof LAYER_KEYS)[number]) => resolveValue(json[key] as SceneValue | undefined, properties);
+    const bindings: PuppetLayerDef["bindings"] = [];
+    for (const field of ["rate", "blend", "visible"] as const) {
+      const binding = userBindingOf(json[field] as SceneValue | undefined);
+      if (binding) bindings.push({ field, ...binding });
+    }
+    const name = value("name");
+    defs.push({
+      animation: slot,
+      name: typeof name === "string" ? name : "",
+      rate: floatField(value("rate"), 1),
+      blend: floatField(value("blend"), 1),
+      visible: boolField(value("visible"), true),
+      additive: boolField(value("additive"), false),
+      blendin: boolField(value("blendin"), false),
+      blendout: boolField(value("blendout"), false),
+      blendtime: floatField(value("blendtime"), 0.5),
+      bindings,
+    });
+  }
+  return { used, defs };
+}
+
+/**
+ * 骨骼与动画里 WPE 还没做（或会越界）的用法，图像层与模型共用（P12b2-1 从 `buildPuppet` 抽出）：骨骼物理（`puppet:physics`）、IK / 约束 / 键表 / 链表
+ * （`puppet:ik`）、引用块与记录 / 约束轨道（`puppet:animation-ref`）、轨道数不等于骨骼数（`mdl:animation:tracks`）。
+ */
+function skeletonIssues(
+  skeleton: NonNullable<MdlFile["skeleton"]>,
+  file: MdlFile,
+  used: readonly number[],
+  issues: Set<string>,
+): void {
+  for (const bone of skeleton.bones) {
+    const flags = boneJsonFlags(bone.json);
+    if ((flags & 0x3000 && flags & 0x3) || bone.flags & 2) issues.add("puppet:physics");
+    if (flags & 0xc000) issues.add("puppet:ik");
+  }
+  const { records, constraints, keyMaps, chains } = skeleton.extras;
+  if (records || constraints || keyMaps || chains) issues.add("puppet:ik");
+  for (const index of used) {
+    const animation = file.animations[index];
+    if (animation.unsupported) issues.add("puppet:animation-ref");
+    if (animation.tracks.length !== skeleton.bones.length) issues.add("mdl:animation:tracks");
+  }
+}
+
+/**
  * 整理一个 puppet 图层（步骤 1 点 2）。`layers` 是图层对象的 `animationlayers` 原值；`properties` 是编译期的用户属性（`{user}` 绑定的
  * 初值，同图层字段的 `resolveValue`）。返回 `puppet` 为 null 时 WPE 销毁 P、照常画四边形（mdl 没有网格，rea-mdl 9.1 第 5 条）。
  *
@@ -326,52 +432,12 @@ export function buildPuppet(
   const morph = skinned && (mesh.format & POSITION_VEC4) !== 0 ? buildMorph(mesh) : null;
   const clipping = buildClipping(mesh, issues);
 
-  // 动画层（`FUN_1401fcc20`，rea-RT 1.4）：只认数组里的对象；`animation` 不是数或在 MDLA 里找不到就整层丢掉、不报
-  const used: number[] = [];
-  const defs: PuppetLayerDef[] = [];
-  for (const entry of Array.isArray(layers) ? layers : []) {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const json = entry as Record<string, unknown>;
-    if (typeof json.animation !== "number" || !Number.isFinite(json.animation)) continue;
-    const id = Math.trunc(json.animation);
-    const index = file.animations.findIndex((animation) => animation.id === id);
-    if (index < 0) continue;
-    let slot = used.indexOf(index);
-    if (slot < 0) slot = used.push(index) - 1;
-    if (LAYER_KEYS.some((key) => isScriptValue(json[key]))) issues.add("puppet:layer-script");
-    const value = (key: (typeof LAYER_KEYS)[number]) => resolveValue(json[key] as SceneValue | undefined, properties);
-    const bindings: PuppetLayerDef["bindings"] = [];
-    for (const field of ["rate", "blend", "visible"] as const) {
-      const binding = userBindingOf(json[field] as SceneValue | undefined);
-      if (binding) bindings.push({ field, ...binding });
-    }
-    const name = value("name");
-    defs.push({
-      animation: slot,
-      name: typeof name === "string" ? name : "",
-      rate: floatField(value("rate"), 1),
-      blend: floatField(value("blend"), 1),
-      visible: boolField(value("visible"), true),
-      additive: boolField(value("additive"), false),
-      blendin: boolField(value("blendin"), false),
-      blendout: boolField(value("blendout"), false),
-      blendtime: floatField(value("blendtime"), 0.5),
-      bindings,
-    });
-  }
+  const { used, defs } = layerDefs(file, layers, properties, issues);
 
   if (skinned) {
-    for (const bone of bones) {
-      const flags = boneJsonFlags(bone.json);
-      if ((flags & 0x3000 && flags & 0x3) || bone.flags & 2) issues.add("puppet:physics");
-      if (flags & 0xc000) issues.add("puppet:ik");
-    }
-    const { records, constraints, keyMaps, chains } = skeleton!.extras;
-    if (records || constraints || keyMaps || chains) issues.add("puppet:ik");
+    skeletonIssues(skeleton!, file, used, issues);
     for (const index of used) {
       const animation = file.animations[index];
-      if (animation.unsupported) issues.add("puppet:animation-ref");
-      if (animation.tracks.length !== bones.length) issues.add("mdl:animation:tracks");
       if (animation.boneAlpha && !(mesh.flags & 4)) issues.add("puppet:alpha-track");
       if (animation.drawOrderTrack) issues.add(mesh.flags & 8 ? "puppet:draw-order" : "puppet:order-track");
     }
@@ -413,10 +479,10 @@ export function buildPuppet(
 }
 
 /**
- * 骨骼的父链、逆绑定、静止姿势（rea-RT 1.1、7）。父下标越界（不是 −1 又 ≥ 骨骼数）时当根（WPE 越界读，语料 0 处）。父在后面时读到的是
+ * 骨骼的父链、逆绑定、静止姿势（rea-RT 1.1、7）。`optionalMatrices` 为假（模型对象）时静止姿势只用局部矩阵。父下标越界（不是 −1 又 ≥ 骨骼数）时当根（WPE 越界读，语料 0 处）。父在后面时读到的是
  * 还没算的矩阵，WPE 新分配的是零（rea-RT 1.1），这里同样从零开始。
  */
-function buildSkeleton(file: MdlFile): NonNullable<ScenePuppet["skeleton"]> {
+function buildSkeleton(file: MdlFile, optionalMatrices = true): NonNullable<ScenePuppet["skeleton"]> {
   const source = file.skeleton!;
   const bones = source.bones;
   const n = bones.length;
@@ -434,7 +500,9 @@ function buildSkeleton(file: MdlFile): NonNullable<ScenePuppet["skeleton"]> {
   const inverseBind = new Float32Array(n * 16);
   for (let i = 0; i < n; i++) inverse4(world, i * 16, inverseBind, i * 16);
   const restMatrices = new Float32Array(n * 16);
-  for (let i = 0; i < n; i++) restMatrices.set(source.restMatrices?.[i] ?? bones[i].local, i * 16);
+  // 图像层的静止姿势优先用可选骨骼矩阵（mdl+0x48）；模型只用 MDLS 局部矩阵（rea-texchan-model 7.3，p12b2-rest 实测）
+  for (let i = 0; i < n; i++)
+    restMatrices.set((optionalMatrices ? source.restMatrices?.[i] : undefined) ?? bones[i].local, i * 16);
   const rest = new Float32Array(n * POSE_STRIDE);
   for (let i = 0; i < n; i++) decomposeRest(restMatrices, i * 16, rest, i * POSE_STRIDE);
   return { parents, inverseBind, rest, restMatrices };
@@ -571,4 +639,142 @@ function buildClipping(mesh: MdlMeshRef, issues: Set<string>): PuppetClipping | 
   }
   flush();
   return { commands, segments, records: records.map((record) => ({ mask: `materials/${record.name}.tex` })) };
+}
+
+// ———— 模型对象的骨骼（P12b2-1） ————
+
+/**
+ * 模型组合键里的 `BONECOUNT`（`FUN_140224c70`，rea-texchan-model 5；p12b2-mdl 实测：3 / 4 根 → 16、17 根 → 32）：`min(128, 向上取 2 的幂(max(16, 骨骼数)))`，
+ * 只可能是 16 / 32 / 64 / 128。图像层是真实骨骼数（不取 2 的幂）。
+ */
+export function modelBoneCount(bones: number): number {
+  let count = 1;
+  while (count < Math.max(16, bones)) count *= 2;
+  return Math.min(128, count);
+}
+
+/**
+ * 模型一个网格的组合键（只在 mdl 有骨骼时加，rea-texchan-model 5 的 `FUN_140224c70`）：`SKINNING`（格式含 `a_BlendIndices` 且骨骼非空，0 也总写）、
+ * `BONECOUNT`、`MORPHING`（网格有 `MDMP` 目标）、`MORPHING_NORMALS`（网格标志 bit10，不看有没有目标）。没有 `SKINNING_ALPHA` 等图像层专有的键。
+ */
+export function modelMeshCombos(mesh: MdlMeshRef, bones: number): Record<string, number> {
+  return {
+    SKINNING: mesh.format & BLEND_INDICES && bones > 0 ? 1 : 0,
+    BONECOUNT: modelBoneCount(bones),
+    ...(mesh.morph && mesh.morph.targets.length ? { MORPHING: 1 } : {}),
+    ...(mesh.flags & 0x400 ? { MORPHING_NORMALS: 1 } : {}),
+  };
+}
+
+/**
+ * 模型一个网格的变形纹理（rea-texchan-model 5「变形纹理」，`FUN_1401d7760`；p12b2-morph 实测：边长与 i16 分量流逐个相同）。网格没有 `MDMP` 目标为 null。
+ * - `nVert` = 网格顶点数（不是 `MDMP` 的 nv）；`K = 目标数 × nVert ×（bit10 ? 2 : 1）+（bit11 ? 目标数 × nVert : 0）`，i16 分量数 `3K`，纹素数
+ *   `ceil(3K / 4)`，边长 `⌊√纹素数⌋`、平方不够加 1；
+ * - 内容清 0 后按目标顺序紧排：没有 bit10：每目标 `3 × nVert` 个 i16（位置差）；bit10：每顶点 6 个 i16（位置差、法线差交错）；bit11：整个目标跳过（WPE 实际
+ *   不支持切线差，尺寸却算了切线；照报 `mdl:morph:tangent`，纹理保持全 0）；
+ * - nv 不等于网格顶点数时（WPE 的 `memcpy` 读出界，语料 0 处）照报 `mdl:morph:vertices`，只拷 `min(nv, nVert)` 个顶点、其余保持 0。
+ */
+function buildModelMorph(mesh: MdlMeshRef, issues: Set<string>): ModelMorph | null {
+  const morph = mesh.morph;
+  if (!morph || morph.targets.length === 0) return null;
+  const targets = morph.targets.length;
+  const vertices = mesh.vertexCount;
+  const normals = (mesh.flags & 0x400) !== 0;
+  const tangents = (mesh.flags & 0x800) !== 0;
+  if (tangents) issues.add("mdl:morph:tangent");
+  if (morph.count !== vertices) issues.add("mdl:morph:vertices");
+  const components = 3 * (targets * vertices * (normals ? 2 : 1) + (tangents ? targets * vertices : 0));
+  const count = Math.ceil(components / 4);
+  let side = Math.floor(Math.sqrt(count));
+  if (side * side < count) side++;
+  side = Math.max(1, side);
+  const texels = new Int16Array(side * side * 4);
+  if (!tangents) {
+    const copied = Math.min(morph.count, vertices);
+    const stride = normals ? 6 : 3;
+    morph.targets.forEach((target, t) => {
+      const base = t * vertices * stride;
+      for (let v = 0; v < copied; v++) {
+        const at = base + v * stride;
+        for (let k = 0; k < 3; k++) {
+          texels[at + k] = target.position[3 * v + k];
+          if (normals) texels[at + 3 + k] = target.normal?.[3 * v + k] ?? 0;
+        }
+      }
+    });
+  }
+  return { scale: morph.scale, vertices, targets, side, texels };
+}
+
+/**
+ * 整理模型对象的骨骼（P12b2-1，rea-texchan-model 4–7；实测 `ignore/p12/b2/meas/report.txt`）。mdl 没有 `MDLS`、骨骼数为 0 或超限时为 null（WPE 不建 `S`，
+ * 模型是静态网格，`MDLA` / `MDMP` / `MDAT` 都不读，中性）。`layers` 是对象的 `animationlayers` 原值，`object` 是对象 JSON（只读 `rootmotion`）。
+ *
+ * 和图像层 puppet 共用 `layerDefs`（`autosort` / `index` 这类 WPE 的插入规则语料没有，同图像层）、`skeletonIssues` 与 `convertAnimation`；差别：
+ * 静止姿势不读可选骨骼矩阵、骨骼透明度 / 纹理通道 / 绘制顺序轨道不处理（WPE 的模型更新没有它们，所以不报 `puppet:alpha-track` 这类键）。
+ *
+ * `issues`：
+ * - `mdl:skeleton:bones`（骨骼数 > 128，WPE 直接终止进程）、`mdl:animation-id`（动画 id ≥ 2³²）；
+ * - `puppet:layer-script`（动画层字段挂脚本，P12c）、`puppet:physics` / `puppet:ik` / `puppet:animation-ref` / `mdl:animation:tracks`（同图像层）；
+ * - `mdl:morph:tangent`、`mdl:morph:vertices`（见 `buildModelMorph`）；
+ * - `model:rootmotion`：对象 `rootmotion` 不为假且用到的动画 flags & 0x1f800（WPE 在层循环里调 `FUN_140225900`，内容没读，语料 0 处）。
+ * 段的格式错误（`mdl:section:<标签>`）与截断由 `checkMdlFeatures` 报。
+ */
+export function buildModelSkeleton(
+  file: MdlFile,
+  layers: unknown,
+  object: Record<string, unknown>,
+  properties: Record<string, SceneScalar> = {},
+): { skeleton: ModelSkeleton | null; issues: Set<string> } {
+  const issues = new Set<string>();
+  const source = file.skeleton;
+  if (!source) return { skeleton: null, issues };
+  if (source.count > MAX_BONES) {
+    issues.add("mdl:skeleton:bones");
+    return { skeleton: null, issues };
+  }
+  const bones = source.bones.length;
+  if (bones === 0) return { skeleton: null, issues };
+  if (file.animations.some((animation) => animation.id >= 2 ** 32)) issues.add("mdl:animation-id");
+  const { used, defs } = layerDefs(file, layers, properties, issues);
+  skeletonIssues(source, file, used, issues);
+  const morphs = file.meshes.map((mesh) => buildModelMorph(mesh, issues));
+  const rootmotion = object.rootmotion;
+  if (
+    rootmotion !== undefined &&
+    rootmotion !== null &&
+    rootmotion !== false &&
+    rootmotion !== 0 &&
+    used.some((index) => file.animations[index].flags & 0x1f800)
+  )
+    issues.add("model:rootmotion");
+  const animations = used.map((index) => {
+    const animation = file.animations[index];
+    const out = convertAnimation(animation, file, bones, true, false, 0);
+    // 变形权重轨道按网格存；目标号超过该网格目标数的丢掉（WPE 的权重数组按 `MDMP` 目标数定长）
+    out.meshMorph = file.meshes.map((_, m) => {
+      const morph = morphs[m];
+      const tracks = animation.meshMorphs?.[m];
+      if (!morph || !tracks) return null;
+      const list: (Float32Array | null)[] = Array.from({ length: morph.targets }, () => null);
+      for (const { target, values } of tracks) if (target < morph.targets) list[target] = Float32Array.from(values);
+      return list;
+    });
+    out.bounds = animation.bounds ? [...animation.bounds] : [0, 0, 0, 0, 0, 0];
+    return out;
+  });
+  return {
+    skeleton: {
+      skeleton: buildSkeleton(file, false),
+      animations,
+      layers: defs,
+      attachments: file.attachments.map((item) => ({
+        name: item.name,
+        bone: item.bone,
+        matrix: Float32Array.from(item.matrix),
+      })),
+      morphs,
+    },
+    issues,
+  };
 }

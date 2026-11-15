@@ -10,7 +10,8 @@ import { alignedBytes } from "./mesh";
  * 渲染器要的 puppet 运行时（`GpuScene.setPuppets`、`SceneRenderer.load` 的 `puppets`）：蒙皮矩阵必须有，挂点的模型空间姿势、骨骼透明度、变形上传值
  * （P12b1）可以没有（手写的假来源、旧的调用方）：没有姿势时挂点按普通父子，没有透明度时全 1，没有变形时不变形。
  */
-export type PuppetSource = Pick<ScenePuppets, "skin"> & Partial<Pick<ScenePuppets, "pose" | "boneAlpha" | "morph">>;
+export type PuppetSource = Pick<ScenePuppets, "skin"> &
+  Partial<Pick<ScenePuppets, "pose" | "boneAlpha" | "morph" | "bounds">>;
 
 /**
  * 直接上屏的 puppet 顶点（rea-p12-mdl 9.2 `FUN_14020ae00`）：WPE 拷一份网格 0 的顶点字节，把每个顶点的 `a_TexCoord`（表序 7，只有这一项，
@@ -34,6 +35,11 @@ export function scaledPuppetVertices(
     view.setFloat32(at + 4, view.getFloat32(at + 4, true) * uv[1], true);
   }
   return bytes;
+}
+
+/** 变形纹理的表键（`GpuScene.morphTargets`）：图像层 puppet 一张（`"<对象>"`），模型每个有变形目标的网格一张（`"<对象>:<网格>"`，P12b2-1）。 */
+export function morphKey(object: number, mesh?: number): string {
+  return mesh === undefined ? `${object}` : `${object}:${mesh}`;
 }
 
 /** 这个 puppet 直接上屏时是否需要私有的顶点缓冲（`a_TexCoord` 要乘 `uv`）。 */

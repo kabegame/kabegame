@@ -4,7 +4,7 @@
  *   合成路径（有 effect / colorBlendMode 混合 / 被依赖，passthrough 材质 + puppet 组合键 + `BLENDMODE`，`layer.passthrough` 不再编）、
  *   写死关闭的 effect 不算 effect；mdl 读不到、fullscreen / 组合层上 WPE 整段跳过，不报；
  * - 能力表：puppet 的 pass 放行 `SKINNING` 与 `g_Bones`，别的 pass 照报 `combo:SKINNING` / `uniform:g_Bones`；图像层的 `animationlayers` 放行，
- *   模型对象上照报 `object:animationlayers`；`model:puppet` 不再报；
+ *   模型对象（P12b2-1）同样放行，别的对象上照报；`model:puppet` 不再报；
  * - 动画层绑定：`rate` / `blend` / `visible` 的 `{user}` 登记成 `animation-layer` 目标，`SceneState` 起始值与就地写（条件、不合法的值）；
  * - `transferableBuffers` 带上网格与动画帧缓冲。
  * 依据 rea-p12-mdl 第 9 节，`p12-REPORT` 用例 4、8。渲染图与 `g_Bones` 的写法见 `render/p12a.test.ts`。
@@ -288,14 +288,14 @@ describe("能力表：puppet 的 pass（P12a 步骤 3 点 2）", () => {
     expect(bundle.unsupported).toEqual(["combo:SKINNING", "uniform:g_Bones"]);
   });
 
-  it("animationlayers：图像层放行，模型对象与别的对象上照报", () => {
+  it("animationlayers：图像层与模型对象（P12b2-1）放行，别的对象上照报", () => {
     const keys = (object: Record<string, unknown>) => {
       const out = new Set<string>();
       checkObjectFeatures(object as never, out);
       return [...out];
     };
     expect(keys({ id: 1, image: "models/pup.json", animationlayers: [layerJson()] })).toEqual([]);
-    expect(keys({ id: 1, model: "models/a.mdl", animationlayers: [layerJson()] })).toEqual(["object:animationlayers"]);
+    expect(keys({ id: 1, model: "models/a.mdl", animationlayers: [layerJson()] })).toEqual([]);
     expect(keys({ id: 1, particle: "particles/a.json", animationlayers: [layerJson()] })).toContain(
       "object:animationlayers",
     );

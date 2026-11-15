@@ -12,13 +12,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "../compile/bindings";
-import type { SceneBundle, SceneLayer, ScenePass, ScenePuppetLayer } from "../compile/bundle";
+import type { SceneBundle, SceneLayer, SceneMesh, ScenePass, ScenePuppetLayer } from "../compile/bundle";
 import { particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
-import type { PuppetClipping } from "../compile/puppet";
+import type { ModelMorph, ModelSkeleton, PuppetClipping } from "../compile/puppet";
 import { Wpesl2wgsl, translateWithIncludes, type InterfaceVariable, type TranslateResult } from "../wpesl2wgsl";
-import { planLayer, type DrawStep, type LayerPlan, type LayerStep } from "./graph";
-import { layerLocalMatrix, worldMatrixOf, drawMatrixOf, type LayerTransform } from "./layout";
+import { planLayer, planModelLayer, type DrawStep, type LayerPlan, type LayerStep } from "./graph";
+import { layerLocalMatrix, sceneViewProjection, worldMatrixOf, drawMatrixOf, type LayerTransform } from "./layout";
 import { identity, multiply, type Mat4 } from "./math";
 import { clipMaskSize, morphTexelData, type PuppetSource } from "./puppet";
 import { checkRenderable, GpuScene, stepPipeline, uploadableTextures } from "./scene";
@@ -1069,5 +1069,314 @@ describe("GpuScene：挂点子树的绘制矩阵照 WPE 的缓存戳（步骤 6b
     const fresh = await reference(4, 3);
     expect(mvp(item.scene, 2)).toEqual(mvp(fresh, 2));
     expect(mvp(item.scene, 4)).toEqual(mvp(fresh, 4));
+  });
+});
+
+// ———— 模型对象的骨骼（P12b2-1 点 3） ————
+
+/** 模型程序（BONECOUNT 16）：`g_Bones` 数组 16 项，只写前 n 根；变形 uniform 与槽 5 同 puppet 程序，没有 `g_BonesAlpha`。 */
+function modelProgram(): TranslateResult {
+  return {
+    ok: true,
+    vertex: { wgsl: "// model v", entryPoint: "main" },
+    fragment: { wgsl: "// model f", entryPoint: "main" },
+    attributes: [attribute("a_Position", "vec3", 0), attribute("a_TexCoord", "vec2", 1)],
+    uniforms: [
+      UNIFORMS.mvp,
+      {
+        name: "g_Bones",
+        type: "array<mat4x3<f32>, 16>",
+        declared: "mat4x3",
+        offset: 64,
+        size: 1024,
+        array: 16,
+        stride: 64,
+      },
+      {
+        name: "g_MorphOffsets",
+        type: "array<u32, 12>",
+        declared: "uint",
+        offset: 1088,
+        size: 192,
+        array: 12,
+        stride: 16,
+      },
+      {
+        name: "g_MorphWeights",
+        type: "array<f32, 12>",
+        declared: "float",
+        offset: 1280,
+        size: 192,
+        array: 12,
+        stride: 16,
+      },
+      { name: "g_Texture5Resolution", type: "vec4<f32>", declared: "vec4", offset: 1472, size: 16 },
+    ],
+    uniformBlockSize: 1488,
+    textures: [{ slot: 5, name: "g_Texture5", kind: "2d", binding: 1, samplerBinding: 2 }],
+  } as unknown as TranslateResult;
+}
+const MODEL_PROGRAM = 4;
+
+function modelMesh(object: number, k: number, program = MODEL_PROGRAM): SceneMesh {
+  return {
+    format: 0x9,
+    stride: 20,
+    vertices: new Uint8Array(80),
+    indices: new Uint8Array(12),
+    vertexCount: 4,
+    indexFormat: "uint16",
+    indexCount: 6,
+    material: "materials/m.json",
+    passes: [pass(`objects/${object}/meshes/${k}/passes/0`, { program })],
+  };
+}
+
+const modelMorph = (side: number, texels: Int16Array): ModelMorph => ({
+  scale: 40,
+  vertices: 8,
+  targets: 3,
+  side,
+  texels,
+});
+
+/** 两个网格的模型（网格 0 有变形纹理、网格 1 没有），2 根骨骼。 */
+function modelLayerOf(object: number, partial: Partial<SceneLayer> = {}, morphs?: (ModelMorph | null)[]): SceneLayer {
+  const skeleton: ModelSkeleton = {
+    skeleton: {
+      parents: new Int32Array([-1, 0]),
+      inverseBind: new Float32Array(32),
+      rest: new Float32Array(20),
+      restMatrices: new Float32Array(32),
+    },
+    animations: [],
+    layers: [],
+    attachments: [],
+    morphs: morphs ?? [modelMorph(MORPH_SIDE, morphTexels()), null],
+  };
+  return layerOf(object, {
+    passes: [],
+    model: {
+      path: "models/m.mdl",
+      version: 23,
+      meshes: [modelMesh(object, 0), modelMesh(object, 1)],
+      order: [0, 1],
+      bounds: [-50, -50, -1, 50, 50, 1],
+      skeleton,
+    },
+    ...partial,
+  });
+}
+
+describe("GpuScene：模型对象的骨骼 uniform 与变形纹理（P12b2-1 点 3）", () => {
+  const bundleWith = (layers: SceneLayer[]) => {
+    const bundle = bundleOf(layers);
+    bundle.programs.push(modelProgram());
+    return bundle;
+  };
+  const build = async (features: string[]) => {
+    const bundle = bundleWith([modelLayerOf(0)]);
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(features), []);
+    return { gpu, scene, state, bundle };
+  };
+  /** 变形 uniform 按网格：网格 0 有值，网格 1 没有（`morph(object, mesh)` 返回 null）。 */
+  const meshPuppets = (calls: [number, number | undefined][] = []): PuppetSource => ({
+    skin: () => Float32Array.from({ length: 24 }, (_, i) => 0.5 + i),
+    morph: (object, mesh) => {
+      calls.push([object, mesh]);
+      return mesh === 0
+        ? {
+            offsets: Uint32Array.from([2, 8, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            weights: Float32Array.from([40, 0.75, 0.25, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+          }
+        : null;
+    },
+  });
+
+  it("每个网格一个 draw（puppet 标记 = 对象号）：g_Bones 是对象的蒙皮矩阵、数组只写前 n 根（其余保持 0）；变形 uniform 按网格取", async () => {
+    const { scene, state } = await build(["float32-filterable"]);
+    const calls: [number, number | undefined][] = [];
+    scene.setPuppets(meshPuppets(calls));
+    scene.update(FRAME, state);
+    const draws = drawsOf(scene, 0);
+    expect(draws).toHaveLength(2);
+    for (const draw of draws) {
+      expect(draw.puppet).toBe(0);
+      const buffer = draw.uniformBuffer!;
+      // mat4x3：每列 vec3 补到 16 字节；两根骨骼各 12 个数，第 3 根起没人写
+      expect(floats(buffer, 64, 3)).toEqual([0.5, 1.5, 2.5]);
+      expect(floats(buffer, 64 + 64, 3)).toEqual([12.5, 13.5, 14.5]);
+      expect(floats(buffer, 64 + 2 * 64, 12)).toEqual(new Array(12).fill(0));
+    }
+    const [first, second] = draws;
+    expect(uints(first.uniformBuffer!, 1088, 3, 16)).toEqual([2, 8, 16]);
+    expect(floats(first.uniformBuffer!, 1280, 3, 16)).toEqual([40, 0.75, 0.25]);
+    // 网格 1 没有变形来源：保持 0（不变形）
+    expect(uints(second.uniformBuffer!, 1088, 3, 16)).toEqual([0, 0, 0]);
+    // 每个 draw 用自己的网格号取变形
+    expect(calls.some(([, mesh]) => mesh === 0)).toBe(true);
+    expect(calls.some(([, mesh]) => mesh === 1)).toBe(true);
+    expect(calls.every(([object]) => object === 0)).toBe(true);
+  });
+
+  it("变形纹理每个有目标的网格一张：rgba32float、值 max(c / 32767, −1)；槽 5 的 g_Texture5Resolution 是那一张的边长，没有变形的网格是空槽值", async () => {
+    const { gpu, scene, state } = await build(["float32-filterable"]);
+    const texture = gpu.textures.find((item) => item.label === "morph 0 mesh 0")!;
+    expect(texture.format).toBe("rgba32float");
+    expect(gpu.textures.some((item) => item.label === "morph 0 mesh 1")).toBe(false);
+    const [upload] = gpu.uploads.filter((item) => item.texture === texture);
+    const data = new Float32Array(upload.data.buffer, upload.data.byteOffset, 16);
+    expect(data[3]).toBe(1);
+    expect(data[7]).toBe(-1);
+    scene.setPuppets(meshPuppets());
+    scene.update(FRAME, state);
+    const [first, second] = drawsOf(scene, 0);
+    expect(floats(first.uniformBuffer!, 1472, 4)).toEqual([MORPH_SIDE, MORPH_SIDE, MORPH_SIDE, MORPH_SIDE]);
+    expect(floats(second.uniformBuffer!, 1472, 4)).toEqual([2, 2, 2, 2]);
+  });
+
+  it("没有 float32-filterable：checkRenderable 报 render:morph-texture（模型的变形纹理同图像层）；没有变形的模型不要求", async () => {
+    const bundle = bundleWith([modelLayerOf(0)]);
+    expect(checkRenderable(bundle, new Set())).toContain("render:morph-texture");
+    expect(checkRenderable(bundle, new Set(["float32-filterable"]))).not.toContain("render:morph-texture");
+    const plain = bundleWith([modelLayerOf(0, {}, [null, null])]);
+    expect(checkRenderable(plain, new Set())).not.toContain("render:morph-texture");
+  });
+
+  it("槽 5 的渲染图输入：只有带变形目标的网格绑 { kind: morph, object, mesh }", () => {
+    const layer = modelLayerOf(3);
+    const plan = planModelLayer(layer);
+    expect(plan.steps.map((step) => (step.kind === "mesh" ? step.inputs[5] : null))).toEqual([
+      { kind: "morph", object: 3, mesh: 0 },
+      undefined,
+    ]);
+  });
+
+  it("没有骨骼的模型：draw 不带 puppet 标记，每帧不写 g_Bones（字节同以前）", async () => {
+    const layer = modelLayerOf(0);
+    delete layer.model!.skeleton;
+    const bundle = bundleWith([layer]);
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), []);
+    scene.setPuppets(meshPuppets());
+    scene.update(FRAME, state);
+    for (const draw of drawsOf(scene, 0)) {
+      expect(draw.puppet).toBeNull();
+      expect(floats(draw.uniformBuffer!, 64, 3)).toEqual([0, 0, 0]);
+    }
+  });
+});
+
+describe("GpuScene：模型的视锥剔除盒与挂点（P12b2-1 点 3）", () => {
+  const cull = async (bounds: ((object: number) => readonly number[] | null) | undefined) => {
+    const layer = modelLayerOf(0, { origin: [100, 50, 0] }, [null, null]);
+    const bundle = bundleOf([layer]);
+    bundle.programs.push(modelProgram());
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), []);
+    scene.setPuppets({ skin: () => new Float32Array(24), ...(bounds ? { bounds } : {}) });
+    const internal = scene as unknown as {
+      modelCulled(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>, vp: Mat4): boolean;
+    };
+    return internal.modelCulled(layer, state, new Map(), sceneViewProjection({ width: 1920, height: 1080 }));
+  };
+
+  it("没有 bounds 来源或返回 null：用 mdl 的包围盒（在屏内，不剔）", async () => {
+    expect(await cull(undefined)).toBe(false);
+    expect(await cull(() => null)).toBe(false);
+  });
+
+  it("有动画包围盒：用它剔除（盒在屏外就整个不画，WPE 的 p12b2-cull）", async () => {
+    expect(await cull(() => [100000, 0, 0, 100100, 10, 10])).toBe(true);
+    expect(await cull(() => [-10, -10, -10, 10, 10, 10])).toBe(false);
+  });
+});
+
+describe("GpuScene：模型父的挂点（P12b2-1 点 3，同图像层 puppet）", () => {
+  const att = translation(2, 3);
+  /** 0：模型父（origin (400, 300)，姿势只有它有）；1：挂在骨骼 1 上的普通图层。 */
+  const build = async () => {
+    const layers = [
+      modelLayerOf(0, { origin: [400, 300, 0] }, [null, null]),
+      layerOf(1, { parent: 0, origin: [10, 20, 0], attachment: { parent: 0, bone: 1, matrix: att } }),
+    ];
+    const bundle = bundleOf(layers);
+    bundle.programs.push(modelProgram());
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), []);
+    return { scene, state };
+  };
+
+  it("子对象的 g_ModelMatrix = W_父 · ((Pose[骨骼] · Att) · L)：Pose 取模型的模型空间骨骼矩阵（ScenePuppets.pose）", async () => {
+    const { scene, state } = await build();
+    const { source, puppets } = fakePuppets();
+    source.poseValue!.set(translation(50, 60), 16);
+    scene.setPuppets(puppets);
+    scene.sync(state);
+    scene.update(FRAME, state);
+    const worlds = new Map<number, Mat4>();
+    const w0 = worldMatrixOf(0, state.layers, worlds);
+    const l1 = layerLocalMatrix(state.layers.get(1) as unknown as LayerTransform);
+    const expected = Array.from(multiply(w0, multiply(multiply(translation(50, 60), att), l1)));
+    expect(floats(drawsOf(scene, 1)[0].uniformBuffer!, 64, 16)).toEqual(expected);
+  });
+
+  it("B1 更新阶段：带骨骼的模型也在其中（挂点子树里的模型与它的子对象滞后一帧，同挂点 puppet）", async () => {
+    // 0：R 图像根（每帧被脚本写 origin）；1：Q 不挂点的 puppet（父 R，姿势来源）；2：挂 Q 骨骼 1 的模型 M；3：M 的普通子图像
+    const layers = [
+      layerOf(0, { origin: [400, 300, 0] }),
+      layerOf(1, {
+        parent: 0,
+        origin: [10, 20, 0],
+        puppet: puppetOf({ passes: [pass("objects/1/passes/0", { program: 1 })] }),
+      }),
+      modelLayerOf(2, { parent: 1, origin: [5, 5, 0], attachment: { parent: 1, bone: 1, matrix: att } }, [null, null]),
+      layerOf(3, { parent: 2, origin: [1, 1, 0] }),
+    ];
+    const make = async () => {
+      const bundle = bundleOf(layers);
+      bundle.programs.push(modelProgram());
+      const gpu = new FakeGpu();
+      const state = SceneState.fromBundle(bundle);
+      const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), []);
+      const { source, puppets } = fakePuppets();
+      puppets.pose = (object) => (object === 1 ? source.poseValue : null);
+      scene.setPuppets(puppets);
+      return { scene, state, source };
+    };
+    const originOf = (f: number) => [400 + f * 40, 300 - f * 15, 0];
+    const writeOrigin = (state: SceneState, f: number) =>
+      state.write({ property: "p", target: { kind: "layer", object: 0, field: "origin" } }, originOf(f).join(" "));
+    const mvp = (scene: GpuScene, object: number) => floats(drawsOf(scene, object)[0].uniformBuffer!, 0, 16);
+    const item = await make();
+    for (let f = 1; f <= 4; f++) {
+      item.source.poseValue!.set(translation(f * 10, f), 16);
+      item.scene.sync(item.state);
+      item.scene.stepParticles(0.05, f * 0.05, item.state);
+      writeOrigin(item.state, f);
+      item.scene.drawPhase(item.state);
+      item.scene.sync(item.state);
+      item.scene.update(FRAME, item.state);
+      if (f < 3) continue;
+      // 参照：R 的 origin 取 at 帧、姿势取 f 帧，不走更新 / 渲染阶段现算
+      const reference = async (at: number) => {
+        const ref = await make();
+        ref.source.poseValue!.set(translation(f * 10, f), 16);
+        writeOrigin(ref.state, at);
+        ref.scene.sync(ref.state);
+        ref.scene.update(FRAME, ref.state);
+        return ref.scene;
+      };
+      const lag = await reference(f - 1);
+      const fresh = await reference(f);
+      expect(mvp(item.scene, 2), `M ${f}`).toEqual(mvp(lag, 2));
+      expect(mvp(item.scene, 3), `M 的子 ${f}`).toEqual(mvp(lag, 3));
+      expect(mvp(item.scene, 2)).not.toEqual(mvp(fresh, 2));
+    }
   });
 });

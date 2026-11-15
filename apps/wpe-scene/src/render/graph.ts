@@ -124,8 +124,9 @@ export type TextureRef =
   /**
    * puppet 的变形纹理（P12b1 步骤 4，`objects` 下标 `object` 的 puppet）：槽 5，`side × side`，
    * `rgba32float`（要 `float32-filterable`；WPE 是 rgba16snorm，Dawn 上不可过滤，见 `render/puppet.ts`），点采样、重复（WPE 实测）。每个带变形的 puppet 一张，渲染器建场景时按 `ScenePuppet.morph` 上传。
+   * 模型对象（P12b2-1）每个有变形目标的网格一张（`mesh` = mdl 网格下标，`ModelSkeleton.morphs[mesh]`），布局见 `ModelMorph`。
    */
-  | { kind: "morph"; object: number }
+  | { kind: "morph"; object: number; mesh?: number }
   /**
    * 裁切遮罩 RT（P12b1 步骤 5，WPE 的 `_rt_FullAlphaMask`）：全场共用一张 `r8unorm`，宽高各为场景目标的一半（至少 2），有裁切 puppet 时才建。
    * 目标段的 `g_Texture8`（线性、钳制）读它。
@@ -600,7 +601,7 @@ export function particleTreeWantsFramebuffer(particle: SceneParticle): boolean {
  * - 运行时纹理只认 `_rt_FullFrameBuffer`：编译期已报 `mdl:framebuffer`（WPE 的模型绘制不拷快照，读到的是什么没测），所以这里不排快照
  *   步骤，强制渲染时读到的是快照纹理此刻的内容；其余名字照报 `render:texture-rt:<名>`。
  */
-export function planModelLayer(layer: Pick<SceneLayer, "model" | "sprite">): LayerPlan {
+export function planModelLayer(layer: Pick<SceneLayer, "model" | "sprite"> & { object?: number }): LayerPlan {
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   const model = layer.model;
@@ -616,6 +617,8 @@ export function planModelLayer(layer: Pick<SceneLayer, "model" | "sprite">): Lay
       if (input) inputs[Number(slot)] = input;
       else reasons.push(`render:texture-rt:${name}`);
     }
+    // 带骨骼的模型：有变形目标的网格槽 5 直接绑它自己的变形纹理（WPE 每次绘制重设 `+0xf8`，rea-texchan-model 5；P12b2-1）
+    if (model.skeleton?.morphs[m]) inputs[MORPH_SLOT] = { kind: "morph", object: layer.object ?? 0, mesh: m };
     steps.push({
       kind: "mesh",
       mesh: m,

@@ -27,7 +27,7 @@ import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
-import { buildPuppet, type ScenePuppet } from "./puppet";
+import { buildModelSkeleton, buildPuppet, modelMeshCombos, type ModelSkeleton, type ScenePuppet } from "./puppet";
 import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
 import {
   bindingReader,
@@ -657,13 +657,13 @@ export interface SceneAttachment {
 /**
  * 解析一个对象的挂点（P12b1 步骤 3）：`attachment` 必须是字符串；`parent` 指向有 skinned puppet 的图层、排在子前面（`objects` 下标更小，
  * 否则加载时挂点丢失，rea-AP 1.1）、`MDAT` 里有同名项（区分大小写，取第一个）、骨骼下标在骨骼表内。任一不满足为 null（按普通父子，不报键）。
- * `puppetOf` 返回父对象的 puppet（不是 puppet 或没有图层时 null）。
+ * `puppetOf` 返回父对象的 puppet（不是 puppet 或没有图层时 null）；父是带骨骼的模型对象时（P12b2-1）返回它的 `ModelSkeleton`，同一套规则。
  */
 export function resolveAttachment(
   object: number,
   parent: number | null,
   name: unknown,
-  puppetOf: (object: number) => ScenePuppet | null | undefined,
+  puppetOf: (object: number) => Pick<ScenePuppet, "skeleton" | "attachments"> | null | undefined,
 ): SceneAttachment | null {
   if (typeof name !== "string" || parent === null || parent >= object) return null;
   const puppet = puppetOf(parent);
@@ -745,8 +745,16 @@ export interface SceneModel {
   meshes: SceneMesh[];
   /** 绘制顺序（网格下标，`meshDrawOrder`：不透明的在前，MSVC `std::sort`）。 */
   order: number[];
-  /** 视锥剔除用的包围盒并集（`MdlFile.bounds`，min xyz、max xyz；v < 17 是 ±131072，等于不剔）。 */
+  /**
+   * 视锥剔除用的包围盒并集（`MdlFile.bounds`，min xyz、max xyz；v < 17 是 ±131072，等于不剔）。带骨骼的模型（`skeleton`）运行中改用动画包围盒
+   * （`ScenePuppets.bounds`，没有可见层时退回这一份，rea-texchan-model 7.6）。
+   */
   bounds: number[];
+  /**
+   * 模型对象的骨骼（P12b2-1，`buildModelSkeleton`）：mdl 有 `MDLS`（且骨骼数在 1–128）时有，网格的组合键带 `SKINNING` / `BONECOUNT` 等，每帧写
+   * `g_Bones` 与变形的 uniform（`ScenePuppets` 的 `"model"` 模式）。没有骨骼的模型不写这一项（字节同以前）。
+   */
+  skeleton?: ModelSkeleton;
 }
 export interface SceneBundle {
   general: SceneGeneral;
@@ -1649,14 +1657,37 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       return;
     }
     checkMdlFeatures(file, unsupported);
+    // 骨骼（P12b2-1）：有 `MDLS` 时每个网格的材质多 `SKINNING` / `BONECOUNT` 等组合键，对象的 `animationlayers` 在这里整理
+    const built = buildModelSkeleton(file, object.animationlayers, object, properties);
+    for (const key of built.issues) unsupported.add(key);
+    const skeleton = built.skeleton;
+    const bones = skeleton?.skeleton.parents.length ?? 0;
     const skin = meshSkin(object.skin, file.skins);
     const meshes: SceneMesh[] = [];
     for (const [m, mesh] of file.meshes.entries()) {
       if (settled()) break;
-      meshes.push(await compileMesh(index, m, mesh, mesh.materials[skin]));
+      meshes.push(
+        await compileMesh(index, m, mesh, mesh.materials[skin], skeleton ? modelMeshCombos(mesh, bones) : undefined),
+      );
     }
     const opaque = meshes.map((mesh) => isOpaqueBlending(mesh.passes[0]?.blending));
-    layer.model = { path, version: file.version, meshes, order: meshDrawOrder(opaque), bounds: file.bounds };
+    layer.model = {
+      path,
+      version: file.version,
+      meshes,
+      order: meshDrawOrder(opaque),
+      bounds: file.bounds,
+      ...(skeleton ? { skeleton } : {}),
+    };
+    // 动画层的 `{user}` 绑定（同图像层 puppet：`rate` / `blend` / `visible` 就地写进 `SceneState.animationLayers`）
+    if (skeleton)
+      for (const [slot, def] of skeleton.layers.entries())
+        for (const { field, property, condition } of def.bindings)
+          bindings.list.push({
+            property,
+            ...(condition === undefined ? {} : { condition }),
+            target: { kind: "animation-layer", object: index, layer: slot, field },
+          });
     // 透明排序（P5d 步骤 4，rea-p5-mesh 2.4）：WPE 先置「半透明」，任一网格的材质不透明就改回不透明，所以只有网格全半透明的模型进名单
     // （`p5d-sort-a` 的 M1 / M2）。没有网格时保持半透明，同 WPE（反正不画）
     layer.sortClass = opaque.some(Boolean) ? "opaque" : "translucent";
@@ -1701,6 +1732,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     m: number,
     mesh: MdlMesh,
     material: string | undefined,
+    /** 模型有骨骼时这个网格的组合键（`modelMeshCombos`）：并进材质 pass 的 `combos`，程序检查放行 `g_Bones` 等（`PUPPET_UNIFORMS`）。 */
+    combos?: Record<string, number>,
   ): Promise<SceneMesh> {
     const out: SceneMesh = {
       format: mesh.format,
@@ -1725,10 +1758,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const { passes } = parseMaterial(text);
     // 语料的模型材质都是一个 pass；多 pass 的网格 WPE 怎么画没测
     if (passes.length > 1) unsupported.add("mdl:material-passes");
-    for (const [k, pass] of passes.entries()) {
+    for (const [k, raw] of passes.entries()) {
+      const pass: MaterialPass = combos ? { ...raw, combos: { ...raw.combos, ...combos } } : raw;
       const compiled = await compilePass(pass, {
         key: `objects/${index}/meshes/${m}/passes/${k}`,
         model: true,
+        ...(combos ? { puppet: true } : {}),
       });
       if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], mesh.format, unsupported);
       if (compiled.framebuffer) unsupported.add("mdl:framebuffer");
@@ -2571,7 +2606,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
   // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
   // 挂点（P12b1 步骤 3）：父的 puppet 编完才解析，只在找得到时才写字段（找不到按普通父子）
-  const puppetsByObject = new Map(bundle.layers.map((layer) => [layer.object, layer.puppet ?? null]));
+  const puppetsByObject = new Map(
+    bundle.layers.map((layer) => [layer.object, layer.puppet ?? layer.model?.skeleton ?? null]),
+  );
   for (const layer of bundle.layers) {
     const attachment = resolveAttachment(
       layer.object,
@@ -2682,6 +2719,18 @@ export function transferableBuffers(bundle: SceneBundle): ArrayBuffer[] {
           ]
         : [],
     ),
+    // 模型的骨骼（P12b2-1）：动画帧数据、变形权重轨道与变形纹理都是编译期自有缓冲
+    ...bundle.layers.flatMap((layer) => {
+      const skeleton = layer.model?.skeleton;
+      if (!skeleton) return [];
+      return [
+        ...skeleton.animations.flatMap((animation) => [
+          animation.frames.buffer,
+          ...(animation.meshMorph?.flatMap((list) => list?.map((track) => track?.buffer) ?? []) ?? []),
+        ]),
+        ...skeleton.morphs.map((morph) => morph?.texels.buffer),
+      ];
+    }),
   ];
   return [...new Set(buffers.filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer))];
 }

@@ -813,7 +813,7 @@ export function checkSoundFeatures(object: SceneObject, unsupported: Set<string>
  * 模型对象（P5c 步骤 1）不再整个报 `object:model`：mdl 与网格的用法由 `bundle.ts` 读到文件后按 `checkMdlFeatures`、
  * `checkMeshAttributes` 与模型 pass 的 `checkPassFeatures` 报（P5c 步骤 2 接上绘制后去掉了过渡键 `model:pending`）。对象上：
  * - `MODEL_NEUTRAL_FLAGS` 中性，`perspective: true` 中性（和 P5b 的透视图层同一套，`p5c-matrix` 实测）；
- * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers`（W6）等照未知键报；
+ * - `effects` 非空报 `model:effects`（语料 0 个）；`animationlayers` 与 `rootmotion`（P12b2-1）由 `buildModelSkeleton` 报，别的照未知键报；
  * - `dependencies` 中性（P8 步骤 4）：同别的对象只进并集，模型列的图像层照样被依赖、画进 RT（`3509243656` 的两个，模型材质没读这个名字）。
  *
  * 相机对象（P5d 步骤 3，`isCameraObject`）：`CAMERA_KEYS` 不报；同时带别的内容报 `object:camera:mixed`（`isMixedCameraObject`）。
@@ -909,8 +909,10 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
       !(kind === "particle" && key === "instanceoverride") &&
       !(shape && key === "shape") &&
       // 动画层（P12a）：图像层上 WPE 在加载模型 JSON 的 puppet 时读它（`FUN_1401fcc20`，rea-p12-runtime 1.4）；用法由 `buildPuppet` 报
-      // `puppet:*`。模型对象上 WPE 的读法没查（`3706286085`，P13），照报
-      !(kind === "image" && key === "animationlayers") &&
+      // `puppet:*`。模型对象（P12b2-1，`FUN_1402230c0`，rea-texchan-model 4）同样读，用法由 `buildModelSkeleton` 报；`rootmotion` 也是模型的
+      // 键（`FUN_140227470`），只在用到的动画 flags & 0x1f800 时才有作用，由它报 `model:rootmotion`
+      !((kind === "image" || kind === "model") && key === "animationlayers") &&
+      !(kind === "model" && key === "rootmotion") &&
       active(value)
     )
       unsupported.add(`object:${key}`);
@@ -1020,37 +1022,24 @@ export function checkModelFeatures(model: ModelJson, unsupported: Set<string>): 
 const hex = (value: number) => `0x${(value >>> 0).toString(16)}`;
 
 /**
- * 尾部段的标签 → 能力键（rea-p5-mesh 1.7 的识别规则：`MDLS`、`MDLA` 只比较前 4 个字符，`MDAT0001`、`MDMP0001` 比较 8 个字符，
- * `MDLE0002` 全串比较）。其余标签 WPE 整段跳过，中性（`p5c-ver` 的 S14、S23 带 `ZZZZ0001`、`MDLX0001` 照常显示）。
- */
-function sectionIssue(tag: string): string | undefined {
-  if (tag.startsWith("MDLS") || tag === "MDLE0002") return "mdl:skeleton";
-  if (tag.startsWith("MDLA")) return "mdl:animation";
-  if (tag.startsWith("MDMP0001")) return "mdl:morph";
-  if (tag.startsWith("MDAT0001")) return "mdl:attachment";
-  return undefined;
-}
-
-/**
  * 一个 mdl 文件（`mdl.ts` 的 `parseMdl`，P5c 步骤 1）还不支持的用法。静态网格（无段或只有不认识的段、无木偶数据）都不报。
  * - `mdl:truncated`：读越界（语料 0 个，WPE 的读取原语越界返回 0，不猜）；
- * - `mdl:skeleton` / `mdl:animation` / `mdl:morph` / `mdl:attachment`：骨骼、动画层、变形目标、挂点段（W6，语料只在 3706286085）；
+ * - `mdl:section:<标签>`：`MDLS` / `MDLA` / `MDMP` / `MDAT` 段没恰好读到段末（格式错误，WPE 读进下一段或终止进程，语料 0 处）；
+ * - 骨骼、动画层、变形目标、挂点段本身不报（P12b2-1：模型对象的骨骼由 `compile/puppet.ts` 的 `buildModelSkeleton` 整理，用法报 `puppet:*` / `mdl:morph:*`；
+ *   没有 `MDLS` 时 WPE 不建骨骼运行时，这些段都不读，中性；`MDLE` 模型不读，中性，rea-texchan-model 7.3）；
  * - `mdl:puppet`：网格带可选块或记录表（木偶数据，语料只在 puppet mdl，模型对象用的都是空的）；
- * - `mdl:flags:<十六进制>`：网格标志除 bit0（u32 索引）、bit1（多一个 u32）外还有位，值是多出来的位（bit10 是 `MORPHING_NORMALS`，
- *   bit2、bit12 含义没查，rea 1.3）；
+ * - `mdl:flags:<十六进制>`：网格标志除 bit0（u32 索引）、bit1（多一个 u32）、bit10（`MORPHING_NORMALS`，P12b2-1 已做）、bit11（切线差，
+ *   有变形目标时由 `buildModelSkeleton` 报 `mdl:morph:tangent`）外还有位，值是多出来的位（bit2、bit12 含义没查，rea 1.3）；
  * - `mdl:format:<十六进制>`：格式有表外的位，或同一个语义出现两次（如 `a_Position` 与 `a_PositionVec4`，语料 0 个，WPE 的输入布局
  *   怎么建没测），值是整个格式。
  * 材质多于一个 pass 在编译材质时报（`bundle.ts` 的 `compileMesh`，`mdl:material-passes`）。
  */
 export function checkMdlFeatures(file: MdlFile, unsupported: Set<string>): void {
   if (file.truncated) unsupported.add("mdl:truncated");
-  for (const tag of file.sections) {
-    const issue = sectionIssue(tag);
-    if (issue) unsupported.add(issue);
-  }
+  for (const tag of file.sectionIssues) unsupported.add(`mdl:section:${tag}`);
   for (const mesh of file.meshes) {
     if (mesh.puppet) unsupported.add("mdl:puppet");
-    if (mesh.flags & ~3) unsupported.add(`mdl:flags:${hex(mesh.flags & ~3)}`);
+    if (mesh.flags & ~0xc03) unsupported.add(`mdl:flags:${hex(mesh.flags & ~0xc03)}`);
     const semantics = meshAttributes(mesh.format).map(semanticKey);
     if (mesh.format & ~MDL_FORMAT_BITS || new Set(semantics).size !== semantics.length)
       unsupported.add(`mdl:format:${hex(mesh.format)}`);

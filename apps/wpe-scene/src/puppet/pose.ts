@@ -361,6 +361,48 @@ export function blendMorphWeights(
   }
 }
 
+/**
+ * 模型对象一个网格的变形权重叠法（P12b2-1，rea-texchan-model 5「变形权重的来源」，`0x14021c806`–`0x14021cbef`；p12b2-morph 实测 66 处预测全部一致）。和图像层的
+ * `blendMorphWeights` 的差别：生效阈值是 `|v| > FLT_EPSILON`（不是 `≥`），混合钳 [0, 1] 且只在生效时置位，加法是 `glm::clamp(cur + d, min(cur, d), max(cur, d))`。
+ * - `w == 1`（精确相等）且非加法：**覆盖**，生效置位并写 v（不钳制：1.5、−0.3 原样），不生效只清位、权重不动；
+ * - 非加法其它 w：**混合**，生效置位（从不清位），权重 `clamp(lerp(cur, v, w), 0, 1)`（cur 从 0 起）；
+ * - 加法：不生效整条跳过，否则置位，`d = v·w`，权重 `clamp(cur + d, min(cur, d), max(cur, d))`（同号取绝对值大的，不相加：0.4 加 0.3 得 0.4）。
+ * `tracks[t]` 为 null 的目标这一层不碰；位图是 u64 按 t 取模 64（WPE），这里每目标一个字节，语料没有 64 个以上的目标。
+ */
+export function blendModelMorphWeights(
+  weights: Float32Array,
+  active: Uint8Array,
+  tracks: readonly (Float32Array | null)[],
+  lo: number,
+  hi: number,
+  frac: number,
+  w: number,
+  additive: boolean,
+): void {
+  const override = !additive && w === 1;
+  for (let t = 0; t < tracks.length && t < weights.length; t++) {
+    const track = tracks[t];
+    if (!track) continue;
+    const v = lerp(track[lo], track[hi], frac);
+    const on = Math.abs(v) > FLT_EPSILON;
+    if (override) {
+      if (on) {
+        active[t] = 1;
+        weights[t] = v;
+      } else active[t] = 0;
+    } else if (!additive) {
+      if (on) active[t] = 1;
+      weights[t] = Math.min(Math.max(lerp(weights[t], v, w), 0), 1);
+    } else {
+      if (!on) continue;
+      active[t] = 1;
+      const cur = weights[t];
+      const d = f(v * w);
+      weights[t] = Math.min(Math.max(f(cur + d), Math.min(cur, d)), Math.max(cur, d));
+    }
+  }
+}
+
 /** `g_MorphOffsets` / `g_MorphWeights` 的槽数（`FUN_14020cff0`：最多 11 个目标 + 缩放那一槽）。 */
 export const MORPH_SLOTS = 12;
 

@@ -422,9 +422,9 @@ export class SceneState {
     // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
     for (const layer of bundle.layers)
       if (layer.camera) state.cameras.set(layer.object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
-    // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle
+    // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle；模型对象的骨骼（P12b2-1）同样
     for (const layer of bundle.layers)
-      layer.puppet?.layers.forEach((def, slot) =>
+      (layer.puppet ?? layer.model?.skeleton)?.layers.forEach((def, slot) =>
         state.animationLayers.set(animationLayerKey(layer.object, slot), {
           rate: def.rate,
           blend: def.blend,
