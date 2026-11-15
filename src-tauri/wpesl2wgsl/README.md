@@ -48,7 +48,7 @@ interface TranslateRequest {
   geometry?: string;                               // .geom 原文：给了就做几何着色器展开（定义 GS_ENABLED），见「几何着色器展开」
   includes?: Record<string, string>;               // `#include` 里写的名字（相对 shaders/ 根，如 "common.h"、"base/model_vertex_v1.h"）→ 源码
   combos?: Record<string, number | boolean>;       // 材质 pass 与 effect pass 的 combos，名字不分大小写
-  textures?: { slot: number; format?: number }[];  // 已绑定的 g_Texture<slot> 及其 .tex 格式枚举
+  textures?: { slot: number; format?: number; flags?: number }[];  // 已绑定的 g_Texture<slot>、.tex 格式枚举与头标志
   defaultFormats?: Record<number, number | null>;  // 没绑定、按注解缺省纹理定格式的槽位：slot → 缺省纹理的格式（读不到为 null），见「缺纹理格式」
   defines?: Record<string, string>;                // 额外的宏，最后应用（可覆盖平台宏与 COMBO）
   litDefines?: Record<string, string>;             // 只在最终 LIGHTING 非 0 时生效的宏（LIGHTS_* 等，见下）

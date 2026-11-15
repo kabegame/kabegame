@@ -723,6 +723,9 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 - **单级 mip 纹理的采样器（2026-11-14，P12a 走查转来的 B1）**：`samplerDescriptor` 原先只给多级 mip 的纹理开 8 倍各向异性，单级 mip 的（effect 遮罩、视频）只用双线性；WPE 对文件纹理一律是 Anisotropic 8x、只有 NoInterpolation 点采样（`FUN_140099980`，rea-p8-layer 3.2；视频见 p9-REPORT）。改成不看 mip 级数。依据与复核：
   - 3811769317 的 cloudmotion 用带噪声偏移的第二次采样读遮罩，导数被拉长，双线性和各向异性差到 204 级。复制工程 `ignore/p12/a/final/proj/3811769317-iso-pup` 的 275–280 帧和 WPE 比：改前每帧约 4900 个像素、最大 98–204，改后 10–417 个、最大 1–2（`ignore/p12/a/final/cmp/3811769317-iso-b1.txt`）。
   - 10 张场景的画面哈希（`ignore/p7e/hash-b1*.json`）：beach、deep_space、razer_vortex 变了，临时退回旧规则的 A 组和旧基线逐个相同，变化全部来自这一处；其余 7 张不变。p2-REPORT J1 记的 razer_vortex `wave`（64×8、无 mip）当时认为「WebGPU 复刻不了各向异性」，现在能开了，但这几张没有再和 WPE 重比。
+- **采样器注解 `components` 的组合键（2026-11-15，P12b2 走查转来的 F1）**：`generic4` / `genericimage2/4` 的 PBR 遮罩槽注解带 `components`（METALLIC / ROUGHNESS / REFLECTION / EMISSIVE_MAP），翻译器原先只置顶层 `combo`，3706286085 的 Sonic 手套等少了自发光那一项（WPE 亮 1.15–1.31 倍），静默的画面差。WPE 的规则（`FUN_14016c800`，解析在 `FUN_14016ce60`）：槽绑了纹理时，纹理标志（`.tex` 头、纹理对象 `+0x1c`）带 `0x100000 << i` 就置第 i 个对象条目的组合键；编辑器画的遮罩把用了哪些通道记在 bit 20–23（这张的遮罩是 `0x00800002`，只置 EMISSIVE）。翻译器 `BoundTexture` 加 `flags`，宿主给文件纹理传头标志，缓存键只收 bit 20 起。依据与复核：
+  - 复制工程 `ignore/p12/b2/check1/proj/3706286085-iso-boost(-nl)` 按 WPE 日志回放、和 WPE 抓帧逐帧比（`ignore/f1/cmp-*.txt`）：> 32 的像素 nl 变体每帧 1.5–2.0 万降到 0.12–0.29 万，第 403 帧从 54589 个 / 最大 64 降到 45 个 / 最大 1；原样副本 0.7–1.1 万降到 0.15–0.21 万。剩下的是 P12b2 报告里的 K2 等。
+  - 语料（`ignore/f1/`，同一份 wasm、只差宿主传不传 `flags`）：unsupported 逐场景不变（干净 175 → 175）；1299 个翻译请求里 20 个置了子组合键，涉及 8 张，四个子组合键都有，8 张目前都被别的能力挡着。
 
 ## P8 — 图像层与材质补全
 
@@ -824,6 +827,10 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
   - 另有几处小差异：透视图层换相机的范围、非 final pass 的 `g_ViewProjectionMatrix`、`g_EffectModelMatrixInverse`（WPE 没有这个内置名）。
   - 语料 0 处受影响：150 个这类 pass 都不读这些矩阵。等出现受影响的 effect 再做。
   - 规则、证据与修法见 [effect-matrices-REPORT](effect-matrices-REPORT.md)；工程 `ignore/p7d/proj/p7d-mvp`，抓帧 `A:\p7d\mvp`。
+- **waterwaves 的零星 1 级差**（2026-11-14 P12a 走查的 K4 / U1，用户定为后续项）：
+  - 输入 RT、常量、遮罩逐位相同时，waterwaves 输出仍有一百多个像素差 1 级（3828324728 头发 159 个、3409595232 165 个），全部在遮罩 > 0 处。
+  - 把 WPE 原文直译成 WGSL 回放，对 WPE 只差 8 个像素，用我们翻译器的输出差 87 个，所以差在翻译出的片元算术上（`sin` 参数的乘加、`pow` 的 log / exp 段），还没对 DXBC 与 WGSL 逐指令定位。
+  - 收益只是零星 1 级差。数据在 `ignore/p12/a/final/`（`report.txt` 第三节 K4、第四节 U1，回放器 `scripts/gpuwaves.ts`）。
 
 ## 旧名对照表（D15）
 
@@ -831,10 +838,6 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 | 旧名 | 现在的去处 |
 |---|---|
-- **waterwaves 的零星 1 级差**（2026-11-14 P12a 走查的 K4 / U1，用户定为后续项）：
-  - 输入 RT、常量、遮罩逐位相同时，waterwaves 输出仍有一百多个像素差 1 级（3828324728 头发 159 个、3409595232 165 个），全部在遮罩 > 0 处。
-  - 把 WPE 原文直译成 WGSL 回放，对 WPE 只差 8 个像素，用我们翻译器的输出差 87 个，所以差在翻译出的片元算术上（`sin` 参数的乘加、`pow` 的 log / exp 段），还没对 DXBC 与 WGSL 逐指令定位。
-  - 收益只是零星 1 级差。数据在 `ignore/p12/a/final/`（`report.txt` 第三节 K4、第四节 U1，回放器 `scripts/gpuwaves.ts`）。
 | W1 | 层级 → P4a；`shake`、`iris` 能力表已经不报；形状对象 → P8；工坊着色器进翻译器语料 → P7 |
 | W2 | 视频 → P9；音频频谱 → P11；文本、`thisLayer.text` → P6；绳与跟随指针的控制点 → P4c / P4d；`shine`、`blurprecise`、`opacity` 能力表已经不报 |
 | W3 | 多段视频 → P9；`mediaThumbnailChanged` → P11；相机对象 → P5d；`canvasSize` 已实现；`colorBlendMode` 21 / 31 能力表已经不报 |

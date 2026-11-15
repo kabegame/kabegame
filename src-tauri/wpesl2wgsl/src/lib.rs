@@ -93,12 +93,16 @@ pub struct TranslateRequest {
     pub debug: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct BoundTexture {
     pub slot: u32,
     /// `.tex` 的格式枚举（0 RGBA8888、4 DXT5、8 RG88、9 R8……），即 WPE 的 `TEX<n>FORMAT`。
     #[serde(default)]
     pub format: Option<u32>,
+    /// `.tex` 头的标志（WPE 纹理对象 `+0x1c`）。bit `20 + i` 置位时，采样器注解 `components` 的第 i 项组合键置 1
+    /// （`FUN_14016c800`）；编辑器画的遮罩用它记用了哪些通道。缺省（RT、占位等）按 0。
+    #[serde(default)]
+    pub flags: Option<u32>,
 }
 
 /// 翻译结果。成功时带两段 WGSL 与反射；失败时带出错阶段、所在着色器与诊断。
@@ -590,6 +594,8 @@ fn interfaces(decls: &[rewrite::InterfaceDecl], read: Option<&BTreeSet<String>>)
 }
 
 /// COMBO 取值：`// [COMBO]` 声明的默认值；绑定了带 `combo` 注释的纹理则置 1；请求里的值最后覆盖。
+/// 绑了纹理的槽还看注解的 `components`（只数对象条目，同 WPE 解析 `FUN_14016ce60`）：纹理标志带 `0x100000 << i` 时第 i 项的
+/// `combo` 置 1（`FUN_14016c800`，F1：3706286085 的 PBR 遮罩只置了 `EMISSIVE_MAP`）。
 fn resolve_combos(
     request: &TranslateRequest,
     annotations: &Annotations,
@@ -617,9 +623,32 @@ fn resolve_combos(
         }
     }
     for (slot, meta) in &annotations.samplers {
-        let bound = request.textures.iter().any(|texture| texture.slot == *slot);
-        if let (true, Some(name)) = (bound, meta.get("combo").and_then(Value::as_str)) {
+        let Some(texture) = request
+            .textures
+            .iter()
+            .find(|texture| texture.slot == *slot)
+        else {
+            continue;
+        };
+        if let Some(name) = meta.get("combo").and_then(Value::as_str) {
             set(name, 1, "texture");
+        }
+        let flags = texture.flags.unwrap_or(0);
+        let components = meta.get("components").and_then(Value::as_array);
+        for (i, component) in components
+            .into_iter()
+            .flatten()
+            .filter(|component| component.is_object())
+            .enumerate()
+        {
+            // WPE 按 32 位的 `0x100000 << (i & 31)` 算：i ≥ 12 时位被移出，恒不成立
+            let bit = 0x10_0000u32 << (i as u32 & 31);
+            if flags & bit == 0 {
+                continue;
+            }
+            if let Some(name) = component.get("combo").and_then(Value::as_str) {
+                set(name, 1, "texture");
+            }
         }
     }
     for (name, value) in &request.combos {
@@ -763,6 +792,7 @@ void main() {
             textures: vec![BoundTexture {
                 slot: 0,
                 format: Some(4),
+                ..Default::default()
             }],
             ..TranslateRequest::default()
         }
@@ -831,6 +861,7 @@ void main() {
         req.textures.push(BoundTexture {
             slot: 1,
             format: Some(8),
+            ..Default::default()
         });
         let result = translate(&req);
         assert!(result.ok, "{result:#?}");
@@ -846,13 +877,81 @@ void main() {
         assert!(result.uniforms.iter().any(|u| u.name == "g_Color1"));
     }
 
+    /// 注解的 `components`（F1，`FUN_14016c800`）：纹理标志 bit `20 + i` 置第 i 个对象条目的组合键；非对象条目不计序号；
+    /// 没绑纹理的槽不推；请求里写的值仍最后覆盖。
+    #[test]
+    fn component_combos_follow_texture_flags() {
+        let annotation = r#"{"combo":"PBRMASKS","components":[{"combo":"METALLIC_MAP"},"junk",{"combo":"ROUGHNESS_MAP"},{"label":"x"},{"combo":"EMISSIVE_MAP"}]}"#;
+        let run = |flags: Option<u32>, bound: bool, combos: &[(&str, i64)]| {
+            let mut req = request();
+            req.fragment = format!(
+                "uniform sampler2D g_Texture2; // {annotation}\nvoid main() {{\n\tgl_FragColor = texSample2D(g_Texture2, vec2(0, 0));\n}}\n"
+            );
+            req.textures = if bound {
+                vec![BoundTexture {
+                    slot: 2,
+                    flags,
+                    ..Default::default()
+                }]
+            } else {
+                Vec::new()
+            };
+            for (name, value) in combos {
+                req.combos.insert((*name).into(), Value::from(*value));
+            }
+            let result = translate(&req);
+            assert!(result.ok, "{result:#?}");
+            let mut on: Vec<(String, i64, &str)> = result
+                .combos
+                .iter()
+                .filter(|c| c.name != "TINT" && c.name != "NORMALMAP")
+                .map(|c| (c.name.clone(), c.value, c.source))
+                .collect();
+            on.sort();
+            on
+        };
+        let texture = |name: &str| (name.to_string(), 1, "texture");
+        // bit 20 → 第 0 项；bit 21 → 第 1 个对象（跳过 "junk"）；bit 23 → 第 3 个对象（`{"label":"x"}` 占序号、没有 combo）
+        assert_eq!(
+            run(Some(0x0010_0000), true, &[]),
+            vec![texture("METALLIC_MAP"), texture("PBRMASKS")]
+        );
+        assert_eq!(
+            run(Some(0x0020_0000), true, &[]),
+            vec![texture("PBRMASKS"), texture("ROUGHNESS_MAP")]
+        );
+        assert_eq!(run(Some(0x0040_0000), true, &[]), vec![texture("PBRMASKS")]);
+        assert_eq!(
+            run(Some(0x0080_0000), true, &[]),
+            vec![texture("EMISSIVE_MAP"), texture("PBRMASKS")]
+        );
+        // 3706286085 遮罩的标志：只有 bit 23 与 ClampUVs
+        assert_eq!(
+            run(Some(0x0080_0002), true, &[]),
+            vec![texture("EMISSIVE_MAP"), texture("PBRMASKS")]
+        );
+        assert_eq!(run(None, true, &[]), vec![texture("PBRMASKS")]);
+        assert_eq!(run(Some(0x00f0_0000), false, &[]), Vec::new());
+        assert_eq!(
+            run(Some(0x0080_0000), true, &[("emissive_map", 0)]),
+            vec![
+                ("EMISSIVE_MAP".to_string(), 0, "request"),
+                texture("PBRMASKS")
+            ]
+        );
+    }
+
     /// 翻译后有没有 `g_Mark`：判断 `#if condition` 走了哪一支。
     fn reaches_mark(condition: &str, annotation: &str, format: Option<u32>) -> bool {
         let mut req = request();
         req.fragment = format!(
             "uniform sampler2D g_Texture1; // {annotation}\n#if {condition}\nuniform float g_Mark;\n#endif\nvoid main() {{\n\tgl_FragColor = texSample2D(g_Texture1, vec2(0, 0));\n#if {condition}\n\tgl_FragColor.r = g_Mark;\n#endif\n}}\n"
         );
-        req.textures = vec![BoundTexture { slot: 1, format }];
+        req.textures = vec![BoundTexture {
+            slot: 1,
+            format,
+            ..Default::default()
+        }];
         let result = translate(&req);
         assert!(result.ok, "{result:#?}");
         result.uniforms.iter().any(|u| u.name == "g_Mark")
@@ -914,6 +1013,7 @@ void main() {
                 textures: vec![BoundTexture {
                     slot: 0,
                     format: Some(0),
+                    ..Default::default()
                 }],
                 ..TranslateRequest::default()
             };

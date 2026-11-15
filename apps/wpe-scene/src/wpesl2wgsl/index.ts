@@ -26,8 +26,11 @@ export interface TranslateRequest {
   includes?: Record<string, string>;
   /** 材质 / effect 指定的 COMBO（名字不分大小写）。 */
   combos?: Record<string, number | boolean>;
-  /** 已绑定的纹理槽位与 `.tex` 格式枚举：决定采样器注释里的 `combo` 与 `TEX<n>FORMAT`。 */
-  textures?: { slot: number; format?: number }[];
+  /**
+   * 已绑定的纹理槽位与 `.tex` 格式枚举：决定采样器注释里的 `combo` 与 `TEX<n>FORMAT`。`flags` 是 `.tex` 头的标志，
+   * bit `20 + i` 置注解 `components` 第 i 项的组合键（F1）。
+   */
+  textures?: { slot: number; format?: number; flags?: number }[];
   /**
    * 着色器注解缺省纹理的格式（P13d）：槽位 → `.tex` 格式（读不到为 null）。翻译器对声明了 `formatcombo`、材质没绑、注解带
    * `default` 且 `require` 成立的槽先返回 `phase: "texture"` 与 `missingTextures`，补上再译（同头文件）；不进 `textures`。

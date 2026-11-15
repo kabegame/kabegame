@@ -16,7 +16,15 @@ import { staticCombos, type MaterialPass, type SceneScalar, type SceneValue } fr
 export interface ShaderTextureSlot {
   slot: number;
   format?: number;
+  /**
+   * 文件纹理 `.tex` 头的标志（WPE 纹理对象 `+0x1c`）。翻译器按 bit `20 + i` 置采样器注解 `components` 第 i 项的组合键
+   * （`FUN_14016c800`，F1）；RT、占位等不给，按 0。
+   */
+  flags?: number;
 }
+
+/** 翻译器只读纹理标志的 bit 20 起（注解 `components` 的组合键），缓存键只收这些位。 */
+const COMPONENT_FLAG_SHIFT = 20;
 
 /**
  * 一个材质 pass 的材质常量（带 `meta.material` 的 uniform），按 uniform 名给出。取值照 WPE（`materialValues.ts`，
@@ -114,7 +122,13 @@ export function shaderCacheKey(
     Object.entries(combos)
       .map(([name, value]) => [name.toUpperCase(), Number(value)])
       .sort(),
-    textures.map((t) => [t.slot, t.format]).sort((a, b) => Number(a[0]) - Number(b[0])),
+    textures
+      .map((t) => {
+        // 组合键位为 0 时键与加 `flags` 之前逐字相同
+        const components = (t.flags ?? 0) >>> COMPONENT_FLAG_SHIFT;
+        return components ? [t.slot, t.format, components] : [t.slot, t.format];
+      })
+      .sort((a, b) => Number(a[0]) - Number(b[0])),
   ];
   const extra = Object.entries(defines).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   if (extra.length) parts.push(extra);

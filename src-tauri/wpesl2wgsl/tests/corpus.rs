@@ -155,6 +155,7 @@ fn run_full(
             .map(|(slot, format)| BoundTexture {
                 slot: *slot,
                 format: Some(*format),
+                ..Default::default()
             })
             .collect(),
         lit_defines: lit

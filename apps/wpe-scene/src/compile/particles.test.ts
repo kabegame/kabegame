@@ -1337,6 +1337,15 @@ describe("ShaderCompiler：粒子的 TEX0FORMAT", () => {
     expect(shaderCacheKey("genericimage2", combos, textures, scope)).toBe(legacy);
     expect(shaderCacheKey("genericimage2", combos, textures, scope, {})).toBe(legacy);
     expect(shaderCacheKey("genericimage2", combos, textures, scope, { TEX0FORMAT: "9" })).not.toBe(legacy);
+    // 纹理标志（F1）：只有 bit 20 起（注解 `components` 的组合键位）进键，低位（ClampUVs 等）不进，为 0 时与之前逐字相同
+    const withLow = textures.map((t) => (t.slot === 2 ? { ...t, flags: 0x3 } : t));
+    expect(shaderCacheKey("genericimage2", combos, withLow, scope)).toBe(legacy);
+    const emissive = textures.map((t) => (t.slot === 2 ? { ...t, flags: 0x0080_0002 } : t));
+    const metallic = textures.map((t) => (t.slot === 2 ? { ...t, flags: 0x0010_0002 } : t));
+    expect(shaderCacheKey("genericimage2", combos, emissive, scope)).not.toBe(legacy);
+    expect(shaderCacheKey("genericimage2", combos, emissive, scope)).not.toBe(
+      shaderCacheKey("genericimage2", combos, metallic, scope),
+    );
   });
 
   it("geometry（P4d 步骤 1）：读 .geom 放进请求、进缓存键；不带时缓存键与之前逐字相同", async () => {

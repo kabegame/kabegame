@@ -1991,7 +1991,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       const texture = await getTexture(name, scope, issues, !!context.particle);
       if (texture) {
         slots[slot] = texture.index;
-        formats.push({ slot, format: texture.format });
+        // 标志的 bit 20 起决定注解 `components` 的组合键（F1，`FUN_14016c800`）
+        formats.push({ slot, format: texture.format, flags: bundle.textures[texture.index].flags });
       }
     }
     // 用户纹理（P11b 步骤 1）：缺省纹理解析完才能定参考尺寸。只有 `textures[slot]` 是非空字符串且这一槽由材质自己绑的才生效

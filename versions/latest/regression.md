@@ -800,6 +800,27 @@
 | [x] | V8 上界是字面量 0 的 `smoothstep` | Windows，cargo + dev + WPE 抓帧 | 翻译器换成照 fxc 算的 `kb_smoothstep0`；确定性工程 `p7e-ss0`（下界 +0 / -0 / 整数 0 / 向量 / 非零 / 字面量对照）1600×900 和 WPE 逐像素比；示波器静态底图复制工程按 WPE 帧时间回放，逐 pass 比 | 一致；其余着色器输出不变 | 2026-11-14 Claude：六个图层最大差 0 / 0 / 0 / 0 / 1 / 1（差只在图层边缘，是已知的上屏缩放）；示波器 pass 与 shake pass 四帧 0 差，整帧平均差 78.1 → 0.88；语料基线只有 12 个片元着色器变（示波器、swing、vhs、流体 advection），Tint 0 错；变异 6 / 6 检出 |
 | [ ] | V9 预览里看示波器 | Windows，窗口模式 | 图库预览打开 3585875739，放一段音乐 | 示波器随音乐跳动，和 WPE 打开同一张观感一致 | 可选，待用户确认 |
 
+## 场景壁纸：单级 mip 纹理的各向异性过滤
+
+2026-11-14 Windows。`samplerDescriptor` 原先只给多级 mip 的文件纹理开 8 倍各向异性，单级 mip 的（effect 遮罩、视频）只用双线性。WPE 对文件纹理一律 Anisotropic 8x，只有 NoInterpolation 时点采样（rea-p8-layer 3.2，视频见 p9-REPORT）。改成不看 mip 级数。问题由 P12a 走查发现（`ignore/p12/a/final/report.txt` B1）：3811769317 的 cloudmotion 用带噪声偏移的第二次采样读遮罩，导数被拉长，两种过滤差到 204 级。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | A1 单测 | Node | `render.test.ts`「采样器与所需特性」 | 单级 mip、非点采样得 linear mip + 各向异性 8；点采样仍是 1 | 2026-11-14：44 个通过 |
+| [x] | A2 复制工程对照 | Windows dev + WPE 抓帧 | `ignore/p12/a/final/proj/3811769317-iso-pup` 按 WPE 日志回放 275–280 帧（2560×1046、超高档、跑脚本），和 P12a 走查时的 WPE 抓帧逐帧比 | cloudmotion 的大差消失 | 2026-11-14 Claude：改前每帧约 4900 个像素、最大 98–204；改后 10–417 个、最大 1–2（剩下的是走查已登记的 waterripple 末位与泛光链）。`cmp/3811769317-iso-b1.txt` |
+| [x] | A3 画面哈希 | Windows dev，屏外宿主 | 10 张场景三档各渲染两次；变了的 3 张临时退回旧规则再记一份 | 只有用到单级纹理缩小 / 斜向采样的场景变，变化全部来自本改动 | 2026-11-14 Claude：30 组全部稳定、`unsupported` 不变；beach、deep_space、razer_vortex 的哈希变了，退回旧规则的 A 组与旧基线逐个相同，其余 7 张不变。`ignore/p7e/hash-b1*.json`。这 3 张没有再和 WPE 重比 |
+| [ ] | A4 预览观感 | Windows，窗口模式 | 图库预览打开 3811769317 | cloudmotion 扭曲区域的边缘没有闪烁的硬边 | 可选，待用户确认 |
+
+## 场景壁纸：材质遮罩的通道组合键（F1）
+
+2026-11-15 Windows。`generic4` / `genericimage2/4` 的 PBR 遮罩槽注解带 `components`（METALLIC / ROUGHNESS / REFLECTION / EMISSIVE_MAP），WPE 按遮罩纹理头标志的 bit 20–23 逐项置这几个组合键（`FUN_14016c800`），翻译器原先只置顶层 `PBRMASKS`。翻译器 `BoundTexture` 加 `flags`，宿主给文件纹理传头标志。依据见 `.claude/plans/wpe-import/3-scene/PLAN.md` P7 节 F1 条；对方的取证在 `ignore/p12/b2/check1/F1-emissive.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | F1-1 单测 | Rust / Node | 翻译器 `component_combos_follow_texture_flags`；宿主 `particles.test.ts` 的缓存键用例 | 只置标志里对应的对象条目、非对象条目不计序号、没绑不推、请求值最后覆盖；低位不进缓存键 | 2026-11-15：翻译器 107 个、宿主相关 156 个全过 |
+| [x] | F1-2 复制工程对照 WPE | Windows dev + WPE 抓帧，1920×1080，后处理超高 | `ignore/p12/b2/check1/proj/3706286085-iso-boost-nl` 回放 401–406 帧、原样副本 412–417 帧，和 WPE 逐帧比 | Sonic 的手套、鞋、扣子亮度和 WPE 一致 | 2026-11-15：> 32 的像素 nl 每帧 1.5–2.0 万 → 0.12–0.29 万，第 403 帧 45 个、最大 1；原样副本 0.7–1.1 万 → 0.15–0.21 万（`ignore/f1/cmp-*.txt`），剩下的归 P12b2 的 K2 |
+| [x] | F1-3 语料 | Node，`kbp corpus scan` 两份快照（同一 wasm，只差传不传 `flags`） | 比 unsupported，统计置了子组合键的请求 | unsupported 不变 | 2026-11-15：干净 175 → 175、没有键增减；20 个请求、8 张场景用到，目前都被别的能力挡着 |
+
 ## 场景壁纸 P7d：流体 effect 的条件结构、没被读的 uniform、`g_LayerModelMatrix`
 
 2026-11-13 Windows。四项改动：
@@ -818,17 +839,6 @@
 | [x] | D4 `g_LayerModelMatrix` | Windows dev，屏外宿主 + WPE 抓帧 | 工坊 `rounded_mask` 挂在四个缩放、旋转各不相同的图层上（`ignore/p7d/gen_rmask.py`），1920×1080 和 WPE 逐像素比；测后 `projects_remove` | 一致 | 2026-11-12 Claude：最大差 0；单测和 `p7d-uni` 抓帧的矩阵逐值核对（含父链） |
 | [x] | D5 流体结构 | Node，HEAD 快照 | 六个流体变体的计划与 WPE 抓帧逐项比（绘制数、目标尺寸格式、各槽来源、实例覆盖） | 逐项相同 | 2026-11-12：80 / 80 |
 | [x] | D6 流体单步隔离 | Windows dev，探针 `__kabegameSceneProbe.fluid` | 把 WPE 某帧开始时的模拟 RT 灌进 fbo，跑一帧，逐个 RT 和 WPE 这一帧的输出比 | 只差半精度舍入 | 2026-11-12 Claude：旋度、染料、合成 RT 逐位相同；速度、压力、散度只有个别值差 1–4 ulp（第 122 帧经散度放大到 184 ulp 的单点）；我重跑第 121 帧数字一致 |
-## 场景壁纸：单级 mip 纹理的各向异性过滤
-
-2026-11-14 Windows。`samplerDescriptor` 原先只给多级 mip 的文件纹理开 8 倍各向异性，单级 mip 的（effect 遮罩、视频）只用双线性。WPE 对文件纹理一律 Anisotropic 8x，只有 NoInterpolation 时点采样（rea-p8-layer 3.2，视频见 p9-REPORT）。改成不看 mip 级数。问题由 P12a 走查发现（`ignore/p12/a/final/report.txt` B1）：3811769317 的 cloudmotion 用带噪声偏移的第二次采样读遮罩，导数被拉长，两种过滤差到 204 级。
-
-| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
-| --- | --- | --- | --- | --- | --- |
-| [x] | A1 单测 | Node | `render.test.ts`「采样器与所需特性」 | 单级 mip、非点采样得 linear mip + 各向异性 8；点采样仍是 1 | 2026-11-14：44 个通过 |
-| [x] | A2 复制工程对照 | Windows dev + WPE 抓帧 | `ignore/p12/a/final/proj/3811769317-iso-pup` 按 WPE 日志回放 275–280 帧（2560×1046、超高档、跑脚本），和 P12a 走查时的 WPE 抓帧逐帧比 | cloudmotion 的大差消失 | 2026-11-14 Claude：改前每帧约 4900 个像素、最大 98–204；改后 10–417 个、最大 1–2（剩下的是走查已登记的 waterripple 末位与泛光链）。`cmp/3811769317-iso-b1.txt` |
-| [x] | A3 画面哈希 | Windows dev，屏外宿主 | 10 张场景三档各渲染两次；变了的 3 张临时退回旧规则再记一份 | 只有用到单级纹理缩小 / 斜向采样的场景变，变化全部来自本改动 | 2026-11-14 Claude：30 组全部稳定、`unsupported` 不变；beach、deep_space、razer_vortex 的哈希变了，退回旧规则的 A 组与旧基线逐个相同，其余 7 张不变。`ignore/p7e/hash-b1*.json`。这 3 张没有再和 WPE 重比 |
-| [ ] | A4 预览观感 | Windows，窗口模式 | 图库预览打开 3811769317 | cloudmotion 扭曲区域的边缘没有闪烁的硬边 | 可选，待用户确认 |
-
 | [x] | D7 流体长程统计 | Windows dev，探针 + WPE 三次运行 | 按 WPE 帧时长跑 167 帧，读回第 154–167 帧的画布，和 WPE 比 | 落在 WPE 自身两次运行之间 | 2026-11-12 Claude：平均差 8.34 / 10.50 / 15.45（WPE 之间 8.79 / 11.97 / 14.55）；帧间变化量、火焰覆盖与 WPE 几乎相同 |
 | [x] | D8 收尾 | Windows，cargo + dev | 换上新 wasm；HEAD 快照重录夹具并重放，对 P7c 基线比较；新增 WGSL 过 Tint | 全过；原有输出不变 | 2026-11-13：853 / 853；原有 4012 个文件变了 0，少的 8 个是流体 normal pass 与 combine 的旧请求（条件生效后不再发出或请求换了哈希，WGSL 相同）；新增 114 份 WGSL 0 error 0 warning；能渲染 47 张，P7d 相关键 0 处 |
 | [ ] | D9 预览里看流体 | Windows，窗口模式 | 导入 `ignore/p7d/proj/p7d-fluid`，在图库预览里看一会儿，和 WPE 打开同一工程对照 | 火焰形状、亮度与流动速度和 WPE 观感一致 | 可选，待用户确认；本机语料里用流体的场景还不能渲染 |
