@@ -1,16 +1,11 @@
 <template>
-  <div
-    ref="rootRef"
-    class="pointer-events-none grid justify-items-center"
-    :class="placement === 'bottom' ? 'items-end pb-[4%]' : 'place-items-center'"
-    :style="rootStyle"
-    data-testid="wpe-loading-overlay"
-  >
+  <div ref="rootRef" class="pointer-events-none" :style="rootStyle" data-testid="wpe-loading-overlay">
     <!-- center：整块盖在缩略图上，背后（缩略图）模糊，正中一小块阶段文字 + 细进度条；bottom：失败后留在缩略图底部的红字原因，不模糊。
-         不拦指针。注释放在根元素里：放在外面组件就成了多根片段，调用方给的定位类落不到根上 -->
+         不拦指针。注释放在根元素里：放在外面组件就成了多根片段，调用方给的定位类落不到根上。
+         那一块按根绝对定位、用 translate 对中（不用 grid 居中：它的排版宽度可能比根还宽，grid 的列会被撑开、从左边排起，中心就偏了） -->
     <div
-      class="flex flex-col items-center gap-2 rounded-kb-md bg-kb-glass-strong px-4 py-3 shadow-kb-sm"
-      :class="placement === 'bottom' ? 'w-[min(480px,90%)]' : 'w-[min(320px,70%)]'"
+      class="absolute left-1/2 flex flex-col items-center gap-2 rounded-kb-md bg-kb-glass-strong px-4 py-3 shadow-kb-sm"
+      :class="placement === 'bottom' ? 'bottom-[4%] w-[min(480px,90%)]' : 'top-1/2 w-[min(320px,70%)]'"
       :style="pillStyle"
     >
       <span
@@ -59,6 +54,8 @@
  * 跟着缩放的话文字只剩一两个像素、模糊也只剩几像素。所以量出本层实际被缩放了多少（`displayScaleOf`，含全部祖先 transform）：
  * 那一块反向缩放（center 以中心、bottom 以底边中点为原点），宽度取上限（center 320 px、bottom 480 px）与显示宽度一定比例的较小值；
  * 模糊半径除以缩放。都按屏幕像素。祖先 transform 变了哪个 observer 都不触发（同 `WpeSceneView`），按 {@link MEASURE_INTERVAL_MS} 轮询。
+ * 小场景放大显示时（如 343 px 宽的场景），那一块的排版宽度比根还宽，所以按根绝对定位对中（`pillStyle`），根要由调用方定位
+ * （`ImageContent` 给 `absolute inset-0`）。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useI18n } from "@kabegame/i18n";
@@ -142,14 +139,20 @@ const rootStyle = computed(() => {
   return { backdropFilter: blur, WebkitBackdropFilter: blur };
 });
 
+/**
+ * 那一块的位置与大小：左边（与 center 的上边）在根的 50% 处，translate 拉回自身的一半，中心就落在根的中线上；再以中心（bottom 以底边
+ * 中点）为原点反向缩放，中心不动。translate 写在 scale 前面：两者都绕同一个原点，中心点经缩放不动、再平移半个自身宽度。
+ */
 const pillStyle = computed(() => {
+  const bottom = props.placement === "bottom";
+  const shift = bottom ? "translateX(-50%)" : "translate(-50%, -50%)";
   const value = measured.value;
-  if (!value) return undefined;
+  if (!value) return { transform: shift };
   const size = SIZE[props.placement];
   return {
     width: `${Math.min(size.max, value.width * size.ratio)}px`,
-    transform: `scale(${1 / value.scale})`,
-    transformOrigin: props.placement === "bottom" ? "bottom center" : "center",
+    transform: `${shift} scale(${1 / value.scale})`,
+    transformOrigin: bottom ? "bottom center" : "center",
   };
 });
 

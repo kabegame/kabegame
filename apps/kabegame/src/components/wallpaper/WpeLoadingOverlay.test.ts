@@ -69,7 +69,7 @@ describe("WpeLoadingOverlay", () => {
     expect(wrapper.find('[data-testid="wpe-loading-detail"]').text()).toBe("effect:x");
   });
 
-  it("屏幕上的大小固定：按量到的显示缩放反向缩放中间那块、模糊半径除以缩放，宽度取 240 px 与显示宽度 60% 的较小值", async () => {
+  it("屏幕上的大小固定：按量到的显示缩放反向缩放中间那块、模糊半径除以缩放，宽度取 320 px 与显示宽度 70% 的较小值", async () => {
     vi.useFakeTimers();
     const wrapper = mount(WpeLoadingOverlay, {
       props: { scene: true, value: 0.5, stage: "gpu" },
@@ -79,8 +79,9 @@ describe("WpeLoadingOverlay", () => {
     const pill = () => root.firstElementChild as HTMLElement;
     // 单根：调用方给的定位类落在根上
     expect(root.dataset.testid).toBe("wpe-loading-overlay");
-    // 没量到（还没布局）：中间那块不加内联样式，模糊按没缩放
-    expect(pill().getAttribute("style")).toBeNull();
+    // 没量到（还没布局）：只有对中的平移，不缩放、不定宽，模糊按没缩放
+    expect(pill().style.transform).toBe("translate(-50%, -50%)");
+    expect(pill().style.width).toBe("");
     expect(root.style.backdropFilter).toBe("blur(16px)");
     // 3840×2160 的画布缩到 960×540 显示
     Object.defineProperty(root, "offsetWidth", { configurable: true, value: 3840 });
@@ -88,16 +89,46 @@ describe("WpeLoadingOverlay", () => {
     root.getBoundingClientRect = () => ({ width: 960, height: 540 }) as DOMRect;
     vi.advanceTimersByTime(250);
     await flushPromises();
-    expect(pill().style.transform).toBe("scale(4)");
+    expect(pill().style.transform).toBe("translate(-50%, -50%) scale(4)");
+    expect(pill().style.transformOrigin).toBe("center");
     expect(pill().style.width).toBe("320px");
     expect(root.style.backdropFilter).toBe("blur(64px)");
     // 显示得很小时宽度跟着显示宽度
     root.getBoundingClientRect = () => ({ width: 200, height: 112.5 }) as DOMRect;
     vi.advanceTimersByTime(250);
     await flushPromises();
-    expect(pill().style.transform).toBe("scale(19.2)");
+    expect(pill().style.transform).toBe("translate(-50%, -50%) scale(19.2)");
     expect(pill().style.width).toBe("140px");
     wrapper.unmount();
     vi.useRealTimers();
+  });
+
+  it("对中不靠 grid：那一块按根绝对定位在中线上（小场景放大显示时它的排版宽度比根还宽，grid 的列会被撑开、中心偏右）", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = mount(WpeLoadingOverlay, {
+        props: { scene: true, value: 1, stage: "gpu", failure: ["effect:x"], placement: "bottom" },
+        attachTo: document.body,
+      });
+      const root = wrapper.element as HTMLElement;
+      const pill = root.firstElementChild as HTMLElement;
+      expect(root.classList.contains("grid")).toBe(false);
+      expect(pill.classList).toContain("absolute");
+      expect(pill.classList).toContain("left-1/2");
+      expect(pill.classList).toContain("bottom-[4%]");
+      expect(pill.style.transform).toBe("translateX(-50%)");
+      // 343×193 的小场景放大到 1066 宽显示（实测 dino_run）：排版宽度 480 > 343
+      Object.defineProperty(root, "offsetWidth", { configurable: true, value: 343 });
+      Object.defineProperty(root, "offsetHeight", { configurable: true, value: 193 });
+      root.getBoundingClientRect = () => ({ width: 1066, height: 600 }) as DOMRect;
+      vi.advanceTimersByTime(250);
+      await flushPromises();
+      expect(pill.style.width).toBe("480px");
+      expect(pill.style.transform).toMatch(/^translateX\(-50%\) scale\(0\.32/);
+      expect(pill.style.transformOrigin).toBe("bottom center");
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
