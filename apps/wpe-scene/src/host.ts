@@ -1000,9 +1000,14 @@ export class SceneHost {
           const puppets = pending && pending.bundle === this.scriptBundle ? pending.puppets : this.scenePuppets;
           return puppets
             ? {
-                count: () => puppets.layerCount(object),
+                ids: () => puppets.ids(object),
                 find: (name) => puppets.findLayer(object, name),
-                control: (index) => puppets.layer(object, index),
+                control: (id) => puppets.control(object, id),
+                alive: (id) => puppets.alive(object, id),
+                // 运行时建删层（P12e）：动画表取运行时的 rig，建出来的层由 `settle` / 派发里的 `released` 钩子善后
+                animations: () => puppets.rig(object)?.animations ?? [],
+                create: (item, single) => puppets.createLayer(object, item, single),
+                destroy: (selector) => puppets.destroyLayers(object, selector),
                 // 骨骼脚本方法（P12d-2）
                 boneTransform: (bone) => puppets.boneTransform(object, bone),
                 setBoneTransform: (bone, matrix) => puppets.setBoneTransform(object, bone, matrix),
@@ -1169,6 +1174,16 @@ export class SceneHost {
     if (volume !== undefined) this.sceneSounds?.scheduler(object)?.setVolume(volume);
   };
 
+  /**
+   * 一个动画层被释放（P12e：单次层在派发里被删、或 `settle` 释放 destroyAnimationLayer 摘出的层）：删状态里三方共写的字段（渲染器正在画的与脚本看的
+   * 两份），再让脚本运行时给它的字段脚本发 `destroy`、清重放表里它的项。之后包装作废（`alive` 为假）。
+   */
+  private readonly puppetReleased = (object: number, id: number): void => {
+    this.drawnState?.removeAnimationLayer(object, id);
+    if (this.scriptState !== this.drawnState) this.scriptState?.removeAnimationLayer(object, id);
+    this.runtime?.destroyAnimationLayer(object, id);
+  };
+
   private syncSoundVolumes(): void {
     this.sceneSounds?.syncVolumes(this.soundVolumeOf);
   }
@@ -1333,7 +1348,12 @@ export class SceneHost {
    */
   puppetProbe(): {
     pending: boolean;
-    objects: { object: number; layers: { name: string; frame: number; playing: boolean }[] }[];
+    objects: {
+      object: number;
+      /** 摘出（destroyAnimationLayer）还没释放的层数（P12e：看「摘了还没 settle」）。 */
+      detached: number;
+      layers: { id: number; name: string; frame: number; playing: boolean }[];
+    }[];
   } {
     const pending = !this.scenePuppets && !!this.pendingPuppets;
     const puppets = this.scenePuppets ?? this.pendingPuppets?.puppets ?? null;
@@ -1344,9 +1364,10 @@ export class SceneHost {
       .filter((object) => puppets.layerCount(object) > 0)
       .map((object) => ({
         object,
-        layers: Array.from({ length: puppets.layerCount(object) }, (_, index) => {
-          const control = puppets.layer(object, index)!;
-          return { name: control.name, frame: control.getFrame(), playing: control.isPlaying() };
+        detached: puppets.detachedCount(object),
+        layers: puppets.ids(object).map((id) => {
+          const control = puppets.control(object, id)!;
+          return { id, name: control.name, frame: control.getFrame(), playing: control.isPlaying() };
         }),
       }));
     return { pending, objects };
@@ -1433,6 +1454,7 @@ export class SceneHost {
         if (drawn)
           this.scenePuppets?.frame(dt, stateSink(drawn), {
             event: (object, json) => this.runtime?.animationEvent(object, json),
+            released: this.puppetReleased,
           });
       },
       videos: this.videoSink,
@@ -1460,6 +1482,8 @@ export class SceneHost {
             bundle: this.scriptBundle,
             removed: (objects, regroup) => this.onDestroyed(objects, regroup),
           });
+          // destroyAnimationLayer 摘出的层在这里释放（P12e，WPE 先处理待删对象、再尾调排空 `ctx+0x1478`）：包装作废、字段脚本收 destroy
+          this.scenePuppets?.settle({ released: this.puppetReleased });
         }
       },
       onError: (reasons) => {
@@ -1770,6 +1794,12 @@ export class SceneHost {
           // 待用的（`init` 里的控制要保留）不接旧时钟；否则接上正在播的，没有时接过期的待用运行时（P12c）
           this.pendingPuppets = null;
           if (!pendingPuppets) puppets.carryOver(this.scenePuppets ?? stalePuppets?.puppets ?? null);
+          // 状态的动画层字段按运行时的层表对齐（P12e）：运行时建的层从脚本状态拷、删过的编译期层去掉；在 `refresh` 之前（它读状态）、重放脚本写入之前
+          state.syncAnimationLayers(
+            puppets.liveLayers(),
+            this.scriptState !== state ? this.scriptState : null,
+            puppets.objects(),
+          );
           puppets.refresh(stateSink(state));
           this.scenePuppets = puppets;
           // 运行中属性写进状态时同步交给来源表解码（P11b 步骤 2）；解码完成再经 `onUserTextureReady` 标脏

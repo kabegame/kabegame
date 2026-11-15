@@ -247,7 +247,7 @@ export type BindingTarget =
   /**
    * puppet 动画层的 `rate` / `blend` / `visible`（P12a 步骤 3 点 3，rea-p12-runtime 1.5：三个描述符可绑定，用户属性在两帧之间写进去、puppet
    * 当帧就读到，p12-REPORT 用例 4）：就地写进 `SceneState.animationLayers`，不标脏，`ScenePuppets.frame` 每帧读。`object` 是 `objects` 下标，
-   * `layer` 是 `ScenePuppet.layers` 的下标（丢掉找不到动画的项之后）。字段挂脚本报 `puppet:layer-script`（P12c），不在这里。
+   * `layer` 是层 id（P12e：编译期 = `animationlayers` 的 JSON 下标，运行时建的层是负数），不再是 `ScenePuppet.layers` 的下标。字段挂脚本报 `puppet:layer-script`（P12c），不在这里。
    */
   | { kind: "animation-layer"; object: number; layer: number; field: AnimationLayerField }
   | { kind: "recompile"; reason: RecompileReason; path: string };

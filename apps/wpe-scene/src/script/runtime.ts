@@ -745,10 +745,35 @@ export class ScriptRuntime {
    */
   destroyObjects(objects: ReadonlySet<number>): void {
     if (objects.size === 0) return;
-    const owned = (record: ScriptRecord): boolean => {
+    this.dropRecords((record) => {
       const object = scriptObject(record.script.owner);
       return object !== null && objects.has(object);
-    };
+    });
+    for (const key of [...this.writes.keys()]) {
+      const match = /^objects\/(\d+)\//.exec(key);
+      if (match && objects.has(Number(match[1]))) this.writes.delete(key);
+    }
+  }
+
+  /**
+   * 一个动画层被释放（P12e，WPE 析构链 `FUN_140176f70(…, AL, 0)`）：属主是这个层的字段脚本（owner `animation-layer`、object 与 layer 都相同）先收 destroy
+   * （已 init、导出了才调），再从 records / byId 摘掉，计时器去掉；重放表里 `objects/<o>/animationlayers/<id>/` 开头的项去掉。
+   * 运行时建的层没有字段脚本（config 里的 `{script}` 不登记），只清重放表。只在脚本阶段之后调（同 `destroyObjects`）。
+   */
+  destroyAnimationLayer(object: number, id: number): void {
+    this.dropRecords((record) => {
+      const owner = record.script.owner;
+      return owner.kind === "animation-layer" && owner.object === object && owner.layer === id;
+    });
+    const prefix = `objects/${object}/animationlayers/${id}/`;
+    for (const key of [...this.writes.keys()]) if (key.startsWith(prefix)) this.writes.delete(key);
+  }
+
+  /**
+   * 属主命中的脚本条目：按条目顺序先收 `destroy`（导出了、已 `init` 才调），再从 `records` / `byId` 摘掉，计时器去掉（`destroyObjects` 与
+   * `destroyAnimationLayer` 共用，P12e）。`records` 换成新数组，不影响正在进行的遍历。
+   */
+  private dropRecords(owned: (record: ScriptRecord) => boolean): void {
     for (const record of this.records) {
       if (!owned(record)) continue;
       if (record.state === "inited" && !this.halted) this.call(record, "destroy");
@@ -759,10 +784,6 @@ export class ScriptRuntime {
       for (const record of gone) this.byId.delete(record.script.id);
       for (const timer of this.timers) if (gone.has(timer.owner)) timer.cancelled = true;
       this.timers = this.timers.filter((timer) => !timer.cancelled);
-    }
-    for (const key of [...this.writes.keys()]) {
-      const match = /^objects\/(\d+)\//.exec(key);
-      if (match && objects.has(Number(match[1]))) this.writes.delete(key);
     }
   }
 

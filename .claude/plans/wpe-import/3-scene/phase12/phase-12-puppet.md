@@ -398,6 +398,10 @@ const OBJECT_FLAGS = [
   - `lt`、平移轴锁、`t + re` 照读码实现、只对 python 模型验证；
   - 只做图像层 puppet，模型对象开物理照报。
 
+## P12e — 脚本建删动画层（追加）
+
+**进度**（2026-11-16）：**P12e 完成**，子计划 [phase-12e-createlayer.md](phase-12e-createlayer.md)。原范围里「建删动画层」是照报项，`2887099508` 点书用到 `playSingleAnimation`，用户定为追加一节：三个方法一起做，动画全编，层改按 id 记，照 WPE 的回调循环与删层时机。语料键不变，能渲染数不变。
+
 下面是写子计划之前的范围。
 
 语义依据见 [rea-p12-attach-physics](rea-p12-attach-physics.md) 第 2 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 10、第二部分第 1 节。

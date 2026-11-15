@@ -816,6 +816,11 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 - **语料**：233 张能渲染 182 → 185，解锁 `2345214324`、`3359451610`、`3426865175`。
 - **P12 全部完成**。照报的有：模型对象的物理，语料 0 处的骨骼局部读写、混合形状、建删动画层。
 
+**进度**（2026-11-16）：**P12e 完成**（[phase-12e-createlayer.md](phase12/phase-12e-createlayer.md)）：脚本建删动画层（`createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`），起因是 `2887099508` 点书报错。
+- MDLA 动画全编、层改按 id 记、回调循环与删层两段照 WPE；先读码再实测（`p12-create`），夹具 545 行日志与 WPE 逐行相同。
+- 语料键不变（2887 的调用编译期认不出，本来就不报），puppet 动画数据 36.4 → 49.7 MB；P12a–d 生成工程逐字节不变。
+- 用户在预览里点书确认 2887 翻页正常（回归 PE6）。
+
 - MDLV0021 / MDLV0023 的骨骼（MDLS）、动画（MDLA）、变形（MDMP），skinning（翻译器经 `defines` 传 `BONECOUNT`），puppet warp。语料 33 张。
 - 对象 `animationlayers`（31 张）、`attachment` 挂点（10 张）；脚本 `getAnimationLayer*`、骨骼与混合形状的 API。
 - **依赖：** P5c 的 mdl 解析。P5c 对带这些段的模型报 `mdl:skeleton` / `mdl:animation` / `mdl:morph`。

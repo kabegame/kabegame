@@ -185,9 +185,10 @@ function setup(options: { hosted?: boolean } = {}) {
       ? {}
       : {
           puppetLayers: (object: number) => ({
-            count: () => puppets.layerCount(object),
+            ids: () => puppets.ids(object),
             find: (name: string) => puppets.findLayer(object, name),
-            control: (index: number) => puppets.layer(object, index),
+            control: (id: number) => puppets.control(object, id),
+            alive: (id: number) => puppets.alive(object, id),
           }),
         }),
   });
@@ -271,7 +272,7 @@ describe("IAnimationLayer 的成员", () => {
     expect(layerApi.id).toBeUndefined();
   });
 
-  it("duration / frameCount / fps 是只读数据属性：严格模式赋值抛 TypeError，值不变", () => {
+  it("duration / frameCount / fps 只读（访问器，P12e）：赋值抛 TypeError，值不变", () => {
     const layerApi = setup().layer(0).getAnimationLayer(0) as Api;
     expect([layerApi.duration, layerApi.frameCount, layerApi.fps]).toEqual([1, 10, 10]);
     for (const key of ["duration", "frameCount", "fps"]) {
@@ -386,13 +387,14 @@ describe("IAnimationLayer 的成员", () => {
     // 宿主把落点换成另一份运行时
     const other = new ScenePuppets([{ object: 0, puppet: rig([def(0, { name: "a" })]) }]);
     (h.api as unknown as { access: { puppetLayers: unknown } }).access.puppetLayers = (object: number) => ({
-      count: () => other.layerCount(object),
+      ids: () => other.ids(object),
       find: (name: string) => other.findLayer(object, name),
-      control: (index: number) => other.layer(object, index),
+      control: (id: number) => other.control(object, id),
+      alive: (id: number) => other.alive(object, id),
     });
     expect(layerApi.getFrame()).toBe(0);
     layerApi.setFrame(2);
-    expect(other.layer(0, 0)!.getFrame()).toBe(2);
+    expect(other.control(0, 0)!.getFrame()).toBe(2);
   });
 });
 

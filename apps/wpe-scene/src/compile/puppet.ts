@@ -30,9 +30,12 @@ export type PuppetLayerField = "rate" | "blend" | "visible";
 
 /** 一个动画层（`animationlayers` 的一项，rea-RT 1.4、1.5）。 */
 export interface PuppetLayerDef {
-  /** `ScenePuppet.animations` 的下标。 */
+  /** `ScenePuppet.animations` 的下标（P12e 起动画全编，也就是 `MDLA` 顺序的下标）。 */
   animation: number;
-  /** 这一层在 JSON `animationlayers` 数组里的下标（P12c：字段脚本按它找层；`layerDefs` 会丢项，所以不假设等于层下标）。 */
+  /**
+   * 这一层在 JSON `animationlayers` 数组里的下标，也是这一层的 id（P12e：状态键、包装缓存、字段脚本与 `{user}` 绑定的目标都按它找；
+   * `layerDefs` 会丢项，所以不等于层表里的位置；运行时建的层用负数，不会撞）。
+   */
   entry: number;
   name: string;
   rate: number;
@@ -62,6 +65,12 @@ export interface PuppetAnimation {
   length: number;
   /** `MDLA` 里的事件（P12c，秒；图像层与模型都填）：时钟推进时收集越过的，按表顺序派发。 */
   events: { time: number; json: string }[];
+  /**
+   * 这条动画用到、我们还不支持的用法（P12e）：键同编译期的细分键（`puppet:animation-ref`、`mdl:animation:tracks`、`puppet:alpha-track`、
+   * `puppet:draw-order` / `puppet:order-track`、`model:rootmotion`）。被 `animationlayers` 引用的动画照旧报进 `unsupported`；没被引用的只记在这里，
+   * 不转帧数据（`frames` / `alpha` / `morph` / `channels` / `meshMorph` 为空），运行时在它上面建层返回 null 并 warn。没有时不写这个键（bundle 字节同以前）。
+   */
+  unsupported?: string[];
   /** 每骨骼 1 = 有轨道（轨道 flags bit0 为 0）、0 = 保持来源（rea-mdl 4.3、rea-RT 4）。静态 puppet 为空。 */
   mask: Uint8Array;
   /** 第 f 帧第 b 根骨骼在 `(f × 骨骼数 + b) × 10`：T(3) q(4，w x y z) S(3)。静态 puppet 不转换，为空。 */
@@ -215,23 +224,23 @@ const LAYER_KEYS = ["visible", "additive", "blendin", "blendout", "name", "rate"
 /** 挂脚本仍报 `puppet:layer-script` 的五个可写字段（P12c：`rate` / `blend` / `visible` 接 `animation-layer` 目标，语料 65 处全在这三个上，其余 0 处）。 */
 const UNSCRIPTED_LAYER_KEYS = ["additive", "blendin", "blendout", "name", "blendtime"] as const;
 
-/** float 描述符的 JSON 取值（同图层字段的 `asNumber`：数字原样、布尔 1 / 0、能解析的字符串；其余取缺省），存 float32。 */
-function floatField(value: SceneScalar | undefined, fallback: number): number {
-  if (value === null || value === undefined) return fallback;
-  const parsed = Number(value);
-  return f(Number.isFinite(parsed) ? parsed : fallback);
+/**
+ * float 描述符的 JSON 取值（P12e 改严：加载 `animationlayers` 与运行时 `createAnimationLayer` 走同一个 setter `FUN_1401730d0`，实测只收 JSON 数；
+ * 布尔、字符串、`null` 都不写，取缺省），存 float32。编译期与运行时建层共用这一个函数。语料 316 个 `animationlayers` 项的字段类型全部符合，0 处受影响。
+ */
+export function floatField(value: SceneScalar | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? f(value) : fallback;
 }
 
-/** 位描述符的 JSON 取值（jsoncpp `asBool`：布尔原样、数字非 0 为真；缺键或别的类型取缺省）。语料全是布尔。 */
-function boolField(value: SceneScalar | undefined, fallback: boolean): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  return fallback;
+/** 位描述符的 JSON 取值（P12e 改严，同上：只收 JSON 布尔，数字、字符串不写，取缺省）。编译期与运行时建层共用。 */
+export function boolField(value: SceneScalar | undefined, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 /**
- * 动画层字段的写入取值（用户属性就地写，`render/state.ts`），和编译期的 `floatField` / `boolField` 同一条规则：float 收数字、布尔（1 / 0）与能
- * 解析的字符串，bool 收布尔与数字（非 0 为真）；别的类型返回 undefined（WPE 的 setter 不收时不写字段）。条件先由调用方换成布尔。
+ * 动画层字段的写入取值（用户属性就地写，`render/state.ts`，P12c 定的规则）：float 收数字、布尔（1 / 0）与能解析的字符串，bool 收布尔与数字（非 0 为真）；
+ * 别的类型返回 undefined（WPE 的 setter 不收时不写字段）。条件先由调用方换成布尔。注意它比加载 / 建层时的 `floatField` / `boolField`（P12e 起只收 JSON 原生
+ * 类型）宽：那是 JSON 描述符的 setter，这是属性值与脚本写入的路径（P12c 未改）。
  */
 export function animationLayerValue(
   field: PuppetLayerField,
@@ -452,7 +461,8 @@ function convertAnimation(
 
 /**
  * 动画层（`FUN_1401fcc20`，rea-RT 1.4；模型对象 `FUN_1402230c0` 与它逐条相同，rea-texchan-model 4）：只认数组里的对象；`animation` 不是数或在
- * MDLA 里找不到就整层丢掉、不报。`used` 是用到的动画（`file.animations` 的下标，按首次出现排），`defs[i].animation` 指它的下标。字段挂 `{script}`
+ * MDLA 里找不到就整层丢掉、不报。`used` 是被引用的动画（`file.animations` 的下标，按首次出现排，只用来决定哪些动画的问题要报进 `issues`），
+ * `defs[i].animation` 是 MDLA 下标（P12e：动画全编，两者一致）。字段挂 `{script}`
  * 报 `puppet:layer-script`（P12c）。图像层与模型共用（P12b2-1 从 `buildPuppet` 抽出）。
  */
 function layerDefs(
@@ -470,8 +480,7 @@ function layerDefs(
     const id = Math.trunc(json.animation);
     const index = file.animations.findIndex((animation) => animation.id === id);
     if (index < 0) continue;
-    let slot = used.indexOf(index);
-    if (slot < 0) slot = used.push(index) - 1;
+    if (!used.includes(index)) used.push(index);
     // 字段脚本（P12c）：rate / blend / visible 接 `animation-layer` 目标；其余五个可写字段语料 0 处，照报
     if (UNSCRIPTED_LAYER_KEYS.some((key) => isScriptValue(json[key]))) issues.add("puppet:layer-script");
     const value = (key: (typeof LAYER_KEYS)[number]) => resolveValue(json[key] as SceneValue | undefined, properties);
@@ -482,8 +491,8 @@ function layerDefs(
     }
     const name = value("name");
     defs.push({
-      animation: slot,
-      entry: entryIndex,
+      animation: index, // MDLA 顺序的下标（`ScenePuppet.animations` 全编后两者一致）
+      entry: entryIndex, // 也是这一层的 id（P12e：层 id = JSON 下标）
       name: typeof name === "string" ? name : "",
       rate: floatField(value("rate"), 1),
       blend: floatField(value("blend"), 1),
@@ -499,16 +508,10 @@ function layerDefs(
 }
 
 /**
- * 骨骼与动画里 WPE 还没做（或会越界）的用法，图像层与模型共用（P12b2-1 从 `buildPuppet` 抽出）：骨骼物理（`puppet:physics`）、IK / 约束 / 键表 / 链表
- * （`puppet:ik`）、引用块与记录 / 约束轨道（`puppet:animation-ref`）、轨道数不等于骨骼数（`mdl:animation:tracks`）。
+ * 骨骼里 WPE 还没做（或会越界）的用法，图像层与模型共用（P12b2-1 从 `buildPuppet` 抽出）：骨骼物理（`puppet:physics`）、IK / 约束 / 键表 / 链表
+ * （`puppet:ik`）。逐动画的检查（`puppet:animation-ref`、`mdl:animation:tracks` 等）P12e 起在 `animationIssues`。
  */
-function skeletonIssues(
-  skeleton: NonNullable<MdlFile["skeleton"]>,
-  file: MdlFile,
-  used: readonly number[],
-  issues: Set<string>,
-  model = false,
-): void {
+function skeletonIssues(skeleton: NonNullable<MdlFile["skeleton"]>, issues: Set<string>, model = false): void {
   for (const bone of skeleton.bones) {
     const flags = boneJsonFlags(bone.json);
     // 图像层 puppet 的物理由 `puppet/physics.ts` 做（P12d-1）；模型更新路径里的物理没读码，开了仍报；骨骼文件 flags bit1 两边都报
@@ -517,11 +520,43 @@ function skeletonIssues(
   }
   const { records, constraints, keyMaps, chains } = skeleton.extras;
   if (records || constraints || keyMaps || chains) issues.add("puppet:ik");
-  for (const index of used) {
-    const animation = file.animations[index];
-    if (animation.unsupported) issues.add("puppet:animation-ref");
-    if (animation.tracks.length !== skeleton.bones.length) issues.add("mdl:animation:tracks");
-  }
+}
+
+/**
+ * 一条动画的不支持用法（P12e：从 `skeletonIssues` / `buildPuppet` / `buildModelSkeleton` 抽出，规则不变）：引用块 / 记录 / 约束轨道（`puppet:animation-ref`）、
+ * 轨道数不等于骨骼数（`mdl:animation:tracks`）；图像层另查骨骼透明度轨道没有网格 bit2（`puppet:alpha-track`）与绘制顺序轨道（`puppet:draw-order` /
+ * `puppet:order-track`）；模型另查 `rootmotion`（`model:rootmotion`，对象 `rootmotion` 不为假且动画 flags & 0x1f800）。
+ */
+function animationIssues(
+  animation: MdlAnimation,
+  ctx: { bones: number; model: boolean; meshFlags: number; rootmotion: boolean },
+): string[] {
+  const out: string[] = [];
+  if (animation.unsupported) out.push("puppet:animation-ref");
+  if (animation.tracks.length !== ctx.bones) out.push("mdl:animation:tracks");
+  if (!ctx.model) {
+    if (animation.boneAlpha && !(ctx.meshFlags & 4)) out.push("puppet:alpha-track");
+    if (animation.drawOrderTrack) out.push(ctx.meshFlags & 8 ? "puppet:draw-order" : "puppet:order-track");
+  } else if (ctx.rootmotion && animation.flags & 0x1f800) out.push("model:rootmotion");
+  return out;
+}
+
+/** 没被引用又不支持的动画（P12e）：只留名字、id、模式、fps、长度、事件与 `unsupported`，不转帧数据；运行时在它上面建层返回 null。 */
+function stubAnimation(animation: MdlAnimation, problems: string[]): PuppetAnimation {
+  return {
+    id: animation.id,
+    name: animation.name,
+    mode: MODES[animation.mode],
+    fps: animation.fps,
+    length: animation.length,
+    mask: new Uint8Array(0),
+    frames: new Float32Array(0),
+    alpha: null,
+    alphaMask: new Uint8Array(0),
+    morph: null,
+    events: animation.events.map((event) => ({ time: event.time, json: event.json })),
+    unsupported: problems,
+  };
 }
 
 /**
@@ -571,14 +606,11 @@ export function buildPuppet(
 
   const { used, defs } = layerDefs(file, layers, properties, issues);
 
-  if (skinned) {
-    skeletonIssues(skeleton!, file, used, issues);
-    for (const index of used) {
-      const animation = file.animations[index];
-      if (animation.boneAlpha && !(mesh.flags & 4)) issues.add("puppet:alpha-track");
-      if (animation.drawOrderTrack) issues.add(mesh.flags & 8 ? "puppet:draw-order" : "puppet:order-track");
-    }
-  }
+  if (skinned) skeletonIssues(skeleton!, issues);
+  // 动画全编（P12e）：脚本 `createAnimationLayer("名字")` 能引用 MDLA 里任何一条，编译期认不出。被引用的动画的问题照旧报进 `issues`；
+  // 没被引用又有问题的只留 stub（`unsupported`），不能因为一条可能永远用不到的动画把整张场景退回。静态 puppet 不转帧数据、不查
+  const usedSet = new Set(used);
+  const issuesCtx = { bones: skeleton?.bones.length ?? 0, model: false, meshFlags: mesh.flags, rootmotion: false };
 
   const textureChannels: PuppetTextureChannels | null = channelMesh
     ? {
@@ -615,18 +647,13 @@ export function buildPuppet(
     names: (skeleton?.bones ?? []).map((bone) => bone.name),
     boneCount: skeleton?.bones.length ?? 0,
     skeleton: skinned ? buildSkeleton(file) : null,
-    animations: used.map((index) => {
-      const converted = convertAnimation(
-        file.animations[index],
-        file,
-        bones.length,
-        skinned,
-        withAlpha,
-        morph?.targets ?? 0,
-      );
+    animations: file.animations.map((animation, index) => {
+      const problems = skinned ? animationIssues(animation, issuesCtx) : [];
+      if (usedSet.has(index)) for (const key of problems) issues.add(key);
+      else if (problems.length) return stubAnimation(animation, problems);
+      const converted = convertAnimation(animation, file, bones.length, skinned, withAlpha, morph?.targets ?? 0);
       // 自有缓冲（`Float32Array.from`）：mdl 文件缓冲上的视图不跟着 puppet 一起转移
-      if (textureChannels)
-        converted.channels = (file.animations[index].channels ?? []).map((track) => Float32Array.from(track));
+      if (textureChannels) converted.channels = (animation.channels ?? []).map((track) => Float32Array.from(track));
       return converted;
     }),
     layers: defs,
@@ -910,19 +937,25 @@ export function buildModelSkeleton(
   if (bones === 0) return { skeleton: null, issues };
   if (file.animations.some((animation) => animation.id >= 2 ** 32)) issues.add("mdl:animation-id");
   const { used, defs } = layerDefs(file, layers, properties, issues);
-  skeletonIssues(source, file, used, issues, true);
+  skeletonIssues(source, issues, true);
   const morphs = file.meshes.map((mesh) => buildModelMorph(mesh, issues));
   const rootmotion = object.rootmotion;
-  if (
-    rootmotion !== undefined &&
-    rootmotion !== null &&
-    rootmotion !== false &&
-    rootmotion !== 0 &&
-    used.some((index) => file.animations[index].flags & 0x1f800)
-  )
-    issues.add("model:rootmotion");
-  const animations = used.map((index) => {
-    const animation = file.animations[index];
+  // 动画全编（P12e，同 `buildPuppet`）：被引用的动画的问题照旧报，没被引用又有问题的只留 stub
+  const usedSet = new Set(used);
+  const issuesCtx = {
+    bones: source.bones.length,
+    model: true,
+    meshFlags: 0,
+    rootmotion: rootmotion !== undefined && rootmotion !== null && rootmotion !== false && rootmotion !== 0,
+  };
+  const animations = file.animations.map((animation, index) => {
+    const problems = animationIssues(animation, issuesCtx);
+    if (usedSet.has(index)) for (const key of problems) issues.add(key);
+    else if (problems.length) {
+      const stub = stubAnimation(animation, problems);
+      stub.bounds = animation.bounds ? [...animation.bounds] : [0, 0, 0, 0, 0, 0];
+      return stub;
+    }
     const out = convertAnimation(animation, file, bones, true, false, 0);
     // 变形权重轨道按网格存；目标号超过该网格目标数的丢掉（WPE 的权重数组按 `MDMP` 目标数定长）
     out.meshMorph = file.meshes.map((_, m) => {

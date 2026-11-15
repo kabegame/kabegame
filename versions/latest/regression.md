@@ -3316,3 +3316,28 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | WD10 单测与检查（WD7–WD9） | Windows | vue-tsc；图片、壁纸组件与壁纸窗口的 vitest；Prettier；9 处变异（丢失 / 骨架 / 缩略层不 ready、懒加载、出错丢层、不推旧层、只认透明度、滑入 800 ms、平铺不跟原图） | 0 error、全过；变异全被抓到 | 2026-11-15 Claude：23 个文件 231 例全过，9 处变异全抓到 |
 | [x] | WD11 桌面加载覆盖层的颜色与语言 | Windows dev，壁纸窗口模式，语言简体中文 | 切到一张场景，看加载期间的覆盖层 | 中文阶段名、墨色文字、白色半透明底，进度条有浅色轨道与粉色填充并走满，计数一行在（以前壁纸窗口没导入 `tokens.css`：黑字、看不见进度条；且一直是英语） | 2026-11-16 Claude：壁纸窗口里临时切到 15310 读算出来的样式，文字 rgb(74,21,75)、底 rgba(255,255,255,0.6)、填充 2% → 100%，阶段「解析场景并编译着色器 → 创建 GPU 渲染管线 → 提交首帧」；窗口背景仍透明；单测覆盖启动语言与 `setting-change` 切换 |
 | [x] | WD12 小场景的覆盖层居中 | Windows dev，图库预览 | 预览一张分辨率很小、放大显示的场景（如 dino_run，13518），看加载中正中那块与失败后底部的红字 | 都在画面正中（以前排版宽度比场景还宽时 grid 被撑开，红字整块偏右、被画布边缘裁掉） | 2026-11-16 Claude：实测场景排版 343×193、那块 480 宽，修前中心偏右 213 px，修后与画面中心重合、离底边 4%；单测断言绝对定位与 translate 对中 |
+
+## 场景壁纸 puppet 动画层的建删（P12e）
+
+2026-11-16。图层上的 `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`（图像层 puppet 与带骨骼的模型），连带：
+- MDLA 动画全编，没被引用又不支持的只留占位、不报；
+- 动画层改按层 id 记（编译期 = JSON 下标，运行时建的是负数）；
+- 回调循环照 WPE（本帧有层播完才进、调过回调复位下标、循环后删单次层）；
+- 删层分「当场摘表」与「本帧脚本之后释放」两段；跨重编译按 id 接回。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase12/phase-12e-createlayer.md`；
+- 读码与实测：`rea-p12e-createlayer.md`（末尾「实测」）；
+- 工程与对照：`ignore/p12/e/`（生成器 `defs/p12e.py`、工程 `proj/p12-create`、WPE 日志 `logs/step0.log`、语料 `corpus/`、对照 `check/`）；
+- 抓帧：`A:\p12e\step0\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PE0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc 与相关 vitest | 0 error，相关测试全过 | 2026-11-16：tsc 0 error；puppet / compile / script / dev / host 66 个文件 1138 例与 render 里读 puppet 的 3 个文件全过；计划列的变异全部杀死（一处等价写法换了改法后杀死） |
+| [x] | PE1 语料 | Node | `kbp corpus scan --extra puppetBytes` 工作区快照对 HEAD | 不支持键逐张不变；体积与编译用时不异常 | 2026-11-16：233 张键逐张不变、干净 194 → 194；puppet 动画数据 36.4 → 49.7 MB（最大 `3706286085` 14.2 MB），全库编译 91.4 → 94.2 s |
+| [x] | PE2 `p12-create` 日志逐行 | Node 夹具 + Windows dev 探针 | 按 WPE 帧时间回放 268 帧，比 `[kbp]` 日志 | 545 行与 WPE 逐行相同 | 2026-11-16：夹具（`puppet/p12create.test.ts`）与 dev 宿主里的探针都逐行相同 |
+| [x] | PE3 `g_Bones` 对照 | Node 夹具 | 脚本帧 241、242 五个 puppet 的 `g_Bones` 对 WPE 抓帧 | 在 `rsqrtps` 容差内 | 2026-11-16：480 个数 470 个逐位相同，最大 5.96e-8（4 ulp） |
+| [x] | PE4 P12a–d 生成工程不变 | Windows dev | 8 个生成工程按原时间线重渲 22 帧，和 P12d 留下的帧比 | 逐字节相同 | 2026-11-16：22 / 22 逐字节相同 |
+| [x] | PE5 宿主接线 | Windows dev | 实时预览 `p12-create` 十几秒，看 `host.puppets()` | 各 puppet 最终层数同 WPE，`detached` 为 0，没有新告警 | 2026-11-16：main 29、destroy 1、cb1 1、cb2 2 层，同 WPE；`detached` 全 0 |
+| [x] | PE6 2887099508 点书翻页 | Windows dev，图库预览 | 预览 2887099508，等开场镜头结束后点书 | 手翻一页书，脚本不报 `is not a function`；应用日志里没有这张的脚本出错 | 2026-11-16 用户在预览里点书确认翻页正常（探针模拟点击没点中：开场镜头推近） |
+| [ ] | PE7 非 Windows | macOS、Linux | 同 PE5、PE6 | 同 Windows | 本机不能测 |

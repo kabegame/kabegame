@@ -2906,12 +2906,12 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 ### 分层
 
 - **运行时**（`puppet/player.ts`）：
-  - `ScenePuppets.layerCount` / `layer` / `findLayer` 给出每层的控制口 `PuppetLayerControl`；
+  - `ScenePuppets.ids` / `control` / `findLayer` 给出每层的控制口 `PuppetLayerControl`（P12e 起按层 id，见「puppet 动画层的建删（P12e）」）；
   - 每层一张播完回调表；
   - 时钟带 MDLA 事件；
-  - `frame(dt, state, hooks)` 在每个 puppet 推进完全部层之后派发：先事件（交给 `hooks.event` → 脚本运行时的 `animationEvent`），再按层序调带 `ENDED` 位的层的回调。所以回调里的任何写入都是下一帧生效。
+  - `frame(dt, state, hooks)` 在每个 puppet 推进完全部层之后派发：先事件（交给 `hooks.event` → 脚本运行时的 `animationEvent`），再进回调循环（P12e 起照 WPE：本帧有层播完才进、调过回调就复位下标、之后删单次层）。所以回调里的任何写入都是下一帧生效。
 - **脚本 API**（`script/api.ts`）：
-  - 包装对象按「对象:层下标」缓存，不持有运行时，每次经宿主现取控制口，重编译换了运行时也接得上，同 `IAnimation`。
+  - 包装对象按「对象:层 id」缓存（P12e 前是层下标），不持有运行时，每次经宿主现取控制口，重编译换了运行时也接得上，同 `IAnimation`。
   - `rate` / `blend` / `visible` 是用户属性、字段脚本、API 三方共写的字段，在 `SceneState.animationLayers`，写入走 `animation-layer` 目标，会记进重放表。
   - `name` / `additive` / `blendin` / `blendout` / `blendtime` 只有 API 写，直接落在运行时的层上，重编译时随 `carryOver` 接回（连同回调表）。
 - **宿主**（`host.ts`）：首次加载时 `init` 先于 `beforeFirstFrame`，所以照 P10b 的 `pendingAnimations` 在跑 `init` 之前建好待用的 `ScenePuppets`（`pendingPuppets`）。语料里约 50 处「相位偏移」脚本在 `init` 里 `setFrame`，靠它才有落点。
@@ -2923,7 +2923,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 | 入口 | 所有图层对象都有（图像层与带骨骼的模型都是同一套）。不是 skinned puppet / 骨骼模型时计数 0、查找 `null` |
 | `getAnimationLayer(x)` | number 只认 `0 ≤ x < 计数` 的整数（`1.5`、`-1` 为 `null`）；非空字符串按**当前**名字找，最后一个匹配（`"1"` 也按名字）；其余 `null`。同一层每次返回同一个对象 |
 | 成员 | 19 个自有可枚举成员，顺序 `duration、frameCount、fps、blend、name、blendout、blendin、rate、additive、visible、blendtime、addEndedCallback、play、isPlaying、stop、pause、setFrame、getFrame、getAnimation`；原型只有一个不可枚举 `constructor` |
-| 只读三项 | `fps` = f32(1 / spf)、`frameCount` = length、`duration` = D，不可写的数据属性，严格模式赋值抛 `TypeError` |
+| 只读三项 | `fps` = f32(1 / spf)、`frameCount` = length、`duration` = D；赋值抛 `TypeError`（文字同 WPE 的 `Cannot assign to read only property …`）。P12e 起是访问器（层释放后读 `undefined`），WPE 的原生只读属性在 `getOwnPropertyDescriptor` 里是数据属性，这一点不同 |
 | 写入转换 | 照 WPE 的通用写入函数：`rate` / `blend` / `blendtime` 只收 number（`NaN`、`±Infinity` 也收）；四个布尔只收 `true` / `false`；`name` 忽略 `null` / `undefined`，其余 `ToString`；别的类型静默忽略。不钳制、没有改值回调 |
 | `blendin` / `blendout` | 脚本可以重新置位：`blendin` 按当前 `t` 淡入（`t` 大时看不出）；`blendout` 写成真后循环层每轮末尾也淡出（加载时只对 single 保留） |
 | 方法 | `play` / `pause` / `stop` / `isPlaying` / `getFrame` 同 `IAnimation`；`setFrame(f)` 是 `t = f32(spf × f32(f))` 并置 `SETFRAME`（本帧不判播完）；都是下一帧进画面 |
@@ -2937,7 +2937,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 **照报**：
 - 动画层的 `name` / `additive` / `blendin` / `blendout` / `blendtime` 挂脚本：`puppet:layer-script`（语料 0 处）；
-- 建删层的 `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`：`script:api:layer.*`。语料里 `playSingleAnimation` 2 张用到，都还差别的键（精灵表、`destroyLayer`），不靠它解锁。
+- 建删层的 `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`：P12e 已实现，见下面一节。
 
 **dev 探针**：
 - `host.puppets()`：每个 puppet 每层的名字、帧号、是否在播（还没换上时取待用的那份）；
@@ -3016,6 +3016,84 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
   都在 p12-REPORT 的 python 模型量级以内。剩下的差来自 `rotTo` 阈值附近的判定翻转（差 1 ulp 就翻），逐位一致做不到。
 - **骨骼 API 夹具**（`puppet/p12bones.test.ts`，WPE 抓帧）：`p12-bones` 355 行脚本日志与 200 个 `g_Bones` draw 逐位相同。
 - **语料**：233 张能渲染 182 → 185，解锁 `2345214324`、`3359451610`、`3426865175`；没有场景变成退回。
+
+## puppet 动画层的建删（P12e）
+
+脚本在运行中给 puppet（图像层与带骨骼的模型）建动画层、播一次就删的单次层、删层：图层上的 `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`。
+
+依据：
+- 读码 [rea-p12e-createlayer](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12e-createlayer.md)；
+- WPE 2.8.42 实测（同文件末尾「实测」，工程 `ignore/p12/e/proj/p12-create`，生成器 `ignore/p12/e/defs/p12e.py`）；
+- 计划与记录见 [phase-12e-createlayer.md](../../.claude/plans/wpe-import/3-scene/phase12/phase-12e-createlayer.md)。
+
+### 动画全编与层 id
+
+- **动画全编**（`compile/puppet.ts`）：脚本能按名字引用 MDLA 里任何一条动画，编译期认不出，所以 `ScenePuppet.animations` 是 MDLA 的每一条，`PuppetLayerDef.animation` 就是 MDLA 下标。
+  - 被 `animationlayers` 引用的动画，问题照旧报进 `unsupported`；
+  - 没被引用又用到不支持特性的，只留名字、id、模式、fps、长度、事件与 `unsupported`，不转帧数据，也不报（不能因为一条可能永远用不到的动画把整张场景退回）。运行时在它上面建层返回 `null` 并记一条 warn。
+- **层 id**：编译期的层 = 它在 `animationlayers` 里的 JSON 下标（`entry`），运行时建的层是负数（每个 puppet 从 −1 起递减、不复用）。状态键（`SceneState.animationLayers`）、包装缓存、`{user}` 绑定、字段脚本、重放表都按 id，和 `scene.json` 路径同形。「下标」只在按下标取层、按下标删层、插入位置这几处出现。
+- **取值改严**：加载 `animationlayers` 与运行时建层是 WPE 同一个 setter，float 只收 JSON 数、bool 只收 JSON 布尔、`name` 只收字符串（`floatField` / `boolField`，两处共用）。语料 316 项全部符合，0 处受影响。用户属性与脚本写入的路径（`animationLayerValue`）仍是 P12c 的规则。
+
+### 建层：`createAnimationLayer(第一参, config?)` / `playSingleAnimation(…)`
+
+参数规整是纯函数 `script/animationLayerConfig.ts`：
+
+| 项 | 规则 |
+|---|---|
+| 第一参 | 字符串：按名字找 MDLA 动画（逐字节、区分大小写、第一条）。对象：当一项 `animationlayers`，`animation` 要是 JSON 数（`900.5` 向零取整），按 id 找第一条；`animation` 是字符串（含名字）返回 `null`。数、布尔、`null`、`undefined`、空串、缺参数：`null` |
+| `config` | 对象，或 JSON 文本；数字同缺省。缺 `blendin` 键补 `true`、缺 `blendout` 键补 `true`；config 里的键覆盖第一参的同名键（所以对象第一参里的 `blendin: false` 会被缺省的 `true` 盖掉） |
+| 字段 | 8 个描述符字段按上面的严规则（`NaN`、`'3'`、`0`、`'yes'`、`name: 5` 都不写）；缺省 name `""`、rate 1、blend 1、可见、非加法、blendtime 0.5。值是 `{value, user / script / animation}` 时只取 `value`、不登记绑定（warn 一次，语料 0 处） |
+| 新层 | 在播、t = 0、时钟模式取动画自己的；非 single 动画清掉 `blendout`；没有 `SETFRAME`，第一次推进就判播完；`IAnimationLayer.id` 读出 `undefined`；返回值 `=== getAnimationLayer(计数 − 1)` 只在追加时成立 |
+| 插入 | 缺省追加。`index` 0 插 0；`1 ≤ index ≤ 计数 − 1` 插 `index`；负数或 ≥ 计数 − 1 插到 `计数 − 1`（最后一层之前）。`autosort` 为 JSON `true` 时从尾往前跳过加法层，插在最后一个非加法层之后，优先于 `index` |
+| 生效 | 脚本阶段建的层下一帧才推进；回调里给排在后面的 puppet 建层同帧推进 |
+| `playSingleAnimation` | 同 `createAnimationLayer`，另给层置 `SINGLE_SHOT`（`0x8000000`） |
+
+### 单次层与回调循环
+
+每个 puppet 推进完全部层后（`ScenePuppets.dispatch`）：
+1. 派发 MDLA 事件；
+2. 本帧有层播完（`anyEnded`）才进回调循环：按层序找带 `ENDED` 的层，清 `ENDED`；单次层先置 `DOOMED`（`0x10000000`）再调回调；调过回调的层把循环下标**复位成 0**，`++` 后从 1 重扫；
+3. 删掉全部 `DOOMED` 的层并当场释放。
+
+由此得到的 WPE 行为：
+- 「播完」随模式：single 到头、loop 第一次回绕、mirror 第一次换向；
+- 删层那一帧层仍参与姿势，回调里层仍有效、计数未减、回调不带参数；同一帧之后的 `update` 里已经作废、计数已减；
+- 隐藏的层不推进、永远不删；暂停的不删；回调里 `play()` / `setFrame(0)` 救不回；
+- **漏扫**：A 的回调删了 A，后面的 B 本轮漏掉，`ENDED` 留着，下一次有层播完时才调。
+
+### 删层：`destroyAnimationLayer(x)`
+
+- 参数：字符串按名字删**全部**同名层（区分大小写，空串 `false`）；Int32 按下标（`0 ≤ i < 计数`）；有效的包装按它自己（别的 puppet 的包装 `false`）；其余（`1.5`、`{}`、作废的包装、`null`、找不到的名字）`false`。
+- 两段：命中的层**当场**摘出层表（计数、下标、名字查找立刻看不到），进 `detached`；本帧全部脚本跑完之后宿主调 `ScenePuppets.settle` 释放。所以同一帧里包装仍可读写、可调方法，下一帧作废。
+- 释放（单次层与 `settle` 共用，`PuppetHooks.released`）：删状态项、给这一层的动画层字段脚本发 `destroy`、去掉重放表里 `objects/<o>/animationlayers/<id>/` 开头的项。
+- 删光或全部隐藏后姿势回到静止；骨骼透明度与变形复位；`g_BlendMap` 不复位。
+
+### 作废的包装
+
+读 `undefined`、写忽略、方法返回 `undefined` 且不抛错（`addEndedCallback(非函数)` 也不抛）、`engine.isObjectValid` 为假、作 `destroyAnimationLayer` 的参数返回 `false`。活着的层 `isObjectValid` 为真。
+
+### 跨重编译
+
+运行时建删的层不进编译输入。重编译后 `carryOver` 按 id 把上一份层表原样接回：顺序、运行时建的层（按新 rig 里同一条 MDLA 动画重建）、删过的编译期层（`destroyedEntries`）、时钟的全部位、回调、`nextId`。之后 `SceneState.syncAnimationLayers` 对齐状态项（只对齐有运行时的对象）。理由：`autosort` 的插入位置取决于当时各层的加法位，编译期重演得不到同样的顺序。清空脚本存储后回到 JSON 原样。
+
+### 有意不同与已知差异
+
+- 图像层按名字删、原表最后一层匹配：WPE 崩溃，我们删掉全部同名；
+- `config` 解析成非对象、第一参对象是数组：WPE 未定义行为，我们返回 `null` 并 warn；
+- `autosort` 没有非加法层、空表上 `index ≠ 0`：WPE 越界写，我们插到 0；
+- 静态 puppet（没有骨骼）上建层：WPE 建出一个永不推进的层，我们返回 `null` 并 warn；
+- 运行时 `config` 里的 `{user / script / animation}` 只取 `value`、不登记；
+- 对象 id：WPE 建层让共享计数器前进 2，影响之后 `createLayer` 的自动 id，我们不复刻；
+- jsoncpp 解析失败时可能留下部分键（`'{"rate":2, x'`），我们整段当失败；
+- 只读三项是访问器（见 P12c 一节）；`addEndedCallback(非函数)` 抛 `TypeError`（P12c）。
+
+### 走查
+
+- **`p12-create` 夹具**（`puppet/p12create.test.ts`）：从第 1 帧按 WPE 帧时间回放 268 帧，545 行 `[kbp]` 日志（含 `@f64` 时间线、初值、查找、config、插入、单次层、删层、回调循环）与 WPE 逐行相同；脚本帧 241、242 五个 puppet 的 `g_Bones` 480 个数里 470 个逐位相同，最大差 5.96e-8（4 ulp，`rsqrtps`）。
+- **宿主路径**：dev 里经探针按同一时间线回放，545 行逐行相同；实时预览里各 puppet 的最终层数与 WPE 相同，`host.puppets()` 的 `detached` 为 0（`settle` 接上）。
+- **不变**：P12a–P12d 的 8 个生成工程 22 帧逐字节相同。
+- **语料**：233 张的不支持键逐张不变（`2887099508` 的调用编译期认不出，本来就不报；`2916324703` 仍差精灵表与 `tex:animation`），能渲染数不变。动画全编后 puppet 动画数据 36.4 → 49.7 MB（41 → 43 张、315 → 473 条），最大 `3706286085` 1.9 → 14.2 MB，全库编译 91.4 → 94.2 s。
+- **2887099508**：点书走的是「page首」的 `cursorClick` → `hand book.playSingleAnimation("hand turn")`。探针模拟点击没点中（开场镜头推近，书不在算出的位置），用户在预览里点书确认翻页正常（回归 PE6）。
 
 ## 交互（P6c）
 

@@ -264,20 +264,21 @@ describe("buildPuppet：动画与动画层（rea-p12-runtime 1.4、1.5）", () =
   anims[0].tracks[1].flags = 1;
   const source = file({ skeleton: skeleton([bone(-1), bone(0)]), animations: anims });
 
-  it("缺省值：rate 1、blend 1、visible 真、其余假、blendtime 0.5、name 空；层顺序照 JSON；同一动画只转一次", () => {
+  it("缺省值：rate 1、blend 1、visible 真、其余假、blendtime 0.5、name 空；层顺序照 JSON；动画全编、layer.animation 是 MDLA 下标（P12e）", () => {
     const { puppet, issues } = buildPuppet(
       source,
       [{ animation: 9 }, { animation: 7, name: "w" }, { animation: 9 }],
       "p",
     );
     expect([...issues]).toEqual([]);
+    // 动画全编，顺序就是 MDLA 的顺序（7 在前），不是按首次出现排
     expect(puppet!.animations.map((item) => [item.id, item.mode, item.fps, item.length])).toEqual([
-      [9, 2, 30, 2],
       [7, 1, 10, 4],
+      [9, 2, 30, 2],
     ]);
-    expect(puppet!.layers.map((layer) => layer.animation)).toEqual([0, 1, 0]);
+    expect(puppet!.layers.map((layer) => layer.animation)).toEqual([1, 0, 1]);
     expect(puppet!.layers[1]).toEqual({
-      animation: 1,
+      animation: 0,
       entry: 1,
       name: "w",
       rate: 1,
@@ -341,19 +342,26 @@ describe("buildPuppet：动画与动画层（rea-p12-runtime 1.4、1.5）", () =
     expect(hidden.puppet!.layers[0].visible).toBe(false);
   });
 
-  it("值的类型：float 收数字 / 布尔 / 数字串（存 float32），位收布尔与数字", () => {
+  it("值的类型（P12e 改严，同运行时建层的 setter）：float 只收 JSON 数（存 float32），位只收 JSON 布尔，别的类型取缺省", () => {
     const { puppet } = buildPuppet(
       source,
       [{ animation: 7, rate: "0.3", blend: 0.58, visible: 0, additive: 1, blendin: "x", blendtime: true }],
       "p",
     );
     expect(puppet!.layers[0]).toMatchObject({
-      rate: Math.fround(0.3),
+      rate: 1, // 数字串不收
       blend: Math.fround(0.58),
+      visible: true, // 数字不收
+      additive: false,
+      blendin: false,
+      blendtime: 0.5, // 布尔不收
+    });
+    const ok = buildPuppet(source, [{ animation: 7, rate: 0.3, visible: false, additive: true, blendtime: 2 }], "p");
+    expect(ok.puppet!.layers[0]).toMatchObject({
+      rate: Math.fround(0.3),
       visible: false,
       additive: true,
-      blendin: false,
-      blendtime: 1,
+      blendtime: 2,
     });
   });
 

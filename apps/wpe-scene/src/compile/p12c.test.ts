@@ -2,7 +2,7 @@
  * P12c-1 的编译侧单测（`.claude/plans/wpe-import/3-scene/phase12/phase-12c-script.md` 点 1、点 5）：
  * - `PuppetAnimation.events`、`PuppetLayerDef.entry`；
  * - 动画层字段脚本的属主 `animation-layer`：`collectScripts` 认路径、`targetOf` 只给 `rate` / `blend` / `visible` 目标；
- * - bundle 按 `entry → layer` 回填属主与目标，对象没有运行时或这一项被丢掉时把脚本从列表里删掉；
+ * - bundle 只核对 `entry` 对应的层建出来了没有（层 id = entry，P12e 起不再回填层下标），对象没有运行时或这一项被丢掉时把脚本从列表里删掉；
  * - 键：`rate` / `blend` / `visible` 挂脚本不报，其余五个可写字段照报 `puppet:layer-script`。
  */
 import { gunzipSync } from "node:zlib";
@@ -53,7 +53,7 @@ describe("collectScripts：动画层字段脚本的属主与目标", () => {
     ],
   });
 
-  it("路径 objects/<i>/animationlayers/<k>/<字段>：属主 animation-layer，thisLayer 对应的 layer 为对象下标", async () => {
+  it("路径 objects/<i>/animationlayers/<k>/<字段>：属主 animation-layer，收集时 layer 就是层 id（= entry，P12e）", async () => {
     const { list } = await collectScripts(
       scene([
         {},
@@ -69,14 +69,14 @@ describe("collectScripts：动画层字段脚本的属主与目标", () => {
     // 脚本按 WPE 的登记顺序排（registration.ts），这里只核内容，按 id 排序
     list.sort((a, b) => a.id.localeCompare(b.id));
     expect(list.map((script) => [script.id, script.owner, script.layer])).toEqual([
-      ["objects/1/animationlayers/1/blend", { kind: "animation-layer", object: 1, entry: 1, layer: -1 }, 1],
-      ["objects/1/animationlayers/1/rate", { kind: "animation-layer", object: 1, entry: 1, layer: -1 }, 1],
-      ["objects/1/animationlayers/1/visible", { kind: "animation-layer", object: 1, entry: 1, layer: -1 }, 1],
+      ["objects/1/animationlayers/1/blend", { kind: "animation-layer", object: 1, entry: 1, layer: 1 }, 1],
+      ["objects/1/animationlayers/1/rate", { kind: "animation-layer", object: 1, entry: 1, layer: 1 }, 1],
+      ["objects/1/animationlayers/1/visible", { kind: "animation-layer", object: 1, entry: 1, layer: 1 }, 1],
     ]);
     expect(list.map((script) => [script.target, script.valueType])).toEqual([
-      [{ kind: "animation-layer", object: 1, layer: -1, field: "blend" }, "float"],
-      [{ kind: "animation-layer", object: 1, layer: -1, field: "rate" }, "float"],
-      [{ kind: "animation-layer", object: 1, layer: -1, field: "visible" }, "bool"],
+      [{ kind: "animation-layer", object: 1, layer: 1, field: "blend" }, "float"],
+      [{ kind: "animation-layer", object: 1, layer: 1, field: "rate" }, "float"],
+      [{ kind: "animation-layer", object: 1, layer: 1, field: "visible" }, "bool"],
     ]);
   });
 
@@ -189,7 +189,7 @@ const puppetObject = (layers: unknown[], extra: Record<string, unknown> = {}) =>
 });
 
 describe("compileScene：动画层字段脚本的属主回填", () => {
-  it("回填层下标：属主与目标的 layer 是 ScenePuppet.layers 的下标；entry ≠ layer 时（前面的项被丢）按 entry 找", async () => {
+  it("层 id：属主与目标的 layer 是层 id（= entry，P12e），不是层表里的位置；entry ≠ 位置时（前面的项被丢）也按 entry", async () => {
     const bundle = await compile([
       { id: 9, image: "models/plain.json" },
       puppetObject([
@@ -202,13 +202,13 @@ describe("compileScene：动画层字段脚本的属主回填", () => {
     expect(bundle.scripts.list.map((item) => [item.id, item.owner, item.target])).toEqual([
       [
         "objects/1/animationlayers/1/rate",
-        { kind: "animation-layer", object: 1, entry: 1, layer: 0 },
-        { kind: "animation-layer", object: 1, layer: 0, field: "rate" },
+        { kind: "animation-layer", object: 1, entry: 1, layer: 1 },
+        { kind: "animation-layer", object: 1, layer: 1, field: "rate" },
       ],
       [
         "objects/1/animationlayers/1/visible",
-        { kind: "animation-layer", object: 1, entry: 1, layer: 0 },
-        { kind: "animation-layer", object: 1, layer: 0, field: "visible" },
+        { kind: "animation-layer", object: 1, entry: 1, layer: 1 },
+        { kind: "animation-layer", object: 1, layer: 1, field: "visible" },
       ],
     ]);
   });

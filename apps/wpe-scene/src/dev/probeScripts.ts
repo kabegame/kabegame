@@ -284,9 +284,14 @@ export interface ProbeScriptsInput {
    */
   puppets?: Pick<
     ScenePuppets,
-    | "layerCount"
-    | "layer"
+    | "ids"
+    | "control"
+    | "alive"
     | "findLayer"
+    | "rig"
+    | "createLayer"
+    | "destroyLayers"
+    | "settle"
     | "boneTransform"
     | "setBoneTransform"
     | "applyBonePhysicsImpulse"
@@ -325,6 +330,11 @@ export interface ProbeScripts {
   frame(dt: number, time: number): void;
   /** 动画事件（P10b）：回放推进动画时越过的事件在这里派发给脚本，同宿主 `runtime.animationEvent`；没有脚本时什么都不做（可选：单测的替身可以不给）。 */
   animationEvent?(object: number | null, json: string): void;
+  /**
+   * 一个动画层被释放（P12e，单次层在 `ScenePuppets.frame` 的派发里被删时由回放接到 `PuppetHooks.released`）：同宿主 `puppetReleased`，删状态里的字段、
+   * 给它的字段脚本发 destroy。`frame` 里的 `settle` 释放 destroyAnimationLayer 摘出的层时走同一条路。可选：单测的替身可以不给。
+   */
+  animationLayerReleased?(object: number, id: number): void;
   result(): ProbeScriptsResult;
   /** 五个媒体回调接到这套脚本运行时（P11c，`probeMedia.ts` 派发用）；脚本没建起来时是空操作。 */
   mediaCallbacks?(): MediaCallbacks;
@@ -452,6 +462,12 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     return object;
   };
 
+  /** 一个动画层被释放（P12e，同宿主 `puppetReleased`）：删状态里三方共写的字段，字段脚本收 destroy、重放表清掉它的项。 */
+  const releaseAnimationLayer = (object: number, id: number): void => {
+    state.removeAnimationLayer(object, id);
+    runtime?.destroyAnimationLayer(object, id);
+  };
+
   const createRealm =
     input.createRealm ??
     ((setup: ProbeRealmSetup) =>
@@ -521,9 +537,14 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
           const current = puppets;
           return current
             ? {
-                count: () => current.layerCount(object),
+                ids: () => current.ids(object),
                 find: (name) => current.findLayer(object, name),
-                control: (index) => current.layer(object, index),
+                control: (id) => current.control(object, id),
+                alive: (id) => current.alive(object, id),
+                // 运行时建删层（P12e）：同宿主
+                animations: () => current.rig(object)?.animations ?? [],
+                create: (item, single) => current.createLayer(object, item, single),
+                destroy: (selector) => current.destroyLayers(object, selector),
                 // 骨骼脚本方法（P12d-2）
                 boneTransform: (bone) => current.boneTransform(object, bone),
                 setBoneTransform: (bone, matrix) => current.setBoneTransform(object, bone, matrix),
@@ -589,6 +610,8 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         bundle,
         removed: (objects) => cursorSession.forgetObjects(objects),
       });
+      // destroyAnimationLayer 摘出的层在这里释放（P12e，同宿主 `beforeFrame` 里 `settleDestroyed` 之后的 `settle`）
+      puppets?.settle({ released: releaseAnimationLayer });
     },
     createdCount: () => structure.created.length,
     structure: () => structure,
@@ -613,6 +636,10 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     animationEvent(object, json) {
       if (disposed) return;
       runtime?.animationEvent(object, json);
+    },
+    animationLayerReleased(object, id) {
+      if (disposed) return;
+      releaseAnimationLayer(object, id);
     },
     mediaCallbacks: () => scriptMediaCallbacks({ mediaEvent: (callback, make) => runtime?.mediaEvent(callback, make) }),
     applyProperties(delta, full) {

@@ -24,7 +24,14 @@ import { layerShellValues } from "../compile/layerShell";
 import type { SceneObject, SceneScalar } from "../compile/model";
 import { collectObjectScriptsSync, type SceneScript } from "../compile/scripts";
 import { TEXT_ANCHORS } from "../compile/texts";
-import { animationLayerKey, puppetEntries, type PuppetLayerControl, type PuppetRig } from "../puppet/player";
+import type { PuppetAnimation } from "../compile/puppet";
+import {
+  animationLayerKey,
+  puppetEntries,
+  type AnimationLayerItem,
+  type PuppetLayerControl,
+  type PuppetRig,
+} from "../puppet/player";
 import type { CursorInputSnapshot } from "../render/cursor";
 import { anglesRotation, drawMatrixOf } from "../render/layout";
 import { extractEulerZYX, lookAtAngles, lookAtYawAngles, rotateObjectSpace } from "../render/rotation";
@@ -33,6 +40,7 @@ import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
 import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
+import { animationLayerItem, type RealmJson } from "./animationLayerConfig";
 import { createdLayerKind, createLayerConfig, type CreatedLayerKind, type CreateConfigContext } from "./createConfig";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
@@ -107,10 +115,21 @@ export function createWpeLocalStorage(input: {
  * 不是 skinned puppet / 没有骨骼的对象不给（`puppetLayers` 返回 null 或 `count()` 为 0）。
  */
 export interface PuppetLayersView {
-  count(): number;
-  /** 按当前名字找，最后一个匹配，空串不匹配，找不到 −1。 */
-  find(name: string): number;
-  control(index: number): PuppetLayerControl | null;
+  /** 层表的 id（顺序，P12e：下标只在 `getAnimationLayer(下标)` 里出现；层数就是它的长度）。 */
+  ids(): readonly number[];
+  /** 按当前名字找，最后一个匹配，空串不匹配；返回层 id，找不到 null。 */
+  find(name: string): number | null;
+  /** 控制口（按 id）；没有这个 id 为 null。 */
+  control(id: number): PuppetLayerControl | null;
+  /** 包装还有效（层没被释放）。 */
+  alive(id: number): boolean;
+  /**
+   * 动画表（P12e，同一份 rig，`createAnimationLayer` 的参数规整按它找动画）与运行时建删层。可选：语料诊断、单测的最小视图不给时，
+   * 三个方法返回 `null` / `false`。`destroy` 的选择器已由 API 规整（名字、层表下标、层 id）。
+   */
+  animations?(): readonly PuppetAnimation[];
+  create?(item: AnimationLayerItem, single: boolean): number | null;
+  destroy?(selector: { name: string } | { index: number } | { id: number }): boolean;
   /**
    * 骨骼脚本方法的落点（P12d-2，`ScenePuppets` 的同名方法；骨骼选择器已由 API 规整成 Int32 数或字符串）。可选：语料诊断、单测的最小视图不给时，
    * `getBoneTransform` 返回单位阵、其余空操作。
@@ -329,7 +348,7 @@ export class ScriptApi {
   private readonly layerNames = new Map<number, string>();
   /** `IAnimation` 包装对象（P10b）：按动画 `id`（`scene.json` 路径）缓存，同一条每次 `getAnimation` 返回同一个对象。 */
   private readonly animationApis = new Map<string, ApiObject>();
-  /** `IAnimationLayer` 包装对象（P12c）：按 `<对象>:<层下标>` 缓存，`get(0) === get("walk")`。 */
+  /** `IAnimationLayer` 包装对象（P12c）：按 `<对象>:<层 id>` 缓存（P12e：id 稳定，运行中建删层下标会漂），`get(0) === get("walk")`。 */
   private readonly animationLayerApis = new Map<string, ApiObject>();
   /** 没有宿主视图时（语料诊断）的控制口替身：按 `<对象>:<层下标>` 缓存，保住脚本写过的名字等。 */
   private readonly fallbackLayerControls = new Map<string, PuppetLayerControl>();
@@ -839,9 +858,16 @@ export class ScriptApi {
   private alive(object: number): boolean {
     return this.access.state().layers.has(object);
   }
+  /**
+   * 动画层包装（P12e）：包装对应的 `<对象, 层 id>`。属主对象被删、或这一层已被释放（单次层播完被删、`destroyAnimationLayer` 在 `settle` 里释放）
+   * 之后同样作废：读字段 `undefined`、写忽略、方法返回 `undefined`、`engine.isObjectValid` 为假。
+   */
+  private readonly animationLayerOf = new WeakMap<ApiObject, { object: number; id: number }>();
   private dead(object: ApiObject): boolean {
     const owner = this.ownerOf.get(object);
-    return owner !== undefined && !this.alive(owner);
+    if (owner !== undefined && !this.alive(owner)) return true;
+    const layer = this.animationLayerOf.get(object);
+    return layer !== undefined && (!this.alive(layer.object) || !this.puppetView(layer.object).alive(layer.id));
   }
   private define(object: ApiObject, name: string, get: () => unknown, set?: (value: unknown) => void): void {
     (this.realm.global.Object as typeof Object).defineProperty(object, name, {
@@ -1014,6 +1040,11 @@ export class ScriptApi {
           ([index, layer]) => layer === value && !!this.findLayer(index) && this.alive(index),
         ) ||
         value === this.general ||
+        // 动画层包装（P12e）：层还没被释放、属主对象还在（实测活着的层是 true）
+        (typeof value === "object" &&
+          value !== null &&
+          this.animationLayerOf.has(value as ApiObject) &&
+          !this.dead(value as ApiObject)) ||
         [...this.materials.entries()].some(
           ([pass, object]) => object === value && this.access.state().constants.has(pass) && !this.dead(object),
         ) ||
@@ -1202,26 +1233,29 @@ export class ScriptApi {
   private puppetView(object: number): PuppetLayersView {
     const hosted = this.access.puppetLayers?.(object);
     if (hosted) return hosted;
+    // 替身按编译期层的 id（= `entry`，P12e）
     const defs = () => this.puppetRig(object)?.layers ?? [];
     return {
-      count: () => defs().length,
+      ids: () => defs().map((def) => def.entry),
       find: (name) => {
-        if (name === "") return -1;
-        for (let index = defs().length - 1; index >= 0; index--)
-          if (this.fallbackControl(object, index)?.name === name) return index;
-        return -1;
+        if (name === "") return null;
+        const list = defs();
+        for (let index = list.length - 1; index >= 0; index--)
+          if (this.fallbackControl(object, list[index].entry)?.name === name) return list[index].entry;
+        return null;
       },
-      control: (index) => this.fallbackControl(object, index),
+      control: (id) => this.fallbackControl(object, id),
+      alive: (id) => defs().some((def) => def.entry === id),
     };
   }
 
-  /** 没有宿主视图时的控制口替身：值取自层定义，名字与四个可写项存在替身上，方法空操作。 */
-  private fallbackControl(object: number, index: number): PuppetLayerControl | null {
-    const key = `${object}:${index}`;
+  /** 没有宿主视图时的控制口替身：值取自层定义（按层 id），名字与四个可写项存在替身上，方法空操作。 */
+  private fallbackControl(object: number, id: number): PuppetLayerControl | null {
+    const key = `${object}:${id}`;
     const cached = this.fallbackLayerControls.get(key);
     if (cached) return cached;
     const rig = this.puppetRig(object);
-    const def = rig?.layers[index];
+    const def = rig?.layers.find((item) => item.entry === id);
     const animation = def ? rig!.animations[def.animation] : undefined;
     if (!def || !animation) return null;
     const fps = Math.fround(animation.fps);
@@ -1298,21 +1332,77 @@ export class ScriptApi {
    * （`"1"` 也是按名字）；其余（空串、无参、对象）为 null。
    */
   private installAnimationLayers(api: ApiObject, object: number): void {
-    this.method(api, "getAnimationLayerCount", () => this.puppetView(object).count());
+    this.method(api, "getAnimationLayerCount", () => this.puppetView(object).ids().length);
     this.method(api, "getAnimationLayer", (x?: unknown) => {
       const view = this.puppetView(object);
-      let index = -1;
+      let id: number | null = null;
       if (typeof x === "number") {
-        if (Number.isInteger(x) && x >= 0 && x < view.count()) index = x;
-      } else if (typeof x === "string" && x !== "") index = view.find(x);
-      return index < 0 ? null : this.animationLayerApi(object, index);
+        const ids = view.ids();
+        if (Number.isInteger(x) && x >= 0 && x < ids.length) id = ids[x];
+      } else if (typeof x === "string" && x !== "") id = view.find(x);
+      return id === null ? null : this.animationLayerApi(object, id);
+    });
+    // 运行时建删层（P12e，rea-p12e）：不是带骨骼的运行时（非 puppet、静态 puppet、没有宿主视图）建层 `null`、删层 `false`
+    this.method(api, "createAnimationLayer", (first?: unknown, config?: unknown) =>
+      this.createAnimationLayer(object, first, config, false),
+    );
+    this.method(api, "playSingleAnimation", (first?: unknown, config?: unknown) =>
+      this.createAnimationLayer(object, first, config, true),
+    );
+    // dll 形参 0xa08：字符串 → 名字（空串 false）；Int32（整数、在 int32 范围、不是 −0）→ 层表下标；有效的动画层包装 → 它的 id（别的对象的层 false：
+    // WPE 按指针在本层表里找不到；层 id 是每个 puppet 各自的，不能把别人的 id 传给本层表）；其余（1.5、{}、作废的包装、null、缺参数）→ false
+    this.method(api, "destroyAnimationLayer", (x?: unknown) => {
+      let selector: { name: string } | { index: number } | { id: number };
+      if (typeof x === "string") {
+        const end = x.indexOf("\0");
+        const name = end < 0 ? x : x.slice(0, end);
+        if (name === "") return false;
+        selector = { name };
+      } else if (typeof x === "number") {
+        if (!Number.isInteger(x) || Object.is(x, -0) || x < -2147483648 || x > 2147483647) return false;
+        selector = { index: x };
+      } else if (typeof x === "object" && x !== null) {
+        const layer = this.animationLayerOf.get(x as ApiObject);
+        if (!layer || layer.object !== object || this.dead(x as ApiObject)) return false;
+        selector = { id: layer.id };
+      } else return false;
+      return this.puppetView(object).destroy?.(selector) ?? false;
     });
   }
 
   /**
-   * `IAnimationLayer` 包装对象（P12c，p12-REPORT 用例 9、rea-p12c-script 5）：按 `<对象>:<层下标>` 缓存，不持有运行时，每次经 `puppetView` 现取控制口
-   * （重编译换了 `ScenePuppets` 也接得上）。19 个自有可枚举成员，顺序照实测：
-   * - `duration` / `frameCount` / `fps`：不可写的数据属性，值在建对象时取，严格模式赋值抛 V8 的 TypeError；
+   * `createAnimationLayer` / `playSingleAnimation`（P12e）：参数规整见 `animationLayerItem`；规整出 `null`、没有建层入口、运行时拒绝（动画带
+   * `unsupported`）都返回 `null`。建出来写进状态里三方共写字段（rate / blend / visible）的起始值，返回包装（与之后 `getAnimationLayer(count − 1)` 同一个对象）。
+   * 静态 puppet（WPE 建出一个永不推进的层、计数加一，语料 0）返回 `null` 并 warn（有意不同）。
+   */
+  private createAnimationLayer(object: number, first: unknown, config: unknown, single: boolean): ApiObject | null {
+    const puppet = this.findLayer(object)?.puppet;
+    if (puppet && !puppet.skeleton) {
+      this.log(`createAnimationLayer：图层 ${object} 是静态 puppet（没有骨骼），不建层`);
+      return null;
+    }
+    const view = this.puppetView(object);
+    if (!view.create || !view.animations) return null;
+    const json = this.realm.global.JSON as RealmJson;
+    const { item, warn } = animationLayerItem(first, config, view.animations(), json);
+    if (warn) this.log(warn);
+    if (!item) return null;
+    const id = view.create(item, single);
+    if (id === null) return null;
+    this.access.state().addAnimationLayer(object, id, { rate: item.rate, blend: item.blend, visible: item.visible });
+    return this.animationLayerApi(object, id);
+  }
+
+  private log(message: string): void {
+    if (this.access.warn) this.access.warn(message);
+    else console.warn(message);
+  }
+
+  /**
+   * `IAnimationLayer` 包装对象（P12c，p12-REPORT 用例 9、rea-p12c-script 5）：按 `<对象>:<层 id>` 缓存（P12e：id 不是层表下标，编译期层 = `animationlayers` 的
+   * JSON 下标、运行时建的层是负数），不持有运行时，每次经 `puppetView` 现取控制口（重编译换了 `ScenePuppets` 也接得上）。层被释放后包装作废（`dead`）。
+   * 19 个自有可枚举成员，顺序照实测：
+   * - `duration` / `frameCount` / `fps`：访问器（作废后读 `undefined`），值在建对象时取，赋值抛和 WPE 日志同一句的 TypeError；
    * - `rate` / `blend` / `visible`：访问器，读写 `SceneState.animationLayers`（用户属性、字段脚本、API 三方共写的字段，写走 `animation-layer` 目标，
    *   下一帧生效）；`rate` / `blend` 只收 number（`NaN`、`Infinity` 也收，转 float32，不钳制），`visible` 只收布尔，别的静默忽略；
    * - `name` / `additive` / `blendin` / `blendout` / `blendtime`：访问器，读写控制口；`name` 忽略 `null` / `undefined`、其余 `ToString`（在第一个
@@ -1322,11 +1412,11 @@ export class ScriptApi {
    * - `getAnimation`：对象上通用的那个，属主路径 `objects/<i>/animationlayers/<entry>`（语料下总是 `undefined`）。
    * 原型照 WPE：只有一个不可枚举 `constructor` 的自有原型（`IAnimation` 那边仍是普通原型，已知差异）。
    */
-  private animationLayerApi(object: number, index: number): ApiObject | null {
-    const key = `${object}:${index}`;
+  private animationLayerApi(object: number, id: number): ApiObject | null {
+    const key = `${object}:${id}`;
     const cached = this.animationLayerApis.get(key);
     if (cached) return cached;
-    const first = this.puppetView(object).control(index);
+    const first = this.puppetView(object).control(id);
     if (!first) return null;
     const Obj = this.realm.global.Object as typeof Object;
     // 原型照 WPE（实测 `Object.getOwnPropertyNames(Object.getPrototypeOf(layer))` 只有 `constructor`）：自己的原型，只有一个不可枚举的 `constructor`，再往上是 Object.prototype
@@ -1339,16 +1429,33 @@ export class ScriptApi {
       },
     });
     const api = Obj.create(proto) as ApiObject;
-    const control = () => this.puppetView(object).control(index);
-    const def = () => this.puppetRig(object)?.layers[index];
-    const fields = () => this.access.state().animationLayers.get(animationLayerKey(object, index));
+    const control = () => this.puppetView(object).control(id);
+    const def = () => this.puppetRig(object)?.layers.find((item) => item.entry === id);
+    const fields = () => this.access.state().animationLayers.get(animationLayerKey(object, id));
+    // 只读三项（P12e）：作废后和其余成员一样读 `undefined`，所以是访问器；但不能是「只有 getter」——WPE 的日志（p12-script 第 19 行）是
+    // `Cannot assign to read only property 'fps' of object '[object Object]'`（数据属性的报错），getter-only 的报错是另一句。
+    // setter 抛同一句 TypeError（脚本都是严格模式的模块，赋值本来就抛）；作废后赋值照 `define` 的守卫忽略
     const constant = (name: string, value: unknown) =>
-      Obj.defineProperty(api, name, { value, enumerable: true, writable: false, configurable: false });
+      this.define(
+        api,
+        name,
+        () => value,
+        () => {
+          throw new TypeError(`Cannot assign to read only property '${name}' of object '[object Object]'`);
+        },
+      );
+    // 方法仍是数据属性（成员顺序与描述符同 P12c），值包一层作废守卫：层被释放后调用直接返回 `undefined`、不抛错（含 `addEndedCallback(非函数)`）
     const method = (name: string, run: (...args: unknown[]) => unknown) =>
-      Obj.defineProperty(api, name, { value: run, enumerable: true, writable: true, configurable: true });
+      Obj.defineProperty(api, name, {
+        value: (...args: unknown[]) => (this.dead(api) ? undefined : run(...args)),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    this.animationLayerOf.set(api, { object, id });
     // rate / blend / visible：状态里的字段（读取时没有状态项就取编译期的值）
     const stateField = (name: "rate" | "blend" | "visible") => {
-      const target = (): ApiTarget => ({ kind: "animation-layer", object, layer: index, field: name });
+      const target = (): ApiTarget => ({ kind: "animation-layer", object, layer: id, field: name });
       this.define(
         api,
         name,
@@ -1420,7 +1527,7 @@ export class ScriptApi {
     method("pause", () => void control()?.pause());
     method("setFrame", (frame) => void control()?.setFrame(typeof frame === "number" ? frame : 0));
     method("getFrame", () => control()?.getFrame() ?? 0);
-    this.installGetAnimation(api, () => `objects/${object}/animationlayers/${def()?.entry ?? index}`);
+    this.installGetAnimation(api, () => `objects/${object}/animationlayers/${id}`);
     this.animationLayerApis.set(key, api);
     return api;
   }

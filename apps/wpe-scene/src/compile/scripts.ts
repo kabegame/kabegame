@@ -27,8 +27,9 @@ import { BLOOM_FIELDS } from "./postprocess";
 export type ScriptOwner =
   | { kind: "layer"; object: number }
   /**
-   * puppet 动画层的字段脚本（P12c）：路径 `objects/<i>/animationlayers/<k>/<字段>`。`entry` 是 JSON 里的下标 k，`layer` 是 `ScenePuppet.layers`
-   * 的下标（收集时填 -1，bundle 编完 puppet 后按 `entry` 回填；回填不到的脚本从列表里删掉）。`thisLayer` 是所属图层，`thisObject` 是这个动画层。
+   * puppet 动画层的字段脚本（P12c）：路径 `objects/<i>/animationlayers/<k>/<字段>`。`entry` 是 JSON 里的下标 k，`layer` 是层 id（P12e：编译期的层 id = `entry`，
+   * 收集时就填好；运行时建的层是负数、没有字段脚本）。bundle 编完 puppet 后只核对这一项建出来了没有，没建出来的脚本从列表里删掉。
+   * `thisLayer` 是所属图层，`thisObject` 是这个动画层。
    */
   | { kind: "animation-layer"; object: number; entry: number; layer: number }
   | { kind: "material"; pass: TargetKey; layer: number }
@@ -267,7 +268,7 @@ function scriptVisitor(
             : /^objects\/\d+\/effects$/.test(path)
               ? { kind: "effect" as const, object: layer!, effect: index }
               : /^objects\/\d+\/animationlayers$/.test(path)
-                ? { kind: "animation-layer" as const, object: layer!, entry: index, layer: -1 }
+                ? { kind: "animation-layer" as const, object: layer!, entry: index, layer: index }
                 : owner;
         visit(entry, `${path}/${index}`, next, path === "objects" ? index : layer);
       });
@@ -285,7 +286,7 @@ function scriptVisitor(
       } else if (/^objects\/\d+\/effects$/.test(path)) {
         next = { kind: "effect", object: layer!, effect: Number(key) };
       } else if (/^objects\/\d+\/animationlayers$/.test(path)) {
-        next = { kind: "animation-layer", object: layer!, entry: Number(key), layer: -1 };
+        next = { kind: "animation-layer", object: layer!, entry: Number(key), layer: Number(key) };
       } else if (key === "constantshadervalues" && /\/passes\/\d+$/.test(path)) {
         next = { kind: "material", pass: path, layer: layer! };
       }

@@ -342,7 +342,7 @@ export class SceneState {
    */
   readonly cameras = new Map<number, { fov: number; zoom: number }>();
   /**
-   * puppet 动画层的就地字段（P12a 步骤 3 点 3，键 `animationLayerKey(对象下标, 层下标)`），起始值 = 编译期的 `PuppetLayerDef`（已按属性值解析）。
+   * puppet 动画层的就地字段（P12a 步骤 3 点 3，键 `animationLayerKey(对象下标, 层 id)`，P12e：编译期的层 id = `animationlayers` 的 JSON 下标，运行时建的层是负数），起始值 = 编译期的 `PuppetLayerDef`（已按属性值解析）。
    * 写入不标脏：`ScenePuppets.frame` 每帧经 `animationLayer` 读，用户属性在两帧之间写进来、puppet 当帧就读到（p12-REPORT 用例 4）。
    */
   readonly animationLayers = new Map<string, PuppetLayerFields>();
@@ -502,8 +502,8 @@ export class SceneState {
       if (layer.camera) state.cameras.set(layer.object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
     // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle；模型对象的骨骼（P12b2-1）同样
     for (const layer of bundle.layers)
-      (layer.puppet ?? layer.model?.skeleton)?.layers.forEach((def, slot) =>
-        state.animationLayers.set(animationLayerKey(layer.object, slot), {
+      (layer.puppet ?? layer.model?.skeleton)?.layers.forEach((def) =>
+        state.animationLayers.set(animationLayerKey(layer.object, def.entry), {
           rate: def.rate,
           blend: def.blend,
           visible: def.visible,
@@ -682,6 +682,42 @@ export class SceneState {
   /** 直接子（子表顺序）；没有就空数组。 */
   childrenOf(object: number): readonly number[] {
     return this.children.get(object) ?? [];
+  }
+
+  /** 运行时建层（P12e）：写进三方共写字段的起始值（API 规整后的 rate / blend / visible）。 */
+  addAnimationLayer(object: number, id: number, fields: PuppetLayerFields): void {
+    this.animationLayers.set(animationLayerKey(object, id), {
+      rate: fields.rate,
+      blend: fields.blend,
+      visible: fields.visible,
+    });
+  }
+
+  /** 层释放（P12e）：删掉这一项；之后用户属性、脚本写入、重放对它都是空操作。 */
+  removeAnimationLayer(object: number, id: number): void {
+    this.animationLayers.delete(animationLayerKey(object, id));
+  }
+
+  /**
+   * 重编译 / 换场景后按 puppet 运行时的层表对齐（P12e）：在 `puppets.carryOver` 之后、重放脚本写入之前调。运行时有、本状态没有的项（运行时建的层）
+   * 从 `previous` 拷，`previous` 也没有就取层定义；本状态有、运行时没有的项（删过的编译期层）删掉（给了 objects 参数，只删这些对象的：静态 puppet 没有运行时、状态里的项要留着）。
+   */
+  syncAnimationLayers(
+    layers: Iterable<{ object: number; id: number; def: PuppetLayerFields }>,
+    previous: SceneState | null,
+    objects?: ReadonlySet<number>,
+  ): void {
+    const live = new Set<string>();
+    for (const { object, id, def } of layers) {
+      const key = animationLayerKey(object, id);
+      live.add(key);
+      if (this.animationLayers.has(key)) continue;
+      const old = previous?.animationLayers.get(key) ?? def;
+      this.animationLayers.set(key, { rate: old.rate, blend: old.blend, visible: old.visible });
+    }
+    for (const key of [...this.animationLayers.keys()])
+      if (!live.has(key) && (!objects || objects.has(Number(key.slice(0, key.indexOf(":"))))))
+        this.animationLayers.delete(key);
   }
 
   /**

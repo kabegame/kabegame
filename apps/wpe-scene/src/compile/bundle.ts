@@ -1822,7 +1822,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     number,
     { passes: MaterialPass[]; instanceSize: { width: number; height: number } | null }
   >();
-  /** 有运行时（skinned puppet / 带骨骼的模型）的对象的动画层定义，按 `objects` 下标（P12c：回填动画层字段脚本的属主）。 */
+  /** 有运行时（skinned puppet / 带骨骼的模型）的对象的动画层定义，按 `objects` 下标（P12c：核对动画层字段脚本的属主是否建出来；P12e 起层 id = `entry`，不再回填层下标）。 */
   const animationLayerDefs = new Map<number, readonly PuppetLayerDef[]>();
   /** 解析过的 mdl，按规范化后的路径；读不到为 null。同一个 mdl 被多个对象引用时只读、只解析一次（3354366708 的两个圆环）。 */
   const mdls = new Map<string, MdlFile | null>();
@@ -1893,12 +1893,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     };
     // 动画层的 `{user}` 绑定（同图像层 puppet：`rate` / `blend` / `visible` 就地写进 `SceneState.animationLayers`）
     if (skeleton)
-      for (const [slot, def] of skeleton.layers.entries())
+      for (const def of skeleton.layers)
         for (const { field, property, condition } of def.bindings)
           bindings.list.push({
             property,
             ...(condition === undefined ? {} : { condition }),
-            target: { kind: "animation-layer", object: index, layer: slot, field },
+            // P12e：目标按层 id（编译期 = JSON 下标 `entry`），运行中建删层不会让它漂
+            target: { kind: "animation-layer", object: index, layer: def.entry, field },
           });
     // 透明排序（P5d 步骤 4，rea-p5-mesh 2.4）：WPE 先置「半透明」，任一网格的材质不透明就改回不透明，所以只有网格全半透明的模型进名单
     // （`p5d-sort-a` 的 M1 / M2）。没有网格时保持半透明，同 WPE（反正不画）
@@ -2468,12 +2469,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             instanceSize: instance ? instanceReferenceSize(object.size) : null,
           });
           // 动画层的 `{user}` 绑定（步骤 3 点 3）：`rate` / `blend` / `visible` 就地写进 `SceneState.animationLayers`
-          for (const [slot, def] of built.puppet.layers.entries())
+          for (const def of built.puppet.layers)
             for (const { field, property, condition } of def.bindings)
               bindings.list.push({
                 property,
                 ...(condition === undefined ? {} : { condition }),
-                target: { kind: "animation-layer", object: index, layer: slot, field },
+                target: { kind: "animation-layer", object: index, layer: def.entry, field },
               });
         }
       }
@@ -3091,16 +3092,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   )
     bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
   if (!input.sceneAssets.length) unsupported.add("assets:missing");
-  // 动画层字段脚本的属主回填（P12c）：按 JSON 下标 `entry` 找 `layerDefs` 保留下来的层。对象没有运行时（不是 skinned puppet、不是带骨骼的模型），
-  // 或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
+  // 动画层字段脚本的属主核对（P12c；P12e 起层 id = JSON 下标 `entry`，收集时已填好，不再回填）：只留 `layerDefs` 保留下来的层。对象没有运行时
+  // （不是 skinned puppet、不是带骨骼的模型），或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
   scripts.list = scripts.list.filter((script) => {
     const owner = script.owner;
     if (owner.kind !== "animation-layer") return true;
-    const slot = animationLayerDefs.get(owner.object)?.findIndex((def) => def.entry === owner.entry) ?? -1;
-    if (slot < 0) return false;
-    owner.layer = slot;
-    if (script.target.kind === "animation-layer") script.target.layer = slot;
-    return true;
+    return animationLayerDefs.get(owner.object)?.some((def) => def.entry === owner.entry) ?? false;
   });
   bundle.unsupported = [...unsupported].sort();
   // 「场景用音频」位（P4e 步骤 4）：开关只看 `project.json`（`scene.json` 的同名键 WPE 不读，rea-p4e-audio.md 第 6 节），不会因为场景里

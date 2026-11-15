@@ -146,7 +146,12 @@ describe("buildModelSkeleton：骨骼、动画、动画层、挂点", () => {
       ["A", 1],
       ["B", 0.5],
     ]);
-    expect(rig.animations).toHaveLength(2);
+    // P12e：动画全编（MDLA 里的每一条都转），`layer.animation` 是 MDLA 下标
+    const file = fileOf(fixture, object);
+    expect(rig.animations).toHaveLength(file.animations.length);
+    expect(rig.layers.map((layer) => rig.animations[layer.animation].id)).toEqual(
+      rig.layers.map((layer) => file.animations[layer.animation].id),
+    );
     for (const animation of rig.animations) {
       expect(animation.bounds).toEqual([0, 0, 0, 0, 0, 0]);
       expect(animation.meshMorph).toEqual([null]);

@@ -734,6 +734,8 @@ async function renderFramePass(
         puppets?.carryOver(carry.puppets);
       }
       if (puppets) {
+        // 状态的动画层字段按运行时的层表对齐（P12e，同宿主 `beforeFirstFrame`）：补编那一遍里 `init` 建 / 删的动画层，从第一遍的状态拷
+        if (carry) state.syncAnimationLayers(puppets.liveLayers(), carry.state, puppets.objects());
         puppets.refresh(stateSink(state));
         scene.setPuppets(puppets);
       }

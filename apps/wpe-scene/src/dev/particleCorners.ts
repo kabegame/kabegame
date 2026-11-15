@@ -561,6 +561,8 @@ export interface ReadbackReplayOptions {
     enterFrame?(dt: number, time: number): void;
     /** 动画事件（P10b）：推进动画时越过的事件在写完那一条之后、下一条之前同步派发（同宿主 `beforeFrame` 的 `event` 钩子）。 */
     animationEvent?(object: number | null, json: string): void;
+    /** 动画层被释放（P12e，`ProbeScripts.animationLayerReleased`）：puppet 派发里删单次层时调，同宿主的 `released` 钩子。 */
+    animationLayerReleased?(object: number, id: number): void;
     /** 光标（P6c，`ProbeScripts.cursor`）：每一帧设好相机之后、动画与脚本之前调，只在每一帧都画的回放里（`encodeFrame`）。 */
     cursor?(input: CursorStepInput): void;
   };
@@ -593,7 +595,13 @@ function eventHooks(scripts: ReadbackReplayOptions["scripts"]): AnimationHooks |
  */
 function puppetHooks(scripts: ReadbackReplayOptions["scripts"]): PuppetHooks | undefined {
   const dispatch = scripts?.animationEvent?.bind(scripts);
-  return dispatch ? { event: (object, json) => dispatch(object, json) } : undefined;
+  // 单次层在派发里被删（P12e）：同宿主 `puppetReleased`，状态里的字段与字段脚本交给脚本侧善后
+  const released = scripts?.animationLayerReleased?.bind(scripts);
+  if (!dispatch && !released) return undefined;
+  return {
+    ...(dispatch ? { event: (object: number, json: string) => dispatch(object, json) } : {}),
+    ...(released ? { released: (object: number, id: number) => released(object, id) } : {}),
+  };
 }
 
 /**
