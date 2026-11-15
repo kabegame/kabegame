@@ -702,19 +702,22 @@ describe("帧里的顺序：puppet 先于粒子（P12b1 步骤 3 点 3）", () =
 
   it("dev 探针（逐帧回放、读回帧、profile 帧）：puppet 的 frame 都在对应的 stepParticles 之前", () => {
     const corners = source("../dev/particleCorners.ts");
-    // 逐帧都画的回放：frametime 那一帧的循环里
-    const encodedPuppets = corners.indexOf(
-      "options.puppets?.frame(frametime, stateSink(state));\n    scene.sync(state);",
-    );
+    // P12c 起三处都经 `stepPuppets(options, state, …)`（推进并派发事件），puppet 只在这个函数里 `frame`
+    expect(corners).toContain("options.puppets.frame(dt, stateSink(state), puppetHooks(options.scripts));");
+    // 逐帧都画的回放：frametime 那一帧的循环里，紧接着 sync、再步进粒子
+    const encodedPuppets = corners.indexOf("stepPuppets(options, state, frametime, time);\n    scene.sync(state);");
     expect(encodedPuppets).toBeGreaterThan(0);
+    expect(encodedPuppets).toBeLessThan(
+      corners.indexOf("scene.stepParticles(frametime, time, state, pointers.cursors[i]);", encodedPuppets),
+    );
     // 前 n − 1 帧：beforeStep 里；读回帧：最后一次 stepParticles 之前
-    expect(corners).toContain("options.puppets?.frame(dt, stateSink(state));");
-    const readback = corners.indexOf("if (particles?.dts.length) options.puppets?.frame(frametime, stateSink(state));");
+    expect(corners).toContain("stepPuppets(options, state, dt, at);");
+    const readback = corners.indexOf("if (particles?.dts.length) stepPuppets(options, state, frametime, time);");
     const readbackStep = corners.indexOf("scene.stepParticles(frametime, time, state, pointers.cursors[last]);");
     expect(readback).toBeGreaterThan(0);
     expect(readback).toBeLessThan(readbackStep);
     // 粒子之后不再有 puppet 的步进
-    expect(corners).not.toMatch(/stepParticles\([^)]*\)[^]{0,120}options\.puppets\?\.frame/);
+    expect(corners).not.toMatch(/stepParticles\([^)]*\)[^]{0,120}stepPuppets\(/);
     const probe = source("../dev/probe.ts");
     expect(probe.indexOf("profiledPuppets?.frame(1 / 60, stateSink(state));")).toBeLessThan(
       probe.indexOf("scene.stepParticles(1 / 60, startTime + i / 60, state, cursor);"),

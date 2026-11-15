@@ -278,7 +278,16 @@ export interface ProbeScriptsInput {
    * 探针自己的 puppet 运行时（P12c）：脚本的 `getAnimationLayer` 落到它上面（`probe.ts` 在脚本之前建好，`init` 里的 `setFrame` / `play` 才有落点，
    * 回放推进的是同一份）。不给时按 bundle 的层定义回答，方法空操作。
    */
-  puppets?: Pick<ScenePuppets, "layerCount" | "layer" | "findLayer">;
+  puppets?: Pick<
+    ScenePuppets,
+    | "layerCount"
+    | "layer"
+    | "findLayer"
+    | "boneTransform"
+    | "setBoneTransform"
+    | "applyBonePhysicsImpulse"
+    | "resetBonePhysicsSimulation"
+  >;
   /** 系统媒体回放（P11c，`probeMedia.ts`）：`init` 之后给刚 `init` 的脚本补发一轮媒体回调（`SceneMedia.replayAfterInit`）。不给时不补发。 */
   media?: { replayAfterInit(callbacks: MediaCallbacks): void };
   /** 建 realm（缺省 `createIframeRealm`，在当前文档里建隐藏 iframe）：单测换成不碰 DOM 的假 realm。 */
@@ -446,6 +455,11 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
                 count: () => puppets.layerCount(object),
                 find: (name) => puppets.findLayer(object, name),
                 control: (index) => puppets.layer(object, index),
+                // 骨骼脚本方法（P12d-2）
+                boneTransform: (bone) => puppets.boneTransform(object, bone),
+                setBoneTransform: (bone, matrix) => puppets.setBoneTransform(object, bone, matrix),
+                applyBonePhysicsImpulse: (bone, dir, ang) => puppets.applyBonePhysicsImpulse(object, bone, dir, ang),
+                resetBonePhysicsSimulation: (bone) => puppets.resetBonePhysicsSimulation(object, bone),
               }
             : null;
         },

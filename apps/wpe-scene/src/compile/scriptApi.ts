@@ -124,7 +124,8 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       ["getAttachmentIndex", "getAttachmentMatrix", "getAttachmentOrigin", "getAttachmentAngles"],
       UNIQUE,
     ),
-    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b），`getAnimationLayer` / `getAnimationLayerCount` 已实现（P12c）
+    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b），`getAnimationLayer` / `getAnimationLayerCount` 已实现（P12c），
+    // 骨骼的 `getBoneCount` / `getBoneTransform` / `setBoneTransform` / `applyBonePhysicsImpulse` / `resetBonePhysicsSimulation` 已实现（P12d-2，只图像层）
     ...methods(
       "any",
       ["getTextureAnimation", "createAnimationLayer", "playSingleAnimation", "destroyAnimationLayer"],
@@ -133,9 +134,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ...methods(
       "any",
       [
-        "getBoneCount",
-        "getBoneTransform",
-        "setBoneTransform",
         "getLocalBoneTransform",
         "setLocalBoneTransform",
         "getLocalBoneAngles",
@@ -144,8 +142,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
         "setLocalBoneOrigin",
         "getBoneIndex",
         "getBoneParentIndex",
-        "applyBonePhysicsImpulse",
-        "resetBonePhysicsSimulation",
         "getBlendShapeIndex",
         "getBlendShapeWeight",
         "setBlendShapeWeight",

@@ -810,6 +810,12 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
   - P12a / P12b 生成工程逐字节不变。
 - **待做**：P12d（骨骼物理）。
 
+**进度**（2026-11-15）：**P12d 完成**（[phase-12d-physics.md](phase12/phase-12d-physics.md)）：骨骼物理与骨骼脚本 API。
+- **物理**：照读码 2.4 改写 python 模型，在父链里逐根求解；夹具对 WPE 在 python 模型量级以内。
+- **骨骼 API**：先补读码（`rea-p12d-bones`）再实测 `p12-bones`，脚本日志与 `g_Bones` 与 WPE 逐位相同。
+- **语料**：233 张能渲染 182 → 185，解锁 `2345214324`、`3359451610`、`3426865175`。
+- **P12 全部完成**。照报的有：模型对象的物理，语料 0 处的骨骼局部读写、混合形状、建删动画层。
+
 - MDLV0021 / MDLV0023 的骨骼（MDLS）、动画（MDLA）、变形（MDMP），skinning（翻译器经 `defines` 传 `BONECOUNT`），puppet warp。语料 33 张。
 - 对象 `animationlayers`（31 张）、`attachment` 挂点（10 张）；脚本 `getAnimationLayer*`、骨骼与混合形状的 API。
 - **依赖：** P5c 的 mdl 解析。P5c 对带这些段的模型报 `mdl:skeleton` / `mdl:animation` / `mdl:morph`。

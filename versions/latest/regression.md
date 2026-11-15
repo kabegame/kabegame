@@ -2994,6 +2994,27 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | PD6 点击播放 | Windows dev，图库预览 | `3361965869`（或别的 `cursorClick` 里 `getAnimationLayer("dianji").play()` 的场景）点人物下方的圆环 | 下一帧开始播放点击动画；对象 5「鼓点光环」点击时控制台有一条 `TypeError`（层名是 222，WPE 同样） | 需要人点 |
 | [ ] | PD7 非 Windows | macOS / Linux | 同 PD4、PD6 | 同 Windows | 本机不能测 |
 
+## 场景壁纸 puppet 骨骼物理与骨骼脚本 API（P12d）
+
+2026-11-15。两项内容：
+- 图像层 puppet 的骨骼物理：骨骼 JSON `(r‖t) && (se‖re)` 才开，每帧在父链里逐根求解，图层世界矩阵由宿主交进来；
+- 图像层上的 `getBoneCount` / `getBoneTransform` / `setBoneTransform` / `applyBonePhysicsImpulse` / `resetBonePhysicsSimulation`。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase12/phase-12d-physics.md`；
+- 读码：`rea-p12-attach-physics.md` 第 2 节、`rea-p12d-bones.md`；
+- 实测与对照：`ignore/p12/out/`（物理）、`ignore/p12/d/`（`p12-bones`、语料、对照）；
+- 抓帧：`A:\p12\`、`A:\p12d\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PE0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc 与相关 vitest | 0 error，相关测试全过 | 2026-11-15：tsc 0 error，P12 相关 56 个文件全过；物理夹具对 WPE 在 python 模型量级以内（多数逐位）；`p12-bones` 脚本日志与 `g_Bones` 与 WPE 逐位相同；变异 P12d-1 21 个、P12d-2 8 个，除两个等价变异外全部杀死 |
+| [x] | PE1 语料 | Node | `kbp corpus scan` 工作区快照对 HEAD | 只去掉 P12d 的键，没有场景变成退回 | 2026-11-15：233 张能渲染 182 → 185，解锁 `2345214324`、`3359451610`、`3426865175`；去掉的只有 `puppet:physics` 与 4 个骨骼方法的键 |
+| [x] | PE2 物理整帧对照 WPE | Windows dev + WPE 抓帧 | `p12-phys2`、`2345214324`、`3426865175` 复制工程按 WPE 帧时间回放，比 `g_Bones` 与整帧 | `g_Bones` 在误差包络内，画面差 ≤ 2 级 | 2026-11-15：`p12-phys2` 第 200 帧最大 1 级；`2345214324` 第 220 帧只有 5 个像素差、最大 2 级；`3426865175` 第 192 帧带物理的「苍月草2」`g_Bones` 与 WPE 逐位相同，整帧差在随机粒子、泛光与文字上。`p12-phys` 的日志里有两次运行、时间线解析不了，由夹具逐帧覆盖 |
+| [ ] | PE3 拖动骨骼 | Windows dev，图库预览 | `3359451610`：在角色上按下拖动再松手 | 被拖的部位跟手，松手后弹回 | 需要人拖 |
+| [x] | PE4 P12a–c 不变 | Windows dev | P12 的 8 个生成工程重渲 22 帧 | 和之前逐字节相同 | 2026-11-15：22 帧逐字节相同 |
+| [ ] | PE5 非 Windows | macOS / Linux | 同 PE3 | 同 Windows | 本机不能测 |
+
 ## 场景 dev 探针按指定尺寸渲染
 
 2026-11-14。dev 探针 `renderFrame` 给了 `canvas` 时，正交场景按这个尺寸直接画，和 WPE 测试窗口同一种画法：样式照 WPE 的对齐方式做进正交投影的四个裁切边距，`fit` / `center` 整屏清成 `schemecolor`，读回场景目标本身。`renderMode: "scene"` 取旧的「场景分辨率 + 读回时铺进画布」。产品的预览、桌面、应用背景都不变（用户定）。计划与记录见 `.claude/plans/wpe-import/3-scene/phase-render-size.md`，读码 `rea-render-size.md`。

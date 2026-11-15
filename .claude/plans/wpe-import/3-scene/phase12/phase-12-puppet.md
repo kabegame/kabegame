@@ -391,6 +391,15 @@ const OBJECT_FLAGS = [
 
 ## P12d — 骨骼物理
 
+**进度**（2026-11-15）：**P12d 完成**，子计划 [phase-12d-physics.md](phase-12d-physics.md)。
+- **语料**：233 张能渲染 182 → 185。
+- **和下面范围的出入**：
+  - 加了骨骼脚本 API 的 5 个方法（P12d-2，用户定），解锁 `3359451610`；
+  - `lt`、平移轴锁、`t + re` 照读码实现、只对 python 模型验证；
+  - 只做图像层 puppet，模型对象开物理照报。
+
+下面是写子计划之前的范围。
+
 语义依据见 [rea-p12-attach-physics](rea-p12-attach-physics.md) 第 2 节与 [p12-REPORT](p12-REPORT.md) 第一部分用例 10、第二部分第 1 节。
 
 - 开关：骨骼 JSON 要 `(r‖t) && (se‖re)` 同时成立才开物理，否则标志清零。语料 4 张场景、8 根骨骼。

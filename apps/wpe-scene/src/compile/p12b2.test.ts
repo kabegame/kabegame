@@ -283,6 +283,10 @@ describe("buildModelSkeleton 的键（语料 0 处的写法照报，WPE 不处�
 
   it("骨骼物理、IK、引用块、轨道数不等于骨骼数：同图像层", () => {
     expect(issues(file({ skeleton: skeleton([bone(-1, { flags: 3 })]) }))).toEqual(["puppet:physics"]);
+    // 骨骼 JSON 的物理门：图像层 puppet 自己做（P12d-1），模型更新路径里的物理没读码，开了仍报
+    expect(issues(file({ skeleton: skeleton([bone(-1, { json: '{"r":true,"re":true}' })]) }))).toEqual([
+      "puppet:physics",
+    ]);
     expect(
       issues(
         file({ skeleton: skeleton([bone(-1)], { extras: { records: 0, constraints: 1, keyMaps: 0, chains: 0 } }) }),

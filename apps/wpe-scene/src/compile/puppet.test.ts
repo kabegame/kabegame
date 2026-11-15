@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decomposeRest, eulerToQuat, fastInvSqrt, inverse4, mulFull } from "../puppet/math";
 import { parseMdl, type MdlAnimation, type MdlBone, type MdlFile, type MdlMesh, type MdlSkeleton } from "./mdl";
-import { boneJsonFlags, bonePhysics, buildPuppet } from "./puppet";
+import { boneJsonFlags, bonePhysics, buildPuppet, parseBonePhysics } from "./puppet";
 
 const f32 = (values: readonly number[]) => Array.from(Float32Array.from(values));
 
@@ -417,9 +417,9 @@ describe("buildPuppet：P12a 不做、照报的细分键", () => {
       ["puppet:texture-channels"],
     ],
     [
-      "骨骼 JSON 的物理门 (r ‖ t) && (se ‖ re)",
+      "骨骼 JSON 的物理门 (r ‖ t) && (se ‖ re)：图像层 puppet 自己做（P12d-1），不再报",
       { skeleton: skeleton([bone(-1, IDENTITY, { json: '{"r":true,"se":true}' })]) },
-      ["puppet:physics"],
+      [],
     ],
     ["骨骼文件 flags bit1（物理接管）", { skeleton: skeleton([bone(-1, IDENTITY, { flags: 3 })]) }, ["puppet:physics"]],
     ["骨骼 JSON 的 ik", { skeleton: skeleton([bone(-1, IDENTITY, { json: '{"ik":true}' })]) }, ["puppet:ik"]],
@@ -489,6 +489,189 @@ describe("骨骼 JSON 的门（rea-p12-mdl 2.1）", () => {
   ])("%s → 标志 %i、物理 %s", (json, flags, physics) => {
     expect(boneJsonFlags(json)).toBe(flags);
     expect(bonePhysics(json)).toBe(physics);
+  });
+});
+
+// ———— P12d-1：骨骼物理参数（rea-AP 2.1，`FUN_140265c30`） ————
+
+describe("parseBonePhysics：骨骼 JSON 的物理参数（P12d-1）", () => {
+  const near = (value: number) => Math.fround(value);
+
+  it.each([
+    ["没有 se / re（只有 r）", '{"r":true}'],
+    ["只有 re（没有 r / t）", '{"re":true}'],
+    ["r 不是布尔", '{"r":1,"se":true}'],
+    ["空对象 / 空串 / 坏 JSON", "{}"],
+    ["", ""],
+    ["{bad", "{bad"],
+  ])("物理不开 → null：%s", (_name, json) => {
+    expect(parseBonePhysics(json)).toBeNull();
+  });
+
+  it("缺省值照骨骼构造：ri / ti 为 1、m 为 1000、其余 0，没有限幅与轴锁", () => {
+    expect(parseBonePhysics('{"r":true,"re":true}')).toEqual({
+      rotate: true,
+      translate: false,
+      spring: false,
+      gravity: false,
+      rs: 0,
+      ts: 0,
+      rf: 0,
+      tf: 0,
+      ri: 1,
+      ti: 1,
+      gd: [0, 0, 0],
+      m: 1000,
+      tp: [0, 0, 0],
+      tm: 0,
+      limitAngles: null,
+      limitTurn: null,
+      lockRotate: [false, false, false],
+      lockTranslate: [false, false, false],
+    });
+  });
+
+  it("全部键：换算（ri / ti 是 1 − x/100）、三个数的字符串、`la` / `lt` 的附带键、轴锁（为假 → 锁）", () => {
+    const parsed = parseBonePhysics(
+      JSON.stringify({
+        r: true,
+        t: true,
+        se: true,
+        ge: true,
+        gd: "0 -1 0",
+        m: 20,
+        rs: 300,
+        ts: 200,
+        rf: 7,
+        tf: 5,
+        ri: 30,
+        ti: 40,
+        tp: "1.5 2 -3",
+        tm: 200,
+        la: true,
+        lamin: "-1 -2 -3",
+        lamax: "1 2 3",
+        lt: true,
+        ltmax: 90,
+        rax: true,
+        ray: false,
+        raz: true,
+        tax: false,
+        tay: false,
+        taz: true,
+      }),
+    )!;
+    expect(parsed).toEqual({
+      rotate: true,
+      translate: true,
+      spring: true,
+      gravity: true,
+      rs: 300,
+      ts: 200,
+      rf: 7,
+      tf: 5,
+      ri: near(1 - near(30 / 100)),
+      ti: near(1 - near(40 / 100)),
+      gd: [0, -1, 0],
+      m: 20,
+      tp: [1.5, 2, -3],
+      tm: 200,
+      limitAngles: [-1, -2, -3, 1, 2, 3],
+      limitTurn: 90,
+      lockRotate: [false, true, false],
+      lockTranslate: [true, true, false],
+    });
+  });
+
+  it("re 优先于 se：两个都为真时是 re（没有回弹）", () => {
+    expect(parseBonePhysics('{"r":true,"re":true,"se":true}')!.spring).toBe(false);
+    expect(parseBonePhysics('{"t":true,"se":true}')!.spring).toBe(true);
+  });
+
+  it("`la` / `lt` 只认 JSON true；lamin / lamax / ltmax 只在它们为真时读", () => {
+    const base = { r: true, re: true, lamin: "-1 -1 -1", lamax: "1 1 1", ltmax: 30 };
+    expect(parseBonePhysics(JSON.stringify(base))).toMatchObject({ limitAngles: null, limitTurn: null });
+    expect(parseBonePhysics(JSON.stringify({ ...base, la: 1, lt: "true" }))).toMatchObject({
+      limitAngles: null,
+      limitTurn: null,
+    });
+    expect(parseBonePhysics(JSON.stringify({ ...base, la: true }))).toMatchObject({
+      limitAngles: [-1, -1, -1, 1, 1, 1],
+      limitTurn: null,
+    });
+    expect(parseBonePhysics(JSON.stringify({ ...base, lt: true }))).toMatchObject({
+      limitAngles: null,
+      limitTurn: 30,
+    });
+    // 开了但键缺失：缺省 0
+    expect(parseBonePhysics('{"r":true,"re":true,"la":true,"lt":true}')).toMatchObject({
+      limitAngles: [0, 0, 0, 0, 0, 0],
+      limitTurn: 0,
+    });
+  });
+
+  it("轴锁三个都在且都是布尔才读，缺一个或有一个不是布尔就整组不读", () => {
+    const base = { r: true, t: true, re: true };
+    expect(parseBonePhysics(JSON.stringify({ ...base, rax: false, ray: false }))!.lockRotate).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect(parseBonePhysics(JSON.stringify({ ...base, rax: false, ray: false, raz: 0 }))!.lockRotate).toEqual([
+      false,
+      false,
+      false,
+    ]);
+    expect(parseBonePhysics(JSON.stringify({ ...base, tax: true, tay: false, taz: false }))!.lockTranslate).toEqual([
+      false,
+      true,
+      true,
+    ]);
+  });
+
+  it("三个数的字符串：多余空格、缺的分量与读不出的分量为 0，只取数字前缀（strtod）；不是字符串不读", () => {
+    const tp = (value: unknown) => parseBonePhysics(JSON.stringify({ r: true, re: true, tp: value }))!.tp;
+    expect(tp("  1   2  ")).toEqual([1, 2, 0]);
+    expect(tp("abc 5 x")).toEqual([0, 5, 0]);
+    expect(tp("1e1 2.5abc -0.5 99")).toEqual([10, 2.5, -0.5]);
+    expect(tp([1, 2, 3])).toEqual([0, 0, 0]);
+    expect(tp("0.1 0 0")[0]).toBe(near(0.1));
+  });
+
+  it("数值键要求是数：字符串 / 布尔取缺省；存 float32", () => {
+    const parsed = parseBonePhysics('{"r":true,"re":true,"rs":"300","rf":true,"m":0.1,"ri":"30"}')!;
+    expect([parsed.rs, parsed.rf, parsed.ri]).toEqual([0, 0, 1]);
+    expect(parsed.m).toBe(near(0.1));
+  });
+});
+
+describe("buildPuppet：skeleton.physics 与 puppet:physics（P12d-1）", () => {
+  const physicsOf = (json: string[], extra: Partial<MdlFile> = {}) =>
+    buildPuppet(
+      file({ skeleton: skeleton(json.map((text, i) => bone(i === 0 ? -1 : 0, IDENTITY, { json: text }))), ...extra }),
+      [],
+      "x.mdl",
+    );
+
+  it("开物理的骨骼按下标给参数块，没开的为 null；图像层不再报 puppet:physics", () => {
+    const { puppet, issues } = physicsOf(["", '{"r":true,"re":true,"rf":10}', '{"r":true}']);
+    expect([...issues]).toEqual([]);
+    const physics = puppet!.skeleton!.physics!;
+    expect(physics.length).toBe(3);
+    expect(physics[0]).toBeNull();
+    expect(physics[1]).toMatchObject({ rotate: true, spring: false, rf: 10 });
+    expect(physics[2]).toBeNull();
+  });
+
+  it("全是 null 时不写 physics 键（bundle 字节同以前）", () => {
+    const { puppet } = physicsOf(["", '{"r":true}', '{"se":true}']);
+    expect(puppet!.skeleton).not.toBeNull();
+    expect("physics" in puppet!.skeleton!).toBe(false);
+  });
+
+  it("骨骼文件 flags bit1（物理接管）仍报 puppet:physics", () => {
+    const { issues } = buildPuppet(file({ skeleton: skeleton([bone(-1, IDENTITY, { flags: 2 })]) }), [], "x.mdl");
+    expect([...issues]).toEqual(["puppet:physics"]);
   });
 });
 
@@ -754,8 +937,8 @@ describe.skipIf(!corpusRoot || !existsSync(mdlIndex) || !existsSync(cmOut))(
         if (puppet.clipping) withClipping++;
         alphaAnimations += puppet.animations.filter((item) => item.alpha).length;
       }
-      // 语料里剩下的键：绘制顺序轨道（3577990983）、物理；P12b1 的四样没有新增键，纹理通道（3811424158）P12b2-2 起不再报
-      expect([...keys].sort()).toEqual(["puppet:draw-order", "puppet:physics"]);
+      // 语料里剩下的键：绘制顺序轨道（3577990983）；物理 P12d-1 起图像层自己做，不再报；P12b1 的四样没有新增键，纹理通道（3811424158）P12b2-2 起不再报
+      expect([...keys].sort()).toEqual(["puppet:draw-order"]);
       // 挂点 38 项（MDAT：1 个文件 14、2 个 5、3 个 2、8 个 1）；bit2 的 puppet 8 个、带透明度轨道的动画 15 条；MORPHING 6 个；裁切 5 个
       expect([attachments, withAlpha, alphaAnimations, withMorph, withClipping]).toEqual([38, 8, 15, 6, 5]);
     });

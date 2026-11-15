@@ -35,6 +35,9 @@ import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStora
 
 type ApiObject = Record<string, unknown>;
 
+/** 单位矩阵（列主序，`getBoneTransform` 失败的返回值与 `setBoneTransform` 缺省的底）。 */
+const IDENTITY_4: readonly number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
 /** 向量参数的 f32 分量（P6d1a）：对象取 `x / y / z`（`Number()` 后非有限数当 0），否则用缺省。 */
 function vec3Arg(value: unknown, fallback: [number, number, number]): [number, number, number] {
   if (value === null || typeof value !== "object") return fallback;
@@ -102,6 +105,14 @@ export interface PuppetLayersView {
   /** 按当前名字找，最后一个匹配，空串不匹配，找不到 −1。 */
   find(name: string): number;
   control(index: number): PuppetLayerControl | null;
+  /**
+   * 骨骼脚本方法的落点（P12d-2，`ScenePuppets` 的同名方法；骨骼选择器已由 API 规整成 Int32 数或字符串）。可选：语料诊断、单测的最小视图不给时，
+   * `getBoneTransform` 返回单位阵、其余空操作。
+   */
+  boneTransform?(bone: number | string): Float32Array | null;
+  setBoneTransform?(bone: number | string, matrix: ArrayLike<number>): void;
+  applyBonePhysicsImpulse?(bone: number | string, dir: ArrayLike<number>, ang: ArrayLike<number>): void;
+  resetBonePhysicsSimulation?(bone: number | string): void;
 }
 
 export interface ScriptApiState {
@@ -401,6 +412,7 @@ export class ScriptApi {
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
     this.installGetAnimation(api, () => `objects/${index}`);
     this.installAnimationLayers(api, index);
+    if (this.findLayer(index)?.alignment !== undefined) this.installBones(api, index);
     this.layers.set(object, api);
     return api;
   }
@@ -1117,6 +1129,51 @@ export class ScriptApi {
     };
     this.fallbackLayerControls.set(key, control);
     return control;
+  }
+
+  /**
+   * 图像层上的骨骼方法（P12d-2，rea-p12d-bones；模型对象、声音 / 粒子 / 文本层没有，`alignment` 有值即图像层）：
+   * - `getBoneCount()`：mdl 骨骼数（静态 puppet 也有），非 puppet 为 0；
+   * - `getBoneTransform(bone)`：每次新建 `Mat4`，选骨失败（越界、非整数、空串、没推进过、静态 puppet）返回单位阵、不返回 `null`；
+   * - `setBoneTransform(bone, mat)`：`mat` 不是对象 / 没有数组 `m` 时当单位阵，`m` 里不是数的元素取单位阵对应位的值（dll 的 Mat4 实参转换）；
+   * - `applyBonePhysicsImpulse(bone, dir, ang?)`：`dir` / `ang` 读 `x y z`，不是对象（含缺省）当 `(0, 0, 0)`，不抛错；
+   * - `resetBonePhysicsSimulation(bone)`。
+   * `bone` 先按 dll 的规则规整：Int32 数 → 下标，字符串 → 名字，其余（`1.5`、对象、缺省）→ 空串。
+   */
+  private installBones(api: ApiObject, object: number): void {
+    const bone = (value: unknown): number | string =>
+      typeof value === "number" && Number.isInteger(value) && value >= -2147483648 && value <= 2147483647
+        ? value
+        : typeof value === "string"
+          ? value
+          : "";
+    const view = () => this.access.puppetLayers?.(object) ?? null;
+    this.method(api, "getBoneCount", () => {
+      const puppet = this.findLayer(object)?.puppet;
+      return puppet ? (puppet.boneCount ?? puppet.skeleton?.parents.length ?? 0) : 0;
+    });
+    this.method(api, "getBoneTransform", (b?: unknown) => {
+      const m = view()?.boneTransform?.(bone(b)) ?? IDENTITY_4;
+      const mat = (this.realm.global.Object as typeof Object).create(this.realm.prototypes.Mat4) as ApiObject;
+      mat.m = this.array(Array.from(m));
+      return mat;
+    });
+    this.method(api, "setBoneTransform", (b?: unknown, mat?: unknown) => {
+      const m = Array.from(IDENTITY_4);
+      const source = mat !== null && typeof mat === "object" ? (mat as ApiObject).m : undefined;
+      if (Array.isArray(source))
+        for (let i = 0; i < 16; i++) if (typeof source[i] === "number") m[i] = Math.fround(source[i] as number);
+      view()?.setBoneTransform?.(bone(b), m);
+      return undefined;
+    });
+    this.method(api, "applyBonePhysicsImpulse", (b?: unknown, dir?: unknown, ang?: unknown) => {
+      view()?.applyBonePhysicsImpulse?.(bone(b), vec3Arg(dir, [0, 0, 0]), vec3Arg(ang, [0, 0, 0]));
+      return undefined;
+    });
+    this.method(api, "resetBonePhysicsSimulation", (b?: unknown) => {
+      view()?.resetBonePhysicsSimulation?.(bone(b));
+      return undefined;
+    });
   }
 
   /**

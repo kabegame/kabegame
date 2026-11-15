@@ -916,6 +916,11 @@ export class SceneHost {
                 count: () => puppets.layerCount(object),
                 find: (name) => puppets.findLayer(object, name),
                 control: (index) => puppets.layer(object, index),
+                // 骨骼脚本方法（P12d-2）
+                boneTransform: (bone) => puppets.boneTransform(object, bone),
+                setBoneTransform: (bone, matrix) => puppets.setBoneTransform(object, bone, matrix),
+                applyBonePhysicsImpulse: (bone, dir, ang) => puppets.applyBonePhysicsImpulse(object, bone, dir, ang),
+                resetBonePhysicsSimulation: (bone) => puppets.resetBonePhysicsSimulation(object, bone),
               }
             : null;
         },

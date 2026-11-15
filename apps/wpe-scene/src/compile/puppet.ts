@@ -176,6 +176,12 @@ export interface ScenePuppet {
   };
   /** skinned 时的组合键（`SKINNING` / `BONECOUNT`）；静态 puppet 为空对象。 */
   combos: Record<string, number>;
+  /**
+   * 每根骨骼的名字（mdl `MDLS`，P12d-2，脚本 `getBoneTransform("名字")` 按它找）与 mdl 骨骼数（`getBoneCount`，不看蒙皮门：静态 puppet 也有）。
+   * 骨骼表超过上限（`mdl:skeleton:bones`）时仍照 mdl 的实际数量给。可选同 `alignment`：不动各处手写的测试图层。
+   */
+  names?: string[];
+  boneCount?: number;
   /** 静态 puppet 为 null。 */
   skeleton: {
     /** 父骨骼下标，根为 −1。 */
@@ -186,6 +192,8 @@ export interface ScenePuppet {
     rest: Float32Array;
     /** 静止姿势的来源矩阵，每骨骼 16 个 f32（没有可见层时局部矩阵直接用它，rea-RT 6.1）。 */
     restMatrices: Float32Array;
+    /** 每骨骼的物理参数（P12d-1，只图像层 puppet；没有开物理的骨骼为 null，全 null 时不写这个键，bundle 字节同以前）。 */
+    physics?: (BonePhysics | null)[];
   } | null;
   animations: PuppetAnimation[];
   /** 按 JSON 顺序（语料没有 `autosort` / `index`，rea-RT 1.4）。找不到动画的项整层丢掉，不报。 */
@@ -273,6 +281,100 @@ export function boneJsonFlags(json: string): number {
 export function bonePhysics(json: string): boolean {
   const flags = boneJsonFlags(json);
   return (flags & 0x3000) !== 0 && (flags & 0x3) !== 0;
+}
+
+/**
+ * 一根骨骼的物理参数（rea-AP 2.1，WPE 骨骼 `+0x68` 的参数块 Q；P12d-1）。只在 `(r ‖ t) && (se ‖ re)` 时有，否则 null。数值都是 float32。
+ * `re` 优先：`re` 为真时 `spring` 为假（rea-AP 2.4「`re` 和 `se` 二选一」）。
+ */
+export interface BonePhysics {
+  /** `r`（0x1000）：转动物理。 */
+  rotate: boolean;
+  /** `t`（0x2000）：平移物理。 */
+  translate: boolean;
+  /** `se`（0x1）且没有 `re`：弹簧模式；为假时是 `re`（没有回弹）。 */
+  spring: boolean;
+  /** `ge`（0x4）：重力。 */
+  gravity: boolean;
+  rs: number;
+  ts: number;
+  rf: number;
+  tf: number;
+  /** `1 − ri / 100`（缺省 1）。 */
+  ri: number;
+  /** `1 − ti / 100`（缺省 1）。 */
+  ti: number;
+  gd: [number, number, number];
+  /** 缺省 1000。 */
+  m: number;
+  tp: [number, number, number];
+  tm: number;
+  /** `la`（只认 JSON `true`）：`lamin` xyz、`lamax` xyz（弧度，缺省 0）。 */
+  limitAngles: [number, number, number, number, number, number] | null;
+  /** `lt`（只认 JSON `true`）：`ltmax`（度，缺省 0）。 */
+  limitTurn: number | null;
+  /** `rax` / `ray` / `raz`：三个都在且都是布尔才读，为假 → 锁（这里存「是否锁」）。 */
+  lockRotate: [boolean, boolean, boolean];
+  /** `tax` / `tay` / `taz`，同上。 */
+  lockTranslate: [boolean, boolean, boolean];
+}
+
+/** `strtod` 的三个数（rea-AP 2.1：空格分隔，缺的分量与读不出的分量为 0；只取前缀，`parseFloat` 同样）。 */
+function vec3Field(value: unknown): [number, number, number] {
+  const out: [number, number, number] = [0, 0, 0];
+  if (typeof value !== "string") return out;
+  const tokens = value.split(" ").filter((token) => token !== "");
+  for (let i = 0; i < 3 && i < tokens.length; i++) {
+    const parsed = Number.parseFloat(tokens[i]);
+    out[i] = Number.isNaN(parsed) ? 0 : f(parsed);
+  }
+  return out;
+}
+
+/**
+ * 解析骨骼 JSON 的物理参数（`FUN_140265c30`，rea-AP 2.1，参考 `ignore/p12/rea/attach/physmodel.py` 的 `parse_bone_json`）：门同 `boneJsonFlags`
+ * （`(r ‖ t) && (se ‖ re)`），不开物理返回 null。`ge`、`la`、`lt` 只认 JSON `true`；`lamin` / `lamax` 只在 `la` 时读、`ltmax` 只在 `lt` 时读；
+ * 数值键要求是数（布尔不算）；`gd` / `tp` / `lamin` / `lamax` 是空格分隔的字符串；轴锁三个都在且都是布尔才读。`ik` 参数物理开着时不读。
+ */
+export function parseBonePhysics(json: string): BonePhysics | null {
+  if (!bonePhysics(json)) return null;
+  const object = JSON.parse(json) as Record<string, unknown>;
+  const number = (key: string, fallback: number): number => {
+    const value = object[key];
+    return typeof value === "number" && Number.isFinite(value) ? f(value) : fallback;
+  };
+  const bools = (keys: [string, string, string]): [boolean, boolean, boolean] => {
+    const values = keys.map((key) => object[key]);
+    // 三个都在且都是布尔才读，为假 → 锁住
+    return values.every((value) => typeof value === "boolean")
+      ? [!values[0], !values[1], !values[2]]
+      : [false, false, false];
+  };
+  const re = object.re === true;
+  const la = object.la === true;
+  const lt = object.lt === true;
+  const lamin = la ? vec3Field(object.lamin) : [0, 0, 0];
+  const lamax = la ? vec3Field(object.lamax) : [0, 0, 0];
+  return {
+    rotate: object.r === true,
+    translate: object.t === true,
+    spring: !re && object.se === true,
+    gravity: object.ge === true,
+    rs: number("rs", 0),
+    ts: number("ts", 0),
+    rf: number("rf", 0),
+    tf: number("tf", 0),
+    ri: f(1 - f(number("ri", 0) / 100)),
+    ti: f(1 - f(number("ti", 0) / 100)),
+    gd: vec3Field(object.gd),
+    m: number("m", 1000),
+    tp: vec3Field(object.tp),
+    tm: number("tm", 0),
+    limitAngles: la ? [lamin[0], lamin[1], lamin[2], lamax[0], lamax[1], lamax[2]] : null,
+    limitTurn: lt ? number("ltmax", 0) : null,
+    lockRotate: bools(["rax", "ray", "raz"]),
+    lockTranslate: bools(["tax", "tay", "taz"]),
+  };
 }
 
 const MODES: Record<MdlAnimation["mode"], AnimationMode> = { loop: 0, mirror: 1, single: 2 };
@@ -405,10 +507,12 @@ function skeletonIssues(
   file: MdlFile,
   used: readonly number[],
   issues: Set<string>,
+  model = false,
 ): void {
   for (const bone of skeleton.bones) {
     const flags = boneJsonFlags(bone.json);
-    if ((flags & 0x3000 && flags & 0x3) || bone.flags & 2) issues.add("puppet:physics");
+    // 图像层 puppet 的物理由 `puppet/physics.ts` 做（P12d-1）；模型更新路径里的物理没读码，开了仍报；骨骼文件 flags bit1 两边都报
+    if ((model && flags & 0x3000 && flags & 0x3) || bone.flags & 2) issues.add("puppet:physics");
     if (flags & 0xc000) issues.add("puppet:ik");
   }
   const { records, constraints, keyMaps, chains } = skeleton.extras;
@@ -432,7 +536,7 @@ function skeletonIssues(
  *   只剩没做的细节：`puppet:morph:modifiers`（bit13，`MORPHING_MODIFIERS`）、`puppet:clipping:flags`（记录 flags 非 0）、`puppet:clipping:nested`
  *   （遮罩被别的记录裁切）、`puppet:clipping:groups`（记录下标越界）；
  * - 动画层：`puppet:layer-script`（字段挂脚本，P12c）；
- * - 只在 skinned 时报（静态 puppet 每帧不做事，rea-RT 2）：`puppet:physics`（骨骼 JSON 的物理门，或文件 flags bit1）、`puppet:ik`
+ * - 只在 skinned 时报（静态 puppet 每帧不做事，rea-RT 2）：`puppet:physics`（只剩骨骼文件 flags bit1；骨骼 JSON 的物理 P12d-1 起图像层自己做，模型对象开物理仍报）、`puppet:ik`
  *   （`MDLS` v ≥ 2 的记录、约束、键表、链表，或骨骼 JSON 的 `ik` / `ikce`）、动画层用到的动画里 `puppet:draw-order`（绘制顺序轨道且网格 0
  *   有 bit3）、`puppet:order-track`（有绘制顺序轨道却没有 bit3：WPE 写空指针，读码推断崩溃）、`puppet:alpha-track`（有骨骼透明度轨道
  *   却没有 bit2：WPE 崩溃，p12-REPORT 用例 5）、`puppet:animation-ref`（引用块、记录轨道、约束轨道）、`mdl:animation:tracks`（轨道数
@@ -508,6 +612,8 @@ export function buildPuppet(
           ...(morph ? { MORPHING: 1 } : {}),
         }
       : {},
+    names: (skeleton?.bones ?? []).map((bone) => bone.name),
+    boneCount: skeleton?.bones.length ?? 0,
     skeleton: skinned ? buildSkeleton(file) : null,
     animations: used.map((index) => {
       const converted = convertAnimation(
@@ -564,7 +670,15 @@ function buildSkeleton(file: MdlFile, optionalMatrices = true): NonNullable<Scen
     restMatrices.set((optionalMatrices ? source.restMatrices?.[i] : undefined) ?? bones[i].local, i * 16);
   const rest = new Float32Array(n * POSE_STRIDE);
   for (let i = 0; i < n; i++) decomposeRest(restMatrices, i * 16, rest, i * POSE_STRIDE);
-  return { parents, inverseBind, rest, restMatrices };
+  // 物理参数只图像层 puppet 用（`optionalMatrices` 为真）；全 null 时不写这个键
+  const physics = optionalMatrices ? bones.map((bone) => parseBonePhysics(bone.json)) : [];
+  return {
+    parents,
+    inverseBind,
+    rest,
+    restMatrices,
+    ...(physics.some((item) => item) ? { physics } : {}),
+  };
 }
 
 type MdlMeshRef = MdlFile["meshes"][number];
@@ -796,7 +910,7 @@ export function buildModelSkeleton(
   if (bones === 0) return { skeleton: null, issues };
   if (file.animations.some((animation) => animation.id >= 2 ** 32)) issues.add("mdl:animation-id");
   const { used, defs } = layerDefs(file, layers, properties, issues);
-  skeletonIssues(source, file, used, issues);
+  skeletonIssues(source, file, used, issues, true);
   const morphs = file.meshes.map((mesh) => buildModelMorph(mesh, issues));
   const rootmotion = object.rootmotion;
   if (

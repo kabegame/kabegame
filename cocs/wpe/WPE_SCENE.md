@@ -2897,6 +2897,61 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 **语料**：233 张能渲染 160 → 164，解锁 `3346715292`、`3361965869`、`3492627662`、`3830665420`（后者靠 F2）。工作区快照的语料扫描里，P12c 的三个键全部消失，没有场景变成退回。
 
+## puppet 骨骼物理与骨骼脚本 API（P12d）
+
+依据：
+- 读码 [rea-p12-attach-physics](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12-attach-physics.md) 第 2 节、[rea-p12d-bones](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12d-bones.md)；
+- 实测 p12-REPORT 第一部分用例 10、第二部分第 1 节，以及 `p12-bones`；
+- 计划与记录见 [phase-12d-physics.md](../../.claude/plans/wpe-import/3-scene/phase12/phase-12d-physics.md)。
+
+### 物理
+
+- **开关**：骨骼 JSON 要 `(r‖t) && (se‖re)` 才开，否则 `r`、`t` 一起清掉；`re` 优先于 `se`。参数在编译期解析成 `BonePhysics`（`compile/puppet.ts`，键、换算、缺省照读码 2.1）：
+  - `la` 只认 JSON `true`；
+  - 三个轴锁三个都在且都是布尔才读；
+  - `gd` / `tp` 取空格分隔的三个数。
+- **位置**：每帧动画采样、混合之后，`skinMatrices` 按骨骼下标逐根算模型空间矩阵 `Pose[i]`。算完一根就解一次物理（`puppet/physics.ts` 的 `solveBone`），`Pose[i] ← Pose[i]·D`，子骨骼、蒙皮、挂点都用改过的值。
+- **输入**：
+  - 图层本帧的世界矩阵 `W`，含对齐偏移，由宿主经 `PuppetSink.world`（`drawMatrixOf`）交进来。puppet 推进在脚本之前，所以是上一帧脚本写下的，同 WPE；
+  - `s` = 三列长度平均（z 列也算）；
+  - `Mp` = 上一帧物理（和脚本 `setBoneTransform`）之后的世界骨骼矩阵。
+- **世界骨骼缓冲**：两份，推进开头交换，`cur` 对全部骨骼写 `W·Pose[i]`（WPE 的 `P+0x340` / `P+0x348`）。
+- **求解**：全程 float32，照读码 2.4。
+  - 惯性：距离当度数折成插值比例；
+  - 重力：只取垂直分量、强度 `m·s`；
+  - 积分比例：`min(60·dt, 1)`；
+  - `re`：没有回弹；`se`：有弹簧；
+  - `la` 钳制并扣掉越界的角速度；
+  - 平移：半隐式欧拉，按 `tm` 钳距离。
+- **时机**：首帧不算（没有 `Mp`），`refresh` 不算，图层隐藏照算，暂停冻结，重编译接回状态与缓冲；有物理骨骼的 puppet 不走「静止捷径」。
+- **范围**：只做图像层 puppet；模型对象开物理、骨骼文件 flags bit1 仍报 `puppet:physics`（语料 0 处）。
+- **语料 0 处、照读码实现（未实测）**：`lt`（每轴角速度限幅）、平移轴锁、`t + re`。这几个与 `la` 撞限位一起，只对读码的 python 模型验证过（`puppet/physics.branches.test.ts`）。
+
+### 骨骼脚本 API
+
+图像层对象上五个方法（模型与别的图层没有）：
+
+| 方法 | 规则 |
+|---|---|
+| 选骨 | 整数下标（越界失败），或字符串取第一个全名匹配；空串在读写矩阵时失败，在冲量与复位时落到骨骼 0；第一次推进之前一律失败 |
+| `getBoneCount()` | mdl 的骨骼数；没有 `MDLS` 的静态 puppet 与非 puppet 为 0 |
+| `getBoneTransform(b)` | 本帧（含物理）的世界骨骼矩阵 `W·Pose[i]` 的拷贝，每次新建 `Mat4`；失败返回**单位阵**，不是 `null`；`init` 里全是单位阵 |
+| `setBoneTransform(b, M)` | 写三处：`cur[i] = M`、模型空间 `Pose[i] = W⁻¹·M`、这根骨骼的蒙皮矩阵。当帧画在 `M`，子骨骼当帧不跟；只持续一帧，下一帧全部重算；唯一的残留是 `M` 成为下一帧物理的 `Mp`，所以 `t` 骨骼会被拉向 `M` 再弹回。缺矩阵或元素不是数时写单位阵 |
+| `applyBonePhysicsImpulse(b, dir, ang)` | `vel += dir`、`q ⊗= eulerQuat(ang·DEG/2)`，下一帧的物理里起作用；`ang` 缺省 (0, 0, 0)，只传两个参数不抛错；没开物理的骨骼没有效果 |
+| `resetBonePhysicsSimulation(b)` | 状态置初值，不清 `Mp` |
+
+照报：`getLocalBone*`、`getBoneIndex`、`getBoneParentIndex`、混合形状的方法（语料 0 处）。
+
+### 走查
+
+- **物理夹具**（`puppet/physics.test.ts`，WPE 抓帧）：
+  - `p12-phys` 的 re / se / ronly / tse，`p12-phys2` 的 ronly_y / se_y，逐位相同；
+  - re_ge、re_y、re_rot、se_rot 在 1.5e−5–3.6e−4 px；
+  - `2345214324` 帧 216–220 最大 4.8e−3 px，`3426865175` 帧 190–192 为 0。
+  都在 p12-REPORT 的 python 模型量级以内。剩下的差来自 `rotTo` 阈值附近的判定翻转（差 1 ulp 就翻），逐位一致做不到。
+- **骨骼 API 夹具**（`puppet/p12bones.test.ts`，WPE 抓帧）：`p12-bones` 355 行脚本日志与 200 个 `g_Bones` draw 逐位相同。
+- **语料**：233 张能渲染 182 → 185，解锁 `2345214324`、`3359451610`、`3426865175`；没有场景变成退回。
+
 ## 交互（P6c）
 
 场景脚本的光标交互：六个导出回调 `cursorEnter` / `Leave` / `Move` / `Down` / `Up` / `Click`、全局 `input`、图层 `solid`。规则读码在 `.claude/plans/wpe-import/3-scene/phase6/rea-p6c-dispatch.md` 与 `rea-p6c-script.md`（含 REA 重核），0c 用 wpe-renderdoc 的 `input_play` 逐帧喂光标实测，结论全部成立。实现是纯逻辑的 `render/cursor.ts`（命中、追踪器、可拾取对象表），渲染器每个实时帧在相机更新之后、脚本之前调一次（`SceneRenderer.stepCursor`），把回调交给宿主，宿主调 `ScriptRuntime.cursorEvent`。

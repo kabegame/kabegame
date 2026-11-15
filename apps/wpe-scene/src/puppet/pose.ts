@@ -228,12 +228,16 @@ export const SKIN_STRIDE = 12;
  * `world` 是每骨骼 16 个 f32 的工作区（跨帧保留），`out` 每骨骼 `SKIN_STRIDE` = 12 个：K 的前三列各自的 xyz、再第四列的 xyz，即
  * `(c0.xyz, c1.xyz, c2.xyz, c3.xyz)`。按 WPE 的行向量说法就是「4 行 × 前 3 列，行主序」，和 RenderDoc 读到的 `g_Bones` 同序
  * （`ignore/p12/out/wpe-3203778110-kbp-fps20-1920x1080-consts.json` 的 `draws[*].vs.g_Bones`）。
+ *
+ * `afterBone`（P12d-1，骨骼物理的插入点）：每根骨骼的模型空间矩阵 `world[i]` 算完之后调一次（`i` 是骨骼下标），回调可以就地改写
+ * `world[i × 16 .. +15]`，之后的子骨骼与蒙皮矩阵都用改过的值（WPE 在 `Pose[i]` 上右乘物理增量，rea-AP 2.5）。不给时逐字节同以前。
  */
 export function skinMatrices(
   pose: Float32Array | null,
   skeleton: SkinSkeleton,
   world: Float32Array,
   out: Float32Array,
+  afterBone?: (bone: number) => void,
 ): void {
   const { parents, inverseBind, restMatrices } = skeleton;
   const bones = parents.length;
@@ -248,6 +252,7 @@ export function skinMatrices(
       mulAffine(world, parent * 16, local, 0, temp, 0);
       world.set(temp, i * 16);
     }
+    afterBone?.(i);
   }
   for (let i = 0; i < bones; i++) {
     mulAffine(world, i * 16, inverseBind, i * 16, temp, 0);

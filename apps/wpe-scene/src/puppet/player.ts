@@ -16,6 +16,10 @@
  * - P12b2-1：同一套运行时再服务带骨骼的模型对象（`kind: "model"`，rea-texchan-model 4–7，实测 `ignore/p12/b2/meas/report.txt`）。模式只改这几处：
  *   对象或父链不可见时整段跳过（时钟、权重、姿势都冻结）；权重 0 的层整层跳过（全部跳过就是没有层，局部矩阵取 `MDLS` 局部矩阵）；没有透明度轨道；
  *   变形按网格（`morphs[m]`，每网格自己的顶点数与缩放，权重混合钳 [0, 1]）；剔除盒取可见层动画包围盒的并。图像层的行为与字节不变。
+ * - P12d-1：骨骼物理（只图像层 puppet，参数在 `skeleton.physics`，求解在 `physics.ts`）。`frame` 推进时在 `skinMatrices` 的每根骨骼回调里解：算完 `Pose[i]` 就
+ *   `Mw = W·Pose[i]`、解物理、`Pose[i] ← Pose[i]·D`，后面的子骨骼与蒙皮都用改过的值；`W` 由宿主经 `PuppetSink.world` 交进来（上一帧脚本写下的图层世界矩阵含对齐偏移，
+ *   正是 WPE 的时序，p12-REPORT 第二部分 1.5）。世界骨骼矩阵两份缓冲 `prev` / `cur` 在推进开头交换，`cur` 对**全部**骨骼各写一次（物理骨骼在物理之后写，不再拷贝，脚本 `setBoneTransform` 直接改它，同 WPE `P+0x340` / `P+0x348`），
+ *   首帧 `prev` 为空不解；`refresh` 不是 WPE 的更新，不解也不动状态；隐藏照算（图像层不看可见性）；有物理骨骼的运行时不走「静止捷径」（状态每帧在变）。
  * - P12b2-2：图像层 puppet 多一份 `g_BlendMap`（16 个 float，初值 0，**帧首不复位**），每个可见层按纹理通道轨道写（`blendChannels`）；只在推进时写
  *   （`refresh` 不是 WPE 的更新，加法层会被重复累加）；模型不处理通道轨道。
  */
@@ -23,7 +27,8 @@ import { AnimationClock, BACK, DONE, MIRROR, PAUSED, SINGLE } from "../animation
 import type { AnimationEventDef, AnimationMode } from "../animation/types";
 import type { SceneLayer } from "../compile/bundle";
 import type { ModelSkeleton, PuppetAnimation, PuppetLayerDef, ScenePuppet } from "../compile/puppet";
-import { effectiveVisible, type LayerTransform } from "../render/layout";
+import type { BonePhysics } from "../compile/puppet";
+import { drawMatrixOf, effectiveVisible, type LayerTransform } from "../render/layout";
 import {
   BLEND_MAP_FLOATS,
   blendChannels,
@@ -47,6 +52,8 @@ import {
   type FrameIndex,
   type MorphUniforms,
 } from "./pose";
+import { inverse4, mulAffine, mulFull } from "./math";
+import { applyBoneImpulse, createBoneState, resetBoneState, solveBone, type BoneState } from "./physics";
 
 const f = Math.fround;
 
@@ -72,17 +79,33 @@ export interface PuppetSink {
    * 没有这个方法或对象不在状态里时当作可见；图像层 puppet 不看（隐藏也推进）。
    */
   visible?(object: number): boolean;
+  /**
+   * 图层本帧的世界矩阵（16 个 f32，列主序）含对齐偏移（WPE 图层的世界矩阵虚函数 `+0x80`，骨骼物理的 `W`，P12d-1）；对象不在状态里、不给这个方法时为 null，
+   * 物理不跑（单测、`refresh`）。读的是调用那一刻的状态：每帧更新在脚本之前，所以是上一帧脚本写下的。
+   */
+  world?(object: number): Float32Array | null;
 }
 
 /** 把 `SceneState` 接成 `PuppetSink`（用户属性写进 `animationLayers`，puppet 当帧就读到；`layers` 给模型的可见性门）。 */
 export function stateSink(state: {
   readonly animationLayers: ReadonlyMap<string, PuppetLayerFields>;
-  readonly layers?: ReadonlyMap<number, Pick<LayerTransform, "parent" | "visible">>;
+  readonly layers?: ReadonlyMap<number, Pick<LayerTransform, "parent" | "visible"> & Partial<LayerTransform>>;
 }): PuppetSink {
   const layers = state.layers;
   return {
     animationLayer: (object, layer) => state.animationLayers.get(animationLayerKey(object, layer)),
-    ...(layers ? { visible: (object: number) => !layers.has(object) || effectiveVisible(object, layers) } : {}),
+    ...(layers
+      ? {
+          visible: (object: number) => !layers.has(object) || effectiveVisible(object, layers),
+          // 物理的 `W`：`drawMatrixOf`（世界矩阵 · 自身偏移，不走挂点：语料没有挂在物理骨骼上的 puppet，挂在别的骨骼上的 puppet 的 `W` 退成普通父子，
+          // 与 WPE 差一个挂点矩阵；要做时在这里接渲染器的 `attachHook`）。条目没有变换字段（单测的最小状态）时为 null
+          world: (object: number) => {
+            const layer = layers.get(object);
+            if (!layer?.origin || !layer.angles || !layer.scale) return null;
+            return drawMatrixOf(object, layers as ReadonlyMap<number, LayerTransform>, new Map());
+          },
+        }
+      : {}),
   };
 }
 
@@ -219,6 +242,29 @@ interface PuppetRuntime {
   readonly events: AnimationEventDef[];
   /** `g_BlendMap`（P12b2-2，WPE `P+0x350` 起 16 个 float，构造时清 0、跨帧保留）；模型为 null。 */
   readonly blendMap: Float32Array | null;
+  /** 骨骼物理（P12d-1）；没有物理骨骼（含模型对象）为 null。 */
+  readonly physics: PhysicsRuntime | null;
+}
+
+/** 一个 puppet 的物理运行时。 */
+interface PhysicsRuntime {
+  /** 每骨骼的参数（`skeleton.physics`），null = 这根骨骼没开物理。 */
+  readonly params: readonly (BonePhysics | null)[];
+  /** 有骨骼开了物理（没有时只写 `cur`，不走物理、静止捷径照旧）。 */
+  readonly active: boolean;
+  /** 每骨骼的状态（没开物理的为 null）。 */
+  readonly states: (BoneState | null)[];
+  /** 上一帧物理之后的世界骨骼矩阵（`P+0x348`，每骨骼 16 个 f32）；`hasPrev` 为假时还没有。 */
+  prev: Float32Array;
+  /** 本帧的世界骨骼矩阵（`P+0x340`）；帧末与 `prev` 交换。 */
+  cur: Float32Array;
+  hasPrev: boolean;
+  /** 这一帧推进时用的图层世界矩阵 `W`（16 个 f32；脚本 `setBoneTransform` 求 `W⁻¹·M` 用，P12d-2）。 */
+  readonly layerWorld: Float32Array;
+  /** 工作格：物理之前的 `W·Pose[i]`、物理增量 `D`、`Pose[i]·D` 的结果。 */
+  readonly mw: Float32Array;
+  readonly delta: Float32Array;
+  readonly temp: Float32Array;
 }
 
 /**
@@ -239,6 +285,22 @@ function layerClock(
     return clock;
   }
   return new AnimationClock({ fps, length, mode, startpaused: false }, events);
+}
+
+/** 物理运行时（P12d-1）：每根开物理的骨骼一份状态，`prev` 首帧为空。 */
+function physicsRuntime(params: readonly (BonePhysics | null)[], bones: number): PhysicsRuntime {
+  return {
+    params,
+    active: params.some((item) => item),
+    states: params.map((item) => (item ? createBoneState() : null)),
+    prev: new Float32Array(bones * 16),
+    cur: new Float32Array(bones * 16),
+    hasPrev: false,
+    layerWorld: new Float32Array(16),
+    mw: new Float32Array(16),
+    delta: new Float32Array(16),
+    temp: new Float32Array(16),
+  };
 }
 
 /** 一层的控制口（P12c）：读写直接作用在层的运行时上。 */
@@ -380,6 +442,8 @@ export class ScenePuppets {
         bounds: null,
         events: [],
         blendMap: kind === "image" ? new Float32Array(BLEND_MAP_FLOATS) : null,
+        // 图像层 puppet 都有两份世界骨骼缓冲（脚本读写的 `P+0x340`，P12d-2）；有没有物理骨骼看 `active`
+        physics: kind === "image" ? physicsRuntime(skeleton.physics ?? [], bones) : null,
       };
       this.runtimes.push(runtime);
       this.byObject.set(object, runtime);
@@ -397,6 +461,90 @@ export class ScenePuppets {
       this.evaluate(runtime, d, state ?? null);
       this.dispatch(runtime, hooks ?? null);
     }
+  }
+
+  /**
+   * 静止捷径（没有可见层、上次也是静止、没有物理骨骼）下的世界骨骼矩阵：蒙皮不重算，但有 `W` 的推进帧照样交换缓冲、对全部骨骼写 `W·world[i]`。
+   * `refresh`（`d` 为 null）与没有 `W` 的帧什么都不做。
+   */
+  private restWorldBones(runtime: PuppetRuntime, d: number | null, state: PuppetSink | null): void {
+    const physics = runtime.physics;
+    const layerWorld = physics && d !== null ? (state?.world?.(runtime.object) ?? null) : null;
+    if (!physics || !layerWorld) return;
+    physics.layerWorld.set(layerWorld);
+    [physics.prev, physics.cur] = [physics.cur, physics.prev];
+    for (let bone = 0; bone < runtime.bones; bone++)
+      mulFull(layerWorld, 0, runtime.world, bone * 16, physics.cur, bone * 16);
+    physics.hasPrev = true;
+  }
+
+  /**
+   * 脚本选骨（rea-p12d-bones 3、5）：数字按下标（整数、`0 ≤ i < 骨骼数`），字符串按名字取第一个全名匹配；第一次更新之前（还没有世界骨骼矩阵）一律失败。
+   * 空串：`emptyIsFirst` 为真（冲量与复位）落到骨骼 0，否则（读写矩阵）失败。失败返回 −1。
+   */
+  private selectBone(runtime: PuppetRuntime, bone: number | string, emptyIsFirst: boolean): number {
+    if (!runtime.physics?.hasPrev) return -1;
+    if (typeof bone === "number") return Number.isInteger(bone) && bone >= 0 && bone < runtime.bones ? bone : -1;
+    if (bone === "") return emptyIsFirst && runtime.bones > 0 ? 0 : -1;
+    // 骨骼名只图像层 puppet（`ScenePuppet.names`）有；模型对象没有这些脚本方法，`physics` 为 null 时到不了这里
+    const names = (runtime.puppet as Partial<Pick<ScenePuppet, "names">>).names ?? [];
+    for (let i = 0; i < runtime.bones && i < names.length; i++) if (names[i] === bone) return i;
+    return -1;
+  }
+
+  /**
+   * 脚本 `getBoneTransform`（WPE `P+0x340[i]`，`W·Pose`，物理之后）：16 个 f32 的拷贝；不是图像层 puppet、没推进过、选骨失败时为 null（API 换成单位阵）。
+   */
+  boneTransform(object: number, bone: number | string): Float32Array | null {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return null;
+    const i = this.selectBone(runtime, bone, false);
+    return i < 0 ? null : runtime.physics.cur.slice(i * 16, i * 16 + 16);
+  }
+
+  /**
+   * 脚本 `setBoneTransform`（rea-p12d-bones 4）：写三处，`cur[i] = M`、模型空间 `world[i] = W⁻¹·M`（`W` 取这一帧推进时用的）、蒙皮 `skin[i] = world[i]·绑定逆`
+   * （WPE 这里两次都是完整 4×4 乘法）。子骨骼与物理状态不动，所以当帧只有这根骨骼的画面变，下一帧全部重算、`M` 只作为物理的 `prev` 留下。
+   * 选骨失败、`m` 不足 16 个数时什么都不做。
+   */
+  setBoneTransform(object: number, bone: number | string, m: ArrayLike<number>): void {
+    const runtime = this.byObject.get(object);
+    const physics = runtime?.physics;
+    if (!runtime || !physics || m.length < 16) return;
+    const i = this.selectBone(runtime, bone, false);
+    if (i < 0) return;
+    const matrix = Float32Array.from(m as ArrayLike<number>).subarray(0, 16);
+    physics.cur.set(matrix, i * 16);
+    const inverse = new Float32Array(16);
+    inverse4(physics.layerWorld, 0, inverse, 0);
+    mulFull(inverse, 0, matrix, 0, physics.temp, 0);
+    runtime.world.set(physics.temp, i * 16);
+    mulFull(runtime.world, i * 16, runtime.skeleton.inverseBind, i * 16, physics.temp, 0);
+    const t = physics.temp;
+    runtime.skin.set([t[0], t[1], t[2], t[4], t[5], t[6], t[8], t[9], t[10], t[12], t[13], t[14]], i * SKIN_STRIDE);
+    // 蒙皮被改过：静止捷径不能再跳过下一帧的重算（WPE 下一帧交换后全部重算）
+    runtime.restSkin = false;
+  }
+
+  /**
+   * 脚本 `applyBonePhysicsImpulse`（rea-p12d-bones 5）：`vel += dir`、`q ⊗= eulerQuat(ang·DEG·0.5)`；不看物理开关，但没开物理的骨骼没有状态，空操作
+   * （WPE 写了也不起作用）。空串落到骨骼 0；第一次更新之前、越界什么都不做。
+   */
+  applyBonePhysicsImpulse(object: number, bone: number | string, dir: ArrayLike<number>, ang: ArrayLike<number>): void {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return;
+    const i = this.selectBone(runtime, bone, true);
+    const state = i < 0 ? null : runtime.physics.states[i];
+    if (state) applyBoneImpulse(state, dir, ang);
+  }
+
+  /** 脚本 `resetBonePhysicsSimulation`：选骨同冲量（空串 = 骨骼 0，不是全部），状态置初值，不清 `prev`。 */
+  resetBonePhysicsSimulation(object: number, bone: number | string): void {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return;
+    const i = this.selectBone(runtime, bone, true);
+    const state = i < 0 ? null : runtime.physics.states[i];
+    if (state) resetBoneState(state);
   }
 
   /**
@@ -490,6 +638,21 @@ export class ScenePuppets {
   }
 
   /**
+   * 本帧的世界骨骼矩阵 `W·Pose[i]`（物理之后，每骨骼 16 个 f32，WPE 的 `P+0x340`；脚本 `getBoneTransform` 读它、`setBoneTransform` 写它，写进去的在下一帧
+   * 交换后成为物理的 `prev`，P12d-2）。每帧推进时对**全部**骨骼写；不是图像层 puppet 的对象为 null；宿主没给 `W` 的帧保持上一帧的值。返回的数组每帧原地改写（交换时换底层缓冲，
+   * 不要长期持有）。
+   */
+  worldBones(object: number): Float32Array | null {
+    return this.byObject.get(object)?.physics?.cur ?? null;
+  }
+
+  /** 骨骼物理状态（每骨骼一份，没开物理的为 null）；没有物理骨骼的对象为 null（P12d-1，测试与探针读）。 */
+  physicsStates(object: number): readonly (BoneState | null)[] | null {
+    const physics = this.byObject.get(object)?.physics;
+    return physics?.active ? physics.states : null;
+  }
+
+  /**
    * 重编译时接回上一份（同 P10：WPE 改属性不重载场景，动画层时钟、播放状态与 blendin 的清位都在）：按 (对象下标, 层下标) 找，动画的
    * fps / 长度 / 模式相同时拷时钟的 `t` 与运行时位（`PAUSED` / `DONE` / `BACK`），以及 blendin 是否已清。找不到的从 0 开始。只在新建之后、
    * 第一次 `frame` 之前调一次；之后调 `refresh` 让蒙皮跟上。
@@ -501,6 +664,23 @@ export class ScenePuppets {
       if (!before) continue;
       // `g_BlendMap` 是跨帧的持久状态（WPE 改属性不重载，`P+0x350` 不变），重编译时保留这 16 个 float
       if (runtime.blendMap && before.blendMap) runtime.blendMap.set(before.blendMap);
+      // 物理状态与 `prev`（P12d-1，同样是跨帧的持久状态）：骨骼数相同时按下标接回
+      const physics = runtime.physics;
+      const old = before.physics;
+      if (physics && old && physics.states.length === old.states.length) {
+        physics.states.forEach((state, bone) => {
+          const was = old.states[bone];
+          if (!state || !was) return;
+          state.q.set(was.q);
+          state.ang.set(was.ang);
+          state.off.set(was.off);
+          state.vel.set(was.vel);
+        });
+        physics.prev.set(old.prev);
+        physics.cur.set(old.cur);
+        physics.hasPrev = old.hasPrev;
+        physics.layerWorld.set(old.layerWorld);
+      }
       runtime.layers.forEach((layer, index) => {
         const old = before.layers[index];
         if (!old) return;
@@ -643,8 +823,13 @@ export class ScenePuppets {
       posed = true;
     }
     if (model) this.updateBounds(runtime, state);
+    // 有物理骨骼的运行时不走静止捷径：状态每帧在变（P12d-1）
     if (!posed) {
-      if (runtime.restSkin) return;
+      if (runtime.restSkin && !runtime.physics?.active) {
+        // 静止捷径只省掉蒙皮重算：世界骨骼矩阵每帧照写（脚本 `getBoneTransform` 要跟着图层移动，P12d-2）
+        this.restWorldBones(runtime, d, state);
+        return;
+      }
       if (!model) reset();
     }
     if (morph)
@@ -658,8 +843,51 @@ export class ScenePuppets {
     if (meshMorphs)
       for (const item of meshMorphs)
         if (item) morphUniforms(item.weights, item.active, item.vertices, item.scale, item.uniforms);
-    skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin);
+    // 骨骼物理（P12d-1）：只在推进时（`refresh` 不是 WPE 的更新），且宿主给了图层的世界矩阵
+    const physics = runtime.physics;
+    const layerWorld = physics && d !== null ? (state?.world?.(runtime.object) ?? null) : null;
+    if (physics && layerWorld) {
+      const scale = layerScale(layerWorld);
+      physics.layerWorld.set(layerWorld);
+      // 推进开头交换 `P+0x340` / `P+0x348`：上一帧的 `cur`（含脚本 `setBoneTransform` 之后的写入）成了这一帧的 `prev`；`cur` 之后每根骨骼各写一次，
+      // 不再拷贝。`W` 为 null（sink 没给、`refresh`）时整段不做：不交换、不写 `cur`、物理不跑
+      [physics.prev, physics.cur] = [physics.cur, physics.prev];
+      skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin, (bone) =>
+        this.physicsBone(runtime, physics, layerWorld, scale, d!, bone),
+      );
+      physics.hasPrev = true;
+    } else skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin);
     runtime.restSkin = !posed;
+  }
+
+  /**
+   * 一根骨骼的物理（`skinMatrices` 的回调，`world[bone]` 刚算完、还是动画姿势，rea-AP 2.2 第 5 步）：`cur[bone] = W·Pose[bone]`；开了物理且有 `prev`
+   * 时解一次，`Pose[bone] ← Pose[bone]·D`，`cur[bone]` 取改过之后的。
+   */
+  private physicsBone(
+    runtime: PuppetRuntime,
+    physics: PhysicsRuntime,
+    layerWorld: Float32Array,
+    scale: number,
+    dt: number,
+    bone: number,
+  ): void {
+    const { world } = runtime;
+    const { mw, delta, temp, cur, prev } = physics;
+    mulFull(layerWorld, 0, world, bone * 16, mw, 0);
+    const params = physics.params[bone];
+    const state = physics.states[bone];
+    if (
+      params &&
+      state &&
+      physics.hasPrev &&
+      solveBone(params, state, mw, prev.subarray(bone * 16, bone * 16 + 16), scale, dt, delta)
+    ) {
+      mulAffine(world, bone * 16, delta, 0, temp, 0);
+      world.set(temp, bone * 16);
+      mulFull(layerWorld, 0, world, bone * 16, mw, 0);
+    }
+    cur.set(mw, bone * 16);
   }
 
   /**
@@ -684,4 +912,18 @@ export class ScenePuppets {
     });
     runtime.bounds = valid ? box : null;
   }
+}
+
+/** 图层世界矩阵三列长度的平均（`((|c1| + |c0|) + |c2|) / 3`，z 列也算，`0x1402004d2`，p12-REPORT 1.4 实测）。 */
+function layerScale(world: Float32Array): number {
+  const column = (c: number) =>
+    f(
+      Math.sqrt(
+        f(
+          f(f(world[4 * c] * world[4 * c]) + f(world[4 * c + 1] * world[4 * c + 1])) +
+            f(world[4 * c + 2] * world[4 * c + 2]),
+        ),
+      ),
+    );
+  return f(f(f(column(1) + column(0)) + column(2)) / 3);
 }
