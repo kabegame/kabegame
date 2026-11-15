@@ -87,6 +87,20 @@
 - **A2C 阈值**：单采样 A2C 在 alpha ≥ 0.5 + 2⁻¹² 时才覆盖（见「写入状态（步骤 5）」表里「A2C 的覆盖」一行）；投射变体同样适用，阴影图集逐纹素和 WPE 相同。
 - **实测**（2026-11-15）：确定性工程 `ignore/p13/d/gen_d0.py`、`gen_d8.py`、`gen_d9.py`、`gen_d10.py` 共 29 次抓帧（五个档位 × 点光正交 / 透视 / 平行光、多灯、投射者判定、剔除、改级联距离、相机微移、两盏平行光、投射灯超配、运行中隐藏、毛发层数、三种专用投射者），按抓帧时刻渲染，每张最多 32 个孤立像素、都只差 1 级；`p13d-who` 另有一个粒子方块，是屏外探针不步进粒子，与阴影无关。
 
+## 体积光（P13e）
+
+读码见 [rea-p13-passes](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md) 第 3 节与 [rea-p13-volumetrics](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-volumetrics.md)（V1–V11），计划、实测与实施记录见 [phase-13e-volumetrics](../../.claude/plans/wpe-import/3-scene/phase13/phase-13e-volumetrics.md)。
+
+- **档位**：WPE 的 `general.user.volumetrics`（`disabled` / `low` / `medium` / `high` / `ultra`，缺键或不认识的值按 medium，与阴影共用档位枚举）。编译选项 `volumetrics`（`compile/postprocess.ts` 的 `resolveVolumetrics` / `readWpeVolumetrics`）缺省跟随 WPE，只在场景有会画的灯时才读 `config.json`；设置项「场景体积光」随预览设置的字段组接入（TODO，见计划点 1）。dev 覆盖 `localStorage["kabegame-dev-scene-volumetrics"]`（`dev/volumetricsOverride.ts`），宿主加载与 dev 探针都读，探针结果带 `volumetrics`（档位与会画的灯）；用完要删掉。
+- **谁画**（`compile/volumetrics.ts`）：自己可见且 `castvolumetrics` 的 `lpoint` / `lspot`，不看 `lightconfig`。管光、平行光 WPE 也建组、清屏、合成，但灯体矩阵是没初始化的值（实测 NaN），什么都画不出、合成一片 0，所以不收；灯对象本来就不触发合成，不影响分组。
+- **一盏灯**（`render/volumetrics.ts`，插在主 pass 里灯在 `objects` 中的位置）：场景深度 → `_rt_volumetricsBack`（全分辨率）；1/d 的 Single 深度清 0，画灯体背面（GREATER、写深度、剔正面）；组内第一盏把 LightBuffer 清成 (0, 0, 0, 1)；画灯体正面（剔背面、不测深度、SrcAlpha / One、只写 RGB），着色器沿视线从正面走到「背面与场景深度较近的那个」累加。d：low / medium 8、high / ultra 4；步数 2 / 3 / 5 / 8，带阴影 12 / 24 / 32 / 64（着色器按 `QUALITY`）。WebGPU 的深度纹理不能线性过滤，WPE 读 Back 用的是 Linear + Wrap：每次拷贝改成一个小 pass 把深度写进 `r32float`（Single 同样），要 `float32-filterable`，没有时退回（`render:volumetrics`）。场景深度附件在有体积光时总建。
+- **合成时机**：连续几盏灯共用一次清屏；下一个可见的非灯对象画之前（不可见的不触发）、或顶层列表末尾（泛光之前）合成：low / medium 先 `blur_h`（LightBuffer → B）、`blur_v`（B → LightBuffer）各一次，再 `passthrough` 加法画回场景目标。LightBuffer 在 LDR 下是 `rgba8unorm`（一段灯的累加在合成前就钳到 1）、HDR 下 `rgba16float`，没有 HDR 系数。反射 pass 里没有体积光。
+- **灯体与矩阵**：点光是单位球（两极 + 23 圈 × 25 点，`sinf` / `cosf` 照 MSVC 的 double 求值再舍入），`g_AltViewProjectionMatrix` = diag(r) + 位置，r 是原始 `radius`，灯的 scale / angles 不参与；聚光是 NDC 里的 32 段圆柱，经 `inverse(聚光 VP)` 变回世界（看向局部 +X，fov = 2·outercone，近平面正交 1、透视 0.05，不读 `lightsourcesize`，远平面 `max(radius, near + 0.01)`，视图用快速倒数平方根归一化），`g_RenderVar3` = 世界矩阵第 0 行原值。常量：`g_RenderVar1` = (r·0.99, cos inner, cos outer, intensity)、`g_RenderVar2` = (位置, density)、`g_RenderVar4` = (color, volumetricsexponent)，缺省 density 2、volumetricsexponent 1。`g_EffectModelMatrix` 每帧是本次绘制 VP 的 GLM 逆（float32 标量，连正负零都和抓帧相同）。网格、求逆、聚光矩阵都和抓帧逐位相同（`compile/p13e.test.ts`）。
+- **相机在灯体内**（`insideLightVolume`）：`p = eye + 0.2·F`，点光 `r² > |p − 灯心|²`，聚光沿轴投影 `0 < t ≤ radius` 且离轴距离在锥内；成立时正面换成全屏三角形（`FULLSCREEN = 1`），背面照画。正交场景照样判。
+- **阴影**：`SHADOW` = castshadow ∧ 用户的阴影档 ≠ 0，**不看** `lightconfig` 有没有阴影计数（`p13e-pns`）；带阴影的点光每帧取自己阴影条目的方块变换与点光投影（`g_RenderVar0` / `g_RenderVar3`），`LIGHTS_SHADOW_MAPPING_QUALITY` = 阴影档、只给点光。
+- **照报**（WPE 读的是残留或没初始化的值，语料都没有）：带阴影的点光分不到阴影条目（`volumetrics:shadow-unassigned`，个数超过 `min(pointshadow, point)`）、聚光分不到聚光槽（`volumetrics:spot-unassigned`）、灯在组里（`volumetrics:group`）；另有 cookie（`volumetrics:cookie`）、聚光阴影（`volumetrics:spot-shadow`）、透视场景的透明排序（`volumetrics:transparentsorting`，没测灯在两轮里落在哪）。灯是编译期常量（同 P13d），挂父对象、关键帧、脚本照报，等 P13f。
+- **实测**（2026-11-15）：确定性工程 `ignore/p13/e/gen_e0.py`（正交 / 透视点光、带阴影、分组、相机在灯内、聚光、四类灯、缩放旋转）按抓帧时刻渲染，low 档 9 个工程与 medium / high / ultra / disabled 各 5–6 个（`capture_sweep`）每张最多 66 个像素、都只差 1 级；语料 `3837478759` 隔离出背景与三盏灯，五档都和 WPE 逐像素相同；`3287715210`（HDR）隔离出背景与灯，屏蔽随时间变化的眼睛以后最大差 4 级（与不带灯的底图同量级）。
+
 ## 着色器翻译器 `wpesl2wgsl`
 
 完整契约（请求 / 结果、绑定布局、uniform 打包、内部流程、已知不支持、测试）见

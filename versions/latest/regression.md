@@ -3149,3 +3149,16 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | SH3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 29 次抓帧（五档 × 点光正交 / 透视 / 平行光，多灯、投射者判定、剔除、改级联距离、相机微移、两盏平行光、投射灯超配、运行中隐藏、毛发层数、三种专用投射者），按抓帧时刻渲染，档位用 dev 覆盖 | 整帧只差零星 1 级 | 2026-11-15：每张最多 32 个孤立像素、都只差 1 级；`p13d-who` 的粒子方块是探针不步进粒子；`p13d-hide` 隐藏后原先整帧发黑（空槽 NaN），修后 2 个像素差 1；`p13d-spec` 的格子边差异来自 A2C 阈值（见「场景壁纸：单采样 A2C 的阈值（P13d 附带）」） |
 | [ ] | SH4 设置页切换 | Windows dev（新构建） | 设置页「场景阴影」切六档，预览带阴影的场景 | 每次切换场景重新加载、影子随档位变化，关闭时没有影子 | 待真机看 |
 | [ ] | SH5 非 Windows | macOS / Linux | 预览带阴影的场景 | 同 Windows | 本机不能测 |
+
+## 场景壁纸体积光（P13e）
+
+2026-11-15。可见、`castvolumetrics` 的点光 / 聚光插在主 pass 里灯的位置画体积光（`compile/volumetrics.ts`、`render/volumetrics.ts`）：拷场景深度（转 `r32float`，要 `float32-filterable`）、1/d 画灯体背面、正面沿视线步进累加进 LightBuffer，连续的灯共用一次清屏，下一个可见的非灯对象之前或列表末尾合成（low / medium 先横竖模糊）；档位跟随 WPE 的 `volumetrics`（缺键 medium），dev 覆盖 `localStorage["kabegame-dev-scene-volumetrics"]`；翻译器认 `sampler2DBackBuffer`。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/rea-p13-volumetrics.md`、`rea-p13-passes.md` 第 3 节，计划、实测与实施记录见 `phase-13e-volumetrics.md`；测试工程 `ignore/p13/proj/p13e-*`（`ignore/p13/e/gen_e0.py`），语料隔离工程 `ignore/p13/e/real/`，WPE 抓帧在 `A:p13e`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | VL0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、P13e 相关 vitest；`wpesl2wgsl` 单测与语料 | 0 error、全过 | 2026-11-15：tsc 0 error；`compile/p13e.test.ts` 22 例（网格、GLM 求逆、聚光矩阵与抓帧逐位相同，真翻译器编确定性工程）、`render/p13e-volumetrics.test.ts`、相关渲染测试共 9 个文件 203 例全过；翻译器 109 个单测、语料 165 → 166/167（剩 `puppettexturechannels`） |
+| [x] | VL1 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate` | 20 处（网格、求逆、聚光矩阵、常量与缺省、谁画、照报规则、COMBO、档位、在内判定、宿主键表） | 都被单测抓到 | 2026-11-15：18 / 20；`glm-double` 是等价变异（输入本来就是 float32），`glm-det` 在抓帧里出现的 VP（零很多）上逐位不变；`ignore/p13/e/mut/mutations.py` |
+| [x] | VL2 语料 | Node，233 个工程 | HEAD（`ffa592e5`）与工作区各扫一遍 | 只去掉 `object:castvolumetrics`，只差体积光的场景解锁 | 2026-11-15：能渲染 185 → 187（`3287715210`、`3837478759`），没有掉出；去掉 `object:castvolumetrics` 5 张，新增 `volumetrics:transparentsorting` 1 张（`3453730450`，本来就有 `object:parent` 等）；两张解锁的场景完整工程（带脚本、粒子、文字）渲染正常 |
+| [x] | VL3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | low 档 9 个确定性工程；medium / high / ultra / disabled 各 5–6 个（`capture_sweep`，扫完自动改回）；按抓帧时刻渲染，档位用 dev 覆盖 | 整帧只差零星 1 级 | 2026-11-15：每张最多 66 个像素、都只差 1 级（`kinds`、`scale` 与 `3837478759` 隔离工程五档逐像素相同）；HDR 的 `3287715210` 隔离工程屏蔽随时间变化的眼睛后最大差 4 级，与不带灯的底图同量级 |
+| [ ] | VL4 设置项 | Windows dev | 「场景体积光」接入预览设置字段组后，设置页与预览里切档 | 每次切换整场重新加载、光晕随档位变化 | 等预览设置的改动提交后再做 |
+| [ ] | VL5 非 Windows | macOS / Linux | 预览 `3837478759` | 同 Windows（要 `float32-filterable`） | 本机不能测 |

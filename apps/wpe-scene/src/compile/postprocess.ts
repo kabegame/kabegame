@@ -114,6 +114,19 @@ export function resolveShadows(setting: string | null | undefined, wpeValue: unk
   return typeof wpeValue === "string" && wpeValue in SHADOW_LEVELS ? SHADOW_LEVELS[wpeValue] : 2;
 }
 
+/** 设置「场景体积光」的取值（P13e）；默认 `follow`。取值与阴影相同。 */
+export type SceneVolumetricsSetting = SceneShadowSetting;
+
+export const SCENE_VOLUMETRICS_SETTINGS: readonly SceneVolumetricsSetting[] = SCENE_SHADOW_SETTINGS;
+
+/**
+ * 体积光档位（P13e）：WPE 的 `general.user.volumetrics` 与 `shadows` 共用档位枚举 `FUN_14010dad0`（p2-REPORT G1：0 disabled … 4 ultra，
+ * 不认识的值与缺键按 medium），规则同 {@link resolveShadows}。`wpeValue` 是 `readWpeVolumetrics` 的结果。
+ */
+export function resolveVolumetrics(setting: string | null | undefined, wpeValue: unknown): ShadowQuality {
+  return resolveShadows(setting, wpeValue);
+}
+
 /** WPE 自己的取值 → 档位（`FUN_14010df40`：`memcmp(v, "disabled", 8)`，再比 `ultra` / `displayhdr`）。 */
 export function wpeLevelOf(value: string | null | undefined): PostprocessLevel {
   if (!value || value === "disabled") return "disabled";
@@ -297,6 +310,11 @@ export async function readWpeReflection(reader: SceneReader, sceneAssets: readon
 /** 读 WPE 用户设置里的 `shadows`（P13d，同上的查找方式）；读不到返回 undefined。只读。 */
 export async function readWpeShadows(reader: SceneReader, sceneAssets: readonly string[]): Promise<unknown> {
   return (await readWpeUserValue(reader, sceneAssets, "shadows", (v) => typeof v === "string")) ?? undefined;
+}
+
+/** 读 WPE 用户设置里的 `volumetrics`（P13e，同上的查找方式）；读不到返回 undefined。只读。 */
+export async function readWpeVolumetrics(reader: SceneReader, sceneAssets: readonly string[]): Promise<unknown> {
+  return (await readWpeUserValue(reader, sceneAssets, "volumetrics", (v) => typeof v === "string")) ?? undefined;
 }
 
 /** 读 WPE 用户设置里的 `windowupdaterate`（媒体刷新间隔，P11c；同上的查找方式）；读不到返回 undefined。只读。 */

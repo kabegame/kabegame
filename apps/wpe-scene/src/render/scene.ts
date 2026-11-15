@@ -271,8 +271,9 @@ import {
 } from "./programs";
 import { ReflectionTargets } from "./reflection";
 import { SHADOW_ATLAS_FORMAT, ShadowAtlas, type ShadowCasterDraw } from "./shadows";
+import { VolumetricsRenderer } from "./volumetrics";
 import type { ShadowView } from "./shadowMath";
-import { LIGHT_FRAME_UNIFORMS, lightFrame, lightFrameUniforms } from "../compile/lights";
+import { LIGHT_FRAME_UNIFORMS, lightFrame, lightFrameUniforms, type LightFrame } from "../compile/lights";
 import { SHADOW_CASTER_UNIFORM } from "../compile/features";
 import { mirroredView, type SceneView } from "./views";
 import { SPRITE_COUNT_TARGET_FORMAT, SpriteCounter, spriteOverrides, spriteViewProjection } from "./sprite";
@@ -1098,6 +1099,19 @@ export function checkRenderable(
     !features.has("float32-filterable")
   )
     reasons.add("render:morph-texture");
+  // 体积光（P13e）：Back / Single 转成 `r32float` 后线性采样，要 float32-filterable；材质缺了也退回
+  if (bundle.volumetrics) {
+    if (!features.has("float32-filterable")) reasons.add("render:volumetrics");
+    const { lights, blurH, blurV, combine } = bundle.volumetrics;
+    for (const pass of [
+      ...lights.flatMap((light) => [light.back, light.front, light.fullscreen]),
+      blurH,
+      blurV,
+      combine,
+    ])
+      if (pass && (pass.program === null || !bundle.programs[pass.program]))
+        reasons.add(`render:volumetrics:${pass.key}`);
+  }
   for (const layer of buildableLayers(bundle))
     for (const reason of planProblems(
       planLayer(layer, bundle.textures, undefined, options.texts?.get(layer.object) ?? null),
@@ -1246,6 +1260,10 @@ export class GpuScene {
   /** 真正重建图层的次数与用时（毫秒）：计划签名没变的切换不算。dev 探针读。 */
   readonly rebuildStats = { count: 0, totalMs: 0, maxMs: 0 };
   private bloom: BloomChain | null = null;
+  /** 体积光（P13e，`render/volumetrics.ts`）：bundle 有 `volumetrics` 时才有。 */
+  private volumetrics: VolumetricsRenderer | null = null;
+  /** 最近一帧的灯光缓冲与阴影条目（`frameLightValues`）：带阴影的体积光点光取自己的阴影投影与方块变换。 */
+  private lightFrameCache: LightFrame | null = null;
   /**
    * 本帧的主视图（`render/views.ts` 的 `SceneView`）。平面反射 pass 的视图由它现算（`reflectedView`，P13b2），两者走同一套 uniform 规则
    * （`uniformValues` 的 `view` 参数）。
@@ -1599,10 +1617,12 @@ export class GpuScene {
         label: "scene depth",
         size: { width, height },
         format: SCENE_DEPTH_FORMAT,
-        // 有 sprite 时（P13c）计数 pass 把深度当纹理读
+        // 有 sprite 时（P13c）计数 pass 把深度当纹理读；有体积光时（P13e）每盏灯把它转成 `r32float`
         usage:
           GPUTextureUsage.RENDER_ATTACHMENT |
-          (this.bundle.layers.some((layer) => layer.sprite) ? GPUTextureUsage.TEXTURE_BINDING : 0),
+          (this.bundle.layers.some((layer) => layer.sprite) || this.bundle.volumetrics
+            ? GPUTextureUsage.TEXTURE_BINDING
+            : 0),
       }),
     );
     this.targetBytes += width * height * 4;
@@ -2607,6 +2627,7 @@ export class GpuScene {
     // 加载时没有一个 pass 测深度，比较恒为 always、不写深度（`rasterState` 的写要先测），画面不变
     if (
       bundle.scripts.usesEffectAccess ||
+      bundle.volumetrics !== undefined ||
       wantsDepth(
         built.map((layer, index) => ({
           layer,
@@ -2627,6 +2648,16 @@ export class GpuScene {
           used.add(step.pass.program);
     for (const pass of Object.values(bundle.bloom?.passes ?? {}))
       if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
+    if (bundle.volumetrics) {
+      const { lights, blurH, blurV, combine } = bundle.volumetrics;
+      for (const pass of [
+        ...lights.flatMap((light) => [light.back, light.front, light.fullscreen]),
+        blurH,
+        blurV,
+        combine,
+      ])
+        if (pass && pass.program !== null) used.add(pass.program);
+    }
     const settled = await Promise.allSettled([...used].map((index) => this.ensureProgram(index)));
     const failed = settled.flatMap((result) =>
       result.status === "rejected"
@@ -2727,6 +2758,22 @@ export class GpuScene {
       });
       this.bloom = chain;
       this.targetBytes += chain.bytes;
+    }
+    // 体积光（P13e）：场景目标、深度、阴影图集都已就位
+    if (bundle.volumetrics && this.depthTarget) {
+      this.volumetrics = await VolumetricsRenderer.create({
+        device,
+        volumetrics: bundle.volumetrics,
+        programs,
+        width,
+        height,
+        hdr,
+        sceneFormat: format,
+        depth: this.depthTarget.texture,
+        shadowAtlas: this.shadowAtlas ? { view: this.shadowAtlas.view, sampler: this.shadowAtlas.sampler } : null,
+        own: (resource) => this.own(resource),
+      });
+      this.targetBytes += this.volumetrics.bytes;
     }
     // 世界矩阵按这一刻的状态算，全部图层共用一份缓存
     const worlds = new Map<number, Mat4>();
@@ -4522,6 +4569,7 @@ export class GpuScene {
     const forward = this.view.viewVectors.forward;
     const frame = lightFrame(lights.records, lights.counts, lights.quality, forward);
     this.shadowAtlas?.frame(frame, forward, this.view.eye);
+    this.lightFrameCache = frame;
     return lightFrameUniforms(frame);
   }
 
@@ -5356,6 +5404,55 @@ export class GpuScene {
       }
       pass.end();
     }
+    // 体积光（P13e，V5）：灯不是图层，按 `objects` 下标插进顶层序列。画到一盏灯就拷深度、画进 LightBuffer（一段连续的灯共用一次清屏）；
+    // 下一个可见的非灯对象画之前（不可见的不触发）、或列表末尾（泛光之前）合成。组里的灯照报，这里不会有
+    const volumetrics = this.volumetrics;
+    const lightObjects = volumetrics?.objects ?? [];
+    let nextLight = 0;
+    let pendingComposite = false;
+    if (volumetrics) {
+      const lights = this.lightFrameCache;
+      volumetrics.frame((object) => {
+        const layer = this.bundle.layers.find((item) => item.object === object);
+        const entry = lights?.entries.find((item) => item.cascade === null && item.light.object === object);
+        const slice = (start: number) => lights!.buffer.subarray(start + entry!.slot * 4, start + entry!.slot * 4 + 4);
+        return {
+          viewProjection: layer ? this.viewProjectionOf(layer, state, this.view, false) : this.view.viewProjection,
+          eye: this.view.eye,
+          forward: this.view.viewVectors.forward,
+          ...(entry
+            ? {
+                shadow: {
+                  transform: slice(lights!.layout.pointProjectionTransform),
+                  projection: slice(lights!.layout.pointProjection),
+                },
+              }
+            : {}),
+        };
+      });
+    }
+    const composite = () => {
+      if (!volumetrics || !pendingComposite) return;
+      if (!started) begin();
+      end();
+      volumetrics.encodeComposite(encoder, sceneView);
+      pendingComposite = false;
+    };
+    const lightsBefore = (object: number) => {
+      while (volumetrics && nextLight < lightObjects.length && lightObjects[nextLight] < object) {
+        // 读场景深度：本帧还没画过场景就先清一次（同快照）
+        if (!started) begin();
+        end();
+        volumetrics.encodeLight(encoder, lightObjects[nextLight], !pendingComposite);
+        pendingComposite = true;
+        nextLight++;
+      }
+    };
+    const runTop = (runtime: LayerRuntime) => {
+      lightsBefore(runtime.object);
+      if (visible.has(runtime.object)) composite();
+      runLayer(runtime);
+    };
     // 组的子孙（`group` 非空）在顶层不画，由组的 `subtree` op 画（P5b 步骤 4）
     // `group == null`：缺这个字段（手写的图层）也当顶层
     const { perspective, transparentSorting } = this.bundle.general;
@@ -5365,8 +5462,10 @@ export class GpuScene {
       // 模型的网格顺序、粒子树的先序不动；被依赖的图层跟着自己在新顺序里的位置画（同 WPE）
       const top = this.layers.filter((layer) => layer.layer.group == null).map((runtime) => runtime.layer);
       for (const layer of transparentDrawOrder(top, state, this.view.viewVectors.forward))
-        runLayer(this.runtimeByObject.get(layer.object)!);
-    } else for (const layer of this.layers) if (layer.layer.group == null) runLayer(layer);
+        runTop(this.runtimeByObject.get(layer.object)!);
+    } else for (const layer of this.layers) if (layer.layer.group == null) runTop(layer);
+    lightsBefore(Infinity);
+    composite();
     if (this.bloom && state.bloomEnabled) {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
       if (!started) begin();
@@ -5396,6 +5495,8 @@ export class GpuScene {
     this.shadowAtlas?.destroy();
     this.shadowAtlas = null;
     this.shadowCasters = [];
+    this.volumetrics = null;
+    this.lightFrameCache = null;
     this.depthTarget = null;
     this.bloom = null;
     this.particleIndices = null;

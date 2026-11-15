@@ -184,15 +184,15 @@ describe("灯对象 → uniform", () => {
 });
 
 describe("能力表", () => {
-  it("灯对象自己的键不算不支持，体积光照报", () => {
+  it("灯对象自己的键不算不支持，castvolumetrics 也是（P13e：不支持的组合由 `compile/volumetrics.ts` 照报）", () => {
     const issues = new Set<string>();
     checkObjectFeatures(
       { light: "lpoint", color: "1 1 1", intensity: 1, radius: 2, exponent: 2, castshadow: true, usecookie: true },
       issues,
     );
     expect([...issues]).toEqual([]);
-    checkObjectFeatures({ light: "lspot", castvolumetrics: true }, issues);
-    expect([...issues]).toEqual(["object:castvolumetrics"]);
+    checkObjectFeatures({ light: "lspot", castvolumetrics: true, density: 0.8, volumetricsexponent: 1.5 }, issues);
+    expect([...issues]).toEqual([]);
   });
 
   it("castshadow 在任何对象上都中性（P13d D4：只有不透明模型进阴影 pass，图像层写了也不画）", () => {

@@ -557,7 +557,8 @@ export function cursorPickKind(object: SceneObject): "image" | "text" | undefine
 }
 
 /**
- * 灯对象自己的键（`FUN_14025da80`）。灯不画东西，这些键只影响 `lights.ts` 算出的 uniform，`density` 之后的项只给体积光与阴影用。
+ * 灯对象自己的键（`FUN_14025da80`）。这些键只影响 `lights.ts` 算出的 uniform 与体积光（`volumetrics.ts`，P13e：`castvolumetrics`、`density`、
+ * `volumetricsexponent`；不支持的组合由那里照报 `volumetrics:*`），`cascadedistance*` 之后的项给阴影用。
  * `castshadow` / `usecookie` 单独不起作用：要 `lightconfig` 里的阴影灯数才生效，那时报 `lightconfig:*`。
  */
 const LIGHT_KEYS = new Set([
@@ -568,6 +569,7 @@ const LIGHT_KEYS = new Set([
   "innercone",
   "outercone",
   "controlpoint",
+  "castvolumetrics",
   "density",
   "volumetricsexponent",
   "cascadedistance0",

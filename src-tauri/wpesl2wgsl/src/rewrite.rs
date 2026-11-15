@@ -94,7 +94,9 @@ pub enum TextureKind {
 impl TextureKind {
     fn parse(ty: &str) -> Option<Self> {
         match ty {
-            "sampler2D" => Some(Self::D2),
+            // `sampler2DBackBuffer`（`volumetricsfront`，P13e）：WPE 不开 MSAA 时 `texSample2DBackBuffer(s, uv, r)` 就是
+            // `texSample2D(s, uv)`（exe 里两种宏定义都读到了），我们没有 MSAA，按普通 2D 纹理
+            "sampler2D" | "sampler2DBackBuffer" => Some(Self::D2),
             "sampler2DComparison" | "sampler2DShadow" => Some(Self::D2Comparison),
             "sampler3D" => Some(Self::D3),
             "samplerCube" => Some(Self::Cube),
@@ -1918,6 +1920,24 @@ pub(crate) mod tests {
             "textureLod(sampler2D(g_Texture0, kb_sampler_g_Texture0), uv + texture(sampler2D(g_Texture0, kb_sampler_g_Texture0), uv).xy, 0.0) + kb_shadowCompare(g_Texture6, kb_sampler_g_Texture6, uv, d)"
         );
         assert!(rewrite_texture_calls("texSample2D(tex, uv)", &textures).is_err());
+    }
+
+    #[test]
+    fn back_buffer_sampler_is_plain_2d() {
+        // P13e：volumetricsfront 的 `uniform sampler2DBackBuffer g_Texture1;` 与三参数的 `texSample2DBackBuffer`
+        const BB: &str = "uniform sampler2DBackBuffer g_Texture1;
+uniform vec4 g_Texture1Resolution;
+varying vec2 v_TexCoord;
+void main() { gl_FragColor = texSample2DBackBuffer(g_Texture1, v_TexCoord.xy, g_Texture1Resolution.xy); }";
+        let program = build(&lines(VS), &lines(BB)).unwrap();
+        assert_eq!(program.textures[0].kind, TextureKind::D2);
+        assert!(
+            program
+                .fragment_glsl
+                .contains("texture(sampler2D(g_Texture1, kb_sampler_g_Texture1), v_TexCoord.xy)"),
+            "{}",
+            program.fragment_glsl
+        );
     }
 
     #[test]

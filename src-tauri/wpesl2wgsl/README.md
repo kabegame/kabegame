@@ -319,7 +319,8 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
        WebGPU 没有 BORDER。2×2 足迹全在纹理内时用硬件比较采样；越出时四个纹素各在中心比较一次、越界的换成边框的比较结果，手算双线性。
        权重写成 `w >= 0 ? w : 0`：空阴影槽的坐标是 NaN（WPE 给没有灯的槽写全 0，`xyz /= w` 是 0/0），硬件把 NaN 坐标当 0、结果有限，
        手算的权重不能把 NaN 带进光照和（`p13d-hide`）；
-     - `texSample3D`、`texSample2DBackBuffer` 改成 `texture`；
+     - `texSample3D`、`texSample2DBackBuffer` 改成 `texture`。`sampler2DBackBuffer`（体积光 `volumetricsfront` 读场景深度的拷贝，P13e）按普通
+       `sampler2D` 声明：WPE 不开 MSAA 时 `texSample2DBackBuffer(s, uv, r)` 就是 `texSample2D(s, uv)`（exe 里两种宏定义都读到了），我们没有 MSAA；
      - `texLoad2D(t, uv, res)` 改成 `texelFetch(…, ivec2(uv * res), 0)`。
 
      参数里嵌套的调用一并改写，第一个参数必须是已声明的纹理，或按正文顺序 `#define` 成已声明纹理的对象宏（追多层，`#undef` 生效）。
@@ -466,7 +467,6 @@ void main() {
 |---|---|
 | `phase: "require"`，`LightingV1/spot-shadow` | 聚光的阴影与 cookie 要聚光投影与 `_alias_lightCookie`，渲染器没有（语料 0 张） |
 | `Array size must be greater than zero` | `BONECOUNT` 等引擎宏未定义（骨骼蒙皮），可经 `defines` 传入 |
-| `不支持的采样器类型 sampler2DBackBuffer` | 体积光专用采样器类型 |
 
 另外，glsl-in 只认 Vulkan 语义的 GLSL 450，这正是改写这一步存在的原因；naga 的 `glsl-in` / `wgsl-out` 在其支持表里是二档（维护但测试较少）。
 如果以后遇到 naga 接不住的写法，备选方案是 glslang → SPIR-V → Tint（Babylon.js 的路线）。
@@ -555,5 +555,7 @@ CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapt
 以及 WPE 安装目录部分的 swing、vhs、advection 原件。每个程序变 GLSL 与 WGSL 两个文件，`ok` 与夹具全部一致，12 份 WGSL 过 Tint 0 error 0 warning。
 
 2026-11-07 结果：167 对通过 158 对（94.6%），WGSL 回读失败 0；2026-11-10 加几何着色器展开后不变，几何门槛 27/27。失败的 9 对见「已知不支持」；`fur4` 在基线里失败是因为基线只绑槽 0，缺 `TEX8FORMAT`，绑了毛发图就能过（上面的门槛绑了）。
+
+2026-11-15（P13e，`sampler2DBackBuffer` 按 `sampler2D`）：WPE 安装目录 165 → 166/167（新通过 `volumetricsfront`，剩 `puppettexturechannels`），几何门槛 27/27；单测 109 个。
 
 浏览器自己的 WGSL 编译器（Tint）是否接受这些输出，要在 dev app 里实测：用 `createShaderModule` + `getCompilationInfo` 跑一遍语料。见 `versions/latest/regression.md` 的场景壁纸 P1-0 节。

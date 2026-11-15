@@ -70,9 +70,15 @@ import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
-import type { ScenePostprocessSetting, SceneReflectionSetting, SceneShadowSetting } from "../compile/postprocess";
+import type {
+  ScenePostprocessSetting,
+  SceneReflectionSetting,
+  SceneShadowSetting,
+  SceneVolumetricsSetting,
+} from "../compile/postprocess";
 import { reflectionOverride } from "./reflectionOverride";
 import { shadowsOverride } from "./shadowsOverride";
+import { volumetricsOverride } from "./volumetricsOverride";
 import { schemeColor } from "../sceneStyle";
 import {
   checkRenderMode,
@@ -276,6 +282,8 @@ export interface RenderFrameOptions {
   reflection?: SceneReflectionSetting;
   /** 「场景阴影」设置（P13d）：缺省取 dev 覆盖（`dev/shadowsOverride.ts`），再缺省跟随 WPE。 */
   shadows?: SceneShadowSetting;
+  /** 「场景体积光」设置（P13e）：缺省取 dev 覆盖（`dev/volumetricsOverride.ts`），再缺省跟随 WPE。 */
+  volumetrics?: SceneVolumetricsSetting;
   userProperties?: Record<string, unknown>;
   /**
    * 快捷方式图标（P11d）：属性名 → 宽高与 base64 的直通 alpha RGBA。探针没有后端，快捷方式槽的图标只能由请求给（没给 = 没有图标，用缺省纹理）；
@@ -416,6 +424,8 @@ export interface RenderFrameResult {
   postprocess: SceneBundle["general"]["postprocess"];
   /** 实际生效的阴影档位（P13d，0 关闭 … 4 超高）与阴影计数；场景没有开光照的材质（`bundle.lights` 缺）时为 null。 */
   shadows: { quality: number; pointShadow: number; directionalShadow: number } | null;
+  /** 实际生效的体积光档位（P13e，1 低 … 4 超高）与会画的灯（`objects` 下标）；没有会画的灯或档位关闭时为 null。 */
+  volumetrics: { quality: number; lights: number[] } | null;
   /** 8 位 RGB（alpha 置 255）的 SHA-256：关闭档前后两版逐字节比较用。 */
   sha256: string;
   /** 三通道平均值（0–255），确认不是空图。 */
@@ -547,6 +557,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     postprocess: options.postprocess ?? "disabled",
     reflection: options.reflection ?? reflectionOverride() ?? undefined,
     shadows: options.shadows ?? shadowsOverride() ?? undefined,
+    volumetrics: options.volumetrics ?? volumetricsOverride() ?? undefined,
     force,
     textureCache: cache,
     reader,
@@ -906,6 +917,9 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
               pointShadow: bundle.lights.counts.pointShadow,
               directionalShadow: bundle.lights.counts.directionalShadow,
             }
+          : null,
+        volumetrics: bundle.volumetrics
+          ? { quality: bundle.volumetrics.quality, lights: bundle.volumetrics.lights.map((light) => light.object) }
           : null,
         sha256: await sha256(rgba),
         mean: [sums[0] / count, sums[1] / count, sums[2] / count],

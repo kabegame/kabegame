@@ -2,7 +2,12 @@ import { WPESL2WGSL_WASM_URL } from "../wpesl2wgsl";
 import { FetchSceneReader, type SceneReader } from "./fs";
 import type { SceneBundle } from "./bundle";
 import { decodeEncodedTextures, type TextureDecodeCache } from "./decode";
-import type { SceneReflectionSetting, ScenePostprocessSetting, SceneShadowSetting } from "./postprocess";
+import type {
+  SceneReflectionSetting,
+  ScenePostprocessSetting,
+  SceneShadowSetting,
+  SceneVolumetricsSetting,
+} from "./postprocess";
 import { encodeFileError, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 export interface WorkerCompileInput {
@@ -16,6 +21,8 @@ export interface WorkerCompileInput {
   reflection?: SceneReflectionSetting;
   /** 设置「场景阴影」（P13d）；缺省跟随 WPE。 */
   shadows?: SceneShadowSetting;
+  /** 设置「场景体积光」（P13e）；缺省跟随 WPE。 */
+  volumetrics?: SceneVolumetricsSetting;
   /** dev 强制渲染（D4）：有不支持项也解码纹理。 */
   force?: boolean;
   exhaustive?: boolean;
@@ -100,6 +107,7 @@ async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> 
       postprocess: input.postprocess ?? "follow",
       reflection: input.reflection ?? "follow",
       shadows: input.shadows ?? "follow",
+      volumetrics: input.volumetrics ?? "follow",
       force: input.force === true,
       exhaustive: input.exhaustive === true,
       module,

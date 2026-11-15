@@ -24,6 +24,7 @@ import { conditionsHold, removedFbos } from "./conditions";
 import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
 import { reflectionKind, reflectionList } from "./reflection";
 import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from "./sprite";
+import { compileVolumetrics, wantsVolumetrics, type SceneVolumetrics } from "./volumetrics";
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
 import { resolveParents } from "./hierarchy";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
@@ -128,13 +129,16 @@ import {
   readWpePostprocessing,
   readWpeReflection,
   readWpeShadows,
+  readWpeVolumetrics,
   resolvePostprocessLevel,
   resolveReflection,
   resolveShadows,
+  resolveVolumetrics,
   scenePostprocessState,
   type BloomParams,
   type SceneReflectionSetting,
   type SceneShadowSetting,
+  type SceneVolumetricsSetting,
   type ScenePostprocessSetting,
   type ScenePostprocessState,
 } from "./postprocess";
@@ -824,6 +828,11 @@ export interface SceneBundle {
    * 读灯光数组的绘制每帧取它的切片（同 `g_Time`）。`quality` 是解析好的阴影档位（设置「场景阴影」与 WPE `config.json`），为 0 时没有阴影。
    */
   lights?: { records: SceneLight[]; counts: LightCounts; quality: number };
+  /**
+   * 体积光（P13e，`compile/volumetrics.ts`）：有会画的灯（可见、`castvolumetrics` 的点光 / 聚光）且档位不为 0 时才有。渲染器按 `lights` 的
+   * `objects` 下标把灯插进图层序列，连续的灯共用一次清屏、在下一个可见的非灯对象之前合成（`render/volumetrics.ts`）。
+   */
+  volumetrics?: SceneVolumetrics;
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
   unsupported: string[];
   /**
@@ -870,6 +879,8 @@ export interface CompileSceneInput {
   reflection?: SceneReflectionSetting;
   /** 设置「场景阴影」（P13d）；缺省跟随 WPE 的 `general.user.shadows`（缺键按 medium）。 */
   shadows?: SceneShadowSetting;
+  /** 设置「场景体积光」（P13e）；缺省跟随 WPE 的 `general.user.volumetrics`（缺键按 medium）。 */
+  volumetrics?: SceneVolumetricsSetting;
   /** dev 强制渲染：有不支持项也照常解码 mip，好让渲染器画出半成品（D4）。 */
   force?: boolean;
   /**
@@ -2872,6 +2883,43 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       // 屏幕空间反射（rea-p13-passes 4.1）：任何对象读到就建
       bundle.mipFramebuffer = true;
       if (reflectionOn) unsupported.add("reflection:screen"); // 反射开：P13g 再做，照报
+    }
+  }
+  // 体积光（P13e）：有会画的灯才去读档位（跟随时读 WPE 的 `config.json`）。带阴影的点光每帧要取自己的阴影条目，灯光记录在没有光照程序时也要建
+  {
+    const lightRead = bindingReader(bindings, properties, (path) => recompile("layer-structure", path));
+    if (!settled() && wantsVolumetrics(scene.objects, lightRead)) {
+      const setting = input.volumetrics ?? "follow";
+      const quality = resolveVolumetrics(
+        setting,
+        setting === "follow" ? await readWpeVolumetrics(input.reader, input.sceneAssets) : undefined,
+      );
+      // `SHADOW` 与 `LIGHTS_SHADOW_MAPPING_QUALITY` 取用户的阴影档（`ctx+0x1ac`，V6、V9），不看 `lightconfig` 有没有阴影计数（`p13e-pns` 实测）
+      const volumetricShadows = wantsShadows
+        ? shadowQuality
+        : resolveShadows(
+            shadowSetting,
+            shadowSetting === "follow" ? await readWpeShadows(input.reader, input.sceneAssets) : undefined,
+          );
+      const groups = new Map(bundle.layers.map((layer) => [layer.object, layer.group]));
+      const volumetrics = await compileVolumetrics(
+        { fs, shader, unsupported, addProgram },
+        {
+          objects: scene.objects,
+          read: lightRead,
+          quality,
+          shadowQuality: volumetricShadows,
+          counts,
+          orthographic,
+          inGroup: (object) => groups.get(object) != null,
+        },
+      );
+      if (volumetrics) {
+        bundle.volumetrics = volumetrics;
+        // 透视场景的透明排序（P5d 步骤 4）把顶层重排成两轮，灯在两轮里落在哪、合成时机怎么变没测过（语料两张都是正交），照报
+        if (!orthographic && bundle.general.transparentSorting) unsupported.add("volumetrics:transparentsorting");
+        if (volumetrics.lights.some((light) => light.shadow)) sceneLights();
+      }
     }
   }
   // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光且对象列表非空（A1）。当前开着，或运行中可能打开（绑了属性或挂了脚本）才建；

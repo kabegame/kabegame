@@ -30,6 +30,7 @@ import {
 } from "./compile/postprocess";
 import { reflectionOverride } from "./dev/reflectionOverride";
 import { shadowsOverride } from "./dev/shadowsOverride";
+import { volumetricsOverride } from "./dev/volumetricsOverride";
 import { scriptMediaCallbacks } from "./media/events";
 import { MEDIA_DEFAULT_INTERVAL_MS, mediaIntervalOf } from "./media/interval";
 import { MediaPending } from "./media/pending";
@@ -1521,6 +1522,8 @@ export class SceneHost {
         postprocess: setting,
         reflection,
         shadows,
+        // 「场景体积光」（P13e）：宿主接设置之前只有 dev 覆盖，缺省跟随 WPE
+        volumetrics: volumetricsOverride() ?? undefined,
         force,
         textureCache: this.textureCache,
         reader: this.reader,

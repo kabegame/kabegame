@@ -49,6 +49,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       postprocess: message.postprocess,
       reflection: message.reflection,
       shadows: message.shadows,
+      volumetrics: message.volumetrics,
       force: message.force,
       exhaustive: message.exhaustive,
       reader,
