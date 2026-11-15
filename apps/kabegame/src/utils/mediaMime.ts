@@ -36,8 +36,8 @@ export function isWpeSceneType(t: string | undefined): boolean {
 }
 
 /**
- * 交给壁纸组件（`WpeWallpaperContent` → `WallpaperStage`）渲染原图形态的 WPE 类型：网页（web 层 iframe）与场景
- * （scene 层 WebGPU，不能渲染时显示作者预览图）。缩略位仍是作者 `preview.*`。
+ * 原图形态由壁纸组件（`ImageContent` 的 wallpaper 形态 → `WpeWallpaperContent`）跑实时画面的 WPE 类型：网页（iframe）与
+ * 场景（宿主 iframe 里的 WebGPU）。缩略位仍是作者 `preview.*`，原图形态也拿它打底，实时画面显示不了时它就是最终画面。
  */
 export function isWpeWallpaperContentType(t: string | undefined): boolean {
   return isWpeWebType(t) || isWpeSceneType(t);

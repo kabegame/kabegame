@@ -1,3 +1,5 @@
+import type { WpeSceneSettings } from "@/utils/wpeSettings";
+
 /** 壁纸样式：与壁纸目标配置里的 `style.window`（窗口模式）一致。 */
 export type Mode = "fill" | "fit" | "stretch" | "center" | "tile";
 /** 壁纸切换过渡：与壁纸目标配置里的 `transition.window`（窗口模式）一致。 */
@@ -43,6 +45,18 @@ export interface WallpaperTarget {
    * `WallpaperStage` 才显示它，编译期间保持加载态。其它类型、缩略图为空时为空。
    */
   previewPath?: string | null;
+}
+
+/**
+ * 一张 WPE 网页 / 场景壁纸的播放参数，由调用方算好下传：`ImageContent` 的 wallpaper 形态与 `WpeWallpaperContent` 都不读设置。
+ * 图库预览与应用背景传这张壁纸的「预览设置」（`useWpePreviewPlayback`），桌面传全局「壁纸设置」。暂停与静音仍走
+ * `ImageContent` 的 `videoPlaying` / `videoMuted`。
+ */
+export interface WallpaperPlayback {
+  /** 0…1：网页壁纸经垫片乘到页面音量上，场景交给宿主 */
+  volume: number;
+  /** 场景后处理 / 反射 / 阴影 / 体积光，已按能否跟随 WPE 换算（`wpeSceneSettingsOf`） */
+  sceneSettings: WpeSceneSettings;
 }
 
 /** `WallpaperStage` 暴露给调试面板的只读状态。 */

@@ -3177,3 +3177,16 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | WS6 媒体集成分开 | Windows dev，放音乐 | 全局「媒体集成」关、某张网页壁纸的预览设置开，预览它并把它设为桌面 | 预览里有歌名封面，桌面没有；反过来亦然 | 单测覆盖了开关归属，真机未测 |
 | [ ] | WS7 应用背景强制暂停 | Windows dev | 当前壁纸分别是视频、网页、场景时打开应用背景 | 都停在一帧画面上，不空白、不动；网页开场即冻结时是否空白要看（空白就补「首帧后才冻结」） | 未测 |
 | [ ] | WS8 跟随 WPE | macOS / 清空 WPE 目录的 Windows | 设置页与预览右栏的后处理 / 反射 / 阴影 | 选项里没有「跟随 WPE」，存着的跟随显示为开启 / 开启 / 中 | 未测 |
+
+## 壁纸显示重构步骤 1：WPE 显示组件与图库缩略图打底
+
+2026-11-15 Windows dev。网页 iframe（创建 / 销毁、load 判定、音量协议、右键、鼠标）与场景宿主从 `WallpaperStage` 搬进 `WpeWallpaperContent`（事件 `live` / `fail(reasons)` / `error` / `contextmenu`，`delegatesPing`）；Stage 的 web / scene 层各挂一个。场景结果超时从 Stage 的 10 s 改成 `WpeWallpaperContent` 的 30 s，超时卸载宿主；网页 `fail` 时 Stage 保留上一张。图库（`ImageContent` 的 wallpaper 形态）不再经 Stage：缩略图打底，实时画面 `live` 且满 300 ms 才淡入揭开，`fail` 当原图失败（缩略图就是最终画面），预览设置由调用方经 `playback` 下传，`wallpaperLive` 取代 `sceneLive`。计划见 `.claude/plans/wpe-import/phase-wallpaper-refactor.md` 步骤 1。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WR1 单测与检查 | Windows | vue-tsc；壁纸目录、图片组件、预览弹窗、预览设置的 vitest；Prettier | 0 error、全过 | 2026-11-15 Claude：vue-tsc 0 error；23 个文件 271 例全过（新增 `WpeWallpaperContent.test.ts` 17 例、`WallpaperStage.web.test.ts` 3 例，`ImageContent.wallpaper.test.ts` 改写为 10 例） |
+| [ ] | WR2 预览场景 | Windows dev，图库预览 | 预览一张能渲染的场景、一张不能渲染的场景（如 13518）、一张大场景 | 一打开就是封面，实时画面出来后淡入盖上；不能渲染的停在封面、没有破图与空白；右键「暂停」「设为封面」在揭开之前置灰 | 要打开预览，由用户勾 |
+| [ ] | WR3 预览网页壁纸 | Windows dev，图库预览 | 预览网页壁纸，改音量、暂停、右键、在页面上点击 | 先封面后页面；音量、暂停、右键、鼠标注入和以前一样 | 要打开预览，由用户勾 |
+| [ ] | WR4 换封面 | Windows dev，图库预览 | 实时画面出来后「设为壁纸封面」，再「恢复默认封面」 | 实时画面不闪、不重新加载；关掉实时画面（暂停不算）后看到的是新封面 | 要打开预览，由用户勾 |
+| [ ] | WR5 应用背景 | Windows dev | 当前壁纸分别是网页、场景时打开应用背景 | 先显示封面，再换成停住的实时画面，不交互、不出声 | 未测 |
+| [ ] | WR6 桌面 | Windows dev，壁纸窗口模式 | 依次切到图片、网页、场景、视频，再切回；切到一张不能渲染的场景 | 和以前一样：场景出结果前保留上一张，能渲染淡入、不能渲染显示预览图；网页卡住的 ping 照样触发重载 | 本次测时壁纸是关的，没开 |

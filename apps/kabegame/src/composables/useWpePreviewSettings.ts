@@ -21,7 +21,7 @@ interface WpePreviewSettingsView {
 export type WpePreviewSettingKey = Exclude<WpeSettingKey, "paused">;
 
 /**
- * 一张壁纸的预览设置，同一张的全部使用方共用一份（预览右栏的字段组与画面里的 `WpeWallpaperContent`），面板上的改动
+ * 一张壁纸的预览设置，同一张的全部使用方共用一份（预览右栏的字段组与画面的 `useWpePreviewPlayback`），面板上的改动
  * 当场就被画面读到，不用等写入落地。写入草稿 300 ms 去抖后经 `set_wpe_preview_settings` 改写 metadata；别处写入
  * （另一个窗口、`metadataId` 补丁）时重读。最后一个使用方离开时把未写的草稿写完再释放。
  */

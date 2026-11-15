@@ -22,6 +22,7 @@
         class="app-background-media w-full h-full scale-[1.04] transition-[opacity,filter] duration-250"
         :style="bgImageStyle"
         :video-playing="false"
+        :playback="bgPlayback"
         video-muted
         video-loop
         reset-video-on-pause
@@ -181,7 +182,7 @@ import { fetchImageById } from "@/utils/imageRow";
 import { IS_MACOS, IS_ANDROID, IS_WEB } from "@/env";
 import { initHttpServerBaseUrl } from "@/utils/fileUrl";
 import type { ImageInfo } from "@/types/image";
-import { isVideoPlaybackType } from "@/utils/mediaMime";
+import { isVideoPlaybackType, isWpeWallpaperContentType } from "@/utils/mediaMime";
 import { usePluginStore } from "./stores/plugins";
 import { usePluginMarketStore } from "./stores/pluginMarket";
 import { useFailedImagesStore } from "./stores/failedImages";
@@ -190,6 +191,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@/stores/modalStack";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
 import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
+import { useWpePreviewPlayback } from "@/composables/useWpePreviewPlayback";
 import { kbFilterDropdownContextKey } from "@/components/ui/filterDropdown";
 import { useThrottleFn } from "@vueuse/core";
 import { useApp } from "@/stores/app";
@@ -377,10 +379,13 @@ const isVideoBackground = (image: ImageInfo | undefined) => isVideoPlaybackType(
 
 /**
  * 背景与预览走同一个 `ImageContent`（原图形态），不按类型分支：图片照常显示，网页与场景壁纸由 `ImageContent` 的
- * wallpaper 形态渲染（不交互），其余设置取这张壁纸的「预览设置」。背景强制暂停（`video-playing` 恒为 false）：视频停在
- * 第一帧，网页由垫片冻结、场景停在加载时画的第一帧。`video-muted` 让 `WallpaperStage` 的音量为 0：视频静音，网页壁纸
- * 经垫片的音量协议静音（见 cocs/wpe/WPE_IMPORT.md「音量」）。
+ * wallpaper 形态渲染（缩略图打底、实时画面不交互），场景设置取这张壁纸的「预览设置」（`bgPlayback`）。背景强制暂停
+ * （`video-playing` 恒为 false）：视频停在第一帧，网页由垫片冻结、场景停在加载时画的第一帧。`video-muted` 让音量为 0：
+ * 视频静音，网页壁纸经垫片的音量协议静音（见 cocs/wpe/WPE_IMPORT.md「音量」）。
  */
+const bgPlayback = useWpePreviewPlayback(
+  computed(() => (bgImage.value && isWpeWallpaperContentType(bgImage.value.type) ? bgImage.value.id : null)),
+);
 const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
   !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);
 

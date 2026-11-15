@@ -270,9 +270,10 @@
                       :image="previewImage"
                       prefer="original"
                       :video-playing="!wallpaperPaused"
+                      :playback="previewPlayback"
                       interactive
                       @ready="handlePreviewReady"
-                      @scene-live="previewSceneLive = $event"
+                      @wallpaper-live="previewRendering = $event"
                       @wallpaper-contextmenu="openPreviewContextMenuAt"
                     />
                   </WallpaperPreviewCanvas>
@@ -445,6 +446,7 @@ import ImagePluginDescriptionPanel from "./ImagePluginDescriptionPanel.vue";
 import WpeWebPropertiesPanel from "../wallpaper/WpeWebPropertiesPanel.vue";
 import WpePreviewSettingsPanel from "../wallpaper/WpePreviewSettingsPanel.vue";
 import { useWpePreviewSettings } from "../../composables/useWpePreviewSettings";
+import { useWpePreviewPlayback } from "../../composables/useWpePreviewPlayback";
 import KbResizable from "./KbResizable.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
@@ -470,7 +472,6 @@ import {
   isNativeMetadataEligible,
   isVideoPlaybackType,
   isWpeMediaType,
-  isWpeSceneType,
   isWpeVideoType,
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
@@ -581,12 +582,14 @@ const isPreviewWallpaper = computed(() => isWpeWallpaperContentType(previewImage
 const previewWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && isPreviewWallpaper.value);
 /** 预览这一份的暂停状态，切图时复位；桌面的暂停是设置 `wallpaperPaused`，互不影响 */
 const wallpaperPaused = ref(false);
-/** 网页壁纸加载完；场景退回预览图时也会置位，所以场景看 `previewSceneLive` */
-const previewWallpaperReady = ref(false);
-const previewSceneLive = ref(false);
-/** 画面确定在实时渲染：场景出了首帧，网页 iframe 加载完。之前与退回预览图时为假，暂停与设为封面置灰 */
-const previewRendering = computed(() =>
-  isWpeSceneType(previewImage.value?.type) ? previewSceneLive.value : previewWallpaperReady.value,
+/**
+ * 画面确定在实时渲染（`ImageContent` 的 `wallpaperLive`：场景出了首帧、网页加载完，且实时画面已揭开）。之前与退回缩略图时为假，
+ * 暂停与设为封面置灰
+ */
+const previewRendering = ref(false);
+/** 壁纸的音量与场景设置：取这张壁纸的「预览设置」 */
+const previewPlayback = useWpePreviewPlayback(
+  computed(() => (previewImage.value && isPreviewWallpaper.value ? previewImage.value.id : null)),
 );
 /** 场景的分辨率，画布按它定比例；网页壁纸没有宽高，透视场景读不到 */
 const previewWallpaperSize = computed(() => {
@@ -1074,8 +1077,7 @@ const navPending = ref(false);
 watch(currentId, (id) => {
   navPending.value = false;
   wallpaperPaused.value = false;
-  previewWallpaperReady.value = false;
-  previewSceneLive.value = false;
+  previewRendering.value = false;
   // 上层清空 image 即关闭：停播放
   if (!id) {
     stopSlideshow();
@@ -1300,7 +1302,6 @@ const handlePreviewWheel = (event: WheelEvent) => {
 // ImageContent 内部已处理缩略图→原图流式覆盖与丢失态显示；这里只在内容就绪后对齐 Panzoom（桌面图片）。
 const handlePreviewReady = () => {
   previewImageLoading.value = false;
-  previewWallpaperReady.value = true;
   if (USE_PSWP || isPreviewVideo.value || isPreviewWallpaper.value) return;
   void measureContainerAfterRender().then(() => {
     panzoomReset();

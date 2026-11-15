@@ -125,6 +125,7 @@ describe("targetKind", () => {
   });
 });
 
+// Stage → WpeWallpaperContent（真件）→ WpeSceneView（替身）：Stage 对场景结果的反应
 describe("WallpaperStage scene 层：loading → ready / fallback", () => {
   it("场景垫片请求音量后才委托 ping，切走时收回", async () => {
     const wrapper = mountStage(scene("a"));
@@ -164,7 +165,6 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     expect(sceneLayer(wrapper).classList.contains("visible")).toBe(true);
     expect(wrapper.find(".wallpaper-scene-live").classes()).toContain("live");
     expect(previewImg(wrapper).exists()).toBe(false);
-    expect(wrapper.emitted("sceneLive")).toEqual([[true]]);
   });
 
   it("不能渲染：这时才挂预览图，加载完才发 ready；fallback 不是错误，原因记进调试快照", async () => {
@@ -179,7 +179,6 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     loadPreview(wrapper);
     await settle();
     expect(wrapper.emitted("ready")).toHaveLength(1);
-    expect(wrapper.emitted("sceneLive")).toBeUndefined();
     expect(wrapper.emitted("error")).toBeUndefined();
     expect(debugOf(wrapper).media).toBe("scene");
     expect(debugOf(wrapper).sceneFallback).toBe("object:particle; effect:scroll");
@@ -194,7 +193,6 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     expect(wrapper.find(".wallpaper-scene-live").classes()).toContain("live");
     expect(debugOf(wrapper).sceneFallback).toBe("");
     expect(wrapper.emitted("ready")).toHaveLength(1);
-    expect(wrapper.emitted("sceneLive")).toEqual([[true]]);
   });
 
   it("壁纸样式交给 WpeSceneView，改样式不重建", async () => {
@@ -222,32 +220,28 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     expect(backdrop.style.backgroundRepeat).toBe("repeat");
   });
 
-  it("迟迟没有结果：超时按退回显示预览图并发 ready，迟到的首帧照样切成实时画面", async () => {
+  it("迟迟没有结果：WpeWallpaperContent 30 s 到点卸载宿主，Stage 按退回显示预览图并发 ready", async () => {
     const setTimeoutSpy = vi.spyOn(window, "setTimeout");
     const wrapper = mountStage(scene("a"));
     await settle();
-    const call = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 10_000);
+    const call = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 30_000);
     setTimeoutSpy.mockRestore();
     expect(call).toBeDefined();
     (call![0] as () => void)();
     await settle();
     expect(debugOf(wrapper).sceneFallback).toBe("render:timeout");
+    expect(stub.scenes[0].unmounted).toBe(true);
     loadPreview(wrapper);
     await settle();
     expect(wrapper.emitted("ready")).toHaveLength(1);
     expect(sceneLayer(wrapper).classList.contains("visible")).toBe(true);
-
-    stub.scenes[0].emit("ready");
-    await settle();
-    expect(wrapper.find(".wallpaper-scene-live").classes()).toContain("live");
-    expect(wrapper.emitted("ready")).toHaveLength(1);
   });
 
   it("首帧之后超时回调到点不改变状态", async () => {
     const setTimeoutSpy = vi.spyOn(window, "setTimeout");
     const wrapper = mountStage(scene("a"));
     await settle();
-    const call = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 10_000);
+    const call = setTimeoutSpy.mock.calls.find(([, delay]) => delay === 30_000);
     setTimeoutSpy.mockRestore();
     stub.scenes[0].emit("ready");
     await settle();
@@ -255,6 +249,7 @@ describe("WallpaperStage scene 层：loading → ready / fallback", () => {
     await settle();
     expect(debugOf(wrapper).sceneFallback).toBe("");
     expect(previewImg(wrapper).exists()).toBe(false);
+    expect(stub.scenes[0].unmounted).toBe(false);
   });
 
   it("没有预览图又不能渲染时上报错误（调用方据此结束加载态）", async () => {

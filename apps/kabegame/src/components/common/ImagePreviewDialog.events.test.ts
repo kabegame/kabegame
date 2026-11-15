@@ -240,7 +240,7 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
     await flushPromises();
   }
   async function goLive(wrapper: Wrapper) {
-    wrapper.findComponent(ImageContent).vm.$emit("sceneLive", true);
+    wrapper.findComponent(ImageContent).vm.$emit("wallpaperLive", true);
     await flushPromises();
   }
 
@@ -277,6 +277,8 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
   it("设为封面与清空脚本存储由弹窗处理，不交给上层；其它命令照常上报", async () => {
     const wrapper = await sceneFixture();
     await goLive(wrapper);
+    // 挂载时读这张的预览设置等调用不算
+    invoke.mockClear();
     await choose(wrapper, "setCover");
     expect(invoke).toHaveBeenCalledExactlyOnceWith("capture_wallpaper_cover", { imageId: "current", region });
     await choose(wrapper, "clearStorage");
@@ -304,6 +306,7 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
     invoke.mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)));
     const wrapper = await sceneFixture();
     await goLive(wrapper);
+    invoke.mockClear();
     await choose(wrapper, "setCover");
     expect(item(wrapper, "setCover").disabled).toBe(true);
     await choose(wrapper, "setCover");

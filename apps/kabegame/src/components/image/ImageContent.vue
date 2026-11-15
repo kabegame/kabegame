@@ -66,19 +66,40 @@
         @dragstart="onDragStart(thumbSlot, $event)"
       />
 
-      <!-- 非视频 WPE 壁纸（web / scene）的原图形态：交给壁纸组件渲染（预览内可交互） -->
-      <WpeWallpaperContent
-        v-else-if="mode === 'wallpaper'"
-        :image="image"
-        :fit="fit"
-        :playing="videoPlaying"
-        :muted="videoMuted"
-        :interactive="interactive"
-        @ready="onWallpaperReady"
-        @error="onWallpaperError"
-        @scene-live="emit('sceneLive', $event)"
-        @contextmenu="emit('wallpaperContextmenu', $event)"
-      />
+      <!-- 非视频 WPE 壁纸（web / scene）的原图形态，同图片「原图出来前缩略图能看」：缩略层打底（作者 preview.* 或自定义封面），
+           实时画面（WpeWallpaperContent）叠在上面，出来且满 WALLPAPER_MIN_LOADING_MS 才揭开；实时画面显示不了就当原图加载
+           失败，缩略层是最终画面。Android / Web 不跑实时画面（没有 `wpe` feature），只有缩略层 -->
+      <template v-else-if="mode === 'wallpaper'">
+        <img
+          v-if="!thumbSlot.dead"
+          :key="`thumb:${thumbSlot.src}`"
+          :src="thumbSlot.src"
+          decoding="async"
+          class="ic-img thumbnail-layer z-1"
+          :style="{ objectFit: fit }"
+          :alt="image.id"
+          :draggable="dragEnabled"
+          @load="onLoad"
+          @error="onImgError(thumbSlot, $event)"
+          @dragstart="onDragStart(thumbSlot, $event)"
+        />
+        <WpeWallpaperContent
+          v-if="WPE_LIVE"
+          :key="`wallpaper:${image.id}`"
+          class="ic-wallpaper absolute inset-0 z-2 transition-opacity duration-300"
+          :class="wallpaperShown ? 'opacity-100' : 'opacity-0'"
+          :image-id="image.id"
+          :style-mode="fit === 'cover' ? 'fill' : 'fit'"
+          :volume="videoMuted ? 0 : (playback?.volume ?? 1)"
+          :paused="!videoPlaying"
+          :interactive="interactive"
+          :scene-settings="playback?.sceneSettings"
+          @live="onWallpaperLive"
+          @fail="onWallpaperFail"
+          @error="onWallpaperError"
+          @contextmenu="emit('wallpaperContextmenu', $event)"
+        />
+      </template>
 
       <!-- 视频 -->
       <video
@@ -116,6 +137,7 @@ import { Film, Image as ImageIcon } from "@lucide/vue";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import WpeWallpaperContent from "../wallpaper/WpeWallpaperContent.vue";
 import type { ViewportPoint } from "../wallpaper/wpeContextMenu";
+import type { WallpaperPlayback } from "../wallpaper/types";
 import {
   displayImageMimeType,
   isVideoMediaType,
@@ -181,6 +203,11 @@ import { IS_ANDROID, IS_WEB } from "../../env";
  */
 
 // ---- Path → URL helpers (pure) ----
+/** 网页 / 场景壁纸的实时画面只在桌面跑（`wpe` feature）：Android / Web 的 wallpaper 形态只有缩略层。 */
+const WPE_LIVE = !IS_ANDROID && !IS_WEB;
+/** wallpaper 形态的加载态至少这么久才揭开实时画面：实时画面出得很快时不闪一下缩略图。 */
+const WALLPAPER_MIN_LOADING_MS = 300;
+
 const normalizeDesktopPath = (path: string | undefined): string =>
   (path || "")
     .trimStart()
@@ -208,6 +235,11 @@ interface Props {
   nativeDrag?: boolean;
   /** 只对 `wallpaper` 形态生效：壁纸页面是否接收指针事件（预览为 true）。 */
   interactive?: boolean;
+  /**
+   * 只对 `wallpaper` 形态生效：音量与场景设置（调用方算好，本组件不读设置；图库用 `useWpePreviewPlayback`）。不给时音量 1、
+   * 场景设置跟随 WPE。暂停看 `videoPlaying`，`videoMuted` 时音量按 0。
+   */
+  playback?: WallpaperPlayback;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -219,6 +251,7 @@ const props = withDefaults(defineProps<Props>(), {
   fit: "contain",
   nativeDrag: true,
   interactive: false,
+  playback: undefined,
 });
 
 /** 拖拽落盘的建议文件名：跟随当前实际加载的 source，退回 displayName / id。 */
@@ -294,7 +327,8 @@ const emit = defineEmits<{
   ready: [];
   error: [];
   videoPlayFail: [];
-  sceneLive: [live: boolean];
+  /** wallpaper 形态：实时画面是否已揭开（满最短加载时间且在实时渲染）；退回缩略图、切图时为假 */
+  wallpaperLive: [live: boolean];
   /** wallpaper 形态：网页 / 场景壁纸里点了右键，坐标是本页面视口（见 `wpeContextMenu.ts`） */
   wallpaperContextmenu: [point: ViewportPoint];
 }>();
@@ -306,12 +340,12 @@ const { showLoading, startLoading, finishLoading } = useLoadingDelay(300);
 const isVideo = computed(() => isVideoMediaType(props.image.type));
 const isWpe = computed(() => isWpeMediaType(props.image.type));
 const isWpeVideo = computed(() => isWpeVideoType(props.image.type));
-/** 非视频 WPE（web / scene）：原图形态交给壁纸组件，不走缩略 / 原图链。 */
+/** 非视频 WPE（web / scene）：原图形态是缩略层打底 + 壁纸组件的实时画面，不走原图链。 */
 const isWpeWallpaperContent = computed(() => isWpeWallpaperContentType(props.image.type));
 /** 目录型壁纸没有可拖出的真实媒体文件（local_path 是目录），关闭原生拖拽。 */
 const dragEnabled = computed(() => props.nativeDrag && !isWpe.value);
 const mode = computed<"image" | "gif" | "video" | "wallpaper">(() => {
-  // 非视频 WPE：缩略位仍是作者 preview.*；原图形态交给壁纸组件。
+  // 非视频 WPE：缩略位仍是作者 preview.*；原图形态在它上面叠壁纸组件的实时画面。
   if (isWpeWallpaperContent.value) {
     return props.prefer === "thumbnail" ? "image" : "wallpaper";
   }
@@ -355,8 +389,6 @@ const sourceOf = (path: string): Source => {
 };
 
 const buildChain = (...paths: string[]): Source[] => {
-  // wallpaper 形态不参与缩略 / 原图链：内容由壁纸组件按 id 取目标渲染。
-  if (mode.value === "wallpaper") return [];
   const seen = new Set<string>();
   const chain: Source[] = [];
   for (const path of paths) {
@@ -431,15 +463,43 @@ const setVideoEl = (el: Element | ComponentPublicInstance | null) => {
   videoEl.value = next;
 };
 onBeforeUnmount(() => setVideoEl(null));
-/** wallpaper 形态：壁纸目标取不到（行已删 / IPC 失败）时置 true，显示丢失态。 */
+
+// ---- wallpaper 形态 ----
+/** 壁纸目标取不到（行已删 / IPC 失败）：致命，显示丢失态。 */
+const wallpaperFatal = ref(false);
+/** 实时画面显示不了（编译相关的退回、超时、网页导航被拦）：当原图加载失败，缩略层是最终画面。之后还可能重新 live。 */
 const wallpaperFailed = ref(false);
+/** 实时画面在渲染（`WpeWallpaperContent` 的 live）。 */
+const wallpaperLive = ref(false);
+/** 最短加载时间已过；实时画面要等它才揭开。 */
+const wallpaperMinElapsed = ref(false);
+let wallpaperMinTimer: number | undefined;
+/** 实时画面揭开：盖住缩略层。 */
+const wallpaperShown = computed(() => WPE_LIVE && wallpaperLive.value && wallpaperMinElapsed.value);
+/** wallpaper 形态的 ready 每张只发一次：缩略层加载完与实时画面揭开，先到的那个。 */
+let wallpaperReadySent = false;
+
+function resetWallpaper() {
+  wallpaperFatal.value = false;
+  wallpaperFailed.value = false;
+  wallpaperLive.value = false;
+  wallpaperReadySent = false;
+  window.clearTimeout(wallpaperMinTimer);
+  wallpaperMinElapsed.value = false;
+  if (mode.value !== "wallpaper") return;
+  wallpaperMinTimer = window.setTimeout(() => {
+    wallpaperMinElapsed.value = true;
+  }, WALLPAPER_MIN_LOADING_MS);
+}
+onBeforeUnmount(() => window.clearTimeout(wallpaperMinTimer));
 
 // ---- 终态 ----
 const isLost = computed(() => {
   switch (mode.value) {
     case "wallpaper":
-      // 目录消失直接丢失；其它失败由壁纸组件的致命 error 决定
-      return props.image.localExists === false || wallpaperFailed.value;
+      // 目录消失、目标取不到直接丢失；否则同图片：缩略层与「原图」（实时画面）都显示不了才丢失
+      if (props.image.localExists === false || wallpaperFatal.value) return true;
+      return thumbSlot.dead && (!WPE_LIVE || (wallpaperFailed.value && !wallpaperLive.value));
     case "video":
       return videoSlot.dead;
     case "gif":
@@ -453,8 +513,8 @@ const isLost = computed(() => {
 // ---- Reset on image identity or resource path change (NOT on prefer — preserves hover no-flash) ----
 // When ImageItem flips effectivePrefer thumbnail→original, the two URLs don't change, so this
 // watch doesn't fire, showLoading stays false, and the already-cached thumbnail layer is instant.
-// wallpaper 形态的内容只跟图片 id 走：`WpeWallpaperContent` 按 id 取目标，同一目标只发一次 ready。换封面会改
-// `thumbnailPath`，这里若跟着重置，加载态就再也等不到 ready，骨架一直盖在网页层上（场景层画在骨架之上，看不出来）。
+// wallpaper 形态只跟图片 id 走：实时画面（`WpeWallpaperContent`，按 id 挂载）同一张只报一次 live，换封面会改 `thumbnailPath`，
+// 这里若跟着重置，揭开的实时画面就被收回、再也等不到 live。换封面只换缩略层（下面的 watch）。
 // 网格里 WPE 固定用缩略形态，prefer 不会在两种形态间切换。
 const resetKey = computed(() =>
   mode.value === "wallpaper"
@@ -468,13 +528,18 @@ watch(
     origSlot.reset();
     videoSlot.reset();
     failedSources.value = [];
-    wallpaperFailed.value = false;
+    resetWallpaper();
     if (isLost.value)
       finishLoading(); // 一条可加载的链都没有
     else startLoading();
   },
   { immediate: true },
 );
+
+// wallpaper 形态换封面：缩略层从新封面重来（实时画面不受影响）
+watch(thumbPath, () => {
+  if (mode.value === "wallpaper") thumbSlot.reset();
+});
 
 watch(
   isLost,
@@ -491,19 +556,40 @@ watch(
 const onLoad = (e: Event) => {
   if (isStaleMediaEvent(e)) return;
   finishLoading();
+  if (mode.value === "wallpaper") {
+    if (wallpaperReadySent) return;
+    wallpaperReadySent = true;
+  }
   emit("ready");
 };
 
-const onWallpaperReady = () => {
-  finishLoading();
-  emit("ready");
+const onWallpaperLive = () => {
+  wallpaperFailed.value = false;
+  wallpaperLive.value = true;
 };
 
-/** 致命错误进丢失态（isLost 的 watch 负责 emit error）；非致命只结束加载态，页面仍保留。 */
-const onWallpaperError = (_message: string, fatal: boolean) => {
-  if (fatal) wallpaperFailed.value = true;
-  else finishLoading();
+/** 实时画面显示不了：当原图加载失败，缩略层留着（缩略也死了 isLost 接手） */
+const onWallpaperFail = () => {
+  wallpaperLive.value = false;
+  wallpaperFailed.value = true;
 };
+
+/** 目标取不到：进丢失态（isLost 的 watch 负责 emit error） */
+const onWallpaperError = () => {
+  wallpaperFatal.value = true;
+};
+
+// 实时画面揭开：结束加载态，缩略层还没发过 ready 就由它发；揭开 / 收回都告诉上层（预览据此判断能不能暂停、设封面）
+watch(wallpaperShown, (shown) => {
+  if (shown) {
+    finishLoading();
+    if (!wallpaperReadySent) {
+      wallpaperReadySent = true;
+      emit("ready");
+    }
+  }
+  emit("wallpaperLive", shown);
+});
 
 const onVideoError = (e: Event) => {
   if (isStaleMediaEvent(e)) return;
