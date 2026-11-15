@@ -6,7 +6,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodecVideoPlayer, MAX_AHEAD, type CodecDecoder, type CodecDecoderInit } from "./codecPlayer";
-import { buildMp4, memoryRead, type Spec } from "./demux/testMp4";
+import { buildMkv, cluster, el, info, MKV, payload, simpleBlock, trackEntry } from "./demux/testMkv";
+import { AVCC, buildMp4, memoryRead, type Spec } from "./demux/testMp4";
 import type { ReadRange } from "./demux/mp4";
 import { flush } from "./fakeVideo";
 import type { SceneVideoSource } from "./player";
@@ -693,11 +694,11 @@ describe("CodecVideoPlayer：卡住与失败", () => {
     expect(env.warnings[0][1]).toMatch(/长度不符/);
   });
 
-  it("拆不了包（Matroska）：交给 onUnsupported，自己不失败；takeScriptState 交出脚本状态并释放", async () => {
+  it("拆不了包（不认识的封装）：交给 onUnsupported，自己不失败；takeScriptState 交出脚本状态并释放", async () => {
     const onUnsupported = vi.fn();
-    const ebml = new Uint8Array(64);
-    ebml.set([0x1a, 0x45, 0xdf, 0xa3]);
-    const { player, env } = track(setup({ bytes: ebml, onUnsupported }));
+    // 既不是 EBML 魔数、第一个盒子头也不认识（Matroska 自步骤 3 起能拆，不再退回）
+    const unknown = new Uint8Array(64);
+    const { player, env } = track(setup({ bytes: unknown, onUnsupported }));
     const callback = () => {};
     player.loop = false;
     player.rate = 2;
@@ -705,7 +706,7 @@ describe("CodecVideoPlayer：卡住与失败", () => {
     player.currentTime = 1.5;
     player.addEndedCallback(callback);
     await flush();
-    expect(onUnsupported).toHaveBeenCalledWith(expect.stringContaining("Matroska"));
+    expect(onUnsupported).toHaveBeenCalledWith(expect.stringContaining("不是 MP4"));
     expect(player.failed).toBe(false);
     expect(env.warnings).toEqual([]);
     expect(player.takeScriptState()).toEqual({
@@ -717,6 +718,34 @@ describe("CodecVideoPlayer：卡住与失败", () => {
       seekTo: 1.5,
     });
     expect(player.drawn(1, false)).toBeNull();
+  });
+});
+
+describe("CodecVideoPlayer：Matroska", () => {
+  it("Matroska 也自己拆包解码、不退回：时间戳按块的显示时间，挑帧照常", async () => {
+    const onUnsupported = vi.fn();
+    // 解码顺序 I0 P2 B1 I3（数字是显示的帧号，每帧 0.125 s），时长 0.5 s（Info.Duration 500 ms）
+    const bytes = buildMkv([
+      info(undefined, 500),
+      el(MKV.Tracks, trackEntry({ number: 1, type: 1, codecId: "V_MPEG4/ISO/AVC", codecPrivate: AVCC })),
+      cluster(
+        0,
+        simpleBlock(1, 0, 0x80, payload(1)),
+        simpleBlock(1, 250, 0, payload(2)),
+        simpleBlock(1, 125, 0, payload(3)),
+        simpleBlock(1, 375, 0x80, payload(4)),
+      ),
+    ]);
+    const { player, env, driver, decoder } = track(setup({ bytes, onUnsupported }));
+    await flush();
+    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(env.warnings).toEqual([]);
+    // 第一遍按解码顺序、时间戳是显示时间；loop 下接着喂下一遍（加时长）
+    expect(decoder().fed.slice(0, 5)).toEqual([0, ms(0.25), ms(0.125), ms(0.375), ms(0.5)]);
+    expect(driver.tick(0)).toBe(0);
+    expect(driver.tick(125)).toBe(ms(0.125));
+    expect(driver.tick(125)).toBe(ms(0.25));
+    expect(player.duration).toBe(0.5);
   });
 });
 

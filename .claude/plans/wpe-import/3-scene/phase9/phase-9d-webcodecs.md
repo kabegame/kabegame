@@ -127,6 +127,26 @@ export function wpeColorSpace(track: VideoTrackIndex): VideoColorSpaceInit;
 - **修改** `render/scene.ts` `copyVideo`：尺寸取 `displayWidth` / `displayHeight`（`VideoFrame`）或 `videoWidth` / `videoHeight`（元素），其余不变。
 - **修改** `script/api.ts`：`VideoScriptTarget` 从 `Pick<VideoTexturePlayer, …>` 改为两个播放器都满足的接口。
 
+## 步骤 3 — Matroska 拆包
+
+### 总体思路
+Matroska 没有 MP4 那样集中的帧表：每一帧（SimpleBlock / BlockGroup 里的 Block）散在各个 Cluster 里，帧的时间是「Cluster 时间码 + 块的相对时间码」再乘 `TimecodeScale`，块在文件里按解码顺序排、时间码是显示时间。所以索引只能把 Cluster 顺着读一遍、跳过块的数据只记头。按区间逐块去读块头要上万次 `fetch`，太慢；按约 4 MiB 一块顺序读、在内存里解析，等于整段读一遍（语料那段 299 MiB，量级和原来读成 Blob 相同，只在加载时做一次）。产出和 MP4 同一个 `VideoTrackIndex`，播放器不分格式。
+
+### 点 1 — `video/demux/mkv.ts`（新增）
+- **新增** `indexMatroska(read: ReadRange, length: number): Promise<VideoTrackIndex | { error: string }>`：
+  - EBML 头（DocType `matroska` / `webm`）→ Segment → 顶层元素：`Info`（`TimecodeScale` 缺省 1e6、`Duration`）、`Tracks`（第一条 `TrackType = 1` 的视频轨：`TrackNumber`、`CodecID` 只认 `V_MPEG4/ISO/AVC` 与 `V_MPEGH/ISO/HEVC`、`CodecPrivate` 即 avcC / hvcC、`Video` 的 `PixelWidth` / `PixelHeight` 与 `Colour` 的 `MatrixCoefficients` / `Range` / `Primaries` / `TransferCharacteristics`）、`Cluster`（`Timecode`、`SimpleBlock`、`BlockGroup` 里的 `Block` 与 `ReferenceBlock`）；其余跳过。未知大小的 Segment / Cluster（size 全 1）按「读到下一个同级 ID」处理。
+  - 只收这条轨的块；块的帧标志：SimpleBlock 的 0x80 是关键帧，BlockGroup 没有 `ReferenceBlock` 是关键帧；有 lacing 的块报原因。
+  - `times` = (Cluster 时间码 + 有符号 16 位相对时间码) × `TimecodeScale` / 1e9 秒，再减去第一帧的时间（照 MP4 扣编辑列表的口径，首帧为 0；`editMediaTime` 记扣掉的量）。
+  - 时长：`Info.Duration × TimecodeScale`（和 `containerDuration` 一致），没有时退到最后一帧的显示时间加一帧。
+  - `colr` 字段由 `Colour` 填（码值同 ISO/IEC 23091-2，`Range` 2 是 full），没有 `Colour` 时为 null，交给 `wpeColor` 再看 SPS VUI。
+  - 上限照 `container.ts` / `mp4.ts`：EBML 头 ≤ 4 KiB、元素嵌套深度、帧数 ≤ 10,000,000；不抛错。
+- **新增** `indexVideo(read, length)`：前 4 字节是 EBML 魔数 `1A 45 DF A3` 走 `indexMatroska`，否则 `indexMp4`。
+- **修改** `codecPlayer.ts`：`indexMp4` 换成 `indexVideo`；Matroska 不再退回 `<video>`。
+
+### 点 2 — 测试与语料
+- **新增** `mkv.test.ts`：手造 EBML 字节覆盖 SimpleBlock / BlockGroup、负的相对时间码、未知大小的 Cluster、`TimecodeScale` 非缺省、`Colour`、lacing 报错、非视频轨、截断；本机 ffmpeg 现编一段带 B 帧的 H.264 / HEVC Matroska 做真实字节样例（命令写进注释）。
+- **语料**：3816870245（Matroska H.264 3456×2160 120 fps，299 MiB）用 `indexVideo` 解析，帧数、关键帧数、首帧时间、时长与 ffprobe 一致；记下整段读的耗时。
+
 ## 实施记录
 
 ### 步骤 1 — MP4 拆包与解码配置（2026-11-14）
@@ -154,3 +174,16 @@ export function wpeColorSpace(track: VideoTrackIndex): VideoColorSpaceInit;
 - tsc：视频与脚本相关文件 0 error（剩 `src/puppet/player.test.ts` 一处，别的会话改动中）。`src/video src/script` 17 个文件 345 个用例全过；全量 4134 个里 4 个失败都在 `compile/`（`mdl.test.ts` 3 个、`pipeline.test.ts` 语料 1 个），对应文件在别的会话里改着。Prettier 通过。
 - 变异 14 个全部有测试挂掉：挑帧 ≤ 改 <、空闲时时钟仍前进、循环不加 n×时长、跳转从目标样本而不是关键帧喂、越过的帧不 close、卡住阈值失效、流控上限 < 改 ≤、退回判断取反、没画到就起步、不丢早于目标的输出、不 loop 时不停在时长、读失败也退回、跳转不 reset 解码器、交接不带结束回调。
 - 真机（桌面壁纸 14295「Miku Monitoring」，3585875739 的 4K H.264，`colr` → bt709；宿主重建后 iframe 重载）：`decoder: "webcodecs"`，时长取 `mvhd` 12.758 s（旧路线是 Chromium 的 12.757333）；连续 30 s 每秒采样：媒体时间每秒走 1.000 s，在 12.758 s 处绕回、接着播，解码每秒 60 帧，丢 0 帧，`stallResets` 0，解码队列 + 待显示 3–5 帧。
+
+### 步骤 3 — Matroska 拆包（2026-11-15）
+
+**实现**（子代理新增 `video/demux/mkv.ts`、`index.ts`（`indexVideo` 按 EBML 魔数分派）、`testMkv.ts`、`mkv.test.ts` 与两段 ffmpeg 现编的样例 `h264-bframes.mkv`（30 帧带 B 帧、有 Colour）/ `hevc.mkv`（24 帧带 B 帧）；`container.ts` 只加 export；`codecPlayer.ts` 改用 `indexVideo`；两个「拆不了要退回」的用例改用全 0 字节；Claude 改 `sceneVideos.ts` 的过时注释）：
+- 按 4 MiB 一块顺序读、只记块头；元素跨块边界时接着读，要跳过的元素越过手里的块时从跳到处重读。未知大小的 Segment / Cluster 读到下一个同级或上级 ID 为止。只收第一条视频轨，只对视频轨查 lacing。
+- 时间扣全部帧里最小的显示时间（B 帧时解码顺序第一帧未必最小），`editMediaTime` 用 Matroska 时间码单位、`timescale = 1e9 / TimecodeScale`；时长 = `Info.Duration × TimecodeScale`，没有时退到「最大显示时间 + 相邻差的中位数」（只有一帧时退到 `DefaultDuration`）。`Colour` 填进 `colr`，缺的码值记 2（未指定）。
+- 和计划的出入：不读 `Cues`（帧表靠顺序扫 Cluster）；视频轨带 `ContentEncodings`（头部剥离会让块数据不完整）、Cluster 出现在 Tracks 之前都报原因；编码不支持或没有视频轨时在 Tracks 处就失败、不往下读。
+
+**验收**：
+- tsc 0 error（`script/api.ts` 一度有 2 个错误，是 P11d 改到一半，复跑消失）；`src/video` 7 个文件 212 个用例全过；Prettier 通过。
+- 变异 14 个全部有测试挂掉：关键帧标志位取错、相对时间码当无符号、忽略 TimecodeScale、未知大小 Cluster 不按同级 ID 结束、跨块边界的元素截断、lacing 不报错、有 ReferenceBlock 仍当关键帧、首帧时间不扣、`indexVideo` 分派取反、扣解码顺序第一帧、时长退路取最大差、收了别的轨的块、Range 1 当 full、块数据偏移少去一字节。
+- 语料 3816870245（13632「鸣潮清宵」，Matroska H.264 3456×2160 120 fps）：7049 帧、29 个关键帧、首帧 0（扣 0.023 s，音轨从 0 开始）、时长 58.793，逐包 pts / size / 关键帧 / 位置与 ffprobe 无差异；Node 里 201 ms（76 次读，读 311 MB）。
+- 真机：13632 因 `text:msdf:*` 退回预览图，强制渲染开关也没让它渲染；改在主窗口页面里经 vite `/@fs/` 直接导入 `codecPlayer.ts`，用 rAF 驱动 `CodecVideoPlayer` 20 s、每帧拷进 WebGPU 纹理（不建 DOM，结束全部释放）：浏览器里 `indexVideo` 809 ms（原来读成 Blob 是 508 ms），`decoder: "webcodecs"`，每秒解 120 帧、拷 120 次，时钟每秒走 1.000 s，丢 19 帧（多在开头），`stallResets` 0，没有 warn。
