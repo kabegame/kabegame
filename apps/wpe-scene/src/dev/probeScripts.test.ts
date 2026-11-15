@@ -412,12 +412,16 @@ describe("createProbeScripts", () => {
     expect(log).toEqual([]);
     await scripts.load();
     for (let i = 1; i <= 3; i++) scripts.frame(0.1, i * 0.1);
-    // 全集：WPE 的 14 个内置项加工程声明的（P3a 修复）
-    const full = JSON.stringify({
-      ...Object.fromEntries(Object.entries(builtinProperties()).map(([key, item]) => [key, item.value])),
-      speed: 5,
-      tint: "1 0 0",
-    });
+    // 全集：WPE 的 14 个内置项加工程声明的（P3a 修复），键按字节序（p3am-order）
+    const full = JSON.stringify(
+      Object.fromEntries(
+        Object.entries({
+          ...Object.fromEntries(Object.entries(builtinProperties()).map(([key, item]) => [key, item.value])),
+          speed: 5,
+          tint: "1 0 0",
+        }).sort(([a], [b]) => (a < b ? -1 : 1)),
+      ),
+    );
     expect(log).toEqual([
       "evaluate objects/0/color",
       "evaluate objects/1/alpha",

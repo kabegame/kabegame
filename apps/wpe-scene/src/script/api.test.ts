@@ -340,6 +340,33 @@ describe("SceneScript API（FakeRealm）", () => {
     expect(h.realm.global.input).toBeDefined();
   });
 
+  it("engine.userProperties 的键按字节序（p11 转来；WPE 2.8.42 p3am-order：与全集的插入顺序无关）", () => {
+    const h = setup();
+    const slider = (value: number) => ({ type: "slider", value });
+    h.api.setProperties(
+      new Map<string, { type: string; value: unknown }>([
+        ["rate", slider(100)],
+        ["wec_sa", slider(50)],
+        ["schemecolor", { type: "color", value: "0 0 0" }],
+        ["zz", slider(1)],
+        ["Zb", slider(2)],
+        ["a_b", slider(3)],
+        ["_u", slider(4)],
+        ["aB", slider(5)],
+      ]),
+    );
+    expect(Object.keys(h.api.engine.userProperties as object)).toEqual([
+      "Zb",
+      "_u",
+      "aB",
+      "a_b",
+      "rate",
+      "schemecolor",
+      "wec_sa",
+      "zz",
+    ]);
+  });
+
   it("图层查询、对象身份、向量复制、角度和只读 size", () => {
     const h = setup();
     const scene = h.api.thisScene;

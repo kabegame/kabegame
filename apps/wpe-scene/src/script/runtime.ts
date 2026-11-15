@@ -1,4 +1,4 @@
-import { type TargetKey, type UserProperty } from "../compile/bindings";
+import { scriptPropertyEntries, type TargetKey, type UserProperty } from "../compile/bindings";
 import { scriptToString } from "../text/fields";
 import { type SceneScript, type SceneScripts, type ScriptOwner } from "../compile/scripts";
 import { type CursorCallback } from "../render/cursor";
@@ -406,7 +406,8 @@ export class ScriptRuntime {
     if (this.halted) return;
     this.options.setProperties?.(full);
     const converted: Record<string, UserProperty> = {};
-    for (const [key, property] of Object.entries(delta))
+    // 键按 WPE 的字节序（`scriptPropertyEntries`）：宿主首包是内置项在前、工程属性在后
+    for (const [key, property] of scriptPropertyEntries(Object.entries(delta)))
       if (property && typeof property.type === "string" && "value" in property) converted[key] = property;
     const json = JSON.stringify(converted);
     for (const record of this.records) {

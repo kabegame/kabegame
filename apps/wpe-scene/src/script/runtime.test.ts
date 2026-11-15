@@ -197,6 +197,25 @@ describe("脚本运行时（FakeRealm）", () => {
     expect(init).toBe(1);
   });
 
+  it("applyUserProperties 的参数键按字节序（p11 转来；WPE 2.8.42 p3am-order：大写 < _ < 小写，与给的顺序无关）", async () => {
+    const h = harness();
+    h.realm.modules.set("one", { applyUserProperties: () => {} });
+    await h.runtime.load({ list: [script("one")] });
+    h.realm.events.length = 0;
+    const slider = (value: number) => ({ type: "slider", value });
+    const delta = { zz: slider(1), wec_sa: slider(2), Zb: slider(3), a_b: slider(4), _u: slider(5), aB: slider(6) };
+    h.runtime.applyUserProperties(delta, new Map(Object.entries(delta)));
+    const convert = h.realm.events.find((event) => event.startsWith("convert:"))!;
+    expect(Object.keys(JSON.parse(convert.slice("convert:".length)))).toEqual([
+      "Zb",
+      "_u",
+      "aB",
+      "a_b",
+      "wec_sa",
+      "zz",
+    ]);
+  });
+
   it("返回值按标量、向量、布尔和角度转换，错误类型及其它回调的返回值忽略", async () => {
     const h = harness();
     const cases = [

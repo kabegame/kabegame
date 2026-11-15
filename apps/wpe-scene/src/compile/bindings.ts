@@ -271,6 +271,15 @@ export interface UserProperty {
   file?: string;
 }
 
+/**
+ * 交给脚本的属性对象（`engine.userProperties`、`applyUserProperties` 的参数）的键序：WPE 的属性表按键的字节序排（大写 < `_` < 小写），
+ * 和 project.json 的声明顺序、`order` 字段、内置项都无关（2.8.42 `p3am-order` 实测，`init`、首次 `applyUserProperties`、首帧都是）。
+ * 按 UTF-16 码元比，非 ASCII 的键只在增补平面字符与 U+E000–U+FFFF 之间和字节序不同；整数形式的键 V8 总排在最前，两边相同。
+ */
+export function scriptPropertyEntries<T>(entries: Iterable<[string, T]>): [string, T][] {
+  return [...entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 /** `value` 是不是 `{user: …}` 绑定（含 `{user: {name, condition}}`）。 */
 export function isUserBinding(value: unknown): boolean {
   return userBindingOf(value as SceneValue | undefined) !== null;
