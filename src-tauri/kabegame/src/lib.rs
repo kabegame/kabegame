@@ -993,6 +993,12 @@ pub(crate) fn configure_app(
             #[cfg(feature = "wpe")]
             set_wpe_web_user_properties,
             #[cfg(feature = "wpe")]
+            get_wpe_preview_settings,
+            #[cfg(feature = "wpe")]
+            set_wpe_preview_settings,
+            #[cfg(feature = "wpe")]
+            get_wpe_follow_available,
+            #[cfg(feature = "wpe")]
             capture_wallpaper_cover,
             #[cfg(feature = "wpe")]
             restore_wallpaper_cover,

@@ -12,6 +12,7 @@ pub mod dir_hash;
 pub mod discover;
 #[cfg(feature = "wpe")]
 pub mod locale;
+pub mod preview_settings;
 pub mod project;
 pub mod properties;
 #[cfg(feature = "wpe")]

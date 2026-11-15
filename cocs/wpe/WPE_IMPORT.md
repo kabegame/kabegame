@@ -548,9 +548,9 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
   脚本仍在跑）时为 0，否则是 `volume` prop 钳到 0…1。主窗口里应用背景与预览各有一个 Stage，各答各的 iframe；换壁纸重建
   iframe 后旧 iframe 不再是当前的，新页面的请求照常回复。`volume` / `paused` 变化时把同一条消息推给当前 iframe（还停在初始
   `about:blank` 时也照发，那份文档没有垫片、收下即丢，页面起来后垫片会自己再要）。`targetOrigin` 为 `*`：对方是跨源 `file:`，
-  消息里只有一个数。数据来源：桌面 `WallpaperWindow.vue` 的 `state.volume`（`get_wallpaper_volume` + `setting-change`）、预览
-  `WpeWallpaperContent` 的 `wallpaperVolume`；应用背景由 `ImageContent` 的 `video-muted` 传到 `WpeWallpaperContent` 的 `muted`，
-  `volume` 为 0。
+  消息里只有一个数。数据来源：桌面 `WallpaperWindow.vue` 的 `state.volume`（全局「壁纸设置」，`get_wallpaper_volume` +
+  `setting-change`）、预览 `WpeWallpaperContent` 读这张壁纸「预览设置」的 `volume`（见下「壁纸设置与预览设置」）；应用背景由
+  `ImageContent` 的 `video-muted` 传到 `WpeWallpaperContent` 的 `muted`，`volume` 为 0。
 - **垫片怎么收**：在 `window` 上捕获阶段、最先登记的 `message` 监听，只认 `isTrusted`（页面伪造不了）、`source` 是启动时记下的
   `window.parent`、带上面类型标记且 `volume` 是数字的消息；`source` / `data` 用启动时取的 `MessageEvent.prototype` 原生
   getter 读，页面改原型也影响不了判断。认下的消息 `stopImmediatePropagation`，页面的 `message` 监听看不到。
@@ -766,6 +766,35 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 - **交给场景宿主的**：`wpe_web_pull_state` 的场景分支不给原值，给 `{ value: 原值 SHA-256 的前 16 位十六进制, isbound, commandtype?, file? }`（`scene_user_from_view`）。完整路径不离开后端；非 Windows 时 `isbound` 一律为假。
 - **网页壁纸**不读这类属性，面板也不显示。
 
+### 壁纸设置与预览设置
+
+暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影这一组通用设置分两份，用同一个字段组组件
+（`components/wallpaper/WpeSettingsFields.vue` + `WpeSettingControl.vue`，纯视图，改动经 `update` 报给调用方；字段表、默认值、
+按类型选字段与「跟随 WPE」的规则在 `utils/wpeSettings.ts`）：
+
+- **壁纸设置**（桌面）：全局设置键（`wallpaperPaused`、`wallpaperVolume`、`wallpaperVideoPlaybackRate`、`wpeMediaIntegration`、
+  `wpeScenePostprocess`、`wpeSceneReflection`、`wpeSceneShadows`），所有壁纸共用、只给壁纸窗口。设置页
+  `components/settings/items/WpeWallpaperSettings.vue` 显示全部字段（当前壁纸用不上的照样显示，只是不起作用），每个字段接
+  `useSettingKeyState`；暂停只在窗口模式显示，媒体集成只在 Windows。
+- **预览设置**（预览与应用背景）：每张 `x-wpe/*` 壁纸一份，存在 metadata 顶层的 `previewSettings`（与 `userProperties` 并列，
+  只存与 Kabegame 默认值不同的键），读写 `get_wpe_preview_settings` / `set_wpe_preview_settings`（`kabegame_core::wpe::preview_settings`
+  解析、钳制与改写，经 `rewrite_image_metadata` 后发 `metadataId` 补丁），没设的项取 Kabegame 自己的默认值（暂停否、音量 1、倍速 1、
+  媒体集成开、后处理 `enabled`、反射开、阴影 `medium`，与 WPE 出厂值一致），**不回落到全局**。前端 `useWpePreviewSettings`
+  让同一张的全部使用方（预览右栏、画面里的 `WpeWallpaperContent`、预览弹窗给视频壁纸设倍速）共用一份状态，面板改动当场生效，
+  草稿 300 ms 去抖后写，别处写入（`metadataId` 补丁）时重读。预览右栏的「预览设置」面板（`WpePreviewSettingsPanel.vue`）按类型
+  显示：网页是暂停、音量、媒体集成；场景再加后处理 / 反射 / 阴影；`x-wpe/video` 在预览里按普通视频播放，只有倍速（暂停与音量
+  归视频控制条，音量是全部视频共用的 `kabegame-video-volume`）。
+- **预览的暂停不存**：它是 `ImagePreviewDialog` 的内存状态 `wallpaperPaused`（换图复位），和右键菜单的「暂停」是同一个；
+  字段组的暂停开关把改动交回弹窗。
+- **应用背景**强制暂停（`video-playing` 恒为 false：视频停在第一帧、网页由垫片冻结、场景停在加载时画的第一帧），音量 0，
+  其余取这张壁纸的预览设置。
+- **作者的用户属性**（上节）只有一份，桌面与预览共用，不分作用域。
+- **「跟随 WPE」**：只在能读到 WPE `config.json` 时提供（`get_wpe_follow_available`：只有 Windows，且 WPE 安装目录里有
+  `config.json`；`useWpeFollowAvailable` 全应用一份，`wpeEngineDir` 变了重读）。不能跟随时选项里没有这一档，存着的 `follow`
+  显示为 Kabegame 默认值，交给场景宿主前也换成默认值（`wpeSceneSettingsOf`）。媒体集成只有开 / 关两档。
+- **场景三项怎么到宿主**：父页面经 postMessage 下发（`kabegame:wpe-scene-settings`，见 [WPE_SCENE.md](WPE_SCENE.md)「场景后处理档位」），
+  壁纸窗口传全局值，预览传预览设置；宿主不再自己读全局设置。
+
 ### 封面
 
 WPE 行的 `thumbnail_path` 默认是作者目录里的 `preview.*`，场景的退回画面（`previewPath`）也取它。预览的右键菜单有「设为壁纸封面」：`capture_wallpaper_cover(imageId, region)` 截主窗口，按 `region`（看得见的那一块画布占窗口内容区的比例）裁出来，缩到最长边不超过 1920，写进 `thumbnails_dir`，再经 `replace_image_thumbnail_path` 换行并发 `thumbnailPath` 补丁。暂停时截到的就是停住的那一帧。「恢复默认封面」在预览详情栏的属性面板里（`restorableCover`）；设置页的属性弹窗没有封面按钮。
@@ -798,8 +827,10 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
   大于 8 KB 的消息（封面）还会存进 Channel 数据队列等页面来取。所以 frame 级释放必须靠销毁事件。
 - 没有退订命令：WPE 没有取消登记的接口。
 
-有 `audio` 订阅才开采集线程，有 `media` 订阅且设置「媒体集成」（`wpeMediaIntegration`，默认开，仅 Windows 有开关）打开
-才开媒体会话监视；最后一个订阅离开即停（`info!` 记启停，增删订阅 `debug!` 记 label / frame / 类型 / 订阅数）。停止线程
+有 `audio` 订阅才开采集线程，有打开了「媒体集成」的 `media` 订阅才开媒体会话监视（仅 Windows 有开关）。开关按订阅算
+（`MediaGate`，由 `wpe_web_media_subscribe` 按调用方窗口定）：壁纸窗口的订阅跟全局设置 `wpeMediaIntegration`（默认开），
+主窗口的订阅（预览与应用背景）跟这张壁纸预览设置的 `mediaIntegration`（默认开），见下「壁纸设置与预览设置」。网页与场景壁纸
+都受它管。最后一个订阅离开即停（`info!` 记启停，增删订阅 `debug!` 记 label / frame / 类型 / 订阅数）。停止线程
 （丢弃句柄会 join）一律在订阅表的锁外，采集线程自己触发的停止不 join 自己。
 
 - **音频**（`wpe_media/audio.rs` + `spectrum.rs`）：WASAPI 共享模式回环读默认输出设备（`eRender` / `eConsole`）的混音，
@@ -832,7 +863,10 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
     `textColor` 取对比度 ≥ 2.5 的次色 / 第三色、否则同 `highContrastColor`；`highContrastColor` 按主色对黑的对比度取黑或白。
     **没有封面时五色全黑**：Phase 8 原来是深灰底白字，P11c 照 WPE 改了。
   - 新订阅先收 `Status { enabled }`，监视在运行时再补发快照：网页投影补全部；场景投影照 WPE 只补非空的几类。
-  - 关「媒体集成」：推 `{ enabled: false }`（场景订阅另收复位）并停监视、清快照。
+  - 关「媒体集成」：只对开关归属匹配的订阅推 `{ enabled: false }`（场景订阅另收复位，`set_enabled_where`）；全局设置只管
+    壁纸窗口的订阅（`set_media_enabled`），某张壁纸的预览设置只管主窗口里这张的订阅（`set_preview_enabled`，由
+    `set_wpe_preview_settings` 写完调）。重新打开时监视若已在运行（别的订阅开着）就照新订阅补发快照。没有打开的 media 订阅
+    时停监视、清快照。
 
 Kabegame 自己的会话不过滤。主窗口预览期间，`usePreviewMediaSession` 在应用页主 frame 把 `navigator.mediaSession` 设成
 当前预览项（标题为图片 `displayName`，封面为左上角应用图标）；预览网页壁纸时声音来自 iframe，但垫片不访问 mediaSession，

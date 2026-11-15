@@ -271,7 +271,7 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
         [B, A],
       ),
     );
-    listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+    host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
     await vi.waitFor(() => expect(elements).toHaveLength(2));
     const [, b] = elements;
     const probe = () => Object.fromEntries(host.videos().map((item) => [item.start, item]));
@@ -335,7 +335,7 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
         [A, B],
       ),
     );
-    listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+    host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
     await vi.waitFor(() => expect(elements).toHaveLength(2));
     const probe = () => Object.fromEntries(host.videos().map((item) => [item.start, item]));
     v.pause();

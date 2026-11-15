@@ -137,6 +137,15 @@ trait MediaSources: Send + Sync {
     fn start_media(&self) -> Box<dyn Send>;
 }
 
+/// media 订阅的「媒体集成」开关跟谁：桌面（壁纸窗口）跟全局设置 `wpeMediaIntegration`，预览（主窗口，
+/// 含应用背景）跟这张壁纸自己的预览设置（metadata 的 `previewSettings.mediaIntegration`）。由命令按调用方
+/// 窗口决定，页面不能自己选。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaGate {
+    Global,
+    Preview { image_id: String },
+}
+
 /// 一条订阅：归属某个 webview 里的某个子 frame（网页壁纸 iframe）。
 struct Subscription {
     label: String,
@@ -144,11 +153,15 @@ struct Subscription {
     kind: WpeMediaKind,
     /// 只对 media 订阅有意义（audio 订阅不分投影）
     flavor: WpeMediaFlavor,
+    /// 只对 media 订阅有意义：开关跟谁、当前是否打开（关着的订阅只收过 `Status { enabled: false }`）
+    gate: MediaGate,
+    enabled: bool,
     sink: Box<dyn MediaSink>,
 }
 
 struct HubState {
     subs: Vec<Subscription>,
+    /// 全局「媒体集成」设置，只管 [`MediaGate::Global`] 的订阅
     media_enabled: bool,
     /// 运行中的回环采集，丢弃即停。
     audio: Option<Box<dyn Send>>,
@@ -160,7 +173,7 @@ struct HubState {
 
 static HUB: OnceLock<WpeMediaHub> = OnceLock::new();
 
-/// 全局订阅表：有 audio 订阅才开采集线程，有 media 订阅且「媒体集成」打开才开媒体监视；
+/// 全局订阅表：有 audio 订阅才开采集线程，有打开了「媒体集成」的 media 订阅才开媒体监视；
 /// 每次增删后按订阅表重算两者该不该运行（[`Self::reconcile`]）。
 ///
 /// 采集 / 监视线程会回调 [`Self::broadcast`]（要拿状态锁），所以停止它们（丢弃句柄会 join 线程）一律放在锁外。
@@ -215,23 +228,36 @@ impl WpeMediaHub {
         flavor: WpeMediaFlavor,
         sink: Box<dyn MediaSink>,
     ) {
+        self.subscribe_gated(label, frame, kind, flavor, MediaGate::Global, false, sink);
+    }
+
+    /// 同 [`Self::subscribe`]，另给开关归属；`preview_enabled` 只对 [`MediaGate::Preview`] 有意义（这张壁纸预览设置的
+    /// 当前值，由命令读 metadata 得出），[`MediaGate::Global`] 取全局设置。
+    #[allow(clippy::too_many_arguments)]
+    pub fn subscribe_gated(
+        &self,
+        label: &str,
+        frame: SubframeId,
+        kind: WpeMediaKind,
+        flavor: WpeMediaFlavor,
+        gate: MediaGate,
+        preview_enabled: bool,
+        sink: Box<dyn MediaSink>,
+    ) {
         let stopped = {
             let mut state = self.lock();
             state
                 .subs
                 .retain(|s| !(s.label == label && s.frame == frame && s.kind == kind));
+            let enabled = match gate {
+                MediaGate::Global => state.media_enabled,
+                MediaGate::Preview { .. } => preview_enabled,
+            };
             let mut alive = true;
             if kind == WpeMediaKind::Media {
-                alive = sink.send(&WpeMediaMessage::Status {
-                    enabled: state.media_enabled,
-                });
-                if alive && state.media_enabled && state.media.is_some() {
-                    let cache = &state.last_media[flavor.index()];
-                    alive = cache
-                        .iter()
-                        .flatten()
-                        .filter(|message| flavor == WpeMediaFlavor::Web || scene_replays(message))
-                        .all(|message| sink.send(message));
+                alive = sink.send(&WpeMediaMessage::Status { enabled });
+                if alive && enabled && state.media.is_some() {
+                    alive = replay_cache(&state.last_media, flavor, sink.as_ref());
                 }
             }
             if alive {
@@ -240,6 +266,8 @@ impl WpeMediaHub {
                     frame: frame.clone(),
                     kind,
                     flavor,
+                    gate,
+                    enabled,
                     sink,
                 });
             }
@@ -294,7 +322,7 @@ impl WpeMediaHub {
         drop(stopped);
     }
 
-    /// 设置「媒体集成」变化：向全部 media 订阅推 `Status`，并启停监视（关掉时快照随之清空）。
+    /// 全局设置「媒体集成」变化：只改跟全局的订阅（桌面），见 [`set_enabled_where`]。
     pub fn set_media_enabled(&self, enabled: bool) {
         let stopped = {
             let mut state = self.lock();
@@ -302,26 +330,21 @@ impl WpeMediaHub {
                 return;
             }
             state.media_enabled = enabled;
-            let status = WpeMediaMessage::Status { enabled };
-            // 关闭时场景订阅在 Status 之后再收缓存里不是缺省值的那几类的复位消息（读码推断 WPE 要等重新打开才一起到，
-            // 这里选当场发，记为已知差异）；之后清空场景缓存，网页缓存随 reconcile 停监视时一起清
-            let resets = if enabled {
-                Vec::new()
-            } else {
-                scene_resets(&state.last_media[WpeMediaFlavor::Scene.index()])
-            };
-            state.subs.retain(|s| {
-                if s.kind != WpeMediaKind::Media {
-                    return true;
-                }
-                if !s.sink.send(&status) {
-                    return false;
-                }
-                s.flavor != WpeMediaFlavor::Scene || resets.iter().all(|reset| s.sink.send(reset))
-            });
-            if !enabled {
-                state.last_media[WpeMediaFlavor::Scene.index()] = Default::default();
-            }
+            set_enabled_where(&mut state, |gate| *gate == MediaGate::Global, enabled);
+            self.reconcile(&mut state)
+        };
+        drop(stopped);
+    }
+
+    /// 某张壁纸的预览设置「媒体集成」变化：只改跟这张预览设置的订阅（预览与应用背景）。
+    pub fn set_preview_enabled(&self, image_id: &str, enabled: bool) {
+        let stopped = {
+            let mut state = self.lock();
+            set_enabled_where(
+                &mut state,
+                |gate| matches!(gate, MediaGate::Preview { image_id: id } if id == image_id),
+                enabled,
+            );
             self.reconcile(&mut state)
         };
         drop(stopped);
@@ -340,7 +363,10 @@ impl WpeMediaHub {
             }
             let before = state.subs.len();
             state.subs.retain(|s| {
-                s.kind != WpeMediaKind::Media || s.flavor != flavor || s.sink.send(message)
+                s.kind != WpeMediaKind::Media
+                    || s.flavor != flavor
+                    || !s.enabled
+                    || s.sink.send(message)
             });
             if state.subs.len() == before {
                 return;
@@ -366,9 +392,11 @@ impl WpeMediaHub {
                 _ => {}
             }
             let before = state.subs.len();
-            state
-                .subs
-                .retain(|s| s.kind != kind || s.sink.send(message));
+            state.subs.retain(|s| {
+                s.kind != kind
+                    || (kind == WpeMediaKind::Media && !s.enabled)
+                    || s.sink.send(message)
+            });
             if state.subs.len() == before {
                 return;
             }
@@ -387,8 +415,10 @@ impl WpeMediaHub {
     fn reconcile(&self, state: &mut HubState) -> Vec<Box<dyn Send>> {
         let mut stopped = Vec::new();
         let want_audio = state.subs.iter().any(|s| s.kind == WpeMediaKind::Audio);
-        let want_media =
-            state.media_enabled && state.subs.iter().any(|s| s.kind == WpeMediaKind::Media);
+        let want_media = state
+            .subs
+            .iter()
+            .any(|s| s.kind == WpeMediaKind::Media && s.enabled);
         if want_audio && state.audio.is_none() {
             state.audio = Some(self.sources.start_audio());
             tracing::info!("网页壁纸音频采集已启动");
@@ -410,6 +440,52 @@ impl WpeMediaHub {
         }
         stopped
     }
+}
+
+/// 把开关归属匹配、且当前值不同的 media 订阅改成 `enabled`：先推 `Status`。打开时若监视已在运行（别的订阅开着），
+/// 照新订阅补发缓存；监视没在运行则由 reconcile 启动、之后照常推送。关闭时场景订阅在 Status 之后再收缓存里
+/// 不是缺省值的那几类的复位消息（读码推断 WPE 要等重新打开才一起到，这里选当场发，记为已知差异）。缓存只在
+/// 监视停止时清空（reconcile）：别的订阅还开着时缓存仍是当前数据，留给之后重新打开的订阅补发。
+fn set_enabled_where(state: &mut HubState, matches: impl Fn(&MediaGate) -> bool, enabled: bool) {
+    let HubState {
+        subs,
+        media,
+        last_media,
+        ..
+    } = state;
+    let running = media.is_some();
+    let resets = if enabled {
+        Vec::new()
+    } else {
+        scene_resets(&last_media[WpeMediaFlavor::Scene.index()])
+    };
+    subs.retain_mut(|s| {
+        if s.kind != WpeMediaKind::Media || s.enabled == enabled || !matches(&s.gate) {
+            return true;
+        }
+        s.enabled = enabled;
+        if !s.sink.send(&WpeMediaMessage::Status { enabled }) {
+            return false;
+        }
+        if enabled {
+            !running || replay_cache(last_media, s.flavor, s.sink.as_ref())
+        } else {
+            s.flavor != WpeMediaFlavor::Scene || resets.iter().all(|reset| s.sink.send(reset))
+        }
+    });
+}
+
+/// 给一条 media 订阅补发它 flavor 的缓存；发送失败返回 false。
+fn replay_cache(
+    last_media: &[[Option<WpeMediaMessage>; 4]; 2],
+    flavor: WpeMediaFlavor,
+    sink: &dyn MediaSink,
+) -> bool {
+    last_media[flavor.index()]
+        .iter()
+        .flatten()
+        .filter(|message| flavor == WpeMediaFlavor::Web || scene_replays(message))
+        .all(|message| sink.send(message))
 }
 
 /// 场景订阅补发的条件（照 WPE `AddMediaListener`）：`title` 非空才补属性，有封面才补封面，
@@ -832,6 +908,72 @@ mod tests {
             late.received(),
             vec![WpeMediaMessage::Status { enabled: true }]
         );
+    }
+
+    #[test]
+    fn preview_gate_follows_its_own_setting() {
+        let (hub, counters) = hub(false);
+        let desktop = Sink::default();
+        let preview = Sink::default();
+        let other = Sink::default();
+        hub.subscribe(
+            "wallpaper",
+            frame("d"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
+            Box::new(desktop.clone()),
+        );
+        hub.subscribe_gated(
+            "main",
+            frame("p"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
+            MediaGate::Preview {
+                image_id: "1".into(),
+            },
+            true,
+            Box::new(preview.clone()),
+        );
+        hub.subscribe_gated(
+            "main",
+            frame("q"),
+            WpeMediaKind::Media,
+            WpeMediaFlavor::Web,
+            MediaGate::Preview {
+                image_id: "2".into(),
+            },
+            false,
+            Box::new(other.clone()),
+        );
+        // 预览开着就开监视，全局关着的桌面与关着的另一张都只有 Status false、收不到数据
+        assert_eq!(counters.media_started.load(Ordering::SeqCst), 1);
+        let playing = WpeMediaMessage::Playback { state: 1 };
+        hub.broadcast_media(WpeMediaFlavor::Web, &playing);
+        let off = WpeMediaMessage::Status { enabled: false };
+        let on = WpeMediaMessage::Status { enabled: true };
+        assert_eq!(desktop.received(), vec![off.clone()]);
+        assert_eq!(preview.received(), vec![on.clone(), playing.clone()]);
+        assert_eq!(other.received(), vec![off.clone()]);
+
+        // 全局打开：监视已在运行，桌面补发缓存
+        hub.set_media_enabled(true);
+        assert_eq!(
+            desktop.received(),
+            vec![off.clone(), on.clone(), playing.clone()]
+        );
+        assert_eq!(counters.media_started.load(Ordering::SeqCst), 1);
+
+        // 关掉图 1 的预览：只有它收 Status false；桌面还开着，监视不停
+        hub.set_preview_enabled("1", false);
+        assert_eq!(preview.received().last(), Some(&off));
+        assert_eq!(other.received(), vec![off.clone()]);
+        assert_eq!(counters.media_stopped.load(Ordering::SeqCst), 0);
+        // 同值不重复推
+        hub.set_preview_enabled("1", false);
+        assert_eq!(preview.received().len(), 3);
+
+        hub.set_media_enabled(false);
+        assert_eq!(counters.media_stopped.load(Ordering::SeqCst), 1);
     }
 
     #[test]

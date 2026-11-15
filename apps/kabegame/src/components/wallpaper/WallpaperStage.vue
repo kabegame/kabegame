@@ -47,6 +47,7 @@ import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 import { framePointerEvents } from "./framePointer";
 import { WEB_SANDBOX } from "./webSandbox";
 import WpeSceneView from "./WpeSceneView.vue";
+import { WPE_FOLLOW_SCENE_SETTINGS, type WpeSceneSettings } from "@/utils/wpeSettings";
 
 type Phase = "idle" | "prep" | "enter";
 type MediaType = "image" | "video" | "web" | "scene";
@@ -81,11 +82,14 @@ interface Props {
    * 应用背景为 false。
    */
   interactive?: boolean;
+  /** 场景层的后处理 / 反射 / 阴影，原样交给 `WpeSceneView`：桌面传全局「壁纸设置」，预览传这张壁纸的「预览设置」 */
+  sceneSettings?: WpeSceneSettings;
 }
 
 const props = withDefaults(defineProps<Props>(), {
   paused: false,
   interactive: false,
+  sceneSettings: () => WPE_FOLLOW_SCENE_SETTINGS,
 });
 
 const emit = defineEmits<{
@@ -1821,6 +1825,7 @@ defineExpose({ debugState, delegatesPing });
           :paused="paused"
           :volume="volume"
           :interactive="interactive"
+          :scene-settings="sceneSettings"
           @alive="sceneAlive = true"
           @ready="onSceneReady"
           @fallback="onSceneFallback"

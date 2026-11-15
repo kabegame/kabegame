@@ -118,6 +118,18 @@ function asShadows(value: unknown): SceneShadowSetting {
   return SCENE_SHADOW_SETTINGS.includes(value as SceneShadowSetting) ? (value as SceneShadowSetting) : "follow";
 }
 
+/** 父页面下发的三项设置（已规整） */
+interface SceneSettings {
+  postprocess: ScenePostprocessSetting;
+  reflection: SceneReflectionSetting;
+  shadows: SceneShadowSetting;
+}
+
+const FOLLOW_SCENE_SETTINGS: SceneSettings = { postprocess: "follow", reflection: "follow", shadows: "follow" };
+
+/** 首次加载等父页面场景设置的上限：父页面在宿主请求后同一轮事件里就回，正常是几毫秒 */
+const SCENE_SETTINGS_WAIT_MS = 3000;
+
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -171,7 +183,14 @@ export class SceneHost {
   private lastLostAt = -Infinity;
   private disposed = false;
   private paused = false;
+  /** 设置「场景后处理」：最近一次加载用的值；还没加载过为 null。 */
   private postprocess: ScenePostprocessSetting | null = null;
+  /**
+   * 父页面下发的后处理 / 反射 / 阴影（`kabegame:wpe-scene-settings`，`setSceneSettings`）：桌面是全局「壁纸设置」，预览是这张壁纸的
+   * 「预览设置」，宿主不分。收到第一条之前为 null，`reload` 等它（最多 `SCENE_SETTINGS_WAIT_MS`，等不到按跟随 WPE）。
+   */
+  private sceneSettings: SceneSettings | null = null;
+  private readonly sceneSettingsWaiters: (() => void)[] = [];
   /** 设置「场景反射」（P13b1）：最近一次加载用的值；还没加载过为 null。 */
   private reflection: SceneReflectionSetting | null = null;
   /** 设置「场景阴影」（P13d）：最近一次加载用的值；还没加载过为 null。 */
@@ -336,39 +355,6 @@ export class SceneHost {
     this.userTextures.onReady = (name) => this.onUserTextureReady(name);
     // 来源表建好后按当前暂停状态设一次（P11b 步骤 4，用户视频与 GIF 的时钟）
     this.userTextures.setPaused(this.paused || this.hidden);
-    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理、反射与阴影设置", (raw) => {
-      if (this.disposed || !this.receivedProperties) return;
-      const delta = (raw && typeof raw.changes === "object" ? raw.changes : raw) as Record<string, unknown> | null;
-      if (!delta) return;
-      const keys: string[] = [];
-      if ("wpeScenePostprocess" in delta) {
-        const next = asPostprocess(delta.wpeScenePostprocess);
-        if (this.postprocess === null || next !== this.postprocess) {
-          keys.push("wpeScenePostprocess");
-          options.report.debug(`场景壁纸 ${options.imageId} 后处理设置 ${this.postprocess} → ${next}，重新判定`);
-        }
-      }
-      // 反射（P13b1）：值变才重载；两项设置同时变（一条 setting-change 带两个键）只重载一次
-      if ("wpeSceneReflection" in delta) {
-        const next = asReflection(delta.wpeSceneReflection);
-        if (this.reflection === null || next !== this.reflection) {
-          keys.push("wpeSceneReflection");
-          options.report.debug(`场景壁纸 ${options.imageId} 反射设置 ${this.reflection} → ${next}，重新判定`);
-        }
-      }
-      // 阴影（P13d）：档位决定编不编投射变体、图集尺寸与 `LIGHTS_SHADOW_*` 宏，只能整场重载；同一条里几项一起变只重载一次
-      if ("wpeSceneShadows" in delta) {
-        const next = asShadows(delta.wpeSceneShadows);
-        if (this.shadows === null || next !== this.shadows) {
-          keys.push("wpeSceneShadows");
-          options.report.debug(`场景壁纸 ${options.imageId} 阴影设置 ${this.shadows} → ${next}，重新判定`);
-        }
-      }
-      if (!keys.length) return;
-      // 设置变化引起的重载也计入探针的 recompiled（原因记 settings）
-      this.stats.recompiled.push({ reason: "settings", keys });
-      void this.reload();
-    });
     // 应用页与这份存储不同来源，由后端广播：同一张图的全部宿主（预览、桌面）都停脚本、删前缀、重建
     this.listenEvent<{ imageId?: string }>("wpe-scene-clear-storage", "清空脚本存储", (payload) => {
       const imageId = options.imageId;
@@ -1446,35 +1432,72 @@ export class SceneHost {
     this.options.report.fallback(reasons);
   }
 
-  private async readPostprocess(): Promise<ScenePostprocessSetting> {
-    try {
-      return asPostprocess(await invoke<string>("get_wpe_scene_postprocess"));
-    } catch (error) {
-      this.options.report.warn("读取场景后处理设置失败，按跟随 WPE 处理：", error);
-      return "follow";
-    }
+  /**
+   * 父页面下发三项设置（`kabegame:wpe-scene-settings`）。第一条叫醒等着的 `reload`；之后和最近一次加载用的值比，变了才整场重载
+   * （三项都决定编译结果：泛光链 / HDR、反射名单、阴影变体与图集），几项一起变只重载一次，记进探针的 recompiled（原因 settings）。
+   */
+  setSceneSettings(next: { postprocess: unknown; reflection: unknown; shadows: unknown }): void {
+    if (this.disposed) return;
+    this.sceneSettings = {
+      postprocess: asPostprocess(next.postprocess),
+      reflection: asReflection(next.reflection),
+      shadows: asShadows(next.shadows),
+    };
+    for (const wake of this.sceneSettingsWaiters.splice(0)) wake();
+    // 还没加载过：在等的 reload 会读到这份
+    if (!this.receivedProperties || this.postprocess === null) return;
+    const resolved = this.resolvedSceneSettings();
+    const keys: string[] = [];
+    if (resolved.postprocess !== this.postprocess) keys.push("postprocess");
+    if (resolved.reflection !== this.reflection) keys.push("reflection");
+    if (resolved.shadows !== this.shadows) keys.push("shadows");
+    if (!keys.length) return;
+    this.options.report.debug(
+      `场景壁纸 ${this.options.imageId} 设置变化（${keys.join("、")}）：` +
+        `${this.postprocess}/${this.reflection}/${this.shadows} → ${resolved.postprocess}/${resolved.reflection}/${resolved.shadows}，重新判定`,
+    );
+    this.stats.recompiled.push({ reason: "settings", keys });
+    void this.reload();
   }
 
-  private async readReflection(): Promise<SceneReflectionSetting> {
-    const override = reflectionOverride();
-    if (override) return override;
-    try {
-      return asReflection(await invoke<string>("get_wpe_scene_reflection"));
-    } catch (error) {
-      this.options.report.warn("读取场景反射设置失败，按跟随 WPE 处理：", error);
-      return "follow";
-    }
+  /** 编译用的三项：父页面的值，反射与阴影再叠 dev 覆盖（`localStorage`，生产构建摇掉） */
+  private resolvedSceneSettings(): SceneSettings {
+    const settings = this.sceneSettings ?? FOLLOW_SCENE_SETTINGS;
+    return {
+      postprocess: settings.postprocess,
+      reflection: reflectionOverride() ?? settings.reflection,
+      shadows: shadowsOverride() ?? settings.shadows,
+    };
   }
 
-  private async readShadows(): Promise<SceneShadowSetting> {
-    const override = shadowsOverride();
-    if (override) return override;
-    try {
-      return asShadows(await invoke<string>("get_wpe_scene_shadows"));
-    } catch (error) {
-      this.options.report.warn("读取场景阴影设置失败，按跟随 WPE 处理：", error);
-      return "follow";
+  /**
+   * 等父页面的第一条设置；没有父页面回应（dev 工具直接开的宿主没替它回）时等满上限按跟随 WPE，记一条 warn。
+   * 不在 iframe 里（没有父页面，单测在 node 里）不等，直接按跟随。
+   */
+  private async readSceneSettings(): Promise<SceneSettings> {
+    const framed = typeof window !== "undefined" && window.parent !== window;
+    if (!this.sceneSettings && !framed) this.sceneSettings = FOLLOW_SCENE_SETTINGS;
+    if (!this.sceneSettings) {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          const index = this.sceneSettingsWaiters.indexOf(wake);
+          if (index >= 0) this.sceneSettingsWaiters.splice(index, 1);
+          if (!this.sceneSettings) {
+            this.options.report.warn(
+              `场景壁纸 ${this.options.imageId}：${SCENE_SETTINGS_WAIT_MS} ms 内没收到父页面的场景设置，按跟随 WPE 处理`,
+            );
+            this.sceneSettings = FOLLOW_SCENE_SETTINGS;
+          }
+          resolve();
+        }, SCENE_SETTINGS_WAIT_MS);
+        const wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        this.sceneSettingsWaiters.push(wake);
+      });
     }
+    return this.resolvedSceneSettings();
   }
 
   /** 属性、档位或设备变化时重新编译；代数确保过期结果不能覆盖新场景。 */
@@ -1499,11 +1522,9 @@ export class SceneHost {
         this.targetTask = null;
         throw error;
       }));
-      const [target, setting, reflection, shadows] = await Promise.all([
+      const [target, { postprocess: setting, reflection, shadows }] = await Promise.all([
         targetTask,
-        this.readPostprocess(),
-        this.readReflection(),
-        this.readShadows(),
+        this.readSceneSettings(),
       ]);
       if (id !== this.generation) return;
       this.postprocess = setting;

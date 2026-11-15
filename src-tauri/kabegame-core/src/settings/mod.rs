@@ -1619,21 +1619,21 @@ impl Settings {
 /// 场景后处理档位的默认值：跟随 WPE 安装目录 `config.json` 的 `postprocessing`（前端 `wpe-scene/compile/postprocess.ts` 解析）。
 const DEFAULT_WPE_SCENE_POSTPROCESS: &str = "follow";
 
-fn is_wpe_scene_postprocess(value: &str) -> bool {
+pub(crate) fn is_wpe_scene_postprocess(value: &str) -> bool {
     matches!(value, "follow" | "disabled" | "enabled" | "ultra")
 }
 
 /// 场景反射的默认值：跟随 WPE 安装目录 `config.json` 的 `general.user.reflection`（前端 `wpe-scene/compile/postprocess.ts` 解析）。
 const DEFAULT_WPE_SCENE_REFLECTION: &str = "follow";
 
-fn is_wpe_scene_reflection(value: &str) -> bool {
+pub(crate) fn is_wpe_scene_reflection(value: &str) -> bool {
     matches!(value, "follow" | "disabled" | "enabled")
 }
 
 /// 场景阴影的默认值：跟随 WPE 安装目录 `config.json` 的 `shadows`。
 const DEFAULT_WPE_SCENE_SHADOWS: &str = "follow";
 
-fn is_wpe_scene_shadows(value: &str) -> bool {
+pub(crate) fn is_wpe_scene_shadows(value: &str) -> bool {
     matches!(
         value,
         "follow" | "disabled" | "low" | "medium" | "high" | "ultra"

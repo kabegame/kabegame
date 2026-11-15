@@ -7,6 +7,7 @@ import {
   WALLPAPER_PREVIEW_ZOOM,
   WPE_SCENE_DISPLAY,
   WPE_SCENE_POINTER,
+  WPE_SCENE_SETTINGS,
   WPE_SCENE_STYLE,
   WPE_SCENE_STYLE_REQUEST,
 } from "./wpeSceneStyle";
@@ -84,6 +85,19 @@ describe("WpeSceneView 样式", () => {
     expect(post).toHaveBeenLastCalledWith({ type: WPE_SCENE_STYLE, style: "center" }, "*");
   });
 
+  it("宿主请求时回场景设置（缺省都跟随），设置变了主动推", async () => {
+    const { wrapper, post, fromHost } = await mountView("fit");
+    fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+    const follow = { type: WPE_SCENE_SETTINGS, postprocess: "follow", reflection: "follow", shadows: "follow" };
+    expect(post).toHaveBeenCalledWith(follow, "*");
+    post.mockClear();
+    await wrapper.setProps({ sceneSettings: { postprocess: "enabled", reflection: "follow", shadows: "low" } });
+    expect(post).toHaveBeenCalledExactlyOnceWith({ ...follow, postprocess: "enabled", shadows: "low" }, "*");
+    // 同值的新对象不推
+    await wrapper.setProps({ sceneSettings: { postprocess: "enabled", reflection: "follow", shadows: "low" } });
+    expect(post).toHaveBeenCalledOnce();
+  });
+
   it("别的窗口发来的消息不理", async () => {
     const { post, fromHost } = await mountView();
     fromHost({ type: WPE_SCENE_STYLE_REQUEST }, window);
@@ -137,8 +151,10 @@ describe("WpeSceneView 显示缩放", () => {
   it("挂载：宿主启动时请求，回样式的同时回显示缩放；量不出来时不推", async () => {
     const { post, fromHost, frame } = await mountView("fit");
     fromHost({ type: WPE_SCENE_STYLE_REQUEST });
-    // happy-dom 没有布局：量不出来，只回样式
-    expect(post).toHaveBeenCalledExactlyOnceWith({ type: WPE_SCENE_STYLE, style: "fit" }, "*");
+    // happy-dom 没有布局：量不出来，只回样式（场景设置另算）
+    expect(post.mock.calls.filter(([data]) => (data as { type?: unknown }).type !== WPE_SCENE_SETTINGS)).toEqual([
+      [{ type: WPE_SCENE_STYLE, style: "fit" }, "*"],
+    ]);
     layout(frame, 5760, 1080, 0.18);
     fromHost({ type: WPE_SCENE_STYLE_REQUEST });
     expect(post).toHaveBeenLastCalledWith(displayMessage(0.18), "*");

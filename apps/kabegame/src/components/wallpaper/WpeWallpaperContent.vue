@@ -4,9 +4,11 @@
  * `WallpaperStage`。只服务非视频的 WPE 类型（web 与 scene）；`x-wpe/video` 在图库里按普通视频处理。
  *
  * - 目标经 `get_wallpaper_target_for_image` 获取，与桌面壁纸窗口共用后端 `build_wallpaper_target`。
- * - 过渡 / 音量 / 倍速跟随壁纸设置（主窗口已加载 settings，这里不 loadAll）。铺放不看壁纸样式：这里是图库内容，
+ * - 过渡跟随默认壁纸目标；音量 / 倍速 / 场景后处理、反射、阴影取这张壁纸的「预览设置」（`useWpePreviewSettings`，
+ *   存在 metadata，与桌面的全局「壁纸设置」互不影响；预览右栏改动当场生效）。铺放不看壁纸样式：这里是图库内容，
  *   和其它媒体一样由调用方给 `fit`（预览 contain、应用背景 cover）。
- *   音量对网页壁纸同样生效（Stage 经 postMessage 交给页面里的垫片）；`muted`（应用背景）时为 0。
+ *   音量对网页壁纸同样生效（Stage 经 postMessage 交给页面里的垫片）；`muted`（应用背景）时为 0。暂停由调用方给
+ *   （预览弹窗的内存状态；应用背景恒暂停）。
  * - `ready`：网页 iframe load；场景出首帧，或不能渲染（含超时）时预览图加载完。场景结果出来前不发，加载态一直保持。
  * - `sceneLive`：场景是否在实时渲染，退回预览图时为假。
  * - `error` 第二个参数区分致命与否：目标取不到（行已删、IPC 失败）为致命，调用方显示丢失态；
@@ -14,8 +16,10 @@
  */
 import { computed, ref, watch } from "vue";
 import { invoke } from "@/api/rpc";
-import { useSettingsStore } from "@/stores/settings";
 import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
+import { useWpeFollowAvailable } from "@/composables/useWpeFollowAvailable";
+import { useWpePreviewSettings } from "@/composables/useWpePreviewSettings";
+import { wpeSceneSettingsOf } from "@/utils/wpeSettings";
 import type { ImageInfo } from "@/types/image";
 import WallpaperStage from "./WallpaperStage.vue";
 import type { Mode, Transition, WallpaperTarget } from "./types";
@@ -48,14 +52,15 @@ const emit = defineEmits<{
   contextmenu: [point: ViewportPoint];
 }>();
 
-const settings = useSettingsStore();
-
 const styleMode = computed<Mode>(() => (props.fit === "cover" ? "fill" : "fit"));
 // 预览里的过渡与桌面一致：取默认壁纸目标在当前壁纸模式下的有效过渡
 const { transition: targetTransition } = useWallpaperTarget();
 const transition = computed(() => targetTransition.value as Transition);
-const volume = computed(() => (props.muted ? 0 : (settings.values.wallpaperVolume ?? 1)));
-const playbackRate = computed(() => settings.values.wallpaperVideoPlaybackRate ?? 1);
+const { values: previewSettings } = useWpePreviewSettings(computed(() => props.image.id));
+const followAvailable = useWpeFollowAvailable();
+const volume = computed(() => (props.muted ? 0 : previewSettings.value.volume));
+const playbackRate = computed(() => previewSettings.value.playbackRate);
+const sceneSettings = computed(() => wpeSceneSettingsOf(previewSettings.value, followAvailable.value));
 
 const target = ref<WallpaperTarget | null>(null);
 let seq = 0;
@@ -96,6 +101,7 @@ function onStageError(message: string) {
     :transition="transition"
     :volume="volume"
     :playback-rate="playbackRate"
+    :scene-settings="sceneSettings"
     :paused="props.playing === false"
     :interactive="props.interactive"
     @ready="emit('ready')"

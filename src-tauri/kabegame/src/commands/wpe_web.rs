@@ -12,13 +12,14 @@
 
 use crate::wallpaper::wpe_scene_host;
 use crate::wallpaper::wpe_web_dir_index::WpeWebDirIndex;
-use crate::wpe_media::{WpeMediaFlavor, WpeMediaHub, WpeMediaKind, WpeMediaMessage};
+use crate::wpe_media::{MediaGate, WpeMediaFlavor, WpeMediaHub, WpeMediaKind, WpeMediaMessage};
 use kabegame_core::app_paths::AppPaths;
 use kabegame_core::crawler::downloader::compress::{generate_wallpaper_cover, CoverCrop};
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::media::image_type::wpe_kind;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{ImageInfo, Storage};
+use kabegame_core::wpe::preview_settings;
 use kabegame_core::wpe::project::read_project;
 use kabegame_core::wpe::properties::{resolve_web_user_props, wpe_language_code};
 use kabegame_core::wpe::user_props::{
@@ -518,8 +519,120 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     if kind == WpeMediaKind::Audio && !supports_audio_processing(&id).await? {
         return Err("this wallpaper does not process audio".to_string());
     }
-    WpeMediaHub::global().subscribe(webview.label(), frame, kind, flavor, Box::new(channel));
+    // 「媒体集成」开关：壁纸窗口跟全局设置，主窗口（预览与应用背景）跟这张壁纸的预览设置
+    let label = webview.label();
+    if crate::wallpaper::is_wallpaper_label(label) {
+        WpeMediaHub::global().subscribe(label, frame, kind, flavor, Box::new(channel));
+    } else {
+        let enabled = kind == WpeMediaKind::Media && preview_media_integration(&id).await?;
+        WpeMediaHub::global().subscribe_gated(
+            label,
+            frame,
+            kind,
+            flavor,
+            MediaGate::Preview { image_id: id },
+            enabled,
+            Box::new(channel),
+        );
+    }
     Ok(())
+}
+
+/// 这张壁纸预览设置里的「媒体集成」（没设取默认开）。
+async fn preview_media_integration(image_id: &str) -> Result<bool, String> {
+    let id = image_id.to_string();
+    let raw = tauri::async_runtime::spawn_blocking(move || Storage::global().get_metadata(&id))
+        .await
+        .map_err(|error| error.to_string())??;
+    Ok(raw
+        .as_ref()
+        .map_or(true, preview_settings::media_integration))
+}
+
+/// 预览设置的读视图：`settings` 是存了的键（规整过），没设的项由前端按默认值显示。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WpePreviewSettingsView {
+    pub image_id: String,
+    pub metadata_id: Option<i64>,
+    pub settings: serde_json::Map<String, Value>,
+}
+
+/// 读一张 WPE 壁纸（`x-wpe/*`）的预览设置；行不存在或不是 WPE 返回 None。只给主窗口。
+#[tauri::command]
+pub async fn get_wpe_preview_settings(
+    image_id: String,
+) -> Result<Option<WpePreviewSettingsView>, String> {
+    let Some(info) = Storage::find_image_by_id(&image_id).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    if wpe_kind(info.media_type.as_deref()).is_none() {
+        return Ok(None);
+    }
+    let id = image_id.clone();
+    let raw = tauri::async_runtime::spawn_blocking(move || Storage::global().get_metadata(&id))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(Some(WpePreviewSettingsView {
+        image_id,
+        metadata_id: info.metadata_id,
+        settings: preview_settings::stored(&raw.unwrap_or_default()),
+    }))
+}
+
+/// 写预览设置 `{ key: 新值 | null }`（`null` = 恢复默认），返回保存后的视图。改写 metadata 后发
+/// `image-changed { metadataId }`，打开着的预览与面板靠它重读；媒体集成变了另通知 hub 改这张的预览订阅。
+#[tauri::command]
+pub async fn set_wpe_preview_settings(
+    image_id: String,
+    changes: serde_json::Map<String, Value>,
+) -> Result<WpePreviewSettingsView, String> {
+    let info = Storage::find_image_by_id(&image_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("image not found")?;
+    if wpe_kind(info.media_type.as_deref()).is_none() {
+        return Err("not a wallpaper engine wallpaper".into());
+    }
+    let id = image_id.clone();
+    let changed = tauri::async_runtime::spawn_blocking(move || {
+        Storage::global()
+            .rewrite_image_metadata(&id, |raw| preview_settings::apply_changes(raw, &changes))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if let Some(metadata_id) = changed {
+        GlobalEmitter::global().emit_image_fields(
+            &[image_id.clone()],
+            serde_json::json!({ "metadataId": metadata_id }),
+        );
+    }
+    let view = get_wpe_preview_settings(image_id.clone())
+        .await?
+        .ok_or_else(|| "wpe wallpaper row missing".to_string())?;
+    if let Some(hub) = WpeMediaHub::existing() {
+        let enabled = view
+            .settings
+            .get("mediaIntegration")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        hub.set_preview_enabled(&image_id, enabled);
+    }
+    Ok(view)
+}
+
+/// 设置项能不能提供「跟随 Wallpaper Engine」：只在 Windows 上、且 WPE 安装目录里有 `config.json` 时可以
+/// （场景宿主按它解析后处理 / 反射 / 阴影）。其它情况下界面不给这一档，存着的 `follow` 按 Kabegame 默认值显示与解析。
+#[tauri::command]
+pub async fn get_wpe_follow_available() -> Result<bool, String> {
+    if !cfg!(target_os = "windows") {
+        return Ok(false);
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        kabegame_core::wpe::discover::engine_dir()
+            .is_some_and(|dir| dir.join("config.json").is_file())
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 壁纸是否声明处理音频：读图片 metadata（即 `project.json` 原文）的 `general.supportsaudioprocessing`。

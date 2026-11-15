@@ -9,8 +9,6 @@ import type { VideoSink } from "./video/sceneVideos";
 
 const subscribeAudio = vi.fn<(args: Record<string, unknown>) => Promise<void>>();
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
-/** 替身的 `get_wpe_scene_reflection`（P13b1）与 `get_wpe_scene_shadows`（P13d）返回值。 */
-const settings = { reflection: "follow", shadows: "follow" };
 
 // 宿主依赖 IPC、Worker 编译与 WebGPU：都换成替身，只核对加载状态机（P3a 退回路径）与音频订阅（3c 点 0）
 vi.mock("@tauri-apps/api/core", () => ({
@@ -19,9 +17,6 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
   invoke: vi.fn(async (command: string, args: Record<string, unknown>) => {
     if (command === "wpe_scene_target") return { path: "P:/p", sceneAssets: [] };
-    if (command === "get_wpe_scene_postprocess") return "disabled";
-    if (command === "get_wpe_scene_reflection") return settings.reflection;
-    if (command === "get_wpe_scene_shadows") return settings.shadows;
     if (command === "wpe_web_media_subscribe") return subscribeAudio(args);
     return undefined;
   }),
@@ -208,140 +203,88 @@ describe("SceneHost：退回预览图后的属性变化", () => {
   });
 });
 
-describe("SceneHost：场景反射设置（P13b1）", () => {
-  const compiledReflections = () => compile.mock.calls.map(([input]) => (input as { reflection?: string }).reflection);
-  const pushed = (value: unknown) => listeners.get("setting-change")!({ payload: { wpeSceneReflection: value } });
+describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴影）", () => {
+  const compiledWith = () =>
+    compile.mock.calls.map(([input]) => {
+      const { postprocess, reflection, shadows } = input as {
+        postprocess?: string;
+        reflection?: string;
+        shadows?: string;
+      };
+      return [postprocess, reflection, shadows];
+    });
+  const FOLLOW = { postprocess: "follow", reflection: "follow", shadows: "follow" };
 
   beforeEach(() => {
     vi.stubGlobal("__SCENE_DEV__", false);
     compile.mockReset();
-    settings.reflection = "follow";
     compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  async function load() {
+  async function load(settings?: Record<string, unknown>) {
     const report = reporter();
     const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    if (settings) host.setSceneSettings(settings as never);
     host.applyUserProperties(fx(false));
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
     return { host, report };
   }
 
-  it("加载时读设置并交给编译（读失败 / 不认识的值按跟随）", async () => {
-    settings.reflection = "disabled";
-    const { host } = await load();
-    expect(compiledReflections()).toEqual(["disabled"]);
-    host.dispose();
+  it("加载用父页面先给的值；不认识的值按跟随；没有父页面时不等、按跟随", async () => {
+    const first = await load({ postprocess: "enabled", reflection: "disabled", shadows: "high" });
+    expect(compiledWith()).toEqual([["enabled", "disabled", "high"]]);
+    first.host.dispose();
     compile.mockClear();
-    settings.reflection = "bogus";
-    const second = await load();
-    expect(compiledReflections()).toEqual(["follow"]);
+    const second = await load({ postprocess: 1, reflection: "bogus", shadows: null });
+    expect(compiledWith()).toEqual([["follow", "follow", "follow"]]);
     second.host.dispose();
+    compile.mockClear();
+    const third = await load();
+    expect(compiledWith()).toEqual([["follow", "follow", "follow"]]);
+    third.host.dispose();
   });
 
-  it("推 wpeSceneReflection：值变了重新加载一次（编译带新值、探针记 settings），值不变、别的键不加载", async () => {
-    const { host } = await load();
-    expect(compile).toHaveBeenCalledTimes(1);
-    // 值没变（加载时是 follow）
-    pushed("follow");
-    // 别的键、非法 payload
-    listeners.get("setting-change")!({ payload: { wallpaperPaused: true } });
-    listeners.get("setting-change")!({ payload: null });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(compile).toHaveBeenCalledTimes(1);
-    // 变了
-    settings.reflection = "enabled";
-    pushed("enabled");
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(compiledReflections()).toEqual(["follow", "enabled"]);
-    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["wpeSceneReflection"] });
-    // 再推同一个值：不加载
-    pushed("enabled");
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(compile).toHaveBeenCalledTimes(2);
-    host.dispose();
-  });
-
-  it("同一条 setting-change 带两项设置：只加载一次，键都记进探针", async () => {
-    const { host } = await load();
-    settings.reflection = "disabled";
-    listeners.get("setting-change")!({ payload: { wpeSceneReflection: "disabled", wpeScenePostprocess: "enabled" } });
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(compile).toHaveBeenCalledTimes(2);
-    expect(host.stats.recompiled.at(-1)).toEqual({
-      reason: "settings",
-      keys: ["wpeScenePostprocess", "wpeSceneReflection"],
-    });
-    host.dispose();
-  });
-});
-
-describe("SceneHost：场景阴影设置（P13d）", () => {
-  const compiledShadows = () => compile.mock.calls.map(([input]) => (input as { shadows?: string }).shadows);
-  const pushed = (value: unknown) => listeners.get("setting-change")!({ payload: { wpeSceneShadows: value } });
-
-  beforeEach(() => {
-    vi.stubGlobal("__SCENE_DEV__", false);
-    compile.mockReset();
-    settings.reflection = "follow";
-    settings.shadows = "follow";
-    compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
-  });
-  afterEach(() => vi.unstubAllGlobals());
-
-  async function load() {
+  it("在 iframe 里：等父页面的第一条设置再编译", async () => {
+    vi.stubGlobal("window", { parent: {} });
     const report = reporter();
     const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
     host.applyUserProperties(fx(false));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(compile).not.toHaveBeenCalled();
+    host.setSceneSettings({ postprocess: "disabled", reflection: "enabled", shadows: "low" });
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
-    return { host, report };
-  }
-
-  it("加载时读设置并交给编译（不认识的值按跟随）", async () => {
-    settings.shadows = "high";
-    const { host } = await load();
-    expect(compiledShadows()).toEqual(["high"]);
+    expect(compiledWith()).toEqual([["disabled", "enabled", "low"]]);
+    expect(host.stats.recompiled).toEqual([]);
     host.dispose();
-    compile.mockClear();
-    settings.shadows = "bogus";
-    const second = await load();
-    expect(compiledShadows()).toEqual(["follow"]);
-    second.host.dispose();
   });
 
-  it("推 wpeSceneShadows：值变了重新加载一次，值不变、别的键不加载", async () => {
-    const { host } = await load();
-    pushed("follow");
-    listeners.get("setting-change")!({ payload: { wallpaperPaused: true } });
+  it("运行中值变了重新加载一次（编译带新值、探针记 settings），值不变不加载", async () => {
+    const { host } = await load(FOLLOW);
+    expect(compile).toHaveBeenCalledTimes(1);
+    host.setSceneSettings(FOLLOW);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(1);
-    settings.shadows = "disabled";
-    pushed("disabled");
+    host.setSceneSettings({ ...FOLLOW, reflection: "enabled" });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(compiledShadows()).toEqual(["follow", "disabled"]);
-    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["wpeSceneShadows"] });
-    pushed("disabled");
+    expect(compiledWith().at(-1)).toEqual(["follow", "enabled", "follow"]);
+    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["reflection"] });
+    host.setSceneSettings({ ...FOLLOW, reflection: "enabled" });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(2);
     host.dispose();
   });
 
-  it("三项设置同一条里一起变：只加载一次，键都记进探针", async () => {
-    const { host } = await load();
-    settings.reflection = "disabled";
-    settings.shadows = "ultra";
-    listeners.get("setting-change")!({
-      payload: { wpeSceneReflection: "disabled", wpeScenePostprocess: "enabled", wpeSceneShadows: "ultra" },
-    });
+  it("三项一起变：只加载一次，键都记进探针", async () => {
+    const { host } = await load(FOLLOW);
+    host.setSceneSettings({ postprocess: "enabled", reflection: "disabled", shadows: "ultra" });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(2);
-    expect(compiledShadows()).toEqual(["follow", "ultra"]);
+    expect(compiledWith().at(-1)).toEqual(["enabled", "disabled", "ultra"]);
     expect(host.stats.recompiled.at(-1)).toEqual({
       reason: "settings",
-      keys: ["wpeScenePostprocess", "wpeSceneReflection", "wpeSceneShadows"],
+      keys: ["postprocess", "reflection", "shadows"],
     });
     host.dispose();
   });

@@ -432,6 +432,8 @@
   "slideshowPlayNext": "向後自動播放",
   "slideshowStop": "停止自動播放",
   "wpePropsTitle": "桌布屬性",
+  "wpePreviewSettingsTitle": "預覽設定",
+  "wpePreviewSettingsResetAll": "全部恢復預設",
   "wpePropsResetAll": "全部重設",
   "wpePropsReset": "恢復預設",
   "wpePropsModified": "本組有變更",

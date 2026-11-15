@@ -515,7 +515,7 @@ app IPC 的对应变体（协议 v5）见 [../cli/CLI_IPC.md](../cli/CLI_IPC.md)
 
   逐屏独立下第二、三层才真正分屏：点布局图里的一块屏，第三层就是那块屏的目标；「已断开」列表里是配置还在、屏不在线的目标，「忘记」后那块屏再接回来时从默认目标重新复制一份。
 
-  之后是其余全局项：暂停、音量、倍速、媒体集成、场景后处理、WPE 目录。**选中的目标是页面本地状态**，记在 `localStorage`（`kabegame-settings-wallpaper-target`），不进设置；记下的目标不在当前活跃集合里（换了显示器模式、那块屏断开）时显示默认目标，记录本身不动，屏接回来还是它。第三层的写命令都带选中目标的 id。
+  之后是其余全局项：桌面的「壁纸设置」字段组（暂停、音量、倍速、媒体集成、场景后处理 / 反射 / 阴影，`WpeWallpaperSettings.vue`，全部字段都显示；预览用每张壁纸自己的「预览设置」，见 [WPE_IMPORT.md](../wpe/WPE_IMPORT.md)「壁纸设置与预览设置」）、WPE 目录。**选中的目标是页面本地状态**，记在 `localStorage`（`kabegame-settings-wallpaper-target`），不进设置；记下的目标不在当前活跃集合里（换了显示器模式、那块屏断开）时显示默认目标，记录本身不动，屏接回来还是它。第三层的写命令都带选中目标的 id。
 - **目标选择弹窗**：设置页以外凡是要落到某个目标的操作都先经它。
   - 入口是命令式函数 `pickWallpaperTarget({ action })`（`composables/useWallpaperTargetPicker.ts`，写法同 `askSettingChoice`）：模块级的待处理请求，加挂在 `App.vue` 的宿主 `components/wallpaper/WallpaperTargetPickerHost.vue`，调用方 `await` 结果。`action` 是 `"setWallpaper"` 或 `"setRotation"`，只决定标题。
   - 返回值是目标 id，可以直接当命令的 `target`；用户取消返回 `null`，调用方此时什么都不做。

@@ -25,6 +25,7 @@ listenSceneParent({
   style: (style) => host.setStyle(style),
   displayScale: (scale) => host.setDisplayScale(scale),
   pointer: pointer.initial,
+  settings: (settings) => host.setSceneSettings(settings),
 });
 
 window.wallpaperPropertyListener = {

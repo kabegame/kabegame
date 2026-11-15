@@ -5,6 +5,7 @@ import {
   scenePointerFeed,
   SCENE_DISPLAY_MESSAGE,
   SCENE_POINTER_MESSAGE,
+  SCENE_SETTINGS_MESSAGE,
   SCENE_STYLE_MESSAGE,
   SCENE_STYLE_REQUEST,
 } from "./sceneStyle";
@@ -37,13 +38,25 @@ describe("父页面通路", () => {
     style: (style: string) => void = () => {},
     displayScale: (scale: number) => void = () => {},
     pointer: (x: number, y: number) => void = () => {},
+    settings: (settings: Record<string, unknown>) => void = () => {},
   ) {
     vi.stubGlobal("window", {
       parent,
       addEventListener: (_: string, handler: (event: unknown) => void) => (listener = handler),
     });
-    listenSceneParent({ style, displayScale, pointer });
+    listenSceneParent({ style, displayScale, pointer, settings });
   }
+
+  it("场景设置：只认父窗口发来的可信消息，三项原样交出", () => {
+    const settings = vi.fn();
+    install(undefined, undefined, undefined, settings);
+    const message = { type: SCENE_SETTINGS_MESSAGE, postprocess: "enabled", reflection: "follow", shadows: 3 };
+    listener({ isTrusted: true, source: parent, data: message });
+    expect(settings).toHaveBeenCalledExactlyOnceWith({ postprocess: "enabled", reflection: "follow", shadows: 3 });
+    listener({ isTrusted: false, source: parent, data: message });
+    listener({ isTrusted: true, source: {}, data: message });
+    expect(settings).toHaveBeenCalledOnce();
+  });
 
   it("启动时请求一次（样式与显示缩放共用这一条请求）", () => {
     install();

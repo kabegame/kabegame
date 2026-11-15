@@ -430,6 +430,8 @@
   "slideshowPlayNext": "다음 방향 자동 재생",
   "slideshowStop": "자동 재생 중지",
   "wpePropsTitle": "배경화면 속성",
+  "wpePreviewSettingsTitle": "미리보기 설정",
+  "wpePreviewSettingsResetAll": "모두 기본값으로",
   "wpePropsResetAll": "모두 초기화",
   "wpePropsReset": "기본값으로 복원",
   "wpePropsModified": "이 그룹에 변경 사항 있음",

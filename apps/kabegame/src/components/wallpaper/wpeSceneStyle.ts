@@ -1,9 +1,11 @@
 /**
  * 场景壁纸的父页面 ↔ 宿主消息协议（`postMessage`），父页面一侧是 `WpeSceneView`：宿主启动时发
- * `{ type: WPE_SCENE_STYLE_REQUEST }`，父页面回两条：
+ * `{ type: WPE_SCENE_STYLE_REQUEST }`，父页面回三条：
  * - `{ type: WPE_SCENE_STYLE, style }`：壁纸样式，变化时再主动推；
  * - `{ type: WPE_SCENE_DISPLAY, scale }`：显示缩放（`displayScaleOf`，预览放大时按 `sceneDisplayScale` 封顶），量到变化时
  *   再主动推。宿主按它把画布缩到实际显示大小：预览画布按内容尺寸布局、再整体 `scale`，这个 transform 在 iframe 里量不到。
+ * - `{ type: WPE_SCENE_SETTINGS, postprocess, reflection, shadows }`：场景后处理 / 反射 / 阴影（`wpeSceneSettingsOf`，不能跟随时
+ *   `follow` 已换成默认值），变化时再主动推。桌面传全局「壁纸设置」，预览传这张壁纸的「预览设置」；宿主首次加载等它。
  *
  * 另有一条不经请求、父页面主动发的：
  * - `{ type: WPE_SCENE_POINTER, x, y }`：开场指针（P5a 收尾），光标在 iframe 里的归一化坐标（`scenePointerIn`，不钳制）。
@@ -13,12 +15,14 @@
  * 源码比对，两边不一致就失败。
  */
 import type { InjectionKey, Ref } from "vue";
+import type { WpeSceneSettings } from "@/utils/wpeSettings";
 import type { Mode } from "./types";
 
 export const WPE_SCENE_STYLE_REQUEST = "kabegame:wpe-scene-style-request";
 export const WPE_SCENE_STYLE = "kabegame:wpe-scene-style";
 export const WPE_SCENE_DISPLAY = "kabegame:wpe-scene-display";
 export const WPE_SCENE_POINTER = "kabegame:wpe-scene-pointer";
+export const WPE_SCENE_SETTINGS = "kabegame:wpe-scene-settings";
 
 export function isWpeSceneStyleRequest(data: unknown): boolean {
   return !!data && typeof data === "object" && (data as { type?: unknown }).type === WPE_SCENE_STYLE_REQUEST;
@@ -30,6 +34,17 @@ export function wpeSceneStyleMessage(style: Mode): { type: typeof WPE_SCENE_STYL
 
 export function wpeSceneDisplayMessage(scale: number): { type: typeof WPE_SCENE_DISPLAY; scale: number } {
   return { type: WPE_SCENE_DISPLAY, scale };
+}
+
+export function wpeSceneSettingsMessage(settings: WpeSceneSettings): {
+  type: typeof WPE_SCENE_SETTINGS;
+} & WpeSceneSettings {
+  return {
+    type: WPE_SCENE_SETTINGS,
+    postprocess: settings.postprocess,
+    reflection: settings.reflection,
+    shadows: settings.shadows,
+  };
 }
 
 export function wpeScenePointerMessage(x: number, y: number): { type: typeof WPE_SCENE_POINTER; x: number; y: number } {

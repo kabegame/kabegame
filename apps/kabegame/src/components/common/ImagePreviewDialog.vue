@@ -363,8 +363,17 @@
               @wheel.stop
             >
               <div class="preview-detail-drawer-scroll preview-detail-drawer-scroll-right">
-                <!-- 网页与场景壁纸：作者属性面板（改动经 metadataId 补丁让页面 / 场景重读）。暂停、设为封面、
-                 清空脚本存储在右键菜单与工具条里，面板只留恢复默认封面 -->
+                <!-- WPE 壁纸的「预览设置」：只给预览用、存在这张壁纸的 metadata，与桌面的全局壁纸设置互不影响；
+                 暂停不存，就是本弹窗的 wallpaperPaused（和右键菜单的暂停同一个） -->
+                <WpePreviewSettingsPanel
+                  v-if="previewImage && isWpeMediaType(previewImage.type)"
+                  :image-id="previewImage.id"
+                  :image-type="previewImage.type"
+                  :paused="wallpaperPaused"
+                  @update:paused="wallpaperPaused = $event"
+                />
+                <!-- 网页与场景壁纸：作者属性面板（预览与桌面共用一份，改动经 metadataId 补丁让页面 / 场景重读）。
+                 设为封面、清空脚本存储在右键菜单里，面板只留恢复默认封面 -->
                 <WpeWebPropertiesPanel
                   v-if="previewImage && hasWpeUserProperties(previewImage.type)"
                   :image-id="previewImage.id"
@@ -434,6 +443,8 @@ import ImageBasicInfoPanel, {
 import ImageNativeMetadataPanel from "./ImageNativeMetadataPanel.vue";
 import ImagePluginDescriptionPanel from "./ImagePluginDescriptionPanel.vue";
 import WpeWebPropertiesPanel from "../wallpaper/WpeWebPropertiesPanel.vue";
+import WpePreviewSettingsPanel from "../wallpaper/WpePreviewSettingsPanel.vue";
+import { useWpePreviewSettings } from "../../composables/useWpePreviewSettings";
 import KbResizable from "./KbResizable.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
@@ -458,6 +469,7 @@ import {
   hasWpeUserProperties,
   isNativeMetadataEligible,
   isVideoPlaybackType,
+  isWpeMediaType,
   isWpeSceneType,
   isWpeVideoType,
   isWpeWallpaperContentType,
@@ -616,6 +628,19 @@ const previewContainerRef = ref<HTMLElement | null>(null);
 const previewContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 /** 桌面预览视频：从 ImageContent 暴露的 videoEl 取，供 VideoControls 绑定 */
 const previewVideoEl = computed<HTMLVideoElement | null>(() => previewContentRef.value?.videoEl ?? null);
+/** 视频壁纸（`x-wpe/video`）在预览里按普通视频播放，倍速取这张壁纸的预览设置（暂停与音量归视频控制条） */
+const { values: previewWpeVideoSettings } = useWpePreviewSettings(
+  computed(() => (previewImage.value && isWpeVideoType(previewImage.value.type) ? previewImage.value.id : null)),
+);
+watch(
+  [previewVideoEl, () => previewWpeVideoSettings.value.playbackRate],
+  ([video, rate]) => {
+    if (!video || !isWpeVideoType(previewImage.value?.type)) return;
+    video.defaultPlaybackRate = rate;
+    video.playbackRate = rate;
+  },
+  { immediate: true },
+);
 /** 紧凑模式 PhotoSwipe slot：用 item.id 反查三项窗口 */
 /** 与 PhotoSwipe 数据源同一份窗口（含关闭动画期间的冻结），否则冻结的幻灯片找不到图会被 v-if 收掉。 */
 const imageById = (id: string | number | undefined): ImageInfo | null =>

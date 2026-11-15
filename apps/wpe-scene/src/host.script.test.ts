@@ -441,7 +441,7 @@ describe("SceneHost 脚本接线", () => {
     host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
     await vi.waitFor(() => expect(realmsCreated).toBe(1));
     await new Promise((resolve) => setTimeout(resolve));
-    listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+    host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
     await new Promise((resolve) => setTimeout(resolve));
     open();
@@ -1717,7 +1717,7 @@ describe("SceneHost 脚本接线", () => {
       renderer.tick();
       expect(host.animations().list[0].t).toBe(animatedTime(3));
       events.length = 0;
-      listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+      host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
       await vi.waitFor(() => expect(events).toContain("render"));
       expect(compile).toHaveBeenCalledTimes(2);
       // 新场景接着第 3 帧的时钟走，首帧再推进一帧
@@ -1725,8 +1725,8 @@ describe("SceneHost 脚本接线", () => {
       expect(alpha()).toBe(animatedAt(ALPHA_KEYS, 4));
       host.setPaused(true);
       events.length = 0;
-      // 替身的 `get_wpe_scene_postprocess` 总回 "disabled"：再推一次 "enabled" 才算变化
-      listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+      // 设置和上一次加载用的值比，换一档才算变化
+      host.setSceneSettings({ postprocess: "ultra", reflection: "follow", shadows: "follow" });
       await vi.waitFor(() => expect(events).toContain("render"));
       expect(compile).toHaveBeenCalledTimes(3);
       // bundle 里的 alpha 是 1：暂停时首帧不跑 beforeFrame，是换场景时那一次写入
@@ -1741,7 +1741,7 @@ describe("SceneHost 脚本接线", () => {
       expect(alpha()).toBe(0.6);
       host.setPaused(true);
       events.length = 0;
-      listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+      host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
       await vi.waitFor(() => expect(events).toContain("render"));
       expect(compile).toHaveBeenCalledTimes(2);
       // 暂停时首帧不跑 beforeFrame：换场景时动画按第 2 帧的时钟写了一次，之后脚本重放 0.6 盖过它
@@ -1869,7 +1869,7 @@ describe("SceneHost 脚本接线", () => {
       const first = host.animations().list[0];
       expect(first).toMatchObject({ playing: true, rate: 2 });
       events.length = 0;
-      listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+      host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
       await vi.waitFor(() => expect(events).toContain("render"));
       expect(compile).toHaveBeenCalledTimes(2);
       // init 没有重跑：包装对象还是原来的，rate 与时钟接着走
@@ -2053,7 +2053,7 @@ describe("SceneHost：挂脚本又绑属性的字段，首次加载套属性值�
     onUpdate = () => undefined;
     const host = await load(scriptedBundle("visible", false), true);
     const first = renderer.sceneState;
-    listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+    host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
     await vi.waitFor(() => expect(renderer.sceneState).not.toBe(first));
     expect(imports).toBe(1);
     expect(renderer.sceneState?.layers.get(0)?.visible).toBe(true);
@@ -2068,7 +2068,7 @@ describe("SceneHost：挂脚本又绑属性的字段，首次加载套属性值�
     renderer.tick();
     expect(renderer.sceneState?.layers.get(0)?.visible).toBe(false);
     const first = renderer.sceneState;
-    listeners.get("setting-change")!({ payload: { wpeScenePostprocess: "enabled" } });
+    host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
     await vi.waitFor(() => expect(renderer.sceneState).not.toBe(first));
     // 重放脚本最近一次写回（false），不是属性值 true；之后的 update 仍写 false
     expect(renderer.sceneState?.layers.get(0)?.visible).toBe(false);

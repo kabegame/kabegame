@@ -428,6 +428,8 @@
   "slideshowPlayNext": "Autoplay forward",
   "slideshowStop": "Stop autoplay",
   "wpePropsTitle": "Wallpaper Properties",
+  "wpePreviewSettingsTitle": "Preview Settings",
+  "wpePreviewSettingsResetAll": "Reset all",
   "wpePropsResetAll": "Reset All",
   "wpePropsReset": "Reset to Default",
   "wpePropsModified": "Changed in this group",

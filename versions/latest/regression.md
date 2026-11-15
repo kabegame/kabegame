@@ -3162,3 +3162,18 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | VL3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | low 档 9 个确定性工程；medium / high / ultra / disabled 各 5–6 个（`capture_sweep`，扫完自动改回）；按抓帧时刻渲染，档位用 dev 覆盖 | 整帧只差零星 1 级 | 2026-11-15：每张最多 66 个像素、都只差 1 级（`kinds`、`scale` 与 `3837478759` 隔离工程五档逐像素相同）；HDR 的 `3287715210` 隔离工程屏蔽随时间变化的眼睛后最大差 4 级，与不带灯的底图同量级 |
 | [ ] | VL4 设置项 | Windows dev | 「场景体积光」接入预览设置字段组后，设置页与预览里切档 | 每次切换整场重新加载、光晕随档位变化 | 等预览设置的改动提交后再做 |
 | [ ] | VL5 非 Windows | macOS / Linux | 预览 `3837478759` | 同 Windows（要 `float32-filterable`） | 本机不能测 |
+
+## WPE 壁纸设置与预览设置
+
+2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WS1 单测与检查 | Windows | `deno task check -c kabegame`（vue-tsc 与 cargo check）、`apps/wpe-scene` tsc；`kabegame-core` 的 `preview_settings` 与 `kabegame` 的 `wpe_media` 单测；相关 vitest；Prettier / rustfmt | 0 error、全过 | 2026-11-15 Claude：vue-tsc 0 error；改权限文件之前 cargo check 通过，之后那次被 dev 占着 CEF 的 dll（os error 32）卡在 `cef-dll-sys` 构建脚本；core 4 个、`wpe_media` 62 个（新增预览开关 1 例）；vitest 应用 10 个文件 103 例、宿主 4 个文件 124 例、dev 插件 `scene.test.ts` 全过 |
+| [x] | WS2 预览设置读写 | Windows dev，测试工程 `bloom-off` | `set_wpe_preview_settings` 写音量 0.3、阴影 high、反射 enabled；写 `paused` | 只存 `{ volume: 0.3, shadows: "high" }`（反射等于默认值不存）、`metadataId` 变；`paused` 报「未知预览设置」；作者属性照常可读 | 2026-11-15 Claude：kabegame-dev MCP；测试行已用 `projects_remove` 移除 |
+| [x] | WS3 场景设置下发 | Windows dev，屏外宿主（`host_open`） | 宿主加载后从主窗口推 `postprocess: disabled`；再推同一份 | 第一次整场重载、探针 `recompiled` 记 `{ reason: "settings", keys: ["postprocess"] }`；第二次不重载 | 2026-11-15 Claude：结果符合；首次加载没有出现「3 s 内没收到」的 warn（dev 插件替屏外宿主回了全局设置） |
+| [ ] | WS4 设置页字段组 | Windows dev | 设置 → 壁纸：看暂停（窗口模式）、音量、倍速、媒体集成、后处理、反射、阴影；逐项改动 | 七项都在、外观同原来（后处理 / 反射分段器、阴影下拉、滑杆松手才保存）；改动后桌面壁纸跟着变，预览不变 | 要打开设置页，由用户勾 |
+| [ ] | WS5 预览右栏 | Windows dev，图库预览 | 预览场景、网页、视频壁纸各一张；改音量 / 倍速 / 后处理等；点字段组的暂停，再用右键菜单暂停 | 场景六项、网页三项（暂停、音量、媒体集成）、视频只有倍速；改动当场生效、只影响预览；字段组的暂停和右键菜单联动；换图后暂停复位、预览设置按图各自保留 | 要打开预览，由用户勾 |
+| [ ] | WS6 媒体集成分开 | Windows dev，放音乐 | 全局「媒体集成」关、某张网页壁纸的预览设置开，预览它并把它设为桌面 | 预览里有歌名封面，桌面没有；反过来亦然 | 单测覆盖了开关归属，真机未测 |
+| [ ] | WS7 应用背景强制暂停 | Windows dev | 当前壁纸分别是视频、网页、场景时打开应用背景 | 都停在一帧画面上，不空白、不动；网页开场即冻结时是否空白要看（空白就补「首帧后才冻结」） | 未测 |
+| [ ] | WS8 跟随 WPE | macOS / 清空 WPE 目录的 Windows | 设置页与预览右栏的后处理 / 反射 / 阴影 | 选项里没有「跟随 WPE」，存着的跟随显示为开启 / 开启 / 中 | 未测 |

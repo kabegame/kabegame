@@ -42,8 +42,10 @@ import {
   scenePointerIn,
   wpeSceneDisplayMessage,
   wpeScenePointerMessage,
+  wpeSceneSettingsMessage,
   wpeSceneStyleMessage,
 } from "./wpeSceneStyle";
+import { WPE_FOLLOW_SCENE_SETTINGS, type WpeSceneSettings } from "@/utils/wpeSettings";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 import { framePointerEvents } from "./framePointer";
@@ -64,8 +66,10 @@ const props = withDefaults(
     paused?: boolean;
     volume: number;
     interactive?: boolean;
+    /** 场景后处理 / 反射 / 阴影：桌面传全局「壁纸设置」，预览传这张壁纸的「预览设置」（`wpeSceneSettingsOf`） */
+    sceneSettings?: WpeSceneSettings;
   }>(),
-  { paused: false, interactive: false },
+  { paused: false, interactive: false, sceneSettings: () => WPE_FOLLOW_SCENE_SETTINGS },
 );
 const emit = defineEmits<{
   ready: [];
@@ -111,6 +115,11 @@ function postVolume() {
 
 function postStyle() {
   frame.value?.contentWindow?.postMessage(wpeSceneStyleMessage(props.styleMode), "*");
+}
+
+/** 场景设置：宿主请求时回、变了再推；宿主和上一次加载用的值比，变了才整场重载 */
+function postSceneSettings() {
+  frame.value?.contentWindow?.postMessage(wpeSceneSettingsMessage(props.sceneSettings), "*");
 }
 
 /**
@@ -167,6 +176,7 @@ function onWindowMessage(event: MessageEvent) {
   const target = frame.value?.contentWindow;
   if (!target || !event.isTrusted || event.source !== target) return;
   if (isWpeSceneStyleRequest(event.data)) {
+    postSceneSettings();
     postStyle();
     postDisplay(true);
     return;
@@ -260,6 +270,10 @@ watch(
       postDisplay();
     });
   },
+);
+watch(
+  () => [props.sceneSettings.postprocess, props.sceneSettings.reflection, props.sceneSettings.shadows].join("\n"),
+  postSceneSettings,
 );
 // 换宿主时 iframe 元素随之重建：观察新元素（observe 时会先回调一次）
 watch(

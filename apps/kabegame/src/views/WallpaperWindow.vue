@@ -15,6 +15,8 @@ import WallpaperStage from "@/components/wallpaper/WallpaperStage.vue";
 import { isPausableTarget } from "@/components/wallpaper/targetKind";
 import type { Mode, Transition, WallpaperTarget } from "@/components/wallpaper/types";
 import type { WallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
+import { useWpeFollowAvailable } from "@/composables/useWpeFollowAvailable";
+import { WPE_FOLLOW_SCENE_SETTINGS, wpeSceneSettingsOf, type WpeSceneSettings } from "@/utils/wpeSettings";
 import {
   displayModeOfTarget,
   effectiveStyle,
@@ -44,6 +46,7 @@ const state = reactive<{
   volume: number;
   playbackRate: number;
   paused: boolean;
+  sceneSettings: WpeSceneSettings;
 }>({
   target: null,
   styleMode: "fill",
@@ -54,7 +57,18 @@ const state = reactive<{
   playbackRate: 1,
   /** 设置 `wallpaperPaused`；是否真的暂停看 `stagePaused` */
   paused: false,
+  /** 全局「壁纸设置」的场景三项原值（可能是 follow）；交给 Stage 前按能否跟随 WPE 换算（`stageSceneSettings`） */
+  sceneSettings: { ...WPE_FOLLOW_SCENE_SETTINGS },
 });
+
+/** 场景三项：全局设置键 → 字段，与读它们的命令（顺序一一对应） */
+const SCENE_SETTING_KEYS = [
+  ["wpeScenePostprocess", "postprocess"],
+  ["wpeSceneReflection", "reflection"],
+  ["wpeSceneShadows", "shadows"],
+] as const;
+const SCENE_SETTING_GETTERS = ["get_wpe_scene_postprocess", "get_wpe_scene_reflection", "get_wpe_scene_shadows"];
+const followAvailable = useWpeFollowAvailable();
 
 /**
  * 后端给本窗口的布置：显示哪个壁纸目标、出不出声。启动时取一次（`get_wallpaper_window_assignment`），
@@ -113,6 +127,9 @@ function applyTargetConfig(): boolean {
 
 /** 交给 Stage 的音量：布置不出声时为 0（同一张壁纸各屏各播一份，只让主屏窗口出声）。 */
 const stageVolume = computed(() => (assignment.value?.audible === false ? 0 : state.volume));
+
+/** 交给场景宿主的三项：不能跟随 WPE 时 follow 换成 Kabegame 默认值 */
+const stageSceneSettings = computed(() => wpeSceneSettingsOf(state.sceneSettings, followAvailable.value));
 
 /** 视频、网页、场景共用设置页的「暂停壁纸」，换壁纸后仍保持；图片不受影响。 */
 const stagePaused = computed(() => state.paused && state.target !== null && isPausableTarget(state.target));
@@ -260,6 +277,11 @@ async function init() {
     if ("wallpaperPaused" in changes && typeof changes.wallpaperPaused === "boolean") {
       state.paused = changes.wallpaperPaused;
     }
+    // 场景三项（全局「壁纸设置」）：交给 Stage → WpeSceneView 推给宿主，宿主比较后决定要不要重载
+    for (const [settingKey, field] of SCENE_SETTING_KEYS) {
+      if (settingKey in changes && typeof changes[settingKey] === "string")
+        state.sceneSettings = { ...state.sceneSettings, [field]: changes[settingKey] as string };
+    }
   });
 
   // 布置变化（切显示器模式、主屏换了）：换目标后样式 / 过渡 / 当前壁纸都改读新目标。
@@ -283,14 +305,22 @@ async function init() {
 
     // 能力表只用来归一化样式 / 过渡，读不到就直接用存下来的值，不让它连累整个初始化
     const requested = targetId.value;
-    const [targetsRes, capabilitiesRes, volumeRes, playbackRateRes, pausedRes, targetRes] = await Promise.all([
-      invoke<WallpaperTargets>("get_wallpaper_targets"),
-      invoke<WallpaperCapabilities>("get_wallpaper_capabilities").catch(() => null),
-      invoke<number>("get_wallpaper_volume"),
-      invoke<number>("get_wallpaper_video_playback_rate"),
-      invoke<boolean>("get_wallpaper_paused"),
-      invoke<WallpaperTarget | null>("get_current_wallpaper_target", { target: requested }),
-    ]);
+    const [targetsRes, capabilitiesRes, volumeRes, playbackRateRes, pausedRes, targetRes, ...sceneRes] =
+      await Promise.all([
+        invoke<WallpaperTargets>("get_wallpaper_targets"),
+        invoke<WallpaperCapabilities>("get_wallpaper_capabilities").catch(() => null),
+        invoke<number>("get_wallpaper_volume"),
+        invoke<number>("get_wallpaper_video_playback_rate"),
+        invoke<boolean>("get_wallpaper_paused"),
+        invoke<WallpaperTarget | null>("get_current_wallpaper_target", { target: requested }),
+        // 场景三项读不到不连累初始化：按跟随
+        ...SCENE_SETTING_GETTERS.map((command) => invoke<string>(command).catch(() => null)),
+      ]);
+    const sceneSettings = { ...state.sceneSettings };
+    SCENE_SETTING_KEYS.forEach(([, field], index) => {
+      if (typeof sceneRes[index] === "string") sceneSettings[field] = sceneRes[index] as string;
+    });
+    state.sceneSettings = sceneSettings;
     // 赋值顺序即 WallpaperStage 各 watch 的执行顺序：样式 → 过渡 → 音量 → 倍速 → 暂停 → 目标，
     // 与原实现「先应用样式 / 音量 / 循环，再 setTarget」一致。
     targetSource.targets = targetsRes && typeof targetsRes === "object" ? targetsRes : {};
@@ -378,6 +408,7 @@ onBeforeUnmount(() => {
       :volume="stageVolume"
       :playback-rate="state.playbackRate"
       :paused="stagePaused"
+      :scene-settings="stageSceneSettings"
       interactive
     />
     <!-- 调试面板（开发模式），内容与原实现一致 -->

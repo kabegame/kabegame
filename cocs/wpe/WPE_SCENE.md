@@ -45,7 +45,7 @@
 
 读码与实测见 [rea-p13-passes](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md) 第 1、4 节与 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13b1 的实测」「P13b2 的实测」，计划与走查见 [phase-13b1-reflection-off](../../.claude/plans/wpe-import/3-scene/phase13/phase-13b1-reflection-off.md)、[phase-13b2-reflection-on](../../.claude/plans/wpe-import/3-scene/phase13/phase-13b2-reflection-on.md)。
 
-- **设置「场景反射」**（`wpeSceneReflection`：`follow` 缺省 / `disabled` / `enabled`，`get_wpe_scene_reflection` 场景宿主可读）：跟随时读 WPE `config.json` 的 `general.user.reflection`（缺键、读不到、不是布尔都当开，`compile/postprocess.ts` 的 `resolveReflection`）。WPE 这一个设置同时管平面反射与屏幕空间反射；宿主随 `setting-change` 整场重新加载。只在场景里有读者时才读 `config.json`。
+- **设置「场景反射」**（`wpeSceneReflection`：`follow` 缺省 / `disabled` / `enabled`；宿主收父页面下发的值，见「场景后处理档位」的「设置来源」）：跟随时读 WPE `config.json` 的 `general.user.reflection`（缺键、读不到、不是布尔都当开，`compile/postprocess.ts` 的 `resolveReflection`）。WPE 这一个设置同时管平面反射与屏幕空间反射；值变了宿主整场重新加载。只在场景里有读者时才读 `config.json`。
 - **两张运行时 RT**（`compile/bundle.ts` 的 `REFLECTION_RT` / `MIP_FRAMEBUFFER_RT` 进 `bindRuntime`，渲染图的纹理来源 `{ kind: "reflection" }` / `{ kind: "mip-framebuffer" }`，`render/graph.ts` 的 `runtimeInput` 统一翻译；RT 在 `render/reflection.ts` 的 `ReflectionTargets`）：
   - `_rt_Reflection`：只有**模型**的网格材质读它时才建（WPE 的触发条件），`bundle.reflection.planar`。场景目标尺寸（WPE 是窗口尺寸）、`rgba8unorm`（HDR 下也是），Clamp + Linear；反射关时每帧在主 pass 之前清成 `(clearcolor, 1)`，不看 `clearenabled`，HDR 的大于 1 的清屏色在 8 位上截到 1。同一场景里图像层 / 粒子读它绑同一张。**没有模型读、只有图像层或粒子读**时 WPE 不建，那一槽绑 6×6 黄黑棋盘格占位（编译期在全部对象编完后回改成静态纹理 `checkerIndex()`）。
   - `_rt_MipMappedFrameBuffer`：任何对象读到就建，`bundle.mipFramebuffer`。场景目标尺寸、格式跟场景目标（HDR 时 `rgba16float`），mip 数 `max(1, min(log2(npot(w)/2), log2(npot(h)/2)) − 2)`（1920×1080 为 8、1600×900 为 7），Clamp + 三线性；反射关时建好后各级清成 `(0, 0, 0, 1)` 一次、之后不动。绑它的槽的 `g_Texture<n>MipMapInfo`（float）是引擎 uniform，值为 mip 数（`features.ts` 的 `isMipMapInfoOf`），别的槽照报 `uniform:*`。
@@ -77,7 +77,7 @@
 
 读码见 [rea-p13-passes](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md) 第 2 节与 [rea-p13-shadows](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-shadows.md)（R1–R6），实测见 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13d 的实测：阴影」，计划与实施记录见 [phase-13d-shadows](../../.claude/plans/wpe-import/3-scene/phase13/phase-13d-shadows.md)。
 
-- **设置「场景阴影」**（`wpeSceneShadows`：`follow` 缺省 / `disabled` / `low` / `medium` / `high` / `ultra`，`get_wpe_scene_shadows` 场景宿主可读）：跟随时读 WPE `config.json` 的 `general.user.shadows`，缺键或读不到按 medium（`compile/postprocess.ts` 的 `resolveShadows`）。只在 `lightconfig` 要阴影时才读 `config.json`。宿主随 `setting-change` 整场重新加载（档位决定投射变体、图集尺寸与宏）。dev 覆盖 `localStorage["kabegame-dev-scene-shadows"]`（`dev/shadowsOverride.ts`，生产构建摇掉），宿主加载与 dev 探针都读，验收时不改用户设置也能按任一档位渲染；用完要删掉。
+- **设置「场景阴影」**（`wpeSceneShadows`：`follow` 缺省 / `disabled` / `low` / `medium` / `high` / `ultra`；宿主收父页面下发的值，同上）：跟随时读 WPE `config.json` 的 `general.user.shadows`，缺键或读不到按 medium（`compile/postprocess.ts` 的 `resolveShadows`）。只在 `lightconfig` 要阴影时才读 `config.json`。值变了宿主整场重新加载（档位决定投射变体、图集尺寸与宏）。dev 覆盖 `localStorage["kabegame-dev-scene-shadows"]`（`dev/shadowsOverride.ts`，生产构建摇掉），宿主加载与 dev 探针都读，验收时不改用户设置也能按任一档位渲染；用完要删掉。
 - **灯光缓冲**（`compile/lights.ts` 的 `lightFrame`）：灯光数组不再进材质常量，渲染器每帧（相机与脚本之后）按 WPE 的规则排序——类型升序、`castshadow | usecookie` 降序、局部原点 · `g_ViewForward` 升序——再按 WPE 的平铺布局写整块缓冲：带阴影的灯占前几个槽，多出来的投射灯被普通灯覆盖（`p13d-over`），没有灯的槽全 0。阴影计数照 WPE：档位为 0 时只读 `spotshadowcookie`（并进 `spotcookie`），其余阴影计数不读。
 - **阴影宏**：阴影计数之和非 0 时 `LIGHTS_SHADOW_MAPPING = 1`、`LIGHTS_SHADOW_MAPPING_QUALITY = 档位`（1 low … 4 ultra；1 是单次比较，2 起 9 次采样）。翻译器按 WPE 的生成器展开点光、平行光的阴影分支，平行光的级联下标照抄 WPE 的 `B0 + k + c`（两盏以上读错，语料依赖的 WPE 缺陷照抄）；聚光的阴影 / cookie 照报。
 - **阴影图集**（`render/shadows.ts` 的 `ShadowAtlas`、`render/shadowMath.ts`）：`_rt_shadowAtlas` 是 `depth32float`、每帧清 0（反向 Z），比较采样器 GREATER、线性、clamp（WebGPU 没有 BORDER，越界的边框由翻译器的 `kb_shadowCompare` 处理）。方块边长 low / medium 256、high 512、ultra 1024：点光一块 2×3 个面（S/2 × S/3），平行光三级联各一块；打包点光优先、再按大小降序，8192 宽一行，图集只在不够时变大（「够就不动」）。点光六个面的 fov 94 / 94 / 92 / 91.2°（按档位），近平面正交场景 1、透视场景 `max(0.05, lightsourcesize)`，远平面 `max(radius, near + 0.01)`；阴影 pass 的投影 `P32 −= 0.00333`，uniform 不带。平行光级联 `(a, b) = (cd0, 4cd1)`、`(cd1, 4cd1)`、`(cd2, max(1.5cd2, 4cd1))`，视图照 R3 逐步 float32（快速倒数平方根、`fmodf` 防抖），阴影 pass 的 `VP[3][2] −= 0.0005`。投影与方块变换每帧写进同一块灯光缓冲（`g_LFeature_*`）。
@@ -220,7 +220,16 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **跟随 WPE**（默认）：只读 `<WPE 安装目录>/config.json`（由 `sceneAssets` 的上一级定位，与 assets、`ui_` 词条同一套 `wpe::discover::engine_dir`），取第一个 Steam 用户的 `general.user.postprocessing`。WPE 只认 `disabled` / `ultra` / `displayhdr`，其它非空值当「开启」，缺失或读不到当 `disabled`；`displayhdr` 按「超高」处理（我们输出到普通画布）。
 - **场景实际状态**：泛光 = 档位不是关闭，且 `general.bloom` 的生效值不是 false（缺键即开；写成属性对象时取绑定属性的当前值，没有绑定取对象的 `value`）；HDR = 档位为超高，且 `general.bloom`、`general.hdr` 的生效值都是 true（规则同泛光，缺键不算）。G3 曾推断属性对象不算，工坊 3286859278（`bloom` 为 `{user: "postprocessing", value: true}`）的超高档抓帧证伪了这一点：WPE 照样走 HDR。
 - **泛光参数**：`bloomstrength` / `bloomthreshold` / `bloomtint` / `bloomhdrstrength` / `bloomhdrthreshold` / `bloomhdrfeather` / `bloomhdrscatter` / `bloomhdriterations`，缺键依次取 2 / 0.65 / (1, 1, 1) / 2 / 1 / 0.1 / 1.619 / 8（WPE 场景构造函数），属性对象取生效值（`postprocess.ts` 的 `bloomParams`）。
-- **重新判定**：每次加载都解析档位；`WpeSceneView` 每次重载经 IPC 读设置，并订阅 `setting-change`，`wpeScenePostprocess` 变了就重新加载（壁纸窗口不装 settings store，组件自己读）。WPE 自己的设置改了要等下一次加载才生效。
+- **设置来源**（后处理、反射、阴影三项一起）：宿主不读设置，由父页面 `WpeSceneView` 经 postMessage 下发
+  `{ type: "kabegame:wpe-scene-settings", postprocess, reflection, shadows }`：宿主启动时的样式请求（`kabegame:wpe-scene-style-request`）
+  一并回它，值变了再主动推（`sceneStyle.ts` 的 `listenSceneParent` → `SceneHost.setSceneSettings`）。桌面壁纸窗口传全局「壁纸设置」
+  （`WallpaperWindow.vue` 读三个全局键并跟 `setting-change`），预览与应用背景传这张壁纸的「预览设置」（metadata 的 `previewSettings`，
+  见 [WPE_IMPORT.md](WPE_IMPORT.md)「壁纸设置与预览设置」）。不能跟随 WPE（不是 Windows，或读不到 `config.json`）时父页面已把 `follow`
+  换成 Kabegame 默认值（`enabled` / `enabled` / `medium`），宿主只在能跟随时才解析 `follow`。
+- **重新判定**：首次加载等父页面的第一条设置（在 iframe 里最多等 3 s，等不到按跟随并记 warn；不在 iframe 里不等）；之后每条和上一次
+  加载用的值比，变了才整场重新加载，几项一起变只加载一次，探针 `stats().recompiled` 记 `{ reason: "settings", keys }`（键是
+  `postprocess` / `reflection` / `shadows`）。dev 工具直接开的屏外宿主由 `scripts/kabegame-dev/scene.ts` 在主页面里替它回全局设置。
+  WPE 自己的设置改了要等下一次加载才生效。
 
 `compileSceneInWorker(input)` 在主线程建立 module Worker，先把 wasm 编译成可克隆的 `WebAssembly.Module`，再发 `start`。Worker 以带 `id` 的 `file` 消息请求 `range` / `whole`，主线程执行 fetch 并用 `file-result` 回传 transferable 字节；读取失败时回传错误的类型名与消息（`protocol.ts` 的 `encodeFileError` / `decodeFileError`），Worker 端还原成同类型，`SceneFs` 才能把 `TypeError: Failed to fetch` 认作「不存在、查下一个来源」。Worker 完成后以 `done` 回传 bundle 与所有 mip 的 ArrayBuffer；错误用 `error`。`AbortSignal` 取消时终止 Worker。Worker 不直接访问 `file:`。
 
@@ -249,7 +258,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 组件 `apps/kabegame/src/components/wallpaper/WpeSceneView.vue` 是自取数据的子组件，地位等同 web 层的 iframe（接进 `WallpaperStage` 的方式见下一节）：
 - **props**：`target`、`paused`、`interactive`。
 - **数据**：宿主的 `SceneHost` 接收垫片 `applyUserProperties`（`user[key].value` 组成 `userProperties`）、在 Worker 里编译、建渲染器。
-- **重载**：垫片监听本张图的 `metadataId` 字段补丁并只交付变化键，`SceneHost` 的**应用函数**按绑定表分成就地写与重编译（P3a，见「属性与快速路径」）；只有重编译才在同一设备上换场景，时钟不重置。监听 `setting-change` 的 `wpeScenePostprocess`，档位变了也重新加载；每次重载都经 `get_wpe_scene_postprocess` 读一次设置。
+- **重载**：垫片监听本张图的 `metadataId` 字段补丁并只交付变化键，`SceneHost` 的**应用函数**按绑定表分成就地写与重编译（P3a，见「属性与快速路径」）；只有重编译才在同一设备上换场景，时钟不重置。父页面下发的后处理 / 反射 / 阴影变了也重新加载（见「场景后处理档位」的「设置来源」）。
 - **纹理缓存**：FreeImage 纹理的解码结果按目标缓存（`TextureDecodeCache`），改属性重编译不再解码 4K PNG；换目标或卸载时释放。
 - **dev 强制渲染（D4）**：dev 构建下 `localStorage["kabegame-dev-scene-force-render"] = "1"`（主窗口与壁纸窗口同源共用）时，有不支持项也照常编译、解码并渲染（渲染器自查仍生效），日志里列出不支持项；用来看半成品的构图，例如 bedroom 的脚本颜色按 `value` 静态显示。
 - **emit**：渲染出第一帧 `ready`；不能渲染 `fallback(reasons)`。
@@ -356,7 +365,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - `g_RenderVar0` = (tx, ty, −tx, −ty)：下采样取**源**纹素、上采样取**目标**纹素，按**名义**尺寸算（第 i 级 2^(i+1) / W），不随 RT 取整变。
   - 参数（`hdrBloomConstants`，float32 逐步计算，与抓帧常量逐位相等）：`bloomstrength` = (hdrstrength / (1 + scatter^(max(N, 2) − 2)), scatter)，`blend` = (t, t − k, 2k, 0.25 / (k + 1e−5))（k = t · feather），`scatter` 写给两个上采样材质，`bloomtint` 原样。
   - **收尾**：WPE 在 SDR 显示上用 `combine_hdr_upsample` 输出 `saturate(lin(scene + bloom)) · RV0.x`（RV0.x = 1）到 FP16 线性交换链。我们的画布是 8 位、按编码值显示，用同一份 `combine_hdr` 的 `LINEAR=1` 变体 `combine_hdr_upsample_linear`（也是 WPE 原件）输出 `saturate(scene + bloom)`：sRGB 编码是 `lin()` 的精确反函数，两者单调且把 [0, 1] 映到 [0, 1]，所以 encode(saturate(lin(x))) = saturate(x)，在画布上逐值相等，还省掉 pow 往返与 cover 时的编码。之后 cover 把 FP16 目标写进 8 位画布。
-- **档位切换**：`WpeSceneView` 收到 `setting-change` 后整场重编译，`GpuScene` 按新的 HDR 状态重建场景目标格式；预览、应用背景与桌面用同一个设置（D13），不为预览降档。
+- **档位切换**：宿主收到父页面下发的新档位后整场重编译，`GpuScene` 按新的 HDR 状态重建场景目标格式。桌面用全局「壁纸设置」，预览与应用背景用这张壁纸的「预览设置」（推翻 D13 的「预览、应用背景与桌面用同一个设置」），不为预览降档。
 - **泛光参数就地改**（P3a）：`bloomstrength` / `bloomthreshold` / `bloomtint` / `bloomhdrstrength` / `bloomhdrthreshold` / `bloomhdrfeather` / `bloomhdrscatter` 绑用户属性时就地重算 `BloomChain` 各 pass 的常量并重写 uniform（`BloomChain.setParams`，按 `hdrBloomConstants` 同一套 float32 换算，单测核对与重新建链逐字节相同）。
 - **级数就地**（P3c）：金字塔总是建满全部可用级，每帧只用前 N 级。绘制按步骤身份（pass + 输入 + 目标）去重，8 级共 21 个，`setParams` 取出这一级数要用的绘制。每帧下采样整张覆盖，改级数不残留。
 - **开关就地**（P3c）：`general.bloom` 是场景位 `SceneState.bloomEnabled`，不含档位，脚本读到的也是它。档位关闭时没有链，位怎么变都没有效果，和 WPE 一致。写死 `bloom: false` 的场景也没有链，被脚本打开时走整场重编译；WPE 这里同帧生效，这是有意的差异，换来带脚本的场景不多占显存。
@@ -468,7 +477,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **IPC**：两份 capability 叠加。
   - 网页壁纸的 `wpe-web-capability`（`file:///*`）同样匹配宿主，网页壁纸的命令与事件宿主都有：`wallpaper_pong`、`setting-change` / `image-changed` / `images-change` / `wallpaper-ping` 监听。垫片拉 `wpe_web_pull_state` 时带 `kbScene` 的 `imageId`；后端只在调用方是宿主入口且 id 是库内场景壁纸时接受，返回与网页壁纸同形的 `user`，`directories` 为空；返回前按同一份 metadata 覆盖这张场景的 `scenetexture` 放行（P11b）。普通网页壁纸仍按文档目录认图，忽略传入的 id。
   - 暂停与音量沿用父页面到垫片的 `kabegame:wpe-volume` 消息，新增 `paused`；垫片只在值变化时调 `setPaused`，首次全量属性交付前就已暂停的，交付后补调一次 `setPaused(true)`。`SceneHost` 首次属性包到达后才加载，渲染完成后经 `wpe_scene_report` 报 `ready`，日志经同一命令进入应用日志。
-  - 场景专用命令：`init_pre` 里 `add_capability` 注册 `wpe-scene-host-capability`，`remote.urls` 只有宿主 `index.html` 的确切地址（URLPattern 特殊字符逐个转义），不用路径通配；`frames: "sub"`，窗口是 main 与壁纸窗口 label 池（`wallpaper::WALLPAPER_LABELS`，每块屏一个壁纸窗口）；放行 `get_wpe_scene_postprocess`、`wpe_scene_target`（场景目录与 `sceneAssets`）和 `wpe_scene_report`（`ready` / `fallback` 以 `wpe-scene-status` 事件回到调用方窗口，带实例号；`log` 写 tracing）。
+  - 场景专用命令：`init_pre` 里 `add_capability` 注册 `wpe-scene-host-capability`，`remote.urls` 只有宿主 `index.html` 的确切地址（URLPattern 特殊字符逐个转义），不用路径通配；`frames: "sub"`，窗口是 main 与壁纸窗口 label 池（`wallpaper::WALLPAPER_LABELS`，每块屏一个壁纸窗口）；放行 `wpe_scene_target`（场景目录与 `sceneAssets`）和 `wpe_scene_report`（`ready` / `fallback` 以 `wpe-scene-status` 事件回到调用方窗口，带实例号；`log` 写 tracing）。
 
 ### 属性与快速路径（P3a）
 

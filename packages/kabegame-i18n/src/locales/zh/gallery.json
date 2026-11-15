@@ -431,6 +431,8 @@
   "slideshowPlayNext": "向后自动播放",
   "slideshowStop": "停止自动播放",
   "wpePropsTitle": "壁纸属性",
+  "wpePreviewSettingsTitle": "预览设置",
+  "wpePreviewSettingsResetAll": "全部恢复默认",
   "wpePropsResetAll": "全部重置",
   "wpePropsReset": "恢复默认",
   "wpePropsModified": "本组有改动",

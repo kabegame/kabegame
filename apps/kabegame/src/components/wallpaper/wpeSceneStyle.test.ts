@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   WPE_SCENE_DISPLAY,
   WPE_SCENE_POINTER,
+  WPE_SCENE_SETTINGS,
   WPE_SCENE_STYLE,
   WPE_SCENE_STYLE_REQUEST,
   displayScaleOf,
@@ -12,6 +13,7 @@ import {
   scenePointerIn,
   wpeSceneDisplayMessage,
   wpeScenePointerMessage,
+  wpeSceneSettingsMessage,
   wpeSceneStyleMessage,
 } from "./wpeSceneStyle";
 
@@ -28,6 +30,18 @@ describe("wpeSceneStyle", () => {
   it("宿主的开场指针字面量与这里一致（P5a 收尾）", () => {
     const source = readFileSync(path.resolve(__dirname, "../../../../wpe-scene/src/sceneStyle.ts"), "utf8");
     expect(source).toContain(`SCENE_POINTER_MESSAGE = "${WPE_SCENE_POINTER}"`);
+  });
+
+  it("宿主的场景设置字面量与字段名与这里一致", () => {
+    const source = readFileSync(path.resolve(__dirname, "../../../../wpe-scene/src/sceneStyle.ts"), "utf8");
+    expect(source).toContain(`SCENE_SETTINGS_MESSAGE = "${WPE_SCENE_SETTINGS}"`);
+    for (const field of ["postprocess", "reflection", "shadows"]) expect(source).toContain(`data.${field}`);
+    expect(wpeSceneSettingsMessage({ postprocess: "enabled", reflection: "disabled", shadows: "low" })).toEqual({
+      type: WPE_SCENE_SETTINGS,
+      postprocess: "enabled",
+      reflection: "disabled",
+      shadows: "low",
+    });
   });
 
   it("识别样式请求", () => {
