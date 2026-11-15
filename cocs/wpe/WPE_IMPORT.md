@@ -654,11 +654,12 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
 
 ### 预览放大
 
-2026-11-15 起，图库预览里的网页与场景壁纸和图片一样能放大（视频壁纸在预览里按视频播放，放大以后再做）。计划见
-`.claude/plans/wpe-import/phase-preview-zoom.md`。
+2026-11-15 起，图库预览里的网页与场景壁纸、视频（普通视频与视频壁纸，`x-wpe/video` 在预览里按普通视频播放）都和图片一样能放大。
+预览放大没有单独的文档，普通视频也写在这里。计划见 `.claude/plans/wpe-import/phase-preview-zoom.md`（壁纸）与
+`phase-preview-video-zoom.md`（视频）。
 
-- **和图片共用一个 Panzoom**：`ImagePreviewDialog` 只有一个 `usePanzoomPreview`。壁纸分支包住 `WallpaperPreviewCanvas` 的那层 div 也挂
-  `panzoomWrapperRef`（和图片分支互斥，换元素即重建实例）。所以下面这些和图片完全一样：
+- **和图片共用一个 Panzoom**：`ImagePreviewDialog` 只有一个 `usePanzoomPreview`。壁纸分支包住 `WallpaperPreviewCanvas` 的那层 div、
+  视频分支包住 `ImageContent` 的那层 div 也挂 `panzoomWrapperRef`（三支互斥，换元素即重建实例）。所以下面这些和图片完全一样：
   - 工具条：−、+、滑块、百分比、全屏；
   - Ctrl+滚轮缩放，单独滚轮在放大后平移、不缩放；
   - 抽屉开关、拖宽、全屏、容器尺寸变化时复位。
@@ -680,10 +681,26 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   `sceneDisplayScale(实测, zoom)`，放大时最多到 1（布局 × DPR），见 [WPE_SCENE.md](WPE_SCENE.md)「预览画布尺寸」。网页壁纸不处理：
   iframe 内容由 Chromium 按变换栅格化，页面自己的 canvas（WebGL 等）按页面定的分辨率被浏览器拉伸。
 - **设封面**：不复位，截看得见的那一块（见下「封面」）。
-- **已知副作用**：
+- **视频**（普通视频与视频壁纸）：
+  - `<video>` 收真实鼠标，不盖覆盖层，Panzoom 自己平移（左、中、右键都会开始平移，Panzoom 不分按键，同图片）；放大后关掉原生拖出
+    （`native-drag="!panzoomCanPan"`，同图片）。
+  - **拖过之后的点击不算数**：视频上单击是播放 / 暂停（`VideoControls` 听 `<video>` 的 click），放大后拖动、松开时浏览器照样派发
+    click。`usePanzoomPreview` 在 Panzoom 层上挂捕获阶段的 `pointerdown` / `click`：按下时拖得动才记位置，松开处离按下点超过 4 px
+    （`CLICK_AFTER_PAN_SLOP`）就在捕获阶段拦掉；没放大时、原地单击照常。图片上的点击没有动作，壁纸的鼠标落在变换层外的覆盖层上，
+    都不受影响。
+  - **双击不再全屏**（2026-11-15 去掉）：双击就是两次单击，全屏只走控制条的按钮。
+  - **控制条的缩放按钮**：在音量与全屏之间，没放大时是放大镜、放大后显示百分比；悬停弹出竖向滑块（100–1000，同图片），点按钮回到
+    100%。`VideoControls` 只显示和发事件（`zoom` 进，`zoom-drag-start` / `zoom-input` / `zoom-commit` / `zoom-reset` 出），弹窗复用
+    图片缩放滑块的处理；音量与缩放两个悬停面板共用 `useHoverPanel`；拖缩放滑块或面板展开时控制条不自动隐藏。
+  - **就绪时不复位**：视频的 `ready` 挂在 `canplay` 上，拖进度条、循环回到开头都会再触发，所以 `handlePreviewReady` 对视频跳过；
+    视频换视频由换图的 watch 复位。
+  - **清晰度**：`<video>` 是合成器里的视频层，CSS 缩放直接拿解码后的帧缩放，源分辨率以内都是真实像素，不用另外处理。
+- **拖动范围含留白**：被放大的是铺满预览区的那层，内容按 `contain` 居中，放大后能把上下或左右的留白拖进视野；图片、壁纸、视频一致。
+- **预期行为**（用户 2026-11-15 定为不算问题、不修）：
   - 放大后壁纸延伸到侧栏下面（被裁掉、看不见）。真实光标在侧栏上时注入的点仍落在 frame 里：移动照常，在侧栏上点击也会注入进
-    壁纸视野外的位置（「点击不加闸门、允许重叠」的延伸；要避免可以加窗口级点击区域，没做）。
+    壁纸视野外的位置（「点击不加闸门、允许重叠」的延伸）。
   - 光标出了窗口时注入点钳到 frame 的边界，放大后这条边界可能在视野之外，视差、跟随鼠标的粒子停在视野外那条边上。
+- **已知副作用**：
   - 放大后设的封面，宽高比跟可见区域走，不一定是壁纸的比例。
   - Linux 没有覆盖层：壁纸上的滚轮、拖动进了 iframe，只有留白处（Panzoom 自己的左键平移）与工具条能缩放 / 平移。
 
@@ -990,9 +1007,9 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
   - `third-patches/cef/11-frame-mouse-injection.patch`、`third-patches/cef-rs/09-frame-mouse-injection-bindings.patch`；
   - `wpe_shim.js` 的 `setPointerAttached`；
   - `apps/kabegame/src/components/wallpaper/framePointer.ts`、`WallpaperPointerOverlay.vue`（覆盖层）。
-- 预览放大：`apps/kabegame/src/composables/usePanzoomPreview.ts`（`startPan` / `endPan`）、`components/wallpaper/WallpaperPointerOverlay.vue`
+- 预览放大：`apps/kabegame/src/composables/usePanzoomPreview.ts`（`startPan` / `endPan`、拖过之后的点击）、`components/wallpaper/WallpaperPointerOverlay.vue`
   （平移规则）、`WallpaperPreviewCanvas.vue`（`zoom` 的 provide、截取区域求交）、`wpeSceneStyle.ts` 的 `sceneDisplayScale`、
-  `common/ImagePreviewDialog.vue`（壁纸分支的 Panzoom 层）。
+  `common/ImagePreviewDialog.vue`（壁纸、视频分支的 Panzoom 层）、`common/VideoControls.vue`（视频的缩放按钮）。
 - `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
   `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`App.vue`（背景层）、`utils/mediaMime.ts`
 - 壁纸窗口 ping 看门狗：`src-tauri/kabegame/src/wallpaper/ping.rs`、`wallpaper/window.rs`（生命周期与重载清理）、

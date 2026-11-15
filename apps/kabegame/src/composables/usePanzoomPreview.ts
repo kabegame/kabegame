@@ -20,6 +20,8 @@ const DEFAULT_START_SCALE = 1;
 const WHEEL_DELTA_LINE = 1;
 const WHEEL_DELTA_PAGE = 2;
 const WHEEL_LINE_HEIGHT = 16;
+/** 平移过的拖动松开时不再算一次点击：松开处离按下点超过这个距离（CSS px）就拦 */
+const CLICK_AFTER_PAN_SLOP = 4;
 
 const DEFAULT_OPTIONS: PanzoomOptions = {
   contain: "outside",
@@ -37,6 +39,7 @@ const DEFAULT_OPTIONS: PanzoomOptions = {
  * 暴露 wrapperRef、handleWheel、reset、destroy，并驱动 onPanzoomStart/End 回调。
  * 网页 / 场景壁纸也用这一个实例（和图片分支互斥，换元素即重建）：壁纸上盖着覆盖层，Panzoom 自己的指针绑定碰不到，
  * 平移的起止由覆盖层经 startPan / endPan 决定（`WallpaperPointerOverlay`）。
+ * 视频也用这一个实例：`<video>` 收真实鼠标，Panzoom 自己平移；拖过之后的那次点击在这里拦掉（视频上单击是播放 / 暂停）。
  */
 export function usePanzoomPreview(visible: Ref<boolean>, enabled: Ref<boolean>, options?: UsePanzoomPreviewOptions) {
   const wrapperRef = ref<HTMLElement | null>(null);
@@ -75,6 +78,24 @@ export function usePanzoomPreview(visible: Ref<boolean>, enabled: Ref<boolean>, 
     event.stopPropagation();
   };
 
+  /** 按下时拖得动才记下位置（没放大时拖不动，单击照常） */
+  let panDownPoint: { x: number; y: number } | null = null;
+  const handlePointerDownCapture = (event: PointerEvent) => {
+    panDownPoint = canPan.value ? { x: event.clientX, y: event.clientY } : null;
+  };
+
+  /**
+   * 视频上单击是播放 / 暂停（`VideoControls` 听 `<video>` 的 click），放大后拖动平移、松开时浏览器照样派发 click。
+   * 在 Panzoom 层的捕获阶段拦掉，到不了里面的元素。原地单击（不超过阈值）照常；图片上的点击本来没有动作。
+   */
+  const handleClickCapture = (event: MouseEvent) => {
+    const start = panDownPoint;
+    panDownPoint = null;
+    if (!start || Math.hypot(event.clientX - start.x, event.clientY - start.y) <= CLICK_AFTER_PAN_SLOP) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
   const handlePanzoomStart = () => {
     options?.onPanzoomStart?.();
   };
@@ -94,7 +115,10 @@ export function usePanzoomPreview(visible: Ref<boolean>, enabled: Ref<boolean>, 
       instanceEl.removeEventListener("panzoomstart", handlePanzoomStart);
       instanceEl.removeEventListener("panzoomend", handlePanzoomEnd);
       instanceEl.removeEventListener("panzoomchange", handlePanzoomChange);
+      instanceEl.removeEventListener("pointerdown", handlePointerDownCapture, true);
+      instanceEl.removeEventListener("click", handleClickCapture, true);
     }
+    panDownPoint = null;
     if (instance) {
       instance.destroy();
       instance = null;
@@ -120,6 +144,9 @@ export function usePanzoomPreview(visible: Ref<boolean>, enabled: Ref<boolean>, 
     el.addEventListener("panzoomstart", handlePanzoomStart);
     el.addEventListener("panzoomend", handlePanzoomEnd);
     el.addEventListener("panzoomchange", handlePanzoomChange);
+    // 捕获阶段：先于 Panzoom 自己的 pointerdown（它在拖得动时 stopPropagation）与里面元素的 click
+    el.addEventListener("pointerdown", handlePointerDownCapture, true);
+    el.addEventListener("click", handleClickCapture, true);
   };
 
   watch(

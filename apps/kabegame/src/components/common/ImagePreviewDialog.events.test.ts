@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { flushPromises, shallowMount } from "@vue/test-utils";
-import { ref } from "vue";
+import { ref, type Ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImagePreviewDialog from "./ImagePreviewDialog.vue";
 import { FAVORITE_ALBUM_ID, HIDDEN_ALBUM_ID } from "@/services/albums";
@@ -54,24 +54,27 @@ vi.mock("@vueuse/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@vueuse/core")>()),
   useLocalStorage: (_key: string, value: unknown) => ref(value),
 }));
-/** 缩放的桩：几个方法是共用的 spy，用例里读 */
+/** 缩放的桩：几个方法是共用的 spy，用例里读；缩放倍数与拖不拖得动每个用例新建（beforeEach），用例里改 */
 const panzoom = vi.hoisted(() => ({
   handleWheel: vi.fn(),
   reset: vi.fn(),
+  zoomTo: vi.fn(),
   startPan: vi.fn(() => false),
   endPan: vi.fn(),
+  scale: null as unknown as Ref<number>,
+  canPan: null as unknown as Ref<boolean>,
 }));
 vi.mock("@/composables/usePanzoomPreview", () => ({
   usePanzoomPreview: () => ({
     wrapperRef: ref(null),
-    scale: ref(1),
-    canPan: ref(false),
+    scale: panzoom.scale,
+    canPan: panzoom.canPan,
     handleWheel: panzoom.handleWheel,
     reset: panzoom.reset,
     destroy: vi.fn(),
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
-    zoomTo: vi.fn(),
+    zoomTo: panzoom.zoomTo,
     startPan: panzoom.startPan,
     endPan: panzoom.endPan,
   }),
@@ -82,6 +85,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   panzoom.handleWheel.mockReset();
   panzoom.reset.mockReset();
+  panzoom.zoomTo.mockReset();
+  panzoom.scale = ref(1);
+  panzoom.canPan = ref(false);
   fetchImageById.mockReset().mockImplementation(async (id: string) => ({ id, localPath: `/${id}.jpg` }));
   invoke.mockReset().mockResolvedValue(undefined);
   confirm.mockReset().mockResolvedValue("confirm");
@@ -346,6 +352,56 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
     expect(menu(wrapper).props("visible")).toBe(true);
     expect(menu(wrapper).props("position")).toEqual({ x: 320, y: 180 });
     expect(menu(wrapper).props("actions")).toBe(wrapper.props("actions"));
+  });
+});
+
+describe("视频预览的缩放", () => {
+  const slot = { template: "<div><slot /></div>" };
+  async function videoFixture() {
+    fetchImageById.mockImplementation(async (id: string) => ({ id, localPath: `/${id}.mp4`, type: "video/mp4" }));
+    return fixture({ KbResizable: slot, PreviewControlBar: slot });
+  }
+  const controls = (wrapper: ReturnType<typeof shallowMount>) => wrapper.findComponent({ name: "VideoControls" });
+
+  it("视频上的滚轮交给缩放（同图片：Ctrl+滚轮缩放、滚轮平移）", async () => {
+    const wrapper = await videoFixture();
+    await wrapper.find(".preview-container").trigger("wheel", { deltaY: -100, ctrlKey: true });
+    expect(panzoom.handleWheel).toHaveBeenCalledOnce();
+  });
+
+  it("切到另一个视频时复位；视频就绪（拖进度条、循环都会再触发）不复位", async () => {
+    const wrapper = await videoFixture();
+    panzoom.reset.mockClear();
+    wrapper.findComponent(ImageContent).vm.$emit("ready");
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(panzoom.reset).not.toHaveBeenCalled();
+    await wrapper.setProps({ image: "next" });
+    await flushPromises();
+    expect(panzoom.reset).toHaveBeenCalled();
+  });
+
+  it("放大后关掉原生拖出（同图片）", async () => {
+    const wrapper = await videoFixture();
+    expect(wrapper.findComponent(ImageContent).props("nativeDrag")).toBe(true);
+    panzoom.canPan.value = true;
+    await flushPromises();
+    expect(wrapper.findComponent(ImageContent).props("nativeDrag")).toBe(false);
+  });
+
+  it("控制条拿缩放百分比，滑块与按钮的事件接到缩放", async () => {
+    const wrapper = await videoFixture();
+    expect(controls(wrapper).props("zoom")).toBe(100);
+    panzoom.scale.value = 2.5;
+    await flushPromises();
+    expect(controls(wrapper).props("zoom")).toBe(250);
+    controls(wrapper).vm.$emit("zoom-drag-start");
+    controls(wrapper).vm.$emit("zoom-input", 300);
+    controls(wrapper).vm.$emit("zoom-commit", 400);
+    expect(panzoom.zoomTo.mock.calls).toEqual([[3], [4]]);
+    panzoom.reset.mockClear();
+    controls(wrapper).vm.$emit("zoom-reset");
+    expect(panzoom.reset).toHaveBeenCalledOnce();
   });
 });
 

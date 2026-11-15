@@ -29,7 +29,7 @@
       <div class="time-text">{{ displayTime }}</div>
     </div>
 
-    <div class="volume-wrap" @mouseenter="handleVolumeEnter" @mouseleave="handleVolumeLeave">
+    <div class="hover-panel-wrap" @mouseenter="volumePanel.enter" @mouseleave="volumePanel.leave">
       <button class="control-btn" type="button" aria-label="Mute" @click="toggleMute">
         <svg v-if="!isMuted" viewBox="0 0 24 24" aria-hidden="true">
           <path
@@ -42,10 +42,10 @@
         </svg>
       </button>
       <div
-        class="volume-panel"
-        :class="{ visible: volumePanelVisible }"
-        @mouseenter="handleVolumeEnter"
-        @mouseleave="handleVolumeLeave"
+        class="slider-panel"
+        :class="{ visible: volumePanel.active.value }"
+        @mouseenter="volumePanel.enter"
+        @mouseleave="volumePanel.leave"
         @click.stop
       >
         <PreviewRangeSlider
@@ -56,6 +56,38 @@
           aria-label="Volume"
           vertical
           @update:model-value="handleVolumeInput"
+        />
+      </div>
+    </div>
+
+    <!-- 缩放（预览放大，和图片同一个 Panzoom）：没放大时是放大镜，放大后显示百分比；悬停出竖向滑块，点按钮回到 100% -->
+    <div v-if="zoom != null" class="hover-panel-wrap" @mouseenter="zoomPanel.enter" @mouseleave="zoomPanel.leave">
+      <button
+        class="control-btn zoom-btn"
+        type="button"
+        :aria-label="t('gallery.zoomRatio')"
+        @click="emit('zoom-reset')"
+      >
+        <ZoomIn v-if="zoomPercent === 100" />
+        <span v-else class="zoom-btn-text">{{ zoomPercent }}%</span>
+      </button>
+      <div
+        class="slider-panel"
+        :class="{ visible: zoomPanel.active.value }"
+        @mouseenter="zoomPanel.enter"
+        @mouseleave="zoomPanel.leave"
+        @click.stop
+      >
+        <PreviewRangeSlider
+          :model-value="zoomPercent"
+          :min="100"
+          :max="1000"
+          :step="1"
+          :aria-label="t('gallery.zoomRatio')"
+          vertical
+          @drag-start="handleZoomDragStart"
+          @update:model-value="handleZoomInput"
+          @change="handleZoomCommit"
         />
       </div>
     </div>
@@ -79,6 +111,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useLocalStorage } from "@vueuse/core";
+import { ZoomIn } from "@lucide/vue";
+import { useI18n } from "@kabegame/i18n";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 
@@ -88,13 +122,22 @@ const props = withDefaults(
     /** When false, hide play/pause button (e.g. preview dialog: video always plays, no pause to avoid white frame). */
     showPlayPause?: boolean;
     isFullscreen?: boolean;
+    /** 当前缩放百分比（100–1000，预览弹窗的 Panzoom）；不传不显示缩放按钮 */
+    zoom?: number | null;
   }>(),
-  { showPlayPause: true, isFullscreen: false },
+  { showPlayPause: true, isFullscreen: false, zoom: null },
 );
 
 const emit = defineEmits<{
   (e: "toggle-fullscreen", event?: MouseEvent): void;
+  (e: "zoom-drag-start"): void;
+  (e: "zoom-input", percent: number): void;
+  (e: "zoom-commit", percent: number): void;
+  /** 点缩放按钮：回到 100% */
+  (e: "zoom-reset"): void;
 }>();
+
+const { t } = useI18n();
 
 const barRef = ref<InstanceType<typeof PreviewControlBar> | null>(null);
 const isPlaying = ref(false);
@@ -108,9 +151,8 @@ const volume = ref(1);
 const lastVolume = ref(storedVolume.value > 0 ? storedVolume.value : 1);
 const isSeekDragging = ref(false);
 const seekDraftTime = ref<number | null>(null);
-const volumePanelActive = ref(false);
+const zoomDragging = ref(false);
 
-let volumePanelTimer: ReturnType<typeof setTimeout> | null = null;
 let progressRaf: number | null = null;
 let currentVideo: HTMLVideoElement | null = null;
 
@@ -149,15 +191,6 @@ const seekPercent = computed(() => {
   if (!duration.value) return 0;
   return Math.min(100, Math.max(0, (effectiveCurrentTime.value / duration.value) * 100));
 });
-const keepVisible = computed(() => isSeekDragging.value || volumePanelActive.value);
-const volumePanelVisible = computed(() => volumePanelActive.value);
-
-const clearVolumePanelTimer = () => {
-  if (!volumePanelTimer) return;
-  clearTimeout(volumePanelTimer);
-  volumePanelTimer = null;
-};
-
 const showControls = () => {
   barRef.value?.show();
 };
@@ -165,6 +198,45 @@ const showControls = () => {
 const scheduleHideControls = (delay = 1000) => {
   barRef.value?.scheduleHide(delay);
 };
+
+/** 悬停面板（音量、缩放各一个）：进入即显示，离开 180 ms 后收起（移到面板上不收） */
+function useHoverPanel() {
+  const active = ref(false);
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const clear = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    timer = null;
+  };
+  const enter = () => {
+    clear();
+    active.value = true;
+    showControls();
+  };
+  const leave = () => {
+    clear();
+    timer = setTimeout(() => {
+      active.value = false;
+      timer = null;
+      scheduleHideControls(1000);
+    }, 180);
+    scheduleHideControls(1000);
+  };
+  const reset = () => {
+    clear();
+    active.value = false;
+  };
+  return { active, enter, leave, reset };
+}
+
+const volumePanel = useHoverPanel();
+const zoomPanel = useHoverPanel();
+
+const keepVisible = computed(
+  () => isSeekDragging.value || volumePanel.active.value || zoomDragging.value || zoomPanel.active.value,
+);
+
+const zoomPercent = computed(() => Math.min(1000, Math.max(100, Math.round(props.zoom ?? 100))));
 
 const stopProgressRaf = () => {
   if (progressRaf == null) return;
@@ -249,9 +321,7 @@ const handleVideoClick = () => {
   void togglePlay();
 };
 
-const handleVideoDblClick = (event: MouseEvent) => {
-  void toggleFullscreen(event);
-};
+// 双击不切全屏（双击就是两次单击）：全屏只走控制条的按钮
 
 const attachVideo = (video: HTMLVideoElement | null) => {
   if (currentVideo === video) return;
@@ -265,13 +335,12 @@ const attachVideo = (video: HTMLVideoElement | null) => {
     currentVideo.removeEventListener("durationchange", handleMetadata);
     currentVideo.removeEventListener("volumechange", handleVolumeUpdate);
     currentVideo.removeEventListener("click", handleVideoClick);
-    currentVideo.removeEventListener("dblclick", handleVideoDblClick);
   }
 
   currentVideo = video;
   stopProgressRaf();
-  clearVolumePanelTimer();
-  volumePanelActive.value = false;
+  volumePanel.reset();
+  zoomPanel.reset();
   if (!currentVideo) {
     isPlaying.value = false;
     currentTime.value = 0;
@@ -288,7 +357,6 @@ const attachVideo = (video: HTMLVideoElement | null) => {
   currentVideo.addEventListener("durationchange", handleMetadata);
   currentVideo.addEventListener("volumechange", handleVolumeUpdate);
   currentVideo.addEventListener("click", handleVideoClick);
-  currentVideo.addEventListener("dblclick", handleVideoDblClick);
   applyStoredVolume();
   syncFromVideo();
   if (!currentVideo.paused && !currentVideo.ended) {
@@ -297,6 +365,11 @@ const attachVideo = (video: HTMLVideoElement | null) => {
 };
 
 const handleDocumentPointerUp = () => {
+  // 缩放滑块在面板外松开时滑块自己不发 change，这里收尾，控制条恢复自动隐藏
+  if (zoomDragging.value) {
+    zoomDragging.value = false;
+    scheduleHideControls(1000);
+  }
   if (!isSeekDragging.value) return;
   if (currentVideo && seekDraftTime.value != null) {
     currentVideo.currentTime = Math.min(duration.value || 0, Math.max(0, seekDraftTime.value));
@@ -413,24 +486,27 @@ const toggleFullscreen = (event?: MouseEvent) => {
   refreshControlsPointerAfterLayout(event);
 };
 
-const handleVolumeEnter = () => {
-  clearVolumePanelTimer();
-  volumePanelActive.value = true;
+// 缩放只发事件，由预览弹窗经 Panzoom 缩放（和图片的缩放滑块同一套处理）
+const handleZoomDragStart = () => {
+  zoomDragging.value = true;
+  showControls();
+  emit("zoom-drag-start");
+};
+
+const handleZoomInput = (percent: number) => {
+  emit("zoom-input", percent);
   showControls();
 };
 
-const handleVolumeLeave = () => {
-  clearVolumePanelTimer();
-  volumePanelTimer = setTimeout(() => {
-    volumePanelActive.value = false;
-    volumePanelTimer = null;
-    scheduleHideControls(1000);
-  }, 180);
+const handleZoomCommit = (percent: number) => {
+  zoomDragging.value = false;
+  emit("zoom-commit", percent);
   scheduleHideControls(1000);
 };
 
 onBeforeUnmount(() => {
-  clearVolumePanelTimer();
+  volumePanel.reset();
+  zoomPanel.reset();
   stopProgressRaf();
   attachVideo(null);
   document.removeEventListener("mouseup", handleDocumentPointerUp);
@@ -460,14 +536,28 @@ document.addEventListener("touchend", handleDocumentPointerUp, { passive: true }
   pointer-events: none;
 }
 
-.volume-wrap {
+.hover-panel-wrap {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.volume-panel {
+/* 放大后显示百分比（最长「1000%」），宽度随内容；没放大时是图标，同其它按钮 30px */
+.control-btn.zoom-btn {
+  width: auto;
+  min-width: 30px;
+  padding: 0 6px;
+}
+
+.zoom-btn-text {
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.slider-panel {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 50%;

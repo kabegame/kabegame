@@ -113,3 +113,74 @@ describe("usePanzoomPreview 外部平移（壁纸覆盖层）", () => {
     expect(api.startPan(down())).toBe(false);
   });
 });
+
+describe("usePanzoomPreview 拖过之后的点击（视频上单击是播放 / 暂停）", () => {
+  /** Panzoom 层里放一个子元素（视频），记下它收到的 click */
+  async function attachWithChild(api: ReturnType<typeof usePanzoomPreview>) {
+    const fake = await attach(api);
+    const child = document.createElement("video");
+    fake.el.appendChild(child);
+    const onClick = vi.fn();
+    child.addEventListener("click", onClick);
+    return { fake, child, onClick };
+  }
+  const pressAt = (target: HTMLElement, x: number, y: number) =>
+    target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, clientX: x, clientY: y }));
+  /** 返回 click 是否被 preventDefault */
+  const clickAt = (target: HTMLElement, x: number, y: number) => {
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y });
+    target.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+
+  it("放大后拖过（超过 4 px）松开的点击被拦：到不了里面的元素", async () => {
+    const api = await setup();
+    const { child, onClick } = await attachWithChild(api);
+    api.zoomTo(2);
+    pressAt(child, 100, 100);
+    expect(clickAt(child, 100, 105)).toBe(true);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("放大后原地单击（不超过 4 px）照常", async () => {
+    const api = await setup();
+    const { child, onClick } = await attachWithChild(api);
+    api.zoomTo(2);
+    pressAt(child, 100, 100);
+    expect(clickAt(child, 103, 102)).toBe(false);
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("没放大时（按下时拖不动）移动再远也照常", async () => {
+    const api = await setup();
+    const { child, onClick } = await attachWithChild(api);
+    pressAt(child, 100, 100);
+    expect(clickAt(child, 300, 300)).toBe(false);
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("只管紧跟着的那一次点击：没有按下的点击、拦过之后的下一次点击都照常", async () => {
+    const api = await setup();
+    const { child, onClick } = await attachWithChild(api);
+    api.zoomTo(2);
+    expect(clickAt(child, 300, 300)).toBe(false);
+    pressAt(child, 100, 100);
+    clickAt(child, 200, 200);
+    expect(clickAt(child, 200, 200)).toBe(false);
+    expect(onClick).toHaveBeenCalledTimes(2);
+  });
+
+  it("Panzoom 层换了之后旧元素上不再拦", async () => {
+    const api = await setup();
+    const { child, onClick } = await attachWithChild(api);
+    api.zoomTo(2);
+    pressAt(child, 100, 100);
+    const fresh = await attach(api);
+    expect(clickAt(child, 200, 200)).toBe(false);
+    // 在新层上按下（拖得动）之后，旧元素上的点击也不拦：旧元素的监听已经摘掉
+    api.zoomTo(2);
+    pressAt(fresh.el, 100, 100);
+    expect(clickAt(child, 200, 200)).toBe(false);
+    expect(onClick).toHaveBeenCalledTimes(2);
+  });
+});

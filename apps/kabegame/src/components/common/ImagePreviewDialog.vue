@@ -252,7 +252,7 @@
                 </div>
               </div>
               <!-- 非视频 WPE 壁纸（web / scene）：和单独的图片一样按内容比例显示、一样能放大，可交互；页面里的鼠标由 Rust
-               直接注入 iframe。Panzoom 变换包住画布的那一层（和图片分支共用 panzoomWrapperRef，两支互斥）；覆盖层在
+               直接注入 iframe。Panzoom 变换包住画布的那一层（和图片、视频分支共用 panzoomWrapperRef，三支互斥）；覆盖层在
                变换层之外接住真实鼠标：左键与中键平移（Ctrl+左键不平移，留给壁纸），右键弹菜单。不挂 VideoControls -->
               <div
                 v-if="previewImage && isPreviewWallpaper"
@@ -331,20 +331,30 @@
                   <Minimize v-else />
                 </button>
               </PreviewControlBar>
+              <!-- 视频（含视频壁纸）：Panzoom 变换包住 ImageContent 的那一层（和图片、壁纸分支共用 panzoomWrapperRef，三支互斥），
+               控制条在外面、不跟着放大；控制条的缩放按钮和图片的缩放滑块同一套处理 -->
               <div v-if="previewImage && isPreviewVideo" class="preview-video-wrapper">
-                <ImageContent
-                  ref="previewContentRef"
-                  :image="previewImage"
-                  prefer="original"
-                  video-playing
-                  video-loop
-                  @ready="handlePreviewReady"
-                />
+                <div ref="panzoomWrapperRef" class="w-full h-full">
+                  <ImageContent
+                    ref="previewContentRef"
+                    :image="previewImage"
+                    prefer="original"
+                    video-playing
+                    video-loop
+                    :native-drag="!panzoomCanPan"
+                    @ready="handlePreviewReady"
+                  />
+                </div>
                 <VideoControls
                   :video="previewVideoEl"
                   :show-play-pause="true"
                   :is-fullscreen="isAppFullscreen"
+                  :zoom="zoomPercent"
                   @toggle-fullscreen="toggleAppFullscreen"
+                  @zoom-drag-start="handleZoomSliderDragStart"
+                  @zoom-input="handleZoomSliderInput"
+                  @zoom-commit="handleZoomSliderCommit"
+                  @zoom-reset="panzoomReset"
                 />
               </div>
             </div>
@@ -609,7 +619,7 @@ const previewCoverSource: CoverRegionScope = (run) => {
     ? canvas.withCaptureRegion(run, wallpaperViewportRef.value)
     : Promise.reject(new Error("wallpaper canvas is not mounted"));
 };
-/** 普通图片分支的条件（网页 / 场景壁纸分支也走同一个 Panzoom）。 */
+/** 普通图片分支的条件（网页 / 场景壁纸分支、视频分支也走同一个 Panzoom）。 */
 const isPreviewStatic = computed(() => !isPreviewVideo.value && !isPreviewWallpaper.value);
 
 // 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
@@ -1289,9 +1299,8 @@ const handlePreviewMouseLeave = () => {
   previewHoverSide.value = null;
 };
 
-/** 图片与网页 / 场景壁纸同一套：Ctrl+滚轮缩放，单独滚轮在放大后平移。壁纸上的滚轮落在覆盖层上，冒泡到这里 */
+/** 图片、网页 / 场景壁纸、视频同一套：Ctrl+滚轮缩放，单独滚轮在放大后平移。壁纸上的滚轮落在覆盖层上，冒泡到这里 */
 const handlePreviewWheel = (event: WheelEvent) => {
-  if (isPreviewVideo.value) return;
   handlePanzoomWheel(event);
 };
 
@@ -1302,6 +1311,7 @@ const handlePreviewWheel = (event: WheelEvent) => {
 // ImageContent 内部已处理缩略图→原图流式覆盖与丢失态显示；这里只在内容就绪后对齐 Panzoom（桌面图片）。
 const handlePreviewReady = () => {
   previewImageLoading.value = false;
+  // 视频的 ready 挂在 canplay 上，拖进度条、循环回到开头都会再触发，这里复位会撤掉放大；换视频由换图的 watch 复位
   if (USE_PSWP || isPreviewVideo.value || isPreviewWallpaper.value) return;
   void measureContainerAfterRender().then(() => {
     panzoomReset();
@@ -1488,8 +1498,7 @@ watch(
   () => previewImage.value?.id,
   (id) => {
     if (id && !USE_PSWP) {
-      // 壁纸换壁纸时画布元素没换、Panzoom 实例还在，同样要复位
-      if (isPreviewVideo.value) return;
+      // 壁纸换壁纸、视频换视频时 Panzoom 层没换、实例还在，同样要复位
       panzoomReset();
     }
   },
