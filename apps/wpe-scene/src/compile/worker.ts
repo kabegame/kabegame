@@ -46,6 +46,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       sceneAssets: message.sceneAssets,
       userProperties: message.userProperties,
       scriptOverrides: message.scriptOverrides,
+      structure: message.structure,
       postprocess: message.postprocess,
       reflection: message.reflection,
       shadows: message.shadows,

@@ -44,6 +44,8 @@ let realmsCreated = 0;
 const soundCommands: string[] = [];
 /** 渲染器替身的粒子层落点收到的调用（`<方法>:<对象>[:<参数>]`），P4f 步骤 3 的用例读。 */
 const particleCalls: string[] = [];
+/** 渲染器替身收到的 `forgetObjects`（P6d3a：删除生效后光标的悬停 / 按下集合摘掉）。 */
+const forgotten: number[][] = [];
 
 class Vec3 {
   constructor(
@@ -151,6 +153,14 @@ class FakeRenderer {
       },
       emitParticles: (count?: unknown) => log("emit", count),
     };
+  }
+  /** 删除生效后的光标清理（P6d3a）。 */
+  forgetObjects(objects: number[]) {
+    forgotten.push([...objects]);
+  }
+  /** 挂点钩子（P6d3a，`setParent` 的 adjust 数学用）：替身没有挂点。 */
+  attachMatrix() {
+    return null;
   }
   destroy() {}
 }
@@ -2414,6 +2424,198 @@ describe("SceneHost：粒子层的脚本方法与 instance（P4f 步骤 3）", (
     expect(host.readTarget("objects/0/instanceoverride/controlpoint2")).toEqual([5, 5, 5]);
     expect([...state.takeDirty().particles]).toEqual([0]);
     expect(host.readTarget("objects/0/instanceoverride/alpha")).toBe(1);
+    host.dispose();
+  });
+});
+
+/** P6d3a：多图层场景（图层 0..n-1，名字 L0…；每个图层各挂一段 alpha 脚本）；`groups` 里的下标是组合层（`passthroughModel`）。 */
+function structureBundle(count: number, groups: number[] = [], scripts = 1): SceneBundle {
+  const base = bundle();
+  const template = base.layers[0];
+  base.layers = Array.from({ length: count }, (_, object) => ({
+    ...template,
+    id: object + 1,
+    object,
+    name: `L${object}`,
+    passthroughModel: groups.includes(object),
+  }));
+  base.scripts.list = Array.from({ length: scripts }, (_, object) => ({
+    ...base.scripts.list[0],
+    id: `objects/${object}/alpha`,
+    target: { kind: "layer", object, field: "alpha" },
+    owner: { kind: "layer", object },
+    layer: object,
+  })) as SceneBundle["scripts"]["list"];
+  base.bindings = [];
+  return base;
+}
+
+describe("SceneHost 运行中的结构（P6d3a）", () => {
+  type Scene = {
+    destroyLayer(value: unknown): boolean;
+    sortLayer(value: unknown, index: number): boolean;
+    getLayer(value: unknown): { setParent(parent: unknown, ...rest: unknown[]): void } | null;
+    getLayerCount(): number;
+  };
+  const scene = () => activeGlobal.thisScene as unknown as Scene;
+  /** 编译替身：照结构删掉被删对象及其脚本，同真实编译。 */
+  function compileWithStructure(make: () => SceneBundle) {
+    compile.mockImplementation(async (input) => {
+      const { destroyed } = (input as unknown as { structure: { destroyed: number[] } }).structure;
+      const result = make();
+      result.layers = result.layers.filter((layer) => !destroyed.includes(layer.object));
+      result.scripts.list = result.scripts.list.filter((item) => !destroyed.includes(item.layer as number));
+      return result;
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    vi.stubGlobal("document", {});
+    events.length = 0;
+    imports = 0;
+    destroyed = 0;
+    onUpdate = null;
+    updateArguments = [];
+    onInit = null;
+    onAnimationEvent = null;
+    frozen = false;
+    realmGate = null;
+    moduleGate = null;
+    realmsCreated = 0;
+    forgotten.length = 0;
+    compile.mockReset().mockImplementation(async () => structureBundle(3, [], 2));
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("删除在全部脚本之后生效：同一帧排在后面的脚本照收 update，生效后收 destroy，声音与光标清理被调用", async () => {
+    let calls = 0;
+    onUpdate = () => {
+      if (++calls === 1) expect(scene().destroyLayer(1)).toBe(true);
+      return 0.6;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    // 首帧（`load` 里的 tick）：两段脚本都收到 update，之后被删对象的那段收 destroy
+    expect(events.filter((event) => event === "update" || event === "destroy")).toEqual([
+      "update",
+      "update",
+      "destroy",
+    ]);
+    expect(renderer.sceneState!.layers.has(1)).toBe(false);
+    expect(renderer.sceneState!.order).toEqual([0, 2]);
+    expect(forgotten).toEqual([[1]]);
+    // 下一帧只剩一段脚本
+    events.length = 0;
+    renderer.tick();
+    expect(events.filter((event) => event === "update")).toEqual(["update"]);
+    host.dispose();
+  });
+
+  it("结构随重编译传给编译，删掉的对象不回来；清空脚本存储回到原样", async () => {
+    compileWithStructure(() => structureBundle(3, [], 2));
+    let first = true;
+    onUpdate = () => {
+      if (first) {
+        first = false;
+        scene().destroyLayer(2);
+      }
+      return 0.6;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    expect(renderer.sceneState!.layers.has(2)).toBe(false);
+    // 重编译（改场景后处理档位）：编译输入带着删除，新 bundle 里没有它，状态里仍没有
+    host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect((compile.mock.calls[1][0] as unknown as { structure: unknown }).structure).toEqual({
+      destroyed: [2],
+      parents: [],
+    });
+    await vi.waitFor(() => expect(events.filter((event) => event === "render")).toHaveLength(2));
+    expect(renderer.sceneState!.layers.has(2)).toBe(false);
+    expect([...renderer.sceneState!.layers.keys()]).toEqual([0, 1]);
+    expect(renderer.sceneState!.order).toEqual([0, 1]);
+    host.dispose();
+  });
+
+  it("首次加载：init 里的 sortLayer / setParent / destroyLayer 在首帧生效（bundle 是 init 之前编的，结构由状态接过来）", async () => {
+    let first = true;
+    onInit = () => {
+      if (first) {
+        first = false;
+        // 数字是对象表里的下标（sortLayer 之后会变），这里一律按名字
+        expect(scene().sortLayer("L2", 0)).toBe(true);
+        expect(scene().destroyLayer("L1")).toBe(true);
+        scene().getLayer("L0")!.setParent(scene().getLayer("L2"));
+      }
+      return 0.8;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    const state = renderer.sceneState!;
+    expect(state.order).toEqual([2, 0]);
+    expect(state.layers.has(1)).toBe(false);
+    expect(state.layers.get(0)!.parent).toBe(2);
+    expect(state.childrenOf(2)).toEqual([0]);
+    host.dispose();
+  });
+
+  it("换父：普通换父只改状态、不重编译；会改组归属的换父请求一次重编译，并把换父记进结构", async () => {
+    compile.mockImplementation(async () => structureBundle(4, [3], 1));
+    let step = 0;
+    onUpdate = () => {
+      step++;
+      // 第 1 帧：普通层挂普通层；第 2 帧：普通层挂进组合层
+      if (step === 1) scene().getLayer(1)!.setParent(scene().getLayer(0));
+      if (step === 2) scene().getLayer(2)!.setParent(scene().getLayer(3));
+      return 0.6;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(renderer.sceneState!.layers.get(1)!.parent).toBe(0);
+    expect(compile).toHaveBeenCalledTimes(1);
+    renderer.tick();
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect((compile.mock.calls[1][0] as unknown as { structure: unknown }).structure).toEqual({
+      destroyed: [],
+      parents: [
+        [1, 0, null],
+        [2, 3, null],
+      ],
+    });
+    host.dispose();
+  });
+
+  it("删除改了组归属（被删的是组合层）才请求重编译；删普通层不重编译", async () => {
+    compileWithStructure(() => structureBundle(4, [3], 1));
+    let step = 0;
+    onUpdate = () => {
+      step++;
+      if (step === 1) scene().destroyLayer(1);
+      if (step === 2) scene().destroyLayer("L3");
+      return 0.6;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(compile).toHaveBeenCalledTimes(1);
+    renderer.tick();
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect((compile.mock.calls[1][0] as unknown as { structure: { destroyed: number[] } }).structure.destroyed).toEqual(
+      [1, 3],
+    );
     host.dispose();
   });
 });

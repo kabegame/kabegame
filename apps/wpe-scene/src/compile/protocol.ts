@@ -12,6 +12,17 @@ export interface FileError {
   message: string;
 }
 
+/**
+ * 运行中改过的场景结构（P6d3）：每次编译都带全量，重编译后结构不丢。
+ * - `destroyed`：删掉的对象（`objects` 下标）。编译时这一项当作不存在（置 null），不进 `bundle.layers`，也不参与父链、依赖、灯等整场并集。
+ * - `parents`：运行中的换父，按发生的先后：`[对象, 新父的 objects 下标（null 是根）, 挂点（骨骼名，没有是 null）]`。在 `resolveParents` 之后
+ *   依次套用；子表 = 加载时按 `objects` 顺序、之后按这里的先后追加（组内绘制顺序跟子表走）。同一个对象多次换父只留最后一次。
+ */
+export interface SceneStructure {
+  destroyed: number[];
+  parents: [number, number | null, string | null][];
+}
+
 export type WorkerRequest =
   | {
       type: "start";
@@ -19,6 +30,7 @@ export type WorkerRequest =
       sceneAssets: string[];
       userProperties: Record<string, unknown>;
       scriptOverrides: Record<string, number[] | boolean | string>;
+      structure: SceneStructure;
       postprocess: ScenePostprocessSetting;
       reflection: SceneReflectionSetting;
       shadows: SceneShadowSetting;

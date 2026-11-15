@@ -606,6 +606,35 @@ export class ScriptRuntime {
   forgetWrite(target: TargetKey): void {
     this.writes.delete(target);
   }
+  /**
+   * `destroyLayer` 生效（P6d3a，rea-p6d-layers 6.3 第 4 条）：属主是这些对象的条目（`scriptObject(owner)` 在集合里：图层字段、effect、
+   * 材质常量、动画层）按条目顺序先收 `destroy`（导出了、已 `init` 才调），再从 `records` / `byId` 摘掉；它们的计时器去掉；
+   * 写入重放表里以 `objects/<i>/` 开头的项去掉（重编译后不重放到不存在的对象上）。只在脚本阶段之后调：`records` 换成新数组，
+   * 不影响正在进行的遍历。
+   */
+  destroyObjects(objects: ReadonlySet<number>): void {
+    if (objects.size === 0) return;
+    const owned = (record: ScriptRecord): boolean => {
+      const object = scriptObject(record.script.owner);
+      return object !== null && objects.has(object);
+    };
+    for (const record of this.records) {
+      if (!owned(record)) continue;
+      if (record.state === "inited" && !this.halted) this.call(record, "destroy");
+    }
+    const gone = new Set(this.records.filter(owned));
+    if (gone.size > 0) {
+      this.records = this.records.filter((record) => !gone.has(record));
+      for (const record of gone) this.byId.delete(record.script.id);
+      for (const timer of this.timers) if (gone.has(timer.owner)) timer.cancelled = true;
+      this.timers = this.timers.filter((timer) => !timer.cancelled);
+    }
+    for (const key of [...this.writes.keys()]) {
+      const match = /^objects\/(\d+)\//.exec(key);
+      if (match && objects.has(Number(match[1]))) this.writes.delete(key);
+    }
+  }
+
   destroy(): void {
     for (const record of this.records) if (record.state === "inited" && !this.halted) this.call(record, "destroy");
     this.timers = [];

@@ -15,6 +15,7 @@ import {
 import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
 import { compileSceneInWorker } from "./compile/client";
+import type { SceneStructure } from "./compile/protocol";
 import { TextureDecodeCache } from "./compile/decode";
 import { FetchSceneReader } from "./compile/fs";
 import type { BindingTarget } from "./compile/bindings";
@@ -49,6 +50,7 @@ import { schemeColor } from "./sceneStyle";
 import { instanceControlPoint, type InstanceField } from "./compile/particles";
 import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
 import { applyScriptedProperties } from "./script/initialApply";
+import { recordDestroyed, recordReparent, reparentNeedsRecompile, settleDestroyed } from "./script/structure";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, scriptDiagnostics, type ScriptTarget, type ScriptValue } from "./script/runtime";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "./script/stateWrite";
@@ -230,6 +232,11 @@ export class SceneHost {
   private runtime: ScriptRuntime | null = null;
   private scriptApi: ScriptApi | null = null;
   private readonly scriptOverrides = new Map<string, ScriptValue>();
+  /**
+   * 运行中改过的场景结构（P6d3a）：删掉的对象、换过的父。每次 `reload` 交给编译（删掉的不回来、换过的父保留），跨重编译保留；
+   * 「清空脚本存储」时清空，回到 `scene.json` 原样。
+   */
+  private readonly structure: SceneStructure = { destroyed: [], parents: [] };
   private scriptReloadPending = false;
   private scriptReloadRunning = false;
   private reloading = false;
@@ -499,6 +506,8 @@ export class SceneHost {
     // 新 `init` 里的 play() 落在它上面，`beforeFirstFrame` 换上时不接旧时钟；所以这里不用碰 `sceneAnimations`（旧场景在新场景换上前照常画）
     // 脚本写过的重编译目标一并放弃；用户属性在重建后重新全量交给新脚本
     this.scriptOverrides.clear();
+    this.structure.destroyed = [];
+    this.structure.parents = [];
     this.scriptNeedsFullApply = true;
     const backend = browserStorage();
     if (backend) clearSceneStorage(backend, imageId);
@@ -625,6 +634,39 @@ export class SceneHost {
     this.options.report.debug(`场景脚本重编译目标变化：${path}`);
     this.requestScriptReload();
     return true;
+  }
+
+  /**
+   * `setParent` 改完状态（P6d3a）：记进结构（之后每次编译带上）；会改编译产物（组归属、挂点）的才请求一次重编译，别的换父只改状态、
+   * 渲染侧每帧读状态。组深度检查失败后父被置空的也走这里。
+   */
+  private onReparented(change: {
+    object: number;
+    oldParent: number | null;
+    oldBone: string | null;
+    parent: number | null;
+    bone: string | null;
+  }): void {
+    recordReparent(this.structure, change.object, change.parent, change.bone);
+    if (!this.scriptState || !reparentNeedsRecompile({ state: this.scriptState, bundle: this.scriptBundle, ...change }))
+      return;
+    this.stats.recompiled.push({ reason: `script（setParent ${change.object}）`, keys: [] });
+    this.options.report.debug(`场景脚本换父改了组或挂点：${change.object}`);
+    this.requestScriptReload();
+  }
+
+  /**
+   * 删除生效之后（P6d3a）：记进结构、声音停播并摘掉、光标的悬停 / 按下集合摘掉（不发 Leave / Up）；删除改了组归属时请求重编译。
+   * puppet、关键帧动画对不存在的对象写入本来就是空操作（`SceneState.write` 按 `layers.get` 判断），不用另外清。
+   */
+  private onDestroyed(objects: number[], regroup: boolean): void {
+    recordDestroyed(this.structure, objects);
+    this.sceneSounds?.remove(objects);
+    this.renderer?.forgetObjects(objects);
+    this.options.report.debug(`场景脚本删除了图层：${objects.join(",")}`);
+    if (!regroup) return;
+    this.stats.recompiled.push({ reason: `script（destroyLayer ${objects.join(",")}）`, keys: [] });
+    this.requestScriptReload();
   }
 
   private requestScriptReload(): void {
@@ -898,6 +940,11 @@ export class SceneHost {
           const state = renderer?.sceneState;
           return renderer && state ? renderer.transformMatrix(object, state) : null;
         },
+        // 挂点钩子与运行中结构（P6d3a）：`setParent` 的 adjust 数学与挂点名读它们，换父成功后经 `reparented` 记进结构
+        attachPose: (object) => this.renderer?.attachMatrix(object) ?? null,
+        structure: () => this.structure,
+        reparented: (change) => this.onReparented(change),
+        warn: (message) => this.options.report.warn(message),
         // 全局 `input`（P6c）：每次读都取渲染器最近一帧给的光标快照
         cursorInput: () => this.cursorInput,
         // 快捷方式（P11d）：回调名取自运行时，令牌与属性检查在 `openUserShortcut`
@@ -1370,6 +1417,12 @@ export class SceneHost {
               event: ({ object, json }) => this.runtime?.animationEvent(object, json),
             });
           this.runtime?.frame(dt);
+          // 删除生效（P6d3a，rea-p6d-layers 4.2 第 7.5 步）：全部脚本之后、绘制之前
+          settleDestroyed(this.scriptState, {
+            runtime: this.runtime,
+            bundle: this.scriptBundle,
+            removed: (objects, regroup) => this.onDestroyed(objects, regroup),
+          });
         }
       },
       onError: (reasons) => {
@@ -1562,6 +1615,10 @@ export class SceneHost {
         sceneAssets: target.sceneAssets,
         userProperties,
         scriptOverrides: Object.fromEntries(this.scriptOverrides),
+        structure: {
+          destroyed: [...this.structure.destroyed],
+          parents: this.structure.parents.map((item) => [...item]) as SceneStructure["parents"],
+        },
         postprocess: setting,
         reflection,
         shadows,
@@ -1642,6 +1699,9 @@ export class SceneHost {
         userTextures: this.userTextures,
         puppets,
         beforeFirstFrame: (state) => {
+          // 结构接续（P6d3a）：旧脚本状态里的对象表 / 待删 / 父子（首次加载时是 `init` 里 `sortLayer` / `setParent` / `destroyLayer` 落下的，
+          // bundle 是 `init` 之前编的、不含它们）；重编译后 bundle 已带结构，照搬是幂等的。在重放脚本写入之前
+          if (this.scriptState && this.scriptState !== state) state.adoptStructure(this.scriptState);
           // 新建 → carryOver → refresh（同 P10 的 `write`）：重编译时动画层时钟与 blendin 的清位接着走，换上就按当前时钟与当前状态算一次蒙皮，
           // 不闪出绑定姿势；之后每帧由 `stepPuppets` 推进
           // 待用的（`init` 里的控制要保留）不接旧时钟；否则接上正在播的，没有时接过期的待用运行时（P12c）

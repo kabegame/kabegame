@@ -26,7 +26,9 @@ import { reflectionKind, reflectionList } from "./reflection";
 import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from "./sprite";
 import { compileVolumetrics, wantsVolumetrics, type SceneVolumetrics } from "./volumetrics";
 import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } from "./fs";
-import { resolveParents } from "./hierarchy";
+import { breakCycles, childLists, resolveParents } from "./hierarchy";
+import { normalizeConfig } from "./config";
+import type { SceneStructure } from "./protocol";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
 import {
   buildModelSkeleton,
@@ -89,6 +91,7 @@ import {
 import {
   boolFieldValue,
   currentProperties,
+  isSceneObject,
   numbers,
   parseEffect,
   parseMaterial,
@@ -691,8 +694,10 @@ export function resolveAttachment(
   parent: number | null,
   name: unknown,
   puppetOf: (object: number) => Pick<ScenePuppet, "skeleton" | "attachments"> | null | undefined,
+  /** 运行中换父带挂点（`SceneStructure.parents`，P6d3a）：父早已存在、可以排在子后面（`objects` 下标更大）；加载时的规则不变。 */
+  allowLaterParent = false,
 ): SceneAttachment | null {
-  if (typeof name !== "string" || parent === null || parent >= object) return null;
+  if (typeof name !== "string" || parent === null || (!allowLaterParent && parent >= object)) return null;
   const puppet = puppetOf(parent);
   if (!puppet?.skeleton) return null;
   const found = puppet.attachments.find((item) => item.name === name);
@@ -864,6 +869,17 @@ export interface SceneBundle {
    * 宿主加载就订阅 `kind: "media"`（只订一次）。可选：手写的测试 bundle 可以不给，等于假。
    */
   media?: boolean;
+  /**
+   * 子表（P6d3，WPE `O+0x198`）：父的 `objects` 下标 → 直接子（只放非空的、只含进了 `layers` 的对象）。顺序：没换过父的按 `objects` 下标，
+   * 运行中换过父的按挂上的先后追加在尾（`structure.parents`）。`SceneState` 用它建子表，`assignGroups` 的组内先序也按它。缺省（手写测试
+   * bundle）时 `SceneState` 按 `layers` 的 `parent` 现推。
+   */
+  children?: [number, number[]][];
+  /**
+   * 每个对象加载时的配置原文（P6d3，`getInitialLayerConfig` 用）：`objects` 下标 → JSON 文本，不是对象的项为 null。取套用 `scriptOverrides` 与
+   * 结构之前的 `scene.json` 原文，按 WPE 的 jsoncpp 规整（`config.ts`：去掉顶层 `id`、键按字典序、非整数 8 位有效数字）。
+   */
+  configs?: (string | null)[];
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -871,6 +887,8 @@ export interface CompileSceneInput {
   userProperties?: Record<string, unknown>;
   /** 脚本写入的重编译目标，按 scene.json 坐标覆盖编译输入。 */
   scriptOverrides?: Record<string, number[] | boolean | string>;
+  /** 运行中改过的场景结构（P6d3）；缺省空结构（`EMPTY_STRUCTURE`）。 */
+  structure?: SceneStructure;
   reader: SceneReader;
   translator: Wpesl2wgsl | null;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
@@ -923,6 +941,8 @@ export function passthroughCombos(colorBlendMode: number): Record<string, number
  */
 export function assignGroups(
   layers: Pick<SceneLayer, "object" | "parent" | "passthroughModel" | "group" | "subtree">[],
+  /** 子表顺序（P6d3，`childLists`）：给了就按它排组内先序，缺省按 `objects` 下标。 */
+  order?: ReadonlyMap<number, readonly number[]>,
 ): void {
   const byObject = new Map(layers.map((layer) => [layer.object, layer]));
   const children = new Map<number, number[]>();
@@ -932,7 +952,14 @@ export function assignGroups(
     if (list) list.push(layer.object);
     else children.set(layer.parent, [layer.object]);
   }
-  for (const list of children.values()) list.sort((a, b) => a - b);
+  for (const [parent, list] of children) {
+    list.sort((a, b) => a - b);
+    const ordered = order?.get(parent);
+    if (!ordered) continue;
+    // 子表里有的按子表顺序，子表没有的（理论上不会）仍按下标排在后面
+    const rank = new Map(ordered.map((child, position) => [child, position]));
+    list.sort((a, b) => (rank.get(a) ?? Infinity) - (rank.get(b) ?? Infinity) || a - b);
+  }
   for (const layer of layers) {
     layer.group = null;
     layer.subtree = [];
@@ -1229,6 +1256,9 @@ class EffectIssues extends Set<string> {
   }
 }
 
+/** 没有运行中改过的结构（P6d3）。 */
+export const EMPTY_STRUCTURE: SceneStructure = { destroyed: [], parents: [] };
+
 export async function compileScene(input: CompileSceneInput): Promise<SceneBundle> {
   const fs = new SceneFs(input.projectDir, input.sceneAssets, input.reader);
   const unsupported = new Set<string>();
@@ -1247,6 +1277,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   const scene = parseScene(sceneText);
   // HDR 判定读文件里的 `general.bloom`（K3），脚本覆盖不算，要在套用之前取。缺键写成 null：undefined 会落到缺省参数，读到覆盖后的值
   const fileBloom = scene.general?.bloom ?? null;
+  // 加载原文（P6d3）：在套用写入覆盖与结构之前取，`getInitialLayerConfig` 不反映运行中的改动
+  const configs = scene.objects.map((object) => (isSceneObject(object) ? normalizeConfig(object) : null));
+  const structure = input.structure ?? EMPTY_STRUCTURE;
   for (const [path, value] of Object.entries(input.scriptOverrides ?? {})) {
     const parts = path.split("/");
     let parent: unknown = scene;
@@ -1258,6 +1291,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     (parent as Record<string, unknown>)[key] =
       old && typeof old === "object" && "value" in old ? { ...old, value: next } : next;
   }
+  // 运行中删掉的对象（P6d3）：这一项当作不存在，保持下标对齐；之后所有读 `scene.objects` 的地方都跳过不是对象的项
+  for (const index of structure.destroyed)
+    if (Number.isInteger(index) && index >= 0 && index < scene.objects.length)
+      (scene.objects as unknown[])[index] = null;
   const properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
   // 属性关键帧（P10a 步骤 2）：没有就地目标的照报细分键（`value:animation:light` / `camera` / `other`）；其余进 bundle，
@@ -1319,6 +1356,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     scripts,
     sounds,
     animations: animations.list,
+    configs,
   };
   // 阴影档位（P13d）：决定阴影计数与宏，要在编译着色器之前定。只在 `lightconfig` 写了阴影 / cookie 计数时才去读 WPE 的设置
   const shadowSetting = input.shadows ?? "follow";
@@ -1366,6 +1404,24 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     ));
   // 父对象下标；环已断开，`object:parent-cycle` 由能力表报
   const { parents } = resolveParents(scene.objects);
+  // 运行中的换父（P6d3）：在 JSON 父之后依次套用；挂点改写对象 JSON 的 `attachment`，后面的 `resolveAttachment` 按新父与新骨骼名算
+  const parentOverrides: [number, number | null, string | null][] = [];
+  const lastOverride = new Map<number, number>();
+  structure.parents.forEach(([object], position) => lastOverride.set(object, position));
+  for (const [position, entry] of structure.parents.entries()) {
+    const [object, parent, bone] = entry;
+    if (lastOverride.get(object) !== position) continue;
+    if (!isSceneObject(scene.objects[object])) continue;
+    const valid = parent !== null && isSceneObject(scene.objects[parent]) && parent !== object ? parent : null;
+    parents[object] = valid;
+    parentOverrides.push([object, valid, bone]);
+    const json = scene.objects[object] as Record<string, unknown>;
+    if (bone !== null && valid !== null) json.attachment = bone;
+    else delete json.attachment;
+  }
+  if (parentOverrides.length > 0) breakCycles(parents);
+  // 带挂点覆盖的对象（P6d3a）：`resolveAttachment` 不要求父的下标小于子
+  const attachOverrides = new Set(parentOverrides.filter(([, , bone]) => bone !== null).map(([object]) => object));
   // 图层依赖（P8 步骤 4，rea-p8-render 第 1、2 节）：WPE 在全部对象加载完之后才按并集给图像层置 `0x1010`、建独占 RT，材质却在创建时就按
   // 名字绑纹理表里的对象（RT 建立时接管同名对象），所以引用方排在被依赖者前后都绑得上。我们在开头一次定下并集与名字表，编到哪个 pass 都查得到
   const dependedIds = dependencyIds(scene.objects);
@@ -1380,6 +1436,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
    */
   const layerComposites = new Map<string, { object: number; depended: boolean; ownComposite: boolean }>();
   scene.objects.forEach((object, index) => {
+    if (!isSceneObject(object)) return;
     const id = jsonId(object);
     if (id === null || !isImageLayerObject(object)) return;
     const cbm = colorBlendModeOf(resolveValue(object.colorBlendMode as SceneValue, properties));
@@ -2557,6 +2614,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
 
   for (const [index, object] of scene.objects.entries()) {
     if (settled()) break;
+    if (!isSceneObject(object)) continue; // 不是对象的项（含运行中删掉的）：不进 `bundle.layers`，下标留空
     /** 图层字段的就地目标（场景坐标里的 objects 下标，不随 bundle 下标变）。 */
     const at = (field: LayerField): BindingTarget => ({ kind: "layer", object: index, field });
     // 图层的向量字段照 WPE 的向量 setter 取值（`layerVectorValue`：数字铺满、字符串少写的分量为 0，P6b 1e-3 复核）。绑定的属性值
@@ -2826,10 +2884,20 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       layer.parent,
       (scene.objects[layer.object] as Record<string, unknown> | undefined)?.attachment,
       (object) => puppetsByObject.get(object),
+      attachOverrides.has(layer.object),
     );
     if (attachment) layer.attachment = attachment;
   }
-  assignGroups(bundle.layers);
+  // 子表（P6d3）：只含进了 bundle 的对象；组内先序与 `SceneState` 的子表都按它
+  const present = new Set(bundle.layers.map((layer) => layer.object));
+  const lists = childLists(parents, scene.objects.length, parentOverrides);
+  const children: [number, number[]][] = [];
+  for (const [parent, list] of lists) {
+    const kept = list.filter((child) => present.has(child));
+    if (present.has(parent) && kept.length > 0) children.push([parent, kept]);
+  }
+  bundle.children = children;
+  assignGroups(bundle.layers, new Map(children));
   for (const layer of bundle.layers) {
     if (layer.group === null) continue;
     for (const key of groupChildIssues(layer)) unsupported.add(key);

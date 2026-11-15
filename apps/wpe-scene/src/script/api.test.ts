@@ -302,8 +302,9 @@ describe("SceneScript API（FakeRealm）", () => {
       expect(() => engine[key]).toThrow("模块求值期间");
     for (const name of ["setTimeout", "setInterval", "clearTimeout", "isPortrait", "isLandscape"])
       expect(() => (engine[name] as () => unknown)()).toThrow("模块求值期间");
+    // thisScene 的下标与结构方法抛 realm 的 SyntaxError（P6d3a，文案照 dll）
     for (const name of ["getLayer", "getLayerCount", "enumerateLayers", "getLayerIndex"])
-      expect(() => (h.api.thisScene[name] as () => unknown)()).toThrow("模块求值期间");
+      expect(() => (h.api.thisScene[name] as () => unknown)()).toThrow(`${name} cannot be called from global scope.`);
     h.api.setModuleEvaluating(false);
     expect(engine.frametime).toBe(0.016);
     expect(engine.runtime).toBe(12);
@@ -336,8 +337,7 @@ describe("SceneScript API（FakeRealm）", () => {
     );
     expect(engine.userProperties).not.toBe(first);
     expect(engine.userProperties).toEqual({ tint: new Vec3(0, 1, 0), speed: 2 });
-    for (const name of ["registerAsset", "requestFeatures"])
-      expect(() => (engine[name] as () => void)()).toThrow(TypeError);
+    for (const name of ["requestFeatures"]) expect(() => (engine[name] as () => void)()).toThrow(TypeError);
     // `input`（P6c）已装上：成员见下面的「光标交互」一节
     expect(h.realm.global.input).toBeDefined();
   });
@@ -1020,7 +1020,16 @@ describe("SceneScript API（FakeRealm）", () => {
     h.resetState();
     const { thisScene: scene, general } = h.api;
     // 成员就是 general 的全部字段加五个查询方法：fog*、wind* 这轮不加（zoom 在 P5a 步骤 4 进了 general 字段表）
-    const methods = ["enumerateLayers", "getLayer", "getLayerByID", "getLayerCount", "getLayerIndex"];
+    const methods = [
+      "destroyLayer",
+      "enumerateLayers",
+      "getInitialLayerConfig",
+      "getLayer",
+      "getLayerByID",
+      "getLayerCount",
+      "getLayerIndex",
+      "sortLayer",
+    ];
     expect(Object.keys(scene).sort()).toEqual([...Object.keys(general), ...methods].sort());
     expect(Object.keys(general)).toEqual(
       expect.arrayContaining(["bloom", "hdr", "clearenabled", "clearcolor", ...Object.keys(BLOOM_FIELDS)]),

@@ -72,6 +72,21 @@ describe("SceneSounds", () => {
     expect(log).toEqual(["release 2", "release 1", "voice 1", "1 start 0 loop"]);
   });
 
+  it("remove：停掉被删的声音对象（stop 全部实例）、释放播放器、不再排期；别的对象与不是声音的对象不受影响（P6d3a）", () => {
+    const { player, log } = fakePlayer();
+    const sounds = new SceneSounds(player, () => 0);
+    sounds.setGlobal(1, true);
+    sounds.load([sound(0, ["a.wav"]), sound(1, ["b.wav"])]);
+    log.length = 0;
+    sounds.remove([0, 99]);
+    expect(log).toEqual(["0 stop 0", "release 0"]);
+    expect(sounds.scheduler(0)).toBeNull();
+    expect(sounds.scheduler(1)).not.toBeNull();
+    log.length = 0;
+    sounds.step(10, () => 1);
+    expect(log.filter((line) => line.startsWith("0 "))).toEqual([]);
+  });
+
   it("每帧按场景状态的音量推进：音量从 0 变正时从头开始；没有就地值时用声音表的值", () => {
     const { player, log, gains } = fakePlayer();
     const sounds = new SceneSounds(player, () => 0);

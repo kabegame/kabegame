@@ -288,6 +288,25 @@ describe("CursorTracker：p6c-hit 的段落（回调名、对象、顺序）", (
   });
 });
 
+describe("CursorTracker.forget：对象被删（P6d3a）", () => {
+  it("从悬停与按下集合摘掉：之后不发 leave / up / click；别的对象照常", () => {
+    const s = scene(HIT);
+    s.step(OUT);
+    expect(s.step([600, 799.5001220703125], true).list).toEqual(["A.enter", "A.move", "A.down"]);
+    // A 被删：悬停、按下集合里都没有它了。拖出去在外面松开：本来按下集合里的 A 要收 up、悬停里的要收 leave，现在什么都不发
+    s.tracker.forget([s.names.indexOf("A")]);
+    expect(s.step(OUT, false).list).toEqual([]);
+  });
+
+  it("悬停集合里的对象被摘掉后，光标移出时不发 leave", () => {
+    const s = scene(HIT);
+    s.step(OUT);
+    expect(s.step([300, 799.5001220703125]).list).toEqual(["B.enter", "B.move"]);
+    s.tracker.forget([s.names.indexOf("B")]);
+    expect(s.step(OUT).list).toEqual([]);
+  });
+});
+
 describe("CursorTracker：按下、拖动与松开（p6c-hit 的拖动段）", () => {
   it("只在 A 上按下：同一帧 enter → move → down；按住拖出去只有 A 的 move（外推坐标）、没有 leave；拖回来松开 up + click", () => {
     const s = scene(HIT);

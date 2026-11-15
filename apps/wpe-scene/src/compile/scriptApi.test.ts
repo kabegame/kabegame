@@ -30,11 +30,13 @@ describe("未实现脚本 API 的扫描", () => {
     expect(scan("export function init() { let bar = thisScene.createLayer('models/bar.json'); }")).toEqual([
       "thisScene.createLayer",
     ]);
-    expect(scan("export function init() { thisScene?.sortLayer(x, 1); thisScene['destroyLayer'](x); }")).toEqual([
-      "thisScene.destroyLayer",
-      "thisScene.sortLayer",
+    // destroyLayer / sortLayer / getInitialLayerConfig / registerAsset 在 P6d3a 实现，不再报
+    expect(scan("export function init() { thisScene?.sortLayer(x, 1); thisScene['destroyLayer'](x); }")).toEqual([]);
+    expect(scan("const asset = engine.registerAsset('materials/x.json', true);")).toEqual([]);
+    expect(scan("thisScene?.createModelData(x); engine.requestFeatures([]);")).toEqual([
+      "engine.requestFeatures",
+      "thisScene.createModelData",
     ]);
-    expect(scan("const asset = engine.registerAsset('materials/x.json', true);")).toEqual(["engine.registerAsset"]);
     // `input` 的三个成员 P6c 已实现，不再报
     expect(scan("export function update() { return input.cursorWorldPosition.x + input?.cursorLeftDown; }")).toEqual(
       [],
@@ -44,7 +46,9 @@ describe("未实现脚本 API 的扫描", () => {
   });
 
   it("根对象的成员只认裸全局名：属性链上的同名对象不算", () => {
-    expect(scan("shared.thisScene.createLayer(); foo.engine.registerAsset('a'); my.input.cursorLeftDown;")).toEqual([]);
+    expect(scan("shared.thisScene.createLayer(); foo.engine.requestFeatures('a'); my.input.cursorLeftDown;")).toEqual(
+      [],
+    );
   });
 
   it("图层的独特方法名：任意接收者都算", () => {
@@ -58,7 +62,8 @@ describe("未实现脚本 API 的扫描", () => {
       "}",
     ].join("\n");
     // `getAnimation`（IObject、thisScene 上的）已在 P10b 实现，不再报；`getEffect` 在 P6d1a 实现
-    expect(scan(source)).toEqual(["layer.getTextureAnimation", "layer.setParent"]);
+    // setParent 在 P6d3a 实现
+    expect(scan(source)).toEqual(["layer.getTextureAnimation"]);
     expect(scan("thisScene.getAnimation('x');")).toEqual([]);
   });
 
@@ -100,7 +105,7 @@ describe("未实现脚本 API 的扫描", () => {
   it("注释、字符串、模板文字与正则里的不算；模板插值照常扫", () => {
     const source = [
       "// thisScene.createLayer('a');",
-      "/* bar.setParent(); engine.registerAsset('x'); */",
+      "/* bar.getTextureAnimation(); engine.requestFeatures('x'); */",
       "const a = 'thisScene.createLayer()';",
       'const b = "layer.getTextureAnimation()";',
       "const c = `input.cursorWorldPosition ${'}'} and ${`thisScene.sortLayer`}`;",
@@ -109,14 +114,14 @@ describe("未实现脚本 API 的扫描", () => {
       "export function update() { return value; }",
     ].join("\n");
     expect(scan(source)).toEqual([]);
-    expect(scan("const s = `${bar.setParent(null).name} / ${`${thisScene.createLayer('a')}`}`;")).toEqual([
-      "layer.setParent",
+    expect(scan("const s = `${bar.getTextureAnimation(null).name} / ${`${thisScene.createLayer('a')}`}`;")).toEqual([
+      "layer.getTextureAnimation",
       "thisScene.createLayer",
     ]);
     // 除号之后不是正则：后面的调用照常扫到
-    expect(scan("const k = width / 2; const p = bar.setParent(); const q = (a) / b.setParent();")).toEqual([
-      "layer.setParent",
-    ]);
+    expect(
+      scan("const k = width / 2; const p = bar.getTextureAnimation(); const q = (a) / b.getTextureAnimation();"),
+    ).toEqual(["layer.getTextureAnimation"]);
   });
 
   it("已实现的不报", () => {

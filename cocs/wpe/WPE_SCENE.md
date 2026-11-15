@@ -3047,7 +3047,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 ### 层级
 
-- `getParent()` 返回父的图层对象，根返回 `null`；`getChildren()` 每次新数组，`objects` 顺序。
+- `getParent()` 返回父的图层对象，根返回 `null`；`getChildren()` 每次新数组，按子表顺序（P6d3a 起读状态：加载时 `objects` 顺序，换父挂上的追加在尾）。
 - `getTransformMatrix()` 返回新的 `Mat4`（自有键 `m`，16 个 f32，平移在 12–14），值是**当前状态**的世界矩阵乘图层自身偏移（`drawMatrixOf`，含父链、自己的对齐偏移，子层不继承父的对齐偏移），当场读到刚写的变换（父 `rotateObjectSpace` 之后立刻读子已经跟着变）。场景有挂点缓存（`WorldStamps`，P12b1 的 B1）时照 WPE 走那个带戳的函数：先给本帧已有的变换写入清戳、再按戳求值，求值会改写戳与缓存，之后的绘制沿用（`GpuScene.transformMatrix`）。
 - 图层对象**没有 `id`**（WPE 实测 `undefined`）。`thisScene.getLayerByID(id)` 只收字符串，照 C `strtol` 解析（前导空白按 `isspace`）后按 JSON `id` 找；数字返回 `null`。`getLayer()` / `getLayerByID()` 不传参数返回 `undefined`。
 
@@ -3083,6 +3083,112 @@ WPE 每个对象存角度与 3×3 两份旋转，画面、子孙、`getTransform
 dev 探针跑 `p6d1-xform`、`p6d1-xform2`、`p6d1-cam`、`p6d1-mat`、`p6d1-mat2/3/4/6` 的脚本，`[kbp6d]` 读回和 WPE 逐位相同（材质对象键的顺序另用 `p6d1-keys` 核对扩容）；`p6d1-mat` 八块颜色与 `p6d1-xform`、`p6d1-xform2` 的画面和 WPE 抓帧一致。语料能渲染 +1（`3243449890`）。
 
 P6d1b：`p6d1-mat8` 五个字段 36 次写入的读回和 WPE 实测的规则逐项一致；`p6d1-mat7` blur 四个 pass 的混合、写掩码、剔除、深度和 WPE 抓帧相同；`p6d1-a2c` 八组中心像素 7 组相同，C3（加载时 additive）WPE 是 (255, 255, 0)、我们 (255, 0, 0)：加载期没加 `ADDITIVE` 组合键，WPE 自带着色器只在雾效里读它，雾效现在照报，语料的工坊着色器没有读它的，随雾效一起补。语料不变（干净 160 → 160）。
+
+## 对象表与结构 API（P6d3a）
+
+脚本改场景结构：`sortLayer`、`destroyLayer`、`setParent`，以及下标 API、`getInitialLayerConfig`、`registerAsset`。建层（`createLayer`）是 P6d3b。
+
+- **依据**：
+  - 读码：`rea-p6d-layers.md`（第 3、5–9 节）、`rea-p6d-script.md`（第 1、3–7 节）、`rea-p6d3-adjust.md`（`setParent` 的 adjust、组判定、组深度）。
+  - WPE 实测：工程由 `ignore/p6/d3/make_step0.py` 生成（`p6d3-struct`、`p6d3-parent`、`p6d3-attach`），加上 `ignore/p6/d0/proj/p6d-tree`；日志夹具在 `ignore/p6/d3/out/wpe-*.log`。
+  - 计划：[phase-6d3-runtime-layers.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6d3-runtime-layers.md)。
+
+### 对象表
+
+- **`SceneState.order`**：WPE 的对象表（`G+0x158`），装全部对象键，包括灯、声音、相机、分组节点、子对象。加载时就是 `bundle.layers` 的顺序。读它的有：
+  - 脚本的原始下标；
+  - 顶层绘制与透明排序的输入；
+  - 平面反射 pass；
+  - 体积光的插入点；
+  - 粒子的步进顺序；
+  - 相机对象的选择（取**最后一个**可见的，`sortLayer` 相机会换掉当前相机）；
+  - 光标命中（正交按它倒序）。
+
+  渲染侧按 `structureVersion` 缓存派生表（`render/structure.ts`）。
+- **组内顺序跟子表走**，不跟对象表：把组里的子层排到组前面，它照样由组画。子表初值是编译产物 `bundle.children`（加载时按 `objects` 顺序，换父挂上的追加在尾）；`assignGroups` 的组内先序按它排。
+- **下标 API**（照 dll 的表）：
+  - `getLayerCount` = 表长 − 待删；
+  - `enumerateLayers` 跳过待删；
+  - `getLayerIndex` 是原始下标，含待删；
+  - `getLayer(数字)` 按原始下标，待删或越界返回 `null`；
+  - `getLayer(名字)` 取第一个同名的，它待删就返回 `null`、不再往后找，找不到再按 `strtol` 当 id。
+  - **对象参数不看待删**（dll 的对象分支直接取指针）：同一帧用对象再删一次仍返回 `true`，`sortLayer` 照样排。`setParent` 的父例外，走 exe 侧的解析，待删的父当没有。
+- **`sortLayer(x, i)`**：
+  - 少于两个参数、第二参不是 Number（`'3'` 也算）返回 `false`；
+  - 否则 `ToInt32`，先摘掉再插到 `i`，`i` 按无符号与表长比，越界和负数都到末尾。
+- **作用域门**：`thisScene` 的下标与结构方法在模块顶层调用，抛 `SyntaxError: <名字> cannot be called from global scope.`。文案照 dll，有两处抄错的名字：`getLayerByID` 报 `getLayer`，`getInitialLayerConfig` 报 `destroyLayer`。语料里没有脚本在顶层调它们。
+
+### 删除
+
+- **生效时机**：`destroyLayer` 只记待删（`SceneState.markDestroy`），所有脚本跑完之后、绘制之前一次生效（`script/structure.ts` 的 `settleDestroyed`，宿主 `beforeFrame` 与 dev 探针共用）。所以同一帧排在后面的脚本照收 `update`，这一帧不画。
+- **生效时做的事**：
+  - 从 `order`、`layers`、父的子表里摘掉；
+  - 子对象变成根，本地字段不动，世界变换跳变；
+  - 挂在它上面的脚本条目（图层字段、effect、材质常量、动画层）先收 `destroy` 再摘除，计时器与写入重放表一并清掉；
+  - 声音停播，光标的悬停 / 按下集合摘掉它，不发 `cursorLeave` / `cursorUp`；
+  - 渲染侧在 `sync` 里释放它独有的 GPU 资源（`GpuScene.releaseRemoved`）。
+- **作废**：之后这个对象，以及它的 effect、材质对象都作废：读字段得 `undefined`、写入忽略、方法返回 `undefined`、`engine.isObjectValid` 为假。
+- **删组**：被删的是组合层，或在组里时，请求一次重编译（组归属是编译产物）。WPE 当帧就把剩下的子层改由顶层画；我们要等重编译完才画，这一段不画它们，是已知差异。
+
+### 换父
+
+`setParent(parent, attachment | adjust, adjust)`：
+
+- **解析**：
+  - 第一参：对象、名字、id 字符串、下标都收；解析不到（含待删）就解除父子。
+  - `adjust` = 第二参或第三参是 `true`。
+  - 第二参是整数或字符串时当挂点，按新父 puppet 的挂点表找，找不到当没有挂点。
+  - 父与挂点都没变直接返回。
+- **成环**：WPE 没有成环检测，实测整个进程崩溃。我们拒绝这个调用、记一条 warn。
+- **组深度**：
+  - 「组」是模型 JSON 里 `passthrough: true` 的图像层，没有子层也算；
+  - 先从旧父摘掉，再检查 `up(新父) + down(自己) ≥ 4`；
+  - 失败时父置空、本地字段不动，抛 `Error("Invalid parent configuration.")`。
+- **adjust**（`render/adjust.ts`，逐位移植 `rea-p6d3-adjust.md` 第 1 节）：
+  - 平移取 `inverse(W_新父) · W_旧`；
+  - 局部旋转取「父链刚体旋转的逆 × 自身链刚体旋转」，按 `extractEulerAngleZYX` 写角度，再重建 3×3；
+  - 缩放让新世界矩阵每列长度等于旧的，所以新父有非均匀缩放时剪切会丢掉（WPE 同）；
+  - 带挂点时本地变换归零。
+- **结构记录**：宿主把换父记进结构（`SceneStructure.parents`，按先后），每次编译都带上。改了组归属或挂点的（自己子树、旧父链、新父链上有组合层，或挂点前后有一边不为空）请求一次重编译。WPE 当帧生效，我们晚到重编译完，是已知差异，语料里 `setParent` 是 0 处。
+
+### 结构跨重编译
+
+- **编译输入**：`SceneStructure { destroyed, parents }`（`compile/protocol.ts`）。编译时：
+  - 删掉的项当作不存在，不进 `bundle.layers`，下标不移；
+  - 父覆盖在 `resolveParents` 之后套用；
+  - 带挂点覆盖的对象不要求父排在前面。
+- **接续**：渲染器新建的状态在首帧前 `adoptStructure(旧的脚本状态)`，接过对象表、待删、父与子表，再重放脚本写入。首次加载时 `init` 里的排序、换父、删除也经这一步落到首帧。
+- 「清空脚本存储」时结构清空，回到 `scene.json` 原样。
+
+### 配置原文与登记资源
+
+- **`getInitialLayerConfig(x)`**：返回加载时的配置原文（`bundle.configs`，`compile/config.ts`，在套用脚本写入覆盖之前取），每次在 realm 里新解析一份。按 jsoncpp writer 规整：
+  - 去掉顶层 `id`；
+  - 所有层级的键按字典序；
+  - 非整数按 8 位有效数字，整数原样。
+- **`engine.registerAsset(path)`**：
+  - 只能在模块顶层调，否则抛 `SyntaxError: registerAsset can only be called from global scope.`；
+  - 返回路径字符串本身；
+  - 同一段脚本重复登记同一路径返回 `null`。
+
+  登记表留给 P6d3b 的 `__workshopId` 改写。
+
+### 对比结果
+
+**脚本日志**：dev 探针跑 900 帧（dt 1/60），`[kbp6d3]` 输出和 WPE 日志逐行比：
+
+| 工程 | 结果 |
+|---|---|
+| `p6d3-struct` | 27 行全部相同 |
+| `p6d3-parent` | 前 40 行相同，只有成环那一步不同：WPE 崩溃，我们拒绝后继续 |
+| `p6d-tree` | 51 行中 48 行相同。另 3 行是图层 / effect 对象的自有键集合与原型，P6d1 起就有，P6d3a 前后不变 |
+| `p6d3-attach` | 换父的结构与字段对上。挂点要等重编译（探针不做重编译），挂点的世界位置又依赖 puppet 姿势，所以矩阵不同 |
+
+**画面**：`p6d3-struct` 按 WPE 抓帧的帧号回放读回 1280×720。
+- 第 1、2 阶段（组内排序）和 WPE 逐像素相同。
+- 第 5、6 阶段（相机排序与删除）只差左下角的 G1：删组之后 WPE 当帧由顶层画，我们等重编译，是已知差异。
+
+**语料**：解锁 `2887099508`（`destroyLayer`）、`3570755196`（`registerAsset` 登记字体）。`2887099508` 的开场镜头还没有：`objects/52/visible` 是混淆脚本，用解码出的字符串调 `thisScene.getCameraTransforms` / `setCameraTransforms`，让相机跟着 52 号对象的 `origin` 关键帧滑动。编译期的缺口扫描认不出这种写法，运行时撞到就停用了 `update`。这两个 API 转交 P5（相机）实现（`TODO:[WPE_SCENE]`）。`scriptCorpus` 全库的变化全部来自去掉的四个缺口键：`registerAsset` 3 张、`sortLayer` 10 张、`getInitialLayerConfig` 4 张、`destroyLayer` 3 张。没有新增的键，也没有作用域门带来的新报错。
 
 ## 字体引擎 `wpefont`（P6b 1b 起）
 

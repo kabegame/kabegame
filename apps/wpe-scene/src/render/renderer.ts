@@ -354,6 +354,16 @@ export class SceneRenderer {
     return this.scene;
   }
 
+  /** 被删对象（`destroyLayer` 生效，P6d3a）：从光标的悬停 / 按下集合摘掉，不发 Leave / Up。 */
+  forgetObjects(objects: Iterable<number>): void {
+    this.cursorSession.forgetObjects(objects);
+  }
+
+  /** 挂点钩子（P6d3a，`setParent` 的 adjust 数学用）：父 puppet 骨骼的 `Pose · Att`；没有场景或没有挂点为 null。 */
+  attachMatrix(object: number): Float32Array | null {
+    return this.scene?.attachMatrix(object) ?? null;
+  }
+
   /** 脚本 `getTransformMatrix` 的落点（P6d1a，`GpuScene.transformMatrix`）；没有场景时为 null。 */
   transformMatrix(object: number, state: SceneState): Float32Array | null {
     return this.scene?.transformMatrix(object, state) ?? null;

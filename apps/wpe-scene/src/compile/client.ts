@@ -8,13 +8,15 @@ import type {
   SceneShadowSetting,
   SceneVolumetricsSetting,
 } from "./postprocess";
-import { encodeFileError, type WorkerRequest, type WorkerResponse } from "./protocol";
+import { encodeFileError, type SceneStructure, type WorkerRequest, type WorkerResponse } from "./protocol";
 
 export interface WorkerCompileInput {
   projectDir: string;
   sceneAssets: string[];
   userProperties?: Record<string, unknown>;
   scriptOverrides?: Record<string, number[] | boolean | string>;
+  /** 运行中改过的场景结构（P6d3）；缺省空结构。 */
+  structure?: SceneStructure;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
   postprocess?: ScenePostprocessSetting;
   /** 设置「场景反射」（P13b1）；缺省跟随 WPE。 */
@@ -104,6 +106,7 @@ async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> 
       sceneAssets: input.sceneAssets,
       userProperties: input.userProperties ?? {},
       scriptOverrides: input.scriptOverrides ?? {},
+      structure: input.structure ?? { destroyed: [], parents: [] },
       postprocess: input.postprocess ?? "follow",
       reflection: input.reflection ?? "follow",
       shadows: input.shadows ?? "follow",

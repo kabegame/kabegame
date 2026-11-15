@@ -902,7 +902,8 @@ describe("SceneHost：视频纹理（P9a 步骤 2）", () => {
     let gate: Promise<void> = Promise.resolve();
     rendererPointer.load.mockImplementation(async (_bundle: unknown, options?: unknown) => {
       await gate;
-      (options as { beforeFirstFrame?: (state: unknown) => void }).beforeFirstFrame?.({});
+      // 替身状态要有 `adoptStructure`（P6d3a：宿主在首帧前接旧状态的结构）
+      (options as { beforeFirstFrame?: (state: unknown) => void }).beforeFirstFrame?.({ adoptStructure() {} });
     });
     const report = reporter();
     const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });

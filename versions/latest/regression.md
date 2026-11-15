@@ -344,6 +344,33 @@
 | [x] | H7 加载用时 | Windows dev，屏外宿主 | 能渲染、脚本最多的 `3660962877`（252 段、27 种源码）：`realmCheck` 的 `elapsedMs`，与同一宿主里照旧方式逐段 `import(blob)` 交替各三次 | 不慢于旧方式 | 2026-11-15 Claude：新 176–189 ms，旧约 1 s |
 | [ ] | H8 预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开几张带脚本、能渲染的场景（灯带、时钟、音频条类） | 画面与改前一致，动画在走，日志里没有「场景脚本改写失败」 | 需要用户在界面上看 |
 
+## 场景壁纸 P6d3a：对象表与结构 API
+
+2026-11-15 Windows dev。场景脚本改结构：
+- `SceneState.order` 是 WPE 的对象表，决定绘制顺序与脚本下标，相机对象取表里最后一个可见的；
+- `sortLayer` 先摘再插；
+- `destroyLayer` 记待删、全部脚本之后一次生效，生效后对象作废、挂着的脚本收 `destroy`；
+- `setParent` 照读码逐位复刻 adjust、组深度检查、成环拒绝；
+- 结构跨重编译保留，改组归属或挂点的走重编译；
+- `getInitialLayerConfig` 取加载原文，`registerAsset` 只能在模块顶层调。
+
+建层（`createLayer`）是 P6d3b。说明见 `cocs/wpe/WPE_SCENE.md`「对象表与结构 API（P6d3a）」；计划与 WPE 实测见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d3-runtime-layers.md`，adjust 的读码见同目录 `rea-p6d3-adjust.md`。
+- 验收文件在 `ignore/p6/d3/`：
+  - 测试工程生成 `make_step0.py`，WPE 日志夹具 `out/wpe-*.log`（`cut_log.py` 截取），我们的输出 `out/kb-*.log`（`logrun.mjs`），画面 `out/{wpe,kb}-s*.png`（`renderstage.mjs`、`cmp_png.py`）；
+  - 语料 `corpus-after/`（与 `ignore/p6/d2/after/` 比，`unsupported_diff.py`）；
+  - 变异清单 `mutations.json`（结果 `mutate.txt`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | I1 类型与格式 | Windows | 宿主 `tsc --noEmit`；`deno task check -c kabegame`；Prettier `--check` 本步改动的文件 | 0 error、格式通过 | 2026-11-15 Claude：工作树与主工作区 tsc 0 error；vue-tsc 通过，cargo 那半被跑着的 dev 占用 CEF 文件（os error 32）没跑完；格式通过 |
+| [x] | I2 宿主 vitest（相关文件） | Node，vitest | `src/script`、`src/host*`、`src/dev/probe*`、`src/render`、`compile/p6d3`、`compile/scriptApi` | 全过 | 2026-11-15 Claude：主工作区 86 个文件 1894 条全过（24 条跳过） |
+| [x] | I3 变异检查 | Node，工作区模式 | `mutations.json` 12 处 | 每处都有用例失败，原样还原 | 2026-11-15 Claude：12 处全部检出、全部还原（负数下标到表头、删除当场生效、计数不扣待删、作废后仍可读、对象参数看待删、adjust 不反算、组深度不查、重编译丢结构、组内按下标、配置原文不取 8 位、相机取第一个、换父插在表头） |
+| [x] | I4 脚本输出与 WPE 逐行比 | Windows dev，屏外宿主（dev 探针 `renderFrame`，`scripts.consoleGrep`，dt 1/60）；WPE 测试窗口 | `p6d3-struct`（900 帧）、`p6d3-parent`（900 帧）、`p6d-tree`（150 帧）、`p6d3-attach`（500 帧）的 `[kbp6d3]` / `[kbp6d]` 输出与 WPE `log.txt` 逐行比 | struct 全同；parent 只差成环那一步；tree 只差 P6d1 起就有的三行；attach 只差挂点与骨骼姿势 | 2026-11-15 Claude：struct 27/27 相同；parent 前 40 行相同，第 41 行起是我们拒绝成环后继续跑（WPE 在这里整个进程崩溃）；tree 51 行中 48 行相同（图层 / effect 对象的自有键与原型，改前就不同）；attach 换父的结构与字段相同，挂点要等重编译、puppet 姿势在探针里不推进，矩阵不同 |
+| [x] | I5 画面与 WPE 逐像素比 | Windows dev，屏外宿主，窗口 1280×720；WPE 抓帧 `A:\p6d3\struct\` | `p6d3-struct` 回放到 WPE 抓帧的帧号（162 / 318 / 654 / 779）读回 | 组内排序两阶段相同；相机两阶段除删组后的子层外相同 | 2026-11-15 Claude：第 1、2 阶段 0 像素不同；第 5、6 阶段只差左下角的 G1（删组后 WPE 当帧由顶层画，我们等重编译，已知差异） |
+| [x] | I6 全语料脚本诊断与能力键 | Windows dev，屏外宿主（`scriptCorpus`，120 帧） | 与 P6d2 的 `after/` 逐张比 | 变化只来自去掉的缺口键 | 2026-11-15 Claude：能比的 236 张里 15 张不同，全是去掉 `registerAsset` / `sortLayer` / `getInitialLayerConfig` / `destroyLayer` 四个键带来的（原先求值失败或报 not a function 的脚本现在跑起来），没有新增的键与新报错；解锁 `2887099508`、`3570755196` |
+| [ ] | I7 解锁的两张在预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开 `2887099508`、`3570755196` | 正常渲染、不退回预览图，脚本没有报错（日志） | 2026-11-15 用户：`2887099508` 不通过，缺开场镜头滑动。原因是混淆脚本调 `getCameraTransforms` / `setCameraTransforms`（我们没有，编译期扫描认不出），已转交 P5 会话实现；`3570755196` 待看 |
+| [ ] | I8 删组与换进组的重编译 | Windows dev，预览 | 预览打开 `ignore/p6/d3/proj/p6d3-struct` 与 `p6d3-parent`（已导入，库里 15302 / 15301），看到第 4 阶段（约 8 s）之后 | 删组后剩下的红块在重编译后出现在左下；换进组的蓝块在重编译后被组裁掉；日志有「场景脚本删除了图层」「换父改了组或挂点」，没有报错 | 需要用户在界面上看 |
+
 ## 场景渲染器的逐 draw 轨迹（dev 工具）
 
 2026-11-13，只在 dev 构建：dev 探针 `renderFrame`、vite `/render`、MCP `render_scene` / `host_render` 收 `trace`，记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform、顶点，可选读回 pass 的目标，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。计划见 `.claude/plans/tools/scene-draw-trace.md`，用法见 `.claude/skills/kabegame-chromium/SKILL.md`「逐 draw 轨迹」，实施记录在 `ignore/tools/draw-trace/record.md`。

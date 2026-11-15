@@ -20,7 +20,7 @@ import type { ScenePass } from "./bundle";
 import { checkPassFeatures, checkProgramFeatures, normalizeDepthKeys } from "./features";
 import type { SceneFs } from "./fs";
 import type { LightCounts } from "./lights";
-import { numbers, parseMaterial, type SceneObject, type SceneScalar, type SceneValue } from "./model";
+import { isSceneObject, numbers, parseMaterial, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 import { shaderUniforms, type ShaderCompiler, type ShaderTextureSlot } from "./shader";
 import { FBO_FORMATS } from "./tex";
 import type { TranslateResult } from "../wpesl2wgsl";
@@ -294,6 +294,7 @@ export function wantsVolumetrics(objects: readonly SceneObject[], read: Volumetr
 }
 
 function volumetricKind(object: SceneObject, index: number, read: VolumetricsInput["read"]): "point" | "spot" | null {
+  if (!isSceneObject(object)) return null;
   const kind = object.light === "lpoint" ? "point" : object.light === "lspot" ? "spot" : null;
   if (!kind) return null;
   const at = (key: string) => `objects/${index}/${key}`;
@@ -320,11 +321,14 @@ export async function compileVolumetrics(
   // 可见的聚光数超过聚光槽时，排不上的那盏的聚光 VP 是残留值（V6），照报
   const visibleSpots = objects.filter(
     (object, index) =>
-      object.light === "lspot" && read(object.visible as SceneValue | undefined, `objects/${index}/visible`) !== false,
+      isSceneObject(object) &&
+      object.light === "lspot" &&
+      read(object.visible as SceneValue | undefined, `objects/${index}/visible`) !== false,
   ).length;
   // 点光阴影条目：带阴影的可见点光排在前面（`sortLights` 按 flags 降序），全部排得上 ⇔ 个数 ≤ min(pointShadow, point)
   const castingPoints = objects.filter(
     (object, index) =>
+      isSceneObject(object) &&
       object.light === "lpoint" &&
       read(object.visible as SceneValue | undefined, `objects/${index}/visible`) !== false &&
       read(object.castshadow as SceneValue | undefined, `objects/${index}/castshadow`) === true,

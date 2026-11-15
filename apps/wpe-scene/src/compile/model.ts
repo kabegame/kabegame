@@ -33,6 +33,13 @@ export interface SceneObject extends JsonObject {
   parallaxDepth?: SceneValue;
   effects?: unknown[];
 }
+/**
+ * `scene.objects` 的一项是不是对象。`scene.json` 里不是对象的项（`null`、数字、数组）WPE 加载时跳过；P6d3 起运行中删掉的对象也在这里置成
+ * `null`（保持下标对齐）。所有读 `scene.objects` 的地方都要先过它。
+ */
+export function isSceneObject(value: unknown): value is SceneObject {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
 export interface ModelJson extends JsonObject {
   material?: string;
   width?: number;

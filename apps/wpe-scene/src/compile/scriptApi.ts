@@ -65,14 +65,14 @@ function fields(names: readonly string[]): MissingScriptApi[] {
 
 /** WPE 有、我们没实现的脚本 API。 */
 export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly MissingScriptApi[]>> = {
-  /** `IScene` 14 个方法里实现了 `getLayer` / `getLayerCount` / `getLayerIndex` / `enumerateLayers`（3b）。 */
+  /**
+   * `IScene` 14 个方法里实现了 `getLayer` / `getLayerCount` / `getLayerIndex` / `enumerateLayers`（3b）与 `destroyLayer` / `sortLayer` /
+   * `getInitialLayerConfig`（P6d3a，读写 `SceneState.order`；`createLayer` 留给 P6d3b）。
+   */
   thisScene: [
-    // 建层删层与排序、模型数据 → P6；相机变换本机语料 0 处（L15）
+    // 建层 → P6d3b、模型数据 → P6；相机变换本机语料 0 处（L15）
     ...methods("root", [
       "createLayer",
-      "destroyLayer",
-      "sortLayer",
-      "getInitialLayerConfig",
       "getCameraTransforms",
       "setCameraTransforms",
       "createModelData",
@@ -103,8 +103,8 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       "windstrength",
     ]),
   ],
-  /** `requestFeatures` 声明里没有，DLL 有（报告 C）；`isObjectValid`、`clearTimeout` 已实现。 */
-  engine: methods("root", ["registerAsset", "requestFeatures"]),
+  /** `requestFeatures` 声明里没有，DLL 有（报告 C）；`isObjectValid`、`clearTimeout` 已实现，`registerAsset` 在 P6d3a 实现（只能在模块顶层调、记登记表）。 */
+  engine: methods("root", ["requestFeatures"]),
   /** `input` 的三个只读成员（`cursorWorldPosition` / `cursorScreenPosition` / `cursorLeftDown`）P6c 已实现（`script/api.ts` 的 `installInput`）。 */
   input: [],
   localStorage: [],
@@ -117,8 +117,8 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
    */
   layer: [
     // 层级与变换（W1 / W5）
-    // `getTransformMatrix` / `rotateObjectSpace` / `lookAt` / `lookAtYaw` / `getParent` / `getChildren` 已实现（P6d1a）
-    ...methods("any", ["setParent"], UNIQUE),
+    // `getTransformMatrix` / `rotateObjectSpace` / `lookAt` / `lookAtYaw` / `getParent` / `getChildren` 已实现（P6d1a），`setParent` 见下
+    // `setParent`（含 adjust、挂点、组深度检查）已实现（P6d3a）
     ...methods(
       "any",
       ["getAttachmentIndex", "getAttachmentMatrix", "getAttachmentOrigin", "getAttachmentAngles"],

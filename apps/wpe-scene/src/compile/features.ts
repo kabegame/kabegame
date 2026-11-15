@@ -9,6 +9,7 @@
  * 这三类逐项核对（`checkProgramFeatures`，默认纹理在 `bundle.ts` 里随绑定一起核对）。
  */
 import {
+  isSceneObject,
   numbers,
   resolveValue,
   staticCombos,
@@ -479,9 +480,12 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
       unsupported.add(`general:${key}`);
   const { parents, cycle } = resolveParents(scene.objects);
   if (cycle) unsupported.add("object:parent-cycle");
-  scene.objects.forEach((object, index) => checkObjectFeatures(object, unsupported, parents[index]));
+  scene.objects.forEach((object, index) => {
+    if (isSceneObject(object)) checkObjectFeatures(object, unsupported, parents[index]);
+  });
   if (!orthographic)
-    for (const object of scene.objects) for (const key of perspectiveObjectIssues(object)) unsupported.add(key);
+    for (const object of scene.objects)
+      if (isSceneObject(object)) for (const key of perspectiveObjectIssues(object)) unsupported.add(key);
   // 关键帧不在这里报：由 `collectAnimations`（`animations.ts`，P10a 步骤 2）按目标报细分键
 }
 

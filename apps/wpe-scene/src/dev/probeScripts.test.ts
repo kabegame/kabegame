@@ -194,6 +194,35 @@ const frFactory: Factory = () => {
   };
 };
 
+describe("删除生效与宿主同一套接线（P6d3a）", () => {
+  it("同一帧里后面的脚本照收 update，帧末删除生效后收 destroy、状态里摘掉；下一帧不再收它的 update", async () => {
+    const log: string[] = [];
+    const { scripts, state } = await setup({
+      "objects/0/color": (g) => ({
+        update: (value: unknown) => {
+          log.push("update:0");
+          g.thisScene.destroyLayer("T");
+          return value;
+        },
+      }),
+      "objects/1/alpha": () => ({
+        update: () => void log.push("update:1"),
+        destroy: () => void log.push("destroy:1"),
+      }),
+    });
+    await scripts.load();
+    scripts.frame(0.1, 0.1);
+    expect(log).toEqual(["update:0", "update:1", "destroy:1"]);
+    expect(state.layers.has(1)).toBe(false);
+    expect(state.order).toEqual([0, 2]);
+    log.length = 0;
+    scripts.frame(0.1, 0.2);
+    expect(log).toEqual(["update:0"]);
+    // 诊断里也只剩没被删的那段脚本
+    expect(scripts.result().diagnostics.map((item) => (item as { id: string }).id)).toEqual(["objects/0/color"]);
+  });
+});
+
 describe("scripts 选项（probeScriptsOptionsOf）", () => {
   it("不给为 null；true 与 {} 用缺省并写明；给了的原样", () => {
     expect(probeScriptsOptionsOf(undefined)).toBeNull();

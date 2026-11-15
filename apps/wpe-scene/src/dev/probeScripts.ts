@@ -43,6 +43,7 @@ import {
 } from "../script/runtime";
 import { applyScriptedProperties } from "../script/initialApply";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "../script/stateWrite";
+import { settleDestroyed } from "../script/structure";
 
 /** `renderFrame` 的 `scripts` 给对象时的选项：`clock` 是起点时刻（毫秒时间戳），`seed` 是 `Math.random` 的种子。 */
 export interface ProbeScriptsOptions {
@@ -507,6 +508,12 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       clock.frametime = dt;
       frames++;
       runtime?.frame(dt);
+      // 删除生效（P6d3a）：同宿主 `beforeFrame`，全部脚本之后；探针每次从头编译、用空结构，所以不记 `SceneStructure`
+      settleDestroyed(state, {
+        runtime,
+        bundle,
+        removed: (objects) => cursorSession.forgetObjects(objects),
+      });
     },
     animationEvent(object, json) {
       if (disposed) return;

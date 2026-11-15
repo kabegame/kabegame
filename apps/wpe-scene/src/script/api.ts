@@ -18,12 +18,14 @@ import { constantTargetFields, materialSlots, type MaterialMember } from "../com
 import { isPassStateField, type PassStateField } from "../compile/passState";
 import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlPoint } from "../compile/particles";
 import { BLOOM_FIELDS } from "../compile/postprocess";
+import type { SceneStructure } from "../compile/protocol";
 import type { SceneScript } from "../compile/scripts";
 import { TEXT_ANCHORS } from "../compile/texts";
 import { animationLayerKey, puppetEntries, type PuppetLayerControl, type PuppetRig } from "../puppet/player";
 import type { CursorInputSnapshot } from "../render/cursor";
 import { anglesRotation, drawMatrixOf } from "../render/layout";
 import { extractEulerZYX, lookAtAngles, lookAtYawAngles, rotateObjectSpace } from "../render/rotation";
+import { adjustReparent } from "../render/adjust";
 import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
 import { layerVideoSource } from "../video/sceneVideos";
@@ -147,6 +149,28 @@ export interface ScriptApiState {
    * `init`）时退回按 `state().layers` 纯状态现算（没有挂点）。
    */
   transformMatrix?(object: number): Float32Array | null;
+  /**
+   * 挂点钩子（P6d3a，同 `worldMatrixOf` 的 `attach`：父 puppet 骨骼的 `Pose · Att`，没有挂点返回 null）：`setParent` 的 adjust 数学按它算
+   * 世界矩阵与刚体链。不传时当没有挂点（单测、首次加载的 `init`）。
+   */
+  attachPose?(object: number): Float32Array | null;
+  /**
+   * 宿主维护的运行中结构（P6d3a）：`setParent` 用它找对象当前的挂点名（运行中换过父的取最后一条）。不传当空。
+   */
+  structure?(): SceneStructure;
+  /**
+   * `setParent` 已改完状态（含组深度检查失败后父被置空的情形）：宿主把它记进结构、按需请求重编译（`script/structure.ts`）。
+   * `bone` 是挂点名（没有挂点是 null）。
+   */
+  reparented?(change: {
+    object: number;
+    oldParent: number | null;
+    oldBone: string | null;
+    parent: number | null;
+    bone: string | null;
+  }): void;
+  /** 宿主的日志通道（成环拒绝等）。不传时落到 `console.warn`。 */
+  warn?(message: string): void;
   /**
    * 关键帧动画的落点（P10b，宿主按脚本当前看到的 bundle 取播放器的那一条，`SceneAnimations.control`）：`IAnimation` 的成员接到它上面。
    * 不传或返回 null（语料诊断、播放器还没建）时方法空操作，只读成员取 bundle 里这一条的定义。
@@ -283,6 +307,8 @@ export class ScriptApi {
   /** 没有宿主视图时（语料诊断）的控制口替身：按 `<对象>:<层下标>` 缓存，保住脚本写过的名字等。 */
   private readonly fallbackLayerControls = new Map<string, PuppetLayerControl>();
   private readonly recompileValues = new Map<string, string>();
+  /** `engine.registerAsset` 的登记表：脚本条目 id → 路径（P6d3a 只记，P6d3b 的 `__workshopId` 改写读）。 */
+  private readonly registeredAssetsById = new Map<string, Set<string>>();
   /**
    * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applySpectrum` 每帧把场景频谱（归一化后的）
    * 原地写进 `arrays`（P4e 步骤 4）；没有音频时频谱全零，相当于 WPE 里没有声音在放。`api` 是脚本拿到的对象，脚本可以改写
@@ -359,6 +385,7 @@ export class ScriptApi {
     let api = this.layers.get(object);
     if (api) return api;
     api = this.object();
+    this.ownerOf.set(api, object);
     const index = object;
     this.define(api, "name", () => this.findLayer(index)?.name ?? "");
     // 图层字段与 `size` 的读取按 WPE 取单精度、角度按 f32 算法换成度（`f32.ts`，P3b 补测 `ignore/p3b-f32`）；状态照旧存 double
@@ -424,18 +451,20 @@ export class ScriptApi {
    * - `rotateObjectSpace(v)` / `lookAt` / `lookAtYaw`：写 3×3 与角度（弧度原样），写入走普通 `angles` 同一个 `SceneState.write` 分支。
    */
   private installHierarchy(api: ApiObject, object: number): void {
+    // 父与子表读状态（P6d3a：运行中会换父、删父；子表顺序 = 加载时 `objects` 顺序，换父挂上的追加在尾，`sortLayer` 不改它）
     this.method(api, "getParent", () => {
-      const parent = this.findLayer(object)?.parent ?? null;
+      const parent = this.access.state().layers.get(object)?.parent ?? null;
       return parent === null ? null : this.layer(parent);
     });
     this.method(api, "getChildren", () =>
       this.array(
         this.access
-          .bundle()
-          .layers.filter((layer) => layer.parent === object)
-          .map((layer) => this.layer(layer.object)),
+          .state()
+          .childrenOf(object)
+          .map((child) => this.layer(child)),
       ),
     );
+    this.method(api, "setParent", (...args: unknown[]) => this.setParent(object, args));
     this.method(api, "getTransformMatrix", () => {
       const state = this.access.state();
       const m = this.access.transformMatrix?.(object) ?? drawMatrixOf(object, state.layers, new Map());
@@ -754,17 +783,43 @@ export class ScriptApi {
     // 普通对象，不是 `create(null)`：WPE 的 `String(thisObject)` 是 `[object Object]`，没有原型时会抛 TypeError
     return new (this.realm.global.Object as ObjectConstructor)() as ApiObject;
   }
+  /**
+   * 属主对象被删（`destroyLayer` 生效）之后作废（P6d3a，rea-p6d-layers 6.3）：图层对象、它的 effect 与材质对象登记进 `ownerOf`，
+   * 之后读字段得 `undefined`、写入忽略、方法返回 `undefined`（不抛错）。没登记的对象（`thisScene`、`engine`、general）不受影响。
+   */
+  private readonly ownerOf = new WeakMap<ApiObject, number>();
+  /** 对象还在：没有生效的删除（`SceneState.layers` 里有）。 */
+  private alive(object: number): boolean {
+    return this.access.state().layers.has(object);
+  }
+  private dead(object: ApiObject): boolean {
+    const owner = this.ownerOf.get(object);
+    return owner !== undefined && !this.alive(owner);
+  }
   private define(object: ApiObject, name: string, get: () => unknown, set?: (value: unknown) => void): void {
     (this.realm.global.Object as typeof Object).defineProperty(object, name, {
       enumerable: true,
-      get,
-      ...(set ? { set } : {}),
+      get: () => (this.dead(object) ? undefined : get()),
+      ...(set
+        ? {
+            set: (value: unknown) => {
+              if (!this.dead(object)) set(value);
+            },
+          }
+        : {}),
     });
   }
   private method(object: ApiObject, name: string, fn: (...args: never[]) => unknown, scoped = false): void {
-    this.define(object, name, () => (...args: never[]) => {
-      if (scoped) this.requireCallback(name);
-      return fn(...args);
+    // 方法的取值照常返回函数（作废后调用也不抛错），调用时才看属主还在不在
+    (this.realm.global.Object as typeof Object).defineProperty(object, name, {
+      enumerable: true,
+      get:
+        () =>
+        (...args: never[]) => {
+          if (this.dead(object)) return undefined;
+          if (scoped) this.requireCallback(name);
+          return fn(...args);
+        },
     });
   }
   private requireCallback(name: string): void {
@@ -908,13 +963,15 @@ export class ScriptApi {
       this.engine,
       "isObjectValid",
       (value: unknown) =>
-        [...this.layers.entries()].some(([index, layer]) => layer === value && !!this.findLayer(index)) ||
+        [...this.layers.entries()].some(
+          ([index, layer]) => layer === value && !!this.findLayer(index) && this.alive(index),
+        ) ||
         value === this.general ||
         [...this.materials.entries()].some(
-          ([pass, object]) => object === value && this.access.state().constants.has(pass),
+          ([pass, object]) => object === value && this.access.state().constants.has(pass) && !this.dead(object),
         ) ||
         [...this.effects.entries()].some(([key, object]) => {
-          if (object !== value) return false;
+          if (object !== value || this.dead(object)) return false;
           const [layer, effect] = key.split("/").map(Number);
           return this.findLayer(layer)?.effects.some((item) => item.source === effect) ?? false;
         }),
@@ -928,6 +985,18 @@ export class ScriptApi {
       const buffers = this.audioBuffer(resolution);
       this.access.audioRegistered?.();
       return buffers;
+    });
+    // 登记资源（P6d3a，rea-p6d-script 第 3 节）：只能在模块顶层调；参数不是字符串返回 null；同一段脚本重复登记同一路径返回 null；
+    // 否则记进这段脚本的登记表（P6d3b 的 `__workshopId` 改写用）并返回路径本身。WPE 的 exe 不读这张表，所以 precache 什么都不做
+    this.method(this.engine, "registerAsset", (path?: unknown, _precache?: unknown) => {
+      if (!this.evaluating) throw this.syntaxError("registerAsset can only be called from global scope.");
+      if (typeof path !== "string") return null;
+      const id = this.current?.id ?? "<module>";
+      const set = this.registeredAssetsById.get(id) ?? new Set<string>();
+      if (set.has(path)) return null;
+      set.add(path);
+      this.registeredAssetsById.set(id, set);
+      return path;
     });
     this.method(
       this.engine,
@@ -1310,43 +1379,7 @@ export class ScriptApi {
   }
 
   private installScene(): void {
-    this.method(
-      this.thisScene,
-      "getLayer",
-      (...args: unknown[]) => {
-        // 不传参数返回 undefined（0c 实测）；传了 undefined 的行为不变（按名字找、找不到 null）
-        if (args.length === 0) return undefined;
-        const name = args[0];
-        // 图层对象（P6b 步骤 2，p6b-api 实测：`getLayer(layer) === layer`）：是本场景发出的图层对象就原样返回，别的对象返回 null
-        if (name !== null && typeof name === "object") {
-          for (const [object, api] of this.layers) if (api === name && this.findLayer(object)) return api;
-          return null;
-        }
-        const layers = this.access.bundle().layers;
-        const layer =
-          typeof name === "number"
-            ? layers.find((item) => item.object === name)
-            : layers.find((item) => item.name === name);
-        return layer ? this.layer(layer.object) : null;
-      },
-      true,
-    );
-    // 只收字符串（P6d0c 实测：数字全是 null，无参 undefined），照 C `strtol` 解析（十进制、前导空白、可带 ±、取到第一个非数字为止，没有数字得 0）
-    this.method(
-      this.thisScene,
-      "getLayerByID",
-      (...args: unknown[]) => {
-        if (args.length === 0) return undefined; // 只区分没传参数（传了 undefined 当非字符串，得 null）
-        const id = args[0];
-        if (typeof id !== "string") return null;
-        // 前导空白照 C `isspace`：空格与 \t \n \v \f \r（不是 JS 的 `\s`，后者还含 NBSP、U+FEFF、各种 Unicode 空格）
-        const match = /^[ \t\n\v\f\r]*([+-]?)(\d*)/.exec(id)!;
-        const value = match[2] ? Number(match[1] + match[2]) : 0;
-        const layer = this.access.bundle().layers.find((item) => item.id === value);
-        return layer ? this.layer(layer.object) : null;
-      },
-      true,
-    );
+    this.installLayerTable();
     // 全场景按名字找第一条（P10b，步骤 0 Q6）：参数不是字符串、找不到都是 null；空串照常查（取第一条没写 name 的）
     this.method(this.thisScene, "getAnimation", (name: unknown) => {
       this.requireAnimationContext();
@@ -1354,21 +1387,235 @@ export class ScriptApi {
       const def = this.findAnimation(null, name);
       return def ? this.animationApi(def) : null;
     });
-    this.method(this.thisScene, "getLayerCount", () => this.access.bundle().layers.length, true);
-    this.method(
-      this.thisScene,
-      "enumerateLayers",
-      () => this.array(this.access.bundle().layers.map((layer) => this.layer(layer.object))),
-      true,
+  }
+
+  /** C `strtol` 十进制：前导空白（`isspace`，不是 JS 的 `\s`）、可带 ±、取到第一个非数字为止，没有数字得 0。 */
+  private strtol(text: string): number {
+    const match = /^[ \t\n\v\f\r]*([+-]?)(\d*)/.exec(text)!;
+    return match[2] ? Number(match[1] + match[2]) : 0;
+  }
+
+  /**
+   * 图层参数的解析（P6d3a，WPE dll 的 `R`，rea-p6d-script 4.1）：返回 `order` 里的对象与它是否待删。
+   * - 字符串：先按名字取 `order` 里**第一个**同名对象（它待删时按 `rejectPendingName` 返回 null、不再往后找）；没有同名再按 `strtol` 当 id 找；
+   * - 数字：`ToInt32`，按 `order` 的原始下标取，越界 null；
+   * - 图层对象（本 API 建的）：取它的下标，**不看待删**（dll 的对象分支直接取指针，0c 实测同帧用对象再删一次仍是 true）；作废的当作找不到；
+   * - 其它都是 null。
+   * 数字与 id 命中的待删对象按 `rejectPending` 返回 null 或照常返回。
+   */
+  private lookup(
+    value: unknown,
+    rejectPending: boolean,
+    rejectPendingName: boolean,
+  ): { object: number; pending: boolean } | null {
+    const state = this.access.state();
+    const order = state.order;
+    const hit = (object: number, reject: boolean) => {
+      const pending = state.pendingDestroy.has(object);
+      return pending && reject ? null : { object, pending };
+    };
+    if (typeof value === "string") {
+      for (const object of order) if (this.findLayer(object)?.name === value) return hit(object, rejectPendingName);
+      const id = this.strtol(value);
+      for (const object of order) if (this.findLayer(object)?.id === id) return hit(object, rejectPending);
+      return null;
+    }
+    if (typeof value === "number") {
+      const index = value | 0;
+      if (index < 0 || index >= order.length) return null;
+      return hit(order[index], rejectPending);
+    }
+    if (value !== null && typeof value === "object") {
+      for (const [object, api] of this.layers)
+        if (api === value) return this.alive(object) && order.includes(object) ? hit(object, false) : null;
+    }
+    return null;
+  }
+
+  /** `R`：数字、名字、id 命中待删对象时解析不到（null）；图层对象照常解析（见 `lookup`）。 */
+  private resolveLayer(value: unknown): number | null {
+    return this.lookup(value, true, true)?.object ?? null;
+  }
+
+  /** thisScene 方法在模块顶层调用抛 realm 的 `SyntaxError`；`messageName` 是 dll 里抄错的名字（`getLayerByID` 用 `getLayer`）。 */
+  private sceneMethod(name: string, fn: (...args: unknown[]) => unknown, messageName = name): void {
+    this.method(this.thisScene, name, (...args: unknown[]) => {
+      if (this.evaluating) throw this.syntaxError(`${messageName} cannot be called from global scope.`);
+      return fn(...args);
+    });
+  }
+
+  /**
+   * 下标与结构 API（P6d3a，rea-p6d-layers 3.3、rea-p6d-script 5.1）：读写 `SceneState.order`（WPE 的对象表 `G+0x158`）。
+   * 都不能在模块顶层调用。`getLayerIndex` 与 `getInitialLayerConfig` 不看待删（照 dll 的 `H+0x48`）。
+   */
+  private installLayerTable(): void {
+    const state = () => this.access.state();
+    // 不传参数返回 undefined（0c 实测）；传了 undefined 的行为不变（按名字找、找不到 null）。数字、名字、图层对象都按 `R`
+    this.sceneMethod("getLayer", (...args) => {
+      if (args.length === 0) return undefined;
+      const object = this.resolveLayer(args[0]);
+      return object === null ? null : this.layer(object);
+    });
+    // 只收字符串（P6d0c 实测：数字全是 null，无参 undefined），照 C `strtol` 解析；待删的返回 null
+    this.sceneMethod(
+      "getLayerByID",
+      (...args) => {
+        if (args.length === 0) return undefined; // 只区分没传参数（传了 undefined 当非字符串，得 null）
+        const id = args[0];
+        if (typeof id !== "string") return null;
+        const value = this.strtol(id);
+        const layer = this.access.bundle().layers.find((item) => item.id === value);
+        if (!layer || !this.alive(layer.object) || state().pendingDestroy.has(layer.object)) return null;
+        return this.layer(layer.object);
+      },
+      "getLayer",
     );
-    this.method(
-      this.thisScene,
-      "getLayerIndex",
-      (value: unknown) =>
-        this.access.bundle().layers.find((layer) => this.layer(layer.object) === value || layer.name === value)
-          ?.object ?? -1,
-      true,
+    this.sceneMethod("getLayerCount", () => state().order.length - state().pendingDestroy.size);
+    this.sceneMethod("enumerateLayers", () =>
+      this.array(
+        state()
+          .order.filter((object) => !state().pendingDestroy.has(object))
+          .map((object) => this.layer(object)),
+      ),
     );
+    // 返回 `order` 里的原始下标（含待删），找不到 −1；参数不是对象 / 数字 / 字符串也是 −1
+    this.sceneMethod("getLayerIndex", (value) => {
+      if (typeof value !== "object" && typeof value !== "number" && typeof value !== "string") return -1;
+      const hit = this.lookup(value, false, false);
+      return hit ? state().order.indexOf(hit.object) : -1;
+    });
+    // 少于两个参数、第一参不是对象 / 数字 / 字符串、第二参不是 Number（`'3'` 也是）都是 false；其余按 `R` 解析后改表
+    this.sceneMethod("sortLayer", (...args) => {
+      if (args.length < 2) return false;
+      const first = args[0];
+      if (typeof first !== "object" && typeof first !== "number" && typeof first !== "string") return false;
+      if (typeof args[1] !== "number") return false;
+      const object = this.resolveLayer(first);
+      return object === null ? false : state().sortLayer(object, args[1] | 0);
+    });
+    // 解析不到（含 `null`、待删）返回 false；否则记待删（生效在脚本阶段之后）
+    this.sceneMethod("destroyLayer", (...args) => {
+      if (args.length === 0) return false;
+      const object = this.resolveLayer(args[0]);
+      return object === null ? false : state().markDestroy(object);
+    });
+    // 加载时的配置原文（`bundle.configs`，去掉 id、键按字典序、浮点 8 位有效数字）：每次在 realm 里新解析一份；解析不到、没有配置返回 null。
+    // 名字解析里第一个同名对象待删时仍是 null（`R`），别的路径不看待删
+    this.sceneMethod(
+      "getInitialLayerConfig",
+      (...args) => {
+        const hit = this.lookup(args[0], false, true);
+        const text = hit ? this.access.bundle().configs?.[hit.object] : null;
+        return text ? (this.realm.global.JSON as JSON).parse(text) : null;
+      },
+      "destroyLayer",
+    );
+  }
+
+  /** 对象当前的挂点名：运行中换过父的取结构里最后一条，否则取编译期的（对象 JSON 的 `attachment`，只在 bundle 里解析成功时算）。 */
+  private currentBone(object: number): string | null {
+    const entries = this.access.structure?.().parents ?? [];
+    for (let i = entries.length - 1; i >= 0; i--) if (entries[i][0] === object) return entries[i][2];
+    if (!this.findLayer(object)?.attachment) return null;
+    try {
+      const config = JSON.parse(this.access.bundle().configs?.[object] ?? "null") as { attachment?: unknown } | null;
+      return typeof config?.attachment === "string" ? config.attachment : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** 父图层 puppet（或带骨骼的模型）的挂点表；没有时空数组。 */
+  private attachmentsOf(parent: number | null): readonly { name: string }[] {
+    if (parent === null) return [];
+    const layer = this.findLayer(parent);
+    return layer?.puppet?.attachments ?? layer?.model?.skeleton?.attachments ?? [];
+  }
+
+  /** 组（模型 JSON `passthrough: true` 的图像层，不看有没有子层）。 */
+  private isGroup(object: number): boolean {
+    return this.findLayer(object)?.passthroughModel === true;
+  }
+
+  /**
+   * `setParent(parent, attachment | adjust, adjust)`（P6d3a，rea-p6d-layers 9.4、rea-p6d3-adjust、步骤 0 实测）：
+   * 1. 第一参按 `R` 解析（对象 / 名字 / 下标）；解析不到（`undefined`、找不到、待删、作废）当解除父子；
+   * 2. `adjust` = 第二参或第三参 `=== true`；第二参是整数或字符串时当挂点（整数按新父的挂点表取名，字符串按名，取不到当没有挂点）；
+   * 3. 父与挂点都没变直接返回（在一切检查之前）；
+   * 4. 成环（新父是自己或自己的子孙）不改、记 warn、返回（WPE 没有检测、整个进程崩溃）；
+   * 5. 先从旧父摘掉，再做组深度检查（`up(新父) + down(自己) ≥ 4` 失败：父置空、本地字段不动、抛 `Error("Invalid parent configuration.")`）；
+   * 6. adjust 为假只换父；adjust 为真照 `adjustReparent` 重算 origin / angles / scale，带挂点时 origin 与 angles 归零（缩放不变）。
+   */
+  private setParent(object: number, args: unknown[]): undefined {
+    const state = this.access.state();
+    const self = state.layers.get(object);
+    if (!self) return undefined;
+    const target = this.resolveLayer(args[0]);
+    // 父走 exe 侧的 `D[3]`（rea-p6d-layers 1 节）：对象也要在表里且不待删，这一点和 dll 的 `R` 不同
+    const parent = target !== null && state.layers.has(target) && !state.pendingDestroy.has(target) ? target : null;
+    const adjust = args[1] === true || args[2] === true;
+    const second = args[1];
+    const tables = this.attachmentsOf(parent);
+    let bone: string | null = null;
+    if (parent !== null) {
+      if (typeof second === "string") bone = tables.some((item) => item.name === second) ? second : null;
+      else if (typeof second === "number" && Number.isInteger(second)) bone = tables[second]?.name ?? null;
+    }
+    const oldParent = self.parent;
+    const oldBone = this.currentBone(object);
+    if (parent === oldParent && bone === oldBone) return undefined;
+    // 成环：新父是自己或自己的子孙
+    if (parent !== null && state.subtree(object).includes(parent)) {
+      const message = `setParent：图层 ${object} 不能挂到自己或自己的子孙下，已忽略`;
+      if (this.access.warn) this.access.warn(message);
+      else console.warn(message);
+      return undefined;
+    }
+    // 组深度（`FUN_1401ddb50`）：up 从新父沿父链数组、down 是自己这棵子树里最深的组嵌套
+    let up = 0;
+    const seen = new Set<number>();
+    for (
+      let current = parent;
+      current !== null && !seen.has(current);
+      current = state.layers.get(current)?.parent ?? null
+    ) {
+      seen.add(current);
+      if (this.isGroup(current)) up++;
+    }
+    const down = (current: number, guard: Set<number>): number => {
+      if (guard.has(current)) return 0;
+      guard.add(current);
+      let deepest = 0;
+      for (const child of state.childrenOf(current)) deepest = Math.max(deepest, down(child, guard));
+      return (this.isGroup(current) ? 1 : 0) + deepest;
+    };
+    const depth = up + down(object, new Set());
+    // adjust 的数学读换父之前的状态（旧父、旧本地字段）：先算，之后才改结构
+    const adjusted =
+      adjust && bone === null && depth < 4
+        ? adjustReparent(object, parent, state.layers, this.access.attachPose)
+        : null;
+    // 先从旧父摘掉（失败时它已经离开了）
+    if (self.parent !== null) state.setParent(object, null);
+    if (depth >= 4) {
+      this.access.reparented?.({ object, oldParent, oldBone, parent: null, bone: null });
+      const ErrorCtor = (this.realm.global.Error as ErrorConstructor | undefined) ?? Error;
+      throw new ErrorCtor("Invalid parent configuration.");
+    }
+    if (adjust) {
+      if (adjusted) {
+        this.access.write({ kind: "layer", object, field: "origin" }, adjusted.origin);
+        this.access.write({ kind: "rotation", object, rotation: null, angles: adjusted.angles }, adjusted.angles);
+        this.access.write({ kind: "layer", object, field: "scale" }, adjusted.scale);
+      } else if (bone !== null) {
+        this.access.write({ kind: "layer", object, field: "origin" }, [0, 0, 0]);
+        this.access.write({ kind: "rotation", object, rotation: null, angles: [0, 0, 0] }, [0, 0, 0]);
+      }
+    }
+    state.setParent(object, parent);
+    this.access.reparented?.({ object, oldParent, oldBone, parent, bone });
+    return undefined;
   }
 
   /** bundle 里某个 pass（基础材质或 effect 绘制 pass），按稳定键找。 */
@@ -1411,6 +1658,8 @@ export class ScriptApi {
     let api = this.materials.get(pass);
     if (api) return api;
     api = this.object();
+    const owned = /^objects\/(\d+)\//.exec(pass);
+    if (owned) this.ownerOf.set(api, Number(owned[1]));
     const current = this.findPass(pass);
     const constants = this.materialConstants(pass);
     // 五个 pass 状态字段（静态表，rea-p6d1-xform 4.2）：字符串，读到的是当前有效值（脚本写过的覆盖 ?? bundle，`alphawriting` 缺省 default）；
@@ -1564,6 +1813,7 @@ export class ScriptApi {
     let api = this.effects.get(key);
     if (api) return api;
     api = this.object();
+    this.ownerOf.set(api, object);
     this.define(
       api,
       "visible",
