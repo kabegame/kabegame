@@ -100,6 +100,10 @@ if (mode.value === "wallpaper") return [];
 
 ## 步骤 2 — 场景加载进度（宿主上报 → 应用页）
 
+> 2026-11-15 已做（与步骤 3 一起）：宿主 `progress.ts`（`SceneLoadProgress` 节流 + 分段计时）、Worker `progress` 消息、`decode` / `gpu` /
+> `frame` 计数；`gpu` 在编译、解码完就进入（准备渲染：文本、脚本、取设备期间也算这一段），权重按实测改成 5 / 50 / 10 / 30 / 5；
+> 超时按「30 s 内没有新进度」；应用页 `wpeSceneProgress.ts`、`useWpeLoadProgress`、`WpeLoadingOverlay.vue`。
+
 同 `phase-scene-loading-progress.md` 点 1、点 2：宿主按 `page / compile / decode / gpu / frame` 上报（postMessage
 `kabegame:wpe-scene-progress`，Worker 协议加 `progress`，只在首次加载报），`WpeSceneView` 收、`WpeWallpaperContent` 转发；应用页
 `wpeSceneProgress.ts` 按权重换算、单调、宿主阻塞时缓慢逼近。超时改成「30 s 内**没有新进度**才判超时」还是「从挂载算 30 s」见待定 4。

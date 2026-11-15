@@ -55,6 +55,10 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       exhaustive: message.exhaustive,
       reader,
       translator,
+      onProgress: (done, total) => {
+        const progress: WorkerResponse = { type: "progress", done, total };
+        self.postMessage(progress);
+      },
     });
     const response: WorkerResponse = { type: "done", bundle };
     self.postMessage(response, { transfer: transferableBuffers(bundle) });

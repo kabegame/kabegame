@@ -932,3 +932,83 @@ describe("SceneHost：视频纹理（P9a 步骤 2）", () => {
     host.dispose();
   });
 });
+
+describe("SceneHost：加载进度（壁纸显示重构步骤 2）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    compile.mockImplementation(async (input) => {
+      const { onProgress } = input as { onProgress?: (stage: string, done: number, total: number) => void };
+      onProgress?.("compile", 0, 3);
+      onProgress?.("compile", 3, 3);
+      onProgress?.("decode", 0, 0);
+      return { ...bundleFor(input.userProperties), bindings: [] };
+    });
+    rendererPointer.load.mockImplementation(async (_bundle, options) => {
+      const { onProgress } = options as { onProgress?: (stage: string, done: number, total: number) => void };
+      onProgress?.("gpu", 0, 2);
+      onProgress?.("gpu", 2, 2);
+      onProgress?.("frame", 0, 1);
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rendererPointer.load.mockReset();
+    rendererPointer.load.mockImplementation(async () => {});
+  });
+
+  it("首次加载按阶段报进度、最后报首帧；开始渲染的日志带分段用时；之后的重新加载不报", async () => {
+    const report = { ...reporter(), progress: vi.fn() };
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(report.progress.mock.calls).toEqual([
+      ["compile", 0, 3],
+      ["compile", 3, 3],
+      ["decode", 0, 0],
+      // 编译、解码完就进入准备渲染；建程序时的 0 / 2 与它同阶段、100 ms 内，被节流
+      ["gpu", 0, 1],
+      ["gpu", 2, 2],
+      ["frame", 0, 1],
+      ["frame", 1, 1],
+    ]);
+    const started = report.info.mock.calls
+      .map(([message]) => String(message))
+      .find((message) => message.includes("开始渲染"));
+    expect(started).toMatch(
+      /（等目标与设置 \d+ ms、编译 \d+ ms、解码 \d+ ms、准备 \d+ ms、取设备 \d+ ms、建 GPU 场景 \d+ ms、首帧 \d+ ms）/,
+    );
+
+    report.progress.mockClear();
+    host.setSceneSettings({ postprocess: "disabled", reflection: "follow", shadows: "follow", volumetrics: "follow" });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(report.progress).not.toHaveBeenCalled();
+    host.dispose();
+  });
+
+  it("被新的加载取代后，旧加载的进度不再报", async () => {
+    let release!: () => void;
+    compile.mockImplementationOnce(async (input) => {
+      const { onProgress } = input as { onProgress?: (stage: string, done: number, total: number) => void };
+      onProgress?.("compile", 0, 4);
+      await new Promise<void>((resolve) => (release = resolve));
+      onProgress?.("compile", 4, 4);
+      return { ...bundleFor(input.userProperties), bindings: [] };
+    });
+    const report = { ...reporter(), progress: vi.fn() };
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(1));
+    // 加载中设置变了：起第二次加载，第一次作废
+    host.setSceneSettings({ postprocess: "disabled", reflection: "follow", shadows: "follow", volumetrics: "follow" });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    const before = report.progress.mock.calls.length;
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(report.progress.mock.calls.length).toBe(before);
+    expect(report.progress.mock.calls).not.toContainEqual(["compile", 4, 4]);
+    host.dispose();
+  });
+});

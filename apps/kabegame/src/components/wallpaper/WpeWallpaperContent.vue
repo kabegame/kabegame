@@ -10,10 +10,11 @@
  *   场景是宿主报首帧，之后属性变化让退回的场景重新可渲染时会再发。
  * - `fail(reasons)`：实时画面显示不了，调用方当「原图加载失败」显示退回画面。网页：没有入口、导航没启动（多半没带 CEF 补丁 05）、
  *   导航被改写成 about:blank#blocked；场景：宿主报 `fallback`（不支持、编译失败、渲染器建不起来、设备反复丢失，都和编译 / 渲染
- *   有关；运行时脚本出错宿主只禁用那个回调，不会走到这里）、宿主不可用，以及 {@link SCENE_RESULT_TIMEOUT_MS} 内没有结果
+ *   有关；运行时脚本出错宿主只禁用那个回调，不会走到这里）、宿主不可用，以及 {@link SCENE_RESULT_TIMEOUT_MS} 内既没有新的加载进度也没有结果
  *   （`render:timeout`）。退回的场景宿主仍挂着（属性变化可能让它重新可渲染），只有超时才卸载宿主。
  * - `error(message)`：目标取不到（行已删、IPC 失败），致命，调用方显示丢失态。
  * - `contextmenu(point)`：壁纸里点了右键（`wpeContextMenu.ts`），坐标已换算到本页面视口。
+ * - `progress(progress)`：场景首次加载的进度（`wpeSceneProgress.ts`），出结果之前原样转发；网页壁纸没有。
  *
  * 网页壁纸 iframe（从 `WallpaperStage` 搬来，规则不变）：
  * - 直接赋入口 `file://` 的 `src`：应用页是 http / tauri 源，Chromium 默认在渲染进程用 `SecurityOrigin::CanDisplay` 拦下
@@ -42,14 +43,15 @@ import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVol
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 import { framePointerEvents } from "./framePointer";
 import { WEB_SANDBOX } from "./webSandbox";
+import type { WpeSceneProgress } from "./wpeSceneProgress";
 import WpeSceneView from "./WpeSceneView.vue";
 
 /** iframe 没有 error 事件（404 也会触发 load），只能靠超时判断导航到底启动了没有。 */
 const WEB_LOAD_TIMEOUT_MS = 8_000;
 /**
- * 场景迟迟没有结果（既没首帧也没退回，例如 Worker 卡住、取设备挂起）时判失败、卸载宿主的时限。本机实测编译到首帧 0.3–0.6 s，
- * 大场景几秒；桌面在这期间保留上一张壁纸，图库显示缩略图，所以给得宽。壁纸窗口的 init 看门狗只等设置与目标、不等画面，
- * ping 看门狗在宿主起来之前由应用页应答，和这个时限无关。
+ * 场景迟迟没有结果（既没首帧也没退回，例如 Worker 卡住、取设备挂起）时判失败、卸载宿主的时限：挂上宿主起算，**每收到一条加载进度
+ * 重新计时**，大场景慢慢加载但一直在动时不会被提前判失败。本机实测编译到首帧 0.3–0.6 s，大场景几秒；桌面在这期间保留上一张壁纸，
+ * 图库显示缩略图，所以给得宽。壁纸窗口的 init 看门狗只等设置与目标、不等画面，ping 看门狗在宿主起来之前由应用页应答，和这个时限无关。
  */
 const SCENE_RESULT_TIMEOUT_MS = 30_000;
 
@@ -85,6 +87,7 @@ const emit = defineEmits<{
   fail: [reasons: string[]];
   error: [message: string];
   contextmenu: [point: ViewportPoint];
+  progress: [progress: WpeSceneProgress];
 }>();
 
 /** 正在显示的目标（取到之后才有）；换目标时先清空再换，网页 iframe 与场景宿主都随之重建。 */
@@ -295,10 +298,22 @@ function stopSceneTimer() {
   }
 }
 
+function armSceneTimer() {
+  stopSceneTimer();
+  sceneTimer = window.setTimeout(onSceneTimeout, SCENE_RESULT_TIMEOUT_MS);
+}
+
 function startScene() {
   sceneAlive = false;
   sceneMounted.value = true;
-  sceneTimer = window.setTimeout(onSceneTimeout, SCENE_RESULT_TIMEOUT_MS);
+  armSceneTimer();
+}
+
+/** 加载进度：出结果之前转发，并重新计时（「30 s 内没有新进度」才算超时） */
+function onSceneProgress(progress: WpeSceneProgress) {
+  if (result !== "loading" || !sceneMounted.value) return;
+  armSceneTimer();
+  emit("progress", progress);
 }
 
 function onSceneReady() {
@@ -315,7 +330,9 @@ function onSceneFallback(reasons: string[]) {
 function onSceneTimeout() {
   sceneTimer = null;
   if (result !== "loading") return;
-  logger.warn(`场景壁纸 ${resolved.value?.id ?? props.imageId} ${SCENE_RESULT_TIMEOUT_MS} ms 内没有结果，卸载宿主`);
+  logger.warn(
+    `场景壁纸 ${resolved.value?.id ?? props.imageId} ${SCENE_RESULT_TIMEOUT_MS} ms 内没有新进度也没有结果，卸载宿主`,
+  );
   sceneMounted.value = false;
   sceneAlive = false;
   setFailed(["render:timeout"]);
@@ -382,6 +399,7 @@ defineExpose({ delegatesPing, state });
       @alive="sceneAlive = true"
       @ready="onSceneReady"
       @fallback="onSceneFallback"
+      @progress="onSceneProgress"
       @contextmenu="emit('contextmenu', $event)"
     />
   </div>

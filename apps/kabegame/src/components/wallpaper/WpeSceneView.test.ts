@@ -3,6 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, ref, type Ref } from "vue";
 import WpeSceneView from "./WpeSceneView.vue";
+import { WPE_SCENE_PROGRESS } from "./wpeSceneProgress";
 import {
   WALLPAPER_PREVIEW_ZOOM,
   WPE_SCENE_DISPLAY,
@@ -315,6 +316,18 @@ describe("WpeSceneView 右键", () => {
     expect(wrapper.emitted("contextmenu")).toEqual([[{ x: 300, y: 150 }]]);
     fromHost({ type: WPE_CONTEXT_MENU, x: 1, y: 1 }, window);
     expect(wrapper.emitted("contextmenu")).toHaveLength(1);
+  });
+});
+
+describe("WpeSceneView 加载进度（壁纸显示重构步骤 2）", () => {
+  it("自己 iframe 发的进度原样往上报；别的窗口发的、格式不对的、page 阶段不理", async () => {
+    const { wrapper, fromHost } = await mountView();
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "compile", done: 2, total: 5 });
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "gpu", done: 1, total: 4 }, window);
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "page", done: 0, total: 1 });
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "bogus", done: 0, total: 1 });
+    fromHost({ type: WPE_SCENE_PROGRESS, stage: "decode", done: "1", total: 2 });
+    expect(wrapper.emitted("progress")).toEqual([[{ stage: "compile", done: 2, total: 5 }]]);
   });
 });
 

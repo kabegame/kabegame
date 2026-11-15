@@ -29,11 +29,18 @@ const WallpaperStub = defineComponent({
     interactive: Boolean,
     sceneSettings: Object,
   },
-  emits: ["live", "fail", "error", "contextmenu"],
+  emits: ["live", "fail", "error", "contextmenu", "progress"],
   setup() {
     mounts += 1;
     return () => h("div", { class: "wallpaper-stub" });
   },
+});
+
+/** 进度覆盖层桩（真件要 i18n 插件）：只看 props */
+const OverlayStub = defineComponent({
+  name: "WpeLoadingOverlay",
+  props: { scene: Boolean, value: Number, stage: String, failure: Array, placement: String },
+  setup: () => () => h("div", { class: "overlay-stub" }),
 });
 
 const wrappers: ReturnType<typeof mount>[] = [];
@@ -43,7 +50,7 @@ const wallpaper = (id: string, type: string, thumbnailPath: string) =>
 function mountContent(image: ImageInfo, props: Record<string, unknown> = {}) {
   const wrapper = mount(ImageContent, {
     props: { image, prefer: "original", ...props },
-    global: { stubs: { WpeWallpaperContent: WallpaperStub } },
+    global: { stubs: { WpeWallpaperContent: WallpaperStub, WpeLoadingOverlay: OverlayStub } },
     // 挂进文档：媒体事件按 isConnected 判断是不是过期元素的迟到事件
     attachTo: document.body,
   });
@@ -54,7 +61,11 @@ const overlay = (wrapper: ReturnType<typeof mount>) => wrapper.find(".ic-loading
 const thumb = (wrapper: ReturnType<typeof mount>) => wrapper.find("img.thumbnail-layer");
 const live = (wrapper: ReturnType<typeof mount>) => wrapper.findComponent(WallpaperStub);
 const shown = (wrapper: ReturnType<typeof mount>) => live(wrapper).classes().includes("opacity-100");
-async function emitLive(wrapper: ReturnType<typeof mount>, event: "live" | "fail" | "error", ...args: unknown[]) {
+async function emitLive(
+  wrapper: ReturnType<typeof mount>,
+  event: "live" | "fail" | "error" | "progress",
+  ...args: unknown[]
+) {
   live(wrapper).vm.$emit(event, ...args);
   await flushPromises();
 }
@@ -190,5 +201,51 @@ describe("ImageContent 的壁纸形态：缩略层打底，实时画面当原图
     });
     await wrapper.setProps({ videoMuted: true, videoPlaying: false, fit: "cover" });
     expect(live(wrapper).props()).toMatchObject({ volume: 0, paused: true, styleMode: "fill" });
+  });
+
+  it("进度覆盖层：挂上就在；场景按宿主进度走，live 后走满、停一下再收起", async () => {
+    const wrapper = mountContent(wallpaper("7", "x-wpe/scene", "C:/workshop/7/preview.jpg"));
+    const overlay = () => wrapper.findComponent(OverlayStub);
+    expect(overlay().exists()).toBe(true);
+    expect(overlay().props()).toMatchObject({ scene: true, stage: "page" });
+    await emitLive(wrapper, "progress", { stage: "compile", done: 1, total: 2 });
+    expect(overlay().props("stage")).toBe("compile");
+    expect(overlay().props("value")).toBeCloseTo(0.3);
+    await advance(400);
+    await emitLive(wrapper, "live");
+    expect(overlay().props("value")).toBe(1);
+    await advance(250);
+    expect(overlay().exists()).toBe(false);
+  });
+
+  it("fail：覆盖层带上原因走满、停一下收起，原因换到缩略图底部留着；之后能渲染了收起；网页壁纸是不定进度", async () => {
+    const scene = mountContent(wallpaper("7", "x-wpe/scene", "C:/workshop/7/preview.jpg"));
+    await emitLive(scene, "fail", ["object:particle"]);
+    const overlays = () => scene.findAllComponents(OverlayStub);
+    expect(overlays()).toHaveLength(1);
+    expect(overlays()[0].props()).toMatchObject({ value: 1, failure: ["object:particle"] });
+    await advance(250);
+    expect(overlays()).toHaveLength(1);
+    expect(overlays()[0].props()).toMatchObject({ placement: "bottom", failure: ["object:particle"] });
+    expect(thumb(scene).exists()).toBe(true);
+    // 改属性后能渲染了：底部的原因收起
+    await emitLive(scene, "live");
+    expect(overlays()).toHaveLength(0);
+
+    const web = mountContent(wallpaper("8", "x-wpe/web", "C:/workshop/8/preview.jpg"));
+    expect(web.findComponent(OverlayStub).props("scene")).toBe(false);
+  });
+
+  it("换成另一张壁纸：覆盖层从头再来", async () => {
+    const wrapper = mountContent(wallpaper("7", "x-wpe/scene", "C:/workshop/7/preview.jpg"));
+    await emitLive(wrapper, "progress", { stage: "gpu", done: 1, total: 1 });
+    await advance(400);
+    await emitLive(wrapper, "live");
+    await advance(250);
+    await wrapper.setProps({ image: wallpaper("9", "x-wpe/scene", "C:/workshop/9/preview.jpg") });
+    await flushPromises();
+    const overlay = wrapper.findComponent(OverlayStub);
+    expect(overlay.exists()).toBe(true);
+    expect(overlay.props()).toMatchObject({ stage: "page", value: 0 });
   });
 });

@@ -6,6 +6,7 @@
  * - 地址：`get_wpe_scene_host_url` + `kbScene=<图片 id>` + `kbInstance=<实例号>`；换目标就换实例号、重建 iframe。
  * - 状态：宿主经 `wpe_scene_report` 报 `ready` / `fallback`，后端以 `wpe-scene-status` 发回本窗口，这里只认本实例号，
  *   照旧 emit `ready` / `fallback(reasons)`；取不到宿主地址时 emit `fallback(["host:unavailable"])`。
+ * - 加载进度：宿主首次加载时经 postMessage 按阶段报（`wpeSceneProgress.ts`），只认自己的 iframe，原样 emit `progress`。
  * - 暂停与音量：回应本 iframe 里垫片的音量请求（`wpeWebVolume.ts` 的协议，消息带 `paused`，垫片转成
  *   `setPaused`），`volume` / `paused` / `interactive` 变化时主动推。第一次收到请求说明垫片已在跑，emit `alive`：
  *   壁纸窗口从此把 ping 交给宿主里的垫片应答。
@@ -50,6 +51,7 @@ import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVol
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 import { framePointerEvents } from "./framePointer";
 import { createShortcutThrottle, wpeShortcutName } from "./wpeSceneShortcut";
+import { isWpeSceneProgressMessage, type WpeSceneProgress } from "./wpeSceneProgress";
 
 /**
  * 祖先 transform 变化不触发任何 observer，按这个间隔核对显示缩放。不用 rAF：桌面壁纸窗口里场景一直在，
@@ -77,6 +79,8 @@ const emit = defineEmits<{
   alive: [];
   /** 宿主里点了右键（垫片转发，`wpeContextMenu.ts`），坐标已换算到本页面视口 */
   contextmenu: [point: ViewportPoint];
+  /** 首次加载的进度（宿主的 `compile` / `decode` / `gpu` / `frame`） */
+  progress: [progress: WpeSceneProgress];
 }>();
 const frame = ref<HTMLIFrameElement | null>(null);
 const src = ref("");
@@ -179,6 +183,11 @@ function onWindowMessage(event: MessageEvent) {
     postSceneSettings();
     postStyle();
     postDisplay(true);
+    return;
+  }
+  if (isWpeSceneProgressMessage(event.data)) {
+    const { stage, done, total } = event.data;
+    emit("progress", { stage, done, total });
     return;
   }
   const point = frame.value ? wpeContextMenuPoint(event.data, frame.value) : null;

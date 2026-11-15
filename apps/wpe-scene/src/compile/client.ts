@@ -35,6 +35,8 @@ export interface WorkerCompileInput {
   textureCache?: TextureDecodeCache;
   signal?: AbortSignal;
   reader?: SceneReader;
+  /** 加载进度（`progress.ts`）：Worker 编译报 `compile`，主线程解码报 `decode`。 */
+  onProgress?: (stage: "compile" | "decode", done: number, total: number) => void;
 }
 let modulePromise: Promise<WebAssembly.Module | null> | null = null;
 async function getModule(): Promise<WebAssembly.Module | null> {
@@ -53,7 +55,7 @@ export async function compileSceneInWorker(input: WorkerCompileInput): Promise<S
   const bundle = await compileInWorker(input);
   if (input.signal?.aborted) throw new DOMException("已取消", "AbortError");
   if (input.textureCache && (input.force || !bundle.unsupported.length))
-    await decodeEncodedTextures(bundle, input.textureCache);
+    await decodeEncodedTextures(bundle, input.textureCache, (done, total) => input.onProgress?.("decode", done, total));
   if (input.signal?.aborted) throw new DOMException("已取消", "AbortError");
   return bundle;
 }
@@ -88,6 +90,11 @@ async function compileInWorker(input: WorkerCompileInput): Promise<SceneBundle> 
       const message = event.data;
       if (message.type === "done") return finish(message.bundle);
       if (message.type === "error") return finish(undefined, new Error(message.message));
+      // 进度不是读文件请求：其余消息才是
+      if (message.type === "progress") {
+        input.onProgress?.("compile", message.done, message.total);
+        return;
+      }
       try {
         const bytes =
           message.operation === "whole"

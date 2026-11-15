@@ -906,6 +906,11 @@ export interface CompileSceneInput {
    * 预览图越早显示（翻译工坊场景的几十个 effect 着色器要上百次读取和不少 wasm 时间），这时 `unsupported` 只是部分清单。
    */
   exhaustive?: boolean;
+  /**
+   * 加载进度（`progress.ts` 的 `compile` 阶段）：对象循环每处理一个对象之前报一次，`done / total` 是已处理对象的权重 / 总权重（每个对象
+   * 1 + 它的 effect 数，effect 着色器是编译的大头），循环结束报 `total / total`。
+   */
+  onProgress?: (done: number, total: number) => void;
 }
 
 /** 场景目标的整帧快照（B8）。 */
@@ -2612,9 +2617,16 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     return compilePass(pass, { key, planned, text: options.text });
   };
 
+  // 加载进度：对象的权重 = 1 + effect 数（读完 scene.json 就知道），每处理一个对象之前报已处理的部分
+  const progressWeight = (object: unknown): number =>
+    isSceneObject(object) ? 1 + (Array.isArray(object.effects) ? object.effects.length : 0) : 0;
+  const progressTotal = scene.objects.reduce((sum: number, object) => sum + progressWeight(object), 0);
+  let progressDone = 0;
   for (const [index, object] of scene.objects.entries()) {
     if (settled()) break;
     if (!isSceneObject(object)) continue; // 不是对象的项（含运行中删掉的）：不进 `bundle.layers`，下标留空
+    input.onProgress?.(progressDone, progressTotal);
+    progressDone += progressWeight(object);
     /** 图层字段的就地目标（场景坐标里的 objects 下标，不随 bundle 下标变）。 */
     const at = (field: LayerField): BindingTarget => ({ kind: "layer", object: index, field });
     // 图层的向量字段照 WPE 的向量 setter 取值（`layerVectorValue`：数字铺满、字符串少写的分量为 0，P6b 1e-3 复核）。绑定的属性值
@@ -2873,6 +2885,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         unsupported,
       });
   }
+  input.onProgress?.(progressTotal, progressTotal);
   // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
   // 挂点（P12b1 步骤 3）：父的 puppet 编完才解析，只在找得到时才写字段（找不到按普通父子）
   const puppetsByObject = new Map(

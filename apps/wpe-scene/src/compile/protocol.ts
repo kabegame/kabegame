@@ -43,7 +43,9 @@ export type WorkerRequest =
 export type WorkerResponse =
   | { type: "file"; id: number; operation: "range" | "whole"; path: string; start?: number; end?: number }
   | { type: "done"; bundle: SceneBundle }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** 编译进度（`progress.ts` 的 `compile` 阶段）：已处理对象的权重 / 总权重 */
+  | { type: "progress"; done: number; total: number };
 
 export function encodeFileError(error: unknown): FileError {
   return error instanceof Error

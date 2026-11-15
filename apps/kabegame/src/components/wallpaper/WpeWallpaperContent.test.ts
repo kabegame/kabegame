@@ -29,7 +29,7 @@ vi.mock("./WpeSceneView.vue", async () => {
         interactive: Boolean,
         sceneSettings: Object,
       },
-      emits: ["ready", "fallback", "alive", "contextmenu"],
+      emits: ["ready", "fallback", "alive", "contextmenu", "progress"],
       setup(props, { emit }) {
         const record = {
           id: (props.target as WallpaperTarget).id,
@@ -336,6 +336,26 @@ describe("WpeWallpaperContent 场景壁纸", () => {
     await settle();
     expect(wrapper.emitted("fail")).toEqual([[["effect:x"]]]);
     expect(stub.scenes[0].unmounted).toBe(false);
+  });
+
+  it("加载进度：出结果之前转发并重新计时（30 s 内没有新进度才超时），出结果之后不再转发", async () => {
+    const spy = vi.spyOn(window, "setTimeout");
+    const clear = vi.spyOn(window, "clearTimeout");
+    const wrapper = mountContent({ imageId: "s", target: scene("s") });
+    await settle();
+    const timers = () =>
+      spy.mock.calls.flatMap(([, ms], index) => (ms === 30_000 ? [spy.mock.results[index].value] : []));
+    expect(timers()).toHaveLength(1);
+    stub.scenes[0].emit("progress" as never, { stage: "compile", done: 1, total: 4 });
+    expect(wrapper.emitted("progress")).toEqual([[{ stage: "compile", done: 1, total: 4 }]]);
+    // 旧的计时清掉、重新起一个 30 s
+    expect(timers()).toHaveLength(2);
+    expect(clear).toHaveBeenCalledWith(timers()[0]);
+    spy.mockRestore();
+    clear.mockRestore();
+    stub.scenes[0].emit("ready");
+    stub.scenes[0].emit("progress" as never, { stage: "frame", done: 1, total: 1 });
+    expect(wrapper.emitted("progress")).toHaveLength(1);
   });
 
   it("垫片请求音量（alive）后才委托 ping", async () => {

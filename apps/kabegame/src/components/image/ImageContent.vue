@@ -97,8 +97,32 @@
           @live="onWallpaperLive"
           @fail="onWallpaperFail"
           @error="onWallpaperError"
+          @progress="reportLoad"
           @contextmenu="emit('wallpaperContextmenu', $event)"
         />
+        <!-- 加载进度（步骤 3）：挂上就显示，实时画面出来或确定显示不了时走满、停一下再淡出 -->
+        <Transition leave-active-class="transition-opacity duration-300" leave-to-class="opacity-0">
+          <WpeLoadingOverlay
+            v-if="wallpaperLoading"
+            class="absolute inset-0 z-4"
+            :scene="isWpeScene"
+            :value="loadValue"
+            :stage="loadStage"
+            :failure="loadFailure"
+          />
+        </Transition>
+        <!-- 显示不了：覆盖层收起后，红字原因留在缩略图底部（用户定），直到实时画面出来或换图 -->
+        <Transition enter-active-class="transition-opacity duration-300" enter-from-class="opacity-0">
+          <WpeLoadingOverlay
+            v-if="wallpaperFailureCaption"
+            class="absolute inset-0 z-4"
+            placement="bottom"
+            :scene="isWpeScene"
+            :value="1"
+            :stage="loadStage"
+            :failure="loadFailure"
+          />
+        </Transition>
       </template>
 
       <!-- 视频 -->
@@ -136,12 +160,15 @@ import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import { Film, Image as ImageIcon } from "@lucide/vue";
 import ImageNotFound from "../common/ImageNotFound.vue";
 import WpeWallpaperContent from "../wallpaper/WpeWallpaperContent.vue";
+import WpeLoadingOverlay from "../wallpaper/WpeLoadingOverlay.vue";
+import { useWpeLoadProgress } from "../../composables/useWpeLoadProgress";
 import type { ViewportPoint } from "../wallpaper/wpeContextMenu";
 import type { WallpaperPlayback } from "../wallpaper/types";
 import {
   displayImageMimeType,
   isVideoMediaType,
   isWpeMediaType,
+  isWpeSceneType,
   isWpeVideoType,
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
@@ -207,6 +234,8 @@ import { IS_ANDROID, IS_WEB } from "../../env";
 const WPE_LIVE = !IS_ANDROID && !IS_WEB;
 /** wallpaper 形态的加载态至少这么久才揭开实时画面：实时画面出得很快时不闪一下缩略图。 */
 const WALLPAPER_MIN_LOADING_MS = 300;
+/** 进度条走满后停这么久再淡出（实时画面出来、或确定显示不了时）。 */
+const WALLPAPER_PROGRESS_HOLD_MS = 200;
 
 const normalizeDesktopPath = (path: string | undefined): string =>
   (path || "")
@@ -478,6 +507,12 @@ let wallpaperMinTimer: number | undefined;
 const wallpaperShown = computed(() => WPE_LIVE && wallpaperLive.value && wallpaperMinElapsed.value);
 /** wallpaper 形态的 ready 每张只发一次：缩略层加载完与实时画面揭开，先到的那个。 */
 let wallpaperReadySent = false;
+const isWpeScene = computed(() => isWpeSceneType(props.image.type));
+/** 进度覆盖层收起了：实时画面出来或确定显示不了之后，条走满、停 WALLPAPER_PROGRESS_HOLD_MS 再淡出。 */
+const loadSettled = ref(false);
+/** 显示不了的原因（`fail(reasons)`）：覆盖层先变红，收起后留在缩略图底部。 */
+const loadFailure = ref<string[] | null>(null);
+let loadSettleTimer: number | undefined;
 
 function resetWallpaper() {
   wallpaperFatal.value = false;
@@ -486,12 +521,30 @@ function resetWallpaper() {
   wallpaperReadySent = false;
   window.clearTimeout(wallpaperMinTimer);
   wallpaperMinElapsed.value = false;
+  window.clearTimeout(loadSettleTimer);
+  loadSettleTimer = undefined;
+  loadSettled.value = false;
+  loadFailure.value = null;
+  startLoad();
   if (mode.value !== "wallpaper") return;
   wallpaperMinTimer = window.setTimeout(() => {
     wallpaperMinElapsed.value = true;
   }, WALLPAPER_MIN_LOADING_MS);
 }
-onBeforeUnmount(() => window.clearTimeout(wallpaperMinTimer));
+onBeforeUnmount(() => {
+  window.clearTimeout(wallpaperMinTimer);
+  window.clearTimeout(loadSettleTimer);
+});
+
+/** 进度条走满，停一下再收起覆盖层（已经收起或正在等的不再排） */
+function settleLoad() {
+  completeLoad();
+  if (loadSettled.value || loadSettleTimer !== undefined) return;
+  loadSettleTimer = window.setTimeout(() => {
+    loadSettleTimer = undefined;
+    loadSettled.value = true;
+  }, WALLPAPER_PROGRESS_HOLD_MS);
+}
 
 // ---- 终态 ----
 const isLost = computed(() => {
@@ -509,6 +562,26 @@ const isLost = computed(() => {
       return IS_ANDROID ? origEngaged.value && origSlot.dead : thumbSlot.dead && origSlot.dead;
   }
 });
+
+/** wallpaper 形态的进度覆盖层显示中：跑实时画面、没丢失、还没收起（`settleLoad`） */
+const wallpaperLoading = computed(() => WPE_LIVE && mode.value === "wallpaper" && !isLost.value && !loadSettled.value);
+/** 失败原因留在缩略图底部：覆盖层收起之后、实时画面出来之前 */
+const wallpaperFailureCaption = computed(
+  () =>
+    WPE_LIVE &&
+    mode.value === "wallpaper" &&
+    !isLost.value &&
+    wallpaperFailed.value &&
+    loadSettled.value &&
+    loadFailure.value !== null,
+);
+const {
+  value: loadValue,
+  stage: loadStage,
+  start: startLoad,
+  report: reportLoad,
+  complete: completeLoad,
+} = useWpeLoadProgress(wallpaperLoading);
 
 // ---- Reset on image identity or resource path change (NOT on prefer — preserves hover no-flash) ----
 // When ImageItem flips effectivePrefer thumbnail→original, the two URLs don't change, so this
@@ -566,12 +639,16 @@ const onLoad = (e: Event) => {
 const onWallpaperLive = () => {
   wallpaperFailed.value = false;
   wallpaperLive.value = true;
+  loadFailure.value = null;
+  settleLoad();
 };
 
-/** 实时画面显示不了：当原图加载失败，缩略层留着（缩略也死了 isLost 接手） */
-const onWallpaperFail = () => {
+/** 实时画面显示不了：当原图加载失败，缩略层留着（缩略也死了 isLost 接手），原因先红字显示、再留在底部 */
+const onWallpaperFail = (reasons: string[]) => {
   wallpaperLive.value = false;
   wallpaperFailed.value = true;
+  loadFailure.value = [...reasons];
+  settleLoad();
 };
 
 /** 目标取不到：进丢失态（isLost 的 watch 负责 emit error） */

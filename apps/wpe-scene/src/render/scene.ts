@@ -1632,6 +1632,8 @@ export class GpuScene {
        * `g_Screen`、快照、泛光、反射、深度、fullscreen 合成 RT 随场景目标走。产品不传，字节不变；透视场景传了也忽略（本来就按 `size` 画）。
        */
       target?: { size: readonly [number, number]; edges: Edges; clear: readonly [number, number, number] | null };
+      /** 加载进度（`progress.ts` 的 `gpu` 阶段）：着色器程序开建前报 `0 / 总数`，之后每建好（或失败）一个报一次。 */
+      onProgress?: (done: number, total: number) => void;
     } = {},
   ): Promise<GpuScene> {
     if (options.texts) state.setTexts(options.texts);
@@ -1648,7 +1650,7 @@ export class GpuScene {
     device.pushErrorScope("validation");
     let failure: unknown = null;
     try {
-      await scene.populate(state, options.size, options.target);
+      await scene.populate(state, options.size, options.target, options.onProgress);
     } catch (error) {
       failure = error;
     }
@@ -2657,6 +2659,7 @@ export class GpuScene {
     state: SceneState,
     size?: readonly [number, number],
     target?: { size: readonly [number, number]; edges: Edges; clear: readonly [number, number, number] | null },
+    onProgress?: (done: number, total: number) => void,
   ): Promise<void> {
     const { device, bundle } = this;
     const { general } = bundle;
@@ -2743,7 +2746,11 @@ export class GpuScene {
       ])
         if (pass && pass.program !== null) used.add(pass.program);
     }
-    const settled = await Promise.allSettled([...used].map((index) => this.ensureProgram(index)));
+    let programsBuilt = 0;
+    onProgress?.(0, used.size);
+    const settled = await Promise.allSettled(
+      [...used].map((index) => this.ensureProgram(index).finally(() => onProgress?.(++programsBuilt, used.size))),
+    );
     const failed = settled.flatMap((result) =>
       result.status === "rejected"
         ? result.reason instanceof SceneRenderError

@@ -143,6 +143,11 @@ export interface SceneRendererOptions {
 export interface SceneLoadOptions {
   /** dev 强制渲染（D4）：不因 `bundle.unsupported` 拒绝，渲染器自查仍然生效。 */
   ignoreUnsupported?: boolean;
+  /**
+   * 加载进度（`progress.ts`）：建 GPU 场景时按着色器程序报 `gpu`，画第一帧之前报 `frame` 的 `0 / 1`（出来的 `1 / 1` 由宿主在等完
+   * 视频首帧之后报）。
+   */
+  onProgress?: (stage: "gpu" | "frame", done: number, total: number) => void;
   /** 新状态建好后、首帧绘制前同步执行。 */
   beforeFirstFrame?: (state: SceneState) => void;
   /**
@@ -436,6 +441,7 @@ export class SceneRenderer {
       relayout: options.relayout,
       userTextures: options.userTextures,
       size,
+      onProgress: (done, total) => options.onProgress?.("gpu", done, total),
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();
@@ -481,6 +487,7 @@ export class SceneRenderer {
     options.beforeFirstFrame?.(state);
     old?.destroy();
     this.failed = false;
+    options.onProgress?.("frame", 0, 1);
     this.render(true);
     await this.gpu.device.queue.onSubmittedWorkDone();
     if (this.failed) throw new SceneRenderError(["webgpu:first-frame"]);

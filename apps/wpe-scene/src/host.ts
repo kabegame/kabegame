@@ -15,6 +15,7 @@ import {
 import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
 import { compileSceneInWorker } from "./compile/client";
+import { SceneLoadProgress } from "./progress";
 import type { SceneStructure } from "./compile/protocol";
 import { TextureDecodeCache } from "./compile/decode";
 import { FetchSceneReader } from "./compile/fs";
@@ -1586,6 +1587,14 @@ export class SceneHost {
     const abort = (this.controller = new AbortController());
     if (this.state !== "ready") this.state = "loading";
     const started = performance.now();
+    // 加载进度（`progress.ts`）：只在首次加载时报给父页面（重编译时旧画面一直在画）、被新的加载取代后不再报；分段计时两种都记，进日志
+    const load = new SceneLoadProgress(
+      this.state === "ready"
+        ? null
+        : (stage, done, total) => {
+            if (id === this.generation) this.options.report.progress?.(stage, done, total);
+          },
+    );
     // 编译用的裸值快照：属性只作为编译输入，同时记下来供场景换上（或退回）后补差
     let compiledWith: Record<string, unknown> | null = null;
     try {
@@ -1627,6 +1636,7 @@ export class SceneHost {
         textureCache: this.textureCache,
         reader: this.reader,
         signal: abort.signal,
+        onProgress: (stage, done, total) => load.report(stage, done, total),
       }).catch((error: unknown) => {
         throw isAbort(error) ? error : new SceneRenderError(reasonsOf(error, "compile"));
       });
@@ -1638,6 +1648,9 @@ export class SceneHost {
         }
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 强制渲染（dev），不支持项：`, bundle.unsupported);
       }
+      // 文本、声音、媒体、视频、用户纹理、脚本 init：进度条已进入「准备渲染」（`gpu`，取设备、建 GPU 场景同一段），日志另记一段
+      load.mark("准备");
+      load.report("gpu", 0, 1, { mark: false });
       // 文本（P6b 1d）：排版要 wasm 与字体字节，在声音、脚本与 GPU 资源之前排好（读字体是异步的，之后比代数）。wasm 不在或排版
       // 出错时抛 `text:engine`，由下面的 catch 退回预览图
       let texts: Map<number, TextLayout> | undefined;
@@ -1683,6 +1696,7 @@ export class SceneHost {
         await this.ensureRuntime(bundle, target.sceneAssets);
         if (id !== this.generation) return;
       }
+      load.mark("取设备");
       const current = await this.ensureRenderer();
       if (id !== this.generation) return;
       current.setPaused(this.paused);
@@ -1698,6 +1712,7 @@ export class SceneHost {
         relayout,
         userTextures: this.userTextures,
         puppets,
+        onProgress: (stage, done, total) => load.report(stage, done, total),
         beforeFirstFrame: (state) => {
           // 结构接续（P6d3a）：旧脚本状态里的对象表 / 待删 / 父子（首次加载时是 `init` 里 `sortLayer` / `setParent` / `destroyLayer` 落下的，
           // bundle 是 `init` 之前编的、不含它们）；重编译后 bundle 已带结构，照搬是幂等的。在重放脚本写入之前
@@ -1783,14 +1798,15 @@ export class SceneHost {
         }
         this.state = "ready";
         this.lastFallback = "";
+        load.report("frame", 1, 1);
         this.options.report.info(
           `场景壁纸 ${this.options.imageId} 开始渲染：${bundle.layers.length} 层、${bundle.programs.length} 个程序，` +
-            `${detail}，用时 ${Math.round(performance.now() - started)} ms`,
+            `${detail}，用时 ${Math.round(performance.now() - started)} ms（${load.summary()}）`,
         );
         this.options.report.ready();
       } else
         this.options.report.debug(
-          `场景壁纸 ${this.options.imageId} 重新加载：${detail}，用时 ${Math.round(performance.now() - started)} ms`,
+          `场景壁纸 ${this.options.imageId} 重新加载：${detail}，用时 ${Math.round(performance.now() - started)} ms（${load.summary()}）`,
         );
       // 加载期间到达的增量不丢：与编译用的快照比较，差异再走一次应用函数（P3a）
       const pending = pendingChanges(this.properties, this.compiledWith);

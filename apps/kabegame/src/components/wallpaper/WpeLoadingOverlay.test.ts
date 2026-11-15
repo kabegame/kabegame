@@ -1,0 +1,86 @@
+// @vitest-environment happy-dom
+import { flushPromises, mount } from "@vue/test-utils";
+import { describe, expect, it, vi } from "vitest";
+import WpeLoadingOverlay from "./WpeLoadingOverlay.vue";
+
+vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+
+describe("WpeLoadingOverlay", () => {
+  it("场景：按进度画条、按阶段显示文字", async () => {
+    const wrapper = mount(WpeLoadingOverlay, { props: { scene: true, value: 0.42, stage: "compile" } });
+    expect(wrapper.findComponent({ name: "Progress" }).props("value")).toBeCloseTo(42);
+    expect(wrapper.text()).toBe("gallery.wpeLoadStageCompile");
+    for (const [stage, key] of [
+      ["page", "gallery.wpeLoadStagePage"],
+      ["decode", "gallery.wpeLoadStageDecode"],
+      ["gpu", "gallery.wpeLoadStageGpu"],
+      ["frame", "gallery.wpeLoadStageFrame"],
+    ] as const) {
+      await wrapper.setProps({ stage });
+      expect(wrapper.text()).toBe(key);
+    }
+  });
+
+  it("网页壁纸：不定进度条与「加载中」", () => {
+    const wrapper = mount(WpeLoadingOverlay, { props: { scene: false, value: 0.5, stage: "gpu" } });
+    expect(wrapper.findComponent({ name: "Progress" }).props("value")).toBeNull();
+    expect(wrapper.text()).toBe("gallery.wpeLoadStageWeb");
+  });
+
+  it("失败：文字与进度条变红，标题是「无法实时渲染」，下面列原因；超时是「加载超时」、不列原因", async () => {
+    const wrapper = mount(WpeLoadingOverlay, {
+      props: { scene: true, value: 0.3, stage: "compile", failure: ["object:particle", "script:api:x"] },
+    });
+    const label = wrapper.find('[data-testid="wpe-loading-label"]');
+    expect(label.text()).toBe("gallery.wpeLoadFailed");
+    expect(label.classes()).toContain("text-kb-danger");
+    expect(wrapper.find('[data-testid="wpe-loading-detail"]').text()).toBe("object:particle; script:api:x");
+    const progress = wrapper.findComponent({ name: "Progress" });
+    expect(progress.props("value")).toBe(100);
+    expect(progress.props("tone")).toBe("danger");
+    await wrapper.setProps({ failure: ["render:timeout"] });
+    expect(wrapper.find('[data-testid="wpe-loading-label"]').text()).toBe("gallery.wpeLoadTimeout");
+    expect(wrapper.find('[data-testid="wpe-loading-detail"]').exists()).toBe(false);
+  });
+
+  it("bottom：失败后留在缩略图底部，不模糊、没有进度条", () => {
+    const wrapper = mount(WpeLoadingOverlay, {
+      props: { scene: true, value: 1, stage: "gpu", failure: ["effect:x"], placement: "bottom" },
+    });
+    expect((wrapper.element as HTMLElement).style.backdropFilter).toBe("");
+    expect(wrapper.findComponent({ name: "Progress" }).exists()).toBe(false);
+    expect(wrapper.find('[data-testid="wpe-loading-detail"]').text()).toBe("effect:x");
+  });
+
+  it("屏幕上的大小固定：按量到的显示缩放反向缩放中间那块、模糊半径除以缩放，宽度取 240 px 与显示宽度 60% 的较小值", async () => {
+    vi.useFakeTimers();
+    const wrapper = mount(WpeLoadingOverlay, {
+      props: { scene: true, value: 0.5, stage: "gpu" },
+      attachTo: document.body,
+    });
+    const root = wrapper.element as HTMLElement;
+    const pill = () => root.firstElementChild as HTMLElement;
+    // 单根：调用方给的定位类落在根上
+    expect(root.dataset.testid).toBe("wpe-loading-overlay");
+    // 没量到（还没布局）：中间那块不加内联样式，模糊按没缩放
+    expect(pill().getAttribute("style")).toBeNull();
+    expect(root.style.backdropFilter).toBe("blur(16px)");
+    // 3840×2160 的画布缩到 960×540 显示
+    Object.defineProperty(root, "offsetWidth", { configurable: true, value: 3840 });
+    Object.defineProperty(root, "offsetHeight", { configurable: true, value: 2160 });
+    root.getBoundingClientRect = () => ({ width: 960, height: 540 }) as DOMRect;
+    vi.advanceTimersByTime(250);
+    await flushPromises();
+    expect(pill().style.transform).toBe("scale(4)");
+    expect(pill().style.width).toBe("240px");
+    expect(root.style.backdropFilter).toBe("blur(64px)");
+    // 显示得很小时宽度跟着显示宽度
+    root.getBoundingClientRect = () => ({ width: 200, height: 112.5 }) as DOMRect;
+    vi.advanceTimersByTime(250);
+    await flushPromises();
+    expect(pill().style.transform).toBe("scale(19.2)");
+    expect(pill().style.width).toBe("120px");
+    wrapper.unmount();
+    vi.useRealTimers();
+  });
+});
