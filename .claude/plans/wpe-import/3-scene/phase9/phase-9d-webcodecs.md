@@ -337,3 +337,12 @@ private newPlayer(shared: Shared, blob: Blob): VideoTexturePlayer {
 **用户视频的矩阵：不改（2026-11-16）**。用户：「我觉得这一点应该算 wpe 的 bug，不改」。WPE 读用户视频不看码流标签记为 WPE 的缺陷，我们照标签（`"user"` 规则不变：`colr` → VUI → 没标按分辨率），有意不同；依据：用户视频不在语料里，没有画面依赖它（同「语料依赖的 WPE 缺陷才复现」）。记进 `video/demux/config.ts` 文件头。没标时的分界 WPE 是 576、我们是 720（高 577–719 的未标片两边矩阵不同），也没改。场景视频的「恒为 709」是语料画面依赖的（两段标 bt470bg 的语料作者在 WPE 里看到的是 709），保留。
 
 **用户视频没标时的分界对齐 WPE（2026-11-16）**。用户：「可以对齐」。`MF_HD_MIN_HEIGHT = 720`（高 ≥ 720 用 709）改为 `MF_SD_MAX_HEIGHT = 576`（高 > 576 用 709，否则 601，宽度不参与），照走查的纯色片实测。标签照旧优先（上一条的有意不同不变）。测试改成走查的四个尺寸（720×576 → 601、720×578 → 709、1280×480 → 601、480×720 → 709）；tsc 0 error，引用视频模块的 48 个文件 905 个用例全过，Prettier 通过；变异 2 个（分界不含 576、阈值改回 719）都有测试挂掉。
+
+**主窗口隐藏时的探针（2026-11-16）**。用户把主窗口最小化后实测：主窗口页面 `visibilityState` 为 `hidden` 时，`CodecVideoPlayer` 40 ms 出第一帧、跳到 1 s 拿到时间戳 1 000 000 的那一帧，没有告警（WebCodecs 不经 Chromium 的 `DeferMediaLoad`）。于是删掉探针的 `checkVideoVisibility`（P11b 步骤 5 为 `<video>` 加的「不可见就报错」）与只给它用的 `userVideoValues`，`dev/probe.ts` 只删调用与两处导入；重建宿主后在最小化状态下 `render_scene` 14295 `videoTime: 1`，像素摘要 `56c1095e…` 与窗口可见时逐字节相同。tsc 0 error，`src/dev` 17 个文件 194 个用例全过，Prettier 通过。`cocs/wpe/WPE_SCENE.md` 里「屏外宿主要用视频时主窗口不能最小化」一句留到步骤 4 改文档时删。
+
+### 步骤 4 — 收尾（2026-11-16）
+
+- `cocs/wpe/WPE_SCENE.md`：「视频纹理（P9a）」整节按 P9d 重写为「视频纹理（P9a、P9d）」（拆包、播放器、颜色、已知差异、走查、dev 探针；删去挂进页面与 P9c 卡住兜底两段）；「用户纹理」里视频一条改为 `CodecVideoPlayer` 与用户视频的颜色规则，删去「主窗口不能最小化」，「标清视频偏色」的已知差异改为「标了色彩标签的用户视频」；`IVideoTexture` 表的 `rate` 一行改为非负有限数都收。
+- `cocs/README.md`：WPE_SCENE 条目的「视频纹理」与「用户纹理」两条、适用场景里视频相关的几句。
+- `versions/latest/regression.md`：新增「场景壁纸视频改用 WebCodecs（P9d）」Y0–Y10，已勾 Y0–Y7，Y8（预览里的用户视频实时播放）待用户，Y9（长时间播放）按用户要求未长测，Y10（拆不了包）只有单测。
+- `versions/latest/changelog.md`：用户侧 Optimized 一条、开发侧 Changed 一条；P11b 用户侧那条里「标清视频的色彩有细微差别」改为「JPEG 与视频在颜色剧烈变化的边缘有细微差别」。

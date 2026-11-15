@@ -1659,7 +1659,8 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
   - `bgindex` 只在有全局调色板、非 0、不越界时保留；首帧（含重新开始）只在本帧没有透明位时填背景；
   - disposal 3 恢复两帧之前的画布（没有时按 2 处理），alpha > 128 才写；
   - 只在被画到时推进、每个渲染帧最多前进一帧：剩余时间按 float32 减本帧 `g_Frametime`，≤ 0 才换下一帧，超出部分带到下一帧；延时 = 10 × GIF 的 delay 毫秒，不设下限；无限循环；图层隐藏、壁纸暂停时不推进、也不补时间。
-- **视频**（`.mp4 .wmv .avi .m4v .mov .mkv .webm`）：P9a 的 `VideoTexturePlayer`，和 WPE 用的是同一个播放器类。循环、不出声、自己的时钟、30 帧没画到就暂停、卡住兜底（P9c）都同场景视频。纹理按裁后尺寸建，裁切写在 `copyExternalImageToTexture` 的源矩形上，几何 UV 不变。第一帧最多等 10 s，建不起来用缺省纹理（不是透明）。面板只给 `.mp4`，别的扩展名只可能来自手输，同样认。
+- **视频**（`.mp4 .wmv .avi .m4v .mov .mkv .webm`）：和场景视频同一个播放器 `CodecVideoPlayer`（P9d，见「视频纹理」），循环、不出声、自己的时钟、30 帧没画到就暂停都同场景视频。先整段读成 Blob（`file:` 响应没有长度，拆包要先知道总长；Chromium 把大 Blob 换到磁盘），再按切片读（`blobRangeReader`）。纹理按裁后尺寸建，裁切写在 `copyExternalImageToTexture` 的源矩形上，几何 UV 不变。第一帧最多等 10 s，建不起来（含 `.wmv`、`.avi`、`.webm` 等拆不了的封装）用缺省纹理（不是透明）。面板只给 `.mp4`，别的扩展名只可能来自手输，同样认。
+- **用户视频的颜色**（`ColorRule` 的 `"user"`）：矩阵照码流标签（`colr` → H.264 SPS 的 VUI），没标时按高度：高 > 576 用 BT.709，否则 BT.601，宽度不参与（P9d 步骤 4 在 WPE 实测的分界：720×576、1280×480 → 601，720×578、480×720、1024×700 → 709）。WPE 读用户视频不看标签、只按高度（480² 标 709 → 601、720² 标 601 → 709），算 WPE 的缺陷，我们照标签（有意不同：用户视频不在语料里，没有画面依赖它）。原色、传递函数、范围与色度位置同场景视频。
 - 扩展名转小写再判断（`mediaKind`）。GIF 与视频按值共用一份（引用计数），每个纹理名各一份帧状态；不进按值的解码缓存，换走再选回来从头开始（同 WPE）。
 
 **能力表**：不再整个报 `material:usertextures` / `effect:*:pass:usertextures`，按项细分照报：
@@ -1673,7 +1674,6 @@ pass 级的 `keepaspect` WPE 不读，改中性。
 **dev 探针**：
 - `host.userTextures()`：每个属性来源的当前值、状态（`ready` / `empty` / `failed` / `loading`）、解码后的整张尺寸、最近一次解码用时、已登记的纹理名，GIF 的换帧次数。
 - 确定性回放（`renderFrame`）没有宿主，自建一份来源表，按 `userProperties` 预解码、等完，并置为暂停。`gifDts`（每项是一帧的 `g_Frametime`，秒）逐帧推进 GIF；`videoTime` 也作用于用户视频。vite 的 `/render` 与 MCP `render_scene` / `host_render` 收 `gifDts`。
-- 屏外宿主要用视频时，主窗口不能最小化或隐藏：宿主 iframe 的 `document.hidden` 跟着为真，Chromium 推迟媒体加载，`<video>` 停在 `readyState` 0。探针遇到这种情况直接报原因（`checkVideoVisibility`）。
 - `host.renderFrame(time, key)` 给了 `key` 时存读回的 RGBA，用来按区域和 WPE 比运行中改值后的画面。
 
 **验收**（1920×1080，WPE 抓帧 `A:\p11b\`）：
@@ -1685,7 +1685,7 @@ pass 级的 `keepaspect` WPE 不读，改中性。
 - **解码是异步的**：WPE 在下一帧开头同步读文件、建纹理，同帧画出；我们解码完成后的下一帧才换上，大图晚几帧（6000×3000 解码几十毫秒）。首次加载与确定性回放都等解码完，不受影响。
 - **JPEG 的色度上采样**：WPE 的 FreeImage 3.18 自带的 libjpeg 与浏览器的 libjpeg-turbo 不同，色块边界上差到几十级，照片上很小。
 - **16 位灰度 PNG**：FreeImage 按 `[min(255, 最小值), 最大值]` 拉伸，浏览器只给 8 位。
-- **标清、未标色彩信息的视频整体偏色**：Chromium 识别成 `smpte170m`（矩阵对），`copyExternalImageToTexture` 另做 SMPTE-C → sRGB 的原色转换；WPE 的 Media Foundation 只做矩阵。场景视频纹理（P9a）同样受影响。
+- **标了色彩标签的用户视频**：WPE 不看标签（只按高度），我们照标签，标签和高度给出的矩阵不同时颜色不同（有意不同，见「解码」）。色度上采样的纵向位置同场景视频的已知差异。P9d 之前标清、未标视频的整体偏色（Chromium 的 `<video>` 拷贝另做 SMPTE-C → sRGB 原色转换）随 `<video>` 一起消失。
 - **视频源矩形落在半像素**：WPE 的视频处理器重采样，我们只按整像素取。HDR 视频（PQ / HLG）不做，照常 RGBA8；槽 0 换成用户视频时 `getVideoTexture()` 不做。
 - 暂停期间改值新建的 GIF，第一次画到时用的是上一个实时帧的 frametime。
 - 几乎不可压缩的大 GIF 解码开销高（1.1 MB 一帧约 29 ms）。
@@ -2534,51 +2534,60 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **dev 探针**：`__kabegameSceneProbe.host.sounds()` 给宿主音量、暂停 / 隐藏，每个声音对象的模式、当前文件、可用文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的 context 状态、淡变值、Blob 数与各元素的状态。
 
-## 视频纹理（P9a）
+## 视频纹理（P9a、P9d）
 
-视频纹理是头标志带 Video（`0x20`）的 `.tex`：一张图、一级 mip，mip 的数据就是整段视频（语料 59 段 MP4、1 段 Matroska；H.264 为主，1 段 HEVC）。WPE 用 Media Foundation 的 `IMFMediaEngineEx`（帧服务器模式）解码，每次绑定这张纹理画图时把最新一帧拷进一张普通的 RGBA8 纹理。我们照同样的结构：解码交给 `<video>`（挂在宿主页面最上层、几乎看不见，P9b 步骤 3），GPU 侧仍是普通纹理，着色器与绑定组不变。脚本经 `getVideoTexture()` 控制播放是 P9b（本节「脚本 `IVideoTexture`」）。依据：读码 [rea-p9-video](../../.claude/plans/wpe-import/3-scene/phase9/rea-p9-video.md)，实测 [p9-REPORT](../../.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md)（P9b 的补测在「P9b 步骤 0 的补测」），P9b 的计划与真机对照见 [phase-9b-script.md](../../.claude/plans/wpe-import/3-scene/phase9/phase-9b-script.md)。
+视频纹理是头标志带 Video（`0x20`）的 `.tex`：一张图、一级 mip，mip 的数据就是整段视频（语料 59 段 MP4、1 段 Matroska；H.264 为主，1 段 HEVC）。WPE 用 Media Foundation 的 `IMFMediaEngineEx`（帧服务器模式）解码，每次绑定这张纹理画图时把最新一帧拷进一张普通的 RGBA8 纹理。我们照同样的结构，GPU 侧仍是普通纹理，着色器与绑定组不变；解码自 P9d 起不经 `<video>`：宿主自己从磁盘区间拆出每一帧的压缩数据，交给 WebCodecs 的 `VideoDecoder`（显卡硬解），按自己的媒体时钟挑出当前的 `VideoFrame` 拷进纹理。脚本经 `getVideoTexture()` 控制播放是 P9b（本节「脚本 `IVideoTexture`」）。依据：读码 [rea-p9-video](../../.claude/plans/wpe-import/3-scene/phase9/rea-p9-video.md)，实测 [p9-REPORT](../../.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md)（P9b 的补测在「P9b 步骤 0 的补测」），P9b 的计划与真机对照见 [phase-9b-script.md](../../.claude/plans/wpe-import/3-scene/phase9/phase-9b-script.md)，P9d 的设计、实施与走查见 [phase-9d-webcodecs.md](../../.claude/plans/wpe-import/3-scene/phase9/phase-9d-webcodecs.md)。
 
 | 层 | 位置 | 做什么 |
 |---|---|---|
 | 编译 | `compile/tex.ts` → `SceneTexture.video` | 按 Video 标志跳过 mip 字节（最大一段 674 MiB，编译 Worker 不读视频数据，这是唯一的一道），只给视频在磁盘上的绝对区间（散 `.tex` 从文件开头算，`scene.pkg` 条目带条目偏移）。要解码时另读容器头里的时长（`video/container.ts`：MP4 的 `mvhd`、Matroska 的 `Info.Duration`，盒子只读头、`mdat` 按大小跳过，每段 2–6 次小读；场景确定退回时不读），放进 `video.duration`（P9b 步骤 1）。不报能力键：槽 0 以外同样工作，WPE 也是逐槽更新 |
-| 播放器 | `video/player.ts` | 一段视频一个：按区间 `fetch(file:)` 直接 `Response.blob()`（数据不经 JS 堆，Chromium 把大 Blob 换到磁盘）；`<video>` 静音、缺省循环，挂进宿主页面（`attachToDocument`，见下）；`requestVideoFrameCallback`、`loadeddata`、`seeked` 置新帧标志；读不到、长度不符或解码出错时标为失败、记一条 warn。脚本 `IVideoTexture` 的落点（`rate`、`loop`、`currentTime`、`duration`、`play` / `pause` / `stop`、`isPlaying`、结束回调） |
+| 拆包 | `video/demux/`（`index.ts` 的 `indexVideo` 按 EBML 魔数分派） | MP4（`mp4.ts`）读 `moov` 里的帧表：偏移、大小、显示时间（`ctts`）、关键帧（`stss`），扣编辑列表的 `media_time`（只认「没有」或「一段、`media_time ≥ 0`、速率 1」）；Matroska（`mkv.ts`）按 4 MiB 一块顺序扫 Cluster、只记块头，时间扣全部帧里最小的显示时间。产出同一个 `VideoTrackIndex`，帧时间与 ffmpeg 的 pts 逐帧相同。拆不了（分片 MP4、`stz2`、lacing、`ContentEncodings`、编码不是 H.264 / HEVC、表不一致等）给出原因、不抛错。`config.ts` 给 codec 串、`description` 与色彩空间（见下「颜色」） |
+| 播放器 | `video/codecPlayer.ts`（`CodecVideoPlayer`） | 一段视频一个：按区间 `fetch(file:)` 读（散文件与 pkg 条目同样，偏移加 `source.start`），先 `indexVideo`，之后按解码顺序约 4 MiB 一块预读、至多两块在手；`VideoDecoder` 只解不播，媒体时钟、挑帧、跳转、流控（解码队列 + 已解出未显示的帧合计不超过 8）都在这里；读不到、拆不了包、配置不支持、解码出错时标为失败、记一条 warn。脚本 `IVideoTexture` 的落点（`rate`、`loop`、`currentTime`、`duration`、`play` / `pause` / `stop`、`isPlaying`、结束回调）；`seeked()` 给 dev 探针与用户视频等跳转完成 |
 | 脚本 | `script/api.ts`（`getVideoTexture`）、`script/runtime.ts`（`callFor`） | P9b：每个图层的 `getVideoTexture`，包装对象按 WPE 的成员与类型，经宿主按视频区间键现取播放器；结束回调在登记它的脚本上下文里调 |
 | 场景视频表 | `video/sceneVideos.ts`（实现 `VideoSink`） | 帧号、30 帧规则、宿主暂停；跨重编译按视频区间复用播放器（改属性不重读、不打断） |
-| GPU | `render/textures.ts`、`render/scene.ts`（`copyVideo`）、`render/renderer.ts` | 视频纹理建成初值全 0 的 `rgba8unorm`、一级 mip，绑定组建一次不再变；每个 draw 建时记下着色器真正绑定的视频纹理，编码时画到它就问 `VideoSink.drawn`，有新帧就 `copyExternalImageToTexture`（队列操作，先于这一帧的绘制）；渲染器每个实时帧开头调 `beginFrame`（补画帧不调） |
+| GPU | `render/textures.ts`、`render/scene.ts`（`copyVideo`）、`render/renderer.ts` | 视频纹理建成初值全 0 的 `rgba8unorm`、一级 mip，绑定组建一次不再变；每个 draw 建时记下着色器真正绑定的视频纹理，编码时画到它就问 `VideoSink.drawn`，有新帧就 `copyExternalImageToTexture(VideoFrame)`（尺寸取显示尺寸，队列操作，先于这一帧的绘制；帧由播放器持有、下次替换时关掉）；渲染器每个实时帧开头调 `beginFrame`（补画帧不调） |
 | 宿主 | `host.ts` | `loadVideos` 紧挨声音、不等 GPU；暂停与文档隐藏都转给 `setPaused`；第一次 ready 之前等可见图层的视频出第一帧（最多 2 s，免得淡入时看见透明的几帧）；重编译期间按视频区间把旧场景的纹理下标换算到新表；脚本的落点按 `scriptBundle`（脚本正在用的那份）找图层槽 0 的视频，经 `SceneVideos.playerFor` 按区间键取；「清空脚本存储」重启脚本时 `SceneVideos.resetScriptState`（清结束回调、`loop` 真、`rate` 1、想放，不 seek）；退回预览图与销毁时释放 |
 
 **播放规则**（WPE 实测）：
-- 加载即播放，`loop` 缺省为真，视频用自己的时钟（不读 `g_Time`）；循环点每轮停约 3 ms（Chromium 约 4 ms）。
-- 不出声：WPE 的场景视频纹理带 `FORCEMUTE` 创建，`videoaudiooutput` 不起作用。
+- 视频用自己的时钟（不读 `g_Time`），`loop` 缺省为真。我们的时钟在「在放」时按墙钟 × 速率前进：想放、宿主没暂停、没空闲、没结束，且出了第一帧、已被画到过一次（第一次画到时起步，宿主 ready 前已等到第一帧，所以视频和场景同时开始）。
+- 不出声：WPE 的场景视频纹理带 `FORCEMUTE` 创建，`videoaudiooutput` 不起作用；我们只解视频轨。
 - 纹理连续 30 个渲染帧没被画到（图层不可见、被剔除、所在材质不画）就暂停，再被画到时从暂停处续放、不追赶，期间 `isPlaying` 仍为真；加载时就不可见的图层也先播约 30 帧。不看 `visible` 本身。
 - 宿主暂停（含文档隐藏）时全部暂停，恢复时全部放（WPE 恢复时连脚本暂停过的也放）。
-- 第一帧之前与解码失败时纹理全 0（alpha 也是 0），图层透明，场景不退回。
+- 第一帧之前与失败时纹理全 0（alpha 也是 0），图层透明，场景不退回。
 - 脚本暂停或停止期间不取帧：seek 读回的时间立即变，画面不变，到 `play()` 那一帧才换成新位置；`stop()` 后画面停在 stop 那一刻的帧（P9b）。空闲暂停（30 帧没画到）期间 `wantPlay` 仍为真，照常取帧。
-- 时长是容器头里的（MP4 `mvhd`，不看编辑列表），时钟走到它才绕回或结束，结束时读到的时间正好等于它（P9b）。
+- 时长是容器头里的（MP4 `mvhd`），时钟走到它才绕回或结束，结束时读到的时间正好等于它（P9b）；编辑列表两边都认（WPE：P9 测试片带 2 帧的 `media_time`，显示帧号比当前时间 × 60 小 0.09–1.39，不认会再小 2 帧）。
 
-**元素挂进宿主页面**（P9b 步骤 3，`attachToDocument`）：每个 `<video>` 挂在宿主页面最上层，左上角 2 px、1% 不透明、不接收指针，多段视频横向错开 2 px，释放时撤下。看不见的视频由 Chromium 视频合成器的后台渲染驱动，约 250 ms 才更新一次当前帧，暂停一两秒后恢复，第一帧要等约 255 ms。「看不见」有三种：不挂 DOM（P9a 的做法）、`opacity: 0`、被不透明的场景画布整个盖住（合成器把它裁掉不画）。脚本切换多段视频、30 帧空闲暂停后恢复都会碰到。放到最上层之后，预览里 15 次恢复都在 5–12 ms 内出第一帧；混进画面的只有左上角 2×2 像素，8 位输出里最多差 3 级。dev 探针的确定性回放（`dev/videoProbe.ts`）用的元素不播放、只 seek，不挂。
+**播放器的内部**（P9d，`CodecVideoPlayer` 文件头有全文）：
+- **时钟与时间戳**：喂进解码器的时间戳 = `(n × 时长 + 样本显示时间) × 10⁶`，n 是本次跳转起喂到第几遍；循环时不 flush、接着喂下一遍，媒体时钟按展开的时间走、绕了几遍记在 `loops`，所以循环点无缝。`loop` 为假时喂到结尾 flush 一次，时钟停在时长、`ended`。
+- **挑帧**：显示时间 ≤ 媒体时间的最新一帧成为当前帧；被越过的直接关掉、计入丢帧。
+- **跳转**（脚本 `currentTime`、`stop`、结束后 `play`、卡住重置）：`reset()` + 重新 `configure`，从显示时间 ≤ 目标帧的最近关键帧喂起，丢掉早于目标帧的输出，目标帧到了才换当前帧（之前一直显示旧帧）。所以取到的就是「显示时间 ≤ 目标的最新一帧」。
+- **速率**：时钟是自己的，非负有限数都收（旧 `<video>` 受 Chromium 的 [0.0625, 16] 限制）；负数按 0（WPE 负数让工作线程卡死，不复刻）。
+- **卡住**：画到时看，在放（或在跳转）、没有已解出的帧、解码器有待解的输入、喂帧没在等读盘，且 2 s 没有任何输出，就 reset 并从当前媒体时间重新跳转，记 warn、计数 `stallResets`。P9c 记的 Chromium `<video>` 硬件解码静默卡住（`DECODER_UNDERFLOW`）随 `<video>` 一起不再适用；硬件解码的输出帧池有限，流控与「越过即关」保证播放器不长时间握着帧。
+- **主窗口隐藏**：WebCodecs 不经 Chromium 推迟隐藏页面媒体加载的那条路（`DeferMediaLoad`），隐藏时照常解（P9d 步骤 4 实测：40 ms 出第一帧）。
 
-**播放卡住的兜底**（P9c 步骤 1，`VideoTexturePlayer.watchStall`）：
-- **现象**：Chromium 的硬件解码（`D3D11VideoDecoder`）长时间放 4K60 视频后会静默停住。元素仍在放、没有错误，`readyState` 停在 2，时间与解码帧数不再变。13586（4K60 H.264、40 Mbps）的预览 7–14 分钟遇到一次。卡住时 renderer 报 `BUFFERING_HAVE_NOTHING`，原因 `DECODER_UNDERFLOW`。Chromium 没有停顿超时，`stalled` 对 Blob 不发。原地跳一下会清空渲染队列、复位解码器，约 75 ms 恢复。
-- **判定**：每次画到这张纹理时看一眼。播放器要求元素在放、`wantPlay`、非宿主暂停、元素没暂停没结束没在跳转、速率 > 0、`readyState < 3`，而时间 2 s（墙钟）没前进，就算卡住。暂停结论变化、超过 2 s 没画到时重新计时。
-- **处理**：先原地跳（不经脚本的 setter，不影响结束回调）。连续两次没救回就按同一个对象地址重新加载、回到原时间；重新加载期间脚本读到的是要设回的时间，结束判定暂停。重新加载三次仍不行就停手，直到时间重新前进。每次处理记一条 warn，`host.videos()` 的 `stallSeeks` / `stallReloads` 计数。
-- **未证实的根因**：解码器拿不到空闲输出缓冲。可疑的占用方是 WebGPU 零拷贝导入或合成器持有的当前帧，没做对照实验。用户纹理的视频（`usertex/sources.ts`）用同一个播放器，一起兜底。
+**颜色**（P9d 步骤 4 走查：抓 WPE 的视频纹理，从原始 YUV 按不同写法重建，看哪种能逐像素还原；`video/demux/config.ts`）：
+- WebCodecs 不读码流的色彩标签、缺省一律按 BT.709，色彩空间由我们给：原色与传递函数恒报 bt709，即不做色域与传递函数转换（WPE 不做）；范围取码流的（`colr` → VUI → limited）。
+- **场景视频的矩阵恒为 BT.709**：WPE 不看标签、也不按分辨率。标 bt709 的 1080p、1440p HEVC、Matroska，以及标 bt470bg 的 540p（3400241651）与 4K（3812007032）都是 709；后两段按 601 重建最大差 7 与 22。语料画面依赖它，照做。
+- 用户视频见「用户纹理」的「解码」：照标签，没标时高 > 576 用 709（WPE 不看标签记为缺陷，有意不同）。
+- **色度上采样的位置**（已知差异，不照）：两边都是双线性插值（权重 9/16、3/16、3/16、1/16），横向位置相同；WPE 纵向第 k 个色度样本在亮度第 2k − 0.5 行，Chromium 拷 `VideoFrame` 时在标准的 2k + 0.5 行。按各自的位置重建，WPE 四段都只差 1、我们最大差 2；两边之间的差全部来自这一处：3823859141（1:1）整帧 58% 像素不同、平均 1.22、最大 45，3816870245 缩到一半后平均 0.48、最大 17，3400241651 的合成 RT 最大 22。要照它得 `VideoFrame.copyTo` 读回 YUV、自己的着色器转换，每帧多一次显存读回，用户定不做。P9a 记的「色度上采样插值不同」就是这一处。
 
 **已知差异**：
-- 色度上采样：4:2:0 视频还原成 RGB 时，Chromium 与 Media Foundation 的插值不同，颜色剧烈变化的边缘差到几十级；测试工程不缩放时 98% 的像素差 ≤ 1、99 分位 7，整体没有偏色。没标颜色的高清视频两边都按 BT.709 换算。
-- 时间轴：两边对容器编辑列表的处理可能不同，同一时刻可能差几帧（语料一段约 67 ms），实时播放看不出。
-- 时长与循环点：`duration` 已取容器时长（P9b），但播放仍由 Chromium 的时钟管，它在自己的时长处（各轨编辑之后）绕回或结束，WPE 走到 `mvhd` 的时长。语料 59 段 MP4 里有 21 段 Chromium 早 22–40 ms（Adobe 导出的、音轨被编辑列表截短的），其余只差 `mvhd` 的毫秒取整。结束时读到的时间仍报容器时长；不补这段时间（P9b 决定 1，用脚本的场景都不靠它）。
+- 色度上采样的纵向位置，见上「颜色」。
+- 时钟（WPE 的视频时钟在媒体引擎自己的线程上，和渲染帧之间有延迟与抖动，每帧显示哪一帧本身不确定；走查回放把视频时刻当输入还原，画面比较不受影响）：
+  - 显示的帧：WPE 落后当前时间 0.09–1.39 帧（均值 0.84），我们 0.07–0.81（均值 0.37）。WPE 多出的约半帧是帧服务器 `TransferVideoFrame` 的转交延迟。
+  - 循环点：WPE 每轮停约 2.6 ms（标准差 2.9 ms），我们不停。
+  - 开场：WPE 视频时间 ≈ 场景时间 − 36.5 ms（媒体引擎的启动延迟），我们 ≈ 场景时间，早约 2 帧（60 fps）。
+  - 场景时间与视频时间的步长：WPE 抓帧那几帧多走 / 少走约 11 ms，我们按墙钟。
+- 拆不了包（分片 MP4 等，语料 0 段）时图层透明；WPE 的媒体引擎能放。
 - 离当前位置不到一帧的 seek：WPE 忽略（暂停在 0.2867 时 seek 0.3 读回不变），我们照跳（P9b 决定 5）。
 - 脚本细节：写 `duration` 抛的 `TypeError` 文字不同；包装对象的原型是 `Object.prototype`（WPE 是只有 `constructor` 的类原型）；`loop` 改回真后在结尾立即 `play()`，这一帧读到 0（WPE 读到结尾时刻），下一帧两边都从开头放；seek 后读回只到微秒。
-- 视频比场景时钟早：第一次 ready 前等首帧期间视频已经在放，场景开始时视频已走了 0.3–1.4 s（WPE 约 0.02 s）；脚本在 `init` 之后才暂停的视频也多放了这一段。
 - 暂停时机：WPE 由工作线程判断，实测第 32 帧冻住，我们是第 31 帧。
-- 预览、桌面、应用背景同时播同一张场景时各解各的；674 MiB 级的视频每次加载都整段写进 Chromium 的 Blob 存储（约 0.8 s），P9c 再看要不要换成缓存文件。
+- 预览、桌面、应用背景同时播同一张场景时各解各的。
 - 视频尺寸和纹理尺寸不同时只拷重叠部分、记一条 warning（WPE 缩放到纹理尺寸；语料 0 段）。
-- 和 WPE 抓帧做整帧对照时，以前的读回是先画场景分辨率再缩到画布，锐利边缘多出十几级差，这是所有图层共有的读回差异，不是视频的。2026-11-14 起 `render_scene` 给 `canvas` 时按窗口尺寸直接画（同 WPE），这一项不再出现；P9a 的视频对照没有按新画法重跑（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）。
 
-**语料**（173 个工程）：能渲染 47 → 50（`3822149301`（HEVC）、`3824550659`、`3828359750`）；报 `tex:video` 的 41 张只去掉这个键。三张解锁场景的视频纹理和 WPE 抓帧逐像素比：HEVC 那张平均差 0.19、最大 5；两段没标颜色的 H.264 平均差 1.2–1.7、99 分位 ≤ 10（WPE 与 ffmpeg 之间也是这个量级）。P9b：用到 `getVideoTexture` 的 6 张（3243449890、3276911872、3326873240、3361965869、3470764447、3605722997）只去掉 `script:api:layer.getVideoTexture`，能渲染数不变，它们还差别的节（人偶、相机、`input`、粒子层的 `play` 等）；强制渲染下按时段切换、改速度、自写控制都和脚本逻辑一致，没有和视频有关的报错。
+**语料**（173 个工程）：能渲染 47 → 50（`3822149301`（HEVC）、`3824550659`、`3828359750`）；报 `tex:video` 的 41 张只去掉这个键。P9b：用到 `getVideoTexture` 的 6 张（3243449890、3276911872、3326873240、3361965869、3470764447、3605722997）只去掉 `script:api:layer.getVideoTexture`，能渲染数不变，它们还差别的节（人偶、相机、`input`、粒子层的 `play` 等）；强制渲染下按时段切换、改速度、自写控制都和脚本逻辑一致，没有和视频有关的报错。P9d 的走查（复制工程只留视频图层，`ignore/p9/p9d/walk/`，抓帧 `A:\p9d\walk\`）：3823859141、3400241651、3822149301、3812007032、3816870245 五张的视频纹理、一张经缩放的整帧，差异都只剩上面的已知差异；语料 60 段全部拆得了，Matroska 那段（3816870245，7049 帧）与 ffprobe 逐包相同。
 
-**dev 探针**：`host.videos()` 给每段视频的位置、`currentTime`、`paused`、`wantPlay`、`lastDrawn`、当前帧号、`fresh`、`failed`、尺寸与丢帧数，以及卡住兜底的 `stallSeeks` / `stallReloads`（P9c）。`renderFrame` 的 `videoTime`（秒，或按纹理路径分别给；超过时长按循环取模）先 seek 好、等到那一帧再拷，是屏外宿主里确定性回放视频的唯一办法（屏外 iframe 里 rAF 与 `requestVideoFrameCallback` 都不跑）；vite 的 `/render` 与 MCP `render_scene` / `host_render` 收同名参数。
+**dev 探针**：`host.videos()` 给每段视频的位置、`currentTime`、`paused`（时钟停着）、`wantPlay`、`lastDrawn`、当前帧号、`fresh`、`failed`、尺寸、时长，解码计数 `decoded` / `dropped` / `queued` / `decodeQueue`、`stallResets` 与色彩说明 `color`。`renderFrame` 的 `videoTime`（秒，或按纹理路径分别给；超过时长按循环取模、钳到 `duration − 0.005`）给每段视频建播放器、跳到那一刻、等目标帧到手，留一份帧给每个 draw 拷，结果的 `videos` 带实际取的 `time` 与帧的显示时间 `frameTime`；主窗口最小化时照常可用。这是屏外宿主里确定性回放视频的唯一办法（屏外 iframe 里 rAF 不跑）；vite 的 `/render` 与 MCP `render_scene` / `host_render` 收同名参数。
 
 ### 脚本 `IVideoTexture`（P9b）
 
@@ -2588,7 +2597,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 |---|---|
 | `duration` | 只读（严格模式写入抛 `TypeError`），容器时长的 float32（`mvhd` 2.517 → 2.5169999599456787）；没有播放器时取 bundle 里的容器时长 |
 | `loop` | 包装对象自己的字段，缺省真，**读出数字 1 / 0**（和 WPE 自带的 `.d.ts` 不同）；写入取 `Boolean` 并转给播放器 |
-| `rate` | 包装对象自己的字段，缺省 1，读出 float32；写入取 `Number`、不是有限数时不写；负数播放器按 0 处理（WPE 负数会让工作线程卡死，不复刻），超出 Chromium 支持的 [0.0625, 16] 时保持原速率 |
+| `rate` | 包装对象自己的字段，缺省 1，读出 float32；写入取 `Number`、不是有限数时不写；负数播放器按 0 处理（WPE 负数会让工作线程卡死，不复刻），其余非负有限数都收（P9d 起时钟是自己的） |
 | `play()` / `pause()` / `stop()` | 返回 `undefined`；已结束（`loop` 为假）时 `play()` 先回到 0；`stop()` = 暂停 + 回到 0，之后 `isPlaying()` 为假 |
 | `setCurrentTime(t)` / `getCurrentTime()` | 钳到 `[0, duration − 0.005]`；读出 float32 |
 | `isPlaying()` | 布尔（`想放 && !已结束`）；空闲暂停、宿主暂停期间仍为真；解码失败为假，脚本 `play()` 之后为真 |

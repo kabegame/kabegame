@@ -2687,6 +2687,24 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | X1 卡住后自动恢复 | Windows dev | 预览 13586（3429479356，4K60 H.264）放到卡住，读应用日志与 `host.videos()` | 卡住约 2 s 后日志一条「场景视频卡住 2000 ms 没前进，原地跳一下」，`stallSeeks` 为 1，画面接着动、之后正常绕回 | 2026-11-14 Claude：放了约 7 分钟在 131.90 s 卡住，`DECODER_UNDERFLOW`；约 2 s 后原地跳，`readyState` 回到 4，按 60 fps 放到 141.4 s 并绕回 |
 | [x] | X2 桌面上的长时间播放 | Windows dev，窗口模式 | 把 13586 设为桌面壁纸放 30 分钟以上，看应用日志 | 有「场景视频卡住」时画面随后恢复，没有「重新加载 3 次仍卡住」 | 2026-11-14 Claude：30 分钟里卡住 11 次（另有 76 次约 1 s 的短暂缺帧自己恢复），每次原地跳一下就恢复，没有用到重新加载；测试期间 WPE 占着同一块显卡 92% 的解码器，解码器整体多在 100%，卡得比单独预览时（7–14 分钟一次）勤得多 |
 
+## 场景壁纸视频改用 WebCodecs（P9d）
+
+2026-11-16。场景视频纹理、用户视频与 dev 探针都不再经过 `<video>`：宿主自己拆包（`video/demux/`：MP4 帧表、Matroska 顺扫 Cluster），交给 WebCodecs 的 `VideoDecoder` 硬解，按自己的媒体时钟挑帧拷进纹理（`video/codecPlayer.ts`）。旧播放器、挂进页面与 P9c 的卡住兜底随之删除（上一节 X1、X2 不再适用，换成解码器 2 s 没输出就重置、`stallResets`）。颜色照 WPE：场景视频矩阵恒为 BT.709，用户视频照标签、没标时高 > 576 用 709；色度纵向采样位置与 WPE 不同，记为已知差异。设计、实施与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9d-webcodecs.md`，测试片与复制工程在 `ignore/p9/p9d/walk/`，WPE 抓帧在 `A:\p9d\walk\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | Y0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`，只跑引用视频模块的文件与 `src/dev`）、Prettier；变异检查 | 0 error；全过；变异各有测试挂掉 | 2026-11-16：tsc 0 error；引用视频模块的 48 个文件 905 个用例、`src/dev` 194 个全过；步骤 1（13）、2a（14）、3（14）、2b（8）与颜色规则（5）共 54 个变异全部挂掉 |
+| [x] | Y1 语料拆包 | Node | 60 段视频逐段 `indexVideo`，和 ffprobe 比帧数、关键帧、时长、首帧 | 全部拆得了、逐段一致 | 2026-11-15 Claude：59 段 MP4 与 1 段 Matroska（3816870245，7049 帧）全部一致，Matroska 逐包 pts / 大小 / 关键帧与 ffprobe 无差异 |
+| [x] | Y2 桌面上的 4K60 实时播放 | Windows dev，窗口模式 | 桌面壁纸设 14295（3585875739，4K H.264），读 `host.videos()` 30 s | `decoder` 是 WebCodecs，每秒解 60 帧，循环处无缝，不丢帧 | 2026-11-14 Claude：媒体时间每秒走 1.000 s，在 12.758 s（`mvhd`）绕回，丢 0 帧，`stallResets` 0 |
+| [x] | Y3 Matroska 实时播放 | Windows dev | 主窗口页面里直接驱动播放器放 3816870245 的视频 20 s | 每秒解 120 帧，时钟每秒 1 s，没有告警 | 2026-11-15 Claude：建索引 809 ms，每秒解 120 帧，20 s 丢 19 帧（多在开头），`stallResets` 0 |
+| [x] | Y4 颜色对照 WPE | Windows dev + WPE 抓帧 | 复制工程只留视频图层，WPE 抓一帧，按同一帧回放，比视频纹理与整帧 | 只剩色度纵向位置的差；标 bt470bg 的场景视频不再整体偏色 | 2026-11-16 Claude：3823859141（1:1）整帧最大 45、平均 1.22，按两边各自的色度位置重建都只差 1–2；3400241651（标 bt470bg）改为 709 后合成 RT 最大 22；3816870245 缩到一半最大 17；3822149301（HEVC）、3812007032（4K 标 bt470bg）的 WPE 纹理按「709、2k − 0.5」重建最大差 1 |
+| [x] | Y5 时间轴 | Windows dev | 播放器放 P9 的 60 fps 测试片 12 s，和 P9 实测的 WPE 时钟比 | 编辑列表、时长两边相同；时钟按墙钟、循环无缝 | 2026-11-16 Claude：时钟每秒 1.000 s，循环间隔即时长 2.517 s；显示落后 0.07–0.81 帧（WPE 0.09–1.39）；开场比 WPE 早约 2 帧、WPE 循环点停约 2.6 ms，都是 WPE 媒体引擎的延迟（已知差异） |
+| [x] | Y6 确定性回放 | Windows dev | `render_scene` 14295 `videoTime` 1 与 13，各两次；再在主窗口最小化时跑一次 | 取到 ≤ 目标的最新一帧，两次逐字节相同；最小化时照常 | 2026-11-16 Claude：1 → `frameTime` 1.0，13 → 按时长取模 0.242、`frameTime` 0.2333；同一请求像素摘要相同；最小化时与可见时逐字节相同 |
+| [x] | Y7 用户视频 | Windows dev | 导入 `ignore/p11/proj/p11-ut`，属性 `ut` 设 P11b 的彩条片（320×240、未标），`render_scene` 取 0.5 s | 用户视频 ready，颜色与按 BT.601 解出的源只差 1 | 2026-11-16 Claude：ready、矩阵按分辨率取 smpte170m，(254, 0, 0) 对 ffmpeg 的 (253, 0, 0)；以前屏外拿不到用户视频帧的问题也没了 |
+| [ ] | Y8 预览里的用户视频实时播放 | Windows dev | 给一张有 `scenetexture` 属性的场景在属性面板选一段 MP4，看预览 | 视频在槽里循环播放，裁切与颜色正常 | 待用户 |
+| [ ] | Y9 长时间播放 | Windows dev，窗口模式 | 把 13586（3429479356，4K60）设为桌面壁纸放 30 分钟以上，看应用日志 | 画面一直在动；即使有「场景视频解码器 2000 ms 没有输出」也随即恢复 | 用户要求先不长测 |
+| [ ] | Y10 拆不了包的视频 | Windows dev | 场景或用户视频用一段分片 MP4 / WebM | 场景视频图层透明、用户视频用缺省纹理，日志一条「场景视频不能拆包」，场景不退回 | 只有单测 |
+
 ## 按颜色排序与代表色
 
 2026-11-11。每张图入库时算一份色盘（最多 5 个代表色 + 占比，`images.palette`），详情「基本信息」里画成色带；排序新增「颜色」维度。迁移 v052 加色盘列、色桶表 `color_buckets`（12 个基本色桶，黄 / 绿 / 青为 `e6c200` / `2e9e3f` / `1fb5b5`，不是纯色）与关系表 `image_color_distances`，给存量图 × 每个色桶铺一行 65536；回填作业 `image_palette` 在后台给 `palette IS NULL` 的图补算。排序有两个段：`sort/by-color_0x<rrggbb>`（色桶，预计算、沿索引读）与 `sort/by-any-color_0x<rrggbb>`（任意颜色，现算），前端按色桶列表（`color_buckets://`）选段并在列表变化时校正；用户可把颜色保存成色桶（`add_color_bucket`，最多 24 个）或删除（`delete_color_bucket`），提交后发 `color-buckets-change`。机制见 `cocs/gallery/COLOR_PALETTE.md`。

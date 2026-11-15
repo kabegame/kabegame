@@ -138,12 +138,7 @@ import {
 } from "./probeMedia";
 import { prepareProbeTexts } from "./probeTexts";
 import type { UserProperty } from "../compile/bindings";
-import {
-  checkGifDts,
-  prepareProbeUserTextures,
-  userVideoValues,
-  type ProbeShortcutIconInput,
-} from "./probeUserTextures";
+import { checkGifDts, prepareProbeUserTextures, type ProbeShortcutIconInput } from "./probeUserTextures";
 import {
   checkCanvas,
   expandInputTimeline,
@@ -155,7 +150,6 @@ import {
 import { applyScriptValues, wroteTextValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
 import {
   checkVideoTime,
-  checkVideoVisibility,
   ProbeVideos,
   requestedVideoTime,
   type ProbeVideoResult,
@@ -603,10 +597,6 @@ async function renderFramePass(
   const compileMs = performance.now() - started;
   // 文本层（P6b 1d）：同宿主，建场景前排好；没有文本层时不碰 wasm
   const texts = await prepareProbeTexts(bundle, reader, options.sceneAssets);
-  // 要用视频而宿主 frame 不可见（主窗口最小化）时 Chromium 推迟媒体加载、拿不到帧：在等之前就报出原因（P11b 步骤 5）
-  checkVideoVisibility(
-    bundle.textures.some((texture) => !!texture.video) || userVideoValues(bundle, options.userProperties).length > 0,
-  );
   // 用户纹理（P11b 步骤 2）：按 `userProperties` 预先解码并等完，读回的就是用户图；没有属性来源时不建
   const userTextures = await prepareProbeUserTextures(bundle, options.userProperties, reader, options.shortcutIcons);
   const gpu = await acquireGpu();

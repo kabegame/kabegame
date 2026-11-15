@@ -32,7 +32,7 @@
 - 场景壁纸的 3D 模型按 Wallpaper Engine 的规则读取编辑器里画的材质遮罩用了哪些通道（自发光、金属度、粗糙度、反射）：以前这几项被忽略，带自发光遮罩的部位（如创意工坊 3706286085 里角色的手套和鞋）比 Wallpaper Engine 暗。用到它的场景还缺雾、阴影等别的能力，暂时仍显示预览图。
 - 场景壁纸支持视频：作为图层画面的视频（包括创意工坊打包在场景里的 4K 视频与 HEVC 视频）会循环播放，被隐藏的视频图层自动暂停解码，暂停壁纸时一起停；和 Wallpaper Engine 一样不出声。画面与 Wallpaper Engine 对照过，只在颜色剧烈变化的边缘有细微差别。创意工坊 3822149301、3824550659、3828359750 现在可实时渲染；其余带视频的场景大多还缺文本、音频频谱、关键帧动画等别的能力。HEVC 视频需要显卡支持硬件解码，不支持时这个图层显示为透明。
 - 场景壁纸支持音频频谱：声明了音频处理的场景里，读系统声音频谱的效果（频谱条、随音乐跳动的光圈等）会跟着正在播放的声音动，和 Wallpaper Engine 用的是同一份数据，测试场景逐帧逐像素一致。创意工坊 3502090109、3585875739、3825170583 现在可实时渲染；其余用到音频频谱的场景大多还缺文本、关键帧动画、媒体信息等别的能力。只在 Windows 上有声音数据，其它系统上频谱保持为 0。
-- 场景壁纸支持作者开放的自定义图片属性：在属性面板里给这类属性选一张图片、GIF 或 MP4 视频，场景里对应的图层或效果贴图就换成它，按 Wallpaper Engine 的规则从正中裁成需要的比例，改了立即生效、不重新加载场景；清空后回到作者的贴图。图片的解码、GIF 的合成与播放节奏都逐像素对照过 Wallpaper Engine 的输出，只有 JPEG 的颜色边缘和标清视频的色彩有细微差别。创意工坊 3462279189、3783690410 现在可实时渲染；快捷方式图标这类贴图来源还没实现，用到它的场景仍显示预览图（系统媒体封面见下一条）。
+- 场景壁纸支持作者开放的自定义图片属性：在属性面板里给这类属性选一张图片、GIF 或 MP4 视频，场景里对应的图层或效果贴图就换成它，按 Wallpaper Engine 的规则从正中裁成需要的比例，改了立即生效、不重新加载场景；清空后回到作者的贴图。图片的解码、GIF 的合成与播放节奏都逐像素对照过 Wallpaper Engine 的输出，只有 JPEG 与视频在颜色剧烈变化的边缘有细微差别。创意工坊 3462279189、3783690410 现在可实时渲染；快捷方式图标这类贴图来源还没实现，用到它的场景仍显示预览图（系统媒体封面见下一条）。
 - Windows 上的场景壁纸支持系统媒体集成：显示正在播放的歌名、歌手、专辑封面，并随播放状态变化的场景（音乐卡片、唱片机一类）现在可实时渲染。标题、封面、颜色与刷新节奏都按 Wallpaper Engine 的规则，用同一个测试媒体会话逐项对照过它的回调和封面画面。创意工坊 2932157836、2974757317、3219908811、3355291946、3470764447、3482471820、3487328036、3823859141、3823864170、3837699827 现在可实时渲染。在设置里关掉「媒体集成」后，这些场景按没有媒体处理；macOS 和 Linux 上暂时没有媒体数据。
 - 场景壁纸支持形状光束、图层对齐、图层互相引用与透明写入设置：编辑器里的光束形状图层按 Wallpaper Engine 的规则画出；图片图层的对齐方式（如左上、底部居中）生效，子图层不受影响，场景脚本也能读写；遮罩、混合类效果可以引用别的图层（包括隐藏的图层）的画面；图层叠加效果时的边缘处理、像素风图层的不插值、材质的透明通道写入与「透明度覆盖」混合也按 Wallpaper Engine 的规则处理（以前个别图层叠加效果时边缘会露出另一侧的画面）。测试场景逐像素对照过 Wallpaper Engine 的输出，只在纹理缩小处有细微差别。创意工坊 3656079027、3668499717、3811764016、3812887609、3819646765、3821678218 现在可实时渲染；其余用到这些功能的场景大多还缺场景脚本、关键帧动画、木偶动画等别的能力。
 - 场景壁纸支持关键帧动画：编辑器里给位置、旋转、缩放、颜色、透明度、效果参数、缩放镜头等属性打的关键帧会按 Wallpaper Engine 的规则播放（循环、往返、只播一次，子动画跟随父动画），改属性时动画接着走、不从头开始；动画值逐帧对照过 Wallpaper Engine 的输出。创意工坊 2251857160 现在可实时渲染。脚本也能控制动画（播放、暂停、停止、跳帧、调速）并收到动画事件，规则对照过 Wallpaper Engine；用到它们的创意工坊场景多数还要等光标与媒体交互，暂时仍显示预览图。
@@ -88,6 +88,7 @@
 - Windows 安装程序在最后阶段不再一个接一个地闪出大量黑色命令行窗口：搬运 CEF 运行时、DLL 与设置目录图标属性改用安装程序内置指令完成。
 - 桌面端界面卡死后的自动恢复更快：页面无响应约 6 秒（原约 16 秒）即自动重新加载。
 - 按视频筛选和视频计数在大图库下明显更快；应用启动时会刷新数据库的查询统计，启动页显示「正在优化数据库」，图库越大这一步越久。
+- 场景壁纸里的视频改由应用自己解码，不再经过浏览器的视频播放器：视频和场景同时开始（以前视频会比场景早放零点几秒到一秒多）、循环时没有停顿，长视频加载时不再整段写进磁盘缓存；标清视频（包括属性面板里选的视频）不再整体偏色，场景里标了标清色彩信息的视频颜色和 Wallpaper Engine 一致。和 Wallpaper Engine 相比只在颜色上下剧烈变化的边缘还有细微差别。
 
 ### Fixed
 - 主窗口缩到很窄时，设置页「当前轮播路径」「当前壁纸」两行的标题不再被长路径挤成一列字。
@@ -329,6 +330,13 @@
 - CEF 补丁 06 改用每工厂私有 CORS 列表，运行时登记应用 origin 到 `file:` 的跨源白名单；删除桌面 `start_http_server` 并关闭 Tauri asset 协议。
 - Phase 6d：CEF 补丁 03 扩到 Windows（需重编 CEF）——Chromium 内层补丁的 aura `StartDragging` 钩子放宽到 `IS_LINUX || IS_WIN`，delegate 背书文件时另清 `html` / `download_metadata`，Windows 不打 `chromium/x-renderer-taint`；`tauri-runtime-kbcef` 的 `on_start_dragging` 去掉 Linux / macOS cfg，应用在三个桌面平台安装拖出 resolver，`authorize_drag_image` 收紧为 `is_file()`（`x-wpe/*` 目录行不得拖出）；前端桌面拖出只写 image id 并设 `effectAllowed = "copy"`，Web 版保留 `DownloadURL`。
 - 主程序每次启动在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`（`Storage::init_global_for_app`，CLI 与测试不跑，失败只告警），启动页新增 `analyze` 阶段。媒体分类改成绑定模式串的 `images.type GLOB ? AND images.type NOT GLOB ?`，相关 provider 的属性 `kind` 换成 `type_glob` / `type_not_glob`，视频走 `idx_images_type`；格式过滤的 `SUBSTR` 与宽高比的 `+` 实测改写后更慢，保持原样。
+- 场景壁纸 P9d：视频纹理不再经 `<video>`，改为 TypeScript 拆包 + WebCodecs 解码。
+  - 新增 `video/demux/`：`mp4.ts`（`moov` 帧表、编辑列表）、`mkv.ts`（顺扫 Cluster）、`index.ts`（`indexVideo` 按魔数分派）、`config.ts`（codec 串、`description`、色彩空间）。
+  - 新增 `video/codecPlayer.ts`（`CodecVideoPlayer`）：区间预读、`VideoDecoder` 只解不播、自己的媒体时钟、挑帧、跳转从关键帧喂起、解码器 2 s 没输出就重置（`stallResets`）、`seeked()`；`blobRangeReader` 给用户视频。
+  - 删除 `VideoTexturePlayer`、`attachToDocument`、`fetchVideoBlob`、P9c 的 `watchStall` 与退回逻辑；`video/player.ts` 只剩公共定义；`VideoSink.drawn` 与 `UserTextureFrame` 的视频一支只交 `VideoFrame`。
+  - 颜色规则 `ColorRule`：场景视频矩阵恒为 BT.709（WPE 不看标签）；用户视频照标签，没标时高 > 576 用 709（`MF_SD_MAX_HEIGHT`）。
+  - dev 探针 `videoTime` 精确解到那一刻（结果加 `frameTime`），删掉主窗口隐藏时报错的 `checkVideoVisibility`；`host.videos()` 的字段改为解码计数与色彩说明。测试替身 `video/fakeDecoder.ts` 换掉 `fakeVideo.ts`。
+  - 设计、实施与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9d-webcodecs.md`。
 
 ### Fixed
 - `rebind_deduped_metadata` 对 WPE 行直接返回：去重命中不再改挂它的 metadata 与 `plugin_id`。
