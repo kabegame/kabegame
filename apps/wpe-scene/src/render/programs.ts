@@ -249,6 +249,12 @@ const PRELUDE_LINES = 1;
 /** A2C 入口的名字前缀：翻译器自己的名字以 `kb_` 开头（`kb_FragColor`、`kb_sampler_*`），再加一段避开。 */
 const A2C_PREFIX = "kb_a2c_";
 
+/**
+ * 单采样 A2C 的覆盖阈值（P13d 实测，见 {@link alphaToCoverageEntry}）：alpha ≥ 0.5 + 2⁻¹² = 2049 / 4096 才画，等价于「乘 4096 截断后
+ * 大于 2048」。f32 精确可表示。
+ */
+export const A2C_THRESHOLD = 0.5 + 2 ** -12;
+
 /** 从 `open` 处的开括号（`(` 或 `{`）找到匹配的闭括号。 */
 function matchBracket(source: string, open: number): number {
   const opening = source[open];
@@ -299,11 +305,14 @@ function isColorOutput(attributes: Map<string, string>, type: string): boolean {
 
 /**
  * 给翻译出的片元 WGSL 追加 A2C 入口 `kb_a2c_<入口>`（rea-p8-render 第 5 节，p8-REPORT 结论 11）：原入口的逐字副本，每个 `return X;`
- * 换成「X 的位置 0 输出的 alpha 不大于 0.5（含 NaN）就 discard，否则返回 X」。原入口与主体不动。
+ * 换成「X 的位置 0 输出的 alpha 小于 {@link A2C_THRESHOLD}（含 NaN）就 discard，否则返回 X」。原入口与主体不动。
  *
  * - 返回只认两种（翻译器 naga GLSL 前端的输出，`ignore/p8/s5/dump-entry.txt`）：结构（取带 `@location(0)` 的成员，跳过 `@builtin`），
  *   或直接 `-> @location(0) vec4<f32>`；位置 0 的类型要是 vec4<f32>。
- * - 丢弃条件写成 `!(a > 0.5)`：`p8-a2c` 实测 alpha 0.4995 不画、0.5005 画，对象 alpha 0.5（锐化后最大正好 0.5）一列都没画；NaN 也丢。
+ * - 丢弃条件写成 `!(a >= 0.500244140625)`，即 alpha ≥ 0.5 + 2⁻¹² 才画（{@link A2C_THRESHOLD}）。`p8-a2c` 只测到 0.4995 不画、
+ *   0.5005 画；P13d 的 `p13d-a2cth*` 逐段细分：0.5 + 2⁻¹² 画，0.5 + 2⁻¹² − 2⁻²² 与更小的都不画，100×100 的段内整片一致，不按像素抖动
+ *   （本机 NVIDIA、D3D11 单采样）。这个差别在格子边界上才看得出：双线性过滤在 0 / 1 两个纹素正中返回 0.5 ± 2⁻¹⁷（两边同一块硬件，
+ *   `p13d-a2cth` 的 C 条），锐化后约 0.500015，`> 0.5` 会画、WPE 不画（p13d-spec 图集第 127 行，p13-REPORT P13d）。NaN 也丢。
  * - 丢弃在入口里、主体（`main_1()`）之后，导数不受影响；WebGPU 的 alpha-to-coverage 只能用在多重采样目标上，WPE 的 `msaa: none`
  *   单采样下 A2C 实测就是这个硬阈值。
  * - 每处 `return` 换成一个块（`{ let kb_a2c_out = X; if … { discard; } return kb_a2c_out; }`），多个 `return` 互不冲突。
@@ -367,7 +376,7 @@ export function alphaToCoverageEntry(wgsl: string, entryPoint: string): { code: 
     if (!value) throw new Error("片元入口的 return 没有值");
     rewritten +=
       body.slice(at, start) +
-      `{ let ${A2C_PREFIX}out = ${value}; if !(${alpha} > 0.5) { discard; } return ${A2C_PREFIX}out; }`;
+      `{ let ${A2C_PREFIX}out = ${value}; if !(${alpha} >= ${A2C_THRESHOLD}) { discard; } return ${A2C_PREFIX}out; }`;
     at = semicolon + 1;
   }
   if (!at) throw new Error("片元入口里没有 return");
