@@ -408,6 +408,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 宿主帧循环也每 250 ms 核对一次画布尺寸（DPR 变化不触发 ResizeObserver）。桌面窗口没有缩放，显示缩放为 1，结果与只按 DPR 算逐位相同。
   - 修正前按布局尺寸 × DPR 渲染、超 8192 时宽高各自钳：4K 上渲染一张只显示约 1/4 面积的大画面，宽高比还被破坏，预览「适应」下多出 `schemecolor` 留边、画面缩小。
   - 脚本的 `engine.screenResolution` 按显示缩放 1 算（`SceneRenderer.screenResolution`），预览缩小显示时脚本看到的分辨率仍与桌面一致。
+  - **预览放大**（2026-11-15，[WPE_IMPORT.md](WPE_IMPORT.md)「预览放大」）：量到的显示缩放含了 Panzoom 的放大，照原样上报的话放大 10 倍画布就是 10 倍，但场景目标没有那么高的分辨率（正交按场景分辨率、透视按布局 × DPR，即 `full`）。所以 `WpeSceneView` 上报 `sceneDisplayScale(实测, zoom) = zoom > 1 ? max(实测 ÷ zoom, min(实测, 1)) : 实测`（`wpeSceneStyle.ts`）：放大时画布跟着变大，到 1 为止；没放大前就超过 1 的（小场景放大显示）保持原值；zoom 为 1 时就是实测值，桌面与应用背景不变。`zoom` 由预览画布 `provide`（`WALLPAPER_PREVIEW_ZOOM`），没有提供方按 1。放大倍数一变，下一帧补量一次（Panzoom 也在 rAF 里写 transform），不等轮询。宿主不用改：透视场景「分辨率变了就整场重载」看的是 `full`，只改显示缩放不触发。
 
 **验证**（2026-11-01，本机 NVIDIA Lovelace，有 `texture-compression-bc`）
 - **单测**：`render/render.test.ts` 覆盖矩阵、四边形与 cover、BC 行跨度与 mip、uniform 打包、混合、顶点布局、时钟与节流；设置 `KABEGAME_WPE_ROOT` 后另对 P1 三张样本跑一遍纯逻辑部分。

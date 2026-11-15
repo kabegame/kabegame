@@ -251,21 +251,37 @@
                   </button>
                 </div>
               </div>
-              <!-- 非视频 WPE 壁纸（web / scene）：和单独的图片一样按内容比例显示，可交互；画布上的覆盖层接住真实鼠标，
-               页面里的鼠标由 Rust 直接注入 iframe。不走 Panzoom，也不挂 VideoControls -->
-              <div v-if="previewImage && isPreviewWallpaper" class="preview-wallpaper-wrapper absolute inset-0">
-                <WallpaperPreviewCanvas ref="wallpaperCanvasRef" :content-size="previewWallpaperSize">
-                  <ImageContent
-                    ref="previewContentRef"
-                    :image="previewImage"
-                    prefer="original"
-                    :video-playing="!wallpaperPaused"
-                    interactive
-                    @ready="handlePreviewReady"
-                    @scene-live="previewSceneLive = $event"
-                    @wallpaper-contextmenu="openPreviewContextMenuAt"
-                  />
-                </WallpaperPreviewCanvas>
+              <!-- 非视频 WPE 壁纸（web / scene）：和单独的图片一样按内容比例显示、一样能放大，可交互；页面里的鼠标由 Rust
+               直接注入 iframe。Panzoom 变换包住画布的那一层（和图片分支共用 panzoomWrapperRef，两支互斥）；覆盖层在
+               变换层之外接住真实鼠标：左键与中键平移（Ctrl+左键不平移，留给壁纸），右键弹菜单。不挂 VideoControls -->
+              <div
+                v-if="previewImage && isPreviewWallpaper"
+                ref="wallpaperViewportRef"
+                class="preview-wallpaper-wrapper absolute inset-0"
+              >
+                <div ref="panzoomWrapperRef" class="w-full h-full">
+                  <WallpaperPreviewCanvas
+                    ref="wallpaperCanvasRef"
+                    :content-size="previewWallpaperSize"
+                    :zoom="panzoomScale"
+                  >
+                    <ImageContent
+                      ref="previewContentRef"
+                      :image="previewImage"
+                      prefer="original"
+                      :video-playing="!wallpaperPaused"
+                      interactive
+                      @ready="handlePreviewReady"
+                      @scene-live="previewSceneLive = $event"
+                      @wallpaper-contextmenu="openPreviewContextMenuAt"
+                    />
+                  </WallpaperPreviewCanvas>
+                </div>
+                <WallpaperPointerOverlay
+                  :pannable="panzoomCanPan"
+                  :start-pan="panzoomStartPan"
+                  :end-pan="panzoomEndPan"
+                />
               </div>
               <div v-if="previewImage && isPreviewStatic" ref="panzoomWrapperRef" class="panzoom-wrapper">
                 <!-- 未缩放时 panzoom 拖不动画面，把指针让给原生拖拽（拖出图片 + 残影） -->
@@ -283,45 +299,27 @@
                 :is-fullscreen="isAppFullscreen"
                 :keep-visible="zoomSliderDragging"
               >
-                <!-- 缩放只对 Panzoom 图片有意义；壁纸画布只保留全屏 -->
-                <template v-if="isPreviewStatic">
-                  <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
-                    <ZoomOut />
-                  </button>
-                  <button class="control-btn" type="button" :aria-label="t('gallery.zoomIn')" @click="panzoomZoomIn">
-                    <ZoomIn />
-                  </button>
-                  <div class="zoom-progress-wrap">
-                    <PreviewRangeSlider
-                      :model-value="zoomSliderValue"
-                      :min="100"
-                      :max="1000"
-                      :step="1"
-                      :aria-label="t('gallery.zoomRatio')"
-                      @drag-start="handleZoomSliderDragStart"
-                      @update:model-value="handleZoomSliderInput"
-                      @change="handleZoomSliderCommit"
-                    />
-                    <span class="zoom-progress-text">{{ zoomPercentText }}</span>
-                  </div>
-                </template>
-                <!-- 壁纸的右键菜单项按原顺序平铺成图标按钮（壁纸上的右键落在覆盖层上，由预览容器的 @contextmenu 弹菜单） -->
-                <template v-if="isPreviewWallpaper && wallpaperBarActions.length > 0">
-                  <template v-for="action in wallpaperBarActions" :key="action.key">
-                    <span v-if="action.divider" class="control-bar-divider" />
-                    <button
-                      class="control-btn"
-                      type="button"
-                      :title="action.label"
-                      :aria-label="action.label"
-                      :disabled="action.disabled"
-                      @click="handlePreviewActionCommand(action.command)"
-                    >
-                      <component :is="action.icon" />
-                    </button>
-                  </template>
-                </template>
-                <!-- 控制条定宽左对齐：普通图片靠缩放滑块撑开，壁纸没有弹性项，靠 ml-auto 贴到最右 -->
+                <!-- 图片与网页 / 场景壁纸同一套缩放（同一个 Panzoom）；壁纸的暂停、设封面等在右键菜单里 -->
+                <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
+                  <ZoomOut />
+                </button>
+                <button class="control-btn" type="button" :aria-label="t('gallery.zoomIn')" @click="panzoomZoomIn">
+                  <ZoomIn />
+                </button>
+                <div class="zoom-progress-wrap">
+                  <PreviewRangeSlider
+                    :model-value="zoomSliderValue"
+                    :min="100"
+                    :max="1000"
+                    :step="1"
+                    :aria-label="t('gallery.zoomRatio')"
+                    @drag-start="handleZoomSliderDragStart"
+                    @update:model-value="handleZoomSliderInput"
+                    @change="handleZoomSliderCommit"
+                  />
+                  <span class="zoom-progress-text">{{ zoomPercentText }}</span>
+                </div>
+                <!-- 控制条定宽左对齐：缩放滑块撑开，全屏贴到最右 -->
                 <button
                   class="control-btn ml-auto"
                   type="button"
@@ -426,6 +424,7 @@ import { useI18n } from "@kabegame/i18n";
 import type { ImageInfo } from "../../types/image";
 import ImageContent from "../image/ImageContent.vue";
 import WallpaperPreviewCanvas, { type CoverRegionScope } from "../wallpaper/WallpaperPreviewCanvas.vue";
+import WallpaperPointerOverlay from "../wallpaper/WallpaperPointerOverlay.vue";
 import ImageLabelsPanel from "../image/ImageLabelsPanel.vue";
 import PswpSlideContent from "./PswpSlideContent.vue";
 import ImageBasicInfoPanel, {
@@ -442,7 +441,7 @@ import VideoControls from "./VideoControls.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useKameMessageStore } from "../../stores/kameMessage";
 import ActionRenderer from "../ActionRenderer.vue";
-import { resolveActionIcon, type ActionItem, type ActionContext } from "../../actions/types";
+import type { ActionItem, ActionContext } from "../../actions/types";
 import type { ImageActionContext } from "../../actions/imageActions";
 import { captureWpeCover, clearWpeSceneStorage } from "../../utils/wpeWallpaperCommands";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
@@ -583,12 +582,19 @@ const previewWallpaperSize = computed(() => {
   return image?.width && image?.height ? { width: image.width, height: image.height } : null;
 });
 const wallpaperCanvasRef = ref<InstanceType<typeof WallpaperPreviewCanvas> | null>(null);
-/** 预览的封面截取来源：主窗口里的画布，用户看到什么就截到什么。点击时才取画布，区域也是那时才量 */
+/** 壁纸的可见区域（Panzoom 的父元素，被它设成 overflow: hidden）：放大后画布超出它 */
+const wallpaperViewportRef = ref<HTMLElement | null>(null);
+/**
+ * 预览的封面截取来源：主窗口里的画布，用户看到什么就截到什么：放大后截的是看得见的那一块（和可见区域求交，不截进侧栏），
+ * 可以借此定制封面。点击时才取画布，区域也是那时才量
+ */
 const previewCoverSource: CoverRegionScope = (run) => {
   const canvas = wallpaperCanvasRef.value;
-  return canvas ? canvas.withCaptureRegion(run) : Promise.reject(new Error("wallpaper canvas is not mounted"));
+  return canvas
+    ? canvas.withCaptureRegion(run, wallpaperViewportRef.value)
+    : Promise.reject(new Error("wallpaper canvas is not mounted"));
 };
-/** Panzoom 图片分支的条件。 */
+/** 普通图片分支的条件（网页 / 场景壁纸分支也走同一个 Panzoom）。 */
 const isPreviewStatic = computed(() => !isPreviewVideo.value && !isPreviewWallpaper.value);
 
 // 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
@@ -627,6 +633,9 @@ let panzoomZoomTo!: (scale: number, animate?: boolean) => void;
 let panzoomScale!: Ref<number>;
 /** 拖动会否平移画面；为 false 时把指针让给浏览器原生图片拖拽 */
 let panzoomCanPan!: Ref<boolean>;
+/** 壁纸预览：覆盖层决定平移的起止（左键 / 中键，Ctrl+左键不平移） */
+let panzoomStartPan!: (event: PointerEvent) => boolean;
+let panzoomEndPan!: (event: PointerEvent) => void;
 // Android 上划删除相关状态
 const swipeDeleteActive = ref(false);
 const swipeDeleteReady = ref(false);
@@ -712,6 +721,8 @@ const markPreviewInteracting = () => {
   zoomIn: panzoomZoomIn,
   zoomOut: panzoomZoomOut,
   zoomTo: panzoomZoomTo,
+  startPan: panzoomStartPan,
+  endPan: panzoomEndPan,
 } = usePanzoomPreview(
   previewVisible,
   computed(() => !USE_PSWP),
@@ -1162,7 +1173,7 @@ const handleDialogPointerDownOutside = (event: Event & { detail?: { originalEven
   keepOpenOnToast(event);
 };
 
-/** 设为封面进行中：菜单项与工具条按钮置灰，也挡住重复触发 */
+/** 设为封面进行中：菜单项置灰，也挡住重复触发 */
 const coverBusy = ref(false);
 
 const previewActionContext = computed<ImageActionContext>(() => ({
@@ -1176,8 +1187,8 @@ const previewActionContext = computed<ImageActionContext>(() => ({
 }));
 
 /**
- * 设为封面：截的是这一份预览的画面。截取期间盖在画布上的工具条、箭头等按 `data-kb-cover-capture` 隐藏（见样式），
- * 从工具条或右键菜单点的时候它们正显示着。
+ * 设为封面：截的是这一份预览看得见的画面（放大时是放大的那一块）。截取期间盖在画布上的工具条、箭头等按
+ * `data-kb-cover-capture` 隐藏（见样式），从右键菜单点的时候它们可能正显示着。
  */
 async function setPreviewCover(imageId: string) {
   if (coverBusy.value || !previewRendering.value) return;
@@ -1205,27 +1216,6 @@ function handleWallpaperCommand(command: string, image: ImageInfo): boolean {
   }
   return false;
 }
-
-// 壁纸预览的工具条按钮：右键菜单的可见项按原顺序平铺（桌面菜单没有子菜单）
-const wallpaperBarActions = computed(() => {
-  const ctx = previewActionContext.value;
-  return props.actions
-    .filter((action) => action.command && action.icon && (action.visible === undefined || action.visible(ctx)))
-    .map((action, index) => {
-      const label = typeof action.label === "function" ? action.label(ctx) : action.label;
-      const suffix = typeof action.suffix === "function" ? action.suffix(ctx) : action.suffix;
-      const divider = typeof action.dividerBefore === "function" ? action.dividerBefore(ctx) : action.dividerBefore;
-      return {
-        key: action.key,
-        command: action.command!,
-        label: suffix ? `${label} ${suffix}` : label,
-        // 同 ActionRenderer：iconBy 包出来的解析器按上下文解析，图标组件原样用
-        icon: resolveActionIcon(action.icon, ctx),
-        disabled: typeof action.disabled === "function" ? action.disabled(ctx) : !!action.disabled,
-        divider: index > 0 && !!divider,
-      };
-    });
-});
 
 const handlePswpActionClose = () => {
   if (USE_PSWP) {
@@ -1272,8 +1262,9 @@ const handlePreviewMouseLeave = () => {
   previewHoverSide.value = null;
 };
 
+/** 图片与网页 / 场景壁纸同一套：Ctrl+滚轮缩放，单独滚轮在放大后平移。壁纸上的滚轮落在覆盖层上，冒泡到这里 */
 const handlePreviewWheel = (event: WheelEvent) => {
-  if (isPreviewVideo.value || isPreviewWallpaper.value) return;
+  if (isPreviewVideo.value) return;
   handlePanzoomWheel(event);
 };
 
@@ -1471,7 +1462,8 @@ watch(
   () => previewImage.value?.id,
   (id) => {
     if (id && !USE_PSWP) {
-      if (isPreviewVideo.value || isPreviewWallpaper.value) return;
+      // 壁纸换壁纸时画布元素没换、Panzoom 实例还在，同样要复位
+      if (isPreviewVideo.value) return;
       panzoomReset();
     }
   },

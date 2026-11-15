@@ -14,6 +14,8 @@
  *   大小。预览画布（`WallpaperPreviewCanvas`）按内容尺寸布局、再整体 `scale`，这个 transform 在 iframe 里量不到，
  *   只能在这里量。宿主请求时必回；iframe 尺寸变化（ResizeObserver）、窗口尺寸变化时量一次；只有祖先 transform
  *   变了时（弹窗缩放、预览弹窗动画）布局尺寸不变、哪个 observer 都不触发，所以再按 250ms 轮询比较，只在值变时推。
+ *   预览放大时（预览画布提供的 `WALLPAPER_PREVIEW_ZOOM` > 1）按 `sceneDisplayScale` 封顶：画布跟着放大到布局 × DPR 为止；
+ *   放大倍数一变就在下一帧补量一次（Panzoom 也在 rAF 里写 transform），不等轮询。
  * - 快捷方式（P11d）：脚本的 `engine.openUserShortcut` 经宿主门禁后 `postMessage` 属性名（`wpeSceneShortcut.ts`）。这里是安全边界：
  *   只认可交互实例、`navigator.userActivation.isActive`（真实用户输入）、同一属性 1 秒一次，以本组件持有的图片 id 调
  *   `wpe_open_user_shortcut`（只开给应用页，宿主调不到）；消息里除属性名外的东西都不信。
@@ -29,12 +31,14 @@ import { invoke } from "@/api";
 import { IS_ANDROID, IS_WEB } from "@/env";
 import { logger } from "@/utils/logger";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { Mode, WallpaperTarget } from "./types";
 import { WEB_SANDBOX } from "./webSandbox";
 import {
+  WALLPAPER_PREVIEW_ZOOM,
   displayScaleOf,
   isWpeSceneStyleRequest,
+  sceneDisplayScale,
   scenePointerIn,
   wpeSceneDisplayMessage,
   wpeScenePointerMessage,
@@ -83,6 +87,10 @@ let resizeObserver: ResizeObserver | null = null;
 let displayTimer: number | undefined;
 /** 本页最近一次 `pointermove` / `pointerdown` 的视口坐标（CSS 像素）：问不到 Rust 时的开场指针。 */
 let pagePointer: { x: number; y: number } | null = null;
+/** 预览的放大倍数（预览画布提供）；桌面、应用背景没有提供方，按 1。 */
+const previewZoom = inject(WALLPAPER_PREVIEW_ZOOM, null);
+/** 放大倍数变了之后补量的那一帧（合并成一次）。 */
+let displayFrame = 0;
 
 function onPagePointer(event: PointerEvent) {
   pagePointer = { x: event.clientX, y: event.clientY };
@@ -107,14 +115,15 @@ function postStyle() {
 
 /**
  * 量显示缩放，变了才推；`force`（宿主请求）时照推。量不出来（还没布局、`scale(0)`）就不推，宿主保持上次的值
- * （起初是 1），轮询会在量得出来时补上。
+ * （起初是 1），轮询会在量得出来时补上。预览放大时按 `sceneDisplayScale` 封顶。
  */
 function postDisplay(force = false) {
   const element = frame.value;
   const target = element?.contentWindow;
   if (!element || !target) return;
-  const scale = displayScaleOf(element);
-  if (scale === null) return;
+  const measured = displayScaleOf(element);
+  if (measured === null) return;
+  const scale = sceneDisplayScale(measured, previewZoom?.value ?? 1);
   if (!force && postedScale !== null && Math.abs(scale - postedScale) <= postedScale * DISPLAY_SCALE_EPSILON) return;
   postedScale = scale;
   target.postMessage(wpeSceneDisplayMessage(scale), "*");
@@ -241,6 +250,17 @@ watch(
 );
 watch(() => [props.volume, props.paused, props.interactive], postVolume);
 watch(() => props.styleMode, postStyle);
+// 预览放大倍数变了：下一帧补量（Panzoom 在 rAF 里写 transform，排在它后面才量得到新值），同一帧里多次变化合并
+watch(
+  () => previewZoom?.value,
+  () => {
+    if (displayFrame || disposed) return;
+    displayFrame = requestAnimationFrame(() => {
+      displayFrame = 0;
+      postDisplay();
+    });
+  },
+);
 // 换宿主时 iframe 元素随之重建：观察新元素（observe 时会先回调一次）
 watch(
   frame,
@@ -261,6 +281,8 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   resizeObserver = null;
   window.clearInterval(displayTimer);
+  if (displayFrame) cancelAnimationFrame(displayFrame);
+  displayFrame = 0;
   unlisten?.();
   src.value = "";
 });

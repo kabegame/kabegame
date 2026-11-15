@@ -581,13 +581,13 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 
 iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片把它转给父页面。场景宿主也加载这份垫片，网页与场景同一条路。
 
-2026-11-15 起 Windows / macOS 上 iframe 不收真实鼠标（见下「鼠标」），预览里的右键落在画布的覆盖层上、冒泡到预览容器的
-`@contextmenu` 弹菜单，这条路不再触发。Linux 退回 iframe 直接收真实鼠标，仍走这条路。
+2026-11-15 起 Windows / macOS 上 iframe 不收真实鼠标（见下「鼠标」），预览里的右键落在覆盖层（`WallpaperPointerOverlay`）上、
+冒泡到预览容器的 `@contextmenu` 弹菜单，这条路不再触发。Linux 退回 iframe 直接收真实鼠标，仍走这条路。
 
 - **消息**：`{ type: "kabegame:wpe-contextmenu", x, y }`，垫片 → 父页面，`x` / `y` 是 iframe 视口里的 CSS 像素。字面量集中在
   `components/wallpaper/wpeContextMenu.ts`，`wpeWebVolume.test.ts` 读垫片原文核对。
 - **垫片**：在 `window` 捕获阶段、页面脚本之前登记 `contextmenu` 监听，只转发 `isTrusted` 的事件；页面取消右键或停止冒泡也照发
-  （菜单是应用的功能，和工具条一样总能用）。原生菜单 CEF 已全局关掉（`DisabledContextMenuHandler`），不必 `preventDefault`。
+  （菜单是应用的功能，总能用）。原生菜单 CEF 已全局关掉（`DisabledContextMenuHandler`），不必 `preventDefault`。
 - **父页面**：网页层由 `WallpaperStage`、场景层由 `WpeSceneView` 收，只认 `isTrusted` 且 `source` 是自己当前 iframe 的消息，
   按 iframe 的显示矩形换算到本页面视口（预览画布带 CSS `scale`：坐标 × 显示矩形 ÷ 布局尺寸 + 左上角），经
   `WpeWallpaperContent` → `ImageContent` 的 `wallpaperContextmenu` 交给预览弹窗，在那个位置弹出与右键容器同一份菜单。应用背景
@@ -633,8 +633,9 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   那是阻塞 UI 线程的模态循环，而真实的抬起本线程收不到，拖放就挂住。所以按住拖动时，页面收到的 `mousemove` 的 `buttons` 为 0。
 - **预览**：
   - iframe 一律 `pointer-events: none`，真实鼠标进不了 frame。
-  - `WallpaperPreviewCanvas` 在画布上盖一层只拦截、不转发的透明覆盖层。鼠标在壁纸上移动时预览容器照常收到 `mousemove`（翻页
-    箭头），右键冒泡到预览容器弹菜单，滚轮与拖动留给以后的放大。只为「iframe 吞掉 mousemove」设的翻页热区已删。
+  - 壁纸之上盖一层只拦截、不转发的透明覆盖层（`WallpaperPointerOverlay`，在放大的变换层之外，见下「预览放大」）。鼠标在壁纸上
+    移动时预览容器照常收到 `mousemove`（翻页箭头），右键冒泡到预览容器弹菜单，滚轮与左键 / 中键拖动交给放大。只为「iframe 吞掉
+    mousemove」设的翻页热区已删。
 - **焦点**：注入的按下会把键盘焦点切进 iframe；键盘还不支持，焦点留在里面时预览的 Esc、方向键失灵。但不能一按下就还：iframe
   失焦时页面会当成松开（场景宿主把 `blur` 当左键抬起），拖动就断了。预览画布用 `framePointer.ts` 的 `keepFocusOutOfFrames`：父页面的
   真实左键按着时不动，松开后等 100 ms（注入的抬起先到），`document.activeElement` 是画布里的 iframe 就 `blur()` 它。桌面壁纸窗口
@@ -650,6 +651,41 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   - 不做键盘、滚轮、右键。
 - **Linux**：拿不到全局光标，`attach_frame` 返回 `false`。前端（`framePointer.ts` 的 `NATIVE_FRAME_POINTER`）退回原来的做法：
   可交互的 iframe 直接收真实鼠标，预览不盖覆盖层，光标在 iframe 外不跟随。Linux 也没有窗口壁纸模式。
+
+### 预览放大
+
+2026-11-15 起，图库预览里的网页与场景壁纸和图片一样能放大（视频壁纸在预览里按视频播放，放大以后再做）。计划见
+`.claude/plans/wpe-import/phase-preview-zoom.md`。
+
+- **和图片共用一个 Panzoom**：`ImagePreviewDialog` 只有一个 `usePanzoomPreview`。壁纸分支包住 `WallpaperPreviewCanvas` 的那层 div 也挂
+  `panzoomWrapperRef`（和图片分支互斥，换元素即重建实例）。所以下面这些和图片完全一样：
+  - 工具条：−、+、滑块、百分比、全屏；
+  - Ctrl+滚轮缩放，单独滚轮在放大后平移、不缩放；
+  - 抽屉开关、拖宽、全屏、容器尺寸变化时复位。
+
+  壁纸换壁纸时画布元素没换、实例还在，换图的 watch 同样复位。工具条以前平铺右键菜单的可见项（那时 iframe 上右键用不了），
+  现在和图片一样；暂停、设封面、清空脚本存储都在右键菜单里。
+- **覆盖层在变换层之外，由它决定平移**（`WallpaperPointerOverlay.vue`）：覆盖层和 Panzoom 层是兄弟、盖在上面、不跟着放大，Panzoom
+  自己的指针绑定碰不到它（它在按下那一刻就定了要不要平移，也不分按键）。平移的起止经 composable 的 `startPan` / `endPan`
+  （Panzoom 的 `handleDown` / `handleUp`），中间的移动由 Panzoom 挂在 `document` 上的监听处理：
+  - 左键：每次移动看事件的 `ctrlKey`，没按 Ctrl 就平移，按着就不平移（留给壁纸交互），所以拖动中途松开 / 按下 Ctrl 会接着 / 停下
+    平移。只看指针事件的修饰键、不听键盘：拖动中焦点可能在 iframe 里（`keepFocusOutOfFrames` 等左键松开才还）。平移的同一次拖动
+    也照常注入进了壁纸（接受）。
+  - 中键：平移，不看 Ctrl；一律阻止默认（中键自动滚动）。
+  - 右键：冒泡到预览容器弹菜单。
+  - 光标：拖得动时 `grab`，平移中 `grabbing`。
+- **注入照常**：`ConvertPointFromView` 用合成器命中测试的变换，已含放大与平移，点击与跟随对得上位置。
+- **场景画布的分辨率**：显示缩放（`displayScaleOf`）含了放大，照原样上报的话放大 10 倍画布就是 10 倍，但场景目标没有那么高的
+  分辨率。`WallpaperPreviewCanvas` 把放大倍数 `provide` 给画布里的场景（`WALLPAPER_PREVIEW_ZOOM`），`WpeSceneView` 上报
+  `sceneDisplayScale(实测, zoom)`，放大时最多到 1（布局 × DPR），见 [WPE_SCENE.md](WPE_SCENE.md)「预览画布尺寸」。网页壁纸不处理：
+  iframe 内容由 Chromium 按变换栅格化，页面自己的 canvas（WebGL 等）按页面定的分辨率被浏览器拉伸。
+- **设封面**：不复位，截看得见的那一块（见下「封面」）。
+- **已知副作用**：
+  - 放大后壁纸延伸到侧栏下面（被裁掉、看不见）。真实光标在侧栏上时注入的点仍落在 frame 里：移动照常，在侧栏上点击也会注入进
+    壁纸视野外的位置（「点击不加闸门、允许重叠」的延伸；要避免可以加窗口级点击区域，没做）。
+  - 光标出了窗口时注入点钳到 frame 的边界，放大后这条边界可能在视野之外，视差、跟随鼠标的粒子停在视野外那条边上。
+  - 放大后设的封面，宽高比跟可见区域走，不一定是壁纸的比例。
+  - Linux 没有覆盖层：壁纸上的滚轮、拖动进了 iframe，只有留白处（Panzoom 自己的左键平移）与工具条能缩放 / 平移。
 
 ### web 层（`WallpaperStage`）
 
@@ -686,8 +722,8 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
 - 预览弹窗对非视频 WPE 行渲染 `components/wallpaper/WallpaperPreviewCanvas.vue`：给一块固定尺寸的画布，整体
   `scale` 进可用区域并居中，没有背景，和单独的图片一样显示。尺寸取图片行的 `width` / `height`（场景入库时写的分辨率）；
   网页壁纸没有固有尺寸，透视场景读不到，这时按主显示器逻辑分辨率（`primaryMonitor()`
-  的 `size / scaleFactor`，失败回退 `window.screen`，模块级缓存），页面按这个尺寸排版。可交互，不走 Panzoom（页面要收指针）、
-  不挂 `VideoControls`，控制条只保留全屏。
+  的 `size / scaleFactor`，失败回退 `window.screen`，模块级缓存），页面按这个尺寸排版。可交互，和图片一样能放大（Panzoom 包住画布，
+  见「预览放大」），不挂 `VideoControls`，控制条和图片一样。
 - 应用背景层不按类型分支：与预览同走 `ImageContent` 原图形态（`prefer="original"`），网页与场景壁纸都实时渲染、不交互。
   **背景静音**：`video-muted` 经 `WpeWallpaperContent` 的 `muted` 让 `WallpaperStage` 的 `volume` 为 0，网页壁纸页面的声音由垫片
   按 0 缩放（见上「音量」），开着应用背景时只有桌面出声。
@@ -732,12 +768,14 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 ### 封面
 
-WPE 行的 `thumbnail_path` 默认是作者目录里的 `preview.*`，场景的退回画面（`previewPath`）也取它。预览的右键菜单与底部工具条有「设为壁纸封面」：`capture_wallpaper_cover(imageId, region)` 截主窗口，按 `region`（画布占窗口内容区的比例）裁出画布，缩到最长边不超过 1920，写进 `thumbnails_dir`，再经 `replace_image_thumbnail_path` 换行并发 `thumbnailPath` 补丁。暂停时截到的就是停住的那一帧。「恢复默认封面」在预览详情栏的属性面板里（`restorableCover`）；设置页的属性弹窗没有封面按钮。
+WPE 行的 `thumbnail_path` 默认是作者目录里的 `preview.*`，场景的退回画面（`previewPath`）也取它。预览的右键菜单有「设为壁纸封面」：`capture_wallpaper_cover(imageId, region)` 截主窗口，按 `region`（看得见的那一块画布占窗口内容区的比例）裁出来，缩到最长边不超过 1920，写进 `thumbnails_dir`，再经 `replace_image_thumbnail_path` 换行并发 `thumbnailPath` 补丁。暂停时截到的就是停住的那一帧。「恢复默认封面」在预览详情栏的属性面板里（`restorableCover`）；设置页的属性弹窗没有封面按钮。
 
-- **预览专属的菜单项**（`actions/imageActions.ts`）：「暂停」（排第一）、「设为壁纸封面」「清空脚本存储」（只场景）只在 `ImageActionContext.wallpaperPreview` 存在时显示，它由 `ImagePreviewDialog` 在桌面预览网页与场景壁纸时给出（`live` / `paused` / `coverBusy`）；画廊的右键菜单不带它，所以没有这几项。工具条照常平铺菜单的可见项。这几条命令由弹窗的 `handleWallpaperCommand` 处理，不发 `contextCommand`，网格不需要知道画面出没出来。
+- **预览专属的菜单项**（`actions/imageActions.ts`）：「暂停」（排第一）、「设为壁纸封面」「清空脚本存储」（只场景）只在 `ImageActionContext.wallpaperPreview` 存在时显示，它由 `ImagePreviewDialog` 在桌面预览网页与场景壁纸时给出（`live` / `paused` / `coverBusy`）；画廊的右键菜单不带它，所以没有这几项。工具条和图片一样（缩放与全屏），不平铺菜单项。这几条命令由弹窗的 `handleWallpaperCommand` 处理，不发 `contextCommand`，网格不需要知道画面出没出来。
 - **截整窗再裁，不用 CDP 的 `clip`**：`clip` 靠临时改视口实现，这次改动画在屏幕正在显示的表面上，整个窗口跳变约 150 ms，`scale: 1` 也一样；宿主和页面收不到尺寸事件，只看 `stats()` 发现不了。代价是封面分辨率等于画布的屏幕像素（窗口 1200 CSS 宽、缩放 150% 时约 1071 宽）。对 iframe target 截图也不行，Chromium 只认顶层（`Command can only be executed on top-level targets`）。
 - **画面确定实时渲染之前，暂停与设为壁纸封面置灰**：场景看 `WallpaperStage` 的 `sceneLive`（出了首帧才为真，退回预览图时为假），网页壁纸看 `ready`，即弹窗的 `previewRendering`，经 `wallpaperPreview.live` 交给菜单项。`ready` 在退回时也发，不能用来判断。后端不记实时状态，也不校验。恢复不受影响：退回预览图的场景也能恢复；属性面板的 `customCover` 跟着 `thumbnailPath` 补丁重读，从菜单设的封面也会让恢复按钮出现。`ImageContent` 的壁纸形态只按图片 id 重置加载态：换封面改的 `thumbnailPath` 不能让它重新等 ready（壁纸组件同一目标只发一次，骨架会一直盖在网页层上）。
-- **截图前的等待**（`WallpaperPreviewCanvas.withCaptureRegion`）：盖在画布上的 UI 会截进去，先在 `<html>` 加 `data-kb-cover-capture` 隐藏看板娘与预览容器里除壁纸画布外的全部元素（工具条、箭头、抽屉开关：从工具条或右键菜单点时它们正显示着；右键菜单是 `v-if`，命令发出时已经移除），`finally` 里恢复；壁纸层出画面后还要淡入，这时截到的是黑底，所以再等画布里的 `CSSTransition` 结束（只等过渡：页面里可能有循环动画）。窗口被完全遮挡时 `visibilityState` 不是 `visible`，矩形即使量得出来，截到的也是残缺的画面，所以报错不截。
+- **截图前的等待**（`WallpaperPreviewCanvas.withCaptureRegion`）：盖在画布上的 UI 会截进去，先在 `<html>` 加 `data-kb-cover-capture` 隐藏看板娘、预览容器里除壁纸画布外的全部元素（工具条、箭头、抽屉开关：从右键菜单点时它们可能正显示着）与全部弹出层（`[data-reka-popper-content-wrapper]`：右键菜单、提示、气泡，传送到 body 下；右键菜单点完还要淡出 100 ms，Reka 等退场动画放完才移除，截图只等两帧，所以直接藏、不靠等），`finally` 里恢复；壁纸层出画面后还要淡入，这时截到的是黑底，所以再等画布里的 `CSSTransition` 结束（只等过渡：页面里可能有循环动画）。
+- **放大时截看得见的那一块**（2026-11-15）：不复位缩放，用户可以借放大定制封面。区域取画布矩形与壁纸可见区域（`.preview-wallpaper-wrapper`，Panzoom 的父元素）的交集：放大后画布超出可见区域，侧栏不在预览容器里、截图时不隐藏，后端也只按整张截图钳制，不求交就会把侧栏截进去。宽高比跟可见区域走；场景画布此时分辨率更高（`sceneDisplayScale`），封面更清楚。
+- **遮挡**：窗口被完全遮挡时 `visibilityState` 不是 `visible`，矩形即使量得出来，截到的也是残缺的画面，所以报错不截。
 - **文件归属**：删除只碰 `thumbnails_dir` 里的文件，作者的 `preview.*` 不动。换封面、删图时旧封面随之清掉；「恢复默认封面」读 `project.json` 的预览图，没有时回到 `local_path`（同 `add_image` 的兜底）。`get_wpe_web_properties` 的 `customCover` 表示封面在 `thumbnails_dir` 里。重新导入跳过已有行，封面保留。
 
 ### 音频与媒体集成（第二阶段 Phase 8）
@@ -882,7 +920,10 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
   - `src-tauri/tauri-runtime-kbcef/src/frame_mouse.rs`（钳制与配对）与 `webview.rs` 的 `frame_mouse`；
   - `third-patches/cef/11-frame-mouse-injection.patch`、`third-patches/cef-rs/09-frame-mouse-injection-bindings.patch`；
   - `wpe_shim.js` 的 `setPointerAttached`；
-  - `apps/kabegame/src/components/wallpaper/framePointer.ts`、`WallpaperPreviewCanvas.vue`（覆盖层）。
+  - `apps/kabegame/src/components/wallpaper/framePointer.ts`、`WallpaperPointerOverlay.vue`（覆盖层）。
+- 预览放大：`apps/kabegame/src/composables/usePanzoomPreview.ts`（`startPan` / `endPan`）、`components/wallpaper/WallpaperPointerOverlay.vue`
+  （平移规则）、`WallpaperPreviewCanvas.vue`（`zoom` 的 provide、截取区域求交）、`wpeSceneStyle.ts` 的 `sceneDisplayScale`、
+  `common/ImagePreviewDialog.vue`（壁纸分支的 Panzoom 层）。
 - `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
   `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`App.vue`（背景层）、`utils/mediaMime.ts`
 - 壁纸窗口 ping 看门狗：`src-tauri/kabegame/src/wallpaper/ping.rs`、`wallpaper/window.rs`（生命周期与重载清理）、

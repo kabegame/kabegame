@@ -35,6 +35,8 @@ const DEFAULT_OPTIONS: PanzoomOptions = {
 /**
  * 桌面端图片预览的 Panzoom 封装：根据 visible + enabled 创建/销毁实例，
  * 暴露 wrapperRef、handleWheel、reset、destroy，并驱动 onPanzoomStart/End 回调。
+ * 网页 / 场景壁纸也用这一个实例（和图片分支互斥，换元素即重建）：壁纸上盖着覆盖层，Panzoom 自己的指针绑定碰不到，
+ * 平移的起止由覆盖层经 startPan / endPan 决定（`WallpaperPointerOverlay`）。
  */
 export function usePanzoomPreview(visible: Ref<boolean>, enabled: Ref<boolean>, options?: UsePanzoomPreviewOptions) {
   const wrapperRef = ref<HTMLElement | null>(null);
@@ -205,6 +207,21 @@ export function usePanzoomPreview(visible: Ref<boolean>, enabled: Ref<boolean>, 
     scale.value = instance.getScale();
   };
 
+  /**
+   * 从外部开始一次平移（壁纸预览：覆盖层按自己的规则决定何时平移，左键同时还注入进了壁纸）。之后的移动由 Panzoom 挂在
+   * document 上的监听处理，松开时它自己结束。拖不动（未放大）时不开始。返回是否开始了。
+   */
+  const startPan = (event: PointerEvent): boolean => {
+    if (!instance || !instanceEl || wrapperRef.value !== instanceEl || !canPan.value) return false;
+    instance.handleDown(event);
+    return true;
+  };
+
+  /** 提前结束平移（壁纸预览：拖动中按下了 Ctrl）。没在平移时 Panzoom 什么都不做。 */
+  const endPan = (event: PointerEvent) => {
+    instance?.handleUp(event);
+  };
+
   return {
     wrapperRef,
     scale,
@@ -215,5 +232,7 @@ export function usePanzoomPreview(visible: Ref<boolean>, enabled: Ref<boolean>, 
     zoomIn,
     zoomOut,
     zoomTo,
+    startPan,
+    endPan,
   };
 }

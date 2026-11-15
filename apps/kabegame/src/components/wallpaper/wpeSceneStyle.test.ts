@@ -8,6 +8,7 @@ import {
   WPE_SCENE_STYLE_REQUEST,
   displayScaleOf,
   isWpeSceneStyleRequest,
+  sceneDisplayScale,
   scenePointerIn,
   wpeSceneDisplayMessage,
   wpeScenePointerMessage,
@@ -83,5 +84,26 @@ describe("displayScaleOf", () => {
     expect(displayScaleOf(element(0, 0, 0, 0))).toBeNull();
     expect(displayScaleOf(element(1000, 0, 100, 0))).toBeNull();
     expect(displayScaleOf(element(1000, 500, 0, 0))).toBeNull();
+  });
+});
+
+describe("sceneDisplayScale", () => {
+  it("没放大（zoom 1）时就是实测值", () => {
+    expect(sceneDisplayScale(0.4, 1)).toBe(0.4);
+    expect(sceneDisplayScale(1.5, 1)).toBe(1.5);
+  });
+
+  it("放大时画布跟着放大", () => {
+    // 适应时显示 0.4，放大 2 倍量到 0.8
+    expect(sceneDisplayScale(0.8, 2)).toBeCloseTo(0.8, 12);
+  });
+
+  it("到布局 × DPR（1）封顶：再大只是浏览器放大", () => {
+    expect(sceneDisplayScale(2, 5)).toBe(1);
+    expect(sceneDisplayScale(4, 10)).toBe(1);
+  });
+
+  it("没放大前就超过 1 的（小场景放大显示）保持原值", () => {
+    expect(sceneDisplayScale(3, 2)).toBe(1.5);
   });
 });

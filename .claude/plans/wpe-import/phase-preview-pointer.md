@@ -599,6 +599,7 @@ function installPointer() {
 
 壁纸放大：Panzoom 包装层包住 `WallpaperPreviewCanvas`，滚轮 / Ctrl+滚轮 / 工具条缩放同图片，中键拖动平移，左键给壁纸；`WpeSceneView`
 上报 `max(实测 ÷ zoom, min(实测, 1))` 的显示缩放；设封面前复位缩放。视频放大再之后。
+（实际计划见 [phase-preview-zoom.md](phase-preview-zoom.md)，按用户反馈改过：左键也平移、Ctrl+左键不平移，设封面不复位。）
 
 ## 实施记录
 

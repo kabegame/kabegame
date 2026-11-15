@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
 import { mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WallpaperPreviewCanvas, { type CoverRegion } from "./WallpaperPreviewCanvas.vue";
+import { defineComponent, h, inject, type Ref } from "vue";
+import WallpaperPreviewCanvas, { intersectRect, type CoverRegion } from "./WallpaperPreviewCanvas.vue";
 import { NATIVE_FRAME_POINTER } from "./framePointer";
+import { WALLPAPER_PREVIEW_ZOOM } from "./wpeSceneStyle";
 
 vi.mock("@tauri-apps/api/window", () => ({ primaryMonitor: async () => null }));
 
@@ -26,8 +28,15 @@ function mountCanvas(
   canvas.getBoundingClientRect = () => rect as DOMRect;
   canvas.getAnimations = () => animations;
   return wrapper.vm as unknown as {
-    withCaptureRegion<T>(run: (region: CoverRegion) => Promise<T>): Promise<T>;
+    withCaptureRegion<T>(run: (region: CoverRegion) => Promise<T>, viewport?: Element | null): Promise<T>;
   };
+}
+
+/** 可见区域（预览里 Panzoom 的父元素）：只量矩形 */
+function viewportAt(rect: { x: number; y: number; width: number; height: number }): Element {
+  const element = document.createElement("div");
+  element.getBoundingClientRect = () => rect as DOMRect;
+  return element;
 }
 
 const VISIBLE = { x: 100, y: 75, width: 500, height: 300 };
@@ -70,6 +79,35 @@ describe("WallpaperPreviewCanvas.withCaptureRegion", () => {
     const canvas = mountCanvas(VISIBLE);
     const region = await canvas.withCaptureRegion(async (value) => value);
     expect(region).toEqual({ x: 0.1, y: 0.125, width: 0.5, height: 0.5 });
+  });
+
+  it("给了可见区域时只截交集：放大后画布超出可见区域，不截进侧栏", async () => {
+    // 画布放大到 (−200, −100) 起 1400×800，可见区域是左侧 800×600（右边 200 是侧栏）
+    const canvas = mountCanvas({ x: -200, y: -100, width: 1400, height: 800 });
+    const region = await canvas.withCaptureRegion(
+      async (value) => value,
+      viewportAt({ x: 0, y: 0, width: 800, height: 600 }),
+    );
+    expect(region).toEqual({ x: 0, y: 0, width: 0.8, height: 1 });
+  });
+
+  it("没放大时画布在可见区域里，交集就是画布", async () => {
+    const canvas = mountCanvas(VISIBLE);
+    const region = await canvas.withCaptureRegion(
+      async (value) => value,
+      viewportAt({ x: 0, y: 0, width: 800, height: 600 }),
+    );
+    expect(region).toEqual({ x: 0.1, y: 0.125, width: 0.5, height: 0.5 });
+  });
+
+  it("和可见区域不相交时报错，不调回调", async () => {
+    const canvas = mountCanvas(VISIBLE);
+    const run = vi.fn(async () => {});
+    await expect(canvas.withCaptureRegion(run, viewportAt({ x: 700, y: 0, width: 100, height: 600 }))).rejects.toThrow(
+      "not visible",
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(root.hasAttribute(ATTR)).toBe(false);
   });
 
   it("回调期间隐藏，结束后恢复，并返回回调的结果", async () => {
@@ -139,23 +177,51 @@ describe("WallpaperPreviewCanvas.withCaptureRegion", () => {
   });
 });
 
-describe("WallpaperPreviewCanvas 覆盖层", () => {
-  it("画布之上盖一层透明覆盖层，插槽内容在它下面；Linux 退回时不盖", () => {
+describe("WallpaperPreviewCanvas 放大倍数", () => {
+  it("把 zoom 提供给画布里的场景，跟着 prop 变；不再自带覆盖层（在 Panzoom 变换层之外）", async () => {
+    let injected: Readonly<Ref<number>> | null = null;
+    const Probe = defineComponent({
+      setup() {
+        injected = inject(WALLPAPER_PREVIEW_ZOOM, null);
+        return () => h("iframe", { class: "slot-frame" });
+      },
+    });
     const wrapper = mount(WallpaperPreviewCanvas, {
       attachTo: document.body,
-      slots: { default: '<iframe class="slot-frame"></iframe>' },
+      props: { zoom: 2.5 },
+      slots: { default: () => h(Probe) },
     });
     wrappers.push(wrapper);
-    if (!NATIVE_FRAME_POINTER) {
-      expect(wrapper.element.querySelector("[data-wallpaper-pointer-overlay]")).toBeNull();
-      return;
-    }
-    const overlay = wrapper.element.lastElementChild as HTMLElement;
-    expect(overlay.hasAttribute("data-wallpaper-pointer-overlay")).toBe(true);
-    expect(overlay.classList.contains("inset-0")).toBe(true);
-    // 覆盖层排在画布之后（后绘制，盖在上面），自己是空的；插槽内容在画布里
-    expect(overlay.childElementCount).toBe(0);
+    expect(injected!.value).toBe(2.5);
+    await wrapper.setProps({ zoom: 1 });
+    expect(injected!.value).toBe(1);
+    expect(wrapper.element.querySelector("[data-wallpaper-pointer-overlay]")).toBeNull();
     expect(wrapper.element.firstElementChild?.querySelector(".slot-frame")).not.toBeNull();
+  });
+
+  it("没传 zoom 时按 1", () => {
+    let injected: Readonly<Ref<number>> | null = null;
+    const Probe = defineComponent({
+      setup() {
+        injected = inject(WALLPAPER_PREVIEW_ZOOM, null);
+        return () => null;
+      },
+    });
+    wrappers.push(mount(WallpaperPreviewCanvas, { attachTo: document.body, slots: { default: () => h(Probe) } }));
+    expect(injected!.value).toBe(1);
+  });
+});
+
+describe("intersectRect", () => {
+  it("相交时取重叠部分，不相交时宽高为 0", () => {
+    expect(intersectRect({ x: 0, y: 0, width: 10, height: 10 }, { x: 5, y: -5, width: 10, height: 10 })).toEqual({
+      x: 5,
+      y: 0,
+      width: 5,
+      height: 5,
+    });
+    const apart = intersectRect({ x: 0, y: 0, width: 10, height: 10 }, { x: 20, y: 0, width: 5, height: 5 });
+    expect(apart.width).toBe(0);
   });
 });
 

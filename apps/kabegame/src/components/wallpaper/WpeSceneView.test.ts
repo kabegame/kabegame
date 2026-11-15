@@ -1,8 +1,15 @@
 // @vitest-environment happy-dom
 import { flushPromises, mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nextTick, ref, type Ref } from "vue";
 import WpeSceneView from "./WpeSceneView.vue";
-import { WPE_SCENE_DISPLAY, WPE_SCENE_POINTER, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
+import {
+  WALLPAPER_PREVIEW_ZOOM,
+  WPE_SCENE_DISPLAY,
+  WPE_SCENE_POINTER,
+  WPE_SCENE_STYLE,
+  WPE_SCENE_STYLE_REQUEST,
+} from "./wpeSceneStyle";
 import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
 import { WPE_SCENE_SHORTCUT } from "./wpeSceneShortcut";
 import { WPE_VOLUME_MESSAGE, WPE_VOLUME_REQUEST } from "./wpeWebVolume";
@@ -182,6 +189,90 @@ describe("WpeSceneView 显示缩放", () => {
     wrapper.unmount();
     expect(clear).toHaveBeenCalledWith(intervals.findIndex((item) => item.delay === 250) + 1);
     expect(observers.every((item) => !item.targets.has(frame))).toBe(true);
+  });
+
+  describe("预览放大", () => {
+    /** 手动推进的 rAF 队列 */
+    let frames: Map<number, FrameRequestCallback>;
+    let nextFrameId: number;
+    const runFrames = () => {
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach((callback) => callback(0));
+    };
+
+    beforeEach(() => {
+      frames = new Map();
+      nextFrameId = 0;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+        frames.set(++nextFrameId, callback);
+        return nextFrameId;
+      });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    });
+
+    /** 挂在预览画布里：画布提供放大倍数 */
+    async function mountZoomed(zoom: Ref<number>) {
+      const wrapper = mount(WpeSceneView, {
+        props: { target: { id: "7", path: "D:/wpe/7" }, styleMode: "fit", volume: 1 } as never,
+        attachTo: document.body,
+        global: { provide: { [WALLPAPER_PREVIEW_ZOOM as symbol]: zoom } },
+      });
+      wrappers.push(wrapper);
+      await flushPromises();
+      const frame = wrapper.find("iframe").element as HTMLIFrameElement;
+      const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => {});
+      return { wrapper, post, frame };
+    }
+
+    it("放大时按 sceneDisplayScale 封顶：画布跟着放大到 1 为止", async () => {
+      const zoom = ref(2);
+      const { post, frame } = await mountZoomed(zoom);
+      // 适应时 0.4，放大 2 倍量到 0.8
+      layout(frame, 2560, 1440, 0.8);
+      poll();
+      expect(post).toHaveBeenLastCalledWith(displayMessage(0.8), "*");
+      // 放大 5 倍量到 2：封顶到 1
+      zoom.value = 5;
+      layout(frame, 2560, 1440, 2);
+      poll();
+      expect(post).toHaveBeenLastCalledWith(displayMessage(1), "*");
+    });
+
+    it("放大倍数一变就在下一帧补量一次，同一帧内多次变化只量一次", async () => {
+      const zoom = ref(1);
+      const { post, frame } = await mountZoomed(zoom);
+      layout(frame, 2560, 1440, 0.4);
+      poll();
+      post.mockClear();
+      zoom.value = 1.5;
+      await nextTick();
+      zoom.value = 2;
+      await nextTick();
+      layout(frame, 2560, 1440, 0.8);
+      expect(displayPosts(post)).toHaveLength(0);
+      expect(frames.size).toBe(1);
+      runFrames();
+      expect(displayPosts(post)).toEqual([[displayMessage(0.8), "*"]]);
+    });
+
+    it("卸载时取消还没跑的那一帧", async () => {
+      const zoom = ref(1);
+      const { wrapper } = await mountZoomed(zoom);
+      zoom.value = 3;
+      await nextTick();
+      expect(frames.size).toBe(1);
+      wrappers.splice(wrappers.indexOf(wrapper), 1);
+      wrapper.unmount();
+      expect(frames.size).toBe(0);
+    });
+
+    it("没有提供方（桌面、应用背景）时就是实测值", async () => {
+      const { post, fromHost, frame } = await mountView();
+      layout(frame, 1000, 500, 2);
+      fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+      expect(post).toHaveBeenLastCalledWith(displayMessage(2), "*");
+    });
   });
 });
 
