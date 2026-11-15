@@ -764,10 +764,20 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
 才开媒体会话监视；最后一个订阅离开即停（`info!` 记启停，增删订阅 `debug!` 记 label / frame / 类型 / 订阅数）。停止线程
 （丢弃句柄会 join）一律在订阅表的锁外，采集线程自己触发的停止不 join 自己。
 
-- **音频**（`wpe_media/audio.rs` + `spectrum.rs`）：WASAPI 共享模式回环读默认输出设备（`eRender` / `eConsole`）的混音，
-  每 10ms 读包、每 33ms 出一帧 128 个浮点（左 0–63、右 64–127，低频在前）。推送定时器与采集包解耦：静音标志的包或这段时间
-  没有包（系统静音时回环不送包）都按静音补零，页面收到逐帧衰减到 0 的数据，「空闲」判断才生效；打不开设备也照样推静音帧。
-  默认设备每秒比对 id、`AUDCLNT_E_DEVICE_INVALIDATED` 立即重开。只处理 32 位浮点与 16 位整数混音格式。
+- **音频**（`wpe_media/audio/` + `spectrum.rs`）：采集线程与推帧循环在 `audio/mod.rs`，两个平台只提供「默认输出设备 id +
+  打开回环流 + 读样本」（`Devices` / `LoopbackStream`，按 cfg 选后端）。每 10ms 读包、每 33ms 出一帧 128 个浮点（左 0–63、右
+  64–127，低频在前）。推送定时器与采集包解耦：静音包或这段时间没有包都按静音补零，页面收到逐帧衰减到 0 的数据，「空闲」判断才生效；
+  打不开设备也照样推静音帧。默认设备每秒比对 id、读取失败立即重开。
+  - **Windows**（`audio/wasapi.rs`）：WASAPI 共享模式回环读默认输出设备（`eRender` / `eConsole`）的混音（系统静音时回环不送包），
+    `AUDCLNT_E_DEVICE_INVALIDATED` 表现为读取失败。只处理 32 位浮点与 16 位整数混音格式。
+  - **macOS**（`audio/process_tap.rs`，2026-11-16）：Core Audio 进程 tap（14.2+），`CATapDescription` 的「全局立体声、不排除
+    任何进程」挂进只放 tap 的私有聚合设备（不放输出设备做时钟：带麦克风的耳机会连麦克风一起开），IOProc 在实时线程里把输入
+    缓冲（tap 的流在缓冲列表末尾，交错 / 非交错都收，只收 32 位浮点）拷进预留容量的共享缓冲（`try_lock`、满了整段丢、不分配），
+    采集线程每轮换出来喂频谱。静音时 tap 送全 0 样本。最低系统版本是 11，`AudioHardwareCreateProcessTap` /
+    `AudioHardwareDestroyProcessTap` 用 `dlsym` 取、`CATapDescription` 按类名找，14.2 以下打开报错、推静音帧。
+    第一次启动时系统弹「录制系统音频」授权，用途说明 `NSAudioCaptureUsageDescription` 写在 `src-tauri/kabegame/Info.plist`（release
+    打包合并）与 `macos/embedded-Info.plist`（dev 裸可执行文件），两处同步；拒绝时 tap 只送静音。权限记在负责进程名下，dev 从
+    VS Code 终端拉起时记在 VS Code 名下。全局 tap 跟随系统混音、不绑设备，换默认输出设备仍重开一次（采样率可能变）。
   频谱算法自定（WPE 未公开）：Hann 窗 → 2048 点实数 FFT（`realfft`）→ 64 个对数频段（30 Hz – 16 kHz，不超过奈奎斯特的
   95%）取段内峰值 → dB + 高频补偿（相对 1 kHz 每倍频程 +3 dB）→ `(dB − (−70)) / 60` 映射、上限 1.2 → 上升即时、下降每帧
   保留 0.75。常数集中在 `SpectrumTuning`，真机按样本调。
@@ -800,7 +810,9 @@ Kabegame 自己的会话不过滤。主窗口预览期间，`usePreviewMediaSess
 当前预览项（标题为图片 `displayName`，封面为左上角应用图标）；预览网页壁纸时声音来自 iframe，但垫片不访问 mediaSession，
 Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网页壁纸收到的是 Kabegame 自己的会话（图片名 + 应用图标）。
 
-只有 Windows 有数据源（`realfft`、`rustfft` 与 `windows` 的音频 / WinRT feature 只在 Windows 依赖段，并由 `wpe` feature 开启），macOS / Linux 的订阅命令直接返回错误，垫片忽略，页面收不到音频与媒体回调。
+数据源按平台：`audio` 在 Windows 与 macOS，`media` 只在 Windows（`wpe_media::kind_available`，订阅命令据此放行）。`realfft`、`rustfft`
+在 Windows 与 macOS 两个依赖段各登记一次，`windows` 的音频 / WinRT feature 只在 Windows 段，都由 `wpe` feature 开启。没有数据源的
+订阅命令直接返回错误，垫片忽略，页面收不到对应回调（场景脚本收到 `enabled: false`）。
 
 ## 七、已知边界
 

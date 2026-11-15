@@ -16,5 +16,8 @@
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <!-- 系统音频录制(Core Audio 进程 tap),与 release 合并用的 ../Info.plist 同步修改 -->
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Kabegame listens to system audio so that Wallpaper Engine wallpapers with audio visualization can react to what is playing. The audio is analyzed on this Mac and is never recorded or uploaded.</string>
 </dict>
 </plist>

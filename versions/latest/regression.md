@@ -3138,6 +3138,23 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PN14 macOS 预览的鼠标位置 | macOS dev，主窗口带原生标题栏，图库预览 | 预览一张跟随鼠标的网页 / 场景壁纸，光标放在画面里某个明显的点上（如按钮、图层边缘），上下移动 | 命中点与光标重合，不再偏下一个标题栏高度（32pt）；桌面壁纸窗口（无标题栏）不受影响 | 2026-11-16 Claude：`outerHeight - innerHeight` = 32 证实偏差来源；`cargo test -p tauri-plugin-cursor` 19 条全过（新增标题栏内缩换算）；2026-11-16 用户真机确认命中点与光标重合 |
 | [x] | PN15 macOS 拖动窗口时的鼠标位置 | 同 PN14 | 预览开着时拖动主窗口标题栏、拖边缘缩放窗口，拖动中与松手后都把光标放到画面上看 | 落点始终跟着光标，不再停在拖动前的位置、等约 1 秒才跟上 | 2026-11-16 Claude：单窗口 `kCGWindowBounds` 查询实测约 114 µs / 次，每轮现查；2026-11-16 用户真机确认拖动、缩放中落点跟手 |
 
+## macOS 系统音频回环（Core Audio 进程 tap）
+
+2026-11-16。网页与场景壁纸的音频订阅在 macOS 上有了数据源：`wpe_media` 的音频回环拆成共用的推帧循环（`audio/mod.rs`）与平台后端，Windows 原 WASAPI 实现移到 `audio/wasapi.rs`（只搬移，逻辑不变），macOS 新增 `audio/process_tap.rs`（14.2+，全局立体声 tap 挂进只放 tap 的私有聚合设备）。订阅命令改按 `kind_available` 放行：audio 在 Windows / macOS，media 仍只在 Windows。`NSAudioCaptureUsageDescription` 写进 `src-tauri/kabegame/Info.plist`（打包合并）与 `macos/embedded-Info.plist`（dev）。
+
+同一轮排查的「预览里场景没声音」不是代码问题：dev 数据目录里的壁纸音量被存成了 0（后端默认 1.0），场景排期器在音量为 0 时不开始播放；调到 0.5 后 9196 的背景音乐正常播放（AudioContext `running`，曲目时间前进）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MA1 单测与检查 | macOS | `check-kabegame --skip vue`；`test-kabegame kabegame --lib wpe_media` | 0 error；全过 | 2026-11-16 Claude：cargo check 0 error、新文件无告警；39 条全过（新增 tap 布局 5 条：只收 32 位浮点、交错取末尾缓冲、非交错取末尾几个平面交错、满了整段丢且不扩容、声道数不符忽略；`spectrum` / `wpe_spectrum` 的用例在 macOS 上第一次跑） |
+| [x] | MA2 场景频谱随声音变化 | macOS 26.6 dev，图库预览场景 9196（壁纸音量 0.5，场景自带背景音乐在放） | 看日志；探针 `host.audio()` 隔 300 ms 读 6 次 | 日志有「网页壁纸音频回环已打开 sample_rate=48000 channels=2」；`raw` 非零、`peak` 随音乐变化、帧数约 30 帧/秒 | 2026-11-16 Claude：回环已打开；`peak` 0.60–1.88 起伏，帧数每 300 ms +9；说明授权已放行（dev 由 VS Code 终端拉起，权限记在 VS Code 名下） |
+| [x] | MA3 订阅离开即停 | 同 MA2 | 预览里从带音频的场景切到别的壁纸 | 日志「网页壁纸音频采集已停止」，聚合设备随之拆掉 | 2026-11-16 Claude：日志 01:26:54 释放订阅后紧接「已停止」，切到下一张带音频的场景又重新打开 |
+| [ ] | MA4 网页壁纸的音频回调 | macOS dev | 预览一张声明 `supportsaudioprocessing` 的网页壁纸（频谱条类），放音乐 | 频谱条随音乐动，停止后逐帧回落到 0 | 待用户 |
+| [ ] | MA5 首次授权与拒绝 | macOS release 包（新装、未授权） | 第一次预览带音频的壁纸；在系统设置里关掉 Kabegame 的「仅系统录音」后再看 | 弹「录制系统音频」授权，文案为 Info.plist 的说明；关掉后频谱保持 0、不报错 | 待打包后测；dev 下权限记在 VS Code 名下，测不出 |
+| [ ] | MA6 换默认输出设备 | macOS dev | 放音乐时插拔耳机或在控制中心切换输出 | 约 1 秒内重开回环，频谱继续动；采样率变了也正常 | 待用户 |
+| [ ] | MA7 macOS 14.2 以下 | macOS 13 / 14.1 | 预览带音频的壁纸 | 不崩，日志一条「打开音频回环失败…需要 macOS 14.2」，频谱保持 0 | 本机是 26.6，没法测 |
+| [ ] | MA8 Windows 不回归 | Windows dev | `check-kabegame`；预览带音频的网页 / 场景壁纸 | 编过；频谱照常随音乐变化 | 本机没有 Windows 目标，`wasapi.rs` 的搬移没在 Windows 上编译过 |
+
 ## 预览翻页只认箭头
 
 2026-11-15。图库预览两侧各 20% 的区域原来整条可点（箭头显示时点哪都切图），改成区域只管摆放与显隐、本身不拦鼠标，只有点箭头才切图；区域里别处的点击落到下面的图片（拖动）或壁纸上。幻灯片按钮不变。

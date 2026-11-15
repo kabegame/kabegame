@@ -1,21 +1,12 @@
-//! WASAPI 共享模式回环采集：专用线程读默认输出设备（`eRender` / `eConsole`）的混音，每 33ms 产出一帧频谱。
+//! WASAPI 共享模式回环采集：读默认输出设备（`eRender` / `eConsole`）的混音。推帧循环在 `mod.rs`。
 //!
-//! 推送定时器与采集包解耦：系统静音时回环不送包，包带 `AUDCLNT_BUFFERFLAGS_SILENT` 或这段时间没有包都按静音补零，
-//! 页面照常收到逐帧衰减到 0 的数据，它的「空闲」判断才会生效。打不开设备（没有输出设备等）也照样推静音帧。
-//! 默认设备变化靠每秒比对设备 id 发现（不实现 `IMMNotificationClient`），设备失效（`AUDCLNT_E_DEVICE_INVALIDATED`）
-//! 立即重开。逐帧路径不打日志。
-//!
-//! 同一批样本另喂给 WPE 的原始频谱（`wpe_spectrum.rs`，P4e 步骤 4，只给场景用）：每攒够约 29 ms 的样本做一次 FFT，推的是最近
-//! 一次的结果；静音照 WPE，包带 `AUDCLNT_BUFFERFLAGS_SILENT` 或读取失败时立即清零，连续超过 1 s 没有包时清零，1 s 内保留。
-//! 两份每 33 ms 一起推（`on_frame(网页壁纸的, WPE 原始的)`）。
+//! 包带 `AUDCLNT_BUFFERFLAGS_SILENT`、空数据或不支持的格式时，网页壁纸的频谱按静音补零，WPE 原始频谱立即清零。
+//! 默认设备变化靠循环每秒比对设备 id 发现（不实现 `IMMNotificationClient`），设备失效（`AUDCLNT_E_DEVICE_INVALIDATED`）
+//! 表现为读取失败、立即重开。
 
-use super::spectrum::{Spectrum, BANDS};
-use super::wpe_spectrum::Spectrum as WpeSpectrum;
-use super::ComGuard;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use super::super::spectrum::Spectrum;
+use super::super::wpe_spectrum::Spectrum as WpeSpectrum;
+use super::super::ComGuard;
 use windows::core::{GUID, PWSTR};
 use windows::Win32::Media::Audio::{
     eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
@@ -24,9 +15,6 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoTaskMemFree, CLSCTX_ALL};
 
-const FRAME_INTERVAL: Duration = Duration::from_micros(33_333);
-const POLL_INTERVAL: Duration = Duration::from_millis(10);
-const DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 /// 共享模式缓冲时长（100ns 单位）：1 秒，轮询间隔远小于它，不会丢包。
 const BUFFER_DURATION: i64 = 10_000_000;
 
@@ -37,133 +25,36 @@ const KSDATAFORMAT_SUBTYPE_PCM: GUID = GUID::from_u128(0x00000001_0000_0010_8000
 const KSDATAFORMAT_SUBTYPE_IEEE_FLOAT: GUID =
     GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
 
-/// 运行中的回环采集；丢弃即停止。
-pub struct AudioCapture {
-    stop: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+/// 采集线程上的设备枚举器；持有本线程的 COM 初始化（MTA）。
+pub(super) struct Devices {
+    // 字段按声明顺序析构：枚举器先于 COM 反初始化
+    enumerator: IMMDeviceEnumerator,
+    _com: ComGuard,
 }
 
-impl AudioCapture {
-    pub fn start(on_frame: impl Fn([f32; BANDS * 2], [f32; BANDS * 2]) + Send + 'static) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread = std::thread::Builder::new()
-            .name("kabegame-wpe-audio".to_string())
-            .spawn({
-                let stop = stop.clone();
-                move || run(&stop, &on_frame)
-            })
-            .map_err(|error| tracing::warn!("启动网页壁纸音频采集线程失败: {error}"))
-            .ok();
-        Self { stop, thread }
-    }
-}
-
-impl Drop for AudioCapture {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            // 采集线程自己触发的停止（广播时发现订阅全没了）不能 join 自己：置了标志，它会自行退出
-            if thread.thread().id() != std::thread::current().id() {
-                let _ = thread.join();
-            }
-        }
-    }
-}
-
-fn run(stop: &AtomicBool, on_frame: &dyn Fn([f32; BANDS * 2], [f32; BANDS * 2])) {
-    let _com = ComGuard::init();
-    let enumerator: Option<IMMDeviceEnumerator> =
+impl Devices {
+    /// 创建失败（记一次 warn）时返回 `None`，采集线程照样推静音帧。
+    pub(super) fn new() -> Option<Self> {
+        let com = ComGuard::init();
         match unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) } {
-            Ok(enumerator) => Some(enumerator),
+            Ok(enumerator) => Some(Self {
+                enumerator,
+                _com: com,
+            }),
             Err(error) => {
                 tracing::warn!("创建音频设备枚举器失败，网页壁纸音频按静音处理: {error}");
                 None
             }
-        };
-    let mut stream: Option<LoopbackStream> = None;
-    let mut sample_rate = 48_000;
-    let mut spectrum = Spectrum::new(sample_rate);
-    let mut wpe = WpeSpectrum::new(sample_rate);
-    let mut last_poll = Instant::now();
-    // 本帧周期内实际收到的样本帧数，不够的按静音补
-    let mut received = 0usize;
-    let mut open_failed = false;
-    let mut next_frame = Instant::now();
-    let mut next_device_check = Instant::now();
+        }
+    }
 
-    while !stop.load(Ordering::Relaxed) {
-        let now = Instant::now();
-        if let Some(enumerator) = &enumerator {
-            if now >= next_device_check {
-                next_device_check = now + DEVICE_CHECK_INTERVAL;
-                let current = default_device_id(enumerator);
-                let stale = match &stream {
-                    Some(open) => current.as_deref() != Some(open.device_id.as_str()),
-                    None => true,
-                };
-                if stale {
-                    stream = None;
-                    match LoopbackStream::open(enumerator) {
-                        Ok(open) => {
-                            tracing::info!(
-                                sample_rate = open.sample_rate,
-                                channels = open.channels,
-                                "网页壁纸音频回环已打开"
-                            );
-                            if open.sample_rate != sample_rate {
-                                sample_rate = open.sample_rate;
-                                spectrum = Spectrum::new(sample_rate);
-                                wpe = WpeSpectrum::new(sample_rate);
-                            }
-                            open_failed = false;
-                            stream = Some(open);
-                        }
-                        Err(error) => {
-                            if !open_failed {
-                                tracing::warn!("打开音频回环失败，网页壁纸音频按静音处理: {error}");
-                                open_failed = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // WPE 原始频谱：这一轮读到的包数（静音包也算）；一个都没有时累计无包时长，连续超过 1 s 清零
-        let elapsed = now.duration_since(last_poll);
-        last_poll = now;
-        let mut packets = 0;
-        if let Some(open) = &mut stream {
-            match open.read(&mut spectrum, &mut wpe) {
-                Ok((frames, count)) => {
-                    received += frames;
-                    packets = count;
-                }
-                Err(error) => {
-                    tracing::debug!("音频回环读取失败，稍后重开: {error}");
-                    // WPE 读取失败也立即清零
-                    wpe.silent();
-                    stream = None;
-                    next_device_check = now;
-                }
-            }
-        }
-        if packets == 0 {
-            wpe.no_packet(elapsed);
-        }
-        if now >= next_frame {
-            let expected = (sample_rate as f32 * FRAME_INTERVAL.as_secs_f32()) as usize;
-            if received < expected {
-                spectrum.push_silence(expected - received);
-            }
-            received = 0;
-            on_frame(spectrum.frame(), wpe.frame());
-            next_frame += FRAME_INTERVAL;
-            // 落后太多（睡眠唤醒、线程被挂起）不补帧
-            if next_frame < now {
-                next_frame = now + FRAME_INTERVAL;
-            }
-        }
-        std::thread::sleep(POLL_INTERVAL);
+    /// 当前默认输出设备的 id；没有时 `None`。
+    pub(super) fn default_id(&self) -> Option<String> {
+        default_device_id(&self.enumerator)
+    }
+
+    pub(super) fn open(&self) -> windows::core::Result<LoopbackStream> {
+        LoopbackStream::open(&self.enumerator)
     }
 }
 
@@ -190,12 +81,12 @@ enum SampleFormat {
 }
 
 /// 一条打开的回环流。
-struct LoopbackStream {
+pub(super) struct LoopbackStream {
     client: IAudioClient,
     capture: IAudioCaptureClient,
-    device_id: String,
-    sample_rate: u32,
-    channels: usize,
+    pub(super) device_id: String,
+    pub(super) sample_rate: u32,
+    pub(super) channels: usize,
     format: SampleFormat,
     /// 16 位样本转浮点的缓冲
     scratch: Vec<f32>,
@@ -240,7 +131,7 @@ impl LoopbackStream {
 
     /// 读完当前所有包喂给两份频谱，返回读到的样本帧数与包数（静音包都算）。网页壁纸的频谱把静音包、空数据与不支持的格式按静音补零；
     /// WPE 原始频谱让它们立即清零。
-    fn read(
+    pub(super) fn read(
         &mut self,
         spectrum: &mut Spectrum,
         wpe: &mut WpeSpectrum,

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Tauri 打包时合并进 .app 的 Info.plist(tauri-cli 读 tauri 目录下的 Info.plist)。
+         dev 的裸可执行文件读 macos/embedded-Info.plist,两处同步修改。
+         系统音频录制(Core Audio 进程 tap,src/wpe_media/audio/process_tap.rs):没有这条说明时系统不弹授权、只送静音。 -->
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Kabegame listens to system audio so that Wallpaper Engine wallpapers with audio visualization can react to what is playing. The audio is analyzed on this Mac and is never recorded or uploaded.</string>
+</dict>
+</plist>
