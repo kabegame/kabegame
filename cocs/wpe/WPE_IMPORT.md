@@ -584,6 +584,39 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
     shadow root，DOM 外的元素收不到捕获事件）；
   - 场景壁纸目前没有声音，不涉及。
 
+#### 暂停
+
+`paused` 跟着音量消息到垫片（见上「音量」），iframe 保持可见，由垫片冻结页面。实现照 WPE 给网页壁纸注入的 `___wpxPause`
+（逆向记录见 `.claude/plans/wpe-import/2-web/API.md` §4.4，原文是 `webwallpaper64.exe` 里的明文脚本）。垫片的 `installFreeze`
+在页面脚本之前包装，冻结分两组：
+
+- **画面组**：在跑的 CSS 动画（`document.getAnimations()` 逐个 `pause()`）、在播的 `<video>` / `<audio>`；恢复时只恢复由这里停下的。
+- **脚本组**：
+  - `requestAnimationFrame`：冻结时退掉排着的原生回调，恢复时重排；页面拿到的 id 由垫片发，前后不变。
+  - `setInterval`：冻结期间到点就跳过（同 WPE）。
+  - `setTimeout`：冻结之前排的照常到点（同 WPE，页面在 `setPaused(true)` 里排的收尾能跑完）；冻结期间排的到点先压住，恢复时
+    按到点先后补跑，最多压 1000 个（同 WPE 的队列上限）。id 一律是原生的，压住的用两个清除函数都能取消。
+  - 实时 `AudioContext`：包装构造器登记实例，冻结时 `suspend` 在跑的、恢复时只 `resume` 这些；冻结期间新建的也 `suspend`。
+    音量仍由上面的主增益负责，两边互不相干。
+- **`setPaused`**：照 WPE，`setPaused(true)` 在冻结之前调，`setPaused(false)` 在解冻之后调。
+- **暂停中打开**（应用背景、暂停中的桌面；WPE 没有这种情况）：先让页面画起来。画面组在 `load` 后两帧冻；脚本组从页面自己在
+  `load` 后的第一个 rAF 回调起再跑 3 s 才冻。原因是 Unity WebGL 在 `load` 之后才异步拉起主循环，加载期间不用 rAF、只靠计时器，
+  脚本组冻早了一帧都画不出来，只剩一块 `#231F20` 的空画布；3 s 盖过 Unity 个人版约 2 s 的启动画面。从不用 rAF 的页面，这一次
+  暂停不冻脚本组，恢复后再暂停才冻。预热期间恢复就解除预热。
+- **为什么计时器必须冻**：Unity 的主循环走 rAF，rAF 停了以后还有一个约 1 s 的 `setInterval`（`_emscripten_set_interval`）兜底，
+  每次跑一帧 player loop。只冻 rAF，画面就是每秒一帧。2026-11-16 在「阿洛娜指纹识别 2.0」（3756621387）上实测：同一张壁纸
+  在 WPE 里能停住。
+- **和 WPE 有意不同**：
+  - 暂停前排上的 rAF 也压住，WPE 让它再跑一次；
+  - 计时器 id 一律是原生的，WPE 暂停期间返回 `{}`，恢复后取消不掉；
+  - CSS 动画用 `getAnimations()`，不是遍历全部元素的计算样式。
+- **管不到的**：
+  - Worker / OffscreenCanvas 里画的；
+  - `MessageChannel` 等自己排的循环、事件驱动的绘制；
+  - 嵌套 iframe 里的页面。
+
+  场景宿主（带 `kbScene`）不经这套冻结，它有自己的暂停。
+
 #### 右键
 
 iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片把它转给父页面。场景宿主也加载这份垫片，网页与场景同一条路。
@@ -722,7 +755,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   `sandbox="allow-scripts allow-same-origin allow-pointer-lock allow-forms"`（不给 top-navigation / popups / modals /
   downloads）、`allow="autoplay; fullscreen"`、`referrerpolicy="no-referrer"`。换目标、卸载时 **销毁** iframe（先 `about:blank`
   再移除），frame 销毁后它的监听随 `SubframeDestroyed` 清掉。`volume` / `paused` / `interactive` 经音量消息交给垫片（见上「音量」
-  「鼠标」），暂停由垫片冻结页面、iframe 保持可见；iframe 的 `pointer-events` 一律 `none`（Linux 退回时可交互才收）。
+  「鼠标」），暂停由垫片冻结页面、iframe 保持可见（见上「暂停」）；iframe 的 `pointer-events` 一律 `none`（Linux 退回时可交互才收）。
 - **场景**：挂一个 `WpeSceneView`（见 [WPE_SCENE.md](WPE_SCENE.md)「显示」）。
 - **事件**：
   - `live`：网页 `load`（导航了但 8 s 没 load 也算，页面已在画，只记 warn）；场景出首帧，退回后又能渲染时再发。
@@ -866,7 +899,8 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
   归视频控制条，音量是全部视频共用的 `kabegame-video-volume`）。
 - **预览的暂停不存**：它是 `ImagePreviewDialog` 的内存状态 `wallpaperPaused`（换图复位），和右键菜单的「暂停」是同一个；
   字段组的暂停开关把改动交回弹窗。
-- **应用背景**强制暂停（`video-playing` 恒为 false：视频停在第一帧、网页由垫片冻结、场景停在加载时画的第一帧），音量 0，
+- **应用背景**强制暂停（`video-playing` 恒为 false：视频停在第一帧、网页由垫片先预热再冻结（见「暂停」）、场景停在加载时画的
+  第一帧），音量 0，
   其余取这张壁纸的预览设置。
 - **作者的用户属性**（上节）只有一份，桌面与预览共用，不分作用域。
 - **「跟随 WPE」**：只在能读到 WPE `config.json` 时提供（`get_wpe_follow_available`：只有 Windows，且 WPE 安装目录里有

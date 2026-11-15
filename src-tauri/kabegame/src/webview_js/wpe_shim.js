@@ -31,7 +31,7 @@
   } catch (error) {
     console.warn("[kb-wpe] volume", error);
   }
-  // 暂停：rAF 同样要在页面脚本之前包装
+  // 暂停：rAF、计时器与 AudioContext 同样要在页面脚本之前包装
   try {
     freezer = installFreeze();
   } catch (error) {
@@ -75,29 +75,51 @@
     );
   }
 
-  // ---- 暂停：iframe 保持可见，冻结 requestAnimationFrame、CSS 动画与媒体元素 ----
-  // 管不到的：setTimeout / setInterval 不冻结，靠它们驱动的页面暂停时还会动；Web Audio 沿用音量置 0，不 suspend。
+  // ---- 暂停：iframe 保持可见，照 WPE 的 ___wpxPause 冻结（API.md §4.4，原文在 webwallpaper64.exe 里）----
+  // 分两组。画面组：在跑的 CSS 动画、在播的 <video> / <audio>。脚本组：requestAnimationFrame、setTimeout / setInterval、
+  // 实时 AudioContext（suspend）。计时器必须一起冻：Unity 的主循环走 rAF，rAF 停了还有一个约 1 秒的 setInterval 兜底出帧，
+  // 只冻 rAF 就成了每秒一帧。
+  // 和 WPE 有意不同：
+  // - 暂停前已排上的 rAF 也压住（WPE 让它再跑一次；timeout 照 WPE 照常到点）；
+  // - 计时器的 id 一律是原生的，暂停期间建的恢复后照样能取消（WPE 暂停期间返回 {}，恢复后取消不掉）；
+  // - 打开时就在暂停（应用背景、暂停中的桌面）先让页面画起来，WPE 没有这种情况：画面组在 load 后两帧冻，脚本组从页面
+  //   自己在 load 后的第一个 rAF 回调起再跑 WARM_UP_MS 才冻。Unity 在 load 之后才异步拉起主循环，加载期间不用 rAF、
+  //   只靠计时器，脚本组冻早了它一帧都画不出来。从不用 rAF 的页面这一次暂停不冻脚本组，恢复后再暂停才冻。
+  // 管不到的：Worker / OffscreenCanvas、MessageChannel 等自己排的循环、事件驱动的绘制、嵌套 iframe 里的页面。
   function installFreeze() {
     // 场景宿主不冻结：它有自己的 setPaused，渲染循环也要留给 load 画首帧
     if (new URLSearchParams(location.search).get("kbScene")) return null;
     var nativeRequest = window.requestAnimationFrame;
     var nativeCancel = window.cancelAnimationFrame;
+    var nativeSetTimeout = window.setTimeout;
     if (typeof nativeRequest !== "function" || typeof nativeCancel !== "function") return null;
+    if (typeof nativeSetTimeout !== "function") return null;
+    var WARM_UP_MS = 3000;
     // 页面拿到的 id 都由这里发：暂停时把排着的原生回调全部退掉、恢复时重排，id 不变，页面随时能取消
     var requests = new Map(); // id → { callback, native }；native 为 0 表示暂停中没有排
     var nextId = 0;
-    var frozen = false;
+    var scriptFrozen = false; // 脚本组已冻
     var wanted = false; // 宿主要求暂停；load 之前只记下，见 set
     var loaded = false;
+    // load 时就在暂停：脚本组等预热结束再冻（见上）；恢复一次就解除
+    var gated = false;
+    var warmUp = 0; // 预热计时器（原生 id），0 表示还没开始
     var heldAnimations = [];
     var heldMedia = [];
 
     function schedule(id, request) {
       request.native = nativeRequest.call(window, function (time) {
         requests.delete(id);
+        // 打开时就在暂停：页面在 load 后自己画的第一帧开始预热
+        if (gated && !warmUp) warmUp = nativeSetTimeout.call(window, warmedUp, WARM_UP_MS);
         var callback = request.callback; // 取出来再调，this 才和原生一样不是 request
         callback(time);
       });
+    }
+    function warmedUp() {
+      if (!gated) return; // 预热期间恢复过
+      gated = false;
+      if (wanted) freeze();
     }
     window.requestAnimationFrame = function requestAnimationFrame(callback) {
       // 不是函数：交给原生照原样报错
@@ -105,7 +127,7 @@
       var id = ++nextId;
       var request = { callback: callback, native: 0 };
       requests.set(id, request);
-      if (!frozen) schedule(id, request);
+      if (!scriptFrozen) schedule(id, request);
       return id;
     };
     window.cancelAnimationFrame = function cancelAnimationFrame(id) {
@@ -124,13 +146,160 @@
         }
       });
     }
-    function freeze() {
-      if (frozen) return;
-      frozen = true;
-      requests.forEach(function (request) {
-        nativeCancel.call(window, request.native);
-        request.native = 0;
-      });
+    function weakRef(value) {
+      return typeof WeakRef === "function"
+        ? new WeakRef(value)
+        : {
+            deref: function () {
+              return value;
+            },
+          };
+    }
+    var timers = installTimers();
+    var contexts = installAudioContexts();
+
+    // ---- setTimeout / setInterval：id 一律是原生的 ----
+    // interval 冻结期间到点就跳过（同 WPE）；冻结期间排的 timeout 到点先压住，解冻时按到点先后补跑，最多压 MAX_HELD 个
+    // （同 WPE 的队列上限），再多的丢掉
+    function installTimers() {
+      var nativeClearTimeout = window.clearTimeout;
+      var nativeSetInterval = window.setInterval;
+      var nativeClearInterval = window.clearInterval;
+      if (
+        typeof nativeClearTimeout !== "function" ||
+        typeof nativeSetInterval !== "function" ||
+        typeof nativeClearInterval !== "function"
+      ) {
+        return null;
+      }
+      var MAX_HELD = 1000;
+      var held = new Map(); // timeout id → 任务
+
+      // 照原生：函数以 this = window、带上第三个起的参数调用；别的先转成字符串，到点在全局作用域求值
+      function task(handler, args) {
+        if (typeof handler === "function") {
+          var extra = Array.prototype.slice.call(args, 2);
+          return function () {
+            handler.apply(window, extra);
+          };
+        }
+        var code = String(handler);
+        return function () {
+          (0, eval)(code);
+        };
+      }
+      window.setTimeout = function setTimeout(handler) {
+        var run = task(handler, arguments);
+        // 照 WPE：冻结之前排的照常到点（页面在 setPaused(true) 里排的收尾能跑完），只压冻结期间排的
+        var armedFrozen = scriptFrozen;
+        var id = nativeSetTimeout.call(
+          window,
+          function () {
+            if (!armedFrozen || !scriptFrozen) run();
+            else if (held.size < MAX_HELD) held.set(id, run);
+          },
+          arguments[1],
+        );
+        return id;
+      };
+      window.setInterval = function setInterval(handler) {
+        var run = task(handler, arguments);
+        return nativeSetInterval.call(
+          window,
+          function () {
+            if (!scriptFrozen) run();
+          },
+          arguments[1],
+        );
+      };
+      // 原生的两个清除函数可以互换，压住的 timeout 两个都能取消
+      window.clearTimeout = function clearTimeout(id) {
+        held.delete(id);
+        return nativeClearTimeout.call(window, id);
+      };
+      window.clearInterval = function clearInterval(id) {
+        held.delete(id);
+        return nativeClearInterval.call(window, id);
+      };
+      return {
+        // 解冻：压住的按到点先后各排一个 0 ms 的原生 timeout 补跑；补跑前又冻结了就留着等下次解冻，被取消了就不跑
+        release: function () {
+          held.forEach(function (run, id) {
+            nativeSetTimeout.call(
+              window,
+              function () {
+                if (scriptFrozen || held.get(id) !== run) return;
+                held.delete(id);
+                run();
+              },
+              0,
+            );
+          });
+        },
+      };
+    }
+
+    // ---- 实时 AudioContext：包装构造器登记全部实例，冻结时 suspend 在跑的、解冻时只 resume 这些（同 WPE）----
+    // 冻结期间新建的、在跑的也 suspend。音量仍由主增益负责（installAudioVolume），两边互不相干
+    function installAudioContexts() {
+      var Native = window.AudioContext;
+      var proto = Native && Native.prototype;
+      var nativeSuspend = proto && proto.suspend;
+      var nativeResume = proto && proto.resume;
+      if (typeof nativeSuspend !== "function" || typeof nativeResume !== "function" || typeof Reflect !== "object") {
+        return null;
+      }
+      var all = []; // 弱引用
+      var suspended = []; // 冻结时由这里 suspend 的（弱引用）
+
+      function settle(promise) {
+        if (promise && typeof promise.then === "function") promise.then(null, function () {});
+      }
+      function suspendIfRunning(context) {
+        if (context.state !== "running") return;
+        suspended.push(weakRef(context));
+        settle(nativeSuspend.call(context));
+      }
+      var AudioContext = function AudioContext() {
+        // 不带 new 调用时原生报错
+        if (!new.target) return Native.apply(this, arguments);
+        var context = Reflect.construct(Native, arguments, new.target);
+        all.push(weakRef(context));
+        if (scriptFrozen) {
+          try {
+            suspendIfRunning(context);
+          } catch (error) {
+            console.warn("[kb-wpe] freeze", error);
+          }
+        }
+        return context;
+      };
+      AudioContext.prototype = proto;
+      Object.setPrototypeOf(AudioContext, Object.getPrototypeOf(Native));
+      Object.defineProperty(proto, "constructor", { value: AudioContext, writable: true, configurable: true });
+      window.AudioContext = AudioContext;
+
+      return {
+        suspend: function () {
+          all = all.filter(function (ref) {
+            return ref.deref();
+          });
+          tryEach(all, function (ref) {
+            var context = ref.deref();
+            if (context) suspendIfRunning(context);
+          });
+        },
+        resume: function () {
+          tryEach(suspended.splice(0), function (ref) {
+            var context = ref.deref();
+            if (context) settle(nativeResume.call(context));
+          });
+        },
+      };
+    }
+
+    // 画面组。可以重复调：已压住的不再在跑 / 在播，不会记两次
+    function freezeVisual() {
       tryEach(document.getAnimations(), function (animation) {
         if (animation.playState !== "running") return;
         animation.pause();
@@ -142,12 +311,28 @@
         heldMedia.push(el);
       });
     }
-    function thaw() {
-      if (!frozen) return;
-      frozen = false;
-      requests.forEach(function (request, id) {
-        schedule(id, request);
+    function freezeScript() {
+      if (scriptFrozen) return;
+      scriptFrozen = true;
+      requests.forEach(function (request) {
+        nativeCancel.call(window, request.native);
+        request.native = 0;
       });
+      if (contexts) contexts.suspend();
+    }
+    function freeze() {
+      freezeVisual();
+      freezeScript();
+    }
+    function thaw() {
+      if (scriptFrozen) {
+        scriptFrozen = false;
+        requests.forEach(function (request, id) {
+          schedule(id, request);
+        });
+        if (timers) timers.release();
+        if (contexts) contexts.resume();
+      }
       // 只恢复记下的；页面在暂停期间自己取消或播放了的不动
       tryEach(heldAnimations.splice(0), function (animation) {
         if (animation.playState === "paused") animation.play();
@@ -158,22 +343,28 @@
         if (playing && playing.catch) playing.catch(function () {});
       });
     }
-    // load 之前不冻结：暂停中打开的壁纸也要先画出第一帧，否则靠 rAF 绘制的页面一直是空白。等 load 回调都跑完、
-    // 再过一帧（页面在 load 里排的第一帧画完）才冻结；这期间恢复了就不冻
+    // load 之前不冻结：暂停中打开的壁纸也要先画出来。画面组等 load 回调都跑完、再过一帧（页面在 load 里排的第一帧画完）
+    // 才冻；脚本组等预热（见 schedule）。这期间恢复了就都不冻
     window.addEventListener("load", function () {
       loaded = true;
       if (!wanted) return;
+      gated = true;
       nativeRequest.call(window, function () {
         nativeRequest.call(window, function () {
-          if (wanted) freeze();
+          if (wanted) freezeVisual();
         });
       });
     });
     return {
       set: function (paused) {
         wanted = paused;
-        if (!paused) thaw();
-        else if (loaded) freeze();
+        if (!paused) {
+          gated = false;
+          thaw();
+        } else if (loaded) {
+          freezeVisual();
+          if (!gated) freezeScript();
+        }
       },
     };
   }
@@ -477,9 +668,11 @@
         var paused = data.paused === true;
         if (hostPaused !== paused) {
           hostPaused = paused;
-          if (freezer) freezer.set(paused);
+          // 照 WPE：页面的 setPaused(true) 在冻结之前、setPaused(false) 在解冻之后（页面在里面排的 timeout 照常到点）。
           // 首次投递之前到达的留给 deliverFull 补
-          if (delivered) call("setPaused", paused);
+          if (paused && delivered) call("setPaused", true);
+          if (freezer) freezer.set(paused);
+          if (!paused && delivered) call("setPaused", false);
         }
         // 可交互（预览、桌面）且没暂停才收鼠标；应用背景不交互
         setPointerAttached(data.interactive === true && !paused);

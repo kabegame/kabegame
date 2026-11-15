@@ -144,8 +144,20 @@ function createFakes() {
     }
   }
   class FakeAudioContext extends FakeBaseContext {
+    suspendCalls = 0;
+    resumeCalls = 0;
     createMediaElementSource(mediaElement: unknown) {
       return new FakeSourceNode(this, { mediaElement });
+    }
+    suspend() {
+      this.suspendCalls += 1;
+      this.state = "suspended";
+      return Promise.resolve();
+    }
+    resume() {
+      this.resumeCalls += 1;
+      this.state = "running";
+      return Promise.resolve();
     }
   }
   class FakeOfflineContext extends FakeBaseContext {}
@@ -217,7 +229,40 @@ function fakeMedia(paused: boolean) {
   };
 }
 
-function createShimEnv(initialState: unknown = null, search = "") {
+/** 手动推进的计时器（id 是数字，同浏览器）：`advance` 按到点先后逐个触发，interval 到点后排下一次。 */
+function createClock() {
+  let now = 0;
+  let nextId = 0;
+  const timers = new Map<number, { at: number; every: number | null; fn: () => void }>();
+  const add = (fn: () => void, delay: unknown, repeat: boolean) => {
+    const ms = Math.max(0, Number(delay) || 0);
+    timers.set(++nextId, { at: now + ms, every: repeat ? Math.max(1, ms) : null, fn });
+    return nextId;
+  };
+  return {
+    setTimeout: (fn: () => void, delay?: unknown) => add(fn, delay, false),
+    setInterval: (fn: () => void, delay?: unknown) => add(fn, delay, true),
+    clearTimeout: (id: number) => void timers.delete(id),
+    clearInterval: (id: number) => void timers.delete(id),
+    advance(ms: number) {
+      const end = now + ms;
+      for (;;) {
+        let due: [number, { at: number; every: number | null; fn: () => void }] | null = null;
+        for (const entry of timers) if (entry[1].at <= end && (!due || entry[1].at < due[1].at)) due = entry;
+        if (!due) break;
+        const [id, timer] = due;
+        now = timer.at;
+        if (timer.every === null) timers.delete(id);
+        else timer.at += timer.every;
+        timer.fn();
+      }
+      now = end;
+    },
+  };
+}
+type Clock = ReturnType<typeof createClock>;
+
+function createShimEnv(initialState: unknown = null, search = "", clock?: Clock) {
   const fakes = createFakes();
   const {
     FakeMediaElement,
@@ -278,7 +323,10 @@ function createShimEnv(initialState: unknown = null, search = "") {
     MessageEvent: FakeMessageEvent,
     Event: FakeEvent,
     DOMException,
-    setTimeout,
+    setTimeout: clock?.setTimeout ?? setTimeout,
+    clearTimeout: clock?.clearTimeout ?? clearTimeout,
+    setInterval: clock?.setInterval ?? setInterval,
+    clearInterval: clock?.clearInterval ?? clearInterval,
     queueMicrotask,
     console: consoleSpy,
   };
@@ -310,6 +358,11 @@ function createShimEnv(initialState: unknown = null, search = "") {
   const page = sandbox as unknown as {
     requestAnimationFrame(callback: (time: number) => void): number;
     cancelAnimationFrame(id: number): void;
+    setTimeout(handler: unknown, delay?: number, ...args: unknown[]): number;
+    clearTimeout(id: number): void;
+    setInterval(handler: unknown, delay?: number, ...args: unknown[]): number;
+    clearInterval(id: number): void;
+    AudioContext: new () => InstanceType<Fakes["FakeAudioContext"]>;
   };
   return {
     ...fakes,
@@ -528,8 +581,8 @@ describe("wpe_shim 音量接管", () => {
 
 describe("wpe_shim 暂停冻结", () => {
   /** 页面已加载完：之后的暂停立即冻结。 */
-  function loaded(search = "") {
-    const env = createShimEnv(null, search);
+  function loaded(search = "", clock?: Clock) {
+    const env = createShimEnv(null, search, clock);
     env.dispatch("load", {});
     return env;
   }
@@ -666,37 +719,239 @@ describe("wpe_shim 暂停冻结", () => {
     expect(media.paused).toBe(false);
   });
 
-  it("load 之前收到暂停：页面先画出第一帧，load 后再过一帧才冻结", () => {
-    const env = createShimEnv();
+  it("暂停期间 interval 到点就跳过，恢复后接着走（Unity 停了 rAF 后靠它每秒出一帧）", () => {
+    const clock = createClock();
+    const env = loaded("", clock);
+    const tickFn = vi.fn();
+    env.page.setInterval(tickFn, 1000);
+    clock.advance(1000);
+    expect(tickFn).toHaveBeenCalledTimes(1);
+    pause(env);
+    clock.advance(5000);
+    expect(tickFn).toHaveBeenCalledTimes(1);
+    resume(env);
+    clock.advance(1000);
+    expect(tickFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("冻结期间排的 timeout 压住，恢复后按到点先后补跑；暂停前排的照常到点；参数、this 与字符串照原生", () => {
+    const clock = createClock();
+    const env = loaded("", clock);
+    const order: string[] = [];
+    const before = vi.fn(() => order.push("before"));
+    env.page.setTimeout(before, 300);
+    pause(env);
+    const late = vi.fn(function (this: unknown, ...args: unknown[]) {
+      order.push("late");
+      return [this, args];
+    });
+    env.page.setTimeout(late, 100, 1, 2);
+    env.page.setTimeout(() => order.push("early"), 50);
+    env.page.setTimeout("window.evaluated = (window.evaluated || 0) + 1", 10);
+    clock.advance(1000);
+    // 暂停前排的照 WPE 到点；冻结期间排的都压着
+    expect(order).toEqual(["before"]);
+    expect(env.sandbox.evaluated).toBeUndefined();
+
+    resume(env);
+    expect(order).toEqual(["before"]);
+    clock.advance(0);
+    expect(order).toEqual(["before", "early", "late"]);
+    expect(env.sandbox.evaluated).toBe(1);
+    // vm 里页面看到的 window 是上下文化后的全局对象，不是外面的 sandbox
+    expect(late.mock.contexts[0]).toBe(vm.runInContext("window", env.sandbox));
+    expect(late.mock.calls[0]).toEqual([1, 2]);
+    clock.advance(1000);
+    expect(late).toHaveBeenCalledOnce();
+  });
+
+  it("压住的 timeout 用 clearTimeout / clearInterval 都能取消；补跑之前又暂停就留到下次恢复", () => {
+    const clock = createClock();
+    const env = loaded("", clock);
+    pause(env);
+    const cancelled = vi.fn();
+    const kept = vi.fn();
+    const id = env.page.setTimeout(cancelled, 10);
+    env.page.setTimeout(kept, 10);
+    clock.advance(20);
+    env.page.clearInterval(id);
+    resume(env);
+    pause(env);
+    clock.advance(10);
+    expect(kept).not.toHaveBeenCalled();
+    resume(env);
+    clock.advance(0);
+    expect(kept).toHaveBeenCalledOnce();
+    expect(cancelled).not.toHaveBeenCalled();
+  });
+
+  it("暂停时 suspend 在跑的 AudioContext，恢复时只 resume 这些；暂停期间新建的也 suspend", () => {
+    const env = loaded();
+    const AudioContext = env.page.AudioContext;
+    expect(AudioContext).not.toBe(env.FakeAudioContext);
+    expect(AudioContext.prototype.constructor).toBe(AudioContext);
+    expect(() => (AudioContext as unknown as () => unknown)()).toThrow(TypeError);
+    // 页面自己的子类照样能建
+    class PageContext extends AudioContext {}
+    const running = new PageContext();
+    expect(running).toBeInstanceOf(PageContext);
+    expect(running).toBeInstanceOf(env.FakeAudioContext);
+    const suspendedByPage = new AudioContext();
+    suspendedByPage.state = "suspended";
+
+    pause(env);
+    expect(running.state).toBe("suspended");
+    expect(suspendedByPage.suspendCalls).toBe(0);
+    const createdWhilePaused = new AudioContext();
+    expect(createdWhilePaused.state).toBe("suspended");
+
+    resume(env);
+    expect(running.state).toBe("running");
+    expect(createdWhilePaused.state).toBe("running");
+    expect(suspendedByPage.state).toBe("suspended");
+    expect(suspendedByPage.resumeCalls).toBe(0);
+    expect(env.consoleSpy.warn).not.toHaveBeenCalled();
+  });
+
+  it("照 WPE：页面的 setPaused(true) 在冻结之前、setPaused(false) 在解冻之后调", async () => {
+    const env = createShimEnv({ imageId: "web", user: {}, general: {}, directories: {} });
+    const seen: [boolean, boolean][] = [];
     const media = fakeMedia(false);
     env.mediaElements.push(media);
+    env.sandbox.wallpaperPropertyListener = {
+      setPaused: (paused: boolean) => seen.push([paused, media.paused]),
+      applyUserProperties: vi.fn(),
+    };
+    env.dispatch("load", {});
+    await tick();
+    pause(env);
+    resume(env);
+    expect(seen).toEqual([
+      [true, false],
+      [false, false],
+    ]);
+  });
+
+  /** 页面的 rAF 动画循环。 */
+  function rafLoop(env: ReturnType<typeof createShimEnv>) {
+    const state = { frames: 0 };
+    const loop = () => {
+      state.frames++;
+      env.page.requestAnimationFrame(loop);
+    };
+    env.page.requestAnimationFrame(loop);
+    return state;
+  }
+
+  it("暂停中打开：画面组在 load 后两帧冻，脚本组从页面 load 后的第一帧起跑满 3 秒再冻", () => {
+    const clock = createClock();
+    const env = createShimEnv(null, "", clock);
+    const media = fakeMedia(false);
+    env.mediaElements.push(media);
+    const ctx = new env.page.AudioContext();
     pause(env);
     const beforeLoad = vi.fn();
     env.page.requestAnimationFrame(beforeLoad);
     env.runFrame();
     expect(beforeLoad).toHaveBeenCalledOnce();
     expect(media.paused).toBe(false);
+    const tickFn = vi.fn();
+    env.page.setInterval(tickFn, 1000); // 到点在 1000、2000……；预热从 500 起，错开同一时刻
+    clock.advance(500);
 
     env.dispatch("load", {});
-    // 页面在 load 回调里排的第一帧照常画
-    let frames = 0;
-    const loop = () => {
-      frames++;
-      env.page.requestAnimationFrame(loop);
-    };
-    env.page.requestAnimationFrame(loop);
+    // 页面在 load 回调里排的第一帧照常画，从这一帧开始预热
+    const loop = rafLoop(env);
     env.runFrame();
-    expect(frames).toBe(1);
+    expect(loop.frames).toBe(1);
     env.runFrame();
     expect(media.paused).toBe(true);
-    const frozenAt = frames;
+    // 预热期间脚本照跑
+    clock.advance(2999);
     env.runFrame();
-    expect(frames).toBe(frozenAt);
+    expect(loop.frames).toBe(3);
+    expect(tickFn).toHaveBeenCalledTimes(3);
+    expect(ctx.state).toBe("running");
+
+    clock.advance(1);
+    const frozenAt = loop.frames;
+    env.runFrame();
+    clock.advance(5000);
+    expect(loop.frames).toBe(frozenAt);
+    expect(tickFn).toHaveBeenCalledTimes(3);
+    expect(ctx.state).toBe("suspended");
 
     resume(env);
     expect(media.paused).toBe(false);
     env.runFrame();
-    expect(frames).toBe(frozenAt + 1);
+    expect(loop.frames).toBe(frozenAt + 1);
+    clock.advance(1000);
+    expect(tickFn).toHaveBeenCalledTimes(4);
+    expect(ctx.state).toBe("running");
+  });
+
+  it("暂停中打开、加载期间只用计时器的页面（Unity）：等它主循环的第一帧起预热 3 秒再冻", () => {
+    const clock = createClock();
+    const env = createShimEnv(null, "", clock);
+    pause(env);
+    env.dispatch("load", {});
+    const tickFn = vi.fn();
+    env.page.setInterval(tickFn, 1000);
+    env.runFrame();
+    env.runFrame();
+    clock.advance(10_500);
+    expect(tickFn).toHaveBeenCalledTimes(10);
+    // 主循环起来了：从它的第一帧起预热
+    const loop = rafLoop(env);
+    env.runFrame();
+    clock.advance(2999);
+    env.runFrame();
+    expect(loop.frames).toBe(2);
+    expect(tickFn).toHaveBeenCalledTimes(13);
+    clock.advance(1);
+    env.runFrame();
+    clock.advance(5000);
+    expect(loop.frames).toBe(2);
+    expect(tickFn).toHaveBeenCalledTimes(13);
+  });
+
+  it("暂停中打开、从不用 rAF 的页面：这次暂停不冻脚本组，恢复后再暂停就冻", () => {
+    const clock = createClock();
+    const env = createShimEnv(null, "", clock);
+    pause(env);
+    env.dispatch("load", {});
+    const tickFn = vi.fn();
+    env.page.setInterval(tickFn, 1000);
+    env.runFrame();
+    env.runFrame();
+    clock.advance(10_500);
+    expect(tickFn).toHaveBeenCalledTimes(10);
+    resume(env);
+    pause(env);
+    clock.advance(5000);
+    expect(tickFn).toHaveBeenCalledTimes(10);
+  });
+
+  it("预热期间恢复：不再按预热冻结，之后的暂停立刻冻", () => {
+    const clock = createClock();
+    const env = createShimEnv(null, "", clock);
+    const media = fakeMedia(false);
+    env.mediaElements.push(media);
+    pause(env);
+    env.dispatch("load", {});
+    const loop = rafLoop(env);
+    env.runFrame();
+    resume(env);
+    clock.advance(3000);
+    env.runFrame();
+    env.runFrame();
+    expect(loop.frames).toBe(3);
+    expect(media.paused).toBe(false);
+
+    pause(env);
+    env.runFrame();
+    expect(loop.frames).toBe(3);
+    expect(media.paused).toBe(true);
   });
 
   it("load 之后等冻结的那一帧里已经恢复：不冻结", () => {
