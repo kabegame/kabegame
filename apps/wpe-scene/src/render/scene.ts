@@ -203,7 +203,7 @@ import type { TextLayout } from "../text/layout";
 import { isDynamicSource, type UserTextureSlot } from "../compile/usertextures";
 import type { CropRect } from "../usertex/crop";
 import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextureProvider } from "../usertex/sources";
-import type { VideoSink } from "../video/sceneVideos";
+import type { VideoFrameSource, VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import type { CursorCamera } from "./cursor";
@@ -4507,11 +4507,13 @@ export class GpuScene {
    * 把视频元素当前的帧拷进第 `index` 张纹理（P9a）。拷的尺寸取视频与纹理的较小者：WPE 是缩放到纹理尺寸（rea-p9-video 第 2 节第 3 条），
    * 语料 60 段两者都相同，不同时只拷重叠部分并记一条 warning（决定 3）。还没有尺寸（`videoWidth` 为 0）时跳过；拷贝抛错（元素状态
    * 不对等）时记一条 warning，不让这一帧失败。两种 warning 每张纹理各记一次。
+   * P9d 起来源也可以是 WebCodecs 解出的 `VideoFrame`（尺寸取显示尺寸），拷完由播放器释放。
    */
-  private copyVideo(index: number, source: HTMLVideoElement): void {
+  private copyVideo(index: number, source: VideoFrameSource): void {
     const texture = this.textures[index];
     const info = this.bundle.textures[index];
-    const { videoWidth, videoHeight } = source;
+    const videoWidth = "displayWidth" in source ? source.displayWidth : source.videoWidth;
+    const videoHeight = "displayHeight" in source ? source.displayHeight : source.videoHeight;
     if (!texture || !info || !videoWidth || !videoHeight) return;
     if (videoWidth !== info.textureWidth || videoHeight !== info.textureHeight)
       this.warnVideo(

@@ -1,5 +1,6 @@
 import {
   GENERAL_FIELDS,
+  scriptPropertyEntries,
   TEXT_RUNTIME_FIELDS,
   type BindingTarget,
   type GeneralKey,
@@ -23,7 +24,6 @@ import { anglesRotation, drawMatrixOf } from "../render/layout";
 import { extractEulerZYX, lookAtAngles, lookAtYawAngles, rotateObjectSpace } from "../render/rotation";
 import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
-import type { VideoTexturePlayer } from "../video/player";
 import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
@@ -133,13 +133,34 @@ export interface ScriptApiState {
    * 不传（语料诊断、`realmCheck`）时读到全 0、左键松开。
    */
   cursorInput?(): CursorInputSnapshot;
+  /**
+   * 正在跑的回调名（P11d，`ScriptRuntime.activeCallback`）：`engine.openUserShortcut` 只许在 `cursorClick` / `cursorDown` / `cursorUp` 里调。
+   * 不传（语料诊断、`realmCheck`）时当不在任何回调里，调用抛错。
+   */
+  activeCallback?(): string | null;
+  /**
+   * 脚本调 `engine.openUserShortcut(name)`（P11d，门禁里参数已核对为字符串）：宿主先取点击令牌，再查属性全集。返回码同 WPE 宿主：
+   * 0 = 失败（属性不是已配好的快捷方式），1 = 成功（宿主已把属性名交给父页面），2 = 没有令牌（同一次点击已用过 / 没有点击）。
+   * 不传时当 0（语料诊断没有宿主）。
+   */
+  openUserShortcut?(name: string): 0 | 1 | 2;
 }
 
-/** `IVideoTexture` 的落点（P9b，`VideoTexturePlayer` 满足它）。 */
-export type VideoScriptTarget = Pick<
-  VideoTexturePlayer,
-  "rate" | "loop" | "currentTime" | "duration" | "play" | "pause" | "stop" | "isPlaying" | "addEndedCallback"
->;
+/**
+ * `IVideoTexture` 的落点（P9b）：视频纹理的两种播放器（`video/player.ts` 的 `VideoTexturePlayer`、P9d 的 `video/codecPlayer.ts`
+ * `CodecVideoPlayer`）都满足它。
+ */
+export interface VideoScriptTarget {
+  rate: number;
+  loop: boolean;
+  currentTime: number;
+  readonly duration: number;
+  play(): void;
+  pause(): void;
+  stop(): void;
+  isPlaying(): boolean;
+  addEndedCallback(callback: () => void): void;
+}
 
 /** 声音层脚本方法的落点（`audio/scheduler.ts` 的 `SoundScheduler` 满足它）：WPE `ISoundLayer` 的四个方法。 */
 export interface SoundScriptTarget {
@@ -177,6 +198,18 @@ const TEXT_API_TYPES: Record<TextRuntimeField, ValueType | "string"> = {
   limituseellipsis: "bool",
   blockalign: "bool",
 };
+
+/**
+ * `engine.userProperties` 交给 `convertUserProperties` 的全集（P11d）：快捷方式项只带 `type` 与 `value`，脚本读到 `{}`（三个字段都是 undefined，
+ * p11-REPORT「P11d 补测」：WPE 的 `engine.userProperties` 里始终如此，`init` 里、改值之后都一样）。`isbound` / `commandtype` / `file` 只在
+ * `applyUserProperties` 的增量里给（宿主把全集项原样交过去），所以全集保留着它们，这里剥掉。
+ */
+export function scriptUserProperties(properties: ReadonlyMap<string, UserProperty>): Record<string, UserProperty> {
+  const out: Record<string, UserProperty> = {};
+  for (const [key, property] of properties)
+    out[key] = property.type === "usershortcut" ? { type: property.type, value: property.value } : property;
+  return out;
+}
 
 /** 路径的最后一段（`script.id` / 动画 `id` 的属性名）。 */
 const lastSegment = (path: string): string => path.slice(path.lastIndexOf("/") + 1);
@@ -791,10 +824,23 @@ export class ScriptApi {
     scoped("screenResolution", () => this.vector(this.access.screenResolution(), 2));
     scoped("userProperties", () => {
       if (!this.convertedProperties)
+        // 键按 WPE 的字节序（`scriptPropertyEntries`），同 `applyUserProperties` 的参数
         this.convertedProperties = this.realm.internal.convertUserProperties(
-          JSON.stringify(Object.fromEntries(this.properties)),
+          JSON.stringify(Object.fromEntries(scriptPropertyEntries(Object.entries(scriptUserProperties(this.properties))))),
         );
       return this.convertedProperties;
+    });
+    // 快捷方式（P11d，p11-REPORT「P11d 补测」门禁表）：只在三个光标回调里能调，否则抛 realm 的 `SyntaxError`；参数不是字符串原始值
+    // 返回 false 且不消耗令牌；之后取令牌，没有就抛；然后查属性（令牌在查属性之前就消耗了）。方法本身不是 scoped：模块求值期间调同样落到
+    // 「不在光标回调里」。`true` 只表示宿主受理（WPE 的 `true` 是 `ShellExecuteW` 成功，我们的启动在应用页异步完成，已知差异）
+    this.method(this.engine, "openUserShortcut", (...args: unknown[]) => {
+      const callback = this.access.activeCallback?.() ?? null;
+      if (callback !== "cursorClick" && callback !== "cursorDown" && callback !== "cursorUp")
+        throw this.syntaxError("Cannot execute user command outside of cursor callbacks.");
+      if (args.length < 1 || typeof args[0] !== "string") return false;
+      const result = this.access.openUserShortcut?.(args[0]) ?? 0;
+      if (result === 2) throw this.syntaxError("Cannot execute more than one user command per cursor click.");
+      return result === 1;
     });
     this.method(this.engine, "isRunningInEditor", () => false);
     this.method(this.engine, "isMobileDevice", () => false);
@@ -898,6 +944,12 @@ export class ScriptApi {
     scoped("cursorScreenPosition", () => this.vector(scriptNumbers(snapshot().screen), 2));
     scoped("cursorLeftDown", () => snapshot().leftDown);
     this.realm.global.input = input;
+  }
+
+  /** realm 里的 `SyntaxError`（WPE 的宿主抛的就是它，`instanceof Error` 为真；同 `input` 与 `getAnimation`）。 */
+  private syntaxError(message: string): Error {
+    const Ctor = (this.realm.global.SyntaxError as ErrorConstructor | undefined) ?? SyntaxError;
+    return new Ctor(message);
   }
 
   /** 模块求值期间调 `getAnimation` 抛 realm 的 SyntaxError，消息照 WPE（P10b 步骤 0 Q5）。 */

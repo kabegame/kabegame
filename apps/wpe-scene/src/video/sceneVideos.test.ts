@@ -1,10 +1,13 @@
 /**
  * 场景的视频纹理（P9a 步骤 1）：用替身元素核对 30 帧规则、加载时就没被画到的视频、宿主暂停与恢复、新帧只交出一次、
  * 跨 load 复用与释放、失败、等第一帧、结束回调的时机与探针。WPE 依据见 p9-REPORT 与 rea-p9-video 第 3、4、6 节。
+ * Node 里没有 `VideoDecoder`，不注入解码器时走旧的 `<video>` 播放器；P9d 步骤 2a 的 WebCodecs 播放器与退回在最后一组。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { flush, videoEnv } from "./fakeVideo";
 import type { SceneBundle } from "../compile/bundle";
+import { CodecVideoPlayer, type CodecDecoder, type CodecDecoderInit } from "./codecPlayer";
+import { buildMp4 } from "./demux/testMp4";
 import type { SceneVideoSource } from "./player";
 import { layerVideoSource, SceneVideos } from "./sceneVideos";
 
@@ -277,6 +280,7 @@ describe("SceneVideos", () => {
         droppedFrames: 1,
         stallSeeks: 0,
         stallReloads: 0,
+        decoder: "element",
         textures: [1],
       },
     ]);
@@ -367,5 +371,143 @@ describe("脚本侧的查找（P9b）", () => {
     expect(layerVideoSource(null, 0)).toBeUndefined();
     // 手写的 bundle 没有纹理表
     expect(layerVideoSource({ layers: bundle.layers } as unknown as SceneBundle, 0)).toBeUndefined();
+  });
+});
+
+describe("WebCodecs 播放器与退回（P9d 步骤 2a）", () => {
+  /** 8 帧、每帧 0.125 s、时长 1 s 的 MP4。 */
+  const mp4 = buildMp4({
+    sizes: Array.from({ length: 8 }, () => 10),
+    perChunk: [8],
+    stts: [[8, 125]],
+    timescale: 1000,
+    stss: [1, 5],
+    movie: [1000, 1000],
+  }).bytes;
+  const clip: SceneVideoSource = { path: "P:/p/materials/clip.tex", start: 0, end: mp4.length };
+  /** Matroska 的头：`indexMp4` 拆不了。 */
+  const mkv = new Uint8Array(64);
+  mkv.set([0x1a, 0x45, 0xdf, 0xa3]);
+
+  /** 解码器替身：每个 chunk 在微任务里吐出一帧；记打开的帧数。 */
+  function codecSetup() {
+    const env = videoEnv();
+    const counter = { opened: 0, decoders: 0, reads: 0 };
+    const createDecoder = (init: CodecDecoderInit): CodecDecoder => {
+      counter.decoders++;
+      let queue = 0;
+      return {
+        get decodeQueueSize() {
+          return queue;
+        },
+        configure() {},
+        decode(chunk) {
+          queue++;
+          queueMicrotask(() => {
+            queue--;
+            counter.opened++;
+            const frame = {
+              timestamp: chunk.timestamp,
+              displayWidth: 1920,
+              displayHeight: 1080,
+              close: () => counter.opened--,
+            };
+            init.output(frame as unknown as VideoFrame);
+          });
+        },
+        flush: () => Promise.resolve(),
+        reset() {},
+        close() {},
+      };
+    };
+    let clock = 0;
+    const videos = new SceneVideos(env.report, {
+      ...env.factories,
+      readRange: (source) => async (start, end) => {
+        counter.reads++;
+        return (source.path === clip.path ? mp4 : mkv).slice(start, end);
+      },
+      createDecoder,
+      isConfigSupported: async () => ({ supported: true }),
+      now: () => clock,
+    });
+    return { ...env, videos, counter, advance: (ms: number) => (clock += ms) };
+  }
+
+  it("有解码器时建 CodecVideoPlayer：drawn 交出 VideoFrame，探针报 webcodecs；跨重编译按区间复用、不重读", async () => {
+    const env = codecSetup();
+    env.videos.load([{ video: clip }]);
+    await flush();
+    const player = env.videos.player(0)!;
+    expect(player).toBeInstanceOf(CodecVideoPlayer);
+    expect(env.elements).toHaveLength(0);
+    env.videos.beginFrame();
+    expect((env.videos.drawn(0) as VideoFrame | null)?.timestamp).toBe(0);
+    env.advance(125);
+    env.videos.beginFrame();
+    expect((env.videos.drawn(0) as VideoFrame | null)?.timestamp).toBe(125_000);
+    expect(env.videos.probe()[0]).toMatchObject({ decoder: "webcodecs", textures: [0], frame: 2, currentTime: 0.125 });
+    const reads = env.counter.reads;
+    env.videos.load([{}, { video: { ...clip } }]);
+    await flush();
+    expect(env.videos.player(1)).toBe(player);
+    expect(env.videos.playerFor(clip)).toBe(player);
+    expect(env.counter).toMatchObject({ decoders: 1, reads });
+    env.videos.dispose();
+    expect(env.counter.opened).toBe(0);
+  });
+
+  it("拆不了包：退回 <video>，记一条 warn；拆包期间的脚本状态与 lastDrawn 交给旧播放器；firstFrames 接着等它", async () => {
+    const env = codecSetup();
+    const source: SceneVideoSource = { path: "P:/p/scene.pkg", start: 100, end: 164 };
+    env.videos.load([{ video: source }]);
+    const codec = env.videos.player(0)!;
+    expect(codec).toBeInstanceOf(CodecVideoPlayer);
+    let done = false;
+    void env.videos.firstFrames([0], 60_000).then(() => (done = true));
+    // 拆包期间：脚本改状态、画到一次
+    const ended: number[] = [];
+    codec.loop = false;
+    codec.rate = 2;
+    codec.pause();
+    codec.currentTime = 0.5;
+    codec.addEndedCallback(() => ended.push(1));
+    env.videos.beginFrame();
+    expect(env.videos.drawn(0)).toBeNull();
+    await flush();
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0][0]).toContain("退回 <video>");
+    expect(env.warnings[0][1]).toMatch(/Matroska/);
+    const player = env.videos.player(0)!;
+    expect(player).not.toBe(codec);
+    expect(env.videos.playerFor(source)).toBe(player);
+    const [element] = env.elements;
+    expect([element.loop, element.playbackRate, element.currentTime]).toEqual([false, 2, 0.5]);
+    expect(env.videos.probe()[0]).toMatchObject({ decoder: "element", wantPlay: false, lastDrawn: 1, textures: [0] });
+    expect(element.paused).toBe(true);
+    expect(done).toBe(false);
+    element.loadData();
+    await flush();
+    expect(done).toBe(true);
+    // 结束回调跟着过去
+    element.ended = true;
+    env.videos.beginFrame();
+    expect(ended).toEqual([1]);
+  });
+
+  it("退回之前已被 load 换掉或整个释放：不建元素、不记 warn", async () => {
+    const env = codecSetup();
+    const source: SceneVideoSource = { path: "P:/p/scene.pkg", start: 100, end: 164 };
+    env.videos.load([{ video: source }]);
+    env.videos.load([{ video: clip }]);
+    await flush();
+    expect(env.elements).toHaveLength(0);
+    expect(env.warnings).toEqual([]);
+    env.videos.load([{ video: source }]);
+    env.videos.dispose();
+    await flush();
+    expect(env.elements).toHaveLength(0);
+    expect(env.warnings).toEqual([]);
+    expect(env.counter.opened).toBe(0);
   });
 });

@@ -54,9 +54,11 @@ private copyVideo(index: number, source: HTMLVideoElement): void {
 ## 步骤
 
 1. **MP4 拆包与解码配置**（只新增文件，纯函数，Node 单测）：`video/demux/` 下帧表解析、codec 串、`description`、色彩空间（`colr` / H.264 SPS VUI / MF 规则）、编辑列表。语料扫描：60 段逐段解析，帧数、关键帧、时长、codec、色彩和 `ignore/p9/out/vtex.json` 对照。
-2. **WebCodecs 播放器**：`VideoTexturePlayer` 换内部（区间读取与预读、解码流控、媒体时钟、挑帧、跳转、循环预滚、暂停、速率、结束、解码器卡住重置、帧的释放）；`VideoSink.drawn` 交出 `VideoFrame`，`GpuScene.copyVideo` 跟着改；删 `<video>`、Blob、`attachToDocument`、`watchStall`；`host.videos()` 探针换字段；`usertex/sources.ts` 跟着换读取方式。
+2. **WebCodecs 播放器**，分两半（`usertex/sources.ts` 有 P11b 未提交的改动，`render/scene.ts`、`host.ts` 有别的会话的改动）：
+   - **2a**：新增 `video/codecPlayer.ts`（区间读取与预读、解码流控、媒体时钟、挑帧、跳转、循环预滚、暂停、速率、结束、解码器卡住重置、帧的释放），场景视频纹理（`SceneVideos`）换用它；拆包失败（Matroska 等）的退回旧的 `<video>` 播放器；`VideoSink.drawn` 交出 `VideoFrame | HTMLVideoElement`，`GpuScene.copyVideo` 两种都认（只改这一处）；脚本接口的类型改成接口；`host.videos()` 探针加新字段。
+   - **2b**：P11b 提交后，用户视频与 dev 探针 `videoTime` 换用新播放器（探针改为精确解到那一帧），删掉旧播放器的 `<video>`、Blob、`attachToDocument`、`watchStall`。
 3. **Matroska 拆包**：EBML、`Tracks`（`CodecPrivate`）、`Cues`、按 Cluster 流式读 SimpleBlock / BlockGroup。
-4. **对照与收尾**：dev 探针 `videoTime` 改为精确解到那一帧；和 WPE 对照时间（循环点、一帧内跳转、开场、编辑列表）与颜色（SD / HD 未标的分界）；语料；文档、回归、changelog。
+4. **对照与收尾**：和 WPE 对照时间（循环点、一帧内跳转、开场、编辑列表）与颜色（SD / HD 未标的分界）；语料；文档、回归、changelog。
 
 ## 步骤 1 — MP4 拆包与解码配置
 
@@ -104,6 +106,27 @@ export function wpeColorSpace(track: VideoTrackIndex): VideoColorSpaceInit;
 - **新增** `video/demux/mp4.test.ts`、`config.test.ts`：手造的最小 MP4（盒子拼字节）覆盖各表与编辑列表、`co64`、`ctts` v1、缺 `stss`；SPS VUI 有 / 无颜色描述、带 scaling list 的 High profile；codec 串（含 HEVC 的约束字节裁剪）。
 - **语料扫描**（不入库）：`ignore/p9/p9d/step1/corpus.ts`，按 `ignore/p9/out/vtex.json` 的 60 个条目逐段 `indexMp4`，和表里的帧数 / codec / 宽高 / 色彩 / 时长对照，并用 ffprobe 抽查几段的关键帧数与首帧显示时间。
 
+## 步骤 2a — WebCodecs 播放器（场景视频纹理）
+
+### 现状锚点
+**d. 场景视频的播放器工厂**（`video/sceneVideos.ts` 的 `SceneVideos.load`）：每个视频区间 `new VideoTexturePlayer(video, this.frame, { ...this.factories, report })`，跨重编译按 `videoSourceKey` 复用；`beginFrame` 里 `detectEnd` 与 `apply`，`drawn(texture)` 转给播放器。
+
+### 点 1 — 新播放器（`video/codecPlayer.ts`，新增）
+- **新增** `CodecVideoPlayer`，对外成员与 `VideoTexturePlayer` 相同（`wantPlay`、`lastDrawn`、`fresh`、`failed`、`source`、`apply`、`drawn`、`detectEnd`、`hasFirstFrame`、`firstFrame`、`rate`、`loop`、`currentTime`、`duration`、`play`、`pause`、`stop`、`isPlaying`、`resetScriptState`、`addEndedCallback`、`probe`、`dispose`），另有 `videoWidth` / `videoHeight`。语义照 `player.ts` 现有的 WPE 规则（rea-p9-video、p9-REPORT），只换实现：
+  - **读**：`ReadRange`（缺省按 `source.path` 区间 `fetch(file:)`，`source.start` 为基点），先 `indexMp4`；失败交给工厂退回旧播放器（`indexMp4` 的错误原因进 warn）。预读按解码顺序连续读约 4 MiB 一块，至多留两块。
+  - **解码**：`VideoDecoder`（可注入，测试用替身），`decoderConfig(track)`；`isConfigSupported` 不支持或解码出错 → `fail`（图层透明、记 warn，同旧播放器）。流控：解码队列 + 已解出未显示的帧合计不超过 8。循环时不停顿地接着喂下一遍的帧（时间戳加 `n × duration`），不 flush。
+  - **时钟**：媒体时间只在「在放」（`wantPlay && !宿主暂停 && 没空闲` 且出了第一帧）时按墙钟 × 速率前进，第一次 `drawn` 时才起步（消掉开场时视频比场景早）；时长取 `source.duration ?? track.duration`（mvhd），时钟走到时长才绕回（`loop`）或结束（停在时长，`ended`）。
+  - **挑帧**：显示时间 ≤ 媒体时间的最新一帧；被越过的帧直接 `close()`、计入丢帧；当前帧留到被替换时再 `close()`。
+  - **跳转**（脚本 `currentTime` 写、`stop`、结束后 `play`）：`decoder.reset()`，关掉队列里的帧，从显示时间 ≤ 目标的最近关键帧重新喂，丢掉早于目标帧的输出；脚本暂停期间照旧不交帧（P9b 语义）。
+  - **卡住**：在放、队列空、解码器有待解的输入，2 s 没有输出 → `reset()` 后从当前媒体时间重新跳转，记 warn、计数（替代 P9c 的 `watchStall`）。
+  - **探针**：`probe()` 在 `VideoPlayerProbe` 的字段外加 `decoder`（`"webcodecs"`）、`decoded`、`dropped`、`queued`、`decodeQueue`、`stallResets`、`color`（`wpeColor` 的说明）。
+- **测试**（`codecPlayer.test.ts`）：解码器替身（按喂入顺序在微任务里吐出带时间戳的假帧、可让它停止输出）、注入时钟、用 `demux/mp4.test.ts` 的手造 MP4 拼字节：起步、按时钟挑帧与丢帧、循环不停顿、不循环时结束停在时长、跳转到关键帧之间、暂停不前进、速率、空闲暂停、宿主暂停、卡住重置、失败、释放后不再交帧、帧都被 `close()`（统计打开的帧数为 0）。
+
+### 点 2 — 接线
+- **修改** `video/sceneVideos.ts`：工厂先试 `CodecVideoPlayer`，拆包失败退回 `VideoTexturePlayer`；`VideoSink.drawn` 的返回类型改为 `VideoFrameSource = VideoFrame | HTMLVideoElement`。
+- **修改** `render/scene.ts` `copyVideo`：尺寸取 `displayWidth` / `displayHeight`（`VideoFrame`）或 `videoWidth` / `videoHeight`（元素），其余不变。
+- **修改** `script/api.ts`：`VideoScriptTarget` 从 `Pick<VideoTexturePlayer, …>` 改为两个播放器都满足的接口。
+
 ## 实施记录
 
 ### 步骤 1 — MP4 拆包与解码配置（2026-11-14）
@@ -119,3 +142,15 @@ export function wpeColorSpace(track: VideoTrackIndex): VideoColorSpaceInit;
 - tsc 0 error；`src/video` 151 个用例全过（demux 61 个）；Prettier 通过。
 - 变异 13 个全部有测试挂掉：ctts v1 当无符号、co64 当 stco、编辑列表不扣 `media_time`、缺 `stss` 当全不是关键帧、`stsc` 的 first_chunk 不减 1、8×8 scaling list 当 4×4 跳、4:4:4 只跳 8 个 scaling list、HEVC 兼容标志不反序、不去防竞争字节、矩阵码 2 不当没标、分辨率阈值 ≥ 改 >、se 符号取反、场编码纵向裁剪不乘 2。
 - 语料（Claude 复跑）：60 段里 59 段 MP4 全部解析成功，1 段 Matroska 跳过（3816870245）。帧数、codec、宽高与 `vtex.json` 一致，时长与 `mvhd` 逐段相等，首帧显示时间都是 0；ffprobe 抽查全部 59 段的包数、关键帧数、首帧 pts 一致。每段读 3–5 次、0.4–4.3 ms，最多读 247 KB。色彩：VUI → bt709 29 段、`colr` → bt709 14 段、按分辨率 → bt709 14 段、VUI → smpte170m 2 段（3400241651 960×540；**3812007032 是 4K 却标了 `bt470bg`**，WPE 在 4K 上是否照码流用 601 留到步骤 4 实测）。唯一的「不一致」是设计如此：3822149301（HEVC）码流 VUI 标 bt709，我们只认 `colr`、走分辨率规则，结果同为 bt709。
+
+### 步骤 2a — WebCodecs 播放器（2026-11-14）
+
+**实现**（子代理新增 `video/codecPlayer.ts`、`codecPlayer.test.ts`、`video/demux/testMp4.ts`（从 `mp4.test.ts` 抽出的造 MP4 工具），改 `video/sceneVideos.ts` 与测试、`script/api.ts`；Claude 改 `render/scene.ts` 的 `copyVideo`）：
+- **退回**：`SceneVideos.load` 仍同步建播放器；有 WebCodecs 时建 `CodecVideoPlayer`，它异步拆包，`indexMp4` 失败时经 `onUnsupported` 让 `SceneVideos.fallBack` 换成旧播放器（核对区间键仍是它 → warn 一条 → `takeScriptState()` 收走想放 / loop / rate / 结束回调 / 拆包期间写的时间 / `lastDrawn` → 建 `VideoTexturePlayer` 设回去）。拆包期间没有帧、时钟没走，脚本能改的只有这几项；脚本每次经 `playerFor` 现取。读本身失败（文件不在、长度不符）直接失败、不退回。没有 WebCodecs（Node 单测）时直接用旧播放器。`firstFrames` 按区间键等，被顶替时接着等新的。
+- **时钟与时间戳**：`clock` 从本次跳转的 0 点起展开、不绕回，`loops` 记遍数，媒体时间 = `clock − loops × 时长`；喂进解码器的时间戳 = `round((n × 时长 + 样本显示时间) × 10⁶)`，挑帧直接比 `timestamp ≤ round(clock × 10⁶)`。循环时不 flush、接着喂下一遍；不 loop 时喂到结尾 flush 一次，时钟停在时长、`ended`，挑帧上限减 1 µs。跳转时 reset + configure，`clock` 设为目标，遍数归零，登记喂进去的时间戳，不在登记里的输出是 reset 之前的残留、直接关掉。「在放」= 画到过一次、出了第一帧、不在跳转中、想放、宿主没暂停、没空闲、没结束；凡改变它的地方先 `advance()` 结清之前的墙钟。
+- 和计划的出入：`rate` 收任何非负有限数（新时钟不受 Chromium 的 [0.0625, 16] 限制），负数按 0、非有限值不收；跳转期间当前帧保留到目标帧到达、时钟停着；丢帧只计被越过的已解出帧；卡住判定另要求「喂帧不在等读盘」；第一帧之前就画到时，时钟从第一帧到达时起步；流控 `decodeQueueSize + 已解出未显示 < 8` 不含硬件解码器内部为 B 帧重排攒的帧。
+
+**验收**：
+- tsc：视频与脚本相关文件 0 error（剩 `src/puppet/player.test.ts` 一处，别的会话改动中）。`src/video src/script` 17 个文件 345 个用例全过；全量 4134 个里 4 个失败都在 `compile/`（`mdl.test.ts` 3 个、`pipeline.test.ts` 语料 1 个），对应文件在别的会话里改着。Prettier 通过。
+- 变异 14 个全部有测试挂掉：挑帧 ≤ 改 <、空闲时时钟仍前进、循环不加 n×时长、跳转从目标样本而不是关键帧喂、越过的帧不 close、卡住阈值失效、流控上限 < 改 ≤、退回判断取反、没画到就起步、不丢早于目标的输出、不 loop 时不停在时长、读失败也退回、跳转不 reset 解码器、交接不带结束回调。
+- 真机（桌面壁纸 14295「Miku Monitoring」，3585875739 的 4K H.264，`colr` → bt709；宿主重建后 iframe 重载）：`decoder: "webcodecs"`，时长取 `mvhd` 12.758 s（旧路线是 Chromium 的 12.757333）；连续 30 s 每秒采样：媒体时间每秒走 1.000 s，在 12.758 s 处绕回、接着播，解码每秒 60 帧，丢 0 帧，`stallResets` 0，解码队列 + 待显示 3–5 帧。
