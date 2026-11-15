@@ -72,6 +72,12 @@ export interface LayerState {
   origin: number[];
   scale: number[];
   angles: number[];
+  /**
+   * 3×3 旋转（9 个 f32，列主序 `R[3c + r]`；P6d1a，rea-p6d1-xform 2.5）：WPE 画面与世界矩阵只读它，角度写入先存角度再按 `Rz·Ry·Rx` 重建；
+   * 只有 `rotateObjectSpace` 直接乘它并把角度反算回去，两份在末位上分开。`null` / 缺省 = 按 `angles` 现算（`layerLocalMatrix`），
+   * 任何 `angles` 写入都清成 `null`。
+   */
+  rotation?: number[] | null;
   alpha: number;
   color: number[];
   brightness: number;
@@ -186,6 +192,7 @@ function layerStateOf(layer: SceneLayer): LayerState {
     origin: [...layer.origin],
     scale: [...layer.scale],
     angles: [...layer.angles],
+    rotation: null, // 按角度现算；只有 rotateObjectSpace 会写（P6d1a）
     alpha: layer.alpha,
     color: [...layer.color],
     brightness: layer.brightness,
@@ -630,6 +637,19 @@ export class SceneState {
       }
       return "applied";
     }
+    // 脚本转向（P6d1a）：`rotateObjectSpace` 带乘出来的 3×3，`lookAt` / `lookAtYaw` 带 null（按角度重建）；角度原样存进状态（NaN 也存），
+    // 记变换写入、子树标脏，同 `angles`。
+    // 值（`raw`）不看：目标自己带着两份数据
+    if (target.kind === "rotation") {
+      const layer = this.layers.get(target.object);
+      if (layer) {
+        layer.rotation = target.rotation ? [...target.rotation] : null;
+        layer.angles = [...target.angles];
+        this.transformWrites.add(target.object);
+        for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
+      }
+      return "applied";
+    }
     if (target.kind === "layer") {
       const layer = this.layers.get(target.object);
       const { field } = target;
@@ -662,6 +682,8 @@ export class SceneState {
           if (field === "visible" && typeof conditioned(binding, raw) !== "boolean") return "applied";
           writeLayer(layer, field, bindingValue(raw, binding.condition, field));
         }
+        // 角度写入一律按新角度重建 3×3（WPE 的角度 setter `FUN_1401dd630`），乘出来的那份丢掉（P6d1a）
+        if (field === "angles") layer.rotation = null;
         // 变换写入（属性、关键帧、脚本同一条路；向量写不进时上面已返回）：影子缓存清戳（WPE 描述符回调 `0x1401e0520`，B1）
         if (field === "origin" || field === "angles" || field === "scale") this.transformWrites.add(target.object);
         // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的

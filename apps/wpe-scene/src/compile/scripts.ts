@@ -19,6 +19,7 @@ import {
   type SceneValue,
 } from "./model";
 import { registrationKeys } from "./registration";
+import { usesEffectAccess } from "./scriptApi";
 import { instanceControlPoint, SCRIPT_INSTANCE_KEYS, type InstanceKey } from "./particles";
 import { BLOOM_FIELDS } from "./postprocess";
 
@@ -43,6 +44,11 @@ export interface SceneScript {
 
 export interface SceneScripts {
   list: SceneScript[];
+  /**
+   * 会执行的脚本里有 `getEffect` 成员访问（P6d1a，词法同 `scriptApi.ts` 的 `memberAccesses`，任意接收者）：为真时写死关闭的 effect
+   * 也编进 bundle（`visibleBound`），脚本才拿得到、打得开。可选：测试里手写的 `{ list: [] }` 视同 false。
+   */
+  usesEffectAccess?: boolean;
 }
 
 const layerTypes: Record<string, ValueType> = {
@@ -264,5 +270,6 @@ export async function collectScripts(
   }
   if (scene.general) visit(scene.general, "general", { kind: "general" }, null);
   visit(scene.objects, "objects", { kind: "general" }, null);
-  return { list };
+  // 导入说明符无效的整段不求值（`ScriptRuntime.load`），同能力表只看会执行的脚本
+  return { list, usesEffectAccess: list.some((script) => !script.errors.length && usesEffectAccess(script.source)) };
 }

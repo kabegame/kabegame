@@ -17,7 +17,7 @@
 import { layerLocalMatrix, type LayerTransform } from "./layout";
 import { identity, multiply, type Mat4 } from "./math";
 
-type StampLayer = Pick<LayerTransform, "origin" | "angles" | "scale" | "parent">;
+type StampLayer = Pick<LayerTransform, "origin" | "angles" | "scale" | "rotation" | "parent">;
 
 export class WorldStamps {
   private frameNo = 0;

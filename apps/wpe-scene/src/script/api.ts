@@ -12,13 +12,15 @@ import type { AnimationControl } from "../animation/player";
 import type { SceneAnimation } from "../animation/types";
 import type { SceneSpectrum } from "../audio/spectrum";
 import { alignmentIndex, alignmentName } from "../compile/alignment";
-import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import type { SceneBundle, SceneEffect, SceneLayer, ScenePass } from "../compile/bundle";
 import { constantTargetFields, materialSlots, type MaterialMember } from "../compile/materialValues";
 import { FLT_MAX, INSTANCE_CONTROL_POINT_KEYS, INSTANCE_FIELDS, instanceControlPoint } from "../compile/particles";
 import { BLOOM_FIELDS } from "../compile/postprocess";
 import type { SceneScript } from "../compile/scripts";
 import { TEXT_ANCHORS } from "../compile/texts";
 import type { CursorInputSnapshot } from "../render/cursor";
+import { anglesRotation, drawMatrixOf } from "../render/layout";
+import { extractEulerZYX, lookAtAngles, lookAtYawAngles, rotateObjectSpace } from "../render/rotation";
 import type { SceneState } from "../render/state";
 import { scriptToString } from "../text/fields";
 import type { VideoTexturePlayer } from "../video/player";
@@ -29,7 +31,23 @@ import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
 import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStorage } from "./storage";
 
 type ApiObject = Record<string, unknown>;
+
+/** 向量参数的 f32 分量（P6d1a）：对象取 `x / y / z`（`Number()` 后非有限数当 0），否则用缺省。 */
+function vec3Arg(value: unknown, fallback: [number, number, number]): [number, number, number] {
+  if (value === null || typeof value !== "object") return fallback;
+  const part = (key: string): number => {
+    const n = Number((value as ApiObject)[key]);
+    return Number.isFinite(n) ? Math.fround(n) : 0;
+  };
+  return [part("x"), part("y"), part("z")];
+}
 type ApiTarget = BindingTarget | { kind: "unsupported"; path: string };
+
+/** 材质对象上登记的一个常量键（P6d1a）：形状同 `constantTargetFields`，`rad2deg` 的 float 键脚本里用度。 */
+interface MaterialConstant {
+  shape: { uniforms: string[]; type: ValueType; members?: MaterialMember[] };
+  rad2deg: boolean;
+}
 
 /** 模块求值期间调用 scoped 方法 / 访问 scoped 属性时抛错（`ScriptApi` 与 WPE `localStorage` 共用）。 */
 export function requireCallbackContext(name: string, evaluating: boolean): void {
@@ -99,6 +117,11 @@ export interface ScriptApiState {
    * `emitParticles` 接到它上面。不传或返回 null（没有场景）时方法什么都不做，`isPlaying` 为假。
    */
   particles?(object: number): ParticleScriptTarget | null;
+  /**
+   * 图层的绘制矩阵（P6d1a，`getTransformMatrix`）：宿主按渲染器当前状态与挂点钩子现算。不传或返回 null（单测的假 access、首次加载的
+   * `init`）时退回按 `state().layers` 纯状态现算（没有挂点）。
+   */
+  transformMatrix?(object: number): Float32Array | null;
   /**
    * 关键帧动画的落点（P10b，宿主按脚本当前看到的 bundle 取播放器的那一条，`SceneAnimations.control`）：`IAnimation` 的成员接到它上面。
    * 不传或返回 null（语料诊断、播放器还没建）时方法空操作，只读成员取 bundle 里这一条的定义。
@@ -185,6 +208,11 @@ export class ScriptApi {
   private readonly videoTextures = new Map<number, ApiObject>();
   private readonly materials = new Map<string, ApiObject>();
   private readonly effects = new Map<string, ApiObject>();
+  /**
+   * effect 的 `name`（P6d1a）：WPE 里 effect 描述符的 `name` 字段可读写、没有改值回调，只影响 `getEffect(名字)`。存在 API 这边，
+   * API 对象跨重编译保留，所以名字也保留；没写过的取 `SceneEffect.name`。键同 `effects`：`<对象>/<JSON 下标>`。
+   */
+  private readonly effectNames = new Map<string, string>();
   /** `IAnimation` 包装对象（P10b）：按动画 `id`（`scene.json` 路径）缓存，同一条每次 `getAnimation` 返回同一个对象。 */
   private readonly animationApis = new Map<string, ApiObject>();
   private readonly recompileValues = new Map<string, string>();
@@ -266,7 +294,6 @@ export class ScriptApi {
     api = this.object();
     const index = object;
     this.define(api, "name", () => this.findLayer(index)?.name ?? "");
-    this.define(api, "id", () => this.findLayer(index)?.id ?? -1);
     // 图层字段与 `size` 的读取按 WPE 取单精度、角度按 f32 算法换成度（`f32.ts`，P3b 补测 `ignore/p3b-f32`）；状态照旧存 double
     this.define(
       api,
@@ -312,11 +339,63 @@ export class ScriptApi {
     if (this.findLayer(index)?.particle) this.installParticle(api, index);
     if (this.findLayer(index)?.alignment !== undefined) this.installAlignment(api, index);
     if (this.findLayer(index)?.text) this.installText(api, index);
+    this.installHierarchy(api, index);
+    this.installEffectAccess(api, index);
     // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
     this.installGetAnimation(api, () => `objects/${index}`);
     this.layers.set(object, api);
     return api;
+  }
+
+  /**
+   * 层级与变换（P6d1a 点 2，rea-p6d1-xform、`p6d1-xform.log` / `p6d1-round2.log` 实测）：装在每个图层对象上。
+   * - `getParent()`：父图层对象，根返回 `null`；`getChildren()`：每次新数组，`objects` 顺序。
+   * - `getTransformMatrix()`：新 `Mat4`（自有键 `m`，16 个 f32），值 = 当前状态的 `drawMatrixOf`（世界矩阵 · 自身偏移），现算不读渲染器缓存。
+   * - `rotateObjectSpace(v)` / `lookAt` / `lookAtYaw`：写 3×3 与角度（弧度原样），写入走普通 `angles` 同一个 `SceneState.write` 分支。
+   */
+  private installHierarchy(api: ApiObject, object: number): void {
+    this.method(api, "getParent", () => {
+      const parent = this.findLayer(object)?.parent ?? null;
+      return parent === null ? null : this.layer(parent);
+    });
+    this.method(api, "getChildren", () =>
+      this.array(
+        this.access
+          .bundle()
+          .layers.filter((layer) => layer.parent === object)
+          .map((layer) => this.layer(layer.object)),
+      ),
+    );
+    this.method(api, "getTransformMatrix", () => {
+      const state = this.access.state();
+      const m = this.access.transformMatrix?.(object) ?? drawMatrixOf(object, state.layers, new Map());
+      const mat = (this.realm.global.Object as typeof Object).create(this.realm.prototypes.Mat4) as ApiObject;
+      mat.m = this.array(Array.from(m));
+      return mat;
+    });
+    this.method(api, "rotateObjectSpace", (v?: unknown) => {
+      const layer = this.access.state().layers.get(object);
+      if (!layer) return undefined;
+      const R = layer.rotation ?? anglesRotation(layer.angles);
+      const next = rotateObjectSpace(R, vec3Arg(v, [0, 0, 0]));
+      this.access.write({ kind: "rotation", object, rotation: next, angles: extractEulerZYX(next) }, next);
+      return undefined;
+    });
+    const lookAt = (name: "lookAt" | "lookAtYaw", compute: typeof lookAtAngles) =>
+      this.method(api, name, (target?: unknown, up?: unknown) => {
+        const layer = this.access.state().layers.get(object);
+        if (!layer) return undefined;
+        const eye = vec3Arg({ x: layer.origin[0], y: layer.origin[1], z: layer.origin[2] }, [0, 0, 0]);
+        const camera = this.findLayer(object)?.camera != null;
+        const angles = compute(eye, vec3Arg(target, [0, 0, 0]), vec3Arg(up, [0, 1, 0]), camera);
+        // 结果是弧度，照 WPE 的角度 setter 原样写进（不经脚本的度 → 弧度换算，那会改末位）：走 `rotation` 目标、3×3 为 null（按角度
+        // 重建）。视线与 up 平行时角度是 NaN（`p6d1-round2` 的 L3b、KN：WPE 读回 NaN），普通图层字段写入（`layerVectorValue`）会丢掉它
+        if (angles) this.access.write({ kind: "rotation", object, rotation: null, angles: [...angles] }, [...angles]);
+        return undefined;
+      });
+    lookAt("lookAt", lookAtAngles);
+    lookAt("lookAtYaw", lookAtYawAngles);
   }
 
   /**
@@ -906,7 +985,10 @@ export class ScriptApi {
     this.method(
       this.thisScene,
       "getLayer",
-      (name: unknown) => {
+      (...args: unknown[]) => {
+        // 不传参数返回 undefined（0c 实测）；传了 undefined 的行为不变（按名字找、找不到 null）
+        if (args.length === 0) return undefined;
+        const name = args[0];
         // 图层对象（P6b 步骤 2，p6b-api 实测：`getLayer(layer) === layer`）：是本场景发出的图层对象就原样返回，别的对象返回 null
         if (name !== null && typeof name === "object") {
           for (const [object, api] of this.layers) if (api === name && this.findLayer(object)) return api;
@@ -917,6 +999,22 @@ export class ScriptApi {
           typeof name === "number"
             ? layers.find((item) => item.object === name)
             : layers.find((item) => item.name === name);
+        return layer ? this.layer(layer.object) : null;
+      },
+      true,
+    );
+    // 只收字符串（P6d0c 实测：数字全是 null，无参 undefined），照 C `strtol` 解析（十进制、前导空白、可带 ±、取到第一个非数字为止，没有数字得 0）
+    this.method(
+      this.thisScene,
+      "getLayerByID",
+      (...args: unknown[]) => {
+        if (args.length === 0) return undefined; // 只区分没传参数（传了 undefined 当非字符串，得 null）
+        const id = args[0];
+        if (typeof id !== "string") return null;
+        // 前导空白照 C `isspace`：空格与 \t \n \v \f \r（不是 JS 的 `\s`，后者还含 NBSP、U+FEFF、各种 Unicode 空格）
+        const match = /^[ \t\n\v\f\r]*([+-]?)(\d*)/.exec(id)!;
+        const value = match[2] ? Number(match[1] + match[2]) : 0;
+        const layer = this.access.bundle().layers.find((item) => item.id === value);
         return layer ? this.layer(layer.object) : null;
       },
       true,
@@ -945,38 +1043,57 @@ export class ScriptApi {
     );
   }
 
-  private material(pass: string): ApiObject {
-    let api = this.materials.get(pass);
-    if (api) return api;
-    api = this.object();
-    const names = new Map<string, { uniforms: string[]; type: ValueType; members?: MaterialMember[] }>();
+  /** bundle 里某个 pass（基础材质或 effect 绘制 pass），按稳定键找。 */
+  private findPass(pass: string): ScenePass | undefined {
+    for (const layer of this.access.bundle().layers) {
+      for (const item of layer.passes) if (item.key === pass) return item;
+      for (const effect of layer.effects)
+        for (const step of effect.steps) if (step.kind === "draw" && step.pass.key === pass) return step.pass;
+    }
+    return undefined;
+  }
+
+  /**
+   * 一个 pass 的材质对象上登记的常量键（P6d1a）：只收编译后着色器实际读到的键（`slot.used`，p6d1-mat3 实测：chromaticaberration 缺省
+   * `MODE 0` 不用方向键，材质对象里就没有它）；顺序是声明顺序（WPE 是 MSVC `unordered_map` 的迭代顺序，复刻对不上三组实测，已知差异）。
+   * `rad2deg`：脚本里这个键用度、状态里存弧度。
+   */
+  private materialConstants(pass: string): Map<string, MaterialConstant> {
+    const names = new Map<string, MaterialConstant>();
     const bundle = this.access.bundle();
-    const passes = bundle.layers.flatMap((layer) => [
-      ...layer.passes,
-      ...layer.effects.flatMap((effect) => effect.steps.flatMap((step) => (step.kind === "draw" ? [step.pass] : []))),
-    ]);
-    const current = passes.find((item) => item.key === pass);
+    const current = this.findPass(pass);
     const program =
       current?.program === null || current?.program === undefined ? null : bundle.programs[current.program];
     // 每个材质键一个字段：形状取这个键 setter 的类型，写回按各格的取值方式（`materialValues.ts`）
     for (const slot of materialSlots(program?.uniforms ?? []))
-      if (slot.material) names.set(slot.material, constantTargetFields(slot));
+      if (slot.material && slot.used)
+        names.set(slot.material, { shape: constantTargetFields(slot), rad2deg: slot.rad2deg });
     // FakeRealm 单测没有翻译器结果；真实 bundle 以 meta.material 为准。
     if (!program)
       for (const script of bundle.scripts.list)
         if (script.owner.kind === "material" && script.owner.pass === pass && script.target.kind === "constant")
           names.set(script.target.material, {
-            uniforms: script.target.uniforms,
-            type: script.target.type,
-            members: script.target.members,
+            shape: { uniforms: script.target.uniforms, type: script.target.type, members: script.target.members },
+            rad2deg: false,
           });
-    for (const [name, shape] of names)
+    return names;
+  }
+
+  private material(pass: string): ApiObject {
+    let api = this.materials.get(pass);
+    if (api) return api;
+    api = this.object();
+    const current = this.findPass(pass);
+    for (const [name, { shape, rad2deg }] of this.materialConstants(pass))
       this.define(
         api,
         name,
         () => {
           const target: ApiTarget = { kind: "constant", pass, material: name, ...shape };
           const values = this.access.read?.(target) ?? this.access.state().constants.get(pass)?.[shape.uniforms[0]];
+          // 带 `rad2deg` 的 float 键读成度（`p6d1-mat4`：chromaticaberration 方向缺省读 90）
+          if (rad2deg && Array.isArray(values) && values.length === 1 && typeof values[0] === "number")
+            return radiansToScript(values[0]);
           // 同图层字段按 WPE 取单精度（P3b 补测 `ignore/p3b-f32`：`thisObject.alpha` 读出 0.30000001192092896）
           return Array.isArray(values)
             ? values.length === 1
@@ -984,12 +1101,126 @@ export class ScriptApi {
               : this.vector(scriptNumbers(values), values.length as 2 | 3 | 4)
             : values;
         },
-        (value) => this.write({ kind: "constant", pass, material: name, ...shape }, value, shape.type),
+        (value) => this.writeConstant(pass, name, shape, rad2deg, value),
       );
+    // 五个 pass 状态字段（静态表，rea-p6d1-xform 4.2；`S0` / `S7val` 实测排在常量之后、`getAnimation` 之前）：字符串，可读。
+    // 写入本段什么都不做（运行中换管线是 P6d1b）
+    if (current) {
+      const state: [string, string][] = [
+        ["depthwrite", current.depthwrite],
+        ["depthtest", current.depthtest],
+        ["cullmode", current.cullmode],
+        ["alphawriting", current.alphaWriting ?? "default"],
+        ["blending", current.blending],
+      ];
+      for (const [name, value] of state)
+        this.define(
+          api,
+          name,
+          () => value,
+          () => undefined,
+        );
+    }
     this.installGetAnimation(api, () => `${pass}/constantshadervalues`);
     this.materials.set(pass, api);
     return api;
   }
+
+  /** 材质常量的字段写入：带 `rad2deg` 的 float 键收度（`f32(f32(度) × f32(0.017453292))` 存弧度），别的原样走 `write`。 */
+  private writeConstant(
+    pass: string,
+    material: string,
+    shape: MaterialConstant["shape"],
+    rad2deg: boolean,
+    value: unknown,
+  ): void {
+    const target: ApiTarget = { kind: "constant", pass, material, ...shape };
+    if (rad2deg && shape.type === "float") {
+      if (typeof value !== "number") return; // float 只收数（`write` 对别的类型本来也不收）
+      value = degreesFromScript(value);
+    }
+    this.write(target, value, shape.type);
+  }
+
+  /**
+   * `setMaterialProperty(名, 值)`（`FUN_1401ee1d0` + dll `0x7c` 转换，rea-p6d1-xform 4.1–4.3，`p6d1-round2.log` S1–S7）：值按 dll 归三类
+   * （数 → number；任何对象含数组 → Vec2，`x` / `y` 取 `Number()`、非有限数当 0；其余 → 整数 0）。名字不是字符串什么都不做；对 effect 的
+   * 每个 pass 按名字全等（区分大小写）找已登记的常量键（状态字段不收），数配 float、Vec2 配 vec2，别的组合跳过；
+   * 带 `rad2deg` 的 float 收度。写入走和字段写入同一个 `writeConstant`。
+   */
+  private setMaterialProperty(object: number, effect: number, name: unknown, value: unknown): void {
+    if (typeof name !== "string") return;
+    let kind: "number" | "vec2" | "zero";
+    let number = 0;
+    let vec2 = { x: 0, y: 0 };
+    if (typeof value === "number") {
+      kind = "number";
+      number = value;
+    } else if ((typeof value === "object" && value !== null) || typeof value === "function") {
+      kind = "vec2";
+      const part = (key: string): number => {
+        let n: number;
+        try {
+          n = Number((value as ApiObject)[key]);
+        } catch {
+          n = NaN;
+        }
+        return Number.isFinite(n) ? Math.fround(n) : 0;
+      };
+      vec2 = { x: part("x"), y: part("y") };
+    } else {
+      kind = "zero"; // 字符串、布尔、`null`、`undefined`：整数 0，float 常量被写成 0
+    }
+    for (const pass of this.effectPasses(object, effect)) {
+      const entry = this.materialConstants(pass.key).get(name);
+      if (!entry) continue;
+      const { shape, rad2deg } = entry;
+      if (shape.type === "float" && kind !== "vec2")
+        this.writeConstant(pass.key, name, shape, rad2deg, kind === "number" ? number : 0);
+      else if (shape.type === "vec2" && kind === "vec2") this.writeConstant(pass.key, name, shape, rad2deg, vec2);
+    }
+  }
+
+  /** effect（JSON 下标）的绘制 pass，按 bundle 里的顺序（条件过滤之后，同 WPE `effect+0xd0` 向量）。 */
+  private effectPasses(object: number, effect: number): ScenePass[] {
+    const item = this.findEffect(object, effect);
+    return item ? item.steps.flatMap((step) => (step.kind === "draw" ? [step.pass] : [])) : [];
+  }
+
+  private findEffect(object: number, effect: number): SceneEffect | undefined {
+    return this.findLayer(object)?.effects.find((item) => item.source === effect);
+  }
+
+  private effectName(object: number, effect: number): string {
+    return this.effectNames.get(`${object}/${effect}`) ?? this.findEffect(object, effect)?.name ?? "";
+  }
+
+  /**
+   * 图层的 `getEffectCount()` / `getEffect(i | 名字)`（P6d1a，rea-p6d-layers 10.1，p6d1 0c 实测）：全部 effect（含写死关闭的，
+   * 编译期脚本用到 `getEffect` 时都进 bundle）。整数取第 i 个（JSON 下标，越界 / 负数 `null`）；字符串按当前名字**区分大小写**全等，
+   * 同名取最后一个，空串 `null`；别的类型 `null`。
+   */
+  private installEffectAccess(api: ApiObject, object: number): void {
+    this.method(api, "getEffectCount", () => {
+      const layer = this.findLayer(object);
+      return layer?.effectCount ?? layer?.effects.length ?? 0;
+    });
+    this.method(api, "getEffect", (key?: unknown) => {
+      const layer = this.findLayer(object);
+      if (!layer) return null;
+      if (typeof key === "number" && Number.isInteger(key)) {
+        const item = layer.effects.find((effect) => effect.source === key);
+        return item ? this.effect(object, item.source) : null;
+      }
+      if (typeof key === "string" && key !== "") {
+        let found: SceneEffect | null = null;
+        for (const item of layer.effects) if (this.effectName(object, item.source) === key) found = item;
+        return found ? this.effect(object, found.source) : null;
+      }
+      return null;
+    });
+  }
+
   private effect(object: number, effect: number): ApiObject {
     const key = `${object}/${effect}`;
     let api = this.effects.get(key);
@@ -1001,6 +1232,37 @@ export class ScriptApi {
       () => this.access.state().effectEnabled(object, effect),
       (value) => this.write({ kind: "effect", object, effect }, value, "bool"),
     );
+    // `name`（P6d1a）：可读写字符串，只存在 API 这边；写入照类型 5 的 `ToString`，`null` / `undefined` / 抛错的不写
+    this.define(
+      api,
+      "name",
+      () => this.effectName(object, effect),
+      (value) => {
+        const text = scriptToString(value);
+        if (text !== undefined) this.effectNames.set(key, text);
+      },
+    );
+    this.method(api, "getMaterialCount", () => this.effectPasses(object, effect).length);
+    // 整数取第 i 个 pass 的材质（越界、负数 `null`，无参 = 0）；字符串按 pass 的材质文件路径不分大小写全等、空串匹配每一个，最后一个胜出
+    this.method(api, "getMaterial", (...args: unknown[]) => {
+      const passes = this.effectPasses(object, effect);
+      const arg = args.length === 0 ? 0 : args[0];
+      if (typeof arg === "number" && Number.isInteger(arg)) {
+        const pass = passes[arg];
+        return pass ? this.material(pass.key) : null;
+      }
+      if (typeof arg === "string") {
+        const lower = arg.toLowerCase();
+        let found: ScenePass | null = null;
+        for (const pass of passes) if (lower === "" || (pass.material ?? "").toLowerCase() === lower) found = pass;
+        return found ? this.material(found.key) : null;
+      }
+      return null;
+    });
+    this.method(api, "setMaterialProperty", (name?: unknown, value?: unknown) => {
+      this.setMaterialProperty(object, effect, name, value);
+      return undefined;
+    });
     this.installGetAnimation(api, () => `objects/${object}/effects/${effect}`);
     this.effects.set(key, api);
     return api;

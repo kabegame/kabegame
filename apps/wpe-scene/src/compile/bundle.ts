@@ -358,6 +358,11 @@ export function particleSheetDefines(
   };
 }
 export interface ScenePass {
+  /**
+   * pass 的材质文件路径（P6d1a：effect pass 取 effect.json 里的 `material`，基础材质取模型的 `material`，网格材质取网格的）；
+   * 脚本 `effect.getMaterial(名字)` 按它不分大小写全等查找。没有来源路径的 pass（passthrough、组上屏、粒子、泛光）不写这个键。
+   */
+  material?: string;
   /** 本 pass 的稳定键（基础材质 `objects/<i>/passes/<k>`、effect `objects/<i>/effects/<j>/passes/<k>`、`objects/<i>/passthrough`、`bloom/<pass>`）。 */
   key: TargetKey;
   program: number | null;
@@ -440,6 +445,11 @@ export interface SceneEffect {
 }
 export interface SceneLayer {
   id: number;
+  /**
+   * JSON 里这个对象的 effect 个数（含写死关闭的）：只在场景脚本用到 `getEffect` 时写（P6d1a），`getEffectCount()` 读它；
+   * 其余场景不写这个键，bundle 与以前相同。
+   */
+  effectCount?: number;
   /** scene.json 的 `objects` 下标（稳定键；`layers` 下标会随被跳过的对象移位）。 */
   object: number;
   /**
@@ -1096,6 +1106,8 @@ export { shaderUniforms };
 interface PassContext {
   /** 本 pass 的稳定键（绑定表的目标键），见 `bindings.ts`。 */
   key: TargetKey;
+  /** 材质文件路径，原样写进 `ScenePass.material`（P6d1a）。 */
+  material?: string;
   scope?: ResourceScope | null;
   /** 本 effect 的 fbo 表：只有 effect 的绘制 pass 带它（可能为空表），基础 pass、passthrough、组上屏、粒子都没有。 */
   fbos?: ReadonlyMap<string, SceneFbo>;
@@ -1762,6 +1774,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       const pass: MaterialPass = combos ? { ...raw, combos: { ...raw.combos, ...combos } } : raw;
       const compiled = await compilePass(pass, {
         key: `objects/${index}/meshes/${m}/passes/${k}`,
+        material,
         model: true,
         ...(combos ? { puppet: true } : {}),
       });
@@ -1889,6 +1902,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         if (slot) Object.assign(script.target, constantTargetFields(slot));
         else script.target.uniforms = [];
         script.valueType = script.target.type;
+        // 角度常量：脚本一侧按度（P6d1a，`p6d1-mat6` 实测：字段脚本收发都是度），只对 float 生效
+        if (slot?.rad2deg && script.target.type === "float") script.target.rad2deg = true;
       }
       // 关键帧的常量目标（P10a 步骤 2）：同样补，补完按主格类型定写不写（关着的 effect 的常量动画同样每帧写）
       for (const animation of animations.list) {
@@ -1951,6 +1966,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 深度 / 剔除三个键照 WPE 规整（P5d 步骤 1）：缺键为开、非法值取表的第一项，所有 pass 一套规则
     return {
       key: context.key,
+      ...(context.material !== undefined ? { material: context.material } : {}),
       program,
       blending: pass.blending ?? "normal",
       ...passAlphaWriting(pass),
@@ -2067,6 +2083,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         // 有 bind 时材质槽 0 的 null 不再自动填（B6）：不在 planned 里的 null 槽位就保持空
         const compiled = await compilePass(merged, {
           key: `objects/${index}/effects/${shell.source}/passes/${passIndex++}`,
+          material: pass.material,
           scope,
           fbos,
           planned,
@@ -2152,6 +2169,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       layer.passes.push(
         await compilePass(pass, {
           key: `objects/${index}/passes/${k}`,
+          material: model.material,
           // instanced 的参考尺寸取对象 `size`（P11b，WPE 把它写进 `instance.usertexturereference`，p11-REPORT M2）
           ...(instance ? { instanceSize: instanceReferenceSize(object.size) } : {}),
         }),
@@ -2508,10 +2526,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     // 组的局部正交在透视场景里没测过（P5d 步骤 2），照报
     if (hasChildren && bundle.general.perspective) unsupported.add("camera:perspective:group");
 
+    if (bundle.scripts.usesEffectAccess) layer.effectCount = Array.isArray(object.effects) ? object.effects.length : 0;
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
       if (settled()) break;
       const instance = (raw ?? {}) as SceneEffectInstance;
-      const visibleBound = isUserBinding(instance.visible) || isScriptValue(instance.visible);
+      // 场景脚本里有 `getEffect`（P6d1a）：脚本可能把写死关闭的 effect 打开，WPE 的 effect 列表含全部 effect，所以都按「可变」编进来
+      const visibleBound =
+        isUserBinding(instance.visible) || isScriptValue(instance.visible) || !!bundle.scripts.usesEffectAccess;
       // 同图层 `visible` 的 bool setter（`p3am-num` F1–F3 实测）：数字、字符串属性写不进，留 `value`
       const enabled = boolFieldValue(
         instance.visible as SceneValue | undefined,

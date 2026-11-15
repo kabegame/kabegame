@@ -349,6 +349,11 @@ export class SceneRenderer {
     return this.scene;
   }
 
+  /** 脚本 `getTransformMatrix` 的落点（P6d1a，`GpuScene.transformMatrix`）；没有场景时为 null。 */
+  transformMatrix(object: number, state: SceneState): Float32Array | null {
+    return this.scene?.transformMatrix(object, state) ?? null;
+  }
+
   /** 粒子层脚本方法的落点（P4f 步骤 3，`GpuScene.particleScript`）；没有场景或不是粒子层时为 null。 */
   particleScript(object: number): ParticleScriptTarget | null {
     return this.scene?.particleScript(object) ?? null;

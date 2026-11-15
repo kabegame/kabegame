@@ -506,3 +506,96 @@ describe("模型 solidlayer", () => {
     expect(bundle.layers[0]).toMatchObject({ solidLayer: true, instanced: true });
   });
 });
+
+describe("场景脚本用到 getEffect 时写死关闭的 effect 也进 bundle（P6d1a）", () => {
+  /** 一个带两个 effect 的图像层（下标 0 写死关闭、1 启用）+ 一个只挂了脚本的分组对象。 */
+  const compileWith = (script: string) =>
+    compileScene({
+      projectDir: "P:/p",
+      sceneAssets: ["A:/assets"],
+      reader: memoryReader({
+        ...FILES,
+        "P:/p/scene.json": JSON.stringify({
+          general: { orthogonalprojection: { width: 64, height: 32 } },
+          objects: [
+            {
+              id: 1,
+              name: "a",
+              image: "models/a.json",
+              effects: [{ file: "effects/good/effect.json", visible: false }, { file: "effects/good/effect.json" }],
+            },
+            { id: 2, name: "s", visible: { script, value: true } },
+          ],
+        }),
+      }),
+      translator: translator(),
+      postprocess: "disabled",
+    });
+
+  it("有 getEffect：写死关闭的 effect 以 visibleBound 进 bundle、记 effectCount；没有：bundle 同以前，只少这一个 effect", async () => {
+    const withAccess = await compileWith(
+      "export function init() { thisScene.getLayer('a').getEffect(0).visible = true; }",
+    );
+    const without = await compileWith(
+      "export function init() { thisScene.getLayer('a').getEffec_(0).visible = true; }",
+    );
+    expect(withAccess.scripts.usesEffectAccess).toBe(true);
+    expect(without.scripts.usesEffectAccess).toBe(false);
+    const brief = (bundle: SceneBundle) =>
+      effectsOf(bundle).map(({ source, enabled, visibleBound }) => ({ source, enabled, visibleBound }));
+    expect(brief(withAccess)).toEqual([
+      { source: 0, enabled: false, visibleBound: true },
+      // 脚本可能把任何 effect 关掉：启用的也按「可变」编（`visibleBound`，单图层变体预建）
+      { source: 1, enabled: true, visibleBound: true },
+    ]);
+    expect(brief(without)).toEqual([{ source: 1, enabled: true, visibleBound: false }]);
+    expect(withAccess.layers[0].effectCount).toBe(2);
+    expect(without.layers[0].effectCount).toBeUndefined();
+    expect(withAccess.unsupported).toEqual([]);
+    expect(without.unsupported).toEqual([]);
+    // 其余字段完全相同（启用的那个 effect 只有 visibleBound 与缺省 id 不同：没写 id 时取它在 `layer.effects` 里的下标，前面多了一个关着的 effect）：别的图层、程序表、纹理表、绑定
+    const rest = (bundle: SceneBundle) => ({
+      ...bundle,
+      scripts: undefined,
+      layers: bundle.layers.map((layer) => ({
+        ...layer,
+        effects: layer.effects
+          .filter((e) => e.source === 1)
+          .map((e) => ({ ...e, visibleBound: undefined, id: undefined })),
+        effectCount: undefined,
+      })),
+    });
+    expect(rest(withAccess)).toEqual(rest(without));
+    // 写死关闭的 effect 的 pass 材质路径记进 ScenePass.material
+    const step = effectsOf(withAccess)[0].steps[0];
+    expect(step.kind === "draw" && step.pass.material).toBe("materials/good.json");
+  });
+
+  it("写死关闭的坏 effect 在有 getEffect 时进空壳而不是让整场编译失败，不计入场景级 unsupported", async () => {
+    const bundle = await compileScene({
+      projectDir: "P:/p",
+      sceneAssets: ["A:/assets"],
+      reader: memoryReader({
+        ...FILES,
+        "P:/p/scene.json": JSON.stringify({
+          general: { orthogonalprojection: { width: 64, height: 32 } },
+          objects: [
+            {
+              id: 1,
+              name: "a",
+              image: "models/a.json",
+              effects: [{ file: "effects/broken/effect.json", visible: false }],
+            },
+            { id: 2, name: "s", visible: { script: "thisLayer.getEffect(0);", value: true } },
+          ],
+        }),
+      }),
+      translator: translator(),
+      postprocess: "disabled",
+    });
+    expect(bundle.unsupported).toEqual([]);
+    expect(effectsOf(bundle).map(({ source, enabled }) => ({ source, enabled }))).toEqual([
+      { source: 0, enabled: false },
+    ]);
+  });
+});

@@ -103,6 +103,9 @@ export function targetKey(target: ScriptTarget): string {
   switch (target.kind) {
     case "layer":
       return `objects/${target.object}/${target.field}`;
+    // `rotateObjectSpace`（P6d1a）：与 `angles` 同一个键，后写的覆盖先写的
+    case "rotation":
+      return `objects/${target.object}/angles`;
     case "effect":
       return `objects/${target.object}/effects/${target.effect}/visible`;
     case "constant":
@@ -267,7 +270,12 @@ export class ScriptRuntime {
       : typeof input === "string"
         ? input.trim().split(/\s+/).map(Number)
         : [input];
-    if (type === "float") return scriptNumber(values[0]);
+    if (type === "float") {
+      // rad2deg 的材质常量：状态存弧度、脚本读度（与材质对象字段读同一个换算）
+      if (record.script.target.kind === "constant" && record.script.target.rad2deg && typeof values[0] === "number")
+        return radiansToScript(values[0]);
+      return scriptNumber(values[0]);
+    }
     const size = type === "vec2" ? 2 : type === "vec4" ? 4 : 3;
     const prototype = this.realm.prototypes[`Vec${size}` as "Vec2" | "Vec3" | "Vec4"];
     const ctor = (prototype as { constructor: new (...args: number[]) => unknown }).constructor;
@@ -306,7 +314,8 @@ export class ScriptRuntime {
         value = parts as number[];
       } else return;
       // 角度按 WPE 的 f32 乘法换成弧度（`f32.ts`）；其余数原样交给宿主（下一次读时再取 f32，同 WPE 存下的值）
-      if (type === "angles") value = value.map((part) => degreesFromScript(part));
+      if (type === "angles" || (record.script.target.kind === "constant" && record.script.target.rad2deg))
+        value = value.map((part) => degreesFromScript(part));
     }
     if (record.script.target.kind === "recompile") record.recompileWrites++;
     if (this.options.write(record.script.target, value, record.script.id))

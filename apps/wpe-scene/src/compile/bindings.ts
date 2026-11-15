@@ -163,6 +163,13 @@ export function isTextRuntimeField(key: string): key is TextRuntimeField {
 export type BindingTarget =
   | { kind: "script-property"; script: string; key: string }
   | { kind: "layer"; object: number; field: LayerField }
+  /**
+   * 脚本转向（P6d1a，只由脚本 API 产生），角度（弧度）原样写进 `LayerState`，不经图层向量字段的取值规则（NaN 也写）：
+   * - `rotateObjectSpace`：`rotation` 是乘出来的 3×3（列主序 9 个 f32），角度是反算的；
+   * - `lookAt` / `lookAtYaw`：`rotation` 为 `null`（同 WPE 的角度 setter：存角度、3×3 按角度重建），视线与 up 平行时角度是 NaN（`p6d1-round2` 的 L3b）。
+   * 路径键与 `angles` 相同（`objects/<i>/angles`），后写的胜出：之后的 `angles` 写入清掉 3×3。
+   */
+  | { kind: "rotation"; object: number; rotation: number[] | null; angles: number[] }
   /** effect 可见性：`effect` 是 `effects[]` 的 JSON 下标（`SceneEffect.source`），开关后只重建该图层（3c）。 */
   | { kind: "effect"; object: number; effect: number }
   /**
@@ -176,6 +183,11 @@ export type BindingTarget =
       uniforms: string[];
       type: ValueType;
       members?: MaterialMember[];
+      /**
+       * 着色器注解 `conversion: rad2deg` 的 float 键（P6d1b）：状态里是弧度，字段脚本的入参与返回值按度
+       * （`p6d1-mat6`：JSON 0.5 弧度 → 脚本收 28.647890090942383）。只由字段脚本目标带上（`bundle.ts`，取 `MaterialSlot.rad2deg`）。
+       */
+      rad2deg?: true;
     }
   | { kind: "bloom"; field: keyof BloomParams }
   /** `general.bloom`：每帧读（A1），写的是场景位。 */

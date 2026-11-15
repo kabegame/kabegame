@@ -1070,6 +1070,52 @@ describe("GpuScene：挂点子树的绘制矩阵照 WPE 的缓存戳（步骤 6b
     expect(mvp(item.scene, 2)).toEqual(mvp(fresh, 2));
     expect(mvp(item.scene, 4)).toEqual(mvp(fresh, 4));
   });
+
+  it("getTransformMatrix（P6d1a）：没有挂点（没有 stamps）时与 drawMatrixOf 逐字节相同，带自身偏移", async () => {
+    const item = await build(false);
+    item.state.layers.get(3)!.offset = [3, -4];
+    writeOrigin(item.state, 2);
+    for (const object of [0, 1, 2, 3, 4]) {
+      const expected = drawMatrixOf(object, item.state.layers, new Map(), undefined);
+      expect(Array.from(item.scene.transformMatrix(object, item.state))).toEqual(Array.from(expected));
+    }
+  });
+
+  it("getTransformMatrix（P6d1a）：脚本在写入之后、drawPhase 之前读挂点子树，当场重算并改写戳，随后的绘制沿用这个值", async () => {
+    const item = await build(true);
+    for (let f = 1; f <= 3; f++) frame(item, f);
+    // 第 4 帧：更新阶段 → 脚本写 R 的 origin → 脚本读 A1 的矩阵 → 渲染阶段
+    const f = 4;
+    poseAt(item, f);
+    item.scene.sync(item.state);
+    item.scene.stepParticles(0.05, f * 0.05, item.state);
+    writeOrigin(item.state, f);
+    const read = item.scene.transformMatrix(2, item.state);
+    // 参照：同一份状态，另一个没走过任何帧的场景现算（戳全空，整条链现算）
+    const ref = await build(true);
+    poseAt(ref, f);
+    writeOrigin(ref.state, f);
+    expect(Array.from(read)).toEqual(Array.from(ref.scene.transformMatrix(2, ref.state)));
+    // 读取已改写戳：drawPhase 沿用它，所以这一帧 A1 不再滞后（WPE：脚本读矩阵会把整条链重算成本帧号）
+    expect(item.scene.drawPhase(item.state)).toBe(true);
+    item.scene.sync(item.state);
+    item.scene.update(FRAME, item.state);
+    const fresh = await reference(f, f);
+    expect(mvp(item.scene, 2)).toEqual(mvp(fresh, 2));
+    expect(mvp(item.scene, 4)).toEqual(mvp(fresh, 4));
+  });
+
+  it("getTransformMatrix（P6d1a）：drawPhase 之后读取并取走写入，预置作废、之后的 sync 取现算值", async () => {
+    const item = await build(true);
+    for (let f = 1; f <= 3; f++) frame(item, f);
+    writeOrigin(item.state, 4);
+    item.scene.transformMatrix(2, item.state); // 取走 transformWrites
+    expect(item.state.hasTransformWrites()).toBe(false);
+    item.scene.sync(item.state);
+    item.scene.update(FRAME, item.state);
+    const fresh = await reference(4, 3);
+    expect(mvp(item.scene, 2)).toEqual(mvp(fresh, 2));
+  });
 });
 
 // ———— 模型对象的骨骼（P12b2-1 点 3） ————

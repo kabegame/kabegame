@@ -245,6 +245,24 @@
 | [ ] | U8 插件版本不兼容提示 | macOS 插件详情 | 打开一个要求更高应用版本的未安装插件，悬停安装按钮 | 按钮置灰，悬停提示所需版本 | 未测 |
 | [ ] | U9 Web 版 | Web | 打开画廊 | 收集菜单只有「网络」，其余同 U1 | 未测 |
 
+## 场景壁纸 P6d1a：层级、转向与 effect / 材质访问
+
+2026-11-15 Windows dev。场景脚本的 `getParent` / `getChildren` / `getTransformMatrix`、`rotateObjectSpace` / `lookAt` / `lookAtYaw`、`getEffect` / `getEffectCount` / effect `name` / `getMaterial` / `getMaterialCount` / `setMaterialProperty`、`getLayerByID`，删掉图层对象的 `id`；旋转存角度与 3×3 两份（`LayerState.rotation`）；用到 `getEffect` 时写死关闭的 effect 也编进 bundle；材质对象只登记读到的常量、加五个只读状态字段；`rad2deg` 材质常量脚本一侧按度。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「层级、转向与 effect / 材质访问（P6d1a）」；计划与实施记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d1-hierarchy-effects.md`。验收文件在 `ignore/p6/d1/`（独立工作树 `wt/`、HEAD 快照 `head/`、变异清单 `mutations*.json`、语料 `corpus-*.json`、真机读图 `real/`），测试工程由 `ignore/p6/d0/make_p6d1.py`、`make_p6d1b.py` 生成在 `ignore/p6/d0/proj/p6d1-*`，WPE 读回在 `ignore/p6/d0/out/p6d1-xform.log`、`p6d1-round2.log`，抓帧在 `A:\p6d\p6d1-*\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | F1 类型与格式 | Windows | 宿主 `tsc --noEmit`；Prettier `--check` 本步改动的 TS 文件 | 0 error、格式通过 | 2026-11-15 Claude：工作树与合并后的主工作区 tsc 都是 0 error |
+| [x] | F2 宿主 vitest（相关文件） | Node，vitest | 带 `KABEGAME_WPE_ROOT` 跑 `render/rotation`、`render/hierarchy`、`render/p12b`、`script/hierarchyApi`、`script/effectMaterialApi`、`script/api`、`script/runtime`、`compile/scriptApi`、`compile/p3c`、`host.script` | 全过 | 2026-11-15 Claude：工作树 361 条全过；合并进主工作区后 372 条全过（多出的是 P12b2-1 的用例）。`rotation.test.ts` 对 WPE 读回逐位比（−0 与 0 视同，WPE 日志印不出符号） |
+| [x] | F3 变异检查 | Node，工作区模式 | `ignore/p6/d1/mutations.json` 12 处、`mutations2.json` 1 处（`kbp mutate --mode workspace`，工作树里） | 每处都有用例失败，原样还原 | 2026-11-15 Claude：12 处检出 11 处；没检出的「Vec2 写进 vec3」是等价变异（对象没有 z，vec3 写入本来就不收），改成带 z 并放开 vec3 后检出；整树哈希前后一致 |
+| [x] | F4 语料编译 | Node，`kbp corpus scan` / `diff` | HEAD 快照（`868d1711`）与工作树各扫一次，两边用同一份翻译器 wasm | 只去掉本步实现的键，没有新增的键 | 2026-11-15 Claude：233 张，0 出错，干净 159 → 160（`3243449890`）；去掉 `layer.getParent` 11 张、`getTransformMatrix` 6、`getChildren` 4、`getEffect` 4、`effect.getMaterial` 2，没有新增。第一次比时工作树还是旧 wasm，多出 22 张 `shader:*:texture` 的差别，换成主工作区当天重建的 wasm 后消失（与本步无关） |
+| [x] | F5 转向的读回 | Windows dev，屏外宿主（`render_scene`，`scripts: true`） | `p6d1-xform`、`p6d1-xform2`、`p6d1-cam` 导入 dev 库跑脚本，`[kbp6d]` 读回和 WPE 日志逐行比 | 逐位相同 | 2026-11-15 Claude：43 + 23 + 2 行逐位相同。第一次跑 `p6d1-xform2` 时 L3b、KN（视线与 up 平行）读回 `0 0 0`、WPE 是 NaN：NaN 角度走图层向量字段的写入被丢掉，改成经 `rotation` 写入目标（3×3 为 null）后相同，补了单测 |
+| [x] | F6 effect / 材质的读回 | Windows dev，屏外宿主 | `p6d1-mat`（回放 8 帧）、`p6d1-mat2`、`p6d1-mat3`、`p6d1-mat4`、`p6d1-mat6`（回放 8 帧）跑脚本 | 数值逐位相同 | 2026-11-15 Claude：`setMaterialProperty` 的全部情形（S1–S7、E1–E8）、`rad2deg` 的四种来源（T1–T4）、`getEffect` / `getMaterial` 读回都相同。材质对象的键顺序不同（WPE `color, alpha`、我们 `alpha, color` 等），是已知差异（复刻没对上，待定） |
+| [x] | F7 画面 | Windows dev，屏外宿主；WPE 抓帧 | `p6d1-mat` 八块的中心像素；`p6d1-xform`、`p6d1-xform2` 整帧和 WPE 上屏图（`save_texture` 取 Present 那一事件）看布局 | 颜色相同、布局相同 | 2026-11-15 Claude：E1–E8 与 WPE 一致（E2 191/255 即 0.749）；三种转向转出的条形、侧对镜头不可见的层、NaN 的层不画都一致 |
+| [x] | F8 解锁场景 `3243449890` | Windows dev，屏外宿主 | `kbp content unpack` 解包后导入，`render_scene` 跑脚本回放 30 帧 | 能渲染，没有不支持项；脚本没有与本步相关的报错 | 2026-11-15 Claude：100 段脚本全部 `init`，画面完整；只有 `objects/48/visible` 的 `update` 报 `Cannot create property 'x' on boolean 'true'` 被禁用：作者把拖拽脚本挂在了 `visible` 上，`init` 把 `value`（布尔）存进 `weizhi`，严格模式下 WPE 也会抛，与本步无关 |
+| [x] | F9 解锁场景的实时画面 | Windows，真机 | 实时看 `3243449890` | 时钟与音频条照常动，和 WPE 观感一致 | 2026-11-15 用户手测：和 WPE 差不多 |
+
 ## 场景渲染器的逐 draw 轨迹（dev 工具）
 
 2026-11-13，只在 dev 构建：dev 探针 `renderFrame`、vite `/render`、MCP `render_scene` / `host_render` 收 `trace`，记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform、顶点，可选读回 pass 的目标，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。计划见 `.claude/plans/tools/scene-draw-trace.md`，用法见 `.claude/skills/kabegame-chromium/SKILL.md`「逐 draw 轨迹」，实施记录在 `ignore/tools/draw-trace/record.md`。

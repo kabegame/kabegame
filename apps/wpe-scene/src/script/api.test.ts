@@ -356,7 +356,9 @@ describe("SceneScript API（FakeRealm）", () => {
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)(first)).toBe(true);
     expect((h.api.engine.isObjectValid as (value: unknown) => boolean)({})).toBe(false);
     expect(first.name).toBe("First");
-    expect(first.id).toBe(10);
+    // 图层对象没有 `id`（P6d1a：WPE 的 ILayer 不暴露，按 id 找用 getLayerByID）
+    expect(Object.keys(first)).not.toContain("id");
+    expect("id" in first).toBe(false);
     expect(first.origin).toBeInstanceOf(Vec3);
     (first.origin as Vec3).x = 9;
     expect(h.state.layers.get(0)?.origin).toEqual([1, 2, 3]);
@@ -988,8 +990,8 @@ describe("SceneScript API（FakeRealm）", () => {
     h.bundle.bloom = { hdr: false, passes: {} };
     h.resetState();
     const { thisScene: scene, general } = h.api;
-    // 成员就是 general 的全部字段加四个查询方法：fog*、wind* 这轮不加（zoom 在 P5a 步骤 4 进了 general 字段表）
-    const methods = ["enumerateLayers", "getLayer", "getLayerCount", "getLayerIndex"];
+    // 成员就是 general 的全部字段加五个查询方法：fog*、wind* 这轮不加（zoom 在 P5a 步骤 4 进了 general 字段表）
+    const methods = ["enumerateLayers", "getLayer", "getLayerByID", "getLayerCount", "getLayerIndex"];
     expect(Object.keys(scene).sort()).toEqual([...Object.keys(general), ...methods].sort());
     expect(Object.keys(general)).toEqual(
       expect.arrayContaining(["bloom", "hdr", "clearenabled", "clearcolor", ...Object.keys(BLOOM_FIELDS)]),

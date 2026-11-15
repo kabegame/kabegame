@@ -230,6 +230,7 @@ import {
 import {
   type Edges,
   drawMatrixOf,
+  withSelfOffset,
   effectiveVisible,
   everyAncestor,
   eyePosition,
@@ -2846,6 +2847,24 @@ export class GpuScene {
       templates: new Map(),
       framebuffer: particleTreeWantsFramebuffer(compiled),
     };
+  }
+
+  /**
+   * 脚本 `getTransformMatrix`（P6d1a）：WPE 调的就是带戳的世界矩阵函数（`FUN_1401850a0`），脚本调用当场按戳规则求值并改写戳与缓存，
+   * 之后的绘制沿用。我们的变换写入先记在 `SceneState.transformWrites`、等 `stepParticles` / `drawPhase` 才清戳，所以这里先把已记的写入
+   * 清戳（等价于 WPE 的写入当场清戳），再走 `WorldStamps.evaluate`，最后乘自身偏移（`withSelfOffset`，与 `drawMatrixOf` 同一个函数）。
+   * 取走写入后，`drawPhase` 的预置（`drawSeeds`）不能再靠 `hasTransformWrites` 判作废，所以取到了写入就直接作废它（WPE 里写过的对象
+   * 戳为 0、渲染时重算，同此）；`drawPhase` 自己随后仍会 `invalidate` 本帧新写入，不受影响。没有挂点（没有 `stamps`）时与以前一样现算。
+   */
+  transformMatrix(object: number, state: SceneState): Mat4 {
+    const stamps = this.stamps;
+    if (!stamps) return drawMatrixOf(object, state.layers, new Map(), this.attachHook);
+    if (state.hasTransformWrites()) {
+      stamps.invalidate(state.takeTransformWrites());
+      this.drawSeeds = null;
+    }
+    const world = stamps.evaluate(object, state.layers, this.hasAttachment, this.attachHook);
+    return withSelfOffset(world, state.layers.get(object)?.offset);
   }
 
   /**

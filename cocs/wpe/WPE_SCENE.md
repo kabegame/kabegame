@@ -2687,6 +2687,36 @@ P12b1 在 P12a 的 puppet 上再接四样东西，四样都是 WPE 图像层 pup
 
 五个确定性工程（`ignore/p6/c0/proj/p6c-*`）：`hit` 回调 98 / 98 与 `upd` 169 / 169 逐字相同，`par` 13 / 13；`shake` 回调序列 42 / 42 相同，数值差 ≤ 0.13（WPE 当时的 `g_Time` 取不到，用 `(帧 + 偏移) × 0.05`）；`zoom`（`perspective: true` 图层）35 / 49 逐字相同，其余 `localPosition` 差 ≤ 4.6e-5（覆盖相机的 float32 链没有逐步搬）；`persp` 序列相同，世界坐标差 ≤ 1e-3（远平面上 1 ulp，来自透视相机矩阵的 float32 组合）。已知没做：模型命中、木偶 `hitBox`、`openUserShortcut`（P11）、透视场景里 bit9 层的命中排序（`TODO:[WPE_SCENE]`）。语料能渲染 +11（`3146703458`、`3173418061`、`3340707146`、`3451555874`、`3460973721`、`3605722997`、`3637191856`、`3809965824`、`3810092560`、`3817779853`、`3832004152`）。
 
+## 层级、转向与 effect / 材质访问（P6d1a）
+
+脚本拿到的层级（父、子、世界矩阵）、三个转向方法、effect 与材质对象，外加 `getLayerByID`。读码见 `.claude/plans/wpe-import/3-scene/phase6/rea-p6d-layers.md`（9、10 节）、`rea-p6d-script.md`、`rea-p6d1-xform.md`；WPE 实测的工程由 `ignore/p6/d0/make_p6d1.py`、`make_p6d1b.py` 生成，全精度读回在 `ignore/p6/d0/out/p6d1-xform.log`、`p6d1-round2.log`；计划与记录见 [phase-6d1-hierarchy-effects.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6d1-hierarchy-effects.md)。改结构的 `setParent`、`sortLayer`、建删层是 P6d3。
+
+### 层级
+
+- `getParent()` 返回父的图层对象，根返回 `null`；`getChildren()` 每次新数组，`objects` 顺序。
+- `getTransformMatrix()` 返回新的 `Mat4`（自有键 `m`，16 个 f32，平移在 12–14），值是**当前状态**的世界矩阵乘图层自身偏移（`drawMatrixOf`，含父链、自己的对齐偏移，子层不继承父的对齐偏移），当场读到刚写的变换（父 `rotateObjectSpace` 之后立刻读子已经跟着变）。场景有挂点缓存（`WorldStamps`，P12b1 的 B1）时照 WPE 走那个带戳的函数：先给本帧已有的变换写入清戳、再按戳求值，求值会改写戳与缓存，之后的绘制沿用（`GpuScene.transformMatrix`）。
+- 图层对象**没有 `id`**（WPE 实测 `undefined`）。`thisScene.getLayerByID(id)` 只收字符串，照 C `strtol` 解析（前导空白按 `isspace`）后按 JSON `id` 找；数字返回 `null`。`getLayer()` / `getLayerByID()` 不传参数返回 `undefined`。
+
+### 旋转的两份状态与转向方法
+
+WPE 每个对象存角度与 3×3 两份旋转，画面、子孙、`getTransformMatrix` 只读 3×3；角度写入（JSON、脚本、属性、关键帧、`lookAt`）先存角度再按 `Rz·Ry·Rx` 重建 3×3。`LayerState.rotation`（9 个 f32，列主序）照搬：`null` 时 `layerLocalMatrix` 按角度现算（`anglesRotation`，逐字节同以前），任何 `angles` 写入都清成 `null`。写入目标 `rotation` 只由脚本 API 产生，路径键同 `angles`（`objects/<i>/angles`），后写的胜出，重编译重放原样恢复。公式在 `render/rotation.ts`，逐运算 f32，对 WPE 读回逐位相同（`render/rotation.test.ts`）。
+
+- `rotateObjectSpace(v)`：`R ← R · Rz(v.z) · Ry(v.y) · Rx(v.x)`，分量是**弧度**（`angles` 字段在脚本里是度），绕自身轴；每步照 glm `rotate` 通式（轴向对角元是 `(1−c)+c`）。乘出来的 3×3 直接写进状态，角度按 glm `extractEulerAngleZYX` 反算（读回会被归一化：`400°` 读回 `40.000004`）；参数不是对象时只做归一化。转完再把读回的角度写回去，矩阵末位会变（改按角度重建）。
+- `lookAt(target, up = (0, 1, 0))` / `lookAtYaw(...)`：目标与 `origin` 同在父空间（不读父链）；普通对象本地 +Z、相机对象 −Z 对着目标；`lookAtRH` 后从视图矩阵按 ZYX 取角度，交给角度 setter（写入目标 `rotation`、3×3 为 `null`）。`|d|² ≤ 1.1920929e−07` 什么都不做；视线与 up 平行时写进 NaN（图层不画，WPE 同）；up 不归一化；`lookAtYaw` 先 `d′ = d − up·(up·d)`；不传目标或目标不是对象 = 看原点。返回 `undefined`。
+
+### effect 与材质对象
+
+- `getEffectCount()` 数 JSON 里全部 effect（含写死关闭的）；`getEffect(i | 名字)`：整数按 JSON 下标，名字按当前 `name` **区分大小写**、同名取最后一个，空串、越界、别的类型 `null`。返回的就是挂在 effect `visible` 上的脚本的 `thisObject`。
+- **编译期**：场景里会执行的脚本有 `getEffect` 成员访问时（`SceneScripts.usesEffectAccess`，词法同能力表），写死关闭的 effect 也按「`visible` 可变」编进 bundle（WPE 加载时全部 effect 都在列表里，脚本能当帧打开），`SceneLayer.effectCount` 记 JSON 个数；没有时维持跳过（B11），bundle 不变。
+- effect 对象：`name` 可读写（只存在脚本 API 这边，没有改值回调，跨重编译保留）、`getMaterialCount()`（条件过滤后的绘制 pass 数）、`getMaterial(i | 文件名)`（无参 = 0；文件名按 `ScenePass.material` 不分大小写全等，空串匹配每一个，最后一个胜出），返回的就是挂在材质常量上的脚本的 `thisObject`。`executeMaterialFunction` 照报（`script:api:effect.executeMaterialFunction`）。
+- 材质对象的键：编译后着色器**实际读到的**材质常量（`MaterialSlot.used`；chromaticaberration 缺省 `MODE 0` 没有方向键），然后是五个状态字段 `depthwrite, depthtest, cullmode, alphawriting, blending`（字符串，P6d1a 只读，写入在 P6d1b 接管线），再是 `getAnimation`。常量键的顺序 WPE 是实例表（MSVC `unordered_map`）的迭代顺序，按声明顺序插入复刻对不上三组实测，现在是声明顺序（已知差异，待定）。
+- `setMaterialProperty(名, 值)`：值按 dll 归三类——数；任何对象（`Vec2/3/4`、`{x, y}`、数组）只取 x、y（非有限数当 0）当 Vec2；其余（字符串、布尔、`null`、不传）当整数 0。对这个 effect 的**每个 pass** 按名字全等（区分大小写，`g_` uniform 名不收，状态字段不收）找常量：数写 float 常量（不钳），Vec2 写 vec2 常量，别的组合跳过，所以 vec3 / vec4 常量永远写不进、非数值把 float 写成 0。和字段写入同一个 setter，当帧生效。返回 `undefined`。
+- **`rad2deg` 常量的单位**（注解 `"conversion": "rad2deg"`，`MaterialSlot.rad2deg`）：状态与 uniform 是弧度；JSON 值、用户属性原样当弧度；脚本一侧一律度——材质对象字段读写、`setMaterialProperty`、常量上字段脚本收到的 `value` 与返回值（`p6d1-mat6`：JSON 0.5 读回 28.647890°，属性 30 读回 1718.8734°，字段脚本收到 28.647890、返回 45 读回 45）。度 → 弧度存 `f32(f32(度) · f32(0.017453292))`，同图层 `angles`。
+
+### 对比结果
+
+dev 探针跑 `p6d1-xform`、`p6d1-xform2`、`p6d1-cam`、`p6d1-mat`、`p6d1-mat2/3/4/6` 的脚本，`[kbp6d]` 读回和 WPE 逐位相同（只有材质对象键的顺序不同）；`p6d1-mat` 八块颜色与 `p6d1-xform`、`p6d1-xform2` 的画面和 WPE 抓帧一致。语料能渲染 +1（`3243449890`）。
+
 ## 字体引擎 `wpefont`（P6b 1b 起）
 
 文本对象（P6b）照 WPE 的画法：FreeType 栅格化、HarfBuzz 排字，逐字四边形加图集。WPE 的字形位置和位图由这两个库的具体版本与加载参数决定，自己写栅格化器对不上像素，所以直接把同版本的库编成 wasm 放进场景宿主，排版规则（回退链、断行、对齐、图集装箱）另在 TS 里照读码写（1c 起）。静态文本 1d 起照 WPE 画，文字随脚本或属性变化 1e 起就地重排（见下一节「文本对象」）。完整接口契约见 [src-tauri/wpefont/README.md](../../src-tauri/wpefont/README.md)，计划与实测见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「步骤 1a」「1b」。

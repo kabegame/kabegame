@@ -473,6 +473,8 @@ export class SceneHost {
 
   private targetPath(target: BindingTarget): string {
     if (target.kind === "layer") return `objects/${target.object}/${target.field}`;
+    // `rotateObjectSpace`（P6d1a）：与 `angles` 同键
+    if (target.kind === "rotation") return `objects/${target.object}/angles`;
     if (target.kind === "effect") return `objects/${target.object}/effects/${target.effect}/visible`;
     if (target.kind === "constant") return `${target.pass}/constantshadervalues/${target.material}`;
     if (target.kind === "bloom") return `general/bloom/${target.field}`;
@@ -844,6 +846,12 @@ export class SceneHost {
         },
         // 粒子层的 play / pause / stop / isPlaying / emitParticles（P4f 步骤 3）：同样每次现取
         particles: (object) => this.particleTarget(object),
+        // getTransformMatrix（P6d1a）：有渲染器场景时用它的挂点钩子现算，否则（首次加载的 init）api 退回纯状态现算
+        transformMatrix: (object) => {
+          const renderer = this.renderer;
+          const state = renderer?.sceneState;
+          return renderer && state ? renderer.transformMatrix(object, state) : null;
+        },
         // 全局 `input`（P6c）：每次读都取渲染器最近一帧给的光标快照
         cursorInput: () => this.cursorInput,
         // 关键帧动画的 IAnimation（P10b）：待用播放器属于脚本当前看到的 bundle 时取它（首次加载的 init），否则取正在播的那份；每次现取，

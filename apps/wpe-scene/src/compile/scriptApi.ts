@@ -69,7 +69,6 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
   thisScene: [
     // 建层删层与排序、模型数据 → P6；相机变换本机语料 0 处（L15）
     ...methods("root", [
-      "getLayerByID",
       "createLayer",
       "destroyLayer",
       "sortLayer",
@@ -118,15 +117,13 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
    */
   layer: [
     // 层级与变换（W1 / W5）
-    ...methods("any", ["getTransformMatrix", "rotateObjectSpace", "lookAtYaw"], UNIQUE),
-    ...methods("any", ["setParent", "getParent", "getChildren"], `${UNIQUE}；DOM 用的是 \`parentNode\` / \`children\``),
+    // `getTransformMatrix` / `rotateObjectSpace` / `lookAt` / `lookAtYaw` / `getParent` / `getChildren` 已实现（P6d1a）
+    ...methods("any", ["setParent"], UNIQUE),
     ...methods(
       "any",
       ["getAttachmentIndex", "getAttachmentMatrix", "getAttachmentOrigin", "getAttachmentAngles"],
       UNIQUE,
     ),
-    // `Mat4.lookAt` 是 `baseclasses.js` 的静态方法（1112 行），只按名字会误报
-    ...methods("root", ["lookAt"]),
     // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b）
     ...methods(
       "any",
@@ -162,8 +159,8 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       ],
       UNIQUE,
     ),
-    // effect 访问（3c 待定 3）
-    ...methods("any", ["getEffect", "getEffectCount", "transformAttachmentToTexture"], UNIQUE),
+    // `getEffect` / `getEffectCount` 已实现（P6d1a）
+    ...methods("any", ["transformAttachmentToTexture"], UNIQUE),
     // 字段：写入在我们这边落成普通属性、不报错也不生效。名字大多通用，只认根对象。`alignment` 已在图像层上实现（P8 步骤 3，
     // `script/api.ts`）；别的图层上 WPE 读回什么由脚本 dll 决定，没查，不再静态报。粒子层的 `instance` 已实现（P4f 步骤 3）
     ...fields([
@@ -174,14 +171,10 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       // 文本层的 13 个字段都已实现（P6b 步骤 2，`script/api.ts` `installText`），不在表里
     ]),
   ],
-  /** `IEffect`：已实现 `visible`。 */
+  /** `IEffect`：已实现 `visible`、`name`、`getMaterialCount`、`getMaterial`、`setMaterialProperty`（P6d1a）。 */
   effect: [
-    ...methods(
-      "any",
-      ["getMaterial", "getMaterialCount", "setMaterialProperty", "executeMaterialFunction"],
-      `${UNIQUE}；材质常量在我们这边是材质对象上的字段，不经这些方法`,
-    ),
-    ...fields(["name"]),
+    // `getMaterial` / `getMaterialCount` / `setMaterialProperty` / `name` 已实现（P6d1a）；`executeMaterialFunction` 照报
+    ...methods("any", ["executeMaterialFunction"], UNIQUE),
   ],
   /**
    * `IObject`：所有对象（图层、effect、材质、动画层、模型数据）都有的成员。唯一的 `getAnimation` 已在 P10b 实现（图层、effect、材质、
@@ -392,6 +385,11 @@ export function memberAccesses(source: string): MemberAccess[] {
       out.push({ root: rootAt(receiverAt), name: key.value });
   }
   return out;
+}
+
+/** 脚本里有没有 `getEffect` 成员访问（任意接收者，P6d1a）：场景里写死关闭的 effect 要不要编进 bundle。 */
+export function usesEffectAccess(source: string): boolean {
+  return memberAccesses(source).some((access) => access.name === "getEffect");
 }
 
 /** 扫描用到的脚本信息（`SceneScript` 的子集）。 */

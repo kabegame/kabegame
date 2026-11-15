@@ -7,6 +7,7 @@ import { parseScene } from "../compile/model";
 import type { SceneReader } from "../compile/fs";
 import { Wpesl2wgsl } from "../wpesl2wgsl";
 import { ScriptRuntime, type ScriptRealm } from "./runtime";
+import { radiansToScript } from "./f32";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -684,5 +685,64 @@ describe("说明符与全量遍历", () => {
     expect(scripts.list).toHaveLength(1);
     expect(scripts.list[0].imports).toEqual(["WEColor"]);
     expect(scripts.list[0].errors).toHaveLength(1);
+  });
+});
+
+describe("rad2deg 材质常量上的字段脚本（P6d1b，p6d1-mat6）", () => {
+  const constant = (material: string, rad2deg: boolean) =>
+    script(`c-${material}`, {
+      target: {
+        kind: "constant",
+        pass: "objects/0/effects/0/passes/0",
+        material,
+        uniforms: ["g_Angle"],
+        type: "float",
+        ...(rad2deg ? { rad2deg: true as const } : {}),
+      },
+      owner: { kind: "material", pass: "objects/0/effects/0/passes/0", layer: 0 },
+      valueType: "float",
+      initial: 0.5,
+    });
+
+  async function run(item: SceneScript, state: number, returns: number) {
+    const realm = new FakeRealm();
+    const seen: unknown[] = [];
+    realm.modules.set(item.id, {
+      init: (value: unknown) => void seen.push(value),
+      update: (value: unknown) => {
+        seen.push(value);
+        return returns;
+      },
+    });
+    const written: unknown[] = [];
+    const runtime = new ScriptRuntime(realm, {
+      report: { ready() {}, fallback() {}, debug() {}, info() {}, warn() {}, error() {} },
+      now: () => 0,
+      write(_target, value) {
+        written.push(value);
+        return true;
+      },
+      read: () => [state],
+      enterScript() {},
+      setProperties() {},
+    });
+    await runtime.load({ list: [item] });
+    runtime.frame(0.1);
+    return { seen, written };
+  }
+
+  it("入参按度、返回值按度写回弧度（f32(f32(45)·f32(0.017453292))）", async () => {
+    const { seen, written } = await run(constant("angle", true), 0.5, 45);
+    expect(seen).toEqual([28.647890090942383, 28.647890090942383]);
+    const radians = Math.fround(Math.fround(45) * Math.fround(0.017453292));
+    expect(written).toEqual([[radians]]);
+    // 经材质对象读回：弧度 → 度
+    expect(radiansToScript(radians)).toBe(45);
+  });
+
+  it("非 rad2deg 的常量照旧不换算", async () => {
+    const { seen, written } = await run(constant("alpha", false), 0.5, 45);
+    expect(seen).toEqual([0.5, 0.5]);
+    expect(written).toEqual([[45]]);
   });
 });

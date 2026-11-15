@@ -392,3 +392,21 @@ describe("可见性沿父链：建不建资源", () => {
     expect(buildableLayers(bundle).map((layer) => layer.name)).toEqual(["c", "d"]);
   });
 });
+
+describe("SceneState：rotation 目标（P6d1a）", () => {
+  it("rotation 写入存 3×3 与角度、标脏子树；之后的 angles 写入清掉 3×3；记变换写入", async () => {
+    const state = SceneState.fromBundle(await compile(p4aObjects()));
+    expect(state.layers.get(2)?.rotation ?? null).toBeNull();
+    const R = [0, 1, 0, -1, 0, 0, 0, 0, 1];
+    state.write({ property: "", target: { kind: "rotation", object: 2, rotation: R, angles: [0, 0, 1.5] } }, 0);
+    expect(state.layers.get(2)?.rotation).toEqual(R);
+    expect(state.layers.get(2)?.angles).toEqual([0, 0, 1.5]);
+    // g0（2）→ h1（3）→ h2（4）
+    expect([...state.takeDirty().layers].sort((a, b) => a - b)).toEqual([2, 3, 4]);
+    expect([...state.takeTransformWrites()]).toEqual([2]);
+    // 之后的角度写入按新角度重建，乘出来的那份丢掉
+    state.write({ property: "p", target: { kind: "layer", object: 2, field: "angles" } }, "0 0 0.1");
+    expect(state.layers.get(2)?.rotation).toBeNull();
+    expect(state.layers.get(2)?.angles).toEqual([0, 0, 0.1]);
+  });
+});

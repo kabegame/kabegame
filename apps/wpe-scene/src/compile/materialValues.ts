@@ -41,6 +41,11 @@ export interface MaterialSlot {
    * 没被读的键不占 48 个 float 的预算。取值照常填（这一格没人读，填什么都一样）。
    */
   used: boolean;
+  /**
+   * 着色器注解 `"conversion": "rad2deg"`（WPE 条目标志 `0x20`，描述符角度位 `+0x30 |= 4`，rea-p6d1-xform 4.2）：脚本里读写这个键用度、
+   * 状态里存弧度（`p6d1-mat4` 实测：transform `angle` 读 / 写 45 度，chromaticaberration 方向缺省 90）。取主格的注解。
+   */
+  rad2deg: boolean;
   issues: string[];
 }
 
@@ -178,7 +183,8 @@ export function materialSlots(uniforms: readonly UniformLayout[]): MaterialSlot[
       return { name: u.name, size: own * (u.array ?? 1), components, count, default: record.meta?.default };
     });
     if (primary) members.sort((a, b) => Number(b.name === primary.name) - Number(a.name === primary.name));
-    slots.push({ material, members, used: read.length > 0, issues: [...issues] });
+    const rad2deg = (primary ?? list[0]).meta?.conversion === "rad2deg";
+    slots.push({ material, members, used: read.length > 0, rad2deg, issues: [...issues] });
   }
   return slots;
 }
