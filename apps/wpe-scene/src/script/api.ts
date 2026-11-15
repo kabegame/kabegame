@@ -28,6 +28,7 @@ import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
+import { materialObjectKeys } from "./materialKeyOrder";
 import { createMemoryStorage, LOCATION_GLOBAL, LOCATION_SCREEN, SceneScriptStorage } from "./storage";
 
 type ApiObject = Record<string, unknown>;
@@ -1055,7 +1056,7 @@ export class ScriptApi {
 
   /**
    * 一个 pass 的材质对象上登记的常量键（P6d1a）：只收编译后着色器实际读到的键（`slot.used`，p6d1-mat3 实测：chromaticaberration 缺省
-   * `MODE 0` 不用方向键，材质对象里就没有它）；顺序是声明顺序（WPE 是 MSVC `unordered_map` 的迭代顺序，复刻对不上三组实测，已知差异）。
+   * `MODE 0` 不用方向键，材质对象里就没有它）；Map 顺序是声明顺序、不影响别处；材质对象上的键顺序由 `materialKeyOrder.ts` 定（照 WPE 的 MSVC `unordered_map` 迭代顺序）。
    * `rad2deg`：脚本里这个键用度、状态里存弧度。
    */
   private materialConstants(pass: string): Map<string, MaterialConstant> {
@@ -1084,42 +1085,52 @@ export class ScriptApi {
     if (api) return api;
     api = this.object();
     const current = this.findPass(pass);
-    for (const [name, { shape, rad2deg }] of this.materialConstants(pass))
-      this.define(
-        api,
-        name,
-        () => {
-          const target: ApiTarget = { kind: "constant", pass, material: name, ...shape };
-          const values = this.access.read?.(target) ?? this.access.state().constants.get(pass)?.[shape.uniforms[0]];
-          // 带 `rad2deg` 的 float 键读成度（`p6d1-mat4`：chromaticaberration 方向缺省读 90）
-          if (rad2deg && Array.isArray(values) && values.length === 1 && typeof values[0] === "number")
-            return radiansToScript(values[0]);
-          // 同图层字段按 WPE 取单精度（P3b 补测 `ignore/p3b-f32`：`thisObject.alpha` 读出 0.30000001192092896）
-          return Array.isArray(values)
-            ? values.length === 1
-              ? scriptNumber(values[0])
-              : this.vector(scriptNumbers(values), values.length as 2 | 3 | 4)
-            : values;
-        },
-        (value) => this.writeConstant(pass, name, shape, rad2deg, value),
-      );
-    // 五个 pass 状态字段（静态表，rea-p6d1-xform 4.2；`S0` / `S7val` 实测排在常量之后、`getAnimation` 之前）：字符串，可读。
-    // 写入本段什么都不做（运行中换管线是 P6d1b）
-    if (current) {
-      const state: [string, string][] = [
-        ["depthwrite", current.depthwrite],
-        ["depthtest", current.depthtest],
-        ["cullmode", current.cullmode],
-        ["alphawriting", current.alphaWriting ?? "default"],
-        ["blending", current.blending],
-      ];
-      for (const [name, value] of state)
+    const constants = this.materialConstants(pass);
+    // 五个 pass 状态字段（静态表，rea-p6d1-xform 4.2）：字符串，可读。写入本段什么都不做（运行中换管线是 P6d1b）
+    const states = new Map<string, string>(
+      current
+        ? [
+            ["depthwrite", current.depthwrite],
+            ["depthtest", current.depthtest],
+            ["cullmode", current.cullmode],
+            ["alphawriting", current.alphaWriting ?? "default"],
+            ["blending", current.blending],
+          ]
+        : [],
+    );
+    // 键顺序照 WPE（`materialKeyOrder.ts`）：常量与状态字段按算出的顺序交错定义；`getAnimation` 在末尾单独装
+    for (const name of materialObjectKeys(constants.keys())) {
+      if (name === "getAnimation") continue;
+      const constant = constants.get(name);
+      if (constant) {
+        const { shape, rad2deg } = constant;
+        this.define(
+          api,
+          name,
+          () => {
+            const target: ApiTarget = { kind: "constant", pass, material: name, ...shape };
+            const values = this.access.read?.(target) ?? this.access.state().constants.get(pass)?.[shape.uniforms[0]];
+            // 带 `rad2deg` 的 float 键读成度（`p6d1-mat4`：chromaticaberration 方向缺省读 90）
+            if (rad2deg && Array.isArray(values) && values.length === 1 && typeof values[0] === "number")
+              return radiansToScript(values[0]);
+            // 同图层字段按 WPE 取单精度（P3b 补测 `ignore/p3b-f32`：`thisObject.alpha` 读出 0.30000001192092896）
+            return Array.isArray(values)
+              ? values.length === 1
+                ? scriptNumber(values[0])
+                : this.vector(scriptNumbers(values), values.length as 2 | 3 | 4)
+              : values;
+          },
+          (value) => this.writeConstant(pass, name, shape, rad2deg, value),
+        );
+      } else if (states.has(name)) {
+        const value = states.get(name);
         this.define(
           api,
           name,
           () => value,
           () => undefined,
         );
+      }
     }
     this.installGetAnimation(api, () => `${pass}/constantshadervalues`);
     this.materials.set(pass, api);

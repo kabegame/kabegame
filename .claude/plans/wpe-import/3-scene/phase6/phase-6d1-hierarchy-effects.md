@@ -143,7 +143,21 @@ export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles"
 
 ## 点 8 — P6d1b：材质状态字段运行中改管线（`render/state.ts`、`render/scene.ts`、`render/graph.ts`）
 
-动工前补测 `blending` 在中间 pass 上的效果（blur pass 0 改 `additive`，抓帧比 `_rt_QuarterCompoBuffer1` 的像素），再定细节。方向：
+**补测**（2026-11-15，`make_p6d1b.py` 的 `p6d1-mat7`、`p6d1-mat8`，抓帧 `A:\p6d\p6d1-mat7`、`A:\p6d\p6d1-mat8`，读回在 `ignore/p6/d0/out/p6d1-round2.log` 之外的本节）：
+- **写入当场进管线，按加载时同一套角色规则**（blur 四个 pass，`init` 里写，读帧里每次绘制的管线）：
+  - pass 0 `blending = 'additive'` → 混合 SrcAlpha / One（中间 pass 的混合当场改了）；
+  - pass 1 `cullmode = 'normal'` → 剔除 Back；
+  - pass 2 `alphawriting / depthtest / depthwrite = 'enabled'` → 深度开、比较 GREATER、写深度（这个 RT 没挂深度缓冲，实际不起作用），写掩码本来就是 15；
+  - pass 3（最后上屏）`blending = 'additive'` 没进管线（仍 SrcAlpha / InvSrcAlpha，上屏混合借基础材质，P2a），`cullmode = 'normal'` 进了（剔除取 effect 材质，P5d）；
+  - 中间 pass 的 `normal` 是不混合（One / Zero），同我们的 `blendState`。
+- **取值规则**（`p6d1-mat8`，tint 的 pass 0 上依次写）：每个字段只认自己表里的名字、区分大小写，**非法值复位成表的第一项**（不是保持原值），同编译期 `normalizeDepthKeys`：
+  - `blending`：`normal` / `translucent` / `additive`（`alphatocoverage` 没测，枚举 3，hdr-macro-REPORT）；`bogus` / `Additive` / `disabled` / `3` / `null` → `normal`；
+  - `alphawriting`：`enabled` / `disabled` / `default`；非法 → `default`；
+  - `depthtest`、`depthwrite`：`enabled` / `disabled`；非法 → `disabled`（`less` 也非法）；
+  - `cullmode`：`normal` / `nocull`；非法（`back` / `front` / `none` / `Normal`）→ `normal`。
+- **还要读码**：五个字段的 setter（`FUN_1401577e0` 一带）的完整枚举表（`blending` 有没有第 5 项以后的名字）、改值回调做什么——特别是写成 `alphatocoverage` 时着色器的 `ALPHATOCOVERAGE` 组合键（P8 编译期加）会不会重编着色器，还是只改管线。读完再定实现。
+
+方向：
 - 状态字段写入成为 `SceneState` 里按 pass 键的覆盖（只收 WPE 认得的值，`bogus`、数字不改，实测 `M2`）；
 - `GpuScene.sync` 发现某 pass 的覆盖变了，就给用到它的绘制换管线（按状态组合缓存，WebGPU `createRenderPipeline` 同步可用）；哪个 pass 的哪个字段真正进哪次绘制，照现有规则（上屏混合借基础材质、剔除取 effect 材质，P2a / P5d）。
 - 重编译重放同普通字段写入。
@@ -172,7 +186,7 @@ export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles"
 
 ## 已定
 
-1. **材质对象键照 WPE 的顺序**（2026-11-15 用户「同意」，待定 1 推荐项）：复刻 MSVC `unordered_map` 的迭代顺序，三组实测核对，对不上停下报告。
+1. **材质对象键照 WPE 的顺序**（2026-11-15 用户「同意」，待定 1 推荐项）：复刻 MSVC `unordered_map` 的迭代顺序，三组实测核对，对不上停下报告。第一次按声明顺序插入没对上（P6d1a 提交时保留声明顺序），用户同意再读码（「同意」），查清后补提交，见实施记录「材质键顺序（补提交）」。
 2. **用到 `getEffect` 时全部 effect 进 bundle**（同上，待定 2 推荐项）。
 
 ## 实施记录
@@ -199,3 +213,10 @@ export function layerLocalMatrix(layer: Pick<LayerTransform, "origin" | "angles"
 - 真机发现并修了一处：`lookAt` 视线与 up 平行时 WPE 写进 NaN，我们经图层向量字段写入被丢掉（读回 0 0 0）。改为 `rotation` 写入目标允许 3×3 为 `null`（等于角度 setter：原样存角度、3×3 按角度重建），`lookAt` / `lookAtYaw` 用它；补单测 L3b。工作树与主工作区同步改。
 - `3243449890` 能渲染；`objects/48/visible` 的 `update` 报错是作者把拖拽脚本挂在 `visible` 上，WPE 同样会抛。
 - 解锁场景的实时画面（F9）：用户手测「和 WPE 差不多」（2026-11-15）。
+- 提交：`89722d0d`（31 个文件；工作树先对齐到 `baa6a591` 重验，临时索引提交，文档只带本步的段落）。
+
+### 材质键顺序（补提交，2026-11-15）
+
+- 读码 [rea-p6d1-keyorder.md](rea-p6d1-keyorder.md)：模型（FNV-1a + MSVC `unordered_map`）本身对，错在两处——插入顺序是材质键的 **UTF-8 字节序**（合并常量表 `+0x20` 是 `std::map`，`FUN_140154480` 中序遍历），V8 装访问器（`AppendUniqueCallbacks` 从后往前收、同名留后一个）又把整串**倒序**。静态表链表顺序 `blending, alphawriting, cullmode, depthtest, depthwrite`，倒过来正是实测。复刻脚本 `ignore/p6/rea/layers/keyorder/`。
+- WPE 实测扩容（`p6d1-keys`：fire、pulse 9 个键，lightshafts 12 个键）：三组和读码预测逐项相同（fire 以 `threshold` 开头，不扩容会以 `scale` 开头）。读回在 `ignore/p6/d0/out/p6d1-round2.log` 末段。
+- 实现 `script/materialKeyOrder.ts`（`materialConstantOrder` / `materialObjectKeys`），`material()` 按它交错定义常量与状态字段。单测七组逐项相同；变异 3 处全部检出；真机 `p6d1-mat2/3/4`、`p6d1-keys` 的 `Object.keys` 和 WPE 相同（回归 F10）。

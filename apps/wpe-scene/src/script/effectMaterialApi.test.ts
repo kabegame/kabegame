@@ -1,6 +1,6 @@
 // P6d1a 点 4–5：effect 与材质对象的脚本 API（getEffectCount / getEffect / name / getMaterialCount / getMaterial / setMaterialProperty、
 // 材质对象的键与状态字段）。真值：`ignore/p6/d0/out/p6d1-round2.log` 的 S0–S7（WPE 2.8.42 实测，make_p6d1b.py）。
-// 键顺序是已知差异：WPE 是 MSVC `unordered_map` 的迭代顺序，复刻与三组实测对不上，我们保留声明顺序（见 `ScriptApi.materialConstants`）。
+// 键顺序照 WPE 的 MSVC `unordered_map` 迭代顺序（`materialKeyOrder.ts`，单测在 `materialKeyOrder.test.ts`）。
 import { describe, expect, it } from "vitest";
 import { generalDefaults } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer, ScenePass } from "../compile/bundle";
@@ -279,15 +279,16 @@ describe("getMaterialCount / getMaterial", () => {
 });
 
 describe("材质对象的键（p6d1-round2 S0 / S7keys / S7val）", () => {
-  it("只登记被读到的常量，状态字段在常量之后、getAnimation 之前；键顺序是声明顺序（WPE 是哈希表顺序，已知差异）", () => {
+  it("只登记被读到的常量，状态字段在常量之后、getAnimation 之前；键顺序照 WPE 的哈希表顺序", () => {
     const h = setup();
     const tail = ["depthwrite", "depthtest", "cullmode", "alphawriting", "blending", "getAnimation"];
-    // 声明顺序：alpha、color（WPE 实测 color、alpha）；g_Hidden 没被读，不登记
-    expect(Object.keys(h.l.getEffect(0).getMaterial(0))).toEqual(["alpha", "color", ...tail]);
+    // WPE 实测 color、alpha；g_Hidden 没被读，不登记
+    expect(Object.keys(h.l.getEffect(0).getMaterial(0))).toEqual(["color", "alpha", ...tail]);
     // MODE 0：方向键没被读（S7keys），MODE 1 才有（S7ca keys）
     expect(Object.keys(h.l.getEffect(3).getMaterial(0))).toEqual(["strength", "center", ...tail]);
-    expect(Object.keys(h.l.getEffect(2).getMaterial(0))).toEqual(["dir", "strength", "center", ...tail]);
-    expect(Object.keys(h.l.getEffect(4).getMaterial(0))).toEqual(["offset", "scale", "angle", ...tail]);
+    // 夹具里的短名（dir / strength / center），顺序是算法对这三个名字的结果
+    expect(Object.keys(h.l.getEffect(2).getMaterial(0))).toEqual(["strength", "center", "dir", ...tail]);
+    expect(Object.keys(h.l.getEffect(4).getMaterial(0))).toEqual(["scale", "offset", "angle", ...tail]);
   });
 
   it("五个状态字段是 pass 上的字符串，写入什么都不做（P6d1b 再接）；alphawriting 缺省 default", () => {

@@ -2788,13 +2788,13 @@ WPE 每个对象存角度与 3×3 两份旋转，画面、子孙、`getTransform
 - `getEffectCount()` 数 JSON 里全部 effect（含写死关闭的）；`getEffect(i | 名字)`：整数按 JSON 下标，名字按当前 `name` **区分大小写**、同名取最后一个，空串、越界、别的类型 `null`。返回的就是挂在 effect `visible` 上的脚本的 `thisObject`。
 - **编译期**：场景里会执行的脚本有 `getEffect` 成员访问时（`SceneScripts.usesEffectAccess`，词法同能力表），写死关闭的 effect 也按「`visible` 可变」编进 bundle（WPE 加载时全部 effect 都在列表里，脚本能当帧打开），`SceneLayer.effectCount` 记 JSON 个数；没有时维持跳过（B11），bundle 不变。
 - effect 对象：`name` 可读写（只存在脚本 API 这边，没有改值回调，跨重编译保留）、`getMaterialCount()`（条件过滤后的绘制 pass 数）、`getMaterial(i | 文件名)`（无参 = 0；文件名按 `ScenePass.material` 不分大小写全等，空串匹配每一个，最后一个胜出），返回的就是挂在材质常量上的脚本的 `thisObject`。`executeMaterialFunction` 照报（`script:api:effect.executeMaterialFunction`）。
-- 材质对象的键：编译后着色器**实际读到的**材质常量（`MaterialSlot.used`；chromaticaberration 缺省 `MODE 0` 没有方向键），然后是五个状态字段 `depthwrite, depthtest, cullmode, alphawriting, blending`（字符串，P6d1a 只读，写入在 P6d1b 接管线），再是 `getAnimation`。常量键的顺序 WPE 是实例表（MSVC `unordered_map`）的迭代顺序，按声明顺序插入复刻对不上三组实测，现在是声明顺序（已知差异，待定）。
+- 材质对象的键：编译后着色器**实际读到的**材质常量（`MaterialSlot.used`；chromaticaberration 缺省 `MODE 0` 没有方向键），然后是五个状态字段 `depthwrite, depthtest, cullmode, alphawriting, blending`（字符串，P6d1a 只读，写入在 P6d1b 接管线），再是 `getAnimation`。常量键的顺序照 WPE（`script/materialKeyOrder.ts`，读码 `rea-p6d1-keyorder.md`）：材质键按 UTF-8 字节序（WPE 的合并常量表是有序 `std::map`）依次插入 MSVC `std::unordered_map`（FNV-1a、8 桶起、`(size+1)/桶数 > 1` 扩容、非空桶插在桶首），取链表顺序，前面拼上静态表的链表顺序，再整串倒序（V8 装访问器时倒了一次）、同名去重，末尾 `getAnimation`。tint、transform、chromaticaberration 两种组合键、fire / pulse（9 个键，触发扩容）、lightshafts（12 个键）七组和 WPE 逐项相同。
 - `setMaterialProperty(名, 值)`：值按 dll 归三类——数；任何对象（`Vec2/3/4`、`{x, y}`、数组）只取 x、y（非有限数当 0）当 Vec2；其余（字符串、布尔、`null`、不传）当整数 0。对这个 effect 的**每个 pass** 按名字全等（区分大小写，`g_` uniform 名不收，状态字段不收）找常量：数写 float 常量（不钳），Vec2 写 vec2 常量，别的组合跳过，所以 vec3 / vec4 常量永远写不进、非数值把 float 写成 0。和字段写入同一个 setter，当帧生效。返回 `undefined`。
 - **`rad2deg` 常量的单位**（注解 `"conversion": "rad2deg"`，`MaterialSlot.rad2deg`）：状态与 uniform 是弧度；JSON 值、用户属性原样当弧度；脚本一侧一律度——材质对象字段读写、`setMaterialProperty`、常量上字段脚本收到的 `value` 与返回值（`p6d1-mat6`：JSON 0.5 读回 28.647890°，属性 30 读回 1718.8734°，字段脚本收到 28.647890、返回 45 读回 45）。度 → 弧度存 `f32(f32(度) · f32(0.017453292))`，同图层 `angles`。
 
 ### 对比结果
 
-dev 探针跑 `p6d1-xform`、`p6d1-xform2`、`p6d1-cam`、`p6d1-mat`、`p6d1-mat2/3/4/6` 的脚本，`[kbp6d]` 读回和 WPE 逐位相同（只有材质对象键的顺序不同）；`p6d1-mat` 八块颜色与 `p6d1-xform`、`p6d1-xform2` 的画面和 WPE 抓帧一致。语料能渲染 +1（`3243449890`）。
+dev 探针跑 `p6d1-xform`、`p6d1-xform2`、`p6d1-cam`、`p6d1-mat`、`p6d1-mat2/3/4/6` 的脚本，`[kbp6d]` 读回和 WPE 逐位相同（材质对象键的顺序另用 `p6d1-keys` 核对扩容）；`p6d1-mat` 八块颜色与 `p6d1-xform`、`p6d1-xform2` 的画面和 WPE 抓帧一致。语料能渲染 +1（`3243449890`）。
 
 ## 字体引擎 `wpefont`（P6b 1b 起）
 
