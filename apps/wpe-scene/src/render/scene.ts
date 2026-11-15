@@ -203,7 +203,7 @@ import type { TextLayout } from "../text/layout";
 import { isDynamicSource, type UserTextureSlot } from "../compile/usertextures";
 import type { CropRect } from "../usertex/crop";
 import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextureProvider } from "../usertex/sources";
-import type { VideoFrameSource, VideoSink } from "../video/sceneVideos";
+import type { VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { applyPassStates } from "./passState";
@@ -2208,7 +2208,7 @@ export class GpuScene {
 
   /**
    * 把 GIF 的画布 / 视频的画面的 `rect` 一块传进用户纹理（P11b 步骤 4）：GIF 是 `writeTexture`（`offset` 指到裁切起点、行距取整张画布，
-   * rea-p11b 2.1），视频是 `copyExternalImageToTexture`（源矩形起点 = `rect`，整像素）。元素装不下 `rect`、拷贝抛错时记一条 warning
+   * rea-p11b 2.1），视频是 `copyExternalImageToTexture`（源矩形起点 = `rect`，整像素）。画面装不下 `rect`、拷贝抛错时记一条 warning
    * （每个纹理名每种一次）、这一帧不更新，不让整帧失败。
    */
   private uploadUserFrame(key: string, texture: GPUTexture, rect: CropRect, frame: UserTextureFrame): void {
@@ -2222,7 +2222,7 @@ export class GpuScene {
       );
       return;
     }
-    const { videoWidth, videoHeight } = frame.element;
+    const { displayWidth: videoWidth, displayHeight: videoHeight } = frame.frame;
     if (!videoWidth || !videoHeight) return;
     if (videoWidth < rect.x + rect.width || videoHeight < rect.y + rect.height) {
       this.warnUser(
@@ -2233,7 +2233,7 @@ export class GpuScene {
     }
     try {
       this.device.queue.copyExternalImageToTexture(
-        { source: frame.element, origin: { x: rect.x, y: rect.y } },
+        { source: frame.frame, origin: { x: rect.x, y: rect.y } },
         { texture },
         size,
       );
@@ -4925,16 +4925,15 @@ export class GpuScene {
   }
 
   /**
-   * 把视频元素当前的帧拷进第 `index` 张纹理（P9a）。拷的尺寸取视频与纹理的较小者：WPE 是缩放到纹理尺寸（rea-p9-video 第 2 节第 3 条），
-   * 语料 60 段两者都相同，不同时只拷重叠部分并记一条 warning（决定 3）。还没有尺寸（`videoWidth` 为 0）时跳过；拷贝抛错（元素状态
-   * 不对等）时记一条 warning，不让这一帧失败。两种 warning 每张纹理各记一次。
-   * P9d 起来源也可以是 WebCodecs 解出的 `VideoFrame`（尺寸取显示尺寸），拷完由播放器释放。
+   * 把播放器解出的当前帧（WebCodecs 的 `VideoFrame`）拷进第 `index` 张纹理（P9a）。拷的尺寸取画面（显示尺寸）与纹理的较小者：WPE 是
+   * 缩放到纹理尺寸（rea-p9-video 第 2 节第 3 条），语料 60 段两者都相同，不同时只拷重叠部分并记一条 warning（决定 3）。还没有尺寸
+   * （`displayWidth` 为 0）时跳过；拷贝抛错时记一条 warning，不让这一帧失败。两种 warning 每张纹理各记一次。拷完由播放器释放帧。
    */
-  private copyVideo(index: number, source: VideoFrameSource): void {
+  private copyVideo(index: number, source: VideoFrame): void {
     const texture = this.textures[index];
     const info = this.bundle.textures[index];
-    const videoWidth = "displayWidth" in source ? source.displayWidth : source.videoWidth;
-    const videoHeight = "displayHeight" in source ? source.displayHeight : source.videoHeight;
+    const videoWidth = source.displayWidth;
+    const videoHeight = source.displayHeight;
     if (!texture || !info || !videoWidth || !videoHeight) return;
     if (videoWidth !== info.textureWidth || videoHeight !== info.textureHeight)
       this.warnVideo(

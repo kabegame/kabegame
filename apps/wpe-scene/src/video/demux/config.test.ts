@@ -9,7 +9,7 @@ import {
   decoderConfig,
   firstAvcSps,
   matrixFromCode,
-  MF_HD_MIN_HEIGHT,
+  MF_SD_MAX_HEIGHT,
   parseAvcSps,
   unescapeRbsp,
   wpeColor,
@@ -312,50 +312,78 @@ describe("parseAvcSps：读到 VUI（裁剪后的宽高核对前面的字段都�
   });
 });
 
-describe("wpeColor：照 WPE（Media Foundation）", () => {
+describe("wpeColor 场景视频：矩阵恒为 bt709（步骤 4 走查：WPE 不看标签、不按分辨率）", () => {
+  it("码流标 bt470bg 的 540p 与 4K（语料 3400241651、3812007032）都是 bt709，标签进说明", () => {
+    for (const [w, h] of [
+      [960, 540],
+      [3840, 2160],
+    ]) {
+      const color = wpeColor(track({ sps: SPS_540_BT470BG, codedWidth: w, codedHeight: h }), "scene");
+      expect(color.colorSpace).toEqual({ primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false });
+      expect(color).toMatchObject({ source: "scene", code: 5, matrix: "bt709", rangeSource: "vui" });
+      expect(color.note).toMatch(/场景视频恒为 bt709（码流 SPS VUI 矩阵码 5）/);
+    }
+  });
+
+  it("没标的标清不按分辨率；colr 标 601 也不认；范围照码流", () => {
+    expect(wpeColor(track({ codedWidth: 320, codedHeight: 240 }), "scene")).toMatchObject({
+      source: "scene",
+      code: null,
+      matrix: "bt709",
+    });
+    expect(wpeColor(track({ codedWidth: 320, codedHeight: 240 }), "scene").note).toMatch(/码流未标/);
+    const full = wpeColor(track({ colr: colr(6, true), codedHeight: 480 }), "scene");
+    expect(full.colorSpace).toEqual({ primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: true });
+    expect(full.note).toMatch(/colr 矩阵码 6/);
+  });
+});
+
+describe("wpeColor 用户视频：照码流标签，没标按分辨率（Media Foundation）", () => {
   it("矩阵码映射：1 → bt709，5 / 6 → smpte170m，9 → bt2020-ncl，其它不认识", () => {
     expect([1, 5, 6, 9].map(matrixFromCode)).toEqual(["bt709", "smpte170m", "smpte170m", "bt2020-ncl"]);
     expect([0, 2, 4, 7, 10, 14].map(matrixFromCode)).toEqual([null, null, null, null, null, null]);
   });
 
   it("VUI：语料 3400241651（码流标 bt470bg）→ smpte170m / limited", () => {
-    const color = wpeColor(track({ sps: SPS_540_BT470BG, codedWidth: 960, codedHeight: 540 }));
+    const color = wpeColor(track({ sps: SPS_540_BT470BG, codedWidth: 960, codedHeight: 540 }), "user");
     expect(color.colorSpace).toEqual({ primaries: "bt709", transfer: "bt709", matrix: "smpte170m", fullRange: false });
     expect(color).toMatchObject({ source: "vui", code: 5, unknownCode: false, rangeSource: "vui" });
     expect(color.note).toMatch(/SPS VUI 矩阵码 5 → smpte170m/);
   });
 
   it("VUI：高清片标 bt470bg 也照码流（语料 3812007032 是 4K、标 bt470bg）", () => {
-    expect(wpeColorSpace(track({ sps: SPS_540_BT470BG, codedWidth: 3840, codedHeight: 2160 })).matrix).toBe(
+    expect(wpeColorSpace(track({ sps: SPS_540_BT470BG, codedWidth: 3840, codedHeight: 2160 }), "user").matrix).toBe(
       "smpte170m",
     );
   });
 
   it("colr 优先于 VUI，范围也取 colr；原色与传递函数恒为 bt709", () => {
-    const color = wpeColor(track({ sps: SPS_540_BT470BG, colr: colr(1, true, 9, 16) }));
+    const color = wpeColor(track({ sps: SPS_540_BT470BG, colr: colr(1, true, 9, 16) }), "user");
     expect(color.colorSpace).toEqual({ primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: true });
     expect(color).toMatchObject({ source: "colr", code: 1, rangeSource: "colr" });
   });
 
   it("colr 矩阵 2（未指定）：往下取 VUI；范围仍取 colr", () => {
-    const color = wpeColor(track({ sps: SPS_540_BT470BG, colr: colr(2, true) }));
+    const color = wpeColor(track({ sps: SPS_540_BT470BG, colr: colr(2, true) }), "user");
     expect(color).toMatchObject({ source: "vui", matrix: "smpte170m", rangeSource: "colr" });
     expect(color.colorSpace.fullRange).toBe(true);
   });
 
   it("colr 矩阵 9 → bt2020-ncl；不认识的码按 bt709 并记下", () => {
-    expect(wpeColor(track({ colr: colr(9) })).colorSpace.matrix).toBe("bt2020-ncl");
-    const unknown = wpeColor(track({ colr: colr(4), codedHeight: 480 }));
+    expect(wpeColor(track({ colr: colr(9) }), "user").colorSpace.matrix).toBe("bt2020-ncl");
+    const unknown = wpeColor(track({ colr: colr(4), codedHeight: 480 }), "user");
     expect(unknown).toMatchObject({ matrix: "bt709", source: "colr", code: 4, unknownCode: true });
     expect(unknown.note).toMatch(/矩阵码 4 不认识/);
   });
 
-  it(`没标：按分辨率（高 ≥ ${MF_HD_MIN_HEIGHT} 用 bt709，否则 smpte170m）`, () => {
-    expect(MF_HD_MIN_HEIGHT).toBe(720);
-    const sd = wpeColor(track({ codedWidth: 1280, codedHeight: 719 }));
+  it(`没标：按高度（高 > ${MF_SD_MAX_HEIGHT} 用 bt709，否则 smpte170m，宽度不参与；走查在 WPE 实测的分界）`, () => {
+    expect(MF_SD_MAX_HEIGHT).toBe(576);
+    const sd = wpeColor(track({ codedWidth: 720, codedHeight: 576 }), "user");
     expect(sd).toMatchObject({ source: "resolution", code: null, matrix: "smpte170m", rangeSource: "default" });
     expect(sd.colorSpace.fullRange).toBe(false);
-    expect(wpeColor(track({ codedWidth: 1280, codedHeight: 720 })).matrix).toBe("bt709");
+    expect(wpeColor(track({ codedWidth: 720, codedHeight: 578 }), "user").matrix).toBe("bt709");
+    expect(wpeColor(track({ codedWidth: 1280, codedHeight: 480 }), "user").matrix).toBe("smpte170m");
+    expect(wpeColor(track({ codedWidth: 480, codedHeight: 720 }), "user").matrix).toBe("bt709");
     // VUI 的矩阵码 2（未指定）同样当作没标
     const unspecified = synthSps({
       profile: 77,
@@ -363,17 +391,17 @@ describe("wpeColor：照 WPE（Media Foundation）", () => {
       heightMapUnits: 15,
       vui: { signal: { fullRange: false, colour: [2, 2, 2] } },
     });
-    expect(wpeColor(track({ sps: unspecified, codedHeight: 240 }))).toMatchObject({
+    expect(wpeColor(track({ sps: unspecified, codedHeight: 240 }), "user")).toMatchObject({
       source: "resolution",
       matrix: "smpte170m",
     });
   });
 
   it("VUI 没有 video_signal_type（AVC-Intra 50）：矩阵按分辨率、范围未标；只有范围没有颜色描述：范围取 VUI", () => {
-    const color = wpeColor(track({ sps: SPS_AVCI50, codedHeight: 480 }));
+    const color = wpeColor(track({ sps: SPS_AVCI50, codedHeight: 480 }), "user");
     expect(color).toMatchObject({ source: "resolution", matrix: "smpte170m", rangeSource: "default" });
     const full = synthSps({ profile: 100, widthMbs: 40, heightMapUnits: 30, vui: { signal: { fullRange: true } } });
-    expect(wpeColor(track({ sps: full, codedHeight: 480 })).colorSpace).toMatchObject({
+    expect(wpeColor(track({ sps: full, codedHeight: 480 }), "user").colorSpace).toMatchObject({
       matrix: "smpte170m",
       fullRange: true,
     });
@@ -387,16 +415,19 @@ describe("wpeColor：照 WPE（Media Foundation）", () => {
       codedWidth: 2560,
       codedHeight: 1440,
     });
-    expect(wpeColor(hevc)).toMatchObject({ source: "resolution", matrix: "bt709" });
-    expect(wpeColor({ ...hevc, colr: colr(6) })).toMatchObject({ source: "colr", matrix: "smpte170m" });
+    expect(wpeColor(hevc, "user")).toMatchObject({ source: "resolution", matrix: "bt709" });
+    expect(wpeColor({ ...hevc, colr: colr(6) }, "user")).toMatchObject({ source: "colr", matrix: "smpte170m" });
   });
 
   it("SPS 解析失败或 avcC 里没有 SPS：按分辨率，原因进说明", () => {
-    const broken = wpeColor(track({ sps: SPS_1080_BT709.subarray(0, 12), codedHeight: 1080 }));
+    const broken = wpeColor(track({ sps: SPS_1080_BT709.subarray(0, 12), codedHeight: 1080 }), "user");
     expect(broken).toMatchObject({ source: "resolution", matrix: "bt709" });
     expect(broken.spsError).toMatch(/截断/);
     expect(broken.note).toMatch(/SPS 解析失败/);
-    const empty = wpeColor(track({ description: new Uint8Array([1, 0x64, 0, 0x28, 0xff, 0xe0, 0]), codedHeight: 360 }));
+    const empty = wpeColor(
+      track({ description: new Uint8Array([1, 0x64, 0, 0x28, 0xff, 0xe0, 0]), codedHeight: 360 }),
+      "user",
+    );
     expect(empty).toMatchObject({ source: "resolution", matrix: "smpte170m", spsError: "avcC 里没有 SPS" });
   });
 });
@@ -423,16 +454,22 @@ describe("codecString / decoderConfig", () => {
     expect(codecString(hevc)).toBe("hev1.B2.80000000.H186");
   });
 
-  it("decoderConfig：codec、编码尺寸、description、色彩空间、优先硬件", () => {
+  it("decoderConfig：codec、编码尺寸、description、色彩空间（按规则）、优先硬件", () => {
     const t = track({ sps: SPS_540_BT470BG, codedWidth: 960, codedHeight: 540 });
-    expect(decoderConfig(t)).toEqual({
+    expect(decoderConfig(t, "scene")).toEqual({
       codec: "avc1.64001f",
       codedWidth: 960,
       codedHeight: 540,
       description: t.description,
-      colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "smpte170m", fullRange: false },
+      colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false },
       hardwareAcceleration: "prefer-hardware",
     });
-    expect(decoderConfig(t).description).toBe(t.description);
+    expect(decoderConfig(t, "user").colorSpace).toEqual({
+      primaries: "bt709",
+      transfer: "bt709",
+      matrix: "smpte170m",
+      fullRange: false,
+    });
+    expect(decoderConfig(t, "scene").description).toBe(t.description);
   });
 });

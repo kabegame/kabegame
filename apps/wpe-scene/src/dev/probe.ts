@@ -1018,7 +1018,7 @@ async function renderFramePass(
       scene.destroy();
     }
   } finally {
-    // 视频元素与对象地址（P9a 步骤 3）：读回之后释放，出错也释放
+    // 视频纹理留下的帧（P9a 步骤 3，P9d 起是解出的 `VideoFrame`）：读回之后释放，出错也释放
     videos?.dispose();
     userTextures?.dispose();
     for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();

@@ -21,8 +21,9 @@
  *   （`MediaTexture`），`GpuScene` 只持有 GPU 纹理，画到时经 `UserTextureAnimation.drawn()` 要新内容、自己上传。
  *   - **按值登记、引用计数**（`Shared`）：不同属性名选了同一个文件共用一份（WPE 的纹理缓存按名字共享）；没有来源用这个值时释放（GIF 状态
  *     丢掉、播放器 `dispose`）。动图不进按值的解码缓存：WPE 换走再选回来是新纹理、从第 0 帧 / 视频开头重来（rea-p11b 2.4、3.4）。
- *   - **加载**：GIF 读字节、`openGif` 解出第 0 帧，尺寸 = 逻辑屏幕尺寸；视频读 Blob、建 `VideoTexturePlayer`（P9a 的类）等第一帧，尺寸取
- *     `videoWidth × videoHeight`；读不出、打不开、视频解码失败或没有尺寸都是 `failed`，槽用缺省纹理（同 WPE）。初始解出的那个 GIF / 播放器留给
+ *   - **加载**：GIF 读字节、`openGif` 解出第 0 帧，尺寸 = 逻辑屏幕尺寸；视频读成 Blob（`file:` 响应没有长度，拆包要先知道总长；Blob 由 Chromium 换到磁盘）、
+ *     按 Blob 切片的区间读取建 `CodecVideoPlayer`（WebCodecs，颜色照 WPE 的规则，标清视频不再偏色）等第一帧，尺寸取
+ *     第一帧的 `displayWidth × displayHeight`；读不出、打不开、视频解码失败或没有尺寸都是 `failed`，槽用缺省纹理（同 WPE）。初始解出的那个 GIF / 播放器留给
  *     第一个请求的纹理名，后来的纹理名各自再开（同一份字节 / Blob）。
  *   - **推进**：GIF 只在画到时推进、每个渲染帧最多一次（帧号由 `beginFrame` 走，宿主暂停时不走）；视频的 30 帧规则与暂停同 `SceneVideos`。
  *     已知小差异：暂停期间改值新建的 GIF 第一次画到时用的是上一个实时帧的 frametime。HDR 视频（PQ / HLG，WPE 用 `rgba16float`）不做，照常 RGBA8。
@@ -36,13 +37,8 @@ import { GifAnimation } from "./gif";
 import type { UserTextureKind } from "../compile/usertextures";
 import { cropRect, padRect, referenceRatio, textureKey, type CropRect } from "./crop";
 import { pngGammaTable } from "./png";
-import {
-  SEEK_END_MARGIN,
-  VideoTexturePlayer,
-  type VideoFactories,
-  type VideoPlayerProbe,
-  type VideoReport,
-} from "../video/player";
+import { SEEK_END_MARGIN, type VideoReport } from "../video/player";
+import { blobRangeReader, CodecVideoPlayer, type CodecFactories, type CodecVideoProbe } from "../video/codecPlayer";
 
 export interface UserTextureImage {
   width: number;
@@ -57,11 +53,11 @@ export interface UserTextureImage {
 }
 
 /**
- * 一次要上传的内容：GIF 是整张画布（渲染器按 `rect` 取，`width` 是画布宽），视频是元素（按 `rect` 的源矩形拷，整像素起点；WPE 的 MF 在
+ * 一次要上传的内容：GIF 是整张画布（渲染器按 `rect` 取，`width` 是画布宽），视频是解出的帧（按 `rect` 的源矩形拷，整像素起点；WPE 的 MF 在
  * 半像素起点时重采样，记为已知差异）。
  */
 export type UserTextureFrame =
-  { kind: "pixels"; data: Uint8Array; width: number; height: number } | { kind: "element"; element: HTMLVideoElement };
+  { kind: "pixels"; data: Uint8Array; width: number; height: number } | { kind: "video"; frame: VideoFrame };
 
 /** GIF / 视频的一张纹理（WPE 的一个纹理名）的帧来源：渲染器按它建 GPU 纹理、画到时要新内容。 */
 export interface UserTextureAnimation {
@@ -140,8 +136,8 @@ export interface UserTextureDeps {
   openGif(bytes: Uint8Array): GifSource;
   /** 读视频文件成 Blob（参数是属性值，即绝对路径）：缺省 `fetch(fileToUrl(path))`；失败抛错。 */
   readBlob(path: string): Promise<Blob>;
-  /** 视频播放器的浏览器对象工厂（测试注入替身；`readBlob` 由来源表自己给，这里的会被覆盖）。 */
-  videoFactories: VideoFactories;
+  /** 视频播放器的部件（测试注入解码器替身；`readRange` 由来源表自己按 Blob 给，这里的会被覆盖）。 */
+  codecFactories: CodecFactories;
   /** 视频播放器的 warning 出口（宿主传它的 report）。 */
   report: VideoReport;
   /**
@@ -170,7 +166,7 @@ export interface UserTextureProbe {
   /** 已登记的纹理名（`crop` 请求过的），按登记顺序。 */
   keys: string[];
   /** 视频：每个纹理名的播放器状态。 */
-  videos?: { key: string; player: VideoPlayerProbe }[];
+  videos?: { key: string; player: CodecVideoProbe }[];
   /** GIF：每个纹理名换过几次帧（`frames`）与最近一次推进时的帧号（`lastFrame`，没推进过 −1）。 */
   gifs?: { key: string; frames: number; lastFrame: number }[];
 }
@@ -283,7 +279,7 @@ class VideoTexture implements UserTextureAnimation {
   readonly kind = "video";
 
   constructor(
-    readonly player: VideoTexturePlayer,
+    readonly player: CodecVideoPlayer,
     private readonly clock: Clock,
   ) {}
 
@@ -293,8 +289,8 @@ class VideoTexture implements UserTextureAnimation {
   }
 
   drawn(): UserTextureFrame | null {
-    const element = this.player.drawn(this.clock.frame, this.clock.paused);
-    return element ? { kind: "element", element } : null;
+    const frame = this.player.drawn(this.clock.frame, this.clock.paused);
+    return frame ? { kind: "video", frame } : null;
   }
 }
 
@@ -314,7 +310,7 @@ interface Shared {
   error: string;
   /** 加载结束（成功或失败）时 resolve，不 reject。 */
   ready: Promise<void>;
-  /** GIF 的逻辑屏幕尺寸、视频的 `videoWidth × videoHeight`（ready 后有）。 */
+  /** GIF 的逻辑屏幕尺寸、视频第一帧的显示尺寸（ready 后有）。 */
   width: number;
   height: number;
   loadMs: number;
@@ -322,7 +318,7 @@ interface Shared {
   blob: Blob | null;
   /** 初始解出的 GIF / 播放器：留给第一个请求的纹理名，取走后 null。 */
   initialGif: GifSource | null;
-  initialPlayer: VideoTexturePlayer | null;
+  initialPlayer: CodecVideoPlayer | null;
   /** 纹理名 → 帧状态。 */
   textures: Map<string, MediaTexture>;
   rects: Map<string, CropRect>;
@@ -359,7 +355,7 @@ function defaultDeps(read: (path: string) => Promise<Uint8Array>): UserTextureDe
       if (!response.ok) throw new TypeError(`读取视频失败（HTTP ${response.status}）`);
       return response.blob();
     },
-    videoFactories: {},
+    codecFactories: {},
     report: { warn: () => {} },
     shortcutIcon: () => Promise.resolve(null),
     bitmapFromIcon: (icon) =>
@@ -883,7 +879,7 @@ export class UserTextureSources implements UserTextureProvider {
         shared.initialPlayer = player;
         await withTimeout(player.firstFrame(), VIDEO_FIRST_FRAME_TIMEOUT_MS, "等视频第一帧超时");
         if (shared.disposed) return;
-        const { videoWidth, videoHeight } = player.element;
+        const { videoWidth, videoHeight } = player;
         // 解码失败，或没有尺寸（rea-p11b 3.1 更正）：失败、用缺省纹理
         if (player.failed || !videoWidth || !videoHeight) throw new Error("视频解码失败或没有画面尺寸");
         shared.width = videoWidth;
@@ -904,11 +900,13 @@ export class UserTextureSources implements UserTextureProvider {
   }
 
   /** 同一个 Blob 的一个播放器（整个 Blob 就是区间）：建好立即按当前帧号与暂停状态开始。 */
-  private newPlayer(shared: Shared, blob: Blob): VideoTexturePlayer {
-    const player = new VideoTexturePlayer({ path: shared.value, start: 0, end: blob.size }, this.clock.frame, {
-      ...this.deps.videoFactories,
-      readBlob: () => Promise.resolve(blob),
+  private newPlayer(shared: Shared, blob: Blob): CodecVideoPlayer {
+    const player = new CodecVideoPlayer({ path: shared.value, start: 0, end: blob.size }, this.clock.frame, {
+      ...this.deps.codecFactories,
+      readRange: () => blobRangeReader(blob),
       report: this.deps.report,
+      // 用户视频的颜色照码流标签、没标按分辨率（WPE 读用户视频走另一条路径，同场景视频纹理的「恒为 709」不同）
+      colorRule: "user",
     });
     player.apply(this.clock.frame, this.clock.paused);
     return player;
@@ -938,22 +936,21 @@ export class UserTextureSources implements UserTextureProvider {
   }
 
   /** 全部视频播放器（含还没被纹理名取走的初始播放器）。 */
-  private *players(): Iterable<VideoTexturePlayer> {
+  private *players(): Iterable<CodecVideoPlayer> {
     for (const shared of this.media.values()) if (shared.kind === "video") yield* this.sharedPlayers(shared);
   }
 
-  private sharedPlayers(shared: Shared): VideoTexturePlayer[] {
-    const list: VideoTexturePlayer[] = [];
+  private sharedPlayers(shared: Shared): CodecVideoPlayer[] {
+    const list: CodecVideoPlayer[] = [];
     if (shared.initialPlayer) list.push(shared.initialPlayer);
     for (const texture of shared.textures.values()) if (texture instanceof VideoTexture) list.push(texture.player);
     return list;
   }
 
-  /** seek 一个播放器到时刻 `time`（循环取模、钳到时长之内），等 `seeked`，超时也往下走。 */
-  private seek(player: VideoTexturePlayer, time: number): Promise<void> {
+  /** seek 一个播放器到时刻 `time`（循环取模、钳到时长之内），等目标帧到手（`seeked()`），超时也往下走。 */
+  private seek(player: CodecVideoPlayer, time: number): Promise<void> {
     if (player.failed) return Promise.resolve();
-    const element = player.element;
-    const target = seekTarget(time, element.duration);
+    const target = seekTarget(time, player.duration);
     return new Promise<void>((resolve) => {
       let done = false;
       const finish = () => {
@@ -966,8 +963,8 @@ export class UserTextureSources implements UserTextureProvider {
         this.deps.log(`用户视频 ${player.source.path}：seek 到 ${target} s 超时`);
         finish();
       }, SEEK_TIMEOUT_MS);
-      element.addEventListener("seeked", finish);
       player.currentTime = target;
+      void player.seeked().then(finish);
     });
   }
 }

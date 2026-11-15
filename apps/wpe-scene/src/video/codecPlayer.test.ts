@@ -1,134 +1,18 @@
 /**
- * WebCodecs 播放器（P9d 步骤 2a）：解码器替身按喂入顺序在微任务里吐出带时间戳的假帧（可按显示顺序重排、可停止输出），墙钟注入，
- * 输入是 `demux/testMp4.ts` 手造的 MP4。核对起步、按时钟挑帧与丢帧、循环不停顿与跨循环的时间戳、不循环时结束、跳转到关键帧之间
- * （含 B 帧）、暂停、速率、空闲、宿主暂停、卡住重置、失败、释放、流控与预读；每个用例最后打开的帧数为 0。
- * 语义对照旧播放器（`player.test.ts`）与 WPE（p9-REPORT、rea-p9-video 第 3、4、6、7 节）。
+ * WebCodecs 播放器（P9d 步骤 2a / 2b）：解码器替身（`fakeDecoder.ts`）按喂入顺序在微任务里吐出带时间戳的假帧（可按显示顺序重排、可停止
+ * 输出），墙钟注入，输入是 `demux/testMp4.ts` 手造的 MP4。核对起步、按时钟挑帧与丢帧、循环不停顿与跨循环的时间戳、不循环时结束、
+ * 跳转到关键帧之间（含 B 帧）与 `seeked()`、暂停、速率、空闲、宿主暂停、卡住重置、失败（含拆不了包）、释放、流控与预读、两种区间读取
+ * （文件与 Blob）；每个用例最后打开的帧数为 0。语义对照 WPE（p9-REPORT、rea-p9-video 第 3、4、6、7 节）。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CodecVideoPlayer, MAX_AHEAD, type CodecDecoder, type CodecDecoderInit } from "./codecPlayer";
+import { blobRangeReader, CodecVideoPlayer, fileRangeReader, MAX_AHEAD } from "./codecPlayer";
 import { buildMkv, cluster, el, info, MKV, payload, simpleBlock, trackEntry } from "./demux/testMkv";
 import { AVCC, buildMp4, memoryRead, type Spec } from "./demux/testMp4";
 import type { ReadRange } from "./demux/mp4";
-import { flush } from "./fakeVideo";
+import { FakeFrame, fakeFactories, flush, newFakeEnv, type FakeEnv } from "./fakeDecoder";
 import type { SceneVideoSource } from "./player";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => `file:///${path}` }));
-
-// ———— 替身 ————
-
-/** 假帧：只有播放器与 GpuScene 用到的字段；`close` 记账。 */
-class FakeFrame {
-  closed = false;
-  readonly duration = 125_000;
-  readonly displayWidth = 1920;
-  readonly displayHeight = 1080;
-  constructor(
-    private readonly env: Env,
-    readonly timestamp: number,
-  ) {
-    env.opened++;
-  }
-  close() {
-    if (this.closed) return;
-    this.closed = true;
-    this.env.opened--;
-  }
-}
-
-/**
- * 解码器替身：`decode` 进队列，微任务里按喂入顺序吐出（`depth > 0` 时先攒 `depth` 个、按时间戳最小的先出，模拟 B 帧重排）。
- * `halted` 时不吐。configure / flush 之后第一个必须是关键帧（同 WebCodecs 的 key chunk required）。
- */
-class FakeDecoder implements CodecDecoder {
-  queue: EncodedVideoChunkInit[] = [];
-  held: EncodedVideoChunkInit[] = [];
-  /** 喂入的时间戳，reset 记作 "reset"。 */
-  fed: (number | "reset")[] = [];
-  configures = 0;
-  resets = 0;
-  flushes = 0;
-  closed = false;
-  halted = false;
-  private needKey = true;
-  private scheduled = false;
-
-  constructor(
-    private readonly env: Env,
-    readonly init: CodecDecoderInit,
-    private readonly depth: number,
-  ) {}
-
-  get decodeQueueSize() {
-    return this.queue.length + this.held.length;
-  }
-  configure() {
-    this.configures++;
-    this.needKey = true;
-  }
-  decode(chunk: EncodedVideoChunkInit) {
-    if (this.needKey && chunk.type !== "key") throw new DOMException("需要关键帧", "DataError");
-    this.needKey = false;
-    this.fed.push(chunk.timestamp);
-    this.queue.push(chunk);
-    this.schedule();
-  }
-  flush() {
-    this.flushes++;
-    this.needKey = true;
-    return Promise.resolve().then(() => {
-      this.drain();
-      this.held.sort((a, b) => a.timestamp - b.timestamp);
-      for (const chunk of this.held.splice(0)) this.emit(chunk);
-    });
-  }
-  reset() {
-    this.resets++;
-    this.fed.push("reset");
-    this.queue = [];
-    this.held = [];
-  }
-  close() {
-    this.closed = true;
-  }
-  /** 恢复输出。 */
-  resume() {
-    this.halted = false;
-    this.schedule();
-  }
-  private schedule() {
-    if (this.scheduled) return;
-    this.scheduled = true;
-    queueMicrotask(() => {
-      this.scheduled = false;
-      this.drain();
-    });
-  }
-  private drain() {
-    while (!this.halted && !this.closed && this.queue.length > 0) {
-      const chunk = this.queue.shift()!;
-      if (this.depth === 0) {
-        this.emit(chunk);
-        continue;
-      }
-      this.held.push(chunk);
-      if (this.held.length > this.depth) {
-        this.held.sort((a, b) => a.timestamp - b.timestamp);
-        this.emit(this.held.shift()!);
-      }
-    }
-  }
-  private emit(chunk: EncodedVideoChunkInit) {
-    this.init.output(new FakeFrame(this.env, chunk.timestamp) as unknown as VideoFrame);
-  }
-}
-
-interface Env {
-  now: number;
-  opened: number;
-  warnings: [string, unknown][];
-  decoders: FakeDecoder[];
-  reads: [number, number][];
-}
 
 // ———— 输入 ————
 
@@ -176,13 +60,12 @@ interface SetupOptions {
   read?: ReadRange;
   blockBytes?: number;
   source?: Partial<SceneVideoSource>;
-  onUnsupported?: (reason: string) => void;
   /** 解码器一建好就不出帧。 */
   halted?: boolean;
 }
 
 function setup(options: SetupOptions = {}) {
-  const env: Env = { now: 0, opened: 0, warnings: [], decoders: [], reads: [] };
+  const env: FakeEnv = newFakeEnv();
   const bytes = options.bytes ?? clip();
   const memory = memoryRead(bytes).read;
   const read: ReadRange = options.read ?? ((start, end) => (env.reads.push([start, end]), memory(start, end)));
@@ -190,16 +73,8 @@ function setup(options: SetupOptions = {}) {
   const player = new CodecVideoPlayer(source, 0, {
     report: { warn: (message, detail) => void env.warnings.push([message, detail]) },
     readRange: () => read,
-    createDecoder: (init) => {
-      const decoder = new FakeDecoder(env, init, options.depth ?? 0);
-      decoder.halted = options.halted ?? false;
-      env.decoders.push(decoder);
-      return decoder;
-    },
-    isConfigSupported: async () => ({ supported: options.supported ?? true }),
-    now: () => env.now,
+    ...fakeFactories(env, options),
     blockBytes: options.blockBytes,
-    onUnsupported: options.onUnsupported,
   });
   const driver = new Driver(player, env);
   return { player, env, driver, decoder: () => env.decoders[env.decoders.length - 1] };
@@ -211,7 +86,7 @@ class Driver {
   hostPaused = false;
   constructor(
     readonly player: CodecVideoPlayer,
-    readonly env: Env,
+    readonly env: FakeEnv,
   ) {}
   tick(ms: number, draw = true): number | null {
     this.env.now += ms;
@@ -238,7 +113,7 @@ class Driver {
 
 /** 全部释放后打开的帧数为 0。 */
 let disposeAll: (() => void)[] = [];
-function track<T extends { player: CodecVideoPlayer; env: Env }>(made: T): T {
+function track<T extends { player: CodecVideoPlayer; env: FakeEnv }>(made: T): T {
   disposeAll.push(() => {
     made.player.dispose();
     expect(made.env.opened, "释放后仍有没关的帧").toBe(0);
@@ -272,13 +147,15 @@ describe("CodecVideoPlayer：起步与挑帧", () => {
     expect(driver.tick(125)).toBe(ms(0.125));
     expect(player.currentTime).toBe(0.125);
     expect(player.probe()).toMatchObject({
-      decoder: "webcodecs",
       paused: false,
       videoWidth: 1920,
       videoHeight: 1080,
       duration: 1,
-      color: expect.stringContaining("按分辨率"),
+      color: expect.stringContaining("场景视频恒为 bt709"),
     });
+    // 只有一种解码器，探针里没有旧播放器的字段
+    expect(player.probe()).not.toHaveProperty("decoder");
+    expect(player.probe()).not.toHaveProperty("stallSeeks");
   });
 
   it("没画到过的视频时钟不走（消掉开场时视频比场景早）", async () => {
@@ -308,7 +185,7 @@ describe("CodecVideoPlayer：起步与挑帧", () => {
     expect(driver.tick(125)).toBe(ms(0.125));
     // 0.125 → 0.5：越过 0.25、0.375
     expect(driver.tick(375)).toBe(ms(0.5));
-    expect(player.probe()).toMatchObject({ dropped: 2, droppedFrames: 2 });
+    expect(player.probe()).toMatchObject({ dropped: 2 });
     // 差一点不到下一帧：不换
     expect(driver.tick(124)).toBeNull();
     expect(driver.tick(1)).toBe(ms(0.625));
@@ -654,7 +531,7 @@ describe("CodecVideoPlayer：卡住与失败", () => {
     expect(env.warnings[0][0]).toMatch(/解码配置不支持.*图层保持透明/);
     expect(player.wantPlay).toBe(false);
     expect(driver.tick(0)).toBeNull();
-    // 同旧播放器：失败后脚本 play() 照常置真、仍没有帧
+    // 失败后脚本 play() 照常置真（WPE 探测失败同样）、仍没有帧
     player.play();
     expect(player.isPlaying()).toBe(true);
     expect(driver.tick(0)).toBeNull();
@@ -672,14 +549,11 @@ describe("CodecVideoPlayer：卡住与失败", () => {
     expect(env.warnings[0][0]).toContain("解码失败");
   });
 
-  it("读失败：失败（不退回旧播放器）", async () => {
-    const onUnsupported = vi.fn();
-    const { player, env } = track(
-      setup({ read: () => Promise.reject(new TypeError("Failed to fetch")), onUnsupported }),
-    );
+  it("读失败：失败、记 warn、不建解码器", async () => {
+    const { player, env } = track(setup({ read: () => Promise.reject(new TypeError("Failed to fetch")) }));
     await flush();
     expect(player.failed).toBe(true);
-    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(env.decoders).toHaveLength(0);
     expect(env.warnings[0][0]).toContain("读取失败");
   });
 
@@ -694,36 +568,27 @@ describe("CodecVideoPlayer：卡住与失败", () => {
     expect(env.warnings[0][1]).toMatch(/长度不符/);
   });
 
-  it("拆不了包（不认识的封装）：交给 onUnsupported，自己不失败；takeScriptState 交出脚本状态并释放", async () => {
-    const onUnsupported = vi.fn();
-    // 既不是 EBML 魔数、第一个盒子头也不认识（Matroska 自步骤 3 起能拆，不再退回）
+  it("拆不了包（不认识的封装）：和读失败一样按失败处理，记原因、不建解码器、没有退回", async () => {
+    // 既不是 EBML 魔数、第一个盒子头也不认识
     const unknown = new Uint8Array(64);
-    const { player, env } = track(setup({ bytes: unknown, onUnsupported }));
-    const callback = () => {};
-    player.loop = false;
-    player.rate = 2;
-    player.pause();
+    const { player, env, driver } = track(setup({ bytes: unknown }));
+    let first = false;
+    void player.firstFrame().then(() => (first = true));
     player.currentTime = 1.5;
-    player.addEndedCallback(callback);
     await flush();
-    expect(onUnsupported).toHaveBeenCalledWith(expect.stringContaining("不是 MP4"));
-    expect(player.failed).toBe(false);
-    expect(env.warnings).toEqual([]);
-    expect(player.takeScriptState()).toEqual({
-      wantPlay: false,
-      loop: false,
-      rate: 2,
-      lastDrawn: 0,
-      endedCallbacks: [callback],
-      seekTo: 1.5,
-    });
-    expect(player.drawn(1, false)).toBeNull();
+    expect(first).toBe(true);
+    expect(player.failed).toBe(true);
+    expect(player.wantPlay).toBe(false);
+    expect(env.decoders).toHaveLength(0);
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0][0]).toContain("场景视频不能拆包");
+    expect(env.warnings[0][1]).toMatch(/不是 MP4/);
+    expect(driver.tick(0)).toBeNull();
   });
 });
 
 describe("CodecVideoPlayer：Matroska", () => {
-  it("Matroska 也自己拆包解码、不退回：时间戳按块的显示时间，挑帧照常", async () => {
-    const onUnsupported = vi.fn();
+  it("Matroska 也自己拆包解码：时间戳按块的显示时间，挑帧照常", async () => {
     // 解码顺序 I0 P2 B1 I3（数字是显示的帧号，每帧 0.125 s），时长 0.5 s（Info.Duration 500 ms）
     const bytes = buildMkv([
       info(undefined, 500),
@@ -736,9 +601,9 @@ describe("CodecVideoPlayer：Matroska", () => {
         simpleBlock(1, 375, 0x80, payload(4)),
       ),
     ]);
-    const { player, env, driver, decoder } = track(setup({ bytes, onUnsupported }));
+    const { player, env, driver, decoder } = track(setup({ bytes }));
     await flush();
-    expect(onUnsupported).not.toHaveBeenCalled();
+    expect(player.failed).toBe(false);
     expect(env.warnings).toEqual([]);
     // 第一遍按解码顺序、时间戳是显示时间；loop 下接着喂下一遍（加时长）
     expect(decoder().fed.slice(0, 5)).toEqual([0, ms(0.25), ms(0.125), ms(0.375), ms(0.5)]);
@@ -746,6 +611,124 @@ describe("CodecVideoPlayer：Matroska", () => {
     expect(driver.tick(125)).toBe(ms(0.125));
     expect(driver.tick(125)).toBe(ms(0.25));
     expect(player.duration).toBe(0.5);
+  });
+});
+
+describe("CodecVideoPlayer：seeked()", () => {
+  it("跳转中等到目标帧到手才 resolve；之后写下一次跳转同理", async () => {
+    const { player, driver, decoder } = track(setup());
+    await flush();
+    driver.tick(0);
+    decoder().halted = true;
+    player.currentTime = 0.8;
+    let done = false;
+    void player.seeked().then(() => (done = true));
+    await flush();
+    expect(done).toBe(false);
+    decoder().resume();
+    await flush();
+    expect(done).toBe(true);
+    // 目标帧已经成了当前帧
+    expect(driver.tick(0)).toBe(ms(0.75));
+  });
+
+  it("拆包期间写的时间：等到解码器建好、那次跳转完成", async () => {
+    const { player, driver } = track(setup());
+    // 构造之后立即写：帧表还没拆出来，时间记在 pendingSeek
+    player.currentTime = 0.6;
+    let done = false;
+    void player.seeked().then(() => (done = true));
+    expect(done).toBe(false);
+    await flush();
+    expect(done).toBe(true);
+    expect(driver.tick(0)).toBe(ms(0.5));
+    expect(player.currentTime).toBe(0.6);
+  });
+
+  it("没在跳转：立即 resolve（含拆包完成、没有等着的跳转）", async () => {
+    const { player } = track(setup());
+    await flush();
+    await expect(player.seeked()).resolves.toBeUndefined();
+    await expect(player.seeked()).resolves.toBeUndefined();
+  });
+
+  it("失败或释放时 resolve，不 reject", async () => {
+    const failing = track(setup({ halted: true }));
+    await flush();
+    failing.player.currentTime = 0.5;
+    const failed = failing.player.seeked();
+    failing.decoder().init.error(new DOMException("坏了", "EncodingError"));
+    await expect(failed).resolves.toBeUndefined();
+    await expect(failing.player.seeked()).resolves.toBeUndefined();
+
+    const disposing = track(setup({ halted: true }));
+    await flush();
+    const pending = disposing.player.seeked();
+    disposing.player.currentTime = 0.5;
+    const second = disposing.player.seeked();
+    disposing.player.dispose();
+    await expect(pending).resolves.toBeUndefined();
+    await expect(second).resolves.toBeUndefined();
+    await expect(disposing.player.seeked()).resolves.toBeUndefined();
+  });
+});
+
+describe("区间读取", () => {
+  it("fileRangeReader：按区间 fetch(file:)，Range 是闭区间、偏移加 source.start；200 也收，只认长度", async () => {
+    const calls: [string, RequestInit | undefined][] = [];
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      calls.push([url, init]);
+      return new Response(new Uint8Array(30), { status: 200 });
+    });
+    try {
+      const read = fileRangeReader({ path: "P:/p/scene.pkg", start: 100, end: 164 });
+      expect((await read(10, 40)).length).toBe(30);
+      expect(calls).toEqual([["file:///P:/p/scene.pkg", { headers: { Range: "bytes=110-139" } }]]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fileRangeReader：Range 被忽略（拿到整个文件）、HTTP 失败、区间无效：都拒绝", async () => {
+    const read = fileRangeReader({ path: "P:/p/scene.pkg", start: 100, end: 164 });
+    try {
+      vi.stubGlobal("fetch", async () => new Response(new Uint8Array(1000), { status: 200 }));
+      await expect(read(0, 30)).rejects.toThrow("长度不符");
+      vi.stubGlobal("fetch", async () => new Response(null, { status: 404 }));
+      await expect(read(0, 30)).rejects.toThrow("HTTP 404");
+      await expect(read(5, 5)).rejects.toThrow(RangeError);
+      await expect(read(0, 65)).rejects.toThrow(RangeError);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("blobRangeReader：切片、越界、长度", async () => {
+    const blob = new Blob([Uint8Array.from({ length: 64 }, (_, i) => i)]);
+    const read = blobRangeReader(blob);
+    expect(Array.from(await read(0, 4))).toEqual([0, 1, 2, 3]);
+    expect(Array.from(await read(60, 64))).toEqual([60, 61, 62, 63]);
+    await expect(read(60, 65)).rejects.toThrow(RangeError);
+    await expect(read(-1, 4)).rejects.toThrow(RangeError);
+    await expect(read(4, 4)).rejects.toThrow(RangeError);
+    await expect(read(0.5, 4)).rejects.toThrow(RangeError);
+  });
+
+  it("blobRangeReader 接进播放器：从 Blob 切片读帧表与样本，解到目标帧", async () => {
+    const bytes = clip();
+    const blob = new Blob([bytes as Uint8Array<ArrayBuffer>]);
+    const env = newFakeEnv();
+    const player = new CodecVideoPlayer({ path: "blob", start: 0, end: blob.size }, 0, {
+      report: { warn: (message, detail) => void env.warnings.push([message, detail]) },
+      readRange: () => blobRangeReader(blob),
+      ...fakeFactories(env),
+    });
+    const made = track({ player, env, driver: new Driver(player, env) });
+    player.currentTime = 0.5;
+    await player.seeked();
+    await flush();
+    expect(player.failed).toBe(false);
+    expect(made.driver.tick(0)).toBe(ms(0.5));
   });
 });
 
@@ -790,5 +773,33 @@ describe("CodecVideoPlayer：脚本状态与释放", () => {
     await flush();
     expect(env.decoders).toHaveLength(0);
     expect(env.opened).toBe(0);
+  });
+});
+
+describe("颜色规则（步骤 4 走查）", () => {
+  /** 240 高、没标颜色的片子：交给 `isConfigSupported` 的配置。 */
+  async function configured(colorRule?: "scene" | "user"): Promise<VideoDecoderConfig> {
+    const env = newFakeEnv();
+    const bytes = clip({ width: 320, height: 240 });
+    let seen: VideoDecoderConfig | null = null;
+    const player = new CodecVideoPlayer({ path: "P:/p/v.mp4", start: 0, end: bytes.length }, 0, {
+      report: { warn: (message, detail) => void env.warnings.push([message, detail]) },
+      readRange: () => memoryRead(bytes).read,
+      ...fakeFactories(env),
+      isConfigSupported: async (config) => ((seen = config), { supported: true }),
+      ...(colorRule ? { colorRule } : {}),
+    });
+    await player.firstFrame();
+    player.dispose();
+    return seen!;
+  }
+
+  it("缺省是场景视频：矩阵恒为 bt709，不按分辨率", async () => {
+    expect((await configured()).colorSpace).toMatchObject({ matrix: "bt709", primaries: "bt709", transfer: "bt709" });
+    expect((await configured("scene")).colorSpace?.matrix).toBe("bt709");
+  });
+
+  it("用户视频：没标时按分辨率（240 高 → smpte170m）", async () => {
+    expect((await configured("user")).colorSpace?.matrix).toBe("smpte170m");
   });
 });

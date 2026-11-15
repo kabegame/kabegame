@@ -1075,8 +1075,8 @@ const gifPixels = (): UserTextureFrame => ({
   width: 100,
   height: 80,
 });
-const videoElement = (videoWidth = 320, videoHeight = 240) =>
-  ({ videoWidth, videoHeight }) as unknown as HTMLVideoElement;
+const videoElement = (displayWidth = 320, displayHeight = 240) =>
+  ({ displayWidth, displayHeight }) as unknown as VideoFrame;
 
 async function openAnim(provider: UserTextureProvider, bundle = npotBundle()) {
   const gpu = new FakeGpu();
@@ -1183,7 +1183,7 @@ describe("GIF 与视频的用户纹理：GPU 纹理与上传", () => {
     expect(userWrites(gpu)).toHaveLength(0);
     expect(gpu.copies).toHaveLength(0);
     const element = videoElement();
-    animation.frames.push({ kind: "element", element });
+    animation.frames.push({ kind: "video", frame: element });
     encode();
     expect(gpu.copies).toEqual([
       { source: element, texture: "user k.mp4x15", origin: { x: 0, y: 13 }, size: { width: 320, height: 213 } },
@@ -1192,26 +1192,26 @@ describe("GIF 与视频的用户纹理：GPU 纹理与上传", () => {
     expect(gpu.copies).toHaveLength(1);
   });
 
-  it("视频元素装不下裁切矩形 / 拷贝抛错：这一帧不更新、记一条 warning（每个纹理名每种一次），整帧不失败", async () => {
+  it("视频画面装不下裁切矩形 / 拷贝抛错：这一帧不更新、记一条 warning（每个纹理名每种一次），整帧不失败", async () => {
     const animation = new FakeAnimation("video", null);
     const { gpu, warnings, encode } = await openAnim(animProvider(animation, VIDEO_RECT, "k.mp4x15"));
-    animation.frames.push({ kind: "element", element: videoElement(320, 100) });
+    animation.frames.push({ kind: "video", frame: videoElement(320, 100) });
     expect(encode).not.toThrow();
-    animation.frames.push({ kind: "element", element: videoElement(320, 100) });
+    animation.frames.push({ kind: "video", frame: videoElement(320, 100) });
     encode();
     expect(gpu.copies).toHaveLength(0);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("装不下");
     gpu.copyError = new DOMException("The video element has no frame", "InvalidStateError");
-    animation.frames.push({ kind: "element", element: videoElement() });
+    animation.frames.push({ kind: "video", frame: videoElement() });
     expect(encode).not.toThrow();
-    animation.frames.push({ kind: "element", element: videoElement() });
+    animation.frames.push({ kind: "video", frame: videoElement() });
     encode();
     expect(warnings).toHaveLength(2);
     expect(warnings[1]).toContain("拷进纹理失败");
-    // 视频还没有尺寸（videoWidth 为 0）：跳过，不记 warning
+    // 视频还没有尺寸（displayWidth 为 0）：跳过，不记 warning
     gpu.copyError = null;
-    animation.frames.push({ kind: "element", element: videoElement(0, 0) });
+    animation.frames.push({ kind: "video", frame: videoElement(0, 0) });
     encode();
     expect(gpu.copies).toHaveLength(0);
     expect(warnings).toHaveLength(2);

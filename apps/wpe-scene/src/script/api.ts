@@ -241,8 +241,7 @@ interface PendingLayer {
 }
 
 /**
- * `IVideoTexture` 的落点（P9b）：视频纹理的两种播放器（`video/player.ts` 的 `VideoTexturePlayer`、P9d 的 `video/codecPlayer.ts`
- * `CodecVideoPlayer`）都满足它。
+ * `IVideoTexture` 的落点（P9b）：视频纹理的播放器（`video/codecPlayer.ts` 的 `CodecVideoPlayer`）满足它。
  */
 export interface VideoScriptTarget {
   rate: number;

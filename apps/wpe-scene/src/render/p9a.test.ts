@@ -2,8 +2,8 @@
  * P9a 步骤 2 的渲染侧单测（`.claude/plans/wpe-import/3-scene/phase9/phase-9a-playback.md`「步骤 2」）：
  * - `uploadTexture` 的视频分支：`rgba8unorm`、纹理尺寸、一级 mip、能拷外部图像，不写数据（初值全 0，rea-p9-video 第 8 节）；
  * - `checkRenderable` 不把没有 mip 的视频纹理当缺；
- * - `GpuScene.encode`：画到绑定视频纹理的 draw 时问 `VideoSink.drawn`，交来元素就 `copyExternalImageToTexture`；不可见图层与着色器
- *   没绑定的槽不问（WPE 只逐槽更新程序用到的槽，rea 第 2 节第 4 条）；尺寸不同只拷重叠部分（决定 3）、`videoWidth` 为 0 跳过、
+ * - `GpuScene.encode`：画到绑定视频纹理的 draw 时问 `VideoSink.drawn`，交来帧就 `copyExternalImageToTexture`；不可见图层与着色器
+ *   没绑定的槽不问（WPE 只逐槽更新程序用到的槽，rea 第 2 节第 4 条）；尺寸不同只拷重叠部分（决定 3）、`displayWidth` 为 0 跳过、
  *   拷贝抛错不让这一帧失败，warning 每张纹理每种一次；
  * - `SceneRenderer`：换上场景时接上 sink（第一帧就问），实时帧开头 `beginFrame`、在粒子步进之前，补画帧不调。
  * 假设备照 `render/particles.test.ts`，另记纹理描述与外部图像拷贝。
@@ -269,13 +269,14 @@ async function open(source = bundle()) {
   return { gpu, state, scene, warnings };
 }
 
-/** 替身视频元素：只有 `copyVideo` 读的两个尺寸。 */
-const element = (videoWidth = 1280, videoHeight = 720) => ({ videoWidth, videoHeight }) as unknown as HTMLVideoElement;
+/** 替身视频帧：只有 `copyVideo` 读的两个显示尺寸。 */
+const element = (displayWidth = 1280, displayHeight = 720) =>
+  ({ displayWidth, displayHeight }) as unknown as VideoFrame;
 
-/** 记录调用的 sink：`frames` 给出每个下标交出的元素（没有就 null）。 */
-function sink(frames: Map<number, HTMLVideoElement | null> = new Map()) {
+/** 记录调用的 sink：`frames` 给出每个下标交出的帧（没有就 null）。 */
+function sink(frames: Map<number, VideoFrame | null> = new Map()) {
   const drawn: number[] = [];
-  const value: VideoSink & { drawn: (texture: number) => HTMLVideoElement | null } = {
+  const value: VideoSink & { drawn: (texture: number) => VideoFrame | null } = {
     beginFrame: vi.fn(),
     drawn: (texture) => {
       drawn.push(texture);
@@ -332,7 +333,7 @@ describe("GpuScene：画到视频纹理时拷帧（P9a 步骤 2）", () => {
     expect(gpu.writes).toEqual(["materials/i.tex"]);
   });
 
-  it("问 drawn 的顺序就是绘制顺序：同一张视频被两个图层画到问两次；不可见图层、没绑定的槽不问；交来元素才拷", async () => {
+  it("问 drawn 的顺序就是绘制顺序：同一张视频被两个图层画到问两次；不可见图层、没绑定的槽不问；交来帧才拷", async () => {
     const { gpu, state, scene } = await open();
     const { sink: videos, drawn, frames } = sink();
     scene.setVideoSink(videos);
@@ -340,7 +341,7 @@ describe("GpuScene：画到视频纹理时拷帧（P9a 步骤 2）", () => {
     expect(drawn).toEqual([0, 0]);
     expect(gpu.copies).toEqual([]);
 
-    // 有新帧：第一次问交出元素（交出即清标志由 SceneVideos 负责，这里替身只交一次）
+    // 有新帧：第一次问交出帧（交出即清标志由 SceneVideos 负责，这里替身只交一次）
     const frame = element();
     frames.set(0, frame);
     drawn.length = 0;

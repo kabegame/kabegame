@@ -1,10 +1,12 @@
 /**
  * dev 探针的视频时刻（P9a 步骤 3，`videoProbe.ts`）：
  * - 纯函数：`videoTime` 的校验、按纹理路径取时刻、循环取模与钳到 `[0, duration − SEEK_END_MARGIN]`；
- * - `ProbeVideos`：替身元素（设 src 后按脚本出第一帧、设 `currentTime` 后按脚本完成 seek）核对读法、seek 的目标、每个 draw 都交出元素、
- *   读 / 解码失败保持透明并标出、总时限超时报错、释放。
+ * - `ProbeVideos`（P9d 步骤 2b：WebCodecs 播放器）：解码器替身 + `demux/testMp4.ts` 手造的 MP4 字节，核对读法、跳转的目标帧（关键帧之间的
+ *   时刻取显示时间 ≤ 目标的最新一帧）、每个 draw 都交出同一帧、读 / 拆包 / 解码失败保持透明并标出、总时限超时报错、释放后帧都被关掉。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildMp4, memoryRead, type Spec } from "../video/demux/testMp4";
+import { FakeDecoder, fakeFactories, flush, newFakeEnv, type FakeDecoderOptions } from "../video/fakeDecoder";
 import { SEEK_END_MARGIN, type SceneVideoSource } from "../video/player";
 import {
   checkVideoTime,
@@ -84,213 +86,130 @@ describe("requestedVideoTime / checkVideoTime", () => {
 
 // ———— ProbeVideos ————
 
-type Behavior = "event" | "silent" | "never" | "error";
+/** 8 帧、每帧 0.125 s（二进制下都是精确值）、时长 1 s，关键帧是第 1、5 个样本（显示时间 0、0.5）。 */
+const CLIP: Spec = {
+  sizes: Array.from({ length: 8 }, () => 10),
+  perChunk: [8],
+  stts: [[8, 125]],
+  timescale: 1000,
+  stss: [1, 5],
+  movie: [1000, 1000],
+};
+const CLIP_BYTES = buildMp4(CLIP).bytes;
 
-interface VideoBehavior {
-  load: Behavior;
-  seek: Behavior;
-  duration: number;
-  size: [number, number];
+type Mode = "ok" | "read-fail" | "unsupported";
+interface EnvOptions extends FakeDecoderOptions {
+  /** 每段视频（按纹理路径）的输入，缺省 `ok`。 */
+  modes?: Record<string, Mode>;
+  /** 第二次 configure（即跳转）时解码器不再出帧。 */
+  haltOnSeek?: boolean;
 }
 
-/**
- * 替身 `<video>`：设 src 时按地址找到它是哪段视频（`behaviorOf`），再按 `load` 出第一帧（`loadeddata`）、报错或不动；设 `currentTime` 时
- * `seeking` 同步变真，再按 `seek` 完成（`event` 发 `seeked`、`silent` 不发事件只放下 `seeking`）。事件在微任务里发，模拟异步。
- */
-class SeekVideo {
-  muted = false;
-  playsInline = false;
-  preload = "";
-  readyState = 0;
-  seeking = false;
-  duration = Number.NaN;
-  videoWidth = 0;
-  videoHeight = 0;
-  error: { code: number; message: string } | null = null;
-  /** 这个元素放的是哪张纹理、挂的对象地址（设 src 时才知道；清 src 之后仍留着）。 */
-  path: string | null = null;
-  url: string | null = null;
-  calls: string[] = [];
-  seeks: number[] = [];
-  private behavior: VideoBehavior | null = null;
-  private time = 0;
-  private readonly attributes = new Map<string, string>();
-  private readonly listeners = new Map<string, Set<() => void>>();
-
-  constructor(private readonly behaviorOf: (url: string) => { path: string; behavior: VideoBehavior }) {}
-
-  set src(value: string) {
-    this.attributes.set("src", value);
-    this.url = value;
-    const { path, behavior } = this.behaviorOf(value);
-    this.path = path;
-    this.behavior = behavior;
-    queueMicrotask(() => {
-      if (behavior.load === "error") this.fail();
-      else if (behavior.load !== "never") {
-        this.duration = behavior.duration;
-        [this.videoWidth, this.videoHeight] = behavior.size;
-        this.readyState = 2;
-        if (behavior.load === "event") this.fire("loadeddata");
-      }
-    });
-  }
-  getAttribute(name: string) {
-    return this.attributes.get(name) ?? null;
-  }
-  removeAttribute(name: string) {
-    this.attributes.delete(name);
-    this.calls.push(`remove ${name}`);
-  }
-  get currentTime() {
-    return this.time;
-  }
-  set currentTime(value: number) {
-    this.seeks.push(value);
-    this.time = value;
-    this.seeking = true;
-    this.readyState = 1;
-    const seek = this.behavior!.seek;
-    queueMicrotask(() => {
-      if (seek === "error") return this.fail();
-      if (seek === "never") return;
-      this.seeking = false;
-      this.readyState = 2;
-      if (seek === "event") this.fire("seeked");
-    });
-  }
-  addEventListener(type: string, fn: () => void) {
-    (this.listeners.get(type) ?? this.listeners.set(type, new Set()).get(type)!).add(fn);
-  }
-  removeEventListener(type: string, fn: () => void) {
-    this.listeners.get(type)?.delete(fn);
-  }
-  get listenerCount() {
-    return [...this.listeners.values()].reduce((sum, set) => sum + set.size, 0);
-  }
-  fire(type: string) {
-    for (const fn of [...(this.listeners.get(type) ?? [])]) fn();
-  }
-  fail() {
-    this.error = { code: 4, message: "DEMUXER_ERROR_COULD_NOT_OPEN" };
-    this.fire("error");
-  }
-  pause() {
-    this.calls.push("pause");
-  }
-  load() {
-    this.calls.push("load");
-  }
-  play() {
-    this.calls.push("play");
-    return Promise.resolve();
-  }
-}
-
-const source = (path: string, start = 91, length = 1000): SceneVideoSource => ({
-  path: `P:/p/${path}`,
-  start,
-  end: start + length,
-});
-
-/** 纹理表：0、2 是普通纹理，1 是散文件视频，3 是 scene.pkg 里的视频。 */
-const TEXTURES = [
-  { path: "materials/a.tex" },
-  { path: "materials/v1.tex", video: source("materials/v1.tex") },
-  { path: "materials/b.tex" },
-  { path: "materials/v3.tex", video: source("scene.pkg", 5000, 2000) },
-];
-
-type EnvBehavior = Partial<VideoBehavior> & { read?: "ok" | "fail" | "short" };
-
-/** 注入替身的 `ProbeVideos`：按纹理路径给每段视频的行为；记下读、建与撤销的对象地址。 */
-function env(option: VideoTimeOption | undefined, behaviors: Record<string, EnvBehavior> = {}) {
-  const elements: SeekVideo[] = [];
+/** 注入替身的 `ProbeVideos`：v1 是散文件、v3 在 scene.pkg 里（起点不是 0）；记下每段视频的读取区间。 */
+function env(option: VideoTimeOption | undefined, options: EnvOptions = {}) {
+  const fake = newFakeEnv();
+  const base = fakeFactories(fake, options);
   const reads: string[] = [];
-  const created: string[] = [];
-  const revoked: string[] = [];
-  const pathOfBlob = new WeakMap<Blob, string>();
-  const pathOfUrl = new Map<string, string>();
-  const behaviorOf = (url: string) => {
-    const path = pathOfUrl.get(url)!;
-    return {
-      path,
-      behavior: { load: "event", seek: "event", duration: 2.5, size: [1280, 720], ...behaviors[path] } as VideoBehavior,
-    };
-  };
-  const videos = new ProbeVideos(TEXTURES, option, {
-    readBlob: async (video) => {
-      reads.push(`${video.path} ${video.start} ${video.end}`);
-      const path = TEXTURES.find((texture) => texture.video === video)!.path;
-      const mode = behaviors[path]?.read ?? "ok";
-      if (mode === "fail") throw new TypeError("Failed to fetch");
-      const blob = new Blob([new Uint8Array(mode === "short" ? 10 : video.end - video.start)]);
-      pathOfBlob.set(blob, path);
-      return blob;
-    },
-    createElement: () => {
-      const element = new SeekVideo(behaviorOf);
-      elements.push(element);
-      return element as unknown as HTMLVideoElement;
-    },
-    createObjectUrl: (blob) => {
-      const url = `blob:${created.length + 1}`;
-      created.push(url);
-      pathOfUrl.set(url, pathOfBlob.get(blob)!);
-      return url;
-    },
-    revokeObjectUrl: (url) => void revoked.push(url),
+  const source = (path: string, start: number): SceneVideoSource => ({
+    path: `P:/p/${path}`,
+    start,
+    end: start + CLIP_BYTES.length,
   });
-  const elementOf = (path: string) => elements.find((element) => element.path === path)!;
-  return { videos, elements, elementOf, reads, created, revoked };
+  const textures = [
+    { path: "materials/a.tex" },
+    { path: "materials/v1.tex", video: source("materials/v1.tex", 91) },
+    { path: "materials/b.tex" },
+    { path: "materials/v3.tex", video: source("scene.pkg", 5000) },
+  ];
+  const memory = memoryRead(CLIP_BYTES).read;
+  const videos = new ProbeVideos(textures, option, {
+    ...base,
+    createDecoder: (init) => {
+      const decoder = base.createDecoder!(init) as FakeDecoder;
+      if (options.haltOnSeek) {
+        const configure = decoder.configure.bind(decoder);
+        let configures = 0;
+        decoder.configure = () => {
+          configure();
+          if (++configures === 2) decoder.halted = true;
+        };
+      }
+      return decoder;
+    },
+    readRange: (video) => {
+      reads.push(`${video.path} ${video.start} ${video.end}`);
+      const mode = options.modes?.[textures.find((texture) => texture.video === video)!.path] ?? "ok";
+      if (mode === "read-fail") return () => Promise.reject(new TypeError("Failed to fetch"));
+      if (mode === "unsupported") return (start, end) => Promise.resolve(new Uint8Array(end - start));
+      return memory;
+    },
+  });
+  return { videos, fake, reads, textures };
 }
 
-/** 让读、建元素、设 src 这一串微任务走完（假定时器下也一样）。 */
+/** 让读、拆包、解码这一串微任务走完（假定时器下也一样）。 */
 async function microtasks() {
-  for (let i = 0; i < 50; i++) await Promise.resolve();
+  for (let i = 0; i < 100; i++) await Promise.resolve();
 }
 
 describe("ProbeVideos", () => {
-  it("读每段视频的区间、建静音不挂 DOM 的元素，seek 到取模后的时刻；每个 draw 都交出元素", async () => {
-    const { videos, elements, elementOf, reads } = env(3.25);
+  it("按区间读每段视频，跳到取模后的时刻，交出目标帧（显示时间 ≤ 目标的最新一帧）；每个 draw 都交出同一帧", async () => {
+    const { videos, fake, reads } = env(3.25);
     await videos.prepare();
-    expect(reads).toEqual(["P:/p/materials/v1.tex 91 1091", "P:/p/scene.pkg 5000 7000"]);
-    expect(elements).toHaveLength(2);
-    for (const element of elements) {
-      expect([element.muted, element.playsInline, element.preload]).toEqual([true, true, "auto"]);
-      // 3.25 超过时长 2.5：循环取模到 0.75
-      expect(element.seeks).toEqual([0.75]);
-      // 不播放：探针按固定时刻取帧
-      expect(element.calls).not.toContain("play");
-      // 等待结束后事件都撤掉了
-      expect(element.listenerCount).toBe(0);
-    }
-    expect(videos.results()).toEqual([
-      { path: "materials/v1.tex", time: 0.75, duration: 2.5, width: 1280, height: 720, failed: false },
-      { path: "materials/v3.tex", time: 0.75, duration: 2.5, width: 1280, height: 720, failed: false },
+    expect(reads).toEqual([
+      `P:/p/materials/v1.tex 91 ${91 + CLIP_BYTES.length}`,
+      `P:/p/scene.pkg 5000 ${5000 + CLIP_BYTES.length}`,
     ]);
-    // 确定性优先：同一张纹理每次被画到都交出元素（每个 draw 都拷）；不是视频的下标不交
+    // 3.25 超过时长 1：循环取模到 0.25，正好是第 3 帧的显示时间
+    expect(videos.results()).toEqual([
+      { path: "materials/v1.tex", time: 0.25, frameTime: 0.25, duration: 1, width: 1920, height: 1080, failed: false },
+      { path: "materials/v3.tex", time: 0.25, frameTime: 0.25, duration: 1, width: 1920, height: 1080, failed: false },
+    ]);
+    // 播放器都已释放，只剩探针留的两份 clone
+    expect(fake.opened).toBe(2);
+    expect(fake.decoders.every((decoder) => decoder.closed)).toBe(true);
+    // 确定性优先：同一张纹理每次被画到都交出同一帧；不是视频的下标不交
     videos.beginFrame();
-    const v1 = elementOf("materials/v1.tex") as unknown as HTMLVideoElement;
+    const v1 = videos.drawn(1) as unknown as { timestamp: number; closed: boolean };
+    expect(v1.timestamp).toBe(250_000);
     expect(videos.drawn(1)).toBe(v1);
-    expect(videos.drawn(1)).toBe(v1);
-    expect(videos.drawn(3)).toBe(elementOf("materials/v3.tex"));
+    expect(videos.drawn(3)).not.toBeNull();
+    expect(videos.drawn(3)).not.toBe(v1);
     expect(videos.drawn(0)).toBeNull();
     expect(videos.drawn(2)).toBeNull();
+    // 释放：帧都被关掉，之后不再交帧，重复释放无害
+    videos.dispose();
+    expect(v1.closed).toBe(true);
+    expect(fake.opened).toBe(0);
+    expect(videos.drawn(1)).toBeNull();
+    videos.dispose();
+    expect(fake.opened).toBe(0);
+  });
+
+  it("关键帧之间的时刻取 ≤ 目标的最新一帧：time 是请求值、frameTime 是帧的显示时间", async () => {
+    const { videos } = env(0.3);
+    await videos.prepare();
+    expect(videos.results().map((r) => [r.time, r.frameTime])).toEqual([
+      [0.3, 0.25],
+      [0.3, 0.25],
+    ]);
     videos.dispose();
   });
 
   it("按纹理路径分别给时刻，没给的取 0；缺省全部 0；落在最后 0.005 s 里钳到 duration − 0.005", async () => {
-    const byPath = env({ "materials/v1.tex": 2.499 }, { "materials/v3.tex": { duration: 4 } });
+    const byPath = env({ "materials/v1.tex": 0.999 });
     await byPath.videos.prepare();
-    expect(byPath.videos.results().map((r) => [r.path, r.time, r.duration])).toEqual([
-      ["materials/v1.tex", 2.495, 2.5],
-      ["materials/v3.tex", 0, 4],
+    expect(byPath.videos.results().map((r) => [r.path, r.time, r.frameTime, r.duration])).toEqual([
+      ["materials/v1.tex", 0.995, 0.875, 1],
+      ["materials/v3.tex", 0, 0, 1],
     ]);
     byPath.videos.dispose();
     const plain = env(undefined);
     await plain.videos.prepare();
-    expect(plain.elements.map((element) => element.seeks)).toEqual([[0], [0]]);
+    expect(plain.videos.results().map((r) => [r.time, r.frameTime])).toEqual([
+      [0, 0],
+      [0, 0],
+    ]);
     plain.videos.dispose();
   });
 
@@ -306,61 +225,63 @@ describe("ProbeVideos", () => {
     none.dispose();
   });
 
-  it("seek 完不发 seeked：短轮询看到 seeking 落下也算完成", async () => {
-    const { videos, elementOf } = env(1, { "materials/v1.tex": { seek: "silent" } });
-    await videos.prepare();
-    expect(elementOf("materials/v1.tex").seeks).toEqual([1]);
-    expect(videos.results()[0]).toMatchObject({ time: 1, failed: false });
-    videos.dispose();
-  });
-
-  it("读不到、长度不符、解码出错（第一帧前或 seek 时）：这段标为失败、不交出元素（透明），别的照常", async () => {
+  it("读不到、拆不了包：这段标为失败、不交帧（透明）、原因带第一条 warn，别的照常", async () => {
     const cases = [
-      ["read", { read: "fail" }, /Failed to fetch/],
-      ["short", { read: "short" }, /长度不符：读到 10 字节，应为 1000/],
-      ["load", { load: "error" }, /解码失败：MediaError 4：DEMUXER_ERROR_COULD_NOT_OPEN/],
-      ["seek", { seek: "error" }, /解码失败：MediaError 4/],
+      ["read-fail", /场景视频读取失败.*Failed to fetch/],
+      ["unsupported", /场景视频不能拆包/],
     ] as const;
-    for (const [name, behavior, message] of cases) {
-      const { videos, elementOf, revoked } = env(1, { "materials/v1.tex": behavior });
+    for (const [mode, message] of cases) {
+      const { videos, fake } = env(1, { modes: { "materials/v1.tex": mode } });
       await videos.prepare();
       const [broken, fine] = videos.results();
-      expect(broken, name).toMatchObject({
+      expect(broken, mode).toMatchObject({
         path: "materials/v1.tex",
         failed: true,
+        frameTime: null,
         width: 0,
         height: 0,
         duration: null,
       });
-      expect(broken.error, name).toMatch(message);
+      expect(broken.error, mode).toMatch(message);
       // 失败时的 time 是请求的时刻
-      expect(broken.time, name).toBe(1);
-      expect(fine, name).toMatchObject({ path: "materials/v3.tex", failed: false, time: 1 });
-      expect(videos.drawn(1), name).toBeNull();
-      expect(videos.drawn(3), name).not.toBeNull();
-      // 建过元素的失败视频立即释放：撤销对象地址、清 src
-      if (name === "load" || name === "seek") {
-        const element = elementOf("materials/v1.tex");
-        expect(revoked, name).toEqual([element.url]);
-        expect(element.getAttribute("src"), name).toBeNull();
-        expect(element.calls, name).toEqual(["pause", "remove src", "load"]);
-      }
+      expect(broken.time, mode).toBe(1);
+      expect(fine, mode).toMatchObject({ path: "materials/v3.tex", failed: false, frameTime: 0 });
+      expect(videos.drawn(1), mode).toBeNull();
+      expect(videos.drawn(3), mode).not.toBeNull();
+      expect(fake.opened, mode).toBe(1);
       videos.dispose();
+      expect(fake.opened, mode).toBe(0);
     }
+  });
+
+  it("解码器出错：这段标为失败，不当成总时限", async () => {
+    const { videos, fake } = env(0, { halted: true });
+    const preparing = videos.prepare();
+    await flush();
+    for (const decoder of fake.decoders) decoder.init.error(new DOMException("坏了", "EncodingError"));
+    await preparing;
+    for (const result of videos.results()) {
+      expect(result).toMatchObject({ failed: true, frameTime: null, width: 0 });
+      expect(result.error).toMatch(/场景视频解码失败.*坏了/);
+    }
+    expect(fake.opened).toBe(0);
+    videos.dispose();
   });
 
   it("超过总时限：prepare 抛 ProbeVideoTimeout（不当成透明），消息带路径、阶段与时限", async () => {
     vi.useFakeTimers();
-    const first = env(1, { "materials/v3.tex": { load: "never" } });
+    const first = env(0.5, { halted: true });
     const loading = expect(first.videos.prepare(1000)).rejects.toThrow(
-      /等 materials\/v3\.tex \[5000, 7000\) 的第一帧（loadeddata）：超过总时限 1 s/,
+      /等 materials\/v1\.tex \[91, \d+\) 的第一帧：超过总时限 1 s/,
     );
     await microtasks();
     await vi.advanceTimersByTimeAsync(1000);
     await loading;
     first.videos.dispose();
+    expect(first.fake.opened).toBe(0);
 
-    const second = env(1, { "materials/v1.tex": { seek: "never" } });
+    // 第一帧到了、跳转时解码器不再出帧
+    const second = env(0.5, { haltOnSeek: true });
     const seeking = second.videos.prepare(500);
     const settled = seeking.then(
       () => null,
@@ -370,50 +291,38 @@ describe("ProbeVideos", () => {
     await vi.advanceTimersByTimeAsync(500);
     const error = await settled;
     expect(error).toBeInstanceOf(ProbeVideoTimeout);
-    expect((error as Error).message).toMatch(/等 materials\/v1\.tex \[91, 1091\) seek 到 1 s：超过总时限 0\.5 s/);
+    expect((error as Error).message).toMatch(/等 materials\/v1\.tex \[91, \d+\) 跳到 0\.5 s：超过总时限 0\.5 s/);
     second.videos.dispose();
+    expect(second.fake.opened).toBe(0);
   });
 
-  it("读本身超过总时限也报错，不建元素", async () => {
+  it("读本身超过总时限也报错，不建解码器", async () => {
     vi.useFakeTimers();
-    const videos = new ProbeVideos(TEXTURES.slice(0, 2), 0, {
-      readBlob: () => new Promise<Blob>(() => {}),
-      createElement: () => {
-        throw new Error("不该建元素");
-      },
-    });
-    const reading = expect(videos.prepare(2000)).rejects.toThrow(/读 materials\/v1\.tex .*：超过总时限 2 s/);
+    const fake = newFakeEnv();
+    const videos = new ProbeVideos(
+      [{ path: "materials/v1.tex", video: { path: "P:/p/materials/v1.tex", start: 0, end: 1000 } }],
+      0,
+      { ...fakeFactories(fake), readRange: () => () => new Promise<Uint8Array>(() => {}) },
+    );
+    const reading = expect(videos.prepare(2000)).rejects.toThrow(/等 materials\/v1\.tex .*的第一帧：超过总时限 2 s/);
     await vi.advanceTimersByTimeAsync(2000);
     await reading;
     videos.dispose();
+    expect(fake.decoders).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("dispose：停元素、清 src、撤销对象地址，之后不再交出元素；还在等的 prepare 以「已释放」失败、定时器清掉", async () => {
-    const done = env(0);
-    await done.videos.prepare();
-    done.videos.dispose();
-    expect(done.revoked).toEqual(done.created);
-    for (const element of done.elements) {
-      expect(element.calls).toEqual(["pause", "remove src", "load"]);
-      expect(element.getAttribute("src")).toBeNull();
-    }
-    expect(done.videos.drawn(1)).toBeNull();
-    // 重复释放无害
-    done.videos.dispose();
-    expect(done.revoked).toHaveLength(2);
-
+  it("dispose：还在等的 prepare 以「已释放」失败、定时器清掉、解码器与帧都关掉", async () => {
     vi.useFakeTimers();
-    const pending = env(0, { "materials/v1.tex": { load: "never" }, "materials/v3.tex": { load: "never" } });
+    const pending = env(0, { halted: true });
     const waiting = expect(pending.videos.prepare()).rejects.toThrow("视频探针已释放");
-    // 读完、元素建好、开始等第一帧
     await microtasks();
-    expect(pending.elements).toHaveLength(2);
+    expect(pending.fake.decoders).toHaveLength(2);
     expect(vi.getTimerCount()).toBeGreaterThan(0);
     pending.videos.dispose();
     await waiting;
     expect(vi.getTimerCount()).toBe(0);
-    expect(pending.revoked).toEqual(pending.created);
-    for (const element of pending.elements) expect(element.listenerCount).toBe(0);
+    expect(pending.fake.decoders.every((decoder) => decoder.closed)).toBe(true);
+    expect(pending.fake.opened).toBe(0);
   });
 });

@@ -147,6 +147,77 @@ Matroska 没有 MP4 那样集中的帧表：每一帧（SimpleBlock / BlockGroup
 - **新增** `mkv.test.ts`：手造 EBML 字节覆盖 SimpleBlock / BlockGroup、负的相对时间码、未知大小的 Cluster、`TimecodeScale` 非缺省、`Colour`、lacing 报错、非视频轨、截断；本机 ffmpeg 现编一段带 B 帧的 H.264 / HEVC Matroska 做真实字节样例（命令写进注释）。
 - **语料**：3816870245（Matroska H.264 3456×2160 120 fps，299 MiB）用 `indexVideo` 解析，帧数、关键帧数、首帧时间、时长与 ffprobe 一致；记下整段读的耗时。
 
+## 步骤 2b — 只剩 WebCodecs 一条路
+
+2026-11-16 用户：「不需要 webcodecs 不存在的兜底，我们是自编 cef。开始 2b」。
+
+### 总体思路
+场景视频纹理、用户视频（P11b）、dev 探针的 `videoTime` 三处都改用 `CodecVideoPlayer`，旧的 `<video>` 播放器整个删掉：没有 `VideoTexturePlayer`、没有 Blob → 对象地址 → 媒体元素、没有 `attachToDocument`、没有 P9c 的 `watchStall`。退回也一起删掉——没有 WebCodecs 的环境（只剩 Node 单测，单测一律注入解码器替身）不再考虑；拆不了包（分片 MP4、不认识的编码、Matroska 的 lacing 等）和解码失败一样按失败处理：记一条 warn、纹理保持全 0（场景视频图层透明、用户视频槽用缺省纹理），同 WPE 打不开视频时的表现。语料 60 段全部拆得了（步骤 1、3），用户视频按 WPE 的过滤只有 mp4。
+
+帧来源从此只有 `VideoFrame`：`VideoSink.drawn`、`UserTextureFrame` 的视频一支、`GpuScene` 的两处拷贝都只认它。用户视频仍先整段读成 Blob（`file:` 响应没有长度，拆包要先知道总长；Blob 由 Chromium 换到磁盘），区间读取改成 `blob.slice(a, b).arrayBuffer()`。
+
+dev 探针改成「精确解到那一帧」：给播放器加一个等跳转完成的 `seeked()`，跳转本来就是「从目标帧往回最近的关键帧喂起、丢掉早于目标帧的输出、目标帧到了才换当前帧」，到手的就是显示时间 ≤ 目标的最新一帧。bundle 视频由 `ProbeVideos` 自己建播放器、跳到目标、留一份 `clone()` 的帧给每个 draw、随即释放播放器；用户视频沿用来源表里的播放器（来源表在探针里是宿主暂停状态，时钟不走），写 `currentTime` 后等 `seeked()`。
+
+`video/player.ts` 只剩公共定义（`SceneVideoSource`、`VideoReport`、`IDLE_FRAMES`、`SEEK_END_MARGIN`、`STALL_MS`、`videoSourceKey`）：`compile/bundle.ts`、`compile/tex.ts` 从它导入类型，这两个文件别的会话在改，不改名、不动导入。
+
+### 现状锚点
+**a. 两种播放器与退回**（`video/sceneVideos.ts`）
+```ts
+export type VideoFrameSource = VideoFrame | HTMLVideoElement;   // 现状：两种帧来源
+private create(video: SceneVideoSource): SceneVideoPlayer {
+  if (!this.codecs) return new VideoTexturePlayer(video, this.frame, { ...this.factories, report: this.report });  // 现状：没有 WebCodecs 用旧的
+  const player: CodecVideoPlayer = new CodecVideoPlayer(video, this.frame, {
+    ...this.factories, report: this.report,
+    onUnsupported: (reason) => this.fallBack(player, reason),   // 现状：拆不了包退回旧播放器
+  });
+  return player;
+}
+```
+**b. 用户视频**（`usertex/sources.ts:907`）
+```ts
+private newPlayer(shared: Shared, blob: Blob): VideoTexturePlayer {
+  const player = new VideoTexturePlayer({ path: shared.value, start: 0, end: blob.size }, this.clock.frame, {
+    ...this.deps.videoFactories, readBlob: () => Promise.resolve(blob), report: this.deps.report,   // 现状：<video> 播 Blob
+  });
+```
+`seek` 读 `player.element.duration`、等元素的 `seeked`；`loadShared` 读 `player.element.videoWidth`；`UserTextureFrame` 的视频一支是 `{ kind: "element"; element: HTMLVideoElement }`。
+**c. dev 探针**（`dev/videoProbe.ts`）：每段视频 `fetchVideoBlob` → 不挂 DOM 的 `<video>` → seek → 等 `seeked` 与 `readyState ≥ 2`，每个 draw 交出元素。
+**d. GPU**（`render/scene.ts`）：`copyVideo(index, source: VideoFrameSource)` 两种尺寸都认；`uploadUserFrame` 对视频读 `frame.element.videoWidth` 并以元素为源拷。
+
+### 点 1 — 播放器（`video/codecPlayer.ts`、`video/player.ts`）
+- **删除** `CodecPlayerOptions.onUnsupported`、`takeScriptState`、`CodecScriptState`：拆不了包直接 `fail("场景视频不能拆包", 原因)`。文件头「读」一条改写（不再退回）；「卡住」一条不再提 `watchStall` 的替代关系以外的旧实现细节。
+- **新增** `seeked(): Promise<void>`：没有在跳转（含拆包期间等着的 `pendingSeek`：等到建好解码器、那次跳转完成）、失败或释放时 resolve，不 reject。实现同 `firstFrame` 的等待表：`seeking` 落下（目标帧到手、成为当前帧）时结清。
+- **修改** `CodecVideoProbe` 不再 `extends VideoPlayerProbe`，自己列全字段；去掉只对旧播放器有意义的 `totalFrames` / `droppedFrames`（就是 `decoded` / `dropped`）、`stallSeeks` / `stallReloads`；`decoder` 字段也去掉（只有一种）。
+- **修改** `video/player.ts` 只留 `SceneVideoSource`（`duration` 的注释改成「读不出时播放器取帧表的时长」）、`VideoReport`、`IDLE_FRAMES`、`SEEK_END_MARGIN`、`STALL_MS`、`videoSourceKey`，文件头改成「场景视频的公共定义」，说明播放器在 `codecPlayer.ts`。**删除** `VideoTexturePlayer`、`VideoFactories`、`VideoPlayerOptions`、`VideoPlayerProbe`、`attachToDocument`、`fetchVideoBlob`、`STALL_SEEKS_BEFORE_RELOAD`、`STALL_MAX_RELOADS`、`HAVE_*` 与辅助函数。
+- **新增** `blobRangeReader(blob: Blob): ReadRange`（放在 `codecPlayer.ts`，`fileRangeReader` 旁边）：`blob.slice(start, end).arrayBuffer()`，区间越界抛 `RangeError`，读到的长度核对同 `fileRangeReader`。
+
+### 点 2 — 场景视频（`video/sceneVideos.ts`）
+- **删除** `VideoFrameSource`、`ElementVideoProbe`、`codecs` 字段、`fallBack`、`SceneVideoFactories`（构造参数改为 `CodecFactories`）；`create` 只建 `CodecVideoPlayer`。
+- **修改** `SceneVideoPlayer` 接口与 `VideoSink.drawn` 的返回类型为 `VideoFrame | null`；`SceneVideoProbe = CodecVideoProbe & { frame; textures }`；`firstFrames` / `firstFrameOf` 去掉「被顶替接着等」（`firstFrameOf` 简化为等当前播放器一次）。文件头「两种播放器」一条改成「播放器」：只有 `CodecVideoPlayer`，拆不了包与解码失败同样透明。
+
+### 点 3 — 用户视频（`usertex/sources.ts`）
+- **修改** `UserTextureFrame` 的视频一支改为 `{ kind: "video"; frame: VideoFrame }`；`VideoTexture.drawn` 交 `player.drawn(...)` 的帧。
+- **修改** `newPlayer` 建 `CodecVideoPlayer({ path: shared.value, start: 0, end: blob.size }, frame, { ...this.deps.codecFactories, readRange: () => blobRangeReader(blob), report })`；`UserTextureDeps.videoFactories` 改名 `codecFactories: CodecFactories`（测试注入解码器替身；`readRange` 由来源表自己给，注入的会被覆盖）。`loadShared` 尺寸取 `player.videoWidth / videoHeight`（第一帧之后是显示尺寸）。
+- **修改** `seek`：目标 = `seekTarget(time, player.duration)`，写 `player.currentTime = target` 后等 `player.seeked()`（保留 `SEEK_TIMEOUT_MS` 超时与日志）。失败的播放器不等。
+- 类型 `VideoTexturePlayer` → `CodecVideoPlayer`、`VideoPlayerProbe` → `CodecVideoProbe`；文件头「加载」一条改写（Blob → 区间读取 → `CodecVideoPlayer`，颜色照 WPE 的规则，P9c「步骤 3 候选」里标清视频的偏色随之消掉）。
+
+### 点 4 — GPU（`render/scene.ts`，共享文件，只改这两处，之后按块提交）
+- **修改** `import type { VideoFrameSource, VideoSink }` → `import type { VideoSink }`；`copyVideo(index, source: VideoFrame)` 尺寸取 `displayWidth / displayHeight`，注释去掉「视频元素」「也可以是」的说法。
+- **修改** `uploadUserFrame` 的视频一支：`frame.frame` 的 `displayWidth / displayHeight`，以 `frame.frame` 为源；注释「元素装不下」改「画面装不下」。
+
+### 点 5 — dev 探针（`dev/videoProbe.ts`）
+- **修改** `ProbeVideos`：第三个参数改为 `CodecFactories`（`probe.ts` 的调用点传 `{}`，不用改）。`prepareOne`：建 `CodecVideoPlayer(source, 0, { ...factories, report })`，`apply(0, true)`（宿主暂停：时钟不走），`await firstFrame()`，失败则标失败；否则 `currentTime = videoSeekTime(requested, player.duration)`，`await seeked()`，`player.drawn(0, true)` 取当前帧（跳转后 `fresh` 为真），`clone()` 存进 entry，记 `time`（读回的 `currentTime`）、`frameTime`（帧的 `timestamp / 1e6`，跳转后时间戳从 0 编，就是媒体时间）、`duration`、`width / height`（显示尺寸），然后释放播放器。总时限与 `ProbeVideoTimeout` 照旧（用 `beforeDeadline` 包住整段）；释放时关掉 clone 的帧。
+- **修改** `drawn` 每次交出 clone 的帧（确定性优先，同以前每个 draw 都拷）；`ProbeVideoResult` 加 `frameTime`（失败时 null），`duration` 注释改「容器时长」。
+- **删除** `waitFor`、`POLL_MS`、`HAVE_CURRENT_DATA`、`describe` 里 `MediaError` 的分支、`release` 里元素与对象地址的处理。
+- `checkVideoVisibility` 保留不动：WebCodecs 不经 `DeferMediaLoad`，主窗口隐藏时可能已经能解，但要最小化用户的主窗口才能实测，留到步骤 4 问过再测。文件头改写成新做法。
+
+### 点 6 — 测试
+- **新增** `video/fakeDecoder.ts`：从 `codecPlayer.test.ts` 抽出解码器替身（`FakeFrame`、`FakeDecoder`、建工厂的函数、打开帧计数），`codecPlayer.test.ts` 改为导入它。
+- **删除** `video/player.test.ts` 里旧播放器的全部用例（`videoSourceKey` 若有用例就留下）、`video/fakeVideo.ts`。
+- **修改** `sceneVideos.test.ts`、`host.video.test.ts`、`usertex/sources.media.test.ts`、`dev/videoProbe.test.ts`（与 `probeUserTextures.test.ts` 若受影响）改用解码器替身 + `demux/testMp4.ts` 造的 MP4 字节；原来断言旧播放器行为（退回、`decoder: "element"`、元素事件、`watchStall`）的用例删掉或改成新行为：拆不了包 → `failed`、warn 一条、不交帧。
+- **新增** 用例：`seeked()`（跳转中等到目标帧、拆包期间写的时间等到那次跳转完成、失败 / 释放时 resolve、没在跳时立即 resolve）；`blobRangeReader`（切片、越界、长度）；`ProbeVideos` 交出的是目标帧（关键帧之间的时刻取 ≤ 目标的最新一帧、`frameTime` 对得上）、每个 draw 都交同一帧、释放后帧被关掉；用户视频 `seekVideos` 之后 `drawn` 交出目标帧。
+- 打开的帧最后都被关掉（替身的计数为 0）。
+
 ## 实施记录
 
 ### 步骤 1 — MP4 拆包与解码配置（2026-11-14）
@@ -187,3 +258,82 @@ Matroska 没有 MP4 那样集中的帧表：每一帧（SimpleBlock / BlockGroup
 - 变异 14 个全部有测试挂掉：关键帧标志位取错、相对时间码当无符号、忽略 TimecodeScale、未知大小 Cluster 不按同级 ID 结束、跨块边界的元素截断、lacing 不报错、有 ReferenceBlock 仍当关键帧、首帧时间不扣、`indexVideo` 分派取反、扣解码顺序第一帧、时长退路取最大差、收了别的轨的块、Range 1 当 full、块数据偏移少去一字节。
 - 语料 3816870245（13632「鸣潮清宵」，Matroska H.264 3456×2160 120 fps）：7049 帧、29 个关键帧、首帧 0（扣 0.023 s，音轨从 0 开始）、时长 58.793，逐包 pts / size / 关键帧 / 位置与 ffprobe 无差异；Node 里 201 ms（76 次读，读 311 MB）。
 - 真机：13632 因 `text:msdf:*` 退回预览图，强制渲染开关也没让它渲染；改在主窗口页面里经 vite `/@fs/` 直接导入 `codecPlayer.ts`，用 rAF 驱动 `CodecVideoPlayer` 20 s、每帧拷进 WebGPU 纹理（不建 DOM，结束全部释放）：浏览器里 `indexVideo` 809 ms（原来读成 Blob 是 508 ms），`decoder: "webcodecs"`，每秒解 120 帧、拷 120 次，时钟每秒走 1.000 s，丢 19 帧（多在开头），`stallResets` 0，没有 warn。
+
+### 步骤 2b — 只剩 WebCodecs 一条路（2026-11-16）
+
+**实现**（子代理；Claude 补 `usertex/sources.media.test.ts` 一条用例、改 `dev/probe.ts` 一句过时注释）：
+- 删 `VideoTexturePlayer` 与 `fakeVideo.ts`，`video/player.ts` 只剩公共定义；`CodecVideoPlayer` 去掉退回（`onUnsupported` / `takeScriptState`），拆不了包直接失败；加 `seeked()` 与 `blobRangeReader`；`CodecVideoProbe` 自己列字段，去掉 `totalFrames` / `droppedFrames` / `stallSeeks` / `stallReloads` / `decoder`。
+- `SceneVideos` 只建 `CodecVideoPlayer`，`firstFrames` 直接等播放器；`VideoSink.drawn` 与 `UserTextureFrame` 的视频一支（`{ kind: "video"; frame }`）只交 `VideoFrame`，`render/scene.ts` 只改 import、`copyVideo`、`uploadUserFrame` 的视频一支。
+- 用户视频：Blob → `blobRangeReader` → `CodecVideoPlayer`，`UserTextureDeps.videoFactories` 改名 `codecFactories`；`seekVideos` 写 `currentTime` 后等 `seeked()`。
+- 探针：每段视频建播放器（宿主暂停）→ `firstFrame()` → 写 `currentTime` → `seeked()` → 取当前帧 `clone()`、释放播放器，每个 draw 交同一帧；结果多 `frameTime`。
+- 和计划的出入：`render/p9a.test.ts`、`render/p11b.test.ts` 的替身跟着改成 `VideoFrame`（不改过不了类型检查）；`host.video.test.ts` 里 `SceneHost` 自己 `new SceneVideos`，改为桩全局 `VideoDecoder` / `EncodedVideoChunk` / `fetch`；`sceneVideos.test.ts` 里「建好就播」「加载时就没画到的先播 30 帧」两条按新时钟（第一次画到才起步）改写；用户视频「没有画面尺寸 → 失败」换成「不认识的封装 → 失败」。
+
+**验收**：
+- tsc 0 error（含别的会话的文件）；引用视频模块的 46 个测试文件 859 个用例全过；Prettier 通过。
+- 变异 8 个全部有测试挂掉：`seeked()` 立即返回、目标帧到手不结清、失败不结清、Blob 越界不查、探针不按时长取模、探针不 `clone`、拆不了包不失败、用户视频 seek 不等（这一条起初漏了：替身在微任务里出帧，等不等结果一样；补了「解码器停住时 `seekVideos` 不返回」的用例后挂掉）。
+- 真机（屏外宿主，重建的 dev 产物）：
+  - 14295（4K H.264 60 fps）`videoTime: 1` → `frameTime` 1.0；`videoTime: 13` → 按时长 12.758 取模 0.242、`frameTime` 0.233333（≤ 目标的最新一帧）；同一请求两次像素摘要相同。
+  - p11-ut 临时导入，属性 `ut` 设为 P11b 的彩条片 `ut-video.mp4`（320×240、未标）、`videoTime` 0.5：用户视频 ready，矩阵按分辨率取 smpte170m，渲染出的颜色 (254, 0, 0) 与 ffmpeg 按 BT.601 解出的 (253, 0, 0) 差 1。P11b 记的「屏外探针拿不到用户视频的帧」随 `<video>` 一起消失。测完 `projects_remove` 移除。
+  - 先要用 `set_wpe_web_user_properties` 把文件写进属性：探针请求里给的 `userProperties` 不进 `file:` 放行（`deny file: … OutsideRoot`），这是 P11b 起就有的规则。
+- 实时播放没有重测：场景视频的播放路径和 2a 相同（2a 已在桌面实测）；用户视频换成同一个播放器，桌面 / 预览里的实时播放留到步骤 4 一起看。
+
+### 步骤 4 走查第一轮 — 视频纹理的颜色（2026-11-16，按 FINAL_CHECK）
+
+做法：每张建复制工程（`kbp content isolate`，只留视频图层，工程在 `ignore/p9/p9d/walk/`），WPE 1920×1080 测试窗口抓一帧（`A:\p9d\walk\`，fps 20、后处理 ultra），存下视频纹理（WPE 的视频 RT，原尺寸）；从 `.tex` 切出 MP4，ffmpeg 逐帧缩小比对找出 WPE 显示的那一帧，取原始 yuv420p，用不同的「色度上采样位置 × 矩阵 × 取整」重建 RGB，分别和 WPE、和我们比（脚本在会话临时目录 `p9d2b/`：`match.py`、`yuvmodel.py`、`fit.py`）。
+
+| 样本 | 视频 | WPE 显示的帧 | 还原 WPE 的写法 | 和 WPE |
+|---|---|---|---|---|
+| 3823859141 | H.264 1920×1080，标 bt709 | 11.966667 s | 709，色度纵向 2k − 0.5 | 最大 1，81.0% 相同 |
+| 3400241651 | H.264 960×540，**标 bt470bg** | 8.666667 s | **709**，同上 | 最大 1，97.8% 相同（按 601 最大 7） |
+| 3822149301 | HEVC 2560×1440，标 bt709 | 8.033333 s | 709，同上 | 最大 1，75.5% 相同 |
+| 3812007032 | H.264 3840×2160，**标 bt470bg** | 8.533333 s | **709**，同上 | 最大 1，77.3% 相同（按 601 平均 5.3、最大 22） |
+
+结论：
+1. **色度上采样的位置**（最小二乘拟合 WPE 的纹理，4×4 邻域、按像素相位分四组，残差 rms 0.16–0.17）：WPE 是双线性，权重 9/16、3/16、3/16、1/16；横向色度样本在两个亮度像素正中（同标准），**纵向第 k 个色度样本在亮度第 2k − 0.5 行**，比标准（2k + 0.5，Chromium 的 `copyExternalImageToTexture(VideoFrame)` 即如此）高一行。
+2. **我们和 WPE 的整帧**（3823859141，1:1，`render_scene` 取 11.966667 s、canvas 1920×1080、ultra）：58.2% 的像素有差，平均 1.22、最大 45。我们的图按「标准位置、709、四舍五入」重建时 92.5% 相同、最大 2；按 WPE 的位置重建就是和 WPE 的差。**差异全部来自纵向色度位置**，剩下 ±1 是两边各自的算术精度。
+3. **矩阵**：场景视频四张都是 BT.709，包括码流标 bt470bg 的两张（一张 540 高、一张 4K）。WPE 不读码流的矩阵、也不按分辨率选；我们的 `wpeColor` 照码流取 601，这两段（语料里仅有的两段）现在偏色。用户视频（P11b，320×240、未标）步骤 0 记的是 WPE 用 601，走的是不是另一条路径这轮没测。
+4. 时刻：WPE 开窗后约 8.0–12.0 s 显示的帧，和 ffmpeg 的 pts 逐帧对上；本轮只为找帧，没有核对开场与循环点（留给下一轮）。
+
+没做：Matroska（3816870245）、用户视频、经过缩放的整帧（4K 视频画进 1080 窗口）、时间轴（开场、循环点、跳转、编辑列表）。
+
+### 场景视频的矩阵恒为 BT.709（2026-11-16）
+
+用户：「只改矩阵吧」（色度位置记为已知差异，不读回 YUV 自己转换）。
+
+- **修改** `video/demux/config.ts`：新增 `ColorRule = "scene" | "user"`，`decoderConfig` / `wpeColorSpace` / `wpeColor` 必须给规则。场景视频矩阵恒为 bt709（`source: "scene"`，码流的标签只进说明）；用户视频照旧（`colr` → VUI → 按分辨率）。原色、传递函数、范围两条路径相同。文件头补走查依据与色度位置的已知差异。
+- **修改** `video/codecPlayer.ts`：选项 `colorRule`，缺省 `"scene"`；`usertex/sources.ts` 建用户视频播放器时传 `"user"`。
+- **测试**：`config.test.ts` 原有用例改为显式 `"user"`，新增场景规则两条（标 bt470bg 的 540p / 4K、未标的标清与 colr 601 都是 bt709，范围照码流）；`codecPlayer.test.ts` 新增「缺省场景 → 240 高也是 bt709、`user` → smpte170m」；`sources.media.test.ts` 的探针用例断言用户视频走分辨率规则；`mkv.test.ts` 跟着补参数。tsc 0 error，`src/video src/usertex` 等 16 个文件 349 个用例全过，Prettier 通过；变异 3 个（场景规则不生效、用户视频不传 `user`、播放器缺省改 `user`）全部有测试挂掉。
+- **真机**：3400241651 复制工程（标 bt470bg、960×540）取 8.666667 s，用探针逐 draw 轨迹读回「鱼」的合成 RT（960×540，视频 1:1 画进去），和 WPE 同一 RT 比：平均 0.170、最大 22、6.3% 不同；我们的 RT 按「709、标准位置」重建 99.4% 相同、最大 2，WPE 的按「709、2k − 0.5」重建 97.8% 相同、最大 1，两个模型之间的差就是这 22——剩下的只有色度位置。改之前我们按 601，比 WPE 多一层整体偏差（按 601 重建和 WPE 最大差 7）。整帧两边都是全黑（这张场景单留「鱼」时上屏混合结果为黑），所以比的是合成 RT。
+- **已知差异（定）**：色度上采样的纵向位置。WPE 第 k 个色度样本在亮度第 2k − 0.5 行，Chromium 拷 `VideoFrame` 时在 2k + 0.5 行；颜色在纵向剧烈变化的边缘差到几十级（3823859141 整帧 58% 像素有差、平均 1.22、最大 45；3400241651 合成 RT 最大 22）。照它要 `VideoFrame.copyTo` 读回 YUV、自己的着色器转换，用户定不做。
+
+### 步骤 4 走查第二轮（2026-11-16）
+
+**Matroska**（3816870245，复制工程只留对象 21，1728×1080 窗口，`A:\p9d\walk\d3816870245-frame186.rdc`）：WPE 显示 ffmpeg pts 9.340 那一帧（我们的时间轴扣首帧 0.023 s，即 9.317）；按「709、色度纵向 2k − 0.5」重建 WPE 的视频纹理最大差 1、73.3% 相同。规则同 MP4。
+
+**经过缩放的整帧**（同一张，3456×2160 画进 1728×1080，正好 0.5 倍）：我们（`render_scene` 取 9.317 s、canvas 1728×1080、ultra）对 WPE 整帧 41.3% 像素有差、平均 0.476、最大 17。两边各自「按自己的色度位置重建纹理 → 2×2 平均（0.5 倍时采样点在纹素角上，双线性即四个的平均；WPE 是 8 倍各向异性、单 mip，等比时同样）」和自己的整帧都只差 ≤ 2（WPE 用它的实测纹理 2×2 平均对整帧 ≤ 1），两个模型之间正好最大 17。缩放一步两边相同，差异仍然只是色度位置。
+
+**用户视频的矩阵**（p11-ut，属性 `ut` 逐个换成生成的测试片，`A:\p9d\walk\ut\`，测试片在 `ignore/p9/p9d/walk/ut/`）：
+- 方形 testsrc2 静帧（整张进 1:1 槽，不裁）：`sd-unl` 480² 未标 → 601；`sd-709` 480² **标 709 → 601**；`hd-unl` 720² 未标 → 709；`hd-601` 720² **标 601 → 709**。四张按「对应矩阵、2k − 0.5」重建最大差 3（≥ 2 的像素 0.02%–0.2%，都在蓝 / 红高饱和处，定点系数的精度），换另一个矩阵平均差 16–25。
+- 纯色片（YUV 102 / 128 / 190：601 → (199, 50, 100)、709 → (211, 67, 100)，取纹理中心）：1280×480 → 601；480×720 → 709；720×576 → 601；**720×578 → 709**；1024×700 → 709。
+- 结论：WPE 读用户视频**不看码流标签，只按高度：高 > 576 用 709，否则 601**（宽度不参与）。我们现在的 `"user"` 规则（先看 `colr` / VUI、阈值 720）三处不对：标签、阈值、576 < 高 < 720 的片子。色度位置同场景视频（2k − 0.5）。
+
+**时间轴**（WPE 侧用 P9 步骤 0 的 `p9-clock` 实测，p9-REPORT「时钟、循环与显示的帧」；我们这边在主窗口页面经 vite `/@fs/` 导入 `CodecVideoPlayer`，rAF 驱动 12 s 播 `ignore/p9/media/v60-151.mp4`（60 fps、151 帧、mvhd 2.517、elst media_time 512/15360 = 2 帧），不建 DOM、结束释放）：
+
+| 项 | WPE | 我们 | 判定 |
+|---|---|---|---|
+| 编辑列表 | 认：显示帧号 − 当前时间 × 60 ∈ [−1.39, −0.09]；不认的话会整体再小 2 帧 | 认（拆包扣 media_time，帧时间与 ffmpeg 的 pts 逐帧相同，走查各张都对上） | 相同。P9a 记的 3824550659「差 4 帧」是旧 `<video>` 路线 |
+| 时钟步长 | 和场景时间步长相同，抓帧那几帧多走 / 少走约 11 ms（媒体引擎自己的实时时钟） | 每墙钟秒 1.000 s | 相同语义；WPE 的抖动来自它的时钟线程，不复刻 |
+| 显示哪一帧 | 当前时间之前的帧，落后 0.09–1.39 帧，均值 0.84 | 落后 0.07–0.81 帧，均值 0.37（rAF 144 Hz 时取「≤ 时钟的最新一帧」） | 已知差异：WPE 多出约半帧，是帧服务器 `TransferVideoFrame` 的转交延迟；我们按定义取当前帧 |
+| 循环 | 每轮 2.5196 s（标准差 2.9 ms），循环点停约 2.6 ms | 每轮正好时长（实测 rAF 粒度内 2.5165–2.5167），不停 | 已知差异：WPE 的停顿是媒体引擎回绕的开销、有抖动，不复刻 |
+| 开场 | `init` 时 0，之后视频时间 ≈ 场景 runtime − 36.5 ms | 第一次画到、第一帧到手时起步（本次 42 ms 拿到第一帧，起步时 currentTime 0） | 已知差异：WPE 的 36.5 ms 是媒体引擎的启动延迟；宿主 ready 前等第一帧，我们的视频时间 ≈ 场景时间，比 WPE 早约 2 帧（60 fps） |
+| 时长 | mvhd | mvhd（`source.duration` 取容器时长） | 相同 |
+
+时间轴的差异都是「WPE 的视频时钟在媒体引擎的线程上、和渲染帧之间有延迟与抖动」，每帧显示哪一帧在 WPE 那边本身不确定。走查的回放按 FINAL_CHECK 把它当输入还原（从 WPE 的画面认出帧、`videoTime` 取那一帧），画面比较不受影响。
+
+**第二轮结论**：
+- 场景视频：颜色、Matroska、缩放、编辑列表都只剩已知差异（色度位置、时钟的延迟与循环停顿、开场 2 帧）。
+- 要修的一处：用户视频的矩阵（按高度 > 576、不看标签），见上「用户视频的矩阵」。
+
+**用户视频的矩阵：不改（2026-11-16）**。用户：「我觉得这一点应该算 wpe 的 bug，不改」。WPE 读用户视频不看码流标签记为 WPE 的缺陷，我们照标签（`"user"` 规则不变：`colr` → VUI → 没标按分辨率），有意不同；依据：用户视频不在语料里，没有画面依赖它（同「语料依赖的 WPE 缺陷才复现」）。记进 `video/demux/config.ts` 文件头。没标时的分界 WPE 是 576、我们是 720（高 577–719 的未标片两边矩阵不同），也没改。场景视频的「恒为 709」是语料画面依赖的（两段标 bt470bg 的语料作者在 WPE 里看到的是 709），保留。
+
+**用户视频没标时的分界对齐 WPE（2026-11-16）**。用户：「可以对齐」。`MF_HD_MIN_HEIGHT = 720`（高 ≥ 720 用 709）改为 `MF_SD_MAX_HEIGHT = 576`（高 > 576 用 709，否则 601，宽度不参与），照走查的纯色片实测。标签照旧优先（上一条的有意不同不变）。测试改成走查的四个尺寸（720×576 → 601、720×578 → 709、1280×480 → 601、480×720 → 709）；tsc 0 error，引用视频模块的 48 个文件 905 个用例全过，Prettier 通过；变异 2 个（分界不含 576、阈值改回 719）都有测试挂掉。

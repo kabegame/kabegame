@@ -3,12 +3,13 @@
  * - `mediaKind`（扩展名转小写）；
  * - GIF：注入假的 `openGif`——ready / failed、第一个纹理名用初始解码器、后来的另开、`drawn` 每帧最多推进一次、不画不推进、`current` 是当前画布、
  *   换值丢弃旧状态、再选回来从头开始、同值共用与引用计数释放；
- * - 视频：用 `video/fakeVideo.ts` 的替身工厂——等第一帧才 ready、失败回缺省、尺寸取 `videoWidth/Height`、每个纹理名一个播放器、
- *   `beginFrame` 的 30 帧规则、`setPaused`、换值 `dispose`；
+ * - 视频（P9d 步骤 2b：`CodecVideoPlayer`）：用 `video/fakeDecoder.ts` 的解码器替身 + `demux/testMp4.ts` 手造的 MP4（Blob 切片读）——
+ *   等第一帧才 ready、失败回缺省、尺寸取第一帧的显示尺寸、每个纹理名一个播放器、`beginFrame` 的 30 帧规则、`setPaused`、换值 `dispose`；
  * - dev 用的 `advanceGifs` 与 `seekVideos`。
  */
-import { describe, expect, it } from "vitest";
-import { flush, videoEnv, type FakeVideo } from "../video/fakeVideo";
+import { afterEach, describe, expect, it } from "vitest";
+import { buildMp4 } from "../video/demux/testMp4";
+import { fakeFactories, flush, newFakeEnv, type FakeDecoderOptions } from "../video/fakeDecoder";
 import { cropRect } from "./crop";
 import { fileExtension, mediaKind, UserTextureSources, type GifSource, type UserTextureDeps } from "./sources";
 
@@ -35,13 +36,23 @@ class FakeGif implements GifSource {
 /** GIF 与视频的尺寸表：路径 → 尺寸。 */
 const GIFS: Record<string, [number, number]> = { "a.gif": [100, 80], "b.GIF": [64, 64] };
 
-function setup() {
+/** 8 帧、每帧 0.125 s、时长 1 s 的 MP4（关键帧是第 1、5 个样本）：所有视频文件的内容；`audio.mp4` 例外，是不认识的封装。 */
+const MP4 = buildMp4({
+  sizes: Array.from({ length: 8 }, () => 10),
+  perChunk: [8],
+  stts: [[8, 125]],
+  timescale: 1000,
+  stss: [1, 5],
+  movie: [1000, 1000],
+}).bytes;
+
+function setup(decoder: FakeDecoderOptions = {}) {
   const reads: string[] = [];
   const blobReads: string[] = [];
   const opened: FakeGif[] = [];
   const logs: string[] = [];
   const failing = new Set<string>();
-  const env = videoEnv();
+  const fake = newFakeEnv();
   const deps: Partial<UserTextureDeps> = {
     async read(path) {
       reads.push(path);
@@ -59,35 +70,46 @@ function setup() {
     async readBlob(path) {
       blobReads.push(path);
       if (failing.has(path)) throw new Error("读不出");
-      return new Blob([new Uint8Array(10)]);
+      return new Blob([(path === "audio.mp4" ? new Uint8Array(64) : MP4) as Uint8Array<ArrayBuffer>]);
     },
-    videoFactories: env.factories,
-    report: env.report,
+    codecFactories: fakeFactories(fake, decoder),
+    report: { warn: (message, detail) => void fake.warnings.push([message, detail]) },
     now: () => 0,
     log: (message) => logs.push(message),
   };
   const sources = new UserTextureSources(async () => new Uint8Array(), deps);
   const ready: string[] = [];
   sources.onReady = (name) => ready.push(name);
-  return { sources, ready, reads, blobReads, opened, logs, failing, env };
+  const made = { sources, ready, reads, blobReads, opened, logs, failing, fake };
+  fixtures.push(made);
+  return made;
 }
 
-/** 设一个视频值并让它出第一帧（`videoWidth` × `videoHeight`），返回那个元素。 */
+/** 每个用例结束时放掉全部来源：打开的帧数为 0。 */
+const fixtures: { sources: UserTextureSources; fake: { opened: number } }[] = [];
+afterEach(() => {
+  for (const fixture of fixtures) {
+    fixture.sources.dispose();
+    expect(fixture.fake.opened, "释放后仍有没关的帧").toBe(0);
+  }
+  fixtures.length = 0;
+});
+
+/** 设一个视频值并等它出第一帧（尺寸 = 传入的假帧显示尺寸，缺省 320×240）。 */
 async function readyVideo(
   fixture: ReturnType<typeof setup>,
   name: string,
   value: string,
   size: [number, number] = [320, 240],
-): Promise<FakeVideo> {
+): Promise<void> {
+  fixture.fake.frameSize = size;
   fixture.sources.setValue(name, value);
-  await flush();
-  const element = fixture.env.elements.at(-1)!;
-  element.videoWidth = size[0];
-  element.videoHeight = size[1];
-  element.loadData();
   await fixture.sources.settled();
-  return element;
 }
+
+/** 第 `index` 个视频纹理名的播放器探针（要先 `crop` 过）。 */
+const playerProbe = (fixture: ReturnType<typeof setup>, index = 0) =>
+  fixture.sources.probe().flatMap((entry) => entry.videos ?? [])[index].player;
 
 const SLOT = { width: 3, height: 2 };
 
@@ -325,9 +347,9 @@ describe("UserTextureSources：GIF", () => {
 });
 
 describe("UserTextureSources：视频", () => {
-  it("第一帧到了才 ready：之前是 loading、crop 为空；尺寸取 videoWidth × videoHeight，裁切同静态图", async () => {
-    const fixture = setup();
-    const { sources, ready, blobReads } = fixture;
+  it("第一帧到了才 ready：之前是 loading、crop 为空；尺寸取第一帧的显示尺寸，裁切同静态图", async () => {
+    const fixture = setup({ halted: true });
+    const { sources, ready, blobReads, fake } = fixture;
     sources.setValue("ut", "D:/v/clip.MP4");
     expect(sources.status("ut")).toBe("loading");
     await flush();
@@ -335,10 +357,8 @@ describe("UserTextureSources：视频", () => {
     expect(ready).toEqual([]);
     expect(sources.status("ut")).toBe("loading");
     expect(sources.crop("ut", SLOT)).toBeNull();
-    const element = fixture.env.elements[0];
-    element.videoWidth = 320;
-    element.videoHeight = 240;
-    element.loadData();
+    fake.frameSize = [320, 240];
+    fake.decoders[0].resume();
     await sources.settled();
     expect(ready).toEqual(["ut"]);
     expect(blobReads).toEqual(["D:/v/clip.MP4"]);
@@ -352,9 +372,9 @@ describe("UserTextureSources：视频", () => {
     expect(crop.animation!.current()).toBeNull();
   });
 
-  it("读不出、解码出错、没有画面尺寸都是 failed（槽用缺省纹理），失败的播放器被释放", async () => {
-    const fixture = setup();
-    const { sources, failing, env } = fixture;
+  it("读不出、拆不了包、解码出错都是 failed（槽用缺省纹理），失败的播放器被释放", async () => {
+    const fixture = setup({ halted: true });
+    const { sources, failing, fake } = fixture;
     failing.add("bad.mp4");
     sources.setValue("a", "bad.mp4");
     await sources.settled();
@@ -363,32 +383,32 @@ describe("UserTextureSources：视频", () => {
     // 解码出错
     sources.setValue("b", "err.mp4");
     await flush();
-    env.elements.at(-1)!.fail();
+    fake.decoders.at(-1)!.init.error(new DOMException("坏了", "EncodingError"));
     await sources.settled();
     expect(sources.status("b")).toBe("failed");
     expect(sources.crop("b", null)).toBeNull();
-    expect(env.warnings.length).toBeGreaterThan(0);
+    expect(fake.warnings.length).toBeGreaterThan(0);
+    expect(fake.decoders.at(-1)!.closed).toBe(true);
 
-    // 出了第一帧但 videoWidth 为 0（纯音频等）
+    // 不认识的封装（纯音频等）：拆不了包，没有解码器
+    const decoders = fake.decoders.length;
     sources.setValue("c", "audio.mp4");
-    await flush();
-    const element = env.elements.at(-1)!;
-    element.loadData();
     await sources.settled();
     expect(sources.status("c")).toBe("failed");
-    expect(element.count("load")).toBeGreaterThan(0);
-    expect(env.revoked).toHaveLength(env.created.length);
+    expect(fake.decoders).toHaveLength(decoders);
+    expect(fake.warnings.at(-1)![0]).toContain("场景视频不能拆包");
   });
 
   it("每个纹理名一个播放器（同一个 Blob）：第一个拿初始播放器，后来的另建", async () => {
     const fixture = setup();
-    const { sources, blobReads, env } = fixture;
+    const { sources, blobReads, fake } = fixture;
     await readyVideo(fixture, "ut", "v.mp4");
-    expect(env.elements).toHaveLength(1);
+    expect(fake.decoders).toHaveLength(1);
     const first = sources.crop("ut", SLOT)!;
-    expect(env.elements).toHaveLength(1);
+    expect(fake.decoders).toHaveLength(1);
     const second = sources.crop("ut", { width: 1, height: 1 })!;
-    expect(env.elements).toHaveLength(2);
+    await flush();
+    expect(fake.decoders).toHaveLength(2);
     expect(second.animation).not.toBe(first.animation);
     expect(sources.crop("ut", SLOT)!.animation).toBe(first.animation);
     // Blob 只读一次
@@ -396,117 +416,132 @@ describe("UserTextureSources：视频", () => {
     expect(sources.probe()[0].videos!.map((item) => item.key)).toEqual(["v.mp4x15", "v.mp4x10"]);
   });
 
-  it("drawn() 有新帧交出元素（交出即清标志），没有新帧 null", async () => {
+  it("drawn() 有新帧交出 VideoFrame（交出即清标志），没有新帧 null；时钟走过一帧后交出下一帧", async () => {
     const fixture = setup();
-    const element = await readyVideo(fixture, "ut", "v.mp4");
-    const animation = fixture.sources.crop("ut", SLOT)!.animation!;
-    expect(animation.drawn()).toEqual({ kind: "element", element });
-    expect(animation.drawn()).toBeNull();
-    element.present();
-    expect(animation.drawn()).toEqual({ kind: "element", element });
-  });
-
-  it("beginFrame 的 30 帧规则：连续 30 帧没画到就暂停，再画到时立即恢复", async () => {
-    const fixture = setup();
-    const { sources } = fixture;
-    const element = await readyVideo(fixture, "ut", "v.mp4");
+    const { sources, fake } = fixture;
+    await readyVideo(fixture, "ut", "v.mp4");
     const animation = sources.crop("ut", SLOT)!.animation!;
-    expect(element.paused).toBe(false);
-    for (let i = 0; i < 30; i++) sources.beginFrame(1 / 60);
-    expect(element.paused).toBe(false);
+    expect(animation.drawn()).toMatchObject({
+      kind: "video",
+      frame: { timestamp: 0, displayWidth: 320, displayHeight: 240 },
+    });
+    expect(animation.drawn()).toBeNull();
+    fake.now += 125;
     sources.beginFrame(1 / 60);
-    expect(element.paused).toBe(true);
-    animation.drawn();
-    expect(element.paused).toBe(false);
+    expect(animation.drawn()).toMatchObject({ kind: "video", frame: { timestamp: 125_000 } });
   });
 
-  it("setPaused：暂停时全部 pause；恢复时 wantPlay 置真再放（连脚本不会置的失败 / 暂停过的也放）", async () => {
+  it("beginFrame 的 30 帧规则：连续 30 帧没画到就暂停（时钟停住），再画到时立即恢复", async () => {
     const fixture = setup();
     const { sources } = fixture;
-    const element = await readyVideo(fixture, "ut", "v.mp4");
-    sources.crop("ut", SLOT);
+    await readyVideo(fixture, "ut", "v.mp4");
+    const animation = sources.crop("ut", SLOT)!.animation!;
+    // 第一次画到时时钟才起步
+    expect(playerProbe(fixture).paused).toBe(true);
+    animation.drawn();
+    expect(playerProbe(fixture).paused).toBe(false);
+    for (let i = 0; i < 30; i++) sources.beginFrame(1 / 60);
+    expect(playerProbe(fixture).paused).toBe(false);
+    sources.beginFrame(1 / 60);
+    expect(playerProbe(fixture).paused).toBe(true);
+    animation.drawn();
+    expect(playerProbe(fixture).paused).toBe(false);
+  });
+
+  it("setPaused：暂停时全部暂停；恢复时 wantPlay 置真再放（连脚本不会置的失败 / 暂停过的也放）", async () => {
+    const fixture = setup();
+    const { sources } = fixture;
+    await readyVideo(fixture, "ut", "v.mp4");
+    sources.crop("ut", SLOT)!.animation!.drawn();
+    expect(playerProbe(fixture).paused).toBe(false);
     sources.setPaused(true);
-    expect(element.paused).toBe(true);
+    expect(playerProbe(fixture).paused).toBe(true);
     // 暂停期间新建的播放器（第二个纹理名）不放
     sources.crop("ut", { width: 1, height: 1 });
     sources.setPaused(false);
-    expect(element.paused).toBe(false);
+    expect(playerProbe(fixture, 0)).toMatchObject({ paused: false, wantPlay: true });
     // 同样的状态再设不重复
-    const plays = element.count("play");
     sources.setPaused(false);
-    expect(element.count("play")).toBe(plays);
+    expect(playerProbe(fixture, 0).paused).toBe(false);
   });
 
-  it("换值 / 放光引用：播放器 dispose（元素清 src、对象地址撤销）；再选回来是新的播放器", async () => {
+  it("换值 / 放光引用：播放器 dispose（解码器关掉）；再选回来是新的播放器", async () => {
     const fixture = setup();
-    const { sources, env } = fixture;
-    const element = await readyVideo(fixture, "ut", "v.mp4");
+    const { sources, fake } = fixture;
+    await readyVideo(fixture, "ut", "v.mp4");
     const first = sources.crop("ut", SLOT)!.animation!;
     sources.setValue("ut", "");
-    expect(element.getAttribute("src")).toBeNull();
-    expect(element.count("load")).toBeGreaterThan(0);
-    expect(env.revoked).toEqual(["blob:1"]);
-    const second = await readyVideo(fixture, "ut", "v.mp4");
-    expect(second).not.toBe(element);
+    expect(fake.decoders[0].closed).toBe(true);
+    expect(fake.opened).toBe(0);
+    await readyVideo(fixture, "ut", "v.mp4");
+    expect(fake.decoders).toHaveLength(2);
     expect(sources.crop("ut", SLOT)!.animation).not.toBe(first);
   });
 
   it("两个属性同值共用一个 Blob 与初始播放器；一个换走另一个还在，放光才 dispose", async () => {
     const fixture = setup();
-    const { sources, blobReads } = fixture;
-    const element = await readyVideo(fixture, "x", "v.mp4");
+    const { sources, blobReads, fake } = fixture;
+    await readyVideo(fixture, "x", "v.mp4");
     fixture.sources.setValue("y", "v.mp4");
     expect(sources.status("y")).toBe("ready");
     expect(blobReads).toEqual(["v.mp4"]);
     const x = sources.crop("x", SLOT)!.animation!;
     expect(sources.crop("y", SLOT)!.animation).toBe(x);
     sources.setValue("x", "");
-    expect(element.getAttribute("src")).not.toBeNull();
+    expect(fake.decoders[0].closed).toBe(false);
     sources.setValue("y", "");
-    expect(element.getAttribute("src")).toBeNull();
+    expect(fake.decoders[0].closed).toBe(true);
   });
 
   it("加载在途时换值：旧播放器释放，不会变成 ready", async () => {
-    const fixture = setup();
-    const { sources, ready, env } = fixture;
+    const fixture = setup({ halted: true });
+    const { sources, ready, fake } = fixture;
     sources.setValue("ut", "v.mp4");
     await flush();
-    const element = env.elements[0];
     sources.setValue("ut", "");
-    expect(element.count("load")).toBeGreaterThan(0);
-    element.videoWidth = 10;
-    element.videoHeight = 10;
-    element.loadData();
+    expect(fake.decoders[0].closed).toBe(true);
     await sources.settled();
     expect(ready).toEqual(["ut"]);
     expect(sources.status("ut")).toBe("empty");
   });
 
-  it("seekVideos：按值给时刻，循环取模并钳到 duration − 0.005，等 seeked，之后 drawn 交出那一帧；没给时刻的不动", async () => {
+  it("seekVideos：按值给时刻，循环取模并钳到 duration − 0.005，等目标帧到手，之后 drawn 交出那一帧；没给时刻的不动", async () => {
     const fixture = setup();
     const { sources } = fixture;
-    const element = await readyVideo(fixture, "ut", "v.mp4");
-    const other = await readyVideo(fixture, "o", "w.mp4");
+    await readyVideo(fixture, "ut", "v.mp4");
+    await readyVideo(fixture, "o", "w.mp4");
     const animation = sources.crop("ut", SLOT)!.animation!;
+    sources.crop("o", SLOT);
     animation.drawn();
-    const seeking = sources.seekVideos((value) => (value === "v.mp4" ? 1.5 : undefined));
-    element.fire("seeked");
-    await seeking;
-    expect(element.currentTime).toBe(1.5);
-    expect(other.currentTime).toBe(0);
-    expect(animation.drawn()).toEqual({ kind: "element", element });
+    await sources.seekVideos((value) => (value === "v.mp4" ? 0.3 : undefined));
+    expect(playerProbe(fixture, 0).currentTime).toBe(0.3);
+    expect(playerProbe(fixture, 1).currentTime).toBe(0);
+    // 显示时间 ≤ 0.3 的最新一帧是 0.25
+    expect(animation.drawn()).toMatchObject({ kind: "video", frame: { timestamp: 250_000 } });
 
-    // 超过时长按循环取模（2.517 的时长：5 % 2.517 = 2.483），接近末尾时钳到 duration − 0.005
-    const wrapped = sources.seekVideos(() => 5);
-    element.fire("seeked");
-    other.fire("seeked");
-    await wrapped;
-    expect(element.currentTime).toBeCloseTo(5 % 2.517, 6);
-    const clamped = sources.seekVideos(() => 2.516);
-    element.fire("seeked");
-    other.fire("seeked");
-    await clamped;
-    expect(element.currentTime).toBeCloseTo(2.517 - 0.005, 6);
+    // 超过时长按循环取模（时长 1 s：2.25 % 1 = 0.25），接近末尾时钳到 duration − 0.005
+    await sources.seekVideos(() => 2.25);
+    expect(playerProbe(fixture, 0).currentTime).toBeCloseTo(0.25, 9);
+    expect(playerProbe(fixture, 1).currentTime).toBeCloseTo(0.25, 9);
+    await sources.seekVideos(() => 0.999);
+    expect(playerProbe(fixture, 0).currentTime).toBeCloseTo(1 - 0.005, 9);
+    expect(animation.drawn()).toMatchObject({ kind: "video", frame: { timestamp: 875_000 } });
+  });
+
+  it("seekVideos 等到目标帧到手才返回：解码器停住期间不返回，恢复后交出目标帧", async () => {
+    const fixture = setup();
+    await readyVideo(fixture, "ut", "v.mp4");
+    const animation = fixture.sources.crop("ut", SLOT)!.animation!;
+    animation.drawn();
+    const decoder = fixture.fake.decoders[0];
+    decoder.halted = true;
+    let done = false;
+    const seeking = fixture.sources.seekVideos(() => 0.3).then(() => void (done = true));
+    await flush();
+    expect(done).toBe(false);
+    decoder.resume();
+    await seeking;
+    expect(animation.drawn()).toMatchObject({ kind: "video", frame: { timestamp: 250_000 } });
   });
 
   it("探针：每个纹理名的播放器状态", async () => {
@@ -517,7 +552,14 @@ describe("UserTextureSources：视频", () => {
     expect(probe.videos).toHaveLength(1);
     expect(probe.videos![0]).toMatchObject({
       key: "v.mp4x15",
-      player: { videoWidth: 320, videoHeight: 240, failed: false },
+      // 颜色走用户视频的规则（照标签、没标按分辨率），不是场景视频纹理的「恒为 bt709」
+      player: {
+        videoWidth: 320,
+        videoHeight: 240,
+        failed: false,
+        duration: 1,
+        color: expect.stringContaining("按分辨率"),
+      },
     });
   });
 });
