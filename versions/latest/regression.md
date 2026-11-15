@@ -799,6 +799,17 @@
 | [x] | D4 `g_LayerModelMatrix` | Windows dev，屏外宿主 + WPE 抓帧 | 工坊 `rounded_mask` 挂在四个缩放、旋转各不相同的图层上（`ignore/p7d/gen_rmask.py`），1920×1080 和 WPE 逐像素比；测后 `projects_remove` | 一致 | 2026-11-12 Claude：最大差 0；单测和 `p7d-uni` 抓帧的矩阵逐值核对（含父链） |
 | [x] | D5 流体结构 | Node，HEAD 快照 | 六个流体变体的计划与 WPE 抓帧逐项比（绘制数、目标尺寸格式、各槽来源、实例覆盖） | 逐项相同 | 2026-11-12：80 / 80 |
 | [x] | D6 流体单步隔离 | Windows dev，探针 `__kabegameSceneProbe.fluid` | 把 WPE 某帧开始时的模拟 RT 灌进 fbo，跑一帧，逐个 RT 和 WPE 这一帧的输出比 | 只差半精度舍入 | 2026-11-12 Claude：旋度、染料、合成 RT 逐位相同；速度、压力、散度只有个别值差 1–4 ulp（第 122 帧经散度放大到 184 ulp 的单点）；我重跑第 121 帧数字一致 |
+## 场景壁纸：单级 mip 纹理的各向异性过滤
+
+2026-11-14 Windows。`samplerDescriptor` 原先只给多级 mip 的文件纹理开 8 倍各向异性，单级 mip 的（effect 遮罩、视频）只用双线性。WPE 对文件纹理一律 Anisotropic 8x，只有 NoInterpolation 时点采样（rea-p8-layer 3.2，视频见 p9-REPORT）。改成不看 mip 级数。问题由 P12a 走查发现（`ignore/p12/a/final/report.txt` B1）：3811769317 的 cloudmotion 用带噪声偏移的第二次采样读遮罩，导数被拉长，两种过滤差到 204 级。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | A1 单测 | Node | `render.test.ts`「采样器与所需特性」 | 单级 mip、非点采样得 linear mip + 各向异性 8；点采样仍是 1 | 2026-11-14：44 个通过 |
+| [x] | A2 复制工程对照 | Windows dev + WPE 抓帧 | `ignore/p12/a/final/proj/3811769317-iso-pup` 按 WPE 日志回放 275–280 帧（2560×1046、超高档、跑脚本），和 P12a 走查时的 WPE 抓帧逐帧比 | cloudmotion 的大差消失 | 2026-11-14 Claude：改前每帧约 4900 个像素、最大 98–204；改后 10–417 个、最大 1–2（剩下的是走查已登记的 waterripple 末位与泛光链）。`cmp/3811769317-iso-b1.txt` |
+| [x] | A3 画面哈希 | Windows dev，屏外宿主 | 10 张场景三档各渲染两次；变了的 3 张临时退回旧规则再记一份 | 只有用到单级纹理缩小 / 斜向采样的场景变，变化全部来自本改动 | 2026-11-14 Claude：30 组全部稳定、`unsupported` 不变；beach、deep_space、razer_vortex 的哈希变了，退回旧规则的 A 组与旧基线逐个相同，其余 7 张不变。`ignore/p7e/hash-b1*.json`。这 3 张没有再和 WPE 重比 |
+| [ ] | A4 预览观感 | Windows，窗口模式 | 图库预览打开 3811769317 | cloudmotion 扭曲区域的边缘没有闪烁的硬边 | 可选，待用户确认 |
+
 | [x] | D7 流体长程统计 | Windows dev，探针 + WPE 三次运行 | 按 WPE 帧时长跑 167 帧，读回第 154–167 帧的画布，和 WPE 比 | 落在 WPE 自身两次运行之间 | 2026-11-12 Claude：平均差 8.34 / 10.50 / 15.45（WPE 之间 8.79 / 11.97 / 14.55）；帧间变化量、火焰覆盖与 WPE 几乎相同 |
 | [x] | D8 收尾 | Windows，cargo + dev | 换上新 wasm；HEAD 快照重录夹具并重放，对 P7c 基线比较；新增 WGSL 过 Tint | 全过；原有输出不变 | 2026-11-13：853 / 853；原有 4012 个文件变了 0，少的 8 个是流体 normal pass 与 combine 的旧请求（条件生效后不再发出或请求换了哈希，WGSL 相同）；新增 114 份 WGSL 0 error 0 warning；能渲染 47 张，P7d 相关键 0 处 |
 | [ ] | D9 预览里看流体 | Windows，窗口模式 | 导入 `ignore/p7d/proj/p7d-fluid`，在图库预览里看一会儿，和 WPE 打开同一工程对照 | 火焰形状、亮度与流动速度和 WPE 观感一致 | 可选，待用户确认；本机语料里用流体的场景还不能渲染 |
@@ -2872,15 +2883,3 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | FI3 画面哈希 | Windows dev 屏外宿主 | `hash_baseline` 10 张 × 3 档，改动前后比 | 不读逆矩阵的场景不变 | 2026-11-15：30 组全部相同 |
 | [x] | FI4 和 WPE 比 | Windows dev + 已有的 WPE 抓帧 | 重跑 `sun`、`whale`（P10a）、`tmpl2` 四组（P5d）、`3822495444`（P7c）、`3498150384`（P13a）的按窗口尺寸对照 | 读逆矩阵的常量和 WPE 逐位相同；反馈 RT 的差异缩小 | 2026-11-15：`sun` 光晕那次绘制 14 个常量全部相同，但像素差和改前一样（归着色器舍入）；`tmpl2`、`whale`、`3822495444` 不变；P13a 229、230 帧逐像素相同、其余帧最大差 4 → 1，只把求逆换回 double 就回到原来的数字 |
 | [ ] | FI5 实时预览 | Windows dev，图库预览 | 预览 `3498150384`（鼠标波纹），在画面上拖动 | 波纹正常，没有闪烁或发散 | 只做了屏外回放 |
-
-## 场景壁纸：单采样 A2C 的阈值（P13d 附带）
-
-2026-11-15。`alphatocoverage` 的丢弃条件从 `!(a > 0.5)` 改成 `!(a >= 0.500244140625)`（`render/programs.ts` 的 `A2C_THRESHOLD`），主 pass 与之后的阴影投射者共用。WPE 的实测与推理见 `.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md`「单采样 A2C 的阈值」；测试工程 `ignore/p13/proj/p13d-a2cth*`（`ignore/p13/d/gen_d10.py`），抓帧 `A:\p13d\a2cth*\`。
-
-| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
-| --- | --- | --- | --- | --- | --- |
-| [x] | AT1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`p8.test.ts` | 0 error、全过 | 2026-11-15：tsc 0 error，`p8.test.ts` 96 个全过（A2C 入口的期望改成新阈值） |
-| [x] | AT2 WPE 阈值 | WPE 抓帧，1920×1080 | 自写着色器输出 alpha = 0.5 + d，d 逐段细分到 2⁻²² | 找到画与不画的分界 | 2026-11-15：0.5 + 2⁻¹² 画，再小 2⁻²² 不画，段内整片一致；格子边界上的双线性过滤值是 0.5 ± 2⁻¹⁷ |
-| [x] | AT3 P8 回归 | Windows dev + 已有的 WPE 抓帧 | `p8-a2c` 第 162 帧、`p8-misc` 第 155 帧按日志回放 | 和 WPE 逐像素相同（屏蔽 FR / CLK） | 2026-11-15：两个都 0 差异；测试行测完已移除 |
-| [x] | AT4 镂空材质 | Windows dev + WPE 抓帧（`p13d-spec-ns`，chroma4 / foliage4 棋盘格 A2C） | 渲染抓帧那一刻，和 WPE 比 | 格子边上不再多画 | 2026-11-15：差异 54 → 11，剩下的都是 1 级孤立像素（在 P13d 进行中的工作区上测，`fur4` 的主 pass 要 P13d） |
-| [ ] | AT5 非 Windows / 别的显卡 | macOS / Linux / AMD / Intel | 预览用 A2C 的场景 | 同 Windows | 阈值是本机 NVIDIA、D3D11 单采样的实测，别的驱动可能不同 |

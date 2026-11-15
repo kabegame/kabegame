@@ -720,6 +720,9 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
   - `editable`：`wallpaper64.exe` 里没有这个字符串，推断是编辑器键，按中性放开。
 - **varying 的布局（P7e，2026-11-14 加）**：WebGPU 缺省 16 个阶段间变量，语料 5 张超过（`auto_sway` 4 张、示波器 3585875739），运行时建管线失败。照 WPE 的数组长度（`vec3` / `vec4` 数组只剩 `ceil(n / 4)` 个元素）并在超过时打包进 vec4，见 [phase-7e-varyings.md](phase7/phase-7e-varyings.md)。2026-11-14 完成：改后最多 13 个 location，确定性工程与 WPE 逐格一致，3585875739 运行时能画了；不解锁别的场景。收尾另修上界是字面量 0 的 `smoothstep`（fxc 把 `0.0 - lo` 化成 `-lo`，示波器没有声音时整张提亮）。
 - **验收：** 翻译器的语料测试覆盖 pkg 里的工坊着色器；解锁的场景和 WPE 同一时刻的画面比。
+- **单级 mip 纹理的采样器（2026-11-14，P12a 走查转来的 B1）**：`samplerDescriptor` 原先只给多级 mip 的纹理开 8 倍各向异性，单级 mip 的（effect 遮罩、视频）只用双线性；WPE 对文件纹理一律是 Anisotropic 8x、只有 NoInterpolation 点采样（`FUN_140099980`，rea-p8-layer 3.2；视频见 p9-REPORT）。改成不看 mip 级数。依据与复核：
+  - 3811769317 的 cloudmotion 用带噪声偏移的第二次采样读遮罩，导数被拉长，双线性和各向异性差到 204 级。复制工程 `ignore/p12/a/final/proj/3811769317-iso-pup` 的 275–280 帧和 WPE 比：改前每帧约 4900 个像素、最大 98–204，改后 10–417 个、最大 1–2（`ignore/p12/a/final/cmp/3811769317-iso-b1.txt`）。
+  - 10 张场景的画面哈希（`ignore/p7e/hash-b1*.json`）：beach、deep_space、razer_vortex 变了，临时退回旧规则的 A 组和旧基线逐个相同，变化全部来自这一处；其余 7 张不变。p2-REPORT J1 记的 razer_vortex `wave`（64×8、无 mip）当时认为「WebGPU 复刻不了各向异性」，现在能开了，但这几张没有再和 WPE 重比。
 
 ## P8 — 图像层与材质补全
 
@@ -821,6 +824,10 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 
 | 旧名 | 现在的去处 |
 |---|---|
+- **waterwaves 的零星 1 级差**（2026-11-14 P12a 走查的 K4 / U1，用户定为后续项）：
+  - 输入 RT、常量、遮罩逐位相同时，waterwaves 输出仍有一百多个像素差 1 级（3828324728 头发 159 个、3409595232 165 个），全部在遮罩 > 0 处。
+  - 把 WPE 原文直译成 WGSL 回放，对 WPE 只差 8 个像素，用我们翻译器的输出差 87 个，所以差在翻译出的片元算术上（`sin` 参数的乘加、`pow` 的 log / exp 段），还没对 DXBC 与 WGSL 逐指令定位。
+  - 收益只是零星 1 级差。数据在 `ignore/p12/a/final/`（`report.txt` 第三节 K4、第四节 U1，回放器 `scripts/gpuwaves.ts`）。
 | W1 | 层级 → P4a；`shake`、`iris` 能力表已经不报；形状对象 → P8；工坊着色器进翻译器语料 → P7 |
 | W2 | 视频 → P9；音频频谱 → P11；文本、`thisLayer.text` → P6；绳与跟随指针的控制点 → P4c / P4d；`shine`、`blurprecise`、`opacity` 能力表已经不报 |
 | W3 | 多段视频 → P9；`mediaThumbnailChanged` → P11；相机对象 → P5d；`canvasSize` 已实现；`colorBlendMode` 21 / 31 能力表已经不报 |

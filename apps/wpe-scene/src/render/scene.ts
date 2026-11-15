@@ -1637,7 +1637,7 @@ export class GpuScene {
   }
 
   private samplerFor(texture: SceneTexture): GPUSampler {
-    return this.sampler(samplerDescriptor(texture, texture.mips.length > 1));
+    return this.sampler(samplerDescriptor(texture));
   }
 
   /**

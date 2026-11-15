@@ -67,7 +67,7 @@ export const SUPPORTED = {
   objects: ["image"],
   /**
    * `alphatocoverage`（P8 步骤 5，rea-p8-render 第 5 节）：混合关、写掩码与深度同 normal，着色器加 `ALPHATOCOVERAGE = 1`
-   * （`writeState.ts` 的 `materialCombos`），渲染器在 A2C 管线的片元入口里丢弃锐化后 alpha 小于 0.5 + 2⁻¹² 的片元（`render/programs.ts`）。
+   * （`writeState.ts` 的 `materialCombos`），渲染器在 A2C 管线的片元入口里丢弃锐化后 alpha 不大于 0.5 的片元（`render/programs.ts`）。
    */
   blending: ["normal", "translucent", "additive", "alphatocoverage"],
   /** 按原格式上传的 `.tex` 格式（0、4、6–9），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
