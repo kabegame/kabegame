@@ -34,10 +34,16 @@ function nextFrame(): Promise<void> {
 /**
  * 预览弹窗里的壁纸画布（纯布局）：给插槽一块固定尺寸的画布，再整体 `scale` 进可用区域并居中，没有背景，
  * 看起来和单独一张图一样。尺寸取 `contentSize`，也就是图片行的宽高；网页壁纸没有固有尺寸，透视场景读不到分辨率，
- * 这时按主显示器逻辑分辨率，页面照这个尺寸排版。画布本身不拦指针事件。
+ * 这时按主显示器逻辑分辨率，页面照这个尺寸排版。
+ * 画布之上盖一层透明覆盖层，只接住真实鼠标、不转发：壁纸 iframe 本来就不收真实鼠标，页面里的鼠标由 Rust 直接注入
+ * iframe（`framePointer.ts`），覆盖层挡不住它。有了覆盖层，鼠标在壁纸上移动时预览容器照常收到 `mousemove`
+ * （翻页箭头），右键冒泡到预览容器弹菜单，滚轮与拖动留给以后的放大。透明、不写 z-index，箭头与工具条照常在它上面。
+ * 注入的点击会把键盘焦点切进壁纸 iframe：等真实左键松开后还给父页面（`keepFocusOutOfFrames`），预览的 Esc、方向键才照常。
+ * Linux 退回 iframe 直接收真实鼠标，不盖覆盖层，也不管焦点。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { primaryMonitor } from "@tauri-apps/api/window";
+import { NATIVE_FRAME_POINTER, keepFocusOutOfFrames } from "./framePointer";
 
 const props = defineProps<{ contentSize?: { width: number; height: number } | null }>();
 
@@ -113,7 +119,13 @@ function measure() {
   available.value = { width: el.clientWidth, height: el.clientHeight };
 }
 
+// 注入的点击切进画布里的壁纸 iframe 的焦点，真实左键松开后还给父页面
+let stopFrameFocus: (() => void) | null = null;
+
 onMounted(() => {
+  if (NATIVE_FRAME_POINTER) {
+    stopFrameFocus = keepFocusOutOfFrames((frame) => canvasRef.value?.contains(frame) ?? false);
+  }
   measure();
   observer = new ResizeObserver(() => measure());
   if (containerRef.value) observer.observe(containerRef.value);
@@ -125,6 +137,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   observer?.disconnect();
   observer = null;
+  stopFrameFocus?.();
+  stopFrameFocus = null;
 });
 
 /**
@@ -165,5 +179,6 @@ defineExpose({ withCaptureRegion });
     <div ref="canvasRef" class="absolute origin-top-left overflow-hidden" :style="canvasStyle">
       <slot />
     </div>
+    <div v-if="NATIVE_FRAME_POINTER" class="absolute inset-0" data-wallpaper-pointer-overlay />
   </div>
 </template>

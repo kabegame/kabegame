@@ -5,6 +5,8 @@ import WpeSceneView from "./WpeSceneView.vue";
 import { WPE_SCENE_DISPLAY, WPE_SCENE_POINTER, WPE_SCENE_STYLE, WPE_SCENE_STYLE_REQUEST } from "./wpeSceneStyle";
 import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
 import { WPE_SCENE_SHORTCUT } from "./wpeSceneShortcut";
+import { WPE_VOLUME_MESSAGE, WPE_VOLUME_REQUEST } from "./wpeWebVolume";
+import { framePointerEvents } from "./framePointer";
 
 /** `wpe_scene_cursor` 的返回（开场指针）；其余命令都当取宿主地址。 */
 const cursor = vi.hoisted(() => ({ value: null as { x: number; y: number } | null }));
@@ -325,5 +327,25 @@ describe("WpeSceneView 快捷方式（P11d）：应用页是安全边界", () =>
     fromHost({ type: WPE_SCENE_SHORTCUT, name: "Chrome" });
     await flushPromises();
     expect(loggerMock.warn).toHaveBeenCalledWith(expect.stringContaining("启动快捷方式失败"));
+  });
+});
+
+describe("WpeSceneView 鼠标", () => {
+  it("音量消息带 interactive，变化时主动推；iframe 按平台收不收真实鼠标", async () => {
+    const { wrapper, post, fromHost, frame } = await mountView("fit", true);
+    const volumePosts = () =>
+      post.mock.calls.filter(([data]) => (data as { type?: unknown }).type === WPE_VOLUME_MESSAGE);
+    fromHost({ type: WPE_VOLUME_REQUEST });
+    expect(frame.style.pointerEvents).toBe(framePointerEvents(true));
+    expect(volumePosts().at(-1)?.[0]).toEqual({
+      type: WPE_VOLUME_MESSAGE,
+      volume: 1,
+      paused: false,
+      interactive: true,
+    });
+    await wrapper.setProps({ interactive: false });
+    expect((volumePosts().at(-1)?.[0] as { interactive: boolean }).interactive).toBe(false);
+    // 不交互时任何平台都不收真实鼠标
+    expect(frame.style.pointerEvents).toBe("none");
   });
 });

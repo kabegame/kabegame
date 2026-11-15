@@ -951,13 +951,13 @@ P4a、P4b 的粒子系统是封闭的：控制点 0 当单位阵，粒子都在�
 
 **数据流**：
 - 宿主 `pointermove` → `SceneRenderer.setPointer` 只记画布上的原始坐标；
-- 开场指针（P5a 收尾）：`interactive` 时 `WpeSceneView` 在 iframe `load` 与宿主 ready 时各问一次 `wpe_scene_cursor`（Windows：`GetCursorPos` + `ScreenToClient` + DPI，同鼠标转发；其它平台 `null`，退回父页面最近一次 `pointermove` / `pointerdown`），按 iframe 显示矩形换成归一化坐标（不钳制），经 `kabegame:wpe-scene-pointer` 交给宿主当初值；宿主收到过真实 `pointermove` 后初值作废（`scenePointerFeed`）。`SceneHost` 记住最近的指针，渲染器建好时先于 `load` 带进去，没有场景时原样记下的指针在 `load` 里按新场景铺放换成 `g_PointerPosition`，所以预热与第一帧就用真实光标；
+- 开场指针（P5a 收尾）：`interactive` 时 `WpeSceneView` 在 iframe `load` 与宿主 ready 时各问一次 `wpe_scene_cursor`（`tauri-plugin-cursor` 的 `position_in_window`：Windows `GetCursorPos` + `ScreenToClient` + DPI，macOS 未实测；Linux `null`，退回父页面最近一次 `pointermove` / `pointerdown`），按 iframe 显示矩形换成归一化坐标（不钳制），经 `kabegame:wpe-scene-pointer` 交给宿主当初值；宿主收到过真实 `pointermove` 后初值作废（`scenePointerFeed`）。`SceneHost` 记住最近的指针，渲染器建好时先于 `load` 带进去，没有场景时原样记下的指针在 `load` 里按新场景铺放换成 `g_PointerPosition`，所以预热与第一帧就用真实光标；
 - 每帧在 `syncPlacement` 之后按当前样式现算 `cursor`，放进 `FrameInput.cursor`，改样式、改尺寸下一帧就对；
 - `GpuScene.stepParticles` 每次调用反投影一次，作为 `ControlPointInputs.pointer` 交给每个系统。模拟器只收场景坐标，不知道样式；
 - 加载时按新场景的尺寸（`sceneTargetSize`）算一次 `cursor`，给加载时的更新与预热；
 - 暂停时照记坐标、不画，恢复后的第一帧用最新值。WPE 暂停时指针冻结、恢复后读当时的光标，效果相同。
 
-**已知差别**：WPE 用全局光标（`GetCursorPos`），光标在窗口外也跟踪。我们开场取一次真实光标（见上，不交互时不取），之后只在宿主收到 `pointermove` 时更新（预览里是光标在 iframe 上时，桌面是鼠标转发时），之外保持最后的值；两样都没有时 `cursor` 取场景中心 (0.5, 0.5)。
+**已知差别**：WPE 用全局光标（`GetCursorPos`），光标在窗口外也跟踪，`g_PointerPosition` 可以出 0…1。我们开场取一次真实光标（见上，不交互时不取），之后只在宿主收到 `pointermove` 时更新，两样都没有时 `cursor` 取场景中心 (0.5, 0.5)。2026-11-15 起预览与桌面都由 Rust 按全局光标直接注入宿主 iframe（见 [WPE_IMPORT.md](WPE_IMPORT.md)「鼠标」），光标在 iframe 外、应用窗口外、另一块屏上也跟踪，但钳到「frame 中心到光标的连线」与 frame 边界的交点：视差与跟随鼠标的粒子停在边缘，不像 WPE 那样外推（用户定的）。Linux 拿不到全局光标，只在 iframe 上跟踪。
 
 ### `controlpointattract`
 
@@ -1896,7 +1896,7 @@ P11c 照这三段做，每段放在对应的位置。依据：
 
 视差点、`g_ParallaxPosition` 和跟随指针的粒子都要从第一帧起就用真实光标。WPE 每帧 `GetCursorPos`，加载第一帧就用真实光标。我们的宿主原来只在收到 `pointermove` 时更新指针：预览 iframe 开场收不到，桌面鼠标转发只在光标移动时注入。所以打开后视差停在中间，鼠标动一下才滑过去（2026-11-11 真机走查发现，跟随指针的粒子同样受影响）。现在让宿主一开始就拿到一次真实光标：
 - **只在可交互时**：应用页 `WpeSceneView`（预览与桌面共用）在 `interactive` 时，于 iframe `load` 与宿主 ready 各调一次 `wpe_scene_cursor`。非 `interactive`（应用背景、不交互的预览）照旧不给指针，视差目标点就是场景中心加 s，只剩静止偏移。
-- **Rust**：`wpe_scene_cursor` 在 `src-tauri/kabegame/src/commands/wpe_scene.rs`，`wpe` feature 下注册。Windows 用 `GetCursorPos` + `ScreenToClient`，再除以 `dpi/96`，得到光标在调用方窗口客户区的 CSS 像素，和鼠标转发同一套映射；其它平台返回 `null`。问 Rust 而不只用父页面记的鼠标位置，是因为桌面壁纸窗口的页面收不到鼠标事件，只有注入给 iframe 的。
+- **Rust**：`wpe_scene_cursor` 在 `src-tauri/kabegame/src/commands/wpe_scene.rs`，`wpe` feature 下注册。换算在 `tauri-plugin-cursor` 的 `position_in_window`（2026-11-15 起）：Windows 用 `GetCursorPos` + `ScreenToClient`，再除以 `dpi/96`，得到光标在调用方窗口客户区的 CSS 像素，和鼠标注入同一套坐标；macOS 也有（未实测），Linux 返回 `null`。问 Rust 而不只用父页面记的鼠标位置，是因为桌面壁纸窗口的页面收不到鼠标事件，只有注入给 iframe 的。
 - **应用页**：按 iframe 的显示矩形换成 iframe 内的归一化坐标，不钳制（`wpeSceneStyle.ts` 的 `scenePointerIn`），经 `kabegame:wpe-scene-pointer` 交给宿主。命令返回 `null`、出错，或在 Web / Android 上时，退回本页最近一次 `pointermove` / `pointerdown`，也没有就不发；等命令期间换了宿主也不发。
 - **宿主**：`sceneStyle.ts` 只认父窗口发来的可信消息，当一次 `setPointer`；收到过真实 `pointermove` 之后，初值作废（`scenePointerFeed`）。`SceneHost` 记住最近的指针，渲染器建好时先于 `load` 带进去，`load` 按新场景的铺放换成 `g_PointerPosition`，所以预热与第一帧就用它。
 
@@ -2982,7 +2982,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 ### 宿主左键
 
-`main.ts` 的 `pointerdown` / `pointerup`（只认主键，`pointercancel` 与窗口失焦当抬起）→ `SceneHost.setButton` → `SceneRenderer.setButton`。桌面的按下门（只在光标下是桌面或图标时转发）由后端 `wallpaper/input_forward.rs` 负责，宿主不另加；应用背景不交互。
+`main.ts` 的 `pointerdown` / `pointerup`（只认主键，`pointercancel` 与窗口失焦当抬起）→ `SceneHost.setButton` → `SceneRenderer.setButton`。按下门由 `tauri-plugin-cursor` 的点击规则负责（桌面：光标下是桌面或图标；预览：光标下是本窗口），宿主不另加；应用背景不交互。宿主把 `blur` 当抬起，所以预览要等真实左键松开后才把焦点从 iframe 还给父页面（`framePointer.ts` 的 `keepFocusOutOfFrames`），否则拖动会断。
 
 ### dev 探针
 

@@ -260,7 +260,7 @@ pub trait WallpaperManager: Send + Sync {
 - **原生**（`native.rs`）：
   - macOS：系统只有逐屏的入口。`Placement::All` 对布置里的每块屏各设一次，`Placement::One` 设一次，`Placement::Span` 报错；样式随每次调用带给系统。见下文「原生模式：macOS 逐屏」。
   - 其余平台：`Placement::All` 走 `set_all`，其余两种布置报错。Windows 先把样式写进注册表的壁纸位置，再设一次壁纸让它生效，过渡为 `fade` 时由这一次设壁纸触发系统淡入；Linux 把样式随壁纸一起交给 GNOME / Plasma；Android 把样式交给壁纸插件。
-- **窗口**（`window.rs`）：样式、过渡与当前壁纸由壁纸页面从 `setting-change` 里自己读。`set_wallpaper` 只按这张壁纸是不是网页 / 场景壁纸，给显示该目标的窗口开关桌面鼠标转发：`Placement::All` 对应全部窗口，`Placement::One` 对应铺那块屏的窗口。详见下文「窗口模式：每屏一窗」。
+- **窗口**（`window.rs`）：样式、过渡与当前壁纸由壁纸页面从 `setting-change` 里自己读。`set_wallpaper` 在后端没有要做的事：桌面鼠标由各窗口里的 iframe 自己登记。详见下文「窗口模式：每屏一窗」。
 - **Plasma 插件**（`plasma_plugin.rs`）：`set_wallpaper` 什么都不做。当前壁纸、样式、过渡由调用方写进 `multiple` 目标，Plasma 侧的插件（源码不在本仓库）经 IPC 与 `setting-change` 自己读取并显示。
 
 ## 窗口模式：每屏一窗
@@ -309,7 +309,7 @@ label 先到先得：建窗时取池里第一个空闲的（正在销毁、还�
 | 同一块屏已有窗口 | 保留，页面不重载 |
 | ……屏的矩形或其它信息变了 | 重新铺放到新矩形（macOS 重设 frame） |
 | ……布置变了 | 记下新布置，并向该窗口发 `wallpaper-assignment` |
-| 屏已不在表里 | 销毁窗口（它的 ping 看门狗与鼠标转发随之停止），撤销就绪标记 |
+| 屏已不在表里 | 销毁窗口（它的 ping 看门狗随之停止，iframe 的鼠标登记随窗口销毁清掉），撤销就绪标记 |
 | 表里的屏还没有窗口 | 先登记布置，再建窗；全部建完后逐个等页面就绪、挂到桌面层 |
 
 先登记布置再建窗，是因为页面初始化时就来取布置，早于它报告就绪。缺的窗口先全部建出来再逐个等就绪，各页面因此并行加载。某个窗口建窗或挂载失败时把它摘掉并销毁，其余窗口照常对齐。
@@ -322,7 +322,7 @@ label 先到先得：建窗时取池里第一个空闲的（正在销毁、还�
 
 它们由一把锁串行（对齐期间要等页面就绪，可能持有数秒）；窗口表另有一把只在读写瞬间持有的锁，持有期间不调用会同步等主线程的窗口接口。
 
-对齐之后控制器把各活跃目标重新输出一次（`realign_outputs`），窗口后端借此给新建的窗口按它的壁纸类型开鼠标转发。
+对齐之后控制器把各活跃目标重新输出一次（`realign_outputs`）。
 
 ### 挂载
 
@@ -344,13 +344,13 @@ pub struct WindowAssignment {   // JSON 为 camelCase：{ targetId, audible }
 
 布置与带着目标配置的 `setting-change` 不走同一条通道，到达先后不保证。窗口收到指向一个本地还没有配置的目标的布置时先不动画面，等配置到了再算。
 
-### 就绪、ping、鼠标转发
+### 就绪、ping、鼠标
 
 三者都是每个窗口各一份：
 
 - **就绪握手**：后端记一个「已就绪的 label」集合。页面初始化完调 `wallpaper_window_ready`，命令按调用方 label 登记；后端建窗后等到这个 label 才挂载并显示。销毁窗口时撤销，否则同一个 label 下次重建时会被当成已就绪。
 - **ping 看门狗**：每个窗口挂载后启动自己的看门狗，序号各自独立。`wallpaper-ping { label, seq }` 是广播事件，每个窗口只应答 label 是自己的那一条；`wallpaper_pong` 按调用方 label 记，页面替不了别的窗口应答。一个窗口失联只重载它自己。
-- **桌面鼠标转发**：每个显示网页或场景壁纸的窗口各有一条转发线程，按自己窗口的范围判断光标在不在里面。光标在哪块屏，就只有那块屏的窗口收到移动与点击，其它窗口在光标离开时收到一次离开。
+- **桌面鼠标**：每个壁纸窗口里的网页 / 场景 iframe 自己向 `tauri-plugin-cursor` 登记，各有一个订阅，全部共用插件的一条轮询线程。点击只在光标落在本窗口范围内、且光标下是桌面时注入；移动各窗口都收，光标在别的屏时钳在本窗口 frame 靠近光标的那条边上（见 [WPE_IMPORT.md](../wpe/WPE_IMPORT.md)「鼠标」）。
 
 WPE 网页壁纸的音频 / 媒体订阅本来就按 `(label, frame, 类型)` 归属，多窗口不需要改。
 
@@ -626,7 +626,7 @@ macOS 原生模式改用逐屏接口带来的变化：
 - `src-tauri/kabegame/src/wallpaper/manager/{native,window,plasma_plugin}.rs`：三个后端；`window.rs` 里是窗口表、`plan_windows` / `diff_windows` 与对齐
 - `src-tauri/kabegame/src/wallpaper/manager/native_mac.rs`：macOS 逐屏设桌面图片、样式 → 选项的映射、能不能显示的判断
 - `src-tauri/kabegame/src/wallpaper/mod.rs`：壁纸窗口 label 池 `WALLPAPER_LABELS`、`is_wallpaper_label`
-- `src-tauri/kabegame/src/wallpaper/window.rs`、`window_mount_macos.rs`：单个壁纸窗口（按 label 的就绪握手、挂载、看门狗、鼠标转发）与 macOS 按屏铺放
+- `src-tauri/kabegame/src/wallpaper/window.rs`、`window_mount_macos.rs`：单个壁纸窗口（按 label 的就绪握手、挂载、看门狗）与 macOS 按屏铺放
 - `src-tauri/kabegame/src/commands/window.rs`、`capabilities/main.json.handlebars`、`capabilities/wpe-web.json`、`wallpaper/wpe_scene_host.rs`：按 label 的就绪命令与各处窗口列表
 - `src-tauri/kabegame/src/wallpaper/screens.rs`：`ScreenInfo`、缓存、watcher、去抖与提交；`screens/mac.rs`：macOS 枚举、坐标换算与按 id 查 `NSScreen`
 - `src-tauri/kabegame/src/wallpaper/rotator.rs`：按目标选图与轮播线程

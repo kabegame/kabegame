@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-detach-frame"
+description = "Enables the detach_frame command without any pre-configured scope."
+commands.allow = ["detach_frame"]
+
+[[permission]]
+identifier = "deny-detach-frame"
+description = "Denies the detach_frame command without any pre-configured scope."
+commands.deny = ["detach_frame"]

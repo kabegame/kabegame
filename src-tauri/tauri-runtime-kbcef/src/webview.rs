@@ -248,84 +248,140 @@ mod imp {
         decode_capture_result(success, &body)
     }
 
-    /// 经 `CefBrowserHost::SendMouse*Event` 向某个 webview 注入鼠标事件。
-    ///
-    /// 直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序。移动事件是高频的：这里只
-    /// `post_task` 不等回执，找不到 browser 时静默忽略。
-    ///
-    /// 移动与离开一律不带按键标志（与 WE 的 `modifiers=0` 一致）：Blink 只在移动事件
-    /// `button == kLeft` 时进入拖动处理（`MouseEventManager::HandleMouseDraggedEvent`），
-    /// 带上左键标志会让拖动页面图片启动 Win32 OLE 拖放；那是阻塞 UI 线程的模态循环，
-    /// 而真实的抬起发生在 Explorer 里、本线程收不到，拖放就挂住、不再响应注入。
-    pub(crate) fn inject_mouse(
-        webview_label: &str,
-        input: crate::MouseInjection,
-    ) -> std::result::Result<(), String> {
-        use crate::MouseInjection;
+    /// 各 frame 的注入状态，键是 `(webview label, frame 标识)`。只在 CEF UI 线程上读写。
+    static FRAME_MOUSE_STATES: std::sync::OnceLock<
+        Mutex<std::collections::HashMap<(String, String), crate::frame_mouse::FrameMouseState>>,
+    > = std::sync::OnceLock::new();
+    /// libcef 不带补丁 11 的 warn 已记过。
+    static FRAME_MOUSE_UNSUPPORTED_WARNED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    fn frame_mouse_states() -> &'static Mutex<
+        std::collections::HashMap<(String, String), crate::frame_mouse::FrameMouseState>,
+    > {
+        FRAME_MOUSE_STATES.get_or_init(Default::default)
+    }
+
+    /// libcef 带不带补丁 11 的三个方法：`_cef_frame_t` 由 libcef 分配，`base.size` 是它实际的大小；旧 libcef
+    /// 分配的结构体比绑定短，读新字段会越界，所以调用前必须先比大小。
+    fn frame_supports_mouse_injection(frame: &Frame) -> bool {
+        let raw = frame.get_raw();
+        !raw.is_null()
+            && unsafe { (*raw).base.size } >= std::mem::size_of::<cef::sys::_cef_frame_t>()
+    }
+
+    /// 浏览器视图坐标 → frame 坐标与 frame 视口尺寸（UI 线程）。
+    fn frame_point_from_view(frame: &Frame, x: f64, y: f64) -> Option<((f64, f64), (f64, f64))> {
+        let (mut fx, mut fy, mut fw, mut fh) = (0.0, 0.0, 0.0, 0.0);
+        let converted = frame.convert_point_from_view(
+            x,
+            y,
+            Some(&mut fx),
+            Some(&mut fy),
+            Some(&mut fw),
+            Some(&mut fh),
+        );
+        (converted != 0).then_some(((fx, fy), (fw, fh)))
+    }
+
+    fn send_frame_action(frame: &Frame, action: crate::frame_mouse::FrameAction) {
+        use crate::frame_mouse::FrameAction;
         // `EVENTFLAG_LEFT_MOUSE_BUTTON`（cef_types.h：1 << 4）。
         let left_flag = cef::sys::cef_event_flags_t::EVENTFLAG_LEFT_MOUSE_BUTTON.0 as u32;
-        let label = webview_label.to_string();
+        match action {
+            FrameAction::Move { x, y } => frame.send_mouse_move_event_to_frame(x, y, 0, 0),
+            FrameAction::Leave { x, y } => frame.send_mouse_move_event_to_frame(x, y, 0, 1),
+            FrameAction::LeftDown { x, y } => {
+                frame.send_mouse_click_event_to_frame(x, y, left_flag, MouseButtonType::LEFT, 0, 1)
+            }
+            FrameAction::LeftUp { x, y } => {
+                frame.send_mouse_click_event_to_frame(x, y, 0, MouseButtonType::LEFT, 1, 1)
+            }
+        }
+    }
+
+    /// 向 `webview_label` 里标识为 `frame_id` 的 frame 注入鼠标输入（见 `crate::frame_mouse`）。
+    ///
+    /// 移动是高频的：只 `post_task` 不等回执。移动一律不带按键标志（与 WPE 的 `modifiers=0` 一致）：Blink 只在
+    /// 移动事件 `button == kLeft` 时进入拖动处理（`MouseEventManager::HandleMouseDraggedEvent`），带上左键标志
+    /// 会让拖动页面图片启动原生拖放；Windows 上那是阻塞 UI 线程的模态循环，而真实的抬起本线程收不到，拖放就挂住。
+    pub(crate) fn frame_mouse(
+        webview_label: &str,
+        frame_id: &str,
+        input: crate::FrameMouse,
+    ) -> std::result::Result<(), String> {
+        use crate::frame_mouse::PointerKind;
+        use crate::FrameMouse;
+        let key = (webview_label.to_string(), frame_id.to_string());
         let mut task = CefUiTask::new(Arc::new(Mutex::new(Some(Box::new(move || {
-            let browser = webview_browser_ids()
+            let frame = webview_browser_ids()
                 .lock()
                 .ok()
-                .and_then(|map| map.get(&label).copied())
-                .and_then(browser_host_get_browser_by_identifier);
-            let Some(host) = browser.and_then(|browser| browser.host()) else {
+                .and_then(|map| map.get(&key.0).copied())
+                .and_then(browser_host_get_browser_by_identifier)
+                .and_then(|browser| {
+                    browser.frame_by_identifier(Some(&CefString::from(key.1.as_str())))
+                })
+                .filter(|frame| frame.is_valid() == 1);
+            let (kind, x, y) = match input {
+                FrameMouse::Release => {
+                    let state = frame_mouse_states()
+                        .lock()
+                        .ok()
+                        .and_then(|mut map| map.remove(&key));
+                    // frame 已不在（销毁后才收尾）：只清状态
+                    if let (Some(mut state), Some(frame)) = (state, frame) {
+                        if frame_supports_mouse_injection(&frame) {
+                            for action in state.release() {
+                                send_frame_action(&frame, action);
+                            }
+                        }
+                    }
+                    return;
+                }
+                FrameMouse::Move { x, y } => (PointerKind::Move, x, y),
+                FrameMouse::Down { x, y } => (PointerKind::Down, x, y),
+                FrameMouse::Up { x, y } => (PointerKind::Up, x, y),
+            };
+            // frame 已销毁：插件随 `SubframeDestroyed` 收尾，这里静默丢弃
+            let Some(frame) = frame else {
                 return;
             };
-            let event = |x: i32, y: i32, modifiers: u32| cef::MouseEvent { x, y, modifiers };
-            match input {
-                MouseInjection::Move { x, y } => {
-                    host.send_mouse_move_event(Some(&event(x, y, 0)), 0)
+            if !frame_supports_mouse_injection(&frame) {
+                if !FRAME_MOUSE_UNSUPPORTED_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    tracing::warn!("libcef 不带 frame 鼠标注入（CEF 补丁 11），壁纸收不到鼠标");
                 }
-                MouseInjection::Leave { x, y } => {
-                    host.send_mouse_move_event(Some(&event(x, y, 0)), 1)
+                return;
+            }
+            let mapped = frame_point_from_view(&frame, x, y);
+            let action = {
+                let Ok(mut states) = frame_mouse_states().lock() else {
+                    return;
+                };
+                let state = states.entry(key.clone()).or_default();
+                match mapped {
+                    Some((point, size)) => state.input(kind, point, size),
+                    None => {
+                        // 同进程 frame、frame 还没合成（刚建好、display:none）时换算不出
+                        if !std::mem::replace(&mut state.warned, true) {
+                            tracing::warn!("frame 坐标换算失败，不注入鼠标: {} / {}", key.0, key.1);
+                        } else {
+                            tracing::trace!("frame 坐标换算失败: {} / {}", key.0, key.1);
+                        }
+                        None
+                    }
                 }
-                MouseInjection::LeftDown { x, y } => {
-                    host.send_mouse_click_event(
-                        Some(&event(x, y, left_flag)),
-                        cef::MouseButtonType::LEFT,
-                        0,
-                        1,
-                    );
-                    // Views 窗口收到按下会 SetCapture 抢鼠标：真实的左键抬起随后被送进本窗口
-                    // （页面收到两次 mouseup），Explorer 也收不到抬起，桌面框选卡住。注入的输入
-                    // 本来就不依赖系统捕获（抬起同样由注入补齐），所以按下后立刻还回去。
-                    #[cfg(target_os = "windows")]
-                    release_own_mouse_capture();
-                }
-                MouseInjection::LeftUp { x, y } => host.send_mouse_click_event(
-                    Some(&event(x, y, 0)),
-                    cef::MouseButtonType::LEFT,
-                    1,
-                    1,
-                ),
+            };
+            // 出锁再注入
+            if let Some(action) = action {
+                send_frame_action(&frame, action);
             }
         }) as CefUiTaskCallback))));
         if cef::post_task(ThreadId::UI, Some(&mut task)) == 0 {
-            return Err("CEF failed to post inject_mouse task".to_string());
+            return Err("CEF failed to post frame_mouse task".to_string());
         }
         Ok(())
-    }
-
-    /// 释放本线程上属于本进程窗口的鼠标捕获（只在注入按下之后、CEF UI 线程上调用）。
-    /// `GetCapture` 只返回调用线程输入队列的捕获窗口，所以不会碰到别的进程。
-    #[cfg(target_os = "windows")]
-    fn release_own_mouse_capture() {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture};
-        use windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
-        unsafe {
-            let hwnd = GetCapture();
-            if hwnd == 0 {
-                return;
-            }
-            let mut pid = 0u32;
-            GetWindowThreadProcessId(hwnd, &mut pid);
-            if pid == std::process::id() {
-                ReleaseCapture();
-            }
-        }
     }
 
     #[derive(Clone)]

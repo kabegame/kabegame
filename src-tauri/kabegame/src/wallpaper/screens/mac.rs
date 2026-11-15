@@ -5,7 +5,7 @@
 //! - 持久标识是 `CGDisplayCreateUUIDFromDisplayID` 的 UUID 字符串：`CGDirectDisplayID` 重启、重新接入后会变，
 //!   UUID 对同一块真实显示器不变，`NSWorkspace` 逐屏设壁纸时也按屏对得上。
 //! - 坐标：`NSScreen.frame` 是 Cocoa 屏幕坐标（主屏左下为原点、y 向上），这里翻成左上原点、y 向下的点坐标，
-//!   与窗口服务的 CG 全局坐标一致（`input_forward/mac.rs` 用的是同一种换算）。
+//!   与窗口服务的 CG 全局坐标一致（`tauri-plugin-cursor` 的 macOS 探针用的是同一种换算）。
 //! - 主屏指原点所在、带菜单栏的那块（`CGMainDisplayID`），不是 `NSScreen.mainScreen`（那是键盘焦点所在的屏）。
 
 use std::ffi::c_void;

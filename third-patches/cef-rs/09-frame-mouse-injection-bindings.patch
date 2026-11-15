@@ -1,0 +1,796 @@
+diff --git a/cef/src/bindings/aarch64_apple_darwin.rs b/cef/src/bindings/aarch64_apple_darwin.rs
+index 17eec23e00ec6f2437eb2a7cd905f3eb94bb6638..cc81bdb0458909a8a726bd585465804ec01535d3 100644
+--- a/cef/src/bindings/aarch64_apple_darwin.rs
++++ b/cef/src/bindings/aarch64_apple_darwin.rs
+@@ -7582,6 +7582,34 @@ pub trait ImplFrame: Clone + Sized + Rc {
+     ) -> Option<Urlrequest>;
+     #[doc = "See [`_cef_frame_t::send_process_message`] for more documentation."]
+     fn send_process_message(&self, target_process: ProcessId, message: Option<&mut ProcessMessage>);
++    #[doc = "See [`_cef_frame_t::convert_point_from_view`] for more documentation."]
++    fn convert_point_from_view(
++        &self,
++        view_x: f64,
++        view_y: f64,
++        frame_x: Option<&mut f64>,
++        frame_y: Option<&mut f64>,
++        frame_width: Option<&mut f64>,
++        frame_height: Option<&mut f64>,
++    ) -> ::std::os::raw::c_int;
++    #[doc = "See [`_cef_frame_t::send_mouse_move_event_to_frame`] for more documentation."]
++    fn send_mouse_move_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        mouse_leave: ::std::os::raw::c_int,
++    );
++    #[doc = "See [`_cef_frame_t::send_mouse_click_event_to_frame`] for more documentation."]
++    fn send_mouse_click_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        type_: MouseButtonType,
++        mouse_up: ::std::os::raw::c_int,
++        click_count: ::std::os::raw::c_int,
++    );
+     fn get_raw(&self) -> *mut _cef_frame_t;
+ }
+ impl ImplFrame for Frame {
+@@ -7922,6 +7950,96 @@ impl ImplFrame for Frame {
+             }
+         }
+     }
++    fn convert_point_from_view(
++        &self,
++        view_x: f64,
++        view_y: f64,
++        frame_x: Option<&mut f64>,
++        frame_y: Option<&mut f64>,
++        frame_width: Option<&mut f64>,
++        frame_height: Option<&mut f64>,
++    ) -> ::std::os::raw::c_int {
++        unsafe {
++            self.0
++                .convert_point_from_view
++                .map(|f| {
++                    let (
++                        arg_view_x,
++                        arg_view_y,
++                        arg_frame_x,
++                        arg_frame_y,
++                        arg_frame_width,
++                        arg_frame_height,
++                    ) = (view_x, view_y, frame_x, frame_y, frame_width, frame_height);
++                    let arg_self_ = self.into_raw();
++                    let arg_frame_x = arg_frame_x
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_y = arg_frame_y
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_width = arg_frame_width
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_height = arg_frame_height
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let result = f(
++                        arg_self_,
++                        arg_view_x,
++                        arg_view_y,
++                        arg_frame_x,
++                        arg_frame_y,
++                        arg_frame_width,
++                        arg_frame_height,
++                    );
++                    result.wrap_result()
++                })
++                .unwrap_or_default()
++        }
++    }
++    fn send_mouse_move_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        mouse_leave: ::std::os::raw::c_int,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.send_mouse_move_event_to_frame {
++                let (arg_x, arg_y, arg_modifiers, arg_mouse_leave) = (x, y, modifiers, mouse_leave);
++                let arg_self_ = self.into_raw();
++                f(arg_self_, arg_x, arg_y, arg_modifiers, arg_mouse_leave);
++            }
++        }
++    }
++    fn send_mouse_click_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        type_: MouseButtonType,
++        mouse_up: ::std::os::raw::c_int,
++        click_count: ::std::os::raw::c_int,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.send_mouse_click_event_to_frame {
++                let (arg_x, arg_y, arg_modifiers, arg_type_, arg_mouse_up, arg_click_count) =
++                    (x, y, modifiers, type_, mouse_up, click_count);
++                let arg_self_ = self.into_raw();
++                let arg_type_ = arg_type_.into_raw();
++                f(
++                    arg_self_,
++                    arg_x,
++                    arg_y,
++                    arg_modifiers,
++                    arg_type_,
++                    arg_mouse_up,
++                    arg_click_count,
++                );
++            }
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_frame_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+diff --git a/cef/src/bindings/x86_64_apple_darwin.rs b/cef/src/bindings/x86_64_apple_darwin.rs
+index 17eec23e00ec6f2437eb2a7cd905f3eb94bb6638..cc81bdb0458909a8a726bd585465804ec01535d3 100644
+--- a/cef/src/bindings/x86_64_apple_darwin.rs
++++ b/cef/src/bindings/x86_64_apple_darwin.rs
+@@ -7582,6 +7582,34 @@ pub trait ImplFrame: Clone + Sized + Rc {
+     ) -> Option<Urlrequest>;
+     #[doc = "See [`_cef_frame_t::send_process_message`] for more documentation."]
+     fn send_process_message(&self, target_process: ProcessId, message: Option<&mut ProcessMessage>);
++    #[doc = "See [`_cef_frame_t::convert_point_from_view`] for more documentation."]
++    fn convert_point_from_view(
++        &self,
++        view_x: f64,
++        view_y: f64,
++        frame_x: Option<&mut f64>,
++        frame_y: Option<&mut f64>,
++        frame_width: Option<&mut f64>,
++        frame_height: Option<&mut f64>,
++    ) -> ::std::os::raw::c_int;
++    #[doc = "See [`_cef_frame_t::send_mouse_move_event_to_frame`] for more documentation."]
++    fn send_mouse_move_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        mouse_leave: ::std::os::raw::c_int,
++    );
++    #[doc = "See [`_cef_frame_t::send_mouse_click_event_to_frame`] for more documentation."]
++    fn send_mouse_click_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        type_: MouseButtonType,
++        mouse_up: ::std::os::raw::c_int,
++        click_count: ::std::os::raw::c_int,
++    );
+     fn get_raw(&self) -> *mut _cef_frame_t;
+ }
+ impl ImplFrame for Frame {
+@@ -7922,6 +7950,96 @@ impl ImplFrame for Frame {
+             }
+         }
+     }
++    fn convert_point_from_view(
++        &self,
++        view_x: f64,
++        view_y: f64,
++        frame_x: Option<&mut f64>,
++        frame_y: Option<&mut f64>,
++        frame_width: Option<&mut f64>,
++        frame_height: Option<&mut f64>,
++    ) -> ::std::os::raw::c_int {
++        unsafe {
++            self.0
++                .convert_point_from_view
++                .map(|f| {
++                    let (
++                        arg_view_x,
++                        arg_view_y,
++                        arg_frame_x,
++                        arg_frame_y,
++                        arg_frame_width,
++                        arg_frame_height,
++                    ) = (view_x, view_y, frame_x, frame_y, frame_width, frame_height);
++                    let arg_self_ = self.into_raw();
++                    let arg_frame_x = arg_frame_x
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_y = arg_frame_y
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_width = arg_frame_width
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_height = arg_frame_height
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let result = f(
++                        arg_self_,
++                        arg_view_x,
++                        arg_view_y,
++                        arg_frame_x,
++                        arg_frame_y,
++                        arg_frame_width,
++                        arg_frame_height,
++                    );
++                    result.wrap_result()
++                })
++                .unwrap_or_default()
++        }
++    }
++    fn send_mouse_move_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        mouse_leave: ::std::os::raw::c_int,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.send_mouse_move_event_to_frame {
++                let (arg_x, arg_y, arg_modifiers, arg_mouse_leave) = (x, y, modifiers, mouse_leave);
++                let arg_self_ = self.into_raw();
++                f(arg_self_, arg_x, arg_y, arg_modifiers, arg_mouse_leave);
++            }
++        }
++    }
++    fn send_mouse_click_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        type_: MouseButtonType,
++        mouse_up: ::std::os::raw::c_int,
++        click_count: ::std::os::raw::c_int,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.send_mouse_click_event_to_frame {
++                let (arg_x, arg_y, arg_modifiers, arg_type_, arg_mouse_up, arg_click_count) =
++                    (x, y, modifiers, type_, mouse_up, click_count);
++                let arg_self_ = self.into_raw();
++                let arg_type_ = arg_type_.into_raw();
++                f(
++                    arg_self_,
++                    arg_x,
++                    arg_y,
++                    arg_modifiers,
++                    arg_type_,
++                    arg_mouse_up,
++                    arg_click_count,
++                );
++            }
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_frame_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+diff --git a/cef/src/bindings/x86_64_pc_windows_msvc.rs b/cef/src/bindings/x86_64_pc_windows_msvc.rs
+index 01756106ca34a8af35acdb9814a707a99a4696e0..df6d95fd1061e66fcc5d0f40d7cd0947946d8165 100644
+--- a/cef/src/bindings/x86_64_pc_windows_msvc.rs
++++ b/cef/src/bindings/x86_64_pc_windows_msvc.rs
+@@ -7597,6 +7597,34 @@ pub trait ImplFrame: Clone + Sized + Rc {
+     ) -> Option<Urlrequest>;
+     #[doc = "See [`_cef_frame_t::send_process_message`] for more documentation."]
+     fn send_process_message(&self, target_process: ProcessId, message: Option<&mut ProcessMessage>);
++    #[doc = "See [`_cef_frame_t::convert_point_from_view`] for more documentation."]
++    fn convert_point_from_view(
++        &self,
++        view_x: f64,
++        view_y: f64,
++        frame_x: Option<&mut f64>,
++        frame_y: Option<&mut f64>,
++        frame_width: Option<&mut f64>,
++        frame_height: Option<&mut f64>,
++    ) -> ::std::os::raw::c_int;
++    #[doc = "See [`_cef_frame_t::send_mouse_move_event_to_frame`] for more documentation."]
++    fn send_mouse_move_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        mouse_leave: ::std::os::raw::c_int,
++    );
++    #[doc = "See [`_cef_frame_t::send_mouse_click_event_to_frame`] for more documentation."]
++    fn send_mouse_click_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        type_: MouseButtonType,
++        mouse_up: ::std::os::raw::c_int,
++        click_count: ::std::os::raw::c_int,
++    );
+     fn get_raw(&self) -> *mut _cef_frame_t;
+ }
+ impl ImplFrame for Frame {
+@@ -7937,6 +7965,96 @@ impl ImplFrame for Frame {
+             }
+         }
+     }
++    fn convert_point_from_view(
++        &self,
++        view_x: f64,
++        view_y: f64,
++        frame_x: Option<&mut f64>,
++        frame_y: Option<&mut f64>,
++        frame_width: Option<&mut f64>,
++        frame_height: Option<&mut f64>,
++    ) -> ::std::os::raw::c_int {
++        unsafe {
++            self.0
++                .convert_point_from_view
++                .map(|f| {
++                    let (
++                        arg_view_x,
++                        arg_view_y,
++                        arg_frame_x,
++                        arg_frame_y,
++                        arg_frame_width,
++                        arg_frame_height,
++                    ) = (view_x, view_y, frame_x, frame_y, frame_width, frame_height);
++                    let arg_self_ = self.into_raw();
++                    let arg_frame_x = arg_frame_x
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_y = arg_frame_y
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_width = arg_frame_width
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_height = arg_frame_height
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let result = f(
++                        arg_self_,
++                        arg_view_x,
++                        arg_view_y,
++                        arg_frame_x,
++                        arg_frame_y,
++                        arg_frame_width,
++                        arg_frame_height,
++                    );
++                    result.wrap_result()
++                })
++                .unwrap_or_default()
++        }
++    }
++    fn send_mouse_move_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        mouse_leave: ::std::os::raw::c_int,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.send_mouse_move_event_to_frame {
++                let (arg_x, arg_y, arg_modifiers, arg_mouse_leave) = (x, y, modifiers, mouse_leave);
++                let arg_self_ = self.into_raw();
++                f(arg_self_, arg_x, arg_y, arg_modifiers, arg_mouse_leave);
++            }
++        }
++    }
++    fn send_mouse_click_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        type_: MouseButtonType,
++        mouse_up: ::std::os::raw::c_int,
++        click_count: ::std::os::raw::c_int,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.send_mouse_click_event_to_frame {
++                let (arg_x, arg_y, arg_modifiers, arg_type_, arg_mouse_up, arg_click_count) =
++                    (x, y, modifiers, type_, mouse_up, click_count);
++                let arg_self_ = self.into_raw();
++                let arg_type_ = arg_type_.into_raw();
++                f(
++                    arg_self_,
++                    arg_x,
++                    arg_y,
++                    arg_modifiers,
++                    arg_type_,
++                    arg_mouse_up,
++                    arg_click_count,
++                );
++            }
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_frame_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+diff --git a/cef/src/bindings/x86_64_unknown_linux_gnu.rs b/cef/src/bindings/x86_64_unknown_linux_gnu.rs
+index 3c050dcca457bdaf733a2515faf346518101262f..15ca3a1e5e8d2bd5c1c91bdcc292be0cd94fb7cb 100644
+--- a/cef/src/bindings/x86_64_unknown_linux_gnu.rs
++++ b/cef/src/bindings/x86_64_unknown_linux_gnu.rs
+@@ -7640,6 +7640,34 @@ pub trait ImplFrame: Clone + Sized + Rc {
+     ) -> Option<Urlrequest>;
+     #[doc = "See [`_cef_frame_t::send_process_message`] for more documentation."]
+     fn send_process_message(&self, target_process: ProcessId, message: Option<&mut ProcessMessage>);
++    #[doc = "See [`_cef_frame_t::convert_point_from_view`] for more documentation."]
++    fn convert_point_from_view(
++        &self,
++        view_x: f64,
++        view_y: f64,
++        frame_x: Option<&mut f64>,
++        frame_y: Option<&mut f64>,
++        frame_width: Option<&mut f64>,
++        frame_height: Option<&mut f64>,
++    ) -> ::std::os::raw::c_int;
++    #[doc = "See [`_cef_frame_t::send_mouse_move_event_to_frame`] for more documentation."]
++    fn send_mouse_move_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        mouse_leave: ::std::os::raw::c_int,
++    );
++    #[doc = "See [`_cef_frame_t::send_mouse_click_event_to_frame`] for more documentation."]
++    fn send_mouse_click_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        type_: MouseButtonType,
++        mouse_up: ::std::os::raw::c_int,
++        click_count: ::std::os::raw::c_int,
++    );
+     fn get_raw(&self) -> *mut _cef_frame_t;
+ }
+ impl ImplFrame for Frame {
+@@ -7980,6 +8008,96 @@ impl ImplFrame for Frame {
+             }
+         }
+     }
++    fn convert_point_from_view(
++        &self,
++        view_x: f64,
++        view_y: f64,
++        frame_x: Option<&mut f64>,
++        frame_y: Option<&mut f64>,
++        frame_width: Option<&mut f64>,
++        frame_height: Option<&mut f64>,
++    ) -> ::std::os::raw::c_int {
++        unsafe {
++            self.0
++                .convert_point_from_view
++                .map(|f| {
++                    let (
++                        arg_view_x,
++                        arg_view_y,
++                        arg_frame_x,
++                        arg_frame_y,
++                        arg_frame_width,
++                        arg_frame_height,
++                    ) = (view_x, view_y, frame_x, frame_y, frame_width, frame_height);
++                    let arg_self_ = self.into_raw();
++                    let arg_frame_x = arg_frame_x
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_y = arg_frame_y
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_width = arg_frame_width
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let arg_frame_height = arg_frame_height
++                        .map(std::ptr::from_mut)
++                        .unwrap_or(std::ptr::null_mut());
++                    let result = f(
++                        arg_self_,
++                        arg_view_x,
++                        arg_view_y,
++                        arg_frame_x,
++                        arg_frame_y,
++                        arg_frame_width,
++                        arg_frame_height,
++                    );
++                    result.wrap_result()
++                })
++                .unwrap_or_default()
++        }
++    }
++    fn send_mouse_move_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        mouse_leave: ::std::os::raw::c_int,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.send_mouse_move_event_to_frame {
++                let (arg_x, arg_y, arg_modifiers, arg_mouse_leave) = (x, y, modifiers, mouse_leave);
++                let arg_self_ = self.into_raw();
++                f(arg_self_, arg_x, arg_y, arg_modifiers, arg_mouse_leave);
++            }
++        }
++    }
++    fn send_mouse_click_event_to_frame(
++        &self,
++        x: f64,
++        y: f64,
++        modifiers: u32,
++        type_: MouseButtonType,
++        mouse_up: ::std::os::raw::c_int,
++        click_count: ::std::os::raw::c_int,
++    ) {
++        unsafe {
++            if let Some(f) = self.0.send_mouse_click_event_to_frame {
++                let (arg_x, arg_y, arg_modifiers, arg_type_, arg_mouse_up, arg_click_count) =
++                    (x, y, modifiers, type_, mouse_up, click_count);
++                let arg_self_ = self.into_raw();
++                let arg_type_ = arg_type_.into_raw();
++                f(
++                    arg_self_,
++                    arg_x,
++                    arg_y,
++                    arg_modifiers,
++                    arg_type_,
++                    arg_mouse_up,
++                    arg_click_count,
++                );
++            }
++        }
++    }
+     fn get_raw(&self) -> *mut _cef_frame_t {
+         unsafe { RefGuard::into_raw(&self.0) }
+     }
+diff --git a/sys/src/bindings/aarch64_apple_darwin.rs b/sys/src/bindings/aarch64_apple_darwin.rs
+index 311a19822979603055731cc78adf7715d50e01ad..3ca97fd5c25b79066d042da9ebb794c61df18d44 100644
+--- a/sys/src/bindings/aarch64_apple_darwin.rs
++++ b/sys/src/bindings/aarch64_apple_darwin.rs
+@@ -6895,10 +6895,44 @@ pub struct _cef_frame_t {
+             message: *mut _cef_process_message_t,
+         ),
+     >,
++    #[doc = "\n Maps a point from the browser view coordinate space into this frame's own\n widget coordinate space and returns this frame's viewport size.\n |view_x|/|view_y| use the same space as the x/y members of the\n cef_mouse_event_t passed to cef_browser_host_t::SendMouseMoveEvent/\n SendMouseClickEvent: device-independent pixels (DIP) relative to the\n upper-left corner of the browser view. On success |frame_x|/|frame_y|\n receive the point in DIP relative to the upper-left corner of this\n frame's viewport, after every transform between the browser view and this\n frame (scrolling, CSS transform, CSS zoom, page scale), and\n |frame_width|/|frame_height| receive the viewport size in the same space.\n The point is not clamped and may lie outside the viewport. The mapping\n comes from compositor hit-test data and may lag by a frame. Only frames\n that own a widget (the main frame and out-of-process subframes) are\n supported. Returns false (0) for same-process subframes, detached frames,\n or when no hit-test data exists for the frame (e.g. display:none, not yet\n composited). This function can only be called on the browser process UI\n thread.\n"]
++    pub convert_point_from_view: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            view_x: f64,
++            view_y: f64,
++            frame_x: *mut f64,
++            frame_y: *mut f64,
++            frame_width: *mut f64,
++            frame_height: *mut f64,
++        ) -> ::std::os::raw::c_int,
++    >,
++    #[doc = "\n Sends a mouse move (or leave, if |mouse_leave| is true (1)) event directly\n to this frame's widget. Hit testing in the browser view and in all ancestor\n documents is bypassed, so content drawn over this frame by an ancestor\n does not receive it. |x|/|y| are DIP in this frame's widget coordinate\n space (see ConvertPointFromView). |modifiers| are cef_event_flags_t. Unlike\n cef_browser_host_t::SendMouseMoveEvent this does not go through the native\n view: it never takes native mouse capture or keyboard focus, never changes\n the displayed cursor or tooltip, and leaves the browser-side hover/capture\n state of real mouse input untouched. Out-of-process frames nested inside\n this frame are not targeted. Ignored for frames that do not own a widget.\n May be called on any browser process thread; runs on the UI thread\n (synchronously when called there).\n"]
++    pub send_mouse_move_event_to_frame: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            x: f64,
++            y: f64,
++            modifiers: u32,
++            mouse_leave: ::std::os::raw::c_int,
++        ),
++    >,
++    #[doc = "\n Sends a mouse button event directly to this frame's widget. Same\n coordinate space, threading and side-effect rules as\n SendMouseMoveEventToFrame.\n"]
++    pub send_mouse_click_event_to_frame: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            x: f64,
++            y: f64,
++            modifiers: u32,
++            type_: cef_mouse_button_type_t,
++            mouse_up: ::std::os::raw::c_int,
++            click_count: ::std::os::raw::c_int,
++        ),
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_frame_t"][::std::mem::size_of::<_cef_frame_t>() - 248usize];
++    ["Size of _cef_frame_t"][::std::mem::size_of::<_cef_frame_t>() - 272usize];
+     ["Alignment of _cef_frame_t"][::std::mem::align_of::<_cef_frame_t>() - 8usize];
+     ["Offset of field: _cef_frame_t::base"][::std::mem::offset_of!(_cef_frame_t, base) - 0usize];
+     ["Offset of field: _cef_frame_t::is_valid"]
+@@ -6947,6 +6981,12 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_frame_t, create_urlrequest) - 232usize];
+     ["Offset of field: _cef_frame_t::send_process_message"]
+         [::std::mem::offset_of!(_cef_frame_t, send_process_message) - 240usize];
++    ["Offset of field: _cef_frame_t::convert_point_from_view"]
++        [::std::mem::offset_of!(_cef_frame_t, convert_point_from_view) - 248usize];
++    ["Offset of field: _cef_frame_t::send_mouse_move_event_to_frame"]
++        [::std::mem::offset_of!(_cef_frame_t, send_mouse_move_event_to_frame) - 256usize];
++    ["Offset of field: _cef_frame_t::send_mouse_click_event_to_frame"]
++        [::std::mem::offset_of!(_cef_frame_t, send_mouse_click_event_to_frame) - 264usize];
+ };
+ #[doc = "\n Structure used to represent a frame in the browser window. When used in the\n browser process the functions of this structure may be called on any thread\n unless otherwise indicated in the comments. When used in the render process\n the functions of this structure may only be called on the main thread.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_frame_t = _cef_frame_t;
+diff --git a/sys/src/bindings/x86_64_apple_darwin.rs b/sys/src/bindings/x86_64_apple_darwin.rs
+index 311a19822979603055731cc78adf7715d50e01ad..3ca97fd5c25b79066d042da9ebb794c61df18d44 100644
+--- a/sys/src/bindings/x86_64_apple_darwin.rs
++++ b/sys/src/bindings/x86_64_apple_darwin.rs
+@@ -6895,10 +6895,44 @@ pub struct _cef_frame_t {
+             message: *mut _cef_process_message_t,
+         ),
+     >,
++    #[doc = "\n Maps a point from the browser view coordinate space into this frame's own\n widget coordinate space and returns this frame's viewport size.\n |view_x|/|view_y| use the same space as the x/y members of the\n cef_mouse_event_t passed to cef_browser_host_t::SendMouseMoveEvent/\n SendMouseClickEvent: device-independent pixels (DIP) relative to the\n upper-left corner of the browser view. On success |frame_x|/|frame_y|\n receive the point in DIP relative to the upper-left corner of this\n frame's viewport, after every transform between the browser view and this\n frame (scrolling, CSS transform, CSS zoom, page scale), and\n |frame_width|/|frame_height| receive the viewport size in the same space.\n The point is not clamped and may lie outside the viewport. The mapping\n comes from compositor hit-test data and may lag by a frame. Only frames\n that own a widget (the main frame and out-of-process subframes) are\n supported. Returns false (0) for same-process subframes, detached frames,\n or when no hit-test data exists for the frame (e.g. display:none, not yet\n composited). This function can only be called on the browser process UI\n thread.\n"]
++    pub convert_point_from_view: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            view_x: f64,
++            view_y: f64,
++            frame_x: *mut f64,
++            frame_y: *mut f64,
++            frame_width: *mut f64,
++            frame_height: *mut f64,
++        ) -> ::std::os::raw::c_int,
++    >,
++    #[doc = "\n Sends a mouse move (or leave, if |mouse_leave| is true (1)) event directly\n to this frame's widget. Hit testing in the browser view and in all ancestor\n documents is bypassed, so content drawn over this frame by an ancestor\n does not receive it. |x|/|y| are DIP in this frame's widget coordinate\n space (see ConvertPointFromView). |modifiers| are cef_event_flags_t. Unlike\n cef_browser_host_t::SendMouseMoveEvent this does not go through the native\n view: it never takes native mouse capture or keyboard focus, never changes\n the displayed cursor or tooltip, and leaves the browser-side hover/capture\n state of real mouse input untouched. Out-of-process frames nested inside\n this frame are not targeted. Ignored for frames that do not own a widget.\n May be called on any browser process thread; runs on the UI thread\n (synchronously when called there).\n"]
++    pub send_mouse_move_event_to_frame: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            x: f64,
++            y: f64,
++            modifiers: u32,
++            mouse_leave: ::std::os::raw::c_int,
++        ),
++    >,
++    #[doc = "\n Sends a mouse button event directly to this frame's widget. Same\n coordinate space, threading and side-effect rules as\n SendMouseMoveEventToFrame.\n"]
++    pub send_mouse_click_event_to_frame: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            x: f64,
++            y: f64,
++            modifiers: u32,
++            type_: cef_mouse_button_type_t,
++            mouse_up: ::std::os::raw::c_int,
++            click_count: ::std::os::raw::c_int,
++        ),
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_frame_t"][::std::mem::size_of::<_cef_frame_t>() - 248usize];
++    ["Size of _cef_frame_t"][::std::mem::size_of::<_cef_frame_t>() - 272usize];
+     ["Alignment of _cef_frame_t"][::std::mem::align_of::<_cef_frame_t>() - 8usize];
+     ["Offset of field: _cef_frame_t::base"][::std::mem::offset_of!(_cef_frame_t, base) - 0usize];
+     ["Offset of field: _cef_frame_t::is_valid"]
+@@ -6947,6 +6981,12 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_frame_t, create_urlrequest) - 232usize];
+     ["Offset of field: _cef_frame_t::send_process_message"]
+         [::std::mem::offset_of!(_cef_frame_t, send_process_message) - 240usize];
++    ["Offset of field: _cef_frame_t::convert_point_from_view"]
++        [::std::mem::offset_of!(_cef_frame_t, convert_point_from_view) - 248usize];
++    ["Offset of field: _cef_frame_t::send_mouse_move_event_to_frame"]
++        [::std::mem::offset_of!(_cef_frame_t, send_mouse_move_event_to_frame) - 256usize];
++    ["Offset of field: _cef_frame_t::send_mouse_click_event_to_frame"]
++        [::std::mem::offset_of!(_cef_frame_t, send_mouse_click_event_to_frame) - 264usize];
+ };
+ #[doc = "\n Structure used to represent a frame in the browser window. When used in the\n browser process the functions of this structure may be called on any thread\n unless otherwise indicated in the comments. When used in the render process\n the functions of this structure may only be called on the main thread.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_frame_t = _cef_frame_t;
+diff --git a/sys/src/bindings/x86_64_pc_windows_msvc.rs b/sys/src/bindings/x86_64_pc_windows_msvc.rs
+index ee68ea98102874f51d13892bfbb892b7e5e7d100..e68def835baec2f0a8b82db5922bb3b6de6433ab 100644
+--- a/sys/src/bindings/x86_64_pc_windows_msvc.rs
++++ b/sys/src/bindings/x86_64_pc_windows_msvc.rs
+@@ -6909,10 +6909,44 @@ pub struct _cef_frame_t {
+             message: *mut _cef_process_message_t,
+         ),
+     >,
++    #[doc = "\n Maps a point from the browser view coordinate space into this frame's own\n widget coordinate space and returns this frame's viewport size.\n |view_x|/|view_y| use the same space as the x/y members of the\n cef_mouse_event_t passed to cef_browser_host_t::SendMouseMoveEvent/\n SendMouseClickEvent: device-independent pixels (DIP) relative to the\n upper-left corner of the browser view. On success |frame_x|/|frame_y|\n receive the point in DIP relative to the upper-left corner of this\n frame's viewport, after every transform between the browser view and this\n frame (scrolling, CSS transform, CSS zoom, page scale), and\n |frame_width|/|frame_height| receive the viewport size in the same space.\n The point is not clamped and may lie outside the viewport. The mapping\n comes from compositor hit-test data and may lag by a frame. Only frames\n that own a widget (the main frame and out-of-process subframes) are\n supported. Returns false (0) for same-process subframes, detached frames,\n or when no hit-test data exists for the frame (e.g. display:none, not yet\n composited). This function can only be called on the browser process UI\n thread.\n"]
++    pub convert_point_from_view: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            view_x: f64,
++            view_y: f64,
++            frame_x: *mut f64,
++            frame_y: *mut f64,
++            frame_width: *mut f64,
++            frame_height: *mut f64,
++        ) -> ::std::os::raw::c_int,
++    >,
++    #[doc = "\n Sends a mouse move (or leave, if |mouse_leave| is true (1)) event directly\n to this frame's widget. Hit testing in the browser view and in all ancestor\n documents is bypassed, so content drawn over this frame by an ancestor\n does not receive it. |x|/|y| are DIP in this frame's widget coordinate\n space (see ConvertPointFromView). |modifiers| are cef_event_flags_t. Unlike\n cef_browser_host_t::SendMouseMoveEvent this does not go through the native\n view: it never takes native mouse capture or keyboard focus, never changes\n the displayed cursor or tooltip, and leaves the browser-side hover/capture\n state of real mouse input untouched. Out-of-process frames nested inside\n this frame are not targeted. Ignored for frames that do not own a widget.\n May be called on any browser process thread; runs on the UI thread\n (synchronously when called there).\n"]
++    pub send_mouse_move_event_to_frame: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            x: f64,
++            y: f64,
++            modifiers: u32,
++            mouse_leave: ::std::os::raw::c_int,
++        ),
++    >,
++    #[doc = "\n Sends a mouse button event directly to this frame's widget. Same\n coordinate space, threading and side-effect rules as\n SendMouseMoveEventToFrame.\n"]
++    pub send_mouse_click_event_to_frame: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            x: f64,
++            y: f64,
++            modifiers: u32,
++            type_: cef_mouse_button_type_t,
++            mouse_up: ::std::os::raw::c_int,
++            click_count: ::std::os::raw::c_int,
++        ),
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_frame_t"][::std::mem::size_of::<_cef_frame_t>() - 248usize];
++    ["Size of _cef_frame_t"][::std::mem::size_of::<_cef_frame_t>() - 272usize];
+     ["Alignment of _cef_frame_t"][::std::mem::align_of::<_cef_frame_t>() - 8usize];
+     ["Offset of field: _cef_frame_t::base"][::std::mem::offset_of!(_cef_frame_t, base) - 0usize];
+     ["Offset of field: _cef_frame_t::is_valid"]
+@@ -6961,6 +6995,12 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_frame_t, create_urlrequest) - 232usize];
+     ["Offset of field: _cef_frame_t::send_process_message"]
+         [::std::mem::offset_of!(_cef_frame_t, send_process_message) - 240usize];
++    ["Offset of field: _cef_frame_t::convert_point_from_view"]
++        [::std::mem::offset_of!(_cef_frame_t, convert_point_from_view) - 248usize];
++    ["Offset of field: _cef_frame_t::send_mouse_move_event_to_frame"]
++        [::std::mem::offset_of!(_cef_frame_t, send_mouse_move_event_to_frame) - 256usize];
++    ["Offset of field: _cef_frame_t::send_mouse_click_event_to_frame"]
++        [::std::mem::offset_of!(_cef_frame_t, send_mouse_click_event_to_frame) - 264usize];
+ };
+ #[doc = "\n Structure used to represent a frame in the browser window. When used in the\n browser process the functions of this structure may be called on any thread\n unless otherwise indicated in the comments. When used in the render process\n the functions of this structure may only be called on the main thread.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_frame_t = _cef_frame_t;
+diff --git a/sys/src/bindings/x86_64_unknown_linux_gnu.rs b/sys/src/bindings/x86_64_unknown_linux_gnu.rs
+index fd2696fea9dbdcb92d78c7946de5527dc8d8a397..662d581d2bf8e9e5918978fad87047dc04d27ea3 100644
+--- a/sys/src/bindings/x86_64_unknown_linux_gnu.rs
++++ b/sys/src/bindings/x86_64_unknown_linux_gnu.rs
+@@ -6869,10 +6869,44 @@ pub struct _cef_frame_t {
+             message: *mut _cef_process_message_t,
+         ),
+     >,
++    #[doc = "\n Maps a point from the browser view coordinate space into this frame's own\n widget coordinate space and returns this frame's viewport size.\n |view_x|/|view_y| use the same space as the x/y members of the\n cef_mouse_event_t passed to cef_browser_host_t::SendMouseMoveEvent/\n SendMouseClickEvent: device-independent pixels (DIP) relative to the\n upper-left corner of the browser view. On success |frame_x|/|frame_y|\n receive the point in DIP relative to the upper-left corner of this\n frame's viewport, after every transform between the browser view and this\n frame (scrolling, CSS transform, CSS zoom, page scale), and\n |frame_width|/|frame_height| receive the viewport size in the same space.\n The point is not clamped and may lie outside the viewport. The mapping\n comes from compositor hit-test data and may lag by a frame. Only frames\n that own a widget (the main frame and out-of-process subframes) are\n supported. Returns false (0) for same-process subframes, detached frames,\n or when no hit-test data exists for the frame (e.g. display:none, not yet\n composited). This function can only be called on the browser process UI\n thread.\n"]
++    pub convert_point_from_view: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            view_x: f64,
++            view_y: f64,
++            frame_x: *mut f64,
++            frame_y: *mut f64,
++            frame_width: *mut f64,
++            frame_height: *mut f64,
++        ) -> ::std::os::raw::c_int,
++    >,
++    #[doc = "\n Sends a mouse move (or leave, if |mouse_leave| is true (1)) event directly\n to this frame's widget. Hit testing in the browser view and in all ancestor\n documents is bypassed, so content drawn over this frame by an ancestor\n does not receive it. |x|/|y| are DIP in this frame's widget coordinate\n space (see ConvertPointFromView). |modifiers| are cef_event_flags_t. Unlike\n cef_browser_host_t::SendMouseMoveEvent this does not go through the native\n view: it never takes native mouse capture or keyboard focus, never changes\n the displayed cursor or tooltip, and leaves the browser-side hover/capture\n state of real mouse input untouched. Out-of-process frames nested inside\n this frame are not targeted. Ignored for frames that do not own a widget.\n May be called on any browser process thread; runs on the UI thread\n (synchronously when called there).\n"]
++    pub send_mouse_move_event_to_frame: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            x: f64,
++            y: f64,
++            modifiers: u32,
++            mouse_leave: ::std::os::raw::c_int,
++        ),
++    >,
++    #[doc = "\n Sends a mouse button event directly to this frame's widget. Same\n coordinate space, threading and side-effect rules as\n SendMouseMoveEventToFrame.\n"]
++    pub send_mouse_click_event_to_frame: ::std::option::Option<
++        unsafe extern "C" fn(
++            self_: *mut _cef_frame_t,
++            x: f64,
++            y: f64,
++            modifiers: u32,
++            type_: cef_mouse_button_type_t,
++            mouse_up: ::std::os::raw::c_int,
++            click_count: ::std::os::raw::c_int,
++        ),
++    >,
+ }
+ #[allow(clippy::unnecessary_operation, clippy::identity_op)]
+ const _: () = {
+-    ["Size of _cef_frame_t"][::std::mem::size_of::<_cef_frame_t>() - 248usize];
++    ["Size of _cef_frame_t"][::std::mem::size_of::<_cef_frame_t>() - 272usize];
+     ["Alignment of _cef_frame_t"][::std::mem::align_of::<_cef_frame_t>() - 8usize];
+     ["Offset of field: _cef_frame_t::base"][::std::mem::offset_of!(_cef_frame_t, base) - 0usize];
+     ["Offset of field: _cef_frame_t::is_valid"]
+@@ -6921,6 +6955,12 @@ const _: () = {
+         [::std::mem::offset_of!(_cef_frame_t, create_urlrequest) - 232usize];
+     ["Offset of field: _cef_frame_t::send_process_message"]
+         [::std::mem::offset_of!(_cef_frame_t, send_process_message) - 240usize];
++    ["Offset of field: _cef_frame_t::convert_point_from_view"]
++        [::std::mem::offset_of!(_cef_frame_t, convert_point_from_view) - 248usize];
++    ["Offset of field: _cef_frame_t::send_mouse_move_event_to_frame"]
++        [::std::mem::offset_of!(_cef_frame_t, send_mouse_move_event_to_frame) - 256usize];
++    ["Offset of field: _cef_frame_t::send_mouse_click_event_to_frame"]
++        [::std::mem::offset_of!(_cef_frame_t, send_mouse_click_event_to_frame) - 264usize];
+ };
+ #[doc = "\n Structure used to represent a frame in the browser window. When used in the\n browser process the functions of this structure may be called on any thread\n unless otherwise indicated in the comments. When used in the render process\n the functions of this structure may only be called on the main thread.\n\n NOTE: This struct is allocated DLL-side.\n"]
+ pub type cef_frame_t = _cef_frame_t;

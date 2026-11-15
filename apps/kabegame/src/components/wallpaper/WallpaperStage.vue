@@ -9,8 +9,12 @@
  *   直接把目标里的 `webEntry` 赋给 `src`，没有命令往返、没有要维护的状态。页面里的 WPE 垫片有自己的 IPC 桥
  *   （CEF 给每个子 frame 注入，权限来自 `wpe-web-capability`），自己拉取、自己 listen，事件只投递到这个 iframe，
  *   iframe 销毁时它的监听随之清掉。唯一的例外是音量：垫片经 `postMessage` 向父页面要宿主音量，本组件只回答
- *   自己当前 iframe 的请求、回复自己的 `volume`（`paused` 时为 0），`volume` / `paused` 变化时再推
+ *   自己当前 iframe 的请求、回复自己的 `volume`（`paused` 时为 0），`volume` / `paused` / `interactive` 变化时再推
  *   （协议见 `wpeWebVolume.ts`）。
+ * - 鼠标：iframe 不收真实鼠标（`pointer-events: none`）。`interactive` 经音量消息交给垫片，垫片在可交互且没暂停时
+ *   向 `tauri-plugin-cursor` 登记本 frame，Rust 把全局光标的移动与点击直接注入它（钳进 frame），父页面盖在上面的
+ *   东西（预览的覆盖层）挡不住。注入的点击把焦点切进 iframe 时由预览画布还给父页面。Linux 拿不到全局光标，退回
+ *   可交互的 iframe 直接收真实鼠标（`framePointer.ts`）。
  * - 铺满父元素（父元素需有确定尺寸），可放在任意尺寸容器里。
  * - WPE 网页壁纸（`x-wpe/web`）走独立的 web 层：一次只存在一个 `file:` iframe（与应用页跨源），
  *   不参与 base / top 双层过渡；切入时等页面 load 后整层淡入盖住媒体层，切走时新媒体先直设到 base、
@@ -40,6 +44,7 @@ import { isSceneTarget, isVideoTarget, isWebTarget, isWpeTarget } from "./target
 import type { Mode, Transition, WallpaperStageDebugState, WallpaperTarget, WpeVideoProps } from "./types";
 import { clampWallpaperVolume, isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
+import { framePointerEvents } from "./framePointer";
 import { WEB_SANDBOX } from "./webSandbox";
 import WpeSceneView from "./WpeSceneView.vue";
 
@@ -71,7 +76,10 @@ interface Props {
   playbackRate: number;
   /** true 时暂停视频（应用背景不可见、预览关闭时用）；桌面壁纸窗口不传 */
   paused?: boolean;
-  /** 预览内嵌为 true：媒体层接收指针事件；桌面默认 false（与原实现一致，媒体层 pointer-events: none） */
+  /**
+   * 预览内嵌与桌面壁纸窗口为 true：网页 / 场景壁纸收鼠标（Rust 注入，见文件头），预览里媒体层还接收指针事件；
+   * 应用背景为 false。
+   */
   interactive?: boolean;
 }
 
@@ -534,18 +542,15 @@ function settleWebLoad() {
   resolve?.();
 }
 
-/**
- * iframe 的指针事件：预览内嵌与桌面壁纸窗口都接收（桌面由后端把桌面上的鼠标注入到窗口，iframe 不接收就到不了
- * 页面，壁纸窗口传 `interactive`）；应用背景等非交互场景不接收。
- */
-function applyWebInteractive() {
-  if (webFrameEl) webFrameEl.style.pointerEvents = props.interactive ? "auto" : "none";
+/** iframe 的 `pointer-events`：鼠标由 Rust 注入时一律 `none`，Linux 退回时可交互才 `auto`（`framePointer.ts`）。 */
+function applyWebPointerEvents() {
+  if (webFrameEl) webFrameEl.style.pointerEvents = framePointerEvents(props.interactive);
 }
 
 /**
- * 把当前宿主音量发给 web iframe 里的垫片：回复它的请求，或 `volume` / `paused` 变化时主动推。
+ * 把当前宿主音量发给 web iframe 里的垫片：回复它的请求，或 `volume` / `paused` / `interactive` 变化时主动推。
  * `paused` 也经这条消息到垫片：iframe 保持可见，垫片冻结 rAF、CSS 动画与媒体元素并调页面的 `setPaused`，
- * 页面音量随之按 0。
+ * 页面音量随之按 0。`interactive && !paused` 时垫片登记原生鼠标注入。
  * iframe 还停在初始 about:blank 时也照发（那份文档没有垫片、收下即丢），页面起来后垫片会自己再要一次。
  */
 function postWebVolume() {
@@ -553,7 +558,10 @@ function postWebVolume() {
   if (!target) return;
   try {
     // 对方是跨源的 `file:` 文档；消息携带音量与暂停状态，不限定 targetOrigin。
-    target.postMessage(wpeVolumeMessage(webHostVolume(props.volume, props.paused), props.paused), "*");
+    target.postMessage(
+      wpeVolumeMessage(webHostVolume(props.volume, props.paused), props.paused, props.interactive),
+      "*",
+    );
   } catch (error) {
     logger.warn(`网页壁纸音量发送失败: ${error}`);
   }
@@ -630,7 +638,7 @@ async function createWebFrame(entry: string | null | undefined): Promise<void> {
     markReady();
   });
   webFrameEl = frame;
-  applyWebInteractive();
+  applyWebPointerEvents();
   const done = new Promise<void>((resolve) => {
     webLoadResolve = resolve;
   });
@@ -1677,7 +1685,10 @@ watch(
 );
 watch(
   () => props.interactive,
-  () => applyWebInteractive(),
+  () => {
+    applyWebPointerEvents();
+    postWebVolume();
+  },
 );
 watch(
   () => props.volume,
@@ -1986,7 +1997,7 @@ defineExpose({ debugState, delegatesPing });
   transition: opacity 400ms ease-in-out;
 }
 
-/* iframe 是命令式创建的，没有本组件的 data-v 属性，需 :deep；pointer-events 由 applyWebInteractive 内联设置 */
+/* iframe 是命令式创建的，没有本组件的 data-v 属性，需 :deep；pointer-events 由 applyWebPointerEvents 内联设置 */
 .wallpaper-web-layer :deep(.wallpaper-web-frame) {
   display: block;
   width: 100%;

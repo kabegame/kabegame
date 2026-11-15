@@ -2,8 +2,11 @@
  * 网页壁纸（`x-wpe/web`）音量的父页面 ↔ 垫片消息协议（`postMessage`），父页面一侧是 `WallpaperStage` 的 web 层。
  *
  * - 垫片启动时向父页面发 `{ type: WPE_VOLUME_REQUEST }`；父页面只理会来自自己当前 iframe 的请求，回
- *   `{ type: WPE_VOLUME_MESSAGE, volume }`；`volume` / `paused` 变化时父页面再主动推同一条消息。
+ *   `{ type: WPE_VOLUME_MESSAGE, volume, paused, interactive }`；`volume` / `paused` / `interactive` 变化时父页面再主动推
+ *   同一条消息。
  * - 垫片收到第一条之前按 0（静音）处理；只认 `isTrusted` 且 `source` 是父窗口的消息。
+ * - `interactive && !paused` 时垫片向 `tauri-plugin-cursor` 登记本 frame（`attach_frame`），Rust 把光标事件直接注入；
+ *   否则解除（`detach_frame`）。
  *
  * 垫片 `src-tauri/kabegame/src/webview_js/wpe_shim.js` 是不经打包的纯脚本，不能 import 这里，按同样的字面量
  * 另写一份；`wpeWebVolume.test.ts` 读垫片源码按这里的常量跑一遍，两边不一致就失败。
@@ -25,6 +28,8 @@ export interface WpeVolumeMessage {
   volume: number;
   /** 垫片转交给 wallpaperPropertyListener.setPaused。 */
   paused: boolean;
+  /** 本 iframe 收不收鼠标：预览与桌面为真，应用背景为假。和 `!paused` 同时成立时垫片登记原生鼠标注入。 */
+  interactive: boolean;
 }
 
 export function isWpeVolumeRequest(data: unknown): data is WpeVolumeRequest {
@@ -44,6 +49,6 @@ export function webHostVolume(volume: number, paused: boolean): number {
   return paused ? 0 : clampWallpaperVolume(volume);
 }
 
-export function wpeVolumeMessage(volume: number, paused: boolean): WpeVolumeMessage {
-  return { type: WPE_VOLUME_MESSAGE, volume, paused };
+export function wpeVolumeMessage(volume: number, paused: boolean, interactive = false): WpeVolumeMessage {
+  return { type: WPE_VOLUME_MESSAGE, volume, paused, interactive };
 }

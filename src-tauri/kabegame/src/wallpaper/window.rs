@@ -22,21 +22,16 @@ fn ready_notify() -> &'static ReadyNotify {
     })
 }
 
-/// 一个壁纸窗口。窗口模式下每块在线屏一个（见 `manager::window`），各有各的就绪握手、ping 看门狗与
-/// 桌面鼠标转发。
+/// 一个壁纸窗口。窗口模式下每块在线屏一个（见 `manager::window`），各有各的就绪握手与 ping 看门狗。
 ///
 /// 窗口始终停在应用页（`index.html?window=wallpaper`，`WallpaperWindow.vue`），图片 / 视频 / 网页壁纸
 /// 都由 `WallpaperStage` 自驱动渲染：网页壁纸（`x-wpe/web`）是 web 层里的 `file:` iframe，与图库预览
-/// 同一套组件与代码路径，窗口本身不再导航。后端只负责桌面鼠标转发（[`Self::set_mouse_forwarding`]），
-/// 以及 ping 看门狗。
+/// 同一套组件与代码路径，窗口本身不再导航。后端只负责挂载与 ping 看门狗；桌面鼠标由网页壁纸 / 场景宿主的
+/// iframe 自己向 `tauri-plugin-cursor` 登记（点击规则：光标下是桌面）。
 pub struct WallpaperWindow<R: Runtime> {
     window: WebviewWindow<R>,
     /// ping 看门狗：mount 完成后启动，随本对象丢弃而停止。
     pinger: Option<super::ping::Pinger>,
-    /// 窗口的原生标识：`mount()` 时取，鼠标转发用。Windows 是 HWND，macOS 是窗口号（`NSWindow.windowNumber`）。
-    native_id: Option<isize>,
-    /// 桌面鼠标转发：只在显示网页 / 场景壁纸期间运行，丢弃即停止（见 `InputForwarder` 的 `Drop`）。
-    forwarder: Option<super::input_forward::InputForwarder>,
 }
 
 impl<R: Runtime> WallpaperWindow<R> {
@@ -45,8 +40,6 @@ impl<R: Runtime> WallpaperWindow<R> {
         Self {
             window,
             pinger: None,
-            native_id: None,
-            forwarder: None,
         }
     }
 
@@ -103,24 +96,11 @@ impl<R: Runtime> WallpaperWindow<R> {
         // 挂载会读取窗口句柄并改其父子/样式，必须等 webview 真正建起来。
         Self::wait_ready(self.window.label(), std::time::Duration::from_secs(100))?;
 
-        // 窗口 getter 会同步等主线程回执，只在这里（不持 manager 锁）读一次并记住；
-        // 之后 `set_mouse_forwarding` 在 manager 锁内只用记下的标识。
-        #[cfg(target_os = "windows")]
-        match self.window.hwnd() {
-            Ok(hwnd) => self.native_id = Some(hwnd.0 as isize),
-            Err(error) => tracing::warn!("取壁纸窗口句柄失败: {error}"),
-        }
-
         #[cfg(target_os = "windows")]
         tauri_plugin_wemt::attach_window(&self.window, None).map_err(|e| e.to_string())?;
 
         #[cfg(target_os = "macos")]
-        {
-            self.native_id = Some(crate::wallpaper::window_mount_macos::mount_to_desktop(
-                &self.window,
-                screen,
-            )?);
-        }
+        crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window, screen)?;
 
         // 建窗时是 visible(false)（避免挂载前闪一下窗口），挂好后转常显。
         self.window
@@ -151,33 +131,5 @@ impl<R: Runtime> WallpaperWindow<R> {
     #[cfg(target_os = "macos")]
     pub fn place(window: &WebviewWindow<R>, screen: &ScreenInfo) -> Result<(), String> {
         crate::wallpaper::window_mount_macos::mount_to_desktop(window, Some(screen)).map(|_| ())
-    }
-
-    /// 开关桌面鼠标转发：显示网页 / 场景壁纸时开（桌面上的移动与左键点击注入到窗口，落到 web 层的
-    /// iframe 或场景宿主），否则关。「暂停壁纸」不经这里：转发线程每轮自己读设置，暂停期间不注入。
-    /// 重复调用幂等。
-    ///
-    /// 不调会同步等主线程的 getter：调用方持着 manager 锁。
-    pub fn set_mouse_forwarding(&mut self, enabled: bool) {
-        if !enabled {
-            // 丢弃即置停止标志，线程最多一个周期后自行退出。
-            self.forwarder = None;
-            return;
-        }
-        if self.forwarder.is_some() {
-            return;
-        }
-        let Some(native_id) = self.native_id else {
-            tracing::warn!("没有壁纸窗口标识，不转发桌面鼠标");
-            return;
-        };
-        #[cfg(target_os = "windows")]
-        let probe = super::input_forward::win::WindowsProbe::new(native_id);
-        #[cfg(target_os = "macos")]
-        let probe = super::input_forward::mac::MacProbe::new(native_id);
-        self.forwarder = Some(super::input_forward::InputForwarder::start(
-            self.window.label(),
-            probe,
-        ));
     }
 }

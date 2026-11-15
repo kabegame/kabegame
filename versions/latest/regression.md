@@ -3040,6 +3040,32 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | FI4 和 WPE 比 | Windows dev + 已有的 WPE 抓帧 | 重跑 `sun`、`whale`（P10a）、`tmpl2` 四组（P5d）、`3822495444`（P7c）、`3498150384`（P13a）的按窗口尺寸对照 | 读逆矩阵的常量和 WPE 逐位相同；反馈 RT 的差异缩小 | 2026-11-15：`sun` 光晕那次绘制 14 个常量全部相同，但像素差和改前一样（归着色器舍入）；`tmpl2`、`whale`、`3822495444` 不变；P13a 229、230 帧逐像素相同、其余帧最大差 4 → 1，只把求逆换回 double 就回到原来的数字 |
 | [ ] | FI5 实时预览 | Windows dev，图库预览 | 预览 `3498150384`（鼠标波纹），在画面上拖动 | 波纹正常，没有闪烁或发散 | 只做了屏外回放 |
 
+## 壁纸 iframe 的原生鼠标注入（图库预览与桌面）
+
+2026-11-15 第二版。网页壁纸与场景宿主的 iframe 自己向 `tauri-plugin-cursor` 登记（`attach_frame`），插件轮询全局光标，经 CEF 补丁 11 把原生鼠标事件直接注入那个 frame。
+- 光标在 frame 外时，钳到「frame 中心到光标的连线」与边界的交点。
+- 点击规则按窗口：预览要求光标下是本窗口，桌面要求光标下是桌面。
+- 预览画布盖一层只拦截、不转发的覆盖层；iframe 不收真实鼠标；点过壁纸后，真实左键松开时把焦点还给父页面。
+- Linux 退回 iframe 直接收真实鼠标。
+- 删掉了第一版的 JS 转发（`kabegame:wpe-pointer`、垫片合成事件）、桌面的 `input_forward.rs` 与运行时的整窗注入。
+
+计划与记录见 `.claude/plans/wpe-import/phase-preview-pointer.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PN1 单测与检查 | Windows（dev 停着） | `cargo test -p tauri-plugin-cursor`；`frame_mouse.rs` 用 rustc 单独编成测试跑；`src/components/wallpaper` 下相关 6 个 vitest 文件；`check-kabegame`；Prettier、`cargo fmt` | 0 error、全过 | 2026-11-15 Claude：插件 17 条、钳制 7 条、vitest 82 条全过；`check-kabegame` 0 error；运行时 crate 的测试要现编 CEF 包装库（环境不齐），钳制规则不依赖 CEF，所以单独编 |
+| [x] | PN2 Rust 变异检查 | rustc + cargo，按原字节还原 | 钳制取逐轴最近点、不向内收；frame 外的按下也注入、没按下也发抬起、收尾不补；插件按下不要求在窗口内、两种规则对调、丢弃订阅不发收尾、登记时已按着算按下 | 全部检出 | 2026-11-15 Claude：9 / 9 |
+| [x] | PN3 前端变异检查 | vitest，按原字节还原 | 垫片暂停时也登记、调用不排队；Stage 消息不带 `interactive`；场景视图 `interactive` 变了不推；焦点按着也还、松开后不等；画布没有覆盖层；注入时 iframe 也收真实鼠标 | 全部检出 | 2026-11-15 Claude：8 / 8 |
+| [x] | PN4 新 CEF 构建 | Windows，MSYS2 + VS | 带补丁 11 跑 `deno task build:chromium`，再用新 CEF 启动 dev | 编过；`_cef_frame_t` 是 272 字节（运行时不报「libcef 不带 frame 鼠标注入」） | 2026-11-15 用户编好、重启 dev；日志没有「libcef 不带」，注入生效（见 PN6、PN7）。每个新登记的 frame 第一次采样都记一条「frame 坐标换算失败」（frame 还没合成），之后正常，这条 warn 待改成持续失败才记 |
+| [ ] | PN5 旧 libcef | Windows dev，没有补丁 11 的 CEF | 打开预览里的网页 / 场景壁纸、桌面设网页壁纸 | 不崩，日志只有一条「libcef 不带 frame 鼠标注入」，壁纸收不到鼠标 | 没测到：dev 重启时已换上新 CEF |
+| [ ] | PN6 桌面跟随与点击 | Windows，窗口模式 | 桌面设一张跟随鼠标的网页壁纸、一张 P6c 场景（光标回调）；在桌面上移动、点空白处与图标、点别的窗口；光标移到别的窗口上、别的显示器上 | 跟随与点击正常，`isTrusted` 为真；点别的窗口不进页面；光标在窗口外时效果停在画面边缘 | 2026-11-15 Claude：桌面场景宿主（14297）里临时挂计数 8 s，收到 218 个 `pointermove`、全部可信；点击没测（要在桌面上点） |
+| [ ] | PN7 预览里画面外跟随 | Windows dev，图库预览 | 预览开了视差或有跟随鼠标粒子的场景，光标移到留白、详情栏、应用窗口外 | 景物继续跟随，停在画面边缘，移回画面没有跳变 | 2026-11-15 Claude：用户开着的预览（13617）里临时挂计数 8 s，收到 3 个可信 `pointermove`，`x` 都是 2559.5（宽 2560，钳在右边界内收半个像素处）；画面效果要用户看 |
+| [ ] | PN8 预览里的点击、拖动、菜单与键盘 | Windows dev，图库预览 | P6c 测试工程上点击、按住拖出画面再松开；留白处点击；右键；鼠标移到两侧；点过壁纸后按 Esc、方向键 | 点击触发光标回调；拖动中途不断（按下到松开之间没有提前的抬起），拖出后松开照样收到抬起；留白处点击不进页面；右键弹预览菜单；两侧出现翻页箭头；Esc、方向键照常 | 待新 CEF，要打开预览，由用户勾 |
+| [ ] | PN9 预览里的网页壁纸 | Windows dev，图库预览 | 预览跟随鼠标的网页壁纸，悬停按钮、点按钮、拖页面里的原生滑块 | 悬停样式显示，点击生效；滑块能不能拖记下来（移动不带按键标志，同 WPE） | 待新 CEF，要打开预览，由用户勾 |
+| [ ] | PN10 暂停与应用背景 | Windows dev | 预览里暂停后移动、点击，再恢复；同一张设为应用背景 | 暂停期间不跟随、不点，恢复后照常；应用背景不收鼠标 | 待新 CEF |
+| [ ] | PN11 macOS | macOS | 桌面与预览同 PN6–PN8 | 同 Windows | 本机不能测；插件的 `over_window` 是新写的（`TODO:[WPE_SCENE]`） |
+| [ ] | PN12 Linux | Linux | 预览里网页 / 场景壁纸 | 和改动前一样：光标在壁纸上时跟随、点击生效，画面外不跟随 | 本机不能测（`TODO:[WPE_SCENE]`） |
+
 ## 场景壁纸：单采样 A2C 的阈值（P13d 附带）
 
 2026-11-15。`alphatocoverage` 的丢弃条件从 `!(a > 0.5)` 改成 `!(a >= 0.500244140625)`（`render/programs.ts` 的 `A2C_THRESHOLD`），主 pass 与之后的阴影投射者共用。WPE 的实测与推理见 `.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md`「单采样 A2C 的阈值」；测试工程 `ignore/p13/proj/p13d-a2cth*`（`ignore/p13/d/gen_d10.py`），抓帧 `A:\p13d\a2cth*\`。

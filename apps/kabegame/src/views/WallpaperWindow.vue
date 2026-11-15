@@ -368,7 +368,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="wallpaper-root relative w-screen h-screen overflow-hidden bg-transparent">
-    <!-- interactive：网页壁纸 iframe 要接收后端从桌面注入的鼠标事件 -->
+    <!-- interactive：网页 / 场景壁纸的 iframe 登记鼠标注入，Rust 把桌面上的鼠标直接注入 iframe（点击只认落在桌面上的） -->
     <!-- 音量：布置不出声的窗口（各屏复制时的副屏）恒为 0，其余 props 各窗口相同 -->
     <WallpaperStage
       ref="stage"

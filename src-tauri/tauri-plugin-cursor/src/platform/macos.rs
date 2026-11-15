@@ -1,7 +1,7 @@
 //! macOS 探针：`NSEvent` 的类属性读光标与左键，`+[NSWindow windowNumberAtPoint:belowWindowWithWindowNumber:]`
 //! 判断光标下是不是桌面。都不需要辅助功能 / 输入监控权限。
 //!
-//! 壁纸窗口在桌面层、`ignoresMouseEvents`，真实点击穿透给 Finder 的桌面图标窗口；这里旁路观察再注入。
+//! 壁纸窗口在桌面层、`ignoresMouseEvents`，真实点击穿透给 Finder 的桌面图标窗口；这里旁路观察再由使用方注入。
 //!
 //! - 坐标：`NSEvent.mouseLocation` 是 Cocoa 屏幕坐标（左下原点），窗口边界取自窗口服务（CG 全局坐标，左上原点），
 //!   两者用主显示器高度互换。单位都是点，等于 CEF 的视图坐标（DIP），不用再除缩放。
@@ -24,11 +24,12 @@ use dispatch2::run_on_main;
 use objc2_app_kit::{NSEvent, NSWindow};
 use objc2_foundation::NSPoint;
 
-use super::{DesktopProbe, Sample};
+use super::NativeWindow;
+use crate::hub::{Probe, Sample};
 
-/// 每隔多少轮重新读一次壁纸窗口边界与主显示器高度（约 1 秒）：分辨率、显示器排布变化后跟上。
+/// 每隔多少轮重新读一次窗口边界与主显示器高度（约 1 秒）：分辨率、显示器排布变化后跟上。
 const GEOMETRY_REFRESH_POLLS: u32 = 60;
-/// 还没查到窗口时的重试间隔（约 0.1 秒）：转发在窗口 `show()` 生效之前就启动，那时窗口服务还查不到它。
+/// 还没查到窗口时的重试间隔（约 0.1 秒）：订阅在窗口 `show()` 生效之前就可能开始，那时窗口服务还查不到它。
 const GEOMETRY_RETRY_POLLS: u32 = 6;
 
 /// `CGWindowLevelKey` 的 `kCGDesktopIconWindowLevelKey`。
@@ -67,12 +68,12 @@ fn window_info(number: CGWindowID) -> Option<WindowInfo> {
     })
 }
 
-/// 光标的 CG 全局坐标是否落在 `bounds` 内，以及它相对 `bounds` 左上角的视图坐标。
-fn locate(bounds: &CGRect, x: f64, y: f64) -> (bool, (i32, i32)) {
+/// 光标的 CG 全局坐标是否落在 `bounds` 内，以及它相对 `bounds` 左上角的视图坐标（不取整）。
+fn locate(bounds: &CGRect, x: f64, y: f64) -> (bool, (f64, f64)) {
     let dx = x - bounds.origin.x;
     let dy = y - bounds.origin.y;
     let inside = dx >= 0.0 && dy >= 0.0 && dx < bounds.size.width && dy < bounds.size.height;
-    (inside, (dx.round() as i32, dy.round() as i32))
+    (inside, (dx, dy))
 }
 
 /// 命中窗口的层级是否属于桌面（不高于桌面图标层）。
@@ -80,10 +81,10 @@ fn is_desktop_layer(layer: i64, icon_level: i64) -> bool {
     layer <= icon_level
 }
 
-/// 壁纸窗口（窗口号 `window`）的探针。
+/// 窗口（窗口号 `window`）的探针。
 pub(crate) struct MacProbe {
     window: CGWindowID,
-    /// 壁纸窗口边界，CG 全局坐标。
+    /// 窗口边界，CG 全局坐标。
     bounds: Option<CGRect>,
     /// 主显示器高度：Cocoa 屏幕坐标与 CG 全局坐标的 y 互换用。
     main_height: f64,
@@ -94,7 +95,7 @@ pub(crate) struct MacProbe {
 
 impl MacProbe {
     /// `window_number` 是 `NSWindow.windowNumber`。
-    pub(crate) fn new(window_number: isize) -> Self {
+    pub(crate) fn new(window_number: NativeWindow) -> Self {
         Self {
             window: window_number as CGWindowID,
             bounds: None,
@@ -105,8 +106,8 @@ impl MacProbe {
     }
 }
 
-impl DesktopProbe for MacProbe {
-    /// 窗口的生灭由 `WallpaperWindow` 管（丢弃即停止转发），这里不自行判死：窗口服务一时查不到窗口
+impl Probe for MacProbe {
+    /// 窗口的生灭由使用方管（丢弃订阅即停止），这里不自行判死：窗口服务一时查不到窗口
     /// （刚建好还没显示）只是暂时没有边界，[`Self::sample`] 那几轮返回 `None`。
     fn alive(&mut self) -> bool {
         let interval = if self.bounds.is_some() {
@@ -117,7 +118,7 @@ impl DesktopProbe for MacProbe {
         if self.polls % interval == 0 {
             let info = window_info(self.window);
             if info.is_none() && self.bounds.is_some() {
-                tracing::warn!("查不到壁纸窗口 #{}，暂停桌面鼠标转发", self.window);
+                tracing::warn!("查不到窗口 #{}，暂停光标采样", self.window);
             }
             self.bounds = info.map(|info| info.bounds);
             self.main_height = CGDisplay::main().bounds().size.height;
@@ -139,11 +140,7 @@ impl DesktopProbe for MacProbe {
     }
 
     fn over_desktop(&mut self) -> bool {
-        let point = NSPoint::new(self.cursor.0, self.cursor.1);
-        // 只在按下沿调用一次；AppKit 的窗口接口要在主线程上
-        let hit = run_on_main(move |mtm| {
-            NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(point, 0, mtm)
-        });
+        let hit = window_number_at(self.cursor);
         if hit <= 0 {
             // 这个位置没有任何窗口接收点击（没有桌面图标层时）：按桌面处理
             return true;
@@ -153,6 +150,46 @@ impl DesktopProbe for MacProbe {
             || window_info(hit)
                 .is_some_and(|info| is_desktop_layer(info.layer, desktop_icon_level()))
     }
+
+    // TODO:[WPE_SCENE] macOS 未实测
+    fn over_window(&mut self) -> bool {
+        window_number_at(self.cursor) == self.window as isize
+    }
+}
+
+/// Cocoa 屏幕坐标处「按下会落到哪个窗口」的窗口号（会跳过点击穿透的窗口）；没有窗口时不大于 0。
+/// 只在按下沿调用一次；AppKit 的窗口接口要在主线程上。
+fn window_number_at(cursor: (f64, f64)) -> isize {
+    let point = NSPoint::new(cursor.0, cursor.1);
+    run_on_main(move |mtm| NSWindow::windowNumberAtPoint_belowWindowWithWindowNumber(point, 0, mtm))
+}
+
+// TODO:[WPE_SCENE] macOS 未实测
+/// 取窗口的 `NSWindow.windowNumber`（要上主线程读，同 `wallpaper/window_mount_macos.rs`）。
+pub fn native_window<R: tauri::Runtime>(window: &tauri::Window<R>) -> Option<NativeWindow> {
+    let ptr = match window.ns_window() {
+        Ok(ptr) if !ptr.is_null() => ptr,
+        Ok(_) => return None,
+        Err(error) => {
+            tracing::debug!("取 NSWindow 句柄失败: {error}");
+            return None;
+        }
+    };
+    // 用 usize 中转，使闭包只捕获 Send 类型
+    let addr = ptr as usize;
+    Some(run_on_main(move |_| {
+        let ns_window: &NSWindow = unsafe { &*(addr as *mut std::ffi::c_void).cast() };
+        ns_window.windowNumber()
+    }))
+}
+
+// TODO:[WPE_SCENE] macOS 未实测
+/// 一次性取光标在窗口里的视图坐标（点，可越界）：窗口边界与主显示器高度现查。
+pub fn position_in_window(native: NativeWindow) -> Option<(f64, f64)> {
+    let info = window_info(native as CGWindowID)?;
+    let location = NSEvent::mouseLocation();
+    let main_height = CGDisplay::main().bounds().size.height;
+    Some(locate(&info.bounds, location.x, main_height - location.y).1)
 }
 
 #[cfg(test)]
@@ -164,12 +201,12 @@ mod tests {
     fn locate_maps_global_point_to_view_coordinates() {
         // 副屏在主屏左侧：窗口原点为负
         let bounds = CGRect::new(&CGPoint::new(-1920.0, 0.0), &CGSize::new(1920.0, 1080.0));
-        assert_eq!(locate(&bounds, -1920.0, 0.0), (true, (0, 0)));
-        assert_eq!(locate(&bounds, -960.4, 539.6), (true, (960, 540)));
+        assert_eq!(locate(&bounds, -1920.0, 0.0), (true, (0.0, 0.0)));
+        assert_eq!(locate(&bounds, -960.4, 539.6), (true, (959.6, 539.6)));
         // 右、下边界不含
-        assert_eq!(locate(&bounds, 0.0, 10.0), (false, (1920, 10)));
-        assert_eq!(locate(&bounds, -100.0, 1080.0), (false, (1820, 1080)));
-        assert_eq!(locate(&bounds, -1921.0, 5.0), (false, (-1, 5)));
+        assert_eq!(locate(&bounds, 0.0, 10.0), (false, (1920.0, 10.0)));
+        assert_eq!(locate(&bounds, -100.0, 1080.0), (false, (1820.0, 1080.0)));
+        assert_eq!(locate(&bounds, -1921.0, 5.0), (false, (-1.0, 5.0)));
     }
 
     /// 对屏幕上真实存在的窗口逐个查一遍：层级与边界都要能解析出来。没有窗口服务（无界面环境）时列表为空，跳过。

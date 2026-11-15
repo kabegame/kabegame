@@ -45,6 +45,7 @@ use tauri_runtime::UserEvent;
 #[cfg(target_os = "macos")]
 mod app_mac;
 mod file_access;
+mod frame_mouse;
 mod page_zoom;
 mod runtime;
 mod subprocess;
@@ -110,28 +111,36 @@ pub fn disable_wheel_zoom(webview_label: &str) {
     page_zoom::disable_wheel_zoom(webview_label)
 }
 
-// ---- 鼠标注入 ----
+// ---- 子 frame 鼠标注入 ----
 
-/// 注入到 webview 的鼠标事件；坐标是视图坐标（DIP，相对 browser 视图左上角）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseInjection {
-    /// 移动（`send_mouse_move_event`）。不带按键标志，页面里不会启动拖放 / 拖选（同 WE）。
-    Move { x: i32, y: i32 },
-    /// 离开视图（`send_mouse_move_event(mouse_leave = 1)`）。
-    Leave { x: i32, y: i32 },
-    /// 左键按下（`send_mouse_click_event(LEFT, up = 0, click_count = 1)`）。
-    LeftDown { x: i32, y: i32 },
-    /// 左键抬起（`send_mouse_click_event(LEFT, up = 1, click_count = 1)`）。
-    LeftUp { x: i32, y: i32 },
+/// 注入到某个 frame 的鼠标输入。坐标是浏览器视图坐标（DIP，相对 browser 视图左上角，即窗口客户区），
+/// 光标在窗口外时也照给（可为负或越界）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FrameMouse {
+    /// 移动：换算到 frame 坐标后钳进 frame（[`clamp_to_frame`]）再注入。不带按键标志，页面里不会启动
+    /// 拖放 / 拖选（同 WPE）。
+    Move { x: f64, y: f64 },
+    /// 左键按下：换算后的点（钳制前）落在 frame 里才注入，否则这次按下作废，之后的抬起也不发。
+    Down { x: f64, y: f64 },
+    /// 左键抬起：只在按下被注入过时注入（钳进 frame）。
+    Up { x: f64, y: f64 },
+    /// 停止向这个 frame 注入：按下未抬起就补抬起，再发一次离开，然后清掉它的状态。frame 已不在时只清状态。
+    Release,
 }
 
-/// 经 `CefBrowserHost::SendMouse*Event` 向 `webview_label` 注入鼠标事件。
+/// 向 `webview_label` 里标识为 `frame_id` 的 frame（`tauri::webview::SubframeId` 的字符串）注入鼠标输入。
 ///
-/// 直接进 Chromium 输入管线，不依赖窗口焦点与 Z 序；只投递到 CEF UI 线程、不等回执，
-/// 找不到 browser 时静默返回 `Ok`。投递失败（CEF 未运行）返回 Err。
-pub fn inject_mouse(webview_label: &str, input: MouseInjection) -> Result<(), String> {
-    webview::inject_mouse(webview_label, input)
+/// 走 CEF 补丁 11 的 `CefFrame::SendMouse*EventToFrame`：事件直接交给 frame 自己的输入通道，不经浏览器视图的
+/// 命中测试，所以父页面盖在 frame 上的元素（预览的覆盖层）挡不住它；也不经原生窗口，不抢鼠标捕获与焦点，
+/// 页面里收到的是可信事件（`isTrusted`）。只支持自己有 widget 的 frame（主 frame 与跨进程的子 frame）。
+///
+/// 只投递到 CEF UI 线程、不等回执。frame 已不在时静默忽略；libcef 没有补丁 11（`_cef_frame_t` 比绑定短）、
+/// 或换算失败（同进程 frame、还没合成）时不注入，只记一次 warn。投递失败（CEF 未运行）返回 Err。
+pub fn frame_mouse(webview_label: &str, frame_id: &str, input: FrameMouse) -> Result<(), String> {
+    webview::frame_mouse(webview_label, frame_id, input)
 }
+
+pub use frame_mouse::clamp_to_frame;
 
 // ---- 截图 ----
 

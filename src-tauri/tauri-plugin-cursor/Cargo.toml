@@ -1,0 +1,50 @@
+[package]
+name = "tauri-plugin-cursor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "Global cursor polling for Tauri windows and native mouse injection into subframes (Windows / macOS)."
+license = "MIT OR Apache-2.0"
+links = "tauri-plugin-cursor"
+
+[lib]
+name = "tauri_plugin_cursor"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.12", default-features = false }
+tracing = "0.1"
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.3", features = ["build"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25"
+core-foundation = "0.10"
+dispatch2 = "0.3"
+objc2 = { version = "0.6", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSEvent",
+  "NSWindow",
+  "NSResponder",
+  "NSGraphics",
+  "objc2-core-foundation",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSDictionary",
+  "NSString",
+  "NSValue",
+  "NSObject",
+] }

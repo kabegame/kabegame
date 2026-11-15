@@ -93,6 +93,7 @@ winver = "1"
 tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
+tauri-plugin-cursor = { workspace = true, optional = true }
 tauri = { version = "2.12.4", default-features = false, features = [
   "tray-icon", "devtools", "image-png", "unstable",
   "compression", "common-controls-v6", "dynamic-acl", "x11", "dbus",
@@ -137,7 +138,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
   "NSError",
 ] }
 objc2 = { version = "0.6", default-features = false }
-# 桌面鼠标转发（wallpaper/input_forward/mac.rs）：向窗口服务查窗口层级与边界
+# 显示器枚举（wallpaper/screens/mac.rs）：display UUID、显示器边界与光标位置
 core-graphics = "0.25"
 core-foundation = "0.10"
 
@@ -182,6 +183,7 @@ wpe = [
 standard = [
     "wpe",
     "dep:tauri-plugin-wemt",
+    "dep:tauri-plugin-cursor",
     "dep:cef",
     "dep:gtk",
     "kabegame-core/virtual-driver",

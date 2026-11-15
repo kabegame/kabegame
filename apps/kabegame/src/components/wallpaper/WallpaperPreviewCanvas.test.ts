@@ -2,6 +2,7 @@
 import { mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WallpaperPreviewCanvas, { type CoverRegion } from "./WallpaperPreviewCanvas.vue";
+import { NATIVE_FRAME_POINTER } from "./framePointer";
 
 vi.mock("@tauri-apps/api/window", () => ({ primaryMonitor: async () => null }));
 
@@ -135,5 +136,49 @@ describe("WallpaperPreviewCanvas.withCaptureRegion", () => {
     const canvas = mountCanvas(VISIBLE);
     await expect(canvas.withCaptureRegion(async () => "ok")).resolves.toBe("ok");
     stub.mockRestore();
+  });
+});
+
+describe("WallpaperPreviewCanvas 覆盖层", () => {
+  it("画布之上盖一层透明覆盖层，插槽内容在它下面；Linux 退回时不盖", () => {
+    const wrapper = mount(WallpaperPreviewCanvas, {
+      attachTo: document.body,
+      slots: { default: '<iframe class="slot-frame"></iframe>' },
+    });
+    wrappers.push(wrapper);
+    if (!NATIVE_FRAME_POINTER) {
+      expect(wrapper.element.querySelector("[data-wallpaper-pointer-overlay]")).toBeNull();
+      return;
+    }
+    const overlay = wrapper.element.lastElementChild as HTMLElement;
+    expect(overlay.hasAttribute("data-wallpaper-pointer-overlay")).toBe(true);
+    expect(overlay.classList.contains("inset-0")).toBe(true);
+    // 覆盖层排在画布之后（后绘制，盖在上面），自己是空的；插槽内容在画布里
+    expect(overlay.childElementCount).toBe(0);
+    expect(wrapper.element.firstElementChild?.querySelector(".slot-frame")).not.toBeNull();
+  });
+});
+
+describe("WallpaperPreviewCanvas 焦点", () => {
+  it("画布里的 iframe 拿到焦点时还给父页面（注入时）；卸载后不再管", async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = mount(WallpaperPreviewCanvas, {
+        attachTo: document.body,
+        slots: { default: '<iframe class="slot-frame"></iframe>' },
+      });
+      const frame = wrapper.element.querySelector(".slot-frame") as HTMLIFrameElement;
+      vi.spyOn(document, "activeElement", "get").mockImplementation(() => frame);
+      const blur = vi.spyOn(frame, "blur");
+      window.dispatchEvent(new Event("blur"));
+      vi.advanceTimersByTime(0);
+      expect(blur).toHaveBeenCalledTimes(NATIVE_FRAME_POINTER ? 1 : 0);
+      wrapper.unmount();
+      window.dispatchEvent(new Event("blur"));
+      vi.advanceTimersByTime(0);
+      expect(blur).toHaveBeenCalledTimes(NATIVE_FRAME_POINTER ? 1 : 0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

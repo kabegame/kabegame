@@ -4564,6 +4564,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-android-battery-optimization",
  "tauri-plugin-clipboard-manager",
+ "tauri-plugin-cursor",
  "tauri-plugin-dialog",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
@@ -8786,6 +8787,23 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tauri-plugin-cursor"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.1",
+ "core-graphics",
+ "dispatch2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "serde",
+ "tauri",
+ "tauri-plugin",
+ "tracing",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
