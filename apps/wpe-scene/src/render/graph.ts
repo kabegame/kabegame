@@ -862,7 +862,9 @@ export function planLayer(
   // puppet 的合成路径（P12a 步骤 4）：编译期定的 `0x10`，同被依赖，全部 effect 留在合成链，由 `puppet.upload` 上屏
   const puppet = layer.puppet ?? null;
   const puppetComposite = !!puppet?.composite;
-  const composited = passthrough || depended || puppetComposite;
+  // 开雾强制的 passthrough（P13f，`SceneLayer.fogPassthrough`）：同 colorBlendMode 混合走合成路径、`passthrough` 上屏，快照规则 1 不变
+  const fogged = !!layer.fogPassthrough;
+  const composited = passthrough || depended || puppetComposite || fogged;
   let snapped = false;
   const snapshot = () => {
     if (snapped) return;
@@ -905,7 +907,7 @@ export function planLayer(
   // 组（P5b 步骤 4）：带子层的组合层。没有 effect、colorBlendMode ∈ {0, 31} 时也要画：基础 pass → 子树 → `groupUpload` 上屏
   const group = layer.passthroughModel && layer.subtree.length > 0;
   // 被依赖的图层一律走合成路径（P8 步骤 4）：没有启用的 effect 也是，组合层这时同样要画（`p8-dep` 的 7、`p8-misc` 的 A13）
-  if (!needsComposite(layer, enabled) && !group && !depended && !puppetComposite) {
+  if (!needsComposite(layer, enabled) && !group && !depended && !puppetComposite && !fogged) {
     // 组合层（P5b 步骤 2，p5-REPORT `p5b-cl` 的 CL3、CL5）：没有启用的 effect、colorBlendMode ∈ {0, 31}、没有子层时整层不画。
     // WPE 在图层开始时照拷一次快照，没人读，不拷。带子层的是组，走下面的合成路径（步骤 4）。
     // fullscreenlayer 也是组合层，同样不画（P5b 步骤 3，`p5b-fsnofx` 没有 draw）

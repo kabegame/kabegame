@@ -157,6 +157,8 @@ export class ShaderCompiler {
      * 不进缓存键：同一着色器、同一范围、同样 COMBO 与纹理，缺省纹理就是同一张。没给时缺格式的翻译原样失败（`phase: "texture"`）。
      */
     private textureFormat?: (name: string, scope: ResourceScope | null) => Promise<number | null>,
+    /** 只在最终 `FOG` 非 0 时生效的宏（P13f，`fog.ts` 的 `fogDefines`）。整场一份、加载时定，不进缓存键。 */
+    private fogDefines: Record<string, string> = {},
   ) {}
 
   /**
@@ -219,6 +221,8 @@ export class ShaderCompiler {
         textures,
         defines: { ...this.defines, ...defines },
         litDefines: this.litDefines,
+        // 不开雾时不写这个键：请求与录下的夹具逐字节同以前
+        ...(Object.keys(this.fogDefines).length ? { fogDefines: this.fogDefines } : {}),
       },
       (name) => this.fs.text(`shaders/${name}`),
       undefined,

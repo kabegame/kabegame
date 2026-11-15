@@ -31,6 +31,7 @@
  * `setText` 换上新排版。
  */
 import { ALIGNMENTS } from "../compile/alignment";
+import { isFogUniformField } from "../compile/fog";
 import {
   bindingValue,
   cameraValue,
@@ -124,7 +125,7 @@ export interface DirtyState {
   bloom: boolean;
   /** effect 开关变了的图层（`objects` 下标）：渲染图可能要重排（3c）。 */
   structures: Set<number>;
-  /** `ambientcolor` / `skylightcolor` 写过：刷进声明了这两个 uniform 的 draw（L5）。 */
+  /** `ambientcolor` / `skylightcolor`（L5）与雾的数值字段（P13f）写过：刷进声明了对应 uniform 的 draw。 */
   lights: boolean;
   /** `instanceoverride` 改过的粒子层（`objects` 下标）：交给模拟器从基值重新乘（P4a 步骤 5）。 */
   particles: Set<number>;
@@ -809,7 +810,9 @@ export class SceneState {
       const value = generalValue(target.key, conditioned(binding, raw));
       if (value === undefined) return "applied";
       this.general = { ...this.general, [target.key]: value };
-      if (target.key === "ambientcolor" || target.key === "skylightcolor") this.lightsDirty = true;
+      // 环境光与雾（P13f）的字段进 uniform：刷进声明了它们的 draw
+      if (target.key === "ambientcolor" || target.key === "skylightcolor" || isFogUniformField(target.key))
+        this.lightsDirty = true;
       return "applied";
     }
     if (target.kind === "particle-instance") {

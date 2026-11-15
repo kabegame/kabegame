@@ -274,6 +274,7 @@ import { SHADOW_ATLAS_FORMAT, ShadowAtlas, type ShadowCasterDraw } from "./shado
 import { VolumetricsRenderer } from "./volumetrics";
 import type { ShadowView } from "./shadowMath";
 import { LIGHT_FRAME_UNIFORMS, lightFrame, lightFrameUniforms, type LightFrame } from "../compile/lights";
+import { FOG_UNIFORMS, fogUniforms } from "../compile/fog";
 import { SHADOW_CASTER_UNIFORM } from "../compile/features";
 import { mirroredView, type SceneView } from "./views";
 import { SPRITE_COUNT_TARGET_FORMAT, SpriteCounter, spriteOverrides, spriteViewProjection } from "./sprite";
@@ -3548,6 +3549,8 @@ export class GpuScene {
       // 读状态，不读编译结果：单图层重建新建的 draw 要拿到当前值
       ambient: state.general.ambientcolor,
       skylight: state.general.skylightcolor,
+      // 雾（P13f）：同环境光，读状态现算
+      fog: fogUniforms(state.general),
     };
     // 组里的图层（P5b 步骤 4，p5-REPORT `p5b-grp-*`、`p5b-grpptc`）：视图投影换成组的局部正交 `ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，
     // 不经 `viewProjectionOf`（组里没有视差、抖动、缩放、透视，它们只作用在组本身，`p5b-grp-par`）。嵌套组自己的 compose 基础 pass
@@ -4546,13 +4549,19 @@ export class GpuScene {
     draw.dirty = true;
   }
 
-  /** 环境光变化：只写块里有、材质没覆盖的名字；都没有时不标脏，脚本逐帧写时不重传无关的缓冲。 */
+  /** 环境光与雾（P13f）变化：只写块里有、材质没覆盖的名字；都没有时不标脏，脚本逐帧写时不重传无关的缓冲。 */
   private refreshLights(draw: Draw, state: SceneState): void {
     const { block, step } = draw;
     if (!block) return;
     for (const [name, key] of Object.entries(LIGHT_UNIFORMS)) {
       if (!block.has(name) || name in step.pass.uniforms) continue;
       block.set(name, state.general[key]);
+      draw.dirty = true;
+    }
+    if (!FOG_UNIFORMS.some((name) => block.has(name))) return;
+    for (const [name, value] of Object.entries(fogUniforms(state.general))) {
+      if (!block.has(name) || name in step.pass.uniforms) continue;
+      block.set(name, value);
       draw.dirty = true;
     }
   }

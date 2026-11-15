@@ -28,6 +28,8 @@ import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
 import { drawUniformValues, frameBuiltins, LAYER_UNIFORMS, staticBuiltins } from "../render/uniforms";
 import { identity } from "../render/math";
 import type { DrawRole } from "../render/graph";
+import { fogUniforms } from "./fog";
+import { generalDefaults } from "./bindings";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -270,8 +272,10 @@ describe("能力表裁决", () => {
         { name: "g_Time", type: "f32", offset: 0, size: 4 },
         { name: "g_Texture3Resolution", type: "vec4<f32>", offset: 16, size: 16 },
         { name: "g_Brightness", type: "f32", offset: 32, size: 4, meta: { material: "brightness" } },
-        // 雾的参数（P13f 才写）：没实现的引擎 uniform 照报
-        { name: "g_FogDistanceParams", type: "vec4<f32>", offset: 48, size: 16 },
+        // 内置表里没有的引擎 uniform 照报
+        { name: "g_EngineUnknown", type: "vec4<f32>", offset: 48, size: 16 },
+        // 雾（P13f）进了内置表
+        { name: "g_FogDistanceParams", type: "vec4<f32>", offset: 64, size: 16 },
       ],
       combos: [
         { name: "HUEMODE", value: 1, source: "request" },
@@ -283,7 +287,7 @@ describe("能力表裁决", () => {
       ],
     } as TranslateResult;
     checkProgramFeatures(result, keys);
-    expect([...keys].sort()).toEqual(["combo:SPRITESHEET", "uniform:g_FogDistanceParams"]);
+    expect([...keys].sort()).toEqual(["combo:SPRITESHEET", "uniform:g_EngineUnknown"]);
   });
   it("音频频谱 uniform（P11a）：六个都是引擎 uniform、不报；readsAudioUniforms 只认被读、不是材质常量的", () => {
     const names = ["16", "32", "64"].flatMap((n) => [`g_AudioSpectrum${n}Left`, `g_AudioSpectrum${n}Right`]);
@@ -341,6 +345,7 @@ describe("能力表裁决", () => {
           eye: [],
           ambient: [0, 0, 0],
           skylight: [0, 0, 0],
+          fog: fogUniforms(generalDefaults()),
         }),
       ),
       ...Object.keys(

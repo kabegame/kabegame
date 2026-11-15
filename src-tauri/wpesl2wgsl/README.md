@@ -52,6 +52,7 @@ interface TranslateRequest {
   defaultFormats?: Record<number, number | null>;  // 没绑定、按注解缺省纹理定格式的槽位：slot → 缺省纹理的格式（读不到为 null），见「缺纹理格式」
   defines?: Record<string, string>;                // 额外的宏，最后应用（可覆盖平台宏与 COMBO）
   litDefines?: Record<string, string>;             // 只在最终 LIGHTING 非 0 时生效的宏（LIGHTS_* 等，见下）
+  fogDefines?: Record<string, string>;             // 只在最终组合表里 FOG 非 0 时生效的宏（FOG_DIST / FOG_HEIGHT，见下）
   debug?: boolean;                                 // 成功时也带上生成的 GLSL 450
 }
 ```
@@ -59,6 +60,7 @@ interface TranslateRequest {
 - **头文件按需提供**：结果为 `phase: "include"` 时，读出 `missing` 里的文件、放进 `includes` 后再调一次。只有处于有效分支的 `#include` 才要求提供。
   头文件的查找顺序（项目 `shaders/` → WPE `assets/shaders/`，effect 自己的 `shaders/` 优先）由调用方决定。
 - **`litDefines`**：WPE 只在最终 `LIGHTING` 非 0 时写 `LIGHTS_*`，而 COMBO 的最终值（可能来自着色器注解的默认值）要到这里才算得出，所以由翻译器裁决。
+- **`fogDefines`**（P13f）：WPE 在材质加载时，general 的雾开关为真且组合表（并进着色器注解的缺省值之后）里有 `FOG`、值不为 0 时才定义 `FOG_DIST` / `FOG_HEIGHT`；调用方按开关给出这两个宏，`FOG` 的最终值由翻译器裁决。着色器不声明、材质也没写 `FOG` 时不生效。
 - **`textures` 有两个作用**：一是采样器注释里写了 `"combo": "NORMALMAP"` 的槽位绑定了纹理时，该 COMBO 置 1；二是给声明了 `formatcombo` 的槽位定义 `TEX<slot>FORMAT = format`，和 WPE 一样；没声明的不定义，在 `#if` 里按 0。
   格式枚举与 WPE 一致：0 RGBA8888、1 RGB888、2 RGB565、4 DXT5、6 DXT3、7 DXT1、8 RG88、9 R8、10 RG1616F、11 R16F、12 BC7。
   采样器注释还可以带 `components`（如 `generic4` 的 PBR 遮罩 `{"combo":"PBRMASKS","components":[{"combo":"METALLIC_MAP"},…,{"combo":"EMISSIVE_MAP"}]}`）：槽位绑定了纹理、且 `flags`（`.tex` 头的标志，WPE 纹理对象 `+0x1c`）带 `0x100000 << i` 时，第 i 个**对象**条目的 `combo` 置 1，非对象条目不计序号，`flags` 缺省按 0（`FUN_14016c800`；编辑器画的遮罩用这几位记用了哪些通道）。请求里的同名 COMBO 照样最后覆盖。

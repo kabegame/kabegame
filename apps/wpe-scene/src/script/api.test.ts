@@ -1091,6 +1091,19 @@ describe("SceneScript API（FakeRealm）", () => {
       cameraparallaxdelay: 0.2,
       cameraparallaxmouseinfluence: 0.6,
       zoom: 1.5,
+      // 雾（P13f）：开关只改字段，数值进 g_Fog*
+      fogdistance: true,
+      fogheight: true,
+      fogdistancecolor: new Vec3(0.9, 0.2, 0.1),
+      fogheightcolor: new Vec3(0.1, 0.3, 0.9),
+      fogdistancestart: 4,
+      fogdistanceend: 18,
+      fogdistancestartdensity: 0.25,
+      fogdistanceenddensity: 0.75,
+      fogheightstart: 2.5,
+      fogheightend: -0.5,
+      fogheightstartdensity: 0.125,
+      fogheightenddensity: 0.5,
     };
     expect(Object.keys(written).sort()).toEqual(Object.keys(GENERAL_FIELDS).sort());
     for (const [key, value] of Object.entries(written)) {

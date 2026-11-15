@@ -148,6 +148,7 @@ import {
   type ScenePostprocessState,
 } from "./postprocess";
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
+import { fogDefines } from "./fog";
 import { collectScripts, type SceneScripts } from "./scripts";
 import { checkCameraObjectPath, compileCamera, type SceneCameraJson } from "./camera";
 import { compileSound, type SceneSound } from "./sounds";
@@ -645,6 +646,13 @@ export interface SceneLayer {
    */
   dependedOn?: boolean;
   /**
+   * 开雾强制的 passthrough（P13f，WPE 渲染标志 `0x1800000` = `fogdistance` | `fogheight`，p2-REPORT「渲染标志」与 passthrough 标志的条件，
+   * p13-REPORT「P13f」F7）：场景加载时任一雾开关为真，普通图像层与文本层都置 passthrough 标志，同 colorBlendMode 混合走「基础 pass → 合成 RT →
+   * `passthrough` 上屏」，没有 effect 的也走；雾在上屏 pass 里算（`FOG_COMPUTED` 取基础材质最终的 `FOG`）。编译期定下、运行中改开关不变。
+   * 可选同 `alignment`：不动各处手写的测试图层。
+   */
+  fogPassthrough?: true;
+  /**
    * puppet（P12a 步骤 3，rea-p12-mdl 第 9 节）：图像层的模型 JSON 带 `puppet`（字符串、不是 fullscreen、不是组合层）且 mdl 有网格时有；
    * 网格 0 代替上屏的四边形。`layer.passes` 保持不带 puppet 组合键（合成路径的基础 pass 画四边形进合成 RT，要用它）。读不到 mdl 或网格
    * 为空时为 null（WPE 销毁 P、照常画四边形，不报）。可选同 `alignment`：不动各处手写的测试图层。
@@ -939,9 +947,19 @@ export function passthroughMaterial(sceneVersion: unknown): string {
   const version = sceneVersionOf(sceneVersion);
   return version > 2 ? "materials/util/effectpassthrough_4.json" : "materials/util/effectpassthrough.json";
 }
-/** passthrough 的 COMBO（B8）：`BLENDMODE = colorBlendMode`、`FOG_COMPUTED = 1`。组的上屏（P5b 步骤 4）用 `BLENDMODE` 0。 */
-export function passthroughCombos(colorBlendMode: number): Record<string, number> {
-  return { BLENDMODE: colorBlendMode, FOG_COMPUTED: 1 };
+/**
+ * passthrough 的 COMBO（B8）：`BLENDMODE = colorBlendMode`、`FOG_COMPUTED`。组的上屏（P5b 步骤 4）用 `BLENDMODE` 0。
+ * 开雾时图像层的 `FOG_COMPUTED` 取基础材质最终的 `FOG`（P13f，`p13f-fog-img`：基础材质 `FOG: 0`、不声明 `FOG` 的着色器，上屏都不上雾），文本层是 1；只在开雾时有区别
+ * （不开雾时 `FOG_DIST` / `FOG_HEIGHT` 不定义，这个键不起作用），不开雾的调用方照旧传 1，请求与以前逐字节相同。
+ */
+export function passthroughCombos(colorBlendMode: number, fogComputed = 1): Record<string, number> {
+  return { BLENDMODE: colorBlendMode, FOG_COMPUTED: fogComputed };
+}
+
+/** 程序最终的 `FOG`（含着色器注解缺省值，翻译结果的 `combos`）；没有这个组合键为 0。 */
+export function programFog(result: Pick<TranslateResult, "combos"> | undefined): number {
+  const value = result?.combos?.find((combo) => combo.name.toUpperCase() === "FOG")?.value;
+  return typeof value === "number" ? value : value === true ? 1 : 0;
 }
 
 /**
@@ -1359,6 +1377,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ? (general.orthogonalprojection as { width?: number; height?: number })
       : {};
   const fields = generalFields(general, properties, bindings);
+  /** 加载时任一雾开关为真（P13f，WPE 渲染标志 `0x1800000`）：定 `FOG_DIST` / `FOG_HEIGHT`，并强制图像层走 passthrough（`SceneLayer.fogPassthrough`）。 */
+  const fogForced = fields.fogdistance || fields.fogheight;
   /** 声音表（P6a 步骤 1）：对象循环里按 `objects` 顺序填。 */
   const sounds: SceneSound[] = [];
   /** 投影类型只在这里判一次（P5d 步骤 2）：能力表、`SCENE_ORTHO`、粒子缺省值、渲染器都读 `general.perspective`。 */
@@ -1420,6 +1440,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     engineDefines(postprocess.hdr, orthographic),
     // 注解缺省纹理的格式（P13d）：同绑定缺省纹理时的解析（之后照样按注解绑它，那时才上报缺失），这里不上报
     async (name, scope) => (await getTexture(name, scope, new Set()))?.format ?? null,
+    // 雾的宏（P13f）：按加载时的开关定，运行中改开关不重编（p13-REPORT F3）
+    fogDefines(fields),
   );
   /** 场景有阴影（P13d）：档位 ≠ 0 且有点光 / 平行光阴影计数；为真时模型网格编投射变体、渲染器建阴影图集。 */
   const castsShadows = shadowQuality !== 0 && counts.pointShadow + counts.directionalShadow > 0;
@@ -2840,13 +2862,30 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     const blended = cbm !== 0 && cbm !== 31;
     // 被依赖（P8 步骤 4）：WPE 的 `0x10` 同 colorBlendMode 混合，全部 effect 留在合成链、passthrough 上屏
     const depended = !!layer.dependedOn;
+    // 开雾（P13f，WPE 渲染标志 `0x1800000`）：图像层与文本层都置 passthrough 标志（`SceneLayer.fogPassthrough`）。实测：`p13f-fog-img` 的 FR / CLK、
+    // `FOG: 0`、`genericimage2`、文本、带 effect、colorBlendMode 31 / 1 的，`p13f-fog-fs` 的组合层与全屏层（不带 effect 的全屏层也画：拷屏 → 上屏），
+    // 全都画进合成 RT 再上屏。带子层的组、形状层、puppet 开雾时怎么画没测过（语料 0），照报
+    // TODO:[WPE_SCENE] 开雾时的组 / 形状层 / puppet 没实测，照报 `fog:<种类>`
+    const fogLayer = fogForced && (objectKind(object) === "image" || textObject);
+    const fogKind = !fogLayer
+      ? null
+      : hasChildren
+        ? "group"
+        : isShapeObject(object)
+          ? "shape"
+          : layer.puppet
+            ? "puppet"
+            : null;
+    if (fogKind) unsupported.add(`fog:${fogKind}`);
+    if (fogLayer && !fogKind) layer.fogPassthrough = true;
+    const fogged = !!layer.fogPassthrough;
     // 带 effect 或走 passthrough 时，WPE 把光照挪到基础 pass（PRELIGHTING=1，世界坐标改用 g_Alt*），上屏 pass 关光照（FUN_140209540）；
     // 被依赖的图层同样是 `0x10`（P8 步骤 4，rea-p8-render 第 1 节）
     const lit = layer.passes.some((pass) => pass.program !== null && usesLighting(bundle.programs[pass.program]));
     // TODO:[WPE_SCENE] PRELIGHTING 没实现，照报：要给基础 pass 加 `PRELIGHTING=1` 并写 `g_AltModelMatrix` / `g_AltNormalModelMatrix` /
     // `g_AltViewProjectionMatrix`（现在在 `features.ts` 的 `UNREAD_UNIFORMS` 里放行、渲染器不写），上屏 pass 关光照。语料 0 张，P13 总计划定为
     // 按需实现（phase13/phase-13-3d-lighting.md「决定」4）
-    if (lit && (layer.effects.length > 0 || blended || depended)) unsupported.add("lighting:prelighting");
+    if (lit && (layer.effects.length > 0 || blended || depended || fogged)) unsupported.add("lighting:prelighting");
     // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
     if (depended && hasChildren) unsupported.add("dependency:group");
     // puppet 的上屏路径与材质变体（步骤 3 点 1）：composite 时 passthrough 上屏由 puppet 自己的 `upload` 承担，不再编 `layer.passthrough`
@@ -2868,22 +2907,6 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         layer.effects.length > 0 || blended || depended || !!layer.puppet.textureChannels,
         blended ? cbm : 0,
       );
-    if ((blended || depended) && !layer.puppet) {
-      const path = passthroughMaterial(scene.version);
-      const text = await fs.text(path);
-      const pass = text ? parseMaterial(text).passes[0] : undefined;
-      if (!pass) unsupported.add(`material:missing:${path}`);
-      else {
-        // `BLENDMODE` = colorBlendMode ∉ {0, 31} ? colorBlendMode : 0（rea-p8-render 第 1 节 `FUN_1401ebbc0`：被依赖、cbm 0 / 31 时编法同
-        // 组的上屏 `groupUpload`）
-        layer.passthrough = await compilePass(
-          { ...pass, combos: { ...pass.combos, ...passthroughCombos(blended ? cbm : 0) } },
-          { key: `objects/${index}/passthrough`, planned: [{ slot: 0 }] },
-        );
-        // passthrough 上屏颜色置 (1, 1, 1, 1)（B8 / B10）
-        layer.passthrough.uniforms.g_Color4 = [1, 1, 1, 1];
-      }
-    }
     if (hasChildren) {
       // 组的上屏（P5b 步骤 4，p5-REPORT `p5b-grp-nofx` / `nofx0`）：无 effect、colorBlendMode ∈ {0, 31} 时用。effect 运行时可能全关，
       // 所以有子层就编。同 colorBlendMode 混合的 passthrough 材质，`BLENDMODE` 0（不读快照），槽 0 是合成 RT
@@ -2908,10 +2931,33 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         hdr: postprocess.hdr,
         visibleEffects: layer.effects.filter((effect) => effect.enabled).length,
         colorBlendMode: cbm,
-        mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31),
+        mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31) || fogged,
         hostPass: compileHostPass,
         unsupported,
       });
+    // passthrough 上屏（B8）：在文本之后编（文本层编完才有 `layer.text`，开雾时它的上屏另按规则定 `FOG_COMPUTED`）
+    if ((blended || depended || fogged) && !layer.puppet && !settled()) {
+      const path = passthroughMaterial(scene.version);
+      const text = await fs.text(path);
+      const pass = text ? parseMaterial(text).passes[0] : undefined;
+      if (!pass) unsupported.add(`material:missing:${path}`);
+      else {
+        // 开雾时图像层上屏的 `FOG_COMPUTED` = 基础材质最终的 `FOG`（P13f，图像层路径 `FUN_140206b3a` 写的，rea-p13-lights 2.4；`p13f-fog-img`：
+        // `FOG: 0`、不声明 `FOG` 的 `genericimage2` 与自定着色器都不上雾）。文本层不经这条路径，按 passthrough JSON 原样的 1（`font` 不声明
+        // `FOG`，实测照样上雾）。不开雾时照旧 1
+        const baseProgram = layer.passes[0]?.program ?? null;
+        const fogComputed =
+          fogForced && !layer.text ? programFog(baseProgram === null ? undefined : bundle.programs[baseProgram]) : 1;
+        // `BLENDMODE` = colorBlendMode ∉ {0, 31} ? colorBlendMode : 0（rea-p8-render 第 1 节 `FUN_1401ebbc0`：被依赖、cbm 0 / 31 时编法同
+        // 组的上屏 `groupUpload`）
+        layer.passthrough = await compilePass(
+          { ...pass, combos: { ...pass.combos, ...passthroughCombos(blended ? cbm : 0, fogComputed) } },
+          { key: `objects/${index}/passthrough`, planned: [{ slot: 0 }] },
+        );
+        // passthrough 上屏颜色置 (1, 1, 1, 1)（B8 / B10）
+        layer.passthrough.uniforms.g_Color4 = [1, 1, 1, 1];
+      }
+    }
   }
   input.onProgress?.(progressTotal, progressTotal);
   // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
@@ -3027,6 +3073,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
         bundle.volumetrics = volumetrics;
         // 透视场景的透明排序（P5d 步骤 4）把顶层重排成两轮，灯在两轮里落在哪、合成时机怎么变没测过（语料两张都是正交），照报
         if (!orthographic && bundle.general.transparentSorting) unsupported.add("volumetrics:transparentsorting");
+        // 雾（P13f）：`volumetricsfront` 声明 `FOG`（缺省 1），开雾时它读四个雾 uniform，体积光的 uniform 是 `render/volumetrics.ts` 自己写的、
+        // 没有接雾，也没和 WPE 比过（语料 0 张），照报
+        if (fogForced) unsupported.add("volumetrics:fog");
         if (volumetrics.lights.some((light) => light.shadow)) sceneLights();
       }
     }

@@ -40,6 +40,8 @@ export interface TranslateRequest {
   defines?: Record<string, string>;
   /** 只在最终 `LIGHTING` 非 0 时生效的宏：`LIGHTS_*` 与光照路径的 `HDR` / `SCENE_ORTHO`。 */
   litDefines?: Record<string, string>;
+  /** 只在最终组合表里 `FOG` 非 0 时生效的宏：`FOG_DIST` / `FOG_HEIGHT`（P13f，`compile/fog.ts` 的 `fogDefines`）。 */
+  fogDefines?: Record<string, string>;
   /** 成功时也带上生成的 GLSL 450。 */
   debug?: boolean;
 }

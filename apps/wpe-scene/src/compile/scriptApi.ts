@@ -72,21 +72,9 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
   thisScene: [
     // 模型数据 → P6；相机变换本机语料 0 处（L15）。`createLayer` 在 P6d3b 实现
     ...methods("root", ["getCameraTransforms", "setCameraTransforms", "createModelData", "destroyModelData"]),
-    // L1 的 47 个字段里 `general` 还没接的 20 个（已接的见 `GENERAL_FIELDS`、`BLOOM_FIELDS` 与 `bloom` / `hdr`；`zoom` 在 P5a 步骤 4 接上）。
-    // 重力与风渲染器不读（能力表把它们当中性），但脚本读到 undefined 会算出 NaN，照收
+    // L1 的 47 个字段里 `general` 还没接的 8 个（已接的见 `GENERAL_FIELDS`、`BLOOM_FIELDS` 与 `bloom` / `hdr`；`zoom` 在 P5a 步骤 4 接上，雾的
+    // 12 个在 P13f 接上）。重力与风渲染器不读（能力表把它们当中性），但脚本读到 undefined 会算出 NaN，照收
     ...fields([
-      "fogdistance",
-      "fogheight",
-      "fogdistancecolor",
-      "fogheightcolor",
-      "fogdistancestart",
-      "fogdistanceend",
-      "fogdistancestartdensity",
-      "fogdistanceenddensity",
-      "fogheightstart",
-      "fogheightend",
-      "fogheightstartdensity",
-      "fogheightenddensity",
       "perspectiveoverridefov",
       "transparentsorting",
       "customsortorder",

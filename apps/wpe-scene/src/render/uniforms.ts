@@ -183,6 +183,8 @@ export interface StaticBuiltinInput {
   view?: ViewVectors;
   ambient?: readonly number[];
   skylight?: readonly number[];
+  /** 四个雾 uniform（P13f，`compile/fog.ts` 的 `fogUniforms`，由 `SceneState.general` 现算）：声明了才写，场景没开雾时着色器不声明。 */
+  fog?: Readonly<Record<string, readonly number[]>>;
 }
 
 type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight"> & {
@@ -267,6 +269,7 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
   if (input.layerModel) values.g_LayerModelMatrix = Array.from(input.layerModel);
   if (input.ambient) values.g_LightAmbientColor = [...input.ambient];
   if (input.skylight) values.g_LightSkylightColor = [...input.skylight];
+  if (input.fog) for (const [name, value] of Object.entries(input.fog)) values[name] = [...value];
   Object.assign(values, textureBuiltins(input.textures));
   return values;
 }
@@ -432,6 +435,8 @@ export interface DrawUniformInput {
   view?: ViewVectors;
   ambient?: readonly number[];
   skylight?: readonly number[];
+  /** 四个雾 uniform（P13f，`compile/fog.ts` 的 `fogUniforms`）。 */
+  fog?: Readonly<Record<string, readonly number[]>>;
 }
 
 /**
@@ -459,6 +464,7 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
     view: input.view,
     ambient: input.ambient,
     skylight: input.skylight,
+    fog: input.fog,
   });
   for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
   return values;
@@ -525,6 +531,8 @@ export interface TextUniformInput {
   view?: ViewVectors;
   ambient?: readonly number[];
   skylight?: readonly number[];
+  /** 四个雾 uniform（P13f，`compile/fog.ts` 的 `fogUniforms`）。 */
+  fog?: Readonly<Record<string, readonly number[]>>;
 }
 
 /** 文本绘制的全部静态 uniform：变换见 `textMatrices`，颜色与其余内置值同图层（`staticBuiltins`），材质常量覆盖。 */
@@ -541,6 +549,7 @@ export function textUniformValues(input: TextUniformInput): Record<string, numbe
     view: input.view,
     ambient: input.ambient,
     skylight: input.skylight,
+    fog: input.fog,
   });
   for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
   return values;
@@ -624,6 +633,8 @@ export interface ParticleUniformInput {
   view?: ViewVectors;
   ambient?: readonly number[];
   skylight?: readonly number[];
+  /** 四个雾 uniform（P13f，`compile/fog.ts` 的 `fogUniforms`）。 */
+  fog?: Readonly<Record<string, readonly number[]>>;
   /** 粒子 pass 槽 0 纹理的帧表（`SceneTexture.sheet`）；没有时 `g_RenderVar1` 为 0。 */
   sheet?: SceneSpriteSheet | null;
   /** 系统的 renderer（`SceneParticle.renderer`，P4c 步骤 5）：朝向与拖尾的 `g_RenderVar0`。缺省是 screen 朝向的 sprite。 */
@@ -654,6 +665,7 @@ export function particleUniformValues(input: ParticleUniformInput): Record<strin
     view: input.view,
     ambient: input.ambient,
     skylight: input.skylight,
+    fog: input.fog,
   });
   // 朝向用这次绘制的模型矩阵（同 `g_ModelMatrix`，rea-p4c-render.md 7.2：两者都取 `*(ctx+0x30)`）
   Object.assign(values, particleBuiltins(input.sheet, input.renderer, input.world, input.trailTimer, input.view));

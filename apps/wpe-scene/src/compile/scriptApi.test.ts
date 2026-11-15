@@ -43,7 +43,9 @@ describe("未实现脚本 API 的扫描", () => {
       [],
     );
     // 场景字段（L1）只认 thisScene
-    expect(scan("export function update() { thisScene.fogdistance = 2; }")).toEqual(["thisScene.fogdistance"]);
+    expect(scan("export function update() { thisScene.windstrength = 2; }")).toEqual(["thisScene.windstrength"]);
+    // 雾的 14 个字段 P13f 起在 `GENERAL_FIELDS` 里
+    expect(scan("export function update() { thisScene.fogdistance = false; }")).toEqual([]);
   });
 
   it("根对象的成员只认裸全局名：属性链上的同名对象不算", () => {
@@ -171,11 +173,11 @@ describe("未实现脚本 API 的扫描", () => {
     // general：thisObject / thisLayer 都是场景字段对象，只有字段没有方法（L14）
     expect(
       scan(
-        "thisObject.fogheight = 1; thisLayer.windstrength; thisObject.createModelData('a');",
+        "thisObject.gravitystrength = 1; thisLayer.windstrength; thisObject.createModelData('a');",
         { kind: "general" },
         null,
       ),
-    ).toEqual(["thisScene.fogheight", "thisScene.windstrength"]);
+    ).toEqual(["thisScene.gravitystrength", "thisScene.windstrength"]);
     // 材质 / effect 上的脚本，thisLayer 是所在图层
     expect(scan("thisLayer.perspective = 1;", { kind: "material" }, 2)).toEqual(["layer.perspective"]);
   });

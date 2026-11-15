@@ -105,6 +105,18 @@
   - `3287715210`（HDR）重新复制成只留渐变背景与灯（`ignore/p13/e/real/3287715210-iso2`：人物层的 `iris_follow_cursor` 跟光标、抓帧时光标没录，且图像层不影响体积光，按原则第 5 条去掉）：LightBuffer（`rgba16float`）正面只有 1 个纹素差 1 个半精度 ulp（SHADOW 变体，没逐值复算），合成加上的量其余像素逐位相同；合成之前的差异来自背景的渐进式 JPEG（4:2:0），是已登记的「JPEG 色度上采样」；最终 8 位帧最大差 3（背景差异经泛光摊开）。
   - `blur_h` 的输出 alpha 两边不同（WPE 是 0、我们是 1）；`blur_v` 的输出 alpha 两边都是 1，合成按它做 SrcAlpha，所以不影响画面。
 
+## 雾（P13f1）
+
+读码见 [rea-p13-lights](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-lights.md) 第 2 节，计划与实施记录见 [phase-13f-fog-lights](../../.claude/plans/wpe-import/3-scene/phase13/phase-13f-fog-lights.md)，实测见 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13f 的实测」F1–F7。
+
+- **字段**：`general.fog*` 的 14 个字段在 `GENERAL_FIELDS` 里（缺省照 WPE：距离 1 → 5、高度 1 → −3、起止密度 0 → 1、颜色黑），属性、关键帧、字段脚本、`thisScene.fog*` 都走 general 目标、就地生效。
+- **宏**（`compile/fog.ts` 的 `fogDefines`）：加载时开关为真才给翻译请求 `fogDefines`（`FOG_DIST` / `FOG_HEIGHT`），翻译器只在最终组合表里 `FOG` 非 0 时并进（着色器注解缺省值算；`FOG: 0`、不声明 `FOG` 的不上雾）。运行中改开关只改字段、不重编，WPE 画面也逐像素不变（F3）。
+- **uniform**（`fogUniforms`）：`g_FogDistanceColor` / `g_FogHeightColor` 原值，`g_FogDistanceParams` / `g_FogHeightParams` = `(start, end − start, startdensity, enddensity − startdensity)`，差值按 float32 减法；每次按 `SceneState.general` 现算，进 `staticBuiltins`（图层、文本、粒子、网格共用），数值字段写入置灯光脏位、`refreshLights` 刷新。
+- **图像层也上雾**（F7）：任一开关为真时 WPE 的渲染标志 `0x1800000` 给每个图像层与文本层置 passthrough 标志，没有 effect 的也走「基础 pass → 合成 RT → passthrough 上屏」，雾在上屏 pass 里算（`SceneLayer.fogPassthrough`，`render/graph.ts` 并进合成路径）。上屏的 `FOG_COMPUTED`：图像层取基础材质最终的 `FOG`，文本层是 1。组合层、全屏层实测过；带子层的组、形状层、puppet 照报 `fog:<种类>`，开雾的图层带光照照报 `lighting:prelighting`。
+- **`ADDITIVE`**：材质混合是 `additive` 时编译期加 `ADDITIVE = 1`（WPE 加载时加，运行中改混合不加），只有 `generic4` / `chroma4` / `foliage4` / `fur4` 的雾分支读它（雾因子乘进 alpha）。粒子组合键白名单放行它。
+- **照报**：开雾又有体积光报 `volumetrics:fog`（`volumetricsfront` 声明 `FOG`，体积光的 uniform 没接雾，语料 0）。
+- **实测**（2026-11-15，`ignore/p13/f/gen_f0.py`）：透视 / 正交 / 粒子 / 各种图像层与文本 / 组合层与全屏层 7 个工程和 WPE 整帧比，最多 12 个像素、都只差 1 级，两个关雾的工程 0 差异。
+
 ## 着色器翻译器 `wpesl2wgsl`
 
 完整契约（请求 / 结果、绑定布局、uniform 打包、内部流程、已知不支持、测试）见
