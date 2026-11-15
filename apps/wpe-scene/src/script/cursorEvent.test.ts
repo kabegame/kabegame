@@ -1,6 +1,8 @@
 /**
  * P6c 步骤 1：`ScriptRuntime.cursorEvent`（光标回调派发给脚本）。假 realm，同 `animationEvent.test.ts` 的写法。
  */
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import type { SceneScript } from "../compile/scripts";
 import { RUNTIME_CALLBACKS, ScriptRuntime, type ScriptRealm, type ScriptTarget } from "./runtime";
@@ -18,10 +20,10 @@ class FakeRealm implements ScriptRealm {
   prototypes = { Vec2: Vec3.prototype, Vec3: Vec3.prototype, Vec4: Vec3.prototype, Mat3: {}, Mat4: {} };
   modules = new Map<string, Record<string, unknown> | Error>();
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
     const result = this.modules.get(label);
     if (result instanceof Error) throw result;
-    return result ?? {};
+    return fakeModule(result ?? {});
   }
   dispose() {}
 }

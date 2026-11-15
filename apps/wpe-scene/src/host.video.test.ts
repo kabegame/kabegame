@@ -3,6 +3,7 @@
  * 已按新 bundle 重建下标表）按旧 bundle 仍取到同一个播放器，换上新场景之后照样；登记过的结束回调跟着播放器、在登记它的脚本上下文里调。
  * `SceneVideos` 与播放器是真的：`<video>` 换成 `FakeVideo`，`fetch(file:)` 按 Range 回对应长度。
  */
+import { fakeModule } from "./script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "./compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "./compile/bundle";
@@ -50,12 +51,12 @@ vi.mock("./script/realm", () => ({
         updateScriptProperties() {},
         convertUserProperties: (json: string) => JSON.parse(json),
       },
-      async importModule() {
-        return {
+      async prepareModule() {
+        return fakeModule({
           init() {
             onInit?.();
           },
-        };
+        });
       },
       dispose() {},
     };

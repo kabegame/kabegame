@@ -535,7 +535,22 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 | `console` | 改写成只有 `log`（宿主 DevTools 控制台）和 `error`（应用日志 warn）；`console.warn()` 抛 `TypeError` |
 | `localStorage` | 改写成 WPE 的形状：`get` / `set` / `delete` / `clear` 加 `LOCATION_GLOBAL` / `LOCATION_SCREEN`，没有 `remove`，默认位置是屏幕 |
 
-模块按每个场景动态生成 import map：`compile/scripts.ts` 用 `es-module-lexer` 扫描脚本里的原样说明符；宿主按 `sceneAssets` 顺序查找 WPE 的 `scripts/jsmodules/<说明符小写>.js`，递归扫描模块自身的依赖，把**原样大小写的说明符**映射到相应 `file:` 地址。扫描结果连同缺失结果按 `sceneAssets` 缓存在宿主内存；同一个文件 URL 在 realm 里只求值一次。`scripts/jsclasses/baseclasses.js` 先由 `file:` 作为经典脚本加载，提供 `Vec2` / `Vec3` 等全局词法类、`shared`、`createScriptProperties` 和 `_Internal`；每段用户源码则各自以新的 blob URL 作 ES 模块求值，源码重复也各有模块状态。模块语法错误若 rejection 没有行列，再用 `<script type="module" src=blob:>` 的 `error` 事件补位置；仍取不到时仅记录错误文本。非裸说明符在收集期记为脚本错误，变量形式的动态 `import()` 无法预先扫描。
+模块按每个场景动态生成 import map：`compile/scripts.ts` 用 `es-module-lexer` 扫描脚本里的原样说明符；宿主按 `sceneAssets` 顺序查找 WPE 的 `scripts/jsmodules/<说明符小写>.js`，递归扫描模块自身的依赖，把**原样大小写的说明符**映射到相应 `file:` 地址。扫描结果连同缺失结果按 `sceneAssets` 缓存在宿主内存；同一个文件 URL 在 realm 里只求值一次。`scripts/jsclasses/baseclasses.js` 先由 `file:` 作为经典脚本加载，提供 `Vec2` / `Vec3` 等全局词法类、`shared`、`createScriptProperties` 和 `_Internal`；非裸说明符在收集期记为脚本错误（只看静态导入与再导出，P6d2 起动态 `import()` 与 `import.meta` 不扫）。
+
+**用户脚本的加载（P6d2，同步工厂）**：用户源码不再各自作 blob 模块求值，改成编一次、按需同步实例化（`script/moduleRewrite.ts`、`script/moduleFactory.ts`、`ScriptRealm.prepareModule`），给 P6d3 克隆带脚本的图层用：
+- **加载期**（每种源码一次，按源码文本缓存）：
+  - 先按真模块检查：源码前加一行导入「哨兵」blob 模块，哨兵求值时抛一个固定值，所以整张图链接完、用户代码一行不执行。reject 的不是哨兵值，就是以前会得到的错误：`SyntaxError` 没有行列时照旧用 `<script type="module" src=blob:>` 的 `error` 事件按原文补位置。合法与否由浏览器判，不由解析器判。
+  - 再用 acorn 把源码原地改写成工厂函数的函数体：`import` 语句、`export` 关键字、`export { … }` 换成等长空白，`import.meta`、`import(`、顶层 `this` 换成等长标识符，每个原有字符的行列不变；导入绑定写在前一行。在 realm 全局作用域以间接 `eval` 编成箭头函数，箭头函数没有自己的 `arguments`，顶层访问照样 `ReferenceError`。acorn 不认、或改写后编不过的，这段报「场景脚本改写失败」、不求值。
+  - 它导入的库在 realm 里原生 `import()`，按说明符缓存，所有脚本共用一份（同 WPE）。
+- **求值**：每段脚本调一次工厂，同步执行模块顶层，得到自己的一份模块状态；源码相同的两段各有一份。顶层有 `await` 的编成 async 工厂，加载期等它。
+- **命名空间**照 WPE 实测（`ignore/p6/d2/wpe-forms.log`）：
+  - realm 里的 `Proxy`：键按码元序、活绑定、原型为 null、不可扩展、`[object Module]`；
+  - 描述符是 `writable: true, configurable: false` 的数据属性，写入抛 `TypeError: Cannot assign to property '<键>' of [object Module]`；
+  - 回调的 `this` 是它；运行时取回调走取值函数，不经 `Proxy`。
+  - 具名导入取求值时的值，不是活绑定。WPE 三个库导出的 `let`（`deg2rad`、`rad2deg`）模块里不再赋值，结果相同。
+- **和以前不同、照 WPE 的两处**：动态 `import()` 一律返回 reject 的 Promise（`Error: Not supported`）；`import.meta` 是每个模块实例一个没有键、原型为 null 的对象。语料里两者都没有。
+- **报错位置**：工厂源码的 `sourceURL` 是 `kabegame-script:<序号>`，原文第 1 行在第 3 行，`messageOf` 减 2。`realmCheck` 带 14 段错误源码（语法、链接、缺库、顶层 `return`、HTML 注释、`await` 作变量名、求值期报错）前后对照，报错文字与行列逐字相同。
+- **用时**：每种源码检查、编译各一次，之后每段只调一次函数。能渲染的场景里脚本最多的是 `3660962877`（252 段、27 种源码），加载 176–189 ms；同一宿主里照旧方式逐段 `import(blob)` 约 1 s。
 
 脚本表只扫描 `scene.json`，用 JSON 坐标作稳定 id，收集 `general`、图层字段、effect 字段、pass 的 `constantshadervalues` 四种来源，并记 owner、图层、初值、值类型、`scriptproperties` 和导入。未启用的 effect 里的脚本也入表，材质 JSON 内的脚本目前不收集。`thisObject` 随 owner 分别是 general、图层、effect 或该 pass 的材质常量对象；general 脚本的 `thisLayer` 为 `null`。后者暴露该 pass 全部有 `meta.material` 的常量，没编译出的 pass 则无法写入。`thisLayer` 与 `thisScene.getLayer(数字)` 按 `scene.json` 的 `objects` 下标定位，图层 API 对象跨重编译保持身份；非图片对象当前也有通用图层项，尚无声音、文本等专用 API。
 
@@ -584,9 +599,9 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 
 宿主的「重新判定 / 重新加载 / 就地更新」是 `debug`，只进宿主自己的 DevTools 控制台，不进应用日志。窗口被完全遮挡时 Chromium 判页面为 hidden、不出帧，脚本随渲染一起停（WPE 按焦点、最大化等设置暂停，触发条件不同）。场景在建 GPU 场景时才失败而退回预览图时，脚本此前已经求值并跑过 `init`。
 
-development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（逐段状态、导出、禁用回调、错误与调用统计）、`host.read(path)`（读当前目标）、`host.realmCheck(extraSources?)`（另建 realm 检查导入、环境、错误位置与缓存），以及 `scriptCorpus(imageIds)`（逐张独立 realm、固定 dt 跑 120 帧，不建 GPU；生产构建无这些探针）。`scriptCorpus` 返回的 `remainingTestFrames` 是 `{ before, after }`，数的是 `iframe[data-kb-script-realm="1"]`，两者相等才说明没有残留子 frame。`missingApis` 是条目数组（类型、名字、场景数、段数、报错数），连带错误按属性名列出，没有归到根因。存储用临时前缀，跑完清掉，不碰真实场景存过的东西。探针也不统计重编译目标写入次数，使用作者默认属性且不派发 `cursor*` / `media*` 回调。
+development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（逐段状态、导出、禁用回调、错误与调用统计）、`host.read(path)`（读当前目标）、`host.realmCheck(extraSources?)`（另建 realm 检查导入、环境、错误位置与缓存），以及 `scriptCorpus(imageIds, { frames?, dt?, clock?, seed?, postprocess? })`（逐张独立 realm、不建 GPU；生产构建无这些探针）。P6d2 起脚本环境用 dev 探针的 `createProbeScripts`（固定时钟与 `Math.random` 种子、写回读取同宿主、`localStorage` 只在内存、用户属性含 WPE 内置项），缺省按 1/60 s 跑 120 帧；每张返回逐段诊断（去掉计时）、跑完之后的状态摘要 `stateDigest`（`SceneState` 里脚本写得到的各张表）与 console 行数和摘要。同样的请求两次结果逐张相同，P6d2 在改动前后各对库里全部场景跑一遍比对（驱动 `ignore/p6/d2/corpus_run.mjs`、比较 `corpus_diff.mjs`）。`remainingTestFrames` 是 `{ before, after }`，数的是 `iframe[data-kb-script-realm="1"]`，两者相等才说明没有残留子 frame。`missingApis` 是条目数组（类型、名字、场景数、段数、报错数），连带错误按属性名列出，没有归到根因。不派发 `cursor*` / `media*` 回调。
 
-**已知差异与后续**：realm 无 CSP，变量形式的动态 `import()` 仍可能加载远程模块；API 对象可加任意属性，写入未提供字段可能读回成功但画面无变化；回调里排的微任务（Promise）时机不同：WPE 推断在每个最外层回调返回后冲刷，我们要到本帧任务结束才跑（本机样本没用 Promise）；`thisObject.constructor.name` 我们是 `Object`，WPE 是空串，`String(thisObject)` 两边都是 `[object Object]`。不清屏的场景暂停时改属性，补画的那一帧会推进累加链（回归 D46，用户定为不动）。HDR 不清屏累加时，分界线上有约 1 像素宽的残余差异（回归 D37），推断是 FP16 舍入，没有抓帧证实。单层 mip 纹理的差异和非整数 `size` 的四边形（WPE 截断）没有处理，见 3c 计划「后续」。后续按渲染能力阶段补音频、层级、输入、纹理动画、声音和文本 API，并处理材质 JSON 脚本。当前有意不照搬 WPE 两个缺陷：属性增量不会从 `engine.userProperties` 的已有全集中丢键（WPE 注入的 14 个内置项首包补进全集后一直保留，见「属性与快速路径」的取值规则）；CLI 颜色改值也不降成字符串。
+**已知差异与后续**：realm 无 CSP，用户代码经 `eval` / `Function` 拼出来的 `import()` 不经改写，仍是原生的，可能加载远程模块（P6d2 起源码里直接写的 `import()` 一律 reject）；API 对象可加任意属性，写入未提供字段可能读回成功但画面无变化；回调里排的微任务（Promise）时机不同：WPE 推断在每个最外层回调返回后冲刷，我们要到本帧任务结束才跑（本机样本没用 Promise）；`thisObject.constructor.name` 我们是 `Object`，WPE 是空串，`String(thisObject)` 两边都是 `[object Object]`。不清屏的场景暂停时改属性，补画的那一帧会推进累加链（回归 D46，用户定为不动）。HDR 不清屏累加时，分界线上有约 1 像素宽的残余差异（回归 D37），推断是 FP16 舍入，没有抓帧证实。单层 mip 纹理的差异和非整数 `size` 的四边形（WPE 截断）没有处理，见 3c 计划「后续」。后续按渲染能力阶段补音频、层级、输入、纹理动画、声音和文本 API，并处理材质 JSON 脚本。当前有意不照搬 WPE 两个缺陷：属性增量不会从 `engine.userProperties` 的已有全集中丢键（WPE 注入的 14 个内置项首包补进全集后一直保留，见「属性与快速路径」的取值规则）；CLI 颜色改值也不降成字符串。
 
 ## 层级（P4a）
 

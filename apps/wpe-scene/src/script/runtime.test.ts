@@ -1,3 +1,6 @@
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
+import { vmRealm } from "./testing/vmRealm";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -6,7 +9,7 @@ import { collectScripts, type SceneScript } from "../compile/scripts";
 import { parseScene } from "../compile/model";
 import type { SceneReader } from "../compile/fs";
 import { Wpesl2wgsl } from "../wpesl2wgsl";
-import { ScriptRuntime, type ScriptRealm } from "./runtime";
+import { messageOf, ScriptRuntime, type ScriptRealm } from "./runtime";
 import { radiansToScript } from "./f32";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -57,12 +60,12 @@ class FakeRealm implements ScriptRealm {
       );
     },
   };
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
     this.imports.push(label);
     this.events.push(`import:${label}`);
     const result = this.modules.get(label);
     if (result instanceof Error) throw result;
-    return result ?? {};
+    return fakeModule(result ?? {});
   }
   dispose(): void {
     this.disposed = true;
@@ -563,9 +566,9 @@ describe("脚本运行时的销毁", () => {
     const { runtime } = harness(realm);
     const init = vi.fn();
     let finish!: (module: Record<string, unknown>) => void;
-    realm.importModule = () =>
+    realm.prepareModule = () =>
       new Promise((resolve) => {
-        finish = resolve;
+        finish = (module) => resolve(fakeModule(module));
       });
     const loading = runtime.load({ list: [script("a")] });
     runtime.destroy();
@@ -763,5 +766,61 @@ describe("rad2deg 材质常量上的字段脚本（P6d1b，p6d1-mat6）", () => 
     const { seen, written } = await run(constant("alpha", false), 0.5, 45);
     expect(seen).toEqual([0.5, 0.5]);
     expect(written).toEqual([[45]]);
+  });
+});
+
+describe("工厂模块的加载（vmRealm）", () => {
+  class VmFakeRealm extends FakeRealm {
+    readonly vm = vmRealm();
+    constructor() {
+      super();
+      this.global = this.vm.global;
+    }
+    override prepareModule(source: string, label: string): Promise<ScriptModule> {
+      return this.vm.prepareModule(source, label);
+    }
+  }
+
+  it("messageOf：认 kabegame-script 的行列（行减工厂前言）与 blob 行列", () => {
+    expect(messageOf({ message: "boom", stack: "Error: boom\n    at f (kabegame-script:7:5:3)" })).toBe(
+      "boom (line 3, col 3)",
+    );
+    expect(messageOf({ message: "boom", stack: "Error: boom\n    at f (blob:null/abc-def:4:9)" })).toBe(
+      "boom (line 4, col 9)",
+    );
+    expect(messageOf({ message: "boom", stack: "Error: boom" })).toBe("boom");
+  });
+
+  it("同一源码的两段脚本各自一份模块状态", async () => {
+    const realm = new VmFakeRealm();
+    realm.vm.run("globalThis.seen = []");
+    const source = "let n = 0; export function update() { n++; globalThis.seen.push(n); return n; }";
+    const h = harness(realm);
+    await h.runtime.load({
+      list: [
+        script("a", { source, target: { kind: "layer", object: 0, field: "alpha" } }),
+        script("b", { source, target: { kind: "layer", object: 1, field: "brightness" } }),
+      ],
+    });
+    h.runtime.frame(0.1);
+    h.runtime.frame(0.1);
+    expect(realm.vm.run("globalThis.seen")).toEqual(expect.objectContaining({ length: 4 }));
+    expect(Array.from(realm.vm.run<number[]>("globalThis.seen"))).toEqual([1, 1, 2, 2]);
+  });
+
+  it("回调里的 this 是模块命名空间", async () => {
+    const realm = new VmFakeRealm();
+    const h = harness(realm);
+    await h.runtime.load({
+      list: [
+        script("a", {
+          source:
+            "export const marker = 7; export function init() { globalThis.seenThis = { marker: this.marker, keys: Object.keys(this).join(',') }; return 1; }",
+        }),
+      ],
+    });
+    expect(realm.vm.run("globalThis.seenThis.marker")).toBe(7);
+    expect(realm.vm.run("globalThis.seenThis.keys")).toBe("init,marker");
+    expect(h.runtime.diagnostics[0]).toMatchObject({ exports: ["init", "marker"] });
   });
 });

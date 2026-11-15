@@ -3,6 +3,8 @@ import { scriptToString } from "../text/fields";
 import { type SceneScript, type SceneScripts, type ScriptOwner } from "../compile/scripts";
 import { type CursorCallback } from "../render/cursor";
 import { type SceneReporter } from "../report";
+import type { ModuleInstance, ScriptModule } from "./moduleFactory";
+import { FACTORY_LINE_OFFSET } from "./moduleRewrite";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 
 export interface ScriptRealm {
@@ -12,7 +14,11 @@ export interface ScriptRealm {
     updateScriptProperties(script: Record<string, unknown>, vars: string): void;
     convertUserProperties(json: string): Record<string, unknown>;
   };
-  importModule(source: string, label: string): Promise<Record<string, unknown>>;
+  /**
+   * 加载期：每种源码一次（按源码文本缓存 Promise，同一源码的两段脚本共用一个 ScriptModule、各自 instantiate）。
+   * 失败时 reject，错误要和以前 importModule 同一份源码给出的错误一样（文字与行列）。
+   */
+  prepareModule(source: string, label: string): Promise<ScriptModule>;
   dispose(): void;
 }
 
@@ -74,6 +80,11 @@ const CURSOR_EXPORTS = [
 type HostCallback = "timer" | "ended";
 interface ScriptRecord {
   script: SceneScript;
+  /** 加载期编好的模块（同源码的脚本共用）；P6d3 要用，现在只存不用 */
+  module: ScriptModule | null;
+  /** 这段脚本自己的模块状态 */
+  instance: ModuleInstance | null;
+  /** = `instance.namespace`：回调的 this、诊断的导出名、updateScriptProperties 的参数 */
   exports: Record<string, unknown> | null;
   state: "pending" | "loaded" | "inited" | "failed";
   disabled: Set<Callback>;
@@ -160,8 +171,11 @@ export function messageOf(error: unknown): string {
   const object = error as { message?: unknown; stack?: unknown } | null;
   const message = typeof object?.message === "string" ? object.message : String(error);
   const stack = typeof object?.stack === "string" ? object.stack : "";
-  const location = /blob:[^\s)]+:(\d+):(\d+)/.exec(stack);
-  return location ? `${message} (line ${location[1]}, col ${location[2]})` : message;
+  // 栈里第一处 blob 行列或工厂脚本（`kabegame-script:<序号>`）行列；工厂源码在原文前有包装头与前言，行要减掉
+  const location = /(?:blob:[^\s)]+|(kabegame-script):\d+):(\d+):(\d+)/.exec(stack);
+  if (!location) return message;
+  const line = location[1] ? Number(location[2]) - FACTORY_LINE_OFFSET : Number(location[2]);
+  return `${message} (line ${line}, col ${location[3]})`;
 }
 
 export class ScriptRuntime {
@@ -262,10 +276,17 @@ export class ScriptRuntime {
     return result;
   }
 
+  /** 取一段脚本导出的函数（经 `instance.read`，不经命名空间 Proxy）；不是函数返回 undefined。 */
+  private exported(record: ScriptRecord, name: string): ((...args: unknown[]) => unknown) | undefined {
+    const value = record.instance?.read(name);
+    return typeof value === "function" ? (value as (...args: unknown[]) => unknown) : undefined;
+  }
+
   private call(record: ScriptRecord, callback: Callback, ...args: unknown[]): unknown {
-    if (record.disabled.has(callback) || !record.exports || typeof record.exports[callback] !== "function")
-      return undefined;
-    return this.invoke(record, callback, () => (record.exports![callback] as (...args: unknown[]) => unknown)(...args));
+    if (record.disabled.has(callback)) return undefined;
+    const fn = this.exported(record, callback);
+    if (!fn) return undefined;
+    return this.invoke(record, callback, () => fn.call(record.exports, ...args));
   }
 
   /**
@@ -348,6 +369,8 @@ export class ScriptRuntime {
   async load(scripts: SceneScripts, afterInit?: () => void): Promise<void> {
     this.records = scripts.list.map((script) => ({
       script,
+      module: null,
+      instance: null,
       exports: null,
       state: "pending",
       disabled: new Set(),
@@ -368,7 +391,13 @@ export class ScriptRuntime {
         this.active = record;
         this.options.enterScript?.(record.script);
         this.options.setModuleEvaluating?.(true);
-        record.exports = await this.realm.importModule(record.script.source, record.script.id);
+        record.module = await this.realm.prepareModule(record.script.source, record.script.id);
+        const made = record.module.instantiate();
+        record.instance =
+          typeof (made as { then?: unknown }).then === "function"
+            ? await (made as Promise<ModuleInstance>)
+            : (made as ModuleInstance);
+        record.exports = record.instance.namespace;
         record.state = "loaded";
         this.options.report.debug(`场景脚本 ${record.script.id} 导出：${Object.keys(record.exports).join(",")}`);
       } catch (error) {
@@ -433,7 +462,7 @@ export class ScriptRuntime {
     }
     for (const record of this.records) {
       if (record.state !== "inited" || this.halted) continue;
-      if (typeof record.exports?.applyUserProperties === "function")
+      if (this.exported(record, "applyUserProperties"))
         this.call(record, "applyUserProperties", this.realm.internal.convertUserProperties(json));
     }
   }
@@ -506,7 +535,7 @@ export class ScriptRuntime {
     if (this.halted) return;
     for (const record of this.records) {
       if (record.state !== "inited" || scriptObject(record.script.owner) !== object) continue;
-      if (record.disabled.has("animationEvent") || typeof record.exports?.animationEvent !== "function") continue;
+      if (record.disabled.has("animationEvent") || !this.exported(record, "animationEvent")) continue;
       const parse = (this.realm.global.JSON as JSON).parse;
       const result = this.call(record, "animationEvent", parse(json), this.value(record));
       this.writeReturn(record, result);
@@ -525,7 +554,7 @@ export class ScriptRuntime {
     if (this.halted) return;
     for (const record of this.records) {
       if (record.state !== "inited" || scriptObject(record.script.owner) !== object) continue;
-      if (record.disabled.has(callback) || typeof record.exports?.[callback] !== "function") continue;
+      if (record.disabled.has(callback) || !this.exported(record, callback)) continue;
       this.call(record, callback, this.cursorEventObject(world, local));
       if (this.halted) break;
     }
@@ -551,12 +580,7 @@ export class ScriptRuntime {
   mediaEvent(callback: MediaCallback, makeEvent: (realm: ScriptRealm) => unknown): void {
     if (this.halted) return;
     for (const record of this.records) {
-      if (
-        record.state !== "inited" ||
-        record.disabled.has(callback) ||
-        typeof record.exports?.[callback] !== "function"
-      )
-        continue;
+      if (record.state !== "inited" || record.disabled.has(callback) || !this.exported(record, callback)) continue;
       this.call(record, callback, makeEvent(this.realm));
       if (this.halted) break;
     }
@@ -565,8 +589,7 @@ export class ScriptRuntime {
   /** 某个对象上有没有脚本导出了光标回调（`cursorHitTest` 也算：它只打开拾取）：渲染器据此决定每帧要不要做命中测试。 */
   get hasCursorCallbacks(): boolean {
     return this.records.some(
-      (record) =>
-        record.state === "inited" && CURSOR_EXPORTS.some((name) => typeof record.exports?.[name] === "function"),
+      (record) => record.state === "inited" && CURSOR_EXPORTS.some((name) => this.exported(record, name)),
     );
   }
 

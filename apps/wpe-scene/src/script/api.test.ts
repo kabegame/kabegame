@@ -1,3 +1,5 @@
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it, vi } from "vitest";
 import { SceneSpectrum } from "../audio/spectrum";
 import { GENERAL_FIELDS, generalDefaults, type GeneralKey } from "../compile/bindings";
@@ -64,8 +66,8 @@ class FakeRealm implements ScriptRealm {
       ),
   };
   modules = new Map<string, Record<string, unknown>>();
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
-    return this.modules.get(label) ?? {};
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
+    return fakeModule(this.modules.get(label) ?? {});
   }
   dispose() {}
 }

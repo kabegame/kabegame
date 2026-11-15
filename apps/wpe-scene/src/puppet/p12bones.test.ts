@@ -24,6 +24,7 @@ import {
 } from "../dev/probeScripts";
 import { SceneState } from "../render/state";
 import type { ScriptRealm } from "../script/runtime";
+import { fakeModule } from "../script/testing/fakeModule";
 import type { TranslateRequest, TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import fixture from "./fixtures/p12-bones.json";
 import { puppetEntries, ScenePuppets, stateSink } from "./player";
@@ -121,14 +122,16 @@ function vmRealm(setup: ProbeRealmSetup): ScriptRealm {
       Mat4: global._Mat4 as object,
     },
     internal: global._Internal as ScriptRealm["internal"],
-    async importModule(source: string, label: string) {
+    async prepareModule(source: string, label: string) {
       const names = [...source.matchAll(/^export\s+(?:async\s+)?function\s+(\w+)/gm)].map((match) => match[1]);
       const body = source.replace(/^export\s+/gm, "");
-      return vm.runInContext(
-        `(function () {\n${body}\nreturn { ${names.map((name) => `${name}: ${name}`).join(", ")} };\n})()`,
-        context,
-        { filename: label },
-      ) as Record<string, unknown>;
+      return fakeModule(
+        vm.runInContext(
+          `(function () {\n${body}\nreturn { ${names.map((name) => `${name}: ${name}`).join(", ")} };\n})()`,
+          context,
+          { filename: label },
+        ) as Record<string, unknown>,
+      );
     },
     dispose() {},
   };

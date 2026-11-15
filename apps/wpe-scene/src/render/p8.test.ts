@@ -38,6 +38,7 @@
  * - `alphaToCoverageEntry`：导出的真实入口逐字比对、直接返回 `@location(0)`、多个 `return`、认不出时抛错；
  * - GpuScene 假设备：A2C 管线键、A2C 模块按程序建一次、入口与写掩码，没有 A2C 的场景不建模块，改写或 Tint 失败时的原因键。
  */
+import { fakeModule } from "../script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ALIGNMENTS, alignmentIndex, type AlignmentName } from "../compile/alignment";
 import { generalDefaults } from "../compile/bindings";
@@ -1032,7 +1033,7 @@ function alignRealm(): ScriptRealm {
     global: { Object, Array, JSON, Float32Array },
     prototypes: { Vec2: AlignVec.prototype, Vec3: AlignVec.prototype, Vec4: AlignVec.prototype, Mat3: {}, Mat4: {} },
     internal: { updateScriptProperties() {}, convertUserProperties: () => ({}) },
-    importModule: async () => ({}),
+    prepareModule: async () => fakeModule({}),
     dispose() {},
   };
 }

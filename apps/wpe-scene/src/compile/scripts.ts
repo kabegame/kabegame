@@ -212,6 +212,8 @@ export async function collectScripts(
       const errors: string[] = [];
       try {
         for (const item of parse(raw.script)[0]) {
+          // 只看静态导入与再导出（t 为 1 / 4 / 6）：动态导入（2 / 5 / 7）在 WPE 里一律 reject、不影响加载，import.meta（3）无关
+          if (item.t !== 1 && item.t !== 4 && item.t !== 6) continue;
           if (item.n === undefined) continue;
           if (item.n === null) continue; // 变量动态 import 无法在编译期确定
           if (/^(?![./]|[a-z][\w+.-]*:)[\w-]+$/i.test(item.n)) imports.push(item.n);

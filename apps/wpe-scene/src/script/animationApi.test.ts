@@ -2,6 +2,8 @@
  * P10b 步骤 2：脚本侧的 `getAnimation`（图层 / effect / 材质 / general / `thisScene`）与 `IAnimation` 包装对象。落点用真的
  * `SceneAnimations.control`，realm 用不碰 DOM 的假 realm（同 `api.test.ts` 的写法，另给 `SyntaxError`）。
  */
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import { SceneAnimations } from "../animation/player";
 import type { SceneAnimation } from "../animation/types";
@@ -20,8 +22,8 @@ class FakeRealm implements ScriptRealm {
   global: Record<string, unknown> = { Object, Array, JSON, Float32Array, SyntaxError };
   prototypes = { Vec2: Vec.prototype, Vec3: Vec.prototype, Vec4: Vec.prototype, Mat3: {}, Mat4: {} };
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
-  async importModule(): Promise<Record<string, unknown>> {
-    return {};
+  async prepareModule(): Promise<ScriptModule> {
+    return fakeModule({});
   }
   dispose() {}
 }

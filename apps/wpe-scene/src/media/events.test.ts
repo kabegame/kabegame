@@ -2,6 +2,8 @@
  * P11c 步骤 2：事件对象（rea-p11-media 第 3 节）：键的插入顺序、类型、`Vec3` 原型，以及 `ScriptRuntime.mediaEvent` 的派发规则
  * （全部已 init 且导出该回调的脚本、按记录顺序、不写回、出错只禁用这个回调、每个接收者各一个新对象）。假 realm 同 `cursorEvent.test.ts`。
  */
+import type { ScriptModule } from "../script/moduleFactory";
+import { fakeModule } from "../script/testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import type { SceneScript } from "../compile/scripts";
 import { ScriptRuntime, type ScriptRealm } from "../script/runtime";
@@ -21,10 +23,10 @@ class FakeRealm implements ScriptRealm {
   prototypes = { Vec2: Vec3.prototype, Vec3: Vec3.prototype, Vec4: Vec3.prototype, Mat3: {}, Mat4: {} };
   modules = new Map<string, Record<string, unknown> | Error>();
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
     const result = this.modules.get(label);
     if (result instanceof Error) throw result;
-    return result ?? {};
+    return fakeModule(result ?? {});
   }
   dispose() {}
 }

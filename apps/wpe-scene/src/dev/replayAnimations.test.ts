@@ -6,6 +6,7 @@
  * - 没有回放（没有 `dts`）时不推进（调用方自己 `seek` + `write`）；
  * - 用真的 `SceneAnimations`：写在 `sync` 之前，最后的值和同一串 dt 逐帧推进的结果相同。
  */
+import { fakeModule } from "../script/testing/fakeModule";
 import { describe, expect, it, vi } from "vitest";
 import { SceneAnimations } from "../animation/player";
 import type { SceneAnimation } from "../animation/types";
@@ -279,8 +280,8 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
         global,
         prototypes: { Vec2: {}, Vec3: {}, Vec4: {}, Mat3: {}, Mat4: {} },
         internal: { updateScriptProperties() {}, convertUserProperties: () => ({}) },
-        async importModule() {
-          return {
+        async prepareModule() {
+          return fakeModule({
             init() {
               log.push("init");
               if (playInInit) (global.thisObject as { getAnimation(): { play(): void } }).getAnimation().play();
@@ -293,7 +294,7 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
               log.push("update");
               times.push(["update", (global.engine as { runtime: number }).runtime]);
             },
-          };
+          });
         },
         dispose() {},
       };

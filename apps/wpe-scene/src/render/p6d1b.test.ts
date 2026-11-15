@@ -8,6 +8,7 @@
  *   管线现建期间保持原状态、建好后下一次 `sync` 换上；不写就不重建，写过的不是每帧重建。
  * 假设备照 `render/p5d-depth.test.ts`。
  */
+import { fakeModule } from "../script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults, type SceneBinding } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer, ScenePass } from "../compile/bundle";
@@ -180,8 +181,8 @@ describe("脚本写入表：键 <pass>/state/<字段>，重编译后重放", () 
       global: {},
       prototypes: {},
       internal: {},
-      async importModule() {
-        return {};
+      async prepareModule() {
+        return fakeModule({});
       },
       dispose() {},
     } as unknown as ScriptRealm;

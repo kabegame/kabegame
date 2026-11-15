@@ -4,6 +4,7 @@
  * 模块按脚本 id 取一个工厂，工厂在「模块求值」时拿到 realm 的全局（脚本读的 `Date`、`Math`、`engine` 都经它），所以能核对替换发生在
  * 模块求值之前。脚本都是有限步的同步函数，不会卡住。
  */
+import { fakeModule } from "../script/testing/fakeModule";
 import { describe, expect, it, vi } from "vitest";
 import { builtinProperties } from "../compile/builtinProperties";
 import { compileScene, type SceneBundle } from "../compile/bundle";
@@ -135,9 +136,9 @@ function fakeRealm(factories: Record<string, Factory>, log: string[] = []) {
             ]),
           ),
       },
-      async importModule(_source: string, label: string) {
+      async prepareModule(_source: string, label: string) {
         log.push(`evaluate ${label}`);
-        return factories[label]?.(global) ?? {};
+        return fakeModule(factories[label]?.(global) ?? {});
       },
       dispose() {
         made.disposed++;

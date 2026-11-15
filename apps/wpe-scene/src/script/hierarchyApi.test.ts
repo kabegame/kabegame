@@ -1,5 +1,7 @@
 // P6d1a 点 2：图层对象的层级与变换 API（getParent / getChildren / getTransformMatrix / rotateObjectSpace / lookAt / lookAtYaw）
 // 与 `thisScene.getLayerByID`。真值：`ignore/p6/d0/out/p6d1-round2.log`、`p6d1-xform.log`（WPE 2.8.42 实测）；比较逐位，-0 与 0 视同。
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import { generalDefaults } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
@@ -22,8 +24,8 @@ class FakeRealm implements ScriptRealm {
   global: Record<string, unknown> = { Object, Array, JSON, Float32Array };
   prototypes = { Vec2: Vec.prototype, Vec3: Vec.prototype, Vec4: Vec.prototype, Mat3: {}, Mat4: Mat4Proto.prototype };
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
-  async importModule(): Promise<Record<string, unknown>> {
-    return {};
+  async prepareModule(): Promise<ScriptModule> {
+    return fakeModule({});
   }
   dispose() {}
 }

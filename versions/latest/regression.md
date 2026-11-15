@@ -316,6 +316,34 @@
 | [x] | G6 管线状态 | Windows dev，屏外宿主 + 逐 draw 轨迹；WPE 抓帧 | `p6d1-mat7` 在 blur 四个 pass 各写一项，轨迹里每次绘制的混合、写掩码、剔除、深度和 WPE 抓帧比 | 相同 | 2026-11-15 Claude：pass 0 additive 进了中间 pass；pass 1 剔除 Back；pass 2 测写深度（fbo 没有深度附件，不起作用，同 WPE）；pass 3 上屏 SrcAlpha / InvSrcAlpha、写掩码 7、深度关（借基础材质）、剔除 Back（用自己的），和 WPE event 110 逐项相同 |
 | [x] | G7 A2C 与 additive 的画面 | Windows dev，屏外宿主（回放 70 帧，第 60 帧写入）；WPE 抓帧 | `p6d1-a2c` 八组的中心像素和 WPE 比 | 7 组相同；C3 是已知差异 | 2026-11-15 Claude：N、M1（normal → A2C 不锐化，黑）、C1、M2a / M2b（A2C → translucent 仍锐化）、M3（运行中 additive 没有 `ADDITIVE`）、M7（不写 alpha）相同；C3（加载时 additive）WPE (255, 255, 0)、我们 (255, 0, 0)：加载期没加 `ADDITIVE` 组合键，WPE 自带着色器只在雾效读它、语料工坊着色器没有，随雾效补 |
 
+## 场景壁纸 P6d2：脚本改成同步工厂加载
+
+2026-11-15 Windows dev。用户脚本不再各自作 blob 模块求值：
+- 加载期每种源码按真模块检查一次（哨兵模块，不执行用户代码），用 acorn 原地改写成工厂、间接 `eval` 编一次；
+- 每段脚本调一次工厂，同步得到自己的模块状态；
+- 命名空间、动态 `import()`（一律 reject）、`import.meta`（空对象）照 WPE 实测；
+- 报错文字与行列和以前逐字相同；
+- dev 工具 `scriptCorpus` 改成确定的，用来在改动前后跑全库比对。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「场景脚本（P3b）」的「用户脚本的加载（P6d2，同步工厂）」；计划与实施记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6d2-script-factory.md`。
+- 验收文件在 `ignore/p6/d2/`：
+  - WPE 实测 `wpe-forms.log`，改前 / 改后的输出 `forms-before.log` / `forms-after.log`；
+  - 语料基线 `base/`、`base2/` 与改后 `after/`，驱动 `corpus_run.mjs`、比较 `corpus_diff.mjs`；
+  - `realmCheck` 的错误源码 `realmcheck-sources.json` 与前后结果 `realmcheck-before.json` / `realmcheck-after.json`；
+  - 变异清单 `mutations.json`（结果 `mutate.txt`），加载用时 `loadtime.mjs` / `loadtime.json`，语料写法统计 `forms.mjs`。
+- 测试工程由 `ignore/p6/d0/make_p6d2.py`（`p6d2-forms`）生成。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | H1 类型与格式 | Windows | 宿主 `tsc --noEmit`；Prettier `--check` 本步改动的 TS 文件 | 0 error、格式通过 | 2026-11-15 Claude：工作树与主工作区 tsc 都是 0 error；格式通过 |
+| [x] | H2 宿主 vitest（相关文件） | Node，vitest | `src/script/`、`src/dev/`、`src/puppet/`、`host.script`、`host.test`、改过的 24 个测试文件、新增的 `moduleRewrite` / `moduleFactory` / `compile/scriptImports` | 全过 | 2026-11-15 Claude：主工作区 53 个文件 918 条全过。本机语料下 `compile/pipeline.test.ts`「请求次数有界」失败，主工作区不含本步的代码同样失败，与本步无关 |
+| [x] | H3 变异检查 | Node，工作区模式 | `mutations.json` 13 处 | 每处都有用例失败，原样还原 | 2026-11-15 Claude：13 处全部检出、全部还原（命名空间不排序、多变量导出漏名、顶层 this 不换、行偏移错一行、动态导入 resolve、实例共用状态、星号歧义不去掉、default 名字不改、报错不减偏移、回调 this 不对、编译期又扫动态导入、顶层 await 不判 async、写入报错文字不同） |
+| [x] | H4 模块写法与 WPE 逐行比 | Windows dev，屏外宿主（`render_scene`，`scripts: true`，6 帧）；WPE 测试窗口 | `p6d2-forms` 五段脚本的 `[kbp6d]` 输出与 WPE `log.txt` 逐行比 | 26 行相同 | 2026-11-15 Claude：改后 26 行与 WPE 逐行相同；改前有 3 行不同（`import.meta` 带 `url`、两次动态导入能 resolve） |
+| [x] | H5 报错文字与行列 | Windows dev，屏外宿主（`host.realmCheck`，场景 `3146703458`） | 14 段错误源码（语法、链接、缺库、顶层 `return`、HTML 注释、`await` 作变量名、求值期报错、多变量 / 解构导出、再导出、`import.meta`、默认导出、顶层 `this` / `arguments`）改前改后各跑一次 | 逐字相同 | 2026-11-15 Claude：14 段的状态、导出名、报错文字与行列全部相同 |
+| [x] | H6 全语料脚本诊断 | Windows dev，屏外宿主（`scriptCorpus`，120 帧、固定时钟与种子） | 改前连跑两遍、改后一遍，逐张比各段诊断、状态摘要、console 摘要 | 相同 | 2026-11-15 Claude：改前两遍 236 张逐张相同（工具确定）；改后能比的 236 张里 231 张相同，另 5 张只有编译期能力键不同（`object:castvolumetrics`，别的会话未提交的体积光改动），脚本诊断、状态与 console 都相同；10 张是基线之后才导入的，不比 |
+| [x] | H7 加载用时 | Windows dev，屏外宿主 | 能渲染、脚本最多的 `3660962877`（252 段、27 种源码）：`realmCheck` 的 `elapsedMs`，与同一宿主里照旧方式逐段 `import(blob)` 交替各三次 | 不慢于旧方式 | 2026-11-15 Claude：新 176–189 ms，旧约 1 s |
+| [ ] | H8 预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开几张带脚本、能渲染的场景（灯带、时钟、音频条类） | 画面与改前一致，动画在走，日志里没有「场景脚本改写失败」 | 需要用户在界面上看 |
+
 ## 场景渲染器的逐 draw 轨迹（dev 工具）
 
 2026-11-13，只在 dev 构建：dev 探针 `renderFrame`、vite `/render`、MCP `render_scene` / `host_render` 收 `trace`，记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform、顶点，可选读回 pass 的目标，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照。计划见 `.claude/plans/tools/scene-draw-trace.md`，用法见 `.claude/skills/kabegame-chromium/SKILL.md`「逐 draw 轨迹」，实施记录在 `ignore/tools/draw-trace/record.md`。

@@ -2,6 +2,7 @@
  * P11d：宿主的快捷方式接线（`SceneHost.openUserShortcut` / 令牌 / 属性形状）。渲染器、realm 是替身（同 `host.script.test.ts` 的写法），
  * 渲染器替身按真渲染器 `stepCursor` 的顺序调 `cursor.input` → `cursor.events`（有派发时）→ `cursor.end`；其余用真的宿主、运行时、API、令牌。
  */
+import { fakeModule } from "./script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "./compile/bindings";
 import type { SceneBundle } from "./compile/bundle";
@@ -34,8 +35,8 @@ function createRealm() {
         return JSON.parse(json);
       },
     },
-    async importModule() {
-      return {
+    async prepareModule() {
+      return fakeModule({
         init() {
           initProps = JSON.parse(JSON.stringify((activeGlobal.engine as { userProperties: unknown }).userProperties));
           return 0.8;
@@ -44,7 +45,7 @@ function createRealm() {
           applied.push(JSON.parse(JSON.stringify(props)));
         },
         ...cursorExports,
-      };
+      });
     },
     dispose() {},
   };

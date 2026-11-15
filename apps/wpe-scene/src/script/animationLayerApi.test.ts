@@ -2,6 +2,8 @@
  * P12c-2：脚本侧的动画层 API（`getAnimationLayerCount` / `getAnimationLayer`、`IAnimationLayer` 包装对象、动画层字段脚本的 `thisObject`）。
  * 落点用真的 `ScenePuppets`，realm 用不碰 DOM 的假 realm（同 `animationApi.test.ts`）；WPE 日志的逐帧比对见 `puppet/p12script.test.ts`。
  */
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import { generalDefaults } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
@@ -22,8 +24,8 @@ class FakeRealm implements ScriptRealm {
   prototypes = { Vec2: Vec.prototype, Vec3: Vec.prototype, Vec4: Vec.prototype, Mat3: {}, Mat4: {} };
   modules = new Map<string, Record<string, unknown>>();
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
-    return this.modules.get(label) ?? {};
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
+    return fakeModule(this.modules.get(label) ?? {});
   }
   dispose() {}
 }

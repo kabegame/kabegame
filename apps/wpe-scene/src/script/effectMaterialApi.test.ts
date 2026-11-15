@@ -1,6 +1,8 @@
 // P6d1a 点 4–5：effect 与材质对象的脚本 API（getEffectCount / getEffect / name / getMaterialCount / getMaterial / setMaterialProperty、
 // 材质对象的键与状态字段）。真值：`ignore/p6/d0/out/p6d1-round2.log` 的 S0–S7（WPE 2.8.42 实测，make_p6d1b.py）。
 // 键顺序照 WPE 的 MSVC `unordered_map` 迭代顺序（`materialKeyOrder.ts`，单测在 `materialKeyOrder.test.ts`）。
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import { generalDefaults } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer, ScenePass } from "../compile/bundle";
@@ -25,8 +27,8 @@ class FakeRealm implements ScriptRealm {
   global: Record<string, unknown> = { Object, Array, JSON, Float32Array };
   prototypes = { Vec2: Vec2.prototype, Vec3: Vec3.prototype, Vec4: Vec4.prototype, Mat3: {}, Mat4: {} };
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
-  async importModule(): Promise<Record<string, unknown>> {
-    return {};
+  async prepareModule(): Promise<ScriptModule> {
+    return fakeModule({});
   }
   dispose() {}
 }

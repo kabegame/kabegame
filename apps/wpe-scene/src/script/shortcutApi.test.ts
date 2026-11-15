@@ -3,6 +3,8 @@
  * 假 realm（`SyntaxError` 是 realm 自己的类，证明抛的是它），运行时、API、令牌用真的；宿主一侧的取令牌 / 查属性在这里用同样的逻辑替身，
  * 真宿主的接线见 `host.shortcut.test.ts`。
  */
+import type { ScriptModule } from "./moduleFactory";
+import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
 import { mergeProperties, type UserProperty } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
@@ -33,8 +35,8 @@ class FakeRealm implements ScriptRealm {
         ]),
       ),
   };
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
-    return this.modules.get(label) ?? {};
+  async prepareModule(_source: string, label: string): Promise<ScriptModule> {
+    return fakeModule(this.modules.get(label) ?? {});
   }
   dispose() {}
 }

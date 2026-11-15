@@ -14,6 +14,7 @@ import { SceneState } from "../render/state";
 import { ScriptApi } from "./api";
 import { writeScriptState } from "./stateWrite";
 import type { ScriptRealm, ScriptTarget, ScriptValue } from "./runtime";
+import { fakeModule } from "./testing/fakeModule";
 
 class Vec {
   constructor(..._values: number[]) {}
@@ -24,8 +25,8 @@ class FakeRealm implements ScriptRealm {
   prototypes = { Vec2: Vec.prototype, Vec3: Vec.prototype, Vec4: Vec.prototype, Mat3: {}, Mat4: {} };
   modules = new Map<string, Record<string, unknown>>();
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
-  async importModule(_source: string, label: string): Promise<Record<string, unknown>> {
-    return this.modules.get(label) ?? {};
+  async prepareModule(_source: string, label: string) {
+    return fakeModule(this.modules.get(label) ?? {});
   }
   dispose() {}
 }

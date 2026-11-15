@@ -9,6 +9,7 @@
  * puppet 推进并派发事件与播完回调）→ 脚本 `frame` 的顺序推进；realm 用 `node:vm` 的上下文（脚本是严格模式的 ES 模块，导出函数）。
  * 比：每帧脚本日志行与 WPE 逐行相同；g_Bones 与 WPE 在 P12a 的 `rsqrtps` 容差内（≤ 5 ulp 或 ≤ 2e-6，逐位相同的帧数与最大差打印出来）。
  */
+import { fakeModule } from "../script/testing/fakeModule";
 import vm from "node:vm";
 import { gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -133,16 +134,17 @@ function vmRealm(setup: ProbeRealmSetup): ScriptRealm {
           ]),
         ),
     },
-    async importModule(source: string, label: string) {
+    async prepareModule(source: string, label: string) {
       const names = [...source.matchAll(/^export\s+(?:async\s+)?function\s+(\w+)/gm)].map((match) => match[1]);
       const body = source.replace(/^export\s+/gm, "");
-      return vm.runInContext(
+      const exports = vm.runInContext(
         `(function () {\n${body}\nreturn { ${names.map((name) => `${name}: ${name}`).join(", ")} };\n})()`,
         context,
         {
           filename: label,
         },
       ) as Record<string, unknown>;
+      return fakeModule(exports);
     },
     dispose() {},
   };

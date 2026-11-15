@@ -1,3 +1,5 @@
+import type { ScriptModule } from "./script/moduleFactory";
+import { fakeModule } from "./script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SceneSpectrum } from "./audio/spectrum";
 import { builtinProperties } from "./compile/builtinProperties";
@@ -354,9 +356,9 @@ class FakeRealm implements ScriptRealm {
   prototypes = { Vec2: {}, Vec3: {}, Vec4: {}, Mat3: {}, Mat4: {} };
   internal = { updateScriptProperties() {}, convertUserProperties: () => ({}) };
   constructor(private readonly body: (register: Register) => void) {}
-  async importModule(): Promise<Record<string, unknown>> {
+  async prepareModule(): Promise<ScriptModule> {
     this.body((this.global.engine as { registerAudioBuffers: Register }).registerAudioBuffers);
-    return {};
+    return fakeModule({});
   }
   dispose() {}
 }

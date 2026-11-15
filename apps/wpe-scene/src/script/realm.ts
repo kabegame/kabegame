@@ -2,6 +2,8 @@ import { init, parse } from "es-module-lexer";
 import type { SceneScripts } from "../compile/scripts";
 import { fileToUrl } from "../fileUrl";
 import { alignScriptEnvironment } from "./environment";
+import { compileModule, type ScriptModule } from "./moduleFactory";
+import { rewriteModule, type ModuleRewrite } from "./moduleRewrite";
 import type { ScriptRealm } from "./runtime";
 
 export interface JsModule {
@@ -193,6 +195,86 @@ export async function createIframeRealm(
     let heldInternal: ScriptRealm["internal"] | null = internal;
     let heldPrototypes: typeof prototypes | null = prototypes;
     let heldFrame: HTMLIFrameElement | null = frame;
+    // ---- prepareModule 的实现 ----
+    const modules = new Map<string, Promise<ScriptModule>>();
+    const libs = new Map<string, Promise<object>>();
+    let sequence = 0;
+    // 「哨兵」模块：求值即抛。检查源码时把它作为第一条导入，整张图链接成功后才会求值到它，
+    // 于是 reject 的值恰为 MARK 就说明用户源码语法与链接都合法、且一行都没执行。
+    let sentinelUrl: string | null = null;
+    let sentinel: Promise<unknown> | null = null;
+    const nativeImport = (activeChild: ChildWindow) =>
+      new activeChild.Function("u", "return import(u)") as (url: string) => Promise<Record<string, unknown>>;
+    const getSentinel = (activeChild: ChildWindow): Promise<unknown> => {
+      if (!sentinel) {
+        sentinelUrl = activeChild.URL.createObjectURL(
+          new activeChild.Blob(['throw new Error("kabegame-validate");'], { type: "text/javascript" }),
+        );
+        sentinel = nativeImport(activeChild)(sentinelUrl).then(
+          () => {
+            throw new Error("哨兵模块意外求值成功");
+          },
+          (mark: unknown) => mark,
+        );
+      }
+      return sentinel;
+    };
+    /** 按真模块检查源码（不求值用户代码）：合法就返回，否则抛出和以前 importModule 同一份源码给出的错误。 */
+    const validate = async (activeChild: ChildWindow, source: string): Promise<void> => {
+      const mark = await getSentinel(activeChild);
+      const url = activeChild.URL.createObjectURL(
+        new activeChild.Blob(
+          [
+            `import ${JSON.stringify(sentinelUrl)};
+${source}`,
+          ],
+          { type: "text/javascript" },
+        ),
+      );
+      try {
+        await nativeImport(activeChild)(url);
+        console.warn("场景脚本检查：模块意外求值成功");
+      } catch (error) {
+        if (error === mark) return;
+        const stack = (error as { stack?: unknown })?.stack;
+        if ((error as { name?: string })?.name === "SyntaxError" && !/blob:[^\s)]+:\d+:\d+/.test(String(stack))) {
+          const position = await syntaxPosition(activeChild, source);
+          if (position) {
+            const object = error as { message?: string };
+            object.message = `${object.message ?? String(error)} (line ${position.line}, col ${position.col})`;
+          }
+        }
+        throw error;
+      } finally {
+        activeChild.URL.revokeObjectURL(url);
+      }
+    };
+    const prepare = async (source: string): Promise<ScriptModule> => {
+      const activeChild = child;
+      if (!activeChild) throw new Error("脚本 realm 已释放");
+      await validate(activeChild, source);
+      let rewrite: ModuleRewrite;
+      try {
+        rewrite = rewriteModule(source, `kabegame-script:${++sequence}`);
+      } catch (error) {
+        throw new Error(`场景脚本改写失败：${(error as { message?: string })?.message ?? String(error)}`);
+      }
+      // 库的命名空间按说明符在本 realm 里缓存，所有脚本共用一份（同 WPE）
+      const namespaces: object[] = [];
+      for (const specifier of rewrite.specifiers) {
+        let lib = libs.get(specifier);
+        if (!lib) {
+          lib = nativeImport(activeChild)(specifier);
+          libs.set(specifier, lib);
+        }
+        namespaces.push(await lib);
+      }
+      try {
+        return compileModule(activeChild as unknown as Record<string, unknown>, rewrite, namespaces);
+      } catch (error) {
+        throw new Error(`场景脚本改写失败：${(error as { message?: string })?.message ?? String(error)}`);
+      }
+    };
     return {
       get global() {
         if (!heldGlobal) throw new Error("脚本 realm 已释放");
@@ -207,30 +289,20 @@ export async function createIframeRealm(
         return heldPrototypes;
       },
       importMap,
-      async importModule(source: string, _label: string): Promise<Record<string, unknown>> {
-        if (!child) throw new Error("脚本 realm 已释放");
-        const activeChild = child;
-        const url = activeChild.URL.createObjectURL(new activeChild.Blob([source], { type: "text/javascript" }));
-        try {
-          const importer = new activeChild.Function("u", "return import(u)") as (
-            url: string,
-          ) => Promise<Record<string, unknown>>;
-          return await importer(url);
-        } catch (error) {
-          const stack = (error as { stack?: unknown })?.stack;
-          if ((error as { name?: string })?.name === "SyntaxError" && !/blob:[^\s)]+:\d+:\d+/.test(String(stack))) {
-            const position = await syntaxPosition(activeChild, source);
-            if (position) {
-              const object = error as { message?: string };
-              object.message = `${object.message ?? String(error)} (line ${position.line}, col ${position.col})`;
-            }
-          }
-          throw error;
-        } finally {
-          activeChild.URL.revokeObjectURL(url);
-        }
+      prepareModule(source: string, _label: string): Promise<ScriptModule> {
+        if (!child) return Promise.reject(new Error("脚本 realm 已释放"));
+        const cached = modules.get(source);
+        if (cached) return cached;
+        const task = prepare(source);
+        modules.set(source, task);
+        return task;
       },
       dispose(): void {
+        if (sentinelUrl) child?.URL.revokeObjectURL(sentinelUrl);
+        sentinelUrl = null;
+        sentinel = null;
+        modules.clear();
+        libs.clear();
         heldFrame?.remove();
         heldFrame = null;
         child = null;

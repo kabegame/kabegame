@@ -6,6 +6,7 @@
  * - 订阅被拒时脚本收到 `{ enabled: false }`；没有脚本的场景（只有封面纹理）也派发、同帧换纹理。
  * 渲染器、realm 是替身（同 `host.script.test.ts`），封面解码用假的 `createImageBitmap`，来源表与 `MediaPending` 是真的。
  */
+import { fakeModule } from "./script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "./compile/bindings";
 import type { SceneBundle, SceneLayer } from "./compile/bundle";
@@ -32,8 +33,8 @@ function createRealm() {
     global: { Object, Array, JSON },
     prototypes: { Vec2: {}, Vec3: Vec3.prototype, Vec4: {}, Mat3: {}, Mat4: {} },
     internal: { updateScriptProperties() {}, convertUserProperties: (text: string) => JSON.parse(text) },
-    async importModule() {
-      return {
+    async prepareModule() {
+      return fakeModule({
         init: () => void log.push("init"),
         applyUserProperties: (properties: unknown) => void log.push(`apply ${json(properties)}`),
         mediaStatusChanged: (event: unknown) => void log.push(`status ${json(event)}`),
@@ -42,7 +43,7 @@ function createRealm() {
         mediaThumbnailChanged: (event: Record<string, unknown>) =>
           void log.push(`thumbnail ${event.hasThumbnail} ${Math.round((event.primaryColor as Vec3).x * 255)}`),
         mediaTimelineChanged: (event: unknown) => void log.push(`timeline ${json(event)}`),
-      };
+      });
     },
     dispose() {},
   };
