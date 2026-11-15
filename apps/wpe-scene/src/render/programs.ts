@@ -236,6 +236,15 @@ export interface GpuProgram {
   alphaToCoverage(): Promise<ShaderEntry>;
 }
 
+/**
+ * 主 pass 一次绘制画几个实例（P13d，rea-p13-shadows R6）：程序的 COMBO `INSTANCECOUNT` 非 0 时 WPE 给程序置标志 0x20、绑材质时把实例数
+ * 设成它（`0x1400d5abc`、`0x140157106`），`fur4` 靠它一次画 N 层毛发壳（实例号做层号）；其余程序 1。阴影 pass 的投射变体不继承它。
+ */
+export function programInstances(result: TranslateResult): number {
+  const count = result.combos?.find((combo) => combo.name === "INSTANCECOUNT")?.value ?? 0;
+  return count > 0 ? count : 1;
+}
+
 /** 一个着色器模块里的一个入口。 */
 export interface ShaderEntry {
   module: GPUShaderModule;
@@ -475,6 +484,48 @@ export const SCENE_DEPTH_FORMAT: GPUTextureFormat = "depth32float";
 /** 深度状态的两位标记（管线键与标签共用）：测 `t` / 不测 `-`，写 `w` / 不写 `-`。 */
 export function depthFlags(depth: { test: boolean; write: boolean }): string {
   return `${depth.test ? "t" : "-"}${depth.write ? "w" : "-"}`;
+}
+
+/**
+ * 阴影 pass 投射者的管线（P13d，rea-p13-passes 2.6）：没有颜色附件，深度 `depth32float`（阴影图集）GREATER、写深度，
+ * `depthBias` 0、`depthBiasSlopeScale` −4、`depthBiasClamp` 0；剔除照 WPE 的光栅序号 4：材质缺省剔除时实际不剔（建状态时 CullMode 停在 NONE），
+ * 帧级剔正面（`alignmentfliph`）时剔正面。没有 A2C 时不挂片元阶段（投射着色器的片元是空的或只输出 alpha）；A2C 时用 `alphaToCoverageEntry`
+ * 的丢弃入口（单采样下 alpha 小于 0.5 + 2⁻¹² 就丢弃，P8、P13d 实测；阴影 pass 没有颜色附件，WPE 的 A2C 照样生效，p13-REPORT D8）。
+ */
+export async function createShadowPipeline(
+  device: GPUDevice,
+  program: GpuProgram,
+  vertexBuffers: GPUVertexBufferLayout[],
+  cull: "none" | "front",
+  alphaToCoverage: boolean,
+  depthFormat: GPUTextureFormat,
+): Promise<GPURenderPipeline> {
+  const fragment = alphaToCoverage ? await program.alphaToCoverage() : null;
+  try {
+    return await device.createRenderPipelineAsync({
+      label: `shadow caster ${program.index}${cull === "front" ? " front" : ""}${alphaToCoverage ? " a2c" : ""}`,
+      layout: program.pipelineLayout,
+      vertex: {
+        module: program.vertex,
+        entryPoint: program.result.vertex?.entryPoint ?? "main",
+        buffers: vertexBuffers,
+      },
+      ...(fragment ? { fragment: { module: fragment.module, entryPoint: fragment.entryPoint, targets: [] } } : {}),
+      primitive: { topology: "triangle-list", cullMode: cull, frontFace: "ccw" },
+      depthStencil: {
+        format: depthFormat,
+        depthCompare: "greater",
+        depthWriteEnabled: true,
+        depthBias: 0,
+        depthBiasSlopeScale: -4,
+        depthBiasClamp: 0,
+      },
+    });
+  } catch (error) {
+    throw new SceneRenderError([
+      `webgpu:pipeline:${program.index}:shadow:${oneLine(error instanceof Error ? error.message : String(error))}`,
+    ]);
+  }
 }
 
 /**

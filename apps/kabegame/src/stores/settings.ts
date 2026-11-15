@@ -62,6 +62,8 @@ export interface AppSettings {
   wpeScenePostprocess: "follow" | "disabled" | "enabled" | "ultra";
   /** 场景壁纸反射：跟随 WPE 的 reflection，或固定为关闭 / 开启（桌面） */
   wpeSceneReflection: "follow" | "disabled" | "enabled";
+  /** 场景壁纸阴影画质：跟随 WPE 的 shadows，或固定为关闭 / 低 / 中 / 高 / 超高（桌面） */
+  wpeSceneShadows: "follow" | "disabled" | "low" | "medium" | "high" | "ultra";
   /** WPE 安装目录（桌面）：为空时后端自动查找并写入，用户可覆盖 */
   wpeEngineDir: string | null;
   windowState: {

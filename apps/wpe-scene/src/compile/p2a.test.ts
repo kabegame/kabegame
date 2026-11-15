@@ -12,6 +12,7 @@ import {
   isEngineUniform,
   readsAudioUniforms,
   scanValue,
+  SHADOW_CASTER_UNIFORM,
 } from "./features";
 import type { SceneReader } from "./fs";
 import {
@@ -347,6 +348,9 @@ describe("能力表裁决", () => {
       ),
     ]);
     expect([...written].sort()).toEqual([...ENGINE_UNIFORMS].sort());
+    // 投射者的视图投影（P13d）只由阴影 pass 写，单列，仍算引擎 uniform
+    expect(ENGINE_UNIFORMS.has(SHADOW_CASTER_UNIFORM)).toBe(false);
+    expect(isEngineUniform(SHADOW_CASTER_UNIFORM)).toBe(true);
   });
   it("只在 effect pass 写的 uniform 表与渲染器一一对应（P7d 步骤 2，EFFECT_UNIFORMS）", () => {
     // 不是通用的引擎 uniform：基础材质读到照报

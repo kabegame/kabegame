@@ -38,13 +38,15 @@ import {
 import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
 import {
   bindingReader,
+  collectSceneLights,
   engineDefines,
   legacyLightUniforms,
   lightConfigIssues,
   lightCounts,
-  lightUniforms,
   litDefines,
   readsLegacyLights,
+  type LightCounts,
+  type SceneLight,
 } from "./lights";
 import {
   checkEffectFeatures,
@@ -124,11 +126,14 @@ import {
   flagValue,
   readWpePostprocessing,
   readWpeReflection,
+  readWpeShadows,
   resolvePostprocessLevel,
   resolveReflection,
+  resolveShadows,
   scenePostprocessState,
   type BloomParams,
   type SceneReflectionSetting,
+  type SceneShadowSetting,
   type ScenePostprocessSetting,
   type ScenePostprocessState,
 } from "./postprocess";
@@ -758,6 +763,12 @@ export interface SceneMesh {
   /** 按 `skin` 选中的材质路径与它的 pass（语料都是一个 pass，多于一个报 `mdl:material-passes`）。 */
   material: string;
   passes: ScenePass[];
+  /**
+   * 阴影 pass 的投射变体（P13d，rea-p13-shadows R5）：场景有阴影（档位 ≠ 0、有点光 / 平行光阴影计数）时按第一个 pass 建。着色器取基础着色器
+   * 片元首行的 `// [PASS] shadow <名>`，没有用 `shadowcaster`；COMBO 只取投射着色器自己声明的，值取基础程序的（没有为 0），基础材质 blending
+   * 为 alphatocoverage 时另加 `ALPHATOCOVERAGE = 1` 并带 A2C；纹理按 `{"material": 键}` 对槽；材质常量原样拷；剔除、深度不继承。
+   */
+  shadow?: ScenePass;
 }
 /** 模型对象（P5c 步骤 1，rea-p5-mesh 第 2 节）。 */
 export interface SceneModel {
@@ -772,6 +783,11 @@ export interface SceneModel {
    * （`ScenePuppets.bounds`，没有可见层时退回这一份，rea-texchan-model 7.6）。
    */
   bounds: number[];
+  /**
+   * 投射阴影（P13d，rea-p13-passes 2.7）：对象的 `castshadow`（模型缺省开，只认 JSON 布尔与绑属性的当前值）且不透明（任一网格第一个 pass 的
+   * blending 是 normal / alphatocoverage，`0x140225252`）。为真时阴影 pass 画它全部网格的 `shadow` 变体。
+   */
+  castShadow?: boolean;
   /**
    * 模型对象的骨骼（P12b2-1，`buildModelSkeleton`）：mdl 有 `MDLS`（且骨骼数在 1–128）时有，网格的组合键带 `SKINNING` / `BONECOUNT` 等，每帧写
    * `g_Bones` 与变形的 uniform（`ScenePuppets` 的 `"model"` 模式）。没有骨骼的模型不写这一项（字节同以前）。
@@ -802,6 +818,11 @@ export interface SceneBundle {
   reflection?: { planar: boolean; enabled?: boolean; list?: number[] };
   /** `_rt_MipMappedFrameBuffer` 被任何对象读到（P13b1〔g1〕，rea-p13-passes 4.1）：渲染器建带 mip 的 RT，反射关时加载时清成 (0, 0, 0, 1)。 */
   mipFramebuffer?: boolean;
+  /**
+   * 灯光（P13d）：有开了光照的程序时才有。渲染器每帧按当时的 `g_ViewForward` 排序、照 WPE 写整块灯光缓冲（`lightFrame`）并生成阴影条目，
+   * 读灯光数组的绘制每帧取它的切片（同 `g_Time`）。`quality` 是解析好的阴影档位（设置「场景阴影」与 WPE `config.json`），为 0 时没有阴影。
+   */
+  lights?: { records: SceneLight[]; counts: LightCounts; quality: number };
   /** 非空时渲染器必须回退预览图，不能用可能缺少 mip 的 textures 渲染。 */
   unsupported: string[];
   /**
@@ -846,6 +867,8 @@ export interface CompileSceneInput {
   postprocess?: ScenePostprocessSetting;
   /** 设置「场景反射」（P13b1）；缺省跟随 WPE 的 `general.user.reflection`（缺键当开）。 */
   reflection?: SceneReflectionSetting;
+  /** 设置「场景阴影」（P13d）；缺省跟随 WPE 的 `general.user.shadows`（缺键按 medium）。 */
+  shadows?: SceneShadowSetting;
   /** dev 强制渲染：有不支持项也照常解码 mip，好让渲染器画出半成品（D4）。 */
   force?: boolean;
   /**
@@ -860,6 +883,8 @@ export const FRAMEBUFFER_RT = "_rt_FullFrameBuffer";
 /** 平面反射 RT（P13b1）：反射关时每帧清成场景清屏色。 */
 export const REFLECTION_RT = "_rt_Reflection";
 /** 屏幕空间反射用的 mip 帧缓冲（P13b1〔g1〕）：反射关时加载时清成 (0, 0, 0, 1)、之后不更新。 */
+/** 阴影图集（P13d，rea-p13-passes 2.2）：深度 RT，`generic4` / `genericimage4` 的 `g_Texture6` 注解缺省。 */
+export const SHADOW_ATLAS_RT = "_rt_shadowAtlas";
 export const MIP_FRAMEBUFFER_RT = "_rt_MipMappedFrameBuffer";
 
 /**
@@ -1283,23 +1308,43 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     sounds,
     animations: animations.list,
   };
-  const counts = lightCounts(general);
-  for (const issue of lightConfigIssues(general)) unsupported.add(issue);
+  // 阴影档位（P13d）：决定阴影计数与宏，要在编译着色器之前定。只在 `lightconfig` 写了阴影 / cookie 计数时才去读 WPE 的设置
+  const shadowSetting = input.shadows ?? "follow";
+  const asked = lightCounts(general, 1);
+  const wantsShadows =
+    asked.pointShadow + asked.directionalShadow + asked.spotShadow + asked.spotCookie + asked.spotShadowCookie > 0;
+  const shadowQuality = !wantsShadows
+    ? 0
+    : resolveShadows(
+        shadowSetting,
+        shadowSetting === "follow" ? await readWpeShadows(input.reader, input.sceneAssets) : undefined,
+      );
+  const counts = lightCounts(general, shadowQuality);
+  for (const issue of lightConfigIssues(general, shadowQuality)) unsupported.add(issue);
   const shader = new ShaderCompiler(
     fs,
     input.translator,
     unsupported,
-    litDefines(counts),
+    litDefines(counts, shadowQuality),
     engineDefines(postprocess.hdr, orthographic),
+    // 注解缺省纹理的格式（P13d）：同绑定缺省纹理时的解析（之后照样按注解绑它，那时才上报缺失），这里不上报
+    async (name, scope) => (await getTexture(name, scope, new Set()))?.format ?? null,
   );
-  /** 开了光照的程序才读；没人用时不解析灯对象，也不登记它们的绑定。 */
-  let lights: Record<string, number[]> | null = null;
-  const sceneLights = () =>
-    (lights ??= lightUniforms(
-      scene.objects,
+  /** 场景有阴影（P13d）：档位 ≠ 0 且有点光 / 平行光阴影计数；为真时模型网格编投射变体、渲染器建阴影图集。 */
+  const castsShadows = shadowQuality !== 0 && counts.pointShadow + counts.directionalShadow > 0;
+  /**
+   * 开了光照的程序才读；没人用时不解析灯对象，也不登记它们的绑定（P13d 起灯光数组不进材质常量，渲染器每帧按 `bundle.lights` 写）。
+   */
+  const sceneLights = () => {
+    bundle.lights ??= {
+      records: collectSceneLights(
+        scene.objects,
+        bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
+      ),
       counts,
-      bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
-    ));
+      quality: shadowQuality,
+    };
+  };
   /** 遗留灯（P13a）：程序读到三个数组之一才算；同 `sceneLights` 只解析一次。 */
   let legacy: Record<string, number[]> | null = null;
   const legacyLights = () =>
@@ -1695,12 +1740,20 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       );
     }
     const opaque = meshes.map((mesh) => isOpaqueBlending(mesh.passes[0]?.blending));
+    // 投射阴影（P13d）：模型缺省开；绑属性登记重编译（投射者名单在加载时定）
+    const castSetting = bindings.bind(
+      object.castshadow as SceneValue | undefined,
+      properties,
+      recompile("layer-structure", `objects/${index}/castshadow`),
+    );
+    const castShadow = castsShadows && castSetting !== false && opaque.some(Boolean);
     layer.model = {
       path,
       version: file.version,
       meshes,
       order: meshDrawOrder(opaque),
       bounds: file.bounds,
+      ...(castShadow ? { castShadow } : {}),
       ...(skeleton ? { skeleton } : {}),
     };
     // 动画层的 `{user}` 绑定（同图像层 puppet：`rate` / `blend` / `visible` 就地写进 `SceneState.animationLayers`）
@@ -1793,8 +1846,74 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], mesh.format, unsupported);
       if (compiled.framebuffer) unsupported.add("mdl:framebuffer");
       out.passes.push(compiled);
+      if (k === 0 && castsShadows && compiled.program !== null) {
+        const shadow = await compileShadowCaster(index, m, pass, compiled, combos);
+        if (shadow) {
+          if (shadow.program !== null) checkMeshAttributes(bundle.programs[shadow.program], mesh.format, unsupported);
+          out.shadow = shadow;
+        }
+      }
     }
     return out;
+  }
+
+  /**
+   * 投射变体（P13d，rea-p13-shadows R5，`FUN_140155fc0` 阴影模式）：见 `SceneMesh.shadow`。投射着色器先不带 COMBO 译一次，取它声明的 COMBO
+   * （注解不看条件分支）；再按最终的 COMBO 译一次取纹理注解（`ALPHATOCOVERAGE` 下才声明 albedo）、按 `material` 键对上基础材质的纹理，
+   * 最后照常 `compilePass`。基础的变形纹理（`morph`，运行时纹理）由渲染器按键换槽，这里不填。稳定键 `objects/<i>/meshes/<m>/shadow`。
+   */
+  async function compileShadowCaster(
+    index: number,
+    m: number,
+    base: MaterialPass,
+    compiled: ScenePass,
+    combos?: Record<string, number>,
+  ): Promise<ScenePass | null> {
+    if (!base.shader || compiled.program === null) return null;
+    const fragment = await fs.text(`shaders/${base.shader}.frag`);
+    const casterShader =
+      /^[ \t]*\/\/[ \t]*\[PASS\][ \t]+shadow[ \t]+(\S+)/m.exec(fragment ?? "")?.[1] ?? "shadowcaster";
+    const declared = await shader.compile(casterShader, {}, [], null, new Set());
+    if (!declared?.ok) {
+      unsupported.add(`shadow:caster:${casterShader}`);
+      return null;
+    }
+    const baseResult = bundle.programs[compiled.program];
+    const baseValue = (name: string) => baseResult.combos?.find((combo) => combo.name === name)?.value ?? 0;
+    const casterCombos: Record<string, number> = {};
+    for (const combo of declared.combos ?? []) casterCombos[combo.name] = baseValue(combo.name);
+    const a2c = (base.blending ?? "normal") === "alphatocoverage";
+    if (a2c) casterCombos.ALPHATOCOVERAGE = 1;
+    const shaped = await shader.compile(casterShader, casterCombos, [], null, new Set());
+    // 纹理：两份程序的纹理注解里 `material` 键相同的配对，基础那一槽的纹理名（材质写的，或注解缺省）给投射那一槽
+    const textures: unknown[] = [];
+    for (const binding of shaped?.textures ?? []) {
+      const key = binding.meta?.material;
+      if (typeof key !== "string" || key === "morph") continue;
+      const source = baseResult.textures?.find((t) => t.meta?.material === key);
+      if (!source) continue;
+      const name = base.textures?.[source.slot] ?? source.meta?.default;
+      if (typeof name === "string" && name) textures[binding.slot] = name;
+    }
+    const casterPass: MaterialPass = {
+      shader: casterShader,
+      blending: a2c ? "alphatocoverage" : "normal",
+      combos: casterCombos,
+      textures: Array.from(textures, (name) => name ?? null),
+      ...(base.constantshadervalues ? { constantshadervalues: base.constantshadervalues } : {}),
+    };
+    const caster = await compilePass(casterPass, {
+      key: `objects/${index}/meshes/${m}/shadow`,
+      model: true,
+      ...(combos ? { puppet: true } : {}),
+    });
+    // 材质常量照 WPE 从基础程序的常量存储按名字拷（`0x140156cb5`）：基础那边的值含它自己注解的缺省（投射着色器的注解只有 `material` 键、
+    // 没有缺省，比如 foliage 的风），所以拿基础 pass 解析好的值盖上，名字两边一样
+    const casterResult = caster.program === null ? null : bundle.programs[caster.program];
+    for (const uniform of casterResult?.uniforms ?? [])
+      if (typeof uniform.meta?.material === "string" && uniform.name in compiled.uniforms)
+        caster.uniforms[uniform.name] = compiled.uniforms[uniform.name];
+    return caster;
   }
 
   /** 编译一个材质 pass：纹理（含 `_rt_*` 与着色器注解默认值）、着色器、uniform、能力检查。 */
@@ -1816,6 +1935,9 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       } else if (name === MIP_FRAMEBUFFER_RT) {
         runtime[slot] = name;
         mipReaders = true;
+      } else if (name === SHADOW_ATLAS_RT) {
+        // 阴影图集（P13d）：着色器只在 LIGHTS_SHADOW_MAPPING 时声明它（比较采样器），渲染器按帧打包的尺寸建
+        runtime[slot] = name;
       } else return false;
       return true;
     };
@@ -1989,7 +2111,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ...(userTextures.slots.length ? { userTextures: userTextures.slots } : {}),
       uniforms: {
         ...shaderUniforms(result, pass, properties, context.key, bindings, issues),
-        ...(result?.ok && usesLighting(result) ? sceneLights() : {}),
+        ...(result?.ok && usesLighting(result) ? (sceneLights(), {}) : {}),
         ...(result?.ok && readsLegacyLights(result) ? legacyLights() : {}),
       },
       framebuffer: needsFramebuffer(names, result?.ok ? result : null),

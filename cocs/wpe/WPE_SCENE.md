@@ -35,10 +35,10 @@
   `genericimage4` 顶层那条无条件的 require，在 `LIGHTING=0` 时等于空行。逐灯的 PBR 计算在公开头文件 `common_pbr_2.h`，翻译器 `library.rs` 只负责遍历灯。
 - **灯数不看灯对象**：`LIGHTS_*` 取 `general.lightconfig`，每种灯 4 位。灯对象只负责填数组：多的丢掉，少的槽位全 0。没有这个键的场景里灯对象不起作用，开了 `LIGHTING` 的材质只剩环境光。
 - **`"light": "point"` 是遗留灯**，不进这些数组；V1 灯是 `lpoint` / `lspot` / `ltube` / `ldirectional`。
-- 宿主 `compile/lights.ts` 把灯对象换算成 uniform（编译期常量，绑了 `{user}` 的字段登记重编译），宏经 `litDefines` 传给翻译器，只在最终 `LIGHTING` 非 0 时生效。
+- 宿主 `compile/lights.ts` 把灯对象整理成记录（`bundle.lights`，绑了 `{user}` 的字段登记重编译），渲染器每帧按视线方向排序、照 WPE 写整块灯光缓冲（P13d 起，见「阴影（P13d）」），宏经 `litDefines` 传给翻译器，只在最终 `LIGHTING` 非 0 时生效。
 - 光照路径自己的宏只有 `LIGHTS_*`。`SHADERVERSION` 是翻译器的平台宏（69），`genericimage3` 按它选公式。
 - **全局引擎宏**（[hdr-macro-REPORT](../../.claude/plans/wpe-import/3-scene/hdr-macro-REPORT.md)）：`HDR`、`SCENE_ORTHO` 经 `engineDefines` 传给全部着色器，关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。`REVERSEDEPTH` 恒为 1（P13c，WPE 用反向深度；见「sprite 对象（P13c）」）。`TEX<n>FORMAT` 只给声明了 `formatcombo` 且按名字绑定的槽位定义，运行时槽位（`previous`、`bind`、passthrough）不定义。`HLSL_GS40_DISABLED` 不能定义，WPE 没有这个宏。
-- **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，阴影 / cookie 报 `lightconfig:*`，体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
+- **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，聚光的阴影 / cookie 报 `lightconfig:spot*`（点光、平行光的阴影 P13d 起支持），体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
 - 本机语料没有一张真的开 `LIGHTING`，这条路径靠 `ignore/lighting/` 的测试工程和 WPE 1:1 对比（最大差 1）。普通图层带法线图时另有 UV 内缩的差异（已知，最大 10）。
 
 ## 反射（P13b1：设置与「反射关」；P13b2：平面反射开）
@@ -72,6 +72,20 @@
 - **照报**：组里的 sprite 报 `model:passthrough:children:sprite`（遮挡测试读哪张深度没测）；反射开时 sprite 在名单里报 `reflection:planar:sprite`（WPE 在反射 pass 里也画、谁先画谁做测试，矩阵怎么镜像没查清）；sprite 材质多 pass 报 `sprite:material-passes`、读快照报 `sprite:framebuffer`。
 - **拼错的深度键**：`depthtesting` / `depthwriting`（ricepod 的 `orbital_*`）中性，WPE 不读，按缺省规整（测深度，S4）。
 - **实测**（2026-11-14）：确定性工程 `ignore/p13/c/gen_c.py`（不挡 / 挡一半 / 全挡、相机平移 + sprite 写变换、正交）和 WPE 整帧 0 差异，挡一半的 k = 0.737888 和抓帧逐位相同。ricepod 去掉粒子的复制工程在太阳被船体部分挡住的时段（约 110 s）按日志逐帧回放的走查差异已解释（2026-11-15 复核，P5d 把透视相机改成逐步 float32 之后）：第 2223 帧各 draw 的常量与 WPE 0 ULP（遮挡方块的轴长改成 float32 的 0.2 之后）；光斑的 k 两边都是 1，光斑在整帧上不引入差异；第 2221 帧逐像素相同，其余 4 帧剩下的都是 1 级：船体主网格（e102）8 个、喷口（e118）1 个孤立像素，归「片元的零星舍入差」（P11a 已知差异），2222 帧泛光模糊 1 个纹素差 1（P2b 已知差异）经上采样成 3 个像素，2224 帧船体 1 个像素经泛光摊成 134 个。dev 探针的结果里 `sprites` 给每个 sprite 读回帧之前那一帧数到的遮挡样本数（`previous`，读回帧的 k 由它算）、k 与读回帧自己数到的样本数（`GpuScene.spriteSamples`，计数缓冲带 `COPY_SRC`，产品不读）。
+
+## 阴影（P13d）
+
+读码见 [rea-p13-passes](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md) 第 2 节与 [rea-p13-shadows](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-shadows.md)（R1–R6），实测见 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13d 的实测：阴影」，计划与实施记录见 [phase-13d-shadows](../../.claude/plans/wpe-import/3-scene/phase13/phase-13d-shadows.md)。
+
+- **设置「场景阴影」**（`wpeSceneShadows`：`follow` 缺省 / `disabled` / `low` / `medium` / `high` / `ultra`，`get_wpe_scene_shadows` 场景宿主可读）：跟随时读 WPE `config.json` 的 `general.user.shadows`，缺键或读不到按 medium（`compile/postprocess.ts` 的 `resolveShadows`）。只在 `lightconfig` 要阴影时才读 `config.json`。宿主随 `setting-change` 整场重新加载（档位决定投射变体、图集尺寸与宏）。dev 覆盖 `localStorage["kabegame-dev-scene-shadows"]`（`dev/shadowsOverride.ts`，生产构建摇掉），宿主加载与 dev 探针都读，验收时不改用户设置也能按任一档位渲染；用完要删掉。
+- **灯光缓冲**（`compile/lights.ts` 的 `lightFrame`）：灯光数组不再进材质常量，渲染器每帧（相机与脚本之后）按 WPE 的规则排序——类型升序、`castshadow | usecookie` 降序、局部原点 · `g_ViewForward` 升序——再按 WPE 的平铺布局写整块缓冲：带阴影的灯占前几个槽，多出来的投射灯被普通灯覆盖（`p13d-over`），没有灯的槽全 0。阴影计数照 WPE：档位为 0 时只读 `spotshadowcookie`（并进 `spotcookie`），其余阴影计数不读。
+- **阴影宏**：阴影计数之和非 0 时 `LIGHTS_SHADOW_MAPPING = 1`、`LIGHTS_SHADOW_MAPPING_QUALITY = 档位`（1 low … 4 ultra；1 是单次比较，2 起 9 次采样）。翻译器按 WPE 的生成器展开点光、平行光的阴影分支，平行光的级联下标照抄 WPE 的 `B0 + k + c`（两盏以上读错，语料依赖的 WPE 缺陷照抄）；聚光的阴影 / cookie 照报。
+- **阴影图集**（`render/shadows.ts` 的 `ShadowAtlas`、`render/shadowMath.ts`）：`_rt_shadowAtlas` 是 `depth32float`、每帧清 0（反向 Z），比较采样器 GREATER、线性、clamp（WebGPU 没有 BORDER，越界的边框由翻译器的 `kb_shadowCompare` 处理）。方块边长 low / medium 256、high 512、ultra 1024：点光一块 2×3 个面（S/2 × S/3），平行光三级联各一块；打包点光优先、再按大小降序，8192 宽一行，图集只在不够时变大（「够就不动」）。点光六个面的 fov 94 / 94 / 92 / 91.2°（按档位），近平面正交场景 1、透视场景 `max(0.05, lightsourcesize)`，远平面 `max(radius, near + 0.01)`；阴影 pass 的投影 `P32 −= 0.00333`，uniform 不带。平行光级联 `(a, b) = (cd0, 4cd1)`、`(cd1, 4cd1)`、`(cd2, max(1.5cd2, 4cd1))`，视图照 R3 逐步 float32（快速倒数平方根、`fmodf` 防抖），阴影 pass 的 `VP[3][2] −= 0.0005`。投影与方块变换每帧写进同一块灯光缓冲（`g_LFeature_*`）。
+- **阴影 pass**（`render/scene.ts` 的 `buildShadowCasters` / `shadowCasterOf`）：每帧在反射 pass 与主 pass 之前。投射者是不透明（任一网格第一个 pass 是 normal / alphatocoverage）且 `castshadow` 不为 false 的模型（缺省开、地面也投；绑属性登记重编译）；图像层、粒子等写了 `castshadow` 也不画，键中性。每个网格的投射变体（`SceneMesh.shadow`）：着色器取基础片元首行的 `// [PASS] shadow <名>`，没有用 `shadowcaster`；COMBO 只取投射着色器声明的、值取基础程序的，基础 blending 为 alphatocoverage 时加 `ALPHATOCOVERAGE = 1`、变体也走 A2C 丢弃入口；纹理按注解的 `material` 键对槽，材质常量按名字从基础 pass 拷（投射着色器的注解没有缺省，比如 foliage 的风）。管线只写深度、剔除 NONE、`depthBiasSlopeScale −4`。`fur4` 的主 pass 按 `INSTANCECOUNT` 画多层，投射变体只画基础网格一层。WebGPU 没有视口数组：每个图集条目、每个视图单独画一次，`firstInstance` 取视图号，着色器照样按实例号取 `g_ViewportViewProjectionMatrices[i]`（翻译器去掉 `gl_ViewportIndex` 的赋值）；投射者每个条目一份 uniform 副本（`g_ModelMatrix` 按当前状态、视图投影是这一条的）。
+- **空槽**：WPE 给没有灯的阴影槽写全 0，投影 `w` 是 0，坐标是 0/0 的 NaN；硬件比较采样把 NaN 坐标当 0、结果有限，乘颜色 0 没有贡献。`kb_shadowCompare` 手算双线性的权重写成 `w >= 0 ? w : 0`，否则 NaN 会进整个光照和、画面全黑（`p13d-hide` 运行中隐藏一盏）。
+- **已知差别**：WPE 运行中隐藏投射灯时图集不缩；我们 `visible` 绑属性是整场重编译，按新的灯数建图集，方块变换的分母不同，画面相同（`p13d-hide` 2 个像素差 1）。
+- **A2C 阈值**：单采样 A2C 在 alpha ≥ 0.5 + 2⁻¹² 时才覆盖（见「写入状态（步骤 5）」表里「A2C 的覆盖」一行）；投射变体同样适用，阴影图集逐纹素和 WPE 相同。
+- **实测**（2026-11-15）：确定性工程 `ignore/p13/d/gen_d0.py`、`gen_d8.py`、`gen_d9.py`、`gen_d10.py` 共 29 次抓帧（五个档位 × 点光正交 / 透视 / 平行光、多灯、投射者判定、剔除、改级联距离、相机微移、两盏平行光、投射灯超配、运行中隐藏、毛发层数、三种专用投射者），按抓帧时刻渲染，每张最多 32 个孤立像素、都只差 1 级；`p13d-who` 另有一个粒子方块，是屏外探针不步进粒子，与阴影无关。
 
 ## 着色器翻译器 `wpesl2wgsl`
 

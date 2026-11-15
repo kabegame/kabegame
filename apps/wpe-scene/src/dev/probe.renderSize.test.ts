@@ -83,6 +83,8 @@ function fakeScene(size: readonly [number, number] | undefined) {
     setParallax: () => {},
     update: (frame: { pointer: [number, number] }) => void updatePointers.push(frame.pointer),
     encode: () => {},
+    // sprite 的遮挡计数（P13c 走查）：没有 sprite
+    spriteSamples: async () => [],
     profileParticles: () => {},
     particleProfile: () => [],
     particleStats: () => [],

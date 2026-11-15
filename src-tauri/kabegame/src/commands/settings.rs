@@ -120,6 +120,11 @@ pub fn get_wpe_scene_reflection() -> String {
 }
 
 #[tauri::command]
+pub fn get_wpe_scene_shadows() -> String {
+    Settings::global().get_wpe_scene_shadows()
+}
+
+#[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
 }
@@ -473,6 +478,12 @@ pub fn set_wpe_scene_postprocess(value: String) -> Result<(), String> {
 #[tauri::command]
 pub fn set_wpe_scene_reflection(value: String) -> Result<(), String> {
     Settings::global().set_wpe_scene_reflection(value)
+}
+
+/// 场景壁纸「场景阴影」设置：写设置并广播 `setting-change`，正在显示的场景据此重新判定、重新加载。
+#[tauri::command]
+pub fn set_wpe_scene_shadows(value: String) -> Result<(), String> {
+    Settings::global().set_wpe_scene_shadows(value)
 }
 
 /// 暂停桌面上的壁纸：壁纸窗口经 `setting-change` 收到，只对网页与场景生效；暂停期间桌面鼠标也不再转发给壁纸

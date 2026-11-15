@@ -511,6 +511,8 @@ const READBACK_FORMATS: Record<string, { texel: number; kind: "rgba8" | "f32" }>
   "bgra8unorm-srgb": { texel: 4, kind: "rgba8" },
   rgba16float: { texel: 8, kind: "f32" },
   rgba32float: { texel: 16, kind: "f32" },
+  // 只有深度附件的 pass（P13d 阴影图集）：按 depth-only 拷，每纹素一个 f32，转换时摊进 rgba 的 r（g、b 为 0，a 为 1）
+  depth32float: { texel: 4, kind: "f32" },
 };
 
 const isDepthFormat = (format: string) => format.startsWith("depth") || format.startsWith("stencil");
@@ -1147,7 +1149,8 @@ class Tracer {
       },
       draws: [],
       size,
-      attachment: first,
+      // 没有颜色附件时读回深度附件（P13d 阴影图集）
+      attachment: first ?? depthView,
     };
     this.frame.passes.push(record);
     encoder.events.push({ kind: "pass", pass: record });
@@ -1372,7 +1375,12 @@ class Tracer {
       },
     ]) as GPUBuffer;
     encoder.copyTextureToBuffer(
-      { texture: texture.object, mipLevel: view.mip, origin: { x: 0, y: 0, z: view.layer } },
+      {
+        texture: texture.object,
+        mipLevel: view.mip,
+        origin: { x: 0, y: 0, z: view.layer },
+        ...(texture.format === "depth32float" ? { aspect: "depth-only" as const } : {}),
+      },
       { buffer, bytesPerRow, rowsPerImage: height },
       { width, height, depthOrArrayLayers: 1 },
     );
@@ -1580,6 +1588,15 @@ export function convertReadback(
   }
   const out = new Float32Array(width * height * 4);
   const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
+  if (format === "depth32float") {
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++) {
+        const o = (y * width + x) * 4;
+        out[o] = view.getFloat32(y * bytesPerRow + x * 4, true);
+        out[o + 3] = 1;
+      }
+    return { kind: "f32", data: out };
+  }
   const table = spec.texel === 8 ? halfTable() : null;
   for (let y = 0; y < height; y++)
     for (let i = 0; i < width * 4; i++) {

@@ -7,7 +7,7 @@
  *   同一套规则（`normalizeDepthKeys`），三个键都不再报（会写深度的 `depthwrite:enabled`、`cull:*`、`depthtest:*` 都去掉了）；
  * - `mdl:missing-attribute` 只对读了的属性报（真翻译器，`p5c-attr` 的 M1–M5）；分量类型对不上报 `mdl:attribute-type`（步骤 2）；
  * - `mdl:*` 各键（步骤 2 加 `mdl:framebuffer`）、`model:id`、`model:effects`、模型在组里（`model:passthrough:children:model`）；
- *   `castshadow` 等在模型上中性、在图像层上照报；
+ *   `skin` 等在模型上中性、在图像层上照报（`castshadow` P13d 起在任何对象上都中性）；
  * - 本机有 WPE 时 retro 不再报任何键（步骤 2 解锁）。
  * 依据是 p5-REPORT「P5c 语义的实测核对」。
  */
@@ -622,10 +622,10 @@ describe("checkObjectFeatures：模型对象（点 4）", () => {
     ).toEqual([]);
   });
 
-  it("这几个键在图像层上照报（`reflected` 自 P13b2 起中性）；模型上 perspective 绑属性照报（attachment 自 P12b1、animationlayers 与 rootmotion 自 P12b2-1 起中性）", () => {
+  it("skin 在图像层上照报（`reflected` 自 P13b2、`castshadow` 自 P13d 起中性）；模型上 perspective 绑属性照报（attachment 自 P12b1、animationlayers 与 rootmotion 自 P12b2-1 起中性）", () => {
     expect(
       keys({ id: 1, image: "models/i.json", castshadow: true, reflected: true, skin: 1, disablepropagation: true }),
-    ).toEqual(["object:castshadow", "object:skin"]);
+    ).toEqual(["object:skin"]);
     expect(keys({ id: 1, model: "models/a.mdl", perspective: { user: "p", value: true } })).toEqual([
       "object:perspective",
     ]);

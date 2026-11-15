@@ -793,6 +793,8 @@ pub(crate) fn configure_app(
             set_wpe_scene_postprocess,
             get_wpe_scene_reflection,
             set_wpe_scene_reflection,
+            get_wpe_scene_shadows,
+            set_wpe_scene_shadows,
             #[cfg(not(target_os = "android"))]
             get_web_server_enabled,
             #[cfg(not(target_os = "android"))]

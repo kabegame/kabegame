@@ -9,12 +9,16 @@ import {
   lightAxes,
   lightConfigIssues,
   lightCounts,
+  lightFrame,
+  lightFrameUniforms,
   lightUniforms,
   litDefines,
   readsLegacyLights,
 } from "./lights";
 import type { SceneObject, SceneScalar, SceneValue } from "./model";
 
+/** 不带阴影的计数（P13d 起 `LightCounts` 带阴影与聚光 cookie 的计数）。 */
+const NONE = { pointShadow: 0, directionalShadow: 0, spotShadow: 0, spotCookie: 0, spotShadowCookie: 0 };
 const plain = (value: SceneValue | undefined) => value as string | number | boolean | null | undefined;
 const close = (actual: number[], expected: number[]) => {
   expect(actual).toHaveLength(expected.length);
@@ -23,8 +27,9 @@ const close = (actual: number[], expected: number[]) => {
 
 describe("general.lightconfig", () => {
   it("灯数只取低 4 位，缺键与非数字按 0", () => {
-    expect(lightCounts({})).toEqual({ point: 0, spot: 0, tube: 0, directional: 0 });
+    expect(lightCounts({})).toEqual({ ...NONE, point: 0, spot: 0, tube: 0, directional: 0 });
     expect(lightCounts({ lightconfig: { point: 2, spot: 17, tube: "3", directional: 15 } })).toEqual({
+      ...NONE,
       point: 2,
       spot: 1,
       tube: 0,
@@ -32,20 +37,57 @@ describe("general.lightconfig", () => {
     });
   });
 
-  it("阴影与 cookie 的灯数照报", () => {
+  it("阴影计数按档位（P13d）：档位 0 时阴影计数不读，spotshadowcookie 并进 spotcookie；各 2 位", () => {
+    const config = {
+      lightconfig: { point: 2, pointshadow: 1, directional: 1, directionalshadow: 5, spotshadowcookie: 1 },
+    };
+    expect(lightCounts(config, 0)).toEqual({
+      ...NONE,
+      point: 2,
+      spot: 0,
+      tube: 0,
+      directional: 1,
+      spotCookie: 1,
+    });
+    expect(lightCounts(config, 1)).toEqual({
+      ...NONE,
+      point: 2,
+      spot: 0,
+      tube: 0,
+      directional: 1,
+      pointShadow: 1,
+      directionalShadow: 1,
+      spotShadowCookie: 1,
+    });
+  });
+
+  it("只有聚光的阴影与 cookie 照报（P13d 起点光、平行光的阴影支持）", () => {
     expect(lightConfigIssues({})).toEqual([]);
-    expect(lightConfigIssues({ lightconfig: { point: 1, spotcookie: 1, pointshadow: 2, spotshadow: 0 } })).toEqual([
-      "lightconfig:spotcookie",
-      "lightconfig:pointshadow",
-    ]);
+    const config = { lightconfig: { point: 1, spotcookie: 1, pointshadow: 2, spotshadow: 1 } };
+    expect(lightConfigIssues(config, 2)).toEqual(["lightconfig:spotshadow", "lightconfig:spotcookie"]);
+    expect(lightConfigIssues(config, 0)).toEqual(["lightconfig:spotcookie"]);
   });
 
   it("宏：litDefines 只有 LIGHTS_*，HDR / SCENE_ORTHO 全局给，关闭时不写键；REVERSEDEPTH 恒为 1（P13c）", () => {
-    expect(litDefines({ point: 2, spot: 0, tube: 1, directional: 0 })).toEqual({
+    const shadowless = {
+      LIGHTS_SPOT_SHADOW: "0",
+      LIGHTS_SPOT_COOKIE: "0",
+      LIGHTS_SPOT_SHADOW_COOKIE: "0",
+      LIGHTS_DIRECTIONAL_SHADOW: "0",
+      LIGHTS_POINT_SHADOW: "0",
+    };
+    expect(litDefines({ ...NONE, point: 2, spot: 0, tube: 1, directional: 0 })).toEqual({
       LIGHTS_POINT: "2",
       LIGHTS_SPOT: "0",
       LIGHTS_TUBE: "1",
       LIGHTS_DIRECTIONAL: "0",
+      ...shadowless,
+    });
+    // 有阴影计数时另写 LIGHTS_SHADOW_MAPPING 与档位（P13d）
+    expect(litDefines({ ...NONE, point: 1, spot: 0, tube: 0, directional: 0, pointShadow: 1 }, 3)).toMatchObject({
+      LIGHTS_POINT_SHADOW: "1",
+      LIGHTS_SHADOW_MAPPING: "1",
+      LIGHTS_SHADOW_MAPPING_QUALITY: "3",
     });
     expect(engineDefines(false, false)).toEqual({ REVERSEDEPTH: "1" });
     expect(engineDefines(true, true)).toEqual({ REVERSEDEPTH: "1", HDR: "1", SCENE_ORTHO: "1" });
@@ -53,7 +95,7 @@ describe("general.lightconfig", () => {
 });
 
 describe("灯对象 → uniform", () => {
-  const counts = { point: 1, spot: 1, tube: 1, directional: 1 };
+  const counts = { ...NONE, point: 1, spot: 1, tube: 1, directional: 1 };
 
   it("旋转是 Rz · Ry · Rx，弧度", () => {
     // 绕 y 转 90°：局部 +X 指向世界 -Z，这正是灯从 +Z 照向图层的写法
@@ -132,11 +174,11 @@ describe("灯对象 → uniform", () => {
       { light: "lpoint", intensity: 1, color: "1 0 0", radius: 5 },
       { light: "lpoint", intensity: 1, color: "0 1 0", radius: 5 },
     ];
-    const values = lightUniforms(objects, { point: 2, spot: 0, tube: 0, directional: 0 }, plain);
+    const values = lightUniforms(objects, { ...NONE, point: 2, spot: 0, tube: 0, directional: 0 }, plain);
     expect(values.g_LPoint_Color).toEqual([1, 0, 0, 5, 0, 1, 0, 5]);
-    const one = lightUniforms(objects, { point: 1, spot: 0, tube: 0, directional: 0 }, plain);
+    const one = lightUniforms(objects, { ...NONE, point: 1, spot: 0, tube: 0, directional: 0 }, plain);
     expect(one.g_LPoint_Color).toEqual([1, 0, 0, 5]);
-    const empty = lightUniforms([], { point: 2, spot: 0, tube: 0, directional: 0 }, plain);
+    const empty = lightUniforms([], { ...NONE, point: 2, spot: 0, tube: 0, directional: 0 }, plain);
     expect(empty.g_LPoint_Color).toEqual(new Array(8).fill(0));
   });
 });
@@ -153,20 +195,23 @@ describe("能力表", () => {
     expect([...issues]).toEqual(["object:castvolumetrics"]);
   });
 
-  it("图像上的 castshadow 仍然报", () => {
+  it("castshadow 在任何对象上都中性（P13d D4：只有不透明模型进阴影 pass，图像层写了也不画）", () => {
     const issues = new Set<string>();
     checkObjectFeatures({ image: "models/a.json", castshadow: true }, issues);
-    expect([...issues]).toEqual(["object:castshadow"]);
+    checkObjectFeatures({ model: "models/m.json", castshadow: false }, issues);
+    expect([...issues]).toEqual([]);
   });
 
-  it("灯光数组算引擎 uniform，别的 g_L* 不算", () => {
+  it("灯光数组与阴影数组（g_LFeature_*，P13d）算引擎 uniform，别的 g_L* 不算", () => {
     expect(isEngineUniform("g_LPoint_Color")).toBe(true);
     expect(isEngineUniform("g_LDirectional_Direction")).toBe(true);
     // 遗留灯的三个数组（P13a）随材质常量写入
     expect(isEngineUniform("g_LightsPosition")).toBe(true);
     expect(isEngineUniform("g_LightsColorRadius")).toBe(true);
     expect(isEngineUniform("g_LightsColorPremultiplied")).toBe(true);
-    expect(isEngineUniform("g_LFeature_ShadowProjection")).toBe(false);
+    expect(isEngineUniform("g_LFeature_ShadowProjection")).toBe(true);
+    expect(isEngineUniform("g_LFeature_ShadowPointTransform")).toBe(true);
+    expect(isEngineUniform("g_LCustom_Value")).toBe(false);
   });
 });
 
@@ -327,12 +372,16 @@ describe("编译", () => {
   }
   const lamp = { id: 2, name: "l", light: "lpoint", color: "1 1 1", intensity: { user: "p", value: 1 }, radius: 3 };
 
-  it("无 effect 的图层：灯数宏随请求给翻译器，灯光 uniform 进 pass", async () => {
+  it("无 effect 的图层：灯数宏随请求给翻译器，灯光数组不进 pass、由 bundle.lights 每帧算（P13d）", async () => {
     const { bundle, calls } = await compile({ image: "models/lit.json" }, { lightconfig: { point: 1 } }, [lamp]);
     expect(bundle.unsupported).toEqual([]);
     expect(calls[0].litDefines).toMatchObject({ LIGHTS_POINT: "1" });
     expect(calls[0].defines).toMatchObject({ SCENE_ORTHO: "1" });
-    expect(bundle.layers[0].passes[0].uniforms.g_LPoint_Color).toEqual([2, 2, 2, 3]);
+    expect(bundle.layers[0].passes[0].uniforms.g_LPoint_Color).toBeUndefined();
+    const lights = bundle.lights!;
+    expect(lights.records).toHaveLength(1);
+    const frame = lightFrame(lights.records, lights.counts, lights.quality, [0, 0, -1]);
+    expect(lightFrameUniforms(frame).g_LPoint_Color).toEqual([2, 2, 2, 3]);
   });
 
   it("灯字段绑了属性：登记重编译", async () => {
@@ -348,6 +397,7 @@ describe("编译", () => {
     const { bundle } = await compile({ image: "models/off.json" }, { lightconfig: { point: 1 } }, [lamp]);
     expect(bundle.layers[0].passes[0].uniforms).toEqual({});
     expect(bundle.bindings).toEqual([]);
+    expect(bundle.lights).toBeUndefined();
   });
 
   const legacyLamp = { id: 3, name: "g", light: "point", origin: "1 2 3", color: "1 1 1", intensity: 1, radius: 4 };
@@ -392,8 +442,16 @@ describe("编译", () => {
     expect(bundle.unsupported).toContain("lighting:effect");
   });
 
-  it("lightconfig 要阴影：照报", async () => {
-    const { bundle } = await compile({ image: "models/lit.json" }, { lightconfig: { pointshadow: 1 } });
-    expect(bundle.unsupported).toContain("lightconfig:pointshadow");
+  it("lightconfig 的点光、平行光阴影不报（P13d 支持），聚光的阴影照报", async () => {
+    // 内存读取器里没有 WPE 的 config.json：阴影档位按缺键的 medium（2）
+    const point = await compile(
+      { image: "models/lit.json" },
+      { lightconfig: { pointshadow: 1, directionalshadow: 1 } },
+    );
+    expect(point.bundle.unsupported).toEqual([]);
+    expect(point.bundle.lights?.counts).toMatchObject({ pointShadow: 1, directionalShadow: 1 });
+    expect(point.bundle.lights?.quality).toBe(2);
+    const spot = await compile({ image: "models/lit.json" }, { lightconfig: { spotshadow: 1 } });
+    expect(spot.bundle.unsupported).toContain("lightconfig:spotshadow");
   });
 });

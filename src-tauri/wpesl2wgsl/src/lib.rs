@@ -78,6 +78,12 @@ pub struct TranslateRequest {
     /// 额外的宏（最后应用，可覆盖平台宏与 COMBO）。
     #[serde(default)]
     pub defines: BTreeMap<String, String>,
+    /// 着色器注解缺省纹理的格式：槽位 → `.tex` 格式（读不到为 null）。只用于声明了 `formatcombo`、材质没绑（不在 `textures` 里）、
+    /// 注解带 `default` 且 `require` 成立的槽（P13d：`fur4` 的 `g_Texture8` 缺省 `util/fur`，着色器把 `TEX8FORMAT` 当参数用）；
+    /// 缺了的在结果里列出（`phase: "texture"`、`missingTextures`），调用方读到格式后带上重试，同头文件。不进 `textures`，
+    /// 所以不会把采样器注解的 `combo` 置 1。
+    #[serde(default, rename = "defaultFormats")]
+    pub default_formats: BTreeMap<u32, Option<u32>>,
     /// 只在最终 `LIGHTING` 非 0 时生效的宏：`LIGHTS_*`（WPE 只在这时写它们，`FUN_1401a5c40`）与光照路径要的 `HDR`。
     /// 材质默认开光照的情况调用方翻译前不知道，所以由这里按最终取值裁决。
     #[serde(default, rename = "litDefines")]
@@ -133,9 +139,19 @@ pub struct TranslateResult {
     /// `phase: "include"` 时缺少的头文件。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
-    /// `phase: "require"` 时展开不了的库：未知的名字，或要阴影 / cookie 的 `LightingV1/shadow`。
+    /// `phase: "texture"` 时要格式的注解缺省纹理（见请求的 `defaultFormats`）。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_textures: Vec<MissingTexture>,
+    /// `phase: "require"` 时展开不了的库：未知的名字，或要聚光阴影 / cookie 的 `LightingV1/spot-shadow`。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
+}
+
+/// 要格式的注解缺省纹理：槽位与缺省名（着色器注解的 `default`，如 `util/fur`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MissingTexture {
+    pub slot: u32,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -319,6 +335,41 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
         if let Some(format) = texture.format {
             defines.insert(format!("TEX{}FORMAT", texture.slot), format.to_string());
         }
+    }
+    // 注解缺省纹理的格式（P13d，`fur4` 的 `TEX8FORMAT`）：WPE 绑缺省纹理时同样按它的格式定义宏；缺的先问调用方
+    let mut missing_textures = Vec::new();
+    for (slot, meta) in &annotations.samplers {
+        if meta.get("formatcombo").and_then(Value::as_bool) != Some(true)
+            || request.textures.iter().any(|texture| texture.slot == *slot)
+        {
+            continue;
+        }
+        let Some(name) = meta
+            .get("default")
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        if !requirement_holds(meta, &combos) {
+            continue;
+        }
+        match request.default_formats.get(slot) {
+            Some(Some(format)) => {
+                defines.insert(format!("TEX{slot}FORMAT"), format.to_string());
+            }
+            Some(None) => {}
+            None => missing_textures.push(MissingTexture {
+                slot: *slot,
+                name: name.to_string(),
+            }),
+        }
+    }
+    if !missing_textures.is_empty() {
+        return TranslateResult {
+            missing_textures,
+            ..TranslateResult::failure("texture", None, Vec::new())
+        };
     }
     defines.extend(request.defines.clone());
     if defines.get("LIGHTING").is_some_and(|value| value != "0") {
@@ -575,6 +626,22 @@ fn resolve_combos(
         set(name, combo_value(value)?, "request");
     }
     Ok(combos.into_values().collect())
+}
+
+/// 采样器注解的 `require`（`{"SHADINGGRADIENT": 1}`）在当前 COMBO 下是否成立：每一项都等于要求的值（缺的 COMBO 按 0）。
+/// 没写 `require` 时成立；值转不成整数的那一项按不成立。
+fn requirement_holds(meta: &Value, combos: &[Combo]) -> bool {
+    let Some(require) = meta.get("require").and_then(Value::as_object) else {
+        return true;
+    };
+    require.iter().all(|(name, wanted)| {
+        let name = name.trim().to_ascii_uppercase();
+        let actual = combos
+            .iter()
+            .find(|combo| combo.name == name)
+            .map_or(0, |combo| combo.value);
+        combo_value(wanted).is_ok_and(|wanted| wanted == actual)
+    })
 }
 
 fn combo_value(value: &Value) -> Result<i64, String> {
@@ -1055,7 +1122,89 @@ vec3 PointSegmentDelta(vec3 p, vec3 a, vec3 b) { return a - p; }
             .insert("LIGHTS_SPOT_COOKIE".into(), "1".into());
         let result = translate(&req);
         assert_eq!(result.phase, Some("require"));
-        assert_eq!(result.requires, ["LightingV1/shadow"]);
+        assert_eq!(result.requires, ["LightingV1/spot-shadow"]);
+    }
+
+    /// 点光、平行光的阴影分支能翻译（P13d）：投影与采样函数用桩，真实实现在 WPE 的 `common_pbr_2.h`。
+    #[test]
+    fn lighting_shadows_translate() {
+        let mut req = lit_request();
+        req.fragment = format!(
+            "uniform sampler2DComparison g_Texture6;\nvec4 CalculateProjectedCoordsPoint(vec3 p, vec3 o, vec4 info, vec4 t) {{ return vec4(p - o, info.x + t.x); }}\nfloat PerformPointShadowMapping(vec4 c) {{ return texSample2DCompare(g_Texture6, c.xy, c.z).r; }}\nvec4 CalculateProjectedCoordsCascades(vec3 p, mat4 m) {{ return mul(vec4(p, 1.0), m); }}\nfloat PerformShadowMapping(vec3 c, vec4 t) {{ return texSample2DCompare(g_Texture6, c.xy * t.zw + t.xy, c.z).r; }}\n{}",
+            req.fragment
+        );
+        for (name, value) in [
+            ("LIGHTS_POINT", "2"),
+            ("LIGHTS_POINT_SHADOW", "1"),
+            ("LIGHTS_DIRECTIONAL", "1"),
+            ("LIGHTS_DIRECTIONAL_SHADOW", "1"),
+        ] {
+            req.lit_defines.insert(name.into(), value.into());
+        }
+        let result = translate(&req);
+        assert!(result.ok, "{:?} {:?}", result.phase, result.errors);
+        let names: Vec<_> = result.uniforms.iter().map(|u| u.name.as_str()).collect();
+        for name in [
+            "g_LFeature_ShadowPointProjection",
+            "g_LFeature_ShadowPointProjectionTransform",
+            "g_LFeature_ShadowProjection",
+            "g_LFeature_ShadowProjectionTransform",
+        ] {
+            assert!(names.contains(&name), "缺 {name}: {names:?}");
+        }
+        assert!(result
+            .textures
+            .iter()
+            .any(|t| t.slot == 6 && t.kind == "2d-comparison"));
+    }
+
+    const FUR_FRAG: &str = "uniform sampler2D g_Texture8; // {\"default\":\"util/fur\",\"formatcombo\":true}\nuniform sampler2D g_Texture4; // {\"default\":\"gradient/x\",\"formatcombo\":true,\"require\":{\"SHADINGGRADIENT\":1}}\nvarying vec2 v_TexCoord;\nvoid main() {\n#if TEX8FORMAT == 9\n\tgl_FragColor = texSample2D(g_Texture8, v_TexCoord);\n#else\n\tgl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);\n#endif\n}\n";
+
+    /// 注解缺省纹理的格式（P13d）：`formatcombo` 槽材质没绑、注解带 `default` 时先问调用方要格式；`require` 不成立的槽不问。
+    #[test]
+    fn default_texture_formats_are_requested() {
+        let mut req = request();
+        req.fragment = FUR_FRAG.into();
+        let result = translate(&req);
+        assert_eq!(result.phase, Some("texture"));
+        assert_eq!(
+            result.missing_textures,
+            [MissingTexture {
+                slot: 8,
+                name: "util/fur".into()
+            }]
+        );
+        // 给了格式：宏生效（9 → 采样分支）
+        req.default_formats.insert(8, Some(9));
+        let result = translate(&req);
+        assert!(result.ok, "{:?}", result.errors);
+        let wgsl = result.fragment.unwrap().wgsl.unwrap();
+        assert!(wgsl.contains("textureSample"), "{wgsl}");
+        // 读不到（null）：不再问，宏照旧未定义
+        req.default_formats.insert(8, None);
+        let result = translate(&req);
+        assert!(result.ok, "{:?}", result.errors);
+        let wgsl = result.fragment.unwrap().wgsl.unwrap();
+        assert!(!wgsl.contains("textureSample"), "{wgsl}");
+        // require 成立时也问 g_Texture4
+        let mut req = request();
+        req.fragment = FUR_FRAG.into();
+        req.combos
+            .insert("SHADINGGRADIENT".into(), serde_json::json!(1));
+        let result = translate(&req);
+        let slots: Vec<_> = result.missing_textures.iter().map(|t| t.slot).collect();
+        assert_eq!(slots, [8, 4]); // 按注解出现的顺序
+    }
+
+    /// `gl_ViewportIndex = …;`（阴影投射着色器）去掉，声明也不进接口（P13d）。
+    #[test]
+    fn viewport_index_assignment_is_dropped() {
+        let mut req = request();
+        req.vertex = "uniform mat4 g_ViewportViewProjectionMatrices[6];\nin uint gl_InstanceID;\nvarying uint gl_ViewportIndex;\nattribute vec3 a_Position;\nvarying vec2 v_TexCoord;\nvoid main() {\n\tgl_Position = mul(vec4(a_Position, 1.0), g_ViewportViewProjectionMatrices[gl_InstanceID]);\n\tgl_ViewportIndex = gl_InstanceID;\n\tv_TexCoord = a_Position.xy;\n}\n".into();
+        let result = translate(&req);
+        assert!(result.ok, "{:?}", result.errors);
+        let wgsl = result.vertex.unwrap().wgsl.unwrap();
+        assert!(wgsl.contains("instance_index"), "{wgsl}");
     }
 
     // ---- 几何着色器展开 ----

@@ -104,6 +104,8 @@ function fakeScene() {
       updateFrames.push(frame);
     },
     encode: () => void log.push("encode"),
+    // sprite 的遮挡计数（P13c 走查）：没有 sprite
+    spriteSamples: async () => [],
     profileParticles: () => {},
     particleProfile: () => [],
     particleStats: () => [],

@@ -138,14 +138,21 @@ export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
 ]);
 /** 光照路径声明了、只有 PRELIGHTING 才读的 uniform（`genericimage4.vert`）：渲染器不写，PRELIGHTING 另报。 */
 const UNREAD_UNIFORMS = new Set(["g_AltModelMatrix", "g_AltNormalModelMatrix", "g_AltViewProjectionMatrix"]);
+/**
+ * 阴影 pass 投射者的视图投影数组（P13d，`shadowcaster*.vert` 按实例号取）：只有投射者的绘制写，`GpuScene.shadowCasterOf` 每个图集条目
+ * 写一份（这一条的全部视图），所以不在 `ENGINE_UNIFORMS` 里（那张表与 `staticBuiltins` / `frameBuiltins` 一一对应）。
+ */
+export const SHADOW_CASTER_UNIFORM = "g_ViewportViewProjectionMatrices";
+
 export function isEngineUniform(name: string): boolean {
-  // 灯光数组由 `lights.ts` 随材质常量写入：V1 四种灯，与遗留灯的三个数组（P13a）
+  // 灯光数组（V1 四种灯与阴影的 `g_LFeature_*`）由渲染器每帧按 `bundle.lights` 写（P13d），遗留灯的三个数组（P13a）随材质常量写入
   return (
     ENGINE_UNIFORMS.has(name) ||
+    name === SHADOW_CASTER_UNIFORM ||
     UNREAD_UNIFORMS.has(name) ||
     LEGACY_LIGHT_UNIFORMS.has(name) ||
     /^g_Texture\d+(?:Resolution|Texel)$/.test(name) ||
-    /^g_L(?:Point|Spot|Tube|Directional)_/.test(name)
+    /^g_L(?:Point|Spot|Tube|Directional|Feature)_/.test(name)
   );
 }
 
@@ -858,8 +865,9 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   if (isMixedCameraObject(object)) unsupported.add("object:camera:mixed");
   const cameraKey = (key: string) => camera && CAMERA_KEYS.has(key);
   // `reflected`（P13b2）：任何可画对象上都由反射名单读（`compile/reflection.ts`，p13-REPORT C1），反射关时不影响画面，中性
+  // `castshadow`（P13d）：只有不透明的模型投射（`obj+0x120` 的 0xc00，rea-p13-passes 2.7），图像层、粒子等写了也不进阴影 pass（D4 实测），中性
   for (const key of OBJECT_FLAGS)
-    if (active(object[key]) && !lightKey(key) && !modelKey(key) && key !== "reflected")
+    if (active(object[key]) && !lightKey(key) && !modelKey(key) && key !== "reflected" && key !== "castshadow")
       unsupported.add(`object:${key}`);
   // 光标命中（P6c）：`disablepropagation` 只认 JSON 布尔（任何对象类型都读它，只有图像层与文本层参与命中，别的类型上中性）；绑属性、挂脚本
   // 的取值运行中会变，没有就地路径，照报。模型对象（类型 5）P6c 不做命中：可见（JSON 不是 false）且为真时它会挡住下面的对象，照报 `cursor:model`

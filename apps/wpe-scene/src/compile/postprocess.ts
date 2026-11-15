@@ -88,6 +88,32 @@ export function resolveReflection(setting: string | null | undefined, wpeValue: 
   return typeof wpeValue === "boolean" ? wpeValue : true;
 }
 
+/** 设置「场景阴影」的取值（P13d）；默认 `follow`。 */
+export type SceneShadowSetting = "follow" | "disabled" | "low" | "medium" | "high" | "ultra";
+
+export const SCENE_SHADOW_SETTINGS: readonly SceneShadowSetting[] = [
+  "follow",
+  "disabled",
+  "low",
+  "medium",
+  "high",
+  "ultra",
+];
+
+/** 阴影档位 0 disabled、1 low、2 medium、3 high、4 ultra（rea-p13-passes「命名」，`ctx+0x1ac`）。 */
+export type ShadowQuality = 0 | 1 | 2 | 3 | 4;
+
+const SHADOW_LEVELS: Record<string, ShadowQuality> = { disabled: 0, low: 1, medium: 2, high: 3, ultra: 4 };
+
+/**
+ * 阴影档位（P13d）：固定档位直接用；跟随时用 WPE 的 `general.user.shadows`，档位枚举 `FUN_14010dad0` 不认识的值与缺键都按 medium
+ * （p2-REPORT G1）。不认识的设置值按跟随处理。`wpeValue` 是 `readWpeShadows` 的结果。
+ */
+export function resolveShadows(setting: string | null | undefined, wpeValue: unknown): ShadowQuality {
+  if (setting && setting !== "follow" && setting in SHADOW_LEVELS) return SHADOW_LEVELS[setting];
+  return typeof wpeValue === "string" && wpeValue in SHADOW_LEVELS ? SHADOW_LEVELS[wpeValue] : 2;
+}
+
 /** WPE 自己的取值 → 档位（`FUN_14010df40`：`memcmp(v, "disabled", 8)`，再比 `ultra` / `displayhdr`）。 */
 export function wpeLevelOf(value: string | null | undefined): PostprocessLevel {
   if (!value || value === "disabled") return "disabled";
@@ -266,6 +292,11 @@ export async function readWpePostprocessing(
 /** 读 WPE 用户设置里的 `reflection`（同上的查找方式）；读不到返回 undefined。只读。 */
 export async function readWpeReflection(reader: SceneReader, sceneAssets: readonly string[]): Promise<unknown> {
   return (await readWpeUserValue(reader, sceneAssets, "reflection", () => true)) ?? undefined;
+}
+
+/** 读 WPE 用户设置里的 `shadows`（P13d，同上的查找方式）；读不到返回 undefined。只读。 */
+export async function readWpeShadows(reader: SceneReader, sceneAssets: readonly string[]): Promise<unknown> {
+  return (await readWpeUserValue(reader, sceneAssets, "shadows", (v) => typeof v === "string")) ?? undefined;
 }
 
 /** 读 WPE 用户设置里的 `windowupdaterate`（媒体刷新间隔，P11c；同上的查找方式）；读不到返回 undefined。只读。 */

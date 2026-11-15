@@ -85,6 +85,7 @@ import {
   FRAMEBUFFER_RT,
   MIP_FRAMEBUFFER_RT,
   REFLECTION_RT,
+  SHADOW_ATLAS_RT,
   type SceneFbo,
   type SceneLayer,
   type ScenePass,
@@ -105,6 +106,8 @@ export type TextureRef =
   | { kind: "reflection" }
   /** mip 帧缓冲（P13b1〔g1〕，`_rt_MipMappedFrameBuffer`）：反射关时加载时清成 (0, 0, 0, 1)，之后不更新。Clamp + 三线性。 */
   | { kind: "mip-framebuffer" }
+  /** 阴影图集（P13d，`render/shadows.ts`）：深度 RT，比较采样 */
+  | { kind: "shadow-atlas" }
   /**
    * 文本层的字形图集（P6b 1d）：本层排版结果所在的 R8 主图集（`color: false`）或 RGBA8 彩色图集（`true`），按字体键共享，渲染器建场景时
    * 整张上传。线性过滤、repeat、没有 mip（rea-p6b-raster 3.2，p6b 抓帧的采样器是 Wrap）。
@@ -140,6 +143,7 @@ function runtimeInput(name: string): TextureRef | null {
   if (name === FRAMEBUFFER_RT) return { kind: "framebuffer" };
   if (name === REFLECTION_RT) return { kind: "reflection" };
   if (name === MIP_FRAMEBUFFER_RT) return { kind: "mip-framebuffer" };
+  if (name === SHADOW_ATLAS_RT) return { kind: "shadow-atlas" };
   return null;
 }
 
@@ -460,6 +464,26 @@ function passInputs(
     if (isDynamicSource(slot.source.kind) && fallback) inputs[slot.slot] = { kind: "user", slot, fallback };
   }
   return inputs;
+}
+
+/**
+ * 阴影投射变体（P13d，`SceneMesh.shadow`）的纹理来源：同 `planModelLayer` 的网格步骤（材质静态纹理与运行时 RT）；有变形目标的网格
+ * （`model.skeleton.morphs[m]`）把它自己的变形纹理接到投射着色器的 `morph` 槽（基础着色器是槽 5，`shadowcaster` 是槽 1，按注解的
+ * `material` 键找，`morphSlot` 为 null 时不接）。认不出的运行时名字进 `reasons`。
+ */
+export function shadowCasterInputs(
+  pass: ScenePass,
+  morph: { slot: number; object: number; mesh: number } | null,
+): { inputs: Record<number, TextureRef>; reasons: string[] } {
+  const inputs = passInputs(pass);
+  const reasons: string[] = [];
+  for (const [slot, name] of Object.entries(pass.runtime)) {
+    const input = runtimeInput(name);
+    if (input) inputs[Number(slot)] = input;
+    else reasons.push(`render:texture-rt:${name}`);
+  }
+  if (morph) inputs[morph.slot] = { kind: "morph", object: morph.object, mesh: morph.mesh };
+  return { inputs, reasons };
 }
 
 /**

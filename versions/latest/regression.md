@@ -2940,3 +2940,16 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | AT3 P8 回归 | Windows dev + 已有的 WPE 抓帧 | `p8-a2c` 第 162 帧、`p8-misc` 第 155 帧按日志回放 | 和 WPE 逐像素相同（屏蔽 FR / CLK） | 2026-11-15：两个都 0 差异；测试行测完已移除 |
 | [x] | AT4 镂空材质 | Windows dev + WPE 抓帧（`p13d-spec-ns`，chroma4 / foliage4 棋盘格 A2C） | 渲染抓帧那一刻，和 WPE 比 | 格子边上不再多画 | 2026-11-15：差异 54 → 11，剩下的都是 1 级孤立像素（在 P13d 进行中的工作区上测，`fur4` 的主 pass 要 P13d） |
 | [ ] | AT5 非 Windows / 别的显卡 | macOS / Linux / AMD / Intel | 预览用 A2C 的场景 | 同 Windows | 阈值是本机 NVIDIA、D3D11 单采样的实测，别的驱动可能不同 |
+
+## 场景壁纸阴影（P13d）
+
+2026-11-15。设置「场景阴影」（`wpeSceneShadows`，跟随 WPE 的 `shadows`，缺键 medium）；灯光数组改成每帧按 WPE 的规则排序、写整块缓冲；点光与平行光的阴影图集与阴影 pass（投射变体照 `[PASS] shadow` 注解，COMBO / A2C / 纹理 / 常量从基础材质继承，逐视图 `firstInstance` 代替视口数组）；翻译器展开点光 / 平行光阴影、`kb_shadowCompare` 处理没有 BORDER 与 NaN 坐标、新增「缺纹理格式」回合（`fur4`）、去掉 `gl_ViewportIndex` 的赋值；`fur4` 主 pass 按 `INSTANCECOUNT` 画多层。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase13/rea-p13-shadows.md`、`rea-p13-passes.md` 第 2 节与 `p13-REPORT.md`「P13d 的实测：阴影」，计划与实施记录见 `phase-13d-shadows.md`；测试工程 `ignore/p13/proj/p13d-*`（`ignore/p13/d/gen_d0.py`、`gen_d8.py`、`gen_d9.py`），WPE 抓帧在 `A:\p13d\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | SH0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、P13d 相关的 vitest（直接导入改动模块的 106 个文件）；`wpesl2wgsl` 单测与语料；`kabegame-core` 设置单测 | 0 error、全过 | 2026-11-15：tsc 0 error；翻译器 108 个单测过、语料 165/167（剩 `puppettexturechannels`、`volumetricsfront`，与本节无关）、几何门槛 27/27；vitest 的失败里 16 条在 HEAD 上同样失败（P13c 留下的探针替身、`REVERSEDEPTH` 宏、拼错的深度键），已一并修好；`pipeline.test.ts` 两张工坊场景的请求 / 字节上限在 HEAD 上同样超 |
+| [x] | SH1 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate` | 20 处（偏移、排序、打包、宏、计数、投射判定、COMBO / A2C / 注解 / 常量 / 纹理继承、引擎 uniform、宿主设置） | 都被单测抓到 | 2026-11-15：19 / 20，剩下的 `casts-ignore-quality` 是等价变异（档位 0 时阴影计数已是 0）；`ignore/p13/d/mut/mutations.py` |
+| [x] | SH2 语料 | Node，233 个工程 | HEAD 与工作区各扫一遍 | 只去掉 `lightconfig:pointshadow` / `directionalshadow` | 2026-11-15：去掉这两个键 4 张（都还有别的键）；`3455121165` 另报 `shader:generic4:require:LightingV1/spot-shadow`（本来就报 `lightconfig:spotshadow`）；其余增减是别的会话的改动 |
+| [x] | SH3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | 29 次抓帧（五档 × 点光正交 / 透视 / 平行光，多灯、投射者判定、剔除、改级联距离、相机微移、两盏平行光、投射灯超配、运行中隐藏、毛发层数、三种专用投射者），按抓帧时刻渲染，档位用 dev 覆盖 | 整帧只差零星 1 级 | 2026-11-15：每张最多 32 个孤立像素、都只差 1 级；`p13d-who` 的粒子方块是探针不步进粒子；`p13d-hide` 隐藏后原先整帧发黑（空槽 NaN），修后 2 个像素差 1；`p13d-spec` 的格子边差异来自 A2C 阈值（见「场景壁纸：单采样 A2C 的阈值（P13d 附带）」） |
+| [ ] | SH4 设置页切换 | Windows dev（新构建） | 设置页「场景阴影」切六档，预览带阴影的场景 | 每次切换场景重新加载、影子随档位变化，关闭时没有影子 | 待真机看 |
+| [ ] | SH5 非 Windows | macOS / Linux | 预览带阴影的场景 | 同 Windows | 本机不能测 |

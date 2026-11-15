@@ -70,8 +70,9 @@ import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker } from "../compile/client";
 import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
-import type { ScenePostprocessSetting, SceneReflectionSetting } from "../compile/postprocess";
+import type { ScenePostprocessSetting, SceneReflectionSetting, SceneShadowSetting } from "../compile/postprocess";
 import { reflectionOverride } from "./reflectionOverride";
+import { shadowsOverride } from "./shadowsOverride";
 import { schemeColor } from "../sceneStyle";
 import {
   checkRenderMode,
@@ -268,6 +269,8 @@ export interface RenderFrameOptions {
   postprocess?: ScenePostprocessSetting;
   /** 「场景反射」设置（P13b2）：缺省取 dev 覆盖（`dev/reflectionOverride.ts`），再缺省跟随 WPE。 */
   reflection?: SceneReflectionSetting;
+  /** 「场景阴影」设置（P13d）：缺省取 dev 覆盖（`dev/shadowsOverride.ts`），再缺省跟随 WPE。 */
+  shadows?: SceneShadowSetting;
   userProperties?: Record<string, unknown>;
   /** `g_Time`（秒）；`g_Daytime` 固定 0.5，保证可复现。传了 `particles` 时改用 dt 的累计值。 */
   time?: number;
@@ -401,6 +404,8 @@ export interface RenderFrameResult {
   format: string;
   unsupported: string[];
   postprocess: SceneBundle["general"]["postprocess"];
+  /** 实际生效的阴影档位（P13d，0 关闭 … 4 超高）与阴影计数；场景没有开光照的材质（`bundle.lights` 缺）时为 null。 */
+  shadows: { quality: number; pointShadow: number; directionalShadow: number } | null;
   /** 8 位 RGB（alpha 置 255）的 SHA-256：关闭档前后两版逐字节比较用。 */
   sha256: string;
   /** 三通道平均值（0–255），确认不是空图。 */
@@ -531,6 +536,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
     userProperties: options.userProperties,
     postprocess: options.postprocess ?? "disabled",
     reflection: options.reflection ?? reflectionOverride() ?? undefined,
+    shadows: options.shadows ?? shadowsOverride() ?? undefined,
     force,
     textureCache: cache,
     reader,
@@ -877,6 +883,13 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
         format,
         unsupported: bundle.unsupported,
         postprocess: bundle.general.postprocess,
+        shadows: bundle.lights
+          ? {
+              quality: bundle.lights.quality,
+              pointShadow: bundle.lights.counts.pointShadow,
+              directionalShadow: bundle.lights.counts.directionalShadow,
+            }
+          : null,
         sha256: await sha256(rgba),
         mean: [sums[0] / count, sums[1] / count, sums[2] / count],
         compileMs,

@@ -49,6 +49,7 @@ interface TranslateRequest {
   includes?: Record<string, string>;               // `#include` 里写的名字（相对 shaders/ 根，如 "common.h"、"base/model_vertex_v1.h"）→ 源码
   combos?: Record<string, number | boolean>;       // 材质 pass 与 effect pass 的 combos，名字不分大小写
   textures?: { slot: number; format?: number }[];  // 已绑定的 g_Texture<slot> 及其 .tex 格式枚举
+  defaultFormats?: Record<number, number | null>;  // 没绑定、按注解缺省纹理定格式的槽位：slot → 缺省纹理的格式（读不到为 null），见「缺纹理格式」
   defines?: Record<string, string>;                // 额外的宏，最后应用（可覆盖平台宏与 COMBO）
   litDefines?: Record<string, string>;             // 只在最终 LIGHTING 非 0 时生效的宏（LIGHTS_* 等，见下）
   debug?: boolean;                                 // 成功时也带上生成的 GLSL 450
@@ -60,6 +61,10 @@ interface TranslateRequest {
 - **`litDefines`**：WPE 只在最终 `LIGHTING` 非 0 时写 `LIGHTS_*`，而 COMBO 的最终值（可能来自着色器注解的默认值）要到这里才算得出，所以由翻译器裁决。
 - **`textures` 有两个作用**：一是采样器注释里写了 `"combo": "NORMALMAP"` 的槽位绑定了纹理时，该 COMBO 置 1；二是给声明了 `formatcombo` 的槽位定义 `TEX<slot>FORMAT = format`，和 WPE 一样；没声明的不定义，在 `#if` 里按 0。
   格式枚举与 WPE 一致：0 RGBA8888、1 RGB888、2 RGB565、4 DXT5、6 DXT3、7 DXT1、8 RG88、9 R8、10 RG1616F、11 R16F、12 BC7。
+  采样器注释还可以带 `components`（如 `generic4` 的 PBR 遮罩 `{"combo":"PBRMASKS","components":[{"combo":"METALLIC_MAP"},…,{"combo":"EMISSIVE_MAP"}]}`）：槽位绑定了纹理、且 `flags`（`.tex` 头的标志，WPE 纹理对象 `+0x1c`）带 `0x100000 << i` 时，第 i 个**对象**条目的 `combo` 置 1，非对象条目不计序号，`flags` 缺省按 0（`FUN_14016c800`；编辑器画的遮罩用这几位记用了哪些通道）。请求里的同名 COMBO 照样最后覆盖。
+- **缺纹理格式**（P13d）：声明了 `formatcombo` 的槽位没绑定、注解有 `default` 纹理、`require` 条件成立时，WPE 用缺省纹理的格式定
+  `TEX<slot>FORMAT`（`fur4` 的槽 8）。翻译器不读文件：结果为 `phase: "texture"` 时，读出 `missingTextures`（`{ slot, name }`）里各纹理的
+  `.tex` 头格式，放进 `defaultFormats` 后再调一次；读不到的写 `null`，按没定义处理。
 
 ### 结果
 
@@ -81,7 +86,8 @@ interface TranslateRequest {
 |---|---|
 | `request` | 请求 JSON 无法解析，或 COMBO 值不是整数 / 布尔 |
 | `include` | 缺头文件，见 `missing`；只有几何段缺时 `stage` 为 `"geometry"` |
-| `require` | `#require` 展开不了，见 `requires`：未知的库名，或要阴影 / cookie 的 `LightingV1/shadow` |
+| `require` | `#require` 展开不了，见 `requires`：未知的库名，或聚光的阴影 / cookie（`LightingV1/spot-shadow`；点光、平行光的阴影 P13d 起展开） |
+| `texture` | 缺缺省纹理的格式，见 `missingTextures` 与「缺纹理格式」；补上 `defaultFormats` 再调一次 |
 | `preprocess` | `#if` 没有闭合、`#if` 里宏展开过深、未知预处理指令（`file` / `line` 指向原文） |
 | `rewrite` | 不支持的全局声明、两阶段同名的引擎 uniform（都没有 `material`）类型不同、纹理函数参数不是已声明的纹理；几何着色器展开不支持的写法（`IN[1]`、`OUT.RestartStrip()` 等）；`int` / `uint` / 矩阵数组的 varying；varying 打包后仍超过 16 个 location、要打包却认不出 `main` 或正文里已有 `kb_main` / `kb_varying_*` |
 | `parse` / `validate` / `write` | naga 阶段的错误（行号指向生成的 GLSL） |
@@ -273,7 +279,9 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
      请求的宏（COMBO 等）同样经 naga 的 `Options::defines` 进它的宏表，源码改它们的值也补 `#undef`。p7-sem 的 `kbredef` 实测后者生效。
    - 全局声明的数组长度如果写成宏（`g_Bones[BONECOUNT]`），按当前宏表算成数字。
    - `#require` 按 WPE 语义现场展开（`library.rs`）：`LightingV1` 在 `LIGHTING` 非 0 时按 `LIGHTS_*` 生成灯光 uniform 与 `PerformLighting_V1`，
-     否则什么都不插；逐灯计算在公开头文件 `common_pbr_2.h`，这里只负责遍历。未知的库、阴影与 cookie 报 `phase: "require"`。
+     否则什么都不插；逐灯计算在公开头文件 `common_pbr_2.h`，这里只负责遍历。P13d 起照 WPE 的生成器展开点光与平行光的阴影
+     （`LIGHTS_POINT_SHADOW` / `LIGHTS_DIRECTIONAL_SHADOW`，带阴影的灯占前几个槽，后面的普通灯从阴影数之后开始；平行光的级联下标照抄 WPE
+     的 `B0 + k + c`，两盏以上会读错，见 rea-p13-shadows R1）。未知的库、聚光的阴影与 cookie 报 `phase: "require"`。
    - `#version` / `#extension` / `#pragma` 去掉。
    - 带几何段时，几何段在顶点段之后预处理，顶点段展开过的头文件只求宏、不出行（见下节第 1 条）。
 4. **几何着色器展开**（`geometry.rs`，只在带几何段时）：顶点段与几何段拼成一段顶点着色器，再交给下一步，见「几何着色器展开」。
@@ -289,6 +297,8 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
      - 两阶段都声明、类型不同的 varying（不论哪边宽），片元按顶点的类型声明，见「HLSL 隐式转换」。
      - 全局 `const` 的初始值引用运行期值时改成私有全局、在 `main` 开头赋值，见「HLSL 隐式转换」。
      - `gl_*` 名的全局声明（几何着色器遗留的 `varying uint gl_ViewportIndex`、fur4 的 `in uint gl_InstanceID`）忽略。
+     - 阴影投射着色器里的 `gl_ViewportIndex = …;` 整行去掉（P13d）：WebGPU 没有视口数组，渲染器逐视图各画一次、`firstInstance` 取视图号，
+       着色器照样按实例号取 `g_ViewportViewProjectionMatrices[i]`。
    - **`main` 之前的打包数组**（`src/pack.rs`）：WPE 把 `float` / `vec2` / `int` / `uint` 数组 uniform 在常量缓冲里声明成 `float4` / `int4` / `uint4`、长度 `ceil(n/4)`，
      只有 `main` 签名之后的文本换成拆包后的 `float[n]`；`main` 之前（全局辅助函数、文件顶部的 `#define`）看到的是打包形态（rea「accessArray 的适用条件」、「P7b 补查」第 4 条）。
      - `main` 签名照 WPE 的正则 `\bvoid\s+main\s*\(\s*\)\s*\{` 认第一处；认不出（`main(void)`）的不做。
@@ -305,7 +315,10 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
    - **纹理函数**：
      - `texSample2D(t, uv)` 改成 `texture(sampler2D(t, kb_sampler_t), uv)`；
      - `texSample2DLod` 改成 `textureLod`；
-     - `texSample2DCompare(t, uv, ref)` 改成 `texture(sampler2DShadow(…), vec3(uv, ref))`；
+     - `texSample2DCompare(t, uv, ref)` 改成 `kb_shadowCompare(t, kb_sampler_t, uv, ref)`（P13d）：WPE 的比较采样器是三轴 BORDER、边框 0，
+       WebGPU 没有 BORDER。2×2 足迹全在纹理内时用硬件比较采样；越出时四个纹素各在中心比较一次、越界的换成边框的比较结果，手算双线性。
+       权重写成 `w >= 0 ? w : 0`：空阴影槽的坐标是 NaN（WPE 给没有灯的槽写全 0，`xyz /= w` 是 0/0），硬件把 NaN 坐标当 0、结果有限，
+       手算的权重不能把 NaN 带进光照和（`p13d-hide`）；
      - `texSample3D`、`texSample2DBackBuffer` 改成 `texture`；
      - `texLoad2D(t, uv, res)` 改成 `texelFetch(…, ivec2(uv * res), 0)`。
 
@@ -451,8 +464,7 @@ void main() {
 
 | 现象 | 原因 |
 |---|---|
-| `phase: "require"`，`LightingV1/shadow` | 阴影与 cookie 要 `_rt_shadowAtlas` / `_alias_lightCookie`，渲染器没有 |
-| `Unknown variable: gl_ViewportIndex` | 阴影投射走的几何着色器路径 |
+| `phase: "require"`，`LightingV1/spot-shadow` | 聚光的阴影与 cookie 要聚光投影与 `_alias_lightCookie`，渲染器没有（语料 0 张） |
 | `Array size must be greater than zero` | `BONECOUNT` 等引擎宏未定义（骨骼蒙皮），可经 `defines` 传入 |
 | `不支持的采样器类型 sampler2DBackBuffer` | 体积光专用采样器类型 |
 

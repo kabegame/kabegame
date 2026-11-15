@@ -23,10 +23,13 @@ import {
   readWpeWindowUpdateRate,
   SCENE_POSTPROCESS_SETTINGS,
   SCENE_REFLECTION_SETTINGS,
+  SCENE_SHADOW_SETTINGS,
   type SceneReflectionSetting,
   type ScenePostprocessSetting,
+  type SceneShadowSetting,
 } from "./compile/postprocess";
 import { reflectionOverride } from "./dev/reflectionOverride";
+import { shadowsOverride } from "./dev/shadowsOverride";
 import { scriptMediaCallbacks } from "./media/events";
 import { MEDIA_DEFAULT_INTERVAL_MS, mediaIntervalOf } from "./media/interval";
 import { MediaPending } from "./media/pending";
@@ -101,6 +104,10 @@ function asReflection(value: unknown): SceneReflectionSetting {
     : "follow";
 }
 
+function asShadows(value: unknown): SceneShadowSetting {
+  return SCENE_SHADOW_SETTINGS.includes(value as SceneShadowSetting) ? (value as SceneShadowSetting) : "follow";
+}
+
 function isAbort(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
@@ -157,6 +164,8 @@ export class SceneHost {
   private postprocess: ScenePostprocessSetting | null = null;
   /** 设置「场景反射」（P13b1）：最近一次加载用的值；还没加载过为 null。 */
   private reflection: SceneReflectionSetting | null = null;
+  /** 设置「场景阴影」（P13d）：最近一次加载用的值；还没加载过为 null。 */
+  private shadows: SceneShadowSetting | null = null;
   /**
    * 累计全集（WPE 渲染器 `+0x1728`，I1）：键 → `{ type, value }`。保留 `type`，不学 WPE 的整项覆盖（I4）。
    * 加载传全集、运行时传增量，两条路都走 `apply`。
@@ -302,7 +311,7 @@ export class SceneHost {
     this.userTextures.onReady = (name) => this.onUserTextureReady(name);
     // 来源表建好后按当前暂停状态设一次（P11b 步骤 4，用户视频与 GIF 的时钟）
     this.userTextures.setPaused(this.paused || this.hidden);
-    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理与反射设置", (raw) => {
+    this.listenEvent<Record<string, unknown>>("setting-change", "场景后处理、反射与阴影设置", (raw) => {
       if (this.disposed || !this.receivedProperties) return;
       const delta = (raw && typeof raw.changes === "object" ? raw.changes : raw) as Record<string, unknown> | null;
       if (!delta) return;
@@ -320,6 +329,14 @@ export class SceneHost {
         if (this.reflection === null || next !== this.reflection) {
           keys.push("wpeSceneReflection");
           options.report.debug(`场景壁纸 ${options.imageId} 反射设置 ${this.reflection} → ${next}，重新判定`);
+        }
+      }
+      // 阴影（P13d）：档位决定编不编投射变体、图集尺寸与 `LIGHTS_SHADOW_*` 宏，只能整场重载；同一条里几项一起变只重载一次
+      if ("wpeSceneShadows" in delta) {
+        const next = asShadows(delta.wpeSceneShadows);
+        if (this.shadows === null || next !== this.shadows) {
+          keys.push("wpeSceneShadows");
+          options.report.debug(`场景壁纸 ${options.imageId} 阴影设置 ${this.shadows} → ${next}，重新判定`);
         }
       }
       if (!keys.length) return;
@@ -1345,6 +1362,17 @@ export class SceneHost {
     }
   }
 
+  private async readShadows(): Promise<SceneShadowSetting> {
+    const override = shadowsOverride();
+    if (override) return override;
+    try {
+      return asShadows(await invoke<string>("get_wpe_scene_shadows"));
+    } catch (error) {
+      this.options.report.warn("读取场景阴影设置失败，按跟随 WPE 处理：", error);
+      return "follow";
+    }
+  }
+
   /** 属性、档位或设备变化时重新编译；代数确保过期结果不能覆盖新场景。 */
   private async reload(): Promise<void> {
     if (!this.options.imageId) {
@@ -1367,14 +1395,16 @@ export class SceneHost {
         this.targetTask = null;
         throw error;
       }));
-      const [target, setting, reflection] = await Promise.all([
+      const [target, setting, reflection, shadows] = await Promise.all([
         targetTask,
         this.readPostprocess(),
         this.readReflection(),
+        this.readShadows(),
       ]);
       if (id !== this.generation) return;
       this.postprocess = setting;
       this.reflection = reflection;
+      this.shadows = shadows;
       const force = forceRender();
       const userProperties = Object.fromEntries(
         [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
@@ -1387,6 +1417,7 @@ export class SceneHost {
         scriptOverrides: Object.fromEntries(this.scriptOverrides),
         postprocess: setting,
         reflection,
+        shadows,
         force,
         textureCache: this.textureCache,
         reader: this.reader,

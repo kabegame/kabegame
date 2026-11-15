@@ -1,5 +1,5 @@
 import type { SceneBundle } from "./bundle";
-import type { SceneReflectionSetting, ScenePostprocessSetting } from "./postprocess";
+import type { SceneReflectionSetting, ScenePostprocessSetting, SceneShadowSetting } from "./postprocess";
 
 /** 主线程读文件失败时回传给 Worker 的错误。保留类型名：SceneFs 靠 `TypeError("Failed to fetch")` 判断文件不存在。 */
 export interface FileError {
@@ -16,6 +16,7 @@ export type WorkerRequest =
       scriptOverrides: Record<string, number[] | boolean | string>;
       postprocess: ScenePostprocessSetting;
       reflection: SceneReflectionSetting;
+      shadows: SceneShadowSetting;
       force: boolean;
       exhaustive: boolean;
       module: WebAssembly.Module | null;

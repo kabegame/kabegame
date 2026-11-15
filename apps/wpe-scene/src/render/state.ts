@@ -339,6 +339,8 @@ export class SceneState {
   onUserTexture: ((name: string, value: string) => void) | null = null;
   /** 可变 effect 加载时没备好的图层：切换走整场重编译。 */
   private readonly frozenLayers = new Set<number>();
+  /** 模型网格第一个 pass 的键 → 它的阴影投射变体的键（P13d，`SceneMesh.shadow`）：基础常量写入时同步写变体。 */
+  private shadowPasses = new Map<TargetKey, TargetKey>();
 
   private constructor(
     layers: Map<number, LayerState>,
@@ -362,6 +364,7 @@ export class SceneState {
   static fromBundle(bundle: SceneBundle): SceneState {
     const layers = new Map<number, LayerState>();
     const constants = new Map<TargetKey, Record<string, number[]>>();
+    const shadowOf = new Map<TargetKey, TargetKey>();
     const effects = new Map<string, EffectState>();
     const children = new Map<number, number[]>();
     const instances = new Map<number, ParticleInstanceValues>();
@@ -384,8 +387,14 @@ export class SceneState {
       };
       if (layer.particle) addParticle(layer.particle);
       // 模型网格材质的常量（P5c 步骤 2）：网格 draw 的 uniform 同样从这里取（retro 的 `g_Tint`），属性绑定按 pass 键就地写
-      for (const mesh of layer.model?.meshes ?? [])
+      for (const mesh of layer.model?.meshes ?? []) {
         for (const pass of mesh.passes) constants.set(pass.key, { ...pass.uniforms });
+        // 阴影投射变体（P13d）：常量照 WPE 从基础程序按名字拷（编译期已拷好初值），基础 pass 的常量写入同时写它（`shadowOf`）
+        if (mesh.shadow && mesh.passes[0]) {
+          constants.set(mesh.shadow.key, { ...mesh.shadow.uniforms });
+          shadowOf.set(mesh.passes[0].key, mesh.shadow.key);
+        }
+      }
       for (const effect of layer.effects) {
         effects.set(effectKey(layer.object, effect.source), {
           enabled: effect.enabled,
@@ -421,6 +430,7 @@ export class SceneState {
       { ...fields },
       children,
     );
+    state.shadowPasses = shadowOf;
     // 加载时 `rate` 钳到 0.01 并写回（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，rea-p4f-script.md 6.1）：脚本 `init` 读到的就是钳过的
     // 值，和建系统时（`ParticleSystem` 构造）的钳制一致
     for (const [object, values] of instances)
@@ -708,7 +718,17 @@ export class SceneState {
         constants[member.name] = memberValue(member, written);
         changed = true;
       }
-      if (changed) this.dirtyPasses.add(target.pass);
+      if (changed) {
+        this.dirtyPasses.add(target.pass);
+        // 投射变体（P13d）：同名的常量跟着改
+        const shadowKey = this.shadowPasses.get(target.pass);
+        const shadow = shadowKey ? this.constants.get(shadowKey) : undefined;
+        if (shadowKey && shadow) {
+          for (const member of constantMembers(target))
+            if (member.name in shadow) shadow[member.name] = constants[member.name];
+          this.dirtyPasses.add(shadowKey);
+        }
+      }
       return "applied";
     }
     if (target.kind === "text") {

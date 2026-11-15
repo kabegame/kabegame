@@ -138,6 +138,11 @@ export class ShaderCompiler {
     private litDefines: Record<string, string> = {},
     /** 整场全局的引擎宏（`lights.ts` 的 `engineDefines`）。`ShaderCompiler` 每次编译新建，不进缓存键。 */
     private defines: Record<string, string> = {},
+    /**
+     * 注解缺省纹理的格式（P13d，`fur4` 的 `TEX8FORMAT`）：按着色器所在的资源范围解析纹理名、读 `.tex` 头的格式，读不到为 null。
+     * 不进缓存键：同一着色器、同一范围、同样 COMBO 与纹理，缺省纹理就是同一张。没给时缺格式的翻译原样失败（`phase: "texture"`）。
+     */
+    private textureFormat?: (name: string, scope: ResourceScope | null) => Promise<number | null>,
   ) {}
 
   /**
@@ -202,6 +207,8 @@ export class ShaderCompiler {
         litDefines: this.litDefines,
       },
       (name) => this.fs.text(`shaders/${name}`),
+      undefined,
+      this.textureFormat ? (name) => this.textureFormat!(name, scope) : undefined,
     );
     if (!result.ok) {
       const detail =
