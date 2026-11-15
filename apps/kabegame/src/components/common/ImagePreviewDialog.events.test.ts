@@ -272,3 +272,15 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
     expect(menu().props("actions")).toBe(wrapper.props("actions"));
   });
 });
+
+describe("翻页箭头", () => {
+  it("只有点箭头才切图，点两侧区域的别处不切", async () => {
+    const wrapper = await fixture({}, { canPrev: true, canNext: true });
+    const zone = (side: "left" | "right") => wrapper.find(`.preview-nav-zone.${side}`);
+    await zone("right").trigger("click");
+    await zone("left").trigger("click");
+    expect(wrapper.emitted("switch")).toBeUndefined();
+    await zone("right").find("button.preview-nav-btn").trigger("click");
+    expect(wrapper.emitted("switch")).toEqual([[{ direction: "next", source: "manual" }]]);
+  });
+});

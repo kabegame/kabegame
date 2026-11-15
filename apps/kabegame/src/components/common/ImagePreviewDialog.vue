@@ -187,18 +187,20 @@
               >
                 <X />
               </button>
-              <!-- 箭头的有无直接表达上层意图：没有下一张就不渲染，不做置灰态 -->
-              <div
-                v-if="props.canPrev"
-                class="preview-nav-zone left"
-                :class="{ visible: previewHoverSide === 'left' }"
-                @click.stop="goPrev"
-              >
+              <!-- 箭头的有无直接表达上层意图：没有下一张就不渲染，不做置灰态。两侧区域只负责摆放与显隐（显隐看鼠标
+               横坐标，见 handlePreviewMouseMove），本身不拦鼠标：只有点箭头才切图，区域里别处的点击落到下面的图片 / 壁纸上 -->
+              <div v-if="props.canPrev" class="preview-nav-zone left" :class="{ visible: previewHoverSide === 'left' }">
                 <div class="preview-nav-stack">
-                  <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="上一张">
+                  <button
+                    class="preview-nav-btn"
+                    type="button"
+                    :class="{ disabled: navPending }"
+                    aria-label="上一张"
+                    @click.stop="goPrev"
+                  >
                     <ChevronLeft />
                   </button>
-                  <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
+                  <!-- 幻灯片播放：与箭头同显隐 -->
                   <button
                     class="preview-slideshow-btn"
                     type="button"
@@ -220,13 +222,18 @@
                 v-if="props.canNext"
                 class="preview-nav-zone right"
                 :class="{ visible: previewHoverSide === 'right' }"
-                @click.stop="goNext"
               >
                 <div class="preview-nav-stack">
-                  <button class="preview-nav-btn" type="button" :class="{ disabled: navPending }" aria-label="下一张">
+                  <button
+                    class="preview-nav-btn"
+                    type="button"
+                    :class="{ disabled: navPending }"
+                    aria-label="下一张"
+                    @click.stop="goNext"
+                  >
                     <ChevronRight />
                   </button>
-                  <!-- 幻灯片播放：与箭头同显隐；stop 防止冒泡到 zone 触发单步切换 -->
+                  <!-- 幻灯片播放：与箭头同显隐 -->
                   <button
                     class="preview-slideshow-btn"
                     type="button"
@@ -1921,12 +1928,17 @@ defineExpose({
     align-items: center;
     z-index: 2;
     opacity: 0;
+    // 区域本身一律不拦鼠标，只有显示时的按钮可点（点箭头才切图）
     pointer-events: none;
     transition: opacity 0.12s ease;
 
     &.visible {
       opacity: 1;
-      pointer-events: auto;
+
+      .preview-nav-btn,
+      .preview-slideshow-btn {
+        pointer-events: auto;
+      }
     }
 
     &.left {
