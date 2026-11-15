@@ -66,7 +66,7 @@ const props = withDefaults(
     paused?: boolean;
     volume: number;
     interactive?: boolean;
-    /** 场景后处理 / 反射 / 阴影：桌面传全局「壁纸设置」，预览传这张壁纸的「预览设置」（`wpeSceneSettingsOf`） */
+    /** 场景后处理 / 反射 / 阴影 / 体积光：桌面传全局「壁纸设置」，预览传这张壁纸的「预览设置」（`wpeSceneSettingsOf`） */
     sceneSettings?: WpeSceneSettings;
   }>(),
   { paused: false, interactive: false, sceneSettings: () => WPE_FOLLOW_SCENE_SETTINGS },
@@ -272,7 +272,13 @@ watch(
   },
 );
 watch(
-  () => [props.sceneSettings.postprocess, props.sceneSettings.reflection, props.sceneSettings.shadows].join("\n"),
+  () =>
+    [
+      props.sceneSettings.postprocess,
+      props.sceneSettings.reflection,
+      props.sceneSettings.shadows,
+      props.sceneSettings.volumetrics,
+    ].join("\n"),
   postSceneSettings,
 );
 // 换宿主时 iframe 元素随之重建：观察新元素（observe 时会先回调一次）

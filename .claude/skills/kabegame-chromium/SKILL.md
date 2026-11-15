@@ -311,7 +311,7 @@ RenderDoc 抓帧（`wpe-renderdoc` MCP）逐 draw 对照：哪一处像素差落
 同名文件覆盖），结果里一行摘要（pass 数、draw 数、读回了哪些、选中了没读回的原因、记录器 / 校验错误条数、目录与文件）。
 
 - **文件**：`trace.json`（紧凑 JSON，NaN 写成 null），读回图 `pass-<下标>.png`（8 位目标，RGBA 原值，alpha 不改、不预乘，bgra 换成 rgba）
-  或 `pass-<下标>.f32`（`rgba16float` / `rgba32float` 目标，RGBA 单精度小端，同 `meta` 读回的浮点规则）。
+  或 `pass-<下标>.f32`（`rgba16float` / `rgba32float` 目标，RGBA 单精度小端，同 `meta` 读回的浮点规则；单通道的 `r32float` 与只有深度附件的 `depth32float` 摊在 r，g、b 为 0、a 为 1）。
 - **`trace.json` 的形状**（ID 在一次渲染里按创建顺序编号，前缀 `t` 纹理、`b` 缓冲、`s` 采样器、`p` 管线；标签照抄渲染器的）：
   - `resources`：这一帧引用到的 `textures`（`label`、`size`、`format`、`mipLevelCount`、`usage`：渲染器要的用途，读回补的 COPY_SRC 不算）、
     `buffers`、`samplers`（描述）、`pipelines`（`label`、`topology`、`cullMode`、`frontFace`、`vertex`：顶点缓冲布局、`targets`：格式、

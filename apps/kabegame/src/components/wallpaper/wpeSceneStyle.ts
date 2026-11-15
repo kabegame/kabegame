@@ -4,7 +4,7 @@
  * - `{ type: WPE_SCENE_STYLE, style }`：壁纸样式，变化时再主动推；
  * - `{ type: WPE_SCENE_DISPLAY, scale }`：显示缩放（`displayScaleOf`，预览放大时按 `sceneDisplayScale` 封顶），量到变化时
  *   再主动推。宿主按它把画布缩到实际显示大小：预览画布按内容尺寸布局、再整体 `scale`，这个 transform 在 iframe 里量不到。
- * - `{ type: WPE_SCENE_SETTINGS, postprocess, reflection, shadows }`：场景后处理 / 反射 / 阴影（`wpeSceneSettingsOf`，不能跟随时
+ * - `{ type: WPE_SCENE_SETTINGS, postprocess, reflection, shadows, volumetrics }`：场景后处理 / 反射 / 阴影 / 体积光（`wpeSceneSettingsOf`，不能跟随时
  *   `follow` 已换成默认值），变化时再主动推。桌面传全局「壁纸设置」，预览传这张壁纸的「预览设置」；宿主首次加载等它。
  *
  * 另有一条不经请求、父页面主动发的：
@@ -44,6 +44,7 @@ export function wpeSceneSettingsMessage(settings: WpeSceneSettings): {
     postprocess: settings.postprocess,
     reflection: settings.reflection,
     shadows: settings.shadows,
+    volumetrics: settings.volumetrics,
   };
 }
 

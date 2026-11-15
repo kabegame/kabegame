@@ -8,7 +8,7 @@ import type { SceneStyle } from "./render/layout";
  * - `{ type: SCENE_DISPLAY_MESSAGE, scale }`：显示缩放，iframe 在父页面里实际显示的大小 ÷ 布局大小（预览画布按内容尺寸
  *   布局、再整体 `scale`，这个 transform 在 iframe 里量不到）。父页面量到变化时再主动推，桌面等不缩放的地方是 1。
  *   宿主按它把画布缩到实际显示大小（`canvasSize`）。
- * - `{ type: SCENE_SETTINGS_MESSAGE, postprocess, reflection, shadows }`：场景后处理 / 反射 / 阴影，变化时再主动推。桌面是全局
+ * - `{ type: SCENE_SETTINGS_MESSAGE, postprocess, reflection, shadows, volumetrics }`：场景后处理 / 反射 / 阴影 / 体积光，变化时再主动推。桌面是全局
  *   「壁纸设置」、预览是这张壁纸的「预览设置」，宿主不分；不能跟随 WPE 时父页面已把 `follow` 换成默认值。首次加载等它
  *   （`SceneHost.setSceneSettings`）。
  *
@@ -47,8 +47,8 @@ export interface SceneParentHandlers {
   displayScale(scale: number): void;
   /** 开场指针：两个有限数，iframe 里的归一化坐标（不钳制）。 */
   pointer(x: number, y: number): void;
-  /** 场景设置：三项原样交出，由宿主规整（不认识的值按跟随）。 */
-  settings(settings: { postprocess: unknown; reflection: unknown; shadows: unknown }): void;
+  /** 场景设置：四项原样交出，由宿主规整（不认识的值、缺了的项按跟随）。 */
+  settings(settings: { postprocess: unknown; reflection: unknown; shadows: unknown; volumetrics: unknown }): void;
 }
 
 /** 收父页面的样式、显示缩放、场景设置与开场指针消息，然后请求一次样式、显示缩放与场景设置的当前值。只认父窗口发来的可信消息。 */
@@ -64,6 +64,7 @@ export function listenSceneParent(handlers: SceneParentHandlers): void {
       postprocess?: unknown;
       reflection?: unknown;
       shadows?: unknown;
+      volumetrics?: unknown;
     } | null;
     if (data?.type === SCENE_STYLE_MESSAGE) {
       if (typeof data.style === "string" && SCENE_STYLES.includes(data.style)) handlers.style(data.style as SceneStyle);
@@ -71,7 +72,12 @@ export function listenSceneParent(handlers: SceneParentHandlers): void {
       const scale = data.scale;
       if (typeof scale === "number" && Number.isFinite(scale) && scale > 0) handlers.displayScale(scale);
     } else if (data?.type === SCENE_SETTINGS_MESSAGE) {
-      handlers.settings({ postprocess: data.postprocess, reflection: data.reflection, shadows: data.shadows });
+      handlers.settings({
+        postprocess: data.postprocess,
+        reflection: data.reflection,
+        shadows: data.shadows,
+        volumetrics: data.volumetrics,
+      });
     } else if (data?.type === SCENE_POINTER_MESSAGE) {
       const { x, y } = data;
       if (typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y))

@@ -47,15 +47,27 @@ describe("父页面通路", () => {
     listenSceneParent({ style, displayScale, pointer, settings });
   }
 
-  it("场景设置：只认父窗口发来的可信消息，三项原样交出", () => {
+  it("场景设置：只认父窗口发来的可信消息，四项原样交出（缺了的是 undefined）", () => {
     const settings = vi.fn();
     install(undefined, undefined, undefined, settings);
     const message = { type: SCENE_SETTINGS_MESSAGE, postprocess: "enabled", reflection: "follow", shadows: 3 };
     listener({ isTrusted: true, source: parent, data: message });
-    expect(settings).toHaveBeenCalledExactlyOnceWith({ postprocess: "enabled", reflection: "follow", shadows: 3 });
+    expect(settings).toHaveBeenCalledExactlyOnceWith({
+      postprocess: "enabled",
+      reflection: "follow",
+      shadows: 3,
+      volumetrics: undefined,
+    });
     listener({ isTrusted: false, source: parent, data: message });
     listener({ isTrusted: true, source: {}, data: message });
     expect(settings).toHaveBeenCalledOnce();
+    listener({ isTrusted: true, source: parent, data: { ...message, volumetrics: "high" } });
+    expect(settings).toHaveBeenLastCalledWith({
+      postprocess: "enabled",
+      reflection: "follow",
+      shadows: 3,
+      volumetrics: "high",
+    });
   });
 
   it("启动时请求一次（样式与显示缩放共用这一条请求）", () => {

@@ -203,17 +203,18 @@ describe("SceneHost：退回预览图后的属性变化", () => {
   });
 });
 
-describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴影）", () => {
+describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴影 / 体积光）", () => {
   const compiledWith = () =>
     compile.mock.calls.map(([input]) => {
-      const { postprocess, reflection, shadows } = input as {
+      const { postprocess, reflection, shadows, volumetrics } = input as {
         postprocess?: string;
         reflection?: string;
         shadows?: string;
+        volumetrics?: string;
       };
-      return [postprocess, reflection, shadows];
+      return [postprocess, reflection, shadows, volumetrics];
     });
-  const FOLLOW = { postprocess: "follow", reflection: "follow", shadows: "follow" };
+  const FOLLOW = { postprocess: "follow", reflection: "follow", shadows: "follow", volumetrics: "follow" };
 
   beforeEach(() => {
     vi.stubGlobal("__SCENE_DEV__", false);
@@ -232,16 +233,17 @@ describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴�
   }
 
   it("加载用父页面先给的值；不认识的值按跟随；没有父页面时不等、按跟随", async () => {
-    const first = await load({ postprocess: "enabled", reflection: "disabled", shadows: "high" });
-    expect(compiledWith()).toEqual([["enabled", "disabled", "high"]]);
+    const first = await load({ postprocess: "enabled", reflection: "disabled", shadows: "high", volumetrics: "low" });
+    expect(compiledWith()).toEqual([["enabled", "disabled", "high", "low"]]);
     first.host.dispose();
     compile.mockClear();
+    // 缺了的项（旧的父页面没有体积光）同不认识的值，按跟随
     const second = await load({ postprocess: 1, reflection: "bogus", shadows: null });
-    expect(compiledWith()).toEqual([["follow", "follow", "follow"]]);
+    expect(compiledWith()).toEqual([["follow", "follow", "follow", "follow"]]);
     second.host.dispose();
     compile.mockClear();
     const third = await load();
-    expect(compiledWith()).toEqual([["follow", "follow", "follow"]]);
+    expect(compiledWith()).toEqual([["follow", "follow", "follow", "follow"]]);
     third.host.dispose();
   });
 
@@ -252,9 +254,9 @@ describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴�
     host.applyUserProperties(fx(false));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).not.toHaveBeenCalled();
-    host.setSceneSettings({ postprocess: "disabled", reflection: "enabled", shadows: "low" });
+    host.setSceneSettings({ postprocess: "disabled", reflection: "enabled", shadows: "low", volumetrics: "ultra" });
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
-    expect(compiledWith()).toEqual([["disabled", "enabled", "low"]]);
+    expect(compiledWith()).toEqual([["disabled", "enabled", "low", "ultra"]]);
     expect(host.stats.recompiled).toEqual([]);
     host.dispose();
   });
@@ -267,7 +269,7 @@ describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴�
     expect(compile).toHaveBeenCalledTimes(1);
     host.setSceneSettings({ ...FOLLOW, reflection: "enabled" });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(compiledWith().at(-1)).toEqual(["follow", "enabled", "follow"]);
+    expect(compiledWith().at(-1)).toEqual(["follow", "enabled", "follow", "follow"]);
     expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["reflection"] });
     host.setSceneSettings({ ...FOLLOW, reflection: "enabled" });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -275,17 +277,26 @@ describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴�
     host.dispose();
   });
 
-  it("三项一起变：只加载一次，键都记进探针", async () => {
+  it("四项一起变：只加载一次，键都记进探针", async () => {
     const { host } = await load(FOLLOW);
-    host.setSceneSettings({ postprocess: "enabled", reflection: "disabled", shadows: "ultra" });
+    host.setSceneSettings({ postprocess: "enabled", reflection: "disabled", shadows: "ultra", volumetrics: "high" });
     await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(2);
-    expect(compiledWith().at(-1)).toEqual(["enabled", "disabled", "ultra"]);
+    expect(compiledWith().at(-1)).toEqual(["enabled", "disabled", "ultra", "high"]);
     expect(host.stats.recompiled.at(-1)).toEqual({
       reason: "settings",
-      keys: ["postprocess", "reflection", "shadows"],
+      keys: ["postprocess", "reflection", "shadows", "volumetrics"],
     });
+    host.dispose();
+  });
+
+  it("只改体积光：重新加载一次（P13e，档位决定 RT 与 QUALITY）", async () => {
+    const { host } = await load(FOLLOW);
+    host.setSceneSettings({ ...FOLLOW, volumetrics: "disabled" });
+    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+    expect(compiledWith().at(-1)).toEqual(["follow", "follow", "follow", "disabled"]);
+    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["volumetrics"] });
     host.dispose();
   });
 });

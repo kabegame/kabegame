@@ -57,17 +57,23 @@ const state = reactive<{
   playbackRate: 1,
   /** 设置 `wallpaperPaused`；是否真的暂停看 `stagePaused` */
   paused: false,
-  /** 全局「壁纸设置」的场景三项原值（可能是 follow）；交给 Stage 前按能否跟随 WPE 换算（`stageSceneSettings`） */
+  /** 全局「壁纸设置」的场景四项原值（可能是 follow）；交给 Stage 前按能否跟随 WPE 换算（`stageSceneSettings`） */
   sceneSettings: { ...WPE_FOLLOW_SCENE_SETTINGS },
 });
 
-/** 场景三项：全局设置键 → 字段，与读它们的命令（顺序一一对应） */
+/** 场景四项：全局设置键 → 字段，与读它们的命令（顺序一一对应） */
 const SCENE_SETTING_KEYS = [
   ["wpeScenePostprocess", "postprocess"],
   ["wpeSceneReflection", "reflection"],
   ["wpeSceneShadows", "shadows"],
+  ["wpeSceneVolumetrics", "volumetrics"],
 ] as const;
-const SCENE_SETTING_GETTERS = ["get_wpe_scene_postprocess", "get_wpe_scene_reflection", "get_wpe_scene_shadows"];
+const SCENE_SETTING_GETTERS = [
+  "get_wpe_scene_postprocess",
+  "get_wpe_scene_reflection",
+  "get_wpe_scene_shadows",
+  "get_wpe_scene_volumetrics",
+];
 const followAvailable = useWpeFollowAvailable();
 
 /**
@@ -128,7 +134,7 @@ function applyTargetConfig(): boolean {
 /** 交给 Stage 的音量：布置不出声时为 0（同一张壁纸各屏各播一份，只让主屏窗口出声）。 */
 const stageVolume = computed(() => (assignment.value?.audible === false ? 0 : state.volume));
 
-/** 交给场景宿主的三项：不能跟随 WPE 时 follow 换成 Kabegame 默认值 */
+/** 交给场景宿主的四项：不能跟随 WPE 时 follow 换成 Kabegame 默认值 */
 const stageSceneSettings = computed(() => wpeSceneSettingsOf(state.sceneSettings, followAvailable.value));
 
 /** 视频、网页、场景共用设置页的「暂停壁纸」，换壁纸后仍保持；图片不受影响。 */
@@ -277,7 +283,7 @@ async function init() {
     if ("wallpaperPaused" in changes && typeof changes.wallpaperPaused === "boolean") {
       state.paused = changes.wallpaperPaused;
     }
-    // 场景三项（全局「壁纸设置」）：交给 Stage → WpeSceneView 推给宿主，宿主比较后决定要不要重载
+    // 场景四项（全局「壁纸设置」）：交给 Stage → WpeSceneView 推给宿主，宿主比较后决定要不要重载
     for (const [settingKey, field] of SCENE_SETTING_KEYS) {
       if (settingKey in changes && typeof changes[settingKey] === "string")
         state.sceneSettings = { ...state.sceneSettings, [field]: changes[settingKey] as string };
@@ -313,7 +319,7 @@ async function init() {
         invoke<number>("get_wallpaper_video_playback_rate"),
         invoke<boolean>("get_wallpaper_paused"),
         invoke<WallpaperTarget | null>("get_current_wallpaper_target", { target: requested }),
-        // 场景三项读不到不连累初始化：按跟随
+        // 场景四项读不到不连累初始化：按跟随
         ...SCENE_SETTING_GETTERS.map((command) => invoke<string>(command).catch(() => null)),
       ]);
     const sceneSettings = { ...state.sceneSettings };

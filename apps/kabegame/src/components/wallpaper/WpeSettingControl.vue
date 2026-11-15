@@ -13,9 +13,9 @@
     @commit="(v) => emit('update', settingKey, v)"
   />
   <template v-else-if="choiceKey">
-    <!-- 设置页里项少的用分段器（同原来的单选）；阴影六档与预览侧栏（窄）用下拉，紧凑档用底部滚轮 -->
+    <!-- 设置页里项少的用分段器（同原来的单选）；阴影、体积光六档与预览侧栏（窄）用下拉，紧凑档用底部滚轮 -->
     <KbSegmentedControl
-      v-if="variant === 'settings' && choiceKey !== 'shadows'"
+      v-if="variant === 'settings' && choiceKey !== 'shadows' && choiceKey !== 'volumetrics'"
       :model-value="current"
       :options="options"
       :disabled="disabled"

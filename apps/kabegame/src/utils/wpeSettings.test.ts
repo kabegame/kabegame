@@ -20,12 +20,13 @@ describe("wpeSettingFieldsFor", () => {
       "postprocess",
       "reflection",
       "shadows",
+      "volumetrics",
     ]);
     expect(wpeSettingFieldsFor("image/png", true)).toEqual([]);
   });
 
   it("不给类型时是全部字段（设置页）", () => {
-    expect(wpeSettingFieldsFor(null, true)).toHaveLength(7);
+    expect(wpeSettingFieldsFor(null, true)).toHaveLength(8);
     expect(wpeSettingFieldsFor(null, false)).not.toContain("mediaIntegration");
   });
 });
@@ -36,15 +37,20 @@ describe("跟随 WPE", () => {
     expect(wpeChoiceValues("reflection", false)).toEqual(["disabled", "enabled"]);
     expect(wpeChoiceDisplay("shadows", "follow", false)).toBe("medium");
     expect(wpeChoiceDisplay("shadows", "follow", true)).toBe("follow");
+    // 体积光与阴影同一套档位，默认 medium（P13e）
+    expect(wpeChoiceValues("volumetrics", false)).toEqual(["disabled", "low", "medium", "high", "ultra"]);
+    expect(wpeChoiceDisplay("volumetrics", "follow", false)).toBe("medium");
+    expect(wpeChoiceDisplay("volumetrics", "enabled", true)).toBe("medium");
     expect(wpeChoiceDisplay("postprocess", "bogus", true)).toBe("enabled");
   });
 
   it("推给场景宿主前把不能跟随的 follow 换成默认值", () => {
-    const values = { postprocess: "follow", reflection: "disabled", shadows: "follow" };
+    const values = { postprocess: "follow", reflection: "disabled", shadows: "follow", volumetrics: "follow" };
     expect(wpeSceneSettingsOf(values, false)).toEqual({
       postprocess: "enabled",
       reflection: "disabled",
       shadows: "medium",
+      volumetrics: "medium",
     });
     expect(wpeSceneSettingsOf(values, true)).toEqual(values);
   });
@@ -53,10 +59,13 @@ describe("跟随 WPE", () => {
 describe("wpePreviewSettingValues", () => {
   it("存了的键叠在默认值上，类型不对的忽略", () => {
     expect(wpePreviewSettingValues(null)).toEqual(WPE_SETTING_DEFAULTS);
-    expect(wpePreviewSettingValues({ volume: 0.3, shadows: "high", mediaIntegration: "no" })).toEqual({
+    expect(
+      wpePreviewSettingValues({ volume: 0.3, shadows: "high", volumetrics: "low", mediaIntegration: "no" }),
+    ).toEqual({
       ...WPE_SETTING_DEFAULTS,
       volume: 0.3,
       shadows: "high",
+      volumetrics: "low",
     });
   });
 });

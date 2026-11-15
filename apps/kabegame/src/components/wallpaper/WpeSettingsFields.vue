@@ -55,7 +55,7 @@ import { WPE_SETTING_LABEL_KEYS, type WpeSettingKey, type WpeSettingValues } fro
 import WpeSettingControl from "./WpeSettingControl.vue";
 
 /**
- * WPE 设置字段组：暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影。纯视图，不读写任何存储：
+ * WPE 设置字段组：暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影 / 体积光。纯视图，不读写任何存储：
  * 调用方给要显示的字段（`utils/wpeSettings.ts` 的 `wpeSettingFieldsFor`）与当前值，改动经 `update` 报出去，
  * 由调用方写进自己的数据源——设置页写全局「壁纸设置」，预览写这张壁纸的「预览设置」（暂停由预览弹窗特殊处理成内存状态）。
  */

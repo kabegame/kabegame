@@ -125,6 +125,11 @@ pub fn get_wpe_scene_shadows() -> String {
 }
 
 #[tauri::command]
+pub fn get_wpe_scene_volumetrics() -> String {
+    Settings::global().get_wpe_scene_volumetrics()
+}
+
+#[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
 }
@@ -484,6 +489,12 @@ pub fn set_wpe_scene_reflection(value: String) -> Result<(), String> {
 #[tauri::command]
 pub fn set_wpe_scene_shadows(value: String) -> Result<(), String> {
     Settings::global().set_wpe_scene_shadows(value)
+}
+
+/// 场景壁纸「场景体积光」设置：写设置并广播 `setting-change`，桌面壁纸窗口把新档位下发给场景宿主，宿主整场重新加载。
+#[tauri::command]
+pub fn set_wpe_scene_volumetrics(value: String) -> Result<(), String> {
+    Settings::global().set_wpe_scene_volumetrics(value)
 }
 
 /// 暂停桌面上的壁纸：壁纸窗口经 `setting-change` 收到，只对网页与场景生效；暂停期间桌面鼠标也不再注入壁纸

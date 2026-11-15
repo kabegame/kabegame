@@ -24,9 +24,11 @@ import {
   SCENE_POSTPROCESS_SETTINGS,
   SCENE_REFLECTION_SETTINGS,
   SCENE_SHADOW_SETTINGS,
+  SCENE_VOLUMETRICS_SETTINGS,
   type SceneReflectionSetting,
   type ScenePostprocessSetting,
   type SceneShadowSetting,
+  type SceneVolumetricsSetting,
 } from "./compile/postprocess";
 import { reflectionOverride } from "./dev/reflectionOverride";
 import { shadowsOverride } from "./dev/shadowsOverride";
@@ -118,14 +120,26 @@ function asShadows(value: unknown): SceneShadowSetting {
   return SCENE_SHADOW_SETTINGS.includes(value as SceneShadowSetting) ? (value as SceneShadowSetting) : "follow";
 }
 
-/** 父页面下发的三项设置（已规整） */
+function asVolumetrics(value: unknown): SceneVolumetricsSetting {
+  return SCENE_VOLUMETRICS_SETTINGS.includes(value as SceneVolumetricsSetting)
+    ? (value as SceneVolumetricsSetting)
+    : "follow";
+}
+
+/** 父页面下发的四项设置（已规整） */
 interface SceneSettings {
   postprocess: ScenePostprocessSetting;
   reflection: SceneReflectionSetting;
   shadows: SceneShadowSetting;
+  volumetrics: SceneVolumetricsSetting;
 }
 
-const FOLLOW_SCENE_SETTINGS: SceneSettings = { postprocess: "follow", reflection: "follow", shadows: "follow" };
+const FOLLOW_SCENE_SETTINGS: SceneSettings = {
+  postprocess: "follow",
+  reflection: "follow",
+  shadows: "follow",
+  volumetrics: "follow",
+};
 
 /** 首次加载等父页面场景设置的上限：父页面在宿主请求后同一轮事件里就回，正常是几毫秒 */
 const SCENE_SETTINGS_WAIT_MS = 3000;
@@ -186,7 +200,7 @@ export class SceneHost {
   /** 设置「场景后处理」：最近一次加载用的值；还没加载过为 null。 */
   private postprocess: ScenePostprocessSetting | null = null;
   /**
-   * 父页面下发的后处理 / 反射 / 阴影（`kabegame:wpe-scene-settings`，`setSceneSettings`）：桌面是全局「壁纸设置」，预览是这张壁纸的
+   * 父页面下发的后处理 / 反射 / 阴影 / 体积光（`kabegame:wpe-scene-settings`，`setSceneSettings`）：桌面是全局「壁纸设置」，预览是这张壁纸的
    * 「预览设置」，宿主不分。收到第一条之前为 null，`reload` 等它（最多 `SCENE_SETTINGS_WAIT_MS`，等不到按跟随 WPE）。
    */
   private sceneSettings: SceneSettings | null = null;
@@ -195,6 +209,8 @@ export class SceneHost {
   private reflection: SceneReflectionSetting | null = null;
   /** 设置「场景阴影」（P13d）：最近一次加载用的值；还没加载过为 null。 */
   private shadows: SceneShadowSetting | null = null;
+  /** 设置「场景体积光」（P13e）：最近一次加载用的值；还没加载过为 null。 */
+  private volumetrics: SceneVolumetricsSetting | null = null;
   /**
    * 累计全集（WPE 渲染器 `+0x1728`，I1）：键 → `{ type, value }`。保留 `type`，不学 WPE 的整项覆盖（I4）。
    * 加载传全集、运行时传增量，两条路都走 `apply`。
@@ -1433,15 +1449,17 @@ export class SceneHost {
   }
 
   /**
-   * 父页面下发三项设置（`kabegame:wpe-scene-settings`）。第一条叫醒等着的 `reload`；之后和最近一次加载用的值比，变了才整场重载
-   * （三项都决定编译结果：泛光链 / HDR、反射名单、阴影变体与图集），几项一起变只重载一次，记进探针的 recompiled（原因 settings）。
+   * 父页面下发四项设置（`kabegame:wpe-scene-settings`）。第一条叫醒等着的 `reload`；之后和最近一次加载用的值比，变了才整场重载
+   * （四项都决定编译结果：泛光链 / HDR、反射名单、阴影变体与图集、体积光的 RT 与 `QUALITY`），几项一起变只重载一次，记进探针的
+   * recompiled（原因 settings）。缺了的项（旧的父页面）按跟随。
    */
-  setSceneSettings(next: { postprocess: unknown; reflection: unknown; shadows: unknown }): void {
+  setSceneSettings(next: { postprocess: unknown; reflection: unknown; shadows: unknown; volumetrics?: unknown }): void {
     if (this.disposed) return;
     this.sceneSettings = {
       postprocess: asPostprocess(next.postprocess),
       reflection: asReflection(next.reflection),
       shadows: asShadows(next.shadows),
+      volumetrics: asVolumetrics(next.volumetrics),
     };
     for (const wake of this.sceneSettingsWaiters.splice(0)) wake();
     // 还没加载过：在等的 reload 会读到这份
@@ -1451,22 +1469,25 @@ export class SceneHost {
     if (resolved.postprocess !== this.postprocess) keys.push("postprocess");
     if (resolved.reflection !== this.reflection) keys.push("reflection");
     if (resolved.shadows !== this.shadows) keys.push("shadows");
+    if (resolved.volumetrics !== this.volumetrics) keys.push("volumetrics");
     if (!keys.length) return;
+    const before = [this.postprocess, this.reflection, this.shadows, this.volumetrics].join("/");
+    const after = [resolved.postprocess, resolved.reflection, resolved.shadows, resolved.volumetrics].join("/");
     this.options.report.debug(
-      `场景壁纸 ${this.options.imageId} 设置变化（${keys.join("、")}）：` +
-        `${this.postprocess}/${this.reflection}/${this.shadows} → ${resolved.postprocess}/${resolved.reflection}/${resolved.shadows}，重新判定`,
+      `场景壁纸 ${this.options.imageId} 设置变化（${keys.join("、")}）：${before} → ${after}，重新判定`,
     );
     this.stats.recompiled.push({ reason: "settings", keys });
     void this.reload();
   }
 
-  /** 编译用的三项：父页面的值，反射与阴影再叠 dev 覆盖（`localStorage`，生产构建摇掉） */
+  /** 编译用的四项：父页面的值，反射、阴影与体积光再叠 dev 覆盖（`localStorage`，生产构建摇掉） */
   private resolvedSceneSettings(): SceneSettings {
     const settings = this.sceneSettings ?? FOLLOW_SCENE_SETTINGS;
     return {
       postprocess: settings.postprocess,
       reflection: reflectionOverride() ?? settings.reflection,
       shadows: shadowsOverride() ?? settings.shadows,
+      volumetrics: volumetricsOverride() ?? settings.volumetrics,
     };
   }
 
@@ -1522,7 +1543,7 @@ export class SceneHost {
         this.targetTask = null;
         throw error;
       }));
-      const [target, { postprocess: setting, reflection, shadows }] = await Promise.all([
+      const [target, { postprocess: setting, reflection, shadows, volumetrics }] = await Promise.all([
         targetTask,
         this.readSceneSettings(),
       ]);
@@ -1530,6 +1551,7 @@ export class SceneHost {
       this.postprocess = setting;
       this.reflection = reflection;
       this.shadows = shadows;
+      this.volumetrics = volumetrics;
       const force = forceRender();
       const userProperties = Object.fromEntries(
         [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
@@ -1543,8 +1565,7 @@ export class SceneHost {
         postprocess: setting,
         reflection,
         shadows,
-        // 「场景体积光」（P13e）：宿主接设置之前只有 dev 覆盖，缺省跟随 WPE
-        volumetrics: volumetricsOverride() ?? undefined,
+        volumetrics,
         force,
         textureCache: this.textureCache,
         reader: this.reader,

@@ -135,6 +135,8 @@ pub enum SettingKey {
     WpeSceneReflection,
     /// 场景壁纸阴影画质：follow（跟随 WPE 的 `config.json` 里的 `shadows`）/ disabled / low / medium / high / ultra
     WpeSceneShadows,
+    /// 场景壁纸体积光画质：follow（跟随 WPE 的 `config.json` 里的 `volumetrics`）/ disabled / low / medium / high / ultra
+    WpeSceneVolumetrics,
     /// WPE 安装目录（场景的 `assets`、`config.json` 与 `ui_` 词条都从这里读）；None 时由
     /// `wpe::discover::engine_dir` 自动查找并写入，用户可以在壁纸设置里覆盖
     WpeEngineDir,
@@ -356,6 +358,9 @@ impl Settings {
             SettingKey::WpeSceneShadows => {
                 SettingValue::String(DEFAULT_WPE_SCENE_SHADOWS.to_string())
             }
+            SettingKey::WpeSceneVolumetrics => {
+                SettingValue::String(DEFAULT_WPE_SCENE_VOLUMETRICS.to_string())
+            }
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
@@ -439,6 +444,7 @@ impl Settings {
             SettingKey::WpeScenePostprocess,
             SettingKey::WpeSceneReflection,
             SettingKey::WpeSceneShadows,
+            SettingKey::WpeSceneVolumetrics,
             SettingKey::WpeEngineDir,
             SettingKey::WindowState,
             #[cfg(feature = "virtual-driver")]
@@ -584,6 +590,12 @@ impl Settings {
                 json.as_str()
                     .filter(|value| is_wpe_scene_shadows(value))
                     .unwrap_or(DEFAULT_WPE_SCENE_SHADOWS)
+                    .to_string(),
+            )),
+            SettingKey::WpeSceneVolumetrics => Ok(SettingValue::String(
+                json.as_str()
+                    .filter(|value| is_wpe_scene_volumetrics(value))
+                    .unwrap_or(DEFAULT_WPE_SCENE_VOLUMETRICS)
                     .to_string(),
             )),
             #[cfg(feature = "virtual-driver")]
@@ -777,6 +789,7 @@ impl Settings {
             SettingKey::WpeScenePostprocess => "wpeScenePostprocess".to_string(),
             SettingKey::WpeSceneReflection => "wpeSceneReflection".to_string(),
             SettingKey::WpeSceneShadows => "wpeSceneShadows".to_string(),
+            SettingKey::WpeSceneVolumetrics => "wpeSceneVolumetrics".to_string(),
             SettingKey::WpeEngineDir => "wpeEngineDir".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             #[cfg(feature = "virtual-driver")]
@@ -1109,6 +1122,14 @@ impl Settings {
             .and_then(|c| c.load().as_string())
             .filter(|value| is_wpe_scene_shadows(value))
             .unwrap_or_else(|| DEFAULT_WPE_SCENE_SHADOWS.to_string())
+    }
+
+    pub fn get_wpe_scene_volumetrics(&self) -> String {
+        Self::cells()
+            .get(&SettingKey::WpeSceneVolumetrics)
+            .and_then(|c| c.load().as_string())
+            .filter(|value| is_wpe_scene_volumetrics(value))
+            .unwrap_or_else(|| DEFAULT_WPE_SCENE_VOLUMETRICS.to_string())
     }
 
     pub fn get_window_state(&self) -> Option<WindowState> {
@@ -1544,6 +1565,20 @@ impl Settings {
         Ok(())
     }
 
+    /// 场景体积光画质；取值同阴影。
+    pub fn set_wpe_scene_volumetrics(&self, value: String) -> Result<(), String> {
+        if !is_wpe_scene_volumetrics(&value) {
+            return Err(format!("无效的场景体积光设置：{value}"));
+        }
+        let cells = Self::cells();
+        let new_value = SettingValue::String(value);
+        if let Some(cell) = cells.get(&SettingKey::WpeSceneVolumetrics) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WpeSceneVolumetrics, &new_value);
+        Ok(())
+    }
+
     /// WPE 安装目录；空串按未设置处理。是不是安装目录由调用方判断（`wpe::discover`，它只随 `wpe` feature 编译）。
     pub fn set_wpe_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
         let dir = dir
@@ -1638,6 +1673,14 @@ pub(crate) fn is_wpe_scene_shadows(value: &str) -> bool {
         value,
         "follow" | "disabled" | "low" | "medium" | "high" | "ultra"
     )
+}
+
+/// 场景体积光的默认值：跟随 WPE 安装目录 `config.json` 的 `volumetrics`。
+const DEFAULT_WPE_SCENE_VOLUMETRICS: &str = "follow";
+
+/// 体积光与阴影是 WPE 的同一个档位枚举（`FUN_14010dad0`），取值相同。
+pub(crate) fn is_wpe_scene_volumetrics(value: &str) -> bool {
+    is_wpe_scene_shadows(value)
 }
 
 #[cfg(test)]
@@ -1749,6 +1792,38 @@ mod tests {
             .as_string()
             .as_deref(),
             Some("high")
+        );
+    }
+
+    #[test]
+    fn wpe_scene_volumetrics_rejects_unknown_values() {
+        for ok in ["follow", "disabled", "low", "medium", "high", "ultra"] {
+            assert!(is_wpe_scene_volumetrics(ok));
+        }
+        assert!(!is_wpe_scene_volumetrics("enabled"));
+        assert_eq!(
+            Settings::json_value_to_setting_value(
+                SettingKey::WpeSceneVolumetrics,
+                &serde_json::json!("enabled")
+            )
+            .unwrap()
+            .as_string()
+            .as_deref(),
+            Some("follow")
+        );
+        assert_eq!(
+            Settings::json_value_to_setting_value(
+                SettingKey::WpeSceneVolumetrics,
+                &serde_json::json!("ultra")
+            )
+            .unwrap()
+            .as_string()
+            .as_deref(),
+            Some("ultra")
+        );
+        assert_eq!(
+            Settings::key_to_json_string(SettingKey::WpeSceneVolumetrics),
+            "wpeSceneVolumetrics"
         );
     }
 

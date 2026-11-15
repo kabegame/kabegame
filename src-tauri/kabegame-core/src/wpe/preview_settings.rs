@@ -17,6 +17,7 @@ const MEDIA_INTEGRATION: &str = "mediaIntegration";
 const POSTPROCESS: &str = "postprocess";
 const REFLECTION: &str = "reflection";
 const SHADOWS: &str = "shadows";
+const VOLUMETRICS: &str = "volumetrics";
 
 /// Kabegame 自己的默认值（与 WPE 出厂值一致）。
 const DEFAULT_VOLUME: f64 = 1.0;
@@ -25,6 +26,7 @@ const DEFAULT_MEDIA_INTEGRATION: bool = true;
 const DEFAULT_POSTPROCESS: &str = "enabled";
 const DEFAULT_REFLECTION: &str = "enabled";
 const DEFAULT_SHADOWS: &str = "medium";
+const DEFAULT_VOLUMETRICS: &str = "medium";
 
 /// 把一个值规整成能存的形状；键不认识或值非法返回 Err，数值钳到范围内。
 fn normalize(key: &str, value: &Value) -> Result<Value, String> {
@@ -50,6 +52,7 @@ fn normalize(key: &str, value: &Value) -> Result<Value, String> {
         POSTPROCESS => choice(crate::settings::is_wpe_scene_postprocess),
         REFLECTION => choice(crate::settings::is_wpe_scene_reflection),
         SHADOWS => choice(crate::settings::is_wpe_scene_shadows),
+        VOLUMETRICS => choice(crate::settings::is_wpe_scene_volumetrics),
         _ => Err(format!("未知预览设置: {key}")),
     }
 }
@@ -61,6 +64,7 @@ fn default_of(key: &str) -> Value {
         MEDIA_INTEGRATION => Value::Bool(DEFAULT_MEDIA_INTEGRATION),
         POSTPROCESS => Value::from(DEFAULT_POSTPROCESS),
         REFLECTION => Value::from(DEFAULT_REFLECTION),
+        VOLUMETRICS => Value::from(DEFAULT_VOLUMETRICS),
         _ => Value::from(DEFAULT_SHADOWS),
     }
 }
@@ -179,5 +183,23 @@ mod tests {
         assert!(media_integration(&raw));
         let off = json!({ PREVIEW_SETTINGS_KEY: { "mediaIntegration": false } });
         assert!(!media_integration(&off));
+    }
+
+    #[test]
+    fn volumetrics_choices_and_default() {
+        let raw = json!({});
+        // 默认 medium 不存，其余档位存；不认识的值报错
+        assert_eq!(
+            apply_changes(&raw, &changes(json!({ "volumetrics": "medium" }))).unwrap(),
+            None
+        );
+        let next = apply_changes(&raw, &changes(json!({ "volumetrics": "ultra" })))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            next[PREVIEW_SETTINGS_KEY],
+            json!({ "volumetrics": "ultra" })
+        );
+        assert!(apply_changes(&raw, &changes(json!({ "volumetrics": "enabled" }))).is_err());
     }
 }

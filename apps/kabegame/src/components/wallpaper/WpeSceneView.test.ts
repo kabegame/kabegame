@@ -88,14 +88,27 @@ describe("WpeSceneView 样式", () => {
   it("宿主请求时回场景设置（缺省都跟随），设置变了主动推", async () => {
     const { wrapper, post, fromHost } = await mountView("fit");
     fromHost({ type: WPE_SCENE_STYLE_REQUEST });
-    const follow = { type: WPE_SCENE_SETTINGS, postprocess: "follow", reflection: "follow", shadows: "follow" };
+    const follow = {
+      type: WPE_SCENE_SETTINGS,
+      postprocess: "follow",
+      reflection: "follow",
+      shadows: "follow",
+      volumetrics: "follow",
+    };
     expect(post).toHaveBeenCalledWith(follow, "*");
     post.mockClear();
-    await wrapper.setProps({ sceneSettings: { postprocess: "enabled", reflection: "follow", shadows: "low" } });
+    const next = { postprocess: "enabled", reflection: "follow", shadows: "low", volumetrics: "follow" };
+    await wrapper.setProps({ sceneSettings: next });
     expect(post).toHaveBeenCalledExactlyOnceWith({ ...follow, postprocess: "enabled", shadows: "low" }, "*");
     // 同值的新对象不推
-    await wrapper.setProps({ sceneSettings: { postprocess: "enabled", reflection: "follow", shadows: "low" } });
+    await wrapper.setProps({ sceneSettings: { ...next } });
     expect(post).toHaveBeenCalledOnce();
+    // 只改体积光也推（P13e）
+    await wrapper.setProps({ sceneSettings: { ...next, volumetrics: "ultra" } });
+    expect(post).toHaveBeenLastCalledWith(
+      { ...follow, postprocess: "enabled", shadows: "low", volumetrics: "ultra" },
+      "*",
+    );
   });
 
   it("别的窗口发来的消息不理", async () => {

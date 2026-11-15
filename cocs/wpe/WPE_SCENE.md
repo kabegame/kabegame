@@ -91,7 +91,7 @@
 
 读码见 [rea-p13-passes](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-passes.md) 第 3 节与 [rea-p13-volumetrics](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-volumetrics.md)（V1–V11），计划、实测与实施记录见 [phase-13e-volumetrics](../../.claude/plans/wpe-import/3-scene/phase13/phase-13e-volumetrics.md)。
 
-- **档位**：WPE 的 `general.user.volumetrics`（`disabled` / `low` / `medium` / `high` / `ultra`，缺键或不认识的值按 medium，与阴影共用档位枚举）。编译选项 `volumetrics`（`compile/postprocess.ts` 的 `resolveVolumetrics` / `readWpeVolumetrics`）缺省跟随 WPE，只在场景有会画的灯时才读 `config.json`；设置项「场景体积光」随预览设置的字段组接入（TODO，见计划点 1）。dev 覆盖 `localStorage["kabegame-dev-scene-volumetrics"]`（`dev/volumetricsOverride.ts`），宿主加载与 dev 探针都读，探针结果带 `volumetrics`（档位与会画的灯）；用完要删掉。
+- **档位**：WPE 的 `general.user.volumetrics`（`disabled` / `low` / `medium` / `high` / `ultra`，缺键或不认识的值按 medium，与阴影共用档位枚举）。编译选项 `volumetrics`（`compile/postprocess.ts` 的 `resolveVolumetrics` / `readWpeVolumetrics`）缺省跟随 WPE，只在场景有会画的灯时才读 `config.json`。设置「场景体积光」（`wpeSceneVolumetrics`：`follow` 缺省 / `disabled` / `low` / `medium` / `high` / `ultra`；预览设置的 `volumetrics` 默认 `medium`）在 WPE 设置字段组里、排在阴影后面，同阴影一样由父页面下发（见「场景后处理档位」的「设置来源」），值变了宿主整场重新加载（`recompiled` 的键 `volumetrics`）。dev 覆盖 `localStorage["kabegame-dev-scene-volumetrics"]`（`dev/volumetricsOverride.ts`），宿主加载与 dev 探针都读，探针结果带 `volumetrics`（档位与会画的灯）；用完要删掉。
 - **谁画**（`compile/volumetrics.ts`）：自己可见且 `castvolumetrics` 的 `lpoint` / `lspot`，不看 `lightconfig`。管光、平行光 WPE 也建组、清屏、合成，但灯体矩阵是没初始化的值（实测 NaN），什么都画不出、合成一片 0，所以不收；灯对象本来就不触发合成，不影响分组。
 - **一盏灯**（`render/volumetrics.ts`，插在主 pass 里灯在 `objects` 中的位置）：场景深度 → `_rt_volumetricsBack`（全分辨率）；1/d 的 Single 深度清 0，画灯体背面（GREATER、写深度、剔正面）；组内第一盏把 LightBuffer 清成 (0, 0, 0, 1)；画灯体正面（剔背面、不测深度、SrcAlpha / One、只写 RGB），着色器沿视线从正面走到「背面与场景深度较近的那个」累加。d：low / medium 8、high / ultra 4；步数 2 / 3 / 5 / 8，带阴影 12 / 24 / 32 / 64（着色器按 `QUALITY`）。WebGPU 的深度纹理不能线性过滤，WPE 读 Back 用的是 Linear + Wrap：每次拷贝改成一个小 pass 把深度写进 `r32float`（Single 同样），要 `float32-filterable`，没有时退回（`render:volumetrics`）。场景深度附件在有体积光时总建。
 - **合成时机**：连续几盏灯共用一次清屏；下一个可见的非灯对象画之前（不可见的不触发）、或顶层列表末尾（泛光之前）合成：low / medium 先 `blur_h`（LightBuffer → B）、`blur_v`（B → LightBuffer）各一次，再 `passthrough` 加法画回场景目标。LightBuffer 在 LDR 下是 `rgba8unorm`（一段灯的累加在合成前就钳到 1）、HDR 下 `rgba16float`，没有 HDR 系数。反射 pass 里没有体积光。
@@ -99,7 +99,11 @@
 - **相机在灯体内**（`insideLightVolume`）：`p = eye + 0.2·F`，点光 `r² > |p − 灯心|²`，聚光沿轴投影 `0 < t ≤ radius` 且离轴距离在锥内；成立时正面换成全屏三角形（`FULLSCREEN = 1`），背面照画。正交场景照样判。
 - **阴影**：`SHADOW` = castshadow ∧ 用户的阴影档 ≠ 0，**不看** `lightconfig` 有没有阴影计数（`p13e-pns`）；带阴影的点光每帧取自己阴影条目的方块变换与点光投影（`g_RenderVar0` / `g_RenderVar3`），`LIGHTS_SHADOW_MAPPING_QUALITY` = 阴影档、只给点光。
 - **照报**（WPE 读的是残留或没初始化的值，语料都没有）：带阴影的点光分不到阴影条目（`volumetrics:shadow-unassigned`，个数超过 `min(pointshadow, point)`）、聚光分不到聚光槽（`volumetrics:spot-unassigned`）、灯在组里（`volumetrics:group`）；另有 cookie（`volumetrics:cookie`）、聚光阴影（`volumetrics:spot-shadow`）、透视场景的透明排序（`volumetrics:transparentsorting`，没测灯在两轮里落在哪）。灯是编译期常量（同 P13d），挂父对象、关键帧、脚本照报，等 P13f。
-- **实测**（2026-11-15）：确定性工程 `ignore/p13/e/gen_e0.py`（正交 / 透视点光、带阴影、分组、相机在灯内、聚光、四类灯、缩放旋转）按抓帧时刻渲染，low 档 9 个工程与 medium / high / ultra / disabled 各 5–6 个（`capture_sweep`）每张最多 66 个像素、都只差 1 级；语料 `3837478759` 隔离出背景与三盏灯，五档都和 WPE 逐像素相同；`3287715210`（HDR）隔离出背景与灯，屏蔽随时间变化的眼睛以后最大差 4 级（与不带灯的底图同量级）。
+- **实测与走查**（2026-11-15，按 `FINAL_CHECK.md` 逐 pass 对齐、逐值解释，记录在 `phase-13e-volumetrics.md`「走查」）：
+  - 确定性工程 `ignore/p13/e/gen_e0.py`（正交 / 透视点光、带阴影、分组、相机在灯内、聚光、四类灯、缩放旋转），low 档 9 个与 medium / high / ultra / disabled 共 21 次抓帧：体积光链（正面、`blur_h`、`blur_v`、合成）的 RGB 和 WPE 逐位相同，只有 2 处各一个纹素差 1（`in-low` (202, 11)、`po-high` (303 / 346, 37)），上采样后是最终帧里那 64 / 32 个像素；其余差异全在体积光之前的场景 draw（地面 / 立方体的 `LIGHTING`，P13a），各档都是同一批像素。每一处都按 WPE 的 DXBC 用 float64 复算到值，都落在「硬件写 8 位的取整阈值」上，见下方已知差异「片元的零星舍入差」。
+  - 语料 `3837478759` 隔离出背景与三盏灯，五档都和 WPE 逐像素相同。
+  - `3287715210`（HDR）重新复制成只留渐变背景与灯（`ignore/p13/e/real/3287715210-iso2`：人物层的 `iris_follow_cursor` 跟光标、抓帧时光标没录，且图像层不影响体积光，按原则第 5 条去掉）：LightBuffer（`rgba16float`）正面只有 1 个纹素差 1 个半精度 ulp（SHADOW 变体，没逐值复算），合成加上的量其余像素逐位相同；合成之前的差异来自背景的渐进式 JPEG（4:2:0），是已登记的「JPEG 色度上采样」；最终 8 位帧最大差 3（背景差异经泛光摊开）。
+  - `blur_h` 的输出 alpha 两边不同（WPE 是 0、我们是 1）；`blur_v` 的输出 alpha 两边都是 1，合成按它做 SrcAlpha，所以不影响画面。
 
 ## 着色器翻译器 `wpesl2wgsl`
 
@@ -220,15 +224,15 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **跟随 WPE**（默认）：只读 `<WPE 安装目录>/config.json`（由 `sceneAssets` 的上一级定位，与 assets、`ui_` 词条同一套 `wpe::discover::engine_dir`），取第一个 Steam 用户的 `general.user.postprocessing`。WPE 只认 `disabled` / `ultra` / `displayhdr`，其它非空值当「开启」，缺失或读不到当 `disabled`；`displayhdr` 按「超高」处理（我们输出到普通画布）。
 - **场景实际状态**：泛光 = 档位不是关闭，且 `general.bloom` 的生效值不是 false（缺键即开；写成属性对象时取绑定属性的当前值，没有绑定取对象的 `value`）；HDR = 档位为超高，且 `general.bloom`、`general.hdr` 的生效值都是 true（规则同泛光，缺键不算）。G3 曾推断属性对象不算，工坊 3286859278（`bloom` 为 `{user: "postprocessing", value: true}`）的超高档抓帧证伪了这一点：WPE 照样走 HDR。
 - **泛光参数**：`bloomstrength` / `bloomthreshold` / `bloomtint` / `bloomhdrstrength` / `bloomhdrthreshold` / `bloomhdrfeather` / `bloomhdrscatter` / `bloomhdriterations`，缺键依次取 2 / 0.65 / (1, 1, 1) / 2 / 1 / 0.1 / 1.619 / 8（WPE 场景构造函数），属性对象取生效值（`postprocess.ts` 的 `bloomParams`）。
-- **设置来源**（后处理、反射、阴影三项一起）：宿主不读设置，由父页面 `WpeSceneView` 经 postMessage 下发
-  `{ type: "kabegame:wpe-scene-settings", postprocess, reflection, shadows }`：宿主启动时的样式请求（`kabegame:wpe-scene-style-request`）
+- **设置来源**（后处理、反射、阴影、体积光四项一起）：宿主不读设置，由父页面 `WpeSceneView` 经 postMessage 下发
+  `{ type: "kabegame:wpe-scene-settings", postprocess, reflection, shadows, volumetrics }`：宿主启动时的样式请求（`kabegame:wpe-scene-style-request`）
   一并回它，值变了再主动推（`sceneStyle.ts` 的 `listenSceneParent` → `SceneHost.setSceneSettings`）。桌面壁纸窗口传全局「壁纸设置」
-  （`WallpaperWindow.vue` 读三个全局键并跟 `setting-change`），预览与应用背景传这张壁纸的「预览设置」（metadata 的 `previewSettings`，
+  （`WallpaperWindow.vue` 读四个全局键并跟 `setting-change`），预览与应用背景传这张壁纸的「预览设置」（metadata 的 `previewSettings`，
   见 [WPE_IMPORT.md](WPE_IMPORT.md)「壁纸设置与预览设置」）。不能跟随 WPE（不是 Windows，或读不到 `config.json`）时父页面已把 `follow`
-  换成 Kabegame 默认值（`enabled` / `enabled` / `medium`），宿主只在能跟随时才解析 `follow`。
+  换成 Kabegame 默认值（`enabled` / `enabled` / `medium` / `medium`），宿主只在能跟随时才解析 `follow`；缺了的项（不带体积光的旧父页面）按跟随。
 - **重新判定**：首次加载等父页面的第一条设置（在 iframe 里最多等 3 s，等不到按跟随并记 warn；不在 iframe 里不等）；之后每条和上一次
   加载用的值比，变了才整场重新加载，几项一起变只加载一次，探针 `stats().recompiled` 记 `{ reason: "settings", keys }`（键是
-  `postprocess` / `reflection` / `shadows`）。dev 工具直接开的屏外宿主由 `scripts/kabegame-dev/scene.ts` 在主页面里替它回全局设置。
+  `postprocess` / `reflection` / `shadows` / `volumetrics`）。dev 工具直接开的屏外宿主由 `scripts/kabegame-dev/scene.ts` 在主页面里替它回全局设置。
   WPE 自己的设置改了要等下一次加载才生效。
 
 `compileSceneInWorker(input)` 在主线程建立 module Worker，先把 wasm 编译成可克隆的 `WebAssembly.Module`，再发 `start`。Worker 以带 `id` 的 `file` 消息请求 `range` / `whole`，主线程执行 fetch 并用 `file-result` 回传 transferable 字节；读取失败时回传错误的类型名与消息（`protocol.ts` 的 `encodeFileError` / `decodeFileError`），Worker 端还原成同类型，`SceneFs` 才能把 `TypeError: Failed to fetch` 认作「不存在、查下一个来源」。Worker 完成后以 `done` 回传 bundle 与所有 mip 的 ArrayBuffer；错误用 `error`。`AbortSignal` 取消时终止 Worker。Worker 不直接访问 `file:`。
@@ -258,7 +262,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 组件 `apps/kabegame/src/components/wallpaper/WpeSceneView.vue` 是自取数据的子组件，地位等同 web 层的 iframe（接进 `WallpaperStage` 的方式见下一节）：
 - **props**：`target`、`paused`、`interactive`。
 - **数据**：宿主的 `SceneHost` 接收垫片 `applyUserProperties`（`user[key].value` 组成 `userProperties`）、在 Worker 里编译、建渲染器。
-- **重载**：垫片监听本张图的 `metadataId` 字段补丁并只交付变化键，`SceneHost` 的**应用函数**按绑定表分成就地写与重编译（P3a，见「属性与快速路径」）；只有重编译才在同一设备上换场景，时钟不重置。父页面下发的后处理 / 反射 / 阴影变了也重新加载（见「场景后处理档位」的「设置来源」）。
+- **重载**：垫片监听本张图的 `metadataId` 字段补丁并只交付变化键，`SceneHost` 的**应用函数**按绑定表分成就地写与重编译（P3a，见「属性与快速路径」）；只有重编译才在同一设备上换场景，时钟不重置。父页面下发的后处理 / 反射 / 阴影 / 体积光变了也重新加载（见「场景后处理档位」的「设置来源」）。
 - **纹理缓存**：FreeImage 纹理的解码结果按目标缓存（`TextureDecodeCache`），改属性重编译不再解码 4K PNG；换目标或卸载时释放。
 - **dev 强制渲染（D4）**：dev 构建下 `localStorage["kabegame-dev-scene-force-render"] = "1"`（主窗口与壁纸窗口同源共用）时，有不支持项也照常编译、解码并渲染（渲染器自查仍生效），日志里列出不支持项；用来看半成品的构图，例如 bedroom 的脚本颜色按 `value` 静态显示。
 - **emit**：渲染出第一帧 `ready`；不能渲染 `fallback(reasons)`。
@@ -1600,6 +1604,12 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 - **片元的零星舍入差**：和顶点无关，最大 1 级、每帧 0 到几十个像素，出在落在舍入中点附近的像素上（Liberty 的音频条 pass 用 numpy 复算过，
   两边离精确值的偏差分布相同）。陡边上能见到 2 级：P6c 走查 `3810092560` 的水波 effect（waterwaves）按 `sin` / `pow` 扰动 UV 再双线性采样，
   WPE 是 fxc 的 DXBC、我们是 WGSL 经 Dawn，UV 在 float 舍入量级上不同，偶尔跨过 GPU 双线性 1/256 子纹素权重的台阶（依据 `ignore/p6/cw/cmp/`）。
+  「中点」不是 .5：P13e 走查（2026-11-15，本机 NVIDIA、D3D11 与 Dawn D3D12 相同）按整张 RT 的 float64 复算测出，硬件把浮点写进 RGBA8
+  （有混合）时，第 n 级往上取的门槛是 `n + t(n)`：t(n) 每升 1 级降约 1/256，大约每 16 级跳回约 .56（测到的段 n = 9–16、61–148 里
+  跳在 16、64、80、96、112、127、143；如 n = 9 → .5252、15 → .5017、16 → .5598、61 → .5088、64 → .5593、126 → .504、127 → .562）；两边在 n + t(n) 两侧各取一边，确定性工程、
+  地面光照、体积光正面里每一处差 1 级的像素都正好落在这个门槛上（`ignore/p13/e/fc_front_threshold.py`、`fc_ground*.py`、`fc_front_mesh.py`）。
+  透视场景插值的世界坐标有 float 误差（顶点按 1/256 像素对齐到网格，两边顶点的 float 舍入不同就可能对齐到相邻的网格点），门槛附近的
+  不确定带宽到 ~1e-3 级，聚光锥边这类梯度大的地方更宽（`p13e-spot` 立方体上一个像素离 WPE 的门槛 0.0034 级，相当于 1/526 像素）。
 - **场景比窗口大时的上屏**：产品先画场景分辨率再缩，WPE 按窗口分辨率直接画（不复刻，见「铺放与帧循环」）。dev 探针按窗口尺寸画时没有这一项：Liberty（3840×2160 场景、1920×1080 窗口）4 帧和 WPE 逐像素相同，音频条与模糊 pass 的零星舍入差在这个分辨率下也没出现（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）。
 
 ## 用户纹理（P11b）

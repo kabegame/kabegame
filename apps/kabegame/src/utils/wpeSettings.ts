@@ -14,7 +14,7 @@ import type { AppSettingKey } from "@/stores/settings";
 import { isWpeSceneType, isWpeVideoType, isWpeWebType } from "./mediaMime";
 
 export type WpeSettingKey =
-  "paused" | "volume" | "playbackRate" | "mediaIntegration" | "postprocess" | "reflection" | "shadows";
+  "paused" | "volume" | "playbackRate" | "mediaIntegration" | "postprocess" | "reflection" | "shadows" | "volumetrics";
 
 export interface WpeSettingValues {
   paused: boolean;
@@ -24,6 +24,7 @@ export interface WpeSettingValues {
   postprocess: string;
   reflection: string;
   shadows: string;
+  volumetrics: string;
 }
 
 /** 字段的显示顺序 */
@@ -35,6 +36,7 @@ export const WPE_SETTING_KEYS: readonly WpeSettingKey[] = [
   "postprocess",
   "reflection",
   "shadows",
+  "volumetrics",
 ];
 
 /** Kabegame 自己的默认值（与 WPE 出厂值一致）：预览设置没设的项、不能跟随时的 `follow` 都取它 */
@@ -46,6 +48,7 @@ export const WPE_SETTING_DEFAULTS: Readonly<WpeSettingValues> = {
   postprocess: "enabled",
   reflection: "enabled",
   shadows: "medium",
+  volumetrics: "medium",
 };
 
 /** 桌面「壁纸设置」对应的全局设置键 */
@@ -57,6 +60,7 @@ export const WPE_SETTING_GLOBAL_KEYS: Readonly<Record<WpeSettingKey, AppSettingK
   postprocess: "wpeScenePostprocess",
   reflection: "wpeSceneReflection",
   shadows: "wpeSceneShadows",
+  volumetrics: "wpeSceneVolumetrics",
 };
 
 /** 标签词条（说明是 `<词条>Desc`，选项文案是 `<词条><Follow|Disabled|…>`），沿用设置页原来的词条 */
@@ -68,13 +72,15 @@ export const WPE_SETTING_LABEL_KEYS: Readonly<Record<WpeSettingKey, string>> = {
   postprocess: "settings.wpeScenePostprocess",
   reflection: "settings.wpeSceneReflection",
   shadows: "settings.wpeSceneShadows",
+  volumetrics: "settings.wpeSceneVolumetrics",
 };
 
-/** 三个场景选项的取值（含 `follow`），顺序即显示顺序 */
+/** 场景选项的取值（含 `follow`），顺序即显示顺序；体积光与阴影是 WPE 的同一个档位枚举 */
 export const WPE_SETTING_CHOICES = {
   postprocess: ["follow", "disabled", "enabled", "ultra"],
   reflection: ["follow", "disabled", "enabled"],
   shadows: ["follow", "disabled", "low", "medium", "high", "ultra"],
+  volumetrics: ["follow", "disabled", "low", "medium", "high", "ultra"],
 } as const satisfies Partial<Record<WpeSettingKey, readonly string[]>>;
 
 export type WpeChoiceKey = keyof typeof WPE_SETTING_CHOICES;
@@ -96,14 +102,15 @@ export function wpeChoiceDisplay(key: WpeChoiceKey, value: unknown, followAvaila
 
 /**
  * 某类壁纸用得上的字段；`type` 为空时给全部字段（设置页）。媒体集成只有 Windows 有数据源；
- * 倍速只作用于视频层（网页、场景收不到）；后处理 / 反射 / 阴影只有场景。
+ * 倍速只作用于视频层（网页、场景收不到）；后处理 / 反射 / 阴影 / 体积光只有场景。
  */
 export function wpeSettingFieldsFor(type: string | null | undefined, windows: boolean): WpeSettingKey[] {
   const media = windows ? (["mediaIntegration"] as const) : [];
   if (!type) return WPE_SETTING_KEYS.filter((key) => windows || key !== "mediaIntegration");
   if (isWpeVideoType(type)) return ["paused", "volume", "playbackRate"];
   if (isWpeWebType(type)) return ["paused", "volume", ...media];
-  if (isWpeSceneType(type)) return ["paused", "volume", ...media, "postprocess", "reflection", "shadows"];
+  if (isWpeSceneType(type))
+    return ["paused", "volume", ...media, "postprocess", "reflection", "shadows", "volumetrics"];
   return [];
 }
 
@@ -129,11 +136,12 @@ export function wpePreviewSettingValues(stored: Record<string, unknown> | null |
   return values;
 }
 
-/** 推给场景宿主的三项（`kabegame:wpe-scene-settings`）：不能跟随时 `follow` 换成默认值，宿主只在能跟随时才解析 `follow` */
+/** 推给场景宿主的四项（`kabegame:wpe-scene-settings`）：不能跟随时 `follow` 换成默认值，宿主只在能跟随时才解析 `follow` */
 export interface WpeSceneSettings {
   postprocess: string;
   reflection: string;
   shadows: string;
+  volumetrics: string;
 }
 
 /** 没有给场景设置的地方（缺省值）：都跟随 WPE，同宿主收不到父页面设置时的处理 */
@@ -141,6 +149,7 @@ export const WPE_FOLLOW_SCENE_SETTINGS: Readonly<WpeSceneSettings> = {
   postprocess: "follow",
   reflection: "follow",
   shadows: "follow",
+  volumetrics: "follow",
 };
 
 export function wpeSceneSettingsOf(
@@ -151,5 +160,6 @@ export function wpeSceneSettingsOf(
     postprocess: wpeChoiceDisplay("postprocess", values.postprocess, followAvailable),
     reflection: wpeChoiceDisplay("reflection", values.reflection, followAvailable),
     shadows: wpeChoiceDisplay("shadows", values.shadows, followAvailable),
+    volumetrics: wpeChoiceDisplay("volumetrics", values.volumetrics, followAvailable),
   };
 }

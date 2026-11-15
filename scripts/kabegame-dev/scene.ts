@@ -141,12 +141,16 @@ export async function openHost(s: DevSession, options: { hidden?: boolean; scene
           if (!frame.isConnected) return window.removeEventListener("message", onRequest);
           if (event.source !== frame.contentWindow || event.data?.type !== "kabegame:wpe-scene-style-request") return;
           const read = (command) => window.__TAURI_INTERNALS__.invoke(command, {}).catch(() => "follow");
-          const [postprocess, reflection, shadows] = await Promise.all([
+          const [postprocess, reflection, shadows, volumetrics] = await Promise.all([
             read("get_wpe_scene_postprocess"),
             read("get_wpe_scene_reflection"),
             read("get_wpe_scene_shadows"),
+            read("get_wpe_scene_volumetrics"),
           ]);
-          frame.contentWindow?.postMessage({ type: "kabegame:wpe-scene-settings", postprocess, reflection, shadows }, "*");
+          frame.contentWindow?.postMessage(
+            { type: "kabegame:wpe-scene-settings", postprocess, reflection, shadows, volumetrics },
+            "*",
+          );
         };
         window.addEventListener("message", onRequest);
         return true;

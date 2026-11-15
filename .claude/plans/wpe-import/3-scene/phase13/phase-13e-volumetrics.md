@@ -193,3 +193,48 @@ sampleType: comparison ? "depth" : "float", // 现状：r32float 要 float32-fil
 - **对 WPE**：low 档 9 个确定性工程、四档扫描 21 次（`A:\p13e\sweep`，扫完自动改回 low，`config.json` 回到扫描前的 sha）每张最多 66 个像素、只差 1 级；`3837478759` 隔离工程五档逐像素相同；`3287715210`（HDR）隔离工程屏蔽随时间变化的眼睛后最大差 4 级，与不带灯的底图同量级。对照脚本 `ignore/p13/e/plan_cmp.py`、`cmp.py`、`plan_sweep.py`、`cmp_sweep.py`、`cmp_real.py`（DDS 按 sRGB 编码）。
 - **语料**：185 → 187（`3287715210`、`3837478759`），没有掉出。变异 18 / 20（两处等价，见回归 VL1）。
 - **还没做**：步骤 4（设置项接进预览设置字段组、宿主收父页面下发的 `volumetrics`），等那份改动进 HEAD；测试行（`ignore/p13/e/manifest-e.json`、`manifest-real.json`、`manifest-real2.json`、`manifest-full.json`）提交之后用 `projects_remove` 移除。
+
+## 步骤 4 实施记录（2026-11-15，预览设置的改动 `49499ddb` 进 HEAD 之后）
+
+上节「还没做」里的测试行已在 P13e 提交后移除。步骤 4 照「阴影」一项逐处抄：
+
+- **Rust**：`settings/mod.rs` 新键 `WpeSceneVolumetrics`（默认 `follow`，`is_wpe_scene_volumetrics` 同阴影的档位，getter / setter、单测）；
+  `commands/settings.rs` 两个命令、`lib.rs` 注册（不进宿主权限，值由父页面下发）；`wpe/preview_settings.rs` 键 `volumetrics`（默认 `medium`、单测）。
+- **前端**：`stores/settings.ts` 类型、`settingsDescriptors.ts` 一行；`utils/wpeSettings.ts` 字段表（排在阴影后）、默认、全局键、词条、
+  六档选项、场景字段、`WpeSceneSettings` 四项；设置页里体积光同阴影用下拉（`WpeSettingControl.vue`）；`WpeWallpaperSettings.vue`、
+  `WallpaperWindow.vue`（全局键与 getter）、`WpeSceneView.vue`（比较键）、`wpeSceneStyle.ts`（消息字段）；`scripts/kabegame-dev/scene.ts`
+  屏外宿主补读并下发；五种语言 `settings.wpeSceneVolumetrics*`（选项文案同各语言阴影）。
+- **宿主**：`sceneStyle.ts` 收 `volumetrics`；`host.ts` 的 `SceneSettings` 四项、`setSceneSettings` 比较并整场重载（键 `volumetrics`）、
+  缺了的项按跟随、dev 覆盖叠在父页面值上，编译输入改用下发值（去掉只看 dev 覆盖的临时写法）。
+- **验证**：vue-tsc、宿主 tsc 0 error；前端 4 个文件 47 例、宿主 2 个文件 41 例全过（新增「只改体积光重载一次」等）；
+  `kabegame-core` 名字含 `wpe` 的单测里设置 4 个、预览设置 5 个全过，同一过滤带出的 `wpe_import::tests::ingest` 与
+  `local_folder::tests::wpe_*` 失败是既有的（单线程照样失败，用例在 Windows 上 `canonicalize` 出 `\?\` 路径查不到行），与本步无关；
+  `deno task check -c kabegame` 的 cargo 一半被 dev 占着的 CEF dll 卡住（os error 32），主 app crate 没能检查。
+  真机：屏外宿主 `p13e-po` 推 `disabled`、同值、`ultra`，`recompiled` 与画面哈希都符合（回归 VL4 备注）；设置页与预览要重启 dev。
+
+## 走查（2026-11-15，按 `FINAL_CHECK.md`）
+
+用户：「按军规比一下像素」。之前的「每张最多 66 个像素、只差 1 级」与 `3287715210`「屏蔽眼睛后最大差 4 级」都没落到 draw 和值，按原则第 4 条不算通过，重做。
+
+**方法**：两边逐 pass 读回（我们用 `render_scene` 的 `trace.readback`，WPE 用 `save_texture`）：合成前场景、LightBuffer 正面、`blur_h`、`blur_v`、合成；第一处不同落在哪个 draw，就按 WPE 那个 draw 的 DXBC 用 float64 复算整张 RT，测两边在各整数级的取整门槛，看差异像素在不在门槛上。追踪工具原来不读 `r32float`（体积光的 Back / Single），补上（`render/trace.ts`，单测一条），用它逐位比了 `in-low` 的 Back（2073600 个）与 Single（32400 个，`r32float` 拷贝与 `depth32float` 原值都比）：全部相同；`in-low` 正面 draw 的 uniform 在轨迹 `rawUniforms` 里与 WPE 逐位相同。脚本都在 `ignore/p13/e/fc_*.py`，读回与抓帧导出在 `ignore/p13/e/fc/<样本>/`。
+
+**发现**：本机硬件把浮点写进 RGBA8（带混合）不是 ×255 就近取整：第 n 级往上取的门槛 `n + t(n)`，t(n) 每升 1 级降约 1/256、约每 16 级跳回 .56（`fc_front_threshold.py`、`fc_ground*.py` 在三种画法上测的同一组门槛）；两边的门槛相同（只差一两个分量），差异全是着色器输出的 float32 微小不同（fxc DXBC 与 Tint / DXC）把值放在门槛两侧。登记进 `WPE_SCENE.md`「片元的零星舍入差」。
+
+| 样本 | 差异 | 第一处不同 | 精确值与门槛 | 结论 |
+|---|---|---|---|---|
+| `po-low` / `hdr-low`（同场景） | 3 像素 | 合成前：地面（WPE 事件 49，`generic4` + 点光） | (1580, 318) B 72.52807、(1203, 338) B 101.53933、(1099, 617) R 76.51244，各自正是 n = 72 / 101 / 76 那一级两边门槛的端点 | 门槛像素；体积光链 RGB 逐位相同 |
+| `in-low`（相机在灯内） | 66 像素 | LightBuffer 正面全屏变体，纹素 (202, 11) R 15 / 16 | 输入（Back、Single、uniform）逐位相同；R 精确 15.501708，n = 15 门槛 .50171（WPE 往上的最小值 = 我们往下的最大值 = 这个纹素）；另 2 个像素在合成前 | 门槛纹素，经模糊与 8 倍上采样成 64 像素 |
+| `pp-low` / `ps-low` | 1 像素 | 合成前：透视地面 | (1324, 784) G 78.5048，n = 78 门槛带 .50431–.50481（透视插值使两边门槛重叠） | 门槛像素；`ps` 的阴影变体体积光链逐位相同 |
+| `seq-low`（两段灯、两次合成） | 1 像素 | 合成前：地面（三盏点光） | (1244, 500) R/G 61.50879，n = 61 门槛 .50879 | 门槛像素；两段体积光链逐位相同 |
+| `spot-low` | 4 像素 | 合成前：地面 3 个、立方体 1 个（聚光） | 地面 B 67.54783 / R 86.53698 / B 62.50526 在各级门槛带里；立方体 (937, 436) R 89.5277，离 WPE 门槛 .5243 高 0.0034 级：在聚光锥边（每像素 1.8 级），相当于 1/526 像素，归透视插值的位置误差（推断：顶点按 1/256 像素对齐，没逐位证实） | 门槛像素；聚光体积光链逐位相同 |
+| `kinds-low` / `scale-low` | 0 | — | — | 逐像素相同 |
+| 四档 21 张 | 除 `po-high` 外的差异全是上面 low 档已证实的同一批场景像素 | — | — | 同上 |
+| `po-high` | 多 32 像素 | LightBuffer 正面（480×270、不模糊）纹素 (303 / 346, 37) | 按 577 点球网格求交复算整张：R 精确 11.51739，n = 11 门槛 .51739 | 门槛纹素，4×4 上采样成 32 像素 |
+| `3837478759-iso` 五档 | 0 | — | — | 逐像素相同 |
+| `3287715210-iso2`（HDR，新复制工程：只留渐变背景 259 与灯 85） | 最终 8 位 104481 像素、最大 3 | 合成前场景 54509 像素（背景图层） | 背景是渐进式 JPEG 4:2:0（`fc_tex_kind.py`），已登记的「JPEG 色度上采样」；LightBuffer 正面 1 个纹素差 1 个半精度 ulp（SHADOW 变体，没逐值复算），合成前逐位相同的 201.9 万像素里合成后只有 9 个差 1 ulp，全在这个纹素的上采样范围；最终帧的差异是背景差异经泛光摊开 | 体积光部分：一个半精度舍入纹素；其余是别的阶段的已登记差异 |
+
+**另记**：
+- `blur_h` 输出的 alpha 两边不同（WPE 0、我们 1），`blur_v` 输出的 alpha 两边都是 1、合成按它 SrcAlpha，画面不受影响。
+- 旧的 `3287715210-iso` 留了人物层，`iris_follow_cursor` 跟光标转、抓帧时光标没录，状态还原不了；图像层不写深度、不投影，不影响体积光，按原则第 5 条去掉。
+- 没做到的：`3287715210-iso2` 那个半精度纹素与 `spot` 立方体像素没逐位证实（前者要复算阴影图集采样，后者要复现顶点对齐）；只比了每次抓帧的第一帧（场景静止）。
+- 测试行导入后都已用 `projects_remove` 移除（`manifest-fc.json`、`manifest-fc-iso2.json`）；`po-high` 用 dev 覆盖切档，用完已清除。
