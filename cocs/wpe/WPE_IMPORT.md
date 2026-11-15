@@ -645,7 +645,8 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
 - **局限**：
   - 页面里的光标形状与 tooltip 显示不出来（注入不经光标管理）。
   - 网页壁纸里再嵌的跨源 iframe 收不到事件（只注入登记的 frame）。
-  - 同进程的子 frame 不支持（换算失败，只记一次 warn）。我们的 `file:` iframe 与应用页跨站，都是独立进程。
+  - 同进程的子 frame 不支持（换算失败）。我们的 `file:` iframe 与应用页跨站，都是独立进程。frame 刚登记、还没合成时第一次
+    采样也会换算失败，之后就好，所以连续失败 30 次（`MAPPING_WARN_AFTER`）才记一次 warn。
   - 不做键盘、滚轮、右键。
 - **Linux**：拿不到全局光标，`attach_frame` 返回 `false`。前端（`framePointer.ts` 的 `NATIVE_FRAME_POINTER`）退回原来的做法：
   可交互的 iframe 直接收真实鼠标，预览不盖覆盖层，光标在 iframe 外不跟随。Linux 也没有窗口壁纸模式。

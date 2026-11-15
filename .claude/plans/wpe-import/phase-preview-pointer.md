@@ -679,3 +679,5 @@ function installPointer() {
   - 桌面场景宿主 8 s 收到 218 个可信 `pointermove`。
   - 预览场景宿主收到可信 `pointermove`，钳在右边界 `2560 - 0.5`。
   - 每个新登记的 frame 第一次采样记一条「frame 坐标换算失败」：frame 还没合成，之后正常。待改成连续失败约 1 s 才 warn；这要改运行时、dev 会重启，等用户这轮手测完再改。
+- **换算失败的 warn**（用户手测通过后）：`FrameMouseState` 记连续失败次数，换算成功清零，连续 30 次
+  （`MAPPING_WARN_AFTER`）才记一次 warn，每个 frame 只记一次；单测 1 条，变异 3 / 3。翻页只认箭头另提交（`996012d6`）。

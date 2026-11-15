@@ -8,6 +8,10 @@
 /// 也可能算到框外，所以向内收半个像素。左、上边界（0）本身就在框内，不收。
 const EDGE_INSET: f64 = 0.5;
 
+/// 换算连续失败多少次才 warn。frame 刚登记时还没合成，第一次采样常常换算不出，之后就好；插件只在光标动了时
+/// 发移动（16 ms 一次），连续这么多次都不行才说明是一直不行（同进程 frame、`display: none`）。
+pub(crate) const MAPPING_WARN_AFTER: u32 = 30;
+
 /// 把 frame 坐标里的点钳进 `[0, w) × [0, h)`：点在框里原样返回（第二项为真）；在框外时取 frame 中心到该点的
 /// 连线与边界的交点（第二项为假）。尺寸不是正数、或坐标不是有限数时返回 `None`（不注入）。
 pub fn clamp_to_frame(point: (f64, f64), size: (f64, f64)) -> Option<((f64, f64), bool)> {
@@ -60,8 +64,10 @@ pub(crate) struct FrameMouseState {
     pressed: bool,
     /// 上一次注入的位置（frame 坐标），收尾补抬起 / 离开用。
     last: Option<(f64, f64)>,
-    /// 这个 frame 换算失败的 warn 已记过（之后只记 debug）。
-    pub(crate) warned: bool,
+    /// 连续换算失败的次数（换算成功一次就清零）。
+    failures: u32,
+    /// 这个 frame 换算失败的 warn 已记过（每个 frame 只记一次）。
+    warned: bool,
 }
 
 impl FrameMouseState {
@@ -75,6 +81,7 @@ impl FrameMouseState {
         point: (f64, f64),
         size: (f64, f64),
     ) -> Option<FrameAction> {
+        self.failures = 0;
         let ((x, y), inside) = clamp_to_frame(point, size)?;
         let action = match kind {
             PointerKind::Move => FrameAction::Move { x, y },
@@ -95,6 +102,16 @@ impl FrameMouseState {
         };
         self.last = Some((x, y));
         Some(action)
+    }
+
+    /// 记一次换算失败；返回这次是否该 warn：连续失败到 [`MAPPING_WARN_AFTER`] 次时为真，每个 frame 只有一次。
+    pub(crate) fn mapping_failed(&mut self) -> bool {
+        self.failures = self.failures.saturating_add(1);
+        if self.failures >= MAPPING_WARN_AFTER && !self.warned {
+            self.warned = true;
+            return true;
+        }
+        false
     }
 
     /// 停止注入：按下未抬起就补抬起，再发一次离开（都在上一次的位置），页面不会停在悬停 / 按住状态。
@@ -216,6 +233,26 @@ mod tests {
         // 收尾后重新开始：没按下就不补抬起
         state.input(PointerKind::Move, (1.0, 2.0), SIZE);
         assert_eq!(state.release(), [FrameAction::Leave { x: 1.0, y: 2.0 }]);
+    }
+
+    #[test]
+    fn mapping_failure_warns_only_when_it_persists() {
+        let mut state = FrameMouseState::default();
+        // 刚登记时失败几次、随后换算成功：不 warn，计数清零
+        for _ in 0..MAPPING_WARN_AFTER - 1 {
+            assert!(!state.mapping_failed());
+        }
+        state.input(PointerKind::Move, (1.0, 1.0), SIZE);
+        for _ in 0..MAPPING_WARN_AFTER - 1 {
+            assert!(!state.mapping_failed());
+        }
+        // 连续失败到门限那一次 warn，之后不再 warn（成功后再失败也不）
+        assert!(state.mapping_failed());
+        assert!(!state.mapping_failed());
+        state.input(PointerKind::Move, (1.0, 1.0), SIZE);
+        for _ in 0..MAPPING_WARN_AFTER * 2 {
+            assert!(!state.mapping_failed());
+        }
     }
 
     #[test]

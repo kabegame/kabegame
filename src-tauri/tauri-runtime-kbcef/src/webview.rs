@@ -363,9 +363,15 @@ mod imp {
                 match mapped {
                     Some((point, size)) => state.input(kind, point, size),
                     None => {
-                        // 同进程 frame、frame 还没合成（刚建好、display:none）时换算不出
-                        if !std::mem::replace(&mut state.warned, true) {
-                            tracing::warn!("frame 坐标换算失败，不注入鼠标: {} / {}", key.0, key.1);
+                        // frame 刚登记、还没合成（第一次采样常常如此）时换算不出，之后就好；
+                        // 一直不好（同进程 frame、display:none）才 warn
+                        if state.mapping_failed() {
+                            tracing::warn!(
+                                "frame 坐标连续 {} 次换算失败，不注入鼠标: {} / {}",
+                                crate::frame_mouse::MAPPING_WARN_AFTER,
+                                key.0,
+                                key.1
+                            );
                         } else {
                             tracing::trace!("frame 坐标换算失败: {} / {}", key.0, key.1);
                         }

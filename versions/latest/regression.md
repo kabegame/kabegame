@@ -3056,7 +3056,7 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PN1 单测与检查 | Windows（dev 停着） | `cargo test -p tauri-plugin-cursor`；`frame_mouse.rs` 用 rustc 单独编成测试跑；`src/components/wallpaper` 下相关 6 个 vitest 文件；`check-kabegame`；Prettier、`cargo fmt` | 0 error、全过 | 2026-11-15 Claude：插件 17 条、钳制 7 条、vitest 82 条全过；`check-kabegame` 0 error；运行时 crate 的测试要现编 CEF 包装库（环境不齐），钳制规则不依赖 CEF，所以单独编 |
 | [x] | PN2 Rust 变异检查 | rustc + cargo，按原字节还原 | 钳制取逐轴最近点、不向内收；frame 外的按下也注入、没按下也发抬起、收尾不补；插件按下不要求在窗口内、两种规则对调、丢弃订阅不发收尾、登记时已按着算按下 | 全部检出 | 2026-11-15 Claude：9 / 9 |
 | [x] | PN3 前端变异检查 | vitest，按原字节还原 | 垫片暂停时也登记、调用不排队；Stage 消息不带 `interactive`；场景视图 `interactive` 变了不推；焦点按着也还、松开后不等；画布没有覆盖层；注入时 iframe 也收真实鼠标 | 全部检出 | 2026-11-15 Claude：8 / 8 |
-| [x] | PN4 新 CEF 构建 | Windows，MSYS2 + VS | 带补丁 11 跑 `deno task build:chromium`，再用新 CEF 启动 dev | 编过；`_cef_frame_t` 是 272 字节（运行时不报「libcef 不带 frame 鼠标注入」） | 2026-11-15 用户编好、重启 dev；日志没有「libcef 不带」，注入生效（见 PN6、PN7）。每个新登记的 frame 第一次采样都记一条「frame 坐标换算失败」（frame 还没合成），之后正常，这条 warn 待改成持续失败才记 |
+| [x] | PN4 新 CEF 构建 | Windows，MSYS2 + VS | 带补丁 11 跑 `deno task build:chromium`，再用新 CEF 启动 dev | 编过；`_cef_frame_t` 是 272 字节（运行时不报「libcef 不带 frame 鼠标注入」） | 2026-11-15 用户编好、重启 dev；日志没有「libcef 不带」，注入生效（见 PN6、PN7）。每个新登记的 frame 第一次采样都换算失败（frame 还没合成），之后正常；2026-11-15 改成连续失败 30 次才记 warn（见 PN13） |
 | [ ] | PN5 旧 libcef | Windows dev，没有补丁 11 的 CEF | 打开预览里的网页 / 场景壁纸、桌面设网页壁纸 | 不崩，日志只有一条「libcef 不带 frame 鼠标注入」，壁纸收不到鼠标 | 没测到：dev 重启时已换上新 CEF |
 | [ ] | PN6 桌面跟随与点击 | Windows，窗口模式 | 桌面设一张跟随鼠标的网页壁纸、一张 P6c 场景（光标回调）；在桌面上移动、点空白处与图标、点别的窗口；光标移到别的窗口上、别的显示器上 | 跟随与点击正常，`isTrusted` 为真；点别的窗口不进页面；光标在窗口外时效果停在画面边缘 | 2026-11-15 Claude：桌面场景宿主（14297）里临时挂计数 8 s，收到 218 个 `pointermove`、全部可信；点击没测（要在桌面上点） |
 | [ ] | PN7 预览里画面外跟随 | Windows dev，图库预览 | 预览开了视差或有跟随鼠标粒子的场景，光标移到留白、详情栏、应用窗口外 | 景物继续跟随，停在画面边缘，移回画面没有跳变 | 2026-11-15 Claude：用户开着的预览（13617）里临时挂计数 8 s，收到 3 个可信 `pointermove`，`x` 都是 2559.5（宽 2560，钳在右边界内收半个像素处）；画面效果要用户看 |
@@ -3065,6 +3065,7 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | PN10 暂停与应用背景 | Windows dev | 预览里暂停后移动、点击，再恢复；同一张设为应用背景 | 暂停期间不跟随、不点，恢复后照常；应用背景不收鼠标 | 待新 CEF |
 | [ ] | PN11 macOS | macOS | 桌面与预览同 PN6–PN8 | 同 Windows | 本机不能测；插件的 `over_window` 是新写的（`TODO:[WPE_SCENE]`） |
 | [ ] | PN12 Linux | Linux | 预览里网页 / 场景壁纸 | 和改动前一样：光标在壁纸上时跟随、点击生效，画面外不跟随 | 本机不能测（`TODO:[WPE_SCENE]`） |
+| [x] | PN13 换算失败不误报 | Windows dev | dev 重启后打开 / 切换几张网页与场景壁纸的预览，桌面壁纸照常 | 日志里不再出现「frame 坐标…换算失败」的 warn，鼠标照常注入；单测与变异（成功不清零、第一次就 warn、每次都 warn）全部检出 | 2026-11-15 Claude：单测 1 条、变异 3 / 3；dev 重启后桌面与预览两个宿主都登记了，日志没有这条 warn，桌面宿主 6 s 收到 266 个可信 `pointermove` |
 
 ## 预览翻页只认箭头
 
