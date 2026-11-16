@@ -1,4 +1,4 @@
-import { collectAnimations, settleConstantAnimation } from "./animations";
+import { collectAnimations, collectObjectAnimations, settleConstantAnimation } from "./animations";
 import { alignmentIndex } from "./alignment";
 import { compileBloom, type SceneBloom } from "./bloom";
 import {
@@ -44,6 +44,7 @@ import {
 import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
 import {
   bindingReader,
+  compileLightObject,
   compileLightObjects,
   engineDefines,
   lightConfigIssues,
@@ -59,6 +60,7 @@ import {
   checkMdlFeatures,
   checkMeshAttributes,
   checkModelFeatures,
+  checkObjectFeatures,
   checkParticleFeatures,
   checkParticleInstance,
   checkParticleProgram,
@@ -79,6 +81,7 @@ import {
   modelFlag,
   normalizeDepthKeys,
   objectKind,
+  perspectiveObjectIssues,
   PARTICLE_UNIFORMS,
   PUPPET_COMBOS,
   PUPPET_CLIP_MASK_UNIFORMS,
@@ -148,7 +151,15 @@ import {
 } from "./postprocess";
 import { ShaderCompiler, shaderUniforms, type ShaderTextureSlot } from "./shader";
 import { fogDefines } from "./fog";
-import { collectScripts, type SceneScripts } from "./scripts";
+import { collectObjectScriptsSync, collectScripts, type SceneScript, type SceneScripts } from "./scripts";
+import {
+  bindingOwnedBy,
+  layerUsesAudio,
+  layerUsesMedia,
+  type FragmentDelta,
+  type FragmentRequest,
+  type ObjectFragment,
+} from "./fragment";
 import { checkCameraObjectPath, compileCamera, type SceneCameraJson } from "./camera";
 import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
@@ -167,7 +178,7 @@ import type { SceneVideoSource } from "../video/player";
 import type { SceneAnimation } from "../animation/types";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
-import { exportsMediaCallback } from "./scriptApi";
+import { exportsMediaCallback, usesEffectAccess } from "./scriptApi";
 
 export interface SceneGeneral {
   /**
@@ -1291,9 +1302,47 @@ class EffectIssues extends Set<string> {
 /** 没有运行中改过的结构（P6d3）。 */
 export const EMPTY_STRUCTURE: SceneStructure = { destroyed: [], parents: [], created: [] };
 
+/**
+ * 会话的不支持项集合（L1）：`recorder` 非空时，每次 `add` 另记一份（键已在也记），`compileFragment` 据此得到这个对象带来的键，
+ * 编完把调用前没有的键从会话里删掉。类型仍是 `Set<string>`，`ShaderCompiler`、`EffectIssues` 等直接持有的就是它。
+ */
+class RecordingSet extends Set<string> {
+  recorder: Set<string> | null = null;
+  override add(key: string): this {
+    this.recorder?.add(key);
+    return super.add(key);
+  }
+}
+
+/**
+ * 编译会话（L1）：`compileScene` 的闭包作用域。整场编译 = 开会话 → 逐个 `compileObject` → `finalize`；`finalize` 之后可以反复
+ * `compileFragment`，运行中编一个新对象的片段（见 `fragment.ts`）。
+ */
+export interface SceneCompileSession {
+  /** 开会话时 `scene.objects` 的项数（含运行中建的、被删的置 null） */
+  readonly objectCount: number;
+  /** 已确定退回且不列全时为真：整场编译的循环在这里停 */
+  settled(): boolean;
+  /** 编一个对象（原循环体），并按原样报进度 */
+  compileObject(index: number): Promise<void>;
+  /** 原收尾，只调一次；之后才能 `compileFragment` */
+  finalize(): Promise<SceneBundle>;
+  /** 运行中编一个新对象的片段与增量（`finalize` 之后） */
+  compileFragment(request: FragmentRequest): Promise<FragmentDelta>;
+}
+
 export async function compileScene(input: CompileSceneInput): Promise<SceneBundle> {
+  const session = await openCompileSession(input);
+  for (let index = 0; index < session.objectCount; index++) {
+    if (session.settled()) break;
+    await session.compileObject(index);
+  }
+  return session.finalize();
+}
+
+export async function openCompileSession(input: CompileSceneInput): Promise<SceneCompileSession> {
   const fs = new SceneFs(input.projectDir, input.sceneAssets, input.reader);
-  const unsupported = new Set<string>();
+  const unsupported = new RecordingSet();
   /** 属性绑定表：每处解析 `{user}` 的地方登记一次（P3a）。 */
   const bindings = new BindingCollector();
   const recompile = (reason: RecompileReason, path: string): BindingTarget => ({
@@ -1352,7 +1401,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   for (const index of structure.destroyed)
     if (Number.isInteger(index) && index >= 0 && index < scene.objects.length)
       (scene.objects as unknown[])[index] = null;
-  const properties = currentProperties(project, input.userProperties ?? {});
+  // `let`：`compileFragment` 按请求换成当前属性全集（闭包读到的总是最新的）
+  let properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
   // 脚本里的资源路径字面量里，在 WPE assets 中存在的名单（P6d3b，`createLayer` 的 `__workshopId` 改写用）
   const assetPaths = (
@@ -1549,6 +1599,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }[] = [];
   /** 有 pass 读 `_rt_MipMappedFrameBuffer`（P13b1〔g1〕）。 */
   let mipReaders = false;
+  /** 读 `_rt_MipMappedFrameBuffer` 的 pass 槽累计数（L1：`compileFragment` 据此看这个对象有没有新增读者）。 */
+  let mipReads = 0;
   // 粒子字段的缺省值按正交 / 透视选两套（`rea-p4a.md`「基础」），读上面的 `orthographic`
   const textureIndex = new Map<string, number>();
   /** 纹理下标 → 它的不支持项：同一张可能被关着的 effect 与启用的 effect 共用，缓存命中时重新上报。 */
@@ -1566,7 +1618,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   };
   const shouldDecode = () => input.force === true || unsupported.size === 0;
   /** 已确定退回且不需要列全时，停止编译后面的图层 / effect。 */
-  const settled = () => unsupported.size > 0 && !input.force && !input.exhaustive;
+  // `compileFragment` 编译期间（记录器开着）恒为假：片段要编全，不能让它自己带来的不支持项截断编译
+  const settled = () => unsupported.recorder === null && unsupported.size > 0 && !input.force && !input.exhaustive;
 
   /**
    * 一张纹理（按解析后的路径缓存）。`particleSlot`：本次是粒子材质的某个槽位，帧表是合法用法，这次上报的问题里去掉
@@ -2088,6 +2141,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       } else if (name === MIP_FRAMEBUFFER_RT) {
         runtime[slot] = name;
         mipReaders = true;
+        mipReads++;
       } else if (name === SHADOW_ATLAS_RT) {
         // 阴影图集（P13d）：着色器只在 LIGHTS_SHADOW_MAPPING 时声明它（比较采样器），渲染器按帧打包的尺寸建
         runtime[slot] = name;
@@ -2698,11 +2752,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     isSceneObject(object) ? 1 + (Array.isArray(object.effects) ? object.effects.length : 0) : 0;
   const progressTotal = scene.objects.reduce((sum: number, object) => sum + progressWeight(object), 0);
   let progressDone = 0;
-  for (const [index, object] of scene.objects.entries()) {
-    if (settled()) break;
-    if (!isSceneObject(object)) continue; // 不是对象的项（含运行中删掉的）：不进 `bundle.layers`，下标留空
-    input.onProgress?.(progressDone, progressTotal);
-    progressDone += progressWeight(object);
+  /** 编一个对象（原对象循环体，L1 起是闭包，`compileObject` 与 `compileFragment` 共用）；原循环里的 `continue` 在这里是 `return`。 */
+  async function compileOne(index: number): Promise<void> {
+    const object = scene.objects[index];
+    if (!isSceneObject(object)) return; // 不是对象的项（含运行中删掉的）：不进 `bundle.layers`，下标留空
     /** 图层字段的就地目标（场景坐标里的 objects 下标，不随 bundle 下标变）。 */
     const at = (field: LayerField): BindingTarget => ({ kind: "layer", object: index, field });
     // 图层壳的取值抽成纯函数 `layerShellValues`（P6d3b，运行时 `createLayer` 共用）：向量 / 标量 setter 的规则见 `layerShell.ts`。绑定的属性值
@@ -2784,31 +2837,31 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             }),
           ) ?? CAMERA_DEFAULTS[key];
         layer.camera = { fov: field("fov"), zoom: field("zoom") };
-        continue;
+        return;
       }
     }
     if (objectKind(object) === "particle") {
       // 粒子构造即进半透明名单（P5d 步骤 4，rea-p5-mesh 4.2，`p5d-sort-a` 的粒子在第二遍）
       layer.sortClass = "translucent";
       await compileParticle(index, object, layer);
-      continue;
+      return;
     }
     // 模型对象（P5c 步骤 1）：和粒子一样挂在图层上（`layer.model`），`effects` 不编译（能力表报 `model:effects`）
     if (objectKind(object) === "model") {
       await compileModel(index, object, layer);
-      continue;
+      return;
     }
     // sprite 对象（P13c）：两网格的常量模型（光斑、遮挡方块），对象的变换不参与；不进半透明名单（构造不置半透明位，rea-p13-lights 4.1）
     if (objectKind(object) === "sprite") {
       layer.sortClass = "opaque";
       // 不是字符串（绑属性等）时能力表已报 `object:sprite`，不编
       if (typeof object.sprite === "string") await compileSprite(index, object.sprite, layer);
-      continue;
+      return;
     }
     // 声音对象（P6a 步骤 1）：图层上只有变换，播放字段进声音表；可见性不影响播放（p6-REPORT `p6a-misc`）
     if (isSoundObject(object)) {
       sounds.push(await compileSound(index, object, fs, properties, bindings));
-      continue;
+      return;
     }
     // 形状对象（P8 步骤 2）：没有模型和基础 pass，effect 不看开关全编，渲染图只画最后一个（`planShapeLayer`）；colorBlendMode 中性，
     // 不编 passthrough
@@ -2816,7 +2869,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       // 形状不进半透明名单（P5d 步骤 4，见 `SceneLayer.sortClass`）：只调基类构造，加载路径不置 bit8
       layer.sortClass = "opaque";
       await compileShape(index, object, layer);
-      continue;
+      return;
     }
     // 文本对象（P6b 1d）：没有模型，基础 pass 换成文本表里的宿主材质（排版在宿主主线程）；effect 与 colorBlendMode passthrough
     // 走下面图像层那段，文本表在它们之后编（`padding` 看启用的 effect 个数）
@@ -2828,10 +2881,10 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     if (textObject && isDepended(object)) unsupported.add("dependency:text");
     if (!textObject) {
       // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
-      if (!object.image) continue;
+      if (!object.image) return;
       // 被依赖（P8 步骤 4）：图像层才填，判定同名字表（`isImageLayerObject`）
       layer.dependedOn = isDepended(object);
-      if (!(await compileImageModel(index, object, layer))) continue;
+      if (!(await compileImageModel(index, object, layer))) return;
     }
     // 组（P5b 步骤 4）：有对象的父指向这个组合层。子孙由它按局部正交画进合成 RT、不在顶层画（`assignGroups` 在全部对象之后定归属）
     const hasChildren = layer.passthroughModel && parents.includes(index);
@@ -2977,156 +3030,350 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       }
     }
   }
-  input.onProgress?.(progressTotal, progressTotal);
-  // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
-  // 挂点（P12b1 步骤 3）：父的 puppet 编完才解析，只在找得到时才写字段（找不到按普通父子）
-  const puppetsByObject = new Map(
-    bundle.layers.map((layer) => [layer.object, layer.puppet ?? layer.model?.skeleton ?? null]),
-  );
-  for (const layer of bundle.layers) {
-    const attachment = resolveAttachment(
-      layer.object,
-      layer.parent,
-      (scene.objects[layer.object] as Record<string, unknown> | undefined)?.attachment,
-      (object) => puppetsByObject.get(object),
-      attachOverrides.has(layer.object),
-    );
-    if (attachment) layer.attachment = attachment;
-  }
-  // 子表（P6d3）：只含进了 bundle 的对象；组内先序与 `SceneState` 的子表都按它
-  const present = new Set(bundle.layers.map((layer) => layer.object));
-  const lists = childLists(parents, scene.objects.length, parentOverrides);
-  const children: [number, number[]][] = [];
-  for (const [parent, list] of lists) {
-    const kept = list.filter((child) => present.has(child));
-    if (present.has(parent) && kept.length > 0) children.push([parent, kept]);
-  }
-  bundle.children = children;
-  assignGroups(bundle.layers, new Map(children));
-  for (const layer of bundle.layers) {
-    if (layer.group === null) continue;
-    for (const key of groupChildIssues(layer)) unsupported.add(key);
-    // 关着、运行时可能打开的 effect 读快照：记进它自己的不支持项，打开时整场重编译（`SceneState.needsRecompile`），重编译后按上面报
-    for (const effect of layer.effects)
-      if (!effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER))
-        effect.unsupported = [...effect.unsupported, GROUP_CHILD_FRAMEBUFFER].sort();
-  }
-  // 反射（P13b1）。设置解析成「反射开」一个布尔：跟随时读 WPE `config.json` 的 `general.user.reflection`，只在有读者时才读
-  if (reflectionReaders.length || mipReaders) {
+
+  /** 反射设置解析成「反射开」（P13b1）：跟随时读 WPE `config.json`，整场只解析一次（`finalize` 与 `compileFragment` 共用）。 */
+  let reflectionOnMemo: Promise<boolean> | null = null;
+  const reflectionEnabled = (): Promise<boolean> => {
     const reflectionSetting = input.reflection ?? "follow";
-    const reflectionOn = resolveReflection(
-      reflectionSetting,
-      reflectionSetting === "follow" ? await readWpeReflection(input.reader, input.sceneAssets) : undefined,
-    );
-    if (reflectionReaders.some((reader) => reader.model)) {
-      // 平面反射（rea-p13-passes 1.1、1.4）：只有模型的网格读 `_rt_Reflection` 时 WPE 才建这张 RT、才有反射 pass
-      bundle.reflection = { planar: true };
-      if (reflectionOn) {
-        // 反射开（P13b2）：名单 = 图层里 `reflected` 不为 false、不是读反射图的模型（整个对象排除）的那些，按 `objects` 顺序。
-        // `reflected` 绑用户属性登记重编译（已定 2：名单在加载时定）。名单里反射 pass 画不了的种类照报（`reflectionKind`）
-        const excluded = new Set(
-          reflectionReaders.flatMap((reader) => (reader.model && reader.object !== null ? [reader.object] : [])),
-        );
-        const list = reflectionList(
-          bundle.layers,
-          excluded,
-          (object) =>
-            flagValue(
-              scene.objects[object]?.reflected,
-              properties,
-              bindings,
-              recompile("layer-structure", `objects/${object}/reflected`),
-            ) !== false,
-        );
-        for (const object of list) {
-          const layer = bundle.layers.find((item) => item.object === object);
-          const kind = layer ? reflectionKind(layer) : null;
-          if (kind) unsupported.add(`reflection:planar:${kind}`);
-        }
-        bundle.reflection = { planar: true, enabled: true, list };
-      }
-    } else {
-      // RT 不建：WPE 把那一槽绑 6×6 黄黑棋盘格占位（步骤 0 R3）
-      for (const reader of reflectionReaders) {
-        delete reader.runtime[reader.slot];
-        reader.slots[reader.slot] = checkerIndex();
-      }
-    }
-    if (mipReaders) {
-      // 屏幕空间反射（rea-p13-passes 4.1）：任何对象读到就建
-      bundle.mipFramebuffer = true;
-      if (reflectionOn) unsupported.add("reflection:screen"); // 反射开：P13g 再做，照报
-    }
-  }
-  // 体积光（P13e）：有会画的灯才去读档位（跟随时读 WPE 的 `config.json`）。带阴影的点光每帧要取自己的阴影条目，灯光记录在没有光照程序时也要建
-  {
-    if (!settled() && wantsVolumetrics(lightObjects)) {
-      const setting = input.volumetrics ?? "follow";
-      const quality = resolveVolumetrics(
-        setting,
-        setting === "follow" ? await readWpeVolumetrics(input.reader, input.sceneAssets) : undefined,
-      );
-      // `SHADOW` 与 `LIGHTS_SHADOW_MAPPING_QUALITY` 取用户的阴影档（`ctx+0x1ac`，V6、V9），不看 `lightconfig` 有没有阴影计数（`p13e-pns` 实测）
-      const volumetricShadows = wantsShadows
-        ? shadowQuality
-        : resolveShadows(
-            shadowSetting,
-            shadowSetting === "follow" ? await readWpeShadows(input.reader, input.sceneAssets) : undefined,
-          );
-      const groups = new Map(bundle.layers.map((layer) => [layer.object, layer.group]));
-      const volumetrics = await compileVolumetrics(
-        { fs, shader, unsupported, addProgram },
-        {
-          lights: lightObjects,
-          layerOf: (object) => bundle.layers.find((layer) => layer.object === object),
-          quality,
-          shadowQuality: volumetricShadows,
-          counts,
-          orthographic,
-          inGroup: (object) => groups.get(object) != null,
-        },
-      );
-      if (volumetrics) {
-        bundle.volumetrics = volumetrics;
-        // 透视场景的透明排序（P5d 步骤 4）把顶层重排成两轮，灯在两轮里落在哪、合成时机怎么变没测过（语料两张都是正交），照报
-        if (!orthographic && bundle.general.transparentSorting) unsupported.add("volumetrics:transparentsorting");
-        // 雾（P13f）：`volumetricsfront` 声明 `FOG`（缺省 1），开雾时它读四个雾 uniform，体积光的 uniform 是 `render/volumetrics.ts` 自己写的、
-        // 没有接雾，也没和 WPE 比过（语料 0 张），照报
-        if (fogForced) unsupported.add("volumetrics:fog");
-        if (volumetrics.lights.some((light) => light.shadow)) sceneLights();
-      }
-    }
-  }
-  // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光且对象列表非空（A1）。当前开着，或运行中可能打开（绑了属性或挂了脚本）才建；
-  // 不按「场景有脚本」判定：`bloom: false` 的场景大多带脚本，会平白多占显存。别的写入打开时走整场重编译（`SceneState.needsRecompile`）。
-  // 链的形态跟 HDR 判定走，和当前开不开无关（K3）：JSON 为 true、属性为 false 时建 HDR 链，运行中打开是 HDR 泛光
-  const bloomVariable = isUserBinding(general.bloom) || isScriptValue(general.bloom);
-  if (
-    (postprocess.bloom || (bloomVariable && postprocess.level !== "disabled")) &&
-    scene.objects.length > 0 &&
-    !settled()
-  )
-    bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
-  if (!input.sceneAssets.length) unsupported.add("assets:missing");
-  // 动画层字段脚本的属主核对（P12c；P12e 起层 id = JSON 下标 `entry`，收集时已填好，不再回填）：只留 `layerDefs` 保留下来的层。对象没有运行时
-  // （不是 skinned puppet、不是带骨骼的模型），或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
-  scripts.list = scripts.list.filter((script) => {
+    return (reflectionOnMemo ??= (async () =>
+      resolveReflection(
+        reflectionSetting,
+        reflectionSetting === "follow" ? await readWpeReflection(input.reader, input.sceneAssets) : undefined,
+      ))());
+  };
+  /** 对象的 `reflected` 不为 false（绑用户属性时登记重编译，已定 2：名单在加载时定）。 */
+  const isReflected = (object: number): boolean =>
+    flagValue(
+      scene.objects[object]?.reflected,
+      properties,
+      bindings,
+      recompile("layer-structure", `objects/${object}/reflected`),
+    ) !== false;
+  /**
+   * 动画层字段脚本的属主核对（P12c；P12e 起层 id = JSON 下标 `entry`，收集时已填好）：只留 `layerDefs` 保留下来的层。对象没有运行时
+   * （不是 skinned puppet、不是带骨骼的模型），或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，
+   * 要从列表里删掉。
+   */
+  const keepsAnimationLayerScript = (script: SceneScript): boolean => {
     const owner = script.owner;
     if (owner.kind !== "animation-layer") return true;
     return animationLayerDefs.get(owner.object)?.some((def) => def.entry === owner.entry) ?? false;
-  });
-  bundle.unsupported = [...unsupported].sort();
-  // 「场景用音频」位（P4e 步骤 4）：开关只看 `project.json`（`scene.json` 的同名键 WPE 不读，rea-p4e-audio.md 第 6 节），不会因为场景里
-  // 有音频粒子就自动开启（4.3）。读音频频谱 uniform 的程序同样要订阅才有数据（P11a）；读了却没声明开关时 uniform 全 0，同 WPE
-  bundle.audio =
-    project.general?.supportsaudioprocessing === true &&
-    (bundle.layers.some((layer) => layer.particle !== null && particleUsesAudio(layer.particle)) ||
-      bundle.programs.some(readsAudioUniforms));
-  // 媒体集成位（P11c，rea-p11-media 2.1）：有脚本导出五个媒体回调之一，或有 system 来源的槽（封面纹理）。只扫会执行的脚本（同能力表）
-  bundle.media =
-    (bundle.userTextures ?? []).some((source) => source.kind === "system") ||
-    bundle.scripts.list.some((script) => !script.errors.length && exportsMediaCallback(script.source));
-  return bundle;
+  };
+
+  let finalized = false;
+  /** 原收尾（对象循环之后）：只能调一次。 */
+  async function finalize(): Promise<SceneBundle> {
+    if (finalized) throw new Error("finalize 只能调一次");
+    finalized = true;
+    input.onProgress?.(progressTotal, progressTotal);
+    // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
+    // 挂点（P12b1 步骤 3）：父的 puppet 编完才解析，只在找得到时才写字段（找不到按普通父子）
+    const puppetsByObject = new Map(
+      bundle.layers.map((layer) => [layer.object, layer.puppet ?? layer.model?.skeleton ?? null]),
+    );
+    for (const layer of bundle.layers) {
+      const attachment = resolveAttachment(
+        layer.object,
+        layer.parent,
+        (scene.objects[layer.object] as Record<string, unknown> | undefined)?.attachment,
+        (object) => puppetsByObject.get(object),
+        attachOverrides.has(layer.object),
+      );
+      if (attachment) layer.attachment = attachment;
+    }
+    // 子表（P6d3）：只含进了 bundle 的对象；组内先序与 `SceneState` 的子表都按它
+    const present = new Set(bundle.layers.map((layer) => layer.object));
+    const lists = childLists(parents, scene.objects.length, parentOverrides);
+    const children: [number, number[]][] = [];
+    for (const [parent, list] of lists) {
+      const kept = list.filter((child) => present.has(child));
+      if (present.has(parent) && kept.length > 0) children.push([parent, kept]);
+    }
+    bundle.children = children;
+    assignGroups(bundle.layers, new Map(children));
+    for (const layer of bundle.layers) {
+      if (layer.group === null) continue;
+      for (const key of groupChildIssues(layer)) unsupported.add(key);
+      // 关着、运行时可能打开的 effect 读快照：记进它自己的不支持项，打开时整场重编译（`SceneState.needsRecompile`），重编译后按上面报
+      for (const effect of layer.effects)
+        if (!effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER))
+          effect.unsupported = [...effect.unsupported, GROUP_CHILD_FRAMEBUFFER].sort();
+    }
+    // 反射（P13b1）。设置解析成「反射开」一个布尔：跟随时读 WPE `config.json` 的 `general.user.reflection`，只在有读者时才读
+    if (reflectionReaders.length || mipReaders) {
+      const reflectionOn = await reflectionEnabled();
+      if (reflectionReaders.some((reader) => reader.model)) {
+        // 平面反射（rea-p13-passes 1.1、1.4）：只有模型的网格读 `_rt_Reflection` 时 WPE 才建这张 RT、才有反射 pass
+        bundle.reflection = { planar: true };
+        if (reflectionOn) {
+          // 反射开（P13b2）：名单 = 图层里 `reflected` 不为 false、不是读反射图的模型（整个对象排除）的那些，按 `objects` 顺序。
+          // `reflected` 绑用户属性登记重编译（已定 2：名单在加载时定）。名单里反射 pass 画不了的种类照报（`reflectionKind`）
+          const excluded = new Set(
+            reflectionReaders.flatMap((reader) => (reader.model && reader.object !== null ? [reader.object] : [])),
+          );
+          const list = reflectionList(bundle.layers, excluded, isReflected);
+          for (const object of list) {
+            const layer = bundle.layers.find((item) => item.object === object);
+            const kind = layer ? reflectionKind(layer) : null;
+            if (kind) unsupported.add(`reflection:planar:${kind}`);
+          }
+          bundle.reflection = { planar: true, enabled: true, list };
+        }
+      } else {
+        // RT 不建：WPE 把那一槽绑 6×6 黄黑棋盘格占位（步骤 0 R3）
+        for (const reader of reflectionReaders) {
+          delete reader.runtime[reader.slot];
+          reader.slots[reader.slot] = checkerIndex();
+        }
+      }
+      if (mipReaders) {
+        // 屏幕空间反射（rea-p13-passes 4.1）：任何对象读到就建
+        bundle.mipFramebuffer = true;
+        if (reflectionOn) unsupported.add("reflection:screen"); // 反射开：P13g 再做，照报
+      }
+    }
+    // 体积光（P13e）：有会画的灯才去读档位（跟随时读 WPE 的 `config.json`）。带阴影的点光每帧要取自己的阴影条目，灯光记录在没有光照程序时也要建
+    {
+      if (!settled() && wantsVolumetrics(lightObjects)) {
+        const setting = input.volumetrics ?? "follow";
+        const quality = resolveVolumetrics(
+          setting,
+          setting === "follow" ? await readWpeVolumetrics(input.reader, input.sceneAssets) : undefined,
+        );
+        // `SHADOW` 与 `LIGHTS_SHADOW_MAPPING_QUALITY` 取用户的阴影档（`ctx+0x1ac`，V6、V9），不看 `lightconfig` 有没有阴影计数（`p13e-pns` 实测）
+        const volumetricShadows = wantsShadows
+          ? shadowQuality
+          : resolveShadows(
+              shadowSetting,
+              shadowSetting === "follow" ? await readWpeShadows(input.reader, input.sceneAssets) : undefined,
+            );
+        const groups = new Map(bundle.layers.map((layer) => [layer.object, layer.group]));
+        const volumetrics = await compileVolumetrics(
+          { fs, shader, unsupported, addProgram },
+          {
+            lights: lightObjects,
+            layerOf: (object) => bundle.layers.find((layer) => layer.object === object),
+            quality,
+            shadowQuality: volumetricShadows,
+            counts,
+            orthographic,
+            inGroup: (object) => groups.get(object) != null,
+          },
+        );
+        if (volumetrics) {
+          bundle.volumetrics = volumetrics;
+          // 透视场景的透明排序（P5d 步骤 4）把顶层重排成两轮，灯在两轮里落在哪、合成时机怎么变没测过（语料两张都是正交），照报
+          if (!orthographic && bundle.general.transparentSorting) unsupported.add("volumetrics:transparentsorting");
+          // 雾（P13f）：`volumetricsfront` 声明 `FOG`（缺省 1），开雾时它读四个雾 uniform，体积光的 uniform 是 `render/volumetrics.ts` 自己写的、
+          // 没有接雾，也没和 WPE 比过（语料 0 张），照报
+          if (fogForced) unsupported.add("volumetrics:fog");
+          if (volumetrics.lights.some((light) => light.shadow)) sceneLights();
+        }
+      }
+    }
+    // 泛光链：每帧在全部对象画完之后跑，前提是允许泛光且对象列表非空（A1）。当前开着，或运行中可能打开（绑了属性或挂了脚本）才建；
+    // 不按「场景有脚本」判定：`bloom: false` 的场景大多带脚本，会平白多占显存。别的写入打开时走整场重编译（`SceneState.needsRecompile`）。
+    // 链的形态跟 HDR 判定走，和当前开不开无关（K3）：JSON 为 true、属性为 false 时建 HDR 链，运行中打开是 HDR 泛光
+    const bloomVariable = isUserBinding(general.bloom) || isScriptValue(general.bloom);
+    if (
+      (postprocess.bloom || (bloomVariable && postprocess.level !== "disabled")) &&
+      scene.objects.length > 0 &&
+      !settled()
+    )
+      bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
+    if (!input.sceneAssets.length) unsupported.add("assets:missing");
+    // 动画层字段脚本的属主核对（P12c；P12e 起层 id = JSON 下标 `entry`，收集时已填好，不再回填）：只留 `layerDefs` 保留下来的层。对象没有运行时
+    // （不是 skinned puppet、不是带骨骼的模型），或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
+    scripts.list = scripts.list.filter(keepsAnimationLayerScript);
+    bundle.unsupported = [...unsupported].sort();
+    // 「场景用音频」位（P4e 步骤 4）：开关只看 `project.json`（`scene.json` 的同名键 WPE 不读，rea-p4e-audio.md 第 6 节），不会因为场景里
+    // 有音频粒子就自动开启（4.3）。读音频频谱 uniform 的程序同样要订阅才有数据（P11a）；读了却没声明开关时 uniform 全 0，同 WPE
+    bundle.audio =
+      project.general?.supportsaudioprocessing === true &&
+      (bundle.layers.some((layer) => layer.particle !== null && particleUsesAudio(layer.particle)) ||
+        bundle.programs.some(readsAudioUniforms));
+    // 媒体集成位（P11c，rea-p11-media 2.1）：有脚本导出五个媒体回调之一，或有 system 来源的槽（封面纹理）。只扫会执行的脚本（同能力表）
+    bundle.media =
+      (bundle.userTextures ?? []).some((source) => source.kind === "system") ||
+      bundle.scripts.list.some((script) => !script.errors.length && exportsMediaCallback(script.source));
+    return bundle;
+  }
+
+  /**
+   * 运行中编一个新对象的片段与增量（L1，`fragment.ts`；`finalize` 之后）。按整场编译的顺序做一遍单对象版的收集：脚本（带绑定）→ 灯 → 关键帧 →
+   * 能力检查 → `compileOne` → 收尾里和这个对象有关的部分，再按调用前后各表的长度切出片段与增量。
+   *
+   * 会话的表继续增长（程序、纹理、绑定、脚本、关键帧、声音、图层都追加在同一批数组里）；不支持项只记在 `unsupported.recorder` 里，编完把调用前
+   * 没有的键从会话集合里删掉，所以之后编片段不受影响、`settled()` 也不会误判。编译期间 `settled()` 恒为假：片段要编全，退不退回由宿主按
+   * `unsupported` 与 `sceneFlips` 决定。组归属、子树、挂点、灯的遗留槽位取决于运行中的父链与别的对象，不进片段（`finalize` 里与它们有关的
+   * 步骤都不跑）。`media` 按「这个图层有 system 来源的槽或脚本导出媒体回调」判（比「新增来源」多报，宿主只会补订阅）。
+   */
+  async function compileFragment(request: FragmentRequest): Promise<FragmentDelta> {
+    if (!finalized) throw new Error("compileFragment 要在 finalize 之后调");
+    const at = request.object;
+    if (!Number.isInteger(at) || at < 0) throw new Error(`对象下标不合法：${at}`);
+    if (at < scene.objects.length) throw new Error("单对象重编译在 L6");
+    const parsed: unknown = JSON.parse(request.config);
+    const isGroup = Array.isArray(parsed);
+    if (!isGroup && !isSceneObject(parsed)) throw new Error("配置不是对象或数组");
+
+    // 放进场景：数组配置编成分组节点（`{}`），配置原文仍是数组（同 `structure.created`）；中间空位补 null
+    const objects = scene.objects as unknown[];
+    while (objects.length < at) objects.push(null);
+    objects[at] = isGroup ? {} : parsed;
+    while (configs.length <= at) configs.push(null);
+    configs[at] = normalizeConfig(parsed);
+    while (parents.length < at) parents.push(null);
+    const parent =
+      request.parent !== null && isSceneObject(scene.objects[request.parent]) && request.parent !== at
+        ? request.parent
+        : null;
+    parents[at] = parent;
+    const json = objects[at] as Record<string, unknown>;
+    if (request.bone !== null && parent !== null) json.attachment = request.bone;
+    else delete json.attachment;
+    properties = currentProperties(project, request.properties);
+    const object = objects[at] as SceneObject;
+
+    // 开记录
+    const recorder = new Set<string>();
+    const knownKeys = new Set(unsupported);
+    unsupported.recorder = recorder;
+    const programsFrom = bundle.programs.length;
+    const texturesFrom = bundle.textures.length;
+    const userTexturesFrom = (bundle.userTextures ??= []).length;
+    const bindingsFrom = bindings.list.length;
+    const soundsFrom = sounds.length;
+    const animationsFrom = animations.list.length;
+    const scriptsFrom = scripts.list.length;
+    const readersFrom = reflectionReaders.length;
+    const mipFrom = mipReads;
+    const hadLights = !!bundle.lights;
+    const hadLegacyLights = !!bundle.legacyLights;
+    const flips = new Set<string>();
+    const newAssetPaths: string[] = [];
+    try {
+      // 脚本（带绑定）：新条目跑能力检查；用了 `getEffect` 而场景没有 `usesEffectAccess` 会翻转「写死关闭的 effect 也编」这个不变量
+      const fresh = collectObjectScriptsSync(object, at, properties, bindings.list);
+      scripts.list.push(...fresh);
+      checkScriptFeatures(fresh, unsupported, scene.objects);
+      if (!scripts.usesEffectAccess && fresh.some((script) => !script.errors.length && usesEffectAccess(script.source)))
+        flips.add("effect-access");
+      // 灯：片段里 `legacySlot` 恒为 -1；体积光灯的 GPU 资源加载时按灯列表建，运行中增删属 L8
+      const light = compileLightObject(
+        object,
+        at,
+        (value, owner, field) => bindings.bind(value, properties, { kind: "light", object: owner, field }),
+        unsupported,
+      );
+      if (light && wantsVolumetrics([light])) flips.add("volumetrics");
+      // 关键帧：`parent` 是对象内的下标，追加进整场列表时加偏移
+      const collected = collectObjectAnimations(scene, at);
+      for (const animation of collected.list)
+        animations.list.push({
+          ...animation,
+          parent: animation.parent === null ? null : animation.parent + animationsFrom,
+        });
+      for (const key of collected.unsupported) unsupported.add(key);
+      // 能力检查（整场版 `checkSceneFeatures` 的逐对象部分）
+      checkObjectFeatures(object, unsupported, parents[at]);
+      if (!orthographic) for (const key of perspectiveObjectIssues(object)) unsupported.add(key);
+
+      await compileOne(at);
+      const layer = bundle.layers.find((item) => item.object === at);
+      if (!layer) throw new Error(`对象 ${at} 没有进图层`);
+
+      // 单对象收尾（和 `finalize` 共用 `reflectionEnabled` / `isReflected` / `keepsAnimationLayerScript`）
+      // 反射读者：模型读者要场景有平面反射，非模型读者在没有平面反射时改绑棋盘格；场景反射开着时按名单规则求 `reflected`
+      const readers = reflectionReaders.slice(readersFrom);
+      const scenePlanar = bundle.reflection?.planar === true;
+      const modelReader = readers.some((reader) => reader.model);
+      if (!scenePlanar && modelReader) flips.add("reflection:planar");
+      if (!scenePlanar && !modelReader)
+        for (const reader of readers) {
+          delete reader.runtime[reader.slot];
+          reader.slots[reader.slot] = checkerIndex();
+        }
+      let reflected = false;
+      if (
+        bundle.reflection?.enabled === true &&
+        !readers.some((reader) => reader.model && reader.object !== null) &&
+        isReflected(at)
+      ) {
+        reflected = true;
+        const kind = reflectionKind(layer);
+        if (kind) unsupported.add(`reflection:planar:${kind}`);
+      }
+      // mip 帧缓冲：场景还没建它时翻转；反射开时屏幕空间反射照报
+      if (mipReads > mipFrom) {
+        if (!bundle.mipFramebuffer) flips.add("mip-framebuffer");
+        if (await reflectionEnabled()) unsupported.add("reflection:screen");
+      }
+      // 光照位：第一次出现光照 / 遗留灯程序时翻转
+      if (!hadLights && bundle.lights) flips.add("lights");
+      if (!hadLegacyLights && bundle.legacyLights) flips.add("legacy-lights");
+      // 动画层字段脚本的属主核对（`compileOne` 之后 `animationLayerDefs` 才有这个对象）
+      const kept = scripts.list.slice(scriptsFrom).filter(keepsAnimationLayerScript);
+      scripts.list.length = scriptsFrom;
+      scripts.list.push(...kept);
+      // 脚本里的资源路径字面量里，在 WPE assets 中存在的新名单（`createLayer` 的 `__workshopId` 改写用）
+      for (const path of scriptAssetCandidates(kept.map((script) => script.source)))
+        if (!assetPaths.includes(path) && (await fs.existsInAssets(path))) {
+          assetPaths.push(path);
+          newAssetPaths.push(path);
+        }
+      if (newAssetPaths.length) bundle.assetPaths ??= assetPaths;
+
+      // 切片
+      const added = bindings.list.slice(bindingsFrom);
+      const fragmentAnimations = animations.list.slice(animationsFrom).map((animation) => ({
+        ...animation,
+        parent: animation.parent === null ? null : animation.parent - animationsFrom,
+      }));
+      const sound = sounds.slice(soundsFrom)[0];
+      const fragment: ObjectFragment = {
+        object: at,
+        config: configs[at] ?? "",
+        layer,
+        bindings: added.filter((binding) => bindingOwnedBy(binding, at)),
+        scripts: kept,
+        animations: fragmentAnimations,
+        ...(sound ? { sound } : {}),
+        ...(light ? { light } : {}),
+        reflected,
+        sceneFlips: [...flips].sort(),
+        audio: project.general?.supportsaudioprocessing === true && layerUsesAudio(layer, bundle.programs),
+        media: layerUsesMedia(layer, kept),
+        unsupported: [...recorder].sort(),
+      };
+      return {
+        fragment,
+        programs: { from: programsFrom, list: bundle.programs.slice(programsFrom) },
+        textures: { from: texturesFrom, list: bundle.textures.slice(texturesFrom) },
+        userTextures: { from: userTexturesFrom, list: (bundle.userTextures ?? []).slice(userTexturesFrom) },
+        bindings: added.filter((binding) => !bindingOwnedBy(binding, at)),
+        assetPaths: newAssetPaths,
+      };
+    } finally {
+      // 把这次新增、调用前会话里没有的键删掉，关记录器
+      unsupported.recorder = null;
+      for (const key of recorder) if (!knownKeys.has(key)) unsupported.delete(key);
+    }
+  }
+
+  return {
+    objectCount: scene.objects.length,
+    settled,
+    async compileObject(index: number): Promise<void> {
+      const object = scene.objects[index];
+      if (!isSceneObject(object)) return;
+      input.onProgress?.(progressDone, progressTotal);
+      progressDone += progressWeight(object);
+      await compileOne(index);
+    },
+    finalize,
+    compileFragment,
+  };
 }
 
 /** 交给主线程时转移的缓冲：纹理 mip 与 mdl 文件（网格与 puppet 的顶点 / 索引是它的视图，同一个 mdl 的对象共用一份）、puppet 的动画帧数据，去重。 */

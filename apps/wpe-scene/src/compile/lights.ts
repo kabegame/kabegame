@@ -228,8 +228,46 @@ export interface SceneLightObject {
 const LIGHT_STATIC_KEYS = ["light", "castshadow", "usecookie", "castvolumetrics"] as const;
 
 /**
- * 全部灯对象 → {@link SceneLightObject}。`bind(value, object, field)` 解析数值字段（产品里是 `bindings.bind` + 就地目标）；四个静态字段
- * 只取 JSON 值（`{user}` 取 `value`），挂了属性 / 脚本 / 关键帧时 `issues` 收 `light:runtime:<键>`。
+ * 一个灯对象 → {@link SceneLightObject}（L1：整场版的单对象部分，`compileFragment` 直接用）。不是灯返回 null。`legacySlot` 为 -1：遗留灯槽位取决于
+ * 别的灯对象，由 {@link compileLightObjects} 按 `objects` 顺序分配，片段里由 L3 的登记表按「排在最后取第一个空槽」分配。
+ * `bind(value, object, field)` 解析数值字段（产品里是 `bindings.bind` + 就地目标）；四个静态字段只取 JSON 值（`{user}` 取 `value`），
+ * 挂了属性 / 脚本 / 关键帧时 `issues` 收 `light:runtime:<键>`。
+ */
+export function compileLightObject(
+  object: unknown,
+  index: number,
+  bind: (value: SceneValue | undefined, object: number, field: LightField) => SceneScalar | undefined,
+  issues?: Set<string>,
+): SceneLightObject | null {
+  if (!isSceneObject(object) || typeof object.light !== "string") return null;
+  for (const key of LIGHT_STATIC_KEYS) {
+    const raw = object[key];
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) issues?.add(`light:runtime:${key}`);
+  }
+  const flag = (key: string) => {
+    const raw = object[key];
+    const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
+    return value === true;
+  };
+  const values = lightDefaults();
+  for (const field of Object.keys(LIGHT_FIELDS) as LightField[]) {
+    const value = lightFieldValue(field, bind(object[field] as SceneValue | undefined, index, field));
+    if (value !== undefined) (values as Record<LightField, number | number[]>)[field] = value;
+  }
+  return {
+    object: index,
+    light: object.light,
+    kind: lightKindOf(object.light),
+    legacy: object.light === "point",
+    legacySlot: -1,
+    flags: (flag("castshadow") ? 1 : 0) | (flag("usecookie") ? 2 : 0),
+    castVolumetrics: flag("castvolumetrics"),
+    values,
+  };
+}
+
+/**
+ * 全部灯对象 → {@link SceneLightObject}：逐个调 {@link compileLightObject}，再按 `objects` 顺序分配遗留槽位（取第一个空槽，槽满取 0）。
  */
 export function compileLightObjects(
   objects: readonly unknown[],
@@ -239,34 +277,12 @@ export function compileLightObjects(
   const out: SceneLightObject[] = [];
   const taken = new Array<boolean>(LEGACY_SLOTS).fill(false);
   objects.forEach((object, index) => {
-    if (!isSceneObject(object) || typeof object.light !== "string") return;
+    const light = compileLightObject(object, index, bind, issues);
+    if (!light) return;
     const free = taken.indexOf(false);
-    const legacySlot = free < 0 ? 0 : free;
+    light.legacySlot = free < 0 ? 0 : free;
     if (free >= 0) taken[free] = true;
-    for (const key of LIGHT_STATIC_KEYS) {
-      const raw = object[key];
-      if (raw && typeof raw === "object" && !Array.isArray(raw)) issues?.add(`light:runtime:${key}`);
-    }
-    const flag = (key: string) => {
-      const raw = object[key];
-      const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
-      return value === true;
-    };
-    const values = lightDefaults();
-    for (const field of Object.keys(LIGHT_FIELDS) as LightField[]) {
-      const value = lightFieldValue(field, bind(object[field] as SceneValue | undefined, index, field));
-      if (value !== undefined) (values as Record<LightField, number | number[]>)[field] = value;
-    }
-    out.push({
-      object: index,
-      light: object.light,
-      kind: lightKindOf(object.light),
-      legacy: object.light === "point",
-      legacySlot,
-      flags: (flag("castshadow") ? 1 : 0) | (flag("usecookie") ? 2 : 0),
-      castVolumetrics: flag("castvolumetrics"),
-      values,
-    });
+    out.push(light);
   });
   return out;
 }

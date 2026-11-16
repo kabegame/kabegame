@@ -196,6 +196,50 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **快速退回**：缺省时一旦 `unsupported` 非空就不再编译后面的图层与 effect（这时清单只是部分），退回的场景更早显示预览图——工坊场景完整编译要翻译几十个 effect 着色器、上百次读取，快速路径只需 2–4 次。`exhaustive: true` 列全（语料统计用），`force: true`（dev 强制渲染，D4）也照常编译并解码 mip。
 - **后处理档位**：`postprocess` 是设置值（缺省 `follow`），跟随时读 WPE 的 `config.json`，见下「场景后处理档位」。
 
+### 编译会话与对象片段（活的场景图 L1）
+
+运行中建层、改对象不再整场重编译。这是横切重构「活的场景图」（`.claude/plans/wpe-import/3-scene/phase-live-scene.md`），L1 是编译这一侧。
+
+- **会话**：`openCompileSession(input)` 就是原来 `compileScene` 的闭包作用域，开场解析、着色器编译器、纹理 / 程序表、名字表、各种缓存都在里面。
+  - 对象循环体是 `compileOne(index)`，收尾是 `finalize()`（只能调一次）。
+  - `compileScene` = 开会话 → 逐个 `compileObject` → `finalize`。整场编译的产物和拆之前逐字节相同（全语料摘要）。
+- **片段**：`finalize` 之后，`compileFragment(request)` 编一个运行中新建的对象。
+  - 按整场的顺序收集：脚本（带绑定）→ 灯 → 关键帧 → 能力检查 → `compileOne` → 收尾里和这个对象有关的部分。
+  - 然后按调用前后各表的长度切出片段 `ObjectFragment` 与只增的场景级增量 `FragmentDelta`（程序、纹理、用户纹理来源、`user-texture` 绑定、资源路径）。
+  - 会话的表继续增长；整场 bundle 交出去之后，调用方不能再拿会话里同一批数组当快照用。
+  - 已有下标（单对象重编译）在 L6 再做，现在抛错。片段编失败时不回滚会话的表，由宿主整场重载、换新会话。
+- **片段和位置无关**：组归属、子树、挂点、灯的遗留槽位取决于运行中的父链与别的对象，不进片段。片段里一律是：
+  - `group: null`、`subtree: []`；
+  - 没有 `attachment`；
+  - 灯 `legacySlot: -1`；
+  - effect 的 `unsupported` 里没有 `GROUP_CHILD_FRAMEBUFFER`。
+
+  这些由运行时现算（L3）。
+- **不支持项**：会话的 `unsupported` 是能记录写入的 `RecordingSet`，因为 `ShaderCompiler`、`EffectIssues` 等直接持有它，换不掉。
+  - 编片段期间每次 `add` 另记一份，得到这个对象带来的键；编完把调用前没有的键从会话删掉。
+  - 编片段期间 `settled()` 恒为假，片段编全。
+- **场景级不变量**：新对象会翻转的记进 `sceneFlips`，宿主据此整场重载。目前有：
+  - `effect-access`：用了 `getEffect` 而场景没有；
+  - `reflection:planar`：模型读反射图而场景没有平面反射；
+  - `mip-framebuffer`；
+  - `lights` / `legacy-lights`：第一次出现光照 / 遗留灯程序；
+  - `volumetrics`：会画的体积光灯，运行中增删留到以后。
+- **从整场 bundle 取片段**（`compile/fragment.ts`）：`fragmentOf(bundle, i)` 按「属于对象 i」过滤各表，`rekeyFragment(片段, { object, id, parent })` 改键，即克隆。
+  - 字符串里的 `objects/<i>` 前缀（后面是 `/` 或到尾）换成新下标；
+  - 数字 `object` 等于旧下标的换掉；
+  - `id`、`parent` 取新值。字段清单在文件头。
+  - `fragmentBlocker` 拦下四种取不了的：
+    - `missing`；
+    - `depended`：克隆不被依赖，计划不同；
+    - `hdr-layer-composites`：`TEX<n>FORMAT` 随下标变；
+    - `group-upload`：模板带子层。
+- **判据**（`ignore/live/l1/fragments.test.ts`）：全语料每个对象比较两种片段，要求逐字段相同（`unsupported` 不比）。
+  - 一种是在新下标上 `compileFragment` 真编；
+  - 一种是 `rekeyFragment(fragmentOf(…))`。
+
+  2026-11-16 的结果：233 张场景、6392 个对象，0 不同；跳过 56 个（`depended` 38、`group-upload` 15、`hdr-layer-composites` 3）。
+- **规整配置有损**：`configs[i]`（`getInitialLayerConfig` 的规整文本）的非整数只留 8 位有效数字。按它编出的片段，和从原文编出的模板片段在少数常量的末几位上不同；WPE 的 `createLayer(getInitialLayerConfig(x))` 同样拿到的是舍入后的值。对照测试按原文编；L5 的片段缓存要处理这一点（见总计划 L5）。
+
 ### 能力表（`features.ts`）
 
 能力键以 `类别:具体能力` 命名，例如 `camera:perspective:<用法>`、`tex:format:<n>`、`tex:video`、`uniform:g_LightsPosition`、`combo:SPRITESHEET`、`effect:<目录>:<字段>`、`particle:<类别>:<模块>`、`script:api:<分组>.<成员>`、`script:callback:<名>`、`value:animation`、`shader:flag:parse:…`、`render:bloom:<pass>`、`assets:missing`。原则是**只报真正改变画面的特性**，中性字段逐项写明依据后放行（依据多来自 WPE 2.8.42 的只读逆向，`.claude/plans/wpe-import/3-scene/p2-REPORT.md`；P4a 的在 `phase4/p4-particles-REPORT.md`）。脚本由 P3b 运行时执行，运行期的脚本错误只进脚本诊断、不加入 `unsupported`；但脚本里静态看得出的未实现 API 报 `script:api:*`、整张退回（2026-11-07 改定，见下）。其它渲染能力键照常决定是否退回预览图：

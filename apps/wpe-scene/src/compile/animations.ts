@@ -190,8 +190,10 @@ function propertyOf(path: string): string {
 const isLightObject = (object: SceneObject) => typeof object.light === "string";
 const isCameraObject = (object: SceneObject) => object.camera !== undefined && object.camera !== null;
 
+type AnimationVisit = (value: unknown, path: string, owner: ScriptOwner | null, layer: number | null) => void;
+
 /**
- * 收集 `scene.json` 里的关键帧动画。坐标遍历同 `collectScripts`（`general` 先，再 `objects`；字典内的键序照 WPE 的登记顺序，见
+ * 收集 `scene.json` 里的关键帧动画（整场 `collectAnimations` 与单对象 `collectObjectAnimations` 共用，区别只在遍历的起点）。坐标遍历同 `collectScripts`（`general` 先，再 `objects`；字典内的键序照 WPE 的登记顺序，见
  * `registration.ts`；effect 实例常量的属主是材质 pass；`instanceoverride` 在对象下）。遇到关键帧值不再往里走；脚本值照常往里走（`scriptproperties` 里的关键帧报 `other`）。其余顶层键里的
  * 关键帧没有就地目标，报 `other`。
  *
@@ -207,7 +209,7 @@ const isCameraObject = (object: SceneObject) => object.camera !== undefined && o
  *
  * 每条另记 `name`（`options.name`）、`object`（所属场景对象，事件的接收范围）、`owner`（`getAnimation` 的查找范围，同联动的属主）。
  */
-export function collectAnimations(scene: SceneJson): CollectedAnimations {
+function collectWith(scene: SceneJson, run: (visit: AnimationVisit) => void): CollectedAnimations {
   const list: SceneAnimation[] = [];
   /** 与 `list` 对齐：各条的 `options.parent.key`（没有为 null）。 */
   const parentKeys: (string | null)[] = [];
@@ -334,11 +336,7 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
     }
   }
 
-  if (scene.general) visit(scene.general, "general", { kind: "general" }, null);
-  visit(scene.objects, "objects", { kind: "general" }, null);
-  // 其余顶层键（`camera` 等）不经属性框架：照报，不进列表
-  for (const [key, value] of Object.entries(scene))
-    if (key !== "general" && key !== "objects") visit(value, key, null, null);
+  run(visit);
 
   // 联动（读码第 7 节）：父必须同一属主、属性名等于 parent key、自己没有 parent key，只有一层；先登记的优先。
   // 属主按 pass 算（`…/passes/<k>/constantshadervalues`）：P10b 步骤 0 Q2 实测，同一 effect 的两个 pass、同一图层的两个 effect、
@@ -354,6 +352,27 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
     animation.parent = parent < 0 ? null : parent;
   });
   return { list, unsupported: [...unsupported].sort() };
+}
+
+/** 整场收集：`general` 先，再 `objects`，其余顶层键照报。详见 {@link collectWith} 上的说明。 */
+export function collectAnimations(scene: SceneJson): CollectedAnimations {
+  return collectWith(scene, (visit) => {
+    if (scene.general) visit(scene.general, "general", { kind: "general" }, null);
+    visit(scene.objects, "objects", { kind: "general" }, null);
+    // 其余顶层键（`camera` 等）不经属性框架：照报，不进列表
+    for (const [key, value] of Object.entries(scene))
+      if (key !== "general" && key !== "objects") visit(value, key, null, null);
+  });
+}
+
+/**
+ * 只收一个对象上的关键帧（L1，`compileFragment` 用）：路径 `objects/<index>/…`，属主、目标、键序与整场版同一套遍历。`parent`（联动）是返回
+ * 列表内的下标：联动的父与子在同一属主、属主属于一个对象，所以按对象拆与整场收集完全等价；调用方拼进整场列表时给 `parent` 加偏移。
+ */
+export function collectObjectAnimations(scene: SceneJson, index: number): CollectedAnimations {
+  return collectWith(scene, (visit) =>
+    visit((scene.objects as unknown[])[index], `objects/${index}`, { kind: "layer", object: index }, index),
+  );
 }
 
 /**
