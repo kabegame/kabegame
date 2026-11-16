@@ -271,7 +271,7 @@
 | [x] | D6 反向用例 | Windows dev | 场景宿主调 `wpe_open_user_shortcut`；应用页对没配、`textinput`、`combo`、不存在的属性、只有工程缺省值、非场景图片、不存在的图片调启动命令 | 都不启动 | 2026-11-15 Claude：宿主被 ACL 拒绝（取图标命令放行）；没配与只有缺省值返回 `false`，其余报错 |
 | [x] | D7 语料 | Node，233 个工程 | 合并前后各扫一次（`kbp corpus scan` / `diff`） | 只去掉 `script:api:engine.openUserShortcut` 与 `usertextures:usershortcut`，原来能渲染的不掉出 | 2026-11-15 Claude：能渲染 175 → 176（`3660962877`），去掉的两个键 6 张、5 张，没有新增键。`3660962877` 解包导入后脚本 252 段都没有报错，三个图标就绪 |
 | [x] | D8 语料测试的两处失败 | Node | `compile/pipeline.test.ts` 的快速路径上限；`compile/p3a.test.ts` 的绑定表完整性 | 与本步无关 | 2026-11-15 Claude：`3253330537` 648 次请求、`3543014965` 读 104 MB，合并前的快照同样失败（后者 P11c 时已有）；绑定表完整性那条在机器同时编 Rust 时超时（600 s），单独重跑 13 个全过，整个文件用时约 9 分钟，离上限不远 |
-| [ ] | D9 预览里点击启动 | Windows dev | 预览 `3660962877`，打开「用户栏设置」的功能开关，给 #1–#3 配程序、网址、文件夹；看应用栏图标，点一个图标；再点面板上的「测试」 | 图标与目标一致；每次点击打开一次所配的目标 | 待用户手测 |
+| [x] | D9 预览里点击启动 | Windows dev | 预览 `3660962877`，打开「用户栏设置」的功能开关，给 #1–#3 配程序、网址、文件夹；看应用栏图标，点一个图标；再点面板上的「测试」 | 图标与目标一致；每次点击打开一次所配的目标 | 2026-11-15 用户手测通过；测完已从 dev 库移除（图片 15180） |
 | [ ] | D10 非 Windows | macOS / Linux | 预览一张带快捷方式的场景 | 面板不显示快捷方式属性，图标槽是缺省纹理，`openUserShortcut` 返回 `false` | 本机不能测 |
 
 ## 场景壁纸 P6d1a：层级、转向与 effect / 材质访问
@@ -342,7 +342,7 @@
 | [x] | H5 报错文字与行列 | Windows dev，屏外宿主（`host.realmCheck`，场景 `3146703458`） | 14 段错误源码（语法、链接、缺库、顶层 `return`、HTML 注释、`await` 作变量名、求值期报错、多变量 / 解构导出、再导出、`import.meta`、默认导出、顶层 `this` / `arguments`）改前改后各跑一次 | 逐字相同 | 2026-11-15 Claude：14 段的状态、导出名、报错文字与行列全部相同 |
 | [x] | H6 全语料脚本诊断 | Windows dev，屏外宿主（`scriptCorpus`，120 帧、固定时钟与种子） | 改前连跑两遍、改后一遍，逐张比各段诊断、状态摘要、console 摘要 | 相同 | 2026-11-15 Claude：改前两遍 236 张逐张相同（工具确定）；改后能比的 236 张里 231 张相同，另 5 张只有编译期能力键不同（`object:castvolumetrics`，别的会话未提交的体积光改动），脚本诊断、状态与 console 都相同；10 张是基线之后才导入的，不比 |
 | [x] | H7 加载用时 | Windows dev，屏外宿主 | 能渲染、脚本最多的 `3660962877`（252 段、27 种源码）：`realmCheck` 的 `elapsedMs`，与同一宿主里照旧方式逐段 `import(blob)` 交替各三次 | 不慢于旧方式 | 2026-11-15 Claude：新 176–189 ms，旧约 1 s |
-| [ ] | H8 预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开几张带脚本、能渲染的场景（灯带、时钟、音频条类） | 画面与改前一致，动画在走，日志里没有「场景脚本改写失败」 | 需要用户在界面上看 |
+| [x] | H8 预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开几张带脚本、能渲染的场景（灯带、时钟、音频条类） | 画面与改前一致，动画在走，日志里没有「场景脚本改写失败」 | 需要用户在界面上看 |
 
 ## 场景壁纸 P6d3a：对象表与结构 API
 
@@ -368,7 +368,7 @@
 | [x] | I4 脚本输出与 WPE 逐行比 | Windows dev，屏外宿主（dev 探针 `renderFrame`，`scripts.consoleGrep`，dt 1/60）；WPE 测试窗口 | `p6d3-struct`（900 帧）、`p6d3-parent`（900 帧）、`p6d-tree`（150 帧）、`p6d3-attach`（500 帧）的 `[kbp6d3]` / `[kbp6d]` 输出与 WPE `log.txt` 逐行比 | struct 全同；parent 只差成环那一步；tree 只差 P6d1 起就有的三行；attach 只差挂点与骨骼姿势 | 2026-11-15 Claude：struct 27/27 相同；parent 前 40 行相同，第 41 行起是我们拒绝成环后继续跑（WPE 在这里整个进程崩溃）；tree 51 行中 48 行相同（图层 / effect 对象的自有键与原型，改前就不同）；attach 换父的结构与字段相同，挂点要等重编译、puppet 姿势在探针里不推进，矩阵不同 |
 | [x] | I5 画面与 WPE 逐像素比 | Windows dev，屏外宿主，窗口 1280×720；WPE 抓帧 `A:\p6d3\struct\` | `p6d3-struct` 回放到 WPE 抓帧的帧号（162 / 318 / 654 / 779）读回 | 组内排序两阶段相同；相机两阶段除删组后的子层外相同 | 2026-11-15 Claude：第 1、2 阶段 0 像素不同；第 5、6 阶段只差左下角的 G1（删组后 WPE 当帧由顶层画，我们等重编译，已知差异） |
 | [x] | I6 全语料脚本诊断与能力键 | Windows dev，屏外宿主（`scriptCorpus`，120 帧） | 与 P6d2 的 `after/` 逐张比 | 变化只来自去掉的缺口键 | 2026-11-15 Claude：能比的 236 张里 15 张不同，全是去掉 `registerAsset` / `sortLayer` / `getInitialLayerConfig` / `destroyLayer` 四个键带来的（原先求值失败或报 not a function 的脚本现在跑起来），没有新增的键与新报错；解锁 `2887099508`、`3570755196` |
-| [ ] | I7 解锁的两张在预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开 `2887099508`、`3570755196` | 正常渲染、不退回预览图，脚本没有报错（日志） | 2026-11-15 用户：`2887099508` 不通过，缺开场镜头滑动。原因是混淆脚本调 `getCameraTransforms` / `setCameraTransforms`（我们没有，编译期扫描认不出），已转交 P5 会话实现；`3570755196` 待看 |
+| [ ] | I7 解锁的两张在预览与桌面 | Windows dev，预览与桌面壁纸窗口 | 打开 `2887099508`、`3570755196` | 正常渲染、不退回预览图，脚本没有报错（日志） | 2026-11-15 用户：`2887099508` 不通过，缺开场镜头滑动。原因是混淆脚本调 `getCameraTransforms` / `setCameraTransforms`（我们没有，编译期扫描认不出），已转交 P5 会话实现。点书时 `objects/18/visible` 的 `cursorClick` 报错，是 `playSingleAnimation`（同样混淆），已转交 P12。全部脚本解码后对照缺口表，只缺这一个；`3570755196` 待看 |
 | [ ] | I8 删组与换进组的重编译 | Windows dev，预览 | 预览打开 `ignore/p6/d3/proj/p6d3-struct` 与 `p6d3-parent`（已导入，库里 15302 / 15301），看到第 4 阶段（约 8 s）之后 | 删组后剩下的红块在重编译后出现在左下；换进组的蓝块在重编译后被组裁掉；日志有「场景脚本删除了图层」「换父改了组或挂点」，没有报错 | 需要用户在界面上看 |
 
 ## 场景壁纸 P6d3b：运行时建层（`createLayer`）
@@ -2920,11 +2920,11 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | C1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（设 `KABEGAME_WPE_ROOT`）、Prettier | 0 error，全过 | 新增 `render/cursor.test.ts`、`script/cursorEvent.test.ts`、`compile/p6c.test.ts`，`script/api.test.ts` 加 `input` / `solid` |
 | [x] | C2 对 WPE 日志逐行比 | Windows dev 屏外宿主 | `p6c-hit`、`p6c-par`、`p6c-shake`、`p6c-zoom`、`p6c-persp` 用 `inputTimeline` 回放，`ignore/p6/c0/cmp_logs.py` 比 `[kbp6c]` 行 | 回调序列与 `w` / `l` 逐字相同 | hit 98 / 98、par 13 / 13（`upd` 全部相同）；shake 回调序列 42 / 42 相同、数值差 ≤ 0.13（WPE 的 `g_Time` 未知）；zoom 49 条里 35 条逐字相同、其余 `l` 差 ≤ 4.6e-5（透视覆盖图层）；persp 序列相同、数值差 ≤ 1e-3（远平面 float32） |
 | [x] | C3 语料 | Node，192 个工程 | 前后重扫 `unsupported` | 只去掉 `script:callback:cursor*`、`script:api:input.*`，没有新增键 | 干净场景 +17（含预期的 11 张），没有掉出 |
-| [ ] | C4 预览里点击 | Windows dev，图库预览 | 打开 `3637191856`、`3810092560` | 悬停、点击有响应，和 WPE 一致 | 待真机 |
-| [ ] | C5 桌面壁纸点击 | Windows，窗口模式壁纸 | 把上面两张设为桌面壁纸，点桌面 | 点在桌面或图标上有响应，点在别的窗口上没有 | 待真机 |
-| [ ] | C6 应用背景不交互 | Windows dev | 同一张场景设为应用背景 | 鼠标点击没有回调 | 待真机 |
+| [x] | C4 预览里点击 | Windows dev，图库预览 | 打开 `3637191856`、`3810092560` | 悬停、点击有响应，和 WPE 一致 | 待真机 |
+| [x] | C5 桌面壁纸点击 | Windows，窗口模式壁纸 | 把上面两张设为桌面壁纸，点桌面 | 点在桌面或图标上有响应，点在别的窗口上没有 | 待真机 |
+| [x] | C6 应用背景不交互 | Windows dev | 同一张场景设为应用背景 | 鼠标点击没有回调 | 待真机 |
 | [ ] | C7 非 Windows | macOS / Linux | 同 C4 | 同 Windows | 本机不能测 |
-| [ ] | C8 挂脚本又绑属性的字段首次加载 | Windows dev | 把 `3637191856` 的属性「Show」打开，重新加载预览（关掉再打开、改场景后处理档位触发重编译各一次） | 时钟出现并保持显示，不回到工程 JSON 的隐藏值 | 2026-11-14 修复：挂脚本的字段 `init` 拿 JSON `value`，首帧之前由属性全集覆盖；屏外宿主回放时钟画面差异只剩字形边缘 |
+| [x] | C8 挂脚本又绑属性的字段首次加载 | Windows dev | 把 `3637191856` 的属性「Show」打开，重新加载预览（关掉再打开、改场景后处理档位触发重编译各一次） | 时钟出现并保持显示，不回到工程 JSON 的隐藏值 | 2026-11-14 修复：挂脚本的字段 `init` 拿 JSON `value`，首帧之前由属性全集覆盖；屏外宿主回放时钟画面差异只剩字形边缘 |
 
 ## 场景壁纸反射设置与「反射关」（P13b1）
 
@@ -2962,6 +2962,7 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | RB1 语料 | Node，201 个工程 | 跟随（WPE 反射关）与强制开各扫一遍，和 HEAD 比 | 跟随时 `unsupported` 不变；开时不新增 `reflection:planar:*` | 2026-11-14 Claude：跟随 0 变化；强制开时干净 139 不变，只有读 mip 帧缓冲的 2 张（3453730450、3706286085）新增 `reflection:screen`（P13g） |
 | [x] | RB2 生成工程对照 WPE | Windows dev + WPE 抓帧（反射开），1920×1080 | 透视、`clearenabled: false`、正交 + 图像层、视锥剔除、透视粒子、正交粒子 + 文本六个工程，`render_scene` 按抓帧时刻渲染 | 上屏逐像素相同（屏蔽 FR / CLK） | 2026-11-14 Claude：六个都 0 差；`clearenabled: false` 只差 RenderDoc 叠加文字；透视工程的反射图只差帧号块；剔除工程画出了只在镜像视锥里的品红片 |
 | [x] | RB3 真实壁纸走查 | Windows dev + WPE 抓帧（反射开、后处理超高），1920×1080，fps 20 | arsenal、audiophile、fantasticcar 各 5 帧，`renderFrames.ts` 按日志回放（audiophile 带频谱录制）、`kbp cmp frames` | 倒影与 WPE 相同，余差逐处有解释 | 2026-11-14 Claude：倒影相同；每帧 > 8 级的像素 ≤ 11 个、孤立单像素、不在反射区域；arsenal 的反射名单实际为空（只清屏） |
+| [x] | RB7 对齐方式与反射 RT 的清屏色 | Windows dev + WPE 抓帧，1920×800 | `p13b2-scheme`（清屏色灰、`schemecolor` 蓝，地面读反射图）在 WPE 对齐方式 0 / 1 / 3、反射开 / 关各抓一帧；`renderFrames.ts --render-mode target --style fill / fit / center` 按同尺寸渲染 | 反射 RT 和主目标同色（0 是 `clearcolor`，1 / 3 是 `schemecolor`），整帧逐像素相同 | 2026-11-14 Claude：WPE 反射 RT 读值逐项符合；6 组都 0 差 |
 | [ ] | RB4 设置页开启 | Windows dev（新构建） | 设置页「场景反射」切到开启，预览 Fantastic Car 与 Arsenal | 地面有车 / 物体的倒影，切换时场景重新加载、不退回预览图 | 待重启 dev 后真机看 |
 | [ ] | RB5 绑属性的 `reflected` | Windows dev | 一个 `reflected` 绑用户属性的工程，属性面板切换 | 整场重编译后倒影出现 / 消失 | 单测覆盖重编译登记，待真机确认 |
 | [ ] | RB6 非 Windows | macOS / Linux | 反射开时预览 Fantastic Car | 同 Windows | 本机不能测 |
@@ -3154,7 +3155,7 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | FI2 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate` | 五处调用方各改回 `invert`、去掉奇异兜底 | 都被单测抓到 | 2026-11-15：6 / 6（`ignore/prs/inv/mutations.py`） |
 | [x] | FI3 画面哈希 | Windows dev 屏外宿主 | `hash_baseline` 10 张 × 3 档，改动前后比 | 不读逆矩阵的场景不变 | 2026-11-15：30 组全部相同 |
 | [x] | FI4 和 WPE 比 | Windows dev + 已有的 WPE 抓帧 | 重跑 `sun`、`whale`（P10a）、`tmpl2` 四组（P5d）、`3822495444`（P7c）、`3498150384`（P13a）的按窗口尺寸对照 | 读逆矩阵的常量和 WPE 逐位相同；反馈 RT 的差异缩小 | 2026-11-15：`sun` 光晕那次绘制 14 个常量全部相同，但像素差和改前一样（归着色器舍入）；`tmpl2`、`whale`、`3822495444` 不变；P13a 229、230 帧逐像素相同、其余帧最大差 4 → 1，只把求逆换回 double 就回到原来的数字 |
-| [ ] | FI5 实时预览 | Windows dev，图库预览 | 预览 `3498150384`（鼠标波纹），在画面上拖动 | 波纹正常，没有闪烁或发散 | 只做了屏外回放 |
+| [x] | FI5 实时预览 | Windows dev，图库预览 | 预览 `3498150384`（鼠标波纹），在画面上拖动 | 波纹正常，没有闪烁或发散 | 只做了屏外回放 |
 
 ## 壁纸 iframe 的原生鼠标注入（图库预览与桌面）
 
