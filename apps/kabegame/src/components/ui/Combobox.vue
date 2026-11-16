@@ -52,7 +52,6 @@
             :value="option.value"
             :text-value="option.label"
             :disabled="option.disabled"
-            :title="option.label"
             class="kb-menu-item pr-8"
           >
             <slot name="option" :option="option">
