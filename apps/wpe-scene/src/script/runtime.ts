@@ -154,6 +154,9 @@ export function targetKey(target: ScriptTarget): string {
     // 相机对象的 `fov` / `zoom`（P5d 步骤 3）：同宿主 `targetPath`
     case "camera":
       return `objects/${target.object}/${target.field}`;
+    // 场景相机的基准（P5e）：每个字段一个键；同宿主 `targetPath`
+    case "camera-base":
+      return `general/camera/${target.field}`;
     // 用户纹理（P11b）：属性来源，脚本写不到它；同宿主 `targetPath`
     case "user-texture":
       return `usertextures/${target.name}`;

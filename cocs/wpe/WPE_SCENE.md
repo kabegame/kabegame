@@ -2308,7 +2308,7 @@ P5d 改的是整场的投影与深度，分三块，依赖方向是单向的：�
 | 透视覆盖 | 透视粒子与 `perspective: true` 的图像层 / 模型在相机 V 上做：旋转不变，平移换成 (t.x − W/2, t.y − H/2, −d)，d 按含缩放的可见高算（`zoom 2` 时减半） | 实测 `p5d-camo-pp`（原点投到 NDC (−0.5, −0.5)、w = d = 494.82）、`-ppr`（旋转与 `zoom 2` 都保留）；按「覆盖不看相机」会落在 (+0.5, +0.5) |
 | 视差点与抖动 | 视差点的 eye.xy 是相机的 eye.xy + s；抖动加在相机的 eye 上 | 实测 `-par`（5 个色块的 MVP 与 `o = amount·depth·(origin − P)` 差 ≤ 1.2e-7）、`-shake`（差 ≤ 1.3e-7） |
 | 透视场景 | 来源姿态换成相机的（`perspectiveCamera` 只换 pose），fov 取相机对象的 `fov`（钳制），`zoom` 不起作用 | 实测 `p5d-camp-*`（eye (2, 0, 8)、m11 = cot 30°） |
-| 能力表 | 删 `object:camera`、`object:fov`、`object:zoom`、`object:path`、`object:queuemode`。相机对象同时带别的内容键（图像、模型、粒子、声音、文本、灯、形状）时报 `object:camera:mixed`（不进 `cameras`、不登记 `fov` / `zoom` 目标，只读 `path`）；`camera:path` 的边界（空串、不是字符串、根不是对象都报，`paths` 不是数组按空表）；`fov` / `zoom` 挂关键帧仍报 `value:animation:camera`；脚本的 `getCameraTransforms` / `setCameraTransforms` 与图层上的 `fov` / `zoom` 字段访问仍在缺口表 | 读码；语料 0 处 |
+| 能力表 | 删 `object:camera`、`object:fov`、`object:zoom`、`object:path`、`object:queuemode`。相机对象同时带别的内容键（图像、模型、粒子、声音、文本、灯、形状）时报 `object:camera:mixed`（不进 `cameras`、不登记 `fov` / `zoom` 目标，只读 `path`）；`camera:path` 的边界（空串、不是字符串、根不是对象都报，`paths` 不是数组按空表）；`fov` / `zoom` 挂关键帧仍报 `value:animation:camera`；图层上的 `fov` / `zoom` 字段访问仍在缺口表（`getCameraTransforms` / `setCameraTransforms` 由 P5e 实现） | 读码；语料 0 处 |
 | 渲染器 | `scene.ts` 新增 `objectCamera` 标志：离开相机对象时不提前返回、视图向量复位；`same` 提成模块级函数 | 变异检查（「离开相机对象时提前返回」补用例后检出） |
 
 ### 透明排序（步骤 4）
@@ -2373,7 +2373,7 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 | 透视场景里脚本 `engine.canvasSize` | 照读码读到 (0, 0)，没测，语料 0 处 | 步骤 2 |
 | 跟随粒子的指针反投影 | 透视场景、带相机对象的场景里没接相机视图，`particleTrackProbe` 给了 `cursors` 时直接抛错（语料 0） | 步骤 2、3 |
 | 加载时的预热与视差点初值 | 不看相机对象；WPE 这时的 eye 没测（`-par` 用的是 delay 0），带相机对象的模板场景开场可能不同 | 步骤 3 |
-| 相机对象的其它写法 | `object:camera:mixed`（语料 0）、`camera:path`（22 个相机都是空表）、`getCameraTransforms` / `setCameraTransforms` 与图层 `fov` / `zoom` 访问（语料 0 处）、`fov` / `zoom` 挂关键帧（`value:animation:camera`）；每个相机对象多读一次 `path` 文件，计进请求数 | 步骤 3 |
+| 相机对象的其它写法 | `object:camera:mixed`（语料 0）、`camera:path`（22 个相机都是空表）、图层 `fov` / `zoom` 访问（语料 0 处；`getCameraTransforms` / `setCameraTransforms` 由 P5e 实现）、`fov` / `zoom` 挂关键帧（`value:animation:camera`）；每个相机对象多读一次 `path` 文件，计进请求数 | 步骤 3 |
 | 步骤 3 提交树的画面哈希 | `5889b490` + 步骤 3 没重测：共享宿主产物当时正被别的会话的临时插桩使用；变基前后步骤 3 的增删行按文件逐行相同 | 步骤 3 |
 | `3706286085` 的透视走查 | 做不了：它的相机都挂在带骨骼动画的模型下（`CameraBoneMoveMesh` 等，`mdl:skeleton` / `mdl:animation` 没实现），相机的世界矩阵依赖这些模型，复制工程去不掉；换成 `3453730450` | 步骤 3 补充 |
 | 走查里去掉的内容 | `3462279189` 的人物（纹理标志 0x22 视频，视频时刻对不上，属 P9a 的特性）与 `3605722997` 的主图（视频）；走查里的 `shared.*` 写入方删掉了，两边读到的都是 undefined | 步骤 3 补充 |
@@ -2391,6 +2391,34 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 - 步骤 2：`d2/gen_d2.py`（`p5d-tilt`）、`mk_layers.py`（neon_sunset 逐层拆开）；步骤 3：`d3/gen_d3.py` / `gen_d3b.py`、`ana_par.py`、`ana_s4k.py`、走查 `walk_sv.ts`、`peek_draws.py`（WPE 侧）/ `peek_trace.py`（我们这边）；步骤 4：`d4/gen_d4.py`、`ana_order.py`；
 - 各步的快照、补丁、变异清单（`mutate_d1.py`–`mutate_d4.py`）、语料比较与整帧比对在 `d1/`–`d4/`；
 - WPE 参照在 `A:\p5d\`。
+
+## 脚本的相机基准（P5e）
+
+WPE 的场景有两套相机字段：基准（eye、center、up、zoom，`G+0x118`…`+0x13c`）和每帧算出的当前值。每帧按「可见的相机对象 >
+镜头路径 > 基准」选来源，基准只在前两者都没有时生效。脚本的 `thisScene.getCameraTransforms()` / `setCameraTransforms(t)` 读写的是
+基准。我们把基准从编译期常量改成运行时状态 `SceneState.cameraBase`：脚本写进去，渲染器每帧求相机时读出来；重编译时随脚本写回重放恢复。
+正交场景没有相机对象时，基准改过就和相机对象走同一个 `orthographicCameraObjectFrame`（视图 lookAt、`g_EyePosition` = eye.xy +
+(W/2, H/2)、视差中心 eye.xy、总缩放 `general.zoom × 基准 zoom`）；基准是加载完成的重置值、zoom 为 1 时保留原来的快路径，现有场景
+逐字节不变。透视场景没有路径时基准取状态，zoom 不起作用。
+
+计划与实测见 [phase-5e](../../.claude/plans/wpe-import/3-scene/phase5/phase-5e-camera-transforms.md)「步骤 0 结果」；读码补充见
+[rea-p5-camera](../../.claude/plans/wpe-import/3-scene/phase5/rea-p5-camera.md)「更正与补充」。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| `get` | 每次返回新的普通对象（原型 `Object.prototype`），键序 `eye, center, up, zoom`；前三个是新的 `Vec3`，zoom 是 number。读的是基准当前值（含本帧之前 set 过的），不是路径、抖动、相机对象或 `general.zoom`；改返回值不影响基准 | dll `0x181635540`；`p5e-a` 日志 |
+| `set` | 没有参数或参数不是对象（`null` 也算不是）返回 `false`、不改；否则返回 `true`，四项各自处理：`eye` / `center` / `up` 是对象就取 x / y / z（number 转 float32，不是 number 记 0），不是对象跳过；`zoom` 是 number 才写（float32）。NaN、Infinity 照写 | dll `0x1816359e0`、`0x181620090`；`p5e-a` 第 2–8 帧 |
+| 时序 | `set` 后 `get` 当场读回；画面下一帧才变（WPE 先求相机、后跑脚本，我们的渲染器同序） | `p5e-a` 第 161 / 162 帧的 `g_EyePosition` 与方块颜色编码的帧号 |
+| 加载顺序 | 脚本 `init` 早于读 `scene.json` 的 `camera`：`init` 期间基准是构造缺省 (2,2,2) / (0,0,0) / (0,1,0)、zoom 1（`beginScriptInit`）；全部 `init` 之后正交场景 eye / center / up 重置成 (0,0,0) / (0,0,−1) / (0,1,0)，透视场景只有 JSON 里是字符串的项覆盖（`SceneCameraJson.given`），zoom 不受影响（`finishScriptInit`）；被覆盖的字段把脚本写入从重放表里去掉，重编译不复活 | `p5e-init-o` / `p5e-init-p`；exe 加载函数 `0x140186d51` 写基准 zoom 1 |
+| 相机对象 / 路径 | 有可见相机对象时基准（含 zoom）不参与；透视场景有路径时基准不参与。`set` 照样写进去，`get` 读回写入的值 | `p5e-cam`（总缩放 1.25 = `general.zoom`、`g_EyePosition` (960, 540)） |
+| dev 探针 | `probeCameraObjects` 没有相机对象时也给（图层表为空），回放每帧都经 `sceneCameraFrame`，脚本改过的基准才进探针的视图；基准没改过时结果和以前逐项相同 | 单测 `p5e-camera-base.test.ts` |
+| 缺口表 | `MISSING_SCRIPT_API.thisScene` 去掉这两项 | — |
+
+**验收**（`ignore/p5/e/`，WPE 抓帧 `A:\p5e\`）：生成工程 `p5e-a`（正交、每帧 set eye / center / zoom、`general.zoom` 1.25）与
+`p5e-cam`（有相机对象）整帧和 WPE 逐像素相同；`p5e-persp`（透视、每帧 set）屏蔽 FR / CLK 后逐像素相同；`p5e-par`（视差 delay 0.3 +
+抖动）的 `g_EyePosition` 与缩放逐位相同，只有视差点差 7e-5（日志只到第 150 帧，第 151–159 帧的 dt 是平分的，视差平滑按 dt 累积），
+120 个像素是一个方块的上下两条边。工坊场景 2887099508 的解包副本按日志回放（逐帧光标）：开场镜头随 52 号对象滑动，第 263、319、419 帧
+和 WPE 的整体位移都是 0（相位相关），剩下的差异来自樱花粒子的随机数和视频纹理的时刻。
 
 ## 图像层与材质补全（P8）
 
@@ -3302,7 +3330,7 @@ P6d1b：`p6d1-mat8` 五个字段 36 次写入的读回和 WPE 实测的规则逐
 - 第 1、2 阶段（组内排序）和 WPE 逐像素相同。
 - 第 5、6 阶段（相机排序与删除）只差左下角的 G1：删组之后 WPE 当帧由顶层画，我们等重编译，是已知差异。
 
-**语料**：解锁 `2887099508`（`destroyLayer`）、`3570755196`（`registerAsset` 登记字体）。`2887099508` 的开场镜头还没有：`objects/52/visible` 是混淆脚本，用解码出的字符串调 `thisScene.getCameraTransforms` / `setCameraTransforms`，让相机跟着 52 号对象的 `origin` 关键帧滑动。编译期的缺口扫描认不出这种写法，运行时撞到就停用了 `update`。这两个 API 转交 P5（相机）实现（`TODO:[WPE_SCENE]`）。`scriptCorpus` 全库的变化全部来自去掉的四个缺口键：`registerAsset` 3 张、`sortLayer` 10 张、`getInitialLayerConfig` 4 张、`destroyLayer` 3 张。没有新增的键，也没有作用域门带来的新报错。
+**语料**：解锁 `2887099508`（`destroyLayer`）、`3570755196`（`registerAsset` 登记字体）。`2887099508` 的开场镜头还没有：`objects/52/visible` 是混淆脚本，用解码出的字符串调 `thisScene.getCameraTransforms` / `setCameraTransforms`，让相机跟着 52 号对象的 `origin` 关键帧滑动。编译期的缺口扫描认不出这种写法，运行时撞到就停用了 `update`。这两个 API 转交 P5（相机）实现，P5e 已实现（见「脚本的相机基准（P5e）」）。`scriptCorpus` 全库的变化全部来自去掉的四个缺口键：`registerAsset` 3 张、`sortLayer` 10 张、`getInitialLayerConfig` 4 张、`destroyLayer` 3 张。没有新增的键，也没有作用域门带来的新报错。
 
 ## 运行时建层（P6d3b）
 

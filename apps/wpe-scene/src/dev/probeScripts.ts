@@ -582,7 +582,11 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       const loaded = runtime;
       syncAllocator(allocator, bundle);
       const createdBefore = structure.created.length;
+      // 同宿主（P5e）：`init` 读写相机基准的构造缺省值，跑完之后按加载规则收尾；被 `scene.json` 覆盖的字段把脚本的写入从重放表里去掉
+      // （补编后 `swap` 重放写入时不复活，同宿主）
+      state.beginScriptInit();
       await loaded.load(bundle.scripts, () => input.media?.replayAfterInit(scriptMediaCallbacks(loaded)));
+      for (const field of state.finishScriptInit()) loaded.forgetWrite(targetKey({ kind: "camera-base", field }));
       // `init` 里建了层（P6d3b）：停在这里，等调用方带结构补编、`swap` 换上新场景后再套属性值（同宿主在最终那份场景的 `beforeFirstFrame`）
       if (input.deferOnCreate && structure.created.length > createdBefore) {
         deferred = true;

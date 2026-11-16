@@ -555,6 +555,8 @@ export class SceneHost {
     if (target.kind === "text") return `objects/${target.object}/${target.field}`;
     // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
     if (target.kind === "camera") return `objects/${target.object}/${target.field}`;
+    // 场景相机的基准（P5e）：同脚本运行时的 `targetKey`
+    if (target.kind === "camera-base") return `general/camera/${target.field}`;
     if (target.kind === "recompile") return target.path;
     // 用户纹理（P11b）：同脚本运行时的 `targetKey`
     if (target.kind === "user-texture") return `usertextures/${target.name}`;
@@ -1748,6 +1750,8 @@ export class SceneHost {
         this.scriptBundle = bundle;
         this.scriptState = SceneState.fromBundle(bundle);
         syncAllocator(this.allocator, bundle);
+        // 相机基准（P5e）：WPE 先跑全部脚本的 `init`、后读 `scene.json` 的 `camera`，所以 `init` 读写的是构造缺省值；跑完之后按加载规则收尾
+        this.scriptState.beginScriptInit();
         // 先按新 bundle 建好动画播放器，`init` 里的 getAnimation().play() 才有落点（见 `pendingAnimations`）
         const player = new SceneAnimations(bundle.animations ?? []);
         // 加载期间又来一次加载（重编译）：脚本环境已经建好或正在跑 `init`（`runtime` 已赋值），之前的 `init` 控制的是上一份待用播放器，
@@ -1759,6 +1763,10 @@ export class SceneHost {
         if (this.runtime && this.pendingPuppets) pendingPuppets.carryOver(this.pendingPuppets.puppets);
         this.pendingPuppets = { bundle, puppets: pendingPuppets };
         await this.ensureRuntime(bundle, target.sceneAssets);
+        // `init` 全部跑完：相机基准按加载规则收尾，被 `scene.json` 覆盖的字段把脚本的写入从重放表里去掉（重编译不复活）。放在代数判断之前：
+        // 被取代的加载也跑过 `init`，之后的加载不再进这个分支，不收尾就没人做了（幂等）
+        for (const field of this.scriptState?.finishScriptInit() ?? [])
+          this.runtime?.forgetWrite(this.targetPath({ kind: "camera-base", field }));
         if (id !== this.generation) return;
         // `init` 里建了层（P6d3b，rea-p6d-layers 5）：放弃本次加载、带着结构立刻重编。脚本环境保留（`init` 不重跑），第二次编完才建 GPU 资源、
         // 画首帧，画面与 WPE 一样；不画旧 bundle 的首帧。`pendingAnimations` / `pendingPuppets` 走上面「加载期间又来一次加载」的接续

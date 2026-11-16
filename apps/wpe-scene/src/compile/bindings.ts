@@ -288,6 +288,11 @@ export type BindingTarget =
    */
   | { kind: "camera"; object: number; field: CameraField }
   /**
+   * 场景相机的基准字段（P5e，`thisScene.setCameraTransforms`，WPE `G+0x118`…`+0x13c`）：只由脚本 API 产生，就地写进
+   * `SceneState.cameraBase`（每个字段单独一个键，值是 3 个或 1 个 float32），不标脏、不重编译，渲染器每帧求相机时读。
+   */
+  | { kind: "camera-base"; field: CameraBaseField }
+  /**
    * 用户纹理的属性来源（P11b，`compile/usertextures.ts`）：属性 `name` 换了值，就地记进 `SceneState`，宿主的 `usertex` 读文件、解码、裁切，
    * 下一帧换上用到它的槽，不重编译（WPE 的 setter 只在值变了时把材质记进待刷新集合，rea-p11-textures 2.1）。每个属性只登记一条，
    * 不管它绑在几个槽上。值只认字符串，别的类型当空串（缺省纹理）。
@@ -309,6 +314,9 @@ export type BindingTarget =
 
 /** 动画层能绑用户属性的字段（同 `compile/puppet.ts` 的 `PuppetLayerField`）。 */
 export type AnimationLayerField = "rate" | "blend" | "visible";
+
+/** 相机基准的字段（P5e）：eye / center / up 三分量，zoom 一个 float。 */
+export type CameraBaseField = "eye" | "center" | "up" | "zoom";
 
 /** 相机对象的就地字段（P5d 步骤 3）。 */
 export type CameraField = "fov" | "zoom";

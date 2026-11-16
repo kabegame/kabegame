@@ -1024,11 +1024,13 @@ describe("SceneScript API（FakeRealm）", () => {
       "createLayer",
       "destroyLayer",
       "enumerateLayers",
+      "getCameraTransforms",
       "getInitialLayerConfig",
       "getLayer",
       "getLayerByID",
       "getLayerCount",
       "getLayerIndex",
+      "setCameraTransforms",
       "sortLayer",
     ];
     expect(Object.keys(scene).sort()).toEqual([...Object.keys(general), ...methods].sort());

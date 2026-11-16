@@ -1582,6 +1582,40 @@ export class ScriptApi {
       const def = this.findAnimation(null, name);
       return def ? this.animationApi(def) : null;
     });
+    this.installCameraTransforms();
+  }
+
+  /**
+   * 相机基准（P5e，p5e 步骤 0 实测）：`getCameraTransforms()` 每次返回新的普通对象（键序 eye、center、up、zoom；前三个是新的 `Vec3`，zoom 是
+   * number），读的是基准当前值（`SceneState.cameraBase`，含本帧之前 set 过的），不是路径、抖动、相机对象的结果；`setCameraTransforms(t)` 没有参数或
+   * `t` 不是对象返回 false、什么都不改，否则四项各自处理：eye / center / up 是对象就取 x / y / z（是 number 转 float32、不是记 0），zoom 是 number
+   * 才转 float32，别的项跳过，返回 true。两个都不能在模块顶层调用。
+   */
+  private installCameraTransforms(): void {
+    const isObject = (value: unknown): value is Record<string, unknown> =>
+      (typeof value === "object" && value !== null) || typeof value === "function";
+    this.sceneMethod("getCameraTransforms", () => {
+      const base = this.access.state().cameraBase;
+      const result = this.object();
+      result.eye = this.vector(base.eye, 3);
+      result.center = this.vector(base.center, 3);
+      result.up = this.vector(base.up, 3);
+      result.zoom = base.zoom;
+      return result;
+    });
+    this.sceneMethod("setCameraTransforms", (...args) => {
+      const transforms = args[0];
+      if (args.length < 1 || !isObject(transforms)) return false;
+      // 先把四项都读出来（WPE 按 eye、center、up、zoom 的顺序各取一次属性），再写
+      const fields = [transforms.eye, transforms.center, transforms.up, transforms.zoom];
+      const toFloat = (value: unknown): number => (typeof value === "number" ? Math.fround(value) : 0);
+      (["eye", "center", "up"] as const).forEach((field, i) => {
+        const vector = fields[i];
+        if (isObject(vector)) this.access.write({ kind: "camera-base", field }, [toFloat(vector.x), toFloat(vector.y), toFloat(vector.z)]);
+      });
+      if (typeof fields[3] === "number") this.access.write({ kind: "camera-base", field: "zoom" }, [Math.fround(fields[3])]);
+      return true;
+    });
   }
 
   /** C `strtol` 十进制：前导空白（`isspace`，不是 JS 的 `\s`）、可带 ±、取到第一个非数字为止，没有数字得 0。 */

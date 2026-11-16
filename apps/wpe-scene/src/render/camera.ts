@@ -1,12 +1,13 @@
 /**
  * 透视相机（P5d 步骤 2，`.claude/plans/wpe-import/3-scene/phase5/phase-5d-camera-depth.md`「步骤 2」点 3）：纯函数，不碰 GPU。
  *
- * - **来源**：「相机对象 > 路径 > 基准」三选一（rea-p5-camera 3.2、4.2）。基准与路径表来自编译期（`compile/camera.ts` 的
- *   `SceneCameraJson`）；相机对象（P5d 步骤 3）每帧按 `objects` 倒序选第一个自身与父链都可见的（`activeCameraObject`），有它时路径
- *   不推进，透视场景的 fov 取它的（`perspectiveCamera` 的 `fov`）。
+ * - **来源**：「相机对象 > 路径 > 基准」三选一（rea-p5-camera 3.2、4.2）。路径表来自编译期（`compile/camera.ts` 的 `SceneCameraJson`），
+ *   基准是运行时状态（`SceneState.cameraBase`，P5e：加载时取 `scene.json`，脚本可读写）；
+ *   相机对象（P5d 步骤 3）每帧按 `objects` 倒序选第一个自身与父链都可见的（`activeCameraObject`），有它时路径不推进，透视场景的 fov 取它的（`perspectiveCamera` 的 `fov`）。
  * - **正交场景的相机对象**（P5d 步骤 3，`orthographicCameraObjectFrame`）：V = lookAtRH(eye + s, center + s, up)（s 是正交抖动），
  *   VP = 正交投影（总缩放 `general.zoom × camera.zoom`）· V，`g_EyePosition` 加相机的 eye.xy，视图向量取 V，透视覆盖在相机 V 上做
- *   （`particleViewProjection` 的 `view`）。没有可见相机对象时正交场景照旧是单位视图（P5a），不经过这里。
+ *   （`particleViewProjection` 的 `view`）。没有可见相机对象时，基准是加载完成的重置值就照旧是单位视图（P5a 快路径），脚本
+ *   经 `setCameraTransforms` 改过基准（P5e，`SceneState.cameraBase`）则同样交给它（pose = 基准，总缩放 `general.zoom × 基准 zoom`）。
  * - **路径**（rea-p5-camera 3.2【确】，`p5d-path` 实测）：状态三元组（路径下标 `G+0xe4`、关键帧下标 `G+0xe8`、本路径内时间
  *   `G+0xec`）。每帧先求值、再 `t += dt`：
  *   1. `t < k[i].t`：取 k[i]，段末 e = k[i].t + (i + 1 < n ? k[i+1].t : 0)；
@@ -43,7 +44,7 @@ import type { Mat4 } from "./math";
 import { mulAffine } from "./math";
 import type { SceneCamera } from "./scene";
 import { shakeOffset, shakeOffset3, type ShakeFields } from "./shake";
-import type { SceneState } from "./state";
+import { ORTHOGRAPHIC_CAMERA_BASE, type SceneState } from "./state";
 
 const f = Math.fround;
 /** WPE 的度转弧度常量（`G+0x148 × 0.017453292`，rea-p5-camera 1.1）。 */
@@ -168,15 +169,30 @@ export function baseCameraPose(camera: Pick<SceneCameraJson, "eye" | "center" | 
   return { eye: [...camera.eye], center: [...camera.center], up: [...camera.up], zoom: 1 };
 }
 
-/** 本帧的来源姿态（路径 > 基准）并推进路径状态；没有路径时状态原样返回。 */
+/**
+ * 本帧的来源姿态（路径 > 基准）并推进路径状态；没有路径时状态原样返回。`base` 是运行时基准（`SceneState.cameraBase`，脚本
+ * `setCameraTransforms` 写过的，P5e）；不给时取编译期的 `camera`。
+ */
 export function stepCameraSource(
   camera: SceneCameraJson,
   state: CameraPathState,
   dt: number,
+  base?: CameraPose,
 ): { pose: CameraPose; next: CameraPathState } {
   return usesCameraPaths(camera.paths)
     ? stepCameraPath(camera.paths, state, dt)
-    : { pose: baseCameraPose(camera), next: state };
+    : { pose: base ? baseCameraPose(base) : baseCameraPose(camera), next: state };
+}
+
+/** 基准是不是加载完成的正交重置值（eye (0,0,0)、center (0,0,−1)、up (0,1,0)、zoom 1）：是就走原来的单位视图快路径，字节同改动前。 */
+function isOrthographicResetBase(base: CameraPose): boolean {
+  const same = (a: readonly number[], b: readonly number[]) => a.every((value, i) => value === b[i]);
+  return (
+    base.zoom === 1 &&
+    same(base.eye, ORTHOGRAPHIC_CAMERA_BASE.eye) &&
+    same(base.center, ORTHOGRAPHIC_CAMERA_BASE.center) &&
+    same(base.up, ORTHOGRAPHIC_CAMERA_BASE.up)
+  );
 }
 
 /**
@@ -545,7 +561,10 @@ export interface SceneCameraInput {
   /** 场景的相机对象图层（`cameraObjectLayers`）；空时不选，正交与透视都同步骤 2。 */
   cameraLayers: readonly SceneLayer[];
   /** 场景状态：相机对象的可见性与变换（图层字段）、`fov` / `zoom`（`cameras`），脚本之前的 general 字段。 */
-  state: Pick<SceneState, "layers" | "cameras" | "general">;
+  state: Pick<SceneState, "layers" | "cameras" | "general"> & {
+    /** 场景相机的基准（P5e，`SceneState.cameraBase`）：没有相机对象（正交）/ 没有路径（透视）时才生效；缺省（手写的测试状态）取加载完成值。 */
+    cameraBase?: CameraPose;
+  };
   /** 场景的 general：正交的 W、H（抖动按 H 算）与透视覆盖的 fov。 */
   general: Pick<SceneGeneral, "width" | "height" | "perspectiveOverrideFov">;
   /** 投影的裁切（dev 探针按指定尺寸画）：只对正交场景的相机对象有用，交给 `orthographicCameraObjectFrame`；缺省不裁。 */
@@ -584,7 +603,7 @@ export function sceneCameraFrame(input: SceneCameraInput): SceneCameraResult {
   if (perspective) {
     const { pose, next } = active
       ? { pose: active.pose, next: perspective.path }
-      : stepCameraSource(perspective.camera, perspective.path, perspective.dt);
+      : stepCameraSource(perspective.camera, perspective.path, perspective.dt, state.cameraBase);
     const frame = perspectiveCamera({
       pose,
       ...(active ? { fov: active.fov } : {}),
@@ -596,10 +615,15 @@ export function sceneCameraFrame(input: SceneCameraInput): SceneCameraResult {
     return { camera: { kind: "perspective", frame }, eye: [frame.eye[0], frame.eye[1]], path: next };
   }
   const shake = shakeOffset(state.general, input.time, input.general.height);
-  if (!active) return { camera: { shake, zoom: state.general.zoom }, eye: shake, path: null };
-  const zoom = orthographicCameraZoom(state.general.zoom, active.zoom);
+  // 没有相机对象：基准是加载完成的重置值时视图恒为单位阵（快路径，字节同 P5a）；脚本改过基准（P5e）就和相机对象走同一个 lookAt，
+  // 总缩放 `general.zoom × 基准 zoom`，`g_EyePosition` / 视差中心取基准 eye.xy
+  const base = active ? null : state.cameraBase;
+  if (!active && (!base || isOrthographicResetBase(base)))
+    return { camera: { shake, zoom: state.general.zoom }, eye: shake, path: null };
+  const source = active ?? { pose: base!, zoom: base!.zoom };
+  const zoom = orthographicCameraZoom(state.general.zoom, source.zoom);
   const frame = orthographicCameraObjectFrame({
-    pose: active.pose,
+    pose: source.pose,
     shake,
     zoom,
     general: input.general,

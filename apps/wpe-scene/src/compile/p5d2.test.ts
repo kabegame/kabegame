@@ -138,11 +138,16 @@ describe("compileCamera：基准与路径文件", () => {
 
   it("基准：字符串照 atof，不是字符串或缺键时保留构造值 (2, 2, 2) / (0, 0, 0) / (0, 1, 0)", async () => {
     const issues = new Set<string>();
-    expect(await compileCamera({}, fs({}), issues)).toEqual({ ...DEFAULT_CAMERA, paths: [] });
+    expect(await compileCamera({}, fs({}), issues)).toEqual({
+      ...DEFAULT_CAMERA,
+      given: { eye: false, center: false, up: false },
+      paths: [],
+    });
     expect(await compileCamera({ camera: { eye: "6 4 10", center: 1, up: "0 0 1" } }, fs({}), issues)).toEqual({
       eye: [6, 4, 10],
       center: [0, 0, 0],
       up: [0, 0, 1],
+      given: { eye: true, center: false, up: true },
       paths: [],
     });
     expect(issues.size).toBe(0);
@@ -299,6 +304,7 @@ describe("compileScene：投影类型一处判定（P5d 步骤 2 点 1）", () =
       eye: [6, 4, 10],
       center: [0, 0, 0],
       up: [0, 1, 0],
+      given: { eye: true, center: true, up: true },
       paths: [{ duration: 2, keys: [{ t: 0, eye: [1, 2, 3], center: [0, 0, 0], up: [0, 0, 0], zoom: 1 }] }],
     });
     const ortho = await compile({ general: ORTHO, camera }, { "P:/p/scripts/c.json": file });

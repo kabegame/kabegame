@@ -2811,6 +2811,19 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | 真实场景观感 | Windows dev，图库预览与桌面 | 开几张带旋转、视差、文字的场景壁纸 | 画面无缝线、无半像素偏移、不闪烁 | |
 | [ ] | macOS / Linux 三角形带 | macOS / Linux dev | 开一张图层边缘有双线性采样的场景壁纸，与 Windows 同帧对比 | 边缘像素一致；若有末位差别，确认是奇数三角形顶点轮换所致 | 代码里 `layerQuad` 带 `TODO:[WPE_SCENE]` |
 
+## 场景壁纸脚本的相机基准（P5e）
+
+2026-11-15。脚本 `thisScene.getCameraTransforms` / `setCameraTransforms` 读写相机基准（`SceneState.cameraBase`），正交场景没有相机对象时基准改过就进视图。计划、WPE 实测与实施记录见 `.claude/plans/wpe-import/3-scene/phase5/phase-5e-camera-transforms.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 正交场景每帧 set | Windows dev，屏外宿主（`render_scene`，跑脚本） | `p5e-a` 按 WPE 日志回放第 163 帧 | 整帧与 WPE 逐像素相同 | 2026-11-15 Claude：0 差；`get` / `set` 的日志与 WPE 逐行相同 |
+| [x] | 有相机对象 | 同上 | `p5e-cam` 第 163 帧 | 基准不影响画面，逐像素相同 | 2026-11-15 Claude：0 差 |
+| [x] | 透视场景每帧 set | 同上 | `p5e-persp` 第 165 帧（屏蔽 FR / CLK） | 逐像素相同 | 2026-11-15 Claude：0 差 |
+| [x] | 视差与抖动叠加 | 同上 | `p5e-par` 第 160 帧，逐 draw 对 WPE 常量 | `g_EyePosition`、缩放逐位相同 | 2026-11-15 Claude：逐位相同；视差点差 7e-5、120 个像素是方块边缘，来自日志缺第 151–159 帧（dt 平分） |
+| [x] | 2887099508 开场镜头 | 同上，解包副本按日志与逐帧光标回放 | 第 263、319、419 帧对 WPE | 镜头位置一致，脚本不报错 | 2026-11-15 Claude：整体位移 0（相位相关），81 段脚本无错；余差来自樱花粒子与视频时刻 |
+| [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 2887099508，看开场 15 秒 | 镜头从书与人物附近边滑边拉远，回到全景；下方没有多出的半透明黑框 | |
+
 ## 场景壁纸透视相机矩阵逐步 float32（P5d 补修）
 
 2026-11-15。透视场景的相机路径插值、lookAt、透视投影（含 DirectXMath `XMScalarSinCos` 多项式）照汇编逐步 float32。计划与实施记录见 `phase-5d-camera-depth.md`「补修：透视相机矩阵逐步 float32」。

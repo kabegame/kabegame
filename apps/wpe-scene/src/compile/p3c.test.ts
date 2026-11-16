@@ -447,7 +447,13 @@ describe("general 字段表", () => {
       );
       expect(perspective.bindings).toEqual([]);
       expect(read).toEqual(new Set());
-      expect(perspective.general.camera).toEqual({ eye: [2, 2, 2], center: [0, 0, 0], up: [0, 1, 0], paths: [] });
+      expect(perspective.general.camera).toEqual({
+        eye: [2, 2, 2],
+        center: [0, 0, 0],
+        up: [0, 1, 0],
+        given: { eye: false, center: false, up: false },
+        paths: [],
+      });
     } finally {
       observePropertyReads(null);
     }

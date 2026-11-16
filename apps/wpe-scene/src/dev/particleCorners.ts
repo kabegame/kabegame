@@ -434,10 +434,12 @@ export interface ProbeCameraObjects {
   crop?: ProjectionCrop;
 }
 
-/** 探针的相机对象（`cameraObjectLayers`）；场景没有相机对象时为 undefined。 */
-export function probeCameraObjects(bundle: Pick<SceneBundle, "general" | "layers">): ProbeCameraObjects | undefined {
-  const layers = cameraObjectLayers(bundle);
-  return layers.length ? { layers, general: bundle.general } : undefined;
+/**
+ * 探针的相机对象（`cameraObjectLayers`）。没有相机对象时也给（图层表为空）：脚本 `setCameraTransforms` 改过的基准（P5e）要经
+ * `sceneCameraFrame` 才进正交视图；图层表为空、基准没改过时它的结果和不给时逐项相同。
+ */
+export function probeCameraObjects(bundle: Pick<SceneBundle, "general" | "layers">): ProbeCameraObjects {
+  return { layers: cameraObjectLayers(bundle), general: bundle.general };
 }
 
 /**
@@ -488,7 +490,7 @@ export function frameCamera(
       const shake = shakeOffset(state.general, time, height);
       return { camera: { shake, zoom: state.general.zoom }, eye: shake };
     }
-    const { pose, next } = stepCameraSource(perspective.camera, path, step);
+    const { pose, next } = stepCameraSource(perspective.camera, path, step, state.cameraBase);
     path = next;
     const frame = perspectiveCamera({
       pose,
@@ -538,7 +540,7 @@ export interface ReadbackReplayOptions {
   puppets?: Pick<ScenePuppets, "frame">;
   /** 透视场景的探针相机（P5d 步骤 2，`probePerspective`）：按 `particles.dts` 推路径状态，不移动对象。正交场景不给。 */
   perspective?: ProbePerspective;
-  /** 场景里的相机对象（P5d 步骤 3，`probeCameraObjects`）：每帧按状态选生效的。没有相机对象时不给。 */
+  /** 场景里的相机对象（P5d 步骤 3，`probeCameraObjects`）：每帧按状态选生效的；没有相机对象时图层表为空，照样按状态里的相机基准求（P5e）。 */
   cameraObjects?: ProbeCameraObjects;
   /**
    * 前 n − 1 帧每一帧都在 GPU 上画（P10a 走查，FINAL_CHECK「确定性工程能还原全部状态」）：给了且有回放时，每一帧照读回帧的顺序走完
