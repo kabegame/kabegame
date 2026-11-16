@@ -70,11 +70,19 @@ export class FrameClock {
 /**
  * 帧节流：rAF 的回调频率等于显示器刷新率（本机 144 Hz），壁纸没必要跟满。没到下一拍的回调直接跳过；
  * 节拍固定前进，长期平均频率贴近上限而不是被量化到刷新率的约数。`maxFps <= 0` 不节流。
+ * 上限可以运行中改（`setMaxFps`，帧率设置就地生效）：改值后下一次回调立即渲染，之后按新节拍推进。
  */
 export class FrameThrottle {
   private last = -Infinity;
 
-  constructor(private readonly maxFps: number) {}
+  constructor(private maxFps: number) {}
+
+  /** 换帧上限：旧节拍作废，下一次回调就渲染并从那一刻按新间隔对齐（不等旧间隔走完，也不按旧节拍补帧）。 */
+  setMaxFps(maxFps: number): void {
+    if (maxFps === this.maxFps) return;
+    this.maxFps = maxFps;
+    this.last = -Infinity;
+  }
 
   /** 本次回调是否应该渲染。 */
   ready(now: number): boolean {

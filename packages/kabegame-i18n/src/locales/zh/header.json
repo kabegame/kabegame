@@ -41,7 +41,8 @@
   "backfillFailed": "数据库后台更新失败（{name}），下次启动时会继续",
   "backfill": {
     "wpe_dir_hash": "重新计算 Wallpaper Engine 壁纸的内容指纹",
-    "image_palette": "计算壁纸的代表色"
+    "image_palette": "计算壁纸的代表色",
+    "video_thumbnail_frame": "重新生成视频缩略图"
   },
   "viewLogs": "查看日志",
   "logs": {

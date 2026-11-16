@@ -466,7 +466,7 @@ import { useKameMessageStore } from "../../stores/kameMessage";
 import ActionRenderer from "../ActionRenderer.vue";
 import type { ActionItem, ActionContext } from "../../actions/types";
 import type { ImageActionContext } from "../../actions/imageActions";
-import { captureWpeCover, clearWpeSceneStorage } from "../../utils/wpeWallpaperCommands";
+import { captureVideoCover, captureWpeCover, clearWpeSceneStorage } from "../../utils/wpeWallpaperCommands";
 // @ts-expect-error - Vue SFC component import, types resolved via package.json exports
 import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
@@ -1221,7 +1221,23 @@ const previewActionContext = computed<ImageActionContext>(() => ({
   wallpaperPreview: previewWallpaperLive.value
     ? { live: previewRendering.value, paused: wallpaperPaused.value, coverBusy: coverBusy.value }
     : undefined,
+  videoPreview: previewVideoCoverable.value ? { coverBusy: coverBusy.value } : undefined,
 }));
+
+/** 视频能设封面：桌面预览（Android 的视频缩略图是 GIF 动图，Web 版没有这条命令） */
+const previewVideoCoverable = computed(() => !USE_PSWP && !IS_WEB && isPreviewVideo.value);
+
+/** 视频设为封面：取 `<video>` 此刻的播放时间（暂停在哪一帧就是哪一帧），由后端从视频文件解帧 */
+async function setPreviewVideoCover(imageId: string) {
+  const video = previewVideoEl.value;
+  if (coverBusy.value || !video) return;
+  coverBusy.value = true;
+  try {
+    await captureVideoCover(imageId, Number.isFinite(video.currentTime) ? video.currentTime : 0, t);
+  } finally {
+    coverBusy.value = false;
+  }
+}
 
 /**
  * 设为封面：截的是这一份预览看得见的画面（放大时是放大的那一块）。截取期间盖在画布上的工具条、箭头等按
@@ -1244,7 +1260,8 @@ function handleWallpaperCommand(command: string, image: ImageInfo): boolean {
     return true;
   }
   if (command === "setCover") {
-    void setPreviewCover(image.id);
+    if (previewVideoCoverable.value) void setPreviewVideoCover(image.id);
+    else void setPreviewCover(image.id);
     return true;
   }
   if (command === "clearStorage") {

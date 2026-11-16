@@ -6,6 +6,7 @@ import { IS_ANDROID, IS_DEV, IS_WEB } from "../env";
 import { guardSuperRequired } from "../utils/superModeGuard";
 import {
   buildSettingsDescriptors,
+  localSettingStorageKey,
   type QuerySettingDescriptor,
   type SettingDescriptor,
   type SettingsHistoryMode,
@@ -58,6 +59,8 @@ export interface AppSettings {
   wallpaperPaused: boolean;
   /** 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（仅 Windows 桌面） */
   wpeMediaIntegration: boolean;
+  /** WPE 壁纸帧率（桌面）：10～1000 的整数，或跟随 WPE；场景按它限帧，网页壁纸经 `applyGeneralProperties` 收到 */
+  wpeFps: number | "follow";
   /** 场景壁纸后处理档位（泛光 / 超高）：跟随 WPE 的 postprocessing，或固定为关闭 / 开启 / 超高（桌面） */
   wpeScenePostprocess: "follow" | "disabled" | "enabled" | "ultra";
   /** 场景壁纸反射：跟随 WPE 的 reflection，或固定为关闭 / 开启（桌面） */
@@ -96,6 +99,8 @@ export interface AppSettings {
   mcpDisabledCapabilities: string[];
 
   // --- 前端本地偏好（始终走 localStorage，所有平台一致）---
+  /** 颜色主题 id（`src/theme/builtin/*.json` 的 `id`）；不认识的 id 按默认主题显示 */
+  colorTheme: string;
   /** 应用内背景图开关 */
   appBackgroundEnabled: boolean;
   /** 应用内背景图模糊半径（px） */
@@ -157,7 +162,6 @@ export type AppSettingKey = keyof AppSettings;
 export type ImageClickAction = AppSettings["imageClickAction"];
 export type { SettingsSaveOptions, SettingsHistoryMode };
 
-const LOCAL_STORAGE_PREFIX = "kabegame-setting-";
 const descriptors = buildSettingsDescriptors();
 
 export interface SettingsQueryAdapter {
@@ -272,7 +276,7 @@ export const useSettingsStore = defineStore("settings", () => {
     if (!descriptor) continue;
 
     if (descriptor.backend === "localStorage") {
-      const storageKey = `${LOCAL_STORAGE_PREFIX}${String(key)}`;
+      const storageKey = localSettingStorageKey(key);
       const localRef = useLocalStorage(storageKey, descriptor.defaultValue as any, { mergeDefaults: true });
       localRefs[key] = localRef;
       (values as any)[key] = localRef.value;

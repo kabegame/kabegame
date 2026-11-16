@@ -2,7 +2,7 @@
   <span
     v-if="count > 0"
     class="pointer-events-none absolute -right-1 -top-1 box-border flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-600 leading-none tabular-nums text-white ring-2 ring-[var(--kb-surface-raised)]"
-    :class="tone === 'danger' ? 'bg-kb-danger' : 'bg-kb-accent'"
+    :class="tone === 'danger' ? 'bg-kb-danger' : 'bg-kb-accent bg-kb-gradient'"
     aria-hidden="true"
   >
     {{ count > max ? `${max}+` : count }}

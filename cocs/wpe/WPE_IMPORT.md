@@ -118,8 +118,8 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 
 ## 四、收集入口与内建任务
 
-「开始收集」菜单新增第四项 **壁纸**（桌面端；Web / Android 隐藏；macOS / Linux 入口仍在，但 `platform_supported` 为 false，
-自动发现为空，只剩「添加文件夹」）。对话框 `WallpaperImportDialog`
+入口是「开始收集 → 本地」对话框顶部的 **WPE 壁纸** 来源（桌面端；Web / Android 隐藏；macOS / Linux 入口仍在，但 `platform_supported` 为 false，
+自动发现为空，只剩「添加文件夹」；从 Steam 拉取在「网络 → Steam」，见 [WPE_STEAM.md](WPE_STEAM.md)）。面板 `collect/WpeLocalPanel`
 打开即调 `wpe_scan`，按三类来源显示「N 个壁纸 / M 个可导入 / 视频 v · 网页 w / K 个已导入」
 （可导入 = 已支持类型且未入库；类型分布为 0 的项省略），默认勾选有待导入项的来源；
 「添加文件夹」经 `wpe_recognize_dir` 识别后追加。确认后提交内建任务 `wpe-import`
@@ -513,7 +513,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 - **ping 应答**：垫片监听 `wallpaper-ping`，从 `__TAURI_INTERNALS__.metadata.currentWebview.label` 取自身 label、过滤后调用
   `wallpaper_pong(seq)`；不等 load 或属性拉取成功。只有壁纸窗口里的 iframe 应答（预览的 label 是 `main`）。`wallpaper_pong`
   只替调用方窗口发应答，不读取数据。
-- **重拉触发**：`setting-change` 带 `language`（界面语言变了）；`image-changed` / `images-change` 里有**本张**图片
+- **重拉触发**：`setting-change` 带 `language`（界面语言变了）或 `wpeFps`（桌面帧率变了）；`image-changed` / `images-change` 里有**本张**图片
   （`state.imageId`）的 `metadataId` 补丁——图片 metadata 按 id 不可变，属性一改就换 `metadataId`（Phase 7 的设置面板保存时
   写新 metadata 行）；首个状态到达前任何 `metadataId` 补丁都重拉。垫片**先订阅再拉取**，订阅生效后的变化都会触发重拉。
 - **投递语义**（我们自己的规则）：
@@ -525,6 +525,15 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
     属性的访问器，页面写 `window.x = …` 或顶层 `var x = …` 都走到 setter。
   - 乱序：垫片给每次拉取编号，某次结果落地后丢弃编号更早、返回更晚的结果（同 pathql 的 pending 窗口）。
   - 页面回调抛错只记 `console.error("[kb-wpe] …")`，不影响后续投递。
+  - **键序**（2026-11-16）：交给页面的属性对象（`applyUserProperties` 的全量与增量、`applyGeneralProperties`）顶层键按名字排序。
+    WPE 用 jsoncpp 拼回调参数，对象键按 `std::map` 排序【推，没在 WPE 上实测】；有壁纸依赖它：corsair_collection 的
+    `applyUserPropertiesHandler` 按 `Object.keys` 逐个发设置，处理 `scene` 时先调 `effectProvider.currentEffect.reset()`，
+    `currentEffect` 要等 `effect` 到了才有，按 project.json 顺序（`scene` 在前）会抛错，订阅被 rxjs 退订后再也不切场景、页面空白。
+- **History API**（2026-11-16）：WPE 带 `--disable-web-security`，文档有 universal access，`pushState` / `replaceState` 能把地址改到
+  别的路径；Chromium 对没有它的 `file:` 文档只许改 query 与 hash，改路径抛 `SecurityError`。用 HTML5 路由的单页壁纸先写地址再激活
+  组件（Angular 6 的 `location.go` 在 `ActivateRoutes.activate` 之前），一抛错组件就建不出来。垫片在页面脚本之前包装这两个方法，
+  只接住「同源 `file:` 目标改路径」这一种错误，改成保留本文档路径、带上目标的 query 与 hash 再写一次；和 WPE 的差别只是
+  `location.pathname` 停在本文档。不给 `file:` 文档开 universal access：那会连带放开同源与 CORS。
 - **监听随 frame 清理**：监听按「webview → frame → 事件」登记，iframe 销毁时 runtime 报 `SubframeDestroyed`，Tauri 删掉该
   frame 的全部监听。同一 frame 内重新导航后旧条目还在、投递进新文档时找不到 id 等于空操作，直到 frame 销毁；`WpeWallpaperContent`
   每次切换都销毁重建 iframe，不会积累。补丁 11 的 `clear_js_listeners()` 只剩看门狗整页重载时调用。
@@ -881,21 +890,21 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 ### 壁纸设置与预览设置
 
-暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影 / 体积光这一组通用设置分两份，用同一个字段组组件
+暂停、音量、视频倍速、媒体集成、帧率、场景后处理 / 反射 / 阴影 / 体积光这一组通用设置分两份，用同一个字段组组件
 （`components/wallpaper/WpeSettingsFields.vue` + `WpeSettingControl.vue`，纯视图，改动经 `update` 报给调用方；字段表、默认值、
 按类型选字段与「跟随 WPE」的规则在 `utils/wpeSettings.ts`）：
 
-- **壁纸设置**（桌面）：全局设置键（`wallpaperPaused`、`wallpaperVolume`、`wallpaperVideoPlaybackRate`、`wpeMediaIntegration`、
+- **壁纸设置**（桌面）：全局设置键（`wallpaperPaused`、`wallpaperVolume`、`wallpaperVideoPlaybackRate`、`wpeMediaIntegration`、`wpeFps`、
   `wpeScenePostprocess`、`wpeSceneReflection`、`wpeSceneShadows`、`wpeSceneVolumetrics`），所有壁纸共用、只给壁纸窗口。设置页
   `components/settings/items/WpeWallpaperSettings.vue` 显示全部字段（当前壁纸用不上的照样显示，只是不起作用），每个字段接
   `useSettingKeyState`；暂停只在窗口模式显示，媒体集成只在 Windows。
 - **预览设置**（预览与应用背景）：每张 `x-wpe/*` 壁纸一份，存在 metadata 顶层的 `previewSettings`（与 `userProperties` 并列，
   只存与 Kabegame 默认值不同的键），读写 `get_wpe_preview_settings` / `set_wpe_preview_settings`（`kabegame_core::wpe::preview_settings`
   解析、钳制与改写，经 `rewrite_image_metadata` 后发 `metadataId` 补丁），没设的项取 Kabegame 自己的默认值（暂停否、音量 1、倍速 1、
-  媒体集成开、后处理 `enabled`、反射开、阴影 `medium`、体积光 `medium`，与 WPE 出厂值一致），**不回落到全局**。前端 `useWpePreviewSettings`
+  媒体集成开、帧率 30、后处理 `enabled`、反射开、阴影 `medium`、体积光 `medium`；帧率以外与 WPE 出厂值一致），**不回落到全局**。前端 `useWpePreviewSettings`
   让同一张的全部使用方（预览右栏、画面里的 `WpeWallpaperContent`、预览弹窗给视频壁纸设倍速）共用一份状态，面板改动当场生效，
   草稿 300 ms 去抖后写，别处写入（`metadataId` 补丁）时重读。预览右栏的「预览设置」面板（`WpePreviewSettingsPanel.vue`）按类型
-  显示：网页是暂停、音量、媒体集成；场景再加后处理 / 反射 / 阴影 / 体积光；`x-wpe/video` 在预览里按普通视频播放，只有倍速（暂停与音量
+  显示：网页是暂停、音量、媒体集成、帧率；场景再加后处理 / 反射 / 阴影 / 体积光；`x-wpe/video` 在预览里按普通视频播放，只有倍速（暂停与音量
   归视频控制条，音量是全部视频共用的 `kabegame-video-volume`）。
 - **预览的暂停不存**：它是 `ImagePreviewDialog` 的内存状态 `wallpaperPaused`（换图复位），和右键菜单的「暂停」是同一个；
   字段组的暂停开关把改动交回弹窗。
@@ -908,6 +917,10 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
   显示为 Kabegame 默认值，交给场景宿主前也换成默认值（`wpeSceneSettingsOf`）。媒体集成只有开 / 关两档。
 - **场景四项怎么到宿主**：父页面经 postMessage 下发（`kabegame:wpe-scene-settings`，见 [WPE_SCENE.md](WPE_SCENE.md)「场景后处理档位」），
   壁纸窗口传全局值，预览传预览设置；宿主不再自己读全局设置。
+- **帧率**（整数或 `"follow"`，默认 30）：范围 10 到显示器最高刷新率（`get_display_max_refresh_rate`，同 WPE 滑块的
+  `runtime.frequencymax`），「跟随 WPE」是滑块上方的开关。它不走上面的 postMessage：生效值由 `wpe_web_pull_state` 按调用方窗口
+  取全局或预览设置、解析跟随（WPE `config.json` 只读一次）后放进 `general.fps`，垫片经 `applyGeneralProperties` 同时交给网页壁纸与
+  场景宿主，场景就地改限帧（见 [WPE_SCENE.md](WPE_SCENE.md)「帧率」）。
 
 ### 封面
 
@@ -1011,8 +1024,9 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
   设置里的目录失效时不另找，清空才重新查找；找不到时 `scene_assets_of` 打 warn，场景退回预览图。用户在壁纸设置里覆盖（`set_wpe_engine_dir` 校验同一判据、刷新宿主范围，传空时立即重新查找）。
   用户怎么拿到这些资源见用户文档 `apps/docs/src/content/docs/guide/wallpaper-engine.md`。
 - 导入 `video`、`web` 与 `scene`；`application` 只占位并计入跳过。场景壁纸目前只有少数能实时渲染（P1：eagleflag、deep_space、beach），其余在预览、应用背景与桌面显示作者预览图。
-- 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言（`applyGeneralProperties({ language })`）；
-  `fps`、`setPaused` 尚未实现。目录内容不监视，下次状态拉取时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
+- 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言与帧率（`applyGeneralProperties({ language, fps })`，
+  帧率见上「壁纸设置与预览设置」；只是告诉页面，Kabegame 不限网页自己的刷新，WPE 改帧率时会重启网页壁纸的 CEF 进程）；
+  `setPaused` 尚未实现。目录内容不监视，下次状态拉取时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
   WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`（取值算法 P11c 起同 WPE）；回环会采到 Kabegame 自己的声音（与 WPE 一致）。
 - 网页壁纸只能监听四个事件（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开 `wpe_web_pull_state`、
   `wallpaper_pong` 与 `wpe_web_media_subscribe`。
@@ -1084,7 +1098,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 - 预览放大：`apps/kabegame/src/composables/usePanzoomPreview.ts`（`startPan` / `endPan`、拖过之后的点击）、`components/wallpaper/WallpaperPointerOverlay.vue`
   （平移规则）、`WallpaperPreviewCanvas.vue`（`zoom` 的 provide、截取区域求交）、`wpeSceneStyle.ts` 的 `sceneDisplayScale`、
   `common/ImagePreviewDialog.vue`（壁纸、视频分支的 Panzoom 层）、`common/VideoControls.vue`（视频的缩放按钮）。
-- `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
+- `apps/kabegame/src/components/collect/WpeLocalPanel.vue`、`image/ImageContent.vue`、
   `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`App.vue`（背景层）、`utils/mediaMime.ts`
 - 壁纸窗口 ping 看门狗：`src-tauri/kabegame/src/wallpaper/ping.rs`、`wallpaper/window.rs`（生命周期与重载清理）、
   `commands/window.rs`（`wallpaper_pong`）、`src-tauri/kabegame-core/src/{ipc/events.rs,emitter.rs}`（ping / pong 事件）

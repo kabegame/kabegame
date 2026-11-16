@@ -64,7 +64,8 @@ shortcuts: [
 - 颜色、圆角、阴影取 `apps/kabegame/src/styles/tokens.css` 的 `--kb-*`：`text-kb-fg`、`bg-kb-hover`、
   `border-kb-line`、`rounded-kb-md`、`shadow-kb-pop`……透明度修饰（`/50`）对它们不生效。
 - 没有 Tailwind reset：`border` 配 `border-solid`；没有 tailwind-merge：不要在调用处叠同类工具类去覆盖组件变体，要不同就加变体。
-- `anime-theme.css` 只剩旧主题变量（中性的已指向 `--kb-*`）与功能性规则；新代码直接用 `--kb-*`。
+- `--anime-*` 已下线，`anime-theme.css` 只剩全局规则；颜色一律用 `--kb-*`（插件描述 iframe 里注入的 `--anime-*` 是插件约定，例外）。
+- 颜色主题（`src/theme/builtin/*.json`）只覆盖 `--kb-*`：颜色分主色 `--kb-primary` 与点缀色 `--kb-secondary` 两条线；新颜色若要跟主题，就在 `tokens.css` 里从这两条线 `color-mix`，不要写死品牌色。
 - 提示用 `toast`（`@/components/ui/toast`）、确认 / 输入框用 `messageBox`（`@/components/ui/messageBox`，调用方式同
   `ElMessageBox`，自己实现、渲染在 `MessageBoxHost`）、加载遮罩在 `<script setup>` 里导入 `vLoading`。
 - 浮层的 z-index 不写死：用 `components/ui/layer.ts` 的 `useLayerZIndex`（打开时向全局计数器取号），层的点外部事件接

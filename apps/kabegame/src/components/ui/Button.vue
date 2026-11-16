@@ -44,8 +44,9 @@ const BASE =
   "[&_svg]:pointer-events-none [&_svg]:shrink-0";
 
 const VARIANTS: Record<Variant, string> = {
+  // 主操作是主色 → 点缀色的渐变（底色留实心主色，渐变缺失时兜底）
   primary:
-    "border-0 bg-kb-primary text-kb-primary-fg shadow-kb-sm hover:bg-kb-primary-hover data-[state=open]:bg-kb-primary-hover",
+    "border-0 bg-kb-primary bg-kb-gradient text-kb-primary-fg shadow-kb-sm hover:bg-kb-gradient-hover data-[state=open]:bg-kb-gradient-hover",
   danger: "border-0 bg-kb-danger text-white shadow-kb-sm hover:bg-[color-mix(in_srgb,var(--kb-danger)_86%,black)]",
   outline:
     "bg-transparent text-kb-fg border border-solid border-kb-line-strong hover:bg-kb-hover data-[state=open]:bg-kb-hover",

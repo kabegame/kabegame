@@ -8,6 +8,8 @@
 
 use serde_json::{Map, Number, Value};
 
+use super::fps::WpeFps;
+
 /// metadata 顶层的段名。
 pub const PREVIEW_SETTINGS_KEY: &str = "previewSettings";
 
@@ -18,6 +20,8 @@ const POSTPROCESS: &str = "postprocess";
 const REFLECTION: &str = "reflection";
 const SHADOWS: &str = "shadows";
 const VOLUMETRICS: &str = "volumetrics";
+/// 帧率：整数或 `"follow"`，形状与默认值见 `wpe::fps`。
+const FPS: &str = "fps";
 
 /// Kabegame 自己的默认值（与 WPE 出厂值一致）。
 const DEFAULT_VOLUME: f64 = 1.0;
@@ -53,6 +57,10 @@ fn normalize(key: &str, value: &Value) -> Result<Value, String> {
         REFLECTION => choice(crate::settings::is_wpe_scene_reflection),
         SHADOWS => choice(crate::settings::is_wpe_scene_shadows),
         VOLUMETRICS => choice(crate::settings::is_wpe_scene_volumetrics),
+        // 统一成整数或字符串：「等于默认就删键」按 `Value` 比较，`30.0` 与 `30` 不相等
+        FPS => WpeFps::from_json(value)
+            .map(WpeFps::to_json)
+            .ok_or_else(|| format!("预览设置 {key} 不是帧率")),
         _ => Err(format!("未知预览设置: {key}")),
     }
 }
@@ -65,6 +73,7 @@ fn default_of(key: &str) -> Value {
         POSTPROCESS => Value::from(DEFAULT_POSTPROCESS),
         REFLECTION => Value::from(DEFAULT_REFLECTION),
         VOLUMETRICS => Value::from(DEFAULT_VOLUMETRICS),
+        FPS => WpeFps::default().to_json(),
         _ => Value::from(DEFAULT_SHADOWS),
     }
 }
@@ -115,6 +124,14 @@ pub fn media_integration(raw: &Value) -> bool {
         .get(MEDIA_INTEGRATION)
         .and_then(Value::as_bool)
         .unwrap_or(DEFAULT_MEDIA_INTEGRATION)
+}
+
+/// 预览的帧率设置（没设取默认 30；`"follow"` 未解析，解析见 `wpe::fps::resolve`）。
+pub fn fps(raw: &Value) -> WpeFps {
+    stored(raw)
+        .get(FPS)
+        .and_then(WpeFps::from_json)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -201,5 +218,30 @@ mod tests {
             json!({ "volumetrics": "ultra" })
         );
         assert!(apply_changes(&raw, &changes(json!({ "volumetrics": "enabled" }))).is_err());
+    }
+
+    #[test]
+    fn fps_stores_integer_or_follow() {
+        let raw = json!({});
+        // 默认 30 不存（浮点写法也算默认），其余存成整数；低于下限钳到 10
+        assert_eq!(
+            apply_changes(&raw, &changes(json!({ "fps": 30.0 }))).unwrap(),
+            None
+        );
+        let next = apply_changes(&raw, &changes(json!({ "fps": 59.6 })))
+            .unwrap()
+            .unwrap();
+        assert_eq!(next[PREVIEW_SETTINGS_KEY], json!({ "fps": 60 }));
+        assert_eq!(fps(&next), WpeFps::Fixed(60));
+        let follow = apply_changes(&raw, &changes(json!({ "fps": "follow" })))
+            .unwrap()
+            .unwrap();
+        assert_eq!(fps(&follow), WpeFps::Follow);
+        let low = apply_changes(&raw, &changes(json!({ "fps": 1 })))
+            .unwrap()
+            .unwrap();
+        assert_eq!(low[PREVIEW_SETTINGS_KEY], json!({ "fps": 10 }));
+        assert!(apply_changes(&raw, &changes(json!({ "fps": "fast" }))).is_err());
+        assert_eq!(fps(&raw), WpeFps::Fixed(30));
     }
 }

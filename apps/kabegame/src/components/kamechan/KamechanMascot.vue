@@ -579,7 +579,7 @@ html[data-kb-cover-capture] .kamechan-host {
   touch-action: none;
 
   &:focus-visible {
-    outline: 2px solid var(--anime-primary);
+    outline: 2px solid var(--kb-primary);
     outline-offset: 2px;
   }
 }

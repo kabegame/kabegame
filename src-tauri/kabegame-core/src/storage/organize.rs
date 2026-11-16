@@ -442,7 +442,12 @@ fn thumbnail_refresh_action(row: &OrganizeScanRow) -> Option<ThumbnailRefreshAct
 
     if crate::media::image_type::is_video_by_path(local) {
         let thumb = row.thumbnail_path.trim();
-        if thumb.is_empty() || thumb == local_path || !Path::new(thumb).exists() {
+        // 旧形态（mp4 短片 / gif 动图）也重做成首帧静图
+        if thumb.is_empty()
+            || thumb == local_path
+            || !Path::new(thumb).exists()
+            || !crate::crawler::downloader::compress::is_current_video_thumbnail(thumb)
+        {
             return Some(ThumbnailRefreshAction::RegenerateVideo {
                 id: row.id,
                 local_path: local_path.to_string(),
@@ -793,24 +798,13 @@ fn run_organize(
                     }
                 }
                 ThumbnailRefreshAction::RegenerateVideo { id, local_path } => {
-                    #[cfg(target_os = "android")]
                     let preview = handle.block_on(async {
-                        crate::crawler::downloader::compress::compress_video_for_preview(
-                            &local_path,
-                        )
-                        .await
-                    });
-                    #[cfg(not(target_os = "android"))]
-                    let preview = handle.block_on(async {
-                        crate::crawler::downloader::compress::compress_video_for_preview(Path::new(
-                            &local_path,
-                        ))
-                        .await
+                        crate::crawler::downloader::compress::generate_video_thumbnail(&local_path)
+                            .await
                     });
                     match preview {
-                        Ok(result) => {
-                            let preview_path_str =
-                                result.preview_path.to_string_lossy().to_string();
+                        Ok(preview_path) => {
+                            let preview_path_str = preview_path.to_string_lossy().to_string();
                             storage
                                 .replace_image_thumbnail_path(&id.to_string(), &preview_path_str)
                                 .inspect_err(|_| {
@@ -1133,7 +1127,7 @@ mod tests {
     fn thumbnail_refresh_keeps_existing_video_thumb() {
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("test.mp4");
-        let thumb = dir.path().join("existing_preview.mp4");
+        let thumb = dir.path().join("existing_preview.jpg");
         std::fs::write(&local, [1u8; 100]).unwrap();
         std::fs::write(&thumb, [2u8; 100]).unwrap();
         let row = OrganizeScanRow {
@@ -1146,6 +1140,34 @@ mod tests {
             native_parser_version: None,
         };
         assert!(thumbnail_refresh_action(&row).is_none());
+    }
+
+    /// 旧形态的视频缩略图（mp4 短片 / gif 动图）即使文件还在，也重做成首帧静图。
+    #[test]
+    fn thumbnail_refresh_regenerates_legacy_video_thumb() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("test.mp4");
+        std::fs::write(&local, [1u8; 100]).unwrap();
+        for legacy in ["legacy_preview.mp4", "legacy_preview.gif"] {
+            let thumb = dir.path().join(legacy);
+            std::fs::write(&thumb, [2u8; 100]).unwrap();
+            let row = OrganizeScanRow {
+                id: 12,
+                hash: String::new(),
+                local_path: local.to_string_lossy().to_string(),
+                thumbnail_path: thumb.to_string_lossy().to_string(),
+                compatible_path: String::new(),
+                format_key: None,
+                native_parser_version: None,
+            };
+            assert!(
+                matches!(
+                    thumbnail_refresh_action(&row),
+                    Some(ThumbnailRefreshAction::RegenerateVideo { id: 12, .. })
+                ),
+                "{legacy} 应重做"
+            );
+        }
     }
 
     // ---------- 重新计算代表色 ----------

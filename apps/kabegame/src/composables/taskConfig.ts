@@ -103,7 +103,7 @@ export function buildSubmitUserConfig(userConfig: Record<string, any>, defs: Plu
 
 /**
  * 唯一的 task config 写入口：读插件定义与用户默认配置，整体替换 store 值并递增 revision。
- * 调用方随后自行 `crawlerDrawerStore.open()`。
+ * 调用方随后自行 `useCollectDialogsStore().openNetwork("plugin")`。
  */
 export async function writeTaskConfig(input: TaskConfigInput | null): Promise<void> {
   const crawlerStore = useCrawlerStore();

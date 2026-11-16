@@ -7,6 +7,8 @@ declare global {
   interface Window {
     wallpaperPropertyListener?: {
       applyUserProperties(changed: Record<string, SceneProperty>): void;
+      /** 垫片在 load 后与 `general` 变化时调；场景宿主只取 `fps`（Rust 已解析好的正整数）。 */
+      applyGeneralProperties(general: unknown): void;
       setPaused(value: boolean): void;
     };
     /** 垫片放的宿主音量（只读，0…1；收到父页面第一次回复之前为 0），变化时派发 `kabegame-host-volume`（P6a 步骤 1）。 */
@@ -30,6 +32,8 @@ listenSceneParent({
 
 window.wallpaperPropertyListener = {
   applyUserProperties: (changed) => host.applyUserProperties(changed),
+  // 帧率就地生效（不重新加载），不走父页面的场景设置消息
+  applyGeneralProperties: (general) => host.setGeneral(general),
   setPaused: (paused) => host.setPaused(paused),
 };
 

@@ -83,6 +83,7 @@ pub(crate) mod v049_images_type_normalized;
 mod v050_task_retry;
 mod v051_wpe_dir_hash;
 mod v052_image_palette;
+mod v053_video_thumbnail_frame;
 
 use backfill::{Backfill, BackfillCtx};
 use rusqlite::Connection;
@@ -462,13 +463,20 @@ const MIGRATIONS: &[Migration] = &[
         up: v052_image_palette::up,
         min_backfill_version: None,
     },
+    // 空迁移：登记回填作业 video_thumbnail_frame
+    Migration {
+        version: 53,
+        name: "video_thumbnail_frame",
+        up: v053_video_thumbnail_frame::up,
+        min_backfill_version: None,
+    },
 ];
 
 /// 当前支持的最新 schema 版本。
 ///
 /// v4.0 将 v001–v007 的历史迁移整合进 [`init::create_all_tables`]，
 /// 因此基准版本为 7，后续每新增一个迁移文件递增一次。
-pub const LATEST_VERSION: u32 = 52;
+pub const LATEST_VERSION: u32 = 53;
 
 pub(crate) fn current_version(conn: &Connection) -> u32 {
     conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))

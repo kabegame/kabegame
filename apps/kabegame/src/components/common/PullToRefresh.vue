@@ -253,13 +253,13 @@ onUnmounted(() => {
 .spinner-svg {
   width: 100%;
   height: 100%;
-  color: var(--anime-primary);
-  filter: drop-shadow(0 2px 4px rgba(255, 107, 157, 0.3));
+  color: var(--kb-primary);
+  filter: drop-shadow(0 2px 4px color-mix(in srgb, var(--kb-primary) 30%, transparent));
 }
 
 .spinner-circle {
   transition: stroke-dashoffset 0.3s ease;
-  stroke: var(--anime-primary);
+  stroke: var(--kb-primary);
 }
 
 /* 下拉检测容器：不位移、不 bouncing，仅用于触顶与下拉检测 */

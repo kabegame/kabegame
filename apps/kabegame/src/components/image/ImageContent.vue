@@ -71,6 +71,24 @@
         @dragstart="onDragStart(thumbSlot, $event)"
       />
 
+      <!-- 视频的封面形态（桌面网格）：缩略图是图（首帧静图，旧 Android 的 gif 动图、WPE 作者的 preview.*）就用 <img> 打底，
+           播放时（悬浮 / 点角标）才在上面挂原视频（见下方 <video> 的 posterVideo），停了就卸载 -->
+      <img
+        v-else-if="mode === 'poster'"
+        v-show="!thumbSlot.dead"
+        :key="`poster:${thumbSlot.src}`"
+        :src="thumbSlot.src"
+        :loading="imgLoading"
+        decoding="async"
+        class="ic-img thumbnail-layer z-1"
+        :style="{ objectFit: fit }"
+        :alt="image.id"
+        :draggable="dragEnabled"
+        @load="onLoad"
+        @error="onImgError(thumbSlot, $event)"
+        @dragstart="onDragStart(thumbSlot, $event)"
+      />
+
       <!-- 非视频 WPE 壁纸（web / scene）的原图形态，同图片「原图出来前缩略图能看」：缩略层打底（作者 preview.* 或自定义封面），
            实时画面（WpeWallpaperContent）叠在上面，出来且满 WALLPAPER_MIN_LOADING_MS 才揭开；实时画面显示不了就当原图加载
            失败，缩略层是最终画面。Android / Web 不跑实时画面（没有 `wpe` feature），只有缩略层 -->
@@ -132,14 +150,16 @@
           />
         </Transition>
       </template>
+    </template>
 
-      <!-- 视频 -->
+    <!-- 视频：视频形态独占；封面形态里只在播放或缩略图坏了时挂在缩略层上面，出第一帧前透明（不闪黑） -->
+    <template v-if="!isLost && videoMounted">
       <video
-        v-else
         :key="`video:${videoSlot.src}`"
         :ref="setVideoEl"
         :src="videoSlot.src"
         class="ic-img ic-video"
+        :class="mode === 'poster' && ['z-2', posterVideoShown ? 'opacity-100' : 'opacity-0']"
         :style="videoStyle"
         :draggable="dragEnabled"
         :muted="isWallpaperVariant || videoMuted"
@@ -151,8 +171,8 @@
         webkit-playsinline="true"
         disablepictureinpicture="true"
         disableremoteplayback=""
-        @loadeddata="onLoad"
-        @canplay="onLoad"
+        @loadeddata="onVideoLoad"
+        @canplay="onVideoLoad"
         @error="onVideoError"
         @dragstart="onDragStart(videoSlot, $event)"
         @mousedown="onVideoMouseDown"
@@ -223,7 +243,7 @@ import { wpeVideoPresentation, type MediaFit } from "../wallpaper/wpeVideoStyle"
  * ----------|--------------------------------------|------------------------------------------|--------------
  * 路径状况  | 路径三条路径都相同，或者只有本地路径 | 兼容路径和本地路径相同，或者兼容路径为空 | 三个路径都不同
  * fail状态  | 直接跳到local-fail，没有其他fail状态 | 有thumb-fail,可能有local-fail            | 三个fail都可能出现
- * 视频则只有一个独占播放位，安卓视频的thumb则是一个gif，和图片分开。
+ * 视频则只有一个独占播放位；桌面缩略位的缩略图是图（首帧静图 / WPE 预览）时走 poster 形态：缩略层打底，播放时才挂视频（只走 comp → local）。安卓视频的thumb则是一个gif，和图片分开。
  *
  * 实现：上面的每一行都是一条「有序回退链」。每个渲染槽（slot）持有一条链，
  * error 事件把当前环的失败等级记入 failedSources 并前进到下一环，链走空即 dead——
@@ -419,17 +439,26 @@ const isWallpaperVariant = computed(() => props.variant === "wallpaper");
 const imgLoading = computed(() => (isWallpaperVariant.value ? "eager" : "lazy"));
 /** 壁纸变体的 ready 已发（每张一次，`emitReady`）；重置时清（声明在重置的 watch 之前） */
 let readySent = false;
-const mode = computed<"image" | "gif" | "video" | "wallpaper">(() => {
+/**
+ * 渲染形态：
+ * - `image`：图片（缩略层 + 原图层）；非视频 WPE 的缩略位也是它。
+ * - `poster`：桌面视频的缩略位，缩略图是图（首帧静图、WPE 视频的作者 preview.*）：`<img>` 打底，
+ *   播放时（`videoPlaying`）才在上面挂原视频，停了就卸载，网格里不常驻 `<video>`。
+ * - `gif`：Android 普通视频的缩略位，单张 GIF 动图（网格没有悬浮，不挂视频）。
+ * - `video`：原图位（预览、背景、桌面），或缩略图本身就是视频（旧版本的 mp4 短片、没有独立缩略图）。
+ * - `wallpaper`：非视频 WPE 的原图形态（实时画面）。
+ */
+const mode = computed<"image" | "poster" | "gif" | "video" | "wallpaper">(() => {
   // 非视频 WPE：缩略位仍是作者 preview.*；原图形态在它上面叠壁纸组件的实时画面。
   if (isWpeWallpaperContent.value) {
     return props.prefer === "thumbnail" ? "image" : "wallpaper";
   }
-  // 目录型视频壁纸：网格/缩略位用 WPE 自带 preview（gif 原生播放），预览与背景播入口视频。
-  if (isWpeVideo.value) {
-    return props.prefer === "thumbnail" && hasWpePreview.value ? "image" : "video";
-  }
-  if (!isVideo.value) return "image";
-  return IS_ANDROID && props.prefer === "thumbnail" ? "gif" : "video";
+  if (!isVideo.value && !isWpeVideo.value) return "image";
+  if (props.prefer !== "thumbnail") return "video";
+  // 目录型视频壁纸没有预览图时 thumbnail_path 回落成目录本身，只能放入口视频
+  if (isWpeVideo.value) return hasWpePreview.value ? "poster" : "video";
+  if (IS_ANDROID) return "gif";
+  return thumbPath.value && !thumbIsClip.value ? "poster" : "video";
 });
 
 // ---- 资源三元组（按 path 归一） ----
@@ -449,6 +478,14 @@ const thumbPath = computed(() => {
 
 /** WPE 预览是否真的独立于壁纸目录（缺 preview 时 thumbnail_path 会回落成目录本身）。 */
 const hasWpePreview = computed(() => !!thumbPath.value && thumbPath.value !== localPath.value);
+
+/**
+ * 桌面普通视频的缩略图本身是不是视频：旧版本的缩略图是 2.5 秒的 mp4 短片（直接当视频放），没有独立缩略图时缩略位就是
+ * 原视频；现在是首帧 JPEG，当图显示。回填作业跑完之前两种并存，按缩略图本身决定放什么。
+ */
+const thumbIsClip = computed(
+  () => !!thumbPath.value && (thumbPath.value === localPath.value || /\.mp4$/i.test(thumbPath.value)),
+);
 
 interface Source {
   tag: ImageSourceTag;
@@ -504,14 +541,30 @@ function useSlot(chain: () => Source[]) {
   });
 }
 
-// 图片缩略层（gif 形态复用同一槽）；原图层 comp → local；视频链方向由 prefer 决定。
+// 图片缩略层（poster / gif 形态复用同一槽）；原图层 comp → local。
+// 视频链：poster 形态叠的是原视频（comp → local）；视频形态按 prefer 定方向，缩略图是图时不进链（放不了）。
 const thumbSlot = useSlot(() => buildChain(thumbPath.value));
 const origSlot = useSlot(() => buildChain(compPath.value, localPath.value));
-const videoSlot = useSlot(() =>
-  props.prefer === "original"
-    ? buildChain(compPath.value, localPath.value, thumbPath.value)
-    : buildChain(thumbPath.value, compPath.value, localPath.value),
-);
+const videoSlot = useSlot(() => {
+  if (mode.value === "poster") return buildChain(compPath.value, localPath.value);
+  const clip = thumbIsClip.value ? thumbPath.value : "";
+  return props.prefer === "original"
+    ? buildChain(compPath.value, localPath.value, clip)
+    : buildChain(clip, compPath.value, localPath.value);
+});
+
+/** 挂 `<video>`：视频形态一直挂；poster 形态只在播放时挂（缩略层坏了也挂，停在首帧当缩略图用）。 */
+const videoMounted = computed(() => {
+  if (mode.value === "video") return true;
+  if (mode.value !== "poster") return false;
+  return (props.videoPlaying || thumbSlot.dead) && !videoSlot.dead;
+});
+/** poster 形态的视频出了第一帧才盖上缩略层（之前透明，不闪黑）；卸载时复位。 */
+const posterVideoReady = ref(false);
+const posterVideoShown = computed(() => posterVideoReady.value || thumbSlot.dead);
+watch(videoMounted, (mounted) => {
+  if (!mounted) posterVideoReady.value = false;
+});
 
 type MediaSlot = typeof thumbSlot;
 
@@ -603,6 +656,9 @@ const isLost = computed(() => {
       return videoSlot.dead;
     case "gif":
       return thumbSlot.dead;
+    case "poster":
+      // 缩略层与原视频都放不了才丢失；原视频坏了而缩略层在，靠角标提示
+      return thumbSlot.dead && videoSlot.dead;
     case "image":
       // 安卓：原图层死亡即视为丢失（缩略图可能仍在，但源文件已不可达）
       return IS_ANDROID ? origEngaged.value && origSlot.dead : thumbSlot.dead && origSlot.dead;
@@ -636,11 +692,13 @@ const {
 // wallpaper 形态只跟图片 id 走：实时画面（`WpeWallpaperContent`，按 id 挂载）同一张只报一次 live，换封面会改 `thumbnailPath`，
 // 这里若跟着重置，揭开的实时画面就被收回、再也等不到 live。换封面只换缩略层（下面的 watch）。
 // 网格里 WPE 固定用缩略形态，prefer 不会在两种形态间切换。
-const resetKey = computed(() =>
-  mode.value === "wallpaper"
-    ? `wallpaper|${props.image.id}`
-    : [props.image.id, localPath.value, compPath.value, thumbPath.value].join("|"),
-);
+// video 形态同理：缩略图不是视频时不在播放链里，预览里「设为封面」换了 `thumbnailPath` 也不重置正在播的视频
+// （`<video>` 的 src 没变、不会重新加载，重置了加载遮罩就一直盖着）。
+const resetKey = computed(() => {
+  if (mode.value === "wallpaper") return `wallpaper|${props.image.id}`;
+  const thumb = mode.value === "video" && !thumbIsClip.value ? "" : thumbPath.value;
+  return [props.image.id, localPath.value, compPath.value, thumb].join("|");
+});
 watch(
   resetKey,
   () => {
@@ -726,6 +784,17 @@ watch(wallpaperShown, (shown) => {
   emit("wallpaperLive", shown);
 });
 
+const onVideoLoad = (e: Event) => {
+  if (isStaleMediaEvent(e)) return;
+  if (mode.value === "poster") {
+    // 盖到缩略层上；缩略层还在加载（或已坏）时由这里结束加载态
+    posterVideoReady.value = true;
+    finishLoading();
+    return;
+  }
+  onLoad(e);
+};
+
 const onVideoError = (e: Event) => {
   if (isStaleMediaEvent(e)) return;
   console.error("[video-error]", e);
@@ -739,7 +808,7 @@ const onVideoError = (e: Event) => {
 // 因此不播放 ≠ 显示首帧——App 背景壁纸与 PhotoSwipe 预览都必须真正 play()。
 watchEffect(() => {
   const el = videoEl.value;
-  if (!el || mode.value !== "video" || props.nativeVideoControls) return;
+  if (!el || !videoMounted.value || props.nativeVideoControls) return;
   if (props.videoPlaying) {
     if (isWallpaperVariant.value) {
       // 壁纸窗口没有用户手势，Chromium 只允许静音自动播放：先静音 play，成功后再按音量出声（带声 play 会被拒、停在第 0 帧）

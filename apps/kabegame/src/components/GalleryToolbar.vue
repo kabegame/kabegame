@@ -79,11 +79,6 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   refresh: [];
-  showCrawlerDialog: [];
-  showLocalImport: [];
-  showWebpageCollect: [];
-  showWallpaperImport: [];
-  openCollectMenu: [];
 }>();
 
 const { t } = useI18n();
@@ -204,21 +199,6 @@ const handleAction = (payload: { id: string; data: { type: string; value?: strin
   switch (payload.id) {
     case HeaderFeatureId.Refresh:
       emit("refresh");
-      break;
-    case HeaderFeatureId.Collect:
-      if (payload.data.type === "openMenu") {
-        emit("openCollectMenu");
-      } else if (payload.data.type === "select") {
-        if (payload.data.value === "local") {
-          emit("showLocalImport");
-        } else if (payload.data.value === "network") {
-          emit("showCrawlerDialog");
-        } else if (payload.data.value === "webpage") {
-          emit("showWebpageCollect");
-        } else if (payload.data.value === "wallpaper") {
-          emit("showWallpaperImport");
-        }
-      }
       break;
     case HeaderFeatureId.GalleryPageSize:
       queryBarRef.value?.openPageSizePicker();

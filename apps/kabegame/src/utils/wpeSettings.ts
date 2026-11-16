@@ -3,24 +3,45 @@
  *
  * 同一组字段有两个数据源：
  * - 桌面的「壁纸设置」：全局设置键（`WPE_SETTING_GLOBAL_KEYS`），所有壁纸共用，设置页显示全部字段；
- * - 预览的「预览设置」：每张壁纸一份，存在 metadata 的 `previewSettings`（后端 `kabegame_core::wpe::preview_settings`，
- *   字段与默认值的唯一实现在那里，这里是镜像，改一处要同步另一处），没设的项取 `WPE_SETTING_DEFAULTS`。
- *   预览的暂停不在其中：它是预览弹窗里的内存状态。
+ * - 预览的「预览设置」：每张壁纸一份，存在 metadata 的 `previewSettings`（后端
+ *   `src-tauri/kabegame-core/src/wpe/preview_settings.rs`，字段与默认值的唯一实现在那里，这里是镜像，改一处要同步另一处），
+ *   没设的项取 `WPE_SETTING_DEFAULTS`。预览的暂停不在其中：它是预览弹窗里的内存状态。
  *
  * 「跟随 WPE」只在能读到 WPE `config.json` 的环境里提供（`get_wpe_follow_available`，只有 Windows 可能为真）；
  * 不能跟随时选项里没有这一档，存着的 `follow` 按 Kabegame 默认值显示，交给场景宿主前也换成默认值。
+ *
+ * 帧率（`fps`）是数值或 `follow`，不在选项表里：界面是「跟随 WPE」开关加滑条（`WpeSettingControl.vue`）。
+ * 生效帧率（含 `follow` 的解析）只在 Rust 算，经垫片的 `applyGeneralProperties` 交给网页壁纸与场景宿主，
+ * 前端只负责编辑设置，不往场景设置消息里放帧率。
  */
 import type { AppSettingKey } from "@/stores/settings";
 import { isWpeSceneType, isWpeVideoType, isWpeWebType } from "./mediaMime";
 
 export type WpeSettingKey =
-  "paused" | "volume" | "playbackRate" | "mediaIntegration" | "postprocess" | "reflection" | "shadows" | "volumetrics";
+  | "paused"
+  | "volume"
+  | "playbackRate"
+  | "mediaIntegration"
+  | "fps"
+  | "postprocess"
+  | "reflection"
+  | "shadows"
+  | "volumetrics";
+
+/** 帧率设置的取值：固定帧率，或跟随 WPE */
+export type WpeFpsValue = number | "follow";
+
+/** 帧率下限（同 WPE 设置界面的 floor）；上限是显示器的最高刷新率（`useDisplayMaxFps`） */
+export const WPE_FPS_MIN = 10;
+/** 帧率的 Kabegame 默认值 */
+export const WPE_FPS_DEFAULT = 30;
 
 export interface WpeSettingValues {
   paused: boolean;
   volume: number;
   playbackRate: number;
   mediaIntegration: boolean;
+  fps: WpeFpsValue;
   postprocess: string;
   reflection: string;
   shadows: string;
@@ -33,6 +54,7 @@ export const WPE_SETTING_KEYS: readonly WpeSettingKey[] = [
   "volume",
   "playbackRate",
   "mediaIntegration",
+  "fps",
   "postprocess",
   "reflection",
   "shadows",
@@ -45,6 +67,7 @@ export const WPE_SETTING_DEFAULTS: Readonly<WpeSettingValues> = {
   volume: 1,
   playbackRate: 1,
   mediaIntegration: true,
+  fps: WPE_FPS_DEFAULT,
   postprocess: "enabled",
   reflection: "enabled",
   shadows: "medium",
@@ -57,6 +80,7 @@ export const WPE_SETTING_GLOBAL_KEYS: Readonly<Record<WpeSettingKey, AppSettingK
   volume: "wallpaperVolume",
   playbackRate: "wallpaperVideoPlaybackRate",
   mediaIntegration: "wpeMediaIntegration",
+  fps: "wpeFps",
   postprocess: "wpeScenePostprocess",
   reflection: "wpeSceneReflection",
   shadows: "wpeSceneShadows",
@@ -69,6 +93,7 @@ export const WPE_SETTING_LABEL_KEYS: Readonly<Record<WpeSettingKey, string>> = {
   volume: "settings.wallpaperVolume",
   playbackRate: "settings.wallpaperVideoPlaybackRate",
   mediaIntegration: "settings.wpeMediaIntegration",
+  fps: "settings.wpeFps",
   postprocess: "settings.wpeScenePostprocess",
   reflection: "settings.wpeSceneReflection",
   shadows: "settings.wpeSceneShadows",
@@ -100,17 +125,43 @@ export function wpeChoiceDisplay(key: WpeChoiceKey, value: unknown, followAvaila
   return typeof value === "string" && values.includes(value) ? value : WPE_SETTING_DEFAULTS[key];
 }
 
+/** 存着的帧率值：有限数值或 `follow`，其余（缺失、类型不对）取默认值；数值不在这里钳制，显示时再钳 */
+export function wpeFpsValueOf(value: unknown): WpeFpsValue {
+  if (value === "follow") return "follow";
+  return typeof value === "number" && Number.isFinite(value) ? value : WPE_FPS_DEFAULT;
+}
+
+/**
+ * 帧率的显示值：`follow` 但不能跟随时显示默认值 30；数值取整钳到 [10, 显示器最高刷新率]
+ * （存的值高于当前上限时按上限显示，实际帧率本来也被刷新率封顶）。
+ */
+export function wpeFpsDisplay(value: unknown, followAvailable: boolean, max: number): WpeFpsValue {
+  const parsed = wpeFpsValueOf(value);
+  if (parsed === "follow") {
+    if (followAvailable) return "follow";
+    return clampWpeFps(WPE_FPS_DEFAULT, max);
+  }
+  return clampWpeFps(parsed, max);
+}
+
+/** 取整钳到 [10, max]；max 低于下限（取不到刷新率之类）时按下限 */
+export function clampWpeFps(value: number, max: number): number {
+  const upper = Number.isFinite(max) ? Math.max(WPE_FPS_MIN, Math.round(max)) : WPE_FPS_MIN;
+  return Math.min(upper, Math.max(WPE_FPS_MIN, Math.round(value)));
+}
+
 /**
  * 某类壁纸用得上的字段；`type` 为空时给全部字段（设置页）。媒体集成只有 Windows 有数据源；
- * 倍速只作用于视频层（网页、场景收不到）；后处理 / 反射 / 阴影 / 体积光只有场景。
+ * 倍速只作用于视频层（网页、场景收不到）；帧率作用于网页（经 `applyGeneralProperties` 推给页面）与场景（限帧）；
+ * 后处理 / 反射 / 阴影 / 体积光只有场景。
  */
 export function wpeSettingFieldsFor(type: string | null | undefined, windows: boolean): WpeSettingKey[] {
   const media = windows ? (["mediaIntegration"] as const) : [];
   if (!type) return WPE_SETTING_KEYS.filter((key) => windows || key !== "mediaIntegration");
   if (isWpeVideoType(type)) return ["paused", "volume", "playbackRate"];
-  if (isWpeWebType(type)) return ["paused", "volume", ...media];
+  if (isWpeWebType(type)) return ["paused", "volume", ...media, "fps"];
   if (isWpeSceneType(type))
-    return ["paused", "volume", ...media, "postprocess", "reflection", "shadows", "volumetrics"];
+    return ["paused", "volume", ...media, "fps", "postprocess", "reflection", "shadows", "volumetrics"];
   return [];
 }
 
@@ -130,6 +181,7 @@ export function wpePreviewSettingValues(stored: Record<string, unknown> | null |
   if (typeof stored.volume === "number") values.volume = stored.volume;
   if (typeof stored.playbackRate === "number") values.playbackRate = stored.playbackRate;
   if (typeof stored.mediaIntegration === "boolean") values.mediaIntegration = stored.mediaIntegration;
+  values.fps = wpeFpsValueOf(stored.fps);
   for (const key of Object.keys(WPE_SETTING_CHOICES) as WpeChoiceKey[]) {
     if (typeof stored[key] === "string") values[key] = stored[key] as string;
   }

@@ -1,0 +1,20 @@
+{
+  "id": "elegant-purple",
+  "name": {
+    "default": "Elegant Purple",
+    "zh": "优雅紫",
+    "zhtw": "優雅紫",
+    "en": "Elegant Purple",
+    "ja": "エレガントパープル",
+    "ko": "우아한 퍼플"
+  },
+  "vars": {
+    "--kb-primary": "#8b6cf0",
+    "--kb-primary-hover": "#7556dc",
+    "--kb-secondary": "#6ec3f4",
+    "--kb-fg": "#2c2150",
+    "--kb-fg-regular": "#44376e",
+    "--kb-fg-muted": "#5a59c9",
+    "--kb-fg-subtle": "#a7a9e8"
+  }
+}

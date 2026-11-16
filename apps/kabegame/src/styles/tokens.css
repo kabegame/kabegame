@@ -4,15 +4,29 @@
  * 规则：中性外框 + 一个强调色。壁纸本身是彩色的，外框越中性，图越突出；
  * 强调色只用在计数、选中、焦点这类需要被看见的地方。
  *
- * 与旧主题的关系：中性的 --anime-*（文字、边框、底色、阴影）在 anime-theme.css 里改指向这里，
- * 业务组件 scoped 样式里残留的 --anime-* 因此也是中性外观。
- * 品牌色 --anime-primary / --anime-secondary 不动：强调色与危险色挂在它们上，插件详情运行时
- * 局部改写 --anime-* 换肤时也能波及新组件。
+ * 这里的值就是默认主题「动漫粉」。颜色主题（src/theme/，设置「外观 → 颜色主题」）在 <html> 的行内样式上
+ * 覆盖其中一部分 --kb-*：主题 JSON 只写基色（主色、点缀色、四档文字），其余在下面用 color-mix 从基色推出来，
+ * 所以跟着主题走；主题也可以显式覆盖它们。
+ * 旧的 --anime-* 已下线，新旧代码都直接用 --kb-*（插件详情 iframe 里注入的 --anime-* 是插件模板约定，另算）。
  *
  * UnoCSS 里以 `kb` 色板 / `kb-*` 圆角与阴影引用（uno.config.pub.ts）。颜色是 CSS 变量，
  * `text-kb-fg/50` 这类透明度修饰不生效，需要半透明就在这里加一个 token。
  */
 :root {
+  /*
+   * 颜色分两条线：主色（品牌色，主操作、选中、焦点）与点缀色（第二个色相，和主色一起组成渐变、页面底的另一端、投影）。
+   * 主题只给这两条线的基色和四档文字；填充、浅阶、渐变、悬停、分隔线、阴影都按下面的固定关系从基色推出，
+   * 所以每个主题天然是「主色 + 点缀色」两个色相，不会整片同色。说明文字与图标（--kb-fg-muted / -subtle）
+   * 建议取点缀色的色相，正文（--kb-fg / -regular）取主色或点缀色压暗后的深色。
+   */
+
+  /* 主色（品牌色）：主操作的实心底、强调色都挂在它上 */
+  --kb-primary: #ff6b9d;
+  --kb-primary-hover: #e8557f;
+  --kb-primary-fg: #ffffff;
+  /* 点缀色：第二个色相 */
+  --kb-secondary: #a78bfa;
+
   /* 文字 */
   --kb-fg: #4a154b;
   --kb-fg-muted: #7c3aed;
@@ -25,9 +39,30 @@
     -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI",
     "Microsoft YaHei", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
 
-  /* 页面底与侧栏底：不透明的浅灰，内容面（卡片、顶栏、弹层）是白 */
-  --kb-bg: linear-gradient(135deg, #fef3f8 0%, #f0e9ff 100%);
-  --kb-bg-sidebar: linear-gradient(180deg, #fff0f5 0%, #f5f0ff 100%);
+  /* 浅阶（不透明）：选中项、标签、提示块的浅底 */
+  --kb-primary-soft: color-mix(in srgb, var(--kb-primary) 16%, #ffffff);
+  --kb-secondary-soft: color-mix(in srgb, var(--kb-secondary) 26%, #ffffff);
+
+  /* 渐变：主色 → 点缀色。实心渐变给主操作与计数，浅渐变给选中的浅底 */
+  --kb-gradient: linear-gradient(135deg, var(--kb-primary) 0%, var(--kb-secondary) 100%);
+  --kb-gradient-hover: linear-gradient(
+    135deg,
+    var(--kb-primary-hover) 0%,
+    color-mix(in srgb, var(--kb-secondary) 86%, #000000) 100%
+  );
+  --kb-gradient-soft: linear-gradient(135deg, var(--kb-primary-soft) 0%, var(--kb-secondary-soft) 100%);
+
+  /* 页面底与侧栏底：主色浅阶 → 点缀色浅阶，内容面（卡片、顶栏、弹层）是白 */
+  --kb-bg: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--kb-primary) 6%, #ffffff) 0%,
+    color-mix(in srgb, var(--kb-secondary) 12%, #ffffff) 100%
+  );
+  --kb-bg-sidebar: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--kb-primary) 7%, #ffffff) 0%,
+    color-mix(in srgb, var(--kb-secondary) 9%, #ffffff) 100%
+  );
   /* 开着应用背景（壁纸作底）时外框的毛玻璃面 */
   --kb-glass: rgba(255, 255, 255, 0.28);
   --kb-glass-strong: rgba(255, 255, 255, 0.6);
@@ -35,42 +70,42 @@
   /* 表面：surface 是浮在壁纸 / 背景之上的毛玻璃面（顶栏），raised 是弹出层 */
   --kb-surface: rgba(255, 255, 255, 0.74);
   --kb-surface-raised: #ffffff;
-  --kb-hover: rgba(255, 107, 157, 0.08);
-  --kb-pressed: rgba(255, 107, 157, 0.14);
-  /* 不透明填充：输入框底、分段控件轨道、进度条轨道 */
-  --kb-fill: #fbe9f2;
-  --kb-fill-light: #fdf2f8;
-  --kb-fill-lighter: #fef7fb;
-  --kb-fill-dark: #f5dbea;
+  --kb-hover: color-mix(in srgb, var(--kb-primary) 8%, transparent);
+  --kb-pressed: color-mix(in srgb, var(--kb-primary) 14%, transparent);
+  /* 不透明填充（输入框底、分段控件轨道、进度条轨道）：主色由浅到深的四阶 */
+  --kb-fill-lighter: color-mix(in srgb, var(--kb-primary) 4%, #ffffff);
+  --kb-fill-light: color-mix(in srgb, var(--kb-primary) 7%, #ffffff);
+  --kb-fill: color-mix(in srgb, var(--kb-primary) 11%, #ffffff);
+  --kb-fill-dark: color-mix(in srgb, var(--kb-primary) 18%, #ffffff);
 
   /* 分隔线 */
-  --kb-line: rgba(255, 107, 157, 0.16);
-  --kb-line-strong: rgba(255, 107, 157, 0.3);
+  --kb-line: color-mix(in srgb, var(--kb-primary) 16%, transparent);
+  --kb-line-strong: color-mix(in srgb, var(--kb-primary) 30%, transparent);
 
-  /* 主操作：墨色实心。想换回品牌粉只改这三行（primary 指向 --anime-primary） */
-  --kb-primary: var(--anime-primary);
-  --kb-primary-hover: var(--anime-primary-dark);
-  --kb-primary-fg: #ffffff;
-
-  /* 强调与状态 */
-  --kb-accent: var(--anime-primary);
-  --kb-danger: var(--anime-danger);
-  --kb-success: var(--anime-success);
-  --kb-warning: var(--anime-warning);
-  --kb-ring: color-mix(in srgb, var(--anime-primary) 45%, transparent);
+  /* 强调与状态（状态色是定值，不归主题管） */
+  --kb-accent: var(--kb-primary);
+  --kb-danger: #ef4444;
+  --kb-success: #10b981;
+  --kb-warning: #f59e0b;
+  --kb-ring: color-mix(in srgb, var(--kb-primary) 45%, transparent);
 
   /* 形状 */
   --kb-radius-sm: 6px;
   --kb-radius-md: 8px;
   --kb-radius-lg: 12px;
-  --kb-shadow-sm: 0 1px 3px rgba(255, 107, 157, 0.1);
-  --kb-shadow-md: 0 4px 20px rgba(255, 107, 157, 0.15);
-  --kb-shadow-lg: 0 0 0 1px rgba(255, 107, 157, 0.12), 0 24px 56px -12px rgba(124, 58, 237, 0.3);
+  /* 阴影：主色描边 + 点缀色压暗的投影，跟着主题走 */
+  --kb-shadow-sm: 0 1px 3px color-mix(in srgb, var(--kb-primary) 10%, transparent);
+  --kb-shadow-md: 0 4px 20px color-mix(in srgb, var(--kb-primary) 15%, transparent);
+  --kb-shadow-lg:
+    0 0 0 1px color-mix(in srgb, var(--kb-primary) 12%, transparent),
+    0 24px 56px -12px color-mix(in srgb, color-mix(in srgb, var(--kb-secondary) 70%, #000000) 30%, transparent);
   --kb-shadow-pop:
-    0 0 0 1px rgba(255, 107, 157, 0.14), 0 12px 32px -8px rgba(124, 58, 237, 0.22), 0 2px 6px -2px rgba(255, 107, 157, 0.14);
+    0 0 0 1px color-mix(in srgb, var(--kb-primary) 14%, transparent),
+    0 12px 32px -8px color-mix(in srgb, color-mix(in srgb, var(--kb-secondary) 70%, #000000) 22%, transparent),
+    0 2px 6px -2px color-mix(in srgb, var(--kb-primary) 14%, transparent);
 
   /* 模态遮罩 */
-  --kb-overlay: rgba(74, 21, 75, 0.3);
+  --kb-overlay: rgba(16, 14, 20, 0.32);
 
   /* 动效 */
   --kb-ease-out: cubic-bezier(0.22, 1, 0.36, 1);

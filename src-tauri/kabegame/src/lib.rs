@@ -681,6 +681,8 @@ pub(crate) fn configure_app(
             get_image_native_metadata,
             get_gallery_image,
             copy_image_to_clipboard,
+            #[cfg(not(target_os = "android"))]
+            set_video_cover,
             delete_image,
             remove_image,
             batch_delete_images,
@@ -823,6 +825,8 @@ pub(crate) fn configure_app(
             set_wpe_scene_shadows,
             get_wpe_scene_volumetrics,
             set_wpe_scene_volumetrics,
+            get_wpe_fps,
+            set_wpe_fps,
             #[cfg(not(target_os = "android"))]
             get_web_server_enabled,
             #[cfg(not(target_os = "android"))]
@@ -1020,6 +1024,8 @@ pub(crate) fn configure_app(
             set_wpe_preview_settings,
             #[cfg(feature = "wpe")]
             get_wpe_follow_available,
+            #[cfg(feature = "wpe")]
+            get_display_max_refresh_rate,
             #[cfg(feature = "wpe")]
             capture_wallpaper_cover,
             #[cfg(feature = "wpe")]

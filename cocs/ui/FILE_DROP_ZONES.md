@@ -148,7 +148,7 @@ local-import 的结果保持扁平，不再为拖入目录创建同步画册或�
   框内的淡色蒙层也铺在这一层上，框外 6px 保持完全通透。
 - **`.drop-icon` 不能用 `background-clip: text` 做渐变色**。图标是 `<el-icon>` 里的 SVG，
   文字裁剪对它无效，结果是渲染成继承来的黑色。改造前的旧样式就有这个 bug（一直没人发现，
-  因为它藏在渐变文字旁边）。直接给 `color: var(--anime-primary)`，SVG 的 `currentColor` 会跟着走。
+  因为它藏在渐变文字旁边）。直接给 `color: var(--kb-primary)`，SVG 的 `currentColor` 会跟着走。
 
 浮层是 `pointer-events: none`，不吃鼠标事件也不可点击关闭 —— 松手即导入，没有可关的东西。
 

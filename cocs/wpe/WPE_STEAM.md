@@ -7,7 +7,7 @@
 ## 总体结构
 
 ```
-对话框（WallpaperImportDialog.vue）
+「网络」对话框的 Steam 来源（collect/SteamImportPanel.vue）
   ├─ WpeSteamPanel.vue 登录：每一步一次 HTTPS 调用 IAuthenticationService（auth.rs）
   │    └─ 成功 → refresh token 存进 wpe-import 插件数据的私有区（sessions.rs）
   ├─ WpeSteamWorkshopList.vue 两个页签：「我的订阅」每页一次 wpe_steam_subscriptions、「工坊发现」每页一次
@@ -106,12 +106,12 @@
 - 进度按条目的 `file_size` 加权，条目内部按 chunk 字节。dry-run 只列条目、记 `taskLogWpeWorkshopDryRun`，不下载。
 - 条目更新后（manifest 变了）按路径命中已有行，只补画册成员；行的目录哈希 / 大小 / metadata 不重算（见「已知限制」）。
 
-## 对话框（`WallpaperImportDialog.vue` + `WpeSteamPanel.vue`）
+## 对话框（`collect/SteamImportPanel.vue` + `WpeSteamPanel.vue`）
 
-- 对话框顶部先选来源：「本机」（Steam 库自动发现 + 手选文件夹，原有界面）或「从 Steam」。来源关掉对话框不重置。两种来源的任务参数互不混用：本机不带 `steamAccount`；从 Steam 传 `sources: null`、`steamAccount`，以及 `steamItems`（条目 id）或 `steamAllSubscriptions`（分级）之一，另一个为 `null`。
-- `WpeSteamPanel` 只在选中「从 Steam」时挂载（每次打开对话框按 key 重新挂载）：挂载即调 `wpe_steam_status`。登录区始终显示；WPE 只是顺带，状态是登录框下面的一行小字（使用已有的 WPE（带路径）/ Kabegame 已下载（build 号）/ 没有找到、导入时顺带下载 / 设置里的目录不可用）。有未过期的会话就先问「以 <账号> 继续（有效至 …）」，点击时 `wpe_steam_verify_session` 连一次 CM，失败删会话、回到登录；没有会话直接进登录，缺省扫码。账号密码登录后要用户做什么完全看 Steam 返回的 `confirmations`（按账号的 Steam Guard 设置给，开了手机令牌的账号只给 `deviceConfirmation` + `deviceCode`，邮箱令牌的账号才给 `emailCode`）：能在手机上点确认或点邮件链接（`emailConfirmation`）时只提示这一步，后台照常轮询、确认后自动变成已登录，验证码收进「改用令牌 / 邮箱验证码」链接；只有验证码这一种方式时直接显示输入框。卸载时放弃进行中的登录。
-- 已登录的账号由对话框持有（`v-model:account`），来回切换来源不丢。
-- 登录后显示「选择壁纸」：两个页签「我的订阅」「工坊发现」，都是 `WpeSteamWorkshopList.vue`（`source` 区分，按 `openCount:账号` 重新挂载；两个都用 `v-show` 留着，切换不丢页码与筛选；工坊发现第一次切过去才挂载）。只持有当前一页（每页 20 条），翻页、换分级 / 类型（每组至少留一个，全不选在 Steam 那边等于不筛选）、换排序、换趋势时间窗、搜索（输入停 500 ms 或回车）各调一次命令，旧请求回来作废；加载中列表半透明。每行整行可点，复选框只做显示；预览图、标题、类型、大小（发现里另有订阅人数）、分级（成人标红），以及「已下载」「有更新」「不支持」。已选条目 id 由对话框持有（`v-model:selected-ids`），两个页签共用、跨页保留，「选中本页」三态；「全部 N 个」只在订阅里，锁住订阅里的逐条勾选，经 `v-model:all-subscriptions` 交出分级与总数。换账号时清空已选。没有选择时不能提交，底栏显示「将导入 N 个创意工坊壁纸」/「将导入全部 N 个订阅」/「…另加选中的 M 个」。
+- 入口是「开始收集 → 网络」对话框顶部的「Steam」来源（与插件、网页并列，上次的来源记在 localStorage）；本机已有的 Wallpaper Engine 目录在「开始收集 → 本地 → WPE 壁纸」（`collect/WpeLocalPanel.vue`）。两种来源的任务参数互不混用：本机不带 `steamAccount`；Steam 传 `sources: null`、`steamAccount`，以及 `steamItems`（条目 id）或 `steamAllSubscriptions`（分级）之一，另一个为 `null`。两边的提交与「保存到」字段共用 `collect/wpeImport.ts` 与 `collect/WpeImportSaveFields.vue`。
+- `SteamImportPanel` 第一次切到 Steam 来源时挂载、每次打开对话框重新挂载，`WpeSteamPanel` 随它挂载即调 `wpe_steam_status`。登录区始终显示；WPE 只是顺带，状态是登录框下面的一行小字（使用已有的 WPE（带路径）/ Kabegame 已下载（build 号）/ 没有找到、导入时顺带下载 / 设置里的目录不可用）。有未过期的会话就先问「以 <账号> 继续（有效至 …）」，点击时 `wpe_steam_verify_session` 连一次 CM，失败删会话、回到登录；没有会话直接进登录，缺省扫码。账号密码登录后要用户做什么完全看 Steam 返回的 `confirmations`（按账号的 Steam Guard 设置给，开了手机令牌的账号只给 `deviceConfirmation` + `deviceCode`，邮箱令牌的账号才给 `emailCode`）：能在手机上点确认或点邮件链接（`emailConfirmation`）时只提示这一步，后台照常轮询、确认后自动变成已登录，验证码收进「改用令牌 / 邮箱验证码」链接；只有验证码这一种方式时直接显示输入框。卸载时放弃进行中的登录。
+- 已登录的账号由 `SteamImportPanel` 持有（`v-model:account`）；本次打开内来回切换来源不丢（面板用 `v-show` 留着）。
+- 登录后显示「选择壁纸」：两个页签「我的订阅」「工坊发现」，都是 `WpeSteamWorkshopList.vue`（`source` 区分，按账号重新挂载；两个都用 `v-show` 留着，切换不丢页码与筛选；工坊发现第一次切过去才挂载）。只持有当前一页（每页 20 条），翻页、换分级 / 类型（每组至少留一个，全不选在 Steam 那边等于不筛选）、换排序、换趋势时间窗、搜索（输入停 500 ms 或回车）各调一次命令，旧请求回来作废；加载中列表半透明。每行整行可点，复选框只做显示；预览图、标题、类型、大小（发现里另有订阅人数）、分级（成人标红），以及「已下载」「有更新」「不支持」。已选条目 id 由 `SteamImportPanel` 持有（`v-model:selected-ids`），两个页签共用、跨页保留，「选中本页」三态；「全部 N 个」只在订阅里，锁住订阅里的逐条勾选，经 `v-model:all-subscriptions` 交出分级与总数。换账号时清空已选。没有选择时不能提交，底栏显示「将导入 N 个创意工坊壁纸」/「将导入全部 N 个订阅」/「…另加选中的 M 个」。
 
 ## 已知限制与后续
 

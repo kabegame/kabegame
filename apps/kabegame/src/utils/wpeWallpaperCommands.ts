@@ -21,6 +21,21 @@ export async function captureWpeCover(imageId: string, source: CoverRegionScope,
 }
 
 /**
+ * 视频（含 WPE 视频）的「设为封面」：把预览里 `<video>` 当前播放时间交给后端，后端从视频文件解那一帧换成缩略图并发
+ * `thumbnailPath` 补丁（网格跟着换图）。成功返回 true。
+ */
+export async function captureVideoCover(imageId: string, timeSecs: number, t: Translate): Promise<boolean> {
+  try {
+    await invoke<string>("set_video_cover", { imageId, timeSecs });
+    toast.success(t("gallery.wpeSetCoverDone"));
+    return true;
+  } catch (failure) {
+    toast.error(`${t("gallery.wpeSetCoverFailed")}: ${String(failure)}`);
+    return false;
+  }
+}
+
+/**
  * 「清空脚本存储」：存储在宿主的 `file:` 来源里，应用页碰不到，由后端广播，同一张图正在运行的宿主收到后清空并重启脚本。
  * 没有宿主存活时没人收、不生效，所以入口只放在有实时实例的地方：预览的右键菜单与工具条。
  */

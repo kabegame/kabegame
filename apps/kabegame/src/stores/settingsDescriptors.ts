@@ -1,6 +1,12 @@
 import { IS_ANDROID, IS_LIGHT_MODE, IS_LINUX, IS_MACOS, IS_WEB, IS_WINDOWS } from "../env";
 import type { AppSettingKey, AppSettings } from "./settings";
 import { DEFAULT_GALLERY_PAGE_SIZE } from "../utils/galleryPageSize";
+import { DEFAULT_COLOR_THEME_ID } from "../theme/colorTheme";
+
+/** localStorage 后端的存储键：`kabegame-setting-<key>`（`useLocalStorage` 对字符串值原样存取）。 */
+export function localSettingStorageKey(key: AppSettingKey): string {
+  return `kabegame-setting-${key}`;
+}
 
 export type SettingsHistoryMode = "push" | "replace";
 
@@ -209,10 +215,11 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(tauri("wpeMediaIntegration", "get_wpe_media_integration", "set_wpe_media_integration", "enabled"));
   }
 
-  // 当前壁纸暂停、场景后处理与 WPE 目录：WPE 只在桌面提供
+  // 当前壁纸暂停、帧率、场景后处理与 WPE 目录：WPE 只在桌面提供
   if (!IS_ANDROID && !IS_WEB) {
     entries.push(
       tauri("wallpaperPaused", "get_wallpaper_paused", "set_wallpaper_paused", "paused"),
+      tauri("wpeFps", "get_wpe_fps", "set_wpe_fps", "value"),
       tauri("wpeScenePostprocess", "get_wpe_scene_postprocess", "set_wpe_scene_postprocess", "value"),
       tauri("wpeSceneReflection", "get_wpe_scene_reflection", "set_wpe_scene_reflection", "value"),
       tauri("wpeSceneShadows", "get_wpe_scene_shadows", "set_wpe_scene_shadows", "value"),
@@ -247,6 +254,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
   for (const entry of entries) assignEntry(map, entry);
 
   const localEntries: Array<[AppSettingKey, SettingDescriptor]> = [
+    frontendLocal("colorTheme", DEFAULT_COLOR_THEME_ID),
     frontendLocal("appBackgroundEnabled", false),
     frontendLocal("appBackgroundBlur", 2),
     frontendLocal("appBackgroundOpacity", 0.25),

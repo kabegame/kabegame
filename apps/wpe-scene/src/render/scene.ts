@@ -187,7 +187,7 @@ import {
 import { SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
-import { ParticleSystem, particleNode } from "../particles/system";
+import { ParticleSystem, particleNode, particlePasses } from "../particles/system";
 import { summarizeParticles, type ParticleSummary } from "../particles/track";
 import {
   particleVertexLayout,
@@ -1330,9 +1330,10 @@ export class GpuScene {
   private particleIndices: { buffer: GPUBuffer; format: GPUIndexFormat; particles: number } | null = null;
   /** 粒子层（`objects` 下标）→ 第几个粒子层（`bundle.layers` 里带 `particle` 的顺序），定种子用。 */
   private readonly particleOrdinals = new Map<number, number>();
-  private readonly particlePasses: 1 | 2;
-  /** 宿主的帧上限（`ParticleOptions.fps`）：rope 的 `TL`、`TP0`（`writeRopeSegments`）。 */
-  private readonly particleFps: number;
+  /** operator 遍数（`ParticleOptions.passes`，运行中由 `setFrameRate` 改）：新建的系统树用它。 */
+  private particlePasses: 1 | 2;
+  /** 宿主的帧上限（`ParticleOptions.fps`，运行中由 `setFrameRate` 改）：rope 的 `TL`、`TP0`（`writeRopeSegments`）。 */
+  private particleFps: number;
   private readonly particleSeed: number;
   private readonly particleROverride: ParticleOptions["rOverride"];
   /**
@@ -3130,6 +3131,22 @@ export class GpuScene {
     for (const [object, tree] of this.trees) {
       const old = previous.trees.get(object);
       if (old) tree.system.adoptScriptControl(old.system);
+    }
+  }
+
+  /**
+   * 帧率设置就地生效（`SceneRenderer.setMaxFps`）：operator 遍数（`particlePasses`）与 rope 读的帧上限一起换，下一帧起生效，不重建
+   * 系统树。现有的树整棵换遍数（`ParticleSystem.setPasses`，static 子孙与事件池一起）；全部粒子层标脏，暂停中的补画也按新帧上限重写
+   * rope 的 `TL`。预热固定 1 遍、拖尾按实际帧时间采样，所以中途切换没有残留状态。
+   */
+  setFrameRate(fps: number): void {
+    const passes = particlePasses(fps);
+    if (fps === this.particleFps && passes === this.particlePasses) return;
+    this.particleFps = fps;
+    this.particlePasses = passes;
+    for (const [object, tree] of this.trees) {
+      tree.system.setPasses(passes);
+      this.markParticlesStale(object);
     }
   }
 

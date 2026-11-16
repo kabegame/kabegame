@@ -39,13 +39,13 @@
       <Pause v-if="videoShouldPlay" class="size-3 fill-current" />
       <Play v-else class="size-3 fill-current" />
     </div>
-    <!-- WPE 壁纸：预览图即作者提供的动图 / 静图，网格不加载入口视频 / 页面 -->
+    <!-- WPE 壁纸：网格显示缩略图，不加载页面；视频壁纸悬浮时播入口视频 -->
     <div v-else-if="isWpe" class="wpe-video-badge" aria-hidden="true">
       <Play v-if="isWpeVideo" class="size-2.5 fill-current" />
-      <Monitor v-else class="size-3" />
+      <WpeLogo v-else class="size-3" />
       <span>{{ wpeBadgeText }}</span>
     </div>
-    <!-- 视频标识：GIF 等不可控形态，仅作为静态指示 -->
+    <!-- 视频标识：Android 的 GIF 缩略图不可控，仅作为静态指示 -->
     <div v-else-if="isVideo" class="video-play-badge" aria-hidden="true">
       <Play class="size-3 fill-current" />
     </div>
@@ -75,11 +75,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
-import { Monitor, Pause, Play, TriangleAlert } from "@lucide/vue";
+import { Pause, Play, TriangleAlert } from "@lucide/vue";
+import WpeLogo from "@/components/icons/WpeLogo.vue";
 import { Tooltip } from "@/components/ui";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageContent from "./ImageContent.vue";
 import { isVideoMediaType, isWpeMediaType, isWpeVideoType, wpeKind } from "../../utils/mediaMime";
+import { IS_ANDROID, IS_WEB } from "../../env";
 import { storeToRefs } from "pinia";
 import { useUiStore } from "@/stores/ui";
 import { useI18n } from "@kabegame/i18n";
@@ -244,7 +246,7 @@ const rootStyle = computed<Record<string, string> | undefined>(() => {
 });
 
 const isVideo = computed(() => isVideoMediaType(props.image.type));
-/** WPE 视频壁纸：网格里只播自带预览图，不悬停加载入口视频。 */
+/** WPE 视频壁纸：网格里显示首帧（或作者预览图），桌面悬浮时播入口视频。 */
 const isWpeVideo = computed(() => isWpeVideoType(props.image.type));
 /** 所有 WPE 壁纸（视频 / 网页 / …）：网格固定显示作者预览图，不悬停加载原图形态。 */
 const isWpe = computed(() => isWpeMediaType(props.image.type));
@@ -259,34 +261,16 @@ const wpeBadgeText = computed(() => {
   return key ? `WPE · ${t(key)}` : "WPE";
 });
 
-function pathFromUrlLike(value: string | undefined): string {
-  const raw = (value || "").trim();
-  if (!raw) return "";
-  try {
-    const u = new URL(raw, window.location.origin);
-    const pathParam = u.searchParams.get("path");
-    if (pathParam) return pathParam;
-    return decodeURIComponent(u.pathname || raw);
-  } catch {
-    const noHash = raw.split("#", 1)[0] || "";
-    const noQuery = noHash.split("?", 1)[0] || noHash;
-    try {
-      return decodeURIComponent(noQuery);
-    } catch {
-      return noQuery;
-    }
-  }
-}
-
-function hasPathExtension(value: string | undefined, ext: string): boolean {
-  const path = pathFromUrlLike(value).trim().toLowerCase();
-  return path.endsWith(`.${ext.toLowerCase()}`);
-}
-
-const previewPath = computed(() => props.image.thumbnailPath || props.image.localPath);
-const isVideoRenderedAsImage = computed(() => isVideo.value && hasPathExtension(previewPath.value, "gif"));
-// GIF 预览不可控；mp4 预览走 <video>，由上层统一控制播放/暂停。
-const isControllableVideo = computed(() => isVideo.value && !isVideoRenderedAsImage.value);
+/**
+ * 桌面网格里能悬浮播的视频：普通视频都能（缩略图是图时 `ImageContent` 在上面挂原视频，旧版本的 mp4 短片缩略图直接放）；
+ * WPE 视频壁纸只在桌面（`wpe` feature，Android / Web 的 x-wpe 行只有预览图）且有入口视频时能。
+ */
+const canPlayInGrid = computed(
+  () => (isVideo.value && !IS_ANDROID) || (isWpeVideo.value && !IS_ANDROID && !IS_WEB && !!props.image.compatiblePath),
+);
+// 右上角播放 / 暂停按钮只给桌面的普通视频；WPE 视频的角标留着「WPE · 视频」，悬浮照样播。
+// Android 的缩略图是 GIF 动图、网格里不挂视频，角标只作静态指示。
+const isControllableVideo = computed(() => isVideo.value && !IS_ANDROID);
 
 const hoverVideoPreviewActive = ref(false);
 const hoverOriginalActive = ref(false);
@@ -296,11 +280,11 @@ const HOVER_IMAGE_ORIGINAL_DELAY_MS = 500;
 let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
 let hoverImageOriginalTimer: ReturnType<typeof setTimeout> | null = null;
 
-// 视频始终用缩略（压缩短视频），不在网格里加载原视频；
+// 视频始终用缩略位：缩略图打底，播放（悬浮 / 角标）时 ImageContent 才挂原视频；
 // 图片在 hover 时把 prefer 临时升级为 original（替代旧的 forceDesktopLayers）。
 const effectivePrefer = computed<ImagePrefer>(() => {
   if (isVideo.value) return "thumbnail";
-  // WPE 的缩略位本身就是作者提供的动图 / 静图，网格固定用它，滚动时不加载入口视频或页面。
+  // WPE 的缩略位是首帧静图（视频）或作者的预览图，网格固定用它，滚动时不加载页面；视频壁纸悬浮时才挂入口视频。
   if (isWpe.value) return "thumbnail";
   return hoverOriginalActive.value ? "original" : props.prefer;
 });
@@ -343,14 +327,11 @@ const handleMouseEnter = () => {
   if (isCompact.value) return;
   clearHoverPreviewTimer();
   clearHoverImageOriginalTimer();
-  if (isVideo.value && !isWpeVideo.value) {
+  if (canPlayInGrid.value) {
     hoverPreviewTimer = setTimeout(() => {
       hoverPreviewTimer = null;
-      if (isControllableVideo.value) {
-        hoverVideoPreviewActive.value = true;
-        emit("hoverVideoPreview", true);
-        return;
-      }
+      hoverVideoPreviewActive.value = true;
+      emit("hoverVideoPreview", true);
     }, HOVER_PREVIEW_DELAY_MS);
   } else if (!isWpe.value) {
     hoverImageOriginalTimer = setTimeout(() => {

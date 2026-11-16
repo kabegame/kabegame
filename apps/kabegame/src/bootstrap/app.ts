@@ -18,10 +18,15 @@ import { setCrawlerBeforeAddTaskGuard } from "@/stores/crawler";
 import { i18n } from "@kabegame/i18n";
 import { logger } from "@/utils/logger";
 import { runInitScreen } from "./initScreen";
+import { applyStoredColorTheme } from "@/theme/colorTheme";
+import { localSettingStorageKey } from "@/stores/settingsDescriptors";
 
 if (IS_ANDROID) {
   document.documentElement.classList.add("platform-android");
 }
+
+// 颜色主题先于启动页应用，之后由 App.vue 跟随设置
+applyStoredColorTheme(localSettingStorageKey("colorTheme"));
 
 const describeError = (error: unknown) =>
   error instanceof Error ? `${error.message}\n${error.stack ?? ""}`.trim() : String(error);

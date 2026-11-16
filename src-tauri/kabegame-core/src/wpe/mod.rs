@@ -10,6 +10,7 @@
 pub mod dir_hash;
 #[cfg(feature = "wpe")]
 pub mod discover;
+pub mod fps;
 #[cfg(feature = "wpe")]
 pub mod locale;
 pub mod preview_settings;

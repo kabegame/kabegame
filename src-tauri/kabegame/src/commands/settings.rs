@@ -129,6 +129,12 @@ pub fn get_wpe_scene_volumetrics() -> String {
     Settings::global().get_wpe_scene_volumetrics()
 }
 
+/// 桌面 WPE 壁纸的帧率设置：整数或 `"follow"`（未解析）。
+#[tauri::command]
+pub fn get_wpe_fps() -> serde_json::Value {
+    Settings::global().get_wpe_fps().to_json()
+}
+
 #[tauri::command]
 pub fn get_default_download_dir() -> Option<String> {
     Settings::global().get_default_download_dir()
@@ -495,6 +501,13 @@ pub fn set_wpe_scene_shadows(value: String) -> Result<(), String> {
 #[tauri::command]
 pub fn set_wpe_scene_volumetrics(value: String) -> Result<(), String> {
     Settings::global().set_wpe_scene_volumetrics(value)
+}
+
+/// 桌面 WPE 壁纸的帧率：写设置并广播 `setting-change`；壁纸窗口里的垫片据此重拉状态，把解析后的帧率经
+/// `applyGeneralProperties` 交给网页壁纸与场景宿主，场景就地改限帧、不重新加载。
+#[tauri::command]
+pub fn set_wpe_fps(value: serde_json::Value) -> Result<(), String> {
+    Settings::global().set_wpe_fps(&value)
 }
 
 /// 暂停桌面上的壁纸：壁纸窗口经 `setting-change` 收到，只对网页与场景生效；暂停期间桌面鼠标也不再注入壁纸

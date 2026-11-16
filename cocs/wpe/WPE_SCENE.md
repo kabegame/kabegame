@@ -377,6 +377,17 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 画到场景目标的 pass 不写 alpha（LWE 最后一个 pass 前 `glColorMask(…, false)`），场景 alpha 一直是清屏时的 1；画进合成 RT / fbo 的 pass 写四通道，合成链带着 alpha 走到上屏。
   - 组里例外（P5b）：子孙「画到场景」的绘制落在组的合成 RT 里，直接画的写 RGBA，组 `copybackground: false` 时 alpha 用 One / One / Max，见「图像模型标志（P5b）」的「组」。
 
+### 帧率（2026-11-16）
+
+设置「帧率」（桌面全局键 `wpeFps`，预览与应用背景是每张壁纸的 `previewSettings.fps`；整数或 `"follow"`，默认 30）限制场景宿主的帧循环，也推给网页壁纸。
+
+- **范围**：同 WPE 设置界面的帧率滑块，10 到显示器最高刷新率（`runtime.frequencymax`，rea-wpe-settings.md）。上限由 `get_display_max_refresh_rate` 现查（macOS `NSScreen.maximumFramesPerSecond`，Windows `EnumDisplaySettingsW` 的当前模式，取所有在线屏的最大值；Linux 取不到按 60），只用于界面；存储层只钳 [10, 1000]（`kabegame_core::wpe::fps`）。
+- **生效值只在 Rust 算一次**：`wpe_web_pull_state` 按调用方窗口取设置（壁纸窗口取全局，主窗口取这张图的预览设置，同媒体集成的分流），`"follow"` 解析成 WPE `config.json` 的 `general.user.fps`（缺键按 WPE 的缺省 15；跟随不可用时 30），放进 `general.fps`。垫片照 WPE 网页壁纸协议调 `applyGeneralProperties(general)`，场景宿主在 `main.ts` 的 `wallpaperPropertyListener` 上接同一个回调，所以帧率不走父页面的场景设置消息。
+- **跟随只读一次**：`config.json` 第一次读成功后缓存到进程退出（WPE 自己也只在启动时读它），文件不存在时不缓存。
+- **改值就地生效**：桌面改全局键 → `setting-change` 带 `wpeFps` → 垫片重拉；预览改设置 → `metadataId` 补丁 → 垫片重拉；`general` 变了才回调。宿主 `setGeneral` → `SceneRenderer.setMaxFps`：节流器改上限，`GpuScene.setFrameRate` 改粒子 operator 遍数（1–20 两遍，`particlePasses`）与 rope 读的 `fps`，下一帧生效，不重新加载、不重新预热（预热固定一遍，drag 用实际帧时间，切遍数没有残留状态）。`load` 在 `await GpuScene.build` 期间收到的新值，换上新场景前补设一次。WPE 运行中改 fps 也是就地推给场景（0x467 → +0x18c）；粒子遍数是否同样当帧切换没有实测【推】。
+- **高于刷新率**：rAF 按刷新率回调，实际帧率封顶在刷新率；粒子遍数与 rope 的 `min(fps, R)` 仍按设置值算，与 WPE 读设置一致。
+- **随帧率变化的行为**：`engine.frametime` / `runtime`、`engine.setInterval` 的节拍、视频纹理「30 个渲染帧没画到就暂停」都按渲染帧走，限帧后自然跟着变，与 WPE 相同。场景脚本的 `applyGeneralSettings` 在 WPE 的声明里只带 `language`（`lib.sceneScript.d.ts`），与帧率无关。
+
 ### 图层渲染图（`graph.ts` + `scene.ts`，P2a）
 
 依据 WPE 2.8.42 的只读逆向（p2-REPORT B5–B8、PLAN P2a；与 LWE 冲突时以 WPE 为准）。`planLayer(layer, textures)` 是纯函数，把一个图层排成步骤；`GpuScene` 照步骤建资源、逐帧编码。

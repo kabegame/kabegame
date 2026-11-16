@@ -18,6 +18,7 @@ import {
   WPE_SETTING_DEFAULTS,
   WPE_SETTING_GLOBAL_KEYS,
   WPE_SETTING_KEYS,
+  wpeFpsValueOf,
   type WpeSettingKey,
   type WpeSettingValues,
 } from "@/utils/wpeSettings";
@@ -45,6 +46,8 @@ const values = computed<WpeSettingValues>(() => {
     volume: read("volume"),
     playbackRate: read("playbackRate"),
     mediaIntegration: read("mediaIntegration"),
+    // 帧率是数值或 `follow`，上面按默认值类型比较的读法会把 `follow` 当非法，单独读
+    fps: wpeFpsValueOf(states.fps.settingValue.value),
     postprocess: read("postprocess"),
     reflection: read("reflection"),
     shadows: read("shadows"),

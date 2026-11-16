@@ -529,14 +529,30 @@ async fn insert_wpe_row(
         .insert_metadata_row(&project.raw, WPE_IMPORT_PLUGIN_ID, 0, None, None)
         .map_err(|e| format!("写入 metadata 失败：{e}"))?;
 
-    let thumbnail_path = project
-        .preview_path()
-        .map(|path| {
-            path.to_string_lossy()
-                .trim_start_matches("\\\\?\\")
-                .to_string()
-        })
-        .unwrap_or_default();
+    // 视频壁纸的缩略图同普通视频：入口视频（或兼容副本）的首帧，网格悬浮时再播视频；解不出来时退回作者的
+    // preview.*。网页 / 场景用作者的 preview.*（可换成自定义封面）。
+    let frame_thumbnail = match (project.kind, compatible_path.as_deref()) {
+        (WpeKind::Video, Some(video)) => {
+            match crate::crawler::downloader::compress::generate_video_thumbnail(video).await {
+                Ok(path) => Some(path.to_string_lossy().into_owned()),
+                Err(error) => {
+                    tracing::warn!("WPE 视频壁纸首帧缩略图生成失败，用作者预览图: {error}");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+    let thumbnail_path = frame_thumbnail.clone().unwrap_or_else(|| {
+        project
+            .preview_path()
+            .map(|path| {
+                path.to_string_lossy()
+                    .trim_start_matches("\\\\?\\")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    });
     let crawled_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -595,6 +611,9 @@ async fn insert_wpe_row(
         Ok(inserted) => inserted,
         Err(error) => {
             let _ = storage.gc_metadata(&[metadata_id]);
+            if let Some(frame) = &frame_thumbnail {
+                let _ = std::fs::remove_file(frame);
+            }
             // local_path 有唯一约束：另一个入口（文件夹同步 / 并发任务）抢先写了同一个目录
             return match Storage::find_image_by_path(&dir_string).ok().flatten() {
                 Some(existing) => finish_existing(opts, project, existing).await,

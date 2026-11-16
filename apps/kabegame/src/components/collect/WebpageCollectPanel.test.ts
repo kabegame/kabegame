@@ -3,7 +3,7 @@ import { shallowMount } from "@vue/test-utils";
 import { createPinia } from "pinia";
 import { nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import WebpageCollectDialog from "./WebpageCollectDialog.vue";
+import WebpageCollectPanel from "./WebpageCollectPanel.vue";
 
 const env = vi.hoisted(() => ({ android: false }));
 const enqueueTask = vi.hoisted(() => vi.fn(async (_params: Record<string, any>) => true));
@@ -72,8 +72,9 @@ async function open(initialConfig?: {
   httpHeaders?: Record<string, string>;
   outputAlbumId?: string | null;
 }): Promise<Exposed> {
-  const wrapper = shallowMount(WebpageCollectDialog, {
-    props: { modelValue: true, initialConfig },
+  // 面板每次打开都重新挂载，挂载即「打开」
+  const wrapper = shallowMount(WebpageCollectPanel, {
+    props: { initialConfig },
     global: { plugins: [createPinia()], mocks: { $t: (key: string) => key } },
   });
   wrappers.push(wrapper);
@@ -89,7 +90,7 @@ afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
 });
 
-describe("WebpageCollectDialog", () => {
+describe("WebpageCollectPanel", () => {
   it("fills url, vars, and headers from initialConfig when opened", async () => {
     const vm = await open({
       userConfig: {
@@ -137,6 +138,7 @@ describe("WebpageCollectDialog", () => {
         triggerSource: "manual",
       }),
     );
+    expect(wrappers.at(-1)!.emitted("done")).toHaveLength(1);
   });
 
   it("forces empty headers and drops V8-only switches for WebView tasks", async () => {
@@ -153,12 +155,13 @@ describe("WebpageCollectDialog", () => {
     expect(params.userConfig).toEqual({ url: "https://example.com/", backend: "webview" });
   });
 
-  it("keeps the dialog and shows the reason for an invalid URL", async () => {
+  it("does not finish and shows the reason for an invalid URL", async () => {
     const vm = await open();
     vm.form.url = "https://user:pw@example.com/";
     await vm.handleSubmit();
     expect(enqueueTask).not.toHaveBeenCalled();
     expect(vm.urlError).toBe("credentials");
+    expect(wrappers.at(-1)!.emitted("done")).toBeUndefined();
   });
 
   it("keeps the WebView backend and V8 switches on Android", async () => {

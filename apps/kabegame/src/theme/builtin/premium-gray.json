@@ -1,0 +1,20 @@
+{
+  "id": "premium-gray",
+  "name": {
+    "default": "Premium Gray",
+    "zh": "高级灰",
+    "zhtw": "高級灰",
+    "en": "Premium Gray",
+    "ja": "上品グレー",
+    "ko": "고급 그레이"
+  },
+  "vars": {
+    "--kb-primary": "#56657a",
+    "--kb-primary-hover": "#465365",
+    "--kb-secondary": "#c9a27a",
+    "--kb-fg": "#22262c",
+    "--kb-fg-regular": "#3b414a",
+    "--kb-fg-muted": "#866848",
+    "--kb-fg-subtle": "#b8a48b"
+  }
+}

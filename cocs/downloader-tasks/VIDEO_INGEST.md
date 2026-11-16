@@ -2,9 +2,13 @@
 
 ## 背景
 
-视频下载/导入需要生成预览缩略图并读取视频宽高。**桌面（Windows/macOS/Linux）与 Android 都用进程内 FFmpeg（rsmpeg/libav\*）**，但预览格式不同：
-- **桌面**：H.264 MP4 预览缩略图（网格用 `<video>`，鼠标悬浮自动播放）+ H.264/AAC MP4 兼容副本。
-- **Android**：**10fps 动图 GIF 预览**（`run_ffmpeg_gif`：`fps=10,scale,palettegen,paletteuse`）。安卓网格无鼠标悬浮，静帧 `<video>` 无意义，故用动图，前端以 `<img>` 展示（`ImageContent.vue` 的 `mode==='gif'`）。Android 不生成兼容副本。
+视频下载/导入需要生成缩略图并读取视频宽高。**桌面（Windows/macOS/Linux）与 Android 都用进程内 FFmpeg（rsmpeg/libav\*）**：
+- **桌面**：**首帧 JPEG** 缩略图（`generate_video_thumbnail`：`media::decode::decode_first_video_frame` 解第一帧、等比缩到最长边 512，`image` crate 编 JPEG，写进 `thumbnails_dir`）+ H.264/AAC MP4 兼容副本。网格只显示这张静图，悬浮时 `ImageContent.vue` 的 `poster` 形态才在静图上挂原视频（`compatible_path` → `local_path`），停了就卸载，网格里不常驻 `<video>`。`x-wpe/video` 同样取 `compatible_path` 的首帧，解不出退回作者 `preview.*`。
+- **Android**：**10fps 动图 GIF 缩略图**（`generate_video_thumbnail` 的 Android 版 → `run_ffmpeg_gif`：`fps=10,scale,palettegen,paletteuse`）。安卓网格无鼠标悬浮，故用动图，前端以 `<img>` 展示（`ImageContent.vue` 的 `mode==='gif'`），角标只作静态指示。Android 不生成兼容副本。
+
+预览的右键菜单「设为壁纸封面」（只在桌面，普通视频与 `x-wpe/video`）：前端把 `<video>.currentTime` 交给 `set_video_cover`，后端 `generate_video_cover` → `decode_video_frame_at` 从视频文件解出那一刻显示的帧（seek 到之前的关键帧再逐帧解到越过它，越过末尾取最后一帧；普通视频先读原文件、失败再读兼容副本，WPE 读 `compatible_path`），换 `thumbnail_path` 并发补丁。封面和首帧同是 `thumbnails_dir` 里的 jpg，回填与整理不会换掉它。`ImageContent` 的视频形态在缩略图不是短片时不让 `thumbnailPath` 参与重置，预览里设封面不会重载正在播的视频。
+
+桌面旧版本的缩略图是 2.5 s H.264 MP4 短片（`run_ffmpeg_transcode`，已删除）。v053 登记的回填作业 `video_thumbnail_frame` 把桌面存量换成首帧并删掉 `thumbnails_dir` 里的旧文件（`x-wpe/video` 的作者 `preview.*` 不删；Android 上一批空跑完）；前端按缩略图本身决定放什么（是图走 `poster`，是 mp4 或就是原视频走视频形态），回填期间两种并存也能显示。整理的「重新生成缩略图」把不是当前形态的视频缩略图当作需要重做（`is_current_video_thumbnail`：桌面 `.jpg`、Android `.gif`）。
 
 此前 Android 走的慢速 Kotlin 编码插件（`tauri-plugin-compress`：`MediaMetadataRetriever` 抽帧 + Rust `image` crate GIF 编码）已删除，改由 rsmpeg 一步生成 GIF。
 
@@ -18,9 +22,9 @@ Android 视频源是 `content://` URI，FFmpeg 无法直接打开。改由 `Cont
 
 | 构建目标 | 视频实现 |
 |---------|---------|
-| Windows/macOS/Linux standard desktop | rsmpeg/FFmpeg（本机静态库 `bin/{platform}/{arch}/FFmpeg-build/install/`）；兼容副本 H.264/AAC MP4，预览 H.264 MP4 |
+| Windows/macOS/Linux standard desktop | rsmpeg/FFmpeg（本机静态库 `bin/{platform}/{arch}/FFmpeg-build/install/`）；兼容副本 H.264/AAC MP4，缩略图首帧 JPEG |
 | kabegame-cli | rsmpeg/FFmpeg（同桌面） |
-| Android（aarch64） | rsmpeg/FFmpeg（交叉编译静态库 `bin/android/arm64/FFmpeg-build/install/`，含 gif 编码器/muxer + palettegen/paletteuse/fps 滤镜）；预览为 **10fps GIF**（`run_ffmpeg_gif`），`content://` 经 `open_fd` → `/proc/self/fd/N` 读取。视频**宽高**仍由 `ContentIoProvider.get_video_dimensions`（Kotlin `MediaMetadataRetriever`）提供 |
+| Android（aarch64） | rsmpeg/FFmpeg（交叉编译静态库 `bin/android/arm64/FFmpeg-build/install/`，含 gif 编码器/muxer + palettegen/paletteuse/fps 滤镜）；缩略图为 **10fps GIF**（`run_ffmpeg_gif`），`content://` 经 `open_fd` → `/proc/self/fd/N` 读取。视频**宽高**仍由 `ContentIoProvider.get_video_dimensions`（Kotlin `MediaMetadataRetriever`）提供 |
 
 依赖门控（[../../src-tauri/kabegame-core/Cargo.toml](../../src-tauri/kabegame-core/Cargo.toml)）：`rsmpeg`/`rusty_ffmpeg` 现在 `cfg(not(target_os = "ios"))`（桌面 + Android，仅排除 iOS），与 V8/deno 同块。
 
@@ -32,20 +36,22 @@ Android 视频源是 `content://` URI，FFmpeg 无法直接打开。改由 `Cont
 |------|------|
 | `scripts/build-ffmpeg.ts` | 三平台本机 + `--target android` 交叉编译。Android 用环境 NDK（`NDK_HOME` 等定位）编 x264 + FFmpeg 到独立 abi 目录；`--enable-protocol=fd` 供 fd 读取。 |
 | `scripts/plugins/mode-plugin.ts` | 桌面注入 `FFMPEG_PKG_CONFIG_PATH`（+ Windows 复制 DLL）。**Android 现也注入** `FFMPEG_PKG_CONFIG_PATH`（指向 android install）、`FFMPEG_LINK_MODE=static`、`BINDGEN_EXTRA_CLANG_ARGS`（NDK sysroot + target）、`PKG_CONFIG_ALLOW_CROSS=1`、以及 NDK 交叉 linker/CC/CXX/AR（供 `check --mode android` 独立 `cargo check`）。 |
-| `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 桌面（`#[cfg(not(android))]`）：`run_ffmpeg_transcode` / `filter_encode_write` / `generate_video_preview_from_path` 产 H.264 MP4，`compress_video_for_preview(&Path)` 直调。Android：`compress_video_for_preview(&str uri)` 经 `open_fd` → `/proc/self/fd/N` → `run_ffmpeg_gif`（`#[cfg(android)]`）产 10fps GIF。`encode_write` 两侧共用。 |
+| `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | `generate_video_thumbnail(&str)`：桌面传文件路径，解首帧编 JPEG；Android 传 `content://` URI，经 `open_fd` → `/proc/self/fd/N` → `run_ffmpeg_gif` 产 10fps GIF。`is_current_video_thumbnail` 判断缩略图是不是当前形态。`encode_write` 两侧共用（桌面兼容视频转码与 Android GIF）。 |
 | `src-tauri/kabegame-core/src/crawler/content_io.rs` | `ContentIoProvider` 新增 `open_fd(uri) -> i32`。 |
 | `src-tauri/kabegame/src/content_io_provider.rs` | Channel 代理新增 `OpenFd` 请求/响应，转发到 PickerPlugin `open_fd`。 |
 | `src-tauri/tauri-plugin-picker/**` | 新增 `openFd` 命令（models/commands/mobile/lib/build/permissions + Kotlin `openFd` = `openFileDescriptor().detachFd()`）。 |
 | `src-tauri/kabegame-core/src/media/dimensions.rs` | 桌面 `resolve_video_dimensions_sync` 用 rsmpeg 读 codecpar；Android 同步 stub 返回 `None`，`content://` 视频宽高由 async `ContentIoProvider.get_video_dimensions` 提供。 |
-| `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | 下载入库 postprocess：Android content URI 视频把 URI 传给 `compress_video_for_preview`；桌面直接传文件路径。 |
-| `src-tauri/kabegame-core/src/storage/organize.rs` | `RegenerateVideo` 缩略图重建同样按平台分流调 `compress_video_for_preview`。 |
-| `src-tauri/kabegame-core/src/local_folder/import.rs` | 桌面本地导入生成 rsmpeg 预览；Android 本地导入 `build_thumbnail_path` 仍为 stub（不生成视频预览，未在本次扩展范围）。 |
+| `src-tauri/kabegame-core/src/crawler/downloader/mod.rs` | 下载入库 postprocess：Android content URI 视频把 URI 传给 `generate_video_thumbnail`；桌面直接传文件路径。 |
+| `src-tauri/kabegame-core/src/storage/organize.rs` | `RegenerateVideo`：缩略图缺失、等于原文件或不是当前形态（桌面的旧 mp4）时调 `generate_video_thumbnail` 重做。 |
+| `src-tauri/kabegame-core/src/storage/migrations/backfills/video_thumbnail_frame.rs` | 回填作业（只在桌面）：存量视频与 WPE 视频的缩略图换成首帧，写回带旧值做条件，提交后删旧文件（只删 `thumbnails_dir` 内）。 |
+| `src-tauri/kabegame-core/src/crawler/wpe_import.rs` | `x-wpe/video` 入库时取 `compatible_path` 的首帧作缩略图，解不出退回作者 `preview.*`。 |
+| `src-tauri/kabegame-core/src/local_folder/import.rs` | 桌面本地导入生成首帧缩略图；Android 本地导入 `build_thumbnail_path` 仍为 stub（不生成视频预览，未在本次扩展范围）。 |
 | ~~`src-tauri/kabegame/src/compress_provider.rs`~~ | 已删除（原 Android Kotlin provider bridge）。 |
 | ~~`tauri-plugin-compress`~~ | 整个插件已删除（原 Kotlin 抽帧/字节拷贝 + 权限 + 注册）。 |
 
 ## 调用规则
 
-1. 新增视频处理调用点：桌面传文件路径；Android 传 `content://` URI，由 `compress_video_for_preview` 内部经 `open_fd` → `/proc/self/fd/N` 解析。桌面兼容副本 H.264/AAC MP4、预览 H.264 MP4；Android 无兼容副本、预览为 10fps GIF。
+1. 新增视频处理调用点：桌面传文件路径；Android 传 `content://` URI，由 `generate_video_thumbnail` 内部经 `open_fd` → `/proc/self/fd/N` 解析。桌面缩略图首帧 JPEG、兼容副本 H.264/AAC MP4；Android 缩略图 10fps GIF、无兼容副本。
 2. “补充兼容格式”只补缺失的 `compatible_path`。已有兼容副本不做平台迁移式重建。
 3. 不要新增 `video` / `video-ingest` Cargo feature gate。视频能力不是构建模式开关。
 4. Android 视频**预览/兼容处理**现在直接用 rsmpeg；但读取 `content://` 必须经 `open_fd` 拿 fd，不要把 URI 当普通文件路径，也不要先整段落盘。视频**宽高**仍走 `ContentIoProvider.get_video_dimensions`（`MediaMetadataRetriever`，快，非编码插件）。
@@ -55,7 +61,7 @@ Android 视频源是 `content://` URI，FFmpeg 无法直接打开。改由 `Cont
 
 画廊展示已存入 DB 的视频无需 FFmpeg：
 - `isVideoBackground` / `isVideoMediaType`：检查 `image.type.startsWith("video/")`。
-- `<video>` 元素直接加载 `local_path` 或 thumbnail，播放不经过 rsmpeg。
+- 桌面网格平时只显示缩略图（`<img>`），悬浮 / 点角标时才挂 `<video>` 加载 `compatible_path` 或 `local_path`；缩略图是旧 mp4 短片时照旧当视频放。Android 网格显示 GIF。播放不经过 rsmpeg。
 
 ## FFmpeg 构建依赖
 

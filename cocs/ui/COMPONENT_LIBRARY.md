@@ -23,7 +23,7 @@ token map、`el-` 前缀、`KbTab` / `KbFilterDropdown` 放进 vendored 包等�
 ## 组件与约定
 
 目标观感是「中性外框 + 一个强调色」的简约风（参照 ChatGPT / Claude 一类应用）。壁纸本身是彩色的，
-外框越中性，图越突出；强调色（`--anime-primary` 的粉）只留给选中、焦点、计数。
+外框越中性，图越突出；强调色（`--kb-primary`，默认主题是粉）只留给选中、焦点、计数。
 
 **三层分工**
 
@@ -171,12 +171,28 @@ token map、`el-` 前缀、`KbTab` / `KbFilterDropdown` 放进 vendored 包等�
   `touch apps/kabegame/uno.config.ts` 即可；改 `bootstrap/app.ts`（如新增全局 css）要整页刷新。
 
 **token 方向**：
-- **`tokens.css`** 是唯一来源：中性色（文字 `--kb-fg` / `-muted` / `-subtle` / `-regular`、底、线、填充）是新值；
-  `--kb-accent` / `--kb-danger` / `--kb-success` / `--kb-warning` / `--kb-ring` 挂在 `--anime-*` 品牌色上，插件详情运行时
-  局部改写 `--anime-*` 换肤仍能波及。主操作是墨色 `--kb-primary`。
-- **旧主题变量**：`anime-theme.css` 里中性的 `--anime-*`（文字、边框、底色、阴影）指向 `--kb-*`，业务 scoped 样式里残留的
-  `--anime-*` 因此也是中性外观；品牌色 `--anime-primary` / `--anime-secondary` 不变。新代码直接用 `--kb-*` / `kb` 色板。
-- 插件描述给模板 iframe 注入的 `--anime-*` 五个变量是插件约定，名字不改、取值来自 `--kb-*`。
+- **`tokens.css`** 是唯一来源，`:root` 上的值就是默认主题「动漫粉」。颜色分两条线：**主色** `--kb-primary`（主操作、选中、
+  焦点、强调）与**点缀色** `--kb-secondary`（第二个色相）。基色只有这两条线加四档文字，其余按固定关系推出：
+  - 填充 `--kb-fill-lighter` / `-light` / 本身 / `-dark` 是主色混白 4% / 7% / 11% / 18% 的四阶；
+  - 浅阶 `--kb-primary-soft` / `--kb-secondary-soft`（不透明，选中项、标签的浅底）；
+  - 渐变 `--kb-gradient`（主色 → 点缀色，主按钮、计数徽标）、`--kb-gradient-hover`、`--kb-gradient-soft`（两个浅阶，侧栏选中项）；
+  - 页面底 / 侧栏底是主色浅阶 → 点缀色浅阶的渐变；悬停 / 按下 / 分隔线 / 焦点环是主色加透明度，阴影描边用主色、投影用压暗的点缀色。
+  
+  说明文字与图标（`--kb-fg-muted` / `-subtle`）取点缀色的色相，正文取深色：这样每个主题天然有两个色相，不会整片同色
+  （第一版只有主色一条线，高级灰整片发灰，像色盲模式）。UnoCSS：`bg-kb-primary-soft`、`bg-kb-secondary(-soft)`，渐变是
+  `bg-kb-gradient` / `bg-kb-gradient-hover` / `bg-kb-gradient-soft`（`background-image`，和 `bg-kb-primary` 底色叠用，底色兜底）。
+  状态色 `--kb-danger` / `--kb-success` / `--kb-warning` 是定值、不归主题管。新加的颜色 token 若要跟主题，也从这两条线推。
+- **`--anime-*` 已下线**（2026-11-16）：品牌色、状态色改成直接定义的 `--kb-*`，残留引用全部迁走，`anime-theme.css` 只剩全局规则。
+  不要再写 `--anime-*`。唯一例外是插件描述给模板 iframe 注入的五个 `--anime-*`：插件模板约定，名字不改、取值来自 `--kb-*`。
+- **颜色主题**（设置「外观 → 颜色主题」，`src/theme/`）：一个主题是一份 JSON（`builtin/*.json`：`id`、多语言 `name`
+  `{ default, zh, … }`、`vars`），`vars` 只能写 `THEME_VARIABLES` 白名单里的 `--kb-*`（必填 7 个：主色与悬停、点缀色、
+  四档文字；派生 token 可选覆盖），
+  校验口是 `parseColorTheme`。`applyColorTheme` 把 `vars` 写到 `<html>` 的行内样式上（并标 `data-kb-theme`），换主题时先清掉
+  上一个主题写的键；主窗口 bootstrap 先按 localStorage 里存的值应用一次（启动页也换肤），之后 `App.vue` 跟随设置
+  `colorTheme`（localStorage 后端，跨窗口经 storage 事件同步）。壁纸窗口不应用主题（只用到加载进度的颜色）。
+  目前只有五个内置主题，都是浅色调，主色 → 点缀色分别是：清爽蓝（天蓝 → 薄荷青）、动漫粉（粉 → 紫）、高级灰
+  （石板蓝灰 → 香槟金）、清新绿（绿 → 暖阳黄）、优雅紫（紫 → 天蓝）；设置里的色样就是这条渐变。新增主题只加一份 JSON 并登记进
+  `BUILTIN_COLOR_THEMES`，`colorTheme.test.ts` 会检查基色与五种语言的名字。
 
 **层级**（`components/ui/layer.ts`）：
 

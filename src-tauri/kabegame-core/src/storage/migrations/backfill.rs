@@ -188,6 +188,7 @@ impl<'a> BackfillCtx<'a> {
 const BACKFILLS: &[Backfill] = &[
     super::backfills::wpe_dir_hash::JOB,
     super::backfills::image_palette::JOB,
+    super::backfills::video_thumbnail_frame::JOB,
 ];
 
 pub(crate) fn registry() -> &'static [Backfill] {

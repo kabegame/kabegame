@@ -372,7 +372,8 @@ export type ParticleDrawnCallback = (
 export class ParticleSystem {
   readonly def: SceneParticle;
   readonly columns: ParticleColumns;
-  readonly passes: 1 | 2;
+  /** operator 遍数（`particlePasses(帧上限)`）：帧率设置运行中改了经 `setPasses` 换，预热固定 1 遍、不读它。 */
+  passes: 1 | 2;
   /** 槽号上界（只增不减，循环上界）。 */
   highWater = 0;
   /** 存活数。 */
@@ -623,6 +624,16 @@ export class ParticleSystem {
     this.context.audio = audio;
     for (const child of this.statics) child.system.setAudio(audio);
     for (const pool of this.events) for (const instance of [...pool.active, ...pool.free]) instance.setAudio(audio);
+  }
+
+  /**
+   * 换 operator 遍数（帧率设置运行中改了，`GpuScene.setFrameRate`）：整棵树（static 子孙、各池的活跃与空闲实例）一起换，之后新建的
+   * 实例从父上取（构造时）。下一次 `step` 起生效；遍数只决定一帧里 operator 分几段积分，系统不为它存别的状态，中途切换没有残留。
+   */
+  setPasses(passes: 1 | 2): void {
+    this.passes = passes;
+    for (const child of this.statics) child.system.setPasses(passes);
+    for (const pool of this.events) for (const instance of [...pool.active, ...pool.free]) instance.setPasses(passes);
   }
 
   /** 有子系统（static 或事件条目）：不可见时也要每帧步进子孙（3.6），渲染器据此每帧重写顶点。 */

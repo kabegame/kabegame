@@ -34,7 +34,7 @@ JS 爬虫与畅游窗口对 `data:`、普通 `blob:` 和 MSE `blob:` 使用通�
 | `src-tauri/kabegame-core/src/crawler/downloader/http.rs` | HTTP/HTTPS scheme downloader；响应流读取写入 `DownloadSink`、Range 续传、进度快照、请求头处理 |
 | `src-tauri/kabegame-core/src/crawler/downloader/task_vfs.rs` | `task-vfs://` scheme downloader；校验当前任务 handle 后从 `PluginVfs` 分块读取并写入 `DownloadSink`；`resolve_relocate_source` 为 `relocate` 下载把 VFS 路径解析成宿主路径 |
 | `src-tauri/kabegame-core/src/crawler/downloader/content.rs` | Android-only `content://` scheme downloader；从 ContentResolver 读取 bytes 写入 `DownloadSink` |
-| `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频预览压缩、缩略图尺寸策略 |
+| `src-tauri/kabegame-core/src/crawler/downloader/compress.rs` | 图片缩略图、视频缩略图（桌面首帧 / Android GIF）、缩略图尺寸策略 |
 | `src-tauri/kabegame-core/src/crawler/downloader/util.rs` | 安全文件名、唯一下载路径、hash、MIME/文件名辅助；整目录搬运 `move_dir_unique` / `copy_dir_unique` |
 | `src-tauri/kabegame-core/src/crawler/wpe_import.rs`、`src-tauri/kabegame-core/src/wpe/dir_hash.rs` | 后处理目录分支的实际入库函数 `ingest_wpe_dir`（`wpe` feature）；目录哈希 |
 | `src-tauri/kabegame-core/src/storage/source_purge.rs`、`safe_delete.rs` | 图库源文件清除唯一入口；桌面回收站护栏、分块与逐条降级；Android MediaStore / 普通路径分流 |
@@ -406,7 +406,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 - 库内的最终命名与冲突处理交给 Android 系统；`get_display_name(uri)` 取回系统去重后的真实名。
 - hash 去重发生在复制（写临时文件）之前，避免给系统媒体库制造重复项。
 - 图片缩略图：`Bytes` 源直接从内存字节生成（最可靠）；`Path` 源（溢写文件已删除）改用 `get_image_thumbnail(content_uri)` 取系统缩略图，失败回退 `None`。
-- 视频预览：必须在复制进库**之后**，用 content URI 走 Kotlin provider 的 `compress_video_for_preview(uri)` 生成（Android 版只接受 content URI，不接受文件路径）。
+- 视频缩略图（10fps GIF）：必须在复制进库**之后**，用 content URI 调 `generate_video_thumbnail(uri)`（Android 版只接受 content URI，内部经 `open_fd` → `/proc/self/fd/N` 交给 FFmpeg）。
 - 宽高：图片/视频均通过 content URI 由 `get_image_dimensions` / `get_video_dimensions` 解析（图片侧有 `BitmapFactory` 兜底，刚插入即可解码）。大小优先用 `Bytes` 长度，否则 `get_content_size(uri)`。
 - 入库后 `images.local_path` 存最终 content URI，`images.url` 仍存原始下载 URL（`url.scheme()=="content"` 的本地导入才置空），缩略图仍是本地路径。
 - `ContentUri` 源（本地 `content://` 导入）跳过复制：`local_path` 即原 URI。

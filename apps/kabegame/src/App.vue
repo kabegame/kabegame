@@ -123,13 +123,8 @@
   <AutoConfigDialog />
   <OrganizeDialog v-model="organizeDialogOpen" @confirm="handleOrganizeConfirm" />
   <AppLogDialog />
-  <CrawlerDialog v-model="crawlerDrawerVisible" />
-  <WebpageCollectDialog v-if="!IS_WEB" v-model="webpageVisible" :initial-config="webpageInitial" />
-  <LocalImportDialog
-    v-if="!IS_WEB && !uiStore.isCompact"
-    v-model="localImportVisible"
-    :initial-config="localImportInitial"
-  />
+  <!-- 收集入口（「本地」「网络」对话框、选择层、紧凑档媒体选择器），全局唯一，经 collectDialogs store 打开 -->
+  <CollectEntryHost />
   <MissedRunsDialog
     :open="missedRunsModal.isOpen.value"
     :items="missedRunItems"
@@ -158,14 +153,10 @@ import { registerHeaderFeatures } from "@/header/headerFeatures";
 import GlobalToolsPopover from "@/header/comps/GlobalToolsPopover.vue";
 import TaskDrawer from "./components/TaskDrawer.vue";
 import { useTaskDrawerStore } from "./stores/taskDrawer";
-import { useCrawlerDrawerStore } from "./stores/crawlerDrawer";
-import { useCollectDialogsStore } from "./stores/collectDialogs";
 import { storeToRefs } from "pinia";
 import FileDropOverlay from "./components/FileDropOverlay.vue";
 import PluginImportDialog from "./components/import/PluginImportDialog.vue";
-import CrawlerDialog from "./components/CrawlerDialog.vue";
-import WebpageCollectDialog from "./components/WebpageCollectDialog.vue";
-import LocalImportDialog from "./components/LocalImportDialog.vue";
+import CollectEntryHost from "./components/collect/CollectEntryHost.vue";
 import MissedRunsDialog from "./components/scheduler/MissedRunsDialog.vue";
 import AutoConfigDialog from "./components/scheduler/AutoConfigDialog.vue";
 import OrganizeDialog from "./components/OrganizeDialog.vue";
@@ -190,6 +181,7 @@ import { useDownloadStateStore } from "./stores/downloadState";
 import { useRoute, useRouter } from "vue-router";
 import { useModalStackStore } from "@/stores/modalStack";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
+import { applyColorTheme } from "@/theme/colorTheme";
 import { useWallpaperTarget } from "@/composables/useWallpaperTarget";
 import { useWpePreviewPlayback } from "@/composables/useWpePreviewPlayback";
 import { kbFilterDropdownContextKey } from "@/components/ui/filterDropdown";
@@ -267,12 +259,12 @@ const sideNavItems = computed(() => {
   return items;
 });
 
-// 侧栏图标项：40px 方块，悬停浅灰底，选中是白底小卡片 + 强调色图标（侧栏底是浅灰，白卡片自然浮起）
+// 侧栏图标项：40px 方块，悬停浅底，选中是主色 → 点缀色的浅渐变小卡片 + 强调色图标
 const SIDEBAR_ITEM =
   "relative box-border grid size-10 flex-none cursor-pointer place-items-center rounded-kb-md border-0 bg-transparent p-0 " +
   "text-kb-fg-muted no-underline outline-none transition-[background-color,color,box-shadow] duration-150 " +
   "hover:bg-kb-hover hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring [&_svg]:size-5";
-const SIDEBAR_ITEM_ACTIVE = "!bg-kb-surface-raised !text-kb-fg shadow-kb-md [&_svg]:text-kb-accent";
+const SIDEBAR_ITEM_ACTIVE = "!bg-kb-surface-raised bg-kb-gradient-soft !text-kb-fg shadow-kb-md [&_svg]:text-kb-accent";
 
 // 任务抽屉 store
 const taskDrawerStore = useTaskDrawerStore();
@@ -294,10 +286,6 @@ const openSettingsEntry = () => {
 useGlobalShortcuts({ openSettings: openSettingsEntry });
 
 // 全局导入弹窗 store
-const crawlerDrawerStore = useCrawlerDrawerStore();
-const { visible: crawlerDrawerVisible } = storeToRefs(crawlerDrawerStore);
-const collectDialogsStore = useCollectDialogsStore();
-const { webpageVisible, webpageInitial, localImportVisible, localImportInitial } = storeToRefs(collectDialogsStore);
 const organizeStore = useOrganizeStore();
 const { dialogOpen: organizeDialogOpen } = storeToRefs(organizeStore);
 
@@ -366,6 +354,11 @@ provide(kbFilterDropdownContextKey, {
   panelMode: computed(() => (uiStore.isCompact ? "dialog" : "popover")),
 });
 const settingsStore = useSettingsStore();
+// 颜色主题：启动时 bootstrap 已按存储值应用过一次，这里跟随设置（含其它窗口改动经 storage 事件同步过来）
+watch(
+  () => settingsStore.values.colorTheme,
+  (id) => applyColorTheme(id),
+);
 type BgMediaType = "image" | "video";
 
 const bgImage = ref<ImageInfo | null>(null);

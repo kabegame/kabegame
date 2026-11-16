@@ -244,12 +244,12 @@ function handleReset() {
   transition: background-color 0.15s ease;
 
   &:hover {
-    background: var(--kb-resizable-handle-hover, color-mix(in srgb, var(--anime-primary) 58%, transparent));
+    background: var(--kb-resizable-handle-hover, color-mix(in srgb, var(--kb-primary) 58%, transparent));
   }
 }
 
 .kb-resizable.is-resizing > .kb-resizable-handle {
-  background: var(--kb-resizable-handle-active, color-mix(in srgb, var(--anime-primary) 72%, transparent));
+  background: var(--kb-resizable-handle-active, color-mix(in srgb, var(--kb-primary) 72%, transparent));
 }
 
 .kb-resizable--left > .kb-resizable-handle,

@@ -1,6 +1,6 @@
 #[cfg(not(target_os = "android"))]
 use crate::crawler::downloader::compress::{
-    compress_video_for_preview, generate_compatible_image, generate_compatible_video,
+    generate_compatible_image, generate_compatible_video, generate_video_thumbnail,
 };
 use crate::crawler::downloader::{
     compute_file_hash, generate_thumbnail, wait_after_download_if_needed,
@@ -158,9 +158,9 @@ pub async fn import_local_file(
 #[cfg(not(target_os = "android"))]
 async fn build_thumbnail_path(path: &Path, is_video: bool) -> String {
     let result = if is_video {
-        compress_video_for_preview(path)
+        generate_video_thumbnail(&path.to_string_lossy())
             .await
-            .map(|result| Some(result.preview_path))
+            .map(Some)
     } else {
         generate_thumbnail(path).await
     };
