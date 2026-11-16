@@ -29,7 +29,23 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const compile = vi.fn<(input: { userProperties: Record<string, unknown> }) => Promise<SceneBundle>>();
-vi.mock("./compile/client", () => ({ compileSceneInWorker: (input: never) => compile(input) }));
+/** 开出过的编译会话替身（L2）：宿主要关的会话都在这里，核对留 / 关 */
+const sessions = vi.hoisted(() => ({
+  list: [] as { close: ReturnType<typeof vi.fn>; stats: unknown; broken: boolean }[],
+}));
+vi.mock("./compile/client", () => ({
+  openSceneSession: async (input: never) => {
+    const bundle = await compile(input);
+    const session = {
+      close: vi.fn(),
+      compileFragment: vi.fn(),
+      stats: { cachedBytes: 2048, mdls: 0, files: 0, programs: 0, textures: 0, wasmBytes: 4096 },
+      broken: false,
+    };
+    sessions.list.push(session);
+    return { bundle, session };
+  },
+}));
 
 const createRealm = vi.fn<() => Promise<ScriptRealm>>();
 vi.mock("./script/realm", () => ({ createIframeRealm: () => createRealm(), getJsModuleIndex: () => ({}) }));
@@ -1047,6 +1063,102 @@ describe("SceneHost：加载进度（壁纸显示重构步骤 2）", () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(report.progress.mock.calls.length).toBe(before);
     expect(report.progress.mock.calls).not.toContainEqual(["compile", 4, 4]);
+    host.dispose();
+  });
+});
+
+describe("SceneHost：编译会话的留与关（L2）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+    sessions.list.length = 0;
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const open = (imageId = "1") => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId, report });
+    host.applyUserProperties({});
+    return { host, report };
+  };
+
+  it("没有脚本、没有 layer-structure 绑定的场景：编完就关会话", async () => {
+    compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
+    const { host, report } = open();
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(sessions.list).toHaveLength(1);
+    expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
+    host.dispose();
+    expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("有脚本的场景：会话留着，日志带统计；销毁时关", async () => {
+    createRealm.mockImplementation(async () => new FakeRealm(() => {}));
+    compile.mockImplementation(async () => scriptedBundle());
+    const { host, report } = open("7");
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(sessions.list[0].close).not.toHaveBeenCalled();
+    const line = report.info.mock.calls.map((call) => String(call[0])).find((text) => text.includes("开始渲染"))!;
+    expect(line).toContain("编译会话：留（缓存 2 KiB、wasm 4 KiB）");
+    host.dispose();
+    expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("只有 layer-structure 绑定（没有脚本）：留着", async () => {
+    compile.mockImplementation(
+      async () =>
+        ({
+          ...scriptedBundle(),
+          scripts: { list: [] },
+        }) as unknown as SceneBundle,
+    );
+    const { host, report } = open();
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(sessions.list[0].close).not.toHaveBeenCalled();
+    host.dispose();
+    expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("换场景（重新加载）：旧会话关掉，新会话留着", async () => {
+    createRealm.mockImplementation(async () => new FakeRealm(() => {}));
+    compile.mockImplementation(async () => scriptedBundle());
+    const { host, report } = open("7");
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    host.applyUserProperties(fx(true));
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(sessions.list.length).toBeGreaterThanOrEqual(2));
+    await vi.waitFor(() => expect(sessions.list[0].close).toHaveBeenCalledTimes(1));
+    const alive = sessions.list.filter((session) => session.close.mock.calls.length === 0);
+    expect(alive).toHaveLength(1);
+    host.dispose();
+    expect(sessions.list.filter((session) => session.close.mock.calls.length === 0)).toHaveLength(0);
+  });
+
+  it("加载以退回告终：会话关掉，没有留下", async () => {
+    compile.mockImplementation(async ({ userProperties }) => bundleFor(userProperties));
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(report.fallback).toHaveBeenCalled());
+    expect(sessions.list).toHaveLength(1);
+    expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+
+  it("留着会话的场景退回预览图：会话关掉", async () => {
+    createRealm.mockImplementation(async () => new FakeRealm(() => {}));
+    let unsupported = false;
+    compile.mockImplementation(
+      async () => ({ ...scriptedBundle(), unsupported: unsupported ? ["effect:unsupported"] : [] }) as SceneBundle,
+    );
+    const { host, report } = open("7");
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(sessions.list[0].close).not.toHaveBeenCalled();
+    unsupported = true;
+    host.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(report.fallback).toHaveBeenCalled());
+    expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
+    expect(sessions.list.every((session) => session.close.mock.calls.length >= 1)).toBe(true);
     host.dispose();
   });
 });

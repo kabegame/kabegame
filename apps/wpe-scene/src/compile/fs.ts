@@ -88,6 +88,11 @@ export class SceneFs {
   private readonly pkgWindows = new Map<number, Promise<Uint8Array>>();
   private readonly resolved = new Map<string, Promise<SceneFile | null>>();
   private readonly contents = new Map<string, Promise<{ source: SceneSource; bytes: Uint8Array } | null>>();
+  // 已完成的缓存条目的同步镜像（L2）：Promise 不能同步看值，`forgetBuffers` / `cacheStats` 要看字节落在哪个缓冲上、有多大。
+  // 只在对应的 Map 里还是同一个 Promise 时才写入，被删 / 被换的条目不会复活。
+  private readonly settledContents = new Map<string, { source: SceneSource; bytes: Uint8Array } | null>();
+  private readonly settledResolved = new Map<string, SceneFile | null>();
+  private readonly settledWindows = new Map<number, Uint8Array>();
 
   constructor(
     readonly projectDir: string,
@@ -105,11 +110,19 @@ export class SceneFs {
     if (!task) {
       task = this.reader.readRange(path, windowStart, windowStart + chunk);
       this.pkgWindows.set(windowStart, task);
+      const created = task;
+      void created.then(
+        (bytes) => {
+          if (this.pkgWindows.get(windowStart) === created) this.settledWindows.set(windowStart, bytes);
+        },
+        () => undefined,
+      );
     }
     try {
       return (await task).slice(start - windowStart, end - windowStart);
     } catch (error) {
       this.pkgWindows.delete(windowStart);
+      this.settledWindows.delete(windowStart);
       throw error;
     }
   }
@@ -153,11 +166,13 @@ export class SceneFs {
     if (!task) {
       task = this.resolveUncached(rel);
       this.resolved.set(rel, task);
+      this.mirror(this.resolved, this.settledResolved, rel, task);
     }
     try {
       return await task;
     } catch (error) {
       this.resolved.delete(rel);
+      this.settledResolved.delete(rel);
       throw error;
     }
   }
@@ -205,6 +220,67 @@ export class SceneFs {
     return false;
   }
 
+  /** 任务完成时把值记进镜像（条目还是这个 Promise 才记）。 */
+  private mirror<K, V>(live: Map<K, Promise<V>>, settled: Map<K, V>, key: K, task: Promise<V>): void {
+    void task.then(
+      (value) => {
+        if (live.get(key) === task) settled.set(key, value);
+      },
+      () => undefined,
+    );
+  }
+
+  /**
+   * 忘掉字节落在这批缓冲上的缓存条目（L2：Worker 把缓冲转移给主线程之后，这里的视图就成了已分离的空缓冲，再读到会出错）。
+   * - `contents`：只删已完成的条目（未完成的 Promise 字节还没被转移，由它们自己的调用方持有）；
+   * - `resolved`：散文件首个区间读的 `head` 在这批里的条目（`.tex` 解析器复用它）；
+   * - `pkgWindows`：窗口读出来后都是 `slice` 拷贝再用，从不转移，但窗口本身也检查一遍，保持对称。
+   * 被删的下次再要就重读。
+   */
+  forgetBuffers(buffers: ReadonlySet<ArrayBuffer>): void {
+    for (const [key, entry] of this.settledContents) {
+      if (entry && buffers.has(entry.bytes.buffer as ArrayBuffer)) {
+        this.contents.delete(key);
+        this.settledContents.delete(key);
+      }
+    }
+    for (const [key, entry] of this.settledResolved) {
+      if (entry?.head && buffers.has(entry.head.buffer as ArrayBuffer)) {
+        this.resolved.delete(key);
+        this.settledResolved.delete(key);
+      }
+    }
+    for (const [start, bytes] of this.settledWindows) {
+      if (buffers.has(bytes.buffer as ArrayBuffer)) {
+        this.pkgWindows.delete(start);
+        this.settledWindows.delete(start);
+      }
+    }
+  }
+
+  /**
+   * 清空文件缓存（L2，会话打开之后调）：`contents`、`pkgWindows`、`resolved` 连同同步镜像全部清掉，pkg 目录表保留。整场编完之后它们是重复
+   * 数据——全库冒烟里少数场景常驻 80–290 MB（大 mdl 的原始文件字节，解析结果不再指向它们，`forgetBuffers` 释放不到）。之后编片段要用的文件
+   * 再经主线程重读。只在没有读取在途时调（打开结束、片段之间）。
+   */
+  clearCaches(): void {
+    this.contents.clear();
+    this.settledContents.clear();
+    this.resolved.clear();
+    this.settledResolved.clear();
+    this.pkgWindows.clear();
+    this.settledWindows.clear();
+  }
+
+  /** 缓存里已完成条目的字节数（`contents` 的文件内容 + `pkgWindows` 的窗口 + `resolved` 的 head）与整读文件数，给会话统计。 */
+  cacheStats(): { bytes: number; files: number } {
+    let bytes = 0;
+    for (const entry of this.settledContents.values()) bytes += entry?.bytes.byteLength ?? 0;
+    for (const window of this.settledWindows.values()) bytes += window.byteLength;
+    for (const entry of this.settledResolved.values()) bytes += entry?.head?.byteLength ?? 0;
+    return { bytes, files: this.settledContents.size };
+  }
+
   /** JSON / shader 用：直接整读，命中与未命中都只请求一次，并缓存内容。 */
   async read(raw: string): Promise<{ source: SceneSource; bytes: Uint8Array } | null> {
     const rel = normalizeScenePath(raw);
@@ -212,11 +288,13 @@ export class SceneFs {
     if (!task) {
       task = this.readUncached(rel);
       this.contents.set(rel, task);
+      this.mirror(this.contents, this.settledContents, rel, task);
     }
     try {
       return await task;
     } catch (error) {
       this.contents.delete(rel);
+      this.settledContents.delete(rel);
       throw error;
     }
   }

@@ -18,6 +18,7 @@ import {
 } from "./probe";
 import { realmCheck } from "./realmProbe";
 import { scriptCorpus } from "./scriptCorpus";
+import { sessionSmoke } from "./sessionSmoke";
 
 export function installSceneDevProbe(host: SceneHost): void {
   (window as unknown as { __kabegameSceneProbe?: unknown }).__kabegameSceneProbe = {
@@ -26,6 +27,8 @@ export function installSceneDevProbe(host: SceneHost): void {
     chunk: probeChunk,
     keys: probeKeys,
     scriptCorpus,
+    /** L2：真 Worker 开编译会话，逐对象请求片段并与主线程改键的片段逐字段比，另报已分离缓冲次数、耗时、stats 与整场摘要。 */
+    sessionSmoke,
     /** P4a 步骤 3：按 dt 序列步进粒子模拟器，输出 RenderDoc 轨迹同格式的数据。 */
     particleTrack: particleTrackProbe,
     /** P4a 步骤 4（风险 7）：翻译出的粒子顶点着色器对当前粒子算出的四角裁剪坐标。 */

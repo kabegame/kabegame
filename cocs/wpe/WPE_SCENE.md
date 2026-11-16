@@ -239,6 +239,16 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 
   2026-11-16 的结果：233 张场景、6392 个对象，0 不同；跳过 56 个（`depended` 38、`group-upload` 15、`hdr-layer-composites` 3）。
 - **规整配置有损**：`configs[i]`（`getInitialLayerConfig` 的规整文本）的非整数只留 8 位有效数字。按它编出的片段，和从原文编出的模板片段在少数常量的末几位上不同；WPE 的 `createLayer(getInitialLayerConfig(x))` 同样拿到的是舍入后的值。对照测试按原文编；L5 的片段缓存要处理这一点（见总计划 L5）。
+- **常驻 Worker（L2）**：会话活在 Worker 里，一个 Worker 一个场景。逻辑在 `compile/workerHandler.ts`（Node 里可测），`worker.ts` 只做转接。
+  - **协议**（`compile/protocol.ts`）：`open` → `opened`（整场 bundle 与 `SessionStats`）；`fragment` → `fragment-done`（增量）或 `fragment-error`；`close`。读文件与进度两种消息不变。
+  - **串行**：片段请求排成一条队列串行处理，因为 `compileFragment` 改会话共享的表、开关记录器。编失败、增量里有已分离的缓冲、发回时意外抛错，都把会话标坏，之后的请求一律回 `broken`，宿主据此整场重载。
+  - **清缓存**：整场编完与每个片段编完、发回之前，会话 `trimCaches` 清掉解析过的 mdl 与 `SceneFs` 的文件内容、pkg 窗口、路径解析缓存，常驻的只剩着色器翻译缓存等真正省时间的部分。
+    - 原因：全库冒烟里少数场景常驻 80–290 MB，是大 mdl 的原始文件字节；解析结果不再指向它们，靠下一条的遗忘释放不到。
+    - 代价：编片段要用的文件每次经主线程重读，全库冒烟里片段平均约 9 ms、最慢约 0.5 s。片段只编运行中第一次出现的配置，而且是异步的。
+  - **转移之后遗忘**：`opened` 转移纹理 mip 与 mdl 文件缓冲。之后会话 `forgetBuffers` 删掉 `mdls` 与 `SceneFs` 缓存里引用这批缓冲的条目，再要就重读；有了上一条，这一条只是保险。片段回传只转移新增纹理的 mip，其余复制；Worker 发片段前查一遍已分离的缓冲（`findDetached`）兜底。
+  - **客户端**（`compile/client.ts`）：`openSceneSession` 返回 bundle 与 `CompileSessionClient`（`compileFragment` / `close` / `stats` / `broken`）；增量里的 FreeImage 新纹理在交回前于主线程解码。`compileSceneInWorker` = 开会话、取 bundle、马上关，dev 探针等一次性编译照旧用它。
+  - **宿主的留与关**（`host.ts` `sessionUseful`）：场景有脚本，或有对象级重编译绑定（`layer-structure`）时留着会话，否则编完就关。换场景时关旧的，退回、销毁时关。「开始渲染」日志末尾带会话统计。
+  - **冒烟**：dev 探针 `sessionSmoke(imageIds)` 经真 Worker 比较片段与改键（同 L1 的对照）、查已分离缓冲、比较整场摘要与 `compileSceneInWorker`。
 
 ### 能力表（`features.ts`）
 

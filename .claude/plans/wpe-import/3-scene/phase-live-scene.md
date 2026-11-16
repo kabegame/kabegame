@@ -340,6 +340,8 @@ export function rekeyFragment(fragment: ObjectFragment, to: { object: number; id
 
 ### L2 — 常驻 Worker 与增量协议（`compile/worker.ts`、`client.ts`、`protocol.ts`、`host.ts`）
 
+子计划：[live/phase-l2-worker.md](live/phase-l2-worker.md)（细化：转移后会话忘掉 `mdls` 与 `SceneFs.contents` 里的那批缓冲；片段只转移新纹理；Worker 串行处理片段、出错即标坏；宿主只在场景有脚本或对象级重编译绑定时留着会话）。
+
 #### 点 1 — 协议
 - **修改** `WorkerRequest` / `WorkerResponse`：
   - `start` 改名 `open`，回 `opened`（整场 bundle，同现在的 `done`）；
@@ -378,6 +380,10 @@ export class CompileSessionClient {
   - 记下会话常驻时 Worker 的堆大小，写进文档。
 
 ### L3 — 主线程按对象增删（`render/state.ts`、新 `compile/registry.ts`、新 `render/derived.ts`、宿主子系统）
+
+拆成两块，各自验收：
+- [live/phase-l3a-registry-state.md](live/phase-l3a-registry-state.md)：登记表、状态逐对象增删、组与挂点运行时重算。派生量不另建 `derived.ts`，由登记表现算、写回图层，L4 的消费者不改。片段缓存挪到 L5。
+- L3b：宿主子系统，子计划待写。
 
 #### 点 1 — 状态按对象（`render/state.ts`，即 P6d4 点 3 的扩展）
 - **修改** `fromBundle` 里按对象初始化的部分抽成一个函数。`fromBundle` 改成「场景级部分 + 对每个对象调它」，不留两份。

@@ -1329,6 +1329,27 @@ export interface SceneCompileSession {
   finalize(): Promise<SceneBundle>;
   /** 运行中编一个新对象的片段与增量（`finalize` 之后） */
   compileFragment(request: FragmentRequest): Promise<FragmentDelta>;
+  /**
+   * 忘掉已转移给主线程的缓冲（L2）：解析过的 mdl 里文件缓冲在这批里的条目、`SceneFs` 缓存里字节在这批里的条目都删掉，再要就重读。
+   * 纹理 mip 不用管：纹理按路径缓存的只是下标与格式。
+   */
+  forgetBuffers(buffers: ReadonlySet<ArrayBuffer>): void;
+  /**
+   * 清掉解析过的 mdl 与 `SceneFs` 的文件缓存（L2，打开之后调）：整场编完之后它们是重复数据，常驻会话只留着色器翻译缓存等真正省时间的部分。
+   * 之后编片段要用的文件与 mdl 再重读。只在没有编译在途时调。
+   */
+  trimCaches(): void;
+  /** 会话缓存的规模（L2，给宿主日志与冒烟看内存；wasm 线性内存由 Worker 另报） */
+  stats(): SessionCacheStats;
+}
+
+/** 会话缓存规模：`cachedBytes` = 整读文件字节 + pkg 窗口 + 散文件 head 的已完成部分 */
+export interface SessionCacheStats {
+  cachedBytes: number;
+  mdls: number;
+  files: number;
+  programs: number;
+  textures: number;
 }
 
 export async function compileScene(input: CompileSceneInput): Promise<SceneBundle> {
@@ -1896,6 +1917,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   const animationLayerDefs = new Map<number, readonly PuppetLayerDef[]>();
   /** 解析过的 mdl，按规范化后的路径；读不到为 null。同一个 mdl 被多个对象引用时只读、只解析一次（3354366708 的两个圆环）。 */
   const mdls = new Map<string, MdlFile | null>();
+  /** 每个解析过的 mdl 的文件缓冲（L2：网格 / puppet 的顶点与索引是它的视图，缓冲被转移走后 `forgetBuffers` 据此删条目）。 */
+  const mdlBuffers = new Map<string, ArrayBuffer>();
   async function readMdl(path: string): Promise<MdlFile | null> {
     const key = normalizeScenePath(path);
     let file = mdls.get(key);
@@ -1903,6 +1926,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       const read = await fs.read(key);
       file = read && parseMdl(read.bytes);
       mdls.set(key, file);
+      if (read) mdlBuffers.set(key, read.bytes.buffer as ArrayBuffer);
     }
     return file;
   }
@@ -3373,6 +3397,29 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     },
     finalize,
     compileFragment,
+    forgetBuffers(buffers: ReadonlySet<ArrayBuffer>): void {
+      for (const [key, buffer] of mdlBuffers) {
+        if (!buffers.has(buffer)) continue;
+        mdls.delete(key);
+        mdlBuffers.delete(key);
+      }
+      fs.forgetBuffers(buffers);
+    },
+    trimCaches(): void {
+      mdls.clear();
+      mdlBuffers.clear();
+      fs.clearCaches();
+    },
+    stats(): SessionCacheStats {
+      const cache = fs.cacheStats();
+      return {
+        cachedBytes: cache.bytes,
+        mdls: mdls.size,
+        files: cache.files,
+        programs: bundle.programs.length,
+        textures: bundle.textures.length,
+      };
+    },
   };
 }
 

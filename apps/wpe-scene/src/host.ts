@@ -14,7 +14,7 @@ import {
 } from "./compile/bindings";
 import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
-import { compileSceneInWorker } from "./compile/client";
+import { openSceneSession, type CompileSessionClient } from "./compile/client";
 import { SceneLoadProgress } from "./progress";
 import type { SceneStructure } from "./compile/protocol";
 import { TextureDecodeCache } from "./compile/decode";
@@ -243,6 +243,8 @@ export class SceneHost {
   private compiledWith: Record<string, unknown> = {};
   /** 当前场景的 bundle（取绑定表）与渲染器（就地写）。 */
   private bundle: SceneBundle | null = null;
+  /** 常驻的编译会话（L2）：只在用得上时留着（见 `sessionUseful`），L5 起运行中建层、对象级重编译用它；本步不调片段。 */
+  private compileSession: CompileSessionClient | null = null;
   private scriptBundle: SceneBundle | null = null;
   private scriptState: SceneState | null = null;
   private runtime: ScriptRuntime | null = null;
@@ -1579,6 +1581,7 @@ export class SceneHost {
     this.pendingAnimations = null;
     this.pendingPuppets = null;
     this.bundle = null;
+    this.closeCompileSession();
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
     this.pendingParticles.calls.length = 0;
@@ -1686,6 +1689,8 @@ export class SceneHost {
     );
     // 编译用的裸值快照：属性只作为编译输入，同时记下来供场景换上（或退回）后补差
     let compiledWith: Record<string, unknown> | null = null;
+    // 这次加载打开的编译会话（L2）：没交给 `this.compileSession` 之前归这个局部变量，finally 保证没交出去就关
+    let held: CompileSessionClient | null = null;
     try {
       // 场景目录与 assets 目录不随属性变化，取一次；失败不缓存，下次重载再取
       const targetTask = (this.targetTask ??= invoke<SceneTarget>("wpe_scene_target", {
@@ -1710,7 +1715,7 @@ export class SceneHost {
       compiledWith = { ...userProperties };
       // 这次编译用的新建对象个数（P6d3b）：脚本 `init` 之后结构里的更多，说明 `init` 里建了层，这份 bundle 不带它们
       const createdAtCompile = this.structure.created.length;
-      const bundle = await compileSceneInWorker({
+      const opened = await openSceneSession({
         projectDir: target.path,
         sceneAssets: target.sceneAssets,
         userProperties,
@@ -1732,6 +1737,8 @@ export class SceneHost {
       }).catch((error: unknown) => {
         throw isAbort(error) ? error : new SceneRenderError(reasonsOf(error, "compile"));
       });
+      const bundle = opened.bundle;
+      held = opened.session;
       if (id !== this.generation) return;
       if (bundle.unsupported.length) {
         if (!force) {
@@ -1889,6 +1896,12 @@ export class SceneHost {
       });
       if (id !== this.generation) return;
       this.bundle = bundle;
+      // 会话换手：旧的关掉；新的用得上才留，否则编完就关（用不上时关掉不影响正确性，真要用时整场重载照样对）
+      this.closeCompileSession();
+      if (sessionUseful(bundle)) {
+        this.compileSession = held;
+        held = null;
+      }
       this.compiledWith = compiledWith;
       current.setPaused(this.paused);
       for (const warning of current.warnings.splice(0))
@@ -1918,12 +1931,12 @@ export class SceneHost {
         load.report("frame", 1, 1);
         this.options.report.info(
           `场景壁纸 ${this.options.imageId} 开始渲染：${bundle.layers.length} 层、${bundle.programs.length} 个程序，` +
-            `${detail}，用时 ${Math.round(performance.now() - started)} ms（${load.summary()}）`,
+            `${detail}，用时 ${Math.round(performance.now() - started)} ms（${load.summary()}）${this.sessionSummary()}`,
         );
         this.options.report.ready();
       } else
         this.options.report.debug(
-          `场景壁纸 ${this.options.imageId} 重新加载：${detail}，用时 ${Math.round(performance.now() - started)} ms（${load.summary()}）`,
+          `场景壁纸 ${this.options.imageId} 重新加载：${detail}，用时 ${Math.round(performance.now() - started)} ms（${load.summary()}）${this.sessionSummary()}`,
         );
       // 加载期间到达的增量不丢：与编译用的快照比较，差异再走一次应用函数（P3a）
       const pending = pendingChanges(this.properties, this.compiledWith);
@@ -1932,6 +1945,8 @@ export class SceneHost {
       if (id !== this.generation || isAbort(error)) return;
       this.fallbackAfterLoad(reasonsOf(error, "render"), compiledWith);
     } finally {
+      // 没交出去的会话（被新的加载取代、退回、出错、`init` 里建层放弃本次）一律关掉
+      held?.close();
       if (id === this.generation) {
         this.reloading = false;
         if (this.scriptReloadPending && !this.scriptReloadRunning && this.state === "ready") this.requestScriptReload();
@@ -1968,5 +1983,31 @@ export class SceneHost {
     this.runtime = null;
     this.scriptApi = null;
     this.textureCache.clear();
+    this.closeCompileSession();
   }
+
+  /** 关掉常驻的编译会话（L2），幂等。 */
+  private closeCompileSession(): void {
+    this.compileSession?.close();
+    this.compileSession = null;
+  }
+
+  /** 「开始渲染」日志里的会话段：留没留、缓存字节、wasm 线性内存。 */
+  private sessionSummary(): string {
+    const stats = this.compileSession?.stats;
+    if (!this.compileSession) return "，编译会话：关";
+    return `，编译会话：留（缓存 ${Math.round((stats?.cachedBytes ?? 0) / 1024)} KiB、wasm ${Math.round((stats?.wasmBytes ?? 0) / 1024)} KiB）`;
+  }
+}
+
+/**
+ * 场景换上后编译会话要不要留（L2）：L5 / L6 只有两种情况用得上——脚本运行中建层或写对象级重编译字段（要求场景有脚本），
+ * 或有对象级重编译绑定（L6 之前只有 `layer-structure`）。常驻 Worker 占着翻译器 wasm 实例、着色器翻译缓存与文件缓存，
+ * 桌面每块屏一个壁纸窗口外加预览，用不上就关。
+ */
+export function sessionUseful(bundle: Pick<SceneBundle, "scripts" | "bindings">): boolean {
+  if (bundle.scripts.list.length > 0) return true;
+  return bundle.bindings.some(
+    (binding) => binding.target.kind === "recompile" && binding.target.reason === "layer-structure",
+  );
 }

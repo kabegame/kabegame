@@ -174,6 +174,11 @@ export class Wpesl2wgsl {
     return Wpesl2wgsl.fromModule(await WebAssembly.compile(bytes));
   }
 
+  /** wasm 线性内存的字节数（L2，给会话统计；trap 后实例被丢弃时为 0）。只读，不触发实例化。 */
+  get memoryBytes(): number {
+    return this.exports?.memory.buffer.byteLength ?? 0;
+  }
+
   /** 翻译一个着色器对；头文件缺失时返回 `phase: "include"`，见 {@link translateWithIncludes}。 */
   async translate(request: TranslateRequest): Promise<TranslateResult> {
     if (!this.exports) {

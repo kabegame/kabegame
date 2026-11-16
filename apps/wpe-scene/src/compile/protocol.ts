@@ -1,4 +1,5 @@
-import type { SceneBundle } from "./bundle";
+import type { SceneBundle, SessionCacheStats } from "./bundle";
+import type { FragmentDelta, FragmentRequest } from "./fragment";
 import type {
   SceneReflectionSetting,
   ScenePostprocessSetting,
@@ -29,29 +30,46 @@ export interface SceneStructure {
   created: { object: number; config: string }[];
 }
 
+/** `open` 请求的载荷（L2：原 `start`，字段不变） */
+export interface OpenRequest {
+  projectDir: string;
+  sceneAssets: string[];
+  userProperties: Record<string, unknown>;
+  scriptOverrides: Record<string, number[] | boolean | string>;
+  structure: SceneStructure;
+  postprocess: ScenePostprocessSetting;
+  reflection: SceneReflectionSetting;
+  shadows: SceneShadowSetting;
+  volumetrics: SceneVolumetricsSetting;
+  force: boolean;
+  exhaustive: boolean;
+  module: WebAssembly.Module | null;
+}
+
+/** 会话统计（L2）：缓存规模加翻译器 wasm 的线性内存字节数 */
+export interface SessionStats extends SessionCacheStats {
+  wasmBytes: number;
+}
+
+/**
+ * 主线程 → Worker。一个 Worker 一个会话：`open` 只收一次；`fragment` 按请求 id 配对、Worker 里串行处理；`close` 之后一律回错误。
+ */
 export type WorkerRequest =
-  | {
-      type: "start";
-      projectDir: string;
-      sceneAssets: string[];
-      userProperties: Record<string, unknown>;
-      scriptOverrides: Record<string, number[] | boolean | string>;
-      structure: SceneStructure;
-      postprocess: ScenePostprocessSetting;
-      reflection: SceneReflectionSetting;
-      shadows: SceneShadowSetting;
-      volumetrics: SceneVolumetricsSetting;
-      force: boolean;
-      exhaustive: boolean;
-      module: WebAssembly.Module | null;
-    }
+  | ({ type: "open" } & OpenRequest)
+  | { type: "fragment"; id: number; request: FragmentRequest }
+  | { type: "close" }
   | { type: "file-result"; id: number; bytes?: Uint8Array; error?: FileError };
 export type WorkerResponse =
   | { type: "file"; id: number; operation: "range" | "whole"; path: string; start?: number; end?: number }
-  | { type: "done"; bundle: SceneBundle }
-  | { type: "error"; message: string }
   /** 编译进度（`progress.ts` 的 `compile` 阶段）：已处理对象的权重 / 总权重 */
-  | { type: "progress"; done: number; total: number };
+  | { type: "progress"; done: number; total: number }
+  /** 整场编完（原 `done`），会话在 Worker 里保留 */
+  | { type: "opened"; bundle: SceneBundle; stats: SessionStats }
+  /** 只用于 `open` 失败（含重复 `open`） */
+  | { type: "error"; message: string }
+  | { type: "fragment-done"; id: number; delta: FragmentDelta; stats: SessionStats }
+  /** `broken` 为真：会话已不可用，宿主要整场重载、换新会话 */
+  | { type: "fragment-error"; id: number; message: string; broken: boolean };
 
 export function encodeFileError(error: unknown): FileError {
   return error instanceof Error
