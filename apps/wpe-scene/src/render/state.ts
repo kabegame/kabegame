@@ -50,6 +50,8 @@ import {
   type TextRuntimeField,
 } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import type { SceneLightObject } from "../compile/lights";
+import type { SceneSound } from "../compile/sounds";
 import { DEFAULT_CAMERA } from "../compile/camera";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
@@ -330,6 +332,26 @@ function writeLayer(
   layer[field] = values.length ? [...values] : [...LAYER_DEFAULTS[field]];
 }
 
+/**
+ * 状态需要的对象切片（L3a）：图层、声音、灯，是 `ObjectFragment` 的子集（`ObjectFragment` 可以直接当它用）。
+ * `addObject` / `replaceObject` 与 `fromBundle` 的循环体共用这一份输入。
+ */
+export interface ObjectStateSlice {
+  layer: SceneLayer;
+  sound?: SceneSound;
+  light?: SceneLightObject;
+}
+
+/** 一个对象在按键存放的表里占的键（`dropObject` / `replaceObject` 用，不依赖键的写法）。 */
+interface OwnedKeys {
+  /** `constants` 的 pass 键（`passStates` 同键） */
+  constants: TargetKey[];
+  /** `effects` 的键 */
+  effects: string[];
+  /** `shadowPasses` 的键（基础 pass 键） */
+  shadow: TargetKey[];
+}
+
 export class SceneState {
   /** 按 `objects` 下标（稳定键）；只含进了 bundle 的图层。 */
   readonly layers = new Map<number, LayerState>();
@@ -437,98 +459,35 @@ export class SceneState {
   private readonly frozenLayers = new Set<number>();
   /** 模型网格第一个 pass 的键 → 它的阴影投射变体的键（P13d，`SceneMesh.shadow`）：基础常量写入时同步写变体。 */
   private shadowPasses = new Map<TargetKey, TargetKey>();
+  /** 每个对象在按键存放的表里占的键（L3a）：`dropObject` / `replaceObject` 按它清，不靠键的写法。 */
+  private readonly owned = new Map<number, OwnedKeys>();
+  /** effect 开关表（键见 `effectKey`）；对象的项由 `installTables` 写、`clearTables` 清。 */
+  private readonly effects = new Map<string, EffectState>();
+  /** 子表（WPE `O+0x198`）：父 → 直接子（都是 `objects` 下标，只含进了 bundle 的图层）。写父的变换或可见性时子孙一起标脏；换父挂上的追加在尾。 */
+  private readonly children = new Map<number, number[]>();
 
   private constructor(
-    layers: Map<number, LayerState>,
-    constants: Map<TargetKey, Record<string, number[]>>,
     bloom: BloomParams,
-    private readonly effects: Map<string, EffectState>,
     bloomEnabled: boolean,
     /** 档位允许但没有编泛光链：打开要整场重编译。 */
     private readonly bloomMissing: boolean,
     general: GeneralValues,
-    /** 子表（WPE `O+0x198`）：父 → 直接子（都是 `objects` 下标，只含进了 bundle 的图层）。写父的变换或可见性时子孙一起标脏；换父挂上的追加在尾。 */
-    private readonly children: Map<number, number[]>,
   ) {
-    this.layers = layers;
-    this.constants = constants;
     this.bloom = bloom;
     this.bloomEnabled = bloomEnabled;
     this.general = general;
   }
 
   static fromBundle(bundle: SceneBundle): SceneState {
-    const layers = new Map<number, LayerState>();
-    const constants = new Map<TargetKey, Record<string, number[]>>();
-    const shadowOf = new Map<TargetKey, TargetKey>();
-    const effects = new Map<string, EffectState>();
-    const children = new Map<number, number[]>();
-    const instances = new Map<number, ParticleInstanceValues>();
-    // 子表以编译产物为准（P6d3：带换父的先后）；手写的测试 bundle 没有时按 `layers` 的 `parent` 现推
-    if (bundle.children) for (const [parent, list] of bundle.children) children.set(parent, [...list]);
-    for (const layer of bundle.layers) {
-      layers.set(layer.object, layerStateOf(layer));
-      if (layer.particle) instances.set(layer.object, instanceValues(layer.particle.instance));
-      if (!bundle.children && layer.parent !== null) {
-        const list = children.get(layer.parent);
-        if (list) list.push(layer.object);
-        else children.set(layer.parent, [layer.object]);
-      }
-      for (const pass of layer.passes) constants.set(pass.key, { ...pass.uniforms });
-      // 粒子材质的常量（P4a 步骤 4）：粒子 draw 的 uniform 同样从这里取，绑定也按 pass 键就地写；含系统树里的子系统（P4e 步骤 1）。
-      // 第 2 条起的 renderer 的变体（P4f 步骤 4）各有自己的键，属性绑定两份都登记，这里各留一份
-      const addParticle = (particle: SceneParticle) => {
-        for (const pass of particle.passes) constants.set(pass.key, { ...pass.uniforms });
-        for (const draw of particleDraws(particle).slice(1))
-          for (const pass of draw.passes) constants.set(pass.key, { ...pass.uniforms });
-        for (const child of particle.children ?? []) addParticle(child.system);
-      };
-      if (layer.particle) addParticle(layer.particle);
-      // 模型网格材质的常量（P5c 步骤 2）：网格 draw 的 uniform 同样从这里取（retro 的 `g_Tint`），属性绑定按 pass 键就地写
-      for (const mesh of layer.model?.meshes ?? []) {
-        for (const pass of mesh.passes) constants.set(pass.key, { ...pass.uniforms });
-        // 阴影投射变体（P13d）：常量照 WPE 从基础程序按名字拷（编译期已拷好初值），基础 pass 的常量写入同时写它（`shadowOf`）
-        if (mesh.shadow && mesh.passes[0]) {
-          constants.set(mesh.shadow.key, { ...mesh.shadow.uniforms });
-          shadowOf.set(mesh.passes[0].key, mesh.shadow.key);
-        }
-      }
-      for (const effect of layer.effects) {
-        effects.set(effectKey(layer.object, effect.source), {
-          enabled: effect.enabled,
-          unsupported: effect.unsupported.length > 0,
-        });
-        for (const step of effect.steps)
-          if (step.kind === "draw") constants.set(step.pass.key, { ...step.pass.uniforms });
-      }
-      // puppet 纹理通道网格的材质常量（P12b2-2）：该 draw 的 uniform 同样从这里取
-      if (layer.puppet?.textureChannels?.pass)
-        constants.set(layer.puppet.textureChannels.pass.key, { ...layer.puppet.textureChannels.pass.uniforms });
-      if (layer.passthrough) constants.set(layer.passthrough.key, { ...layer.passthrough.uniforms });
-      // 组的上屏（P5b 步骤 4）：同 passthrough，g_Color4 由材质值置 1
-      if (layer.groupUpload) constants.set(layer.groupUpload.key, { ...layer.groupUpload.uniforms });
-      // 文本的四个宿主 pass（P6b 1d）。背景常量总要有一份：没有背景 pass（合成路径清屏）时清屏色同样从它读，`backgroundcolor` 的
-      // 就地写落在这里
-      const text = layer.text;
-      if (text) {
-        for (const pass of [text.glyphPass, text.colorPass, text.backgroundPass, text.clearAlphaPass])
-          if (pass) constants.set(pass.key, { ...pass.uniforms });
-        if (!constants.has(text.background.key))
-          constants.set(text.background.key, { g_Color: [...text.background.color] });
-      }
-    }
     const { bloom, postprocess, fields } = bundle.general;
     const state = new SceneState(
-      layers,
-      constants,
       { ...bloom, tint: [...bloom.tint] },
-      effects,
       postprocess.bloomFlag,
       !bundle.bloom && postprocess.level !== "disabled",
       { ...fields },
-      children,
     );
-    state.shadowPasses = shadowOf;
+    // 子表以编译产物为准（P6d3：带换父的先后）；手写的测试 bundle 没有时按 `layers` 的 `parent` 现推（`install` 的 `appendChild`）
+    if (bundle.children) for (const [parent, list] of bundle.children) state.children.set(parent, [...list]);
     // 相机基准（P5e）：正交（含手写的 bundle 没有 `perspective` 标记）= 重置值，`init` 之后一律重置；透视 = JSON 解析值，
     // 只有 `scene.json` 里是字符串的项覆盖 `init` 写的值（`given`，缺省当全给了；没有相机时都不覆盖）
     const camera = bundle.general.camera;
@@ -547,36 +506,207 @@ export class SceneState {
         overridden: ["eye", "center", "up"],
       };
     state.cameraBase = copyCameraPose(state.cameraLoaded.pose);
-    for (const layer of bundle.layers) state.order.push(layer.object);
+    // 手写的测试 bundle 可能没有声音表 / 灯表
+    const soundOf = new Map((bundle.sounds ?? []).map((sound) => [sound.object, sound]));
+    const lightOf = new Map((bundle.lightObjects ?? []).map((light) => [light.object, light]));
+    for (const layer of bundle.layers)
+      state.install(
+        { layer, sound: soundOf.get(layer.object), light: lightOf.get(layer.object) },
+        bundle.children === undefined,
+      );
+    // 没有图层的声音 / 灯（手写的测试 bundle）：只写它们自己的表
+    const layered = new Set(bundle.layers.map((layer) => layer.object));
+    for (const sound of bundle.sounds ?? [])
+      if (!layered.has(sound.object)) state.sounds.set(sound.object, { volume: sound.volume });
+    for (const light of bundle.lightObjects ?? [])
+      if (!layered.has(light.object)) state.lights.set(light.object, structuredClone(light.values));
+    return state;
+  }
+
+  /**
+   * 一个对象的全部按对象的表（`fromBundle` 的循环体，L3a 抽出）：图层状态、材质常量（基础 pass、粒子含子系统与多 renderer、网格与阴影变体、effect
+   * 绘制 pass、texchan、passthrough、组上屏、文本的四个 pass 与背景键）、effect 开关、粒子 `instanceoverride`（`rate` 钳 0.01）、对齐尺寸、声音、灯、
+   * 相机、puppet 动画层字段、文本字段与冻结。占的键记进 `owned`。不动 `order` 与子表。
+   */
+  private installTables(slice: ObjectStateSlice): void {
+    const { layer } = slice;
+    const object = layer.object;
+    const owned: OwnedKeys = { constants: [], effects: [], shadow: [] };
+    this.owned.set(object, owned);
+    const putConstant = (key: TargetKey, uniforms: Record<string, number[]>) => {
+      this.constants.set(key, { ...uniforms });
+      owned.constants.push(key);
+    };
+    this.layers.set(object, layerStateOf(layer));
     // 加载时 `rate` 钳到 0.01 并写回（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，rea-p4f-script.md 6.1）：脚本 `init` 读到的就是钳过的
     // 值，和建系统时（`ParticleSystem` 构造）的钳制一致
-    for (const [object, values] of instances)
-      state.particleInstances.set(object, { ...values, rate: Math.max(INSTANCE_RATE_MIN, values.rate) });
-    for (const layer of bundle.layers)
-      if (layer.alignment !== undefined) state.alignmentSizes.set(layer.object, [...layer.size]);
-    // 手写的测试 bundle 可能没有声音表
-    for (const sound of bundle.sounds ?? []) state.sounds.set(sound.object, { volume: sound.volume });
-    for (const light of bundle.lightObjects ?? []) state.lights.set(light.object, structuredClone(light.values));
-    // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
-    for (const layer of bundle.layers)
-      if (layer.camera) state.cameras.set(layer.object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
-    // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle；模型对象的骨骼（P12b2-1）同样
-    for (const layer of bundle.layers)
-      (layer.puppet ?? layer.model?.skeleton)?.layers.forEach((def) =>
-        state.animationLayers.set(animationLayerKey(layer.object, def.entry), {
-          rate: def.rate,
-          blend: def.blend,
-          visible: def.visible,
-        }),
-      );
-    // 文本层的 effect 开关会改 `padding`、文字框与合成 RT（rea-p6b-layout 3.5），1d 没有就地重排：切换一律整场重编译（同冻结的图层）
-    for (const layer of bundle.layers)
-      if (layer.text) {
-        state.textObjects.add(layer.object);
-        state.textFields.set(layer.object, copyTextFields(layer.text.fields));
-        state.freezeLayer(layer.object);
+    if (layer.particle) {
+      const values = instanceValues(layer.particle.instance);
+      this.particleInstances.set(object, { ...values, rate: Math.max(INSTANCE_RATE_MIN, values.rate) });
+    }
+    for (const pass of layer.passes) putConstant(pass.key, pass.uniforms);
+    // 粒子材质的常量（P4a 步骤 4）：粒子 draw 的 uniform 同样从这里取，绑定也按 pass 键就地写；含系统树里的子系统（P4e 步骤 1）。
+    // 第 2 条起的 renderer 的变体（P4f 步骤 4）各有自己的键，属性绑定两份都登记，这里各留一份
+    const addParticle = (particle: SceneParticle) => {
+      for (const pass of particle.passes) putConstant(pass.key, pass.uniforms);
+      for (const draw of particleDraws(particle).slice(1))
+        for (const pass of draw.passes) putConstant(pass.key, pass.uniforms);
+      for (const child of particle.children ?? []) addParticle(child.system);
+    };
+    if (layer.particle) addParticle(layer.particle);
+    // 模型网格材质的常量（P5c 步骤 2）：网格 draw 的 uniform 同样从这里取（retro 的 `g_Tint`），属性绑定按 pass 键就地写
+    for (const mesh of layer.model?.meshes ?? []) {
+      for (const pass of mesh.passes) putConstant(pass.key, pass.uniforms);
+      // 阴影投射变体（P13d）：常量照 WPE 从基础程序按名字拷（编译期已拷好初值），基础 pass 的常量写入同时写它（`shadowPasses`）
+      if (mesh.shadow && mesh.passes[0]) {
+        putConstant(mesh.shadow.key, mesh.shadow.uniforms);
+        this.shadowPasses.set(mesh.passes[0].key, mesh.shadow.key);
+        owned.shadow.push(mesh.passes[0].key);
       }
-    return state;
+    }
+    for (const effect of layer.effects) {
+      const key = effectKey(object, effect.source);
+      this.effects.set(key, { enabled: effect.enabled, unsupported: effect.unsupported.length > 0 });
+      owned.effects.push(key);
+      for (const step of effect.steps) if (step.kind === "draw") putConstant(step.pass.key, step.pass.uniforms);
+    }
+    // puppet 纹理通道网格的材质常量（P12b2-2）：该 draw 的 uniform 同样从这里取
+    if (layer.puppet?.textureChannels?.pass)
+      putConstant(layer.puppet.textureChannels.pass.key, layer.puppet.textureChannels.pass.uniforms);
+    if (layer.passthrough) putConstant(layer.passthrough.key, layer.passthrough.uniforms);
+    // 组的上屏（P5b 步骤 4）：同 passthrough，g_Color4 由材质值置 1
+    if (layer.groupUpload) putConstant(layer.groupUpload.key, layer.groupUpload.uniforms);
+    // 文本的四个宿主 pass（P6b 1d）。背景常量总要有一份：没有背景 pass（合成路径清屏）时清屏色同样从它读，`backgroundcolor` 的
+    // 就地写落在这里
+    const text = layer.text;
+    if (text) {
+      for (const pass of [text.glyphPass, text.colorPass, text.backgroundPass, text.clearAlphaPass])
+        if (pass) putConstant(pass.key, pass.uniforms);
+      if (!this.constants.has(text.background.key))
+        putConstant(text.background.key, { g_Color: [...text.background.color] });
+    }
+    if (layer.alignment !== undefined) this.alignmentSizes.set(object, [...layer.size]);
+    if (slice.sound) this.sounds.set(object, { volume: slice.sound.volume });
+    if (slice.light) this.lights.set(object, structuredClone(slice.light.values));
+    // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
+    if (layer.camera) this.cameras.set(object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
+    // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle；模型对象的骨骼（P12b2-1）同样
+    (layer.puppet ?? layer.model?.skeleton)?.layers.forEach((def) =>
+      this.animationLayers.set(animationLayerKey(object, def.entry), {
+        rate: def.rate,
+        blend: def.blend,
+        visible: def.visible,
+      }),
+    );
+    // 文本层的 effect 开关会改 `padding`、文字框与合成 RT（rea-p6b-layout 3.5），1d 没有就地重排：切换一律整场重编译（同冻结的图层）
+    if (layer.text) {
+      this.textObjects.add(object);
+      this.textFields.set(object, copyTextFields(layer.text.fields));
+      this.freezeLayer(object);
+    }
+  }
+
+  /** `installTables` 加上对象表尾与（`appendChild`）父的子表尾；不动 `structureVersion`。 */
+  private install(slice: ObjectStateSlice, appendChild: boolean): void {
+    this.installTables(slice);
+    const { layer } = slice;
+    this.order.push(layer.object);
+    if (appendChild && layer.parent !== null) {
+      const list = this.children.get(layer.parent);
+      if (list) list.push(layer.object);
+      else this.children.set(layer.parent, [layer.object]);
+    }
+  }
+
+  /**
+   * 加一个对象（L3a，运行中增删）：写它的全部按对象的表（同 `fromBundle` 的循环体）、追加到 `order` 尾与父的子表尾，`structureVersion` 加一。
+   * 对象已在时抛错。图层状态的 `parent` 取切片图层的 `parent`（父不在状态里时子表照挂，同 `fromBundle` 的手写 bundle 路径）。
+   */
+  addObject(slice: ObjectStateSlice): void {
+    if (this.layers.has(slice.layer.object)) throw new Error(`对象 ${slice.layer.object} 已在状态里`);
+    this.install(slice, true);
+    this.structureVersion++;
+  }
+
+  /** 清掉一个对象的全部按对象的表与它留在各脏集合里的项；不动 `order` 与子表（`dropObject` 另管）。 */
+  private clearTables(object: number): void {
+    const owned = this.owned.get(object);
+    if (owned) {
+      for (const key of owned.constants) {
+        this.constants.delete(key);
+        this.passStates.delete(key);
+        this.dirtyPasses.delete(key);
+      }
+      for (const key of owned.effects) this.effects.delete(key);
+      for (const key of owned.shadow) this.shadowPasses.delete(key);
+      this.owned.delete(object);
+    }
+    this.layers.delete(object);
+    this.particleInstances.delete(object);
+    this.sounds.delete(object);
+    this.lights.delete(object);
+    this.cameras.delete(object);
+    const prefix = `${object}:`;
+    for (const key of [...this.animationLayers.keys()]) if (key.startsWith(prefix)) this.animationLayers.delete(key);
+    this.texts.delete(object);
+    this.textFields.delete(object);
+    this.textObjects.delete(object);
+    this.alignmentSizes.delete(object);
+    this.frozenLayers.delete(object);
+    this.pendingDestroy.delete(object);
+    this.dirtyLayers.delete(object);
+    this.transformWrites.delete(object);
+    this.dirtyStructures.delete(object);
+    this.dirtyParticles.delete(object);
+    this.dirtyTexts.delete(object);
+    this.rateParticles.delete(object);
+    this.dirtyPassStates.delete(object);
+  }
+
+  /**
+   * 把图层 effect 的「带不支持项」同步进 effect 开关表（L3a）：登记表的 `restructure` 在组内图层的 effect 上加 / 去 `GROUP_CHILD_FRAMEBUFFER` 之后调，
+   * `needsRecompile` 读的就是这一份。只改 `unsupported`，不动 `enabled`（运行中写的开关）；状态里没有这一项时什么都不做。
+   */
+  syncEffectSupport(layer: SceneLayer): void {
+    for (const effect of layer.effects) {
+      const state = this.effects.get(effectKey(layer.object, effect.source));
+      if (state) state.unsupported = effect.unsupported.length > 0;
+    }
+  }
+
+  /**
+   * 清掉一个对象的全部按对象的表（L3a；`flushDestroy` 之后调：它不清常量、effect 开关、粒子实例等）。结构归 `flushDestroy` 管：对象还在
+   * `order` 里时不动 `order` 与子表；不在 `order` 里（已被 `flushDestroy` 摘掉）时顺手确保它不在任何子表里、没有自己的子表。
+   */
+  dropObject(object: number): void {
+    this.clearTables(object);
+    if (this.order.includes(object)) return;
+    for (const [parent, list] of [...this.children]) {
+      const at = list.indexOf(object);
+      if (at >= 0) list.splice(at, 1);
+      if (list.length === 0) this.children.delete(parent);
+    }
+    this.children.delete(object);
+  }
+
+  /**
+   * 换成新编的同一对象（L3a，L5 / L6 用）：`order` 的位置、`parent`（运行中的父）、子表、冻结与待删标记不动，其余按对象的表按新切片重建
+   * （运行中的写入——常量覆盖、脚本写的字段、动画层字段、排版结果——都回到新切片的初值，由宿主重放这个对象的脚本写入，L3b）。`structureVersion` 加一，
+   * 渲染侧据此重建派生表。对象不在状态里时抛错。
+   */
+  replaceObject(slice: ObjectStateSlice): void {
+    const object = slice.layer.object;
+    const old = this.layers.get(object);
+    if (!old) throw new Error(`对象 ${object} 不在状态里`);
+    const parent = old.parent;
+    const frozen = this.frozenLayers.has(object);
+    const pending = this.pendingDestroy.has(object);
+    this.clearTables(object);
+    this.installTables(slice);
+    this.layers.get(object)!.parent = parent;
+    if (frozen) this.frozenLayers.add(object);
+    if (pending) this.pendingDestroy.add(object);
+    this.structureVersion++;
   }
 
   /**

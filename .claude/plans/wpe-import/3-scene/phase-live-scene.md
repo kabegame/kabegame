@@ -383,7 +383,7 @@ export class CompileSessionClient {
 
 拆成两块，各自验收：
 - [live/phase-l3a-registry-state.md](live/phase-l3a-registry-state.md)：登记表、状态逐对象增删、组与挂点运行时重算。派生量不另建 `derived.ts`，由登记表现算、写回图层，L4 的消费者不改。片段缓存挪到 L5。
-- L3b：宿主子系统，子计划待写。
+- [live/phase-l3b-host-subsystems.md](live/phase-l3b-host-subsystems.md)：宿主子系统（关键帧、puppet、文本、脚本、声音、用户纹理 / 媒体）的按对象增删入口，加上宿主的 `addCompiledObject` / `removeObjectEverywhere`，不接进 `createLayer`（L5 接）。
 
 #### 点 1 — 状态按对象（`render/state.ts`，即 P6d4 点 3 的扩展）
 - **修改** `fromBundle` 里按对象初始化的部分抽成一个函数。`fromBundle` 改成「场景级部分 + 对每个对象调它」，不留两份。

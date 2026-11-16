@@ -150,6 +150,25 @@ replaceObject(slice: ObjectStateSlice): void;
   - `replaceObject` 把图层追加到尾。
 - **不碰**：宿主、`GpuScene`、渲染器（L3b / L4）。产品行为不变，除了收尾改成调共用函数（产物不变）。
 
+## 验收中的补充（2026-11-17）
+
+**实现与本计划不同的几处**（复核后接受）：
+- `replaceObject` 不把其余表追加到尾，而是插回「按所属对象排序的位置」：脚本和关键帧的 `init` / `update` 顺序由表顺序决定，追加会改变被替换对象的执行顺序。加新对象时这个位置就是表尾。
+- `restructure` 顺带按状态的子表重写 `bundle.children`，免得它和活的父子关系脱节。
+- 共用函数没有另建 `structureRules.ts`，放在 `bundle.ts` 导出（`applyAttachments`、`applyGroupRules`），避免循环 import。
+- `applyGroupRules` 对 effect 写时复制，不原地改，所以登记表的图层可以和整场 bundle 共用 effect。产物哈希不变。
+- 状态加了私有表 `owned`，记每个对象占的常量 / effect / 阴影变体的键，`dropObject` 按它清，不依赖键的写法。
+- 灯全删光时删掉 `bundle.lightObjects` 键，和编译期「没有灯就不写」一致。
+- 「逐个加」对绑定只能按所属对象稳定排序后比：整场里场景级绑定与收尾登记的反射重编译绑定穿插在各处。脚本与关键帧严格同序。
+
+**补上的漏项：状态的 effect 开关跟着组规则走。**
+- 现象：`restructure` 给组内关着且读快照的 effect 加 / 去 `GROUP_CHILD_FRAMEBUFFER`，只改了登记表里的 effect。状态的 effect 开关表在 `addObject` 时就按 `unsupported.length > 0` 定了值，`needsRecompile` 读的是这份。
+- 后果：运行中建的对象进了组、之后脚本打开那个 effect，不会整场重编译；出组时反过来多编一次。
+- 为什么对照没抓到：语料里这类 effect 为 0。
+- 修法：状态加 `syncEffectSupport(layer)`，只改 `unsupported`、不动运行中写的 `enabled`。`restructure` 在组规则之后对状态里有的每个图层调一次。补了单测和变异。
+
+**L2 的回归顺带修了**：五个 `host.*.test.ts` 的 mock 还是旧入口，见 [phase-l2-worker.md](phase-l2-worker.md)「验收中的补充」。
+
 ## 交付
 
 sonnet 执行代理在主工作区实现。

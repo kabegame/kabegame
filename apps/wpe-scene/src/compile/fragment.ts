@@ -162,13 +162,15 @@ export function fragmentBlocker(bundle: SceneBundle, object: number): string | n
 }
 
 /**
- * 从整场 bundle 里取一个对象的片段。各表按「属于这个对象」过滤：图层按 `object`，绑定按 {@link bindingOwnedBy}，脚本与关键帧按 `objects/<i>/` 前缀的
- * id（关键帧的 `parent` 换成片段内下标），声音、灯按 `object`。位置相关的字段清成和 `compileFragment` 相同的空值；`reflected` 取
- * `bundle.reflection?.list` 是否含它；`unsupported`、`sceneFlips` 为 []；`audio`、`media` 现算（同 `compileFragment`）。有 `fragmentBlocker` 时返回 null。
+ * 从整场 bundle 里取一个对象的片段（不做 {@link fragmentBlocker} 检查，L3a：登记表的逐个加对照要取全部对象）。各表按「属于这个对象」过滤：图层按
+ * `object`，绑定按 {@link bindingOwnedBy}，脚本与关键帧按 `objects/<i>/` 前缀的 id（关键帧的 `parent` 换成片段内下标），声音、灯按 `object`。
+ * 位置相关的字段清成和 `compileFragment` 相同的空值（`group` / `subtree` / `attachment` / effect 的 `GROUP_CHILD_FRAMEBUFFER` / 灯的 `legacySlot`）；
+ * `groupUpload` 原样保留。`reflected` 取 `bundle.reflection?.list` 是否含它；`unsupported`、`sceneFlips` 为 []；`audio`、`media` 现算（同
+ * `compileFragment`）。对象不在 `bundle.layers` 里返回 null。
  */
-export function fragmentOf(bundle: SceneBundle, object: number): ObjectFragment | null {
-  if (fragmentBlocker(bundle, object) !== null) return null;
-  const source = bundle.layers.find((item) => item.object === object)!;
+export function objectSlice(bundle: SceneBundle, object: number): ObjectFragment | null {
+  const source = bundle.layers.find((item) => item.object === object);
+  if (!source) return null;
   const layer: SceneLayer = {
     ...source,
     group: null,
@@ -212,6 +214,14 @@ export function fragmentOf(bundle: SceneBundle, object: number): ObjectFragment 
     media: layerUsesMedia(layer, scripts),
     unsupported: [],
   };
+}
+
+/**
+ * 从整场 bundle 里取一个对象的片段（克隆模板用）：有 {@link fragmentBlocker} 时返回 null，否则同 {@link objectSlice}。
+ */
+export function fragmentOf(bundle: SceneBundle, object: number): ObjectFragment | null {
+  if (fragmentBlocker(bundle, object) !== null) return null;
+  return objectSlice(bundle, object);
 }
 
 // ———— 改键 ————

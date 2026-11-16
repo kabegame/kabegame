@@ -249,6 +249,28 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - **客户端**（`compile/client.ts`）：`openSceneSession` 返回 bundle 与 `CompileSessionClient`（`compileFragment` / `close` / `stats` / `broken`）；增量里的 FreeImage 新纹理在交回前于主线程解码。`compileSceneInWorker` = 开会话、取 bundle、马上关，dev 探针等一次性编译照旧用它。
   - **宿主的留与关**（`host.ts` `sessionUseful`）：场景有脚本，或有对象级重编译绑定（`layer-structure`）时留着会话，否则编完就关。换场景时关旧的，退回、销毁时关。「开始渲染」日志末尾带会话统计。
   - **冒烟**：dev 探针 `sessionSmoke(imageIds)` 经真 Worker 比较片段与改键（同 L1 的对照）、查已分离缓冲、比较整场摘要与 `compileSceneInWorker`。
+- **登记表与状态的逐对象增删（L3a）**：宿主手里那份 bundle 由 `compile/registry.ts` 的 `SceneRegistry` 增删。它改的就是 bundle 自己的数组，现读 `bundle.layers` 等的消费者自动接上。状态一侧是 `SceneState.addObject` / `dropObject` / `replaceObject`，`fromBundle` 就是场景级构造加逐个对象装表。本步还没接进宿主（L3b、L4、L5 接）。
+  - **加**：
+    - 图层追加到表尾；
+    - 绑定、脚本、关键帧、声音、灯插在按所属对象排序的位置（新对象就是表尾），关键帧联动的 `parent` 换成表内下标；
+    - 灯的遗留槽现分配：空出的最小槽，满了取 0；
+    - 有粒子的图层领下一个粒子序号，删掉的序号不回收；
+    - 场景级只增表走 `applyDelta`，`from` 不等于当前长度就抛错。
+  - **删**：状态先 `flushDestroy`，再 `dropObject` 清掉这个对象的全部表。清哪些键按装表时记下的 `owned`，不靠键的写法。登记表 `removeObject` 摘掉条目，`configs` 保留。
+  - **换**：
+    - 图层留在原位置，其余条目插回原位置（脚本与关键帧的执行顺序不变），灯沿用原槽、粒子沿用原序号；
+    - 状态保留 `order` 位置、运行中的父、子表、冻结与待删标记；
+    - 运行中的写入回到新切片的初值，由宿主重放这个对象的脚本写入（L3b）。
+  - **组与挂点**：`restructure(state, bones)` 按状态里运行中的父与子表，重写 `bundle.children`、组归属、子树与挂点。
+    - 组内关着且读快照的 effect 加 / 去 `GROUP_CHILD_FRAMEBUFFER`，并同步状态的 effect 开关（`syncEffectSupport`，只改 `unsupported`、不动运行中写的 `enabled`）；
+    - 返回组内用法的不支持项，由调用方处理；
+    - 和 `finalize` 共用 `applyAttachments` / `applyGroupRules`，整场产物不变。
+  - **判据**（`ignore/live/l3/registry.test.ts`）：全语料上比三件事：
+    - 「从空逐个加」等于「整场一次」；
+    - 逐个替换后不变；
+    - 随机逐个删，每步等于「只加剩下的」。
+
+    2026-11-17 的结果：233 张场景、6448 个对象，0 不同。
 
 ### 能力表（`features.ts`）
 

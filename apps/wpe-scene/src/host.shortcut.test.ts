@@ -101,7 +101,10 @@ vi.mock("@tauri-apps/api/event", () => ({
     return () => {};
   }),
 }));
-vi.mock("./compile/client", () => ({ compileSceneInWorker: (input: never) => compile(input) }));
+// 宿主经常驻编译会话拿 bundle（L2）：会话本身只用到 close 与 stats，这里是空壳
+vi.mock("./compile/client", () => ({
+  openSceneSession: async (input: never) => ({ bundle: await compile(input), session: { close() {}, stats: null } }),
+}));
 vi.mock("./script/realm", () => ({
   getJsModuleIndex: () => ({}),
   createIframeRealm: async () => createRealm(),

@@ -219,6 +219,7 @@ export async function sessionSmoke(imageIds: string[], options?: { maxObjects?: 
     - 只在打开时清不够：第二轮冒烟每个对象都编片段，缓存又涨回原规模。
     - `trimCaches` 测试开关同 `forgetAfterTransfer`。
 - **队列卡死**：片段任务里意外抛错（发回时结构化克隆失败）会让串行队列变成 rejected，之后的请求永远没有回复。改成队列只接已兜住的 Promise，意外异常也标坏并回 `fragment-error`，补了用例并做了变异。
+- **漏跑的宿主测试**（L3a 验收时发现，随 L3a 提交修）：宿主的编译入口换成 `openSceneSession` 后，只有 `host.test.ts` 的 mock 跟着改了。`host.media` / `script` / `shortcut` / `usertextures` / `video` 五个测试文件仍只 mock `compileSceneInWorker`，宿主加载时调到 undefined、永远不 ready，117 条失败。L2 验收只跑了 `host.test.ts`。修法：五个文件的 mock 换成 `openSceneSession` 返回 `{ bundle, session: 空壳 }`。以后改宿主入口时，按 `grep compile/client` 列出全部 mock 它的测试再跑。
 
 ## 交付
 

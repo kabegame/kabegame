@@ -176,7 +176,10 @@ vi.mock("@tauri-apps/api/event", () => ({
     return () => {};
   }),
 }));
-vi.mock("./compile/client", () => ({ compileSceneInWorker: (input: never) => compile(input) }));
+// 宿主经常驻编译会话拿 bundle（L2）：会话本身只用到 close 与 stats，这里是空壳
+vi.mock("./compile/client", () => ({
+  openSceneSession: async (input: never) => ({ bundle: await compile(input), session: { close() {}, stats: null } }),
+}));
 // 声音的播放后端换成记命令的假货：排期器（`audio/scheduler.ts`）与 `SceneSounds` 是真的
 vi.mock("./audio/player", () => ({
   ScenePlayer: class {

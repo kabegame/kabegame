@@ -1042,6 +1042,71 @@ export function assignGroups(
 }
 
 /**
+ * 挂点（P12b1 步骤 3）的重算：每个图层按它当前的父、挂点骨骼名与「父可以排在后面」位置解析 {@link resolveAttachment}，找得到写 `attachment`、
+ * 找不到去掉。父的 puppet 取自 `layers` 里的 `puppet` / 模型骨骼。编译收尾（`finalize`）与 L3a 登记表的 `restructure` 共用这一份。
+ * `nameOf` 给一个图层的挂点骨骼名（原文，非字符串时 `resolveAttachment` 判不挂）与是否带挂点覆盖（运行中换父，允许父排在后面）。
+ */
+export function applyAttachments(
+  layers: readonly SceneLayer[],
+  nameOf: (layer: SceneLayer) => { name: unknown; override: boolean },
+): void {
+  const puppetsByObject = new Map(layers.map((layer) => [layer.object, layer.puppet ?? layer.model?.skeleton ?? null]));
+  for (const layer of layers) {
+    const { name, override } = nameOf(layer);
+    const attachment = resolveAttachment(
+      layer.object,
+      layer.parent,
+      name,
+      (object) => puppetsByObject.get(object),
+      override,
+    );
+    if (attachment) layer.attachment = attachment;
+    else delete layer.attachment;
+  }
+}
+
+/**
+ * 组的归属与组里的用法（P5b 步骤 4）的重算：`assignGroups` 之后，组里的图层按 {@link groupChildIssues} 报还不支持的用法（返回 对象 → 键，
+ * 没有问题的对象不在表里），关着、运行时可能打开的 effect 读快照时记 {@link GROUP_CHILD_FRAMEBUFFER}（打开时整场重编译，
+ * `SceneState.needsRecompile`）；不在组里的图层把这个标记去掉。effect 对象不原地改（写成新对象换进图层的 `effects`），所以两个图层可以共用 effect。
+ * 编译收尾与 L3a 登记表的 `restructure` 共用这一份。
+ */
+export function applyGroupRules(
+  layers: SceneLayer[],
+  /** 子表顺序（`assignGroups` 的 `order`） */
+  children: ReadonlyMap<number, readonly number[]>,
+): Map<number, string[]> {
+  assignGroups(layers, children);
+  const issues = new Map<number, string[]>();
+  for (const layer of layers) {
+    if (layer.group === null) {
+      if (layer.effects.some((effect) => effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER)))
+        layer.effects = layer.effects.map((effect) =>
+          effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER)
+            ? { ...effect, unsupported: effect.unsupported.filter((key) => key !== GROUP_CHILD_FRAMEBUFFER) }
+            : effect,
+        );
+      continue;
+    }
+    const keys = groupChildIssues(layer);
+    if (keys.length > 0) issues.set(layer.object, keys);
+    // 关着、运行时可能打开的 effect 读快照：记进它自己的不支持项，打开时整场重编译，重编译后按上面报
+    if (
+      layer.effects.some(
+        (effect) =>
+          !effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER),
+      )
+    )
+      layer.effects = layer.effects.map((effect) =>
+        !effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER)
+          ? { ...effect, unsupported: [...effect.unsupported, GROUP_CHILD_FRAMEBUFFER].sort() }
+          : effect,
+      );
+  }
+  return issues;
+}
+
+/**
  * 图像层的尺寸（P5b 步骤 1；rea-p5-modelflags §7「尺寸的最终取值顺序」，p5-REPORT `p5b-autosize` 实测）：1×1 → 模型 `width` /
  * `height`（是数字才算，两个分量各自生效）→ 对象 `size`（`objectSize`，解析出的分量各自覆盖）→ `autosize` 时覆盖前面的值：
  * - `projectlayer`（P5b 步骤 2，rea §3.1，`p5b-proj` 实测）：正交投影宽高（`projection`，即 `SceneGeneral` 的 `width` / `height`），
@@ -3092,19 +3157,10 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     input.onProgress?.(progressTotal, progressTotal);
     // 组（P5b 步骤 4）：全部对象编完之后定归属与子树（祖先可能排在子孙后面），再按子孙编好的模型、材质、effect、粒子查组里还不支持的用法
     // 挂点（P12b1 步骤 3）：父的 puppet 编完才解析，只在找得到时才写字段（找不到按普通父子）
-    const puppetsByObject = new Map(
-      bundle.layers.map((layer) => [layer.object, layer.puppet ?? layer.model?.skeleton ?? null]),
-    );
-    for (const layer of bundle.layers) {
-      const attachment = resolveAttachment(
-        layer.object,
-        layer.parent,
-        (scene.objects[layer.object] as Record<string, unknown> | undefined)?.attachment,
-        (object) => puppetsByObject.get(object),
-        attachOverrides.has(layer.object),
-      );
-      if (attachment) layer.attachment = attachment;
-    }
+    applyAttachments(bundle.layers, (layer) => ({
+      name: (scene.objects[layer.object] as Record<string, unknown> | undefined)?.attachment,
+      override: attachOverrides.has(layer.object),
+    }));
     // 子表（P6d3）：只含进了 bundle 的对象；组内先序与 `SceneState` 的子表都按它
     const present = new Set(bundle.layers.map((layer) => layer.object));
     const lists = childLists(parents, scene.objects.length, parentOverrides);
@@ -3114,15 +3170,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       if (present.has(parent) && kept.length > 0) children.push([parent, kept]);
     }
     bundle.children = children;
-    assignGroups(bundle.layers, new Map(children));
-    for (const layer of bundle.layers) {
-      if (layer.group === null) continue;
-      for (const key of groupChildIssues(layer)) unsupported.add(key);
-      // 关着、运行时可能打开的 effect 读快照：记进它自己的不支持项，打开时整场重编译（`SceneState.needsRecompile`），重编译后按上面报
-      for (const effect of layer.effects)
-        if (!effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER))
-          effect.unsupported = [...effect.unsupported, GROUP_CHILD_FRAMEBUFFER].sort();
-    }
+    for (const keys of applyGroupRules(bundle.layers, new Map(children)).values())
+      for (const key of keys) unsupported.add(key);
     // 反射（P13b1）。设置解析成「反射开」一个布尔：跟随时读 WPE `config.json` 的 `general.user.reflection`，只在有读者时才读
     if (reflectionReaders.length || mipReaders) {
       const reflectionOn = await reflectionEnabled();
