@@ -187,9 +187,18 @@ describe("collectAnimations：目标与值类型", () => {
     ]);
   });
 
-  it("灯、相机对象上的不进列表，报 light / camera（语料 3465215190、3554161528）", () => {
-    const light = collect([image(), { id: 2, light: "lpoint", origin: kf3(), intensity: kf1({}, 1) }]);
-    expect(light).toEqual({ list: [], unsupported: ["value:animation:light"] });
+  it("灯对象（P13f2）：数值字段进灯目标、变换进图层目标；静态字段报 other；相机对象上的不进列表，报 camera（语料 3465215190、3554161528）", () => {
+    const light = collect([
+      image(),
+      { id: 2, light: "lpoint", origin: kf3(), intensity: kf1({}, 1), castshadow: kf1() },
+    ]);
+    expect(light.unsupported).toEqual(["value:animation:other"]);
+    expect(light.list.map((item) => item.target)).toEqual([
+      // 登记顺序按键名（P10b，`registration.ts`）
+      { kind: "light", object: 1, field: "intensity" },
+      { kind: "layer", object: 1, field: "origin" },
+    ]);
+    expect(light.list.map((item) => item.valueType)).toEqual(["float", "vec3"]);
     const camera = collect([{ id: 3, camera: "camera", origin: kf3({ parent: { key: "zoom" } }), zoom: kf1({}, 1) }]);
     expect(camera).toEqual({ list: [], unsupported: ["value:animation:camera"] });
   });
@@ -221,7 +230,7 @@ describe("collectAnimations：目标与值类型", () => {
 });
 
 describe("collectAnimations：丢弃、通道与时钟参数", () => {
-  it("丢弃（读码第 5 节第 1 条）：不报键；P10b 起图层字段上的照样进列表、标 inert，灯对象上与没有就地目标的仍不进", () => {
+  it("丢弃（读码第 5 节第 1 条）：不报键；P10b 起图层字段上的照样进列表、标 inert（P13f2 起灯对象的数值字段同样），没有就地目标的仍不进", () => {
     const discarded: JsonObject[] = [
       { animation: { c0: CURVE }, value: 1 },
       { animation: { c0: CURVE, options: [] }, value: 1 },
@@ -249,7 +258,10 @@ describe("collectAnimations：丢弃、通道与时钟参数", () => {
         parent: null,
         clock: { fps: 1, mode: 0, startpaused: false },
       });
-      expect(collect([{ id: 2, light: "lpoint", intensity: value }])).toEqual({ list: [], unsupported: [] });
+      // 灯对象（P13f2 起有就地目标）：丢弃的同图层字段，进列表、标 inert
+      expect(collect([{ id: 2, light: "lpoint", intensity: value }]).list, JSON.stringify(value)).toMatchObject([
+        { id: "objects/0/intensity", inert: true, target: { kind: "light", object: 0, field: "intensity" } },
+      ]);
       // 目标解析不了的（图层的 size）丢弃后也不进列表、不报键
       expect(collect([image({ size: value })]), JSON.stringify(value)).toEqual({ list: [], unsupported: [] });
     }
@@ -674,7 +686,7 @@ describe("compileScene：bundle.animations 与能力键", () => {
     expect(material.animations).toEqual([]);
   });
 
-  it("灯对象上的动画：报 value:animation:light，不进 bundle", async () => {
+  it("灯对象上的动画（P13f2）：数值字段进 bundle、就地写，不报键", async () => {
     const bundle = await compileScene({
       projectDir: "P:/p",
       sceneAssets: ["A:/assets"],
@@ -686,7 +698,7 @@ describe("compileScene：bundle.animations 与能力键", () => {
       postprocess: "disabled",
       exhaustive: true,
     });
-    expect(bundle.animations).toEqual([]);
-    expect(bundle.unsupported).toEqual(["value:animation:light"]);
+    expect(bundle.animations?.map((item) => item.target)).toEqual([{ kind: "light", object: 0, field: "intensity" }]);
+    expect(bundle.unsupported).toEqual([]);
   });
 });

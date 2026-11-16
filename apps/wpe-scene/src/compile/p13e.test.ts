@@ -10,8 +10,8 @@ import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compileScene } from "./bundle";
 import type { SceneReader } from "./fs";
-import type { LightCounts } from "./lights";
-import type { SceneObject, SceneScalar, SceneValue } from "./model";
+import { compileLightObjects, type LightCounts } from "./lights";
+import { numbers, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 import {
   compileVolumetrics,
   glmInverse,
@@ -20,6 +20,7 @@ import {
   spotViewProjection,
   volumetricsTargetSize,
   type VolumetricsCompileContext,
+  type VolumetricsInput,
 } from "./volumetrics";
 import { layerLocalMatrix } from "../render/layout";
 import { Wpesl2wgsl, type TranslateResult } from "../wpesl2wgsl";
@@ -156,6 +157,21 @@ const COUNTS: LightCounts = {
 const read = (value: SceneValue | undefined): SceneScalar | undefined =>
   value && typeof value === "object" && "value" in value ? (value.value as SceneScalar) : (value as SceneScalar);
 
+/** 灯对象与图层初值（P13f2 起体积光读 `SceneLightObject` 与 `bundle.layers` 的初值）：按 JSON 取。 */
+function volumetricsLights(objects: SceneObject[]): Pick<VolumetricsInput, "lights" | "layerOf"> {
+  const vector = (object: SceneObject, key: string, fallback: number[]) =>
+    numbers(read(object[key] as SceneValue | undefined), fallback);
+  return {
+    lights: compileLightObjects(objects, (value) => read(value)),
+    layerOf: (index) => ({
+      origin: vector(objects[index], "origin", [0, 0, 0]),
+      angles: vector(objects[index], "angles", [0, 0, 0]),
+      scale: vector(objects[index], "scale", [1, 1, 1]),
+      color: vector(objects[index], "color", [0, 0, 0]),
+    }),
+  };
+}
+
 async function compileRules(objects: SceneObject[], options: { quality?: number; shadowQuality?: number } = {}) {
   const unsupported = new Set<string>();
   let programs = 0;
@@ -170,8 +186,7 @@ async function compileRules(objects: SceneObject[], options: { quality?: number;
     addProgram: () => programs++,
   };
   const result = await compileVolumetrics(context, {
-    objects,
-    read: (value) => read(value),
+    ...volumetricsLights(objects),
     quality: options.quality ?? 1,
     shadowQuality: options.shadowQuality ?? 1,
     counts: COUNTS,
@@ -184,7 +199,7 @@ async function compileRules(objects: SceneObject[], options: { quality?: number;
 const point = (extra: SceneObject = {}): SceneObject => ({ light: "lpoint", castvolumetrics: true, ...extra });
 
 describe("compileVolumetrics 的取舍（V5、V6，待定 2、3）", () => {
-  it("可见、castvolumetrics 的点光 / 聚光才收；管光、平行光、隐藏的、没开的不收", async () => {
+  it("castvolumetrics 的点光 / 聚光都收（隐藏的也收：可见性是运行时状态，P13f2）；管光、平行光、没开的不收", async () => {
     const { result, unsupported } = await compileRules([
       point(),
       { light: "ltube", castvolumetrics: true },
@@ -196,6 +211,7 @@ describe("compileVolumetrics 的取舍（V5、V6，待定 2、3）", () => {
     expect(unsupported).toEqual([]);
     expect(result!.lights.map((light) => [light.object, light.kind])).toEqual([
       [0, "point"],
+      [3, "point"],
       [5, "spot"],
     ]);
     expect(result!.blurH).not.toBeNull();
@@ -244,12 +260,12 @@ describe("compileVolumetrics 的取舍（V5、V6，待定 2、3）", () => {
     );
   });
 
-  it("带阴影的点光多于 min(pointShadow, point) 时报 volumetrics:shadow-unassigned；隐藏的不算", async () => {
+  it("带阴影的点光多于 min(pointShadow, point) 时报 volumetrics:shadow-unassigned；隐藏的也算（P13f2：可见性是运行时状态，按全部可见判，待定 3）", async () => {
     expect((await compileRules([point({ castshadow: true })])).unsupported).toEqual([]);
     expect(
       (await compileRules([point({ castshadow: true }), { light: "lpoint", castshadow: true, visible: false }]))
         .unsupported,
-    ).toEqual([]);
+    ).toEqual(["volumetrics:shadow-unassigned"]);
     expect(
       (await compileRules([point({ castshadow: true }), { light: "lpoint", castshadow: true }])).unsupported,
     ).toEqual(["volumetrics:shadow-unassigned"]);
@@ -260,10 +276,13 @@ describe("compileVolumetrics 的取舍（V5、V6，待定 2、3）", () => {
     ).toEqual([]);
   });
 
-  it("聚光：可见的聚光多于聚光槽报 spot-unassigned，带阴影报 spot-shadow；任何灯 usecookie 报 cookie", async () => {
+  it("聚光：聚光（含隐藏的，P13f2）多于聚光槽报 spot-unassigned，带阴影报 spot-shadow；任何灯 usecookie 报 cookie", async () => {
     const spot = { light: "lspot", castvolumetrics: true };
     expect((await compileRules([spot, { light: "lspot" }])).unsupported).toEqual(["volumetrics:spot-unassigned"]);
-    expect((await compileRules([spot, { light: "lspot", visible: false }])).unsupported).toEqual([]);
+    // 可见性是运行时状态（P13f2）：按全部可见判，隐藏的也算（待定 3）
+    expect((await compileRules([spot, { light: "lspot", visible: false }])).unsupported).toEqual([
+      "volumetrics:spot-unassigned",
+    ]);
     expect((await compileRules([{ ...spot, castshadow: true }])).unsupported).toEqual(["volumetrics:spot-shadow"]);
     expect((await compileRules([point({ usecookie: true })])).unsupported).toEqual(["volumetrics:cookie"]);
   });
@@ -284,8 +303,7 @@ describe("compileVolumetrics 的取舍（V5、V6，待定 2、3）", () => {
       addProgram: () => 0,
     };
     await compileVolumetrics(context, {
-      objects: [point({ castshadow: true }), { light: "lspot", castvolumetrics: true }],
-      read: (value) => read(value),
+      ...volumetricsLights([point({ castshadow: true }), { light: "lspot", castvolumetrics: true }]),
       quality: 2,
       shadowQuality: 3,
       counts: COUNTS,

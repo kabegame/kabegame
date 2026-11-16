@@ -38,9 +38,12 @@ import {
   generalValue,
   isLayerVectorField,
   layerVectorValue,
+  lightFieldValue,
   type BindingTarget,
   type GeneralValues,
   type LayerField,
+  type LightField,
+  type LightValues,
   type SceneBinding,
   type TargetKey,
   type TextRuntimeField,
@@ -337,6 +340,11 @@ export class SceneState {
    */
   readonly sounds = new Map<number, { volume: number }>();
   /**
+   * 灯对象的数值字段（P13f2，`objects` 下标 → `LightValues`），起始值 = 编译期的 `SceneLightObject.values`。写入不标脏：渲染器每帧现算
+   * 灯光 uniform、遗留灯与体积光（WPE 这些字段没有改值回调，逐帧读，rea-p13-lights 3.1）。
+   */
+  readonly lights = new Map<number, LightValues>();
+  /**
    * 相机对象的就地值（P5d 步骤 3，`objects` 下标 → 值），起始值 = 编译期的 `SceneLayer.camera`；只含 `camera` 非空的图层（纯相机对象）。
    * 写入不标脏：渲染器每帧选相机时读。
    */
@@ -497,6 +505,7 @@ export class SceneState {
       if (layer.alignment !== undefined) state.alignmentSizes.set(layer.object, [...layer.size]);
     // 手写的测试 bundle 可能没有声音表
     for (const sound of bundle.sounds ?? []) state.sounds.set(sound.object, { volume: sound.volume });
+    for (const light of bundle.lightObjects ?? []) state.lights.set(light.object, structuredClone(light.values));
     // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
     for (const layer of bundle.layers)
       if (layer.camera) state.cameras.set(layer.object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
@@ -868,6 +877,13 @@ export class SceneState {
       // `0x14022ab30` 置脏（5.1），下一帧开头从基值重算（5.2、5.3）
       if (target.field === "rate") this.rateParticles.add(target.object);
       else this.dirtyParticles.add(target.object);
+      return "applied";
+    }
+    if (target.kind === "light") {
+      const light = this.lights.get(target.object);
+      // 取值规则与编译期相同（`lightFieldValue`），条件先换成布尔；不合法的值不改字段
+      const value = lightFieldValue(target.field, conditioned(binding, raw));
+      if (light && value !== undefined) (light as Record<LightField, number | number[]>)[target.field] = value;
       return "applied";
     }
     if (target.kind === "sound") {

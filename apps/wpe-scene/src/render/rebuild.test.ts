@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generalDefaults, type GeneralKey, type GeneralValues } from "../compile/bindings";
+import { generalDefaults, lightDefaults, type GeneralKey, type GeneralValues } from "../compile/bindings";
 import {
   FRAMEBUFFER_RT,
   type SceneBundle,
@@ -1877,5 +1877,52 @@ describe("层级（P4a 步骤 1）", () => {
     live.state.write({ property: "p", target: { kind: "layer", object: 2, field: "visible" } }, false);
     advance(live);
     expect(visibleObjects(runtimes, live.state)).toEqual([4]);
+  });
+});
+
+describe("遗留灯晚一帧（P13f2，p13-REPORT「P13f 的实测」L1）", () => {
+  it("脚本写了遗留灯的位置：这一帧的 uniform 仍是上一帧末的值，下一帧才变；同一帧再 update 不换代", async () => {
+    // 图层 0 兼作遗留灯对象（只要它在状态里有图层与灯字段）；程序另声明 `g_LightsPosition`（vec3[4]，16 字节步长）
+    const bundle = twoEffects([true, true]);
+    bundle.programs = bundle.programs.map((item) => {
+      const base = item as unknown as { uniforms: object[] };
+      return {
+        ...base,
+        uniforms: [
+          ...base.uniforms,
+          { name: "g_LightsPosition", type: "array<vec3<f32>, 4>", declared: "vec3", offset: 128, size: 64 },
+        ],
+        uniformBlockSize: 192,
+      } as unknown as TranslateResult;
+    });
+    bundle.lightObjects = [
+      {
+        object: 0,
+        light: "point",
+        kind: null,
+        legacy: true,
+        legacySlot: 0,
+        flags: 0,
+        castVolumetrics: false,
+        values: lightDefaults(),
+      },
+    ];
+    bundle.legacyLights = true;
+    const live = await open(bundle);
+    const slot0 = () =>
+      internals(live.scene).layers[0].draws.map((draw) => [
+        ...new Float32Array(draw.uniformBuffer.bytes.slice().buffer, 128, 3),
+      ]);
+    live.scene.update({ ...FRAME, time: 0 });
+    const before = slot0();
+    expect(before[0]).toEqual([10, 20, 0]);
+    live.state.write({ property: "o", target: { kind: "layer", object: 0, field: "origin" } }, "7 8 9");
+    live.scene.sync(live.state);
+    live.scene.update({ ...FRAME, time: 1 });
+    expect(slot0()).toEqual(before);
+    live.scene.update({ ...FRAME, time: 1 });
+    expect(slot0()).toEqual(before);
+    live.scene.update({ ...FRAME, time: 2 });
+    expect(slot0().every((value) => value.join(" ") === "7 8 9")).toBe(true);
   });
 });

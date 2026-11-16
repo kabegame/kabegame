@@ -24,7 +24,7 @@ export interface CollectedAnimations {
    */
   list: SceneAnimation[];
   /**
-   * 不进列表、照报的能力键：灯对象上的 `value:animation:light`（P13）、相机对象上的 `value:animation:camera`（P5d）、
+   * 不进列表、照报的能力键：相机对象上的 `value:animation:camera`（P5d）、
    * 没有就地目标的 `value:animation:other`。
    */
   unsupported: string[];
@@ -187,7 +187,7 @@ function propertyOf(path: string): string {
 }
 
 /** 灯对象（P13）与相机对象（P5d）：有这个键（不为 null）。 */
-const isLightObject = (object: SceneObject) => object.light !== undefined && object.light !== null;
+const isLightObject = (object: SceneObject) => typeof object.light === "string";
 const isCameraObject = (object: SceneObject) => object.camera !== undefined && object.camera !== null;
 
 /**
@@ -196,7 +196,7 @@ const isCameraObject = (object: SceneObject) => object.camera !== undefined && o
  * 关键帧没有就地目标，报 `other`。
  *
  * 每处关键帧依次：
- * 1. 灯 / 相机对象上的：不进列表，报 `value:animation:light` / `camera`（丢弃的这几种不报）；
+ * 1. 相机对象上的：不进列表，报 `value:animation:camera`（丢弃的不报）；灯对象 P13f2 起走 `targetOf`（数值字段 `light`、图层字段 `layer`）；
  * 2. 目标（`targetOf`）没有就地目标：不进列表，报 `value:animation:other`（丢弃的不报）；
  * 3. 丢弃（`clockOf`）：WPE 属性保持 `value`、什么都不写，但照样登记、`getAnimation` 找得到（读码第 5 节，P10b 步骤 0 Q7）：进列表、
  *    标 `inert`，`writes` 假、通道与事件为空，时钟参数 `fps` 1、`mode` 0（惰性时钟，`AnimationClock.inert`），`length` 是数时截断、否则 0；
@@ -219,12 +219,9 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
     const options = animation.options;
     const parsed = clockOf(options);
     const object = layer === null ? undefined : objects[layer];
-    // 丢弃的（`parsed` 为 null）照样登记（P10b，读码第 5 节第 1 条）；灯 / 相机对象与没有就地目标的无论丢不丢都不进列表，
-    // 丢弃的这几种也不报键（WPE 本来就什么都不做，和 P10a 一致）
-    if (isRecord(object) && isLightObject(object)) {
-      if (parsed) unsupported.add("value:animation:light");
-      return;
-    }
+    // 丢弃的（`parsed` 为 null）照样登记（P10b，读码第 5 节第 1 条）；相机对象与没有就地目标的无论丢不丢都不进列表，
+    // 丢弃的这几种也不报键（WPE 本来就什么都不做，和 P10a 一致）。灯对象 P13f2 起有就地目标（数值字段 `light`、变换与颜色是图层字段，
+    // `p13f-light` 的 L1：V1 灯当帧、遗留灯晚一帧），`light` / `castshadow` 等静态字段落到下面的 `other`
     if (isRecord(object) && isCameraObject(object)) {
       if (parsed) unsupported.add("value:animation:camera");
       return;
@@ -240,6 +237,8 @@ export function collectAnimations(scene: SceneJson): CollectedAnimations {
           isRecord(object) && isSoundObject(object),
           isRecord(object) && isTextObject(object),
           isRecord(object) && objectKind(object) === "particle",
+          false,
+          isRecord(object) && isLightObject(object),
         )
       : ({ kind: "unsupported", path } as const);
     if (target.kind === "unsupported" || target.kind === "recompile") {

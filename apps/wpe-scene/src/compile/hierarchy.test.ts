@@ -71,7 +71,7 @@ describe("能力表：层级", () => {
     expect([...keys]).toEqual([]);
   });
 
-  it("普通图层带 parent 不报；灯带有效 parent 仍报 object:parent", () => {
+  it("普通图层带 parent 不报；灯带有效 parent 也不报（P13f2）", () => {
     const keys = new Set<string>();
     checkSceneFeatures(
       {
@@ -94,7 +94,8 @@ describe("能力表：层级", () => {
       },
       keys,
     );
-    expect([...keys]).toEqual(["object:parent"]);
+    // P13f2 起灯挂父对象也不报：位置、方向与可见性每帧沿父链现算
+    expect([...keys]).toEqual([]);
   });
 
   it("灯的 parent 找不到时当根节点，不报", () => {

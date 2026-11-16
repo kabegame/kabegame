@@ -35,7 +35,7 @@
   `genericimage4` 顶层那条无条件的 require，在 `LIGHTING=0` 时等于空行。逐灯的 PBR 计算在公开头文件 `common_pbr_2.h`，翻译器 `library.rs` 只负责遍历灯。
 - **灯数不看灯对象**：`LIGHTS_*` 取 `general.lightconfig`，每种灯 4 位。灯对象只负责填数组：多的丢掉，少的槽位全 0。没有这个键的场景里灯对象不起作用，开了 `LIGHTING` 的材质只剩环境光。
 - **`"light": "point"` 是遗留灯**，不进这些数组；V1 灯是 `lpoint` / `lspot` / `ltube` / `ldirectional`。
-- 宿主 `compile/lights.ts` 把灯对象整理成记录（`bundle.lights`，绑了 `{user}` 的字段登记重编译），渲染器每帧按视线方向排序、照 WPE 写整块灯光缓冲（P13d 起，见「阴影（P13d）」），宏经 `litDefines` 传给翻译器，只在最终 `LIGHTING` 非 0 时生效。
+- 宿主 `compile/lights.ts` 把灯对象整理成编译期记录（`bundle.lightObjects`，绑了 `{user}` 的数值字段登记就地目标，P13f2），渲染器每帧按 `SceneState` 现组灯记录、按视线方向排序、照 WPE 写整块灯光缓冲（P13d 起，见「阴影（P13d）」与「灯的运行时（P13f2）」），宏经 `litDefines` 传给翻译器，只在最终 `LIGHTING` 非 0 时生效。
 - 光照路径自己的宏只有 `LIGHTS_*`。`SHADERVERSION` 是翻译器的平台宏（69），`genericimage3` 按它选公式。
 - **全局引擎宏**（[hdr-macro-REPORT](../../.claude/plans/wpe-import/3-scene/hdr-macro-REPORT.md)）：`HDR`、`SCENE_ORTHO` 经 `engineDefines` 传给全部着色器，关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。`REVERSEDEPTH` 恒为 1（P13c，WPE 用反向深度；见「sprite 对象（P13c）」）。`TEX<n>FORMAT` 只给声明了 `formatcombo` 且按名字绑定的槽位定义，运行时槽位（`previous`、`bind`、passthrough）不定义。`HLSL_GS40_DISABLED` 不能定义，WPE 没有这个宏。
 - **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，聚光的阴影 / cookie 报 `lightconfig:spot*`（点光、平行光的阴影 P13d 起支持），体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
@@ -116,6 +116,17 @@
 - **`ADDITIVE`**：材质混合是 `additive` 时编译期加 `ADDITIVE = 1`（WPE 加载时加，运行中改混合不加），只有 `generic4` / `chroma4` / `foliage4` / `fur4` 的雾分支读它（雾因子乘进 alpha）。粒子组合键白名单放行它。
 - **照报**：开雾又有体积光报 `volumetrics:fog`（`volumetricsfront` 声明 `FOG`，体积光的 uniform 没接雾，语料 0）。
 - **实测**（2026-11-15，`ignore/p13/f/gen_f0.py`）：透视 / 正交 / 粒子 / 各种图像层与文本 / 组合层与全屏层 7 个工程和 WPE 整帧比，最多 12 个像素、都只差 1 级，两个关雾的工程 0 差异。
+
+## 灯的运行时（P13f2）
+
+读码见 [rea-p13-lights](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-lights.md) 第 1、3 节，实测见 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13f 的实测」L1–L4。WPE 的灯字段都没有改值回调、逐帧读，所以灯是运行时状态，不再是编译期常量。
+
+- **编译期**（`compile/lights.ts` 的 `compileLightObjects` → `bundle.lightObjects`）：每个 `light` 是字符串的对象一条（类型、遗留槽、`castshadow` / `usecookie` / `castvolumetrics`、12 个数值字段的初值，`LIGHT_FIELDS`）。数值字段绑属性登记就地目标 `{ kind: "light" }`；颜色、变换、可见性是图层字段（灯的 `color` 缺省黑）。`light`、`castshadow`、`usecookie`、`castvolumetrics` 运行中变 WPE 会重建灯的资源，挂属性 / 脚本 / 关键帧照报 `light:runtime:<键>`。
+- **状态与写入**：`SceneState.lights`（float32，同 L2 的脚本读回）；属性、关键帧（P10a 的运行时，`value:animation:light` 去掉）、字段脚本（`targetOf`）、脚本对象（`installLight`：12 个数值字段可读写，`light` 读出类型字符串，三个开关只读，写入只告警一次）都写这张表。
+- **每帧**（`render/lights.ts`）：V1 灯按本帧（动画、脚本之后）的状态组记录，世界矩阵与可见性沿父链（`worldMatrixOf` / `effectiveVisible`），排序键取局部 origin（L2′）；遗留灯三个数组按**上一帧末**的状态写（WPE 在动画与脚本之前写，L1：晚一帧；`GpuScene` 按帧时刻换代，探针同一帧多次 `update` 不错位）。阴影图集按加载时的灯记录定尺寸。
+- **选灯的「带阴影」**：看用户阴影档 ∧ `castshadow`，不看 `lightconfig` 有没有阴影计数（L3，同 P13e 的 `SHADOW`）；没有阴影计数时带 `castshadow` 的灯先写槽 0、被后面的普通灯覆盖，照 WPE。
+- **体积光**：每盏 `castvolumetrics` 的点光 / 聚光都预建绘制，每帧按可见性决定画不画、重新分段（L4：隐藏的灯不画也不开一段，隐藏中间的立方体两段并成一段），几何与常量（`volumetricGeometry`：位置与聚光方向取世界矩阵、字段取状态）每帧写。残留值配置（聚光超槽、点光没分到阴影条目）按全部可见照报。
+- **实测**（2026-11-16）：`p13f-light` 按 WPE 日志确定性回放第 153 帧，灯光数组与遗留灯数组全部对上（最大差 2e-6，日志只记 6 位小数）；`p13f-vol` 四种状态与 WPE 整帧 0 差异；`p13f-sort` 两种状态各差 2 个像素 1 级。
 
 ## 着色器翻译器 `wpesl2wgsl`
 

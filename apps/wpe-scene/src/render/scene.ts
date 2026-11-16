@@ -273,7 +273,16 @@ import { ReflectionTargets } from "./reflection";
 import { SHADOW_ATLAS_FORMAT, ShadowAtlas, type ShadowCasterDraw } from "./shadows";
 import { VolumetricsRenderer } from "./volumetrics";
 import type { ShadowView } from "./shadowMath";
-import { LIGHT_FRAME_UNIFORMS, lightFrame, lightFrameUniforms, type LightFrame } from "../compile/lights";
+import {
+  LEGACY_LIGHT_UNIFORMS,
+  LIGHT_FRAME_UNIFORMS,
+  legacyLightFrame,
+  lightFrame,
+  lightFrameUniforms,
+  type LightFrame,
+} from "../compile/lights";
+import { legacyLightInputs, lightRecords } from "./lights";
+import { volumetricGeometry } from "../compile/volumetrics";
 import { FOG_UNIFORMS, fogUniforms } from "../compile/fog";
 import { SHADOW_CASTER_UNIFORM } from "../compile/features";
 import { mirroredView, type SceneView } from "./views";
@@ -1268,6 +1277,12 @@ export class GpuScene {
   private volumetrics: VolumetricsRenderer | null = null;
   /** 最近一帧的灯光缓冲与阴影条目（`frameLightValues`）：带阴影的体积光点光取自己的阴影投影与方块变换。 */
   private lightFrameCache: LightFrame | null = null;
+  /** 最近一次 `sync` / 建场景的状态（P13f2）：`update` 没给状态时按它组灯记录。 */
+  private lightState: SceneState | null = null;
+  /** 遗留灯（P13f2）：这一帧画的值、按本帧末状态算的下一帧的值、换代用的帧时刻（`frameLightValues`）。 */
+  private legacyCurrent: Record<string, number[]> | null = null;
+  private legacyNext: Record<string, number[]> | null = null;
+  private legacyTime: number | null = null;
   /**
    * 本帧的主视图（`render/views.ts` 的 `SceneView`）。平面反射 pass 的视图由它现算（`reflectedView`，P13b2），两者走同一套 uniform 规则
    * （`uniformValues` 的 `view` 参数）。
@@ -2696,7 +2711,10 @@ export class GpuScene {
     // 反射的两张常量 RT（P13b1）：场景目标尺寸，只在有读者时建；要在建任何 draw 之前就位（`resolveTexture`）
     this.reflectionTargets = ReflectionTargets.create(device, bundle, width, height, hdr);
     if (this.reflectionTargets) this.targetBytes += this.reflectionTargets.bytes;
-    this.shadowAtlas = ShadowAtlas.create(device, bundle);
+    // 图集尺寸按加载时的灯记录打包（P13f2：灯是运行时状态，之后条目变多时只画放得下的视口，同 P13d）
+    this.shadowAtlas = ShadowAtlas.create(device, bundle, lightRecords(bundle.lightObjects ?? [], state, new Map()));
+    this.lightState = state;
+    if (bundle.legacyLights) this.legacyNext = this.legacyFrame(state);
     if (this.shadowAtlas) this.targetBytes += this.shadowAtlas.width * this.shadowAtlas.height * 4;
     this.atlasTextures = new TextAtlasTextures(
       device,
@@ -3371,6 +3389,8 @@ export class GpuScene {
         ),
         // 灯光数组（P13d）：每帧由 `frameLightValues` 排序写整块缓冲后切出来
         ...(this.bundle.lights ? LIGHT_FRAME_UNIFORMS : []),
+        // 遗留灯（P13f2）：每帧按上一帧末的状态写（`frameLightValues`）
+        ...(this.bundle.legacyLights ? LEGACY_LIGHT_UNIFORMS : []),
       ].filter((name) => block!.has(name) && !(name in pass.uniforms));
       // ropetrail（P4d 步骤 2）的 g_RenderVar0 随计时器每帧变（建 draw 时的值是计时器初值 0 的，`particleBuiltins`）。只有 ropetrail 那次
       // 绘制写（P4f 步骤 4：强制渲染混挂时同系统的 sprite 那次照旧是 0）
@@ -3858,6 +3878,7 @@ export class GpuScene {
    * 脏 draw 由 `update` 整块重写。结构脏当场处理，返回时新结构已换上。
    */
   sync(state: SceneState): void {
+    this.lightState = state;
     // 对象被删（P6d3）：先释放被删对象的资源，后面的刷新与重建就不会再碰它们
     if (state.structureVersion !== this.structureSeen) {
       this.structureSeen = state.structureVersion;
@@ -4677,21 +4698,35 @@ export class GpuScene {
    * 图集时打包、算阴影视图并把投影与方块变换写进同一块（`ShadowAtlas.frame`）。WPE 在相机与脚本之后、反射与主 pass 之前算（帧函数
    * `0x14018031a`），我们的 `update` 在 `setCamera` 之后，同序。没有灯（`bundle.lights` 缺）时为空。
    */
-  private frameLightValues(state?: SceneState): Record<string, number[]> {
+  private frameLightValues(input: FrameInput, state?: SceneState): Record<string, number[]> {
+    // P13f2：灯记录每帧按状态现组（`render/lights.ts`）；`state` 没给时（探针的部分调用）用最近一次 `sync` 的
+    const current = state ?? this.lightState;
+    if (state) this.lightState = state;
+    let values: Record<string, number[]> = {};
+    // 遗留灯（P13f2）：WPE 在动画与脚本之前写（`p13f-light` 的 L1：晚一帧）。这一帧画上一帧末算好的值，再按现在（本帧脚本之后）的状态算
+    // 下一帧的；同一帧多次 `update`（探针）不换代，按帧时刻判
+    if (this.bundle.legacyLights) {
+      if (input.time !== this.legacyTime) {
+        this.legacyTime = input.time;
+        this.legacyCurrent = this.legacyNext;
+      }
+      if (current) this.legacyNext = this.legacyFrame(current);
+      values = { ...(this.legacyCurrent ?? this.legacyNext ?? {}) };
+    }
     const lights = this.bundle.lights;
-    if (!lights) return {};
+    if (!lights || !current) return values;
     const forward = this.view.viewVectors.forward;
-    // 被删的灯不再参与排序与写缓冲（P6d3）
-    const records =
-      state || this.removedObjects.size
-        ? lights.records.filter((light) =>
-            state ? state.layers.has(light.object) : !this.removedObjects.has(light.object),
-          )
-        : lights.records;
+    // 被删的灯不在 `state.layers` 里，不再参与排序与写缓冲（P6d3）
+    const records = lightRecords(this.bundle.lightObjects ?? [], current, new Map(), this.attachHook);
     const frame = lightFrame(records, lights.counts, lights.quality, forward);
     this.shadowAtlas?.frame(frame, forward, this.view.eye);
     this.lightFrameCache = frame;
-    return lightFrameUniforms(frame);
+    return { ...values, ...lightFrameUniforms(frame) };
+  }
+
+  /** 遗留灯的三个数组（P13f2，`legacyLightFrame`）按这份状态算。 */
+  private legacyFrame(state: SceneState): Record<string, number[]> {
+    return legacyLightFrame(legacyLightInputs(this.bundle.lightObjects ?? [], state, new Map(), this.attachHook));
   }
 
   /**
@@ -4701,7 +4736,7 @@ export class GpuScene {
    * 第 4 节）：步进在前，所以是本帧采样之后的计时器。
    */
   update(frame: FrameInput, state?: SceneState): void {
-    const values = (this.frameValues = { ...frameBuiltins(frame), ...this.frameLightValues(state) });
+    const values = (this.frameValues = { ...frameBuiltins(frame), ...this.frameLightValues(frame, state) });
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
       if (!draw.frameNames.length && !draw.dirty && !draw.trailRenderVar && draw.puppet === null) continue;
@@ -5542,10 +5577,13 @@ export class GpuScene {
     // 体积光（P13e，V5）：灯不是图层，按 `objects` 下标插进顶层序列。画到一盏灯就拷深度、画进 LightBuffer（一段连续的灯共用一次清屏）；
     // 下一个可见的非灯对象画之前（不可见的不触发）、或列表末尾（泛光之前）合成。组里的灯照报，这里不会有
     const volumetrics = this.volumetrics;
-    // 灯按对象表顺序插进顶层序列；被删的灯跳过（P6d3）
+    // 灯按对象表顺序插进顶层序列；被删的灯跳过（P6d3）。可见性是运行时状态（P13f2，`p13f-vol` 的 L4）：自身或父链不可见的灯这一帧不画、
+    // 也不开一段（不可见的灯不打断别的灯，V5）
     const lightObjects = (volumetrics?.objects ?? [])
-      .filter((object) => state.layers.has(object))
+      .filter((object) => state.layers.has(object) && effectiveVisible(object, state.layers))
       .sort(byPosition(position));
+    const lightWorlds = new Map<number, Mat4>();
+    const volumetricLights = new Map((this.bundle.lightObjects ?? []).map((light) => [light.object, light]));
     let nextLight = 0;
     let pendingComposite = false;
     if (volumetrics) {
@@ -5554,7 +5592,22 @@ export class GpuScene {
         const layer = this.bundle.layers.find((item) => item.object === object);
         const entry = lights?.entries.find((item) => item.cascade === null && item.light.object === object);
         const slice = (start: number) => lights!.buffer.subarray(start + entry!.slot * 4, start + entry!.slot * 4 + 4);
+        // 灯的几何与常量按这一帧的状态（P13f2）：字段取 `SceneState.lights`，颜色取图层状态，位置与方向取世界矩阵（沿父链）
+        const light = volumetricLights.get(object);
+        const values = state.lights.get(object);
+        const layerState = state.layers.get(object);
+        const geometry =
+          light && values && layerState && (light.kind === "point" || light.kind === "spot")
+            ? volumetricGeometry(
+                light.kind,
+                values,
+                layerState.color,
+                worldMatrixOf(object, state.layers, lightWorlds, this.attachHook),
+                !this.bundle.general.perspective,
+              )
+            : undefined;
         return {
+          ...(geometry ? { geometry } : {}),
           viewProjection: layer ? this.viewProjectionOf(layer, state, this.view, false) : this.view.viewProjection,
           eye: this.view.eye,
           forward: this.view.viewVectors.forward,

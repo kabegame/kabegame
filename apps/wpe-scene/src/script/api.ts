@@ -1,5 +1,7 @@
 import {
   GENERAL_FIELDS,
+  LIGHT_FIELDS,
+  type LightField,
   scriptPropertyEntries,
   TEXT_RUNTIME_FIELDS,
   type BindingTarget,
@@ -333,6 +335,8 @@ export class ScriptApi {
   private readonly layers = new Map<number, ApiObject>();
   /** 图层的 `IVideoTexture`（P9b）：每个图层建一次，之后 `getVideoTexture()` 返回同一个对象（WPE 的 `L+0x4c0`）。 */
   private readonly videoTextures = new Map<number, ApiObject>();
+  /** 写过不支持的灯字段（P13f2，`installLight`）：每个对象 / 字段只告警一次。 */
+  private readonly warnedLightWrites = new Set<string>();
   private readonly materials = new Map<string, ApiObject>();
   private readonly effects = new Map<string, ApiObject>();
   /**
@@ -495,6 +499,8 @@ export class ScriptApi {
     // 编译前没有 puppet：计数 0、其余空操作
     const kind = this.pending.get(index)?.kind;
     if (this.isSoundLayer(index) || kind === "sound") this.installSound(api, index);
+    // 灯对象（P13f2）：数值字段与类型 / 开关
+    this.installLight(api, index);
     if (this.findLayer(index)?.particle || kind === "particle") this.installParticle(api, index);
     if (this.findLayer(index)?.alignment !== undefined || kind === "image") this.installAlignment(api, index);
     if (this.findLayer(index)?.text || kind === "text") this.installText(api, index);
@@ -654,6 +660,42 @@ export class ScriptApi {
   /** 是不是声音对象的图层：声音表里有它（对象类别跨重编译不变，图层代理建一次就定）。 */
   private isSoundLayer(object: number): boolean {
     return this.access.bundle().sounds?.some((sound) => sound.object === object) ?? false;
+  }
+
+  /**
+   * 灯对象的成员（P13f2，`p13f-light` 的 L2 实测形状）：12 个数值字段（`LIGHT_FIELDS`，读回 float32，`controlpoint` 是 Vec3）读写
+   * `SceneState.lights`，写入走同一个 `SceneState.write`（当帧进灯光 uniform）；`light` 读出类型字符串，`castshadow` / `castvolumetrics` /
+   * `usecookie` 读出布尔。后四个 WPE 运行中改会重建灯的资源，这里不支持：写入只记一次 warn、不改（语料 0，待定 4、5）。
+   */
+  private installLight(api: ApiObject, object: number): void {
+    const light = this.access.bundle().lightObjects?.find((item) => item.object === object);
+    if (!light) return;
+    for (const field of Object.keys(LIGHT_FIELDS) as LightField[]) {
+      const type = LIGHT_FIELDS[field].type;
+      this.define(
+        api,
+        field,
+        () => {
+          const value = this.access.state().lights.get(object)?.[field];
+          return Array.isArray(value) ? this.vector(scriptNumbers(value), 3) : scriptNumber(value);
+        },
+        (value) => this.write({ kind: "light", object, field }, value, type),
+      );
+    }
+    const readOnly = (name: string, read: () => unknown) =>
+      this.define(api, name, read, () => {
+        // TODO:[WPE_SCENE] 运行中改灯的类型 / 阴影 / cookie / 体积光开关（WPE 重建灯资源，rea-p13-lights 3.1 的 `0x14025c610`）没做，语料 0
+        if (!this.warnedLightWrites.has(`${object}/${name}`)) {
+          this.warnedLightWrites.add(`${object}/${name}`);
+          const message = `场景脚本写灯的 ${name} 暂不支持（对象 ${object}）`;
+          if (this.access.warn) this.access.warn(message);
+          else console.warn(message);
+        }
+      });
+    readOnly("light", () => light.light);
+    readOnly("castshadow", () => (light.flags & 1) !== 0);
+    readOnly("usecookie", () => (light.flags & 2) !== 0);
+    readOnly("castvolumetrics", () => light.castVolumetrics);
   }
 
   /**

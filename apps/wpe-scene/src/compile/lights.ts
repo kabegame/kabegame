@@ -4,10 +4,19 @@
  * - **灯数不看灯对象**：`LIGHTS_*` 直接取 `general.lightconfig`（`FUN_140186c90`），每种灯 4 位，缺这个键时全 0。灯对象只负责
  *   填数组（`FUN_140190c80`）：多出来的灯丢掉，少了的槽位保持全 0（半径 0，不发光）。所以没有 `lightconfig` 的场景里，
  *   `lpoint` 这类灯对象对画面没有影响，开了 `LIGHTING` 的材质只剩环境光。
- * - **`"light": "point"` 是遗留灯**，不进这里的数组：它写 `g_LightsPosition` 等，由 `legacyLightUniforms` 照 WPE 的槽位规则算。
- * - 这些值是编译期算好的常量：绑了 `{user}` 的字段登记重编译，脚本改灯还不支持（宿主没有灯对象）。
+ * - **`"light": "point"` 是遗留灯**，不进这里的数组：它写 `g_LightsPosition` 等，由 `legacyLightFrame` 照 WPE 的槽位规则算。
+ * - **灯的运行时**（P13f2）：编译期只出灯对象（`compileLightObjects`：类型、开关、数值字段初值，绑属性登记就地目标）；灯光数组、遗留灯、体积光
+ *   每帧由渲染器按 `SceneState` 现算（`render/lights.ts`：世界矩阵与可见性沿父链，属性、关键帧、字段脚本、脚本对象都写进状态）。
  */
-import type { BindingCollector, BindingTarget } from "./bindings";
+import {
+  LIGHT_FIELDS,
+  lightDefaults,
+  lightFieldValue,
+  type BindingCollector,
+  type BindingTarget,
+  type LightField,
+  type LightValues,
+} from "./bindings";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { isSceneObject, numbers, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 import { layerLocalMatrix } from "../render/layout";
@@ -150,8 +159,8 @@ export type LightKind = "point" | "spot" | "tube" | "directional";
 const KIND_ORDER: Record<LightKind, number> = { point: 0, spot: 1, tube: 2, directional: 3 };
 
 /**
- * 一盏灯的编译期字段（P13d：灯光 uniform 改成每帧由 {@link lightFrame} 排序、写整块缓冲；字段仍是编译期常量，P13f 再换成运行时状态）。
- * 绑 `{user}` 的字段登记重编译（同以前），`visible` 为假的灯照样进表（WPE 遍历时跳过，`FUN_140185010`）。
+ * 一盏灯在一帧里的记录（P13f2：每帧由 {@link sceneLightOf} 按 `SceneState` 现组，排序、写整块缓冲见 {@link lightFrame}）。
+ * `visible` 为假的灯照样进表（WPE 遍历时跳过，`FUN_140185010`）。
  */
 export interface SceneLight {
   /** `objects` 下标 */
@@ -159,10 +168,13 @@ export interface SceneLight {
   kind: LightKind;
   /** `light+0x2c4 & 3`：bit0 `castshadow`、bit1 `usecookie`（排序键之一，R2.3） */
   flags: number;
+  /** 自身与父链都可见（`FUN_140185010`） */
   visible: boolean;
-  /** 本地 origin（排序键 `dot(origin, g_ViewForward)`，R2.3；挂父对象的灯照报 `object:parent`，所以也是世界位置） */
+  /** 世界位置（世界矩阵的平移，`p13f-light` 的 L1：挂在父对象下的 `lpoint` 位置跟父链） */
   origin: [number, number, number];
-  /** 本地矩阵 `T·Rz·Ry·Rx·S`（`layerLocalMatrix`，列主序 f32）：平行光的方向与级联（rea-p13-shadows R3）读它的三列 */
+  /** 局部 origin：排序键 `dot(局部 origin, g_ViewForward)`（R2.3，`+0x128`，不含父链，L2′ 实测）；缺省同 `origin` */
+  sortOrigin?: [number, number, number];
+  /** 世界矩阵（列主序 f32，`worldMatrixOf`）：平行光的方向与级联（rea-p13-shadows R3）读它的三列 */
   matrix: Float32Array;
   /** `color · intensity` */
   color: [number, number, number];
@@ -171,7 +183,7 @@ export interface SceneLight {
   /** 聚光内外锥角的余弦 */
   inner: number;
   outer: number;
-  /** 管光另一端（`controlpoint` 经本地矩阵） */
+  /** 管光另一端（`controlpoint` 经世界矩阵） */
   tubeEnd: [number, number, number];
   /** `lightsourcesize`：透视场景点光阴影的近平面（rea-p13-passes 2.3） */
   lightSourceSize: number;
@@ -179,62 +191,151 @@ export interface SceneLight {
   cascades: [number, number, number];
 }
 
-/** 灯对象 → {@link SceneLight}，`objects` 顺序（只收四类 V1 灯；遗留灯 `point` 走 `legacyLightUniforms`）。 */
-export function collectSceneLights(
-  objects: readonly SceneObject[],
-  read: (value: SceneValue | undefined, path: string) => SceneScalar | undefined,
-): SceneLight[] {
-  const out: SceneLight[] = [];
+/** `light` 字段的字符串 → V1 类型；遗留的 `point` 与别的字符串为 null。 */
+export function lightKindOf(type: unknown): LightKind | null {
+  return type === "lpoint"
+    ? "point"
+    : type === "lspot"
+      ? "spot"
+      : type === "ltube"
+        ? "tube"
+        : type === "ldirectional"
+          ? "directional"
+          : null;
+}
+
+/**
+ * 灯对象的编译期记录（P13f2）：每个 `light` 是字符串的对象一条，`objects` 顺序。数值字段的初值在 `values`（绑属性的登记成就地目标
+ * `{ kind: "light" }`，运行中的值在 `SceneState.lights`）；颜色、变换、可见性在图层状态里。
+ */
+export interface SceneLightObject {
+  /** `objects` 下标 */
+  object: number;
+  /** `light` 原文：V1 四类（`kind`）、遗留 `point`（`legacy`），或别的字符串（只占遗留槽） */
+  light: string;
+  kind: LightKind | null;
+  legacy: boolean;
+  /** 遗留槽（rea-p13-lights 1.1）：每个灯对象按 `objects` 顺序取第一个空槽，满了取 0 */
+  legacySlot: number;
+  /** bit0 `castshadow`、bit1 `usecookie`（JSON 值，运行中变照报） */
+  flags: number;
+  /** `castvolumetrics`（JSON 值，运行中变照报） */
+  castVolumetrics: boolean;
+  values: LightValues;
+}
+
+/** 编译期定、运行中变会重建资源的灯字段（rea-p13-lights 3.1 的回调 `0x14025c610`）：挂属性 / 脚本 / 关键帧照报 `light:runtime:<键>`。 */
+const LIGHT_STATIC_KEYS = ["light", "castshadow", "usecookie", "castvolumetrics"] as const;
+
+/**
+ * 全部灯对象 → {@link SceneLightObject}。`bind(value, object, field)` 解析数值字段（产品里是 `bindings.bind` + 就地目标）；四个静态字段
+ * 只取 JSON 值（`{user}` 取 `value`），挂了属性 / 脚本 / 关键帧时 `issues` 收 `light:runtime:<键>`。
+ */
+export function compileLightObjects(
+  objects: readonly unknown[],
+  bind: (value: SceneValue | undefined, object: number, field: LightField) => SceneScalar | undefined,
+  issues?: Set<string>,
+): SceneLightObject[] {
+  const out: SceneLightObject[] = [];
+  const taken = new Array<boolean>(LEGACY_SLOTS).fill(false);
   objects.forEach((object, index) => {
-    if (!isSceneObject(object)) return;
-    const type = object.light;
-    const kind: LightKind | null =
-      type === "lpoint"
-        ? "point"
-        : type === "lspot"
-          ? "spot"
-          : type === "ltube"
-            ? "tube"
-            : type === "ldirectional"
-              ? "directional"
-              : null;
-    if (!kind) return;
-    const at = (field: string) => `objects/${index}/${field}`;
-    const field = (key: string, fallback: number) =>
-      numbers(read(object[key] as SceneValue | undefined, at(key)), [fallback])[0] ?? fallback;
-    const vector = (key: string, fallback: readonly number[]) =>
-      numbers(read(object[key] as SceneValue | undefined, at(key)), [...fallback]);
-    const flag = (key: string) => read(object[key] as SceneValue | undefined, at(key)) === true;
-    const origin = vector("origin", [0, 0, 0]);
-    const angles = vector("angles", [0, 0, 0]);
-    const scale = vector("scale", [1, 1, 1]);
-    const axes = lightAxes(angles, scale);
-    const intensity = field("intensity", DEFAULTS.intensity);
-    const color = vector("color", DEFAULTS.color);
-    const point = vector("controlpoint", DEFAULTS.controlpoint);
+    if (!isSceneObject(object) || typeof object.light !== "string") return;
+    const free = taken.indexOf(false);
+    const legacySlot = free < 0 ? 0 : free;
+    if (free >= 0) taken[free] = true;
+    for (const key of LIGHT_STATIC_KEYS) {
+      const raw = object[key];
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) issues?.add(`light:runtime:${key}`);
+    }
+    const flag = (key: string) => {
+      const raw = object[key];
+      const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
+      return value === true;
+    };
+    const values = lightDefaults();
+    for (const field of Object.keys(LIGHT_FIELDS) as LightField[]) {
+      const value = lightFieldValue(field, bind(object[field] as SceneValue | undefined, index, field));
+      if (value !== undefined) (values as Record<LightField, number | number[]>)[field] = value;
+    }
     out.push({
       object: index,
-      kind,
+      light: object.light,
+      kind: lightKindOf(object.light),
+      legacy: object.light === "point",
+      legacySlot,
       flags: (flag("castshadow") ? 1 : 0) | (flag("usecookie") ? 2 : 0),
-      visible: read(object.visible, at("visible")) !== false,
-      origin: [origin[0] ?? 0, origin[1] ?? 0, origin[2] ?? 0],
-      matrix: layerLocalMatrix({ origin, angles, scale }),
-      color: [0, 1, 2].map((k) => (color[k] ?? 0) * intensity) as [number, number, number],
-      radius: field("radius", DEFAULTS.radius),
-      exponent: field("exponent", DEFAULTS.exponent),
-      inner: Math.cos(field("innercone", DEFAULTS.innercone) * DEGREES),
-      outer: Math.cos(field("outercone", DEFAULTS.outercone) * DEGREES),
-      tubeEnd: [0, 1, 2].map(
-        (k) =>
-          (point[0] ?? 0) * axes[0][k] + (point[1] ?? 0) * axes[1][k] + (point[2] ?? 0) * axes[2][k] + (origin[k] ?? 0),
-      ) as [number, number, number],
-      lightSourceSize: field("lightsourcesize", 0),
-      cascades: [field("cascadedistance0", 3), field("cascadedistance1", 10), field("cascadedistance2", 100)],
+      castVolumetrics: flag("castvolumetrics"),
+      values,
     });
   });
   return out;
 }
 
+/** 一盏灯这一帧的图层状态（渲染器按 `SceneState` 现算；编译期测试按 JSON 给）。 */
+export interface LightLayerInput {
+  /** 自身与父链都可见 */
+  visible: boolean;
+  /** 世界矩阵（列主序 f32） */
+  world: ArrayLike<number>;
+  /** 局部 origin（排序键） */
+  localOrigin: readonly number[];
+  /** 图层 `color`（灯的颜色，缺省黑） */
+  color: readonly number[];
+}
+
+/** V1 灯的一帧记录（{@link SceneLight}）：字段取运行中的 `values`，位置与方向取世界矩阵。遗留灯与别的字符串返回 null。 */
+export function sceneLightOf(light: SceneLightObject, values: LightValues, layer: LightLayerInput): SceneLight | null {
+  if (!light.kind) return null;
+  const w = layer.world;
+  const f = Math.fround;
+  const point = values.controlpoint;
+  const [cx = 0, cy = 0, cz = 0] = point;
+  return {
+    object: light.object,
+    kind: light.kind,
+    flags: light.flags,
+    visible: layer.visible,
+    origin: [w[12], w[13], w[14]],
+    sortOrigin: [layer.localOrigin[0] ?? 0, layer.localOrigin[1] ?? 0, layer.localOrigin[2] ?? 0],
+    matrix: Float32Array.from(w),
+    color: [0, 1, 2].map((k) => f(f(layer.color[k] ?? 0) * values.intensity)) as [number, number, number],
+    radius: values.radius,
+    exponent: values.exponent,
+    inner: Math.cos(values.innercone * DEGREES),
+    outer: Math.cos(values.outercone * DEGREES),
+    tubeEnd: [0, 1, 2].map((k) => cx * w[k] + cy * w[4 + k] + cz * w[8 + k] + w[12 + k]) as [number, number, number],
+    lightSourceSize: values.lightsourcesize,
+    cascades: [values.cascadedistance0, values.cascadedistance1, values.cascadedistance2],
+  };
+}
+
+/**
+ * 灯对象 → {@link SceneLight}，`objects` 顺序（只收四类 V1 灯）：按 JSON 当世界（不看父链），编译期测试与只看灯光数组的地方用；
+ * 渲染器每帧按状态走 {@link sceneLightOf}。
+ */
+export function collectSceneLights(
+  objects: readonly SceneObject[],
+  read: (value: SceneValue | undefined, path: string) => SceneScalar | undefined,
+): SceneLight[] {
+  const out: SceneLight[] = [];
+  for (const light of compileLightObjects(objects, (value, object, field) =>
+    read(value, `objects/${object}/${field}`),
+  )) {
+    const object = objects[light.object];
+    const at = (field: string) => `objects/${light.object}/${field}`;
+    const vector = (key: string, fallback: readonly number[]) =>
+      numbers(read(object[key] as SceneValue | undefined, at(key)), [...fallback]);
+    const origin = vector("origin", [0, 0, 0]);
+    const record = sceneLightOf(light, light.values, {
+      visible: read(object.visible, at("visible")) !== false,
+      world: layerLocalMatrix({ origin, angles: vector("angles", [0, 0, 0]), scale: vector("scale", [1, 1, 1]) }),
+      localOrigin: origin,
+      color: vector("color", [0, 0, 0]),
+    });
+    if (record) out.push(record);
+  }
+  return out;
+}
 /**
  * 灯光 uniform 缓冲的布局（rea-p13-shadows R2.1，单位 float）：WPE 是一整块，各 uniform 是它的切片，按生成器的声明顺序排。
  * 越界写（配置与灯对象不一致时，R2.4）落进下一段，照抄要按整块写（P13d 待定 4）。
@@ -322,11 +423,10 @@ export interface LightFrame {
 /** 排序键（R2.3）：类型升序 → `flags` 降序 → `dot(局部 origin, g_ViewForward)` 升序；同键保持原顺序（WPE 是 ≤ 32 个的插入排序）。 */
 export function sortLights(lights: readonly SceneLight[], forward: readonly number[]): SceneLight[] {
   const f = Math.fround;
-  const key = (light: SceneLight) =>
-    f(
-      f(f(f(light.origin[0]) * f(forward[0])) + f(f(light.origin[1]) * f(forward[1]))) +
-        f(f(light.origin[2]) * f(forward[2])),
-    );
+  const key = (light: SceneLight) => {
+    const origin = light.sortOrigin ?? light.origin;
+    return f(f(f(f(origin[0]) * f(forward[0])) + f(f(origin[1]) * f(forward[1]))) + f(f(origin[2]) * f(forward[2])));
+  };
   return lights
     .map((light, index) => ({ light, index, key: key(light) }))
     .sort(
@@ -476,44 +576,42 @@ export function readsLegacyLights(result: Pick<TranslateResult, "uniforms">): bo
 
 const LEGACY_SLOTS = 4;
 
+/** 一盏灯对象这一帧的遗留灯输入（渲染器按上一帧末的 `SceneState` 现算，见 {@link legacyLightFrame}）。 */
+export interface LegacyLightInput {
+  /** 遗留槽（`SceneLightObject.legacySlot`） */
+  slot: number;
+  /** 是遗留的 `point`（别的灯对象只占槽、不写） */
+  legacy: boolean;
+  /** 自身与父链都可见 */
+  visible: boolean;
+  /** 世界位置 */
+  position: readonly number[];
+  /** 图层 `color` */
+  color: readonly number[];
+  intensity: number;
+  radius: number;
+}
+
 /**
- * 遗留灯（`"light": "point"`）→ 三个数组（rea-p13-lights 第 1 节，`FUN_14018ff60` 分槽、`FUN_14025d1f0` 写入）：
- * - 每个灯对象（`light` 是字符串，不分类型，`lpoint` 等也算）按 `objects` 顺序取第一个空槽，4 个都占时取槽 0；
- * - 遗留灯写自己的槽：位置 = 世界平移（挂父对象的灯照报 `object:parent`，这里取本地 `origin`；P13f 改成父链），
- *   颜色半径 = 可见 ? `(color·intensity, radius)` : `(0, 0, 0, 1)`，隐藏时位置照写；同槽后写的覆盖先写的；
+ * 遗留灯（`"light": "point"`）→ 三个数组（rea-p13-lights 第 1 节，`FUN_14018ff60` 分槽、`FUN_14025d1f0` 写入），按 `objects` 顺序给：
+ * - 遗留灯写自己的槽：位置 = 世界平移，颜色半径 = 可见 ? `(color·intensity, radius)` : `(0, 0, 0, 1)`，隐藏时位置照写；同槽后写的覆盖先写的；
  * - 没人写的槽：位置 `(0, 100, 0)`、颜色半径 `(0, 0, 0, 1)`（渲染上下文的初值）；
  * - `g_LightsColorPremultiplied[i].rgb = c_i · r_i²`（i = 0..2），`[i].w = c_3[i] · r_3²`（c、r 取颜色半径）。
  * 颜色乘强度、半径平方、两者相乘都逐步按单精度舍入（`Math.fround`，p13-REPORT「P13a 的实测」A5：WPE 的 `108000.0078`）。
+ * WPE 在每帧对象更新时写（动画与脚本之前，`0x1401891f9`），所以运行时用上一帧末的状态（`p13f-light` 的 L1：晚一帧）。
  * 位置是 `vec3[4]`，按声明分量展平（12 个数，`UniformBlock.set` 按 16 字节步长写）。
  */
-export function legacyLightUniforms(
-  objects: readonly SceneObject[],
-  read: (value: SceneValue | undefined, path: string) => SceneScalar | undefined,
-): Record<string, number[]> {
+export function legacyLightFrame(lights: readonly LegacyLightInput[]): Record<string, number[]> {
   const position: number[][] = Array.from({ length: LEGACY_SLOTS }, () => [0, 100, 0]);
   const colorRadius: number[][] = Array.from({ length: LEGACY_SLOTS }, () => [0, 0, 0, 1]);
-  const taken = new Array<boolean>(LEGACY_SLOTS).fill(false);
   const f = Math.fround;
-  objects.forEach((object, index) => {
-    if (!isSceneObject(object) || typeof object.light !== "string") return;
-    const free = taken.indexOf(false);
-    const slot = free < 0 ? 0 : free;
-    if (free >= 0) taken[free] = true;
-    if (object.light !== "point") return;
-    const at = (field: string) => `objects/${index}/${field}`;
-    const vector = (key: string, fallback: readonly number[]) =>
-      numbers(read(object[key] as SceneValue | undefined, at(key)), [...fallback]);
-    const origin = vector("origin", [0, 0, 0]);
-    position[slot] = [0, 1, 2].map((k) => f(origin[k] ?? 0));
-    if (read(object.visible, at("visible")) === false) {
-      colorRadius[slot] = [0, 0, 0, 1];
-      return;
-    }
-    const intensity = f(numbers(read(object.intensity as SceneValue | undefined, at("intensity")), [0])[0] ?? 0);
-    const color = vector("color", DEFAULTS.color);
-    const radius = f(numbers(read(object.radius as SceneValue | undefined, at("radius")), [1])[0] ?? 1);
-    colorRadius[slot] = [...[0, 1, 2].map((k) => f(f(color[k] ?? 0) * intensity)), radius];
-  });
+  for (const light of lights) {
+    if (!light.legacy) continue;
+    position[light.slot] = [0, 1, 2].map((k) => f(light.position[k] ?? 0));
+    colorRadius[light.slot] = light.visible
+      ? [...[0, 1, 2].map((k) => f(f(light.color[k] ?? 0) * f(light.intensity))), f(light.radius)]
+      : [0, 0, 0, 1];
+  }
   const premultiplied: number[] = [];
   for (let i = 0; i < LEGACY_SLOTS - 1; i++) {
     const [r, g, b, radius] = colorRadius[i];
@@ -527,6 +625,30 @@ export function legacyLightUniforms(
     g_LightsColorRadius: colorRadius.flat(),
     g_LightsColorPremultiplied: premultiplied,
   };
+}
+
+/** 遗留灯三个数组按 JSON 算（不看父链，位置取本地 `origin`）：编译期测试用；渲染器每帧走 {@link legacyLightFrame}。 */
+export function legacyLightUniforms(
+  objects: readonly SceneObject[],
+  read: (value: SceneValue | undefined, path: string) => SceneScalar | undefined,
+): Record<string, number[]> {
+  return legacyLightFrame(
+    compileLightObjects(objects, (value, object, field) => read(value, `objects/${object}/${field}`)).map((light) => {
+      const object = objects[light.object];
+      const at = (field: string) => `objects/${light.object}/${field}`;
+      const vector = (key: string, fallback: readonly number[]) =>
+        numbers(read(object[key] as SceneValue | undefined, at(key)), [...fallback]);
+      return {
+        slot: light.legacySlot,
+        legacy: light.legacy,
+        visible: read(object.visible, at("visible")) !== false,
+        position: vector("origin", [0, 0, 0]),
+        color: vector("color", [0, 0, 0]),
+        intensity: light.values.intensity,
+        radius: light.values.radius,
+      };
+    }),
+  );
 }
 
 /** `lightUniforms` 里 `read` 的标准实现：解析 `{user}` 并登记成 `target`。 */

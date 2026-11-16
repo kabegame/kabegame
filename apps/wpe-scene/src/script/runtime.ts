@@ -145,6 +145,9 @@ export function targetKey(target: ScriptTarget): string {
       return `objects/${target.object}/instanceoverride/${target.field}`;
     case "sound":
       return `objects/${target.object}/${target.field}`;
+    // 灯字段（P13f2）：同宿主 `targetPath`
+    case "light":
+      return `objects/${target.object}/${target.field}`;
     // 文本字段（P6b 1e）：同宿主 `targetPath`，属性就地写时据此忘掉脚本的旧写入
     case "text":
       return `objects/${target.object}/${target.field}`;

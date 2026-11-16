@@ -5,6 +5,7 @@ import { checkObjectFeatures, isEngineUniform } from "./features";
 import type { SceneReader } from "./fs";
 import {
   engineDefines,
+  legacyLightFrame,
   legacyLightUniforms,
   lightAxes,
   lightConfigIssues,
@@ -16,6 +17,8 @@ import {
   readsLegacyLights,
 } from "./lights";
 import type { SceneObject, SceneScalar, SceneValue } from "./model";
+import { legacyLightInputs, lightRecords } from "../render/lights";
+import { SceneState } from "../render/state";
 
 /** 不带阴影的计数（P13d 起 `LightCounts` 带阴影与聚光 cookie 的计数）。 */
 const NONE = { pointShadow: 0, directionalShadow: 0, spotShadow: 0, spotCookie: 0, spotShadowCookie: 0 };
@@ -372,58 +375,73 @@ describe("编译", () => {
   }
   const lamp = { id: 2, name: "l", light: "lpoint", color: "1 1 1", intensity: { user: "p", value: 1 }, radius: 3 };
 
-  it("无 effect 的图层：灯数宏随请求给翻译器，灯光数组不进 pass、由 bundle.lights 每帧算（P13d）", async () => {
+  it("无 effect 的图层：灯数宏随请求给翻译器，灯光数组不进 pass；灯对象进 bundle.lightObjects，按状态每帧组记录（P13d、P13f2）", async () => {
     const { bundle, calls } = await compile({ image: "models/lit.json" }, { lightconfig: { point: 1 } }, [lamp]);
     expect(bundle.unsupported).toEqual([]);
     expect(calls[0].litDefines).toMatchObject({ LIGHTS_POINT: "1" });
     expect(calls[0].defines).toMatchObject({ SCENE_ORTHO: "1" });
     expect(bundle.layers[0].passes[0].uniforms.g_LPoint_Color).toBeUndefined();
     const lights = bundle.lights!;
-    expect(lights.records).toHaveLength(1);
-    const frame = lightFrame(lights.records, lights.counts, lights.quality, [0, 0, -1]);
+    expect(bundle.lightObjects?.map((light) => [light.object, light.kind])).toEqual([[1, "point"]]);
+    const records = lightRecords(bundle.lightObjects!, SceneState.fromBundle(bundle), new Map());
+    expect(records).toHaveLength(1);
+    const frame = lightFrame(records, lights.counts, lights.quality, [0, 0, -1]);
     expect(lightFrameUniforms(frame).g_LPoint_Color).toEqual([2, 2, 2, 3]);
   });
 
-  it("灯字段绑了属性：登记重编译", async () => {
+  it("灯字段绑了属性：登记就地目标（P13f2，不再整场重编译）", async () => {
     const { bundle } = await compile({ image: "models/lit.json" }, { lightconfig: { point: 1 } }, [lamp]);
     expect(bundle.bindings.find((binding) => binding.property === "p")?.target).toEqual({
-      kind: "recompile",
-      reason: "layer-structure",
-      path: "objects/1/intensity",
+      kind: "light",
+      object: 1,
+      field: "intensity",
     });
   });
 
-  it("没有开光照的材质不写灯光 uniform，也不解析灯对象", async () => {
+  it("选灯的「带阴影」看用户阴影档（L3）：lightconfig 没有阴影计数、有 castshadow 的灯时照样解析档位；没有这样的灯时为 0", async () => {
+    const caster = { ...lamp, intensity: 1, castshadow: true };
+    const { bundle } = await compile({ image: "models/lit.json" }, { lightconfig: { point: 1 } }, [caster]);
+    // 跟随 WPE、读不到 config.json 时按 medium（2）；图集仍不建（没有阴影计数）
+    expect(bundle.lights).toMatchObject({ quality: 2, counts: { pointShadow: 0 } });
+    const plain = await compile({ image: "models/lit.json" }, { lightconfig: { point: 1 } }, [lamp]);
+    expect(plain.bundle.lights?.quality).toBe(0);
+  });
+
+  it("没有开光照的材质不写灯光 uniform、没有 bundle.lights；灯对象照样编（就地绑定，便宜）", async () => {
     const { bundle } = await compile({ image: "models/off.json" }, { lightconfig: { point: 1 } }, [lamp]);
     expect(bundle.layers[0].passes[0].uniforms).toEqual({});
-    expect(bundle.bindings).toEqual([]);
+    expect(bundle.bindings.map((binding) => binding.target.kind)).toEqual(["light"]);
     expect(bundle.lights).toBeUndefined();
+    expect(bundle.lightObjects).toHaveLength(1);
   });
 
   const legacyLamp = { id: 3, name: "g", light: "point", origin: "1 2 3", color: "1 1 1", intensity: 1, radius: 4 };
   const legacyUniforms = [{ name: "g_LightsPosition", type: "array<vec3<f32>, 4>", offset: 0, size: 64 }];
 
-  it("遗留灯：声明 g_LightsPosition 的程序（不开 LIGHTING）拿到值、不报 uniform:*", async () => {
+  it("遗留灯：声明 g_LightsPosition 的程序（不开 LIGHTING）不报 uniform:*，三个数组不进材质常量、由渲染器每帧写（P13f2）", async () => {
     const { bundle } = await compile({ image: "models/off.json" }, {}, [legacyLamp], legacyUniforms);
     expect(bundle.unsupported).toEqual([]);
-    const uniforms = bundle.layers[0].passes[0].uniforms;
-    expect(uniforms.g_LightsPosition).toEqual([1, 2, 3, 0, 100, 0, 0, 100, 0, 0, 100, 0]);
-    expect(uniforms.g_LightsColorRadius).toHaveLength(16);
-    expect(uniforms.g_LightsColorPremultiplied).toHaveLength(12);
+    expect(bundle.legacyLights).toBe(true);
+    expect(bundle.layers[0].passes[0].uniforms.g_LightsPosition).toBeUndefined();
+    const values = legacyLightFrame(legacyLightInputs(bundle.lightObjects!, SceneState.fromBundle(bundle), new Map()));
+    expect(values.g_LightsPosition).toEqual([1, 2, 3, 0, 100, 0, 0, 100, 0, 0, 100, 0]);
+    expect(values.g_LightsColorRadius).toHaveLength(16);
+    expect(values.g_LightsColorPremultiplied).toHaveLength(12);
   });
 
-  it("遗留灯：不声明三个数组的程序 uniforms 里没有这三个键", async () => {
+  it("遗留灯：不声明三个数组的程序不要每帧写", async () => {
     const { bundle } = await compile({ image: "models/off.json" }, {}, [legacyLamp]);
     expect(Object.keys(bundle.layers[0].passes[0].uniforms)).toEqual([]);
+    expect(bundle.legacyLights).toBeUndefined();
   });
 
-  it("遗留灯：visible 绑属性登记重编译", async () => {
+  it("遗留灯：visible 绑属性是图层的就地目标（P13f2）", async () => {
     const lamp = { ...legacyLamp, visible: { user: "p", value: true } };
     const { bundle } = await compile({ image: "models/off.json" }, {}, [lamp], legacyUniforms);
     expect(bundle.bindings.find((binding) => binding.property === "p")?.target).toEqual({
-      kind: "recompile",
-      reason: "layer-structure",
-      path: "objects/1/visible",
+      kind: "layer",
+      object: 1,
+      field: "visible",
     });
   });
 

@@ -549,6 +549,8 @@ export class SceneHost {
     if (target.kind === "general") return `general/${target.key}`;
     if (target.kind === "particle-instance") return `objects/${target.object}/instanceoverride/${target.field}`;
     if (target.kind === "sound") return `objects/${target.object}/${target.field}`;
+    // 灯字段（P13f2）：同脚本运行时的 `targetKey`
+    if (target.kind === "light") return `objects/${target.object}/${target.field}`;
     // 文本字段（P6b 1e）：同脚本运行时重放表的键
     if (target.kind === "text") return `objects/${target.object}/${target.field}`;
     // 相机对象的 `fov` / `zoom`（P5d 步骤 3）

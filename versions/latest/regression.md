@@ -3266,6 +3266,19 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | FG4 真机预览 | Windows dev | 图库预览 `3115845558`（雾全关，只差雾字段） | 实时渲染、画面正常 | 2026-11-16 用户：正常 |
 | [ ] | FG5 非 Windows | macOS / Linux | 同 FG4 | 同 Windows | 本机不能测 |
 
+## 场景壁纸灯的运行时（P13f2）
+
+2026-11-16。灯从编译期常量改成运行时状态：编译期只出灯对象（`bundle.lightObjects`，数值字段绑属性登记就地目标），属性、关键帧、字段脚本、脚本对象写 `SceneState.lights`；渲染器每帧按状态组灯记录（世界矩阵与可见性沿父链），遗留灯晚一帧；选灯的「带阴影」看用户阴影档 ∧ `castshadow`；体积光每帧按可见性分段、按状态写常量。实测与记录见 `p13-REPORT.md`「P13f 的实测」与 `phase-13f-fog-lights.md`「P13f2 实施记录」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | LR0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`src/compile` + `src/render` + `src/script` 与宿主测试 | 0 error、全过 | 2026-11-16：tsc 我改的文件 0 error（别的会话的视频改动有错误）；3472 例里失败的都不归本节：`scriptApi` 的 `3304642534` 两例（HEAD 上就失败）、`pipeline` 的读取上限（HEAD 上已有 4 条，`3570755196` 来自别的会话 P6d3b，`3706286085` 读 128 MB 是它现在完整编译了），`p3a` 单独跑 13 例全过（并发时超时） |
+| [x] | LR1 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate`（`ignore/p13/f/mut/mutations-f2.py`） | 13 处：灯记录与遗留灯的父链、可见性沿父链、排序键、遗留灯晚一帧与按帧时刻换代、状态写入、字段脚本 / 关键帧目标、灯的颜色缺省、`light:runtime:*`、选灯的阴影档、体积光位置与逐帧常量 | 都被单测抓到 | 2026-11-16：13 / 13；「隐藏的体积光灯照画」在 `GpuScene` 编码里、单测够不到，由 `p13f-vol` 隐藏父对象那张 WPE 对照兜底 |
+| [x] | LR2 语料 | Node，233 个工程 | 改动前后各扫一遍 | 只去掉灯的 `object:parent` 与 `value:animation:light` | 2026-11-16：`3706286085` 变干净；`3455121165` 多了 `volumetrics:transparentsorting`（太阳灯可见性绑属性，运行时可见时会画体积光；这张本来就因聚光阴影不能渲染）；同期别的会话的 `createLayer` 解锁 4 张，不归本节 |
+| [x] | LR3 对照 WPE | Windows dev + WPE 抓帧，1920×1080 | `p13f-light` 按 WPE 日志回放第 153 帧比灯光数组；`p13f-vol` 四种状态（基线、隐藏立方体、隐藏父对象、挪父对象）；`p13f-sort` 两种状态 | uniform 只差日志精度；整帧只有零星 1 级 | 2026-11-16：灯光数组最大差 2e-6（日志只记 6 位小数）；体积光四种状态 0 差异；排序两种状态各 2 个像素 1 级（修前差 82 级：没有阴影计数时选灯的阴影档当 0，见 L3） |
+| [ ] | LR4 真机预览 | Windows dev | 图库预览 `3706286085`，按住左键看太阳与车灯变亮，在属性里改太阳方向 | 实时渲染，灯光随按键与属性变化 | 待用户看 |
+| [ ] | LR5 非 Windows | macOS / Linux | 同 LR4 | 同 Windows | 本机不能测 |
+
 ## WPE 壁纸设置与预览设置
 
 2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。

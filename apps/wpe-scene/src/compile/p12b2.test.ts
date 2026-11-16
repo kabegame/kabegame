@@ -4,7 +4,7 @@
  * - 变形纹理逐分量对 WPE 抓帧（`p12b2-morph` 的 `mo_ovr`、`mo_nrm`，RenderDoc 读回的 i16）；边长、每网格各一张；
  * - `buildModelSkeleton`：静止姿势只用 `MDLS` 局部矩阵、动画层规则、变形轨道按网格、动画包围盒，和不再报的 / 新报的键；
  * - 整张场景：`SceneModel.skeleton`、网格 pass 的组合键、`animation-layer` 绑定、挂点、`transferableBuffers`、渲染图槽 5 的变形纹理；
- * - 本机语料 `3706286085` 编译后的不支持项只剩 P13 的键、`puppet:layer-script`、`object:parent`（没有语料时跳过）。
+ * - 本机语料 `3706286085` 编译后没有别的不支持项（P13f 之后，没有语料时跳过）。
  * 样本：`../puppet/fixtures/p12b2-*.json`（`ignore/p12/b2/impl/mkfix_model.py`）。
  */
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
@@ -568,7 +568,7 @@ describe.skipIf(!existsSync(join(workshop, "3706286085")) || !existsSync(wasm))(
       }
     };
 
-    it("编译后的不支持项只剩 P13 的键（雾、方向光阴影）、puppet:layer-script 与 object:parent；带骨骼的模型都有 skeleton", async () => {
+    it("编译后的不支持项只剩 P13 的键（P13f 之后都没有了）；带骨骼的模型都有 skeleton", async () => {
       vi.stubGlobal("fetch", nodeFetch);
       try {
         const translator = await RealTranslator.fromBytes(readFileSync(wasm));
@@ -588,9 +588,10 @@ describe.skipIf(!existsSync(join(workshop, "3706286085")) || !existsSync(wasm))(
           ),
         );
         expect(gone).toEqual([]);
-        // 剩下的：P13 的雾（general:fog*）与方向光阴影（lightconfig:directionalshadow）、挂在模型下的点光（object:parent，P13f）；动画层字段脚本 P12c 起不再报
+        // 剩下的：P13 已全部支持（雾 P13f1、灯挂在模型下 P13f2、方向光阴影 P13d）；过滤只为语料以后再变时报出新键
         const rest = bundle.unsupported.filter((key) => !/^(general:fog|lightconfig:)/.test(key));
-        expect(rest.sort()).toEqual(["object:parent"]);
+        // P13f2 起没有剩下的键
+        expect(rest.sort()).toEqual([]);
         const skeletons = bundle.layers.filter((layer) => layer.model?.skeleton);
         // FBX_Stage、RioSonic、BoostModel1/2/3
         expect(skeletons.length).toBe(5);
