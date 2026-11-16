@@ -15,7 +15,7 @@
  */
 import type { SceneLayer } from "../compile/bundle";
 import { particleThick } from "../compile/particles";
-import { sceneViewProjection, worldMatrixOf } from "../render/layout";
+import { sceneViewProjection, worldMatrixOf, type Edges } from "../render/layout";
 import { multiply, translation, type Mat4 } from "../render/math";
 import { shakeOffset, type ShakeFields } from "../render/shake";
 import { silentParticleAudio, writeParticleAudio, type ParticleAudioFrame } from "./audio";
@@ -96,6 +96,11 @@ export interface ParticleTrackOptions {
    * 差几百像素）。不跑脚本，整段回放是同一个值，预热也用它（同渲染器建场景时取编译期的值）。不给时 1，和以前逐字节相同。
    */
   zoom?: number;
+  /**
+   * 光标的裁切边距（P6c 修复 2，`render/layout.ts` 的 `fillCropEdges`）：给了时 `cursors` 是窗口归一化指针（不换到场景上），跟随点按裁过的
+   * `sceneViewProjection(size, zoom, edges)` 反投影，同渲染器在 `fill` 且窗口与场景比例不同时的做法。不给时和以前逐字节相同。
+   */
+  cursorCrop?: Edges;
   /** 随机种子；第 i 个粒子层用 `seed + i`。缺省 1。 */
   seed?: number;
   /** 按 `objects` 下标、按出生顺序顶替 `R`（`injectedR`，用完退回种子随机数），同 dev 探针 `renderFrame` 的 `particles.random`。 */
@@ -200,7 +205,9 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     throw new Error(`audio 有 ${options.audio.length} 项，dts 有 ${options.dts.length} 项，应等长`);
   /** 全部系统共用的频谱（P4e 步骤 4）：预热时全 0，每帧步进之前按 `options.audio` 写。 */
   const audio = silentParticleAudio();
-  const viewProjection = size ? sceneViewProjection({ width: size[0], height: size[1] }, options.zoom) : null;
+  const viewProjection = size
+    ? sceneViewProjection({ width: size[0], height: size[1] }, options.zoom, options.cursorCrop)
+    : null;
   /** 第 i 帧（从 0 起）的跟随点：每帧反投影一次，全部系统共用。`shake` 是模拟时相机的抖动（上一帧的 s），为 0 时用原矩阵。 */
   const pointerAt = (i: number, shake: readonly [number, number] = [0, 0]): readonly [number, number] => {
     if (!viewProjection) return [0, 0];

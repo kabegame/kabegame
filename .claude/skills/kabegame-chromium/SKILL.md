@@ -262,6 +262,10 @@ WPE 对上），MCP 不再涂色，结果写「FR 由脚本自己画（scripts�
 解出的颜色全部等于文件名帧号的公式值；P5a 的 5 组抖动、5 组缩放与 `p5a-shakepar2` 第 941 帧按时间线回放，和 WPE 上屏帧**整帧逐像素比、
 不挖任何区域，11 组都是 0 差异**；`replay.fr: false` 时差异正好是 FR 块，经 REST 给 N − 1 帧的颜色时 FR 块差 1。
 
+### 光标输入（`inputTimeline` / `buttons`，P6c）
+
+`render_scene` / `host_render` / REST `render` / `renderFrames.ts` 收 `inputTimeline`（wpe-renderdoc `input_play` / `input_start` 的时间线 `[[x, y, down(, n)], …]`，展开后等于回放帧数，要同时给 `canvas`，指针按窗口像素量化得到和 WPE 日志逐位相同的世界坐标）或 `buttons`（和回放等长的布尔数组，配 `replay.timeline.cursors`），原样交给探针；二者互斥，都要 `scripts: true` 脚本才读得到 `input.cursorLeftDown`。`renderFrames.ts` 用 `--input-timeline` / `--buttons`（整段录制，第 f 帧只带前 f 帧）。探针每帧先进入这一帧的时钟（`engine.frametime` / `runtime` / `Date`）再派发光标回调，同宿主；`Date` 每帧只有一个。MCP 需重连、REST 需重启 dev 才生效。
+
 ### 跑场景脚本（`render_scene` / `host_render` 的 `scripts`）
 
 不给 `scripts` 时探针不跑场景脚本，挂脚本的字段停在编译期的初值（只能用 `scriptValues` 逐字段塞值）。给 `scripts: true` 或

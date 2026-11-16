@@ -127,7 +127,7 @@ function legacy(pointer: Point, particles: ParticleReplay | undefined, time = 0)
 describe("逐帧指针（replayPointers）", () => {
   it("只给 pointer 或都不给：每一帧都是它，cursor 与 pointer 相同；没有回放时只有读回那一帧", () => {
     const none = replayPointers({}, SCENE, undefined);
-    expect(none).toEqual({ pointers: [[0.5, 0.5]], cursors: [[0.5, 0.5]], warmup: [0.5, 0.5] });
+    expect(none).toEqual({ pointers: [[0.5, 0.5]], cursors: [[0.5, 0.5]], warmup: [0.5, 0.5], cursorCrop: null });
     const fixed = replayPointers({ pointer: [0.3, 0.7] }, SCENE, 3);
     expect(fixed.pointers).toEqual([
       [0.3, 0.7],

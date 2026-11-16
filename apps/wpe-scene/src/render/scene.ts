@@ -237,6 +237,7 @@ import {
   effectiveVisible,
   everyAncestor,
   eyePosition,
+  croppedCursorViewProjection,
   groupViewProjection,
   layerQuad,
   particleViewProjection,
@@ -669,6 +670,11 @@ export interface ParticleOptions {
    * 跟随点（WPE 加载时也读当时的指针，rea-p4c-sim.md 1.3、1.7）。缺省场景中心 `(0.5, 0.5)`。
    */
   cursor?: readonly [number, number];
+  /**
+   * 光标的裁切边距（`fillCropEdges`，P6c 修复 2）：给了时 `cursor` 是窗口归一化指针、反投影用裁过的 `P·V`（`GpuScene.setCursorCrop`）。
+   * 产品由渲染器按样式与画布给，dev 探针在旧的「按场景分辨率画」模式下照同一规则给。
+   */
+  cursorCrop?: Edges | null;
   /**
    * 粒子读的 16 段频谱（P4e 步骤 4，`particles/audio.ts`）：渲染器给场景频谱的 `L16` / `R16`（`SceneSpectrum`，它每帧在步进之前推进）。
    * 不给时建一份全 0 的（dev 探针回放时往 `GpuScene.particleAudio` 里直接写抓帧的值）。全部粒子层共用这一份。
@@ -1311,6 +1317,16 @@ export class GpuScene {
   /** 当前的正交缩放（P5a 步骤 4，`setCamera`）：建场景时取编译期的 `general.zoom`，两份基准矩阵按它算。 */
   private zoom = 1;
   /**
+   * 光标反投影用的总缩放（P6c 修复 2）：不裁时就是 `zoom`，有相机对象时是 `general.zoom × camera.zoom`（`setCamera` / `applyCameraObject` 记）。
+   */
+  private pointerZoom = 1;
+  /**
+   * `fill` 且窗口与场景比例不同时的裁切边距（`fillCropEdges`，渲染器每帧设、`ParticleOptions.cursorCrop` 建场景时给）：非空时光标
+   * （命中与世界坐标、粒子的跟随指针）按裁过的 `P·V` 与窗口归一化指针反投影，传进来的 `cursor` 也是窗口指针。透视场景与按指定尺寸画
+   * （`crop`，投影本来就裁了）时忽略。
+   */
+  private cursorCrop: Edges | null = null;
+  /**
    * 按指定尺寸画（dev 探针，`build` 的 `target`，只对正交场景）：投影的裁切边距与窗口（= 场景目标）尺寸，所有正交投影与透视粒子投影都带它
    * （建场景、`setCamera` 的 zoom 重算）。产品不传，恒为 null，字节不变。
    */
@@ -1478,6 +1494,7 @@ export class GpuScene {
     this.particleSeed = particles.seed ?? Math.floor(Math.random() * 2 ** 32);
     this.particleROverride = particles.rOverride;
     this.particleCursor = particles.cursor ?? [0.5, 0.5];
+    this.cursorCrop = particles.cursorCrop ?? null;
     this.particleAudio = particles.audio ?? silentParticleAudio();
     let ordinal = 0;
     for (const layer of bundle.layers) if (layer.particle) this.particleOrdinals.set(layer.object, ordinal++);
@@ -2785,7 +2802,7 @@ export class GpuScene {
     const fboPool = new Map<string, number>();
     const setup = device.createCommandEncoder({ label: "scene setup" });
     // 建场景时 s 是 (0, 0)：两份相同，`setCamera` 换成带抖动的。缩放取编译期的值（P5a 步骤 4），预热的指针反投影就带上它
-    this.zoom = general.fields.zoom;
+    this.zoom = this.pointerZoom = general.fields.zoom;
     const sceneProjection = sceneViewProjection(general, this.zoom, this.crop?.edges);
     this.view.viewProjection = this.baseViewProjection = sceneProjection;
     this.view.sceneCamera = { projection: sceneProjection, view: identity() };
@@ -3056,7 +3073,7 @@ export class GpuScene {
     // 频谱（P4e 步骤 4）：预热之前换上，预热读到的是当时的值（首次加载为 0，rea-p4e-audio.md 3.5【推】）
     system.setAudio(this.particleAudio);
     const world = worldMatrixOf(layer.object, state.layers, new Map(), this.attachHook);
-    const inputs = { world, pointer: pointerScenePoint(this.view.viewProjection, this.particleCursor) };
+    const inputs = { world, pointer: pointerScenePoint(this.cursorViewProjection(), this.particleCursor) };
     system.prewarm(inputs);
     // 单图层重建：旧树还在 `trees` 里（`install` 之后才换）
     const previous = this.trees.get(layer.object);
@@ -3744,6 +3761,26 @@ export class GpuScene {
     return multiply(base, translation(x, y, 0));
   }
 
+  /** 设光标的裁切边距（渲染器每帧按样式与画布尺寸调，`fillCropEdges`）；null 是不裁。见 {@link GpuScene.cursorCrop}。 */
+  setCursorCrop(edges: Edges | null): void {
+    this.cursorCrop = edges;
+  }
+
+  /** 实际生效的裁切边距：透视场景与按指定尺寸画（投影已裁）时没有。 */
+  private cursorEdges(): Edges | null {
+    return this.cursorCrop && !this.bundle.general.perspective && !this.crop ? this.cursorCrop : null;
+  }
+
+  /**
+   * 光标反投影用的 `P·V`：有裁切边距时是裁过的 P 乘当前 V（`croppedCursorViewProjection`，总缩放取 `pointerZoom`），否则就是场景的
+   * `viewProjection`。
+   */
+  private cursorViewProjection(): Mat4 {
+    const edges = this.cursorEdges();
+    if (!edges) return this.view.viewProjection;
+    return croppedCursorViewProjection(this.bundle.general, this.pointerZoom, edges, this.view.sceneCamera.view);
+  }
+
   /**
    * 光标命中用的本帧相机（P6c，`render/cursor.ts`）：场景级的 `P·V`（`setCamera` 交来的，带抖动、缩放、相机对象）、眼位、视线方向，以及正交场景里
    * `perspective: true` 图层的透视覆盖输入（V、P 与 `perspectiveoverridefov`，`window` 是窗口客户区像素，投影宽高比取它）。渲染器在
@@ -3753,7 +3790,8 @@ export class GpuScene {
     const general = this.bundle.general;
     const perspective = !!general.perspective;
     return {
-      viewProjection: this.view.viewProjection,
+      viewProjection: this.cursorViewProjection(),
+      windowCursor: this.cursorEdges() !== null,
       eye: this.view.eye,
       perspective,
       forward: this.view.viewVectors.forward,
@@ -3791,6 +3829,7 @@ export class GpuScene {
     }
     const [x, y] = camera.shake;
     const { zoom } = camera;
+    this.pointerZoom = zoom;
     const zoomed = zoom !== this.zoom;
     if (!zoomed && x === this.shake[0] && y === this.shake[1] && !this.objectCamera) return;
     // 刚离开相机对象（P5d 步骤 3，相机对象被隐藏）：视图向量回到正交常量，下面按 zoom 与 s 整套重算
@@ -3850,6 +3889,7 @@ export class GpuScene {
    */
   private applyCameraObject(frame: OrthographicCameraFrame): void {
     this.view.sceneCamera = { projection: frame.projection, view: frame.view }; // 同 applyPerspective
+    this.pointerZoom = frame.zoom;
     const vectors = this.view.viewVectors;
     if (
       this.objectCamera &&
@@ -4843,7 +4883,7 @@ export class GpuScene {
       if (state && !effectiveVisible(object, state.layers)) {
         // 不可见时控制点照常更新（P4d 步骤 5，rea-p4d-modules.md 5.3）：`W` 与跟随点照可见时的算法算
         const world = worldMatrixOf(object, state.layers, worlds, this.attachHook);
-        pointer ??= pointerScenePoint(this.view.viewProjection, cursor);
+        pointer ??= pointerScenePoint(this.cursorViewProjection(), cursor);
         tree.inputs = { world, pointer };
         // 系统时间在不可见的帧上照常累加（P4d 收尾 A），所以把帧时间也交给它；子系统与事件实例这时以 `emit = false` 照常步进
         // （rea-p4e-children 3.6），所以有子系统时每帧都要重写
@@ -4855,7 +4895,7 @@ export class GpuScene {
       const timing = first ? this.particleTimings?.get(first) : undefined;
       const started = timing ? performance.now() : 0;
       const world = state ? worldMatrixOf(object, state.layers, worlds, this.attachHook) : tree.world;
-      pointer ??= pointerScenePoint(this.view.viewProjection, cursor);
+      pointer ??= pointerScenePoint(this.cursorViewProjection(), cursor);
       tree.inputs = { world, pointer };
       root.step(frametime, time, tree.inputs);
       if (timing) {

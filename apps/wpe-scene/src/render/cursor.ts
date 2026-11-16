@@ -468,6 +468,11 @@ export function pickablesOf(
 export interface CursorCamera {
   /** 场景级的 `P·V`：正交场景带缩放、抖动与相机对象，透视场景是透视相机的。 */
   viewProjection: Mat4;
+  /**
+   * `viewProjection` 是裁过的（`fill` 且窗口与场景比例不同，`GpuScene.setCursorCrop`）：世界坐标按窗口归一化指针（`pointer`）反投影，
+   * 不用 `cursor`（场景纹理坐标）；缺省或 false 时用 `cursor`，同以前。
+   */
+  windowCursor?: boolean;
   /** `g_EyePosition`（正交时 z = 2000）。 */
   eye: readonly number[];
   /** 透视场景（命中顺序按视线排、射线从 eye 出发）。 */
@@ -524,7 +529,7 @@ export class CursorSession {
     dispatch: boolean,
   ): { snapshot: CursorInputSnapshot; dispatches: CursorDispatch[] } {
     const { camera } = input;
-    const unprojected = unprojectCursor(camera.viewProjection, input.cursor);
+    const unprojected = unprojectCursor(camera.viewProjection, camera.windowCursor ? input.pointer : input.cursor);
     // 正交场景把 z 置 0（透视场景落在远平面上）
     const world: Vec3Tuple = camera.perspective ? unprojected : [unprojected[0], unprojected[1], 0];
     const screen: [number, number] = [

@@ -54,10 +54,12 @@ import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
 import {
   canvasSize,
+  fillCropEdges,
   sceneCursor,
   scenePlacement,
   scenePointer,
   sceneTargetSize,
+  type Edges,
   type ScenePlacement,
   type SceneStyle,
 } from "./layout";
@@ -422,6 +424,8 @@ export class SceneRenderer {
       this.gpu.device.limits.maxTextureDimension2D,
     );
     const placementStyle: SceneStyle = perspective ? "stretch" : this.style;
+    // 光标的裁切（P6c 修复 2）：`fill` 且窗口与场景比例不同时，光标按裁过的 `P·V` 与窗口指针反投影（`GpuScene.setCursorCrop`）
+    const cursorCrop = this.cursorCropOf(bundle.general, placementStyle);
     const placement = scenePlacement(
       placementStyle,
       sceneWidth,
@@ -437,7 +441,8 @@ export class SceneRenderer {
       particles: {
         passes: particlePasses(fps),
         fps,
-        cursor: this.cursorOf(placement, placementStyle),
+        cursor: this.cursorOf(placement, placementStyle, cursorCrop),
+        cursorCrop,
         // 粒子读场景频谱的 16 段（P4e 步骤 4）；预热在这里跑，首次加载时频谱是 0（rea-p4e-audio.md 3.5）
         audio: { left: this.spectrum.L16, right: this.spectrum.R16 },
       },
@@ -722,10 +727,22 @@ export class SceneRenderer {
     this.gpu.device.queue.writeBuffer(this.placementBuffer, 0, placementUniform(this.placement));
   }
 
+  /** 光标的裁切边距（`fillCropEdges`）：透视场景（按画布尺寸画、样式按 `stretch`）与没有场景时没有。 */
+  private cursorCropOf(general: SceneGeneral | null, style: SceneStyle): Edges | null {
+    if (!general || general.perspective) return null;
+    return fillCropEdges(style, general.width, general.height, this.canvas.width, this.canvas.height);
+  }
+
   /** 光标下的场景纹理坐标（`sceneCursor`，P4c 步骤 2）：按当前样式与给定铺放从 `canvasPointer` 现算；没收到过指针时取场景中心。 */
-  private cursorOf(placement: ScenePlacement, style: SceneStyle = this.placementStyle): [number, number] {
+  private cursorOf(
+    placement: ScenePlacement,
+    style: SceneStyle = this.placementStyle,
+    crop: Edges | null = this.cursorCropOf(this.sceneGeneral, style),
+  ): [number, number] {
     const pointer = this.canvasPointer;
     if (!pointer) return [0.5, 0.5];
+    // 有裁切时反投影吃窗口归一化指针（裁过的 `P·V`），不换到场景纹理坐标（P6c 修复 2）
+    if (crop) return [pointer[0], pointer[1]];
     return sceneCursor(style, placement, this.canvas.width, this.canvas.height, pointer[0], pointer[1]);
   }
 
@@ -733,14 +750,15 @@ export class SceneRenderer {
    * 一个实时帧的光标（P6c）：算 `input.*` 的快照，有脚本导出光标回调时命中、派发。窗口指针是画布上的原始归一化坐标（没收到过时取中心），
    * 光标下的场景点按壁纸样式换算（`cursorOf`，`fill` 与窗口指针相同）。
    */
-  private stepCursor(scene: GpuScene, state: SceneState, cursor: [number, number]): void {
+  private stepCursor(scene: GpuScene, state: SceneState): void {
     const options = this.options.cursor;
     if (!options) return;
     const window = this.fullResolution;
     const { snapshot, dispatches } = this.cursorSession.frame(
       {
         camera: scene.cursorCamera(window),
-        cursor,
+        // 光标下的场景纹理坐标永远按铺放换算（透视覆盖的射线用它）；裁切时世界坐标改用窗口指针（`camera.windowCursor`）
+        cursor: this.cursorOf(this.placement, this.placementStyle, null),
         pointer: this.canvasPointer ?? [0.5, 0.5],
         window,
         down: this.button,
@@ -774,7 +792,9 @@ export class SceneRenderer {
     const { time, frametime } = this.frameClock;
     const wrapped = time % TIME_WRAP_SECONDS;
     // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上
-    const cursor = this.cursorOf(this.placement);
+    const cursorCrop = this.cursorCropOf(this.sceneGeneral, this.placementStyle);
+    const cursor = this.cursorOf(this.placement, this.placementStyle, cursorCrop);
+    scene.setCursorCrop(cursorCrop);
     const [width, height] = this.projection;
     // 抖动（P5a 步骤 3）：帧开头、视差点之前，用本帧的 `g_Time` 与脚本之前的字段算 eye 偏移 s（WPE 更新相机时算，在 lookAt 与
     // 视差点之前，脚本之后才跑，rea-p5-camera.md 第 5 节；脚本写 `camerashake*` 下一帧才生效）。交给场景要等粒子步进之后，见下。
@@ -824,7 +844,7 @@ export class SceneRenderer {
     scene.setCamera(camera);
     // 光标命中与派发（P6c）：相机更新之后、脚本（关键帧动画、计时器、`update`）之前（WPE `FUN_14017fa70` 的 `0x1401802af`）；只在实时帧，
     // 同样在 try 外：回调里的脚本错误不走 `render:frame` 退回
-    if (live) this.stepCursor(scene, state, cursor);
+    if (live) this.stepCursor(scene, state);
     // 声音（P6a 步骤 1）：粒子之后、脚本之前；同脚本在 try 外，声音的问题不让画面退回
     if (live) this.options.stepObjects?.(frametime);
     // 脚本在 try 外（同以前）：脚本自己的错误不走 `render:frame` 退回

@@ -17,7 +17,17 @@
  *   透视粒子（P4a 步骤 4）另用一套透视相机（`particleViewProjection`），z = 0 平面和正交画面重合。
  */
 import type { SceneGeneral, SceneLayer, SceneTexture } from "../compile/bundle";
-import { alignOffset, identity, invert, multiply, orthographic, translateGlm, translation, type Mat4 } from "./math";
+import {
+  alignOffset,
+  identity,
+  invert,
+  mulAffine,
+  multiply,
+  orthographic,
+  translateGlm,
+  translation,
+  type Mat4,
+} from "./math";
 
 /**
  * 正交场景的深度范围 ±2000，照 WPE（2026-11-07 RenderDoc 读到的 MVP，图像层与正交粒子相同）：深度 = 0.00025·z + 0.5，
@@ -503,6 +513,41 @@ function zoomed(projection: Mat4, w: number, h: number, zoom: number): Mat4 {
   const scaled = Float32Array.from(moved);
   for (let i = 0; i < 8; i++) scaled[i] = f(moved[i] * z);
   return translateGlm(scaled, [f(w * -0.5), f(h * -0.5), -0]);
+}
+
+/**
+ * 光标反投影要不要用「裁过的 `P·V`」（P6c 修复 2）：样式是 `fill` 且窗口与场景比例不同（整数交叉相乘判，精确）时返回 `alignEdges(0, …)`
+ * 的裁切边距，否则 null（别的样式、同比例：照旧用不裁的 `P·V` 加 `sceneCursor`，结果逐字节同以前）。
+ * 依据：WPE 渲染到窗口，居中盖满裁切在投影的四个边界里（`ortho(E0, W − E2, E3, H − E1)`，rea-render-size 第 1 节），光标直接用窗口归一化
+ * 指针按这份 `P·V` 反投影；Kabegame 的场景目标是场景分辨率、`P·V` 不裁，所以要另算一份给光标用（`croppedCursorViewProjection`）。
+ * 2026-11-14 对 `clockv-drag` 抓帧：这样算的 MVP（FR 的 `T(−100000, −100000)`）`m0` `m5` `m12` `m13` 与 WPE 逐位相同。
+ */
+export function fillCropEdges(
+  style: SceneStyle,
+  sceneWidth: number,
+  sceneHeight: number,
+  windowWidth: number,
+  windowHeight: number,
+): Edges | null {
+  if (style !== "fill") return null;
+  if (!(sceneWidth > 0 && sceneHeight > 0 && windowWidth > 0 && windowHeight > 0)) return null;
+  if (sceneWidth * windowHeight === sceneHeight * windowWidth) return null;
+  return alignEdges(0, sceneWidth, sceneHeight, windowWidth, windowHeight);
+}
+
+/**
+ * 光标用的裁过的 `P·V`：`mulAffine(sceneViewProjection(general, zoom, edges), V)`。zoom 的三步照 WPE 无条件做（`sceneViewProjection` 带
+ * `edges` 时的路径），`V` 是场景当前的视图（抖动的平移或相机对象的 lookAt，不带视差，同 `GpuScene` 的 `viewProjection`）。
+ * 缩放、抖动、相机对象与裁切的组合：WPE 的帧函数先建裁切后的 P（`FUN_14009a630`）、再乘 zoom 的三步、最后 `P ⊗ V`，
+ * 各步都在这一个函数里，和 `GpuScene.setCamera` 不裁时的顺序相同，只是 P 换成裁过的。
+ */
+export function croppedCursorViewProjection(
+  general: Pick<SceneGeneral, "width" | "height">,
+  zoom: number,
+  edges: Edges,
+  view: Mat4,
+): Mat4 {
+  return mulAffine(sceneViewProjection(general, zoom, edges), view);
 }
 
 /**

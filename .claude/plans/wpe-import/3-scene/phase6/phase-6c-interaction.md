@@ -452,3 +452,8 @@ export function hitQuad(ray: Ray, p: Pickable, offset: [number, number]): { hit:
 - **我核对的：** tsc 0 error；相关 7 个测试文件 240 条全过；`scripts/kabegame-dev` 26 个、`apps/kabegame-dev-mcp` 29 个 deno 测试全过；变异（快照 `ignore/p6/fix2/mut`，`ignore/p6/fix2/mutate.py`）「裁切恒不启用」「探针先派发光标再进帧」都抓到；重建宿主产物后 `p6c-hit` 重放对 WPE 日志仍是回调 98 / 98、`upd` 169 / 169 逐字相同，测试行已移除。
 - **提交：** `particleCorners.ts`、`dev/probe.ts`、`replayPointers.ts`、REST 与 MCP 的几个文件里混着渲染尺寸阶段的块，修复 2 又依赖它的函数；等那个会话提交后再提交这批。
 - **提交（2026-11-14 用户：「强行提交你的就行了，我没那么在乎这些差别，只在乎卡点」）：** 这次只提交修复 3 与文档 5 里 P11a 那一条——它们能和别的会话的块干净分开。留在工作区、等别的会话提交后再提交：修复 2（依赖渲染尺寸阶段没提交的 `alignEdges` / `orthoWpe`）、工具 4（REST / MCP / `renderFrames.ts` 的块和渲染尺寸、P11c 的块逐行交错）、`FINAL_CHECK.md` 与 `kabegame-chromium/SKILL.md` 的更新（写的是工具 4，跟它一起提交）。两项都不是卡点。
+- **提交（2026-11-17，「活的场景图」会话转告用户的话：看能不能提交或收掉）：** 渲染尺寸（`alignEdges` / `orthoWpe`）与 P11c 都已进 HEAD，修复 2 与工具 4 一起提交，连同 `FINAL_CHECK.md` 与 `kabegame-chromium/SKILL.md` 的更新。
+  - `scene.ts` 里同在工作区的 P13b2 补测（反射 RT 的清屏色）不带，按原文换回后只留修复 2 的块（`ignore/p6/fix2/land_split.py`）。
+  - 文档（`WPE_SCENE.md` 的「`fill` 裁切（P6c 修复 2）」、「粒子（P4c）」的指针）已随别的提交进了 HEAD，这次只差代码。
+  - 夹具 `cursorCrop.fixture.json` 按 Prettier 格式化（同仓库里别的夹具），JSON 值不变。
+  - 在 `425239f3` 之上的提交快照里核对：tsc 0 error；引用改动模块的 84 个测试文件 2066 条通过（51 条要本机语料、跳过）；REST 与 MCP 的 deno 测试 56 个通过；kbp-tools 的 tsc 0 error；Prettier 通过。

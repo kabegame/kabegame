@@ -598,7 +598,7 @@ export async function collectScripts(scene: SceneJson, properties: …, bindings
     - 用户定为 P12 的范围，已转交 `wpe p12 d/d (fork)` 会话（2026-11-15）。
     - 全部脚本解码（`ignore/p6/d3/scene_missing.py`，结果 `ignore/p6/d3/out/2887/all/`）后对照缺口表，这张场景没实现的只剩它一个。
     - 2026-11-16 P12e 已实现（[phase-12e-createlayer.md](../phase12/phase-12e-createlayer.md)），用户在预览里点书确认翻页正常（回归 PE6）。
-- **测试工程**：`p6d3-struct` / `p6d3-parent` / `p6d3-attach` / `p6d-tree` 留在 dev 库里（清单 `ignore/p6/d3/import.json`，图片 15299–15302），给用户看 I8，之后用 `projects_remove` 移除。
+- **测试工程**：`p6d3-struct` / `p6d3-parent` / `p6d3-attach` / `p6d-tree`（清单 `ignore/p6/d3/import.json`，图片 15299–15302）用户看过后，2026-11-16 用 `projects_remove` 移除。
 
 ### P6d3b（2026-11-16）
 
@@ -636,4 +636,5 @@ export async function collectScripts(scene: SceneJson, properties: …, bindings
   - 运行中建的层晚一段才画（P6d4）；
   - WPE 对数组配置取 `getInitialLayerConfig` 时中止 `init`，不复刻。
 - **另记**：图层对象的自有键数 WPE 比我们多（图像层 59 / 30，普通对象 21 / 24），P6d1 起就有、和建层无关，要补得先在 WPE 里列出键名。
-- **测试工程**：`p6d3b-bars` / `p6d3b-clone` / `p6d3b-default` / `p6d-order` / `p6d-asset` 留在 dev 库里（清单 `ignore/p6/d3/import-b.json`，图片 15315–15319），给用户看 J10，之后用 `projects_remove` 移除。
+- **提交**：`88be89b3`（2026-11-16，用户：「可以」），在 `74cf58c6` 之上，`host.ts` 三方合并；三份共享文档只带本步的段落。
+- **测试工程**：`p6d3b-bars` / `p6d3b-clone` / `p6d3b-default` / `p6d-order` / `p6d-asset`（清单 `ignore/p6/d3/import-b.json`，图片 15315–15319）用户看过 J10 后，2026-11-16 用 `projects_remove` 移除。

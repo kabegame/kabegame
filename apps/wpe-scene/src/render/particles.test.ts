@@ -24,7 +24,15 @@ import type { TranslateResult } from "../wpesl2wgsl";
 import { clampFrametime, FrameClock, FRAMETIME_MAX, FRAMETIME_MIN } from "./clock";
 import { acquireGpu } from "./device";
 import { planLayer, planParticleLayer, planSignature } from "./graph";
-import { particleViewProjection, sceneCursor, scenePlacement, sceneViewProjection, worldMatrixOf } from "./layout";
+import {
+  croppedCursorViewProjection,
+  fillCropEdges,
+  particleViewProjection,
+  sceneCursor,
+  scenePlacement,
+  sceneViewProjection,
+  worldMatrixOf,
+} from "./layout";
 import { identity, multiply, translation, type Mat4 } from "./math";
 import { SceneRenderer } from "./renderer";
 import {
@@ -1610,8 +1618,9 @@ describe("渲染器：帧时钟与遍数", () => {
     renderer.setPointer(0, 0.1);
     const fill = next();
     expect(fill.pointer).toEqual([0, 0.1]);
-    expect(fill.cursor).toEqual(expected("fill", 0, 0.1));
-    expect(fill.cursor[0]).toBeCloseTo(0.21875, 12);
+    // fill 且比例不同（P6c 修复 2）：cursor 保持窗口指针，反投影用裁过的 P·V（`GpuScene.setCursorCrop`）
+    expect(fill.cursor).toEqual([0, 0.1]);
+    expect(expected("fill", 0, 0.1)[0]).toBeCloseTo(0.21875, 12);
     // 改样式：不再收到指针，下一帧的 cursor 照新样式算
     renderer.setStyle("stretch");
     expect(next().cursor).toEqual([0, 0.1]);
@@ -1632,9 +1641,11 @@ describe("渲染器：帧时钟与遍数", () => {
     };
     const bundle = bundleOf([particleLayer(1, json, { origin: [960, 540, 0] })]);
     const { renderer } = await start(0, bundle, (r) => r.setPointer(0.25, 0.25));
-    const cursor = sceneCursor("fill", scenePlacement("fill", 1920, 1080, 100, 100), 100, 100, 0.25, 0.25);
-    expect(build.mock.lastCall![5]!.particles!.cursor).toEqual(cursor);
-    const follow = pointerScenePoint(sceneViewProjection(GENERAL_1080), cursor);
+    // fill 且比例不同（P6c 修复 2）：cursor 是窗口指针，跟随点按裁过的 P·V 反投影
+    const edges = fillCropEdges("fill", 1920, 1080, 100, 100)!;
+    expect(build.mock.lastCall![5]!.particles!.cursor).toEqual([0.25, 0.25]);
+    expect(build.mock.lastCall![5]!.particles!.cursorCrop).toEqual(edges);
+    const follow = pointerScenePoint(croppedCursorViewProjection(GENERAL_1080, 1, edges, identity()), [0.25, 0.25]);
     const system = particleDraw(renderer.currentScene!, 1).particles!.system;
     expect(system.alive).toBeGreaterThan(0);
     // 本地系统：inverse(W)·F + 发射器 origin (100, 200)

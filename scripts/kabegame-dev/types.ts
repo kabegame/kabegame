@@ -497,6 +497,16 @@ export interface RenderRequest {
    */
   pointers?: [number, number][];
   /**
+   * 逐帧的左键（P6c），和 `particles.dts` 等长，要有 `particles` 与 `pointers`（还要 `scripts`，探针才派发光标回调）；不和 `inputTimeline` 同给。
+   * 原样交给探针 `renderFrame`。
+   */
+  buttons?: boolean[];
+  /**
+   * wpe-renderdoc 的输入时间线（P6c）`[x, y, down]` 或 `[x, y, down, n]`，展开后等于 `particles.dts` 的帧数；要同时给 `window`（或 `canvas`），
+   * 探针按窗口像素量化指针。不和 `pointer` / `pointers` / `buttons` 同给。原样交给探针 `renderFrame`。
+   */
+  inputTimeline?: [number, number, boolean | number, number?][];
+  /**
    * 抓帧窗口尺寸 `[宽, 高]`：和场景不同尺寸时探针按壁纸样式 `fill` 把光标换到场景上；缺省或同尺寸时原样。没给时探针用 `canvas`；
    * 两个都给时要相同。
    */

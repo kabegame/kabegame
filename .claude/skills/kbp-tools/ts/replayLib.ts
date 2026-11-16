@@ -229,6 +229,8 @@ export interface Section {
   scene: Point;
   window: Point;
   cursors?: Point[];
+  /** 光标的裁切边距（`fill` 且窗口与场景比例不同时非空，P6c 修复 2）：`cursors` 是窗口指针，`particleTrack` 要带它。 */
+  cursorCrop?: number[];
   follows?: Point[];
   world?: (layer: any, frame: number) => unknown;
   limits: Limits;
@@ -823,14 +825,17 @@ export class CaseContext {
     }
     // 控制点输入：track 与 log 的光标都是 g_PointerPosition（窗口归一化），同一段换到场景上
     if (cursorsMode === "track" || cursorsMode === "log") {
-      const { scenePlacement, sceneCursor, sceneViewProjection } = await this.mod("render/layout");
+      const { scenePlacement, sceneCursor, sceneViewProjection, fillCropEdges } = await this.mod("render/layout");
       const { pointerScenePoint } = await this.mod("particles/controlpoints");
       const same = window[0] === scene[0] && window[1] === scene[1];
-      const placement = same ? null : scenePlacement("fill", scene[0], scene[1], window[0], window[1]);
+      // 窗口与场景比例不同（fill）：照产品（P6c 修复 2）用裁过的 P·V 与窗口指针反投影；旧快照没有 fillCropEdges，走原来的换算
+      const crop = !same && fillCropEdges ? fillCropEdges("fill", scene[0], scene[1], window[0], window[1]) : null;
+      const placement = same || crop ? null : scenePlacement("fill", scene[0], scene[1], window[0], window[1]);
       sec.cursors = (timeline.cursors ?? []).map(([x, y]) =>
-        same ? ([x, y] as Point) : (sceneCursor("fill", placement, window[0], window[1], x, y) as Point),
+        same || crop ? ([x, y] as Point) : (sceneCursor("fill", placement, window[0], window[1], x, y) as Point),
       );
-      const viewProjection = sceneViewProjection({ width: scene[0], height: scene[1] });
+      const viewProjection = sceneViewProjection({ width: scene[0], height: scene[1] }, undefined, crop ?? undefined);
+      if (crop) sec.cursorCrop = crop;
       sec.follows = sec.cursors.map((c) => pointerScenePoint(viewProjection, c) as Point);
     } else if (cursorsMode === "zero") {
       sec.follows = sec.dts.map(() => [0, 0] as Point);
@@ -1134,6 +1139,7 @@ export class CaseContext {
       frames: sec.frames,
       passes: sec.passes,
       cursors: sec.cursors,
+      cursorCrop: sec.cursorCrop,
       size: sec.scene,
     });
     const strip = (p: SimParticle | undefined) =>

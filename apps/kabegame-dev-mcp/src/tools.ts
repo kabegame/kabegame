@@ -495,6 +495,19 @@ const SCRIPTS = z
       "音频缓冲全 0、媒体回调不调；声音层、视频纹理、粒子层的脚本方法空操作并计数。要整场重编译的写入探针做不了，结果里列出（这一帧不可信）。" +
       "给了时 FR 帧号块由脚本自己画，不再涂色。结果里写各段脚本的状态与出错",
   );
+/** wpe-renderdoc 的输入时间线（`input_play` / `input_start` 的格式）：`[x, y, down]` 或 `[x, y, down, n]`（重复 n 帧）。 */
+const INPUT_TIMELINE = z
+  .array(
+    z.union([
+      z.tuple([z.number(), z.number(), z.union([z.boolean(), z.literal(0), z.literal(1)])]),
+      z.tuple([z.number(), z.number(), z.union([z.boolean(), z.literal(0), z.literal(1)]), z.number().int().min(1)]),
+    ]),
+  )
+  .describe(
+    "wpe-renderdoc 的输入时间线（P6c，input_play / input_start 的格式）：[[x, y, down], [x, y, down, n], …]，x / y 是窗口客户区归一化坐标，n 是重复帧数，展开后要等于 replay 的帧数（第 i 项就是场景第 i 帧）。" +
+      "原样交给探针 renderFrame：指针按 WPE 的取法量化到整数像素（所以和 WPE 日志里的世界坐标 / 局部坐标逐位相同），左键逐帧派发给光标回调（要同时给 scripts: true）。" +
+      "要同时给 canvas（模拟的壁纸窗口，指针按它的像素量化）；不和 pointer、buttons、replay.timeline 的逐帧光标同给",
+  );
 const RENDER_FIELDS = {
   time: z.number().optional().describe("g_Time（秒），缺省 1.5（同画面哈希基线）；给了 replay 时不收"),
   postprocess: POSTPROCESS.optional().describe("场景后处理档位，缺省 disabled"),
@@ -512,6 +525,14 @@ const RENDER_FIELDS = {
   media: MEDIA.optional(),
   trace: TRACE.optional(),
   scripts: SCRIPTS.optional(),
+  inputTimeline: INPUT_TIMELINE.optional(),
+  buttons: z
+    .array(z.boolean())
+    .optional()
+    .describe(
+      "逐帧左键（P6c），和 replay 的帧数等长，配 replay.timeline 的逐帧光标（cursors）一起给，原样交给探针；探针在相机更新之后、脚本之前按光标位置命中并派发光标回调，" +
+        "脚本的 input.cursorLeftDown 读到它，所以要同时给 scripts: true。不和 inputTimeline 同给",
+    ),
 };
 const OUT = z.string().describe("结果写到这个文件（相对路径按仓库根）");
 const OVERWRITE = z.boolean().default(false).describe("out 已存在时是否覆盖，缺省拒绝");
@@ -1289,6 +1310,9 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       ...(scripts !== undefined ? { scripts: scripts as RenderScriptsRequest } : {}),
     };
     if (!replay) {
+      if (rest.inputTimeline !== undefined || rest.buttons !== undefined) {
+        throw new ToolError("local", "inputTimeline / buttons 要和 replay 一起给：它们是回放每一帧的输入");
+      }
       return { body: { imageId, ...rest }, lines: [] as string[], timelineWindow: null, fr: null as FrPlan };
     }
     if (rest.time !== undefined) {
@@ -1303,6 +1327,27 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       throw new ToolError(
         "local",
         "pointer 与时间线的逐帧光标（replay.timeline 的 cursors / cursor）不能同时给：要固定光标就只给 pointer",
+      );
+    }
+    // 输入时间线 / 逐帧左键（P6c）：互斥与前提在这里先查，错了不碰页面（长度对不对由后端对着 dts 校验）
+    if (rest.inputTimeline !== undefined) {
+      if (timelineCursors || rest.pointer !== undefined || rest.buttons !== undefined) {
+        throw new ToolError(
+          "local",
+          "inputTimeline 不能和 pointer、buttons、replay.timeline 的逐帧光标同给：它自己展开成逐帧指针与左键",
+        );
+      }
+      if (rest.canvas === undefined) {
+        throw new ToolError(
+          "local",
+          "inputTimeline 要同时给 canvas：指针按模拟的壁纸窗口像素量化，和 WPE 的整数像素一致",
+        );
+      }
+    }
+    if (rest.buttons !== undefined && !timelineCursors) {
+      throw new ToolError(
+        "local",
+        "buttons 要和 replay.timeline 的逐帧光标（cursors）一起给：左键按逐帧光标的位置派发",
       );
     }
     const frOption = (replay as RenderReplayArg).fr;
@@ -1369,7 +1414,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "桌面：在已开的宿主里渲染某张场景一帧（dev 探针 renderFrame），回图片与元数据（meta.sha256 是 RGBA 像素摘要）。只想渲染一张用 render_scene。" +
         "replay、canvas、videoTime 同 render_scene：按 WPE 的 dt 序列确定性回放粒子后再读回（replay.fr 缺省 true，把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色）；" +
         "给 canvas 时正交场景按这个尺寸直接画（style 缺省 fill，照 WPE 的对齐方式做进投影裁切边距，读回场景目标本身；renderMode: scene 取旧的读回时按 fill 铺放）；videoTime 定视频纹理的时刻（也作用于用户视频）；gifDts 逐帧推进用户 GIF；trace 同 render_scene，把这一帧的逐 draw 轨迹写进 trace.save 目录；" +
-        "scripts 同 render_scene：探针照宿主跑场景脚本（外部值来自请求、可重复），FR 由脚本自己画、不再涂色。",
+        "scripts 同 render_scene：探针照宿主跑场景脚本（外部值来自请求、可重复），FR 由脚本自己画、不再涂色；inputTimeline / buttons 同 render_scene（逐帧光标与左键）。",
       inputSchema: {
         handle: z.string().min(1),
         imageId: IMAGE_ID,
@@ -1497,6 +1542,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "给 gifDts: [每帧 g_Frametime 秒…] 时探针读回前逐项推进用户纹理里的 GIF，不给时停在第 0 帧，和 WPE 抓帧比时填抓帧的逐帧 dt；结果里写一行用户纹理。" +
         "给 trace: { save, readback?, maxVertices? } 时探针记下读回那一帧逐个 pass、逐个 draw 的管线、绑定、uniform（按名字解码）、顶点，" +
         "写到 save 目录的 trace.json，readback 选中的 pass 的目标另存 pass-<下标>.png / .f32，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照；轨迹不进会话，结果里只有一行摘要。" +
+        "光标交互（P6c）：给 scripts: true 加 inputTimeline（wpe-renderdoc input_play / input_start 的时间线格式，要同时给 canvas）或 replay.timeline.cursors 加 buttons，" +
+        "探针每帧先进入这一帧的时钟、再按光标位置命中并派发光标回调（脚本的 input.cursorLeftDown 读到左键）；探针每帧只有一个 Date（WPE 每次调用都是真时钟）。" +
         "工具不做比较，比较自己跑 ignore/p4 的脚本。",
       inputSchema: {
         imageId: IMAGE_ID,

@@ -102,7 +102,7 @@ import {
   placementUniform,
 } from "../render/blit";
 import { acquireGpu } from "../render/device";
-import { scenePlacement } from "../render/layout";
+import { fillCropEdges, scenePlacement } from "../render/layout";
 import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame } from "../render/camera";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene, type ParticleProfile } from "../render/scene";
@@ -663,14 +663,24 @@ async function renderFramePass(
         );
     }
     const pointers = replayPointers(
-      { pointer: options.pointer, pointers: timeline?.pointers ?? options.pointers, window: cursorWindow },
+      {
+        pointer: options.pointer,
+        pointers: timeline?.pointers ?? options.pointers,
+        window: cursorWindow,
+        // 按场景分辨率画（旧模式）时同产品渲染器：光标的裁切在反投影里（P6c 修复 2）
+        cropped: !sized && !perspective,
+      },
       // 按指定尺寸画时窗口就是场景目标：光标原样（`windowPointer` 的同尺寸分支），反投影交给带裁切的 VP
       target ?? (sized ? sized.target.size : [sceneWidth, sceneHeight]),
       options.particles?.dts.length,
     );
     const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
       ignoreUnsupported: force,
-      particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
+      particles: {
+        ...replayParticleOptions(options.particles),
+        cursor: pointers.warmup,
+        cursorCrop: pointers.cursorCrop,
+      },
       texts: texts.texts,
       relayout: texts.relayout,
       userTextures,
@@ -1243,6 +1253,11 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
     if (options.cursors && cameraObjectLayers(bundle).length)
       throw new Error("带相机对象的场景的 particleTrack 还不支持 cursors（跟随点要按相机对象的视图反投影）");
     const size: [number, number] | undefined = perspective ? undefined : [bundle.general.width, bundle.general.height];
+    // 光标的裁切（P6c 修复 2）：`fill` 且窗口与场景比例不同时用裁过的 P·V 与窗口指针，同产品渲染器
+    const trackCrop =
+      options.cursors && size && options.window
+        ? fillCropEdges("fill", size[0], size[1], options.window[0], options.window[1])
+        : null;
     return particleTrack({
       layers: bundle.layers,
       dts: options.dts,
@@ -1253,7 +1268,9 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
       random: options.random,
       audio: options.audio,
       // 窗口归一化 → 光标下的场景纹理坐标（P5a 收尾，换算放在 dev 里，`particles/track.ts` 只收场景坐标）
-      cursors: options.cursors && size && sceneCursors(options.cursors, size, options.window),
+      cursors:
+        options.cursors && size && (trackCrop ? options.cursors : sceneCursors(options.cursors, size, options.window)),
+      cursorCrop: trackCrop ?? undefined,
       size,
       // 跟随点按上一帧的抖动反投影（P5a 步骤 3），投影带缩放（步骤 4），同渲染器
       shake: bundle.general.fields,

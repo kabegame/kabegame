@@ -197,7 +197,7 @@ export interface SceneLayer {
 1. **P6d1 层级、变换与 effect / 材质访问**：[phase-6d1-hierarchy-effects.md](phase-6d1-hierarchy-effects.md)。分 P6d1a（查询、转向、effect / 材质读与常量写、`getLayerByID`、删 `id`）与 P6d1b（材质状态字段运行中改管线）。
 2. **P6d2 脚本改成同步工厂加载**（「已定」2）：[phase-6d2-script-factory.md](phase-6d2-script-factory.md)。改写用 acorn（2026-11-15 用户「方案1可以」）。
 3. **P6d3 动态图像层与结构**：[phase-6d3-runtime-layers.md](phase-6d3-runtime-layers.md)。运行时渲染顺序表、`sortLayer`、`destroyLayer`、`setParent`（含挂点与组深度检查、组归属变化）、`__workshopId`、模板实例化、克隆（含脚本）、逐实例属性绑定。解锁 4 张音频条。
-4. **P6d4 文本层与粒子模板、运行中新模型的兜底**（兜底的形态待用户定 B：异步编完再画、作为已知差异）。
+4. **P6d4 运行中建层的同步实例化**：[phase-6d4-sync-instantiate.md](phase-6d4-sync-instantiate.md)。按模板克隆（改键、当帧加进状态与 GPU 场景），没有模板的配置照 P6d3b 重编译、晚一段出现（「已定」3）。
 5. 走查（按 FINAL_CHECK）与文档随各步做。
 
 ## 已定

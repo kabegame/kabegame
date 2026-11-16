@@ -506,6 +506,8 @@ export interface OrthographicCameraInput {
 export interface OrthographicCameraFrame {
   /** V = lookAtRH(eye + s, center + s, up)。 */
   view: Mat4;
+  /** 总缩放 `general.zoom × camera.zoom`（光标的裁过的 `P·V` 要用，P6c 修复 2）。 */
+  zoom: number;
   /** 场景投影 `sceneViewProjection(general, zoom)`（P）：`GpuScene` 分开存 P 与 V，每次 draw 现算视差后的 `P ⊗ V`（rea-matrix-order 2.3）。 */
   projection: Mat4;
   /** `mulAffine(projection, V)`（WPE 的 `FUN_1400d4200` 写法，rea-matrix-order 2.1）。 */
@@ -542,6 +544,7 @@ export function orthographicCameraObjectFrame(input: OrthographicCameraInput): O
   const projection = sceneViewProjection(general, zoom, input.crop?.edges);
   return {
     view,
+    zoom,
     projection,
     viewProjection: mulAffine(projection, view),
     perspectiveViewProjection: particleViewProjection(general, zoom, view, input.crop),

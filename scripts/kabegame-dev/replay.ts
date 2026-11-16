@@ -287,6 +287,56 @@ export function checkRenderStyleMode(body: { style?: unknown; renderMode?: unkno
   }
 }
 
+/** 输入时间线展开后的最大帧数（探针 `MAX_INPUT_FRAMES` 的抄本，改了两边一起改）。 */
+export const MAX_INPUT_FRAMES = 100000;
+
+/**
+ * 逐帧左键 `buttons`（P6c）：布尔数组，要有 `particles`、和 `particles.dts` 等长，并和 `pointers` 一起给（左键按指针的位置派发）。
+ * 不和 `inputTimeline` 同给（它自己展开成逐帧指针与左键）。
+ */
+function checkButtons(value: unknown, particles: ParticleReplay | undefined): boolean[] {
+  if (!particles) fail("buttons", "要和 particles 一起给（逐帧左键是回放的每一帧）");
+  if (!Array.isArray(value)) fail("buttons", `要是布尔数组，收到 ${shown(value)}`);
+  if (value.length !== particles.dts.length)
+    fail("buttons", `有 ${value.length} 项，应和 particles.dts 等长（${particles.dts.length} 项）`);
+  value.forEach((item, i) => {
+    if (typeof item !== "boolean") fail(`buttons[${i}]`, `要是布尔值，收到 ${shown(item)}`);
+  });
+  return value as boolean[];
+}
+
+/**
+ * wpe-renderdoc 的输入时间线 `inputTimeline`（P6c）：每项 `[x, y, down]` 或 `[x, y, down, n]`（x / y 有限数，down 布尔或 0 / 1，n 正整数，
+ * 重复 n 帧），展开后要等于 `particles.dts` 的帧数（不展开，只数帧）。要有 `particles`、窗口尺寸（`window` 或 `canvas`：指针按窗口像素量化），
+ * 不和 `pointer` / `pointers` / `buttons` 同给。
+ */
+function checkInputTimeline(value: unknown, particles: ParticleReplay | undefined): void {
+  if (!particles) fail("inputTimeline", "要和 particles 一起给（时间线展开后是回放的每一帧）");
+  if (!Array.isArray(value) || !value.length)
+    fail("inputTimeline", `要是非空数组（每项 [x, y, down, n?]），收到 ${shown(value)}`);
+  let frames = 0;
+  value.forEach((item, i) => {
+    const ok =
+      Array.isArray(item) &&
+      (item.length === 3 || item.length === 4) &&
+      Number.isFinite(item[0]) &&
+      Number.isFinite(item[1]) &&
+      typeof item[0] === "number" &&
+      typeof item[1] === "number" &&
+      (typeof item[2] === "boolean" || item[2] === 0 || item[2] === 1) &&
+      (item.length === 3 || (typeof item[3] === "number" && Number.isInteger(item[3]) && item[3] >= 1));
+    if (!ok)
+      fail(
+        `inputTimeline[${i}]`,
+        `要是 [x, y, down] 或 [x, y, down, n]（x / y 有限数，down 布尔或 0 / 1，n 正整数），收到 ${shown(item)}`,
+      );
+    frames += item.length === 4 ? (item[3] as number) : 1;
+    if (frames > MAX_INPUT_FRAMES) fail("inputTimeline", `展开后超过 ${MAX_INPUT_FRAMES} 帧`);
+  });
+  if (frames !== particles.dts.length)
+    fail("inputTimeline", `展开后有 ${frames} 帧，应和 particles.dts 等长（${particles.dts.length} 项）`);
+}
+
 /** 渲染与四角的逐帧指针 `pointers`：要有 `particles`，和 `particles.dts` 等长。 */
 function checkPointers(value: unknown, particles: ParticleReplay | undefined): [number, number][] {
   if (!particles) fail("pointers", "要和 particles 一起给（逐帧指针是回放的每一帧）");
@@ -601,6 +651,8 @@ export function checkRenderReplay(body: {
   time?: unknown;
   pointer?: unknown;
   pointers?: unknown;
+  buttons?: unknown;
+  inputTimeline?: unknown;
   window?: unknown;
   canvas?: unknown;
   style?: unknown;
@@ -628,6 +680,19 @@ export function checkRenderReplay(body: {
   }
   const window = body.window === undefined ? undefined : checkWindow(body.window);
   if (body.canvas !== undefined) checkCanvas(body.canvas, window);
+  // 逐帧左键与输入时间线（P6c）：buttons 配 pointers，inputTimeline 自己展开成两者，互斥；时间线按窗口像素量化，窗口 = window ?? canvas
+  if (body.inputTimeline !== undefined) {
+    for (const other of ["pointer", "pointers", "buttons"] as const) {
+      if (body[other] !== undefined) fail("inputTimeline", `和 ${other} 不能同时给：时间线自己展开成逐帧指针与左键`);
+    }
+    if (window === undefined && body.canvas === undefined)
+      fail("inputTimeline", "要同时给 window（或 canvas）：指针按窗口像素量化，和 WPE 的整数像素一致");
+    checkInputTimeline(body.inputTimeline, particles);
+  }
+  if (body.buttons !== undefined) {
+    checkButtons(body.buttons, particles);
+    if (body.pointers === undefined) fail("buttons", "要和 pointers 一起给（左键按逐帧指针的位置派发）");
+  }
   checkRenderStyleMode(body);
   if (body.scriptValues !== undefined) checkScriptValues(body.scriptValues);
   if (body.scripts !== undefined) {

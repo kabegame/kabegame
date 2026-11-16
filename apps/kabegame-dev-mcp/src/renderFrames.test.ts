@@ -19,6 +19,7 @@ import {
   parseFrames,
   renderArgs,
   renderFrames,
+  sliceInputTimeline,
   splitRenderText,
 } from "./renderFrames.ts";
 import type { RenderFramesOptions } from "./renderFrames.ts";
@@ -235,6 +236,54 @@ describe("参数", () => {
     bad(["--script-seed", "5"], /要和 --scripts 一起给/);
     for (const seed of ["-1", "1.5", "4294967296", "x"]) bad(["--scripts", "--script-seed", seed], /--script-seed/);
     for (const clock of ["x", "9e15", ""]) bad(["--scripts", "--clock", clock], /--clock/);
+  });
+
+  test("光标输入（P6c）：--input-timeline / --buttons 只在回放时收、互斥与前提报错；每帧只带前 f 帧的输入", () => {
+    const cwd = path.resolve("/repo");
+    const head = ["--image", "13", "--frames", "1", "--out", "o", "--timeline-log", "l.txt"];
+    const tl = JSON.stringify([
+      [0.5, 0.5, false],
+      [0.6, 0.5, true, 4],
+    ]);
+    const parsed = parseCli([...head, "--canvas", "1920x1080", "--input-timeline", tl], cwd);
+    assert.deepEqual(parsed.inputTimeline, [
+      [0.5, 0.5, false],
+      [0.6, 0.5, true, 4],
+    ]);
+    const withButtons = parseCli([...head, "--cursors", "log", "--buttons", "[false,true,true]"], cwd);
+    assert.deepEqual(withButtons.buttons, [false, true, true]);
+    const bad = (args: string[], re: RegExp) => assert.throws(() => parseCli([...head, ...args], cwd), re);
+    bad(["--input-timeline", tl], /要和 --canvas 一起给/);
+    bad(["--canvas", "1x1", "--input-timeline", tl, "--buttons", "[true]"], /不能和/);
+    bad(["--canvas", "1x1", "--input-timeline", tl, "--cursors", "log"], /不能和/);
+    bad(["--canvas", "1x1", "--input-timeline", "[[0.5, 0.5]]"], /每项 \[x, y, down\]/);
+    bad(["--buttons", "[true]"], /要和 --cursors 一起给/);
+    bad(["--cursors", "log", "--buttons", "[1]"], /布尔数组/);
+    assert.throws(
+      () => parseCli(["--image", "13", "--frames", "1", "--out", "o", "--fps", "20", "--buttons", "[true]"], cwd),
+      /只在回放/,
+    );
+    // 每帧：第 f 帧只带前 f 帧，放不下的那一项截断重复数
+    const out = path.resolve("/o");
+    const replay: RenderFramesOptions = {
+      ...base(out),
+      fps: undefined,
+      timeline: { log: "/l.txt" },
+      canvas: [1920, 1080],
+      inputTimeline: [
+        [0.5, 0.5, false],
+        [0.6, 0.5, true, 4],
+      ],
+    };
+    assert.deepEqual(renderArgs(replay, 3).inputTimeline, [
+      [0.5, 0.5, false],
+      [0.6, 0.5, true, 2],
+    ]);
+    assert.deepEqual(renderArgs(replay, 1).inputTimeline, [[0.5, 0.5, false]]);
+    assert.deepEqual(sliceInputTimeline(replay.inputTimeline!, 5), replay.inputTimeline);
+    const buttonsArgs = renderArgs({ ...replay, inputTimeline: undefined, buttons: [false, true, true, false] }, 3);
+    assert.deepEqual(buttonsArgs.buttons, [false, true, true]);
+    assert.equal("inputTimeline" in renderArgs(base(out), 2) || "buttons" in renderArgs(base(out), 2), false);
   });
 
   test("每帧参数：回放模式填 timeline.frame、时刻模式 time = 帧号 / fps；save 到 ours-f<帧>.png、inline false；trace 只给指定帧", () => {

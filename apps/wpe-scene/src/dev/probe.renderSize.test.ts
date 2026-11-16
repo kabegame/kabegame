@@ -12,7 +12,7 @@ import { compileSceneInWorker } from "../compile/client";
 import type { SceneReader } from "../compile/fs";
 import type { SceneObject } from "../compile/model";
 import { acquireGpu } from "../render/device";
-import { alignEdges } from "../render/layout";
+import { alignEdges, fillCropEdges } from "../render/layout";
 import { GpuScene } from "../render/scene";
 import { renderFrame } from "./probe";
 import { readProbeUserProperties } from "./probeScripts";
@@ -216,15 +216,17 @@ describe("renderFrame 按指定尺寸画的接线", () => {
     expect(cursors[0]).toEqual([0.25, 0.75]);
   });
 
-  it("renderMode: scene：不交 target，光标照旧按 fill 换到场景上（旧画法，字节同以前），读回走上屏（替身设备做不了，失败）", async () => {
+  it("renderMode: scene：不交 target，光标保持窗口指针并交裁切边距（P6c 修复 2，同产品渲染器），读回走上屏（替身设备做不了，失败）", async () => {
     const particles = { dts: [0.1] };
     await expect(
       renderFrame({ ...BASE, canvas: [1920, 800], renderMode: "scene", particles, pointers: [[0.5, 0.25]] }),
     ).rejects.toThrow();
     expect(buildOptions()[0].target).toBeUndefined();
-    // fill：1920×800 窗口的 y = 0.25 对应场景 y = (0.25·800 + 140) / 1080，不等于窗口坐标
-    expect(cursors[0][0]).toBeCloseTo(0.5, 6);
-    expect(cursors[0][1]).toBeCloseTo((0.25 * 800 + 140) / 1080, 6);
+    // fill 且比例不同：光标是窗口指针，反投影交给 GpuScene 的 cursorCrop（裁过的 P·V），不再换到场景纹理坐标
+    expect(cursors[0]).toEqual([0.5, 0.25]);
+    expect((buildOptions()[0].particles as { cursorCrop?: unknown }).cursorCrop).toEqual(
+      fillCropEdges("fill", 1920, 1080, 1920, 800),
+    );
     // g_PointerPosition 在 fill 下本来就是窗口坐标原样
     expect(updatePointers).toEqual([[0.5, 0.25]]);
   });

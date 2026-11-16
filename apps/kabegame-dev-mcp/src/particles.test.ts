@@ -857,6 +857,69 @@ describe("跑场景脚本（第 7 批）", () => {
     });
   });
 
+  test("inputTimeline / buttons（P6c）：原样转给 REST（render_scene 与 host_render）；互斥与前提在发请求之前报 [local]", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const inputTimeline = [
+        [0.5, 0.5, false],
+        [0.6, 0.5, true, 4],
+      ];
+      const ok = await call("render_scene", {
+        imageId: "9",
+        replay: { timeline: TIMELINE },
+        canvas: [1920, 1080],
+        scripts: true,
+        inputTimeline,
+      });
+      assert.notEqual(ok.isError, true, textOf(ok));
+      const body = bodiesOf(rest, "/render").at(-1)!;
+      assert.deepEqual(body.inputTimeline, inputTimeline);
+      assert.deepEqual(body.canvas, [1920, 1080]);
+      assert.equal("pointers" in body, false);
+      assert.equal("buttons" in body, false);
+      const host = await call("host_render", {
+        handle: "h-1",
+        imageId: "9",
+        replay: { timeline: TIMELINE },
+        canvas: [1920, 1080],
+        scripts: true,
+        inputTimeline,
+      });
+      assert.notEqual(host.isError, true, textOf(host));
+      assert.deepEqual(bodiesOf(rest, "/hosts/h-1/render").at(-1)!.inputTimeline, inputTimeline);
+
+      // buttons 跟着时间线的逐帧光标走
+      const buttons = [false, false, true, true, false];
+      const cursorTimeline = { ...TIMELINE, cursors: "track" };
+      const withButtons = await call("render_scene", {
+        imageId: "9",
+        replay: { timeline: cursorTimeline },
+        scripts: true,
+        buttons,
+      });
+      assert.notEqual(withButtons.isError, true, textOf(withButtons));
+      assert.deepEqual(bodiesOf(rest, "/render").at(-1)!.buttons, buttons);
+
+      const before = rest.seen.length;
+      const cases: [Record<string, unknown>, RegExp][] = [
+        [{ replay: { timeline: TIMELINE }, inputTimeline }, /inputTimeline 要同时给 canvas/],
+        [
+          { replay: { timeline: TIMELINE }, canvas: [1, 1], inputTimeline, pointer: [0.5, 0.5] },
+          /inputTimeline 不能和/,
+        ],
+        [{ replay: { timeline: TIMELINE }, canvas: [1, 1], inputTimeline, buttons }, /inputTimeline 不能和/],
+        [{ replay: { timeline: cursorTimeline }, canvas: [1, 1], inputTimeline }, /inputTimeline 不能和/],
+        [{ replay: { timeline: TIMELINE }, buttons }, /buttons 要和 replay\.timeline 的逐帧光标/],
+        [{ inputTimeline, canvas: [1, 1] }, /要和 replay 一起给/],
+      ];
+      for (const [args, pattern] of cases) {
+        const result = await call("render_scene", { imageId: "9", ...args });
+        assert.equal(result.isError, true);
+        assert.match(textOf(result), pattern);
+      }
+      assert.equal(rest.seen.length, before, "参数错时不发请求");
+    });
+  });
+
   test("scripts 与 replay.fr: true 同给报 [local]、不开宿主；fr: false 照常（不涂、FR 由脚本画）", async () => {
     await withMcp(async (call, _root, rest) => {
       const clash = await call("render_scene", {

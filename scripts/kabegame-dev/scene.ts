@@ -517,6 +517,9 @@ export async function renderFrame(
     ...(request.pointer ? { pointer: request.pointer } : {}),
     // 逐帧光标（P5a 收尾）：checkRenderReplay 已校验（要有 particles、等长、不和 pointer 同给）
     ...(request.pointers ? { pointers: request.pointers } : {}),
+    // 逐帧左键与输入时间线（P6c）：checkRenderReplay 已校验（长度、互斥、窗口）；展开与量化由探针做
+    ...(request.buttons ? { buttons: request.buttons } : {}),
+    ...(request.inputTimeline ? { inputTimeline: request.inputTimeline } : {}),
     ...(request.window ? { window: request.window } : {}),
     // 读回画布（第 5 批）：checkRenderReplay 已校验（两个正整数、不超过上限、和 window 相同）
     ...(request.canvas ? { canvas: request.canvas } : {}),

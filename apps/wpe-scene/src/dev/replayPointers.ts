@@ -8,7 +8,7 @@
  * 窗口没给或与场景同尺寸时两者都原样，和加这一项之前逐字节相同；不同尺寸时与 kbp replay（`replayLib.ts` 的 `"track"` 分支）同一换算。
  * 场景尺寸用 `bundle.general.width/height`（视差点与 `particleTrack` 的 `size` 用的同一个）。
  */
-import { sceneCursor, scenePlacement, scenePointer } from "../render/layout";
+import { fillCropEdges, sceneCursor, scenePlacement, scenePointer, type Edges } from "../render/layout";
 
 export type Point = [number, number];
 
@@ -19,6 +19,12 @@ export interface ReplayPointerOptions {
   pointers?: readonly (readonly [number, number])[];
   /** 抓帧窗口尺寸 `[宽, 高]`（像素）；缺省或与场景同尺寸时光标原样。 */
   window?: readonly [number, number];
+  /**
+   * 场景按场景分辨率画、上屏时才裁（`renderMode: "scene"`，同产品渲染器）：`fill` 且窗口与场景比例不同时，光标不再换到场景纹理坐标，
+   * 保持窗口归一化指针，由 `GpuScene` 的 `cursorCrop`（结果里的 `cursorCrop`）用裁过的 `P·V` 反投影（P6c 修复 2，同渲染器）。缺省 false：
+   * 照旧（按指定尺寸画时投影本来就裁了，窗口与场景同尺寸、原样）。
+   */
+  cropped?: boolean;
 }
 
 /** 回放每一帧的两个量，下标同 `dts`；没有回放时只有一项（读回那一帧）。 */
@@ -29,6 +35,8 @@ export interface ReplayPointers {
   cursors: Point[];
   /** 预热（`GpuScene.build` 的 `particles.cursor`）用的 cursor：第 0 项。 */
   warmup: Point;
+  /** 光标的裁切边距（`cropped` 且 `fill`、比例不同时非空）：交给 `GpuScene.build` 的 `particles.cursorCrop`，缺省 null。 */
+  cursorCrop: Edges | null;
 }
 
 const isPoint = (value: unknown): value is readonly [number, number] =>
@@ -82,12 +90,17 @@ export function pointerWindow(
 export function windowPointer(
   scene: readonly [number, number],
   window?: readonly [number, number],
+  cropped = false,
 ): (pointer: readonly [number, number]) => { pointer: Point; cursor: Point } {
   if (window !== undefined) checkWindow(window);
   if (!window || (window[0] === scene[0] && window[1] === scene[1])) {
     return ([x, y]) => ({ pointer: [x, y], cursor: [x, y] });
   }
   const [width, height] = window;
+  // 裁切时光标保持窗口指针（P6c 修复 2）：反投影用裁过的 P·V
+  if (cropped && fillCropEdges("fill", scene[0], scene[1], width, height)) {
+    return ([x, y]) => ({ pointer: [x, y], cursor: [x, y] });
+  }
   const placement = scenePlacement("fill", scene[0], scene[1], width, height);
   return ([x, y]) => ({
     pointer: scenePointer("fill", placement, width, height, x, y),
@@ -119,7 +132,7 @@ export function replayPointers(
   scene: readonly [number, number],
   frames: number | undefined,
 ): ReplayPointers {
-  const convert = windowPointer(scene, options.window);
+  const convert = windowPointer(scene, options.window, options.cropped);
   const count = Math.max(1, frames ?? 0);
   let raw: readonly (readonly [number, number])[];
   if (options.pointers !== undefined) {
@@ -138,7 +151,11 @@ export function replayPointers(
   }
   const converted = raw.map(convert);
   const cursors = converted.map((item) => item.cursor);
-  return { pointers: converted.map((item) => item.pointer), cursors, warmup: cursors[0] };
+  const cursorCrop =
+    options.cropped && options.window
+      ? fillCropEdges("fill", scene[0], scene[1], options.window[0], options.window[1])
+      : null;
+  return { pointers: converted.map((item) => item.pointer), cursors, warmup: cursors[0], cursorCrop };
 }
 
 /** wpe-renderdoc 的输入时间线（`input_play` / `input_start` 的格式）：`[x, y, down]` 或 `[x, y, down, n]`（重复 n 帧），x / y 是窗口客户区归一化坐标。 */

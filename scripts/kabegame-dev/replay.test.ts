@@ -108,6 +108,68 @@ describe("checkReplay", () => {
     rejects400(() => checkRenderReplay({ particles: { dts: [0.1] }, time: 1 }), "time", /不能同时给/);
   });
 
+  test("渲染的逐帧左键与输入时间线（P6c）：buttons 配 pointers、inputTimeline 要窗口且展开后与 dts 等长、两者互斥", () => {
+    const particles = { dts: [0.1, 0.2, 0.3] };
+    const pointers = [
+      [0.1, 0.2],
+      [0.3, 0.4],
+      [0.5, 0.6],
+    ];
+    const buttons = [false, true, true];
+    assert.deepEqual(checkRenderReplay({ particles, pointers, buttons }), particles);
+    // 时间线：重复项展开成 3 帧；down 可以是 0 / 1
+    const timeline = [
+      [0.5, 0.5, false],
+      [0.6, 0.5, 1, 2],
+    ];
+    assert.deepEqual(checkRenderReplay({ particles, inputTimeline: timeline, window: [1920, 1080] }), particles);
+    assert.deepEqual(checkRenderReplay({ particles, inputTimeline: timeline, canvas: [1920, 1080] }), particles);
+    rejects400(() => checkRenderReplay({ buttons }), "buttons", /要和 particles 一起给/);
+    rejects400(() => checkRenderReplay({ particles, buttons }), "buttons", /要和 pointers 一起给/);
+    rejects400(
+      () => checkRenderReplay({ particles, pointers, buttons: [true] }),
+      "buttons",
+      /应和 particles\.dts 等长/,
+    );
+    rejects400(() => checkRenderReplay({ particles, pointers, buttons: [false, 1, true] }), "buttons[1]", /要是布尔值/);
+    rejects400(() => checkRenderReplay({ particles, inputTimeline: timeline }), "inputTimeline", /要同时给 window/);
+    rejects400(
+      () => checkRenderReplay({ inputTimeline: timeline, window: [1920, 1080] }),
+      "inputTimeline",
+      /要和 particles 一起给/,
+    );
+    rejects400(
+      () => checkRenderReplay({ particles: { dts: [0.1] }, inputTimeline: timeline, window: [1920, 1080] }),
+      "inputTimeline",
+      /展开后有 3 帧/,
+    );
+    rejects400(
+      () =>
+        checkRenderReplay({
+          particles,
+          inputTimeline: [
+            [0.5, 0.5],
+            [0.1, 0.1, true, 2],
+          ],
+          window: [1, 1],
+        }),
+      "inputTimeline[0]",
+      /\[x, y, down\]/,
+    );
+    rejects400(
+      () => checkRenderReplay({ particles, inputTimeline: [[0.5, 0.5, true, 0]], window: [1, 1] }),
+      "inputTimeline[0]",
+      /n 正整数/,
+    );
+    for (const other of [{ pointers }, { buttons }, { pointer: [0.5, 0.5] }]) {
+      rejects400(
+        () => checkRenderReplay({ particles, inputTimeline: timeline, window: [1920, 1080], ...other }),
+        "inputTimeline",
+        /不能同时给/,
+      );
+    }
+  });
+
   test("渲染的逐帧光标：pointers 要有 particles、和 dts 等长、不和 pointer 同给；pointer、window 的形状", () => {
     const particles = { dts: [0.1, 0.2] };
     const pointers = [

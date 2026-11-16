@@ -284,6 +284,31 @@ describe("粒子接口的参数透传", () => {
       (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === "pointer",
     );
     assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    // 逐帧左键与输入时间线（P6c）：原样交给探针（时间线不在这里展开，量化由探针做）；互斥与长度不对回 400
+    const buttons = [false, true];
+    await renderFrame(f.s, "h-1", { imageId: "14108", particles, pointers, buttons, userProperties: {} });
+    const withButtons = f.probeCalls.filter((call) => call.name === "renderFrame")[3].args as Record<string, unknown>;
+    assert.deepEqual(withButtons.buttons, buttons);
+    const inputTimeline: [number, number, boolean | number, number?][] = [
+      [0.5, 0.5, false],
+      [0.6, 0.5, true],
+    ];
+    await renderFrame(f.s, "h-1", {
+      imageId: "14108",
+      particles,
+      inputTimeline,
+      window: [1920, 1080],
+      userProperties: {},
+    });
+    const withTimeline = f.probeCalls.filter((call) => call.name === "renderFrame")[4].args as Record<string, unknown>;
+    assert.deepEqual(withTimeline.inputTimeline, inputTimeline);
+    assert.equal("pointers" in withTimeline, false);
+    assert.equal("buttons" in withTimeline, false);
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14108", particles, inputTimeline, buttons, window: [1920, 1080] }),
+      (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === "inputTimeline",
+    );
   });
 
   test("读回画布（第 5 批）：canvas 原样交给探针；不给时不带；和 window 冲突回 400 不碰页面；结果对不上回 409", async () => {

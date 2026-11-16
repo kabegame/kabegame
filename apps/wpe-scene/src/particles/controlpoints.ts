@@ -107,7 +107,8 @@ export const IDENTITY_BASIS: Float32Array = new Float32Array([1, 0, 0, 0, 1, 0, 
  *
  * WPE 的 `ctx+0x8c/0x90` 是窗口归一化坐标（1.7），`P·V` 里已带着把场景居中盖满到窗口的裁切（报告「步骤 2 补测」）；Kabegame 的
  * 场景渲染在场景分辨率的目标里、`P·V` 不裁，裁切与留白在上屏时按样式做，所以先由 `sceneCursor` 把画布指针换成光标下的场景
- * 纹理坐标，再照 WPE 同一串运算反投影。`fill` 的铺放就是 WPE 的居中盖满，两边结果一致。逐步 float32（照 1.6 的伪代码）：
+ * 纹理坐标，再照 WPE 同一串运算反投影。`fill` 的铺放就是 WPE 的居中盖满，两边结果一致。P6c 修复 2 起，`fill` 且窗口与场景比例不同时
+ * 改由 `GpuScene` 传裁过的 `P·V`（`croppedCursorViewProjection`）和窗口指针进来（`cursor` 就是窗口归一化指针），float32 舍入才与 WPE 逐位相同。逐步 float32（照 1.6 的伪代码）：
  * ```
  * x = ((px − 0) + (px − 0)) − 1                          // subss 0、addss 自身、subss 1
  * y = (((1 − py) − 0) + ((1 − py) − 0)) − 1

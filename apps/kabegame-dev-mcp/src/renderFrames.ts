@@ -8,6 +8,7 @@
  *   [--fps N | --time 秒]                           不给日志时：每帧 g_Time = 帧号 / fps（名义时间），或每帧同一个时刻
  *   [--canvas WxH [--style fill|fit|stretch|center] [--render-mode target|scene]] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON] [--gif-dts 秒,秒…|JSON]
  *   [--user-properties <JSON 文件或 JSON 串>] [--scripts [--clock 毫秒] [--script-seed N]]
+ *   [--input-timeline <JSON 文件或 JSON 串> | --buttons <JSON 文件或 JSON 串>]   回放的光标输入（要 --timeline-log）
  *   [--trace-frames 250 [--trace-readback 0,"text glyphs"] [--trace-max-vertices N]]
  *   [--reuse-host] [--timeout 秒] [--overwrite]
  * ```
@@ -19,6 +20,8 @@
  * - 时刻模式（不给日志）：第 f 帧传 `time: f / fps`（或 `--time` 的固定值），粒子是预热后的状态（同 render_scene 不给 replay）。
  * - 跑场景脚本（kabegame-chromium 第 7 批，`--scripts`）：每一帧的 `render_scene` 都带 `scripts`（`true`，或给了 `--clock` / `--script-seed`
  *   时 `{ clock?, seed? }`），探针照宿主跑场景脚本、外部值来自请求；回放时 FR 由脚本自己画（工具不再涂色，不能和 FR 涂色同时要）。两种模式都收。
+ * - 光标输入（P6c）：`--input-timeline`（wpe-renderdoc 的时间线 `[[x, y, down(, n)], …]`，要 `--canvas`，不和 `--cursors` / `--cursor` / `--pointer` /
+ *   `--buttons` 同给）或 `--buttons`（`[true, false, …]`，配 `--cursors`）；都是整段录制的逐帧输入，第 f 帧只带前 f 帧（回放到那一帧），原样交给 `render_scene`。
  * - 输出：`<out>/ours-f<帧>.png`（`save`，原尺寸，`inline: false`：图片不回到任何会话）、`<out>/frames.json`（每帧的元数据、
  *   PNG 文件 sha256、工具结果里的说明行、错误）；`--trace-frames` 的帧另把逐 draw 轨迹写到 `<out>/trace-f<帧>/`。stdout 一行 JSON 摘要。
  * - 前提：用户自己跑着 `deno task dev -c kabegame`；本工具不启动、不重启任何进程。vite / CDP 不在（`[vite]` / `[cdp]`）时剩下的帧不再试。
@@ -38,6 +41,8 @@ import { createDevMcpServer, defaultDeps } from "./main.ts";
 import type { DevMcpDeps } from "./tools.ts";
 
 export type Point = [number, number];
+/** wpe-renderdoc 的输入时间线一项：`[x, y, down]` 或 `[x, y, down, n]`（重复 n 帧）。 */
+export type InputTimelineEntry = [number, number, boolean | number, number?];
 
 export interface RenderFramesOptions {
   image: string;
@@ -76,6 +81,10 @@ export interface RenderFramesOptions {
   userProperties?: Record<string, unknown>;
   /** 跑场景脚本（第 7 批）：原样作每一帧 `render_scene` 的 `scripts`；不给时不传。 */
   scripts?: true | { clock?: number; seed?: number };
+  /** wpe-renderdoc 的输入时间线（P6c，整段录制）：第 f 帧只带展开后的前 f 帧；要回放与 `canvas`。 */
+  inputTimeline?: InputTimelineEntry[];
+  /** 逐帧左键（P6c，整段录制）：第 f 帧只带前 f 项；要回放与 `timeline.cursors`。 */
+  buttons?: boolean[];
   trace?: { frames: number[]; readback?: Array<number | string>; maxVertices?: number };
   /** 开一个屏外宿主给全部帧用（`host_open` / `host_close` 工具），缺省每帧由 render_scene 自己开关。 */
   reuseHost?: boolean;
@@ -181,6 +190,8 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
         scripts: { type: "boolean" },
         clock: { type: "string" },
         "script-seed": { type: "string" },
+        "input-timeline": { type: "string" },
+        buttons: { type: "string" },
         "trace-frames": { type: "string" },
         "trace-readback": { type: "string" },
         "trace-max-vertices": { type: "string" },
@@ -314,6 +325,32 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
   } else if (clock !== undefined || scriptSeed !== undefined) {
     throw new ArgError("--clock / --script-seed 要和 --scripts 一起给");
   }
+  // 光标输入（P6c）：只在回放时收；时间线要 --canvas（指针按窗口像素量化）、自己展开成逐帧指针与左键，所以不和别的光标来源同给
+  const inputTimeline = str("input-timeline");
+  const buttons = str("buttons");
+  if ((inputTimeline !== undefined || buttons !== undefined) && !options.timeline) {
+    throw new ArgError("--input-timeline / --buttons 只在回放（--timeline-log）时收");
+  }
+  if (inputTimeline !== undefined) {
+    if (buttons !== undefined || str("cursors") !== undefined || str("cursor") !== undefined || options.pointer) {
+      throw new ArgError(
+        "--input-timeline 不能和 --buttons / --cursors / --cursor / --pointer 同给：它自己展开成逐帧指针与左键",
+      );
+    }
+    if (!options.canvas) throw new ArgError("--input-timeline 要和 --canvas 一起给：指针按模拟的壁纸窗口像素量化");
+    const list = jsonArg(inputTimeline, cwd, "--input-timeline");
+    if (!Array.isArray(list) || !list.length || list.some((e) => !Array.isArray(e) || e.length < 3 || e.length > 4)) {
+      throw new ArgError("--input-timeline 要是非空数组，每项 [x, y, down] 或 [x, y, down, n]");
+    }
+    options.inputTimeline = list as InputTimelineEntry[];
+  }
+  if (buttons !== undefined) {
+    if (!str("cursors") || !options.timeline)
+      throw new ArgError("--buttons 要和 --cursors 一起给：左键按逐帧光标的位置派发");
+    const list = jsonArg(buttons, cwd, "--buttons");
+    if (!Array.isArray(list) || list.some((b) => typeof b !== "boolean")) throw new ArgError("--buttons 要是布尔数组");
+    options.buttons = list as boolean[];
+  }
   const traceFrames = str("trace-frames");
   if (traceFrames !== undefined) {
     const frames = parseFrames(traceFrames);
@@ -341,6 +378,26 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
 export const pngName = (frame: number) => `ours-f${frame}.png`;
 export const traceDirName = (frame: number) => `trace-f${frame}`;
 
+/**
+ * 输入时间线展开后的前 `frames` 帧（回放到第 `frames` 帧）：整项放得下的原样留，放不下的那一项把重复数 n 截到剩下的帧数。
+ * 时间线本身短于 `frames` 时原样返回（后端按 dts 长度报错，不在这里猜）。
+ */
+export function sliceInputTimeline(timeline: readonly InputTimelineEntry[], frames: number): InputTimelineEntry[] {
+  const out: InputTimelineEntry[] = [];
+  let left = frames;
+  for (const entry of timeline) {
+    if (left <= 0) break;
+    const n = entry.length === 4 ? (entry[3] as number) : 1;
+    if (n <= left) {
+      out.push([...entry] as InputTimelineEntry);
+    } else {
+      out.push([entry[0], entry[1], entry[2], left]);
+    }
+    left -= n;
+  }
+  return out;
+}
+
 /** 第 `frame` 帧的 render_scene 参数（`host` 给了时用已开的宿主）。 */
 export function renderArgs(options: RenderFramesOptions, frame: number, host?: string): Record<string, unknown> {
   const args: Record<string, unknown> = { imageId: options.image };
@@ -363,6 +420,9 @@ export function renderArgs(options: RenderFramesOptions, frame: number, host?: s
   if (options.gifDts !== undefined) args.gifDts = options.gifDts;
   if (options.userProperties) args.userProperties = options.userProperties;
   if (options.scripts !== undefined) args.scripts = options.scripts;
+  // 光标输入（P6c）：回放到第 frame 帧，只带前 frame 帧的输入
+  if (options.inputTimeline) args.inputTimeline = sliceInputTimeline(options.inputTimeline, frame);
+  if (options.buttons) args.buttons = options.buttons.slice(0, frame);
   if (options.trace?.frames.includes(frame)) {
     args.trace = {
       save: path.join(options.out, traceDirName(frame)),
