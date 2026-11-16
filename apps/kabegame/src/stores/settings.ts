@@ -58,6 +58,8 @@ export interface AppSettings {
   wallpaperPaused: boolean;
   /** 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（仅 Windows 桌面） */
   wpeMediaIntegration: boolean;
+  /** WPE 壁纸帧率（桌面）：10～1000 的整数，或跟随 WPE；场景按它限帧，网页壁纸经 `applyGeneralProperties` 收到 */
+  wpeFps: number | "follow";
   /** 场景壁纸后处理档位（泛光 / 超高）：跟随 WPE 的 postprocessing，或固定为关闭 / 开启 / 超高（桌面） */
   wpeScenePostprocess: "follow" | "disabled" | "enabled" | "ultra";
   /** 场景壁纸反射：跟随 WPE 的 reflection，或固定为关闭 / 开启（桌面） */

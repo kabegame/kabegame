@@ -8,6 +8,7 @@
  *   恢复后 `g_Time` 从冻结处继续（见 `clock.ts`）。暂停期间画布尺寸变了会补画一帧（同一时刻），避免空白。
  *   帧时间照 WPE 钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值（T2，`FrameClock`）。粒子每个实时帧按帧时间步进一次，
  *   operator 的遍数由 `maxFps` 定（`particlePasses`：1–20 两遍，否则一遍，对应 WPE 的 `fps` 设置，P4a 步骤 4）。
+ *   帧上限运行中可改（`setMaxFps`，宿主收到垫片的 `applyGeneralProperties` 时调）：节流、遍数与 rope 读的 `fps` 下一帧起换，不重新加载。
  *   一帧的顺序（P4c 步骤 4）：`sync` → 步进粒子 → 脚本（`beforeFrame`）→ `sync` → 写每帧 uniform → 编码，粒子先于脚本，同 WPE。
  *   声音的排期器（P6a 步骤 1，`stepObjects`）在步进粒子之后、脚本之前，同一个帧时间。视频纹理（P9a 步骤 2，`videos`）的帧号在
  *   帧时钟推进之后、第一次 `sync` 之前加一（`beginFrame`，只在实时帧，补画帧与暂停期间帧号不走），视频的结束回调因此先于脚本；
@@ -83,7 +84,7 @@ function validDisplayScale(value: unknown): value is number {
 }
 
 export interface SceneRendererOptions {
-  /** 帧率上限；≤ 0 不限（跟随 rAF）。默认 60。 */
+  /** 帧率上限的初值（之后由 `setMaxFps` 改）；≤ 0 不限（跟随 rAF）。默认 60。 */
   maxFps?: number;
   /** 初始显示缩放（见 `setDisplayScale`），默认 1。建渲染器时就带上，免得先按原尺寸建一张大画布再缩。 */
   displayScale?: number;
@@ -181,6 +182,8 @@ export class SceneRenderer {
   private readonly format: GPUTextureFormat;
   private readonly clock = new PausableClock();
   private readonly throttle: FrameThrottle;
+  /** 当前帧上限（`options.maxFps` 是初值，`setMaxFps` 就地改）：节流、粒子遍数与 rope 读的 `fps` 都取它。 */
+  private maxFps: number;
   private readonly blitPipeline: GPURenderPipeline;
   private readonly blitSampler: GPUSampler;
   /** `tile` 用：纹理坐标超出 0…1 的部分重复。 */
@@ -274,7 +277,8 @@ export class SceneRenderer {
     private readonly options: SceneRendererOptions,
   ) {
     const device = gpu.device;
-    this.throttle = new FrameThrottle(options.maxFps ?? 60);
+    this.maxFps = options.maxFps ?? 60;
+    this.throttle = new FrameThrottle(this.maxFps);
     if (validDisplayScale(options.displayScale)) this.displayScale = options.displayScale;
     const context = canvas.getContext("webgpu");
     if (!context) throw new SceneRenderError(["webgpu:canvas-context"]);
@@ -426,8 +430,8 @@ export class SceneRenderer {
       this.canvas.height,
       this.pixelRatio,
     );
-    // 遍数与 rope 读的 `fps`（P4d 步骤 1，rea-p4d-rope.md 1.2）都取帧上限，对应 WPE 的 `fps` 设置
-    const fps = this.options.maxFps ?? 60;
+    // 遍数与 rope 读的 `fps`（P4d 步骤 1，rea-p4d-rope.md 1.2）都取帧上限，对应 WPE 的 `fps` 设置；建场景期间改了的在换上之前补设
+    const fps = this.maxFps;
     const scene = await GpuScene.build(this.gpu.device, bundle, state, this.gpu.features, this.warnings, {
       ignoreUnsupported: options.ignoreUnsupported,
       particles: {
@@ -450,6 +454,8 @@ export class SceneRenderer {
     // 视频纹理（P9a）：画第一帧之前接上，第一帧就能问 `drawn`
     scene.setVideoSink(this.options.videos ?? null);
     scene.setPuppets(options.puppets ?? null);
+    // `await GpuScene.build` 期间帧率可能又变了（`setMaxFps` 只改得到旧场景）：按当前值补设，预热已按建场景时的值跑完、不受影响
+    scene.setFrameRate(this.maxFps);
     const old = this.scene;
     // 重编译：粒子层沿用旧场景的脚本暂停 / 停止（P4f 步骤 3），在重放脚本写入、画第一帧之前
     if (old) scene.adoptParticleScripts(old);
@@ -497,6 +503,17 @@ export class SceneRenderer {
   setPaused(paused: boolean): void {
     this.paused = paused;
     this.sync();
+  }
+
+  /**
+   * 帧率设置就地生效（宿主 `setGeneral`，垫片的 `applyGeneralProperties`）：节流器换上限、当前场景换粒子遍数与 rope 读的 `fps`，
+   * 下一帧起生效，不重新加载。≤ 0 不节流（遍数按 `particlePasses` 的规则取一遍）。
+   */
+  setMaxFps(fps: number): void {
+    if (fps === this.maxFps) return;
+    this.maxFps = fps;
+    this.throttle.setMaxFps(fps);
+    this.scene?.setFrameRate(fps);
   }
 
   /**

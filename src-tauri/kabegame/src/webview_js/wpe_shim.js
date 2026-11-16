@@ -43,6 +43,41 @@
   } catch (error) {
     console.warn("[kb-wpe] contextmenu", error);
   }
+  // History API：要在页面脚本之前包装（见 installHistory）
+  try {
+    installHistory();
+  } catch (error) {
+    console.warn("[kb-wpe] history", error);
+  }
+
+  // WPE 带 --disable-web-security，文档有 universal access，pushState / replaceState 能把地址改到别的路径；Chromium
+  // 对没有它的 file: 文档只许改 query 与 hash，改路径抛 SecurityError。用 HTML5 路由的单页壁纸（Angular 等）先写地址
+  // 再激活组件，一抛错组件就建不出来（corsair_collection：`<base href=".">`，路由要写 `…/circuit`）。这里只接住「同源
+  // file: 目标改路径」这一种错误，改成保留本文档路径、带上目标的 query 与 hash 再写一次：路由按内部状态激活，只在
+  // popstate / hashchange 时读回地址（壁纸里没有前进后退），和 WPE 的差别只是 location.pathname 停在本文档。
+  function installHistory() {
+    var proto = History.prototype;
+    ["pushState", "replaceState"].forEach(function (name) {
+      var original = proto[name];
+      if (typeof original !== "function") return;
+      proto[name] = function (state, title, url) {
+        try {
+          return original.apply(this, arguments);
+        } catch (error) {
+          if (!error || error.name !== "SecurityError" || url === undefined || url === null) throw error;
+          var target;
+          try {
+            target = new URL(String(url), document.baseURI);
+          } catch (_) {
+            throw error;
+          }
+          if (target.protocol !== "file:") throw error;
+          var own = location.href.replace(/[?#].*$/, "");
+          return original.call(this, state, title, own + target.search + target.hash);
+        }
+      };
+    });
+  }
 
   // ---- 鼠标：登记 / 解除原生注入 ----
   // 登记后插件按本 frame 所在窗口轮询光标，移动照发（光标在 frame 外时钳到「frame 中心到光标的连线」与边界的
@@ -599,6 +634,17 @@
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
   }
+  // WPE 用 jsoncpp 拼回调参数，对象的键按名字排序（std::map），页面按 Object.keys 逐个处理时先后照此；有壁纸依赖
+  // 这个顺序（corsair_collection 处理 scene 之前要先有 effect，否则抛错并被 rxjs 退订、之后再也不切场景）。只排顶层键。
+  function sortedByKey(value) {
+    var out = {};
+    Object.keys(value)
+      .sort()
+      .forEach(function (key) {
+        out[key] = value[key];
+      });
+    return out;
+  }
   function call(name) {
     var target = listener;
     if (target && typeof target[name] === "function") {
@@ -648,8 +694,8 @@
     }, 0);
   }
   function deliverFull(state) {
-    call("applyUserProperties", clone(state.user));
-    call("applyGeneralProperties", clone(state.general));
+    call("applyUserProperties", sortedByKey(clone(state.user)));
+    call("applyGeneralProperties", sortedByKey(clone(state.general)));
     deliverDirectories(null, state.directories);
     delivered = state;
     if (hostPaused) call("setPaused", true);
@@ -679,9 +725,9 @@
     if (!delivered) return deliverFull(next);
     // WPE 没有整份替换的接口：只推值变化的键；作者删掉的键页面无从撤销，不推
     var changed = changedUser(delivered.user, next.user);
-    if (changed) call("applyUserProperties", changed);
+    if (changed) call("applyUserProperties", sortedByKey(changed));
     if (JSON.stringify(delivered.general) !== JSON.stringify(next.general)) {
-      call("applyGeneralProperties", clone(next.general));
+      call("applyGeneralProperties", sortedByKey(clone(next.general)));
     }
     deliverDirectories(delivered.directories, next.directories);
     delivered = next;
@@ -771,7 +817,11 @@
     if (event.name === "setting-change") {
       var payload = event.payload || {};
       var changes = payload.changes && typeof payload.changes === "object" ? payload.changes : payload;
-      return Object.prototype.hasOwnProperty.call(changes, "language");
+      // 语言与桌面帧率进 general；预览的帧率在 metadata 的 previewSettings 里，随 metadataId 补丁重拉
+      return (
+        Object.prototype.hasOwnProperty.call(changes, "language") ||
+        Object.prototype.hasOwnProperty.call(changes, "wpeFps")
+      );
     }
     // 图片 metadata 按 id 不可变：属性改了就换 metadataId。首个状态到达前不知道本张 id，任何 metadataId 补丁都重拉
     var id = latest && latest.imageId;

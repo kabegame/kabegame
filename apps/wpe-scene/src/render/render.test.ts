@@ -753,6 +753,34 @@ describe("时钟与节流", () => {
     for (let i = 0; i < 600; i++) if (sixty.ready(i * (1000 / 60) + (i % 2 ? 0.4 : -0.4))) all++;
     expect(all).toBe(600);
   });
+  it("运行中改帧上限（setMaxFps）：下一次回调立即渲染，之后按新节拍；改成 0 不节流、再改回来恢复", () => {
+    const tick = 1000 / 144;
+    const count = (throttle: FrameThrottle, from: number, to: number) => {
+      let frames = 0;
+      for (let i = from; i < to; i++) if (throttle.ready(i * tick)) frames++;
+      return frames;
+    };
+    const throttle = new FrameThrottle(60);
+    // 前 10 秒 60 fps
+    expect(count(throttle, 0, 1440)).toBeGreaterThan(560);
+    // 切到 10 fps：切换后第一次回调就画（不等旧节拍），之后 10 秒约 100 帧
+    throttle.setMaxFps(10);
+    expect(throttle.ready(1440 * tick)).toBe(true);
+    // 同值不动节拍：刚画过一帧，重复设置不会把下一次回调提前放行
+    throttle.setMaxFps(10);
+    expect(throttle.ready(1441 * tick)).toBe(false);
+    const ten = count(throttle, 1442, 2880);
+    expect(ten).toBeGreaterThanOrEqual(98);
+    expect(ten).toBeLessThanOrEqual(100);
+    // 0 不节流：每次回调都画
+    throttle.setMaxFps(0);
+    expect(count(throttle, 2880, 2980)).toBe(100);
+    // 改回 30：约 30 fps
+    throttle.setMaxFps(30);
+    const thirty = count(throttle, 2980, 2980 + 1440);
+    expect(thirty).toBeGreaterThanOrEqual(295);
+    expect(thirty).toBeLessThanOrEqual(301);
+  });
 });
 
 describe("可渲染性自查", () => {

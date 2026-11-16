@@ -34,7 +34,12 @@ vi.mock("./compile/client", () => ({ compileSceneInWorker: (input: never) => com
 const createRealm = vi.fn<() => Promise<ScriptRealm>>();
 vi.mock("./script/realm", () => ({ createIframeRealm: () => createRealm(), getJsModuleIndex: () => ({}) }));
 
-const rendererStyle = vi.hoisted(() => ({ setStyle: vi.fn(), setBackground: vi.fn(), setDisplayScale: vi.fn() }));
+const rendererStyle = vi.hoisted(() => ({
+  setStyle: vi.fn(),
+  setBackground: vi.fn(),
+  setDisplayScale: vi.fn(),
+  setMaxFps: vi.fn((_fps: number) => {}),
+}));
 /** `SceneRenderer.create` 收到的选项（核对建渲染器时带上显示缩放）。 */
 const rendererCreate = vi.hoisted(() => vi.fn((_options: unknown) => {}));
 /** 就地写的落点（P4a 步骤 5 核对 instanceoverride 走就地一侧）。 */
@@ -403,6 +408,7 @@ describe("SceneHost：壁纸样式与留白", () => {
     rendererStyle.setStyle.mockReset();
     rendererStyle.setBackground.mockReset();
     rendererStyle.setDisplayScale.mockReset();
+    rendererStyle.setMaxFps.mockReset();
     rendererCreate.mockReset();
     compile.mockImplementation(async ({ userProperties }) => unbound(userProperties));
   });
@@ -447,6 +453,35 @@ describe("SceneHost：壁纸样式与留白", () => {
     await Promise.resolve();
     expect(compile).toHaveBeenCalledOnce();
     host.dispose();
+  });
+
+  it("帧率（applyGeneralProperties 的 general.fps）：没收到时按 30 建渲染器，收到的值建时带上，之后就地交给渲染器、不重新编译", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.setGeneral({ language: "zh", fps: 15 });
+    host.applyUserProperties(scheme("0 0 0"));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    expect(rendererCreate).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ maxFps: 15 }));
+    // 取设备期间没变：不用再设一次
+    expect(rendererStyle.setMaxFps).not.toHaveBeenCalled();
+    // 取整；同值不再下发
+    host.setGeneral({ language: "zh", fps: 59.6 });
+    expect(rendererStyle.setMaxFps).toHaveBeenLastCalledWith(60);
+    host.setGeneral({ language: "en", fps: 60 });
+    expect(rendererStyle.setMaxFps).toHaveBeenCalledOnce();
+    // 非法值忽略、保持当前帧率
+    for (const general of [{ language: "zh" }, { fps: 0 }, { fps: -5 }, { fps: Number.NaN }, { fps: "30" }, null, 3])
+      host.setGeneral(general);
+    expect(rendererStyle.setMaxFps).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(compile).toHaveBeenCalledOnce();
+    host.dispose();
+
+    const fresh = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report: reporter() });
+    fresh.applyUserProperties(scheme("0 0 0"));
+    await vi.waitFor(() => expect(rendererCreate).toHaveBeenCalledTimes(2));
+    expect(rendererCreate.mock.calls[1][0]).toEqual(expect.objectContaining({ maxFps: 30 }));
+    fresh.dispose();
   });
 });
 

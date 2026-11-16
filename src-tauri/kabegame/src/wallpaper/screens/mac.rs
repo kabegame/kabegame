@@ -168,6 +168,19 @@ pub(super) fn enumerate() -> Vec<ScreenInfo> {
     to_screen_infos(run_on_main(read_screens))
 }
 
+/// 在线屏里最高的刷新率（`NSScreen.maximumFramesPerSecond`，ProMotion 屏给的是可变刷新的上限）。主线程读。
+pub(super) fn max_refresh_rate() -> Option<u32> {
+    run_on_main(|mtm| {
+        NSScreen::screens(mtm)
+            .to_vec()
+            .into_iter()
+            .map(|screen| screen.maximumFramesPerSecond())
+            .filter(|fps| *fps > 0)
+            .max()
+    })
+    .and_then(|fps| u32::try_from(fps).ok())
+}
+
 /// 光标位置，左上原点的点坐标。`NSEvent.mouseLocation` 是类属性，任意线程可读。
 pub(super) fn cursor(screens: &[ScreenInfo]) -> Option<(f64, f64)> {
     // 主屏在两个坐标系里都从 y = 0 起，它的高度就是翻转用的量

@@ -209,10 +209,11 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(tauri("wpeMediaIntegration", "get_wpe_media_integration", "set_wpe_media_integration", "enabled"));
   }
 
-  // 当前壁纸暂停、场景后处理与 WPE 目录：WPE 只在桌面提供
+  // 当前壁纸暂停、帧率、场景后处理与 WPE 目录：WPE 只在桌面提供
   if (!IS_ANDROID && !IS_WEB) {
     entries.push(
       tauri("wallpaperPaused", "get_wallpaper_paused", "set_wallpaper_paused", "paused"),
+      tauri("wpeFps", "get_wpe_fps", "set_wpe_fps", "value"),
       tauri("wpeScenePostprocess", "get_wpe_scene_postprocess", "set_wpe_scene_postprocess", "value"),
       tauri("wpeSceneReflection", "get_wpe_scene_reflection", "set_wpe_scene_reflection", "value"),
       tauri("wpeSceneShadows", "get_wpe_scene_shadows", "set_wpe_scene_shadows", "value"),

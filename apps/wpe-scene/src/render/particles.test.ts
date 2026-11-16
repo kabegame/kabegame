@@ -540,7 +540,7 @@ async function open(bundle: SceneBundle, particles: ParticleOptions = { seed: 1 
 interface DrawView {
   label: string;
   object: number;
-  particles: { system: ParticleSystem; count: number } | null;
+  particles: { system: ParticleSystem; count: number; stale?: boolean } | null;
   uniformBuffer: FakeBuffer;
   vertexBuffer: FakeBuffer;
 }
@@ -1569,6 +1569,24 @@ describe("渲染器：帧时钟与遍数", () => {
     expect(await passes(21)).toBe(1);
     expect(await passes(undefined)).toBe(1);
     expect(await passes(0)).toBe(1);
+  });
+
+  it("帧率设置就地生效（setMaxFps → GpuScene.setFrameRate）：同一个场景换遍数与 rope 的 fps、粒子标脏，不重新加载", async () => {
+    const { renderer } = await start(60);
+    const scene = renderer.currentScene!;
+    const read = () => ({
+      fps: (scene as unknown as { particleFps: number }).particleFps,
+      passes: particleDraw(scene, 1).particles!.system.passes,
+    });
+    expect(read()).toEqual({ fps: 60, passes: 1 });
+    particleDraw(scene, 1).particles!.stale = false;
+    renderer.setMaxFps(15);
+    expect(renderer.currentScene).toBe(scene);
+    expect(read()).toEqual({ fps: 15, passes: 2 });
+    expect(particleDraw(scene, 1).particles!.stale).toBe(true);
+    renderer.setMaxFps(30);
+    expect(read()).toEqual({ fps: 30, passes: 1 });
+    renderer.destroy();
   });
 
   it("cursor（P4c 步骤 2）：没收到指针时是场景中心；setPointer 只记原始坐标，每帧按当前样式现算，改样式不经 setPointer 也变", async () => {

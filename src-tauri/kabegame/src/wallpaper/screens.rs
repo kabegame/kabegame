@@ -85,6 +85,51 @@ fn cursor_position(_screens: &[ScreenInfo]) -> Option<(f64, f64)> {
     None
 }
 
+/// 所有在线显示器里最高的刷新率（Hz），WPE 壁纸帧率滑块的上限（同 WPE 设置界面的 `runtime.frequencymax`）。
+/// 现查、不走缓存：Windows 还没有显示器枚举，刷新率也不在 [`ScreenInfo`] 里。取不到（Linux 等）返回 None。
+#[cfg_attr(not(feature = "wpe"), allow(dead_code))]
+pub fn max_refresh_rate() -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    return mac::max_refresh_rate();
+    #[cfg(windows)]
+    return windows_max_refresh_rate();
+    #[cfg(not(any(target_os = "macos", windows)))]
+    None
+}
+
+/// 挂在桌面上的显示设备逐个取当前模式的 `dmDisplayFrequency`；0 与 1 表示「硬件默认」，不算。
+#[cfg(windows)]
+fn windows_max_refresh_rate() -> Option<u32> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        EnumDisplayDevicesW, EnumDisplaySettingsW, DEVMODEW, DISPLAY_DEVICEW,
+        DISPLAY_DEVICE_ATTACHED_TO_DESKTOP, ENUM_CURRENT_SETTINGS,
+    };
+    let mut best: Option<u32> = None;
+    for index in 0.. {
+        // SAFETY: 两个结构体都是纯数据，按文档先填 cb / dmSize 再交给 API 写
+        let mut device: DISPLAY_DEVICEW = unsafe { std::mem::zeroed() };
+        device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+        if unsafe { EnumDisplayDevicesW(std::ptr::null(), index, &mut device, 0) } == 0 {
+            break;
+        }
+        if device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP == 0 {
+            continue;
+        }
+        let mut mode: DEVMODEW = unsafe { std::mem::zeroed() };
+        mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        if unsafe {
+            EnumDisplaySettingsW(device.DeviceName.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode)
+        } == 0
+        {
+            continue;
+        }
+        if mode.dmDisplayFrequency > 1 {
+            best = Some(best.map_or(mode.dmDisplayFrequency, |b| b.max(mode.dmDisplayFrequency)));
+        }
+    }
+    best
+}
+
 /// 读一次在线屏填进缓存，再启动 watcher。之后屏幕增减、移动、改分辨率都会更新缓存、通知控制器并发事件。
 ///
 /// 要在壁纸控制器初始化**之前**、在主线程上调用：控制器初始化时就要按在线屏算布局，而首次枚举是同步的

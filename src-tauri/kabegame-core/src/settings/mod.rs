@@ -8,6 +8,7 @@ use std::time::Duration;
 use tokio::time::Instant;
 
 use crate::emitter::GlobalEmitter;
+pub use crate::wpe::fps::WpeFps;
 
 mod migrations;
 mod wallpaper_targets;
@@ -137,6 +138,9 @@ pub enum SettingKey {
     WpeSceneShadows,
     /// 场景壁纸体积光画质：follow（跟随 WPE 的 `config.json` 里的 `volumetrics`）/ disabled / low / medium / high / ultra
     WpeSceneVolumetrics,
+    /// 桌面 WPE 壁纸的帧率：整数（10…，界面按显示器最高刷新率封顶）或 follow（跟随 WPE 的 `general.user.fps`，
+    /// 只读一次）；场景宿主据此限帧，网页壁纸经 `applyGeneralProperties` 收到（`wpe::fps`）
+    WpeFps,
     /// WPE 安装目录（场景的 `assets`、`config.json` 与 `ui_` 词条都从这里读）；None 时由
     /// `wpe::discover::engine_dir` 自动查找并写入，用户可以在壁纸设置里覆盖
     WpeEngineDir,
@@ -361,6 +365,7 @@ impl Settings {
             SettingKey::WpeSceneVolumetrics => {
                 SettingValue::String(DEFAULT_WPE_SCENE_VOLUMETRICS.to_string())
             }
+            SettingKey::WpeFps => wpe_fps_setting_value(WpeFps::default()),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
@@ -445,6 +450,7 @@ impl Settings {
             SettingKey::WpeSceneReflection,
             SettingKey::WpeSceneShadows,
             SettingKey::WpeSceneVolumetrics,
+            SettingKey::WpeFps,
             SettingKey::WpeEngineDir,
             SettingKey::WindowState,
             #[cfg(feature = "virtual-driver")]
@@ -597,6 +603,9 @@ impl Settings {
                     .filter(|value| is_wpe_scene_volumetrics(value))
                     .unwrap_or(DEFAULT_WPE_SCENE_VOLUMETRICS)
                     .to_string(),
+            )),
+            SettingKey::WpeFps => Ok(wpe_fps_setting_value(
+                WpeFps::from_json(json).unwrap_or_default(),
             )),
             #[cfg(feature = "virtual-driver")]
             SettingKey::AlbumDriveEnabled => {
@@ -790,6 +799,7 @@ impl Settings {
             SettingKey::WpeSceneReflection => "wpeSceneReflection".to_string(),
             SettingKey::WpeSceneShadows => "wpeSceneShadows".to_string(),
             SettingKey::WpeSceneVolumetrics => "wpeSceneVolumetrics".to_string(),
+            SettingKey::WpeFps => "wpeFps".to_string(),
             SettingKey::WpeEngineDir => "wpeEngineDir".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
             #[cfg(feature = "virtual-driver")]
@@ -1130,6 +1140,21 @@ impl Settings {
             .and_then(|c| c.load().as_string())
             .filter(|value| is_wpe_scene_volumetrics(value))
             .unwrap_or_else(|| DEFAULT_WPE_SCENE_VOLUMETRICS.to_string())
+    }
+
+    /// 桌面 WPE 壁纸的帧率设置（未解析 follow，解析见 `wpe::fps::resolve`）。
+    pub fn get_wpe_fps(&self) -> WpeFps {
+        match Self::cells().get(&SettingKey::WpeFps).map(|c| c.load()) {
+            Some(value) => match value.as_ref() {
+                SettingValue::U32(fps) => WpeFps::from_json(&serde_json::Value::from(*fps)),
+                SettingValue::String(text) => {
+                    WpeFps::from_json(&serde_json::Value::from(text.as_str()))
+                }
+                _ => None,
+            }
+            .unwrap_or_default(),
+            None => WpeFps::default(),
+        }
     }
 
     pub fn get_window_state(&self) -> Option<WindowState> {
@@ -1579,6 +1604,18 @@ impl Settings {
         Ok(())
     }
 
+    /// 桌面 WPE 壁纸的帧率：整数（钳到 `wpe::fps` 的范围）或 `"follow"`，其它值报错。
+    pub fn set_wpe_fps(&self, value: &serde_json::Value) -> Result<(), String> {
+        let fps = WpeFps::from_json(value).ok_or_else(|| format!("无效的帧率设置：{value}"))?;
+        let cells = Self::cells();
+        let new_value = wpe_fps_setting_value(fps);
+        if let Some(cell) = cells.get(&SettingKey::WpeFps) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WpeFps, &new_value);
+        Ok(())
+    }
+
     /// WPE 安装目录；空串按未设置处理。是不是安装目录由调用方判断（`wpe::discover`，它只随 `wpe` feature 编译）。
     pub fn set_wpe_engine_dir(&self, dir: Option<String>) -> Result<(), String> {
         let dir = dir
@@ -1681,6 +1718,14 @@ const DEFAULT_WPE_SCENE_VOLUMETRICS: &str = "follow";
 /// 体积光与阴影是 WPE 的同一个档位枚举（`FUN_14010dad0`），取值相同。
 pub(crate) fn is_wpe_scene_volumetrics(value: &str) -> bool {
     is_wpe_scene_shadows(value)
+}
+
+/// 帧率在设置里的存法：固定值 `U32`，跟随 `String("follow")`，写盘与 `setting-change` 都是数字或字符串。
+fn wpe_fps_setting_value(fps: WpeFps) -> SettingValue {
+    match fps {
+        WpeFps::Fixed(fps) => SettingValue::U32(fps),
+        WpeFps::Follow => SettingValue::String("follow".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -1825,6 +1870,24 @@ mod tests {
             Settings::key_to_json_string(SettingKey::WpeSceneVolumetrics),
             "wpeSceneVolumetrics"
         );
+    }
+
+    #[test]
+    fn wpe_fps_stores_number_or_follow() {
+        let read = |json: serde_json::Value| {
+            let value = Settings::json_value_to_setting_value(SettingKey::WpeFps, &json).unwrap();
+            Settings::setting_value_to_json(SettingKey::WpeFps, &value).unwrap()
+        };
+        assert_eq!(read(serde_json::json!(60)), serde_json::json!(60));
+        assert_eq!(
+            read(serde_json::json!("follow")),
+            serde_json::json!("follow")
+        );
+        // 低于下限钳到 10，非法值回默认 30
+        assert_eq!(read(serde_json::json!(5)), serde_json::json!(10));
+        assert_eq!(read(serde_json::json!("fast")), serde_json::json!(30));
+        assert_eq!(read(serde_json::json!(null)), serde_json::json!(30));
+        assert_eq!(Settings::key_to_json_string(SettingKey::WpeFps), "wpeFps");
     }
 
     #[test]

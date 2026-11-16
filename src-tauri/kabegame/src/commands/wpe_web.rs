@@ -19,6 +19,7 @@ use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::media::image_type::wpe_kind;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::{ImageInfo, Storage};
+use kabegame_core::wpe::fps::{self as wpe_fps, WpeFps};
 use kabegame_core::wpe::preview_settings;
 use kabegame_core::wpe::project::read_project;
 use kabegame_core::wpe::properties::{resolve_web_user_props, wpe_language_code};
@@ -352,24 +353,61 @@ fn path_for_page(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-/// 通用属性：第一版只有界面语言。`fps` 等到 Phase 6 有了设置再推（推 0 会让按 `1000 / fps`
-/// 算间隔的页面停住）。
+/// 通用属性，垫片经 `applyGeneralProperties` 交给页面（WPE 网页壁纸协议），场景宿主也从这里取帧率。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WpeWebGeneral {
     /// WPE 语言码（`zh-chs` / `zh-cht` / `en-us` / `ja-jp` / `ko-kr`）。
     pub language: &'static str,
+    /// 解析后的帧率（正整数，`wpe::fps::resolve`）。不会是 0：按 `1000 / fps` 算间隔的页面会停住。
+    pub fps: u32,
+}
+
+/// 设置取哪一份：桌面（壁纸窗口）取全局设置，预览与应用背景（主窗口）取这张图 metadata 的 `previewSettings`；
+/// 与媒体集成的分流同一规则（[`wpe_web_media_subscribe`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WpeSettingsSource {
+    Desktop,
+    Preview,
+}
+
+impl WpeSettingsSource {
+    pub fn of_label(label: &str) -> Self {
+        if crate::wallpaper::is_wallpaper_label(label) {
+            Self::Desktop
+        } else {
+            Self::Preview
+        }
+    }
 }
 
 /// 按 id 组装状态，每次都读图片当前的 metadata（导入时存的 `project.json` 原文）；
 /// 行不存在或不是 `x-wpe/web` / `x-wpe/scene` 返回 None。场景的 directories 为空。
-pub async fn build_wpe_web_state(image_id: &str) -> Result<Option<WpeWebState>, String> {
-    Ok(build_wpe_web_state_with_raw(image_id)
+pub async fn build_wpe_web_state(
+    image_id: &str,
+    source: WpeSettingsSource,
+) -> Result<Option<WpeWebState>, String> {
+    Ok(build_wpe_web_state_with_raw(image_id, source)
         .await?
         .map(|(state, _)| state))
 }
 
+/// 帧率设置解析成生效值。跟随 WPE 第一次要读 `config.json`（经 `engine_dir` 碰 Storage），放到阻塞线程。
+async fn resolve_fps(source: WpeSettingsSource, raw: &Value) -> Result<u32, String> {
+    let fps = match source {
+        WpeSettingsSource::Desktop => Settings::global().get_wpe_fps(),
+        WpeSettingsSource::Preview => preview_settings::fps(raw),
+    };
+    match fps {
+        WpeFps::Fixed(fps) => Ok(fps),
+        WpeFps::Follow => tauri::async_runtime::spawn_blocking(move || wpe_fps::resolve(fps))
+            .await
+            .map_err(|error| error.to_string()),
+    }
+}
+
 async fn build_wpe_web_state_with_raw(
     image_id: &str,
+    source: WpeSettingsSource,
 ) -> Result<Option<(WpeWebState, Value)>, String> {
     let Some(info) =
         Storage::find_image_by_id(image_id).map_err(|e| format!("Storage error: {}", e))?
@@ -427,12 +465,14 @@ async fn build_wpe_web_state_with_raw(
         .await
         .map_err(|e| e.to_string())?
     };
+    let fps = resolve_fps(source, &raw).await?;
     Ok(Some((
         WpeWebState {
             image_id: info.id,
             user,
             general: WpeWebGeneral {
                 language: wpe_language_code(Settings::global().get_resolved_language()),
+                fps,
             },
             directories,
         },
@@ -447,15 +487,20 @@ async fn build_wpe_web_state_with_raw(
 ///
 /// 返回之前用同一份 metadata 覆盖这张壁纸的 `file:` 放行：页面只能从拉取结果得知用户新选的路径，拿到时
 /// 闸门一定已经认它；撤销旧选择由目录索引跟随 `metadataId` 补丁完成。
+///
+/// `general.fps` 按调用方所在窗口取设置（[`WpeSettingsSource`]）：桌面改全局 `wpeFps` 时垫片因 `setting-change`
+/// 重拉，预览改 `previewSettings` 时因 `metadataId` 补丁重拉。
 #[tauri::command]
-pub async fn wpe_web_pull_state(
+pub async fn wpe_web_pull_state<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
     caller: tauri::ipc::CallerOrigin,
     image_id: Option<String>,
 ) -> Result<WpeWebState, String> {
     let doc = caller_document(&caller.0).ok_or("caller is not a file: document")?;
+    let source = WpeSettingsSource::of_label(webview.label());
     let index = WpeWebDirIndex::global();
     if let Some(id) = index.image_id_of(&doc) {
-        let (state, raw) = build_wpe_web_state_with_raw(&id)
+        let (state, raw) = build_wpe_web_state_with_raw(&id, source)
             .await?
             .ok_or_else(|| "web wallpaper row missing".to_string())?;
         index.replace_grants(&id, user_file_grants(&raw));
@@ -466,7 +511,7 @@ pub async fn wpe_web_pull_state(
         if !index.is_scene(&id) {
             return Err("not a scene wallpaper in the library".into());
         }
-        let (state, raw) = build_wpe_web_state_with_raw(&id)
+        let (state, raw) = build_wpe_web_state_with_raw(&id, source)
             .await?
             .ok_or_else(|| "scene wallpaper row missing".to_string())?;
         // 场景的 `scenetexture` 文件放行与网页壁纸同两个时机：这里在交出状态前覆盖，`metadataId` 补丁时由目录索引重算
@@ -633,6 +678,22 @@ pub async fn get_wpe_follow_available() -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(|| {
         kabegame_core::wpe::discover::engine_dir()
             .is_some_and(|dir| dir.join("config.json").is_file())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// 取不到显示器刷新率时帧率滑块的上限（Linux 等）。
+const FALLBACK_MAX_REFRESH_RATE: u32 = 60;
+
+/// WPE 壁纸帧率滑块的上限：所有在线显示器里最高的刷新率（同 WPE 设置界面的 `runtime.frequencymax`），
+/// 取不到时 60。macOS 要在主线程读 `NSScreen`，放到阻塞线程里同步派过去。
+#[tauri::command]
+pub async fn get_display_max_refresh_rate() -> Result<u32, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::wallpaper::screens::max_refresh_rate()
+            .filter(|fps| *fps >= wpe_fps::WPE_FPS_MIN)
+            .unwrap_or(FALLBACK_MAX_REFRESH_RATE)
     })
     .await
     .map_err(|e| e.to_string())

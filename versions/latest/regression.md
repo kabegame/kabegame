@@ -1,5 +1,35 @@
 # v4.7.0 regression
 
+## WPE 壁纸帧率设置
+
+2026-11-16 macOS dev。壁纸设置与预览设置新增「帧率」（整数或「跟随 WPE」，默认 30，范围 10 到显示器最高刷新率）。生效值由 `wpe_web_pull_state` 按调用方窗口取全局 `wpeFps` 或这张图的 `previewSettings.fps`、解析跟随（WPE `config.json` 只读一次）后放进 `general.fps`，垫片经 `applyGeneralProperties` 同时交给网页壁纸与场景宿主；场景宿主 `SceneRenderer.setMaxFps` 就地改节流、粒子遍数与 rope 的 fps，不重新加载。见 `cocs/wpe/WPE_SCENE.md`「帧率」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | F0 单测与检查 | macOS | `check-kabegame`；`test-kabegame kabegame-core --lib fps`；`apps/wpe-scene` 的 `src/particles`、`render/particles.test.ts`、`render/render.test.ts`、`host.test.ts` 与 typecheck；`apps/kabegame` 的 `wpeSettings.test.ts`、`useWpePreviewSettings.test.ts`、`components/wallpaper`、`components/image` | 0 error；全过 | 2026-11-16 Claude：vue-tsc 与 cargo 0 error；core 4 个用例；wpe-scene 707 + 35 个用例全过、typecheck 通过（全量只有 `wpefont/index.test.ts` 因本机 Node 缺 `--experimental-wasm-gc` 失败，与本次无关）；kabegame 26 个文件 286 个用例全过 |
+| [x] | F1 刷新率上限 | macOS dev | 调 `get_display_max_refresh_rate` | 等于在线屏的最高刷新率 | 2026-11-16 Claude：本机（M5 内建 ProMotion 屏）返回 120 |
+| [x] | F2 预览就地改帧率 | macOS dev | 预览一张粒子场景，预览帧率从 30 改到 10、20、21 | 实际帧率跟着变；`host.stats().recompiled` 不变（不重新加载）；跨 20 的遍数分界粒子不清空 | 2026-11-16 Claude：9180（带子系统的萤火虫粒子），按宿主 `clock()` 的运行时长数 2 s 内的渲染帧：默认 30.5 fps → 10 → 10.5（中位 100.1 ms）→ 20 → 20.5 → 21 → 21.5，全程 `recompiled` 为空，粒子存活数连续（9/12/200/2 → 10/12/200/2）。经 `set_wpe_preview_settings` 改（与面板同一命令），测完删回默认 |
+| [x] | F3 桌面跟设置页 | macOS dev 窗口模式 | 改全局 `wpeFps` | 壁纸窗口里的场景跟着变、不重新加载；预览不受影响 | 2026-11-16 Claude：桌面 9180 在全局 12 时 12.5 fps（83.3 ms），改 24 后 24.5 fps（41.7 ms），`recompiled` 为空；同时预览按自己的 10 帧不变、网页壁纸预览没有收到新值。测完改回用户原来的 12 |
+| [x] | F4 网页壁纸收到 fps | macOS dev | 预览网页壁纸 9000（corsair_collection），在 iframe 里换一个转发的 `wallpaperPropertyListener` 记录 `applyGeneralProperties`；改这张的预览帧率 | 补投带 `{ language, fps: 30 }`；改值后收到新 `fps` | 2026-11-16 Claude：先收到 `{ language: "en-us", fps: 30 }`，改成 15 后收到 `{ fps: 15 }`；改全局帧率时它不变 |
+| [ ] | F5 跟随 WPE | Windows dev（有 WPE `config.json`） | 打开「跟随 WPE」 | 滑条置灰；场景按 WPE 的 `general.user.fps` 限帧；改 WPE 的帧率后不跟（只读一次），重启后跟上 | 只能在 Windows 上测 |
+| [x] | F6 跟随不可用 | macOS dev | 看预览侧栏的帧率字段；把预览帧率存成 `"follow"` | 没有「跟随 WPE」开关；存着的 `follow` 显示 30、页面收到 30 | 2026-11-16 Claude：截图确认侧栏只有滑条（10–120，本机刷新率 120）；存 `"follow"` 后侧栏显示 30 并带「恢复默认」，网页收到 `fps: 30`；页面里调 `get_wpe_preview_settings` 被 ACL 拒绝（预期）。测完删回默认 |
+
+## 网页壁纸：属性键序与 History API
+
+2026-11-16 macOS dev。自带网页壁纸 CORSAIR Collection（Angular 6，`<base href=".">`）一直只显示预览图，控制台报 `replaceState` 的 `SecurityError` 和 `Cannot read properties of undefined (reading 'reset')`。两个原因：
+- 垫片按 project.json 顺序推属性，`scene` 在 `effect` 前；壁纸处理 `scene` 时要先有 `effect` 建的 `currentEffect`，抛错后 rxjs 退订，再也不切场景。
+- 没有 universal access 的 `file:` 文档改不了路径，Angular 先写地址（`…/circuit`）再激活组件，一抛错组件就建不出来；WPE 带 `--disable-web-security`，没有这个限制。
+
+垫片改为属性按键名排序（模仿 jsoncpp，WPE 上的顺序没实测），并在页面脚本之前包装 `pushState` / `replaceState`：同源 `file:` 目标改路径被拒时保留本文档路径、带上目标的 query 与 hash 重写。见 `cocs/wpe/WPE_IMPORT.md`「运行时垫片与宿主协议」的「键序」「History API」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | W1 CORSAIR 实时显示 | macOS dev | 预览 9000（corsair_collection） | `<router-outlet>` 后有场景组件、有 canvas，画面是动画而不是预览图 | 2026-11-16 Claude：改前 `<router-outlet>` 后为空、0 个 canvas；改后 `APP-CIRCUIT` 加 1 个 canvas，截图是 iCUE 电路动画；`location.pathname` 停在 `index.html`（预期） |
+| [x] | W2 切场景 | macOS dev | 在页面里调 `applyUserProperties({ scene: city })`，再切回 `circuit` | 组件换成 `APP-CITY` 再换回 `APP-CIRCUIT`，不报错 | 2026-11-16 Claude：两次都对，`error` 事件 0 条。iframe 重新加载后组件照样建出来；控制台流 0 条，但流可能在重新加载时脱开，不算确证 |
+| [x] | W3 场景宿主不受影响 | macOS dev | 应用重启后看壁纸窗口里的场景 9180 | 照常渲染，帧率按设置 | 2026-11-16 Claude：12.5 fps（全局 12），没有重新编译 |
+| [ ] | W4 WPE 的键序 | Windows + WPE | 在 WPE 的网页壁纸开发者工具里看 `applyUserProperties` 收到的键序 | 按键名排序 | 没有 Windows 电脑，未测；排序是按 jsoncpp 的 `std::map` 推的 |
+| [ ] | W5 其它网页壁纸 | macOS dev | 预览库里另外两张网页壁纸 | 属性与显示和改前一样 | 未测 |
+
 ## 从 Steam 导入（wpe-import P1 + P3）
 
 2026-11-15 macOS dev。P1 与 P3 都在这一版。P3 把来源改成「从 Steam 导入」：登录后在「我的订阅」里挑创意工坊条目，任务下载进 WPE 目录的 `projects/myprojects/<条目 id>/` 并入库；WPE 本体只在设置里没有 WPE 时顺带下载，不再导入官方默认壁纸。下表 P0–P14 是 P1 当时的结果（P7 的「先到 80% 再导入官方默认壁纸」是 P1 的行为），S 开头的是 P3。

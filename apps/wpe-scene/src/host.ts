@@ -102,6 +102,8 @@ export interface SceneHostStats {
 }
 
 const LOST_RETRY_WINDOW_MS = 60_000;
+/** 还没收到 `general.fps` 时的帧率：Kabegame 帧率设置的缺省值。 */
+const DEFAULT_FPS = 30;
 /** 第一次 ready 之前最多等视频纹理出第一帧这么久（P9a 决定 1）。 */
 const FIRST_VIDEO_FRAME_TIMEOUT_MS = 2000;
 const FORCE_RENDER_KEY = "kabegame-dev-scene-force-render";
@@ -208,6 +210,11 @@ export class SceneHost {
   private lastLostAt = -Infinity;
   private disposed = false;
   private paused = false;
+  /**
+   * 帧率（垫片的 `applyGeneralProperties` 带来的 `general.fps`，Rust 已解析好「跟随 WPE」与预览 / 桌面的数据源）：建渲染器时传入、
+   * 运行中就地改（`setGeneral`）。收到之前按 Kabegame 的缺省 30（首包与用户属性同批送达，实际早于建渲染器）。
+   */
+  private fps = DEFAULT_FPS;
   /** 设置「场景后处理」：最近一次加载用的值；还没加载过为 null。 */
   private postprocess: ScenePostprocessSetting | null = null;
   /**
@@ -1134,6 +1141,20 @@ export class SceneHost {
     this.syncSoundGlobal();
   }
 
+  /**
+   * 垫片的 `applyGeneralProperties(general)`（加载后一次、之后 `general` 变了才调）：只取帧率。`general.fps` 是有限正数时取整存下
+   * 并交给渲染器就地生效（不重新加载）；别的值忽略、保持当前帧率。不走父页面的 `kabegame:wpe-scene-settings`（那条只管要重载的四项）。
+   */
+  setGeneral(general: unknown): void {
+    if (this.disposed || !general || typeof general !== "object") return;
+    const raw = (general as { fps?: unknown }).fps;
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return;
+    const fps = Math.max(1, Math.round(raw));
+    if (fps === this.fps) return;
+    this.fps = fps;
+    this.renderer?.setMaxFps(fps);
+  }
+
   /** 文档隐藏时渲染循环停转、声音的计时冻结，声音也按暂停处理（不然多文件、`random` 会在放完之后断掉）。 */
   setHidden(hidden: boolean): void {
     this.hidden = hidden;
@@ -1407,7 +1428,10 @@ export class SceneHost {
   private ensureRenderer(): Promise<SceneRenderer> {
     if (this.rendererTask) return this.rendererTask;
     const displayScale = this.displayScale;
+    const fps = this.fps;
     const task: Promise<SceneRenderer> = SceneRenderer.create(this.canvas, {
+      // 帧率（`setGeneral`）：首次建与设备丢失后重建都取当前值；取设备期间又变了的在建好后补设
+      maxFps: fps,
       displayScale,
       // 场景频谱的输入（P4e 步骤 4）：Hub 最近一次的原值，渲染器每帧开头取一次
       audioFrame: () => this.lastAudioFrame,
@@ -1490,6 +1514,7 @@ export class SceneHost {
         this.renderer = created;
         // 取设备期间父页面可能又推了新的显示缩放
         if (this.displayScale !== displayScale) created.setDisplayScale(this.displayScale);
+        if (this.fps !== fps) created.setMaxFps(this.fps);
         created.setStyle(this.style);
         // 先于 load：加载时的预热与第一帧用它（渲染器按新场景的铺放换算，见 `SceneRenderer.load`）
         if (this.pointer) created.setPointer(...this.pointer);
