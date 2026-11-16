@@ -302,8 +302,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：下载任务生命周期、偶发 `UNIQUE constraint failed: images.local_path` 或同名图片互相覆盖、插件把 VFS 里的文件或壁纸目录交给下载器（`relocate`）后源没被移走或报错、去重命中后 WPE 行的详情 / 属性面板失效、下载目录与文件夹画册重叠、Android `content://` 与 HTTP/HTTPS 下载差异、畅游一键下载与取消、页面快照回看、JS 爬虫或畅游窗口的页面自发原生下载、`blob:` / `data:` / MSE 媒体下载、会话 VFS 写入与清理、MSE 多 SourceBuffer 显式合流、surf 导入与终态反馈、源文件删除/回收站护栏、清空隐藏画册、失败重试、状态流转问题；任务 success/deleted/failed/dedup 计数与前端同步；排查下载后列表/画册未刷新。
 
 - [downloader-tasks/VIDEO_INGEST.md](downloader-tasks/VIDEO_INGEST.md)
-  - 主题：视频摄入（下载/导入压缩）的平台门控机制。桌面 standard/CLI 使用 rsmpeg/FFmpeg；Android 走 Kotlin `AndroidVideoCompressProvider` 与系统媒体 API，不编译 FFmpeg。画廊播放始终可用（HTML `<video>`，无需 FFmpeg）。
-  - 适用场景：新增视频处理调用点；排查桌面 FFmpeg 构建环境；排查 Android content URI 视频预览/维度读取；理解 `deno task build:ffmpeg` 与桌面构建的关系。
+  - 主题：视频摄入（下载/导入压缩）的平台门控机制。桌面 standard/CLI 与 Android 都用进程内 rsmpeg/FFmpeg；视频缩略图桌面为首帧 JPEG（`generate_video_thumbnail`，WPE 视频取 `compatible_path` 的首帧）、Android 为 10fps GIF，桌面网格悬浮时才挂原视频，前端按缩略图本身决定放什么，旧的 mp4 短片 / GIF 由回填作业 `video_thumbnail_frame` 替换。画廊播放不经过 FFmpeg。
+  - 适用场景：新增视频处理调用点；排查视频缩略图是旧短片 / 动图、全黑（首帧是黑场）、悬浮不播放（主窗口在后台时 Chromium 会以省电为由拒绝 play）；排查桌面 FFmpeg 构建环境；排查 Android content URI 视频预览/维度读取；理解 `deno task build:ffmpeg` 与桌面构建的关系。
 
 - [downloader-tasks/TASK_DRAWER_LOAD.md](downloader-tasks/TASK_DRAWER_LOAD.md)
   - 主题：任务列表与运行配置的 PathQL 按需加载；任务与配置累计窗口分页、运行配置最新任务相关子查询 join、chip 过滤/计数/排序、任务 / 配置列表累计行与总数同批观察、任务状态计数与详情观察方、事件刷新及高频字段补丁（`useTaskRowPatches` 共用）、写后事件刷新、推荐导入态 plugin-changed 观察刷新、**重试链观察方**（`tasks://retry_root/<原始任务 id>` 走 `idx_tasks_retry_root`、只在弹出层打开期间观察、本链新增 / 已持有行删除才刷新、被删的几次补占位），以及任务右键菜单与再次执行的数据流。
@@ -517,6 +517,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - v049 同步规范化 `images.type` 并建索引；迁移 SQL 与 Rust 写入口的格式表外规则有比对测试，分页执行计划约束见 `provider-dsl/RULES.md` §2.2。
   - v051 是空迁移，登记发布态第一个回填作业 `wpe_dir_hash`：把存量 WPE 壁纸行的 `hash` / `size` 从入口文件重算为目录哈希与目录总字节数（每批 4 行、不持锁读盘、目录缺失跳过；跑完之前存量行按目录哈希查不到）。
   - v052 加 `images.palette`、色桶表与关系表，同步给存量图 × 每个色桶铺一行 65536（铺完再建排序索引），并登记回填作业 `image_palette`：每批 32 行给 `palette IS NULL` 的图算色盘、改写距离、发 `palette` 补丁，算不出的不重试。表的含义见 [gallery/COLOR_PALETTE.md](gallery/COLOR_PALETTE.md)。
+  - v053 是空迁移，登记回填作业 `video_thumbnail_frame`：把桌面存量视频（含 `x-wpe/video`）的缩略图换成首帧 JPEG（Android 仍是 GIF，空跑）（每批 8 行、写回带旧值做条件），提交后删掉 `thumbnails_dir` 里的旧短片 / 动图，作者的 `preview.*` 不删；解不出首帧的保留旧缩略图、不重试。
   - 主程序每次启动在 schema 迁移之后、读连接打开之前跑一次完整 `ANALYZE`（`Storage::init_global_for_app`，启动页 `analyze` 阶段，失败只告警；CLI 不跑）。
   - 适用场景：新增需要补算数据的迁移或回填作业；排查启动统计刷新耗时或执行计划随统计变化；某个迁移要改动回填读写的列；排查启动卡在启动页、启动页报错、回填不前进 / 重复处理 / 失败重试、忙碌卡片不消失；调整桌面 / Android 启动顺序或主线程要求。
 

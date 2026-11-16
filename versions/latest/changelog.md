@@ -81,6 +81,8 @@
 - 场景壁纸支持距离雾与高度雾：3D 模型、粒子、图片与文字图层都按 Wallpaper Engine 的方式蒙上雾色，雾的颜色、远近与浓度属性改了即时生效；画面与 Wallpaper Engine 逐像素对照过（相差不超过 1/255）。只差雾的创意工坊场景（如 3115845558）现在可以实时渲染。
 
 ### Optimized
+- 桌面版视频（含 Wallpaper Engine 视频壁纸）的缩略图改为第一帧静图，图库网格更轻；鼠标悬浮时直接播放原视频，不用打开就能看。升级后已有视频的缩略图会在后台自动重做，旧的预览短片随之删除。Android 仍用动图缩略图。
+- 桌面版预览视频（含 Wallpaper Engine 视频壁纸）时，右键菜单新增「设为壁纸封面」：把当前播放到的那一帧设为这个视频在图库里的缩略图。
 - 场景壁纸改颜色、透明度、位置、亮度与滑块类属性时即时生效，不再整场重新加载；按属性条件显示 / 隐藏的图层也能正确切换。
 - 场景壁纸开关图层效果、泛光，以及改背景色等属性时也即时生效，不再重新加载。
 - 场景壁纸图层的贴图采样位置与 Wallpaper Engine 对齐，放大低分辨率贴图时不再有亚像素偏移。
@@ -352,6 +354,7 @@
 - 新增 CEF 补丁 07（需重编 CEF）：建子资源 / 导航工厂时捕获文档与父文档 URL，对非 http(s) 请求写入两个私有归属头；`file:` 闸门按文档头分档，移除 worker 的 `file:` 工厂和垫片首批请求退避重试。
 
 ### Internal
+- 视频缩略图：`compress::generate_video_thumbnail` 取代 `compress_video_for_preview`（桌面删掉 mp4 短片编码路径，首帧解码复用 `media::decode::decode_first_video_frame`；Android 仍走 `run_ffmpeg_gif`）；`ImageContent` 新增 `poster` 形态（桌面缩略图是图时打底、播放时才挂原视频）；v053 空迁移登记回填作业 `video_thumbnail_frame`（Android 空跑）。新增命令 `set_video_cover(imageId, timeSecs)`（core `commands::image::set_video_cover`，只在桌面、只给应用页），按时间点解帧用 `media::decode::decode_video_frame_at`。
 - 收藏视图：前端 Dexie 库 `kbg-saved-views`（`services/savedViews.ts`），存不含根前缀 / hide / no-album / 分页尾的查询体，随机排序经新增的 `buildComposablePath({ omitRandomSeed })` 去种子；`gridViewPathKey` 扩成 `gridViewKey { path, source, pathFor }`，`GridRouteStore` 增加 `computePath`。`gallery-path` 全平台改走 URL query，`galleryRoute` 删掉自己读写的 `kabegame-gallery-path`，本地迁移删除两个旧键；非画廊页的画廊过滤链接改为显式 `router.push` 到 `/gallery`。组件库：tooltip / `KbFilterDropdown` 新增 `clickOutsideIgnore`，popconfirm 新增可追加的 `popperClass`。删除 8 个 `galleryChip*` 前端设置（工具条 chip 显隐），本地迁移清掉对应的 localStorage 键；i18n `chipSettings` / `chipVisibleTitle` / `chipHiddenHelp` 改为 `viewMenu`。见 `cocs/gallery/SAVED_VIEWS.md`。
 - 设置迁移 v004：`wallpaperDisabled` 取反成 `wallpaperEnabled`（默认 true）并删掉旧键，命令改为 `get_wallpaper_enabled` / `set_wallpaper_enabled(enabled)`；`wallpaperPaused` 的作用范围扩到视频壁纸。
 - 网页壁纸音频与媒体集成（Windows）：新增 `wpe_media` 模块（WASAPI 回环 + `realfft` 自定频谱、SMTC 媒体会话、封面配色）与 `wpe_web_media_subscribe` 命令，数据经 Tauri Channel 只推回订阅的 iframe；订阅按调用方 frame 归属、`SubframeDestroyed` 即释放。tauri 补丁 18 增补公开命令参数 `tauri::ipc::CallerFrame`（拉取后须重新应用 tauri 补丁序列）。新设置 `wpeMediaIntegration`。`realfft` 与 `windows` 的音频 / WinRT feature 只在 Windows 依赖段。

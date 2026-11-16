@@ -1,5 +1,23 @@
 # v4.7.0 regression
 
+## 视频缩略图改为首帧静图，悬浮播原视频
+
+2026-11-16 macOS dev。桌面的视频缩略图从 2.5 秒 H.264 短片改成第一帧缩到最长边 512 的 JPEG（Android 保持 10fps GIF 与 `gif` 形态不变）（`compress::generate_video_thumbnail`，解码复用 `media::decode::decode_first_video_frame`）；WPE 视频壁纸的缩略图也改成入口视频（`compatible_path`）的首帧，解不出时退回作者 `preview.*`。网格只显示静图，悬浮时 `ImageContent` 的 `poster` 形态才在静图上挂原视频（comp → local），出第一帧前透明、停了就卸载。前端按缩略图本身决定放什么：是图（jpg / WPE 预览）走 `poster`，是 mp4 短片或就是原视频走原来的视频形态。预览的右键菜单新增「设为壁纸封面」（只在桌面，普通视频与 WPE 视频）：前端把 `<video>.currentTime` 交给 `set_video_cover`，后端按时间点解出那一刻显示的帧（`decode_video_frame_at`：seek 到之前的关键帧再逐帧解到越过它）换成缩略图。存量由 v053 登记的回填作业 `video_thumbnail_frame` 重做并删掉 `thumbnails_dir` 里的旧文件（作者的 `preview.*` 不删；Android 上空跑）；整理的「重新生成缩略图」也把旧形态当作需要重做（`is_current_video_thumbnail`：桌面 `.jpg`、Android `.gif`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T0 检查与单测 | macOS | `deno task check -c kabegame`；core `video_thumbnail_frame` / `thumbnail_refresh` / `media::decode` / `storage::migrations` / `wpe_import`；vitest `src/components/image` | 0 error；全过 | 2026-11-16 Claude：check 通过；core 新增 3 个回填用例（真实 x264 视频换首帧、旧文件删除、作者预览保留、二次运行不重做）与整理旧形态用例全过；`local_folder::replace_image_thumbnail_path_deletes_old_independent_thumbnail` 失败是既有问题（旧缩略图不在 `thumbnails_dir`）；`ImageContent.poster.test.ts` 6 个用例全过 |
+| [x] | T1 存量回填 | macOS dev（127 个视频行） | 升级后启动 | 日志 `enqueued video_thumbnail_frame (v053, total 127)` → `done`；视频行缩略图全是 jpg；`thumbnails` 目录里不再有 mp4；WPE 目录里的 `preview.*` 还在 | 2026-11-16 Claude：8.5 s 跑完；119 mp4 + 1 webm + 7 WPE 视频全部换成 jpg，`thumbnails` 目录 3934 个文件全是 jpg，7 个 WPE 目录的 `preview.gif/jpg` 都在；无「解不出首帧」告警 |
+| [x] | T2 普通视频悬浮 | macOS dev | 画廊视频筛选，悬浮一张视频再移开 | 平时只有 `<img>`；悬浮约 200 ms 后挂原视频播放、首帧静图在下面；移开后 `<video>` 卸载 | 2026-11-16 Claude：悬浮 1.5 s 播到 1.27 s，移开即卸载。主窗口在后台时 Chromium 以「后台纯视频省电」拒绝 play，前台正常 |
+| [x] | T3 WPE 视频悬浮 | macOS dev | 画廊「Wallpaper Engine / Video」，悬浮一张 | 缩略图是首帧 jpg、角标「WPE · 视频」保留；悬浮播入口视频，移开卸载 | 2026-11-16 Claude：7 张均为首帧；悬浮播放 `…/莉莉艾露_身心皆奉.mp4`；有 1 张入口视频黑场淡入、首帧全黑（库内 127 张里 2 张近全黑） |
+| [ ] | T4 回填期间两种形态并存 | macOS dev | 回填跑完前（或手动把某行 `thumbnail_path` 改回旧 mp4）打开画廊 | mp4 缩略图的格子照旧用短片悬浮播放，jpg 的走静图 + 原视频；补丁到达后格子换成静图，不闪丢失图 | 用例覆盖（`ImageContent.poster.test.ts`），真机未构造 |
+| [ ] | T5 新入库 | macOS dev | 下载 / 本地导入一个视频、导入一张 WPE 视频壁纸 | 缩略图是 `thumbnails` 里的 jpg；WPE 视频解不出首帧时退回 `preview.*` | |
+| [ ] | T6 整理重做缩略图 | macOS dev | 把某视频行 `thumbnail_path` 改成旧 mp4，整理勾「重新生成缩略图」 | 换成首帧 jpg，旧 mp4 删除 | |
+| [ ] | T7 预览与桌面不受影响 | macOS dev | 打开视频预览、设视频为窗口壁纸 / 应用背景 | 照常播原视频；原视频丢失时显示丢失（不再退到缩略图短片） | |
+| [x] | T9 视频设为封面 | macOS dev | 预览一个视频 / WPE 视频，拖到某一刻暂停，右键「设为壁纸封面」 | 菜单有这一项；缩略图换成那一刻的画面（`thumbnails` 里的新 jpg），网格格子跟着换，上一张封面文件删除；预览里的视频不重载、不出加载遮罩 | 2026-11-16 Claude：WPE 视频 9247 在 5 s、8 s 各设一次，封面即 5 s 处画面（512×297），旧文件删除；第一次发现补丁让 `ImageContent` 重置、加载遮罩一直盖着视频，`resetKey` 改成视频形态下非短片缩略图不参与后修好（用例「预览里设封面」）。普通视频 30 经命令在 2.5 s 设封面成功，`timeSecs: -1` 被拒 |
+| [ ] | T10 设封面后的回填与整理 | macOS dev | 设过封面的视频跑整理「重新生成缩略图」 | 封面保留，不被换回首帧 | 封面与首帧同为 `thumbnails` 里的 jpg，按规则跳过；未实测 |
+| [ ] | T8 Android 不变 | Android dev | 升级后看画廊视频；新下载一个视频 | 缩略图仍是 GIF 动图、角标是静态指示（不能点播）；回填作业空跑完、gif 不被替换；新视频照旧生成 GIF | 安卓分支恢复为原来的 GIF 代码；本机没有 Android 构建产物，未编译验证 |
+
 ## 颜色主题与 `--anime-*` 下线
 
 2026-11-16 macOS dev。设置「外观」第一行「颜色主题」，五个内置主题（`apps/kabegame/src/theme/builtin/*.json`）。主题 JSON 只写 `--kb-*` 白名单里的变量，`applyColorTheme` 写到 `<html>` 行内样式；设置键 `colorTheme` 走 localStorage 后端，主窗口 bootstrap 先应用一次、`App.vue` 跟随。`tokens.css` 的 `:root` 即默认主题「动漫粉」。颜色分主色 `--kb-primary` 与点缀色 `--kb-secondary` 两条线，主题只写这两条线和四档文字；填充四阶、浅阶、渐变、页面底、悬停、分隔线、阴影都由它们 `color-mix`。主按钮与计数徽标改用主色 → 点缀色渐变，侧栏选中项是两个浅阶的渐变。第一版只有主色一条线，高级灰整片发灰（像色盲模式），第二版加了点缀色。`--anime-*` 全部下线：品牌色与状态色直接定义成 `--kb-*`，10 处引用（下拉刷新、亀ちゃん、可拖动分隔条、图片缺失、过滤树计数）迁到 `--kb-*`，硬编码的粉色投影改成 `color-mix`；插件描述 iframe 注入的五个 `--anime-*` 是插件约定，保留。
