@@ -1,7 +1,8 @@
 /**
  * 宿主的 `IVideoTexture` 接线（P9b 点 4）：脚本拿到的落点就是这段视频区间的播放器；重编译期间（脚本还在用旧 bundle、`SceneVideos`
  * 已按新 bundle 重建下标表）按旧 bundle 仍取到同一个播放器，换上新场景之后照样；登记过的结束回调跟着播放器、在登记它的脚本上下文里调。
- * `SceneVideos` 与播放器是真的：`<video>` 换成 `FakeVideo`，`fetch(file:)` 按 Range 回对应长度。
+ * `SceneVideos` 与播放器是真的（P9d 步骤 2b：`CodecVideoPlayer`）：`VideoDecoder` 换成解码器替身，`fetch(file:)` 按 Range 回虚拟文件里手造的 MP4，
+ * 墙钟由测试控制。
  */
 import { fakeModule } from "./script/testing/fakeModule";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +10,8 @@ import { generalDefaults } from "./compile/bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "./compile/bundle";
 import { SceneState } from "./render/state";
 import type { VideoSink } from "./video/sceneVideos";
-import { FakeVideo } from "./video/fakeVideo";
+import { buildMp4 } from "./video/demux/testMp4";
+import { FakeDecoder, newFakeEnv } from "./video/fakeDecoder";
 import type { SceneVideoSource } from "./video/player";
 
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -22,8 +24,23 @@ let activeGlobal: Record<string, unknown> = {};
 let loadGate: Promise<void> | null = null;
 /** 渲染器拿到的 `videos`（宿主的 sink）：`beginFrame` 推进帧号、判定结束。 */
 let sink: VideoSink | null = null;
-/** `document.createElement("video")` 建出的替身，按建的顺序。 */
-let elements: FakeVideo[] = [];
+/** 解码器替身的共享状态（打开的帧数等）。 */
+const fake = newFakeEnv();
+/** 播放器的墙钟（毫秒）：不推进就不走。 */
+let nowMs = 0;
+
+/** 8 帧、每帧 0.125 s、时长 1 s 的 MP4，放在虚拟文件的 100 与 900 处（两段视频的区间）。 */
+const MP4 = buildMp4({
+  sizes: Array.from({ length: 8 }, () => 10),
+  perChunk: [8],
+  stts: [[8, 125]],
+  timescale: 1000,
+  stss: [1, 5],
+  movie: [1000, 1000],
+}).bytes;
+const FILE = new Uint8Array(2000);
+FILE.set(MP4, 100);
+FILE.set(MP4, 900);
 
 vi.mock("@tauri-apps/api/core", () => ({
   Channel: class {
@@ -94,8 +111,8 @@ vi.mock("./render", async (original) => ({
 
 const { SceneHost } = await import("./host");
 
-const A: SceneVideoSource = { path: "P:/p/scene.pkg", start: 100, end: 164, duration: 2.55 };
-const B: SceneVideoSource = { path: "P:/p/scene.pkg", start: 200, end: 232, duration: 1 };
+const A: SceneVideoSource = { path: "P:/p/scene.pkg", start: 100, end: 100 + MP4.length, duration: 2.55 };
+const B: SceneVideoSource = { path: "P:/p/scene.pkg", start: 900, end: 900 + MP4.length, duration: 1 };
 
 function layer(object: number, slot0: number): SceneLayer {
   return {
@@ -208,26 +225,54 @@ type VideoApi = Record<string, unknown> & {
 describe("SceneHost 的 IVideoTexture（P9b）", () => {
   beforeEach(() => {
     vi.stubGlobal("__SCENE_DEV__", false);
-    elements = [];
     sink = null;
+    nowMs = 0;
+    fake.opened = 0;
+    fake.decoders = [];
+    vi.spyOn(performance, "now").mockImplementation(() => nowMs);
     loadGate = null;
     onInit = null;
     listeners.clear();
-    vi.stubGlobal("document", {
-      createElement: () => {
-        const element = new FakeVideo();
-        elements.push(element);
-        return element;
+    vi.stubGlobal("document", {});
+    // WebCodecs 替身：解码器按喂入顺序吐出假帧，配置都支持
+    vi.stubGlobal(
+      "VideoDecoder",
+      class {
+        static isConfigSupported = async () => ({ supported: true });
+        private readonly inner: FakeDecoder;
+        constructor(init: { output(frame: VideoFrame): void; error(error: unknown): void }) {
+          this.inner = new FakeDecoder(fake, init, 0);
+          fake.decoders.push(this.inner);
+        }
+        get decodeQueueSize() {
+          return this.inner.decodeQueueSize;
+        }
+        configure = () => this.inner.configure();
+        decode = (chunk: EncodedVideoChunkInit) => this.inner.decode(chunk);
+        flush = () => this.inner.flush();
+        reset = () => this.inner.reset();
+        close = () => this.inner.close();
       },
-    });
-    // 按区间读：回 Range 对应的长度（CEF 的 `file:` 回 200、只给区间）
+    );
+    vi.stubGlobal(
+      "EncodedVideoChunk",
+      class {
+        constructor(init: EncodedVideoChunkInit) {
+          Object.assign(this, init);
+        }
+      },
+    );
+    // 按区间读：回虚拟文件里 Range 对应的字节（CEF 的 `file:` 回 200、只给区间）
     vi.stubGlobal("fetch", async (_url: string, init?: { headers?: Record<string, string> }) => {
       const range = /bytes=(\d+)-(\d+)/.exec(init?.headers?.Range ?? "")!;
-      return new Response(new Uint8Array(Number(range[2]) - Number(range[1]) + 1));
+      return new Response(FILE.slice(Number(range[1]), Number(range[2]) + 1));
     });
     compile.mockReset();
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
 
   it("落点是该区间的播放器；重编译换了下标，换场景前后都落到同一个播放器，结束回调跟着它走", async () => {
     compile.mockImplementation(async () => bundle([[0, 0]], [A]));
@@ -243,13 +288,10 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
     const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
     host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
     // 第一次 ready 等可见视频的第一帧
-    await vi.waitFor(() => expect(elements).toHaveLength(1));
-    const [a] = elements;
-    a.loadData(2.516667);
     await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
     const v = video!;
     expect(v).not.toBeNull();
-    // 容器时长（float32），不是元素的 2.516667
+    // 容器时长（float32），不是帧表里的 1 s
     expect(v.duration).toBe(Math.fround(2.55));
     v.pause();
     expect(host.videos()[0]).toMatchObject({ start: 100, wantPlay: false, textures: [0] });
@@ -257,7 +299,7 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
     v.play();
     v.rate = 2;
     v.setCurrentTime(1);
-    expect([a.playbackRate, a.currentTime, host.videos()[0].wantPlay]).toEqual([2, 1, true]);
+    expect([host.videos()[0].currentTime, host.videos()[0].wantPlay]).toEqual([1, true]);
 
     // 重编译：新 bundle 里 A 挪到下标 1，下标 0 成了另一段视频 B（图层 1）。渲染器换场景之前停住
     let open!: () => void;
@@ -272,17 +314,15 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
       ),
     );
     host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
-    await vi.waitFor(() => expect(elements).toHaveLength(2));
-    const [, b] = elements;
+    await vi.waitFor(() => expect(host.videos()).toHaveLength(2));
     const probe = () => Object.fromEntries(host.videos().map((item) => [item.start, item]));
     // SceneVideos 已按新 bundle 重建下标表；脚本还在用旧 bundle（图层 0 槽 0 = 下标 0）
     expect(probe()[100].textures).toEqual([1]);
-    expect(probe()[200].textures).toEqual([0]);
+    expect(probe()[900].textures).toEqual([0]);
     expect((initLayer as Record<string, () => VideoApi>).getVideoTexture()).toBe(v);
     v.pause();
     v.rate = 0.5;
-    expect([probe()[100].wantPlay, probe()[200].wantPlay]).toEqual([false, true]);
-    expect([a.playbackRate, b.playbackRate]).toEqual([0.5, 1]);
+    expect([probe()[100].wantPlay, probe()[900].wantPlay]).toEqual([false, true]);
     expect(v.duration).toBe(Math.fround(2.55));
 
     // 换上新场景：脚本看新 bundle（图层 0 槽 0 = 下标 1），照样是 A
@@ -292,15 +332,18 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
       expect(reporter.debug.mock.calls.some(([message]) => String(message).includes("重新加载"))).toBe(true),
     );
     v.play();
-    expect([probe()[100].wantPlay, probe()[200].wantPlay]).toEqual([true, true]);
+    expect([probe()[100].wantPlay, probe()[900].wantPlay]).toEqual([true, true]);
     v.pause();
-    expect([probe()[100].wantPlay, probe()[200].wantPlay]).toEqual([false, true]);
+    expect([probe()[100].wantPlay, probe()[900].wantPlay]).toEqual([false, true]);
 
     // 结束回调登记在 A 的播放器上，跨重编译还在；在登记它的脚本（图层 0）上下文里调
     v.play();
     v.loop = 0;
+    v.rate = 1;
+    // 画到 A（新 bundle 里是下标 1）之后时钟起步；一步走过时长（2.55 s），下一个 beginFrame 的判定看到结束
     sink!.beginFrame();
-    a.ended = true;
+    sink!.drawn(1);
+    nowMs += 3000;
     sink!.beginFrame();
     sink!.beginFrame();
     expect(ended).toEqual([initLayer]);
@@ -318,8 +361,6 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
     const reporter = report();
     const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
     host.applyUserProperties({ p: { type: "slider", value: 0.3 } });
-    await vi.waitFor(() => expect(elements).toHaveLength(1));
-    elements[0].loadData(2.516667);
     await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
     const v = video!;
 
@@ -336,10 +377,10 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
       ),
     );
     host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
-    await vi.waitFor(() => expect(elements).toHaveLength(2));
+    await vi.waitFor(() => expect(host.videos()).toHaveLength(2));
     const probe = () => Object.fromEntries(host.videos().map((item) => [item.start, item]));
     v.pause();
-    expect([probe()[100].wantPlay, probe()[200].wantPlay]).toEqual([false, true]);
+    expect([probe()[100].wantPlay, probe()[900].wantPlay]).toEqual([false, true]);
     expect(v.duration).toBe(Math.fround(2.55));
 
     open();
@@ -349,7 +390,7 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
     v.play();
     v.pause();
     // 换上之后图层 0 是 B：暂停落在 B 上，A 保持之前的状态
-    expect([probe()[100].wantPlay, probe()[200].wantPlay]).toEqual([false, false]);
+    expect([probe()[100].wantPlay, probe()[900].wantPlay]).toEqual([false, false]);
     expect(v.duration).toBe(Math.fround(1));
     host.dispose();
   });

@@ -241,6 +241,9 @@ V.evalCondition = function (e) {
   - 即页面的 `setPaused(true)` 在冻结之前、`setPaused(false)` 在解冻之后被调用。
 - 暂停的实现方式：
   - 包装 `requestAnimationFrame` / `setInterval` / `setTimeout`：暂停期间新回调进队列，每类最多 1000 个，恢复时补发。
+    - 追记（2026-11-16，按 `webwallpaper64.exe` 里的脚本原文核对）：已经在跑的 interval 也停。包装在页面加载时就套上，每次到点先看
+      `state.isPaused`，暂停就跳过；暂停之前排上的 rAF 与 timeout 照常回调一次，暂停期间新排的才进队列。Unity 靠一个约 1 s 的
+      interval 兜底出帧，就是靠这一条才停得住。
   - 给所有带 CSS 动画的元素设 `animation-play-state: paused`，伪元素用注入的 class 处理。
   - 暂停正在播放的 `<video>` / `<audio>`。
   - 包装 `AudioContext` 构造器以登记全部实例，暂停时 `suspend()`。
@@ -415,7 +418,7 @@ V.evalCondition = function (e) {
 | `applyUserProperties` 增量推送 | P1 | 已完成（投递 5 / 触发 7，触发待真机） | 用户改属性 = 新 metadata 行 + `metadataId` 补丁；垫片订阅补丁后重拉，只推值变化的键 |
 | `applyGeneralProperties({ fps })` | P1 | 6 | 有了帧率设置再推。不推 0：按 `1000 / fps` 算间隔的页面会停住，而不推时页面保留自己的默认值 |
 | `applyGeneralProperties` 的 `language` | P2 | 已完成（5） | 推 Kabegame 当前语言，字段名 `language`，值用 WPE 语言码（`zh-chs` / `zh-cht` / `en-us` / `ja-jp` / `ko-kr`，§3.1）；语言变化时垫片收到 `setting-change`（预览由父页面代为 listen 转发）后重拉 |
-| `setPaused` + 冻结计时 / 动画 / 媒体 | P1 | 6（垫片与触发；Phase 5 方案移出） | 垫片照搬 WPE 的 `___wpxPause` 思路（§4.4）；宿主按壁纸窗口的暂停条件触发 |
+| `setPaused` + 冻结计时 / 动画 / 媒体 | P1 | 已完成（3c 起 rAF / CSS 动画 / 媒体；2026-11-16 补计时器、`AudioContext` 与 `setPaused` 先后） | 垫片照搬 WPE 的 `___wpxPause`（§4.4），暂停中打开先预热 3 s；见 WPE_IMPORT.md「暂停」 |
 | `localization` 文案 | P1 | 已完成（7，待真机） | 照 WPE：当前语言（WPE 内置词表覆盖项目 `ui_` 词条）→ `en-us` → 原文；内置词表运行时只读取 WPE 安装目录的 `locale\ui_<码>.json` |
 | `condition` 显隐 | P1 | 已完成（7，待真机） | 照 WPE 的 `$parse.readOnly` 白名单自写解释器，不 eval，失败当 true（第一节） |
 | `file` 属性 | P2 | 已完成（7，待真机） | 见难点一；kaguya 的 `custom_user_bg` 即此类。拉取状态时按调用方 label 追加放行用户选的文件 |

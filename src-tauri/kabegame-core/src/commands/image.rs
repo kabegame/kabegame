@@ -146,6 +146,73 @@ fn clear_current_wallpaper_if_removed(removed_ids: &[String]) {
     let _ = Settings::global().clear_wallpaper_targets_current_images(removed_ids);
 }
 
+/// 把视频（含 `x-wpe/video`）在 `time_secs` 秒（前端 `<video>.currentTime`）时的画面设为封面，返回新的缩略图路径。
+///
+/// 后端从视频文件解那一帧（[`generate_video_cover`]），不截屏：放大、控制条都不影响结果。普通视频先读原文件、解不了再读
+/// 兼容副本（时间轴相同）；WPE 视频读 `compatible_path`（入口视频或兼容副本），壁纸目录本身不是文件。换 `thumbnail_path`
+/// 后发 `thumbnailPath` 补丁；旧缩略图只删 `thumbnails_dir` 里的，WPE 作者的 `preview.*` 不动。封面和首帧缩略图是同一种
+/// 形态（`thumbnails_dir` 里的 JPEG），回填与整理都不会把它换回首帧。只在桌面（Android 的视频缩略图是 GIF 动图）。
+///
+/// [`generate_video_cover`]: crate::crawler::downloader::compress::generate_video_cover
+#[cfg(not(target_os = "android"))]
+pub async fn set_video_cover(image_id: String, time_secs: f64) -> Result<String, String> {
+    use crate::media::image_type::{is_video_like_type, is_wpe_video_type};
+
+    if !time_secs.is_finite() || time_secs < 0.0 {
+        return Err(format!("invalid time: {time_secs}"));
+    }
+    let info = Storage::find_image_by_id(&image_id)?.ok_or("image not found")?;
+    let media_type = info.media_type.as_deref();
+    if !is_video_like_type(media_type) {
+        return Err("not a video".into());
+    }
+    let compatible = info
+        .compatible_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty());
+    let sources: Vec<&str> = if is_wpe_video_type(media_type) {
+        compatible.into_iter().collect()
+    } else {
+        std::iter::once(info.local_path.trim())
+            .filter(|path| !path.is_empty())
+            .chain(compatible)
+            .collect()
+    };
+
+    let mut failure = "no playable video file".to_string();
+    let mut cover = None;
+    for source in sources {
+        match crate::crawler::downloader::compress::generate_video_cover(source, time_secs).await {
+            Ok(path) => {
+                cover = Some(path);
+                break;
+            }
+            Err(error) => failure = error,
+        }
+    }
+    let cover = cover.ok_or(failure)?;
+    let path = cover.to_string_lossy().into_owned();
+
+    let (id, target) = (image_id.clone(), path.clone());
+    let replaced = tokio::task::spawn_blocking(move || {
+        Storage::global().replace_image_thumbnail_path(&id, &target)
+    })
+    .await
+    .map_err(|e| e.to_string())
+    .and_then(|result| result);
+    if let Err(error) = replaced {
+        // 没换上的封面没有行引用它，留着就成了孤儿文件
+        let _ = std::fs::remove_file(&cover);
+        return Err(error);
+    }
+    crate::emitter::GlobalEmitter::global().emit_image_fields(
+        std::slice::from_ref(&image_id),
+        json!({ "thumbnailPath": path }),
+    );
+    Ok(path)
+}
+
 pub async fn delete_image(image_id: String) -> Result<Value, String> {
     delete_images_with_events(std::slice::from_ref(&image_id), true).await?;
     clear_current_wallpaper_if_removed(std::slice::from_ref(&image_id));

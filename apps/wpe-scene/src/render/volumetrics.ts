@@ -17,6 +17,7 @@ import {
   volumetricsBlurs,
   volumetricsTargetSize,
   type SceneVolumetrics,
+  type VolumetricGeometry,
   type VolumetricLight,
   type VolumetricMesh,
 } from "../compile/volumetrics";
@@ -62,6 +63,8 @@ export interface VolumetricLightFrame {
   forward: readonly number[];
   /** 带阴影的点光：这一帧阴影条目的方块变换（`g_RenderVar0`）与点光阴影投影（`g_RenderVar3`）。 */
   shadow?: { transform: ArrayLike<number>; projection: ArrayLike<number> };
+  /** 这一帧的几何与常量（P13f2，按 `SceneState` 现算的 `volumetricGeometry`）；缺省用编译期的初值。 */
+  geometry?: VolumetricGeometry;
 }
 
 interface VolumetricsDraw {
@@ -413,7 +416,8 @@ export class VolumetricsRenderer {
 
   /**
    * 这一帧（相机与脚本之后）：每盏灯的 `g_ViewProjectionMatrix`、`g_EffectModelMatrix`（它的 GLM 逆，V3）、`g_EyePosition`，带阴影的点光
-   * 写 `g_RenderVar0` / `g_RenderVar3`；判相机是否在灯体内。`frameOf` 返回 null 的灯这一帧不画（不会发生：灯是编译期常量）。
+   * 写 `g_RenderVar0` / `g_RenderVar3`；灯的几何与常量按这一帧的状态写（P13f2，`geometry`）；判相机是否在灯体内。`frameOf` 返回 null 的灯
+   * 跳过（这一帧不画的灯，渲染器另外不把它插进序列）。
    */
   frame(frameOf: (object: number) => VolumetricLightFrame | null): void {
     for (const draws of this.lights) {
@@ -424,11 +428,14 @@ export class VolumetricsRenderer {
         g_EffectModelMatrix: glmInverse(input.viewProjection),
         g_EyePosition: input.eye,
       };
+      // 灯字段、颜色、位置都是运行时状态（P13f2）：常量每帧写；点光的 `g_RenderVar3` 下面换成阴影投影
+      const geometry = input.geometry ?? draws.light;
+      Object.assign(values, geometry.constants);
       if (input.shadow) {
         values.g_RenderVar0 = input.shadow.transform;
         values.g_RenderVar3 = input.shadow.projection;
       }
-      draws.inside = insideLightVolume(draws.light, input.eye, input.forward);
+      draws.inside = insideLightVolume({ kind: draws.light.kind, ...geometry }, input.eye, input.forward);
       this.write(draws.back, values);
       this.write(draws.inside ? draws.fullscreen : draws.front, values);
     }

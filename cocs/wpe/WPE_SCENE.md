@@ -35,7 +35,7 @@
   `genericimage4` 顶层那条无条件的 require，在 `LIGHTING=0` 时等于空行。逐灯的 PBR 计算在公开头文件 `common_pbr_2.h`，翻译器 `library.rs` 只负责遍历灯。
 - **灯数不看灯对象**：`LIGHTS_*` 取 `general.lightconfig`，每种灯 4 位。灯对象只负责填数组：多的丢掉，少的槽位全 0。没有这个键的场景里灯对象不起作用，开了 `LIGHTING` 的材质只剩环境光。
 - **`"light": "point"` 是遗留灯**，不进这些数组；V1 灯是 `lpoint` / `lspot` / `ltube` / `ldirectional`。
-- 宿主 `compile/lights.ts` 把灯对象整理成记录（`bundle.lights`，绑了 `{user}` 的字段登记重编译），渲染器每帧按视线方向排序、照 WPE 写整块灯光缓冲（P13d 起，见「阴影（P13d）」），宏经 `litDefines` 传给翻译器，只在最终 `LIGHTING` 非 0 时生效。
+- 宿主 `compile/lights.ts` 把灯对象整理成编译期记录（`bundle.lightObjects`，绑了 `{user}` 的数值字段登记就地目标，P13f2），渲染器每帧按 `SceneState` 现组灯记录、按视线方向排序、照 WPE 写整块灯光缓冲（P13d 起，见「阴影（P13d）」与「灯的运行时（P13f2）」），宏经 `litDefines` 传给翻译器，只在最终 `LIGHTING` 非 0 时生效。
 - 光照路径自己的宏只有 `LIGHTS_*`。`SHADERVERSION` 是翻译器的平台宏（69），`genericimage3` 按它选公式。
 - **全局引擎宏**（[hdr-macro-REPORT](../../.claude/plans/wpe-import/3-scene/hdr-macro-REPORT.md)）：`HDR`、`SCENE_ORTHO` 经 `engineDefines` 传给全部着色器，关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。`REVERSEDEPTH` 恒为 1（P13c，WPE 用反向深度；见「sprite 对象（P13c）」）。`TEX<n>FORMAT` 只给声明了 `formatcombo` 且按名字绑定的槽位定义，运行时槽位（`previous`、`bind`、passthrough）不定义。`HLSL_GS40_DISABLED` 不能定义，WPE 没有这个宏。
 - **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，聚光的阴影 / cookie 报 `lightconfig:spot*`（点光、平行光的阴影 P13d 起支持），体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
@@ -47,14 +47,14 @@
 
 - **设置「场景反射」**（`wpeSceneReflection`：`follow` 缺省 / `disabled` / `enabled`；宿主收父页面下发的值，见「场景后处理档位」的「设置来源」）：跟随时读 WPE `config.json` 的 `general.user.reflection`（缺键、读不到、不是布尔都当开，`compile/postprocess.ts` 的 `resolveReflection`）。WPE 这一个设置同时管平面反射与屏幕空间反射；值变了宿主整场重新加载。只在场景里有读者时才读 `config.json`。
 - **两张运行时 RT**（`compile/bundle.ts` 的 `REFLECTION_RT` / `MIP_FRAMEBUFFER_RT` 进 `bindRuntime`，渲染图的纹理来源 `{ kind: "reflection" }` / `{ kind: "mip-framebuffer" }`，`render/graph.ts` 的 `runtimeInput` 统一翻译；RT 在 `render/reflection.ts` 的 `ReflectionTargets`）：
-  - `_rt_Reflection`：只有**模型**的网格材质读它时才建（WPE 的触发条件），`bundle.reflection.planar`。场景目标尺寸（WPE 是窗口尺寸）、`rgba8unorm`（HDR 下也是），Clamp + Linear；反射关时每帧在主 pass 之前清成 `(clearcolor, 1)`，不看 `clearenabled`，HDR 的大于 1 的清屏色在 8 位上截到 1。同一场景里图像层 / 粒子读它绑同一张。**没有模型读、只有图像层或粒子读**时 WPE 不建，那一槽绑 6×6 黄黑棋盘格占位（编译期在全部对象编完后回改成静态纹理 `checkerIndex()`）。
+  - `_rt_Reflection`：只有**模型**的网格材质读它时才建（WPE 的触发条件），`bundle.reflection.planar`。场景目标尺寸（WPE 是窗口尺寸）、`rgba8unorm`（HDR 下也是），Clamp + Linear；反射关时每帧在主 pass 之前清成 `(clearcolor, 1)`（和主目标同一个清屏色：按指定尺寸画、对齐方式 1 / 3 时是 `schemecolor`，p13-REPORT「P13b2 补测」），不看 `clearenabled`，HDR 的大于 1 的清屏色在 8 位上截到 1。同一场景里图像层 / 粒子读它绑同一张。**没有模型读、只有图像层或粒子读**时 WPE 不建，那一槽绑 6×6 黄黑棋盘格占位（编译期在全部对象编完后回改成静态纹理 `checkerIndex()`）。
   - `_rt_MipMappedFrameBuffer`：任何对象读到就建，`bundle.mipFramebuffer`。场景目标尺寸、格式跟场景目标（HDR 时 `rgba16float`），mip 数 `max(1, min(log2(npot(w)/2), log2(npot(h)/2)) − 2)`（1920×1080 为 8、1600×900 为 7），Clamp + 三线性；反射关时建好后各级清成 `(0, 0, 0, 1)` 一次、之后不动。绑它的槽的 `g_Texture<n>MipMapInfo`（float）是引擎 uniform，值为 mip 数（`features.ts` 的 `isMipMapInfoOf`），别的槽照报 `uniform:*`。
 - **照报**：设置为开（或跟随且 WPE 开着）时，有 mip 帧缓冲的报 `reflection:screen`，整张退回预览图（「开」是 P13g）；平面反射开见下一条，只有名单里反射 pass 画不了的种类照报。
 - **平面反射开**（P13b2，`compile/reflection.ts`、`render/views.ts`、`render/scene.ts` 的反射 pass）：
   - **名单**（C1，编译期定、`bundle.reflection = { planar, enabled, list }`）：可画对象里 `reflected` 不为 false、且不是「读 `_rt_Reflection` 的模型」（一个网格读就整个对象排除）的，按 `objects` 顺序；反射 pass 只画名单，不做透明排序。`reflected` 绑用户属性时登记成重编译（`layer-structure`，已定 2），对所有对象中性、不再报 `object:reflected`。
   - **支持的种类**（已定 1）：模型、直接上屏的图像层与文本层、普通粒子。名单里别的种类报 `reflection:planar:<种类>`（`reflectionKind`）：`group`（组与组里的图层）、`shape`、`perspective`（`perspective: true` 的图层 / 模型）、`effect`（带 effect）、`composite`（不带 effect 但走合成路径：colorBlendMode 混合、被依赖、组合层）、`particle-perspective`（树里有 `flags & 4` 的系统）、`particle-framebuffer`（树里有要快照的材质）。这些在反射 pass 里重跑会改合成链或快照的状态，WPE 的行为没测，本机语料 0 处。
   - **视图**（`mirroredView`，C2、C3、C7）：透视场景 `VP' = S·VP·S`（`S = diag(1, −1, 1, 1)`，透视覆盖的视图投影同样镜像，分开的 P、V 为 `S·P`、`V·S`，视差平移照常）；**正交场景视图投影不变**（读码以为同样镜像，实测反射 pass 的 MVP 与主 pass 逐值相同）。两种场景都把 `g_EyePosition`、`g_ViewRight`、`g_ViewUp` 的 y 取反，`g_ViewForward` 不变。粒子 sprite 的朝向 `g_Orientation*` 保持主视图的值（C9，WPE 在对象更新时写），拖尾宽度用本 pass 的 `g_EyePosition`（C10）。没有裁剪平面（C4）。视锥剔除用镜像后的视图投影（C8）。
-  - **pass**（C5、C6）：反射 pass 在主 pass 之前、画进 `_rt_Reflection`，深度共用场景目标的深度附件；`clearenabled` 时颜色清成 `(clearcolor, 1)`、深度清 0，否则两者都 load；写掩码 RGB。逐 draw 有一份反射副本（`ReflectionCopy`：自己的 uniform 缓冲与绑定组，只换 binding 0），每帧拷主块再盖相机项（`REFLECTION_CAMERA_UNIFORMS`：MVP 及逆、VP、effect 矩阵、eye、视图向量），相机项在 `refreshLayer` 里按镜像视图现算：渲染器的五个相机量收成主视图 `GpuScene.view`（`SceneView`），`uniformValues` / `viewProjectionOf` 收视图参数，主 pass 与反射 pass 走同一套规则。HDR 场景的目标是 `rgba16float`、反射图是 `rgba8unorm`，名单里的图层另备一条 `rgba8unorm` 管线（`prepareLayer`）。粒子层一帧只排一次（`arrangeParticles` 返回排好的列表，`encode` 按树缓存），反射 pass 与主 pass 画同一次排列；模型的视锥剔除两个 pass 共用 `modelCulled`，各传自己视图的 VP。不可见的名单对象不画。
+  - **pass**（C5、C6）：反射 pass 在主 pass 之前、画进 `_rt_Reflection`，深度共用场景目标的深度附件；`clearenabled` 时颜色清成 `(clearcolor, 1)`（同上，对齐方式 1 / 3 时是 `schemecolor`）、深度清 0，否则两者都 load；写掩码 RGB。逐 draw 有一份反射副本（`ReflectionCopy`：自己的 uniform 缓冲与绑定组，只换 binding 0），每帧拷主块再盖相机项（`REFLECTION_CAMERA_UNIFORMS`：MVP 及逆、VP、effect 矩阵、eye、视图向量），相机项在 `refreshLayer` 里按镜像视图现算：渲染器的五个相机量收成主视图 `GpuScene.view`（`SceneView`），`uniformValues` / `viewProjectionOf` 收视图参数，主 pass 与反射 pass 走同一套规则。HDR 场景的目标是 `rgba16float`、反射图是 `rgba8unorm`，名单里的图层另备一条 `rgba8unorm` 管线（`prepareLayer`）。粒子层一帧只排一次（`arrangeParticles` 返回排好的列表，`encode` 按树缓存），反射 pass 与主 pass 画同一次排列；模型的视锥剔除两个 pass 共用 `modelCulled`，各传自己视图的 VP。不可见的名单对象不画。
   - **dev 覆盖**：`localStorage["kabegame-dev-scene-reflection"]` 为 `follow` / `disabled` / `enabled` 时宿主加载与 dev 探针都用它（`dev/reflectionOverride.ts`，生产构建摇掉），验收不改用户设置就能按反射开渲染；用完要删掉，它对同源的全部场景宿主生效。
   - **实测**（2026-11-14）：确定性工程 `ignore/p13/b2/gen_b2.py`（透视、`clearenabled: false`、正交 + 图像层、剔除、透视粒子、正交粒子 + 文本）按 WPE 抓帧时刻渲染，上屏与 WPE 逐像素相同（不清屏工程只差 RenderDoc 叠加文字，它不清屏时留在后备缓冲里），透视工程的反射图只差帧号块；arsenal、audiophile、fantasticcar 按日志逐帧回放（后处理 ultra，audiophile 带频谱录制），读反射图的地面相同，余下是孤立的单像素（每帧 > 8 的 ≤ 11 个，不在反射区域）。语料按反射开扫描：没有场景报 `reflection:planar:*`，干净数不变，读 mip 帧缓冲的 2 张仍报 `reflection:screen`。
 - **实测**：确定性工程（`ignore/p13/b1/gen_b1.py`）和 WPE 整帧逐像素相同（HDR 那张反射图与泛光前的场景目标逐值相同，最后只差泛光链的 ≤ 4 级）；arsenal、audiophile、fantasticcar 按日志逐帧回放，读反射图的地面逐像素相同，余下的是孤立的网格边像素（相机矩阵 1e-6 量级的差导致的覆盖翻转）。能渲染 +3 张（这三张）。
@@ -116,6 +116,17 @@
 - **`ADDITIVE`**：材质混合是 `additive` 时编译期加 `ADDITIVE = 1`（WPE 加载时加，运行中改混合不加），只有 `generic4` / `chroma4` / `foliage4` / `fur4` 的雾分支读它（雾因子乘进 alpha）。粒子组合键白名单放行它。
 - **照报**：开雾又有体积光报 `volumetrics:fog`（`volumetricsfront` 声明 `FOG`，体积光的 uniform 没接雾，语料 0）。
 - **实测**（2026-11-15，`ignore/p13/f/gen_f0.py`）：透视 / 正交 / 粒子 / 各种图像层与文本 / 组合层与全屏层 7 个工程和 WPE 整帧比，最多 12 个像素、都只差 1 级，两个关雾的工程 0 差异。
+
+## 灯的运行时（P13f2）
+
+读码见 [rea-p13-lights](../../.claude/plans/wpe-import/3-scene/phase13/rea-p13-lights.md) 第 1、3 节，实测见 [p13-REPORT](../../.claude/plans/wpe-import/3-scene/phase13/p13-REPORT.md)「P13f 的实测」L1–L4。WPE 的灯字段都没有改值回调、逐帧读，所以灯是运行时状态，不再是编译期常量。
+
+- **编译期**（`compile/lights.ts` 的 `compileLightObjects` → `bundle.lightObjects`）：每个 `light` 是字符串的对象一条（类型、遗留槽、`castshadow` / `usecookie` / `castvolumetrics`、12 个数值字段的初值，`LIGHT_FIELDS`）。数值字段绑属性登记就地目标 `{ kind: "light" }`；颜色、变换、可见性是图层字段（灯的 `color` 缺省黑）。`light`、`castshadow`、`usecookie`、`castvolumetrics` 运行中变 WPE 会重建灯的资源，挂属性 / 脚本 / 关键帧照报 `light:runtime:<键>`。
+- **状态与写入**：`SceneState.lights`（float32，同 L2 的脚本读回）；属性、关键帧（P10a 的运行时，`value:animation:light` 去掉）、字段脚本（`targetOf`）、脚本对象（`installLight`：12 个数值字段可读写，`light` 读出类型字符串，三个开关只读，写入只告警一次）都写这张表。
+- **每帧**（`render/lights.ts`）：V1 灯按本帧（动画、脚本之后）的状态组记录，世界矩阵与可见性沿父链（`worldMatrixOf` / `effectiveVisible`），排序键取局部 origin（L2′）；遗留灯三个数组按**上一帧末**的状态写（WPE 在动画与脚本之前写，L1：晚一帧；`GpuScene` 按帧时刻换代，探针同一帧多次 `update` 不错位）。阴影图集按加载时的灯记录定尺寸。
+- **选灯的「带阴影」**：看用户阴影档 ∧ `castshadow`，不看 `lightconfig` 有没有阴影计数（L3，同 P13e 的 `SHADOW`）；没有阴影计数时带 `castshadow` 的灯先写槽 0、被后面的普通灯覆盖，照 WPE。
+- **体积光**：每盏 `castvolumetrics` 的点光 / 聚光都预建绘制，每帧按可见性决定画不画、重新分段（L4：隐藏的灯不画也不开一段，隐藏中间的立方体两段并成一段），几何与常量（`volumetricGeometry`：位置与聚光方向取世界矩阵、字段取状态）每帧写。残留值配置（聚光超槽、点光没分到阴影条目）按全部可见照报。
+- **实测**（2026-11-16）：`p13f-light` 按 WPE 日志确定性回放第 153 帧，灯光数组与遗留灯数组全部对上（最大差 2e-6，日志只记 6 位小数）；`p13f-vol` 四种状态与 WPE 整帧 0 差异；`p13f-sort` 两种状态各差 2 个像素 1 级。
 
 ## 着色器翻译器 `wpesl2wgsl`
 
@@ -449,7 +460,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - 之后的变化：同一张场景改属性重编译时宿主在同一设备上换场景，画面一直是旧场景直到新场景就绪，`ImageContent` 不回到加载态，也不闪缩略图。改属性后不能渲染了就退回预览图，退回后又能渲染了就切回实时画面。`ready` 每个目标只发一次。
 - **样式**：壁纸样式按 Kabegame 语义生效，几何同图片层（`render/layout.ts` 的 `scenePlacement`）：`fill` 等比盖满、`fit` 等比放进、`stretch` 拉满、`center` 一个场景像素对一个布局 CSS 像素（iframe 里的 CSS 像素，按画布的 `pixelRatio` 换算；放不下就居中裁，预览缩小显示时构图与桌面相同）、`tile` 等比放进后居中重复。WPE 的 Free 不做。宿主画布始终铺满 iframe，只有上屏这一步变（视口加 `offset + uv * scale`，`tile` 换重复采样器），场景本身不重画，改样式不重编译、暂停时也会补画一帧。样式走 postMessage（`wpeSceneStyle.ts`，字面量在宿主 `sceneStyle.ts` 另有一份，测试比对）：宿主启动时请求一次，变化时 `WpeSceneView` 主动推。
 - **留白颜色**：`fit` / `center` 空出的区域整屏清成 `schemecolor`，不是 `clearcolor`，这和 WPE 一致：对齐为 fill(1) / center(3) / free(4) 时用它代替清屏色（`(alignment & ~2) != 0`，`0x14017fc4c`，实测 `alignment=1` + `schemecolor="1 0 0"` 背景整片变红）。WPE 的优先级是用户值 > `config.json` 的 `general.defaultproperties.schemecolor` > 工程值 > 灰色 `0.5 0.5 0.5`；我们从宿主的属性全集取，用户值已并入，`defaultproperties` 不读（本机没有这个键），灰色兜底照搬。值原样当 0…1 的 RGB，不做颜色空间转换，alpha 为 1。作者建工程时编辑器按素材主色填 `schemecolor`（`getDominantColorFromFile`），所以留白通常和画面配套。用户改色走属性增量，就地生效。退回预览图时留白不是这个颜色，Stage 没有它。
-- **指针**：`fill` / `stretch` 仍取窗口归一化坐标（同 WPE；P4c 步骤 2 补测确认窗口和场景比例不同、WPE 居中盖满裁切时，`g_PointerPosition` 仍是窗口坐标）；其余样式画面不跟窗口对齐，`scenePointer` 换算到场景上，光标效果才落在画面上，留白处的值在 0…1 之外，`tile` 按所在那一块算。WPE 在这些对齐下怎么算没有查过。粒子控制点的跟随点在所有样式下都按铺放反算（`sceneCursor`），和 `g_PointerPosition` 只在 `fill` 下不同，见「粒子（P4c）」的「指针」。过渡（fade / slide / zoom）对 scene 层整层生效，曲线与 web 层相同。
+- **指针**：`fill` / `stretch` 仍取窗口归一化坐标（同 WPE；P4c 步骤 2 补测确认窗口和场景比例不同、WPE 居中盖满裁切时，`g_PointerPosition` 仍是窗口坐标）；其余样式画面不跟窗口对齐，`scenePointer` 换算到场景上，光标效果才落在画面上，留白处的值在 0…1 之外，`tile` 按所在那一块算。WPE 在这些对齐下怎么算没有查过。粒子控制点的跟随点在所有样式下都按铺放反算（`sceneCursor`）；`fill` 且窗口与场景比例不同时改用窗口指针与裁过的 `P·V` 反投影（P6c 修复 2，见「交互（P6c）」的「`fill` 裁切」），和 `g_PointerPosition` 只在 `fill` 下不同，见「粒子（P4c）」的「指针」。过渡（fade / slide / zoom）对 scene 层整层生效，曲线与 web 层相同。
 - **`paused` / `interactive`**：由 `WpeSceneView` 经音量消息的 `paused` 交给垫片，垫片调用宿主的 `setPaused`（停帧冻结时钟）；`interactive` 控制 iframe 指针事件。
 - **调试快照**（桌面 `Wallpaper.debugState()`）：`media` 增加 `"scene"`，`sceneFallback` 是当前层显示不了的原因。`delegatesPing()` 逐层转问（`ImageContent` → `WpeWallpaperContent`），宿主垫片首次请求音量后把 ping 交给宿主；未启动时仍由应用页应答。
 
@@ -612,8 +623,8 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 - **首次加载**：按脚本表顺序逐段求值，再按顺序更新 JSON `scriptproperties`（其中 `{user}` 已解析为当前属性值）并调用 `init(value)` 写回；`init` 之后、首帧之前以属性全集为增量走一次直接绑定（`script/initialApply.ts` 的 `applyScriptedProperties`，宿主 `beforeFirstFrame` 与 dev 探针共用，用 `applyChanges` 同一份属性表、含 WPE 内置项）：编译期不挂脚本的字段本来就取属性值，挂脚本的字段取 JSON 的 `value` 给 `init`（`init` 与写回都拿到它），这一次绑定再把属性值盖上去并忘掉脚本记下的 `init` 写回（2026-11-14 修复：此前挂脚本又绑属性的字段停在 JSON `value`，如 `3637191856` 的「Show」打开后时钟仍隐藏）；目标被 `needsRecompile` 挡下或属于重编译类的条目忽略（编译期已按当前属性编过，不再触发重编译）；重编译时同一规则只补脚本没有写入记录的目标，有记录的照脚本最近一次写回重放；之后才是 `updateScriptProperties` 与 `applyUserProperties`；首帧先推进计时器、逐段调用 `update(value)` 并写回，再同步 `SceneState` 到 GPU、渲染，最后报 `ready`。
 - **属性增量**：在两帧之间按「直接绑定 → `updateScriptProperties` → `applyUserProperties(增量)`」处理，下一帧生效，`init` 不重跑。只有同时带 `type` 和 `value` 的项会传给 `applyUserProperties`；`engine.userProperties` 读累计全集，`init` 里就是（含 WPE 的 14 个内置项，同 WPE）。交给脚本的这两个对象（`applyUserProperties` 的参数、`engine.userProperties`）键按字节序排（大写 < `_` < 小写，`compile/bindings.ts` 的 `scriptPropertyEntries`），与声明顺序、`order`、是不是内置项都无关（2026-11-15 `p3am-order` 实测）。用户直接绑定覆盖旧脚本写入时撤销该目标的重放值。暂停或 `document.hidden` 时不推进帧脚本和计时器；恢复后继续。
 - **返回值与写回**：`init` / `update` 的非 `null`、非 `undefined` 返回值按目标类型转换：布尔只收布尔，数字可展开为向量各分量，向量读取 `x` / `y` / `z` / `w`，角度由度转弧度；类型不符不写，字符串目标目前不写。可写图层变换、透明度、颜色、可见性、亮度、材质常量、effect `visible`、泛光开关与参数、`GENERAL_FIELDS` 的字段；`hdr` 等重编译目标仅在值变化时请求重编译。宿主用 `scriptOverrides` 按稳定路径覆盖 Worker 的编译输入，同一时刻最多一项在途，期间再变化则下一轮合并。返回值写到 `text`、`maxwidth` 等不支持目标时只对该段告警一次，不写画面；这类运行期告警不进 `unsupported`（脚本里直接访问 `thisLayer.text` 这类未实现字段，由下面的「脚本 API 检查」在编译期报）。
-- **错误与保留**：模块导入或求值失败，整段不调用；回调抛错只禁用该段的这个回调，计时器抛错只取消该计时器，其余继续。单个回调超过 15 秒时，等它返回后停掉本场景全部脚本并保留已写画面；死循环仍可能卡住宿主，由既有 ping / 看门狗处理。`console.error` 每段每分钟最多向应用日志报 10 条，超出的数量随下一条可上报日志附带。跨重编译保留 realm 与脚本状态，新 `SceneState` 首帧前由 `replayWrites()` 重放脚本最后一次写入。有脚本时，所有**带材质 pass** 的图层即使初始隐藏也预建 GPU 资源，编码时仍按当前可见性跳过。
 - **数值是单精度**（2026-11-14 补测，`ignore/p3b-f32`）：WPE 交给脚本的数都是 float32，`init` / `update` 的入参（vec2 / vec3 / float、材质常量）、`thisLayer.<字段>` 与从别的图层读的字段、`size`、材质对象的 `thisObject.<键>` 都是（`100.1` 读成 `100.0999984741211`）。`SceneState` 照旧存 double，只在脚本读取时取单精度（`script/f32.ts`）：每次读都取一次，「读 → 改 → 写回」每一轮和 WPE 同值，累加逐帧逐位相同。角度读写都是 f32 乘法：读 `f32(f32(弧度) × f32(57.29578))`，写 `f32(f32(度) × f32(0.017453292))`（double 除法、读结果再取 f32、× π/180、写回 `f32(度 × 0.017453292)` 等都被实测排除）。入参取单精度不分目标；`thisObject` 读 general、泛光、声音 `volume`、粒子实例覆盖时还是 double（没实测）。
+- **错误与保留**：模块导入或求值失败，整段不调用；回调抛错只禁用该段的这个回调，计时器抛错只取消该计时器，其余继续。单个回调超过 15 秒时，等它返回后停掉本场景全部脚本并保留已写画面；死循环仍可能卡住宿主，由既有 ping / 看门狗处理。`console.error` 每段每分钟最多向应用日志报 10 条，超出的数量随下一条可上报日志附带。跨重编译保留 realm 与脚本状态，新 `SceneState` 首帧前由 `replayWrites()` 重放脚本最后一次写入。有脚本时，所有**带材质 pass** 的图层即使初始隐藏也预建 GPU 资源，编码时仍按当前可见性跳过。
 
 - **持久存储**：WPE `localStorage` 存在宿主 `file:` 来源的浏览器 `Storage` 里，键前缀 `kabegame:wpe-scene:ls:<图片 id>:<g|s>:`，所以场景之间、场景与网页壁纸互相看不到，但共用这个来源的配额。值按 JSON 存取，超配额抛错，由回调包装禁用那一段。`LOCATION_*` 的数值是推断的 0 / 1，脚本拿到的是不透明的值。「清空脚本存储」（只在预览的右键菜单与工具条）只清当前场景，清完重建 realm，`init` 重跑；没有宿主存活时广播没人收、不生效，所以画廊的右键菜单里没有这一项。
 - **音频缓冲**：`engine.registerAudioBuffers(16 | 32 | 64)` 只能在模块顶层调，返回 `{ left, right, average }`。宿主第一次收到注册时订阅 `WpeMediaHub`，订阅方式同网页壁纸，Windows 与 macOS（14.2+）有数据源；每帧原地写，脚本持有的数组不变。分辨率 n 的每段取对应 64 / n 个原始段的最大值，含义是推断。着色器的 `g_AudioSpectrum*` 读同一份场景频谱（P11a，见「音频频谱 uniform（P11a）」）。
@@ -1015,7 +1026,7 @@ P4a、P4b 的粒子系统是封闭的：控制点 0 当单位阵，粒子都在�
 |---|---|---|
 | 指针点 | `current = base` 后整体覆盖平移，`offset` 被丢弃，3×3 是单位阵（不吃实例覆盖）。本地系统乘 `inverse(W)`（和 `flags 2` 共用一次求逆，`W` 奇异时平移写 NaN），世界系统直接是 `(X, Y, 0)`、不乘 `W`。用本帧的指针 | 读码 1.6；实测：对象 `scale 2` 时世界组和本地组的出生点正好差 100（本地组的 (100, 0) 经对象放大成 200），`angles 0.7`、`scale 2` 的本地组偏移和预测一致；补测：跟随点和当帧指针换算的值差 ≤ 0.02，和上一帧的差几十像素 |
 | 反投影（`pointerScenePoint`） | 照 WPE 逐步 float32：`x = 2px − 1`、`y = 2(1 − py) − 1`，用场景的正交 `P·V`（`sceneViewProjection`，不裁切）的逆，把 NDC z = 0 的点反投影；1920×1080 的场景就是 `(px·1920, (1 − py)·1080)`。求逆没按 float32 复刻，回放里 y 最大差 6.9e-5 | 读码 1.6；实测：指针 (1.4115, 0.7398) 那一帧粒子出生在 (2810, 281)，y 不翻转的式子差 518；光标在窗口外照样外推 |
-| 光标下的场景纹理坐标（`render/layout.ts` 的 `sceneCursor`） | 画布指针按当前样式的铺放反算：<br>- `fill`：等于 WPE 把居中盖满裁切做进投影的结果，和 WPE 一致；<br>- `fit` / `center`：Kabegame 自己的样式，按同一原则，留白处线性外推（不钳制）；<br>- `stretch`：恒等；<br>- `tile`：取所在那一块（小数部分） | 补测：1920×800、1440×1080 窗口下 WPE 的跟随点都是 `inverse(P·V)` 作用在窗口指针上，即光标下的场景点，朴素换算差 12–45 像素 |
+| 光标下的场景纹理坐标（`render/layout.ts` 的 `sceneCursor`） | 画布指针按当前样式的铺放反算：<br>- `fill`：等于 WPE 把居中盖满裁切做进投影的结果，和 WPE 一致（窗口与场景比例不同时反投影不再经它，改用裁过的 `P·V` 与窗口指针，见「交互（P6c）」的「`fill` 裁切」；比例相同时仍走这里）；<br>- `fit` / `center`：Kabegame 自己的样式，按同一原则，留白处线性外推（不钳制）；<br>- `stretch`：恒等；<br>- `tile`：取所在那一块（小数部分） | 补测：1920×800、1440×1080 窗口下 WPE 的跟随点都是 `inverse(P·V)` 作用在窗口指针上，即光标下的场景点，朴素换算差 12–45 像素 |
 | 和 `g_PointerPosition` 的关系 | 不是一个量。`g_PointerPosition` 照 P2a 不变：`fill` / `stretch` 是画布归一化坐标（补测：WPE 裁切时也仍是窗口坐标），其余样式换算到场景上（`scenePointer`）。两者只在 `fill` 下不同 | 补测 |
 | 透视粒子与透视场景 | 透视粒子（系统 `flags & 4`）不用另算：WPE 模拟时栈上是场景的正交投影，透视粒子的 z = 0 平面和正交画面重合。透视场景当时（P4c）照报，所以 `P·V` 只有正交一种；P5d 起透视场景能渲染，透视粒子（`flags & 4`）在透视场景里照报 `camera:perspective:particle`。P5a 起它带抖动与缩放、不带视差，而且是上一帧交给场景的相机，见「相机：视差、抖动与缩放（P5a）」的「一帧里的顺序」 | 读码 1.6；P5a 实测 `p5a-shakepar`、`p5a-zoomx*` |
 
@@ -1670,7 +1681,8 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
   - `bgindex` 只在有全局调色板、非 0、不越界时保留；首帧（含重新开始）只在本帧没有透明位时填背景；
   - disposal 3 恢复两帧之前的画布（没有时按 2 处理），alpha > 128 才写；
   - 只在被画到时推进、每个渲染帧最多前进一帧：剩余时间按 float32 减本帧 `g_Frametime`，≤ 0 才换下一帧，超出部分带到下一帧；延时 = 10 × GIF 的 delay 毫秒，不设下限；无限循环；图层隐藏、壁纸暂停时不推进、也不补时间。
-- **视频**（`.mp4 .wmv .avi .m4v .mov .mkv .webm`）：P9a 的 `VideoTexturePlayer`，和 WPE 用的是同一个播放器类。循环、不出声、自己的时钟、30 帧没画到就暂停、卡住兜底（P9c）都同场景视频。纹理按裁后尺寸建，裁切写在 `copyExternalImageToTexture` 的源矩形上，几何 UV 不变。第一帧最多等 10 s，建不起来用缺省纹理（不是透明）。面板只给 `.mp4`，别的扩展名只可能来自手输，同样认。
+- **视频**（`.mp4 .wmv .avi .m4v .mov .mkv .webm`）：和场景视频同一个播放器 `CodecVideoPlayer`（P9d，见「视频纹理」），循环、不出声、自己的时钟、30 帧没画到就暂停都同场景视频。先整段读成 Blob（`file:` 响应没有长度，拆包要先知道总长；Chromium 把大 Blob 换到磁盘），再按切片读（`blobRangeReader`）。纹理按裁后尺寸建，裁切写在 `copyExternalImageToTexture` 的源矩形上，几何 UV 不变。第一帧最多等 10 s，建不起来（含 `.wmv`、`.avi`、`.webm` 等拆不了的封装）用缺省纹理（不是透明）。面板只给 `.mp4`，别的扩展名只可能来自手输，同样认。
+- **用户视频的颜色**（`ColorRule` 的 `"user"`）：矩阵照码流标签（`colr` → H.264 SPS 的 VUI），没标时按高度：高 > 576 用 BT.709，否则 BT.601，宽度不参与（P9d 步骤 4 在 WPE 实测的分界：720×576、1280×480 → 601，720×578、480×720、1024×700 → 709）。WPE 读用户视频不看标签、只按高度（480² 标 709 → 601、720² 标 601 → 709），算 WPE 的缺陷，我们照标签（有意不同：用户视频不在语料里，没有画面依赖它）。原色、传递函数、范围与色度位置同场景视频。
 - 扩展名转小写再判断（`mediaKind`）。GIF 与视频按值共用一份（引用计数），每个纹理名各一份帧状态；不进按值的解码缓存，换走再选回来从头开始（同 WPE）。
 
 **能力表**：不再整个报 `material:usertextures` / `effect:*:pass:usertextures`，按项细分照报：
@@ -1684,7 +1696,6 @@ pass 级的 `keepaspect` WPE 不读，改中性。
 **dev 探针**：
 - `host.userTextures()`：每个属性来源的当前值、状态（`ready` / `empty` / `failed` / `loading`）、解码后的整张尺寸、最近一次解码用时、已登记的纹理名，GIF 的换帧次数。
 - 确定性回放（`renderFrame`）没有宿主，自建一份来源表，按 `userProperties` 预解码、等完，并置为暂停。`gifDts`（每项是一帧的 `g_Frametime`，秒）逐帧推进 GIF；`videoTime` 也作用于用户视频。vite 的 `/render` 与 MCP `render_scene` / `host_render` 收 `gifDts`。
-- 屏外宿主要用视频时，主窗口不能最小化或隐藏：宿主 iframe 的 `document.hidden` 跟着为真，Chromium 推迟媒体加载，`<video>` 停在 `readyState` 0。探针遇到这种情况直接报原因（`checkVideoVisibility`）。
 - `host.renderFrame(time, key)` 给了 `key` 时存读回的 RGBA，用来按区域和 WPE 比运行中改值后的画面。
 
 **验收**（1920×1080，WPE 抓帧 `A:\p11b\`）：
@@ -1696,7 +1707,7 @@ pass 级的 `keepaspect` WPE 不读，改中性。
 - **解码是异步的**：WPE 在下一帧开头同步读文件、建纹理，同帧画出；我们解码完成后的下一帧才换上，大图晚几帧（6000×3000 解码几十毫秒）。首次加载与确定性回放都等解码完，不受影响。
 - **JPEG 的色度上采样**：WPE 的 FreeImage 3.18 自带的 libjpeg 与浏览器的 libjpeg-turbo 不同，色块边界上差到几十级，照片上很小。
 - **16 位灰度 PNG**：FreeImage 按 `[min(255, 最小值), 最大值]` 拉伸，浏览器只给 8 位。
-- **标清、未标色彩信息的视频整体偏色**：Chromium 识别成 `smpte170m`（矩阵对），`copyExternalImageToTexture` 另做 SMPTE-C → sRGB 的原色转换；WPE 的 Media Foundation 只做矩阵。场景视频纹理（P9a）同样受影响。
+- **标了色彩标签的用户视频**：WPE 不看标签（只按高度），我们照标签，标签和高度给出的矩阵不同时颜色不同（有意不同，见「解码」）。色度上采样的纵向位置同场景视频的已知差异。P9d 之前标清、未标视频的整体偏色（Chromium 的 `<video>` 拷贝另做 SMPTE-C → sRGB 原色转换）随 `<video>` 一起消失。
 - **视频源矩形落在半像素**：WPE 的视频处理器重采样，我们只按整像素取。HDR 视频（PQ / HLG）不做，照常 RGBA8；槽 0 换成用户视频时 `getVideoTexture()` 不做。
 - 暂停期间改值新建的 GIF，第一次画到时用的是上一个实时帧的 frametime。
 - 几乎不可压缩的大 GIF 解码开销高（1.1 MB 一帧约 29 ms）。
@@ -2308,7 +2319,7 @@ P5d 改的是整场的投影与深度，分三块，依赖方向是单向的：�
 | 透视覆盖 | 透视粒子与 `perspective: true` 的图像层 / 模型在相机 V 上做：旋转不变，平移换成 (t.x − W/2, t.y − H/2, −d)，d 按含缩放的可见高算（`zoom 2` 时减半） | 实测 `p5d-camo-pp`（原点投到 NDC (−0.5, −0.5)、w = d = 494.82）、`-ppr`（旋转与 `zoom 2` 都保留）；按「覆盖不看相机」会落在 (+0.5, +0.5) |
 | 视差点与抖动 | 视差点的 eye.xy 是相机的 eye.xy + s；抖动加在相机的 eye 上 | 实测 `-par`（5 个色块的 MVP 与 `o = amount·depth·(origin − P)` 差 ≤ 1.2e-7）、`-shake`（差 ≤ 1.3e-7） |
 | 透视场景 | 来源姿态换成相机的（`perspectiveCamera` 只换 pose），fov 取相机对象的 `fov`（钳制），`zoom` 不起作用 | 实测 `p5d-camp-*`（eye (2, 0, 8)、m11 = cot 30°） |
-| 能力表 | 删 `object:camera`、`object:fov`、`object:zoom`、`object:path`、`object:queuemode`。相机对象同时带别的内容键（图像、模型、粒子、声音、文本、灯、形状）时报 `object:camera:mixed`（不进 `cameras`、不登记 `fov` / `zoom` 目标，只读 `path`）；`camera:path` 的边界（空串、不是字符串、根不是对象都报，`paths` 不是数组按空表）；`fov` / `zoom` 挂关键帧仍报 `value:animation:camera`；脚本的 `getCameraTransforms` / `setCameraTransforms` 与图层上的 `fov` / `zoom` 字段访问仍在缺口表 | 读码；语料 0 处 |
+| 能力表 | 删 `object:camera`、`object:fov`、`object:zoom`、`object:path`、`object:queuemode`。相机对象同时带别的内容键（图像、模型、粒子、声音、文本、灯、形状）时报 `object:camera:mixed`（不进 `cameras`、不登记 `fov` / `zoom` 目标，只读 `path`）；`camera:path` 的边界（空串、不是字符串、根不是对象都报，`paths` 不是数组按空表）；`fov` / `zoom` 挂关键帧仍报 `value:animation:camera`；图层上的 `fov` / `zoom` 字段访问仍在缺口表（`getCameraTransforms` / `setCameraTransforms` 由 P5e 实现） | 读码；语料 0 处 |
 | 渲染器 | `scene.ts` 新增 `objectCamera` 标志：离开相机对象时不提前返回、视图向量复位；`same` 提成模块级函数 | 变异检查（「离开相机对象时提前返回」补用例后检出） |
 
 ### 透明排序（步骤 4）
@@ -2325,6 +2336,12 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 
 ### 已知差异与只记不补
 
+- **相机挂在每帧移动又每帧被画的父对象下时，WPE 隔帧刷新相机（有意不同，2026-11-16 用户定不修）**：
+  - **WPE 的做法**：相机对象自己不被画，只在帧开头（脚本之前）按世界矩阵缓存戳（规则同 `render/worldStamps.ts`）求一次。父对象被脚本写变换时戳清 0，在脚本之后被画时重算，戳变成本帧号。下一帧开头，相机「戳 ≥ 父戳」判命中，返回上一次算的整份矩阵（平移和旋转都是旧的），于是相机每两帧才刷新一次。
+  - **我们的做法**：相机每帧用当帧的父变换。
+  - **触发条件**：相机父链上有对象每帧被脚本或关键帧移动，并且这个对象每帧被画。
+  - **依据**：`3706286085` 的复制工程（P13f 走查，`phase-13f-fog-lights.md`「走查」）。奇数帧视点与 VP 逐位相同；偶数帧 WPE 的视点 = 第 f−2 帧末的父位置 + 本帧抖动，380–396 帧 6 位小数全同。
+  - **为什么不复刻**：这是 WPE 的缓存缺陷，效果是镜头按半帧率顿挫，语料画面不依赖它。
 - **产品先按场景分辨率画再缩**（`FINAL_CHECK.md` 已登记，不复刻）：正交场景里场景分辨率 ≠ 窗口分辨率时，锐利边缘（月亮轮廓、图层硬边）缩小采样有差，最大差 35–90；放大采样（`zoom` 2 / 2.87）时最大差只有 12。dev 探针按窗口尺寸画时（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）：`3605722997` 三个相机整帧 0 差异；`3462279189` 四组每帧剩 49–117 个像素差 1，地板 effect 的 `g_EffectTextureProjectionMatrixInverse` 原先差 1 ulp（求逆的写法），2026-11-15 改成 WPE 的单精度求逆后常量逐位相同、这些像素一个没少（[phase-f32-inverse](../../.claude/plans/wpe-import/3-scene/phase-f32-inverse.md)），归着色器求值的舍入，没有逐像素分开。
 - **透视场景里图像层的视锥剔除只记不补**：WPE 在透视场景对图像层做视锥剔除（相机背后与视野两侧外的剔掉，远过 farz 的照样画），正交场景不剔；着色器乘 MVP 时这些图层本来就不在画面里，没有画面差别（`p5d-imgcull`、`-imgcull-p`）。只在不乘 MVP 的着色器（如插桩 FR / CLK、`p5d-imgcull-p`）下看得出来，真实壁纸走查里 `p5d-camp-1` 的 FR / CLK 块就是这一条。
 - **槽 0 没有纹理的 fullscreen 模型**：几何不改成 2×2，WPE 用对象 `size`（`p5d-2d` 的探针层，±960 × ±540）；语料里 fullscreen 模型的槽 0 全是 `_rt_FullFrameBuffer`，没做。
@@ -2373,7 +2390,7 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 | 透视场景里脚本 `engine.canvasSize` | 照读码读到 (0, 0)，没测，语料 0 处 | 步骤 2 |
 | 跟随粒子的指针反投影 | 透视场景、带相机对象的场景里没接相机视图，`particleTrackProbe` 给了 `cursors` 时直接抛错（语料 0） | 步骤 2、3 |
 | 加载时的预热与视差点初值 | 不看相机对象；WPE 这时的 eye 没测（`-par` 用的是 delay 0），带相机对象的模板场景开场可能不同 | 步骤 3 |
-| 相机对象的其它写法 | `object:camera:mixed`（语料 0）、`camera:path`（22 个相机都是空表）、`getCameraTransforms` / `setCameraTransforms` 与图层 `fov` / `zoom` 访问（语料 0 处）、`fov` / `zoom` 挂关键帧（`value:animation:camera`）；每个相机对象多读一次 `path` 文件，计进请求数 | 步骤 3 |
+| 相机对象的其它写法 | `object:camera:mixed`（语料 0）、`camera:path`（22 个相机都是空表）、图层 `fov` / `zoom` 访问（语料 0 处；`getCameraTransforms` / `setCameraTransforms` 由 P5e 实现）、`fov` / `zoom` 挂关键帧（`value:animation:camera`）；每个相机对象多读一次 `path` 文件，计进请求数 | 步骤 3 |
 | 步骤 3 提交树的画面哈希 | `5889b490` + 步骤 3 没重测：共享宿主产物当时正被别的会话的临时插桩使用；变基前后步骤 3 的增删行按文件逐行相同 | 步骤 3 |
 | `3706286085` 的透视走查 | 做不了：它的相机都挂在带骨骼动画的模型下（`CameraBoneMoveMesh` 等，`mdl:skeleton` / `mdl:animation` 没实现），相机的世界矩阵依赖这些模型，复制工程去不掉；换成 `3453730450` | 步骤 3 补充 |
 | 走查里去掉的内容 | `3462279189` 的人物（纹理标志 0x22 视频，视频时刻对不上，属 P9a 的特性）与 `3605722997` 的主图（视频）；走查里的 `shared.*` 写入方删掉了，两边读到的都是 undefined | 步骤 3 补充 |
@@ -2391,6 +2408,34 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 - 步骤 2：`d2/gen_d2.py`（`p5d-tilt`）、`mk_layers.py`（neon_sunset 逐层拆开）；步骤 3：`d3/gen_d3.py` / `gen_d3b.py`、`ana_par.py`、`ana_s4k.py`、走查 `walk_sv.ts`、`peek_draws.py`（WPE 侧）/ `peek_trace.py`（我们这边）；步骤 4：`d4/gen_d4.py`、`ana_order.py`；
 - 各步的快照、补丁、变异清单（`mutate_d1.py`–`mutate_d4.py`）、语料比较与整帧比对在 `d1/`–`d4/`；
 - WPE 参照在 `A:\p5d\`。
+
+## 脚本的相机基准（P5e）
+
+WPE 的场景有两套相机字段：基准（eye、center、up、zoom，`G+0x118`…`+0x13c`）和每帧算出的当前值。每帧按「可见的相机对象 >
+镜头路径 > 基准」选来源，基准只在前两者都没有时生效。脚本的 `thisScene.getCameraTransforms()` / `setCameraTransforms(t)` 读写的是
+基准。我们把基准从编译期常量改成运行时状态 `SceneState.cameraBase`：脚本写进去，渲染器每帧求相机时读出来；重编译时随脚本写回重放恢复。
+正交场景没有相机对象时，基准改过就和相机对象走同一个 `orthographicCameraObjectFrame`（视图 lookAt、`g_EyePosition` = eye.xy +
+(W/2, H/2)、视差中心 eye.xy、总缩放 `general.zoom × 基准 zoom`）；基准是加载完成的重置值、zoom 为 1 时保留原来的快路径，现有场景
+逐字节不变。透视场景没有路径时基准取状态，zoom 不起作用。
+
+计划与实测见 [phase-5e](../../.claude/plans/wpe-import/3-scene/phase5/phase-5e-camera-transforms.md)「步骤 0 结果」；读码补充见
+[rea-p5-camera](../../.claude/plans/wpe-import/3-scene/phase5/rea-p5-camera.md)「更正与补充」。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| `get` | 每次返回新的普通对象（原型 `Object.prototype`），键序 `eye, center, up, zoom`；前三个是新的 `Vec3`，zoom 是 number。读的是基准当前值（含本帧之前 set 过的），不是路径、抖动、相机对象或 `general.zoom`；改返回值不影响基准 | dll `0x181635540`；`p5e-a` 日志 |
+| `set` | 没有参数或参数不是对象（`null` 也算不是）返回 `false`、不改；否则返回 `true`，四项各自处理：`eye` / `center` / `up` 是对象就取 x / y / z（number 转 float32，不是 number 记 0），不是对象跳过；`zoom` 是 number 才写（float32）。NaN、Infinity 照写 | dll `0x1816359e0`、`0x181620090`；`p5e-a` 第 2–8 帧 |
+| 时序 | `set` 后 `get` 当场读回；画面下一帧才变（WPE 先求相机、后跑脚本，我们的渲染器同序） | `p5e-a` 第 161 / 162 帧的 `g_EyePosition` 与方块颜色编码的帧号 |
+| 加载顺序 | 脚本 `init` 早于读 `scene.json` 的 `camera`：`init` 期间基准是构造缺省 (2,2,2) / (0,0,0) / (0,1,0)、zoom 1（`beginScriptInit`）；全部 `init` 之后正交场景 eye / center / up 重置成 (0,0,0) / (0,0,−1) / (0,1,0)，透视场景只有 JSON 里是字符串的项覆盖（`SceneCameraJson.given`），zoom 不受影响（`finishScriptInit`）；被覆盖的字段把脚本写入从重放表里去掉，重编译不复活 | `p5e-init-o` / `p5e-init-p`；exe 加载函数 `0x140186d51` 写基准 zoom 1 |
+| 相机对象 / 路径 | 有可见相机对象时基准（含 zoom）不参与；透视场景有路径时基准不参与。`set` 照样写进去，`get` 读回写入的值 | `p5e-cam`（总缩放 1.25 = `general.zoom`、`g_EyePosition` (960, 540)） |
+| dev 探针 | `probeCameraObjects` 没有相机对象时也给（图层表为空），回放每帧都经 `sceneCameraFrame`，脚本改过的基准才进探针的视图；基准没改过时结果和以前逐项相同 | 单测 `p5e-camera-base.test.ts` |
+| 缺口表 | `MISSING_SCRIPT_API.thisScene` 去掉这两项 | — |
+
+**验收**（`ignore/p5/e/`，WPE 抓帧 `A:\p5e\`）：生成工程 `p5e-a`（正交、每帧 set eye / center / zoom、`general.zoom` 1.25）与
+`p5e-cam`（有相机对象）整帧和 WPE 逐像素相同；`p5e-persp`（透视、每帧 set）屏蔽 FR / CLK 后逐像素相同；`p5e-par`（视差 delay 0.3 +
+抖动）的 `g_EyePosition` 与缩放逐位相同，只有视差点差 7e-5（日志只到第 150 帧，第 151–159 帧的 dt 是平分的，视差平滑按 dt 累积），
+120 个像素是一个方块的上下两条边。工坊场景 2887099508 的解包副本按日志回放（逐帧光标）：开场镜头随 52 号对象滑动，第 263、319、419 帧
+和 WPE 的整体位移都是 0（相位相关），剩下的差异来自樱花粒子的随机数和视频纹理的时刻。
 
 ## 图像层与材质补全（P8）
 
@@ -2545,51 +2590,60 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **dev 探针**：`__kabegameSceneProbe.host.sounds()` 给宿主音量、暂停 / 隐藏，每个声音对象的模式、当前文件、可用文件、实例状态、`T`、`Rm`、`isPlaying`、增益，以及播放器的 context 状态、淡变值、Blob 数与各元素的状态。
 
-## 视频纹理（P9a）
+## 视频纹理（P9a、P9d）
 
-视频纹理是头标志带 Video（`0x20`）的 `.tex`：一张图、一级 mip，mip 的数据就是整段视频（语料 59 段 MP4、1 段 Matroska；H.264 为主，1 段 HEVC）。WPE 用 Media Foundation 的 `IMFMediaEngineEx`（帧服务器模式）解码，每次绑定这张纹理画图时把最新一帧拷进一张普通的 RGBA8 纹理。我们照同样的结构：解码交给 `<video>`（挂在宿主页面最上层、几乎看不见，P9b 步骤 3），GPU 侧仍是普通纹理，着色器与绑定组不变。脚本经 `getVideoTexture()` 控制播放是 P9b（本节「脚本 `IVideoTexture`」）。依据：读码 [rea-p9-video](../../.claude/plans/wpe-import/3-scene/phase9/rea-p9-video.md)，实测 [p9-REPORT](../../.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md)（P9b 的补测在「P9b 步骤 0 的补测」），P9b 的计划与真机对照见 [phase-9b-script.md](../../.claude/plans/wpe-import/3-scene/phase9/phase-9b-script.md)。
+视频纹理是头标志带 Video（`0x20`）的 `.tex`：一张图、一级 mip，mip 的数据就是整段视频（语料 59 段 MP4、1 段 Matroska；H.264 为主，1 段 HEVC）。WPE 用 Media Foundation 的 `IMFMediaEngineEx`（帧服务器模式）解码，每次绑定这张纹理画图时把最新一帧拷进一张普通的 RGBA8 纹理。我们照同样的结构，GPU 侧仍是普通纹理，着色器与绑定组不变；解码自 P9d 起不经 `<video>`：宿主自己从磁盘区间拆出每一帧的压缩数据，交给 WebCodecs 的 `VideoDecoder`（显卡硬解），按自己的媒体时钟挑出当前的 `VideoFrame` 拷进纹理。脚本经 `getVideoTexture()` 控制播放是 P9b（本节「脚本 `IVideoTexture`」）。依据：读码 [rea-p9-video](../../.claude/plans/wpe-import/3-scene/phase9/rea-p9-video.md)，实测 [p9-REPORT](../../.claude/plans/wpe-import/3-scene/phase9/p9-REPORT.md)（P9b 的补测在「P9b 步骤 0 的补测」），P9b 的计划与真机对照见 [phase-9b-script.md](../../.claude/plans/wpe-import/3-scene/phase9/phase-9b-script.md)，P9d 的设计、实施与走查见 [phase-9d-webcodecs.md](../../.claude/plans/wpe-import/3-scene/phase9/phase-9d-webcodecs.md)。
 
 | 层 | 位置 | 做什么 |
 |---|---|---|
 | 编译 | `compile/tex.ts` → `SceneTexture.video` | 按 Video 标志跳过 mip 字节（最大一段 674 MiB，编译 Worker 不读视频数据，这是唯一的一道），只给视频在磁盘上的绝对区间（散 `.tex` 从文件开头算，`scene.pkg` 条目带条目偏移）。要解码时另读容器头里的时长（`video/container.ts`：MP4 的 `mvhd`、Matroska 的 `Info.Duration`，盒子只读头、`mdat` 按大小跳过，每段 2–6 次小读；场景确定退回时不读），放进 `video.duration`（P9b 步骤 1）。不报能力键：槽 0 以外同样工作，WPE 也是逐槽更新 |
-| 播放器 | `video/player.ts` | 一段视频一个：按区间 `fetch(file:)` 直接 `Response.blob()`（数据不经 JS 堆，Chromium 把大 Blob 换到磁盘）；`<video>` 静音、缺省循环，挂进宿主页面（`attachToDocument`，见下）；`requestVideoFrameCallback`、`loadeddata`、`seeked` 置新帧标志；读不到、长度不符或解码出错时标为失败、记一条 warn。脚本 `IVideoTexture` 的落点（`rate`、`loop`、`currentTime`、`duration`、`play` / `pause` / `stop`、`isPlaying`、结束回调） |
+| 拆包 | `video/demux/`（`index.ts` 的 `indexVideo` 按 EBML 魔数分派） | MP4（`mp4.ts`）读 `moov` 里的帧表：偏移、大小、显示时间（`ctts`）、关键帧（`stss`），扣编辑列表的 `media_time`（只认「没有」或「一段、`media_time ≥ 0`、速率 1」）；Matroska（`mkv.ts`）按 4 MiB 一块顺序扫 Cluster、只记块头，时间扣全部帧里最小的显示时间。产出同一个 `VideoTrackIndex`，帧时间与 ffmpeg 的 pts 逐帧相同。拆不了（分片 MP4、`stz2`、lacing、`ContentEncodings`、编码不是 H.264 / HEVC、表不一致等）给出原因、不抛错。`config.ts` 给 codec 串、`description` 与色彩空间（见下「颜色」） |
+| 播放器 | `video/codecPlayer.ts`（`CodecVideoPlayer`） | 一段视频一个：按区间 `fetch(file:)` 读（散文件与 pkg 条目同样，偏移加 `source.start`），先 `indexVideo`，之后按解码顺序约 4 MiB 一块预读、至多两块在手；`VideoDecoder` 只解不播，媒体时钟、挑帧、跳转、流控（解码队列 + 已解出未显示的帧合计不超过 8）都在这里；读不到、拆不了包、配置不支持、解码出错时标为失败、记一条 warn。脚本 `IVideoTexture` 的落点（`rate`、`loop`、`currentTime`、`duration`、`play` / `pause` / `stop`、`isPlaying`、结束回调）；`seeked()` 给 dev 探针与用户视频等跳转完成 |
 | 脚本 | `script/api.ts`（`getVideoTexture`）、`script/runtime.ts`（`callFor`） | P9b：每个图层的 `getVideoTexture`，包装对象按 WPE 的成员与类型，经宿主按视频区间键现取播放器；结束回调在登记它的脚本上下文里调 |
 | 场景视频表 | `video/sceneVideos.ts`（实现 `VideoSink`） | 帧号、30 帧规则、宿主暂停；跨重编译按视频区间复用播放器（改属性不重读、不打断） |
-| GPU | `render/textures.ts`、`render/scene.ts`（`copyVideo`）、`render/renderer.ts` | 视频纹理建成初值全 0 的 `rgba8unorm`、一级 mip，绑定组建一次不再变；每个 draw 建时记下着色器真正绑定的视频纹理，编码时画到它就问 `VideoSink.drawn`，有新帧就 `copyExternalImageToTexture`（队列操作，先于这一帧的绘制）；渲染器每个实时帧开头调 `beginFrame`（补画帧不调） |
+| GPU | `render/textures.ts`、`render/scene.ts`（`copyVideo`）、`render/renderer.ts` | 视频纹理建成初值全 0 的 `rgba8unorm`、一级 mip，绑定组建一次不再变；每个 draw 建时记下着色器真正绑定的视频纹理，编码时画到它就问 `VideoSink.drawn`，有新帧就 `copyExternalImageToTexture(VideoFrame)`（尺寸取显示尺寸，队列操作，先于这一帧的绘制；帧由播放器持有、下次替换时关掉）；渲染器每个实时帧开头调 `beginFrame`（补画帧不调） |
 | 宿主 | `host.ts` | `loadVideos` 紧挨声音、不等 GPU；暂停与文档隐藏都转给 `setPaused`；第一次 ready 之前等可见图层的视频出第一帧（最多 2 s，免得淡入时看见透明的几帧）；重编译期间按视频区间把旧场景的纹理下标换算到新表；脚本的落点按 `scriptBundle`（脚本正在用的那份）找图层槽 0 的视频，经 `SceneVideos.playerFor` 按区间键取；「清空脚本存储」重启脚本时 `SceneVideos.resetScriptState`（清结束回调、`loop` 真、`rate` 1、想放，不 seek）；退回预览图与销毁时释放 |
 
 **播放规则**（WPE 实测）：
-- 加载即播放，`loop` 缺省为真，视频用自己的时钟（不读 `g_Time`）；循环点每轮停约 3 ms（Chromium 约 4 ms）。
-- 不出声：WPE 的场景视频纹理带 `FORCEMUTE` 创建，`videoaudiooutput` 不起作用。
+- 视频用自己的时钟（不读 `g_Time`），`loop` 缺省为真。我们的时钟在「在放」时按墙钟 × 速率前进：想放、宿主没暂停、没空闲、没结束，且出了第一帧、已被画到过一次（第一次画到时起步，宿主 ready 前已等到第一帧，所以视频和场景同时开始）。
+- 不出声：WPE 的场景视频纹理带 `FORCEMUTE` 创建，`videoaudiooutput` 不起作用；我们只解视频轨。
 - 纹理连续 30 个渲染帧没被画到（图层不可见、被剔除、所在材质不画）就暂停，再被画到时从暂停处续放、不追赶，期间 `isPlaying` 仍为真；加载时就不可见的图层也先播约 30 帧。不看 `visible` 本身。
 - 宿主暂停（含文档隐藏）时全部暂停，恢复时全部放（WPE 恢复时连脚本暂停过的也放）。
-- 第一帧之前与解码失败时纹理全 0（alpha 也是 0），图层透明，场景不退回。
+- 第一帧之前与失败时纹理全 0（alpha 也是 0），图层透明，场景不退回。
 - 脚本暂停或停止期间不取帧：seek 读回的时间立即变，画面不变，到 `play()` 那一帧才换成新位置；`stop()` 后画面停在 stop 那一刻的帧（P9b）。空闲暂停（30 帧没画到）期间 `wantPlay` 仍为真，照常取帧。
-- 时长是容器头里的（MP4 `mvhd`，不看编辑列表），时钟走到它才绕回或结束，结束时读到的时间正好等于它（P9b）。
+- 时长是容器头里的（MP4 `mvhd`），时钟走到它才绕回或结束，结束时读到的时间正好等于它（P9b）；编辑列表两边都认（WPE：P9 测试片带 2 帧的 `media_time`，显示帧号比当前时间 × 60 小 0.09–1.39，不认会再小 2 帧）。
 
-**元素挂进宿主页面**（P9b 步骤 3，`attachToDocument`）：每个 `<video>` 挂在宿主页面最上层，左上角 2 px、1% 不透明、不接收指针，多段视频横向错开 2 px，释放时撤下。看不见的视频由 Chromium 视频合成器的后台渲染驱动，约 250 ms 才更新一次当前帧，暂停一两秒后恢复，第一帧要等约 255 ms。「看不见」有三种：不挂 DOM（P9a 的做法）、`opacity: 0`、被不透明的场景画布整个盖住（合成器把它裁掉不画）。脚本切换多段视频、30 帧空闲暂停后恢复都会碰到。放到最上层之后，预览里 15 次恢复都在 5–12 ms 内出第一帧；混进画面的只有左上角 2×2 像素，8 位输出里最多差 3 级。dev 探针的确定性回放（`dev/videoProbe.ts`）用的元素不播放、只 seek，不挂。
+**播放器的内部**（P9d，`CodecVideoPlayer` 文件头有全文）：
+- **时钟与时间戳**：喂进解码器的时间戳 = `(n × 时长 + 样本显示时间) × 10⁶`，n 是本次跳转起喂到第几遍；循环时不 flush、接着喂下一遍，媒体时钟按展开的时间走、绕了几遍记在 `loops`，所以循环点无缝。`loop` 为假时喂到结尾 flush 一次，时钟停在时长、`ended`。
+- **挑帧**：显示时间 ≤ 媒体时间的最新一帧成为当前帧；被越过的直接关掉、计入丢帧。
+- **跳转**（脚本 `currentTime`、`stop`、结束后 `play`、卡住重置）：`reset()` + 重新 `configure`，从显示时间 ≤ 目标帧的最近关键帧喂起，丢掉早于目标帧的输出，目标帧到了才换当前帧（之前一直显示旧帧）。所以取到的就是「显示时间 ≤ 目标的最新一帧」。
+- **速率**：时钟是自己的，非负有限数都收（旧 `<video>` 受 Chromium 的 [0.0625, 16] 限制）；负数按 0（WPE 负数让工作线程卡死，不复刻）。
+- **卡住**：画到时看，在放（或在跳转）、没有已解出的帧、解码器有待解的输入、喂帧没在等读盘，且 2 s 没有任何输出，就 reset 并从当前媒体时间重新跳转，记 warn、计数 `stallResets`。P9c 记的 Chromium `<video>` 硬件解码静默卡住（`DECODER_UNDERFLOW`）随 `<video>` 一起不再适用；硬件解码的输出帧池有限，流控与「越过即关」保证播放器不长时间握着帧。
+- **主窗口隐藏**：WebCodecs 不经 Chromium 推迟隐藏页面媒体加载的那条路（`DeferMediaLoad`），隐藏时照常解（P9d 步骤 4 实测：40 ms 出第一帧）。
 
-**播放卡住的兜底**（P9c 步骤 1，`VideoTexturePlayer.watchStall`）：
-- **现象**：Chromium 的硬件解码（`D3D11VideoDecoder`）长时间放 4K60 视频后会静默停住。元素仍在放、没有错误，`readyState` 停在 2，时间与解码帧数不再变。13586（4K60 H.264、40 Mbps）的预览 7–14 分钟遇到一次。卡住时 renderer 报 `BUFFERING_HAVE_NOTHING`，原因 `DECODER_UNDERFLOW`。Chromium 没有停顿超时，`stalled` 对 Blob 不发。原地跳一下会清空渲染队列、复位解码器，约 75 ms 恢复。
-- **判定**：每次画到这张纹理时看一眼。播放器要求元素在放、`wantPlay`、非宿主暂停、元素没暂停没结束没在跳转、速率 > 0、`readyState < 3`，而时间 2 s（墙钟）没前进，就算卡住。暂停结论变化、超过 2 s 没画到时重新计时。
-- **处理**：先原地跳（不经脚本的 setter，不影响结束回调）。连续两次没救回就按同一个对象地址重新加载、回到原时间；重新加载期间脚本读到的是要设回的时间，结束判定暂停。重新加载三次仍不行就停手，直到时间重新前进。每次处理记一条 warn，`host.videos()` 的 `stallSeeks` / `stallReloads` 计数。
-- **未证实的根因**：解码器拿不到空闲输出缓冲。可疑的占用方是 WebGPU 零拷贝导入或合成器持有的当前帧，没做对照实验。用户纹理的视频（`usertex/sources.ts`）用同一个播放器，一起兜底。
+**颜色**（P9d 步骤 4 走查：抓 WPE 的视频纹理，从原始 YUV 按不同写法重建，看哪种能逐像素还原；`video/demux/config.ts`）：
+- WebCodecs 不读码流的色彩标签、缺省一律按 BT.709，色彩空间由我们给：原色与传递函数恒报 bt709，即不做色域与传递函数转换（WPE 不做）；范围取码流的（`colr` → VUI → limited）。
+- **场景视频的矩阵恒为 BT.709**：WPE 不看标签、也不按分辨率。标 bt709 的 1080p、1440p HEVC、Matroska，以及标 bt470bg 的 540p（3400241651）与 4K（3812007032）都是 709；后两段按 601 重建最大差 7 与 22。语料画面依赖它，照做。
+- 用户视频见「用户纹理」的「解码」：照标签，没标时高 > 576 用 709（WPE 不看标签记为缺陷，有意不同）。
+- **色度上采样的位置**（已知差异，不照）：两边都是双线性插值（权重 9/16、3/16、3/16、1/16），横向位置相同；WPE 纵向第 k 个色度样本在亮度第 2k − 0.5 行，Chromium 拷 `VideoFrame` 时在标准的 2k + 0.5 行。按各自的位置重建，WPE 四段都只差 1、我们最大差 2；两边之间的差全部来自这一处：3823859141（1:1）整帧 58% 像素不同、平均 1.22、最大 45，3816870245 缩到一半后平均 0.48、最大 17，3400241651 的合成 RT 最大 22。要照它得 `VideoFrame.copyTo` 读回 YUV、自己的着色器转换，每帧多一次显存读回，用户定不做。P9a 记的「色度上采样插值不同」就是这一处。
 
 **已知差异**：
-- 色度上采样：4:2:0 视频还原成 RGB 时，Chromium 与 Media Foundation 的插值不同，颜色剧烈变化的边缘差到几十级；测试工程不缩放时 98% 的像素差 ≤ 1、99 分位 7，整体没有偏色。没标颜色的高清视频两边都按 BT.709 换算。
-- 时间轴：两边对容器编辑列表的处理可能不同，同一时刻可能差几帧（语料一段约 67 ms），实时播放看不出。
-- 时长与循环点：`duration` 已取容器时长（P9b），但播放仍由 Chromium 的时钟管，它在自己的时长处（各轨编辑之后）绕回或结束，WPE 走到 `mvhd` 的时长。语料 59 段 MP4 里有 21 段 Chromium 早 22–40 ms（Adobe 导出的、音轨被编辑列表截短的），其余只差 `mvhd` 的毫秒取整。结束时读到的时间仍报容器时长；不补这段时间（P9b 决定 1，用脚本的场景都不靠它）。
+- 色度上采样的纵向位置，见上「颜色」。
+- 时钟（WPE 的视频时钟在媒体引擎自己的线程上，和渲染帧之间有延迟与抖动，每帧显示哪一帧本身不确定；走查回放把视频时刻当输入还原，画面比较不受影响）：
+  - 显示的帧：WPE 落后当前时间 0.09–1.39 帧（均值 0.84），我们 0.07–0.81（均值 0.37）。WPE 多出的约半帧是帧服务器 `TransferVideoFrame` 的转交延迟。
+  - 循环点：WPE 每轮停约 2.6 ms（标准差 2.9 ms），我们不停。
+  - 开场：WPE 视频时间 ≈ 场景时间 − 36.5 ms（媒体引擎的启动延迟），我们 ≈ 场景时间，早约 2 帧（60 fps）。
+  - 场景时间与视频时间的步长：WPE 抓帧那几帧多走 / 少走约 11 ms，我们按墙钟。
+- 拆不了包（分片 MP4 等，语料 0 段）时图层透明；WPE 的媒体引擎能放。
 - 离当前位置不到一帧的 seek：WPE 忽略（暂停在 0.2867 时 seek 0.3 读回不变），我们照跳（P9b 决定 5）。
 - 脚本细节：写 `duration` 抛的 `TypeError` 文字不同；包装对象的原型是 `Object.prototype`（WPE 是只有 `constructor` 的类原型）；`loop` 改回真后在结尾立即 `play()`，这一帧读到 0（WPE 读到结尾时刻），下一帧两边都从开头放；seek 后读回只到微秒。
-- 视频比场景时钟早：第一次 ready 前等首帧期间视频已经在放，场景开始时视频已走了 0.3–1.4 s（WPE 约 0.02 s）；脚本在 `init` 之后才暂停的视频也多放了这一段。
 - 暂停时机：WPE 由工作线程判断，实测第 32 帧冻住，我们是第 31 帧。
-- 预览、桌面、应用背景同时播同一张场景时各解各的；674 MiB 级的视频每次加载都整段写进 Chromium 的 Blob 存储（约 0.8 s），P9c 再看要不要换成缓存文件。
+- 预览、桌面、应用背景同时播同一张场景时各解各的。
 - 视频尺寸和纹理尺寸不同时只拷重叠部分、记一条 warning（WPE 缩放到纹理尺寸；语料 0 段）。
-- 和 WPE 抓帧做整帧对照时，以前的读回是先画场景分辨率再缩到画布，锐利边缘多出十几级差，这是所有图层共有的读回差异，不是视频的。2026-11-14 起 `render_scene` 给 `canvas` 时按窗口尺寸直接画（同 WPE），这一项不再出现；P9a 的视频对照没有按新画法重跑（[phase-render-size](../../.claude/plans/wpe-import/3-scene/phase-render-size.md)「步骤 2」）。
 
-**语料**（173 个工程）：能渲染 47 → 50（`3822149301`（HEVC）、`3824550659`、`3828359750`）；报 `tex:video` 的 41 张只去掉这个键。三张解锁场景的视频纹理和 WPE 抓帧逐像素比：HEVC 那张平均差 0.19、最大 5；两段没标颜色的 H.264 平均差 1.2–1.7、99 分位 ≤ 10（WPE 与 ffmpeg 之间也是这个量级）。P9b：用到 `getVideoTexture` 的 6 张（3243449890、3276911872、3326873240、3361965869、3470764447、3605722997）只去掉 `script:api:layer.getVideoTexture`，能渲染数不变，它们还差别的节（人偶、相机、`input`、粒子层的 `play` 等）；强制渲染下按时段切换、改速度、自写控制都和脚本逻辑一致，没有和视频有关的报错。
+**语料**（173 个工程）：能渲染 47 → 50（`3822149301`（HEVC）、`3824550659`、`3828359750`）；报 `tex:video` 的 41 张只去掉这个键。P9b：用到 `getVideoTexture` 的 6 张（3243449890、3276911872、3326873240、3361965869、3470764447、3605722997）只去掉 `script:api:layer.getVideoTexture`，能渲染数不变，它们还差别的节（人偶、相机、`input`、粒子层的 `play` 等）；强制渲染下按时段切换、改速度、自写控制都和脚本逻辑一致，没有和视频有关的报错。P9d 的走查（复制工程只留视频图层，`ignore/p9/p9d/walk/`，抓帧 `A:\p9d\walk\`）：3823859141、3400241651、3822149301、3812007032、3816870245 五张的视频纹理、一张经缩放的整帧，差异都只剩上面的已知差异；语料 60 段全部拆得了，Matroska 那段（3816870245，7049 帧）与 ffprobe 逐包相同。
 
-**dev 探针**：`host.videos()` 给每段视频的位置、`currentTime`、`paused`、`wantPlay`、`lastDrawn`、当前帧号、`fresh`、`failed`、尺寸与丢帧数，以及卡住兜底的 `stallSeeks` / `stallReloads`（P9c）。`renderFrame` 的 `videoTime`（秒，或按纹理路径分别给；超过时长按循环取模）先 seek 好、等到那一帧再拷，是屏外宿主里确定性回放视频的唯一办法（屏外 iframe 里 rAF 与 `requestVideoFrameCallback` 都不跑）；vite 的 `/render` 与 MCP `render_scene` / `host_render` 收同名参数。
+**dev 探针**：`host.videos()` 给每段视频的位置、`currentTime`、`paused`（时钟停着）、`wantPlay`、`lastDrawn`、当前帧号、`fresh`、`failed`、尺寸、时长，解码计数 `decoded` / `dropped` / `queued` / `decodeQueue`、`stallResets` 与色彩说明 `color`。`renderFrame` 的 `videoTime`（秒，或按纹理路径分别给；超过时长按循环取模、钳到 `duration − 0.005`）给每段视频建播放器、跳到那一刻、等目标帧到手，留一份帧给每个 draw 拷，结果的 `videos` 带实际取的 `time` 与帧的显示时间 `frameTime`；主窗口最小化时照常可用。这是屏外宿主里确定性回放视频的唯一办法（屏外 iframe 里 rAF 不跑）；vite 的 `/render` 与 MCP `render_scene` / `host_render` 收同名参数。
 
 ### 脚本 `IVideoTexture`（P9b）
 
@@ -2599,7 +2653,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 |---|---|
 | `duration` | 只读（严格模式写入抛 `TypeError`），容器时长的 float32（`mvhd` 2.517 → 2.5169999599456787）；没有播放器时取 bundle 里的容器时长 |
 | `loop` | 包装对象自己的字段，缺省真，**读出数字 1 / 0**（和 WPE 自带的 `.d.ts` 不同）；写入取 `Boolean` 并转给播放器 |
-| `rate` | 包装对象自己的字段，缺省 1，读出 float32；写入取 `Number`、不是有限数时不写；负数播放器按 0 处理（WPE 负数会让工作线程卡死，不复刻），超出 Chromium 支持的 [0.0625, 16] 时保持原速率 |
+| `rate` | 包装对象自己的字段，缺省 1，读出 float32；写入取 `Number`、不是有限数时不写；负数播放器按 0 处理（WPE 负数会让工作线程卡死，不复刻），其余非负有限数都收（P9d 起时钟是自己的） |
 | `play()` / `pause()` / `stop()` | 返回 `undefined`；已结束（`loop` 为假）时 `play()` 先回到 0；`stop()` = 暂停 + 回到 0，之后 `isPlaying()` 为假 |
 | `setCurrentTime(t)` / `getCurrentTime()` | 钳到 `[0, duration − 0.005]`；读出 float32 |
 | `isPlaying()` | 布尔（`想放 && !已结束`）；空闲暂停、宿主暂停期间仍为真；解码失败为假，脚本 `play()` 之后为真 |
@@ -2917,12 +2971,12 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 ### 分层
 
 - **运行时**（`puppet/player.ts`）：
-  - `ScenePuppets.layerCount` / `layer` / `findLayer` 给出每层的控制口 `PuppetLayerControl`；
+  - `ScenePuppets.ids` / `control` / `findLayer` 给出每层的控制口 `PuppetLayerControl`（P12e 起按层 id，见「puppet 动画层的建删（P12e）」）；
   - 每层一张播完回调表；
   - 时钟带 MDLA 事件；
-  - `frame(dt, state, hooks)` 在每个 puppet 推进完全部层之后派发：先事件（交给 `hooks.event` → 脚本运行时的 `animationEvent`），再按层序调带 `ENDED` 位的层的回调。所以回调里的任何写入都是下一帧生效。
+  - `frame(dt, state, hooks)` 在每个 puppet 推进完全部层之后派发：先事件（交给 `hooks.event` → 脚本运行时的 `animationEvent`），再进回调循环（P12e 起照 WPE：本帧有层播完才进、调过回调就复位下标、之后删单次层）。所以回调里的任何写入都是下一帧生效。
 - **脚本 API**（`script/api.ts`）：
-  - 包装对象按「对象:层下标」缓存，不持有运行时，每次经宿主现取控制口，重编译换了运行时也接得上，同 `IAnimation`。
+  - 包装对象按「对象:层 id」缓存（P12e 前是层下标），不持有运行时，每次经宿主现取控制口，重编译换了运行时也接得上，同 `IAnimation`。
   - `rate` / `blend` / `visible` 是用户属性、字段脚本、API 三方共写的字段，在 `SceneState.animationLayers`，写入走 `animation-layer` 目标，会记进重放表。
   - `name` / `additive` / `blendin` / `blendout` / `blendtime` 只有 API 写，直接落在运行时的层上，重编译时随 `carryOver` 接回（连同回调表）。
 - **宿主**（`host.ts`）：首次加载时 `init` 先于 `beforeFirstFrame`，所以照 P10b 的 `pendingAnimations` 在跑 `init` 之前建好待用的 `ScenePuppets`（`pendingPuppets`）。语料里约 50 处「相位偏移」脚本在 `init` 里 `setFrame`，靠它才有落点。
@@ -2934,7 +2988,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 | 入口 | 所有图层对象都有（图像层与带骨骼的模型都是同一套）。不是 skinned puppet / 骨骼模型时计数 0、查找 `null` |
 | `getAnimationLayer(x)` | number 只认 `0 ≤ x < 计数` 的整数（`1.5`、`-1` 为 `null`）；非空字符串按**当前**名字找，最后一个匹配（`"1"` 也按名字）；其余 `null`。同一层每次返回同一个对象 |
 | 成员 | 19 个自有可枚举成员，顺序 `duration、frameCount、fps、blend、name、blendout、blendin、rate、additive、visible、blendtime、addEndedCallback、play、isPlaying、stop、pause、setFrame、getFrame、getAnimation`；原型只有一个不可枚举 `constructor` |
-| 只读三项 | `fps` = f32(1 / spf)、`frameCount` = length、`duration` = D，不可写的数据属性，严格模式赋值抛 `TypeError` |
+| 只读三项 | `fps` = f32(1 / spf)、`frameCount` = length、`duration` = D；赋值抛 `TypeError`（文字同 WPE 的 `Cannot assign to read only property …`）。P12e 起是访问器（层释放后读 `undefined`），WPE 的原生只读属性在 `getOwnPropertyDescriptor` 里是数据属性，这一点不同 |
 | 写入转换 | 照 WPE 的通用写入函数：`rate` / `blend` / `blendtime` 只收 number（`NaN`、`±Infinity` 也收）；四个布尔只收 `true` / `false`；`name` 忽略 `null` / `undefined`，其余 `ToString`；别的类型静默忽略。不钳制、没有改值回调 |
 | `blendin` / `blendout` | 脚本可以重新置位：`blendin` 按当前 `t` 淡入（`t` 大时看不出）；`blendout` 写成真后循环层每轮末尾也淡出（加载时只对 single 保留） |
 | 方法 | `play` / `pause` / `stop` / `isPlaying` / `getFrame` 同 `IAnimation`；`setFrame(f)` 是 `t = f32(spf × f32(f))` 并置 `SETFRAME`（本帧不判播完）；都是下一帧进画面 |
@@ -2948,7 +3002,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 **照报**：
 - 动画层的 `name` / `additive` / `blendin` / `blendout` / `blendtime` 挂脚本：`puppet:layer-script`（语料 0 处）；
-- 建删层的 `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`：`script:api:layer.*`。语料里 `playSingleAnimation` 2 张用到，都还差别的键（精灵表、`destroyLayer`），不靠它解锁。
+- 建删层的 `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`：P12e 已实现，见下面一节。
 
 **dev 探针**：
 - `host.puppets()`：每个 puppet 每层的名字、帧号、是否在播（还没换上时取待用的那份）；
@@ -3028,6 +3082,84 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 - **骨骼 API 夹具**（`puppet/p12bones.test.ts`，WPE 抓帧）：`p12-bones` 355 行脚本日志与 200 个 `g_Bones` draw 逐位相同。
 - **语料**：233 张能渲染 182 → 185，解锁 `2345214324`、`3359451610`、`3426865175`；没有场景变成退回。
 
+## puppet 动画层的建删（P12e）
+
+脚本在运行中给 puppet（图像层与带骨骼的模型）建动画层、播一次就删的单次层、删层：图层上的 `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer`。
+
+依据：
+- 读码 [rea-p12e-createlayer](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12e-createlayer.md)；
+- WPE 2.8.42 实测（同文件末尾「实测」，工程 `ignore/p12/e/proj/p12-create`，生成器 `ignore/p12/e/defs/p12e.py`）；
+- 计划与记录见 [phase-12e-createlayer.md](../../.claude/plans/wpe-import/3-scene/phase12/phase-12e-createlayer.md)。
+
+### 动画全编与层 id
+
+- **动画全编**（`compile/puppet.ts`）：脚本能按名字引用 MDLA 里任何一条动画，编译期认不出，所以 `ScenePuppet.animations` 是 MDLA 的每一条，`PuppetLayerDef.animation` 就是 MDLA 下标。
+  - 被 `animationlayers` 引用的动画，问题照旧报进 `unsupported`；
+  - 没被引用又用到不支持特性的，只留名字、id、模式、fps、长度、事件与 `unsupported`，不转帧数据，也不报（不能因为一条可能永远用不到的动画把整张场景退回）。运行时在它上面建层返回 `null` 并记一条 warn。
+- **层 id**：编译期的层 = 它在 `animationlayers` 里的 JSON 下标（`entry`），运行时建的层是负数（每个 puppet 从 −1 起递减、不复用）。状态键（`SceneState.animationLayers`）、包装缓存、`{user}` 绑定、字段脚本、重放表都按 id，和 `scene.json` 路径同形。「下标」只在按下标取层、按下标删层、插入位置这几处出现。
+- **取值改严**：加载 `animationlayers` 与运行时建层是 WPE 同一个 setter，float 只收 JSON 数、bool 只收 JSON 布尔、`name` 只收字符串（`floatField` / `boolField`，两处共用）。语料 316 项全部符合，0 处受影响。用户属性与脚本写入的路径（`animationLayerValue`）仍是 P12c 的规则。
+
+### 建层：`createAnimationLayer(第一参, config?)` / `playSingleAnimation(…)`
+
+参数规整是纯函数 `script/animationLayerConfig.ts`：
+
+| 项 | 规则 |
+|---|---|
+| 第一参 | 字符串：按名字找 MDLA 动画（逐字节、区分大小写、第一条）。对象：当一项 `animationlayers`，`animation` 要是 JSON 数（`900.5` 向零取整），按 id 找第一条；`animation` 是字符串（含名字）返回 `null`。数、布尔、`null`、`undefined`、空串、缺参数：`null` |
+| `config` | 对象，或 JSON 文本；数字同缺省。缺 `blendin` 键补 `true`、缺 `blendout` 键补 `true`；config 里的键覆盖第一参的同名键（所以对象第一参里的 `blendin: false` 会被缺省的 `true` 盖掉） |
+| 字段 | 8 个描述符字段按上面的严规则（`NaN`、`'3'`、`0`、`'yes'`、`name: 5` 都不写）；缺省 name `""`、rate 1、blend 1、可见、非加法、blendtime 0.5。值是 `{value, user / script / animation}` 时只取 `value`、不登记绑定（warn 一次，语料 0 处） |
+| 新层 | 在播、t = 0、时钟模式取动画自己的；非 single 动画清掉 `blendout`；没有 `SETFRAME`，第一次推进就判播完；`IAnimationLayer.id` 读出 `undefined`；返回值 `=== getAnimationLayer(计数 − 1)` 只在追加时成立 |
+| 插入 | 缺省追加。`index` 0 插 0；`1 ≤ index ≤ 计数 − 1` 插 `index`；负数或 ≥ 计数 − 1 插到 `计数 − 1`（最后一层之前）。`autosort` 为 JSON `true` 时从尾往前跳过加法层，插在最后一个非加法层之后，优先于 `index` |
+| 生效 | 脚本阶段建的层下一帧才推进；回调里给排在后面的 puppet 建层同帧推进 |
+| `playSingleAnimation` | 同 `createAnimationLayer`，另给层置 `SINGLE_SHOT`（`0x8000000`） |
+
+### 单次层与回调循环
+
+每个 puppet 推进完全部层后（`ScenePuppets.dispatch`）：
+1. 派发 MDLA 事件；
+2. 本帧有层播完（`anyEnded`）才进回调循环：按层序找带 `ENDED` 的层，清 `ENDED`；单次层先置 `DOOMED`（`0x10000000`）再调回调；调过回调的层把循环下标**复位成 0**，`++` 后从 1 重扫；
+3. 删掉全部 `DOOMED` 的层并当场释放。
+
+由此得到的 WPE 行为：
+- 「播完」随模式：single 到头、loop 第一次回绕、mirror 第一次换向；
+- 删层那一帧层仍参与姿势，回调里层仍有效、计数未减、回调不带参数；同一帧之后的 `update` 里已经作废、计数已减；
+- 隐藏的层不推进、永远不删；暂停的不删；回调里 `play()` / `setFrame(0)` 救不回；
+- **漏扫**：A 的回调删了 A，后面的 B 本轮漏掉，`ENDED` 留着，下一次有层播完时才调。
+
+### 删层：`destroyAnimationLayer(x)`
+
+- 参数：字符串按名字删**全部**同名层（区分大小写，空串 `false`）；Int32 按下标（`0 ≤ i < 计数`）；有效的包装按它自己（别的 puppet 的包装 `false`）；其余（`1.5`、`{}`、作废的包装、`null`、找不到的名字）`false`。
+- 两段：命中的层**当场**摘出层表（计数、下标、名字查找立刻看不到），进 `detached`；本帧全部脚本跑完之后宿主调 `ScenePuppets.settle` 释放。所以同一帧里包装仍可读写、可调方法，下一帧作废。
+- 释放（单次层与 `settle` 共用，`PuppetHooks.released`）：删状态项、给这一层的动画层字段脚本发 `destroy`、去掉重放表里 `objects/<o>/animationlayers/<id>/` 开头的项。
+- 删光或全部隐藏后姿势回到静止；骨骼透明度与变形复位；`g_BlendMap` 不复位。
+
+### 作废的包装
+
+读 `undefined`、写忽略、方法返回 `undefined` 且不抛错（`addEndedCallback(非函数)` 也不抛）、`engine.isObjectValid` 为假、作 `destroyAnimationLayer` 的参数返回 `false`。活着的层 `isObjectValid` 为真。
+
+### 跨重编译
+
+运行时建删的层不进编译输入。重编译后 `carryOver` 按 id 把上一份层表原样接回：顺序、运行时建的层（按新 rig 里同一条 MDLA 动画重建）、删过的编译期层（`destroyedEntries`）、时钟的全部位、回调、`nextId`。之后 `SceneState.syncAnimationLayers` 对齐状态项（只对齐有运行时的对象）。理由：`autosort` 的插入位置取决于当时各层的加法位，编译期重演得不到同样的顺序。清空脚本存储后回到 JSON 原样。
+
+### 有意不同与已知差异
+
+- 图像层按名字删、原表最后一层匹配：WPE 崩溃，我们删掉全部同名；
+- `config` 解析成非对象、第一参对象是数组：WPE 未定义行为，我们返回 `null` 并 warn；
+- `autosort` 没有非加法层、空表上 `index ≠ 0`：WPE 越界写，我们插到 0；
+- 静态 puppet（没有骨骼）上建层：WPE 建出一个永不推进的层，我们返回 `null` 并 warn；
+- 运行时 `config` 里的 `{user / script / animation}` 只取 `value`、不登记；
+- 对象 id：WPE 建层让共享计数器前进 2，影响之后 `createLayer` 的自动 id，我们不复刻；
+- jsoncpp 解析失败时可能留下部分键（`'{"rate":2, x'`），我们整段当失败；
+- 只读三项是访问器（见 P12c 一节）；`addEndedCallback(非函数)` 抛 `TypeError`（P12c）。
+
+### 走查
+
+- **`p12-create` 夹具**（`puppet/p12create.test.ts`）：从第 1 帧按 WPE 帧时间回放 268 帧，545 行 `[kbp]` 日志（含 `@f64` 时间线、初值、查找、config、插入、单次层、删层、回调循环）与 WPE 逐行相同；脚本帧 241、242 五个 puppet 的 `g_Bones` 480 个数里 470 个逐位相同，最大差 5.96e-8（4 ulp，`rsqrtps`）。
+- **宿主路径**：dev 里经探针按同一时间线回放，545 行逐行相同；实时预览里各 puppet 的最终层数与 WPE 相同，`host.puppets()` 的 `detached` 为 0（`settle` 接上）。
+- **不变**：P12a–P12d 的 8 个生成工程 22 帧逐字节相同。
+- **语料**：233 张的不支持键逐张不变（`2887099508` 的调用编译期认不出，本来就不报；`2916324703` 仍差精灵表与 `tex:animation`），能渲染数不变。动画全编后 puppet 动画数据 36.4 → 49.7 MB（41 → 43 张、315 → 473 条），最大 `3706286085` 1.9 → 14.2 MB，全库编译 91.4 → 94.2 s。
+- **2887099508**：点书走的是「page首」的 `cursorClick` → `hand book.playSingleAnimation("hand turn")`。探针模拟点击没点中（开场镜头推近，书不在算出的位置），用户在预览里点书确认翻页正常（回归 PE6）。
+
 ## 交互（P6c）
 
 场景脚本的光标交互：六个导出回调 `cursorEnter` / `Leave` / `Move` / `Down` / `Up` / `Click`、全局 `input`、图层 `solid`。规则读码在 `.claude/plans/wpe-import/3-scene/phase6/rea-p6c-dispatch.md` 与 `rea-p6c-script.md`（含 REA 重核），0c 用 wpe-renderdoc 的 `input_play` 逐帧喂光标实测，结论全部成立。实现是纯逻辑的 `render/cursor.ts`（命中、追踪器、可拾取对象表），渲染器每个实时帧在相机更新之后、脚本之前调一次（`SceneRenderer.stepCursor`），把回调交给宿主，宿主调 `ScriptRuntime.cursorEvent`。
@@ -3048,6 +3180,13 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 渲染器一帧：相机（`setCamera`）→ 光标命中派发 → 声音 → 关键帧动画 → 计时器 → `update`。所以同一帧的回调先于 `update`，回调里写的字段当帧画出。数值逐步 float32：反投影用 WPE 的 float32 求逆（`render/inverseF32.ts`，从反汇编 `0x14005f730` 生成，`ignore/p6/c1/gen_inv.py`；double 余子式的 `invert` 在正交矩阵上差 1 ulp），射线对四边形照 `FUN_14019d5a0`。`perspective: true` 的图层用透视覆盖相机的射线（`perspectiveLayerRay`，`FUN_14018fc40`）。`GpuScene.cursorCamera` 交出本帧的 `P·V`、眼位与覆盖输入。
 
+### `fill` 裁切（P6c 修复 2）
+
+WPE 渲染到窗口，居中盖满的裁切做进投影的四个边界（`ortho(E0, W − E2, E3, H − E1)`，`alignEdges` 的模式 0），光标直接用窗口归一化指针按这份 `P·V` 反投影；我们的场景目标是场景分辨率、`P·V` 不裁。所以样式是 `fill` 且窗口与场景比例不同（`fillCropEdges`，整数交叉相乘判，精确）时，光标反投影改用**裁过的 `P·V`**（`croppedCursorViewProjection` = `mulAffine(sceneViewProjection(general, 总缩放, edges), V)`，zoom 三步照 WPE 无条件做）和窗口指针，不再先过 `sceneCursor`（double）：命中与世界坐标（`CursorCamera.windowCursor`）、粒子跟随指针（`GpuScene.cursorCrop` 让 `pointerScenePoint` 用它）都走它。别的样式与比例相同时逐字节同以前。
+
+- 依据：`clockv-drag` 抓帧里 FR（`T(−100000, −100000)`）的 MVP，`m0 = 0.0005095108645036817`、`m5 = 0.0009057971183210611`、`m12 = −51.95380401611328`、`m13 = −91.5797119140625` 与这样算出的逐位相同；走查日志 969 帧里 968 帧的 `origin` 逐位复现（另 1 帧光标已移出窗口、`origin` 不再变），之前 1 ulp 的差（如 `1340.35546875` 对 `1340.3555908203125`）消失。投影的构造沿用 render-size 已核对的 `alignEdges` + `orthoWpe`（每步 f32）+ zoom 三步，缩放、V（抖动、相机对象的 lookAt）在其后相乘，和不裁时同序；缩放、抖动、相机对象与裁切的组合没有单独抓帧，只按读码与不裁时的组合顺序推定（单测只对了 zoom 与 V 的平移方向）。
+- 没做：透视场景（本来按画布尺寸画、不裁）；`perspective: true` 图层的覆盖相机射线（`perspectiveLayerRay`）仍用按铺放换算的场景坐标与不裁的投影，WPE 的覆盖相机在裁切下 `d` 与相机位置也变（`croppedParticleViewProjection` 的算法，没接到光标上）；`pointerScenePoint` 仍是 double 求逆（比例不同时与 WPE 末位可能差 1 ulp，没有抓帧核对，同比例的 P4c 回归要求逐字节不变所以没改）。
+
 ### `input`
 
 全局对象，三个只读成员，每次读现取、建新对象：`cursorWorldPosition`（`Vec3`，同回调的 `worldPosition`）、`cursorScreenPosition`（`Vec2`，`ptr × 窗口像素`，左上原点、y 向下、不钳制，和 `engine.screenResolution` 同一套单位）、`cursorLeftDown`（登记的左键）。模块顶层读抛 realm 的 `SyntaxError: <成员名> cannot be accessed from global scope.`；`init`、回调、计时器里都能读。快照由渲染器每个实时帧给（没有脚本导出光标回调时也算）。
@@ -3066,7 +3205,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 
 ### 对比结果与已知差异
 
-五个确定性工程（`ignore/p6/c0/proj/p6c-*`）：`hit` 回调 98 / 98 与 `upd` 169 / 169 逐字相同，`par` 13 / 13；`shake` 回调序列 42 / 42 相同，数值差 ≤ 0.13（WPE 当时的 `g_Time` 取不到，用 `(帧 + 偏移) × 0.05`）；`zoom`（`perspective: true` 图层）35 / 49 逐字相同，其余 `localPosition` 差 ≤ 4.6e-5（覆盖相机的 float32 链没有逐步搬）；`persp` 序列相同，世界坐标差 ≤ 1e-3（远平面上 1 ulp，来自透视相机矩阵的 float32 组合）。已知没做：模型命中、木偶 `hitBox`、透视场景里 bit9 层的命中排序（`TODO:[WPE_SCENE]`）；`openUserShortcut` 在 P11d 实现，见「快捷方式（P11d）」。语料能渲染 +11（`3146703458`、`3173418061`、`3340707146`、`3451555874`、`3460973721`、`3605722997`、`3637191856`、`3809965824`、`3810092560`、`3817779853`、`3832004152`）。
+五个确定性工程（`ignore/p6/c0/proj/p6c-*`）：`hit` 回调 98 / 98 与 `upd` 169 / 169 逐字相同，`par` 13 / 13；`shake` 回调序列 42 / 42 相同，数值差 ≤ 0.13（WPE 当时的 `g_Time` 取不到，用 `(帧 + 偏移) × 0.05`）；`zoom`（`perspective: true` 图层）35 / 49 逐字相同，其余 `localPosition` 差 ≤ 4.6e-5（覆盖相机的 float32 链没有逐步搬）；`persp` 序列相同，世界坐标差 ≤ 1e-3（远平面上 1 ulp，来自透视相机矩阵的 float32 组合）。窗口与场景比例不同的 `fill` 下 `origin` 的 1 ulp 差已按上节修掉（走查 `clockv` 1080p 968 / 968 帧逐位相同）。已知没做：模型命中、木偶 `hitBox`、透视场景里 bit9 层的命中排序（`TODO:[WPE_SCENE]`）；`openUserShortcut` 在 P11d 实现，见「快捷方式（P11d）」。语料能渲染 +11（`3146703458`、`3173418061`、`3340707146`、`3451555874`、`3460973721`、`3605722997`、`3637191856`、`3809965824`、`3810092560`、`3817779853`、`3832004152`）。
 
 ## 层级、转向与 effect / 材质访问（P6d1a）
 
@@ -3215,7 +3354,7 @@ P6d1b：`p6d1-mat8` 五个字段 36 次写入的读回和 WPE 实测的规则逐
 - 第 1、2 阶段（组内排序）和 WPE 逐像素相同。
 - 第 5、6 阶段（相机排序与删除）只差左下角的 G1：删组之后 WPE 当帧由顶层画，我们等重编译，是已知差异。
 
-**语料**：解锁 `2887099508`（`destroyLayer`）、`3570755196`（`registerAsset` 登记字体）。`2887099508` 的开场镜头还没有：`objects/52/visible` 是混淆脚本，用解码出的字符串调 `thisScene.getCameraTransforms` / `setCameraTransforms`，让相机跟着 52 号对象的 `origin` 关键帧滑动。编译期的缺口扫描认不出这种写法，运行时撞到就停用了 `update`。这两个 API 转交 P5（相机）实现（`TODO:[WPE_SCENE]`）。`scriptCorpus` 全库的变化全部来自去掉的四个缺口键：`registerAsset` 3 张、`sortLayer` 10 张、`getInitialLayerConfig` 4 张、`destroyLayer` 3 张。没有新增的键，也没有作用域门带来的新报错。
+**语料**：解锁 `2887099508`（`destroyLayer`）、`3570755196`（`registerAsset` 登记字体）。`2887099508` 的开场镜头还没有：`objects/52/visible` 是混淆脚本，用解码出的字符串调 `thisScene.getCameraTransforms` / `setCameraTransforms`，让相机跟着 52 号对象的 `origin` 关键帧滑动。编译期的缺口扫描认不出这种写法，运行时撞到就停用了 `update`。这两个 API 转交 P5（相机）实现，P5e 已实现（见「脚本的相机基准（P5e）」）。点书翻页用的 `playSingleAnimation`（`objects/18/visible` 的 `cursorClick` / `animationEvent`，同样是混淆字符串）转交 P12（`TODO:[WPE_SCENE]`）；全部脚本解码后对照缺口表，这张场景没实现的只剩它一个。`scriptCorpus` 全库的变化全部来自去掉的四个缺口键：`registerAsset` 3 张、`sortLayer` 10 张、`getInitialLayerConfig` 4 张、`destroyLayer` 3 张。没有新增的键，也没有作用域门带来的新报错。
 
 ## 运行时建层（P6d3b）
 

@@ -145,12 +145,18 @@ export function targetKey(target: ScriptTarget): string {
       return `objects/${target.object}/instanceoverride/${target.field}`;
     case "sound":
       return `objects/${target.object}/${target.field}`;
+    // 灯字段（P13f2）：同宿主 `targetPath`
+    case "light":
+      return `objects/${target.object}/${target.field}`;
     // 文本字段（P6b 1e）：同宿主 `targetPath`，属性就地写时据此忘掉脚本的旧写入
     case "text":
       return `objects/${target.object}/${target.field}`;
     // 相机对象的 `fov` / `zoom`（P5d 步骤 3）：同宿主 `targetPath`
     case "camera":
       return `objects/${target.object}/${target.field}`;
+    // 场景相机的基准（P5e）：每个字段一个键；同宿主 `targetPath`
+    case "camera-base":
+      return `general/camera/${target.field}`;
     // 用户纹理（P11b）：属性来源，脚本写不到它；同宿主 `targetPath`
     case "user-texture":
       return `usertextures/${target.name}`;
@@ -745,10 +751,35 @@ export class ScriptRuntime {
    */
   destroyObjects(objects: ReadonlySet<number>): void {
     if (objects.size === 0) return;
-    const owned = (record: ScriptRecord): boolean => {
+    this.dropRecords((record) => {
       const object = scriptObject(record.script.owner);
       return object !== null && objects.has(object);
-    };
+    });
+    for (const key of [...this.writes.keys()]) {
+      const match = /^objects\/(\d+)\//.exec(key);
+      if (match && objects.has(Number(match[1]))) this.writes.delete(key);
+    }
+  }
+
+  /**
+   * 一个动画层被释放（P12e，WPE 析构链 `FUN_140176f70(…, AL, 0)`）：属主是这个层的字段脚本（owner `animation-layer`、object 与 layer 都相同）先收 destroy
+   * （已 init、导出了才调），再从 records / byId 摘掉，计时器去掉；重放表里 `objects/<o>/animationlayers/<id>/` 开头的项去掉。
+   * 运行时建的层没有字段脚本（config 里的 `{script}` 不登记），只清重放表。只在脚本阶段之后调（同 `destroyObjects`）。
+   */
+  destroyAnimationLayer(object: number, id: number): void {
+    this.dropRecords((record) => {
+      const owner = record.script.owner;
+      return owner.kind === "animation-layer" && owner.object === object && owner.layer === id;
+    });
+    const prefix = `objects/${object}/animationlayers/${id}/`;
+    for (const key of [...this.writes.keys()]) if (key.startsWith(prefix)) this.writes.delete(key);
+  }
+
+  /**
+   * 属主命中的脚本条目：按条目顺序先收 `destroy`（导出了、已 `init` 才调），再从 `records` / `byId` 摘掉，计时器去掉（`destroyObjects` 与
+   * `destroyAnimationLayer` 共用，P12e）。`records` 换成新数组，不影响正在进行的遍历。
+   */
+  private dropRecords(owned: (record: ScriptRecord) => boolean): void {
     for (const record of this.records) {
       if (!owned(record)) continue;
       if (record.state === "inited" && !this.halted) this.call(record, "destroy");
@@ -759,10 +790,6 @@ export class ScriptRuntime {
       for (const record of gone) this.byId.delete(record.script.id);
       for (const timer of this.timers) if (gone.has(timer.owner)) timer.cancelled = true;
       this.timers = this.timers.filter((timer) => !timer.cancelled);
-    }
-    for (const key of [...this.writes.keys()]) {
-      const match = /^objects\/(\d+)\//.exec(key);
-      if (match && objects.has(Number(match[1]))) this.writes.delete(key);
     }
   }
 

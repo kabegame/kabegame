@@ -434,10 +434,12 @@ export interface ProbeCameraObjects {
   crop?: ProjectionCrop;
 }
 
-/** 探针的相机对象（`cameraObjectLayers`）；场景没有相机对象时为 undefined。 */
-export function probeCameraObjects(bundle: Pick<SceneBundle, "general" | "layers">): ProbeCameraObjects | undefined {
-  const layers = cameraObjectLayers(bundle);
-  return layers.length ? { layers, general: bundle.general } : undefined;
+/**
+ * 探针的相机对象（`cameraObjectLayers`）。没有相机对象时也给（图层表为空）：脚本 `setCameraTransforms` 改过的基准（P5e）要经
+ * `sceneCameraFrame` 才进正交视图；图层表为空、基准没改过时它的结果和不给时逐项相同。
+ */
+export function probeCameraObjects(bundle: Pick<SceneBundle, "general" | "layers">): ProbeCameraObjects {
+  return { layers: cameraObjectLayers(bundle), general: bundle.general };
 }
 
 /**
@@ -488,7 +490,7 @@ export function frameCamera(
       const shake = shakeOffset(state.general, time, height);
       return { camera: { shake, zoom: state.general.zoom }, eye: shake };
     }
-    const { pose, next } = stepCameraSource(perspective.camera, path, step);
+    const { pose, next } = stepCameraSource(perspective.camera, path, step, state.cameraBase);
     path = next;
     const frame = perspectiveCamera({
       pose,
@@ -538,7 +540,7 @@ export interface ReadbackReplayOptions {
   puppets?: Pick<ScenePuppets, "frame">;
   /** 透视场景的探针相机（P5d 步骤 2，`probePerspective`）：按 `particles.dts` 推路径状态，不移动对象。正交场景不给。 */
   perspective?: ProbePerspective;
-  /** 场景里的相机对象（P5d 步骤 3，`probeCameraObjects`）：每帧按状态选生效的。没有相机对象时不给。 */
+  /** 场景里的相机对象（P5d 步骤 3，`probeCameraObjects`）：每帧按状态选生效的；没有相机对象时图层表为空，照样按状态里的相机基准求（P5e）。 */
   cameraObjects?: ProbeCameraObjects;
   /**
    * 前 n − 1 帧每一帧都在 GPU 上画（P10a 走查，FINAL_CHECK「确定性工程能还原全部状态」）：给了且有回放时，每一帧照读回帧的顺序走完
@@ -561,6 +563,8 @@ export interface ReadbackReplayOptions {
     enterFrame?(dt: number, time: number): void;
     /** 动画事件（P10b）：推进动画时越过的事件在写完那一条之后、下一条之前同步派发（同宿主 `beforeFrame` 的 `event` 钩子）。 */
     animationEvent?(object: number | null, json: string): void;
+    /** 动画层被释放（P12e，`ProbeScripts.animationLayerReleased`）：puppet 派发里删单次层时调，同宿主的 `released` 钩子。 */
+    animationLayerReleased?(object: number, id: number): void;
     /** 光标（P6c，`ProbeScripts.cursor`）：每一帧设好相机之后、动画与脚本之前调，只在每一帧都画的回放里（`encodeFrame`）。 */
     cursor?(input: CursorStepInput): void;
   };
@@ -593,7 +597,13 @@ function eventHooks(scripts: ReadbackReplayOptions["scripts"]): AnimationHooks |
  */
 function puppetHooks(scripts: ReadbackReplayOptions["scripts"]): PuppetHooks | undefined {
   const dispatch = scripts?.animationEvent?.bind(scripts);
-  return dispatch ? { event: (object, json) => dispatch(object, json) } : undefined;
+  // 单次层在派发里被删（P12e）：同宿主 `puppetReleased`，状态里的字段与字段脚本交给脚本侧善后
+  const released = scripts?.animationLayerReleased?.bind(scripts);
+  if (!dispatch && !released) return undefined;
+  return {
+    ...(dispatch ? { event: (object: number, json: string) => dispatch(object, json) } : {}),
+    ...(released ? { released: (object: number, id: number) => released(object, id) } : {}),
+  };
 }
 
 /**

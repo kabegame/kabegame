@@ -138,12 +138,7 @@ import {
 } from "./probeMedia";
 import { prepareProbeTexts } from "./probeTexts";
 import type { UserProperty } from "../compile/bindings";
-import {
-  checkGifDts,
-  prepareProbeUserTextures,
-  userVideoValues,
-  type ProbeShortcutIconInput,
-} from "./probeUserTextures";
+import { checkGifDts, prepareProbeUserTextures, type ProbeShortcutIconInput } from "./probeUserTextures";
 import {
   checkCanvas,
   expandInputTimeline,
@@ -155,7 +150,6 @@ import {
 import { applyScriptValues, wroteTextValues, type ScriptValue, type ScriptValueResult } from "./scriptValues";
 import {
   checkVideoTime,
-  checkVideoVisibility,
   ProbeVideos,
   requestedVideoTime,
   type ProbeVideoResult,
@@ -603,10 +597,6 @@ async function renderFramePass(
   const compileMs = performance.now() - started;
   // 文本层（P6b 1d）：同宿主，建场景前排好；没有文本层时不碰 wasm
   const texts = await prepareProbeTexts(bundle, reader, options.sceneAssets);
-  // 要用视频而宿主 frame 不可见（主窗口最小化）时 Chromium 推迟媒体加载、拿不到帧：在等之前就报出原因（P11b 步骤 5）
-  checkVideoVisibility(
-    bundle.textures.some((texture) => !!texture.video) || userVideoValues(bundle, options.userProperties).length > 0,
-  );
   // 用户纹理（P11b 步骤 2）：按 `userProperties` 预先解码并等完，读回的就是用户图；没有属性来源时不建
   const userTextures = await prepareProbeUserTextures(bundle, options.userProperties, reader, options.shortcutIcons);
   const gpu = await acquireGpu();
@@ -734,6 +724,8 @@ async function renderFramePass(
         puppets?.carryOver(carry.puppets);
       }
       if (puppets) {
+        // 状态的动画层字段按运行时的层表对齐（P12e，同宿主 `beforeFirstFrame`）：补编那一遍里 `init` 建 / 删的动画层，从第一遍的状态拷
+        if (carry) state.syncAnimationLayers(puppets.liveLayers(), carry.state, puppets.objects());
         puppets.refresh(stateSink(state));
         scene.setPuppets(puppets);
       }
@@ -1016,7 +1008,7 @@ async function renderFramePass(
       scene.destroy();
     }
   } finally {
-    // 视频元素与对象地址（P9a 步骤 3）：读回之后释放，出错也释放
+    // 视频纹理留下的帧（P9a 步骤 3，P9d 起是解出的 `VideoFrame`）：读回之后释放，出错也释放
     videos?.dispose();
     userTextures?.dispose();
     for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();

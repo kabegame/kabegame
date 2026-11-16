@@ -56,10 +56,20 @@ export function readScriptState(state: SceneState, target: ScriptTarget): Script
     const value = state.sounds.get(target.object)?.volume;
     return value === undefined ? null : [value];
   }
+  // 灯字段（P13f2）：`update(value)` 收到当前值
+  if (target.kind === "light") {
+    const value = state.lights.get(target.object)?.[target.field];
+    return value === undefined ? null : typeof value === "number" ? [value] : [...value];
+  }
   // 相机对象的 `fov` / `zoom`（P5d 步骤 3）：`update(value)` 收到当前值
   if (target.kind === "camera") {
     const value = state.cameras.get(target.object)?.[target.field];
     return value === undefined ? null : [value];
+  }
+  // 场景相机的基准（P5e）：eye / center / up 三分量、zoom 一个
+  if (target.kind === "camera-base") {
+    const value = state.cameraBase[target.field];
+    return typeof value === "number" ? [value] : [...value];
   }
   // 文本字段（P6b 1e）：当前排版字段，`update(value)` 收到的是现在的文字（计数器不到刷新间隔时原样返回它）
   if (target.kind === "text") {

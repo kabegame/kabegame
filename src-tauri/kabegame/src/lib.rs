@@ -681,6 +681,8 @@ pub(crate) fn configure_app(
             get_image_native_metadata,
             get_gallery_image,
             copy_image_to_clipboard,
+            #[cfg(not(target_os = "android"))]
+            set_video_cover,
             delete_image,
             remove_image,
             batch_delete_images,

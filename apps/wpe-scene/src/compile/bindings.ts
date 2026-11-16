@@ -150,6 +150,59 @@ export function generalValue(key: GeneralKey, value: SceneScalar | undefined): n
 }
 
 /**
+ * 灯对象自己的数值字段（P13f2，rea-p13-lights 3.1，`FUN_14025da80`）：都是普通描述符、没有改值回调，WPE 逐帧读；`fallback` 是构造缺省值
+ * （`FUN_14018ff60`）。颜色、变换、可见性是图层字段（`LayerState`）；`light`、`castshadow`、`usecookie`、`castvolumetrics` 运行中变会重建资源，
+ * 不在这里（编译期定，挂属性 / 脚本 / 关键帧照报 `light:runtime:<键>`）。值按 float32 存（`p13f-light` 的 L2：脚本写入读回是 float32）。
+ */
+export const LIGHT_FIELDS = {
+  intensity: { type: "float", fallback: 0 },
+  radius: { type: "float", fallback: 1 },
+  exponent: { type: "float", fallback: 2 },
+  innercone: { type: "float", fallback: 20 },
+  outercone: { type: "float", fallback: 30 },
+  controlpoint: { type: "vec3", fallback: [2, 0, 0] },
+  density: { type: "float", fallback: 2 },
+  volumetricsexponent: { type: "float", fallback: 1 },
+  cascadedistance0: { type: "float", fallback: 3 },
+  cascadedistance1: { type: "float", fallback: 10 },
+  cascadedistance2: { type: "float", fallback: 100 },
+  lightsourcesize: { type: "float", fallback: 0 },
+} as const satisfies Record<string, { type: "float" | "vec3"; fallback: number | readonly number[] }>;
+
+export type LightField = keyof typeof LIGHT_FIELDS;
+
+/** 一盏灯的数值字段（float32）。 */
+export type LightValues = { [K in LightField]: (typeof LIGHT_FIELDS)[K]["type"] extends "vec3" ? number[] : number };
+
+/** 全部灯字段的缺省值：每次一份新的。 */
+export function lightDefaults(): LightValues {
+  return Object.fromEntries(
+    Object.entries(LIGHT_FIELDS).map(([key, { fallback }]) => [
+      key,
+      typeof fallback === "object" ? [...fallback] : fallback,
+    ]),
+  ) as LightValues;
+}
+
+/** `key` 是不是灯的数值字段（按自有键判）。 */
+export function isLightField(key: string): key is LightField {
+  return Object.prototype.hasOwnProperty.call(LIGHT_FIELDS, key);
+}
+
+/**
+ * 灯字段的取值规则（编译与就地写共用）：float 只收数字（布尔不收），vec3 单个数字铺满、不足三个分量的不收，同 {@link generalValue}；
+ * 结果按 float32。不合法时 undefined：WPE 不改字段。
+ */
+export function lightFieldValue(key: LightField, value: SceneScalar | undefined): number[] | number | undefined {
+  if (typeof value === "boolean") return undefined;
+  const parts = numbers(value);
+  if (!parts.length || !parts.every(Number.isFinite)) return undefined;
+  if (LIGHT_FIELDS[key].type === "float") return parts.length === 1 ? Math.fround(parts[0]) : undefined;
+  if (parts.length === 1) return [0, 0, 0].map(() => Math.fround(parts[0]));
+  return parts.length >= 3 ? parts.slice(0, 3).map(Math.fround) : undefined;
+}
+
+/**
  * 文本对象运行中可改、改了要重排的排版字段（P6b 1e）：WPE 比较表（`f_140256f20.c:55-80`，rea-p6b-layout 3.5）里除 `font`、
  * `opaquebackground` 以外的（这两个照旧整场重编译，1e 已定 3）。取值规则在 `text/fields.ts`（`textFieldFromJson` /
  * `textFieldFromScript`）。
@@ -209,6 +262,8 @@ export type BindingTarget =
   | { kind: "bloom-enabled" }
   /** `GENERAL_FIELDS` 的字段：只改 `SceneState.general`，不重编译。 */
   | { kind: "general"; key: GeneralKey }
+  /** 灯对象的数值字段（P13f2，`LIGHT_FIELDS`）：就地写进 `SceneState.lights`，渲染器每帧现算灯光 uniform。`object` 是 `objects` 下标。 */
+  | { kind: "light"; object: number; field: LightField }
   /**
    * 粒子对象 `instanceoverride` 的标量键与 `colorn`（P4a 步骤 5，`rea-p4a.md` C5；P4b 步骤 6）：就地写，`GpuScene.sync` 交给
    * 模拟器从基值重新乘、重算颜色平移与新粒子的颜色初值（含 HDR 下的 `brightness`，P4f 步骤 2），存活粒子保留出生时的颜色
@@ -233,6 +288,11 @@ export type BindingTarget =
    */
   | { kind: "camera"; object: number; field: CameraField }
   /**
+   * 场景相机的基准字段（P5e，`thisScene.setCameraTransforms`，WPE `G+0x118`…`+0x13c`）：只由脚本 API 产生，就地写进
+   * `SceneState.cameraBase`（每个字段单独一个键，值是 3 个或 1 个 float32），不标脏、不重编译，渲染器每帧求相机时读。
+   */
+  | { kind: "camera-base"; field: CameraBaseField }
+  /**
    * 用户纹理的属性来源（P11b，`compile/usertextures.ts`）：属性 `name` 换了值，就地记进 `SceneState`，宿主的 `usertex` 读文件、解码、裁切，
    * 下一帧换上用到它的槽，不重编译（WPE 的 setter 只在值变了时把材质记进待刷新集合，rea-p11-textures 2.1）。每个属性只登记一条，
    * 不管它绑在几个槽上。值只认字符串，别的类型当空串（缺省纹理）。
@@ -247,13 +307,16 @@ export type BindingTarget =
   /**
    * puppet 动画层的 `rate` / `blend` / `visible`（P12a 步骤 3 点 3，rea-p12-runtime 1.5：三个描述符可绑定，用户属性在两帧之间写进去、puppet
    * 当帧就读到，p12-REPORT 用例 4）：就地写进 `SceneState.animationLayers`，不标脏，`ScenePuppets.frame` 每帧读。`object` 是 `objects` 下标，
-   * `layer` 是 `ScenePuppet.layers` 的下标（丢掉找不到动画的项之后）。字段挂脚本报 `puppet:layer-script`（P12c），不在这里。
+   * `layer` 是层 id（P12e：编译期 = `animationlayers` 的 JSON 下标，运行时建的层是负数），不再是 `ScenePuppet.layers` 的下标。字段挂脚本报 `puppet:layer-script`（P12c），不在这里。
    */
   | { kind: "animation-layer"; object: number; layer: number; field: AnimationLayerField }
   | { kind: "recompile"; reason: RecompileReason; path: string };
 
 /** 动画层能绑用户属性的字段（同 `compile/puppet.ts` 的 `PuppetLayerField`）。 */
 export type AnimationLayerField = "rate" | "blend" | "visible";
+
+/** 相机基准的字段（P5e）：eye / center / up 三分量，zoom 一个 float。 */
+export type CameraBaseField = "eye" | "center" | "up" | "zoom";
 
 /** 相机对象的就地字段（P5d 步骤 3）。 */
 export type CameraField = "fov" | "zoom";

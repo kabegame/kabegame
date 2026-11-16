@@ -149,9 +149,10 @@ function setup(options: { hosted?: boolean } = {}) {
       ? {}
       : {
           puppetLayers: (object: number) => ({
-            count: () => puppets.layerCount(object),
+            ids: () => puppets.ids(object),
             find: (name: string) => puppets.findLayer(object, name),
-            control: (index: number) => puppets.layer(object, index),
+            control: (id: number) => puppets.control(object, id),
+            alive: (id: number) => puppets.alive(object, id),
             boneTransform: (bone: number | string) => puppets.boneTransform(object, bone),
             setBoneTransform: (bone: number | string, matrix: ArrayLike<number>) =>
               puppets.setBoneTransform(object, bone, matrix),

@@ -556,10 +556,14 @@ export class SceneHost {
     if (target.kind === "general") return `general/${target.key}`;
     if (target.kind === "particle-instance") return `objects/${target.object}/instanceoverride/${target.field}`;
     if (target.kind === "sound") return `objects/${target.object}/${target.field}`;
+    // 灯字段（P13f2）：同脚本运行时的 `targetKey`
+    if (target.kind === "light") return `objects/${target.object}/${target.field}`;
     // 文本字段（P6b 1e）：同脚本运行时重放表的键
     if (target.kind === "text") return `objects/${target.object}/${target.field}`;
     // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
     if (target.kind === "camera") return `objects/${target.object}/${target.field}`;
+    // 场景相机的基准（P5e）：同脚本运行时的 `targetKey`
+    if (target.kind === "camera-base") return `general/camera/${target.field}`;
     if (target.kind === "recompile") return target.path;
     // 用户纹理（P11b）：同脚本运行时的 `targetKey`
     if (target.kind === "user-texture") return `usertextures/${target.name}`;
@@ -1007,9 +1011,14 @@ export class SceneHost {
           const puppets = pending && pending.bundle === this.scriptBundle ? pending.puppets : this.scenePuppets;
           return puppets
             ? {
-                count: () => puppets.layerCount(object),
+                ids: () => puppets.ids(object),
                 find: (name) => puppets.findLayer(object, name),
-                control: (index) => puppets.layer(object, index),
+                control: (id) => puppets.control(object, id),
+                alive: (id) => puppets.alive(object, id),
+                // 运行时建删层（P12e）：动画表取运行时的 rig，建出来的层由 `settle` / 派发里的 `released` 钩子善后
+                animations: () => puppets.rig(object)?.animations ?? [],
+                create: (item, single) => puppets.createLayer(object, item, single),
+                destroy: (selector) => puppets.destroyLayers(object, selector),
                 // 骨骼脚本方法（P12d-2）
                 boneTransform: (bone) => puppets.boneTransform(object, bone),
                 setBoneTransform: (bone, matrix) => puppets.setBoneTransform(object, bone, matrix),
@@ -1190,6 +1199,16 @@ export class SceneHost {
     if (volume !== undefined) this.sceneSounds?.scheduler(object)?.setVolume(volume);
   };
 
+  /**
+   * 一个动画层被释放（P12e：单次层在派发里被删、或 `settle` 释放 destroyAnimationLayer 摘出的层）：删状态里三方共写的字段（渲染器正在画的与脚本看的
+   * 两份），再让脚本运行时给它的字段脚本发 `destroy`、清重放表里它的项。之后包装作废（`alive` 为假）。
+   */
+  private readonly puppetReleased = (object: number, id: number): void => {
+    this.drawnState?.removeAnimationLayer(object, id);
+    if (this.scriptState !== this.drawnState) this.scriptState?.removeAnimationLayer(object, id);
+    this.runtime?.destroyAnimationLayer(object, id);
+  };
+
   private syncSoundVolumes(): void {
     this.sceneSounds?.syncVolumes(this.soundVolumeOf);
   }
@@ -1354,7 +1373,12 @@ export class SceneHost {
    */
   puppetProbe(): {
     pending: boolean;
-    objects: { object: number; layers: { name: string; frame: number; playing: boolean }[] }[];
+    objects: {
+      object: number;
+      /** 摘出（destroyAnimationLayer）还没释放的层数（P12e：看「摘了还没 settle」）。 */
+      detached: number;
+      layers: { id: number; name: string; frame: number; playing: boolean }[];
+    }[];
   } {
     const pending = !this.scenePuppets && !!this.pendingPuppets;
     const puppets = this.scenePuppets ?? this.pendingPuppets?.puppets ?? null;
@@ -1365,9 +1389,10 @@ export class SceneHost {
       .filter((object) => puppets.layerCount(object) > 0)
       .map((object) => ({
         object,
-        layers: Array.from({ length: puppets.layerCount(object) }, (_, index) => {
-          const control = puppets.layer(object, index)!;
-          return { name: control.name, frame: control.getFrame(), playing: control.isPlaying() };
+        detached: puppets.detachedCount(object),
+        layers: puppets.ids(object).map((id) => {
+          const control = puppets.control(object, id)!;
+          return { id, name: control.name, frame: control.getFrame(), playing: control.isPlaying() };
         }),
       }));
     return { pending, objects };
@@ -1457,6 +1482,7 @@ export class SceneHost {
         if (drawn)
           this.scenePuppets?.frame(dt, stateSink(drawn), {
             event: (object, json) => this.runtime?.animationEvent(object, json),
+            released: this.puppetReleased,
           });
       },
       videos: this.videoSink,
@@ -1484,6 +1510,8 @@ export class SceneHost {
             bundle: this.scriptBundle,
             removed: (objects, regroup) => this.onDestroyed(objects, regroup),
           });
+          // destroyAnimationLayer 摘出的层在这里释放（P12e，WPE 先处理待删对象、再尾调排空 `ctx+0x1478`）：包装作废、字段脚本收 destroy
+          this.scenePuppets?.settle({ released: this.puppetReleased });
         }
       },
       onError: (reasons) => {
@@ -1747,6 +1775,8 @@ export class SceneHost {
         this.scriptBundle = bundle;
         this.scriptState = SceneState.fromBundle(bundle);
         syncAllocator(this.allocator, bundle);
+        // 相机基准（P5e）：WPE 先跑全部脚本的 `init`、后读 `scene.json` 的 `camera`，所以 `init` 读写的是构造缺省值；跑完之后按加载规则收尾
+        this.scriptState.beginScriptInit();
         // 先按新 bundle 建好动画播放器，`init` 里的 getAnimation().play() 才有落点（见 `pendingAnimations`）
         const player = new SceneAnimations(bundle.animations ?? []);
         // 加载期间又来一次加载（重编译）：脚本环境已经建好或正在跑 `init`（`runtime` 已赋值），之前的 `init` 控制的是上一份待用播放器，
@@ -1758,6 +1788,10 @@ export class SceneHost {
         if (this.runtime && this.pendingPuppets) pendingPuppets.carryOver(this.pendingPuppets.puppets);
         this.pendingPuppets = { bundle, puppets: pendingPuppets };
         await this.ensureRuntime(bundle, target.sceneAssets);
+        // `init` 全部跑完：相机基准按加载规则收尾，被 `scene.json` 覆盖的字段把脚本的写入从重放表里去掉（重编译不复活）。放在代数判断之前：
+        // 被取代的加载也跑过 `init`，之后的加载不再进这个分支，不收尾就没人做了（幂等）
+        for (const field of this.scriptState?.finishScriptInit() ?? [])
+          this.runtime?.forgetWrite(this.targetPath({ kind: "camera-base", field }));
         if (id !== this.generation) return;
         // `init` 里建了层（P6d3b，rea-p6d-layers 5）：放弃本次加载、带着结构立刻重编。脚本环境保留（`init` 不重跑），第二次编完才建 GPU 资源、
         // 画首帧，画面与 WPE 一样；不画旧 bundle 的首帧。`pendingAnimations` / `pendingPuppets` 走上面「加载期间又来一次加载」的接续
@@ -1795,6 +1829,12 @@ export class SceneHost {
           // 待用的（`init` 里的控制要保留）不接旧时钟；否则接上正在播的，没有时接过期的待用运行时（P12c）
           this.pendingPuppets = null;
           if (!pendingPuppets) puppets.carryOver(this.scenePuppets ?? stalePuppets?.puppets ?? null);
+          // 状态的动画层字段按运行时的层表对齐（P12e）：运行时建的层从脚本状态拷、删过的编译期层去掉；在 `refresh` 之前（它读状态）、重放脚本写入之前
+          state.syncAnimationLayers(
+            puppets.liveLayers(),
+            this.scriptState !== state ? this.scriptState : null,
+            puppets.objects(),
+          );
           puppets.refresh(stateSink(state));
           this.scenePuppets = puppets;
           // 运行中属性写进状态时同步交给来源表解码（P11b 步骤 2）；解码完成再经 `onUserTextureReady` 标脏

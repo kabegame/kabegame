@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { glmInverse, spotViewProjection } from "../compile/volumetrics";
 import { layerLocalMatrix } from "./layout";
-import { insideLightVolume } from "./volumetrics";
+import { insideLightVolume, VolumetricsRenderer } from "./volumetrics";
 
 const FORWARD = [0, 0, -1];
 
@@ -44,5 +44,38 @@ describe("insideLightVolume（V4）", () => {
     expect(insideLightVolume(light, [5, 4, 0.2], FORWARD)).toBe(false);
     expect(insideLightVolume(light, [-1, 0, 0.2], FORWARD)).toBe(false);
     expect(insideLightVolume(light, [11, 0, 0.2], FORWARD)).toBe(false);
+  });
+});
+
+describe("VolumetricsRenderer.frame（P13f2）", () => {
+  it("灯的常量每帧按 frameOf 给的几何写（不是编译期初值），在内判定也用它", () => {
+    const written: Record<string, ArrayLike<number>>[] = [];
+    const renderer = Object.create(VolumetricsRenderer.prototype) as {
+      lights: unknown[];
+      write: (draw: unknown, values: Record<string, ArrayLike<number>>) => void;
+      frame: VolumetricsRenderer["frame"];
+    };
+    const draws = {
+      light: { object: 4, kind: "point", radius: 1, position: [0, 0, 0], constants: { g_RenderVar2: [0, 0, 0, 2] } },
+      back: {},
+      front: {},
+      fullscreen: {},
+      inside: false,
+    };
+    renderer.lights = [draws];
+    renderer.write = (_draw, values) => written.push({ ...values });
+    const identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+    renderer.frame(() => ({
+      viewProjection: identity,
+      eye: [5, 6, 7.1],
+      forward: [0, 0, -1],
+      geometry: { radius: 3, position: [5, 6, 7], constants: { g_RenderVar2: [5, 6, 7, 2] } },
+    }));
+    expect(written.map((values) => Array.from(values.g_RenderVar2))).toEqual([
+      [5, 6, 7, 2],
+      [5, 6, 7, 2],
+    ]);
+    // 眼睛在 (5, 6, 7) 半径 3 的球里：按这一帧的几何判，不是编译期的 (0, 0, 0) 半径 1
+    expect(draws.inside).toBe(true);
   });
 });

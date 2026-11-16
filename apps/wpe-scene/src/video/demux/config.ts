@@ -5,11 +5,20 @@
  *   `<样本项>.<profile_space 字母><profile_idc>.<兼容标志按位反序的十六进制>.<L|H><level_idc>.<约束字节>`，约束字节 6 个、
  *   去掉末尾的 0 之后各自十六进制用 `.` 连接（步骤 0 实测 3822149301 为 `hvc1.1.6.L153.90`）。前缀照样本项（avc1 / avc3 /
  *   hvc1 / hev1），十六进制用小写（步骤 0 在 Chromium 里实测过的写法）。
- * - **颜色照 WPE（Media Foundation）**：步骤 0 实测 WebCodecs 不读码流的色彩标签、缺省一律按 BT.709，所以必须自己给。矩阵依次取
- *   `colr` 盒 → H.264 SPS 的 VUI → 没标时按分辨率（MF 的 SD / HD 规则，阈值 `MF_HD_MIN_HEIGHT`，步骤 4 用 WPE 实测分界）；
- *   码值 2（未指定）当作没标、往下一个来源找。原色与传递函数恒报 bt709，即不做色域与传递函数转换（WPE 不做，phase-9c
- *   「步骤 3」）；范围取 `colr` 的 full_range，没有 `colr` 时取 VUI 的 video_full_range_flag，都没有为 false（limited）。
- *   HEVC 先只认 `colr`（语料唯一的 HEVC 是 1440p，按分辨率给 709，和它码流的标签一致），HEVC 的 VUI 等需要时再解。
+ * - **颜色照 WPE**：步骤 0 实测 WebCodecs 不读码流的色彩标签、缺省一律按 BT.709，所以必须自己给。两条路径（`ColorRule`）：
+ *   - **场景视频**（`"scene"`，`.tex` 视频纹理）：矩阵恒为 BT.709，不看码流的标签、也不按分辨率。步骤 4 走查（phase-9d「步骤 4
+ *     走查第一轮」）抓了 WPE 的视频纹理、从原始 YUV 重建：标 bt709 的 1080p / 1440p HEVC、标 bt470bg 的 540p 与 4K 四段都是 709
+ *     （按 601 重建，后两段最大差 7 与 22）。
+ *   - **用户视频**（`"user"`，P11b 的 `scenetexture`，WPE 走另一条读取路径）：矩阵依次取 `colr` 盒 → H.264 SPS 的 VUI → 没标时按分辨率
+ *     （Media Foundation 的 SD / HD 规则：高 > `MF_SD_MAX_HEIGHT`（576）用 709，否则 601，宽度不参与）；码值 2（未指定）当作没标、往下一个来源找。
+ *     **和 WPE 有意不同**：走查第二轮实测 WPE 读用户视频不看标签、只按高度（高 > 576 用 709，否则 601；480² 标 709 → 601、
+ *     720² 标 601 → 709）。不看标签算 WPE 的缺陷（用户定，2026-11-16），用户视频不在语料里、没有画面依赖它，我们照标签。
+ *     没标时的分界照 WPE 实测（720×576 → 601、720×578 → 709、1280×480 → 601、480×720 → 709）。
+ *   两条路径共同：原色与传递函数恒报 bt709，即不做色域与传递函数转换（WPE 不做，phase-9c「步骤 3」）；范围取 `colr` 的 full_range，
+ *   没有 `colr` 时取 VUI 的 video_full_range_flag，都没有为 false（limited）（走查的四段都是 limited，full 没有对过）。
+ *   HEVC 先只认 `colr`，HEVC 的 VUI 等需要时再解。
+ *   色度上采样的位置照不了：WPE 纵向第 k 个色度样本在亮度第 2k − 0.5 行，Chromium 拷 `VideoFrame` 时在 2k + 0.5 行（标准），
+ *   颜色剧烈变化的横向边缘差到几十级（走查 3823859141 整帧最大 45、平均 1.22）。要照它得读回 YUV 自己转换，用户定不做（已知差异）。
  * - **SPS**：avcC 里第一个 SPS，去掉防竞争字节（`00 00 03` 里的 03）后按 exp-Golomb 读到 `vui_parameters`，High 系 profile 的
  *   chroma_format_idc、bit depth 与 scaling list 照 ITU-T H.264 7.3.2.1.1 跳过；顺带算出裁剪后的宽高（语料扫描用它核对解析走对了）。
  *
@@ -17,20 +26,23 @@
  */
 import type { VideoTrackIndex } from "./mp4";
 
-/** Media Foundation 没有色彩标签时按分辨率选矩阵：编码高度 ≥ 这个值用 BT.709，否则 BT.601（smpte170m）。 */
-export const MF_HD_MIN_HEIGHT = 720;
+/** 没有色彩标签时按分辨率选矩阵（Media Foundation 的规则，走查第二轮在 WPE 实测）：高 > 这个值用 BT.709，否则 BT.601（smpte170m）。 */
+export const MF_SD_MAX_HEIGHT = 576;
 
 /** WebCodecs 的矩阵名；TS 的 DOM 类型里还没有 `bt2020-ncl`（Chromium 认）。 */
 export type WpeMatrix = VideoMatrixCoefficients | "bt2020-ncl";
 
-/** 矩阵从哪里来：`colr` 盒、H.264 SPS 的 VUI、没标时的分辨率规则。 */
-export type ColorSource = "colr" | "vui" | "resolution";
+/** 视频走哪条路径的颜色规则：场景视频纹理（矩阵恒为 BT.709），或用户视频（照码流标签、没标按分辨率）。 */
+export type ColorRule = "scene" | "user";
+
+/** 矩阵从哪里来：`colr` 盒、H.264 SPS 的 VUI、没标时的分辨率规则，或场景视频的固定规则。 */
+export type ColorSource = "colr" | "vui" | "resolution" | "scene";
 
 export interface WpeColor {
   colorSpace: VideoColorSpaceInit;
   matrix: WpeMatrix;
   source: ColorSource;
-  /** 来源里的矩阵码（ISO/IEC 23091-2）；按分辨率时 null。 */
+  /** 来源里的矩阵码（ISO/IEC 23091-2）；按分辨率时 null。场景视频也记码流里标的码（只进说明，不决定矩阵），没标为 null。 */
   code: number | null;
   /** 码值不在映射表里、按 bt709 处理。 */
   unknownCode: boolean;
@@ -42,21 +54,23 @@ export interface WpeColor {
   note: string;
 }
 
-/** codec 串、description、色彩空间：交给 VideoDecoder.configure。 */
-export function decoderConfig(track: VideoTrackIndex): VideoDecoderConfig {
+/** codec 串、description、色彩空间（按 `rule`）：交给 VideoDecoder.configure。 */
+export function decoderConfig(track: VideoTrackIndex, rule: ColorRule): VideoDecoderConfig {
   return {
     codec: codecString(track),
     codedWidth: track.codedWidth,
     codedHeight: track.codedHeight,
     description: track.description,
-    colorSpace: wpeColorSpace(track),
+    colorSpace: wpeColorSpace(track, rule),
     hardwareAcceleration: "prefer-hardware",
   };
 }
 
-/** 照 WPE（Media Foundation）的颜色：矩阵取 colr → H.264 SPS VUI → 没标时按分辨率，原色与传递函数恒为 bt709，范围取码流的。 */
-export function wpeColorSpace(track: VideoTrackIndex): VideoColorSpaceInit {
-  return wpeColor(track).colorSpace;
+/**
+ * 照 WPE 的颜色：场景视频矩阵恒为 bt709；用户视频矩阵取 colr → H.264 SPS VUI → 没标时按分辨率。原色与传递函数恒为 bt709，范围取码流的。
+ */
+export function wpeColorSpace(track: VideoTrackIndex, rule: ColorRule): VideoColorSpaceInit {
+  return wpeColor(track, rule).colorSpace;
 }
 
 /** 矩阵码 → WebCodecs 的矩阵名：1 → bt709，5 / 6 → smpte170m（bt470bg 与它同一个矩阵），9 → bt2020-ncl，其它 null。 */
@@ -68,7 +82,7 @@ export function matrixFromCode(code: number): WpeMatrix | null {
 }
 
 /** `wpeColorSpace` 的完整结论：结果、矩阵与范围的来源、说明。 */
-export function wpeColor(track: VideoTrackIndex): WpeColor {
+export function wpeColor(track: VideoTrackIndex, rule: ColorRule): WpeColor {
   let vui: AvcVui | null = null;
   let spsError: string | undefined;
   if (track.codec === "avc") {
@@ -94,17 +108,26 @@ export function wpeColor(track: VideoTrackIndex): WpeColor {
   }
   const mapped = code === null ? null : matrixFromCode(code);
   const unknownCode = code !== null && mapped === null;
-  const matrix: WpeMatrix = mapped ?? (code === null && track.codedHeight < MF_HD_MIN_HEIGHT ? "smpte170m" : "bt709");
   const rangeSource = track.colr ? "colr" : vui?.fullRange !== undefined ? "vui" : "default";
   const fullRange = track.colr ? track.colr.fullRange : (vui?.fullRange ?? false);
 
   const where = source === "colr" ? "colr" : "SPS VUI";
-  let note =
-    source === "resolution"
-      ? `未标，按分辨率（高 ${track.codedHeight} ${track.codedHeight >= MF_HD_MIN_HEIGHT ? "≥" : "<"} ${MF_HD_MIN_HEIGHT}）→ ${matrix}`
-      : unknownCode
-        ? `${where} 矩阵码 ${code} 不认识，按 bt709`
-        : `${where} 矩阵码 ${code} → ${matrix}`;
+  let matrix: WpeMatrix;
+  let note: string;
+  if (rule === "scene") {
+    // 场景视频：WPE 不看标签、不按分辨率（步骤 4 走查），标签只进说明
+    matrix = "bt709";
+    note = `场景视频恒为 bt709（${source === "resolution" ? "码流未标" : `码流 ${where} 矩阵码 ${code}`}）`;
+    source = "scene";
+  } else {
+    matrix = mapped ?? (code === null && track.codedHeight <= MF_SD_MAX_HEIGHT ? "smpte170m" : "bt709");
+    note =
+      source === "resolution"
+        ? `未标，按分辨率（高 ${track.codedHeight} ${track.codedHeight > MF_SD_MAX_HEIGHT ? ">" : "≤"} ${MF_SD_MAX_HEIGHT}）→ ${matrix}`
+        : unknownCode
+          ? `${where} 矩阵码 ${code} 不认识，按 bt709`
+          : `${where} 矩阵码 ${code} → ${matrix}`;
+  }
   note += `；范围 ${fullRange ? "full" : "limited"}（${rangeSource === "default" ? "未标" : rangeSource === "colr" ? "colr" : "VUI"}）`;
   if (spsError) note += `；SPS 解析失败：${spsError}`;
   return {

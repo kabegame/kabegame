@@ -334,8 +334,12 @@ pub struct ImageNativeMetadataRow {
     pub format_key: Option<String>,
 }
 
+/// 删掉不再被引用的缩略图文件：只删 Kabegame 自己生成、位于 `thumbnails_dir` 内的，与原文件相同的不删。
 #[cfg(not(target_os = "android"))]
-fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Option<&str>) {
+pub(crate) fn remove_thumbnail_file_if_needed(
+    local_path: Option<&str>,
+    thumbnail_path: Option<&str>,
+) {
     let Some(thumb) = thumbnail_path.map(str::trim).filter(|p| !p.is_empty()) else {
         return;
     };
@@ -365,7 +369,11 @@ fn remove_thumbnail_file_if_needed(local_path: Option<&str>, thumbnail_path: Opt
 }
 
 #[cfg(target_os = "android")]
-fn remove_thumbnail_file_if_needed(_local_path: Option<&str>, _thumbnail_path: Option<&str>) {}
+pub(crate) fn remove_thumbnail_file_if_needed(
+    _local_path: Option<&str>,
+    _thumbnail_path: Option<&str>,
+) {
+}
 
 /// 删除由 Kabegame 生成且位于 `compatibles_dir` 内的兼容副本。
 /// canonicalize 后再校验目录归属，避免删除原始媒体、外部路径或越界软链接。

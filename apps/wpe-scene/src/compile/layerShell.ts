@@ -67,7 +67,8 @@ export function layerShellValues(object: SceneObject, bind: LayerShellBind = unw
     angles: numbers(bind("angles", object.angles), [0, 0, 0]),
     size: numbers(bind("size", object.size)),
     alpha: scalar("alpha"),
-    color: vector("color", [1, 1, 1]),
+    // 灯对象的 `color` 是灯的颜色，构造缺省黑（P13f2，`FUN_14018ff60`；灯光记录读图层状态的这个字段）
+    color: vector("color", typeof object.light === "string" ? [0, 0, 0] : [1, 1, 1]),
     brightness: scalar("brightness"),
     visible: boolFieldValue(object.visible, bind("visible", object.visible)),
     visibleBound: isUserBinding(object.visible),

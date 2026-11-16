@@ -263,3 +263,26 @@ export function legacyLightFrame(lights: SceneLights, state: SceneState, worlds:
 **语料**（`ignore/p13/f/corpus-f1.json` 对 `corpus-before.json`）：189 → 190（`3115845558`），没有新增键、没有掉出；`3706286085` 只剩 `object:parent`（P13f2）。
 
 **测试**：`compile/p13f-fog.test.ts` 13 例（含真翻译器编 5 个确定性工程），`render/p8.test.ts` 加「开雾强制 passthrough」的计划用例，`render/rebuild.test.ts` 加「雾的数值字段」就地 = 重编译；改了 `p2a`、`p8`、`scriptApi`、`script/api` 里拿雾当「没实现」例子的断言。变异检查 15 / 15（`ignore/p13/f/mut/mutations.py`）。整批 `src/compile` + `src/render` 的 6 个失败都与本节无关：`scriptApi` 的 `3304642534` 两例来自别的会话的 `sortLayer`；`mdl` / `puppet` 单独跑通过（整批时超时）；`p3a` 的语料用例跑满 600 s 超时；`pipeline` 的上限超标里四条 HEAD 快照（`18dc5475`）上就有，多出的「`3570755196` 单字节探测」来自别的会话 P6d3b 的 `SceneFs.existsInAssets`。
+
+## P13f2 实施记录（2026-11-16，灯的运行时）
+
+**改动**
+- `compile/bindings.ts`：`LIGHT_FIELDS`（12 个数值字段与构造缺省）、`lightFieldValue`（float32）、目标 `{ kind: "light" }`。
+- `compile/lights.ts`：`SceneLightObject` / `compileLightObjects`（类型、遗留槽、开关、数值字段初值，静态字段挂属性 / 脚本 / 关键帧照报 `light:runtime:*`）、`sceneLightOf`（世界矩阵、`sortOrigin`）、`legacyLightFrame`；`collectSceneLights` / `legacyLightUniforms` 保留成按 JSON 算的测试入口；`sortLights` 用局部 origin。
+- 新文件 `render/lights.ts`：`lightRecords` / `legacyLightInputs`（世界矩阵与可见性沿父链）。
+- `compile/bundle.ts`：`bundle.lightObjects`、`bundle.legacyLights`，`bundle.lights` 只剩计数与档位；灯字段不再登记重编译；遗留灯三个数组不进材质常量；选灯的阴影档在有 `castshadow` 的 V1 灯时照样解析（L3 补出的 P13d 缺陷，见 p13-REPORT）；体积光改用灯对象。
+- `compile/layerShell.ts`：灯对象的 `color` 缺省黑。
+- `compile/volumetrics.ts`：`volumetricGeometry`（几何与常量，位置与聚光方向取世界矩阵）；`castvolumetrics` 的点光 / 聚光都编，不看可见性；残留值照报按全部可见判。
+- `render/scene.ts`：`frameLightValues` 每帧按状态组记录；遗留灯按上一帧末的状态写（按帧时刻换代）；阴影图集按加载时的记录建；体积光按可见性分段、每帧按状态算几何。`render/shadows.ts`、`render/volumetrics.ts` 跟着改接口。
+- `render/state.ts`：`SceneState.lights` 与写入；`script/stateWrite.ts`、`script/runtime.ts`、`host.ts` 认新目标。
+- `compile/scripts.ts`：`targetOf` 给灯字段出目标、`targetValueType`；`compile/animations.ts` 去掉灯对象的特判（`value:animation:light` 不再报）。
+- `script/api.ts`：`installLight`（12 个数值字段可读写，`light` 与三个开关只读、写入告警一次）。
+- `compile/features.ts`：灯挂父对象不再报 `object:parent`。
+
+**对 WPE**：`p13f-light` 按 WPE 日志回放第 153 帧，灯光数组与遗留灯数组最大差 2e-6（日志只记 6 位小数）；`p13f-vol` 四种状态 0 差异；`p13f-sort` 两种状态各 2 个像素 1 级（修 L3 之前差 82 级）。
+
+**语料**（`corpus-f2.json` 对 `corpus-f1.json`）：灯的 `object:parent` 4 张、`value:animation:light` 2 张全部去掉，`3706286085` 变干净；`3455121165` 多 `volumetrics:transparentsorting`（太阳灯可见性绑属性，现在运行时可见就会画体积光；这张本来就因聚光阴影不能渲染）。同期别的会话的 `createLayer` 解锁 4 张，不归本节。
+
+**测试**：新 `render/p13f-lights.test.ts` 8 例；`compile/lights.test.ts` 按新模型改写编译用例、加 L3；`compile/p13e.test.ts`、`compile/animations.test.ts` 按新规则改期望；`render/rebuild.test.ts` 加「遗留灯晚一帧」；`render/p13e-volumetrics.test.ts` 加 `frame` 逐帧常量。变异 13 / 13（`ignore/p13/f/mut/mutations-f2.py`）。
+
+**还没做**：`3706286085` 按 `FINAL_CHECK.md` 的走查（复制工程逐帧对照）；回归 LR4 真机预览。

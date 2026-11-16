@@ -874,8 +874,7 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
     if (hasEffects) unsupported.add("sprite:effects");
   } else if (kind && kind !== "image" && kind !== "light" && kind !== "sound" && kind !== "text")
     unsupported.add(`object:${kind}`);
-  // 灯的位置取本地 origin（`lights.ts`），挂在父链下时的位置没有和 WPE 比过，照报
-  if (kind === "light" && parent !== null) unsupported.add("object:parent");
+  // 灯挂父对象（P13f2）：位置、方向与可见性每帧沿父链现算（`render/lights.ts`，`p13f-light` 的 L1、`p13f-vol` 的 L4 实测），不再照报
   const lightKey = (key: string) => kind === "light" && LIGHT_KEYS.has(key);
   // 声音对象（P6a 步骤 1）：父层、可见性不影响播放（p6-REPORT `p6a-misc`），`parent` / `origin` 只在三维声音里用
   const sound = isSoundObject(object);

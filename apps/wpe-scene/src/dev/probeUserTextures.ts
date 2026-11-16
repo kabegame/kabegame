@@ -6,7 +6,7 @@
  */
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
-import { mediaKind, UserTextureSources, type ShortcutIcon } from "../usertex/sources";
+import { UserTextureSources, type ShortcutIcon } from "../usertex/sources";
 
 /** 请求里给的快捷方式图标（P11d）：`rgba` 是 base64 的直通 alpha RGBA（宽·高·4 字节）；探针没有后端，图标只能由请求给。 */
 export interface ProbeShortcutIconInput {
@@ -56,17 +56,6 @@ export async function prepareProbeUserTextures(
     ...shortcuts.map((source) => [source.name, shortcutKeyOf(userProperties?.[source.name]), "usershortcut"] as const),
   ]);
   return sources;
-}
-
-/** bundle 的属性来源按 `userProperties` 选了视频的那些值（`mediaKind`）：探针据此判断要不要加载视频（`checkVideoVisibility`）。 */
-export function userVideoValues(
-  bundle: Pick<SceneBundle, "userTextures">,
-  userProperties: Record<string, unknown> | undefined,
-): string[] {
-  return (bundle.userTextures ?? []).flatMap((source) => {
-    const value = source.kind === "property" ? userProperties?.[source.name] : undefined;
-    return typeof value === "string" && value !== "" && mediaKind(value) === "video" ? [value] : [];
-  });
 }
 
 /** 校验 `gifDts`：数组，每项有限非负；不合法抛 RangeError（编译之前查）。缺省原样返回 undefined。 */

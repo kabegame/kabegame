@@ -19,8 +19,9 @@
 import type { ScenePass } from "./bundle";
 import { checkPassFeatures, checkProgramFeatures, normalizeDepthKeys } from "./features";
 import type { SceneFs } from "./fs";
-import type { LightCounts } from "./lights";
-import { isSceneObject, numbers, parseMaterial, type SceneObject, type SceneScalar, type SceneValue } from "./model";
+import type { LightCounts, SceneLightObject } from "./lights";
+import type { LightValues } from "./bindings";
+import { parseMaterial } from "./model";
 import { shaderUniforms, type ShaderCompiler, type ShaderTextureSlot } from "./shader";
 import { FBO_FORMATS } from "./tex";
 import type { TranslateResult } from "../wpesl2wgsl";
@@ -232,24 +233,16 @@ export function spotViewProjection(
   return multiply(perspectiveRH(fov, 1, near, far), view);
 }
 
-/** 一盏会画的体积光（编译期常量；每帧量由渲染器算）。 */
-export interface VolumetricLight {
+/**
+ * 一盏会画体积光的灯：类型、`SHADOW` 变体与三份 pass 是编译期定的；几何与常量（{@link VolumetricGeometry}）这里是加载时的初值，
+ * 渲染器每帧按状态重算（P13f2）。
+ */
+export interface VolumetricLight extends VolumetricGeometry {
   /** `objects` 下标：渲染器按它把灯插进图层序列。 */
   object: number;
   kind: "point" | "spot";
   /** `SHADOW` 变体（castshadow ∧ 阴影档 ≠ 0，V6）：点光的 `g_RenderVar0` / `g_RenderVar3` 每帧取这盏灯的阴影条目。 */
   shadow: boolean;
-  /** 原始 `radius`（float32）：点光灯体缩放与「在内」判定。 */
-  radius: number;
-  /** 世界位置（根对象的 `origin`）。 */
-  position: [number, number, number];
-  /**
-   * 不随相机变的 uniform：`g_RenderVar1`（r·0.99、cos 内外锥、intensity）、`g_RenderVar2`（位置、density）、`g_RenderVar4`
-   * （color、volumetricsexponent）、`g_AltViewProjectionMatrix`、`g_AltModelMatrix`，聚光另有 `g_RenderVar3`。
-   */
-  constants: Record<string, number[]>;
-  /** 聚光的「在内」判定（V4）：归一化的灯轴（世界矩阵第 0 行 / 四分量长度）与远平面上圆的半径。 */
-  spot?: { axis: [number, number, number]; farRadius: number };
   back: ScenePass;
   front: ScenePass;
   fullscreen: ScenePass;
@@ -275,9 +268,10 @@ export interface VolumetricsCompileContext {
 }
 
 export interface VolumetricsInput {
-  objects: readonly SceneObject[];
-  /** 读灯字段（解析 `{user}` 并登记重编译，`lights.ts` 的 `bindingReader`）。 */
-  read: (value: SceneValue | undefined, path: string) => SceneScalar | undefined;
+  /** 灯对象（P13f2，`compile/lights.ts` 的 `compileLightObjects`）：字段初值与 `castvolumetrics` / `castshadow` / `usecookie`。 */
+  lights: readonly SceneLightObject[];
+  /** 灯的图层初值（`bundle.layers` 里的 `origin` / `angles` / `scale` / `color`）：只给常量初值，渲染器每帧按状态重算。 */
+  layerOf: (object: number) => VolumetricLayerInput | undefined;
   /** volumetrics 档 0–4（0 = 关）。 */
   quality: number;
   /** 阴影档 0–4 与 `lightconfig` 的计数（P13d）。 */
@@ -288,113 +282,137 @@ export interface VolumetricsInput {
   inGroup: (object: number) => boolean;
 }
 
-/** 场景里有没有会画的体积光灯（可见点光 / 聚光且 `castvolumetrics`）；读档位前判一次，没有就不读 WPE 的设置。 */
-export function wantsVolumetrics(objects: readonly SceneObject[], read: VolumetricsInput["read"]): boolean {
-  return objects.some((object, index) => volumetricKind(object, index, read) !== null);
+/** 编译期常量初值用的图层字段。 */
+export interface VolumetricLayerInput {
+  origin: readonly number[];
+  angles: readonly number[];
+  scale: readonly number[];
+  color: readonly number[];
 }
-
-function volumetricKind(object: SceneObject, index: number, read: VolumetricsInput["read"]): "point" | "spot" | null {
-  if (!isSceneObject(object)) return null;
-  const kind = object.light === "lpoint" ? "point" : object.light === "lspot" ? "spot" : null;
-  if (!kind) return null;
-  const at = (key: string) => `objects/${index}/${key}`;
-  if (read(object.castvolumetrics as SceneValue | undefined, at("castvolumetrics")) !== true) return null;
-  if (read(object.visible as SceneValue | undefined, at("visible")) === false) return null;
-  return kind;
-}
-
-/** 灯对象缺键时的值（`FUN_14018ff60`，rea-p13-lights 构造缺省）。 */
-const DEFAULTS = { intensity: 0, radius: 1, innercone: 20, outercone: 30, density: 2, volumetricsexponent: 1 };
 
 /**
- * 编译体积光：每盏会画的灯一份常量与三份 pass（背面、正面、全屏正面），整场一份模糊与合成。档位为 0 或没有会画的灯时返回 null。
+ * 场景里有没有会画体积光的灯（点光 / 聚光且 `castvolumetrics`）；读档位前判一次，没有就不读 WPE 的设置。P13f2 起不看可见性：可见性是
+ * 运行时状态，渲染器每帧判（`p13f-vol` 的 L4：隐藏的灯不画、也没有它那一段）。
+ */
+export function wantsVolumetrics(lights: readonly SceneLightObject[]): boolean {
+  return lights.some((light) => volumetricKind(light) !== null);
+}
+
+function volumetricKind(light: SceneLightObject): "point" | "spot" | null {
+  if (!light.castVolumetrics) return null;
+  return light.kind === "point" || light.kind === "spot" ? light.kind : null;
+}
+
+/** 一盏体积光灯随状态变的量（P13f2）：编译期给初值，渲染器每帧按 `SceneState` 重算（{@link volumetricGeometry}）。 */
+export interface VolumetricGeometry {
+  /** 原始 `radius`（float32）：点光灯体缩放与「在内」判定。 */
+  radius: number;
+  /** 世界位置（世界矩阵的平移）。 */
+  position: [number, number, number];
+  /**
+   * 不随相机变的 uniform：`g_RenderVar1`（r·0.99、cos 内外锥、intensity）、`g_RenderVar2`（位置、density）、`g_RenderVar4`
+   * （color、volumetricsexponent）、`g_AltViewProjectionMatrix`、`g_AltModelMatrix`，聚光另有 `g_RenderVar3`。
+   */
+  constants: Record<string, number[]>;
+  /** 聚光的「在内」判定（V4）：归一化的灯轴（世界矩阵第 0 行 / 四分量长度）与远平面上圆的半径。 */
+  spot?: { axis: [number, number, number]; farRadius: number };
+}
+
+/**
+ * 一盏灯的几何与常量（V1、V2）：字段取 `values`（float32），颜色取图层 `color`，位置与聚光方向取世界矩阵 `world`（列主序；WPE 读对象的
+ * 世界矩阵，`p13f-vol` 的 L4：挂在父对象下的灯位置 = 父 + 本地）。
+ */
+export function volumetricGeometry(
+  kind: "point" | "spot",
+  values: LightValues,
+  color: readonly number[],
+  world: ArrayLike<number>,
+  orthographic: boolean,
+): VolumetricGeometry {
+  const position: [number, number, number] = [f(world[12]), f(world[13]), f(world[14])];
+  const radius = f(values.radius);
+  const toRadians = (degrees: number) => f(degrees * f(0.017453292));
+  const constants: Record<string, number[]> = {
+    g_RenderVar1: [
+      f(radius * f(0.99)),
+      cosf(toRadians(values.innercone)),
+      cosf(toRadians(values.outercone)),
+      f(values.intensity),
+    ],
+    g_RenderVar2: [...position, f(values.density)],
+    g_RenderVar4: [f(color[0] ?? 0), f(color[1] ?? 0), f(color[2] ?? 0), f(values.volumetricsexponent)],
+  };
+  if (kind === "point") {
+    constants.g_AltViewProjectionMatrix = [radius, 0, 0, 0, 0, radius, 0, 0, 0, 0, radius, 0, ...position, 1];
+    // 点光的 `g_AltModelMatrix` 是点光阴影的 P（`POINTLIGHT` 不读），给单位阵
+    constants.g_AltModelMatrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    return { radius, position, constants };
+  }
+  const vp = spotViewProjection(world, values.outercone, radius, orthographic);
+  const inverse = glmInverse(vp);
+  constants.g_AltModelMatrix = Array.from(vp);
+  constants.g_AltViewProjectionMatrix = Array.from(inverse);
+  const row0 = [world[0], world[1], world[2], world[3]].map((v) => f(v));
+  constants.g_RenderVar3 = row0;
+  const length = f(
+    Math.sqrt(f(f(f(f(row0[0] * row0[0]) + f(row0[1] * row0[1])) + f(row0[2] * row0[2])) + f(row0[3] * row0[3]))),
+  );
+  // 远平面上的圆半径：NDC (0, 0, 0, 1) 与 (0, 1, 0, 1) 经逆矩阵变回世界、除 w 后的距离（V4，运算顺序没核）
+  const unproject = (y: number) => {
+    const w = f(f(inverse[7] * y) + inverse[15]);
+    return [0, 1, 2].map((k) => f(f(f(inverse[4 + k] * y) + inverse[12 + k]) / w));
+  };
+  const [a, b] = [unproject(0), unproject(1)];
+  const farRadius = f(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]));
+  return {
+    radius,
+    position,
+    constants,
+    spot: { axis: [f(row0[0] / length), f(row0[1] / length), f(row0[2] / length)], farRadius },
+  };
+}
+
+/**
+ * 编译体积光：每盏 `castvolumetrics` 的点光 / 聚光一份常量初值与三份 pass（背面、正面、全屏正面），整场一份模糊与合成。档位为 0 或
+ * 没有这样的灯时返回 null。P13f2 起不看可见性（渲染器每帧判），照报的残留值配置按「全部可见」判（待定 3）。
  */
 export async function compileVolumetrics(
   context: VolumetricsCompileContext,
   input: VolumetricsInput,
 ): Promise<SceneVolumetrics | null> {
-  const { objects, read, quality, shadowQuality, counts, orthographic } = input;
+  const { quality, shadowQuality, counts, orthographic } = input;
   if (quality <= 0) return null;
   const issues = context.unsupported;
-  const kinds = objects.map((object, index) => volumetricKind(object, index, read));
-  if (!kinds.some(Boolean)) return null;
-  // 可见的聚光数超过聚光槽时，排不上的那盏的聚光 VP 是残留值（V6），照报
-  const visibleSpots = objects.filter(
-    (object, index) =>
-      isSceneObject(object) &&
-      object.light === "lspot" &&
-      read(object.visible as SceneValue | undefined, `objects/${index}/visible`) !== false,
-  ).length;
-  // 点光阴影条目：带阴影的可见点光排在前面（`sortLights` 按 flags 降序），全部排得上 ⇔ 个数 ≤ min(pointShadow, point)
-  const castingPoints = objects.filter(
-    (object, index) =>
-      isSceneObject(object) &&
-      object.light === "lpoint" &&
-      read(object.visible as SceneValue | undefined, `objects/${index}/visible`) !== false &&
-      read(object.castshadow as SceneValue | undefined, `objects/${index}/castshadow`) === true,
-  ).length;
+  const candidates = input.lights.filter((light) => volumetricKind(light) !== null);
+  if (!candidates.length) return null;
+  // 聚光数超过聚光槽时，排不上的那盏的聚光 VP 是残留值（V6），照报；可见性是运行时状态，按全部可见判
+  const spots = input.lights.filter((light) => light.kind === "spot").length;
+  // 点光阴影条目：带阴影的点光排在前面（`sortLights` 按 flags 降序），全部排得上 ⇔ 个数 ≤ min(pointShadow, point)
+  const castingPoints = input.lights.filter((light) => light.kind === "point" && (light.flags & 1) !== 0).length;
   const lights: VolumetricLight[] = [];
-  for (const [index, object] of objects.entries()) {
-    const kind = kinds[index];
-    if (!kind) continue;
-    const at = (key: string) => `objects/${index}/${key}`;
-    const field = (key: keyof typeof DEFAULTS) =>
-      f(numbers(read(object[key] as SceneValue | undefined, at(key)), [DEFAULTS[key]])[0] ?? DEFAULTS[key]);
-    const vector = (key: string, fallback: number[]) =>
-      numbers(read(object[key] as SceneValue | undefined, at(key)), fallback).map((v) => f(v));
-    const flag = (key: string) => read(object[key] as SceneValue | undefined, at(key)) === true;
+  for (const light of candidates) {
+    const index = light.object;
+    const kind = volumetricKind(light)!;
     if (input.inGroup(index)) issues.add("volumetrics:group");
-    if (flag("usecookie")) issues.add("volumetrics:cookie");
-    const shadow = flag("castshadow") && shadowQuality !== 0;
+    if (light.flags & 2) issues.add("volumetrics:cookie");
+    const shadow = (light.flags & 1) !== 0 && shadowQuality !== 0;
     if (kind === "spot") {
       if (shadow) issues.add("volumetrics:spot-shadow");
-      if (visibleSpots > counts.spot) issues.add("volumetrics:spot-unassigned");
+      if (spots > counts.spot) issues.add("volumetrics:spot-unassigned");
     } else if (shadow && castingPoints > Math.min(counts.pointShadow, counts.point))
       issues.add("volumetrics:shadow-unassigned");
-    const origin = vector("origin", [0, 0, 0]);
-    const position: [number, number, number] = [origin[0] ?? 0, origin[1] ?? 0, origin[2] ?? 0];
-    const radius = field("radius");
-    const color = vector("color", [0, 0, 0]);
-    const toRadians = (degrees: number) => f(degrees * f(0.017453292));
-    const constants: Record<string, number[]> = {
-      g_RenderVar1: [
-        f(radius * f(0.99)),
-        cosf(toRadians(field("innercone"))),
-        cosf(toRadians(field("outercone"))),
-        field("intensity"),
-      ],
-      g_RenderVar2: [...position, field("density")],
-      g_RenderVar4: [color[0] ?? 0, color[1] ?? 0, color[2] ?? 0, field("volumetricsexponent")],
-    };
-    let spot: VolumetricLight["spot"];
-    if (kind === "point") {
-      constants.g_AltViewProjectionMatrix = [radius, 0, 0, 0, 0, radius, 0, 0, 0, 0, radius, 0, ...position, 1];
-      // 点光的 `g_AltModelMatrix` 是点光阴影的 P（`POINTLIGHT` 不读），给单位阵
-      constants.g_AltModelMatrix = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-    } else {
-      const matrix = layerLocalMatrix({
-        origin: vector("origin", [0, 0, 0]),
-        angles: vector("angles", [0, 0, 0]),
-        scale: vector("scale", [1, 1, 1]),
-      });
-      const vp = spotViewProjection(matrix, field("outercone"), radius, orthographic);
-      const inverse = glmInverse(vp);
-      constants.g_AltModelMatrix = Array.from(vp);
-      constants.g_AltViewProjectionMatrix = Array.from(inverse);
-      const row0 = [matrix[0], matrix[1], matrix[2], matrix[3]].map((v) => f(v));
-      constants.g_RenderVar3 = row0;
-      const length = f(
-        Math.sqrt(f(f(f(f(row0[0] * row0[0]) + f(row0[1] * row0[1])) + f(row0[2] * row0[2])) + f(row0[3] * row0[3]))),
-      );
-      // 远平面上的圆半径：NDC (0, 0, 0, 1) 与 (0, 1, 0, 1) 经逆矩阵变回世界、除 w 后的距离（V4，运算顺序没核，编译期常量）
-      const unproject = (y: number) => {
-        const w = f(f(inverse[7] * y) + inverse[15]);
-        return [0, 1, 2].map((k) => f(f(f(inverse[4 + k] * y) + inverse[12 + k]) / w));
-      };
-      const [a, b] = [unproject(0), unproject(1)];
-      const farRadius = f(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]));
-      spot = { axis: [f(row0[0] / length), f(row0[1] / length), f(row0[2] / length)], farRadius };
-    }
+    const layer = input.layerOf(index);
+    const geometry = volumetricGeometry(
+      kind,
+      light.values,
+      layer?.color ?? [0, 0, 0],
+      layerLocalMatrix({
+        origin: layer?.origin ?? [0, 0, 0],
+        angles: layer?.angles ?? [0, 0, 0],
+        scale: layer?.scale ?? [1, 1, 1],
+      }),
+      orthographic,
+    );
     const combos: Record<string, number> = {
       POINTLIGHT: kind === "point" ? 1 : 0,
       SHADOW: shadow ? 1 : 0,
@@ -419,18 +437,7 @@ export async function compileVolumetrics(
       FRONT_SLOTS,
     );
     if (!back || !front || !fullscreen) continue;
-    lights.push({
-      object: index,
-      kind,
-      shadow,
-      radius,
-      position,
-      constants,
-      ...(spot ? { spot } : {}),
-      back,
-      front,
-      fullscreen,
-    });
+    lights.push({ object: index, kind, shadow, ...geometry, back, front, fullscreen });
   }
   const blurs = volumetricsBlurs(quality);
   const blurH = blurs

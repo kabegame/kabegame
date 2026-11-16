@@ -1342,7 +1342,7 @@ pub async fn postprocess_downloaded_image(
 
             // Android：把下载到的临时文件复制进系统媒体库（图片→Pictures，视频→Movies），
             // 得到 content:// URI；之后尺寸/预览/大小/名称解析与入库 local_path 都用该 URI。
-            // 视频必须如此：Android 的 compress_video_for_preview 只接受 content URI。
+            // 视频必须如此：Android 的视频缩略图从 content URI 读。
             // ContentUri 源（本地 content:// 导入）已是 URI，跳过复制。
             #[cfg(target_os = "android")]
             if !matches!(&source, PostprocessSource::ContentUri) {
@@ -1404,16 +1404,16 @@ pub async fn postprocess_downloaded_image(
             let t_thumb = (!auto_deduplicate).then(Instant::now);
 
             let thumbnail_result: Result<Option<PathBuf>, String> = if is_video {
-                // 视频预览是尽力而为：失败只记日志、不阻断入库。画廊用 <video> 直接播放原文件，
+                // 视频缩略图（首帧）是尽力而为：失败只记日志、不阻断入库。画廊用 <video> 直接播放原文件，
                 // thumbnail 回退为原文件（见下方 thumbnail_path_str 的 local_path 兜底）。典型场景：
                 // 本 ffmpeg 构建缺该编码的解码器（如未启用 av1 解码器时的 AV1）。
+                // Android 的 local_path 此时是系统媒体库 content URI。
                 #[cfg(target_os = "android")]
-                // local_path 此时是系统媒体库 content URI，交给 Kotlin provider 生成预览。
-                let preview = compress::compress_video_for_preview(&local_path).await;
+                let preview = compress::generate_video_thumbnail(&local_path).await;
                 #[cfg(not(target_os = "android"))]
-                let preview = compress::compress_video_for_preview(&path).await;
+                let preview = compress::generate_video_thumbnail(&path.to_string_lossy()).await;
                 match preview {
-                    Ok(r) => Ok(Some(r.preview_path)),
+                    Ok(path) => Ok(Some(path)),
                     Err(e) => {
                         tracing::warn!(
                             "video preview generation failed, storing without preview: {e}"

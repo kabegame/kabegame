@@ -41,6 +41,11 @@ export interface ImageActionContext extends ActionContext<ImageInfo> {
     /** 设为封面进行中 */
     coverBusy: boolean;
   };
+  /** 只在桌面预览视频（含 WPE 视频）时有：「设为封面」取当前播放时间的那一帧 */
+  videoPreview?: {
+    /** 设为封面进行中 */
+    coverBusy: boolean;
+  };
 }
 
 /** 设为壁纸：桌面与 Android 设的是系统壁纸，Web 版设的是应用背景 */
@@ -89,6 +94,7 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
   const canDetail = () => IS_ANDROID && !hideSet.has("detail");
   const canShare = () => IS_ANDROID && !hideSet.has("share");
   const wallpaperPreviewOf = (ctx: ActionContext<ImageInfo>) => (ctx as ImageActionContext).wallpaperPreview;
+  const videoPreviewOf = (ctx: ActionContext<ImageInfo>) => (ctx as ImageActionContext).videoPreview;
 
   // Single-select actions
   const singleActions: ActionItem<ImageInfo>[] = [
@@ -182,13 +188,14 @@ export function createImageActions(options: CreateImageActionsOptions = {}): Act
       label: t("gallery.wpeSetCover"),
       icon: Camera,
       command: "setCover",
-      // 截的是预览里正在渲染的画面，画廊里没有当前画面
+      // 网页 / 场景截预览里正在渲染的画面，视频取当前播放时间的那一帧；画廊里没有当前画面
       visible: (ctx) =>
         !hideSet.has("setCover") &&
         isSingle(ctx) &&
-        !!wallpaperPreviewOf(ctx) &&
-        hasWpeUserProperties(ctx.target?.type),
+        ((!!wallpaperPreviewOf(ctx) && hasWpeUserProperties(ctx.target?.type)) || !!videoPreviewOf(ctx)),
       disabled: (ctx) => {
+        const video = videoPreviewOf(ctx);
+        if (video) return video.coverBusy;
         const preview = wallpaperPreviewOf(ctx);
         return !preview?.live || preview.coverBusy;
       },

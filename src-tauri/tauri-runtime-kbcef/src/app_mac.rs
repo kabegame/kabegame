@@ -96,6 +96,7 @@ define_class!(
 
     unsafe impl NSApplicationDelegate for KabegameCefAppDelegate {
         #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        #[warn(non_snake_case)]
         fn applicationShouldHandleReopen_hasVisibleWindows(
             &self,
             _sender: &NSApplication,

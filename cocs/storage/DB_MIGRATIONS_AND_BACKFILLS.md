@@ -9,9 +9,10 @@
 |---|---|---|
 | core | `src-tauri/kabegame-core/src/storage/migrations/mod.rs` | `MIGRATIONS` 注册表、`Migration.min_backfill_version`、`run_pending` 两阶段、`StartupProgress`、`BACKFILL_JOBS_DDL` |
 | core | `src-tauri/kabegame-core/src/storage/migrations/backfill.rs` | `Backfill` / `BatchOutcome` / `BackfillCtx`、`BACKFILLS` 注册表、`enqueue_introduced_at`、`pending_jobs`、`run_to_completion`，以及框架测试 |
-| core | `src-tauri/kabegame-core/src/storage/migrations/backfills/` | 作业实现目录（当前有 `wpe_dir_hash`、`image_palette`） |
+| core | `src-tauri/kabegame-core/src/storage/migrations/backfills/` | 作业实现目录（当前有 `wpe_dir_hash`、`image_palette`、`video_thumbnail_frame`） |
 | core | `src-tauri/kabegame-core/src/storage/migrations/v051_wpe_dir_hash.rs` | 空迁移，只为登记 `wpe_dir_hash` |
 | core | `src-tauri/kabegame-core/src/storage/migrations/v052_image_palette.rs` | 色盘列、色桶表与关系表；登记 `image_palette` |
+| core | `src-tauri/kabegame-core/src/storage/migrations/v053_video_thumbnail_frame.rs` | 空迁移，只为登记 `video_thumbnail_frame` |
 | core | `src-tauri/kabegame-core/src/storage/migrations/v048_backfill_jobs.rs` | 建 `backfill_jobs` 表（`init::create_all_tables` 共用同一 DDL） |
 | core | `src-tauri/kabegame-core/src/storage/backfill_service.rs` | `BackfillService`：后台按序跑剩余作业，忙碌快照 + `backfill-finished` |
 | core | `src-tauri/kabegame-core/src/storage/mod.rs` | `Storage::init_global_for_app`、`refresh_query_stats`（启动统计刷新） |
@@ -123,6 +124,20 @@ DDL、索引与种子放在 `migrations/mod.rs`，`init::create_all_tables` 共�
 - 只读写 v052 引入的列与表以及此前就存在的列，没有迁移依赖它（`min_backfill_version` 为 `None`），只在进入界面后由
   `BackfillService` 后台跑；CLI 本地模式不跑。忙碌卡片副标题是 `header.backfill.image_palette`。
 - 以后若有迁移要改 `images.palette` 的格式或关系表的结构，必须用 `min_backfill_version: Some(52)` 先排干它。
+
+## v053：视频缩略图换成首帧（回填作业 `video_thumbnail_frame`）
+
+空迁移，只登记作业。桌面的视频缩略图从 2.5 s H.264 短片 / WPE 视频的作者 `preview.*` 改成首帧 JPEG
+（`compress::generate_video_thumbnail`），作业把存量行换过来。Android 的缩略图仍是 10fps GIF，作业在那里对每行都跳过、一批批空跑完。
+
+- 候选是 `type GLOB 'video/*' OR type = 'x-wpe/video'`（走 `idx_images_type`），每批 8 行；分母是全部视频行。
+- 普通视频从原文件（Android 是 `content://`）解首帧，缩略图已是 `.jpg` 且不等于原文件的跳过；WPE 视频从 `compatible_path`
+  解，缩略图已是 `thumbnails_dir` 里的 `.jpg` 的跳过。重跑幂等。
+- 解码不持有连接；写回 `UPDATE … WHERE id = ? AND thumbnail_path = <旧值>`，期间被别处换过的不写、删掉刚生成的文件。
+  提交后对写成功的行调 `remove_thumbnail_file_if_needed` 删旧文件（只删 `thumbnails_dir` 内的，作者 `preview.*` 不动），
+  并发 `thumbnailPath` 字段补丁。
+- 解不出首帧（原文件不在、缺解码器）的行保留旧缩略图、不重试；前端两种形态都能显示，要重做就用整理的「重新生成缩略图」。
+- 只读写 `thumbnail_path`（引入前就存在的列）。
 
 ## 执行模型
 

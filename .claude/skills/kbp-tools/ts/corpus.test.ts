@@ -7,6 +7,7 @@
  *     （c1–c5 的写法；c1–c4 没有 `renderer`，c5 起有）；
  *   - `sheets`：帧表纹理绑在哪里（`animatedUsages[]`），以及帧表粒子材质按同样的宏重译一次的结果（`sheets[]`，b2 的写法；
  *     源码没有帧表实现（`particleSheetDefines`）时只有 `animatedUsages`）；
+ *   - `puppetBytes`（P12e）：puppet 与模型骨骼动画的类型化数组字节和、动画条数、其中 `unsupported` 的条数，外加编译用时 `compileMs`；
  *   - `requests:<目录>`（P7a 步骤 1）：编译前给翻译器包一层，录下编译管线真实发出的翻译请求（只留结果不是 `include` 的那次，
  *     即头文件补齐后的最终请求），按规范化 JSON 的 SHA-1 去重写 `<目录>/<sha1>.json`，供 `src-tauri/wpesl2wgsl/tests/corpus.rs`
  *     重放；行字段 `requests`（本场景录到的不同请求数）。目录由 kbp.py 检查（非空且没给 --overwrite 时拒绝）。
@@ -151,7 +152,10 @@ function shaderName(rel: string): string | null {
   const parts = slash(rel).split("/");
   const at = parts.indexOf("shaders");
   if (at < 0 || at === parts.length - 1) return null;
-  return parts.slice(at + 1).join("/").replace(SHADER_EXT, "");
+  return parts
+    .slice(at + 1)
+    .join("/")
+    .replace(SHADER_EXT, "");
 }
 
 /** 着色器源码 → 名字（按来源顺序：散文件、scene.pkg、assets，同一份源码在多处时第一个在前）。 */
@@ -323,6 +327,18 @@ interface PluginContext {
   mod: Record<string, Any>;
   translator: Any;
   recorder: RequestRecorder | null;
+  /** 本场景 `compileScene` 的用时（毫秒，`performance.now()` 差）。 */
+  ms: number;
+}
+
+/** 一个值里（递归进数组与普通对象）全部类型化数组的字节数之和。 */
+function typedBytes(value: unknown, seen = new Set<unknown>()): number {
+  if (!value || typeof value !== "object" || seen.has(value)) return 0;
+  seen.add(value);
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  let sum = 0;
+  for (const item of Array.isArray(value) ? value : Object.values(value)) sum += typedBytes(item, seen);
+  return sum;
 }
 
 /** 每个插件：往行里写附加字段。插件内部出错不吞，整行记 error（同旧脚本的 try 范围）。 */
@@ -475,6 +491,29 @@ const PLUGINS: Record<string, (ctx: PluginContext, args: string[], row: Json) =>
     row.sheets = sheets;
   },
 
+  /**
+   * P12e：puppet 与模型骨骼的动画数据量。行字段 `puppetBytes`（全部动画里类型化数组的字节和：帧、透明度、变形权重、纹理通道、网格变形等，
+   * 不认字段名，递归求和）、`puppetAnimations`（动画条数）、`puppetUnsupported`（其中带 `unsupported` 的条数）、`compileMs`（编译用时）。
+   */
+  async puppetBytes(ctx, _args, row) {
+    let bytes = 0;
+    let count = 0;
+    let unsupported = 0;
+    for (const layer of ctx.bundle.layers) {
+      for (const owner of [layer.puppet, layer.model?.skeleton]) {
+        for (const animation of owner?.animations ?? []) {
+          count++;
+          if (animation.unsupported) unsupported++;
+          bytes += typedBytes(animation);
+        }
+      }
+    }
+    row.puppetBytes = bytes;
+    row.puppetAnimations = count;
+    row.puppetUnsupported = unsupported;
+    row.compileMs = Math.round(ctx.ms);
+  },
+
   async requests(ctx, _args, row) {
     // 记录在编译时已做完（见 RequestRecorder），这里只写计数
     row.requests = ctx.recorder?.count ?? 0;
@@ -509,6 +548,7 @@ it("kbp corpus scan", async () => {
     if (ONLY && !ONLY.includes(sample)) continue;
     recorder?.begin(sample, dir);
     try {
+      const started = performance.now();
       const bundle = await compileScene({
         projectDir: dir,
         sceneAssets: [ASSETS],
@@ -517,10 +557,11 @@ it("kbp corpus scan", async () => {
         postprocess: "ultra",
         exhaustive: true,
       });
+      const ms = performance.now() - started;
       const row: Json = { sample, unsupported: [...bundle.unsupported].sort() };
       const fs = new SceneFs(dir, [ASSETS], nodeReader);
       for (const extra of EXTRAS)
-        await PLUGINS[extra.name]({ dir, bundle, fs, mod, translator, recorder }, extra.args, row);
+        await PLUGINS[extra.name]({ dir, bundle, fs, mod, translator, recorder, ms }, extra.args, row);
       rows.push(row);
     } catch (error) {
       rows.push({ sample, error: String(error) });

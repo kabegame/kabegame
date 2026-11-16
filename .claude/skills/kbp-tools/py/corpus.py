@@ -3,7 +3,7 @@
 
 - scan：照 `ignore/p4/c5/corpus.test.ts`，对默认工程与创意工坊工程跑 `compileScene(exhaustive)`，行格式
   `{ sample, unsupported[], …附加字段 }`，出错 `{ sample, error }`。附加字段是插件（`--extra`，可重复）：
-  `modules:<category:name,…|@b3|@b4>`、`controlpoints[:norenderer]`、`sheets`、`requests:<目录>`（只 scan 收）。
+  `modules:<category:name,…|@b3|@b4>`、`controlpoints[:norenderer]`、`sheets`、`puppetBytes`、`requests:<目录>`（只 scan 收）。
 - diff：照 `b5/diff_corpus.py`、`c5/corpus_diff.py` 的通用部分：场景数与出错、干净场景增减、每个键去掉 / 新增了哪些场景、
   变化的场景逐张列出之后还剩的键，加上「去掉某些键后还剩什么」（`b6/corpus_colorn.py`，`--without`）；`--explain <模块.py>` 挂
   各步自己的解释脚本（模块里的 `explain(before, after, diff) -> [行]`，before / after 是 {sample: 行}）。
@@ -30,7 +30,7 @@ def parse_extras(values, requests=False):
 
     `requests:<目录>`（P7a 步骤 1，录翻译请求夹具）只有 `corpus scan` 收（`requests=True`）：参数整段是目录（可含盘符冒号），
     转成绝对路径；`regress --corpus` 两边会写同一个目录，不收。"""
-    names = ("modules", "controlpoints", "sheets") + (("requests",) if requests else ())
+    names = ("modules", "controlpoints", "sheets", "puppetBytes") + (("requests",) if requests else ())
     out = []
     for value in values or []:
         name, _, rest = value.partition(":")

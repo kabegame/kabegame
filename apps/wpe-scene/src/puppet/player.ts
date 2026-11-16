@@ -20,6 +20,10 @@
  *   `Mw = W·Pose[i]`、解物理、`Pose[i] ← Pose[i]·D`，后面的子骨骼与蒙皮都用改过的值；`W` 由宿主经 `PuppetSink.world` 交进来（上一帧脚本写下的图层世界矩阵含对齐偏移，
  *   正是 WPE 的时序，p12-REPORT 第二部分 1.5）。世界骨骼矩阵两份缓冲 `prev` / `cur` 在推进开头交换，`cur` 对**全部**骨骼各写一次（物理骨骼在物理之后写，不再拷贝，脚本 `setBoneTransform` 直接改它，同 WPE `P+0x340` / `P+0x348`），
  *   首帧 `prev` 为空不解；`refresh` 不是 WPE 的更新，不解也不动状态；隐藏照算（图像层不看可见性）；有物理骨骼的运行时不走「静止捷径」（状态每帧在变）。
+ * - P12e-1：层有稳定 id（编译期的层 = `PuppetLayerDef.entry`，运行时建的层 = 负数、每个 puppet 从 −1 起递减不复用），层表（顺序）另存、可 `createLayer` / `destroyLayers`；
+ *   「下标」只在插入位置与 `destroyLayers` 的下标选择器里出现。派发改成 WPE 的形状：本帧确有层播完（`anyEnded`）才进回调循环，回调后复位下标（漏扫），
+ *   单次层（`SINGLE_SHOT`）先置 `DOOMED` 再调回调、循环之后当场删除；`destroyLayers` 把层摘到 `detached`，`settle` 在本帧全部脚本之后释放。
+ *   `carryOver` 按 id 接回层表顺序、运行时层、删过的编译期层。依据 rea-p12e-createlayer 与 phase-12e-createlayer 点 2。
  * - P12b2-2：图像层 puppet 多一份 `g_BlendMap`（16 个 float，初值 0，**帧首不复位**），每个可见层按纹理通道轨道写（`blendChannels`）；只在推进时写
  *   （`refresh` 不是 WPE 的更新，加法层会被重复累加）；模型不处理通道轨道。
  */
@@ -60,6 +64,10 @@ const f = Math.fround;
 /** 时钟运行时位（P12c，WPE 同位）：`setFrame` 那一帧不判播完；本帧播完（loop 回绕、mirror 换向、single 结束）。 */
 export const SETFRAME = 0x02000000;
 export const ENDED = 0x04000000;
+/** playSingleAnimation 的层（P12e，WPE `K.flags` 同位，`0x14020ef67`）：第一次播完时先置 DOOMED 再调回调。 */
+export const SINGLE_SHOT = 0x08000000;
+/** 本帧回调循环之后当场删除（WPE `0x10000000`，`0x140200371`）。play / setFrame / stop 都不清它（stop 的掩码 0x3fffffff 保留它）。 */
+export const DOOMED = 0x10000000;
 
 /** 动画层的三个可变字段（WPE `AL+0xc8` / `+0xcc` / `+0xd0` bit0，rea-RT 1.5）。 */
 export interface PuppetLayerFields {
@@ -68,9 +76,27 @@ export interface PuppetLayerFields {
   visible: boolean;
 }
 
+/** 运行时建层的规整结果（P12e，`script/animationLayerConfig.ts` 产出）：字段已按 WPE 的 JSON setter 取值。 */
+export interface AnimationLayerItem {
+  /** `ScenePuppet.animations` 的下标（= MDLA 下标）。 */
+  animation: number;
+  name: string;
+  rate: number;
+  blend: number;
+  visible: boolean;
+  additive: boolean;
+  blendin: boolean;
+  blendout: boolean;
+  blendtime: number;
+  /** `config.autosort` 是 JSON `true`（`1`、`"true"` 都不算，rea-p12c 第 7 节）。 */
+  autosort: boolean;
+  /** `config.index` 是 JSON 数时的 `asInt`（向零取整）；不是数为 null。 */
+  index: number | null;
+}
+
 /**
  * 读动画层字段的状态（步骤 3 接到 `SceneState`：用户属性在两帧之间写进去，puppet 当帧就读到，p12-REPORT 用例 4）。取不到时用
- * `PuppetLayerDef` 里的值。`object` 是 `objects` 下标，`layer` 是 `animationlayers` 里保留下来的层的下标（`ScenePuppet.layers`）。
+ * `PuppetLayerDef` 里的值。`object` 是 `objects` 下标，`layer` 是层 id（P12e：编译期的层 = `animationlayers` 的 JSON 下标，运行时建的层是负数）。
  */
 export interface PuppetSink {
   animationLayer(object: number, layer: number): PuppetLayerFields | undefined;
@@ -109,9 +135,9 @@ export function stateSink(state: {
   };
 }
 
-/** `SceneState.animationLayers` 的键：对象下标与层下标。 */
-export function animationLayerKey(object: number, layer: number): string {
-  return `${object}:${layer}`;
+/** `SceneState.animationLayers` 的键：对象下标与层 id（P12e：不是层表里的位置）。 */
+export function animationLayerKey(object: number, id: number): string {
+  return `${object}:${id}`;
 }
 
 /**
@@ -145,10 +171,17 @@ export interface PuppetLayerControl {
 export interface PuppetHooks {
   /** 本帧越过的 MDLA 事件：每个 puppet 推进完全部层之后，按收集顺序（层序 × 事件表顺序）调。 */
   event?(object: number, json: string): void;
+  /**
+   * 一层被释放（P12e）：单次层在派发里被删、或 `settle` 释放 destroyAnimationLayer 摘出的层。宿主删 SceneState 的三方共写字段、
+   * 给它的动画层字段脚本发 destroy、去掉重放表里它的项。之后包装作废（`alive` 为假）。
+   */
+  released?(object: number, id: number): void;
 }
 
 /** 一个动画层的运行时。 */
 interface LayerRuntime {
+  /** 层 id（P12e）：编译期的层 = `def.entry`，运行时建的层是负数。 */
+  readonly id: number;
   readonly def: PuppetLayerDef;
   readonly frames: Float32Array;
   readonly mask: Uint8Array;
@@ -219,7 +252,18 @@ interface PuppetRuntime {
   readonly puppet: PuppetRig;
   readonly skeleton: NonNullable<ScenePuppet["skeleton"]>;
   readonly bones: number;
+  /** 层表（顺序 = 采样混合顺序 = getAnimationLayer 的下标）。建删层原地改这个数组（splice），不换引用：回调循环在遍历它。 */
   readonly layers: LayerRuntime[];
+  /** 全部活着的层，按 id（含已从层表摘出、还没 settle 的：同一帧包装照常可用）。 */
+  readonly byId: Map<number, LayerRuntime>;
+  /** destroyAnimationLayer 摘出的层，`settle` 在脚本之后释放（WPE 的 `ctx+0x1478`）。 */
+  readonly detached: LayerRuntime[];
+  /** 删过的编译期层的 id（接回时不再建它们，跨重编译保留）。 */
+  readonly destroyedEntries: Set<number>;
+  /** 下一个运行时层 id（−1 起递减，接回时保留，不复用）。 */
+  nextId: number;
+  /** 本帧推进时有层播完（WPE 的 anyEnded）：只有它为真时才进回调与删层循环。 */
+  anyEnded: boolean;
   /** 当前姿势（每骨骼 10 个 f32）。 */
   readonly pose: Float32Array;
   /** 一层的样本（每骨骼 10 个 f32）。 */
@@ -300,6 +344,30 @@ function physicsRuntime(params: readonly (BonePhysics | null)[], bones: number):
     mw: new Float32Array(16),
     delta: new Float32Array(16),
     temp: new Float32Array(16),
+  };
+}
+
+/**
+ * 建一层（加载 `animationlayers` 与运行时建层共用，WPE 同一个函数 `FUN_1401fcc20`）：时钟按动画自己的模式，t = 0、在播放、没有 SETFRAME；
+ * blendout 只在 single 有效：非 single 的动画直接清掉（`0x1401fd068`，rea-RT 1.4，运行时建层同样发生，rea-p12e 2）。
+ */
+function buildLayer(id: number, def: PuppetLayerDef, animation: PuppetAnimation): LayerRuntime {
+  const clock = layerClock(animation.fps, animation.length, animation.mode, animation.events);
+  let flags = (def.additive ? LAYER_ADDITIVE : 0) | (def.blendin ? LAYER_BLENDIN : 0);
+  if (def.blendout && clock.flags & SINGLE) flags |= LAYER_BLENDOUT;
+  return {
+    id,
+    def,
+    frames: animation.frames,
+    mask: animation.mask,
+    animation,
+    clock,
+    length: Math.trunc(animation.length),
+    flags,
+    blendtime: def.blendtime,
+    name: def.name,
+    callbacks: [],
+    control: null,
   };
 }
 
@@ -385,26 +453,7 @@ export class ScenePuppets {
       const skeleton = puppet.skeleton;
       if (!skeleton) continue;
       const bones = skeleton.parents.length;
-      const layers = puppet.layers.map((def): LayerRuntime => {
-        const animation = puppet.animations[def.animation];
-        const clock = layerClock(animation.fps, animation.length, animation.mode, animation.events);
-        let flags = (def.additive ? LAYER_ADDITIVE : 0) | (def.blendin ? LAYER_BLENDIN : 0);
-        // blendout 只在 single 有效：加载时非 single 直接清掉（`0x1401fd068`，rea-RT 1.4）
-        if (def.blendout && clock.flags & SINGLE) flags |= LAYER_BLENDOUT;
-        return {
-          def,
-          frames: animation.frames,
-          mask: animation.mask,
-          animation,
-          clock,
-          length: Math.trunc(animation.length),
-          flags,
-          blendtime: def.blendtime,
-          name: def.name,
-          callbacks: [],
-          control: null,
-        };
-      });
+      const layers = puppet.layers.map((def) => buildLayer(def.entry, def, puppet.animations[def.animation]));
       const runtime: PuppetRuntime = {
         object,
         kind,
@@ -412,6 +461,11 @@ export class ScenePuppets {
         skeleton,
         bones,
         layers,
+        byId: new Map(layers.map((layer) => [layer.id, layer])),
+        detached: [],
+        destroyedEntries: new Set(),
+        nextId: -1,
+        anyEnded: false,
         pose: new Float32Array(bones * POSE_STRIDE),
         sample: new Float32Array(bones * POSE_STRIDE),
         world: new Float32Array(bones * 16),
@@ -556,11 +610,35 @@ export class ScenePuppets {
       const events = runtime.events.splice(0);
       if (hooks?.event) for (const event of events) hooks.event(runtime.object, event.json);
     }
-    for (const layer of runtime.layers) {
-      if (!(layer.clock.flags & ENDED)) continue;
-      layer.clock.flags = (layer.clock.flags & ~ENDED) >>> 0;
-      for (const callback of [...layer.callbacks]) callback();
+    // 本帧没有层播完不进循环（WPE 的 anyEnded；漏扫的层带着 ENDED 位等以后某一帧，rea-p12e 实测 9）
+    if (!runtime.anyEnded) return;
+    runtime.anyEnded = false;
+    const layers = runtime.layers;
+    for (let i = 0; i < layers.length; i++) {
+      // 下标循环、每轮重读层数：回调里会建删层
+      const layer = layers[i];
+      const clock = layer.clock;
+      if (!(clock.flags & ENDED)) continue;
+      clock.flags = (clock.flags & ~ENDED) >>> 0;
+      // 单次层先标删再调回调（回调里 play / setFrame 救不回，`0x140200371`）
+      if (clock.flags & SINGLE_SHOT) clock.flags = (clock.flags | DOOMED) >>> 0;
+      if (layer.callbacks.length) {
+        for (const callback of [...layer.callbacks]) callback();
+        // 调过回调的层把循环下标复位成 0（`0x1402002f6` / 模型 `0x14021ce69`），`++` 后从 1 重扫：前面被漏掉的层这一轮不再处理
+        i = 0;
+      }
     }
+    // 删 DOOMED 的层并当场释放（同一帧之后的脚本看到作废）；回调里已 destroyAnimationLayer 的层在 detached，由 settle 释放，不会重复
+    for (let i = 0; i < layers.length; i++)
+      if (layers[i].clock.flags & DOOMED) this.release(runtime, layers.splice(i--, 1)[0], hooks);
+  }
+
+  /** 释放一层：从 id 表摘掉（包装从此作废）、丢控制口、通知宿主。 */
+  private release(runtime: PuppetRuntime, layer: LayerRuntime, hooks: PuppetHooks | null): void {
+    runtime.byId.delete(layer.id);
+    layer.control = null;
+    runtime.restSkin = false;
+    hooks?.released?.(runtime.object, layer.id);
   }
 
   /** skinned puppet / 带骨骼模型的动画层数；别的对象为 0（P12c）。 */
@@ -568,19 +646,131 @@ export class ScenePuppets {
     return this.byObject.get(object)?.layers.length ?? 0;
   }
 
-  /** 第 `index` 层的控制口；不是 puppet 或 index 越界为 null（P12c）。 */
-  layer(object: number, index: number): PuppetLayerControl | null {
-    const layer = this.byObject.get(object)?.layers[index];
+  /** 层表的 id（顺序）；不是带骨骼的运行时为空数组（P12e）。 */
+  ids(object: number): readonly number[] {
+    return this.byObject.get(object)?.layers.map((layer) => layer.id) ?? [];
+  }
+
+  /** 控制口（按 id，含摘出未释放的）；没有这个 id 为 null（P12e，取代按下标的 `layer`）。 */
+  control(object: number, id: number): PuppetLayerControl | null {
+    const layer = this.byObject.get(object)?.byId.get(id);
     if (!layer) return null;
     return (layer.control ??= layerControl(layer));
   }
 
-  /** 按**当前**名字找层：最后一个匹配，空串不匹配，找不到 −1（P12c，`getAnimationLayer("名字")`）。 */
-  findLayer(object: number, name: string): number {
+  /** 这个 id 的层还没被释放（包装是否有效，P12e）。 */
+  alive(object: number, id: number): boolean {
+    return this.byObject.get(object)?.byId.has(id) ?? false;
+  }
+
+  /** 按**当前**名字找层：最后一个匹配，空串不匹配，返回 id，找不到 null（P12c 的规则，P12e 起返回 id；`getAnimationLayer("名字")`）。 */
+  findLayer(object: number, name: string): number | null {
     const layers = this.byObject.get(object)?.layers;
-    if (!layers || name === "") return -1;
-    for (let index = layers.length - 1; index >= 0; index--) if (layers[index].name === name) return index;
-    return -1;
+    if (!layers || name === "") return null;
+    for (let index = layers.length - 1; index >= 0; index--) if (layers[index].name === name) return layers[index].id;
+    return null;
+  }
+
+  /** 运行时的 rig（API 按名字找动画、查 unsupported 用；同一份 bundle）；不是带骨骼的运行时为 null（P12e）。 */
+  rig(object: number): PuppetRig | null {
+    return this.byObject.get(object)?.puppet ?? null;
+  }
+
+  /** 全部活着的层（含摘出还没释放的）的字段初值，供 `SceneState.syncAnimationLayers` 对齐（P12e）。 */
+  *liveLayers(): Generator<{ object: number; id: number; def: PuppetLayerFields }> {
+    for (const runtime of this.runtimes)
+      for (const layer of runtime.byId.values()) yield { object: runtime.object, id: layer.id, def: layer.def };
+  }
+
+  /** 有运行时的对象下标（`SceneState.syncAnimationLayers` 只对齐这些对象；静态 puppet 没有运行时，P12e）。 */
+  objects(): ReadonlySet<number> {
+    return new Set(this.byObject.keys());
+  }
+
+  /** 摘出还没释放的层数（P12e，探针 / 测试看「摘了还没释放」）。 */
+  detachedCount(object: number): number {
+    return this.byObject.get(object)?.detached.length ?? 0;
+  }
+
+  /**
+   * 运行时建层（WPE `FUN_1401fcc20` / 模型 `FUN_1402230c0` 的后半，rea-p12e 2）。不是带骨骼的运行时、动画下标越界或这条动画带 `unsupported` 返回 null。
+   * - 时钟按动画自己的模式（`buildLayer`，带事件表），t = 0、在播放，没有 SETFRAME；`single` 为真（playSingleAnimation）时置 SINGLE_SHOT；
+   * - 非 single 模式的动画清 blendout（`0x1401fd068`）；
+   * - 插入（rea-p12c 第 7 节，实测 4）：autosort → 从尾往前跳过加法层，插在第一个非加法层之后；一个非加法层都没有（含空表）WPE 越界写，我们插到 0（有意不同）。
+   *   否则 index 是数：0 插 0；`1 ≤ index ≤ n − 1` 插 index；其余（负数、≥ n − 1、超出 int）插 n − 1（最后一层之前）；空表一律插 0（WPE 对非 0 越界，有意不同）。
+   *   都没有 → 追加；
+   * - 分配 id = nextId--。
+   */
+  createLayer(object: number, item: AnimationLayerItem, single: boolean): number | null {
+    const runtime = this.byObject.get(object);
+    const animation = runtime?.puppet.animations[item.animation];
+    if (!runtime || !animation || animation.unsupported) return null;
+    const id = runtime.nextId--;
+    const def: PuppetLayerDef = {
+      animation: item.animation,
+      entry: id,
+      name: item.name,
+      rate: item.rate,
+      blend: item.blend,
+      visible: item.visible,
+      additive: item.additive,
+      blendin: item.blendin,
+      blendout: item.blendout,
+      blendtime: item.blendtime,
+      bindings: [],
+    };
+    const layer = buildLayer(id, def, animation);
+    if (single) layer.clock.flags = (layer.clock.flags | SINGLE_SHOT) >>> 0;
+    const layers = runtime.layers;
+    const n = layers.length;
+    let position = n;
+    if (item.autosort) {
+      position = n;
+      while (position > 0 && layers[position - 1].flags & LAYER_ADDITIVE) position--;
+    } else if (item.index !== null) {
+      const index = item.index;
+      position = index === 0 ? 0 : index >= 1 && index <= n - 1 ? index : Math.max(n - 1, 0);
+    }
+    layers.splice(position, 0, layer);
+    runtime.byId.set(id, layer);
+    runtime.restSkin = false;
+    return id;
+  }
+
+  /**
+   * destroyAnimationLayer（rea-p12e 第 5 节）：`selector` 已由 API 规整。命中的层当场从层表摘掉（计数、下标、名字查找立刻看不到），进 `detached`、
+   * 仍在 `byId`；编译期层的 id 记进 `destroyedEntries`。名字删全部同名（区分大小写，空串不匹配；图像层 WPE 在最后一层匹配时崩溃，我们照删，有意不同）；
+   * 下标要 `0 ≤ i < 层数`；id 要在当前层表里（摘出未释放的、别的 puppet 的都不算）。返回是否删了至少一个。
+   */
+  destroyLayers(object: number, selector: { name: string } | { index: number } | { id: number }): boolean {
+    const runtime = this.byObject.get(object);
+    if (!runtime) return false;
+    const layers = runtime.layers;
+    const hit: LayerRuntime[] = [];
+    if ("name" in selector) {
+      if (selector.name === "") return false;
+      for (const layer of layers) if (layer.name === selector.name) hit.push(layer);
+    } else if ("index" in selector) {
+      const index = selector.index;
+      if (Number.isInteger(index) && index >= 0 && index < layers.length) hit.push(layers[index]);
+    } else {
+      const layer = layers.find((item) => item.id === selector.id);
+      if (layer) hit.push(layer);
+    }
+    for (const layer of hit) {
+      layers.splice(layers.indexOf(layer), 1);
+      runtime.detached.push(layer);
+      if (layer.id >= 0) runtime.destroyedEntries.add(layer.id);
+    }
+    if (hit.length) runtime.restSkin = false;
+    return hit.length > 0;
+  }
+
+  /** 释放全部 `detached`（WPE `FUN_14018b390` 尾调排空 `ctx+0x1478`）：全部脚本之后、渲染之前每帧调；逐个 `release`。 */
+  settle(hooks?: PuppetHooks | null): void {
+    for (const runtime of this.runtimes)
+      if (runtime.detached.length)
+        for (const layer of runtime.detached.splice(0)) this.release(runtime, layer, hooks ?? null);
   }
 
   /**
@@ -653,8 +843,10 @@ export class ScenePuppets {
   }
 
   /**
-   * 重编译时接回上一份（同 P10：WPE 改属性不重载场景，动画层时钟、播放状态与 blendin 的清位都在）：按 (对象下标, 层下标) 找，动画的
-   * fps / 长度 / 模式相同时拷时钟的 `t` 与运行时位（`PAUSED` / `DONE` / `BACK`），以及 blendin 是否已清。找不到的从 0 开始。只在新建之后、
+   * 重编译时接回上一份（同 P10：WPE 改属性不重载场景，动画层时钟、播放状态与 blendin 的清位都在）：按 (对象下标, 层 id) 找，动画的
+   * fps / 长度 / 模式相同时拷时钟的 `t` 与整份运行时位（含 `SINGLE_SHOT` / `DOOMED` / 漏扫留下的 `ENDED`），以及 blendin 是否已清。找不到的从 0 开始。
+   * P12e：新层表的顺序 = 上一份层表的顺序；运行时建的层（负 id）按新 rig 里同一条动画（MDLA id 相同）重建、动画的 fps / 长度 / 模式变了就丢掉；删过的编译期层
+   * （`destroyedEntries`）不回来；上一份没有的编译期层（新 bundle 才有）按 bundle 顺序追加；`nextId` 保留。只在新建之后、
    * 第一次 `frame` 之前调一次；之后调 `refresh` 让蒙皮跟上。
    */
   carryOver(previous: ScenePuppets | null): void {
@@ -681,15 +873,15 @@ export class ScenePuppets {
         physics.hasPrev = old.hasPrev;
         physics.layerWorld.set(old.layerWorld);
       }
-      runtime.layers.forEach((layer, index) => {
-        const old = before.layers[index];
-        if (!old) return;
+      // 一层接回上一份的状态；动画的 fps / 长度 / 模式变了（spec 不同）时不接，返回 false
+      const adopt = (layer: LayerRuntime, old: LayerRuntime): boolean => {
         const a = layer.clock;
         const b = old.clock;
-        if (a.spf !== b.spf || a.D !== b.D || layer.length !== old.length || (a.flags & 3) !== (b.flags & 3)) return;
+        if (a.spf !== b.spf || a.D !== b.D || layer.length !== old.length || (a.flags & 3) !== (b.flags & 3))
+          return false;
         a.t = b.t;
-        a.flags =
-          ((a.flags & ~(PAUSED | DONE | BACK | SETFRAME)) | (b.flags & (PAUSED | DONE | BACK | SETFRAME))) >>> 0;
+        // 整份运行时位（模式位已比过相等）：`SINGLE_SHOT` / `DOOMED` / 漏扫留下的 `ENDED` 也接得上，原来的掩码是它的子集
+        a.flags = b.flags >>> 0;
         // 五个可写字段与回调表（P12c，WPE 改属性不重载，脚本写过的都还在）：additive / blendin / blendout 三位原样接回（blendin 是否已清也在里面）
         const writable = LAYER_ADDITIVE | LAYER_BLENDIN | LAYER_BLENDOUT;
         layer.flags = (layer.flags & ~writable) | (old.flags & writable);
@@ -697,7 +889,42 @@ export class ScenePuppets {
         layer.blendtime = old.blendtime;
         layer.callbacks = old.callbacks;
         layer.control = null;
-      });
+        return true;
+      };
+      const fresh = new Map(runtime.layers.map((layer) => [layer.id, layer]));
+      const table: LayerRuntime[] = [];
+      for (const old of before.layers) {
+        let layer: LayerRuntime | undefined;
+        if (old.id >= 0) {
+          layer = fresh.get(old.id);
+          if (layer) adopt(layer, old);
+        } else {
+          // 运行时建的层：按新 rig 里同一条动画（MDLA id 相同、没有 unsupported）重建
+          const index = runtime.puppet.animations.findIndex((item) => item.id === old.animation.id);
+          const animation = runtime.puppet.animations[index];
+          if (animation && !animation.unsupported) {
+            const rebuilt = buildLayer(old.id, { ...old.def, animation: index }, animation);
+            if (adopt(rebuilt, old)) layer = rebuilt;
+          }
+        }
+        fresh.delete(old.id);
+        if (layer) table.push(layer);
+      }
+      for (const id of before.destroyedEntries) {
+        // 删过的编译期层不回来
+        fresh.delete(id);
+        runtime.destroyedEntries.add(id);
+      }
+      for (const layer of fresh.values()) table.push(layer);
+      runtime.layers.splice(0, runtime.layers.length, ...table);
+      runtime.byId.clear();
+      for (const layer of table) runtime.byId.set(layer.id, layer);
+      // 摘出还没释放的层：换场景发生在帧与帧之间，上一帧的 settle 已跑过，按理为空；不空就照接
+      for (const layer of before.detached) {
+        runtime.detached.push(layer);
+        runtime.byId.set(layer.id, layer);
+      }
+      runtime.nextId = before.nextId;
       runtime.restSkin = false;
     }
   }
@@ -766,9 +993,8 @@ export class ScenePuppets {
       if (meshMorphs) for (const item of meshMorphs) if (item) resetMorph(item.weights, item.active);
     };
     if (model) reset();
-    for (let index = 0; index < runtime.layers.length; index++) {
-      const layer = runtime.layers[index];
-      const fields = state?.animationLayer(runtime.object, index) ?? layer.def;
+    for (const layer of runtime.layers) {
+      const fields = state?.animationLayer(runtime.object, layer.id) ?? layer.def;
       if (!fields.visible) continue;
       if (!model && !posed) reset();
       if (d !== null) {
@@ -785,7 +1011,10 @@ export class ScenePuppets {
               : clock.flags & MIRROR
                 ? ((old ^ clock.flags) & BACK) !== 0 // mirror：换向
                 : t0 > clock.t; // loop：回绕（负 rate 每帧都成立，照抄）
-          if (ended) clock.flags = (clock.flags | ENDED) >>> 0;
+          if (ended) {
+            clock.flags = (clock.flags | ENDED) >>> 0;
+            runtime.anyEnded = true;
+          }
         }
         // 只在可见、推进的层上清（不可见的层保留到下次推进）
         clock.flags = (clock.flags & ~SETFRAME) >>> 0;
@@ -899,8 +1128,8 @@ export class ScenePuppets {
     if (!runtime.layers.length) return;
     const box = [FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX];
     let valid = false;
-    runtime.layers.forEach((layer, index) => {
-      const fields = state?.animationLayer(runtime.object, index) ?? layer.def;
+    runtime.layers.forEach((layer) => {
+      const fields = state?.animationLayer(runtime.object, layer.id) ?? layer.def;
       if (!fields.visible) return;
       // MDLA v < 5 没有包围盒：WPE 动画记录里这 6 个 float 是构造时的 0（推断，语料的动画全是 v5），全 0 的盒子照样并进去（同上）
       const own = layer.animation.bounds ?? ZERO_BOX;

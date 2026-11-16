@@ -420,6 +420,7 @@ ID 来自名字表 `FUN_140002860`（`0x140002a6d`–`0x140003091`，每项 0x28
 - **p3 L2「相机图层优先」：** 成立，补充选择规则（倒序找最后一个可见）、`visible: false` 不参与、正交场景里相机 fov 无效。
 - **本任务说明里的「相机对象典型形状 `visible: false`」：** 语料 22 个里只有 1 个写死 false（3453730450 id 200）、7 个绑用户属性（缺省 false 6 个、true 1 个），其余 14 个不写（= 可见、生效）。
 - **features.ts 注释「`parallaxDepth` 只在视差开时起作用」：** 成立；补充缺省值 (1, 1)，开视差的场景里没写该键的对象也会动。
+- **基准相机与脚本（P5e，2026-11-15，[phase-5e](phase-5e-camera-transforms.md)「步骤 0 结果」）：** `thisScene.getCameraTransforms` / `setCameraTransforms` 读写基准 `G+0x118`…`+0x13c`（exe `0x14018da30` / `0x14018da90` 逐字段拷，`set` 的空指针跳过该项）；基准 zoom 由加载函数在 `0x140186d51` 写成 1，`scene.json` 的 `camera.zoom` 不读。实测补充：脚本 `init` 早于读 `camera`（init 里读到构造缺省 (2,2,2) / (0,0,0) / (0,1,0)），init 里写的 eye / center / up 会被 JSON 的字符串覆盖、正交无路径时被重置，zoom 留下；`set` 下一帧进视图；正交总缩放 = `general.zoom × 基准 zoom`；有可见相机对象时基准（含 zoom）不参与。
 
 ## 未查清
 

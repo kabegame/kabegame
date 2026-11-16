@@ -107,8 +107,8 @@ describe("indexMatroska：ffmpeg 现编的样例", () => {
     // 关键帧的数据以 NAL 长度开头（avcC 的 lengthSizeMinusOne = 3）
     expect(track.description[0]).toBe(1);
     expect(codecString(track)).toBe("avc1.64000a");
-    expect(decoderConfig(track)).toMatchObject({ codec: "avc1.64000a", codedWidth: 64, codedHeight: 48 });
-    expect(wpeColor(track)).toMatchObject({ source: "colr", matrix: "bt709" });
+    expect(decoderConfig(track, "scene")).toMatchObject({ codec: "avc1.64000a", codedWidth: 64, codedHeight: 48 });
+    expect(wpeColor(track, "user")).toMatchObject({ source: "colr", matrix: "bt709" });
   });
 
   it("HEVC 带 B 帧：codec 串照 hvc1，帧表与 ffprobe 一致（pts 是毫秒时间码）", async () => {
@@ -302,7 +302,7 @@ describe("indexMatroska：块与时间", () => {
       ]),
     );
     expect(full.colr).toEqual({ primaries: 5, transfer: 6, matrix: 6, fullRange: true });
-    expect(wpeColor(full)).toMatchObject({ matrix: "smpte170m", source: "colr" });
+    expect(wpeColor(full, "user")).toMatchObject({ matrix: "smpte170m", source: "colr" });
     const partial = await index(
       buildMkv([
         info(),
@@ -311,7 +311,7 @@ describe("indexMatroska：块与时间", () => {
       ]),
     );
     expect(partial.colr).toEqual({ primaries: 2, transfer: 2, matrix: 2, fullRange: false });
-    expect(wpeColor(partial).source).not.toBe("colr");
+    expect(wpeColor(partial, "user").source).not.toBe("colr");
     const none = await index(buildMkv([info(), tracks(VIDEO), cluster(0, simpleBlock(1, 0, KEY, payload(1)))]));
     expect(none.colr).toBeNull();
   });

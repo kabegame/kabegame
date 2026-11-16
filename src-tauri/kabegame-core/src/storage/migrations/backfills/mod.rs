@@ -2,4 +2,5 @@
 //! 再登记进 [`super::backfill`] 的 `BACKFILLS` 注册表。
 
 pub(crate) mod image_palette;
+pub(crate) mod video_thumbnail_frame;
 pub(crate) mod wpe_dir_hash;

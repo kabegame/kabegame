@@ -44,15 +44,14 @@ import {
 import { constantTargetFields, materialSlots, unwrapValue } from "./materialValues";
 import {
   bindingReader,
-  collectSceneLights,
+  compileLightObjects,
   engineDefines,
-  legacyLightUniforms,
   lightConfigIssues,
   lightCounts,
   litDefines,
   readsLegacyLights,
   type LightCounts,
-  type SceneLight,
+  type SceneLightObject,
 } from "./lights";
 import {
   checkEffectFeatures,
@@ -839,10 +838,18 @@ export interface SceneBundle {
   /** `_rt_MipMappedFrameBuffer` 被任何对象读到（P13b1〔g1〕，rea-p13-passes 4.1）：渲染器建带 mip 的 RT，反射关时加载时清成 (0, 0, 0, 1)。 */
   mipFramebuffer?: boolean;
   /**
-   * 灯光（P13d）：有开了光照的程序时才有。渲染器每帧按当时的 `g_ViewForward` 排序、照 WPE 写整块灯光缓冲（`lightFrame`）并生成阴影条目，
-   * 读灯光数组的绘制每帧取它的切片（同 `g_Time`）。`quality` 是解析好的阴影档位（设置「场景阴影」与 WPE `config.json`），为 0 时没有阴影。
+   * 灯光（P13d）：有开了光照的程序时才有。渲染器每帧按 `SceneState` 现组灯记录（P13f2，`render/lights.ts`）、按当时的 `g_ViewForward`
+   * 排序、照 WPE 写整块灯光缓冲（`lightFrame`）并生成阴影条目，读灯光数组的绘制每帧取它的切片（同 `g_Time`）。`quality` 是解析好的阴影档位
+   * （设置「场景阴影」与 WPE `config.json`），为 0 时没有阴影。
    */
-  lights?: { records: SceneLight[]; counts: LightCounts; quality: number };
+  lights?: { counts: LightCounts; quality: number };
+  /**
+   * 灯对象（P13f2，`compile/lights.ts` 的 `compileLightObjects`）：场景里每个 `light` 是字符串的对象一条，`objects` 顺序。数值字段的初值，
+   * 运行中的值在 `SceneState.lights`；灯光数组、遗留灯、体积光每帧都由它与图层状态现算。没有灯对象时缺省。
+   */
+  lightObjects?: SceneLightObject[];
+  /** 有程序读遗留灯的三个数组（P13a，`readsLegacyLights`）：渲染器每帧按上一帧末的状态写（P13f2，`legacyLightFrame`，晚一帧）。 */
+  legacyLights?: true;
   /**
    * 体积光（P13e，`compile/volumetrics.ts`）：有会画的灯（可见、`castvolumetrics` 的点光 / 聚光）且档位不为 0 时才有。渲染器按 `lights` 的
    * `objects` 下标把灯插进图层序列，连续的灯共用一次清屏、在下一个可见的非灯对象之前合成（`render/volumetrics.ts`）。
@@ -1355,7 +1362,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       ),
     )
   ).filter((path): path is string => path !== null);
-  // 属性关键帧（P10a 步骤 2）：没有就地目标的照报细分键（`value:animation:light` / `camera` / `other`）；其余进 bundle，
+  // 属性关键帧（P10a 步骤 2）：没有就地目标的照报细分键（`value:animation:camera` / `other`；灯对象 P13f2 起有就地目标）；其余进 bundle，
   // 由宿主每帧写（P10a 步骤 3，`animation/player.ts`）
   const animations = collectAnimations(scene);
   for (const key of animations.unsupported) unsupported.add(key);
@@ -1446,25 +1453,35 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   /** 场景有阴影（P13d）：档位 ≠ 0 且有点光 / 平行光阴影计数；为真时模型网格编投射变体、渲染器建阴影图集。 */
   const castsShadows = shadowQuality !== 0 && counts.pointShadow + counts.directionalShadow > 0;
   /**
-   * 开了光照的程序才读；没人用时不解析灯对象，也不登记它们的绑定（P13d 起灯光数组不进材质常量，渲染器每帧按 `bundle.lights` 写）。
+   * 灯对象（P13f2）：数值字段绑属性登记就地目标（`{ kind: "light" }`，不再整场重编译）；`light`、`castshadow`、`usecookie`、`castvolumetrics`
+   * 挂属性 / 脚本 / 关键帧照报 `light:runtime:<键>`（WPE 运行中重建资源，语料 0）。
    */
+  const lightObjects = compileLightObjects(
+    scene.objects,
+    (value, object, field) => bindings.bind(value, properties, { kind: "light", object, field }),
+    unsupported,
+  );
+  if (lightObjects.length) bundle.lightObjects = lightObjects;
+  /**
+   * 选灯时「带阴影」的判定（`lightFrame` 的 `flag`）看用户阴影档 ∧ `castshadow`，不看 `lightconfig` 有没有阴影计数（`ctx+0x1ac`，同 P13e 的
+   * `SHADOW`；`p13f-sort` 的 L3：没有 `pointshadow` 时带 `castshadow` 的灯照样先写槽 0、被后面的普通灯覆盖）。所以有带 `castshadow` 的 V1 灯时
+   * 照样解析阴影档；图集仍只在有阴影计数时建（`ShadowAtlas.create`）。
+   */
+  const lightShadowQuality =
+    wantsShadows || !lightObjects.some((light) => light.kind && light.flags & 1)
+      ? shadowQuality
+      : resolveShadows(
+          shadowSetting,
+          shadowSetting === "follow" ? await readWpeShadows(input.reader, input.sceneAssets) : undefined,
+        );
+  /** 开了光照的程序才读灯光数组（P13d 起不进材质常量，渲染器每帧按 `bundle.lights` 与状态写）。 */
   const sceneLights = () => {
-    bundle.lights ??= {
-      records: collectSceneLights(
-        scene.objects,
-        bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
-      ),
-      counts,
-      quality: shadowQuality,
-    };
+    bundle.lights ??= { counts, quality: lightShadowQuality };
   };
-  /** 遗留灯（P13a）：程序读到三个数组之一才算；同 `sceneLights` 只解析一次。 */
-  let legacy: Record<string, number[]> | null = null;
-  const legacyLights = () =>
-    (legacy ??= legacyLightUniforms(
-      scene.objects,
-      bindingReader(bindings, properties, (path) => recompile("layer-structure", path)),
-    ));
+  /** 遗留灯（P13a）：程序读到三个数组之一才写（P13f2 起渲染器每帧写，不进材质常量）。 */
+  const legacyLights = () => {
+    bundle.legacyLights = true;
+  };
   // 父对象下标；环已断开，`object:parent-cycle` 由能力表报
   const { parents } = resolveParents(scene.objects);
   // 运行中的换父（P6d3）：在 JSON 父之后依次套用；挂点改写对象 JSON 的 `attachment`，后面的 `resolveAttachment` 按新父与新骨骼名算
@@ -1822,7 +1839,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     number,
     { passes: MaterialPass[]; instanceSize: { width: number; height: number } | null }
   >();
-  /** 有运行时（skinned puppet / 带骨骼的模型）的对象的动画层定义，按 `objects` 下标（P12c：回填动画层字段脚本的属主）。 */
+  /** 有运行时（skinned puppet / 带骨骼的模型）的对象的动画层定义，按 `objects` 下标（P12c：核对动画层字段脚本的属主是否建出来；P12e 起层 id = `entry`，不再回填层下标）。 */
   const animationLayerDefs = new Map<number, readonly PuppetLayerDef[]>();
   /** 解析过的 mdl，按规范化后的路径；读不到为 null。同一个 mdl 被多个对象引用时只读、只解析一次（3354366708 的两个圆环）。 */
   const mdls = new Map<string, MdlFile | null>();
@@ -1893,12 +1910,13 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
     };
     // 动画层的 `{user}` 绑定（同图像层 puppet：`rate` / `blend` / `visible` 就地写进 `SceneState.animationLayers`）
     if (skeleton)
-      for (const [slot, def] of skeleton.layers.entries())
+      for (const def of skeleton.layers)
         for (const { field, property, condition } of def.bindings)
           bindings.list.push({
             property,
             ...(condition === undefined ? {} : { condition }),
-            target: { kind: "animation-layer", object: index, layer: slot, field },
+            // P12e：目标按层 id（编译期 = JSON 下标 `entry`），运行中建删层不会让它漂
+            target: { kind: "animation-layer", object: index, layer: def.entry, field },
           });
     // 透明排序（P5d 步骤 4，rea-p5-mesh 2.4）：WPE 先置「半透明」，任一网格的材质不透明就改回不透明，所以只有网格全半透明的模型进名单
     // （`p5d-sort-a` 的 M1 / M2）。没有网格时保持半透明，同 WPE（反正不画）
@@ -2249,7 +2267,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       uniforms: {
         ...shaderUniforms(result, pass, properties, context.key, bindings, issues),
         ...(result?.ok && usesLighting(result) ? (sceneLights(), {}) : {}),
-        ...(result?.ok && readsLegacyLights(result) ? legacyLights() : {}),
+        ...(result?.ok && readsLegacyLights(result) ? (legacyLights(), {}) : {}),
       },
       framebuffer: needsFramebuffer(names, result?.ok ? result : null),
     };
@@ -2468,12 +2486,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
             instanceSize: instance ? instanceReferenceSize(object.size) : null,
           });
           // 动画层的 `{user}` 绑定（步骤 3 点 3）：`rate` / `blend` / `visible` 就地写进 `SceneState.animationLayers`
-          for (const [slot, def] of built.puppet.layers.entries())
+          for (const def of built.puppet.layers)
             for (const { field, property, condition } of def.bindings)
               bindings.list.push({
                 property,
                 ...(condition === undefined ? {} : { condition }),
-                target: { kind: "animation-layer", object: index, layer: slot, field },
+                target: { kind: "animation-layer", object: index, layer: def.entry, field },
               });
         }
       }
@@ -3042,8 +3060,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   }
   // 体积光（P13e）：有会画的灯才去读档位（跟随时读 WPE 的 `config.json`）。带阴影的点光每帧要取自己的阴影条目，灯光记录在没有光照程序时也要建
   {
-    const lightRead = bindingReader(bindings, properties, (path) => recompile("layer-structure", path));
-    if (!settled() && wantsVolumetrics(scene.objects, lightRead)) {
+    if (!settled() && wantsVolumetrics(lightObjects)) {
       const setting = input.volumetrics ?? "follow";
       const quality = resolveVolumetrics(
         setting,
@@ -3060,8 +3077,8 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
       const volumetrics = await compileVolumetrics(
         { fs, shader, unsupported, addProgram },
         {
-          objects: scene.objects,
-          read: lightRead,
+          lights: lightObjects,
+          layerOf: (object) => bundle.layers.find((layer) => layer.object === object),
           quality,
           shadowQuality: volumetricShadows,
           counts,
@@ -3091,16 +3108,12 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
   )
     bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
   if (!input.sceneAssets.length) unsupported.add("assets:missing");
-  // 动画层字段脚本的属主回填（P12c）：按 JSON 下标 `entry` 找 `layerDefs` 保留下来的层。对象没有运行时（不是 skinned puppet、不是带骨骼的模型），
-  // 或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
+  // 动画层字段脚本的属主核对（P12c；P12e 起层 id = JSON 下标 `entry`，收集时已填好，不再回填）：只留 `layerDefs` 保留下来的层。对象没有运行时
+  // （不是 skinned puppet、不是带骨骼的模型），或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
   scripts.list = scripts.list.filter((script) => {
     const owner = script.owner;
     if (owner.kind !== "animation-layer") return true;
-    const slot = animationLayerDefs.get(owner.object)?.findIndex((def) => def.entry === owner.entry) ?? -1;
-    if (slot < 0) return false;
-    owner.layer = slot;
-    if (script.target.kind === "animation-layer") script.target.layer = slot;
-    return true;
+    return animationLayerDefs.get(owner.object)?.some((def) => def.entry === owner.entry) ?? false;
   });
   bundle.unsupported = [...unsupported].sort();
   // 「场景用音频」位（P4e 步骤 4）：开关只看 `project.json`（`scene.json` 的同名键 WPE 不读，rea-p4e-audio.md 第 6 节），不会因为场景里

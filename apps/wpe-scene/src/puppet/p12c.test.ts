@@ -71,7 +71,7 @@ function rig(animations: PuppetAnimation[], layers: PuppetLayerDef[]): PuppetRig
 /** 一个单层 puppet，返回运行时、控制口与「播完」计数。 */
 function single(mode: 0 | 1 | 2, extra: Partial<PuppetLayerDef> = {}) {
   const puppets = new ScenePuppets([{ object: 3, puppet: rig([animation(mode)], [def(0, 0, extra)]) }]);
-  const control = puppets.layer(3, 0)!;
+  const control = puppets.control(3, 0)!;
   let ended = 0;
   control.addEndedCallback(() => ended++);
   return { puppets, control, count: () => ended };
@@ -159,12 +159,12 @@ describe("事件的收集与派发顺序", () => {
       { object: 7, puppet: rig([animation(0, events0), animation(0, events1)], [def(0, 0), def(1, 1)]) },
     ]);
     const log: string[] = [];
-    puppets.layer(7, 0)!.addEndedCallback(() => log.push("end0"));
-    puppets.layer(7, 1)!.addEndedCallback(() => log.push("end1"));
+    puppets.control(7, 0)!.addEndedCallback(() => log.push("end0"));
+    puppets.control(7, 1)!.addEndedCallback(() => log.push("end1"));
     const hooks = {
       event: (object: number, json: string) => {
         // 派发时两层都已推进：第 1 层的帧号反映本帧结果
-        log.push(`${object}:${(JSON.parse(json) as { e: string }).e}@${puppets.layer(7, 1)!.getFrame().toFixed(1)}`);
+        log.push(`${object}:${(JSON.parse(json) as { e: string }).e}@${puppets.control(7, 1)!.getFrame().toFixed(1)}`);
       },
     };
     puppets.frame(0.6, null, hooks); // [0, 0.6)：层 0 的 a0、b0，层 1 的 a1
@@ -214,7 +214,7 @@ describe("模型对象", () => {
       },
     ]);
     let ended = 0;
-    puppets.layer(2, 0)!.addEndedCallback(() => ended++);
+    puppets.control(2, 0)!.addEndedCallback(() => ended++);
     const events: string[] = [];
     const sink = modelSink(
       () => true,
@@ -235,7 +235,7 @@ describe("模型对象", () => {
       },
     ]);
     let ended = 0;
-    puppets.layer(2, 0)!.addEndedCallback(() => ended++);
+    puppets.control(2, 0)!.addEndedCallback(() => ended++);
     const events: string[] = [];
     const sink = modelSink(
       () => false,
@@ -244,7 +244,7 @@ describe("模型对象", () => {
     for (let i = 0; i < 3; i++) puppets.frame(0.6, sink, { event: (_o, json) => events.push(json) });
     expect(ended).toBe(0);
     expect(events).toEqual([]);
-    expect(puppets.layer(2, 0)!.getFrame()).toBe(0);
+    expect(puppets.control(2, 0)!.getFrame()).toBe(0);
   });
 });
 
@@ -292,10 +292,10 @@ describe("控制口", () => {
     const { puppets, control } = single(0);
     expect(puppets.layerCount(3)).toBe(1);
     expect(puppets.layerCount(99)).toBe(0);
-    expect(puppets.layer(99, 0)).toBeNull();
-    expect(puppets.layer(3, 1)).toBeNull();
-    expect(puppets.layer(3, -1)).toBeNull();
-    expect(puppets.layer(3, 0)).toBe(control);
+    expect(puppets.control(99, 0)).toBeNull();
+    expect(puppets.control(3, 1)).toBeNull();
+    expect(puppets.control(3, -1)).toBeNull();
+    expect(puppets.control(3, 0)).toBe(control);
   });
 
   it("静态 puppet（skeleton 为 null）不进运行时：层数 0", () => {
@@ -305,7 +305,7 @@ describe("控制口", () => {
 });
 
 describe("findLayer", () => {
-  it("取最后一个匹配；空串不匹配；找不到 −1；改名后按新名字找", () => {
+  it("取最后一个匹配；空串不匹配；找不到 null；改名后按新名字找（返回层 id）", () => {
     const puppets = new ScenePuppets([
       {
         object: 5,
@@ -316,14 +316,14 @@ describe("findLayer", () => {
       },
     ]);
     expect(puppets.findLayer(5, "walk")).toBe(1);
-    expect(puppets.findLayer(5, "")).toBe(-1);
-    expect(puppets.findLayer(5, "run")).toBe(-1);
-    expect(puppets.findLayer(6, "walk")).toBe(-1);
-    puppets.layer(5, 0)!.name = "run";
+    expect(puppets.findLayer(5, "")).toBeNull();
+    expect(puppets.findLayer(5, "run")).toBeNull();
+    expect(puppets.findLayer(6, "walk")).toBeNull();
+    puppets.control(5, 0)!.name = "run";
     expect(puppets.findLayer(5, "run")).toBe(0);
-    puppets.layer(5, 1)!.name = "run";
+    puppets.control(5, 1)!.name = "run";
     expect(puppets.findLayer(5, "run")).toBe(1);
-    expect(puppets.findLayer(5, "walk")).toBe(-1);
+    expect(puppets.findLayer(5, "walk")).toBeNull();
   });
 });
 
@@ -332,7 +332,7 @@ describe("carryOver 接回可写字段与回调表", () => {
 
   it("名字、additive / blendin / blendout 三位、blendtime、回调表（同一个数组）、SETFRAME、时钟位都接回", () => {
     const old = build();
-    const control = old.layer(3, 0)!;
+    const control = old.control(3, 0)!;
     control.name = "x";
     control.additive = true;
     control.blendin = false;
@@ -345,7 +345,7 @@ describe("carryOver 接回可写字段与回调表", () => {
     control.setFrame(9.9);
     const next = build();
     next.carryOver(old);
-    const carried = next.layer(3, 0)!;
+    const carried = next.control(3, 0)!;
     expect(carried).toMatchObject({ name: "x", additive: true, blendin: false, blendout: true, blendtime: 0.125 });
     expect(carried.getFrame()).toBeCloseTo(9.9, 4);
     // SETFRAME 接回：新运行时第一帧越过 D 也不判；回调表是接回的那一个
@@ -357,13 +357,13 @@ describe("carryOver 接回可写字段与回调表", () => {
 
   it("动画变了（fps 不同）不接：从定义重来，回调表为空", () => {
     const old = build();
-    old.layer(3, 0)!.name = "x";
-    old.layer(3, 0)!.addEndedCallback(() => {
+    old.control(3, 0)!.name = "x";
+    old.control(3, 0)!.addEndedCallback(() => {
       throw new Error("不该被调");
     });
     const next = new ScenePuppets([{ object: 3, puppet: rig([animation(0, [], { fps: 20 })], [def(0, 0)]) }]);
     next.carryOver(old);
-    expect(next.layer(3, 0)!.name).toBe("L0");
+    expect(next.control(3, 0)!.name).toBe("L0");
     next.frame(2);
   });
 

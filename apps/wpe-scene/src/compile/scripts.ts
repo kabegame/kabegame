@@ -1,6 +1,8 @@
 import { init, initSync, parse } from "es-module-lexer";
 import {
   GENERAL_FIELDS,
+  LIGHT_FIELDS,
+  isLightField,
   type AnimationLayerField,
   isTextRuntimeField,
   type BindingTarget,
@@ -27,8 +29,9 @@ import { BLOOM_FIELDS } from "./postprocess";
 export type ScriptOwner =
   | { kind: "layer"; object: number }
   /**
-   * puppet 动画层的字段脚本（P12c）：路径 `objects/<i>/animationlayers/<k>/<字段>`。`entry` 是 JSON 里的下标 k，`layer` 是 `ScenePuppet.layers`
-   * 的下标（收集时填 -1，bundle 编完 puppet 后按 `entry` 回填；回填不到的脚本从列表里删掉）。`thisLayer` 是所属图层，`thisObject` 是这个动画层。
+   * puppet 动画层的字段脚本（P12c）：路径 `objects/<i>/animationlayers/<k>/<字段>`。`entry` 是 JSON 里的下标 k，`layer` 是层 id（P12e：编译期的层 id = `entry`，
+   * 收集时就填好；运行时建的层是负数、没有字段脚本）。bundle 编完 puppet 后只核对这一项建出来了没有，没建出来的脚本从列表里删掉。
+   * `thisLayer` 是所属图层，`thisObject` 是这个动画层。
    */
   | { kind: "animation-layer"; object: number; entry: number; layer: number }
   | { kind: "material"; pass: TargetKey; layer: number }
@@ -134,6 +137,7 @@ export function targetOf(
   text: boolean,
   particle: boolean,
   camera = false,
+  light = false,
 ): SceneScript["target"] {
   if (
     owner.kind === "layer" &&
@@ -142,6 +146,9 @@ export function targetOf(
     path === `objects/${owner.object}/${key}`
   )
     return { kind: "camera", object: owner.object, field: key };
+  // 灯对象的数值字段（P13f2，`LIGHT_FIELDS`）：就地写进 `SceneState.lights`，渲染器每帧现算（`p13f-light` 的 L2：字段脚本当帧生效）
+  if (owner.kind === "layer" && light && path === `objects/${owner.object}/${key}` && isLightField(key))
+    return { kind: "light", object: owner.object, field: key };
   if (owner.kind === "layer" && sound && path === `objects/${owner.object}/volume`)
     return { kind: "sound", object: owner.object, field: "volume" };
   if (owner.kind === "layer" && text && path === `objects/${owner.object}/${key}` && isTextRuntimeField(key))
@@ -185,6 +192,7 @@ export function targetValueType(
   key: string,
 ): ValueType | "string" | null {
   if (target.kind === "sound" || target.kind === "camera") return "float";
+  if (target.kind === "light") return LIGHT_FIELDS[target.field].type;
   if (target.kind === "animation-layer") return target.field === "visible" ? "bool" : "float";
   if (target.kind === "text") return textTypes[target.field];
   if (target.kind === "particle-instance")
@@ -244,7 +252,8 @@ function scriptVisitor(
       const text = !!object && typeof object === "object" && isTextObject(object);
       const particle = !!object && typeof object === "object" && objectKind(object) === "particle";
       const camera = !!object && typeof object === "object" && isCameraObject(object) && !isMixedCameraObject(object);
-      const target = targetOf(path, owner, key, initial, sound, text, particle, camera);
+      const light = !!object && typeof object === "object" && typeof object.light === "string";
+      const target = targetOf(path, owner, key, initial, sound, text, particle, camera, light);
       list.push({
         id: path,
         source: raw.script,
@@ -267,7 +276,7 @@ function scriptVisitor(
             : /^objects\/\d+\/effects$/.test(path)
               ? { kind: "effect" as const, object: layer!, effect: index }
               : /^objects\/\d+\/animationlayers$/.test(path)
-                ? { kind: "animation-layer" as const, object: layer!, entry: index, layer: -1 }
+                ? { kind: "animation-layer" as const, object: layer!, entry: index, layer: index }
                 : owner;
         visit(entry, `${path}/${index}`, next, path === "objects" ? index : layer);
       });
@@ -285,7 +294,7 @@ function scriptVisitor(
       } else if (/^objects\/\d+\/effects$/.test(path)) {
         next = { kind: "effect", object: layer!, effect: Number(key) };
       } else if (/^objects\/\d+\/animationlayers$/.test(path)) {
-        next = { kind: "animation-layer", object: layer!, entry: Number(key), layer: -1 };
+        next = { kind: "animation-layer", object: layer!, entry: Number(key), layer: Number(key) };
       } else if (key === "constantshadervalues" && /\/passes\/\d+$/.test(path)) {
         next = { kind: "material", pass: path, layer: layer! };
       }

@@ -25,7 +25,8 @@
  * - iframe 命令式创建（先插入再赋 `src`，插入时初始空文档的 load 靠 `isInitialBlank` 忽略），不经 Vue 的 patch。
  * - 音量：垫片经 `postMessage` 要宿主音量，只回答自己当前 iframe 的请求（主窗口里应用背景与预览各有一个），回 `volume`（`paused`
  *   时为 0）；`volume` / `paused` / `interactive` 变化时主动推（协议见 `wpeWebVolume.ts`）。`paused` 也经这条消息交给垫片：iframe
- *   保持可见，垫片冻结 rAF、CSS 动画与媒体元素并调页面的 `setPaused`。
+ *   保持可见，垫片照 WPE 冻结 rAF、计时器、`AudioContext`、CSS 动画与媒体元素并调页面的 `setPaused`（暂停中打开的先让页面
+ *   画起来，见垫片 `installFreeze`）。
  * - 鼠标：iframe 不收真实鼠标（`pointer-events: none`）。`interactive` 经音量消息交给垫片，垫片在可交互且没暂停时向
  *   `tauri-plugin-cursor` 登记本 frame，Rust 把全局光标直接注入它。Linux 拿不到全局光标，退回可交互的 iframe 直接收真实鼠标
  *   （`framePointer.ts`）。

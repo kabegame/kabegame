@@ -824,8 +824,8 @@ describe("渲染器：每帧选相机对象（P5d 步骤 3 点 4）", () => {
 // ———— dev 探针 ————
 
 describe("dev 探针的相机对象（P5d 步骤 3 点 4）", () => {
-  it("probeCameraObjects：没有相机对象为 undefined；frameCamera 正交交相机对象的帧、eyes 记相机的 eye.xy + s", () => {
-    expect(probeCameraObjects(bundleOf([layer(0)]))).toBeUndefined();
+  it("probeCameraObjects：没有相机对象时图层表为空（P5e）；frameCamera 正交交相机对象的帧、eyes 记相机的 eye.xy + s", () => {
+    expect(probeCameraObjects(bundleOf([layer(0)])).layers).toEqual([]);
     const bundle = bundleOf([layer(0), cameraLayer(1, [200, 100, 0])], false, SHAKE);
     const objects = probeCameraObjects(bundle)!;
     expect(objects.layers.map((item) => item.object)).toEqual([1]);

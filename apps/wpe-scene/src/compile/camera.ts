@@ -3,7 +3,8 @@
  * `up` 与 `paths` 指向的路径文件。每帧的求值与推进在 `render/camera.ts`。
  *
  * - 基准：字符串按空格 `atof` 三次、缺分量为 0；不是字符串时保留构造值 (2, 2, 2) / (0, 0, 0) / (0, 1, 0)（L2）。WPE 加载时硬读字符串，
- *   `camera` 不是描述符，绑不了属性、脚本也碰不到（`getCameraTransforms` / `setCameraTransforms` 仍在 `MISSING_SCRIPT_API`）。
+ *   `camera` 不是描述符，绑不了属性。脚本经 `thisScene.getCameraTransforms` / `setCameraTransforms`（P5e）读写的是运行时基准
+ *   （`SceneState.cameraBase`）：`init` 先于加载末尾套 `scene.json`，只有字符串的项覆盖 `init` 写的值（`given` 记哪几项是字符串）。
  * - 路径文件：格式与容错照 rea-p5-camera 3.1（`parseCameraPaths`），按 `camera.paths` 的顺序、文件内的顺序追加；读不到或不是 JSON 报
  *   `camera:paths:unreadable`（没测，语料 0）。
  * - 正交场景不解析（视图恒为单位阵，L2）：带非空 `paths` 由能力表报 `camera:paths:orthographic`（读码说那时不重置相机、视图会平移，
@@ -32,6 +33,11 @@ export interface SceneCameraJson {
   eye: Vec3;
   center: Vec3;
   up: Vec3;
+  /**
+   * `eye` / `center` / `up` 在 `scene.json` 里各自是不是字符串（P5e）：是才覆盖脚本 `init` 写进基准的值，不是保留 `init` 写的（WPE 先跑
+   * 全部 `init`、后读 `camera`）。缺省（手写的 bundle）当全部给了。
+   */
+  given?: { eye: boolean; center: boolean; up: boolean };
   /** 路径表（已去掉没有关键帧的路径，见 `compileCamera`）；空表时用基准。 */
   paths: CameraPath[];
 }
@@ -157,6 +163,11 @@ export async function compileCamera(
     eye: cameraVector(camera.eye) ?? [...DEFAULT_CAMERA.eye],
     center: cameraVector(camera.center) ?? [...DEFAULT_CAMERA.center],
     up: cameraVector(camera.up) ?? [...DEFAULT_CAMERA.up],
+    given: {
+      eye: typeof camera.eye === "string",
+      center: typeof camera.center === "string",
+      up: typeof camera.up === "string",
+    },
     paths: paths[0]?.keys.length ? paths.filter((path) => path.keys.length > 0) : [],
   };
 }

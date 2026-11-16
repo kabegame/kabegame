@@ -38,14 +38,19 @@ import {
   generalValue,
   isLayerVectorField,
   layerVectorValue,
+  lightFieldValue,
   type BindingTarget,
+  type CameraBaseField,
   type GeneralValues,
   type LayerField,
+  type LightField,
+  type LightValues,
   type SceneBinding,
   type TargetKey,
   type TextRuntimeField,
 } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
+import { DEFAULT_CAMERA } from "../compile/camera";
 import { materialSetter, memberValue, type MaterialMember } from "../compile/materialValues";
 import type { SceneScalar } from "../compile/model";
 import type { LayerShellValues } from "../compile/layerShell";
@@ -68,7 +73,27 @@ import { animationLayerValue } from "../compile/puppet";
 import { animationLayerKey, type PuppetLayerFields } from "../puppet/player";
 import { sameTextField, textFieldFromJson, type TextFields } from "../text/fields";
 import type { TextLayout } from "../text/layout";
+import type { CameraPose } from "./camera";
 import { alignmentOffset } from "./layout";
+
+const f32 = Math.fround;
+
+/** 正交且没有路径的场景，加载末尾把相机基准重置成的值（rea-p5-camera / p3 L2）：视图恒为单位阵。 */
+export const ORTHOGRAPHIC_CAMERA_BASE: Readonly<Pick<CameraPose, "eye" | "center" | "up">> = {
+  eye: [0, 0, 0],
+  center: [0, 0, -1],
+  up: [0, 1, 0],
+};
+
+/** 脚本 `init` 之前相机基准的构造缺省值（eye (2,2,2)、center (0,0,0)、up (0,1,0)、zoom 1；WPE 先跑 `init`、后读 `scene.json` 的 `camera`）。 */
+export function constructedCameraBase(): CameraPose {
+  return { eye: [...DEFAULT_CAMERA.eye], center: [...DEFAULT_CAMERA.center], up: [...DEFAULT_CAMERA.up], zoom: 1 };
+}
+
+/** 相机基准的两份拷贝用的深拷贝（运行中改它不动 bundle）。 */
+function copyCameraPose(pose: CameraPose): CameraPose {
+  return { eye: [...pose.eye], center: [...pose.center], up: [...pose.up], zoom: pose.zoom };
+}
 
 export interface LayerState {
   /** angles 为弧度（同 scene.json）。都是本地值：世界矩阵与继承后的可见性按父链现算（`render/layout.ts`）。 */
@@ -337,12 +362,28 @@ export class SceneState {
    */
   readonly sounds = new Map<number, { volume: number }>();
   /**
+   * 灯对象的数值字段（P13f2，`objects` 下标 → `LightValues`），起始值 = 编译期的 `SceneLightObject.values`。写入不标脏：渲染器每帧现算
+   * 灯光 uniform、遗留灯与体积光（WPE 这些字段没有改值回调，逐帧读，rea-p13-lights 3.1）。
+   */
+  readonly lights = new Map<number, LightValues>();
+  /**
    * 相机对象的就地值（P5d 步骤 3，`objects` 下标 → 值），起始值 = 编译期的 `SceneLayer.camera`；只含 `camera` 非空的图层（纯相机对象）。
    * 写入不标脏：渲染器每帧选相机时读。
    */
   readonly cameras = new Map<number, { fov: number; zoom: number }>();
   /**
-   * puppet 动画层的就地字段（P12a 步骤 3 点 3，键 `animationLayerKey(对象下标, 层下标)`），起始值 = 编译期的 `PuppetLayerDef`（已按属性值解析）。
+   * 场景相机的基准姿态（P5e，WPE `G+0x118`…`+0x13c`，`thisScene.get/setCameraTransforms` 读写的就是它），值按 float32 存。起始值 = 加载完成值
+   * （正交 = 重置值 (0,0,0) / (0,0,−1) / (0,1,0)、透视 = `scene.json` 解析值，zoom 都是 1）；脚本 `init` 之前宿主调 `beginScriptInit` 换成构造缺省值，
+   * `init` 之后调 `finishScriptInit` 套 `scene.json`。不标脏：渲染器每帧求相机时读（`render/camera.ts` 的 `sceneCameraFrame`）。
+   */
+  cameraBase: CameraPose = constructedCameraBase();
+  /** 加载完成值与 `init` 之后被 `scene.json` 覆盖的字段（`finishScriptInit` 用）。 */
+  private cameraLoaded: { pose: CameraPose; overridden: readonly CameraBaseField[] } = {
+    pose: constructedCameraBase(),
+    overridden: [],
+  };
+  /**
+   * puppet 动画层的就地字段（P12a 步骤 3 点 3，键 `animationLayerKey(对象下标, 层 id)`，P12e：编译期的层 id = `animationlayers` 的 JSON 下标，运行时建的层是负数），起始值 = 编译期的 `PuppetLayerDef`（已按属性值解析）。
    * 写入不标脏：`ScenePuppets.frame` 每帧经 `animationLayer` 读，用户属性在两帧之间写进来、puppet 当帧就读到（p12-REPORT 用例 4）。
    */
   readonly animationLayers = new Map<string, PuppetLayerFields>();
@@ -488,6 +529,24 @@ export class SceneState {
       children,
     );
     state.shadowPasses = shadowOf;
+    // 相机基准（P5e）：正交（含手写的 bundle 没有 `perspective` 标记）= 重置值，`init` 之后一律重置；透视 = JSON 解析值，
+    // 只有 `scene.json` 里是字符串的项覆盖 `init` 写的值（`given`，缺省当全给了；没有相机时都不覆盖）
+    const camera = bundle.general.camera;
+    if (bundle.general.perspective) {
+      const pose: CameraPose = camera
+        ? { eye: [...camera.eye], center: [...camera.center], up: [...camera.up], zoom: 1 }
+        : constructedCameraBase();
+      const given = camera ? (camera.given ?? { eye: true, center: true, up: true }) : null;
+      state.cameraLoaded = {
+        pose,
+        overridden: (["eye", "center", "up"] as const).filter((field) => given?.[field]),
+      };
+    } else
+      state.cameraLoaded = {
+        pose: copyCameraPose({ ...ORTHOGRAPHIC_CAMERA_BASE, zoom: 1 }),
+        overridden: ["eye", "center", "up"],
+      };
+    state.cameraBase = copyCameraPose(state.cameraLoaded.pose);
     for (const layer of bundle.layers) state.order.push(layer.object);
     // 加载时 `rate` 钳到 0.01 并写回（`FUN_14022af30` `0x14022b840`–`0x14022b86f`，rea-p4f-script.md 6.1）：脚本 `init` 读到的就是钳过的
     // 值，和建系统时（`ParticleSystem` 构造）的钳制一致
@@ -497,13 +556,14 @@ export class SceneState {
       if (layer.alignment !== undefined) state.alignmentSizes.set(layer.object, [...layer.size]);
     // 手写的测试 bundle 可能没有声音表
     for (const sound of bundle.sounds ?? []) state.sounds.set(sound.object, { volume: sound.volume });
+    for (const light of bundle.lightObjects ?? []) state.lights.set(light.object, structuredClone(light.values));
     // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
     for (const layer of bundle.layers)
       if (layer.camera) state.cameras.set(layer.object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
     // puppet 的动画层字段（P12a 步骤 3 点 3）：拷一份，运行中改它不动 bundle；模型对象的骨骼（P12b2-1）同样
     for (const layer of bundle.layers)
-      (layer.puppet ?? layer.model?.skeleton)?.layers.forEach((def, slot) =>
-        state.animationLayers.set(animationLayerKey(layer.object, slot), {
+      (layer.puppet ?? layer.model?.skeleton)?.layers.forEach((def) =>
+        state.animationLayers.set(animationLayerKey(layer.object, def.entry), {
           rate: def.rate,
           blend: def.blend,
           visible: def.visible,
@@ -684,6 +744,42 @@ export class SceneState {
     return this.children.get(object) ?? [];
   }
 
+  /** 运行时建层（P12e）：写进三方共写字段的起始值（API 规整后的 rate / blend / visible）。 */
+  addAnimationLayer(object: number, id: number, fields: PuppetLayerFields): void {
+    this.animationLayers.set(animationLayerKey(object, id), {
+      rate: fields.rate,
+      blend: fields.blend,
+      visible: fields.visible,
+    });
+  }
+
+  /** 层释放（P12e）：删掉这一项；之后用户属性、脚本写入、重放对它都是空操作。 */
+  removeAnimationLayer(object: number, id: number): void {
+    this.animationLayers.delete(animationLayerKey(object, id));
+  }
+
+  /**
+   * 重编译 / 换场景后按 puppet 运行时的层表对齐（P12e）：在 `puppets.carryOver` 之后、重放脚本写入之前调。运行时有、本状态没有的项（运行时建的层）
+   * 从 `previous` 拷，`previous` 也没有就取层定义；本状态有、运行时没有的项（删过的编译期层）删掉（给了 objects 参数，只删这些对象的：静态 puppet 没有运行时、状态里的项要留着）。
+   */
+  syncAnimationLayers(
+    layers: Iterable<{ object: number; id: number; def: PuppetLayerFields }>,
+    previous: SceneState | null,
+    objects?: ReadonlySet<number>,
+  ): void {
+    const live = new Set<string>();
+    for (const { object, id, def } of layers) {
+      const key = animationLayerKey(object, id);
+      live.add(key);
+      if (this.animationLayers.has(key)) continue;
+      const old = previous?.animationLayers.get(key) ?? def;
+      this.animationLayers.set(key, { rate: old.rate, blend: old.blend, visible: old.visible });
+    }
+    for (const key of [...this.animationLayers.keys()])
+      if (!live.has(key) && (!objects || objects.has(Number(key.slice(0, key.indexOf(":"))))))
+        this.animationLayers.delete(key);
+  }
+
   /**
    * 重编译后新状态接过旧状态的结构（P6d3）：`order` 滤掉新状态里没有的、新状态里有而旧表没有的按新状态原顺序追加在尾；待删集合滤掉不存在的。
    * 父与子表：双方都有的对象照搬旧状态的（首次加载时 `init` 里的 `setParent` 落在宿主自建的脚本状态上，bundle 是 `init` 之前编的、不含它；
@@ -751,6 +847,26 @@ export class SceneState {
           out.push(child);
         }
     return out;
+  }
+
+  /**
+   * 脚本 `init` 之前（P5e）：相机基准换成构造缺省值（`init` 里 `getCameraTransforms` 读到的、`setCameraTransforms` 写进的就是它）。
+   * 只在首次加载 / 清空脚本存储后重建脚本环境时调（重编译不重跑 `init`）。
+   */
+  beginScriptInit(): void {
+    this.cameraBase = constructedCameraBase();
+  }
+
+  /**
+   * 全部脚本 `init` 跑完之后（P5e，WPE 先跑 `init`、后读 `scene.json` 的 `camera`）：正交场景 eye / center / up 一律重置，透视场景只有
+   * `scene.json` 里是字符串的项覆盖，不是字符串的保留 `init` 写的值；`zoom` 不受影响（`init` 里写的留下）。返回被覆盖的字段，宿主据此把脚本对它们的
+   * 写入从重放表里去掉（`ScriptRuntime.forgetWrite`，否则重编译重放时会复活）。
+   */
+  finishScriptInit(): CameraBaseField[] {
+    const { pose, overridden } = this.cameraLoaded;
+    const base = this.cameraBase;
+    for (const field of overridden) if (field !== "zoom") base[field] = [...pose[field]];
+    return [...overridden];
   }
 
   /** 按 scene.json 坐标取 effect 开关；不在 bundle 里的算关着。 */
@@ -834,6 +950,13 @@ export class SceneState {
       else this.dirtyParticles.add(target.object);
       return "applied";
     }
+    if (target.kind === "light") {
+      const light = this.lights.get(target.object);
+      // 取值规则与编译期相同（`lightFieldValue`），条件先换成布尔；不合法的值不改字段
+      const value = lightFieldValue(target.field, conditioned(binding, raw));
+      if (light && value !== undefined) (light as Record<LightField, number | number[]>)[target.field] = value;
+      return "applied";
+    }
     if (target.kind === "sound") {
       const sound = this.sounds.get(target.object);
       // 取值规则与编译期相同（`soundVolume`），条件先换成布尔；不合法的值不改字段（WPE 的 float 解析器不收时不写）
@@ -846,6 +969,13 @@ export class SceneState {
       // 取值规则与编译期相同（`cameraValue`），条件先换成布尔；不合法的值不改字段（同 general 的 float）
       const value = cameraValue(conditioned(binding, raw));
       if (camera && value !== undefined) camera[target.field] = value;
+      return "applied";
+    }
+    // 相机基准（P5e，只由脚本 API 产生）：值是 float32 转出来的分量（API 已按「数字取 float32、不是数字记 0」规整），NaN / Infinity 照存
+    if (target.kind === "camera-base") {
+      const parts = typeof raw === "string" ? raw.split(" ").map(Number) : [Number(raw)];
+      if (target.field === "zoom") this.cameraBase.zoom = f32(parts[0]);
+      else this.cameraBase[target.field] = [f32(parts[0] ?? 0), f32(parts[1] ?? 0), f32(parts[2] ?? 0)];
       return "applied";
     }
     if (target.kind === "animation-layer") {

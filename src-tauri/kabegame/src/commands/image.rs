@@ -76,6 +76,13 @@ pub async fn get_gallery_time_filter_data() -> Result<Value, String> {
     commands::image::get_gallery_time_filter_data()
 }
 
+/// 预览里「设为封面」：把视频在 `time_secs` 秒（`<video>.currentTime`）的画面设为缩略图，返回新路径。只给应用页。
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn set_video_cover(image_id: String, time_secs: f64) -> Result<String, String> {
+    commands::image::set_video_cover(image_id, time_secs).await
+}
+
 #[tauri::command]
 pub async fn delete_image(image_id: String) -> Result<Value, String> {
     commands::image::delete_image(image_id).await

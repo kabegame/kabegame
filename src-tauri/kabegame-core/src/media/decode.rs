@@ -413,10 +413,13 @@ fn open_video_input(path: &Path) -> Result<(AVFormatContextInput, usize, AVCodec
     Ok((fmt, stream_index, decoder))
 }
 
-fn receive_sampled_frame(decoder: &mut AVCodecContext) -> Result<Option<(i64, RgbImage)>, String> {
+fn receive_sampled_frame(
+    decoder: &mut AVCodecContext,
+    max_edge: u32,
+) -> Result<Option<(i64, RgbImage)>, String> {
     match decoder.receive_frame() {
         Ok(frame) => {
-            let image = frame_to_rgb_within(&frame, Some(SAMPLED_FRAME_MAX_EDGE))?;
+            let image = frame_to_rgb_within(&frame, Some(max_edge))?;
             Ok(Some((frame.best_effort_timestamp, image)))
         }
         Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => Ok(None),
@@ -424,12 +427,13 @@ fn receive_sampled_frame(decoder: &mut AVCodecContext) -> Result<Option<(i64, Rg
     }
 }
 
-/// 从当前读位置起解出 `stream_index` 的下一帧，返回（时间戳，缩小后的画面）。
+/// 从当前读位置起解出 `stream_index` 的下一帧，返回（时间戳，最长边缩到 `max_edge` 以内的画面）。
 /// 读到文件尾或读满 [`SAMPLE_MAX_PACKETS_PER_POINT`] 个包仍没有帧时返回 `None`。
 fn decode_next_frame(
     fmt: &mut AVFormatContextInput,
     decoder: &mut AVCodecContext,
     stream_index: usize,
+    max_edge: u32,
 ) -> Result<Option<(i64, RgbImage)>, String> {
     for _ in 0..SAMPLE_MAX_PACKETS_PER_POINT {
         let packet = match fmt.read_packet() {
@@ -440,7 +444,7 @@ fn decode_next_frame(
                     Ok(()) | Err(RsmpegError::DecoderFlushedError) => {}
                     Err(e) => return Err(format!("failed to flush video decoder: {e:?}")),
                 }
-                return receive_sampled_frame(decoder);
+                return receive_sampled_frame(decoder, max_edge);
             }
             Err(e) => return Err(format!("failed to read video packet: {e:?}")),
         };
@@ -451,7 +455,7 @@ fn decode_next_frame(
         if decoder.send_packet(Some(&packet)).is_err() {
             continue;
         }
-        if let Some(found) = receive_sampled_frame(decoder)? {
+        if let Some(found) = receive_sampled_frame(decoder, max_edge)? {
             return Ok(Some(found));
         }
     }
@@ -492,7 +496,7 @@ pub fn sample_video_frames(path: &Path, count: usize) -> Result<Vec<RgbImage>, S
             }
             decoder.flush_buffers();
             let Ok(Some((timestamp, image))) =
-                decode_next_frame(&mut fmt, &mut decoder, stream_index)
+                decode_next_frame(&mut fmt, &mut decoder, stream_index, SAMPLED_FRAME_MAX_EDGE)
             else {
                 continue;
             };
@@ -506,13 +510,101 @@ pub fn sample_video_frames(path: &Path, count: usize) -> Result<Vec<RgbImage>, S
 
     if frames.is_empty() {
         // 重新打开再从头解：前面失败的 seek 可能已经把读位置挪走了
-        let (mut fmt, stream_index, mut decoder) = open_video_input(path)?;
-        match decode_next_frame(&mut fmt, &mut decoder, stream_index)? {
-            Some((_, image)) => frames.push(image),
-            None => return Err("no decodable video frame found".to_string()),
-        }
+        frames.push(decode_first_video_frame(path, SAMPLED_FRAME_MAX_EDGE)?);
     }
     Ok(frames)
+}
+
+/// 从头解出视频的第一帧，最长边超过 `max_edge` 时等比缩到 `max_edge`（不放大）。视频缩略图用它。
+pub fn decode_first_video_frame(path: &Path, max_edge: u32) -> Result<RgbImage, String> {
+    let (mut fmt, stream_index, mut decoder) = open_video_input(path)?;
+    match decode_next_frame(&mut fmt, &mut decoder, stream_index, max_edge)? {
+        Some((_, image)) => Ok(image),
+        None => Err("no decodable video frame found".to_string()),
+    }
+}
+
+/// 解出视频在 `secs` 秒（从第一帧起算，同 `<video>.currentTime`）时正在显示的那一帧：显示时间不晚于它的最后一帧。
+/// 先 seek 到它之前最近的关键帧，再逐帧解到越过它为止，只转换选中的那一帧。最长边超过 `max_edge` 时等比缩小。
+/// 超过视频末尾时取最后一帧。设为封面用它。
+pub fn decode_video_frame_at(path: &Path, secs: f64, max_edge: u32) -> Result<RgbImage, String> {
+    let (mut fmt, stream_index, mut decoder) = open_video_input(path)?;
+    let time_base = fmt.streams()[stream_index].time_base;
+    let tick = f64::from(time_base.num) / f64::from(time_base.den.max(1));
+    let start = if fmt.start_time == ffi::AV_NOPTS_VALUE {
+        0
+    } else {
+        fmt.start_time
+    };
+    let av_time_base = f64::from(ffi::AV_TIME_BASE as i32);
+    let target = start as f64 / av_time_base + secs.max(0.0);
+    if secs > 0.0
+        && fmt
+            .seek(
+                -1,
+                (target * av_time_base) as i64,
+                ffi::AVSEEK_FLAG_BACKWARD as i32,
+            )
+            .is_ok()
+    {
+        decoder.flush_buffers();
+    }
+
+    let mut chosen: Option<AVFrame> = None;
+    // 收下解码器吐出的帧；返回 true 表示已越过目标，停止
+    let mut take = |decoder: &mut AVCodecContext| -> Result<bool, String> {
+        loop {
+            let frame = match decoder.receive_frame() {
+                Ok(frame) => frame,
+                Err(RsmpegError::DecoderDrainError) | Err(RsmpegError::DecoderFlushedError) => {
+                    return Ok(false)
+                }
+                Err(e) => return Err(format!("failed to receive decoded video frame: {e:?}")),
+            };
+            let timestamp = frame.best_effort_timestamp;
+            if timestamp == ffi::AV_NOPTS_VALUE {
+                // 没有时间戳就没法比较，取它
+                chosen = Some(frame);
+                return Ok(true);
+            }
+            if timestamp as f64 * tick > target + 1e-6 {
+                if chosen.is_none() {
+                    chosen = Some(frame);
+                }
+                return Ok(true);
+            }
+            chosen = Some(frame);
+        }
+    };
+    loop {
+        let packet = match fmt.read_packet() {
+            Ok(Some(packet)) => packet,
+            Ok(None) => {
+                // 文件尾：冲出压着的帧，最后一帧就是答案
+                match decoder.send_packet(None) {
+                    Ok(()) | Err(RsmpegError::DecoderFlushedError) => {}
+                    Err(e) => return Err(format!("failed to flush video decoder: {e:?}")),
+                }
+                take(&mut decoder)?;
+                break;
+            }
+            Err(e) => return Err(format!("failed to read video packet: {e:?}")),
+        };
+        if packet.stream_index as usize != stream_index {
+            continue;
+        }
+        // seek 之后的头几个包可能解不了（缺参考帧），跳过等下一个
+        if decoder.send_packet(Some(&packet)).is_err() {
+            continue;
+        }
+        if take(&mut decoder)? {
+            break;
+        }
+    }
+    match chosen {
+        Some(frame) => frame_to_rgb_within(&frame, Some(max_edge)),
+        None => Err("no decodable video frame found".to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -625,6 +717,30 @@ pub(crate) mod tests {
             "first and last frames look the same: {levels:?}"
         );
         assert_eq!(frames[0].dimensions(), (64, 64));
+    }
+
+    /// 按时间点取帧：取的是那一刻正在显示的帧（关键帧之间也准），越过末尾取最后一帧，0 是第一帧。
+    #[test]
+    fn decode_video_frame_at_picks_the_frame_on_screen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        // 4 秒、10 fps、每秒一个关键帧：第 15 帧（1.5 s）在两个关键帧之间
+        write_test_video(&path, 40, 10, 10);
+        let at = |secs: f64| brightness(&decode_video_frame_at(&path, secs, 512).unwrap());
+
+        let (before, frame15, after) = (at(1.45), at(1.55), at(1.65));
+        assert!(
+            before < frame15 && frame15 < after,
+            "{before} {frame15} {after}"
+        );
+        assert_eq!(at(1.5), frame15, "1.5 s 正好是第 15 帧");
+        assert!(at(1.0) < before, "不是退回关键帧");
+        assert!(at(0.0) < 60, "0 是第一帧");
+        assert!(at(99.0) >= after, "越过末尾取最后一帧");
+        assert_eq!(
+            decode_video_frame_at(&path, 1.0, 32).unwrap().dimensions(),
+            (32, 32)
+        );
     }
 
     #[test]

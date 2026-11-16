@@ -41,7 +41,8 @@
   "backfillFailed": "資料庫背景更新失敗（{name}），下次啟動時會繼續",
   "backfill": {
     "wpe_dir_hash": "重新計算 Wallpaper Engine 桌布的內容指紋",
-    "image_palette": "計算桌布的代表色"
+    "image_palette": "計算桌布的代表色",
+    "video_thumbnail_frame": "重新產生影片縮圖"
   },
   "viewLogs": "查看日誌",
   "logs": {
