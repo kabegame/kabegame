@@ -1,12 +1,12 @@
 // @vitest-environment happy-dom
 /**
- * 组件的行为测试：对话框的 Esc / Android 返回栈、提示消息门面、确认框门面、加载指令、层级工具与滚轮选择。
+ * 组件的行为测试：对话框的 Esc / Android 返回栈、提示消息门面、确认框门面、加载指令、层级工具、滚轮选择与翻页。
  * 外观在 dev 的 /dev/ui 陈列页里人工对照，这里只测行为。
  */
 import { flushPromises, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defineComponent, h, nextTick, ref, withDirectives } from "vue";
+import { defineComponent, effectScope, h, nextTick, ref, withDirectives } from "vue";
 
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 // Android：useModalBack 只在 Android 上接返回栈
@@ -18,11 +18,12 @@ vi.mock("@/env", async (importOriginal) => ({
 import Dialog from "./Dialog.vue";
 import MessageBoxHost from "./MessageBoxHost.vue";
 import PickerSheet, { type PickerOption } from "./PickerSheet.vue";
+import Paginator from "./Paginator.vue";
 import { useModalStackStore } from "@/stores/modalStack";
 import { closeToast, toast, toastEntries } from "./toast";
 import { messageBox, messageBoxQueue } from "./messageBox";
 import { vLoading } from "./loading";
-import { isInAnyLayer, keepOpenOnToast, nextLayerZIndex } from "./layer";
+import { isInAnyLayer, keepOpenOnToast, nextLayerZIndex, topModalLayerZIndex, useLayerZIndex } from "./layer";
 
 const wrappers: { unmount: () => void }[] = [];
 
@@ -242,6 +243,44 @@ describe("层级工具", () => {
     expect(elsewhere.defaultPrevented).toBe(false);
   });
 
+  it("点到常驻浮层（data-kb-persistent，看板娘）时也不关当前层", () => {
+    const host = document.createElement("div");
+    host.setAttribute("data-kb-persistent", "");
+    const img = document.createElement("img");
+    host.appendChild(img);
+    document.body.appendChild(host);
+    const fromMascot = new CustomEvent("x", { cancelable: true, detail: { originalEvent: { target: img } } });
+    keepOpenOnToast(fromMascot as unknown as Event);
+    expect(fromMascot.defaultPrevented).toBe(true);
+  });
+
+  it("模态层打开期间登记层级号：topModalLayerZIndex 取最高的、可排除打开方，关掉或卸载后撤销", async () => {
+    const before = topModalLayerZIndex();
+    const a = ref(false);
+    const b = ref(false);
+    const menu = ref(false);
+    const scope = effectScope();
+    const [za, zb] = scope.run(() => [
+      useLayerZIndex(a, { modal: true }),
+      useLayerZIndex(b, { modal: true, owner: "kamechan" }),
+      useLayerZIndex(menu),
+    ])!;
+    a.value = true;
+    await nextTick();
+    expect(topModalLayerZIndex()).toBe(za.value);
+    b.value = true;
+    menu.value = true;
+    await nextTick();
+    // 非模态的菜单不登记；排除 kamechan 自己的对话框后，最高的是 a
+    expect(topModalLayerZIndex()).toBe(zb.value);
+    expect(topModalLayerZIndex("kamechan")).toBe(za.value);
+    a.value = false;
+    await nextTick();
+    expect(topModalLayerZIndex("kamechan")).toBe(before);
+    scope.stop();
+    expect(topModalLayerZIndex()).toBe(before);
+  });
+
   it("isInAnyLayer：对话框、菜单、提示里算层内，页面上不算", () => {
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
@@ -316,5 +355,40 @@ describe("PickerSheet", () => {
       .click();
     await flushPromises();
     expect(confirmed.mock.calls[0][0].selectedValues).toEqual(["a"]);
+  });
+});
+
+describe("Paginator", () => {
+  function mountPaginator(page: number, pageCount: number) {
+    const updates: number[] = [];
+    const wrapper = mount(Paginator, {
+      props: { page, pageCount, "onUpdate:page": (value: number) => updates.push(value) },
+      attachTo: document.body,
+    });
+    wrappers.push(wrapper);
+    return { wrapper, updates };
+  }
+
+  it("上一页 / 下一页按边界置灰，点了报相邻页", async () => {
+    const { wrapper, updates } = mountPaginator(1, 3);
+    const [prev, next] = wrapper.findAll("button");
+    expect(prev.attributes("disabled")).toBeDefined();
+    await next.trigger("click");
+    expect(updates).toEqual([2]);
+    await wrapper.setProps({ page: 3 });
+    expect(wrapper.findAll("button")[1].attributes("disabled")).toBeDefined();
+  });
+
+  it("输入的页码收拢到 1～总页数；不是数字就复原、不跳", async () => {
+    const { wrapper, updates } = mountPaginator(2, 5);
+    const input = wrapper.find("input");
+    await input.setValue("99");
+    await input.trigger("keydown", { key: "Enter" });
+    expect(updates).toEqual([5]);
+    expect((input.element as HTMLInputElement).value).toBe("5");
+    await input.setValue("abc");
+    await input.trigger("blur");
+    expect(updates).toEqual([5]);
+    expect((input.element as HTMLInputElement).value).toBe("2");
   });
 });

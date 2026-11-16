@@ -107,6 +107,9 @@ tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "0.3"
+# 网页壁纸 / 场景音频频谱的两份 FFT（同 Windows 段的说明），由 wpe feature 开启；样本来自 Core Audio 进程 tap
+realfft = { version = "3.4", optional = true }
+rustfft = { version = "6.4", optional = true }
 tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", optional = true }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
@@ -153,6 +156,7 @@ default = []
 
 # Wallpaper Engine 壁纸：发现、导入与运行。三个桌面平台随 standard 开启，Android / Web 不开。
 # windows 的这些 feature 都是 wpe_media 的系统接口；macOS / Linux 没有这个依赖，写在这里不生效。
+# realfft / rustfft 在 Windows 与 macOS 段各登记一次（两个平台都有音频回环）。
 wpe = [
     "kabegame-core/wpe",
     "dep:realfft",

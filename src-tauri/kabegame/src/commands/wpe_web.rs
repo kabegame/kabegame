@@ -483,7 +483,8 @@ pub async fn wpe_web_pull_state(
 /// （SceneScript 的 `engine.registerAudioBuffers`），网页壁纸的垫片不传。订阅归属调用方 frame，frame 销毁
 /// 即释放（`lib.rs` 的 `on_webview_event`），同一 frame 再订阅同一类替换旧条，所以没有退订命令。只接受
 /// 子 frame：两个窗口的主 frame 是应用页。`audio` 只对 `general.supportsaudioprocessing: true` 的壁纸放行
-/// （照 WPE）。只有 Windows 有数据源，其它平台返回错误，垫片与宿主都忽略。
+/// （照 WPE）。本平台没有这一类的数据源（`audio` 在 Windows / macOS 有，`media` 只在 Windows）时返回错误，
+/// 垫片与宿主都忽略。
 #[tauri::command]
 pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     webview: tauri::Webview<R>,
@@ -496,10 +497,12 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     let tauri::ipc::CallerFrame::Sub(frame) = frame else {
         return Err("only web wallpaper frames can subscribe".to_string());
     };
-    // TODO:[WPE_SCENE] 在 macOS / Linux 上测试：场景音频。这两个系统还没有回环采集（WpeMediaHub 只在 Windows 上采），场景宿主
-    // 订阅被拒后频谱全 0（`g_AudioSpectrum*`、音频粒子、脚本音频缓冲都读 0）；接上各平台的系统音频回环、在这里放开后，核对三者都随音乐变化。
-    if !cfg!(target_os = "windows") {
-        return Err("web wallpaper media is only available on Windows".to_string());
+    // TODO:[WPE_SCENE] 在 Linux 上测试：场景音频。Linux 还没有回环采集，场景宿主订阅被拒后频谱全 0（`g_AudioSpectrum*`、音频粒子、
+    // 脚本音频缓冲都读 0）；接上系统音频回环、在 `kind_available` 放开后，核对三者都随音乐变化。
+    if !crate::wpe_media::kind_available(kind) {
+        return Err(format!(
+            "web wallpaper {kind:?} data is not available on this platform"
+        ));
     }
     let doc = caller_document(&caller.0).ok_or("caller is not a file: document")?;
     let index = WpeWebDirIndex::global();

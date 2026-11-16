@@ -133,5 +133,8 @@
   "nextMonth": "下個月",
   "nextYear": "下一年",
   "today": "今天",
-  "addCustom": "新增「{value}」"
+  "addCustom": "新增「{value}」",
+  "prevPage": "上一頁",
+  "nextPage": "下一頁",
+  "jumpToPage": "跳轉至頁"
 }

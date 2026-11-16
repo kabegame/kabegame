@@ -32,6 +32,7 @@
     "npm:@vueuse/core@^14.1.0": "14.4.0_vue@3.5.40__typescript@5.9.3",
     "npm:@vueuse/core@^14.4.0": "14.4.0_vue@3.5.40__typescript@5.9.3",
     "npm:@webgpu/types@~0.1.60": "0.1.74",
+    "npm:acorn@8.18.0": "8.18.0",
     "npm:agent-browser@~0.33.2": "0.33.2",
     "npm:astro@5": "5.18.1_@types+node@22.20.1_sass@1.102.0",
     "npm:axios@^1.6.7": "1.13.2",

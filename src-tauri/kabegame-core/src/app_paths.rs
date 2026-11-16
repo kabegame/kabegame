@@ -40,6 +40,11 @@ impl AppPaths {
             .expect("AppPaths not initialized. Call AppPaths::init() at startup.")
     }
 
+    /// 已初始化时返回全局 AppPaths；用于「没有路径也能正常降级」的只读查询。
+    pub fn try_global() -> Option<&'static AppPaths> {
+        APP_PATHS.get()
+    }
+
     /// 测试用：整个测试进程共用一个临时根，只初始化一次。
     ///
     /// `AppPaths` 是进程级单例，同一个测试二进制里各模块若各自 `AppPaths::init`，先到者赢、

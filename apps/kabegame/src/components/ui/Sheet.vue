@@ -119,7 +119,7 @@ const SIDES: Record<Side, string> = {
 const { t } = useI18n();
 const open = defineModel<boolean>("open", { default: false });
 useModalBack(open);
-const zIndex = useLayerZIndex(open);
+const zIndex = useLayerZIndex(open, { modal: true });
 
 const sizeStyle = computed(() => {
   const size = typeof props.size === "number" ? `${props.size}px` : props.size;

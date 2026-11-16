@@ -1,5 +1,48 @@
 # v4.7.0 regression
 
+## 从 Steam 导入（wpe-import P1 + P3）
+
+2026-11-15 macOS dev。P1 与 P3 都在这一版。P3 把来源改成「从 Steam 导入」：登录后在「我的订阅」里挑创意工坊条目，任务下载进 WPE 目录的 `projects/myprojects/<条目 id>/` 并入库；WPE 本体只在设置里没有 WPE 时顺带下载，不再导入官方默认壁纸。下表 P0–P14 是 P1 当时的结果（P7 的「先到 80% 再导入官方默认壁纸」是 P1 的行为），S 开头的是 P3。
+
+P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话框里扫码或账号密码登录 Steam（Steam Guard 在表单里完成），任务只带账号名，用存在插件数据私有区的 refresh token 登录 CM，下载 Windows 版 WPE 到 `plugins-data/wpe-import/steamapps/common/wallpaper_engine`，按 manifest 增量更新；设置里已有别的 WPE 目录时不下载。插件数据新增宿主私有区 `__private`，对外出口一律剥掉、写入时保留。流程与实测见 `cocs/wpe/WPE_STEAM.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | P0 单测与检查 | macOS | `check-kabegame`；`test-kabegame kabegame-core --lib steam` / `plugin_data` / `wpe_import` / `discover` | 0 error；全过 | 2026-11-15 Claude：vue-tsc 与 cargo 0 error；steam 18、plugin_data 4、wpe_import 14、discover 7 个用例全过 |
+| [x] | P1 协议链路 | macOS，`ignore/steam-p0` | 扫码登录 → CM → PICS → depot 密钥 → manifest → chunk | refresh token `aud` 含 `client`；431961 的 manifest 6301 个文件；`assets/shaders/common.h` 的 chunk 与整文件 SHA-1 一致 | 2026-11-15 Claude：本机分到的三台国内 CDN 都要先申请 CDN 授权 token；`app_branch` 传 `"public"` 拿到的 request code 无效 |
+| [x] | P2 私有区不外露 | macOS dev | 登录后调 `get_plugin_data { pluginId: "wpe-import" }` | 返回里没有 `__private` 与 token | 2026-11-15 Claude：Tauri 返回 `{}`；库里该行确有 `__private.steamSessions.<账号>`（refreshToken / steamId / expiresAt / savedAt）。web 调度与 Tauri 走同一个 core 函数，没单独调 |
+| [x] | P3 扫码登录 | macOS dev 导入对话框 | 来源切到「从 Steam」→ 扫码 → 手机确认 | 二维码约 20 s 刷新一次；扫码后提示「已扫码」；确认后显示「已登录」、可提交 | 2026-11-15 用户扫码、Claude 经 CDP 看结果：登录成功，会话过期时间约 2027-06-13 |
+| [x] | P3b 来源切换 | macOS dev 导入对话框 | 本机勾一个来源 → 切到从 Steam 复用登录 → 换个账号（开始扫码）→ 切回本机 | 切换不丢本机勾选与已登录账号；切走时进行中的扫码被取消；提交的任务参数只有 `sources: null` 与 `steamAccount` | 2026-11-15 Claude：CDP；勾选保留；「换个账号」清掉账号并出二维码，切回本机后面板卸载。提交参数按代码核对，未抓包 |
+| [x] | P4 账号密码登录 | macOS dev | 账号密码登录；按 Steam 给的方式确认 | 表单按 `confirmations` 显示要做的事；确认后登录成功；密码框清空 | 2026-11-15 用户实测：开了手机令牌的账号，Steam 只给 `deviceConfirmation` + `deviceCode`，手机上点确认即登录成功。修了两处：`GetPasswordRSAPublicKey` 只接受 GET（POST 返回 405）；有手机确认时验证码输入框收进「改用令牌验证码」，补上 `emailConfirmation` 提示。邮箱验证码路径未测（要只开邮箱令牌的账号） |
+| [x] | P5 复用登录 | macOS dev | 关掉再打开对话框（来源保持「从 Steam」） | 显示「以 <账号> 继续（有效至 …）」；点击后验证通过即可提交，不显示登录表单 | 2026-11-15 Claude：CDP 每 200 ms 记录 4 s，停在「以 … 继续」不自动登录；点击后连 CM 验证约 2.8 s。修了日期按 CEF 系统区域显示（`6/13/2027` → 按应用语言 `2027/6/13`） |
+| [x] | P5b 换个账号后返回 | macOS dev | ① 「以 <账号> 继续」→ 换个账号 → 返回；② 已登录 → 换个账号 → 返回 | 登录表单右上角有「返回使用 <账号>」；① 回到「以 … 继续」；② 直接恢复已登录、不再验证；进行中的扫码被放弃 | 2026-11-15 Claude：CDP，两条都对，② 0.3 s 恢复、没有连 CM。用户实测发现原来换账号后回不去，补了这个入口 |
+| [x] | P6 失效的登录 | macOS dev | 在 Steam 里取消设备授权后点「以 <账号> 继续」 | 提示登录已失效；会话被删；回到登录表单 | 2026-11-15 用户实测两次：Steam 先后返回 `AccessDenied` 与 `invalid credentials`，都按会话失效处理，token 被删、回到扫码登录、不显示「返回使用」 |
+| [x] | P7 首次拉取 | macOS dev | 来源「从 Steam」登录后提交 | 任务日志依次为登录 / manifest / 需下载 / 已下载；进度先到 80% 再导入官方默认壁纸；场景壁纸能读到 `assets` | 2026-11-15 Claude：设置里本有 DepotDownloader 下的目录，为不动它，在应用管理目录放了只有 `assets/shaders/common.h` 的占位安装并把设置指过去。约 1 分钟：manifest 6301 条目 788 MB，下载 4571 个文件 364.7 MB，导入 18 个默认壁纸、跳过 `sheep`（类型 other）。与 DepotDownloader 的结果逐文件比对：除 `431966`（steamchina）覆盖的 78 个文件与它带的 `sc.flag` 外全部相同（我们按国际版跳过 steamchina depot）；占位 `common.h` 被替换；无 `.kbpart` 残留。`render_scene` 渲染 Eagle Flag 成功、`unsupported` 为空 |
+| [x] | P8 再次拉取 | macOS dev | 再提交一次 | 日志「已是最新」，不下载 | 2026-11-15 Claude：日志「已是最新」，18 个默认壁纸「已存在」 |
+| [x] | P9 中断续传 | macOS dev | 模拟首次拉取在写状态前中断：移走安装状态文件、删掉已下载的文件，再提交 | 已完整写好的文件不重下（没有状态记录的按 SHA-1 判断）；不留 `.kbpart` | 2026-11-15 Claude：删了 `wallpaperui.exe`（12 MB）与 `common.h`，只下载这 2 个（5.0 MB），其余 4570 个按 SHA-1 判为最新；状态文件重写（4572 个文件）；补下的文件 SHA-1 与对照一致。没有测「任务运行中取消」本身 |
+| [x] | P10 已有 WPE | macOS dev（设置里是 DepotDownloader 下的目录） | 来源切到「从 Steam」 | P3 起：登录照常显示，登录框下一行小字「使用已有的 Wallpaper Engine：<路径>」；任务不下载本体，条目放进这个目录 | 2026-11-15 Claude：截图确认（P1 时是只显示说明、置灰提交，P3 按用户要求改掉）。Windows 上 Steam 装了 WPE 的情况未测 |
+| [x] | P13 看板娘浮在对话框之上 | macOS dev | 打开壁纸导入对话框；点看板娘 | 看板娘在遮罩之上；点它不关对话框；之后打开的菜单在它之上；它自己的消息历史对话框不被它挡住 | 2026-11-15 Claude：CDP 读层级，看板娘 3003、对话框 3002；`ui.test.ts` 补了常驻浮层不关层、模态层登记 / 排除打开方 / 撤销两个用例，17 个全过。界面重构 P9 起的回归，用户发现 |
+| [x] | P14 登录表单居中 | macOS dev | 从 Steam → 扫码 / 账号密码 | 二维码与提示上下居中；账号密码表单限宽居中，登录按钮在输入框下方居中 | 2026-11-15 Claude：截图确认 |
+| [x] | S0 单测与检查 | macOS | `check-kabegame`；`test-kabegame kabegame-core --lib wpe` | 0 error；全过 | 2026-11-15 Claude：vue-tsc 与 cargo 0 error；108 个用例全过（新增 `workshop` 3 个、`wpe_import` 的选择解析 2 个，`picks_public_windows_depots_only` 补了 `workshopdepot`） |
+| [x] | S1 订阅接口 | macOS，`ignore/steam-p0 subs <参数>` | 分页、排序、`excludedtags` / `requiredtags`、`totalonly`；`depot 431960 <hcontent>` | 能翻页；`total` 随筛选变；工坊条目 manifest 与 chunk 能解 | 2026-11-15 Claude：225 条；分级 165 / 5 / 55；只有 `lastupdated` 与 `subscriptiondate` 两种排序；「白鸢2」的 `project.json` chunk（VSZa/zstd）SHA-1 一致。结论记在 `cocs/wpe/WPE_STEAM.md`「创意工坊」 |
+| [x] | S2 面板布局 | macOS dev 导入对话框 | 来源切到「从 Steam」 | 登录区始终显示；WPE 状态是登录框下一行小字；文案以导入壁纸为主 | 2026-11-15 Claude：截图（设置里有 `/Users/didi/wpe/wallpaper_engine` 时显示「使用已有的 Wallpaper Engine：…」） |
+| [x] | S3 订阅列表 | macOS dev | 「以 <账号> 继续」→ 看列表；取消勾「成人」；换「最近订阅」；翻到第 2 页 | 每页 20 条，预览图、类型、大小、分级、本地状态；筛选后总数变、回到第 1 页；翻页正确 | 2026-11-15 Claude：CDP；全部 225（12 页），去掉成人 170；每页 1–2 s（复用连接，耗时是 Steam 接口本身）。排序下拉原来占满一行，改为右侧定宽 |
+| [x] | S4 导入一个条目 | macOS dev | 勾一个条目 → 开始导入 | 下载进 `<WPE>/projects/myprojects/<id>/`；写 `kabegame_workshop.json`；入库；挂 Steam 标签 | 2026-11-15 Claude：「sonic-topography」（网页，2.1 MB），列出约 9 s（连 CM、PICS、密钥、CDN 列表）、下载加入库 1.6 s；入库 `x-wpe/web`；挂上「科幻」「广受好评」等，`Approved` 只有 Steam 标签才有 |
+| [x] | S5 再导入同一条 | macOS dev | 列表看同一条；再勾它导入 | 列表标「已下载」；日志「已是最新」、入库「已存在」，不下载 | 2026-11-15 Claude：结果对，但这次任务用了 86 s：对话框浏览的连接和任务的连接同账号互相踢下线（steam-vent 的 login id 固定为 0），加上一次连 CM 等到系统超时。改为每账号一条共享连接、连 CM 20 s 超时 |
+| [x] | S6 浏览与任务同时进行 | macOS dev | 对话框列表开着时导入 4 个条目 | 不出现 `InvalidHeader` / 心跳失败；4 个都入库 | 2026-11-15 用户在改完连接后自己选了 4 个条目（约 141 MB）导入，全部成功；Claude 查日志没有踢下线的报错 |
+| [x] | S12 工坊发现接口 | macOS，`ignore/steam-p0 query <参数>` | 逐个试 `query_type`、`days`、`search_text`、标签筛选、深分页 | 记下每种排序的实际含义 | 2026-11-15 Claude：0 评分、1 最新发布、3 趋势、9 总订阅、11 好评数、12 相关度、21 最近更新，19 含义不明不用；约 328 万条，`page = 2000` 能取；预设约 14 万条、程序壁纸 1 条 |
+| [x] | S13 工坊发现页签 | macOS dev | 登录后切到「工坊发现」 | 搜索框、分级与类型筛选、时间窗与排序；每行有订阅人数；与订阅共用已选 | 2026-11-15 Claude：截图；缺省「本周 · 最热门」共 313.5 万个（排除了预设与程序壁纸）。搜索经命令验证：「芙宁娜」+ 去掉成人 15151 条、相关度排在前面；界面里的搜索与「切到相关度」没点到（对话框被关了） |
+| [ ] | S15 按 id 搜 | macOS dev | 工坊发现的搜索框里填 `3831518461`、工坊链接、几个 id 用逗号隔开、别的游戏的条目 id | 只列出这几条，不受排序与筛选影响；别的游戏的与不存在的不出现 | 2026-11-16 Claude：解析有单测（`item_ids_from_search_text`）；`ignore/steam-p0 details` 实测别的游戏的条目回 `result = 8`、不存在的回 `9`。界面里没测（dev 没在跑） |
+| [x] | S16 翻页组件 | macOS | `ui.test.ts`（`Paginator` 两例）、`TaskDetail.test.ts`、`ImageGrid.previewFollowPage.test.ts`；`check-kabegame --skip cargo` | 翻页抽成 `components/ui/Paginator`，画廊等的 `GalleryBigPaginator` 只剩外框、调用方不变；「从 Steam 导入」的网格改用它 | 2026-11-16 Claude：59 + 2 个用例全过，vue-tsc 0 error。画廊翻页条截图对照见备注；对话框里的样子没看（当时开着别的对话框） |
+| [ ] | S14 订阅与发现一起导入 | macOS dev | 订阅里勾「全部 N 个」，发现里再勾几条 → 导入 | 底栏「…另加选中的 M 个」；任务取并集、重复的只下一次 | 未测 |
+| [ ] | S7 「全部 N 个」 | macOS dev | 只勾「全年龄」→ 勾「全部 N 个」→ 导入 | 逐条勾选被锁住；任务按分级重新列，只导入全年龄的 | 未测（全部下载要十几 GB，要挑个小账号或先 dry-run） |
+| [ ] | S8 条目有更新 | 任意 | 等订阅的某条更新后再导入 | 列表标「有更新」；只下载变化的文件、删掉新版本里没有的；行的哈希 / metadata 不重算（已知限制） | 未测（要等作者更新） |
+| [ ] | S9 dry-run 与取消 | macOS dev | 打开「空跑」导入几条；另一次导入大条目时中途取消 | dry-run 只记日志不下载；取消后已完成的条目保留，没写完的不入库、不留状态记录 | 未测 |
+| [ ] | S10 没有 WPE 时 | macOS dev | 清空「Wallpaper Engine 目录」后导入一条 | 先下载本体（进度前 20%）、写进设置，条目进管理目录的 `projects/myprojects` | 未测（本体下载链路 P7 测过） |
+| [ ] | S11 依赖工坊效果的场景 | macOS dev | 导入「晴空球场的银发应援少女」类场景并预览 | 已知缺口：`effects/workshop/<id>/…` 引用的是别的工坊条目，没有下载、渲染器也不解析，画面缺这些效果 | 2026-11-15 用户导入的 3836725625、3837598414 在日志里出现这类 `deny file: … NotFound`。要先查 WPE 怎么解析这类路径，再决定下载依赖条目放哪 |
+| [ ] | P11 没买 WPE 的账号 | 任意 | 用没有 431960 的账号拉取 | 任务失败，日志说明需要先购买 | |
+| [ ] | P12 插件脚本写 plugin_data | 任一 V8 插件 | 插件 `setPluginData({})` 覆盖 | 不影响自己 id 下的私有区（单测已覆盖存储层） | |
+
 ## 界面重构 P9：收尾（删除 element-plus 与 Vant）
 
 2026-11-13 macOS dev。确认框门面 `messageBox` 改为自己实现（`MessageBoxHost`，Reka AlertDialog），`PickerSheet` 的 `van-picker` 换成自写滚轮 `WheelColumn`，删掉混用期垫片（层级改由 `components/ui/layer.ts` 自己的计数器给），删除 vendored element-plus / icons、Vant、`@vitejs/plugin-vue-jsx` 与全部接线。全仓不再有 `<el-*>`、`.el-*`、`@kabegame/element-plus` 导入与 `TODO:[REF_UI]`。
@@ -16,7 +59,6 @@
 | [x] | P3 输入框 | macOS | `messageBox.prompt` 带初值与校验；清空回车；再填回车 | 打开时选中原文；清空后提示「名称不能为空」、红边框、框不关；填好后 resolve `{ value }` | 2026-11-13 Claude：CDP；发现并修了聚焦时红边框被盖住 |
 | [x] | P4 对话框里的确认框 | macOS `/dev/ui`「对话框 ⊃ 各种浮层」→「确认框」；Esc | 确认框层级高于对话框；Esc 只关确认框、焦点回到对话框 | 2026-11-13 Claude：CDP；层级 3003 / 3004 |
 | [x] | P5 滚轮（级联） | macOS `/dev/ui` 对话框里点「滚轮」 | 初值 12；十位滚到 3；个位按 ↓；确定 | 两列对齐 1 / 2；十位 3 时个位只剩 0–5；确定得 33、底部面板关闭 | 2026-11-13 Claude：CDP；截图看过（桌面宽度下两列各占一半） |
-| [ ] | P6 真实删除 / 重命名流程 | macOS 画册树右键 | 重命名、设置标签 key（校验不过）、删除正在轮播的画册（取消） | 输入框初值、出错提示、取消不删 | 未走真实入口（门面同一份，已在 P2–P3 用门面直接测） |
 | [ ] | P7 Android 滚轮 | Android | 画廊翻页（级联）、每页条数、设置里的数字 / 时长 / 语言滚轮；快速甩动后立刻点确定 | 停在选项上；确定取到停住的值；返回键关闭 | 未测（需真机，惯性滚动只能在触屏上看） |
 | [ ] | P8 Android 退出确认 | Android 主页返回键 | 返回键弹退出确认；再按返回键 | 第二次返回键关掉确认框、不退出 | 未测 |
 | [ ] | P9 Web 版 | `deno task build:web` | 打开 demo、确认框 / 输入框 / super 模式提示 | 与桌面一致 | 未测（只跑了前端构建） |
@@ -3183,6 +3225,25 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | PN11 macOS | macOS | 桌面与预览同 PN6–PN8 | 同 Windows | 本机不能测；插件的 `over_window` 是新写的（`TODO:[WPE_SCENE]`） |
 | [ ] | PN12 Linux | Linux | 预览里网页 / 场景壁纸 | 和改动前一样：光标在壁纸上时跟随、点击生效，画面外不跟随 | 本机不能测（`TODO:[WPE_SCENE]`） |
 | [x] | PN13 换算失败不误报 | Windows dev | dev 重启后打开 / 切换几张网页与场景壁纸的预览，桌面壁纸照常 | 日志里不再出现「frame 坐标…换算失败」的 warn，鼠标照常注入；单测与变异（成功不清零、第一次就 warn、每次都 warn）全部检出 | 2026-11-15 Claude：单测 1 条、变异 3 / 3；dev 重启后桌面与预览两个宿主都登记了，日志没有这条 warn，桌面宿主 6 s 收到 266 个可信 `pointermove` |
+| [x] | PN14 macOS 预览的鼠标位置 | macOS dev，主窗口带原生标题栏，图库预览 | 预览一张跟随鼠标的网页 / 场景壁纸，光标放在画面里某个明显的点上（如按钮、图层边缘），上下移动 | 命中点与光标重合，不再偏下一个标题栏高度（32pt）；桌面壁纸窗口（无标题栏）不受影响 | 2026-11-16 Claude：`outerHeight - innerHeight` = 32 证实偏差来源；`cargo test -p tauri-plugin-cursor` 19 条全过（新增标题栏内缩换算）；2026-11-16 用户真机确认命中点与光标重合 |
+| [x] | PN15 macOS 拖动窗口时的鼠标位置 | 同 PN14 | 预览开着时拖动主窗口标题栏、拖边缘缩放窗口，拖动中与松手后都把光标放到画面上看 | 落点始终跟着光标，不再停在拖动前的位置、等约 1 秒才跟上 | 2026-11-16 Claude：单窗口 `kCGWindowBounds` 查询实测约 114 µs / 次，每轮现查；2026-11-16 用户真机确认拖动、缩放中落点跟手 |
+
+## macOS 系统音频回环（Core Audio 进程 tap）
+
+2026-11-16。网页与场景壁纸的音频订阅在 macOS 上有了数据源：`wpe_media` 的音频回环拆成共用的推帧循环（`audio/mod.rs`）与平台后端，Windows 原 WASAPI 实现移到 `audio/wasapi.rs`（只搬移，逻辑不变），macOS 新增 `audio/process_tap.rs`（14.2+，全局立体声 tap 挂进只放 tap 的私有聚合设备）。订阅命令改按 `kind_available` 放行：audio 在 Windows / macOS，media 仍只在 Windows。`NSAudioCaptureUsageDescription` 写进 `src-tauri/kabegame/Info.plist`（打包合并）与 `macos/embedded-Info.plist`（dev）。
+
+同一轮排查的「预览里场景没声音」不是代码问题：dev 数据目录里的壁纸音量被存成了 0（后端默认 1.0），场景排期器在音量为 0 时不开始播放；调到 0.5 后 9196 的背景音乐正常播放（AudioContext `running`，曲目时间前进）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MA1 单测与检查 | macOS | `check-kabegame --skip vue`；`test-kabegame kabegame --lib wpe_media` | 0 error；全过 | 2026-11-16 Claude：cargo check 0 error、新文件无告警；39 条全过（新增 tap 布局 5 条：只收 32 位浮点、交错取末尾缓冲、非交错取末尾几个平面交错、满了整段丢且不扩容、声道数不符忽略；`spectrum` / `wpe_spectrum` 的用例在 macOS 上第一次跑） |
+| [x] | MA2 场景频谱随声音变化 | macOS 26.6 dev，图库预览场景 9196（壁纸音量 0.5，场景自带背景音乐在放） | 看日志；探针 `host.audio()` 隔 300 ms 读 6 次 | 日志有「网页壁纸音频回环已打开 sample_rate=48000 channels=2」；`raw` 非零、`peak` 随音乐变化、帧数约 30 帧/秒 | 2026-11-16 Claude：回环已打开；`peak` 0.60–1.88 起伏，帧数每 300 ms +9；说明授权已放行（dev 由 VS Code 终端拉起，权限记在 VS Code 名下） |
+| [x] | MA3 订阅离开即停 | 同 MA2 | 预览里从带音频的场景切到别的壁纸 | 日志「网页壁纸音频采集已停止」，聚合设备随之拆掉 | 2026-11-16 Claude：日志 01:26:54 释放订阅后紧接「已停止」，切到下一张带音频的场景又重新打开 |
+| [ ] | MA4 网页壁纸的音频回调 | macOS dev | 预览一张声明 `supportsaudioprocessing` 的网页壁纸（频谱条类），放音乐 | 频谱条随音乐动，停止后逐帧回落到 0 | 待用户 |
+| [ ] | MA5 首次授权与拒绝 | macOS release 包（新装、未授权） | 第一次预览带音频的壁纸；在系统设置里关掉 Kabegame 的「仅系统录音」后再看 | 弹「录制系统音频」授权，文案为 Info.plist 的说明；关掉后频谱保持 0、不报错 | 待打包后测；dev 下权限记在 VS Code 名下，测不出 |
+| [ ] | MA6 换默认输出设备 | macOS dev | 放音乐时插拔耳机或在控制中心切换输出 | 约 1 秒内重开回环，频谱继续动；采样率变了也正常 | 待用户 |
+| [ ] | MA7 macOS 14.2 以下 | macOS 13 / 14.1 | 预览带音频的壁纸 | 不崩，日志一条「打开音频回环失败…需要 macOS 14.2」，频谱保持 0 | 本机是 26.6，没法测 |
+| [ ] | MA8 Windows 不回归 | Windows dev | `check-kabegame`；预览带音频的网页 / 场景壁纸 | 编过；频谱照常随音乐变化 | 本机没有 Windows 目标，`wasapi.rs` 的搬移没在 Windows 上编译过 |
 
 ## 预览翻页只认箭头
 

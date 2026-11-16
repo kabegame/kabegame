@@ -3,6 +3,7 @@
 ## 用户侧
 
 ### Added
+- 「壁纸」收集新增来源「从 Steam」，直接导入你的创意工坊订阅：在导入对话框顶部把来源从「本机」切到「从 Steam」，扫码或用账号密码登录购买了 Wallpaper Engine 的 Steam 账号（邮箱 / 令牌验证码直接在表单里填），在「我的订阅」里按分级筛选、勾选要导入的壁纸（也可以一次选全部），或者在「工坊发现」里搜索（也可以直接填条目编号或工坊链接）、按热门 / 订阅数 / 评分 / 发布时间浏览整个创意工坊并勾选，Kabegame 把它们下载到 Wallpaper Engine 目录的 `projects/myprojects` 下并导入，不用装 Steam。已下载的壁纸不会重下，有更新的只下载变化的部分。设置里还没有 Wallpaper Engine 目录时（例如 macOS / Linux），会顺带把 Wallpaper Engine 下载到 Kabegame 的数据目录并自动设为「Wallpaper Engine 目录」，不用再从 Windows 电脑复制。登录在有效期内可以直接复用，密码不会保存。
 - macOS 窗口模式支持多显示器：每块显示器都有壁纸（原来只有主屏）。设置页「显示器模式」可选「各屏复制」（所有显示器同一张，视频只有主屏出声）或「逐屏独立」：点显示器布局图里的一块屏，就能给它单独设当前壁纸、轮播路径、显示方式与过渡；轮播到点时每块屏各换一张。显示器拔掉后它的设置会保留，接回来自动恢复，用不上了可以在布局图下方「忘记」。
 - macOS 原生模式支持多显示器逐屏独立：每块显示器各设当前壁纸、轮播路径与显示方式，轮播到点时各换一张；新接上的显示器自动换成它该显示的壁纸。窗口模式与原生模式互切时「逐屏独立」会保留。
 - macOS 原生模式的壁纸显示方式新增「适应」「拉伸」「居中」（原来只有填充，铺法由系统决定），改了立即生效，每块显示器可以不同。
@@ -31,8 +32,9 @@
 - 场景壁纸里只有一级的纹理（效果遮罩、视频等）改用和 Wallpaper Engine 相同的各向异性过滤：纹理被斜向拉伸采样时（如云层流动效果）边缘不再出现明显色差。
 - 场景壁纸的 3D 模型按 Wallpaper Engine 的规则读取编辑器里画的材质遮罩用了哪些通道（自发光、金属度、粗糙度、反射）：以前这几项被忽略，带自发光遮罩的部位（如创意工坊 3706286085 里角色的手套和鞋）比 Wallpaper Engine 暗。用到它的场景还缺雾、阴影等别的能力，暂时仍显示预览图。
 - 场景壁纸支持视频：作为图层画面的视频（包括创意工坊打包在场景里的 4K 视频与 HEVC 视频）会循环播放，被隐藏的视频图层自动暂停解码，暂停壁纸时一起停；和 Wallpaper Engine 一样不出声。画面与 Wallpaper Engine 对照过，只在颜色剧烈变化的边缘有细微差别。创意工坊 3822149301、3824550659、3828359750 现在可实时渲染；其余带视频的场景大多还缺文本、音频频谱、关键帧动画等别的能力。HEVC 视频需要显卡支持硬件解码，不支持时这个图层显示为透明。
-- 场景壁纸支持音频频谱：声明了音频处理的场景里，读系统声音频谱的效果（频谱条、随音乐跳动的光圈等）会跟着正在播放的声音动，和 Wallpaper Engine 用的是同一份数据，测试场景逐帧逐像素一致。创意工坊 3502090109、3585875739、3825170583 现在可实时渲染；其余用到音频频谱的场景大多还缺文本、关键帧动画、媒体信息等别的能力。只在 Windows 上有声音数据，其它系统上频谱保持为 0。
 - 场景壁纸支持作者开放的自定义图片属性：在属性面板里给这类属性选一张图片、GIF 或 MP4 视频，场景里对应的图层或效果贴图就换成它，按 Wallpaper Engine 的规则从正中裁成需要的比例，改了立即生效、不重新加载场景；清空后回到作者的贴图。图片的解码、GIF 的合成与播放节奏都逐像素对照过 Wallpaper Engine 的输出，只有 JPEG 与视频在颜色剧烈变化的边缘有细微差别。创意工坊 3462279189、3783690410 现在可实时渲染；快捷方式图标这类贴图来源还没实现，用到它的场景仍显示预览图（系统媒体封面见下一条）。
+- 场景壁纸支持音频频谱：声明了音频处理的场景里，读系统声音频谱的效果（频谱条、随音乐跳动的光圈等）会跟着正在播放的声音动，和 Wallpaper Engine 用的是同一份数据，测试场景逐帧逐像素一致。创意工坊 3502090109、3585875739、3825170583 现在可实时渲染；其余用到音频频谱的场景大多还缺文本、关键帧动画、媒体信息等别的能力。Windows 与 macOS（14.2 起）上有声音数据，Linux 上频谱保持为 0。
+- 场景壁纸支持作者开放的自定义图片属性：在属性面板里给这类属性选一张图片、GIF 或 MP4 视频，场景里对应的图层或效果贴图就换成它，按 Wallpaper Engine 的规则从正中裁成需要的比例，改了立即生效、不重新加载场景；清空后回到作者的贴图。图片的解码、GIF 的合成与播放节奏都逐像素对照过 Wallpaper Engine 的输出，只有 JPEG 的颜色边缘和标清视频的色彩有细微差别。创意工坊 3462279189、3783690410 现在可实时渲染；快捷方式图标这类贴图来源还没实现，用到它的场景仍显示预览图（系统媒体封面见下一条）。
 - Windows 上的场景壁纸支持系统媒体集成：显示正在播放的歌名、歌手、专辑封面，并随播放状态变化的场景（音乐卡片、唱片机一类）现在可实时渲染。标题、封面、颜色与刷新节奏都按 Wallpaper Engine 的规则，用同一个测试媒体会话逐项对照过它的回调和封面画面。创意工坊 2932157836、2974757317、3219908811、3355291946、3470764447、3482471820、3487328036、3823859141、3823864170、3837699827 现在可实时渲染。在设置里关掉「媒体集成」后，这些场景按没有媒体处理；macOS 和 Linux 上暂时没有媒体数据。
 - 场景壁纸支持形状光束、图层对齐、图层互相引用与透明写入设置：编辑器里的光束形状图层按 Wallpaper Engine 的规则画出；图片图层的对齐方式（如左上、底部居中）生效，子图层不受影响，场景脚本也能读写；遮罩、混合类效果可以引用别的图层（包括隐藏的图层）的画面；图层叠加效果时的边缘处理、像素风图层的不插值、材质的透明通道写入与「透明度覆盖」混合也按 Wallpaper Engine 的规则处理（以前个别图层叠加效果时边缘会露出另一侧的画面）。测试场景逐像素对照过 Wallpaper Engine 的输出，只在纹理缩小处有细微差别。创意工坊 3656079027、3668499717、3811764016、3812887609、3819646765、3821678218 现在可实时渲染；其余用到这些功能的场景大多还缺场景脚本、关键帧动画、木偶动画等别的能力。
 - 场景壁纸支持关键帧动画：编辑器里给位置、旋转、缩放、颜色、透明度、效果参数、缩放镜头等属性打的关键帧会按 Wallpaper Engine 的规则播放（循环、往返、只播一次，子动画跟随父动画），改属性时动画接着走、不从头开始；动画值逐帧对照过 Wallpaper Engine 的输出。创意工坊 2251857160 现在可实时渲染。脚本也能控制动画（播放、暂停、停止、跳帧、调速）并收到动画事件，规则对照过 Wallpaper Engine；用到它们的创意工坊场景多数还要等光标与媒体交互，暂时仍显示预览图。
@@ -60,7 +62,8 @@
 - 预览视频或网页壁纸时，系统媒体浮窗显示图片名称与 Kabegame 图标，不再显示「画廊」。
 - 新增「壁纸」收集入口：自动发现本机 Wallpaper Engine 壁纸（Steam 创意工坊订阅、官方默认、我的项目），也可手动添加壁纸目录；第一阶段把 `video` 型壁纸原地引用入库，使用作者自带的 `preview.gif` / `preview.jpg` 作为图库预览，不复制、不转码用户目录。
 - 壁纸设置新增「Wallpaper Engine 目录」：留空时自动查找（Steam 库，或从已导入的壁纸往上找）并写入，也可以手动指定。没有 Steam 版 WPE 时，把 `assets` 等资源复制到本机就能让场景壁纸读到内置资源，做法见文档「Wallpaper Engine 壁纸」。
-- Wallpaper Engine 壁纸现在也支持 macOS 和 Linux：可以导入并在图库预览、应用背景里运行网页与场景壁纸，macOS 还可在窗口模式设为桌面壁纸；音频可视化、媒体集成和桌面鼠标转发仍只在 Windows，Linux 暂不能设为桌面壁纸。Android 与 Web 版不提供。
+- Wallpaper Engine 壁纸现在也支持 macOS 和 Linux：可以导入并在图库预览、应用背景里运行网页与场景壁纸，macOS 还可在窗口模式设为桌面壁纸；音频可视化 Windows 与 macOS（14.2 起）可用，媒体集成和桌面鼠标转发仍只在 Windows，Linux 暂不能设为桌面壁纸。Android 与 Web 版不提供。
+- macOS 上 Wallpaper Engine 壁纸的音频可视化可用（macOS 14.2 起）：声明了处理音频的网页与场景壁纸，频谱条、随音乐跳动的光圈、音频粒子等会跟着电脑正在播放的声音变化，和 Windows 一样。第一次显示这类壁纸时系统会询问是否允许 Kabegame 录制系统音频；声音只在本机分析，不录制、不上传。歌曲名、封面等媒体信息仍只在 Windows 上提供。
 - 「壁纸」导入现在会带上 Wallpaper Engine 里显示的全部标签：除作者声明的题材外，还有音频响应、可自定义的、视频纹理、年龄分级等（不含分辨率），并按题材、年龄分级、特性分到 `WPE` 下的子目录，名称跟随导入时的界面语言。
 - 「壁纸」导入支持 Wallpaper Engine 网页壁纸：原地引用壁纸目录；预览以主屏比例的画布运行页面并可交互，也可在窗口模式设为桌面壁纸，应用背景同样实时显示（静音）。设置里的「壁纸音量」（原「视频壁纸音量」）对网页壁纸同样生效。
 - 桌面网页壁纸改为像 Wallpaper Engine 一样以 `file://` 直接加载壁纸目录：依赖读取同目录数据文件的壁纸（如歌单、字幕类）现在能完整运行；文件访问只对壁纸窗口开启，且只能读当前壁纸目录内的文件。Windows 上桌面的鼠标移动与左键点击会转发给网页壁纸（不拦截桌面本身的点击，桌面框选不受影响）。预览网页壁纸时，鼠标移到画布左右边缘中段即可唤出切换箭头。预览网页壁纸时右键菜单无法弹出（右键会被壁纸页面接收），菜单里的操作改为按原顺序排在底部工具条里。
@@ -92,6 +95,7 @@
 - 场景壁纸里的视频改由应用自己解码，不再经过浏览器的视频播放器：视频和场景同时开始（以前视频会比场景早放零点几秒到一秒多）、循环时没有停顿，长视频加载时不再整段写进磁盘缓存；标清视频（包括属性面板里选的视频）不再整体偏色，场景里标了标清色彩信息的视频颜色和 Wallpaper Engine 一致。和 Wallpaper Engine 相比只在颜色上下剧烈变化的边缘还有细微差别。
 
 ### Fixed
+- 看板娘被对话框压在下面：打开任何对话框、确认框、侧边面板或看图时，看板娘都被盖在遮罩下面（界面重构之后的问题）。现在它重新浮在这些弹层之上，点它也不会关掉底下的对话框；之后打开的菜单仍在它上面，它自己的消息历史对话框也不会被它挡住。
 - 主窗口缩到很窄时，设置页「当前轮播路径」「当前壁纸」两行的标题不再被长路径挤成一列字。
 - 修改壁纸轮播间隔后，从修改的那一刻起按新间隔切换，不用再多等一轮。
 - 窗口模式与原生模式的显示方式、过渡各记各的：窗口 → 原生 → 窗口来回切换后，窗口模式原来的显示方式与过渡不再被原生模式的值覆盖（第一次切到另一个模式时仍沿用当前的值）。
@@ -163,6 +167,7 @@
 ## 插件开发侧
 
 ### Changed
+- 插件私有数据（`pluginData` / `setPluginData`、详情模板的 `__bridge.getPluginData`）的顶层键 `__private` 归宿主保留：读取时不返回，插件写入这个键会被忽略，原有内容保留。
 - kabegame-server（0.3.0）：`x-wpe/*` 行改为先请求 `/file/<目录>` 取文件清单，再经 SDK 的 `downloadWpeWallpaper` 整目录复制；`engines.kabegame` 提到 `>=4.7.0`。
 - 图片详情的插件模板（`description.ejs`）iframe 不再与应用同源（去掉 `allow-same-origin`），并在文档最前带内层 CSP（`connect-src 'none'`、`frame-src about:` 等）：模板里直接 `fetch` / XHR / WebSocket、`<link>` 外链样式、远程字体、嵌套 http(s) 或 `file:` iframe 都会被拒，网络请求一律经 `__bridge.fetch`；`<img>`、CSS 背景等元素级远程图片与嵌套 `srcdoc` iframe 不受影响；`window.parent`、`localStorage` 不可访问（跨次缓存用 `__bridge.getCache` / `setCache`）。
 
@@ -178,6 +183,9 @@
 ## 开发侧
 
 ### Added
+- `wpe_media` 的音频回环拆成共用的推帧循环（`audio/mod.rs`）与平台后端：Windows 原 WASAPI 实现移到 `audio/wasapi.rs`（逻辑不变），新增 macOS 的 Core Audio 进程 tap（`audio/process_tap.rs`，14.2+：全局立体声 tap 挂进只放 tap 的私有聚合设备，IOProc 只拷进预留容量的共享缓冲；14.2 的两个函数用 `dlsym` 取、`CATapDescription` 按类名找）。`realfft` / `rustfft` 加进 macOS 依赖段，`spectrum` / `wpe_spectrum` 在 macOS 也编译。`wpe_web_media_subscribe` 改按 `wpe_media::kind_available` 放行（audio：Windows / macOS，media：Windows）。`NSAudioCaptureUsageDescription` 写进新增的 `src-tauri/kabegame/Info.plist`（打包合并）与 `macos/embedded-Info.plist`（dev）。
+- `kabegame-core::wpe::steam`（`wpe` feature）：对话框分步登录（HTTPS 上的 `IAuthenticationService`，扫码 / 账号密码 / Steam Guard，`SteamClient` 平台类型）、会话存 `wpe-import` 插件数据私有区、`steam-vent` 连 CM（每个账号一条共享连接 `cm::shared_connection`：steam-vent 的 login id 固定为 0，同账号的第二条连接会把前一条踢下线；PICS、depot 密钥、manifest request code、CDN 服务器与授权 token）、CDN manifest / chunk 的解密解压校验与增量安装；创意工坊 `workshop.rs`（`PublishedFile.GetUserFiles` 列订阅，分页 / 排序 / 分级筛选交给 Steam，`QueryFiles` 做工坊发现（排序 `query_type` 按实测含义、搜索、分级 / 类型筛选，固定排除预设与程序壁纸），`GetDetails` 按 id 查，条目下载进 `<WPE>/projects/myprojects/<id>/`，状态 `kabegame_workshop.json` 按 manifest 增量并记 Steam 标签给导入打标签）；`wpe-import` 新变量 `steamItems` / `steamAllSubscriptions`（取并集），有 `steamAccount` 时走 `run_steam_import`（按需本体 → 逐条下载入库），不再导入官方默认壁纸；`PluginDataStorage` 新增宿主私有区 `__private`（`get_private` / `update_private`）；`AppPaths::try_global`；`discover` 的 VDF 解析器支持 `\"` 转义并导出 `parse_vdf`，`discover_roots` 把插件数据目录当作一个 Steam 库补登。新增 Tauri 命令 `wpe_steam_status` / `wpe_steam_verify_session` / `wpe_steam_forget_session` / `wpe_steam_login_qr` / `wpe_steam_login_credentials` / `wpe_steam_login_submit_code` / `wpe_steam_login_poll` / `wpe_steam_login_cancel` / `wpe_steam_subscriptions` / `wpe_steam_workshop_query`（只给主窗口）。新依赖：`steam-vent`、`steam-vent-proto-*`、`ruzstd`、`qrcode`（其余复用锁文件里已有的版本）。
+- 前端翻页抽成底层组件 `components/ui/Paginator`（`v-model:page` + `pageCount`，桌面输入框 / 触屏级联滚轮），`GalleryBigPaginator` 只剩外框与「一页时隐藏」、调用方不变；翻页文案 `prevPage` / `nextPage` / `jumpToPage` 从 `gallery` 挪到 `common`。
 - 界面重构 P2：`apps/kabegame/src/components/ui/` 新增弹层（Dialog、AlertDialog、Sheet、ContextMenu）、下拉与右键共用的菜单项（`MenuItem` / `MenuSub` / `MenuCheckboxItem` / `MenuRadioGroup` / `MenuLabel` / `MenuSeparator`）、表单（Field、Input、Textarea、NumberField、Checkbox、CheckboxGroup、RadioGroup、Select、Slider、Combobox）、展示（Tag、Skeleton、Separator、ScrollArea、DescriptionList、Alert、Spinner），Button 加 `danger` 变体；反馈门面 `toast`（签名同 `ElMessage`）、`messageBox`（签名同 `ElMessageBox`，内部仍是 EP）、`vLoading`；dev 陈列页 `/dev/ui`。混用期垫片 `components/ui/compat.ts` + `styles/kb-compat.css`：新浮层打开时向 EP 的 z-index 计数器取号（`--kb-z-popover` / `--kb-z-tooltip` 删除）、打开期间暂停 EP 的焦点陷阱、触发器在 EP 对话框里时挂进去、旧浮层在新模态层下可点且不触发关闭。混用期代码统一标 `TODO:[REF_UI]`。
 - 场景壁纸 P5d：透视相机、相机对象、深度与剔除、透明排序。
   - 深度与剔除：场景目标挂 `depth32float`（`render/scene.ts`，每帧清 0、GREATER，`clearenabled: false` 时不清），`normalizeDepthKeys` 规整三个材质键（缺键测深度、`depthwrite` 只在 normal / alphatocoverage 写、缺 `cullmode` 剔背面），`programs.ts` 的 `depthFlags` / `SCENE_DEPTH_FORMAT`，管线键与标签带 `depth:`，合成 RT、fbo、泛光不挂深度；删 `PassContext.model`；删 `cull:normal`、`depthtest:enabled`、`depthwrite:enabled`。
@@ -342,6 +350,7 @@
 
 ### Fixed
 - `rebind_deduped_metadata` 对 WPE 行直接返回：去重命中不再改挂它的 metadata 与 `plugin_id`。
+- `tauri-plugin-cursor` 的 macOS 探针按窗口内容区算视图坐标，并且每次采样都现查窗口位置（同 Windows 每次现算 `ScreenToClient`）。原来直接把 `kCGWindowBounds`（整个窗口框）当视图原点、每秒才刷新一次：带原生标题栏的主窗口里，注入预览壁纸 iframe 的鼠标位置比光标低一个标题栏高度（macOS 26 为 32pt），拖动窗口时落点停在旧位置。现在窗口框每轮从窗口服务现查（约 0.1 ms，不上主线程），标题栏等内缩每秒在主线程上读一次 `contentRectForFrameRect(frame)`；`position_in_window`（场景开场光标）同样修正。
 - 新增 CEF 补丁 10：建窗 `extra_info` 带 `kabegame.disable_wheel_zoom` 的 browser 忽略 Ctrl+滚轮缩放（`AlloyBrowserHostImpl::ContentsZoomChange` 提前返回），主窗口与壁纸窗口登记（`tauri_runtime_kbcef::disable_wheel_zoom`）。子 frame 里没被页面取消的 Ctrl+滚轮会缩放整个 WebContents，主文档的 `wheel` 监听收不到子 frame 的事件；这两个窗口的主 frame 加载完时，缩放不是默认值就复位，清掉以前按 host 存进 profile 的缩放。需要重新构建 CEF（`deno task build:chromium`）。
 - CEF 运行时 `on_context_created` 只往 frame 的主世界注入初始化脚本（比较 `frame.v8_context()`），DevTools / CDP 建的隔离世界不再重复执行 Tauri 与畅游脚本。
 - 新增 tauri 补丁 12：`ipc-protocol.js` 的自定义协议 IPC fetch 固定 `referrerPolicy: 'origin'`（Windows 上 https 页面请求 `http://ipc.localhost` 时 CEF 把 `Origin` 发成 `null`，Tauri 回 500 且不回退 postMessage）；`tauri-runtime-kbcef` 的 `cef-ipc` 回退 shim 同样设置。

@@ -133,5 +133,8 @@
   "nextMonth": "Next month",
   "nextYear": "Next year",
   "today": "Today",
-  "addCustom": "Add \"{value}\""
+  "addCustom": "Add \"{value}\"",
+  "prevPage": "Previous",
+  "nextPage": "Next",
+  "jumpToPage": "Go to page"
 }

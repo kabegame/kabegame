@@ -20,6 +20,8 @@ pub mod recognize;
 #[cfg(feature = "wpe")]
 pub mod scan;
 #[cfg(feature = "wpe")]
+pub mod steam;
+#[cfg(feature = "wpe")]
 pub mod tags;
 pub mod user_props;
 

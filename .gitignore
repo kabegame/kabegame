@@ -74,6 +74,8 @@ apps/wpe-scene/src/wpefont/*.wasm
 /.kabegame/debug
 
 # claude设计
+# 计划里的界面截图（改前 / 改后对照，体积大，只留本地）
+/.claude/plans/*/shots/
 /*.zip
 /exports
 
