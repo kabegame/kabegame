@@ -94,6 +94,28 @@ WPE 2.8.42，窗口 1920×1080。用户设置（`config.json` 的 `general.user`
 | C11 | 正交的粒子与文本 | ptco：反射 pass 与主 pass 的 sprite、文本顶点逐值相同，拖尾差 0.0026（眼位翻了） | 与 C7、C10 一致 |
 | C12 | 真实场景 | arsenal（反射开）：反射 pass 没有绘制（名单里两个空模型对象、FR 在透视场景画面外），反射图只是清屏色 | 名单为空的路径在语料里会走到 |
 
+## P13b2 补测：对齐方式与反射 RT 的清屏色（2026-11-14）
+
+渲染尺寸那一节（`../phase-render-size.md`）实测了对齐方式 1 / 3 时 WPE 把整个后备缓冲清成 `schemecolor`，留了一条 `TODO:[WPE_SCENE]`：
+反射 RT 是不是也拿到 `schemecolor`（读码推断设备清屏色是共享状态）。
+
+- 工程 `ignore/p13/b2/gen_scheme.py` → `ignore/p13/proj/p13b2-scheme`：同 p13b2-ortho（正交 1920×1080，地面铺下半屏、读 `_rt_Reflection`
+  按屏幕 UV 直接输出），清屏色 0.15 灰、`schemecolor` (0, 0, 0.6)。地面所在的下半屏反射图里没有对象。
+- 窗口 1920×800，开窗后 `apply_properties({"alignment": 0 | 1 | 3})` 各抓一帧；先在用户原设置（反射关）下抓（`A:\p13b2\scheme\off-a*`），
+  再 `restart_wpe({"reflection": true})` 抓一轮（`on-a*`），抓完 `restart_wpe({"reflection": false})` 改回（`config.json` 哈希回到改前的
+  `cc5081…`）。
+- 读反射 RT 本身（反射关：地面绘制时绑的 `g_Texture0`；反射开：反射 pass 末尾的目标）在 (960, 700) 的值：
+
+| 对齐方式 | 反射关 | 反射开 |
+|---|---|---|
+| 0 | (0.149, 0.149, 0.149, 1) = `clearcolor` | (0.149, 0.149, 0.149, 1) |
+| 1 | (0, 0, 0.6, 1) = `schemecolor` | (0, 0, 0.6, 1) |
+| 3 | (0, 0, 0.6, 1) | (0, 0, 0.6, 1) |
+
+**结论**：反射 RT 和主目标用同一个清屏色，反射开、关都一样，读码推断成立。渲染器改成一个 `clear = targetClear ?? clearcolor` 两处共用
+（`render/scene.ts` 的 `encode`），去掉那条 TODO。我们这边按指定尺寸画（`renderFrames.ts --canvas 1920x800 --render-mode target --style
+fill | fit | center`，dev 覆盖切反射开 / 关）6 组都和 WPE 整帧 0 差异；改之前 fit / center 下地面会是灰色。
+
 ## P13c 的实测：sprite 对象（2026-11-14）
 
 工程 `ignore/p13/c/gen_c.py` → `ignore/p13/proj/p13c-{open,half,full,moved,ortho}`：透视，相机看向 (−1, 0, 1)，sprite 去掉视图平移后在屏幕

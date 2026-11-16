@@ -287,12 +287,18 @@ const FRAME: FrameInput = {
   cursor: [0.5, 0.5],
 };
 
-async function open(bundle: SceneBundle, size?: [number, number]) {
+/** `target`：按指定尺寸画（dev 探针，`GpuScene.build` 的 `target`）。 */
+async function open(
+  bundle: SceneBundle,
+  size?: [number, number],
+  target?: { size: [number, number]; edges: [number, number, number, number]; clear: [number, number, number] | null },
+) {
   const gpu = new FakeGpu();
   const state = SceneState.fromBundle(bundle);
   const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], {
     particles: { seed: 1 },
     ...(size ? { size } : {}),
+    ...(target ? { target } : {}),
   } as never);
   scene.update(FRAME, state);
   return { gpu, scene, state };
@@ -388,6 +394,29 @@ describe("反射 pass（P13b2）", () => {
     expect(passes.map((item) => item.label)).toEqual(["_rt_Reflection clear", "scene"]);
     expect(passes[0].draws).toEqual([]);
     expect(gpu.buffers.some((buffer) => buffer.label.endsWith(" reflection"))).toBe(false);
+  });
+
+  it("按指定尺寸画、对齐方式 1 / 3（清屏色是 schemecolor）：反射开时的反射 pass、反射关时的清屏都和主目标同色（p13-REPORT 补测）", async () => {
+    const target = {
+      size: [1920, 800] as [number, number],
+      edges: [0, 0, 0, 0] as [number, number, number, number],
+      clear: [0, 0, 0.6] as [number, number, number],
+    };
+    for (const enabled of [true, false]) {
+      const { gpu, scene, state } = await open(bundleOf({ list: [0], enabled }), undefined, target);
+      state.general.clearcolor = [0.15, 0.15, 0.15];
+      const [reflection, main] = gpu.encode(scene, state);
+      expect(reflection.label, `${enabled}`).toBe(enabled ? "_rt_Reflection reflection" : "_rt_Reflection clear");
+      expect(reflection.clear, `${enabled}`).toEqual({ r: 0, g: 0, b: 0.6, a: 1 });
+      expect(main.clear, `${enabled}`).toEqual({ r: 0, g: 0, b: 0.6, a: 1 });
+    }
+    // 没有 target：两者都是 clearcolor
+    const { gpu, scene, state } = await open(bundleOf({ list: [0] }));
+    state.general.clearcolor = [0.15, 0.15, 0.15];
+    expect(gpu.encode(scene, state).map((pass) => pass.clear)).toEqual([
+      { r: 0.15, g: 0.15, b: 0.15, a: 1 },
+      { r: 0.15, g: 0.15, b: 0.15, a: 1 },
+    ]);
   });
 
   it("不可见的名单对象不进反射 pass", async () => {

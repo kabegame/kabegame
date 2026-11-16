@@ -222,3 +222,8 @@ Claude 独立验收：
 **没做**：
 - 设置页切到开启看 Fantastic Car（回归 RB4）、绑属性的 `reflected` 真机切换（RB5）：同 P13b1 R4，运行中的 dev 构建还没有 `get_wpe_scene_reflection`，等用户重启 dev。
 - 逐 draw 对常量（反射 pass 的 MVP、eye、视图向量）没再对真实壁纸做：确定性工程整帧 0 差，单测已用 WPE 的反射 VP 逐值核对。
+
+**补测：对齐方式与反射 RT 的清屏色**（2026-11-14，用户：「那你顺手测一下」）：渲染尺寸那一节留的 `TODO:[WPE_SCENE]`（反射 RT 是否也拿到
+`schemecolor`）。WPE 实测成立（反射开 / 关、对齐方式 0 / 1 / 3，见 p13-REPORT「P13b2 补测」），`encode` 里主目标与反射 RT 共用
+`clear = targetClear ?? clearcolor`、去掉 TODO；`p13b2-reflection.test.ts` 加一条用例，2 处变异检出（`ignore/p13/b2/mutations_scheme.py`）；
+按指定尺寸渲染 6 组和 WPE 整帧 0 差异。依赖的 `targetClear` 随渲染尺寸那一节提交（`89492754`）；文档与回归 RB7 已随 `8c2ed7cc` 进库，代码与测试 2026-11-17 单独提交。

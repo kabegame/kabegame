@@ -1331,7 +1331,10 @@ export class GpuScene {
    * （建场景、`setCamera` 的 zoom 重算）。产品不传，恒为 null，字节不变。
    */
   private crop: ProjectionCrop | null = null;
-  /** 按指定尺寸画时主场景目标每帧的清屏色（对齐方式 1 / 3 的 `schemecolor`）；null 用 `clearcolor`。反射 pass 不用它，见 `encode`。 */
+  /**
+   * 按指定尺寸画时每帧的清屏色（对齐方式 1 / 3 的 `schemecolor`）；null 用 `clearcolor`。主场景目标与平面反射 RT 都用它：WPE 帧首选一个
+   * 设备清屏色，反射 RT 跟着拿到（p13-REPORT「P13b2 补测：对齐方式与反射 RT 的清屏色」，反射开 / 关都实测过）。
+   */
   private targetClear: readonly [number, number, number] | null = null;
   /** `setCamera` 改了相机、draw 还没按新相机重写：下一次 `setParallax` 整体刷一遍（与视差的刷新合成一次）。 */
   private cameraDirty = false;
@@ -5379,17 +5382,16 @@ export class GpuScene {
     // 粒子层现排时的世界矩阵（P4e 步骤 2）：这一刻的状态下，一条父链只算一次。同 `sync` 预置渲染阶段的挂点子树世界矩阵（B1）：
     // 挂点子树里粒子层的事件实例（`arrangeParticles` 的模型矩阵）与视锥剔除（`modelCulled`）要和本体用同一份 W，否则实例按新 W、本体按旧 W
     const worlds = new Map<number, Mat4>(this.liveSeeds(state) ?? []);
-    const [r, g, b] = clearcolor;
-    // 按指定尺寸画时主场景目标改用 `schemecolor`（对齐方式 1 / 3）；反射 pass 仍用 `clearcolor`（下面 r、g、b）
-    // TODO:[WPE_SCENE] WPE 的设备清屏色是共享状态，读码推断反射 RT 也会拿到 `schemecolor`，没测；测过再让反射 pass 也用 `targetClear`
-    const [mr, mg, mb] = this.targetClear ?? clearcolor;
+    // 清屏色：按指定尺寸画、对齐方式 1 / 3 时是 `schemecolor`（`targetClear`），主场景目标与平面反射 RT 共用（反射开 / 关都一样）
+    const clear = this.targetClear ?? clearcolor;
+    const [r, g, b] = clear;
     // 平面反射 RT（P13b1）：反射关时每帧清成清屏色，在主 pass 之前，不看 clearenabled（rea-p13-passes 1.1）
     // 反射开（P13b2）时改由下面的反射 pass 清屏并作画
     // 阴影 pass（P13d）：在反射与主 pass 之前（帧函数 `0x14018031a`），每帧清图集、画投射者
     this.encodingState = state;
     this.shadowAtlas?.encode(encoder, this.shadowCasters);
     const reflectionTarget = this.reflectionList ? (this.reflectionTargets?.reflection ?? null) : null;
-    if (!reflectionTarget) this.reflectionTargets?.encode(encoder, clearcolor);
+    if (!reflectionTarget) this.reflectionTargets?.encode(encoder, clear);
     if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);
     const snapshot = () => {
       if (this.snapshot)
@@ -5416,7 +5418,7 @@ export class GpuScene {
         label: scene ? "scene" : "group",
         colorAttachments: [
           scene
-            ? { view, clearValue: { r: mr, g: mg, b: mb, a: 1 }, loadOp, storeOp: "store" }
+            ? { view, clearValue: { r, g, b, a: 1 }, loadOp, storeOp: "store" }
             : { view, loadOp: "load", storeOp: "store" },
         ],
         // 深度附件（P5d 步骤 1）只挂在真正的场景目标上（组的合成 RT 不挂）：和颜色一起清成 0（反向 Z），其余 load；`clearenabled` 为
