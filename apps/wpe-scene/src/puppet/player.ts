@@ -222,13 +222,18 @@ export interface PuppetRig {
 export function puppetEntries(
   layers: readonly Pick<SceneLayer, "object" | "puppet" | "model">[],
 ): { object: number; puppet: PuppetRig; kind: "image" | "model" }[] {
-  return layers.flatMap((layer): { object: number; puppet: PuppetRig; kind: "image" | "model" }[] =>
-    layer.puppet
-      ? [{ object: layer.object, puppet: layer.puppet, kind: "image" }]
-      : layer.model?.skeleton
-        ? [{ object: layer.object, puppet: layer.model.skeleton, kind: "model" }]
-        : [],
-  );
+  return layers.flatMap((layer) => puppetEntry(layer));
+}
+
+/** 单个图层要进运行时的条目（L3b：`puppetEntries` 的逐个版本，同一规则）；不是 skinned puppet / 带骨骼模型时为空数组。 */
+export function puppetEntry(
+  layer: Pick<SceneLayer, "object" | "puppet" | "model">,
+): { object: number; puppet: PuppetRig; kind: "image" | "model" }[] {
+  return layer.puppet
+    ? [{ object: layer.object, puppet: layer.puppet, kind: "image" }]
+    : layer.model?.skeleton
+      ? [{ object: layer.object, puppet: layer.model.skeleton, kind: "model" }]
+      : [];
 }
 
 /** 模型一个网格的变形运行时：权重与生效位按该网格的目标数，uniform 用该网格自己的顶点数与缩放（决定 1，WPE 两处缺陷不照抄）。 */
@@ -449,6 +454,14 @@ export class ScenePuppets {
    * （图像层 puppet）；带骨骼的模型对象交 `"model"` 和它的 `SceneModel.skeleton`（P12b2-1）。
    */
   constructor(list: readonly { object: number; puppet: PuppetRig; kind?: "image" | "model" }[]) {
+    this.add(list);
+  }
+
+  /**
+   * 追加运行时（L3b，构造也走这里）：同构造的规则——只收 skinned 的，建好按 t = 0 算一次姿势（不推进）。排在已有的后面（`frame` 的遍历顺序）。
+   * 同一对象已有运行时时由调用方先 `remove`（替换）；不先摘会留下两份、`byObject` 指向新的。
+   */
+  add(list: readonly { object: number; puppet: PuppetRig; kind?: "image" | "model" }[]): void {
     for (const { object, puppet, kind = "image" } of list) {
       const skeleton = puppet.skeleton;
       if (!skeleton) continue;
@@ -503,6 +516,20 @@ export class ScenePuppets {
       this.byObject.set(object, runtime);
       this.evaluate(runtime, null, null);
     }
+  }
+
+  /** 摘掉这些对象的运行时（L3b）：之后 `skin` / `pose` 等读它们的都是 null，摘出还没释放的层随运行时一起丢（字段脚本已由宿主清）。 */
+  remove(objects: ReadonlySet<number>): void {
+    if (objects.size === 0) return;
+    let write = 0;
+    for (const runtime of this.runtimes) {
+      if (objects.has(runtime.object)) {
+        if (this.byObject.get(runtime.object) === runtime) this.byObject.delete(runtime.object);
+        continue;
+      }
+      this.runtimes[write++] = runtime;
+    }
+    this.runtimes.length = write;
   }
 
   /**

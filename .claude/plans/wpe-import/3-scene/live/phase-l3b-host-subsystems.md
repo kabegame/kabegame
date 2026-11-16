@@ -151,6 +151,37 @@ private removeObjectEverywhere(objects: readonly number[]): void;
   - 删除后不调 `removeObjectEverywhere`。
 - **真机**：本步宿主只多了删除后的清理。用 `scriptCorpus` 全库前后比，除了内存，脚本行为与状态摘要不变。基线按当时的代码先取一遍，因为 L0 的基线在合并之后已不对应。
 
+## 验收中的补充（2026-11-17）
+
+**删除路径只接了一半。**
+- `removeObjectEverywhere(objects, { structural })` 多了一个选项。
+  - 缺省为真，即本计划写的完整形态，有单测验调用顺序。
+  - 删除生效处（`onDestroyed`）实际接的是 `structural: false`：声音、文本排版引用、puppet、关键帧、状态 `dropObject`。登记表 `removeObject` 和 `restructure` 不接。
+- 不接的原因，渲染侧与脚本 API 还按整场 bundle 现读：
+  - **组字段**：`render/structure.ts` 按 `layer.group == null` 选顶层，`groupOf` / `groupDepth` 找组的 RT。删组之后 `restructure` 把子层的 `group` 改成 null，子层会被当成顶层画，而它们的 op 指向已释放的组合成 RT。
+  - **新 id**：`ScriptApi.newLayerId` 取 `bundle.layers` 最大 id 加 1，摘掉最大 id 的层会让这个 id 再发一次（WPE 的 id 不回收）。`findLayer` / `getLayerByID` 也按 `bundle.layers` 找。
+  - 这两件挪到 L4（总计划 L4 点 3）。
+- 接上的那一半是安全的，有两条依据：
+  - `flushDestroy` 本来就删了 `state.layers` 的项；
+  - 渲染侧在同一帧下一次 `sync` 开头的 `releaseRemoved`，先于任何按对象的读取。
+
+  复核时另外核过两类访问：
+  - **读取**：各表都带空值保护；
+  - **写入**：常量、effect、粒子实例、灯、声音、相机、动画层、文本字段、材质状态，缺项时一律返回 applied、不做事。删除后改属性不会抛错。
+- **唯一的行为差别**：被删对象上的 effect 开关绑了属性时，原来改这个属性会多触发一次整场重编译，现在不会，因为 effect 开关表清掉了。画面不变。
+
+**文本**：加载时没有文本层的场景，运行中新建文本层时，`layoutInCurrent` 为当前代数开一套新图集（`preparing` 标志区分「`prepare` 正在跑」）。这条路径只有桩单测，真字体与 wasm 留到 L5 真机验。
+
+**组内问题**：`addCompiledObject` 里 `restructure` 返回的组内问题，先并进 `bundle.unsupported` 并 warn。L5 / L7 再定最终做法。
+
+**覆盖缺口**：语料里关键帧事件实际派发数为 0（有事件定义的动画只有 1 张场景，长跑也没触发）。事件派发序列的对照只有单测在管。
+
+**复核时补的两条测试**：
+- `animation/playerAdd.test.ts`：暂停中被摘掉的条目，作废的控制对象 `play()` 也不播。原用例调 `play` 时时钟本来就在播，变异「不拦 play」抓不到。
+- `render/p6d3.test.ts`：假设备 `GpuScene` 上，删除生效后再 `dropObject`，同帧先 update / encode 再 sync 不崩，释放与其余图层照常；删后写它的常量返回 applied。这条代替真机：语料里三张会删层的场景跑 120 帧都不删层；探针跑脚本也不经宿主的 `onDestroyed`；屏外宿主不真正加载场景；主窗口预览被占用时不能接管。
+
+**真机**：`scriptCorpus` 在当前代码上重取基线，两遍 236 张逐张相同，没有排除项（`ignore/live/l3b/corpus-base-1`、`-2`）。L3b 产物（`index-C_MyNBdA.js`）跑完与基线 236/236 相同。
+
 ## 交付
 
 sonnet 执行代理在主工作区实现。

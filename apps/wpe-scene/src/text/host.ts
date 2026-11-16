@@ -25,7 +25,7 @@
  *   重排器绑定加载代数：更新的加载一开始（`prepare` 开头加代数）或宿主销毁之后，旧场景的重排器不再动图集（返回 null），读完字体的回调
  *   也丢掉——旧场景在新场景建好之前还在画，不能把字形排进新加载的图集（装箱顺序要和 WPE 一样）。
  */
-import type { SceneBundle } from "../compile/bundle";
+import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import type { SceneReader } from "../compile/fs";
 import type { SceneFontFile } from "../compile/texts";
 import { SceneRenderError } from "../render/errors";
@@ -99,6 +99,8 @@ export class SceneTexts {
   private generation = 0;
   /** 最近一次排完的加载（`prepare` 成功返回时记下），`relayouter()` 绑它；更新的加载开始时清掉。 */
   private current: TextLoad | null = null;
+  /** `prepare` 还在跑（最新一次的）：这期间没有「当前加载」，`layoutInCurrent` 不自己建（L3b）。 */
+  private preparing = false;
   private disposed = false;
   /**
    * 运行中重排发起、还没结束的字体读取（P6b 1e-3，dev 探针结清用）：每项是「读完 → 比代数 → `onReady`」整条链，结束时（成功、失败或
@@ -120,12 +122,30 @@ export class SceneTexts {
   ): Promise<Map<number, TextLayout> | null> {
     const generation = ++this.generation;
     this.current = null;
+    this.preparing = true;
+    // 更新的加载开始后，这一次的收尾不再动标志（`preparing` 属于最新的那次）
+    const done = (): void => {
+      if (generation === this.generation) this.preparing = false;
+    };
+    // 字体来源先记下：没有文本层的场景运行中新建文本层（`layoutInCurrent`）也要读系统字体
+    this.sources = sources;
     const layouts = new Map<number, TextLayout>();
     const layers = bundle.layers.filter((layer) => layer.text);
-    if (!layers.length) return layouts;
-    const fonts = await this.ensureFonts();
-    if (cancelled()) return null;
-    this.sources = sources;
+    if (!layers.length) {
+      done();
+      return layouts;
+    }
+    let fonts: TextFonts;
+    try {
+      fonts = await this.ensureFonts();
+    } catch (error) {
+      done();
+      throw error;
+    }
+    if (cancelled()) {
+      done();
+      return null;
+    }
     for (const layer of layers) {
       const font = layer.text!.font;
       if (!font.path.startsWith(SYSTEM_FONT_PREFIX)) this.locations.set(font.path, font);
@@ -138,7 +158,10 @@ export class SceneTexts {
         let layout = layoutText(fields, fonts, atlases);
         for (let round = 0; layout.missingFonts.length && round < MAX_FONT_ROUNDS; round++) {
           await fonts.load(layout.missingFonts);
-          if (cancelled()) return null;
+          if (cancelled()) {
+            done();
+            return null;
+          }
           layout = layoutText(fields, fonts, atlases);
         }
         // 读过的字体不会再缺（读不到的记成 null），走到这里说明轮数上限不够，按排不出处理
@@ -147,15 +170,67 @@ export class SceneTexts {
         layouts.set(layer.object, layout);
       }
     } catch (error) {
+      done();
       this.options.report?.warn("场景文本排版失败：", error);
       throw new SceneRenderError(["text:engine"]);
     }
     // 排完才记：读字体的 await 期间有更新的加载开始时，代数已经不是这一次的
     if (generation === this.generation && !this.disposed) this.current = { generation, atlases };
+    done();
     this.options.report?.debug(
       `场景文本：${layers.length} 层，图集 ${atlases.all().length} 组，用时 ${Math.round(performance.now() - started)} ms`,
     );
     return layouts;
+  }
+
+  /**
+   * 在当前加载的图集里排一个新建的文本层（L3b，运行中新建 / 替换对象用）：读字体同 `prepare`（缺字体读完再排，每轮至少读进一个），排进这次加载的图集。
+   * 过期（更新的加载开始、宿主已销毁）返回 null、不动图集；排不出抛 `SceneRenderError(["text:engine"])`（同 `prepare`）。结果交状态的 `setText`。
+   * 没有「当前加载」时：`prepare` 没在跑（场景加载时没有文本层、没排过），就为当前代数开一套新图集；`prepare` 在跑时返回 null。
+   * 不是文本层返回 null。
+   */
+  async layoutInCurrent(layer: SceneLayer): Promise<TextLayout | null> {
+    const text = layer.text;
+    if (!text || this.disposed) return null;
+    let load = this.current;
+    if (!load) {
+      if (this.preparing) return null;
+      load = this.current = { generation: this.generation, atlases: new TextAtlases() };
+    }
+    const stale = (): boolean => this.disposed || load.generation !== this.generation;
+    let fonts: TextFonts;
+    try {
+      fonts = await this.ensureFonts();
+    } catch (error) {
+      if (stale()) return null;
+      throw error;
+    }
+    if (stale()) return null;
+    if (!text.font.path.startsWith(SYSTEM_FONT_PREFIX)) this.locations.set(text.font.path, text.font);
+    try {
+      let layout = layoutText(text.fields, fonts, load.atlases);
+      for (let round = 0; layout.missingFonts.length && round < MAX_FONT_ROUNDS; round++) {
+        await fonts.load(layout.missingFonts);
+        if (stale()) return null;
+        layout = layoutText(text.fields, fonts, load.atlases);
+      }
+      if (layout.missingFonts.length)
+        throw new Error(`字体读了 ${MAX_FONT_ROUNDS} 轮仍缺：${layout.missingFonts.join(", ")}`);
+      return layout;
+    } catch (error) {
+      this.options.report?.warn("场景文本排版失败：", error);
+      throw new SceneRenderError(["text:engine"]);
+    }
+  }
+
+  /** 放回一个排版占的图集字形引用（L3b，删除 / 替换对象时调；重复调无害，`releaseTextLayout` 看 `released`）。 */
+  releaseLayout(layout: TextLayout): void {
+    releaseTextLayout(layout);
+  }
+
+  /** {@link releaseLayout} 的反操作（L3b）：片段缓存存一份排版、命中时按新对象再占一份引用用。 */
+  retainLayout(layout: TextLayout): void {
+    retainTextLayout(layout);
   }
 
   /**

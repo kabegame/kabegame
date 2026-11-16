@@ -471,6 +471,14 @@ removeObject(object: number): void;
   - 深度附件仍按全部计划定一次。运行中的片段要深度而场景没有时，由片段的 `sceneFlips` 退回整场重载。
 - **修改** `SceneRenderer` 转发 `addObject` / `replaceObject` / `removeObject`；dev 探针建场景走同一条路。
 
+#### 点 3 — 删除路径接上登记表（L3b 留下的）
+
+L3b 的 `removeObjectEverywhere` 在删除生效处只接了 `structural: false`，即子系统与状态的清理。登记表的 `removeObject` 和之后的 `restructure` 没接，因为有两类消费者还按整场 bundle 现读（见 [live/phase-l3b-host-subsystems.md](live/phase-l3b-host-subsystems.md)「验收中的补充」）。L4 改掉它们之后才改成 `structural: true`：
+- **渲染侧读组字段**：`render/structure.ts` 按 `layer.group == null` 选顶层，`groupOf` / `groupDepth` 找组的 RT。删组之后子层的 `group` 会变成 null，按顶层去画，但它们的 op 还指向已释放的组合成 RT。L4 的装卸要让组归属变化时重建这些 op，或者在删组时把子层重装成顶层。
+- **脚本 API 读 `bundle.layers`**：
+  - `ScriptApi.newLayerId` 取 `bundle.layers` 里最大的 id 加 1。删掉最大 id 的层之后，这个 id 会被再发一次，而 WPE 的 id 不回收。要改成单调的分配器。
+  - `findLayer`、`getLayerByID` 等也按 `bundle.layers` 找，要核对删掉之后的语义。
+
 #### 验收
 - **画面哈希与 L0 基线全部相同**：加载路径已经换成逐对象装。
 - 假设备单测：

@@ -271,6 +271,19 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
     - 随机逐个删，每步等于「只加剩下的」。
 
     2026-11-17 的结果：233 张场景、6448 个对象，0 不同。
+- **宿主子系统的按对象增删（L3b）**：宿主加载时为 bundle 建一个 `SceneRegistry`，各子系统有了按对象的入口：
+  - **关键帧** `SceneAnimations.add` / `removeObjects`：联动的主人记条目，不记下标；控制对象按 id 缓存。新条目建出那一帧不写，下一帧先推进再求值（同 WPE）。摘掉之后，已给出的控制对象作废：方法空操作，读值停在摘掉那一刻。
+  - **puppet** `ScenePuppets.add` / `remove`：建好按 t = 0 算一次姿势。
+  - **文本** `SceneTexts.layoutInCurrent` / `releaseLayout` / `retainLayout`：在当前加载的图集里排一层。加载时没有文本层的场景，按当前代数开一套新图集。
+  - **脚本** `ScriptRuntime.replayWritesFor`：只重放目标在这些对象上的写入。
+  - **宿主**：
+    - `addCompiledObject(delta, mode)` 依次走：登记表 → 状态 → `restructure` → 关键帧 → puppet → 文本 → 脚本 → 声音 → 用户纹理 → 媒体 / 音频 → GPU（L4 前是空钩子）。L5 才接进 `createLayer`。
+    - `removeObjectEverywhere(objects, { structural })` 是删除的反向。删除生效处现在接的是 `structural: false`：清子系统残留和状态的按对象的表（`dropObject`），不动登记表，也不重算组。登记表那一半等 L4 改掉还按整场 bundle 现读的组字段与 `newLayerId`。
+  - **判据**（`ignore/live/l3b/subsystems.test.ts`）：全语料比两件事，2026-11-17 都是 0 差异：
+    - 关键帧与 puppet，「逐个加」和「整场一次」各跑 120 帧，每帧写出的值逐位相同；
+    - 删一半之后，等于「只加剩下的」。
+
+    `scriptCorpus` 前后比 236/236 相同。
 
 ### 能力表（`features.ts`）
 

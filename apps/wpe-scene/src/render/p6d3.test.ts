@@ -584,6 +584,54 @@ describe("GpuScene：对象表与删除（点 3、点 4 的渲染侧）", () => 
     scene.sync(state);
   });
 
+  it("删除生效后再 dropObject 清表（L3b 宿主的 removeObjectEverywhere）：同帧先 update / encode 再 sync 不崩，释放与其余图层照常", async () => {
+    const { gpu, state, scene } = await open(three());
+    scene.sync(state);
+    scene.update(FRAME, state);
+    const doomed = drawsOf(scene).filter((draw) => draw.object === 1);
+    // 删之前写过它的常量（dirtyPasses 里有它）
+    state.write(
+      {
+        property: "p",
+        target: {
+          kind: "constant",
+          pass: "objects/1/passes/0",
+          material: "brightness",
+          uniforms: ["g_Brightness"],
+          type: "float",
+        },
+      },
+      0.5,
+    );
+    state.markDestroy(1);
+    expect(state.flushDestroy()).toEqual([1]);
+    state.dropObject(1);
+    // 删后再写它的常量：表里没有了，静默不做事
+    expect(
+      state.write(
+        {
+          property: "p",
+          target: {
+            kind: "constant",
+            pass: "objects/1/passes/0",
+            material: "brightness",
+            uniforms: ["g_Brightness"],
+            type: "float",
+          },
+        },
+        0.25,
+      ),
+    ).toBe("applied");
+    scene.update(FRAME, state);
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    scene.sync(state);
+    scene.update(FRAME, state);
+    for (const draw of doomed) expect(draw.vertexBuffer.destroyed).toBe(true);
+    expect(drawsOf(scene).map((draw) => draw.object)).toEqual([0, 2]);
+    expect(frameOrder(gpu, scene, state, [0, 1, 2])).toEqual([0, 2]);
+    scene.sync(state);
+  });
+
   it("删掉的对象还在 dirty 里（删之前写过）也不抛错", async () => {
     const { state, scene } = await open(three());
     state.write({ property: "p", target: { kind: "layer", object: 2, field: "origin" } }, "1 2 3");

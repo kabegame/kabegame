@@ -1,7 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { EMPTY_ANIMATIONS_PROBE, SceneAnimations, type AnimationsProbe } from "./animation/player";
-import { puppetEntries, ScenePuppets, stateSink } from "./puppet/player";
+import { puppetEntries, puppetEntry, ScenePuppets, stateSink } from "./puppet/player";
 import { ScenePlayer } from "./audio/player";
 import { SceneSounds, type SceneSoundProbe } from "./audio/sceneSounds";
 import {
@@ -14,6 +14,9 @@ import {
 } from "./compile/bindings";
 import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
+import type { FragmentDelta, ObjectFragment } from "./compile/fragment";
+import { SceneRegistry } from "./compile/registry";
+import type { UserTextureSource } from "./compile/usertextures";
 import { openSceneSession, type CompileSessionClient } from "./compile/client";
 import { SceneLoadProgress } from "./progress";
 import type { SceneStructure } from "./compile/protocol";
@@ -247,6 +250,13 @@ export class SceneHost {
   private compileSession: CompileSessionClient | null = null;
   private scriptBundle: SceneBundle | null = null;
   private scriptState: SceneState | null = null;
+  /**
+   * 当前场景的登记表（L3b，`compile/registry.ts`）：场景换上时（`beforeFirstFrame`）为这份 bundle 建一个，换场景 / 重编译时换新的，退回与销毁时丢掉。
+   * `addCompiledObject` 经它加 / 换对象；删除路径的登记表部分（`removeObjectEverywhere` 的 `structural`）本步不接，见那个函数。
+   */
+  private registry: SceneRegistry | null = null;
+  /** 用户纹理来源的种类表（名字 → 种类）：加载时按 bundle 建，`addCompiledObject` 带来新来源时补（`state.onUserTexture` 查它）。 */
+  private userTextureKinds = new Map<string, UserTextureSource["kind"]>();
   private runtime: ScriptRuntime | null = null;
   private scriptApi: ScriptApi | null = null;
   private readonly scriptOverrides = new Map<string, ScriptValue>();
@@ -703,16 +713,153 @@ export class SceneHost {
 
   /**
    * 删除生效之后（P6d3a）：记进结构、声音停播并摘掉、光标的悬停 / 按下集合摘掉（不发 Leave / Up）；删除改了组归属时请求重编译。
-   * puppet、关键帧动画对不存在的对象写入本来就是空操作（`SceneState.write` 按 `layers.get` 判断），不用另外清。
+   * L3b 起顺带清各子系统与状态里被删对象的残留（关键帧、puppet、文本排版引用、状态的按对象的表），只少占内存，不改画面。
    */
   private onDestroyed(objects: number[], regroup: boolean): void {
     recordDestroyed(this.structure, objects);
-    this.sceneSounds?.remove(objects);
+    // 声音停播并摘掉、关键帧 / puppet / 文本排版的残留与状态的按对象的表（L3b）；登记表与组 / 挂点重算本步不接（见 `removeObjectEverywhere`）
+    this.removeObjectEverywhere(objects, { structural: false });
     this.renderer?.forgetObjects(objects);
     this.options.report.debug(`场景脚本删除了图层：${objects.join(",")}`);
     if (!regroup) return;
     this.stats.recompiled.push({ reason: `script（destroyLayer ${objects.join(",")}）`, keys: [] });
     this.requestScriptReload();
+  }
+
+  /**
+   * 把一个编好的对象接进当前场景（L3b）。mode `"add"`：新对象；`"replace"`：替换已有对象（L5 没命中缓存时由壳换成编好的、L6 单对象重编译）。
+   * 同步部分按顺序：登记表（先场景级增量，再对象）→ 状态 → `restructure`（组与挂点重算；骨骼名取配置原文的 `attachment`，`override` 取
+   * `structure.parents` 是否带这个对象；返回的组内问题非空时按 L7 前的约定当不支持项：并进 `bundle.unsupported`、记一条 warn）→ 关键帧 → puppet →
+   * 文本（排版异步起，回来写状态）→ 脚本（`refreshScripts` 换成定型后的条目，再 `replayWritesFor` 重放这个对象建出以来的写入）→
+   * `ScriptApi.adoptBundle` → 声音 → 用户纹理（预解码异步）→ 媒体 / 音频订阅 → GPU（L4 前空钩子）。
+   * 返回要等的异步部分（文本排版、用户纹理解码、补建媒体集成），宿主在下一帧开头前等它（L5 定时机）。登记表与状态都还没建（没有场景）时抛错。
+   */
+  private addCompiledObject(
+    delta: FragmentDelta | { fragment: ObjectFragment },
+    mode: "add" | "replace",
+  ): Promise<void> {
+    const registry = this.registry;
+    const state = this.scriptState;
+    if (!registry || !state) throw new Error("没有场景，不能接对象");
+    const { fragment } = delta;
+    const object = fragment.object;
+    const only = new Set([object]);
+    const pending: Promise<void>[] = [];
+    // 1. 登记表 → 状态 → 组与挂点重算
+    if ("programs" in delta) registry.applyDelta(delta);
+    // 替换时先取旧排版：状态换对象会清掉它，引用要放回图集
+    const previousText = mode === "replace" ? state.texts.get(object) : undefined;
+    if (mode === "add") {
+      registry.addObject(fragment);
+      state.addObject(fragment);
+    } else {
+      registry.replaceObject(fragment);
+      state.replaceObject(fragment);
+    }
+    const issues = registry.restructure(state, (item) => this.restructureBone(registry.bundle, item));
+    const keys = [...new Set([...issues.values()].flat())];
+    if (keys.length > 0) {
+      const unsupported = registry.bundle.unsupported;
+      for (const key of keys) if (!unsupported.includes(key)) unsupported.push(key);
+      unsupported.sort();
+      this.options.report.warn(`场景壁纸 ${this.options.imageId} 运行中接入对象 ${object}，组内用法不支持：`, keys);
+    }
+    // 2. 关键帧
+    if (mode === "replace") this.sceneAnimations?.removeObjects(only);
+    this.sceneAnimations?.add(fragment.animations);
+    // 3. puppet
+    if (mode === "replace") this.scenePuppets?.remove(only);
+    this.scenePuppets?.add(puppetEntry(fragment.layer));
+    // 4. 文本
+    if (previousText) this.sceneTexts?.releaseLayout(previousText);
+    if (fragment.layer.text) {
+      const texts = (this.sceneTexts ??= new SceneTexts({
+        reader: this.reader,
+        report: this.options.report,
+        onReady: (item) => this.onTextReady(item),
+      }));
+      pending.push(
+        texts.layoutInCurrent(fragment.layer).then((layout) => {
+          // 排版回来时对象可能又被删 / 换了：状态里没有文本对象就放掉引用
+          if (!layout) return;
+          if (this.scriptState === state && state.layers.has(object)) state.setText(object, layout);
+          else texts.releaseLayout(layout);
+        }),
+      );
+    }
+    // 5. 脚本：换成定型后的条目，重放这个对象建出以来的写入；API 的待编对象清掉
+    this.runtime?.refreshScripts(fragment.scripts);
+    this.runtime?.replayWritesFor(only);
+    this.scriptApi?.adoptBundle();
+    // 6. 声音
+    this.loadSounds(registry.bundle);
+    // 7. 用户纹理：新来源的种类登记、预解码
+    const fresh = "userTextures" in delta ? delta.userTextures.list : [];
+    for (const source of fresh) this.userTextureKinds.set(source.name, source.kind);
+    if (fresh.length > 0) pending.push(this.primeUserTextureSources(fresh).then(() => {}));
+    // 8. 媒体 / 音频：只会从假变真，没订阅才订
+    if (fragment.audio) this.subscribeAudio();
+    if (fragment.media && !this.sceneMedia) {
+      pending.push(
+        (this.targetTask ?? Promise.resolve(null)).then((target) =>
+          this.loadMedia(registry.bundle, target?.sceneAssets ?? []),
+        ),
+      );
+    }
+    // 9. GPU：L4 接；本步空钩子
+    this.addGpuObject(fragment, mode);
+    return Promise.all(pending).then(() => {});
+  }
+
+  /** GPU 一步（L4）：渲染器按对象加 / 换图层、draw 与按对象的资源。本步空钩子。 */
+  private addGpuObject(_fragment: ObjectFragment, _mode: "add" | "replace"): void {}
+
+  /** `restructure` 的骨骼回调：当前挂点骨骼名取配置原文的 `attachment`，`override`（允许父排在后面）取 `structure.parents` 是否带这个对象。 */
+  private restructureBone(bundle: SceneBundle, object: number): { name: string | null; override: boolean } {
+    let name: string | null = null;
+    const text = bundle.configs?.[object];
+    if (typeof text === "string") {
+      try {
+        const attachment = (JSON.parse(text) as { attachment?: unknown }).attachment;
+        if (typeof attachment === "string") name = attachment;
+      } catch {
+        // 配置原文总是合法 JSON；万一不是就当没有挂点
+      }
+    }
+    return { name, override: this.structure.parents.some(([item]) => item === object) };
+  }
+
+  /**
+   * 删除生效之后（`flushDestroy` 返回的对象，L3b），按和 `addCompiledObject` 相反的顺序从各处摘掉：声音（停播）→ 文本排版引用（要在状态清表之前取）→
+   * puppet → 关键帧 → 状态按对象的表（`dropObject`）→ 登记表（`removeObject`）→ 最后 `restructure` 一次（被删对象的子对象已成根，组与挂点要重算）。
+   * 脚本已由 `runtime.destroyObjects` 清；用户纹理来源是场景级的、媒体 / 音频订阅是只增的，都不摘。
+   *
+   * **`structural: false` 是本步实际接进删除路径的形态**，登记表与 `restructure` 两步留给 L4（渲染侧按 bundle 现读的消费者还没跟上），审读结论：
+   * - `restructure` 会改活的 bundle 图层的 `group` / `subtree` / `attachment`，渲染器 draw 时读它们（`render/structure.ts` 按 `layer.group == null` 选顶层、
+   *   `groupOf` / `groupDepth` 找组的 RT）：删组之后子层的 `group` 变 null，会被当顶层去画、而它们的 op 指向已释放的组合成 RT；
+   * - `registry.removeObject` 从 `bundle.layers` 摘掉图层，`ScriptApi.newLayerId` 按 `bundle.layers` 的 id 最大值取新 id，删掉最大 id 的层会让它被重新发出
+   *   （WPE 的 id 不回收）；`findLayer` / `getLayerByID` 等也按 `bundle.layers` 找。
+   * 其余各处（状态的按对象的表、关键帧、puppet、文本排版）渲染侧读它们都带空值保护、且 `releaseRemoved` 在同一帧下一次 `sync` 先于任何读取释放被删对象的 draw。
+   */
+  private removeObjectEverywhere(objects: readonly number[], options: { structural?: boolean } = {}): void {
+    if (objects.length === 0) return;
+    const { structural = true } = options;
+    const set = new Set(objects);
+    const state = this.scriptState;
+    this.sceneSounds?.remove(objects);
+    if (this.sceneTexts && state)
+      for (const object of objects) {
+        const layout = state.texts.get(object);
+        if (layout) this.sceneTexts.releaseLayout(layout);
+      }
+    this.scenePuppets?.remove(set);
+    this.sceneAnimations?.removeObjects(set);
+    if (state) for (const object of objects) state.dropObject(object);
+    if (!structural) return;
+    const registry = this.registry;
+    if (!registry) return;
+    for (const object of objects) registry.removeObject(object);
+    if (state) registry.restructure(state, (item) => this.restructureBone(registry.bundle, item));
   }
 
   private requestScriptReload(): void {
@@ -1245,9 +1392,17 @@ export class SceneHost {
    * 加载时对 bundle 的属性来源按当前属性值预先解码，全部完成（或失败、回缺省）才建场景，第一帧就是用户图（P11b 步骤 2）。值只认字符串，别的
    * 类型（`slider` 之类）当空串（缺省纹理）。没有用户纹理的 bundle 不碰来源表。封面来源（P11c）不在这里（媒体模块交图），快捷方式（P11d）的值是键、图标经 `shortcutIcon` 取。
    */
-  private async primeUserTextures(bundle: SceneBundle): Promise<boolean> {
-    // 手写的测试 bundle 可能没有这个表；封面来源（P11c）由媒体模块经 `provide` 交图，不在这里。快捷方式（P11d）的值是后端给的键，图标经 `shortcutIcon` 取
-    const sources = (bundle.userTextures ?? []).filter((source) => source.kind !== "system");
+  private primeUserTextures(bundle: SceneBundle): Promise<boolean> {
+    // 手写的测试 bundle 可能没有这个表
+    return this.primeUserTextureSources(bundle.userTextures ?? []);
+  }
+
+  /**
+   * 按来源列表预解码（L3b：运行中接入对象带来的新来源也走它）。封面来源（P11c）由媒体模块经 `provide` 交图，不在这里。
+   * 快捷方式（P11d）的值是后端给的键、图标经 `shortcutIcon` 取。
+   */
+  private async primeUserTextureSources(list: readonly UserTextureSource[]): Promise<boolean> {
+    const sources = list.filter((source) => source.kind !== "system");
     if (!sources.length) return true;
     const limit = this.options.userTexturePrimeTimeoutMs ?? USER_TEXTURE_PRIME_TIMEOUT_MS;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1581,6 +1736,7 @@ export class SceneHost {
     this.pendingAnimations = null;
     this.pendingPuppets = null;
     this.bundle = null;
+    this.registry = null;
     this.closeCompileSession();
     this.scriptState = null;
     this.scriptNeedsFullApply = true;
@@ -1845,8 +2001,11 @@ export class SceneHost {
           puppets.refresh(stateSink(state));
           this.scenePuppets = puppets;
           // 运行中属性写进状态时同步交给来源表解码（P11b 步骤 2）；解码完成再经 `onUserTextureReady` 标脏
-          const kinds = new Map((bundle.userTextures ?? []).map((source) => [source.name, source.kind] as const));
-          state.onUserTexture = (name, value) => this.userTextures.setValue(name, value, kinds.get(name));
+          this.userTextureKinds = new Map(
+            (bundle.userTextures ?? []).map((source) => [source.name, source.kind] as const),
+          );
+          state.onUserTexture = (name, value) =>
+            this.userTextures.setValue(name, value, this.userTextureKinds.get(name));
           // 预解码超时：建场景时这些槽用的是缺省纹理，超时后才解完的那几个在建场景前的 `onReady` 找不到状态、没标脏，这里补标，第一次 `sync` 换上
           if (!primed)
             for (const source of bundle.userTextures ?? [])
@@ -1856,6 +2015,8 @@ export class SceneHost {
           this.drawingBundle = bundle;
           this.scriptBundle = bundle;
           this.scriptState = state;
+          // 登记表跟着这份 bundle（L3b）：换场景 / 重编译时换新的
+          this.registry = new SceneRegistry(bundle);
           // 新建对象编进了 bundle（P6d3b）：脚本条目换成新 bundle 里的（常量目标等由编译填好）、API 的待编对象清掉、分配器对齐
           syncAllocator(this.allocator, bundle);
           this.runtime?.refreshScripts(bundle.scripts.list);
@@ -1981,6 +2142,7 @@ export class SceneHost {
     this.pendingPuppets = null;
     this.runtime?.destroy();
     this.runtime = null;
+    this.registry = null;
     this.scriptApi = null;
     this.textureCache.clear();
     this.closeCompileSession();

@@ -733,6 +733,17 @@ export class ScriptRuntime {
   replayWrites(): void {
     for (const { target, value } of this.writes.values()) this.options.write(target, value, "script-replay");
   }
+  /**
+   * 只重放目标在这些对象上的写入（L3b，键 `objects/<i>/` 前缀）：新编的对象换上定型后的条目后，把它建出以来脚本写下的值再写一遍。
+   * 顺序同 `replayWrites`（写入表的插入顺序）。
+   */
+  replayWritesFor(objects: ReadonlySet<number>): void {
+    if (objects.size === 0) return;
+    for (const [key, { target, value }] of this.writes) {
+      const match = /^objects\/(\d+)\//.exec(key);
+      if (match && objects.has(Number(match[1]))) this.options.write(target, value, "script-replay");
+    }
+  }
   rememberWrite(target: ScriptTarget, value: ScriptValue): void {
     this.writes.set(targetKey(target), { target, value });
   }

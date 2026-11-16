@@ -123,8 +123,13 @@ interface Track {
   readonly def: SceneAnimation;
   /** 每个 `cN` 一条；`carryOver` 时关键帧相同的换成旧的（保留整数帧缓存）。 */
   channels: Channel[];
-  /** 时钟主人的下标：`def.parent` 是有效的父（在列表里、自己没有父）时取它，否则自己。 */
-  readonly owner: number;
+  /**
+   * 时钟主人的条目：`def.parent` 是有效的父（在同一批里、自己没有父）时取它，否则自己（L3b：记条目不记下标，增删之后不用重排）。
+   * 建出来的那一刻先指向自己，`add` 在同批的条目都建好之后才换成父。
+   */
+  owner: Track;
+  /** 条目已被 `removeObjects` 摘掉（L3b）：之前给出的控制对象据此作废，方法空操作、读值留在摘掉那一刻。 */
+  dead: boolean;
   /**
    * 自己的时钟（P10b：每条都有）。自己是主人时由它推进、求值；有父的从不推进，求值用主人的，脚本控制（`control`）改的是这个。
    * 丢弃的（`def.inert`）是惰性时钟。
@@ -154,7 +159,7 @@ function writable(target: SceneAnimation["target"]): boolean {
   return kind !== "recompile" && kind !== "unsupported" && kind !== "script-property";
 }
 
-/** 时钟主人的下标：父必须在列表里、不是自己、自己没有父（只有一层，读码第 7 节）；否则用自己的时钟。 */
+/** 时钟主人的下标（在这一批 `list` 里）：父必须在列表里、不是自己、自己没有父（只有一层，读码第 7 节）；否则用自己的时钟。 */
 function ownerOf(list: readonly SceneAnimation[], index: number): number {
   const parent = list[index].parent;
   if (parent === null || !Number.isInteger(parent) || parent === index) return index;
@@ -188,7 +193,8 @@ function sameClock(a: AnimationClockParams, b: AnimationClockParams): boolean {
 }
 
 export class SceneAnimations {
-  private readonly tracks: Track[];
+  /** 条目按登记顺序：整场构造时是 `list` 的顺序，`add` 追加在尾（同整场重编译时新对象排在最后）。原地增删，不换引用。 */
+  private readonly tracks: Track[] = [];
   /** `frame()` 的序号，从 1 起（`Track.advancedAt` 初值 0）。 */
   private serial = 0;
   /** `advance` 的临时输出，复用。 */
@@ -196,23 +202,34 @@ export class SceneAnimations {
   /** 最近派发的事件（探针读），环形。 */
   private readonly recent: AnimationProbeEvent[] = [];
   private recentNext = 0;
-  /** `id` → 下标，`control` 用。 */
-  private readonly byId = new Map<string, number>();
-  /** 已经给出的控制对象（同一条每次返回同一个）。 */
-  private readonly controls = new Map<number, AnimationControl>();
+  /** `id` → 条目，`control` 用（同 `id` 取登记在前的）。 */
+  private readonly byId = new Map<string, Track>();
+  /** 已经给出的控制对象（同一条每次返回同一个），按 `id` 缓存；条目被摘掉时一并删。 */
+  private readonly controls = new Map<string, AnimationControl>();
   private readonly costs = new Float64Array(FRAME_SAMPLES);
   private costCount = 0;
   private costNext = 0;
 
+  /** 整场构造 = 从空开始 `add(整场列表)`（L3b）。 */
   constructor(list: readonly SceneAnimation[]) {
-    this.tracks = list.map((def, index) => {
+    this.add(list);
+  }
+
+  /**
+   * 追加一批条目（L3b：一个对象的关键帧，也是整场构造的做法）：`list` 里联动的 `parent` 是 `list` 内下标（片段的形状，整场时就是表内下标）。
+   * 新条目排在已有的后面，时钟从 0 起，建出的这一帧不求值（`frame` 下一次调时先推进再求值，L0 实测：f=90 读 0.5，f=91 读 dt/2）。
+   * 同一对象已有条目时由调用方先 `removeObjects`（替换）。
+   */
+  add(list: readonly SceneAnimation[]): void {
+    const created = list.map((def, index): Track => {
       const owner = ownerOf(list, index);
       // 子的帧号上限是主人的 length（`hi ≤ len`），缓存按它预分配
       const frames = Math.min(Math.max(0, Math.trunc(list[owner].clock.length)) + 1, PREALLOCATED_FRAMES);
-      return {
+      const track: Track = {
         def,
         channels: def.channels.map((keys) => new Channel(keys, frames)),
-        owner,
+        owner: null as unknown as Track,
+        dead: false,
         // 子的时钟从不推进（P10b），事件也就永远不触发；丢弃的用惰性时钟
         clock: def.inert ? AnimationClock.inert(def.clock.length) : new AnimationClock(def.clock, def.events),
         rate: 1,
@@ -221,10 +238,44 @@ export class SceneAnimations {
         written: false,
         active: def.writes && writable(def.target),
       };
+      return track;
     });
-    this.tracks.forEach((track, index) => {
-      if (!this.byId.has(track.def.id)) this.byId.set(track.def.id, index);
+    created.forEach((track, index) => {
+      track.owner = created[ownerOf(list, index)];
     });
+    for (const track of created) {
+      this.tracks.push(track);
+      if (!this.byId.has(track.def.id)) this.byId.set(track.def.id, track);
+    }
+  }
+
+  /**
+   * 删掉属于这些对象的全部条目（`def.object`，L3b）：之后 `control(id)` 返回 null，已给出的控制对象作废（方法空操作，读值留在摘掉那一刻）。
+   * 联动的主人与子同属一个对象，所以一起走；主人走了而子留下（理论上不会）时子改用自己的时钟。
+   */
+  removeObjects(objects: ReadonlySet<number>): void {
+    if (objects.size === 0) return;
+    const gone = new Set<Track>();
+    for (const track of this.tracks) if (track.def.object !== null && objects.has(track.def.object)) gone.add(track);
+    if (gone.size === 0) return;
+    let write = 0;
+    for (const track of this.tracks) {
+      if (gone.has(track)) {
+        track.dead = true;
+        continue;
+      }
+      if (gone.has(track.owner)) track.owner = track;
+      this.tracks[write++] = track;
+    }
+    this.tracks.length = write;
+    for (const [id, track] of [...this.byId]) {
+      if (!gone.has(track)) continue;
+      this.byId.delete(id);
+      this.controls.delete(id);
+      // 同 id 还有没走的条目：顶上去
+      const other = this.tracks.find((item) => item.def.id === id);
+      if (other) this.byId.set(id, other);
+    }
   }
 
   /** 动画条数。 */
@@ -245,7 +296,7 @@ export class SceneAnimations {
     const tracks = this.tracks;
     for (let i = 0; i < tracks.length; i++) {
       const track = tracks[i];
-      const owner = tracks[track.owner];
+      const owner = track.owner;
       const clock = owner.clock;
       let emitted: AnimationEventDef[] | null = null;
       if (owner.advancedAt !== serial) {
@@ -258,7 +309,11 @@ export class SceneAnimations {
       if (track.active) this.writeTrack(track, clock, state, hooks.sound);
       if (emitted)
         for (const event of emitted) {
-          const record: AnimationEventRecord = { animation: track.owner, object: owner.def.object, json: event.json };
+          const record: AnimationEventRecord = {
+            animation: tracks.indexOf(owner),
+            object: owner.def.object,
+            json: event.json,
+          };
           this.remember(serial, record);
           hooks.event?.(record);
         }
@@ -278,18 +333,17 @@ export class SceneAnimations {
    * 时钟与 `rate` 上，子动画的不影响画面（读码第 7 节），惰性的（丢弃的）`play()` 也无效（`D = 0`）。
    */
   control(id: string): AnimationControl | null {
-    const index = this.byId.get(id);
-    if (index === undefined) return null;
-    let control = this.controls.get(index);
+    const track = this.byId.get(id);
+    if (!track) return null;
+    let control = this.controls.get(id);
     if (!control) {
-      const track = this.tracks[index];
       const clock = track.clock;
       control = {
         get rate() {
           return track.rate;
         },
         set rate(value: number) {
-          track.rate = f(value);
+          if (!track.dead) track.rate = f(value);
         },
         get fps() {
           return f(1 / clock.spf);
@@ -303,14 +357,23 @@ export class SceneAnimations {
         get name() {
           return track.def.name;
         },
-        play: () => clock.play(),
-        pause: () => clock.pause(),
-        stop: () => clock.stop(),
+        // 条目被 `removeObjects` 摘掉之后空操作（L3b）：时钟停在摘掉那一刻，读值给静态值
+        play: () => {
+          if (!track.dead) clock.play();
+        },
+        pause: () => {
+          if (!track.dead) clock.pause();
+        },
+        stop: () => {
+          if (!track.dead) clock.stop();
+        },
         isPlaying: () => clock.isPlaying(),
         getFrame: () => clock.getFrame(),
-        setFrame: (frame: number) => clock.setFrame(frame),
+        setFrame: (frame: number) => {
+          if (!track.dead) clock.setFrame(frame);
+        },
       };
-      this.controls.set(index, control);
+      this.controls.set(id, control);
     }
     return control;
   }
@@ -320,8 +383,7 @@ export class SceneAnimations {
    * 探针 `seek` 之后调。不清事件。
    */
   write(state: AnimationSink, onSound?: AnimationSoundHook): void {
-    for (const track of this.tracks)
-      if (track.active) this.writeTrack(track, this.tracks[track.owner].clock, state, onSound);
+    for (const track of this.tracks) if (track.active) this.writeTrack(track, track.owner.clock, state, onSound);
   }
 
   private writeTrack(track: Track, clock: AnimationClock, state: AnimationSink, onSound?: AnimationSoundHook): void {
@@ -369,10 +431,9 @@ export class SceneAnimations {
    */
   seek(time: number): void {
     const at = Number.isFinite(time) && time > 0 ? f(time) : 0;
-    for (let index = 0; index < this.tracks.length; index++) {
-      const track = this.tracks[index];
+    for (const track of this.tracks) {
       // 只动主人的时钟（子的从不推进）
-      if (track.owner !== index) continue;
+      if (track.owner !== track) continue;
       const clock = track.clock;
       if (clock.flags & PAUSED || !(clock.D > 0)) continue;
       const D = clock.D;
@@ -413,10 +474,10 @@ export class SceneAnimations {
     return {
       frameMs: { mean: round(mean), p95: round(p95), count },
       list: this.tracks.map((track) => {
-        const clock = this.tracks[track.owner].clock;
+        const clock = track.owner.clock;
         return {
           id: track.def.id,
-          owner: track.owner,
+          owner: this.tracks.indexOf(track.owner),
           t: clock.t,
           frame: clock.getFrame(),
           playing: clock.isPlaying(),
