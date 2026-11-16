@@ -1,41 +1,7 @@
 /*
- * 旧主题变量。界面重构 P1 起：
- * - 品牌色（primary / secondary 及其深浅档）与状态色保持原值，--kb-accent 等挂在它们上；
- * - 中性的文字、边框、底色、阴影改指向 tokens.css 的 --kb-*，还没迁的组件也跟着换成中性外观；
- * - 原来对 element-plus 的全局覆盖已删除，element-plus 本身也在界面重构 P9 删除。
+ * 全局规则（body 字体与底色、可选中文本、隐藏滚动条等）。
+ * 旧主题变量 --anime-* 已下线，颜色一律用 tokens.css 的 --kb-*。
  */
-:root {
-  /* 主色调 - 粉紫色系（品牌色，不随 P1 变） */
-  --anime-primary: #ff6b9d;
-  --anime-primary-light: #ff8fb3;
-  --anime-primary-dark: #e8557f;
-
-  /* 辅助色 - 柔和的蓝紫色 */
-  --anime-secondary: #a78bfa;
-  --anime-secondary-light: #c4b5fd;
-  --anime-secondary-dark: #8b5cf6;
-
-  /* 背景色（P1 起中性） */
-  --anime-bg-main: var(--kb-bg);
-  --anime-bg-card: rgba(255, 255, 255, 0.9);
-  --anime-bg-sidebar: var(--kb-bg-sidebar);
-
-  /* 文字颜色（P1 起中性） */
-  --anime-text-primary: var(--kb-fg);
-  --anime-text-secondary: var(--kb-fg-muted);
-  --anime-text-muted: var(--kb-fg-subtle);
-
-  /* 边框和阴影（P1 起中性） */
-  --anime-border: var(--kb-line-strong);
-  --anime-shadow: var(--kb-shadow-md);
-  --anime-shadow-hover: var(--kb-shadow-lg);
-
-  /* 成功/警告/错误 */
-  --anime-success: #10b981;
-  --anime-warning: #f59e0b;
-  --anime-danger: #ef4444;
-  --anime-info: #3b82f6;
-}
 
 /* 全局样式 */
 body {

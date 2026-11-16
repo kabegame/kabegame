@@ -29,7 +29,14 @@ export default defineConfig({
         hover: 'var(--kb-hover)',
         pressed: 'var(--kb-pressed)',
         line: { DEFAULT: 'var(--kb-line)', strong: 'var(--kb-line-strong)' },
-        primary: { DEFAULT: 'var(--kb-primary)', hover: 'var(--kb-primary-hover)', fg: 'var(--kb-primary-fg)' },
+        primary: {
+          DEFAULT: 'var(--kb-primary)',
+          hover: 'var(--kb-primary-hover)',
+          fg: 'var(--kb-primary-fg)',
+          soft: 'var(--kb-primary-soft)',
+        },
+        // 点缀色：第二个色相（渐变的另一端、页面底、投影）
+        secondary: { DEFAULT: 'var(--kb-secondary)', soft: 'var(--kb-secondary-soft)' },
         accent: 'var(--kb-accent)',
         danger: 'var(--kb-danger)',
         success: 'var(--kb-success)',
@@ -79,5 +86,9 @@ export default defineConfig({
   rules: [
     // Drawer 最大宽度规则（所有平台统一使用 500px，使用 !important 确保优先级）
     ['drawer-max-width', { 'max-width': '500px !important' }],
+    // 主色 → 点缀色的渐变（tokens.css 的 --kb-gradient*）。是 background-image，叠在同名的 bg-kb-* 底色之上
+    ['bg-kb-gradient', { 'background-image': 'var(--kb-gradient)' }],
+    ['bg-kb-gradient-hover', { 'background-image': 'var(--kb-gradient-hover)' }],
+    ['bg-kb-gradient-soft', { 'background-image': 'var(--kb-gradient-soft)' }],
   ],
 })

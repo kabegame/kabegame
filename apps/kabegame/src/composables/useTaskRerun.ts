@@ -2,7 +2,6 @@ import { IS_WEB } from "@/env";
 import type { CrawlTask } from "@/stores/crawler";
 import { LOCAL_IMPORT_PLUGIN_ID, WEBPAGE_PLUGIN_ID } from "@/stores/plugins";
 import { useUiStore } from "@/stores/ui";
-import { useCrawlerDrawerStore } from "@/stores/crawlerDrawer";
 import { useCollectDialogsStore } from "@/stores/collectDialogs";
 import { taskConfigFromTask, writeTaskConfig } from "@/composables/taskConfig";
 
@@ -12,7 +11,6 @@ import { taskConfigFromTask, writeTaskConfig } from "@/composables/taskConfig";
  */
 export function useTaskRerun() {
   const uiStore = useUiStore();
-  const crawlerDrawerStore = useCrawlerDrawerStore();
   const collectDialogs = useCollectDialogsStore();
 
   const canRerun = (task: CrawlTask) => {
@@ -24,7 +22,7 @@ export function useTaskRerun() {
   const rerunTask = async (task: CrawlTask) => {
     const userConfig = task.userConfig ?? {};
     if (task.pluginId === WEBPAGE_PLUGIN_ID) {
-      collectDialogs.openWebpage({
+      collectDialogs.openNetwork("webpage", {
         userConfig: { ...userConfig },
         outputDir: task.outputDir,
         httpHeaders: { ...(task.httpHeaders ?? {}) },
@@ -35,7 +33,7 @@ export function useTaskRerun() {
       return;
     }
     if (task.pluginId === LOCAL_IMPORT_PLUGIN_ID) {
-      collectDialogs.openLocalImport({
+      collectDialogs.openLocal("folder", {
         paths: Array.isArray(userConfig.paths) ? [...userConfig.paths] : [],
         recursive: typeof userConfig.recursive === "boolean" ? userConfig.recursive : undefined,
         copyToDir: userConfig.copy_to_dir === true,
@@ -45,9 +43,9 @@ export function useTaskRerun() {
       });
       return;
     }
-    // 通路 1：先把任务参数写进全局 taskConfig，再打开收集弹窗
+    // 通路 1：先把任务参数写进全局 taskConfig，再打开「网络 → 插件」
     await writeTaskConfig(taskConfigFromTask(task));
-    crawlerDrawerStore.open();
+    collectDialogs.openNetwork("plugin");
   };
 
   return { canRerun, rerunTask };

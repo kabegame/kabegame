@@ -9,19 +9,18 @@
 </template>
 
 <script setup lang="ts">
+/** 紧凑档「开始收集」的选择层：本地 / 网络两组（Web 没有本地，那时调用方直接打开网络、不弹这一层） */
 import { computed } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { FolderOpen, Globe, Link2, Monitor } from "@lucide/vue";
-import { IS_ANDROID, IS_WEB } from "@/env";
+import { FolderOpen, Globe } from "@lucide/vue";
 import OptionPickerDrawer from "@/components/common/OptionPickerDrawer.vue";
 import type { OptionItem } from "@/components/common/OptionPickerDrawer.vue";
+import { LOCAL_SOURCES, type CollectGroup } from "@/stores/collectDialogs";
 
 interface Props {
   modelValue: boolean;
   title?: string;
 }
-
-type CollectSource = "local" | "remote" | "webpage" | "wallpaper";
 
 const props = withDefaults(defineProps<Props>(), {
   title: undefined,
@@ -31,11 +30,11 @@ const resolvedTitle = computed(() => props.title ?? t("gallery.chooseCollectMeth
 
 const emit = defineEmits<{
   (e: "update:modelValue", v: boolean): void;
-  (e: "select", source: CollectSource): void;
+  (e: "select", group: CollectGroup): void;
 }>();
 
 const sourceOptions = computed<OptionItem[]>(() => [
-  ...(!IS_WEB
+  ...(LOCAL_SOURCES.length
     ? [
         {
           id: "local",
@@ -46,35 +45,15 @@ const sourceOptions = computed<OptionItem[]>(() => [
       ]
     : []),
   {
-    id: "remote",
+    id: "network",
     title: t("gallery.network"),
     desc: t("gallery.remoteDesc"),
     icon: Globe,
   },
-  ...(!IS_WEB
-    ? [
-        {
-          id: "webpage",
-          title: t("gallery.webpage"),
-          desc: t("gallery.webpageDesc"),
-          icon: Link2,
-        },
-      ]
-    : []),
-  ...(!IS_WEB && !IS_ANDROID
-    ? [
-        {
-          id: "wallpaper",
-          title: t("gallery.wallpaper"),
-          desc: t("gallery.wallpaperDesc"),
-          icon: Monitor,
-        },
-      ]
-    : []),
 ]);
 
 const handleSelect = (id: string) => {
-  if (id === "local" || id === "remote" || id === "webpage" || id === "wallpaper") {
+  if (id === "local" || id === "network") {
     emit("select", id);
   }
 };

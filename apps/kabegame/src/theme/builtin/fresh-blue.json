@@ -1,0 +1,20 @@
+{
+  "id": "fresh-blue",
+  "name": {
+    "default": "Fresh Blue",
+    "zh": "清爽蓝",
+    "zhtw": "清爽藍",
+    "en": "Fresh Blue",
+    "ja": "爽やかブルー",
+    "ko": "산뜻한 블루"
+  },
+  "vars": {
+    "--kb-primary": "#3d9bff",
+    "--kb-primary-hover": "#2582e6",
+    "--kb-secondary": "#4fd1c5",
+    "--kb-fg": "#15324a",
+    "--kb-fg-regular": "#29475f",
+    "--kb-fg-muted": "#2b7d93",
+    "--kb-fg-subtle": "#88c4cf"
+  }
+}

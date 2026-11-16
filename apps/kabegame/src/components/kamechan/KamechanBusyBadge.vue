@@ -32,7 +32,7 @@ const badgeStyle = computed(() => ({
 
 <style scoped>
 .kamechan-busy-badge {
-  --busy-color: var(--anime-primary);
+  --busy-color: var(--kb-primary);
 
   position: absolute;
   left: 112px;
@@ -47,12 +47,12 @@ const badgeStyle = computed(() => ({
   place-items: center;
   cursor: pointer;
   pointer-events: auto;
-  color: var(--anime-primary-dark);
+  color: var(--kb-primary-hover);
   font-size: 11px;
   font-weight: 800;
   line-height: 1;
   background: transparent;
-  box-shadow: 0 6px 18px rgba(255, 107, 157, 0.45);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--kb-primary) 45%, transparent);
 }
 
 .kamechan-busy-badge::before {
@@ -85,9 +85,9 @@ const badgeStyle = computed(() => ({
 }
 
 .kamechan-busy-badge.is-failure {
-  --busy-color: var(--anime-danger);
+  --busy-color: var(--kb-danger);
 
-  color: var(--anime-danger);
+  color: var(--kb-danger);
   box-shadow: 0 6px 18px rgba(239, 68, 68, 0.4);
 }
 

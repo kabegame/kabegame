@@ -110,7 +110,7 @@
               :key="record.id"
               class="box-border cursor-pointer rounded-kb-lg border border-solid border-kb-line px-4 py-3.5 shadow-kb-sm transition-[box-shadow,border-color] duration-150 hover:border-kb-line-strong hover:shadow-kb-md"
               :class="cardSurfaceClass"
-              @click="goImages(record.host)"
+              @click="openDetailDialog(record)"
               @contextmenu.prevent="openRecordContextMenu($event, record)"
             >
               <div class="flex items-center gap-3">
@@ -132,9 +132,16 @@
                     {{ record.rootUrl }}
                   </div>
                 </div>
-                <Tag size="sm" class="shrink-0 tabular-nums">
-                  {{ $t("surf.imageCount") }} {{ surfCounts.countOf(record.host) }}
-                </Tag>
+                <button
+                  type="button"
+                  class="inline-flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-kb-sm border-0 bg-kb-fill px-2 text-[12px] font-500 tabular-nums text-kb-fg-muted transition-colors hover:bg-kb-hover hover:text-kb-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-kb-ring"
+                  :title="$t('surf.viewDownloadedImages')"
+                  :aria-label="$t('surf.viewDownloadedImages')"
+                  @click.stop="goImages(record.host)"
+                >
+                  <ImageIcon class="size-3.5" />
+                  {{ surfCounts.countOf(record.host) }}
+                </button>
               </div>
               <div class="mt-2.5 flex items-center justify-between gap-2 text-[12px] text-kb-fg-muted">
                 <span class="min-w-0 truncate" :title="formatAbsolute(record.lastVisitAt)">
@@ -152,8 +159,14 @@
                   <Button size="sm" variant="ghost" @click.stop="openDetailDialog(record)">
                     {{ $t("surf.recordDetails") }}
                   </Button>
-                  <Button size="sm" variant="primary" @click.stop="handleRecordClick(record)">
-                    {{ isActiveSurf(record) ? $t("surf.openSurf") : $t("surf.startSurf") }}
+                  <Button
+                    size="icon-sm"
+                    variant="primary"
+                    :title="isActiveSurf(record) ? $t('surf.openSurf') : $t('surf.startSurf')"
+                    :aria-label="isActiveSurf(record) ? $t('surf.openSurf') : $t('surf.startSurf')"
+                    @click.stop="handleRecordClick(record)"
+                  >
+                    <ArrowRight />
                   </Button>
                 </div>
               </div>
@@ -177,6 +190,7 @@
       v-model:open="detailOpen"
       :title="detailRecord?.name || detailRecord?.host || $t('surf.recordDetails')"
       :width="600"
+      @open-auto-focus="focusDialogItself"
       @close-auto-focus="resetDetailDialog"
     >
       <div v-if="detailRecord" class="flex flex-col gap-4 [--kb-field-label-width:96px]">
@@ -233,7 +247,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from "vue";
 import { useRouter } from "vue-router";
-import { ArrowRight, Check, CircleHelp, Copy, History, LayoutGrid, Trash2 } from "@lucide/vue";
+import { ArrowRight, Check, CircleHelp, Copy, History, Image as ImageIcon, LayoutGrid, Trash2 } from "@lucide/vue";
 import { kameMessage } from "@/utils/kameMessage";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { HeaderFeatureId } from "@/stores/header";
@@ -249,7 +263,7 @@ import PluginPickerField from "@/components/PluginPickerField.vue";
 import { formatAbsoluteTime, formatRelativeTime } from "@/utils/relativeTime";
 import { IS_ANDROID } from "@/env";
 import { swimImageUrl } from "@/assets/illustrations";
-import { Autocomplete, Button, Dialog, Field, Input, Tag, Textarea, Tooltip } from "@/components/ui";
+import { Autocomplete, Button, Dialog, Field, Input, Textarea, Tooltip } from "@/components/ui";
 import { messageBox } from "@/components/ui/messageBox";
 
 const { t } = useI18n();
@@ -492,6 +506,12 @@ async function openDetailDialog(record: SurfRecord) {
   } catch (e: any) {
     kameMessage.error(e?.message || String(e) || t("surf.operationFailed"));
   }
+}
+
+/** 详情弹窗打开时焦点落在弹窗本身，不进名称框：一进来就是输入态会诱导用户改名 */
+function focusDialogItself(e: Event) {
+  e.preventDefault();
+  (e.target as HTMLElement | null)?.focus();
 }
 
 function resetDetailDialog() {
@@ -768,6 +788,8 @@ onMounted(async () => {
   width: 92%;
   max-width: 100%;
   display: grid;
+  /* 列宽锁在列表宽度内：默认 auto 列会被长地址撑开，卡片两侧被外层裁掉 */
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   /* 卡片悬停阴影不被滚动容器裁掉 */
   padding: 2px 0;

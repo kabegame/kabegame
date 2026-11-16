@@ -42,7 +42,7 @@
     <!-- WPE 壁纸：预览图即作者提供的动图 / 静图，网格不加载入口视频 / 页面 -->
     <div v-else-if="isWpe" class="wpe-video-badge" aria-hidden="true">
       <Play v-if="isWpeVideo" class="size-2.5 fill-current" />
-      <Monitor v-else class="size-3" />
+      <WpeLogo v-else class="size-3" />
       <span>{{ wpeBadgeText }}</span>
     </div>
     <!-- 视频标识：GIF 等不可控形态，仅作为静态指示 -->
@@ -75,7 +75,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, watch } from "vue";
 import { ref, toRef } from "vue";
-import { Monitor, Pause, Play, TriangleAlert } from "@lucide/vue";
+import { Pause, Play, TriangleAlert } from "@lucide/vue";
+import WpeLogo from "@/components/icons/WpeLogo.vue";
 import { Tooltip } from "@/components/ui";
 import type { ImageInfo, ImagePrefer, ImageSourceTag } from "../../types/image";
 import ImageContent from "./ImageContent.vue";

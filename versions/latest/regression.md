@@ -1,5 +1,38 @@
 # v4.7.0 regression
 
+## 颜色主题与 `--anime-*` 下线
+
+2026-11-16 macOS dev。设置「外观」第一行「颜色主题」，五个内置主题（`apps/kabegame/src/theme/builtin/*.json`）。主题 JSON 只写 `--kb-*` 白名单里的变量，`applyColorTheme` 写到 `<html>` 行内样式；设置键 `colorTheme` 走 localStorage 后端，主窗口 bootstrap 先应用一次、`App.vue` 跟随。`tokens.css` 的 `:root` 即默认主题「动漫粉」。颜色分主色 `--kb-primary` 与点缀色 `--kb-secondary` 两条线，主题只写这两条线和四档文字；填充四阶、浅阶、渐变、页面底、悬停、分隔线、阴影都由它们 `color-mix`。主按钮与计数徽标改用主色 → 点缀色渐变，侧栏选中项是两个浅阶的渐变。第一版只有主色一条线，高级灰整片发灰（像色盲模式），第二版加了点缀色。`--anime-*` 全部下线：品牌色与状态色直接定义成 `--kb-*`，10 处引用（下拉刷新、亀ちゃん、可拖动分隔条、图片缺失、过滤树计数）迁到 `--kb-*`，硬编码的粉色投影改成 `color-mix`；插件描述 iframe 注入的五个 `--anime-*` 是插件约定，保留。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T0 检查与单测 | macOS | vue-tsc；`src/theme/colorTheme.test.ts` | 0 error；全过 | 2026-11-16 Claude：0 error；7 个用例全过（id 唯一与顺序、基色与五种语言的名字、只写 `--kb-*`、白名单 / 缺基色 / 缺 default 名字被拒、回落默认主题、写到 `<html>`） |
+| [x] | T1 默认外观不变 | macOS dev | 升级后不选主题直接打开 | `data-kb-theme="anime-pink"`，粉色外观与原来一致 | 2026-11-16 Claude：`--kb-primary` 为 `#ff6b9d`，`--kb-hover` / `--kb-line` 为基于它的 `color-mix`；截图与原来一致 |
+| [x] | T2 切换五个主题 | macOS dev | 设置 → 外观 → 颜色主题，依次点五个色样 | 立即整体换色（侧栏选中、主按钮、分段控件、说明文字、底色），选中的色样带外环、名字加粗 | 2026-11-16 Claude：五个依次截图确认；英文名原来在 60px 宽里被截断，改成按内容宽度后完整显示 |
+| [x] | T2b 画廊两个色相 | macOS dev | 五个主题各看一次画廊 | 每个主题都能看出主色与点缀色两个色相：「开始收集」是主色 → 点缀色渐变、侧栏选中有浅渐变底、说明文字与图标是点缀色相、页面底从主色浅阶过渡到点缀色浅阶；高级灰不再整片发灰 | 2026-11-16 Claude：五个画廊截图确认（灰：石板蓝灰 → 香槟金；绿的点缀黄压深到 `#e3b341`，白字在渐变末端可读）；动漫粉与原来的观感一致，只多了粉 → 紫的渐变按钮 |
+| [x] | T3 重启保留 | macOS dev | 选高级灰后整页刷新 | 刷新后仍是高级灰（启动页起就是） | 2026-11-16 Claude：刷新后 `data-kb-theme="premium-gray"`、`--kb-primary` 为 `#5b6472` |
+| [ ] | T4 其它界面 | macOS dev | 选非粉色主题后逛画廊、画册、插件、任务抽屉、对话框、右键菜单、吉祥物忙碌徽标、预览 | 没有残留的粉色（插件详情模板里的强调色也跟主题） | 未逐页走查 |
+| [ ] | T5 Android / Web | Android dev、Web dev | 同 T2、T3 | 同上；Android 下拉刷新的图标颜色跟主题 | 未测 |
+
+## 收集入口收成「本地」「网络」两个
+
+2026-11-16 macOS dev。「开始收集」只剩「本地」「网络」两项，具体来源在对话框顶部的分段里切换（参考原壁纸导入对话框的「本机 / 从 Steam」）：本地 = 文件夹（local-import）/ WPE 壁纸（本机目录探测）；网络 = 插件 / 网页 / Steam。原来的 `CrawlerDialog`、`WebpageCollectDialog`、`LocalImportDialog`、`WallpaperImportDialog` 拆成 `components/collect/` 下的面板（只画正文，经 `defineExpose` 交出 `submit` / `canSubmit` / `submitting` / `hint`，约定见 `panel.ts`），宿主 `CollectLocalDialog` / `CollectNetworkDialog` 画分段与底部按钮，全局唯一挂在 `App.vue`。`stores/collectDialogs.ts` 管开关、各平台可用来源（显隐规则只写在 `LOCAL_SOURCES` / `NETWORK_SOURCES`）、两组各自上次的来源（localStorage `kabegame-collect-local-source` / `kabegame-collect-network-source`）与「再次执行」的初始参数；`stores/crawlerDrawer.ts` 删除。面板每次打开重新挂载（宿主按 `openSeq` 换 key），本次打开内第一次切到才挂载、之后 `v-show` 留着。入口界面（两个对话框、选择收集方式层、紧凑档媒体选择器与它的导入处理）收进全局的 `collect/CollectEntryHost.vue`，页头的 `CollectAction` 与画廊空状态直接调 store（`enter` / `openChooser`），页面不再接 Collect 的 action——自动配置页页头的「开始收集」以前点了没反应，就是因为页面没接。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | C0 检查与单测 | macOS | vue-tsc；`WebpageCollectPanel.test.ts` | 0 error；全过 | 2026-11-16 Claude：0 error；5 个用例全过（新增「成功后 emit done、地址非法时不 emit」） |
+| [x] | C1 页头下拉 | macOS dev | 点画廊页头「开始收集」 | 只有「本地」「网络」两项 | 2026-11-16 Claude：菜单项为 Local / Network。点菜单项后打开对应对话框这一步没点成（用户当时在操作应用），由 C2、C3 经 store 覆盖 |
+| [x] | C2 网络对话框 | macOS dev | 打开「网络」，依次切插件 / 网页 / Steam | 只显示当前来源的表单；插件底部有「保存为配置」+「开始收集」，标题有「运行配置」；网页「开始收集」；Steam 左下是登录 / 选择提示，主按钮「开始导入」，未登录时置灰 | 2026-11-16 Claude：截图确认三种都对。第一次截图 Steam 下仍显示插件表单（`CrawlerTaskForm` 多根节点，`v-show` 不生效），改为每个面板外包一层 div 后正常 |
+| [x] | C3 本地对话框 | macOS dev | 打开「本地」，切到 WPE 壁纸 | 打开即扫描，列出来源与计数，左下「将导入 N 个壁纸」 | 2026-11-16 Claude：列出「官方默认壁纸」19 个 / 18 个可导入，左下提示 18 个 |
+| [x] | C4 记住上次来源 | macOS dev | 切到某个来源后关掉再打开 | 停在上次的来源，localStorage 两个键随之更新；焦点落在选中的分段上 | 2026-11-16 Claude：网络停在 steam / webpage、本地停在 wpe 都对；`document.activeElement` 是选中的分段（原来落在第一个分段，焦点环像「选中」） |
+| [x] | C5 再次执行回填 | macOS dev | `openLocal("folder", { paths, recursive: false })` | 停在文件夹来源、路径列表回填、「开始导入」可点 | 2026-11-16 Claude：经 store 调用，两条路径都在。任务抽屉里的「再次执行」没从界面点 |
+| [ ] | C6 实际提交 | macOS dev | 四种来源各提交一次（文件夹、WPE 壁纸、插件、网页；Steam 要账号） | 任务创建成功、对话框关闭、提示与以前一样 | 未测 |
+| [ ] | C7 插件来源的跳转与保存 | macOS dev | 插件来源点标题的「运行配置」、底部「保存为配置」 | 跳到自动配置页并关掉对话框；保存为配置照旧 | 未测 |
+| [x] | C8 选择收集方式层 | macOS dev | 空图库点「开始收集」（`openChooser("empty_state")`），选「本地」 | 弹「选择收集方式」，两项本地 / 网络；选完选择层关闭、打开「本地」 | 2026-11-16 Claude：经 store 调用后点对话框里的按钮，选择层关、本地对话框开。空图库的按钮本身没点 |
+| [x] | C11 自动配置页的「开始收集」 | macOS dev | 自动配置页页头点「开始收集」→「网络」 | 打开「网络」对话框（以前点了没反应） | 2026-11-16 Claude：真实点击下拉与菜单项，打开 Collect from the web，停在上次的来源 |
+| [ ] | C9 Android | Android dev | 页头「开始收集」→ 本地 / 网络 | 本地直接打开系统选择器（图片 / 视频 / 文件夹）；网络是抽屉，分段只有插件 / 网页，底部按钮跟来源走 | 未测 |
+| [ ] | C10 Web | Web dev | 「开始收集」 | 没有本地；网络只有插件、没有分段；空状态直接打开网络 | 未测 |
+
 ## WPE 壁纸帧率设置
 
 2026-11-16 macOS dev。壁纸设置与预览设置新增「帧率」（整数或「跟随 WPE」，默认 30，范围 10 到显示器最高刷新率）。生效值由 `wpe_web_pull_state` 按调用方窗口取全局 `wpeFps` 或这张图的 `previewSettings.fps`、解析跟随（WPE `config.json` 只读一次）后放进 `general.fps`，垫片经 `applyGeneralProperties` 同时交给网页壁纸与场景宿主；场景宿主 `SceneRenderer.setMaxFps` 就地改节流、粒子遍数与 rope 的 fps，不重新加载。见 `cocs/wpe/WPE_SCENE.md`「帧率」。
@@ -3407,3 +3440,11 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | WD10 单测与检查（WD7–WD9） | Windows | vue-tsc；图片、壁纸组件与壁纸窗口的 vitest；Prettier；9 处变异（丢失 / 骨架 / 缩略层不 ready、懒加载、出错丢层、不推旧层、只认透明度、滑入 800 ms、平铺不跟原图） | 0 error、全过；变异全被抓到 | 2026-11-15 Claude：23 个文件 231 例全过，9 处变异全抓到 |
 | [x] | WD11 桌面加载覆盖层的颜色与语言 | Windows dev，壁纸窗口模式，语言简体中文 | 切到一张场景，看加载期间的覆盖层 | 中文阶段名、墨色文字、白色半透明底，进度条有浅色轨道与粉色填充并走满，计数一行在（以前壁纸窗口没导入 `tokens.css`：黑字、看不见进度条；且一直是英语） | 2026-11-16 Claude：壁纸窗口里临时切到 15310 读算出来的样式，文字 rgb(74,21,75)、底 rgba(255,255,255,0.6)、填充 2% → 100%，阶段「解析场景并编译着色器 → 创建 GPU 渲染管线 → 提交首帧」；窗口背景仍透明；单测覆盖启动语言与 `setting-change` 切换 |
 | [x] | WD12 小场景的覆盖层居中 | Windows dev，图库预览 | 预览一张分辨率很小、放大显示的场景（如 dino_run，13518），看加载中正中那块与失败后底部的红字 | 都在画面正中（以前排版宽度比场景还宽时 grid 被撑开，红字整块偏右、被画布边缘裁掉） | 2026-11-16 Claude：实测场景排版 343×193、那块 480 宽，修前中心偏右 213 px，修后与画面中心重合、离底边 4%；单测断言绝对定位与 translate 对中 |
+
+## 设置弹窗窄窗口导航置顶
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | SN1 窄窗口 | macOS dev，主窗口 800×768 | 打开设置，切到「外观」 | 分类导航在顶部一行（图标 + 名称），选中项压暗；面板占满宽度，「颜色主题」说明不再一词一行；不显示版本号 | 2026-11-16 Claude：CDP 读到导航 `flex-direction: row`，截图确认 |
+| [ ] | SN2 宽窗口与来回拖 | macOS / Windows dev | 窗口从宽拖窄再拖回 | 820px 以上回到左侧导航与底部版本号；切分类、记住上次分类不受影响 | 未测 |
+| [ ] | SN3 更窄时横向滚动 | 桌面 dev | 窗口缩到导航放不下（未进入紧凑布局前） | 导航横向滚动、无滚动条，标签不换行 | 未测 |

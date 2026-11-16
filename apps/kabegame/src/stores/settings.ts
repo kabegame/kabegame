@@ -6,6 +6,7 @@ import { IS_ANDROID, IS_DEV, IS_WEB } from "../env";
 import { guardSuperRequired } from "../utils/superModeGuard";
 import {
   buildSettingsDescriptors,
+  localSettingStorageKey,
   type QuerySettingDescriptor,
   type SettingDescriptor,
   type SettingsHistoryMode,
@@ -98,6 +99,8 @@ export interface AppSettings {
   mcpDisabledCapabilities: string[];
 
   // --- 前端本地偏好（始终走 localStorage，所有平台一致）---
+  /** 颜色主题 id（`src/theme/builtin/*.json` 的 `id`）；不认识的 id 按默认主题显示 */
+  colorTheme: string;
   /** 应用内背景图开关 */
   appBackgroundEnabled: boolean;
   /** 应用内背景图模糊半径（px） */
@@ -159,7 +162,6 @@ export type AppSettingKey = keyof AppSettings;
 export type ImageClickAction = AppSettings["imageClickAction"];
 export type { SettingsSaveOptions, SettingsHistoryMode };
 
-const LOCAL_STORAGE_PREFIX = "kabegame-setting-";
 const descriptors = buildSettingsDescriptors();
 
 export interface SettingsQueryAdapter {
@@ -274,7 +276,7 @@ export const useSettingsStore = defineStore("settings", () => {
     if (!descriptor) continue;
 
     if (descriptor.backend === "localStorage") {
-      const storageKey = `${LOCAL_STORAGE_PREFIX}${String(key)}`;
+      const storageKey = localSettingStorageKey(key);
       const localRef = useLocalStorage(storageKey, descriptor.defaultValue as any, { mergeDefaults: true });
       localRefs[key] = localRef;
       (values as any)[key] = localRef.value;

@@ -2,6 +2,7 @@
   <!-- embedded：弹窗正文去掉了内边距，左导航 + 右面板贴边，底部两角跟随对话框的圆角裁切；
        固定高度，切换分类时弹窗不跳动 -->
   <div
+    ref="rootRef"
     class="box-border w-full overflow-hidden"
     :class="
       embedded ? 'h-[min(620px,72dvh)] rounded-b-kb-lg border-0 border-t border-solid border-kb-line' : 'h-full p-5'
@@ -21,31 +22,40 @@
         @action="handleSettingsAction"
       />
 
-      <div class="flex min-h-0 flex-1">
-        <!-- 左导航：中性选中（压暗的底 + 正文色），强调色只落在选中项的图标上 -->
+      <div class="flex min-h-0 flex-1" :class="navOnTop ? 'flex-col' : ''">
+        <!-- 左导航：中性选中（压暗的底 + 正文色），强调色只落在选中项的图标上；
+             容器窄时（见 navOnTop）改成顶部一行横向标签，放不下就横向滚动，版本号不显示 -->
         <nav
           v-if="!isCompact"
-          class="box-border flex w-[200px] flex-none flex-col gap-0.5 overflow-y-auto border-0 border-r border-solid border-kb-line px-2 py-2.5"
+          class="settings-nav box-border flex flex-none gap-0.5 border-0 border-solid border-kb-line"
+          :class="
+            navOnTop
+              ? 'flex-row overflow-x-auto border-b px-3 py-2'
+              : 'w-[200px] flex-col overflow-y-auto border-r px-2 py-2.5'
+          "
           :aria-label="$t('settings.title')"
         >
           <button
             v-for="category in settingsCategories"
             :key="category.name"
             type="button"
-            class="m-0 box-border flex h-9 w-full flex-none cursor-pointer items-center gap-2.5 rounded-kb-md border-0 px-3 text-left text-[13.5px] [font-family:inherit] outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-kb-ring [&_svg]:size-[17px] [&_svg]:shrink-0"
-            :class="
+            class="m-0 box-border flex h-9 flex-none cursor-pointer items-center gap-2.5 rounded-kb-md border-0 px-3 text-left text-[13.5px] [font-family:inherit] outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-kb-ring [&_svg]:size-[17px] [&_svg]:shrink-0"
+            :class="[
+              navOnTop ? 'whitespace-nowrap' : 'w-full',
               activeTab === category.name
                 ? 'bg-kb-pressed font-600 text-kb-fg [&_svg]:text-kb-accent'
-                : 'bg-transparent font-400 text-kb-fg-muted hover:bg-kb-hover hover:text-kb-fg'
-            "
+                : 'bg-transparent font-400 text-kb-fg-muted hover:bg-kb-hover hover:text-kb-fg',
+            ]"
             :aria-current="activeTab === category.name ? 'page' : undefined"
             @click="activeTab = category.name"
           >
             <component :is="category.icon" />
-            <span class="min-w-0 truncate">{{ category.label }}</span>
+            <span :class="navOnTop ? '' : 'min-w-0 truncate'">{{ category.label }}</span>
           </button>
-          <div class="flex-1" />
-          <div class="px-3 pb-1.5 text-[11px] text-kb-fg-subtle">Kabegame {{ appVersion }}</div>
+          <template v-if="!navOnTop">
+            <div class="flex-1" />
+            <div class="px-3 pb-1.5 text-[11px] text-kb-fg-subtle">Kabegame {{ appVersion }}</div>
+          </template>
         </nav>
 
         <div v-if="isCompact && !mobileDetailOpen" class="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3">
@@ -73,7 +83,7 @@
           v-if="!isCompact || mobileDetailOpen"
           v-loading="showLoading"
           class="settings-panel min-h-[120px] min-w-0 flex-1 overflow-auto"
-          :class="embedded ? 'px-9 pb-7 pt-5.5' : 'px-4 pb-6 pt-0'"
+          :class="embedded ? (navOnTop ? 'px-6 pb-6 pt-4' : 'px-9 pb-7 pt-5.5') : 'px-4 pb-6 pt-0'"
         >
           <!-- 行内的长路径按面板宽度的比例封顶（见 .setting-rotation-path），需要面板作容器 -->
           <div
@@ -140,6 +150,9 @@
               :title="$t('settings.categoryAppearance')"
               :transparent="settingsStore.values.appBackgroundEnabled"
             >
+              <SettingRow :label="$t('settings.colorTheme')" :description="$t('settings.colorThemeDesc')">
+                <ColorThemeSetting />
+              </SettingRow>
               <SettingRow
                 v-if="!IS_ANDROID"
                 :label="isHorizontal ? $t('settings.galleryRows') : $t('settings.galleryColumns')"
@@ -430,7 +443,7 @@
 import { ref, onMounted, onActivated, computed, watch } from "vue";
 import { ChevronRight, Download, Image as ImageIcon, Palette, Puzzle, SlidersHorizontal, Wrench } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
-import { useLocalStorage } from "@vueuse/core";
+import { useElementSize, useLocalStorage } from "@vueuse/core";
 import { kameMessage } from "@/utils/kameMessage";
 import { invoke } from "@/api/rpc";
 import PageHeader from "@/components/common/PageHeader.vue";
@@ -463,6 +476,7 @@ import WpeWallpaperSettings from "@/components/settings/items/WpeWallpaperSettin
 import DownloadIntervalSetting from "@/components/settings/items/DownloadIntervalSetting.vue";
 import GalleryGridColumnsSetting from "@/components/settings/items/GalleryGridColumnsSetting.vue";
 import GalleryPageSizeSetting from "@/components/settings/items/GalleryPageSizeSetting.vue";
+import ColorThemeSetting from "@/components/settings/items/ColorThemeSetting.vue";
 import WallpaperRotationEnabledSetting from "@/components/settings/items/WallpaperRotationEnabledSetting.vue";
 import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSetting.vue";
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
@@ -492,6 +506,11 @@ const { embedded } = props;
 const { t } = useI18n();
 const uiStore = useUiStore();
 const isCompact = computed(() => uiStore.isCompact);
+/** 整体宽度不够放「200px 左导航 + 面板」时，导航挪到顶部（窄窗口里的设置弹窗） */
+const NAV_ON_TOP_BELOW = 820;
+const rootRef = ref<HTMLElement | null>(null);
+const { width: rootWidth } = useElementSize(rootRef);
+const navOnTop = computed(() => !isCompact.value && rootWidth.value > 0 && rootWidth.value < NAV_ON_TOP_BELOW);
 const appVersion = computed(() => APP_VERSION ?? "");
 
 const { isPlasma } = useDesktop();
@@ -789,6 +808,10 @@ onActivated(async () => {
 .setting-rotation-path,
 .setting-current-wallpaper-path {
   max-width: min(460px, 70cqw);
+}
+
+.settings-nav {
+  scrollbar-width: none;
 }
 
 .settings-panel {

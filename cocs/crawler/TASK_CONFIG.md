@@ -50,17 +50,17 @@ const taskConfigRevision = ref(0); // 仅外部写入递增
 function setTaskConfig(cfg: TaskConfig | null) { taskConfig.value = cfg; taskConfigRevision.value++; }
 ```
 
-`CrawlerDialog` 对来源无感：它不接收 props 配置、不读 lastRun、不区分入口，表单控件直接绑定
+插件表单（`CrawlerTaskForm`，挂在「网络」对话框 `collect/CollectNetworkDialog` 的插件来源下）对来源无感：它不接收 props 配置、不读 lastRun、不区分入口，表单控件直接绑定
 `crawlerStore.taskConfig` 的字段，用户编辑即就地修改全局对象——所以关闭再打开「自然就是上次的值」。
 
 四条通路：
 
 | 通路 | 入口 | 做法 |
 | --- | --- | --- |
-| 1 | 任务「再次执行」（抽屉右键 / 任务详情页 header） | `await writeTaskConfig(taskConfigFromTask(task))` 再 `crawlerDrawerStore.open()`；两处共用 `useTaskRerun` |
-| 2 | 其他任何方式直接打开 | 不写，直接 `open()` |
+| 1 | 任务「再次执行」（抽屉右键 / 任务详情页 header） | `await writeTaskConfig(taskConfigFromTask(task))` 再 `collectDialogs.openNetwork("plugin")`；两处共用 `useTaskRerun` |
+| 2 | 其他任何方式直接打开（「开始收集 → 网络」停在上次的来源） | 不写，直接 `openNetwork()` |
 | 3 | 首次打开、无上次值 | 同 2（`taskConfig` 为 `null`，弹窗只显示插件选择器） |
-| 4 | 自动配置卡片「以此配置运行」 | `await writeTaskConfig(taskConfigFromRunConfig(cfg))` 再 `open()` |
+| 4 | 自动配置卡片「以此配置运行」 | `await writeTaskConfig(taskConfigFromRunConfig(cfg))` 再 `openNetwork("plugin")` |
 
 通路 4 **不写配置 id、任务不关联该配置、也不回存原配置**：它只是把该配置的 task 部分当作参数初值；
 要改原配置走卡片「更多 → 编辑」。
@@ -129,11 +129,11 @@ writeTaskConfig(input)  // 读插件定义 + fetchPluginUserDefault，整体替�
 
 | 位置 | 职责 |
 | --- | --- |
-| `apps/kabegame/src/components/CrawlerDialog.vue` | 壳：桌面 `ElDialog` / 紧凑 `AndroidDrawer`、header 链接、footer 按钮 |
+| `apps/kabegame/src/components/collect/CollectNetworkDialog.vue` | 「网络」壳：桌面 `Dialog` / 紧凑 `AndroidDrawer`、来源分段（插件 / 网页 / Steam）、插件来源的 header 链接与「保存为配置」、footer 按钮 |
 | `apps/kabegame/src/components/crawler/CrawlerTaskForm.vue` | 表单主体、新建输出画册、保存为配置、提交 |
 | `apps/kabegame/src/components/crawler/PluginConfigForm.vue` | 插件变量区（UI 格式 ↔ 后端格式） |
 | `apps/kabegame/src/composables/taskConfig.ts` | `writeTaskConfig` / 优先级纯函数 / 翻译函数 |
-| `apps/kabegame/src/stores/crawlerDrawer.ts` | 只剩 `visible` / `open()` / `close()` |
+| `apps/kabegame/src/stores/collectDialogs.ts` | 两个收集对话框的开关、各平台可用来源、上次的来源（localStorage）、再次执行的初始参数 |
 | `apps/kabegame/src/stores/crawler.ts` | `taskConfig` / `taskConfigRevision` / `RunConfig` 任务参数与实时并发命令 |
 
 ## 8. 失败重试

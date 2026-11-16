@@ -1,0 +1,20 @@
+{
+  "id": "anime-pink",
+  "name": {
+    "default": "Anime Pink",
+    "zh": "动漫粉",
+    "zhtw": "動漫粉",
+    "en": "Anime Pink",
+    "ja": "アニメピンク",
+    "ko": "애니 핑크"
+  },
+  "vars": {
+    "--kb-primary": "#ff6b9d",
+    "--kb-primary-hover": "#e8557f",
+    "--kb-secondary": "#a78bfa",
+    "--kb-fg": "#4a154b",
+    "--kb-fg-regular": "#5e2a63",
+    "--kb-fg-muted": "#7c3aed",
+    "--kb-fg-subtle": "#a78bfa"
+  }
+}

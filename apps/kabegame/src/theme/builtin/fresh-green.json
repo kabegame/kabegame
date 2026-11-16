@@ -1,0 +1,20 @@
+{
+  "id": "fresh-green",
+  "name": {
+    "default": "Fresh Green",
+    "zh": "清新绿",
+    "zhtw": "清新綠",
+    "en": "Fresh Green",
+    "ja": "さわやかグリーン",
+    "ko": "싱그러운 그린"
+  },
+  "vars": {
+    "--kb-primary": "#2fb380",
+    "--kb-primary-hover": "#24996b",
+    "--kb-secondary": "#e3b341",
+    "--kb-fg": "#163d2c",
+    "--kb-fg-regular": "#2a5442",
+    "--kb-fg-muted": "#3a8a5f",
+    "--kb-fg-subtle": "#9bc9a8"
+  }
+}

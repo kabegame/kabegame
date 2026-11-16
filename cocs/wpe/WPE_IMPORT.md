@@ -118,8 +118,8 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 
 ## 四、收集入口与内建任务
 
-「开始收集」菜单新增第四项 **壁纸**（桌面端；Web / Android 隐藏；macOS / Linux 入口仍在，但 `platform_supported` 为 false，
-自动发现为空，只剩「添加文件夹」）。对话框 `WallpaperImportDialog`
+入口是「开始收集 → 本地」对话框顶部的 **WPE 壁纸** 来源（桌面端；Web / Android 隐藏；macOS / Linux 入口仍在，但 `platform_supported` 为 false，
+自动发现为空，只剩「添加文件夹」；从 Steam 拉取在「网络 → Steam」，见 [WPE_STEAM.md](WPE_STEAM.md)）。面板 `collect/WpeLocalPanel`
 打开即调 `wpe_scan`，按三类来源显示「N 个壁纸 / M 个可导入 / 视频 v · 网页 w / K 个已导入」
 （可导入 = 已支持类型且未入库；类型分布为 0 的项省略），默认勾选有待导入项的来源；
 「添加文件夹」经 `wpe_recognize_dir` 识别后追加。确认后提交内建任务 `wpe-import`
@@ -1064,7 +1064,7 @@ Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网�
 - 预览放大：`apps/kabegame/src/composables/usePanzoomPreview.ts`（`startPan` / `endPan`、拖过之后的点击）、`components/wallpaper/WallpaperPointerOverlay.vue`
   （平移规则）、`WallpaperPreviewCanvas.vue`（`zoom` 的 provide、截取区域求交）、`wpeSceneStyle.ts` 的 `sceneDisplayScale`、
   `common/ImagePreviewDialog.vue`（壁纸、视频分支的 Panzoom 层）、`common/VideoControls.vue`（视频的缩放按钮）。
-- `apps/kabegame/src/components/WallpaperImportDialog.vue`、`image/ImageContent.vue`、
+- `apps/kabegame/src/components/collect/WpeLocalPanel.vue`、`image/ImageContent.vue`、
   `image/ImageItem.vue`、`common/ImagePreviewDialog.vue`、`App.vue`（背景层）、`utils/mediaMime.ts`
 - 壁纸窗口 ping 看门狗：`src-tauri/kabegame/src/wallpaper/ping.rs`、`wallpaper/window.rs`（生命周期与重载清理）、
   `commands/window.rs`（`wallpaper_pong`）、`src-tauri/kabegame-core/src/{ipc/events.rs,emitter.rs}`（ping / pong 事件）

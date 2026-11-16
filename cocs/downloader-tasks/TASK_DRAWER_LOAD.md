@@ -180,12 +180,13 @@ provider 仅持坐标，每次现场解析，版本不符为空；商店只读�
 （`HeaderFeatureId.TaskRerun`，紧凑模式进 fold）共用这一份：
 
 - 普通插件走「先写再打开」：`await writeTaskConfig(taskConfigFromTask(task))` 把任务参数写进全局
-  `crawlerStore.taskConfig`（含输出画册），再 `crawlerDrawerStore.open()` 打开 `App.vue` 常驻的
-  `CrawlerDialog`——后者对来源无感，只响应式编辑这份全局对象。详见
+  `crawlerStore.taskConfig`（含输出画册），再 `collectDialogs.openNetwork("plugin")` 打开 `App.vue` 常驻的
+  「网络」对话框（`collect/CollectNetworkDialog`）的插件来源——插件表单对来源无感，只响应式编辑这份全局对象。详见
   [../crawler/TASK_CONFIG.md](../crawler/TASK_CONFIG.md)。
-- 内建 `webpage` 通过 `collectDialogs.openWebpage` 打开全局 `WebpageCollectDialog`。
-- 内建 `local-import` 仅在桌面端通过 `collectDialogs.openLocalImport` 打开全局
-  `LocalImportDialog`；若原任务来自文件夹画册拖入，只有提交时画册仍是原画册，才继续透传
+- 内建 `webpage` 通过 `collectDialogs.openNetwork("webpage", 初始参数)` 打开「网络」对话框的网页来源
+  （`collect/WebpageCollectPanel`）。
+- 内建 `local-import` 仅在桌面端通过 `collectDialogs.openLocal("folder", 初始参数)` 打开「本地」对话框
+  （`collect/CollectLocalDialog`）的文件夹来源；若原任务来自文件夹画册拖入，只有提交时画册仍是原画册，才继续透传
   `outputDir` 与 `copy_to_dir: true`。
 
 全局弹窗实例由 `App.vue` 唯一承载。Web 版不显示内建 `webpage` / `local-import` 的再次执行；

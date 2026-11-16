@@ -1,6 +1,12 @@
 import { IS_ANDROID, IS_LIGHT_MODE, IS_LINUX, IS_MACOS, IS_WEB, IS_WINDOWS } from "../env";
 import type { AppSettingKey, AppSettings } from "./settings";
 import { DEFAULT_GALLERY_PAGE_SIZE } from "../utils/galleryPageSize";
+import { DEFAULT_COLOR_THEME_ID } from "../theme/colorTheme";
+
+/** localStorage 后端的存储键：`kabegame-setting-<key>`（`useLocalStorage` 对字符串值原样存取）。 */
+export function localSettingStorageKey(key: AppSettingKey): string {
+  return `kabegame-setting-${key}`;
+}
 
 export type SettingsHistoryMode = "push" | "replace";
 
@@ -248,6 +254,7 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
   for (const entry of entries) assignEntry(map, entry);
 
   const localEntries: Array<[AppSettingKey, SettingDescriptor]> = [
+    frontendLocal("colorTheme", DEFAULT_COLOR_THEME_ID),
     frontendLocal("appBackgroundEnabled", false),
     frontendLocal("appBackgroundBlur", 2),
     frontendLocal("appBackgroundOpacity", 0.25),
