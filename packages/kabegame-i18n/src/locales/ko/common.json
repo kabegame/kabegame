@@ -133,5 +133,8 @@
   "nextMonth": "다음 달",
   "nextYear": "다음 해",
   "today": "오늘",
-  "addCustom": "\"{value}\" 추가"
+  "addCustom": "\"{value}\" 추가",
+  "prevPage": "이전",
+  "nextPage": "다음",
+  "jumpToPage": "페이지로 이동"
 }

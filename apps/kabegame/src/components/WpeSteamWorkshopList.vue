@@ -128,27 +128,8 @@
       </div>
     </div>
 
-    <div v-if="pages > 1" class="flex items-center justify-center gap-2 text-[12px] text-kb-fg-muted">
-      <Button
-        variant="ghost"
-        size="sm"
-        :disabled="page <= 1 || loading"
-        :aria-label="$t('gallery.wpeSteamSubsPrev')"
-        @click="page--"
-      >
-        <ChevronLeft />
-      </Button>
-      <span class="min-w-[56px] text-center tabular-nums">{{ page }} / {{ formatCount(pages) }}</span>
-      <Button
-        variant="ghost"
-        size="sm"
-        :disabled="page >= pages || loading"
-        :aria-label="$t('gallery.wpeSteamSubsNext')"
-        @click="page++"
-      >
-        <ChevronRight />
-      </Button>
-    </div>
+    <!-- 翻页：与画廊同一个底层组件，只有一页时不显示 -->
+    <Paginator v-if="pageCount > 1" v-model:page="page" :page-count="pageCount" class="justify-center" />
   </div>
 </template>
 
@@ -164,8 +145,8 @@
  */
 import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
-import { ChevronLeft, ChevronRight, RefreshCw, Search } from "@lucide/vue";
-import { Button, Checkbox, CheckboxGroup, Input, Select, Skeleton, Tag } from "@/components/ui";
+import { RefreshCw, Search } from "@lucide/vue";
+import { Button, Checkbox, CheckboxGroup, Input, Paginator, Select, Skeleton, Tag } from "@/components/ui";
 import { invoke } from "@/api";
 
 export interface SteamAllSubscriptions {
@@ -275,9 +256,9 @@ watch(textInput, () => {
 const page = ref(1);
 const total = ref(0);
 const items = ref<WorkshopItem[]>([]);
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PER_PAGE)));
 const loading = ref(false);
 const error = ref<string | null>(null);
-const pages = computed(() => Math.max(1, Math.ceil(total.value / PER_PAGE)));
 
 const selectAll = ref(false);
 const selectedSet = computed(() => new Set(selectedIds.value));

@@ -62,6 +62,7 @@ export { default as DescriptionItem } from "./DescriptionItem.vue";
 export { default as DescriptionList } from "./DescriptionList.vue";
 export { default as Empty } from "./Empty.vue";
 export { default as Lightbox } from "./Lightbox.vue";
+export { default as Paginator } from "./Paginator.vue";
 export { default as Progress } from "./Progress.vue";
 export { default as ScrollArea } from "./ScrollArea.vue";
 export { default as SectionTitle } from "./SectionTitle.vue";

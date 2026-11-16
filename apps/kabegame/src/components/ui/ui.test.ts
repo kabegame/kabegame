@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /**
- * 组件的行为测试：对话框的 Esc / Android 返回栈、提示消息门面、确认框门面、加载指令、层级工具与滚轮选择。
+ * 组件的行为测试：对话框的 Esc / Android 返回栈、提示消息门面、确认框门面、加载指令、层级工具、滚轮选择与翻页。
  * 外观在 dev 的 /dev/ui 陈列页里人工对照，这里只测行为。
  */
 import { flushPromises, mount } from "@vue/test-utils";
@@ -18,6 +18,7 @@ vi.mock("@/env", async (importOriginal) => ({
 import Dialog from "./Dialog.vue";
 import MessageBoxHost from "./MessageBoxHost.vue";
 import PickerSheet, { type PickerOption } from "./PickerSheet.vue";
+import Paginator from "./Paginator.vue";
 import { useModalStackStore } from "@/stores/modalStack";
 import { closeToast, toast, toastEntries } from "./toast";
 import { messageBox, messageBoxQueue } from "./messageBox";
@@ -354,5 +355,40 @@ describe("PickerSheet", () => {
       .click();
     await flushPromises();
     expect(confirmed.mock.calls[0][0].selectedValues).toEqual(["a"]);
+  });
+});
+
+describe("Paginator", () => {
+  function mountPaginator(page: number, pageCount: number) {
+    const updates: number[] = [];
+    const wrapper = mount(Paginator, {
+      props: { page, pageCount, "onUpdate:page": (value: number) => updates.push(value) },
+      attachTo: document.body,
+    });
+    wrappers.push(wrapper);
+    return { wrapper, updates };
+  }
+
+  it("上一页 / 下一页按边界置灰，点了报相邻页", async () => {
+    const { wrapper, updates } = mountPaginator(1, 3);
+    const [prev, next] = wrapper.findAll("button");
+    expect(prev.attributes("disabled")).toBeDefined();
+    await next.trigger("click");
+    expect(updates).toEqual([2]);
+    await wrapper.setProps({ page: 3 });
+    expect(wrapper.findAll("button")[1].attributes("disabled")).toBeDefined();
+  });
+
+  it("输入的页码收拢到 1～总页数；不是数字就复原、不跳", async () => {
+    const { wrapper, updates } = mountPaginator(2, 5);
+    const input = wrapper.find("input");
+    await input.setValue("99");
+    await input.trigger("keydown", { key: "Enter" });
+    expect(updates).toEqual([5]);
+    expect((input.element as HTMLInputElement).value).toBe("5");
+    await input.setValue("abc");
+    await input.trigger("blur");
+    expect(updates).toEqual([5]);
+    expect((input.element as HTMLInputElement).value).toBe("2");
   });
 });

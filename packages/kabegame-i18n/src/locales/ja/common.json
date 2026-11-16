@@ -133,5 +133,8 @@
   "nextMonth": "翌月",
   "nextYear": "翌年",
   "today": "今日",
-  "addCustom": "「{value}」を追加"
+  "addCustom": "「{value}」を追加",
+  "prevPage": "前へ",
+  "nextPage": "次へ",
+  "jumpToPage": "ページへ移動"
 }
