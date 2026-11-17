@@ -24,7 +24,9 @@ import {
   probeDaytime,
   probeScriptsOptionsOf,
   probeUserProperties,
+  type ProbeLiveHooks,
   type ProbeRealmSetup,
+  type ProbeScriptsInput,
   type ResolvedProbeScripts,
 } from "./probeScripts";
 
@@ -648,11 +650,20 @@ describe("scripts.consoleGrep（P6c）", () => {
   });
 });
 
-describe("createLayer 与补编（P6d3b）", () => {
+describe("createLayer 与运行中建层（P6d3b → L5）", () => {
   const props = () => probeUserProperties(PROJECT, { speed: 5 });
   const create = (g: Global) => g.thisScene.createLayer("models/a.json");
 
-  async function setupCreate(factories: Record<string, Factory>, deferOnCreate: boolean) {
+  /** `live` 替身：记下 create / settle / drain 的调用顺序（和脚本的 init / apply 在同一串里）。 */
+  function liveLog(log: string[]): ProbeLiveHooks {
+    return {
+      create: (object, config, parent) => void log.push(`create ${object} ${config} ${parent}`),
+      settle: async () => void log.push("settle"),
+      drain: () => void log.push("drain"),
+    };
+  }
+
+  async function setupCreate(factories: Record<string, Factory>, extra: Partial<ProbeScriptsInput> = {}) {
     const bundle = await compile();
     const state = SceneState.fromBundle(bundle);
     const realm = fakeRealm(factories);
@@ -663,83 +674,93 @@ describe("createLayer 与补编（P6d3b）", () => {
       properties: props(),
       screen: [1280, 720],
       options: OPTIONS,
-      deferOnCreate,
       createRealm: realm.createRealm,
+      ...extra,
     });
     return { bundle, state, scripts };
   }
 
-  it("init 里建层且 deferOnCreate：load 停在 init 之后（不套属性值、不交 applyUserProperties），结构里有新对象；swap 换上新场景后补做，写入重放到新状态", async () => {
+  it("init 里建层：建壳、记结构之后交给 live.create；init 之后先等 live.settle，再套属性值、交 applyUserProperties", async () => {
     const log: string[] = [];
-    const factories: Record<string, Factory> = {
-      "objects/1/alpha": (g) => ({
-        // 不返回值（返回值会写回同一个目标、盖过直接写入，同 WPE）
-        init: () => {
-          log.push("init");
-          create(g);
-          g.thisLayer.alpha = 0.3;
-        },
-        applyUserProperties: () => void log.push("apply"),
-        update: (value: unknown) => value,
-      }),
-    };
-    const { scripts, state } = await setupCreate(factories, true);
-    await scripts.load();
-    expect(log).toEqual(["init"]);
-    expect(scripts.needsRestart?.()).toBe(true);
-    expect(scripts.createdCount?.()).toBe(1);
-    expect(scripts.structure?.().created).toEqual([{ object: 3, config: '{"image":"models/a.json","id":4}' }]);
-    expect(state.order).toEqual([0, 1, 2, 3]);
-    // 补编：新 bundle / 新状态，新状态接过旧状态的结构，写入重放进去
-    const bundle2 = await compile();
-    const state2 = SceneState.fromBundle(bundle2);
-    state2.adoptStructure(state);
-    expect(state2.layers.get(1)?.alpha).toBe(1);
-    scripts.swap?.({ bundle: bundle2, state: state2 });
-    expect(state2.layers.get(1)?.alpha).toBe(0.3);
-    expect(log).toEqual(["init", "apply"]);
-    expect(scripts.needsRestart?.()).toBe(false);
-    scripts.frame(0.1, 0.1);
-    expect(scripts.result().created).toBe(1);
-    scripts.dispose();
-  });
-
-  it("不给 deferOnCreate 时 load 一气做完；init 里建的层也进结构", async () => {
-    const log: string[] = [];
-    const { scripts } = await setupCreate(
+    const { scripts, state } = await setupCreate(
       {
         "objects/1/alpha": (g) => ({
-          init: (value: unknown) => (create(g), value),
+          init: (value: unknown) => {
+            log.push("init");
+            create(g);
+            return value;
+          },
           applyUserProperties: () => void log.push("apply"),
         }),
       },
-      false,
+      { live: liveLog(log) },
     );
     await scripts.load();
-    expect(scripts.needsRestart?.()).toBe(false);
+    expect(log).toEqual(["init", 'create 3 {"image":"models/a.json","id":4} null', "settle", "apply"]);
+    expect(scripts.structure?.().created).toEqual([{ object: 3, config: '{"image":"models/a.json","id":4}' }]);
+    expect(state.order).toEqual([0, 1, 2, 3]);
+    scripts.dispose();
+  });
+
+  it("不给 live：只建壳、记结构，load 一气做完", async () => {
+    const log: string[] = [];
+    const { scripts } = await setupCreate({
+      "objects/1/alpha": (g) => ({
+        init: (value: unknown) => (create(g), value),
+        applyUserProperties: () => void log.push("apply"),
+      }),
+    });
+    await scripts.load();
     expect(log).toEqual(["apply"]);
     expect(scripts.createdCount?.()).toBe(1);
     scripts.dispose();
   });
 
-  it("回放中途（update 里）建层：探针补编不了，记进 recompile（createLayer/<下标>），不报错", async () => {
+  it("回放中途（update 里）建层：每帧脚本之前 drain；交给 live.create，不再记进 recompile；firstObject 抬高下标", async () => {
+    const log: string[] = [];
     const { scripts } = await setupCreate(
       {
         "objects/1/alpha": (g) => ({
-          update: (value: unknown) => (create(g), value),
+          update: (value: unknown) => {
+            log.push("update");
+            create(g);
+            return value;
+          },
         }),
       },
-      true,
+      { live: liveLog(log), firstObject: 7 },
     );
     await scripts.load();
-    expect(scripts.needsRestart?.()).toBe(false);
+    log.length = 0;
     scripts.frame(0.1, 0.1);
+    expect(log).toEqual(["drain", "update", 'create 7 {"image":"models/a.json","id":4} null']);
     const result = scripts.result();
     expect(result.created).toBe(1);
-    expect(result.recompile).toEqual([
-      { path: "createLayer/3", count: 1, firstFrame: 1, value: '{"image":"models/a.json","id":4}' },
-    ]);
+    expect(result.recompile).toEqual([]);
     expect(result.messages).toEqual([]);
+    scripts.dispose();
+  });
+
+  it("adoptObject：重放这个对象建出以来的写入（片段换上之后状态回到初值，写入要补回来）", async () => {
+    let made: { alpha: number } | null = null;
+    const { scripts, state } = await setupCreate(
+      {
+        "objects/1/alpha": (g) => ({
+          init: (value: unknown) => {
+            made = create(g) as { alpha: number };
+            made.alpha = 0.3;
+            return value;
+          },
+        }),
+      },
+      { live: liveLog([]) },
+    );
+    await scripts.load();
+    expect(state.layers.get(3)!.alpha).toBe(0.3);
+    // 片段换上：状态回到编出的初值
+    state.layers.get(3)!.alpha = 1;
+    scripts.adoptObject?.({ object: 3, scripts: [] });
+    expect(state.layers.get(3)!.alpha).toBe(0.3);
     scripts.dispose();
   });
 });

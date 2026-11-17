@@ -541,5 +541,7 @@
   "wpeShortcutTest": "测试",
   "wpeShortcutTestStarted": "已请求启动",
   "wpeShortcutTestRejected": "无法启动这个快捷方式",
-  "wpeShortcutTestFailed": "启动快捷方式失败"
+  "wpeShortcutTestFailed": "启动快捷方式失败",
+  "wpeSceneUnsupportedDesktop": "桌面的场景壁纸运行中用到了暂不支持的特性：{keys}，相关图层没有画出",
+  "wpeSceneUnsupportedPreview": "预览里的场景壁纸运行中用到了暂不支持的特性：{keys}，相关图层没有画出"
 }

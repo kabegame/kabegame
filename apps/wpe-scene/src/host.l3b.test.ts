@@ -127,7 +127,7 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     const { host, log, stub } = makeHost();
     const previous = { mesh: null } as never;
     host.registry = stub("registry", {
-      bundle: { unsupported: [], configs: [] },
+      bundle: { unsupported: [], configs: [], layers: [{ object: 5 }] },
       applyDelta: () => {},
       addObject: () => {},
       replaceObject: () => {},

@@ -58,7 +58,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 // 宿主经常驻编译会话拿 bundle（L2）：会话本身只用到 close 与 stats，这里是空壳
 vi.mock("./compile/client", () => ({
-  openSceneSession: async () => ({ bundle: await compile(), session: { close() {}, stats: null } }),
+  openSceneSession: async () => ({ bundle: await compile(), session: { close() {}, stats: null }, exactConfigs: [] }),
 }));
 vi.mock("./script/realm", () => ({
   getJsModuleIndex: () => ({}),

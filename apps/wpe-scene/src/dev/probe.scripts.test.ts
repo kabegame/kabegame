@@ -9,7 +9,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileScene, type SceneBundle } from "../compile/bundle";
-import { compileSceneInWorker } from "../compile/client";
+import { openSceneSession, type CompileSessionClient } from "../compile/client";
+import { normalizeConfig } from "../compile/config";
+import { objectSlice, rekeyFragment, type FragmentDelta, type FragmentRequest } from "../compile/fragment";
+import { addShellObject } from "../script/structure";
 import type { SceneReader } from "../compile/fs";
 import type { SceneObject } from "../compile/model";
 import { acquireGpu } from "../render/device";
@@ -19,7 +22,8 @@ import { createProbeScripts, DEFAULT_PROBE_CLOCK, probeDaytime, readProbeUserPro
 import { prepareProbeTexts } from "./probeTexts";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
-vi.mock("../compile/client", () => ({ compileSceneInWorker: vi.fn() }));
+// 探针经常驻编译会话拿 bundle（L5）：会话的片段请求由用例接管
+vi.mock("../compile/client", () => ({ openSceneSession: vi.fn() }));
 vi.mock("../render/device", () => ({ acquireGpu: vi.fn() }));
 vi.mock("../render/scene", async (original) => ({
   ...(await original<typeof import("../render/scene")>()),
@@ -74,6 +78,37 @@ function compile(): Promise<SceneBundle> {
     postprocess: "disabled",
     exhaustive: true,
   });
+}
+
+/** 会话替身（L5）收到的片段请求。 */
+let fragmentRequests: FragmentRequest[] = [];
+/**
+ * 会话替身（L5）：片段请求按模板对象 0 现编（改键到请求的下标，配置按请求规整），增量为空（`from` 对齐当前表长）。
+ */
+function fakeSession() {
+  return {
+    close() {},
+    stats: null,
+    broken: false,
+    exactConfigs: [],
+    compileFragment: vi.fn(async (request: FragmentRequest): Promise<FragmentDelta> => {
+      fragmentRequests.push(request);
+      const parsed = JSON.parse(request.config) as { id?: number };
+      const fragment = rekeyFragment(objectSlice(bundle, 0)!, {
+        object: request.object,
+        id: parsed.id ?? 0,
+        parent: null,
+      });
+      return {
+        fragment: { ...fragment, config: normalizeConfig(parsed) },
+        programs: { from: bundle.programs.length, list: [] },
+        textures: { from: bundle.textures.length, list: [] },
+        userTextures: { from: bundle.userTextures?.length ?? 0, list: [] },
+        bindings: [],
+        assetPaths: [],
+      };
+    }),
+  } as unknown as CompileSessionClient;
 }
 
 /** 一串调用：场景、设备与脚本替身都记进来。 */
@@ -136,6 +171,7 @@ let bundle: SceneBundle;
 
 beforeEach(async () => {
   log = [];
+  fragmentRequests = [];
   updates = [];
   updateFrames = [];
   failAt = null;
@@ -154,9 +190,9 @@ beforeEach(async () => {
     },
   );
   vi.stubGlobal("ImageData", class {});
-  vi.mocked(compileSceneInWorker).mockImplementation(async () => {
+  vi.mocked(openSceneSession).mockImplementation(async () => {
     log.push("compile");
-    return bundle;
+    return { bundle, session: fakeSession(), exactConfigs: [] };
   });
   vi.mocked(acquireGpu).mockImplementation(
     async () => ({ device: fakeDevice(), features: [] }) as unknown as Awaited<ReturnType<typeof acquireGpu>>,
@@ -387,64 +423,110 @@ describe("renderFrame 跑场景脚本的接线（第 7 批）", () => {
   });
 });
 
-describe("renderFrame 的补编（P6d3b，init 里 createLayer）", () => {
-  const structure = { destroyed: [], parents: [], created: [{ object: 1, config: '{"image":"models/a.json"}' }] };
+describe("renderFrame 的运行中建层（L5：会话、两条路、prewarmFragments）", () => {
+  /** 新层的配置（和模板对象 0 不同：不预置缓存时没命中） */
+  const CONFIG = JSON.stringify({ image: "models/b.json", name: "bar", id: 9 });
 
-  it("init 里建了层：放弃第一遍（释放场景、不释放脚本环境），带结构再编译、重建场景，swap 换上新 bundle / 状态后照常跑帧", async () => {
-    let made = 0;
-    let disposed = false;
-    vi.mocked(createProbeScripts).mockImplementation(() => {
-      made++;
+  /** 脚本替身：`load` 里像 `createLayer` 一样建壳、交给 `live`，再等 `live.settle()`（同真实现）；`firstObject` 给了就用它当下标。 */
+  function scriptsCreatingAt(when: "init" | "frame") {
+    const objects: number[] = [];
+    vi.mocked(createProbeScripts).mockImplementation((input) => {
       let frames = 0;
+      let made = 0;
+      const create = () => {
+        const object = (input.firstObject ?? 1) + made++;
+        addShellObject(input.state, object, CONFIG, null);
+        objects.push(object);
+        input.live?.create(object, CONFIG, null);
+      };
       return {
-        load: async () => void log.push("load"),
-        needsRestart: () => made === 1 && !log.includes("swap"),
-        structure: () => structure,
-        swap: () => void log.push("swap"),
-        frame: (dt: number, time: number) => void (log.push(`script ${dt} ${time}`), frames++),
-        result: () => {
-          log.push("result");
-          return { frames } as never;
+        load: async () => {
+          log.push("load");
+          if (when === "init") create();
+          await input.live?.settle();
         },
-        dispose: () => {
-          // 同真实现：可以重复调
-          if (disposed) return;
-          disposed = true;
-          log.push("dispose");
+        frame: (dt: number, time: number) => {
+          input.live?.drain();
+          log.push(`script ${dt} ${time}`);
+          if (when === "frame" && frames === 0) create();
+          frames++;
         },
+        result: () => ({ frames }) as never,
+        dispose: () => {},
       };
     });
+    return objects;
+  }
+
+  /** GPU 装卸的替身记进 `log`。 */
+  function withGpu() {
+    vi.mocked(GpuScene.build).mockImplementation(async () => {
+      log.push("build");
+      return {
+        ...fakeScene(),
+        prepareObjectSync: (layer: { object: number }) => ({ layer }),
+        prepareObject: async (layer: { object: number }) => {
+          log.push(`prepare ${layer.object}`);
+          return { layer };
+        },
+        installObject: (prepared: { layer: { object: number } }) => void log.push(`install ${prepared.layer.object}`),
+        discardPrepared: () => {},
+      } as unknown as GpuScene;
+    });
+  }
+
+  it("init 里建的层（没命中）：不再整场补编，会话编片段、init 之后接上并装 GPU，再跑首帧；计数 async", async () => {
+    withGpu();
+    scriptsCreatingAt("init");
     const result = await renderFrame({ ...BASE, scripts: true });
-    expect(made).toBe(1);
-    expect(compileSceneInWorker).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(compileSceneInWorker).mock.calls[0][0].structure).toBeUndefined();
-    expect(vi.mocked(compileSceneInWorker).mock.calls[1][0].structure).toEqual(structure);
-    // 第一遍：编译 → 建场景 → load（init）→ 发现要补编，释放场景（不 dispose 脚本）；第二遍：编译 → 建场景 → swap → 一帧 → 结果 → 释放
-    expect(log).toEqual([
+    expect(openSceneSession).toHaveBeenCalledTimes(1);
+    expect(fragmentRequests.map((request) => request.object)).toEqual([1]);
+    // 片段到达时预热（prepare 一次再放弃），接上时同步备好、装上；都在第一帧之前
+    expect(log.slice(0, log.indexOf("sync"))).toEqual([
       "compile",
       "build",
       "videoSink",
       "properties",
       "load",
-      "destroy",
-      "compile",
-      "build",
-      "videoSink",
-      "properties",
-      "swap",
-      "sync",
-      "step 0 0",
-      "camera",
-      "script 0 0",
-      "parallax",
-      "sync",
-      "update",
-      "encode",
-      "submit",
-      "result",
-      "dispose",
-      "destroy",
+      "prepare 1",
+      "install 1",
     ]);
-    expect(result.scripts).toEqual({ frames: 1 });
+    expect(result.liveCreate).toMatchObject({
+      sync: 0,
+      async: 1,
+      unsupported: 0,
+      pending: 0,
+      reloads: [],
+      prewarmed: 0,
+    });
+  });
+
+  it("回放中途建的层（没命中）：探针的回放是同步的，片段赶不上读回帧，记 pending；scripts.recompile 里没有 createLayer", async () => {
+    withGpu();
+    scriptsCreatingAt("frame");
+    const result = await renderFrame({ ...BASE, scripts: true, particles: PARTICLES });
+    expect(fragmentRequests).toHaveLength(1);
+    expect(log.some((line) => line.startsWith("install"))).toBe(false);
+    expect(result.liveCreate).toMatchObject({ sync: 0, async: 0, pending: 1 });
+  });
+
+  it("prewarmFragments：预跑一遍收集配置、经会话编进缓存，正式那一遍第一轮就命中、当场装上；新建下标排在预跑编的之后", async () => {
+    withGpu();
+    const objects = scriptsCreatingAt("frame");
+    const result = await renderFrame({ ...BASE, scripts: true, particles: PARTICLES, prewarmFragments: true });
+    // 编译只一次：预跑与正式共用会话；片段只要一次（预跑之后，下标从 bundle 的配置个数起）
+    expect(openSceneSession).toHaveBeenCalledTimes(1);
+    expect(fragmentRequests.map((request) => request.object)).toEqual([1]);
+    // 两遍各建一次场景；正式那一遍先预热预跑编好的，第一帧建层就当场装上
+    expect(log.filter((line) => line === "build")).toHaveLength(2);
+    expect(log).toContain("prepare 1");
+    expect(objects).toEqual([1, 2]);
+    expect(log).toContain("install 2");
+    expect(result.liveCreate).toMatchObject({ sync: 1, async: 0, pending: 0, prewarmed: 1 });
+  });
+
+  it("prewarmFragments 不和 scripts 一起给：编译之前就抛错", async () => {
+    await expect(renderFrame({ ...BASE, prewarmFragments: true })).rejects.toThrow("prewarmFragments");
+    expect(log).toEqual([]);
   });
 });

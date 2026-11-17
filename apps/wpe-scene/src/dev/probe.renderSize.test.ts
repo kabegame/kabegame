@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileScene, type SceneBundle } from "../compile/bundle";
-import { compileSceneInWorker } from "../compile/client";
+import { openSceneSession } from "../compile/client";
 import type { SceneReader } from "../compile/fs";
 import type { SceneObject } from "../compile/model";
 import { acquireGpu } from "../render/device";
@@ -18,7 +18,10 @@ import { renderFrame } from "./probe";
 import { readProbeUserProperties } from "./probeScripts";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
-vi.mock("../compile/client", () => ({ compileSceneInWorker: vi.fn() }));
+// 探针经常驻编译会话拿 bundle（L5）：会话的片段请求由用例接管
+vi.mock("../compile/client", () => ({ openSceneSession: vi.fn() }));
+const fakeSession = () =>
+  ({ close() {}, compileFragment: vi.fn(), stats: null, broken: false, exactConfigs: [] }) as never;
 vi.mock("../render/device", () => ({ acquireGpu: vi.fn() }));
 vi.mock("../render/scene", async (original) => ({
   ...(await original<typeof import("../render/scene")>()),
@@ -132,9 +135,9 @@ beforeEach(async () => {
     },
   );
   vi.stubGlobal("ImageData", class {});
-  vi.mocked(compileSceneInWorker).mockImplementation(async () => {
+  vi.mocked(openSceneSession).mockImplementation(async () => {
     log.push("compile");
-    return bundle;
+    return { bundle, session: fakeSession(), exactConfigs: [] };
   });
   vi.mocked(acquireGpu).mockImplementation(
     async () => ({ device: fakeDevice(), features: [] }) as unknown as Awaited<ReturnType<typeof acquireGpu>>,

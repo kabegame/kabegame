@@ -43,7 +43,7 @@ vi.mock("./compile/client", () => ({
       broken: false,
     };
     sessions.list.push(session);
-    return { bundle, session };
+    return { bundle, session, exactConfigs: [] };
   },
 }));
 
@@ -741,7 +741,7 @@ describe("SceneHost：粒子 instanceoverride（P4a 步骤 5）", () => {
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
     host.applyUserProperties({ count: { type: "slider", value: 2 } });
     expect(rendererWrites.applyBindings).toHaveBeenCalledWith([{ binding, value: 2 }]);
-    expect(host.stats).toEqual({ applied: 1, recompiled: [] });
+    expect(host.stats).toEqual({ applied: 1, recompiled: [], created: { sync: 0, async: 0, unsupported: 0 } });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(1);
     host.dispose();

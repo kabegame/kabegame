@@ -538,5 +538,7 @@
   "wpeShortcutTest": "Test",
   "wpeShortcutTestStarted": "Launch requested",
   "wpeShortcutTestRejected": "This shortcut can't be launched",
-  "wpeShortcutTestFailed": "Failed to launch the shortcut"
+  "wpeShortcutTestFailed": "Failed to launch the shortcut",
+  "wpeSceneUnsupportedDesktop": "The scene wallpaper on the desktop is using features that aren't supported yet: {keys}. The affected layers aren't drawn",
+  "wpeSceneUnsupportedPreview": "The scene wallpaper in the preview is using features that aren't supported yet: {keys}. The affected layers aren't drawn"
 }

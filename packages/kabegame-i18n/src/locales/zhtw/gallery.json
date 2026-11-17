@@ -542,5 +542,7 @@
   "wpeShortcutTest": "測試",
   "wpeShortcutTestStarted": "已請求啟動",
   "wpeShortcutTestRejected": "無法啟動這個捷徑",
-  "wpeShortcutTestFailed": "啟動捷徑失敗"
+  "wpeShortcutTestFailed": "啟動捷徑失敗",
+  "wpeSceneUnsupportedDesktop": "桌面的場景桌布執行中用到了暫不支援的特性：{keys}，相關圖層沒有畫出",
+  "wpeSceneUnsupportedPreview": "預覽裡的場景桌布執行中用到了暫不支援的特性：{keys}，相關圖層沒有畫出"
 }

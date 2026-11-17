@@ -540,5 +540,7 @@
   "wpeShortcutTest": "テスト",
   "wpeShortcutTestStarted": "起動を要求しました",
   "wpeShortcutTestRejected": "このショートカットは起動できません",
-  "wpeShortcutTestFailed": "ショートカットを起動できませんでした"
+  "wpeShortcutTestFailed": "ショートカットを起動できませんでした",
+  "wpeSceneUnsupportedDesktop": "デスクトップのシーン壁紙が実行中にまだ対応していない機能を使いました：{keys}。該当するレイヤーは描画されていません",
+  "wpeSceneUnsupportedPreview": "プレビューのシーン壁紙が実行中にまだ対応していない機能を使いました：{keys}。該当するレイヤーは描画されていません"
 }

@@ -171,7 +171,7 @@ export function createWorkerHandler(
         // `opened` 带回的统计就是常驻的规模。清缓存不碰 bundle，转移照常
         if (options.trimCaches !== false) opened.trimCaches();
         const transfer = transferableBuffers(bundle);
-        post({ type: "opened", bundle, stats: stats(opened) }, transfer);
+        post({ type: "opened", bundle, stats: stats(opened), exactConfigs: opened.exactConfigs() }, transfer);
         // 转移之后这些缓冲在这里已分离：会话的缓存不能再持有它们
         if (options.forgetAfterTransfer !== false) opened.forgetBuffers(new Set(transfer));
       } catch (error) {

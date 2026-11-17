@@ -4,6 +4,7 @@
  * - `reparentNeedsRecompile` / `destroyNeedsRecompile`：判断这次结构变化会不会改编译产物（组归属、挂点），要不要请求重编译。宁可多编，不要漏。
  */
 import type { SceneBundle } from "../compile/bundle";
+import { normalizeConfig } from "../compile/config";
 import type { SceneStructure } from "../compile/protocol";
 import { layerShellValues } from "../compile/layerShell";
 import type { SceneObject } from "../compile/model";
@@ -96,15 +97,40 @@ export function settleDestroyed(state: SceneState, hooks: SettleHooks = {}): num
   return removed;
 }
 
+/** 新建对象配置原文的规整键（同片段缓存的键）；不是合法 JSON 时用原文。 */
+function createdKey(config: string): string {
+  try {
+    const parsed: unknown = JSON.parse(config);
+    return parsed && typeof parsed === "object" ? normalizeConfig(parsed) : config;
+  } catch {
+    return config;
+  }
+}
+
 /**
  * 宿主维护的结构（`SceneStructure`）：删除生效时追加进 `destroyed`；换父成功时删掉这个对象之前的项再追加 `[对象, 新父, 挂点名]`。
  * 原地改、返回同一个对象（宿主跨重编译持有它）。
+ *
+ * 去重（L5，P6d4 点 7）：被删的是新建对象、且结构里已有同一规整配置的已删新建对象时，摘掉旧的那条（`created` 与 `destroyed` 各一项）。建了又删的对象
+ * 只给整场重载兜底（编译时放进场景再当作不存在），每种配置留一个就够；不去重的话对象池类场景（每帧建删）的结构无限增长，每次重编译都带着。
  */
 export function recordDestroyed(structure: SceneStructure, objects: readonly number[]): void {
   for (const object of objects) if (!structure.destroyed.includes(object)) structure.destroyed.push(object);
   // 被删对象的换父记录不再有意义（编译时这一项已是 null）
   const gone = new Set(objects);
   structure.parents = structure.parents.filter(([object]) => !gone.has(object));
+  for (const object of objects) {
+    const entry = structure.created.find((item) => item.object === object);
+    if (!entry) continue;
+    const key = createdKey(entry.config);
+    const stale = structure.created.filter(
+      (item) => item.object !== object && structure.destroyed.includes(item.object) && createdKey(item.config) === key,
+    );
+    if (stale.length === 0) continue;
+    const drop = new Set(stale.map((item) => item.object));
+    structure.created = structure.created.filter((item) => !drop.has(item.object));
+    structure.destroyed = structure.destroyed.filter((item) => !drop.has(item));
+  }
 }
 
 export function recordReparent(
@@ -141,18 +167,28 @@ export function createStructureObject(
   configText: string,
   parent: number | null,
 ): number | null {
+  const object = allocator.next;
+  if (!addShellObject(state, object, configText, parent)) return null;
+  allocator.next++;
+  structure.created.push({ object, config: configText });
+  return object;
+}
+
+/**
+ * 在状态上按给定下标建一个待编对象的壳（`createStructureObject` 的状态一半；L5：整场重载进行中建的对象，在新场景上照旧下标再建一次壳）。
+ * 不分配下标、不记结构。父不在状态里或待删时当根。配置不是合法 JSON 对象 / 数组时返回 false。
+ */
+export function addShellObject(state: SceneState, object: number, configText: string, parent: number | null): boolean {
   let config: unknown;
   try {
     config = JSON.parse(configText);
   } catch {
-    return null;
+    return false;
   }
-  if (config === null || typeof config !== "object") return null;
+  if (config === null || typeof config !== "object") return false;
   const kind = createdLayerKind(config as Record<string, unknown> | unknown[]);
   const shell = layerShellValues((Array.isArray(config) ? {} : config) as SceneObject);
-  const object = allocator.next++;
   const root = parent === null || !state.layers.has(parent) || state.pendingDestroy.has(parent) ? null : parent;
   state.addLayer(object, layerStateFromShell(shell, root, { imageLayer: kind === "image" }));
-  structure.created.push({ object, config: configText });
-  return object;
+  return true;
 }

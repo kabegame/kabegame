@@ -27,7 +27,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 // 宿主经常驻编译会话拿 bundle（L2）：会话本身只用到 close 与 stats，这里是空壳
 vi.mock("./compile/client", () => ({
-  openSceneSession: async () => ({ bundle: await compile(), session: { close() {}, stats: null } }),
+  openSceneSession: async () => ({ bundle: await compile(), session: { close() {}, stats: null }, exactConfigs: [] }),
 }));
 
 /** 渲染器替身：`load` 记下收到的选项与调用那一刻的来源状态，`applyBindings` 照真实现逐条 `state.write`。 */

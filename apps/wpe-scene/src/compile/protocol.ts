@@ -63,8 +63,11 @@ export type WorkerResponse =
   | { type: "file"; id: number; operation: "range" | "whole"; path: string; start?: number; end?: number }
   /** 编译进度（`progress.ts` 的 `compile` 阶段）：已处理对象的权重 / 总权重 */
   | { type: "progress"; done: number; total: number }
-  /** 整场编完（原 `done`），会话在 Worker 里保留 */
-  | { type: "opened"; bundle: SceneBundle; stats: SessionStats }
+  /**
+   * 整场编完（原 `done`），会话在 Worker 里保留。`exactConfigs`（L5）：能拿整场 bundle 的片段预置缓存的对象下标
+   * （`SceneCompileSession.exactConfigs`），不进 bundle
+   */
+  | { type: "opened"; bundle: SceneBundle; stats: SessionStats; exactConfigs: number[] }
   /** 只用于 `open` 失败（含重复 `open`） */
   | { type: "error"; message: string }
   | { type: "fragment-done"; id: number; delta: FragmentDelta; stats: SessionStats }

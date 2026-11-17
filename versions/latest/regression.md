@@ -1,5 +1,20 @@
 # v4.7.0 regression
 
+
+## 场景壁纸运行中建层走片段（活的场景图 L1–L5）
+
+2026-11-17 Windows dev。场景脚本 `createLayer` 不再整场重新加载：编译拆成常驻 Worker 里的会话（`openCompileSession` / `compileFragment`），bundle 有了登记表（`SceneRegistry`）、状态与各子系统（关键帧、puppet、文本、脚本、声音）有了按对象的增删入口，`GpuScene` 有了 `prepareObject` / `installObject` / `removeObject`（整场加载也走同一条路，全库画面哈希不变），宿主按规整配置查片段缓存：命中当场接进并装 GPU（`createLayer` 返回前完成、当帧画出，`init` 读到编好的 `size`），没命中建壳、会话异步编、下一帧开头装上并进缓存。`init` 里建的层不再让场景二次编译。运行中建的对象带不支持项时不画、其余照常，宿主经 `wpe_scene_report` 的 `unsupported` 上报，Rust 以 `wpe-scene-unsupported` 发到主窗口，看板娘提示一次（同图同键只一次；桌面壁纸窗口的也送主窗口）。删除生效后登记表、状态、子系统、GPU 一起摘；改组归属的删除仍整场重载（L7）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T0 单测与检查 | Windows | wpe-scene vitest（compile / render / script / dev / host*）、`tsc`；kabegame `vue-tsc`、`useSceneUnsupportedNotice.test.ts`；Rust `wpe_scene` | 0 error；全过 | 2026-11-17 Claude：wpe-scene 204 文件 4002 条；composable 5 条；Rust 16 条；`cargo check` 被运行中的 dev 占文件没跑成，dev 自动重编 Rust 成功 |
+| [x] | T1 编译产物与状态不变 | Windows | 全库编译摘要、L3 登记表对照、L3b 子系统对照、全库画面哈希（216 张 × 3 档）、`scriptCorpus`（236 张） | 全同 / 0 差异；`scriptCorpus` 只少了 `recompile` 里的 `createLayer/*` | 2026-11-17 Claude：全部成立；`14294` 的两条 `createLayer/142`、`/143` 重编译记录消失，状态与控制台摘要不变 |
+| [x] | T2 克隆当帧出现 | Windows dev 预览 | `ignore/live/l0/proj/live-clone`（第 90 帧克隆 K / B / T） | 三个克隆走同步路径、第 90 帧的对象表里就有；K2 当帧读静态值 0.5（同 WPE）；没有重编译 | 2026-11-17 Claude：`created.sync: 3`、`recompiled: []`，日志 `f=90 K2 n:0.5` 与 WPE 一致；帧时间 0.6 ms |
+| [x] | T3 `init` 里建层不二次编译 | Windows dev 预览 | `ignore/p6/d3/proj/p6d3b-bars`（`init` 里建 7 根柱子） | 只有一次「开始渲染」、首帧 10 层；脚本日志与 WPE（`ignore/p6/d3/out/wpe-bars.log`）逐行相同 | 2026-11-17 Claude：一次编译、10 层；前 10 行逐行相同（宿主转发限流 10 条 / 分钟，其余由探针单测覆盖） |
+| [x] | T4 运行中不支持项的提示 | Windows dev 预览 | `ignore/live/l5/proj/live-unsup`（第 60 帧建没有 effect 的形状对象，第 120 帧克隆 K） | 形状对象不画、脚本照常读到它；看板娘弹「预览里的场景壁纸运行中用到了暂不支持的特性：shape:effects…」一次；K2 当帧出现 | 2026-11-17 Claude：`created: { sync: 1, unsupported: 1 }`，后端 warn 一条，看板娘历史里有这条提示；画面两个绿块（K、K2），没有形状对象 |
+| [ ] | T5 桌面上的提示 | Windows dev 窗口壁纸 | 把 `live-unsup` 设为桌面壁纸 | 提示文案是「桌面的场景壁纸…」，弹在主窗口 | 未测 |
+| [ ] | T6 建删循环 | Windows dev | 反复建删同一配置的场景（如创意工坊 3509243656 轨迹点） | 第二轮起新对象当帧出现；结构长度不随轮数增长；帧时间稳定 | 未测 |
+| [ ] | T7 删除清理 | Windows dev | `p6d3-struct` | 删非组对象走登记表、删组仍重载；最终对象表与 WPE 一致 | L4 验收时已做一次（通过），L5 后未复测 |
 ## 视频缩略图改为首帧静图，悬浮播原视频
 
 2026-11-16 macOS dev。桌面的视频缩略图从 2.5 秒 H.264 短片改成第一帧缩到最长边 512 的 JPEG（Android 保持 10fps GIF 与 `gif` 形态不变）（`compress::generate_video_thumbnail`，解码复用 `media::decode::decode_first_video_frame`）；WPE 视频壁纸的缩略图也改成入口视频（`compatible_path`）的首帧，解不出时退回作者 `preview.*`。网格只显示静图，悬浮时 `ImageContent` 的 `poster` 形态才在静图上挂原视频（comp → local），出第一帧前透明、停了就卸载。前端按缩略图本身决定放什么：是图（jpg / WPE 预览）走 `poster`，是 mp4 短片或就是原视频走原来的视频形态。预览的右键菜单新增「设为壁纸封面」（只在桌面，普通视频与 WPE 视频）：前端把 `<video>.currentTime` 交给 `set_video_cover`，后端按时间点解出那一刻显示的帧（`decode_video_frame_at`：seek 到之前的关键帧再逐帧解到越过它）换成缩略图。存量由 v053 登记的回填作业 `video_thumbnail_frame` 重做并删掉 `thumbnails_dir` 里的旧文件（作者的 `preview.*` 不删；Android 上空跑）；整理的「重新生成缩略图」也把旧形态当作需要重做（`is_current_video_thumbnail`：桌面 `.jpg`、Android `.gif`）。

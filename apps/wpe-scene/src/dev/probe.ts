@@ -64,12 +64,16 @@
  * 读回一律在提交本帧的同一任务里排 `copyTextureToBuffer`，不经过页面上的画布（画布要在同一任务内同步取，否则是全透明空图）。
  */
 import { SceneAnimations, type AnimationProbeEntry } from "../animation/player";
-import { puppetEntries, ScenePuppets, stateSink } from "../puppet/player";
+import { puppetEntries, puppetEntry, ScenePuppets, stateSink } from "../puppet/player";
 import type { SceneBundle } from "../compile/bundle";
 import { DEFAULT_CAMERA } from "../compile/camera";
-import { compileSceneInWorker } from "../compile/client";
-import type { SceneStructure } from "../compile/protocol";
+import { compileSceneInWorker, openSceneSession, type CompileSessionClient } from "../compile/client";
+import type { FragmentDelta } from "../compile/fragment";
+import { SceneRegistry } from "../compile/registry";
 import { TextureDecodeCache } from "../compile/decode";
+import { FragmentCache, fragmentKey } from "../fragmentCache";
+import { cacheCopy, configBone, LiveObjects, rebindFragment, type LiveTarget } from "../script/createLayerChange";
+import { SceneTexts } from "../text/host";
 import { FetchSceneReader } from "../compile/fs";
 import type {
   ScenePostprocessSetting,
@@ -105,7 +109,7 @@ import { acquireGpu } from "../render/device";
 import { fillCropEdges, scenePlacement } from "../render/layout";
 import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame } from "../render/camera";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
-import { GpuScene, type ParticleProfile } from "../render/scene";
+import { GpuScene, type ParticleProfile, type PreparedObject } from "../render/scene";
 import { spriteScale } from "../render/sprite";
 import { SceneState } from "../render/state";
 import type { UserTextureProbe } from "../usertex/sources";
@@ -125,6 +129,7 @@ import {
   probeDaytime,
   probeScriptsOptionsOf,
   readProbeUserProperties,
+  type ProbeLiveHooks,
   type ProbeScripts,
   type ProbeScriptsOptions,
   type ProbeScriptsResult,
@@ -401,6 +406,12 @@ export interface RenderFrameOptions {
    * 8 位目标存 `<key>.pass<下标>.png`（RGBA 原值），浮点目标存 `<key>.pass<下标>.f32`。不给时设备不包、逐字节同以前。
    */
   trace?: boolean | TraceOptions;
+  /**
+   * 运行中建层的预跑（L5）：要和 `scripts` 一起给。先按同样的请求空跑一遍（建场景、`init`、回放，不读回），收集脚本 `createLayer` 建出的配置，经编译会话
+   * 编好进片段缓存，再正式跑：第一轮就命中缓存、当场装上，和 WPE 逐帧比时用。预跑那一遍建的层只建壳（不编、不画），所以靠读新层的值才决定建什么的
+   * 脚本可能收集不全，正式那一遍没命中的照产品晚几帧（读回帧之前赶不上）。不给时照产品行为：第一次出现的配置没命中缓存，不当帧画出。
+   */
+  prewarmFragments?: boolean;
 }
 
 export interface RenderFrameResult {
@@ -464,6 +475,20 @@ export interface RenderFrameResult {
   /** 跑场景脚本的结果（第 7 批，`ProbeScriptsResult`）：只在给了 `scripts` 时有。 */
   scripts?: ProbeScriptsResult;
   /**
+   * 运行中建层（L5）：只在给了 `scripts` 时有。`sync` / `async` / `unsupported` 同宿主 `stats.created`；`pending` 是读回时还没接上的（没命中缓存、
+   * 片段赶不上读回帧）；`reloads` 是宿主会整场重载、探针做不了的原因（片段带 `sceneFlips`、编失败、装 GPU 出错）；`unsupportedKeys` 是运行中出现的
+   * 不支持项；`prewarmed` 是预跑编进缓存的配置数（没给 `prewarmFragments` 时 0）。
+   */
+  liveCreate?: {
+    sync: number;
+    async: number;
+    unsupported: number;
+    pending: number;
+    reloads: string[];
+    unsupportedKeys: string[];
+    prewarmed: number;
+  };
+  /**
    * 每段视频纹理实际取的时刻（P9a 步骤 3，顺序同 bundle 纹理）：`time` 是 seek 完读回的 `currentTime`、`duration` 是时长（未知时 null）、
    * `width` / `height` 是视频尺寸；`failed` 的那段保持透明（同产品），原因在 `error`。没有视频纹理时空数组。
    */
@@ -519,47 +544,20 @@ function encodeCanvasBlit(
   };
 }
 
-/**
- * 脚本 `init` 里 `createLayer` 建了对象（P6d3b）时，第一遍留给补编那一遍的东西：已经 `init` 过的脚本环境（不重跑 `init`）、新建对象的结构、
- * 第一遍的状态（补编后的状态要从它 `adoptStructure`）、第一遍的动画 / puppet 运行时（`init` 里的控制要接过去）。
- */
-interface ProbeCarry {
-  scripts: ProbeScripts;
-  structure: SceneStructure;
-  state: SceneState;
-  animations: SceneAnimations | null;
-  puppets: ScenePuppets | null;
-}
-interface ProbeRestart {
-  restart: ProbeCarry;
+/** `renderFrame` 先查的参数（参数错时不编译）。 */
+interface CheckedRenderFrame {
+  canvas: [number, number] | undefined;
+  cursorWindow: ReturnType<typeof pointerWindow>;
+  style: ReturnType<typeof checkRenderStyle>;
+  renderMode: ReturnType<typeof checkRenderMode>;
+  videoTime: ReturnType<typeof checkVideoTime>;
+  gifDts: ReturnType<typeof checkGifDts>;
+  mediaSteps: ReturnType<typeof checkProbeMedia>;
+  traceOptions: ReturnType<typeof traceOptionsOf>;
+  scriptsOptions: ReturnType<typeof probeScriptsOptionsOf>;
 }
 
-/**
- * 编译并按固定时刻渲染一帧，读回离屏场景目标（不经过页面上的画布、不做铺放）；给了 `canvas` 时读回按 `fill` 上屏到这么大的画布
- * （`encodeCanvasBlit`）。
- *
- * 脚本 `init` 里建了层（P6d3b，`createLayer`）时探针和宿主一样要补编：第一遍编译、建场景、跑 `init`，发现结构里多了新建对象就放弃这一遍
- * （释放场景与设备，脚本环境留下），带着结构再编译、重建场景，`swap` 换上新 bundle / 状态后照常逐帧。回放中途（`update` 里）建的层探针
- * 补编不了，记进结果 `scripts.recompile`。
- */
-export async function renderFrame(options: RenderFrameOptions): Promise<RenderFrameResult> {
-  const first = await renderFramePass(options, null);
-  if (!("restart" in first)) return first;
-  try {
-    const second = await renderFramePass(options, first.restart);
-    // 第二遍带着 carry，不会再要求补编
-    if ("restart" in second) throw new Error("探针补编之后又要求补编");
-    return second;
-  } finally {
-    // 第二遍里脚本环境交给了它自己的 finally；这里兜底（出错发生在接手之前），`dispose` 可以重复调
-    first.restart.scripts.dispose();
-  }
-}
-
-async function renderFramePass(
-  options: RenderFrameOptions,
-  carry: ProbeCarry | null,
-): Promise<RenderFrameResult | ProbeRestart> {
+function checkRenderFrame(options: RenderFrameOptions): CheckedRenderFrame {
   // 先查读回画布与光标窗口（`window ?? canvas`，两个都给而不同时抛错），参数错时不编译；纹理上限要等取到设备再查
   const canvas = options.canvas === undefined ? undefined : checkCanvas(options.canvas);
   const cursorWindow = pointerWindow(options.window, canvas);
@@ -577,24 +575,145 @@ async function renderFramePass(
   const scriptsOptions = probeScriptsOptionsOf(options.scripts);
   if (scriptsOptions && options.scriptValues !== undefined)
     throw new Error("scripts 与 scriptValues 不能同时给：一个让脚本自己算，一个把脚本的结果塞进去，混用分不清是谁写的");
+  if (options.prewarmFragments && !scriptsOptions)
+    throw new Error("prewarmFragments 要和 scripts 一起给（预跑的是脚本建的层）");
+  return { canvas, cursorWindow, style, renderMode, videoTime, gifDts, mediaSteps, traceOptions, scriptsOptions };
+}
+
+/** 两遍（预跑与正式）共用的编译结果：常驻会话（L5，运行中建层编片段用）、bundle、片段缓存与读文件的缓存。 */
+interface ProbeCompiled {
+  bundle: SceneBundle;
+  session: CompileSessionClient;
+  /** 片段缓存：按 bundle 与会话的 `exactConfigs` 预置，预跑编好的也进来 */
+  cache: FragmentCache;
+  reader: FetchSceneReader;
+  textures: TextureDecodeCache;
+  compileMs: number;
+  force: boolean;
+}
+
+/** 预跑（`prewarmFragments`）之后交给正式那一遍的：编好的片段的增量（按编的先后，正式那一遍的登记表先接上场景级部分）与新建对象下标的下界。 */
+interface ProbePrewarm {
+  deltas: FragmentDelta[];
+  firstObject: number;
+}
+
+/**
+ * 编译并按固定时刻渲染一帧，读回离屏场景目标（不经过页面上的画布、不做铺放）；给了 `canvas` 时读回按 `fill` 上屏到这么大的画布
+ * （`encodeCanvasBlit`）。
+ *
+ * 编译经常驻的编译会话（L5，`openSceneSession`），读回之后关掉。脚本 `createLayer` 建的层和宿主走同一份两条路（`script/createLayerChange.ts`）：命中片段缓存
+ * 当场装上；没命中的排给会话，`init` 里建的等片段到齐再画首帧（同宿主，不再整场补编），回放中途建的赶不上读回帧（探针的回放是同步的）。
+ * `prewarmFragments` 先预跑一遍收集建出的配置、编进缓存，正式那一遍第一轮就命中。
+ */
+export async function renderFrame(options: RenderFrameOptions): Promise<RenderFrameResult> {
+  const checked = checkRenderFrame(options);
   const started = performance.now();
   const reader = new FetchSceneReader();
-  const cache = new TextureDecodeCache(reader);
+  const textures = new TextureDecodeCache(reader);
   const force = options.force ?? true;
-  const bundle = await compileSceneInWorker({
+  const { bundle, session, exactConfigs } = await openSceneSession({
     projectDir: options.projectDir,
     sceneAssets: options.sceneAssets,
     userProperties: options.userProperties,
-    ...(carry ? { structure: carry.structure } : {}),
     postprocess: options.postprocess ?? "disabled",
     reflection: options.reflection ?? reflectionOverride() ?? undefined,
     shadows: options.shadows ?? shadowsOverride() ?? undefined,
     volumetrics: options.volumetrics ?? volumetricsOverride() ?? undefined,
     force,
-    textureCache: cache,
+    textureCache: textures,
     reader,
   });
-  const compileMs = performance.now() - started;
+  const cache = new FragmentCache();
+  cache.seed(bundle, exactConfigs);
+  const compiled: ProbeCompiled = {
+    bundle,
+    session,
+    cache,
+    reader,
+    textures,
+    compileMs: performance.now() - started,
+    force,
+  };
+  try {
+    let prewarm: ProbePrewarm | null = null;
+    if (options.prewarmFragments) {
+      const dry = await renderFramePass(options, checked, compiled, { dry: true });
+      prewarm = await prewarmFragments(compiled, dry.created, options);
+    }
+    return await renderFramePass(options, checked, compiled, { dry: false, prewarm });
+  } finally {
+    session.close();
+    // 视频纹理以外的位图（FreeImage 解码结果）跟着 bundle：两遍都用完才释放
+    for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();
+    textures.clear();
+  }
+}
+
+/**
+ * 预跑之后：建出的配置（去重，缓存里已有的跳过）逐个经会话编成片段进缓存，下标从 bundle 的配置个数起（会话只收新下标）。返回增量（正式那一遍的登记表要先
+ * 接上它们的场景级部分：片段里的程序、纹理下标指向这些新增项）与正式那一遍新建对象下标的下界。编失败的跳过（会话坏了之后的也编不了，正式那一遍没命中的
+ * 照样记进 `reloads`）。
+ */
+async function prewarmFragments(
+  compiled: ProbeCompiled,
+  created: readonly { config: string }[],
+  options: RenderFrameOptions,
+): Promise<ProbePrewarm> {
+  const { bundle, session, cache, reader } = compiled;
+  const properties = await readProbeUserProperties(
+    reader,
+    options.projectDir,
+    options.sceneAssets,
+    options.userProperties,
+  );
+  const raw = Object.fromEntries([...properties].map(([key, property]) => [key, property.value]));
+  const deltas: FragmentDelta[] = [];
+  let next = bundle.configs?.length ?? 0;
+  for (const { config } of created) {
+    const key = fragmentKey(config);
+    if (key === null || cache.has(key)) continue;
+    let delta: FragmentDelta;
+    try {
+      delta = await session.compileFragment({ object: next++, config, parent: null, bone: null, properties: raw });
+    } catch {
+      continue;
+    }
+    deltas.push(delta);
+    if (!delta.fragment.sceneFlips.length) cache.put(key, cacheCopy(delta.fragment));
+  }
+  return { deltas, firstObject: next };
+}
+
+async function renderFramePass(
+  options: RenderFrameOptions,
+  checked: CheckedRenderFrame,
+  compiled: ProbeCompiled,
+  mode: { dry: true },
+): Promise<{ created: { config: string }[] }>;
+async function renderFramePass(
+  options: RenderFrameOptions,
+  checked: CheckedRenderFrame,
+  compiled: ProbeCompiled,
+  mode: { dry: false; prewarm: ProbePrewarm | null },
+): Promise<RenderFrameResult>;
+/**
+ * 建场景、跑脚本、回放、读回的一遍。`mode.dry`（`prewarmFragments` 的预跑）：脚本 `createLayer` 只建壳并记下配置，不读回、不 profile、不记轨迹，返回记下的配置；
+ * 不动 bundle（正式那一遍还要用）。正式那一遍：预跑编好的增量先接进登记表、建好场景后预热它们的程序与管线。
+ */
+async function renderFramePass(
+  options: RenderFrameOptions,
+  checked: CheckedRenderFrame,
+  compiled: ProbeCompiled,
+  mode: { dry: true } | { dry: false; prewarm: ProbePrewarm | null },
+): Promise<RenderFrameResult | { created: { config: string }[] }> {
+  const { canvas, cursorWindow, style, renderMode, videoTime, gifDts, mediaSteps, scriptsOptions } = checked;
+  const traceOptions = mode.dry ? null : checked.traceOptions;
+  const { bundle, reader, force, compileMs } = compiled;
+  const prewarm = mode.dry ? null : mode.prewarm;
+  // 登记表（L5）：运行中建层接进它；预跑编好的增量先接上场景级部分（片段里的程序、纹理下标指向它们）。预跑那一遍不建（不动 bundle）
+  const registry = mode.dry ? null : new SceneRegistry(bundle);
+  for (const delta of prewarm?.deltas ?? []) registry!.applyDelta(delta);
   // 文本层（P6b 1d）：同宿主，建场景前排好；没有文本层时不碰 wasm
   const texts = await prepareProbeTexts(bundle, reader, options.sceneAssets);
   // 用户纹理（P11b 步骤 2）：按 `userProperties` 预先解码并等完，读回的就是用户图；没有属性来源时不建
@@ -617,8 +736,6 @@ async function renderFramePass(
     const videosReady = sink.prepare();
     videosReady.catch(() => {});
     const state = SceneState.fromBundle(bundle);
-    // 补编的那一遍（P6d3b）：新状态接过第一遍状态里的对象表 / 待删 / 父子（同宿主 `beforeFirstFrame`）
-    if (carry) state.adoptStructure(carry.state);
     const { width: sceneWidth, height: sceneHeight } = bundle.general;
     // 按指定尺寸画（phase-render-size）：正交场景给了 `canvas` 且没要 `scene` 时，场景目标 = 画布，样式做进投影裁切边距；清屏色只在
     // 对齐方式 1 / 3 时要，从属性全集（用户值已并入）取
@@ -675,6 +792,7 @@ async function renderFramePass(
       options.particles?.dts.length,
     );
     const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
+      ...(registry ? { particleOrdinal: (object: number) => registry.particleOrdinal(object) } : {}),
       ignoreUnsupported: force,
       particles: {
         ...replayParticleOptions(options.particles),
@@ -699,7 +817,16 @@ async function renderFramePass(
     // 场景脚本（第 7 批）：建好之后读回之前一直在，出错也在 finally 里释放
     let probeScripts: ProbeScripts | null = null;
     let probeMedia: ProbeMedia | null = null;
+    let live: LiveObjects<PreparedObject> | null = null;
     try {
+      // 预跑编好的片段（L5）：程序与管线先在这个场景上预热，正式回放里命中缓存的就能同步备好、当帧装上
+      for (const delta of prewarm?.deltas ?? []) {
+        try {
+          scene.discardPrepared(await scene.prepareObject(delta.fragment.layer, state));
+        } catch {
+          // 预热只是让装入时能同步备好；备不好的到时候走异步
+        }
+      }
       // 视频（P9a 步骤 3）：每段都 seek 好、当前帧可用之后才接上，profile 帧与读回那一帧的每个 draw 都拷同一帧；没有视频纹理时
       // 没有 draw 会问它，逐字节同以前。读不到 / 解码失败的那段不交出元素（透明），超过总时限在这里抛错
       await videosReady;
@@ -721,21 +848,15 @@ async function renderFramePass(
       // 场景脚本（第 7 批）：建好场景、视频就绪之后搭环境、跑 init，再整份交一次用户属性（同宿主首帧之前）；init 的写入进状态、标脏，
       // 回放第一帧开头的 `sync` 刷进去。脚本的 screenResolution 同透视场景的画布：`canvas ?? window ?? [1920, 1080]`
       // 关键帧动画（P10a 步骤 3）：没有动画时是空表，下面不建播放器，调用序列同以前。跑脚本时播放器要在 `init` 之前建好（P10b：`init` 里的
-      // `getAnimation().play()` 才有落点，同宿主的待用播放器），回放推进、读回的就是这一份；不跑脚本时仍在回放之前才建，行为不变
+      // `getAnimation().play()` 才有落点，同宿主的待用播放器），回放推进、读回的就是这一份；不跑脚本时仍在回放之前才建，行为不变。跑脚本时没有动画也建
+      // （L5：运行中建的层可能带关键帧）
       const animationList = bundle.animations ?? [];
-      const animations = animationList.length ? new SceneAnimations(animationList) : null;
+      const animations = animationList.length || scriptsOptions ? new SceneAnimations(animationList) : null;
       // puppet 的骨骼动画（P12a 步骤 4 点 5）：没有 puppet 图层时不建，调用序列逐字节同以前。有回放时沿同一串 dt 从第 1 帧推进
       // （`replayReadback` 的 `puppets`，粒子之后、相机之前），没有回放时按 `time` 定位（`seek`）；profile 帧另用一份
       const puppetList = puppetEntries(bundle.layers);
       const puppets = puppetList.length ? new ScenePuppets(puppetList) : null;
-      // 补编的那一遍：`init` 里对动画 / puppet 的控制在第一遍的运行时上，接过来（同宿主「加载期间又来一次加载」）
-      if (carry) {
-        animations?.carryOver(carry.animations);
-        puppets?.carryOver(carry.puppets);
-      }
       if (puppets) {
-        // 状态的动画层字段按运行时的层表对齐（P12e，同宿主 `beforeFirstFrame`）：补编那一遍里 `init` 建 / 删的动画层，从第一遍的状态拷
-        if (carry) state.syncAnimationLayers(puppets.liveLayers(), carry.state, puppets.objects());
         puppets.refresh(stateSink(state));
         scene.setPuppets(puppets);
       }
@@ -754,16 +875,48 @@ async function renderFramePass(
             scripts: () => probeScripts,
           })
         : null;
-      if (scriptsOptions && carry) {
-        // 补编的那一遍：脚本环境是第一遍留下的（`init` 已跑过），换上新 bundle / 状态，写入重放到新状态上
-        probeScripts = carry.scripts;
-        probeScripts.swap?.({
-          bundle,
+      // 预跑那一遍：`createLayer` 只建壳并记下配置（不编、不画、不动 bundle）
+      const collected: { config: string }[] = [];
+      let liveHooks: ProbeLiveHooks | undefined;
+      const reloads: string[] = [];
+      const unsupportedKeys = new Set<string>();
+      if (scriptsOptions && mode.dry)
+        liveHooks = {
+          create: (_object, config) => void collected.push({ config }),
+          settle: async () => {},
+          drain: () => {},
+        };
+      else if (scriptsOptions) {
+        // 运行中建层（L5）：和宿主同一份两条路，接进这个场景的登记表、状态、子系统与 GPU
+        const objects = createProbeLive({
+          registry: registry!,
           state,
-          ...(animations ? { animations } : {}),
-          ...(puppets ? { puppets } : {}),
+          scene,
+          session: compiled.session,
+          cache: compiled.cache,
+          properties: probeProperties,
+          animations,
+          puppets,
+          reader,
+          sceneAssets: options.sceneAssets,
+          scripts: () => probeScripts,
+          reloads,
+          unsupportedKeys,
         });
-      } else if (scriptsOptions) {
+        live = objects;
+        liveHooks = {
+          create: (object, config, parent) => void objects.create(object, config, parent),
+          settle: async () => {
+            // 排着的片段到齐、接上；接上时排出的异步 GPU 对象（文本层等排版）也等完装上
+            do {
+              await objects.settled();
+              objects.drain();
+            } while (objects.queue.size > 0);
+          },
+          drain: () => void objects.drain(),
+        };
+      }
+      if (scriptsOptions) {
         probeScripts = createProbeScripts({
           bundle,
           state,
@@ -771,29 +924,18 @@ async function renderFramePass(
           properties: probeProperties,
           screen: [...(canvas ?? cursorWindow ?? [1920, 1080])],
           options: scriptsOptions,
-          deferOnCreate: true,
+          ...(liveHooks ? { live: liveHooks } : {}),
+          ...(prewarm ? { firstObject: prewarm.firstObject } : {}),
           ...(animations ? { animations } : {}),
           ...(puppets ? { puppets } : {}),
           ...(probeMedia ? { media: probeMedia } : {}),
         });
         await probeScripts.load();
-        // `init` 里建了层：放弃这一遍，脚本环境交给补编那一遍（置空让 finally 不释放它）
-        if (probeScripts.needsRestart?.()) {
-          const handoff: ProbeCarry = {
-            scripts: probeScripts,
-            structure: probeScripts.structure!(),
-            state,
-            animations,
-            puppets,
-          };
-          probeScripts = null;
-          return { restart: handoff };
-        }
       }
       const startTime = options.time ?? 0;
       let frameMs: RenderFrameResult["frameMs"];
       let particleMs: RenderFrameResult["particleMs"];
-      if (options.profile) {
+      if (options.profile && !mode.dry) {
         // 只记 profile 帧：读回那一帧之前取走并关掉
         scene.profileParticles(true);
         // profile 帧另用一份动画、按 1/60 推进（计时含动画开销）；读回那一帧的值由下面另一份决定，不受 profile 帧数影响
@@ -900,6 +1042,8 @@ async function renderFramePass(
           ? { scripts: probeScripts, daytime: (at: number) => probeDaytime(scriptsClock, at) }
           : {}),
       });
+      // 预跑那一遍（L5）：回放完就交出记下的配置，不读回
+      if (mode.dry) return { created: collected };
       // 跑脚本时：读回帧脚本写的文字在上面的 `sync` 里重排，缺字体时画的是旧排版（宿主靠之后的帧补上，探针没有）。结清：等字体读完再排，
       // 排过（`sync` 不止一次）就把这一帧的帧输入再写一次（重建的文本 draw 要这一帧的内置 uniform）。没有文本层时不调 `sync`
       if (probeScripts) {
@@ -1005,6 +1149,17 @@ async function renderFramePass(
         animations: animations?.probe().list ?? [],
         ...(textSyncs === undefined ? {} : { textSyncs }),
         ...(probeScripts ? { scripts: probeScripts.result() } : {}),
+        ...(live
+          ? {
+              liveCreate: {
+                ...live.stats,
+                pending: live.queue.size,
+                reloads,
+                unsupportedKeys: [...unsupportedKeys].sort(),
+                prewarmed: prewarm?.deltas.length ?? 0,
+              },
+            }
+          : {}),
         ...(probeMedia ? { media: probeMedia.result() } : {}),
         videos: sink.results(),
         ...(userTextures ? { userTextures: userTextures.probe() } : {}),
@@ -1015,17 +1170,91 @@ async function renderFramePass(
       // 脚本环境（第 7 批）：读回之后释放（各段的 destroy、隐藏 iframe），出错也释放
       probeScripts?.dispose();
       probeMedia?.dispose();
+      // 运行中建层（L5）：没装上的放弃（场景随之销毁）；缓存跟着会话，留给 `renderFrame` 收尾
+      live?.dispose();
       scene.destroy();
     }
   } finally {
-    // 视频纹理留下的帧（P9a 步骤 3，P9d 起是解出的 `VideoFrame`）：读回之后释放，出错也释放
+    // 视频纹理留下的帧（P9a 步骤 3，P9d 起是解出的 `VideoFrame`）：读回之后释放，出错也释放。bundle 的位图与解码缓存两遍共用，`renderFrame` 收尾
     videos?.dispose();
     userTextures?.dispose();
-    for (const texture of bundle.textures) for (const mip of texture.mips) mip.bitmap?.close();
-    cache.clear();
     texts.dispose();
     gpu.device.destroy();
   }
+}
+
+/** `createProbeLive` 的输入：正式那一遍的登记表、状态、场景、会话、缓存与子系统。 */
+interface ProbeLiveInput {
+  registry: SceneRegistry;
+  state: SceneState;
+  scene: GpuScene;
+  session: CompileSessionClient;
+  cache: FragmentCache;
+  properties: ReadonlyMap<string, UserProperty>;
+  animations: SceneAnimations | null;
+  puppets: ScenePuppets | null;
+  reader: FetchSceneReader;
+  sceneAssets: readonly string[];
+  /** 脚本环境（建在 `LiveObjects` 之后，接入时现取） */
+  scripts: () => ProbeScripts | null;
+  /** 宿主会整场重载、探针做不了的原因（记进结果） */
+  reloads: string[];
+  /** 运行中出现的不支持项（记进结果） */
+  unsupportedKeys: Set<string>;
+}
+
+/**
+ * 探针的运行中建层（L5）：宿主同一份 `LiveObjects`（两条路、缓存、队列），接进场景的那一侧照宿主 `addCompiledObject` 的顺序：登记表（没有时加）→ 状态的壳
+ * 换成编好的 → 组与挂点 → 绑定按当前属性重写 → 关键帧 → puppet → 文本（排版异步）→ 脚本。GPU 直接调 `GpuScene`（探针没有渲染器）。声音、视频、用户纹理、
+ * 媒体探针本来就不接，这里也不接。场景没有 puppet 图层时新建对象的骨骼动画不推进（探针的 puppet 运行时按 bundle 建，没有时不建）。
+ */
+function createProbeLive(input: ProbeLiveInput): LiveObjects<PreparedObject> {
+  const { registry, state, scene } = input;
+  let texts: SceneTexts | null = null;
+  const target: LiveTarget<PreparedObject> = {
+    alive: (object) => state.layers.has(object),
+    applyDelta: (delta) => registry.applyDelta(delta),
+    adopt: ({ fragment }) => {
+      const object = fragment.object;
+      if (registry.bundle.layers.some((layer) => layer.object === object)) registry.replaceObject(fragment);
+      else registry.addObject(fragment);
+      state.replaceObject(fragment);
+      const structure = input.scripts()?.structure?.() ?? { parents: [] };
+      registry.restructure(state, (item) => configBone(registry.bundle, structure, item));
+      rebindFragment(state, fragment, input.properties);
+      input.animations?.add(fragment.animations);
+      input.puppets?.add(puppetEntry(fragment.layer));
+      let pending: Promise<void> = Promise.resolve();
+      if (fragment.layer.text) {
+        // 探针的文本准备（`probeTexts.ts`）不留实例：运行中建的文本层另开一套（图集和建场景时排的不是同一套，探针可以接受）
+        const owner = (texts ??= new SceneTexts({ reader: input.reader }));
+        pending = owner.layoutInCurrent(fragment.layer).then((layout) => {
+          if (!layout) return;
+          if (state.layers.has(object)) state.setText(object, layout);
+          else owner.releaseLayout(layout);
+        });
+      }
+      input.scripts()?.adoptObject?.(fragment);
+      return pending;
+    },
+    gpu: () => true,
+    prepareSync: (layer) => scene.prepareObjectSync(layer, state),
+    prepare: (layer) => scene.prepareObject(layer, state),
+    install: (prepared) => scene.installObject(prepared, state),
+    discard: (prepared) => scene.discardPrepared(prepared),
+    warm: async (layer) => scene.discardPrepared(await scene.prepareObject(layer, state)),
+    unsupported: (_object, keys) => {
+      for (const key of keys) input.unsupportedKeys.add(key);
+    },
+    reload: (reason) => void input.reloads.push(reason),
+    properties: () => Object.fromEntries([...input.properties].map(([key, property]) => [key, property.value])),
+  };
+  return new LiveObjects(
+    target,
+    (request) => input.session.compileFragment(request),
+    { sync: 0, async: 0, unsupported: 0 },
+    input.cache,
+  );
 }
 
 export function probeKeys(): string[] {
@@ -1062,10 +1291,11 @@ export function hostState(host: SceneHost): unknown {
   };
 }
 
-/** 计数：就地应用次数、重编译记录（含原因）、单图层重建，以及 `render()` 的 CPU 用时统计。 */
+/** 计数：就地应用次数、重编译记录（含原因）、运行中建层（L5）、单图层重建，以及 `render()` 的 CPU 用时统计。 */
 export function hostStats(host: SceneHost): {
   applied: number;
   recompiled: { reason: string; keys: string[] }[];
+  created: SceneHost["stats"]["created"];
   rebuilds: { count: number; meanMs: number; maxMs: number };
   frameMs: { mean: number; p95: number };
 } {
@@ -1073,6 +1303,7 @@ export function hostStats(host: SceneHost): {
   return {
     applied: host.stats.applied,
     recompiled: host.stats.recompiled.map((item) => ({ ...item, keys: [...item.keys] })),
+    created: { ...host.stats.created },
     rebuilds: rebuildSummary(renderer?.currentScene?.rebuildStats),
     frameMs: frameStats(renderer?.frameCosts ?? []),
   };

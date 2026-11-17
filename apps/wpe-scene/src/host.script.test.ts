@@ -178,7 +178,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 // 宿主经常驻编译会话拿 bundle（L2）：会话本身只用到 close 与 stats，这里是空壳
 vi.mock("./compile/client", () => ({
-  openSceneSession: async (input: never) => ({ bundle: await compile(input), session: { close() {}, stats: null } }),
+  openSceneSession: async (input: never) => ({
+    bundle: await compile(input),
+    session: { close() {}, stats: null },
+    exactConfigs: [],
+  }),
 }));
 // 声音的播放后端换成记命令的假货：排期器（`audio/scheduler.ts`）与 `SceneSounds` 是真的
 vi.mock("./audio/player", () => ({
@@ -2625,133 +2629,4 @@ describe("SceneHost 运行中的结构（P6d3a）", () => {
   });
 });
 
-describe("SceneHost 运行时建层（P6d3b，createLayer）", () => {
-  type Layer = { name: string };
-  type Scene = {
-    createLayer(...args: unknown[]): Layer | null;
-    sortLayer(value: unknown, index: number): boolean;
-    getLayerIndex(value: unknown): number;
-  };
-  const scene = () => activeGlobal.thisScene as unknown as Scene;
-  type Structure = { destroyed: number[]; parents: unknown[]; created: { object: number; config: string }[] };
-  const structureOf = (call: number) => (compile.mock.calls[call][0] as unknown as { structure: Structure }).structure;
-  /** 编译替身：照结构给新建对象各加一个图层（配置里的 `name` 带上）、删掉被删对象，`configs` 长度覆盖全部下标，同真实编译。 */
-  function compileWithCreated() {
-    compile.mockImplementation(async (input) => {
-      const { destroyed, created } = (input as unknown as { structure: Structure }).structure;
-      const result = structureBundle(3, [], 2);
-      for (const { object, config } of created) {
-        const parsed = JSON.parse(config) as { name?: string };
-        result.layers.push({ ...result.layers[0], id: 100 + object, object, name: parsed.name ?? "" });
-      }
-      result.configs = Array.from({ length: Math.max(3, ...created.map((item) => item.object + 1)) }, () => null);
-      result.layers = result.layers.filter((layer) => !destroyed.includes(layer.object));
-      return result;
-    });
-  }
-
-  beforeEach(() => {
-    vi.stubGlobal("__SCENE_DEV__", false);
-    vi.stubGlobal("document", {});
-    events.length = 0;
-    imports = 0;
-    destroyed = 0;
-    onUpdate = null;
-    updateArguments = [];
-    onInit = null;
-    onAnimationEvent = null;
-    frozen = false;
-    realmGate = null;
-    moduleGate = null;
-    realmsCreated = 0;
-    forgotten.length = 0;
-    compile.mockReset();
-    compileWithCreated();
-  });
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("首次加载：init 里建了层 → 放弃本次、带结构重编（init 不重跑），首帧就带新对象，位置在 init 里排好的地方", async () => {
-    let first = true;
-    onInit = () => {
-      if (first) {
-        first = false;
-        const bar = scene().createLayer({ image: "models/a.json", name: "bar" });
-        expect(bar).not.toBeNull();
-        expect(scene().getLayerIndex(bar)).toBe(3);
-        scene().sortLayer(bar, 1);
-      }
-      return 0.8;
-    };
-    const reporter = report();
-    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
-    host.applyUserProperties({});
-    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
-    // 编译两次：第一次没有新建对象，第二次带着它；init 只跑一轮（两段脚本各一次），首帧只画了一次
-    expect(compile).toHaveBeenCalledTimes(2);
-    expect(structureOf(0).created).toEqual([]);
-    expect(structureOf(1).created).toEqual([{ object: 3, config: '{"image":"models/a.json","name":"bar","id":4}' }]);
-    expect(events.filter((event) => event === "init")).toHaveLength(2);
-    expect(events.filter((event) => event === "render")).toHaveLength(1);
-    expect(realmsCreated).toBe(1);
-    const state = renderer.sceneState!;
-    expect(state.layers.has(3)).toBe(true);
-    expect(state.order).toEqual([0, 3, 1, 2]);
-    host.dispose();
-  });
-
-  it("运行中建层：请求一次重编译，同一帧里建的多个合并成一次；之后新对象留在状态里", async () => {
-    let step = 0;
-    onUpdate = () => {
-      step++;
-      if (step === 3) {
-        scene().createLayer("models/a.json");
-        scene().createLayer("models/b.json");
-      }
-      return 0.6;
-    };
-    const reporter = report();
-    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
-    host.applyUserProperties({});
-    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
-    await new Promise((resolve) => setTimeout(resolve));
-    expect(compile).toHaveBeenCalledTimes(1);
-    // 第一帧两段脚本各 update 一次，第 3 次 update 在第二帧里
-    renderer.tick();
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(structureOf(1).created.map((item) => item.object)).toEqual([3, 4]);
-    await vi.waitFor(() => expect(events.filter((event) => event === "render")).toHaveLength(2));
-    expect(renderer.sceneState!.order).toEqual([0, 1, 2, 3, 4]);
-    await new Promise((resolve) => setTimeout(resolve));
-    expect(compile).toHaveBeenCalledTimes(2);
-    host.dispose();
-  });
-
-  it("重编译后新建对象一直在（结构随每次编译）；清空脚本存储清掉结构与分配器", async () => {
-    let first = true;
-    onInit = () => {
-      if (first) {
-        first = false;
-        scene().createLayer("models/a.json");
-      }
-      return 0.8;
-    };
-    const reporter = report();
-    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
-    host.applyUserProperties({});
-    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
-    expect(compile).toHaveBeenCalledTimes(2);
-    // 改场景后处理档位触发重编译：结构里的新建对象还在，新状态里也在
-    host.setSceneSettings({ postprocess: "enabled", reflection: "follow", shadows: "follow" });
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(3));
-    expect(structureOf(2).created).toEqual([{ object: 3, config: '{"image":"models/a.json","id":4}' }]);
-    await vi.waitFor(() => expect(events.filter((event) => event === "render")).toHaveLength(2));
-    expect(renderer.sceneState!.layers.has(3)).toBe(true);
-    // 清空脚本存储：结构清零，init 重跑时新建的下标又从原对象数起（分配器清零）
-    first = true;
-    listeners.get("wpe-scene-clear-storage")!({ payload: { imageId: "1" } });
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(5));
-    expect(structureOf(3).created).toEqual([]);
-    expect(structureOf(4).created).toEqual([{ object: 3, config: '{"image":"models/a.json","id":4}' }]);
-    host.dispose();
-  });
-});
+// 运行时建层（P6d3b 的 createLayer）L5 起不再整场重编，用例在 `host.l5.test.ts`。

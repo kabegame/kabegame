@@ -69,7 +69,7 @@ describe("compileSceneInWorker 的进度", () => {
     FakeWorker.script = [
       { type: "progress", done: 0, total: 5 },
       { type: "progress", done: 5, total: 5 },
-      { type: "opened", bundle: bundle as never, stats: STATS },
+      { type: "opened", bundle: bundle as never, stats: STATS, exactConfigs: [] },
     ];
     const { compileSceneInWorker } = await import("./client");
     const reader = { readWhole: vi.fn(), readRange: vi.fn() };
@@ -89,7 +89,9 @@ describe("compileSceneInWorker 的进度", () => {
 describe("compileSceneInWorker 开完即关", () => {
   it("发 open、收到 opened 后发 close 并 terminate；close 幂等", async () => {
     vi.stubGlobal("Worker", FakeWorker);
-    FakeWorker.script = [{ type: "opened", bundle: { unsupported: [], textures: [] } as never, stats: STATS }];
+    FakeWorker.script = [
+      { type: "opened", bundle: { unsupported: [], textures: [] } as never, stats: STATS, exactConfigs: [] },
+    ];
     const { compileSceneInWorker } = await import("./client");
     await compileSceneInWorker({
       projectDir: "P:/p",
@@ -132,7 +134,12 @@ describe("openSceneSession 与片段请求", () => {
   async function open(options: { textureCache?: TextureDecodeCache; unsupported?: string[] } = {}) {
     vi.stubGlobal("Worker", FakeWorker);
     FakeWorker.script = [
-      { type: "opened", bundle: { unsupported: options.unsupported ?? [], textures: [] } as never, stats: STATS },
+      {
+        type: "opened",
+        bundle: { unsupported: options.unsupported ?? [], textures: [] } as never,
+        stats: STATS,
+        exactConfigs: [0, 2],
+      },
     ];
     const { openSceneSession } = await import("./client");
     return openSceneSession({
@@ -142,6 +149,13 @@ describe("openSceneSession 与片段请求", () => {
       textureCache: options.textureCache,
     });
   }
+
+  it("opened 带回的 exactConfigs（L5）：openSceneSession 的返回值与会话上都有，不进 bundle", async () => {
+    const opened = await open();
+    expect(opened.exactConfigs).toEqual([0, 2]);
+    expect(opened.session.exactConfigs).toEqual([0, 2]);
+    expect("exactConfigs" in opened.bundle).toBe(false);
+  });
 
   it("按请求 id 配对：两个请求乱序回复，各自拿到自己的增量；stats 取最近一次", async () => {
     const { session } = await open();

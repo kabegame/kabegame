@@ -1758,6 +1758,19 @@ export class ScriptApi {
     );
   }
 
+  /**
+   * 命中片段缓存时交给运行时的脚本条目（L5）：用 bundle 里这个对象的定型条目（材质常量目标已补 uniforms、动画层字段脚本已过滤，同没命中时片段到达后
+   * `refreshScripts` 换上的），只有 `scriptProperties` 取按当前属性收集的那份（缓存里的片段是按编它那一刻的属性编的，`init` 要拿当前值）。
+   */
+  private compiledScripts(object: number, collected: readonly SceneScript[]): SceneScript[] {
+    const current = new Map(collected.map((script) => [script.id, script.scriptProperties] as const));
+    const prefix = `objects/${object}/`;
+    return this.access
+      .bundle()
+      .scripts.list.filter((script) => script.id.startsWith(prefix))
+      .map((script) => (current.has(script.id) ? { ...script, scriptProperties: current.get(script.id)! } : script));
+  }
+
   /** 图层名（脚本写过的优先，否则已编译的取 `SceneLayer`、待编对象取建出时的）；没有对象是 undefined。 */
   private nameOf(object: number): string | undefined {
     return this.layerNames.get(object) ?? this.findLayer(object)?.name ?? this.pending.get(object)?.name;
@@ -1845,14 +1858,19 @@ export class ScriptApi {
       const parent = typeof parentId === "number" ? this.objectById(parentId) : null;
       const object = create.call(this.access, text, parent);
       if (object === null) return null;
-      const shell = layerShellValues((Array.isArray(config) ? {} : config) as SceneObject);
-      this.pending.set(object, { name: shell.name, id, kind: createdLayerKind(config), config });
+      // 命中片段缓存（L5）：宿主在 `create` 里已经把编好的对象接进了 bundle，不是待编对象
+      const compiled = this.findLayer(object) !== undefined;
+      if (!compiled) {
+        const shell = layerShellValues((Array.isArray(config) ? {} : config) as SceneObject);
+        this.pending.set(object, { name: shell.name, id, kind: createdLayerKind(config), config });
+      }
       this.createdIds.set(id, object);
       if (!Array.isArray(config)) {
         const properties: Record<string, SceneScalar> = Object.fromEntries(
           [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
         );
-        const scripts = collectObjectScriptsSync(config, object, properties);
+        const collected = collectObjectScriptsSync(config, object, properties);
+        const scripts = compiled ? this.compiledScripts(object, collected) : collected;
         if (scripts.length) this.access.addScripts?.(scripts);
       }
       return this.layer(object);

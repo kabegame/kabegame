@@ -74,7 +74,8 @@ pub async fn wpe_steam_subscriptions(
     sort: Option<String>,
     ratings: Option<Vec<String>>,
 ) -> Result<Value, String> {
-    kabegame_core::commands::wpe::wpe_steam_subscriptions(account, page, per_page, sort, ratings).await
+    kabegame_core::commands::wpe::wpe_steam_subscriptions(account, page, per_page, sort, ratings)
+        .await
 }
 
 /// 「从 Steam 导入」的工坊发现：一页创意工坊条目与每条的本地状态。
@@ -90,8 +91,10 @@ pub async fn wpe_steam_workshop_query(
     ratings: Option<Vec<String>>,
     kinds: Option<Vec<String>>,
 ) -> Result<Value, String> {
-    kabegame_core::commands::wpe::wpe_steam_workshop_query(account, page, per_page, sort, days, text, ratings, kinds)
-        .await
+    kabegame_core::commands::wpe::wpe_steam_workshop_query(
+        account, page, per_page, sort, days, text, ratings, kinds,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -101,12 +104,19 @@ pub async fn wpe_steam_login_qr() -> Result<Value, String> {
 
 /// 账号密码登录第一步。密码只在这一次调用里经过内存，不落库、不进日志。
 #[tauri::command]
-pub async fn wpe_steam_login_credentials(account: String, password: String) -> Result<Value, String> {
+pub async fn wpe_steam_login_credentials(
+    account: String,
+    password: String,
+) -> Result<Value, String> {
     kabegame_core::commands::wpe::wpe_steam_login_credentials(account, password).await
 }
 
 #[tauri::command]
-pub async fn wpe_steam_login_submit_code(login_id: String, code: String, kind: String) -> Result<(), String> {
+pub async fn wpe_steam_login_submit_code(
+    login_id: String,
+    code: String,
+    kind: String,
+) -> Result<(), String> {
     kabegame_core::commands::wpe::wpe_steam_login_submit_code(login_id, code, kind).await
 }
 

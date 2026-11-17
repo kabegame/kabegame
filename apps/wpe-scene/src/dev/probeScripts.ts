@@ -15,11 +15,15 @@
  *
  * 要整场重编译的写入（`recompile` 目标、打开带不支持项的 effect、打开没有链的泛光）探针做不了：状态不变，按宿主同一条「值变了才算」
  * （`recordRecompileWrite`）记进结果的 `recompile`，调用方据此判断这一帧不可信。
+ *
+ * `createLayer`（P6d3b → L5）：建壳、记结构之后交给 `live`（`probe.ts` 用宿主同一份 `LiveObjects` 接：命中片段缓存当场接进场景并装 GPU，没命中排给会话），
+ * `init` 之后等排着的片段到齐、接上（`live.settle`，同宿主首次加载），每一帧脚本之前装上已经好了的（`live.drain`）。不给 `live` 时只建壳。
  */
 import type { SceneAnimations } from "../animation/player";
 import { mergeProperties, type UserProperty } from "../compile/bindings";
 import { builtinProperties } from "../compile/builtinProperties";
 import type { SceneBundle } from "../compile/bundle";
+import type { ObjectFragment } from "../compile/fragment";
 import type { SceneStructure } from "../compile/protocol";
 import { SceneFs, type SceneReader } from "../compile/fs";
 import { parseProject, type ProjectJson } from "../compile/model";
@@ -244,7 +248,7 @@ export interface ProbeScriptsResult {
   unconnected: { sound: number; video: number; particles: number };
   /** 脚本注册过的音频缓冲分辨率（缓冲一直全 0）。 */
   audioResolutions: number[];
-  /** `createLayer` 建出的对象数（P6d3b；`init` 里建的由 `renderFrame` 补编，回放中途建的记进 `recompile`，探针做不了）。 */
+  /** `createLayer` 建出的对象数（P6d3b；L5 起都经 `live` 接进场景：命中缓存的当场画出，没命中的 `init` 里建的等片段到齐，回放中途建的赶不上读回帧）。 */
   created: number;
   /** `engine.openUserShortcut` 经门禁（回调类别、参数类型）之后的调用，按发生顺序（P11d）：探针不真的启动，也不发消息。 */
   shortcuts: ProbeShortcutCall[];
@@ -301,21 +305,23 @@ export interface ProbeScriptsInput {
   media?: { replayAfterInit(callbacks: MediaCallbacks): void };
   /** 建 realm（缺省 `createIframeRealm`，在当前文档里建隐藏 iframe）：单测换成不碰 DOM 的假 realm。 */
   createRealm?: (setup: ProbeRealmSetup) => Promise<ScriptRealm>;
+  /** 运行中建层（L5）的落点：不给时 `createLayer` 只建壳、记结构（新对象不画）。 */
+  live?: ProbeLiveHooks;
   /**
-   * `init` 里 `createLayer` 建了对象时，`load()` 在 `init` 之后停下（不套属性值、不交 `applyUserProperties`），等调用方带结构补编后 `swap()`
-   * 换上新 bundle / 状态再补做（同宿主：这两步在最终那份场景的 `beforeFirstFrame`）。`renderFrame` 第一遍给真；补编后的那一遍与单测不给，`load()` 一气做完。
+   * 新建对象下标的下界（L5，`prewarmFragments`）：预跑时编进会话的配置占了 `objects` 下标，这一遍的新建对象排在它们之后（会话只收新下标）。
+   * 缺省按 bundle 的配置个数。
    */
-  deferOnCreate?: boolean;
-  /** 上一遍（补编前）留下的新建对象结构与分配器：这一遍编译用的就是它，`createLayer` 接着分配下标。 */
-  structure?: SceneStructure;
+  firstObject?: number;
 }
 
-/** `swap()` 换上的新场景（补编之后）：bundle、状态，以及用新 bundle 重建的动画 / puppet 运行时。 */
-export interface ProbeScriptsSwap {
-  bundle: SceneBundle;
-  state: SceneState;
-  animations?: ProbeScriptsInput["animations"];
-  puppets?: ProbeScriptsInput["puppets"];
+/** 运行中建层（L5）在探针里的落点：`probe.ts` 用宿主同一份 `LiveObjects` 实现（`script/createLayerChange.ts`）。 */
+export interface ProbeLiveHooks {
+  /** `createLayer` 建好壳、记好结构之后（`parent` 是壳的父）：命中缓存的当场接进场景，没命中的排给会话 */
+  create(object: number, config: string, parent: number | null): void;
+  /** `init` 之后、首次套属性值之前：等排着的片段到齐并接上（同宿主首次加载的 `init` 之后、建 GPU 场景之前） */
+  settle(): Promise<void>;
+  /** 每一帧脚本之前：接上已经好了的（同宿主 `beforeFrame` 开头的 `drain`） */
+  drain(): void;
 }
 
 export interface ProbeScripts {
@@ -347,37 +353,22 @@ export interface ProbeScripts {
   cursor?(input: CursorStepInput): void;
   /** `createLayer` 建出的对象数（P6d3b）；单测的替身可以不给。 */
   createdCount?(): number;
-  /** 运行中的新建对象结构（`SceneStructure.created` 有内容）：补编时交给 `compileSceneInWorker`。 */
+  /** 运行中改过的结构（删掉的、换过父的、新建的）：登记表重算挂点时读 `parents`（L5）。 */
   structure?(): SceneStructure;
-  /** `deferOnCreate` 生效、`load()` 停在 `init` 之后：调用方要带结构补编，再 `swap`。 */
-  needsRestart?(): boolean;
   /**
-   * 补编之后换上新 bundle / 状态（P6d3b，同宿主 `beforeFirstFrame`）：API 与运行时读的 bundle / 状态换成新的、脚本条目换成新 bundle 里的、
-   * 待编对象清掉、分配器对齐，把运行时的写入重放到新状态；`load()` 停过的话补做属性值套用与首次 `applyUserProperties`。
-   * 新状态要先 `adoptStructure(旧状态)`。
+   * 编好的对象接进来之后的脚本一侧（L5，同宿主 `addCompiledObject` 的脚本一步）：条目换成定型的（`refreshScripts`）、重放这个对象建出以来的写入、
+   * API 的待编对象清掉。单测的替身可以不给。
    */
-  swap?(next: ProbeScriptsSwap): void;
+  adoptObject?(fragment: Pick<ObjectFragment, "object" | "scripts">): void;
   /** 调各段的 `destroy`、释放 realm；可以重复调。 */
   dispose(): void;
 }
 
 export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
-  const { options } = input;
-  // bundle / 状态 / 动画 / puppet 在 `swap()` 里换（补编之后，P6d3b），闭包都读这几个变量
-  let bundle = input.bundle;
-  let state = input.state;
-  let animations = input.animations;
-  let puppets = input.puppets;
-  /** `createLayer` 的结构与下标分配器（P6d3b）：探针自己持有，补编那一遍从上一遍接过来。 */
-  const structure: SceneStructure = input.structure
-    ? {
-        destroyed: [...input.structure.destroyed],
-        parents: input.structure.parents.map((item) => [...item]) as SceneStructure["parents"],
-        created: input.structure.created.map((item) => ({ ...item })),
-      }
-    : { destroyed: [], parents: [], created: [] };
-  const allocator: ObjectAllocator = { next: 0 };
-  let deferred = false;
+  const { options, bundle, state, animations, puppets } = input;
+  /** `createLayer` 的结构与下标分配器（P6d3b）：探针自己持有。 */
+  const structure: SceneStructure = { destroyed: [], parents: [], created: [] };
+  const allocator: ObjectAllocator = { next: input.firstObject ?? 0 };
   const screen: [number, number] = [input.screen[0], input.screen[1]];
   /** 当前的回放时间与帧时间：`init` 时都是 0。 */
   const clock = { time: 0, frametime: 0 };
@@ -448,17 +439,11 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     if (applied) runtime?.rememberWrite(target, value);
     return applied;
   };
-  /** `createLayer` 的落点（P6d3b）：建待编对象、记结构；回放中途（`frame` 里）建的探针补编不了，记进 `recompile`。 */
+  /** `createLayer` 的落点（P6d3b → L5）：建壳、记结构，再交给 `live`（同宿主 `onCreateLayer`）。 */
   const createLayer = (config: string, parent: number | null): number | null => {
     syncAllocator(allocator, bundle);
     const object = createStructureObject(state, structure, allocator, config, parent);
-    if (object !== null && frames > 0)
-      recompile.set(`createLayer/${object}`, {
-        path: `createLayer/${object}`,
-        count: 1,
-        firstFrame: frames,
-        value: config,
-      });
+    if (object !== null) input.live?.create(object, config, state.layers.get(object)?.parent ?? null);
     return object;
   };
 
@@ -581,17 +566,13 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       // 同宿主：`init` 之后、首次 `applyUserProperties` 之前补发一轮媒体回调（P11c）
       const loaded = runtime;
       syncAllocator(allocator, bundle);
-      const createdBefore = structure.created.length;
       // 同宿主（P5e）：`init` 读写相机基准的构造缺省值，跑完之后按加载规则收尾；被 `scene.json` 覆盖的字段把脚本的写入从重放表里去掉
-      // （补编后 `swap` 重放写入时不复活，同宿主）
       state.beginScriptInit();
       await loaded.load(bundle.scripts, () => input.media?.replayAfterInit(scriptMediaCallbacks(loaded)));
       for (const field of state.finishScriptInit()) loaded.forgetWrite(targetKey({ kind: "camera-base", field }));
-      // `init` 里建了层（P6d3b）：停在这里，等调用方带结构补编、`swap` 换上新场景后再套属性值（同宿主在最终那份场景的 `beforeFirstFrame`）
-      if (input.deferOnCreate && structure.created.length > createdBefore) {
-        deferred = true;
-        return;
-      }
+      // `init` 里建了层（L5，同宿主首次加载）：没命中缓存的等会话编完、接上，之后才套属性值、交 `applyUserProperties`（绑定要带上新对象的）
+      if (input.live) await input.live.settle();
+      if (disposed) return;
       // 同宿主：`init` 之后按属性全集给挂脚本又绑属性的字段套一次属性值（`init` 拿的是 JSON `value`）
       applyScriptedProperties(bundle.bindings, bundle.scripts, input.properties, state, runtime, true);
       // 同宿主首帧之前（`beforeFirstFrame`）：整份用户属性交一次，`engine.userProperties` 从这时起读得到
@@ -607,6 +588,8 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       clock.time = time;
       clock.frametime = dt;
       frames++;
+      // 运行中建层（L5）：已经编好 / 备好的在脚本之前接上（同宿主 `beforeFrame` 开头）
+      input.live?.drain();
       runtime?.frame(dt);
       // 删除生效（P6d3a）：同宿主 `beforeFrame`，全部脚本之后；探针每次从头编译、用空结构，所以不记 `SceneStructure`
       settleDestroyed(state, {
@@ -619,23 +602,11 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     },
     createdCount: () => structure.created.length,
     structure: () => structure,
-    needsRestart: () => deferred,
-    swap(next) {
+    adoptObject(fragment) {
       if (disposed) return;
-      bundle = next.bundle;
-      state = next.state;
-      animations = next.animations;
-      puppets = next.puppets;
-      syncAllocator(allocator, bundle);
-      // 新建对象编进了 bundle：脚本条目换成新 bundle 里的、API 的待编对象清掉；写入重放到新状态（同宿主 `beforeFirstFrame`）
-      runtime?.refreshScripts(bundle.scripts.list);
+      runtime?.refreshScripts(fragment.scripts);
+      runtime?.replayWritesFor(new Set([fragment.object]));
       api?.adoptBundle();
-      runtime?.replayWrites();
-      if (deferred && runtime) {
-        deferred = false;
-        applyScriptedProperties(bundle.bindings, bundle.scripts, input.properties, state, runtime, true);
-        runtime.applyUserProperties(Object.fromEntries(input.properties), input.properties, bundle.bindings);
-      }
     },
     animationEvent(object, json) {
       if (disposed) return;

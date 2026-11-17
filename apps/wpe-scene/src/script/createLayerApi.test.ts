@@ -78,7 +78,15 @@ function bundleOf(objects: Json[], assetPaths?: string[], perspective = false): 
   } as unknown as SceneBundle;
 }
 
-function harness(objects: Json[], options: { assetPaths?: string[]; perspective?: boolean } = {}) {
+function harness(
+  objects: Json[],
+  options: {
+    assetPaths?: string[];
+    perspective?: boolean;
+    /** 宿主在 `createLayer` 里建好壳之后再做的事（L5：命中片段缓存时当场把编好的对象接进 bundle） */
+    afterCreate?: (object: number, bundle: SceneBundle) => void;
+  } = {},
+) {
   const vm = vmRealm();
   const logs: string[] = [];
   vm.global.console = { log: (text: string) => logs.push(text), error: (text: string) => logs.push(text) };
@@ -145,7 +153,10 @@ function harness(objects: Json[], options: { assetPaths?: string[]; perspective?
     createLayer(config, parent) {
       syncAllocator(allocator, bundle);
       const object = createStructureObject(state, structure, allocator, config, parent);
-      if (object !== null) created.push(object);
+      if (object !== null) {
+        created.push(object);
+        options.afterCreate?.(object, bundle);
+      }
       return object;
     },
     addScripts: (scripts) => runtime.addScripts(scripts),
@@ -574,6 +585,42 @@ export function update(value) { n++; if (n <= 3) L('T.origin update', thisLayer.
     expect(config.alpha.script).toBe(TALPHA);
     expect(config.origin.value).toBe("300 500 0");
     expect("id" in config).toBe(false);
+  });
+});
+
+describe("命中片段缓存（L5）：createLayer 里对象已经编好", () => {
+  it("交给运行时的是 bundle 里的定型条目，只有 scriptProperties 按当前属性收集；不当待编对象；名字、size 读编好的", () => {
+    const source = "export function update(value) { return value; }";
+    const config = {
+      name: "clone",
+      alpha: { script: source, value: 1, scriptproperties: { speed: { user: "s", value: 1 } } },
+    };
+    const added: SceneScript[][] = [];
+    const h = harness(BASE, {
+      afterCreate: (object, bundle) => {
+        // 宿主命中缓存：图层与定型条目（带编译期填的标记，scriptProperties 是编片段那一刻的旧值）进 bundle
+        bundle.layers.push({ ...bundle.layers[0], object, id: 9, name: "clone", size: [64, 32] });
+        const [collected] = collectObjectScriptsSync(config, object, { s: 1 });
+        bundle.scripts.list.push({ ...collected, scriptProperties: { speed: 1 }, valueType: "float", initial: 0.5 });
+      },
+    });
+    h.api.setProperties(new Map([["s", { type: "slider", value: 7 }]]));
+    const original = h.runtime.addScripts.bind(h.runtime);
+    h.runtime.addScripts = (scripts) => {
+      added.push([...scripts]);
+      original(scripts);
+    };
+    const clone = h.scene.createLayer(config);
+    expect(clone.name).toBe("clone");
+    expect([clone.size.x, clone.size.y]).toEqual([64, 32]);
+    expect(added).toHaveLength(1);
+    // 定型条目（initial 是 bundle 里的 0.5），scriptProperties 是当前属性 s = 7
+    expect(added[0].map((script) => [script.id, script.initial, script.scriptProperties])).toEqual([
+      ["objects/3/alpha", 0.5, { speed: 7 }],
+    ]);
+    // 不是待编对象：adoptBundle 之后也不变
+    h.api.adoptBundle();
+    expect(clone.name).toBe("clone");
   });
 });
 

@@ -494,6 +494,8 @@ L3b 的 `removeObjectEverywhere` 在删除生效处只接了 `structural: false`
 
 ### L5 — 运行中建层走片段（`host.ts`、新 `changes.ts`、`script/api.ts`、`script/structure.ts`、`dev/probeScripts.ts`；提示链另涉 `report.ts`、Rust `commands/wpe_scene.rs`、主窗口 `App.vue`）
 
+子计划：[live/phase-l5-create-layer.md](live/phase-l5-create-layer.md)（2026-11-17），拆成 L5a 宿主路径与 L5b 提示链并行。与下面不同的两处：缓存按会话归属、换场景丢掉（片段里的程序 / 纹理下标是会话坐标），重载进行中建的对象在新场景上建壳并排 `create`，不从缓存实例化；无损规整的判定由会话算、经 `opened` 消息带回（`exactConfigs`），不进 bundle。
+
 #### 点 1 — 变更队列
 - **新增**（`changes.ts`）
 ```ts

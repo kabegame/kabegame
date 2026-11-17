@@ -73,6 +73,8 @@ export interface CompileSessionClient {
   compileFragment(request: FragmentRequest, signal?: AbortSignal): Promise<FragmentDelta>;
   /** 最近一次 opened / fragment-done 带回的统计 */
   readonly stats: SessionStats | null;
+  /** 能拿整场 bundle 的片段预置缓存的对象下标（L5，`opened` 带回；打开之前为空） */
+  readonly exactConfigs: readonly number[];
   readonly broken: boolean;
   close(): void;
 }
@@ -82,6 +84,7 @@ const abortError = () => new DOMException("已取消", "AbortError");
 /** 一个 Worker 一个会话的客户端实现。读文件请求由这里代读，会话常驻期间一直接收。 */
 class WorkerSession implements CompileSessionClient {
   stats: SessionStats | null = null;
+  exactConfigs: readonly number[] = [];
   broken = false;
   /** 增量里的 FreeImage 纹理要不要在主线程解（同整场：`unsupported` 为空或强制渲染） */
   decodeFragments = false;
@@ -137,6 +140,8 @@ class WorkerSession implements CompileSessionClient {
         return;
       case "opened": {
         this.stats = message.stats;
+        // 旧版 Worker 消息没有这一项时当全部有损（不预置缓存）
+        this.exactConfigs = message.exactConfigs ?? [];
         const opening = this.opening;
         this.opening = null;
         opening?.resolve(message.bundle);
@@ -228,12 +233,13 @@ class WorkerSession implements CompileSessionClient {
 }
 
 /**
- * 开会话：整场编译 + 主线程解 FreeImage，返回 bundle 与常驻会话。`signal` 只管打开这一段（含解码）：打开前 / 中取消就关 Worker 并抛
- * AbortError，之后会话不再受它影响。出错一律关掉 Worker。
+ * 开会话：整场编译 + 主线程解 FreeImage，返回 bundle、常驻会话与 `exactConfigs`（L5：能拿整场 bundle 的片段预置缓存的对象下标，同
+ * `session.exactConfigs`）。`signal` 只管打开这一段（含解码）：打开前 / 中取消就关 Worker 并抛 AbortError，之后会话不再受它影响。
+ * 出错一律关掉 Worker。
  */
 export async function openSceneSession(
   input: WorkerCompileInput,
-): Promise<{ bundle: SceneBundle; session: CompileSessionClient }> {
+): Promise<{ bundle: SceneBundle; session: CompileSessionClient; exactConfigs: readonly number[] }> {
   if (input.signal?.aborted) throw abortError();
   const module = await getModule();
   if (input.signal?.aborted) throw abortError();
@@ -266,7 +272,7 @@ export async function openSceneSession(
         input.onProgress?.("decode", done, total),
       );
     if (input.signal?.aborted) throw abortError();
-    return { bundle, session };
+    return { bundle, session, exactConfigs: session.exactConfigs };
   } catch (error) {
     session.close();
     throw error;

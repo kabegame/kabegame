@@ -540,5 +540,7 @@
   "wpeShortcutTest": "테스트",
   "wpeShortcutTestStarted": "실행을 요청했습니다",
   "wpeShortcutTestRejected": "이 바로 가기를 실행할 수 없습니다",
-  "wpeShortcutTestFailed": "바로 가기를 실행하지 못했습니다"
+  "wpeShortcutTestFailed": "바로 가기를 실행하지 못했습니다",
+  "wpeSceneUnsupportedDesktop": "바탕 화면의 장면 배경화면이 실행 중에 아직 지원하지 않는 기능을 사용했습니다: {keys}. 해당 레이어는 그려지지 않았습니다",
+  "wpeSceneUnsupportedPreview": "미리보기의 장면 배경화면이 실행 중에 아직 지원하지 않는 기능을 사용했습니다: {keys}. 해당 레이어는 그려지지 않았습니다"
 }

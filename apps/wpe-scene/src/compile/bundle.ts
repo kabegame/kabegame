@@ -1368,6 +1368,18 @@ class EffectIssues extends Set<string> {
 export const EMPTY_STRUCTURE: SceneStructure = { destroyed: [], parents: [], created: [] };
 
 /**
+ * 配置原文经 `normalizeConfig` 的数值规整无损（L5，`SceneCompileSession.exactConfigs`）：每个非整数的有限数按 8 位有效数字取回仍是它自己。
+ * 有损的对象（全库 54 个，L1）规整后编出的片段和按原文编的在少数常量末几位不同，不能拿整场 bundle 的片段预置缓存。
+ */
+export function losslessConfig(value: unknown): boolean {
+  if (typeof value === "number")
+    return Number.isInteger(value) || !Number.isFinite(value) || Number(value.toPrecision(8)) === value;
+  if (Array.isArray(value)) return value.every(losslessConfig);
+  if (value && typeof value === "object") return Object.values(value).every(losslessConfig);
+  return true;
+}
+
+/**
  * 会话的不支持项集合（L1）：`recorder` 非空时，每次 `add` 另记一份（键已在也记），`compileFragment` 据此得到这个对象带来的键，
  * 编完把调用前没有的键从会话里删掉。类型仍是 `Set<string>`，`ShaderCompiler`、`EffectIssues` 等直接持有的就是它。
  */
@@ -1394,6 +1406,12 @@ export interface SceneCompileSession {
   finalize(): Promise<SceneBundle>;
   /** 运行中编一个新对象的片段与增量（`finalize` 之后） */
   compileFragment(request: FragmentRequest): Promise<FragmentDelta>;
+  /**
+   * 能拿整场 bundle 的片段预置缓存的对象（L5，`finalize` 之后）：开会话时在场景里、没删掉、配置原文经规整无损（{@link losslessConfig}）、
+   * 也没有脚本覆盖（`scriptOverrides` 有 `objects/<i>/` 下的路径时，bundle 里的这个对象是按覆盖值编的，和按配置新编的不同）的 `objects` 下标，升序。
+   * 只有会话有原文，所以由会话算、经 `opened` 消息带回宿主，不进 bundle（编译产物摘要不变）。
+   */
+  exactConfigs(): number[];
   /**
    * 忘掉已转移给主线程的缓冲（L2）：解析过的 mdl 里文件缓冲在这批里的条目、`SceneFs` 缓存里字节在这批里的条目都删掉，再要就重读。
    * 纹理 mip 不用管：纹理按路径缓存的只是下标与格式。
@@ -1450,6 +1468,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   // 依赖标记只看加载时的对象（rea-p6d-layers 11：新建层不重算），`loadedLength` 记下加载时的个数
   const loadedLength = scene.objects.length;
   const createdConfigs = new Map<number, string>();
+  /** 新建对象的配置原文（解析后，L5 的 `exactConfigs` 判无损用；数组配置在 `scene.objects` 里换成了 `{}`） */
+  const createdRaw = new Map<number, unknown>();
   for (const { object: at, config } of structure.created) {
     if (!Number.isInteger(at) || at < loadedLength) continue;
     let parsed: unknown;
@@ -1460,6 +1480,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     }
     const objects = scene.objects as unknown[];
     while (objects.length <= at) objects.push(null);
+    createdRaw.set(at, parsed);
     if (Array.isArray(parsed)) {
       // 数组配置：编成一个分组节点（`{}`，照常进 `layers`），配置原文仍是数组
       createdConfigs.set(at, normalizeConfig(parsed));
@@ -1471,6 +1492,10 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   // 加载原文（P6d3）：在套用写入覆盖与删除之前取，`getInitialLayerConfig` 不反映运行中的改动（新建对象取它建出时的配置）
   const configs = scene.objects.map(
     (object, at) => createdConfigs.get(at) ?? (isSceneObject(object) ? normalizeConfig(object) : null),
+  );
+  // 原文规整无损（L5）：同样在套用覆盖与删除之前按原文判
+  const exactAtOpen = scene.objects.map(
+    (object, at) => configs[at] !== null && losslessConfig(createdRaw.has(at) ? createdRaw.get(at) : object),
   );
   for (const [path, value] of Object.entries(input.scriptOverrides ?? {})) {
     const parts = path.split("/");
@@ -3446,6 +3471,19 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     },
     finalize,
     compileFragment,
+    exactConfigs(): number[] {
+      // 脚本覆盖落在哪些对象上：路径形如 `objects/<i>/…`
+      const overridden = new Set<number>();
+      for (const path of Object.keys(input.scriptOverrides ?? {})) {
+        const match = /^objects\/(\d+)\//.exec(path);
+        if (match) overridden.add(Number(match[1]));
+      }
+      const out: number[] = [];
+      exactAtOpen.forEach((exact, at) => {
+        if (exact && !overridden.has(at) && isSceneObject(scene.objects[at])) out.push(at);
+      });
+      return out;
+    },
     forgetBuffers(buffers: ReadonlySet<ArrayBuffer>): void {
       for (const [key, buffer] of mdlBuffers) {
         if (!buffers.has(buffer)) continue;

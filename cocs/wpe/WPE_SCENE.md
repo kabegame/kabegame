@@ -291,6 +291,16 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
   - **整场加载**：`populate` = 场景级准备 → 全部对象并行备好（同步段按图层顺序先跑完，fbo 的建立顺序与 `targets` 下标同以前）→ 被依赖层的独占 RT 全部进表 → 按顺序装上（共用一份世界矩阵缓存）。变体管线与投射者仍在 `build` 的错误作用域之外另跑（现有测试钉住了「坏 WGSL 只落在图层自己的作用域」），但走的是和单对象同一组函数。
   - **删除路径**：`onDestroyed` 接 `structural: true`，不改组归属的删除接着 `restructure`；改组归属的只摘登记表条目、不 `restructure`（子层的 op 还按旧的组），照旧整场重载，L7 去掉。`ScriptApi.newLayerId` 加单调下界 `nextLayerId`，摘掉最大 id 的层后这个 id 不再发（WPE 的 id 不回收）。
   - **判据**：全库画面哈希（`ignore/live/l4/hash-base-*` 两遍基线，排除两遍之间不同的）与改后逐张相同；假设备单测「整场 build = 空场景逐个装」比到 draw 的 pass 键、管线键、顶点 / uniform 字节、op 序列、fbo 池键与引用、投射者、粒子序号、编码轨迹、粒子列的字节；建删 100 次计数回基线。
+- **运行中建层走片段（L5）**：脚本 `createLayer` 不再整场重编译。宿主与 dev 探针共用 `script/createLayerChange.ts` 的 `LiveObjects`（两条路）+ `fragmentCache.ts`（片段缓存）+ `changes.ts`（变更队列），各自只实现「接进场景」的那一侧。
+  - **命中缓存**（键是规整配置 `normalizeConfig`，去 `id`）：`rekeyFragment` 改成新下标、配置里的 id、壳的父 → `addCompiledObject(replace)`（登记表加、状态的壳换成编好的、`restructure`、绑定按当前属性全集重写、子系统、脚本条目换成定型的）→ `prepareObjectSync` + `installObject`，都在 `createLayer` 返回之前完成，之后 `addScripts` 跑 `init` 读到的是编好的 `size`；渲染器这一帧的第二次 `sync` / `encode` 带上它，**当帧画出**（同 WPE）。文本层要等 `layoutInCurrent` 排版，GPU 一律异步、至少晚一帧（已知差异）。
+  - **没命中**：照 P6d3b 建壳、`init` 照常跑，`create` 进队列、会话异步编；片段到达时场景级增量先进登记表、GPU 上预热一次（程序与管线进缓存）；下一帧 `beforeFrame` 开头 `drain`：状态替换、重放这个对象建出以来的脚本写入、按现在的状态同步再备一次再装；片段进缓存。到达前对象已删：只进缓存（建删循环下一轮命中）。
+  - **缓存按会话归属**：片段里的程序 / 纹理下标是会话坐标，换场景 / 整场重载时整个丢掉。从整场 bundle 预置：只收 `fragmentBlocker` 为 null、且原文经规整**无损**（每个非整数有限数 8 位有效数字取回仍是自己；另排除带 `objects/<i>/` 脚本覆盖的、已删的）的对象；无损与否由会话算（`exactConfigs`）、经 `opened` 消息带回，不进 bundle。数组配置、没有 `id` 的配置不进缓存；带「按属性整场重编译」绑定的片段在属性变化时作废（`dropBoundTo`）。
+  - **首次加载 `init` 里建的层**不再二次编译：加载时在 `init` 之前就建好登记表与 `LiveObjects` 并预置缓存，`init` 里建的层命中就当场接进还没换上的 bundle，没命中的等片段到齐接上，再建 GPU 场景。整场重载进行中建的对象：新场景换上时先建壳、再走两条路（能命中新会话预置的缓存）。
+  - **异常**：编片段失败、片段带 `sceneFlips`、装 GPU 出错 → 整场重载（结构里照记）。**运行中出现的不支持项**（已定 4）：这个对象不装 GPU（不画），其余照常，`SceneReporter.unsupported(keys)` 上报、`stats.created.unsupported` 计数，场景不退回。
+  - **提示链**：宿主 `report.unsupported`（同实例同键只报一次）→ `wpe_scene_report` 的 `WpeSceneReport::Unsupported`（记 warn，`emit_to("main", "wpe-scene-unsupported", { image, surface, keys })`，`surface` 按调用方是否壁纸窗口定 `desktop` / `preview`）→ 主窗口 `useSceneUnsupportedNotice`（同一张图同一个键本次运行只提示一次）→ `kameMessage.warning`，文案分桌面 / 预览（`gallery.wpeSceneUnsupported*`，五种语言）。加载时的不支持项照旧整场退回预览图，不走这里。
+  - **结构去重**：`recordDestroyed` 对同一规整配置的已删新建对象只留一条，建删循环的结构长度按配置种类封顶。
+  - **探针**：`renderFrame` 改用会话；`prewarmFragments` 先空跑一遍收集建出的配置、编好进缓存，再正式回放，第一轮就走同步路径（和 WPE 逐帧比用；MCP / REST 的转发还没接，只能 `host_eval` 直调）；不开时片段到达的时机和产品一致，结果里计入 `pending`。
+  - **判据**：编译摘要、登记表与子系统对照不变；`scriptCorpus` 里 `recompile` 的 `createLayer/*` 全部消失、其余不变；全库画面哈希与 L4 基线相同；`p6d3b-bars` / `p6d3b-clone` 的脚本日志与 WPE 逐行不变。
 
 ### 能力表（`features.ts`）
 

@@ -10,6 +10,8 @@ import type { SceneScript } from "../compile/scripts";
 import { SceneState } from "../render/state";
 import { ScriptRuntime, type ScriptRealm } from "./runtime";
 import {
+  addShellObject,
+  createStructureObject,
   destroyNeedsRecompile,
   recordDestroyed,
   recordReparent,
@@ -323,6 +325,56 @@ describe("结构记录", () => {
     recordDestroyed(structure, [3]);
     expect(structure.destroyed).toEqual([1, 3]);
     expect(structure.parents).toEqual([[2, 0, "tip"]]);
+  });
+
+  it("recordDestroyed 去重（L5）：删掉新建对象时，同一规整配置的更早的已删新建对象从 created 与 destroyed 摘掉；每种配置留一个", () => {
+    const config = (id: number, extra: Record<string, unknown> = {}) =>
+      JSON.stringify({ image: "models/a.json", alpha: 0.5, ...extra, id });
+    const structure: SceneStructure = {
+      destroyed: [],
+      parents: [],
+      created: [
+        { object: 5, config: config(1) },
+        // 键序不同、id 不同：规整后同一配置
+        { object: 6, config: JSON.stringify({ id: 2, alpha: 0.5, image: "models/a.json" }) },
+        { object: 7, config: config(3, { name: "other" }) },
+        { object: 8, config: config(4) },
+      ],
+    };
+    recordDestroyed(structure, [5]);
+    expect(structure.created.map((item) => item.object)).toEqual([5, 6, 7, 8]);
+    recordDestroyed(structure, [6]);
+    // 5 与 6 同配置、都已删：摘掉更早的 5
+    expect(structure.created.map((item) => item.object)).toEqual([6, 7, 8]);
+    expect(structure.destroyed).toEqual([6]);
+    // 配置不同的不动；8 还活着时 6 不受影响
+    recordDestroyed(structure, [7]);
+    expect(structure.created.map((item) => item.object)).toEqual([6, 7, 8]);
+    recordDestroyed(structure, [8]);
+    expect(structure.created.map((item) => item.object)).toEqual([7, 8]);
+    expect(structure.destroyed).toEqual([7, 8]);
+    // 加载时的对象（不在 created 里）照旧只追加
+    recordDestroyed(structure, [0]);
+    expect(structure.destroyed).toEqual([7, 8, 0]);
+  });
+
+  it("addShellObject：按给定下标建壳、不分配、不记结构；createStructureObject 分配下标并记结构", () => {
+    const { state } = sceneOf();
+    const structure: SceneStructure = { destroyed: [], parents: [], created: [] };
+    const allocator = { next: 6 };
+    expect(addShellObject(state, 9, '{"image":"models/a.json","origin":"1 2 3"}', null)).toBe(true);
+    expect(state.layers.get(9)!.origin).toEqual([1, 2, 3]);
+    expect(state.order.at(-1)).toBe(9);
+    expect(allocator.next).toBe(6);
+    expect(addShellObject(state, 10, "{", null)).toBe(false);
+    expect(createStructureObject(state, structure, allocator, '{"image":"b"}', 9)).toBe(6);
+    expect(allocator.next).toBe(7);
+    expect(state.layers.get(6)!.parent).toBe(9);
+    expect(state.childrenOf(9)).toEqual([6]);
+    expect(structure.created).toEqual([{ object: 6, config: '{"image":"b"}' }]);
+    // 配置不是 JSON：不分配、不记
+    expect(createStructureObject(state, structure, allocator, "nope", null)).toBeNull();
+    expect(allocator.next).toBe(7);
   });
 
   it("recordReparent：同一个对象只留最后一条，位置在最后", () => {

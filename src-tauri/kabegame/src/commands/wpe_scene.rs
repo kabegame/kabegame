@@ -121,6 +121,13 @@ pub enum WpeSceneReport {
         instance: String,
         reasons: Vec<String>,
     },
+    /// 运行中出现的不支持项（活的场景图 L5 点 5）：场景不退回，相关对象没画出。宿主同实例同键只报一次。
+    Unsupported {
+        instance: String,
+        /// 宿主地址里的 `kbScene`（图片 id），取不到时为空串
+        image: String,
+        keys: Vec<String>,
+    },
     Log {
         level: String,
         message: String,
@@ -148,6 +155,31 @@ pub fn wpe_scene_report<R: tauri::Runtime>(
                 serde_json::json!({ "instance": instance, "kind": "fallback", "reasons": reasons }),
             )
             .map_err(|error| error.to_string()),
+        WpeSceneReport::Unsupported {
+            instance,
+            image,
+            keys,
+        } => {
+            let label = webview.label();
+            // 桌面壁纸窗口没有看板娘：提示一律送主窗口（补丁 14：emit_to 只送这个 label），文案按来源区分
+            let surface = if crate::wallpaper::is_wallpaper_label(label) {
+                "desktop"
+            } else {
+                "preview"
+            };
+            tracing::warn!(
+                target: "kabegame::wpe_scene_host",
+                "{label}: 场景 {image}（实例 {instance}）运行中用到不支持的特性：{}",
+                keys.join(", ")
+            );
+            webview
+                .emit_to(
+                    "main",
+                    "wpe-scene-unsupported",
+                    serde_json::json!({ "image": image, "surface": surface, "keys": keys }),
+                )
+                .map_err(|error| error.to_string())
+        }
         WpeSceneReport::Log { level, message } => {
             let label = webview.label();
             match level.as_str() {
@@ -182,6 +214,9 @@ mod tests {
         );
         assert!(
             matches!(serde_json::from_value::<WpeSceneReport>(serde_json::json!({"kind":"log","level":"info","message":"ok"})), Ok(WpeSceneReport::Log { message, .. }) if message == "ok")
+        );
+        assert!(
+            matches!(serde_json::from_value::<WpeSceneReport>(serde_json::json!({"kind":"unsupported","instance":"3","image":"img-1","keys":["particle:renderers","text:engine"]})), Ok(WpeSceneReport::Unsupported { instance, image, keys }) if instance == "3" && image == "img-1" && keys == ["particle:renderers", "text:engine"])
         );
     }
 }

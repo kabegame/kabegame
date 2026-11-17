@@ -203,6 +203,7 @@ import SettingChoiceHost from "@/components/common/SettingChoiceHost.vue";
 import WallpaperTargetPickerHost from "@/components/wallpaper/WallpaperTargetPickerHost.vue";
 import SettingsDialog from "./components/settings/SettingsDialog.vue";
 import { useGlobalShortcuts } from "./composables/useGlobalShortcuts";
+import { useSceneUnsupportedNotice } from "./composables/useSceneUnsupportedNotice";
 import SidebarActivityBar from "./components/busy/SidebarActivityBar.vue";
 import { useBusyTasks } from "./composables/useBusyTasks";
 import { useOrganizeStore, type OrganizeOptions } from "./stores/organize";
@@ -284,6 +285,8 @@ const openSettingsEntry = () => {
 };
 // 全局快捷键：⌘,(设置) / ⇧⌘R(刷新页面)，全应用唯一一处注册
 useGlobalShortcuts({ openSettings: openSettingsEntry });
+// 场景壁纸运行中的不支持项（桌面与预览的都送到主窗口），经看板娘提示
+useSceneUnsupportedNotice();
 
 // 全局导入弹窗 store
 const organizeStore = useOrganizeStore();
