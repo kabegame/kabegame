@@ -6598,6 +6598,13 @@ export class GpuScene {
     } else for (const layer of topLayers) runTop(layer);
     lightsBefore(Infinity);
     composite();
+    // 屏幕空间反射（P13g）：反射开时把这一帧（泛光前）拷进 mip 帧缓冲并逐级缩小，读它的对象下一帧读到（rea-p13-passes 4.2：
+    // WPE 在 `_rt_FullFrameBuffer` 的拷贝之后、泛光链之前）
+    if (this.reflectionTargets?.updatesMip) {
+      if (!started) begin();
+      end();
+      this.reflectionTargets.encodeMipFramebuffer(encoder, sceneTexture);
+    }
     if (this.bloom && state.bloomEnabled) {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
       if (!started) begin();

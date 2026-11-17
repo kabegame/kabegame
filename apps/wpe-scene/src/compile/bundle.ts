@@ -844,8 +844,12 @@ export interface SceneBundle {
    * 按顺序；`compile/reflection.ts`），只在反射开时写。反射关时两者缺省，渲染器只每帧清屏（P13b1）。
    */
   reflection?: { planar: boolean; enabled?: boolean; list?: number[] };
-  /** `_rt_MipMappedFrameBuffer` 被任何对象读到（P13b1〔g1〕，rea-p13-passes 4.1）：渲染器建带 mip 的 RT，反射关时加载时清成 (0, 0, 0, 1)。 */
-  mipFramebuffer?: boolean;
+  /**
+   * `_rt_MipMappedFrameBuffer` 被任何对象读到（P13b1〔g1〕，rea-p13-passes 4.1）：渲染器建带 mip 的 RT。`update` 是编译期解析好的
+   * 「反射开」（P13g）：每帧主 pass 之后、泛光之前把场景目标拷进 0 级并逐级缩小，读者读到上一帧（rea-p13-passes 4.2）；反射关时
+   * 加载时清成 (0, 0, 0, 1)，之后不更新。
+   */
+  mipFramebuffer?: { update: boolean };
   /**
    * 灯光（P13d）：有开了光照的程序时才有。渲染器每帧按 `SceneState` 现组灯记录（P13f2，`render/lights.ts`）、按当时的 `g_ViewForward`
    * 排序、照 WPE 写整块灯光缓冲（`lightFrame`）并生成阴影条目，读灯光数组的绘制每帧取它的切片（同 `g_Time`）。`quality` 是解析好的阴影档位
@@ -3247,9 +3251,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         }
       }
       if (mipReaders) {
-        // 屏幕空间反射（rea-p13-passes 4.1）：任何对象读到就建
-        bundle.mipFramebuffer = true;
-        if (reflectionOn) unsupported.add("reflection:screen"); // 反射开：P13g 再做，照报
+        // 屏幕空间反射（rea-p13-passes 4.1）：任何对象读到就建；反射开时渲染器每帧更新（P13g）
+        bundle.mipFramebuffer = { update: reflectionOn };
       }
     }
     // 体积光（P13e）：有会画的灯才去读档位（跟随时读 WPE 的 `config.json`）。带阴影的点光每帧要取自己的阴影条目，灯光记录在没有光照程序时也要建
@@ -3461,11 +3464,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         const kind = reflectionKind(layer);
         if (kind) unsupported.add(`reflection:planar:${kind}`);
       }
-      // mip 帧缓冲：场景还没建它时翻转；反射开时屏幕空间反射照报
-      if (mipReads > mipFrom) {
-        if (!bundle.mipFramebuffer) flips.add("mip-framebuffer");
-        if (await reflectionEnabled()) unsupported.add("reflection:screen");
-      }
+      // mip 帧缓冲：场景还没建它时翻转（整场重载时按设置定要不要每帧更新）；已经有了就跟着场景
+      if (mipReads > mipFrom && !bundle.mipFramebuffer) flips.add("mip-framebuffer");
       // 光照位：第一次出现光照 / 遗留灯程序时翻转
       if (!hadLights && bundle.lights) flips.add("lights");
       if (!hadLegacyLights && bundle.legacyLights) flips.add("legacy-lights");

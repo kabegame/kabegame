@@ -181,8 +181,9 @@ export const EFFECT_UNIFORMS: ReadonlySet<string> = new Set(["g_LayerModelMatrix
  * - `SPRITESHEET`：要逐帧的 `g_Texture0Rotation` / `Translation`（P6），现在只给恒等帧；
  * - 蒙皮、变形、预光照：对应的 uniform 也会被 `uniform:*` 报出，这里一并列上，防止只改 COMBO 漏报。
  * - `REFLECTION` 不在这里（P13a）：这个名字在工坊 `cursorripple` 里是波纹在边界反弹的开关、在 `genericimage2` 不带法线图时只是着色器
- *   分支，都不要引擎数据。要引擎数据的两种反射由读到的 RT 报出：平面反射 `reflection:planar`（P13b1 起），屏幕空间反射
- *   `reflection:screen`（P13b1 起 `_rt_MipMappedFrameBuffer` 与槽对应的 `g_Texture<n>MipMapInfo` 在反射关时由渲染器给常量，不再单独报）。
+ *   分支，都不要引擎数据。两种反射都由读到的 RT 决定：平面反射（`_rt_Reflection`，P13b1 / P13b2，反射 pass 画不了的种类报
+ *   `reflection:planar:<种类>`）；屏幕空间反射（`_rt_MipMappedFrameBuffer` 与槽对应的 `g_Texture<n>MipMapInfo`，P13b1 起反射关时由渲染器
+ *   给常量，P13g 起反射开时渲染器每帧更新，不再报）。
  * `ALPHATOCOVERAGE` 自 P8 步骤 5 起不在这里：混合 `alphatocoverage` 的 pass 编译时加它（`writeState.ts` 的 `materialCombos`），着色器
  * 只做 alpha 锐化，丢弃由渲染器的 A2C 入口做；材质自己写它而混合不是 A2C 时只锐化、不丢弃，和 WPE（D3D11 下 `GLSL` 为 0）相同。
  */

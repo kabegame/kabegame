@@ -21,7 +21,7 @@ import { parseParticle, particleFov, type SceneParticle } from "../compile/parti
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { planLayer, planModelLayer, planParticleLayer, planShapeLayer, type DrawStep } from "./graph";
-import { mipLevelCountOf, ReflectionTargets } from "./reflection";
+import { mipDownsampleScale, mipLevelCountOf, mipSourceCoord256, ReflectionTargets } from "./reflection";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
 import type { FrameInput } from "./uniforms";
@@ -56,23 +56,38 @@ interface PassRecord {
   view: FakeView;
   loadOp: string;
   clear: { r: number; g: number; b: number; a: number } | null;
+  /** `setBindGroup` 依次设的 bind group（假设备的 bind group 就是它的描述）。 */
+  bindGroups: { descriptor?: GPUBindGroupDescriptor }[];
+  /** `draw` 的顶点数。 */
+  draws: number[];
+}
+interface CopyRecord {
+  source: string;
+  destination: string;
+  mipLevel: number;
+  size: GPUExtent3DDict;
 }
 
 class FakeGpu {
   readonly textures: FakeTexture[] = [];
   readonly buffers: FakeBuffer[] = [];
   readonly passes: PassRecord[] = [];
+  readonly copies: CopyRecord[] = [];
   submits = 0;
   readonly device: GPUDevice;
 
   constructor() {
-    const renderPass = () => ({
+    const renderPass = (record: PassRecord) => ({
       setViewport() {},
       setPipeline() {},
-      setBindGroup() {},
+      setBindGroup(_index: number, group: { descriptor?: GPUBindGroupDescriptor }) {
+        record.bindGroups.push(group);
+      },
       setVertexBuffer() {},
       setIndexBuffer() {},
-      draw() {},
+      draw(count: number) {
+        record.draws.push(count);
+      },
       drawIndexed() {},
       end() {},
     });
@@ -120,25 +135,53 @@ class FakeGpu {
       createPipelineLayout: () => ({}),
       createRenderPipeline: () => ({ getBindGroupLayout: () => ({}) }),
       createRenderPipelineAsync: async () => ({}),
-      createBindGroup: () => ({}),
+      createBindGroup: (descriptor: GPUBindGroupDescriptor) => ({ descriptor }),
       createCommandEncoder: () => ({
         beginRenderPass: (descriptor: GPURenderPassDescriptor) => {
           const color = [...descriptor.colorAttachments][0]!;
           const value = color.clearValue as GPUColorDict | undefined;
-          this.passes.push({
+          const record: PassRecord = {
             label: descriptor.label ?? "",
             view: color.view as unknown as FakeView,
             loadOp: color.loadOp,
             clear: value ? { r: value.r, g: value.g, b: value.b, a: value.a } : null,
-          });
-          return renderPass();
+            bindGroups: [],
+            draws: [],
+          };
+          this.passes.push(record);
+          return renderPass(record);
         },
-        copyTextureToTexture() {},
+        copyTextureToTexture: (
+          source: GPUTexelCopyTextureInfo,
+          destination: GPUTexelCopyTextureInfo,
+          size: GPUExtent3DDict,
+        ) => {
+          this.copies.push({
+            source: (source.texture as unknown as FakeTexture).label,
+            destination: (destination.texture as unknown as FakeTexture).label,
+            mipLevel: destination.mipLevel ?? 0,
+            size,
+          });
+        },
         copyTextureToBuffer() {},
         finish: () => ({}),
       }),
       queue: {
-        writeBuffer: (buffer: FakeBuffer, offset: number, data: ArrayBuffer, dataOffset = 0, size?: number) => {
+        writeBuffer: (
+          buffer: FakeBuffer,
+          offset: number,
+          data: ArrayBuffer | ArrayBufferView,
+          dataOffset = 0,
+          size?: number,
+        ) => {
+          if (ArrayBuffer.isView(data)) {
+            // 类型化数组：偏移与长度按元素计（同 WebGPU）
+            const element = "BYTES_PER_ELEMENT" in data ? (data.BYTES_PER_ELEMENT as number) : 1;
+            const start = data.byteOffset + dataOffset * element;
+            const length = size !== undefined ? size * element : data.byteLength - dataOffset * element;
+            buffer.bytes.set(new Uint8Array(data.buffer, start, length), offset);
+            return;
+          }
           buffer.bytes.set(new Uint8Array(data, dataOffset, size ?? data.byteLength - dataOffset), offset);
         },
         writeTexture() {},
@@ -155,6 +198,7 @@ class FakeGpu {
   /** 编码一帧，返回这一帧的 render pass 记录。 */
   encode(scene: GpuScene, state: SceneState): PassRecord[] {
     this.passes.length = 0;
+    this.copies.length = 0;
     scene.encode(this.device.createCommandEncoder(), state);
     return [...this.passes];
   }
@@ -255,8 +299,10 @@ describe("ReflectionTargets", () => {
       [true, "rgba16float"],
     ] as const) {
       const gpu = new FakeGpu();
-      const targets = ReflectionTargets.create(gpu.device, { mipFramebuffer: true }, 1920, 1080, hdr)!;
+      const targets = ReflectionTargets.create(gpu.device, { mipFramebuffer: { update: false } }, 1920, 1080, hdr)!;
       expect(gpu.textures).toHaveLength(1);
+      expect(targets.updatesMip).toBe(false);
+      expect(gpu.textures[0].usage & GPUTextureUsage.COPY_DST).toBe(0);
       expect(gpu.textures[0]).toMatchObject({
         label: "_rt_MipMappedFrameBuffer",
         format,
@@ -278,17 +324,114 @@ describe("ReflectionTargets", () => {
       expect(gpu.submits).toBe(1);
       expect(gpu.passes.map((pass) => pass.view.baseMipLevel)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
       for (const pass of gpu.passes) expect(pass.clear).toEqual({ r: 0, g: 0, b: 0, a: 1 });
-      // 每帧的 encode 不碰它
+      // 每帧的 encode 不碰它；反射关时 encodeMipFramebuffer 什么都不做
       targets.encode(gpu.device.createCommandEncoder(), [1, 1, 1]);
+      targets.encodeMipFramebuffer(gpu.device.createCommandEncoder(), gpu.textures[0] as unknown as GPUTexture);
       expect(gpu.passes).toHaveLength(8);
+      expect(gpu.copies).toEqual([]);
     }
+  });
+
+  it("反射开（P13g）：用途带 COPY_DST、建好不清屏；encodeMipFramebuffer 先把源拷进 0 级，再 1…L−1 级各一个 pass 读上一级", () => {
+    for (const [hdr, format] of [
+      [false, "rgba8unorm"],
+      [true, "rgba16float"],
+    ] as const) {
+      const gpu = new FakeGpu();
+      const targets = ReflectionTargets.create(gpu.device, { mipFramebuffer: { update: true } }, 1920, 1080, hdr)!;
+      expect(targets.updatesMip).toBe(true);
+      const [texture] = gpu.texturesOf("_rt_MipMappedFrameBuffer");
+      expect(texture).toMatchObject({ format, size: { width: 1920, height: 1080 }, mipLevelCount: 8 });
+      expect(texture.usage & GPUTextureUsage.COPY_DST).toBeTruthy();
+      // WPE 只在反射关时清；开着时建好不清、不提交
+      expect(gpu.submits).toBe(0);
+      expect(gpu.passes).toEqual([]);
+      const source = { label: "scene target" } as unknown as GPUTexture;
+      targets.encodeMipFramebuffer(gpu.device.createCommandEncoder(), source);
+      expect(gpu.copies).toEqual([
+        {
+          source: "scene target",
+          destination: "_rt_MipMappedFrameBuffer",
+          mipLevel: 0,
+          size: { width: 1920, height: 1080 },
+        },
+      ]);
+      expect(gpu.passes.map((pass) => pass.label)).toEqual(
+        [1, 2, 3, 4, 5, 6, 7].map((k) => `_rt_MipMappedFrameBuffer mip ${k}`),
+      );
+      gpu.passes.forEach((pass, index) => {
+        const level = index + 1;
+        expect(pass.view).toMatchObject({ label: "_rt_MipMappedFrameBuffer", baseMipLevel: level });
+        expect(pass.loadOp).toBe("clear");
+        expect(pass.draws).toEqual([3]);
+        // 读的是上一级的单级视图
+        const entries = [...(pass.bindGroups[0].descriptor!.entries as Iterable<GPUBindGroupEntry>)];
+        expect((entries[0].resource as unknown as FakeView).baseMipLevel).toBe(level - 1);
+        expect((entries[1].resource as unknown as { descriptor: GPUSamplerDescriptor }).descriptor).toEqual({
+          addressModeU: "clamp-to-edge",
+          addressModeV: "clamp-to-edge",
+          magFilter: "linear",
+          minFilter: "linear",
+        });
+        // 定点缩放系数：上一级尺寸 / 这一级尺寸（1080 → 540 → 270 → 135 → 67 → 33 → 16 → 8 的高、1920 起的宽）
+        const scale = (entries[2].resource as unknown as { buffer: FakeBuffer }).buffer;
+        const [sx, sy] = new Uint32Array(scale.bytes.buffer.slice(0, 8));
+        const at = (size: number, l: number) => Math.max(1, size >> l);
+        expect([sx, sy]).toEqual([
+          mipDownsampleScale(at(1920, level - 1), at(1920, level)),
+          mipDownsampleScale(at(1080, level - 1), at(1080, level)),
+        ]);
+      });
+    }
+  });
+
+  it("缩小的定点坐标（步骤 0：p13g 抓帧反推的 GenerateMips）：同式实现与精确值逐个相同；偶数边是 2j + ½，奇数边的整数点落到下一对纹素", () => {
+    const exact = (j: number, c: number) => Number((BigInt(2 * j + 1) * BigInt(c)) >> 17n) - 128;
+    for (const [source, target] of [
+      [1920, 960],
+      [135, 67],
+      [67, 33],
+      [33, 16],
+      [1366, 683],
+      [683, 341],
+      [16384, 8192],
+      [8191, 4095],
+      [3, 1],
+      [1, 1],
+      // 系数的小数部分大于 ½（13 · 2²⁴ / 6 = …​.667）：向下截与就近取不同
+      [13, 6],
+    ]) {
+      const c = mipDownsampleScale(source, target);
+      expect(c).toBe(Math.floor((source * 2 ** 24) / target));
+      for (let j = 0; j < target; j++) expect(mipSourceCoord256(j, c)).toBe(exact(j, c));
+    }
+    // 偶数边：系数正好是 2，坐标 2j + ½ 精确（等于 2×2 平均）
+    expect(mipDownsampleScale(1920, 960)).toBe(2 * 2 ** 24);
+    expect([0, 1, 479].map((j) => mipSourceCoord256(j, 2 * 2 ** 24))).toEqual([128, 640, 958 * 256 + 128]);
+    // 135 → 67：第 33 行理论上正好是 67，WPE 落在 66 + 255/256（抓帧逐行反推）；第 0 行 0 + 129/256（理论 129.91，向下截）
+    const c4 = mipDownsampleScale(135, 67);
+    expect(mipSourceCoord256(33, c4)).toBe(66 * 256 + 255);
+    expect(mipSourceCoord256(0, c4)).toBe(129);
+    // 尺寸为 1 的轴保持 0，3 → 1 取中间那个纹素
+    expect(mipSourceCoord256(0, mipDownsampleScale(1, 1))).toBe(0);
+    expect(mipSourceCoord256(0, mipDownsampleScale(3, 1))).toBe(256);
+  });
+
+  it("反射开：resize 之后按新的级数缩小（1280×720 → 7 级、6 个 pass）", () => {
+    const gpu = new FakeGpu();
+    const targets = ReflectionTargets.create(gpu.device, { mipFramebuffer: { update: true } }, 1920, 1080, false)!;
+    targets.resize(1280, 720);
+    targets.encodeMipFramebuffer(gpu.device.createCommandEncoder(), { label: "scene target" } as unknown as GPUTexture);
+    expect(gpu.copies[0].size).toEqual({ width: 1280, height: 720 });
+    expect(gpu.passes.map((pass) => pass.view.baseMipLevel)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(gpu.passes.every((pass) => pass.view.texture.size.width === 1280)).toBe(true);
   });
 
   it("两张都要：各一张纹理；resize 按新尺寸重建（mip 数跟着变）；destroy 销毁全部", () => {
     const gpu = new FakeGpu();
     const targets = ReflectionTargets.create(
       gpu.device,
-      { reflection: { planar: true }, mipFramebuffer: true },
+      { reflection: { planar: true }, mipFramebuffer: { update: false } },
       1920,
       1080,
       false,
@@ -586,19 +729,93 @@ describe("GpuScene：_rt_Reflection（反射关）", () => {
 
 describe("GpuScene：_rt_MipMappedFrameBuffer（〔g1〕）", () => {
   it("建场景时清一次、之后不更新；g_Texture1MipMapInfo 是 mip 数（float），Resolution 是 RT 尺寸", async () => {
-    const { gpu, scene, state } = await open(bundleOf({ 1: MIP_FRAMEBUFFER_RT }, { mipFramebuffer: true }));
+    const { gpu, scene, state } = await open(
+      bundleOf({ 1: MIP_FRAMEBUFFER_RT }, { mipFramebuffer: { update: false } }),
+    );
     const [texture] = gpu.texturesOf("_rt_MipMappedFrameBuffer");
     expect(texture).toMatchObject({ format: "rgba8unorm", size: { width: 1920, height: 1080 }, mipLevelCount: 8 });
     const clears = gpu.passes.filter((pass) => pass.view.texture.label === "_rt_MipMappedFrameBuffer");
     expect(clears).toHaveLength(8);
     expect(drawUniforms(gpu)).toEqual([1920, 1080, 1920, 1080, 8]);
-    // 每帧不碰它：没有反射清屏，只有场景 pass
+    // 每帧不碰它：没有反射清屏，只有场景 pass，没有拷贝
     expect(gpu.encode(scene, state).map((pass) => pass.label)).toEqual(["scene"]);
+    expect(gpu.copies).toEqual([]);
   });
 
   it("HDR：mip 帧缓冲是 rgba16float", async () => {
-    const { gpu } = await open(bundleOf({ 1: MIP_FRAMEBUFFER_RT }, { mipFramebuffer: true }, { hdr: true }));
+    const { gpu } = await open(
+      bundleOf({ 1: MIP_FRAMEBUFFER_RT }, { mipFramebuffer: { update: false } }, { hdr: true }),
+    );
     expect(gpu.texturesOf("_rt_MipMappedFrameBuffer")[0].format).toBe("rgba16float");
+  });
+
+  it("反射开（P13g）：每帧场景 pass 之后把场景目标拷进 0 级、再逐级缩小；建场景时不清；MipMapInfo 照旧是 mip 数", async () => {
+    for (const hdr of [false, true]) {
+      const { gpu, scene, state } = await open(
+        bundleOf({ 1: MIP_FRAMEBUFFER_RT }, { mipFramebuffer: { update: true } }, { hdr }),
+      );
+      expect(gpu.passes.filter((pass) => pass.view.texture.label === "_rt_MipMappedFrameBuffer")).toEqual([]);
+      expect(drawUniforms(gpu)).toEqual([1920, 1080, 1920, 1080, 8]);
+      for (let frame = 0; frame < 2; frame++) {
+        const passes = gpu.encode(scene, state);
+        expect(passes.map((pass) => pass.label)).toEqual([
+          "scene",
+          ...[1, 2, 3, 4, 5, 6, 7].map((k) => `_rt_MipMappedFrameBuffer mip ${k}`),
+        ]);
+        expect(gpu.copies).toEqual([
+          {
+            source: "scene target",
+            destination: "_rt_MipMappedFrameBuffer",
+            mipLevel: 0,
+            size: { width: 1920, height: 1080 },
+          },
+        ]);
+      }
+    }
+  });
+
+  it("反射开、场景里一个图层都没画：照样先清场景目标再拷（拷的是清屏色）", async () => {
+    const bundle = bundleOf({ 1: MIP_FRAMEBUFFER_RT }, { mipFramebuffer: { update: true } });
+    const { gpu, scene, state } = await open(bundle);
+    state.layers.get(bundle.layers[0].object)!.visible = false;
+    const passes = gpu.encode(scene, state);
+    expect(passes[0]).toMatchObject({ label: "scene", loadOp: "clear" });
+    expect(gpu.copies).toHaveLength(1);
+  });
+
+  it("反射开且有泛光：拷贝与缩小在泛光之前（拷的是泛光前的场景，WPE 的 ResolveSubresource 在泛光链之前）", async () => {
+    /** LDR 泛光链：四个程序（槽 0，combine 另读槽 1），排在图像程序之后。 */
+    const bloomProgram = (slots: number[]) =>
+      ({
+        ...PROGRAM,
+        uniforms: [{ name: "g_RenderVar0", type: "vec4<f32>", declared: "vec4", offset: 0, size: 16 }],
+        uniformBlockSize: 16,
+        textures: slots.map((slot) => ({ slot, binding: 1 + 2 * slot, samplerBinding: 2 + 2 * slot, kind: "2d" })),
+      }) as unknown as TranslateResult;
+    const names = ["quarter", "eighth", "blur", "combine"];
+    const bundle = bundleOf({ 1: MIP_FRAMEBUFFER_RT }, { mipFramebuffer: { update: true } });
+    bundle.programs.push(...names.map((name) => bloomProgram(name === "combine" ? [0, 1] : [0])));
+    bundle.bloom = {
+      hdr: false,
+      passes: Object.fromEntries(
+        names.map((name, index) => [name, pass({ key: `bloom/${name}`, program: 1 + index, blending: "normal" })]),
+      ),
+    } as SceneBundle["bloom"];
+    bundle.general.postprocess = { level: "enabled", bloomFlag: true, hdrFlag: false, bloom: true, hdr: false };
+    const { gpu, scene, state } = await open(bundle);
+    expect(state.bloomEnabled).toBe(true);
+    const labels = gpu.encode(scene, state).map((pass) => pass.label);
+    const lastMip = labels.indexOf("_rt_MipMappedFrameBuffer mip 7");
+    expect(labels.slice(0, lastMip + 1)).toEqual([
+      "scene",
+      ...[1, 2, 3, 4, 5, 6, 7].map((k) => `_rt_MipMappedFrameBuffer mip ${k}`),
+    ]);
+    // 后面是泛光链（至少一个 pass），不再碰 mip 帧缓冲
+    expect(labels.length).toBeGreaterThan(lastMip + 1);
+    expect(labels.slice(lastMip + 1).some((label) => label.includes("_rt_MipMappedFrameBuffer"))).toBe(false);
+    // 第一次拷贝是 mip 帧缓冲的 0 级，泛光的整帧快照在它之后
+    expect(gpu.copies[0]).toMatchObject({ source: "scene target", destination: "_rt_MipMappedFrameBuffer" });
+    expect(gpu.copies.length).toBeGreaterThan(1);
   });
 
   it("绑 _rt_Reflection 的槽没有 MipMapInfo（只有绑 mip 帧缓冲的槽写）", async () => {

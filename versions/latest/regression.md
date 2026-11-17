@@ -3494,6 +3494,20 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | LR4 真机预览 | Windows dev | 图库预览 `3706286085`，按住左键看太阳与车灯变亮，在属性里改太阳方向 | 实时渲染，灯光随按键与属性变化 | 待用户看 |
 | [ ] | LR5 非 Windows | macOS / Linux | 同 LR4 | 同 Windows | 本机不能测 |
 
+## 场景壁纸屏幕空间反射开（P13g）
+
+2026-11-17。「场景反射」开着（或跟随且 WPE 开着）时，`_rt_MipMappedFrameBuffer` 每帧在主 pass 之后、泛光之前从场景目标拷 0 级再逐级缩小，读它的对象读到上一帧，不再报 `reflection:screen`。缩小照 WPE 驱动的 `GenerateMips`：硬件双线性，缩放系数截到 2⁻²⁴、坐标向下截到 1/256（`render/reflection.ts` 的 `MIP_DOWNSAMPLE_WGSL`）。实测与走查见 `phase-13g-screen-reflection.md` 与 `p13-REPORT.md`「P13g 的实测」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | SR0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；`src/render/reflection.test.ts`、`src/compile/p13b1.test.ts` | 0 error、全过 | 2026-11-17：tsc 0 error，2 个文件 67 例全过（新增：反射开的建 / 拷 / 缩小、泛光之前、定点坐标与 BigInt 精确值逐个比） |
+| [x] | SR1 变异检查 | Node，`kbp snapshot export WORKTREE` + `kbp mutate`（`ignore/p13/g/mut/mutations-g.py`） | 13 处：挪到泛光之后、不调、不拷、读错级、反射开照旧清屏、没有 `COPY_DST`、系数两轴对调 / 就近取、坐标就近取 / 溢出、编译期恒不更新、渲染器不看 `update`、照旧报键 | 都被单测抓到 | 2026-11-17：13 / 13（「系数就近取」第一轮漏掉，补了一组系数小数部分大于 ½ 的尺寸）。着色器里的坐标算式单测跑不到，由 SR3 的 GPU 对照兜底（就近取时第 4、5 级各差 11 / 8 个分量） |
+| [x] | SR2 语料 | Node，233 个工程 | HEAD 快照与工作区各扫一遍；再把两份快照的缺省设置换成「开」，扫读 mip 帧缓冲的两张 | 跟随时逐张不变；反射开时只去掉 `reflection:screen` | 2026-11-17：跟随 197 → 197、0 张变化；反射开 `3706286085` 变干净，`3453730450` 还剩 P13h 的三个键 |
+| [x] | SR3 对照 WPE（确定性工程） | Windows dev + WPE 抓帧（`capture_sweep` 临时开反射） | `ignore/p13/g/gen_g.py` 的 `p13g-mip`（1920×1080、1366×768）与 `p13g-hdr` 按日志回放，轨迹读回各级 mip，与抓帧导出的各级逐值比 | 拷贝在泛光之前、读者读到上一帧；各级逐值相同 | 2026-11-17：三种下各级与读者的十条 lod 横带逐值相同（只差读时钟的 CLK 块）；HDR 0 级 > 1 的值保留 |
+| [x] | SR4 走查（FINAL_CHECK） | Windows dev + WPE 抓帧 | `3453730450` 复制工程（`ignore/p13/g/walk/make_iso_3453.py`）反射开 10 帧按日志回放；`3706286085` 复制工程同样 10 帧 | 整帧逐像素相同，差异逐处解释 | 2026-11-17：`3453730450` 10 帧逐像素相同，同一帧反射开 / 关差 109 个像素（最大 57 级）；`3706286085` 的读者（眼睛）被挡住，反射开 / 关逐像素相同，余下的差是已知的偶数帧相机滞后与城市骨骼 K2（第 261 帧只差 37 个像素 ≤ 1） |
+| [ ] | SR5 真机预览 | Windows dev | 设置页「场景反射」改成「开启」，预览 `3453730450`（强制渲染）或 `3706286085`，再改回「跟随」 | 反射开时金属 / 光滑模型上有模糊的屏幕反射，切换设置后整场重新加载 | 待用户看 |
+| [ ] | SR6 非 NVIDIA 显卡 | AMD / Intel | 同 SR3 | 和本机 WPE 的画面一致 | 缩小的滤波是照本机 NVIDIA 驱动反推的，别的驱动可能不同（那时 WPE 自己的画面也不同）；本机不能测 |
+
 ## WPE 壁纸设置与预览设置
 
 2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。

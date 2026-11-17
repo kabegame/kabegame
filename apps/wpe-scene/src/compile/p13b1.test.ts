@@ -4,7 +4,8 @@
  * - 模型的网格读 `_rt_Reflection`（材质 `textures`、着色器注解缺省两种来源）：反射关时 `bundle.reflection.planar`、不报；反射开时报
  *   `reflection:planar`；跟随时读 WPE 的 `general.user.reflection`；
  * - 只有图像层读：不报、那一槽绑棋盘格、`runtime` 里没有它、没有 `bundle.reflection`（步骤 0 R3）；
- * - 读 `_rt_MipMappedFrameBuffer` 与 `g_Texture<n>MipMapInfo`：关时不报、开时报 `reflection:screen`；别的槽的 `MipMapInfo` 照报。
+ * - 读 `_rt_MipMappedFrameBuffer` 与 `g_Texture<n>MipMapInfo`：开关都不报，`mipFramebuffer.update` 是「反射开」（P13g 起开时每帧更新，
+ *   之前报 `reflection:screen`）；别的槽的 `MipMapInfo` 照报。
  */
 import { describe, expect, it, vi } from "vitest";
 import { compileScene, MIP_FRAMEBUFFER_RT, REFLECTION_RT, type SceneBundle } from "./bundle";
@@ -279,22 +280,30 @@ describe("只有图像层读 _rt_Reflection：WPE 不建 RT，绑棋盘格（步
 });
 
 describe("_rt_MipMappedFrameBuffer 与 g_Texture<n>MipMapInfo（〔g1〕）", () => {
-  it("图像层材质 textures 绑它：反射关时不报（MipMapInfo 是引擎 uniform），记 mipFramebuffer；开时报 reflection:screen", async () => {
+  it("图像层材质 textures 绑它：反射关时不报（MipMapInfo 是引擎 uniform）、不更新；开时也不报、每帧更新（P13g）", async () => {
     const image = { shader: "mip", textures: ["", MIP_FRAMEBUFFER_RT] };
     const off = await compile({ image }, { reflection: "disabled" });
     expect(off.unsupported).toEqual([]);
-    expect(off.mipFramebuffer).toBe(true);
+    expect(off.mipFramebuffer).toEqual({ update: false });
     expect(off.reflection).toBeUndefined();
     expect(off.layers[0].passes[0].runtime).toEqual({ 1: MIP_FRAMEBUFFER_RT });
     const on = await compile({ image }, { reflection: "enabled" });
-    expect(on.unsupported).toEqual(["reflection:screen"]);
-    expect(on.mipFramebuffer).toBe(true);
+    expect(on.unsupported).toEqual([]);
+    expect(on.mipFramebuffer).toEqual({ update: true });
+    expect(on.layers[0].passes[0].runtime).toEqual({ 1: MIP_FRAMEBUFFER_RT });
+  });
+
+  it("跟随 WPE：update 随 config.json 的 reflection（false 关，true / 缺键开）", async () => {
+    const image = { shader: "mip", textures: ["", MIP_FRAMEBUFFER_RT] };
+    expect((await compile({ image }, { config: userConfig(false) })).mipFramebuffer).toEqual({ update: false });
+    expect((await compile({ image }, { config: userConfig(true) })).mipFramebuffer).toEqual({ update: true });
+    expect((await compile({ image }, { config: userConfig() })).mipFramebuffer).toEqual({ update: true });
   });
 
   it("注解缺省绑它：同样不报 MipMapInfo", async () => {
     const off = await compile({ image: { shader: "mipdef" } }, { reflection: "disabled" });
     expect(off.unsupported).toEqual([]);
-    expect(off.mipFramebuffer).toBe(true);
+    expect(off.mipFramebuffer).toEqual({ update: false });
   });
 
   it("别的槽的 MipMapInfo 照旧报 uniform:*（槽 0 绑的不是 mip 帧缓冲）", async () => {
