@@ -29,6 +29,14 @@ if (live === this.live && this.registry?.bundle.layers.find((item) => item.objec
 ## 点 2 — 宿主（`host.ts`）
 - **删除** `objectLive` 的 `dependedOn` 退回与注释；L5 / L6 文档里相应的「被依赖的图层照旧整场」改掉。
 
+## 结果（2026-11-17，我自己改的）
+
+- **实现与计划的差别**：`rebindUserDraw` 改名 `rebindDrawInputs`（它不再只服务用户纹理）；沿用判定除尺寸、格式外还比采样器（`sameTargetShape`：`sampler()` 按描述缓存，同参数是同一个对象；`nointerpolation` 变了就得换 RT）；`teardown` 加 `keepTarget` 选项由 `installCore` 决定，不另做延迟释放（`teardown` 到重绑之间是同步的、不提交引用方的 draw）。反射副本不用额外处理：`reflectionCopyOf` 比 `copy.source !== bindGroupOf(draw)`，主 draw 换了 bind group 它就重建。
+- **单测**：`render/l4.test.ts` 三条（形状相同沿用、尺寸变了换新 + 重绑、尺寸相同但采样变了也换新），`host.l6.test.ts` 原「被依赖的图层照旧整场」改成「也走单对象重编译」。相关目录 182 个文件 3727 条通过（111 skipped），tsc 0 错误，prettier 通过。
+- **变异**（5 条，全部抓到，按原字节还原）：形状不同也沿用；换了新 RT 不重绑；沿用时仍释放旧 RT；`sameTargetShape` 不看采样器；`objectLive` 仍因 `dependedOn` 退回。
+- **真机**（`ignore/live/l6b/proj/live-dep`，图片 15484）：A1（带纹理，RT 形状不变 → 沿用）、A2（纯色，RT 随 `size` 变 → 换新 + 重绑）各被 B1 / B2 的 kbref effect 引用；经宿主的 `wallpaperPropertyListener.applyUserProperties` 改两次 `sz`：`recompiledObjects` 2 → 4、`recompiled: []`、一次「开始渲染」、脚本帧号连续到 1500、无 WebGPU 错误；画面按新 size 变、引用方正常；粒子 206 → 301 连续，帧时间 0.32 ms。
+- 回归条目见 `versions/latest/regression.md` L6 节的 T4、T7。
+
 ## 验收
 - 单测：`l4` / `l6`：替换被依赖层、尺寸相同 → 沿用同一张 RT（句柄相同、引用方 bind group 不重建）；尺寸不同 → 新 RT、引用方 draw 重绑且 `g_Texture<n>Resolution` 换新尺寸、旧 RT 释放；`host.l6`：被依赖层走单对象重编译、`recompiled` 不增。
 - 变异：尺寸不同也沿用（引用方读到旧尺寸）；不重绑；`objectLive` 退回不删（用例失败）。

@@ -7,7 +7,9 @@
  * - 粒子索引缓冲：先装小 `maxcount` 再装大的，缓冲重建、旧 draw 编码时用新缓冲；
  * - `prepareObjectSync`：管线就绪时不建新管线；缺管线时同步建；缺程序时返回 null、什么都不建；
  * - `installObject` 中途失败（`createTarget` 抛）回滚：运行时、索引、draw 都不含它，fbo 引用不涨；
- * - L6：`installObject` 替换同一对象时粒子定义相同沿用旧的粒子树（之后每帧和没替换过的逐位相同），不同就新建、接回脚本暂停 / 停止。
+ * - L6：`installObject` 替换同一对象时粒子定义相同沿用旧的粒子树（之后每帧和没替换过的逐位相同），不同就新建、接回脚本暂停 / 停止；
+ * - L6b：替换被依赖的图层时独占 RT 形状相同就沿用旧的那张（引用方不动），形状变了换新的、旧的销毁、引用方的 draw 重绑并按新尺寸写
+ *   `g_Texture<n>Resolution`。
  * 搭法同 `p6d3.test.ts` / `rebuild.test.ts`。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -514,6 +516,10 @@ interface DrawView {
   pipeline: { label: string };
   vertexBuffer: FakeBuffer;
   uniformBuffer: FakeBuffer | null;
+  /** L6b：被依赖图层换了独占 RT 时引用方重绑，看 bind group 换没换、按槽的纹理尺寸与脏标记 */
+  bindGroup: unknown;
+  textureSizes: { width: number; height: number }[];
+  dirty: boolean;
 }
 interface RuntimeView {
   object: number;
@@ -953,6 +959,58 @@ describe("installObject 替换同一对象（L6 单对象重编译）", () => {
     expect(next).not.toBe(system);
     expect(next.columns.capacity).toBe(24);
     expect(next.scriptIsPlaying()).toBe(false);
+  });
+
+  it("L6b 被依赖的图层、独占 RT 形状相同：沿用旧的那张（不销毁、不重建），引用方的 bind group 不动", async () => {
+    const live = await full(mixed());
+    const target = internals(live.scene).layerTargets.get(3) as { texture: FakeTexture };
+    const user = [...internals(live.scene).draws].find((item) => item.object === 4)!;
+    const bindGroup = user.bindGroup;
+    const sizes = [...user.textureSizes];
+    await replaceWith(live, dependedLayer(3));
+    expect(internals(live.scene).layerTargets.get(3)).toBe(target);
+    expect(target.texture.destroyed).toBe(false);
+    // 引用方的 draw 没被碰过（bind group 与按槽的尺寸都是原来那份）
+    const after = [...internals(live.scene).draws].find((item) => item.object === 4)!;
+    expect(after).toBe(user);
+    expect(after.bindGroup).toBe(bindGroup);
+    expect(after.textureSizes).toEqual(sizes);
+  });
+
+  it("L6b 被依赖的图层、独占 RT 形状变了：换新的、旧的销毁，引用方重绑并按新尺寸写 g_Texture<n>Resolution", async () => {
+    const live = await full(mixed());
+    const target = internals(live.scene).layerTargets.get(3) as { texture: FakeTexture; width: number };
+    const user = [...internals(live.scene).draws].find((item) => item.object === 4)!;
+    const bindGroup = user.bindGroup;
+    expect(user.textureSizes[1]).toMatchObject({ width: target.width, height: 64 });
+    // 独占 RT 的尺寸取槽 0 的纹理（`compositeSize`）：换成 image96（96×48）
+    const fresh = dependedLayer(3);
+    fresh.passes[0].textures = { 0: 2 };
+    await replaceWith(live, fresh);
+    const next = internals(live.scene).layerTargets.get(3) as { texture: FakeTexture; width: number };
+    expect(next).not.toBe(target);
+    expect(next.width).toBe(96);
+    expect(target.texture.destroyed).toBe(true);
+    const after = [...internals(live.scene).draws].find((item) => item.object === 4)!;
+    expect(after).toBe(user);
+    expect(after.bindGroup).not.toBe(bindGroup);
+    expect(after.textureSizes[1]).toMatchObject({ width: 96, height: 48 });
+    expect(after.dirty).toBe(true);
+  });
+
+  it("L6b 被依赖的图层、尺寸相同但采样变了（nointerpolation）：也换新的 RT、引用方重绑", async () => {
+    const live = await full(mixed());
+    const target = internals(live.scene).layerTargets.get(3) as { texture: FakeTexture; width: number };
+    const user = [...internals(live.scene).draws].find((item) => item.object === 4)!;
+    const bindGroup = user.bindGroup;
+    const fresh = dependedLayer(3);
+    fresh.noInterpolation = true;
+    await replaceWith(live, fresh);
+    const next = internals(live.scene).layerTargets.get(3) as { texture: FakeTexture; width: number };
+    expect(next).not.toBe(target);
+    expect(next.width).toBe(target.width);
+    expect(target.texture.destroyed).toBe(true);
+    expect([...internals(live.scene).draws].find((item) => item.object === 4)!.bindGroup).not.toBe(bindGroup);
   });
 
   it("sameParticleDefinition：同样的编译产物（键序不同也算）相同，任一字段不同就不同", () => {

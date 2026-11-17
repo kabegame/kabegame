@@ -376,6 +376,14 @@ interface RenderTarget {
 }
 
 /**
+ * 两张渲染目标的形状相同（L6b）：尺寸、格式与采样器（`sampler()` 按描述缓存，同参数是同一个对象）。替换被依赖的图层时据此沿用旧的独占 RT，
+ * 引用方的 bind group 不用重绑。
+ */
+function sameTargetShape(a: RenderTarget, b: RenderTarget): boolean {
+  return a.width === b.width && a.height === b.height && a.format === b.format && a.sampler === b.sampler;
+}
+
+/**
  * 一个图层用到的合成 RT（可能来自共享池）与 fbo 名 → `targets` 下标的对应。
  * 跨单图层重建保留：合成 RT 只增不减，fbo 的 swap 状态不丢。文本层（P6b 1e）的合成 RT 与 fbo 由本层独占，排版尺寸变了就换成新尺寸的
  * （fbo 在同一个下标上换，对应与 swap 状态不丢），图集随排版重新取。
@@ -773,7 +781,7 @@ interface Draw {
    * 材质没覆盖时为真。
    */
   trailRenderVar: boolean;
-  /** 按槽位的纹理尺寸（就地刷新时复用；用户纹理换图时 `rebindUserDraw` 重算）。 */
+  /** 按槽位的纹理尺寸（就地刷新时复用；用户纹理换图时 `rebindDrawInputs` 重算）。 */
   textureSizes: readonly (TextureSize | undefined)[];
   /** 这个 draw 的输入里用到的用户纹理属性来源（P11b 步骤 2，去重）：来源标脏时 `sync` 按它找 draw。 */
   userNames: string[];
@@ -783,7 +791,7 @@ interface Draw {
    */
   videos: number[];
   /**
-   * 着色器绑定的 GIF / 视频用户纹理（P11b 步骤 4，同 `videos` 只看真正绑定的槽，按纹理名去重）：建 draw 与 `rebindUserDraw` 时算，
+   * 着色器绑定的 GIF / 视频用户纹理（P11b 步骤 4，同 `videos` 只看真正绑定的槽，按纹理名去重）：建 draw 与 `rebindDrawInputs` 时算，
    * 编码时在视频之后逐个 `drawn()`，有内容就上传（`uploadUserFrame`）。没有时为空。
    */
   userAnimations: UserAnim[];
@@ -1691,9 +1699,10 @@ export class GpuScene {
 
   /**
    * `removeObject` 的实现。`replacing`（`installObject` 替换同一对象，L5）：不记进 `removedObjects`、不动挂在它骨骼上的子对象的挂点，
-   * `layerByObject` 留给新图层覆盖。
+   * `layerByObject` 留给新图层覆盖。`keepTarget`（L6b）：被依赖图层的独占 RT 留着不释放（替换时新旧形状相同、沿用旧的那张，引用方
+   * 的 bind group 不用重绑），由调用方覆盖 `layerTargets`。
    */
-  private teardown(object: number, options: { replacing?: boolean } = {}): void {
+  private teardown(object: number, options: { replacing?: boolean; keepTarget?: boolean } = {}): void {
     const runtime = this.runtimeByObject.get(object);
     if (!runtime) return;
     const replacing = options.replacing ?? false;
@@ -1706,7 +1715,7 @@ export class GpuScene {
     this.runtimeByObject.delete(object);
     this.trees.delete(object);
     const own = this.layerTargets.get(object);
-    if (own) {
+    if (own && !options.keepTarget) {
       this.releaseTarget(own);
       this.layerTargets.delete(object);
     }
@@ -3608,7 +3617,15 @@ export class GpuScene {
     const previous = this.runtimeByObject.get(object);
     const previousTree = this.trees.get(object);
     const at = previous ? this.layers.indexOf(previous) : -1;
-    if (previous) this.teardown(object, { replacing: true });
+    // 替换被依赖的图层（L6b）：它的独占合成 RT 被引用方的 bind group 烤着。新旧形状相同（`size` 没重编）时沿用旧的那张，引用方不用重绑；
+    // 形状变了才换新的，旧的由 `teardown` 释放、引用方在下面重绑（这中间是同步的，不提交引用方的 draw）
+    const previousTarget = previous ? (this.layerTargets.get(object) ?? null) : null;
+    const reuseTarget =
+      previousTarget && prepared.layerTarget && sameTargetShape(previousTarget, prepared.layerTarget)
+        ? previousTarget
+        : null;
+    if (reuseTarget && prepared.layerTarget) this.releaseTarget(prepared.layerTarget);
+    if (previous) this.teardown(object, { replacing: true, keepTarget: !!reuseTarget });
     const runtime: LayerRuntime = {
       object,
       layer,
@@ -3629,7 +3646,8 @@ export class GpuScene {
     this.layerByObject.set(object, layer);
     if (prepared.textFbos) this.textFbos.set(object, prepared.textFbos);
     for (const [key, target] of prepared.morphs) this.morphTargets.set(key, target);
-    if (prepared.layerTarget) this.layerTargets.set(object, prepared.layerTarget);
+    const layerTarget = reuseTarget ?? prepared.layerTarget;
+    if (layerTarget) this.layerTargets.set(object, layerTarget);
     try {
       // 粒子序号（定种子）：登记表或缺省的计数给，装的时候取一次（单图层重建的 `createParticleTree` 读表）
       if (layer.particle) this.particleOrdinals.set(object, this.particleOrdinal(object));
@@ -3649,6 +3667,8 @@ export class GpuScene {
       if (typeof prepared.variants === "string") this.freezeVariants(layer, state, prepared.variants);
       if (prepared.shadows) this.installShadowCasters(runtime, prepared.shadows, state);
       this.ensureParticleIndices(this.particleCapacityOf(layer, prepared.plan));
+      // 被依赖图层换了独占 RT（L6b，形状变了）：引用它的 draw 的 bind group 与 `g_Texture<n>Resolution` 还按旧的那张，重绑（同 P11b 换图）
+      if (previousTarget && previousTarget !== layerTarget) this.rebindDependents(object, state, worlds);
     } catch (error) {
       this.teardown(object);
       throw error;
@@ -4801,7 +4821,7 @@ export class GpuScene {
    * 1. （RT 参考的槽从第一次真正写入起才生效，M8：`state.userWritten`，解码完成不算）；
    * 2. 槽 0 在图像层基础 pass 上的图层整层强制重建（`ensureUserSizing` 换合成 RT 与 fbo，UV 与合成尺寸随 `planLayer`），清它的 fbo；
    *    被依赖图层的独占 RT 换了尺寸，引用它的 draw 重绑；
-   * 3. 其余用到这些来源的 draw 只重建 bind group、重写 `g_Texture<n>Resolution` 与颜色组（`rebindUserDraw`）；
+   * 3. 其余用到这些来源的 draw 只重建 bind group、重写 `g_Texture<n>Resolution` 与颜色组（`rebindDrawInputs`）；
    * 4. 没有槽引用的用户纹理销毁（来回切换时 CPU 侧的解码结果还在来源表里，不重复解码）。
    * 没有标脏的来源时什么都不做，非用户纹理场景的行为不变。
    */
@@ -4828,9 +4848,22 @@ export class GpuScene {
       const named = draw.userNames.some((name) => names.has(name));
       const referencing =
         resized.size > 0 && Object.values(draw.step.inputs).some((ref) => this.refersToLayer(ref, resized));
-      if (named || referencing) this.rebindUserDraw(draw, state, worlds);
+      if (named || referencing) this.rebindDrawInputs(draw, state, worlds);
     }
     this.releaseUnusedUserTextures();
+  }
+
+  /**
+   * 被依赖图层换了独占 RT（L6b，单对象重编译替换它、形状变了）：引用它的 draw 的 bind group 烤着旧那张的句柄，重绑并按新尺寸重写
+   * `g_Texture<n>Resolution`。它自己的 draw 刚建好、已按新的，跳过。
+   */
+  private rebindDependents(object: number, state: SceneState, worlds: Map<number, Mat4>): void {
+    const objects = new Set([object]);
+    for (const draw of this.draws) {
+      if (draw.object === object || draw.step.kind !== "draw") continue;
+      if (Object.values(draw.step.inputs).some((ref) => this.refersToLayer(ref, objects)))
+        this.rebindDrawInputs(draw, state, worlds);
+    }
   }
 
   /** 这个输入是不是被依赖图层 `objects` 之一的独占 RT（直接引用，或用户纹理的缺省）。 */
@@ -4840,10 +4873,11 @@ export class GpuScene {
   }
 
   /**
-   * 一个 draw 的用户纹理换了图（不重建图层）：重算按槽的纹理尺寸，重建 bind group，重写 `g_Texture<n>Resolution` / `g_Texture<n>Texel`
+   * 一个 draw 的输入纹理换了（不重建图层）：重算按槽的纹理尺寸，重建 bind group，重写 `g_Texture<n>Resolution` / `g_Texture<n>Texel`
    * 与颜色组（组合层 / instanced 的强制白）。粒子与网格的 draw 不处理（粒子槽编译期照报，P11b 不做）。
+   * 用在用户纹理换图（P11b）与被依赖图层换了独占 RT（L6b）两处；反射副本的 bind group 跟着主 draw 的换（`reflectionCopyOf` 比 `source`）。
    */
-  private rebindUserDraw(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
+  private rebindDrawInputs(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
     const { step, program } = draw;
     if (step.kind !== "draw") return;
     const slots = Math.max(10, ...program.textures.map((t) => t.slot + 1));

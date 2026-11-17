@@ -399,17 +399,24 @@ describe("分级与替换（L6 点 3）", () => {
     host.dispose();
   });
 
-  it("被依赖的图层（别的图层绑它的独占合成 RT）：照旧整场重编译（GPU 替换会放掉引用方还绑着的 RT）", async () => {
+  it("被依赖的图层（别的图层绑它的独占合成 RT）也走单对象重编译（L6b）：不整场重编译，GPU 照常替换", async () => {
     compile.mockImplementation(async () => {
       const result = sceneBundle();
       result.layers[1].dependedOn = true;
       return result;
     });
-    const { host } = await open();
+    const { host, internals } = await open();
     writeRecompile(host, "objects/1/font", "fonts/b.ttf");
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect(sessions[0].requests).toEqual([]);
-    expect(host.stats.recompiled).toEqual([{ reason: "script（objects/1/font）", keys: [] }]);
+    const requests = sessions[0].requests.map((item) => item.request);
+    expect(requests).toEqual([expect.objectContaining({ object: 1, overrides: { font: "fonts/b.ttf" } })]);
+    sessions[0].requests[0].resolve(deltaFor(requests[0]));
+    await flush();
+    renderer.tick();
+    expect(registryLayer(internals, 1)!.size).toEqual([96, 48]);
+    expect(gpu.installed).toEqual([1]);
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(host.stats.recompiled).toEqual([]);
+    expect(host.stats.recompiledObjects).toBe(1);
     host.dispose();
   });
 

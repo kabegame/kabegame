@@ -789,9 +789,7 @@ export class SceneHost {
         ? this.live
         : null;
     if (!live || !this.scriptState?.layers.has(object) || this.structure.destroyed.includes(object)) return null;
-    // 被依赖的图层（别的图层按名字绑它的独占合成 RT）：GPU 替换会放掉旧 RT，引用方的 draw 不重绑（L5 定），照旧整场。`init` 期间还没有 GPU 场景，不受限
-    if (live === this.live && this.registry?.bundle.layers.find((item) => item.object === object)?.dependedOn)
-      return null;
+    // 被依赖的图层（别的图层按名字绑它的独占合成 RT）L6b 起也走这条路：替换时形状相同沿用旧 RT、变了引用方重绑（`GpuScene.installCore`）
     return live;
   }
 
