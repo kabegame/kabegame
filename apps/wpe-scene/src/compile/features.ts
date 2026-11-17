@@ -513,16 +513,15 @@ export function checkSceneFeatures(scene: SceneJson, unsupported: Set<string>): 
 
 /**
  * 透视场景里没测过、只看对象 JSON 就能判的用法（P5d 步骤 2，计划点 7）：
- * - `camera:perspective:text`：文本对象。P6b 只测了正交，透视场景里文本选 `_depth` 材质（rea-p6b-raster 1）；
  * - `camera:perspective:shape`：形状对象。缺省尺寸是正交高（透视场景里 WPE 取 1），语料 0；
  * - `camera:perspective:image`：图像层 / 模型 `perspective: true`（rea-p5-camera 7.3【推】，语料 0）。
- * 要编完模型 / 粒子才能判的三个在 `bundle.ts`：`camera:perspective:projectlayer`（`autosize` + `projectlayer`）、
- * `camera:perspective:group`（带子层的组合层）、`camera:perspective:particle`（粒子系统树里有 `flags & 4`）。
+ * 要编完模型 / 粒子才能判的两个在 `bundle.ts`：`camera:perspective:projectlayer`（`autosize` + `projectlayer`）、
+ * `camera:perspective:particle`（粒子系统树里有 `flags & 4`）。
+ * 文本对象（选 `_depth` 材质，`compile/texts.ts`）与带子层的组合层（组的局部正交照画）P13h 起支持，不再报。
  */
 export function perspectiveObjectIssues(object: SceneObject): string[] {
   const keys: string[] = [];
   const kind = objectKind(object);
-  if (isTextObject(object)) keys.push("camera:perspective:text");
   if (isShapeObject(object)) keys.push("camera:perspective:shape");
   if ((kind === "image" || kind === "model") && object.perspective === true) keys.push("camera:perspective:image");
   return keys;
@@ -721,8 +720,8 @@ const CAMERA_KEYS = new Set(["camera", "fov", "zoom", "path", "queuemode"]);
 
 /**
  * 文本对象自己的键（描述符表 `DAT_1404e88e0`，rea-p6b-layout 1.2）。排版类键、背景、`depthtest` 已实现或中性：
- * - `depthtest`：只在透视场景选 `_depth` 材质，正交场景恒用无深度材质（rea-p6b-raster 1，p6-REPORT 实测），透视场景里的文本对象
- *   另报 `camera:perspective:text`（P5d 步骤 2，`perspectiveObjectIssues`）；
+ * - `depthtest`：只在透视场景选 `_depth` 材质（P13h，`compile/texts.ts` 的 `TEXT_DEPTH_MATERIALS`），正交场景恒用无深度材质
+ *   （rea-p6b-raster 1，p6-REPORT 实测）；
  * - 描边、模糊、投影的参数（`outlinethickness` 等）只在 MSDF 路径用，开关另由 `checkTextOptions` 报；
  * - `backgroundbrightness` 只在 HDR 下乘进背景色（`compile/texts.ts`）。
  * 不在这张表、文本上同样中性的：`size`（运行时用排版结果覆盖，1.4）、`alignment`（不在文本的查找链上）、`copybackground`（文本的

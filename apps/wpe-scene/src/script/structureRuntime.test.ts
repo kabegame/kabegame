@@ -267,54 +267,47 @@ describe("settleDestroyed（宿主与探针共用）", () => {
 describe("组内不支持组合（L7，groupSelfIssues / trackGroupIssues）", () => {
   const layer = (object: number, extra: Partial<SceneLayer> = {}) =>
     ({ object, passthroughModel: false, subtree: [], ...extra }) as SceneLayer;
-  const ORTHO = { perspective: false };
 
-  it("groupSelfIssues：只有成了组（组合层且子树非空）才报，键同编译期", () => {
+  it("groupSelfIssues：只有成了组（组合层且子树非空）才报，键同编译期；透视场景不再报（P13h）", () => {
     const group = { passthroughModel: true, subtree: [2], dependedOn: true, fogPassthrough: true as const };
-    expect(groupSelfIssues(group, { perspective: true })).toEqual([
-      "camera:perspective:group",
-      "dependency:group",
-      "fog:group",
-    ]);
-    expect(groupSelfIssues({ ...group, subtree: [] }, { perspective: true })).toEqual([]);
-    expect(groupSelfIssues({ ...group, passthroughModel: false }, { perspective: true })).toEqual([]);
-    expect(groupSelfIssues({ passthroughModel: true, subtree: [2] }, ORTHO)).toEqual([]);
+    expect(groupSelfIssues(group)).toEqual(["dependency:group", "fog:group"]);
+    expect(groupSelfIssues({ ...group, subtree: [] })).toEqual([]);
+    expect(groupSelfIssues({ ...group, passthroughModel: false })).toEqual([]);
+    expect(groupSelfIssues({ passthroughModel: true, subtree: [2] })).toEqual([]);
   });
 
   it("trackGroupIssues：新出现的进 added 并记下；键不变时不再报；问题消失进 cleared；删掉的只摘", () => {
     const tracked = new Map<number, string[]>();
     const layers = [layer(1, { passthroughModel: true, subtree: [2] }), layer(2), layer(3)];
     const issues = new Map([[2, ["model:passthrough:children:fullscreen"]]]);
-    let out = trackGroupIssues(tracked, { changed: new Set([1, 2]), issues }, layers, ORTHO);
+    let out = trackGroupIssues(tracked, { changed: new Set([1, 2]), issues }, layers);
     expect([...out.added]).toEqual([[2, ["model:passthrough:children:fullscreen"]]]);
     expect(out.cleared).toEqual([]);
     // 再来一次（同一批问题，2 不在 changed 里也照样看，因为它已记下）：不再报
-    out = trackGroupIssues(tracked, { changed: new Set([3]), issues }, layers, ORTHO);
+    out = trackGroupIssues(tracked, { changed: new Set([3]), issues }, layers);
     expect(out.added.size).toBe(0);
     // 出组：问题消失
-    out = trackGroupIssues(tracked, { changed: new Set([1, 2]), issues: new Map() }, layers, ORTHO);
+    out = trackGroupIssues(tracked, { changed: new Set([1, 2]), issues: new Map() }, layers);
     expect(out.cleared).toEqual([2]);
     expect(tracked.size).toBe(0);
     // 加载时就有、派生量没变过的组内问题不管（dev 强制渲染才走得到）
-    out = trackGroupIssues(tracked, { changed: new Set(), issues }, layers, ORTHO);
+    out = trackGroupIssues(tracked, { changed: new Set(), issues }, layers);
     expect(out.added.size).toBe(0);
     // 记下之后对象被删（不在图层表里）：只摘，不进 cleared
-    trackGroupIssues(tracked, { changed: new Set([2]), issues }, layers, ORTHO);
-    out = trackGroupIssues(tracked, { changed: new Set(), issues: new Map() }, [layers[0]], ORTHO);
+    trackGroupIssues(tracked, { changed: new Set([2]), issues }, layers);
+    out = trackGroupIssues(tracked, { changed: new Set(), issues: new Map() }, [layers[0]]);
     expect(out.cleared).toEqual([]);
     expect(tracked.size).toBe(0);
   });
 
-  it("trackGroupIssues：组自身的条件并进组的键（透视场景里组合层成了组）；键变了重报", () => {
+  it("trackGroupIssues：组自身的条件并进组的键（组合层成了组且被依赖）；键变了重报", () => {
     const tracked = new Map<number, string[]>();
-    const group = layer(1, { passthroughModel: true, subtree: [2] });
-    let out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map() }, [group], {
-      perspective: true,
-    });
-    expect([...out.added]).toEqual([[1, ["camera:perspective:group"]]]);
-    group.dependedOn = true;
-    out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map() }, [group], { perspective: true });
-    expect([...out.added]).toEqual([[1, ["camera:perspective:group", "dependency:group"]]]);
+    const group = layer(1, { passthroughModel: true, subtree: [2], dependedOn: true });
+    let out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map() }, [group]);
+    expect([...out.added]).toEqual([[1, ["dependency:group"]]]);
+    group.fogPassthrough = true;
+    out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map() }, [group]);
+    expect([...out.added]).toEqual([[1, ["dependency:group", "fog:group"]]]);
   });
 });
 

@@ -866,7 +866,7 @@ export class SceneHost {
   ): Map<number, string[]> {
     const { bundle } = registry;
     if (registry !== this.registry) {
-      const keys = [...trackGroupIssues(new Map(), result, bundle.layers, bundle.general).added.values()].flat();
+      const keys = [...trackGroupIssues(new Map(), result, bundle.layers).added.values()].flat();
       if (keys.length > 0) {
         const unsupported = bundle.unsupported;
         for (const key of keys) if (!unsupported.includes(key)) unsupported.push(key);
@@ -877,7 +877,7 @@ export class SceneHost {
       }
       return new Map();
     }
-    const { added, cleared } = trackGroupIssues(this.groupIssues, result, bundle.layers, bundle.general);
+    const { added, cleared } = trackGroupIssues(this.groupIssues, result, bundle.layers);
     const gpu = this.gpuCurrent(registry);
     const renderer = this.renderer;
     for (const [object, keys] of added) {

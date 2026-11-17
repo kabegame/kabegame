@@ -179,6 +179,7 @@ import type {
   ScenePass,
   ScenePuppetLayer,
   SceneTexture,
+  SortClass,
 } from "../compile/bundle";
 import { layerCompositeName } from "../compile/dependencies";
 import { particleDraws, type ParticleRenderer, type SceneParticle } from "../compile/particles";
@@ -6568,19 +6569,20 @@ export class GpuScene {
       volumetrics.encodeComposite(encoder, sceneView);
       pendingComposite = false;
     };
+    const drawLight = (object: number) => {
+      // 读场景深度：本帧还没画过场景就先清一次（同快照）
+      if (!started) begin();
+      end();
+      volumetrics!.encodeLight(encoder, object, !pendingComposite);
+      pendingComposite = true;
+    };
     const lightsBefore = (object: number) => {
       while (
         volumetrics &&
         nextLight < lightObjects.length &&
         (position.get(lightObjects[nextLight]) ?? Infinity) < (position.get(object) ?? Infinity)
-      ) {
-        // 读场景深度：本帧还没画过场景就先清一次（同快照）
-        if (!started) begin();
-        end();
-        volumetrics.encodeLight(encoder, lightObjects[nextLight], !pendingComposite);
-        pendingComposite = true;
-        nextLight++;
-      }
+      )
+        drawLight(lightObjects[nextLight++]);
     };
     const runTop = (runtime: LayerRuntime) => {
       lightsBefore(runtime.object);
@@ -6594,9 +6596,25 @@ export class GpuScene {
       // 透明排序（P5d 步骤 4，`render/sortOrder.ts`）：只重排顶层这一轮，先按原顺序画不在半透明名单里的，再把半透明的按「当帧状态里的
       // 局部 origin · 当帧相机的视线方向」从远到近画（`viewVectors` 是 `setCamera` 交来的透视帧的，含抖动、相机对象、路径）。组画子树、
       // 模型的网格顺序、粒子树的先序不动；被依赖的图层跟着自己在新顺序里的位置画（同 WPE）
-      const top = topLayers.map((runtime) => runtime.layer);
-      for (const layer of transparentDrawOrder(top, state, this.view.viewVectors.forward))
-        runTop(this.runtimeByObject.get(layer.object)!);
+      // 体积光的灯（P13h，rea-p5-mesh 4.2：灯构造时就置半透明位）进第二遍，和半透明对象一起按局部 origin 排序；合成照旧在下一个可见的
+      // 非灯对象之前或列表末尾（`FUN_14018aac0` 两遍循环里各有一处 `+0x60 != 6` 判定，末尾一处，`p13h-vol`）
+      type Item = { object: number; sortClass?: SortClass; runtime?: LayerRuntime };
+      const items: Item[] = topLayers.map((runtime) => ({
+        object: runtime.object,
+        sortClass: runtime.layer.sortClass,
+        runtime,
+      }));
+      for (const object of lightObjects) items.push({ object, sortClass: "translucent" });
+      // 稳定排序的「原顺序」是对象表顺序
+      items.sort((a, b) => (position.get(a.object) ?? Infinity) - (position.get(b.object) ?? Infinity));
+      for (const item of transparentDrawOrder(items, state, this.view.viewVectors.forward)) {
+        if (!item.runtime) drawLight(item.object);
+        else {
+          if (visible.has(item.object)) composite();
+          runLayer(item.runtime);
+        }
+      }
+      nextLight = lightObjects.length;
     } else for (const layer of topLayers) runTop(layer);
     lightsBefore(Infinity);
     composite();

@@ -362,10 +362,10 @@ describe("能力表：透视相机（P5d 步骤 2 点 7）", () => {
     expect(keys({ camera: { paths: ["a.json"] } })).toEqual([]);
   });
 
-  it("perspectiveObjectIssues：文本、形状、图像层 / 模型 perspective: true", () => {
+  it("perspectiveObjectIssues：形状、图像层 / 模型 perspective: true；文本 P13h 起不报", () => {
     const issues = (object: Partial<SceneObject>) => perspectiveObjectIssues(object as SceneObject);
-    expect(issues({ text: "hi" })).toEqual(["camera:perspective:text"]);
-    expect(issues({ text: "" })).toEqual(["camera:perspective:text"]);
+    expect(issues({ text: "hi" })).toEqual([]);
+    expect(issues({ text: "" })).toEqual([]);
     expect(issues({ shape: "quad" })).toEqual(["camera:perspective:shape"]);
     expect(issues({ image: "models/a.json", perspective: true })).toEqual(["camera:perspective:image"]);
     expect(issues({ model: "models/m.mdl", perspective: true })).toEqual(["camera:perspective:image"]);
@@ -382,13 +382,12 @@ describe("能力表：透视相机（P5d 步骤 2 点 7）", () => {
       { id: 3, image: "models/a.json", perspective: true },
     ] as SceneObject[];
     const perspective = keys({ objects });
-    expect(perspective).toEqual(
-      expect.arrayContaining(["camera:perspective:text", "camera:perspective:shape", "camera:perspective:image"]),
-    );
+    expect(perspective).toEqual(expect.arrayContaining(["camera:perspective:shape", "camera:perspective:image"]));
+    expect(perspective).not.toContain("camera:perspective:text");
     expect(keys({ general: ORTHO, objects }).filter((key) => key.startsWith("camera:"))).toEqual([]);
   });
 
-  it("要编完才知道的三个：projectlayer（autosize + projectlayer）、组、透视粒子（含子系统）", async () => {
+  it("要编完才知道的两个：projectlayer（autosize + projectlayer）、透视粒子（含子系统）；组 P13h 起不报", async () => {
     const issues = async (objects: JsonObject[], general: JsonObject = {}) =>
       (await compile({ general, objects })).bundle.unsupported.filter((key) => key.startsWith("camera:"));
     expect(await issues([{ id: 1, image: "models/project.json" }])).toEqual(["camera:perspective:projectlayer"]);
@@ -398,7 +397,7 @@ describe("能力表：透视相机（P5d 步骤 2 点 7）", () => {
         { id: 1, image: "models/compose.json" },
         { id: 2, image: "models/a.json", parent: 1 },
       ]),
-    ).toEqual(["camera:perspective:group"]);
+    ).toEqual([]);
     expect(await issues([{ id: 1, particle: "particles/persp.json" }])).toEqual(["camera:perspective:particle"]);
     expect(await issues([{ id: 1, particle: "particles/tree.json" }])).toEqual(["camera:perspective:particle"]);
     expect(await issues([{ id: 1, particle: "particles/p.json" }])).toEqual([]);

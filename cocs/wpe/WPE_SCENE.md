@@ -2431,7 +2431,7 @@ P5d 改的是整场的投影与深度，分三块，依赖方向是单向的：�
 | `SceneCamera` | 两种：`orthographic`（`kind` 可省，现状的一份）与 `perspective`（V、P、eye、视图向量一份预先算好的帧）；`SceneGeneral.perspective` / `camera` 写成可选，不动手写的测试夹具 | — |
 
 照报的细分（只在透视场景报）：
-- `camera:perspective:text`（文本对象，P6b 只测了正交，透视下选 `_depth` 材质）、`camera:perspective:particle`（粒子系统树里有 `flags & 4`，宽高是 0 时覆盖的 fov 退化，步骤 0 只测了 MVP）、`camera:perspective:image`（图像层 / 模型 `perspective: true`）、`camera:perspective:group`（带子层的组合层）、`camera:perspective:projectlayer`（`autosize` + `projectlayer`，W = H = 0）、`camera:perspective:shape`（形状对象）；
+- `camera:perspective:particle`（粒子系统树里有 `flags & 4`，宽高是 0 时覆盖的 fov 退化，步骤 0 只测了 MVP）、`camera:perspective:image`（图像层 / 模型 `perspective: true`）、`camera:perspective:projectlayer`（`autosize` + `projectlayer`，W = H = 0）、`camera:perspective:shape`（形状对象）；文本（`…:text`）与带子层的组合层（`…:group`）P13h 起支持，见「透视场景的余项（P13h）」；
 - `camera:paths:unreadable`（路径文件读不到或不是 JSON）、`camera:paths:orthographic`（正交场景 `camera.paths` 非空：读码说不重置相机、视图会平移，没测）。
 
 ### 相机对象（步骤 3）
@@ -2456,8 +2456,21 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 | 两遍 | 第一遍按 `objects` 顺序画不是半透明的对象；第二遍把半透明的按「**局部** `origin` · 视线方向」从大到小（由远到近）稳定排序后画（`render/sortOrder.ts` 的 `transparentDrawOrder`，键按 float32 算）。前向是当帧透视相机的视线（center − eye，带抖动、相机对象、路径）；`origin` 取脚本写回之后的当帧值。正交场景、开关关时逐字不变 | 读码 rea-p5-mesh 4.2；实测 `p5d-sort-a`（两遍的划分、脚本写的 `origin` 当帧生效）、`-off`、`-rot`（相机在 +x 看向 −x：J、L、K）、`-par`（局部 z −6 的 F 排在 H 前：用局部不是世界）、`-eq`（键相同保持原顺序）、`-ortho` |
 | 键 −∞ | `fullscreen` / `projectlayer` 标志的半透明图像键是 −∞，排在最后，两者之间保持原顺序（组合层没有 effect 时本来就不画，所以实测用的是带标志的纯色模型） | 实测 `p5d-sort-fs` |
 | 分类（`SceneLayer.sortClass`，编译期按 WPE 加载末尾置位的规则定，之后不变） | 粒子：`translucent`。图像层：基础材质第一个 pass 的 blending 是 normal / alphatocoverage 时 `opaque`，否则 `translucent`；模型标志 `fullscreen` 或 `projectlayer` 为真且是 `translucent` 时 `last`。模型：任一网格第一个 pass 的 blending 是 normal / alphatocoverage 时 `opaque`，否则 `translucent`（`isOpaqueBlending`，网格排序也改用它，结果不变）。不画的对象（分组、灯、声音、相机）不填。组合层、fullscreen、instanced、带 effect 的图层只看基础材质第一个 pass，effect、colorBlendMode、`copybackground` 不参与 | 实测 `p5d-sort-a`：normal 图像、normal 网格的模型在第一遍；translucent / additive 图像、网格全 translucent 的模型、粒子在第二遍 |
-| 文本与形状 | 文本无条件 `translucent`（构造函数直接置位，rea-p6b-layout 1.1），形状记 `opaque`（形状工厂只调基类构造、加载路径不置位，读码 `factory_14018ff60` 等）。**只读码，没测**：两者在透视场景都照报，只影响强制渲染 | 读码 |
+| 文本与形状 | 文本无条件 `translucent`（构造函数直接置位，rea-p6b-layout 1.1），形状记 `opaque`（形状工厂只调基类构造、加载路径不置位，读码 `factory_14018ff60` 等）。文本 P13h 起在透视场景照画（`p13h-text`）；形状仍照报 | 读码、P13h |
+| 体积光的灯（P13h） | 灯构造即置半透明位，第二遍和半透明对象一起按局部 `origin` 排序；合成照旧在下一个可见的非灯对象之前或列表末尾（`FUN_14018aac0` 两遍各一处判定，末尾一处）。`encode` 把顶层图层与可见的体积光灯按对象表顺序合成一个序列交给 `transparentDrawOrder` | 实测 `p13h-vol`（局部键与世界键会排出不同顺序） |
 | 开关 | `SceneGeneral.transparentSorting`（可选，`compileScene` 总会填）只认 JSON 布尔。绑属性、挂脚本时照报 `general:transparentsorting`，除布尔外的写法照报、正交场景也照报（保守）；`customsortorder` 照报 | 语料 0，没测运行中改开关 |
+
+### 透视场景的余项（P13h）
+
+P5d 照报的三项（透视场景里的文本、带子层的组合层、透明排序下的体积光）P13h 起支持，子计划 [phase-13h-perspective-rest](../../.claude/plans/wpe-import/3-scene/phase13/phase-13h-perspective-rest.md)：
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 文本 | 透视场景、对象 `depthtest` 不是 disabled 时，字形 / 彩色字形 / 背景换成 `basefont_depth` / `basefontrgba_depth` / `fontbackground_depth`（`compile/texts.ts` 的 `TEXT_DEPTH_MATERIALS`）：只多测深度，translucent 不写；带 effect 的合成上屏借字形材质的深度键，同样测、不写；`composelayer_clearalpha` 不换。正交场景不读这个键 | rea-p13-lights 5.2；`p13h-text` 的四种用法整帧 0 差 |
+| 组 | 照正交时的画法：子树按 `inverse(W_组)` 与组的局部正交画进合成 RT，组的基础 pass 与上屏用场景的透视相机，上屏深度借基础材质（`composelayer_depthtest` 测、不写）；`camera:perspective:group` 不再报（编译期与运行中成组都去掉） | rea-p13-lights 5.3；`p13h-group` 整帧 0 差 |
+| 体积光 | 见上「透明排序」的「体积光的灯」 | `p13h-vol` / `-off` 整帧 0 差 |
+
+走查：`3453730450` 复制工程（文本、组、体积光都在）10 帧整帧逐像素相同；`3509243656`（HDR）只有泛光光晕渐变上 ±1（WPE 后备缓冲 f16 量化）。
 
 ### 已知差异与只记不补
 
@@ -2511,7 +2524,7 @@ WPE 的场景绘制只有一个开关会改顺序：透视场景里 `general.tra
 | `p5d-shakep` | 日志到第 150 帧、抓帧在 180，没比；`p5d-shakep-r` 与单测已覆盖三维抖动 | 步骤 2 |
 | 样本里粒子层的 MVP 与朝向 | 没逐绘制比；斜相机的朝向由 `p5d-tilt` 锁住 | 步骤 2 |
 | 桌面壁纸窗口、「改画布尺寸只重载一次」 | 桌面壁纸窗口没看；重载只有单测，没在真机上拖窗口 | 步骤 2 |
-| `camera:perspective:*` 的六个细分与 `camera:paths:*` | 照报：文本、透视粒子（`flags & 4`）、图像层 `perspective: true`、组、`projectlayer`、形状、正交场景带路径、路径文件读不到；语料 0 或只在还差 20 项以上的场景里 | 步骤 2 |
+| `camera:perspective:*` 的细分与 `camera:paths:*` | 照报：透视粒子（`flags & 4`）、图像层 `perspective: true`、`projectlayer`、形状、正交场景带路径、路径文件读不到；语料 0 或只在还差 20 项以上的场景里 | 步骤 2 |
 | 透视场景里脚本 `engine.canvasSize` | 照读码读到 (0, 0)，没测，语料 0 处 | 步骤 2 |
 | 跟随粒子的指针反投影 | 透视场景、带相机对象的场景里没接相机视图，`particleTrackProbe` 给了 `cursors` 时直接抛错（语料 0） | 步骤 2、3 |
 | 加载时的预热与视差点初值 | 不看相机对象；WPE 这时的 eye 没测（`-par` 用的是 delay 0），带相机对象的模板场景开场可能不同 | 步骤 3 |

@@ -3508,6 +3508,18 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | SR5 真机预览 | Windows dev | 预览 `3453730450`（强制渲染），在右栏「预览设置」里把「场景反射」在「开启」与「关闭」之间切换（预览不读设置页的全局值），盯着探测卫星（属性「探测卫星」）的隔热毯 / 太阳能板与小行星 1 | 开启时这两个模型表面有很淡的模糊反射（1080p 下约百来个像素变化），关闭时没有；切换后整场重新加载 | 待用户看。效果很弱，肉眼不明显时以「切换后重新加载、不报错」为准，画面已由 SR4 逐像素验过。`3706286085` 的读者（眼睛）被挡住，开关逐像素相同，不用看 |
 | [ ] | SR6 非 NVIDIA 显卡 | AMD / Intel | 同 SR3 | 和本机 WPE 的画面一致 | 缩小的滤波是照本机 NVIDIA 驱动反推的，别的驱动可能不同（那时 WPE 自己的画面也不同）；本机不能测 |
 
+## 场景壁纸透视场景的余项（P13h）
+
+2026-11-18。透视场景里的文本按对象 `depthtest` 换 `_depth` 材质（测深度、不写），带子层的组合层照正交时的画法，透明排序时体积光的灯进第二遍按局部 `origin` 排序；不再报 `camera:perspective:text`、`camera:perspective:group`、`volumetrics:transparentsorting`。实测与走查见 `phase-13h-perspective-rest.md` 与 `p13-REPORT.md`「P13h 的实测」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PH0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；`src/compile/p13h.test.ts`、`p5d2.test.ts`、`p5d4.test.ts`、`texts.test.ts`、`fragment.test.ts`、`src/script/structureRuntime.test.ts`、`src/render/sortOrder.test.ts`、`text.test.ts` | 0 error、全过 | 2026-11-18：tsc 0 error，8 个文件 178 例全过（新增：透视文本三种 `depthtest` 的材质、正交不换、带 effect 时 clearalpha 不换、透视组成组且不报） |
+| [x] | PH1 语料 | Node，233 个工程 | HEAD 快照与工作区各扫一遍（`ignore/p13/h/corpus-{head,wt}.json`） | 只去掉三个键；`3453730450`、`3509243656` 变干净 | 2026-11-18：干净 197 → 199，text 4 张、transparentsorting 2 张、group 1 张，没有新增键 |
+| [x] | PH2 对照 WPE（确定性工程） | Windows dev + WPE 抓帧（`A:\p13h\`） | `ignore/p13/h/gen_h.py` 的 `p13h-text`、`p13h-group`、`p13h-vol`、`p13h-vol-off` 与 WPE 整帧比 | 整帧 0 差 | 2026-11-18：四个都 0 差。RenderDoc 核过文本字形、背景、带 effect 的合成上屏都是 GREATER、不写；`p13h-vol` 的 MID 带着 L2 的光（局部键）。透明排序的灯顺序在 `encode` 里，没有单测，由这一条兜底 |
+| [x] | PH3 走查（FINAL_CHECK） | Windows dev + WPE 抓帧 | `3453730450` 复制工程（`ignore/p13/h/walk/make_iso_3453.py`）10 帧、`3509243656` 复制工程（`make_iso_3509.py`）5 帧按日志回放 | 整帧逐像素相同，差异逐处解释 | 2026-11-18：`3453730450` 10 帧逐像素相同（文本、组、体积光都在画面里）；`3509243656` 是 HDR，WPE 后备缓冲 RGBA16F 按 sRGB 编码就近取整后每帧最大差 1（4 万像素，全在泛光光晕渐变上，f16 量化），文字处相同 |
+| [ ] | PH4 真机预览 | Windows dev | 图库里预览 `3453730450`（《玉盘 /Moon》）与 `3509243656`（三体实时演算） | 不再停在封面、实时渲染；`3453730450` 的「The Moon」文字与时钟在画面中间，透视下文字被前面的物体挡住的部分不画 | 待用户看。两张都是脚本驱动，画面已由 PH3 的复制工程逐像素验过 |
+
 ## WPE 壁纸设置与预览设置
 
 2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。

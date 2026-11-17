@@ -412,3 +412,7 @@ const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as
 ### P13g — 屏幕空间反射开（2026-11-17）
 
 子计划、步骤 0 与实施记录见 [phase-13g-screen-reflection.md](phase-13g-screen-reflection.md)。反射开时 `_rt_MipMappedFrameBuffer` 每帧在主 pass 之后、泛光之前拷 0 级再逐级缩小，读者读到上一帧，不再报 `reflection:screen`。步骤 0 推翻预案的一半：WPE 驱动的 `GenerateMips` 在奇数边上的采样坐标是定点的（系数截到 2⁻²⁴、坐标向下截到 1/256），照做后 1920×1080、1366×768、HDR 的各级与 WPE 逐值相同。走查 `3453730450` 复制工程 10 帧逐像素相同；`3706286085` 的读者被挡住、反射不进画面。语料跟随时不变，反射开时 `3706286085` 变干净。下一节是 P13h（`3453730450` 剩下的三个键）。
+
+### P13h — 透视场景的余项（2026-11-18）
+
+子计划、步骤 0 与实施记录见 [phase-13h-perspective-rest.md](phase-13h-perspective-rest.md)。透视场景里的文本按 `depthtest` 换 `_depth` 材质（测深度、不写，带 effect 的合成上屏借字形材质），带子层的组照正交时的画法，透明排序时体积光的灯进第二遍按局部 origin 排序；去掉 `camera:perspective:text`、`camera:perspective:group`、`volumetrics:transparentsorting`。步骤 0 的三个确定性工程与 WPE 整帧 0 差，读码全部成立。语料干净 197 → 199（`3453730450`、`3509243656`）；走查 `3453730450` 复制工程 10 帧逐像素相同，`3509243656`（HDR）只有光晕渐变 ±1。P13 的分节到此做完；`3455121165` 还差聚光阴影，`3662790108` 还差 PRELIGHTING（照报）与缺材质。

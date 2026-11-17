@@ -3038,10 +3038,10 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       layer.dependedOn = isDepended(object);
       if (!(await compileImageModel(index, object, layer))) return;
     }
-    // 组（P5b 步骤 4）：有对象的父指向这个组合层。子孙由它按局部正交画进合成 RT、不在顶层画（`assignGroups` 在全部对象之后定归属）
+    // 组（P5b 步骤 4）：有对象的父指向这个组合层。子孙由它按局部正交画进合成 RT、不在顶层画（`assignGroups` 在全部对象之后定归属）。
+    // 透视场景同样画（P13h）：子树仍按 `inverse(W_组)`、单位视图、`ortho(±w/2, ±h/2, ±1000)` 压平进合成 RT，没有按场景类型的分支，
+    // 组自己的基础 pass 与上屏用场景的透视相机、上屏的深度借基础材质（rea-p13-lights 5.3；`p13h-group` 和 WPE 整帧比）
     const hasChildren = layer.passthroughModel && parents.includes(index);
-    // 组的局部正交在透视场景里没测过（P5d 步骤 2），照报
-    if (hasChildren && bundle.general.perspective) unsupported.add("camera:perspective:group");
 
     if (bundle.scripts.usesEffectAccess) layer.effectCount = Array.isArray(object.effects) ? object.effects.length : 0;
     for (const [source, raw] of (Array.isArray(object.effects) ? object.effects : []).entries()) {
@@ -3140,6 +3140,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         properties,
         bindings,
         hdr: postprocess.hdr,
+        perspective: bundle.general.perspective,
         visibleEffects: layer.effects.filter((effect) => effect.enabled).length,
         colorBlendMode: cbm,
         mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31) || fogged,
@@ -3285,8 +3286,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         );
         if (volumetrics) {
           bundle.volumetrics = volumetrics;
-          // 透视场景的透明排序（P5d 步骤 4）把顶层重排成两轮，灯在两轮里落在哪、合成时机怎么变没测过（语料两张都是正交），照报
-          if (!orthographic && bundle.general.transparentSorting) unsupported.add("volumetrics:transparentsorting");
+          // 透视场景的透明排序（P5d 步骤 4）：灯构造时就进半透明集合，在第二遍按局部 origin 排序，合成仍是「下一个可见的非灯对象之前或
+          // 列表末尾」（P13h，`render/scene.ts` 的 `encode`）
           // 雾（P13f）：`volumetricsfront` 声明 `FOG`（缺省 1），开雾时它读四个雾 uniform，体积光的 uniform 是 `render/volumetrics.ts` 自己写的、
           // 没有接雾，也没和 WPE 比过（语料 0 张），照报
           if (fogForced) unsupported.add("volumetrics:fog");

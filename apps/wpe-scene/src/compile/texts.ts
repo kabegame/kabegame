@@ -4,7 +4,8 @@
  * - 把对象的排版字段规整成 `text/layout.ts` 的 `TextFields`（取值规则照 WPE 的 JSON setter，rea-p6b-layout 1.2、1.3）；
  * - 定位主字体（工程 → `scene.pkg` → WPE `assets`；`systemfont_*` 由宿主读 `%WINDIR%\Fonts`）；
  * - 编四个宿主指定材质的 pass：`basefont`（普通字形）、`basefontrgba`（彩色字形）、`fontbackground`（直接上屏的背景）、
- *   `composelayer_clearalpha`（合成路径没开背景时 RT 的初值）。正交场景一律用不带 `_depth` 的材质（rea-p6b-raster 1，5.4）；
+ *   `composelayer_clearalpha`（合成路径没开背景时 RT 的初值）。正交场景一律用不带 `_depth` 的材质（rea-p6b-raster 1，5.4）；透视场景里
+ *   `depthtest` 不是 disabled 时字形与背景换成 `_depth` 材质（P13h，rea-p13-lights 5.2）：只多「测深度」，材质是 translucent、不写深度；
  * - 背景色（`g_Color` = `backgroundcolor` × (HDR ? `backgroundbrightness` : 1)）。
  * 排版、栅格化要 wasm、字体字节与图集，在宿主主线程（`text/host.ts`），结果经 `GpuScene.build` 的 `texts` 交给渲染器。
  *
@@ -42,6 +43,17 @@ export const TEXT_MATERIALS = {
   color: "materials/fonts/basefontrgba.json",
   background: "materials/fonts/fontbackground.json",
   clearAlpha: "materials/util/composelayer_clearalpha.json",
+} as const;
+
+/**
+ * 透视场景里测深度的三个材质（P13h）：WPE 在非正交场景、对象 `depthtest` 没写或不是 disabled 时选它们（`O+0x5a0 == 0`，exe 里的路径串
+ * `0x14048f130` 等，rea-p13-lights 5.2）。和上面的同名材质只差 `depthtest` / `depthwrite` 是 enabled；translucent 按 P5d 的规则只测不写
+ * （`p13h-text`：字形、背景、带 effect 的合成上屏都是 GREATER、不写）。`composelayer_clearalpha` 画进合成 RT（没有深度），不换。
+ */
+export const TEXT_DEPTH_MATERIALS = {
+  glyphs: "materials/fonts/basefont_depth.json",
+  color: "materials/fonts/basefontrgba_depth.json",
+  background: "materials/fonts/fontbackground_depth.json",
 } as const;
 
 /** R8 图集的 `.tex` 格式号（`__font_atlas_` 用格式 9，rea-p6b-raster 3.2）。 */
@@ -109,6 +121,8 @@ export interface TextCompileContext {
   bindings: BindingCollector;
   /** 场景实际的 HDR（`postprocess.hdr`）：`backgroundbrightness` 只在 HDR 下乘。 */
   hdr: boolean;
+  /** 透视场景（`general.perspective`）：`depthtest` 不是 disabled 时选 `_depth` 材质（`TEXT_DEPTH_MATERIALS`）。缺省正交。 */
+  perspective?: boolean;
   /** 编译期启用的 effect 个数（WPE `+0x320`）与 `colorBlendMode`：决定加不加 `padding`。 */
   visibleEffects: number;
   colorBlendMode: number;
@@ -248,19 +262,19 @@ export async function compileText(
     (rgb[2] ?? 0) * brightness,
   ];
 
-  // 四个宿主材质（WPE 自带，`textures` 都没有静态纹理）：字形的槽 0 是图集，由渲染图填
+  // 四个宿主材质（WPE 自带，`textures` 都没有静态纹理）：字形的槽 0 是图集，由渲染图填。透视场景里 `depthtest` 不是 disabled 就换测深度的
+  // 三个（`TEXT_DEPTH_MATERIALS`）；正交场景不读这个键（不登记绑定）。绑了属性登记成重编译，按生效值重选
+  const materials = ctx.perspective && read("depthtest") !== "disabled" ? TEXT_DEPTH_MATERIALS : TEXT_MATERIALS;
   const glyphPass = await ctx.hostPass(
-    TEXT_MATERIALS.glyphs,
+    materials.glyphs,
     `objects/${index}/text/glyphs`,
     [{ slot: 0, format: R8_FORMAT }],
     { text: true },
   );
-  const colorPass = await ctx.hostPass(TEXT_MATERIALS.color, `objects/${index}/text/color`, [{ slot: 0 }], {
+  const colorPass = await ctx.hostPass(materials.color, `objects/${index}/text/color`, [{ slot: 0 }], {
     text: true,
   });
-  const backgroundPass = fields.opaquebackground
-    ? await ctx.hostPass(TEXT_MATERIALS.background, backgroundKey, [])
-    : null;
+  const backgroundPass = fields.opaquebackground ? await ctx.hostPass(materials.background, backgroundKey, []) : null;
   const clearAlphaPass =
     !fields.opaquebackground && ctx.mayComposite
       ? await ctx.hostPass(TEXT_MATERIALS.clearAlpha, `objects/${index}/text/clearalpha`, [])

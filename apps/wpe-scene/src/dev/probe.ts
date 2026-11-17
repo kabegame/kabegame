@@ -1240,7 +1240,7 @@ function createProbeLive(input: ProbeLiveInput): {
   const bones = (item: number) => configBone(registry.bundle, input.scripts()?.structure?.() ?? { parents: [] }, item);
   /** 同宿主 `applyRestructure`（当前场景那一支）；返回新出现问题的对象 → 键。 */
   const applyRestructure = (result: RestructureResult, skip: number | null = null): Map<number, string[]> => {
-    const { added, cleared } = trackGroupIssues(groupIssues, result, registry.bundle.layers, registry.bundle.general);
+    const { added, cleared } = trackGroupIssues(groupIssues, result, registry.bundle.layers);
     for (const [object, keys] of added) {
       for (const key of keys) input.unsupportedKeys.add(key);
       if (object !== skip && scene.hasObject(object)) {

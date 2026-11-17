@@ -37,17 +37,15 @@ export function settleDestroyed(state: SceneState, hooks: SettleHooks = {}): num
 }
 
 /**
- * 组自身的不支持项（L7）：组合层运行中挂上子层成了组（`passthroughModel` 且 `subtree` 非空），而编译期按「有子层」才报的三个场景级条件成立：
- * 透视场景（`camera:perspective:group`，组的局部正交在透视场景里没测）、被依赖（`dependency:group`）、开雾（`fog:group`；没有子层的组合层开雾时
- * 编译期置了 `fogPassthrough`）。键和编译期报的相同（`compile/bundle.ts` 的 `compileOne`）。不是组时为空。
+ * 组自身的不支持项（L7）：组合层运行中挂上子层成了组（`passthroughModel` 且 `subtree` 非空），而编译期按「有子层」才报的两个条件成立：
+ * 被依赖（`dependency:group`）、开雾（`fog:group`；没有子层的组合层开雾时编译期置了 `fogPassthrough`）。键和编译期报的相同（`compile/bundle.ts`
+ * 的 `compileOne`）。不是组时为空。透视场景里的组 P13h 起照画（`camera:perspective:group` 不再报）。
  */
 export function groupSelfIssues(
   layer: Pick<SceneLayer, "passthroughModel" | "subtree" | "dependedOn" | "fogPassthrough">,
-  general: Pick<SceneBundle["general"], "perspective">,
 ): string[] {
   if (!layer.passthroughModel || !layer.subtree?.length) return [];
   const keys: string[] = [];
-  if (general.perspective) keys.push("camera:perspective:group");
   if (layer.dependedOn) keys.push("dependency:group");
   if (layer.fogPassthrough) keys.push("fog:group");
   return keys;
@@ -70,7 +68,6 @@ export function trackGroupIssues(
   tracked: Map<number, string[]>,
   result: RestructureResult,
   layers: readonly SceneLayer[],
-  general: Pick<SceneBundle["general"], "perspective">,
 ): GroupIssueChanges {
   const byObject = new Map(layers.map((layer) => [layer.object, layer]));
   const added = new Map<number, string[]>();
@@ -81,7 +78,7 @@ export function trackGroupIssues(
       tracked.delete(object);
       continue;
     }
-    const keys = [...new Set([...(result.issues.get(object) ?? []), ...groupSelfIssues(layer, general)])].sort();
+    const keys = [...new Set([...(result.issues.get(object) ?? []), ...groupSelfIssues(layer)])].sort();
     const previous = tracked.get(object);
     if (keys.length > 0) {
       if (!previous || previous.join("\n") !== keys.join("\n")) added.set(object, keys);
