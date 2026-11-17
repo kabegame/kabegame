@@ -287,6 +287,7 @@ watch(
       props.sceneSettings.reflection,
       props.sceneSettings.shadows,
       props.sceneSettings.volumetrics,
+      props.sceneSettings.forceRender,
     ].join("\n"),
   postSceneSettings,
 );

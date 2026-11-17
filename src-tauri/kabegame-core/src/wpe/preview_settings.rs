@@ -20,6 +20,8 @@ const POSTPROCESS: &str = "postprocess";
 const REFLECTION: &str = "reflection";
 const SHADOWS: &str = "shadows";
 const VOLUMETRICS: &str = "volumetrics";
+/// 场景壁纸强制渲染：有暂不支持的特性也照常渲染（用户在打开时确认过）。
+const FORCE_RENDER: &str = "forceRender";
 /// 帧率：整数或 `"follow"`，形状与默认值见 `wpe::fps`。
 const FPS: &str = "fps";
 
@@ -31,6 +33,7 @@ const DEFAULT_POSTPROCESS: &str = "enabled";
 const DEFAULT_REFLECTION: &str = "enabled";
 const DEFAULT_SHADOWS: &str = "medium";
 const DEFAULT_VOLUMETRICS: &str = "medium";
+const DEFAULT_FORCE_RENDER: bool = false;
 
 /// 把一个值规整成能存的形状；键不认识或值非法返回 Err，数值钳到范围内。
 fn normalize(key: &str, value: &Value) -> Result<Value, String> {
@@ -49,7 +52,7 @@ fn normalize(key: &str, value: &Value) -> Result<Value, String> {
     match key {
         VOLUME => number(0.0, 1.0),
         PLAYBACK_RATE => number(0.25, 3.0),
-        MEDIA_INTEGRATION => value
+        MEDIA_INTEGRATION | FORCE_RENDER => value
             .as_bool()
             .map(Value::Bool)
             .ok_or_else(|| format!("预览设置 {key} 不是布尔值")),
@@ -70,6 +73,7 @@ fn default_of(key: &str) -> Value {
         VOLUME => Value::from(DEFAULT_VOLUME),
         PLAYBACK_RATE => Value::from(DEFAULT_PLAYBACK_RATE),
         MEDIA_INTEGRATION => Value::Bool(DEFAULT_MEDIA_INTEGRATION),
+        FORCE_RENDER => Value::Bool(DEFAULT_FORCE_RENDER),
         POSTPROCESS => Value::from(DEFAULT_POSTPROCESS),
         REFLECTION => Value::from(DEFAULT_REFLECTION),
         VOLUMETRICS => Value::from(DEFAULT_VOLUMETRICS),
@@ -243,5 +247,27 @@ mod tests {
         assert_eq!(low[PREVIEW_SETTINGS_KEY], json!({ "fps": 10 }));
         assert!(apply_changes(&raw, &changes(json!({ "fps": "fast" }))).is_err());
         assert_eq!(fps(&raw), WpeFps::Fixed(30));
+    }
+
+    #[test]
+    fn force_render_is_bool_and_defaults_off() {
+        let raw = json!({});
+        // 默认关不存，打开存 true；不是布尔值报错
+        assert_eq!(
+            apply_changes(&raw, &changes(json!({ "forceRender": false }))).unwrap(),
+            None
+        );
+        let next = apply_changes(&raw, &changes(json!({ "forceRender": true })))
+            .unwrap()
+            .unwrap();
+        assert_eq!(next[PREVIEW_SETTINGS_KEY], json!({ "forceRender": true }));
+        assert!(apply_changes(&raw, &changes(json!({ "forceRender": "yes" }))).is_err());
+        // 关掉回到默认：删键、段空了删整段
+        assert_eq!(
+            apply_changes(&next, &changes(json!({ "forceRender": false })))
+                .unwrap()
+                .unwrap(),
+            json!({})
+        );
     }
 }

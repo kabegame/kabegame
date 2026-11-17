@@ -13,6 +13,9 @@
  * 帧率（`fps`）是数值或 `follow`，不在选项表里：界面是「跟随 WPE」开关加滑条（`WpeSettingControl.vue`）。
  * 生效帧率（含 `follow` 的解析）只在 Rust 算，经垫片的 `applyGeneralProperties` 交给网页壁纸与场景宿主，
  * 前端只负责编辑设置，不往场景设置消息里放帧率。
+ *
+ * 强制渲染（`forceRender`）只对场景：有暂不支持的特性也照常渲染。打开一律先确认（`confirmWpeForceRender`，字段组与预览的
+ * 「我就要看」共用），和四个场景选项一起经场景设置消息交给宿主，变了宿主整场重新加载。
  */
 import type { AppSettingKey } from "@/stores/settings";
 import { isWpeSceneType, isWpeVideoType, isWpeWebType } from "./mediaMime";
@@ -26,7 +29,8 @@ export type WpeSettingKey =
   | "postprocess"
   | "reflection"
   | "shadows"
-  | "volumetrics";
+  | "volumetrics"
+  | "forceRender";
 
 /** 帧率设置的取值：固定帧率，或跟随 WPE */
 export type WpeFpsValue = number | "follow";
@@ -46,6 +50,7 @@ export interface WpeSettingValues {
   reflection: string;
   shadows: string;
   volumetrics: string;
+  forceRender: boolean;
 }
 
 /** 字段的显示顺序 */
@@ -59,6 +64,7 @@ export const WPE_SETTING_KEYS: readonly WpeSettingKey[] = [
   "reflection",
   "shadows",
   "volumetrics",
+  "forceRender",
 ];
 
 /** Kabegame 自己的默认值（与 WPE 出厂值一致）：预览设置没设的项、不能跟随时的 `follow` 都取它 */
@@ -72,6 +78,7 @@ export const WPE_SETTING_DEFAULTS: Readonly<WpeSettingValues> = {
   reflection: "enabled",
   shadows: "medium",
   volumetrics: "medium",
+  forceRender: false,
 };
 
 /** 桌面「壁纸设置」对应的全局设置键 */
@@ -85,6 +92,7 @@ export const WPE_SETTING_GLOBAL_KEYS: Readonly<Record<WpeSettingKey, AppSettingK
   reflection: "wpeSceneReflection",
   shadows: "wpeSceneShadows",
   volumetrics: "wpeSceneVolumetrics",
+  forceRender: "wpeSceneForceRender",
 };
 
 /** 标签词条（说明是 `<词条>Desc`，选项文案是 `<词条><Follow|Disabled|…>`），沿用设置页原来的词条 */
@@ -98,6 +106,7 @@ export const WPE_SETTING_LABEL_KEYS: Readonly<Record<WpeSettingKey, string>> = {
   reflection: "settings.wpeSceneReflection",
   shadows: "settings.wpeSceneShadows",
   volumetrics: "settings.wpeSceneVolumetrics",
+  forceRender: "settings.wpeSceneForceRender",
 };
 
 /** 场景选项的取值（含 `follow`），顺序即显示顺序；体积光与阴影是 WPE 的同一个档位枚举 */
@@ -153,7 +162,7 @@ export function clampWpeFps(value: number, max: number): number {
 /**
  * 某类壁纸用得上的字段；`type` 为空时给全部字段（设置页）。媒体集成只有 Windows 有数据源；
  * 倍速只作用于视频层（网页、场景收不到）；帧率作用于网页（经 `applyGeneralProperties` 推给页面）与场景（限帧）；
- * 后处理 / 反射 / 阴影 / 体积光只有场景。
+ * 后处理 / 反射 / 阴影 / 体积光 / 强制渲染只有场景。
  */
 export function wpeSettingFieldsFor(type: string | null | undefined, windows: boolean): WpeSettingKey[] {
   const media = windows ? (["mediaIntegration"] as const) : [];
@@ -161,7 +170,7 @@ export function wpeSettingFieldsFor(type: string | null | undefined, windows: bo
   if (isWpeVideoType(type)) return ["paused", "volume", "playbackRate"];
   if (isWpeWebType(type)) return ["paused", "volume", ...media, "fps"];
   if (isWpeSceneType(type))
-    return ["paused", "volume", ...media, "fps", "postprocess", "reflection", "shadows", "volumetrics"];
+    return ["paused", "volume", ...media, "fps", "postprocess", "reflection", "shadows", "volumetrics", "forceRender"];
   return [];
 }
 
@@ -181,6 +190,7 @@ export function wpePreviewSettingValues(stored: Record<string, unknown> | null |
   if (typeof stored.volume === "number") values.volume = stored.volume;
   if (typeof stored.playbackRate === "number") values.playbackRate = stored.playbackRate;
   if (typeof stored.mediaIntegration === "boolean") values.mediaIntegration = stored.mediaIntegration;
+  if (typeof stored.forceRender === "boolean") values.forceRender = stored.forceRender;
   values.fps = wpeFpsValueOf(stored.fps);
   for (const key of Object.keys(WPE_SETTING_CHOICES) as WpeChoiceKey[]) {
     if (typeof stored[key] === "string") values[key] = stored[key] as string;
@@ -188,12 +198,17 @@ export function wpePreviewSettingValues(stored: Record<string, unknown> | null |
   return values;
 }
 
-/** 推给场景宿主的四项（`kabegame:wpe-scene-settings`）：不能跟随时 `follow` 换成默认值，宿主只在能跟随时才解析 `follow` */
+/**
+ * 推给场景宿主的五项（`kabegame:wpe-scene-settings`）：四个选项不能跟随时 `follow` 换成默认值，宿主只在能跟随时才解析
+ * `follow`；强制渲染原样。五项都是编译输入，变了宿主整场重新加载。
+ */
 export interface WpeSceneSettings {
   postprocess: string;
   reflection: string;
   shadows: string;
   volumetrics: string;
+  /** 有暂不支持的特性也照常渲染 */
+  forceRender: boolean;
 }
 
 /** 没有给场景设置的地方（缺省值）：都跟随 WPE，同宿主收不到父页面设置时的处理 */
@@ -202,10 +217,11 @@ export const WPE_FOLLOW_SCENE_SETTINGS: Readonly<WpeSceneSettings> = {
   reflection: "follow",
   shadows: "follow",
   volumetrics: "follow",
+  forceRender: false,
 };
 
 export function wpeSceneSettingsOf(
-  values: Pick<WpeSettingValues, WpeChoiceKey>,
+  values: Pick<WpeSettingValues, WpeChoiceKey | "forceRender">,
   followAvailable: boolean,
 ): WpeSceneSettings {
   return {
@@ -213,5 +229,6 @@ export function wpeSceneSettingsOf(
     reflection: wpeChoiceDisplay("reflection", values.reflection, followAvailable),
     shadows: wpeChoiceDisplay("shadows", values.shadows, followAvailable),
     volumetrics: wpeChoiceDisplay("volumetrics", values.volumetrics, followAvailable),
+    forceRender: values.forceRender === true,
   };
 }

@@ -35,16 +35,23 @@ describe("wpeSceneStyle", () => {
   it("宿主的场景设置字面量与字段名与这里一致", () => {
     const source = readFileSync(path.resolve(__dirname, "../../../../wpe-scene/src/sceneStyle.ts"), "utf8");
     expect(source).toContain(`SCENE_SETTINGS_MESSAGE = "${WPE_SCENE_SETTINGS}"`);
-    for (const field of ["postprocess", "reflection", "shadows", "volumetrics"])
+    for (const field of ["postprocess", "reflection", "shadows", "volumetrics", "forceRender"])
       expect(source).toContain(`data.${field}`);
     expect(
-      wpeSceneSettingsMessage({ postprocess: "enabled", reflection: "disabled", shadows: "low", volumetrics: "high" }),
+      wpeSceneSettingsMessage({
+        postprocess: "enabled",
+        reflection: "disabled",
+        shadows: "low",
+        volumetrics: "high",
+        forceRender: true,
+      }),
     ).toEqual({
       type: WPE_SCENE_SETTINGS,
       postprocess: "enabled",
       reflection: "disabled",
       shadows: "low",
       volumetrics: "high",
+      forceRender: true,
     });
   });
 

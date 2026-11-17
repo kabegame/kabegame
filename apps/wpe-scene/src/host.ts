@@ -129,9 +129,10 @@ const LOST_RETRY_WINDOW_MS = 60_000;
 const DEFAULT_FPS = 30;
 /** 第一次 ready 之前最多等视频纹理出第一帧这么久（P9a 决定 1）。 */
 const FIRST_VIDEO_FRAME_TIMEOUT_MS = 2000;
+/** dev 覆盖：有不支持项也照常渲染（生产构建摇掉）；用户设置「强制渲染」经父页面的场景设置消息来，两者取或 */
 const FORCE_RENDER_KEY = "kabegame-dev-scene-force-render";
 
-function forceRender(): boolean {
+function devForceRender(): boolean {
   if (!__SCENE_DEV__) return false;
   try {
     return localStorage.getItem(FORCE_RENDER_KEY) === "1";
@@ -162,12 +163,14 @@ function asVolumetrics(value: unknown): SceneVolumetricsSetting {
     : "follow";
 }
 
-/** 父页面下发的四项设置（已规整） */
+/** 父页面下发的五项设置（已规整） */
 interface SceneSettings {
   postprocess: ScenePostprocessSetting;
   reflection: SceneReflectionSetting;
   shadows: SceneShadowSetting;
   volumetrics: SceneVolumetricsSetting;
+  /** 用户设置「强制渲染」：有不支持项也照常渲染（只认 `true`） */
+  forceRender: boolean;
 }
 
 const FOLLOW_SCENE_SETTINGS: SceneSettings = {
@@ -175,6 +178,7 @@ const FOLLOW_SCENE_SETTINGS: SceneSettings = {
   reflection: "follow",
   shadows: "follow",
   volumetrics: "follow",
+  forceRender: false,
 };
 
 /** 首次加载等父页面场景设置的上限：父页面在宿主请求后同一轮事件里就回，正常是几毫秒 */
@@ -252,6 +256,8 @@ export class SceneHost {
   private shadows: SceneShadowSetting | null = null;
   /** 设置「场景体积光」（P13e）：最近一次加载用的值；还没加载过为 null。 */
   private volumetrics: SceneVolumetricsSetting | null = null;
+  /** 设置「强制渲染」：最近一次加载用的值；还没加载过为 null。 */
+  private forceRenderSetting: boolean | null = null;
   /**
    * 累计全集（WPE 渲染器 `+0x1728`，I1）：键 → `{ type, value }`。保留 `type`，不学 WPE 的整项覆盖（I4）。
    * 加载传全集、运行时传增量，两条路都走 `apply`。
@@ -2108,17 +2114,24 @@ export class SceneHost {
   }
 
   /**
-   * 父页面下发四项设置（`kabegame:wpe-scene-settings`）。第一条叫醒等着的 `reload`；之后和最近一次加载用的值比，变了才整场重载
-   * （四项都决定编译结果：泛光链 / HDR、反射名单、阴影变体与图集、体积光的 RT 与 `QUALITY`），几项一起变只重载一次，记进探针的
-   * recompiled（原因 settings）。缺了的项（旧的父页面）按跟随。
+   * 父页面下发五项设置（`kabegame:wpe-scene-settings`）。第一条叫醒等着的 `reload`；之后和最近一次加载用的值比，变了才整场重载
+   * （五项都决定编译结果：泛光链 / HDR、反射名单、阴影变体与图集、体积光的 RT 与 `QUALITY`、有不支持项时退回还是照常渲染），
+   * 几项一起变只重载一次，记进探针的 recompiled（原因 settings）。缺了的项（旧的父页面）按跟随、强制渲染按关。
    */
-  setSceneSettings(next: { postprocess: unknown; reflection: unknown; shadows: unknown; volumetrics?: unknown }): void {
+  setSceneSettings(next: {
+    postprocess: unknown;
+    reflection: unknown;
+    shadows: unknown;
+    volumetrics?: unknown;
+    forceRender?: unknown;
+  }): void {
     if (this.disposed) return;
     this.sceneSettings = {
       postprocess: asPostprocess(next.postprocess),
       reflection: asReflection(next.reflection),
       shadows: asShadows(next.shadows),
       volumetrics: asVolumetrics(next.volumetrics),
+      forceRender: next.forceRender === true,
     };
     for (const wake of this.sceneSettingsWaiters.splice(0)) wake();
     // 还没加载过：在等的 reload 会读到这份
@@ -2129,9 +2142,18 @@ export class SceneHost {
     if (resolved.reflection !== this.reflection) keys.push("reflection");
     if (resolved.shadows !== this.shadows) keys.push("shadows");
     if (resolved.volumetrics !== this.volumetrics) keys.push("volumetrics");
+    if (resolved.forceRender !== this.forceRenderSetting) keys.push("forceRender");
     if (!keys.length) return;
-    const before = [this.postprocess, this.reflection, this.shadows, this.volumetrics].join("/");
-    const after = [resolved.postprocess, resolved.reflection, resolved.shadows, resolved.volumetrics].join("/");
+    const before = [this.postprocess, this.reflection, this.shadows, this.volumetrics, this.forceRenderSetting].join(
+      "/",
+    );
+    const after = [
+      resolved.postprocess,
+      resolved.reflection,
+      resolved.shadows,
+      resolved.volumetrics,
+      resolved.forceRender,
+    ].join("/");
     this.options.report.debug(
       `场景壁纸 ${this.options.imageId} 设置变化（${keys.join("、")}）：${before} → ${after}，重新判定`,
     );
@@ -2147,6 +2169,7 @@ export class SceneHost {
       reflection: reflectionOverride() ?? settings.reflection,
       shadows: shadowsOverride() ?? settings.shadows,
       volumetrics: volumetricsOverride() ?? settings.volumetrics,
+      forceRender: settings.forceRender,
     };
   }
 
@@ -2215,7 +2238,7 @@ export class SceneHost {
         this.targetTask = null;
         throw error;
       }));
-      const [target, { postprocess: setting, reflection, shadows, volumetrics }] = await Promise.all([
+      const [target, { postprocess: setting, reflection, shadows, volumetrics, forceRender }] = await Promise.all([
         targetTask,
         this.readSceneSettings(),
       ]);
@@ -2224,7 +2247,9 @@ export class SceneHost {
       this.reflection = reflection;
       this.shadows = shadows;
       this.volumetrics = volumetrics;
-      const force = forceRender();
+      this.forceRenderSetting = forceRender;
+      // 有不支持项时照常渲染：用户设置「强制渲染」（打开时确认过），或 dev 覆盖
+      const force = forceRender || devForceRender();
       const userProperties = Object.fromEntries(
         [...this.properties].map(([key, property]) => [key, property.value as SceneScalar]),
       );
@@ -2259,7 +2284,10 @@ export class SceneHost {
           this.fallbackAfterLoad(bundle.unsupported, compiledWith);
           return;
         }
-        this.options.report.warn(`场景壁纸 ${this.options.imageId} 强制渲染（dev），不支持项：`, bundle.unsupported);
+        this.options.report.warn(
+          `场景壁纸 ${this.options.imageId} 强制渲染（${forceRender ? "设置" : "dev"}），不支持项：`,
+          bundle.unsupported,
+        );
       }
       // 文本、声音、媒体、视频、用户纹理、脚本 init、取设备：进度的 `prepare` 阶段（日志里「准备」「取设备」两段）
       load.report("prepare", 0, 1);

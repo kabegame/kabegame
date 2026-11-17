@@ -110,6 +110,11 @@ pub fn get_wpe_media_integration() -> bool {
 }
 
 #[tauri::command]
+pub fn get_wpe_scene_force_render() -> bool {
+    Settings::global().get_wpe_scene_force_render()
+}
+
+#[tauri::command]
 pub fn get_wpe_scene_postprocess() -> String {
     Settings::global().get_wpe_scene_postprocess()
 }
@@ -515,6 +520,13 @@ pub fn set_wpe_fps(value: serde_json::Value) -> Result<(), String> {
 #[tauri::command]
 pub fn set_wallpaper_paused(paused: bool) -> Result<(), String> {
     Settings::global().set_wallpaper_paused(paused)
+}
+
+/// 场景壁纸「强制渲染」（桌面）：有暂不支持的特性也照常渲染。写设置并广播 `setting-change`，壁纸窗口经场景设置消息
+/// 交给场景宿主，宿主整场重新加载。预览与应用背景按每张壁纸的预览设置（`set_wpe_preview_settings`）。
+#[tauri::command]
+pub fn set_wpe_scene_force_render(enabled: bool) -> Result<(), String> {
+    Settings::global().set_wpe_scene_force_render(enabled)
 }
 
 /// 网页壁纸「媒体集成」：写设置后同步启停媒体会话监视，并向已订阅的页面推 `{ enabled }`。

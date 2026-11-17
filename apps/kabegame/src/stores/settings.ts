@@ -69,6 +69,8 @@ export interface AppSettings {
   wpeSceneShadows: "follow" | "disabled" | "low" | "medium" | "high" | "ultra";
   /** 场景壁纸体积光画质：跟随 WPE 的 volumetrics，或固定为关闭 / 低 / 中 / 高 / 超高（桌面） */
   wpeSceneVolumetrics: "follow" | "disabled" | "low" | "medium" | "high" | "ultra";
+  /** 场景壁纸强制渲染：有暂不支持的特性也照常渲染（桌面；打开时先确认） */
+  wpeSceneForceRender: boolean;
   /** WPE 安装目录（桌面）：为空时后端自动查找并写入，用户可覆盖 */
   wpeEngineDir: string | null;
   windowState: {

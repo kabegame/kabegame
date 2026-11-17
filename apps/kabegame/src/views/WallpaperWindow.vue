@@ -58,7 +58,10 @@ const state = reactive<{
   playbackRate: 1,
   /** 设置 `wallpaperPaused`；是否真的暂停看 `stagePaused` */
   paused: false,
-  /** 全局「壁纸设置」的场景四项原值（可能是 follow）；交给 Wallpaper 前按能否跟随 WPE 换算（`stageSceneSettings`） */
+  /**
+   * 全局「壁纸设置」的场景五项原值（四个选项可能是 follow，另有强制渲染）；交给 Wallpaper 前按能否跟随 WPE 换算
+   * （`stageSceneSettings`）
+   */
   sceneSettings: { ...WPE_FOLLOW_SCENE_SETTINGS },
 });
 
@@ -292,11 +295,13 @@ async function init() {
     if ("wallpaperPaused" in changes && typeof changes.wallpaperPaused === "boolean") {
       state.paused = changes.wallpaperPaused;
     }
-    // 场景四项（全局「壁纸设置」）：交给 Wallpaper → WpeSceneView 推给宿主，宿主比较后决定要不要重载
+    // 场景五项（全局「壁纸设置」）：交给 Wallpaper → WpeSceneView 推给宿主，宿主比较后决定要不要重载
     for (const [settingKey, field] of SCENE_SETTING_KEYS) {
       if (settingKey in changes && typeof changes[settingKey] === "string")
         state.sceneSettings = { ...state.sceneSettings, [field]: changes[settingKey] as string };
     }
+    if ("wpeSceneForceRender" in changes && typeof changes.wpeSceneForceRender === "boolean")
+      state.sceneSettings = { ...state.sceneSettings, forceRender: changes.wpeSceneForceRender };
     // 语言：桌面的加载进度、失败原因等文字跟应用语言（规则同主窗口 App.vue）
     if ("language" in changes) applyLanguage(changes.language);
   });
@@ -322,24 +327,36 @@ async function init() {
 
     // 能力表只用来归一化样式 / 过渡，读不到就直接用存下来的值，不让它连累整个初始化
     const requested = targetId.value;
-    const [targetsRes, capabilitiesRes, volumeRes, playbackRateRes, pausedRes, targetRes, languageRes, ...sceneRes] =
-      await Promise.all([
-        invoke<WallpaperTargets>("get_wallpaper_targets"),
-        invoke<WallpaperCapabilities>("get_wallpaper_capabilities").catch(() => null),
-        invoke<number>("get_wallpaper_volume"),
-        invoke<number>("get_wallpaper_video_playback_rate"),
-        invoke<boolean>("get_wallpaper_paused"),
-        invoke<WallpaperTarget | null>("get_current_wallpaper_target", { target: requested }),
-        // 语言读不到不连累初始化：按默认语言
-        invoke<string | null>("get_language").catch(() => null),
-        // 场景四项读不到不连累初始化：按跟随
-        ...SCENE_SETTING_GETTERS.map((command) => invoke<string>(command).catch(() => null)),
-      ]);
+    const [
+      targetsRes,
+      capabilitiesRes,
+      volumeRes,
+      playbackRateRes,
+      pausedRes,
+      targetRes,
+      languageRes,
+      forceRenderRes,
+      ...sceneRes
+    ] = await Promise.all([
+      invoke<WallpaperTargets>("get_wallpaper_targets"),
+      invoke<WallpaperCapabilities>("get_wallpaper_capabilities").catch(() => null),
+      invoke<number>("get_wallpaper_volume"),
+      invoke<number>("get_wallpaper_video_playback_rate"),
+      invoke<boolean>("get_wallpaper_paused"),
+      invoke<WallpaperTarget | null>("get_current_wallpaper_target", { target: requested }),
+      // 语言读不到不连累初始化：按默认语言
+      invoke<string | null>("get_language").catch(() => null),
+      // 强制渲染读不到按关
+      invoke<boolean>("get_wpe_scene_force_render").catch(() => null),
+      // 场景四项读不到不连累初始化：按跟随
+      ...SCENE_SETTING_GETTERS.map((command) => invoke<string>(command).catch(() => null)),
+    ]);
     applyLanguage(languageRes);
     const sceneSettings = { ...state.sceneSettings };
     SCENE_SETTING_KEYS.forEach(([, field], index) => {
       if (typeof sceneRes[index] === "string") sceneSettings[field] = sceneRes[index] as string;
     });
+    if (typeof forceRenderRes === "boolean") sceneSettings.forceRender = forceRenderRes;
     state.sceneSettings = sceneSettings;
     // 先样式 / 过渡 / 音量 / 倍速 / 暂停，最后目标：新层挂上时拿到的就是这一份（Wallpaper 按 props 渲染）。
     targetSource.targets = targetsRes && typeof targetsRes === "object" ? targetsRes : {};

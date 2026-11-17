@@ -130,6 +130,8 @@ pub enum SettingKey {
     WallpaperPaused,
     /// 网页壁纸媒体集成：页面可读取系统正在播放的媒体信息（标题、封面、进度），仅 Windows 生效
     WpeMediaIntegration,
+    /// 场景壁纸强制渲染：有暂不支持的特性也照常渲染（桌面；预览按每张壁纸的预览设置）
+    WpeSceneForceRender,
     /// 场景壁纸后处理档位：follow（跟随 WPE 的 postprocessing）/ disabled / enabled / ultra
     WpeScenePostprocess,
     /// 场景壁纸反射：follow（跟随 WPE 的 `general.user.reflection`，缺键当开）/ disabled / enabled
@@ -353,6 +355,7 @@ impl Settings {
             SettingKey::WallpaperVideoPlaybackRate => SettingValue::F64(1.0),
             SettingKey::WallpaperPaused => SettingValue::Bool(false),
             SettingKey::WpeMediaIntegration => SettingValue::Bool(true),
+            SettingKey::WpeSceneForceRender => SettingValue::Bool(false),
             SettingKey::WpeScenePostprocess => {
                 SettingValue::String(DEFAULT_WPE_SCENE_POSTPROCESS.to_string())
             }
@@ -446,6 +449,7 @@ impl Settings {
             SettingKey::WallpaperVideoPlaybackRate,
             SettingKey::WallpaperPaused,
             SettingKey::WpeMediaIntegration,
+            SettingKey::WpeSceneForceRender,
             SettingKey::WpeScenePostprocess,
             SettingKey::WpeSceneReflection,
             SettingKey::WpeSceneShadows,
@@ -579,6 +583,9 @@ impl Settings {
             SettingKey::SurfFreezePage => Ok(SettingValue::Bool(json.as_bool().unwrap_or(true))),
             SettingKey::WpeMediaIntegration => {
                 Ok(SettingValue::Bool(json.as_bool().unwrap_or(true)))
+            }
+            SettingKey::WpeSceneForceRender => {
+                Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
             }
             SettingKey::WpeScenePostprocess => Ok(SettingValue::String(
                 json.as_str()
@@ -795,6 +802,7 @@ impl Settings {
             SettingKey::WallpaperVideoPlaybackRate => "wallpaperVideoPlaybackRate".to_string(),
             SettingKey::WallpaperPaused => "wallpaperPaused".to_string(),
             SettingKey::WpeMediaIntegration => "wpeMediaIntegration".to_string(),
+            SettingKey::WpeSceneForceRender => "wpeSceneForceRender".to_string(),
             SettingKey::WpeScenePostprocess => "wpeScenePostprocess".to_string(),
             SettingKey::WpeSceneReflection => "wpeSceneReflection".to_string(),
             SettingKey::WpeSceneShadows => "wpeSceneShadows".to_string(),
@@ -1108,6 +1116,13 @@ impl Settings {
             .get(&SettingKey::WpeMediaIntegration)
             .map(|c| c.load().as_bool().unwrap_or(true))
             .unwrap_or(true)
+    }
+
+    pub fn get_wpe_scene_force_render(&self) -> bool {
+        Self::cells()
+            .get(&SettingKey::WpeSceneForceRender)
+            .map(|c| c.load().as_bool().unwrap_or(false))
+            .unwrap_or(false)
     }
 
     pub fn get_wpe_scene_postprocess(&self) -> String {
@@ -1545,6 +1560,17 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WpeMediaIntegration, &new_value);
+        Ok(())
+    }
+
+    /// 场景壁纸强制渲染（桌面）：写设置并广播 `setting-change`，壁纸窗口经场景设置消息交给宿主，宿主整场重新加载。
+    pub fn set_wpe_scene_force_render(&self, enabled: bool) -> Result<(), String> {
+        let cells = Self::cells();
+        let new_value = SettingValue::Bool(enabled);
+        if let Some(cell) = cells.get(&SettingKey::WpeSceneForceRender) {
+            cell.store(Arc::new(new_value.clone()));
+        }
+        Self::emit_setting_change(SettingKey::WpeSceneForceRender, &new_value);
         Ok(())
     }
 

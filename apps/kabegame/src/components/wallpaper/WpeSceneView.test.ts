@@ -95,10 +95,17 @@ describe("WpeSceneView 样式", () => {
       reflection: "follow",
       shadows: "follow",
       volumetrics: "follow",
+      forceRender: false,
     };
     expect(post).toHaveBeenCalledWith(follow, "*");
     post.mockClear();
-    const next = { postprocess: "enabled", reflection: "follow", shadows: "low", volumetrics: "follow" };
+    const next = {
+      postprocess: "enabled",
+      reflection: "follow",
+      shadows: "low",
+      volumetrics: "follow",
+      forceRender: false,
+    };
     await wrapper.setProps({ sceneSettings: next });
     expect(post).toHaveBeenCalledExactlyOnceWith({ ...follow, postprocess: "enabled", shadows: "low" }, "*");
     // 同值的新对象不推
@@ -108,6 +115,12 @@ describe("WpeSceneView 样式", () => {
     await wrapper.setProps({ sceneSettings: { ...next, volumetrics: "ultra" } });
     expect(post).toHaveBeenLastCalledWith(
       { ...follow, postprocess: "enabled", shadows: "low", volumetrics: "ultra" },
+      "*",
+    );
+    // 打开强制渲染也推（宿主比较后整场重新加载）
+    await wrapper.setProps({ sceneSettings: { ...next, volumetrics: "ultra", forceRender: true } });
+    expect(post).toHaveBeenLastCalledWith(
+      { ...follow, postprocess: "enabled", shadows: "low", volumetrics: "ultra", forceRender: true },
       "*",
     );
   });

@@ -39,7 +39,16 @@ const WallpaperStub = defineComponent({
 /** 进度覆盖层桩（真件要 i18n 插件）：只看 props */
 const OverlayStub = defineComponent({
   name: "WpeLoadingOverlay",
-  props: { scene: Boolean, value: Number, stage: String, failure: Array, placement: String, count: Object },
+  props: {
+    scene: Boolean,
+    value: Number,
+    stage: String,
+    failure: Array,
+    placement: String,
+    count: Object,
+    forceRenderPrompt: String,
+  },
+  emits: ["forceRender"],
   setup: () => () => h("div", { class: "overlay-stub" }),
 });
 
@@ -235,6 +244,37 @@ describe("ImageContent 的壁纸形态：缩略层打底，实时画面当原图
 
     const web = mountContent(wallpaper("8", "x-wpe/web", "C:/workshop/8/preview.jpg"));
     expect(web.findComponent(OverlayStub).props("scene")).toBe(false);
+  });
+
+  it("强制渲染提示：预览给「我就要看」、桌面给指向壁纸设置的文字；超时 / 宿主不可用、开着强制、网页、应用背景都不给", async () => {
+    const bottom = (wrapper: ReturnType<typeof mount>) =>
+      wrapper.findAllComponents(OverlayStub).find((item) => item.props("placement") === "bottom");
+    async function failed(type: string, reasons: string[], props: Record<string, unknown> = {}) {
+      const wrapper = mountContent(wallpaper("7", type, "C:/workshop/7/preview.jpg"), {
+        offerForceRender: true,
+        ...props,
+      });
+      await emitLive(wrapper, "fail", reasons);
+      await advance(250);
+      return wrapper;
+    }
+    const scene = await failed("x-wpe/scene", ["combo:SPRITESHEET", "tex:animation"]);
+    expect(bottom(scene)?.props("forceRenderPrompt")).toBe("action");
+    bottom(scene)!.vm.$emit("forceRender");
+    expect(scene.emitted("wallpaperForceRender")).toHaveLength(1);
+
+    expect(bottom(await failed("x-wpe/scene", ["render:timeout"]))?.props("forceRenderPrompt")).toBeNull();
+    expect(bottom(await failed("x-wpe/scene", ["host:unavailable"]))?.props("forceRenderPrompt")).toBeNull();
+    const forced = await failed("x-wpe/scene", ["render:program:0"], {
+      playback: { volume: 1, sceneSettings: { forceRender: true } },
+    });
+    expect(bottom(forced)?.props("forceRenderPrompt")).toBeNull();
+    expect(bottom(await failed("x-wpe/web", ["web:blocked"]))?.props("forceRenderPrompt")).toBeNull();
+    // 不给 offerForceRender：桌面（壁纸变体）给文字，应用背景（默认变体）不给
+    const desktop = await failed("x-wpe/scene", ["tex:animation"], { offerForceRender: false, variant: "wallpaper" });
+    expect(bottom(desktop)?.props("forceRenderPrompt")).toBe("settings");
+    const background = await failed("x-wpe/scene", ["tex:animation"], { offerForceRender: false });
+    expect(bottom(background)?.props("forceRenderPrompt")).toBeNull();
   });
 
   it("换成另一张壁纸：覆盖层从头再来", async () => {

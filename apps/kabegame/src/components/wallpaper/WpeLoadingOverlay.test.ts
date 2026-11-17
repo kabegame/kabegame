@@ -60,6 +60,34 @@ describe("WpeLoadingOverlay", () => {
     expect(wrapper.find('[data-testid="wpe-loading-detail"]').exists()).toBe(false);
   });
 
+  it("强制渲染提示：action 是可转交点击的链接「我就要看」，settings 是指向壁纸设置的文字；只在 bottom", async () => {
+    const wrapper = mount(WpeLoadingOverlay, {
+      props: { scene: true, value: 1, stage: "gpu", failure: ["tex:animation"], placement: "bottom" },
+    });
+    const link = () => wrapper.find('[data-testid="wpe-loading-force-render"]');
+    expect(link().exists()).toBe(false);
+    const hint = () => wrapper.find('[data-testid="wpe-loading-force-render-hint"]');
+    expect(hint().exists()).toBe(false);
+    await wrapper.setProps({ forceRenderPrompt: "action" });
+    expect(link().text()).toBe("gallery.wpeForceRenderAction");
+    expect(link().element.tagName).toBe("BUTTON");
+    expect(link().attributes()).toHaveProperty("data-wallpaper-clickable");
+    expect(link().classes()).toEqual(expect.arrayContaining(["pointer-events-auto", "underline"]));
+    await link().trigger("click");
+    expect(wrapper.emitted("forceRender")).toHaveLength(1);
+    expect(hint().exists()).toBe(false);
+    // 桌面：只有文字，没有链接
+    await wrapper.setProps({ forceRenderPrompt: "settings" });
+    expect(link().exists()).toBe(false);
+    expect(hint().text()).toBe("gallery.wpeForceRenderSettingsHint");
+    expect(hint().attributes()).not.toHaveProperty("data-wallpaper-clickable");
+    // 加载中（center）不给
+    await wrapper.setProps({ placement: "center" });
+    expect(hint().exists()).toBe(false);
+    await wrapper.setProps({ forceRenderPrompt: "action" });
+    expect(link().exists()).toBe(false);
+  });
+
   it("bottom：失败后留在缩略图底部，不模糊、没有进度条", () => {
     const wrapper = mount(WpeLoadingOverlay, {
       props: { scene: true, value: 1, stage: "gpu", failure: ["effect:x"], placement: "bottom" },

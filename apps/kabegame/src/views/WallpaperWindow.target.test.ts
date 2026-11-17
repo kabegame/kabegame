@@ -18,6 +18,8 @@ const backend = vi.hoisted(() => ({
   calls: [] as string[],
   /** `get_language` 的返回值 */
   language: null as string | null,
+  /** `get_wpe_scene_force_render` 的返回值 */
+  forceRender: false as boolean | undefined,
   /** `get_current_wallpaper_target` 每次调用带的 target 参数 */
   targetArgs: [] as unknown[],
   listeners: new Map<string, (event: { payload: unknown }) => void>(),
@@ -38,6 +40,7 @@ vi.mock("@/api/rpc", () => ({
     }
     if (command === "get_wallpaper_volume") return 0.8;
     if (command === "get_language") return backend.language;
+    if (command === "get_wpe_scene_force_render") return backend.forceRender;
     if (command === "get_current_wallpaper_target") {
       const target = args?.target;
       backend.targetArgs.push(target);
@@ -62,7 +65,7 @@ vi.mock("@/components/wallpaper/Wallpaper.vue", async () => {
   return {
     default: defineComponent({
       name: "Wallpaper",
-      props: { target: Object, styleMode: String, transition: String, volume: Number },
+      props: { target: Object, styleMode: String, transition: String, volume: Number, sceneSettings: Object },
       setup(_props, { expose }) {
         expose({ debugState: () => null, delegatesPing: () => false });
         return () => h("div", { class: "stage" });
@@ -360,5 +363,29 @@ describe("WallpaperWindow 的语言", () => {
     expect(i18n.global.locale.value).toBe("ja");
     await settingChange({ language: "xx" });
     expect(i18n.global.locale.value).toBe("en");
+  });
+});
+
+describe("WallpaperWindow 的强制渲染", () => {
+  afterEach(() => {
+    backend.forceRender = false;
+  });
+
+  it("启动读全局设置交给 Wallpaper 的场景设置，之后跟 setting-change；读不到按关", async () => {
+    backend.forceRender = true;
+    const wrapper = await mountWindow({ multiple: target({}) });
+    expect(stage(wrapper).props("sceneSettings")).toMatchObject({ forceRender: true });
+    await settingChange({ wpeSceneForceRender: false });
+    expect(stage(wrapper).props("sceneSettings")).toMatchObject({ forceRender: false });
+    await settingChange({ wpeSceneForceRender: true });
+    expect(stage(wrapper).props("sceneSettings")).toMatchObject({ forceRender: true });
+    // 不是布尔值的忽略
+    await settingChange({ wpeSceneForceRender: "off" });
+    expect(stage(wrapper).props("sceneSettings")).toMatchObject({ forceRender: true });
+    wrapper.unmount();
+
+    backend.forceRender = undefined;
+    const fallback = await mountWindow({ multiple: target({}) });
+    expect(stage(fallback).props("sceneSettings")).toMatchObject({ forceRender: false });
   });
 });

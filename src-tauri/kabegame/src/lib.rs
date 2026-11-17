@@ -817,6 +817,8 @@ pub(crate) fn configure_app(
             set_wallpaper_paused,
             get_wpe_media_integration,
             set_wpe_media_integration,
+            get_wpe_scene_force_render,
+            set_wpe_scene_force_render,
             get_wpe_scene_postprocess,
             set_wpe_scene_postprocess,
             get_wpe_scene_reflection,

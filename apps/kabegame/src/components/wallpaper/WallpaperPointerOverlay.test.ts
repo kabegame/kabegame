@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { mount } from "@vue/test-utils";
+import { nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WallpaperPointerOverlay from "./WallpaperPointerOverlay.vue";
 
@@ -8,7 +9,9 @@ vi.mock("./framePointer", () => ({
   get NATIVE_FRAME_POINTER() {
     return env.native;
   },
+  WALLPAPER_CLICKABLE_SELECTOR: "[data-wallpaper-clickable]",
 }));
+const originalElementsFromPoint = document.elementsFromPoint;
 
 const wrappers: ReturnType<typeof mount>[] = [];
 let startPan: ReturnType<typeof vi.fn<(event: PointerEvent) => boolean>>;
@@ -38,6 +41,7 @@ beforeEach(() => {
 
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
+  document.elementsFromPoint = originalElementsFromPoint;
 });
 
 describe("WallpaperPointerOverlay 平移", () => {
@@ -123,6 +127,50 @@ describe("WallpaperPointerOverlay 平移", () => {
     element.dispatchEvent(pointer("pointerup", { button: 0 }));
     await wrapper.vm.$nextTick();
     expect(element.classList.contains("cursor-grabbing")).toBe(false);
+  });
+});
+
+describe("WallpaperPointerOverlay 转交点击", () => {
+  it("左键落在带 data-wallpaper-clickable 的元素上：不平移，松开时还在它上面才 click 它；悬停是手形", async () => {
+    const { element, capture } = mountOverlay();
+    const link = document.createElement("button");
+    link.setAttribute("data-wallpaper-clickable", "");
+    const inner = document.createElement("span");
+    link.append(inner);
+    document.body.append(link);
+    const click = vi.fn();
+    link.addEventListener("click", click);
+    // 覆盖层在最上面，下面是链接里的文字
+    let under: Element[] = [element, inner, link];
+    document.elementsFromPoint = vi.fn(() => under);
+
+    element.dispatchEvent(pointer("pointermove"));
+    await nextTick();
+    expect(element.classList).toContain("cursor-pointer");
+    element.dispatchEvent(pointer("pointerdown", { button: 0 }));
+    expect(startPan).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    element.dispatchEvent(pointer("pointerup", { button: 0 }));
+    expect(click).toHaveBeenCalledTimes(1);
+
+    // 按下后移开再松开：不点
+    element.dispatchEvent(pointer("pointerdown", { button: 0 }));
+    under = [element];
+    element.dispatchEvent(pointer("pointerup", { button: 0 }));
+    expect(click).toHaveBeenCalledTimes(1);
+    element.dispatchEvent(pointer("pointermove"));
+    await nextTick();
+    expect(element.classList).not.toContain("cursor-pointer");
+
+    // 中键、右键不转交；不在链接上：左键照常平移
+    under = [element, inner, link];
+    element.dispatchEvent(pointer("pointerdown", { button: 2 }));
+    element.dispatchEvent(pointer("pointerup", { button: 2 }));
+    expect(click).toHaveBeenCalledTimes(1);
+    under = [element];
+    element.dispatchEvent(pointer("pointerdown", { button: 0 }));
+    expect(startPan).toHaveBeenCalledTimes(1);
+    link.remove();
   });
 });
 

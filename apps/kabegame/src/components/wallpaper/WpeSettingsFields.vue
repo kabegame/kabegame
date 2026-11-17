@@ -8,7 +8,7 @@
         :follow-available="followAvailable"
         :variant="variant"
         :disabled="isDisabled(key)"
-        @update="(k, v) => emit('update', k, v)"
+        @update="onUpdate"
       />
     </SettingRow>
     <!-- 预览侧栏：同作者属性面板的条目样式；开关同一行，其余放在标签下方（侧栏窄） -->
@@ -39,7 +39,7 @@
           :follow-available="followAvailable"
           :variant="variant"
           :disabled="isDisabled(key)"
-          @update="(k, v) => emit('update', k, v)"
+          @update="onUpdate"
         />
       </div>
     </div>
@@ -52,12 +52,14 @@ import { RotateCcw } from "@lucide/vue";
 import { Button, Tooltip } from "@/components/ui";
 import SettingRow from "@/components/settings/SettingRow.vue";
 import { WPE_SETTING_LABEL_KEYS, type WpeSettingKey, type WpeSettingValues } from "@/utils/wpeSettings";
+import { confirmWpeForceRender } from "@/utils/wpeForceRender";
 import WpeSettingControl from "./WpeSettingControl.vue";
 
 /**
- * WPE 设置字段组：暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影 / 体积光。纯视图，不读写任何存储：
+ * WPE 设置字段组：暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影 / 体积光 / 强制渲染。纯视图，不读写任何存储：
  * 调用方给要显示的字段（`utils/wpeSettings.ts` 的 `wpeSettingFieldsFor`）与当前值，改动经 `update` 报出去，
  * 由调用方写进自己的数据源——设置页写全局「壁纸设置」，预览写这张壁纸的「预览设置」（暂停由预览弹窗特殊处理成内存状态）。
+ * 打开强制渲染先确认（`confirmWpeForceRender`，用户定），取消就不报，两个调用方都经这一处。
  */
 const props = withDefaults(
   defineProps<{
@@ -86,7 +88,13 @@ function descriptionOf(key: WpeSettingKey): string {
   return t(`${WPE_SETTING_LABEL_KEYS[key]}Desc`);
 }
 function isInline(key: WpeSettingKey): boolean {
-  return key === "paused" || key === "mediaIntegration";
+  return key === "paused" || key === "mediaIntegration" || key === "forceRender";
+}
+
+/** 改值往外报；强制渲染由关变开时先确认，取消就不报（开关控件按 `values` 显示，自然回到关） */
+async function onUpdate(key: WpeSettingKey, value: boolean | number | string) {
+  if (key === "forceRender" && value === true && !(await confirmWpeForceRender())) return;
+  emit("update", key, value);
 }
 function isDisabled(key: WpeSettingKey): boolean {
   return props.disabled || props.disabledKeys.includes(key);

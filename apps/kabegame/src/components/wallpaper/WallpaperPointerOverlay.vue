@@ -12,11 +12,14 @@
  * - 右键：冒泡到预览容器弹菜单；滚轮：冒泡到预览容器，同图片（Ctrl+滚轮缩放、滚轮平移）。
  * 平移开始后的移动与松开由 Panzoom 挂在 document 上的监听处理；这里捕获指针，拖出覆盖层也不断。
  *
+ * 画布里要能点的元素（带 `data-wallpaper-clickable`，如缩略图底部的「我就要看」）在覆盖层下面收不到点击：左键按下时按位置
+ * （`document.elementsFromPoint`）找到它就不平移，松开时还在同一个元素上就 `click()` 它；悬停时光标为手形。
+ *
  * Linux 不盖：iframe 直接收真实鼠标（`NATIVE_FRAME_POINTER`）。
  */
 // TODO:[WPE_SCENE] Linux 未实测：没有覆盖层，壁纸上的滚轮、拖动进了 iframe，只有留白处（Panzoom 自己的左键平移）与工具条能缩放 / 平移
 import { ref } from "vue";
-import { NATIVE_FRAME_POINTER } from "./framePointer";
+import { NATIVE_FRAME_POINTER, WALLPAPER_CLICKABLE_SELECTOR } from "./framePointer";
 
 const props = defineProps<{
   /** 现在拖得动（已放大） */
@@ -28,11 +31,29 @@ const props = defineProps<{
 }>();
 
 const panning = ref(false);
+/** 光标下有能点的元素 */
+const overClickable = ref(false);
 /** 按住的是左键、且按下时拖得动：之后每次移动按 Ctrl 决定平移与否 */
 let leftDrag = false;
+/** 左键按下时光标下那个能点的元素：松开时还在它上面才转交点击 */
+let pressed: HTMLElement | null = null;
+
+/** 光标下能点的元素：覆盖层自己在最上面，按从上到下找第一个落在带属性的元素里的 */
+function clickableAt(event: PointerEvent): HTMLElement | null {
+  const elements = document.elementsFromPoint?.(event.clientX, event.clientY) ?? [];
+  for (const element of elements) {
+    const hit = element.closest<HTMLElement>(WALLPAPER_CLICKABLE_SELECTOR);
+    if (hit) return hit;
+  }
+  return null;
+}
 
 function onPointerDown(event: PointerEvent) {
   if (event.button === 1) event.preventDefault();
+  if (event.button === 0) {
+    pressed = clickableAt(event);
+    if (pressed) return;
+  }
   if ((event.button !== 0 && event.button !== 1) || !props.pannable) return;
   (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
   leftDrag = event.button === 0;
@@ -40,7 +61,10 @@ function onPointerDown(event: PointerEvent) {
 }
 
 function onPointerMove(event: PointerEvent) {
-  if (!leftDrag) return;
+  if (!leftDrag) {
+    overClickable.value = clickableAt(event) !== null;
+    return;
+  }
   if (!event.ctrlKey && !panning.value) {
     panning.value = props.startPan(event);
   } else if (event.ctrlKey && panning.value) {
@@ -49,9 +73,21 @@ function onPointerMove(event: PointerEvent) {
   }
 }
 
+function onPointerUp(event: PointerEvent) {
+  const target = pressed;
+  pressed = null;
+  if (target && event.button === 0 && clickableAt(event) === target) target.click();
+  onPointerEnd();
+}
+
 function onPointerEnd() {
   leftDrag = false;
   panning.value = false;
+}
+
+function onPointerCancel() {
+  pressed = null;
+  onPointerEnd();
 }
 </script>
 
@@ -59,12 +95,12 @@ function onPointerEnd() {
   <div
     v-if="NATIVE_FRAME_POINTER"
     class="absolute inset-0"
-    :class="panning ? 'cursor-grabbing' : pannable ? 'cursor-grab' : ''"
+    :class="panning ? 'cursor-grabbing' : overClickable ? 'cursor-pointer' : pannable ? 'cursor-grab' : ''"
     data-wallpaper-pointer-overlay
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
-    @pointerup="onPointerEnd"
-    @pointercancel="onPointerEnd"
+    @pointerup="onPointerUp"
+    @pointercancel="onPointerCancel"
     @lostpointercapture="onPointerEnd"
   />
 </template>

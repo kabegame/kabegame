@@ -52,6 +52,7 @@ const values = computed<WpeSettingValues>(() => {
     reflection: read("reflection"),
     shadows: read("shadows"),
     volumetrics: read("volumetrics"),
+    forceRender: read("forceRender"),
   };
 });
 /** 读取 / 保存中不可改（同原来的 Setting*Control） */

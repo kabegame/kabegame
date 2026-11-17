@@ -375,12 +375,14 @@ const isVideoBackground = (image: ImageInfo | undefined) => isVideoPlaybackType(
 
 /**
  * 背景与预览走同一个 `ImageContent`（原图形态），不按类型分支：图片照常显示，网页与场景壁纸由 `ImageContent` 的
- * wallpaper 形态渲染（缩略图打底、实时画面不交互），场景设置取这张壁纸的「预览设置」（`bgPlayback`）。背景强制暂停
+ * wallpaper 形态渲染（缩略图打底、实时画面不交互），场景设置取这张壁纸的「预览设置」（`bgPlayback`），只是强制渲染一律打开
+ * （用户定：背景始终渲染、不退回封面，也没有「我就要看」）。背景强制暂停
  * （`video-playing` 恒为 false）：视频停在第一帧，网页由垫片冻结、场景停在加载时画的第一帧。`video-muted` 让音量为 0：
  * 视频静音，网页壁纸经垫片的音量协议静音（见 cocs/wpe/WPE_IMPORT.md「音量」）。
  */
 const bgPlayback = useWpePreviewPlayback(
   computed(() => (bgImage.value && isWpeWallpaperContentType(bgImage.value.type) ? bgImage.value.id : null)),
+  { forceRender: true },
 );
 const hasAppBackgroundSource = (image: ImageInfo | null | undefined) =>
   !!(image?.localPath || image?.thumbnailPath || image?.compatiblePath);

@@ -312,6 +312,54 @@ describe("SceneHost：父页面下发的场景设置（后处理 / 反射 / 阴�
     host.dispose();
   });
 
+  /** 第 n 次编译带的 force（替身的参数类型里没有这个字段） */
+  const forceOf = (call: number) => (compile.mock.calls[call][0] as { force?: unknown }).force;
+
+  it("强制渲染：关着时有不支持项退回；打开后重新加载、带 force 编译并照常渲染；再关掉又退回", async () => {
+    compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.setSceneSettings({ ...FOLLOW, forceRender: false });
+    host.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(report.fallback).toHaveBeenCalledWith(["effect:unsupported"]));
+    expect(forceOf(0)).toBe(false);
+    expect(report.ready).not.toHaveBeenCalled();
+
+    host.setSceneSettings({ ...FOLLOW, forceRender: true });
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(forceOf(1)).toBe(true);
+    expect(host.stats.recompiled.at(-1)).toEqual({ reason: "settings", keys: ["forceRender"] });
+    expect(report.warn).toHaveBeenCalledWith(expect.stringContaining("强制渲染（设置）"), ["effect:unsupported"]);
+
+    host.setSceneSettings({ ...FOLLOW, forceRender: false });
+    await vi.waitFor(() => expect(report.fallback).toHaveBeenCalledTimes(2));
+    expect(forceOf(2)).toBe(false);
+    host.dispose();
+  });
+
+  it("强制渲染只认 true；dev 覆盖照旧生效", async () => {
+    compile.mockImplementation(async ({ userProperties }) => ({ ...bundleFor(userProperties), bindings: [] }));
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.setSceneSettings({ ...FOLLOW, forceRender: "true" });
+    host.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(report.fallback).toHaveBeenCalledTimes(1));
+    host.dispose();
+
+    vi.stubGlobal("__SCENE_DEV__", true);
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => (key === "kabegame-dev-scene-force-render" ? "1" : null),
+    });
+    const devReport = reporter();
+    const devHost = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report: devReport });
+    devHost.setSceneSettings(FOLLOW);
+    devHost.applyUserProperties(fx(true));
+    await vi.waitFor(() => expect(devReport.ready).toHaveBeenCalledTimes(1));
+    expect(devReport.warn).toHaveBeenCalledWith(expect.stringContaining("强制渲染（dev）"), ["effect:unsupported"]);
+    devHost.dispose();
+  });
+
   it("只改体积光：重新加载一次（P13e，档位决定 RT 与 QUALITY）", async () => {
     const { host } = await load(FOLLOW);
     host.setSceneSettings({ ...FOLLOW, volumetrics: "disabled" });

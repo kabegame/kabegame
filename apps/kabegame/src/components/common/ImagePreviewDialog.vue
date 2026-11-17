@@ -94,9 +94,21 @@
           @interact-outside="handleDialogPointerDownOutside"
         >
           <header class="flex h-12 shrink-0 items-center gap-3 border-0 border-b border-solid border-kb-line pl-5 pr-3">
-            <DialogTitle class="m-0 min-w-0 flex-1 truncate text-[15px] font-600 leading-6 text-kb-fg">
-              {{ previewDialogTitle }}
-            </DialogTitle>
+            <!-- 名称与紧跟其后的标记：开着强制渲染的场景壁纸，名称右边警告色「强制渲染」（只看这张的预览设置） -->
+            <div class="flex min-w-0 flex-1 items-center gap-2">
+              <DialogTitle class="m-0 min-w-0 truncate text-[15px] font-600 leading-6 text-kb-fg">
+                {{ previewDialogTitle }}
+              </DialogTitle>
+              <Tooltip v-if="previewForceRender" :content="t('gallery.wpeForceRenderTitleTip')">
+                <span
+                  class="inline-flex flex-none items-center gap-1 rounded-kb-sm border border-solid border-kb-warning bg-[color-mix(in_srgb,var(--kb-warning)_12%,transparent)] px-1.5 text-[12px] leading-5 text-kb-warning"
+                  data-testid="preview-force-render"
+                >
+                  <TriangleAlert class="size-3.5" />
+                  {{ t("gallery.wpeForceRenderTitle") }}
+                </span>
+              </Tooltip>
+            </div>
             <Tooltip :content="t('common.close')">
               <DialogClose as-child>
                 <Button variant="ghost" size="icon-sm" :aria-label="t('common.close')">
@@ -272,9 +284,11 @@
                       :video-playing="!wallpaperPaused"
                       :playback="previewPlayback"
                       interactive
+                      offer-force-render
                       @ready="handlePreviewReady"
                       @wallpaper-live="previewRendering = $event"
                       @wallpaper-contextmenu="openPreviewContextMenuAt"
+                      @wallpaper-force-render="onPreviewForceRender"
                     />
                   </WallpaperPreviewCanvas>
                 </div>
@@ -432,6 +446,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Trash2,
+  TriangleAlert,
   X,
   ZoomIn,
   ZoomOut,
@@ -482,9 +497,11 @@ import {
   isNativeMetadataEligible,
   isVideoPlaybackType,
   isWpeMediaType,
+  isWpeSceneType,
   isWpeVideoType,
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
+import { confirmWpeForceRender } from "../../utils/wpeForceRender";
 import type { Plugin } from "@/stores/plugins";
 import { IS_ANDROID, IS_WEB } from "@/env.ts";
 
@@ -641,6 +658,21 @@ const previewContainerRef = ref<HTMLElement | null>(null);
 const previewContentRef = ref<InstanceType<typeof ImageContent> | null>(null);
 /** 桌面预览视频：从 ImageContent 暴露的 videoEl 取，供 VideoControls 绑定 */
 const previewVideoEl = computed<HTMLVideoElement | null>(() => previewContentRef.value?.videoEl ?? null);
+/** 场景壁纸的预览设置：标题的「强制渲染」标记与缩略图底部的「我就要看」都读写它（同侧栏，同张共用一份） */
+const previewSceneSettings = useWpePreviewSettings(
+  computed(() => (previewImage.value && isWpeSceneType(previewImage.value.type) ? previewImage.value.id : null)),
+);
+/** 名称右边的警告标记：这张是场景、预览设置开着强制渲染（用户定：只看设置，不看宿主报了什么） */
+const previewForceRender = computed(
+  () => isWpeSceneType(previewImage.value?.type) && previewSceneSettings.values.value.forceRender,
+);
+/** 缩略图底部的「我就要看」：确认后打开这张壁纸的强制渲染；确认期间换了图就不写 */
+async function onPreviewForceRender() {
+  const id = previewImage.value?.id;
+  if (!id || !(await confirmWpeForceRender())) return;
+  if (previewImage.value?.id !== id) return;
+  previewSceneSettings.set("forceRender", true);
+}
 /** 视频壁纸（`x-wpe/video`）在预览里按普通视频播放，倍速取这张壁纸的预览设置（暂停与音量归视频控制条） */
 const { values: previewWpeVideoSettings } = useWpePreviewSettings(
   computed(() => (previewImage.value && isWpeVideoType(previewImage.value.type) ? previewImage.value.id : null)),

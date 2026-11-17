@@ -28,12 +28,16 @@ describe("wpeSettingFieldsFor", () => {
       "reflection",
       "shadows",
       "volumetrics",
+      "forceRender",
     ]);
+    // 强制渲染只有场景
+    expect(wpeSettingFieldsFor("x-wpe/web", true)).not.toContain("forceRender");
     expect(wpeSettingFieldsFor("image/png", true)).toEqual([]);
   });
 
   it("不给类型时是全部字段（设置页）", () => {
-    expect(wpeSettingFieldsFor(null, true)).toHaveLength(9);
+    expect(wpeSettingFieldsFor(null, true)).toHaveLength(10);
+    expect(wpeSettingFieldsFor(null, true)).toContain("forceRender");
     expect(wpeSettingFieldsFor(null, true)).toContain("fps");
     expect(wpeSettingFieldsFor(null, false)).not.toContain("mediaIntegration");
   });
@@ -91,13 +95,20 @@ describe("跟随 WPE", () => {
     expect(wpeChoiceDisplay("postprocess", "bogus", true)).toBe("enabled");
   });
 
-  it("推给场景宿主前把不能跟随的 follow 换成默认值", () => {
-    const values = { postprocess: "follow", reflection: "disabled", shadows: "follow", volumetrics: "follow" };
+  it("推给场景宿主前把不能跟随的 follow 换成默认值；强制渲染原样带上", () => {
+    const values = {
+      postprocess: "follow",
+      reflection: "disabled",
+      shadows: "follow",
+      volumetrics: "follow",
+      forceRender: true,
+    };
     expect(wpeSceneSettingsOf(values, false)).toEqual({
       postprocess: "enabled",
       reflection: "disabled",
       shadows: "medium",
       volumetrics: "medium",
+      forceRender: true,
     });
     expect(wpeSceneSettingsOf(values, true)).toEqual(values);
   });
@@ -114,6 +125,12 @@ describe("wpePreviewSettingValues", () => {
       shadows: "high",
       volumetrics: "low",
     });
+  });
+
+  it("强制渲染：只认布尔值，默认关", () => {
+    expect(WPE_SETTING_DEFAULTS.forceRender).toBe(false);
+    expect(wpePreviewSettingValues({ forceRender: true }).forceRender).toBe(true);
+    expect(wpePreviewSettingValues({ forceRender: "yes" }).forceRender).toBe(false);
   });
 
   it("帧率：数值与 follow 都认，其它取默认值", () => {

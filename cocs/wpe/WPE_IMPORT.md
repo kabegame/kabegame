@@ -722,6 +722,9 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
     平移。只看指针事件的修饰键、不听键盘：拖动中焦点可能在 iframe 里（`keepFocusOutOfFrames` 等左键松开才还）。平移的同一次拖动
     也照常注入进了壁纸（接受）。
   - 中键：平移，不看 Ctrl；一律阻止默认（中键自动滚动）。
+  - 画布里要能点的元素（带 `data-wallpaper-clickable`，如缩略图底部的「我就要看」，选择器 `WALLPAPER_CLICKABLE_SELECTOR` 在
+    `framePointer.ts`）在覆盖层下面收不到点击：左键按下时按位置（`document.elementsFromPoint`）找到它就不平移，松开时还在同一个
+    元素上才 `click()` 它；悬停时光标为手形。同一次点击照常注入进了壁纸（显示不了时宿主不在画，无影响）。
   - 右键：冒泡到预览容器弹菜单。
   - 光标：拖得动时 `grab`，平移中 `grabbing`。
 - **注入照常**：`ConvertPointFromView` 用合成器命中测试的变换，已含放大与平移，点击与跟随对得上位置。
@@ -890,22 +893,34 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 ### 壁纸设置与预览设置
 
-暂停、音量、视频倍速、媒体集成、帧率、场景后处理 / 反射 / 阴影 / 体积光这一组通用设置分两份，用同一个字段组组件
+暂停、音量、视频倍速、媒体集成、帧率、场景后处理 / 反射 / 阴影 / 体积光 / 强制渲染这一组通用设置分两份，用同一个字段组组件
 （`components/wallpaper/WpeSettingsFields.vue` + `WpeSettingControl.vue`，纯视图，改动经 `update` 报给调用方；字段表、默认值、
 按类型选字段与「跟随 WPE」的规则在 `utils/wpeSettings.ts`）：
 
 - **壁纸设置**（桌面）：全局设置键（`wallpaperPaused`、`wallpaperVolume`、`wallpaperVideoPlaybackRate`、`wpeMediaIntegration`、`wpeFps`、
-  `wpeScenePostprocess`、`wpeSceneReflection`、`wpeSceneShadows`、`wpeSceneVolumetrics`），所有壁纸共用、只给壁纸窗口。设置页
+  `wpeScenePostprocess`、`wpeSceneReflection`、`wpeSceneShadows`、`wpeSceneVolumetrics`、`wpeSceneForceRender`），所有壁纸共用、只给壁纸窗口。设置页
   `components/settings/items/WpeWallpaperSettings.vue` 显示全部字段（当前壁纸用不上的照样显示，只是不起作用），每个字段接
   `useSettingKeyState`；暂停只在窗口模式显示，媒体集成只在 Windows。
 - **预览设置**（预览与应用背景）：每张 `x-wpe/*` 壁纸一份，存在 metadata 顶层的 `previewSettings`（与 `userProperties` 并列，
   只存与 Kabegame 默认值不同的键），读写 `get_wpe_preview_settings` / `set_wpe_preview_settings`（`kabegame_core::wpe::preview_settings`
   解析、钳制与改写，经 `rewrite_image_metadata` 后发 `metadataId` 补丁），没设的项取 Kabegame 自己的默认值（暂停否、音量 1、倍速 1、
-  媒体集成开、帧率 30、后处理 `enabled`、反射开、阴影 `medium`、体积光 `medium`；帧率以外与 WPE 出厂值一致），**不回落到全局**。前端 `useWpePreviewSettings`
+  媒体集成开、帧率 30、后处理 `enabled`、反射开、阴影 `medium`、体积光 `medium`、强制渲染关；帧率以外与 WPE 出厂值一致），**不回落到全局**。前端 `useWpePreviewSettings`
   让同一张的全部使用方（预览右栏、画面里的 `WpeWallpaperContent`、预览弹窗给视频壁纸设倍速）共用一份状态，面板改动当场生效，
   草稿 300 ms 去抖后写，别处写入（`metadataId` 补丁）时重读。预览右栏的「预览设置」面板（`WpePreviewSettingsPanel.vue`）按类型
-  显示：网页是暂停、音量、媒体集成、帧率；场景再加后处理 / 反射 / 阴影 / 体积光；`x-wpe/video` 在预览里按普通视频播放，只有倍速（暂停与音量
+  显示：网页是暂停、音量、媒体集成、帧率；场景再加后处理 / 反射 / 阴影 / 体积光 / 强制渲染；`x-wpe/video` 在预览里按普通视频播放，只有倍速（暂停与音量
   归视频控制条，音量是全部视频共用的 `kabegame-video-volume`）。
+- **强制渲染**（2026-11-17 用户定，只对场景）：有暂不支持的特性也照常渲染，不退回封面（宿主的处理见 [WPE_SCENE.md](WPE_SCENE.md)
+  「强制渲染」）。打开一律先确认（`utils/wpeForceRender.ts` 的 `confirmWpeForceRender`，警告样式，提示画面可能缺东西、错位或和
+  WPE 不一致）：设置页与预览侧栏在字段组 `WpeSettingsFields` 里拦 `update`，取消就不报；预览的「我就要看」由预览弹窗确认后写这张的
+  预览设置；关掉不确认。值和四个场景选项一起经场景设置消息（`wpeSceneSettingsOf` 的 `forceRender`）交给宿主，桌面由壁纸窗口读
+  `get_wpe_scene_force_render` 并跟 `setting-change`。
+  - **原因下面的提示**（`WpeLoadingOverlay` 的 `forceRenderPrompt`，`ImageContent` 在场景显示不了、还没开强制渲染、原因不是
+    `render:timeout` / `host:*` 时给）：预览（调用方给 `offerForceRender`）是「我就要看」链接文字（用户定：不做成按钮），点了确认后
+    打开这张的强制渲染；预览画布上盖着拦指针的覆盖层，它把左键点击转交给带 `data-wallpaper-clickable` 的元素（见下「预览放大」的
+    覆盖层）。桌面（壁纸变体）点不到，是一行文字「可以打开壁纸设置 -> 强制渲染」（用户定）。
+  - **应用背景一律强制渲染**（用户定）：`useWpePreviewPlayback(…, { forceRender: true })`，不看这张的预览设置，也就没有提示。
+  - **预览标题**：这张是场景、预览设置开着强制渲染时，名称右边一个警告色「强制渲染」（`TriangleAlert`），悬停说明画面可能有误、
+    在右侧设置里关；只看设置，不看宿主报了什么（用户定）。
 - **预览的暂停不存**：它是 `ImagePreviewDialog` 的内存状态 `wallpaperPaused`（换图复位），和右键菜单的「暂停」是同一个；
   字段组的暂停开关把改动交回弹窗。
 - **应用背景**强制暂停（`video-playing` 恒为 false：视频停在第一帧、网页由垫片先预热再冻结（见「暂停」）、场景停在加载时画的

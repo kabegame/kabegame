@@ -3609,3 +3609,16 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PE5 宿主接线 | Windows dev | 实时预览 `p12-create` 十几秒，看 `host.puppets()` | 各 puppet 最终层数同 WPE，`detached` 为 0，没有新告警 | 2026-11-16：main 29、destroy 1、cb1 1、cb2 2 层，同 WPE；`detached` 全 0 |
 | [x] | PE6 2887099508 点书翻页 | Windows dev，图库预览 | 预览 2887099508，等开场镜头结束后点书 | 手翻一页书，脚本不报 `is not a function`；应用日志里没有这张的脚本出错 | 2026-11-16 用户在预览里点书确认翻页正常（探针模拟点击没点中：开场镜头推近） |
 | [ ] | PE7 非 Windows | macOS、Linux | 同 PE5、PE6 | 同 Windows | 本机不能测 |
+
+## 场景壁纸「强制渲染」设置
+
+2026-11-17 Windows dev。WPE 设置字段组加开关「强制渲染」（只对场景，默认关）：桌面是全局键 `wpeSceneForceRender`（设置页「壁纸设置」），预览与应用背景是这张壁纸的预览设置 `forceRender`（预览右侧边栏）；打开一律先确认（`confirmWpeForceRender`）。值经场景设置消息交给宿主，变了整场重新加载，开着时有不支持项也照常渲染（原来只有 dev 的 `localStorage` 开关）。预览里场景显示不了时，底部红字原因下面有「我就要看」链接；名称右边的警告色「强制渲染」只看设置。计划见 `.claude/plans/wpe-import/phase-force-render.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | FR1 单测与检查 | Windows | `preview_settings` 单测与 cargo check；vue-tsc、宿主 tsc；`wpeSettings`、`wpeForceRender`、`WpeSettingsFields`、`WallpaperPointerOverlay`、`WpeLoadingOverlay`、`ImageContent.wallpaper`、`WpeSceneView`、`wpeSceneStyle`、壁纸窗口、预览弹窗与宿主 `host` / `sceneStyle` 的 vitest；Prettier | 0 error、全过；变异全被抓到 | 2026-11-17 Claude：core `preview_settings` 7 例过；应用 crate 的 cargo check 因 dev 占着 CEF 的 DLL（os error 32）没跑成，重启 dev 时会编到；vue-tsc、宿主 tsc 0 error；应用相关 32 个文件 351 例中只有 `wpeWebVolume.test.ts` 4 例既有失败（`History is not defined`，来自 `807bf80e` 的垫片改动，与本项无关），宿主 54 例全过；12 处变异全抓到 |
+| [ ] | FR2 「我就要看」 | Windows dev（重启后的新构建），图库预览 | 预览一张显示不了的场景（如 dino_run，13518），点红字原因下面的「我就要看」，先点取消、再点打开 | 链接是文字不是按钮、悬停手形；取消什么都不变；打开后场景重新加载并渲染出来，名称右边出现警告色「强制渲染」，右侧预览设置里的开关是开的 | 要重启 dev（加了 Rust 命令与预览设置键） |
+| [ ] | FR3 预览侧栏开关 | Windows dev，图库预览 | 在右侧预览设置里打开 / 关掉「强制渲染」 | 打开先弹同一个确认框，取消后开关仍是关；关掉不确认、场景回到封面与红字原因，标题的标记消失 | |
+| [ ] | FR4 设置页（桌面） | Windows dev，壁纸窗口模式 | 设置页「壁纸设置」打开「强制渲染」，桌面换成一张显示不了的场景 | 没开时桌面的红字原因下面是一行文字「可以打开壁纸设置 -> 强制渲染」（不是链接）；打开先确认，桌面上的场景照常渲染；关掉后回到封面与那行文字 | |
+| [ ] | FR5 应用背景与不该出提示的地方 | Windows dev | 把一张显示不了的场景（如 dino_run）设为当前壁纸并开应用背景；预览里加载超时的场景；已开强制渲染仍画不出来的场景 | 应用背景直接强制渲染出来（不看这张的预览设置）；后两种都没有「我就要看」 | |
+| [ ] | FR6 非 Windows | macOS、Linux | 同 FR2、FR3 | 同 Windows（Linux 没有覆盖层，链接直接可点） | 本机不能测 |

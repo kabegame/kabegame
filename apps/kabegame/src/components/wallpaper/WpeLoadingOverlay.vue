@@ -36,6 +36,25 @@
       >
         {{ detail }}
       </span>
+      <!-- 失败原因下面的强制渲染提示（用户定）：预览是「我就要看」链接文字（不做成按钮；根不收指针，这里单独收，预览画布上盖着
+           拦指针的覆盖层，它按 data-wallpaper-clickable 把点击转交过来）；桌面点不到，只给文字指路到壁纸设置 -->
+      <button
+        v-if="forceRenderPrompt === 'action' && placement === 'bottom'"
+        type="button"
+        class="pointer-events-auto cursor-pointer border-0 bg-transparent p-0 text-[12px] leading-[1.4] text-kb-accent underline underline-offset-2 hover:opacity-80"
+        data-wallpaper-clickable
+        data-testid="wpe-loading-force-render"
+        @click="emit('forceRender')"
+      >
+        {{ t("gallery.wpeForceRenderAction") }}
+      </button>
+      <span
+        v-else-if="forceRenderPrompt === 'settings' && placement === 'bottom'"
+        class="max-w-full text-center text-[12px] leading-[1.4] text-kb-fg-muted"
+        data-testid="wpe-loading-force-render-hint"
+      >
+        {{ t("gallery.wpeForceRenderSettingsHint") }}
+      </span>
     </div>
   </div>
 </template>
@@ -46,6 +65,8 @@
  * - `center`（加载中）：实时画面揭开之前盖在缩略图上，背后模糊（用户定：只看到清晰的缩略图、没有文字，就是没加载出来），正中是阶段文字
  *   与进度条。场景有阶段（技术名词，用户定）、进度与一行「当前阶段的 done / total · 总百分比（两位小数）」（计数只在编译、解码、建
  *   管线这几个有计数的阶段显示，`wpeSceneProgress.ts`）；网页壁纸只有不定进度条与「加载中」。
+ * - `bottom` 可在原因下面带强制渲染的提示（`forceRenderPrompt`）：`action` 是「我就要看」链接文字（预览，点了 emit `forceRender`，
+ *   调用方确认后打开强制渲染）；`settings` 是一行文字「可以打开壁纸设置 -> 强制渲染」（桌面，点不到）。
  * - 失败（`failure` 给了原因）：文字与进度条变红，标题是「喵呜，这张壁纸渲染失败了呢」（超时是「加载超时」），下面一行是原因（宿主报的键，超时不列）；
  *   调用方停一下就换成 `bottom`：不模糊，红字留在缩略图底部，直到实时画面出来或换图。
  * 纯视图，进度由调用方算（`useWpeLoadProgress`）。
@@ -75,9 +96,12 @@ const props = withDefaults(
     placement?: "center" | "bottom";
     /** 当前阶段最近一次的真实计数（`useWpeLoadProgress` 的 `count`） */
     count?: { done: number; total: number } | null;
+    /** `bottom` 原因下面的强制渲染提示：`action` 是「我就要看」链接，`settings` 是指向壁纸设置的文字；不给就没有 */
+    forceRenderPrompt?: "action" | "settings" | null;
   }>(),
-  { failure: null, placement: "center", count: null },
+  { failure: null, placement: "center", count: null, forceRenderPrompt: null },
 );
+const emit = defineEmits<{ forceRender: [] }>();
 
 /** 那一块的宽度上限（屏幕像素）与占显示宽度的比例上限。 */
 const SIZE = { center: { max: 320, ratio: 0.7 }, bottom: { max: 480, ratio: 0.9 } } as const;

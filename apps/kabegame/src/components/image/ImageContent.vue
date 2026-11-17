@@ -147,6 +147,8 @@
             :value="1"
             :stage="loadStage"
             :failure="loadFailure"
+            :force-render-prompt="forceRenderPrompt"
+            @force-render="emit('wallpaperForceRender')"
           />
         </Transition>
       </template>
@@ -320,6 +322,12 @@ interface Props {
    * 场景设置跟随 WPE。暂停看 `videoPlaying`，`videoMuted` 时音量按 0。
    */
   playback?: WallpaperPlayback;
+  /**
+   * 只对场景的 wallpaper 形态生效：显示不了、红字原因留在底部时，原因下面给「我就要看」链接（emit `wallpaperForceRender`，
+   * 调用方确认后打开强制渲染）。只有预览给 true：桌面的点击落在桌面上、应用背景不交互，都点不到；桌面（壁纸变体）改给一行
+   * 文字指向壁纸设置，应用背景一律强制渲染（`playback.sceneSettings.forceRender`），不给提示。
+   */
+  offerForceRender?: boolean;
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -335,6 +343,7 @@ const props = withDefaults(defineProps<Props>(), {
   variant: "default",
   wpeVideo: undefined,
   wallpaperTarget: null,
+  offerForceRender: false,
 });
 
 /** 拖拽落盘的建议文件名：跟随当前实际加载的 source，退回 displayName / id。 */
@@ -416,6 +425,8 @@ const emit = defineEmits<{
   wallpaperFail: [reasons: string[]];
   /** wallpaper 形态：网页 / 场景壁纸里点了右键，坐标是本页面视口（见 `wpeContextMenu.ts`） */
   wallpaperContextmenu: [point: ViewportPoint];
+  /** 场景显示不了时点了「我就要看」（`offerForceRender`）：调用方确认后打开这张壁纸的强制渲染 */
+  wallpaperForceRender: [];
   /** 壁纸变体：当前画面换了（缩略层、原图层、视频出来），`displaySource()` 可能变了（桌面平铺重取图源） */
   displayChange: [];
 }>();
@@ -677,6 +688,19 @@ const wallpaperFailureCaption = computed(
     loadSettled.value &&
     loadFailure.value !== null,
 );
+/**
+ * 底部红字原因下面的强制渲染提示（用户定）：场景、还没开强制渲染、原因不是超时或宿主不可用（这两类是宿主卡住或起不来，强制也
+ * 没用；开了强制还失败的是真画不出来）时，预览（`offerForceRender`）给「我就要看」链接，桌面（壁纸变体）给指向壁纸设置的文字，
+ * 别处（应用背景本来就强制）不给。
+ */
+const forceRenderPrompt = computed<"action" | "settings" | null>(() => {
+  if (!isWpeScene.value || !wallpaperFailureCaption.value) return null;
+  if (props.playback?.sceneSettings?.forceRender) return null;
+  if ((loadFailure.value ?? []).some((reason) => reason === "render:timeout" || reason.startsWith("host:")))
+    return null;
+  if (props.offerForceRender) return "action";
+  return isWallpaperVariant.value ? "settings" : null;
+});
 const {
   value: loadValue,
   stage: loadStage,

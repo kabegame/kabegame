@@ -216,11 +216,11 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
       });
     },
   };
-  async function sceneFixture() {
+  async function sceneFixture(stubs: Record<string, unknown> = {}) {
     viewports.splice(0);
     fetchImageById.mockImplementation(async (id: string) => ({ id, localPath: `/${id}`, type: "x-wpe/scene" }));
     return fixture(
-      { KbResizable: slot, WallpaperPreviewCanvas: canvas, PreviewControlBar: slot },
+      { KbResizable: slot, WallpaperPreviewCanvas: canvas, PreviewControlBar: slot, ...stubs },
       { actions: createImageActions() },
     );
   }
@@ -249,6 +249,50 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
     wrapper.findComponent(ImageContent).vm.$emit("wallpaperLive", true);
     await flushPromises();
   }
+
+  it("强制渲染：预览设置开着时名称右边有警告标记，没开时没有", async () => {
+    let forceRender = true;
+    invoke.mockImplementation(async (command: string) =>
+      command === "get_wpe_preview_settings"
+        ? { imageId: "current", metadataId: 1, settings: forceRender ? { forceRender: true } : {} }
+        : undefined,
+    );
+    const wrapper = await sceneFixture({ Tooltip: slot });
+    expect(wrapper.find('[data-testid="preview-force-render"]').text()).toContain("gallery.wpeForceRenderTitle");
+    expect(wrapper.findComponent(ImageContent).props("offerForceRender")).toBe(true);
+    wrapper.unmount();
+    wrappers.splice(wrappers.indexOf(wrapper), 1);
+    forceRender = false;
+    const off = await sceneFixture({ Tooltip: slot });
+    expect(off.find('[data-testid="preview-force-render"]').exists()).toBe(false);
+  });
+
+  it("「我就要看」：确认后打开这张壁纸的强制渲染（写预览设置），取消不写", async () => {
+    invoke.mockImplementation(async (command: string, args?: { changes?: unknown }) =>
+      command === "set_wpe_preview_settings"
+        ? { imageId: "current", metadataId: 2, settings: args?.changes ?? {} }
+        : command === "get_wpe_preview_settings"
+          ? { imageId: "current", metadataId: 1, settings: {} }
+          : undefined,
+    );
+    const wrapper = await sceneFixture({ Tooltip: slot });
+    const writes = () => invoke.mock.calls.filter(([command]) => command === "set_wpe_preview_settings");
+    confirm.mockRejectedValueOnce("cancel");
+    wrapper.findComponent(ImageContent).vm.$emit("wallpaperForceRender");
+    await flushPromises();
+    vi.advanceTimersByTime(400);
+    await flushPromises();
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(writes()).toEqual([]);
+
+    wrapper.findComponent(ImageContent).vm.$emit("wallpaperForceRender");
+    await flushPromises();
+    // 草稿当场生效（标题标记立即出现），写库去抖 300 ms
+    expect(wrapper.find('[data-testid="preview-force-render"]').exists()).toBe(true);
+    vi.advanceTimersByTime(400);
+    await flushPromises();
+    expect(writes()).toEqual([["set_wpe_preview_settings", { imageId: "current", changes: { forceRender: true } }]]);
+  });
 
   it("工具条和图片一样：缩放组与全屏，没有右键菜单的映射", async () => {
     const wrapper = await sceneFixture();

@@ -1,6 +1,6 @@
 <template>
   <Switch
-    v-if="settingKey === 'paused' || settingKey === 'mediaIntegration'"
+    v-if="settingKey === 'paused' || settingKey === 'mediaIntegration' || settingKey === 'forceRender'"
     :model-value="values[settingKey]"
     :disabled="disabled"
     @update:model-value="(v: boolean) => emit('update', settingKey, v)"

@@ -408,7 +408,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **数据**：宿主的 `SceneHost` 接收垫片 `applyUserProperties`（`user[key].value` 组成 `userProperties`）、在 Worker 里编译、建渲染器。
 - **重载**：垫片监听本张图的 `metadataId` 字段补丁并只交付变化键，`SceneHost` 的**应用函数**按绑定表分成就地写与重编译（P3a，见「属性与快速路径」）；只有重编译才在同一设备上换场景，时钟不重置。父页面下发的后处理 / 反射 / 阴影 / 体积光变了也重新加载（见「场景后处理档位」的「设置来源」）。
 - **纹理缓存**：FreeImage 纹理的解码结果按目标缓存（`TextureDecodeCache`），改属性重编译不再解码 4K PNG；换目标或卸载时释放。
-- **dev 强制渲染（D4）**：dev 构建下 `localStorage["kabegame-dev-scene-force-render"] = "1"`（主窗口与壁纸窗口同源共用）时，有不支持项也照常编译、解码并渲染（渲染器自查仍生效），日志里列出不支持项；用来看半成品的构图，例如 bedroom 的脚本颜色按 `value` 静态显示。
+- **强制渲染**（2026-11-17 用户定，原 dev 的 D4）：设置「强制渲染」（WPE 设置字段组的开关，桌面是全局键 `wpeSceneForceRender`、预览与应用背景是这张壁纸的预览设置 `forceRender`，默认关，打开一律先确认，见 [WPE_IMPORT.md](WPE_IMPORT.md)「壁纸设置与预览设置」）经场景设置消息的 `forceRender` 交给宿主（只认 `true`），变了整场重新加载；开着时有不支持项也照常编译、解码并渲染（渲染器自查仍生效，真画不出来照样退回），日志「强制渲染（设置），不支持项：…」。dev 构建另可 `localStorage["kabegame-dev-scene-force-render"] = "1"`（主窗口与壁纸窗口同源共用，和设置取或，日志写「（dev）」），用来看半成品的构图，例如 bedroom 的脚本颜色按 `value` 静态显示。应用背景一律强制渲染；预览里场景显示不了时，底部红字原因下面有「我就要看」链接、桌面是一行指向壁纸设置的文字（见 WPE_IMPORT「壁纸设置与预览设置」），预览名称右边的警告色「强制渲染」只看设置。
 - **emit**：渲染出第一帧 `ready`；不能渲染 `fallback(reasons)`。
 - **生命周期**：换目标或卸载时终止编译、销毁 GPU 资源与设备；设备丢失时重建一次渲染器，一分钟内再丢就退回。
 - **注意**：调用方传来的 `target` 往往是响应式 Proxy，交给 Worker 前必须拷成普通值，否则 `postMessage` 克隆失败。

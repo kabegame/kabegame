@@ -13,6 +13,12 @@ import { IS_LINUX } from "@/env";
 /** 鼠标由 Rust 注入 iframe（不是 iframe 自己收真实鼠标）。 */
 export const NATIVE_FRAME_POINTER = !IS_LINUX;
 
+/**
+ * 预览画布里要能点的元素（缩略图底部的「我就要看」）带这个属性：画布上盖着拦指针的覆盖层（`WallpaperPointerOverlay`），
+ * 覆盖层按点击位置找到它就把左键点击转交过去。
+ */
+export const WALLPAPER_CLICKABLE_SELECTOR = "[data-wallpaper-clickable]";
+
 /** iframe 元素在父页面里的 `pointer-events`：注入时一律 `none`，退回时可交互才 `auto`。 */
 export function framePointerEvents(interactive: boolean): "auto" | "none" {
   return !NATIVE_FRAME_POINTER && interactive ? "auto" : "none";
