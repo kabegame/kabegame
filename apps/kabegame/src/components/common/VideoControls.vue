@@ -92,6 +92,14 @@
       </div>
     </div>
 
+    <!-- 播放速度（预览弹窗给 `rate` 才有）：在全屏左边（用户定）；临时值，不保存 -->
+    <PreviewSpeedControl
+      v-if="rate != null"
+      :model-value="rate"
+      @update:model-value="emit('update:rate', $event)"
+      @active="speedPanelActive = $event"
+    />
+
     <button
       class="control-btn"
       type="button"
@@ -115,6 +123,7 @@ import { ZoomIn } from "@lucide/vue";
 import { useI18n } from "@kabegame/i18n";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
+import PreviewSpeedControl from "./PreviewSpeedControl.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -124,8 +133,10 @@ const props = withDefaults(
     isFullscreen?: boolean;
     /** 当前缩放百分比（100–1000，预览弹窗的 Panzoom）；不传不显示缩放按钮 */
     zoom?: number | null;
+    /** 播放速度（0.25–4，预览弹窗持有的临时值）；不传不显示倍速按钮。改了 emit `update:rate`，由调用方设到视频上 */
+    rate?: number | null;
   }>(),
-  { showPlayPause: true, isFullscreen: false, zoom: null },
+  { showPlayPause: true, isFullscreen: false, zoom: null, rate: null },
 );
 
 const emit = defineEmits<{
@@ -135,6 +146,7 @@ const emit = defineEmits<{
   (e: "zoom-commit", percent: number): void;
   /** 点缩放按钮：回到 100% */
   (e: "zoom-reset"): void;
+  (e: "update:rate", rate: number): void;
 }>();
 
 const { t } = useI18n();
@@ -152,6 +164,7 @@ const lastVolume = ref(storedVolume.value > 0 ? storedVolume.value : 1);
 const isSeekDragging = ref(false);
 const seekDraftTime = ref<number | null>(null);
 const zoomDragging = ref(false);
+const speedPanelActive = ref(false);
 
 let progressRaf: number | null = null;
 let currentVideo: HTMLVideoElement | null = null;
@@ -233,7 +246,12 @@ const volumePanel = useHoverPanel();
 const zoomPanel = useHoverPanel();
 
 const keepVisible = computed(
-  () => isSeekDragging.value || volumePanel.active.value || zoomDragging.value || zoomPanel.active.value,
+  () =>
+    isSeekDragging.value ||
+    volumePanel.active.value ||
+    zoomDragging.value ||
+    zoomPanel.active.value ||
+    speedPanelActive.value,
 );
 
 const zoomPercent = computed(() => Math.min(1000, Math.max(100, Math.round(props.zoom ?? 100))));

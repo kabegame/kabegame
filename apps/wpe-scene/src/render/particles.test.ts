@@ -235,6 +235,21 @@ describe("帧时钟（T2）", () => {
     for (let i = 1; i <= 3; i++) clock.advance(100 * i);
     expect(clock.time - before).toBeCloseTo(0.75, 12);
   });
+
+  it("播放速度：先钳再乘，速度恒为 ×rate、不受帧率影响（卡 2 秒在 4× 下走 1 秒，不再钳）", () => {
+    const clock = new FrameClock();
+    clock.advance(0);
+    clock.rate = 2;
+    clock.advance(0.1);
+    expect(clock.frametime).toBeCloseTo(0.2, 12);
+    clock.rate = 4;
+    clock.advance(2.1);
+    expect(clock.frametime).toBe(1);
+    clock.rate = 0.25;
+    clock.advance(2.2);
+    expect(clock.frametime).toBeCloseTo(0.025, 12);
+    expect(clock.time).toBeCloseTo(0.0001 + 0.2 + 1 + 0.025, 12);
+  });
 });
 
 // ———— 假设备 ————

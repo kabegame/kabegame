@@ -79,6 +79,8 @@ import { useDisplayMaxFps } from "@/composables/useDisplayMaxFps";
 import {
   WPE_FPS_DEFAULT,
   WPE_FPS_MIN,
+  WPE_PLAYBACK_RATE_MAX,
+  WPE_PLAYBACK_RATE_MIN,
   WPE_SETTING_LABEL_KEYS,
   clampWpeFps,
   isWpeChoiceKey,
@@ -105,7 +107,7 @@ const props = defineProps<{
 const emit = defineEmits<{ update: [key: WpeSettingKey, value: boolean | number | string] }>();
 
 const VOLUME_RANGE = { min: 0, max: 1, step: 0.1, precision: 1 };
-const RATE_RANGE = { min: 0.25, max: 3, step: 0.25, precision: 2 };
+const RATE_RANGE = { min: WPE_PLAYBACK_RATE_MIN, max: WPE_PLAYBACK_RATE_MAX, step: 0.25, precision: 2 };
 /** 选项文案的词条：`<字段词条><Follow|Disabled|…>` */
 const capitalize = (value: string) => `${value[0].toUpperCase()}${value.slice(1)}`;
 

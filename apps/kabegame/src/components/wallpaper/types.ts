@@ -57,7 +57,10 @@ export interface WallpaperPlayback {
   volume: number;
   /** 场景后处理 / 反射 / 阴影 / 体积光，已按能否跟随 WPE 换算（`wpeSceneSettingsOf`） */
   sceneSettings: WpeSceneSettings;
-  /** 视频倍速（0.25…3，越界钳制）：只在 `ImageContent` 的 `variant="wallpaper"` 用（桌面）；图库的视频倍速由预览弹窗自己设 */
+  /**
+   * 倍速（0.25…4，越界钳制；视频与场景共用，用户定）：视频只在 `ImageContent` 的 `variant="wallpaper"` 用（桌面，图库的视频倍速由预览
+   * 弹窗自己设）；场景交给宿主（桌面是全局设置，预览是控制条的临时值）
+   */
   playbackRate?: number;
   /** 场景的铺放（桌面传壁纸样式，含 tile）；不给时按 `ImageContent` 的 `fit` 换算 */
   style?: Mode;

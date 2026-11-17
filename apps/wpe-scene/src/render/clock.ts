@@ -45,19 +45,22 @@ export function clampFrametime(seconds: number): number {
  * 所以一帧卡了 1 秒时 `g_Time` 只走 0.25（WPE 同样，实测 `fps=5` 启动时连续三帧恰好 0.25、`runtime` 严格加 0.25）。
  * 第一个实时帧没有上一帧，差按 0，钳成 0.0001。
  * 补画帧（暂停、页面隐藏时的 redraw、resize）画的是同一时刻：`time` 不动、`frametime` 为 0，粒子不步进。
+ * 播放速度（`rate`，预览控制条，用户定 0.2–4、默认 1、不保存）：先钳再乘，速度恒为 ×rate、不受帧率影响（帧率只改切片粒度）。
  */
 export class FrameClock {
   /** 累加的秒数（未回绕）。 */
   time = 0;
   /** 这一帧的帧时间（秒）。 */
   frametime = 0;
+  /** 播放速度：钳过的帧时间再乘它。 */
+  rate = 1;
   private last: number | null = null;
 
   /** 一个实时帧：`seconds` 是 `PausableClock.seconds()`。 */
   advance(seconds: number): void {
     const raw = this.last === null ? 0 : seconds - this.last;
     this.last = seconds;
-    this.frametime = clampFrametime(raw);
+    this.frametime = clampFrametime(raw) * this.rate;
     this.time += this.frametime;
   }
 

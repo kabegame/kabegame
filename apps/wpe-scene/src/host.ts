@@ -61,7 +61,7 @@ import { uploadableTextures, visibleObjects } from "./render/scene";
 import { SceneState } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
-import { schemeColor } from "./sceneStyle";
+import { PLAYBACK_RATE_MAX, PLAYBACK_RATE_MIN, schemeColor } from "./sceneStyle";
 import { instanceControlPoint, type InstanceField } from "./compile/particles";
 import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
 import { applyScriptedProperties } from "./script/initialApply";
@@ -242,6 +242,8 @@ export class SceneHost {
    * 运行中就地改（`setGeneral`）。收到之前按 Kabegame 的缺省 30（首包与用户属性同批送达，实际早于建渲染器）。
    */
   private fps = DEFAULT_FPS;
+  /** 播放速度（父页面的 `kabegame:wpe-scene-rate`，`setPlaybackRate`）：建渲染器、视频、声音时带上，运行中就地改。 */
+  private playbackRate = 1;
   /** 设置「场景后处理」：最近一次加载用的值；还没加载过为 null。 */
   private postprocess: ScenePostprocessSetting | null = null;
   /**
@@ -1671,6 +1673,20 @@ export class SceneHost {
     this.renderer?.setMaxFps(fps);
   }
 
+  /**
+   * 播放速度（父页面的 `kabegame:wpe-scene-rate`：壁纸设置「倍速」与预览控制条，0.2–4）：渲染器的帧时间、视频纹理的时钟、声音元素一起换，
+   * 不重新加载。不是有限正数的忽略，越界的钳进范围。
+   */
+  setPlaybackRate(rate: number): void {
+    if (this.disposed || !Number.isFinite(rate) || rate <= 0) return;
+    const clamped = Math.min(PLAYBACK_RATE_MAX, Math.max(PLAYBACK_RATE_MIN, rate));
+    if (clamped === this.playbackRate) return;
+    this.playbackRate = clamped;
+    this.renderer?.setPlaybackRate(clamped);
+    this.sceneVideos?.setHostRate(clamped);
+    this.soundPlayer?.setRate(clamped);
+  }
+
   /** 文档隐藏时渲染循环停转、声音的计时冻结，声音也按暂停处理（不然多文件、`random` 会在放完之后断掉）。 */
   setHidden(hidden: boolean): void {
     this.hidden = hidden;
@@ -1828,6 +1844,7 @@ export class SceneHost {
     if (!this.sceneSounds) {
       const imageId = this.options.imageId;
       this.soundPlayer = new ScenePlayer({ reader: this.reader }, this.options.report);
+      if (this.playbackRate !== 1) this.soundPlayer.setRate(this.playbackRate);
       this.sceneSounds = new SceneSounds(this.soundPlayer, Math.random, (object, file, error) =>
         this.options.report.warn(
           `场景壁纸 ${imageId} 声音对象 ${object} 的文件读不出，已从列表删掉：${file.path}`,
@@ -1857,6 +1874,7 @@ export class SceneHost {
       this.sceneVideos = new SceneVideos(this.options.report);
       // 先定暂停再建播放器：暂停中加载的场景，新播放器一开始就不放
       this.sceneVideos.setPaused(this.paused || this.hidden);
+      if (this.playbackRate !== 1) this.sceneVideos.setHostRate(this.playbackRate);
     }
     this.sceneVideos.load(textures);
     this.videoBundle = bundle;
@@ -2061,6 +2079,7 @@ export class SceneHost {
         // 取设备期间父页面可能又推了新的显示缩放
         if (this.displayScale !== displayScale) created.setDisplayScale(this.displayScale);
         if (this.fps !== fps) created.setMaxFps(this.fps);
+        if (this.playbackRate !== 1) created.setPlaybackRate(this.playbackRate);
         created.setStyle(this.style);
         // 先于 load：加载时的预热与第一帧用它（渲染器按新场景的铺放换算，见 `SceneRenderer.load`）
         if (this.pointer) created.setPointer(...this.pointer);

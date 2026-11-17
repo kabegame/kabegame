@@ -133,7 +133,7 @@ describe("ImageContent 的壁纸变体（桌面）", () => {
     }
   });
 
-  it("视频：静音起播，成功后按 playback 的音量出声；音量变了跟着改；videoMuted 时为 0；倍速钳到 0.25…3", async () => {
+  it("视频：静音起播，成功后按 playback 的音量出声；音量变了跟着改；videoMuted 时为 0；倍速钳到 0.25…4", async () => {
     const wrapper = mountContent(video("v"), {
       videoPlaying: true,
       playback: { volume: 0.4, playbackRate: 9, sceneSettings: WPE_FOLLOW_SCENE_SETTINGS },
@@ -143,7 +143,7 @@ describe("ImageContent 的壁纸变体（桌面）", () => {
     expect(play).toHaveBeenCalled();
     expect(el.volume).toBeCloseTo(0.4);
     expect(el.muted).toBe(false);
-    expect(el.playbackRate).toBe(3);
+    expect(el.playbackRate).toBe(4);
     Object.defineProperty(el, "paused", { configurable: true, value: false });
     await wrapper.setProps({ playback: { volume: 0.7, playbackRate: 1, sceneSettings: WPE_FOLLOW_SCENE_SETTINGS } });
     expect(el.volume).toBeCloseTo(0.7);

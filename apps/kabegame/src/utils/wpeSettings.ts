@@ -40,6 +40,16 @@ export const WPE_FPS_MIN = 10;
 /** 帧率的 Kabegame 默认值 */
 export const WPE_FPS_DEFAULT = 30;
 
+/** 倍速的范围（用户定：视频、场景、壁纸设置统一 0.25–4；Rust 的设置与预览设置同样钳到这里，宿主是 `PLAYBACK_RATE_MIN` / `MAX`） */
+export const WPE_PLAYBACK_RATE_MIN = 0.25;
+export const WPE_PLAYBACK_RATE_MAX = 4;
+
+/** 钳进倍速范围；不是有限数按 1 */
+export function clampPlaybackRate(rate: unknown): number {
+  const value = typeof rate === "number" && Number.isFinite(rate) ? rate : 1;
+  return Math.min(WPE_PLAYBACK_RATE_MAX, Math.max(WPE_PLAYBACK_RATE_MIN, value));
+}
+
 export interface WpeSettingValues {
   paused: boolean;
   volume: number;
@@ -161,7 +171,7 @@ export function clampWpeFps(value: number, max: number): number {
 
 /**
  * 某类壁纸用得上的字段；`type` 为空时给全部字段（设置页）。媒体集成只有 Windows 有数据源；
- * 倍速只作用于视频层（网页、场景收不到）；帧率作用于网页（经 `applyGeneralProperties` 推给页面）与场景（限帧）；
+ * 倍速作用于视频与场景（同一个值，用户定；网页收不到）；帧率作用于网页（经 `applyGeneralProperties` 推给页面）与场景（限帧）；
  * 后处理 / 反射 / 阴影 / 体积光 / 强制渲染只有场景。
  */
 export function wpeSettingFieldsFor(type: string | null | undefined, windows: boolean): WpeSettingKey[] {
@@ -170,7 +180,18 @@ export function wpeSettingFieldsFor(type: string | null | undefined, windows: bo
   if (isWpeVideoType(type)) return ["paused", "volume", "playbackRate"];
   if (isWpeWebType(type)) return ["paused", "volume", ...media, "fps"];
   if (isWpeSceneType(type))
-    return ["paused", "volume", ...media, "fps", "postprocess", "reflection", "shadows", "volumetrics", "forceRender"];
+    return [
+      "paused",
+      "volume",
+      "playbackRate",
+      ...media,
+      "fps",
+      "postprocess",
+      "reflection",
+      "shadows",
+      "volumetrics",
+      "forceRender",
+    ];
   return [];
 }
 

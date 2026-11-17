@@ -51,7 +51,7 @@ fn normalize(key: &str, value: &Value) -> Result<Value, String> {
     };
     match key {
         VOLUME => number(0.0, 1.0),
-        PLAYBACK_RATE => number(0.25, 3.0),
+        PLAYBACK_RATE => number(0.25, 4.0),
         MEDIA_INTEGRATION | FORCE_RENDER => value
             .as_bool()
             .map(Value::Bool)
@@ -172,7 +172,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             next[PREVIEW_SETTINGS_KEY],
-            json!({ "playbackRate": 3.0, "volume": 0.0 })
+            json!({ "playbackRate": 4.0, "volume": 0.0 })
         );
         assert!(apply_changes(&raw, &changes(json!({ "reflection": "ultra" }))).is_err());
         assert!(apply_changes(&raw, &changes(json!({ "mediaIntegration": 1 }))).is_err());

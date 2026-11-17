@@ -8,6 +8,7 @@ import {
   WALLPAPER_PREVIEW_ZOOM,
   WPE_SCENE_DISPLAY,
   WPE_SCENE_POINTER,
+  WPE_SCENE_RATE,
   WPE_SCENE_SETTINGS,
   WPE_SCENE_STYLE,
   WPE_SCENE_STYLE_REQUEST,
@@ -178,8 +179,9 @@ describe("WpeSceneView 显示缩放", () => {
   it("挂载：宿主启动时请求，回样式的同时回显示缩放；量不出来时不推", async () => {
     const { post, fromHost, frame } = await mountView("fit");
     fromHost({ type: WPE_SCENE_STYLE_REQUEST });
-    // happy-dom 没有布局：量不出来，只回样式（场景设置另算）
-    expect(post.mock.calls.filter(([data]) => (data as { type?: unknown }).type !== WPE_SCENE_SETTINGS)).toEqual([
+    // happy-dom 没有布局：量不出来，只回样式（场景设置与播放速度另算）
+    const other = new Set<unknown>([WPE_SCENE_SETTINGS, WPE_SCENE_RATE]);
+    expect(post.mock.calls.filter(([data]) => !other.has((data as { type?: unknown }).type))).toEqual([
       [{ type: WPE_SCENE_STYLE, style: "fit" }, "*"],
     ]);
     layout(frame, 5760, 1080, 0.18);
@@ -188,6 +190,18 @@ describe("WpeSceneView 显示缩放", () => {
     // 宿主再请求（例如重载）时即使没变也照回
     fromHost({ type: WPE_SCENE_STYLE_REQUEST });
     expect(displayPosts(post)).toHaveLength(2);
+  });
+
+  it("播放速度：宿主请求时回，变了再推，同值不推", async () => {
+    const { wrapper, post, fromHost } = await mountView("fit");
+    const rates = () => post.mock.calls.filter(([data]) => (data as { type?: unknown }).type === WPE_SCENE_RATE);
+    fromHost({ type: WPE_SCENE_STYLE_REQUEST });
+    expect(rates()).toEqual([[{ type: WPE_SCENE_RATE, rate: 1 }, "*"]]);
+    await wrapper.setProps({ rate: 2.5 });
+    expect(rates()).toHaveLength(2);
+    expect(rates()[1]).toEqual([{ type: WPE_SCENE_RATE, rate: 2.5 }, "*"]);
+    await wrapper.setProps({ rate: 2.5 });
+    expect(rates()).toHaveLength(2);
   });
 
   it("iframe 尺寸变化（ResizeObserver）时推新的缩放，没变不推", async () => {

@@ -111,7 +111,7 @@
   "wallpaperPausedDesc": "In window mode, pauses video, web and scene wallpapers on the desktop and stays paused when the wallpaper changes; image wallpapers are not affected",
   "wallpaperVolume": "Wallpaper volume",
   "wallpaperVolumeDesc": "Volume for video, web and scene wallpapers on the desktop (0–1). Gallery previews use each wallpaper's own preview settings; the in-app background is always muted",
-  "wallpaperVideoPlaybackRate": "Video playback rate",
+  "wallpaperVideoPlaybackRate": "Playback speed",
   "wallpaperVideoPlaybackRateDesc": "0.25–3",
   "wpeMediaIntegration": "Media integration",
   "wpeMediaIntegrationDesc": "Web and scene wallpapers can read the title, cover art and progress of what is playing",

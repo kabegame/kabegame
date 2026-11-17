@@ -13,6 +13,9 @@ import type { SceneStyle } from "./render/layout";
  *   「壁纸设置」、预览是这张壁纸的「预览设置」，宿主不分；不能跟随 WPE 时父页面已把 `follow` 换成默认值。首次加载等它
  *   （`SceneHost.setSceneSettings`）。
  *
+ * - `{ type: SCENE_RATE_MESSAGE, rate }`：播放速度（壁纸设置「倍速」与预览控制条，`PLAYBACK_RATE_MIN`–`PLAYBACK_RATE_MAX`），变化时
+ *   再主动推；宿主就地换，不重新加载（`SceneHost.setPlaybackRate`）。
+ *
  * 另有一条不经请求、父页面主动发的：
  * - `{ type: SCENE_POINTER_MESSAGE, x, y }`：开场指针（P5a 收尾），光标在 iframe 里的归一化坐标（0…1 为 iframe 内，
  *   不钳制，可越界）。父页面只在 `interactive` 时、宿主 iframe 建好与报 ready 时各发一次（问 Rust 光标在窗口里的位置，
@@ -25,6 +28,11 @@ export const SCENE_STYLE_MESSAGE = "kabegame:wpe-scene-style";
 export const SCENE_DISPLAY_MESSAGE = "kabegame:wpe-scene-display";
 export const SCENE_POINTER_MESSAGE = "kabegame:wpe-scene-pointer";
 export const SCENE_SETTINGS_MESSAGE = "kabegame:wpe-scene-settings";
+export const SCENE_RATE_MESSAGE = "kabegame:wpe-scene-rate";
+
+/** 播放速度的范围（用户定：视频、场景、壁纸设置统一 0.25–4）。 */
+export const PLAYBACK_RATE_MIN = 0.25;
+export const PLAYBACK_RATE_MAX = 4;
 
 const SCENE_STYLES: readonly string[] = ["fill", "fit", "stretch", "center", "tile"] satisfies SceneStyle[];
 
@@ -56,6 +64,8 @@ export interface SceneParentHandlers {
     volumetrics: unknown;
     forceRender: unknown;
   }): void;
+  /** 播放速度：有限正数，原样交出，由宿主钳进范围。 */
+  rate(rate: number): void;
 }
 
 /** 收父页面的样式、显示缩放、场景设置与开场指针消息，然后请求一次样式、显示缩放与场景设置的当前值。只认父窗口发来的可信消息。 */
@@ -73,6 +83,7 @@ export function listenSceneParent(handlers: SceneParentHandlers): void {
       shadows?: unknown;
       volumetrics?: unknown;
       forceRender?: unknown;
+      rate?: unknown;
     } | null;
     if (data?.type === SCENE_STYLE_MESSAGE) {
       if (typeof data.style === "string" && SCENE_STYLES.includes(data.style)) handlers.style(data.style as SceneStyle);
@@ -87,6 +98,9 @@ export function listenSceneParent(handlers: SceneParentHandlers): void {
         volumetrics: data.volumetrics,
         forceRender: data.forceRender,
       });
+    } else if (data?.type === SCENE_RATE_MESSAGE) {
+      const rate = data.rate;
+      if (typeof rate === "number" && Number.isFinite(rate) && rate > 0) handlers.rate(rate);
     } else if (data?.type === SCENE_POINTER_MESSAGE) {
       const { x, y } = data;
       if (typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y))

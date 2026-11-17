@@ -83,6 +83,8 @@ class FakeElement {
   error: unknown = null;
   plays = 0;
   loads = 0;
+  playbackRate = 1;
+  defaultPlaybackRate = 1;
   private attributes = new Map<string, string>();
   private listeners = new Map<string, (() => void)[]>();
   set src(value: string) {
@@ -275,6 +277,18 @@ describe("ScenePlayer", () => {
       "set 1 3",
       `target 1 3 ${FADE_TIME_CONSTANT}`,
     ]);
+  });
+
+  it("宿主的播放速度：已有的元素立即换、之后建的建好就设，playbackRate 与 defaultPlaybackRate 一起", async () => {
+    const env = setup();
+    const voice = env.player.voice(0, [loose, packed], env.events().value);
+    voice.start(0, true);
+    await flush();
+    env.player.setRate(2);
+    expect([env.elements[0].playbackRate, env.elements[0].defaultPlaybackRate]).toEqual([2, 2]);
+    voice.start(1, false);
+    await flush();
+    expect([env.elements[1].playbackRate, env.elements[1].defaultPlaybackRate]).toEqual([2, 2]);
   });
 
   it("dispose：停掉并清空元素、撤销 Blob、关掉 AudioContext", async () => {

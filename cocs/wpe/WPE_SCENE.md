@@ -468,6 +468,22 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **高于刷新率**：rAF 按刷新率回调，实际帧率封顶在刷新率；粒子遍数与 rope 的 `min(fps, R)` 仍按设置值算，与 WPE 读设置一致。
 - **随帧率变化的行为**：`engine.frametime` / `runtime`、`engine.setInterval` 的节拍、视频纹理「30 个渲染帧没画到就暂停」都按渲染帧走，限帧后自然跟着变，与 WPE 相同。场景脚本的 `applyGeneralSettings` 在 WPE 的声明里只带 `language`（`lib.sceneScript.d.ts`），与帧率无关。
 
+### 播放速度（2026-11-17）
+
+壁纸设置「倍速」（视频与场景共用一个值，用户定；桌面全局键仍叫 `wallpaperVideoPlaybackRate`，预览是这张的 `previewSettings.playbackRate`）与预览控制条的
+倍速（临时值，用户定：默认取设置值、不保存）。范围统一 0.25–4（应用 `WPE_PLAYBACK_RATE_MIN` / `MAX`、宿主 `PLAYBACK_RATE_MIN` / `MAX`、Rust
+的设置与预览设置同样钳到这里，字面量测试比对）。
+
+- **通路**：`ImageContent` 把 `playback.playbackRate`（钳过）交给 `WpeWallpaperContent` 的 `rate` → `WpeSceneView` → 宿主
+  `kabegame:wpe-scene-rate`（宿主请求时回、变了再推）→ `SceneHost.setPlaybackRate`，就地换、不重新加载；网页壁纸不吃。
+- **帧时间**：`FrameClock` 先把帧时间钳到 `[0.0001, 0.25]` 再乘速度，`g_Time`、`g_Frametime`、粒子、关键帧、puppet、脚本（`engine.runtime` /
+  `frametime`）、声音排期、动图都跟着；先钳再乘，速度恒为 ×rate、和帧率正交（不然 4× 在 10 fps 下撞上 0.25 只有 2.5×）。
+- **和帧率的关系**：整体推进速度只看真实流逝的时间与倍速，帧率不改速度；帧率改的是切片粒度（≤ 20 fps 时粒子 operator 两遍、drag 系数看帧时间、
+  ropetrail 每帧最多采一次），倍速大、帧率低时每帧的步长变大（4× 在 10 fps 下 0.4 s 一步），粒子更粗，这和 WPE 换帧率时的差异同类。
+- **自己有时钟的**：视频纹理 `CodecVideoPlayer` 的时钟乘「脚本 `rate` × 宿主速度」（换速度前走过的墙钟按旧速度结清，脚本读到的 `rate` 不含宿主
+  速度）；声音元素设 `playbackRate` / `defaultPlaybackRate`（音高照浏览器缺省保持）。用户纹理里的视频没接，照常速。
+- **WPE 没有这个功能**：和 WPE 对照时保持 1。
+
 ### 图层渲染图（`graph.ts` + `scene.ts`，P2a）
 
 依据 WPE 2.8.42 的只读逆向（p2-REPORT B5–B8、PLAN P2a；与 LWE 冲突时以 WPE 为准）。`planLayer(layer, textures)` 是纯函数，把一个图层排成步骤；`GpuScene` 照步骤建资源、逐帧编码。

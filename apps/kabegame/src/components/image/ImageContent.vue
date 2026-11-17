@@ -119,6 +119,7 @@
           :paused="!videoPlaying"
           :interactive="interactive"
           :scene-settings="playback?.sceneSettings"
+          :rate="wallpaperRate"
           @live="onWallpaperLive"
           @fail="onWallpaperFail"
           @error="onWallpaperError"
@@ -219,6 +220,7 @@ import { useUiStore } from "../../stores/ui";
 import { useLoadingDelay } from "../../composables/useLoadingDelay";
 import { compatibleToUrl, fileNameFromUrlOrPath, fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
 import { resetVideoElement } from "../../utils/videoElement";
+import { clampPlaybackRate } from "../../utils/wpeSettings";
 import { IS_ANDROID, IS_WEB } from "../../env";
 import { invoke } from "../../api/rpc";
 import { clampWallpaperVolume } from "../wallpaper/wpeWebVolume";
@@ -883,7 +885,7 @@ const wallpaperVolume = computed(() => (props.videoMuted ? 0 : clampWallpaperVol
 /** 壁纸变体视频的倍速（0.25…3） */
 const wallpaperRate = computed(() => {
   const rate = props.playback?.playbackRate ?? 1;
-  return Math.min(3, Math.max(0.25, Number.isFinite(rate) ? rate : 1));
+  return clampPlaybackRate(rate);
 });
 
 function applyWallpaperAudio(el: HTMLVideoElement) {

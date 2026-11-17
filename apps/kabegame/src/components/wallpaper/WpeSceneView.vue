@@ -43,6 +43,7 @@ import {
   scenePointerIn,
   wpeSceneDisplayMessage,
   wpeScenePointerMessage,
+  wpeSceneRateMessage,
   wpeSceneSettingsMessage,
   wpeSceneStyleMessage,
 } from "./wpeSceneStyle";
@@ -70,8 +71,10 @@ const props = withDefaults(
     interactive?: boolean;
     /** 场景后处理 / 反射 / 阴影 / 体积光：桌面传全局「壁纸设置」，预览传这张壁纸的「预览设置」（`wpeSceneSettingsOf`） */
     sceneSettings?: WpeSceneSettings;
+    /** 播放速度（0.25–4）：桌面传全局「壁纸设置」的倍速，预览传控制条的临时值；宿主就地换 */
+    rate?: number;
   }>(),
-  { paused: false, interactive: false, sceneSettings: () => WPE_FOLLOW_SCENE_SETTINGS },
+  { paused: false, interactive: false, sceneSettings: () => WPE_FOLLOW_SCENE_SETTINGS, rate: 1 },
 );
 const emit = defineEmits<{
   ready: [];
@@ -119,6 +122,11 @@ function postVolume() {
 
 function postStyle() {
   frame.value?.contentWindow?.postMessage(wpeSceneStyleMessage(props.styleMode), "*");
+}
+
+/** 播放速度：宿主请求时回、变了再推 */
+function postRate() {
+  frame.value?.contentWindow?.postMessage(wpeSceneRateMessage(props.rate), "*");
 }
 
 /** 场景设置：宿主请求时回、变了再推；宿主和上一次加载用的值比，变了才整场重载 */
@@ -181,6 +189,7 @@ function onWindowMessage(event: MessageEvent) {
   if (!target || !event.isTrusted || event.source !== target) return;
   if (isWpeSceneStyleRequest(event.data)) {
     postSceneSettings();
+    postRate();
     postStyle();
     postDisplay(true);
     return;
@@ -269,6 +278,7 @@ watch(
 );
 watch(() => [props.volume, props.paused, props.interactive], postVolume);
 watch(() => props.styleMode, postStyle);
+watch(() => props.rate, postRate);
 // 预览放大倍数变了：下一帧补量（Panzoom 在 rAF 里写 transform，排在它后面才量得到新值），同一帧里多次变化合并
 watch(
   () => previewZoom?.value,

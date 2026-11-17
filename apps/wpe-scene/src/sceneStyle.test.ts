@@ -5,6 +5,7 @@ import {
   scenePointerFeed,
   SCENE_DISPLAY_MESSAGE,
   SCENE_POINTER_MESSAGE,
+  SCENE_RATE_MESSAGE,
   SCENE_SETTINGS_MESSAGE,
   SCENE_STYLE_MESSAGE,
   SCENE_STYLE_REQUEST,
@@ -39,13 +40,29 @@ describe("父页面通路", () => {
     displayScale: (scale: number) => void = () => {},
     pointer: (x: number, y: number) => void = () => {},
     settings: (settings: Record<string, unknown>) => void = () => {},
+    rate: (rate: number) => void = () => {},
   ) {
     vi.stubGlobal("window", {
       parent,
       addEventListener: (_: string, handler: (event: unknown) => void) => (listener = handler),
     });
-    listenSceneParent({ style, displayScale, pointer, settings });
+    listenSceneParent({ style, displayScale, pointer, settings, rate });
   }
+
+  it("播放速度：只认父窗口发来的可信消息，只收有限正数（钳制归宿主）", () => {
+    const rate = vi.fn();
+    install(undefined, undefined, undefined, undefined, rate);
+    const message = (value: unknown) => ({ type: SCENE_RATE_MESSAGE, rate: value });
+    listener({ isTrusted: true, source: parent, data: message(2) });
+    expect(rate).toHaveBeenCalledExactlyOnceWith(2);
+    listener({ isTrusted: false, source: parent, data: message(3) });
+    listener({ isTrusted: true, source: {}, data: message(3) });
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "2", null, undefined])
+      listener({ isTrusted: true, source: parent, data: message(bad) });
+    expect(rate).toHaveBeenCalledOnce();
+    listener({ isTrusted: true, source: parent, data: message(9) });
+    expect(rate).toHaveBeenLastCalledWith(9);
+  });
 
   it("场景设置：只认父窗口发来的可信消息，五项原样交出（缺了的是 undefined）", () => {
     const settings = vi.fn();

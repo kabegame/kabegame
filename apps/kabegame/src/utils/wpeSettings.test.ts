@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   WPE_FPS_DEFAULT,
   WPE_FPS_MIN,
+  WPE_PLAYBACK_RATE_MAX,
+  WPE_PLAYBACK_RATE_MIN,
   WPE_SETTING_DEFAULTS,
+  clampPlaybackRate,
   clampWpeFps,
   wpeChoiceDisplay,
   wpeChoiceValues,
@@ -22,6 +25,7 @@ describe("wpeSettingFieldsFor", () => {
     expect(wpeSettingFieldsFor("x-wpe/scene", true)).toEqual([
       "paused",
       "volume",
+      "playbackRate",
       "mediaIntegration",
       "fps",
       "postprocess",
@@ -30,9 +34,19 @@ describe("wpeSettingFieldsFor", () => {
       "volumetrics",
       "forceRender",
     ]);
-    // 强制渲染只有场景
+    // 强制渲染只有场景；倍速视频与场景共用、网页没有
     expect(wpeSettingFieldsFor("x-wpe/web", true)).not.toContain("forceRender");
+    expect(wpeSettingFieldsFor("x-wpe/web", true)).not.toContain("playbackRate");
     expect(wpeSettingFieldsFor("image/png", true)).toEqual([]);
+  });
+
+  it("倍速范围统一 0.25–4：越界钳制，不是有限数按 1", () => {
+    expect([WPE_PLAYBACK_RATE_MIN, WPE_PLAYBACK_RATE_MAX]).toEqual([0.25, 4]);
+    expect(clampPlaybackRate(9)).toBe(4);
+    expect(clampPlaybackRate(0.1)).toBe(0.25);
+    expect(clampPlaybackRate(1.5)).toBe(1.5);
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, "2", null, undefined])
+      expect(clampPlaybackRate(bad)).toBe(1);
   });
 
   it("不给类型时是全部字段（设置页）", () => {

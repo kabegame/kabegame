@@ -57,6 +57,12 @@ export interface SoundTrackProbe {
   readyState: number;
 }
 
+/** 元素换源（`load`）时 `playbackRate` 会回到 `defaultPlaybackRate`，两个一起设。 */
+function applyRate(element: HTMLAudioElement, rate: number): void {
+  element.defaultPlaybackRate = rate;
+  element.playbackRate = rate;
+}
+
 class SoundVoice implements SoundBackend {
   private gain = 0;
   private node: GainNode | null = null;
@@ -219,6 +225,8 @@ export class ScenePlayer implements SoundPlayer {
   /** pkg 条目（按 scene.pkg 路径 + 偏移 + 长度）→ Blob 地址；同一场景只读一次，`dispose` 时撤销。 */
   private readonly blobs = new Map<string, Promise<string>>();
   private disposed = false;
+  /** 宿主的播放速度（`setRate`）。 */
+  private rate = 1;
 
   constructor(
     private readonly options: ScenePlayerOptions,
@@ -266,7 +274,18 @@ export class ScenePlayer implements SoundPlayer {
   }
 
   createElement(): HTMLAudioElement {
-    return this.options.createElement ? this.options.createElement() : new Audio();
+    const element = this.options.createElement ? this.options.createElement() : new Audio();
+    applyRate(element, this.rate);
+    return element;
+  }
+
+  /**
+   * 宿主的播放速度（预览控制条）：全部声音元素按它放（音高照浏览器缺省保持），之后建的元素建好就设。排期（`loop` / `random` 的间隔）
+   * 走场景的帧时间，渲染器那边已经乘过。
+   */
+  setRate(rate: number): void {
+    this.rate = rate;
+    for (const voice of this.voices.values()) for (const track of voice.tracks.values()) applyRate(track.element, rate);
   }
 
   /** 元素的地址：散文件直接 `file:`；pkg 条目按区间读成 Blob（同一条目只读一次）。 */

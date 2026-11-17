@@ -72,6 +72,8 @@ const props = withDefaults(
     interactive?: boolean;
     /** 场景后处理 / 反射 / 阴影 / 体积光（已按能否跟随 WPE 换算），原样交给 `WpeSceneView` */
     sceneSettings?: WpeSceneSettings;
+    /** 播放速度（0.25–4）：只交给场景（网页壁纸不吃） */
+    rate?: number;
   }>(),
   {
     target: undefined,
@@ -80,6 +82,7 @@ const props = withDefaults(
     paused: false,
     interactive: false,
     sceneSettings: () => WPE_FOLLOW_SCENE_SETTINGS,
+    rate: 1,
   },
 );
 
@@ -397,6 +400,7 @@ defineExpose({ delegatesPing, state });
       :volume="volume"
       :interactive="interactive"
       :scene-settings="sceneSettings"
+      :rate="rate"
       @alive="sceneAlive = true"
       @ready="onSceneReady"
       @fallback="onSceneFallback"

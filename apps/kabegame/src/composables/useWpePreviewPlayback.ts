@@ -18,6 +18,7 @@ export function useWpePreviewPlayback(
   const followAvailable = useWpeFollowAvailable();
   return computed(() => ({
     volume: values.value.volume,
+    playbackRate: values.value.playbackRate,
     sceneSettings: {
       ...wpeSceneSettingsOf(values.value, followAvailable.value),
       ...(options.forceRender ? { forceRender: true } : {}),

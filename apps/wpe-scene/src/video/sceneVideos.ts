@@ -32,6 +32,8 @@ export interface SceneVideoPlayer {
   currentTime: number;
   readonly duration: number;
   apply(frame: number, hostPaused: boolean): void;
+  /** 宿主的播放速度（预览控制条），和脚本的 `rate` 相乘。 */
+  setHostRate(rate: number): void;
   drawn(frame: number, hostPaused: boolean): VideoFrame | null;
   detectEnd(): void;
   firstFrame(): Promise<void>;
@@ -80,6 +82,7 @@ export type SceneVideoProbe = CodecVideoProbe & {
 export class SceneVideos implements VideoSink {
   private frame = 0;
   private hostPaused = false;
+  private hostRate = 1;
   private disposed = false;
   /** 区间键 → 播放器。 */
   private players = new Map<string, SceneVideoPlayer>();
@@ -103,6 +106,7 @@ export class SceneVideos implements VideoSink {
       let player = players.get(key) ?? this.players.get(key);
       if (!player) {
         player = this.create(video);
+        player.setHostRate(this.hostRate);
         player.apply(this.frame, this.hostPaused);
       }
       players.set(key, player);
@@ -147,6 +151,13 @@ export class SceneVideos implements VideoSink {
   resetScriptState(): void {
     if (this.disposed) return;
     for (const player of this.players.values()) player.resetScriptState();
+  }
+
+  /** 宿主的播放速度（预览控制条）：已有的播放器立即换，之后建的建好就设。 */
+  setHostRate(rate: number): void {
+    if (this.disposed) return;
+    this.hostRate = rate;
+    for (const player of this.players.values()) player.setHostRate(rate);
   }
 
   /** 宿主暂停或文档隐藏。 */

@@ -28,6 +28,7 @@ listenSceneParent({
   displayScale: (scale) => host.setDisplayScale(scale),
   pointer: pointer.initial,
   settings: (settings) => host.setSceneSettings(settings),
+  rate: (rate) => host.setPlaybackRate(rate),
 });
 
 window.wallpaperPropertyListener = {

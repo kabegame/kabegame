@@ -1,15 +1,18 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { WPE_PLAYBACK_RATE_MAX, WPE_PLAYBACK_RATE_MIN } from "@/utils/wpeSettings";
 import {
   WPE_SCENE_DISPLAY,
   WPE_SCENE_POINTER,
+  WPE_SCENE_RATE,
   WPE_SCENE_SETTINGS,
   WPE_SCENE_STYLE,
   WPE_SCENE_STYLE_REQUEST,
   displayScaleOf,
   isWpeSceneStyleRequest,
   sceneDisplayScale,
+  wpeSceneRateMessage,
   scenePointerIn,
   wpeSceneDisplayMessage,
   wpeScenePointerMessage,
@@ -30,6 +33,15 @@ describe("wpeSceneStyle", () => {
   it("宿主的开场指针字面量与这里一致（P5a 收尾）", () => {
     const source = readFileSync(path.resolve(__dirname, "../../../../wpe-scene/src/sceneStyle.ts"), "utf8");
     expect(source).toContain(`SCENE_POINTER_MESSAGE = "${WPE_SCENE_POINTER}"`);
+  });
+
+  it("宿主的播放速度字面量、字段与范围与这里一致", () => {
+    const source = readFileSync(path.resolve(__dirname, "../../../../wpe-scene/src/sceneStyle.ts"), "utf8");
+    expect(source).toContain(`SCENE_RATE_MESSAGE = "${WPE_SCENE_RATE}"`);
+    expect(source).toContain("data.rate");
+    expect(source).toContain(`PLAYBACK_RATE_MIN = ${WPE_PLAYBACK_RATE_MIN};`);
+    expect(source).toContain(`PLAYBACK_RATE_MAX = ${WPE_PLAYBACK_RATE_MAX};`);
+    expect(wpeSceneRateMessage(2)).toEqual({ type: WPE_SCENE_RATE, rate: 2 });
   });
 
   it("宿主的场景设置字面量与字段名与这里一致", () => {

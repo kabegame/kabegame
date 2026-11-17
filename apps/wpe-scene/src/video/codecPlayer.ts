@@ -225,6 +225,8 @@ export class CodecVideoPlayer {
   private hostPaused = false;
   private loopValue = true;
   private rateValue = 1;
+  /** 宿主的播放速度（预览控制条）：和脚本的 `rate` 相乘，脚本读到的 `rate` 不含它。 */
+  private hostRate = 1;
   private rateWarned = false;
 
   // —— 结束回调（WPE 的 `V+0xf0` / `V+0xf4`，rea 第 6 节）——
@@ -324,6 +326,13 @@ export class CodecVideoPlayer {
   set wantPlay(value: boolean) {
     this.advance();
     this.wantPlayValue = value;
+  }
+
+  /** 宿主的播放速度：先按旧速度结清走过的墙钟，之后按新速度走。 */
+  setHostRate(rate: number): void {
+    if (this.disposed) return;
+    this.advance();
+    this.hostRate = rate;
   }
 
   /** 按 wantPlay、空闲（30 帧没画到）、宿主暂停推进时钟，挑帧、喂帧。 */
@@ -563,7 +572,7 @@ export class CodecVideoPlayer {
     const elapsed = now - this.lastNow;
     this.lastNow = now;
     if (!(elapsed > 0) || !this.running) return;
-    this.clock += (elapsed / 1000) * this.rateValue;
+    this.clock += (elapsed / 1000) * this.rateValue * this.hostRate;
     const duration = this.duration;
     if (!(duration > 0)) return;
     if (this.loopValue) {

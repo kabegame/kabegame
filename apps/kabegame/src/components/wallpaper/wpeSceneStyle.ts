@@ -24,6 +24,7 @@ export const WPE_SCENE_STYLE = "kabegame:wpe-scene-style";
 export const WPE_SCENE_DISPLAY = "kabegame:wpe-scene-display";
 export const WPE_SCENE_POINTER = "kabegame:wpe-scene-pointer";
 export const WPE_SCENE_SETTINGS = "kabegame:wpe-scene-settings";
+export const WPE_SCENE_RATE = "kabegame:wpe-scene-rate";
 
 export function isWpeSceneStyleRequest(data: unknown): boolean {
   return !!data && typeof data === "object" && (data as { type?: unknown }).type === WPE_SCENE_STYLE_REQUEST;
@@ -48,6 +49,11 @@ export function wpeSceneSettingsMessage(settings: WpeSceneSettings): {
     volumetrics: settings.volumetrics,
     forceRender: settings.forceRender,
   };
+}
+
+/** 播放速度（壁纸设置「倍速」与预览控制条）：宿主就地换，不重新加载 */
+export function wpeSceneRateMessage(rate: number): { type: typeof WPE_SCENE_RATE; rate: number } {
+  return { type: WPE_SCENE_RATE, rate };
 }
 
 export function wpeScenePointerMessage(x: number, y: number): { type: typeof WPE_SCENE_POINTER; x: number; y: number } {

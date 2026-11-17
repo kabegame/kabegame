@@ -574,6 +574,14 @@ export class SceneRenderer {
   }
 
   /**
+   * 播放速度（预览控制条，0.2–4）：下一个实时帧起帧时间乘它（`FrameClock.rate`），`g_Time`、粒子、关键帧、puppet、脚本、声音排期与
+   * 动图都跟着；视频纹理与声音元素各有时钟，由宿主另设。不重新加载。
+   */
+  setPlaybackRate(rate: number): void {
+    this.frameClock.rate = rate;
+  }
+
+  /**
    * 帧率设置就地生效（宿主 `setGeneral`，垫片的 `applyGeneralProperties`）：节流器换上限、当前场景换粒子遍数与 rope 读的 `fps`，
    * 下一帧起生效，不重新加载。≤ 0 不节流（遍数按 `particlePasses` 的规则取一遍）。
    */

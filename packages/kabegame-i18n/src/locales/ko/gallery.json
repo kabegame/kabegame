@@ -8,6 +8,7 @@
   "zoomIn": "확대",
   "zoomOut": "축소",
   "zoomRatio": "확대 비율",
+  "playbackSpeed": "재생 속도",
   "fullscreen": "전체 화면",
   "exitFullscreen": "전체 화면 종료",
   "previewImageMissing": "이미지가 존재하지 않거나 삭제되었습니다",

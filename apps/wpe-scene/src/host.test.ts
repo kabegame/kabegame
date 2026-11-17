@@ -55,6 +55,7 @@ const rendererStyle = vi.hoisted(() => ({
   setBackground: vi.fn(),
   setDisplayScale: vi.fn(),
   setMaxFps: vi.fn((_fps: number) => {}),
+  setPlaybackRate: vi.fn((_rate: number) => {}),
 }));
 /** `SceneRenderer.create` 收到的选项（核对建渲染器时带上显示缩放）。 */
 const rendererCreate = vi.hoisted(() => vi.fn((_options: unknown) => {}));
@@ -113,6 +114,9 @@ vi.mock("./video/sceneVideos", () => ({
     }
     setPaused(paused: boolean) {
       this.record.log.push(`paused ${paused}`);
+    }
+    setHostRate(rate: number) {
+      this.record.log.push(`rate ${rate}`);
     }
     firstFrames(textures: readonly number[], timeoutMs: number) {
       this.record.log.push(`firstFrames ${textures.join(",")} ${timeoutMs}`);
@@ -473,6 +477,7 @@ describe("SceneHost：壁纸样式与留白", () => {
     rendererStyle.setBackground.mockReset();
     rendererStyle.setDisplayScale.mockReset();
     rendererStyle.setMaxFps.mockReset();
+    rendererStyle.setPlaybackRate.mockReset();
     rendererCreate.mockReset();
     compile.mockImplementation(async ({ userProperties }) => unbound(userProperties));
   });
@@ -517,6 +522,34 @@ describe("SceneHost：壁纸样式与留白", () => {
     await Promise.resolve();
     expect(compile).toHaveBeenCalledOnce();
     host.dispose();
+  });
+
+  it("播放速度（kabegame:wpe-scene-rate）：建渲染器时带上已收到的值，之后就地交给渲染器、不重新编译；钳进 0.25–4，非法值忽略", async () => {
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.setPlaybackRate(2);
+    host.applyUserProperties(scheme("0 0 0"));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    expect(rendererStyle.setPlaybackRate).toHaveBeenCalledExactlyOnceWith(2);
+    host.setPlaybackRate(9);
+    expect(rendererStyle.setPlaybackRate).toHaveBeenLastCalledWith(4);
+    host.setPlaybackRate(0.1);
+    expect(rendererStyle.setPlaybackRate).toHaveBeenLastCalledWith(0.25);
+    // 同值不再下发；非法值忽略
+    for (const bad of [0.2, 0, -1, Number.NaN, Number.POSITIVE_INFINITY]) host.setPlaybackRate(bad);
+    expect(rendererStyle.setPlaybackRate).toHaveBeenCalledTimes(3);
+    await Promise.resolve();
+    expect(compile).toHaveBeenCalledOnce();
+    host.dispose();
+
+    // 缺省 1：建渲染器时不用设
+    rendererStyle.setPlaybackRate.mockReset();
+    const fresh = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report: reporter() });
+    fresh.applyUserProperties(scheme("0 0 0"));
+    await vi.waitFor(() => expect(rendererCreate).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(rendererStyle.setPlaybackRate).not.toHaveBeenCalled();
+    fresh.dispose();
   });
 
   it("帧率（applyGeneralProperties 的 general.fps）：没收到时按 30 建渲染器，收到的值建时带上，之后就地交给渲染器、不重新编译", async () => {

@@ -29,6 +29,7 @@ const WallpaperStub = defineComponent({
     paused: Boolean,
     interactive: Boolean,
     sceneSettings: Object,
+    rate: Number,
   },
   emits: ["live", "fail", "error", "contextmenu", "progress"],
   setup() {
@@ -211,6 +212,16 @@ describe("ImageContent 的壁纸形态：缩略层打底，实时画面当原图
     });
     await wrapper.setProps({ videoMuted: true, videoPlaying: false, fit: "cover" });
     expect(live(wrapper).props()).toMatchObject({ volume: 0, paused: true, styleMode: "fill" });
+  });
+
+  it("倍速：取 playback 的 playbackRate 交给实时画面（场景用），钳到 0.25–4，不给时 1；改倍速不重挂", async () => {
+    const wrapper = mountContent(wallpaper("7", "x-wpe/scene", "C:/workshop/7/preview.jpg"));
+    expect(live(wrapper).props("rate")).toBe(1);
+    await wrapper.setProps({ playback: { volume: 1, sceneSettings: {}, playbackRate: 9 } as WallpaperPlayback });
+    expect(live(wrapper).props("rate")).toBe(4);
+    await wrapper.setProps({ playback: { volume: 1, sceneSettings: {}, playbackRate: 0.5 } as WallpaperPlayback });
+    expect(live(wrapper).props("rate")).toBe(0.5);
+    expect(mounts).toBe(1);
   });
 
   it("进度覆盖层：挂上就在；场景按宿主进度走，live 后走满、停一下再收起", async () => {

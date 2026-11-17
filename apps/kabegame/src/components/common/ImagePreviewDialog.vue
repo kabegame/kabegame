@@ -282,7 +282,7 @@
                       :image="previewImage"
                       prefer="original"
                       :video-playing="!wallpaperPaused"
-                      :playback="previewPlayback"
+                      :playback="previewWallpaperPlayback"
                       interactive
                       offer-force-render
                       @ready="handlePreviewReady"
@@ -312,7 +312,7 @@
                 ref="imageControlBarRef"
                 v-if="previewImage && !isPreviewVideo"
                 :is-fullscreen="isAppFullscreen"
-                :keep-visible="zoomSliderDragging"
+                :keep-visible="zoomSliderDragging || speedPanelActive"
               >
                 <!-- 图片与网页 / 场景壁纸同一套缩放（同一个 Panzoom）；壁纸的暂停、设封面等在右键菜单里 -->
                 <button class="control-btn" type="button" :aria-label="t('gallery.zoomOut')" @click="panzoomZoomOut">
@@ -334,9 +334,16 @@
                   />
                   <span class="zoom-progress-text">{{ zoomPercentText }}</span>
                 </div>
-                <!-- 控制条定宽左对齐：缩放滑块撑开，全屏贴到最右 -->
+                <!-- 控制条定宽左对齐：缩放滑块撑开，全屏贴到最右；场景壁纸的播放速度在全屏左边（用户定；临时值，不保存；网页壁纸没有） -->
+                <PreviewSpeedControl
+                  v-if="isPreviewScene"
+                  v-model="previewRate"
+                  class="ml-auto"
+                  @active="speedPanelActive = $event"
+                />
                 <button
-                  class="control-btn ml-auto"
+                  class="control-btn"
+                  :class="{ 'ml-auto': !isPreviewScene }"
                   type="button"
                   :aria-label="isAppFullscreen ? t('gallery.exitFullscreen') : t('gallery.fullscreen')"
                   @click="toggleAppFullscreen"
@@ -364,6 +371,8 @@
                   :show-play-pause="true"
                   :is-fullscreen="isAppFullscreen"
                   :zoom="zoomPercent"
+                  :rate="previewRate"
+                  @update:rate="previewRate = $event"
                   @toggle-fullscreen="toggleAppFullscreen"
                   @zoom-drag-start="handleZoomSliderDragStart"
                   @zoom-input="handleZoomSliderInput"
@@ -476,6 +485,7 @@ import KbResizable from "./KbResizable.vue";
 import PreviewControlBar from "./PreviewControlBar.vue";
 import PreviewRangeSlider from "./PreviewRangeSlider.vue";
 import VideoControls from "./VideoControls.vue";
+import PreviewSpeedControl from "./PreviewSpeedControl.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { useKameMessageStore } from "../../stores/kameMessage";
 import ActionRenderer from "../ActionRenderer.vue";
@@ -502,6 +512,7 @@ import {
   isWpeWallpaperContentType,
 } from "../../utils/mediaMime";
 import { confirmWpeForceRender } from "../../utils/wpeForceRender";
+import { clampPlaybackRate } from "../../utils/wpeSettings";
 import type { Plugin } from "@/stores/plugins";
 import { IS_ANDROID, IS_WEB } from "@/env.ts";
 
@@ -673,14 +684,37 @@ async function onPreviewForceRender() {
   if (previewImage.value?.id !== id) return;
   previewSceneSettings.set("forceRender", true);
 }
-/** 视频壁纸（`x-wpe/video`）在预览里按普通视频播放，倍速取这张壁纸的预览设置（暂停与音量归视频控制条） */
+/** 视频壁纸（`x-wpe/video`）在预览里按普通视频播放，倍速从这张壁纸的预览设置起步（暂停与音量归视频控制条） */
 const { values: previewWpeVideoSettings } = useWpePreviewSettings(
   computed(() => (previewImage.value && isWpeVideoType(previewImage.value.type) ? previewImage.value.id : null)),
 );
+const isPreviewScene = computed(() => isWpeSceneType(previewImage.value?.type));
+/**
+ * 控制条的播放速度（视频与场景壁纸，0.25–4）：这次观看的临时值（用户定：默认 1、不保存）。换图时回到起步值：视频壁纸与场景取这张
+ * 「倍速」预览设置（右栏改了也跟着回到它），普通视频是 1；在控制条里改不写回设置。
+ */
+const previewRate = ref(1);
+const previewRateBase = computed(() => {
+  const type = previewImage.value?.type;
+  if (isWpeVideoType(type)) return clampPlaybackRate(previewWpeVideoSettings.value.playbackRate);
+  if (isWpeSceneType(type)) return clampPlaybackRate(previewPlayback.value.playbackRate);
+  return 1;
+});
 watch(
-  [previewVideoEl, () => previewWpeVideoSettings.value.playbackRate],
+  [() => previewImage.value?.id, previewRateBase],
+  () => {
+    previewRate.value = previewRateBase.value;
+  },
+  { immediate: true },
+);
+/** 倍速面板打开期间控制条保持显示 */
+const speedPanelActive = ref(false);
+/** 场景拿控制条的倍速（网页壁纸不吃） */
+const previewWallpaperPlayback = computed(() => ({ ...previewPlayback.value, playbackRate: previewRate.value }));
+watch(
+  [previewVideoEl, previewRate],
   ([video, rate]) => {
-    if (!video || !isWpeVideoType(previewImage.value?.type)) return;
+    if (!video) return;
     video.defaultPlaybackRate = rate;
     video.playbackRate = rate;
   },

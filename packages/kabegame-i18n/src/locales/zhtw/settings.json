@@ -111,7 +111,7 @@
   "wallpaperPausedDesc": "視窗模式下暫停桌面上的影片、網頁與場景桌布，換桌布後仍保持暫停；圖片桌布不受影響",
   "wallpaperVolume": "壁紙音量",
   "wallpaperVolumeDesc": "桌面上影片、網頁與場景桌布的音量（0～1）；圖庫預覽使用每張桌布自己的預覽設定，應用內背景一律靜音",
-  "wallpaperVideoPlaybackRate": "影片播放速率",
+  "wallpaperVideoPlaybackRate": "倍速",
   "wallpaperVideoPlaybackRateDesc": "0.25～3",
   "wpeMediaIntegration": "媒體整合",
   "wpeMediaIntegrationDesc": "網頁與場景桌布可讀取正在播放的歌曲名稱、封面與播放進度",

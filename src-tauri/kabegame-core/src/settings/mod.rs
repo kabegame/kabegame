@@ -635,7 +635,7 @@ impl Settings {
             }
             SettingKey::WallpaperVideoPlaybackRate => {
                 let v = json.as_f64().unwrap_or(1.0);
-                let v = v.clamp(0.25, 3.0);
+                let v = v.clamp(0.25, 4.0);
                 Ok(SettingValue::F64(v))
             }
             SettingKey::ImageClickAction
@@ -1533,7 +1533,7 @@ impl Settings {
     }
 
     pub fn set_wallpaper_video_playback_rate(&self, rate: f64) -> Result<(), String> {
-        let r = rate.clamp(0.25, 3.0);
+        let r = rate.clamp(0.25, 4.0);
         let cells = Self::cells();
         let new_value = SettingValue::F64(r);
         if let Some(cell) = cells.get(&SettingKey::WallpaperVideoPlaybackRate) {

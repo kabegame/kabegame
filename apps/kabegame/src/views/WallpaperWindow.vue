@@ -17,7 +17,12 @@ import { isPausableTarget } from "@/components/wallpaper/targetKind";
 import type { Mode, Transition, WallpaperTarget } from "@/components/wallpaper/types";
 import type { WallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
 import { useWpeFollowAvailable } from "@/composables/useWpeFollowAvailable";
-import { WPE_FOLLOW_SCENE_SETTINGS, wpeSceneSettingsOf, type WpeSceneSettings } from "@/utils/wpeSettings";
+import {
+  clampPlaybackRate,
+  WPE_FOLLOW_SCENE_SETTINGS,
+  wpeSceneSettingsOf,
+  type WpeSceneSettings,
+} from "@/utils/wpeSettings";
 import {
   displayModeOfTarget,
   effectiveStyle,
@@ -290,7 +295,7 @@ async function init() {
       state.volume = Math.min(1, Math.max(0, Number.isFinite(v) ? v : 1));
     }
     if ("wallpaperVideoPlaybackRate" in changes && typeof changes.wallpaperVideoPlaybackRate === "number") {
-      state.playbackRate = Math.min(3, Math.max(0.25, changes.wallpaperVideoPlaybackRate));
+      state.playbackRate = clampPlaybackRate(changes.wallpaperVideoPlaybackRate);
     }
     if ("wallpaperPaused" in changes && typeof changes.wallpaperPaused === "boolean") {
       state.paused = changes.wallpaperPaused;
@@ -368,7 +373,7 @@ async function init() {
       state.volume = Math.min(1, Math.max(0, volumeRes));
     }
     if (typeof playbackRateRes === "number" && Number.isFinite(playbackRateRes)) {
-      state.playbackRate = Math.min(3, Math.max(0.25, playbackRateRes));
+      state.playbackRate = clampPlaybackRate(playbackRateRes);
     }
     if (typeof pausedRes === "boolean") {
       state.paused = pausedRes;

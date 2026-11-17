@@ -432,6 +432,26 @@ describe("CodecVideoPlayer：时钟的条件", () => {
     expect(player.currentTime).toBe(0.375);
   });
 
+  it("宿主的播放速度：和脚本的 rate 相乘，换速度前走过的墙钟按旧速度结清；脚本读到的 rate 不含它", async () => {
+    const { player, driver } = track(setup());
+    await flush();
+    driver.tick(0);
+    player.setHostRate(2);
+    driver.tick(100);
+    expect(player.currentTime).toBeCloseTo(0.2, 9);
+    player.rate = 1.5;
+    driver.tick(100);
+    expect(player.currentTime).toBeCloseTo(0.5, 9);
+    expect(player.rate).toBe(1.5);
+    // 走了 100 ms 才换速度：这 100 ms 按旧的 3× 记
+    driver.env.now += 100;
+    player.setHostRate(0.25);
+    driver.tick(0);
+    expect(player.currentTime).toBeCloseTo(0.8, 9);
+    driver.tick(400);
+    expect(player.currentTime).toBeCloseTo(0.95, 9);
+  });
+
   it("空闲：30 帧没画到就停住，再画到时接着走、不追赶", async () => {
     const { player, driver } = track(setup());
     await flush();

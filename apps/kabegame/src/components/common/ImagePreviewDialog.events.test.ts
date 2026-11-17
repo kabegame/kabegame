@@ -250,6 +250,34 @@ describe("WPE 壁纸预览的右键菜单与工具条", () => {
     await flushPromises();
   }
 
+  it("播放速度：控制条从这张的「倍速」预览设置起步，改了交给场景、不写回设置；换图回到起步值；网页壁纸没有", async () => {
+    invoke.mockImplementation(async (command: string) =>
+      command === "get_wpe_preview_settings"
+        ? { imageId: "current", metadataId: 1, settings: { playbackRate: 1.5 } }
+        : undefined,
+    );
+    const wrapper = await sceneFixture();
+    const speed = () => wrapper.findComponent({ name: "PreviewSpeedControl" });
+    const rate = () =>
+      (wrapper.findComponent(ImageContent).props("playback") as { playbackRate?: number }).playbackRate;
+    expect(speed().props("modelValue")).toBe(1.5);
+    expect(rate()).toBe(1.5);
+    speed().vm.$emit("update:modelValue", 3);
+    await flushPromises();
+    expect(rate()).toBe(3);
+    vi.advanceTimersByTime(400);
+    await flushPromises();
+    expect(invoke.mock.calls.filter(([command]) => command === "set_wpe_preview_settings")).toEqual([]);
+    await wrapper.setProps({ image: "next" });
+    await flushPromises();
+    expect(speed().props("modelValue")).toBe(1.5);
+
+    fetchImageById.mockImplementation(async (id: string) => ({ id, localPath: `/${id}`, type: "x-wpe/web" }));
+    await wrapper.setProps({ image: "web" });
+    await flushPromises();
+    expect(speed().exists()).toBe(false);
+  });
+
   it("强制渲染：预览设置开着时名称右边有警告标记，没开时没有", async () => {
     let forceRender = true;
     invoke.mockImplementation(async (command: string) =>
@@ -431,6 +459,17 @@ describe("视频预览的缩放", () => {
     panzoom.canPan.value = true;
     await flushPromises();
     expect(wrapper.findComponent(ImageContent).props("nativeDrag")).toBe(false);
+  });
+
+  it("播放速度：普通视频从 1 起步，控制条改了就是视频的倍速（临时值），换视频回到 1", async () => {
+    const wrapper = await videoFixture();
+    expect(controls(wrapper).props("rate")).toBe(1);
+    controls(wrapper).vm.$emit("update:rate", 2);
+    await flushPromises();
+    expect(controls(wrapper).props("rate")).toBe(2);
+    await wrapper.setProps({ image: "next" });
+    await flushPromises();
+    expect(controls(wrapper).props("rate")).toBe(1);
   });
 
   it("控制条拿缩放百分比，滑块与按钮的事件接到缩放", async () => {

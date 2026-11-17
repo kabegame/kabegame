@@ -111,7 +111,7 @@
   "wallpaperPausedDesc": "ウィンドウモードで、デスクトップの動画・Web・シーン壁紙を一時停止します。壁紙を切り替えても一時停止のままです。画像の壁紙には影響しません",
   "wallpaperVolume": "壁紙の音量",
   "wallpaperVolumeDesc": "デスクトップ上の動画・Web・シーン壁紙の音量（0～1）。ギャラリーのプレビューは壁紙ごとのプレビュー設定を使い、アプリ内背景は常にミュートです",
-  "wallpaperVideoPlaybackRate": "動画再生速度",
+  "wallpaperVideoPlaybackRate": "再生速度",
   "wallpaperVideoPlaybackRateDesc": "0.25～3",
   "wpeMediaIntegration": "メディア連携",
   "wpeMediaIntegrationDesc": "Web 壁紙とシーン壁紙が再生中の曲名、カバー画像、再生位置を読み取れます",
