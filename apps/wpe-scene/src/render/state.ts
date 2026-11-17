@@ -352,6 +352,15 @@ interface OwnedKeys {
   shadow: TargetKey[];
 }
 
+/** 图层的 `ITextureAnimation` 私有状态（P6e 点 3，WPE 的 `A`）：`rate` 存 f32；`frame` 是 int，可越界、可负；`time` 是格内已过的秒。 */
+export interface TextureAnimationState {
+  detached: boolean;
+  playing: boolean;
+  rate: number;
+  frame: number;
+  time: number;
+}
+
 export class SceneState {
   /** 按 `objects` 下标（稳定键）；只含进了 bundle 的图层。 */
   readonly layers = new Map<number, LayerState>();
@@ -409,6 +418,13 @@ export class SceneState {
    * 写入不标脏：`ScenePuppets.frame` 每帧经 `animationLayer` 读，用户属性在两帧之间写进来、puppet 当帧就读到（p12-REPORT 用例 4）。
    */
   readonly animationLayers = new Map<string, PuppetLayerFields>();
+  /**
+   * 图层的 `ITextureAnimation` 私有状态（P6e 点 3，WPE 的 `A`，键 = `objects` 下标）：脚本第一次 `getTextureAnimation()` 时建，对象只是读写它的外壳。
+   * `detached` 的图层画自己的 `frame`、每帧按 `rate` 私有推进（`GpuScene.stepParticles`，不看可见性）；否则跟共享计时器。随对象删除清掉
+   * （`clearTables`），单对象重编译保留（`replaceObject`），整场重编译由 `adoptTextureAnimations` 接过；槽 0 换成用户纹理时由渲染器删（`dropTextureAnimation`）。
+   * 条目对象本身是 API 外壳的身份：条目被删或换成别的对象，外壳即作废。
+   */
+  readonly textureAnimations = new Map<number, TextureAnimationState>();
   /**
    * 文本层的排版结果（P6b 1d，`objects` 下标 → `TextLayout`，含字形网格与它所在的图集）：宿主在加载前排好（`text/host.ts`），经
    * `GpuScene.build` 的 `texts` 交来（`setTexts`）。渲染图按它定文字框、合成 RT 与有没有彩色字形，世界矩阵带它的对齐偏移。
@@ -642,6 +658,7 @@ export class SceneState {
       this.owned.delete(object);
     }
     this.layers.delete(object);
+    this.textureAnimations.delete(object);
     this.particleInstances.delete(object);
     this.sounds.delete(object);
     this.lights.delete(object);
@@ -701,8 +718,11 @@ export class SceneState {
     const parent = old.parent;
     const frozen = this.frozenLayers.has(object);
     const pending = this.pendingDestroy.has(object);
+    // 纹理动画的私有状态跨单对象重编译保留（P6e 点 3）：脚本手里的外壳还认它
+    const textureAnimation = this.textureAnimations.get(object);
     this.clearTables(object);
     this.installTables(slice);
+    if (textureAnimation) this.textureAnimations.set(object, textureAnimation);
     this.layers.get(object)!.parent = parent;
     if (frozen) this.frozenLayers.add(object);
     if (pending) this.pendingDestroy.add(object);
@@ -886,6 +906,19 @@ export class SceneState {
   /** 层释放（P12e）：删掉这一项；之后用户属性、脚本写入、重放对它都是空操作。 */
   removeAnimationLayer(object: number, id: number): void {
     this.animationLayers.delete(animationLayerKey(object, id));
+  }
+
+  /** 槽 0 换成别的纹理（用户纹理换图，WPE `FUN_140209360`）：删条目，脚本手里的外壳随之作废。 */
+  dropTextureAnimation(object: number): void {
+    this.textureAnimations.delete(object);
+  }
+
+  /**
+   * 整场重编译后接过旧状态里的纹理动画条目（P6e 点 3）：同一个条目对象（外壳的身份不变），只收新状态里还有的图层。在新状态首帧前调。
+   */
+  adoptTextureAnimations(previous: SceneState): void {
+    for (const [object, entry] of previous.textureAnimations)
+      if (this.layers.has(object) && !this.textureAnimations.has(object)) this.textureAnimations.set(object, entry);
   }
 
   /**

@@ -107,10 +107,9 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
       ["getAttachmentIndex", "getAttachmentMatrix", "getAttachmentOrigin", "getAttachmentAngles"],
       UNIQUE,
     ),
-    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b），`getAnimationLayer` / `getAnimationLayerCount` 已实现（P12c），
+    // 纹理动画、动画层、骨骼与混合形状（W5 / P6）；`getVideoTexture` 已实现（P9b），`getTextureAnimation` 已实现（P6e 点 3，只图像层、与 `getVideoTexture` 共一格），`getAnimationLayer` / `getAnimationLayerCount` 已实现（P12c），
     // 骨骼的 `getBoneCount` / `getBoneTransform` / `setBoneTransform` / `applyBonePhysicsImpulse` / `resetBonePhysicsSimulation` 已实现（P12d-2，只图像层），
     // `createAnimationLayer` / `playSingleAnimation` / `destroyAnimationLayer` 已实现（P12e）
-    ...methods("any", ["getTextureAnimation"], UNIQUE),
     ...methods(
       "any",
       [

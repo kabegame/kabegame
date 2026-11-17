@@ -317,6 +317,8 @@ export interface ProbeScriptsInput {
   >;
   /** 系统媒体回放（P11c，`probeMedia.ts`）：`init` 之后给刚 `init` 的脚本补发一轮媒体回调（`SceneMedia.replayAfterInit`）。不给时不补发。 */
   media?: { replayAfterInit(callbacks: MediaCallbacks): void };
+  /** 帧表纹理的共享计时器（P6e 点 3，`GpuScene.sheetClockOf`）：`ITextureAnimation` 未脱离时读 / 脱离时拷。不给时当 {0, 0}。 */
+  sheetClock?: (texture: number) => Readonly<{ frame: number; time: number }> | undefined;
   /** 建 realm（缺省 `createIframeRealm`，在当前文档里建隐藏 iframe）：单测换成不碰 DOM 的假 realm。 */
   createRealm?: (setup: ProbeRealmSetup) => Promise<ScriptRealm>;
   /** 运行中建层（L5）的落点：不给时 `createLayer` 只建壳、记结构（新对象不画）。 */
@@ -557,6 +559,7 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
           unconnected.particles++;
           return null;
         },
+        sheetClock: (texture) => input.sheetClock?.(texture),
         // 关键帧动画（P10b）：探针自己的播放器，每次现取
         animation: (id) => animations?.control(id) ?? null,
         // puppet 动画层（P12c）：探针自己的运行时，每次现取

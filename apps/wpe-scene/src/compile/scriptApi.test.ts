@@ -59,14 +59,14 @@ describe("未实现脚本 API 的扫描", () => {
       "export function init() {",
       "  let bar = thisScene.getLayer('bar');",
       "  let parent = bar.setParent(null);",
-      "  layers[0].getTextureAnimation().play();",
+      "  layers[0].getAttachmentIndex().play();",
       "  thisScene.getLayer(1)?.getEffect('tint').visible = false;",
       "  shared.target.getAnimation('a').play();",
       "}",
     ].join("\n");
     // `getAnimation`（IObject、thisScene 上的）已在 P10b 实现，不再报；`getEffect` 在 P6d1a 实现
-    // setParent 在 P6d3a 实现
-    expect(scan(source)).toEqual(["layer.getTextureAnimation"]);
+    // setParent 在 P6d3a 实现；getTextureAnimation 在 P6e 点 3 实现，这里改用仍缺失的 getAttachmentIndex
+    expect(scan(source)).toEqual(["layer.getAttachmentIndex"]);
     expect(scan("thisScene.getAnimation('x');")).toEqual([]);
   });
 
@@ -108,22 +108,23 @@ describe("未实现脚本 API 的扫描", () => {
   it("注释、字符串、模板文字与正则里的不算；模板插值照常扫", () => {
     const source = [
       "// thisScene.createModelData('a');",
-      "/* bar.getTextureAnimation(); engine.requestFeatures('x'); */",
+      "/* bar.getAttachmentIndex(); engine.requestFeatures('x'); */",
       "const a = 'thisScene.createModelData()';",
-      'const b = "layer.getTextureAnimation()";',
+      'const b = "layer.getAttachmentIndex()";',
       "const c = `input.cursorWorldPosition ${'}'} and ${`thisScene.sortLayer`}`;",
       "const d = /x.setParent\\/()/g.test(s) ? 1 : 2;",
       "const e = n / 2 / thisLayer.origin.x;",
       "export function update() { return value; }",
     ].join("\n");
     expect(scan(source)).toEqual([]);
-    expect(scan("const s = `${bar.getTextureAnimation(null).name} / ${`${thisScene.createModelData('a')}`}`;")).toEqual(
-      ["layer.getTextureAnimation", "thisScene.createModelData"],
-    );
+    expect(scan("const s = `${bar.getAttachmentIndex(null).name} / ${`${thisScene.createModelData('a')}`}`;")).toEqual([
+      "layer.getAttachmentIndex",
+      "thisScene.createModelData",
+    ]);
     // 除号之后不是正则：后面的调用照常扫到
     expect(
-      scan("const k = width / 2; const p = bar.getTextureAnimation(); const q = (a) / b.getTextureAnimation();"),
-    ).toEqual(["layer.getTextureAnimation"]);
+      scan("const k = width / 2; const p = bar.getAttachmentIndex(); const q = (a) / b.getAttachmentIndex();"),
+    ).toEqual(["layer.getAttachmentIndex"]);
   });
 
   it("已实现的不报", () => {

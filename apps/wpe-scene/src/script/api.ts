@@ -38,7 +38,8 @@ import type { CursorInputSnapshot } from "../render/cursor";
 import { anglesRotation, drawMatrixOf } from "../render/layout";
 import { extractEulerZYX, lookAtAngles, lookAtYawAngles, rotateObjectSpace } from "../render/rotation";
 import { adjustReparent } from "../render/adjust";
-import type { SceneState } from "../render/state";
+import { layerSheet } from "../render/sheets";
+import type { SceneState, TextureAnimationState } from "../render/state";
 import { scriptToString } from "../text/fields";
 import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
@@ -164,6 +165,11 @@ export interface ScriptApiState {
    * 不传或返回 null（语料诊断、播放器已释放）时方法空操作，`duration` 退回 bundle 里的容器时长。
    */
   video?(object: number): VideoScriptTarget | null;
+  /**
+   * 帧表纹理共享计时器的当前 `{frame, time}`（P6e 点 3，宿主取 `GpuScene.sheetClockOf`；键是 bundle 纹理下标）：`ITextureAnimation` 未脱离时读
+   * （`getFrame`）、脱离那一刻拷。不传（语料诊断、`realmCheck`）或还没有计时器时当 `{0, 0}`。
+   */
+  sheetClock?(texture: number): Readonly<{ frame: number; time: number }> | undefined;
   /**
    * 粒子对象的根系统（P4f 步骤 3，宿主从渲染器的场景取，`GpuScene.particleScript`）：粒子层的 `play` / `pause` / `stop` / `isPlaying` /
    * `emitParticles` 接到它上面。不传或返回 null（没有场景）时方法什么都不做，`isPlaying` 为假。
@@ -335,6 +341,12 @@ export class ScriptApi {
   private readonly layers = new Map<number, ApiObject>();
   /** 图层的 `IVideoTexture`（P9b）：每个图层建一次，之后 `getVideoTexture()` 返回同一个对象（WPE 的 `L+0x4c0`）。 */
   private readonly videoTextures = new Map<number, ApiObject>();
+  /**
+   * 图层的 `ITextureAnimation`（P6e 点 3）：和 `videoTextures` 共用 WPE 的一格（`L+0x4c0`）——先建了哪个、另一个方法也返回它。外壳本身不存状态
+   * （状态在 `SceneState.textureAnimations`），它认的是建它时的那个条目对象：条目被删（图层删除、槽 0 换成用户纹理）即作废。
+   */
+  private readonly textureAnimationApis = new Map<number, ApiObject>();
+  private readonly textureAnimationOf = new WeakMap<ApiObject, { object: number; entry: TextureAnimationState }>();
   /** 写过不支持的灯字段（P13f2，`installLight`）：每个对象 / 字段只告警一次。 */
   private readonly warnedLightWrites = new Set<string>();
   private readonly materials = new Map<string, ApiObject>();
@@ -516,6 +528,9 @@ export class ScriptApi {
     this.installEffectAccess(api, index);
     // 视频纹理（P9b，决定 6）：所有图层都有这个方法，不是视频图层时返回 null
     this.method(api, "getVideoTexture", () => this.videoTexture(index));
+    // 纹理动画（P6e 点 3）：只在图像层上（WPE 图像层方法表；文本、粒子、声音等调用是 TypeError），同 `getVideoTexture` 共一格
+    if (this.findLayer(index)?.alignment !== undefined || kind === "image")
+      this.method(api, "getTextureAnimation", () => this.textureAnimation(index));
     this.installGetAnimation(api, () => `objects/${index}`);
     this.installAnimationLayers(api, index);
     if (this.findLayer(index)?.alignment !== undefined || kind === "image") this.installBones(api, index);
@@ -747,6 +762,9 @@ export class ScriptApi {
    * - `getAnimation`：返回 undefined（WPE 有这个成员）。
    */
   private videoTexture(object: number): ApiObject | null {
+    // 先建了纹理动画的图层上，两个方法返回同一个对象（WPE `L+0x4c0` 一格）
+    const shared = this.textureAnimationApis.get(object);
+    if (shared && !this.dead(shared)) return shared;
     if (!layerVideoSource(this.access.bundle(), object)) return null;
     let api = this.videoTextures.get(object);
     if (api) return api;
@@ -810,6 +828,135 @@ export class ScriptApi {
     });
     this.method(api, "getAnimation", () => undefined);
     this.videoTextures.set(object, api);
+    return api;
+  }
+
+  /**
+   * 图层的 `ITextureAnimation`（P6e 点 3，rea-p6e-sheet 3、rea-p6e-script，`p6e-api` 实测）。`getTextureAnimation()`：已有就返回（含被 `getVideoTexture`
+   * 先占的格），否则槽 0 是帧表时在 `SceneState.textureAnimations` 建条目（`{false, true, 1, 0, 0}`）与外壳，不是帧表返回 null（纯色层等）。
+   * 外壳只是条目的读写口，每次读写都核对条目还是不是建它时的那个（图层删除、槽 0 换成用户纹理后作废：读字段 undefined、写忽略、方法返回 undefined）。
+   * - 原型：每个对象自己一个，只有不可枚举的 `constructor`（`name` 为空串），再往上 Object.prototype；
+   * - 自有成员（键序 `frameCount, duration, rate, play, isPlaying, stop, pause, setFrame, getFrame, join, getAnimation`，都可枚举、可配置）：
+   *   `frameCount` / `duration` 只读（赋值抛 TypeError，文案同 WPE），每次现读当前槽 0 帧表；`rate` 只收 number 原始值、存 f32，写后 `rate !== 1` 且
+   *   未脱离时拷共享 `{frame, time}` 并脱离；`play` 只置 `playing`；`pause` 未脱离时先拷共享状态再停、脱离；`stop` 私有 `{0, 0}`、停、脱离；
+   *   `setFrame(n)` 只收 int32 整数（其余当 0），写 `{n, 0}`，未脱离时同时脱离并播放；`getFrame` 脱离时返回私有帧号原值（不夹取），否则读共享计时器；
+   *   `isPlaying` = `!(detached && !playing)`；`join` 只清 `detached`；`getAnimation(名字)` 全场景按名字找、找不到 undefined；
+   * - 脱离接收者调用（`const { play } = a; play()`）返回 undefined、不改状态（实测）。
+   */
+  private textureAnimation(object: number): ApiObject | null {
+    const cached = this.textureAnimationApis.get(object);
+    if (cached && !this.dead(cached)) return cached;
+    const video = this.videoTextures.get(object);
+    if (video) return video;
+    if (!layerSheet(this.access.bundle(), object)) return null;
+    const entry: TextureAnimationState = { detached: false, playing: true, rate: 1, frame: 0, time: 0 };
+    this.access.state().textureAnimations.set(object, entry);
+    const Obj = this.realm.global.Object as typeof Object;
+    const proto = Obj.create(Obj.prototype, {
+      constructor: {
+        value: new (this.realm.global.Function as FunctionConstructor)("return function () {}")(),
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      },
+    });
+    const api = Obj.create(proto) as ApiObject;
+    this.textureAnimationOf.set(api, { object, entry });
+    const sheet = () => layerSheet(this.access.bundle(), object);
+    // 未脱离时共享计时器的当前值（没有计时器时 {0, 0}）
+    const shared = () => {
+      const index = sheet()?.index;
+      const clock = index === undefined ? undefined : this.access.sheetClock?.(index);
+      return { frame: clock?.frame ?? 0, time: clock?.time ?? 0 };
+    };
+    const detach = () => {
+      if (entry.detached) return;
+      const clock = shared();
+      entry.frame = clock.frame;
+      entry.time = clock.time;
+      entry.detached = true;
+    };
+    // 访问器、可枚举、可配置；作废后读 undefined、写忽略（同 `define`，只是 configurable）
+    const accessor = (name: string, get: () => unknown, set: (value: unknown) => void) =>
+      Obj.defineProperty(api, name, {
+        enumerable: true,
+        configurable: true,
+        get: () => (this.dead(api) ? undefined : get()),
+        set: (value: unknown) => {
+          if (!this.dead(api)) set(value);
+        },
+      });
+    const readOnly = (name: string) => () => {
+      throw new TypeError(`Cannot assign to read only property '${name}' of object '[object Object]'`);
+    };
+    accessor("frameCount", () => sheet()?.sheet.frames.length ?? 0, readOnly("frameCount"));
+    accessor("duration", () => sheet()?.sheet.total ?? 0, readOnly("duration"));
+    accessor(
+      "rate",
+      () => entry.rate,
+      (value) => {
+        // 只收 number 原始值（含 NaN、-0、±Infinity）；别的类型（字符串、布尔、对象、new Number）忽略
+        if (typeof value !== "number") return;
+        entry.rate = Math.fround(value);
+        // 写入后的回调（`LAB_1401fa4a0`）：恰好 1 什么都不做（NaN 不算 1），已脱离也不做，否则拷共享状态并脱离
+        if (entry.rate !== 1) detach();
+      },
+    );
+    const this_ = this;
+    // 方法是数据属性；值是普通函数：接收者不是这个外壳（脱离 this 调用）或已作废时返回 undefined、不改状态
+    const method = (name: string, run: (...args: unknown[]) => unknown) =>
+      Obj.defineProperty(api, name, {
+        value: function (this: unknown, ...args: unknown[]) {
+          return this === api && !this_.dead(api) ? run(...args) : undefined;
+        } as (...args: unknown[]) => unknown,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    method("play", () => {
+      entry.playing = true;
+    });
+    method("isPlaying", () => !(entry.detached && !entry.playing));
+    method("stop", () => {
+      entry.frame = 0;
+      entry.time = 0;
+      entry.playing = false;
+      entry.detached = true;
+    });
+    method("pause", () => {
+      detach();
+      entry.playing = false;
+    });
+    method("setFrame", (frame) => {
+      // 只认 int32 整数（`IsInt32`：不是 -0、范围内、无小数），其余当 0；多余实参忽略
+      const n =
+        typeof frame === "number" &&
+        Number.isInteger(frame) &&
+        frame >= -(2 ** 31) &&
+        frame < 2 ** 31 &&
+        !Object.is(frame, -0)
+          ? frame
+          : 0;
+      entry.frame = n;
+      entry.time = 0;
+      // 未脱离时同时脱离并播放；已脱离时 playing 不变
+      if (!entry.detached) {
+        entry.detached = true;
+        entry.playing = true;
+      }
+    });
+    method("getFrame", () => (entry.detached ? entry.frame : shared().frame));
+    method("join", () => {
+      entry.detached = false;
+    });
+    // 全场景按名字找（`owner = 0` 不过滤属主），找不到 undefined（和 `thisScene.getAnimation` 的 null 不同）
+    method("getAnimation", (name) => {
+      this.requireAnimationContext();
+      const wanted = typeof name === "string" && name !== "" ? name : this.current ? lastSegment(this.current.id) : "";
+      const def = this.findAnimation(null, wanted);
+      return def ? this.animationApi(def) : undefined;
+    });
+    this.textureAnimationApis.set(object, api);
     return api;
   }
 
@@ -915,6 +1062,9 @@ export class ScriptApi {
   private dead(object: ApiObject): boolean {
     const owner = this.ownerOf.get(object);
     if (owner !== undefined && !this.alive(owner)) return true;
+    const texture = this.textureAnimationOf.get(object);
+    if (texture)
+      return !this.alive(texture.object) || this.access.state().textureAnimations.get(texture.object) !== texture.entry;
     const layer = this.animationLayerOf.get(object);
     return layer !== undefined && (!this.alive(layer.object) || !this.puppetView(layer.object).alive(layer.id));
   }
@@ -1095,6 +1245,10 @@ export class ScriptApi {
         (typeof value === "object" &&
           value !== null &&
           this.animationLayerOf.has(value as ApiObject) &&
+          !this.dead(value as ApiObject)) ||
+        (typeof value === "object" &&
+          value !== null &&
+          this.textureAnimationOf.has(value as ApiObject) &&
           !this.dead(value as ApiObject)) ||
         [...this.materials.entries()].some(
           ([pass, object]) => object === value && this.access.state().constants.has(pass) && !this.dead(object),

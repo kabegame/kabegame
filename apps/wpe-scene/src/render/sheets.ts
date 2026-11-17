@@ -7,7 +7,8 @@
  *
  * 全部按 float32 算（WPE 的 `addss` / `subss` / `minss` / `maxss`），每一步 `Math.fround`。
  */
-import type { SceneSheetFrames } from "../compile/bundle";
+import type { SceneBundle, SceneSheetFrames } from "../compile/bundle";
+import type { TextureAnimationState } from "./state";
 
 /** 共享计时器（WPE 纹理对象的 `+0x9c / +0xa0 / +0xa4`）。`frame` 是当前帧号（可越界，见 `advanceSheet`），`lastFrame` 是上次推进时的渲染帧号。 */
 export interface SheetClock {
@@ -86,4 +87,39 @@ export function sheetFrameFor(
   advanceSheet(clock, sheet.frames, clock.lastFrame !== frameNo ? dt : 0);
   clock.lastFrame = frameNo;
   return clock.frame >= 0 && clock.frame < count ? clock.frame : 0;
+}
+
+/**
+ * 图层基础材质槽 0 的帧表纹理（`ITextureAnimation` 的判定，rea-p6e-sheet 3.1：`O+0x498` 的槽 0 纹理带帧表位）：返回 bundle 纹理下标与帧表；
+ * 没有这个图层、槽 0 不是 bundle 纹理、不是帧表时 undefined。只看 bundle，语料诊断也认得出。
+ */
+export function layerSheet(
+  bundle: Pick<SceneBundle, "layers" | "textures"> | null | undefined,
+  object: number,
+): { index: number; sheet: SceneSheetFrames } | undefined {
+  const index = bundle?.layers.find((layer) => layer.object === object)?.passes[0]?.textures[0];
+  if (index === undefined) return undefined;
+  const sheet = bundle?.textures?.[index]?.frames;
+  return sheet ? { index, sheet } : undefined;
+}
+
+/**
+ * 脱离且在播的图层按自己的 `rate` 私有推进（P6e 点 3，rea-p6e-sheet 3.3：`advance(A.frame, 帧表, dt × rate)`，f32，不看可见性）。条目本身就是 `{frame, time}`。
+ * `sheetOf` 给图层槽 0 当前的帧表；不再是帧表（只可能是被换掉的）时不动。每个渲染帧一次，在对象更新循环里（`GpuScene.stepParticles`）。
+ */
+export function advanceTextureAnimations(
+  animations: ReadonlyMap<number, TextureAnimationState>,
+  frametime: number,
+  sheetOf: (object: number) => SceneSheetFrames | undefined,
+): void {
+  for (const [object, entry] of animations) {
+    if (!entry.detached || !entry.playing) continue;
+    const sheet = sheetOf(object);
+    if (sheet) advanceSheet(entry, sheet.frames, f32(f32(frametime) * entry.rate));
+  }
+}
+
+/** 一个图层画哪一格的覆盖（`GpuScene.setSheetOverrides` 的来源，宿主与探针共用）：脱离时是私有帧号，否则 −1（走共享计时器）。 */
+export function textureAnimationOverride(entry: Readonly<TextureAnimationState> | undefined): number {
+  return entry?.detached ? entry.frame : -1;
 }

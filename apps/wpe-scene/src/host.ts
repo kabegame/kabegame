@@ -86,6 +86,7 @@ import { ShortcutToken } from "./shortcut/token";
 import { parseShortcutIcon, UserTextureSources, type ShortcutIcon, type UserTextureProbe } from "./usertex/sources";
 import { videoSourceKey } from "./video/player";
 import { layerVideoSource, SceneVideos, type SceneVideoProbe, type VideoSink } from "./video/sceneVideos";
+import { textureAnimationOverride } from "./render/sheets";
 
 interface SceneTarget {
   path: string;
@@ -1485,6 +1486,8 @@ export class SceneHost {
           const source = layerVideoSource(this.scriptBundle, object);
           return source ? (this.sceneVideos?.playerFor(source) ?? null) : null;
         },
+        // ITextureAnimation 未脱离时读 / 脱离时拷共享计时器（P6e 点 3）：渲染器画完上一帧后的值
+        sheetClock: (texture) => this.renderer?.sheetClock(texture),
         // 粒子层的 play / pause / stop / isPlaying / emitParticles（P4f 步骤 3）：同样每次现取
         particles: (object) => this.particleTarget(object),
         // getTransformMatrix（P6d1a）：有渲染器场景时用它的挂点钩子现算，否则（首次加载的 init）api 退回纯状态现算
@@ -2019,6 +2022,8 @@ export class SceneHost {
           });
       },
       videos: this.videoSink,
+      // 脱离的纹理动画图层画自己的帧（P6e 点 3）：读渲染器正在画的那份状态，没有条目或没脱离时 −1（走共享计时器）
+      sheetOverride: (object) => textureAnimationOverride(this.drawnState?.textureAnimations.get(object)),
       beforeFrame: (dt, spectrum) => {
         // 脚本的音频缓冲改读归一化频谱（P4e 步骤 4，「决定」5）：渲染器这一帧推进之后、脚本之前拷一次
         this.scriptApi?.applySpectrum(spectrum);
@@ -2444,6 +2449,8 @@ export class SceneHost {
           // 结构接续（P6d3a）：旧脚本状态里的对象表 / 待删 / 父子（首次加载时是 `init` 里 `sortLayer` / `setParent` / `destroyLayer` 落下的，
           // bundle 是 `init` 之前编的、不含它们）；重编译后 bundle 已带结构，照搬是幂等的。在重放脚本写入之前
           if (this.scriptState && this.scriptState !== state) state.adoptStructure(this.scriptState);
+          // 纹理动画的私有状态（P6e 点 3）：脚本手里的外壳认同一个条目对象
+          if (this.scriptState && this.scriptState !== state) state.adoptTextureAnimations(this.scriptState);
           // 新建 → carryOver → refresh（同 P10 的 `write`）：重编译时动画层时钟与 blendin 的清位接着走，换上就按当前时钟与当前状态算一次蒙皮，
           // 不闪出绑定姿势；之后每帧由 `stepPuppets` 推进
           // 待用的（`init` 里的控制要保留）不接旧时钟；否则接上正在播的，没有时接过期的待用运行时（P12c）

@@ -80,6 +80,7 @@ function fakeScene(size: readonly [number, number] | undefined) {
     targetTexture: { format: "rgba8unorm" },
     targetView: {},
     setVideoSink: () => {},
+    setSheetOverrides: () => {},
     sync: () => {},
     stepParticles: (_dt: number, _time: number, _state: unknown, cursor: [number, number]) => void cursors.push(cursor),
     setCamera: () => {},

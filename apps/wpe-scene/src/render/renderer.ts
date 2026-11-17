@@ -117,6 +117,10 @@ export interface SceneRendererOptions {
    */
   stepPuppets?: (dt: number) => void;
   /**
+   * 纹理动画脱离帧号的来源（P6e 点 3，`GpuScene.setSheetOverrides`）：宿主按正在画的状态答；不给时一律走共享计时器。
+   */
+  sheetOverride?: (object: number) => number;
+  /**
    * 视频纹理的帧来源（P9a 步骤 2，宿主的 `SceneVideos`）：每个实时帧开头 `beginFrame`（帧时钟推进之后、粒子步进之前；补画帧不调），
    * 换上的每个场景都交给 `GpuScene.setVideoSink`，编码时画到视频纹理才问 `drawn`。缺省时视频纹理保持全 0。
    */
@@ -385,6 +389,11 @@ export class SceneRenderer {
     return this.scene?.transformMatrix(object, state) ?? null;
   }
 
+  /** 帧表纹理共享计时器的当前值（脚本 `ITextureAnimation` 未脱离时读 / 脱离时拷它，P6e 点 3）；没有场景或还没有计时器时 undefined。 */
+  sheetClock(texture: number): Readonly<{ frame: number; time: number }> | undefined {
+    return this.scene?.sheetClockOf(texture);
+  }
+
   /** 粒子层脚本方法的落点（P4f 步骤 3，`GpuScene.particleScript`）；没有场景或不是粒子层时为 null。 */
   particleScript(object: number): ParticleScriptTarget | null {
     return this.scene?.particleScript(object) ?? null;
@@ -521,6 +530,8 @@ export class SceneRenderer {
     }
     // 视频纹理（P9a）：画第一帧之前接上，第一帧就能问 `drawn`
     scene.setVideoSink(this.options.videos ?? null);
+    // 脱离的纹理动画图层画自己的帧（P6e 点 3）
+    scene.setSheetOverrides(this.options.sheetOverride ?? null);
     scene.setPuppets(options.puppets ?? null);
     // `await GpuScene.build` 期间帧率可能又变了（`setMaxFps` 只改得到旧场景）：按当前值补设，预热已按建场景时的值跑完、不受影响
     scene.setFrameRate(this.maxFps);

@@ -298,7 +298,7 @@ import { SHADOW_CASTER_UNIFORM } from "../compile/features";
 import { mirroredView, type SceneView } from "./views";
 import { SPRITE_COUNT_TARGET_FORMAT, SpriteCounter, spriteOverrides, spriteViewProjection } from "./sprite";
 import { transparentDrawOrder } from "./sortOrder";
-import { newSheetClock, sheetFrameFor, type SheetClock } from "./sheets";
+import { advanceTextureAnimations, layerSheet, newSheetClock, sheetFrameFor, type SheetClock } from "./sheets";
 import { byPosition, layerStructure } from "./structure";
 import type { DirtyState, LayerState, SceneState } from "./state";
 import { WorldStamps } from "./worldStamps";
@@ -4859,6 +4859,8 @@ export class GpuScene {
       const slot = baseUserSlot(runtime.layer);
       if (!slot || !names.has(slot.source.name)) continue;
       const before = this.layerTargets.get(runtime.object);
+      // 槽 0 换成用户的图：WPE 删掉这个图层的 `ITextureAnimation`（`FUN_140209360`，tex != A.tex），脚本手里的对象作废（P6e 点 3）
+      if (this.userCrop(slot)) state.dropTextureAnimation(runtime.object);
       this.rebuildLayer(runtime, state, worlds, { force: true });
       rebuilt.add(runtime.object);
       if (before && this.layerTargets.get(runtime.object) !== before) resized.add(runtime.object);
@@ -5796,6 +5798,9 @@ export class GpuScene {
     // 渲染帧号（共享计时器去重用）：每帧恰好一次，补画帧（帧时间 0）也算一帧、只是 dt 为 0
     this.sheetFrameNo++;
     if (!(frametime > 0)) return;
+    // 脱离的图层私有推进（P6e 点 3，WPE 帧函数第 2 步图像层更新的末尾）：不看可见性、不看这张纹理本帧画不画
+    if (state)
+      advanceTextureAnimations(state.textureAnimations, frametime, (object) => layerSheet(this.bundle, object)?.sheet);
     // 对象更新循环（WPE `FUN_1401891a0`，p12-lag，B1）：本帧号加一，蒙皮 puppet 与粒子层按 objects 顺序各取一次世界矩阵（不看可见性：
     // 隐藏的 puppet 照推进、粒子照更新控制点）；挂点对象在这里每帧重算、戳 = 本帧号，渲染阶段（`drawPhase`）据此沿用这里的值
     if (this.stamps && state) {

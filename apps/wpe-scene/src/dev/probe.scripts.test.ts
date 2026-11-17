@@ -152,6 +152,7 @@ function fakeScene() {
     targetTexture: { format: "rgba8unorm" },
     targetView: {},
     setVideoSink: () => void log.push("videoSink"),
+    setSheetOverrides: () => {},
     sync: () => void log.push("sync"),
     stepParticles: (dt: number, time: number) => void log.push(`step ${dt} ${time}`),
     setCamera: () => void log.push("camera"),

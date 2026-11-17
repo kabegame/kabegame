@@ -11,6 +11,7 @@ import { particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { GpuScene } from "./scene";
+import { textureAnimationOverride } from "./sheets";
 import { SceneState } from "./state";
 import type { FrameInput } from "./uniforms";
 
@@ -315,5 +316,37 @@ describe("GpuScene：帧表共享计时器（P6e 点 2）", () => {
     scene.setSheetOverrides(null);
     show(state, 0);
     expect(frame(gpu, scene, state, 0.25, [0, 1])).toEqual([0, 0]);
+  });
+});
+
+describe("GpuScene：脱离的纹理动画（P6e 点 3）", () => {
+  it("脱离且在播的图层按自己的 rate 私有推进（stepParticles 里）、画自己的格；不碰共享计时器；隐藏时照常推进", async () => {
+    const { gpu, state, scene } = await open(2);
+    scene.setSheetOverrides((object) => textureAnimationOverride(state.textureAnimations.get(object)));
+    // 图层 1 脱离：私有 {0, 0}、在播、rate 2；帧时长 0.1，dt 0.06 × 2 = 0.12 每帧进一格
+    state.textureAnimations.set(1, { detached: true, playing: true, rate: 2, frame: 0, time: 0 });
+    expect(frame(gpu, scene, state, 0.06, [0, 1])).toEqual([0, 1]);
+    expect(frame(gpu, scene, state, 0.06, [0, 1])).toEqual([1, 2]);
+    // 隐藏图层 1：不画，但私有推进照常（rea-p6e-sheet 3.3，不看可见性）
+    hide(state, 1);
+    frame(gpu, scene, state, 0.06, [0]);
+    frame(gpu, scene, state, 0.06, [0]);
+    expect(state.textureAnimations.get(1)!.frame).toBe(0);
+    show(state, 1);
+    // 暂停：不推进；画当前私有格；共享计时器仍走自己的
+    state.textureAnimations.get(1)!.playing = false;
+    const shared = scene.sheetClockOf(0)!.frame;
+    expect(frame(gpu, scene, state, 0.25, [1])).toEqual([0]);
+    expect(frame(gpu, scene, state, 0.25, [0, 1])[1]).toBe(0);
+    expect(scene.sheetClockOf(0)!.frame).not.toBe(shared);
+  });
+
+  it("越界的私有帧号画第 0 格、负的走共享计时器（setFrame(99) / setFrame(-1)，p6e-api X2 / X3）", async () => {
+    const { gpu, state, scene } = await open(2);
+    scene.setSheetOverrides((object) => textureAnimationOverride(state.textureAnimations.get(object)));
+    state.textureAnimations.set(1, { detached: true, playing: false, rate: 1, frame: 99, time: 0 });
+    expect(frame(gpu, scene, state, 0.25, [0, 1])).toEqual([1, 0]);
+    state.textureAnimations.get(1)!.frame = -1;
+    expect(frame(gpu, scene, state, 0.25, [0, 1])).toEqual([2, 2]);
   });
 });

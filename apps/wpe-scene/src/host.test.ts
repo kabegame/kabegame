@@ -1047,6 +1047,7 @@ describe("SceneHost：视频纹理（P9a 步骤 2）", () => {
       (options as { beforeFirstFrame?: (state: unknown) => void }).beforeFirstFrame?.({
         adoptStructure() {},
         syncAnimationLayers() {},
+        adoptTextureAnimations() {},
       });
     });
     const report = reporter();
@@ -1302,6 +1303,7 @@ describe("SceneHost：登记表在建 GPU 场景之前建（L4）", () => {
       (options as { beforeFirstFrame?: (state: unknown) => void }).beforeFirstFrame?.({
         adoptStructure() {},
         syncAnimationLayers() {},
+        adoptTextureAnimations() {},
       });
     });
     const report = reporter();

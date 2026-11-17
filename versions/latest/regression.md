@@ -1,5 +1,17 @@
 # v4.7.0 regression
 
+## 场景壁纸图像层帧表的脚本控制（P6e 第 2 步：`ITextureAnimation`）
+
+2026-11-18 Windows dev。图像层的 `getTextureAnimation()` 不再报 `script:api:layer.getTextureAnimation`：返回的对象默认跟着纹理的共享计时器走；`pause` / `stop` / `setFrame` / 写 `rate ≠ 1` 让这个图层脱离，之后每帧在对象更新里（脚本之前、不看可见性）按 `g_Frametime × rate` 推进自己的帧号，画这个图层时所有帧表都画这一格（越界画第 0 格、负数改走共享计时器），`join()` 并回。状态在 `SceneState.textureAnimations`，跨单对象重编译与整场重载接回，图层删除或槽 0 换成用户纹理时清掉。成员、键序、每个对象一个原型、只读字段的报错、`rate` 只收 number、`setFrame` 只认 int32（其余当 0）、和 `getVideoTexture()` 共用一格、作废后读写都是 `undefined`，均照 WPE 实测。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：`script/textureAnimationApi.test.ts`（含按 `p6e-api` 的 WPE 日志 170 帧逐帧比 `getFrame` / `isPlaying` / `rate`、按 `p6e-rate` 比私有推进）、`render/p6e-sheets.test.ts`，以及 `src/host`、`src/dev`、`src/script`、`compile/scriptApi.test.ts`；`tsc` | 全过 | 2026-11-18 Claude：61 个文件 1012 条通过；`tsc` 0 错误；变异 12 处全部抓到 |
+| [x] | T2 脚本日志与 WPE 逐行比 | Windows dev，屏外宿主（dev 探针，`canvas` 1280×720，dt 取 WPE 日志） | `ignore/p6/e0/proj/p6e-api` 回放到 f317，`[kbp] p6e` 日志与 `ignore/p6/e0/out/api2-log.txt` 逐行比 | 相同（下面两行除外） | 2026-11-18 Claude：378 行里 376 行相同。`top`：模块顶层的 `thisLayer` / `thisObject` WPE 是 `null`、我们不是（脚本运行时原有的差异，与帧表无关）；`desc`：`frameCount` / `rate` 的属性描述 WPE 是数据属性、我们是访问器（同 `IAnimationLayer`，为了作废后读到 `undefined`） |
+| [x] | T3 脱离图层的画面 | 同上 | `p6e-api` 回放到 f306–f317，和 `ignore/p6/e0/out/png/wpe-api2-f*.png` 整帧比 | 0 差异 | 2026-11-18 Claude：六帧整帧 0 差异（停在第 2 格、越界画第 0 格、负帧号走共享、`stop`、正播与倒播的私有推进） |
+| [x] | T4 全库 | Node，`kbp corpus scan` / `diff` | 与第 1 步之后的结果比 | 只去掉 `script:api:layer.getTextureAnimation`，不新增键 | 2026-11-18 Claude：能渲染 205 → 214，本步解锁 8 张（3286859278、3319542538、3326873240、3400241651、3516174947、3524852519、3570560686、3826860299；另 1 张 3455121165 是同期别的会话的聚光阴影）；没有新增键，没有掉出 |
+| [ ] | T5 按钮类帧表场景 | Windows dev 预览 | 打开 3326873240 / 3400241651 / 3516174947（「夜莺Night」系列）、3570560686、3826860299 的预览，点几个开关按钮 | 按钮的帧随点击切换，和 WPE 一样 | 需要用户看 |
+
 ## 场景壁纸图像层帧表（P6e 第 1 步：编译与共享计时器）
 
 2026-11-18 Windows dev。图像层上的帧表（sprite sheet）纹理不再报 `tex:animation` / `combo:SPRITESHEET`：bundle 带上完整帧表（每格帧时长、所在图像、`Rotation` / `Translation`），渲染器给每张帧表纹理一份共享计时器，同 Wallpaper Engine 只在本帧第一次有 draw 画到这张纹理时按 `g_Frametime` 推进（每帧最多一格、余量截掉、总是循环），没画到的帧不推进也不补时间，再把这一格写进 draw 的 `g_Texture<n>Rotation` / `Translation`。帧表图层的 `autosize` 与合成 RT 取 TEXS 头里的格尺寸；TEXS0003 直接上屏的 UV 取 (1, 1)，合成路径的基础 pass 照 WPE 实测仍按「图像 / 纹理」。脚本的 `getTextureAnimation`、多图像帧表、文本 `anchor` 是后面几步，仍照报。
@@ -9,7 +21,7 @@
 | [x] | T1 单测与检查 | Windows | wpe-scene vitest：`render/sheets.test.ts`、`render/p6e-sheets.test.ts`、`compile/p6e-sheets.test.ts`、`render/graph.test.ts` 与改了期望的 `compile/sheet`、`refract`、`p12b2-tc`、`p2a`、`p8`；`tsc` | 全过 | 2026-11-18 Claude：9 个文件 223 条通过；`tsc` 0 错误；变异 12 处抓到 11 处，没抓到的是等价变异（版本 < 3 的帧表本来没有 gif 宽高） |
 | [x] | T2 推进节奏和 WPE 一致 | Windows dev，屏外宿主（dev 探针，`canvas` 1280×720，`particles.dts` 取 WPE 日志逐帧的 `engine.frametime`） | `ignore/p6/e0/proj/p6e-rate`（帧时长 0.1 / 0.02 / 0 的三张帧表）回放到 f228–f232，和 `ignore/p6/e0/out/png/wpe-rate-f*.png` 按区域逐像素比 | 帧表图层 0 差异 | 2026-11-18 Claude：三层五帧全部 0 差异（计数层不同是脚本调了第 2 步的 `getTextureAnimation`，预期） |
 | [x] | T3 NPOT、TEXS0002、旋转帧、autosize | 同上 | `p6e-tex-single`（`p6e-tex` 去掉多图像那层）用 `p6e-tex` 的 WPE 日志回放到 f192–f200 比 | N1–N4、R1 0 差异 | 2026-11-18 Claude：五层五帧全部 0 差异，含「带 effect 的 NPOT 帧表只画出格的左上一块」（WPE 实测） |
-| [ ] | T4 共享计时器的隐藏规则 | 同上 | `p6e-shared` 全部图层与 WPE 比 | 一隐一显同格；两个都隐不推进不补 | 第 1 步只比得了一直可见的 A、D（0 差异）；隐藏写在脚本里，要第 2 步的 `getTextureAnimation` 才跑得起来；单测已按 WPE 日志逐帧覆盖 |
+| [x] | T4 共享计时器的隐藏规则 | 同上 | `p6e-shared` 全部图层与 WPE 比 | 一隐一显同格；两个都隐不推进不补 | 2026-11-18 Claude（第 2 步之后，脚本跑得起来了）：f213–f236 七帧整帧 0 差异，脚本日志 237 行逐行相同 |
 | [x] | T5 全库 | Node，`kbp corpus scan` / `diff` | HEAD + 本步与基线比 | 只去掉 `tex:animation`、`combo:SPRITESHEET`，不新增键 | 2026-11-18 Claude：能渲染 199 → 205（2833017810、2916324703、3420277613、3662390671、3811424158、3818053626），两个键各去掉 20 张，没有新增，没有掉出；新解锁的 6 张冒烟渲染无不支持项、无脚本错误 |
 | [ ] | T6 新解锁的场景预览 | Windows dev 预览 | 打开上面 6 张的预览看一会儿 | 帧表在动，节奏和 WPE 一样；3818053626 开场约 10 s 是黑的开场动画 | 需要用户看 |
 

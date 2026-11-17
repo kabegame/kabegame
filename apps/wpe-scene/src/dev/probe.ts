@@ -112,6 +112,7 @@ import { fillCropEdges, scenePlacement } from "../render/layout";
 import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame } from "../render/camera";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput } from "../render/parallax";
 import { GpuScene, type ParticleProfile, type PreparedObject } from "../render/scene";
+import { textureAnimationOverride } from "../render/sheets";
 import { spriteScale } from "../render/sprite";
 import { SceneState } from "../render/state";
 import type { UserTextureProbe } from "../usertex/sources";
@@ -810,6 +811,8 @@ async function renderFramePass(
       size: target,
       ...(sized ? { target: sized.target } : {}),
     });
+    // 脱离的纹理动画图层画自己的帧（P6e 点 3，同宿主的 `sheetOverride`）；推进在 `stepParticles` 里
+    scene.setSheetOverrides((object) => textureAnimationOverride(state.textureAnimations.get(object)));
     // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器；profile 帧用第 0 项的指针
     const pointer = pointers.pointers[0];
     const cursor = pointers.cursors[0];
@@ -941,6 +944,7 @@ async function renderFramePass(
           ...(animations ? { animations } : {}),
           ...(puppets ? { puppets } : {}),
           ...(probeMedia ? { media: probeMedia } : {}),
+          sheetClock: (texture) => scene.sheetClockOf(texture),
         });
         await probeScripts.load();
       }
