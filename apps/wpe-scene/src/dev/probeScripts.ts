@@ -14,7 +14,8 @@
  * `Date` 与 `Math.random` 在 realm 建好之后、模块求值之前换掉（`installProbeClock` / `installProbeRandom`）。
  *
  * 要整场重编译的写入（`recompile` 目标、打开带不支持项的 effect、打开没有链的泛光）探针做不了：状态不变，按宿主同一条「值变了才算」
- * （`recordRecompileWrite`）记进结果的 `recompile`，调用方据此判断这一帧不可信。
+ * （`recordRecompileWrite`）记进结果的 `recompile`，调用方据此判断这一帧不可信。L6 起对象级的（路径 `objects/<i>/…`）在 `live` 给了 `recompile` 时
+ * 同宿主交给运行中的单对象重编译（`LiveObjects.recompile`），不再记进 `recompile`；场景级的（`general/…`）照旧记。
  *
  * `createLayer`（P6d3b → L5）：建壳、记结构之后交给 `live`（`probe.ts` 用宿主同一份 `LiveObjects` 接：命中片段缓存当场接进场景并装 GPU，没命中排给会话），
  * `init` 之后等排着的片段到齐、接上（`live.settle`，同宿主首次加载），每一帧脚本之前装上已经好了的（`live.drain`）。不给 `live` 时只建壳。
@@ -49,6 +50,13 @@ import {
 import { applyScriptedProperties } from "../script/initialApply";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "../script/stateWrite";
 import { createStructureObject, settleDestroyed, syncAllocator, type ObjectAllocator } from "../script/structure";
+import {
+  objectOverridesOf,
+  placementBone,
+  recompileObjectOf,
+  type ObjectOverrides,
+  type ObjectPlacement,
+} from "../script/createLayerChange";
 
 /** `renderFrame` 的 `scripts` 给对象时的选项：`clock` 是起点时刻（毫秒时间戳），`seed` 是 `Math.random` 的种子。 */
 export interface ProbeScriptsOptions {
@@ -322,6 +330,12 @@ export interface ProbeLiveHooks {
   settle(): Promise<void>;
   /** 每一帧脚本之前：接上已经好了的（同宿主 `beforeFrame` 开头的 `drain`） */
   drain(): void;
+  /**
+   * 对象级的重编译写入（L6，同宿主 `recompileWith`）：`overrides` 是这个对象累计的全部覆盖（路径相对对象），`placement` 是运行中的父与挂点骨骼名，
+   * `config` 是运行中建的对象的配置原文（别的对象为空串）。
+   * 不给时这类写入照旧记进结果的 `recompile`（探针做不了）。
+   */
+  recompile?(object: number, overrides: ObjectOverrides, placement: ObjectPlacement, config: string): void;
 }
 
 export interface ProbeScripts {
@@ -423,6 +437,17 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
     if (result === "recompile") {
       const path = targetKey(target);
       if (recordRecompileWrite(overrides, bundle.general, path, value)) {
+        // 对象级（L6）：同宿主交给运行中的单对象重编译（`init` 里写的在 `live.settle` 里接上），不记进 `recompile`
+        const object = recompileObjectOf(path);
+        if (object !== null && input.live?.recompile && state.layers.has(object)) {
+          input.live.recompile(
+            object,
+            objectOverridesOf(overrides, object),
+            { parent: state.layers.get(object)?.parent ?? null, bone: placementBone(bundle, structure, object) },
+            structure.created.find((item) => item.object === object)?.config ?? "",
+          );
+          return true;
+        }
         const item = recompile.get(path);
         if (item) {
           item.count++;

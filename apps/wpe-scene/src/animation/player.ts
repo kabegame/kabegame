@@ -192,6 +192,22 @@ function sameClock(a: AnimationClockParams, b: AnimationClockParams): boolean {
   return a.fps === b.fps && a.length === b.length && a.mode === b.mode;
 }
 
+/**
+ * 一条新条目接上同 `id` 的旧条目（`carryOver` 与 `replaceObjects` 共用）：关键帧逐项相同的通道复用旧的 `Channel`（整数帧缓存跟着来）；时钟参数相同时
+ * 拷 `t`、整个 `flags` 与 `rate`。
+ */
+function carryTrack(track: Track, before: Track): void {
+  track.channels = track.channels.map((channel, c) => {
+    const prior = before.channels[c];
+    return prior && sameKeys(prior.keys, channel.keys) ? prior : channel;
+  });
+  if (sameClock(track.def.clock, before.def.clock)) {
+    track.clock.t = before.clock.t;
+    track.clock.flags = before.clock.flags >>> 0;
+    track.rate = before.rate;
+  }
+}
+
 export class SceneAnimations {
   /** 条目按登记顺序：整场构造时是 `list` 的顺序，`add` 追加在尾（同整场重编译时新对象排在最后）。原地增删，不换引用。 */
   private readonly tracks: Track[] = [];
@@ -218,7 +234,7 @@ export class SceneAnimations {
   /**
    * 追加一批条目（L3b：一个对象的关键帧，也是整场构造的做法）：`list` 里联动的 `parent` 是 `list` 内下标（片段的形状，整场时就是表内下标）。
    * 新条目排在已有的后面，时钟从 0 起，建出的这一帧不求值（`frame` 下一次调时先推进再求值，L0 实测：f=90 读 0.5，f=91 读 dt/2）。
-   * 同一对象已有条目时由调用方先 `removeObjects`（替换）。
+   * 同一对象已有条目时由调用方先 `removeObjects`（替换；要按 `id` 接回时钟用 `replaceObjects`，L6）。
    */
   add(list: readonly SceneAnimation[]): void {
     const created = list.map((def, index): Track => {
@@ -408,16 +424,26 @@ export class SceneAnimations {
     const old = new Map(previous.tracks.map((track) => [track.def.id, track]));
     for (const track of this.tracks) {
       const before = old.get(track.def.id);
-      if (!before) continue;
-      track.channels = track.channels.map((channel, c) => {
-        const prior = before.channels[c];
-        return prior && sameKeys(prior.keys, channel.keys) ? prior : channel;
-      });
-      if (sameClock(track.def.clock, before.def.clock)) {
-        track.clock.t = before.clock.t;
-        track.clock.flags = before.clock.flags >>> 0;
-        track.rate = before.rate;
-      }
+      if (before) carryTrack(track, before);
+    }
+  }
+
+  /**
+   * 单对象重编译（L6）换掉这些对象的条目，并按 `id` 接回时钟：先记下要摘的条目（同 `id` 取登记在后的，同 `carryOver`），`removeObjects` 后 `add(list)`，
+   * 新条目里 `id` 相同的按 `carryOver` 的规则接（时钟参数相同才拷 `t` / `flags` / `rate`，关键帧相同的通道复用旧的），找不到的从 0 开始。新条目同
+   * `add` 排在表尾；已给出的控制对象照 `removeObjects` 作废（脚本的包装按 `id` 现取，接得上新条目）。
+   */
+  replaceObjects(objects: ReadonlySet<number>, list: readonly SceneAnimation[]): void {
+    const old = new Map<string, Track>();
+    for (const track of this.tracks)
+      if (track.def.object !== null && objects.has(track.def.object)) old.set(track.def.id, track);
+    this.removeObjects(objects);
+    const from = this.tracks.length;
+    this.add(list);
+    if (old.size === 0) return;
+    for (const track of this.tracks.slice(from)) {
+      const before = old.get(track.def.id);
+      if (before) carryTrack(track, before);
     }
   }
 

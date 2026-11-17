@@ -5,6 +5,10 @@
  * - `compileFragment`（`bundle.ts` 的编译会话）：对新对象真编一遍，按调用前后各表的长度切出片段与增量；
  * - `rekeyFragment(fragmentOf(bundle, i), 新下标)`：从整场 bundle 里取出模板对象的片段再改键（P6d4 的克隆）。
  *
+ * L6 起 `compileFragment` 也重编已有对象（单对象重编译，请求带 `overrides`）：片段形状同新对象，宿主拿它替换场景里的这个对象。判据同上：
+ * `compileFragment({ object: i, overrides: {} })` 等于 `fragmentOf(bundle, i)`，带覆盖时等于「带同样 `scriptOverrides` 整场编」的 `fragmentOf`
+ * （`ignore/live/l6/recompile.test.ts`）。
+ *
  * **位置相关的量不进片段**（组归属、组的子树、挂点、灯的遗留槽位都取决于运行中的父链与别的对象，由 L3 的运行时派生量现算）：
  * `group` 为 null、`subtree` 为 []、没有 `attachment`、`groupUpload` 为 null、灯 `legacySlot` 为 -1、effect 的 `unsupported` 不含
  * `GROUP_CHILD_FRAMEBUFFER`。这样同一个配置在任何位置的片段都一样，片段缓存（L5）才能按规整配置命中。
@@ -40,11 +44,17 @@ import { particleUsesAudio } from "../particles/audio";
 
 /** 运行中编一个对象的请求（L1；L2 起经 Worker 传）。 */
 export interface FragmentRequest {
-  /** `objects` 下标。L1 只收新下标（≥ 会话里的对象数，中间空位补 null）；已有下标（单对象重编译）L6 再做，现在抛错 */
+  /**
+   * `objects` 下标。新下标（≥ 会话里的对象数，中间空位补 null）是运行中建的新对象（L1）；已有下标是单对象重编译（L6），要带 `overrides`，
+   * 没带时抛错
+   */
   object: number;
-  /** 配置原文（JSON 文本）。数组配置编成分组节点，同 P6d3b 的 `structure.created` */
+  /** 配置原文（JSON 文本）。数组配置编成分组节点，同 P6d3b 的 `structure.created`。单对象重编译时不读（会话用开会话时留的原文） */
   config: string;
-  /** 单对象重编译的覆盖（L6），路径同 `scriptOverrides`；L1 只透传、不用 */
+  /**
+   * 单对象重编译的覆盖（L6）：这个对象累计的全部覆盖（不是增量），值同 `scriptOverrides`；路径**相对对象**（`font`、`effects/0/visible`），
+   * 不带 `objects/<i>/` 前缀。属性绑定的值不在这里，会话按 `properties` 取。新对象不读
+   */
   overrides?: Record<string, number[] | boolean | string>;
   /** 运行中的父（`objects` 下标）与挂点骨骼名：父写进 `parents[object]`，骨骼名写进对象 JSON 的 `attachment`（同 `structure.parents`） */
   parent: number | null;

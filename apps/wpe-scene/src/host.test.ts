@@ -338,7 +338,7 @@ class FakeRealm implements ScriptRealm {
   dispose() {}
 }
 
-/** 带一段脚本的场景；`fx` 绑在重编译目标上，用来触发重编译。 */
+/** 带一段脚本的场景；`fx` 绑在场景级重编译目标上，用来触发整场重编译（L6 起对象级的目标只重编那个对象）。 */
 function scriptedBundle(): SceneBundle {
   return {
     ...bundleFor({}),
@@ -346,7 +346,7 @@ function scriptedBundle(): SceneBundle {
     bindings: [
       {
         property: "fx",
-        target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" },
+        target: { kind: "recompile", reason: "layer-structure", path: "general/perspectiveoverridefov" },
       },
     ],
     scripts: {
@@ -741,7 +741,12 @@ describe("SceneHost：粒子 instanceoverride（P4a 步骤 5）", () => {
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
     host.applyUserProperties({ count: { type: "slider", value: 2 } });
     expect(rendererWrites.applyBindings).toHaveBeenCalledWith([{ binding, value: 2 }]);
-    expect(host.stats).toEqual({ applied: 1, recompiled: [], created: { sync: 0, async: 0, unsupported: 0 } });
+    expect(host.stats).toEqual({
+      applied: 1,
+      recompiled: [],
+      created: { sync: 0, async: 0, unsupported: 0 },
+      recompiledObjects: 0,
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(1);
     host.dispose();
@@ -841,7 +846,10 @@ describe("SceneHost：视频纹理（P9a 步骤 2）", () => {
     return {
       ...bundleFor({}),
       bindings: [
-        { property: "fx", target: { kind: "recompile", reason: "layer-structure", path: "objects/0/colorBlendMode" } },
+        {
+          property: "fx",
+          target: { kind: "recompile", reason: "layer-structure", path: "general/perspectiveoverridefov" },
+        },
       ],
       textures: names.map((name) =>
         name === "-"

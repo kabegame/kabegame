@@ -74,6 +74,7 @@ import { TextureDecodeCache } from "../compile/decode";
 import { FragmentCache, fragmentKey } from "../fragmentCache";
 import { cacheCopy, configBone, LiveObjects, rebindFragment, type LiveTarget } from "../script/createLayerChange";
 import { SceneTexts } from "../text/host";
+import { releaseTextLayout } from "../text/layout";
 import { FetchSceneReader } from "../compile/fs";
 import type {
   ScenePostprocessSetting,
@@ -477,7 +478,7 @@ export interface RenderFrameResult {
   /**
    * 运行中建层（L5）：只在给了 `scripts` 时有。`sync` / `async` / `unsupported` 同宿主 `stats.created`；`pending` 是读回时还没接上的（没命中缓存、
    * 片段赶不上读回帧）；`reloads` 是宿主会整场重载、探针做不了的原因（片段带 `sceneFlips`、编失败、装 GPU 出错）；`unsupportedKeys` 是运行中出现的
-   * 不支持项；`prewarmed` 是预跑编进缓存的配置数（没给 `prewarmFragments` 时 0）。
+   * 不支持项；`prewarmed` 是预跑编进缓存的配置数（没给 `prewarmFragments` 时 0）；`recompiles` 是单对象重编译（L6）真正向会话要片段的次数（合并之后的）。
    */
   liveCreate?: {
     sync: number;
@@ -487,6 +488,7 @@ export interface RenderFrameResult {
     reloads: string[];
     unsupportedKeys: string[];
     prewarmed: number;
+    recompiles: number;
   };
   /**
    * 每段视频纹理实际取的时刻（P9a 步骤 3，顺序同 bundle 纹理）：`time` 是 seek 完读回的 `currentTime`、`duration` 是时长（未知时 null）、
@@ -914,6 +916,9 @@ async function renderFramePass(
             } while (objects.queue.size > 0);
           },
           drain: () => void objects.drain(),
+          // 对象级的重编译写入（L6）：同宿主交给单对象重编译，片段到了在帧边界替换（`adopt` 走替换）
+          recompile: (object, overrides, placement, config) =>
+            void objects.recompile(object, overrides, placement, config),
         };
       }
       if (scriptsOptions) {
@@ -1157,6 +1162,7 @@ async function renderFramePass(
                 reloads,
                 unsupportedKeys: [...unsupportedKeys].sort(),
                 prewarmed: prewarm?.deltas.length ?? 0,
+                recompiles: live.recompileRequests,
               },
             }
           : {}),
@@ -1204,9 +1210,11 @@ interface ProbeLiveInput {
 }
 
 /**
- * 探针的运行中建层（L5）：宿主同一份 `LiveObjects`（两条路、缓存、队列），接进场景的那一侧照宿主 `addCompiledObject` 的顺序：登记表（没有时加）→ 状态的壳
- * 换成编好的 → 组与挂点 → 绑定按当前属性重写 → 关键帧 → puppet → 文本（排版异步）→ 脚本。GPU 直接调 `GpuScene`（探针没有渲染器）。声音、视频、用户纹理、
- * 媒体探针本来就不接，这里也不接。场景没有 puppet 图层时新建对象的骨骼动画不推进（探针的 puppet 运行时按 bundle 建，没有时不建）。
+ * 探针的运行中建层（L5）与单对象重编译（L6）：宿主同一份 `LiveObjects`（两条路、缓存、队列），接进场景的那一侧照宿主 `addCompiledObject(replace)` 的顺序：
+ * 登记表（没有时加、有时换）→ 状态换成编好的 → 组与挂点 → 绑定按当前属性重写 → 关键帧（按 id 接回时钟）→ puppet（先摘旧的）→ 文本（排版异步；替换已有
+ * 排版时旧的先留在状态里，新的换上时放掉）→ 脚本。GPU 直接调 `GpuScene`（探针没有渲染器），单对象重编译的片段带不支持项时卸掉旧的运行时。声音、视频、
+ * 用户纹理、媒体探针本来就不接，这里也不接。场景没有 puppet 图层时新建对象的骨骼动画不推进（探针的 puppet 运行时按 bundle 建，没有时不建）。宿主「片段
+ * 过期再编一次」的规则探针不做：一次回放里属性不变。
  */
 function createProbeLive(input: ProbeLiveInput): LiveObjects<PreparedObject> {
   const { registry, state, scene } = input;
@@ -1216,22 +1224,33 @@ function createProbeLive(input: ProbeLiveInput): LiveObjects<PreparedObject> {
     applyDelta: (delta) => registry.applyDelta(delta),
     adopt: ({ fragment }) => {
       const object = fragment.object;
+      const only = new Set([object]);
+      // 替换（L6）时先取旧排版：状态换对象会清掉它
+      const previousText = state.texts.get(object);
       if (registry.bundle.layers.some((layer) => layer.object === object)) registry.replaceObject(fragment);
       else registry.addObject(fragment);
       state.replaceObject(fragment);
       const structure = input.scripts()?.structure?.() ?? { parents: [] };
       registry.restructure(state, (item) => configBone(registry.bundle, structure, item));
       rebindFragment(state, fragment, input.properties);
-      input.animations?.add(fragment.animations);
+      // 关键帧按 id 接回时钟、puppet 先摘旧的（同宿主 `addCompiledObject(replace)`；L5 的壳没有这两样，摘不到什么）
+      input.animations?.replaceObjects(only, fragment.animations);
+      input.puppets?.remove(only);
       input.puppets?.add(puppetEntry(fragment.layer));
+      // 文本（同宿主）：替换一个已有排版的文本层时旧排版先放回状态（旧的运行时在新的装上之前照画、读它），新排版换进状态时才放掉原来那份
+      if (previousText && fragment.layer.text) state.setText(object, previousText);
+      else if (previousText) releaseTextLayout(previousText);
       let pending: Promise<void> = Promise.resolve();
       if (fragment.layer.text) {
         // 探针的文本准备（`probeTexts.ts`）不留实例：运行中建的文本层另开一套（图集和建场景时排的不是同一套，探针可以接受）
         const owner = (texts ??= new SceneTexts({ reader: input.reader }));
         pending = owner.layoutInCurrent(fragment.layer).then((layout) => {
           if (!layout) return;
-          if (state.layers.has(object)) state.setText(object, layout);
-          else owner.releaseLayout(layout);
+          if (state.layers.has(object)) {
+            const current = state.texts.get(object);
+            state.setText(object, layout);
+            if (current && current !== layout) owner.releaseLayout(current);
+          } else owner.releaseLayout(layout);
         });
       }
       input.scripts()?.adoptObject?.(fragment);
@@ -1246,6 +1265,8 @@ function createProbeLive(input: ProbeLiveInput): LiveObjects<PreparedObject> {
     unsupported: (_object, keys) => {
       for (const key of keys) input.unsupportedKeys.add(key);
     },
+    // 单对象重编译的片段带不支持项（L6）：旧的运行时卸掉，这个对象不画
+    removeGpu: (object) => scene.removeObject(object),
     reload: (reason) => void input.reloads.push(reason),
     properties: () => Object.fromEntries([...input.properties].map(([key, property]) => [key, property.value])),
   };
@@ -1291,11 +1312,15 @@ export function hostState(host: SceneHost): unknown {
   };
 }
 
-/** 计数：就地应用次数、重编译记录（含原因）、运行中建层（L5）、单图层重建，以及 `render()` 的 CPU 用时统计。 */
+/**
+ * 计数：就地应用次数、整场重编译记录（含原因）、运行中建层（L5）、交给单对象重编译的次数（L6，`recompiledObjects`）、单图层重建，以及 `render()` 的
+ * CPU 用时统计。
+ */
 export function hostStats(host: SceneHost): {
   applied: number;
   recompiled: { reason: string; keys: string[] }[];
   created: SceneHost["stats"]["created"];
+  recompiledObjects: number;
   rebuilds: { count: number; meanMs: number; maxMs: number };
   frameMs: { mean: number; p95: number };
 } {
@@ -1304,6 +1329,7 @@ export function hostStats(host: SceneHost): {
     applied: host.stats.applied,
     recompiled: host.stats.recompiled.map((item) => ({ ...item, keys: [...item.keys] })),
     created: { ...host.stats.created },
+    recompiledObjects: host.stats.recompiledObjects,
     rebuilds: rebuildSummary(renderer?.currentScene?.rebuildStats),
     frameMs: frameStats(renderer?.frameCosts ?? []),
   };

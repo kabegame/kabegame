@@ -5,19 +5,28 @@
  *   有回放时探针每一帧都画（`replayReadback` 的 `encodeFrame`，P10a 走查），前 n − 1 帧也是渲染器的完整顺序、各自编码提交；
  * - profile 帧不跑脚本；每一帧的 `g_Daytime` 跟着脚本的时钟；`screenResolution` 是 `canvas ?? window ?? [1920, 1080]`；
  * - 不给 `scripts` 时调用序列与加这一项之前相同（没有多的 `sync`、`g_Daytime` 0.5、结果没有 `scripts`）；
- * - `scripts` 与 `scriptValues` 同给、`scripts` 形状不对时编译之前就抛错；出错时也释放脚本环境。
+ * - `scripts` 与 `scriptValues` 同给、`scripts` 形状不对时编译之前就抛错；出错时也释放脚本环境；
+ * - 运行中建层（L5）与单对象重编译（L6）：经同一份 `LiveObjects` 接进场景，重编译的片段替换状态与 GPU、带不支持项时卸掉旧的运行时。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileScene, type SceneBundle } from "../compile/bundle";
 import { openSceneSession, type CompileSessionClient } from "../compile/client";
 import { normalizeConfig } from "../compile/config";
-import { objectSlice, rekeyFragment, type FragmentDelta, type FragmentRequest } from "../compile/fragment";
+import {
+  objectSlice,
+  rekeyFragment,
+  type FragmentDelta,
+  type FragmentRequest,
+  type ObjectFragment,
+} from "../compile/fragment";
 import { addShellObject } from "../script/structure";
 import type { SceneReader } from "../compile/fs";
 import type { SceneObject } from "../compile/model";
 import { acquireGpu } from "../render/device";
 import { GpuScene } from "../render/scene";
-import { renderFrame } from "./probe";
+import { hostStats, renderFrame } from "./probe";
+import type { SceneHost } from "../host";
+import type { SceneState } from "../render/state";
 import { createProbeScripts, DEFAULT_PROBE_CLOCK, probeDaytime, readProbeUserProperties } from "./probeScripts";
 import { prepareProbeTexts } from "./probeTexts";
 
@@ -82,10 +91,20 @@ function compile(): Promise<SceneBundle> {
 
 /** 会话替身（L5）收到的片段请求。 */
 let fragmentRequests: FragmentRequest[] = [];
+/** 单对象重编译（L6）的片段另加的字段（不支持项等）。 */
+let recompileExtra: Partial<ObjectFragment> = {};
 /**
- * 会话替身（L5）：片段请求按模板对象 0 现编（改键到请求的下标，配置按请求规整），增量为空（`from` 对齐当前表长）。
+ * 会话替身（L5）：片段请求按模板对象 0 现编（改键到请求的下标，配置按请求规整），增量为空（`from` 对齐当前表长）。单对象重编译（L6，带 `overrides`）
+ * 给同一下标的整场片段，图层尺寸换成 96×48（看得出换上的是重编的）。
  */
 function fakeSession() {
+  const empty = () => ({
+    programs: { from: bundle.programs.length, list: [] },
+    textures: { from: bundle.textures.length, list: [] },
+    userTextures: { from: bundle.userTextures?.length ?? 0, list: [] },
+    bindings: [],
+    assetPaths: [],
+  });
   return {
     close() {},
     stats: null,
@@ -93,6 +112,10 @@ function fakeSession() {
     exactConfigs: [],
     compileFragment: vi.fn(async (request: FragmentRequest): Promise<FragmentDelta> => {
       fragmentRequests.push(request);
+      if (request.overrides !== undefined) {
+        const slice = objectSlice(bundle, request.object)!;
+        return { fragment: { ...slice, layer: { ...slice.layer, size: [96, 48] }, ...recompileExtra }, ...empty() };
+      }
       const parsed = JSON.parse(request.config) as { id?: number };
       const fragment = rekeyFragment(objectSlice(bundle, 0)!, {
         object: request.object,
@@ -172,6 +195,7 @@ let bundle: SceneBundle;
 beforeEach(async () => {
   log = [];
   fragmentRequests = [];
+  recompileExtra = {};
   updates = [];
   updateFrames = [];
   failAt = null;
@@ -528,5 +552,116 @@ describe("renderFrame 的运行中建层（L5：会话、两条路、prewarmFrag
   it("prewarmFragments 不和 scripts 一起给：编译之前就抛错", async () => {
     await expect(renderFrame({ ...BASE, prewarmFragments: true })).rejects.toThrow("prewarmFragments");
     expect(log).toEqual([]);
+  });
+});
+
+describe("renderFrame 的单对象重编译（L6：探针同路）", () => {
+  /** GPU 装卸的替身记进 `log`（含卸掉）。 */
+  function withGpu() {
+    vi.mocked(GpuScene.build).mockImplementation(async () => {
+      log.push("build");
+      return {
+        ...fakeScene(),
+        prepareObjectSync: (layer: { object: number }) => ({ layer }),
+        prepareObject: async (layer: { object: number }) => {
+          log.push(`prepare ${layer.object}`);
+          return { layer };
+        },
+        installObject: (prepared: { layer: { object: number } }) => void log.push(`install ${prepared.layer.object}`),
+        removeObject: (object: number) => void log.push(`remove ${object}`),
+        discardPrepared: () => {},
+      } as unknown as GpuScene;
+    });
+  }
+
+  /**
+   * 脚本替身：`load` 里（同 `init`）对对象 0 连写两次对象级重编译目标，交给 `live.recompile`，再等 `live.settle()`（同真实现）。返回探针的状态与
+   * 写之前的图层状态。
+   */
+  function scriptsRecompiling() {
+    const seen: { state: SceneState | null; before: unknown; hook: boolean } = {
+      state: null,
+      before: null,
+      hook: false,
+    };
+    vi.mocked(createProbeScripts).mockImplementation((input) => {
+      seen.state = input.state;
+      seen.hook = typeof input.live?.recompile === "function";
+      return {
+        load: async () => {
+          log.push("load");
+          seen.before = input.state.layers.get(0);
+          const at = { parent: null, bone: null };
+          input.live?.recompile?.(0, { font: "a.ttf" }, at, "");
+          input.live?.recompile?.(0, { font: "b.ttf" }, at, "");
+          await input.live?.settle();
+        },
+        frame: () => void input.live?.drain(),
+        result: () => ({ frames: 0 }) as never,
+        dispose: () => {},
+      };
+    });
+    return seen;
+  }
+
+  it("init 里写的对象级目标：交给 live.recompile（在编时合并、到达后按最新的再发），片段换上状态与 GPU，都在首帧之前；不整场补编", async () => {
+    withGpu();
+    const seen = scriptsRecompiling();
+    const result = await renderFrame({ ...BASE, scripts: true });
+    expect(seen.hook).toBe(true);
+    expect(openSceneSession).toHaveBeenCalledTimes(1);
+    expect(fragmentRequests.map((request) => [request.object, request.overrides])).toEqual([
+      [0, { font: "a.ttf" }],
+      [0, { font: "b.ttf" }],
+    ]);
+    // 过期的那份不预热、不装；最新的那份到达时预热，接上时同步备好、替换装上
+    expect(log.slice(0, log.indexOf("sync"))).toEqual([
+      "compile",
+      "build",
+      "videoSink",
+      "properties",
+      "load",
+      "prepare 0",
+      "install 0",
+    ]);
+    expect(bundle.layers.find((layer) => layer.object === 0)!.size).toEqual([96, 48]);
+    expect(seen.state!.layers.get(0)).not.toBe(seen.before);
+    expect(result.liveCreate).toMatchObject({
+      sync: 0,
+      async: 0,
+      unsupported: 0,
+      pending: 0,
+      reloads: [],
+      recompiles: 2,
+    });
+  });
+
+  it("片段带不支持项：状态照替换，卸掉旧的 GPU 运行时（不画），记进 unsupportedKeys；场景不退回", async () => {
+    withGpu();
+    recompileExtra = { unsupported: ["text:x"] };
+    scriptsRecompiling();
+    const result = await renderFrame({ ...BASE, scripts: true });
+    expect(log).toContain("remove 0");
+    expect(log.some((line) => line.startsWith("install"))).toBe(false);
+    expect(result.liveCreate).toMatchObject({ unsupportedKeys: ["text:x"], reloads: [], unsupported: 0 });
+  });
+
+  it("片段带 sceneFlips：记进 reloads（宿主会整场重载，探针做不了），不替换", async () => {
+    withGpu();
+    recompileExtra = { sceneFlips: ["volumetrics"] };
+    scriptsRecompiling();
+    const result = await renderFrame({ ...BASE, scripts: true });
+    expect(result.liveCreate!.reloads).toEqual([
+      expect.stringContaining("重编译对象 0 翻转了场景级不变量（volumetrics）"),
+    ]);
+    expect(bundle.layers.find((layer) => layer.object === 0)!.size).not.toEqual([96, 48]);
+  });
+
+  it("hostStats 带 recompiledObjects（宿主交给单对象重编译的次数）", () => {
+    const host = {
+      stats: { applied: 2, recompiled: [], created: { sync: 0, async: 0, unsupported: 0 }, recompiledObjects: 3 },
+      devScene: { renderer: null },
+    } as unknown as SceneHost;
+    expect(hostStats(host)).toMatchObject({ applied: 2, recompiledObjects: 3 });
   });
 });

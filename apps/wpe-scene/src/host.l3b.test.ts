@@ -1,7 +1,8 @@
 /**
  * L3b 点 6：宿主的两个函数 `addCompiledObject` / `removeObjectEverywhere`（`.claude/plans/wpe-import/3-scene/live/phase-l3b-host-subsystems.md`）。
  * 各子系统桩掉，记调用顺序：
- * - 加：登记表（场景级增量 → 对象）→ 状态 → restructure → 关键帧 → puppet → 文本 → 脚本（refreshScripts → replayWritesFor）→ adoptBundle → …；replace 先摘旧的；
+ * - 加：登记表（场景级增量 → 对象）→ 状态 → restructure → 关键帧 → puppet → 文本 → 脚本（refreshScripts → replayWritesFor）→ adoptBundle → …；replace 先摘旧的
+ *   （关键帧 L6 起走 replaceObjects，按 id 接回时钟）；
  * - 删：声音 → 文本排版引用 → puppet → 关键帧 → 状态按对象的表 →（structural 才有）登记表 → restructure 一次；
  * - 删除生效处（`onDestroyed`）L4 起接 `structural: true`：不改组归属的删除摘登记表并 restructure，改组归属的只摘登记表、不 restructure、照旧整场重载；
  * - 真的关键帧 / puppet 建删 100 次后不留残留。
@@ -123,7 +124,7 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     expect(report.warn).toHaveBeenCalled();
   });
 
-  it("replace：先摘旧的关键帧 / puppet，登记表与状态走 replace；只给 fragment（没有场景级增量）时不调 applyDelta", async () => {
+  it("replace：关键帧走 replaceObjects（L6 按 id 接回时钟）、puppet 先摘旧的，登记表与状态走 replace；只给 fragment（没有场景级增量）时不调 applyDelta", async () => {
     const { host, log, stub } = makeHost();
     const previous = { mesh: null } as never;
     host.registry = stub("registry", {
@@ -139,7 +140,7 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
       addObject: () => {},
       replaceObject: () => {},
     });
-    host.sceneAnimations = stub("animations", { add: () => {}, removeObjects: () => {} });
+    host.sceneAnimations = stub("animations", { add: () => {}, removeObjects: () => {}, replaceObjects: () => {} });
     host.scenePuppets = stub("puppets", { add: () => {}, remove: () => {} });
     host.sceneTexts = stub("texts", { releaseLayout: () => {}, layoutInCurrent: async () => null });
     await host.addCompiledObject({ fragment: fragment(5) }, "replace");
@@ -147,8 +148,7 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
       "registry.replaceObject",
       "state.replaceObject",
       "registry.restructure",
-      "animations.removeObjects",
-      "animations.add",
+      "animations.replaceObjects",
       "puppets.remove",
       "puppets.add",
       // 旧排版的引用放回图集
@@ -180,6 +180,52 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     await host.addCompiledObject({ fragment: textFragment }, "add");
     expect(setText).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledWith(layout);
+  });
+
+  it("replace 文本层（L6 换字体）：旧排版先放回状态（旧的运行时照画要读），新排版回来换上之后才放掉旧的；排版不出来时旧的留着", async () => {
+    const { host } = makeHost();
+    const previous = { mesh: null, tag: "old" } as never;
+    const next = { mesh: null, tag: "new" } as never;
+    const texts = new Map<number, unknown>([[7, previous]]);
+    const layers = new Map<number, unknown>([[7, {}]]);
+    const release = vi.fn();
+    let answer: (layout: unknown) => void = () => {};
+    host.registry = {
+      bundle: { unsupported: [], configs: [], layers: [{ object: 7 }] },
+      applyDelta() {},
+      addObject() {},
+      replaceObject() {},
+      restructure: () => new Map(),
+    };
+    host.scriptState = {
+      texts,
+      layers,
+      addObject() {},
+      // 同 `SceneState.replaceObject`：清掉这个对象的排版
+      replaceObject: () => void texts.delete(7),
+      setText: (object: number, layout: unknown) => void texts.set(object, layout),
+    };
+    host.sceneTexts = {
+      releaseLayout: release,
+      layoutInCurrent: () => new Promise((resolve) => (answer = resolve)),
+    };
+    const textFragment = fragment(7, { layer: { object: 7, id: 8, text: {} } as never });
+    const done = host.addCompiledObject({ fragment: textFragment }, "replace");
+    // 新排版回来之前：状态里仍是旧的，没放
+    expect(texts.get(7)).toBe(previous);
+    expect(release).not.toHaveBeenCalled();
+    answer(next);
+    await done;
+    expect(texts.get(7)).toBe(next);
+    expect(release).toHaveBeenCalledWith(previous);
+    expect(release).toHaveBeenCalledTimes(1);
+    // 排版不出来（缺字体等）：旧的留在状态里、不放
+    release.mockClear();
+    const again = host.addCompiledObject({ fragment: textFragment }, "replace");
+    answer(null);
+    await again;
+    expect(texts.get(7)).toBe(next);
+    expect(release).not.toHaveBeenCalled();
   });
 
   it("没有场景（登记表或状态没建）时抛错", () => {

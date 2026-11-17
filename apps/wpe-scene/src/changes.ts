@@ -6,6 +6,8 @@
  *
  * - `create`：`push` 时立刻向会话要片段（会话在 Worker 里串行处理）。片段到达后**按 push 的先后一个接一个**交给 `arrive`（场景级增量进登记表：
  *   增量的 `from` 要和登记表的表长对齐，不能乱序），再交给 `warm`（在 GPU 上预热这个对象要的程序与管线，不碰正在画的；可以并行）。
+ * - `recompile-object`（L6，单对象重编译）：和 `create` 同一条路（要片段、按先后到达、预热），只是请求的是已有对象带累计覆盖的重编。同一对象的合并
+ *   （在编时又写了）由调用方（`LiveObjects.recompile`）管，队列不认对象。
  * - `install`：GPU 异步备好的对象（命中缓存但不能同步备好、文本层等排版），`task` 是备它的 Promise。
  * - `reload`：整场重载（编片段失败、片段带 `sceneFlips`、装的时候出错，由调用方转成这一种）。
  *
@@ -14,21 +16,36 @@
  */
 import type { FragmentDelta } from "./compile/fragment";
 
-/** 宿主的场景变更（L5）：对象级改动排进来，编好的在下一帧 beforeFrame 开头（脚本之前）按先后装上；场景级的整场重载。 */
+/**
+ * 宿主的场景变更（L5）：对象级改动排进来，编好的在下一帧 beforeFrame 开头（脚本之前）按先后装上；场景级的整场重载。
+ * `recompile-object`（L6）：已有对象按累计覆盖重编（`overrides` 路径相对对象，同 `FragmentRequest.overrides`），`parent` / `bone` 是发请求时运行中的父与
+ * 挂点骨骼名；`config` 只有运行中建的对象带（它的配置原文：命中片段缓存当场接进场景的对象会话没见过，按它登记原文），其余为空串。
+ */
 export type SceneChange =
   | { kind: "create"; object: number; config: string; parent: number | null; bone: string | null }
+  | {
+      kind: "recompile-object";
+      object: number;
+      overrides: Record<string, number[] | boolean | string>;
+      parent: number | null;
+      bone: string | null;
+      config: string;
+    }
   | { kind: "install"; object: number }
   | { kind: "reload"; reason: string };
 
 export type CreateChange = Extract<SceneChange, { kind: "create" }>;
+export type RecompileChange = Extract<SceneChange, { kind: "recompile-object" }>;
+/** 要向会话要片段的两种：新对象（L5）与单对象重编译（L6）。 */
+export type CompileChange = CreateChange | RecompileChange;
 
 export interface SceneChangeHooks {
   /** 向会话要片段（会话自己串行）。 */
-  compile(change: CreateChange): Promise<FragmentDelta>;
+  compile(change: CompileChange): Promise<FragmentDelta>;
   /** 片段到达（按 push 的先后，一个接一个，同步）：场景级增量进登记表。抛错时这一项失败（交给 `drain` 的 `fail`）。 */
-  arrive(change: CreateChange, delta: FragmentDelta): void;
+  arrive(change: CompileChange, delta: FragmentDelta): void;
   /** 到达之后的预热（异步，可以并行；不该抛错，抛了也只当预热失败、不影响这一项）。没有 GPU 场景时直接返回。 */
-  warm?(change: CreateChange, delta: FragmentDelta): Promise<void>;
+  warm?(change: CompileChange, delta: FragmentDelta): Promise<void>;
 }
 
 type Settled = { ok: true; value: unknown } | { ok: false; error: unknown };
@@ -58,7 +75,7 @@ export class SceneChangeQueue {
   }
 
   /**
-   * 排进一项。`create` 立刻向会话要片段；`install` 要给备它的 `task`；`reload` 当场就绪。队列已 `dispose` 时什么都不做（`task` 的结果没人收，
+   * 排进一项。`create` / `recompile-object` 立刻向会话要片段；`install` 要给备它的 `task`；`reload` 当场就绪。队列已 `dispose` 时什么都不做（`task` 的结果没人收，
    * 调用方负责：换场景时旧场景整个销毁）。
    */
   push(change: SceneChange, task?: Promise<unknown>): void {
@@ -112,7 +129,7 @@ export class SceneChangeQueue {
   }
 
   /**
-   * 帧边界（`beforeFrame` 开头）：按先后把已经好了的项交出去，队首没好就停。`apply` 收成功的（`create` 收 `FragmentDelta`，`install` 收备好的对象，
+   * 帧边界（`beforeFrame` 开头）：按先后把已经好了的项交出去，队首没好就停。`apply` 收成功的（`create` / `recompile-object` 收 `FragmentDelta`，`install` 收备好的对象，
    * `reload` 收 undefined），`fail` 收失败的。返回交出去的项数。
    */
   drain(

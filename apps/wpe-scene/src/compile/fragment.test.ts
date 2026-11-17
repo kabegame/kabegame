@@ -4,7 +4,8 @@
  * - 不支持项只记在记录器里，编完会话恢复原样、`settled()` 不变；
  * - `fragmentBlocker` 的四条；
  * - 用 `getEffect` 的脚本让 `sceneFlips` 含 `effect-access`；
- * - 已有下标抛错、`finalize` 前后的调用顺序。
+ * - 已有下标不带 `overrides` 抛错、`finalize` 前后的调用顺序；
+ * - 单对象重编译（L6）：`overrides: {}` 等于 `fragmentOf`，带覆盖等于带同样 `scriptOverrides` 整场编的 `fragmentOf`；旧条目摘掉、`configs` 不变。
  * 全语料的对照在 `ignore/live/l1/fragments.test.ts`。
  */
 import { describe, expect, it, vi } from "vitest";
@@ -309,7 +310,7 @@ describe("会话：整场编译不变", () => {
     await expect(session.finalize()).rejects.toThrow("只能调一次");
   });
 
-  it("已有下标（单对象重编译）抛错，L6 再做", async () => {
+  it("已有下标不带 overrides 仍抛错（单对象重编译要带 overrides，L6）", async () => {
     const { session } = await open();
     await expect(
       session.compileFragment({
@@ -319,7 +320,7 @@ describe("会话：整场编译不变", () => {
         bone: null,
         properties: {},
       }),
-    ).rejects.toThrow("L6");
+    ).rejects.toThrow("overrides");
   });
 });
 
@@ -567,5 +568,122 @@ describe("语料覆盖不到的位置规整与过滤", () => {
     expect(bundle.scripts.list.some((item) => item.owner.kind === "animation-layer")).toBe(false);
     const b = rekeyFragment(fragmentOf(bundle, 0)!, { object: 5, id: 900030, parent: null });
     expect(comparable(delta.fragment)).toEqual(comparable(b));
+  });
+});
+
+describe("单对象重编译（L6）", () => {
+  /** 带 `scriptOverrides` 整场编（判据：带同样覆盖整场编的 `fragmentOf`）。 */
+  async function openWith(scriptOverrides: Record<string, number[] | boolean | string>, objects: unknown[] = OBJECTS) {
+    const session = await openCompileSession({
+      projectDir: "P:/p",
+      sceneAssets: [ASSETS],
+      reader: reader(files(objects)),
+      translator,
+      postprocess: "disabled",
+      reflection: "disabled",
+      exhaustive: true,
+      scriptOverrides,
+    });
+    return { session, bundle: await finish(session) };
+  }
+  const recompile = (session: SceneCompileSession, object: number, overrides: Record<string, unknown> = {}) =>
+    session.compileFragment({
+      object,
+      config: "",
+      overrides: overrides as Record<string, number[] | boolean | string>,
+      parent: null,
+      bone: null,
+      properties: {},
+    });
+
+  for (const object of [0, 1, 2, 3, 4, 5, 6, 7, 8]) {
+    it(`overrides 为空：片段等于整场的 fragmentOf（对象 ${object}）`, async () => {
+      const { session, bundle } = await open();
+      // B 先取：重编会往会话的表里追加
+      const b = fragmentOf(bundle, object)!;
+      const layer = bundle.layers.find((item) => item.object === object)!;
+      const delta = await session.compileFragment({
+        object,
+        config: "",
+        overrides: {},
+        parent: layer.parent,
+        bone: null,
+        properties: {},
+      });
+      expect(comparable(delta.fragment)).toEqual(comparable(b));
+      expect(delta.fragment.layer.object).toBe(object);
+      expect(delta.fragment.sceneFlips).toEqual([]);
+    });
+  }
+
+  it("旧条目摘掉：会话的图层表里这个对象只剩新编的一个（find 找到新的）；声音、灯同理；configs 不变", async () => {
+    const { session, bundle } = await open();
+    const configs = [...bundle.configs!];
+    const before = bundle.layers.find((item) => item.object === 3)!;
+    const sound = await recompile(session, 3);
+    expect(bundle.layers.filter((item) => item.object === 3)).toEqual([sound.fragment.layer]);
+    expect(bundle.layers.find((item) => item.object === 3)).not.toBe(before);
+    expect(bundle.sounds!.filter((item) => item.object === 3)).toEqual([sound.fragment.sound]);
+    await recompile(session, 4);
+    expect(bundle.lightObjects!.filter((item) => item.object === 4)).toEqual([]);
+    // 再编一次照样只有一个；配置原文（`getInitialLayerConfig`）不变
+    const again = await recompile(session, 3, { volume: 0.5 });
+    expect(bundle.layers.filter((item) => item.object === 3)).toEqual([again.fragment.layer]);
+    expect(bundle.configs).toEqual(configs);
+  });
+
+  it("overrides 的相对路径套到对象字段与 effect 常量上：等于带同样 scriptOverrides 整场编的 fragmentOf", async () => {
+    const overrides = { origin: [1, 2, 3], "effects/1/passes/0/constantshadervalues/multiply": [2] };
+    const expected = await openWith({
+      "objects/0/origin": [1, 2, 3],
+      "objects/0/effects/1/passes/0/constantshadervalues/multiply": [2],
+    });
+    const b = fragmentOf(expected.bundle, 0)!;
+    const { session } = await open();
+    const a = (await recompile(session, 0, overrides)).fragment;
+    expect(comparable(a)).toEqual(comparable(b));
+    expect(a.layer.origin).toEqual([1, 2, 3]);
+    // 绑脚本的常量（带 `value` 的对象）只换 `value`：脚本仍在
+    expect(a.scripts.map((item) => item.id)).toContain("objects/0/effects/1/passes/0/constantshadervalues/multiply");
+  });
+
+  it("每次从原文起套：上一次的覆盖不残留（覆盖是这个对象累计的全部，由调用方给全）", async () => {
+    const { session, bundle } = await open();
+    const original = fragmentOf(bundle, 0)!;
+    await recompile(session, 0, { origin: [5, 5, 5] });
+    const back = (await recompile(session, 0, {})).fragment;
+    expect(comparable(back)).toEqual(comparable(original));
+  });
+
+  it("配置里没写 id 的对象：新图层沿用旧图层的 id（整场编时按表内位置发的）", async () => {
+    const objects = [OBJECTS[3], { name: "no-id", image: "models/a.json" }];
+    const { session, bundle } = await open(objects);
+    const before = bundle.layers.find((item) => item.object === 1)!;
+    expect(before.id).toBe(1);
+    const a = (await recompile(session, 1)).fragment;
+    expect(a.layer.id).toBe(before.id);
+  });
+
+  it("运行中建的对象：会话编过的按它的配置原文重编；会话没见过的（L5 命中缓存）按请求带来的 config 登记", async () => {
+    const config = JSON.stringify({ ...OBJECTS[0], id: 777 });
+    const { session } = await open();
+    const created = await session.compileFragment({ object: 20, config, parent: null, bone: null, properties: {} });
+    const again = await recompile(session, 20);
+    expect(comparable(again.fragment)).toEqual(comparable(created.fragment));
+    // 另一个会话：没编过 21，请求带 config
+    const other = await open();
+    const fresh = await other.session.compileFragment({
+      object: 21,
+      config,
+      overrides: { origin: [9, 9, 9] },
+      parent: null,
+      bone: null,
+      properties: {},
+    });
+    expect(fresh.fragment.layer.origin).toEqual([9, 9, 9]);
+    expect(fresh.fragment.layer.id).toBe(777);
+    expect(other.bundle.configs![21]).toBe(created.fragment.config);
+    // 没见过、也没带 config：抛错
+    await expect(recompile(other.session, 30)).rejects.toThrow("没有原文");
   });
 });

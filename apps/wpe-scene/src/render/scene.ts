@@ -537,6 +537,24 @@ interface ParticleTree {
   framebuffer: boolean;
 }
 
+/**
+ * 两份粒子定义（`SceneLayer.particle`，编译产物，纯数据）相同（L6）：单对象重编译替换粒子层时，相同就沿用旧的粒子树。按键排序的 JSON 比（新编的片段与
+ * 旧的键的插入顺序一般相同，排序只为不依赖它）。
+ */
+export function sameParticleDefinition(a: SceneLayer["particle"], b: SceneLayer["particle"]): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const sorted = (_key: string, value: unknown): unknown =>
+    value && typeof value === "object" && !Array.isArray(value) && !ArrayBuffer.isView(value)
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map((key) => [key, (value as Record<string, unknown>)[key]]),
+        )
+      : value;
+  return JSON.stringify(a, sorted) === JSON.stringify(b, sorted);
+}
+
 /** 实例化 draw 的顶点缓冲第一次按多少个粒子分配（不超过系统的 `maxcount`，`particleUnits`）。 */
 const INSTANCE_UNITS_MIN = 64;
 
@@ -2756,6 +2774,11 @@ export class GpuScene {
     prepared: ReadonlyMap<DrawLike, PreparedDraw>,
     state: SceneState,
     worlds: Map<number, Mat4>,
+    /**
+     * 沿用的粒子树（L6，`installCore` 替换同一对象且粒子定义相同时给）：模拟器（粒子、计时、脚本控制、事件实例）与控制点输入照旧，只换成新图层与
+     * 新资源、模板与 draw 重建；不给时新建并预热（`createParticleTree`）。
+     */
+    reuse: ParticleTree | null = null,
   ): { ops: Op[]; draws: Draw[]; tree: ParticleTree | null } {
     const { layer, resources } = runtime;
     this.ensureComposites(runtime, plan);
@@ -2768,7 +2791,9 @@ export class GpuScene {
       const steps = plan.steps.filter((step): step is ParticleStep => step.kind === "particles");
       if (!steps.length) return { ops, draws, tree: null };
       // 整棵树一起建、一起预热；`renderer: []` 的系统要帧缓冲时同样拷快照（它没有步骤，`wantsSnapshot` 看不到）
-      const tree = this.createParticleTree(layer, resources, state);
+      const tree = reuse
+        ? { ...reuse, layer, resources, templates: new Map<string, ParticleTemplate>() }
+        : this.createParticleTree(layer, resources, state);
       if (tree.framebuffer) this.ensureSnapshot();
       for (const step of steps) {
         // 同一系统的各 renderer 步骤（P4f 步骤 4）在计划里连着、同一个模板路径，收进同一个模板
@@ -3407,6 +3432,7 @@ export class GpuScene {
    * 同步装上一个备好的对象（L4）：`LayerRuntime` → `layerByObject` / 独占 fbo / 变形纹理 / 被依赖层的独占 RT 进表 → 粒子序号、挂点 → `buildLayer`
    * （合成 RT、draw、粒子树预热）→ `install` → 变体段失败时冻结 → 阴影投射者 → 粒子索引扩容。`encode` 读的是装好的整体，半装的状态画不到。
    * 同一对象已有运行时（L5 的替换）时先卸掉旧的，粒子树的脚本暂停 / 停止接回新树；别的图层引用旧的被依赖层独占 RT 的 draw 不重绑（L5 定）。
+   * L6（单对象重编译）：新旧图层的粒子定义相同（`sameParticleDefinition`）时沿用旧的粒子树（模拟状态、脚本控制都在，不预热），只重建 draw。
    * 出错时回滚本次加的（运行时、draw、索引、fbo 引用、投射者），抛 `SceneRenderError`，由调用方整场重载。
    * **只能在帧边界调**：`sync` 之前或 `encode` 之后（L5 定具体时机）。
    */
@@ -3460,9 +3486,14 @@ export class GpuScene {
         this.stamps ??= new WorldStamps();
       }
       this.attachedLayers = null;
-      const built = this.buildLayer(runtime, prepared.plan, prepared.prepared, state, worlds);
+      // 替换同一对象（L6 单对象重编译）而粒子定义没变（重编译的是它身上别的字段）：沿用旧的粒子树，粒子不重来；变了才新建、预热，接回脚本暂停 / 停止
+      const reuse =
+        previousTree && layer.particle && sameParticleDefinition(previousTree.layer.particle, layer.particle)
+          ? previousTree
+          : null;
+      const built = this.buildLayer(runtime, prepared.plan, prepared.prepared, state, worlds, reuse);
       this.install(runtime, built);
-      if (previousTree && built.tree) built.tree.system.adoptScriptControl(previousTree.system);
+      if (previousTree && built.tree && !reuse) built.tree.system.adoptScriptControl(previousTree.system);
       if (typeof prepared.variants === "string") this.freezeVariants(layer, state, prepared.variants);
       if (prepared.shadows) this.installShadowCasters(runtime, prepared.shadows, state);
       this.ensureParticleIndices(this.particleCapacityOf(layer, prepared.plan));

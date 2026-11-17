@@ -3,7 +3,8 @@
  * - 新加的条目建出那一帧不写，下一帧写 `dt` 处的值（L0 的 K2：f=90 读静态值 0.5，f=91 读 dt 处的值）；
  * - 联动的主人是条目不是下标：前面的对象增删之后，后面对象的联动照样借父的时钟；
  * - 删除后 `control(id)` 为 null、已给出的控制对象作废（方法空操作、读值留在摘掉那一刻）；
- * - 整场构造 = 逐对象 `add`：每帧写出的值与事件序列逐位相同（全语料对照在 `ignore/live/l3b/subsystems.test.ts`）。
+ * - 整场构造 = 逐对象 `add`：每帧写出的值与事件序列逐位相同（全语料对照在 `ignore/live/l3b/subsystems.test.ts`）；
+ * - L6 `replaceObjects`：同 id、时钟参数相同的接回 t / flags / rate（之后的写入与没替换过的逐位相同），不同的从 0 开始。
  */
 import { describe, expect, it } from "vitest";
 import type { SceneBinding } from "../compile/bindings";
@@ -197,5 +198,90 @@ describe("SceneAnimations.add / removeObjects（L3b）", () => {
     expect(b.writes).toEqual(a.writes);
     expect(eventsB).toEqual(eventsA);
     expect(eventsA.length).toBeGreaterThan(0);
+  });
+});
+
+describe("SceneAnimations.replaceObjects（L6）", () => {
+  /** 两个对象各一条：对象 1 的那条是要被替换的。 */
+  const two = () => [
+    anim(0, "alpha"),
+    anim(1, "alpha", { clock: { fps: 24, length: 48, mode: 1, startpaused: false } }),
+  ];
+
+  it("同 id、时钟参数相同：接回 t / flags / rate，之后每帧写出的值与没替换过的逐位相同；别的对象不受影响", () => {
+    const replaced = new SceneAnimations(two());
+    const reference = new SceneAnimations(two());
+    const a = recorder();
+    const b = recorder();
+    for (let i = 0; i < 37; i++) {
+      replaced.frame(DT, a.state);
+      reference.frame(DT, b.state);
+    }
+    // 脚本改过的速率与暂停状态也接回来
+    replaced.control("objects/1/alpha")!.rate = 2;
+    reference.control("objects/1/alpha")!.rate = 2;
+    replaced.replaceObjects(new Set([1]), [two()[1]]);
+    a.writes.length = 0;
+    b.writes.length = 0;
+    for (let i = 0; i < 60; i++) {
+      replaced.frame(DT, a.state);
+      reference.frame(DT, b.state);
+    }
+    const sorted = (writes: [string, SceneScalar][]) => [...writes].sort((x, y) => x[0].localeCompare(y[0]));
+    expect(sorted(a.writes)).toEqual(sorted(b.writes));
+    expect(replaced.control("objects/1/alpha")!.rate).toBe(2);
+    expect(replaced.control("objects/1/alpha")!.getFrame()).toBe(reference.control("objects/1/alpha")!.getFrame());
+  });
+
+  it("暂停的接回来还是暂停（flags 整个拷）", () => {
+    const players = new SceneAnimations(two());
+    const { state } = recorder();
+    for (let i = 0; i < 10; i++) players.frame(DT, state);
+    players.control("objects/1/alpha")!.pause();
+    const frame = players.control("objects/1/alpha")!.getFrame();
+    players.replaceObjects(new Set([1]), [two()[1]]);
+    for (let i = 0; i < 10; i++) players.frame(DT, state);
+    expect(players.control("objects/1/alpha")!.isPlaying()).toBe(false);
+    expect(players.control("objects/1/alpha")!.getFrame()).toBe(frame);
+  });
+
+  it("不同 id、时钟参数变了：从 0 开始（同新加的条目）；已给出的控制对象作废", () => {
+    const players = new SceneAnimations(two());
+    const { state } = recorder();
+    for (let i = 0; i < 30; i++) players.frame(DT, state);
+    const old = players.control("objects/1/alpha")!;
+    players.replaceObjects(new Set([1]), [
+      anim(1, "brightness"),
+      // 同 id 但 fps 变了：不接
+      anim(1, "alpha", { clock: { fps: 30, length: 48, mode: 1, startpaused: false } }),
+    ]);
+    expect(players.control("objects/1/brightness")!.getFrame()).toBe(0);
+    expect(players.control("objects/1/alpha")!.getFrame()).toBe(0);
+    expect(players.control("objects/1/alpha")).not.toBe(old);
+    // 对象 0 的不动
+    expect(players.control("objects/0/alpha")!.getFrame()).toBeGreaterThan(0);
+  });
+
+  it("联动：父与子一起换，新子借新父的（接回来的）时钟", () => {
+    const list = [anim(1, "alpha", { parent: 1 }), anim(1, "brightness")];
+    const replaced = new SceneAnimations(list);
+    const reference = new SceneAnimations(list);
+    const a = recorder();
+    const b = recorder();
+    for (let i = 0; i < 20; i++) {
+      replaced.frame(DT, a.state);
+      reference.frame(DT, b.state);
+    }
+    replaced.replaceObjects(
+      new Set([1]),
+      list.map((item) => ({ ...item })),
+    );
+    a.writes.length = 0;
+    b.writes.length = 0;
+    for (let i = 0; i < 20; i++) {
+      replaced.frame(DT, a.state);
+      reference.frame(DT, b.state);
+    }
+    expect(a.writes).toEqual(b.writes);
   });
 });

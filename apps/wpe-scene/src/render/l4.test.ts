@@ -6,7 +6,8 @@
  * - 建删 100 次之后 `owned`、`targets`、fbo 池、投射者、粒子序号等全部回到基线；
  * - 粒子索引缓冲：先装小 `maxcount` 再装大的，缓冲重建、旧 draw 编码时用新缓冲；
  * - `prepareObjectSync`：管线就绪时不建新管线；缺管线时同步建；缺程序时返回 null、什么都不建；
- * - `installObject` 中途失败（`createTarget` 抛）回滚：运行时、索引、draw 都不含它，fbo 引用不涨。
+ * - `installObject` 中途失败（`createTarget` 抛）回滚：运行时、索引、draw 都不含它，fbo 引用不涨；
+ * - L6：`installObject` 替换同一对象时粒子定义相同沿用旧的粒子树（之后每帧和没替换过的逐位相同），不同就新建、接回脚本暂停 / 停止。
  * 搭法同 `p6d3.test.ts` / `rebuild.test.ts`。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +29,14 @@ import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { ParticleSystem } from "../particles/system";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { SceneRenderError } from "./errors";
-import { buildableLayers, GpuScene, pipelineKey, type PipelineSpec, type PreparedObject } from "./scene";
+import {
+  buildableLayers,
+  GpuScene,
+  pipelineKey,
+  sameParticleDefinition,
+  type PipelineSpec,
+  type PreparedObject,
+} from "./scene";
 import { SceneState } from "./state";
 import type { FrameInput } from "./uniforms";
 
@@ -893,5 +901,68 @@ describe("installObject 中途失败回滚（L4）", () => {
     expect(() => other.scene.installObject(prepared, other.state)).toThrow(SceneRenderError);
     live.scene.discardPrepared(prepared);
     expect(counts(live.scene)).toEqual(before);
+  });
+});
+
+describe("installObject 替换同一对象（L6 单对象重编译）", () => {
+  /** 宿主替换的那一步：bundle 里换成新图层、状态 `replaceObject`，再备好、装上。 */
+  async function replaceWith(live: Live, layer: SceneLayer): Promise<void> {
+    const at = live.bundle.layers.findIndex((item) => item.object === layer.object);
+    live.bundle.layers[at] = layer;
+    live.state.replaceObject({ layer });
+    live.scene.installObject(await live.scene.prepareObject(layer, live.state), live.state);
+  }
+  const systemOf = (live: Live, object: number) => internals(live.scene).trees.get(object)!.system;
+  const columnsOf = (live: Live, object: number) => particleColumns(live.scene).find(([item]) => item === object);
+
+  it("粒子定义相同：沿用旧的粒子树（同一个模拟器，不预热），粒子数与年龄连续——之后每帧和没替换过的逐位相同；draw 重建、指向新图层", async () => {
+    const replaced = await full(mixed());
+    const reference = await full(mixed());
+    for (let i = 0; i < 6; i++) {
+      frame(replaced.gpu, replaced.scene, replaced.state);
+      frame(reference.gpu, reference.scene, reference.state);
+    }
+    const system = systemOf(replaced, 2);
+    const columns = columnsOf(replaced, 2);
+    expect(columns![1]).toBeGreaterThan(0);
+    const oldDraws = [...internals(replaced.scene).draws].filter((item) => item.object === 2);
+    const fresh = particleLayer(2);
+    await replaceWith(replaced, fresh);
+    expect(systemOf(replaced, 2)).toBe(system);
+    expect(columnsOf(replaced, 2)).toEqual(columns);
+    const draws = [...internals(replaced.scene).draws].filter((item) => item.object === 2);
+    expect(draws.length).toBe(oldDraws.length);
+    expect(draws.some((item) => oldDraws.includes(item))).toBe(false);
+    expect(draws.every((item) => item.layer === fresh)).toBe(true);
+    for (let i = 0; i < 4; i++) {
+      const a = frame(replaced.gpu, replaced.scene, replaced.state);
+      const b = frame(reference.gpu, reference.scene, reference.state);
+      expect(a).toEqual(b);
+      expect(particleColumns(replaced.scene)).toEqual(particleColumns(reference.scene));
+    }
+    expect(snapshot(replaced.scene)).toEqual(snapshot(reference.scene));
+  });
+
+  it("粒子定义不同：新建树、按新定义预热，旧树的脚本暂停 / 停止接回新树", async () => {
+    const live = await full(mixed());
+    for (let i = 0; i < 3; i++) frame(live.gpu, live.scene, live.state);
+    const system = systemOf(live, 2);
+    system.scriptPause();
+    await replaceWith(live, particleLayer(2, { maxcount: 24 }));
+    const next = systemOf(live, 2);
+    expect(next).not.toBe(system);
+    expect(next.columns.capacity).toBe(24);
+    expect(next.scriptIsPlaying()).toBe(false);
+  });
+
+  it("sameParticleDefinition：同样的编译产物（键序不同也算）相同，任一字段不同就不同", () => {
+    const a = particleLayer(2).particle;
+    const b = particleLayer(2).particle;
+    expect(sameParticleDefinition(a, b)).toBe(true);
+    const reordered = Object.fromEntries(Object.entries(b!).reverse()) as typeof b;
+    expect(sameParticleDefinition(a, reordered)).toBe(true);
+    expect(sameParticleDefinition(a, particleLayer(2, { maxcount: 17 }).particle)).toBe(false);
+    expect(sameParticleDefinition(a, null)).toBe(false);
+    expect(sameParticleDefinition(null, null)).toBe(true);
   });
 });

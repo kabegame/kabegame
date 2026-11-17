@@ -1,9 +1,9 @@
 /**
  * 活的场景图 L5 点 1：变更队列（`changes.ts`）。片段乱序到达也按 push 的先后 `arrive`；`drain` 严格按先后、队首没好就停；失败交给 `fail`；
- * `dispose` 之后不再 `arrive` / `warm`，交还已经备好的 `install`。
+ * `dispose` 之后不再 `arrive` / `warm`，交还已经备好的 `install`。L6：`recompile-object` 走同一条要片段的路。
  */
 import { describe, expect, it } from "vitest";
-import { SceneChangeQueue, type CreateChange } from "./changes";
+import { SceneChangeQueue, type CreateChange, type RecompileChange } from "./changes";
 import type { FragmentDelta } from "./compile/fragment";
 
 function deferred<T>() {
@@ -105,6 +105,45 @@ describe("SceneChangeQueue", () => {
       () => void seen.push("fail"),
     );
     expect(seen).toEqual(["create", "prepared", "reload"]);
+  });
+
+  it("recompile-object（L6）：和 create 同一条路——立刻要片段、按 push 的先后到达、预热，drain 交出 FragmentDelta", async () => {
+    const compiles = new Map<number, ReturnType<typeof deferred<FragmentDelta>>>();
+    const log: string[] = [];
+    const queue = new SceneChangeQueue({
+      compile: (change) => {
+        const item = deferred<FragmentDelta>();
+        compiles.set(change.object, item);
+        log.push(`compile ${change.kind} ${change.object}`);
+        return item.promise;
+      },
+      arrive: (change) => void log.push(`arrive ${change.kind} ${change.object}`),
+      warm: async (change) => void log.push(`warm ${change.object}`),
+    });
+    const recompile: RecompileChange = {
+      kind: "recompile-object",
+      object: 4,
+      overrides: { font: "a.ttf" },
+      parent: null,
+      bone: null,
+      config: "",
+    };
+    queue.push(create(1));
+    queue.push(recompile);
+    expect(log).toEqual(["compile create 1", "compile recompile-object 4"]);
+    compiles.get(4)!.resolve(delta(4));
+    await flush();
+    // 重编的先回也要等前面的建层到达
+    expect(log).toHaveLength(2);
+    compiles.get(1)!.resolve(delta(1));
+    await queue.settled();
+    expect(log.slice(2)).toEqual(["arrive create 1", "warm 1", "arrive recompile-object 4", "warm 4"]);
+    const seen: string[] = [];
+    queue.drain(
+      (change, value) => void seen.push(`${change.kind} ${(value as FragmentDelta).fragment.object}`),
+      () => {},
+    );
+    expect(seen).toEqual(["create 1", "recompile-object 4"]);
   });
 
   it("dispose：交还已经备好的 install、之后到达的不再 arrive / warm、push 不收", async () => {

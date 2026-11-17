@@ -421,11 +421,11 @@ describe("串行与失败", () => {
   it("compileFragment 抛错后会话变坏：该请求与之后的请求都回 broken", async () => {
     const { open, fragment, find } = harness();
     await open();
-    // 已有下标（单对象重编译在 L6）抛错
+    // 已有下标不带 overrides（单对象重编译要带，L6）抛错
     const bad = fragment(MODEL_CONFIG(90), 0);
     await bad.done;
     expect(find("fragment-error", bad.id)[0]).toMatchObject({ broken: true });
-    expect(find("fragment-error", bad.id)[0].message).toContain("L6");
+    expect(find("fragment-error", bad.id)[0].message).toContain("overrides");
     const next = fragment(MODEL_CONFIG(91), objectCount);
     await next.done;
     const error = find("fragment-error", next.id)[0];

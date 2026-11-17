@@ -1,5 +1,18 @@
 # v4.7.0 regression
 
+## 场景壁纸运行中单对象重编译（活的场景图 L6）
+
+2026-11-17 Windows dev。要重编译才生效的对象级改动（脚本写文本层的 `font` 等非运行中字段、属性面板改 `size` / `colorBlendMode`、打开带不支持项或在冻结图层上的 effect）不再整场重新加载：宿主按路径分级（`objects/<i>/…` 对象级、`general/…` 场景级），对象级交给 `LiveObjects.recompile`（和 `createLayer` 同一条队列），编译会话按开会话时留的原文套这个对象累计的覆盖重编（`compileFragment` 带 `overrides`），片段到达后下一帧开头替换：登记表 / 状态 / 子系统按对象换（关键帧按 `id` 接回时钟，文本旧排版留到新排版回来），GPU `installObject` 替换同一对象、粒子定义没变时沿用旧粒子树。同一对象在编期间再写只记最新一份、到达后按最新再编一次（最后一次胜出）。`init` 里写的（语料 13608 / 15019 的 `font`）片段到齐接进还没换上的 bundle，不再整场编第二次。场景级（`general/hdr`）、被依赖的图层、带体积光的灯、整场重载进行中新场景还没换上时的写入照旧整场。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T0 单测与检查 | Windows | wpe-scene vitest（compile / script / dev / animation / render / text、`changes`、`fragmentCache`、全部 `host.*`）、`tsc`、prettier | 0 error；全过 | 2026-11-17 Claude：188 文件 3823 条通过（111 skipped）；我复跑 L6 相关 11 个文件 281 条；执行代理 6 条 + 我 5 条变异全部抓到 |
+| [x] | T1 会话对照与全语料不变 | Windows | `ignore/live/l6/recompile.test.ts`（全语料前 20 个对象空覆盖重编 vs `fragmentOf`；13608 / 15019 的 `font` 覆盖 vs 带同样 `scriptOverrides` 整场编）；编译摘要、L3 登记表、L3b 子系统对照；`scriptCorpus` 236 张 | 0 不同；全同；`scriptCorpus` 236/236 不变（它没有会话，对象级写入仍记在 `recompile` 里） | 2026-11-17 Claude：2572 个对象 0 不同（26 个带 `fragmentBlocker` 的也比了）、`font` 23 个对象 0 不同、`sceneFlips` 只有 5 个 `volumetrics`；编译摘要 233 同哈希；登记表 / 子系统全 0；`scriptCorpus` 236 相同、0 不同 |
+| [x] | T2 脚本换字体只编一个对象 | Windows dev 预览 | `ignore/live/l6/proj/live-font`（文本 T 第 60 帧 `thisLayer.font = 'systemfont_comicsans'`，粒子 P 一直发射） | 只有一次「开始渲染」；`recompiledObjects: 1`、`recompiled: []`；第 61 帧起读回 comicsans、画面是 Comic Sans；P 的粒子不重来 | 2026-11-17 Claude：一次「开始渲染」（390 ms）；`stats.recompiledObjects: 1`、`recompiled: []`；日志 `f=61/62/90/180 font systemfont_comicsans`；截图字形是 Comic Sans；P `alive 301 = highWater 301`，粒子条连续；帧时间 0.32 ms |
+| [x] | T3 `init` 里写字体的真实场景 | Windows dev 预览 | 创意工坊 15019（`init` 里 5 处 `font`） | 只有一次「开始渲染」；`recompiledObjects: 5`、`recompiled: []`；时钟文字照常显示 | 2026-11-17 Claude：一次「开始渲染」（66 层，1760 ms）；`recompiledObjects: 5`、`recompiled: []`；6 个文本层在、时钟显示；13608 因 `script:api:layer.getTextureAnimation` 本就退回预览图，看不了 |
+| [ ] | T4 属性面板改对象级设置 | Windows dev 预览 | 找一张 `size` / `colorBlendMode` 绑属性、或带不支持项 effect 绑开关的场景，在属性面板改 | 只重编那个对象，别的图层的粒子 / 动画不重来；连拖几次只以最后一次为准 | 语料里没有这类绑定（L0 统计），只有单测覆盖（`host.l6.test.ts` 属性分流 6 条）；未真机 |
+| [ ] | T5 整场重载进行中的写入 | Windows dev 预览 | 改 `general/hdr`（整场重载）的同时脚本写对象级目标 | 新场景换上前的写入随重载生效；换上之后的交给单对象重编译 | 单测覆盖（「重载进行中照旧整场」）；未真机 |
+
 
 ## 场景壁纸运行中建层走片段（活的场景图 L1–L5）
 

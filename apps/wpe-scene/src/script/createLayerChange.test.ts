@@ -3,13 +3,24 @@
  * - 命中缓存：改键（新下标、id、父）→ adopt → 同步备好 → 装上，都在 `create` 返回之前；同步备不好、文本层排 install，下一次 drain 装上；
  * - 没命中：排 create → 会话编 → 到达（场景级增量进登记表、预热）→ drain：adopt → GPU → 进缓存；到达前已删只进缓存；
  * - sceneFlips、编失败、装失败 → reload；不支持项：不装 GPU、上报、计数；
- * - `rebindFragment`：不挂脚本的目标写当前属性值、挂脚本的不写；`configBone`。
+ * - `rebindFragment`：不挂脚本的目标写当前属性值、挂脚本的不写、挡下的交给 `onBlocked`；`configBone`；
+ * - 单对象重编译（L6 点 2）：请求带累计覆盖、父、骨骼；到达后 drain 走替换（adopt → GPU），不进缓存、不计建层的数；在编时再写只记最新的，交出来时
+ *   丢掉这份按最新的再发（连写 10 次只编 2 次、最后一次胜出）；到达前已删丢弃；不支持项卸 GPU 并上报；sceneFlips / 编失败 reload；
+ *   `recompileObjectOf` / `objectOverridesOf` / `placementBone`。
  */
 import { describe, expect, it } from "vitest";
 import type { SceneLayer } from "../compile/bundle";
 import type { FragmentDelta, FragmentRequest, ObjectFragment } from "../compile/fragment";
 import { fragmentKey } from "../fragmentCache";
-import { configBone, LiveObjects, rebindFragment, type LiveTarget } from "./createLayerChange";
+import {
+  configBone,
+  LiveObjects,
+  objectOverridesOf,
+  placementBone,
+  rebindFragment,
+  recompileObjectOf,
+  type LiveTarget,
+} from "./createLayerChange";
 
 const TEMPLATE_CONFIG = { name: "bar", image: "models/a.json", origin: "1 2 3" };
 const KEY = fragmentKey(JSON.stringify(TEMPLATE_CONFIG))!;
@@ -98,6 +109,7 @@ function harness(
     discard: (prepared) => void log.push(`discard ${prepared.layer.object} ${prepared.tag}`),
     warm: async (layer) => void log.push(`warm ${layer.object}`),
     unsupported: (_object, keys) => void unsupported.push([...keys]),
+    removeGpu: (object) => void log.push(`removeGpu ${object}`),
     reload: (reason) => void reloads.push(reason),
     properties: () => ({ p: 1 }),
   };
@@ -323,5 +335,214 @@ describe("rebindFragment / configBone", () => {
     const bundle = { configs: [null, JSON.stringify({ attachment: "head" }), "{}"] };
     expect(configBone(bundle, { parents: [[1, 0, null]] }, 1)).toEqual({ name: "head", override: true });
     expect(configBone(bundle, { parents: [] }, 2)).toEqual({ name: null, override: false });
+  });
+});
+
+describe("LiveObjects 单对象重编译（L6）", () => {
+  /** 会话由用例控制何时回：`pending` 里按发出的先后。 */
+  function controlled() {
+    const pending: { request: FragmentRequest; resolve(delta: FragmentDelta): void; reject(error: Error): void }[] = [];
+    const h = harness({
+      compile: (request) => new Promise((resolve, reject) => pending.push({ request, resolve, reject })),
+    });
+    return { ...h, pending };
+  }
+  const at = { parent: null, bone: null };
+
+  it("请求带累计覆盖、运行中的父与骨骼、配置、当前属性；到达后 drain：替换（adopt → 同步备好 → 装上），不进缓存、不计建层的数", async () => {
+    const { live, log, objects, requests, adopted } = harness();
+    objects.add(3);
+    expect(live.recompile(3, { font: "a.ttf", "effects/0/visible": true }, { parent: 1, bone: "head" })).toBe("queued");
+    expect(requests).toEqual([
+      {
+        object: 3,
+        config: "",
+        overrides: { font: "a.ttf", "effects/0/visible": true },
+        parent: 1,
+        bone: "head",
+        properties: { p: 1 },
+      },
+    ]);
+    await live.settled();
+    expect(log).toEqual(["applyDelta 3", "warm 3"]);
+    live.drain();
+    expect(log).toEqual(["applyDelta 3", "warm 3", "adopt 3", "prepareSync 3", "install 3 sync"]);
+    expect(adopted.map((item) => item.object)).toEqual([3]);
+    expect(live.cache.size).toBe(0);
+    expect(live.stats).toEqual({ sync: 0, async: 0, unsupported: 0 });
+    expect(live.recompileRequests).toBe(1);
+    expect(live.recompilingObject(3)).toBe(false);
+    // 运行中建的对象带它的配置原文
+    live.recompile(3, {}, at, configOf(42));
+    expect(requests[1].config).toBe(configOf(42));
+  });
+
+  it("同一对象连写 10 次只编 2 次：在编时只记最新的，交出来时丢掉这份、按最新的再发；最后一次胜出", async () => {
+    const { live, objects, adopted, pending, log } = controlled();
+    objects.add(3);
+    expect(live.recompile(3, { font: "f0" }, at)).toBe("queued");
+    for (let i = 1; i < 10; i++) expect(live.recompile(3, { font: `f${i}` }, at)).toBe("merged");
+    expect(pending.map((item) => item.request.overrides)).toEqual([{ font: "f0" }]);
+    pending[0].resolve(deltaOf(fragment(3, { config: "f0" })));
+    await flush();
+    // 标了脏的不预热
+    expect(log).toEqual(["applyDelta 3"]);
+    live.drain();
+    expect(adopted).toEqual([]);
+    expect(pending.map((item) => item.request.overrides)).toEqual([{ font: "f0" }, { font: "f9" }]);
+    pending[1].resolve(deltaOf(fragment(3, { config: "f9" })));
+    await flush();
+    live.drain();
+    expect(adopted.map((item) => item.config)).toEqual(["f9"]);
+    expect(live.recompileRequests).toBe(2);
+    // 换上之后再写：重新排，不算合并
+    expect(live.recompile(3, { font: "f10" }, at)).toBe("queued");
+    expect(pending).toHaveLength(3);
+  });
+
+  it("到达前对象已删：丢弃（不 adopt、不预热、不装），在编状态清掉", async () => {
+    const { live, log, objects } = harness();
+    objects.add(3);
+    live.recompile(3, {}, at);
+    objects.delete(3);
+    await live.settled();
+    live.drain();
+    expect(log).toEqual(["applyDelta 3"]);
+    expect(live.recompilingObject(3)).toBe(false);
+  });
+
+  it("不支持项：adopt 照做（状态与登记表照替换），卸掉旧的 GPU 运行时、上报键，不计建层的 unsupported", async () => {
+    const { live, log, objects, unsupported } = harness({
+      compile: async (request) => deltaOf(fragment(request.object, { unsupported: ["effect:x"] })),
+    });
+    objects.add(3);
+    live.recompile(3, {}, at);
+    await live.settled();
+    live.drain();
+    expect(log).toEqual(["applyDelta 3", "adopt 3", "removeGpu 3"]);
+    expect(unsupported).toEqual([["effect:x"]]);
+    expect(live.stats.unsupported).toBe(0);
+  });
+
+  it("没有 GPU 场景（首次加载 init 期间）：只 adopt，不卸、不装", async () => {
+    const { live, log, objects } = harness({
+      gpu: false,
+      compile: async (request) => deltaOf(fragment(request.object, { unsupported: ["effect:x"] })),
+    });
+    objects.add(3);
+    live.recompile(3, {}, at);
+    await live.settled();
+    live.drain();
+    expect(log).toEqual(["applyDelta 3", "adopt 3"]);
+  });
+
+  it("sceneFlips、编失败：reload；在编状态清掉，之后再写重新排", async () => {
+    const flips = harness({
+      compile: async (request) => deltaOf(fragment(request.object, { sceneFlips: ["volumetrics"] })),
+    });
+    flips.objects.add(3);
+    flips.live.recompile(3, {}, at);
+    await flips.live.settled();
+    flips.live.drain();
+    expect(flips.reloads).toEqual([expect.stringContaining("翻转了场景级不变量（volumetrics）")]);
+    expect(flips.reloads[0]).toContain("重编译对象 3");
+    const failing = controlled();
+    failing.objects.add(3);
+    failing.live.recompile(3, {}, at);
+    failing.pending[0].reject(new Error("会话坏了"));
+    await failing.live.settled();
+    failing.live.drain();
+    expect(failing.reloads).toEqual([expect.stringContaining("会话坏了")]);
+    expect(failing.live.recompile(3, {}, at)).toBe("queued");
+  });
+
+  it("文本层：替换也一律异步装（等排版）", async () => {
+    const { live, log, objects } = harness({
+      compile: async (request) => {
+        const text = fragment(request.object);
+        text.layer.text = {} as never;
+        return deltaOf(text);
+      },
+    });
+    objects.add(3);
+    live.recompile(3, {}, at);
+    await live.settled();
+    live.drain();
+    await live.settled();
+    live.drain();
+    expect(log).toEqual([
+      "applyDelta 3",
+      "warm 3",
+      "adopt 3",
+      "prepare 3",
+      "prepareSync 3",
+      "discard 3 async",
+      "install 3 sync",
+    ]);
+    expect(live.stats).toEqual({ sync: 0, async: 0, unsupported: 0 });
+  });
+
+  it("dispose：在编的放弃，之后再写不排", async () => {
+    const { live, objects, pending } = controlled();
+    objects.add(3);
+    live.recompile(3, {}, at);
+    live.dispose();
+    expect(live.recompilingObject(3)).toBe(false);
+    live.recompile(3, {}, at);
+    expect(pending).toHaveLength(1);
+  });
+});
+
+describe("单对象重编译的辅助（L6）", () => {
+  it("recompileObjectOf：objects/<i>/… 是对象级，general/… 是场景级", () => {
+    expect(recompileObjectOf("objects/12/font")).toBe(12);
+    expect(recompileObjectOf("objects/3/effects/0/visible")).toBe(3);
+    expect(recompileObjectOf("general/hdr")).toBeNull();
+    expect(recompileObjectOf("general/bloom")).toBeNull();
+    expect(recompileObjectOf("general.hdr")).toBeNull();
+  });
+
+  it("objectOverridesOf：只取这个对象的，去掉 objects/<i>/ 前缀", () => {
+    const overrides = new Map<string, number[] | boolean | string>([
+      ["objects/3/font", "a.ttf"],
+      ["objects/3/effects/1/visible", true],
+      ["objects/30/font", "b.ttf"],
+      ["general/hdr", true],
+    ]);
+    expect(objectOverridesOf(overrides, 3)).toEqual({ font: "a.ttf", "effects/1/visible": true });
+    expect(objectOverridesOf(overrides, 4)).toEqual({});
+  });
+
+  it("placementBone：换过父取最后一次记下的骨骼，没换过取配置原文的 attachment", () => {
+    const bundle = { configs: [null, JSON.stringify({ attachment: "head" })] };
+    expect(placementBone(bundle, { parents: [] }, 1)).toBe("head");
+    const twice: [number, number | null, string | null][] = [
+      [1, 0, "arm"],
+      [1, 0, null],
+    ];
+    expect(placementBone(bundle, { parents: twice }, 1)).toBeNull();
+    expect(placementBone(bundle, { parents: [[1, 0, "arm"]] }, 1)).toBe("arm");
+  });
+
+  it("rebindFragment：挡下的交给 onBlocked（片段过期，L6）", () => {
+    const blocked: string[] = [];
+    const state = {
+      needsRecompile: (binding: { target: { field?: string } }) => binding.target.field === "visible",
+      write: () => {},
+    };
+    const fragmentValue = fragment(7, {
+      bindings: [
+        // alpha 挂了脚本（夹具的缺省脚本），不写；color 不挂脚本
+        { property: "c", target: { kind: "layer", object: 7, field: "color" } },
+        { property: "v", target: { kind: "layer", object: 7, field: "visible" } },
+      ],
+    } as Partial<ObjectFragment>);
+    const properties = new Map([
+      ["c", { type: "color", value: "1 0 0" }],
+      ["v", { type: "bool", value: false }],
+    ]);
+    const onBlocked = (binding: { property: string }) => void blocked.push(binding.property);
+    expect(rebindFragment(state as never, fragmentValue, properties, onBlocked)).toBe(1);
+    expect(blocked).toEqual(["v"]);
   });
 });

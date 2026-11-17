@@ -1368,6 +1368,23 @@ class EffectIssues extends Set<string> {
 export const EMPTY_STRUCTURE: SceneStructure = { destroyed: [], parents: [], created: [] };
 
 /**
+ * 把一条写入覆盖套进 JSON：开会话时整场的 `scriptOverrides` 从 `scene` 起套（路径 `objects/<i>/…`、`general/…`），单对象重编译（L6）的
+ * `FragmentRequest.overrides` 从对象起套（路径相对对象，`font`、`effects/0/visible`）。路径中途断了就不套；向量写成空格分隔的字符串；
+ * 原值是带 `value` 的对象（绑属性的字段）时只换 `value`。
+ */
+function applyOverride(root: unknown, path: string, value: number[] | boolean | string): void {
+  const parts = path.split("/");
+  let parent: unknown = root;
+  for (const part of parts.slice(0, -1)) parent = (parent as Record<string, unknown> | undefined)?.[part];
+  if (!parent || typeof parent !== "object") return;
+  const key = parts.at(-1)!;
+  const old = (parent as Record<string, unknown>)[key];
+  const next = Array.isArray(value) ? value.join(" ") : value;
+  (parent as Record<string, unknown>)[key] =
+    old && typeof old === "object" && "value" in old ? { ...old, value: next } : next;
+}
+
+/**
  * 配置原文经 `normalizeConfig` 的数值规整无损（L5，`SceneCompileSession.exactConfigs`）：每个非整数的有限数按 8 位有效数字取回仍是它自己。
  * 有损的对象（全库 54 个，L1）规整后编出的片段和按原文编的在少数常量末几位不同，不能拿整场 bundle 的片段预置缓存。
  */
@@ -1404,7 +1421,10 @@ export interface SceneCompileSession {
   compileObject(index: number): Promise<void>;
   /** 原收尾，只调一次；之后才能 `compileFragment` */
   finalize(): Promise<SceneBundle>;
-  /** 运行中编一个新对象的片段与增量（`finalize` 之后） */
+  /**
+   * 运行中编一个对象的片段与增量（`finalize` 之后）：新下标是新对象（L1）；已有下标带 `overrides` 是单对象重编译（L6，按开会话时留的原文套覆盖重编，
+   * 没有 `overrides` 时抛错）
+   */
   compileFragment(request: FragmentRequest): Promise<FragmentDelta>;
   /**
    * 能拿整场 bundle 的片段预置缓存的对象（L5，`finalize` 之后）：开会话时在场景里、没删掉、配置原文经规整无损（{@link losslessConfig}）、
@@ -1470,6 +1490,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   const createdConfigs = new Map<number, string>();
   /** 新建对象的配置原文（解析后，L5 的 `exactConfigs` 判无损用；数组配置在 `scene.objects` 里换成了 `{}`） */
   const createdRaw = new Map<number, unknown>();
+  /** 新建对象的配置原文（文本，L6 单对象重编译取原文用；开会话时的 `structure.created` 与之后 `compileFragment` 新建的都记） */
+  const createdTexts = new Map<number, string>();
   for (const { object: at, config } of structure.created) {
     if (!Number.isInteger(at) || at < loadedLength) continue;
     let parsed: unknown;
@@ -1481,6 +1503,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     const objects = scene.objects as unknown[];
     while (objects.length <= at) objects.push(null);
     createdRaw.set(at, parsed);
+    createdTexts.set(at, config);
     if (Array.isArray(parsed)) {
       // 数组配置：编成一个分组节点（`{}`，照常进 `layers`），配置原文仍是数组
       createdConfigs.set(at, normalizeConfig(parsed));
@@ -1497,17 +1520,24 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   const exactAtOpen = scene.objects.map(
     (object, at) => configs[at] !== null && losslessConfig(createdRaw.has(at) ? createdRaw.get(at) : object),
   );
-  for (const [path, value] of Object.entries(input.scriptOverrides ?? {})) {
-    const parts = path.split("/");
-    let parent: unknown = scene;
-    for (const part of parts.slice(0, -1)) parent = (parent as Record<string, unknown> | undefined)?.[part];
-    if (!parent || typeof parent !== "object") continue;
-    const key = parts.at(-1)!;
-    const old = (parent as Record<string, unknown>)[key];
-    const next = Array.isArray(value) ? value.join(" ") : value;
-    (parent as Record<string, unknown>)[key] =
-      old && typeof old === "object" && "value" in old ? { ...old, value: next } : next;
-  }
+  /**
+   * 单对象重编译（L6）的原文：开会话时、套 `scriptOverrides` / 删除 / 换父之前的对象 JSON（和 `configs` 同一时刻），每次给一份新的深拷，由调用方套
+   * 这个对象累计的覆盖。`scene.json` 里的对象第一次用到时从场景原文重新解析一遍（只解析一次，之后逐个深拷），运行中建的对象取它的配置原文
+   * （数组配置同 `scene.objects` 换成 `{}`）。只在会话里，不进 bundle；不重编译的会话不付任何代价。
+   */
+  let pristine: unknown[] | null = null;
+  const originalOf = (at: number): SceneObject | null => {
+    const text = createdTexts.get(at);
+    if (text !== undefined) {
+      const parsed: unknown = JSON.parse(text);
+      return Array.isArray(parsed) ? {} : isSceneObject(parsed) ? parsed : null;
+    }
+    if (at >= loadedLength) return null;
+    pristine ??= parseScene(sceneText).objects as unknown[];
+    const object = pristine[at];
+    return isSceneObject(object) ? structuredClone(object) : null;
+  };
+  for (const [path, value] of Object.entries(input.scriptOverrides ?? {})) applyOverride(scene, path, value);
   // 运行中删掉的对象（P6d3）：这一项当作不存在，保持下标对齐；之后所有读 `scene.objects` 的地方都跳过不是对象的项
   for (const index of structure.destroyed)
     if (Number.isInteger(index) && index >= 0 && index < scene.objects.length)
@@ -3301,6 +3331,9 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
    * 运行中编一个新对象的片段与增量（L1，`fragment.ts`；`finalize` 之后）。按整场编译的顺序做一遍单对象版的收集：脚本（带绑定）→ 灯 → 关键帧 →
    * 能力检查 → `compileOne` → 收尾里和这个对象有关的部分，再按调用前后各表的长度切出片段与增量。
    *
+   * 单对象重编译（L6）：已有下标且带 `overrides` 时，取开会话时留的原文（`originalOf`）套上 `overrides` 换进场景，先从会话的 `bundle.layers` /
+   * 声音表 / 灯表摘掉这个对象的旧条目，之后和新对象走同一条单对象管线；`configs[at]` 不动。父与挂点骨骼两种都照请求。
+   *
    * 会话的表继续增长（程序、纹理、绑定、脚本、关键帧、声音、图层都追加在同一批数组里）；不支持项只记在 `unsupported.recorder` 里，编完把调用前
    * 没有的键从会话集合里删掉，所以之后编片段不受影响、`settled()` 也不会误判。编译期间 `settled()` 恒为假：片段要编全，退不退回由宿主按
    * `unsupported` 与 `sceneFlips` 决定。组归属、子树、挂点、灯的遗留槽位取决于运行中的父链与别的对象，不进片段（`finalize` 里与它们有关的
@@ -3310,17 +3343,45 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     if (!finalized) throw new Error("compileFragment 要在 finalize 之后调");
     const at = request.object;
     if (!Number.isInteger(at) || at < 0) throw new Error(`对象下标不合法：${at}`);
-    if (at < scene.objects.length) throw new Error("单对象重编译在 L6");
-    const parsed: unknown = JSON.parse(request.config);
-    const isGroup = Array.isArray(parsed);
-    if (!isGroup && !isSceneObject(parsed)) throw new Error("配置不是对象或数组");
-
-    // 放进场景：数组配置编成分组节点（`{}`），配置原文仍是数组（同 `structure.created`）；中间空位补 null
     const objects = scene.objects as unknown[];
-    while (objects.length < at) objects.push(null);
-    objects[at] = isGroup ? {} : parsed;
-    while (configs.length <= at) configs.push(null);
-    configs[at] = normalizeConfig(parsed);
+    /** 单对象重编译（L6）时被换下的旧图层：配置里没写 `id` 时新图层沿用它的 id */
+    let replaced: SceneLayer | undefined;
+    if (request.overrides !== undefined) {
+      // 单对象重编译（L6）：带 `overrides`（这个对象累计的全部覆盖，路径相对对象）。取开会话时留的原文、套覆盖，换进场景；`configs[at]` 不动
+      // （`getInitialLayerConfig` 取加载原文，覆盖不进去）。会话没见过的运行中建的对象（L5 命中片段缓存、当场接进场景，没经会话编）按请求带来的
+      // 配置原文登记（同新对象）
+      if (at >= loadedLength && !createdTexts.has(at) && request.config !== "") {
+        const parsed: unknown = JSON.parse(request.config);
+        if (!Array.isArray(parsed) && !isSceneObject(parsed)) throw new Error("配置不是对象或数组");
+        while (configs.length <= at) configs.push(null);
+        configs[at] = normalizeConfig(parsed);
+        createdTexts.set(at, request.config);
+      }
+      const original = originalOf(at);
+      if (!original) throw new Error(`对象 ${at} 没有原文，不能重编译`);
+      for (const [path, value] of Object.entries(request.overrides)) applyOverride(original, path, value);
+      while (objects.length <= at) objects.push(null);
+      objects[at] = original;
+      // 摘掉旧条目：`compileOne` 把新图层、声音追加在表尾，`find` 要找到新的；灯表同理（片段的灯不进会话的灯表，旧的留着会过期）。
+      // 绑定 / 脚本 / 关键帧表照旧只追加（片段按调用前的表长切），旧条目留在会话里无害
+      const old = bundle.layers.findIndex((layer) => layer.object === at);
+      if (old >= 0) replaced = bundle.layers.splice(old, 1)[0];
+      for (let i = sounds.length - 1; i >= 0; i--) if (sounds[i].object === at) sounds.splice(i, 1);
+      for (let i = lightObjects.length - 1; i >= 0; i--) if (lightObjects[i].object === at) lightObjects.splice(i, 1);
+    } else {
+      // 新对象（L1）：只收新下标
+      if (at < objects.length) throw new Error(`对象 ${at} 已在会话里：单对象重编译要带 overrides`);
+      const parsed: unknown = JSON.parse(request.config);
+      const isGroup = Array.isArray(parsed);
+      if (!isGroup && !isSceneObject(parsed)) throw new Error("配置不是对象或数组");
+      // 放进场景：数组配置编成分组节点（`{}`），配置原文仍是数组（同 `structure.created`）；中间空位补 null
+      while (objects.length < at) objects.push(null);
+      objects[at] = isGroup ? {} : parsed;
+      while (configs.length <= at) configs.push(null);
+      configs[at] = normalizeConfig(parsed);
+      // 之后对它单对象重编译时的原文
+      createdTexts.set(at, request.config);
+    }
     while (parents.length < at) parents.push(null);
     const parent =
       request.parent !== null && isSceneObject(scene.objects[request.parent]) && request.parent !== at
@@ -3380,6 +3441,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       await compileOne(at);
       const layer = bundle.layers.find((item) => item.object === at);
       if (!layer) throw new Error(`对象 ${at} 没有进图层`);
+      // 单对象重编译：配置里没写 `id` 时 `compileOne` 按表长发 id（整场时是它在表里的位置，摘掉旧图层之后表长变了），沿用旧图层的
+      if (replaced && (object.id === undefined || object.id === null)) layer.id = replaced.id;
 
       // 单对象收尾（和 `finalize` 共用 `reflectionEnabled` / `isReflected` / `keepsAnimationLayerScript`）
       // 反射读者：模型读者要场景有平面反射，非模型读者在没有平面反射时改绑棋盘格；场景反射开着时按名单规则求 `reflected`

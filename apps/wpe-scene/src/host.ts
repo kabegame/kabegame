@@ -19,11 +19,14 @@ import type { PreparedObject } from "./render/scene";
 import {
   configBone,
   LiveObjects,
+  objectOverridesOf,
+  placementBone,
   rebindFragment,
+  recompileObjectOf,
   type LiveCreateStats,
   type LiveTarget,
 } from "./script/createLayerChange";
-import { SceneRegistry } from "./compile/registry";
+import { bindingOwner, SceneRegistry } from "./compile/registry";
 import type { UserTextureSource } from "./compile/usertextures";
 import { openSceneSession, type CompileSessionClient } from "./compile/client";
 import { SceneLoadProgress } from "./progress";
@@ -108,13 +111,15 @@ export interface SceneProperty {
 }
 
 /**
- * 宿主计数（dev 探针读）：就地应用次数与每次重编译的原因 / 键；运行中建层（L5）的计数：`created.sync` 在 `createLayer` 返回前连 GPU 一起装好的，
- * `async` 之后才装上的（片段异步编、GPU 异步备），`unsupported` 带不支持项、没装 GPU 的。
+ * 宿主计数（dev 探针读）：就地应用次数与每次整场重编译的原因 / 键；运行中建层（L5）的计数：`created.sync` 在 `createLayer` 返回前连 GPU 一起装好的，
+ * `async` 之后才装上的（片段异步编、GPU 异步备），`unsupported` 带不支持项、没装 GPU 的。`recompiledObjects`（L6）：交给单对象重编译的次数（每次
+ * 对象级的重编译写入、每个属性改动涉及的每个对象各算一次，合并之前的；这些不进 `recompiled`）。
  */
 export interface SceneHostStats {
   applied: number;
   recompiled: { reason: string; keys: string[] }[];
   created: LiveCreateStats;
+  recompiledObjects: number;
 }
 
 const LOST_RETRY_WINDOW_MS = 60_000;
@@ -293,6 +298,11 @@ export class SceneHost {
   private scriptReloadPending = false;
   private scriptReloadRunning = false;
   private reloading = false;
+  /**
+   * 整场重载进行中、它的新场景还没换上（L6）：这段时间里的对象级重编译写入照旧整场再重载一次——新场景的编译可能已经取过覆盖表，写入落在旧场景上，
+   * 换上之后就丢了。新场景换上（`beforeFirstFrame`）起，写入交给新场景的单对象重编译。
+   */
+  private switchPending = false;
   private scriptUnavailable = false;
   private scriptNeedsFullApply = true;
   private runtimeTask: Promise<void> | null = null;
@@ -393,7 +403,12 @@ export class SceneHost {
     states: Map<number, { paused: boolean; stopped: boolean }>;
   } = { calls: [], states: new Map() };
   /** dev 探针计数：就地应用次数与重编译记录、运行中建层的计数。 */
-  readonly stats: SceneHostStats = { applied: 0, recompiled: [], created: { sync: 0, async: 0, unsupported: 0 } };
+  readonly stats: SceneHostStats = {
+    applied: 0,
+    recompiled: [],
+    created: { sync: 0, async: 0, unsupported: 0 },
+    recompiledObjects: 0,
+  };
   private receivedProperties = false;
   private readonly reader = new FetchSceneReader();
   /**
@@ -489,7 +504,11 @@ export class SceneHost {
     return { ...builtins, ...delta };
   }
 
-  /** 按当前 bundle 的绑定表应用一批变化；有任何一条要重编译（或 `needsRecompile` 挡下了就地写）就整场重编译。 */
+  /**
+   * 按当前 bundle 的绑定表应用一批变化。要重编译的（重编译目标，或 `needsRecompile` 挡下了就地写的）按路径分级（L6）：全是对象级（`objects/<i>/…`、
+   * 打开带不支持项 / 冻结图层的 effect）时其余照常就地写，涉及的对象各交给单对象重编译；有场景级的（`general/hdr`、没有泛光链时打开泛光等）或接不上
+   * 单对象重编译时整场重编译。
+   */
   private applyChanges(changes: ReadonlyMap<string, SceneScalar>): void {
     const bundle = this.bundle;
     if (!bundle) return;
@@ -498,15 +517,29 @@ export class SceneHost {
     const plan = planApply(bundle.bindings, changes);
     // 写之前问：打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景时 `applyBindings` 一条都不写，这几条按重编译目标处理
     const state = this.renderer?.sceneState;
-    const blocked = (state ? plan.writes.filter((write) => state.needsRecompile(write.binding, write.value)) : []).map(
-      (write) => write.binding.target,
-    );
+    const blockedWrites = state ? plan.writes.filter((write) => state.needsRecompile(write.binding, write.value)) : [];
+    const blocked = blockedWrites.map((write) => write.binding.target);
     const blockedPaths = blocked.map((target) => this.targetPath(target));
-    const applied = this.renderer?.applyBindings(plan.writes) ?? false;
+    // 分级（L6）：重编译目标按路径；挡下的 effect 开关是它的对象的，泛光开关是场景级
+    const objects = new Set<number>();
+    let sceneLevel = false;
+    for (const item of plan.recompile) {
+      const object = recompileObjectOf(item.path);
+      if (object === null) sceneLevel = true;
+      else objects.add(object);
+    }
+    for (const target of blocked) {
+      if (target.kind === "effect") objects.add(target.object);
+      else sceneLevel = true;
+    }
+    const objectLevel = !sceneLevel && objects.size > 0;
+    // 全是对象级：挡下的那几条不写（由重编译决定），其余照常就地写；否则照旧（有一条挡下就一条都不写）
+    const writes = objectLevel ? plan.writes.filter((write) => !blockedWrites.includes(write)) : plan.writes;
+    const applied = this.renderer?.applyBindings(writes) ?? false;
     if (applied) {
-      for (const { binding } of plan.writes) this.runtime?.forgetWrite(this.targetPath(binding.target));
+      for (const { binding } of writes) this.runtime?.forgetWrite(this.targetPath(binding.target));
       // 声音的 `volume` 当场生效（WPE 的回调 `V` 在改值时调；暂停时没有帧）
-      if (plan.writes.some(({ binding }) => binding.target.kind === "sound")) this.syncSoundVolumes();
+      if (writes.some(({ binding }) => binding.target.kind === "sound")) this.syncSoundVolumes();
       this.stats.applied++;
       this.options.report.debug(`场景壁纸 ${this.options.imageId} 就地更新：${[...changes.keys()].join(",")}`);
     }
@@ -520,7 +553,32 @@ export class SceneHost {
       this.properties,
       bundle.bindings,
     );
-    if (plan.recompile.length || !applied) {
+    // 单对象重编译在编期间（L6）属性又改了这个对象的绑定（就地写了）：在编的片段按发请求那一刻的属性编，换上时会把这次改动盖回去（被挡下的写不回来，
+    // 不支持项也按旧值判）——同「在编时又写了」，记一次，到达后按当前属性再发
+    if (applied) {
+      const owners = new Set<number>();
+      for (const { binding } of writes) {
+        const owner = bindingOwner(binding);
+        if (owner !== null) owners.add(owner);
+      }
+      for (const owner of owners) {
+        const live = this.objectLive(owner);
+        if (live?.recompilingObject(owner)) this.recompileWith(live, owner);
+      }
+    }
+    // 对象级（L6）：每个对象交给单对象重编译（属性值会话按请求里的属性全集取，不进覆盖；覆盖只带脚本写过的）。先确认都接得上，再一起发
+    if (objectLevel && applied) {
+      const lives = [...objects].map((object) => [object, this.objectLive(object)] as const);
+      if (lives.every(([, live]) => live !== null)) {
+        for (const [object, live] of lives) this.recompileWith(live!, object);
+        this.options.report.debug(
+          `场景壁纸 ${this.options.imageId} 单对象重编译：对象 ${[...objects].join("、")}（${[...changes.keys()].join(",")}）`,
+        );
+        if (this.paused) this.renderer?.redraw();
+        return;
+      }
+    }
+    if (plan.recompile.length || !applied || blocked.length) {
       const blockedTag = (label: string, kind: BindingTarget["kind"]) => {
         const paths = blocked.filter((target) => target.kind === kind).map((target) => this.targetPath(target));
         return paths.length ? [`${label}（${paths.join("、")}）`] : [];
@@ -689,14 +747,56 @@ export class SceneHost {
 
   /**
    * 脚本写重编译类目标：值变了才记进覆盖表、请求重新编译（脚本可能每帧写同一个值）。「变没变」与 dev 探针共用
-   * （`script/stateWrite.ts` 的 `recordRecompileWrite`）。
+   * （`script/stateWrite.ts` 的 `recordRecompileWrite`）。对象级的（路径 `objects/<i>/…`，L6）只重编这一个对象（`objectLive`）；场景级的（`general/…`）
+   * 或接不上单对象重编译时照旧整场重编译（覆盖表照记，整场编译读它）。
    */
   private overrideAndReload(path: string, value: ScriptValue): boolean {
     if (!recordRecompileWrite(this.scriptOverrides, this.scriptBundle?.general, path, value)) return true;
-    this.stats.recompiled.push({ reason: `script（${path}）`, keys: [] });
     this.options.report.debug(`场景脚本重编译目标变化：${path}`);
+    const object = recompileObjectOf(path);
+    const live = object === null ? null : this.objectLive(object);
+    if (live) {
+      this.recompileWith(live, object!);
+      return true;
+    }
+    this.stats.recompiled.push({ reason: `script（${path}）`, keys: [] });
     this.requestScriptReload();
     return true;
+  }
+
+  /**
+   * 对象级重编译（L6）交给哪一份运行中的单对象重编译：`init` 还在跑（首次加载或清空脚本存储后）时是这次加载的 `loadingLive`（片段到齐后接进还没换上的
+   * bundle，建 GPU 场景时一起建，不再整场编第二次）；平时是当前场景的 `live`，要它的编译会话还留着（`sessionUseful`）。整场重载进行中、新场景还没换上时
+   * （`switchPending`：写入可能晚于这次编译取覆盖表的时刻，照旧再整场一次）、对象不在脚本状态里或已删时为 null，调用方照旧整场重编译。
+   */
+  private objectLive(object: number): LiveObjects<PreparedObject> | null {
+    const live = this.runtimeTask
+      ? this.loadingLive
+      : !this.switchPending && this.compileSession && !this.compileSession.broken
+        ? this.live
+        : null;
+    if (!live || !this.scriptState?.layers.has(object) || this.structure.destroyed.includes(object)) return null;
+    // 被依赖的图层（别的图层按名字绑它的独占合成 RT）：GPU 替换会放掉旧 RT，引用方的 draw 不重绑（L5 定），照旧整场。`init` 期间还没有 GPU 场景，不受限
+    if (live === this.live && this.registry?.bundle.layers.find((item) => item.object === object)?.dependedOn)
+      return null;
+    return live;
+  }
+
+  /**
+   * 交给单对象重编译（L6）：覆盖取 `scriptOverrides` 里这个对象累计的全部，父取脚本状态里运行中的，挂点骨骼名按 `placementBone`，运行中建的对象带上
+   * 它的配置原文（`structure.created`，会话可能没见过它）；计一次 `recompiledObjects`。
+   */
+  private recompileWith(live: LiveObjects<PreparedObject>, object: number): void {
+    live.recompile(
+      object,
+      objectOverridesOf(this.scriptOverrides, object),
+      {
+        parent: this.scriptState?.layers.get(object)?.parent ?? null,
+        bone: placementBone(this.scriptBundle ?? {}, this.structure, object),
+      },
+      this.structure.created.find((item) => item.object === object)?.config ?? "",
+    );
+    this.stats.recompiledObjects++;
   }
 
   /**
@@ -784,13 +884,17 @@ export class SceneHost {
       },
       unsupported: (object, keys) => {
         this.options.report.debug(
-          `场景壁纸 ${this.options.imageId} 运行中建的对象 ${object} 用到不支持的特性，不画：${keys.join(",")}`,
+          `场景壁纸 ${this.options.imageId} 运行中接入的对象 ${object} 用到不支持的特性，不画：${keys.join(",")}`,
         );
         this.options.report.unsupported?.(keys);
       },
+      // 单对象重编译的片段带不支持项（L6）：旧的运行时卸掉，这个对象不画
+      removeGpu: (object) => {
+        if (gpu()) this.renderer!.removeObject(object);
+      },
       reload: (reason) => {
         this.stats.recompiled.push({ reason: `script（${reason}）`, keys: [] });
-        this.options.report.debug(`场景壁纸 ${this.options.imageId} 运行中建层退回整场重载：${reason}`);
+        this.options.report.debug(`场景壁纸 ${this.options.imageId} 运行中接入对象退回整场重载：${reason}`);
         // `init` 期间：这次加载放弃、带结构重编（`reload` 里看它）
         if (!current()) loading.reload ??= reason;
         else this.requestScriptReload();
@@ -821,9 +925,9 @@ export class SceneHost {
    * 把一个编好的对象接进当前场景（L3b）。mode `"add"`：新对象；`"replace"`：替换已有对象（L5 运行中建层由壳换成编好的、L6 单对象重编译）。
    * 同步部分按顺序：登记表（先场景级增量，再对象）→ 状态 → `restructure`（组与挂点重算；骨骼名取配置原文的 `attachment`，`override` 取
    * `structure.parents` 是否带这个对象；返回的组内问题非空时按 L7 前的约定当不支持项：并进 `bundle.unsupported`、记一条 warn）→ 绑定按当前属性重写
-   * （L5，`rebindFragment`）→ 关键帧 → puppet → 文本（排版异步起，回来写状态）→ 脚本（`refreshScripts` 换成定型后的条目，再 `replayWritesFor` 重放这个
-   * 对象建出以来的写入）→ `ScriptApi.adoptBundle` → 声音 → 视频纹理 → 用户纹理（预解码异步）→ 媒体 / 音频订阅。GPU 不在这里：L5 的 `LiveObjects`
-   * 在它之后备、装（同一顺序，GPU 最后）。
+   * （L5，`rebindFragment`）→ 关键帧（替换时 `replaceObjects` 按 id 接回时钟，L6）→ puppet → 文本（排版异步起，回来写状态）→ 脚本（`refreshScripts`
+   * 换成定型后的条目，再 `replayWritesFor` 重放这个对象建出以来的写入，L6 替换时运行中写过的字段靠它留着）→ `ScriptApi.adoptBundle` → 声音 → 视频纹理
+   * → 用户纹理（预解码异步）→ 媒体 / 音频订阅。GPU 不在这里：L5 的 `LiveObjects` 在它之后备、装（同一顺序，GPU 最后）。
    * `"replace"` 时登记表里还没有这个对象（L5：运行中建层的壳只在状态里）就走 `addObject`，状态照旧 `replaceObject`。
    * 选项（L5）：`deltaApplied` 场景级增量已在片段到达时进了登记表（只登记用户纹理来源等宿主侧的表）；`registry` 接进哪份登记表（缺省当前的；
    * 这次加载 `init` 期间是还没换上的那份，子系统取待用的 `pendingAnimations` / `pendingPuppets`）；`loadingTexts` 文本排版回来另交到这张表（建 GPU 场景用）。
@@ -873,16 +977,20 @@ export class SceneHost {
       unsupported.sort();
       this.options.report.warn(`场景壁纸 ${this.options.imageId} 运行中接入对象 ${object}，组内用法不支持：`, keys);
     }
-    // 1b. 绑定按当前属性全集重写（L5）：缓存里的片段按编它那一刻的属性编的
-    rebindFragment(state, fragment, this.properties);
-    // 2. 关键帧
-    if (mode === "replace") animations?.removeObjects(only);
-    animations?.add(fragment.animations);
+    // 1b. 绑定按当前属性全集重写（L5）：缓存里的片段按编它那一刻的属性编的。有被 `needsRecompile` 挡下的（L6：编它之后属性改了冻结图层 / 带不支持项的
+    // effect 的开关，片段过期了）时，接完之后这个对象再交一次单对象重编译
+    let stale = false;
+    rebindFragment(state, fragment, this.properties, () => (stale = true));
+    // 2. 关键帧：替换时按 id 接回时钟（L6：单对象重编译不让动画从头来；L5 的壳没有关键帧，接不到什么）
+    if (mode === "replace") animations?.replaceObjects(only, fragment.animations);
+    else animations?.add(fragment.animations);
     // 3. puppet
     if (mode === "replace") puppets?.remove(only);
     puppets?.add(puppetEntry(fragment.layer));
-    // 4. 文本
-    if (previousText) this.sceneTexts?.releaseLayout(previousText);
+    // 4. 文本。替换一个已有排版的文本层（L6 单对象重编译，如换字体）：旧排版先放回状态——旧的运行时在新的装上之前照画、每帧读它（`state.texts`），
+    // 新排版回来、换进状态时才放掉状态里原来那份的引用（排版不出来时旧的留在状态里）。状态对它里面的每份排版持一个引用
+    if (previousText && fragment.layer.text) state.setText(object, previousText);
+    else if (previousText) this.sceneTexts?.releaseLayout(previousText);
     if (fragment.layer.text) {
       const texts = (this.sceneTexts ??= new SceneTexts({
         reader: this.reader,
@@ -895,7 +1003,9 @@ export class SceneHost {
           // 排版回来时对象可能又被删 / 换了：状态里没有文本对象就放掉引用
           if (!layout) return;
           if (this.scriptState === state && state.layers.has(object)) {
+            const current = state.texts.get(object);
             state.setText(object, layout);
+            if (current && current !== layout) texts.releaseLayout(current);
             // 这次加载 `init` 期间接入的：建 GPU 场景时交给渲染器（它按 bundle 另建状态）
             loadingTexts?.set(object, layout);
           } else texts.releaseLayout(layout);
@@ -914,6 +1024,11 @@ export class SceneHost {
     const fresh = "userTextures" in delta ? delta.userTextures.list : [];
     for (const source of fresh) this.userTextureKinds.set(source.name, source.kind);
     if (fresh.length > 0) pending.push(this.primeUserTextureSources(fresh).then(() => {}));
+    // 7b. 过期的片段（见 1b）：按当前属性再编一次；接不上单对象重编译时（重载进行中）由重载之后的属性补差（`pendingChanges`）处理
+    if (stale) {
+      const live = this.objectLive(object);
+      if (live) this.recompileWith(live, object);
+    }
     // 8. 媒体 / 音频：只会从假变真，没订阅才订
     if (fragment.audio) this.subscribeAudio();
     if (fragment.media && !this.sceneMedia) {
@@ -1938,6 +2053,7 @@ export class SceneHost {
     }
     const id = ++this.generation;
     this.reloading = true;
+    this.switchPending = true;
     this.controller?.abort();
     const abort = (this.controller = new AbortController());
     if (this.state !== "ready") this.state = "loading";
@@ -2086,7 +2202,9 @@ export class SceneHost {
         if (id !== this.generation) return;
         // `init` 里建了层（P6d3b → L5 点 4）：命中缓存的已经接进 bundle；没命中的等会话编完、逐个接进来（还没有 GPU 场景），再建 GPU 场景，首帧就带
         // 新对象，不再整场编第二次。片段带 `sceneFlips`、编失败时照旧放弃本次、带着结构整场重编（脚本环境保留，`init` 不重跑）
-        if (sceneLive.queue.size > 0) {
+        // `init` 里写的对象级重编译目标（L6，如文本层的 `font`）同样在这里接进来；同一对象写了几次时，到达后按最新的再发一次（排出新的一项），所以
+        // 等到队空为止
+        while (sceneLive.queue.size > 0) {
           await sceneLive.settled();
           if (id !== this.generation) return;
           sceneLive.drain();
@@ -2100,8 +2218,13 @@ export class SceneHost {
           void this.reload();
           return;
         }
-        // `init` 里建的文本层：排版交给建场景（没有文本层的 bundle 这时才有当前加载的图集与重排器）
+        // `init` 里建的文本层：排版交给建场景（没有文本层的 bundle 这时才有当前加载的图集与重排器）。`init` 里单对象重编译换掉的文本层（L6）：
+        // 建场景前排的旧排版放掉引用
         if (loading.texts.size > 0) {
+          for (const [object, layout] of loading.texts) {
+            const old = texts?.get(object);
+            if (old && old !== layout) this.sceneTexts?.releaseLayout(old);
+          }
           texts = new Map([...(texts ?? []), ...loading.texts]);
           relayout = this.sceneTexts?.relayouter() ?? relayout;
         }
@@ -2174,6 +2297,8 @@ export class SceneHost {
             this.compileSession = held;
             held = null;
           }
+          // 从这一帧起（含换上时画的第一帧里脚本的写入）对象级重编译交给新场景（L6）
+          if (id === this.generation) this.switchPending = false;
           // 新建对象编进了 bundle（P6d3b）：脚本条目换成新 bundle 里的（常量目标等由编译填好）、API 的待编对象清掉、分配器对齐
           syncAllocator(this.allocator, bundle);
           this.runtime?.refreshScripts(bundle.scripts.list);
@@ -2273,6 +2398,7 @@ export class SceneHost {
       if (live && live !== this.live) live.dispose();
       if (id === this.generation) {
         this.reloading = false;
+        this.switchPending = false;
         if (this.scriptReloadPending && !this.scriptReloadRunning && this.state === "ready") this.requestScriptReload();
       }
     }
@@ -2334,12 +2460,19 @@ export class SceneHost {
 
 /**
  * 场景换上后编译会话要不要留（L2）：L5 / L6 只有两种情况用得上——脚本运行中建层或写对象级重编译字段（要求场景有脚本），
- * 或有对象级重编译绑定（L6 之前只有 `layer-structure`）。常驻 Worker 占着翻译器 wasm 实例、着色器翻译缓存与文件缓存，
+ * 或有属性改了要重编译的绑定：`layer-structure` 重编译目标（L6 起路径是 `objects/<i>/…` 的只编那个对象），以及开关会被 `needsRecompile` 挡下的 effect
+ * （L6：绑属性的 effect 在文本层上（冻结的图层），或它自己带不支持项）。常驻 Worker 占着翻译器 wasm 实例、着色器翻译缓存与文件缓存，
  * 桌面每块屏一个壁纸窗口外加预览，用不上就关。
  */
-export function sessionUseful(bundle: Pick<SceneBundle, "scripts" | "bindings">): boolean {
+export function sessionUseful(bundle: Pick<SceneBundle, "scripts" | "bindings" | "layers">): boolean {
   if (bundle.scripts.list.length > 0) return true;
-  return bundle.bindings.some(
-    (binding) => binding.target.kind === "recompile" && binding.target.reason === "layer-structure",
-  );
+  return bundle.bindings.some(({ target }) => {
+    if (target.kind === "recompile") return target.reason === "layer-structure";
+    if (target.kind !== "effect") return false;
+    const layer = bundle.layers.find((item) => item.object === target.object);
+    return (
+      !!layer &&
+      (!!layer.text || layer.effects.some((effect) => effect.source === target.effect && effect.unsupported.length > 0))
+    );
+  });
 }

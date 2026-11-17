@@ -578,6 +578,8 @@ export type SceneChange =
 
 ### L6 — 单对象重编译（`compile/bindings.ts`、`render/state.ts`、`host.ts`）
 
+子计划：[live/phase-l6-object-recompile.md](live/phase-l6-object-recompile.md)（2026-11-17）。与下面不同：不改 `BindingTarget` 的形状，对象级 / 场景级按 `path` 是否 `objects/<i>/` 前缀分；会话按开会话时留的原文副本套累计覆盖重编；GPU 替换时粒子定义相同就沿用旧树。实现后另有几处（见子计划「验收中的补充」）：被依赖的图层、带体积光的灯、整场重载进行中的写入保守走整场；`scriptCorpus` 没有会话、结果不变（点 3 里「对象级路径消失」只在 `probe.ts` 的回放里成立）。
+
 #### 点 1 — 重编译目标分级
 - **修改** 绑定目标：
 ```ts

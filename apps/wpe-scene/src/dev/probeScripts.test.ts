@@ -764,3 +764,65 @@ describe("createLayer 与运行中建层（P6d3b → L5）", () => {
     scripts.dispose();
   });
 });
+
+describe("对象级的重编译写入（L6）", () => {
+  /** 对象 1 的字段脚本的写回目标换成对象级重编译目标（同文本层 `opaquebackground` 这类非运行中字段），返回值依次取 `values`。 */
+  async function setupRecompile(values: boolean[], live?: ProbeLiveHooks) {
+    const bundle = await compile();
+    const entry = bundle.scripts.list.find((item) => item.id === "objects/1/alpha")!;
+    entry.target = { kind: "recompile", reason: "layer-structure", path: "objects/1/opaquebackground" } as never;
+    entry.valueType = "bool";
+    const state = SceneState.fromBundle(bundle);
+    let frame = 0;
+    const realm = fakeRealm({
+      "objects/1/alpha": (g) => ({
+        update: () => {
+          // 场景级的写入照旧记进 `recompile`
+          g.thisScene.hdr = true;
+          return values[frame++];
+        },
+      }),
+    });
+    const scripts = createProbeScripts({
+      bundle,
+      state,
+      sceneAssets: ["A:/assets"],
+      properties: probeUserProperties(PROJECT, {}),
+      screen: [1280, 720],
+      options: OPTIONS,
+      createRealm: realm.createRealm,
+      ...(live ? { live } : {}),
+    });
+    await scripts.load();
+    for (let i = 1; i <= values.length; i++) scripts.frame(0.1, i * 0.1);
+    return scripts;
+  }
+
+  it("给了 live.recompile：值变了才交给它（覆盖是这个对象累计的、路径相对对象，带父与骨骼），不记进 recompile；场景级照旧记", async () => {
+    const calls: unknown[] = [];
+    const scripts = await setupRecompile([true, true, false], {
+      create: () => {},
+      settle: async () => {},
+      drain: () => {},
+      recompile: (object, overrides, placement, config) => void calls.push({ object, overrides, placement, config }),
+    });
+    expect(calls).toEqual([
+      { object: 1, overrides: { opaquebackground: true }, placement: { parent: null, bone: null }, config: "" },
+      { object: 1, overrides: { opaquebackground: false }, placement: { parent: null, bone: null }, config: "" },
+    ]);
+    expect(scripts.result().recompile).toEqual([
+      expect.objectContaining({ path: "general/hdr", count: 1, value: true }),
+    ]);
+    scripts.dispose();
+  });
+
+  it("没给 live.recompile：照旧记进 recompile（探针做不了）", async () => {
+    const scripts = await setupRecompile([true, false]);
+    // 按第一次出现的顺序：update 里先写 hdr、再返回
+    expect(scripts.result().recompile).toEqual([
+      expect.objectContaining({ path: "general/hdr", count: 1, value: true }),
+      expect.objectContaining({ path: "objects/1/opaquebackground", count: 2, value: false }),
+    ]);
+    scripts.dispose();
+  });
+});
