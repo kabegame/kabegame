@@ -137,6 +137,19 @@ class FakeRenderer {
   discardPrepared(prepared: { layer: SceneLayer }) {
     gpu.log.push(`discard ${prepared.layer.object}`);
   }
+  /** 结构变化（L7）：记下交来的对象与重排。 */
+  restructure(objects: number[]) {
+    gpu.log.push(`restructure ${[...objects].sort((a, b) => a - b).join(",")}`);
+  }
+  flushRestructure() {
+    gpu.log.push("flush");
+  }
+  hasObject(object: number) {
+    return gpu.installed.includes(object);
+  }
+  removeObject(object: number) {
+    gpu.log.push(`remove ${object}`);
+  }
   setStyle() {}
   setBackground() {}
   setPaused() {}
@@ -503,6 +516,55 @@ describe("运行中建层：没命中（L5 点 3）", () => {
     expect(gpu.installed).toEqual([]);
     expect(internals.registry!.bundle.layers.some((item) => item.object === 3)).toBe(true);
     expect(reporter.unsupported).toHaveBeenCalledWith(["effect:missing"]);
+    expect(reporter.fallback).not.toHaveBeenCalled();
+    expect(host.stats.created).toEqual({ sync: 0, async: 0, unsupported: 1 });
+    host.dispose();
+  });
+
+  /** 图层 2 是没有子层的组合层（L7）。 */
+  const withComposeLayer = () =>
+    compile.mockImplementation(async (input) => {
+      const result = compiledWithStructure(input);
+      result.layers[2].passthroughModel = true;
+      return result;
+    });
+
+  it("L7：新层挂进组合层（组合层成了组）：组合层交给渲染器当帧重排（脚本之后 flush），新层自己的 GPU 照常由 LiveObjects 装；不整场重编译", async () => {
+    withComposeLayer();
+    const { host, internals } = await open();
+    atUpdate(1, () => void scene().createLayer({ ...NEW, parent: 3 }));
+    renderer.tick();
+    const { request, resolve } = sessions[0].requests[0];
+    expect(request.parent).toBe(2);
+    resolve(deltaFor(request));
+    await flush();
+    gpu.log.length = 0;
+    renderer.tick();
+    // 接进登记表时记下组合层的重排，新层装上之后、绘制之前做掉
+    expect(gpu.log).toEqual(["restructure 2", "prepareSync 3", "install 3", "flush"]);
+    const byObject = (object: number) => internals.registry!.bundle.layers.find((item) => item.object === object)!;
+    expect(byObject(3).group).toBe(2);
+    expect(byObject(2).subtree).toEqual([3]);
+    expect(host.stats.recompiled).toEqual([]);
+    expect(compile).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+
+  it("L7：新层进了组、自己用到组内不支持的用法（fullscreen）：不装 GPU、上报，场景不退回；组合层照常重排", async () => {
+    withComposeLayer();
+    const { host, reporter } = await open();
+    atUpdate(1, () => void scene().createLayer({ ...NEW, parent: 3 }));
+    renderer.tick();
+    const { request, resolve } = sessions[0].requests[0];
+    const delta = deltaFor(request);
+    delta.fragment.layer.fullscreen = true;
+    resolve(delta);
+    await flush();
+    gpu.log.length = 0;
+    renderer.tick();
+    expect(gpu.installed).toEqual([]);
+    expect(gpu.log).toEqual(["restructure 2", "flush"]);
+    expect(reporter.unsupported).toHaveBeenCalledWith(["model:passthrough:children:fullscreen"]);
     expect(reporter.fallback).not.toHaveBeenCalled();
     expect(host.stats.created).toEqual({ sync: 0, async: 0, unsupported: 1 });
     host.dispose();

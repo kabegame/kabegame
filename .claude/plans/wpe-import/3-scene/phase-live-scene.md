@@ -578,7 +578,7 @@ export type SceneChange =
 
 ### L6 — 单对象重编译（`compile/bindings.ts`、`render/state.ts`、`host.ts`）
 
-子计划：[live/phase-l6-object-recompile.md](live/phase-l6-object-recompile.md)（2026-11-17）。与下面不同：不改 `BindingTarget` 的形状，对象级 / 场景级按 `path` 是否 `objects/<i>/` 前缀分；会话按开会话时留的原文副本套累计覆盖重编；GPU 替换时粒子定义相同就沿用旧树。实现后另有几处（见子计划「验收中的补充」）：被依赖的图层、带体积光的灯、整场重载进行中的写入保守走整场；`scriptCorpus` 没有会话、结果不变（点 3 里「对象级路径消失」只在 `probe.ts` 的回放里成立）。
+子计划：[live/phase-l6-object-recompile.md](live/phase-l6-object-recompile.md)（2026-11-17）。与下面不同：不改 `BindingTarget` 的形状，对象级 / 场景级按 `path` 是否 `objects/<i>/` 前缀分；会话按开会话时留的原文副本套累计覆盖重编；GPU 替换时粒子定义相同就沿用旧树。实现后另有几处（见子计划「验收中的补充」）：被依赖的图层、带体积光的灯、整场重载进行中的写入保守走整场；`scriptCorpus` 没有会话、结果不变（点 3 里「对象级路径消失」只在 `probe.ts` 的回放里成立）。补丁 [live/phase-l6b-depended-replace.md](live/phase-l6b-depended-replace.md)（L7 之后做）：被依赖图层的替换沿用同尺寸的独占 RT、尺寸变了引用方按 P11b 的 `rebindUserDraw` 重绑，去掉 `objectLive` 的 `dependedOn` 退回。
 
 #### 点 1 — 重编译目标分级
 - **修改** 绑定目标：
@@ -626,6 +626,8 @@ export type BindingTarget =
   - 场景级误走对象级。
 
 ### L7 — 结构变化不重编（`compile/bundle.ts`、`script/structure.ts`、`render/scene.ts`、`host.ts`）
+
+子计划：[live/phase-l7-restructure.md](live/phase-l7-restructure.md)（2026-11-17）。与下面不同：没有单独的 `restructure(受影响的对象)` 排队——登记表 `restructure` 比较重算前后的 `group` / `subtree` / `attachment` 报出变化集合，渲染器在同一帧的 `sync` 里对这些图层按签名重建（缺的管线同步建）；运行中出现的组内不支持组合按 L5 / L6 的规则「那个对象不画 + 看板娘提示」。
 
 #### 点 1 — 组上屏 pass 预编
 - **修改** 每个组合层（passthrough 模型）都编 `groupUpload`，不再只给有子的。

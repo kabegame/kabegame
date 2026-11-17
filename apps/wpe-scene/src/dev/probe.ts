@@ -69,10 +69,11 @@ import type { SceneBundle } from "../compile/bundle";
 import { DEFAULT_CAMERA } from "../compile/camera";
 import { compileSceneInWorker, openSceneSession, type CompileSessionClient } from "../compile/client";
 import type { FragmentDelta } from "../compile/fragment";
-import { SceneRegistry } from "../compile/registry";
+import { SceneRegistry, type RestructureResult } from "../compile/registry";
 import { TextureDecodeCache } from "../compile/decode";
 import { FragmentCache, fragmentKey } from "../fragmentCache";
 import { cacheCopy, configBone, LiveObjects, rebindFragment, type LiveTarget } from "../script/createLayerChange";
+import { trackGroupIssues } from "../script/structure";
 import { SceneTexts } from "../text/host";
 import { releaseTextLayout } from "../text/layout";
 import { FetchSceneReader } from "../compile/fs";
@@ -490,6 +491,8 @@ export interface RenderFrameResult {
     prewarmed: number;
     recompiles: number;
   };
+  /** 结构变化（换父、删除生效）当场重算组与挂点、交给 GPU 当帧重排的次数（L7，同宿主 `stats.restructured`）：只在给了 `scripts` 时有。 */
+  restructured?: number;
   /**
    * 每段视频纹理实际取的时刻（P9a 步骤 3，顺序同 bundle 纹理）：`time` 是 seek 完读回的 `currentTime`、`duration` 是时长（未知时 null）、
    * `width` / `height` 是视频尺寸；`failed` 的那段保持透明（同产品），原因在 `error`。没有视频纹理时空数组。
@@ -882,6 +885,8 @@ async function renderFramePass(
       let liveHooks: ProbeLiveHooks | undefined;
       const reloads: string[] = [];
       const unsupportedKeys = new Set<string>();
+      /** 结构变化当场重排的次数（L7，同宿主 `stats.restructured`） */
+      const restructured = { count: 0 };
       if (scriptsOptions && mode.dry)
         liveHooks = {
           create: (_object, config) => void collected.push({ config }),
@@ -889,8 +894,8 @@ async function renderFramePass(
           drain: () => {},
         };
       else if (scriptsOptions) {
-        // 运行中建层（L5）：和宿主同一份两条路，接进这个场景的登记表、状态、子系统与 GPU
-        const objects = createProbeLive({
+        // 运行中建层（L5）：和宿主同一份两条路，接进这个场景的登记表、状态、子系统与 GPU；结构变化（L7）同宿主当场重算、GPU 当帧重排
+        const { live: objects, restructure } = createProbeLive({
           registry: registry!,
           state,
           scene,
@@ -904,9 +909,11 @@ async function renderFramePass(
           scripts: () => probeScripts,
           reloads,
           unsupportedKeys,
+          restructured,
         });
         live = objects;
         liveHooks = {
+          restructure,
           create: (object, config, parent) => void objects.create(object, config, parent),
           settle: async () => {
             // 排着的片段到齐、接上；接上时排出的异步 GPU 对象（文本层等排版）也等完装上
@@ -1164,6 +1171,7 @@ async function renderFramePass(
                 prewarmed: prewarm?.deltas.length ?? 0,
                 recompiles: live.recompileRequests,
               },
+              restructured: restructured.count,
             }
           : {}),
         ...(probeMedia ? { media: probeMedia.result() } : {}),
@@ -1207,6 +1215,8 @@ interface ProbeLiveInput {
   reloads: string[];
   /** 运行中出现的不支持项（记进结果） */
   unsupportedKeys: Set<string>;
+  /** 结构变化当场重排的次数（L7，记进结果） */
+  restructured: { count: number };
 }
 
 /**
@@ -1215,10 +1225,41 @@ interface ProbeLiveInput {
  * 排版时旧的先留在状态里，新的换上时放掉）→ 脚本。GPU 直接调 `GpuScene`（探针没有渲染器），单对象重编译的片段带不支持项时卸掉旧的运行时。声音、视频、
  * 用户纹理、媒体探针本来就不接，这里也不接。场景没有 puppet 图层时新建对象的骨骼动画不推进（探针的 puppet 运行时按 bundle 建，没有时不建）。宿主「片段
  * 过期再编一次」的规则探针不做：一次回放里属性不变。
+ * 结构变化（L7，`restructure`，探针脚本的换父 / 删除钩子调）：同宿主 `applyRestructure`，登记表当场重算，组内不支持组合那个对象不画（键记进
+ * `unsupportedKeys`）、出组照常装回，其余变了的交给 `GpuScene.restructure`，下一次 `sync`（这一帧脚本之后）重排；重排失败时 `sync` 抛错（探针不重载）。
  */
-function createProbeLive(input: ProbeLiveInput): LiveObjects<PreparedObject> {
+function createProbeLive(input: ProbeLiveInput): {
+  live: LiveObjects<PreparedObject>;
+  restructure(removed?: readonly number[]): void;
+} {
   const { registry, state, scene } = input;
   let texts: SceneTexts | null = null;
+  /** 组内不支持组合（同宿主 `groupIssues` / `groupHidden`） */
+  const groupIssues = new Map<number, string[]>();
+  const groupHidden = new Set<number>();
+  const bones = (item: number) => configBone(registry.bundle, input.scripts()?.structure?.() ?? { parents: [] }, item);
+  /** 同宿主 `applyRestructure`（当前场景那一支）；返回新出现问题的对象 → 键。 */
+  const applyRestructure = (result: RestructureResult, skip: number | null = null): Map<number, string[]> => {
+    const { added, cleared } = trackGroupIssues(groupIssues, result, registry.bundle.layers, registry.bundle.general);
+    for (const [object, keys] of added) {
+      for (const key of keys) input.unsupportedKeys.add(key);
+      if (object !== skip && scene.hasObject(object)) {
+        scene.removeObject(object);
+        groupHidden.add(object);
+      }
+    }
+    for (const object of cleared) {
+      if (!groupHidden.delete(object) || object === skip) continue;
+      const layer = registry.bundle.layers.find((item) => item.object === object);
+      if (!layer || !state.layers.has(object)) continue;
+      const prepared = scene.prepareObjectSync(layer, state);
+      if (prepared) scene.installObject(prepared, state);
+      else input.reloads.push(`结构变化：对象 ${object} 出组后装不回来（程序没有就绪）`);
+    }
+    const objects = [...result.changed].filter((object) => object !== skip && !groupIssues.has(object));
+    if (objects.length > 0) scene.restructure(objects);
+    return added;
+  };
   const target: LiveTarget<PreparedObject> = {
     alive: (object) => state.layers.has(object),
     applyDelta: (delta) => registry.applyDelta(delta),
@@ -1230,8 +1271,14 @@ function createProbeLive(input: ProbeLiveInput): LiveObjects<PreparedObject> {
       if (registry.bundle.layers.some((layer) => layer.object === object)) registry.replaceObject(fragment);
       else registry.addObject(fragment);
       state.replaceObject(fragment);
-      const structure = input.scripts()?.structure?.() ?? { parents: [] };
-      registry.restructure(state, (item) => configBone(registry.bundle, structure, item));
+      // 组与挂点（L7，同宿主）：别的对象当帧重排；接进来的对象自己用到组内不支持的用法时并进片段的不支持项（`LiveObjects` 不装、上报）
+      const result = registry.restructure(state, bones);
+      const added = applyRestructure({ changed: new Set([...result.changed, object]), issues: result.issues }, object);
+      const own = added.get(object) ?? groupIssues.get(object);
+      if (own && fragment.unsupported.length === 0) {
+        fragment.unsupported = [...own];
+        groupHidden.add(object);
+      }
       rebindFragment(state, fragment, input.properties);
       // 关键帧按 id 接回时钟、puppet 先摘旧的（同宿主 `addCompiledObject(replace)`；L5 的壳没有这两样，摘不到什么）
       input.animations?.replaceObjects(only, fragment.animations);
@@ -1259,7 +1306,13 @@ function createProbeLive(input: ProbeLiveInput): LiveObjects<PreparedObject> {
     gpu: () => true,
     prepareSync: (layer) => scene.prepareObjectSync(layer, state),
     prepare: (layer) => scene.prepareObject(layer, state),
-    install: (prepared) => scene.installObject(prepared, state),
+    // 异步备好的对象装上之前进了用到不支持用法的组（L7，同宿主）：不装
+    install: (prepared) => {
+      if (groupIssues.has(prepared.layer.object)) {
+        scene.discardPrepared(prepared);
+        groupHidden.add(prepared.layer.object);
+      } else scene.installObject(prepared, state);
+    },
     discard: (prepared) => scene.discardPrepared(prepared),
     warm: async (layer) => scene.discardPrepared(await scene.prepareObject(layer, state)),
     unsupported: (_object, keys) => {
@@ -1270,12 +1323,24 @@ function createProbeLive(input: ProbeLiveInput): LiveObjects<PreparedObject> {
     reload: (reason) => void input.reloads.push(reason),
     properties: () => Object.fromEntries([...input.properties].map(([key, property]) => [key, property.value])),
   };
-  return new LiveObjects(
-    target,
-    (request) => input.session.compileFragment(request),
-    { sync: 0, async: 0, unsupported: 0 },
-    input.cache,
-  );
+  return {
+    live: new LiveObjects(
+      target,
+      (request) => input.session.compileFragment(request),
+      { sync: 0, async: 0, unsupported: 0 },
+      input.cache,
+    ),
+    restructure(removed = []) {
+      // 删除生效（同宿主 `removeObjectEverywhere` 的登记表一步）：先摘登记表，被删对象的组内问题一起丢
+      for (const object of removed) {
+        registry.removeObject(object);
+        groupIssues.delete(object);
+        groupHidden.delete(object);
+      }
+      input.restructured.count++;
+      applyRestructure(registry.restructure(state, bones));
+    },
+  };
 }
 
 export function probeKeys(): string[] {
@@ -1313,14 +1378,15 @@ export function hostState(host: SceneHost): unknown {
 }
 
 /**
- * 计数：就地应用次数、整场重编译记录（含原因）、运行中建层（L5）、交给单对象重编译的次数（L6，`recompiledObjects`）、单图层重建，以及 `render()` 的
- * CPU 用时统计。
+ * 计数：就地应用次数、整场重编译记录（含原因）、运行中建层（L5）、交给单对象重编译的次数（L6，`recompiledObjects`）、结构变化当场重排的次数（L7，
+ * `restructured`）、单图层重建，以及 `render()` 的 CPU 用时统计。
  */
 export function hostStats(host: SceneHost): {
   applied: number;
   recompiled: { reason: string; keys: string[] }[];
   created: SceneHost["stats"]["created"];
   recompiledObjects: number;
+  restructured: number;
   rebuilds: { count: number; meanMs: number; maxMs: number };
   frameMs: { mean: number; p95: number };
 } {
@@ -1330,6 +1396,7 @@ export function hostStats(host: SceneHost): {
     recompiled: host.stats.recompiled.map((item) => ({ ...item, keys: [...item.keys] })),
     created: { ...host.stats.created },
     recompiledObjects: host.stats.recompiledObjects,
+    restructured: host.stats.restructured,
     rebuilds: rebuildSummary(renderer?.currentScene?.rebuildStats),
     frameMs: frameStats(renderer?.frameCosts ?? []),
   };

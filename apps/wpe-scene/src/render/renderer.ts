@@ -423,6 +423,25 @@ export class SceneRenderer {
     this.loaded().scene.removeObject(object);
   }
 
+  /** 当前场景里这个对象有没有 GPU 运行时（L7）；没有场景时 false。 */
+  hasObject(object: number): boolean {
+    return this.scene?.hasObject(object) ?? false;
+  }
+
+  /**
+   * 结构变化（L7，`GpuScene.restructure`）：登记表重算后组、子树、挂点变了的对象，下一次重排（宿主在这一帧脚本之后调 `flushRestructure`，没调时
+   * 下一次 `sync`）按当前的组与挂点重建。当前场景没有时抛错。
+   */
+  restructure(objects: Iterable<number>): void {
+    this.loaded().scene.restructure(objects);
+  }
+
+  /** 把记下的结构变化当场做掉（L7，`GpuScene.flushRestructure`）：只能在帧边界调；出错抛 `SceneRenderError`（宿主整场重载）。 */
+  flushRestructure(): void {
+    const { scene, state } = this.loaded();
+    scene.flushRestructure(state);
+  }
+
   /** 放弃一个备好、不装的对象（L4，`GpuScene.discardPrepared`）；场景已经换掉时什么都不做（旧场景随之销毁）。 */
   discardPrepared(prepared: PreparedObject): void {
     this.scene?.discardPrepared(prepared);

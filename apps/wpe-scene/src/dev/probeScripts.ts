@@ -49,7 +49,13 @@ import {
 } from "../script/runtime";
 import { applyScriptedProperties } from "../script/initialApply";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "../script/stateWrite";
-import { createStructureObject, settleDestroyed, syncAllocator, type ObjectAllocator } from "../script/structure";
+import {
+  createStructureObject,
+  recordReparent,
+  settleDestroyed,
+  syncAllocator,
+  type ObjectAllocator,
+} from "../script/structure";
 import {
   objectOverridesOf,
   placementBone,
@@ -336,6 +342,11 @@ export interface ProbeLiveHooks {
    * 不给时这类写入照旧记进结果的 `recompile`（探针做不了）。
    */
   recompile?(object: number, overrides: ObjectOverrides, placement: ObjectPlacement, config: string): void;
+  /**
+   * 结构变化之后（L7，同宿主 `onReparented` / `onDestroyed`）：换父（`removed` 不给）或删除生效（`removed` 是生效的对象）之后调，登记表摘掉被删的、
+   * 重算组与挂点，GPU 当帧重排（`probe.ts`）。不给时（`scriptCorpus`、预跑）只改状态。
+   */
+  restructure?(removed?: readonly number[]): void;
 }
 
 export interface ProbeScripts {
@@ -526,6 +537,12 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         // `createLayer`（P6d3b）：当前脚本的 `__workshopId` 取自运行时，建层与新对象上的脚本落到状态与运行时
         workshopId: () => runtime?.currentWorkshopId() ?? null,
         createLayer,
+        // 运行中结构（同宿主）：`setParent` 找当前挂点名读它；换父成功后记进结构，登记表与 GPU 的重排交给 `live`（L7，同宿主 `onReparented`）
+        structure: () => structure,
+        reparented: (change) => {
+          recordReparent(structure, change.object, change.parent, change.bone);
+          input.live?.restructure?.();
+        },
         addScripts: (scripts) => runtime?.addScripts(scripts),
         // 声音层、视频纹理、粒子层的方法：落点返回 null（方法空操作），只计数
         sound: () => {
@@ -616,11 +633,14 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       // 运行中建层（L5）：已经编好 / 备好的在脚本之前接上（同宿主 `beforeFrame` 开头）
       input.live?.drain();
       runtime?.frame(dt);
-      // 删除生效（P6d3a）：同宿主 `beforeFrame`，全部脚本之后；探针每次从头编译、用空结构，所以不记 `SceneStructure`
+      // 删除生效（P6d3a）：同宿主 `beforeFrame`，全部脚本之后；探针每次从头编译、用空结构，所以不记 `SceneStructure`。登记表与 GPU 的重排交给
+      // `live`（L7，同宿主 `onDestroyed`）
       settleDestroyed(state, {
         runtime,
-        bundle,
-        removed: (objects) => cursorSession.forgetObjects(objects),
+        removed: (objects) => {
+          cursorSession.forgetObjects(objects);
+          input.live?.restructure?.(objects);
+        },
       });
       // destroyAnimationLayer 摘出的层在这里释放（P12e，同宿主 `beforeFrame` 里 `settleDestroyed` 之后的 `settle`）
       puppets?.settle({ released: releaseAnimationLayer });

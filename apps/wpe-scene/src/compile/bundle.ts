@@ -566,8 +566,8 @@ export interface SceneLayer {
   /**
    * 组的上屏 pass（P5b 步骤 4，p5-REPORT `p5b-grp-nofx` / `nofx0`）：没有启用的 effect、colorBlendMode ∈ {0, 31} 时用它把合成 RT
    * 画到世界四边形上。材质是 WPE 的 `effectpassthrough`（`passthroughMaterial`，场景 `version` > 2 用 `_4`），`BLENDMODE` 0，槽 0
-   * 由渲染图填合成 RT，`g_Color4` 置 (1, 1, 1, 1)（实测 `采样 × g_Color4`、`g_Color4` = 1）。有子层的组合层才编（effect 运行时
-   * 可能全关），其余为 null。
+   * 由渲染图填合成 RT，`g_Color4` 置 (1, 1, 1, 1)（实测 `采样 × g_Color4`、`g_Color4` = 1）。组合层都编（effect 运行时可能全关；L7 起
+   * 没有子层的也编，运行中挂上子层就成了组），不是组合层的为 null。有子层的在对象循环里编，没有子层的在全部对象之后编（程序排在表尾）。
    */
   groupUpload: ScenePass | null;
   /**
@@ -2896,6 +2896,33 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     isSceneObject(object) ? 1 + (Array.isArray(object.effects) ? object.effects.length : 0) : 0;
   const progressTotal = scene.objects.reduce((sum: number, object) => sum + progressWeight(object), 0);
   let progressDone = 0;
+  /** 没有子层的组合层（L7）：`groupUpload` 等全部对象编完再编（`flushGroupUploads`），见 `compileOne` 末尾。 */
+  const lateGroupUploads: { index: number; layer: SceneLayer }[] = [];
+  /**
+   * 组的上屏 pass（P5b 步骤 4，p5-REPORT `p5b-grp-nofx` / `nofx0`）：无 effect、colorBlendMode ∈ {0, 31} 时用。同 colorBlendMode 混合的
+   * passthrough 材质，`BLENDMODE` 0（不读快照），槽 0 是合成 RT。`required`：有子层的组缺材质时报 `material:missing`；没有子层的组合层（L7）
+   * 只是备用，缺了留 null（运行中真变成组时渲染器报 `render:no-group-upload`，宿主整场重载、按组编译时再报）。
+   */
+  async function compileGroupUpload(index: number, layer: SceneLayer, required: boolean): Promise<void> {
+    const path = passthroughMaterial(scene.version);
+    const text = await fs.text(path);
+    const pass = text ? parseMaterial(text).passes[0] : undefined;
+    if (!pass) {
+      if (required) unsupported.add(`material:missing:${path}`);
+      return;
+    }
+    layer.groupUpload = await compilePass(
+      { ...pass, combos: { ...pass.combos, ...passthroughCombos(0) } },
+      { key: `objects/${index}/groupupload`, planned: [{ slot: 0 }] },
+    );
+    // 实测上屏颜色是 (1, 1, 1, 1)（`p5b-grp-nofx` 事件 125 的 g_Color4）
+    layer.groupUpload.uniforms.g_Color4 = [1, 1, 1, 1];
+  }
+  /** 编排着的没有子层的组合层的 `groupUpload`（L7）：`finalize`（泛光链之后）与 `compileFragment`（`compileOne` 之后）调，按 `compileOne` 的先后。 */
+  async function flushGroupUploads(): Promise<void> {
+    for (const { index, layer } of lateGroupUploads.splice(0))
+      if (!settled()) await compileGroupUpload(index, layer, false);
+  }
   /** 编一个对象（原对象循环体，L1 起是闭包，`compileObject` 与 `compileFragment` 共用）；原循环里的 `continue` 在这里是 `return`。 */
   async function compileOne(index: number): Promise<void> {
     const object = scene.objects[index];
@@ -3122,22 +3149,10 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         layer.effects.length > 0 || blended || depended || !!layer.puppet.textureChannels,
         blended ? cbm : 0,
       );
-    if (hasChildren) {
-      // 组的上屏（P5b 步骤 4，p5-REPORT `p5b-grp-nofx` / `nofx0`）：无 effect、colorBlendMode ∈ {0, 31} 时用。effect 运行时可能全关，
-      // 所以有子层就编。同 colorBlendMode 混合的 passthrough 材质，`BLENDMODE` 0（不读快照），槽 0 是合成 RT
-      const path = passthroughMaterial(scene.version);
-      const text = await fs.text(path);
-      const pass = text ? parseMaterial(text).passes[0] : undefined;
-      if (!pass) unsupported.add(`material:missing:${path}`);
-      else {
-        layer.groupUpload = await compilePass(
-          { ...pass, combos: { ...pass.combos, ...passthroughCombos(0) } },
-          { key: `objects/${index}/groupupload`, planned: [{ slot: 0 }] },
-        );
-        // 实测上屏颜色是 (1, 1, 1, 1)（`p5b-grp-nofx` 事件 125 的 g_Color4）
-        layer.groupUpload.uniforms.g_Color4 = [1, 1, 1, 1];
-      }
-    }
+    // 组的上屏（P5b 步骤 4）：effect 运行时可能全关，所以有子层就编。没有子层的组合层运行中也可能挂上子层变成组（L7，P6d3 步骤 0：当帧就有了
+    // 合成 RT），同样要有，但放到全部对象之后编（`finalize`，片段是单对象收尾）：新增的程序排在程序表尾，不挪动别的对象的程序下标
+    if (hasChildren) await compileGroupUpload(index, layer, true);
+    else if (layer.passthroughModel) lateGroupUploads.push({ index, layer });
     if (textObject && !settled())
       layer.text = await compileText(index, object, {
         fs,
@@ -3309,6 +3324,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       !settled()
     )
       bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
+    // 没有子层的组合层的 `groupUpload`（L7）：收尾里别的程序（体积光、泛光链）之后编，新程序排在程序表尾，不挪动已有的程序下标
+    await flushGroupUploads();
     if (!input.sceneAssets.length) unsupported.add("assets:missing");
     // 动画层字段脚本的属主核对（P12c；P12e 起层 id = JSON 下标 `entry`，收集时已填好，不再回填）：只留 `layerDefs` 保留下来的层。对象没有运行时
     // （不是 skinned puppet、不是带骨骼的模型），或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
@@ -3439,6 +3456,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       if (!orthographic) for (const key of perspectiveObjectIssues(object)) unsupported.add(key);
 
       await compileOne(at);
+      // 没有子层的组合层的 `groupUpload`（L7）：同 `finalize`，排在这个对象自己的程序之后
+      await flushGroupUploads();
       const layer = bundle.layers.find((item) => item.object === at);
       if (!layer) throw new Error(`对象 ${at} 没有进图层`);
       // 单对象重编译：配置里没写 `id` 时 `compileOne` 按表长发 id（整场时是它在表里的位置，摘掉旧图层之后表长变了），沿用旧图层的

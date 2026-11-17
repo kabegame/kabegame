@@ -884,9 +884,25 @@ describe("compileScene：组（P5b 步骤 4）", () => {
     expect(upload.uniforms.g_Color4).toEqual([1, 1, 1, 1]);
     expect(upload.textures[0]).toBeUndefined();
     expect(upload.runtime[0]).toBeUndefined();
-    // 子层、普通图层、没有子层的组合层都没有
+    // 子层、普通图层都没有
     for (const index of [0, 2, 3, 4, 5]) expect(bundle.layers[index].groupUpload, String(index)).toBeNull();
-    expect((await compileGroup([compose(10)])).layers[0].groupUpload).toBeNull();
+  });
+
+  it("L7：没有子层的组合层也编 groupUpload（运行中可能变成组），在全部对象之后编、程序排在表尾，不挪动别的对象的程序下标", async () => {
+    const lone = await compileGroup([compose(10), image(1, null)]);
+    expect(lone.unsupported).toEqual([]);
+    const upload = lone.layers[0].groupUpload!;
+    expect(upload).toMatchObject({ key: "objects/0/groupupload", blending: "normal" });
+    expect(upload.uniforms.g_Color4).toEqual([1, 1, 1, 1]);
+    // 新程序在表尾：别的 pass 引用的下标都在它前面
+    const others = [...lone.layers[0].passes, ...lone.layers[1].passes].map((pass) => pass.program!);
+    expect(upload.program).toBe(lone.programs.length - 1);
+    for (const program of others) expect(program).toBeLessThan(upload.program!);
+    // 和「后面那个对象」单独编出的程序下标相同（groupUpload 没插在中间）
+    const without = await compileGroup([image(1, null)]);
+    expect(lone.layers[1].passes.map((pass) => lone.programs[pass.program!])).toEqual(
+      without.layers[0].passes.map((pass) => without.programs[pass.program!]),
+    );
   });
 
   it("上屏材质按场景 version（同 colorBlendMode 混合的 passthrough）：> 2 用 effectpassthrough_4；缺材质报 material:missing", async () => {

@@ -1,5 +1,19 @@
 # v4.7.0 regression
 
+## 场景壁纸运行中的结构变化不重编（活的场景图 L7）
+
+2026-11-17 Windows dev。脚本 `setParent` 进出组合层 / 挂到骨骼、`destroyLayer` 删组或删组里的对象，不再整场重编译，当帧生效（同 Wallpaper Engine）：每个组合层都预编 `groupUpload` 上屏 pass（没有子层的在全部对象之后编、程序排表尾）；登记表 `restructure` 比较重算前后的组 / 组的层数 / 子树 / 挂点 / 组内 effect 标记报出变化集合；宿主 `applyRestructure` 把运行中出现的组内不支持组合（子层读快照、fullscreen、透视、模型、形状，以及透视场景 / 被依赖 / 开雾的组）按「那个对象不画 + 看板娘提示一次」处理、消失时装回，其余交给渲染器在同一帧脚本之后 `flushRestructure`：按计划签名加组归属（`placement`）重建受影响图层、缺的管线同步建、合成 RT 按组的层数换池、挂点表更新，失败整场重载兜底。`reparentNeedsRecompile` / `destroyNeedsRecompile` 删掉，`fragmentBlocker` 不再挡组合层。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T0 单测与检查 | Windows | wpe-scene vitest（compile / script / dev / render / animation / text、`changes`、`fragmentCache`、全部 `host.*`）、`tsc`、prettier | 0 error；全过 | 2026-11-17 Claude：189 文件 3847 条通过（111 skipped）；我复跑 L7 相关 12 个文件 355 条；执行代理 11 条 + 我 5 条变异全部抓到（我另 1 条是等价变异） |
+| [x] | T1 编译产物与状态不变 | Windows | 编译摘要（`KBP_IGNORE_GROUP_UPLOAD=1`）、L3 登记表 / L3b 子系统对照、L1 片段对照、L6 会话对照、全库画面哈希、`scriptCorpus` | 摘要 233 全同；对照全 0；哈希 216 × 3 档不变；`scriptCorpus` 只有有空组合层的场景 `stateDigest` 变（`constants` 多了 `groupUpload`） | 2026-11-17 Claude：摘要与 L0 原基线 233/233 相同；登记表 6448 个对象 / 子系统 233 张全 0；片段 6407 个、会话 2572 个 0 不同（blocked 只剩 `depended`）；`scriptCorpus` 95 张 `stateDigest` 变、逐张与「有空组合层」一致、脚本行为与控制台摘要不变；画面哈希对上的 213 张 × 3 档全部相同（基线里 3 张已不在库里） |
+| [x] | T2 进组 / 成组 / 出组 / 删组当帧生效 | Windows dev 回放 | `ignore/live/l7/proj/live-regroup`（第 60 帧 A 进组 G、90 帧 C 挂进空组合层 H、120 帧 A 出组、180 帧删组 G，粒子 P 一直发射）按 f37 / 66 / 115 / 159 / 219 回放，与 WPE 抓帧比 | 没有整场重编译、`restructured` 逐步 1–4；五张整帧只差粒子行与标记行；脚本日志与 WPE 逐行相同；P 的粒子连续 | 2026-11-17 Claude：`recompile: []`、`restructured` 1 / 2 / 3 / 4；差异连通块只在 y 0–32（标记 M，WPE 抓到的是帧间）与 y 96–128（粒子行，发射时序），A / B / C / G / H 各块 0 差异；11 行日志逐行相同；P 存活 112 → 173 连续 |
+| [x] | T3 删组当帧子层回顶层（原已知差异） | Windows dev 回放 | `ignore/p6/d3/proj/p6d3-struct` 第 5（f660）、6（f760）阶段与 `ignore/p6/d3/out/wpe-s5.png` / `wpe-s6.png` 比 | 两帧 0 差异（P6d3a 时第 6 阶段差左下角 G1） | 2026-11-17 Claude：两帧 `> 0` 像素数都是 0 |
+| [ ] | T4 预览里的实时表现 | Windows dev 预览 | 打开 `live-regroup` 的预览看完整段 | 只有一次「开始渲染」；画面按 WPE 的时序变化；看板娘不弹提示 | 回放已覆盖，预览未看 |
+| [ ] | T5 组内不支持组合的提示 | Windows dev 预览 | 脚本把 fullscreen / 读快照 effect 的图层挂进组 | 那个图层不画、看板娘提示一次；出组后恢复 | 单测覆盖（`host.script.test.ts`）；未真机 |
+| [ ] | T6 挂点换父 | Windows dev | `ignore/p6/d3/proj/p6d3-attach` | 挂到骨骼后矩阵当帧跟 puppet，无重编译 | 单测覆盖（`l7` 挂点表、`registry` 换挂点）；未真机 |
+
 ## 场景壁纸运行中单对象重编译（活的场景图 L6）
 
 2026-11-17 Windows dev。要重编译才生效的对象级改动（脚本写文本层的 `font` 等非运行中字段、属性面板改 `size` / `colorBlendMode`、打开带不支持项或在冻结图层上的 effect）不再整场重新加载：宿主按路径分级（`objects/<i>/…` 对象级、`general/…` 场景级），对象级交给 `LiveObjects.recompile`（和 `createLayer` 同一条队列），编译会话按开会话时留的原文套这个对象累计的覆盖重编（`compileFragment` 带 `overrides`），片段到达后下一帧开头替换：登记表 / 状态 / 子系统按对象换（关键帧按 `id` 接回时钟，文本旧排版留到新排版回来），GPU `installObject` 替换同一对象、粒子定义没变时沿用旧粒子树。同一对象在编期间再写只记最新一份、到达后按最新再编一次（最后一次胜出）。`init` 里写的（语料 13608 / 15019 的 `font`）片段到齐接进还没换上的 bundle，不再整场编第二次。场景级（`general/hdr`）、被依赖的图层、带体积光的灯、整场重载进行中新场景还没换上时的写入照旧整场。

@@ -4,7 +4,7 @@
  * - 加：登记表（场景级增量 → 对象）→ 状态 → restructure → 关键帧 → puppet → 文本 → 脚本（refreshScripts → replayWritesFor）→ adoptBundle → …；replace 先摘旧的
  *   （关键帧 L6 起走 replaceObjects，按 id 接回时钟）；
  * - 删：声音 → 文本排版引用 → puppet → 关键帧 → 状态按对象的表 →（structural 才有）登记表 → restructure 一次；
- * - 删除生效处（`onDestroyed`）L4 起接 `structural: true`：不改组归属的删除摘登记表并 restructure，改组归属的只摘登记表、不 restructure、照旧整场重载；
+ * - 删除生效处（`onDestroyed`）：L7 起一律摘登记表并 restructure，变了的交给渲染器当帧重排，不再整场重载；
  * - 真的关键帧 / puppet 建删 100 次后不留残留。
  */
 import { describe, expect, it, vi } from "vitest";
@@ -39,8 +39,8 @@ type Internals = {
   scriptApi: unknown;
   sceneMedia: unknown;
   addCompiledObject(delta: unknown, mode: "add" | "replace"): Promise<void>;
-  removeObjectEverywhere(objects: number[], options?: { structural?: boolean; restructure?: boolean }): void;
-  onDestroyed(objects: number[], regroup: boolean): void;
+  removeObjectEverywhere(objects: number[], options?: { structural?: boolean }): unknown;
+  onDestroyed(objects: number[]): void;
   requestScriptReload(): void;
 };
 
@@ -83,11 +83,14 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     const { host, log, stub } = makeHost();
     const unsupported: string[] = [];
     host.registry = stub("registry", {
-      bundle: { unsupported, configs: [] },
+      bundle: { unsupported, configs: [], layers: [{ object: 3, subtree: [] }], general: {} },
       applyDelta: () => {},
       addObject: () => {},
       replaceObject: () => {},
-      restructure: () => new Map([[3, ["model:passthrough:children:framebuffer"]]]),
+      restructure: () => ({
+        changed: new Set([3]),
+        issues: new Map([[3, ["model:passthrough:children:framebuffer"]]]),
+      }),
     });
     host.scriptState = stub("state", {
       texts: new Map(),
@@ -119,20 +122,23 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
       "runtime.replayWritesFor",
       "api.adoptBundle",
     ]);
-    // restructure 返回的组内问题按不支持项处理
-    expect(unsupported).toEqual(["model:passthrough:children:framebuffer"]);
-    expect(report.warn).toHaveBeenCalled();
+    // restructure 返回的组内问题（L7）：不并进整场的不支持项（场景不退回），并进片段的不支持项（`LiveObjects` 据此不装 GPU、上报），记进组内问题表
+    expect(unsupported).toEqual([]);
+    expect(delta.fragment.unsupported).toEqual(["model:passthrough:children:framebuffer"]);
+    expect((host as unknown as { groupIssues: Map<number, string[]> }).groupIssues.get(3)).toEqual([
+      "model:passthrough:children:framebuffer",
+    ]);
   });
 
   it("replace：关键帧走 replaceObjects（L6 按 id 接回时钟）、puppet 先摘旧的，登记表与状态走 replace；只给 fragment（没有场景级增量）时不调 applyDelta", async () => {
     const { host, log, stub } = makeHost();
     const previous = { mesh: null } as never;
     host.registry = stub("registry", {
-      bundle: { unsupported: [], configs: [], layers: [{ object: 5 }] },
+      bundle: { unsupported: [], configs: [], layers: [{ object: 5, subtree: [] }], general: {} },
       applyDelta: () => {},
       addObject: () => {},
       replaceObject: () => {},
-      restructure: () => new Map(),
+      restructure: () => ({ changed: new Set(), issues: new Map() }),
     });
     host.scriptState = stub("state", {
       texts: new Map([[5, previous]]),
@@ -163,11 +169,11 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     const layout = { mesh: null } as never;
     const release = vi.fn();
     host.registry = {
-      bundle: { unsupported: [], configs: [] },
+      bundle: { unsupported: [], configs: [], layers: [], general: {} },
       applyDelta() {},
       addObject() {},
       replaceObject() {},
-      restructure: () => new Map(),
+      restructure: () => ({ changed: new Set(), issues: new Map() }),
     };
     host.scriptState = { texts: new Map(), layers, addObject() {}, replaceObject() {}, setText };
     host.sceneTexts = stub("texts", { releaseLayout: release, layoutInCurrent: async () => layout });
@@ -191,11 +197,11 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     const release = vi.fn();
     let answer: (layout: unknown) => void = () => {};
     host.registry = {
-      bundle: { unsupported: [], configs: [], layers: [{ object: 7 }] },
+      bundle: { unsupported: [], configs: [], layers: [{ object: 7, subtree: [] }], general: {} },
       applyDelta() {},
       addObject() {},
       replaceObject() {},
-      restructure: () => new Map(),
+      restructure: () => ({ changed: new Set(), issues: new Map() }),
     };
     host.scriptState = {
       texts,
@@ -243,9 +249,9 @@ describe("SceneHost.removeObjectEverywhere（L3b）", () => {
     host.sceneAnimations = stub("animations", { removeObjects: () => {} });
     host.scriptState = stub("state", { texts: new Map([[1, { mesh: null }]]), dropObject: () => {} });
     host.registry = stub("registry", {
-      bundle: { configs: [] },
+      bundle: { configs: [], layers: [], general: {} },
       removeObject: () => true,
-      restructure: () => new Map(),
+      restructure: () => ({ changed: new Set(), issues: new Map() }),
     });
     return { host, log };
   }
@@ -283,26 +289,11 @@ describe("SceneHost.removeObjectEverywhere（L3b）", () => {
     expect(log).toEqual([]);
   });
 
-  it("restructure: false：摘登记表条目，不重算组与挂点", () => {
-    const { host, log } = wired();
-    host.removeObjectEverywhere([1, 2], { restructure: false });
-    expect(log).toEqual([
-      "sounds.remove",
-      "texts.releaseLayout",
-      "puppets.remove",
-      "animations.removeObjects",
-      "state.dropObject",
-      "state.dropObject",
-      "registry.removeObject",
-      "registry.removeObject",
-    ]);
-  });
-
-  it("删除生效处（onDestroyed，L4）：不改组归属时摘登记表并 restructure 一次，不重载；照旧记结构、停声音", () => {
+  it("删除生效处（onDestroyed，L7）：一律摘登记表并 restructure 一次，不重载；照旧记结构、停声音；restructured 加一", () => {
     const { host, log } = wired();
     const reload = vi.fn();
     host.requestScriptReload = reload;
-    host.onDestroyed([1], false);
+    host.onDestroyed([1]);
     expect(log).toEqual([
       "sounds.remove",
       "texts.releaseLayout",
@@ -314,22 +305,29 @@ describe("SceneHost.removeObjectEverywhere（L3b）", () => {
     ]);
     expect(reload).not.toHaveBeenCalled();
     expect((host as unknown as { structure: { destroyed: number[] } }).structure.destroyed).toEqual([1]);
+    expect((host as unknown as { stats: { restructured: number; recompiled: unknown[] } }).stats).toMatchObject({
+      restructured: 1,
+      recompiled: [],
+    });
   });
 
-  it("删除生效处（onDestroyed，L4）：改组归属时只摘登记表条目、不 restructure，请求整场重载", () => {
-    const { host, log } = wired();
+  it("删除生效处（onDestroyed，L7）：删组时派生量变了的子层交给渲染器（当前场景、渲染器画的正是脚本状态时），不重载", () => {
+    const { host } = makeHost();
     const reload = vi.fn();
     host.requestScriptReload = reload;
-    host.onDestroyed([1], true);
-    expect(log).toEqual([
-      "sounds.remove",
-      "texts.releaseLayout",
-      "puppets.remove",
-      "animations.removeObjects",
-      "state.dropObject",
-      "registry.removeObject",
-    ]);
-    expect(reload).toHaveBeenCalledTimes(1);
+    const state = { texts: new Map(), dropObject: () => {} };
+    const restructure = vi.fn();
+    host.scriptState = state;
+    host.registry = {
+      bundle: { configs: [], layers: [{ object: 2, subtree: [] }], general: {} },
+      removeObject: () => true,
+      restructure: () => ({ changed: new Set([2]), issues: new Map() }),
+    };
+    (host as unknown as { renderer: unknown }).renderer = { sceneState: state, restructure, forgetObjects() {} };
+    host.onDestroyed([1]);
+    expect(restructure).toHaveBeenCalledWith([2]);
+    expect((host as unknown as { restructurePending: boolean }).restructurePending).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
   });
 
   it("真的关键帧 / puppet 建删 100 次：不留残留", () => {
@@ -359,7 +357,7 @@ describe("SceneHost.removeObjectEverywhere（L3b）", () => {
         } as never,
       ]);
       animations.control(`objects/${i}/alpha`);
-      host.onDestroyed([i], false);
+      host.onDestroyed([i]);
     }
     expect(animations.size).toBe(0);
     const inner = animations as unknown as { byId: Map<string, unknown>; controls: Map<string, unknown> };

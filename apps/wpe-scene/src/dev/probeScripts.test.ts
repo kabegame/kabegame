@@ -223,6 +223,53 @@ describe("删除生效与宿主同一套接线（P6d3a）", () => {
     // 诊断里也只剩没被删的那段脚本
     expect(scripts.result().diagnostics.map((item) => (item as { id: string }).id)).toEqual(["objects/0/color"]);
   });
+
+  it("结构变化（L7）：换父记进结构并调 live.restructure()，删除生效后调 live.restructure(生效的对象)；不给 live 时只改状态", async () => {
+    for (const withLive of [true, false]) {
+      const calls: string[] = [];
+      const bundle = await compile();
+      const state = SceneState.fromBundle(bundle);
+      let frame = 0;
+      const realm = fakeRealm({
+        "objects/0/color": (g) => ({
+          update: (value: unknown) => {
+            frame++;
+            if (frame === 1) g.thisScene.getLayer("T").setParent(g.thisScene.getLayer("FR"));
+            if (frame === 2) g.thisScene.destroyLayer("FR");
+            return value;
+          },
+        }),
+      });
+      const scripts = createProbeScripts({
+        bundle,
+        state,
+        sceneAssets: ["A:/assets"],
+        properties: probeUserProperties(PROJECT, {}),
+        screen: [1280, 720],
+        options: OPTIONS,
+        createRealm: realm.createRealm,
+        ...(withLive
+          ? {
+              live: {
+                create: () => {},
+                settle: async () => {},
+                drain: () => {},
+                restructure: (removed?: readonly number[]) =>
+                  void calls.push(removed ? `removed ${removed.join(",")}` : "reparented"),
+              },
+            }
+          : {}),
+      });
+      await scripts.load();
+      scripts.frame(0.1, 0.1);
+      expect(state.layers.get(1)!.parent).toBe(0);
+      expect(scripts.structure?.().parents).toEqual([[1, 0, null]]);
+      scripts.frame(0.1, 0.2);
+      expect(state.layers.has(0)).toBe(false);
+      expect(calls).toEqual(withLive ? ["reparented", "removed 0"] : []);
+      scripts.dispose();
+    }
+  });
 });
 
 describe("scripts 选项（probeScriptsOptionsOf）", () => {

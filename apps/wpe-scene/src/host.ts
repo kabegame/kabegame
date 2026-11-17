@@ -26,7 +26,7 @@ import {
   type LiveCreateStats,
   type LiveTarget,
 } from "./script/createLayerChange";
-import { bindingOwner, SceneRegistry } from "./compile/registry";
+import { bindingOwner, SceneRegistry, type RestructureResult } from "./compile/registry";
 import type { UserTextureSource } from "./compile/usertextures";
 import { openSceneSession, type CompileSessionClient } from "./compile/client";
 import { SceneLoadProgress } from "./progress";
@@ -70,9 +70,9 @@ import {
   createStructureObject,
   recordDestroyed,
   recordReparent,
-  reparentNeedsRecompile,
   settleDestroyed,
   syncAllocator,
+  trackGroupIssues,
   type ObjectAllocator,
 } from "./script/structure";
 import { createIframeRealm, getJsModuleIndex } from "./script/realm";
@@ -113,13 +113,15 @@ export interface SceneProperty {
 /**
  * 宿主计数（dev 探针读）：就地应用次数与每次整场重编译的原因 / 键；运行中建层（L5）的计数：`created.sync` 在 `createLayer` 返回前连 GPU 一起装好的，
  * `async` 之后才装上的（片段异步编、GPU 异步备），`unsupported` 带不支持项、没装 GPU 的。`recompiledObjects`（L6）：交给单对象重编译的次数（每次
- * 对象级的重编译写入、每个属性改动涉及的每个对象各算一次，合并之前的；这些不进 `recompiled`）。
+ * 对象级的重编译写入、每个属性改动涉及的每个对象各算一次，合并之前的；这些不进 `recompiled`）。`restructured`（L7）：结构变化（换父、删除生效）当场
+ * 重算组与挂点、交给渲染器当帧重排的次数（不再整场重编译，不进 `recompiled`）。
  */
 export interface SceneHostStats {
   applied: number;
   recompiled: { reason: string; keys: string[] }[];
   created: LiveCreateStats;
   recompiledObjects: number;
+  restructured: number;
 }
 
 const LOST_RETRY_WINDOW_MS = 60_000;
@@ -276,6 +278,16 @@ export class SceneHost {
    * 没命中的 `init` 之后等片段到齐再接），场景换上时成为 `live`。
    */
   private loadingLive: LiveObjects<PreparedObject> | null = null;
+  /** 同 `loadingLive`：这次加载的登记表（L7：`init` 里换父 / 删除时重算组与挂点的是它，建 GPU 场景时自然带上）。 */
+  private loadingRegistry: SceneRegistry | null = null;
+  /**
+   * 运行中出现的组内不支持组合（L7，`trackGroupIssues`）：因为它不画的对象 → 键，属于当前场景（换场景时清空）。`groupHidden` 是其中卸过 GPU 运行时
+   * （或接进来时没装）的，问题消失时照常装回来。
+   */
+  private readonly groupIssues = new Map<number, string[]>();
+  private readonly groupHidden = new Set<number>();
+  /** 交给渲染器、还没重排的结构变化（L7）：这一帧脚本之后 `flushRestructure` 做掉，出错整场重载。 */
+  private restructurePending = false;
   private scriptBundle: SceneBundle | null = null;
   private scriptState: SceneState | null = null;
   /**
@@ -408,6 +420,7 @@ export class SceneHost {
     recompiled: [],
     created: { sync: 0, async: 0, unsupported: 0 },
     recompiledObjects: 0,
+    restructured: 0,
   };
   private receivedProperties = false;
   private readonly reader = new FetchSceneReader();
@@ -800,8 +813,8 @@ export class SceneHost {
   }
 
   /**
-   * `setParent` 改完状态（P6d3a）：记进结构（之后每次编译带上）；会改编译产物（组归属、挂点）的才请求一次重编译，别的换父只改状态、
-   * 渲染侧每帧读状态。组深度检查失败后父被置空的也走这里。
+   * `setParent` 改完状态（P6d3a）：记进结构（之后每次编译带上），登记表当场重算组与挂点（L7，`restructure`），变了的交给 `applyRestructure`：
+   * 渲染器当帧重排（进组当帧画进组的合成 RT，同 WPE），不再整场重编译。组深度检查失败后父被置空的也走这里。
    */
   private onReparented(change: {
     object: number;
@@ -811,10 +824,115 @@ export class SceneHost {
     bone: string | null;
   }): void {
     recordReparent(this.structure, change.object, change.parent, change.bone);
-    if (!this.scriptState || !reparentNeedsRecompile({ state: this.scriptState, bundle: this.scriptBundle, ...change }))
-      return;
-    this.stats.recompiled.push({ reason: `script（setParent ${change.object}）`, keys: [] });
-    this.options.report.debug(`场景脚本换父改了组或挂点：${change.object}`);
+    const registry = this.scriptRegistry();
+    const state = this.scriptState;
+    if (!registry || !state) return;
+    this.stats.restructured++;
+    this.applyRestructure(
+      registry,
+      registry.restructure(state, (item) => this.restructureBone(registry.bundle, item)),
+    );
+  }
+
+  /** 脚本当前看到的那份登记表（L7）：`init` 期间（首次加载或清空脚本存储后）是这次加载的，平时是当前的；都对不上 `scriptBundle` 时 null。 */
+  private scriptRegistry(): SceneRegistry | null {
+    const bundle = this.scriptBundle;
+    if (this.loadingRegistry?.bundle === bundle) return this.loadingRegistry;
+    return this.registry?.bundle === bundle ? this.registry : null;
+  }
+
+  /** 渲染器画的正是脚本状态（场景已换上、没在加载新场景），GPU 的装卸与重排才落在它上面。 */
+  private gpuCurrent(registry: SceneRegistry): boolean {
+    const renderer = this.renderer;
+    return registry === this.registry && !!renderer?.sceneState && renderer.sceneState === this.scriptState;
+  }
+
+  /**
+   * 结构变化之后（L7）：登记表 `restructure` 的结果交到这里（换父、删除生效、`addCompiledObject` 接进对象）。
+   * - 不是当前场景的登记表（`init` 期间那份，还没有 GPU）：派生量建场景时自然带上；组内不支持组合同编译期，并进它的 `bundle.unsupported`（建场景时
+   *   整场退回预览图，之前是整场重编译后同样退回）。
+   * - 当前场景：组内不支持组合按「待定」4（`trackGroupIssues`）：新出现的那个对象不画（卸 GPU 运行时）、`report.unsupported` 提示一次，场景不退回；
+   *   问题消失的照常装回来（同步备不好就整场重载）。其余派生量变了、已装 GPU 的对象交给渲染器，这一帧脚本之后（`flushRestructure`）当帧重排。
+   * `skip`：不交给渲染器的对象（`addCompiledObject` 接进来的那个，GPU 由 `LiveObjects` 接着装）。返回这次新出现问题的对象 → 键。
+   */
+  private applyRestructure(
+    registry: SceneRegistry,
+    result: RestructureResult,
+    skip: number | null = null,
+  ): Map<number, string[]> {
+    const { bundle } = registry;
+    if (registry !== this.registry) {
+      const keys = [...trackGroupIssues(new Map(), result, bundle.layers, bundle.general).added.values()].flat();
+      if (keys.length > 0) {
+        const unsupported = bundle.unsupported;
+        for (const key of keys) if (!unsupported.includes(key)) unsupported.push(key);
+        unsupported.sort();
+        this.options.report.warn(`场景壁纸 ${this.options.imageId} 加载中的结构变化，组内用法不支持：`, [
+          ...new Set(keys),
+        ]);
+      }
+      return new Map();
+    }
+    const { added, cleared } = trackGroupIssues(this.groupIssues, result, bundle.layers, bundle.general);
+    const gpu = this.gpuCurrent(registry);
+    const renderer = this.renderer;
+    for (const [object, keys] of added) {
+      this.options.report.debug(
+        `场景壁纸 ${this.options.imageId} 运行中的结构变化让对象 ${object} 用到不支持的组内用法，不画：${keys.join(",")}`,
+      );
+      this.options.report.unsupported?.(keys);
+      if (gpu && object !== skip && renderer!.hasObject(object)) {
+        renderer!.removeObject(object);
+        this.groupHidden.add(object);
+      }
+    }
+    for (const object of cleared) {
+      if (!this.groupHidden.delete(object) || !gpu || object === skip) continue;
+      const layer = bundle.layers.find((item) => item.object === object);
+      if (!layer || !this.scriptState?.layers.has(object)) continue;
+      try {
+        const prepared = renderer!.prepareObjectSync(layer);
+        if (!prepared) throw new Error("程序没有就绪");
+        renderer!.installObject(prepared);
+      } catch (error) {
+        this.reloadAfterRestructure(`对象 ${object} 出组后装回失败：${String(error)}`);
+      }
+    }
+    const objects = [...result.changed].filter((object) => object !== skip && !this.groupIssues.has(object));
+    if (gpu && objects.length > 0) {
+      renderer!.restructure(objects);
+      this.restructurePending = true;
+    }
+    return added;
+  }
+
+  /**
+   * 交给渲染器的结构变化这一帧做掉（L7，`beforeFrame` 的脚本与删除生效之后、绘制之前）：重排失败（规划问题、管线建不出、合成 RT 建不出）时整场重载
+   * 兜底（结构里照记，重载后一致）。没交过的什么都不做；渲染器的 `sync` 也会做（暂停时的补画帧），那里出错就只能退回。
+   */
+  private flushRestructure(): void {
+    if (!this.restructurePending) return;
+    this.restructurePending = false;
+    const renderer = this.renderer;
+    if (!renderer?.sceneState || renderer.sceneState !== this.scriptState) return;
+    try {
+      renderer.flushRestructure();
+    } catch (error) {
+      this.reloadAfterRestructure(`重排失败：${String(error)}`);
+    }
+  }
+
+  /** 换场景 / 退回 / 销毁（L7）：运行中的组内问题与没做的重排属于旧场景，丢掉。 */
+  private resetRestructure(): void {
+    this.groupIssues.clear();
+    this.groupHidden.clear();
+    this.restructurePending = false;
+  }
+
+  /** 结构变化接不上（L7）：记一条、整场重载（同 `LiveObjects` 的 `reload`）。 */
+  private reloadAfterRestructure(reason: string): void {
+    this.stats.recompiled.push({ reason: `script（结构变化 ${reason}）`, keys: [] });
+    this.options.report.debug(`场景壁纸 ${this.options.imageId} 结构变化退回整场重载：${reason}`);
     this.requestScriptReload();
   }
 
@@ -874,7 +992,14 @@ export class SceneHost {
       prepareSync: (layer) => this.renderer!.prepareObjectSync(layer),
       prepare: (layer) =>
         gpu() ? this.renderer!.prepareObject(layer) : Promise.reject(new Error("场景已经换了，不再备这个对象")),
-      install: (prepared) => this.renderer!.installObject(prepared),
+      // 异步备好的对象装上之前，结构变化让它进了用到不支持用法的组（L7）：不装（出组时由 `applyRestructure` 照常装回来）
+      install: (prepared) => {
+        const object = prepared.layer.object;
+        if (current() && this.groupIssues.has(object)) {
+          this.renderer!.discardPrepared(prepared);
+          this.groupHidden.add(object);
+        } else this.renderer!.installObject(prepared);
+      },
       discard: (prepared) => this.renderer?.discardPrepared(prepared),
       warm: async (layer) => {
         if (!gpu()) return;
@@ -904,27 +1029,30 @@ export class SceneHost {
   }
 
   /**
-   * 删除生效之后（P6d3a）：记进结构、声音停播并摘掉、光标的悬停 / 按下集合摘掉（不发 Leave / Up）；删除改了组归属时请求重编译。
+   * 删除生效之后（P6d3a）：记进结构、声音停播并摘掉、光标的悬停 / 按下集合摘掉（不发 Leave / Up）。
    * L3b 起顺带清各子系统与状态里被删对象的残留（关键帧、puppet、文本排版引用、状态的按对象的表），只少占内存，不改画面。
-   * L4 起登记表一起摘（`structural: true`）：不改组归属的删除接着 `restructure`（挂点、子对象变根后的父）；改组归属的只摘登记表条目、不
-   * `restructure`（渲染器的组合成 RT 与子层的 op 还按旧的组，重算会让子层被当顶层去画），照旧整场重载（L7 去掉）。GPU 资源由下一次 `sync` 的
-   * `releaseRemoved` 释放。
+   * L4 起登记表一起摘；L7 起一律接着 `restructure`（挂点、子对象变根后的父、删组后子层回顶层），变了的交给 `applyRestructure`，渲染器在这一帧脚本之后
+   * 先释放被删对象（`releaseRemoved`）、再按新的组与挂点重排：删组当帧剩下的子层由顶层画（同 WPE），不再整场重编译。
    */
-  private onDestroyed(objects: number[], regroup: boolean): void {
+  private onDestroyed(objects: number[]): void {
     recordDestroyed(this.structure, objects);
-    // 声音停播并摘掉、关键帧 / puppet / 文本排版的残留、状态的按对象的表、登记表（L3b、L4）；改组归属时不 restructure
-    this.removeObjectEverywhere(objects, { structural: true, restructure: !regroup });
+    for (const object of objects) {
+      this.groupIssues.delete(object);
+      this.groupHidden.delete(object);
+    }
+    // 声音停播并摘掉、关键帧 / puppet / 文本排版的残留、状态的按对象的表、登记表（L3b、L4）与组和挂点的重算（L7）
+    const restructured = this.removeObjectEverywhere(objects);
     this.renderer?.forgetObjects(objects);
     this.options.report.debug(`场景脚本删除了图层：${objects.join(",")}`);
-    if (!regroup) return;
-    this.stats.recompiled.push({ reason: `script（destroyLayer ${objects.join(",")}）`, keys: [] });
-    this.requestScriptReload();
+    if (!restructured) return;
+    this.stats.restructured++;
+    this.applyRestructure(restructured.registry, restructured.result);
   }
 
   /**
    * 把一个编好的对象接进当前场景（L3b）。mode `"add"`：新对象；`"replace"`：替换已有对象（L5 运行中建层由壳换成编好的、L6 单对象重编译）。
    * 同步部分按顺序：登记表（先场景级增量，再对象）→ 状态 → `restructure`（组与挂点重算；骨骼名取配置原文的 `attachment`，`override` 取
-   * `structure.parents` 是否带这个对象；返回的组内问题非空时按 L7 前的约定当不支持项：并进 `bundle.unsupported`、记一条 warn）→ 绑定按当前属性重写
+   * `structure.parents` 是否带这个对象；结果交给 `applyRestructure`，L7：别的对象当帧重排、组内不支持组合那个对象不画）→ 绑定按当前属性重写
    * （L5，`rebindFragment`）→ 关键帧（替换时 `replaceObjects` 按 id 接回时钟，L6）→ puppet → 文本（排版异步起，回来写状态）→ 脚本（`refreshScripts`
    * 换成定型后的条目，再 `replayWritesFor` 重放这个对象建出以来的写入，L6 替换时运行中写过的字段靠它留着）→ `ScriptApi.adoptBundle` → 声音 → 视频纹理
    * → 用户纹理（预解码异步）→ 媒体 / 音频订阅。GPU 不在这里：L5 的 `LiveObjects` 在它之后备、装（同一顺序，GPU 最后）。
@@ -969,13 +1097,19 @@ export class SceneHost {
       else registry.addObject(fragment);
       state.replaceObject(fragment);
     }
-    const issues = registry.restructure(state, (item) => this.restructureBone(registry.bundle, item));
-    const keys = [...new Set([...issues.values()].flat())];
-    if (keys.length > 0) {
-      const unsupported = registry.bundle.unsupported;
-      for (const key of keys) if (!unsupported.includes(key)) unsupported.push(key);
-      unsupported.sort();
-      this.options.report.warn(`场景壁纸 ${this.options.imageId} 运行中接入对象 ${object}，组内用法不支持：`, keys);
+    // 组与挂点重算（L7）：派生量变了的别的对象（如接进来的对象挂进了组合层，组合层成了组）交给渲染器当帧重排；接进来的对象自己的 GPU 由 `LiveObjects`
+    // 接着装（同 `prepareObjectSync` 按当前的组规划），这里不交。它自己用到组内不支持的用法时把键并进片段的 `unsupported`：`LiveObjects` 据此不装
+    // GPU（替换时卸掉旧的）、上报，同片段自带的不支持项（L5 / L6）；之后出组时照常装回来（`groupHidden`）
+    const restructured = registry.restructure(state, (item) => this.restructureBone(registry.bundle, item));
+    const added = this.applyRestructure(
+      registry,
+      { changed: new Set([...restructured.changed, object]), issues: restructured.issues },
+      object,
+    );
+    const own = added.get(object) ?? (registry === this.registry ? this.groupIssues.get(object) : undefined);
+    if (own && fragment.unsupported.length === 0) {
+      fragment.unsupported = [...own];
+      this.groupHidden.add(object);
     }
     // 1b. 绑定按当前属性全集重写（L5）：缓存里的片段按编它那一刻的属性编的。有被 `needsRecompile` 挡下的（L6：编它之后属性改了冻结图层 / 带不支持项的
     // effect 的开关，片段过期了）时，接完之后这个对象再交一次单对象重编译
@@ -1049,20 +1183,20 @@ export class SceneHost {
   /**
    * 删除生效之后（`flushDestroy` 返回的对象，L3b），按和 `addCompiledObject` 相反的顺序从各处摘掉：声音（停播）→ 文本排版引用（要在状态清表之前取）→
    * puppet → 关键帧 → 状态按对象的表（`dropObject`）→ 登记表（`removeObject`）→ 最后 `restructure` 一次（被删对象的子对象已成根，组与挂点要重算）。
-   * 脚本已由 `runtime.destroyObjects` 清；用户纹理来源是场景级的、媒体 / 音频订阅是只增的，都不摘。
+   * 脚本已由 `runtime.destroyObjects` 清；用户纹理来源是场景级的、媒体 / 音频订阅是只增的，都不摘。返回 `restructure` 的结果与那份登记表（调用方交给
+   * `applyRestructure`，L7）；没碰登记表时 null。
    *
-   * 选项：`structural: false` 只清子系统与状态，不碰登记表（L3b 时删除路径的形态）；`restructure: false` 摘登记表条目但不重算组与挂点（L4：删除改了
-   * 组归属时，渲染器的组合成 RT 与子层的 op 还按旧的组，`restructure` 把子层的 `group` 置 null 会让它们被当顶层去画；这种删除到 L7 之前整场重载）。
+   * 选项：`structural: false` 只清子系统与状态，不碰登记表（L3b 时删除路径的形态）。L7 起删除一律 `restructure`（删组后子层回顶层，渲染器当帧重排）。
    * L3b 审读的另一个阻碍（`ScriptApi.newLayerId` 按 `bundle.layers` 取最大 id，删掉最大 id 的层会让它被重新发出）L4 改成单调分配器解决；
    * `findLayer` / `getLayerByID` 按活的 bundle 找，删掉的找不到是对的。其余各处（状态的按对象的表、关键帧、puppet、文本排版）渲染侧读它们都带空值保护，
    * 且 `releaseRemoved` 在同一帧下一次 `sync` 先于任何读取释放被删对象的 draw。
    */
   private removeObjectEverywhere(
     objects: readonly number[],
-    options: { structural?: boolean; restructure?: boolean } = {},
-  ): void {
-    if (objects.length === 0) return;
-    const { structural = true, restructure = true } = options;
+    options: { structural?: boolean } = {},
+  ): { registry: SceneRegistry; result: RestructureResult } | null {
+    if (objects.length === 0) return null;
+    const { structural = true } = options;
     const set = new Set(objects);
     const state = this.scriptState;
     this.sceneSounds?.remove(objects);
@@ -1074,11 +1208,12 @@ export class SceneHost {
     this.scenePuppets?.remove(set);
     this.sceneAnimations?.removeObjects(set);
     if (state) for (const object of objects) state.dropObject(object);
-    if (!structural) return;
+    if (!structural) return null;
     const registry = this.registry;
-    if (!registry) return;
+    if (!registry) return null;
     for (const object of objects) registry.removeObject(object);
-    if (state && restructure) registry.restructure(state, (item) => this.restructureBone(registry.bundle, item));
+    if (!state) return null;
+    return { registry, result: registry.restructure(state, (item) => this.restructureBone(registry.bundle, item)) };
   }
 
   private requestScriptReload(): void {
@@ -1885,11 +2020,12 @@ export class SceneHost {
           // 删除生效（P6d3a，rea-p6d-layers 4.2 第 7.5 步）：全部脚本之后、绘制之前
           settleDestroyed(this.scriptState, {
             runtime: this.runtime,
-            bundle: this.scriptBundle,
-            removed: (objects, regroup) => this.onDestroyed(objects, regroup),
+            removed: (objects) => this.onDestroyed(objects),
           });
           // destroyAnimationLayer 摘出的层在这里释放（P12e，WPE 先处理待删对象、再尾调排空 `ctx+0x1478`）：包装作废、字段脚本收 destroy
           this.scenePuppets?.settle({ released: this.puppetReleased });
+          // 结构变化（L7）：这一帧的换父、删除、接进的对象改了组与挂点的，渲染器在绘制之前当帧重排（先释放被删对象），出错整场重载
+          this.flushRestructure();
         }
       },
       onError: (reasons) => {
@@ -1958,6 +2094,7 @@ export class SceneHost {
     this.pendingPuppets = null;
     this.bundle = null;
     this.registry = null;
+    this.resetRestructure();
     this.disposeLive();
     this.closeCompileSession();
     this.scriptState = null;
@@ -2190,10 +2327,13 @@ export class SceneHost {
         this.pendingPuppets = { bundle, puppets: pendingPuppets };
         // `init` 里的 `createLayer` 落在这次加载上（L5 点 4）
         this.loadingLive = sceneLive;
+        // `init` 里的 `setParent` 重算的是这份登记表（L7）
+        this.loadingRegistry = registry;
         try {
           await this.ensureRuntime(bundle, target.sceneAssets);
         } finally {
           if (this.loadingLive === sceneLive) this.loadingLive = null;
+          if (this.loadingRegistry === registry) this.loadingRegistry = null;
         }
         // `init` 全部跑完：相机基准按加载规则收尾，被 `scene.json` 覆盖的字段把脚本的写入从重放表里去掉（重编译不复活）。放在代数判断之前：
         // 被取代的加载也跑过 `init`，之后的加载不再进这个分支，不收尾就没人做了（幂等）
@@ -2289,6 +2429,8 @@ export class SceneHost {
           this.scriptState = state;
           // 登记表跟着这份 bundle（L3b）：换场景 / 重编译时换新的（L4：建 GPU 场景之前已建好，粒子序号从它取）
           this.registry = registry;
+          // 运行中的组内问题与没做的重排属于旧场景（L7）：新场景按 bundle 建，组内问题编译期已报
+          this.resetRestructure();
           // 运行中建层与编译会话跟着换手（L5）：旧场景排着的放弃（旧场景随之销毁），新会话用得上才留，否则编完就关
           this.disposeLive();
           this.live = sceneLive;
@@ -2432,6 +2574,7 @@ export class SceneHost {
     this.runtime?.destroy();
     this.runtime = null;
     this.registry = null;
+    this.resetRestructure();
     this.scriptApi = null;
     this.textureCache.clear();
     this.disposeLive();
@@ -2460,14 +2603,16 @@ export class SceneHost {
 
 /**
  * 场景换上后编译会话要不要留（L2）：L5 / L6 只有两种情况用得上——脚本运行中建层或写对象级重编译字段（要求场景有脚本），
- * 或有属性改了要重编译的绑定：`layer-structure` 重编译目标（L6 起路径是 `objects/<i>/…` 的只编那个对象），以及开关会被 `needsRecompile` 挡下的 effect
- * （L6：绑属性的 effect 在文本层上（冻结的图层），或它自己带不支持项）。常驻 Worker 占着翻译器 wasm 实例、着色器翻译缓存与文件缓存，
- * 桌面每块屏一个壁纸窗口外加预览，用不上就关。
+ * 或有属性改了要重编译的绑定：对象级的 `layer-structure` 重编译目标（路径 `objects/<i>/…`，L6 起只编那个对象；L7 起不认场景级的
+ * `general/perspectiveoverridefov`，它整场重载、用不着会话），以及开关会被 `needsRecompile` 挡下的 effect（L6：绑属性的 effect 在文本层上
+ * （冻结的图层），或它自己带不支持项）。结构变化（L7）不用会话。常驻 Worker 占着翻译器 wasm 实例、着色器翻译缓存与文件缓存，桌面每块屏一个壁纸窗口
+ * 外加预览，用不上就关。
  */
 export function sessionUseful(bundle: Pick<SceneBundle, "scripts" | "bindings" | "layers">): boolean {
   if (bundle.scripts.list.length > 0) return true;
   return bundle.bindings.some(({ target }) => {
-    if (target.kind === "recompile") return target.reason === "layer-structure";
+    if (target.kind === "recompile")
+      return target.reason === "layer-structure" && recompileObjectOf(target.path) !== null;
     if (target.kind !== "effect") return false;
     const layer = bundle.layers.find((item) => item.object === target.object);
     return (

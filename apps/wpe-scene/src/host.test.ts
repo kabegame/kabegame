@@ -746,6 +746,7 @@ describe("SceneHost：粒子 instanceoverride（P4a 步骤 5）", () => {
       recompiled: [],
       created: { sync: 0, async: 0, unsupported: 0 },
       recompiledObjects: 0,
+      restructured: 0,
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(1);
@@ -1112,7 +1113,25 @@ describe("SceneHost：编译会话的留与关（L2）", () => {
     expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
   });
 
-  it("只有 layer-structure 绑定（没有脚本）：留着", async () => {
+  it("只有对象级的 layer-structure 绑定（没有脚本）：留着（L6 单对象重编译要用）", async () => {
+    compile.mockImplementation(
+      async () =>
+        ({
+          ...scriptedBundle(),
+          bindings: [
+            { property: "fx", target: { kind: "recompile", reason: "layer-structure", path: "objects/0/size" } },
+          ],
+          scripts: { list: [] },
+        }) as unknown as SceneBundle,
+    );
+    const { host, report } = open();
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
+    expect(sessions.list[0].close).not.toHaveBeenCalled();
+    host.dispose();
+    expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("只有场景级的 layer-structure 绑定（没有脚本）：编完就关（L7：它整场重载，用不着会话）", async () => {
     compile.mockImplementation(
       async () =>
         ({
@@ -1122,7 +1141,7 @@ describe("SceneHost：编译会话的留与关（L2）", () => {
     );
     const { host, report } = open();
     await vi.waitFor(() => expect(report.ready).toHaveBeenCalledTimes(1));
-    expect(sessions.list[0].close).not.toHaveBeenCalled();
+    expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
     host.dispose();
     expect(sessions.list[0].close).toHaveBeenCalledTimes(1);
   });

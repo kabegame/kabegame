@@ -1,13 +1,15 @@
 /**
  * 运行中结构变化的宿主侧共用步骤（P6d3a）：宿主 `beforeFrame` 与 dev 探针跑脚本用同一套接线，所以放在这里。
  * - `settleDestroyed`：脚本阶段之后让待删生效（`SceneState.flushDestroy`），再让脚本运行时对被删对象收 `destroy`、摘条目；
- * - `reparentNeedsRecompile` / `destroyNeedsRecompile`：判断这次结构变化会不会改编译产物（组归属、挂点），要不要请求重编译。宁可多编，不要漏。
+ * - `trackGroupIssues`（L7）：换父 / 删除之后登记表 `restructure` 报出的组内不支持组合，加上新组自身的三个场景级条件，和上一次比出新出现与消失的。
+ *   结构变化不再整场重编译（L7 删掉了 `reparentNeedsRecompile` / `destroyNeedsRecompile`）：登记表当场重算派生量，渲染器当帧重排。
  */
-import type { SceneBundle } from "../compile/bundle";
+import type { SceneBundle, SceneLayer } from "../compile/bundle";
 import { normalizeConfig } from "../compile/config";
 import type { SceneStructure } from "../compile/protocol";
 import { layerShellValues } from "../compile/layerShell";
 import type { SceneObject } from "../compile/model";
+import type { RestructureResult } from "../compile/registry";
 import { layerStateFromShell, type SceneState } from "../render/state";
 import { createdLayerKind } from "./createConfig";
 import type { ScriptRuntime } from "./runtime";
@@ -15,86 +17,81 @@ import type { ScriptRuntime } from "./runtime";
 export interface SettleHooks {
   /** 脚本运行时（没有脚本的场景为 null / 不传）。 */
   runtime?: Pick<ScriptRuntime, "destroyObjects"> | null;
-  /** 当前场景的 bundle：判断删除会不会改组归属（不传当不会）。 */
-  bundle?: SceneBundle | null;
   /**
-   * 删除已生效、脚本已收 `destroy`：宿主在这里记结构、清理声音 / 光标等宿主侧子系统；`regroup` 为真时删除改了组归属，要重编译。
+   * 删除已生效、脚本已收 `destroy`：宿主在这里记结构、清理声音 / 光标等宿主侧子系统，登记表摘对象并重算组与挂点（L7：一律当场重算，渲染器当帧重排，
+   * 不再判断要不要整场重编译）。
    */
-  removed?(objects: number[], regroup: boolean): void;
-}
-
-/** 组（模型 JSON `passthrough: true` 的图像层，不看有没有子层）。 */
-function isGroup(bundle: SceneBundle | null | undefined, object: number): boolean {
-  return bundle?.layers.find((layer) => layer.object === object)?.passthroughModel === true;
-}
-
-/** 自身与父链上有没有组。 */
-function chainHasGroup(state: SceneState, bundle: SceneBundle | null | undefined, object: number | null): boolean {
-  const seen = new Set<number>();
-  for (
-    let current = object;
-    current !== null && !seen.has(current);
-    current = state.layers.get(current)?.parent ?? null
-  ) {
-    seen.add(current);
-    if (isGroup(bundle, current)) return true;
-  }
-  return false;
-}
-
-/** 这个对象的子树（自身与子孙）里有没有组。 */
-function subtreeHasGroup(state: SceneState, bundle: SceneBundle | null | undefined, object: number): boolean {
-  return state.subtree(object).some((item) => isGroup(bundle, item));
+  removed?(objects: number[]): void;
 }
 
 /**
- * 换父会不会改编译产物：挂点在换父前后有一边不为空；自己的子树里有组；旧父链或新父链上有组（含新父、旧父本身）。
- * 在 `state.setParent` 之后调也成立：只看子树与两条父链，它们不含自己。
- */
-export function reparentNeedsRecompile(input: {
-  state: SceneState;
-  bundle: SceneBundle | null | undefined;
-  object: number;
-  oldParent: number | null;
-  parent: number | null;
-  oldBone: string | null;
-  bone: string | null;
-}): boolean {
-  const { state, bundle, object, oldParent, parent, oldBone, bone } = input;
-  if (oldBone !== null || bone !== null) return true;
-  return (
-    subtreeHasGroup(state, bundle, object) ||
-    chainHasGroup(state, bundle, oldParent) ||
-    chainHasGroup(state, bundle, parent)
-  );
-}
-
-/** 删除会不会改组归属：被删对象是组，或它自己在组里（由组代画）、有在组里的祖先 / 子孙。 */
-export function destroyNeedsRecompile(
-  state: SceneState,
-  bundle: SceneBundle | null | undefined,
-  objects: Iterable<number>,
-): boolean {
-  if (!bundle) return false;
-  for (const object of objects) {
-    const layer = bundle.layers.find((item) => item.object === object);
-    if (layer && layer.group != null) return true;
-    if (chainHasGroup(state, bundle, object) || subtreeHasGroup(state, bundle, object)) return true;
-  }
-  return false;
-}
-
-/**
- * 删除生效（rea-p6d-layers 4.2 第 7.5 步）：全部脚本（含计时器、`update`）之后、绘制之前调一次。先判断会不会改组归属（要在摘表之前，
- * 摘表会改父子关系），再 `flushDestroy`，非空时让脚本对被删对象收 `destroy` 并摘条目，最后交给宿主的 `removed`。返回生效的对象。
+ * 删除生效（rea-p6d-layers 4.2 第 7.5 步）：全部脚本（含计时器、`update`）之后、绘制之前调一次。`flushDestroy`，非空时让脚本对被删对象收 `destroy`
+ * 并摘条目，最后交给宿主的 `removed`。返回生效的对象。
  */
 export function settleDestroyed(state: SceneState, hooks: SettleHooks = {}): number[] {
-  const regroup = destroyNeedsRecompile(state, hooks.bundle, state.pendingDestroy);
   const removed = state.flushDestroy();
   if (removed.length === 0) return removed;
   hooks.runtime?.destroyObjects(new Set(removed));
-  hooks.removed?.(removed, regroup);
+  hooks.removed?.(removed);
   return removed;
+}
+
+/**
+ * 组自身的不支持项（L7）：组合层运行中挂上子层成了组（`passthroughModel` 且 `subtree` 非空），而编译期按「有子层」才报的三个场景级条件成立：
+ * 透视场景（`camera:perspective:group`，组的局部正交在透视场景里没测）、被依赖（`dependency:group`）、开雾（`fog:group`；没有子层的组合层开雾时
+ * 编译期置了 `fogPassthrough`）。键和编译期报的相同（`compile/bundle.ts` 的 `compileOne`）。不是组时为空。
+ */
+export function groupSelfIssues(
+  layer: Pick<SceneLayer, "passthroughModel" | "subtree" | "dependedOn" | "fogPassthrough">,
+  general: Pick<SceneBundle["general"], "perspective">,
+): string[] {
+  if (!layer.passthroughModel || !layer.subtree?.length) return [];
+  const keys: string[] = [];
+  if (general.perspective) keys.push("camera:perspective:group");
+  if (layer.dependedOn) keys.push("dependency:group");
+  if (layer.fogPassthrough) keys.push("fog:group");
+  return keys;
+}
+
+/** `trackGroupIssues` 的结果：这次新出现（或键变了）的对象 → 键，与不再有问题的对象。 */
+export interface GroupIssueChanges {
+  added: Map<number, string[]>;
+  cleared: number[];
+}
+
+/**
+ * 运行中出现的组内不支持组合（L7，「待定」4：那个对象不画、提示一次，场景不退回）：`tracked` 是因为它不画的对象 → 键（调用方持有，这里原地改）。
+ * 只看这次派生量变了的对象（`result.changed`）与已在 `tracked` 里的：键 = 登记表的组内问题（`result.issues`）加组自身的条件（`groupSelfIssues`）。
+ * - 有键：不在 `tracked` 里或键变了的进 `added`（调用方卸 GPU、上报），记进 `tracked`；
+ * - 没有键而在 `tracked` 里：摘掉、进 `cleared`（调用方照常装回来）；对象已不在登记表里（删了）只摘、不进 `cleared`。
+ * 加载时就有、之后派生量没变过的组内问题不管（只有 dev 强制渲染才走得到这里，那时照画）。
+ */
+export function trackGroupIssues(
+  tracked: Map<number, string[]>,
+  result: RestructureResult,
+  layers: readonly SceneLayer[],
+  general: Pick<SceneBundle["general"], "perspective">,
+): GroupIssueChanges {
+  const byObject = new Map(layers.map((layer) => [layer.object, layer]));
+  const added = new Map<number, string[]>();
+  const cleared: number[] = [];
+  for (const object of new Set([...result.changed, ...tracked.keys()])) {
+    const layer = byObject.get(object);
+    if (!layer) {
+      tracked.delete(object);
+      continue;
+    }
+    const keys = [...new Set([...(result.issues.get(object) ?? []), ...groupSelfIssues(layer, general)])].sort();
+    const previous = tracked.get(object);
+    if (keys.length > 0) {
+      if (!previous || previous.join("\n") !== keys.join("\n")) added.set(object, keys);
+      tracked.set(object, keys);
+    } else if (previous) {
+      tracked.delete(object);
+      cleared.push(object);
+    }
+  }
+  return { added, cleared };
 }
 
 /** 新建对象配置原文的规整键（同片段缓存的键）；不是合法 JSON 时用原文。 */

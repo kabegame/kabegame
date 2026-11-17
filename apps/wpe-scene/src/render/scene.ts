@@ -216,7 +216,7 @@ import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
 import { applyPassStates } from "./passState";
 import type { CursorCamera } from "./cursor";
-import { oneLine, SceneRenderError } from "./errors";
+import { oneLine, reasonsOf, SceneRenderError } from "./errors";
 import {
   compositeSampling,
   compositeSize,
@@ -883,6 +883,11 @@ interface LayerRuntime {
   resources: LayerResources;
   /** 当前 `ops` 的计划签名（`planSignature`）；重建时比较，相同就不动。 */
   signature: string;
+  /**
+   * 建 `ops` 时的组归属（L7，`GpuScene.placementOf`）：替它作画的组与组的层数。管线（组里写 alpha、不带深度）、uniform（组的局部正交）与池化合成 RT
+   * （按层数分池）都随它变，计划签名却不变（子层的计划和在不在组里无关），所以重建时和签名一起比。
+   */
+  placement: LayerPlacement;
   /** 粒子层的系统树（P4e 步骤 1、2）；图像层与没有可画模板的粒子层为 null。 */
   tree: ParticleTree | null;
   /**
@@ -894,6 +899,29 @@ interface LayerRuntime {
 
 /** 图层建 draw、备管线要的两样（`LayerRuntime` 的一部分；备好还没装的对象也有，L4）。 */
 type LayerHandle = Pick<LayerRuntime, "layer" | "resources">;
+
+/** 图层的组归属（L7）：替它作画的组（`objects` 下标，顶层为 null）与父链上组的层数（`GpuScene.groupDepth`）。 */
+interface LayerPlacement {
+  group: number | null;
+  depth: number;
+}
+
+function samePlacement(a: LayerPlacement, b: LayerPlacement): boolean {
+  return a.group === b.group && a.depth === b.depth;
+}
+
+/**
+ * 组合层运行中挂上子层变成组时要用的程序（L7）：基础 pass（compose / 拷贝）、`groupUpload`、passthrough 上屏。没有子层的组合层加载时计划是空的，
+ * 这些程序不在任何计划里、不会建；建场景与备对象时另外备好（备不好不报错，真变成组时重排失败、整场重载），重排时管线才能同步建。
+ */
+function groupPrograms(
+  layer: Pick<SceneLayer, "passthroughModel" | "passes" | "groupUpload" | "passthrough">,
+): number[] {
+  if (!layer.passthroughModel) return [];
+  return [...layer.passes, layer.groupUpload, layer.passthrough].flatMap((pass) =>
+    pass && pass.program !== null ? [pass.program] : [],
+  );
+}
 
 /** 绘制类步骤（建 draw、要程序与管线的那四种）。 */
 function isDrawLike(step: LayerPlan["steps"][number]): step is DrawLike {
@@ -1532,6 +1560,8 @@ export class GpuScene {
   private structureSeen = -1;
   /** 已被删除并释放了资源的对象（P6d3）：灯与体积光的灯表跳过它们。 */
   private readonly removedObjects = new Set<number>();
+  /** 结构变化记下、还没重排的对象（L7，`restructure`）：`flushRestructure` 或下一次 `sync` 做掉。 */
+  private readonly pendingRestructure = new Set<number>();
   /** 文本层的字形图集纹理（P6b 1d，`render/text.ts`），按图集对象共享；`populate` 里建。 */
   private atlasTextures: TextAtlasTextures | null = null;
   /** 运行中重排的重排器（P6b 1e，`build` 的 `relayout`）；没有时文本字段变了也不重排（dev 探针、单测）。 */
@@ -1709,12 +1739,8 @@ export class GpuScene {
         for (const copy of record.copies.values()) this.release(copy.buffer);
         return false;
       });
-    // 还是别的图层的组时留着：改组归属的删除到 L7 之前整场重编译，重编译之前子层的规划（`groupOf` / `groupDepth`）还要查它
-    if (
-      !replacing &&
-      ![...this.layerByObject.values()].some((layer) => layer !== runtime.layer && layer.group === object)
-    )
-      this.layerByObject.delete(object);
+    // 删组（L7）：删除生效时登记表已经 `restructure`，子层的 `group` 已不是它，这里直接摘
+    if (!replacing) this.layerByObject.delete(object);
     const at = this.layers.indexOf(runtime);
     if (at >= 0) this.layers.splice(at, 1);
     this.structureCache = null;
@@ -1754,6 +1780,108 @@ export class GpuScene {
       group = this.layerByObject.get(group)?.group ?? null;
     }
     return depth;
+  }
+
+  /** 图层当前的组归属（L7）：管线、uniform、池化合成 RT 随它变（`LayerRuntime.placement`）。 */
+  private placementOf(layer: SceneLayer): LayerPlacement {
+    return { group: this.groupOf(layer)?.object ?? null, depth: this.groupDepth(layer) };
+  }
+
+  /** 这个对象有没有 GPU 运行时（L7：宿主判断组内不支持组合要不要卸）。 */
+  hasObject(object: number): boolean {
+    return this.runtimeByObject.has(object);
+  }
+
+  /**
+   * 结构变化（L7）：登记表 `restructure` 报出派生量（组、组的层数、子树、挂点、effect 的组内标记）变了的对象，记下，下一次 `flushRestructure`
+   * 或 `sync`（`releaseRemoved` 之后、effect 开关的重建之前）当场重排。`SceneLayer` 和登记表是同一份，`groupOf` / `groupDepth` / 顶层表读到的已是
+   * 新值，这里补的只是 draw、管线与资源。
+   */
+  restructure(objects: Iterable<number>): void {
+    for (const object of objects) this.pendingRestructure.add(object);
+  }
+
+  /**
+   * 把记下的结构变化当场做掉（L7）：宿主在一帧的脚本与删除生效之后调（出错整场重载）；没调时 `sync` 做。先释放被删对象（删组之后它的资源不再有人读），
+   * 再 `applyRestructure`。只能在帧边界调。
+   */
+  flushRestructure(state: SceneState): void {
+    if (!this.pendingRestructure.size) return;
+    if (state.structureVersion !== this.structureSeen) {
+      this.structureSeen = state.structureVersion;
+      this.releaseRemoved(state);
+    }
+    this.applyRestructure(state, new Map<number, Mat4>(this.liveSeeds(state) ?? []));
+  }
+
+  /**
+   * 重排记下的对象（L7）：
+   * 1. 挂点：按 `layer.attachment` 写 / 删 `attachments`（没有 GPU 运行时的分组节点也挂在骨骼上，同建场景）；
+   * 2. 有运行时的逐个 `restructureLayer`：计划签名与组归属都没变的不动（本来就是组、只是子表变了：`subtree` op 每帧读 `layer.subtree`；顶层之间换父），
+   *    变了的重建（缺的管线同步建）。
+   * 一个对象重排失败时卸掉它（不画，旧的 draw 可能和新的组归属对不上），其余照做，最后抛 `SceneRenderError`（宿主整场重载）。
+   */
+  private applyRestructure(state: SceneState, worlds: Map<number, Mat4>): void {
+    const objects = [...this.pendingRestructure];
+    this.pendingRestructure.clear();
+    this.structureCache = null;
+    for (const object of objects) {
+      const layer = this.runtimeByObject.get(object)?.layer ?? this.layerByObject.get(object);
+      if (!layer) continue;
+      if (layer.attachment) {
+        this.attachments.set(object, layer.attachment);
+        this.stamps ??= new WorldStamps();
+      } else this.attachments.delete(object);
+    }
+    this.attachedLayers = null;
+    const failures: string[] = [];
+    for (const object of objects) {
+      const runtime = this.runtimeByObject.get(object);
+      if (!runtime) continue;
+      try {
+        this.restructureLayer(runtime, state, worlds);
+      } catch (error) {
+        this.teardown(object);
+        failures.push(...reasonsOf(error, "render:restructure"));
+      }
+    }
+    if (failures.length) throw new SceneRenderError([...new Set(failures)]);
+  }
+
+  /**
+   * 一个图层按当前的组归属重排（L7）：
+   * - 在顶层而场景目标没有深度附件、它的计划（含变体）要测深度（出组回到顶层，或组合层成了组、多了上屏）：抛 `render:restructure-depth`（深度附件建场景时
+   *   按全部计划定一次，是场景级不变量；加载时就在顶层的图层这条判定同建场景，不会成立）；
+   * 组归属变了时：
+   * - 组的层数变了：池化合成 RT 按层数分池，借的换掉（被依赖层独占的第 0 张留着；文本层的合成 RT 本来就独占）；
+   * - 重建（`rebuildLayer` 的 `syncPipelines`：管线缺了同步建，程序不变）；
+   * - 可变 effect 的变体按新的组归属同步备一遍管线（同 `prepareVariants`），备不好时冻结这一层（切换走整场重编译）。
+   * 组归属没变时只按签名重建（组的子树从空变成非空，计划多了子树与上屏）。
+   */
+  private restructureLayer(runtime: LayerRuntime, state: SceneState, worlds: Map<number, Mat4>): void {
+    const { layer } = runtime;
+    const placement = this.placementOf(layer);
+    const moved = !samePlacement(placement, runtime.placement);
+    if (layer.group == null && !this.depthTarget) {
+      const plans = [
+        this.planOf(layer, state),
+        ...variantPlans(layer, this.bundle.textures, null, [this.width, this.height]),
+      ];
+      if (wantsDepth([{ layer, plans }])) throw new SceneRenderError(["render:restructure-depth"]);
+    }
+    if (moved && placement.depth !== runtime.placement.depth && !layer.text)
+      runtime.resources.composites.splice(this.layerTargets.has(runtime.object) ? 1 : 0);
+    this.rebuildLayer(runtime, state, worlds, { syncPipelines: true });
+    if (!moved) return;
+    const text = layer.text ? (state.texts.get(layer.object) ?? null) : null;
+    const plans = variantPlans(layer, this.bundle.textures, text, [this.width, this.height]);
+    if (!plans.length) return;
+    const variants = this.prepareVariantsNow(
+      { layer, resources: runtime.resources, layerTarget: this.layerTargets.get(runtime.object) ?? null },
+      plans,
+    );
+    const failure = variants ? variants.failure : "管线同步建不出（缺程序或 A2C）";
+    if (failure !== null) this.freezeVariants(layer, state, failure);
   }
 
   /** 这一帧画的那张场景目标（dev 探针同步读回用）。有两张时 `encode` 开头才换，要在它之后取。 */
@@ -2673,6 +2801,16 @@ export class GpuScene {
   }
 
   /**
+   * `preparedOf` 的同步建管线版（L7，结构变化的重排）：程序取 `readyPrograms`，管线取就绪表或当帧同步建（`prepareLayerNow`，含 HDR 反射副本），
+   * 程序不在或管线建不出（A2C）时抛 `render:variant-missing`。
+   */
+  private preparedOfSync(plan: LayerPlan, runtime: LayerHandle): Map<DrawLike, PreparedDraw> {
+    const prepared = this.prepareLayerNow(plan, runtime);
+    if (!prepared) throw new SceneRenderError(["render:variant-missing"]);
+    return prepared;
+  }
+
+  /**
    * 关着的 effect 也在加载时备好（WPE 同样）。逐图层进行（`prepareVariantsOf`，各开自己的错误作用域），失败不影响当前画面，这一层之后走整场
    * 重编译。整场加载时在 `build` 的错误作用域之外、全部对象装好之后跑（L4：单个对象的同一段在 `prepareObject` 里，装之前）。
    */
@@ -3057,6 +3195,10 @@ export class GpuScene {
     if (failed.length) throw new SceneRenderError(failed);
     const programs = new Map<number, GpuProgram>();
     for (const result of settled) if (result.status === "fulfilled") programs.set(result.value.index, result.value);
+    // 组合层运行中挂上子层变成组时要的程序（L7，`groupPrograms`）：不在加载时的计划里，另外备好，重排时管线才能当帧同步建。备不好不让场景退回
+    // （真变成组时重排失败、整场重载，那时按组编译、照常报）
+    const spare = new Set(built.flatMap((layer) => groupPrograms(layer)).filter((index) => !used.has(index)));
+    await Promise.allSettled([...spare].map((index) => this.ensureProgram(index)));
 
     const setup = device.createCommandEncoder({ label: "scene setup" });
     // 建场景时 s 是 (0, 0)：两份相同，`setCamera` 换成带抖动的。缩放取编译期的值（P5a 步骤 4），预热的指针反投影就带上它
@@ -3267,6 +3409,8 @@ export class GpuScene {
       const prepared = await this.prepareLayer(plan, staged);
       const variants = await this.serialVariants(() => this.prepareVariantsOf(staged, state, staged.layerTarget));
       const shadows = await this.prepareShadowCasters(layer);
+      // 组合层运行中变成组时要的程序（L7，同 `populate`）：备不好不算失败
+      await Promise.allSettled(groupPrograms(layer).map((index) => this.ensureProgram(index)));
       return { ...staged, prepared, variants, shadows };
     } catch (error) {
       this.discardPrepared(staged);
@@ -3295,6 +3439,9 @@ export class GpuScene {
         if (isDrawLike(step) && step.pass.program !== null) programs.add(step.pass.program);
     for (const { step } of shadowSteps) programs.add(step.pass.program!);
     for (const index of programs) if (!this.readyPrograms.has(index)) return null;
+    // 组合层运行中变成组时要的程序（L7，同 `populate`）：不挡同步装，没备好的后台备（备不好不算失败）
+    for (const index of groupPrograms(layer))
+      if (!this.readyPrograms.has(index)) void this.ensureProgram(index).catch(() => {});
     const encoder = this.device.createCommandEncoder({ label: `prepare object ${layer.object}` });
     const staged = this.stageObject(layer, state, plan, encoder);
     this.device.queue.submit([encoder.finish()]);
@@ -3342,9 +3489,12 @@ export class GpuScene {
 
   /**
    * 变体段的同步版（L4，`prepareObjectSync`）：步骤同 `prepareVariantsOf`，只是没有错误作用域。计划问题、copy / swap 检查失败记进 `failure`（装的时候
-   * 冻结），缺程序或建不了管线时返回 null。
+   * 冻结），缺程序或建不了管线时返回 null。L7 起结构变化后的重排也用它（传装好的运行时与它的独占 RT）。
    */
-  private prepareVariantsNow(staged: PreparedObject, plans: readonly LayerPlan[]): { failure: string | null } | null {
+  private prepareVariantsNow(
+    staged: LayerHandle & Pick<PreparedObject, "layerTarget">,
+    plans: readonly LayerPlan[],
+  ): { failure: string | null } | null {
     const { layer } = staged;
     for (const plan of plans) {
       let ready: Map<DrawLike, PreparedDraw> | null;
@@ -3466,6 +3616,8 @@ export class GpuScene {
       draws: [],
       resources: prepared.resources,
       signature: planSignature(prepared.plan),
+      // 管线按装的这一刻的组归属取（`pipelineOf` 读 `groupOf`，`layerByObject` 已有全部组）
+      placement: this.placementOf(layer),
       tree: null,
       fboKeys: [...prepared.fboKeys],
     };
@@ -4560,6 +4712,8 @@ export class GpuScene {
     // 本次的状态快照下的世界矩阵：重建与刷新共用，一条父链只算一次。父的变换写过时子孙已在 `dirty.layers` 里（`SceneState.write`）
     // 预置渲染阶段的挂点子树世界矩阵（B1，`drawPhase`）：WPE 里挂点子树绘制沿用更新阶段的缓存；不取走，到下一次更新阶段才清
     const worlds = new Map<number, Mat4>(this.liveSeeds(state) ?? []);
+    // 结构变化（L7）：宿主在脚本之后没做掉的（暂停时的补画帧、dev 探针），在释放被删对象之后、下面的各种重建与刷新之前做
+    if (this.pendingRestructure.size) this.applyRestructure(state, worlds);
     // 文本最先（P6b 1e）：重排、换进状态、图集纹理、强制重建本层；偏移变了的本层与子孙并进这次的 `dirty.layers`，下面照常刷
     this.syncTexts(dirty, state, worlds);
     // 用户纹理（P11b 步骤 2）：来源写过或解码完成的，换 bind group / 整层重建，在结构与刷新之前，新 draw 照当前状态写 uniform
@@ -4950,12 +5104,16 @@ export class GpuScene {
     /**
      * `force`（P6b 1e）：签名相同也重建。文本层换了排版时用：直接上屏的文本换了字签名不变，顶点、索引、合成 RT 尺寸与图集却都变了。
      * 强制重建不计入 `rebuildStats`（那是 effect 开关的），记在 `textStats`。
+     * `syncPipelines`（L7，结构变化的重排）：管线不在就绪表里时同步建（`preparedOfSync`；进出组只换管线状态、程序不变），建不出照抛；粒子层沿用
+     * 现有的粒子树（模拟不重来，同 L6 的替换）。
      */
-    options: { force?: boolean } = {},
+    options: { force?: boolean; syncPipelines?: boolean } = {},
   ): void {
     const plan = this.planOf(runtime.layer, state);
     const signature = planSignature(plan);
-    if (!options.force && signature === runtime.signature) return;
+    // 组归属（L7）也比：子层进出组时计划签名不变，管线、uniform 与池化合成 RT 却变了
+    const placement = this.placementOf(runtime.layer);
+    if (!options.force && signature === runtime.signature && samePlacement(placement, runtime.placement)) return;
     const started = performance.now();
     // 开关组合太多，`prepareVariants` 只查 n + 2 份；全部开着的 effect 都没有绘制 pass 这类组合在这里才查得到
     const problems = planProblems(plan, this.bundle, runtime.layer.particle, runtime.layer.model, runtime.layer.puppet);
@@ -4965,20 +5123,19 @@ export class GpuScene {
     try {
       prepared = this.preparedOf(plan, runtime);
     } catch (error) {
+      const missing = error instanceof SceneRenderError && error.reasons.includes("render:variant-missing");
+      // 结构变化的重排（L7）：缺的管线当帧同步建（已定 3，同 WPE）
+      if (missing && options.syncPipelines) prepared = this.preparedOfSync(plan, runtime);
       // 脚本写过材质状态字段的图层：新组合的管线运行中现建（P6d1b），建好之前保持当前画面
-      if (
-        error instanceof SceneRenderError &&
-        error.reasons.includes("render:variant-missing") &&
-        this.stateHasPassOverrides(state, runtime.layer)
-      ) {
+      else if (missing && this.stateHasPassOverrides(state, runtime.layer)) {
         this.deferPassStatePipelines(runtime, plan);
         return;
-      }
-      throw error;
+      } else throw error;
     }
     if (runtime.layer.text) this.ensureTextResources(runtime, plan, state);
     else if (baseUserSlot(runtime.layer)) this.ensureUserSizing(runtime);
-    const built = this.buildLayer(runtime, plan, prepared, state, worlds);
+    const reuse = options.syncPipelines && runtime.layer.particle ? runtime.tree : null;
+    const built = this.buildLayer(runtime, plan, prepared, state, worlds, reuse);
     for (const draw of runtime.draws) {
       this.draws.delete(draw);
       this.drawsByPass.delete(draw.passKey);
@@ -4994,6 +5151,7 @@ export class GpuScene {
     }
     this.install(runtime, built);
     runtime.signature = signature;
+    runtime.placement = placement;
     if (options.force) return;
     const elapsed = performance.now() - started;
     this.rebuildStats.count++;

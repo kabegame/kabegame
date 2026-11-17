@@ -515,10 +515,11 @@ describe("fragmentBlocker", () => {
     expect(fragmentBlocker(bundle, 0)).toBe("hdr-layer-composites");
   });
 
-  it("group-upload：模板带子层（有组上屏 pass）", async () => {
+  it("L7：带组上屏 pass 的图层不再挡（组合层不论有没有子层都编 groupUpload，和位置无关），片段原样带着它", async () => {
     const { bundle } = await open([{ id: 20, image: "models/a.json" }]);
     bundle.layers[0].groupUpload = { ...bundle.layers[0].passes[0], key: "objects/0/groupupload" };
-    expect(fragmentBlocker(bundle, 0)).toBe("group-upload");
+    expect(fragmentBlocker(bundle, 0)).toBeNull();
+    expect(fragmentOf(bundle, 0)!.layer.groupUpload).toEqual(bundle.layers[0].groupUpload);
   });
 });
 

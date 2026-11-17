@@ -665,3 +665,99 @@ describe("renderFrame 的单对象重编译（L6：探针同路）", () => {
     expect(hostStats(host)).toMatchObject({ applied: 2, recompiledObjects: 3 });
   });
 });
+
+describe("renderFrame 的结构变化（L7：探针同路）", () => {
+  /** GPU 的重排与装卸记进 `log`。 */
+  function withGpu() {
+    vi.mocked(GpuScene.build).mockImplementation(async () => {
+      log.push("build");
+      return {
+        ...fakeScene(),
+        restructure: (objects: number[]) =>
+          void log.push(`restructure ${[...objects].sort((a, b) => a - b).join(",")}`),
+        hasObject: () => true,
+        removeObject: (object: number) => void log.push(`remove ${object}`),
+        prepareObjectSync: (layer: { object: number }) => ({ layer }),
+        installObject: (prepared: { layer: { object: number } }) => void log.push(`install ${prepared.layer.object}`),
+      } as unknown as GpuScene;
+    });
+  }
+
+  /** 场景加一个组合层 G（对象 1）：0 FR 运行中挂进去、再删组。`fullscreen` 给了时 FR 是 fullscreen 层（组里不支持）。 */
+  function withGroup(fullscreen = false) {
+    const fr = bundle.layers[0];
+    if (fullscreen) fr.fullscreen = true;
+    bundle.layers.push({ ...fr, object: 1, id: 2, name: "G", passthroughModel: true, fullscreen: false });
+  }
+
+  /** 脚本替身：第 1 帧 FR 挂进 G（交给 `live.restructure()`），第 2 帧删 G（`live.restructure([1])`），第 3 帧不动。 */
+  function scriptsRestructuring() {
+    const seen: { hook: boolean } = { hook: false };
+    vi.mocked(createProbeScripts).mockImplementation((input) => {
+      seen.hook = typeof input.live?.restructure === "function";
+      let frames = 0;
+      return {
+        load: async () => void log.push("load"),
+        frame: () => {
+          frames++;
+          if (frames === 1) {
+            input.state.setParent(0, 1);
+            input.live?.restructure?.();
+          }
+          if (frames === 2) {
+            input.state.markDestroy(1);
+            input.live?.restructure?.(input.state.flushDestroy());
+          }
+        },
+        result: () => ({ frames }) as never,
+        dispose: () => {},
+      };
+    });
+    return seen;
+  }
+
+  it("换父进组、删组：登记表当场重算，变了的交给 GpuScene.restructure（下一次 sync 重排），不整场补编；restructured 计数", async () => {
+    withGpu();
+    withGroup();
+    const seen = scriptsRestructuring();
+    const result = await renderFrame({ ...BASE, scripts: true, particles: PARTICLES });
+    expect(seen.hook).toBe(true);
+    expect(openSceneSession).toHaveBeenCalledTimes(1);
+    expect(log.filter((line) => line.startsWith("restructure"))).toEqual(["restructure 0,1", "restructure 0"]);
+    expect(result.restructured).toBe(2);
+    expect(result.liveCreate).toMatchObject({ reloads: [], unsupportedKeys: [] });
+    // 删组之后 FR 回顶层，登记表里没有 G
+    expect(bundle.layers.map((layer) => [layer.object, layer.group])).toEqual([[0, null]]);
+  });
+
+  it("组内不支持组合：进组的 fullscreen 层卸 GPU、键记进 unsupportedKeys，不交给重排；删组之后问题消失，照常装回", async () => {
+    withGpu();
+    withGroup(true);
+    scriptsRestructuring();
+    const result = await renderFrame({ ...BASE, scripts: true, particles: PARTICLES });
+    expect(log.filter((line) => /^(restructure|remove|install)/.test(line))).toEqual([
+      "remove 0",
+      "restructure 1",
+      "install 0",
+      "restructure 0",
+    ]);
+    expect(result.liveCreate).toMatchObject({
+      unsupportedKeys: ["model:passthrough:children:fullscreen"],
+      reloads: [],
+    });
+  });
+
+  it("hostStats 带 restructured（宿主结构变化当场重排的次数）", () => {
+    const host = {
+      stats: {
+        applied: 0,
+        recompiled: [],
+        created: { sync: 0, async: 0, unsupported: 0 },
+        recompiledObjects: 0,
+        restructured: 3,
+      },
+      devScene: { renderer: null },
+    } as unknown as SceneHost;
+    expect(hostStats(host)).toMatchObject({ restructured: 3 });
+  });
+});

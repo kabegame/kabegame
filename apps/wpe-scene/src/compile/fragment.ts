@@ -10,8 +10,9 @@
  * （`ignore/live/l6/recompile.test.ts`）。
  *
  * **位置相关的量不进片段**（组归属、组的子树、挂点、灯的遗留槽位都取决于运行中的父链与别的对象，由 L3 的运行时派生量现算）：
- * `group` 为 null、`subtree` 为 []、没有 `attachment`、`groupUpload` 为 null、灯 `legacySlot` 为 -1、effect 的 `unsupported` 不含
- * `GROUP_CHILD_FRAMEBUFFER`。这样同一个配置在任何位置的片段都一样，片段缓存（L5）才能按规整配置命中。
+ * `group` 为 null、`subtree` 为 []、没有 `attachment`、灯 `legacySlot` 为 -1、effect 的 `unsupported` 不含
+ * `GROUP_CHILD_FRAMEBUFFER`。这样同一个配置在任何位置的片段都一样，片段缓存（L5）才能按规整配置命中。`groupUpload` 和位置无关（L7）：组合层不论有没有
+ * 子层都带它（整场里没有子层的组合层的那份在全部对象之后编、程序在程序表尾；片段里在这个对象自己的程序之后，在片段的程序表里）。
  *
  * **`rekeyFragment` 的字段清单**（以点 4 的全语料对照为准，漏了会显示成 A、B 不同）：
  * - 字符串里的 `objects/<from>` 前缀（后面是 `/` 或字符串到尾）换成 `objects/<to>`（`rekeyValue` 深度遍历，只认前缀、不认包含）：
@@ -166,8 +167,6 @@ export function fragmentBlocker(bundle: SceneBundle, object: number): string | n
     layerPasses(layer).some((pass) => Object.keys(pass.layerComposites ?? {}).length > 0)
   )
     return "hdr-layer-composites";
-  // 模板带子层，克隆没有；L7 起每个组合层都编，这条删掉
-  if (layer.groupUpload) return "group-upload";
   return null;
 }
 

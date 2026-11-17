@@ -1,5 +1,5 @@
 // P6d3a 点 5、点 4：`ScriptRuntime.destroyObjects`（派发 destroy、摘条目、计时器、重放表）与宿主 / 探针共用的 `settleDestroyed`、
-// 换父与删除是否要重编译的判断、结构记录。
+// 结构记录；L7 起换父与删除不再判断要不要重编译，改测组内不支持组合的跟踪（`groupSelfIssues` / `trackGroupIssues`）。
 import type { ScriptModule } from "./moduleFactory";
 import { fakeModule } from "./testing/fakeModule";
 import { describe, expect, it } from "vitest";
@@ -12,11 +12,11 @@ import { ScriptRuntime, type ScriptRealm } from "./runtime";
 import {
   addShellObject,
   createStructureObject,
-  destroyNeedsRecompile,
+  groupSelfIssues,
   recordDestroyed,
   recordReparent,
-  reparentNeedsRecompile,
   settleDestroyed,
+  trackGroupIssues,
 } from "./structure";
 
 class FakeRealm implements ScriptRealm {
@@ -230,34 +230,32 @@ function sceneOf(): { bundle: SceneBundle; state: SceneState } {
 }
 
 describe("settleDestroyed（宿主与探针共用）", () => {
-  it("待删生效：先判组归属再摘表，脚本收 destroy，宿主 removed 收到对象与 regroup", () => {
-    const { bundle, state } = sceneOf();
+  it("待删生效：摘表，脚本收 destroy，宿主 removed 收到对象（L7 起不再判组归属）", () => {
+    const { state } = sceneOf();
     const destroyed: number[][] = [];
-    const removed: [number[], boolean][] = [];
+    const removed: number[][] = [];
     state.markDestroy(3);
     const out = settleDestroyed(state, {
       runtime: { destroyObjects: (objects) => destroyed.push([...objects]) },
-      bundle,
-      removed: (objects, regroup) => removed.push([objects, regroup]),
+      removed: (objects) => removed.push(objects),
     });
     expect(out).toEqual([3]);
     expect(destroyed).toEqual([[3]]);
-    expect(removed).toEqual([[[3], false]]);
+    expect(removed).toEqual([[3]]);
     expect(state.layers.has(3)).toBe(false);
-    // 删组合层：regroup 为真
+    // 删组合层：同样只交对象，子层变根
     state.markDestroy(0);
-    settleDestroyed(state, { bundle, removed: (objects, regroup) => removed.push([objects, regroup]) });
-    expect(removed[1]).toEqual([[0], true]);
+    settleDestroyed(state, { removed: (objects) => removed.push(objects) });
+    expect(removed[1]).toEqual([0]);
     expect(state.layers.get(1)!.parent).toBeNull();
   });
 
   it("没有待删时什么都不调", () => {
-    const { bundle, state } = sceneOf();
+    const { state } = sceneOf();
     let called = 0;
     expect(
       settleDestroyed(state, {
         runtime: { destroyObjects: () => void called++ },
-        bundle,
         removed: () => void called++,
       }),
     ).toEqual([]);
@@ -266,48 +264,57 @@ describe("settleDestroyed（宿主与探针共用）", () => {
   });
 });
 
-describe("reparentNeedsRecompile / destroyNeedsRecompile（宁可多编）", () => {
-  const input = (
-    scene: ReturnType<typeof sceneOf>,
-    object: number,
-    oldParent: number | null,
-    parent: number | null,
-    oldBone: string | null = null,
-    bone: string | null = null,
-  ) => ({ ...scene, object, oldParent, parent, oldBone, bone });
+describe("组内不支持组合（L7，groupSelfIssues / trackGroupIssues）", () => {
+  const layer = (object: number, extra: Partial<SceneLayer> = {}) =>
+    ({ object, passthroughModel: false, subtree: [], ...extra }) as SceneLayer;
+  const ORTHO = { perspective: false };
 
-  it("普通层在两个普通父之间换：不要", () => {
-    const scene = sceneOf();
-    expect(reparentNeedsRecompile(input(scene, 3, null, 5))).toBe(false);
-    expect(reparentNeedsRecompile(input(scene, 3, 5, null))).toBe(false);
+  it("groupSelfIssues：只有成了组（组合层且子树非空）才报，键同编译期", () => {
+    const group = { passthroughModel: true, subtree: [2], dependedOn: true, fogPassthrough: true as const };
+    expect(groupSelfIssues(group, { perspective: true })).toEqual([
+      "camera:perspective:group",
+      "dependency:group",
+      "fog:group",
+    ]);
+    expect(groupSelfIssues({ ...group, subtree: [] }, { perspective: true })).toEqual([]);
+    expect(groupSelfIssues({ ...group, passthroughModel: false }, { perspective: true })).toEqual([]);
+    expect(groupSelfIssues({ passthroughModel: true, subtree: [2] }, ORTHO)).toEqual([]);
   });
 
-  it("挂点在换父前后有一边不为空：要", () => {
-    const scene = sceneOf();
-    expect(reparentNeedsRecompile(input(scene, 3, null, 1, null, "tip"))).toBe(true);
-    expect(reparentNeedsRecompile(input(scene, 3, 1, 3, "tip", null))).toBe(true);
+  it("trackGroupIssues：新出现的进 added 并记下；键不变时不再报；问题消失进 cleared；删掉的只摘", () => {
+    const tracked = new Map<number, string[]>();
+    const layers = [layer(1, { passthroughModel: true, subtree: [2] }), layer(2), layer(3)];
+    const issues = new Map([[2, ["model:passthrough:children:fullscreen"]]]);
+    let out = trackGroupIssues(tracked, { changed: new Set([1, 2]), issues }, layers, ORTHO);
+    expect([...out.added]).toEqual([[2, ["model:passthrough:children:fullscreen"]]]);
+    expect(out.cleared).toEqual([]);
+    // 再来一次（同一批问题，2 不在 changed 里也照样看，因为它已记下）：不再报
+    out = trackGroupIssues(tracked, { changed: new Set([3]), issues }, layers, ORTHO);
+    expect(out.added.size).toBe(0);
+    // 出组：问题消失
+    out = trackGroupIssues(tracked, { changed: new Set([1, 2]), issues: new Map() }, layers, ORTHO);
+    expect(out.cleared).toEqual([2]);
+    expect(tracked.size).toBe(0);
+    // 加载时就有、派生量没变过的组内问题不管（dev 强制渲染才走得到）
+    out = trackGroupIssues(tracked, { changed: new Set(), issues }, layers, ORTHO);
+    expect(out.added.size).toBe(0);
+    // 记下之后对象被删（不在图层表里）：只摘，不进 cleared
+    trackGroupIssues(tracked, { changed: new Set([2]), issues }, layers, ORTHO);
+    out = trackGroupIssues(tracked, { changed: new Set(), issues: new Map() }, [layers[0]], ORTHO);
+    expect(out.cleared).toEqual([]);
+    expect(tracked.size).toBe(0);
   });
 
-  it("新父或旧父是组合层、父链上有组合层、自己的子树里有组：要", () => {
-    const scene = sceneOf();
-    expect(reparentNeedsRecompile(input(scene, 3, null, 0))).toBe(true);
-    expect(reparentNeedsRecompile(input(scene, 1, 0, null))).toBe(true);
-    // 3 挂到 1：1 自己不是组，但它的父链上有组 0
-    expect(reparentNeedsRecompile(input(scene, 3, null, 1))).toBe(true);
-    // 1 离开组之后，3 挂到 1 不再要
-    scene.state.setParent(1, null);
-    expect(reparentNeedsRecompile(input(scene, 3, null, 1))).toBe(false);
-    // 组 4 自己带着子树换父
-    expect(reparentNeedsRecompile(input(scene, 4, null, 3))).toBe(true);
-  });
-
-  it("删除：组合层、在组里的层（有 group）、有在组里的子孙的层要；根上的普通层不要", () => {
-    const scene = sceneOf();
-    expect(destroyNeedsRecompile(scene.state, scene.bundle, [3])).toBe(false);
-    expect(destroyNeedsRecompile(scene.state, scene.bundle, [0])).toBe(true);
-    expect(destroyNeedsRecompile(scene.state, scene.bundle, [1])).toBe(true);
-    expect(destroyNeedsRecompile(scene.state, scene.bundle, [4])).toBe(true);
-    expect(destroyNeedsRecompile(scene.state, null, [0])).toBe(false);
+  it("trackGroupIssues：组自身的条件并进组的键（透视场景里组合层成了组）；键变了重报", () => {
+    const tracked = new Map<number, string[]>();
+    const group = layer(1, { passthroughModel: true, subtree: [2] });
+    let out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map() }, [group], {
+      perspective: true,
+    });
+    expect([...out.added]).toEqual([[1, ["camera:perspective:group"]]]);
+    group.dependedOn = true;
+    out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map() }, [group], { perspective: true });
+    expect([...out.added]).toEqual([[1, ["camera:perspective:group", "dependency:group"]]]);
   });
 });
 

@@ -531,10 +531,10 @@ describe("restructure", () => {
     const on = framebufferEffect(true);
     const { registry, state } = setup([groupLayer(1), layerOf(2, { effects: [off] }), layerOf(3, { effects: [on] })]);
     const effectsOf = (object: number) => registry.bundle.layers.find((layer) => layer.object === object)!.effects;
-    expect(registry.restructure(state, NO_BONES).size).toBe(0);
+    expect(registry.restructure(state, NO_BONES).issues.size).toBe(0);
     state.setParent(2, 1);
     state.setParent(3, 1);
-    const issues = registry.restructure(state, NO_BONES);
+    const { issues } = registry.restructure(state, NO_BONES);
     expect(effectsOf(2)[0].unsupported).toEqual([GROUP_CHILD_FRAMEBUFFER]);
     // 启用的 effect 读快照：对象级问题，不记在 effect 上
     expect(effectsOf(3)[0].unsupported).toEqual([]);
@@ -561,5 +561,97 @@ describe("restructure", () => {
     state.addObject({ layer: layerOf(2, { parent: 1 }) });
     registry.restructure(state, NO_BONES);
     expect(registry.bundle.children).toEqual([]);
+  });
+
+  // ———— L7：restructure 报出派生量变了的图层（`changed`） ————
+
+  const changedAfter = (
+    registry: SceneRegistry,
+    state: SceneState,
+    bones: (object: number) => { name: string | null; override: boolean } = NO_BONES,
+  ) => [...registry.restructure(state, bones).changed].sort((a, b) => a - b);
+
+  it("L7 changed：进组（自己 + 新组）、出组（自己 + 旧组）、换到另一个组（自己 + 新旧两组）", () => {
+    const { registry, state } = setup([groupLayer(1), groupLayer(2), layerOf(3)]);
+    registry.restructure(state, NO_BONES);
+    state.setParent(3, 1);
+    expect(changedAfter(registry, state)).toEqual([1, 3]);
+    state.setParent(3, 2);
+    expect(changedAfter(registry, state)).toEqual([1, 2, 3]);
+    state.setParent(3, null);
+    expect(changedAfter(registry, state)).toEqual([2, 3]);
+    // 没变：再算一次是空集
+    expect(changedAfter(registry, state)).toEqual([]);
+  });
+
+  it("L7 changed：删组（子层变根，子层进；被删的不在表里、不报）", () => {
+    const { registry, state } = setup([groupLayer(1), layerOf(2, { parent: 1 }), layerOf(3, { parent: 1 })]);
+    registry.restructure(state, NO_BONES);
+    state.markDestroy(1);
+    state.flushDestroy();
+    state.dropObject(1);
+    registry.removeObject(1);
+    expect(changedAfter(registry, state)).toEqual([2, 3]);
+  });
+
+  it("L7 changed：顶层之间换父是空集（只有 parent 变了，渲染器读状态）；整棵子树一起进组时子孙也进", () => {
+    const { registry, state } = setup([layerOf(1), layerOf(2), layerOf(3), groupLayer(4), layerOf(5, { parent: 3 })]);
+    registry.restructure(state, NO_BONES);
+    state.setParent(3, 1);
+    expect(changedAfter(registry, state)).toEqual([]);
+    state.setParent(3, 2);
+    expect(changedAfter(registry, state)).toEqual([]);
+    // 3（带子 5）挂进组 4：3、5 的组变了，4 的子树变了
+    state.setParent(3, 4);
+    expect(changedAfter(registry, state)).toEqual([3, 4, 5]);
+  });
+
+  it("L7 changed：换挂点（只有自己）", () => {
+    const { registry, state } = setup([
+      layerOf(0, {
+        puppet: {
+          skeleton: { parents: new Int32Array([-1, 0, 0]) },
+          layers: [],
+          attachments: [
+            { name: "head", bone: 1, matrix: new Float32Array(16) },
+            { name: "tail", bone: 2, matrix: new Float32Array(16) },
+          ],
+        } as never,
+      }),
+      layerOf(1, { parent: 0 }),
+      layerOf(2, { parent: 1 }),
+    ]);
+    let bone = "head";
+    const bones = (object: number) => (object === 1 ? { name: bone, override: false } : NO_BONES());
+    registry.restructure(state, bones);
+    bone = "tail";
+    expect(changedAfter(registry, state, bones)).toEqual([1]);
+    bone = "none";
+    expect(changedAfter(registry, state, bones)).toEqual([1]);
+  });
+
+  it("L7 changed：组的子表只换顺序时组进（subtree 变了）", () => {
+    const { registry, state } = setup([groupLayer(1), layerOf(2), layerOf(3)]);
+    state.setParent(2, 1);
+    state.setParent(3, 1);
+    registry.restructure(state, NO_BONES);
+    // 2 摘下再挂回：子表变成 [3, 2]
+    state.setParent(2, null);
+    state.setParent(2, 1);
+    expect(changedAfter(registry, state)).toEqual([1]);
+  });
+
+  it("L7 changed：嵌套组换归属时组里的子孙也进（group 没变、组的层数变了，合成 RT 要换池）", () => {
+    const off = framebufferEffect(false);
+    const { registry, state } = setup([
+      groupLayer(1),
+      groupLayer(2),
+      layerOf(3, { parent: 2 }),
+      layerOf(4, { parent: 2, effects: [off] }),
+    ]);
+    registry.restructure(state, NO_BONES);
+    state.setParent(2, 1);
+    // 2 进组 1；3、4 仍由 2 代画（group 不变）但层数 1 → 2
+    expect(changedAfter(registry, state)).toEqual([1, 2, 3, 4]);
   });
 });

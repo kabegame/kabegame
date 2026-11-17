@@ -49,6 +49,10 @@ const particleCalls: string[] = [];
 const forgotten: number[][] = [];
 /** 单对象重编译（L6）向会话要的片段请求。 */
 const fragmentRequests: FragmentRequest[] = [];
+/** 渲染器替身收到的结构变化与装卸（L7）。 */
+const gpuCalls: string[] = [];
+/** 给了时渲染器替身的 `flushRestructure` 抛它（L7：重排失败走整场重载）。 */
+let flushError: Error | null = null;
 
 class Vec3 {
   constructor(
@@ -164,6 +168,26 @@ class FakeRenderer {
   /** 挂点钩子（P6d3a，`setParent` 的 adjust 数学用）：替身没有挂点。 */
   attachMatrix() {
     return null;
+  }
+  /** 结构变化（L7）：记下交来的对象与重排、装卸；`flushError` 给了时重排抛它。 */
+  restructure(objects: number[]) {
+    gpuCalls.push(`restructure:${[...objects].sort((a, b) => a - b).join(",")}`);
+  }
+  flushRestructure() {
+    gpuCalls.push("flush");
+    if (flushError) throw flushError;
+  }
+  hasObject() {
+    return true;
+  }
+  removeObject(object: number) {
+    gpuCalls.push(`remove:${object}`);
+  }
+  prepareObjectSync(layer: { object: number }) {
+    return { layer };
+  }
+  installObject(prepared: { layer: { object: number } }) {
+    gpuCalls.push(`install:${prepared.layer.object}`);
   }
   destroy() {}
 }
@@ -2595,12 +2619,20 @@ describe("SceneHost 运行中的结构（P6d3a）", () => {
     host.dispose();
   });
 
-  it("换父：普通换父只改状态、不重编译；会改组归属的换父请求一次重编译，并把换父记进结构", async () => {
+  /** 宿主的登记表（L7：组与挂点在它上面当场重算）。 */
+  const registryOf = (host: InstanceType<typeof SceneHost>) =>
+    (host as unknown as { registry: { bundle: SceneBundle } }).registry;
+  const layerOf = (host: InstanceType<typeof SceneHost>, object: number) =>
+    registryOf(host).bundle.layers.find((layer) => layer.object === object)!;
+  const reporterWithUnsupported = () => ({ ...report(), unsupported: vi.fn() });
+
+  it("换父（L7）：普通换父只改状态；进组也不整场重编译，登记表当场重算、交给渲染器当帧重排（脚本之后 flush），换父记进结构", async () => {
+    gpuCalls.length = 0;
     compile.mockImplementation(async () => structureBundle(4, [3], 1));
     let step = 0;
     onUpdate = () => {
       step++;
-      // 第 1 帧：普通层挂普通层；第 2 帧：普通层挂进组合层
+      // 第 1 帧：普通层挂普通层；第 2 帧：普通层挂进组合层（组合层 3 成了组）
       if (step === 1) scene().getLayer(1)!.setParent(scene().getLayer(0));
       if (step === 2) scene().getLayer(2)!.setParent(scene().getLayer(3));
       return 0.6;
@@ -2611,10 +2643,18 @@ describe("SceneHost 运行中的结构（P6d3a）", () => {
     await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
     await new Promise((resolve) => setTimeout(resolve));
     expect(renderer.sceneState!.layers.get(1)!.parent).toBe(0);
-    expect(compile).toHaveBeenCalledTimes(1);
+    // 顶层之间换父：派生量没变，不交给渲染器
+    expect(gpuCalls).toEqual([]);
     renderer.tick();
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect((compile.mock.calls[1][0] as unknown as { structure: unknown }).structure).toEqual({
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(host.stats.recompiled).toEqual([]);
+    expect(host.stats.restructured).toBe(2);
+    // 2 进组 3：两者交给渲染器，同一帧脚本之后重排
+    expect(gpuCalls).toEqual(["restructure:2,3", "flush"]);
+    expect(layerOf(host, 2).group).toBe(3);
+    expect(layerOf(host, 3).subtree).toEqual([2]);
+    expect((host as unknown as { structure: unknown }).structure).toEqual({
       destroyed: [],
       parents: [
         [1, 0, null],
@@ -2625,8 +2665,17 @@ describe("SceneHost 运行中的结构（P6d3a）", () => {
     host.dispose();
   });
 
-  it("删除改了组归属（被删的是组合层）才请求重编译；删普通层不重编译", async () => {
-    compileWithStructure(() => structureBundle(4, [3], 1));
+  it("删除（L7）：删普通层、删组都不整场重编译；删组时子层回顶层、交给渲染器重排", async () => {
+    gpuCalls.length = 0;
+    compileWithStructure(() => {
+      const result = structureBundle(4, [3], 1);
+      // 2 是组 3 的子层
+      result.layers[2].parent = 3;
+      result.children = [[3, [2]]];
+      result.layers[2].group = 3;
+      result.layers[3].subtree = [2];
+      return result;
+    });
     let step = 0;
     onUpdate = () => {
       step++;
@@ -2639,13 +2688,100 @@ describe("SceneHost 运行中的结构（P6d3a）", () => {
     host.applyUserProperties({});
     await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
     await new Promise((resolve) => setTimeout(resolve));
-    expect(compile).toHaveBeenCalledTimes(1);
+    // 删普通层：派生量没变
+    expect(gpuCalls).toEqual([]);
     renderer.tick();
-    await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
-    expect((compile.mock.calls[1][0] as unknown as { structure: { destroyed: number[] } }).structure.destroyed).toEqual(
-      [1, 3],
-    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(host.stats.recompiled).toEqual([]);
+    expect(host.stats.restructured).toBe(2);
+    expect(gpuCalls).toEqual(["restructure:2", "flush"]);
+    expect(layerOf(host, 2).group).toBeNull();
+    expect(registryOf(host).bundle.layers.map((layer) => layer.object)).toEqual([0, 2]);
+    expect((host as unknown as { structure: { destroyed: number[] } }).structure.destroyed).toEqual([1, 3]);
     host.dispose();
+  });
+
+  it("组内不支持组合（L7）：进组的 fullscreen 层不画（卸 GPU）、上报一次，场景不退回；出组照常装回来", async () => {
+    gpuCalls.length = 0;
+    compile.mockImplementation(async () => {
+      const result = structureBundle(4, [3], 1);
+      result.layers[2].fullscreen = true;
+      return result;
+    });
+    let step = 0;
+    onUpdate = () => {
+      step++;
+      if (step === 1) scene().getLayer(2)!.setParent(scene().getLayer(3));
+      if (step === 2) scene().getLayer(2)!.setParent(null);
+      return 0.6;
+    };
+    const reporter = reporterWithUnsupported();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve));
+    expect(reporter.unsupported).toHaveBeenCalledWith(["model:passthrough:children:fullscreen"]);
+    expect(reporter.fallback).not.toHaveBeenCalled();
+    // 2 卸掉、不交给渲染器重排；组 3 的子树变了照常重排
+    expect(gpuCalls).toEqual(["remove:2", "restructure:3", "flush"]);
+    gpuCalls.length = 0;
+    renderer.tick();
+    // 出组：问题消失，2 当场装回（同步备好），3 重排
+    expect(gpuCalls).toEqual(["install:2", "restructure:2,3", "flush"]);
+    expect(reporter.unsupported).toHaveBeenCalledTimes(1);
+    expect(compile).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+
+  it("init 里换父进组（L7）：不二次编译，建场景时子层已在组里（登记表重算的是这次加载的那份）", async () => {
+    compile.mockImplementation(async () => structureBundle(4, [3], 1));
+    let first = true;
+    onInit = () => {
+      if (first) {
+        first = false;
+        scene().getLayer(2)!.setParent(scene().getLayer(3));
+      }
+      return 0.8;
+    };
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    host.applyUserProperties({});
+    await vi.waitFor(() => expect(reporter.ready).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(host.stats.recompiled).toEqual([]);
+    expect(layerOf(host, 2).group).toBe(3);
+    expect(layerOf(host, 3).subtree).toEqual([2]);
+    expect(renderer.sceneState!.layers.get(2)!.parent).toBe(3);
+    host.dispose();
+  });
+
+  it("重排失败（L7）：整场重载兜底，结构里照记", async () => {
+    gpuCalls.length = 0;
+    compile.mockImplementation(async () => structureBundle(4, [3], 1));
+    let step = 0;
+    onUpdate = () => {
+      step++;
+      if (step === 1) scene().getLayer(2)!.setParent(scene().getLayer(3));
+      return 0.6;
+    };
+    flushError = new Error("render:variant-missing");
+    const reporter = report();
+    const host = new SceneHost({ width: 100, height: 100 } as HTMLCanvasElement, { imageId: "1", report: reporter });
+    try {
+      host.applyUserProperties({});
+      await vi.waitFor(() => expect(compile).toHaveBeenCalledTimes(2));
+      expect(host.stats.recompiled.map((item) => item.reason)).toEqual([
+        "script（结构变化 重排失败：Error: render:variant-missing）",
+      ]);
+      expect((compile.mock.calls[1][0] as unknown as { structure: { parents: unknown } }).structure.parents).toEqual([
+        [2, 3, null],
+      ]);
+    } finally {
+      flushError = null;
+      host.dispose();
+    }
   });
 });
 
