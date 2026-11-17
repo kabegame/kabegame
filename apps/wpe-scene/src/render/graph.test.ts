@@ -660,3 +660,40 @@ describe("效果矩阵", () => {
     expect(y).toBeCloseTo(-1, 6);
   });
 });
+
+describe("图层渲染图：槽 0 是帧表（P6e 点 1）", () => {
+  // dino_run 的 NPOT 帧表：256×32 的纹理里 144×24 的图像、24×24 一格（TEXS0003，头里的格尺寸 24×24）
+  const sheet = (
+    version: number,
+  ): Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight" | "frames"> => ({
+    width: 144,
+    height: 24,
+    textureWidth: 256,
+    textureHeight: 32,
+    frames: { version, cell: version >= 3 ? [24, 24] : [144, 24], total: 0.6, frames: [] },
+  });
+
+  it("直接上屏：TEXS0003 帧表的四边形 UV 上界取 (1, 1)（WPE `FUN_140209360`），TEXS0002 仍是 图像 / 纹理（p6e-tex 实测）", () => {
+    const v3 = planLayer(layer(), [sheet(3)]);
+    expect(draws(v3.steps)[0]).toMatchObject({ role: "direct", uv: [1, 1] });
+    const v2 = planLayer(layer(), [sheet(2)]);
+    expect(draws(v2.steps)[0]).toMatchObject({ role: "direct", uv: [144 / 256, 24 / 32] });
+    // 不是帧表的 NPOT 纹理不变
+    expect(draws(planLayer(layer(), textures).steps)[0].uv).toEqual([219 / 256, 216 / 256]);
+  });
+
+  it("合成路径的基础 pass 照实测保持 图像 / 纹理（带 effect 的 0003 NPOT 帧表只画出左上一块，p6e-tex N2）；上屏 pass 仍是 (1, 1)", () => {
+    const plan = planLayer(layer({ effects: [effect([draw({ pass: pass({ blending: "normal" }) })])] }), [sheet(3)]);
+    const [base, final] = draws(plan.steps);
+    expect(base).toMatchObject({ role: "base", uv: [144 / 256, 24 / 32] });
+    expect(final).toMatchObject({ role: "final", uv: [1, 1] });
+  });
+
+  it("合成 RT 尺寸取帧表头的格尺寸（0003：24×24；0002：整张图像 144×24），不是图像尺寸", () => {
+    const plan = planLayer(layer({ effects: [effect([draw()])] }), [sheet(3)]);
+    expect(plan.composite).toEqual({ count: 1, width: 24, height: 24 });
+    const v2 = planLayer(layer({ effects: [effect([draw()])] }), [sheet(2)]);
+    expect(v2.composite).toEqual({ count: 1, width: 144, height: 24 });
+    expect(compositeSize(layer(), sheet(3))).toEqual([24, 24]);
+  });
+});

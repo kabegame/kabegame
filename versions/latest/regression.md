@@ -1,5 +1,18 @@
 # v4.7.0 regression
 
+## 场景壁纸图像层帧表（P6e 第 1 步：编译与共享计时器）
+
+2026-11-18 Windows dev。图像层上的帧表（sprite sheet）纹理不再报 `tex:animation` / `combo:SPRITESHEET`：bundle 带上完整帧表（每格帧时长、所在图像、`Rotation` / `Translation`），渲染器给每张帧表纹理一份共享计时器，同 Wallpaper Engine 只在本帧第一次有 draw 画到这张纹理时按 `g_Frametime` 推进（每帧最多一格、余量截掉、总是循环），没画到的帧不推进也不补时间，再把这一格写进 draw 的 `g_Texture<n>Rotation` / `Translation`。帧表图层的 `autosize` 与合成 RT 取 TEXS 头里的格尺寸；TEXS0003 直接上屏的 UV 取 (1, 1)，合成路径的基础 pass 照 WPE 实测仍按「图像 / 纹理」。脚本的 `getTextureAnimation`、多图像帧表、文本 `anchor` 是后面几步，仍照报。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：`render/sheets.test.ts`、`render/p6e-sheets.test.ts`、`compile/p6e-sheets.test.ts`、`render/graph.test.ts` 与改了期望的 `compile/sheet`、`refract`、`p12b2-tc`、`p2a`、`p8`；`tsc` | 全过 | 2026-11-18 Claude：9 个文件 223 条通过；`tsc` 0 错误；变异 12 处抓到 11 处，没抓到的是等价变异（版本 < 3 的帧表本来没有 gif 宽高） |
+| [x] | T2 推进节奏和 WPE 一致 | Windows dev，屏外宿主（dev 探针，`canvas` 1280×720，`particles.dts` 取 WPE 日志逐帧的 `engine.frametime`） | `ignore/p6/e0/proj/p6e-rate`（帧时长 0.1 / 0.02 / 0 的三张帧表）回放到 f228–f232，和 `ignore/p6/e0/out/png/wpe-rate-f*.png` 按区域逐像素比 | 帧表图层 0 差异 | 2026-11-18 Claude：三层五帧全部 0 差异（计数层不同是脚本调了第 2 步的 `getTextureAnimation`，预期） |
+| [x] | T3 NPOT、TEXS0002、旋转帧、autosize | 同上 | `p6e-tex-single`（`p6e-tex` 去掉多图像那层）用 `p6e-tex` 的 WPE 日志回放到 f192–f200 比 | N1–N4、R1 0 差异 | 2026-11-18 Claude：五层五帧全部 0 差异，含「带 effect 的 NPOT 帧表只画出格的左上一块」（WPE 实测） |
+| [ ] | T4 共享计时器的隐藏规则 | 同上 | `p6e-shared` 全部图层与 WPE 比 | 一隐一显同格；两个都隐不推进不补 | 第 1 步只比得了一直可见的 A、D（0 差异）；隐藏写在脚本里，要第 2 步的 `getTextureAnimation` 才跑得起来；单测已按 WPE 日志逐帧覆盖 |
+| [x] | T5 全库 | Node，`kbp corpus scan` / `diff` | HEAD + 本步与基线比 | 只去掉 `tex:animation`、`combo:SPRITESHEET`，不新增键 | 2026-11-18 Claude：能渲染 199 → 205（2833017810、2916324703、3420277613、3662390671、3811424158、3818053626），两个键各去掉 20 张，没有新增，没有掉出；新解锁的 6 张冒烟渲染无不支持项、无脚本错误 |
+| [ ] | T6 新解锁的场景预览 | Windows dev 预览 | 打开上面 6 张的预览看一会儿 | 帧表在动，节奏和 WPE 一样；3818053626 开场约 10 s 是黑的开场动画 | 需要用户看 |
+
 ## 场景壁纸运行中的结构变化不重编（活的场景图 L7）
 
 2026-11-17 Windows dev。脚本 `setParent` 进出组合层 / 挂到骨骼、`destroyLayer` 删组或删组里的对象，不再整场重编译，当帧生效（同 Wallpaper Engine）：每个组合层都预编 `groupUpload` 上屏 pass（没有子层的在全部对象之后编、程序排表尾）；登记表 `restructure` 比较重算前后的组 / 组的层数 / 子树 / 挂点 / 组内 effect 标记报出变化集合；宿主 `applyRestructure` 把运行中出现的组内不支持组合（子层读快照、fullscreen、透视、模型、形状，以及透视场景 / 被依赖 / 开雾的组）按「那个对象不画 + 看板娘提示一次」处理、消失时装回，其余交给渲染器在同一帧脚本之后 `flushRestructure`：按计划签名加组归属（`placement`）重建受影响图层、缺的管线同步建、合成 RT 按组的层数换池、挂点表更新，失败整场重载兜底。`reparentNeedsRecompile` / `destroyNeedsRecompile` 删掉，`fragmentBlocker` 不再挡组合层。

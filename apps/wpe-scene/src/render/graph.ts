@@ -358,7 +358,10 @@ export interface LayerPlan {
   reasons: string[];
 }
 
-type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
+type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight"> & {
+  /** 帧表（P6e，`SceneTexture.frames`）：合成 RT 尺寸取格尺寸，直接上屏的 UV 上界看版本。用户纹理等没有。 */
+  frames?: Pick<NonNullable<SceneTexture["frames"]>, "version" | "cell">;
+};
 
 /**
  * 直接父对象是组（P5f）：WPE 的层首拷贝只看直接父是不是组合层（`FUN_1401e8aa0` 的 `0x1401e8f63`：`+0x180` 父、`+0x120 & 4`），是就不拷；
@@ -373,7 +376,8 @@ export function isDirectGroupChild(layer: Pick<SceneLayer, "group" | "parent">):
  * 或没有纹理时是 `"scene"`，取 `sceneSize` 即场景目标尺寸，P5d 步骤 2），排在最前；否则基础材质槽 0 纹理的图像尺寸，没有纹理、
  * `solidLayer` 且不是 `instanced`（P5b 步骤 5，`p5b-inst2` 的 J1 32×32、J2 48×40，对照组 J0 900×1000）或组合层（取 `round(size)`，
  * rea-p5-modelflags §2.3，`p5b-cl` 实测 600×300）
- * 取图层 size；最后取 max(4, ·)。精灵表取单帧留到 P6。
+ * 取图层 size；最后取 max(4, ·)。槽 0 是帧表时取 TEXS 头的格尺寸（P6e，rea-p6e-sheet 5.3：`FUN_1402091e0` 读 `tex+0xb0/+0xb4`，
+ * TEXS0003 是头里的帧宽高，版本 < 3 时 `parseTex` 已把它定成图像宽高）；fullscreen 的 `fullscreenSize` 不看帧表（语料没有帧表的全屏层）。
  */
 export function compositeSize(
   layer: Pick<SceneLayer, "size" | "solidLayer" | "instanced" | "passthroughModel" | "fullscreenSize">,
@@ -386,7 +390,9 @@ export function compositeSize(
       ? sceneSize
       : layer.fullscreenSize
     : texture && !(layer.solidLayer && !layer.instanced) && !layer.passthroughModel
-      ? [texture.width, texture.height]
+      ? texture.frames
+        ? texture.frames.cell
+        : [texture.width, texture.height]
       : [layer.size[0] ?? 0, layer.size[1] ?? 0];
   return [Math.max(4, Math.round(w)), Math.max(4, Math.round(h))];
 }
@@ -850,6 +856,11 @@ export function planLayer(
   // 文本层的图层尺寸来自排版（`TextLayout.size`），不来自 JSON 的 `size`（rea-p6b-layout 1.4）
   const size = sceneText ? text!.size : layer.size;
   const uv = textureUvExtent(baseTexture);
+  // 直接上屏的四边形 UV 上界（P6e 点 1，rea-p6e-sheet 5.2 `FUN_140209360`）：槽 0 是 TEXS0003 帧表时 WPE 取 (1, 1)（`Rotation` 把 a_TexCoord 映进格，
+  // 上界再缩成「图像 / 纹理」就只画出 NPOT 格的左上一块）；TEXS0001 / 0002 仍是图像 / 纹理（`p6e-tex` 实测：0002 的 NPOT 只画出格的左上
+  // 144/256 × 24/32）。合成路径的基础 pass（下面 `role: "base"`）**不**跟：WPE 读码说有 effect 时取 (1, 1)，实测相反（`p6e-tex` N2：带 effect 的
+  // 0003 NPOT 帧表同样只画出左上一块，基础 pass 自己按「图像 / 纹理」缩了 UV），照实测保持 `uv`；语料的 NPOT 帧表（dino_run）没有 effect
+  const directUv: [number, number] = baseTexture?.frames && baseTexture.frames.version >= 3 ? [1, 1] : uv;
   // UV 内缩分两种（P5b 步骤 1，p5-REPORT `p5b-nopad`）：直接上屏（WPE `+0x490`，flags & 0x226）在 fullscreen、nopadding、
   // passthrough、solidlayer 时不内缩；末 pass 与 passthrough 上屏（`+0x2e8`，flags & 0x222）不看 nopadding。
   // 组合层（步骤 2）两块都不内缩（rea-p5-modelflags §2.3，`p5b-cl` 上屏 UV 0–1）；它不会走直接上屏，加进去只为和 WPE 的条件一致。
@@ -973,7 +984,7 @@ export function planLayer(
       target: { kind: "scene" },
       inputs: staticInputs(base, null),
       geometry: screenGeometry,
-      uv,
+      uv: directUv,
       inset: directInset,
       blending: additive ? "additive" : base.blending,
       raster: rasterState(base, base, additive ? "additive" : base.blending),

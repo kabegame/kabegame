@@ -161,7 +161,7 @@ import {
 import { checkCameraObjectPath, compileCamera, type SceneCameraJson } from "./camera";
 import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
-import { ANIMATION_ISSUE, FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
+import { FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import { materialCombos, passAlphaWriting, type AlphaWriting } from "./writeState";
 import {
   defaultOfTexture,
@@ -245,6 +245,54 @@ export interface SceneTexture {
   video?: SceneVideoSource;
   /** 头标志 bit2（帧表）置位、帧表非空时有（`spriteSheet`）。只有粒子材质的槽 0 用它（P4b 步骤 2）。 */
   sheet?: SceneSpriteSheet;
+  /**
+   * 完整帧表（P6e 点 1，`sheetFrames`）：头标志 bit2 置位、帧表非空时有，图像层、effect 的帧动画用（`render/sheets.ts` 的共享计时器逐帧
+   * 换格）。和 `sheet`（粒子只取第 0 帧的宽高）并存。
+   */
+  frames?: SceneSheetFrames;
+}
+
+/**
+ * 帧表（TEXS，P6e 点 1，rea-p6e-sheet 2.2、2.4、5.3）：每帧的坐标已按该帧所在图像第 0 级 mip 归一化（`parseTex` 的 `readFrames`），
+ * 渲染器写 `g_Texture<s>Rotation = (width, widthY, heightX, height)`、`g_Texture<s>Translation = (x, y)`。全部 float32。
+ */
+export interface SceneSheetFrames {
+  /** TEXS 版本（1–3）。 */
+  version: number;
+  /**
+   * TEXS0003 头里的格宽高；版本 < 3 时是整张图像宽高（WPE `tex+0xb0/+0xb4`，rea-p6e-sheet 5.3）。`autosize` 与图像层合成 RT 的尺寸取它。
+   */
+  cell: [number, number];
+  /** 逐帧 `frametime` 的 float32 累加（`duration`）。 */
+  total: number;
+  frames: {
+    frametime: number;
+    /** imageId（越界时 6 个坐标为 0，同读入）。多图像在 P6e 点 4 才用。 */
+    image: number;
+    rotation: [number, number, number, number];
+    translation: [number, number];
+  }[];
+}
+
+/** 帧表纹理的 `SceneSheetFrames`；不是帧表或帧表为空时为 undefined（空帧表由 `parseTex` 报 `tex:animation:empty`）。 */
+export function sheetFrames(
+  tex: Pick<TexResult, "frames" | "animatedVersion" | "gifWidth" | "gifHeight" | "width" | "height">,
+): SceneSheetFrames | undefined {
+  if (!tex.frames?.length) return undefined;
+  let total = 0;
+  for (const frame of tex.frames) total = Math.fround(total + frame.frametime);
+  return {
+    version: tex.animatedVersion ?? 3,
+    cell:
+      tex.animatedVersion === 3 ? [tex.gifWidth ?? tex.width, tex.gifHeight ?? tex.height] : [tex.width, tex.height],
+    total,
+    frames: tex.frames.map((frame) => ({
+      frametime: frame.frametime,
+      image: frame.image,
+      rotation: [frame.width, frame.widthY, frame.heightX, frame.height],
+      translation: [frame.x, frame.y],
+    })),
+  };
 }
 /**
  * 粒子帧表（rea-p4b-render.md 2.2，`FUN_1402366f0`）：粒子路径只用第 0 帧的宽、高和帧数，`x`、`y`、`frametime`、`imageId`
@@ -1092,9 +1140,10 @@ export function applyGroupRules(
  * `height`（是数字才算，两个分量各自生效）→ 对象 `size`（`objectSize`，解析出的分量各自覆盖）→ `autosize` 时覆盖前面的值：
  * - `projectlayer`（P5b 步骤 2，rea §3.1，`p5b-proj` 实测）：正交投影宽高（`projection`，即 `SceneGeneral` 的 `width` / `height`），
  *   WPE 取整（`0x1401875eb`）。排在纹理之前，组合层的槽 0 是 `_rt_FullFrameBuffer`、本来就没有纹理；
- * - 否则槽 0 纹理的图像尺寸；没有纹理时不覆盖。
- * WPE 的 `autosize` 在纹理就绪时覆盖对象 `size`，我们没有异步的纹理就绪，编译期按同一顺序一次算完。精灵表的帧尺寸、用户纹理的参考
- * 尺寸不在这里：前者随图像层帧动画（`tex:animation`），后者照报（`material:usertextures`）。透视场景里正交投影宽高是 0，
+ * - 否则槽 0 纹理的图像尺寸；槽 0 是帧表时取 TEXS 头的格尺寸（P6e，`SceneSheetFrames.cell`，WPE `tex+0xb0/+0xb4`，rea-p6e-sheet 5.3）；
+ *   没有纹理时不覆盖。
+ * WPE 的 `autosize` 在纹理就绪时覆盖对象 `size`，我们没有异步的纹理就绪，编译期按同一顺序一次算完。用户纹理的参考
+ * 尺寸不在这里（`usertextures`）。透视场景里正交投影宽高是 0，
  * `projectlayer` 没测过（语料 0），`compileImageModel` 报 `camera:perspective:projectlayer`，这里照算（0）。
  * `fullscreen` 模型也不在这里：WPE 在纹理就绪时先判它（几何 2×2，排在 `autosize` 之前），`compileScene` 在调本函数之前就定了
  * （`SceneLayer.fullscreen`，P5b 步骤 3）。
@@ -1102,12 +1151,12 @@ export function applyGroupRules(
 export function imageLayerSize(
   model: ModelJson,
   objectSize: readonly number[],
-  texture: Pick<SceneTexture, "width" | "height"> | undefined,
+  texture: Pick<SceneTexture, "width" | "height" | "frames"> | undefined,
   projection: readonly [number, number],
 ): number[] {
   if (modelFlag(model, "autosize")) {
     if (modelFlag(model, "projectlayer")) return [Math.trunc(projection[0]), Math.trunc(projection[1])];
-    if (texture) return [texture.width, texture.height];
+    if (texture) return texture.frames ? [...texture.frames.cell] : [texture.width, texture.height];
   }
   const fromModel = [model.width, model.height];
   return [0, 1].map((axis) => {
@@ -1744,11 +1793,10 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   const settled = () => unsupported.recorder === null && unsupported.size > 0 && !input.force && !input.exhaustive;
 
   /**
-   * 一张纹理（按解析后的路径缓存）。`particleSlot`：本次是粒子材质的某个槽位，帧表是合法用法，这次上报的问题里去掉
-   * `tex:animation`；`tex:animation:multi-image`、`tex:animation:empty` 照报。帧表纹理用在图像层、effect 时照报（图像层的
-   * 帧动画属 P6）。缓存的 `textureIssues` 仍是纹理自己的全部问题，只在上报时按用途过滤。
-   * 只有槽 0 带帧表语义：WPE 只看槽 0 纹理的头标志置系统的 `0x1000000`（rea-p4b-render.md 2.3），帧表宏与
-   * `SceneParticle.spriteSheet` 也只按槽 0 定，和这个参数无关。其它槽（`REFRACT` 的槽 1 帧表法线图，P4b 步骤 5）
+   * 一张纹理（按解析后的路径缓存）。帧表纹理不报 `tex:animation`（P6e 点 1：图像层、effect、粒子的帧动画都支持，完整帧表在
+   * `SceneTexture.frames`）；`tex:animation:multi-image`（点 4 才支持）、`tex:animation:empty` 照报。
+   * 粒子路径只有槽 0 带帧表语义：WPE 只看槽 0 纹理的头标志置系统的 `0x1000000`（rea-p4b-render.md 2.3），帧表宏与
+   * `SceneParticle.spriteSheet` 也只按槽 0 定。其它槽（`REFRACT` 的槽 1 帧表法线图，P4b 步骤 5）
    * 只是一张普通纹理：绑定取第 0 张图像（2.7），片元用和槽 0 相同的 `v_TexCoord.xy` 采它，槽 0 是帧表时那已是帧内 UV，
    * 法线图和颜色图同样排帧就对得上（语料里的配对都是这样）。
    */
@@ -1756,7 +1804,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     name: string,
     scope: ResourceScope | null,
     issues: Set<string> = unsupported,
-    particleSlot = false,
   ): Promise<{ index: number; format: number } | null> {
     const path = texturePath(name);
     const file = await fs.resolveScoped(path, scope);
@@ -1765,7 +1812,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       return null;
     }
     const report = (keys: readonly string[]) => {
-      for (const key of keys) if (!(particleSlot && key === ANIMATION_ISSUE)) issues.add(key);
+      for (const key of keys) issues.add(key);
     };
     const existing = textureIndex.get(file.path);
     if (existing !== undefined) {
@@ -1806,6 +1853,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     });
     const sheet = spriteSheet(tex, textureWidth, textureHeight);
     if (sheet) bundle.textures[index].sheet = sheet;
+    const frames = sheetFrames(tex);
+    if (frames) bundle.textures[index].frames = frames;
     return { index, format: tex.format };
   }
 
@@ -2319,8 +2368,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         else issues.add(`texture:rendertarget:${name}`);
         continue;
       }
-      // 粒子材质的任何槽位都不报 `tex:animation`（帧表语义只按槽 0，见 `getTexture`）
-      const texture = await getTexture(name, scope, issues, !!context.particle);
+      const texture = await getTexture(name, scope, issues);
       if (texture) {
         slots[slot] = texture.index;
         // 标志的 bit 20 起决定注解 `components` 的组合键（F1，`FUN_14016c800`）
@@ -2426,7 +2474,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
           if (!bindRuntime(binding.slot, fallback)) issues.add(`texture:rendertarget:${fallback}`);
           continue;
         }
-        const texture = await getTexture(fallback, scope, issues, !!context.particle);
+        const texture = await getTexture(fallback, scope, issues);
         if (texture) slots[binding.slot] = texture.index;
       }
       program = addProgram(result);

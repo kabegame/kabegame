@@ -298,6 +298,7 @@ import { SHADOW_CASTER_UNIFORM } from "../compile/features";
 import { mirroredView, type SceneView } from "./views";
 import { SPRITE_COUNT_TARGET_FORMAT, SpriteCounter, spriteOverrides, spriteViewProjection } from "./sprite";
 import { transparentDrawOrder } from "./sortOrder";
+import { newSheetClock, sheetFrameFor, type SheetClock } from "./sheets";
 import { byPosition, layerStructure } from "./structure";
 import type { DirtyState, LayerState, SceneState } from "./state";
 import { WorldStamps } from "./worldStamps";
@@ -1529,6 +1530,26 @@ export class GpuScene {
    * `update` 过时为 null。
    */
   private frameValues: Record<string, ArrayLike<number>> | null = null;
+  /**
+   * 帧表纹理的共享计时器（P6e 点 2，`render/sheets.ts`），键是 bundle 纹理下标，第一次画到这张纹理时按 `{0, 0, 0}` 建（WPE 纹理对象构造时清 0）。
+   * 同一张 `.tex` 一份：用它的所有图层、effect、粒子共用（WPE 纹理按名字缓存，rea-p6e-sheet 2.2【推】，`bundle.ts` 也按解析后的路径去重）。
+   * 本步只在同一个 `GpuScene` 内保持：整场重新加载建新的 `GpuScene` 时计时器从头开始，WPE 重载场景时纹理对象是否重建没查（rea-p6e-sheet 未查清 2）。
+   */
+  private readonly sheetClocks = new Map<number, SheetClock>();
+  /** 每个 draw 里帧表纹理的槽（程序真的绑定的槽，且输入是静态纹理、纹理带帧表）：建一次，空数组也记下。 */
+  private readonly sheetSlots = new WeakMap<Draw, { slot: number; index: number }[]>();
+  /**
+   * 渲染帧号（WPE `ctx+0x144`，每帧开头加 1，共享计时器据此「每帧只推进一次」）：每个帧的唯一入口 `stepParticles` 里加 1（渲染器与 dev 探针每帧
+   * 恰好调一次；`update` 在探针里一帧可能调几次，不能用）。从 1 起，所以第一帧的第一次绑定就推进（`lastFrame` 初值 0）。
+   */
+  private sheetFrameNo = 0;
+  /** 本帧的 `g_Frametime`（最近一次 `update` 的 `frametime`，已钳过；补画帧为 0）：共享计时器按它推进。 */
+  private sheetDt = 0;
+  /**
+   * 图层脱离帧号的来源（脚本 `ITextureAnimation`，P6e 点 3 接 `SceneState`）：`>= 0` 时这个图层整段绘制里的所有帧表纹理都画这一格、不推进
+   * 共享计时器；`< 0` 走共享计时器。本步没有来源，一律 −1。
+   */
+  private sheetOverride: (object: number) => number = () => -1;
   /** HDR 下图层颜色乘 `brightness`（B10），就地刷新时按状态里的 brightness 现算。 */
   private hdr = false;
   /** 上传后的场景纹理，下标同 `bundle.textures`；没上传的为 null（`uploadableTextures`）。 */
@@ -5416,6 +5437,59 @@ export class GpuScene {
     return copy;
   }
 
+  /**
+   * 帧表纹理的选格与 uniform（P6e 点 2，rea-p6e-sheet 2.2、2.3）：对这个 draw 程序真的绑定的每个帧表纹理槽 `s`，按共享计时器取格（本渲染帧第一次
+   * 用到这张纹理时用本帧 `g_Frametime` 推进，同帧再用 dt = 0；`sheetOverride` 给了脱离帧号时都画那一格、不推进），把
+   * `g_Texture<s>Rotation` / `Translation` 写进这个 draw 的 uniform（只写程序声明了的名字，同 WPE 只给用到的槽）并上传（排在本帧提交之前）。
+   * `encode` 的 `draw` 闭包在确定要画之后才调它：不可见的图层、被剔除的模型、没有存活粒子的系统都到不了这里，也就不碰计时器——WPE 实测
+   * （`p6e-shared`）同一张纹理两个图层一隐一显时隐的回来与显的同格，两个都隐时回来接着隐藏前那一格走、不补时间。合成路径里（effect 链、puppet、
+   * 组）用到同一张纹理的 pass 各自调一次，同帧共用同一格。`copy` 是平面反射 pass 的副本块（它的 uniform 是自己的缓冲）。
+   * 多图像帧表换绑图像（点 4）还没有：`tex:animation:multi-image` 照报，到不了这里。
+   */
+  private bindSheets(draw: Draw, copy: ReflectionCopy | null): void {
+    let slots = this.sheetSlots.get(draw);
+    if (!slots) {
+      slots = [];
+      for (const binding of draw.program.textures) {
+        const ref = draw.step.inputs[binding.slot];
+        if (ref?.kind === "texture" && this.bundle.textures[ref.index]?.frames)
+          slots.push({ slot: binding.slot, index: ref.index });
+      }
+      this.sheetSlots.set(draw, slots);
+    }
+    if (!slots.length) return;
+    const override = this.sheetOverride(draw.object);
+    const block = copy ? copy.block : draw.block;
+    const buffer = copy ? copy.buffer : draw.uniformBuffer;
+    let written = false;
+    for (const { slot, index } of slots) {
+      const sheet = this.bundle.textures[index].frames!;
+      let clock = this.sheetClocks.get(index);
+      if (!clock) this.sheetClocks.set(index, (clock = newSheetClock()));
+      const frame = sheet.frames[sheetFrameFor(clock, sheet, this.sheetFrameNo, this.sheetDt, override)];
+      if (!block) continue;
+      if (block.has(`g_Texture${slot}Rotation`)) {
+        block.set(`g_Texture${slot}Rotation`, frame.rotation);
+        written = true;
+      }
+      if (block.has(`g_Texture${slot}Translation`)) {
+        block.set(`g_Texture${slot}Translation`, frame.translation);
+        written = true;
+      }
+    }
+    if (written && block && buffer) this.device.queue.writeBuffer(buffer, 0, block.data);
+  }
+
+  /** 图层脱离帧号的来源（`sheetOverride`）：脚本 `ITextureAnimation`（P6e 点 3）接上；null 恢复成一律 −1。 */
+  setSheetOverrides(source: ((object: number) => number) | null): void {
+    this.sheetOverride = source ?? (() => -1);
+  }
+
+  /** 帧表纹理的共享计时器快照（dev 探针 / 测试读）：键是 bundle 纹理下标。 */
+  sheetClockOf(index: number): Readonly<SheetClock> | undefined {
+    return this.sheetClocks.get(index);
+  }
+
   /** 反射副本的管线（P13b2）：LDR 用主管线；HDR 取加载时备好的 rgba8unorm 那份（`prepareLayer`），缺了说明备漏了。 */
   private reflectionPipeline(draw: Draw): GPURenderPipeline {
     if (!this.hdr) return draw.pipeline;
@@ -5660,6 +5734,7 @@ export class GpuScene {
    */
   update(frame: FrameInput, state?: SceneState): void {
     const values = (this.frameValues = { ...frameBuiltins(frame), ...this.frameLightValues(frame, state) });
+    this.sheetDt = frame.frametime;
     for (const draw of this.draws) {
       if (!draw.block || !draw.uniformBuffer) continue;
       if (!draw.frameNames.length && !draw.dirty && !draw.trailRenderVar && draw.puppet === null) continue;
@@ -5718,6 +5793,8 @@ export class GpuScene {
     cursor: readonly [number, number] = [0.5, 0.5],
   ): void {
     this.particleCursor = cursor;
+    // 渲染帧号（共享计时器去重用）：每帧恰好一次，补画帧（帧时间 0）也算一帧、只是 dt 为 0
+    this.sheetFrameNo++;
     if (!(frametime > 0)) return;
     // 对象更新循环（WPE `FUN_1401891a0`，p12-lag，B1）：本帧号加一，蒙皮 puppet 与粒子层按 objects 顺序各取一次世界矩阵（不看可见性：
     // 隐藏的 puppet 照推进、粒子照更新控制点）；挂点对象在这里每帧重算、戳 = 本帧号，渲染阶段（`drawPhase`）据此沿用这里的值
@@ -6328,7 +6405,7 @@ export class GpuScene {
     const draw = (
       pass: GPURenderPassEncoder,
       item: Draw,
-      reflection?: { pipeline: GPURenderPipeline; bindGroup: GPUBindGroup },
+      reflection?: { pipeline: GPURenderPipeline; bindGroup: GPUBindGroup; copy: ReflectionCopy | null },
     ) => {
       // 视频纹理（P9a）：画到它就记下帧号；有新帧就拷进来，排在本帧提交之前（同 WPE 绑定时 TransferVideoFrame，rea-p9-video
       // 第 2 节第 4 条）。视频尺寸和纹理不同时只拷重叠部分并记一条 warn（决定 3，语料 0 段）
@@ -6349,6 +6426,9 @@ export class GpuScene {
         this.uploadParticles(item, particles);
         if (!particles.count || (!particles.rope && !this.particleIndices)) return;
       }
+      // 帧表纹理（P6e 点 2）：到这里这个 draw 一定会画（上面的早退都过了），就是 WPE「绑定时推进」的那一刻；没画到的 draw 不碰计时器。
+      // 选格与写 uniform 都在这里，不另写一份「会不会画」的判断，所以和编码的取舍永远是同一套
+      this.bindSheets(item, reflection?.copy ?? null);
       pass.setPipeline(reflection?.pipeline ?? item.pipeline);
       pass.setBindGroup(0, reflection?.bindGroup ?? this.bindGroupOf(item));
       pass.setVertexBuffer(0, item.vertexBuffer);
@@ -6500,6 +6580,7 @@ export class GpuScene {
         draw(pass, item, {
           pipeline: this.reflectionPipeline(item),
           bindGroup: copy?.bindGroup ?? this.bindGroupOf(item),
+          copy,
         });
       };
       for (const runtime of reflectionOrder) {

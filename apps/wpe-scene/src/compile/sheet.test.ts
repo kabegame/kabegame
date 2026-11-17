@@ -298,13 +298,13 @@ describe("parseTex：TEXS 帧表（rea-p4b-render.md 2.1）", () => {
     ]);
   });
 
-  it("帧表纹理照报 tex:animation，但 mip 照常解码（粒子槽 0 要上传）；多图像、空帧表另报", async () => {
+  it("帧表纹理不报 tex:animation（P6e），mip 照常解码（槽 0 要上传）；多图像、空帧表另报", async () => {
     const sheet = await parseTex(memoryFile(sheetTex(SAMPLES.rain1)));
-    expect(sheet.unsupported).toEqual(["tex:animation"]);
+    expect(sheet.unsupported).toEqual([]);
     expect(sheet.images[0].mips[0].bytes?.length).toBe(1024 * 1024);
     // 还有别的不支持项时照旧不解码
     const other = await parseTex(memoryFile(sheetTex({ ...SAMPLES.rain1, format: 10 })));
-    expect(other.unsupported).toEqual(["tex:animation", "tex:format:10"]);
+    expect(other.unsupported).toEqual(["tex:format:10"]);
     expect(other.images[0].mips[0].bytes).toBeUndefined();
     // 调用方要求不解码时不解码
     expect((await parseTex(memoryFile(sheetTex(SAMPLES.rain1)), false)).images[0].mips[0].bytes).toBeUndefined();
@@ -320,11 +320,11 @@ describe("parseTex：TEXS 帧表（rea-p4b-render.md 2.1）", () => {
         }),
       ),
     );
-    expect(multi.unsupported).toEqual(["tex:animation", "tex:animation:multi-image"]);
+    expect(multi.unsupported).toEqual(["tex:animation:multi-image"]);
     // 第二帧按自己所在图像（512²）归一化
     expect(multi.frames![1]).toMatchObject({ image: 1, width: 0.5, height: 0.5 });
     const empty = await parseTex(memoryFile(sheetTex({ ...SAMPLES.rain1, frames: [] })));
-    expect(empty.unsupported).toEqual(["tex:animation", "tex:animation:empty"]);
+    expect(empty.unsupported).toEqual(["tex:animation:empty"]);
     expect(empty.frames).toEqual([]);
     // 不是帧表的纹理：没有 frames
     const plain = await parseTex(memoryFile(sheetTex({ ...SAMPLES.rain1, texs: undefined })));
@@ -603,7 +603,7 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
   });
 
-  it("帧表纹理用在粒子槽 1：普通纹理，不报 tex:animation、不算帧表（P4b 步骤 5）；用在图像层照报，缓存命中也照报", async () => {
+  it("帧表纹理用在粒子槽 1：普通纹理，不算帧表（P4b 步骤 5）；用在图像层、缓存命中也不报 tex:animation（P6e）", async () => {
     const { translator, requests } = fakeTranslator();
     const slot1 = await compile(
       memoryReader(
@@ -625,7 +625,7 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     const image = await compile(
       memoryReader(
         files({
-          // 先粒子（槽 0，合法），后图像层（缓存命中，按用途照报）
+          // 先粒子（槽 0），后图像层（缓存命中）：都不报（P6e 起图像层的帧动画由渲染器的共享计时器画）
           "P:/p/scene.json": {
             general: ORTHO,
             objects: [
@@ -637,8 +637,11 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
       ),
       fakeTranslator().translator,
     );
-    expect(image.unsupported).toEqual(["tex:animation"]);
+    expect(image.unsupported).toEqual([]);
     expect(image.textures).toHaveLength(1);
+    // 完整帧表随纹理进 bundle（`SceneTexture.frames`），粒子要的 `sheet` 照旧
+    expect(image.textures[0].frames?.frames.length).toBeGreaterThan(0);
+    expect(image.textures[0].sheet).toBeDefined();
   });
 
   it("拖尾 + 帧表（P4c 步骤 5）：THICKFORMAT、TRAILRENDERER 之外照写 SPRITESHEET*；混帧规则不变", async () => {

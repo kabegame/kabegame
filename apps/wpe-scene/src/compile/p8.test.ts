@@ -1601,7 +1601,9 @@ describe("能力表：alphawriting 与 alphatocoverage（P8 步骤 5）", () => 
     };
     expect(programKeys([{ name: "ALPHATOCOVERAGE", value: 1 }])).toEqual([]);
     expect(programKeys([{ name: "alphatocoverage", value: 1 }])).toEqual([]);
-    expect(programKeys([{ name: "SPRITESHEET", value: 1 }])).toEqual(["combo:SPRITESHEET"]);
+    // SPRITESHEET 自 P6e 起不在引擎 COMBO 表里（材质自己的 COMBO）；蒙皮类照报
+    expect(programKeys([{ name: "SPRITESHEET", value: 1 }])).toEqual([]);
+    expect(programKeys([{ name: "SKINNING", value: 1 }])).toEqual(["combo:SKINNING"]);
     const particleKeys = (pass: MaterialPass, combos: { name: string; value: number }[]) => {
       const keys = new Set<string>();
       checkParticleProgram(pass, result(combos), keys);

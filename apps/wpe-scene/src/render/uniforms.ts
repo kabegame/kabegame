@@ -261,7 +261,9 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
     g_CompositeColor: [input.layer.color[0] ?? 1, input.layer.color[1] ?? 1, input.layer.color[2] ?? 1],
     ...screenBuiltins(input.screenSize),
     g_TextureReductionScale: [1],
-    // 非 spritesheet 时的恒等帧变换：v = translation + u * rotation.xy + v * rotation.zw
+    // 非 spritesheet 时的恒等帧变换：v = translation + u * rotation.xy + v * rotation.zw。槽 0 是帧表时，每次真正画这个 draw 前由
+    // `GpuScene.bindSheets` 按共享计时器的当前格覆盖（P6e）；材质开了 `SPRITESHEET` 而槽 0 不是帧表时一直是这个恒等帧——**有意不同**：
+    // WPE 那时读 `ctx` 上残留的上一次帧表绑定值（rea-p6e-sheet 1，开机后没绑过就是 0），复刻没有意义，语料 0 处
     g_Texture0Rotation: [1, 0, 0, 1],
     g_Texture0Translation: [0, 0],
   };

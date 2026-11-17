@@ -243,6 +243,8 @@ document.addEventListener("pointermove", (event) => {
 
 ## P6e — 图像层帧表
 
+> 子计划：[phase-6e-sprite-sheets.md](phase-6e-sprite-sheets.md)（2026-11-17 步骤 0 做完：读码两份、WPE 实测 7 个工程；范围加上文本 `anchor`）。下面是当初的提纲。
+
 **步骤 0：**
 - 图像层的 `SPRITESHEET` 宏、帧 uniform 和粒子有何不同；帧率从哪来、循环规则；`getTextureAnimation` 返回对象的 `setFrame` / `play` / `pause` / `getFrame` / `frameCount` 等。
 - 帧表纹理用在 effect 上（`tex:animation` 有一部分是这种）时怎么处理。

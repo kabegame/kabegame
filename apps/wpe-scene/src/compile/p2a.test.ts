@@ -287,7 +287,8 @@ describe("能力表裁决", () => {
       ],
     } as TranslateResult;
     checkProgramFeatures(result, keys);
-    expect([...keys].sort()).toEqual(["combo:SPRITESHEET", "uniform:g_EngineUnknown"]);
+    // P6e：SPRITESHEET 是材质自己的 COMBO，不再报（逐帧的 uniform 由渲染器的共享计时器给）
+    expect([...keys].sort()).toEqual(["uniform:g_EngineUnknown"]);
   });
   it("音频频谱 uniform（P11a）：六个都是引擎 uniform、不报；readsAudioUniforms 只认被读、不是材质常量的", () => {
     const names = ["16", "32", "64"].flatMap((n) => [`g_AudioSpectrum${n}Left`, `g_AudioSpectrum${n}Right`]);

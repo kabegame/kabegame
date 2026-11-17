@@ -4,7 +4,7 @@
  *   不再报 `puppet:texture-channels`；不是 skinned 仍报；只认第一个 bit1 网格；
  * - 整张场景：通道材质 pass（键 `objects/<i>/texchan`，`BLENDROWCOUNT` = 行数）、强制合成路径、预光照照报 `puppet:texture-channels:prelighting`、材质缺失、`transferableBuffers`；
  * - 渲染图：基础 pass 之后同一个合成 RT 里多一步 `texchan`（几何 `texchan`、角色 `base`、混合按材质），MVP 是合成 RT 的 `ortho(0, W, 0, H)`，逐位对 WPE 抓帧（p12b2-tc）；
- * - 真翻译器（本机有 wasm 与 WPE 的 `assets` 才跑）：`p12b2-tc` 的 `DOUBLEBUFFERED` / `BLENDROWCOUNT`、`g_BlendMap` 的反射；语料 `3811424158` 只剩 `combo:SPRITESHEET`、`tex:animation`。
+ * - 真翻译器（本机有 wasm 与 WPE 的 `assets` 才跑）：`p12b2-tc` 的 `DOUBLEBUFFERED` / `BLENDROWCOUNT`、`g_BlendMap` 的反射；语料 `3811424158` 在 P6e 之后不剩不支持项。
  * 样本：`../puppet/fixtures/p12b2-tc.json`（`ignore/p12/b2/impl/mkfix_texchan.py`）。
  */
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
@@ -477,9 +477,9 @@ describe.skipIf(!haveTranslator || !existsSync(genProject))("真翻译器：p12b
 describe.skipIf(!haveTranslator || !existsSync(join(workshop, "3811424158")))(
   "本机语料：3811424158 的纹理通道（P12b2-2）",
   () => {
-    it("编译后只剩精灵表帧动画（combo:SPRITESHEET、tex:animation）；01_z 有纹理通道（4 条通道轨道、BLENDROWCOUNT 1、DOUBLEBUFFERED 1）", async () => {
+    it("P6e 起精灵表帧动画不再报（combo:SPRITESHEET、tex:animation 都没有了）；01_z 有纹理通道（4 条通道轨道、BLENDROWCOUNT 1、DOUBLEBUFFERED 1）", async () => {
       const bundle = await compileReal(join(workshop, "3811424158"));
-      expect([...bundle.unsupported].sort()).toEqual(["combo:SPRITESHEET", "tex:animation"]);
+      expect([...bundle.unsupported].sort()).toEqual([]);
       const layer = bundle.layers.find((item) => item.puppet?.textureChannels)!;
       expect(layer.name).toBe("01_z");
       const channels = layer.puppet!.textureChannels!;

@@ -250,9 +250,6 @@ export function decodeLz4Block(input: Uint8Array, outputSize: number): Uint8Arra
   return output;
 }
 
-/** 帧表纹理的不支持项：用在粒子材质槽 0 以外的地方时报（`bundle.ts` 的 `getTexture` 按用途过滤）。 */
-export const ANIMATION_ISSUE = "tex:animation";
-
 /**
  * TEXS 的帧（`FUN_14015e1d0`，rea-p4b-render.md 2.1）：每帧 32 字节，`imageId` 按有符号读（`movsxd`），TEXS0001 的 6 个坐标
  * 是 i32（`cvtdq2ps` 转 float），0002 / 0003 是 f32。归一化的分母是 `imageId` 号图像第 0 级 mip 的宽高（`cvtsi2ss`），
@@ -297,21 +294,20 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   const unsupported: string[] = [];
   // 视频纹理（Video 标志）不报键（P9a 步骤 3 解锁）：播放与纹理在 `video/` 与 `GpuScene.copyVideo`，槽 0 以外（effect pass、粒子）
   // 同样工作，WPE 也是逐槽更新（rea-p9-video 第 2 节），不另报用途键
-  // 帧表纹理：粒子材质的槽 0 是合法用法（P4b 步骤 2），`bundle.ts` 的 `getTexture` 按用途去掉这个键；图像层的帧动画属 P6，照报
-  if (flags & TEX_FLAGS.animated) unsupported.push(ANIMATION_ISSUE);
-  // 粒子路径只采第 0 张图像（rea-p4b-render.md 2.7【推】），帧落在别的图像上会采错
+  // 帧表纹理不再报键（P6e 点 1）：粒子的槽 0（P4b 步骤 2）与图像层 / effect 的帧动画（`render/sheets.ts` 的共享计时器）都支持，
+  // `bundle.ts` 把完整帧表放进 `SceneTexture.frames`。
+  // 多图像帧表：渲染器只上传第 0 张图像，帧落在别的图像上会采错（粒子路径 rea-p4b-render.md 2.7【推】，图像层 rea-p6e-sheet 2.3 要
+  // 按帧换绑图像）。P6e 点 4 才支持，之前照报
   if (flags & TEX_FLAGS.animated && imageCount > 1) unsupported.push("tex:animation:multi-image");
   const freeImageMime = FREE_IMAGE_MIME[freeImageFormat];
   // 原格式上传查格式表；FreeImage 形态由主线程解成 RGBA 位图（`planBitmapUpload` 只收格式 0，本机语料也都是 0）
   if (freeImageMime ? format !== 0 : !textureFormat(format)) unsupported.push(`tex:format:${format}`);
   if (freeImageFormat !== -1 && !freeImageMime) unsupported.push(`tex:freeimage:${freeImageFormat}`);
   if (flags & TEX_FLAGS.clampBorder) unsupported.push("tex:clamp-border");
-  // FreeImage 的 mip 交给主线程解码，这里永远不读字节。`tex:animation` 不挡解码：帧表纹理在粒子槽 0 要上传；用在图像层时
-  // 场景反正退回，多解一张纹理只在 `exhaustive` / `force` 下发生。`tex:animation:empty` 在 mip 之后才读到，同样不挡
+  // FreeImage 的 mip 交给主线程解码，这里永远不读字节。`tex:animation:empty` 在 mip 之后才读到，不挡
   // 视频的 mip 就是整段视频（语料最大 674 MiB）：按 Video 标志跳过，这就是唯一的一道（视频纹理不报任何键，`unsupported` 挡不住），
   // 去掉它 Worker 会经主线程代读整段视频。只给区间，由主线程的播放器读（P9a）
-  const shouldDecode =
-    decode && !(flags & TEX_FLAGS.video) && unsupported.every((key) => key === ANIMATION_ISSUE) && !freeImageMime;
+  const shouldDecode = decode && !(flags & TEX_FLAGS.video) && unsupported.length === 0 && !freeImageMime;
   const images: TexImage[] = [];
   for (let image = 0; image < imageCount; image++) {
     const mipCount = await c.u32();

@@ -178,7 +178,10 @@ export const EFFECT_UNIFORMS: ReadonlySet<string> = new Set(["g_LayerModelMatrix
  * 值非 0 时需要引擎提供数据、渲染器还没有的 COMBO。`LIGHTING` 不在这里：无 effect 的图层已实现（`lights.ts`），
  * 其余路径由 `compileScene` 报 `lighting:*`。其余 COMBO（材质 / effect 自己的选项，如 `VERSION`、`BLENDMODE`、
  * rz 的 `HUEMODE`）只是着色器内部分支，交给翻译器即可。
- * - `SPRITESHEET`：要逐帧的 `g_Texture0Rotation` / `Translation`（P6），现在只给恒等帧；
+ * - `SPRITESHEET` 不在这里（P6e 点 1）：它是材质 JSON 自己的 COMBO（大小写都有，`genericimage*` 用 `g_Texture0Rotation` / `Translation` 自己算
+ *   UV），引擎只写粒子与 puppet 纹理通道的那两处（exe 侧 rea-p6e-sheet 5.1）。逐帧的两个 uniform 由渲染器按槽 0 的帧表给（`render/sheets.ts`）；
+ *   COMBO 打开而槽不是帧表时渲染器给恒等帧（`render/uniforms.ts`）。**有意不同**：WPE 那时读 `ctx` 上残留的上一次绑定值（开机后没绑过就是 0，
+ *   rea-p6e-sheet 1），复刻没有意义，语料 0 处。
  * - 蒙皮、变形、预光照：对应的 uniform 也会被 `uniform:*` 报出，这里一并列上，防止只改 COMBO 漏报。
  * - `REFLECTION` 不在这里（P13a）：这个名字在工坊 `cursorripple` 里是波纹在边界反弹的开关、在 `genericimage2` 不带法线图时只是着色器
  *   分支，都不要引擎数据。两种反射都由读到的 RT 决定：平面反射（`_rt_Reflection`，P13b1 / P13b2，反射 pass 画不了的种类报
@@ -187,7 +190,7 @@ export const EFFECT_UNIFORMS: ReadonlySet<string> = new Set(["g_LayerModelMatrix
  * `ALPHATOCOVERAGE` 自 P8 步骤 5 起不在这里：混合 `alphatocoverage` 的 pass 编译时加它（`writeState.ts` 的 `materialCombos`），着色器
  * 只做 alpha 锐化，丢弃由渲染器的 A2C 入口做；材质自己写它而混合不是 A2C 时只锐化、不丢弃，和 WPE（D3D11 下 `GLSL` 为 0）相同。
  */
-const ENGINE_COMBOS = new Set(["SPRITESHEET", "SKINNING", "SKINNING_ALPHA", "MORPHING", "PRELIGHTING"]);
+const ENGINE_COMBOS = new Set(["SKINNING", "SKINNING_ALPHA", "MORPHING", "PRELIGHTING"]);
 
 /**
  * 不影响画面、或由别处裁决的 general 键。
@@ -331,7 +334,7 @@ const MODEL_NEUTRAL_FLAGS = ["skin", "castshadow", "reflected"];
  * 支持或中性的模型键。
  * - `autosize`：纹理就绪时覆盖对象 `size` 与模型 `width` / `height`（P5b 步骤 1，`bundle.ts` 的 `imageLayerSize`，p5-REPORT
  *   `p5b-autosize`）：带 `projectlayer` 时取正交投影宽高（步骤 2，`p5b-proj`），否则取槽 0 纹理的图像尺寸、没有纹理时不覆盖。
- *   精灵表的帧尺寸随图像层帧动画（`tex:animation`）另报。
+ *   槽 0 是帧表时取 TEXS 头的格尺寸（P6e，`imageLayerSize`）。
  * - `nopadding`：直接上屏的四边形不内缩，带 effect 时末 pass 照旧内缩（P5b 步骤 1，`render/graph.ts`，p5-REPORT `p5b-nopad`）。
  * - `solidlayer`：管两件事，WPE 里分开判断（P5b 步骤 5，rea-p5-modelflags）：上屏（直接上屏与末 pass）不内缩只看这一位
  *   （`+0x304 & 0x200`，`render/graph.ts` 的 `flat`），instanced 照样不内缩；合成 RT 按图层 `size`（`compositeSize`）还要求不是
@@ -1549,8 +1552,7 @@ export function checkParticleChildren(children: unknown, unsupported: Set<string
  *   bit3 父分支不换算与 `parentcontrolpoint` 在子系统里实现（P4e 步骤 1），在顶层系统上 bit2 只让实例覆盖不生效、bit3 没有读者；
  *   `angles`、`locktopointer`、bit4 没有读者，理由见 `SceneControlPoint`）。关键帧照下面整段 `scanValue`。
  * - `animationmode`、`sequencemultiplier` 任意取值都支持（P4b 步骤 2）：只在材质槽 0 是帧表纹理时起作用（frame 列、混帧宏），
- *   否则是中性的。写成绑定或关键帧照下面两条报。帧表纹理用在粒子其它槽位是普通纹理（P4b 步骤 5），用在图像层、effect 由纹理
- *   报 `tex:animation`（`bundle.ts` 的 `getTexture`）。
+ *   否则是中性的。写成绑定或关键帧照下面两条报。
  * - 其它顶层键：`particle:system:<键>`；顶层键写成绑定：`particle:binding:system:<键>`（WPE 按 `isNumeric` / `isString`
  *   读，对象当缺键，语义没核对）。`emitter` / `initializer` / `operator` 不是数组时同样报 `particle:system:<键>`。
  * - renderer：`sprite`、`spritetrail` 在表里，`orientation`、`axis`、`flags` 的取值全部支持（P4c 步骤 5，`particles/orientation.ts`）；

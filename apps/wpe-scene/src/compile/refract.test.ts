@@ -1,7 +1,7 @@
 /**
  * P4b 步骤 5（`genericparticle` 的 `REFRACT`、`CUTOUT`，以及 `REFRACT` 带出的 `NORMALMAP`）：
  * - 能力表放行这三个 COMBO，`LIGHTING` 与别的 COMBO 照报；
- * - 粒子材质任何槽位的帧表纹理都当普通纹理（不报 `tex:animation`），多图像、空帧表照报，effect 材质里照报；
+ * - 帧表纹理任何槽位都不报 `tex:animation`（P6e；粒子只在槽 0 当帧表），多图像、空帧表照报；
  * - 本机有 WPE 时用真翻译器编一个仿 `p4b-refract` / `p4b-refract2` 的工程（材质照 `ignore/p4/proj/p4b-refract`），
  *   用假设备建场景，钉住：快照的位置与次数（存活数为 0 也拷）、`NORMALMAP` 由槽 1 的纹理带出、没开折射时 `NORMALMAP`
  *   不改着色器、法线图按原格式交给翻译器（`TEX1FORMAT`），以及渲染时 uniform 缓冲里的常量。常量是步骤 0 的 WPE 实测值
@@ -171,7 +171,7 @@ describe("compileScene：粒子其它槽位的帧表纹理（P4b 步骤 5）", (
       exhaustive: true,
     });
 
-  it("槽 1 是多图像、空帧表：照报 tex:animation:multi-image / empty，只去掉 tex:animation", async () => {
+  it("槽 1 是多图像、空帧表：照报 tex:animation:multi-image / empty（P6e 起 tex:animation 不再报）", async () => {
     const multi = await compile(
       memoryReader(files(particleMaterial(["particle/plain", "particle/multi"]))),
       fakeTranslator().translator,
@@ -200,7 +200,7 @@ describe("compileScene：粒子其它槽位的帧表纹理（P4b 步骤 5）", (
     expect(bundle.layers[0].particle!.spriteSheet).toBe(false);
   });
 
-  it("effect 材质里的帧表纹理照报 tex:animation（图像层的帧动画属 P6）", async () => {
+  it("effect 材质里的帧表纹理不报 tex:animation（P6e：渲染器按槽写 g_Texture<n>Rotation / Translation）", async () => {
     const bundle = await compile(
       memoryReader(
         files({
@@ -216,7 +216,8 @@ describe("compileScene：粒子其它槽位的帧表纹理（P4b 步骤 5）", (
       ),
       fakeTranslator().translator,
     );
-    expect(bundle.unsupported).toEqual(["tex:animation"]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.textures.some((texture) => texture.frames)).toBe(true);
   });
 });
 
