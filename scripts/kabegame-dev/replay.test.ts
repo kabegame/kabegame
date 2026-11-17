@@ -447,6 +447,19 @@ describe("checkReplay", () => {
       rejects400(() => checkTrace({ maxVertices }), "trace.maxVertices", /1–4096 的整数/);
     }
   });
+
+  test("运行中建层的预跑（L5）：布尔值，为真时要和 scripts 一起给", () => {
+    assert.equal(checkRenderReplay({ scripts: true, prewarmFragments: true }), undefined);
+    // 为假时不要求有 scripts（等于不给）
+    assert.equal(checkRenderReplay({ prewarmFragments: false }), undefined);
+    assert.deepEqual(checkRenderReplay({ particles: { dts: [0.1] }, scripts: { seed: 2 }, prewarmFragments: true }), {
+      dts: [0.1],
+    });
+    rejects400(() => checkRenderReplay({ prewarmFragments: true }), "prewarmFragments", /要和 scripts 一起给/);
+    for (const bad of [1, "yes", null, {}]) {
+      rejects400(() => checkRenderReplay({ scripts: true, prewarmFragments: bad }), "prewarmFragments", /要是布尔值/);
+    }
+  });
 });
 
 describe("轨迹请求", () => {

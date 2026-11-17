@@ -236,6 +236,10 @@ describe("参数", () => {
     bad(["--script-seed", "5"], /要和 --scripts 一起给/);
     for (const seed of ["-1", "1.5", "4294967296", "x"]) bad(["--scripts", "--script-seed", seed], /--script-seed/);
     for (const clock of ["x", "9e15", ""]) bad(["--scripts", "--clock", clock], /--clock/);
+    // 运行中建层的预跑（L5）：要和 --scripts 一起给
+    assert.equal(parseCli([...head, "--fps", "20", "--scripts", "--prewarm-fragments"], cwd).prewarmFragments, true);
+    assert.equal(parseCli([...head, "--fps", "20", "--scripts"], cwd).prewarmFragments, undefined);
+    bad(["--prewarm-fragments"], /--prewarm-fragments 要和 --scripts 一起给/);
   });
 
   test("光标输入（P6c）：--input-timeline / --buttons 只在回放时收、互斥与前提报错；每帧只带前 f 帧的输入", () => {

@@ -71,10 +71,10 @@ deno task dev -c kabegame [--mode android]      用户自己跑（能看到编�
 | `show_window` | 把主窗口带到前台：最小化时 unminimize、不可见时 show，再 set_focus；没到前台（Windows 前台限制）时临时置顶再取消。回走了哪条路径、前后的 `visibilityState` / `hasFocus` | 要 | 桌面 |
 | `open_image_preview` | 主窗口打开某张图的预览，再 `show_window`。导航到 `/gallery`（保留 query，加 `pvwimgid`）并整页重载；图在当前视图里就跳到它所在的页，不在就降级成单图预览，不改筛选条件。回最终路由、预览开没开、是哪张、在不在视图里 | 要 | 桌面（安卓未验，不显示窗口） |
 | `android_screen` | adb 整屏截图（含系统栏、原生对话框）；`save` / `size` 同 `screenshot` | 要 | 安卓 |
-| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`，`replay`、`canvas`、`videoTime`、`trace`、`scripts` 同 `render_scene`） | 要 | 桌面 |
+| `hosts`、`host_open`、`host_close`、`host_eval`、`host_render` | 列出 / 开（缺省屏外）/ 关场景宿主；宿主里求值；渲染一帧（`save` / `size` 同 `screenshot`，`replay`、`canvas`、`videoTime`、`trace`、`scripts`、`prewarmFragments` 同 `render_scene`） | 要 | 桌面 |
 | `projects_remove` | 按清单移除测试工程（只 `batch_remove_images`） | 要 | 桌面 |
 | `job` | 任务表：列出 / `get` / `cancel` / `wait` / `start` | 要 | 都有（`start` 只桌面） |
-| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」），kbp 测试工程的 FR 帧号块缺省涂成读回那一帧的颜色（`replay.fr`，见下方「FR 帧号块」）。给 `scripts: true | { clock?, seed? }` 时探针照宿主跑场景脚本、外部值都来自请求（见下方「跑场景脚本」），FR 由脚本自己画、不再涂。不给 `canvas` 时读回场景目标（场景分辨率）；给 `canvas: [宽, 高]` 时按 `fill` 上屏到这么大的画布再读回（见下方「读回画布」）。有视频纹理的场景用 `videoTime`（秒，缺省 0；数字对全部视频纹理生效，`{ <纹理 path>: 秒 }` 分别给；超过时长按循环取模）定视频的时刻：屏外宿主不跑帧循环，这是确定性回放视频的唯一办法，每段实际取的时刻在结果的「视频纹理」行与 `meta.videos`。`videoTime` 也作用于用户纹理里的视频（对象的键可以是用户视频的值，即属性里的绝对路径）。用户纹理里的 GIF 用 `gifDts`（数组，每项一帧 g_Frametime 秒，探针读回前逐项推进 GIF；不给时停在第 0 帧，和 WPE 抓帧比时填抓帧的逐帧 dt），结果的「用户纹理」行与 `meta.userTextures` 给各 GIF 换过几帧、各视频的 currentTime。快捷方式（P11d）的图标本工具不转发（探针收 `shortcutIcons`），缺省的库内用户属性是面板原值，配过的快捷方式在探针里也当作没配；要带图标与后端形状时，开屏外宿主、在宿主里调 `wpe_web_pull_state` 与 `wpe_scene_shortcut_icon` 再自己调 `renderFrame`（见 `cocs/wpe/WPE_SCENE.md`「快捷方式（P11d）」）。`meta.scripts.shortcuts` 按顺序列出经过门禁的 `openUserShortcut` 调用（帧、属性名、返回码）。系统媒体（P11c）用 `media: [{ frame, messages }]`：`frame` 从 1 起（回放的第几帧之前），`messages` 是 `WpeMediaHub` 发给场景宿主的消息（`status` / `properties` / `sceneThumbnail { png（不带前缀的 base64）, colors }` / `playback` / `timeline`）；同一项并成一次刷新，在那一帧的脚本阶段开头派发，要看回调同时给 `scripts: { consoleGrep }`，结果的 `meta.media` 给切出的事件与场景媒体状态。给 `trace: { save, readback?, maxVertices? }` 时把读回那一帧的逐 draw 轨迹（pass、draw、管线、绑定、uniform、顶点，可选读回 pass 的目标）写进 `save` 目录，和 WPE 的 RenderDoc 抓帧逐 draw 对照（见下方「逐 draw 轨迹」） | 要 | 桌面 |
+| `render_scene` | 给图片 id：自己开屏外宿主、渲染一帧、关掉，回图片与元数据（`save` / `size` 同 `screenshot`）。不给 `replay` 时是固定时刻的一帧、粒子是预热后的状态（见下方「屏外宿主」）；给 `replay` 时按 WPE 的 dt 序列确定性回放粒子再读回（见下方「粒子回放」），kbp 测试工程的 FR 帧号块缺省涂成读回那一帧的颜色（`replay.fr`，见下方「FR 帧号块」）。给 `scripts: true | { clock?, seed? }` 时探针照宿主跑场景脚本、外部值都来自请求（见下方「跑场景脚本」），FR 由脚本自己画、不再涂。不给 `canvas` 时读回场景目标（场景分辨率）；给 `canvas: [宽, 高]` 时按 `fill` 上屏到这么大的画布再读回（见下方「读回画布」）。有视频纹理的场景用 `videoTime`（秒，缺省 0；数字对全部视频纹理生效，`{ <纹理 path>: 秒 }` 分别给；超过时长按循环取模）定视频的时刻：屏外宿主不跑帧循环，这是确定性回放视频的唯一办法，每段实际取的时刻在结果的「视频纹理」行与 `meta.videos`。`videoTime` 也作用于用户纹理里的视频（对象的键可以是用户视频的值，即属性里的绝对路径）。用户纹理里的 GIF 用 `gifDts`（数组，每项一帧 g_Frametime 秒，探针读回前逐项推进 GIF；不给时停在第 0 帧，和 WPE 抓帧比时填抓帧的逐帧 dt），结果的「用户纹理」行与 `meta.userTextures` 给各 GIF 换过几帧、各视频的 currentTime。快捷方式（P11d）的图标本工具不转发（探针收 `shortcutIcons`），缺省的库内用户属性是面板原值，配过的快捷方式在探针里也当作没配；要带图标与后端形状时，开屏外宿主、在宿主里调 `wpe_web_pull_state` 与 `wpe_scene_shortcut_icon` 再自己调 `renderFrame`（见 `cocs/wpe/WPE_SCENE.md`「快捷方式（P11d）」）。`meta.scripts.shortcuts` 按顺序列出经过门禁的 `openUserShortcut` 调用（帧、属性名、返回码）。系统媒体（P11c）用 `media: [{ frame, messages }]`：`frame` 从 1 起（回放的第几帧之前），`messages` 是 `WpeMediaHub` 发给场景宿主的消息（`status` / `properties` / `sceneThumbnail { png（不带前缀的 base64）, colors }` / `playback` / `timeline`）；同一项并成一次刷新，在那一帧的脚本阶段开头派发，要看回调同时给 `scripts: { consoleGrep }`，结果的 `meta.media` 给切出的事件与场景媒体状态。给 `trace: { save, readback?, maxVertices? }` 时把读回那一帧的逐 draw 轨迹（pass、draw、管线、绑定、uniform、顶点，可选读回 pass 的目标）写进 `save` 目录，和 WPE 的 RenderDoc 抓帧逐 draw 对照（见下方「逐 draw 轨迹」）。跑脚本的结果里另有「运行中建层」一行（`meta.liveCreate`、`meta.restructured`：建层、单对象重编译与结构重排的计数与不支持项）；给 `prewarmFragments: true`（要和 `scripts` 一起给）先空跑一遍把脚本建出的配置编进片段缓存，正式那一遍第一轮就命中、当帧画出（见下方「运行中建层与预跑」） | 要 | 桌面 |
 | `particle_track` | 按 WPE 的一次抓帧回放粒子模拟器，在 `frames`（缺省为抓到的帧）输出和 `rd-*.json` 同格式的轨迹，写 `out`；回摘要（每帧每系统的粒子数、位置范围、时间线信息） | 要 | 桌面 |
 | `particle_corners` | 读每个粒子四角的裁剪坐标与像素坐标（和 WPE 的 `gs_out` 比），写 `out`；回摘要（每层画不画、写进顶点的粒子数、前 3 个粒子的四个像素角）。`replay` 同 `render_scene`（没有 `fr`：不渲染） | 要 | 桌面 |
 | `hash_baseline` | 起画面哈希任务并等完成（报 MCP 进度），基线写 `out`；`ids` 或 `from`（旧基线按目录对应） | 要 | 桌面 |
@@ -304,6 +304,24 @@ audioResolutions, messages, console }`：`diagnostics` 同 `host.scripts()`（�
 render_scene { imageId: <id>, replay: { timeline: { log: "…-fps60-1920x1080-log.txt", track: "…", cursors: "log" } },
                canvas: [1920, 1080], scripts: true }          → FR 由它的颜色脚本自己画，整帧和 WPE 比
 render_scene { imageId: <id>, time: 2, scripts: { clock: 1767268800000, seed: 7 } }   → 不回放：init 后跑一帧（帧时间 0），时钟 12:00Z
+```
+
+### 运行中建层与预跑（`render_scene` / `host_render` 的 `prewarmFragments`）
+
+跑脚本的结果里有「运行中建层」一行（`meta.liveCreate` 与 `meta.restructured`，活的场景图 L5 / L6 / L7）：脚本 `createLayer` 建出的对象里
+当帧装上几个、晚几帧的、读回时还没接上的（`pending`）、带不支持项不画的，以及单对象重编译（L6）与结构重排（L7）各几次；运行中出现的不支持项
+与「宿主会整场重载、探针做不了的原因」另起一行（有这一行说明这一帧和宿主不同、不可信）。什么都没发生时不写这一行。
+
+产品里第一次出现的配置要等片段编完，所以读回帧之前可能赶不上（记成 `pending`）。和 WPE 抓帧逐帧比时给 `prewarmFragments: true`（要和
+`scripts` 一起给，否则 MCP 报 `[local]`、REST 400）：探针先按同样的请求空跑一遍（建场景、`init`、回放，不读回），收集脚本建出的配置、经编译
+会话编进片段缓存，再正式跑一遍——第一轮就命中缓存、当帧装上。预跑那一遍建的层只建壳（不编、不画），所以靠读新层的值才决定建什么的脚本可能
+收集不全，正式那一遍没命中的照产品晚几帧。宿主产物不认识这一项（改了探针没重建）时 vite 报 409 `[host]`。
+
+```text
+render_scene { imageId: <id>, scripts: true, replay: { particles: { dts: [...] } } }
+  → 运行中建层：晚几帧装上 7                       （产品行为：init 里建的 7 根柱子等片段）
+render_scene { imageId: <id>, scripts: true, prewarmFragments: true, replay: { … } }
+  → 运行中建层：预跑编进缓存 1 份配置、当帧装上 7  （和 WPE 逐帧比时用）
 ```
 
 ### 逐 draw 轨迹（`render_scene` / `host_render` 的 `trace`）

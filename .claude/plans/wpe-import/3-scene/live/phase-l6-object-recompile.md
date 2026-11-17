@@ -123,7 +123,7 @@ if (at < scene.objects.length) throw new Error("单对象重编译在 L6");   //
 - **真机 `live-font`**：一次「开始渲染」；`stats.recompiledObjects: 1`、`recompiled: []`；第 61 帧起 `thisLayer.font` 读回 `systemfont_comicsans`，截图字形是 Comic Sans；粒子 P `alive 301 = highWater 301`、粒子条连续；帧时间 0.32 ms。
 - **真机 15019**（`init` 里 5 处 `font`）：一次「开始渲染」（66 层，1760 ms），`recompiledObjects: 5`、`recompiled: []`，时钟文字照常。13608 因 `script:api:layer.getTextureAnimation` 本就退回预览图。
 - 回归条目见 `versions/latest/regression.md`「场景壁纸运行中单对象重编译」；T4（属性面板改对象级设置）、T5（重载进行中的写入）只有单测，留给用户勾。
-- 留给以后：探针 `prewarmFragments` 仍未接进 MCP；改组归属的删除与结构变化的重编译（L7）。
+- 留给以后：改组归属的删除与结构变化的重编译（L7）。
 
 ## 交付
 

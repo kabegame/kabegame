@@ -152,7 +152,7 @@ export class SceneChangeQueue { … }
 - 文本层的 GPU 一律异步（要等 `layoutInCurrent`），命中缓存的文本层至少晚一帧出现——已知差异。
 - 暂停时 `drain` 不做，恢复后才装。
 - 顺带补了 L3b 的缺口：增量带视频纹理时 `addCompiledObject` 调 `loadVideos`。
-- 探针：`drain` 在 `frame()` 开头（动画之后，宿主是媒体与动画之前，`particleCorners.ts` 不在范围内没动）；回放同步，没命中的片段赶不上读回帧、结果计入 `pending`；预跑那一遍只建壳不编，靠读新层的值决定建什么的脚本可能收集不全；运行中建的文本层另开一套 `SceneTexts`；声音 / 视频 / 用户纹理 / 媒体不接。`prewarmFragments` 从 MCP / REST 还用不了（`scripts/kabegame-dev/scene.ts` 只转发认识的字段，待接）。
+- 探针：`drain` 在 `frame()` 开头（动画之后，宿主是媒体与动画之前，`particleCorners.ts` 不在范围内没动）；回放同步，没命中的片段赶不上读回帧、结果计入 `pending`；预跑那一遍只建壳不编，靠读新层的值决定建什么的脚本可能收集不全；运行中建的文本层另开一套 `SceneTexts`；声音 / 视频 / 用户纹理 / 媒体不接。`prewarmFragments` 2026-11-17 已接进 MCP / REST（`render_scene` / `host_render` / REST `render` / `renderFrames.ts --prewarm-fragments`，要和 `scripts` 一起给）。
 
 **L5b 实现与本计划不同的两处**（接受）：宿主侧的 warn 只写 iframe 控制台（Rust 收到时已记一行，再走 `log` 会重复）；同一张图同一个键在桌面提示过后预览里不再提示（按「同图同键只一次」）。Web / Android 不监听。
 

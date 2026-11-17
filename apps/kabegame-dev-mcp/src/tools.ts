@@ -16,6 +16,8 @@
  *   `readback` / `maxVertices` 交给 REST，轨迹 JSON 与读回图写进 `save` 目录（`writeTrace`），结果里只写一行摘要。
  * - 跑场景脚本（kabegame-chromium 第 7 批）：`render_scene` / `host_render` 的 `scripts: true | { clock?, seed? }` 原样交给 REST，探针照宿主
  *   跑场景脚本；给了时不发 FR 的 `scriptValues`（FR 由脚本自己画），结果里写脚本的状态、出错、做不了的重编译写入与没接的 API（`scriptsLines`）。
+ * - 运行中建层、单对象重编译与结构重排（活的场景图 L5 / L6 / L7）：跑脚本的结果里写一行计数与不支持项（`liveCreateLines`）；
+ *   `prewarmFragments: true`（要和 `scripts` 一起给，本地先拦）让探针空跑一遍把脚本建出的配置编进片段缓存，正式那一遍第一轮就命中。
  *
  * 工具表是静态的：vite 不在时照常列出，调用时回 `isError` 并写明是哪一层不在（文本以 `[层]` 开头）。
  * 参数里的相对路径一律按仓库根解析。图片类工具的落盘与缩小见 `imageOutput.ts`。
@@ -525,6 +527,15 @@ const RENDER_FIELDS = {
   media: MEDIA.optional(),
   trace: TRACE.optional(),
   scripts: SCRIPTS.optional(),
+  prewarmFragments: z
+    .boolean()
+    .optional()
+    .describe(
+      "运行中建层的预跑（活的场景图 L5），要和 scripts 一起给：探针先按同样的请求空跑一遍（建场景、init、回放，不读回），收集脚本 createLayer 建出的配置、" +
+        "经编译会话编好进片段缓存，再正式跑一遍——第一轮就命中缓存、当帧装上，和 WPE 抓帧逐帧比时用。" +
+        "预跑那一遍建的层只建壳（不编、不画），所以靠读新层的值才决定建什么的脚本可能收集不全，正式那一遍没命中的照产品晚几帧。" +
+        "不给时照产品行为：第一次出现的配置不当帧画出，结果的「运行中建层」行里记成 pending",
+    ),
   inputTimeline: INPUT_TIMELINE.optional(),
   buttons: z
     .array(z.boolean())
@@ -856,6 +867,39 @@ export function scriptsLines(meta: Pick<RenderMeta, "scripts">, requested: boole
   if (result.audioResolutions.length)
     lines.push(`脚本注册了音频缓冲 ${result.audioResolutions.join(" / ")}（一直全 0）`);
   if (result.messages.length) lines.push(`脚本运行时告警 ${result.messages.length} 条，第一条：${result.messages[0]}`);
+  return lines;
+}
+
+/**
+ * 运行中建层、单对象重编译与结构重排（活的场景图 L5 / L6 / L7）的结果说明：没请求 `scripts` 时不写（这些都由脚本触发）；
+ * 请求了而宿主没回 `liveCreate` 时只在请求了预跑时写一行（vite 正常会先报 409），别的情况当作旧产物、不写。
+ * 什么都没发生（没建层、没重编译、没重排）时也不写，免得每次渲染都多一行。
+ */
+export function liveCreateLines(
+  meta: Pick<RenderMeta, "liveCreate" | "restructured">,
+  requested: boolean,
+  prewarm: boolean,
+): string[] {
+  if (!requested) return [];
+  const live = meta.liveCreate;
+  if (!live) return prewarm ? ["运行中建层：宿主没回 liveCreate，预跑没跑（宿主产物要重建）"] : [];
+  const restructured = meta.restructured ?? 0;
+  const parts = [
+    ...(live.sync ? [`当帧装上 ${live.sync}`] : []),
+    ...(live.async ? [`晚几帧装上 ${live.async}`] : []),
+    ...(live.pending ? [`读回时还没接上 ${live.pending}`] : []),
+    ...(live.unsupported ? [`带不支持项、不画 ${live.unsupported}`] : []),
+    ...(live.recompiles ? [`单对象重编译 ${live.recompiles} 次（L6，合并之后）`] : []),
+    ...(restructured ? [`结构重排 ${restructured} 次（L7）`] : []),
+  ];
+  if (prewarm) parts.unshift(`预跑编进缓存 ${live.prewarmed} 份配置`);
+  const lines: string[] = [];
+  if (parts.length) lines.push(`运行中建层：${parts.join("、")}`);
+  if (live.pending && !prewarm)
+    lines.push("  没命中缓存的照产品晚几帧（和 WPE 逐帧比时加 prewarmFragments: true 预编）");
+  if (live.unsupportedKeys.length) lines.push(`  运行中出现的不支持项：${live.unsupportedKeys.join("、")}`);
+  if (live.reloads.length)
+    lines.push(`  宿主会整场重载、探针做不了的（这一帧和宿主不同、不可信）：${live.reloads.join("；")}`);
   return lines;
 }
 
@@ -1265,6 +1309,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       trace?: TraceArg;
       /** 请求了跑场景脚本（第 7 批）：结果里写脚本的状态与出错（`scriptsLines`）。 */
       scripts?: boolean;
+      /** 请求了运行中建层的预跑（L5）：结果里的「运行中建层」行写预编了几份配置（`liveCreateLines`）。 */
+      prewarm?: boolean;
     },
     lead: string[] = [],
   ) =>
@@ -1282,6 +1328,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         options.trace ? writeTrace(root, options.trace.save, response) : "",
         frLine(options.fr ?? null, response.meta) ?? "",
         ...scriptsLines(response.meta, !!options.scripts),
+        ...liveCreateLines(response.meta, !!options.scripts, !!options.prewarm),
         videoLine(response.meta) ?? "",
         userTexturesLine(response.meta) ?? "",
         `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
@@ -1309,6 +1356,13 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
       ...(trace ? { trace: traceRequestOf(trace) } : {}),
       ...(scripts !== undefined ? { scripts: scripts as RenderScriptsRequest } : {}),
     };
+    // 运行中建层的预跑（L5）：预跑收集的是脚本建出的配置，没有 scripts 就没东西可收集（vite 也会 400，这里先拦住不碰页面）
+    if (rest.prewarmFragments && scripts === undefined) {
+      throw new ToolError(
+        "local",
+        "prewarmFragments 要和 scripts 一起给：预跑收集的是脚本 createLayer 建出的配置，不跑脚本就没东西可预编",
+      );
+    }
     if (!replay) {
       if (rest.inputTimeline !== undefined || rest.buttons !== undefined) {
         throw new ToolError("local", "inputTimeline / buttons 要和 replay 一起给：它们是回放每一帧的输入");
@@ -1441,6 +1495,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
           fr,
           trace: render.trace,
           scripts: render.scripts !== undefined,
+          prewarm: !!render.prewarmFragments,
         },
         lines,
       );
@@ -1544,6 +1599,8 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         "写到 save 目录的 trace.json，readback 选中的 pass 的目标另存 pass-<下标>.png / .f32，用来和 WPE 的 RenderDoc 抓帧逐 draw 对照；轨迹不进会话，结果里只有一行摘要。" +
         "光标交互（P6c）：给 scripts: true 加 inputTimeline（wpe-renderdoc input_play / input_start 的时间线格式，要同时给 canvas）或 replay.timeline.cursors 加 buttons，" +
         "探针每帧先进入这一帧的时钟、再按光标位置命中并派发光标回调（脚本的 input.cursorLeftDown 读到左键）；探针每帧只有一个 Date（WPE 每次调用都是真时钟）。" +
+        "脚本运行中建层、单对象重编译与结构重排（活的场景图 L5 / L6 / L7）在结果的「运行中建层」行里：当帧装上几个、晚几帧的、读回时还没接上的、带不支持项不画的、" +
+        "重编译与重排几次；加 prewarmFragments: true（要同时给 scripts）先空跑一遍把脚本建出的配置编进片段缓存，正式那一遍第一轮就命中、当帧画出，和 WPE 抓帧逐帧比时用。" +
         "工具不做比较，比较自己跑 ignore/p4 的脚本。",
       inputSchema: {
         imageId: IMAGE_ID,
@@ -1573,6 +1630,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
           fr,
           trace: render.trace,
           scripts: render.scripts !== undefined,
+          prewarm: !!render.prewarmFragments,
         },
         [hostLine, ...lines],
       );

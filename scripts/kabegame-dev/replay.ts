@@ -643,7 +643,7 @@ export function checkScripts(value: unknown, field = "scripts"): RenderScriptsRe
  * `[宽, 高]`。窗口（画布）尺寸 `canvas`（第 5 批）是两个正整数、各不超过 `MAX_CANVAS`，和 `window` 都给时要相同。脚本值 `scriptValues`（第 6 批）
  * 见 `checkScriptValues`，不要求有 `particles`。壁纸样式 `style` 与画法 `renderMode`（phase-render-size）见 `checkRenderStyleMode`。视频时刻 `videoTime`（P9a 步骤 3）见 `checkVideoTime`，同样不要求有 `particles`。
  * 逐 draw 轨迹 `trace` 见 `checkTrace`。跑场景脚本 `scripts`（第 7 批）见 `checkScripts`，不和 `scriptValues` 同给（一个让脚本自己算，
- * 一个把脚本的结果塞进去）。
+ * 一个把脚本的结果塞进去）。运行中建层的预跑 `prewarmFragments`（L5）是布尔值，为真时要和 `scripts` 一起给。
  * 校验过的值原样留在请求里转给探针。
  */
 export function checkRenderReplay(body: {
@@ -663,6 +663,7 @@ export function checkRenderReplay(body: {
   gifDts?: unknown;
   media?: unknown;
   trace?: unknown;
+  prewarmFragments?: unknown;
 }): ParticleReplay | undefined {
   const particles = body.particles === undefined ? undefined : checkReplay(body.particles, "particles");
   if (particles && body.time !== undefined) {
@@ -708,5 +709,11 @@ export function checkRenderReplay(body: {
   if (body.gifDts !== undefined) checkGifDts(body.gifDts);
   if (body.media !== undefined) checkMedia(body.media);
   if (body.trace !== undefined) checkTrace(body.trace);
+  // 运行中建层的预跑（L5）：预跑的是脚本建的层，没有 `scripts` 就没东西可收集（探针也会拒绝）
+  if (body.prewarmFragments !== undefined) {
+    if (typeof body.prewarmFragments !== "boolean") fail("prewarmFragments", "要是布尔值");
+    if (body.prewarmFragments && body.scripts === undefined)
+      fail("prewarmFragments", "要和 scripts 一起给：预跑收集的是脚本 createLayer 建出的配置");
+  }
   return particles;
 }

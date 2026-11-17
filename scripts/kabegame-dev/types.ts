@@ -446,6 +446,23 @@ export interface RenderMediaStep {
   messages: ({ type: string } & Record<string, unknown>)[];
 }
 
+/**
+ * 运行中建层与单对象重编译的计数（活的场景图 L5 / L6，探针 `RenderFrameResult.liveCreate`）：`sync` / `async` / `unsupported` 同宿主
+ * `stats.created`，`pending` 是读回时还没接上的（没命中缓存、片段赶不上读回帧），`reloads` 是宿主会整场重载而探针做不了的原因，
+ * `unsupportedKeys` 是运行中出现的不支持项，`prewarmed` 是 `prewarmFragments` 预编进缓存的配置数，`recompiles` 是单对象重编译真正向
+ * 会话要片段的次数（合并之后）。
+ */
+export interface RenderLiveCreate {
+  sync: number;
+  async: number;
+  unsupported: number;
+  pending: number;
+  reloads: string[];
+  unsupportedKeys: string[];
+  prewarmed: number;
+  recompiles: number;
+}
+
 /** 探针每段视频纹理实际取的时刻（`videoProbe.ts` 的 `ProbeVideoResult`），顺序同 bundle 纹理。 */
 export interface RenderVideo {
   /** bundle 纹理的 path（`videoTime` 对象的键）。 */
@@ -565,6 +582,12 @@ export interface RenderRequest {
    * 附件。响应多 `trace`（轨迹 JSON）与 `traceImages`（读回图）；合计超过 64 MB 回 413，宿主产物不认识 `trace` 时回 409。
    */
   trace?: RenderTraceRequest;
+  /**
+   * 运行中建层的预跑（活的场景图 L5）：要和 `scripts` 一起给（400）。探针先按同样的请求空跑一遍收集脚本 `createLayer` 建出的配置、编进片段
+   * 缓存，再正式跑：第一轮就命中、当场装上（和 WPE 逐帧比时用）。不给时照产品行为（第一次出现的配置没命中缓存、不当帧画出）。结果的
+   * `meta.liveCreate.prewarmed` 是预编进缓存的配置数；宿主产物不认识这一项（没回 `meta.liveCreate`）时 409。
+   */
+  prewarmFragments?: boolean;
 }
 
 /** 逐 draw 轨迹的请求：`readback` 是 pass 下标或 pass / 目标纹理标签的子串（最多 64 项），`maxVertices` 是 1–4096 的整数。 */
@@ -800,6 +823,10 @@ export interface RenderMeta {
   userTextures?: RenderUserTexture[];
   /** 逐 draw 轨迹的摘要：只在请求带 `trace` 时有（之前的宿主产物没有这一项）。 */
   trace?: RenderTraceMeta;
+  /** 运行中建层（活的场景图 L5 / L6）：只在请求带 `scripts` 时有（之前的宿主产物没有这一项）。 */
+  liveCreate?: RenderLiveCreate;
+  /** 结构变化（换父、删除生效）当帧重排的次数（L7）：只在请求带 `scripts` 时有。 */
+  restructured?: number;
   key: string;
   [key: string]: unknown;
 }

@@ -7,7 +7,7 @@
  *    [--audio <录制>] [--seed N] [--passes 1|2] [--no-fr]]
  *   [--fps N | --time 秒]                           不给日志时：每帧 g_Time = 帧号 / fps（名义时间），或每帧同一个时刻
  *   [--canvas WxH [--style fill|fit|stretch|center] [--render-mode target|scene]] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON] [--gif-dts 秒,秒…|JSON]
- *   [--user-properties <JSON 文件或 JSON 串>] [--scripts [--clock 毫秒] [--script-seed N]]
+ *   [--user-properties <JSON 文件或 JSON 串>] [--scripts [--clock 毫秒] [--script-seed N] [--prewarm-fragments]]
  *   [--input-timeline <JSON 文件或 JSON 串> | --buttons <JSON 文件或 JSON 串>]   回放的光标输入（要 --timeline-log）
  *   [--trace-frames 250 [--trace-readback 0,"text glyphs"] [--trace-max-vertices N]]
  *   [--reuse-host] [--timeout 秒] [--overwrite]
@@ -18,6 +18,8 @@
  * 工具里，行为和会话里调 MCP 逐字相同；这里不另写时间线逻辑，只拼参数、收结果。
  * - 回放模式（给 `--timeline-log`）：第 f 帧传 `replay: { timeline: { log, track?, frame: f, … } }`，其余参数原样；
  * - 时刻模式（不给日志）：第 f 帧传 `time: f / fps`（或 `--time` 的固定值），粒子是预热后的状态（同 render_scene 不给 replay）。
+ * - 运行中建层的预跑（活的场景图 L5，`--prewarm-fragments`，要和 `--scripts` 一起给）：每一帧都先空跑一遍把脚本 `createLayer` 建出的配置
+ *   编进片段缓存，正式那一遍第一轮就命中、当帧画出（和 WPE 逐帧比时用）；不给时照产品行为（第一次出现的配置晚几帧）。
  * - 跑场景脚本（kabegame-chromium 第 7 批，`--scripts`）：每一帧的 `render_scene` 都带 `scripts`（`true`，或给了 `--clock` / `--script-seed`
  *   时 `{ clock?, seed? }`），探针照宿主跑场景脚本、外部值来自请求；回放时 FR 由脚本自己画（工具不再涂色，不能和 FR 涂色同时要）。两种模式都收。
  * - 光标输入（P6c）：`--input-timeline`（wpe-renderdoc 的时间线 `[[x, y, down(, n)], …]`，要 `--canvas`，不和 `--cursors` / `--cursor` / `--pointer` /
@@ -81,6 +83,8 @@ export interface RenderFramesOptions {
   userProperties?: Record<string, unknown>;
   /** 跑场景脚本（第 7 批）：原样作每一帧 `render_scene` 的 `scripts`；不给时不传。 */
   scripts?: true | { clock?: number; seed?: number };
+  /** 运行中建层的预跑（活的场景图 L5）：每一帧的 `render_scene` 都带 `prewarmFragments`，要和 `scripts` 一起给。 */
+  prewarmFragments?: boolean;
   /** wpe-renderdoc 的输入时间线（P6c，整段录制）：第 f 帧只带展开后的前 f 帧；要回放与 `canvas`。 */
   inputTimeline?: InputTimelineEntry[];
   /** 逐帧左键（P6c，整段录制）：第 f 帧只带前 f 项；要回放与 `timeline.cursors`。 */
@@ -188,6 +192,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
         "gif-dts": { type: "string" },
         "user-properties": { type: "string" },
         scripts: { type: "boolean" },
+        "prewarm-fragments": { type: "boolean" },
         clock: { type: "string" },
         "script-seed": { type: "string" },
         "input-timeline": { type: "string" },
@@ -325,6 +330,11 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
   } else if (clock !== undefined || scriptSeed !== undefined) {
     throw new ArgError("--clock / --script-seed 要和 --scripts 一起给");
   }
+  // 运行中建层的预跑（活的场景图 L5）：每一帧都先空跑一遍把脚本建出的配置编进片段缓存，第一轮就命中、当帧画出（和 WPE 逐帧比时用）
+  if (v["prewarm-fragments"]) {
+    if (options.scripts === undefined) throw new ArgError("--prewarm-fragments 要和 --scripts 一起给");
+    options.prewarmFragments = true;
+  }
   // 光标输入（P6c）：只在回放时收；时间线要 --canvas（指针按窗口像素量化）、自己展开成逐帧指针与左键，所以不和别的光标来源同给
   const inputTimeline = str("input-timeline");
   const buttons = str("buttons");
@@ -420,6 +430,7 @@ export function renderArgs(options: RenderFramesOptions, frame: number, host?: s
   if (options.gifDts !== undefined) args.gifDts = options.gifDts;
   if (options.userProperties) args.userProperties = options.userProperties;
   if (options.scripts !== undefined) args.scripts = options.scripts;
+  if (options.prewarmFragments) args.prewarmFragments = true;
   // 光标输入（P6c）：回放到第 frame 帧，只带前 frame 帧的输入
   if (options.inputTimeline) args.inputTimeline = sliceInputTimeline(options.inputTimeline, frame);
   if (options.buttons) args.buttons = options.buttons.slice(0, frame);

@@ -489,6 +489,9 @@ export async function sceneTarget(s: DevSession, imageId: string): Promise<Scene
  * 逐 draw 轨迹 `trace`（`.claude/plans/tools/scene-draw-trace.md`）校验后原样转给探针；给了而结果没有 `meta.trace` 时（宿主产物不认识
  * 这一项，设备没包）报 409。按 `meta.trace` 取回 `<key>.trace.json` 与各读回图，响应加 `trace`（解析后的 JSON）与 `traceImages`；
  * 合计超过 `MAX_TRACE_BYTES` 回 413（先按探针报的大小判，不取）。
+ * 运行中建层的预跑 `prewarmFragments`（活的场景图 L5）校验后原样转给探针（要和 `scripts` 一起给）：探针先空跑一遍收集脚本 `createLayer`
+ * 建出的配置、编进片段缓存，正式那一遍第一轮就命中、当场画出（和 WPE 逐帧比时用）；为真而结果没有 `meta.liveCreate` 时（宿主产物不认识
+ * 这一项，没预跑）报 409。
  */
 export async function renderFrame(
   s: DevSession,
@@ -538,6 +541,8 @@ export async function renderFrame(
     ...(request.media !== undefined ? { media: request.media } : {}),
     // 逐 draw 轨迹：checkRenderReplay 已校验（true 或 { readback?, maxVertices? }）
     ...(request.trace !== undefined ? { trace: request.trace } : {}),
+    // 运行中建层的预跑（L5）：checkRenderReplay 已校验（布尔值、为真时有 scripts）；预跑那一遍由探针做
+    ...(request.prewarmFragments !== undefined ? { prewarmFragments: request.prewarmFragments } : {}),
   };
   const task = await hostTask(s, handle, `__kabegameSceneProbe.renderFrame(${JSON.stringify(args)})`, {
     signal: options.signal,
@@ -603,6 +608,19 @@ export async function renderFrame(
       "host",
       "宿主产物没有回带 kind 的 userTextures：探针不认识 gifDts、用户 GIF 停在第 0 帧，重建宿主（--mode development）",
       { imageId: request.imageId, gifDts: request.gifDts, meta: { userTextures: meta.userTextures ?? null } },
+    );
+  }
+  // 运行中建层的预跑（L5）：探针不认识时既不会预跑、也不回 `liveCreate`（跑的是没预热的那一遍，画面和请求的不同）
+  if (request.prewarmFragments && !(meta.liveCreate && typeof meta.liveCreate === "object")) {
+    throw new DevError(
+      409,
+      "host",
+      "宿主产物没有回 liveCreate：探针不认识 prewarmFragments、没有预跑，第一次出现的配置照产品晚几帧，重建宿主（--mode development）",
+      {
+        imageId: request.imageId,
+        prewarmFragments: request.prewarmFragments,
+        meta: { liveCreate: meta.liveCreate ?? null },
+      },
     );
   }
   const summary = request.trace === undefined ? null : traceMeta(meta, request.imageId);

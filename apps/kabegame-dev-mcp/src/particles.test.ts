@@ -12,6 +12,7 @@ import { createDevMcpServer } from "./main.ts";
 import {
   frLine,
   frScriptValue,
+  liveCreateLines,
   readbackLines,
   scriptsLines,
   summarizeCorners,
@@ -988,6 +989,52 @@ describe("跑场景脚本（第 7 批）", () => {
     assert.equal(many.filter((line) => line.startsWith("  objects/")).length, 20);
     assert.ok(many.includes("  …另 3 段见 meta.scripts.diagnostics"));
   });
+
+  test("liveCreateLines：没请求脚本不写；什么都没发生不写；预跑、计数、不支持项与重载原因各写一行", () => {
+    const zero = {
+      sync: 0,
+      async: 0,
+      unsupported: 0,
+      pending: 0,
+      reloads: [],
+      unsupportedKeys: [],
+      prewarmed: 0,
+      recompiles: 0,
+    };
+    assert.deepEqual(liveCreateLines({ liveCreate: zero }, false, false), []);
+    assert.deepEqual(liveCreateLines({ liveCreate: zero }, true, false), [], "什么都没发生时不写");
+    assert.deepEqual(liveCreateLines({}, true, true), ["运行中建层：宿主没回 liveCreate，预跑没跑（宿主产物要重建）"]);
+    assert.deepEqual(liveCreateLines({}, true, false), [], "没请求预跑时旧产物不写");
+    assert.deepEqual(liveCreateLines({ liveCreate: { ...zero, sync: 3 }, restructured: 2 }, true, false), [
+      "运行中建层：当帧装上 3、结构重排 2 次（L7）",
+    ]);
+    assert.deepEqual(liveCreateLines({ liveCreate: { ...zero, sync: 2, prewarmed: 5 } }, true, true), [
+      "运行中建层：预跑编进缓存 5 份配置、当帧装上 2",
+    ]);
+    assert.deepEqual(
+      liveCreateLines(
+        {
+          liveCreate: {
+            ...zero,
+            async: 1,
+            pending: 2,
+            unsupported: 1,
+            recompiles: 4,
+            unsupportedKeys: ["shape:effects"],
+            reloads: ["createLayer 7 翻转了场景级不变量（volumetrics）"],
+          },
+        },
+        true,
+        false,
+      ),
+      [
+        "运行中建层：晚几帧装上 1、读回时还没接上 2、带不支持项、不画 1、单对象重编译 4 次（L6，合并之后）",
+        "  没命中缓存的照产品晚几帧（和 WPE 逐帧比时加 prewarmFragments: true 预编）",
+        "  运行中出现的不支持项：shape:effects",
+        "  宿主会整场重载、探针做不了的（这一帧和宿主不同、不可信）：createLayer 7 翻转了场景级不变量（volumetrics）",
+      ],
+    );
+  });
 });
 
 describe("轨迹与四角", () => {
@@ -1347,6 +1394,30 @@ describe("逐 draw 轨迹", () => {
       assert.match(textOf(host), /逐 draw 轨迹：3 个 pass/);
       assert.ok(readFileSync(path.join(root, "a", "trace.json")).length > 0);
       assert.ok(readFileSync(path.join(root, "b", "pass-0.png")).length > 0);
+    });
+  });
+
+  test("运行中建层的预跑（L5）：prewarmFragments 交给 REST，host_render 也带；没有 scripts 时本地拒绝、不碰 REST", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const ok = await call("render_scene", { imageId: "9", scripts: true, prewarmFragments: true });
+      assert.notEqual(ok.isError, true, textOf(ok));
+      const host = await call("host_render", {
+        handle: "h-1",
+        imageId: "9",
+        scripts: { seed: 3 },
+        prewarmFragments: true,
+      });
+      assert.notEqual(host.isError, true, textOf(host));
+      await call("render_scene", { imageId: "9", scripts: true });
+      const bodies = bodiesOf(rest, "/render");
+      assert.equal(bodies[0].prewarmFragments, true);
+      assert.equal(bodies[1].prewarmFragments, true);
+      assert.equal("prewarmFragments" in bodies[2], false);
+      const before = bodiesOf(rest, "/render").length;
+      const bad = await call("render_scene", { imageId: "9", prewarmFragments: true });
+      assert.equal(bad.isError, true);
+      assert.match(textOf(bad), /^\[local\][\s\S]*prewarmFragments 要和 scripts 一起给/);
+      assert.equal(bodiesOf(rest, "/render").length, before, "本地拒绝时不发请求");
     });
   });
 

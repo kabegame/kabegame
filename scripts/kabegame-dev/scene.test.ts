@@ -757,6 +757,68 @@ describe("粒子接口的参数透传", () => {
     assert.equal(none.meta.userTextures, undefined);
   });
 
+  test("运行中建层的预跑（L5）：prewarmFragments 原样交给探针；没给不带；没有 scripts 回 400 不碰页面；旧宿主没回 liveCreate 回 409", async () => {
+    const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
+    const f = await fixture({
+      renderFrame: (args: unknown) => {
+        const base = { width: 1, height: 1, sha256: "x", time: 1.5, frametime: 0, scripts: { diagnostics: [] } };
+        // 种子 99 时模拟 L5 之前的探针：跑了脚本但不回 liveCreate
+        if ((args as { scripts?: { seed?: number } }).scripts?.seed === 99) return base;
+        return {
+          ...base,
+          liveCreate: {
+            sync: 1,
+            async: 0,
+            unsupported: 0,
+            pending: 0,
+            reloads: [],
+            unsupportedKeys: [],
+            prewarmed: (args as { prewarmFragments?: boolean }).prewarmFragments ? 2 : 0,
+            recompiles: 0,
+          },
+          restructured: 0,
+        };
+      },
+    });
+    vm.runInContext(
+      `window.__kabegameSceneProbe.chunk = (key, index) => (index === 0 ? ${JSON.stringify(png)} : null)`,
+      f.host,
+    );
+    const calls = () =>
+      f.probeCalls.filter((call) => call.name === "renderFrame").map((c) => c.args as Record<string, unknown>);
+    const response = await renderFrame(f.s, "h-1", {
+      imageId: "14501",
+      scripts: true,
+      prewarmFragments: true,
+      userProperties: {},
+    });
+    assert.equal(calls()[0].prewarmFragments, true);
+    assert.equal(response.meta.liveCreate?.prewarmed, 2);
+    await renderFrame(f.s, "h-1", { imageId: "14501", scripts: true, userProperties: {} });
+    assert.equal("prewarmFragments" in calls()[1], false, "不给时请求和以前一样");
+
+    const before = f.conn.evaluated.length;
+    await assert.rejects(
+      renderFrame(f.s, "h-1", { imageId: "14501", prewarmFragments: true, userProperties: {} }),
+      (error: unknown) => error instanceof DevError && error.status === 400 && error.extra.field === "prewarmFragments",
+    );
+    assert.equal(f.conn.evaluated.length, before, "参数错时不发任何求值");
+
+    await assert.rejects(
+      renderFrame(f.s, "h-1", {
+        imageId: "14501",
+        scripts: { seed: 99 },
+        prewarmFragments: true,
+        userProperties: {},
+      }),
+      (error: unknown) =>
+        error instanceof DevError &&
+        error.status === 409 &&
+        error.layer === "host" &&
+        /探针不认识 prewarmFragments/.test(error.message),
+    );
+  });
+
   test("逐 draw 轨迹：trace 原样交给探针；取回轨迹 JSON 与读回图；没给不带；不合法 400；旧宿主 409；超过 64 MB 回 413 不取", async () => {
     const png = Buffer.from("iVBORw0KGgo=", "base64").toString("base64");
     const trace = {
