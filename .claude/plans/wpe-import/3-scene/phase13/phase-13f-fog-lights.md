@@ -285,4 +285,23 @@ export function legacyLightFrame(lights: SceneLights, state: SceneState, worlds:
 
 **测试**：新 `render/p13f-lights.test.ts` 8 例；`compile/lights.test.ts` 按新模型改写编译用例、加 L3；`compile/p13e.test.ts`、`compile/animations.test.ts` 按新规则改期望；`render/rebuild.test.ts` 加「遗留灯晚一帧」；`render/p13e-volumetrics.test.ts` 加 `frame` 逐帧常量。变异 13 / 13（`ignore/p13/f/mut/mutations-f2.py`）。
 
-**还没做**：`3706286085` 按 `FINAL_CHECK.md` 的走查（复制工程逐帧对照）；回归 LR4 真机预览。
+**还没做**：回归 LR4 真机预览；`3465215190` 的走查（`3706286085` 的见下一节）。
+
+## 走查：`3706286085`（2026-11-16，按 `FINAL_CHECK.md`）
+
+**复制工程**（`ignore/p13/f/walk/make_iso.py` → `ignore/p13/f/walk/proj/3706286085-iso-p13f`）：
+- 留：雾（距离 + 高度）、方向光阴影、`SunLight` 的强度脚本（按左键过渡）与转方向脚本、挂在 `RioSonic` 下的 `BoostLight` 及其强度脚本、按光标移动 `RioSonic` 的 `SonicRunCodeBase`、`Camera_0` 与跟随支架；
+- 换成固定值：`RioSonic` 五个动画层的 rate / blend、`FBX_Stage` 的层 rate 与 scale、`Sky` 的旋转脚本、`BoostModel` 材质里挂脚本的常量；
+- 去：粒子、声音、全屏后处理层、默认不可见的相机。
+
+**录制**：WPE 1920×1080、fps 20，`input_start` 按时间线喂光标与左键（`ignore/p13/f/walk/timeline.json`：40 段、每段 12 帧，段间光标 x 不同，按住时 y 换成 0.56，从日志的光标就能逐帧对齐、还原左键），抓 24 帧 `A:\p13f\walk3706\`（脚本帧 379–402：381 按下沿、393 松开沿）。回放按 `[kbp]` 日志与 `buttons.json`，探针打出的 `[kbp]` 行与 WPE 逐字相同。
+
+**结果**（`ignore/p13/f/walk/cmp/frames.txt`，uniform 对照 `pair_globals.py`，18 帧 379–396）：
+- **P13f 的 uniform 逐位相同**：雾的四个常量、`g_LDirectional_Color`（按下 / 松开的过渡 3.34 → 2.81 → 2.8 … → 3.33 → 3.34）与方向、`g_LPoint_Color` / `g_LPoint_Origin`（L5：灯挂在随光标移动的模型下，成立）、环境光与天光；方向光的阴影投影在奇数帧逐位相同。
+- **389 帧整帧只剩 53 个像素 ≤ 2**：相机与城市骨骼恰好都逐位相同的一帧，雾、灯、阴影的像素都对。
+- **其余帧的差，不在 P13f**：
+  - 城市骨骼 K2（P12b2 已知差异）：每帧同样 6 个平移分量差 0.02–0.04，城市边缘亚像素差；389 帧逐位相同（`city_bones.py`）。
+  - **偶数帧相机滞后（有意不同）**：奇数帧视点与 VP 逐位相同；偶数帧不同（视点差 0.003–0.006，`eye_lag.py`、`vp_lag.py`）。P5 会话查清是 WPE 的世界矩阵缓存戳（规则同 `render/worldStamps.ts`）：相机自己不被画、只在帧开头（脚本之前）求一次；支架每帧被脚本写、又在脚本之后被画一次重算，两者的戳会落在同一个帧号上，下一帧开头相机「戳 ≥ 父戳」判命中，返回上一次算的整份矩阵，所以相机每两帧刷新一次。核对：奇数帧 WPE 视点 = 第 f−1 帧末的支架 + 抖动，偶数帧 = 第 f−2 帧末的支架 + 抖动，380–396 帧 6 位小数全同（P5 的 `p13cam/lag.py`）。我的 `stamp_sim.py` 漏了「相机只在帧开头求、支架在脚本之后被画」这一点。触发条件：相机父链上有对象每帧被脚本 / 关键帧移动且每帧被画。2026-11-16 用户定：不修，记为有意不同（WPE 缺陷，效果是镜头半帧率顿挫，语料画面不依赖）。
+  - 支架是退化网格（108 个索引都指向同一个顶点），我们在阴影 pass 发了 3 个空 draw、WPE 剔掉了，无像素影响。
+
+**判定**：通过。P13f 的 uniform 逐位相同，389 帧整帧几乎 0 差；其余差异都已解释：城市骨骼 K2（已知差异）、偶数帧相机滞后（有意不同）、退化网格的空 draw（无像素影响）。测试行 15336（`ignore/p13/f/walk/manifest.json`）还在库里。`3465215190` 的复制工程还没走。
