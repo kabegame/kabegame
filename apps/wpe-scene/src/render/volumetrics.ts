@@ -383,6 +383,9 @@ export class VolumetricsRenderer {
     let block: UniformBlock | null = null;
     let uniformBuffer: GPUBuffer | null = null;
     if (program.uniformSize) {
+      // TODO:[WPE_SCENE_MCP] 这块 uniform 缓冲没调 `traceUniforms` 登记反射（`scene.ts`、`bloom.ts` 都登记了），逐 draw 轨迹
+      // （render_scene 的 trace）对体积光的 draw 只给 `rawUniforms`、没有按名字解出 `g_RenderVar*` 等，走查时没法和 WPE 逐 draw 对常量
+      // （P13f 走查 3465215190 时遇到，只能靠整帧逐像素比兜住）。补法：建缓冲后 `traceUniforms(uniformBuffer, program.result.uniforms)`
       block = new UniformBlock((program.result.uniforms ?? []) as UniformEntry[], program.uniformSize);
       uniformBuffer = input.own(
         device.createBuffer({

@@ -285,7 +285,7 @@ export function legacyLightFrame(lights: SceneLights, state: SceneState, worlds:
 
 **测试**：新 `render/p13f-lights.test.ts` 8 例；`compile/lights.test.ts` 按新模型改写编译用例、加 L3；`compile/p13e.test.ts`、`compile/animations.test.ts` 按新规则改期望；`render/rebuild.test.ts` 加「遗留灯晚一帧」；`render/p13e-volumetrics.test.ts` 加 `frame` 逐帧常量。变异 13 / 13（`ignore/p13/f/mut/mutations-f2.py`）。
 
-**还没做**：回归 LR4 真机预览；`3465215190` 的走查（`3706286085` 的见下一节）。
+**还没做**：回归 LR4 真机预览。走查见下面两节（`3706286085`、`3465215190`）。
 
 ## 走查：`3706286085`（2026-11-16，按 `FINAL_CHECK.md`）
 
@@ -304,4 +304,18 @@ export function legacyLightFrame(lights: SceneLights, state: SceneState, worlds:
   - **偶数帧相机滞后（有意不同）**：奇数帧视点与 VP 逐位相同；偶数帧不同（视点差 0.003–0.006，`eye_lag.py`、`vp_lag.py`）。P5 会话查清是 WPE 的世界矩阵缓存戳（规则同 `render/worldStamps.ts`）：相机自己不被画、只在帧开头（脚本之前）求一次；支架每帧被脚本写、又在脚本之后被画一次重算，两者的戳会落在同一个帧号上，下一帧开头相机「戳 ≥ 父戳」判命中，返回上一次算的整份矩阵，所以相机每两帧刷新一次。核对：奇数帧 WPE 视点 = 第 f−1 帧末的支架 + 抖动，偶数帧 = 第 f−2 帧末的支架 + 抖动，380–396 帧 6 位小数全同（P5 的 `p13cam/lag.py`）。我的 `stamp_sim.py` 漏了「相机只在帧开头求、支架在脚本之后被画」这一点。触发条件：相机父链上有对象每帧被脚本 / 关键帧移动且每帧被画。2026-11-16 用户定：不修，记为有意不同（WPE 缺陷，效果是镜头半帧率顿挫，语料画面不依赖）。
   - 支架是退化网格（108 个索引都指向同一个顶点），我们在阴影 pass 发了 3 个空 draw、WPE 剔掉了，无像素影响。
 
-**判定**：通过。P13f 的 uniform 逐位相同，389 帧整帧几乎 0 差；其余差异都已解释：城市骨骼 K2（已知差异）、偶数帧相机滞后（有意不同）、退化网格的空 draw（无像素影响）。测试行 15336（`ignore/p13/f/walk/manifest.json`）还在库里。`3465215190` 的复制工程还没走。
+**判定**：通过。P13f 的 uniform 逐位相同，389 帧整帧几乎 0 差；其余差异都已解释：城市骨骼 K2（已知差异）、偶数帧相机滞后（有意不同）、退化网格的空 draw（无像素影响）。测试行 15336 已移除。
+
+## 走查：`3465215190`（2026-11-17，按 `FINAL_CHECK.md`）
+
+这张壁纸没有材质开 `LIGHTING`，灯唯一的画面效果是体积光：两盏 `castvolumetrics` + `castshadow` 的点光（`lightconfig { point: 2, pointshadow: 2 }`，正交场景），`雷` 的 `intensity` 挂关键帧（6 fps、60 帧循环，打雷闪光）。要看的是关键帧当帧写进灯状态、体积光常量每帧按状态写（P13f2）。
+
+**复制工程**（`ignore/p13/f/walk/make_iso_3465.py` → `ignore/p13/f/walk/proj/3465215190-iso-p13f`）：
+- 留：两盏灯、背景图 119（它的 5 个 effect 清空成固定画面：树叶摆动、水波、两个 pulse、调色与体积光无关，pulse 还可能读音频）；
+- 去：其余全部对象。原场景两盏灯之间夹着一个可见粒子，会把两盏灯分成两段各合成一次；去掉之后连成一段、只合成一次（同一条 WPE 分段规则，P13e V5）。
+
+**录制**：WPE 1920×1080、fps 20、体积光 low、阴影 low，不喂输入，抓 24 帧 `A:\p13f\walk3465\`（脚本帧 401–424；被抓的帧帧时间 0.13–0.2 s，24 帧覆盖约 4 s 动画）。WPE 里 `雷` 的强度（`g_RenderVar1.w`）逐帧 0.083 → 14.34 → 0.159，是关键帧第 0–22 帧那一次闪光的完整起落。我们这边按 `[kbp]` 日志回放，体积光档位用 dev 覆盖 `kabegame-dev-scene-volumetrics = low`（应用设置是 ultra，渲染完已删掉覆盖）。
+
+**结果**（`ignore/p13/f/walk/cmp3465/frames.txt`）：**24 帧整帧逐像素相同**。闪光确实改变画面：我们自己的 401 帧（强度 0.08）与 413 帧（14.34）之间有 75 万像素不同（最大 15 级）。体积光的 draw 由 `VolumetricsRenderer` 自建，逐 draw 轨迹工具没有给它们解 uniform（它的 uniform 缓冲没调 `traceUniforms`，记为 `TODO:[WPE_SCENE_MCP]`，在 `render/volumetrics.ts`），常量没有逐 draw 比，由整帧逐像素相同覆盖。
+
+**判定**：通过，逐像素相同。测试行 15494 已移除。
