@@ -55,6 +55,7 @@ import { oneLine, reasonsOf, SceneRenderError } from "./errors";
 import {
   canvasSize,
   fillCropEdges,
+  anchorEdgesFor,
   sceneCursor,
   scenePlacement,
   scenePointer,
@@ -877,6 +878,17 @@ export class SceneRenderer {
     const cursorCrop = this.cursorCropOf(this.sceneGeneral, this.placementStyle);
     const cursor = this.cursorOf(this.placement, this.placementStyle, cursorCrop);
     scene.setCursorCrop(cursorCrop);
+    // 文本 `anchor` 的 E0..E3（P6e 点 5）：每帧按显示的铺放算（画布 CSS 尺寸 = 画布像素 / pixelRatio），样式、尺寸、DPR 变了下一帧生效
+    scene.setAnchorEdges(
+      anchorEdgesFor(
+        this.placementStyle,
+        scene.width,
+        scene.height,
+        this.canvas.width,
+        this.canvas.height,
+        this.pixelRatio,
+      ),
+    );
     const [width, height] = this.projection;
     // 抖动（P5a 步骤 3）：帧开头、视差点之前，用本帧的 `g_Time` 与脚本之前的字段算 eye 偏移 s（WPE 更新相机时算，在 lookAt 与
     // 视差点之前，脚本之后才跑，rea-p5-camera.md 第 5 节；脚本写 `camerashake*` 下一帧才生效）。交给场景要等粒子步进之后，见下。

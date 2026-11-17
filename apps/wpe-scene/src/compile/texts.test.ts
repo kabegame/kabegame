@@ -4,7 +4,7 @@
  * - 四个宿主材质的 pass（键、渲染图填的槽 0、背景与 clearalpha 什么时候编）、背景色、`padding` 看启用的 effect；
  * - 绑定：运行中可改的排版键（`TEXT_RUNTIME_FIELDS`）登记成文本目标（P6b 1e），`font` / `opaquebackground` 等照旧重编译，
  *   `backgroundcolor` 在 LDR 下是背景常量的就地目标；
- * - 能力表：不再报 `object:text` / `object:font` 等，`text:script:<键>`、`text:msdf:<键>`、`text:anchor:<值>` 照规则报；运行中字段
+ * - 能力表：不再报 `object:text` / `object:font` 等，`text:script:<键>`、`text:msdf:<键>` 照规则报，`anchor` 九种取值都放行（P6e 点 5）；运行中字段
  *   （`TEXT_RUNTIME_FIELDS`）挂脚本不报，`text:script` 键去掉（P6b 1e-3）；
  * - `SceneState`：文本 pass 的常量、背景常量、effect 开关走重编译；
  * - 有 WPE 时用真翻译器编 WPE 自带的四个材质（`font`、`flat`、`composelayer` 着色器），程序检查不报。
@@ -211,7 +211,7 @@ describe("能力表：文本对象", () => {
     expect(check({ text: "a", alpha: { script: "export function update() { return 1; }", value: 1 } })).toEqual([]);
   });
 
-  it("生效值的开关与 anchor：MSDF 四个开关报 text:msdf:<键>，anchor 只放行 none / center", () => {
+  it("生效值的开关与 anchor：MSDF 四个开关报 text:msdf:<键>，anchor 九种取值都不报（P6e 点 5）", () => {
     const keys = (values: Partial<Parameters<typeof checkTextOptions>[0]>) => {
       const out = new Set<string>();
       checkTextOptions({ msdf: false, outline: false, blur: false, dropshadow: false, anchor: "none", ...values }, out);
@@ -219,7 +219,8 @@ describe("能力表：文本对象", () => {
     };
     expect(keys({})).toEqual([]);
     expect(keys({ anchor: "center" })).toEqual([]);
-    expect(keys({ anchor: "topleft" })).toEqual(["text:anchor:topleft"]);
+    for (const anchor of ["top", "topright", "right", "bottomright", "bottom", "bottomleft", "left", "topleft"])
+      expect(keys({ anchor }), anchor).toEqual([]);
     expect(keys({ outline: true, dropshadow: true })).toEqual(["text:msdf:dropshadow", "text:msdf:outline"]);
   });
 
@@ -450,12 +451,7 @@ describe("compileScene：文本表", () => {
       ],
       { properties: { edge: { value: true } } },
     );
-    expect(bundle.unsupported).toEqual([
-      "text:anchor:topleft",
-      "text:msdf:msdf",
-      "text:msdf:outline",
-      "text:script:font",
-    ]);
+    expect(bundle.unsupported).toEqual(["text:msdf:msdf", "text:msdf:outline", "text:script:font"]);
     expect(bundle.bindings.map((binding) => binding.target)).toContainEqual({
       kind: "recompile",
       reason: "layer-structure",

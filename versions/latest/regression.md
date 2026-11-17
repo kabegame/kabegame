@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 场景壁纸文本的 anchor（P6e 第 3 步）
+
+2026-11-18 Windows dev。文本对象的 `anchor`（`top`、`topright`、`right`、`bottomright`、`bottom`、`bottomleft`、`left`、`topleft`、`center`）不再报 `text:anchor:*`：绘制时在世界空间加一段平移，让文字跟着可见区域的边或中心走（同 Wallpaper Engine，平移表照 rea-p6b-layout 3.4，与自身和父链的缩放、旋转无关），光标命中同样带上。可见区域由每帧的 `E0..E3`（四边被裁掉的场景单位）给出：dev 探针按窗口画时就是投影用的那份；产品按显示铺放算 `alignEdges(样式对应的对齐方式, 场景宽高, 画布 CSS 宽高)`，铺满时同 WPE；装下 / 居中时 E 为负，贴边的文字被推到场景之外，产品只画场景目标，看不到（render-size 的已知差异）；拉伸、平铺与透视场景为 0。脚本运行中改 `anchor` 走单对象重编译、晚一小段才生效（WPE 当帧，语料没有这种写法）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：`render/anchor.test.ts`（平移表、世界空间、产品 E、探针 E、光标命中）、`compile/texts.test.ts` 与 `render/` 下文本、光标、铺放、`host`、`dev/probe.renderSize`；`tsc` | 全过 | 2026-11-18 Claude：17 个文件 366 条通过；`tsc` 0 错误；变异 7 处抓到 6 处，没抓到的是等价变异（拉伸时 `alignEdges` 本来就是 0） |
+| [x] | T2 和 WPE 逐像素比 | Windows dev，屏外宿主（dev 探针按 WPE 抓帧的窗口尺寸与对齐方式画） | `ignore/p6/e0/proj/p6e-anchor`（十种 anchor）在 1920×1080 铺满、900×1600 铺满 / 装下、2560×1080 装下、960×540 居中，`p6e-anchor2`（自身放大 2 倍、转 90°、父对象缩放 0.5）在 1920×1080 / 900×1600 铺满，和 `A:\p6e\anchor*` 的上屏帧比 | 文本 0 差异 | 2026-11-18 Claude：七组里文本全部 0 差异；剩下的差异只在计数层（脚本帧号不同），其中三组计数层在窗口外、整帧 0 差异 |
+| [x] | T3 全库 | Node，`kbp corpus scan` / `diff` | 与第 2 步之后的结果比 | 只去掉 `text:anchor:*`，不新增键 | 2026-11-18 Claude：能渲染 214 → 221，本步解锁 5 张（dino_run、2981249186、3351163962、3560756264、3643916956；另 2 张是同期别的会话修的着色器）；没有新增键，没有掉出；5 张冒烟渲染无不支持项、无脚本错误 |
+| [ ] | T4 预览与桌面 | Windows dev 预览 / 窗口壁纸 | 打开 dino_run、3643916956 的预览，换窗口比例与样式（铺满 / 装下）；设为桌面 | 铺满时右上角计分、左右两侧的歌名贴着可见区域的边；装下时贴边文字在场景外看不到（已知差异） | 需要用户看 |
+
 ## 场景壁纸图像层帧表的脚本控制（P6e 第 2 步：`ITextureAnimation`）
 
 2026-11-18 Windows dev。图像层的 `getTextureAnimation()` 不再报 `script:api:layer.getTextureAnimation`：返回的对象默认跟着纹理的共享计时器走；`pause` / `stop` / `setFrame` / 写 `rate ≠ 1` 让这个图层脱离，之后每帧在对象更新里（脚本之前、不看可见性）按 `g_Frametime × rate` 推进自己的帧号，画这个图层时所有帧表都画这一格（越界画第 0 格、负数改走共享计时器），`join()` 并回。状态在 `SceneState.textureAnimations`，跨单对象重编译与整场重载接回，图层删除或槽 0 换成用户纹理时清掉。成员、键序、每个对象一个原型、只读字段的报错、`rate` 只收 number、`setFrame` 只认 int32（其余当 0）、和 `getVideoTexture()` 共用一格、作废后读写都是 `undefined`，均照 WPE 实测。

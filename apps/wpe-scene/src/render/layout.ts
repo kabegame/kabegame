@@ -483,6 +483,86 @@ export function alignEdges(
 }
 
 /**
+ * 文本 `anchor` 的世界平移 `(ax, ay)`（P6e 点 5，rea-p6b-layout 3.4 的表；`E0..E3` 是左、上、右、下被裁掉的场景单位，正为裁掉、负为留边）：
+ * `none` (0, 0)；`center` ((E0−E2)/2, (E3−E1)/2)；`top` ((E0−E2)/2, −E1)；`topright` (−E2, −E1)；`right` (−E2, (E3−E1)/2)；
+ * `bottomright` (−E2, E3)；`bottom` ((E0−E2)/2, E3)；`bottomleft` (E0, E3)；`left` (E0, (E3−E1)/2)；`topleft` (E0, −E1)。全部 f32。
+ * 不认识的名字（缺省）当 `none`。结果不带 −0。
+ */
+export function anchorOffset(anchor: string | undefined, edges: Edges): [number, number] {
+  const f = Math.fround;
+  const [E0, E1, E2, E3] = edges;
+  const midX = f(f(E0 - E2) * 0.5);
+  const midY = f(f(E3 - E1) * 0.5);
+  const neg = (v: number) => f(0 - v);
+  switch (anchor) {
+    case "center":
+      return [midX, midY];
+    case "top":
+      return [midX, neg(E1)];
+    case "topright":
+      return [neg(E2), neg(E1)];
+    case "right":
+      return [neg(E2), midY];
+    case "bottomright":
+      return [neg(E2), E3];
+    case "bottom":
+      return [midX, E3];
+    case "bottomleft":
+      return [E0, E3];
+    case "left":
+      return [E0, midY];
+    case "topleft":
+      return [E0, neg(E1)];
+    default:
+      return [0, 0];
+  }
+}
+
+/**
+ * 文本图层画自己的矩阵再加 `anchor` 的**世界空间**平移（实测 `p6e-anchor2`：自身放大 2 倍的文本仍移 E、自身转 90° 的仍沿世界 x、父对象缩放 0.5
+ * 下仍移 E），即 `T(ax, ay, 0) · W`：只改平移列的 x、y（f32 加）。`none` 或偏移为 0 时原样返回，字节同以前。
+ */
+export function withAnchor(world: Mat4, anchor: string | undefined, edges: Edges): Mat4 {
+  const [ax, ay] = anchorOffset(anchor, edges);
+  if (ax === 0 && ay === 0) return world;
+  const out = Float32Array.from(world);
+  out[12] = Math.fround(world[12] + ax);
+  out[13] = Math.fround(world[13] + ay);
+  return out;
+}
+
+/**
+ * 产品里（场景分辨率画再按样式铺放）文本 `anchor` 用的 `E0..E3`：按显示的铺放算，`alignEdges(对齐方式, 场景宽, 场景高, 画布 CSS 宽, 画布 CSS 高)`，
+ * 画布 CSS 尺寸 = 画布像素 / `pixelRatio`（`center` 是一个场景单位对一个 CSS 像素，同 {@link scenePlacement}；`fill` / `fit` 只看比例）。
+ * `stretch` 与 Kabegame 独有的 `tile` 全 0；画布或场景尺寸不合法也全 0。
+ * 已知差异（render-size）：`fit` / `center` 留白时 E 为负，贴边的文字被推到场景之外，而场景目标之外不画，所以产品里看不到。
+ */
+export function anchorEdgesFor(
+  style: SceneStyle,
+  sceneWidth: number,
+  sceneHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+  pixelRatio = 1,
+): Edges {
+  const mode = ALIGNMENT_OF_STYLE[style];
+  const ratio = pixelRatio > 0 ? pixelRatio : 1;
+  const w = canvasWidth / ratio;
+  const h = canvasHeight / ratio;
+  if (mode === undefined || mode === 2 || !(sceneWidth > 0 && sceneHeight > 0 && w > 0 && h > 0)) return [0, 0, 0, 0];
+  return alignEdges(mode, sceneWidth, sceneHeight, w, h);
+}
+
+/**
+ * 文本 `anchor` 实际生效的 `E0..E3`（`GpuScene` 用）：透视场景全 0（WPE 不算）；按指定尺寸画（dev 探针，`crop`）时就是投影用的那份裁切边距；
+ * 否则是渲染器按铺放算的 `anchorEdgesFor`。
+ */
+export function resolveAnchorEdges(perspective: boolean, crop: Edges | null | undefined, product: Edges): Edges {
+  if (perspective) return [0, 0, 0, 0];
+  return crop ?? product;
+}
+
+/**
  * WPE 的正交投影构造（`FUN_14009a630`，rea-matrix-order 第 7 节）：近远面固定 −2000 / 2000，每个加减除都是 f32
  * （`P[10] = −1 / (n − f)`、`P[14] = −f / (n − f)`）。和 `math.ts` 的 `orthographic`（double 算完再存 f32）只在 E ≠ 0 时可能差 1 ulp，
  * 所以带裁切边距的路径用这一个。

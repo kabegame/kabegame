@@ -24,7 +24,7 @@
  * 数值照 WPE 的 float32 运算顺序（每次运算 `Math.fround`），日志里的世界坐标 / 局部坐标才能和 WPE 逐位对上（`799.5001220703125` 这种单精度痕迹）。
  * 世界坐标的反投影与粒子控制点的指针反投影（`pointerScenePoint`）是同一串 float32 运算，P4c 已逐位对上。
  */
-import { drawMatrixOf, effectiveVisible } from "./layout";
+import { drawMatrixOf, effectiveVisible, withAnchor, type Edges } from "./layout";
 import { invertF32 } from "./inverseF32";
 import { multiply, type Mat4 } from "./math";
 import { parallaxOffset, type SceneParallax } from "./parallax";
@@ -153,7 +153,7 @@ export function intersectParallelogram(ray: Ray, p0: Vec3Tuple, p1: Vec3Tuple, p
  * 图像 / 文本的命中（`FUN_14019dbb0`）：`fullscreen` 恒命中，`local` 是窗口像素；否则取画自己的矩阵，四个角是
  * `T ± A/2 ± B/2`（`A = 第 0 列 × size.x`、`B = 第 1 列 × size.y`，`T = 平移 + 视差偏移`），射线对它求交。`t < 0`（射线后方，或平行）时不命中、
  * **不写 `local`**（保持 0）；其余情形不论落在里面外面都写 `local = (u·size.x, (1 − v)·size.y, 0)`，命中只看 `inside`。
- * 矩阵的文本 `anchor` 乘子（`vt[0xa8]`）能力表只放行 `none`，不乘。
+ * 文本的 `anchor` 平移（`vt[0xa8]`）已在 {@link pickablesOf} 里加进 `matrix`（P6e 点 5，同绘制）。
  */
 export function hitQuad(
   ray: Ray,
@@ -384,7 +384,10 @@ export class CursorTracker {
 export type PickLayer = Pick<
   SceneLayer,
   "object" | "pick" | "perspective" | "fullscreen" | "size" | "disablePropagation" | "sortClass"
->;
+> & {
+  /** 文本层的编译产物（只读 `script.anchor`）：命中矩阵带 `anchor` 的世界平移；缺省没有。 */
+  text?: { script?: { anchor: string } } | null;
+};
 
 /** {@link pickablesOf} 读的状态（`SceneState` 的子集）。 */
 export interface PickState {
@@ -409,6 +412,8 @@ export function pickablesOf(
   perspective: boolean,
   forward: readonly number[] = [0, 0, -1],
   cache = new Map<number, Mat4>(),
+  /** 文本 `anchor` 的 `E0..E3`（P6e 点 5）：缺省全 0。 */
+  anchorEdges: Edges = [0, 0, 0, 0],
 ): Pickable[] {
   let picked = layers.filter((layer) => layer.pick && state.layers.has(layer.object));
   if (state.order) {
@@ -448,7 +453,10 @@ export function pickablesOf(
     const size = text ?? layer.size;
     out.push({
       object: layer.object,
-      matrix: drawMatrixOf(layer.object, state.layers, cache),
+      matrix:
+        layer.pick === "text"
+          ? withAnchor(drawMatrixOf(layer.object, state.layers, cache), layer.text?.script?.anchor, anchorEdges)
+          : drawMatrixOf(layer.object, state.layers, cache),
       size: [size[0] ?? 0, size[1] ?? 0],
       origin: own.origin,
       parallaxDepth: own.parallaxDepth,
@@ -475,6 +483,8 @@ export interface CursorCamera {
   windowCursor?: boolean;
   /** `g_EyePosition`（正交时 z = 2000）。 */
   eye: readonly number[];
+  /** 文本 `anchor` 用的 `E0..E3`（P6e 点 5，`GpuScene.anchorEdgesNow`）；缺省全 0。文本命中的矩阵带 `anchor` 的世界平移，同绘制。 */
+  anchorEdges?: Edges;
   /** 透视场景（命中顺序按视线排、射线从 eye 出发）。 */
   perspective: boolean;
   /** 视线方向（透视场景排序用）。 */
@@ -547,7 +557,14 @@ export class CursorSession {
       parallax: camera.perspective ? null : input.parallax,
       windowPixel: [screen[0], screen[1]],
     };
-    const pickables = pickablesOf(scene.layers, scene.state, camera.perspective, camera.forward);
+    const pickables = pickablesOf(
+      scene.layers,
+      scene.state,
+      camera.perspective,
+      camera.forward,
+      undefined,
+      camera.anchorEdges,
+    );
     return { snapshot, dispatches: this.tracker.step(frame, pickables) };
   }
 }

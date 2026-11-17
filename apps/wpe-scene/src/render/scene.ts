@@ -242,6 +242,8 @@ import {
 import {
   type Edges,
   drawMatrixOf,
+  withAnchor,
+  resolveAnchorEdges,
   withSelfOffset,
   effectiveVisible,
   everyAncestor,
@@ -1478,6 +1480,11 @@ export class GpuScene {
    * （`crop`，投影本来就裁了）时忽略。
    */
   private cursorCrop: Edges | null = null;
+  /**
+   * 文本 `anchor` 用的 `E0..E3`（P6e 点 5，渲染器每帧按样式与画布尺寸设，`anchorEdgesFor`；缺省全 0）。按指定尺寸画（`crop`）时用投影的那一份
+   * 裁切边距，透视场景恒为 0（WPE 不算）。见 {@link GpuScene.anchorEdgesNow}。
+   */
+  private anchorEdges: Edges = [0, 0, 0, 0];
   /**
    * 按指定尺寸画（dev 探针，`build` 的 `target`，只对正交场景）：投影的裁切边距与窗口（= 场景目标）尺寸，所有正交投影与透视粒子投影都带它
    * （建场景、`setCamera` 的 zoom 重算）。产品不传，恒为 null，字节不变。
@@ -4378,6 +4385,15 @@ export class GpuScene {
   }
 
   /**
+   * 图层画自己的世界矩阵（`drawMatrixOf`）；文本层再加 `anchor` 的世界平移（P6e 点 5）。合成 RT 内部的文本矩阵不读它（`textMatrices` 的
+   * composite 分支），所以只有直接上屏与合成路径上屏的步骤受影响；`getTransformMatrix` 走另一条路、不带 anchor。
+   */
+  private drawWorldOf(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>): Mat4 {
+    const world = drawMatrixOf(layer.object, state.layers, worlds, this.attachHook);
+    return layer.text ? withAnchor(world, layer.text.script?.anchor, this.anchorEdgesNow()) : world;
+  }
+
+  /**
    * 一个 draw 的全部静态 uniform（建 draw 与就地刷新共用）：图层状态、按父链算的世界矩阵 + 场景级常量（建场景时算一次）。
    * 图层走 `drawUniformValues`，粒子走 `particleUniformValues`（透视粒子换视图投影）。视图投影是取矩阵的唯一入口，开着视差时
    * 两条路径都换成带视差的（`viewProjectionOf`，P5a 步骤 2）。场景级的视图投影与眼位带本帧的抖动与缩放（`setCamera`，步骤 3、4）。
@@ -4397,7 +4413,7 @@ export class GpuScene {
     const common = {
       // 图层画自己的矩阵（P8 步骤 3）：世界矩阵再乘自身偏移（文本排版、图像层对齐），直接上屏、合成链各角色、效果矩阵、
       // `g_LayerModelMatrix` 与文本都用它；粒子下面换成 `model`，模型网格没有偏移（字节同 `worldMatrixOf`）
-      world: drawMatrixOf(layer.object, state.layers, worlds, this.attachHook),
+      world: this.drawWorldOf(layer, state, worlds),
       constants: state.constants.get(step.pass.key) ?? {},
       // HDR 下颜色乘 brightness（B10）；passthrough 的 g_Color4 由材质值覆盖成 (1, 1, 1, 1)
       colorScale: this.hdr ? layerState.brightness : 1,
@@ -4567,6 +4583,22 @@ export class GpuScene {
     return multiply(base, translation(x, y, 0));
   }
 
+  /**
+   * 设文本 `anchor` 的 `E0..E3`（渲染器每帧调，值没变什么都不做）。变了就标相机脏：随后的 `setParallax` 把全部 draw 的由图层算出的 uniform
+   * 重写一遍（带 `anchor` 的文本层的矩阵跟着换）。单图层重建新建的 draw 直接按当前值写。
+   */
+  setAnchorEdges(edges: Edges): void {
+    const now = this.anchorEdges;
+    if (edges[0] === now[0] && edges[1] === now[1] && edges[2] === now[2] && edges[3] === now[3]) return;
+    this.anchorEdges = [edges[0], edges[1], edges[2], edges[3]];
+    this.cameraDirty = true;
+  }
+
+  /** 文本 `anchor` 实际生效的 `E0..E3`：透视场景全 0；按指定尺寸画时就是投影的裁切边距（同一份 `alignEdges`）；否则渲染器设的。 */
+  private anchorEdgesNow(): Edges {
+    return resolveAnchorEdges(!!this.bundle.general.perspective, this.crop?.edges, this.anchorEdges);
+  }
+
   /** 设光标的裁切边距（渲染器每帧按样式与画布尺寸调，`fillCropEdges`）；null 是不裁。见 {@link GpuScene.cursorCrop}。 */
   setCursorCrop(edges: Edges | null): void {
     this.cursorCrop = edges;
@@ -4598,6 +4630,7 @@ export class GpuScene {
     return {
       viewProjection: this.cursorViewProjection(),
       windowCursor: this.cursorEdges() !== null,
+      anchorEdges: this.anchorEdgesNow(),
       eye: this.view.eye,
       perspective,
       forward: this.view.viewVectors.forward,

@@ -766,12 +766,6 @@ const TEXT_KEYS = new Set([
 const TEXT_MSDF_KEYS = ["msdf", "outline", "blur", "dropshadow"] as const;
 
 /**
- * `anchor` 里中性的取值：`none` 不平移；`center` 平移 `((E0 − E2)/2, (E3 − E1)/2)`，场景按居中盖满铺放时左右、上下的裁边相等，为 0
- * （rea-p6b-layout 3.4）。其余取值贴着可见区域的边走，要按铺放算裁边（语料 23 个），报 `text:anchor:<值>`。
- */
-const NEUTRAL_ANCHORS = new Set(["none", "center"]);
-
-/**
  * 文本对象的静态检查（P6b 1d，`checkObjectFeatures` 调）：挂 `{script}` 的文本键。
  * - 运行中字段（`TEXT_RUNTIME_FIELDS`：`text`、`pointsize`、`maxwidth` 等 12 个）挂脚本不报（P6b 1e-3）：字段脚本的返回值经字符串
  *   写回进 `SceneState.textFields`，值变了宿主当帧重排、重建这一层（1e-1、1e-2），同 WPE 写入时当场重排；
@@ -787,14 +781,14 @@ export function checkTextFeatures(object: SceneObject, unsupported: Set<string>)
 /**
  * 文本对象按生效值（绑了属性的取当前值）查的能力（P6b 1d，`compile/texts.ts` 解析字段时调）：
  * - `msdf` / `outline` / `blur` / `dropshadow` 打开：`text:msdf:<键>`；
- * - `anchor` 不是 `none` / `center`：`text:anchor:<值>`（取值已按 WPE 的枚举规则规整，查不到的是 `none`）。
+ * - `anchor` 九种取值都支持（P6e 点 5）：绘制与光标命中时在世界空间加一段平移 `(ax, ay)`，由每帧的 `E0..E3` 算（`render/layout.ts` 的
+ *   `anchorOffset` / `anchorEdgesFor`，rea-p6b-layout 3.4、rea-p6e-sheet 8），不再报 `text:anchor:<值>`。
  */
 export function checkTextOptions(
   values: Record<(typeof TEXT_MSDF_KEYS)[number], boolean> & { anchor: string },
   unsupported: Set<string>,
 ): void {
   for (const key of TEXT_MSDF_KEYS) if (values[key]) unsupported.add(`text:msdf:${key}`);
-  if (!NEUTRAL_ANCHORS.has(values.anchor)) unsupported.add(`text:anchor:${values.anchor}`);
 }
 
 /**
