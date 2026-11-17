@@ -109,6 +109,10 @@ pub struct BoundTexture {
     pub flags: Option<u32>,
 }
 
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 /// 翻译结果。成功时带两段 WGSL 与反射；失败时带出错阶段、所在着色器与诊断。
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -130,6 +134,10 @@ pub struct TranslateResult {
     pub attributes: Vec<Interface>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub varyings: Vec<Interface>,
+    /// `varyings` 用到的 location 个数。超过 WebGPU 缺省的 16 个时（打包后仍超过），渲染器要设备申请到更高的
+    /// `maxInterStageShaderVariables` 才能建管线，否则报不支持。没有 varying 时为 0、不输出。
+    #[serde(skip_serializing_if = "is_zero")]
+    pub inter_stage_locations: u32,
     /// 最终生效的 COMBO 取值。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub combos: Vec<Combo>,
@@ -580,6 +588,7 @@ pub fn translate(request: &TranslateRequest) -> TranslateResult {
             .collect(),
         attributes: interfaces(&program.attributes, Some(&vs.inputs_read)),
         varyings: interfaces(&program.varyings, None),
+        inter_stage_locations: program.inter_stage_locations,
         combos,
         geometry,
         ..TranslateResult::default()
@@ -2080,22 +2089,49 @@ void main() {
         assert!(unpack < fs.rfind("kb_main();").unwrap(), "{fs}");
     }
 
-    /// 打包后仍超过上限：改写阶段报错，场景在编译期报不支持。
+    /// 作者直接写 HLSL 类型名（3348595482 的 `contrast_based_sharpness.frag` 第 125–127 行）：照 WPE 宏头的反方向当 GLSL 类型。
     #[test]
-    fn packing_overflow_is_a_rewrite_failure() {
-        let decls: String = (0..17).map(|i| format!("varying vec4 v_{i};\n")).collect();
+    fn hlsl_type_names_translate() {
         let result = translate(&TranslateRequest {
-            vertex: format!("{decls}void main() {{}}"),
-            fragment: "void main() { gl_FragColor = vec4(1.0); }".into(),
+            vertex: "attribute vec3 a_Position;\nvarying vec2 v_TexCoord;\nvoid main() { v_TexCoord = a_Position.xy; gl_Position = vec4(a_Position, 1.0); }".into(),
+            fragment: "varying vec2 v_TexCoord;\n\
+                float rand_1_05(in float2 uv)\n{\n\
+                \tfloat2 noise = (frac(sin(dot(uv.yx ,float2(12.9898,78.233)*2.0)) * 43758.5453));\n\
+                \treturn abs(noise.x + noise.y) * 0.5;\n}\n\
+                void main() {\n\
+                \tfloat3x3 m = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);\n\
+                \tint2 p = int2(v_TexCoord * 4.0);\n\
+                \tgl_FragColor = vec4(m * vec3(rand_1_05(v_TexCoord), float(p.x), 0.0), 1.0);\n}\n"
+                .into(),
             ..TranslateRequest::default()
         });
+        assert!(result.ok, "{:?} {:?}", result.phase, result.errors);
+    }
+
+    /// 打包后仍超过 16 个：照样翻译，反射报 `interStageLocations`（渲染器按设备上限判断）；超过 32 个才在改写阶段报错。
+    #[test]
+    fn packing_overflow_is_a_rewrite_failure() {
+        let run = |n: usize| {
+            let decls: String = (0..n).map(|i| format!("varying vec4 v_{i};\n")).collect();
+            translate(&TranslateRequest {
+                vertex: format!("{decls}void main() {{ gl_Position = vec4(0.0); }}"),
+                fragment: "void main() { gl_FragColor = vec4(1.0); }".into(),
+                ..TranslateRequest::default()
+            })
+        };
+        let result = run(17);
+        assert!(result.ok, "{:?}", result.errors);
+        assert_eq!(result.inter_stage_locations, 17);
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["interStageLocations"], 17);
+        let result = run(33);
         assert!(!result.ok);
         assert_eq!(
             (result.phase, result.stage),
             (Some("rewrite"), Some(Stage::Vertex))
         );
         assert!(
-            result.errors[0].message.contains("超过 WebGPU 的 16 个"),
+            result.errors[0].message.contains("超过 32 个"),
             "{:?}",
             result.errors
         );

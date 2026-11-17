@@ -15,6 +15,9 @@ use crate::Stage;
 
 /// WPE 方言里的 HLSL 风格内建 → GLSL。WPE 在 Windows 上翻成 HLSL 时也是一张宏头（`#define frac frac`、
 /// `#define mix lerp` 方向相反），这里是镜像。`mul(v, M)` 是行向量左乘，GLSL 里写成 `M * v`。
+/// 末尾的 HLSL 类型名（`float2`、`float3x3`、`int2` …）：WPE 的宏头把 `vec2` 换成 `float2`、`mat4x3` 换成 `float4x3`（按名字、数字不变，
+/// rea-p7-shader），整段交给 fxc，所以作者直接写 HLSL 类型名也能编（3348595482 的 `contrast_based_sharpness` 写 `float2`）。
+/// 这里按同一规则反过来；这些名字在 fxc 里是关键字，作者不可能拿来当变量名，宏不会撞。
 pub const MACRO_HEADER: &str = "\
 #define mul(a, b) ((b) * (a))
 #define frac fract
@@ -35,6 +38,27 @@ pub const MACRO_HEADER: &str = "\
 #define CAST4(x) vec4(x)
 #define CAST4U(x) uvec4(x)
 #define CAST3X3(x) mat3(x)
+#define float2 vec2
+#define float3 vec3
+#define float4 vec4
+#define float2x2 mat2x2
+#define float2x3 mat2x3
+#define float2x4 mat2x4
+#define float3x2 mat3x2
+#define float3x3 mat3x3
+#define float3x4 mat3x4
+#define float4x2 mat4x2
+#define float4x3 mat4x3
+#define float4x4 mat4x4
+#define int2 ivec2
+#define int3 ivec3
+#define int4 ivec4
+#define uint2 uvec2
+#define uint3 uvec3
+#define uint4 uvec4
+#define bool2 bvec2
+#define bool3 bvec3
+#define bool4 bvec4
 ";
 
 /// GLSL 450 的保留字里，WPE 作者拿来当变量名的（HLSL 下合法）。改成 `kb_<名字>`。
@@ -176,6 +200,9 @@ pub struct Program {
     /// 两阶段之间实际的接口：不打包时是作者声明的 varying（数组长度照 WPE 换算），
     /// 打包时是 `kb_varying_<i>`（vec4）加没打包的整数 varying（[`pack_varyings`]）。
     pub varyings: Vec<InterfaceDecl>,
+    /// `varyings` 用到的 location 个数（最大的 location 加它占的个数）。超过 [`MAX_INTER_STAGE`] 时要设备申请到更高的
+    /// `maxInterStageShaderVariables` 才能建管线，由渲染器判断。
+    pub inter_stage_locations: u32,
     pub vertex_glsl: String,
     pub fragment_glsl: String,
 }
@@ -365,9 +392,9 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
         line: None,
     };
     let packing = if vs.merged_geometry {
-        if next_varying > MAX_INTER_STAGE {
+        if next_varying > MAX_INTER_STAGE_CEILING {
             return Err(interface_error(format!(
-                "几何着色器展开的程序 varying 占 {next_varying} 个 location，超过 WebGPU 的 {MAX_INTER_STAGE} 个（这类程序不打包）"
+                "几何着色器展开的程序 varying 占 {next_varying} 个 location，超过 {MAX_INTER_STAGE_CEILING} 个（这类程序不打包）"
             )));
         }
         None
@@ -399,11 +426,17 @@ pub fn build(vertex: &[Line], fragment: &[Line]) -> Result<Program, RewriteError
         Some(packing) => packing.interface,
         None => varyings,
     };
+    let inter_stage_locations = varyings
+        .iter()
+        .map(|v| v.location + location_slots(&v.ty, v.array))
+        .max()
+        .unwrap_or(0);
     Ok(Program {
         uniforms,
         textures,
         attributes,
         varyings,
+        inter_stage_locations,
         vertex_glsl,
         fragment_glsl,
     })
@@ -750,9 +783,14 @@ fn wpe_varying_array(name: &str, ty: &str, n: u32) -> Result<Option<u32>, String
     Ok((n.saturating_mul(weight) > 4).then(|| n.div_ceil(4)))
 }
 
-/// WebGPU 缺省的 `maxInterStageShaderVariables`，每台设备都保证；设备不申请更高的上限（P7e 已定，结果不随显卡变）。
+/// WebGPU 缺省的 `maxInterStageShaderVariables`，每台设备都保证。超过它才打包（P7e 已定，打包规则与输出不随显卡变）。
 /// 校验按 location 比（`location < 16`），所以是 location 的个数。
 pub const MAX_INTER_STAGE: u32 = 16;
+
+/// 翻译器拒绝的 location 数：打包后仍超过 [`MAX_INTER_STAGE`] 的程序照样输出、在反射里报实际用到的个数
+/// （[`Program::inter_stage_locations`]），能不能画由渲染器按设备申请到的 `maxInterStageShaderVariables` 判断
+/// （P7 补漏，3612971233 的示波器要 18 个）；超过这个数时任何桌面适配器都放不下，直接报错，也免得给特别长的数组逐元素建片段。
+pub const MAX_INTER_STAGE_CEILING: u32 = 32;
 
 /// 一个 varying（数组的一个元素、矩阵的一列）装进第 `slot` 个 vec4 的 `offset` 起的 `components` 个分量。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -810,7 +848,8 @@ fn float_shape(ty: &str) -> Option<(u32, u32)> {
 /// 整数 varying 不打包（要 `flat`），各占自己的 location。具体放在哪个分量与 fxc 不必相同，两个阶段都是我们生成的。
 ///
 /// 不超过上限时返回 None，输出与原来逐字节相同（P7e 已定：不照 WPE 总把 `float` / `vec2` 数组打包，免得 36 张 `blur_gaussian`
-/// 等场景的输出都变）。打包后仍超过时报错，场景在编译期报不支持、退回预览图，而不是到运行时建管线才失败。
+/// 等场景的输出都变）。打包后仍超过 [`MAX_INTER_STAGE`] 时照样返回打包结果，由渲染器按设备上限判断；超过
+/// [`MAX_INTER_STAGE_CEILING`] 时报错，场景在编译期报不支持。
 fn pack_varyings(varyings: &[InterfaceDecl]) -> Result<Option<Packing>, String> {
     let total: u64 = varyings
         .iter()
@@ -821,7 +860,7 @@ fn pack_varyings(varyings: &[InterfaceDecl]) -> Result<Option<Packing>, String> 
     }
     let too_many = |needed: u64| {
         format!(
-            "varying 装进 vec4 之后仍要 {needed} 个 location（不打包是 {total} 个），超过 WebGPU 的 {MAX_INTER_STAGE} 个"
+            "varying 装进 vec4 之后仍要 {needed} 个 location（不打包是 {total} 个），超过 {MAX_INTER_STAGE_CEILING} 个"
         )
     };
     // 先按下界判断，免得给特别长的数组逐元素建片段
@@ -838,7 +877,7 @@ fn pack_varyings(varyings: &[InterfaceDecl]) -> Result<Option<Packing>, String> 
         .map(|v| u64::from(location_slots(&v.ty, v.array)))
         .sum();
     let lower_bound = float_components.div_ceil(4) + integer_slots;
-    if lower_bound > u64::from(MAX_INTER_STAGE) {
+    if lower_bound > u64::from(MAX_INTER_STAGE_CEILING) {
         return Err(too_many(lower_bound));
     }
 
@@ -898,7 +937,7 @@ fn pack_varyings(varyings: &[InterfaceDecl]) -> Result<Option<Packing>, String> 
         });
         next += location_slots(&varying.ty, varying.array);
     }
-    if next > MAX_INTER_STAGE {
+    if next > MAX_INTER_STAGE_CEILING {
         return Err(too_many(u64::from(next)));
     }
     Ok(Some(Packing {
@@ -2616,11 +2655,46 @@ void main() { gl_FragColor = texSample2DBackBuffer(g_Texture1, v_TexCoord.xy, g_
         assert!(fragment.contains("    v_M[2] = kb_varying_10.xyz;\n    v_B[0] = kb_varying_11.xyz;\n    v_B[1] = kb_varying_12.xyz;\n"), "{fragment}");
     }
 
-    /// 打包后仍超过 16 个、作者用了保留名、认不出 main、几何展开的程序超过上限：都在改写阶段报错。
+    /// 打包后仍超过 16 个：照样输出、报实际的 location 个数（能不能画由渲染器按设备判断）。
+    #[test]
+    fn packing_above_sixteen_reports_locations() {
+        // 17 个 vec4：打包也省不下
+        let decls: String = (0..17).map(|i| format!("varying vec4 v_{i};\n")).collect();
+        let program = build(
+            &lines(&format!("{decls}void main() {{}}")),
+            &lines("void main() {}"),
+        )
+        .unwrap();
+        assert_eq!(program.inter_stage_locations, 17);
+        assert!(program
+            .varyings
+            .iter()
+            .all(|v| v.name.starts_with("kb_varying_")));
+        // 12 个 vec4 + 5 个 uint：整数不打包，接在 vec4 后面
+        let decls: String = (0..12)
+            .map(|i| format!("varying vec4 v_{i};\n"))
+            .chain((0..5).map(|i| format!("varying uint v_u{i};\n")))
+            .collect();
+        let program = build(
+            &lines(&format!("{decls}void main() {{}}")),
+            &lines("void main() {}"),
+        )
+        .unwrap();
+        assert_eq!(program.inter_stage_locations, 17);
+        // 不超过 16 个：不打包，个数照算
+        let program = build(
+            &lines("varying vec4 v_A;\nvarying mat3 v_M;\nvoid main() {}"),
+            &lines("void main() {}"),
+        )
+        .unwrap();
+        assert_eq!(program.inter_stage_locations, 4);
+    }
+
+    /// 打包后仍超过 32 个、作者用了保留名、认不出 main、几何展开的程序超过 32 个：都在改写阶段报错。
     #[test]
     fn packing_failures_are_rewrite_errors() {
-        // 17 个 vec4：装不下
-        let decls: String = (0..17).map(|i| format!("varying vec4 v_{i};\n")).collect();
+        // 33 个 vec4：任何设备都装不下
+        let decls: String = (0..33).map(|i| format!("varying vec4 v_{i};\n")).collect();
         let error = build(
             &lines(&format!("{decls}void main() {{}}")),
             &lines("void main() {}"),
@@ -2629,10 +2703,10 @@ void main() { gl_FragColor = texSample2DBackBuffer(g_Texture1, v_TexCoord.xy, g_
         assert_eq!(error.stage, Stage::Vertex);
         assert_eq!(
             error.message,
-            "varying 装进 vec4 之后仍要 17 个 location（不打包是 17 个），超过 WebGPU 的 16 个"
+            "varying 装进 vec4 之后仍要 33 个 location（不打包是 33 个），超过 32 个"
         );
-        // 12 个 vec4 + 5 个 uint：整数不打包
-        let decls: String = (0..12)
+        // 28 个 vec4 + 5 个 uint：整数不打包
+        let decls: String = (0..28)
             .map(|i| format!("varying vec4 v_{i};\n"))
             .chain((0..5).map(|i| format!("varying uint v_u{i};\n")))
             .collect();
@@ -2641,7 +2715,7 @@ void main() { gl_FragColor = texSample2DBackBuffer(g_Texture1, v_TexCoord.xy, g_
             &lines("void main() {}"),
         )
         .unwrap_err();
-        assert!(error.message.contains("仍要 17 个"), "{}", error.message);
+        assert!(error.message.contains("仍要 33 个"), "{}", error.message);
 
         let decls: String = (0..17).map(|i| format!("varying float v_{i};\n")).collect();
         let error = build(
@@ -2669,7 +2743,8 @@ void main() { gl_FragColor = texSample2DBackBuffer(g_Texture1, v_TexCoord.xy, g_
         .unwrap_err();
         assert!(error.message.contains("认不出 main"), "{}", error.message);
 
-        // 几何展开拼成的顶点段（行来自 `<geometry>`）：不打包，超过就报错
+        // 几何展开拼成的顶点段（行来自 `<geometry>`）：不打包，超过 32 个就报错
+        let decls: String = (0..33).map(|i| format!("varying float v_{i};\n")).collect();
         let mut vertex = lines(&format!("{decls}void main() {{}}"));
         vertex.push(Line {
             code: String::new(),

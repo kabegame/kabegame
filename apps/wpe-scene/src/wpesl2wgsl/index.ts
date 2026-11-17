@@ -127,6 +127,11 @@ export interface TranslateResult {
   textures?: TextureBinding[];
   attributes?: InterfaceVariable[];
   varyings?: InterfaceVariable[];
+  /**
+   * `varyings` 用到的 location 个数，没有 varying 时不给。超过 WebGPU 缺省的 16 个（打包后仍超过）时，要设备申请到更高的
+   * `maxInterStageShaderVariables` 才能建管线（`createProgram` 判断）。
+   */
+  interStageLocations?: number;
   combos?: ComboValue[];
   /**
    * 只在请求带 `geometry` 时有：顶点输入全部按实例步进（每次几何着色器调用一个实例），每个实例画 `maxVertices` 个顶点，

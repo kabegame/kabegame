@@ -39,7 +39,12 @@ export async function acquireGpu(): Promise<Gpu> {
   const requiredFeatures = OPTIONAL_FEATURES.filter((feature) => adapter.features.has(feature));
   // 二维纹理上限取适配器支持的最大值（P12c 走查 F2）：WebGPU 缺省只给 8192，WPE（D3D11）是 16384。语料 3830665420 有个文本层 `size`
   // 9787×199 带 effect，合成 RT 按缺省上限建不出、整张退回。场景目标、用户纹理等按 `device.limits` 钳的地方随之放宽到同一个值
-  const requiredLimits = { maxTextureDimension2D: adapter.limits.maxTextureDimension2D };
+  // 阶段间变量同样取适配器的最大值（P7 补漏）：翻译器超过 16 个才打包，打包后仍超过的程序（3612971233 的示波器 18 个）
+  // 要更高的上限，`createProgram` 按 `device.limits` 判断能不能建
+  const requiredLimits = {
+    maxTextureDimension2D: adapter.limits.maxTextureDimension2D,
+    maxInterStageShaderVariables: adapter.limits.maxInterStageShaderVariables,
+  };
   let device: GPUDevice;
   try {
     device = await adapter.requestDevice({ label: "kabegame scene", requiredFeatures, requiredLimits });

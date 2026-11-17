@@ -726,6 +726,10 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 - **采样器注解 `components` 的组合键（2026-11-15，P12b2 走查转来的 F1）**：`generic4` / `genericimage2/4` 的 PBR 遮罩槽注解带 `components`（METALLIC / ROUGHNESS / REFLECTION / EMISSIVE_MAP），翻译器原先只置顶层 `combo`，3706286085 的 Sonic 手套等少了自发光那一项（WPE 亮 1.15–1.31 倍），静默的画面差。WPE 的规则（`FUN_14016c800`，解析在 `FUN_14016ce60`）：槽绑了纹理时，纹理标志（`.tex` 头、纹理对象 `+0x1c`）带 `0x100000 << i` 就置第 i 个对象条目的组合键；编辑器画的遮罩把用了哪些通道记在 bit 20–23（这张的遮罩是 `0x00800002`，只置 EMISSIVE）。翻译器 `BoundTexture` 加 `flags`，宿主给文件纹理传头标志，缓存键只收 bit 20 起。依据与复核：
   - 复制工程 `ignore/p12/b2/check1/proj/3706286085-iso-boost(-nl)` 按 WPE 日志回放、和 WPE 抓帧逐帧比（`ignore/f1/cmp-*.txt`）：> 32 的像素 nl 变体每帧 1.5–2.0 万降到 0.12–0.29 万，第 403 帧从 54589 个 / 最大 64 降到 45 个 / 最大 1；原样副本 0.7–1.1 万降到 0.15–0.21 万。剩下的是 P12b2 报告里的 K2 等。
   - 语料（`ignore/f1/`，同一份 wasm、只差宿主传不传 `flags`）：unsupported 逐场景不变（干净 175 → 175）；1299 个翻译请求里 20 个置了子组合键，涉及 8 张，四个子组合键都有，8 张目前都被别的能力挡着。
+- **语料清扫转来的两处缺口（2026-11-18，wpe p6 d/e 转来）**：各挡 1 张，两张都解锁（语料干净 214 → 216，`ignore/p7fix/`）。
+  - **varying 超过 16 个**（3612971233 的工坊示波器 `audio_responsive_oscilloscope`，打包后 18 个）：推翻 P7e 的「设备不申请更高的上限」。打包规则不变（超过 16 才打包，翻译结果不随显卡变）；打包后仍超过 16 个的照样输出、反射报 `interStageLocations`，宿主开设备时按适配器申请 `maxInterStageShaderVariables`（本机 28），`createProgram` 比设备上限、超了报 `render:program:<下标>:inter-stage:<个数>`；超过 32 个仍在改写阶段报错。
+  - **HLSL 类型名**（3348595482 的 `contrast_based_sharpness` 写 `float2`）：WPE 的宏头把 `vec2` 换成 `float2`、`mat4x3` 换成 `float4x3` 后交给 fxc（rea-p7-shader），作者直接写 HLSL 类型名也能编；翻译器宏头按反方向补 `float2/3/4`、`floatNxM`、`int*`、`uint*`、`bool*`。
+  - 复核：1351 个翻译请求夹具重放，之前能翻译的 2672 个 WGSL 逐字节不变，只多出这两个着色器的 5 个程序；两张在 dev 屏外宿主渲染，`unsupported` 为空。没有和 WPE 逐像素比（打包与类型名都只走既有路径）。
 
 ## P8 — 图像层与材质补全
 

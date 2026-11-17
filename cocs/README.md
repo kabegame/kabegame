@@ -187,7 +187,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 主题：场景壁纸（`x-wpe/scene`）的前端渲染路线：WebGPU 在 `WpeWallpaperContent` 挂的场景宿主里、前端 `fetch(file:)` 读资源、前端编译，Rust 只做导入；以及着色器翻译器 `wpesl2wgsl` 的摘要。翻译器的完整契约见 [../src-tauri/wpesl2wgsl/README.md](../src-tauri/wpesl2wgsl/README.md)：
     - **构建**：编成 wasm、不链进应用；`deno task build:wpesl2wgsl` 产出到 `bin/wasm/wpesl2wgsl/`，kabegame 命令不带 `--skip vue` 时拷进前端，缺失只告警。
     - **输入**：WPESL 原文、头文件（缺失时返回 `missing` 让调用方重试）、COMBO 与绑定的纹理。
-    - **输出**：WGSL 与反射（共用的 std140 uniform 块、纹理绑定 `1 + 2n` / `2 + 2n`、location、COMBO 来源）。varying 数组照 WPE 的长度（`vec3` / `vec4` 数组只剩 `ceil(n/4)` 个元素），超过 WebGPU 的 16 个阶段间变量时打包进 vec4（P7e）。
+    - **输出**：WGSL 与反射（共用的 std140 uniform 块、纹理绑定 `1 + 2n` / `2 + 2n`、location、COMBO 来源）。varying 数组照 WPE 的长度（`vec3` / `vec4` 数组只剩 `ceil(n/4)` 个元素），超过 WebGPU 的 16 个阶段间变量时打包进 vec4（P7e），打包后仍超过的按设备申请到的上限判断（反射 `interStageLocations`）；作者直接写的 HLSL 类型名（`float2` 等）由宏头换回 GLSL。
     - **语料**：本机语料 2026-11-12 为 161/167，全部场景实际发出的请求全部通过（P7）；naga 源码嵌在翻译器里，GLSL 前端加了照 fxc 的 HLSL 隐式转换模式，翻译器照 WPE 自己的预处理与改名规则；请求夹具重放与逐字节基线防回归。
     - **`scene.pkg`**：移植自 linux-wallpaperengine 的目录表读取，前端经带 `Range` 头的 `fetch(file:)` 按条目区间读（`wpe-scene/compile/pkg.ts`）。
     - **编译管线**（`wpe-scene/compile/`）：资源按项目散文件 → `scene.pkg` → WPE `assets/` 查找（`file:` 响应没有长度，散文件不探测大小；effect 内的资源按 effect.json 所在目录与来源排先后），产出渲染器唯一输入 `SceneBundle` 与 `unsupported` 能力键；Worker 编译、主线程代读文件，读取错误回传时保留类型；确定退回就停止编译（`exhaustive` 列全）。

@@ -1151,6 +1151,19 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | F1-2 复制工程对照 WPE | Windows dev + WPE 抓帧，1920×1080，后处理超高 | `ignore/p12/b2/check1/proj/3706286085-iso-boost-nl` 回放 401–406 帧、原样副本 412–417 帧，和 WPE 逐帧比 | Sonic 的手套、鞋、扣子亮度和 WPE 一致 | 2026-11-15：> 32 的像素 nl 每帧 1.5–2.0 万 → 0.12–0.29 万，第 403 帧 45 个、最大 1；原样副本 0.7–1.1 万 → 0.15–0.21 万（`ignore/f1/cmp-*.txt`），剩下的归 P12b2 的 K2 |
 | [x] | F1-3 语料 | Node，`kbp corpus scan` 两份快照（同一 wasm，只差传不传 `flags`） | 比 unsupported，统计置了子组合键的请求 | unsupported 不变 | 2026-11-15：干净 175 → 175、没有键增减；20 个请求、8 张场景用到，目前都被别的能力挡着 |
 
+## 场景壁纸：阶段间变量的设备上限与 HLSL 类型名（P7 补漏）
+
+2026-11-18 Windows。语料清扫转来的两处翻译器缺口：打包后仍超过 16 个 varying 的程序照样翻译、反射报 `interStageLocations`，宿主按适配器申请 `maxInterStageShaderVariables`、`createProgram` 比设备上限；宏头补 HLSL 类型名（`float2` 等）。依据见 `.claude/plans/wpe-import/3-scene/PLAN.md` P7 节「语料清扫转来的两处缺口」，数据在 `ignore/p7fix/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | IS1 单测与变异 | Rust / Node | 翻译器 `packing_above_sixteen_reports_locations`、`packing_failures_are_rewrite_errors`、`packing_overflow_is_a_rewrite_failure`、`hlsl_type_names_translate`；宿主 `render/interStage.test.ts`；去掉 `float2` 宏、去掉设备上限检查各做一次变异 | 全过，变异都被抓到 | 2026-11-18：翻译器 114 个、宿主相关 128 个全过 |
+| [x] | IS2 语料 | Node，`kbp corpus scan` 两份快照（同一份源码，只差改前 / 改后的 wasm） | 比 unsupported | 只去掉两个键、不新增 | 2026-11-18：干净 214 → 216（3348595482、3612971233），没有新增键 |
+| [x] | IS3 输出不变 | Rust，翻译请求夹具重放 | 1351 个夹具分别用改前 / 改后的翻译器导出，比两边都有的 WGSL | 逐字节相同 | 2026-11-18：2672 个 WGSL 全相同，只多出这两个着色器的 5 个程序 |
+| [x] | IS4 两张场景能渲染 | Windows dev，屏外宿主（`render_scene`） | 渲染 3612971233（15024）、3348595482（15006） | `unsupported` 为空、画面正常 | 2026-11-18：本机适配器的 `maxInterStageShaderVariables` 是 28；两张都画出来了 |
+| [ ] | IS5 预览与桌面 | Windows，图库预览、窗口模式 | 预览两张，放音乐看示波器 | 实时渲染、示波器随声音动 | 待真机 |
+| [ ] | IS6 别的显卡 | AMD / Intel / macOS | 预览 3612971233 | 上限够时能渲染，不够时退回预览图并报 `render:program:*:inter-stage:18` | 本机测不了 |
+
 ## 场景壁纸 P7d：流体 effect 的条件结构、没被读的 uniform、`g_LayerModelMatrix`
 
 2026-11-13 Windows。四项改动：

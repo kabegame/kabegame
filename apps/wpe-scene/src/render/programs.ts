@@ -420,6 +420,10 @@ export async function createProgram(
 ): Promise<GpuProgram> {
   if (!result.ok || !result.vertex?.wgsl || !result.fragment?.wgsl)
     throw new SceneRenderError([`render:program:${index}:not-translated`]);
+  // 阶段间变量（P7 补漏）：打包后仍超过 16 个的程序要设备申请到更高的上限（`acquireGpu`），设备给不了就退回
+  const locations = result.interStageLocations ?? 0;
+  if (locations > (device.limits.maxInterStageShaderVariables ?? 16))
+    throw new SceneRenderError([`render:program:${index}:inter-stage:${locations}`]);
   const vertex = device.createShaderModule({
     label: `scene program ${index} vertex`,
     code: WGSL_PRELUDE + result.vertex.wgsl,

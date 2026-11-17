@@ -79,6 +79,7 @@ interface TranslateRequest {
 | `uniformBlockSize` | uniform 块总字节数（没有普通 uniform 时缺省） |
 | `textures` | `{ slot, name, kind: "2d" \| "2d-comparison" \| "3d" \| "cube", binding, samplerBinding, meta? }` |
 | `attributes` / `varyings` | `{ name, location, type, array?, unused? }`（`unused` 只出现在属性上，见「没被读的属性」）。`varyings` 是两阶段之间实际的 WGSL 接口：数组是照 WPE 换算后的长度；打包时是 `kb_varying_<i>`（`vec4`）加没打包的整数 varying，见「varying 超过 16 个时打包」 |
+| `interStageLocations` | `varyings` 用到的 location 个数（没有 varying 时缺省）；超过 16 时要设备申请到更高的 `maxInterStageShaderVariables`，见「varying 超过 16 个时打包」 |
 | `combos` | 最终生效的 COMBO：`{ name, value, source: "default" \| "texture" \| "request" }` |
 | `geometry` | 只在请求带 `geometry` 时有：`{ maxVertices }`，见「几何着色器展开」 |
 
@@ -125,7 +126,8 @@ interface TranslateRequest {
 
 ### varying 超过 16 个时打包
 
-WebGPU 缺省只保证 16 个阶段间变量（`maxInterStageShaderVariables`，按 `location < 16` 校验），设备不申请更高的上限，结果不随显卡变。
+WebGPU 缺省只保证 16 个阶段间变量（`maxInterStageShaderVariables`，按 `location < 16` 校验）。打包与否只看 16，翻译结果不随显卡变；
+打包后仍超过 16 个时照样输出，反射的 `interStageLocations` 报实际用到的个数，由渲染器按设备申请到的上限判断（见下面的「超过 16 个」）。
 数组按上一节换算长度之后，varying 仍占超过 16 个 location 时（工坊 `auto_sway`：31 个 `float` / `vec2` 散变量），把浮点 varying 装进 vec4（`rewrite::pack_varyings`）。
 依据：fxc 编签名时把标量、`vec2` 装进同一个寄存器，`auto_sway` 的 31 个 varying 在 WPE 编译缓存里是 11 个寄存器加位置（rea-p7e-varying「和 WebGPU 阶段间变量上限的关系」）。
 打包只改两阶段之间的接口，插值逐分量进行（都是透视插值），值不变。
@@ -160,6 +162,10 @@ void main() {
 - **顶点 `main` 里的 `return;`**：WPE 的顶点 `main` 返回 `VS_OUTPUT`，裸 `return;` 编不过（fxc X3080，顶点回退），所以 WPE 能用的着色器里没有这种写法；
   我们照 GLSL 语义执行，包装入口保证提前返回时也装箱（确定性工程 `p7e-vpack` 的 `vpack_ret` 层，和 WPE 不同，语料 0 处）。
 - **反射**：`varyings` 给实际的接口（`kb_varying_<i>` 加整数 varying）。渲染器与宿主不读它；探针把顶点着色器改写成计算着色器时读的是 WGSL 输出结构，只有超过 16 个的程序会变。
+- **超过 16 个**（2026-11-18，P7 补漏）：打包后仍超过 16 个 location 时不再报错，照样输出，`interStageLocations` 报实际个数；宿主开设备时按适配器的
+  `maxInterStageShaderVariables` 申请（本机 28），`createProgram` 比设备上限，超了报 `render:program:<下标>:inter-stage:<个数>` 退回。
+  超过 32 个（`MAX_INTER_STAGE_CEILING`，任何桌面适配器都放不下）仍在改写阶段报错，几何展开的程序同样按 32 判断。
+  语料里只有工坊示波器 `audio_responsive_oscilloscope`（3612971233）要 18 个；之前能翻译的程序 WGSL 逐字节不变。
 
 ### uniform 打包
 
@@ -329,6 +335,9 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
    - **内建**：`gl_FragColor` → `kb_FragColor`（`layout(location = 0) out vec4`），`gl_VertexID / gl_InstanceID` → `gl_VertexIndex / gl_InstanceIndex`。
      与 GLSL 450 保留字冲突的标识符改名为 `kb_<名字>`：`sample`、`input`、`output`、`texture`、`smooth`、`flat`、`common`、`buffer` 等，完整列表见 `RESERVED_RENAMES`。精度限定符去掉。
    - **HLSL 风格内建**由宏头补上（`MACRO_HEADER`）：`mul(a, b) → ((b) * (a))`（行向量左乘）、`frac`、`lerp`、`atan2`、`saturate`、`ddx / ddy`、`rsqrt`、`fmod`、`log10`、`clip`、`CAST*`。
+     HLSL 类型名也由宏头换回 GLSL（`float2/3/4`、`floatNxM`、`int2/3/4`、`uint2/3/4`、`bool2/3/4`，按名字、数字不变）：WPE 的宏头反方向把 `vec2`
+     换成 `float2`、`mat4x3` 换成 `float4x3` 再交给 fxc，所以作者直接写 HLSL 类型名也能编（工坊 `contrast_based_sharpness` 写 `float2`）；
+     这些名字在 fxc 里是关键字，作者不会拿来当变量名。`half*` 不在内（`half` 已作为保留字改名，见上）。
      正文用到 `pow` / `max` / `min` 时，补一组「标量扩展」重载：HLSL 允许 `pow(v3, 2.4)`、`max(0, v3)`，GLSL 没有这些重载。
 6. **naga**（`naga_stage.rs`）：
    - GLSL 450 前端负责解析和隐式类型转换：打开了嵌入 naga 的 HLSL 模式（`Options::hlsl_implicit`），GLSL 会报错的地方按 fxc 的隐式规则转换，见「HLSL 隐式转换」；
