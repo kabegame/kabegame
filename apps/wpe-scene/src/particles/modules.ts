@@ -25,10 +25,13 @@ import {
 } from "./distance";
 import { boxRandom, sphereRandom } from "./emitters";
 import { f32 } from "./f32";
+import { colorListHsv, colorListRgb } from "./colorn";
 import {
   alphaRandom,
   angularVelocityRandom,
+  colorList,
   colorRandom,
+  hsvColorRandom,
   lifetimeRandom,
   positionOffsetRandom,
   rotationRandom,
@@ -98,9 +101,12 @@ export type ParticleFieldValue = number | number[] | string;
  *   1 / 0；字符串、对象 WPE 会抛异常，这里按形状不对报。
  * - `audiobounds`：`audioprocessingbounds`（P4e 步骤 4，rea-p4e-audio.md 第 2 节）：字符串按 WPE 的两次 `atof` 读成 `[lo, hi]`（第二个数
  *   缺省 0，`audio.ts` 的 `parseAudioBounds`）；数字 0 得 `[0, 0]`，其它形状报。缺省值同样解析。
+ * - `colorlist`：`colorlist` 的 `colors`（P4g 步骤 1，rea-p4g-color.md 1.3）：数组（只认字符串项、不 ÷255）或字符串（当一项），解析成扁平的 HSV
+ *   数组 `h, s, v, …`（`colorn.ts` 的 `colorListRgb` / `colorListHsv`，没有有效项时补纯红 HSV (0, 1, 1)）；其它形状报。缺省值是字符串
+ *   `"1 1 1"`，即一项白色（实测：缺 `colors` 键时粒子是白色）。
  */
 export type ParticleFieldType =
-  "number" | "int" | "vec3" | "vec3z" | "vec3str" | "vec3splat" | "string" | "bool" | "audiobounds";
+  "number" | "int" | "vec3" | "vec3z" | "vec3str" | "vec3splat" | "string" | "bool" | "audiobounds" | "colorlist";
 
 /** JSON 单位的缺省值（未换算）。两套时按场景是否正交选（`rea-p4a.md`「基础」）。 */
 export type ParticleFieldDefault =
@@ -317,6 +323,40 @@ const vec3 = (value: ParticleFieldDefault, type: "vec3" | "vec3z" | "vec3str" = 
 /** 字段乘 `instanceoverride` 的哪一项（C5）。 */
 const by = (instance: InstanceScale, def: ParticleFieldDef): ParticleFieldDef => ({ ...def, instance });
 const TWO_PI = 2 * Math.PI;
+
+/** `|fmodf(d, 1)| < 1/360`（`0x140492610`）判「整圈」。 */
+const HUE_ROUND = f32(1 / 360);
+
+/**
+ * `hsvcolorrandom` 解析期的派生字段（`FUN_1401c7828` 段，rea-p4g-color.md 1.1、1.2【确】，`huesteps ≤ 1` 的 span 取 0 按实测更正）：
+ * ```
+ * s = max(0, huesteps)                                  // 整数；JSON 实数按 jsoncpp 截断（`int` 字段的解析）
+ * s ≤ 1：step = span = 0                                // 色相恒为 huemin，不管区间
+ * 否则 d = huemax − huemin（float32，可为负）；span = (d ≠ 0) ? d : 1；div = s − 1，|fmodf(d, 1)| < 1/360 时 div = s；step = span / div
+ * saturationrange = saturationmax − saturationmin；valuerange 同
+ * ```
+ * 整圈（`d` 是 1 的整数倍，含 0）首尾同色所以除以 `s`，否则除以 `s − 1`；出生时档位取 0..s 共 s+1 档，所以整圈时首尾重复、非整圈时最后
+ * 一档越过 `huemax` 一步（实测 `hsv-fwd` 的 0.75、`hsv-rev` 的 0.523）。派生字段：`steps`、`step`、`span`（0xd 重算用）、
+ * `saturationrange`、`valuerange`。没有钳制：min > max、超出 [0, 1]、负数原样。
+ */
+function normalizeHsvColor(fields: Record<string, ParticleFieldValue>): void {
+  const steps = Math.max(0, fields.huesteps as number);
+  fields.huesteps = steps;
+  fields.steps = steps;
+  const huemin = f32(fields.huemin as number);
+  let span = 0;
+  let step = 0;
+  if (steps > 1) {
+    const d = f32(f32(fields.huemax as number) - huemin);
+    span = d !== 0 ? d : 1;
+    const div = Math.abs(d % 1) < HUE_ROUND ? steps : steps - 1;
+    step = f32(span / div);
+  }
+  fields.step = step;
+  fields.span = span;
+  fields.saturationrange = f32(f32(fields.saturationmax as number) - f32(fields.saturationmin as number));
+  fields.valuerange = f32(f32(fields.valuemax as number) - f32(fields.valuemin as number));
+}
 
 /**
  * jsoncpp 取无符号整数（`FUN_140085f70`，`0x140085f70`–`0x140085fc2`）对数字的结果：整数取低 32 位，实数 `cvttsd2si` 截断成
@@ -653,6 +693,41 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columns: ["color0"],
     columnFlags: 0,
     run: colorRandom,
+  },
+  {
+    // 乘到 `color0`：色相分档（独立随机源）+ S / V 各一次 R；步长等派生字段在 `normalizeHsvColor` 里算
+    category: "initializer",
+    name: "hsvcolorrandom",
+    fields: {
+      huemin: num(0),
+      huemax: num(1),
+      huesteps: int(6),
+      saturationmin: num(0.5),
+      saturationmax: num(1),
+      valuemin: num(0.5),
+      valuemax: num(1),
+    },
+    columns: ["color0"],
+    columnFlags: 0,
+    normalize: normalizeHsvColor,
+    run: hsvColorRandom,
+  },
+  {
+    // 乘到 `color0`：下标、H、S、V 四次 R；`colors` 解析成 HSV 列表，`shift` 是 `colorn` 的 HSV 平移（0xe）
+    category: "initializer",
+    name: "colorlist",
+    fields: {
+      colors: { type: "colorlist", default: "1 1 1" },
+      huenoise: num(0),
+      saturationnoise: num(0),
+      valuenoise: num(0),
+    },
+    columns: ["color0"],
+    columnFlags: 0,
+    normalize(fields) {
+      fields.shift = [0, 0, 0];
+    },
+    run: colorList,
   },
   {
     // 三轴独立，抽取顺序 z、y、x，经控制点矩阵后加到速度
@@ -1297,9 +1372,11 @@ function defaultValue(def: ParticleFieldDef, orthographic: boolean): ParticleFie
       ? raw
       : def.type === "audiobounds"
         ? parseAudioBounds(raw)
-        : def.type === "vec3splat" && typeof raw === "number"
-          ? [raw, raw, raw]
-          : vector(raw);
+        : def.type === "colorlist"
+          ? colorListHsv(colorListRgb(raw))
+          : def.type === "vec3splat" && typeof raw === "number"
+            ? [raw, raw, raw]
+            : vector(raw);
   return applyScale(def, parsed ?? raw);
 }
 
@@ -1355,6 +1432,9 @@ function parseField(def: ParticleFieldDef, raw: unknown, previous: ParticleField
     case "audiobounds":
       // 字符串两次 `atof`、数字 0 得 [0, 0]，其它形状报（P4e 步骤 4，`audio.ts` 的 `parseAudioBounds`）
       return parseAudioBounds(raw);
+    case "colorlist":
+      // 数组（只认字符串项）或字符串（一项）；其它形状 WPE 得空列表（补红），这里报不支持（P4g 步骤 1）
+      return Array.isArray(raw) || typeof raw === "string" ? colorListHsv(colorListRgb(raw)) : undefined;
   }
 }
 

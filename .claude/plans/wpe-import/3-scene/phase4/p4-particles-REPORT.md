@@ -396,3 +396,29 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | 一个系统多个 renderer：sprite 与 spritetrail 共用一份顶点、按数组顺序各画一次、各按自己的朝向；速度为 0 的粒子拖尾那次不画 | `p4f-multi`：`m-st-zero` 的拖尾绘制四角全是 NaN、sprite 照画；`m-ss` 第二个 sprite（`fixed`、`axis 1 0 0`）四角 x 恒定；子系统上同样两次；sprite 那次的顶点输入也带速度列 | 成立 |
 
 **留给实现步骤的：** 字段脚本当帧还是下一帧生效（读码：下一帧，与我们的帧序等价）、单写 `rate` 时湍流的 `timescale` 不跟（`rt-1` / `rt-2`）、脚本发出的粒子下一帧才画且年龄多一帧，都由回放逐粒子核对。
+
+## P4g 语义的实测核对（2026-11-18）
+
+读码在 [rea-p4g-color.md](rea-p4g-color.md)（`hsvcolorrandom`、`colorlist` 的解析、出生公式、系统色与颜色绑定记录 0xd / 0xe）。
+- **工程：** `ignore/p4/defs/p4g0.py`（`kbp gen p4g0`）：`p4g-hsv`（13 组）、`p4g-hsv5`（`version 5`、带 `colorn`，6 组）、`p4g-list`（8 组）、`p4g-live`（`colorn` 绑属性，2 组）。系统都不带 `colorrandom`，按绘制顺序认；粒子每秒 12 个、寿命 4 s，每帧每系统约 48 个。
+- **抓帧：** `A:\p4g\`，fps 20（WPE 当时的设置）；轨迹 `ignore/p4/tracks/rd-p4g-*.json`（points 认法）；读数脚本 `ignore/p4/g0/ana.py`。
+
+| 结论 | 实测 | 判定 |
+|---|---|---|
+| `huesteps ≤ 1` 时色相恒为 `huemin` | `hsv-fixed`（0.25）、`hsv-steps1`（`huesteps 1`、区间 0.1–0.9）全部同色 | 成立 |
+| 档位 `k` 取 0…s 共 s+1 档，非整圈时最后一档越过 `huemax` | `hsv-fwd`（0–0.5、3 档）出 0 / 0.25 / 0.5 / **0.75**；`hsv-rev`（语料的反向区间）出 0.837 / 0.758 / 0.680 / 0.601 / **0.523**，各约 1/(s+1) | 成立 |
+| 缺省 `huesteps 6`、S / V 缺省 [0.5, 1] | `hsv-default`：色相 0、1/6 … 5/6（1 与 0 同色，0 约占 2/7），S ∈ [0.52, 0.99]、V ∈ [0.50, 1.00] | 成立 |
+| `huemin = huemax` 且 `s > 1` 时 span 换成 1、整圈 `div = s` | `hsv-zero-span`（0.3、4 档）出 0.3（2/5）/ 0.55 / 0.8 / 0.05 | 成立 |
+| 负色相出灰 `(v − v·s)·(1, 1, 1)`，色相 ≥ 1 正常回绕 | `hsv-neg`（S 0.5）(0.5, 0.5, 0.5)、`hsv-neg-s1` 黑、`hsv-wrap`（1.25）与 0.25 同色 | 成立 |
+| `huesteps` 按整数截断 | `hsv-real`（2.7）按 2：0.25（2/3）、0.75 | 成立 |
+| 两个颜色 initializer 各乘一次 | `hsv-after-cr`（红 × 青）全黑 | 成立 |
+| S / V 均匀分布 | `hsv-sv`：S ∈ [0.247, 0.791]（设 0.2–0.8）、V ∈ [0.309, 0.886]（设 0.3–0.9） | 成立 |
+| `colorn` 生效时色相档位以 `colorn` 色相为中心、步长不变，S / V 区间居中并钳 | `hsv-colorn`（语料 + 紫）出 0.637 / 0.716 / 0.794 / 0.873 / 0.951，S ∈ [0.757, 0.997]、V ∈ [0.255, 0.741]；`hsv-colorn-neg` 出 −0.2（黑）/ 0.2 / 0.6 | 成立 |
+| `huesteps ≤ 1`、`huemin = huemax` 时套 `colorn` | `hsv-colorn-fixed`（0.25、S / V 0.5 + 紫）出 (0.502, 0, 0.502)，色相 0.8333 = `colorn` 色相 | **和读码不同**：这一支记录里的 span 是 0，不是 1（读码的 `span = d == 0 ? 1 : d` 只在 `s > 1` 时成立） |
+| `flags & 8` 不建绑定记录 | `hsv-flags8` 和不设 `colorn` 时相同 | 成立 |
+| `colorlist`：只认字符串项、不 ÷255、按下标均匀挑 | `list-one`、`list-many`（三色 40% / 31% / 28%）、`list-bad`（只剩绿）、`list-255`（同红） | 成立 |
+| `colorlist` 空列表补纯红 | `list-empty2`（`colors []`）红 | 成立 |
+| `colorlist` 不写 `colors` | `list-empty` 白 (1, 1, 1) | **和读码不同**：缺省值字符串 `"1 1 1"` 被当成一项白色 |
+| noise 区间 `[max(x − n, 0), min(x + n, 1)]` | `list-noise`（青、色相 ±0.1）色相 ∈ [0.40, 0.60]；`list-noise-sv`（灰、S / V ±0.2）S ∈ [0, 0.199]、V ∈ [0.301, 0.695] | 成立 |
+| `colorlist` 的 `colorn` 平移（0xe） | `list-colorn`（红、绿 + 蓝）：红 → 蓝、绿 → 红 | 成立 |
+| 运行中改 `colorn` 只影响之后出生的粒子 | `p4g-live`：`apply_properties` 从紫改绿后抓帧，两个系统新出生的 9 颗是绿、老的 39 颗仍是紫 | 成立 |

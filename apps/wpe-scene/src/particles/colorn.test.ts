@@ -187,7 +187,7 @@ describe("系统色与 0x200000（particleColorSystem，7.1、7.4）", () => {
     ).toEqual([0, 1, 0]);
   });
 
-  it("hsvcolorrandom / colorlist 也算颜色模块（本身报不支持）", () => {
+  it("hsvcolorrandom / colorlist 也算颜色模块（置 hascolor，P4g 步骤 1 起本身也支持）", () => {
     expect(sys({ initializer: [{ name: "hsvcolorrandom" }] }).instanceColor).toBe(false);
     expect(sys({ initializer: [{ name: "colorlist" }] }).instanceColor).toBe(false);
   });

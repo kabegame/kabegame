@@ -108,7 +108,7 @@ import {
 import { identity, invert, multiply, translation, type Mat4 } from "../render/math";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { SILENT_PARTICLE_AUDIO, type ParticleAudio } from "./audio";
-import { colornState, instanceBrightness, type Rgb } from "./colorn";
+import { colornState, instanceBrightness, recenterHsvRange, type Rgb } from "./colorn";
 import { ParticleColumns } from "./columns";
 import {
   controlPointCount,
@@ -948,6 +948,9 @@ export class ParticleSystem {
    * - 0xb `colorrandom`：`min' = shift(min)`、`max' = shift(max)`，两端各自平移后再插值（`colorRandom` 每次按 `max − min` 算区间）。
    * - 0xc `colorchange`：写回 start = `A'`、Δ = `B' − A'`；`colorChange` 每帧按 `f32(end − start)` 算 Δ，和 WPE 的 `subss`
    *   相同，所以换两端即可（7.4）。
+   * - 0xd `hsvcolorrandom`（P4g 步骤 1，rea-p4g-color.md 3.2）：色相 `huemin' = (hc − (span·0.5 + huemin)) + huemin`、S / V 的 min 居中到 `colorn`
+   *   并钳 [0, 1]、超出 1 截短 range；步长与档数不重算（`recenterHsvRange`）；不生效写回基值。出生才读字段，所以只影响之后出生的粒子。
+   * - 0xe `colorlist`：`fields.shift = colorn 的 HSV − 第一项的 HSV`（`ColornState.listShift`），不生效写 0；`flags & 8` 时 `active` 恒假，等于不建记录。
    */
   private applyColorn(): void {
     // 子系统另要父的生效位（3.4），生效位本身整棵树都是顶层的值（`colornGate`）
@@ -958,13 +961,35 @@ export class ParticleSystem {
     const k = instanceBrightness(this.def, this.instance.brightness);
     const [r, g, b] = state.instanceColor;
     this.instanceColor = [f32(r * k), f32(g * k), f32(b * k)];
-    for (const module of this.initializers)
+    for (const module of this.initializers) {
       if (module.name === "colorrandom")
         module.fields = {
           ...module.fields,
           min: state.shift(module.base.min as number[]),
           max: state.shift(module.base.max as number[]),
         };
+      else if (module.name === "hsvcolorrandom") {
+        // 0xd：区间居中到 `colorn`（不生效写回基值）；步长与档数不动（P4g 步骤 1，`recenterHsvRange`）
+        const base = module.base;
+        module.fields = {
+          ...module.fields,
+          ...recenterHsvRange(
+            {
+              huemin: f32(base.huemin as number),
+              span: f32(base.span as number),
+              saturationmin: f32(base.saturationmin as number),
+              saturationrange: f32(base.saturationrange as number),
+              valuemin: f32(base.valuemin as number),
+              valuerange: f32(base.valuerange as number),
+            },
+            state.target,
+          ),
+        };
+      } else if (module.name === "colorlist") {
+        // 0xe：平移 = `colorn` 的 HSV − 记录里第一项的 HSV，不生效写 0
+        module.fields = { ...module.fields, shift: state.listShift(module.base.colors as number[]) };
+      }
+    }
     for (const module of this.operators)
       if (module.name === "colorchange")
         module.fields = {

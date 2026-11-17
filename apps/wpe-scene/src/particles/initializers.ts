@@ -6,11 +6,13 @@
  * 噪声类（`turbulentvelocityrandom`、`positionoffsetrandom`）另读场景时间 `T`（`context.time`）。
  */
 import { moduleAudio } from "./audio";
+import type { ParticleColumns } from "./columns";
+import { hsv2rgb } from "./colorn";
 import { f32, lerp, mulBasis } from "./f32";
 import type { ParticleFields, ParticleRunContext } from "./modules";
 import { snoise1, snoise2 } from "./noise";
 import { PI } from "./noiseTables";
-import type { ParticleRandom } from "./random";
+import { hueRandOf, type ParticleRandom } from "./random";
 
 const LIFE_MIN = f32(0.001);
 
@@ -41,6 +43,75 @@ export function colorRandom(fields: ParticleFields, { columns, random, slot }: P
   const t = drawT(random, fields.exponent as number);
   for (let i = 0; i < 3; i++)
     columns.color0[i][slot] = f32(columns.color0[i][slot] * lerp(min[i], f32(max[i] - min[i]), t));
+}
+
+/** 把 `(cr, cg, cb)` 乘到新粒子的初值颜色列（case 3 / 4 / 5 的共同尾巴，`0x14023b806`–`0x14023b860`）。 */
+function multiplyColor0(columns: ParticleColumns, slot: number, rgb: readonly number[]): void {
+  for (let i = 0; i < 3; i++) columns.color0[i][slot] = f32(columns.color0[i][slot] * rgb[i]);
+}
+
+/**
+ * `hsvcolorrandom`（initializer 4，`0x14023b74a`–`0x14023b866`，rea-p4g-color.md 2.1【确】，实测 P4g 步骤 0b 全部成立）：
+ * ```
+ * r = rand()                                                     // 每粒子无条件一次，s = 0 也抽
+ * k = (int)(r / 32767 · (s + 1)); k = min(k, s); k = max(k, 0)    // 全 float32，s = steps；共 s + 1 档，r = 32767 时被钳到 s
+ * H = k · step + huemin                                           // step 在解析时算好（`hsvStep`）
+ * S = uA · srange + smin;  V = uA · vrange + vmin                 // 先 S 后 V 各一次 R，不钳制
+ * rgb0 *= hsv2rgb(H, S, V)                                        // H 不取模，交给 hsv2rgb 的 fmod(6h, 6)：H ≥ 1 回绕，H < 0 得灰色
+ * ```
+ * - `rand()` 不是 `R` 的流（WPE 是 CRT 的每线程 LCG，我们复刻不了种子），所以档位来自 `random.hueRand()`（`random.ts`，独立的源，不推动
+ *   `a()` 的序列）；单测与回放用 `SeededRandom.hue = injectedHue([...])` / `fixedHue(r)` 固定。
+ * - `fields` 里的 `huemin`、`saturationmin`、`saturationrange`、`valuemin`、`valuerange` 是 `colorn` 重算（0xd，`recenterHsvRange`）会
+ *   改的字段；`step`、`steps` 不动（重算不碰步长与档数）。
+ */
+export function hsvColorRandom(fields: ParticleFields, { columns, random, slot }: ParticleRunContext): void {
+  const steps = fields.steps as number;
+  const r = hueRandOf(random);
+  let k = Math.trunc(f32(f32(f32(r) / 32767) * f32(steps + 1)));
+  k = Math.max(Math.min(k, steps), 0);
+  const hue = f32(f32(f32(k) * (fields.step as number)) + (fields.huemin as number));
+  const saturation = f32(f32(random.a() * (fields.saturationrange as number)) + (fields.saturationmin as number));
+  const value = f32(f32(random.a() * (fields.valuerange as number)) + (fields.valuemin as number));
+  multiplyColor0(columns, slot, hsv2rgb(hue, saturation, value));
+}
+
+/**
+ * `colorlist`（initializer 5，`0x14023b86b`–约 `0x14023ba80`，rea-p4g-color.md 2.2【确】；实测 `list-*` 全部成立）：
+ * ```
+ * idx = uniform_int(0, n − 1)                               // 一个 u32，n = 1 也抽
+ * (h, s, v) = colors[idx]                                   // 已是 HSV（解析时 rgb2hsv）
+ * [lo, hi] = [max(x − noise, 0), min(x + noise, 1)]          // 三个分量各自的区间，noise 为负时 lo > hi 照常
+ * H = uA(hlo, hhi) + shift.h;  S = uA(slo, shi) + shift.s;  V = uA(vlo, vhi) + shift.v     // 依次抽 H、S、V
+ * H = H − floor(H);  S = clamp01(S);  V = clamp01(V)
+ * rgb0 *= hsv2rgb(H, S, V)
+ * ```
+ * 每粒子 4 次抽取，顺序下标、H、S、V，和 WPE 的 4 个 u32 一一对应（WPE 偶有拒绝重抽，下面）。`uA(lo, hi) = unit · (hi − lo) + lo`，
+ * 取 `random.a()`（`unit`，区间 [0, 1) 时与 `uA` 逐位相同）。
+ * - **下标映射**：WPE 的 `std::uniform_int_distribution<int>(0, n − 1)` 用 Lemire 乘法法，取整个 u32，`v = u32 · n`（64 位）的高 32 位，
+ *   低 32 位 `< 2³² mod n` 时重抽（概率 `(2³² mod n) / 2³²`，n 为 2 的幂时为 0）。我们没有裸 u32，用 `random.a()`（24 位 `unit`）
+ *   `idx = min(trunc(unit · n), n − 1)`：**差别**是 (1) 精度 24 位而不是 32 位，n 大到 2²⁴ 以上才有偏，颜色表不会有这么多项；
+ *   (2) 没有拒绝重抽，所以我们每粒子恒为 4 次抽取，WPE 偶尔多 1 次，之后的粒子序列错位（序列本来就不复刻，只有 idx 的边界随机时用得到）。
+ * - `fields.shift` 是 0xe 记录写的 HSV 平移（`colorn` 生效时 = `colorn` 的 HSV 减第一项的 HSV，否则 0）。
+ */
+export function colorList(fields: ParticleFields, { columns, random, slot }: ParticleRunContext): void {
+  const colors = fields.colors as number[];
+  const count = colors.length / 3;
+  const index = Math.min(Math.trunc(f32(random.a() * count)), count - 1);
+  const shift = fields.shift as number[];
+  const noises = [fields.huenoise as number, fields.saturationnoise as number, fields.valuenoise as number];
+  const drawn = [0, 1, 2].map((i) => {
+    const x = colors[index * 3 + i];
+    const noise = noises[i];
+    const lower = f32(x - noise);
+    const upper = f32(x + noise);
+    const lo = lower > 0 ? lower : 0;
+    const hi = 1 > upper ? upper : 1;
+    return f32(f32(f32(random.a() * f32(hi - lo)) + lo) + shift[i]);
+  });
+  const hue = f32(drawn[0] - Math.floor(drawn[0]));
+  const saturation = drawn[1] < 0 ? 0 : drawn[1] > 1 ? 1 : drawn[1];
+  const value = drawn[2] < 0 ? 0 : drawn[2] > 1 ? 1 : drawn[2];
+  multiplyColor0(columns, slot, hsv2rgb(hue, saturation, value));
 }
 
 /**

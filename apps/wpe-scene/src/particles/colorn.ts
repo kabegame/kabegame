@@ -4,7 +4,8 @@
  *
  * 两种作用方式可以同时生效：
  * - **平移：** 每个颜色模块的颜色按「`colorn` 与系统色的 HSV 差」平移（0xb `colorrandom` 的 min、max，0xc `colorchange` 的
- *   startvalue、endvalue，两端各自平移）。
+ *   startvalue、endvalue，两端各自平移）。P4g 步骤 1 起另有两种记录：0xd `hsvcolorrandom` 把色相区间与 S / V 区间居中到 `colorn`
+ *   （`recenterHsvRange`，步长不动），0xe `colorlist` 把 `colorn` 与第一项的 HSV 差当平移（`ColornState.listShift`）。
  * - **实例颜色：** 系统标志 `0x200000`（场景 `version` < 5，或没有颜色模块）时，新粒子的颜色初值是 `colorn`，颜色模块再乘到它上面。
  *
  * 运行中改值时从基值重算（记录里保留基色与系统色的 HSV），不在上一次的结果上累加。子系统另要父的生效位（`colornState` 的
@@ -112,9 +113,117 @@ export function roundTrip5(value: number): number {
   return f32(Number(f32(value).toFixed(5)));
 }
 
+/**
+ * `hsvcolorrandom` 的 0xd 记录里参与重算的基值（rea-p4g-color.md 3.2）：`huemin`、有符号区间 `span`（`s ≤ 1` 时是 0）、
+ * S / V 各自的 min 与 range。步长、档数不在重算里。
+ */
+export interface HsvRangeBase {
+  huemin: number;
+  span: number;
+  saturationmin: number;
+  saturationrange: number;
+  valuemin: number;
+  valuerange: number;
+}
+
+/**
+ * 0xd 重算（`FUN_1401d15a0` case 0xd，rea-p4g-color.md 3.2；全部 float32）：
+ * ```
+ * 不生效：写回基值
+ * 生效（hc, sc, vc = colorn 的 HSV）：
+ *   huemin'   = (hc − (span·0.5 + huemin)) + huemin         // 不取模、不钳；span 有符号
+ *   smin'     = clamp01((sc − (srange·0.5 + smin)) + smin)
+ *   srange'   = (smin' + srange > 1) ? 1 − smin' : srange     // 超出 1 时截短
+ *   （V 同 S，用 vc）
+ * ```
+ * `target` 为 null 表示不生效。`span` 是 0 时（`huesteps ≤ 1`）`huemin' = hc`：实测 `hsv-colorn-fixed` 的粒子色相就是 `colorn` 的色相
+ * （P4g 步骤 0b 更正读码的「`span = d == 0 ? 1 : d`」，那条只在 `s > 1` 分支里成立，已在解析时处理）。
+ */
+export function recenterHsvRange(base: HsvRangeBase, target: readonly number[] | null): HsvRangeBase {
+  if (!target) return { ...base };
+  const [hc, sc, vc] = target;
+  const huemin = f32(f32(hc - f32(f32(base.span * 0.5) + base.huemin)) + base.huemin);
+  const center = (min: number, range: number, c: number): [number, number] => {
+    const lo = clamp01(f32(f32(c - f32(f32(range * 0.5) + min)) + min));
+    return [lo, f32(lo + range) > 1 ? f32(1 - lo) : range];
+  };
+  const [saturationmin, saturationrange] = center(base.saturationmin, base.saturationrange, sc);
+  const [valuemin, valuerange] = center(base.valuemin, base.valuerange, vc);
+  return { huemin, span: base.span, saturationmin, saturationrange, valuemin, valuerange };
+}
+
+/**
+ * `colorlist` 的颜色项解析（rea-p4g-color.md 1.3 第 4 步，`FUN_1401c7bb9`–`0x1401c7db5`）：`s` 是一个字符串项，返回原值的三个分量
+ * （不 ÷255、不钳制），丢掉时返回 null。
+ * ```
+ * 空串：(0, 0, 0)
+ * a = atof(从 p)；在 p 之后找空格，找不到丢掉；p 落在该空格上，跳过连续空格；b = atof(从 p)；再找空格，找不到丢掉；跳过空格；c = atof(从 p)
+ * ```
+ * 所以 `"a b "` 是 (a, b, 0)，`"a "` 丢掉；只认空格（0x20）；第四个及以后的数忽略。`atof` 遇到非数字得 0。
+ * 「在 p 之后找空格」从当前数的起点找：前导空格会让第一次找到的空格落在第一个数之前【推：读码是 `strchr` 的写法，没有单独测前导空格的串】。
+ */
+export function parseColorItem(s: string): [number, number, number] | null {
+  if (s === "") return [0, 0, 0];
+  const atof = (from: number): number => {
+    const m = /^[ \t\n\v\f\r]*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(s.slice(from));
+    return m ? Number(m[0]) : 0;
+  };
+  const skipSpaces = (from: number): number => {
+    let p = from;
+    while (s[p] === " ") p++;
+    return p;
+  };
+  const a = atof(0);
+  let q = s.indexOf(" ", 0);
+  if (q < 0) return null;
+  let p = skipSpaces(q);
+  const b = atof(p);
+  q = s.indexOf(" ", p);
+  if (q < 0) return null;
+  p = skipSpaces(q);
+  return [a, b, atof(p)];
+}
+
+/**
+ * `colorlist` 的 `colors` 取值 → 有效项的 RGB 原值（按顺序，float32）。三种形状：
+ * - 数组：逐项，只认字符串项，`parseColorItem` 切不出三个数的整项丢掉；
+ * - 字符串：当作只有这一项的列表【推：实测 `colors` 缺键时粒子是白色——缺省值字符串 `"1 1 1"` 被当成一项白色；读码说非数组就跳过循环，
+ *   和实测不符，这里让「缺省字符串」与「显式写同一个字符串」走同一条路】；
+ * - 缺键：同缺省字符串 `"1 1 1"`（`missing`）；其它形状（数字、对象）：空列表（调用方在解析处按不支持报）。
+ */
+export function colorListRgb(raw: unknown, missing = false): [number, number, number][] {
+  const items = missing ? ["1 1 1"] : Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [];
+  const out: [number, number, number][] = [];
+  for (const item of items) {
+    if (typeof item !== "string") continue;
+    const rgb = parseColorItem(item);
+    if (rgb) out.push([f32(rgb[0]), f32(rgb[1]), f32(rgb[2])]);
+  }
+  return out;
+}
+
+/**
+ * 出生时的 HSV 列表（扁平 `h, s, v, h, s, v, …`）：每项 `rgb2hsv`（分量大于 1 时 `v > 1`，出生时 V 钳到 [0, 1] 所以等效 `v = 1`）；
+ * 没有有效项时补一项 HSV (0, 1, 1)（纯红，1.3 第 6 条）。系统色与这一步不同：没有有效项时不改系统色（`particleColorSystem`）。
+ */
+export function colorListHsv(rgb: readonly (readonly number[])[]): number[] {
+  if (!rgb.length) return [0, 1, 1];
+  return rgb.flatMap((color) => rgb2hsv(color));
+}
+
 export interface ColornState {
   /** 三条都满足：已设（r ≥ 0）、不是三个分量都和系统色差 < 0.9/255、系统 flags 没有 bit3（7.3）。 */
   active: boolean;
+  /**
+   * 生效时 `colorn` 的 HSV（`hc, sc, vc`），否则 null：0xd 记录把 `hsvcolorrandom` 的区间居中到它（`recenterHsvRange`），0xe 记录用它
+   * 减第一项的 HSV 当平移（`listShift`）。
+   */
+  target: readonly [number, number, number] | null;
+  /**
+   * 0xe（`colorlist`）的平移：生效时 `(hc − h0, sc − s0, vc − v0)`，`(h0, s0, v0)` 是记录里第一项的 HSV（不是系统色的 HSV，二者
+   * 通常相同；列表没有有效项时 `h0` 是补出的红色而系统色是别的模块的，rea-p4g-color.md 3.3）；不生效写 (0, 0, 0)。
+   */
+  listShift(first: readonly number[]): [number, number, number];
   /**
    * 新粒子 rgb 初值里 `colorn` 的那一项：`0x200000`（`version` < 5 或没有颜色模块）且生效时是 `colorn`，否则 (1, 1, 1)（7.3「实例
    * 颜色与亮度」）。这里不乘 `k`：HDR 下的 `brightness` 由 `ParticleSystem.applyColorn` 再逐通道乘上（`instanceBrightness`）。颜色
@@ -145,11 +254,13 @@ export function colornState(
     !(near(0) && near(1) && near(2)) &&
     (def.flags & DISABLE_COLORN) === 0;
   const unchanged = (color: readonly number[]) => [f32(color[0]), f32(color[1]), f32(color[2])];
-  if (!active) return { active, instanceColor: [1, 1, 1], shift: unchanged };
+  if (!active) return { active, target: null, listShift: () => [0, 0, 0], instanceColor: [1, 1, 1], shift: unchanged };
   const target = rgb2hsv(value);
   const origin = rgb2hsv(system);
   return {
     active,
+    target: [target[0], target[1], target[2]],
+    listShift: (first) => [f32(target[0] - first[0]), f32(target[1] - first[1]), f32(target[2] - first[2])],
     instanceColor: def.colorSystem.instanceColor ? value : [1, 1, 1],
     shift: (color) => shiftColor(color, target, origin),
   };

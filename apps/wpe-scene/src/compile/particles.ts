@@ -11,7 +11,7 @@
 import type { ScenePass } from "./bundle";
 import { isScriptValue, isUserBinding } from "./bindings";
 import type { JsonObject, SceneScalar } from "./model";
-import { roundTrip5 } from "../particles/colorn";
+import { colorListRgb, hsv2rgb, roundTrip5 } from "../particles/colorn";
 import { eulerBasis } from "../particles/controlpoints";
 import { f32 } from "../particles/f32";
 import { asUInt32, readParticleModule, type ParticleCategory, type ParticleModule } from "../particles/modules";
@@ -865,7 +865,15 @@ const moduleName = (entry: unknown): unknown =>
  * if 一个都没命中: 找第一个 operator colorchange: color = startvalue（缺省 "1 1 1"，不 ÷255），hascolor = true
  * 系统色 = sprintf("%.5f %.5f %.5f", color) 读回
  * ```
- * `hsvcolorrandom`、`colorlist` 也算颜色模块（置 `hascolor`），但这两个模块本身报不支持，系统色不跟着它们算。
+ * P4g 步骤 1（rea-p4g-color.md 3.1【确】）起 `hsvcolorrandom`、`colorlist` 也按顺序参与（后者覆盖前者）：
+ * ```
+ * hsvcolorrandom: color = hsv2rgb(clamp01((huemax + huemin)·0.5), clamp01((smax + smin)·0.5), clamp01((vmax + vmin)·0.5))；hascolor = true
+ *                 // 不看 huesteps；缺键取缺省 0 / 1 / 0.5 / 1 / 0.5 / 1
+ * colorlist: color = 第一个有效项的 RGB 原值（不 ÷255、不 rgb2hsv）；hascolor = true
+ *            // 空串项是 (0, 0, 0)；切不出三个数的项丢掉看下一项；没有有效项（colors: []）时系统色不变、也不置 hascolor
+ * ```
+ * 缺 `colors` 键按一项白色算（`colorListRgb` 的 `missing`）：实测缺键时粒子是白色，缺省字符串 `"1 1 1"` 就是一项白色，系统色与它同一条路
+ * 【推：系统色这一支实测没有单独测；读码说非数组跳过循环，那样缺键会得 `hascolor = false`，与出生白色不一致，取实测一致的一边】。
  * `0x200000 = sceneVersion < 5 || !hascolor`（7.4）。
  */
 export function particleColorSystem(json: JsonObject, sceneVersion: number): ParticleColorSystem {
@@ -879,7 +887,30 @@ export function particleColorSystem(json: JsonObject, sceneVersion: number): Par
       const max = rawVec3(source.max, [255, 255, 255]).map(f32);
       color = min.map((low, i) => f32(f32(f32(f32(max[i] - low) * 0.5) + low) * INV_255));
       hasColor = true;
-    } else if (name === "hsvcolorrandom" || name === "colorlist") hasColor = true;
+    } else if (name === "hsvcolorrandom") {
+      const source = entry as Record<string, unknown>;
+      const num = (key: string, fallback: number): number => {
+        const value = staticValue(source[key]);
+        return f32(typeof value === "number" && Number.isFinite(value) ? value : fallback);
+      };
+      const mid = (lo: string, hi: string, loDefault: number, hiDefault: number): number => {
+        const mean = f32(f32(num(hi, hiDefault) + num(lo, loDefault)) * 0.5);
+        return mean < 0 ? 0 : mean > 1 ? 1 : mean;
+      };
+      color = hsv2rgb(
+        mid("huemin", "huemax", 0, 1),
+        mid("saturationmin", "saturationmax", 0.5, 1),
+        mid("valuemin", "valuemax", 0.5, 1),
+      );
+      hasColor = true;
+    } else if (name === "colorlist") {
+      const source = entry as Record<string, unknown>;
+      const first = colorListRgb(staticValue(source.colors), source.colors === undefined || source.colors === null)[0];
+      if (first) {
+        color = first;
+        hasColor = true;
+      }
+    }
   }
   if (!hasColor) {
     const change = (particleModuleEntries(json, "operator") ?? []).find((entry) => moduleName(entry) === "colorchange");
