@@ -3631,8 +3631,9 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | FR1 单测与检查 | Windows | `preview_settings` 单测与 cargo check；vue-tsc、宿主 tsc；`wpeSettings`、`wpeForceRender`、`WpeSettingsFields`、`WallpaperPointerOverlay`、`WpeLoadingOverlay`、`ImageContent.wallpaper`、`WpeSceneView`、`wpeSceneStyle`、壁纸窗口、预览弹窗与宿主 `host` / `sceneStyle` 的 vitest；Prettier | 0 error、全过；变异全被抓到 | 2026-11-17 Claude：core `preview_settings` 7 例过；应用 crate 的 cargo check 因 dev 占着 CEF 的 DLL（os error 32）没跑成，重启 dev 时会编到；vue-tsc、宿主 tsc 0 error；应用相关 32 个文件 351 例中只有 `wpeWebVolume.test.ts` 4 例既有失败（`History is not defined`，来自 `807bf80e` 的垫片改动，与本项无关），宿主 54 例全过；12 处变异全抓到 |
-| [ ] | FR2 「我就要看」 | Windows dev（重启后的新构建），图库预览 | 预览一张显示不了的场景（如 dino_run，13518），点红字原因下面的「我就要看」，先点取消、再点打开 | 链接是文字不是按钮、悬停手形；取消什么都不变；打开后场景重新加载并渲染出来，名称右边出现警告色「强制渲染」，右侧预览设置里的开关是开的 | 要重启 dev（加了 Rust 命令与预览设置键） |
-| [ ] | FR3 预览侧栏开关 | Windows dev，图库预览 | 在右侧预览设置里打开 / 关掉「强制渲染」 | 打开先弹同一个确认框，取消后开关仍是关；关掉不确认、场景回到封面与红字原因，标题的标记消失 | |
+| [ ] | FR2 「我就要看」 | Windows dev（重启后的新构建），图库预览 | 预览一张显示不了的场景（如 dino_run，13518），点红字原因下面的「我就要看」，先点取消、再点打开 | 链接是文字不是按钮、悬停手形；取消什么都不变；打开后立刻回到加载初态（缩略图模糊、进度从 0 走），再渲染出来，名称右边出现警告色「强制渲染」，右侧预览设置里的开关是开的 | 要重启 dev（加了 Rust 命令与预览设置键） |
+| [ ] | FR3 预览侧栏开关 | Windows dev，图库预览 | 在右侧预览设置里打开 / 关掉「强制渲染」 | 打开先弹同一个确认框，取消后开关仍是关；打开 / 关掉都立刻回到加载初态、进度从 0 重走；关掉不确认、加载完回到封面与红字原因，标题的标记消失 | |
 | [ ] | FR4 设置页（桌面） | Windows dev，壁纸窗口模式 | 设置页「壁纸设置」打开「强制渲染」，桌面换成一张显示不了的场景 | 没开时桌面的红字原因下面是一行文字「可以打开壁纸设置 -> 强制渲染」（不是链接）；打开先确认，桌面上的场景照常渲染；关掉后回到封面与那行文字 | |
 | [ ] | FR5 应用背景与不该出提示的地方 | Windows dev | 把一张显示不了的场景（如 dino_run）设为当前壁纸并开应用背景；预览里加载超时的场景；已开强制渲染仍画不出来的场景 | 应用背景直接强制渲染出来（不看这张的预览设置）；后两种都没有「我就要看」 | |
+| [x] | FR7 开关是刷新键（单测） | Windows | `ImageContent.wallpaper` 的 vitest；vue-tsc；Prettier；变异（key 不带开关、切换时不回初态） | 场景切换开关时实时画面重挂、进度回到 `page` / 0、底部原因收起、缩略层不动且不再发 ready；网页壁纸不重挂；变异都被抓到 | 2026-11-17 Claude：`components/image/` 5 个文件 38 例过，vue-tsc 0 error，两处变异都抓到 |
 | [ ] | FR6 非 Windows | macOS、Linux | 同 FR2、FR3 | 同 Windows（Linux 没有覆盖层，链接直接可点） | 本机不能测 |

@@ -109,7 +109,7 @@
         <WpeWallpaperContent
           v-if="WPE_LIVE"
           ref="wallpaperContentRef"
-          :key="`wallpaper:${image.id}`"
+          :key="wallpaperContentKey"
           class="ic-wallpaper absolute inset-0 z-2 transition-opacity duration-300"
           :class="wallpaperShown ? 'opacity-100' : 'opacity-0'"
           :image-id="image.id"
@@ -625,10 +625,15 @@ const loadFailure = ref<string[] | null>(null);
 let loadSettleTimer: number | undefined;
 
 function resetWallpaper() {
+  wallpaperReadySent = false;
+  restartWallpaperLoad();
+}
+
+/** 实时画面回到加载初态：揭开、失败与进度都重来（换图，或强制渲染开关切换后宿主重挂）。缩略层不动。 */
+function restartWallpaperLoad() {
   wallpaperFatal.value = false;
   wallpaperFailed.value = false;
   wallpaperLive.value = false;
-  wallpaperReadySent = false;
   window.clearTimeout(wallpaperMinTimer);
   wallpaperMinElapsed.value = false;
   window.clearTimeout(loadSettleTimer);
@@ -738,6 +743,18 @@ watch(
   },
   { immediate: true },
 );
+
+/**
+ * 场景的强制渲染开着：它是实时画面的刷新键（用户定）。切换时按新 key 重挂 `WpeWallpaperContent`（新宿主带着新设置从头加载），
+ * 这里回到加载初态、进度从 0 重走，不然打开后要等宿主整场重载完才有反应、看着像没生效。网页壁纸不看它，不重挂。
+ */
+const wallpaperForced = computed(() => isWpeScene.value && !!props.playback?.sceneSettings?.forceRender);
+const wallpaperContentKey = computed(
+  () => `wallpaper:${props.image.id}:${wallpaperForced.value ? "forced" : "normal"}`,
+);
+watch(wallpaperForced, () => {
+  if (mode.value === "wallpaper") restartWallpaperLoad();
+});
 
 // wallpaper 形态换封面：缩略层从新封面重来（实时画面不受影响）
 watch(thumbPath, () => {

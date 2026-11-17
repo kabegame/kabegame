@@ -4,6 +4,7 @@ import { defineComponent, h } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ImageContent from "./ImageContent.vue";
 import type { ImageInfo } from "@/types/image";
+import type { WallpaperPlayback } from "@/components/wallpaper/types";
 
 vi.mock("@/stores/ui", async () => {
   const { ref } = await import("vue");
@@ -275,6 +276,45 @@ describe("ImageContent 的壁纸形态：缩略层打底，实时画面当原图
     expect(bottom(desktop)?.props("forceRenderPrompt")).toBe("settings");
     const background = await failed("x-wpe/scene", ["tex:animation"], { offerForceRender: false });
     expect(bottom(background)?.props("forceRenderPrompt")).toBeNull();
+  });
+
+  it("强制渲染开关是场景实时画面的刷新键：切换时重挂、回到加载初态、进度从 0 重走；缩略层不动；网页壁纸不重挂", async () => {
+    const playback = (forceRender: boolean) => ({ volume: 1, sceneSettings: { forceRender } }) as WallpaperPlayback;
+    const scene = mountContent(wallpaper("7", "x-wpe/scene", "C:/workshop/7/preview.jpg"), {
+      offerForceRender: true,
+      playback: playback(false),
+    });
+    await thumbEvent(scene, "load");
+    await emitLive(scene, "progress", { stage: "gpu", done: 1, total: 1 });
+    await emitLive(scene, "fail", ["tex:animation"]);
+    await advance(250);
+    const overlays = () => scene.findAllComponents(OverlayStub);
+    expect(overlays().map((item) => item.props("placement"))).toEqual(["bottom"]);
+
+    await scene.setProps({ playback: playback(true) });
+    await flushPromises();
+    expect(mounts).toBe(2);
+    expect(live(scene).props("sceneSettings")).toEqual({ forceRender: true });
+    // 底部原因收起，进度覆盖层回到初态
+    expect(overlays()).toHaveLength(1);
+    expect(overlays()[0].props("placement")).toBeUndefined();
+    expect(overlays()[0].props()).toMatchObject({ stage: "page", value: 0, failure: null });
+    expect(thumb(scene).exists()).toBe(true);
+    // 新宿主照常走完：满 300 ms 才揭开；缩略层已发过 ready，不再发
+    await emitLive(scene, "live");
+    await advance(300);
+    expect(shown(scene)).toBe(true);
+    expect(scene.emitted("ready")).toHaveLength(1);
+    // 关掉同样刷新
+    await scene.setProps({ playback: playback(false) });
+    await flushPromises();
+    expect(mounts).toBe(3);
+    expect(shown(scene)).toBe(false);
+
+    const web = mountContent(wallpaper("8", "x-wpe/web", "C:/workshop/8/preview.jpg"), { playback: playback(false) });
+    await web.setProps({ playback: playback(true) });
+    await flushPromises();
+    expect(mounts).toBe(4);
   });
 
   it("换成另一张壁纸：覆盖层从头再来", async () => {

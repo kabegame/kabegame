@@ -913,7 +913,9 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
   「强制渲染」）。打开一律先确认（`utils/wpeForceRender.ts` 的 `confirmWpeForceRender`，警告样式，提示画面可能缺东西、错位或和
   WPE 不一致）：设置页与预览侧栏在字段组 `WpeSettingsFields` 里拦 `update`，取消就不报；预览的「我就要看」由预览弹窗确认后写这张的
   预览设置；关掉不确认。值和四个场景选项一起经场景设置消息（`wpeSceneSettingsOf` 的 `forceRender`）交给宿主，桌面由壁纸窗口读
-  `get_wpe_scene_force_render` 并跟 `setting-change`。
+  `get_wpe_scene_force_render` 并跟 `setting-change`。切换就是场景实时画面的刷新键（用户定）：`ImageContent` 按它给
+  `WpeWallpaperContent` 换 key 重挂、回到加载初态，进度从 0 重走（缩略层不动、不再发 ready），不然要等宿主整场重载完才有反应、
+  看着像没生效；网页壁纸不看它、不重挂。
   - **原因下面的提示**（`WpeLoadingOverlay` 的 `forceRenderPrompt`，`ImageContent` 在场景显示不了、还没开强制渲染、原因不是
     `render:timeout` / `host:*` 时给）：预览（调用方给 `offerForceRender`）是「我就要看」链接文字（用户定：不做成按钮），点了确认后
     打开这张的强制渲染；预览画布上盖着拦指针的覆盖层，它把左键点击转交给带 `data-wallpaper-clickable` 的元素（见下「预览放大」的
