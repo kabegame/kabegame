@@ -424,4 +424,44 @@ describe("反射 pass（P13b2）", () => {
     state.layers.get(1)!.visible = false;
     expect(gpu.encode(scene, state)[0].draws).toHaveLength(1);
   });
+
+  it("名单随登记表增删刷新（L4）：运行中装进来、改名单后已装的对象，按结构代数进出反射 pass", async () => {
+    const bundle = bundleOf({ list: [0] });
+    const { gpu, scene, state } = await open(bundle);
+    const list = bundle.reflection!.list!;
+    /** 反射 pass 里画的对象名（副本的 bind group 标签是主 draw 的标签加 ` reflection`）。 */
+    const reflected = () =>
+      gpu
+        .encode(scene, state)[0]
+        .draws.map((draw) => /^layer \d+ (l\d+) .* reflection$/.exec(draw.bindGroup!.label)?.[1]);
+    const frame = () => {
+      scene.sync(state);
+      scene.update(FRAME, state);
+    };
+    expect(reflected()).toEqual(["l0"]);
+    // 运行中加对象 3（L5 的路）：登记表 addObject 原地把它插进名单，状态 addObject 加代数，备好、装上
+    const added = layerOf(3);
+    bundle.layers.push(added);
+    list.push(3);
+    state.addObject({ layer: added });
+    scene.installObject(await scene.prepareObject(added, state), state);
+    frame();
+    expect(reflected()).toEqual(["l0", "l3"]);
+    // 已装的对象 1 进名单：代数一变，下一次 `sync` 刷新
+    list.splice(1, 0, 1);
+    const version = state.structureVersion;
+    state.sortLayer(1, 1);
+    expect(state.structureVersion).toBe(version + 1);
+    frame();
+    expect(reflected()).toEqual(["l0", "l1", "l3"]);
+    // 登记表把 3 从名单摘掉（removeObject / replaceObject 的 reflected false）：代数一变就不再参加
+    list.splice(list.indexOf(3), 1);
+    state.sortLayer(3, 3);
+    frame();
+    expect(reflected()).toEqual(["l0", "l1"]);
+    // 代数不变时不重读名单（按结构代数缓存）
+    list.push(3);
+    frame();
+    expect(reflected()).toEqual(["l0", "l1"]);
+  });
 });

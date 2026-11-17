@@ -138,7 +138,7 @@
  *   深度也不清。没有这种步骤的场景不建深度，管线与 render pass 和改前逐字相同。
  * - 被依赖（P8 步骤 4，`SceneLayer.dependedOn`，rea-p8-render 第 1、2 节，p8-REPORT 结论 7–9）：渲染图已排成合成路径（`graph.ts`），这里
  *   多认三样东西。
- *   - 独占 RT：`populate` 在建完全部 runtime 之后、任何 `buildLayer` 之前给每个被依赖的图层建一张（`layerTargets`，尺寸 `compositeSize`、
+ *   - 独占 RT：备对象时给每个被依赖的图层建一张（L4，`stageObject`），`populate` 在任何 `buildLayer` 之前把它们全部放进 `layerTargets`（尺寸 `compositeSize`、
  *     场景格式、采样 `compositeSampling`，同它的合成 RT），随场景销毁；它就是本层的合成 RT 0（`ensureComposites`），其余从池里借。跨帧、
  *     跨 effect 开关的重建都保留、不清（WPE 帧之间不清；被依赖者排在引用方后面时引用方读到上一帧，结论 9）。引用方的
  *     `{ kind: "layer" }` 解析到它（`resolveTexture`），几个引用方共用同一张，采样器与 `g_Texture<n>Resolution` 随它。
@@ -155,6 +155,14 @@
  *   - 建资源：`buildableLayers` 不看被依赖图层自身与祖先的可见性（WPE `0x1000`）。
  *   - 编码：不可见（自身或祖先）时照跑它的 op，只跳过画到「场景」的那一步上屏（`layerOpsToRun`），顶层与组画子树两处同一个判断。
  *     语料里的被依赖者都不是组（是组的照报 `dependency:group`），组隐藏时整棵子树照旧不画。
+ * - 按对象装卸（L4，`.claude/plans/wpe-import/3-scene/live/phase-l4-gpu-objects.md`）：`populate` = 场景级准备（场景目标、纹理、占位纹理、反射 RT、
+ *   阴影图集、深度附件、全部程序、视图、粒子索引、泛光、体积光）→ 全部对象并行 `prepareMain`（`prepareObject` 的主段：变形纹理、fbo、被依赖层的独占 RT、
+ *   程序与管线）→ 被依赖层的独占 RT 进表 → 按图层顺序 `installCore`（`installObject` 的主体：运行时、粒子序号、挂点、合成 RT、draw、粒子树预热）。
+ *   变体段（`prepareVariantsOf`）与投射者（`prepareShadowCasters` / `installShadowCasters`）整场加载时在 `build` 的错误作用域之外逐对象跑（顺序同以前），
+ *   单个对象时并进 `prepareObject` / `installObject`。场景级资源可增长：纹理按增量上传（`ensureTextures`）、fbo 池带引用计数（`fboPool`）、粒子索引
+ *   不够时重建（`ensureParticleIndices`）、裁切遮罩与挂点戳第一次用到才建、投射管线按键缓存；深度附件仍按加载时定一次。卸对象（`removeObject`，
+ *   `releaseRemoved` 的循环体）放掉它独有的资源与 fbo 引用、粒子序号、挂点、投射者。粒子序号由 `build` 的 `particleOrdinal` 给（宿主传登记表的），
+ *   反射名单按结构代数从活的 bundle 刷新（`syncReflectionList`）。
  * - 透明排序（P5d 步骤 4，`render/sortOrder.ts`，p5-REPORT「步骤 4 步骤 0：透明排序」）：透视场景且 `SceneGeneral.transparentSorting` 时，
  *   `encode` 顶层那一轮改按 `transparentDrawOrder`：先按原顺序跑不在半透明名单里的图层，再把半透明的（`SceneLayer.sortClass`）按「当帧
  *   `SceneState` 里的局部 origin · 当帧透视相机的视线方向（`viewVectors.forward`）」从大到小稳定排序后跑，`last` 排在最后。只换图层的先后，
@@ -859,6 +867,84 @@ interface LayerRuntime {
   signature: string;
   /** 粒子层的系统树（P4e 步骤 1、2）；图像层与没有可画模板的粒子层为 null。 */
   tree: ParticleTree | null;
+  /**
+   * 本层从 fbo 共享池取过引用的键（L4，`GpuScene.fboPool`）：卸对象时逐个减引用，归零才释放。同一个键取了几次就记几次；
+   * 文本层与槽 0 有用户纹理的图层的 fbo 是独占的（`textFbos`），不在这里。
+   */
+  fboKeys: string[];
+}
+
+/** 图层建 draw、备管线要的两样（`LayerRuntime` 的一部分；备好还没装的对象也有，L4）。 */
+type LayerHandle = Pick<LayerRuntime, "layer" | "resources">;
+
+/** 绘制类步骤（建 draw、要程序与管线的那四种）。 */
+function isDrawLike(step: LayerPlan["steps"][number]): step is DrawLike {
+  return step.kind === "draw" || step.kind === "particles" || step.kind === "text" || step.kind === "mesh";
+}
+
+/** 一个模型网格的阴影投射者备好的程序与管线（L4，`prepareShadowCasters`）：装对象时照它建 draw（`installShadowCasters`）。 */
+interface ShadowCasterPrep {
+  step: MeshStep;
+  program: GpuProgram;
+  pipeline: GPURenderPipeline;
+}
+
+/** 投射者的归属与它独有的资源（L4：卸对象时 draw 的 uniform 缓冲与逐条目副本一起放掉）。 */
+interface ShadowCasterRecord {
+  object: number;
+  draw: Draw;
+  copies: Map<number, { block: UniformBlock; buffer: GPUBuffer; bindGroup: GPUBindGroup }>;
+}
+
+/**
+ * 备好的对象（L4，`GpuScene.prepareObject`）：装之前不进任何帧内结构（`layers`、`runtimeByObject`、draw 索引、`layerTargets`、
+ * `textFbos`、`morphTargets`），所以备的时候不改正在画的东西。不装时 `discardPrepared` 收回它建的（池化 fbo 的引用、独占的 fbo、
+ * 被依赖层的独占 RT、变形纹理）。只能装进备它的那个场景、只能装一次（`settled`）。
+ */
+export interface PreparedObject {
+  readonly layer: SceneLayer;
+  /** 备的那一刻的计划（`planOf`）；`prepared` 的键是它的步骤。 */
+  readonly plan: LayerPlan;
+  /** `prepareLayer` 的结果：计划里每个绘制步骤的程序与管线（含 HDR 反射副本的管线）。 */
+  readonly prepared: ReadonlyMap<DrawLike, PreparedDraw>;
+  /** 本层的资源：fbo 名 → `targets` 下标（池化的已取引用、独占的已建）、文本层的图集；合成 RT 装的时候借（变体段借过的已在里面）。 */
+  readonly resources: LayerResources;
+  /** 取过引用的 fbo 池键（装上后归运行时，`LayerRuntime.fboKeys`）。 */
+  readonly fboKeys: readonly string[];
+  /** 文本层与槽 0 有用户纹理的图层独占的 fbo（装的时候进 `textFbos`）；其余为 null。 */
+  readonly textFbos: TextFbo[] | null;
+  /** 被依赖图层的独占 RT（装的时候进 `layerTargets`）；不是被依赖的为 null。 */
+  readonly layerTarget: RenderTarget | null;
+  /** 本层的变形纹理（键同 `morphTargets`，装的时候进表）。 */
+  readonly morphs: ReadonlyMap<string, RenderTarget>;
+  /**
+   * 变体段（运行中 effect 开关、文本重排可能用到的程序、管线与合成 RT，`prepareVariantsOf`）：失败的原因（装的时候冻结这一层、记 warning），
+   * 成功为 null。整场加载时为 undefined：变体在 `build` 的错误作用域之外逐层另备（`prepareVariants`，坏 WGSL 只落在图层自己的作用域里）。
+   */
+  readonly variants: string | null | undefined;
+  /** 阴影投射者备好的程序与管线；整场加载时为 null（投射者在变体之后逐层另建，`buildShadowCasters`）。 */
+  readonly shadows: readonly ShadowCasterPrep[] | null;
+  /** 备它的场景（装进别的场景时抛错）。 */
+  readonly owner: GpuScene;
+  /** 已装上或已放弃。 */
+  settled: boolean;
+}
+
+/** 缺省的粒子序号（L4，`GpuScene.build` 的 `particleOrdinal` 没给时）：按 `bundle.layers` 里带 `particle` 的顺序数，之后装的对象接着往后数（同登记表）。 */
+function defaultParticleOrdinals(bundle: Pick<SceneBundle, "layers">): (object: number) => number {
+  const ordinals = new Map<number, number>();
+  let next = 0;
+  for (const layer of bundle.layers) if (layer.particle) ordinals.set(layer.object, next++);
+  return (object) => {
+    let ordinal = ordinals.get(object);
+    if (ordinal === undefined) ordinals.set(object, (ordinal = next++));
+    return ordinal;
+  };
+}
+
+/** 投射者管线的缓存键（L4，`shadowPipelineFor`）：程序、网格布局与 A2C 定一条管线（剔除恒 NONE、深度格式恒为阴影图集）。 */
+function shadowPipelineKey(program: GpuProgram, layout: MeshVertexLayout, a2c: boolean): string {
+  return `shadow|${program.index}|mesh:${layout.key}${a2c ? "|a2c" : ""}`;
 }
 
 type Op =
@@ -1247,8 +1333,15 @@ export class GpuScene {
   private readonly draws = new Set<Draw>();
   private readonly drawsByLayer = new Map<number, Draw[]>();
   private readonly drawsByPass = new Map<TargetKey, Draw[]>();
-  /** fbo 实体（`FboBindings` 的下标指向这里）。 */
+  /** fbo 实体（`FboBindings` 的下标指向这里）。卸对象放掉的下标留空、记进 `freeTargets`，之后建的 fbo 复用（L4）。 */
   private readonly targets: RenderTarget[] = [];
+  /** `targets` 里放掉的下标（L4，`dropTarget`）：没有一个运行时还指向它们，`addTarget` 先用它们。 */
+  private readonly freeTargets: number[] = [];
+  /**
+   * fbo 共享池（L4 起是字段、带引用计数，原来是 `populate` 的局部变量）：键是名字、尺寸、格式、寻址（非 unique）或图层与 effect 的 id
+   * （unique，每层独占），值是 `targets` 下标与取用它的次数。装对象时取（`acquireFbo`），卸对象时还（`releaseFbo`），归零释放。
+   */
+  private readonly fboPool = new Map<string, { id: number; refs: number }>();
   /** 场景目标：`current` 是这一帧画的那张，`alternate` 只在清屏可能关掉时有（L11）。 */
   private current: SceneTarget | null = null;
   private alternate: SceneTarget | null = null;
@@ -1259,10 +1352,13 @@ export class GpuScene {
   private reflectionTargets: ReflectionTargets | null = null;
   /** 阴影图集（P13d，`render/shadows.ts`）：有阴影档位与阴影计数时才有 */
   private shadowAtlas: ShadowAtlas | null = null;
-  /** 阴影 pass 的投射者绘制（P13d）：不透明且 castshadow 的模型网格，按加载时的 bundle 建 */
+  /** 阴影 pass 的投射者绘制（P13d）：不透明且 castshadow 的模型网格，按对象建（L4：`installShadowCasters`） */
   private shadowCasters: ShadowCasterDraw[] = [];
-  /** 投射者 draw → 所属对象（P6d3：对象被删时把它的投射者从 `shadowCasters` 去掉）。 */
-  private readonly shadowCasterOwners = new Map<ShadowCasterDraw, number>();
+  /** 投射者 → 所属对象与它独有的资源（P6d3、L4：卸对象时把它的投射者从 `shadowCasters` 去掉并释放）。 */
+  private readonly shadowCasterRecords = new Map<ShadowCasterDraw, ShadowCasterRecord>();
+  /** 投射者的管线（L4）：按「程序、网格布局、A2C」缓存（`shadowPipelineFor`），同 `pipelines` / `readyPipelines` 的两张表。 */
+  private readonly shadowPipelines = new Map<string, Promise<GPURenderPipeline>>();
+  private readonly readyShadowPipelines = new Map<string, GPURenderPipeline>();
   /** 正在编码的这一帧的状态（P13d）：投射者每帧按它取模型的世界矩阵（脚本、关键帧可能移动了模型） */
   private encodingState: SceneState | null = null;
   /**
@@ -1345,9 +1441,12 @@ export class GpuScene {
   private objectCamera = false;
   /** 本帧的视差（P5a 步骤 2，`setParallax`）：null 为关着，绘制不加平移。 */
   private parallax: SceneParallax | null = null;
-  /** 粒子层全场共用的索引缓冲（`quadIndices`），按最大的 `maxcount` 建一次；没有粒子层时为 null。 */
+  /**
+   * 粒子层全场共用的索引缓冲（`quadIndices`），建场景时按最大的 `maxcount` 建；之后装的对象要的更多时重建（L4，`ensureParticleIndices`），
+   * draw 不持有它、编码时现取。没有粒子层时为 null。
+   */
   private particleIndices: { buffer: GPUBuffer; format: GPUIndexFormat; particles: number } | null = null;
-  /** 粒子层（`objects` 下标）→ 第几个粒子层（`bundle.layers` 里带 `particle` 的顺序），定种子用。 */
+  /** 粒子层（`objects` 下标）→ 粒子序号（定种子用，`build` 的 `particleOrdinal` 给）：装对象时取一次，卸时删（L4）。 */
   private readonly particleOrdinals = new Map<number, number>();
   /** operator 遍数（`ParticleOptions.passes`，运行中由 `setFrameRate` 改）：新建的系统树用它。 */
   private particlePasses: 1 | 2;
@@ -1400,7 +1499,10 @@ export class GpuScene {
    * 解析到这里；跨帧、跨重建保留，随场景销毁。
    */
   private readonly layerTargets = new Map<number, RenderTarget>();
-  /** bundle 的全部图层（含没有资源的分组节点），按 `objects` 下标：组的尺寸、`copyBackground` 与父链上组的层数从这里查。 */
+  /**
+   * bundle 的全部图层（含没有资源的分组节点），按 `objects` 下标：组的尺寸、`copyBackground` 与父链上组的层数从这里查。建场景时按
+   * `bundle.layers` 填，之后随装卸维护（L4；卸的图层还是别的图层的组时留着，子层画的路径上还要查它）。
+   */
   private readonly layerByObject = new Map<number, SceneLayer>();
   /** 建了资源的图层按 `objects` 下标：组的 `subtree` op 按它找子孙的 op（P5b 步骤 4）。 */
   private readonly runtimeByObject = new Map<number, LayerRuntime>();
@@ -1477,8 +1579,15 @@ export class GpuScene {
   private readonly meshBuffers = new Map<ArrayBufferLike, Map<string, GPUBuffer>>();
   /** 网格的占位顶点缓冲（全零，`MESH_PLACEHOLDER_BYTES`）：第一个有占位属性的网格建，全场共用。 */
   private meshPlaceholder: GPUBuffer | null = null;
-  /** 平面反射 pass 的名单（P13b2，`bundle.reflection.list`，`objects` 下标）：反射开时才有，否则 null（只清屏，P13b1）。 */
-  private readonly reflectionList: ReadonlySet<number> | null;
+  /**
+   * 平面反射 pass 的名单（P13b2，`bundle.reflection.list`，`objects` 下标）：反射开时才有，否则 null（只清屏，P13b1）。登记表原地维护
+   * 那个数组（L3a），这里按 `structureVersion` 从它刷新（`syncReflectionList`，L4），查用 `reflected`。
+   */
+  private reflectionSet: Set<number> | null = null;
+  /** `reflectionSet` 刷新时的结构代数；-1 表示还没刷过。 */
+  private reflectionSeen = -1;
+  /** 单个对象的变体段排成一串（L4，`serialVariants`）：各段自己开错误作用域，并行会让作用域互相错位。 */
+  private variantChain: Promise<unknown> = Promise.resolve();
   /** 参加反射 pass 的 draw 的副本（P13b2）：第一次画到时建（`reflectionCopyOf`），draw 被重建时释放。 */
   private readonly reflectionCopies = new Map<Draw, ReflectionCopy>();
   /** sprite 的遮挡计数与 k（P13c，`render/sprite.ts`）：sprite 图层的 `objects` 下标 → 计数器，第一次画到它时建。 */
@@ -1491,6 +1600,8 @@ export class GpuScene {
     private readonly bundle: SceneBundle,
     private readonly warnings: string[],
     particles: ParticleOptions,
+    /** 粒子序号（L4，`build` 的 `particleOrdinal`）：装粒子层时取一次（`particleOrdinals`）。 */
+    private readonly particleOrdinal: (object: number) => number,
   ) {
     this.particlePasses = particles.passes ?? 1;
     this.particleFps = particles.fps ?? 60;
@@ -1499,11 +1610,6 @@ export class GpuScene {
     this.particleCursor = particles.cursor ?? [0.5, 0.5];
     this.cursorCrop = particles.cursorCrop ?? null;
     this.particleAudio = particles.audio ?? silentParticleAudio();
-    let ordinal = 0;
-    for (const layer of bundle.layers) if (layer.particle) this.particleOrdinals.set(layer.object, ordinal++);
-    for (const layer of bundle.layers) this.layerByObject.set(layer.object, layer);
-    const reflection = bundle.reflection;
-    this.reflectionList = reflection?.planar && reflection.enabled ? new Set(reflection.list ?? []) : null;
   }
 
   /** 顶层绘制顺序（按 `state.order`）与位置表（P6d3），随 `structureVersion` 重建。 */
@@ -1516,68 +1622,104 @@ export class GpuScene {
   }
 
   /**
-   * 对象被删（`SceneState.flushDestroy`，P6d3）后的清理：`state.layers` 里已经没有的对象，释放它独有的 GPU 资源（各 draw 的顶点 / uniform
-   * 缓冲、文本索引缓冲、反射副本、被依赖层的独占 RT、文本层独占的合成 RT 与 fbo、变形纹理），从 `layers`、`runtimeByObject`、
-   * `drawsByLayer`、`drawsByPass`、`trees`、投射者表、挂点缓存里摘掉。共享的程序、管线、纹理、池化合成 RT 不动；`layerByObject` 是 bundle
-   * 的静态数据（子层的 `group` 仍指向它），也不动。
+   * 对象被删（`SceneState.flushDestroy`，P6d3）后的清理：`state.layers` 里已经没有的对象逐个 `teardown`（`removeObject` 的同一段）。这仍是
+   * 「状态里没有了就释放」的唯一通路（L4）：宿主的删除路径只改状态与登记表，下一次 `sync` 先于任何读取走到这里。
    */
   private releaseRemoved(state: SceneState): void {
     this.structureCache = null;
-    const gone = this.layers.filter((runtime) => !state.layers.has(runtime.object));
-    if (gone.length === 0) return;
-    const objects = new Set(gone.map((runtime) => runtime.object));
-    for (const runtime of gone) {
-      const object = runtime.object;
-      this.removedObjects.add(object);
-      for (const draw of runtime.draws) {
-        this.draws.delete(draw);
-        const byPass = this.drawsByPass.get(draw.passKey);
-        if (byPass) {
-          const rest = byPass.filter((item) => item !== draw);
-          if (rest.length) this.drawsByPass.set(draw.passKey, rest);
-          else this.drawsByPass.delete(draw.passKey);
-        }
-        if (!draw.mesh || draw.mesh.privateVertices) this.release(draw.vertexBuffer);
-        if (draw.uniformBuffer) this.release(draw.uniformBuffer);
-        if (draw.text) this.release(draw.text.indexBuffer);
-        const copy = this.reflectionCopies.get(draw);
-        if (copy) {
-          this.release(copy.buffer);
-          this.reflectionCopies.delete(draw);
-        }
-      }
-      runtime.draws = [];
-      runtime.ops = [];
-      runtime.tree = null;
-      this.drawsByLayer.delete(object);
-      this.runtimeByObject.delete(object);
-      this.trees.delete(object);
-      const own = this.layerTargets.get(object);
-      if (own) {
-        this.releaseTarget(own);
-        this.layerTargets.delete(object);
-      }
-      if (runtime.layer.text) for (const target of runtime.resources.composites.splice(0)) this.releaseTarget(target);
-      for (const record of this.textFbos.get(object) ?? []) this.releaseTarget(this.targets[record.id]);
-      this.textFbos.delete(object);
-      for (const key of [...this.morphTargets.keys()])
-        if (key === morphKey(object) || key.startsWith(`${object}:`)) {
-          this.releaseTarget(this.morphTargets.get(key)!);
-          this.morphTargets.delete(key);
-        }
-      this.spriteCounters.delete(object);
-      this.passStateWaiting.delete(object);
-      this.passStateReady.delete(object);
+    const gone = this.layers.filter((runtime) => !state.layers.has(runtime.object)).map((runtime) => runtime.object);
+    for (const object of gone) this.teardown(object);
+  }
+
+  /**
+   * 卸掉一个对象（L4，`releaseRemoved` 的单对象版）：释放它独有的 GPU 资源（各 draw 的顶点 / uniform 缓冲、文本索引缓冲、反射副本、被依赖层
+   * 的独占 RT、文本层独占的合成 RT 与 fbo、变形纹理、阴影投射者的 draw 与副本），还掉池化 fbo 的引用（归零释放），摘掉粒子序号、挂点、
+   * 从全部索引里去掉。共享的程序、管线、纹理、池化合成 RT 不动。没有运行时（没建资源）时什么都不做。
+   * 只能在帧边界调（`sync` 之前或 `encode` 之后）。
+   */
+  removeObject(object: number): void {
+    this.teardown(object);
+  }
+
+  /**
+   * `removeObject` 的实现。`replacing`（`installObject` 替换同一对象，L5）：不记进 `removedObjects`、不动挂在它骨骼上的子对象的挂点，
+   * `layerByObject` 留给新图层覆盖。
+   */
+  private teardown(object: number, options: { replacing?: boolean } = {}): void {
+    const runtime = this.runtimeByObject.get(object);
+    if (!runtime) return;
+    const replacing = options.replacing ?? false;
+    if (!replacing) this.removedObjects.add(object);
+    for (const draw of runtime.draws) this.releaseDraw(draw);
+    runtime.draws = [];
+    runtime.ops = [];
+    runtime.tree = null;
+    this.drawsByLayer.delete(object);
+    this.runtimeByObject.delete(object);
+    this.trees.delete(object);
+    const own = this.layerTargets.get(object);
+    if (own) {
+      this.releaseTarget(own);
+      this.layerTargets.delete(object);
     }
-    this.layers.splice(0, this.layers.length, ...this.layers.filter((runtime) => !objects.has(runtime.object)));
-    this.shadowCasters = this.shadowCasters.filter((caster) => {
-      const keep = !objects.has(this.shadowCasterOwners.get(caster) ?? -1);
-      if (!keep) this.shadowCasterOwners.delete(caster);
-      return keep;
-    });
-    for (const [object, attachment] of [...this.attachments])
-      if (objects.has(object) || objects.has(attachment.parent)) this.attachments.delete(object);
+    if (runtime.layer.text) for (const target of runtime.resources.composites.splice(0)) this.releaseTarget(target);
+    for (const record of this.textFbos.get(object) ?? []) this.dropTarget(record.id);
+    this.textFbos.delete(object);
+    for (const key of [...this.morphTargets.keys()])
+      if (key === morphKey(object) || key.startsWith(`${object}:`)) {
+        this.releaseTarget(this.morphTargets.get(key)!);
+        this.morphTargets.delete(key);
+      }
+    this.spriteCounters.delete(object);
+    this.passStateWaiting.delete(object);
+    this.passStateReady.delete(object);
+    // L4：池化 fbo 的引用、粒子序号、挂点、投射者、图层表
+    for (const key of runtime.fboKeys) this.releaseFbo(key);
+    runtime.fboKeys = [];
+    this.particleOrdinals.delete(object);
+    this.attachments.delete(object);
+    if (!replacing)
+      for (const [child, attachment] of [...this.attachments])
+        if (attachment.parent === object) this.attachments.delete(child);
     this.attachedLayers = null;
+    if (this.shadowCasterRecords.size)
+      this.shadowCasters = this.shadowCasters.filter((caster) => {
+        const record = this.shadowCasterRecords.get(caster);
+        if (!record || record.object !== object) return true;
+        this.shadowCasterRecords.delete(caster);
+        this.releaseDraw(record.draw);
+        for (const copy of record.copies.values()) this.release(copy.buffer);
+        return false;
+      });
+    // 还是别的图层的组时留着：改组归属的删除到 L7 之前整场重编译，重编译之前子层的规划（`groupOf` / `groupDepth`）还要查它
+    if (
+      !replacing &&
+      ![...this.layerByObject.values()].some((layer) => layer !== runtime.layer && layer.group === object)
+    )
+      this.layerByObject.delete(object);
+    const at = this.layers.indexOf(runtime);
+    if (at >= 0) this.layers.splice(at, 1);
+    this.structureCache = null;
+  }
+
+  /** 一个 draw 从全部索引里摘掉并释放它独有的缓冲（网格共用的顶点 / 索引缓冲不动，puppet 私有的顶点缓冲例外）。 */
+  private releaseDraw(draw: Draw): void {
+    this.draws.delete(draw);
+    const byPass = this.drawsByPass.get(draw.passKey);
+    if (byPass) {
+      const rest = byPass.filter((item) => item !== draw);
+      if (rest.length) this.drawsByPass.set(draw.passKey, rest);
+      else this.drawsByPass.delete(draw.passKey);
+    }
+    if (!draw.mesh || draw.mesh.privateVertices) this.release(draw.vertexBuffer);
+    if (draw.uniformBuffer) this.release(draw.uniformBuffer);
+    if (draw.text) this.release(draw.text.indexBuffer);
+    const copy = this.reflectionCopies.get(draw);
+    if (copy) {
+      this.release(copy.buffer);
+      this.reflectionCopies.delete(draw);
+    }
+    this.particleTimings?.delete(draw);
   }
 
   /** 替这个图层作画的组（P5b 步骤 4）；顶层图层，或组不在 bundle 里时为 null。 */
@@ -1671,12 +1813,23 @@ export class GpuScene {
       target?: { size: readonly [number, number]; edges: Edges; clear: readonly [number, number, number] | null };
       /** 加载进度（`progress.ts` 的 `gpu` 阶段）：着色器程序开建前报 `0 / 总数`，之后每建好（或失败）一个报一次。 */
       onProgress?: (done: number, total: number) => void;
+      /**
+       * 粒子序号（L4）：粒子层的随机种子是 `ParticleOptions.seed` + 它。L3a 起登记表是它的属主，宿主传 `registry.particleOrdinal`；不给时按
+       * `bundle.layers` 里带 `particle` 的顺序数（之后装的对象接着往后数），和登记表的规则一致（dev 探针走这一条）。
+       */
+      particleOrdinal?: (object: number) => number;
     } = {},
   ): Promise<GpuScene> {
     if (options.texts) state.setTexts(options.texts);
     const reasons = checkRenderable(bundle, features, { ...options, texts: state.texts });
     if (reasons.length) throw new SceneRenderError(reasons);
-    const scene = new GpuScene(device, bundle, warnings, options.particles ?? {});
+    const scene = new GpuScene(
+      device,
+      bundle,
+      warnings,
+      options.particles ?? {},
+      options.particleOrdinal ?? defaultParticleOrdinals(bundle),
+    );
     scene.features = features;
     scene.relayouter = options.relayout ?? null;
     scene.userProvider = options.userTextures ?? null;
@@ -1701,7 +1854,8 @@ export class GpuScene {
         ? failure
         : new SceneRenderError([`webgpu:build:${oneLine(String(failure))}`]);
     }
-    // 必须在上面的错误作用域之外：`createShaderModule` 遇到坏 WGSL 会报校验错误，留在里面会让整场失败
+    // 必须在上面的错误作用域之外：`createShaderModule` 遇到坏 WGSL 会报校验错误，留在里面会让整场失败。这两步就是 `prepareObject` 的
+    // 变体段与 `installObject` 的投射者段（L4），整场加载时在作用域之外逐对象跑，顺序同以前（变体在投射者之前）
     await scene.prepareVariants(state);
     await scene.buildShadowCasters(state);
     return scene;
@@ -1968,39 +2122,40 @@ export class GpuScene {
   /**
    * 被依赖图层的独占 RT（P8 步骤 4，rea-p8-render 2.2）：尺寸同它的合成 RT（`compositeSize`），格式是场景格式（HDR 为 RGBA16F），采样同它
    * 自己采样合成 RT 的规则（`compositeSampling`），不进共享池。WPE 的名字 `_rt_imageLayerComposite_<id>_a` 作标签。计进显存估算、随场景销毁。
+   * 只建不登记：调用方放进 `layerTargets`（L4：备对象时建、装的时候登记）。
    */
-  private createLayerTarget(layer: SceneLayer): void {
+  private createLayerTarget(layer: SceneLayer): RenderTarget {
     const baseTexture = this.baseTexture(layer);
     // 槽 0 的用户纹理有图时按它的尺寸（P11b 步骤 2）
     const [width, height] = this.compositeSizeOf(layer);
     const { clamp, nearest } = compositeSampling(layer, baseTexture);
     const address: GPUAddressMode = clamp ? "clamp-to-edge" : "repeat";
     const filter: GPUFilterMode = nearest ? "nearest" : "linear";
-    this.layerTargets.set(
-      layer.object,
-      this.createTarget(
-        layerCompositeName(layer.id),
-        width,
-        height,
-        this.format,
-        this.sampler({ addressModeU: address, addressModeV: address, magFilter: filter, minFilter: filter }),
-      ),
+    return this.createTarget(
+      layerCompositeName(layer.id),
+      width,
+      height,
+      this.format,
+      this.sampler({ addressModeU: address, addressModeV: address, magFilter: filter, minFilter: filter }),
     );
   }
 
   /**
    * 本图层的合成 RT 至少 `plan.composite.count` 张，不够就从共享池补。文本层的由本层独占（`ensureTextComposites`，P6b 1e）。
-   * 被依赖的图层（P8 步骤 4）第 0 张是它的独占 RT（`layerTargets`），其余照旧从同键的池里借；之后的重建（effect 开关、`prepareVariants`）只往后补，
-   * 第 0 张一直是它。
+   * 被依赖的图层（P8 步骤 4）第 0 张是它的独占 RT（`own`，缺省取 `layerTargets`；备好还没装的对象由调用方给，L4），其余照旧从同键的池里借；
+   * 之后的重建（effect 开关、`prepareVariants`）只往后补，第 0 张一直是它。
    */
-  private ensureComposites(runtime: LayerRuntime, plan: LayerPlan): void {
+  private ensureComposites(
+    runtime: LayerHandle,
+    plan: LayerPlan,
+    own: RenderTarget | null | undefined = this.layerTargets.get(runtime.layer.object),
+  ): void {
     if (!plan.composite) return;
     if (runtime.layer.text) {
       this.ensureTextComposites(runtime, plan.composite);
       return;
     }
     const { width, height, count } = plan.composite;
-    const own = this.layerTargets.get(runtime.object);
     /** 从池里借的张数：独占的那张占了第 0 张。 */
     const pooled = own ? count - 1 : count;
     // 合成 RT 的采样（P8 步骤 1，p8-REPORT、rea-p8-layer §3）：寻址只看对象 clampuvs（缺省钳制），过滤在对象 nointerpolation 或
@@ -2037,7 +2192,7 @@ export class GpuScene {
    * 采样与标签照共享池的写法（组里另加层数），只是每层一组。
    */
   private ensureTextComposites(
-    runtime: LayerRuntime,
+    runtime: LayerHandle,
     { width, height, count }: NonNullable<LayerPlan["composite"]>,
   ): void {
     const { composites } = runtime.resources;
@@ -2080,28 +2235,80 @@ export class GpuScene {
   }
 
   /**
-   * 建场景时给文本层建独占的 effect fbo（P6b 1e，已定 6）：全部 effect（关着的也建，同共享池的规则），每个 effect 的每个名字一张，不和别的
-   * 图层、也不和本层别的 effect 共用；记进 `textFbos`，之后尺寸变了原地换。
+   * 备对象时给文本层（与槽 0 有用户纹理的图层）建独占的 effect fbo（P6b 1e，已定 6）：全部 effect（关着的也建，同共享池的规则），每个 effect
+   * 的每个名字一张，不和别的图层、也不和本层别的 effect 共用。返回的记录装的时候进 `textFbos`（L4），之后尺寸变了原地换。
    */
   private createTextFbos(
     layer: SceneLayer,
     size: readonly [number, number],
     encoder: GPUCommandEncoder,
-  ): Map<string, number>[] {
+  ): { maps: Map<string, number>[]; records: TextFbo[] } {
     const records: TextFbo[] = [];
     const maps = layer.effects.map(
       (effect, e) =>
         new Map(
           effect.fbos.map((fbo) => {
-            const id = this.targets.length;
-            this.targets.push(this.createTextFbo(layer, e, fbo, size, encoder));
+            const id = this.addTarget(this.createTextFbo(layer, e, fbo, size, encoder));
             records.push({ id, effect: e, fbo });
             return [fbo.name, id] as const;
           }),
         ),
     );
-    this.textFbos.set(layer.object, records);
-    return maps;
+    return { maps, records };
+  }
+
+  /**
+   * 从 fbo 共享池取一张（L4，原 `populate` 里的内联）：键是名字、尺寸、格式、寻址（unique 的按图层与 effect 独占），没有就建（创建后清成
+   * `clear` 色，`createFbo`，清屏记进 `encoder`）；引用加一，键记进 `keys`（卸对象时逐个还，`releaseFbo`）。返回 `targets` 下标。
+   */
+  private acquireFbo(
+    layer: SceneLayer,
+    effect: SceneLayer["effects"][number],
+    fbo: SceneFbo,
+    size: readonly [number, number],
+    encoder: GPUCommandEncoder,
+    keys: string[],
+  ): number {
+    const [fw, fh] = fboSize(fbo, size);
+    const fboFormat = fboFormatOf(fbo);
+    const key = fbo.unique
+      ? `unique|${layer.id}|${effect.id}|${fbo.name}`
+      : `${fbo.name}|${fw}x${fh}|${fboFormat}|${fbo.repeat}`;
+    let entry = this.fboPool.get(key);
+    if (!entry) {
+      // 创建后清成 `clear` 色（`createFbo`）
+      const target = this.createFbo(fbo, [fw, fh], fboFormat, key, encoder);
+      entry = { id: this.addTarget(target), refs: 0 };
+      this.fboPool.set(key, entry);
+    }
+    entry.refs++;
+    keys.push(key);
+    return entry.id;
+  }
+
+  /** 还一次 fbo 共享池的引用（L4）：归零时释放那张 fbo、删键、下标进 `freeTargets`。 */
+  private releaseFbo(key: string): void {
+    const entry = this.fboPool.get(key);
+    if (!entry) return;
+    entry.refs--;
+    if (entry.refs > 0) return;
+    this.fboPool.delete(key);
+    this.dropTarget(entry.id);
+  }
+
+  /** 一张 fbo 进 `targets`（L4）：先用放掉的下标，没有就追加（建场景时没有放掉的，下标同以前按建的先后）。 */
+  private addTarget(target: RenderTarget): number {
+    const id = this.freeTargets.pop() ?? this.targets.length;
+    this.targets[id] = target;
+    return id;
+  }
+
+  /** 释放 `targets` 里的一张并空出下标（L4）。没有运行时还指向它（卸对象、放弃备好的对象、池引用归零时才调）。 */
+  private dropTarget(id: number): void {
+    const target = this.targets[id];
+    if (target) this.releaseTarget(target);
+    delete this.targets[id];
+    this.freeTargets.push(id);
   }
 
   /**
@@ -2397,7 +2604,7 @@ export class GpuScene {
         // 编码时同步取（`reflectionPipeline`）。LDR 两者同格式，直接用主管线
         if (
           this.hdr &&
-          this.reflectionList?.has(runtime.layer.object) &&
+          this.reflected(runtime.layer.object) &&
           step.target.kind === "scene" &&
           runtime.layer.group == null
         )
@@ -2448,56 +2655,78 @@ export class GpuScene {
   }
 
   /**
-   * 关着的 effect 也在加载时备好（WPE 同样）。逐图层进行，失败不影响当前画面，这一层之后走整场重编译。
-   * 文本层（P6b 1e）备的是运行中重排可能出现的全部步骤（`variantPlans` 的假想排版）：只备程序与管线，合成 RT 由本层按当时的排版尺寸建
-   * （`ensureTextComposites`），快照用到时 `buildLayer` 再建。备不好时运行中出现新步骤会报 `render:variant-missing`。
+   * 关着的 effect 也在加载时备好（WPE 同样）。逐图层进行（`prepareVariantsOf`，各开自己的错误作用域），失败不影响当前画面，这一层之后走整场
+   * 重编译。整场加载时在 `build` 的错误作用域之外、全部对象装好之后跑（L4：单个对象的同一段在 `prepareObject` 里，装之前）。
    */
   private async prepareVariants(state: SceneState): Promise<void> {
     for (const runtime of this.layers) {
-      const text = runtime.layer.text ? (state.texts.get(runtime.object) ?? null) : null;
-      const plans = variantPlans(runtime.layer, this.bundle.textures, text, [this.width, this.height]);
-      if (!plans.length) continue;
-      this.device.pushErrorScope("out-of-memory");
-      this.device.pushErrorScope("validation");
-      let failure: unknown = null;
-      try {
-        for (const plan of plans) {
-          const problems = planProblems(
-            plan,
-            this.bundle,
-            runtime.layer.particle,
-            runtime.layer.model,
-            runtime.layer.puppet,
-          );
-          if (problems.length) throw new SceneRenderError(problems);
-          if (runtime.layer.text) {
-            await this.prepareLayer(plan, runtime);
-            continue;
-          }
-          this.ensureComposites(runtime, plan);
-          if (wantsSnapshot(plan)) this.ensureSnapshot();
-          this.checkPlanOps(plan, runtime);
-          await this.prepareLayer(plan, runtime);
-        }
-      } catch (error) {
-        failure = error;
-      }
-      const validation = await this.device.popErrorScope();
-      const memory = await this.device.popErrorScope();
-      const error = validation ?? memory;
-      if (failure || error) {
-        state.freezeLayer(runtime.object);
-        this.warnings.push(
-          runtime.layer.text
-            ? `文本图层 ${runtime.object} 的步骤备不好，运行中重排出现新步骤时画不了：${String(failure ?? error!.message)}`
-            : `图层 ${runtime.object} 的可变 effect 备不好，切换时整场重新加载：${String(failure ?? error!.message)}`,
-        );
-      }
+      const failure = await this.prepareVariantsOf(runtime, state);
+      if (failure !== null) this.freezeVariants(runtime.layer, state, failure);
     }
   }
 
+  /**
+   * 一个图层的变体段（原 `prepareVariants` 的循环体）：`variantPlans` 的每份计划查问题、借合成 RT、建快照、查 copy / swap、备程序与管线，全在这一层
+   * 自己的错误作用域里。文本层（P6b 1e）备的是运行中重排可能出现的全部步骤（`variantPlans` 的假想排版）：只备程序与管线，合成 RT 由本层按当时的
+   * 排版尺寸建（`ensureTextComposites`），快照用到时 `buildLayer` 再建。备不好时运行中出现新步骤会报 `render:variant-missing`。
+   * `own`：被依赖图层的独占 RT（缺省取 `layerTargets`；备好还没装的对象由 `prepareObject` 给）。返回失败的原因，成功为 null。
+   */
+  private async prepareVariantsOf(
+    runtime: LayerHandle,
+    state: SceneState,
+    own: RenderTarget | null | undefined = this.layerTargets.get(runtime.layer.object),
+  ): Promise<string | null> {
+    const { layer } = runtime;
+    const text = layer.text ? (state.texts.get(layer.object) ?? null) : null;
+    const plans = variantPlans(layer, this.bundle.textures, text, [this.width, this.height]);
+    if (!plans.length) return null;
+    this.device.pushErrorScope("out-of-memory");
+    this.device.pushErrorScope("validation");
+    let failure: unknown = null;
+    try {
+      for (const plan of plans) {
+        const problems = planProblems(plan, this.bundle, layer.particle, layer.model, layer.puppet);
+        if (problems.length) throw new SceneRenderError(problems);
+        if (layer.text) {
+          await this.prepareLayer(plan, runtime);
+          continue;
+        }
+        this.ensureComposites(runtime, plan, own);
+        if (wantsSnapshot(plan)) this.ensureSnapshot();
+        this.checkPlanOps(plan, runtime);
+        await this.prepareLayer(plan, runtime);
+      }
+    } catch (error) {
+      failure = error;
+    }
+    const validation = await this.device.popErrorScope();
+    const memory = await this.device.popErrorScope();
+    const error = validation ?? memory;
+    return failure || error ? String(failure ?? error!.message) : null;
+  }
+
+  /** 变体段没备好（`prepareVariantsOf` 的失败）：冻结这一层（切换都走整场重编译）并记 warning。 */
+  private freezeVariants(layer: SceneLayer, state: SceneState, failure: string): void {
+    state.freezeLayer(layer.object);
+    this.warnings.push(
+      layer.text
+        ? `文本图层 ${layer.object} 的步骤备不好，运行中重排出现新步骤时画不了：${failure}`
+        : `图层 ${layer.object} 的可变 effect 备不好，切换时整场重新加载：${failure}`,
+    );
+  }
+
+  /**
+   * 单个对象的变体段排成一串（L4）：各段自己 push / pop 错误作用域，几段并行时 pop 会弹到别的段的作用域。整场加载不经过这里（`prepareVariants`
+   * 本来就是逐层 await）。
+   */
+  private serialVariants(task: () => Promise<string | null>): Promise<string | null> {
+    const run = this.variantChain.then(task, task);
+    this.variantChain = run.catch(() => undefined);
+    return run;
+  }
+
   /** copy / swap / clear / subtree 的检查：切换时不能再失败，所以 `prepareVariants` 对每份计划先过一遍。 */
-  private checkPlanOps(plan: LayerPlan, { layer, resources }: LayerRuntime): void {
+  private checkPlanOps(plan: LayerPlan, { layer, resources }: LayerHandle): void {
     for (const step of plan.steps) {
       if (step.kind === "clear" || step.kind === "subtree") {
         // 组合层的 clear 只清合成 RT（P5b 步骤 2），组的子树画进合成 RT（步骤 4）：`ensureComposites` 之后应当解析得到
@@ -2616,26 +2845,25 @@ export class GpuScene {
   }
 
   /**
-   * puppet 的两样 GPU 资源（P12b1 步骤 4、5，建场景时一次）：
-   * - 每个带 `morph` 的 puppet 一张变形纹理（`side × side`，`rgba32float`，点采样、重复，WPE 实测）；设备没有 `float32-filterable` 时抛
-   *   `render:morph-texture`（`checkRenderable` 已先按特性报过）；
-   * - 有裁切的 puppet 时全场一张 `r8unorm` 遮罩 RT，宽高各为场景目标的一半（至少 2；WPE 是后备缓冲的一半，我们的对应物是场景目标）。
+   * 一个图层的 puppet 资源（P12b1 步骤 4、5；L4 起按图层，原来是建场景时全部一次）：
+   * - 带 `morph` 的 puppet 一张变形纹理（`side × side`，`rgba32float`，点采样、重复，WPE 实测）；设备没有 `float32-filterable` 时抛
+   *   `render:morph-texture`（`checkRenderable` 已先按特性报过）；模型对象（P12b2-1）每个有变形目标的网格一张。返回给调用方，装的时候进
+   *   `morphTargets`（`morph` 引用只指向本对象自己）。
+   * - 有裁切的 puppet 第一次遇到时建全场一张 `r8unorm` 遮罩 RT（宽高各为场景目标的一半，至少 2；WPE 是后备缓冲的一半，我们的对应物是场景
+   *   目标），之后共用、随场景销毁。
    */
-  private createPuppetResources(layers: readonly SceneLayer[]): void {
-    for (const layer of layers) {
-      const morph = layer.puppet?.morph;
-      if (!morph) continue;
-      if (!this.features.has("float32-filterable")) throw new SceneRenderError(["render:morph-texture"]);
-      this.morphTargets.set(morphKey(layer.object), this.uploadMorph(layer, morph));
-    }
-    // 模型对象的变形纹理（P12b2-1）：每个有变形目标的网格一张
-    for (const layer of layers)
-      layer.model?.skeleton?.morphs.forEach((morph, m) => {
-        if (!morph) return;
-        if (!this.features.has("float32-filterable")) throw new SceneRenderError(["render:morph-texture"]);
-        this.morphTargets.set(morphKey(layer.object, m), this.uploadMorph(layer, morph, m));
-      });
-    if (layers.some((layer) => layer.puppet?.clipping)) {
+  private ensurePuppetResources(layer: SceneLayer): Map<string, RenderTarget> {
+    const morphs = new Map<string, RenderTarget>();
+    const morph = layer.puppet?.morph;
+    const meshes = layer.model?.skeleton?.morphs ?? [];
+    // 先查特性，什么都没建时抛
+    if ((morph || meshes.some(Boolean)) && !this.features.has("float32-filterable"))
+      throw new SceneRenderError(["render:morph-texture"]);
+    if (morph) morphs.set(morphKey(layer.object), this.uploadMorph(layer, morph));
+    meshes.forEach((item, m) => {
+      if (item) morphs.set(morphKey(layer.object, m), this.uploadMorph(layer, item, m));
+    });
+    if (layer.puppet?.clipping && !this.clipMask) {
       const [width, height] = clipMaskSize(this.width, this.height);
       this.clipMask = this.createTarget(
         "clip mask",
@@ -2650,6 +2878,7 @@ export class GpuScene {
         }),
       );
     }
+    return morphs;
   }
 
   /** 一个 puppet（或模型网格 `mesh`）的变形纹理上传（`morphTexelData` 转好数据，`writeTexture` 一次）。 */
@@ -2724,10 +2953,8 @@ export class GpuScene {
     // 两张都是空的：不清屏时初始底色就是黑，`clearcolor` 不出现（L11）
     if (general.clearVariable) this.alternate = this.createAlternateTarget();
 
-    const uploadable = uploadableTextures(bundle);
-    this.textures = bundle.textures.map((texture, index) =>
-      uploadable.has(index) ? this.own(uploadTexture(device, texture)) : null,
-    );
+    // 纹理（L4）：场景级先传现有的全部（规则同 `uploadableTextures`），之后对象带来的新纹理在备对象时追加（`ensureTextures`）
+    this.ensureTextures(0);
     this.dummies = this.createDummies();
     // 反射的两张常量 RT（P13b1）：场景目标尺寸，只在有读者时建；要在建任何 draw 之前就位（`resolveTexture`）
     this.reflectionTargets = ReflectionTargets.create(device, bundle, width, height, hdr);
@@ -2745,8 +2972,12 @@ export class GpuScene {
     );
 
     const built = buildableLayers(bundle);
-    // puppet 的变形纹理与裁切遮罩 RT（P12b1 步骤 4、5）：要在建任何 draw 之前就位（`resolveTexture`）
-    this.createPuppetResources(built);
+    // 场景级的派生表（L4：不再在构造函数里从 bundle 算死）：全部图层（含没有资源的分组节点：组的尺寸、`copyBackground` 与层数从这里查，
+    // 子层可能排在组前面装）、平面反射名单。之后随装卸维护（`installObject` / `removeObject`、`sync` 按结构代数刷名单）
+    for (const layer of bundle.layers) this.layerByObject.set(layer.object, layer);
+    this.syncReflectionList(state, true);
+    // 挂点（P12b1 步骤 3）：全部图层（没有资源的分组节点也会挂在骨骼上，子孙的世界矩阵沿父链要经它）在建任何 draw 之前就位；之后装的对象
+    // 自己补（`installObject`）。puppet 的变形纹理与裁切遮罩 RT（P12b1 步骤 4、5）改在备对象时建（`ensurePuppetResources`），同样早于任何 draw
     for (const layer of bundle.layers) if (layer.attachment) this.attachments.set(layer.object, layer.attachment);
     if (this.attachments.size) this.stamps = new WorldStamps();
     const plans = built.map((layer) => this.planOf(layer, state));
@@ -2802,7 +3033,6 @@ export class GpuScene {
     const programs = new Map<number, GpuProgram>();
     for (const result of settled) if (result.status === "fulfilled") programs.set(result.value.index, result.value);
 
-    const fboPool = new Map<string, number>();
     const setup = device.createCommandEncoder({ label: "scene setup" });
     // 建场景时 s 是 (0, 0)：两份相同，`setCamera` 换成带抖动的。缩放取编译期的值（P5a 步骤 4），预热的指针反投影就带上它
     this.zoom = this.pointerZoom = general.fields.zoom;
@@ -2819,61 +3049,16 @@ export class GpuScene {
     // 反投影用它。透视粒子那一份（`perspectiveViewProjection`）照旧（透视场景里的透视粒子照报 `camera:perspective:particle`）
     if (general.perspective)
       this.applyPerspective(initialPerspectiveFrame(general.camera, state.general, width, height));
-    // 粒子的索引缓冲：全场一份，按最大的 maxcount 建（含子系统的，每个粒子步骤按它画的那个系统，P4e 步骤 1）
-    const particleCapacity = plans.reduce((max, plan, index) => {
-      const particle = built[index].particle;
-      for (const step of plan.steps)
-        if (step.kind === "particles" && particle) max = Math.max(max, particleNode(particle, step.node).maxcount);
-      return max;
-    }, -1);
-    if (particleCapacity >= 0) this.createParticleIndices(particleCapacity);
+    // 粒子的索引缓冲：全场一份，按最大的 maxcount 建（含子系统的，每个粒子步骤按它画的那个系统，P4e 步骤 1）；之后装的对象要的更多时
+    // 才重建（`ensureParticleIndices`），整场加载时一次建够
+    const particleCapacity = Math.max(-1, ...built.map((layer, index) => this.particleCapacityOf(layer, plans[index])));
+    if (particleCapacity >= 0) this.ensureParticleIndices(particleCapacity);
 
-    const runtimes = plans.map((plan, index) => {
-      const layer = built[index];
-      // fbo 一律按真实合成尺寸：全部 effect 关着时也是，打开时不用重建。文本层取排版的合成 RT 尺寸（P6b 1d），fbo 由本层独占（1e）
-      const textLayout = layer.text ? state.texts.get(layer.object) : undefined;
-      const size = textLayout ? textCompositeSize(textLayout) : this.compositeSizeOf(layer, [width, height]);
-      // 槽 0 有用户纹理的图像层同样独占 fbo（P11b 步骤 2）：换图后合成 RT 的尺寸变了，fbo 要跟着换，共享池里的不能动
-      const maps = this.ownsSizing(layer)
-        ? this.createTextFbos(layer, size, setup)
-        : layer.effects.map(
-            (effect) =>
-              new Map(
-                effect.fbos.map((fbo) => {
-                  const [fw, fh] = fboSize(fbo, size);
-                  const fboFormat = fboFormatOf(fbo);
-                  const key = fbo.unique
-                    ? `unique|${layer.id}|${effect.id}|${fbo.name}`
-                    : `${fbo.name}|${fw}x${fh}|${fboFormat}|${fbo.repeat}`;
-                  let id = fboPool.get(key);
-                  if (id === undefined) {
-                    // 创建后清成 `clear` 色（`createFbo`）
-                    const target = this.createFbo(fbo, [fw, fh], fboFormat, key, setup);
-                    id = this.targets.length;
-                    this.targets.push(target);
-                    fboPool.set(key, id);
-                  }
-                  return [fbo.name, id] as const;
-                }),
-              ),
-          );
-      const runtime: LayerRuntime = {
-        object: layer.object,
-        layer,
-        ops: [],
-        draws: [],
-        resources: { composites: [], fbos: new FboBindings(maps), ...this.textAtlasesOf(textLayout) },
-        signature: planSignature(plan),
-        tree: null,
-      };
-      this.layers.push(runtime);
-      this.runtimeByObject.set(layer.object, runtime);
-      this.structureCache = null;
-      return runtime;
-    });
-    // 被依赖图层的独占 RT（P8 步骤 4）：在任何 `buildLayer` 之前建好，引用方排在被依赖者前面时建 draw 也解析得到（`resolveTexture`）
-    for (const runtime of runtimes) if (runtime.layer.dependedOn) this.createLayerTarget(runtime.layer);
-    const prepared = await Promise.all(plans.map((plan, index) => this.prepareLayer(plan, runtimes[index])));
+    // 逐对象备好（L4，`prepareObject` 的主段 `prepareMain`）：并行。各对象的同步一段（变形纹理、fbo 取引用 / 建、被依赖层的独占 RT，fbo 的
+    // 清屏记进 `setup`）在 `map` 里按图层顺序跑完，之后才开始等管线；程序上面已经全部建好，这里只命中缓存
+    const prepared = await Promise.all(
+      built.map((layer, index) => this.prepareMain(layer, state, plans[index], setup)),
+    );
     // 泛光：全部图层之后（A1 / A3）
     if (bundle.bloom) {
       this.ensureSnapshot();
@@ -2908,12 +3093,397 @@ export class GpuScene {
       });
       this.targetBytes += this.volumetrics.bytes;
     }
-    // 世界矩阵按这一刻的状态算，全部图层共用一份缓存
+    // 被依赖图层的独占 RT（P8 步骤 4）：在任何 `buildLayer` 之前进表，引用方排在被依赖者前面时建 draw 也解析得到（`resolveTexture`）
+    for (const item of prepared) if (item.layerTarget) this.layerTargets.set(item.layer.object, item.layerTarget);
+    // 按图层顺序装上（L4，`installObject` 的主段 `installCore`）；世界矩阵按这一刻的状态算，全部图层共用一份缓存
     const worlds = new Map<number, Mat4>();
-    runtimes.forEach((runtime, index) =>
-      this.install(runtime, this.buildLayer(runtime, plans[index], prepared[index], state, worlds)),
-    );
+    for (const item of prepared) {
+      this.claim(item);
+      this.installCore(item, state, worlds);
+    }
     device.queue.submit([setup.finish()]);
+  }
+
+  /**
+   * 场景纹理按增量上传（L4）：`bundle.textures[from…]` 里可上传的传上去、其余留 null（规则同 `uploadableTextures`，按下标区间算）。
+   * 建场景时 `from` 为 0；登记表追加了纹理（`SceneRegistry.applyDelta`）之后，备对象时从已有的个数接着传。
+   * 给了 `layer` 时再补传它要用、之前没传的（建场景时只被「关着且带不支持项」的 effect 用到的纹理，被新对象用到；或场景从空的图层表起步）：
+   * 整场加载时这一项是空操作（`uploadableTextures` 对全部图层取并集，单个图层的是它的子集）。
+   */
+  private ensureTextures(from: number, layer?: SceneLayer): void {
+    const { bundle } = this;
+    if (from < bundle.textures.length) {
+      const uploadable = uploadableTextures(bundle);
+      for (let index = from; index < bundle.textures.length; index++)
+        this.textures[index] = uploadable.has(index)
+          ? this.own(uploadTexture(this.device, bundle.textures[index]))
+          : null;
+    }
+    if (!layer) return;
+    for (const index of uploadableTextures({ layers: [layer] }))
+      if (!this.textures[index] && bundle.textures[index])
+        this.textures[index] = this.own(uploadTexture(this.device, bundle.textures[index]));
+  }
+
+  /**
+   * 平面反射名单按结构代数从活的 `bundle.reflection.list` 刷新（L4；登记表原地维护那个数组）：建场景时强制刷一次，`sync` 开头与备对象时代数变了
+   * 再刷。没开平面反射时恒为 null（反射 pass 不存在，只清屏）。
+   */
+  private syncReflectionList(state: Pick<SceneState, "structureVersion">, force = false): void {
+    if (!force && state.structureVersion === this.reflectionSeen) return;
+    this.reflectionSeen = state.structureVersion;
+    const reflection = this.bundle.reflection;
+    this.reflectionSet = reflection?.planar && reflection.enabled ? new Set(reflection.list ?? []) : null;
+  }
+
+  /** 对象在平面反射名单里（P13b2）。 */
+  private reflected(object: number): boolean {
+    return this.reflectionSet?.has(object) ?? false;
+  }
+
+  /** 一份计划里粒子步骤要的最大 `maxcount`（含子系统，每个步骤按它画的那个系统，P4e 步骤 1）；没有粒子步骤为 -1。 */
+  private particleCapacityOf(layer: SceneLayer, plan: LayerPlan): number {
+    const particle = layer.particle;
+    let max = -1;
+    if (particle)
+      for (const step of plan.steps)
+        if (step.kind === "particles") max = Math.max(max, particleNode(particle, step.node).maxcount);
+    return max;
+  }
+
+  /**
+   * 备对象的同步一段（L4，不 await，不碰正在画的东西）：新纹理、变形纹理（与第一次用到的裁切遮罩）、fbo（池化的取引用、独占的建；fbo 一律按真实
+   * 合成尺寸：全部 effect 关着时也是，打开时不用重建。文本层取排版的合成 RT 尺寸，P6b 1d；槽 0 有用户纹理的图像层同样独占，P11b 步骤 2）、
+   * 被依赖层的独占 RT（P8 步骤 4）。新建 fbo 的清屏记进 `encoder`。中途抛错时收回这一段已经建的。
+   */
+  private stageObject(
+    layer: SceneLayer,
+    state: SceneState,
+    plan: LayerPlan,
+    encoder: GPUCommandEncoder,
+  ): PreparedObject {
+    this.ensureTextures(this.textures.length, layer);
+    const morphs = this.ensurePuppetResources(layer);
+    const fboKeys: string[] = [];
+    let textFbos: TextFbo[] | null = null;
+    let layerTarget: RenderTarget | null = null;
+    try {
+      const textLayout = layer.text ? state.texts.get(layer.object) : undefined;
+      const size = textLayout ? textCompositeSize(textLayout) : this.compositeSizeOf(layer, [this.width, this.height]);
+      let maps: Map<string, number>[];
+      if (this.ownsSizing(layer)) ({ maps, records: textFbos } = this.createTextFbos(layer, size, encoder));
+      else
+        maps = layer.effects.map(
+          (effect) =>
+            new Map(
+              effect.fbos.map(
+                (fbo) => [fbo.name, this.acquireFbo(layer, effect, fbo, size, encoder, fboKeys)] as const,
+              ),
+            ),
+        );
+      if (layer.dependedOn) layerTarget = this.createLayerTarget(layer);
+      return {
+        layer,
+        plan,
+        prepared: new Map(),
+        resources: { composites: [], fbos: new FboBindings(maps), ...this.textAtlasesOf(textLayout) },
+        fboKeys,
+        textFbos,
+        layerTarget,
+        morphs,
+        variants: undefined,
+        shadows: null,
+        owner: this,
+        settled: false,
+      };
+    } catch (error) {
+      for (const key of fboKeys) this.releaseFbo(key);
+      for (const record of textFbos ?? []) this.dropTarget(record.id);
+      if (layerTarget) this.releaseTarget(layerTarget);
+      for (const target of morphs.values()) this.releaseTarget(target);
+      throw error;
+    }
+  }
+
+  /**
+   * 备对象的主段（L4）：同步一段（`stageObject`）+ 计划的程序与管线（`prepareLayer`）。整场加载并行调它（变体与投射者在 `build` 里另跑），
+   * `prepareObject` 在它之后接变体段与投射者。失败时收回自己建的。
+   */
+  private async prepareMain(
+    layer: SceneLayer,
+    state: SceneState,
+    plan: LayerPlan,
+    encoder: GPUCommandEncoder,
+  ): Promise<PreparedObject> {
+    const staged = this.stageObject(layer, state, plan, encoder);
+    try {
+      return { ...staged, prepared: await this.prepareLayer(plan, staged) };
+    } catch (error) {
+      this.discardPrepared(staged);
+      throw error;
+    }
+  }
+
+  /**
+   * 备好一个对象（L4，异步，不改正在画的东西）：计划（自查同 `rebuildLayer`）→ 新纹理 → 变形纹理 → fbo（取引用）与被依赖层的独占 RT →
+   * 程序与管线（含 HDR 反射副本）→ 变体段（`prepareVariantsOf`，自己的错误作用域，单个对象之间排成一串；失败不抛，装的时候冻结这一层）→
+   * 阴影投射者的程序与管线。fbo 的清屏当场提交（只清新建的）。失败时只收回自己建的，抛 `SceneRenderError`。
+   * 计划按调用这一刻的状态定：备好之后、装之前状态里的 effect 开关又变了时，装上后由 `sync` 照常重建。
+   */
+  async prepareObject(layer: SceneLayer, state: SceneState): Promise<PreparedObject> {
+    this.syncReflectionList(state);
+    const plan = this.planOf(layer, state);
+    const problems = planProblems(plan, this.bundle, layer.particle, layer.model, layer.puppet);
+    if (problems.length) throw new SceneRenderError(problems);
+    const encoder = this.device.createCommandEncoder({ label: `prepare object ${layer.object}` });
+    const staged = this.stageObject(layer, state, plan, encoder);
+    this.device.queue.submit([encoder.finish()]);
+    try {
+      const prepared = await this.prepareLayer(plan, staged);
+      const variants = await this.serialVariants(() => this.prepareVariantsOf(staged, state, staged.layerTarget));
+      const shadows = await this.prepareShadowCasters(layer);
+      return { ...staged, prepared, variants, shadows };
+    } catch (error) {
+      this.discardPrepared(staged);
+      throw error instanceof SceneRenderError
+        ? error
+        : new SceneRenderError([`webgpu:prepare:${oneLine(String(error))}`]);
+    }
+  }
+
+  /**
+   * 程序与管线都已就绪时不经 await 备好（L4，克隆命中缓存）：先查主计划、变体计划与投射者要的程序都在 `readyPrograms` 里，缺一个就返回 null、
+   * 什么都不建（调用方走 `prepareObject`）。管线查 `readyPipelines`，缺的同步建（`createPipelineNow`，当帧生效，同 WPE）；A2C 管线要异步建的
+   * 片元模块，缺时同样返回 null（收回已建的）。变体段没有错误作用域（同步路径 pop 不了），只认得出计划问题与 copy / swap 的检查。
+   */
+  prepareObjectSync(layer: SceneLayer, state: SceneState): PreparedObject | null {
+    this.syncReflectionList(state);
+    const plan = this.planOf(layer, state);
+    const problems = planProblems(plan, this.bundle, layer.particle, layer.model, layer.puppet);
+    if (problems.length) throw new SceneRenderError(problems);
+    const text = layer.text ? (state.texts.get(layer.object) ?? null) : null;
+    const variants = variantPlans(layer, this.bundle.textures, text, [this.width, this.height]);
+    const shadowSteps = this.shadowCasterSteps(layer);
+    const programs = new Set<number>();
+    for (const item of [plan, ...variants])
+      for (const step of item.steps)
+        if (isDrawLike(step) && step.pass.program !== null) programs.add(step.pass.program);
+    for (const { step } of shadowSteps) programs.add(step.pass.program!);
+    for (const index of programs) if (!this.readyPrograms.has(index)) return null;
+    const encoder = this.device.createCommandEncoder({ label: `prepare object ${layer.object}` });
+    const staged = this.stageObject(layer, state, plan, encoder);
+    this.device.queue.submit([encoder.finish()]);
+    try {
+      const prepared = this.prepareLayerNow(plan, staged);
+      const variantResult = prepared ? this.prepareVariantsNow(staged, variants) : null;
+      const shadows = variantResult ? this.prepareShadowCastersNow(shadowSteps) : null;
+      if (!prepared || !variantResult || !shadows) {
+        this.discardPrepared(staged);
+        return null;
+      }
+      return { ...staged, prepared, variants: variantResult.failure, shadows };
+    } catch (error) {
+      this.discardPrepared(staged);
+      throw error instanceof SceneRenderError
+        ? error
+        : new SceneRenderError([`webgpu:prepare:${oneLine(String(error))}`]);
+    }
+  }
+
+  /** `prepareLayer` 的同步版（L4，`prepareObjectSync`）：程序取 `readyPrograms`，管线取 `readyPipelines` 或同步建；缺程序或建不了时 null。 */
+  private prepareLayerNow(plan: LayerPlan, runtime: LayerHandle): Map<DrawLike, PreparedDraw> | null {
+    const prepared = new Map<DrawLike, PreparedDraw>();
+    for (const step of plan.steps) {
+      if (!isDrawLike(step)) continue;
+      const program = this.readyPrograms.get(step.pass.program!);
+      if (!program) return null;
+      const spec = this.pipelineOf(step, runtime);
+      const mesh = drawsMesh(step) ? this.meshLayoutOf(runtime.layer, step) : undefined;
+      // 反射副本的管线（同 `prepareLayer`）
+      if (
+        this.hdr &&
+        this.reflected(runtime.layer.object) &&
+        step.target.kind === "scene" &&
+        runtime.layer.group == null &&
+        !this.pipelineNow(program, { ...spec, format: REFLECTION_TARGET_FORMAT }, mesh)
+      )
+        return null;
+      const pipeline = this.pipelineNow(program, spec, mesh);
+      if (!pipeline) return null;
+      prepared.set(step, { program, pipeline });
+    }
+    return prepared;
+  }
+
+  /**
+   * 变体段的同步版（L4，`prepareObjectSync`）：步骤同 `prepareVariantsOf`，只是没有错误作用域。计划问题、copy / swap 检查失败记进 `failure`（装的时候
+   * 冻结），缺程序或建不了管线时返回 null。
+   */
+  private prepareVariantsNow(staged: PreparedObject, plans: readonly LayerPlan[]): { failure: string | null } | null {
+    const { layer } = staged;
+    for (const plan of plans) {
+      let ready: Map<DrawLike, PreparedDraw> | null;
+      try {
+        const problems = planProblems(plan, this.bundle, layer.particle, layer.model, layer.puppet);
+        if (problems.length) throw new SceneRenderError(problems);
+        if (!layer.text) {
+          this.ensureComposites(staged, plan, staged.layerTarget);
+          if (wantsSnapshot(plan)) this.ensureSnapshot();
+          this.checkPlanOps(plan, staged);
+        }
+        ready = this.prepareLayerNow(plan, staged);
+      } catch (error) {
+        return { failure: String(error) };
+      }
+      if (!ready) return null;
+    }
+    return { failure: null };
+  }
+
+  /** 一条管线：就绪表里有就用，没有就同步建（`createPipelineNow`）；建不了时 null。 */
+  private pipelineNow(program: GpuProgram, spec: PipelineSpec, mesh?: MeshVertexLayout): GPURenderPipeline | null {
+    return this.readyPipelines.get(pipelineKey(spec)) ?? this.createPipelineNow(program, spec, mesh);
+  }
+
+  /**
+   * 同步建一条管线（L4，`prepareObjectSync` 缺管线时，已定：当帧生效，同 WPE）：描述仍由 `createPipeline` 给（不另写一份），用 `capturePipeline`
+   * 接住它交给同步的 `createRenderPipeline`。A2C 的片元模块是异步建的，建不了，返回 null。建好的进 `pipelines` 与 `readyPipelines`。
+   */
+  private createPipelineNow(
+    program: GpuProgram,
+    spec: PipelineSpec,
+    mesh?: MeshVertexLayout,
+  ): GPURenderPipeline | null {
+    if (spec.alphaToCoverage) return null;
+    const made = this.capturePipeline((device) =>
+      createPipeline(
+        device,
+        program,
+        spec.blending,
+        spec.format,
+        spec.alpha,
+        spec.topology,
+        spec.alphaMax ?? false,
+        mesh?.buffers,
+        spec.cull,
+        spec.depth,
+        false,
+      ),
+    );
+    if (!made) return null;
+    const key = pipelineKey(spec);
+    this.pipelines.set(key, made.promise);
+    this.readyPipelines.set(key, made.pipeline);
+    return made.pipeline;
+  }
+
+  /**
+   * 把一个「建管线」的异步函数变成同步的（L4）：`createPipeline` / `createShadowPipeline` 不带 A2C 时在第一个 await 之前就调到
+   * `device.createRenderPipelineAsync`，这里给它一个只有这个方法的设备替身，当场改调同步的 `createRenderPipeline` 并记下结果。没在同步段里调到
+   * （带 A2C、或实现改了）时返回 null，调用方退回异步路径。
+   */
+  private capturePipeline(
+    build: (device: GPUDevice) => Promise<GPURenderPipeline>,
+  ): { pipeline: GPURenderPipeline; promise: Promise<GPURenderPipeline> } | null {
+    const device = this.device;
+    const made: { pipeline?: GPURenderPipeline } = {};
+    const capture = {
+      createRenderPipelineAsync: (descriptor: GPURenderPipelineDescriptor) =>
+        Promise.resolve((made.pipeline = device.createRenderPipeline(descriptor))),
+    } as unknown as GPUDevice;
+    const promise = build(capture);
+    void promise.catch(() => {});
+    return made.pipeline ? { pipeline: made.pipeline, promise } : null;
+  }
+
+  /** 认领一个备好的对象（L4）：必须是本场景备的、还没装也没放弃。 */
+  private claim(prepared: PreparedObject): void {
+    if (prepared.owner !== this) throw new SceneRenderError(["render:prepared-scene"]);
+    if (prepared.settled) throw new SceneRenderError(["render:prepared-settled"]);
+    prepared.settled = true;
+  }
+
+  /**
+   * 同步装上一个备好的对象（L4）：`LayerRuntime` → `layerByObject` / 独占 fbo / 变形纹理 / 被依赖层的独占 RT 进表 → 粒子序号、挂点 → `buildLayer`
+   * （合成 RT、draw、粒子树预热）→ `install` → 变体段失败时冻结 → 阴影投射者 → 粒子索引扩容。`encode` 读的是装好的整体，半装的状态画不到。
+   * 同一对象已有运行时（L5 的替换）时先卸掉旧的，粒子树的脚本暂停 / 停止接回新树；别的图层引用旧的被依赖层独占 RT 的 draw 不重绑（L5 定）。
+   * 出错时回滚本次加的（运行时、draw、索引、fbo 引用、投射者），抛 `SceneRenderError`，由调用方整场重载。
+   * **只能在帧边界调**：`sync` 之前或 `encode` 之后（L5 定具体时机）。
+   */
+  installObject(prepared: PreparedObject, state: SceneState): void {
+    this.claim(prepared);
+    const worlds = new Map<number, Mat4>(this.liveSeeds(state) ?? []);
+    try {
+      this.installCore(prepared, state, worlds);
+    } catch (error) {
+      throw error instanceof SceneRenderError
+        ? error
+        : new SceneRenderError([`webgpu:install:${oneLine(String(error))}`]);
+    }
+  }
+
+  /**
+   * `installObject` 的主体（整场加载也走它，`worlds` 由调用方给：整场加载时全部图层共用一份）。认领由调用方做。整场加载时 `prepared.variants`
+   * 为 undefined、`shadows` 为 null，变体与投射者在 `build` 里另跑；粒子索引已经一次建够，这里不重建。
+   */
+  private installCore(prepared: PreparedObject, state: SceneState, worlds: Map<number, Mat4>): void {
+    const { layer } = prepared;
+    const object = layer.object;
+    const previous = this.runtimeByObject.get(object);
+    const previousTree = this.trees.get(object);
+    const at = previous ? this.layers.indexOf(previous) : -1;
+    if (previous) this.teardown(object, { replacing: true });
+    const runtime: LayerRuntime = {
+      object,
+      layer,
+      ops: [],
+      draws: [],
+      resources: prepared.resources,
+      signature: planSignature(prepared.plan),
+      tree: null,
+      fboKeys: [...prepared.fboKeys],
+    };
+    if (at >= 0) this.layers.splice(at, 0, runtime);
+    else this.layers.push(runtime);
+    this.runtimeByObject.set(object, runtime);
+    this.structureCache = null;
+    this.removedObjects.delete(object);
+    this.layerByObject.set(object, layer);
+    if (prepared.textFbos) this.textFbos.set(object, prepared.textFbos);
+    for (const [key, target] of prepared.morphs) this.morphTargets.set(key, target);
+    if (prepared.layerTarget) this.layerTargets.set(object, prepared.layerTarget);
+    try {
+      // 粒子序号（定种子）：登记表或缺省的计数给，装的时候取一次（单图层重建的 `createParticleTree` 读表）
+      if (layer.particle) this.particleOrdinals.set(object, this.particleOrdinal(object));
+      if (layer.attachment) {
+        this.attachments.set(object, layer.attachment);
+        this.stamps ??= new WorldStamps();
+      }
+      this.attachedLayers = null;
+      const built = this.buildLayer(runtime, prepared.plan, prepared.prepared, state, worlds);
+      this.install(runtime, built);
+      if (previousTree && built.tree) built.tree.system.adoptScriptControl(previousTree.system);
+      if (typeof prepared.variants === "string") this.freezeVariants(layer, state, prepared.variants);
+      if (prepared.shadows) this.installShadowCasters(runtime, prepared.shadows, state);
+      this.ensureParticleIndices(this.particleCapacityOf(layer, prepared.plan));
+    } catch (error) {
+      this.teardown(object);
+      throw error;
+    }
+  }
+
+  /**
+   * 放弃一个备好、不装的对象（L4）：还掉 fbo 引用、释放它独占的 fbo、被依赖层的独占 RT 与变形纹理。已装上或已放弃的什么都不做。借过的池化合成 RT、
+   * 建过的管线留在共享池与缓存里。
+   */
+  discardPrepared(prepared: PreparedObject): void {
+    if (prepared.owner !== this || prepared.settled) return;
+    prepared.settled = true;
+    for (const key of prepared.fboKeys) this.releaseFbo(key);
+    for (const record of prepared.textFbos ?? []) this.dropTarget(record.id);
+    if (prepared.layerTarget && this.layerTargets.get(prepared.layer.object) !== prepared.layerTarget)
+      this.releaseTarget(prepared.layerTarget);
+    for (const [key, target] of prepared.morphs) if (this.morphTargets.get(key) !== target) this.releaseTarget(target);
   }
 
   private clearTarget(encoder: GPUCommandEncoder, target: RenderTarget, color: readonly number[], label: string): void {
@@ -3037,9 +3607,15 @@ export class GpuScene {
     return this.resolveTexture(ref, resources);
   }
 
-  /** 全场一份的粒子索引缓冲（`quadIndices`）：每粒子 `0 1 2 0 2 3`，建场景时写一次。 */
-  private createParticleIndices(capacity: number): void {
+  /**
+   * 全场一份的粒子索引缓冲（`quadIndices`）：每粒子 `0 1 2 0 2 3`，建场景时按全场最大的 `maxcount` 写一次。之后装的对象要的更多时（L4）
+   * 重建并释放旧的；容量够就不动。draw 不持有它，编码时现取 `particleIndices`。`capacity` 为负（没有粒子步骤）时什么都不做。
+   */
+  private ensureParticleIndices(capacity: number): void {
+    if (capacity < 0) return;
     const particles = Math.max(1, capacity);
+    if (this.particleIndices && this.particleIndices.particles >= particles) return;
+    if (this.particleIndices) this.release(this.particleIndices.buffer);
     const indices = quadIndices(particles);
     const buffer = this.own(
       this.device.createBuffer({
@@ -3939,6 +4515,8 @@ export class GpuScene {
    */
   sync(state: SceneState): void {
     this.lightState = state;
+    // 平面反射名单随登记表的增删刷新（L4）
+    this.syncReflectionList(state);
     // 对象被删（P6d3）：先释放被删对象的资源，后面的刷新与重建就不会再碰它们
     if (state.structureVersion !== this.structureSeen) {
       this.structureSeen = state.structureVersion;
@@ -4140,7 +4718,7 @@ export class GpuScene {
     const own = this.layerTargets.get(runtime.object);
     if (own && (own.width !== width || own.height !== height)) {
       this.releaseTarget(own);
-      this.createLayerTarget(layer);
+      this.layerTargets.set(layer.object, this.createLayerTarget(layer));
       resources.composites.length = 0;
     }
     this.resizeTextFbos(runtime.object, [width, height]);
@@ -4543,7 +5121,7 @@ export class GpuScene {
    * 粒子、文本，或图像层的直接上屏（`direct`）。名单里别的种类编译期已照报（`compile/reflection.ts`）。
    */
   private reflects(draw: Draw): boolean {
-    if (!this.reflectionList?.has(draw.object)) return false;
+    if (!this.reflected(draw.object)) return false;
     const { step } = draw;
     if (step.target.kind !== "scene" || draw.layer.group != null) return false;
     if (Object.values(step.inputs).some((ref) => ref.kind === "reflection")) return false;
@@ -4653,56 +5231,115 @@ export class GpuScene {
    * 每帧的量（`g_Time`、骨骼）随 `update` 写；按图集条目各一份 uniform 副本（`g_ModelMatrix` 每帧按当前状态、`g_ViewportViewProjectionMatrices`
    * 是这一条的视图），逐视图 `firstInstance` 取视图号。`fur4` 的投射变体不带 `INSTANCECOUNT`，只画基础网格一层（R6）。
    * 帧级剔正面（`alignmentfliph`）在我们这里没有接，剔除一律 NONE（WPE 材质缺省剔除时的实际状态）。
+   * 整场加载时在变体之后逐对象跑（L4：单个对象的同一段是 `prepareObject` 备管线、`installObject` 建 draw）。
    */
   async buildShadowCasters(state: SceneState): Promise<void> {
     if (!this.shadowAtlas) return;
-    const worlds = new Map<number, Mat4>();
-    for (const runtime of this.layers) {
-      const layer = runtime.layer;
-      const model = layer.model;
-      if (!model?.castShadow) continue;
-      for (const [m, mesh] of model.meshes.entries()) {
-        const pass = mesh.shadow;
-        if (!pass || pass.program === null || !mesh.indexCount) continue;
-        const program = await this.ensureProgram(pass.program);
-        const morphSlot = program.result.textures?.find((t) => t.meta?.material === "morph")?.slot;
-        const { inputs, reasons } = shadowCasterInputs(
-          pass,
-          model.skeleton?.morphs[m] && morphSlot !== undefined
-            ? { slot: morphSlot, object: layer.object, mesh: m }
-            : null,
-        );
-        if (reasons.length) throw new SceneRenderError(reasons);
-        const step: MeshStep = {
-          kind: "mesh",
-          mesh: m,
-          pass,
-          target: { kind: "scene" },
-          inputs,
-          blending: pass.blending,
-          raster: rasterState(pass, pass, pass.blending),
-        };
-        const layout = this.meshLayoutOf(layer, step);
-        const pipeline = await createShadowPipeline(
-          this.device,
-          program,
-          layout.buffers,
-          "none",
-          pass.blending === "alphatocoverage",
-          SHADOW_ATLAS_FORMAT,
-        );
-        const draw = this.createDraw(layer, step, runtime.resources, { program, pipeline }, state, worlds);
-        this.indexDraw(draw);
-        const caster = this.shadowCasterOf(draw, layer.object);
-        this.shadowCasters.push(caster);
-        this.shadowCasterOwners.set(caster, layer.object);
-      }
+    for (const runtime of [...this.layers]) {
+      const shadows = await this.prepareShadowCasters(runtime.layer);
+      if (shadows.length) this.installShadowCasters(runtime, shadows, state);
     }
   }
 
-  /** 一个投射者 draw 的逐条目副本（同反射副本的做法，`reflectionCopyOf`）。 */
-  private shadowCasterOf(draw: Draw, object: number): ShadowCasterDraw {
-    const copies = new Map<number, { block: UniformBlock; buffer: GPUBuffer; bindGroup: GPUBindGroup }>();
+  /**
+   * 一个图层的投射者步骤（L4，原 `buildShadowCasters` 的循环体前半）：有阴影图集、模型 `castShadow` 时，每个有投射变体与索引的网格一步。投射
+   * 着色器的 `morph` 槽按注解的 `material` 键找（程序的反射就是 `bundle.programs` 里那一份），认不出的运行时名字抛 `SceneRenderError`。
+   */
+  private shadowCasterSteps(layer: SceneLayer): { step: MeshStep; layout: MeshVertexLayout; a2c: boolean }[] {
+    const model = layer.model;
+    if (!this.shadowAtlas || !model?.castShadow) return [];
+    const out: { step: MeshStep; layout: MeshVertexLayout; a2c: boolean }[] = [];
+    for (const [m, mesh] of model.meshes.entries()) {
+      const pass = mesh.shadow;
+      if (!pass || pass.program === null || !mesh.indexCount) continue;
+      const morphSlot = this.bundle.programs[pass.program]?.textures?.find((t) => t.meta?.material === "morph")?.slot;
+      const { inputs, reasons } = shadowCasterInputs(
+        pass,
+        model.skeleton?.morphs[m] && morphSlot !== undefined
+          ? { slot: morphSlot, object: layer.object, mesh: m }
+          : null,
+      );
+      if (reasons.length) throw new SceneRenderError(reasons);
+      const step: MeshStep = {
+        kind: "mesh",
+        mesh: m,
+        pass,
+        target: { kind: "scene" },
+        inputs,
+        blending: pass.blending,
+        raster: rasterState(pass, pass, pass.blending),
+      };
+      out.push({ step, layout: this.meshLayoutOf(layer, step), a2c: pass.blending === "alphatocoverage" });
+    }
+    return out;
+  }
+
+  /** 一个图层的投射者的程序与管线（L4，异步，逐个网格 await，同以前）。 */
+  private async prepareShadowCasters(layer: SceneLayer): Promise<ShadowCasterPrep[]> {
+    const out: ShadowCasterPrep[] = [];
+    for (const { step, layout, a2c } of this.shadowCasterSteps(layer)) {
+      const program = await this.ensureProgram(step.pass.program!);
+      out.push({ step, program, pipeline: await this.shadowPipelineFor(program, layout, a2c) });
+    }
+    return out;
+  }
+
+  /** `prepareShadowCasters` 的同步版（L4，`prepareObjectSync`）：缺程序或建不了管线（A2C）时 null。 */
+  private prepareShadowCastersNow(
+    steps: readonly { step: MeshStep; layout: MeshVertexLayout; a2c: boolean }[],
+  ): ShadowCasterPrep[] | null {
+    const out: ShadowCasterPrep[] = [];
+    for (const { step, layout, a2c } of steps) {
+      const program = this.readyPrograms.get(step.pass.program!);
+      if (!program) return null;
+      const key = shadowPipelineKey(program, layout, a2c);
+      let pipeline = this.readyShadowPipelines.get(key) ?? null;
+      if (!pipeline && !a2c) {
+        const made = this.capturePipeline((device) =>
+          createShadowPipeline(device, program, layout.buffers, "none", false, SHADOW_ATLAS_FORMAT),
+        );
+        if (made) {
+          this.shadowPipelines.set(key, made.promise);
+          this.readyShadowPipelines.set(key, (pipeline = made.pipeline));
+        }
+      }
+      if (!pipeline) return null;
+      out.push({ step, program, pipeline });
+    }
+    return out;
+  }
+
+  /** 投射者的管线（L4 起按键缓存，同 `pipelineFor`）：没有颜色附件、深度是阴影图集，剔除 NONE。 */
+  private shadowPipelineFor(program: GpuProgram, layout: MeshVertexLayout, a2c: boolean): Promise<GPURenderPipeline> {
+    const key = shadowPipelineKey(program, layout, a2c);
+    let pipeline = this.shadowPipelines.get(key);
+    if (!pipeline) {
+      pipeline = createShadowPipeline(this.device, program, layout.buffers, "none", a2c, SHADOW_ATLAS_FORMAT).then(
+        (ready) => {
+          this.readyShadowPipelines.set(key, ready);
+          return ready;
+        },
+      );
+      this.shadowPipelines.set(key, pipeline);
+    }
+    return pipeline;
+  }
+
+  /** 装上一个图层的投射者（L4，原 `buildShadowCasters` 的循环体后半）：建 draw、进索引、进 `shadowCasters` 与归属表。 */
+  private installShadowCasters(runtime: LayerRuntime, shadows: readonly ShadowCasterPrep[], state: SceneState): void {
+    const worlds = new Map<number, Mat4>();
+    for (const { step, program, pipeline } of shadows) {
+      const draw = this.createDraw(runtime.layer, step, runtime.resources, { program, pipeline }, state, worlds);
+      this.indexDraw(draw);
+      const record: ShadowCasterRecord = { object: runtime.object, draw, copies: new Map() };
+      const caster = this.shadowCasterOf(record);
+      this.shadowCasters.push(caster);
+      this.shadowCasterRecords.set(caster, record);
+    }
+  }
+
+  /** 一个投射者 draw 的逐条目副本（同反射副本的做法，`reflectionCopyOf`）；副本记在 `record.copies`，卸对象时释放。 */
+  private shadowCasterOf({ draw, object, copies }: ShadowCasterRecord): ShadowCasterDraw {
     return {
       prepare: (entry: number, views: readonly ShadowView[]) => {
         if (!draw.block) return;
@@ -5390,7 +6027,7 @@ export class GpuScene {
     // 阴影 pass（P13d）：在反射与主 pass 之前（帧函数 `0x14018031a`），每帧清图集、画投射者
     this.encodingState = state;
     this.shadowAtlas?.encode(encoder, this.shadowCasters);
-    const reflectionTarget = this.reflectionList ? (this.reflectionTargets?.reflection ?? null) : null;
+    const reflectionTarget = this.reflectionSet ? (this.reflectionTargets?.reflection ?? null) : null;
     if (!reflectionTarget) this.reflectionTargets?.encode(encoder, clear);
     if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);
     const snapshot = () => {
@@ -5493,7 +6130,7 @@ export class GpuScene {
     // 运行时对象表的派生（P6d3）：顶层绘制顺序与位置表
     const { top: topLayers, position } = this.structure(state);
     // 反射 pass 的遍历顺序：对象表里有运行时的全部图层（名单里组内的也在，同以前遍历 `this.layers`，只是改按对象表顺序）
-    const reflectionOrder = this.reflectionList
+    const reflectionOrder = this.reflectionSet
       ? state.order.flatMap((object) => {
           const runtime = this.runtimeByObject.get(object);
           return runtime ? [runtime] : [];
@@ -5622,7 +6259,7 @@ export class GpuScene {
         });
       };
       for (const runtime of reflectionOrder) {
-        if (!this.reflectionList!.has(runtime.object) || !visible.has(runtime.object)) continue;
+        if (!this.reflected(runtime.object) || !visible.has(runtime.object)) continue;
         for (const op of runtime.ops) {
           if (op.kind === "draw") reflect(op.draw);
           else if (op.kind === "particle-tree") {
@@ -5749,6 +6386,9 @@ export class GpuScene {
     this.shadowAtlas?.destroy();
     this.shadowAtlas = null;
     this.shadowCasters = [];
+    this.shadowCasterRecords.clear();
+    this.fboPool.clear();
+    this.freeTargets.length = 0;
     this.volumetrics = null;
     this.lightFrameCache = null;
     this.depthTarget = null;

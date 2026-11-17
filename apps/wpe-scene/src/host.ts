@@ -251,8 +251,8 @@ export class SceneHost {
   private scriptBundle: SceneBundle | null = null;
   private scriptState: SceneState | null = null;
   /**
-   * 当前场景的登记表（L3b，`compile/registry.ts`）：场景换上时（`beforeFirstFrame`）为这份 bundle 建一个，换场景 / 重编译时换新的，退回与销毁时丢掉。
-   * `addCompiledObject` 经它加 / 换对象；删除路径的登记表部分（`removeObjectEverywhere` 的 `structural`）本步不接，见那个函数。
+   * 当前场景的登记表（L3b，`compile/registry.ts`）：建 GPU 场景之前为这份 bundle 建一个（L4：粒子序号从它取），场景换上时（`beforeFirstFrame`）
+   * 成为当前的，换场景 / 重编译时换新的，退回与销毁时丢掉。`addCompiledObject` 经它加 / 换对象，删除生效处（`onDestroyed`）经它摘对象（L4）。
    */
   private registry: SceneRegistry | null = null;
   /** 用户纹理来源的种类表（名字 → 种类）：加载时按 bundle 建，`addCompiledObject` 带来新来源时补（`state.onUserTexture` 查它）。 */
@@ -714,11 +714,14 @@ export class SceneHost {
   /**
    * 删除生效之后（P6d3a）：记进结构、声音停播并摘掉、光标的悬停 / 按下集合摘掉（不发 Leave / Up）；删除改了组归属时请求重编译。
    * L3b 起顺带清各子系统与状态里被删对象的残留（关键帧、puppet、文本排版引用、状态的按对象的表），只少占内存，不改画面。
+   * L4 起登记表一起摘（`structural: true`）：不改组归属的删除接着 `restructure`（挂点、子对象变根后的父）；改组归属的只摘登记表条目、不
+   * `restructure`（渲染器的组合成 RT 与子层的 op 还按旧的组，重算会让子层被当顶层去画），照旧整场重载（L7 去掉）。GPU 资源由下一次 `sync` 的
+   * `releaseRemoved` 释放。
    */
   private onDestroyed(objects: number[], regroup: boolean): void {
     recordDestroyed(this.structure, objects);
-    // 声音停播并摘掉、关键帧 / puppet / 文本排版的残留与状态的按对象的表（L3b）；登记表与组 / 挂点重算本步不接（见 `removeObjectEverywhere`）
-    this.removeObjectEverywhere(objects, { structural: false });
+    // 声音停播并摘掉、关键帧 / puppet / 文本排版的残留、状态的按对象的表、登记表（L3b、L4）；改组归属时不 restructure
+    this.removeObjectEverywhere(objects, { structural: true, restructure: !regroup });
     this.renderer?.forgetObjects(objects);
     this.options.report.debug(`场景脚本删除了图层：${objects.join(",")}`);
     if (!regroup) return;
@@ -834,16 +837,18 @@ export class SceneHost {
    * puppet → 关键帧 → 状态按对象的表（`dropObject`）→ 登记表（`removeObject`）→ 最后 `restructure` 一次（被删对象的子对象已成根，组与挂点要重算）。
    * 脚本已由 `runtime.destroyObjects` 清；用户纹理来源是场景级的、媒体 / 音频订阅是只增的，都不摘。
    *
-   * **`structural: false` 是本步实际接进删除路径的形态**，登记表与 `restructure` 两步留给 L4（渲染侧按 bundle 现读的消费者还没跟上），审读结论：
-   * - `restructure` 会改活的 bundle 图层的 `group` / `subtree` / `attachment`，渲染器 draw 时读它们（`render/structure.ts` 按 `layer.group == null` 选顶层、
-   *   `groupOf` / `groupDepth` 找组的 RT）：删组之后子层的 `group` 变 null，会被当顶层去画、而它们的 op 指向已释放的组合成 RT；
-   * - `registry.removeObject` 从 `bundle.layers` 摘掉图层，`ScriptApi.newLayerId` 按 `bundle.layers` 的 id 最大值取新 id，删掉最大 id 的层会让它被重新发出
-   *   （WPE 的 id 不回收）；`findLayer` / `getLayerByID` 等也按 `bundle.layers` 找。
-   * 其余各处（状态的按对象的表、关键帧、puppet、文本排版）渲染侧读它们都带空值保护、且 `releaseRemoved` 在同一帧下一次 `sync` 先于任何读取释放被删对象的 draw。
+   * 选项：`structural: false` 只清子系统与状态，不碰登记表（L3b 时删除路径的形态）；`restructure: false` 摘登记表条目但不重算组与挂点（L4：删除改了
+   * 组归属时，渲染器的组合成 RT 与子层的 op 还按旧的组，`restructure` 把子层的 `group` 置 null 会让它们被当顶层去画；这种删除到 L7 之前整场重载）。
+   * L3b 审读的另一个阻碍（`ScriptApi.newLayerId` 按 `bundle.layers` 取最大 id，删掉最大 id 的层会让它被重新发出）L4 改成单调分配器解决；
+   * `findLayer` / `getLayerByID` 按活的 bundle 找，删掉的找不到是对的。其余各处（状态的按对象的表、关键帧、puppet、文本排版）渲染侧读它们都带空值保护，
+   * 且 `releaseRemoved` 在同一帧下一次 `sync` 先于任何读取释放被删对象的 draw。
    */
-  private removeObjectEverywhere(objects: readonly number[], options: { structural?: boolean } = {}): void {
+  private removeObjectEverywhere(
+    objects: readonly number[],
+    options: { structural?: boolean; restructure?: boolean } = {},
+  ): void {
     if (objects.length === 0) return;
-    const { structural = true } = options;
+    const { structural = true, restructure = true } = options;
     const set = new Set(objects);
     const state = this.scriptState;
     this.sceneSounds?.remove(objects);
@@ -859,7 +864,7 @@ export class SceneHost {
     const registry = this.registry;
     if (!registry) return;
     for (const object of objects) registry.removeObject(object);
-    if (state) registry.restructure(state, (item) => this.restructureBone(registry.bundle, item));
+    if (state && restructure) registry.restructure(state, (item) => this.restructureBone(registry.bundle, item));
   }
 
   private requestScriptReload(): void {
@@ -1976,12 +1981,15 @@ export class SceneHost {
       const pendingPuppets = this.pendingPuppets?.bundle === bundle ? this.pendingPuppets : null;
       const stalePuppets = pendingPuppets ? null : this.pendingPuppets;
       const puppets = pendingPuppets?.puppets ?? new ScenePuppets(puppetEntries(bundle.layers));
+      // 登记表（L4 起在建 GPU 场景之前建）：粒子序号的属主，渲染器建场景时按它定粒子层的随机种子；换上场景时（`beforeFirstFrame`）才成为当前的
+      const registry = new SceneRegistry(bundle);
       await current.load(bundle, {
         ignoreUnsupported: force,
         texts,
         relayout,
         userTextures: this.userTextures,
         puppets,
+        particleOrdinal: (object) => registry.particleOrdinal(object),
         onProgress: (stage, done, total) => load.report(stage, done, total),
         beforeFirstFrame: (state) => {
           // 结构接续（P6d3a）：旧脚本状态里的对象表 / 待删 / 父子（首次加载时是 `init` 里 `sortLayer` / `setParent` / `destroyLayer` 落下的，
@@ -2015,8 +2023,8 @@ export class SceneHost {
           this.drawingBundle = bundle;
           this.scriptBundle = bundle;
           this.scriptState = state;
-          // 登记表跟着这份 bundle（L3b）：换场景 / 重编译时换新的
-          this.registry = new SceneRegistry(bundle);
+          // 登记表跟着这份 bundle（L3b）：换场景 / 重编译时换新的（L4：建 GPU 场景之前已建好，粒子序号从它取）
+          this.registry = registry;
           // 新建对象编进了 bundle（P6d3b）：脚本条目换成新 bundle 里的（常量目标等由编译填好）、API 的待编对象清掉、分配器对齐
           syncAllocator(this.allocator, bundle);
           this.runtime?.refreshScripts(bundle.scripts.list);

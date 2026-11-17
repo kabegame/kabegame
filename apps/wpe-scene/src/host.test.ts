@@ -1162,3 +1162,51 @@ describe("SceneHost：编译会话的留与关（L2）", () => {
     host.dispose();
   });
 });
+
+describe("SceneHost：登记表在建 GPU 场景之前建（L4）", () => {
+  beforeEach(() => {
+    vi.stubGlobal("__SCENE_DEV__", false);
+    compile.mockReset();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    rendererPointer.load.mockReset();
+    rendererPointer.load.mockImplementation(async () => {});
+  });
+
+  it("load 收到登记表的 particleOrdinal（按 bundle 里带粒子的图层顺序），换上场景时同一个登记表成为当前的", async () => {
+    const layer = (object: number, particle: boolean) => ({
+      object,
+      id: object + 1,
+      parent: null,
+      effects: [],
+      passes: [],
+      ...(particle ? { particle: {} } : {}),
+    });
+    compile.mockImplementation(async ({ userProperties }) => ({
+      ...bundleFor(userProperties),
+      bindings: [],
+      layers: [layer(0, false), layer(1, true), layer(2, false), layer(3, true)] as unknown as SceneBundle["layers"],
+    }));
+    let ordinal: ((object: number) => number) | undefined;
+    rendererPointer.load.mockImplementation(async (_bundle: unknown, options?: unknown) => {
+      ordinal = (options as { particleOrdinal?: (object: number) => number }).particleOrdinal;
+      (options as { beforeFirstFrame?: (state: unknown) => void }).beforeFirstFrame?.({
+        adoptStructure() {},
+        syncAnimationLayers() {},
+      });
+    });
+    const report = reporter();
+    const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
+    host.applyUserProperties(fx(false));
+    await vi.waitFor(() => expect(report.ready).toHaveBeenCalledOnce());
+    expect([0, 1, 2, 3].map((object) => ordinal!(object))).toEqual([0, 0, 0, 1]);
+    const registry = (host as unknown as { registry: { particleOrdinal(object: number): number } }).registry;
+    expect(registry.particleOrdinal(3)).toBe(1);
+    // 换上的登记表就是交给渲染器的那一个：在它上面摘掉对象，渲染器拿到的回调跟着变（序号不回收）
+    (registry as unknown as { removeObject(object: number): boolean }).removeObject(1);
+    expect(ordinal!(1)).toBe(0);
+    expect(ordinal!(3)).toBe(1);
+    host.dispose();
+  });
+});

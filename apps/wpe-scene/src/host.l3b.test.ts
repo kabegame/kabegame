@@ -3,7 +3,7 @@
  * 各子系统桩掉，记调用顺序：
  * - 加：登记表（场景级增量 → 对象）→ 状态 → restructure → 关键帧 → puppet → 文本 → 脚本（refreshScripts → replayWritesFor）→ adoptBundle → …；replace 先摘旧的；
  * - 删：声音 → 文本排版引用 → puppet → 关键帧 → 状态按对象的表 →（structural 才有）登记表 → restructure 一次；
- * - 删除生效处（`onDestroyed`）接的是 `structural: false`：登记表与 restructure 不碰（审读结论见 `removeObjectEverywhere` 的注释）；
+ * - 删除生效处（`onDestroyed`）L4 起接 `structural: true`：不改组归属的删除摘登记表并 restructure，改组归属的只摘登记表、不 restructure、照旧整场重载；
  * - 真的关键帧 / puppet 建删 100 次后不留残留。
  */
 import { describe, expect, it, vi } from "vitest";
@@ -38,8 +38,9 @@ type Internals = {
   scriptApi: unknown;
   sceneMedia: unknown;
   addCompiledObject(delta: unknown, mode: "add" | "replace"): Promise<void>;
-  removeObjectEverywhere(objects: number[], options?: { structural?: boolean }): void;
+  removeObjectEverywhere(objects: number[], options?: { structural?: boolean; restructure?: boolean }): void;
   onDestroyed(objects: number[], regroup: boolean): void;
+  requestScriptReload(): void;
 };
 
 function makeHost() {
@@ -236,8 +237,25 @@ describe("SceneHost.removeObjectEverywhere（L3b）", () => {
     expect(log).toEqual([]);
   });
 
-  it("删除生效处（onDestroyed）接的是 structural: false，并照旧记结构、停声音", () => {
+  it("restructure: false：摘登记表条目，不重算组与挂点", () => {
     const { host, log } = wired();
+    host.removeObjectEverywhere([1, 2], { restructure: false });
+    expect(log).toEqual([
+      "sounds.remove",
+      "texts.releaseLayout",
+      "puppets.remove",
+      "animations.removeObjects",
+      "state.dropObject",
+      "state.dropObject",
+      "registry.removeObject",
+      "registry.removeObject",
+    ]);
+  });
+
+  it("删除生效处（onDestroyed，L4）：不改组归属时摘登记表并 restructure 一次，不重载；照旧记结构、停声音", () => {
+    const { host, log } = wired();
+    const reload = vi.fn();
+    host.requestScriptReload = reload;
     host.onDestroyed([1], false);
     expect(log).toEqual([
       "sounds.remove",
@@ -245,9 +263,27 @@ describe("SceneHost.removeObjectEverywhere（L3b）", () => {
       "puppets.remove",
       "animations.removeObjects",
       "state.dropObject",
+      "registry.removeObject",
+      "registry.restructure",
     ]);
-    expect(log).not.toContain("registry.removeObject");
-    expect(log).not.toContain("registry.restructure");
+    expect(reload).not.toHaveBeenCalled();
+    expect((host as unknown as { structure: { destroyed: number[] } }).structure.destroyed).toEqual([1]);
+  });
+
+  it("删除生效处（onDestroyed，L4）：改组归属时只摘登记表条目、不 restructure，请求整场重载", () => {
+    const { host, log } = wired();
+    const reload = vi.fn();
+    host.requestScriptReload = reload;
+    host.onDestroyed([1], true);
+    expect(log).toEqual([
+      "sounds.remove",
+      "texts.releaseLayout",
+      "puppets.remove",
+      "animations.removeObjects",
+      "state.dropObject",
+      "registry.removeObject",
+    ]);
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it("真的关键帧 / puppet 建删 100 次：不留残留", () => {

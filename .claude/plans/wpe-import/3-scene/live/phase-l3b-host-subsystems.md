@@ -182,6 +182,16 @@ private removeObjectEverywhere(objects: readonly number[]): void;
 
 **真机**：`scriptCorpus` 在当前代码上重取基线，两遍 236 张逐张相同，没有排除项（`ignore/live/l3b/corpus-base-1`、`-2`）。L3b 产物（`index-C_MyNBdA.js`）跑完与基线 236/236 相同。
 
+**真机删层**（提交后补做）：
+- 做法：测试工程 `ignore/p6/d3/proj/p6d3-struct` 在主窗口预览里实时跑 90 多秒，带 dev 强制渲染，因为工程里的 `kbcustom` 是给 WPE 对照用的标记。
+- 覆盖：它依次删了组里的子层、组、相机对象、灯。
+- 结果：
+  - 最终剩下的 6 个对象与 P6d3 记下的 WPE 日志（`ignore/p6/d3/out/wpe-struct.log` 的 `s7+1`）相同；
+  - 删组两次触发整场重编译，是原有行为；
+  - 帧时间均值 0.45 ms，脚本没有报错，应用日志没有异常；
+  - 画面上组被删后子层成了根图层，照常画。
+- 注意：宿主转发脚本 `console.error` 每段脚本每分钟最多 10 条，这个工程第 3 阶段起的日志被限流省掉了，所以按最终状态核对，没有逐行比日志。
+
 ## 交付
 
 sonnet 执行代理在主工作区实现。

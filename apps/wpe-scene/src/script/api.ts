@@ -364,6 +364,14 @@ export class ScriptApi {
   private readonly pending = new Map<number, PendingLayer>();
   /** 建出的对象的 id → `objects` 下标（整个会话保留，编进 bundle 后 `getLayerByID` 仍按建出时发的 id 找得到）。 */
   private readonly createdIds = new Map<number, number>();
+  /**
+   * 新图层 id 的下界（L4，`newLayerId`）：只增不减。换 bundle（`adoptBundle`，或 `newLayerId` 发现脚本看到的 bundle 换了）时取「当前 bundle 图层、已建
+   * 对象与待编对象的 id 最大值 + 1」与旧值的较大者；之后登记表从活的 `bundle.layers` 摘掉最大 id 的层（L4 删除路径），这个 id 也不会再发（WPE 的 id
+   * 不回收）。
+   */
+  private nextLayerId = 1;
+  /** `nextLayerId` 上次按哪份 bundle 取的下界。 */
+  private layerIdBundle: SceneBundle | null = null;
   /** `engine.registerAsset` 的登记表：脚本条目 id → 路径，只用来判同一段脚本重复登记（P6d3b 的 `__workshopId` 改写不读它，查的是编译期的 `bundle.assetPaths`）。 */
   private readonly registeredAssetsById = new Map<string, Set<string>>();
   /**
@@ -1611,9 +1619,11 @@ export class ScriptApi {
       const toFloat = (value: unknown): number => (typeof value === "number" ? Math.fround(value) : 0);
       (["eye", "center", "up"] as const).forEach((field, i) => {
         const vector = fields[i];
-        if (isObject(vector)) this.access.write({ kind: "camera-base", field }, [toFloat(vector.x), toFloat(vector.y), toFloat(vector.z)]);
+        if (isObject(vector))
+          this.access.write({ kind: "camera-base", field }, [toFloat(vector.x), toFloat(vector.y), toFloat(vector.z)]);
       });
-      if (typeof fields[3] === "number") this.access.write({ kind: "camera-base", field: "zoom" }, [Math.fround(fields[3])]);
+      if (typeof fields[3] === "number")
+        this.access.write({ kind: "camera-base", field: "zoom" }, [Math.fround(fields[3])]);
       return true;
     });
   }
@@ -1763,6 +1773,18 @@ export class ScriptApi {
    */
   adoptBundle(): void {
     for (const object of [...this.pending.keys()]) if (this.findLayer(object)) this.pending.delete(object);
+    this.seedLayerIds();
+  }
+
+  /** 新图层 id 的下界按当前 bundle 抬高（L4，见 `nextLayerId`）。 */
+  private seedLayerIds(): void {
+    const bundle = this.access.bundle();
+    let max = 0;
+    for (const layer of bundle.layers) max = Math.max(max, layer.id);
+    for (const id of this.createdIds.keys()) max = Math.max(max, id);
+    for (const item of this.pending.values()) max = Math.max(max, item.id);
+    this.nextLayerId = Math.max(this.nextLayerId, max + 1);
+    this.layerIdBundle = bundle;
   }
 
   /** 当前存在的对象里按 JSON `id` 找（编译的图层，再按 `createdIds` 找建出的对象，含待编的；待删与已删的不算）；找不到 null。 */
@@ -1774,15 +1796,20 @@ export class ScriptApi {
     return created !== undefined && alive(created) ? created : null;
   }
 
-  /** 配置里有非 0 的数字 `id` 照用（不查重）；否则取「全部图层与已建对象的 id 最大值 + 1」起第一个没被占的。WPE 是渲染器级计数器，值复刻不了。 */
+  /**
+   * 配置里有非 0 的数字 `id` 照用（不查重）；否则取「全部图层与已建对象的 id 最大值 + 1」与单调下界（`nextLayerId`，L4）的较大者起第一个没被占的，
+   * 发出后下界移到它之后。WPE 是渲染器级计数器，值复刻不了；只保证不回落、不重发。
+   */
   private newLayerId(config: Record<string, unknown> | unknown[]): number {
     const own = Array.isArray(config) ? 0 : config.id;
     if (typeof own === "number" && own !== 0) return own;
+    if (this.access.bundle() !== this.layerIdBundle) this.seedLayerIds();
     const used = new Set<number>(this.createdIds.keys());
     for (const layer of this.access.bundle().layers) used.add(layer.id);
     for (const item of this.pending.values()) used.add(item.id);
-    let id = Math.max(0, ...used) + 1;
+    let id = Math.max(Math.max(0, ...used) + 1, this.nextLayerId);
     while (used.has(id)) id++;
+    this.nextLayerId = id + 1;
     return id;
   }
 

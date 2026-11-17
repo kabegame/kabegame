@@ -284,6 +284,13 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
     - 删一半之后，等于「只加剩下的」。
 
     `scriptCorpus` 前后比 236/236 相同。
+- **GPU 按对象装卸（L4）**：`GpuScene` 从「整场一次建」改成「场景级准备 + 逐对象装卸」，整场加载走同一条路，产物不变（全库画面哈希对基线）。
+  - **三个入口**：`prepareObject(layer, state)` 异步备好一个对象（计划、新纹理、变形纹理、fbo 引用、被依赖层的独占 RT、程序与管线含反射副本、变体管线、投射管线），不碰正在画的东西，失败只收回自己建的；`installObject(prepared, state)` 在帧边界同步装上（运行时、合成 RT、draw、粒子树预热、投射者、挂点），中途出错回滚并抛 `SceneRenderError`；`removeObject(object)` 是 `releaseRemoved` 的单对象版（内部 `teardown`），另外还 fbo 引用、摘粒子序号、挂点、投射者。`prepareObjectSync` 给克隆命中缓存用：程序都就绪时不经 await，缺的管线同步 `createRenderPipeline` 当帧生效（同 WPE），A2C 管线或程序缺时返回 null。
+  - **场景级资源可增长**：纹理表 `ensureTextures` 按区间追加（备对象时另补这一层要用、之前没传的纹理）；fbo 池是带引用计数的字段，归零释放，`targets` 用空位表复用下标；粒子索引缓冲容量不够时重建、编码时现取；变形纹理按对象、裁切遮罩第一次用到才建；挂点戳按需建；阴影投射者按对象建、投射管线按键缓存。深度附件、场景目标、反射 RT、阴影图集、泛光、体积光仍是加载时一次。
+  - **派生量**：粒子序号（定随机种子）由 `build` 的 `particleOrdinal` 回调给，宿主传登记表的 `particleOrdinal`，缺省按 `bundle.layers` 顺序数；反射名单按 `structureVersion` 从活的 `bundle.reflection.list` 刷新；`layerByObject` 随装卸维护（卸掉的对象仍是别的图层的组时保留，直到整场重载）。
+  - **整场加载**：`populate` = 场景级准备 → 全部对象并行备好（同步段按图层顺序先跑完，fbo 的建立顺序与 `targets` 下标同以前）→ 被依赖层的独占 RT 全部进表 → 按顺序装上（共用一份世界矩阵缓存）。变体管线与投射者仍在 `build` 的错误作用域之外另跑（现有测试钉住了「坏 WGSL 只落在图层自己的作用域」），但走的是和单对象同一组函数。
+  - **删除路径**：`onDestroyed` 接 `structural: true`，不改组归属的删除接着 `restructure`；改组归属的只摘登记表条目、不 `restructure`（子层的 op 还按旧的组），照旧整场重载，L7 去掉。`ScriptApi.newLayerId` 加单调下界 `nextLayerId`，摘掉最大 id 的层后这个 id 不再发（WPE 的 id 不回收）。
+  - **判据**：全库画面哈希（`ignore/live/l4/hash-base-*` 两遍基线，排除两遍之间不同的）与改后逐张相同；假设备单测「整场 build = 空场景逐个装」比到 draw 的 pass 键、管线键、顶点 / uniform 字节、op 序列、fbo 池键与引用、投射者、粒子序号、编码轨迹、粒子列的字节；建删 100 次计数回基线。
 
 ### 能力表（`features.ts`）
 

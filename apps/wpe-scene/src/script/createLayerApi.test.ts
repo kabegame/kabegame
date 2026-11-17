@@ -305,6 +305,39 @@ describe("createLayer 的返回、下标与整理（wpe-bars / wpe-order 的行�
     expect(h.scene.getLayerByID("4")).toBeNull();
   });
 
+  it("id 单调（L4）：登记表从活的 bundle 摘掉最大 id 的层之后再建，id 不回落、不重发", () => {
+    const h = harness(BASE);
+    // 宿主换上场景时（beforeFirstFrame）调一次
+    h.api.adoptBundle();
+    // 删除生效、登记表 removeObject：TOP（id 3）从活的 bundle.layers 里摘掉
+    h.scene.destroyLayer(2);
+    h.state.flushDestroy();
+    h.bundle.layers.splice(2, 1);
+    const a = h.scene.createLayer("models/a.json");
+    expect(JSON.parse(h.structure.created[0].config).id).toBe(4);
+    expect(h.scene.getLayerByID("4")).toBe(a);
+    // 建出的层编进 bundle（adoptBundle）后又被删、从 bundle 摘掉：下一个照样往后数
+    h.bundle.layers.push({ ...h.bundle.layers[0], id: 4, object: 3, name: "" });
+    h.api.adoptBundle();
+    h.bundle.layers.pop();
+    h.scene.createLayer("models/b.json");
+    expect(JSON.parse(h.structure.created[1].config).id).toBe(5);
+    // 配置里带的 id 照用，不动下界之外的分配
+    h.scene.createLayer({ image: "models/c.json", id: 2 });
+    h.scene.createLayer("models/d.json");
+    expect(h.structure.created.map((item) => JSON.parse(item.config).id)).toEqual([4, 5, 2, 6]);
+  });
+
+  it("id：脚本看到的 bundle 换了（重编译）时按新 bundle 抬高下界，旧下界更大时照旧", () => {
+    const h = harness(BASE);
+    h.scene.createLayer("models/a.json");
+    expect(JSON.parse(h.structure.created[0].config).id).toBe(4);
+    // 第一次分配时已按当时的 bundle 定了下界：之后摘掉 id 3 也不回落
+    h.bundle.layers.splice(2, 1);
+    h.scene.createLayer("models/b.json");
+    expect(JSON.parse(h.structure.created[1].config).id).toBe(5);
+  });
+
   it("配置里的父 id 在当时存在的对象里找（编译的图层与待编对象）；找不到 / 待删的当根", () => {
     const h = harness(BASE);
     const kid = h.scene.createLayer({ image: "models/a.json", parent: 2 });

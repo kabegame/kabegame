@@ -68,7 +68,7 @@ import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame, type Came
 import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
 import type { SceneGeneral, SceneLayer } from "../compile/bundle";
 import { CursorSession, type CursorDispatch, type CursorInputSnapshot } from "./cursor";
-import { GpuScene } from "./scene";
+import { GpuScene, type PreparedObject } from "./scene";
 import { SceneState } from "./state";
 import { daytimeOf } from "./uniforms";
 
@@ -171,6 +171,11 @@ export interface SceneLoadOptions {
    * 用户纹理的来源（P11b 步骤 2）：宿主的 `UserTextureSources`，原样交给 `GpuScene.build`；`sync` 换图时同样问它。不给时用户纹理槽都用缺省纹理。
    */
   userTextures?: UserTextureProvider;
+  /**
+   * 粒子序号（L4，定粒子层的随机种子）：宿主传登记表的 `particleOrdinal`，原样交给 `GpuScene.build`。不给时按 `bundle.layers` 里带 `particle`
+   * 的顺序数（同登记表的规则）。
+   */
+  particleOrdinal?: (object: number) => number;
 }
 
 /** 一条就地写：绑定 + 新值（宿主按 `planApply` 挑出来）。 */
@@ -385,6 +390,44 @@ export class SceneRenderer {
     return this.scene?.particleScript(object) ?? null;
   }
 
+  /** 当前场景与它的状态（L4 的装卸转发用）；没有场景时抛错。 */
+  private loaded(): { scene: GpuScene; state: SceneState } {
+    const { scene, state } = this;
+    if (!scene || !state) throw new Error("当前没有场景，不能装卸对象");
+    return { scene, state };
+  }
+
+  /** 备好一个对象（L4，`GpuScene.prepareObject`，按当前场景的状态）。当前场景没有时抛错。 */
+  prepareObject(layer: SceneLayer): Promise<PreparedObject> {
+    const { scene, state } = this.loaded();
+    return scene.prepareObject(layer, state);
+  }
+
+  /** 程序与管线都已就绪时同步备好（L4，`GpuScene.prepareObjectSync`）；缺程序时 null。当前场景没有时抛错。 */
+  prepareObjectSync(layer: SceneLayer): PreparedObject | null {
+    const { scene, state } = this.loaded();
+    return scene.prepareObjectSync(layer, state);
+  }
+
+  /**
+   * 装上备好的对象（L4，`GpuScene.installObject`）：只能在帧边界调（`render` 之外）。备它之后换过场景（整场重编译）时由场景拒绝（抛错）。
+   * 当前场景没有时抛错。
+   */
+  installObject(prepared: PreparedObject): void {
+    const { scene, state } = this.loaded();
+    scene.installObject(prepared, state);
+  }
+
+  /** 卸掉一个对象（L4，`GpuScene.removeObject`）：只能在帧边界调。当前场景没有时抛错。 */
+  removeObject(object: number): void {
+    this.loaded().scene.removeObject(object);
+  }
+
+  /** 放弃一个备好、不装的对象（L4，`GpuScene.discardPrepared`）；场景已经换掉时什么都不做（旧场景随之销毁）。 */
+  discardPrepared(prepared: PreparedObject): void {
+    this.scene?.discardPrepared(prepared);
+  }
+
   /**
    * 就地应用一批绑定写入；需要重编译时返回 false（调用方整场重编译）。
    * 写之前先问状态能不能做：打开带不支持项的 effect、切换冻结的图层、打开没有泛光链的场景不能（`needsRecompile`），
@@ -451,6 +494,7 @@ export class SceneRenderer {
       userTextures: options.userTextures,
       size,
       onProgress: (done, total) => options.onProgress?.("gpu", done, total),
+      particleOrdinal: options.particleOrdinal,
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();

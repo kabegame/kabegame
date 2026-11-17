@@ -444,6 +444,8 @@ export class FragmentCache { … }
 
 ### L4 — GPU 按对象装卸（`render/scene.ts`、`render/renderer.ts`、`dev/probe.ts`）
 
+子计划：[live/phase-l4-gpu-objects.md](live/phase-l4-gpu-objects.md)（2026-11-17）。要点：`populate` 改成「场景级准备 + 逐对象 `prepareObject` / `installObject`」且整场产物逐位不变（全库画面哈希对基线）；场景级资源可增长；粒子序号由登记表给；删除路径接上登记表（改组归属的删除仍重载，L7 去掉）；`newLayerId` 单调。进出组 / 挂点的 GPU 重排是 L7。
+
 #### 点 1 — 场景级资源可增长
 - **修改**
   - **纹理**：`ensureTextures(from)` 增量上传。
