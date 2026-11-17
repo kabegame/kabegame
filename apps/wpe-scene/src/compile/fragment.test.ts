@@ -11,7 +11,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { compileScene, openCompileSession, type SceneBundle, type SceneCompileSession, type ScenePass } from "./bundle";
 import type { SceneReader } from "./fs";
-import { GROUP_CHILD_FRAMEBUFFER } from "./features";
 import { fragmentBlocker, fragmentOf, rekeyFragment, type ObjectFragment } from "./fragment";
 import { mdlStride } from "./mdl";
 import { collectObjectScriptsSync } from "./scripts";
@@ -379,7 +378,7 @@ describe("片段：compileFragment 与 rekeyFragment(fragmentOf) 逐字段相同
     expect(bundle.lightObjects!.map((item) => item.object)).toEqual([4]);
   });
 
-  it("位置相关的字段是空值：group null、subtree []、没有 attachment、effect 的不支持项不含 GROUP_CHILD_FRAMEBUFFER", async () => {
+  it("位置相关的字段是空值：group null、subtree []、没有 attachment", async () => {
     const { session, bundle } = await open();
     const { a, b } = await pair(session, bundle, 0, 40, 900000);
     for (const fragment of [a, b]) {
@@ -526,13 +525,13 @@ describe("fragmentBlocker", () => {
 // 全语料对照覆盖不到的三条路径（L1 验收的变异检查没抓到的）：语料里没有组内关着的读帧缓冲 effect、没有开着的平面反射名单、
 // 没有被 `layerDefs` 滤掉的动画层字段脚本
 describe("语料覆盖不到的位置规整与过滤", () => {
-  it("fragmentOf：组归属、子树、挂点清空，effect 去掉 GROUP_CHILD_FRAMEBUFFER（别的键保留），reflected 取反射名单", async () => {
+  it("fragmentOf：组归属、子树、挂点清空，effect 的不支持项原样保留，reflected 取反射名单", async () => {
     const { bundle } = await open();
     const layer = bundle.layers.find((item) => item.object === 0)!;
     layer.group = 5;
     layer.subtree = [1];
     layer.attachment = { parent: 5, bone: 0, matrix: new Float32Array(16) } as unknown as typeof layer.attachment;
-    layer.effects[0].unsupported = ["effect:keep", GROUP_CHILD_FRAMEBUFFER];
+    layer.effects[0].unsupported = ["effect:keep"];
     bundle.reflection = { planar: true, enabled: true, list: [0, 7] };
     const fragment = fragmentOf(bundle, 0)!;
     expect(fragment.layer.group).toBeNull();
@@ -543,7 +542,7 @@ describe("语料覆盖不到的位置规整与过滤", () => {
     // 不在名单里的为假；整场 bundle 本身不被改
     expect(fragmentOf(bundle, 6)!.reflected).toBe(false);
     expect(layer.group).toBe(5);
-    expect(layer.effects[0].unsupported).toContain(GROUP_CHILD_FRAMEBUFFER);
+    expect(layer.effects[0].unsupported).toEqual(["effect:keep"]);
   });
 
   it("compileFragment：不是 puppet 的对象上的动画层字段脚本被滤掉（同 finalize），和 fragmentOf 相同", async () => {

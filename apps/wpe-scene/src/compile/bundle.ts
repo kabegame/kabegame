@@ -70,8 +70,6 @@ import {
   checkScriptFeatures,
   cursorPickKind,
   EFFECT_UNIFORMS,
-  effectNeedsFramebuffer,
-  GROUP_CHILD_FRAMEBUFFER,
   groupChildIssues,
   isCameraObject,
   isMixedCameraObject,
@@ -1067,8 +1065,7 @@ export function applyAttachments(
 
 /**
  * 组的归属与组里的用法（P5b 步骤 4）的重算：`assignGroups` 之后，组里的图层按 {@link groupChildIssues} 报还不支持的用法（返回 对象 → 键，
- * 没有问题的对象不在表里），关着、运行时可能打开的 effect 读快照时记 {@link GROUP_CHILD_FRAMEBUFFER}（打开时整场重编译，
- * `SceneState.needsRecompile`）；不在组里的图层把这个标记去掉。effect 对象不原地改（写成新对象换进图层的 `effects`），所以两个图层可以共用 effect。
+ * 没有问题的对象不在表里）。读快照在组里不再报（P5f），不再给 effect 记 / 去标记。
  * 编译收尾与 L3a 登记表的 `restructure` 共用这一份。
  */
 export function applyGroupRules(
@@ -1079,29 +1076,9 @@ export function applyGroupRules(
   assignGroups(layers, children);
   const issues = new Map<number, string[]>();
   for (const layer of layers) {
-    if (layer.group === null) {
-      if (layer.effects.some((effect) => effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER)))
-        layer.effects = layer.effects.map((effect) =>
-          effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER)
-            ? { ...effect, unsupported: effect.unsupported.filter((key) => key !== GROUP_CHILD_FRAMEBUFFER) }
-            : effect,
-        );
-      continue;
-    }
+    if (layer.group === null) continue;
     const keys = groupChildIssues(layer);
     if (keys.length > 0) issues.set(layer.object, keys);
-    // 关着、运行时可能打开的 effect 读快照：记进它自己的不支持项，打开时整场重编译，重编译后按上面报
-    if (
-      layer.effects.some(
-        (effect) =>
-          !effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER),
-      )
-    )
-      layer.effects = layer.effects.map((effect) =>
-        !effect.enabled && effectNeedsFramebuffer(effect) && !effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER)
-          ? { ...effect, unsupported: [...effect.unsupported, GROUP_CHILD_FRAMEBUFFER].sort() }
-          : effect,
-      );
   }
   return issues;
 }

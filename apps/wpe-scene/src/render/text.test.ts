@@ -373,6 +373,22 @@ describe("planLayer：文本层", () => {
     });
   });
 
+  it("合成、没开背景在组里（P5f）：直接父是组时 clearalpha 前不拷快照；父是分组节点、顶层各拷一次，且在 compose 之前", () => {
+    const inGroup = { ...textLayer(0, "t", { effect: true }), parent: 1, group: 1 };
+    expect(kinds(planLayer(inGroup, [], undefined, plain).steps)).toEqual([
+      "compose→c0",
+      "text glyphs composite→c0",
+      "final→scene",
+    ]);
+    const underNode = { ...inGroup, parent: 2 };
+    const top = { ...inGroup, parent: null, group: null };
+    for (const layer of [underNode, top]) {
+      const steps = kinds(planLayer(layer, [], undefined, plain).steps);
+      expect(steps.filter((kind) => kind === "snapshot")).toHaveLength(1);
+      expect(steps.indexOf("snapshot")).toBeLessThan(steps.indexOf("compose→c0"));
+    }
+  });
+
   it("合成、开背景（f5）：不拍快照，RT 0 清成背景色 → 字形 → 彩色字形 → 上屏", () => {
     const plan = planLayer(textLayer(0, "t", { effect: true, opaquebackground: true }), [], undefined, withColor);
     expect(kinds(plan.steps)).toEqual([

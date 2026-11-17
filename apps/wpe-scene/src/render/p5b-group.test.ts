@@ -377,10 +377,10 @@ describe("planLayer：组（p5b-grp-*、p5b-nest）", () => {
     expect(planLayer(missing, []).reasons).toEqual(["render:no-group-upload"]);
   });
 
-  it("p5b-nest：外组与内组都是 compose → 子树 → 上屏；子层的计划不变（直接上屏，画到「场景」）", () => {
+  it("p5b-nest：外组与内组都是 compose → 子树 → 上屏；外组层首拷快照，内组直接父是组、不拷（P5f）；子层的计划不变（直接上屏，画到「场景」）", () => {
     const [, outer, s, inner, t] = nestLayers();
-    for (const layer of [outer, inner])
-      expect(kinds(planLayer(layer, []).steps)).toEqual(["snapshot", "compose→c0", "subtree→c0", "final→scene"]);
+    expect(kinds(planLayer(outer, []).steps)).toEqual(["snapshot", "compose→c0", "subtree→c0", "final→scene"]);
+    expect(kinds(planLayer(inner, []).steps)).toEqual(["compose→c0", "subtree→c0", "final→scene"]);
     expect(planLayer(inner, []).composite).toEqual({ count: 1, width: 300, height: 300 });
     for (const layer of [s, t]) expect(kinds(planLayer(layer, []).steps)).toEqual(["direct→scene"]);
   });
@@ -397,6 +397,46 @@ describe("planLayer：组（p5b-grp-*、p5b-nest）", () => {
     ]);
     expect(stepOf(plans[1], "final").pass.key).toBe("objects/1/groupupload");
     expect(stepOf(plans[0], "final").pass.key).toBe("objects/1/effects/0/passes/0");
+  });
+});
+
+describe("planLayer：组里读快照的拷贝点（P5f，p5f-a / p5f-e）", () => {
+  const fbPass = (object: number) => pass(`objects/${object}/passes/0`, { framebuffer: true });
+  const snapshots = (layer: SceneLayer) => kinds(planLayer(layer, []).steps).filter((kind) => kind === "snapshot").length;
+
+  it("直接父是组：基础材质读快照时层首不拷；顶层、隔着分组节点的孙子照拷", () => {
+    const direct = image(2, "FB", [0, 0, 0], [100, 100], { parent: 1, group: 1, passes: [fbPass(2)] });
+    expect(kinds(planLayer(direct, []).steps)).toEqual(["direct→scene"]);
+    const grandchild = image(3, "FBg", [0, 0, 0], [100, 100], { parent: 2, group: 1, passes: [fbPass(3)] });
+    expect(kinds(planLayer(grandchild, []).steps)).toEqual(["snapshot", "direct→scene"]);
+    const top = image(4, "TF", [0, 0, 0], [100, 100], { passes: [fbPass(4)] });
+    expect(kinds(planLayer(top, []).steps)).toEqual(["snapshot", "direct→scene"]);
+  });
+
+  it("effect 前的拷贝不看父：直接父是组也拷（每层至多一次）", () => {
+    const fx = kbfx(2);
+    (fx.steps[0] as { pass: ScenePass }).pass.framebuffer = true;
+    const direct = image(2, "FX", [0, 0, 0], [100, 100], { parent: 1, group: 1, effects: [fx] });
+    expect(snapshots(direct)).toBe(1);
+    const steps = kinds(planLayer(direct, []).steps);
+    expect(steps).toEqual(["base→c0", "snapshot", "final→scene"]);
+  });
+
+  it("colorBlendMode 混合：直接父是组时层首与 passthrough 上屏都不拷；顶层照拷", () => {
+    const passthrough = pass("objects/2/passthrough", { program: PROGRAM.passthrough, framebuffer: true });
+    const inGroup = image(2, "CB", [0, 0, 0], [100, 100], { parent: 1, group: 1, colorBlendMode: 2, passthrough });
+    expect(snapshots(inGroup)).toBe(0);
+    // 隔着分组节点：层首照拷，上屏仍不拷（每层一次）
+    expect(snapshots({ ...inGroup, parent: 9 })).toBe(1);
+    expect(snapshots({ ...inGroup, parent: null, group: null })).toBe(1);
+  });
+
+  it("组的上屏（groupUpload）在组里不拷，顶层照旧", () => {
+    const upload = pass("objects/2/groupupload", { program: PROGRAM.upload, blending: "normal", framebuffer: true });
+    const inner = group(2, "I", { origin: [0, 0, 0], size: [300, 300], subtree: [3] }, { parent: 1, group: 1, groupUpload: upload });
+    inner.passes[0].framebuffer = false;
+    expect(snapshots(inner)).toBe(0);
+    expect(snapshots({ ...inner, parent: null, group: null })).toBe(1);
   });
 });
 
@@ -560,6 +600,8 @@ describe("矩阵：子层在组里（ortho(±w/2, ±h/2, ±1000) · inverse(W_�
 // ———— GpuScene 假设备 ————
 
 interface FakeTexture {
+  width: number;
+  height: number;
   label: string;
   format: string;
   usage: number;
@@ -590,11 +632,15 @@ interface FakePipeline {
  */
 class FakeGpu {
   readonly trace: string[] = [];
+  /** 一帧里的拷贝（P5f）：源与目标的标签、目标原点、尺寸 */
+  readonly copies: { source: string; target: string; origin: { x: number; y: number } | undefined; size: GPUExtent3DDictStrict }[] =
+    [];
   readonly pipelines: FakePipeline[] = [];
   readonly device: GPUDevice;
 
   constructor() {
     const trace = this.trace;
+    const copies = this.copies;
     const fail = (message: string): never => {
       throw new Error(`WebGPU 校验：${message}`);
     };
@@ -637,7 +683,10 @@ class FakeGpu {
       lost: new Promise(() => {}),
       destroy() {},
       createTexture: (descriptor: GPUTextureDescriptor) => {
+        const extent = descriptor.size as { width: number; height: number } | number[];
         const texture = {
+          width: Array.isArray(extent) ? extent[0] : extent.width,
+          height: Array.isArray(extent) ? extent[1] : extent.height,
           label: descriptor.label ?? "",
           format: descriptor.format,
           usage: descriptor.usage,
@@ -682,11 +731,21 @@ class FakeGpu {
           trace.push(`pass ${view.label} ${attachment.loadOp}${clear}`);
           return renderPass(view.texture);
         },
-        copyTextureToTexture: (source: { texture: FakeTexture }, target: { texture: FakeTexture }) => {
+        copyTextureToTexture: (
+          source: { texture: FakeTexture },
+          target: { texture: FakeTexture; origin?: { x: number; y: number } },
+          size: GPUExtent3DDictStrict,
+        ) => {
           if (open) fail("render pass 开着时拷贝");
           if (!(source.texture.usage & GPUTextureUsage.COPY_SRC)) fail(`${source.texture.label} 没有 COPY_SRC`);
           if (!(target.texture.usage & GPUTextureUsage.COPY_DST)) fail(`${target.texture.label} 没有 COPY_DST`);
           if (source.texture === target.texture) fail(`${source.texture.label} 拷给自己`);
+          // 拷贝范围不能超出两边（WebGPU 会拒绝）
+          if (size.width > source.texture.width || size.height! > source.texture.height)
+            fail(`拷贝 ${size.width}x${size.height} 超出源 ${source.texture.label}`);
+          if (size.width > target.texture.width || size.height! > target.texture.height)
+            fail(`拷贝 ${size.width}x${size.height} 超出目标 ${target.texture.label}`);
+          copies.push({ source: source.texture.label, target: target.texture.label, origin: target.origin, size });
           trace.push(`copy ${source.texture.label} -> ${target.texture.label}`);
         },
         copyTextureToBuffer() {},
@@ -708,6 +767,7 @@ class FakeGpu {
   /** 编码一帧，返回这一帧的轨迹。 */
   encode(scene: GpuScene, state: SceneState): string[] {
     this.trace.length = 0;
+    this.copies.length = 0;
     scene.encode(this.device.createCommandEncoder(), state);
     return [...this.trace];
   }
@@ -993,11 +1053,11 @@ describe("GpuScene：p5b-grp 的组", () => {
 });
 
 describe("GpuScene：嵌套组（p5b-nest）", () => {
-  it("内组的快照拷真正的场景目标（= 外组开始时那份）；内组画进按层数分开的合成 RT（k1）；内组上屏画回外组的合成 RT、只写 RGB（事件 129）", async () => {
+  it("内组直接父是组、层首不拷快照（P5f）；内组画进按层数分开的合成 RT（k1）；内组上屏画回外组的合成 RT、只写 RGB（事件 129）", async () => {
     const { gpu, scene, state } = await open(nestLayers());
     const outer = "composite 1200x600|true|false #0";
     const inner = "composite 300x300|true|false|k1 #0";
-    expect(opKinds(scene, 3)).toEqual(["snapshot", "draw compose", "subtree", "draw final"]);
+    expect(opKinds(scene, 3)).toEqual(["draw compose", "subtree", "draw final"]);
     expect(gpu.encode(scene, state)).toEqual([
       CLEAR_SCENE,
       IMAGE_SCENE,
@@ -1009,7 +1069,6 @@ describe("GpuScene：嵌套组（p5b-nest）", () => {
       `pass ${outer} load`,
       IMAGE_GROUP,
       "  draw layer 12 S direct",
-      SNAPSHOT,
       `pass ${inner} load`,
       COMPOSE,
       "  draw layer 13 I compose",
@@ -1133,5 +1192,53 @@ describe("GpuScene：组里的粒子与带 effect 的子层（p5b-grpptc）", ()
     const trace = gpu.encode(scene, state);
     expect(trace).toContain("pass composite 800x400|true|false|k1 #0 load");
     expect(trace.filter((line) => line === `pass ${GRP_RT} load`).length).toBe(2);
+  });
+});
+
+describe("GpuScene：组里执行快照拷当前目标（P5f，p5f-a / p5f-e）", () => {
+  /** 组 `GRP`（size 给定）里一个读快照的 effect 子层 FX；组外有一个读快照的顶层 TF */
+  function layersOf(size: number[]): SceneLayer[] {
+    const fx = kbfx(2);
+    (fx.steps[0] as { pass: ScenePass }).pass.framebuffer = true;
+    return [
+      image(0, "BG", [960, 540, 0], [1920, 1080]),
+      group(1, "GRP", { origin: [960, 540, 0], size, subtree: [2] }),
+      image(2, "FX", [0, 0, 0], [100, 100], { parent: 1, group: 1, effects: [fx] }),
+    ];
+  }
+  const fromTexture = (gpu: FakeGpu, source: string) => gpu.copies.filter((copy) => copy.source === source);
+
+  it("组比屏幕窄：effect 前的拷贝源是组的合成 RT、落在快照 (0, 0)、尺寸取组的大小；组自己的层首拷贝仍是场景目标整张", async () => {
+    const { gpu, scene, state } = await open(layersOf([800, 400]));
+    gpu.encode(scene, state);
+    expect(fromTexture(gpu, "scene target")).toEqual([
+      { source: "scene target", target: "_rt_FullFrameBuffer", origin: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } },
+    ]);
+    expect(fromTexture(gpu, "composite 800x400|true|false #0")).toEqual([
+      {
+        source: "composite 800x400|true|false #0",
+        target: "_rt_FullFrameBuffer",
+        origin: { x: 0, y: 0 },
+        size: { width: 800, height: 400 },
+      },
+    ]);
+  });
+
+  it("组比屏幕宽：宽取屏幕、高取组（2400×600 → 1920×600）", async () => {
+    const { gpu, scene, state } = await open(layersOf([2400, 600]));
+    gpu.encode(scene, state);
+    const [copy] = fromTexture(gpu, "composite 2400x600|true|false #0");
+    expect(copy.target).toBe("_rt_FullFrameBuffer");
+    expect(copy.origin).toEqual({ x: 0, y: 0 });
+    expect(copy.size).toEqual({ width: 1920, height: 600 });
+  });
+
+  it("顶层的快照仍是场景目标整张（组外的读快照图层）", async () => {
+    const top = image(3, "TF", [0, 0, 0], [100, 100], { passes: [pass("objects/3/passes/0", { framebuffer: true })] });
+    const { gpu, scene, state } = await open([image(0, "BG", [960, 540, 0], [1920, 1080]), top]);
+    gpu.encode(scene, state);
+    expect(gpu.copies).toEqual([
+      { source: "scene target", target: "_rt_FullFrameBuffer", origin: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } },
+    ]);
   });
 });

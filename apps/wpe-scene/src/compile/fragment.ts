@@ -10,8 +10,7 @@
  * （`ignore/live/l6/recompile.test.ts`）。
  *
  * **位置相关的量不进片段**（组归属、组的子树、挂点、灯的遗留槽位都取决于运行中的父链与别的对象，由 L3 的运行时派生量现算）：
- * `group` 为 null、`subtree` 为 []、没有 `attachment`、灯 `legacySlot` 为 -1、effect 的 `unsupported` 不含
- * `GROUP_CHILD_FRAMEBUFFER`。这样同一个配置在任何位置的片段都一样，片段缓存（L5）才能按规整配置命中。`groupUpload` 和位置无关（L7）：组合层不论有没有
+ * `group` 为 null、`subtree` 为 []、没有 `attachment`、灯 `legacySlot` 为 -1。这样同一个配置在任何位置的片段都一样，片段缓存（L5）才能按规整配置命中。`groupUpload` 和位置无关（L7）：组合层不论有没有
  * 子层都带它（整场里没有子层的组合层的那份在全部对象之后编、程序在程序表尾；片段里在这个对象自己的程序之后，在片段的程序表里）。
  *
  * **`rekeyFragment` 的字段清单**（以点 4 的全语料对照为准，漏了会显示成 A、B 不同）：
@@ -34,7 +33,7 @@
 import type { SceneAnimation } from "../animation/types";
 import type { BindingTarget, SceneBinding } from "./bindings";
 import type { SceneBundle, SceneLayer, ScenePass, SceneTexture } from "./bundle";
-import { GROUP_CHILD_FRAMEBUFFER, readsAudioUniforms } from "./features";
+import { readsAudioUniforms } from "./features";
 import type { SceneLightObject } from "./lights";
 import { exportsMediaCallback } from "./scriptApi";
 import type { SceneScript } from "./scripts";
@@ -69,7 +68,7 @@ export interface ObjectFragment {
   object: number;
   /** 规整配置（`normalizeConfig`，去顶层 id、键排序）：片段缓存的键 */
   config: string;
-  /** 和位置无关：`group` null、`subtree` []、没有 `attachment`、effect 的 `unsupported` 不含 `GROUP_CHILD_FRAMEBUFFER` */
+  /** 和位置无关：`group` null、`subtree` []、没有 `attachment` */
   layer: SceneLayer;
   /** 对象级绑定（目标指向这个对象的），按登记顺序；`user-texture` 这种按属性名全场去重的不在这里，在 `FragmentDelta.bindings` */
   bindings: SceneBinding[];
@@ -173,7 +172,7 @@ export function fragmentBlocker(bundle: SceneBundle, object: number): string | n
 /**
  * 从整场 bundle 里取一个对象的片段（不做 {@link fragmentBlocker} 检查，L3a：登记表的逐个加对照要取全部对象）。各表按「属于这个对象」过滤：图层按
  * `object`，绑定按 {@link bindingOwnedBy}，脚本与关键帧按 `objects/<i>/` 前缀的 id（关键帧的 `parent` 换成片段内下标），声音、灯按 `object`。
- * 位置相关的字段清成和 `compileFragment` 相同的空值（`group` / `subtree` / `attachment` / effect 的 `GROUP_CHILD_FRAMEBUFFER` / 灯的 `legacySlot`）；
+ * 位置相关的字段清成和 `compileFragment` 相同的空值（`group` / `subtree` / `attachment` / 灯的 `legacySlot`）；
  * `groupUpload` 原样保留。`reflected` 取 `bundle.reflection?.list` 是否含它；`unsupported`、`sceneFlips` 为 []；`audio`、`media` 现算（同
  * `compileFragment`）。对象不在 `bundle.layers` 里返回 null。
  */
@@ -184,11 +183,6 @@ export function objectSlice(bundle: SceneBundle, object: number): ObjectFragment
     ...source,
     group: null,
     subtree: [],
-    effects: source.effects.map((effect) =>
-      effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER)
-        ? { ...effect, unsupported: effect.unsupported.filter((key) => key !== GROUP_CHILD_FRAMEBUFFER) }
-        : effect,
-    ),
   };
   delete layer.attachment;
   const prefix = `objects/${object}/`;

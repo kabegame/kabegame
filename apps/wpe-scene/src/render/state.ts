@@ -664,7 +664,7 @@ export class SceneState {
   }
 
   /**
-   * 把图层 effect 的「带不支持项」同步进 effect 开关表（L3a）：登记表的 `restructure` 在组内图层的 effect 上加 / 去 `GROUP_CHILD_FRAMEBUFFER` 之后调，
+   * 把图层 effect 的「带不支持项」同步进 effect 开关表（L3a）：登记表的 `restructure` 重算之后调（P5f 起组里读快照不再给 effect 记标记，通常没有变化），
    * `needsRecompile` 读的就是这一份。只改 `unsupported`，不动 `enabled`（运行中写的开关）；状态里没有这一项时什么都不做。
    */
   syncEffectSupport(layer: SceneLayer): void {

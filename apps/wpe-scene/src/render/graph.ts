@@ -17,14 +17,14 @@
  * - **instanced**（P5b 步骤 5，`SceneLayer.instanced`，p5-REPORT `p5b-inst2`）：模型同时是 solidlayer，但合成 RT 仍按槽 0 纹理的图像尺寸
  *   （J1 `util/white` 32×32、J2 补边纹理 48×40，`size` 900×1000 不起作用），fbo 跟着它；上屏照 solidlayer 不内缩（J1、J2 末 pass
  *   UV 0–1，J3 直接上屏 UV 正好是图像 / 纹理）。
- * - **`_rt_FullFrameBuffer`**（B8）：场景目标的整帧快照，每图层至多拷一次，时机是三处里最早满足的一处：
+ * - **`_rt_FullFrameBuffer`**（B8）：当前目标的快照（顶层是场景目标整张），每图层至多拷一次，时机是三处里最早满足的一处：
  *   图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前。
  *   合成链不画进场景，所以三处拷到的都是画到本图层之前的场景。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」
  *   的条件。前半只差在 fullscreen 走合成路径时：WPE 在图层开始时不拷快照，而是把当前目标直接拷进合成 RT 0，我们为了这次拷贝先拍
  *   一次快照（见下「fullscreen」），内容相同（都是画到本图层之前的场景），之后规则 2、3 不再重拷。fullscreen 直接上屏时照规则 1。
- *   后半是组里的图层（P5b 步骤 4）：WPE 在组里不拍新的快照、读组开始时那份；我们照规则拍，拍的是真正的场景目标（`scene.ts`），
- *   组里的绘制都落在组的合成 RT 上、不碰场景目标，所以拍到的和组开始时那份内容相同。组里要读快照的用法照报
- *   （`model:passthrough:children:framebuffer`），只有嵌套组自己的基础 pass 例外（`p5b-nest`：它采的正是组开始时那份）。
+ *   后半是组里的图层（P5f，`p5f-a`..`p5f-e` 实测）：快照拷「当前目标」，组里是组的合成 RT，只拷左上角重叠部分（`scene.ts` 的 `snapshot`）；
+ *   第一处在直接父是组时不拷（`isDirectGroupChild`，隔着分组节点的孙子照拷）；effect 前、粒子前照拷；组里的 passthrough /
+ *   `groupUpload` 上屏不拷。顶层行为不变。
  * - **组合层**（P5b 步骤 2，`SceneLayer.passthroughModel`，p5-REPORT `p5b-cl`）：不带子层时就是基础 pass 换了写法的合成路径。
  *   没有启用的 effect、colorBlendMode ∈ {0, 31}、没有子层时整层不画（空计划；WPE 照拷一次快照，看不出来，不拷）。否则基础 pass 按
  *   `copyBackground` 分两种：true 画基础材质（composelayer 着色器，角色 `compose`），用 a_TexCoord 铺满合成 RT，按图层 MVP 算这块在
@@ -359,6 +359,14 @@ export interface LayerPlan {
 }
 
 type TextureSize = Pick<SceneTexture, "width" | "height" | "textureWidth" | "textureHeight">;
+
+/**
+ * 直接父对象是组（P5f）：WPE 的层首拷贝只看直接父是不是组合层（`FUN_1401e8aa0` 的 `0x1401e8f63`：`+0x180` 父、`+0x120 & 4`），是就不拷；
+ * 组里隔着分组节点的孙子层照拷（拷组的合成 RT，`p5f-e`）。
+ */
+export function isDirectGroupChild(layer: Pick<SceneLayer, "group" | "parent">): boolean {
+  return layer.group != null && layer.parent === layer.group;
+}
 
 /**
  * 合成 RT 尺寸（B5 `FUN_1402091e0`）：fullscreen 取 `fullscreenSize`（P5b 步骤 3：槽 0 静态纹理的图像尺寸，`_rt_FullFrameBuffer`
@@ -865,6 +873,8 @@ export function planLayer(
   // 开雾强制的 passthrough（P13f，`SceneLayer.fogPassthrough`）：同 colorBlendMode 混合走合成路径、`passthrough` 上屏，快照规则 1 不变
   const fogged = !!layer.fogPassthrough;
   const composited = passthrough || depended || puppetComposite || fogged;
+  // 直接父是组：层首拷贝不做（P5f）
+  const directGroupChild = isDirectGroupChild(layer);
   let snapped = false;
   const snapshot = () => {
     if (snapped) return;
@@ -912,8 +922,8 @@ export function planLayer(
     // WPE 在图层开始时照拷一次快照，没人读，不拷。带子层的是组，走下面的合成路径（步骤 4）。
     // fullscreenlayer 也是组合层，同样不画（P5b 步骤 3，`p5b-fsnofx` 没有 draw）
     if (layer.passthroughModel) return { composite: null, steps, reasons };
-    // 规则 1：基础材质需要帧缓冲
-    if (base.framebuffer) snapshot();
+    // 规则 1：基础材质需要帧缓冲；直接父是组时 WPE 不拷（P5f）
+    if (base.framebuffer && !directGroupChild) snapshot();
     if (sceneText && mesh) {
       // 文本层直接上屏（rea-p6b-layout 4、5.1，p6b-fx f4 / f6）：[背景] → 普通字形 → [彩色字形]，三者的混合都是 colorBlendMode 31 时
       // additive、否则 translucent（WPE 每帧把材质的混合覆盖成它，材质本身就是 translucent）
@@ -971,8 +981,8 @@ export function planLayer(
     return { composite: null, steps, reasons };
   }
 
-  // 规则 1：基础材质需要帧缓冲，或 colorBlendMode 混合
-  if (base.framebuffer || passthrough) snapshot();
+  // 规则 1：基础材质需要帧缓冲，或 colorBlendMode 混合；直接父是组时 WPE 不拷（P5f，`p5f-a` 实测、`FUN_1401e8aa0` 的 `0x1401e8f63`）
+  if ((base.framebuffer || passthrough) && !directGroupChild) snapshot();
   let writes = 0;
   let current = 0;
   /** 下一次写合成链的目标；调用方先算完本 pass 的输入（读的是写之前的 current）。 */
@@ -991,7 +1001,7 @@ export function planLayer(
     else if (!sceneText.clearAlphaPass) reasons.push("render:text-clear-alpha");
     else {
       const pass = sceneText.clearAlphaPass;
-      if (pass.framebuffer) snapshot();
+      if (pass.framebuffer && !directGroupChild) snapshot();
       steps.push({
         kind: "draw",
         role: "compose",
@@ -1149,7 +1159,8 @@ export function planLayer(
     else {
       const inputs = staticInputs(pass, null);
       inputs[0] = { kind: "composite", index: current };
-      if (pass.framebuffer) snapshot();
+      // 上屏不拷快照（WPE 读码这一段没有拷贝调用，`p5f-a` 的 CB）；顶层的混合层已由规则 1 拷过，这里照旧
+      if (pass.framebuffer && layer.group == null) snapshot();
       // 混合：基础材质的；被依赖、colorBlendMode 31 时 additive（rea-p8-render 2.3 `FUN_1401e8aa0` 的上屏块：cbm 31 ? 2 : 基础材质混合）。
       // colorBlendMode 混合（∉ {0, 31}）时 `additive` 本来就是假，和以前一样
       const blending = additive ? "additive" : base.blending;
@@ -1198,7 +1209,8 @@ export function planLayer(
     else {
       const inputs = staticInputs(pass, null);
       inputs[0] = { kind: "composite", index: current };
-      if (pass.framebuffer) snapshot();
+      // 组里的上屏不拷（P5f，`p5f-a` 实测：组的上屏前没有 Resolve）
+      if (pass.framebuffer && layer.group == null) snapshot();
       const upload = additive ? "additive" : layer.copyBackground ? pass.blending : "translucent";
       steps.push({
         kind: "draw",

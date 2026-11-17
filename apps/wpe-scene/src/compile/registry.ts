@@ -8,13 +8,12 @@
  * 判据是「从空开始逐个加」等于「整场一次」（`ignore/live/l3/registry.test.ts` 在全语料上比）：{@link SceneRegistry.emptyOf} 取整场 bundle 的场景级
  * 部分，按 `objects` 顺序 `addObject` 每个对象的切片（`fragment.ts` 的 `objectSlice`），再 {@link SceneRegistry.restructure} 一次。
  *
- * **位置相关的量不进片段**（组归属、子树、挂点、灯的遗留槽位）：灯槽由 `addObject` 现分配，组与挂点由 `restructure` 按状态里运行中的父与子表重算（组内 effect 的不支持标记也同步进状态的 effect 开关表，`needsRecompile` 读它）。
+ * **位置相关的量不进片段**（组归属、子树、挂点、灯的遗留槽位）：灯槽由 `addObject` 现分配，组与挂点由 `restructure` 按状态里运行中的父与子表重算。
  */
 import type { SceneAnimation } from "../animation/types";
 import type { SceneState } from "../render/state";
 import type { SceneBinding } from "./bindings";
 import { applyAttachments, applyGroupRules, type SceneBundle, type SceneLayer } from "./bundle";
-import { GROUP_CHILD_FRAMEBUFFER } from "./features";
 import type { FragmentDelta, ObjectFragment } from "./fragment";
 import type { SceneScript } from "./scripts";
 
@@ -300,7 +299,7 @@ export class SceneRegistry {
    * 1. 图层 `parent` 同步成状态里运行中的父（状态里没有的图层不动）；
    * 2. `bundle.children` 按状态的子表重写（只含进了登记表的对象，按图层顺序排父），`assignGroups` 按它写回每个图层的 `group` / `subtree`；
    * 3. `attachment` 按当前的父与 `bones(object)`（当前挂点骨骼名；`override` 为真时允许父排在后面，同 `structure.parents`）重算；
-   * 4. 组内图层的 effect 标 / 去 `GROUP_CHILD_FRAMEBUFFER`，并把结果同步进状态的 effect 开关表（`syncEffectSupport`，`needsRecompile` 读它；不动 `enabled`）。
+   * 4. 把图层 effect 的「带不支持项」同步进状态的 effect 开关表（`syncEffectSupport`，`needsRecompile` 读它；不动 `enabled`）。
    * 返回（L7）：`issues` 是组内用法的不支持项（对象 → 键，`groupChildIssues`；整场 `unsupported` 里 `model:passthrough:children:*` 就是它们的并集），
    * `changed` 是派生量变了的图层（重算前后逐个比 {@link structureKey}；之前不在登记表里的也算）。只有 `parent` 变了而派生量没变的（顶层之间换父）
    * 不算：渲染器读状态里的父，不用重排。调用方（宿主、dev 探针）把它交给渲染器当帧重排，`issues` 按「那个对象不画」处理。
@@ -336,7 +335,7 @@ export class SceneRegistry {
 
 /** `SceneRegistry.restructure` 的结果（L7）。 */
 export interface RestructureResult {
-  /** 派生量（组、组的层数、子树、挂点、effect 的组内标记）变了的图层，含之前不在登记表里的；渲染器对这些图层当帧重排。 */
+  /** 派生量（组、组的层数、子树、挂点、直接父是不是组）变了的图层，含之前不在登记表里的；渲染器对这些图层当帧重排。 */
   changed: Set<number>;
   /** 组内用法的不支持项（对象 → 键，`groupChildIssues`）：全部在组里的图层的，不只是变了的。 */
   issues: Map<number, string[]>;
@@ -344,7 +343,7 @@ export interface RestructureResult {
 
 /**
  * 一个图层的位置相关派生量（L7，`restructure` 前后比较用）：替它作画的组、组的层数（嵌套组换了归属时，组里的子孙 `group` 不变、层数变了，合成 RT
- * 要换按层数分开的池）、子树、挂点（父 + 骨骼）、带 `GROUP_CHILD_FRAMEBUFFER` 的 effect 下标（决定可变 effect 的变体）。
+ * 要换按层数分开的池）、子树、挂点（父 + 骨骼）、直接父是不是组（P5f：层首拷贝只看直接父，组内换到分组节点下面时组归属不变、拷贝变了）。
  */
 function structureKey(layer: SceneLayer, byObject: ReadonlyMap<number, SceneLayer>): string {
   let depth = 0;
@@ -353,11 +352,9 @@ function structureKey(layer: SceneLayer, byObject: ReadonlyMap<number, SceneLaye
     seen.add(group);
     group = byObject.get(group)?.group ?? null;
   }
-  const marks = layer.effects.flatMap((effect, index) =>
-    effect.unsupported.includes(GROUP_CHILD_FRAMEBUFFER) ? [index] : [],
-  );
+  const directGroupChild = layer.group != null && layer.parent === layer.group;
   const attachment = layer.attachment ? [layer.attachment.parent, layer.attachment.bone] : null;
-  return JSON.stringify([layer.group ?? null, depth, layer.subtree ?? [], attachment, marks]);
+  return JSON.stringify([layer.group ?? null, depth, layer.subtree ?? [], attachment, directGroupChild]);
 }
 
 /** 全部图层的 {@link structureKey}（对象 → 键）。 */

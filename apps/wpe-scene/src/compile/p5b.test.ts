@@ -7,7 +7,7 @@
  * - 步骤 3：`fullscreen` 模型的 `fullscreen` / `fullscreenSize`（几何 2×2，合成 RT 取槽 0 静态纹理的图像尺寸或场景尺寸）、能力表放开
  *   `fullscreen`（fullscreenlayer 不再报）；
  * - 步骤 4：组（带子层的组合层）的归属 `group` 与子树 `subtree`（`assignGroups`）、上屏材质 `groupUpload`，不再报
- *   `model:passthrough:children`，组里还不支持的用法细分成 `model:passthrough:children:framebuffer` / `:fullscreen` / `:perspective`
+ *   `model:passthrough:children`，组里还不支持的用法细分成 `:fullscreen` / `:perspective`
  *   （`groupChildIssues`），fullscreenlayer 带子层报 `model:fullscreen:children`。
  * - 步骤 5：`instanced` 模型不再报 `model:instanced`，图层上 `solidLayer` 与 `instanced` 分开记；对象的 `instance` 在编译材质前覆盖
  *   pass 的 `textures`（按槽）与 `combos`，`checkInstanceFeatures` 的细分键；非 instanced 对象上的 `instance` 中性。
@@ -816,24 +816,20 @@ describe("groupChildIssues：组里还不支持的用法", () => {
     expect(groupChildIssues(child({ passes: [], particle: particle({ flags: 1 }, { flags: 2 }) }))).toEqual([]);
   });
 
-  it("要拷快照：基础 pass、启用 effect 的 pass、colorBlendMode ∉ {0, 31}、粒子树里任一 pass（含子系统）", () => {
-    const key = ["model:passthrough:children:framebuffer"];
-    expect(groupChildIssues(child({ passes: [scenePass({ framebuffer: true })] }))).toEqual(key);
-    expect(groupChildIssues(child({ effects: [effect(false), effect(true)] }))).toEqual(key);
-    expect(groupChildIssues(child({ colorBlendMode: 2 }))).toEqual(key);
-    expect(groupChildIssues(child({ passes: [], particle: particle({ framebuffer: true }) }))).toEqual(key);
-    expect(groupChildIssues(child({ passes: [], particle: particle({}, { framebuffer: true }) }))).toEqual(key);
-    // 关着的 effect 不算（它自己的不支持项由 compileScene 补，见下）
+  it("读快照不再报（P5f）：基础 pass、启用 effect 的 pass、colorBlendMode ∉ {0, 31}、粒子树里任一 pass（含子系统）", () => {
+    expect(groupChildIssues(child({ passes: [scenePass({ framebuffer: true })] }))).toEqual([]);
+    expect(groupChildIssues(child({ effects: [effect(false), effect(true)] }))).toEqual([]);
+    expect(groupChildIssues(child({ colorBlendMode: 2 }))).toEqual([]);
+    expect(groupChildIssues(child({ passes: [], particle: particle({ framebuffer: true }) }))).toEqual([]);
+    expect(groupChildIssues(child({ passes: [], particle: particle({}, { framebuffer: true }) }))).toEqual([]);
     expect(groupChildIssues(child({ effects: [effect(true, false)] }))).toEqual([]);
   });
 
-  it("嵌套组：基础 pass（composelayer 读快照）不算；它的 effect 读快照、colorBlendMode 混合照报", () => {
+  it("嵌套组：基础 pass、effect 读快照、colorBlendMode 混合都不报（P5f）", () => {
     const nested = child({ passthroughModel: true, passes: [scenePass({ framebuffer: true })] });
     expect(groupChildIssues(nested)).toEqual([]);
-    expect(groupChildIssues({ ...nested, effects: [effect(true)] })).toEqual([
-      "model:passthrough:children:framebuffer",
-    ]);
-    expect(groupChildIssues({ ...nested, colorBlendMode: 5 })).toEqual(["model:passthrough:children:framebuffer"]);
+    expect(groupChildIssues({ ...nested, effects: [effect(true)] })).toEqual([]);
+    expect(groupChildIssues({ ...nested, colorBlendMode: 5 })).toEqual([]);
   });
 
   it("fullscreen；perspective 图层、粒子树里有透视系统（flags & 4，含子系统）", () => {
@@ -954,16 +950,14 @@ describe("compileScene：组（P5b 步骤 4）", () => {
     expect(missing.layers[0].groupUpload).toBeNull();
   });
 
-  it("组里的照报：读快照的 effect、colorBlendMode 混合、fullscreen、perspective；嵌套组本身不报", async () => {
+  it("组里的照报：fullscreen、perspective；读快照的 effect、colorBlendMode 混合（P5f 起）与嵌套组本身不报", async () => {
     const fb = await compileGroup([
       compose(10),
       image(11, 10, { effects: [{ file: "effects/fb/effect.json" }] }),
       image(12, 10, { effects: [{ file: "effects/plain/effect.json" }] }),
     ]);
-    expect(fb.unsupported).toEqual(["model:passthrough:children:framebuffer"]);
-    expect((await compileGroup([compose(10), image(11, 10, { colorBlendMode: 2 })])).unsupported).toEqual([
-      "model:passthrough:children:framebuffer",
-    ]);
+    expect(fb.unsupported).toEqual([]);
+    expect((await compileGroup([compose(10), image(11, 10, { colorBlendMode: 2 })])).unsupported).toEqual([]);
     expect((await compileGroup([compose(10), image(11, 10, { perspective: true })])).unsupported).toEqual([
       "model:passthrough:children:perspective",
     ]);
@@ -992,7 +986,7 @@ describe("compileScene：组（P5b 步骤 4）", () => {
     ).toEqual([]);
   });
 
-  it("关着、绑了属性的 effect 读快照：场景级不报，记进那个 effect 自己的不支持项（打开时整场重编译）", async () => {
+  it("关着、绑了属性的 effect 读快照：不报，也不记进 effect 的不支持项（P5f 起打开不用重编译）", async () => {
     const bundle = await compileGroup([
       compose(10),
       image(11, 10, { effects: [{ file: "effects/fb/effect.json", visible: { user: "p", value: false } }] }),
@@ -1001,7 +995,7 @@ describe("compileScene：组（P5b 步骤 4）", () => {
     expect(bundle.layers[1].effects[0]).toMatchObject({
       enabled: false,
       visibleBound: true,
-      unsupported: ["model:passthrough:children:framebuffer"],
+      unsupported: [],
     });
   });
 

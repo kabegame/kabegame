@@ -481,7 +481,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **fbo**（effect.json `fbos`）：格式 `rgba_backbuffer` / `rgb_backbuffer` 随 HDR，其它查格式表（`FBO_FORMATS`：rgba8888、rgb888、rg88、r8、rg1616f、r16f、rgba16161616f、rgb161616f），不认识的按 rgba8888；尺寸 W′ / H′ 取 `width` / `height`（≤4096）否则合成 RT，`fit`（≤4096）时 W′ < H′ 则 h = min(fit, H′)、w = W′/H′·h，否则 w = min(fit, W′)、h = H′/W′·w，截断后整除 `scale`，最小 2；`unique` 每层独占，否则按名字、尺寸、格式、寻址共享；`clear` 创建后清成该色，要写满 4 个分量才生效（P7d，WPE 解析出 4 个数才置清除位）；`uvs: "repeat"` 重复寻址，否则 clamp；被 `conditions` 去掉的不建。
 - **命令**：`copy` = `copyTextureToTexture` 把 source 整张拷到 target（格式必须一致）；`swap` 不做 GPU 工作，只交换后续 pass（含之后各帧）里这两个名字指向的实体（`FboBindings`），引用 fbo 的 bind group 按当前对应取并缓存。WPE 的做法是改写本 effect 全部非 swap pass 的下标、不交换纹理（rea-p7d-fluid 第 3 节），效果等价；一端被 `conditions` 去掉时什么都不做。
 - **UV 内缩**（`layout.ts` 的 `uvInset`）：上屏的四边形两端各缩 `0.15 / 分母`，float32 逐步算，包括直接上屏、最后一个 effect 上屏和 passthrough 上屏；基础 pass 和 effect 中间 pass 不缩。分母是基础纹理的纹理尺寸，走合成路径时也是，不是合成 RT；没有纹理时是图层 `size` 的整数部分。不缩的条件分两块（P5b）：直接上屏在模型 `fullscreen`、`nopadding`、`passthrough`、`solidlayer`（含 instanced）时不缩，末 pass 与 passthrough 上屏不看 `nopadding`。
-- **`_rt_FullFrameBuffer` 快照**：场景目标整张 `copyTextureToTexture` 到独立纹理，**绝不采样正在写的目标**。每图层至多拷一次，时机是三处里最早满足的一处：图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前；内容都是画到本图层之前的场景（合成链不画进场景）。本帧还没画过场景时先清屏再拷。快照纹理带 `COPY_SRC`：fullscreen 的合成路径要把它拷进合成 RT 0（P5b）。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」的条件：组合层的基础 pass 本来就读快照；组里的子孙要读快照时 WPE 读的是组开始时那份，我们没实现，照报 `model:passthrough:children:framebuffer`（P5b）。
+- **`_rt_FullFrameBuffer` 快照**：场景目标整张 `copyTextureToTexture` 到独立纹理，**绝不采样正在写的目标**。每图层至多拷一次，时机是三处里最早满足的一处：图层开始时（基础材质需要帧缓冲，或走 passthrough）、需要帧缓冲的 effect 的第一个 pass 之前、上屏 pass 之前；内容都是画到本图层之前的场景（合成链不画进场景）。本帧还没画过场景时先清屏再拷。快照纹理带 `COPY_SRC`：fullscreen 的合成路径要把它拷进合成 RT 0（P5b）。WPE 第一处另有「非 fullscreen 或有子层、无 passthrough 父层」的条件：组合层的基础 pass 本来就读快照。组里（P5f）：快照拷的是「当前目标」即组的合成 RT，只拷左上角重叠部分，第一处在直接父是组时不拷，effect 前、粒子前照拷，组里的上屏不拷，见「组里读快照（P5f）」。
 - **需要帧缓冲**（`bundle.ts` 的 `needsFramebuffer`，WPE `FUN_1401515b0`）：某个纹理槽最终解析到的名字是 `_rt_FullFrameBuffer`，解析顺序是材质 `textures` 里给的名字 → 着色器注解 `default`；effect 里任一 pass 需要，该 effect 就需要。
 - **编码**：画到场景目标的步骤合并进同一个 render pass；画进合成 RT / fbo、拷快照与 copy 时先结束场景 pass，之后以 `load` 接着画。场景目标带 `COPY_SRC`。
 - **可见性运行时可变**（P3a）：ops 按图层分组（泛光的 op 单独放在最后），`encode` 先按 `SceneState` 的 `visible` 过滤（`visibleObjects`），不可见图层整段跳过——包括它的快照与 copy / swap；全部图层都不可见时只清屏（泛光照旧跑）。`visible` 绑了用户属性（`visibleBound`）的图层即使当前不可见也建资源，`checkRenderable` 同样检查；没有绑定、写死 `false` 的图层照旧不建。
@@ -2240,7 +2240,8 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 | 写 alpha | 直接画的子层写 RGBA；组里的上屏（带 effect 子层的末 pass、嵌套组画回外层）只写 RGB。组 `copybackground: false` 时 alpha 用 One / One / Max，颜色照绘制自己的混合（`programs.ts` 的 `groupBlendState`，管线键加 `\|max`） | 实测：`p5b-grp-cb1` 子层写掩码 15，`p5b-grpptc`、`p5b-nest` 的上屏是 7；`p5b-grp-cb0` 重叠处 alpha 0.5 |
 | 无 effect 的组 | 基础 pass → 子树 → 上屏：用 `effectpassthrough` 材质（`version` > 2 用 `_4`，`BLENDMODE 0`，`SceneLayer.groupUpload`，`g_Color4` 置 1）画世界四边形，UV 0–1；`copybackground` 为 true 时用材质的 normal（不混合），false 时 translucent | 实测 `p5b-grp-nofx` / `nofx0`，**推翻读码**（读码推断是 composelayer 着色器铺满全屏并拉伸） |
 | 合成 RT 池 | 组里的图层按父链上组的层数另分一池（键加 `\|k<层数>`），不然和组同尺寸的子孙会共用组的合成 RT | 步骤 4 实现时发现 |
-| 照报 | `features.ts` 的 `groupChildIssues`：子孙要读快照（基础 pass 或启用的 effect 读 `_rt_FullFrameBuffer`，或 cbm 混合）报 `model:passthrough:children:framebuffer`，WPE 在组里读的是组开始时那份；`fullscreen` 报 `…:fullscreen`；透视图层、透视粒子报 `…:perspective`。关着、运行时可能打开、又要读快照的 effect，记进它自己的不支持项，打开时整场重编译 | 读码 |
+| 照报 | `features.ts` 的 `groupChildIssues`：`fullscreen` 报 `…:fullscreen`；透视图层、透视粒子报 `…:perspective`。子孙读快照 P5b 时照报 `model:passthrough:children:framebuffer`，P5f 起支持、不再报（见「组里读快照（P5f）」） | 读码 |
+| 快照（P5f） | 拷「当前目标」：组里是组的合成 RT，只拷左上角重叠部分；层首拷贝在直接父是组时跳过，effect 前、粒子前照拷，组里的上屏不拷 | `p5f-a`..`p5f-e`，见「组里读快照（P5f）」 |
 
 ### instanced（纯色图层）
 
@@ -2557,6 +2558,34 @@ WPE 的场景有两套相机字段：基准（eye、center、up、zoom，`G+0x11
 抖动）的 `g_EyePosition` 与缩放逐位相同，只有视差点差 7e-5（日志只到第 150 帧，第 151–159 帧的 dt 是平分的，视差平滑按 dt 累积），
 120 个像素是一个方块的上下两条边。工坊场景 2887099508 的解包副本按日志回放（逐帧光标）：开场镜头随 52 号对象滑动，第 263、319、419 帧
 和 WPE 的整体位移都是 0（相位相关），剩下的差异来自樱花粒子的随机数和视频纹理的时刻。
+
+## 组里读快照（P5f）
+
+组（带子层的组合层）里的子孙读 `_rt_FullFrameBuffer` 时，WPE 的拷快照函数拷的是**当前绑定的渲染目标**：顶层是场景目标，整张拷；组里是组的
+合成 RT。两者尺寸不同时只拷重叠的**左上角** `min(宽) × min(高)`，快照其余部分保持上一次拷贝的内容。读快照的着色器照常按 `gl_Position` 算
+屏幕坐标，组里的投影是组的局部正交，所以它们按「组矩形 = 整个 0–1」去采整张快照：组 RT 的内容只占左上角，其余采到的是更早拍下的场景。
+我们照做：编译期不再报 `model:passthrough:children:framebuffer`（P5b 照报），计划层（`render/graph.ts` 的 `isDirectGroupChild`）按下表决定拷不拷，
+渲染器（`render/scene.ts` 的 `snapshot`）拷当前目标，组里用 `copyTextureToTexture` 拷到快照的 (0, 0)。着色器、uniform、组的局部正交都不动。
+
+计划与实测见 [phase-5f](../../.claude/plans/wpe-import/3-scene/phase5/phase-5f-group-framebuffer.md)「步骤 0 结果」。
+
+| 拷贝点 | 组里的规则 | 依据 |
+|---|---|---|
+| 层首（基础材质读快照，或 colorBlendMode 混合；含文本层的 `composelayer_clearalpha`） | **直接父**是组合层就不拷；组里隔着分组节点的孙子层照拷，拷组 RT | `FUN_1401e8aa0` 的 `0x1401e8f63`（`+0x180` 父、`+0x120 & 4`）；`p5f-a` 的 FB、CB，`p5f-e` 的 FBg（Resolve 96） |
+| effect 前 | 照拷，拷组 RT | `0x1401e9b12`，不看父；`p5f-a` Resolve 144 |
+| 粒子前（`REFRACT` 等） | 照拷，拷组 RT | `FUN_1402366f0`；`p5f-a` Resolve 164 |
+| passthrough / 组的上屏 | 不拷（顶层的混合层已由层首拷过，顶层计划不变） | `0x1401ea06d` 起没有拷贝调用；`p5f-a` 的 CB、组的上屏 |
+| 拷贝的范围 | 组 RT 左上角 `min(组 RT, 快照)`，到快照的 (0, 0)，其余不动 | `p5f-a` 拷后快照（900×500）、`p5f-e`（2400×600 截成 1920×600）逐像素核对 |
+| 嵌套组 | 内组直接父是组，层首不拷，它的 composelayer 采的是当时的快照（可能已被外组里先画的兄弟改过左上角） | `p5f-e` 的 I |
+| 每层至多一次 | 保留。WPE 的 effect 前标志在 effect 循环开头清 0，层首拷过还会再拷，但两次之间当前目标不被本层改动，内容相同 | `0x1401e9a25` |
+| 结构变化 | 登记表的位置派生量（`structureKey`）含「直接父是不是组」，组内换到分组节点下面时重排 | — |
+
+**已知差异来源**：WPE 用 `ResolveSubresource` 拷（两边都不是 MSAA、尺寸也不同，按 D3D11 规范不合法）。这台机器（NVIDIA）上测试窗口的真实画面
+和 RenderDoc 回放逐像素相同，行为就是「拷左上角重叠部分」；别的驱动上 WPE 自己可能不同，我们照这台机器做。
+
+**验收**（`ignore/p5/f/`，WPE 抓帧 `A:\p5f\`）：生成工程 `p5f-a`（组 900×500）、`p5f-b`（`copybackground: false`）、`p5f-c`（组与屏幕同尺寸）、
+`p5f-e`（组 2400×600、分组节点下的孙子、嵌套组）整帧和 WPE 逐像素相同（屏蔽 FR / CLK）；`p5f-d`（组转 0.3 弧度）只有 1 个像素差 1 级。
+工坊场景 `3465215190`（组「路面雨滴」里两个 `REFRACT` 的雨滴溅射粒子）不再退回；语料里只差这个键的 `3465215190`、`3233141951` 解锁。
 
 ## 图像层与材质补全（P8）
 

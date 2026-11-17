@@ -89,7 +89,7 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
       replaceObject: () => {},
       restructure: () => ({
         changed: new Set([3]),
-        issues: new Map([[3, ["model:passthrough:children:framebuffer"]]]),
+        issues: new Map([[3, ["model:passthrough:children:fullscreen"]]]),
       }),
     });
     host.scriptState = stub("state", {
@@ -124,9 +124,9 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     ]);
     // restructure 返回的组内问题（L7）：不并进整场的不支持项（场景不退回），并进片段的不支持项（`LiveObjects` 据此不装 GPU、上报），记进组内问题表
     expect(unsupported).toEqual([]);
-    expect(delta.fragment.unsupported).toEqual(["model:passthrough:children:framebuffer"]);
+    expect(delta.fragment.unsupported).toEqual(["model:passthrough:children:fullscreen"]);
     expect((host as unknown as { groupIssues: Map<number, string[]> }).groupIssues.get(3)).toEqual([
-      "model:passthrough:children:framebuffer",
+      "model:passthrough:children:fullscreen",
     ]);
   });
 

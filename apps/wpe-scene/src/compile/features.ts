@@ -51,7 +51,7 @@ import {
 } from "./particles";
 import { PARTICLE_CATEGORIES, readParticleModule } from "../particles/modules";
 import type { TranslateResult } from "../wpesl2wgsl";
-import type { SceneEffect, SceneLayer } from "./bundle";
+import type { SceneLayer } from "./bundle";
 import type { SceneParticle } from "./particles";
 import type { SceneScript } from "./scripts";
 import { scanScriptApi, scanScriptCallbacks, scriptExports } from "./scriptApi";
@@ -1104,14 +1104,6 @@ export function checkMeshAttributes(program: TranslateResult, format: number, un
   }
 }
 
-/** 组里的图层要拷快照（P5b 步骤 4，`groupChildIssues`）。 */
-export const GROUP_CHILD_FRAMEBUFFER = "model:passthrough:children:framebuffer";
-
-/** effect 的任一绘制 pass 读 `_rt_FullFrameBuffer`（同 `render/graph.ts` 的快照规则 2）。 */
-export function effectNeedsFramebuffer(effect: Pick<SceneEffect, "steps">): boolean {
-  return effect.steps.some((step) => step.kind === "draw" && step.pass.framebuffer);
-}
-
 /** 粒子系统树（P4e 步骤 1）里有一个系统满足 `test`。 */
 function someParticleSystem(system: SceneParticle, test: (system: SceneParticle) => boolean): boolean {
   return test(system) || (system.children ?? []).some((child) => someParticleSystem(child.system, test));
@@ -1121,12 +1113,8 @@ function someParticleSystem(system: SceneParticle, test: (system: SceneParticle)
  * 组里的图层（`SceneLayer.group` 非空，P5b 步骤 4）还不支持的用法。要子孙的模型、材质、effect、粒子都编完才能判断，所以
  * `compileScene` 在全部对象之后逐个调（`assignGroups` 之后）。WPE 在组里画子孙时换了相机与渲染目标（rea-p5-modelflags §2.5），
  * 下面这些用法读的东西和组的局部坐标对不上或没有实测，照报：
- * - `model:passthrough:children:framebuffer`：要拷快照。基础 pass 或任一启用 effect 的 pass 读 `_rt_FullFrameBuffer`、粒子系统树里
- *   任一 pass 读它（`REFRACT` 等）、文本层的合成 RT 初值（`composelayer_clearalpha`，P6b 1d），或 colorBlendMode ∉ {0, 31}
- *   （passthrough 混合上屏要读快照）。WPE 在组里不拍新的快照、读的是组开始
- *   时那份，着色器按屏幕坐标采样，而子孙画在组的局部坐标里。例外是嵌套组自己的基础 pass（composelayer 读快照）：`p5b-nest` 实测它用
- *   场景相机采组开始时那份，已实现（渲染器在组里拍的快照和组开始时那份内容相同：组里的绘制都不落在场景目标上）。关着、运行时可能
- *   打开的 effect 读快照时，`bundle.ts` 把这个键记进那个 effect 自己的不支持项。
+ * - 读快照（`_rt_FullFrameBuffer`）不再报（P5f，`p5f-a`..`p5f-e` 实测）：WPE 的快照拷「当前目标」，组里是组的合成 RT、只拷左上角
+ *   重叠部分，渲染器照做（`render/scene.ts` 的 `snapshot`，拷贝点规则见 `render/graph.ts` 文件头）。
  * - `model:passthrough:children:fullscreen`：fullscreen 模型。当前目标是组的合成 RT，没有实测。
  * - `model:passthrough:children:perspective`：图层 `perspective: true`，或粒子系统树里有透视系统（`flags & 4`）。组里的投影是局部正交，
  *   没有实测。
@@ -1151,16 +1139,6 @@ export function groupChildIssues(
   >,
 ): string[] {
   const keys: string[] = [];
-  const cbm = layer.colorBlendMode;
-  const framebuffer =
-    (!layer.passthroughModel && layer.passes.some((pass) => pass.framebuffer)) ||
-    // 文本层（P6b 1d）走合成、没开背景时，合成 RT 的初值是场景快照（`composelayer_clearalpha`）
-    !!layer.text?.clearAlphaPass?.framebuffer ||
-    layer.effects.some((effect) => effect.enabled && effectNeedsFramebuffer(effect)) ||
-    (cbm !== 0 && cbm !== 31) ||
-    (!!layer.particle &&
-      someParticleSystem(layer.particle, (system) => system.passes.some((pass) => pass.framebuffer)));
-  if (framebuffer) keys.push(GROUP_CHILD_FRAMEBUFFER);
   if (layer.fullscreen) keys.push("model:passthrough:children:fullscreen");
   if (
     layer.perspective ||

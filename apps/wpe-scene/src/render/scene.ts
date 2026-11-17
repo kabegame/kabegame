@@ -96,7 +96,7 @@
  *     WPE 合成渲染结束时关掉 alpha 写入（rea-p5-modelflags §2.5 的 `vfunc_0xd8(1, 0)`），`p5b-grpptc` 事件 102、`p5b-nest` 事件 129 的
  *     写掩码都是 7。WPE 的这个开关是全局状态，之后同组里的普通绘制也不写 alpha（`p5b-grpptc` 的粒子事件 116 / 129），这一条我们没有
  *     复刻（取决于运行时可见性与 effect 开关），记为已知差异。
- *   - 快照：组里的 `snapshot` op 照常拷真正的场景目标（组里的绘制都不落在场景目标上，内容就是组开始时那份，同 WPE）。
+ *   - 快照（P5f）：拷当前目标，组里是组的合成 RT，只拷左上角重叠部分到快照的 (0, 0)（`p5f-a`、`p5f-e` 实测）。
  *   - 合成 RT 池按「父链上组的层数」分开（WPE B5 的池化 RT 名里的 k）：组画子树期间它的合成 RT 一直在用，子孙自己的合成 RT 不能和它
  *     共享同一张，否则子孙的基础 pass 会把组的内容覆盖掉，或者同一张纹理在一个 pass 里既是目标又被采样。顶层图层的池键不变。
  *   - 组隐藏时（含祖先）整棵子树不画：组的 op 整段跳过，子孙在顶层本来就不画。
@@ -6253,13 +6253,32 @@ export class GpuScene {
     const reflectionTarget = this.reflectionSet ? (this.reflectionTargets?.reflection ?? null) : null;
     if (!reflectionTarget) this.reflectionTargets?.encode(encoder, clear);
     if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);
-    const snapshot = () => {
-      if (this.snapshot)
-        encoder.copyTextureToTexture(
-          { texture: sceneTexture },
-          { texture: this.snapshot.texture },
-          { width: this.width, height: this.height },
-        );
+    /** 「画到场景」的目标（P5f）：场景目标，或组画子树时组当前的合成 RT；快照拷的就是它 */
+    interface DrawTarget {
+      view: GPUTextureView;
+      texture: GPUTexture;
+      width: number;
+      height: number;
+    }
+    const sceneDrawTarget: DrawTarget = { view: sceneView, texture: sceneTexture, width: this.width, height: this.height };
+    /**
+     * 拷快照（P5f）：拷当前目标。场景目标整张拷；组里是组的合成 RT，只拷左上角重叠部分（`min(宽) × min(高)`），快照其余保持上一次的内容
+     * （`p5f-a`、`p5f-e` 实测，WPE 的 ResolveSubresource 在 NVIDIA 驱动上的行为）。
+     */
+    const snapshot = (target: DrawTarget) => {
+      if (!this.snapshot) return;
+      const size =
+        target.view === sceneView
+          ? { width: this.width, height: this.height }
+          : {
+              width: Math.min(target.width, this.snapshot.width),
+              height: Math.min(target.height, this.snapshot.height),
+            };
+      encoder.copyTextureToTexture(
+        { texture: target.texture },
+        { texture: this.snapshot.texture, origin: { x: 0, y: 0 } },
+        size,
+      );
     };
     /** 当前开着的「画到场景」的 pass 与它的目标：同一目标上连着的绘制合进一个 pass。 */
     let open: { pass: GPURenderPassEncoder; view: GPUTextureView } | null = null;
@@ -6367,12 +6386,12 @@ export class GpuScene {
       return items;
     };
     /** `sceneTarget`：「画到场景」的绘制落在哪；缺省是真正的场景目标，组画子树时是组的合成 RT（P5b 步骤 4）。 */
-    const runOps = (ops: readonly Op[], sceneTarget: GPUTextureView = sceneView) => {
+    const runOps = (ops: readonly Op[], sceneTarget: DrawTarget = sceneDrawTarget) => {
       for (const op of ops) {
         if (op.kind === "draw") {
           const { draw: item } = op;
           if (item.step.target.kind === "scene") {
-            draw(begin(sceneTarget), item);
+            draw(begin(sceneTarget.view), item);
             continue;
           }
           end();
@@ -6385,19 +6404,18 @@ export class GpuScene {
           draw(pass, item);
           pass.end();
         } else if (op.kind === "snapshot") {
-          // 快照要包含清屏色：本帧还没画过场景就先清一次。组里（P5b 步骤 4）也拷真正的场景目标：组里的绘制都不落在它上面，
-          // 拍到的就是组开始时那份（WPE 在组里读的正是那份）
+          // 快照要包含清屏色：本帧还没画过场景就先清一次。拷当前目标（P5f）：组里是组的合成 RT（只拷左上角重叠部分）
           if (!started) begin();
           end();
-          snapshot();
+          snapshot(sceneTarget);
         } else if (op.kind === "particle-tree") {
           // 粒子层（P4e 步骤 2）：按本帧的排列画，快照插在先序里第一个需要帧缓冲的系统之前（同上面的快照操作）
           for (const item of arranged(op.tree)) {
-            if (item !== "snapshot") draw(begin(sceneTarget), item);
+            if (item !== "snapshot") draw(begin(sceneTarget.view), item);
             else {
               if (!started) begin();
               end();
-              snapshot();
+              snapshot(sceneTarget);
             }
           }
         } else if (op.kind === "model" && op.layer.sprite) {
@@ -6406,13 +6424,13 @@ export class GpuScene {
             encoder,
             op.layer.object,
             op.draws,
-            { scene: () => begin(sceneTarget), end, draw: (pass, item) => draw(pass, item) },
-            sceneTarget === sceneView,
+            { scene: () => begin(sceneTarget.view), end, draw: (pass, item) => draw(pass, item) },
+            sceneTarget.view === sceneView,
           );
         } else if (op.kind === "model") {
           // 模型（P5c 步骤 2）：先做视锥剔除，被剔就整个模型不画
           if (this.modelCulled(op.layer, state, worlds, this.view.viewProjection)) continue;
-          for (const item of op.draws) draw(begin(sceneTarget), item);
+          for (const item of op.draws) draw(begin(sceneTarget.view), item);
         } else if (op.kind === "subtree") {
           // 组画子树（P5b 步骤 4）：子孙按先序画，「画到场景」的绘制改画进组当前的合成 RT（嵌套组递归，它的上屏画进这一张）。
           // 不可见的子孙（含祖先）整段跳过；没有资源的（分组节点、声音）没有 op
@@ -6422,7 +6440,7 @@ export class GpuScene {
           // 不可见的子孙跳过，被依赖的照画进自己的 RT、不上屏（P8 步骤 4，同顶层）
           for (const object of op.layer.subtree) {
             const child = this.runtimeByObject.get(object);
-            if (child) runLayer(child, target.view);
+            if (child) runLayer(child, target);
           }
           end();
         } else if (op.kind === "copy") {
@@ -6449,7 +6467,7 @@ export class GpuScene {
      * 一个图层（P8 步骤 4，`layerOpsToRun`）：可见时全部 op；不可见时一般整段跳过，被依赖的照跑、只去掉画到「场景」（`sceneTarget`）的上屏。
      * 顶层与组画子树共用。
      */
-    function runLayer(runtime: LayerRuntime, sceneTarget?: GPUTextureView): void {
+    function runLayer(runtime: LayerRuntime, sceneTarget?: DrawTarget): void {
       const ops = layerOpsToRun(runtime.ops, runtime.layer, visible.has(runtime.object));
       if (ops.length) runOps(ops, sceneTarget);
     }
@@ -6584,7 +6602,7 @@ export class GpuScene {
       // 全部图层画完：整帧快照（只拷这一次）→ 泛光链 → combine 写回场景目标
       if (!started) begin();
       end();
-      snapshot();
+      snapshot(sceneDrawTarget);
       this.bloom.encode(encoder, sceneView, afterBloomStep);
     }
     if (!started) begin();

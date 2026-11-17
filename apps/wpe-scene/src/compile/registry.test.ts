@@ -11,7 +11,6 @@
 import { describe, expect, it } from "vitest";
 import type { SceneAnimation } from "../animation/types";
 import { generalDefaults, type SceneBinding } from "./bindings";
-import { GROUP_CHILD_FRAMEBUFFER } from "./features";
 import type { SceneBundle, SceneEffect, SceneLayer } from "./bundle";
 import type { ObjectFragment } from "./fragment";
 import { compileLightObjects, type SceneLightObject } from "./lights";
@@ -505,50 +504,35 @@ describe("restructure", () => {
       unsupported,
     }) as unknown as SceneEffect;
 
-  it("进组 / 出组后状态的 effect 开关表跟着变：needsRecompile 随之变，运行中写的 enabled 不动", () => {
-    const { registry, state } = setup([groupLayer(1), layerOf(2, { effects: [framebufferEffect(false)] })]);
-    const open = { property: "p", target: { kind: "effect", object: 2, effect: 0 } } as unknown as SceneBinding;
-    registry.restructure(state, NO_BONES);
-    expect(state.needsRecompile(open, true)).toBe(false);
-    state.setParent(2, 1);
-    registry.restructure(state, NO_BONES);
-    expect(state.needsRecompile(open, true)).toBe(true);
-    expect(state.effectEnabled(2, 0)).toBe(false);
-    // 出组：不再要求重编译；运行中写成开（enabled 为 true）之后再进组、出组，enabled 都保持
-    state.setParent(2, null);
-    registry.restructure(state, NO_BONES);
-    expect(state.needsRecompile(open, true)).toBe(false);
-    expect(state.write(open, true)).toBe("applied");
-    expect(state.effectEnabled(2, 0)).toBe(true);
-    state.setParent(2, 1);
-    registry.restructure(state, NO_BONES);
-    expect(state.effectEnabled(2, 0)).toBe(true);
-    expect(state.needsRecompile(open, false)).toBe(false);
-  });
-
-  it("组内图层的 effect 标记：进组加上（关着的）、出组去掉，启用的 effect 报进返回值", () => {
+  it("组里读快照的 effect 不再记标记（P5f）：进组、出组后 effect 的不支持项不变，needsRecompile 不变，启用的也不报", () => {
     const off = framebufferEffect(false);
     const on = framebufferEffect(true);
     const { registry, state } = setup([groupLayer(1), layerOf(2, { effects: [off] }), layerOf(3, { effects: [on] })]);
     const effectsOf = (object: number) => registry.bundle.layers.find((layer) => layer.object === object)!.effects;
-    expect(registry.restructure(state, NO_BONES).issues.size).toBe(0);
+    const open = { property: "p", target: { kind: "effect", object: 2, effect: 0 } } as unknown as SceneBinding;
     state.setParent(2, 1);
     state.setParent(3, 1);
     const { issues } = registry.restructure(state, NO_BONES);
-    expect(effectsOf(2)[0].unsupported).toEqual([GROUP_CHILD_FRAMEBUFFER]);
-    // 启用的 effect 读快照：对象级问题，不记在 effect 上
-    expect(effectsOf(3)[0].unsupported).toEqual([]);
-    expect([...issues]).toEqual([[3, [GROUP_CHILD_FRAMEBUFFER]]]);
-    // effect 对象不原地改：原来的两个 effect 保持原样
-    expect(off.unsupported).toEqual([]);
-    expect(on.unsupported).toEqual([]);
-    // 再调一次：不重复加
-    registry.restructure(state, NO_BONES);
-    expect(effectsOf(2)[0].unsupported).toEqual([GROUP_CHILD_FRAMEBUFFER]);
-    // 出组去掉
-    state.setParent(2, null);
-    registry.restructure(state, NO_BONES);
     expect(effectsOf(2)[0].unsupported).toEqual([]);
+    expect(effectsOf(3)[0].unsupported).toEqual([]);
+    expect(issues.size).toBe(0);
+    expect(state.needsRecompile(open, true)).toBe(false);
+  });
+
+  it("P5f changed：组内从直接挂组换到分组节点下面，组归属与层数不变，但层首拷贝变了，要进 changed；换回也进", () => {
+    const { registry, state } = setup([groupLayer(1), layerOf(2), layerOf(3, { parent: 1 })]);
+    registry.restructure(state, NO_BONES);
+    // 2 直接挂组 1；3 本来就在 1 下面
+    state.setParent(2, 1);
+    registry.restructure(state, NO_BONES);
+    // 2 换到 3 下面：仍在组 1 里（group 不变），直接父从组变成了 3
+    state.setParent(2, 3);
+    const moved = registry.restructure(state, NO_BONES);
+    const layer = registry.bundle.layers.find((item) => item.object === 2)!;
+    expect(layer.group).toBe(1);
+    expect(moved.changed.has(2)).toBe(true);
+    state.setParent(2, 1);
+    expect(registry.restructure(state, NO_BONES).changed.has(2)).toBe(true);
   });
 
   it("状态里没有的图层不改 parent；children 只含登记表里的对象", () => {
