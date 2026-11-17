@@ -3857,6 +3857,8 @@ export class GpuScene {
     const world = worldMatrixOf(layer.object, state.layers, new Map(), this.attachHook);
     const inputs = { world, pointer: pointerScenePoint(this.cursorViewProjection(), this.particleCursor) };
     system.prewarm(inputs);
+    if (system.prewarmTruncated)
+      this.warnings.push(`粒子层 ${layer.object} 预热到工作量上限，提前结束（starttime ${compiled.starttime}）`);
     // 单图层重建：旧树还在 `trees` 里（`install` 之后才换）
     const previous = this.trees.get(layer.object);
     if (previous) system.adoptScriptControl(previous.system);

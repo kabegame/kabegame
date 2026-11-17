@@ -34,8 +34,10 @@ import {
   particleColumnFlags,
   particlePasses,
   ParticleSystem,
+  PREWARM_WORK_BUDGET,
   prewarmStep,
   prewarmSteps,
+  prewarmWorkOf,
 } from "./system";
 import { particleTrack } from "./track";
 
@@ -723,6 +725,44 @@ describe("预热", () => {
     one.prewarm();
     two.prewarm();
     expect(two.columns.position[0][0]).toBe(one.columns.position[0][0]);
+  });
+
+  it("工作量记法：max(存活数, 1) × 权重", () => {
+    expect(prewarmWorkOf(0, 3)).toBe(3);
+    expect(prewarmWorkOf(10, 3)).toBe(30);
+  });
+
+  it("小 starttime 碰不到工作量上限：照 WPE 跑满", () => {
+    const system = new ParticleSystem(pre(1), new SeededRandom(1), 1);
+    system.prewarm();
+    expect(system.prewarmTruncated).toBe(false);
+    expect(system.prewarmStepsRun).toBe(prewarmSteps(2.5, 1));
+  });
+
+  it("超长 starttime（starfield 预设的 100000）封顶：1 s 内跑完，等于把 starttime 缩短到已跑的那一段，结果可复现", () => {
+    const long = (starttime: number) =>
+      particle(systemJson({ lifetime: 1, rate: 500, maxcount: 512, starttime, velocity: "0 0 1000" }));
+    const run = (starttime: number) => {
+      const system = new ParticleSystem(long(starttime), new SeededRandom(1), 1);
+      system.prewarm();
+      return system;
+    };
+    const started = performance.now();
+    const capped = run(100000);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(capped.prewarmTruncated).toBe(true);
+    expect(capped.prewarmStepsRun).toBeLessThan(prewarmSteps(100000, 512));
+    expect(capped.prewarmStepsRun * 512 * 4).toBeGreaterThanOrEqual(PREWARM_WORK_BUDGET / 2);
+    // 缩短后的 starttime：同样步数的 float32 累加终点
+    let end = 0;
+    for (let i = 0; i < capped.prewarmStepsRun; i++) end = f32(end + prewarmStep(512));
+    const shortened = run(end);
+    expect(shortened.prewarmTruncated).toBe(false);
+    expect(shortened.prewarmStepsRun).toBe(capped.prewarmStepsRun);
+    expect(shortened.alive).toBe(capped.alive);
+    expect(Array.from(shortened.columns.position[0])).toEqual(Array.from(capped.columns.position[0]));
+    // 可复现
+    expect(Array.from(run(100000).columns.position[0])).toEqual(Array.from(capped.columns.position[0]));
   });
 });
 

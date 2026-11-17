@@ -153,6 +153,20 @@ export function prewarmSteps(starttime: number, maxcount: number): number {
   return steps;
 }
 
+/**
+ * 预热的工作量上限（用户定：预热要在 1 s 内跑完）。每步记 `max(存活数, 1) × (1 + 模块数)`（模块 = emitter + initializer + operator），
+ * 累计超过它就提前结束预热，等于把 `starttime` 缩短到已跑的那一段；按工作量而不是墙钟计，结果可复现（画面哈希、探针回放不变）。
+ * 标定（Node，比 CEF 里的宿主慢）：最重的实测组合（5000 容量、湍流、约 600 存活）约 0.5 µs / 单位，200 万单位约 1 s；
+ * starfield 预设（`starttime 100000`、512 容量）约 0.08 µs / 单位，跑约 490 步（约 98 s 的模拟时间）、0.2 s 以内，早已是稳态。
+ * 小 `starttime` 碰不到它，和 WPE 逐步相同；碰到时与 WPE 不同（随机序列、`delay` / `duration` 长过已跑那一段的发射时序），记为有意不同。
+ */
+export const PREWARM_WORK_BUDGET = 2_000_000;
+
+/** 预热一步记的工作量：`max(存活数, 1) × 权重`，权重 = 1 + 模块数（`PREWARM_WORK_BUDGET`）。 */
+export function prewarmWorkOf(alive: number, weight: number): number {
+  return Math.max(alive, 1) * weight;
+}
+
 const DRAG_REFERENCE = f32(0.025);
 const DRAG_EXPONENT = f32(0.7);
 
@@ -457,6 +471,11 @@ export class ParticleSystem {
    * （`stepNode` 开头）清掉。WPE 的实例要到下一帧子系统更新才第一次步进，我们同样（实例建在步进之后）。
    */
   createdByScript = false;
+
+  /** 最近一次预热循环碰到工作量上限、提前结束了（`PREWARM_WORK_BUDGET`；只看本系统，不含子系统）。 */
+  prewarmTruncated = false;
+  /** 最近一次预热循环实际跑的步数（没封顶时等于 `prewarmSteps`）。 */
+  prewarmStepsRun = 0;
 
   private readonly random: ParticleRandom;
   private readonly emitters: ResolvedEmitter[];
@@ -1310,7 +1329,20 @@ export class ParticleSystem {
     const end = f32(this.def.starttime);
     this.context.time = env.time;
     this.context.layerTime = env.layerTime;
-    for (let t = 0; t < end; t = f32(t + step)) this.advance(step, 0, 1, inputs, true, env.object, env, true);
+    // 工作量封顶（`PREWARM_WORK_BUDGET`）：超了就提前结束，等于 `starttime` 缩短到已跑的那一段
+    const weight = 1 + this.emitters.length + this.initializers.length + this.operators.length;
+    let work = 0;
+    this.prewarmTruncated = false;
+    this.prewarmStepsRun = 0;
+    for (let t = 0; t < end; t = f32(t + step)) {
+      if (work >= PREWARM_WORK_BUDGET) {
+        this.prewarmTruncated = true;
+        break;
+      }
+      this.advance(step, 0, 1, inputs, true, env.object, env, true);
+      this.prewarmStepsRun++;
+      work += prewarmWorkOf(this.alive, weight);
+    }
     // ropetrail（P4d 步骤 2）：预热的步进不调顶点函数、不采样，结束后历史塌缩到当前位置（rea-p4d-rope.md 5.1，`0x14022f2fc`）
     this.trail?.afterPrewarm(this.columns, this.highWater);
   }

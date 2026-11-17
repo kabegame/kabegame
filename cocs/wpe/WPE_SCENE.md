@@ -866,7 +866,7 @@ development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（�
 | dt | 当帧 `g_Frametime` × `instanceoverride.rate`（下限 0.01），粒子路径不另钳 | 实测 |
 | 两遍模式 | WPE 设置 `fps` 在 1–20 时 operator 每帧跑两遍（`h = dt/2`），否则一遍；我们接宿主帧上限 `maxFps`（`particlePasses`，缺省 60，所以一遍）。发射用完整 dt | 实测（fps 5–20 与 21–60 两组） |
 | float32 | 列是 `Float32Array`，累加全用 `Math.fround`（`f32.ts`） | 预热步数的实测证明需要 |
-| 预热 | 加载时一次跑完 `while (t < starttime)`：步长 `maxcount < 500` 时 0.05、否则 0.2；**固定一遍**；步数按 float32 累加（`starttime 2.5`、步长 0.05 是 51 步，不是 50）；步长不乘 `rate` | 步长、遍数、步数实测。读码曾以为预热也受 `fps` 分支影响，被实测推翻；`rate ≠ 1` 的预热没测 |
+| 预热 | 加载时一次跑完 `while (t < starttime)`：步长 `maxcount < 500` 时 0.05、否则 0.2；**固定一遍**；步数按 float32 累加（`starttime 2.5`、步长 0.05 是 51 步，不是 50）；步长不乘 `rate`；**工作量封顶**（2026-11-17 用户定：预热要在 1 s 内跑完）：每步记 `max(存活数, 1) × (1 + 模块数)`，累计到 `PREWARM_WORK_BUDGET`（200 万）就提前结束，等于把 `starttime` 缩短到已跑的那一段 | 步长、遍数、步数实测。读码曾以为预热也受 `fps` 分支影响，被实测推翻；`rate ≠ 1` 的预热没测。封顶是有意不同：WPE 原生代码照跑全程，我们在主线程用 JS 跑，`starttime 100000` 的 starfield 预设（15030）要 50 万步、建 GPU 场景 39.6 s（超过应用页 30 s 的超时、被卸掉），封顶后约 490 步、0.66 s；标定见 `system.ts`（Node 下最重的实测组合约 0.5 µs / 单位）；结果按工作量算、可复现；碰到上限时随机序列与长 `delay` / `duration` 的发射时序和 WPE 不同，渲染器记一条 warning「预热到工作量上限」 |
 | 发射欠账 | 按帧成批，同帧新粒子位置相同；数量 `rate·dt + 累积余数`，受容量限制。`instantaneous` 从累积余数里扣，之后要还债 | 实测：突发 3 个后停 `(1 + 3) / rate` 秒 |
 | `instanceoverride` 静态值 | 构造时按基值乘进模块字段（`resolveParticleFields`），预热也用乘过的值；系统 `flags` bit4–7 禁用对应项 | 字段与倍数实测；预热用乘过的值没测 |
 
@@ -917,7 +917,7 @@ development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（�
 - **真机帧时间**（600 帧）：`shimmering_particles`、`3062029089`、`3304642534` 均值都是 3.2–3.4 ms；每个粒子层模拟加写顶点约 0.1 ms。
 - **主线程预算**：Node 实测每个存活粒子每帧约 1 µs 模拟、0.12 µs 写顶点，60 fps 下约 1.5 万个存活粒子。
 - **P4a 不设 `maxcount` 上限**：语料最大的 10 万（`3173418061`、`3351163962`）、62.5 万（`2582765611`）都还有别的不支持项挡着，到它们快解锁时再定：设上限，或把模拟挪进 Worker / GPU。
-- **预热开销**：`shimmering_particles` 的 3 个 `small_motes` 各预热 200 秒，加载时主线程约 1 秒；默认样式下它们不可见，第一帧就被清空。
+- **预热开销**：`shimmering_particles` 的 3 个 `small_motes` 各预热 200 秒，加载时主线程约 1 秒；默认样式下它们不可见，第一帧就被清空。超长 `starttime`（15030 的 starfield 预设 100000 秒）由工作量上限封顶（见上表「预热」），每个系统 1 s 以内。
 
 ### 解锁
 
