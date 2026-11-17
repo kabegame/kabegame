@@ -316,6 +316,19 @@ describe("createLayer 的返回、下标与整理（wpe-bars / wpe-order 的行�
     expect(h.scene.getLayerByID("4")).toBeNull();
   });
 
+  it("engine.isObjectValid(待编对象)：建出即为真，同帧 destroyLayer 之后仍为真（待删），删除生效后为假（p6d-frame 的 f=6 destroy Y … valid）", () => {
+    const h = harness(BASE);
+    const valid = (h.api.engine as { isObjectValid(value: unknown): boolean }).isObjectValid;
+    const y = h.scene.createLayer("models/y.json");
+    // 没命中缓存：还不在 bundle 里
+    expect(h.bundle.layers.some((layer) => layer.object === 3)).toBe(false);
+    expect(valid(y)).toBe(true);
+    expect(h.scene.destroyLayer(y)).toBe(true);
+    expect(valid(y)).toBe(true);
+    h.state.flushDestroy();
+    expect(valid(y)).toBe(false);
+  });
+
   it("id 单调（L4）：登记表从活的 bundle 摘掉最大 id 的层之后再建，id 不回落、不重发", () => {
     const h = harness(BASE);
     // 宿主换上场景时（beforeFirstFrame）调一次

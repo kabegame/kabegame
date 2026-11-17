@@ -1085,8 +1085,10 @@ export class ScriptApi {
       this.engine,
       "isObjectValid",
       (value: unknown) =>
+        // 待编对象（L5 没命中片段缓存，还没进 bundle）同样算：WPE 建出即有效，待删的在删除生效前仍有效（p6d-frame 的 `f=6 destroy Y … valid`）
         [...this.layers.entries()].some(
-          ([index, layer]) => layer === value && !!this.findLayer(index) && this.alive(index),
+          ([index, layer]) =>
+            layer === value && (!!this.findLayer(index) || this.pending.has(index)) && this.alive(index),
         ) ||
         value === this.general ||
         // 动画层包装（P12e）：层还没被释放、属主对象还在（实测活着的层是 true）
