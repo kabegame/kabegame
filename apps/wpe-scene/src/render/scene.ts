@@ -4981,7 +4981,9 @@ export class GpuScene {
     }
     if (encoder) this.device.queue.submit([encoder.finish()]);
     for (const draw of this.draws) {
-      if (draw.step.kind !== "draw" || rebuilt.has(draw.object)) continue;
+      // 粒子 draw（P11b2）同样重绑：槽 0 换图 / 清空后对象级重编译是异步的，换上之前这几帧旧粒子层要先绑到新的纹理（清空时落回缺省），
+      // 否则下面释放掉的用户纹理还在它的 bind group 里（`Destroyed texture used in a submit`）
+      if ((draw.step.kind !== "draw" && draw.step.kind !== "particles") || rebuilt.has(draw.object)) continue;
       const named = draw.userNames.some((name) => names.has(name));
       const referencing =
         resized.size > 0 && Object.values(draw.step.inputs).some((ref) => this.refersToLayer(ref, resized));
@@ -5011,12 +5013,13 @@ export class GpuScene {
 
   /**
    * 一个 draw 的输入纹理换了（不重建图层）：重算按槽的纹理尺寸，重建 bind group，重写 `g_Texture<n>Resolution` / `g_Texture<n>Texel`
-   * 与颜色组（组合层 / instanced 的强制白）。粒子与网格的 draw 不处理（粒子槽编译期照报，P11b 不做）。
+   * 与颜色组（组合层 / instanced 的强制白）。粒子 draw（P11b2，槽 0 的用户纹理）同样重建 bind group、重写 `g_Texture<n>Resolution`
+   * （模型矩阵取这个 draw 上次写的 `particles.model`，只挑纹理尺寸与材质常量写回）；网格的 draw 不处理。
    * 用在用户纹理换图（P11b）与被依赖图层换了独占 RT（L6b）两处；反射副本的 bind group 跟着主 draw 的换（`reflectionCopyOf` 比 `source`）。
    */
   private rebindDrawInputs(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
     const { step, program } = draw;
-    if (step.kind !== "draw") return;
+    if (step.kind !== "draw" && step.kind !== "particles") return;
     const slots = Math.max(10, ...program.textures.map((t) => t.slot + 1));
     draw.textureSizes = Array.from({ length: slots }, (_, slot) => this.inputSize(step.inputs[slot], draw.resources));
     // GIF / 视频的帧来源可能随换值变了（`userGpuOf` 已按新对象重建 GPU 纹理）：重算这个 draw 要上传的
@@ -5031,7 +5034,15 @@ export class GpuScene {
       });
     const layerState = state.layers.get(draw.object);
     if (!draw.block || !layerState) return;
-    const values = this.uniformValues(step, draw.layer, layerState, draw.textureSizes, state, worlds, null);
+    const values = this.uniformValues(
+      step,
+      draw.layer,
+      layerState,
+      draw.textureSizes,
+      state,
+      worlds,
+      draw.particles?.model ?? null,
+    );
     const names = [
       ...layerRefreshNames(step.pass.uniforms),
       ...Object.keys(values).filter((name) => /^g_Texture\d+(?:Resolution|Texel)$/.test(name)),

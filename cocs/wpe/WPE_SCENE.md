@@ -1812,7 +1812,7 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 
 **取值与纹理**（WPE 实测）：
 - 值是 `/` 分隔的绝对路径。空串、文件不存在、读不出、解码失败都回缺省纹理，不保留上一张，只记一条 debug。属性没声明或不是 `scenetexture`（语料有 `slider`）时值不是字符串，当空串，永远是缺省纹理。
-- 参考尺寸四种：缺省纹理 `.tex` 头的**图像**尺寸（不是补到 2 的幂的纹理尺寸），精灵表取帧尺寸；instanced 取对象 `size`（M2，WPE 把它写进 `instance.usertexturereference`）；显式的 `usertexturereference`；缺省是被依赖图层的合成 RT（`_rt_imageLayerComposite_<id>_a`）时取那张 RT 的尺寸，运行中改值按它裁、替换掉 RT，加载时就有值则不生效（M3、M8），第一次改值之后才生效。
+- 参考尺寸四种：缺省纹理 `.tex` 头的**图像**尺寸（不是补到 2 的幂的纹理尺寸），精灵表取 TEXS 头的格宽高（`SceneSheetFrames.cell`，WPE 的 `tex+0xb0/+0xb4`；P11b2 走查前用「归一化帧宽 × 图像尺寸」再取整，`rosepetals` 的 102×128 算成 103、300×200 的图裁成 160 宽，WPE 是 159）；instanced 取对象 `size`（M2，WPE 把它写进 `instance.usertexturereference`）；显式的 `usertexturereference`；缺省是被依赖图层的合成 RT（`_rt_imageLayerComposite_<id>_a`）时取那张 RT 的尺寸，运行中改值按它裁、替换掉 RT，加载时就有值则不生效（M3、M8），第一次改值之后才生效。
 - 纹理是 `rgba8unorm`、1 级 mip、没有各向异性，`g_Texture<n>Resolution` = 裁后的 `(w, h, w, h)`；寻址与过滤沿用缺省纹理的夹取位与点采样位，GIF 另强制点采样。超过设备的 `maxTextureDimension2D` 时用缺省纹理、记一条 warning（WebGPU 缺省上限 8192，WPE 是 D3D11 的 16384【推】）。
 
 **换图时要更新的**：
@@ -1834,11 +1834,25 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 
 **能力表**：不再整个报 `material:usertextures` / `effect:*:pass:usertextures`，按项细分照报：
 - `usertextures:system`（封面）P11c 起不再报，见「媒体（P11c）」；`usertextures:usershortcut`（快捷方式图标）P11d 起不再报，见「快捷方式（P11d）」；
-- `usertextures:particle-sheet`：粒子材质的槽 0。WPE 的帧表在加载时按槽 0 定一次，运行中换图沿用旧帧表、把用户图当精灵表取格子（M4），语料 2 张 3 项，不做；
+- `usertextures:particle-sheet` P11b2 起不再报，见下「粒子材质的槽 0」；
 - `usertextures:keepaspect`、`usertextures:reference`：对象项的 `keepaspect: true` 与 `usertexturereference`，读码清楚、已实现，语料 0 处，照报到有实测；
 - `usertextures:rendertarget:placeholder`（缺省是没被依赖的 `_rt_imageLayerComposite_*`，P8 绑棋盘格）、`usertextures:rendertarget:runtime`（缺省是 `_rt_FullFrameBuffer` 或 fbo）：语料 0 处。
 
 pass 级的 `keepaspect` WPE 不读，改中性。
+
+**粒子材质的槽 0**（P11b2，读码 rea-p11b R6，实测 p11-REPORT M4 与 [phase-11b2-particle-sheet.md](../../.claude/plans/wpe-import/3-scene/phase11/phase-11b2-particle-sheet.md) 步骤 0）：槽 0 的缺省是精灵表、又绑了 `scenetexture` 时，按属性的**当前值**定这个粒子系统是不是精灵表：有图（文件读得到）就没有帧表——薄格式、不写帧表宏、frame 不推，每个粒子画整张用户图、四边形宽高比跟纹理；没有图（或读不到）就照缺省精灵表一格一格播。属性改值时当场重定。
+
+**和 WPE 有意不同**（2026-11-18 用户定）：WPE 建粒子材质时按当时的值解析 `usertextures`，再按槽 0 纹理的帧表位给系统置 `0x1000000`，只做这一次，材质刷新不通知粒子系统。所以在 WPE 里打开后才选的图被当成原来的精灵表、按旧帧表一格一格画（M4），重新打开才画整张；打开时就有图、之后清空，画的是整张缺省精灵表。这算 WPE 的缺陷，语料画面不依赖它（两张场景的作者缺省都是空串），我们改成当场生效。WPE 三种情形的实测见子计划「步骤 0」。
+
+- **判定**：`compile/usertextures.ts` 的 `particleUserImage`，`compilePass` 在解析完 `usertextures` 之后、写粒子宏之前调：槽 0 是属性来源、值是非空字符串、文件读得到（经编译期的 `SceneReader.readRange` 读第 1 个字节）才算用户图，写进这个变体的 `ParticleSheetSystem.userImage`；`particleDefines` 据此不写帧表宏、`TEX0FORMAT` 按 RGBA8888，`SceneParticle.spriteSheet` 取基础变体的结果。读不到同 WPE 按精灵表（`p11b-sheet-missing` 实测）。封面与快捷方式图标不参与（WPE 加载时它们还是缺省纹理）。
+- **改值时**：槽 0 的缺省是精灵表、来源是属性时，`compilePass` 给这个属性另登记一条 `{ kind: "recompile", reason: "layer-structure", path: "objects/<i>/…/usertextures/0" }`。宿主改值时用户纹理照旧就地换，同时按 L6 只重编这个对象（`recompiledObjects` +1，不整场重编译）。新旧粒子定义相同（图换图）时沿用旧的粒子树；有图 ↔ 没图切换时定义变了，这个系统的粒子重新预热一次。对象级重编译是异步的，换上之前旧粒子层照画：`syncUserTextures` 对粒子 draw 也走 `rebindDrawInputs`（重建 bind group、按 `particles.model` 重写 `g_Texture<n>Resolution`），清空时先绑回缺省再释放用户纹理（之前不重绑粒子 draw，清空后提交报 `Destroyed texture used in a submit`、整张退回）。
+- **已知差异**：文件读得到但解码失败的值，WPE 是缺省精灵表（有帧表），我们按用户图（没有帧表、画整张缺省纹理）。
+- 工程缺省值里写了文件路径的 `scenetexture`（语料没有，作者缺省都是空串）宿主读不到：`file:` 放行只认 metadata 里用户设过的值，这时按「值读不到」走精灵表。
+- **走查**（`FINAL_CHECK.md`，2026-11-18）：两张真实壁纸各用 `kbp content isolate` 只留绑了用户纹理的粒子（`3812473896` 的「叶子 2」带子系统、`3799462430` 的「樱花」`randomframe`），粒子 JSON 的随机初始化器收成 min = max、`turbulentvelocityrandom` 去掉、发射距离 0（WPE 的粒子随机数按时间做种、不可复现，同 P4 的做法），材质、usertextures、帧表、renderer、动画模式、对象上的绑定与脚本不动；「为空」与「加载时就有图」两种状态各录 WPE 4 帧（1920×1080、fps 20、后处理 ultra），按日志确定性回放、整帧逐像素比，`randomframe` 的 `R` 两遍注入（先注入 `k/1e5` 认出生序号，再按位置填 WPE 的 `R`）：
+  - 逐粒子：位置、旋转、尺寸逐位相同，帧号与淡入淡出的 alpha 比 WPE 大 `1/(rcpps(9)·9)` = 1.0002442（90 个粒子全在 1.0002441–1.0002443），`g_RenderVar1`、纹理、采样器、渲染目标格式相同；
+  - 找到并修了一个 bug：精灵表参考尺寸（见上「取值与纹理」），修前「樱花 / 有图」最大差 224、每帧约 440 个像素差 > 32；
+  - 剩下的两类都是已知差异：近似倒数（帧号经 ×30 放大成混帧权重差，最大 5.58 级的推算对上实测 5；临时把 `rcp(9)` 换成 `rcpps(9)` 后「叶子 2」从最大 7 降到 3、有差像素降到原来的 3%）；以及用户图色块硬边上的零星 3–10 级（每帧 ≤ 41 个像素）：输入几何逐位相同，是 fxc 的几何着色器与 Tint 的顶点着色器展开四角的浮点舍入，经强缩小（159 宽画进 36 像素、1 级 mip）放大，同类残差在缩小少的「叶子 2」上最大 3。
+  - 运行中换图那条是有意不同，没法对 WPE 比，由单测与回归 S4、S8 覆盖。
 
 **dev 探针**：
 - `host.userTextures()`：每个属性来源的当前值、状态（`ready` / `empty` / `failed` / `loading`）、解码后的整张尺寸、最近一次解码用时、已登记的纹理名，GIF 的换帧次数。
@@ -1860,7 +1874,7 @@ pass 级的 `keepaspect` WPE 不读，改中性。
 - 几乎不可压缩的大 GIF 解码开销高（1.1 MB 一帧约 29 ms）。
 - 显存：用户纹理按原分辨率、只裁不缩（6000×3000 → 3000×3000），一张 4K 方图约 36 MB；合成 RT 池只增不减，反复换不同尺寸的图时旧尺寸的 RT 不回收。
 
-**语料**（183 个工程）：能渲染 88 → 90（`3462279189`、`3783690410`，原来都只差 `usertextures`），没有场景掉出；去掉 `material:usertextures` 30 张、`effect:*:pass:usertextures` 21 张，新增 `usertextures:system` 19 张、`:usershortcut` 3 张、`:particle-sheet` 2 张。用到 `usertextures` 的场景多数还差媒体回调、脚本 API、文本、关键帧等别的节。
+**语料**（183 个工程）：能渲染 88 → 90（`3462279189`、`3783690410`，原来都只差 `usertextures`），没有场景掉出；去掉 `material:usertextures` 30 张、`effect:*:pass:usertextures` 21 张，新增 `usertextures:system` 19 张、`:usershortcut` 3 张、`:particle-sheet` 2 张。用到 `usertextures` 的场景多数还差媒体回调、脚本 API、文本、关键帧等别的节。P11b2（233 个工程）只去掉 `:particle-sheet` 的 2 张，`3799462430`、`3812473896` 解锁，干净 223 → 225。
 
 ## 媒体（P11c）
 

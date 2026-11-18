@@ -81,12 +81,17 @@ export function defaultOfTexture(texture: {
   clampUVs: boolean;
   noInterpolation: boolean;
   sheet?: { renderVar1: readonly number[] };
+  /** 完整帧表（P6e）：`cell` 是 TEXS0003 头的格宽高（版本 < 3 是整张图像宽高），即 WPE 的 `tex+0xb0/+0xb4`。 */
+  frames?: { cell: readonly [number, number] | readonly number[] };
 }): UserTextureDefault {
-  const { sheet } = texture;
+  const { sheet, frames } = texture;
+  // 精灵表的参考尺寸取 TEXS 头的格宽高（rea-p11b「精灵表取帧尺寸（tex+0xb0/+0xb4）」，P11b2 走查）：不能用归一化帧宽乘图像尺寸再取整——
+  // `rosepetals` 的格是 102×128，`0.2001953 × 512` = 102.5 取整成 103，300×200 的图就裁成 160 宽，WPE 是 159
+  const cell = sheet ? frames?.cell : undefined;
   return {
     kind: "texture",
-    width: sheet ? Math.round(sheet.renderVar1[0] * texture.width) : texture.width,
-    height: sheet ? Math.round(sheet.renderVar1[1] * texture.height) : texture.height,
+    width: cell ? cell[0] : sheet ? Math.round(sheet.renderVar1[0] * texture.width) : texture.width,
+    height: cell ? cell[1] : sheet ? Math.round(sheet.renderVar1[1] * texture.height) : texture.height,
     clampUVs: texture.clampUVs,
     noInterpolation: texture.noInterpolation,
     sheet: !!sheet,
@@ -142,8 +147,6 @@ export interface UserTextureOptions {
    * 也不报 `usertextures:reference`。非 instanced 不传。
    */
   instanceSize?: { width: number; height: number } | null;
-  /** 粒子材质 pass：槽 0 的缺省纹理是精灵表时报 `usertextures:particle-sheet`（帧表与 `g_RenderVar1` 只在加载时按槽 0 定一次，M4）。 */
-  particle?: boolean;
 }
 
 /**
@@ -156,7 +159,8 @@ export interface UserTextureOptions {
  * - 采样位：缺省纹理的 `noInterpolation` / `clampUVs`（`FUN_1401556e0` 的请求标志）；缺省是合成 RT 时夹取、线性（M3）；
  * - 名字大小写敏感，同名可以绑多个槽；
  * - 不支持项：`:keepaspect`（语料 0 处）、`:reference`（非 instanced 的有效显式参考，
- *   语料 0 处）、`:particle-sheet`、`:rendertarget:placeholder`、`:rendertarget:runtime`。后两种缺省纹理的槽不登记。
+ *   语料 0 处）、`:rendertarget:placeholder`、`:rendertarget:runtime`。后两种缺省纹理的槽不登记。
+ *   粒子材质槽 0 的缺省是精灵表时照常登记（P11b2）：系统是不是精灵表由 `particleUserImage` 按属性的当前值另定。
  */
 export function parseUserTextures(
   pass: Readonly<Record<string, unknown>>,
@@ -194,8 +198,6 @@ export function parseUserTextures(
       reference = { kind: "size", width: base.width, height: base.height };
     }
     if (item.keepAspect) issues.add("usertextures:keepaspect");
-    if (options.particle && slot === 0 && base.kind === "texture" && base.sheet)
-      issues.add("usertextures:particle-sheet");
     slots.push({
       slot,
       source: { kind: item.kind, name: item.name },
@@ -206,6 +208,33 @@ export function parseUserTextures(
     });
   }
   return { slots, issues: [...issues] };
+}
+
+/**
+ * 粒子材质槽 0 现在是不是用户纹理（P11b2，rea-p11b R6、p11b2 步骤 0）：是的话这个系统按没有帧表编（薄格式、不写帧表宏、frame 不推），
+ * 每个粒子画整张图；不是就照缺省精灵表。槽 0 是属性来源、值是非空字符串、文件读得到（读第 1 个字节）才算用户图；读不到同 WPE 回到缺省
+ * 精灵表（`p11b-sheet-missing` 实测）。文件读得到但解码失败的按用户图（画整张缺省纹理，WPE 是精灵表，已知差异）。封面（`system`）与
+ * 快捷方式图标不算（WPE 加载时它们都还是缺省纹理）。
+ *
+ * WPE 只在加载时按槽 0 定一次，运行中换图帧表不变、用户图被切成格子，重新打开才画整张。我们按**当前值**定：属性改值时由对象级重编译
+ * （`compilePass` 登记的 `layer-structure` 目标）重定，选图当场画整张、清空当场恢复精灵表（有意不同，2026-11-18 用户定）。
+ * @param properties 编译时的属性全集
+ * @param probe 读文件的前若干字节（编译期的 `SceneReader.readRange`），读不到抛错
+ */
+export async function particleUserImage(
+  slots: readonly UserTextureSlot[],
+  properties: Readonly<Record<string, unknown>>,
+  probe: (path: string, start: number, end: number) => Promise<Uint8Array>,
+): Promise<boolean> {
+  const slot = slots.find((item) => item.slot === 0);
+  if (!slot || slot.source.kind !== "property") return false;
+  const value = properties[slot.source.name];
+  if (typeof value !== "string" || value === "") return false;
+  try {
+    return (await probe(value, 0, 1)).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

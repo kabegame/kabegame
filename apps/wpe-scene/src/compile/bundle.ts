@@ -171,6 +171,7 @@ import {
   instanceReferenceSize,
   mergeUserTextures,
   parseUserTextures,
+  particleUserImage,
   type UserTextureDefault,
   type UserTextureSlot,
   type UserTextureSource,
@@ -358,6 +359,12 @@ export interface ParticleSheetSystem {
    * 2.4），同系统的 sprite 变体也写 `THICKFORMAT`、`TEX0FORMAT` 按厚格式的规则。缺省 false（单 renderer 的 sprite 系统没有拖尾）。
    */
   trail?: boolean;
+  /**
+   * 槽 0 现在是用户纹理（P11b2，`particleUserImage`）：`compilePass` 在解析完 `usertextures` 后填。为真时这个系统没有帧表
+   * （WPE 不置 `0x1000000`）：不写帧表宏、不因帧表走厚格式、`TEX0FORMAT` 按用户纹理的 RGBA8888，`SceneParticle.spriteSheet` 为假。
+   * 属性改值时对象级重编译重定（`compilePass` 登记的 `layer-structure` 目标）。
+   */
+  userImage?: boolean;
 }
 
 /**
@@ -1920,11 +1927,13 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     // 拖尾一定走厚格式（`need |= 2`），帧表的 sprite 也是（rea-p4b-render.md 2.4）；厚格式看整个系统，同系统有拖尾的 sprite 也是
     // （`system.trail`，P4f 步骤 4，rea-p4f-script.md 8.1）。rope 两类的 `TEX0FORMAT` 同样只看 8–11（rea-p4d-rope.md 3.4：不像非厚格式
     // sprite 那样也看朝向；ropetrail 虽是非厚格式，也只看格式）
-    const thick = rope || system.renderer?.kind === "spritetrail" || !!system.trail || !!texture?.sheet;
-    const tex0 = particleTex0Format(format, thick, system);
+    // 槽 0 是用户纹理（P11b2）：没有帧表，格式是用户纹理的 RGBA8888（`p11b-sheet-init` 实测薄格式）
+    const sheet = system.userImage ? undefined : texture?.sheet;
+    const thick = rope || system.renderer?.kind === "spritetrail" || !!system.trail || !!sheet;
+    const tex0 = particleTex0Format(system.userImage ? FBO_FORMATS.rgba8888.tex : format, thick, system);
     return {
       ...particleRendererDefines(system),
-      ...(rope ? {} : particleSheetDefines(texture?.sheet, system)),
+      ...(rope ? {} : particleSheetDefines(sheet, system)),
       ...(tex0 !== undefined ? { TEX0FORMAT: String(tex0) } : {}),
     };
   }
@@ -2064,6 +2073,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     const variants = particle.draws.length
       ? particle.draws
       : [{ renderer: particle.renderer, passes: particle.passes }];
+    let baseSystem: ParticleSheetSystem | undefined;
     for (const [r, draw] of variants.entries()) {
       const sheetSystem: ParticleSheetSystem = {
         flags,
@@ -2074,10 +2084,12 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       const base = r === 0 ? key : `${key}/renderers/${r}`;
       for (const [k, pass] of material.passes.entries())
         draw.passes.push(await compilePass(pass, { key: `${base}/passes/${k}`, particle: sheetSystem }));
+      if (r === 0) baseSystem = sheetSystem;
     }
-    // 基础材质槽 0 的纹理带帧表：WPE 置系统的 `0x1000000`，模拟器据此每帧算 frame（rea-p4b-render.md 2.3、2.5）
+    // 基础材质槽 0 的纹理带帧表：WPE 置系统的 `0x1000000`，模拟器据此每帧算 frame（rea-p4b-render.md 2.3、2.5）；
+    // 槽 0 是用户纹理则没有（P11b2）
     const slot0 = particle.passes[0]?.textures[0];
-    particle.spriteSheet = slot0 !== undefined && !!bundle.textures[slot0].sheet;
+    particle.spriteSheet = slot0 !== undefined && !!bundle.textures[slot0].sheet && !baseSystem?.userImage;
   }
 
   /**
@@ -2414,11 +2426,22 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       const texture = slots[slot] === undefined ? undefined : bundle.textures[slots[slot]];
       return texture ? defaultOfTexture(texture) : undefined;
     };
-    const userTextures = parseUserTextures(pass, defaultOf, {
-      instanceSize: context.instanceSize,
-      particle: !!context.particle,
-    });
+    const userTextures = parseUserTextures(pass, defaultOf, { instanceSize: context.instanceSize });
     for (const key of userTextures.issues) issues.add(key);
+    // 粒子系统是不是精灵表按槽 0 的当前值定（P11b2）。槽 0 的缺省是精灵表、来源是属性时，属性改值要重定（帧表宏、顶点格式、frame 列都跟着变），
+    // 另登记一条对象级重编译（路径 `objects/<i>/…`，宿主按 L6 只重编这个对象；用户纹理本身照旧就地换）
+    if (context.particle) {
+      context.particle.userImage = await particleUserImage(userTextures.slots, properties, (path, start, end) =>
+        fs.reader.readRange(path, start, end),
+      );
+      const slot0 = userTextures.slots.find((item) => item.slot === 0);
+      const base = slots[0] === undefined ? undefined : bundle.textures[slots[0]];
+      if (slot0?.source.kind === "property" && base?.sheet)
+        bindings.list.push({
+          property: slot0.source.name,
+          target: recompile("layer-structure", `${context.key}/usertextures/0`),
+        });
+    }
     for (const { source } of userTextures.slots) {
       if (!(bundle.userTextures ??= []).some((item) => item.kind === source.kind && item.name === source.name))
         bundle.userTextures.push({ ...source });

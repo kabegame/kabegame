@@ -19,6 +19,7 @@ import {
   instanceReferenceSize,
   mergeUserTextures,
   parseUserTextures,
+  particleUserImage,
   type UserTextureDefault,
 } from "./usertextures";
 import type { Wpesl2wgsl } from "../wpesl2wgsl";
@@ -138,6 +139,29 @@ describe("parseUserTextures：参考尺寸（rea-p11-textures 2.2，p11-REPORT M
     });
   });
 
+  it("精灵表有 TEXS 格尺寸时取它（WPE tex+0xb0/+0xb4，P11b2 走查）：rosepetals 的 102×128 不按 0.2001953 × 512 取整成 103", () => {
+    const sheet = { renderVar1: [0.2001953125, 1, 5, 1.2487804889678955] };
+    const rose = defaultOfTexture({
+      width: 512,
+      height: 128,
+      clampUVs: false,
+      noInterpolation: false,
+      sheet,
+      frames: { cell: [102, 128] },
+    });
+    expect([rose.kind === "texture" && rose.width, rose.kind === "texture" && rose.height]).toEqual([102, 128]);
+    // 没有帧表时 frames 不参与
+    expect(
+      defaultOfTexture({
+        width: 512,
+        height: 128,
+        clampUVs: false,
+        noInterpolation: false,
+        frames: { cell: [102, 128] },
+      }),
+    ).toMatchObject({ width: 512, height: 128, sheet: false });
+  });
+
   it("显式 usertexturereference（两个都是非 0 数字）优先于缺省纹理，非 instanced 报 usertextures:reference", () => {
     const parsed = ref({ usertexturereference: { width: 400, height: 300 } }, () => texture(100, 60));
     expect(parsed.slots[0].reference).toEqual({ kind: "size", width: 400, height: 300 });
@@ -211,14 +235,40 @@ describe("parseUserTextures：采样位与能力键", () => {
     expect(parsed.issues).toEqual(["usertextures:keepaspect"]);
   });
 
-  it("粒子材质槽 0 的缺省是精灵表：usertextures:particle-sheet；槽 1 或非粒子不报", () => {
+  it("槽 0 的缺省是精灵表：照常登记、不报（P11b2 起 usertextures:particle-sheet 不再报）", () => {
     const sheet = (slot: number) => (slot < 2 ? texture(64, 64, { sheet: true }) : undefined);
-    expect(parseUserTextures({ usertextures: ["a"] }, sheet, { particle: true }).issues).toEqual([
-      "usertextures:particle-sheet",
-    ]);
-    expect(parseUserTextures({ usertextures: [null, "a"] }, sheet, { particle: true }).issues).toEqual([]);
-    expect(parseUserTextures({ usertextures: ["a"] }, sheet).issues).toEqual([]);
-    expect(parseUserTextures({ usertextures: ["a"] }, () => texture(64, 64), { particle: true }).issues).toEqual([]);
+    const parsed = parseUserTextures({ usertextures: ["a"] }, sheet);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.slots.map((slot) => slot.slot)).toEqual([0]);
+  });
+
+  describe("particleUserImage（P11b2：粒子槽 0 现在是不是用户图）", () => {
+    const sheet = (slot: number) => (slot < 2 ? texture(64, 64, { sheet: true }) : undefined);
+    const slotsOf = (usertextures: unknown[]) => parseUserTextures({ usertextures }, sheet).slots;
+    const files: Record<string, Uint8Array> = {
+      "D:/ut/a.png": new Uint8Array([0x89, 0x50]),
+      "D:/ut/empty.png": new Uint8Array(),
+    };
+    const probe = async (path: string, start: number, end: number) => {
+      const bytes = files[path];
+      if (!bytes) throw new TypeError("Failed to fetch");
+      return bytes.slice(start, end);
+    };
+
+    it("属性有值且文件读得到才是用户图", async () => {
+      expect(await particleUserImage(slotsOf(["a"]), { a: "D:/ut/a.png" }, probe)).toBe(true);
+    });
+
+    it("值为空、不是字符串、文件不存在、空文件：都按精灵表（p11b-sheet-missing 实测）", async () => {
+      for (const value of ["", undefined, 0, "D:/ut/missing.png", "D:/ut/empty.png"])
+        expect(await particleUserImage(slotsOf(["a"]), { a: value }, probe)).toBe(false);
+    });
+
+    it("只看槽 0；封面与快捷方式来源一律不算（WPE 加载时它们还是缺省纹理）", async () => {
+      expect(await particleUserImage(slotsOf([null, "a"]), { a: "D:/ut/a.png" }, probe)).toBe(false);
+      for (const type of ["system", "usershortcut"])
+        expect(await particleUserImage(slotsOf([{ name: "a", type }]), { a: "D:/ut/a.png" }, probe)).toBe(false);
+    });
   });
 
   it("缺省是没被依赖的 RT（棋盘格）、运行时 RT：各报各的，槽不登记", () => {

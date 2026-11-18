@@ -17,7 +17,9 @@ import {
   textureBuffers,
   type ParticleSheetSystem,
 } from "./bundle";
+import { planApply } from "./bindings";
 import { checkParticleProgram, checkProgramFeatures, PARTICLE_UNIFORMS } from "./features";
+import { recompileObjectOf } from "../script/createLayerChange";
 import { SceneFs, type SceneFile, type SceneReader } from "./fs";
 import type { JsonObject } from "./model";
 import { ShaderCompiler } from "./shader";
@@ -584,6 +586,93 @@ describe("compileScene：帧表纹理按用途（P4b 步骤 2）", () => {
     expect(bundle.textures[0].mips.map((mip) => mip.bytes?.length)).toEqual([1024 * 1024]);
     expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
     expect(bundle.layers[0].particle!.passes[0].textures).toEqual({ 0: 0 });
+  });
+
+  describe("槽 0 绑用户纹理（P11b2：按当前值定，改值时对象级重编译）", () => {
+    const withUser = (extra: Record<string, unknown> = {}) =>
+      files({
+        "P:/p/project.json": {
+          file: "scene.json",
+          general: { properties: { ut: { type: "scenetexture", value: "" } } },
+        },
+        "P:/p/materials/pm.json": {
+          passes: [{ shader: "genericparticle", textures: ["particle/fog1"], usertextures: ["ut"] }],
+        },
+        "D:/u/a.png": new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+        ...extra,
+      });
+    const compileWith = (input: { userProperties?: Record<string, unknown> }) => {
+      const { translator, requests } = fakeTranslator();
+      return compileScene({
+        projectDir: "P:/p",
+        sceneAssets: ["A:/assets"],
+        reader: memoryReader(withUser()),
+        translator,
+        postprocess: "disabled",
+        exhaustive: true,
+        ...input,
+      }).then((bundle) => ({ bundle, requests }));
+    };
+    const SHEET_DEFINES = {
+      REVERSEDEPTH: "1",
+      SCENE_ORTHO: "1",
+      THICKFORMAT: "1",
+      SPRITESHEET: "1",
+      SPRITESHEETBLEND: "1",
+      SPRITESHEETBLENDNPOT: "0",
+      TEX0FORMAT: "9",
+    };
+
+    it("属性为空：照常是精灵表，不报 usertextures:particle-sheet；属性另登记对象级重编译", async () => {
+      const { bundle, requests } = await compileWith({ userProperties: {} });
+      expect(bundle.unsupported).toEqual([]);
+      expect(requests.map((request) => request.defines)).toEqual([SHEET_DEFINES]);
+      expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
+      expect(bundle.userTextures).toEqual([{ kind: "property", name: "ut" }]);
+      // 用户纹理照旧就地换；另有一条 `objects/<i>/…` 的 layer-structure，宿主按 L6 只重编这个对象（`recompileObjectOf`）
+      expect(bundle.bindings.filter((binding) => binding.property === "ut").map((binding) => binding.target)).toEqual([
+        { kind: "recompile", reason: "layer-structure", path: "objects/0/particle/passes/0/usertextures/0" },
+        { kind: "user-texture", name: "ut" },
+      ]);
+      // 宿主改值时：就地写用户纹理，同时把对象 0 交给单对象重编译（不是场景级）
+      const plan = planApply(bundle.bindings, new Map([["ut", "D:/u/a.png"]]));
+      expect(plan.writes.map((write) => write.binding.target.kind)).toEqual(["user-texture"]);
+      expect(plan.recompile.map((item) => recompileObjectOf(item.path))).toEqual([0]);
+    });
+
+    it("缺省纹理不是精灵表时不登记重编译（换图不改变粒子的画法）", async () => {
+      const { translator } = fakeTranslator();
+      const bundle = await compileScene({
+        projectDir: "P:/p",
+        sceneAssets: ["A:/assets"],
+        reader: memoryReader(
+          withUser({
+            "P:/p/materials/pm.json": {
+              passes: [{ shader: "genericparticle", textures: ["particle/plain"], usertextures: ["ut"] }],
+            },
+          }),
+        ),
+        translator,
+        postprocess: "disabled",
+        exhaustive: true,
+      });
+      expect(
+        bundle.bindings.filter((binding) => binding.property === "ut").map((binding) => binding.target.kind),
+      ).toEqual(["user-texture"]);
+    });
+
+    it("属性有值、文件读得到：没有帧表（薄格式、不写帧表宏、TEX0FORMAT 按 RGBA8888 不写），spriteSheet 为假", async () => {
+      const { bundle, requests } = await compileWith({ userProperties: { ut: "D:/u/a.png" } });
+      expect(bundle.unsupported).toEqual([]);
+      expect(requests.map((request) => request.defines)).toEqual([{ REVERSEDEPTH: "1", SCENE_ORTHO: "1" }]);
+      expect(bundle.layers[0].particle!.spriteSheet).toBe(false);
+    });
+
+    it("值读不到（文件不存在）：按精灵表（p11b-sheet-missing 实测）", async () => {
+      const { bundle, requests } = await compileWith({ userProperties: { ut: "D:/u/missing.png" } });
+      expect(bundle.layers[0].particle!.spriteSheet).toBe(true);
+      expect(requests.map((request) => request.defines)).toEqual([SHEET_DEFINES]);
+    });
   });
 
   it.each([

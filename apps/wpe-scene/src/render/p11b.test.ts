@@ -23,6 +23,7 @@ import {
   type UserTextureProvider,
 } from "../usertex/sources";
 import type { TranslateResult } from "../wpesl2wgsl";
+import { parseParticle } from "../compile/particles";
 import { layerQuad, uvInset } from "./layout";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
@@ -1308,5 +1309,88 @@ describe("GIF 与视频的用户纹理：GPU 纹理与上传", () => {
     encode();
     expect(advances).toEqual([0, 0.1]);
     expect(userWrites(gpu)).toHaveLength(2);
+  });
+});
+
+// ———— 粒子材质槽 0（P11b2） ————
+
+/** 粒子程序（同 `l4.test.ts` 的 PARTICLE_PROGRAM）：只有槽 0，`g_Texture0Resolution` 在 256。 */
+const PARTICLE_PROGRAM = {
+  ok: true,
+  vertex: { wgsl: "// particle v", entryPoint: "main" },
+  fragment: { wgsl: "// particle f", entryPoint: "main" },
+  attributes: [
+    { name: "a_Position", location: 0, type: "vec3" },
+    { name: "a_TexCoordVec4", location: 1, type: "vec4" },
+    { name: "a_Color", location: 2, type: "vec4" },
+    { name: "a_TexCoordC2", location: 3, type: "vec2" },
+  ],
+  uniforms: [
+    { name: "g_ModelViewProjectionMatrix", type: "mat4x4<f32>", declared: "mat4", offset: 0, size: 64 },
+    { name: "g_ModelMatrixInverse", type: "mat4x4<f32>", declared: "mat4", offset: 64, size: 64 },
+    { name: "g_OrientationUp", type: "vec3<f32>", declared: "vec3", offset: 128, size: 12 },
+    { name: "g_OrientationRight", type: "vec3<f32>", declared: "vec3", offset: 144, size: 12 },
+    { name: "g_OrientationForward", type: "vec3<f32>", declared: "vec3", offset: 160, size: 12 },
+    { name: "g_ViewUp", type: "vec3<f32>", declared: "vec3", offset: 176, size: 12 },
+    { name: "g_ViewRight", type: "vec3<f32>", declared: "vec3", offset: 192, size: 12 },
+    { name: "g_EyePosition", type: "vec3<f32>", declared: "vec3", offset: 208, size: 12 },
+    { name: "g_RenderVar0", type: "vec4<f32>", declared: "vec4", offset: 224, size: 16 },
+    { name: "g_RenderVar1", type: "vec4<f32>", declared: "vec4", offset: 240, size: 16 },
+    { name: "g_Texture0Resolution", type: "vec4<f32>", declared: "vec4", offset: 256, size: 16 },
+  ],
+  uniformBlockSize: 272,
+  textures: [{ slot: 0, binding: 1, samplerBinding: 2, kind: "2d" }],
+} as unknown as TranslateResult;
+const PARTICLE_RES0 = 256;
+
+/** 粒子层：槽 0 缺省是 128×128 的 `sheet`，绑属性 `ut`，参考尺寸 64×64（帧尺寸）；发射器不动、寿命很长，第一帧就有粒子。 */
+function particleBundle(): SceneBundle {
+  const particle = parseParticle(
+    {
+      maxcount: 8,
+      emitter: [{ name: "sphererandom", origin: "100 200 0", distancemax: 30, rate: 10 }],
+      initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+      starttime: 1,
+    },
+    { file: "particles/0.json", orthographic: true },
+  );
+  particle.passes = [
+    pass("objects/0/particle/passes/0", {
+      program: 1,
+      textures: { 0: 0 },
+      userTextures: [slot(0, { reference: { kind: "size", width: 64, height: 64 } })],
+    }),
+  ];
+  const bundle = bundleOf(
+    [layer(0, { name: "particles 0", size: [], passes: [], particle })],
+    [texture("sheet", [128, 128])],
+  );
+  bundle.programs.push(PARTICLE_PROGRAM);
+  return bundle;
+}
+
+describe("粒子材质槽 0 换图（P11b2）：粒子 draw 也重绑，清空时先换回缺省再释放用户纹理", () => {
+  it("选图：粒子的 bind group 换成用户图、g_Texture0Resolution 是裁后尺寸；清空：换回缺省，用户纹理释放时已没有 draw 引用它", async () => {
+    const live = await open(particleBundle());
+    const particles = () =>
+      draws(live).filter((draw) => (draw.step as unknown as { kind: string }).kind === "particles");
+    const [draw] = particles();
+    expect(draw).toBeDefined();
+    expect(draw.bindGroup!.key).toContain("1:sheet");
+
+    await live.set("a.png"); // 300×200 按 64×64（1:1）裁成 200×200
+    expect(draw.bindGroup!.key).toContain("1:user a.pngx10");
+    live.scene.update(FRAME);
+    expect(uniform(draw, PARTICLE_RES0, 4)).toEqual([200, 200, 200, 200]);
+    const user = live.gpu.named("user a.png")[0];
+    expect(user.destroyed).toBe(false);
+
+    await live.set("");
+    expect(user.destroyed).toBe(true);
+    // 修复前：粒子 draw 不重绑，bind group 还拿着已销毁的用户纹理，下一次提交报 `Destroyed texture used in a submit`
+    expect(draw.bindGroup!.key).toContain("1:sheet");
+    expect(draw.bindGroup!.key).not.toContain("user");
+    live.scene.update(FRAME);
+    expect(uniform(draw, PARTICLE_RES0, 4)).toEqual([128, 128, 128, 128]);
   });
 });

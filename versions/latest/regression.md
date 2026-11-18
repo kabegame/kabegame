@@ -3239,6 +3239,24 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | U10 大图 | Windows dev | 选一张 6000×3000 的 JPEG，再换回小图 | 解码完成后换上（晚几帧）、不卡死；裁成 3000×3000 | 待真机确认 |
 | [ ] | U11 非 Windows | macOS / Linux | 预览一张带 `scenetexture` 的场景并选图 | 同 Windows | 本机不能测 |
 
+## 场景壁纸粒子精灵表槽的用户纹理（P11b2）
+
+2026-11-18。粒子材质槽 0 的缺省是精灵表、又绑了 `scenetexture` 时，按属性的**当前值**定这个粒子系统是不是精灵表：有图（文件读得到）则每个粒子画整张，清空则回到精灵表一格一格播，改值时只重编这个对象、当场生效（WPE 只在加载时定一次、运行中选的图被切成格子，有意不同）。不再报 `usertextures:particle-sheet`。测试工程在 `ignore/p11/proj/`（`p11b-sheet*`，由 `ignore/p11/b2/make_sheet_init.py`、`make_sheet_live.py` 生成），WPE 抓帧在 `A:\p11b2\`，计划与实测见 `.claude/plans/wpe-import/3-scene/phase11/phase-11b2-particle-sheet.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；vitest `compile/sheet.test.ts`（含改值分到对象级重编译）、`p11b.test.ts`、`workerHandler.test.ts`、`exactConfigs.test.ts`、`fragment.test.ts`、`p4f4.test.ts`、`particles.test.ts`、`registry.test.ts`、`host.test.ts`；Prettier | 通过 | 2026-11-18 Claude：tsc 0 错误；`refract.test.ts` 有 1 条 `tex:animation:multi-image` 失败，HEAD（`f32defcf`）上同样失败，是 P6e 那边的 |
+| [x] | S1 WPE 实测三种情形 | Windows + WPE 抓帧，1600×900 | `p11b-sheet-init`（属性缺省是 `ut-a.png`）、`p11b-sheet-missing`（缺省是不存在的路径）、`p11b-sheet-init` 运行中清空 | 加载时有图：薄格式、UV 0–1 整张；读不到：厚格式、绑缺省精灵表；清空后：整张精灵表 | 2026-11-18 Claude：三条都和读码一致（子计划「步骤 0」表）。前两条我们照做；第三条和运行中选图的格子画法我们改成当场切换（有意不同） |
+| [x] | S2 语料 | Node，233 个工程 | `kbp regress --corpus --no-cases`，HEAD 快照对本步 | 只去掉 `usertextures:particle-sheet`，原来能渲染的不掉出 | 2026-11-18 Claude：只有 `3799462430`、`3812473896` 不同，各去掉这一个键，干净 223 → 225，没有新增键 |
+| [x] | S3 加载时就有图 | Windows dev，屏外宿主 | `p11b-sheet` 导入后用 `set_wpe_web_user_properties` 设 `ut = ut-a.png`，`render_scene` 回放 60 帧、带 `trace` | 每个粒子画整张用户图，粒子管线没有厚格式的那一列 | 2026-11-18 Claude：6 个粒子都是完整的四色块（宽高比 83×100，同 WPE），粒子管线 stride 52（薄格式），槽 0 绑 166×200 的用户图 |
+| [x] | S4 运行中选图、清空只重编这个对象 | Windows dev，屏外宿主 | `p11b-sheet-live` 属性为空时开宿主，先设 `ut-a.png`、再清空 | 每次 `recompiledObjects` +1，`recompiled` 为空（不整场重编译），用户纹理 `ready` → `empty` | 2026-11-18 Claude：0 → 1 → 2，`recompiled` []，日志没有出错；屏外宿主不跑帧循环、粒子是 0 个，画面要在预览里看（S6） |
+| [x] | S5 两张真实壁纸 | Windows dev，屏外宿主 | 开 `3799462430`（库里 13615）、`3812473896`（13624）的宿主 | 进入渲染、不退回预览图 | 2026-11-18 Claude：日志「开始渲染」69 层 / 71 层。`render_scene` 对 13615 等视频纹理第一帧超时（110 MB 的视频，与本步无关） |
+| [ ] | S6 预览里选图、换图、清空 | Windows dev，图库预览 | 预览 `3799462430` 或 `3812473896`，在属性面板「自定义粒子效果」选一张图，再换一张，再清空 | 选图后每片落叶当场变成整张图；换图时落叶不重新开始；清空后当场回到原来的落叶 | 待用户手测（要开预览） |
+| [ ] | S7 非 Windows | macOS / Linux | 同 S6 | 同 Windows | 本机不能测 |
+| [x] | S9 走查：3812473896「叶子 2」复制工程 | Windows dev + WPE 抓帧，1920×1080、fps 20、ultra | `kbp content isolate --keep 37`，随机项收成 min = max；「为空」「加载时就有图」各录 4 帧，按日志回放、逐像素比、逐粒子对 RenderDoc 顶点 | 差异都能解释 | 2026-11-18 Claude：最大差 5（为空）/ 7（有图），全部来自近似倒数 `rcpps(9)`（逐粒子比例 1.0002442，临时换成 `rcpps(9)` 后降到最大 2–3、有差像素降到原来的 3%），剩下的是着色器舍入 |
+| [x] | S10 走查：3799462430「樱花」复制工程（randomframe） | 同 S9 | `--keep 39`；`randomframe` 的 `R` 两遍注入 | 差异都能解释 | 2026-11-18 Claude：找到并修了精灵表参考尺寸的取整 bug（WPE 159、我们 160），修后为空最大 2、有图最大 5–10（用户图色块硬边、强缩小下的着色器舍入，每帧 ≤ 41 个像素 > 2） |
+| [x] | S8 清空不报错 | Windows dev，屏外宿主 + 单测 | 属性为空时开 `p11b-sheet-live`，选图后再清空，清空后连续强制渲染几帧（`host.renderFrame`）；单测 `render/p11b.test.ts`「粒子材质槽 0 换图（P11b2）」 | 不报 `Destroyed texture used in a submit`、不退回；粒子 draw 的 bind group 先换回缺省、用户纹理再释放 | 2026-11-18 用户在预览里选图后清空报这个错（粒子 draw 不重绑，对象级重编译换上之前旧粒子层还拿着被释放的纹理），修复后 Claude 复测：清空后 6 帧都成功、日志没有校验错误；撤掉修复时单测失败 |
+
 ## 场景壁纸系统媒体（P11c）
 
 2026-11-14 至 11-15。场景脚本的五个 `media*Changed` 回调与封面纹理 `$mediaThumbnail` / `$mediaPreviousThumbnail`：
