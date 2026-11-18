@@ -357,3 +357,21 @@ F7 是我们第一次对照时整帧差 25 级的原因：透视工程里 FR 的
 - **`3455121165`**：复制工程 `ignore/p13/i/walk/make_iso_3455.py`（组 205、太阳、灯 85 / 105 / 101、地板 Cube、八颗行星；轨道脚本按 Date 算，行星换成太阳前方的固定位置并放大到 0.04，影子落在地板上）。第一版行星放得太靠外，阴影开 / 关逐像素相同，改位置后同一帧开 / 关差 3221 个像素（最大 4 级）。抓 5 帧（`A:\p13i\walk3455b\`，脚本帧 263–267），按日志回放：每帧 1 个像素差 1。
 - 测试行 15589–15592、15595 已用 `projects_remove` 移除；dev 覆盖 `kabegame-dev-scene-shadows` 每次用完即删。
 
+## P13j 的实测：预光照（2026-11-18）
+
+读码见 `phase-13j-prelighting.md`「步骤 0：读码」。
+
+- **Artorias 抓帧**（`A:\p13j\artorias\`）：puppet 部件 5 的基础 pass（事件 332）画 26391 个索引的网格进 2811×1725 的合成 RT，顶点缓冲步长 64、`POSITION1` 与 `POSITION0` 逐字节相同（`genericimage2` 没用它），`g_AltModelMatrix` = 世界矩阵、`g_AltNormalModelMatrix` 对角 0.998308、`g_AltViewProjectionMatrix` = 场景 VP，上屏 MVP = AltVP · W。
+- **P13j-1 确定性工程**（`ignore/p13/j/gen_j.py`、`gen_j_inst.py`，正交 1920×1080、一盏点光，`genericimage4` / `genericimage2` + 遗留灯）：
+
+| 工程 | 合成原因 | 和 WPE |
+|---|---|---|
+| `p13j-fx` | tint（alpha 0.3），父对象转 0.3、缩放 1.2 | 逐像素相同 |
+| `p13j-tilt` | 同上再绕 x 转 0.6 | 3 个像素差 1（在不带 effect 的对照层上） |
+| `p13j-cbm` | colorBlendMode 1 | 逐像素相同 |
+| `p13j-fog` | tint + 开雾（雾仍在上屏 passthrough） | 2 个像素差 1 |
+| `p13j-legacy` | `genericimage2` + 遗留 point 灯 + tint | 逐像素相同 |
+| `p13j-inst` | instanced（AltModel 乘 size / 图像尺寸，光照铺满图层） | 逐像素相同 |
+
+- 普通图层的光照按图像尺寸的四边形算（顶点 · AltModel），`util/white` 是 32×32，所以 500×350 的图层几乎没有明暗变化，这是 WPE 的行为；instanced 的那一支才铺满。
+

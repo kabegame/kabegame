@@ -448,14 +448,16 @@ describe("编译", () => {
     });
   });
 
-  it("带 effect 的图层走 PRELIGHTING，没实现，照报", async () => {
+  it("带 effect 的图层走 PRELIGHTING（P13j-1：编预光照变体，不再照报）", async () => {
     const { bundle } = await compile({ image: "models/lit.json", effects: [{ file: "effects/e/effect.json" }] });
-    expect(bundle.unsupported).toContain("lighting:prelighting");
+    expect(bundle.unsupported).not.toContain("lighting:prelighting");
+    expect(bundle.layers[0].prelit).toBeDefined();
   });
 
   it("passthrough 的图层同样走 PRELIGHTING", async () => {
     const { bundle } = await compile({ image: "models/lit.json", colorBlendMode: 9 });
-    expect(bundle.unsupported).toContain("lighting:prelighting");
+    expect(bundle.unsupported).not.toContain("lighting:prelighting");
+    expect(bundle.layers[0].prelit).toBeDefined();
   });
 
   it("effect 自己开光照：照报", async () => {

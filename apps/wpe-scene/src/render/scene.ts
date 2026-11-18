@@ -418,6 +418,26 @@ type TexchanDrawStep = DrawStep & { geometry: "texchan" };
 function isTexchanDraw(step: DrawLike): step is TexchanDrawStep {
   return step.kind === "draw" && step.geometry === "texchan";
 }
+/** 预光照的基础 pass（P13j，`DrawStep.prelit`）：四边形与正交按合成 RT 尺寸，多写三个 Alt 矩阵。 */
+function isPrelitDraw(step: DrawLike): boolean {
+  return step.kind === "draw" && !!step.prelit;
+}
+/**
+ * 预光照的 `g_AltModelMatrix`（P13j，`FUN_140207b50` 的 `0x140207da7`–`0x140207e8a`）：图层世界矩阵（虚函数 `+0x80`，不含对齐偏移）；
+ * instanced（模型标志 `0x800`）时行 0、行 1（列主序的前两列）各乘 `size / 图像尺寸`（`mulps`，float32）。纹理降级系数恒为 1，「乘降级
+ * 系数」那一支不走。
+ */
+function prelitModel(world: Mat4, layer: SceneLayer, rtSize: readonly [number, number]): Mat4 {
+  if (!layer.instanced) return world;
+  const out = new Float32Array(world);
+  const sx = Math.fround(Math.fround(layer.size[0] ?? 0) / rtSize[0]);
+  const sy = Math.fround(Math.fround(layer.size[1] ?? 0) / rtSize[1]);
+  for (let k = 0; k < 4; k++) {
+    out[k] = Math.fround(out[k] * sx);
+    out[4 + k] = Math.fround(out[4 + k] * sy);
+  }
+  return out;
+}
 /** 画网格的步骤：模型的网格步骤、puppet 的上屏绘制与纹理通道绘制。 */
 function drawsMesh(step: DrawLike): step is MeshStep | PuppetDrawStep | TexchanDrawStep {
   return step.kind === "mesh" || isPuppetDraw(step) || isTexchanDraw(step);
@@ -4220,7 +4240,12 @@ export class GpuScene {
             ? shapeQuad(this.layerSize(layer, state), layer.shape?.points ?? null)
             : step.geometry === "layer"
               ? layerQuad(screenQuadSize(layer, this.layerSize(layer, state)), step.uv, step.inset)
-              : layerQuad(this.layerSize(layer, state), step.uv, step.inset);
+              : // 预光照的基础 pass（P13j）：四边形按合成 RT 尺寸（顶点 · g_AltModelMatrix 是光照的世界位置），整面正交跟着换，画进 RT 的像素不变
+                layerQuad(
+                  isPrelitDraw(step) ? this.compositeSizeOf(layer) : this.layerSize(layer, state),
+                  step.uv,
+                  step.inset,
+                );
       const vertexData = program.vertexPacking.pack(vertices);
       vertexBuffer = this.own(
         device.createBuffer({
@@ -4563,6 +4588,10 @@ export class GpuScene {
           viewProjection: FULLSCREEN_VIEW_PROJECTION,
         }),
       );
+    // 预光照的基础 pass（P13j）：尺寸按合成 RT（同上面的四边形），Alt 矩阵 = 图层世界矩阵（不含对齐偏移；instanced 再乘 size / 图像尺寸）与
+    // 图层上屏用的视图投影（同下面末 pass / passthrough 的那一份，组里是组的局部正交）
+    const prelit = isPrelitDraw(step);
+    const rtSize = prelit ? this.compositeSizeOf(layer) : null;
     return this.userWhiteout(
       step,
       layer,
@@ -4570,7 +4599,15 @@ export class GpuScene {
       drawUniformValues({
         ...common,
         step,
-        layer: { ...layerState, size: this.layerSize(layer, state) },
+        layer: { ...layerState, size: rtSize ?? this.layerSize(layer, state) },
+        ...(prelit
+          ? {
+              alt: {
+                model: prelitModel(worldMatrixOf(layer.object, state.layers, worlds, this.attachHook), layer, rtSize!),
+                viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, !!layer.perspective),
+              },
+            }
+          : {}),
         // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
         // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
         // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）

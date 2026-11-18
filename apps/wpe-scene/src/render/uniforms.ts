@@ -146,6 +146,12 @@ export class UniformBlock {
 }
 
 export interface StaticBuiltinInput {
+  /**
+   * 预光照（P13j，rea：`FUN_140207b50` / `FUN_140206430` / `FUN_1400d8300` 的 0x10）：`g_AltModelMatrix` = 图层世界矩阵（不含对齐偏移；
+   * instanced 行 0、行 1 再乘 size / 图像尺寸），`g_AltNormalModelMatrix` = 它逐行快速归一化（同 `g_NormalModelMatrix`），
+   * `g_AltViewProjectionMatrix` = 图层上屏用的视图投影（含视差、相机）。只有预光照的基础 pass 给。
+   */
+  alt?: { model: Mat4; viewProjection: Mat4 };
   modelViewProjection: Mat4;
   modelViewProjectionInverse: Mat4 | null;
   model: Mat4;
@@ -269,6 +275,11 @@ export function staticBuiltins(input: StaticBuiltinInput): Record<string, number
   };
   // 只在 effect pass 写（`EFFECT_UNIFORMS`），见 `StaticBuiltinInput.layerModel`
   if (input.layerModel) values.g_LayerModelMatrix = Array.from(input.layerModel);
+  if (input.alt) {
+    values.g_AltModelMatrix = Array.from(input.alt.model);
+    values.g_AltNormalModelMatrix = normalMatrix(input.alt.model);
+    values.g_AltViewProjectionMatrix = Array.from(input.alt.viewProjection);
+  }
   if (input.ambient) values.g_LightAmbientColor = [...input.ambient];
   if (input.skylight) values.g_LightSkylightColor = [...input.skylight];
   if (input.fog) for (const [name, value] of Object.entries(input.fog)) values[name] = [...value];
@@ -294,6 +305,10 @@ export const LAYER_UNIFORMS: ReadonlySet<string> = new Set([
   "g_EffectModelMatrixInverse",
   "g_NormalModelMatrix",
   "g_ViewProjectionMatrix",
+  // 预光照的基础 pass（P13j）：随图层变换与相机重写；别的 draw 算出的值里没有这几个名字，刷新时跳过
+  "g_AltModelMatrix",
+  "g_AltNormalModelMatrix",
+  "g_AltViewProjectionMatrix",
   "g_EffectModelViewProjectionMatrix",
   "g_EffectModelViewProjectionMatrixInverse",
   "g_EffectTextureProjectionMatrix",
@@ -439,6 +454,8 @@ export interface DrawUniformInput {
   skylight?: readonly number[];
   /** 四个雾 uniform（P13f，`compile/fog.ts` 的 `fogUniforms`）。 */
   fog?: Readonly<Record<string, readonly number[]>>;
+  /** 预光照的三个 Alt 矩阵的来源（P13j，`StaticBuiltinInput.alt`）；只有预光照的基础 pass 给。 */
+  alt?: { model: Mat4; viewProjection: Mat4 };
 }
 
 /**
@@ -467,6 +484,7 @@ export function drawUniformValues(input: DrawUniformInput): Record<string, numbe
     ambient: input.ambient,
     skylight: input.skylight,
     fog: input.fog,
+    alt: input.alt,
   });
   for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
   return values;

@@ -83,6 +83,7 @@ import {
   perspectiveObjectIssues,
   PARTICLE_UNIFORMS,
   PUPPET_COMBOS,
+  PRELIT_COMBOS,
   PUPPET_CLIP_MASK_UNIFORMS,
   PUPPET_UNIFORMS,
   readsAudioUniforms,
@@ -715,6 +716,13 @@ export interface SceneLayer {
    */
   fogPassthrough?: true;
   /**
+   * 预光照变体（P13j，WPE `L+0x4a0`，`FUN_140209563`）：基础材质开 `LIGHTING` 或 `REFLECTION`（材质标志 `+0x1fc & 0x18`）、又走合成路径
+   * （有 effect、colorBlendMode 混合、被依赖、开雾）时，基础 pass 换成「基础材质 + `PRELIGHTING=1`」画进合成 RT：光照与反射的屏幕坐标在这一步
+   * 按 `g_AltModelMatrix` / `g_AltNormalModelMatrix` / `g_AltViewProjectionMatrix` 算（渲染器写，`render/uniforms.ts`），之后的 effect 处理
+   * 打过光的画面。同 key 重编（常量与绑定共用 `objects/<i>/passes/0`）。puppet 的变体在 P13j-2，之前照报。
+   */
+  prelit?: ScenePass;
+  /**
    * puppet（P12a 步骤 3，rea-p12-mdl 第 9 节）：图像层的模型 JSON 带 `puppet`（字符串、不是 fullscreen、不是组合层）且 mdl 有网格时有；
    * 网格 0 代替上屏的四边形。`layer.passes` 保持不带 puppet 组合键（合成路径的基础 pass 画四边形进合成 RT，要用它）。读不到 mdl 或网格
    * 为空时为 null（WPE 销毁 P、照常画四边形，不报）。可选同 `alignment`：不动各处手写的测试图层。
@@ -1344,6 +1352,8 @@ interface PassContext {
   particle?: ParticleSheetSystem;
   /** 字体着色器的 pass（P6b 1d）：程序检查放行 `TEXT_UNIFORMS`（MSDF 才读的 `g_RenderVar0–3`）。 */
   text?: boolean;
+  /** 预光照变体（P13j，`SceneLayer.prelit`）：程序检查放行引擎 COMBO `PRELIGHTING`。 */
+  prelit?: boolean;
   /**
    * effect 实例从 `scene.json` 覆盖进来的常量（`passes[k].constantshadervalues`）：它们上面的关键帧由 `collectAnimations` 处理，
    * 能力检查只扫材质 JSON 自己的（`checkPassFeatures` 的 `sceneConstants`，P10a 步骤 2）。
@@ -2068,10 +2078,17 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     particle.spriteSheet = slot0 !== undefined && !!bundle.textures[slot0].sheet;
   }
 
-  /** puppet 图层的基础材质 pass（实例覆盖之后，`compileImageModel` 记、`finalizePuppet` 用），按 `objects` 下标。 */
+  /**
+   * 图像层的基础材质 pass（实例覆盖之后，`compileImageModel` 记；`finalizePuppet` 与预光照变体（P13j）重编时用），按 `objects` 下标。
+   */
   const puppetMaterials = new Map<
     number,
     { passes: MaterialPass[]; instanceSize: { width: number; height: number } | null }
+  >();
+  /** 普通图像层基础材质 pass 0 的原文（实例覆盖之后）：预光照变体（P13j）同 key 重编用，按 `objects` 下标。 */
+  const imageMaterials = new Map<
+    number,
+    { pass: MaterialPass; material: string; instance: boolean; size: SceneObject["size"] }
   >();
   /** 有运行时（skinned puppet / 带骨骼的模型）的对象的动画层定义，按 `objects` 下标（P12c：核对动画层字段脚本的属主是否建出来；P12e 起层 id = `entry`，不再回填层下标）。 */
   const animationLayerDefs = new Map<number, readonly PuppetLayerDef[]>();
@@ -2469,7 +2486,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
                   ? PUPPET_CLIP_MASK_UNIFORMS
                   : PUPPET_UNIFORMS
                 : undefined,
-        context.puppet ? PUPPET_COMBOS : undefined,
+        context.puppet ? PUPPET_COMBOS : context.prelit ? PRELIT_COMBOS : undefined,
         mipSlots,
       );
       // 着色器声明了、材质没给的槽位按注解 `default` 绑定（同 LWE `setupTextureUniforms` 先取着色器默认值）
@@ -2692,6 +2709,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
           }
         : raw;
       merged.push(pass);
+      if (k === 0)
+        imageMaterials.set(index, { pass, material: model.material, instance: !!instance, size: object.size });
       layer.passes.push(
         await compilePass(pass, {
           key: `objects/${index}/passes/${k}`,
@@ -3162,13 +3181,36 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     if (fogKind) unsupported.add(`fog:${fogKind}`);
     if (fogLayer && !fogKind) layer.fogPassthrough = true;
     const fogged = !!layer.fogPassthrough;
-    // 带 effect 或走 passthrough 时，WPE 把光照挪到基础 pass（PRELIGHTING=1，世界坐标改用 g_Alt*），上屏 pass 关光照（FUN_140209540）；
-    // 被依赖的图层同样是 `0x10`（P8 步骤 4，rea-p8-render 第 1 节）
-    const lit = layer.passes.some((pass) => pass.program !== null && usesLighting(bundle.programs[pass.program]));
-    // TODO:[WPE_SCENE] PRELIGHTING 没实现，照报：要给基础 pass 加 `PRELIGHTING=1` 并写 `g_AltModelMatrix` / `g_AltNormalModelMatrix` /
-    // `g_AltViewProjectionMatrix`（现在在 `features.ts` 的 `UNREAD_UNIFORMS` 里放行、渲染器不写），上屏 pass 关光照。语料 0 张，P13 总计划定为
-    // 按需实现（phase13/phase-13-3d-lighting.md「决定」4）
-    if (lit && (layer.effects.length > 0 || blended || depended || fogged)) unsupported.add("lighting:prelighting");
+    // 预光照（P13j）：基础材质开 LIGHTING 或 REFLECTION（材质标志 `+0x1fc & 0x18`）、又走合成路径（有 effect、colorBlendMode 混合、被依赖
+    // （P8 步骤 4 的 `0x10`）、开雾）时，WPE 把光照与反射挪到基础 pass（`PRELIGHTING=1`，`FUN_140209563`），之后的 pass 本来就不带光照。
+    // 普通图层同 key 重编一份变体（`SceneLayer.prelit`）；puppet 的基础 pass 要画网格（P13j-2），之前照报
+    const baseProgram0 = layer.passes[0]?.program ?? null;
+    const prelitCombo = (name: string) =>
+      baseProgram0 !== null &&
+      (bundle.programs[baseProgram0].combos ?? []).some(
+        (combo) => combo.name.toUpperCase() === name && combo.value !== 0,
+      );
+    if (
+      (prelitCombo("LIGHTING") || prelitCombo("REFLECTION")) &&
+      (layer.effects.length > 0 || blended || depended || fogged)
+    ) {
+      const source = imageMaterials.get(index);
+      if (layer.puppet) unsupported.add("lighting:prelighting");
+      else if (source && !settled()) {
+        const before = bindings.list.length;
+        layer.prelit = await compilePass(
+          { ...source.pass, combos: { ...source.pass.combos, PRELIGHTING: 1 } },
+          {
+            key: `objects/${index}/passes/0`,
+            material: source.material,
+            prelit: true,
+            ...(source.instance ? { instanceSize: instanceReferenceSize(source.size) } : {}),
+          },
+        );
+        // 同键重编：基础 pass 编译时已登记过同一批绑定，截掉重复的（同 `finalizePuppet`）
+        bindings.list.length = before;
+      }
+    }
     // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
     if (depended && hasChildren) unsupported.add("dependency:group");
     // puppet 的上屏路径与材质变体（步骤 3 点 1）：composite 时 passthrough 上屏由 puppet 自己的 `upload` 承担，不再编 `layer.passthrough`

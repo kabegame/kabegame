@@ -141,7 +141,10 @@ export const ENGINE_UNIFORMS: ReadonlySet<string> = new Set([
   "g_ParallaxPosition",
   ...AUDIO_UNIFORMS,
 ]);
-/** 光照路径声明了、只有 PRELIGHTING 才读的 uniform（`genericimage4.vert`）：渲染器不写，PRELIGHTING 另报。 */
+/**
+ * 光照路径声明了、只有 PRELIGHTING 才读的 uniform（`genericimage4.vert`）：预光照变体的基础 pass（P13j，`SceneLayer.prelit`）由渲染器写
+ * （`render/uniforms.ts` 的 `staticBuiltins`），别的 pass 不写（WPE 是上一次预光照留下的值，不开 `PRELIGHTING` 的着色器不读）。
+ */
 const UNREAD_UNIFORMS = new Set(["g_AltModelMatrix", "g_AltNormalModelMatrix", "g_AltViewProjectionMatrix"]);
 /**
  * 阴影 pass 投射者的视图投影数组（P13d，`shadowcaster*.vert` 按实例号取）：只有投射者的绘制写，`GpuScene.shadowCasterOf` 每个图集条目
@@ -1345,6 +1348,8 @@ export const PUPPET_UNIFORMS: ReadonlySet<string> = new Set([
  * （`BONECOUNT` 本来就不在 `ENGINE_COMBOS` 里）。
  */
 export const PUPPET_COMBOS: ReadonlySet<string> = new Set(["SKINNING", "SKINNING_ALPHA", "MORPHING"]);
+/** 预光照变体（P13j，`SceneLayer.prelit`）放行的引擎 COMBO：`PRELIGHTING`。 */
+export const PRELIT_COMBOS: ReadonlySet<string> = new Set(["PRELIGHTING"]);
 /**
  * 裁切遮罩 pass（`clippingmaskimage4`，P12b1 步骤 5）放行的引擎 uniform：puppet 的那几个再加 `g_RenderVar0`——WPE 的遮罩绘制写 `ctx+0xa8`，也就是
  * `g_RenderVar0.x`（记录 flags bit1 取反时为 1，否则 0，clip-morph-attach 1(3)、3），编译期在 pass 上固定写 0。别的 puppet pass 读到它仍照报。

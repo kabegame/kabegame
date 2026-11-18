@@ -233,6 +233,11 @@ export interface DrawStep {
   /** 几何 `texchan`（P12b2-2）用：合成 RT 的宽高（`plan.composite` 的同一份，`drawMatrices` 取它做正交投影）；别的几何没有这个字段。 */
   rtSize?: [number, number];
   /**
+   * 预光照的基础 pass（P13j，`SceneLayer.prelit`）：四边形与整面正交按合成 RT 的尺寸（WPE 这时基础四边形 `+0x490` 按纹理尺寸建，光照的
+   * 世界位置 = 顶点 · `g_AltModelMatrix`），并写三个 Alt 矩阵。别的步骤没有这个字段。
+   */
+  prelit?: true;
+  /**
    * puppet 的裁切分段（P12b1 步骤 5，`ScenePuppet.clipping.segments` 的下标）：只画这一段的索引（每段自己一块 u16 索引缓冲）。没有裁切的
    * puppet 与别的几何没有这个字段，整张网格一次画完。
    */
@@ -1062,7 +1067,8 @@ export function planLayer(
     steps.push({
       kind: "draw",
       role: "base",
-      pass: base,
+      // 预光照（P13j）：基础材质开光照 / 反射又走合成时换成 `PRELIGHTING=1` 的变体，混合、深度、剔除同基础材质
+      pass: layer.prelit ?? base,
       effect: null,
       target: nextComposite(),
       inputs: staticInputs(base, null),
@@ -1071,6 +1077,7 @@ export function planLayer(
       inset: NO_INSET,
       blending: null,
       raster: rasterState(base, base, null),
+      ...(layer.prelit ? { prelit: true as const } : {}),
     });
   // puppet 的纹理通道（P12b2-2，rea-texchan-model 2：`FUN_140207b50` 在画完基础四边形之后直接画进合成 RT）：用通道网格自己的材质，混合按材质（语料 normal，
   // p12b2-tc 实测混合关），g_Color4 同基础四边形；puppet 恒走合成路径（`puppetComposite`），所以一定是上面的基础 pass 那一支。尺寸在末尾补

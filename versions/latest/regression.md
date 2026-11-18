@@ -3603,6 +3603,17 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PI3 走查（FINAL_CHECK） | Windows dev + WPE 抓帧 | `3455121165` 复制工程（`ignore/p13/i/walk/make_iso_3455.py`：组、太阳、三盏灯、地板、八颗行星，行星换成固定位置让影子落在地板上）5 帧按日志回放 | 整帧逐像素相同，差异逐处解释 | 2026-11-18：每帧 1 个像素差 1；同一帧阴影开 / 关差 3221 个像素（影子确实进了画面） |
 | [ ] | PI4 真机预览 | Windows dev | 图库里预览 `3455121165`（Solar system 太阳系），右栏「预览设置」的「场景阴影」在 low 与关闭之间切换 | 不再停在封面、实时渲染；切换后整场重新加载，地板上的光斑里有行星的淡影子 | 待用户看。影子落在很暗的光斑上，肉眼不明显时以「能实时渲染、切换不报错」为准 |
 
+## 场景壁纸预光照：普通图层（P13j-1）
+
+2026-11-18。基础材质开 `LIGHTING` 或 `REFLECTION`、又走合成路径（effect、colorBlendMode 混合、被依赖、开雾）的图像层，基础 pass 换成同 key 重编的 `PRELIGHTING=1` 变体（`SceneLayer.prelit`），渲染器给这一步写 `g_AltModelMatrix`（图层世界矩阵，instanced 乘 size / 图像尺寸）、`g_AltNormalModelMatrix`（逐行快速归一化）、`g_AltViewProjectionMatrix`（图层上屏的视图投影），四边形与正交按合成 RT 尺寸。普通图层不再报 `lighting:prelighting`，puppet 照报（P13j-2）。实测见 `phase-13j-prelighting.md` 与 `p13-REPORT.md`「P13j 的实测」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PJ0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；`src/compile/p13j.test.ts`、`src/compile/lights.test.ts` 与 P13 其余测试文件 | 0 error、全过 | 2026-11-18：tsc 0 error；13 个文件全过，「HEAD + P13j-1」快照里同样全过（新增：变体的编法与触发条件、只开反射也触发、不走合成不编；Alt 矩阵按 `p13j-fx` 抓帧的值） |
+| [x] | PJ1 语料 | Node，233 个工程 | 在「HEAD」与「HEAD + P13j-1」两份快照上各扫一遍 | 只有带光照又走合成的普通图层去掉 `lighting:prelighting`，没有新增键 | 2026-11-18：只有 `3662790108` 去掉这个键（还缺材质文件，仍不能渲染）；干净 223 不变 |
+| [x] | PJ2 对照 WPE（确定性工程） | Windows dev + WPE 抓帧（`A:\p13j\`） | `ignore/p13/j/gen_j.py` 的 fx / tilt / cbm / fog / legacy 与 `gen_j_inst.py` 的 inst 整帧比 | 逐像素相同或只有零星取整差 | 2026-11-18：fx、cbm、legacy、inst 逐像素相同；tilt 3 个、fog 2 个孤立像素差 1 |
+| [ ] | PJ3 非 Windows | macOS / Linux | 同 PJ2 的工程导入后预览 | 同 Windows | 本机不能测 |
+
 ## WPE 壁纸设置与预览设置
 
 2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。
