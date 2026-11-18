@@ -10,7 +10,7 @@
  *   投射着色器照样按实例号取 `g_ViewportViewProjectionMatrices[i]`（翻译器去掉了 `gl_ViewportIndex` 的赋值）。
  */
 import type { SceneBundle } from "../compile/bundle";
-import { lightFrame, type LightFrame, type SceneLight } from "../compile/lights";
+import { lightFrame, shadowCount, type LightFrame, type SceneLight } from "../compile/lights";
 import { planShadows, type ShadowPlan, type ShadowView } from "./shadowMath";
 
 /** 阴影图集的格式（WPE 是 R32_TYPELESS 的深度）。 */
@@ -63,7 +63,7 @@ export class ShadowAtlas {
   }
 
   /**
-   * 有阴影档位与阴影计数时才建（`bundle.lights.quality ≠ 0`、`pointShadow + directionalShadow > 0`）。尺寸按加载时的条目打包（`records` 是
+   * 有阴影档位与阴影计数时才建（`bundle.lights.quality ≠ 0`、`shadowCount(counts) > 0`，含聚光阴影，P13i）。尺寸按加载时的条目打包（`records` 是
    * 加载时按状态组的灯记录，P13f2）；
    * 没有条目（投射灯都隐藏）时 2×2（WPE 不建，着色器照样声明、读到的是空纹理，这里给一张清成 0 的）。
    */
@@ -73,7 +73,7 @@ export class ShadowAtlas {
     records: readonly SceneLight[],
   ): ShadowAtlas | null {
     const lights = bundle.lights;
-    if (!lights || !lights.quality || lights.counts.pointShadow + lights.counts.directionalShadow === 0) return null;
+    if (!lights || !lights.quality || shadowCount(lights.counts) === 0) return null;
     const orthographic = !bundle.general.perspective;
     const frame = lightFrame(records, lights.counts, lights.quality, [0, 0, -1]);
     const plan = planShadows(frame, lights.quality, [0, 0, -1], [0, 0, 0], orthographic, null);

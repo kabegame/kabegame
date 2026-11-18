@@ -11,9 +11,13 @@
 //!
 //! 阴影（P13d，rea-p13-shadows R1）：带阴影的点光与平行光各占本类数组的前 `LIGHTS_POINT_SHADOW` /
 //! `LIGHTS_DIRECTIONAL_SHADOW` 个槽，WPE 的生成器给它们逐盏生成一个块（投到 `_rt_shadowAtlas` 取 `shadowFactor`），普通灯
-//! 接在后面。段的先后决定 `sum +=` 的累加顺序，照 WPE：点光阴影 → 点光 → 聚光 → 管光 → 平行光阴影 → 平行光。
-//! 平行光三级的下标照抄 WPE 的 `B0 + k + c`（CPU 每盏写 3 个连续槽，两盏以上时第 2 盏起读错级联，P13d 待定 4 定为照抄）。
-//! 聚光的阴影与 cookie（要 `_alias_lightCookie`，聚光投影也没读）语料 0 张，这些宏非 0 时报 `LightingV1/spot-shadow`。
+//! 接在后面。段的先后决定 `sum +=` 的累加顺序，照 WPE：点光阴影 → 点光 → 聚光阴影 → 聚光 → 管光 → 平行光阴影 → 平行光。
+//! 平行光三级的下标照抄 WPE 的 `B0 + k + c`（`B0 = SSC + SC + SS`，聚光占的投影数；CPU 每盏写 3 个连续槽，两盏以上时第 2 盏起
+//! 读错级联，P13d 待定 4 定为照抄）。
+//! 聚光阴影（P13i）：带阴影的聚光占聚光数组的前 `LIGHTS_SPOT_SHADOW` 个槽（WPE 的四段里 cookie 两段在它前面，照报所以恒 0），
+//! 每盏一个块：锥角衰减之后 `CalculateProjectedCoords` + `PerformShadowMapping`，投影与本灯同下标（rea-p13-shadows R1 1.3）。
+//! 聚光的 cookie（要 `_alias_lightCookie`）语料 0 张，`LIGHTS_SPOT_COOKIE` / `LIGHTS_SPOT_SHADOW_COOKIE` 非 0 时报
+//! `LightingV1/spot-cookie`。
 
 use std::fmt::Write;
 
@@ -28,12 +32,8 @@ pub enum Expansion {
     Unsupported(String),
 }
 
-/// 聚光的阴影与 cookie 宏：还不支持（要 cookie 纹理与聚光投影）。
-const SPOT_SHADOW_MACROS: [&str; 3] = [
-    "LIGHTS_SPOT_SHADOW",
-    "LIGHTS_SPOT_COOKIE",
-    "LIGHTS_SPOT_SHADOW_COOKIE",
-];
+/// 聚光的 cookie 宏：还不支持（要 cookie 纹理 `_alias_lightCookie`）。
+const SPOT_COOKIE_MACROS: [&str; 2] = ["LIGHTS_SPOT_COOKIE", "LIGHTS_SPOT_SHADOW_COOKIE"];
 
 /// 灯数：每类的总数（含带阴影的）与带阴影的个数。
 #[derive(Debug, Clone, Copy, Default)]
@@ -43,6 +43,7 @@ struct Counts {
     tube: i64,
     directional: i64,
     point_shadow: i64,
+    spot_shadow: i64,
     directional_shadow: i64,
 }
 
@@ -57,9 +58,9 @@ pub fn expand(
     if value("LIGHTING")? == 0 {
         return Ok(Expansion::Nothing);
     }
-    for shadow in SPOT_SHADOW_MACROS {
-        if value(shadow)? != 0 {
-            return Ok(Expansion::Unsupported("LightingV1/spot-shadow".to_string()));
+    for cookie in SPOT_COOKIE_MACROS {
+        if value(cookie)? != 0 {
+            return Ok(Expansion::Unsupported("LightingV1/spot-cookie".to_string()));
         }
     }
     Ok(Expansion::Source(lighting_v1(Counts {
@@ -68,6 +69,7 @@ pub fn expand(
         tube: value("LIGHTS_TUBE")?,
         directional: value("LIGHTS_DIRECTIONAL")?,
         point_shadow: value("LIGHTS_POINT_SHADOW")?,
+        spot_shadow: value("LIGHTS_SPOT_SHADOW")?,
         directional_shadow: value("LIGHTS_DIRECTIONAL_SHADOW")?,
     })))
 }
@@ -88,6 +90,7 @@ fn lighting_v1(counts: Counts) -> String {
         tube,
         directional,
         point_shadow,
+        spot_shadow,
         directional_shadow,
     } = counts;
     let mut out = String::new();
@@ -112,13 +115,16 @@ fn lighting_v1(counts: Counts) -> String {
         directional,
         &["g_LDirectional_Color", "g_LDirectional_Direction"],
     );
-    // 阴影投影：平行光每盏三级（聚光的那几项不支持，恒 0），点光每盏一个；先平行光后点光，同 WPE 的声明顺序（R1 1.2）
-    let cascades = 3 * directional_shadow;
-    if cascades > 0 {
-        let _ = writeln!(out, "uniform mat4 g_LFeature_ShadowProjection[{cascades}];");
+    // 阴影投影：聚光阴影每盏一个（cookie 两段照报，恒 0）、平行光每盏三级，点光每盏一个；先这一组后点光，同 WPE 的声明顺序（R1 1.2）
+    let projections = spot_shadow + 3 * directional_shadow;
+    if projections > 0 {
+        let _ = writeln!(
+            out,
+            "uniform mat4 g_LFeature_ShadowProjection[{projections}];"
+        );
         declare(
             &mut out,
-            cascades,
+            projections,
             &["g_LFeature_ShadowProjectionTransform"],
         );
     }
@@ -158,11 +164,19 @@ fn lighting_v1(counts: Counts) -> String {
             )
         );
     }
-    if spot > 0 {
+    // 带阴影的聚光：一盏一个块，锥角衰减照普通聚光，投影与本灯同下标、没有越界判定（R1 1.3，`CalculateProjectedCoords`）
+    let spot_shadows = spot_shadow.min(spot);
+    for i in 0..spot_shadows {
+        let _ = write!(
+            out,
+            "\t{{\n\t\tvec3 toLight = g_LSpot_Origin[{i}].xyz - pos;\n\t\tfloat cone = smoothstep(g_LSpot_Direction[{i}].w, g_LSpot_Origin[{i}].w, dot(normalize(-toLight), g_LSpot_Direction[{i}].xyz));\n\t\tvec3 shadowCoords = CalculateProjectedCoords(pos, g_LFeature_ShadowProjection[{i}]);\n\t\tfloat shadowFactor = PerformShadowMapping(shadowCoords, g_LFeature_ShadowProjectionTransform[{i}]);\n\t\tsum += ComputePBRLightShadow(n, toLight, v, albedo, g_LSpot_Color[{i}].rgb * cone, g_LSpot_Color[{i}].w, g_LSpot_Exponent[{i}].x, tint, f0, rough, metal, shadowFactor);\n\t}}\n"
+        );
+    }
+    if spot > spot_shadows {
         // Origin.w / Direction.w 是内外锥角的余弦；方向指向照射方向，所以用「灯到着色点」点乘
         let _ = write!(
             out,
-            "\tfor (int k = 0; k < {spot}; ++k)\n\t{{\n\t\tvec3 toLight = g_LSpot_Origin[k].xyz - pos;\n\t\tfloat cone = smoothstep(g_LSpot_Direction[k].w, g_LSpot_Origin[k].w, dot(normalize(-toLight), g_LSpot_Direction[k].xyz));\n{}\t}}\n",
+            "\tfor (int k = {spot_shadows}; k < {spot}; ++k)\n\t{{\n\t\tvec3 toLight = g_LSpot_Origin[k].xyz - pos;\n\t\tfloat cone = smoothstep(g_LSpot_Direction[k].w, g_LSpot_Origin[k].w, dot(normalize(-toLight), g_LSpot_Direction[k].xyz));\n{}\t}}\n",
             lit(
                 "toLight",
                 "g_LSpot_Color[k].rgb * cone, g_LSpot_Color[k].w",
@@ -181,10 +195,10 @@ fn lighting_v1(counts: Counts) -> String {
             )
         );
     }
-    // 带阴影的平行光：三级级联，下标照抄 WPE 的 B0 + k + c（B0 = 聚光占的投影数，这里恒 0）。两次 mix 的系数只取 0 或 1，
+    // 带阴影的平行光：三级级联，下标照抄 WPE 的 B0 + k + c（B0 = 聚光占的投影数 SS，cookie 两段恒 0）。两次 mix 的系数只取 0 或 1，
     // 是「越出这一级就换下一级」的选择；第二次看的是第 1 级的越界位（R1 1.4）
     for k in 0..directional_shadow.min(directional) {
-        let (p1, p2, p3) = (k, k + 1, k + 2);
+        let (p1, p2, p3) = (spot_shadow + k, spot_shadow + k + 1, spot_shadow + k + 2);
         let _ = write!(
             out,
             "\t{{\n\t\tvec4 cascade1 = CalculateProjectedCoordsCascades(pos, g_LFeature_ShadowProjection[{p1}]);\n\t\tvec4 cascade2 = CalculateProjectedCoordsCascades(pos, g_LFeature_ShadowProjection[{p2}]);\n\t\tvec4 cascade3 = CalculateProjectedCoordsCascades(pos, g_LFeature_ShadowProjection[{p3}]);\n\t\tcascade1.xyz = mix(cascade1.xyz, cascade2.xyz, cascade1.w);\n\t\tcascade1.xyz = mix(cascade1.xyz, cascade3.xyz, cascade2.w);\n\t\tvec4 atlasTransform = mix(g_LFeature_ShadowProjectionTransform[{p1}], g_LFeature_ShadowProjectionTransform[{p2}], cascade1.w);\n\t\tatlasTransform = mix(atlasTransform, g_LFeature_ShadowProjectionTransform[{p3}], cascade2.w);\n\t\tfloat shadowFactor = max(cascade3.w, PerformShadowMapping(cascade1.xyz, atlasTransform));\n\t\tsum += ComputePBRLightShadowInfinite(n, g_LDirectional_Direction[{k}].xyz, v, albedo, g_LDirectional_Color[{k}].rgb, tint, f0, rough, metal, shadowFactor);\n\t}}\n"
@@ -228,16 +242,65 @@ mod tests {
     }
 
     #[test]
-    fn spot_shadows_are_reported_instead_of_half_generated() {
-        for name in SPOT_SHADOW_MACROS {
+    fn spot_cookies_are_reported_instead_of_half_generated() {
+        for name in SPOT_COOKIE_MACROS {
             assert_eq!(
                 run(
                     "LightingV1",
                     &[("LIGHTING", 1), ("LIGHTS_SPOT", 1), (name, 1)]
                 ),
-                Expansion::Unsupported("LightingV1/spot-shadow".into())
+                Expansion::Unsupported("LightingV1/spot-cookie".into())
             );
         }
+    }
+
+    #[test]
+    fn spot_shadows_take_the_first_slots() {
+        // 两盏聚光、一盏带阴影：槽 0 是阴影块（投影 0），普通循环从 1 开始；阴影块在普通循环之前（R1 1.3）
+        let source = source_of(&[
+            ("LIGHTING", 1),
+            ("LIGHTS_SPOT", 2),
+            ("LIGHTS_SPOT_SHADOW", 1),
+        ]);
+        for line in [
+            "uniform mat4 g_LFeature_ShadowProjection[1];",
+            "uniform vec4 g_LFeature_ShadowProjectionTransform[1];",
+            "float cone = smoothstep(g_LSpot_Direction[0].w, g_LSpot_Origin[0].w, dot(normalize(-toLight), g_LSpot_Direction[0].xyz));",
+            "vec3 shadowCoords = CalculateProjectedCoords(pos, g_LFeature_ShadowProjection[0]);",
+            "PerformShadowMapping(shadowCoords, g_LFeature_ShadowProjectionTransform[0])",
+            "g_LSpot_Color[0].rgb * cone, g_LSpot_Color[0].w, g_LSpot_Exponent[0].x, tint, f0, rough, metal, shadowFactor);",
+            "for (int k = 1; k < 2; ++k)",
+        ] {
+            assert!(source.contains(line), "缺 {line}");
+        }
+        assert!(source.find("shadowCoords").unwrap() < source.find("for (int k = 1").unwrap());
+        assert!(!source.contains("ShadowPointProjection"));
+    }
+
+    #[test]
+    fn spot_shadows_shift_the_cascade_base() {
+        // 一盏带阴影的聚光 + 一盏带阴影的平行光：投影 4 个，聚光用 0，级联读 1、2、3（B0 = SS）
+        let source = source_of(&[
+            ("LIGHTING", 1),
+            ("LIGHTS_SPOT", 1),
+            ("LIGHTS_SPOT_SHADOW", 1),
+            ("LIGHTS_DIRECTIONAL", 1),
+            ("LIGHTS_DIRECTIONAL_SHADOW", 1),
+        ]);
+        for line in [
+            "uniform mat4 g_LFeature_ShadowProjection[4];",
+            "CalculateProjectedCoords(pos, g_LFeature_ShadowProjection[0])",
+            "CalculateProjectedCoordsCascades(pos, g_LFeature_ShadowProjection[1])",
+            "CalculateProjectedCoordsCascades(pos, g_LFeature_ShadowProjection[2])",
+            "CalculateProjectedCoordsCascades(pos, g_LFeature_ShadowProjection[3])",
+        ] {
+            assert!(source.contains(line), "缺 {line}");
+        }
+        // 段顺序：聚光阴影在平行光阴影之前
+        assert!(
+            source.find("CalculateProjectedCoords(").unwrap()
+                < source.find("CalculateProjectedCoordsCascades").unwrap()
+        );
     }
 
     fn source_of(macros: &[(&str, i64)]) -> String {

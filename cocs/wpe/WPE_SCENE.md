@@ -38,7 +38,7 @@
 - 宿主 `compile/lights.ts` 把灯对象整理成编译期记录（`bundle.lightObjects`，绑了 `{user}` 的数值字段登记就地目标，P13f2），渲染器每帧按 `SceneState` 现组灯记录、按视线方向排序、照 WPE 写整块灯光缓冲（P13d 起，见「阴影（P13d）」与「灯的运行时（P13f2）」），宏经 `litDefines` 传给翻译器，只在最终 `LIGHTING` 非 0 时生效。
 - 光照路径自己的宏只有 `LIGHTS_*`。`SHADERVERSION` 是翻译器的平台宏（69），`genericimage3` 按它选公式。
 - **全局引擎宏**（[hdr-macro-REPORT](../../.claude/plans/wpe-import/3-scene/hdr-macro-REPORT.md)）：`HDR`、`SCENE_ORTHO` 经 `engineDefines` 传给全部着色器，关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。`REVERSEDEPTH` 恒为 1（P13c，WPE 用反向深度；见「sprite 对象（P13c）」）。`TEX<n>FORMAT` 只给声明了 `formatcombo` 且按名字绑定的槽位定义，运行时槽位（`previous`、`bind`、passthrough）不定义。`HLSL_GS40_DISABLED` 不能定义，WPE 没有这个宏。
-- **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，聚光的阴影 / cookie 报 `lightconfig:spot*`（点光、平行光的阴影 P13d 起支持），体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
+- **边界**：只实现无 effect 图层。带 effect 或 passthrough 的图层报 `lighting:prelighting`，effect 自己开光照报 `lighting:effect`，聚光的 cookie 报 `lightconfig:spot*cookie`（点光、平行光的阴影 P13d 起支持，聚光阴影 P13i 起支持），体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
 - 本机语料没有一张真的开 `LIGHTING`，这条路径靠 `ignore/lighting/` 的测试工程和 WPE 1:1 对比（最大差 1）。普通图层带法线图时另有 UV 内缩的差异（已知，最大 10）。
 
 ## 反射（P13b1：设置与「反射关」；P13b2：平面反射开；P13g：屏幕空间反射开）
@@ -82,10 +82,17 @@
 
 - **设置「场景阴影」**（`wpeSceneShadows`：`follow` 缺省 / `disabled` / `low` / `medium` / `high` / `ultra`；宿主收父页面下发的值，同上）：跟随时读 WPE `config.json` 的 `general.user.shadows`，缺键或读不到按 medium（`compile/postprocess.ts` 的 `resolveShadows`）。只在 `lightconfig` 要阴影时才读 `config.json`。值变了宿主整场重新加载（档位决定投射变体、图集尺寸与宏）。dev 覆盖 `localStorage["kabegame-dev-scene-shadows"]`（`dev/shadowsOverride.ts`，生产构建摇掉），宿主加载与 dev 探针都读，验收时不改用户设置也能按任一档位渲染；用完要删掉。
 - **灯光缓冲**（`compile/lights.ts` 的 `lightFrame`）：灯光数组不再进材质常量，渲染器每帧（相机与脚本之后）按 WPE 的规则排序——类型升序、`castshadow | usecookie` 降序、局部原点 · `g_ViewForward` 升序——再按 WPE 的平铺布局写整块缓冲：带阴影的灯占前几个槽，多出来的投射灯被普通灯覆盖（`p13d-over`），没有灯的槽全 0。阴影计数照 WPE：档位为 0 时只读 `spotshadowcookie`（并进 `spotcookie`），其余阴影计数不读。
-- **阴影宏**：阴影计数之和非 0 时 `LIGHTS_SHADOW_MAPPING = 1`、`LIGHTS_SHADOW_MAPPING_QUALITY = 档位`（1 low … 4 ultra；1 是单次比较，2 起 9 次采样）。翻译器按 WPE 的生成器展开点光、平行光的阴影分支，平行光的级联下标照抄 WPE 的 `B0 + k + c`（两盏以上读错，语料依赖的 WPE 缺陷照抄）；聚光的阴影 / cookie 照报。
+- **阴影宏**：阴影计数之和非 0 时 `LIGHTS_SHADOW_MAPPING = 1`、`LIGHTS_SHADOW_MAPPING_QUALITY = 档位`（1 low … 4 ultra；1 是单次比较，2 起 9 次采样）。翻译器按 WPE 的生成器展开点光、聚光（P13i）、平行光的阴影分支，平行光的级联下标照抄 WPE 的 `B0 + k + c`（`B0 = SSC + SC + SS`；两盏以上读错，语料依赖的 WPE 缺陷照抄）；聚光的 cookie 照报（`LightingV1/spot-cookie`）。
 - **阴影图集**（`render/shadows.ts` 的 `ShadowAtlas`、`render/shadowMath.ts`）：`_rt_shadowAtlas` 是 `depth32float`、每帧清 0（反向 Z），比较采样器 GREATER、线性、clamp（WebGPU 没有 BORDER，越界的边框由翻译器的 `kb_shadowCompare` 处理）。方块边长 low / medium 256、high 512、ultra 1024：点光一块 2×3 个面（S/2 × S/3），平行光三级联各一块；打包点光优先、再按大小降序，8192 宽一行，图集只在不够时变大（「够就不动」）。点光六个面的 fov 94 / 94 / 92 / 91.2°（按档位），近平面正交场景 1、透视场景 `max(0.05, lightsourcesize)`，远平面 `max(radius, near + 0.01)`；阴影 pass 的投影 `P32 −= 0.00333`，uniform 不带。平行光级联 `(a, b) = (cd0, 4cd1)`、`(cd1, 4cd1)`、`(cd2, max(1.5cd2, 4cd1))`，视图照 R3 逐步 float32（快速倒数平方根、`fmodf` 防抖），阴影 pass 的 `VP[3][2] −= 0.0005`。投影与方块变换每帧写进同一块灯光缓冲（`g_LFeature_*`）。
 - **阴影 pass**（`render/scene.ts` 的 `buildShadowCasters` / `shadowCasterOf`）：每帧在反射 pass 与主 pass 之前。投射者是不透明（任一网格第一个 pass 是 normal / alphatocoverage）且 `castshadow` 不为 false 的模型（缺省开、地面也投；绑属性登记重编译）；图像层、粒子等写了 `castshadow` 也不画，键中性。每个网格的投射变体（`SceneMesh.shadow`）：着色器取基础片元首行的 `// [PASS] shadow <名>`，没有用 `shadowcaster`；COMBO 只取投射着色器声明的、值取基础程序的，基础 blending 为 alphatocoverage 时加 `ALPHATOCOVERAGE = 1`、变体也走 A2C 丢弃入口；纹理按注解的 `material` 键对槽，材质常量按名字从基础 pass 拷（投射着色器的注解没有缺省，比如 foliage 的风）。管线只写深度、剔除 NONE、`depthBiasSlopeScale −4`。`fur4` 的主 pass 按 `INSTANCECOUNT` 画多层，投射变体只画基础网格一层。WebGPU 没有视口数组：每个图集条目、每个视图单独画一次，`firstInstance` 取视图号，着色器照样按实例号取 `g_ViewportViewProjectionMatrices[i]`（翻译器去掉 `gl_ViewportIndex` 的赋值）；投射者每个条目一份 uniform 副本（`g_ModelMatrix` 按当前状态、视图投影是这一条的）。
 - **空槽**：WPE 给没有灯的阴影槽写全 0，投影 `w` 是 0，坐标是 0/0 的 NaN；硬件比较采样把 NaN 坐标当 0、结果有限，乘颜色 0 没有贡献。`kb_shadowCompare` 手算双线性的权重写成 `w >= 0 ? w : 0`，否则 NaN 会进整个光照和、画面全黑（`p13d-hide` 运行中隐藏一盏）。
+- **聚光阴影**（P13i，[phase-13i-spot-shadow](../../.claude/plans/wpe-import/3-scene/phase13/phase-13i-spot-shadow.md)）：
+  - **槽位**：聚光按 `flags & (档位 ≠ 0 ? 3 : 2)`（bit0 `castshadow`、bit1 `usecookie`）选四段之一写 `LSpot_*`：阴影 + cookie（槽 0 起）、cookie、阴影（`SSC + SC` 起）、普通（`SSC + SC + SS` 起）；带阴影或 cookie、且 N 还有余量时占一个投影槽（同段的投影指针；N 余量和平行光共用，灯按类型排序，聚光先用），带阴影的进图集。锥角余弦照 WPE 按单精度算（`f32(角度 · 0.017453292f)` 再 `cosf`，和双精度差 1 ulp）。
+  - **投影**：P13e 的 `spotViewProjection`（灯的世界矩阵做视图、外锥 ×2 当竖直 fov、宽高比 1、近平面正交 1 / 透视 0.05、远平面取半径），写 `ShadowProjection[槽]`；阴影 pass 同平行光 `[3][2] − 0.0005`。
+  - **图集**：每条一块，边长同档位；不是点光，和级联同边长、按生成顺序排在级联之前。
+  - **着色器**：锥角衰减之后 `CalculateProjectedCoords`（透视除法，没有越界判定）+ `PerformShadowMapping`。
+  - **WPE 的阴影 draw**：每个投射者一次 draw，把它看得到的视图压紧成实例数组；我们按条目逐视图画，结果相同。
+  - **实测**（2026-11-18）：确定性工程 `ignore/p13/i/gen_i.py`（朝下 / 斜照 / 正交 / 点光 + 两盏聚光 + 平行光，low 与 high）：灯光缓冲、投影、方块变换、阴影视图与 WPE 逐位相同（`render/p13i-spot.test.ts`），整帧只有 1–17 个孤立像素差 1（同 P13d）；`3455121165` 复制工程 5 帧每帧 1 个像素差 1。
 - **已知差别**：WPE 运行中隐藏投射灯时图集不缩；我们 `visible` 绑属性是整场重编译，按新的灯数建图集，方块变换的分母不同，画面相同（`p13d-hide` 2 个像素差 1）。
 - **A2C 阈值**：单采样 A2C 在 alpha ≥ 0.5 + 2⁻¹² 时才覆盖（见「写入状态（步骤 5）」表里「A2C 的覆盖」一行）；投射变体同样适用，阴影图集逐纹素和 WPE 相同。
 - **实测**（2026-11-15）：确定性工程 `ignore/p13/d/gen_d0.py`、`gen_d8.py`、`gen_d9.py`、`gen_d10.py` 共 29 次抓帧（五个档位 × 点光正交 / 透视 / 平行光、多灯、投射者判定、剔除、改级联距离、相机微移、两盏平行光、投射灯超配、运行中隐藏、毛发层数、三种专用投射者），按抓帧时刻渲染，每张最多 32 个孤立像素、都只差 1 级；`p13d-who` 另有一个粒子方块，是屏外探针不步进粒子，与阴影无关。

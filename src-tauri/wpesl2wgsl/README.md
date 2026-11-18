@@ -89,7 +89,7 @@ interface TranslateRequest {
 |---|---|
 | `request` | 请求 JSON 无法解析，或 COMBO 值不是整数 / 布尔 |
 | `include` | 缺头文件，见 `missing`；只有几何段缺时 `stage` 为 `"geometry"` |
-| `require` | `#require` 展开不了，见 `requires`：未知的库名，或聚光的阴影 / cookie（`LightingV1/spot-shadow`；点光、平行光的阴影 P13d 起展开） |
+| `require` | `#require` 展开不了，见 `requires`：未知的库名，或聚光的 cookie（`LightingV1/spot-cookie`；点光、平行光的阴影 P13d 起展开，聚光阴影 P13i 起展开） |
 | `texture` | 缺缺省纹理的格式，见 `missingTextures` 与「缺纹理格式」；补上 `defaultFormats` 再调一次 |
 | `preprocess` | `#if` 没有闭合、`#if` 里宏展开过深、未知预处理指令（`file` / `line` 指向原文） |
 | `rewrite` | 不支持的全局声明、两阶段同名的引擎 uniform（都没有 `material`）类型不同、纹理函数参数不是已声明的纹理；几何着色器展开不支持的写法（`IN[1]`、`OUT.RestartStrip()` 等）；`int` / `uint` / 矩阵数组的 varying；varying 打包后仍超过 16 个 location、要打包却认不出 `main` 或正文里已有 `kb_main` / `kb_varying_*` |
@@ -476,7 +476,7 @@ void main() {
 
 | 现象 | 原因 |
 |---|---|
-| `phase: "require"`，`LightingV1/spot-shadow` | 聚光的阴影与 cookie 要聚光投影与 `_alias_lightCookie`，渲染器没有（语料 0 张） |
+| `phase: "require"`，`LightingV1/spot-cookie` | 聚光的 cookie 要 `_alias_lightCookie`，渲染器没有（语料 0 张）；聚光阴影 P13i 起展开 |
 | `Array size must be greater than zero` | `BONECOUNT` 等引擎宏未定义（骨骼蒙皮），可经 `defines` 传入 |
 
 另外，glsl-in 只认 Vulkan 语义的 GLSL 450，这正是改写这一步存在的原因；naga 的 `glsl-in` / `wgsl-out` 在其支持表里是二档（维护但测试较少）。

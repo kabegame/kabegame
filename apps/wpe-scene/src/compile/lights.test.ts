@@ -64,11 +64,14 @@ describe("general.lightconfig", () => {
     });
   });
 
-  it("只有聚光的阴影与 cookie 照报（P13d 起点光、平行光的阴影支持）", () => {
+  it("只有聚光的 cookie 照报（P13d 起点光、平行光的阴影支持，P13i 起聚光阴影支持）", () => {
     expect(lightConfigIssues({})).toEqual([]);
     const config = { lightconfig: { point: 1, spotcookie: 1, pointshadow: 2, spotshadow: 1 } };
-    expect(lightConfigIssues(config, 2)).toEqual(["lightconfig:spotshadow", "lightconfig:spotcookie"]);
+    expect(lightConfigIssues(config, 2)).toEqual(["lightconfig:spotcookie"]);
     expect(lightConfigIssues(config, 0)).toEqual(["lightconfig:spotcookie"]);
+    // 档位 0 时 spotshadowcookie 并进 spotcookie（解析期）
+    expect(lightConfigIssues({ lightconfig: { spotshadowcookie: 1 } }, 2)).toEqual(["lightconfig:spotshadowcookie"]);
+    expect(lightConfigIssues({ lightconfig: { spotshadowcookie: 1 } }, 0)).toEqual(["lightconfig:spotcookie"]);
   });
 
   it("宏：litDefines 只有 LIGHTS_*，HDR / SCENE_ORTHO 全局给，关闭时不写键；REVERSEDEPTH 恒为 1（P13c）", () => {
@@ -460,7 +463,7 @@ describe("编译", () => {
     expect(bundle.unsupported).toContain("lighting:effect");
   });
 
-  it("lightconfig 的点光、平行光阴影不报（P13d 支持），聚光的阴影照报", async () => {
+  it("lightconfig 的点光、平行光（P13d）与聚光（P13i）阴影不报，聚光 cookie 照报", async () => {
     // 内存读取器里没有 WPE 的 config.json：阴影档位按缺键的 medium（2）
     const point = await compile(
       { image: "models/lit.json" },
@@ -470,6 +473,9 @@ describe("编译", () => {
     expect(point.bundle.lights?.counts).toMatchObject({ pointShadow: 1, directionalShadow: 1 });
     expect(point.bundle.lights?.quality).toBe(2);
     const spot = await compile({ image: "models/lit.json" }, { lightconfig: { spotshadow: 1 } });
-    expect(spot.bundle.unsupported).toContain("lightconfig:spotshadow");
+    expect(spot.bundle.unsupported).toEqual([]);
+    expect(spot.bundle.lights?.counts).toMatchObject({ spotShadow: 1 });
+    const cookie = await compile({ image: "models/lit.json" }, { lightconfig: { spotcookie: 1 } });
+    expect(cookie.bundle.unsupported).toContain("lightconfig:spotcookie");
   });
 });

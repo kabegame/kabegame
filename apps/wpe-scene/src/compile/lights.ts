@@ -30,18 +30,26 @@ export interface LightCounts {
   /** 带阴影的点光 / 平行光数（`pointshadow` / `directionalshadow`，P13d）；阴影档位为 0 时解析期就丢掉（rea-p13-passes 2.10）。 */
   pointShadow: number;
   directionalShadow: number;
-  /** 聚光的阴影 / cookie 数：不支持（照报 `lightconfig:spot*`），只为照报与宏。档位 0 时 `spotshadowcookie` 并进 `spotcookie`。 */
+  /**
+   * 聚光的阴影 / cookie 数。阴影 P13i 起支持；cookie 两项（`spotcookie`、`spotshadowcookie`）照报 `lightconfig:spot*cookie`，只为照报与宏。
+   * 档位 0 时 `spotshadowcookie` 并进 `spotcookie`。
+   */
   spotShadow: number;
   spotCookie: number;
   spotShadowCookie: number;
 }
 
-/** 聚光的阴影与 cookie 键：要 `_alias_lightCookie` 与聚光投影（语料 0 张），照报。 */
-const SPOT_SHADOW_KEYS = ["spotshadowcookie", "spotshadow", "spotcookie"] as const;
+/** 聚光的 cookie 键：要 `_alias_lightCookie`（语料 0 张），照报。聚光阴影 P13i 起支持。 */
+const SPOT_COOKIE_KEYS = ["spotshadowcookie", "spotcookie"] as const;
 
 function count(value: unknown): number {
   // WPE 只取低 4 位（FUN_140186c90）
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) & 0xf : 0;
+}
+
+/** 会进阴影图集的计数之和：点光、平行光（P13d）、聚光阴影与阴影 + cookie（P13i；后者照报）。为 0 时不建图集、不编投射变体。 */
+export function shadowCount(counts: LightCounts): number {
+  return counts.pointShadow + counts.directionalShadow + counts.spotShadow + counts.spotShadowCookie;
 }
 
 /** 阴影类计数各 2 位（`0x140187b52`–`0x140187d00`，最多 3）。 */
@@ -74,15 +82,16 @@ export function lightCounts(general: Record<string, unknown>, quality = 0): Ligh
   };
 }
 
-/** `lightconfig` 里聚光的阴影 / cookie（按档位解析之后）：照报，不生成缺阴影的画面。点光、平行光的阴影 P13d 起支持。 */
+/**
+ * `lightconfig` 里聚光的 cookie（按档位解析之后）：照报，不生成缺 cookie 的画面。点光、平行光的阴影 P13d 起支持，聚光阴影 P13i 起支持。
+ */
 export function lightConfigIssues(general: Record<string, unknown>, quality = 0): string[] {
   const counts = lightCounts(general, quality);
-  const values: Record<(typeof SPOT_SHADOW_KEYS)[number], number> = {
+  const values: Record<(typeof SPOT_COOKIE_KEYS)[number], number> = {
     spotshadowcookie: counts.spotShadowCookie,
-    spotshadow: counts.spotShadow,
     spotcookie: counts.spotCookie,
   };
-  return SPOT_SHADOW_KEYS.filter((key) => values[key] > 0).map((key) => `lightconfig:${key}`);
+  return SPOT_COOKIE_KEYS.filter((key) => values[key] > 0).map((key) => `lightconfig:${key}`);
 }
 
 /**
@@ -151,7 +160,14 @@ export function lightAxes(angles: readonly number[], scale: readonly number[]): 
   ];
 }
 
-const DEGREES = Math.PI / 180;
+/**
+ * 聚光锥角的余弦（`0x140192e64` / `0x140192eaa`）：角度 float32 乘 `0.017453292f`，再调 MSVC `cosf`（参数 float、内部 double 求值再舍回
+ * float）。P13i 实测 `p13i-spot` 的 `cos 25°` 和双精度直接算差 1 ulp。
+ */
+function coneCos(degrees: number): number {
+  const f = Math.fround;
+  return f(Math.cos(f(f(degrees) * f(0.017453292))));
+}
 
 /** 一类灯（`light+0x2c0`：0 点、1 聚、2 管、3 平行）。 */
 export type LightKind = "point" | "spot" | "tube" | "directional";
@@ -183,6 +199,8 @@ export interface SceneLight {
   /** 聚光内外锥角的余弦 */
   inner: number;
   outer: number;
+  /** 聚光外锥角（度）：阴影投影的 fov 是它的两倍（`spotViewProjection`，P13i） */
+  outercone: number;
   /** 管光另一端（`controlpoint` 经世界矩阵） */
   tubeEnd: [number, number, number];
   /** `lightsourcesize`：透视场景点光阴影的近平面（rea-p13-passes 2.3） */
@@ -317,8 +335,9 @@ export function sceneLightOf(light: SceneLightObject, values: LightValues, layer
     color: [0, 1, 2].map((k) => f(f(layer.color[k] ?? 0) * values.intensity)) as [number, number, number],
     radius: values.radius,
     exponent: values.exponent,
-    inner: Math.cos(values.innercone * DEGREES),
-    outer: Math.cos(values.outercone * DEGREES),
+    inner: coneCos(values.innercone),
+    outer: coneCos(values.outercone),
+    outercone: values.outercone,
     tubeEnd: [0, 1, 2].map((k) => cx * w[k] + cy * w[4 + k] + cz * w[8 + k] + w[12 + k]) as [number, number, number],
     lightSourceSize: values.lightsourcesize,
     cascades: [values.cascadedistance0, values.cascadedistance1, values.cascadedistance2],
@@ -420,12 +439,15 @@ export function lightBufferLayout(counts: LightCounts): LightBufferLayout {
   };
 }
 
-/** 一条阴影条目（rea-p13-shadows R2.2）：点光一条（6 个面），平行光每级一条。 */
+/** 一条阴影条目（rea-p13-shadows R2.2）：点光一条（6 个面），聚光一条（P13i），平行光每级一条。 */
 export interface ShadowEntry {
+  kind: "point" | "spot" | "cascade";
   light: SceneLight;
-  /** 平行光的级联号 0–2；点光为 null */
+  /** 平行光的级联号 0–2；点光、聚光为 null */
   cascade: number | null;
-  /** 写投影与方块变换的槽：点光是 `ShadowPointProjection` 的下标，平行光是 `ShadowProjection` 的下标（可能越过 N，R2.4） */
+  /**
+   * 写投影与方块变换的槽：点光是 `ShadowPointProjection` 的下标，聚光与平行光是 `ShadowProjection` 的下标（平行光可能越过 N，R2.4）
+   */
   slot: number;
 }
 
@@ -462,7 +484,11 @@ export function sortLights(lights: readonly SceneLight[], forward: readonly numb
  *   之后另判 `flag && PS 余量 > 0` 才生成一条阴影条目（投影下标是第几条点光阴影）；
  * - 平行光：同样按 `flag` 选指针（阴影从槽 0、普通从 `DS`），之后 `flag && N 余量 > 0`（初值 N，每盏 −1）才生成三级条目，下标从
  *   `SSC + SC + SS`（聚光的那几项恒 0）起每级 +1、跨盏连续（可能越过 N）；
- * - 聚光、管光照旧（聚光阴影 / cookie 照报，不会走到）；
+ * - 聚光（P13i，`0x140192dbf`）：段 `= flags & (档位 ≠ 0 ? 3 : 2)`（bit0 `castshadow`、bit1 `usecookie`）选四段之一的指针写四个数组，
+ *   四段依次是阴影 + cookie（从槽 0）、cookie（`SSC`）、阴影（`SSC + SC`）、普通（`SSC + SC + SS`）；之后 `castshadow`（档位 ≠ 0）或
+ *   `usecookie` 为真、且 N 余量 > 0 时余量 −1、按同一段的投影指针（阴影 + cookie 0、cookie `SSC`、阴影 `SSC + SC`）占一个投影槽，带阴影的
+ *   生成一条条目（只有 cookie 的不进图集；cookie 照报，这里不写它的投影）；灯按类型排序，聚光先于平行光用掉 N 余量；
+ * - 管光照旧；
  * - 用完的平行光槽把方向补成 (0, 1, 0, 0)、颜色保持 0（`0x1401931bb`：方向是 0 向量时着色器归一化出 NaN，颜色 0 也挡不住）。
  * 越界写落进整块缓冲的下一段，越过整块末尾的丢掉（WPE 会写坏别的内存，语料不会走到）。
  */
@@ -486,8 +512,11 @@ export function lightFrame(
   let dirShadowSlot = 0;
   let dirPlainSlot = counts.directionalShadow;
   let projectionsLeft = layout.projections;
-  let projectionSlot = counts.spotShadowCookie + counts.spotCookie + counts.spotShadow;
-  let spotSlot = 0;
+  const { spotShadowCookie: SSC, spotCookie: SC, spotShadow: SS } = counts;
+  let projectionSlot = SSC + SC + SS;
+  // 聚光的段指针：下标是段号（0 普通、1 阴影、2 cookie、3 阴影 + cookie）
+  const spotSlots = [SSC + SC + SS, SSC + SC, SSC, 0];
+  const spotProjectionSlots = [0, SSC + SC, SSC, 0];
   let tubeSlot = 0;
   const { point: P, spot: S, tube: T, directional: D } = counts;
   for (const light of sortLights(lights, forward)) {
@@ -501,7 +530,7 @@ export function lightFrame(
       write(layout.point + 4 * P + slot * 4, [...origin, light.exponent]);
       if (flag && pointShadowsLeft > 0) {
         pointShadowsLeft--;
-        entries.push({ light, cascade: null, slot: counts.pointShadow - pointShadowsLeft - 1 });
+        entries.push({ kind: "point", light, cascade: null, slot: counts.pointShadow - pointShadowsLeft - 1 });
       }
     } else if (light.kind === "directional") {
       const slot = flag ? dirShadowSlot++ : dirPlainSlot++;
@@ -511,16 +540,24 @@ export function lightFrame(
       write(layout.directional + 4 * D + slot * 4, [-m[0], -m[1], -m[2], 0]);
       if (flag && projectionsLeft > 0) {
         projectionsLeft--;
-        for (let cascade = 0; cascade < 3; cascade++) entries.push({ light, cascade, slot: projectionSlot++ });
+        for (let cascade = 0; cascade < 3; cascade++)
+          entries.push({ kind: "cascade", light, cascade, slot: projectionSlot++ });
       }
     } else if (light.kind === "spot") {
-      const slot = spotSlot++;
+      const segment = light.flags & (shadows ? 3 : 2);
+      const slot = spotSlots[segment]++;
       const m = light.matrix;
       write(layout.spot + slot * 4, [...color, light.radius]);
       write(layout.spot + 4 * S + slot * 4, [...origin, light.inner]);
       // 局部 +X 是照射方向
       write(layout.spot + 8 * S + slot * 4, [m[0], m[1], m[2], light.outer]);
       write(layout.spot + 12 * S + slot * 4, [light.exponent]);
+      const cookie = (light.flags & 2) !== 0;
+      if ((flag || cookie) && projectionsLeft > 0) {
+        projectionsLeft--;
+        const projection = spotProjectionSlots[segment]++;
+        if (flag) entries.push({ kind: "spot", light, cascade: null, slot: projection });
+      }
     } else {
       const slot = tubeSlot++;
       write(layout.tube + slot * 4, [...color, light.radius]);

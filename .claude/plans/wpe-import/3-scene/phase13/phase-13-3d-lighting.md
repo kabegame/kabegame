@@ -416,3 +416,8 @@ const OBJECT_KINDS = ["image", "model", "particle", "sound", "text", "light"] as
 ### P13h — 透视场景的余项（2026-11-18）
 
 子计划、步骤 0 与实施记录见 [phase-13h-perspective-rest.md](phase-13h-perspective-rest.md)。透视场景里的文本按 `depthtest` 换 `_depth` 材质（测深度、不写，带 effect 的合成上屏借字形材质），带子层的组照正交时的画法，透明排序时体积光的灯进第二遍按局部 origin 排序；去掉 `camera:perspective:text`、`camera:perspective:group`、`volumetrics:transparentsorting`。步骤 0 的三个确定性工程与 WPE 整帧 0 差，读码全部成立。语料干净 197 → 199（`3453730450`、`3509243656`）；走查 `3453730450` 复制工程 10 帧逐像素相同，`3509243656`（HDR）只有光晕渐变 ±1。P13 的分节到此做完；`3455121165` 还差聚光阴影，`3662790108` 还差 PRELIGHTING（照报）与缺材质。
+
+### P13i — 聚光阴影（2026-11-18）
+
+总计划见 [phase-13ij-spot-prelighting.md](phase-13ij-spot-prelighting.md)（2026-11-18 全库扫描后用户：「都要做」，P13i、P13j 两节，先 P13i），子计划与实施记录见 [phase-13i-spot-shadow.md](phase-13i-spot-shadow.md)。聚光按 `castshadow / usecookie` 选段写数组，带阴影的占一个投影槽与图集一块，投影复用 P13e 的 `spotViewProjection`，阴影 pass 同平行光；翻译器展开「聚光 · 阴影」段、级联基址加上 SS；聚光 cookie 照报。六组抓帧的灯光缓冲、投影、阴影视图与 WPE 逐位相同，整帧同 P13d 的水平；锥角余弦改成 WPE 的单精度算法（原来差 1 ulp）。语料干净 205 → 206（`3455121165`），走查 5 帧每帧 1 个像素差 1。下一节 P13j（预光照）。
+

@@ -49,6 +49,7 @@ import {
   engineDefines,
   lightConfigIssues,
   lightCounts,
+  shadowCount,
   litDefines,
   readsLegacyLights,
   type LightCounts,
@@ -1676,8 +1677,10 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     // 雾的宏（P13f）：按加载时的开关定，运行中改开关不重编（p13-REPORT F3）
     fogDefines(fields),
   );
-  /** 场景有阴影（P13d）：档位 ≠ 0 且有点光 / 平行光阴影计数；为真时模型网格编投射变体、渲染器建阴影图集。 */
-  const castsShadows = shadowQuality !== 0 && counts.pointShadow + counts.directionalShadow > 0;
+  /**
+   * 场景有阴影（P13d）：档位 ≠ 0 且有点光 / 平行光 / 聚光（P13i，含照报的阴影 + cookie）阴影计数；为真时模型网格编投射变体、渲染器建阴影图集。
+   */
+  const castsShadows = shadowQuality !== 0 && shadowCount(counts) > 0;
   /**
    * 灯对象（P13f2）：数值字段绑属性登记就地目标（`{ kind: "light" }`，不再整场重编译）；`light`、`castshadow`、`usecookie`、`castvolumetrics`
    * 挂属性 / 脚本 / 关键帧照报 `light:runtime:<键>`（WPE 运行中重建资源，语料 0）。

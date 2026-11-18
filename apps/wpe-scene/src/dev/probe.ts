@@ -432,7 +432,7 @@ export interface RenderFrameResult {
   unsupported: string[];
   postprocess: SceneBundle["general"]["postprocess"];
   /** 实际生效的阴影档位（P13d，0 关闭 … 4 超高）与阴影计数；场景没有开光照的材质（`bundle.lights` 缺）时为 null。 */
-  shadows: { quality: number; pointShadow: number; directionalShadow: number } | null;
+  shadows: { quality: number; pointShadow: number; directionalShadow: number; spotShadow: number } | null;
   /** 实际生效的体积光档位（P13e，1 低 … 4 超高）与会画的灯（`objects` 下标）；没有会画的灯或档位关闭时为 null。 */
   volumetrics: { quality: number; lights: number[] } | null;
   /** 8 位 RGB（alpha 置 255）的 SHA-256：关闭档前后两版逐字节比较用。 */
@@ -1145,6 +1145,7 @@ async function renderFramePass(
               quality: bundle.lights.quality,
               pointShadow: bundle.lights.counts.pointShadow,
               directionalShadow: bundle.lights.counts.directionalShadow,
+              spotShadow: bundle.lights.counts.spotShadow,
             }
           : null,
         volumetrics: bundle.volumetrics

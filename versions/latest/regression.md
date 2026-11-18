@@ -3591,6 +3591,18 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PH3 走查（FINAL_CHECK） | Windows dev + WPE 抓帧 | `3453730450` 复制工程（`ignore/p13/h/walk/make_iso_3453.py`）10 帧、`3509243656` 复制工程（`make_iso_3509.py`）5 帧按日志回放 | 整帧逐像素相同，差异逐处解释 | 2026-11-18：`3453730450` 10 帧逐像素相同（文本、组、体积光都在画面里）；`3509243656` 是 HDR，WPE 后备缓冲 RGBA16F 按 sRGB 编码就近取整后每帧最大差 1（4 万像素，全在泛光光晕渐变上，f16 量化），文字处相同 |
 | [ ] | PH4 真机预览 | Windows dev | 图库里预览 `3453730450`（《玉盘 /Moon》）与 `3509243656`（三体实时演算） | 不再停在封面、实时渲染；`3453730450` 的「The Moon」文字与时钟在画面中间，透视下文字被前面的物体挡住的部分不画 | 待用户看。两张都是脚本驱动，画面已由 PH3 的复制工程逐像素验过 |
 
+## 场景壁纸聚光阴影（P13i）
+
+2026-11-18。聚光灯（`lspot`）开 `castshadow` 且 `lightconfig.spotshadow` 留了名额时画阴影：按 `castshadow / usecookie` 选段写聚光数组，带阴影的占一个投影槽与图集一块，投影复用体积光的 `spotViewProjection`，阴影 pass 同平行光偏 0.0005；翻译器展开「聚光 · 阴影」段，平行光级联基址跟着加上聚光阴影数。聚光 cookie 照报（`lightconfig:spot*cookie`、`LightingV1/spot-cookie`）。实测与走查见 `phase-13i-spot-shadow.md` 与 `p13-REPORT.md`「P13i 的实测」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PI0 单测与检查 | Windows | 翻译器 `cargo test --lib`；`apps/wpe-scene` 的 tsc；`src/render/p13i-spot.test.ts`、`src/compile/lights.test.ts` 与 P13 其余 12 个测试文件 | 0 error、全过 | 2026-11-18：翻译器单测全过（工作区 114 例，含别的会话同时新增的）；tsc 0 error；14 个文件 165 例全过（新增：六组抓帧的聚光数组、投影、方块变换、阴影视图集合与图集尺寸逐位对 WPE；段选择、cookie 照报、级联基址） |
+| [x] | PI1 语料 | Node，233 个工程 | 在「HEAD」与「HEAD + P13i」两份快照上各扫一遍（翻译器 wasm 分别编，不混入别的会话在改的翻译器源码） | 只去掉 `lightconfig:spotshadow` 与 `shader:generic4:require:LightingV1/spot-shadow` | 2026-11-18：干净 205 → 206（`3455121165`），没有新增键 |
+| [x] | PI2 对照 WPE（确定性工程） | Windows dev + WPE 抓帧（`A:\p13i\`，`capture_sweep` 临时改阴影档、跑完改回 low） | `ignore/p13/i/gen_i.py` 的 spot / tilt / mix / ortho（low）与 spot / mix（high）整帧比 | 和 P13d 的点光、平行光同一水平 | 2026-11-18：每张 1–17 个孤立像素差 1（光照渐变里的取整，不在影子边缘） |
+| [x] | PI3 走查（FINAL_CHECK） | Windows dev + WPE 抓帧 | `3455121165` 复制工程（`ignore/p13/i/walk/make_iso_3455.py`：组、太阳、三盏灯、地板、八颗行星，行星换成固定位置让影子落在地板上）5 帧按日志回放 | 整帧逐像素相同，差异逐处解释 | 2026-11-18：每帧 1 个像素差 1；同一帧阴影开 / 关差 3221 个像素（影子确实进了画面） |
+| [ ] | PI4 真机预览 | Windows dev | 图库里预览 `3455121165`（Solar system 太阳系），右栏「预览设置」的「场景阴影」在 low 与关闭之间切换 | 不再停在封面、实时渲染；切换后整场重新加载，地板上的光斑里有行星的淡影子 | 待用户看。影子落在很暗的光斑上，肉眼不明显时以「能实时渲染、切换不报错」为准 |
+
 ## WPE 壁纸设置与预览设置
 
 2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。

@@ -6718,7 +6718,7 @@ export class GpuScene {
       const lights = this.lightFrameCache;
       volumetrics.frame((object) => {
         const layer = this.bundle.layers.find((item) => item.object === object);
-        const entry = lights?.entries.find((item) => item.cascade === null && item.light.object === object);
+        const entry = lights?.entries.find((item) => item.kind === "point" && item.light.object === object);
         const slice = (start: number) => lights!.buffer.subarray(start + entry!.slot * 4, start + entry!.slot * 4 + 4);
         // 灯的几何与常量按这一帧的状态（P13f2）：字段取 `SceneState.lights`，颜色取图层状态，位置与方向取世界矩阵（沿父链）
         const light = volumetricLights.get(object);

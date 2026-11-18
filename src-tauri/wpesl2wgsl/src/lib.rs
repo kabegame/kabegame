@@ -158,7 +158,7 @@ pub struct TranslateResult {
     /// `phase: "texture"` 时要格式的注解缺省纹理（见请求的 `defaultFormats`）。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing_textures: Vec<MissingTexture>,
-    /// `phase: "require"` 时展开不了的库：未知的名字，或要聚光阴影 / cookie 的 `LightingV1/spot-shadow`。
+    /// `phase: "require"` 时展开不了的库：未知的名字，或要聚光 cookie 的 `LightingV1/spot-cookie`。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
 }
@@ -1262,20 +1262,22 @@ vec3 PointSegmentDelta(vec3 p, vec3 a, vec3 b) { return a - p; }
             .insert("LIGHTS_SPOT_COOKIE".into(), "1".into());
         let result = translate(&req);
         assert_eq!(result.phase, Some("require"));
-        assert_eq!(result.requires, ["LightingV1/spot-shadow"]);
+        assert_eq!(result.requires, ["LightingV1/spot-cookie"]);
     }
 
-    /// 点光、平行光的阴影分支能翻译（P13d）：投影与采样函数用桩，真实实现在 WPE 的 `common_pbr_2.h`。
+    /// 点光、聚光、平行光的阴影分支能翻译（P13d、P13i）：投影与采样函数用桩，真实实现在 WPE 的 `common_pbr_2.h`。
     #[test]
     fn lighting_shadows_translate() {
         let mut req = lit_request();
         req.fragment = format!(
-            "uniform sampler2DComparison g_Texture6;\nvec4 CalculateProjectedCoordsPoint(vec3 p, vec3 o, vec4 info, vec4 t) {{ return vec4(p - o, info.x + t.x); }}\nfloat PerformPointShadowMapping(vec4 c) {{ return texSample2DCompare(g_Texture6, c.xy, c.z).r; }}\nvec4 CalculateProjectedCoordsCascades(vec3 p, mat4 m) {{ return mul(vec4(p, 1.0), m); }}\nfloat PerformShadowMapping(vec3 c, vec4 t) {{ return texSample2DCompare(g_Texture6, c.xy * t.zw + t.xy, c.z).r; }}\n{}",
+            "uniform sampler2DComparison g_Texture6;\nvec4 CalculateProjectedCoordsPoint(vec3 p, vec3 o, vec4 info, vec4 t) {{ return vec4(p - o, info.x + t.x); }}\nfloat PerformPointShadowMapping(vec4 c) {{ return texSample2DCompare(g_Texture6, c.xy, c.z).r; }}\nvec4 CalculateProjectedCoordsCascades(vec3 p, mat4 m) {{ return mul(vec4(p, 1.0), m); }}\nvec3 CalculateProjectedCoords(vec3 p, mat4 m) {{ return mul(vec4(p, 1.0), m).xyz; }}\nfloat PerformShadowMapping(vec3 c, vec4 t) {{ return texSample2DCompare(g_Texture6, c.xy * t.zw + t.xy, c.z).r; }}\n{}",
             req.fragment
         );
         for (name, value) in [
             ("LIGHTS_POINT", "2"),
             ("LIGHTS_POINT_SHADOW", "1"),
+            ("LIGHTS_SPOT", "2"),
+            ("LIGHTS_SPOT_SHADOW", "1"),
             ("LIGHTS_DIRECTIONAL", "1"),
             ("LIGHTS_DIRECTIONAL_SHADOW", "1"),
         ] {
@@ -1283,6 +1285,12 @@ vec3 PointSegmentDelta(vec3 p, vec3 a, vec3 b) { return a - p; }
         }
         let result = translate(&req);
         assert!(result.ok, "{:?} {:?}", result.phase, result.errors);
+        let projection = result
+            .uniforms
+            .iter()
+            .find(|u| u.name == "g_LFeature_ShadowProjection")
+            .expect("ShadowProjection");
+        assert_eq!(projection.array, Some(4), "聚光 1 + 级联 3");
         let names: Vec<_> = result.uniforms.iter().map(|u| u.name.as_str()).collect();
         for name in [
             "g_LFeature_ShadowPointProjection",

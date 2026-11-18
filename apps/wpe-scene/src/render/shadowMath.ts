@@ -1,11 +1,12 @@
 /**
  * 阴影的纯计算（P13d，rea-p13-passes 第 2 节、rea-p13-shadows R3、R4 与「点光阴影 pass 的 −0.00333」）：方块边长、点光六面的投影与视图、
- * 平行光三级联的视图投影、图集打包、每条条目的视口与方块变换。全部按 WPE 的 float32 逐步算，不碰 GPU，单测直接用抓帧的值核对。
+ * 平行光三级联的视图投影、图集打包、每条条目的视口与方块变换；聚光（P13i）的视图投影复用体积光的 `spotViewProjection`。全部按 WPE 的 float32 逐步算，不碰 GPU，单测直接用抓帧的值核对。
  *
  * 矩阵约定同 `math.ts`：列主序、`M * v`。WPE 的行向量写法 `VP = V · P` 在这里是 `multiply(P, V)`（`multiply` 的累加顺序就是 WPE 的
  * `((t0 + t1) + t2) + t3`）；WPE 的 `VP[3][2]`（深度列的平移项）是这里的下标 14。
  */
 import type { LightFrame, SceneLight, ShadowEntry } from "../compile/lights";
+import { spotViewProjection } from "../compile/volumetrics";
 import { perspectiveFov, perspectiveRH } from "./camera";
 import { fastInverseSqrt, multiply, type Mat4 } from "./math";
 
@@ -228,7 +229,7 @@ export interface ShadowView {
   viewProjection: Mat4;
 }
 
-/** 一帧的阴影：图集尺寸与逐条目的视图（点光 6 个、平行光 1 个）。 */
+/** 一帧的阴影：图集尺寸与逐条目的视图（点光 6 个、聚光与平行光 1 个）。 */
 export interface ShadowPlan {
   width: number;
   height: number;
@@ -240,7 +241,9 @@ export interface ShadowPlan {
  * 给一帧的阴影条目打包、算视图投影，并把 uniform（投影与方块变换）写进灯光整块缓冲（`LightFrame.buffer`）：
  * - 点光：`g_LFeature_ShadowPointProjection[slot]` = 不偏的 (P22, P32, P23, P33)，方块变换写 `…PointProjectionTransform[slot]`；六个面的视口是
  *   `(x + {0, S/2}, y + {0, S/3, 2S/3})`、大小 `(S/2, S/3)`（整数除），视图投影 `V_面 · P'`（P' 带 −0.00333）；
- * - 平行光：`g_LFeature_ShadowProjection[slot]` = 不偏的 VP，方块变换写 `…ProjectionTransform[slot]`；视口整块，阴影 pass 用 `VP[3][2] − 0.0005`。
+ * - 平行光：`g_LFeature_ShadowProjection[slot]` = 不偏的 VP，方块变换写 `…ProjectionTransform[slot]`；视口整块，阴影 pass 用 `VP[3][2] − 0.0005`；
+ * - 聚光（P13i）：同平行光的一级，VP 是 `spotViewProjection(世界矩阵, outercone, radius, 正交)`（`FUN_14025d420` 类型 1，存灯的 `+0x338`），
+ *   不是点光，打包时和级联同边长、按生成顺序排在它们前面。
  * `atlas` 给出现有 RT 的尺寸（R4.5：两边都够就不动，任一边不够改成恰好需要的），返回值的 `width` / `height` 是这一帧要用的 RT 尺寸。
  */
 export function planShadows(
@@ -254,7 +257,7 @@ export function planShadows(
 ): ShadowPlan {
   const size = shadowBlockSize(quality);
   const layout = packShadowAtlas(
-    frame.entries.map((entry: ShadowEntry) => ({ point: entry.cascade === null, size })),
+    frame.entries.map((entry: ShadowEntry) => ({ point: entry.kind === "point", size })),
     previous,
   );
   const fits = atlas && atlas.width >= layout.width && atlas.height >= layout.height;
@@ -266,7 +269,7 @@ export function planShadows(
   const views = frame.entries.map((entry, index): ShadowView[] => {
     const block = layout.blocks[index];
     const transform = atlasTransform(block, width, height);
-    if (entry.cascade === null) {
+    if (entry.kind === "point") {
       const { info, shadow } = pointShadowProjection(entry.light, quality, orthographic);
       write(frame.layout.pointProjection + entry.slot * 4, info);
       write(frame.layout.pointProjectionTransform + entry.slot * 4, transform);
@@ -277,7 +280,10 @@ export function planShadows(
         viewProjection: multiply(shadow, view),
       }));
     }
-    const vp = cascadeViewProjection(entry.light, entry.cascade, forward, eye, orthographic, size);
+    const vp =
+      entry.kind === "spot"
+        ? spotViewProjection(entry.light.matrix, entry.light.outercone, entry.light.radius, orthographic)
+        : cascadeViewProjection(entry.light, entry.cascade ?? 0, forward, eye, orthographic, size);
     write(frame.layout.projection + entry.slot * 16, vp);
     write(frame.layout.projectionTransform + entry.slot * 4, transform);
     const biased = new Float32Array(vp);

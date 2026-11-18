@@ -332,3 +332,28 @@ F7 是我们第一次对照时整帧差 25 级的原因：透视工程里 FR 的
 - **`3453730450`**：复制工程 `ignore/p13/h/walk/make_iso_3453.py`（P13g 那一套加三段顶层文本、组 253 与组里三段时钟文本，脚本与关键帧换成固定值；体积光灯 39 开着）。抓 10 帧（`A:\p13h\walk3453\`，脚本帧 269–278），`renderFrames.ts` 按日志回放（ultra、跑脚本、按日志光标、两遍）：**10 帧整帧逐像素相同**。
 - **`3509243656`**：复制工程 `make_iso_3509.py`（地球模型、顶层两段文本、左菜单组与四段文本，脚本换成固定值）。HDR 场景、后备缓冲 RGBA16F：`kbp cmp` 读不了 Present 的 DDS，RenderDoc 导 PNG 的取整也和就近取整不同（同一像素浮点 (0.000105, 0.000122, 0.000131) 导成 (0, 1, 1)）；按 sRGB 编码后就近取整（`ignore/p13/h/walk/dds_f16_to_png.py … srgb`）比 5 帧：每帧最大差 1、4 万个像素，全在泛光光晕的渐变上（WPE 后备缓冲的 f16 量化），文字处相同。
 - 测试行 15519–15524 已用 `projects_remove` 移除。
+
+## P13i 的实测：聚光阴影（2026-11-18）
+
+读码补充（`ignore/p13/i/rea/asm/`）：聚光写入 `0x140192dbf`–`0x140193178`（段下标 `flags & (档位 ≠ 0 ? 3 : 2)`、`castshadow` 或 `usecookie` 且 N 有余量才算投影、只有带阴影的进条目），投影 `FUN_14025d420` 类型 1 与 P13e 的 V1.2 相同，边长 `FUN_14025d3e0` 三种灯共用。
+
+确定性工程 `ignore/p13/i/gen_i.py`，抓帧 `A:\p13i\{spot,tilt,mix,ortho}-low`、`{spot,mix}-high`（`capture_sweep` 临时改阴影档，跑完改回 low、`config.json` 哈希复原）。常量 `kbp rdc consts --no-clock` → `ignore/p13/i/consts/`，夹具 `apps/wpe-scene/src/render/spotShadow.fixture.json`（`ignore/p13/i/make_fixture.py`）。
+
+| # | 预测 | 抓帧 | 结论 |
+|---|---|---|---|
+| I1 | 投影 = `spotViewProjection` | `ShadowProjection` 与我们逐位相同（朝下、斜照、正交） | 成立 |
+| I2 | 阴影 pass 的 VP `[3][2] − 0.0005` | 阴影 draw 的视图矩阵集合逐位相同 | 成立 |
+| I3 | 边长 low 256 / high 512 | 图集 `g_Texture6Texel` 尺寸相同 | 成立 |
+| I4 | 选段、打包（聚光排在级联前）、级联基址 1 | `mix` 的 `LSpot_*` 四个数组、全部投影与方块变换逐位相同 | 成立 |
+| I5 | 正交近平面 1 | `ortho` 逐位相同 | 成立 |
+
+- **锥角余弦**：WPE 是 `cosf(f32(角度 · 0.017453292f))`，我们原来用双精度 `Math.cos` 再截，`cos 25°` 差 1 ulp；改成照 WPE（聚光照明原来就有这 1 ulp）。
+- **WPE 的阴影 draw**：每个投射者一次 draw，把它看得到的视图压紧进长度 6 的实例数组（点光六面一组；聚光与三级联一组，地面 `[聚光, c0, c1, c2]`、立方体 `[聚光, c1, c2]`），所以单测比较视图矩阵的集合，不按 draw 对。
+- **整帧**（`render_scene` 1920×1080，high 档用 dev 覆盖，用完即删）：spot-low 3、tilt-low 7、mix-low 17、ortho-low 1、spot-high 3、mix-high 12 个孤立像素差 1，都在光照渐变里、不在影子边缘，同 P13d 各工程（连阴影关的 `po-disabled` 也有）。
+- **`3455121165` 的 WPE 阴影 low / 关**：两次抓帧隔了几帧，行星、频谱、太阳表面都在动，差异图看不出影子；聚光从太阳正上方朝下照地板，太阳 `castshadow: false`，影子只来自行星，落在很暗的光斑上。
+
+### P13i 走查（2026-11-18，按 FINAL_CHECK）
+
+- **`3455121165`**：复制工程 `ignore/p13/i/walk/make_iso_3455.py`（组 205、太阳、灯 85 / 105 / 101、地板 Cube、八颗行星；轨道脚本按 Date 算，行星换成太阳前方的固定位置并放大到 0.04，影子落在地板上）。第一版行星放得太靠外，阴影开 / 关逐像素相同，改位置后同一帧开 / 关差 3221 个像素（最大 4 级）。抓 5 帧（`A:\p13i\walk3455b\`，脚本帧 263–267），按日志回放：每帧 1 个像素差 1。
+- 测试行 15589–15592、15595 已用 `projects_remove` 移除；dev 覆盖 `kabegame-dev-scene-shadows` 每次用完即删。
+
