@@ -5,7 +5,7 @@
  * （文件与 Blob）；每个用例最后打开的帧数为 0。语义对照 WPE（p9-REPORT、rea-p9-video 第 3、4、6、7 节）。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { blobRangeReader, CodecVideoPlayer, fileRangeReader, MAX_AHEAD } from "./codecPlayer";
+import { blobRangeReader, CodecVideoPlayer, fileRangeReader, MAX_AHEAD, MAX_IN_FLIGHT } from "./codecPlayer";
 import { buildMkv, cluster, el, info, MKV, payload, simpleBlock, trackEntry } from "./demux/testMkv";
 import { AVCC, buildMp4, memoryRead, type Spec } from "./demux/testMp4";
 import type { ReadRange } from "./demux/mp4";
@@ -821,5 +821,46 @@ describe("颜色规则（步骤 4 走查）", () => {
 
   it("用户视频：没标时按分辨率（240 高 → smpte170m）", async () => {
     expect((await configured("user")).colorSpace?.matrix).toBe("smpte170m");
+  });
+});
+
+describe("补喂由解码器驱动（P6e 报的 12 张场景探针超时）", () => {
+  /** 40 帧、每帧 0.125 s、时长 5 s，关键帧在第 0、20 帧。 */
+  const LONG = {
+    sizes: Array.from({ length: 40 }, () => 10),
+    perChunk: [40],
+    stts: [[40, 125]] as [number, number][],
+    stss: [1, 21],
+    movie: [1000, 5000] as [number, number],
+  };
+
+  it("解码器憋着 16 帧的重排缓冲才出帧：不跑帧循环（只 apply 一次）也能出第一帧、能跳转", async () => {
+    const { player, env, decoder } = setup({ bytes: clip(LONG), depth: 16 });
+    player.apply(0, true);
+    for (let i = 0; i < 50 && !player.hasFirstFrame; i++) await flush();
+    expect(player.hasFirstFrame).toBe(true);
+    expect(decoder().fed.filter((t) => t !== "reset").length).toBeGreaterThan(16);
+    player.currentTime = 2.5;
+    let settled = false;
+    void player.seeked().then(() => (settled = true));
+    for (let i = 0; i < 50 && !settled; i++) await flush();
+    expect(settled).toBe(true);
+    expect(player.drawn(0, true)?.timestamp).toBe(2_500_000);
+    player.dispose();
+    await flush();
+    expect(env.opened).toBe(0);
+  });
+
+  it("只吞不吐的解码器：已喂未出到 MAX_IN_FLIGHT 就停喂", async () => {
+    const sizes = Array.from({ length: 80 }, () => 10);
+    const { player, decoder } = setup({
+      bytes: clip({ sizes, perChunk: [80], stts: [[80, 125]], stss: [1], movie: [1000, 10000] }),
+      depth: 1000,
+    });
+    player.apply(0, true);
+    for (let i = 0; i < 30; i++) await flush();
+    expect(decoder().fed.filter((t) => t !== "reset")).toHaveLength(MAX_IN_FLIGHT);
+    expect(player.hasFirstFrame).toBe(false);
+    player.dispose();
   });
 });

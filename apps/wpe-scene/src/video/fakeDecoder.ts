@@ -69,8 +69,9 @@ export class FakeDecoder implements CodecDecoder {
     private readonly depth: number,
   ) {}
 
+  /** 同真解码器：只算还没消化的输入，收进重排缓冲（`held`）的不算。 */
   get decodeQueueSize() {
-    return this.queue.length + this.held.length;
+    return this.queue.length;
   }
   configure() {
     this.configures++;
@@ -115,6 +116,12 @@ export class FakeDecoder implements CodecDecoder {
     });
   }
   private drain() {
+    const before = this.queue.length;
+    this.drainQueue();
+    // 同真解码器的 dequeue 事件：队列变短后异步通知
+    if (this.queue.length < before) queueMicrotask(() => !this.closed && this.init.dequeue());
+  }
+  private drainQueue() {
     while (!this.halted && !this.closed && this.queue.length > 0) {
       const chunk = this.queue.shift()!;
       if (this.depth === 0) {
@@ -134,7 +141,7 @@ export class FakeDecoder implements CodecDecoder {
 }
 
 export interface FakeDecoderOptions {
-  /** B 帧重排深度，缺省 0（按喂入顺序出）。 */
+  /** 重排缓冲（DPB）深度：攒够这么多帧才按时间戳吐最早的一帧，缺省 0（按喂入顺序出）。收进缓冲的帧不算在 `decodeQueueSize` 里。 */
   depth?: number;
   /** `isConfigSupported` 的结果，缺省支持。 */
   supported?: boolean;

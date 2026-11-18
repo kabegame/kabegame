@@ -372,6 +372,7 @@
   - 删除 `VideoTexturePlayer`、`attachToDocument`、`fetchVideoBlob`、P9c 的 `watchStall` 与退回逻辑；`video/player.ts` 只剩公共定义；`VideoSink.drawn` 与 `UserTextureFrame` 的视频一支只交 `VideoFrame`。
   - 颜色规则 `ColorRule`：场景视频矩阵恒为 BT.709（WPE 不看标签）；用户视频照标签，没标时高 > 576 用 709（`MF_SD_MAX_HEIGHT`）。
   - dev 探针 `videoTime` 精确解到那一刻（结果加 `frameTime`），删掉主窗口隐藏时报错的 `checkVideoVisibility`；`host.videos()` 的字段改为解码计数与色彩说明。测试替身 `video/fakeDecoder.ts` 换掉 `fakeVideo.ts`。
+  - 补喂由 `VideoDecoder` 的 `dequeue` 事件驱动（`CodecDecoderInit.dequeue`），另有已喂未出上限 `MAX_IN_FLIGHT`：level 6.0 等高 level 视频要攒满 16 帧重排缓冲才出第一帧，dev 探针不跑帧循环时原先会卡到 10 s 超时（12 张场景）。
   - 设计、实施与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9d-webcodecs.md`。
 
 ### Fixed

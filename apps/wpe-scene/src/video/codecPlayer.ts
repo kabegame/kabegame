@@ -12,6 +12,10 @@
  *   `error`、`decode` 抛错 → 失败。解码器只解不播（决策「解码器只解不播」）：按解码顺序吃进、按显示顺序吐出，时钟与挑帧都在这里。
  * - **流控**：解码队列（`decodeQueueSize`）+ 已解出未显示的帧合计不超过 `MAX_AHEAD`（8）。硬件解码的输出帧来自一个有限的池子，
  *   握着不放会让解码器拿不到空闲输出缓冲而停住（P9c 步骤 0 的卡住就是这样，见下面「卡住」一条）；所以不在放时也不多喂。
+ *   解码器收下的帧不算在 `decodeQueueSize` 里：码流没写 `max_dec_frame_buffering` 时，解码器按 level 留足重排缓冲（DPB），
+ *   要吃进那么多帧才吐第一帧（2300×2700 的 level 6.0 是 16 帧）。所以补喂由解码器自己驱动——队列变短（`dequeue` 事件）就再喂，
+ *   不只靠 `apply` / `drawn` / 出帧：dev 探针不跑帧循环、宿主 ready 前也不跑，只靠这几处会卡在「收下 12 帧、一帧不出」
+ *   （P9d 走查后 P6e 报的 12 张场景探针超时）。另有已喂未出的总数上限 `MAX_IN_FLIGHT`，防止只吞不吐的解码器把整个文件吃进去。
  * - **时间戳**：喂进解码器的时间戳（微秒）= `round((n × 时长 + 样本显示时间) × 10⁶)`，n 是从本次跳转起喂到第几遍。循环时不停顿地
  *   接着喂下一遍（不 flush），解出的帧仍按时间戳单调排在后面；媒体时钟也按「展开」的时间走（`clock`，从本次跳转起算、不绕回），
  *   绕了几遍记在 `loops`，所以挑帧直接比 `timestamp ≤ round(clock × 10⁶)`，跨循环不用换算。媒体时间 = `clock − loops × 时长`。
@@ -40,13 +44,16 @@ import { IDLE_FRAMES, SEEK_END_MARGIN, STALL_MS, type SceneVideoSource, type Vid
 
 /** 解码队列 + 已解出未显示的帧的上限（phase-9d 步骤 2a 点 1「流控」）。 */
 export const MAX_AHEAD = 8;
+/** 已喂进解码器、还没吐出来的帧的上限：H.264 / HEVC 的 DPB 至多 16 帧，加上解码队列的 `MAX_AHEAD`，再留余量。 */
+export const MAX_IN_FLIGHT = 32;
 /** 预读一块的字节数（约 4 MiB，按解码顺序连续的样本），至多两块在手。 */
 export const BLOCK_BYTES = 4 * 1024 * 1024;
 
-/** 解码器的回调：解出的帧、出错。 */
+/** 解码器的回调：解出的帧、出错、解码队列变短（`VideoDecoder` 的 `dequeue` 事件，补喂由它驱动）。 */
 export interface CodecDecoderInit {
   output(frame: VideoFrame): void;
   error(error: unknown): void;
+  dequeue(): void;
 }
 
 /** 播放器用到的 `VideoDecoder` 子集；`decode` 收 `EncodedVideoChunk` 的初始化参数，缺省实现自己建 chunk（测试替身就不用 chunk 类）。 */
@@ -134,6 +141,7 @@ export function blobRangeReader(blob: Blob): ReadRange {
 /** 缺省的解码器：浏览器的 `VideoDecoder`，`decode` 时建 `EncodedVideoChunk`（构造时拷贝数据，所以可以交块的子视图）。 */
 function browserDecoder(init: CodecDecoderInit): CodecDecoder {
   const decoder = new VideoDecoder({ output: (frame) => init.output(frame), error: (error) => init.error(error) });
+  decoder.ondequeue = () => init.dequeue();
   return {
     get decodeQueueSize() {
       return decoder.decodeQueueSize;
@@ -306,6 +314,8 @@ export class CodecVideoPlayer {
       this.decoder = this.createDecoder({
         output: (frame) => this.onOutput(frame),
         error: (error) => this.fail("场景视频解码失败", error),
+        // 解码器收下了输入（可能憋在重排缓冲里不出帧）：接着喂，不等下一个渲染帧
+        dequeue: () => this.pump(),
       });
     } catch (error) {
       this.fail("场景视频解码器建不出来", error);
@@ -717,7 +727,7 @@ export class CodecVideoPlayer {
     this.starved = false;
     const count = track.sizes.length;
     const durationUs = this.duration > 0 ? this.duration * 1e6 : 0;
-    while (decoder.decodeQueueSize + this.ready.length < MAX_AHEAD) {
+    while (decoder.decodeQueueSize + this.ready.length < MAX_AHEAD && this.pendingCount < MAX_IN_FLIGHT) {
       if (this.feedIndex >= count) {
         if (!this.loopValue || durationUs === 0) {
           if (!this.flushed) {

@@ -346,3 +346,17 @@ private newPlayer(shared: Shared, blob: Blob): VideoTexturePlayer {
 - `cocs/README.md`：WPE_SCENE 条目的「视频纹理」与「用户纹理」两条、适用场景里视频相关的几句。
 - `versions/latest/regression.md`：新增「场景壁纸视频改用 WebCodecs（P9d）」Y0–Y10，已勾 Y0–Y7，Y8（预览里的用户视频实时播放）待用户，Y9（长时间播放）按用户要求未长测，Y10（拆不了包）只有单测。
 - `versions/latest/changelog.md`：用户侧 Optimized 一条、开发侧 Changed 一条；P11b 用户侧那条里「标清视频的色彩有细微差别」改为「JPEG 与视频在颜色剧烈变化的边缘有细微差别」。
+
+### 探针在 12 张视频场景上固定超时（2026-11-19，P6e 会话转来）
+
+**现象**：全库画面哈希（屏外宿主 `renderFrame`，不给 `videoTime`）在 12 张场景上固定报 `ProbeVideoTimeout: 等 … 的第一帧：超过总时限 10 s`（13566 是「跳到 0 s」）：13566、13581、13603、13605、13606、13615、13624、14296、14297、14693、15010、15017。
+
+**根因**（主窗口页面里复现 13581，3361965869 的 `宫子蓝幕60帧.tex`）：H.264 Main、level 6.0（`avc1.4d403c`）、2300×2700，码流没写 `max_dec_frame_buffering`，解码器按 level 留足 DPB（这个尺寸 16 帧），吃进 16 帧以上才吐第一帧。播放器只在 `apply` / `drawn` / 出帧 / 读完一块时补喂，每次补到「`decodeQueueSize` + 已解出未显示 < 8」；解码器把喂进去的 12 帧都收进缓冲（队列 0）却不出帧，没有事件再触发补喂。实时播放每个渲染帧都调 `apply`，只是第一帧晚几拍；探针宿主暂停、不跑帧循环，干等到 10 s。跳转（`seekTo` 先 reset 再从关键帧喂）同理。4K 的 level 5.1 / 5.2 只要 5–6 帧缓冲，所以多数视频没事。替身解码器把重排时攒着的帧也算进 `decodeQueueSize`（真解码器不算），单测没暴露。
+
+**修复**（`video/codecPlayer.ts`、`video/fakeDecoder.ts`、`host.video.test.ts` 的全局替身）：
+- `CodecDecoderInit` 加 `dequeue()`，浏览器解码器接 `VideoDecoder.ondequeue`，播放器在里面调 `pump`：补喂由解码器自己驱动。
+- 加 `MAX_IN_FLIGHT = 32`（已喂未出，H.264 / HEVC 的 DPB 至多 16 帧 + `MAX_AHEAD` + 余量），防止只吞不吐的解码器把整个文件吃进去。
+- 替身照真解码器：收进重排缓冲的帧不算在 `decodeQueueSize` 里，消化完队列后异步回调 `dequeue`。
+- 新增两条单测（DPB 16、只 `apply` 一次也能出第一帧并完成跳转；只吞不吐时喂到 `MAX_IN_FLIGHT` 停）；变异 2 个（不由 `dequeue` 补喂、去掉在途上限）都挂掉。tsc 0 error，视频相关 35 个文件 644 个用例全过，Prettier 通过。
+
+**真机**（重建宿主后，屏外宿主 `time` 1.5、`disabled`）：12 张全部出图，每段视频取到 0 s 那一帧，单张 1.6–6.2 s；13566、15017 复跑像素摘要相同；14295 `videoTime: 1` 仍是 `56c1095e…`（和修之前逐字节相同）。主窗口页面里实时放 13581 的视频 10 s：77 ms 出第一帧，每秒 60 帧，开头丢 2 帧，`stallResets` 0。

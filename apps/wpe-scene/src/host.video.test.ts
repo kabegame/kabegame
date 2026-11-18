@@ -243,8 +243,10 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
       class {
         static isConfigSupported = async () => ({ supported: true });
         private readonly inner: FakeDecoder;
+        /** 同浏览器的 `VideoDecoder`：播放器经 `ondequeue` 接补喂。 */
+        ondequeue: (() => void) | null = null;
         constructor(init: { output(frame: VideoFrame): void; error(error: unknown): void }) {
-          this.inner = new FakeDecoder(fake, init, 0);
+          this.inner = new FakeDecoder(fake, { ...init, dequeue: () => this.ondequeue?.() }, 0);
           fake.decoders.push(this.inner);
         }
         get decodeQueueSize() {
