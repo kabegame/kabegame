@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 场景壁纸图像层帧表收尾（P6e 第 5 步：全库核对与文档）
+
+2026-11-18 Windows dev。P6e 四步之后的全库核对，产品代码不变，文档见 `cocs/wpe/WPE_SCENE.md`「图像层帧表（P6e）」。数据与脚本在 `ignore/p6/e5/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 全库扫描 | Node，`kbp corpus scan` / `diff` | HEAD 与第 4 步之后的扫描比 | 不变；没有帧表与锚点的键 | 2026-11-18 Claude：干净 223 → 223，逐场景相同；剩下 10 张都不归 P6e |
+| [x] | T2 编译产物只在帧表场景上变 | Node，全语料编译摘要（`ignore/live/l0/bundlehash.test.ts` 的副本） | 「HEAD」与「HEAD 减 P6e 四个提交」各编一次（同一个翻译器 wasm），逐场景、逐字段比 | 只有帧表纹理与解锁场景变 | 2026-11-18 Claude：101 张不同。79 张只差帧表纹理新加的 `frames`，去掉后逐字节相同；22 张是不支持集合变了的（解锁的 21 张与 `3577990983`），差在纹理解码、视频时长、`frames` / `images` 与帧表图层的格尺寸。程序、材质、绑定全部相同 |
+| [x] | T3 脚本 | Windows dev，屏外宿主，`scriptCorpus` 120 帧 | 和 L7 收尾的基线（`ignore/live/l7/corpus-after`）比 | P6e 只多 `getTextureAnimation` 的调用结果 | 2026-11-18 Claude：符合。原来报 `is not a function` 的段都跑完；唯一的新报错是 `3400241651` 里对非帧表图层调 `getTextureAnimation().getFrame()`（WPE 同样返回 `null`）。其余不同的场景归到同期别的提交 |
+| [x] | T4 画面哈希 | Windows dev，屏外宿主，全库 3 档 | 和 L7 的基线（`ignore/live/l7/hash-after.json`）比；变了的逐张证明原因 | 没用到帧表的场景不变，或变化另有证据 | 2026-11-19 Claude：对上 216 张，变了 17 张，全部有证据：P6e 解锁的 10 张；WPE 的 `reflection` 设置被改开、用户改过属性值的 3 张（用 L7 的输入加反射关重渲，逐字节复现 L7）；预热封顶的 2 张（Node 按提交二分粒子，正好在 `bde7b148` 变）；P13g / P13h / P13j-2 解锁的 2 张（编译产物按提交二分）。粒子帧表的 79 张里能比的 72 张，70 张不变。12 张视频场景等首帧超时、没比（L7 同样）。第一次跑到一半宿主被别的会话重建，失败的按批重跑 |
+
 ## 场景壁纸多图像帧表（P6e 第 4 步）
 
 2026-11-18 Windows dev。一张 `.tex` 里有多张图像的帧表不再报 `tex:animation:multi-image`：全部图像进 bundle、每张一张 GPU 纹理，选格时按这一格的 `imageId` 换绑那张图像（同 Wallpaper Engine，帧坐标按该图像归一化，`g_Texture<n>Resolution` 仍是头尺寸）；bind group 按「fbo 状态 + 各多图像槽的图像号」缓存，平面反射的副本同样按图像号缓存。单图像帧表与普通纹理不变。FreeImage 形态的多图像帧表报 `tex:animation:multi-image:freeimage`（语料没有）。多图像场景的显存按图像数涨（单张约 7680×7920 DXT）。

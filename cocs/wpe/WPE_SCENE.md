@@ -329,7 +329,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 
 ### 能力表（`features.ts`）
 
-能力键以 `类别:具体能力` 命名，例如 `camera:perspective:<用法>`、`tex:format:<n>`、`tex:video`、`uniform:g_LightsPosition`、`combo:SPRITESHEET`、`effect:<目录>:<字段>`、`particle:<类别>:<模块>`、`script:api:<分组>.<成员>`、`script:callback:<名>`、`value:animation`、`shader:flag:parse:…`、`render:bloom:<pass>`、`assets:missing`。原则是**只报真正改变画面的特性**，中性字段逐项写明依据后放行（依据多来自 WPE 2.8.42 的只读逆向，`.claude/plans/wpe-import/3-scene/p2-REPORT.md`；P4a 的在 `phase4/p4-particles-REPORT.md`）。脚本由 P3b 运行时执行，运行期的脚本错误只进脚本诊断、不加入 `unsupported`；但脚本里静态看得出的未实现 API 报 `script:api:*`、整张退回（2026-11-07 改定，见下）。其它渲染能力键照常决定是否退回预览图：
+能力键以 `类别:具体能力` 命名，例如 `camera:perspective:<用法>`、`tex:format:<n>`、`tex:video`、`uniform:g_LightsPosition`、`combo:PRELIGHTING`、`effect:<目录>:<字段>`、`particle:<类别>:<模块>`、`script:api:<分组>.<成员>`、`script:callback:<名>`、`value:animation`、`shader:flag:parse:…`、`render:bloom:<pass>`、`assets:missing`。原则是**只报真正改变画面的特性**，中性字段逐项写明依据后放行（依据多来自 WPE 2.8.42 的只读逆向，`.claude/plans/wpe-import/3-scene/p2-REPORT.md`；P4a 的在 `phase4/p4-particles-REPORT.md`）。脚本由 P3b 运行时执行，运行期的脚本错误只进脚本诊断、不加入 `unsupported`；但脚本里静态看得出的未实现 API 报 `script:api:*`、整张退回（2026-11-07 改定，见下）。其它渲染能力键照常决定是否退回预览图：
 
 | 放行 | 依据 |
 |---|---|
@@ -352,7 +352,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | 粒子 `instanceoverride` 的 `alpha` / `size` / `count` / `speed` / `lifetime` / `rate` / `colorn` / `color` 与 `id`；`controlpoint0..7` / `controlpointangle0..7` 的静态值 | 已实现、就地生效（见「粒子（P4a）」，`colorn` 见「粒子（P4b）」）；控制点的静态值在建系统时生效（P4c，见「粒子（P4c）」的「控制点」），P4f 起绑属性、挂脚本、脚本 `instance` 对象写入也就地生效；`id` 是编辑器键。`brightness` 只在 HDR 且系统 `flags` 没有 bit3 时乘出生颜色（P4f），其余时候中性。这些键挂 `{script}` 也支持（P4f，`rate` 单独一条路，见「粒子（P4f）」） |
 | `.tex` 头标志 alpha-priority（`0x80000`） | P4b 实测中性：同一张 RG88 纹理有无这个标志，图像层与粒子整帧逐像素相同；读码看全二进制只把它放进采样器缓存的哈希键 |
 
-- **着色器不按名字白名单**：翻译器把材质常量（带 `meta.material` 的 uniform）与 COMBO 都当普通输入。真正依赖引擎的三类逐项核对：没有 `meta.material` 的内置 uniform 必须在 `ENGINE_UNIFORMS`（与 `render/uniforms.ts` 写的值一一对应，单测核对）里，否则报 `uniform:<名字>`；翻译器标了 `unused`（没被读）的不报（P7d：WPE 的反射里没有它）；只在 effect pass 写的 `g_LayerModelMatrix`（`EFFECT_UNIFORMS`，图层世界矩阵，含父链、不含 size、不带视差）只在 effect pass 认，基础材质读到照报（WPE 在基础 pass 里读到的是别的图层的残留值，P7d）；值非 0 的引擎 COMBO（`SPRITESHEET`、`ALPHATOCOVERAGE`、光照 / 反射 / 蒙皮 / 变形 / 预光照）报 `combo:<名字>`；`_rt_*` 纹理只认 `_rt_FullFrameBuffer` 与本 effect 的 fbo，其它报 `texture:rendertarget:<名字>`。
+- **着色器不按名字白名单**：翻译器把材质常量（带 `meta.material` 的 uniform）与 COMBO 都当普通输入。真正依赖引擎的三类逐项核对：没有 `meta.material` 的内置 uniform 必须在 `ENGINE_UNIFORMS`（与 `render/uniforms.ts` 写的值一一对应，单测核对）里，否则报 `uniform:<名字>`；翻译器标了 `unused`（没被读）的不报（P7d：WPE 的反射里没有它）；只在 effect pass 写的 `g_LayerModelMatrix`（`EFFECT_UNIFORMS`，图层世界矩阵，含父链、不含 size、不带视差）只在 effect pass 认，基础材质读到照报（WPE 在基础 pass 里读到的是别的图层的残留值，P7d）；值非 0 的引擎 COMBO（`ALPHATOCOVERAGE`、光照 / 反射 / 蒙皮 / 变形 / 预光照）报 `combo:<名字>`（`SPRITESHEET` P6e 起不算：它是材质 JSON 自己的 COMBO，帧由渲染器按帧表给，见「图像层帧表（P6e）」）；`_rt_*` 纹理只认 `_rt_FullFrameBuffer` 与本 effect 的 fbo，其它报 `texture:rendertarget:<名字>`。
 - **effect** 不再整条报 `effect:<名字>`：逐项检查实例、effect.json、fbo 与命令（`copy` / `swap` 之外的命令、swap 操作数不是本 effect 的 fbo、绘制目标不是本 effect 的 fbo 都报），材质与着色器同基础材质。未启用的 effect（`visible` 为 false 或绑定结果为 false）整步跳过，不检查能力。
 - **effect 的 `conditions`、实例 `combos`、`functions`**（P7d）：
   - `conditions`（fbo、pass、bind）照 WPE 的求值函数（`compile/conditions.ts`）在编译期求一次：只按 effect 实例**顶层** `combos`；不是数组恒真；全是「与」；缺的 COMBO 当 0；右值认数与 `{value, op}`（`ge/gt/le/lt`）。
@@ -1005,7 +1005,7 @@ P4b 在 P4a 的底座上沿三条线扩展，底座的形状不变：
 | `g_RenderVar1` | 只用第 0 帧：`(帧宽 / 纹理宽, 帧高 / 纹理高, 帧数, (纹理高 / 纹理宽) · (帧高 / 帧宽))`（`particleBuiltins(sheet)`） | 读码 + 抓帧常量 |
 | frame 列 | 放在判死之后、发射之前算：<br>- `sequence`：`rcp(life)·age·sequencemultiplier` 的原值，大于 1 不回绕，小数部分由着色器取；<br>- `randomframe`：出生时写 `R`，之后不变，不混帧 | 实测：frame 相对差 2.4e-4，是 WPE `rcpps` 的固定偏差；注入 WPE 的 `R` 后逐位相同 |
 | 顶点 | `a_TexCoordVec4C1 = (速度 xyz, frame 原值)`，偏移仍按反射布局排 | 读码 + 抓帧 |
-| 不支持 | 一张纹理有多个图像报 `tex:animation:multi-image`，没有帧报 `tex:animation:empty`；图像层与 effect 材质的帧表纹理照报 `tex:animation`（图像层帧动画属 P6） | — |
+| 不支持 | 没有帧报 `tex:animation:empty`。P6e 之前一张纹理有多个图像报 `tex:animation:multi-image`、图像层与 effect 材质的帧表纹理报 `tex:animation`；P6e 起都支持（见「图像层帧表（P6e）」）：粒子 draw 同样经 `bindSheets`，多图像帧表绑共享计时器当前格所在的那张图像、粒子各自的格仍在这张图像里取，并推进这张纹理的共享计时器（同 WPE，rea-p6e-sheet 2.3；语料没有这种粒子） | — |
 
 ### 发射时序与档 2 模块
 
@@ -3665,6 +3665,92 @@ P6d3b 对照时顺带改的两处：
 
 所以 `layerShellValues` 的抽取没有改变任何编译结果。
 
+## 图像层帧表（P6e）
+
+WPE 的图像层帧表（sprite sheet）不是图层的动画，而是**纹理的动画**：帧表纹理自己带一份共享计时器，同一张 `.tex` 的所有材质共用，只在绑定时推进。P6e 照这个做，另带上脚本的 `ITextureAnimation`、一张 `.tex` 里多张图像的帧表，以及文本 `anchor`（anchor 写在「文本对象」一节的表里）。计划、步骤 0 的 WPE 实测与分步记录见 [phase-6e-sprite-sheets.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6e-sprite-sheets.md)，读码见同目录的 `rea-p6e-sheet.md`（exe 侧）、`rea-p6e-script.md`（dll 侧）。
+
+### 编译
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 帧表进 bundle | 头标志带帧表位的纹理都有 `SceneTexture.frames`（`compile/bundle.ts` 的 `sheetFrames`）：TEXS 版本、格尺寸 `cell`、f32 逐帧累加的 `total`，每帧 `{frametime, image, rotation, translation}`。`rotation = (width/W, widthY/H, heightX/W, height/H)`、`translation = (x/W, y/H)`，W、H 是这一帧所在图像的第 0 级 mip，f32 精确除法；`image` 越界或那张图像没有 mip 时 6 个坐标为 0（同 WPE 读入） | 读码 2.2；`p6e-tex` |
+| 格尺寸 | TEXS0003 头里的格宽高，版本 < 3 时取图像宽高（WPE `tex+0xb0 / +0xb4`）。槽 0 是帧表时，图层的 `autosize` 与合成 RT 都取它 | 读码 5.3；`p6e-tex` 的 24×24 |
+| 四边形 UV | 槽 0 是帧表且版本 ≥ 3 时，直接上屏的 UV 取 (1, 1)（`render/graph.ts` 的 `directUv`）；合成路径的基础 pass 照旧按「图像 / 纹理」缩。读码说带 effect 时也取 (1, 1)，实测相反：NPOT 帧表带 effect 时 WPE 只画出格的左上一块（`p6e-tex` N2），照实测做，语料用不到 | 读码 5.2；实测 |
+| 能力表 | 帧表纹理不再报 `tex:animation`；`SPRITESHEET` 移出引擎 COMBO（它是材质 JSON 自己的 COMBO，大小写都有，`genericimage*` 用两个帧 uniform 自己算 UV，引擎只给粒子与 puppet 纹理通道写）；`getTextureAnimation` 移出缺失 API 表。空帧表照报 `tex:animation:empty`；FreeImage 形态的多图像帧表报 `tex:animation:multi-image:freeimage`（语料没有） | 读码 5.1 |
+
+### 共享计时器（`render/sheets.ts` + `GpuScene.bindSheets`）
+
+- **状态**：每张帧表纹理（按 bundle 纹理下标）一个 `SheetClock { frame, time, lastFrame }`，挂在 `GpuScene` 上、第一次画到时建（WPE 纹理基类构造清 0）。单对象重编译与运行中建层不换 `GpuScene`，计时器接着走；整场重新加载时从 0 开始。
+- **推进时机**：在编码闭包里所有早退（不可见、空网格、粒子没有存活数等）之后调 `bindSheets`。到这里这个 draw 一定会画，就是 WPE「绑定时推进」的那一刻；「会不会画」和编码用的是同一套判断，不另写一份。本渲染帧第一次绑定（`lastFrame` 不等于本帧号）用本帧的 `g_Frametime` 推进，同帧再绑定不动。没有 draw 画到的帧既不推进也不补时间。所以同一张纹理的两个图层一隐一显时，隐的回来与显的同格；两个都隐时，回来接着隐藏前那一格走（`p6e-shared` 实测）。
+- **推进算法**（`advanceSheet`，读码 2.4，全部 f32）：
+  - **每次最多一格**：`time += dt`，`time ≥ 当前格帧时长` 才进格，`time -= 旧格帧时长`、越界回 0，最后 `time = min(time, 新格帧时长)`。帧时长小于帧间隔时卡在「每个渲染帧一格」，多出的时间截掉，总是循环；
+  - `dt < 0`（只有脚本 `rate` 为负）对称地退格；
+  - 帧号越界（脚本 `setFrame` 写进来的）时，判断取第 0 格的帧时长。
+- **写 uniform**：draw 上每个帧表纹理槽 `s` 写 `g_Texture<s>Rotation` / `Translation`（程序声明了才写）；`g_Texture<s>Resolution` 仍是头尺寸。效果链、组、puppet 里用到同一张纹理的 pass 同帧共用一格。
+- **粒子**：粒子 draw 也走 `bindSheets`（WPE 的粒子材质同样经这一个绑定函数），会推进这张纹理的共享计时器。粒子着色器不读这两个 uniform，粒子各自的格仍由模拟器的 frame 列定（P4b）。
+- **`SPRITESHEET` 打开而槽不是帧表**：渲染器给恒等帧（`render/uniforms.ts`）。
+
+### 脚本 `ITextureAnimation`（`script/api.ts` + `SceneState.textureAnimations`）
+
+- **取得**：图像层的 `getTextureAnimation()`。槽 0 是帧表时第一次调用建对象，否则返回 `null`（纯色层也是 `null`），文本层没有这个方法。它和 `getVideoTexture()` 共用一格：先建的那个两边都返回它（帧表图层上先调 `getVideoTexture()` 得 `null`，之后两者是同一个对象）。
+- **形状**（`p6e-api` 实测）：
+  - 每个对象一个自己的原型，只有不可枚举的 `constructor`（`name` 为空串），再往上 `Object.prototype`；
+  - 自有成员按 `frameCount, duration, rate, play, isPlaying, stop, pause, setFrame, getFrame, join, getAnimation` 排；
+  - `frameCount` / `duration` 只读，严格模式赋值抛 `TypeError`，文案同 WPE；
+  - `rate` 只收 JS number、存 f32（`0.1` → `0.10000000149011612`、`1e40` → `Infinity`）；
+  - `setFrame` 只收 int32，`2.5`、`'2'`、`true`、`NaN`、不传等都当 0，`-1`、`999` 原样。
+- **脱离与并回**（读码 3.3、3.4）：对象默认跟着共享计时器。`pause` / `stop` / `setFrame` / 写 `rate ≠ 1` 让这个图层脱离：
+  - 之后每帧在对象更新循环里（脚本之前，不看可见性）按 `g_Frametime × rate`（f32）推进私有的 `{frame, time}`（`advanceTextureAnimations`）；
+  - 画这个图层时，整次绘制里的帧表一律画私有帧号：越界画第 0 格，负数改走共享计时器；脱离的图层不推进共享计时器；
+  - `join()` 并回；`rate` 写回 1 不并回。
+- **状态**：在 `SceneState.textureAnimations`（WPE 的私有对象 A），跨单对象重编译与整场重载接回（宿主 `adoptTextureAnimations`）；图层删除、槽 0 换成用户纹理时清掉。
+- **作废**：图层删除生效后读写都是 `undefined`、方法不调，`isObjectValid` 为假（同 `IAnimationLayer` 的属主作废）。
+
+### 多图像帧表
+
+- **编译**：一张 `.tex` 里有多张图像时，第 0 张仍在 `mips`，其余在 `SceneTexture.images`（`extraImages`），Worker 一起转移（`textureBuffers`）。
+- **GPU**：每张图像一张 GPU 纹理（`GpuScene.extraTextures`）。绑多图像帧表的 draw 记下这些槽（`Draw.multiImage`），`bindSheets` 选格后记下这一格的图像号，bind group 按「fbo 状态 + 各槽图像号」缓存（`imageKey`），所以这类 draw 一律是动态的；平面反射的副本同样按图像号取（`reflectionGroupOf`）。
+- **显存**：按图像数线性涨，语料里单张约 7680×7920 DXT，`3577990983` 一张有 5 张图像。
+
+### 有意不同与已知差异
+
+- **越界帧号倒播**：WPE 退格后帧号仍越界时读越界内存（未定义），实测每帧减 1；这里按「越界格的帧时长取 0」实现，结果同实测。语料不用。
+- **`SPRITESHEET` 配非帧表纹理**：WPE 读上一次绑定留下的 uniform，我们给恒等帧，语料 0 处。
+- **`general.spritesheetrefreshsync`**：只影响帧数统计，不做、不报。
+- **属性描述**：`frameCount` / `rate` 在 WPE 是数据属性，我们是访问器，为了作废后读到 `undefined`（同 `IAnimationLayer`）。
+- **槽 0 换成用户纹理之后**：WPE 的 `getTextureAnimation()` 返回 `null`；我们按 bundle 判断仍是帧表，会再建一个对象。语料没有这种用法。
+- **整场重新加载**：共享计时器从 0 开始（脱离状态接回）。
+- **文本 `anchor`**：见「文本对象」一节的已知差异（`fit` / `center` 下推到场景之外、运行中改的时机、带 effect 的文本）。
+
+### 对照与语料
+
+- **和 WPE 比**（dev 探针，`canvas` 1280×720，dt 取 WPE 日志逐帧的 `engine.frametime`；工程在 `ignore/p6/e0/proj/`，WPE 抓帧与日志在 `A:\p6e\`、`ignore/p6/e0/out/`）：
+  - `p6e-rate`（帧时长 0.1 / 0.02 / 0）：帧表图层五帧 0 差异；
+  - `p6e-tex` 单图像的五层（NPOT、TEXS0002、旋转帧、`autosize`、带 effect 的 NPOT）0 差异；含两张图像的完整 `p6e-tex` 八帧整帧 0 差异，脚本日志 208 行逐行相同；
+  - `p6e-shared` 七帧整帧 0 差异，日志 237 行逐行相同；
+  - `p6e-api` 378 行日志 376 行相同（两行见上：模块顶层的 `thisLayer` / `thisObject` WPE 是 `null`，是脚本运行时原有的差异；属性描述）；脱离图层六帧整帧 0 差异；
+  - `p6e-anchor`（十种 anchor）在五种窗口尺寸与对齐方式下、`p6e-anchor2` 在两种窗口下，文本全部 0 差异。
+- **语料**（233 张）：能渲染 199 → 223，P6e 解锁 21 张，另 3 张是同期别的会话修的。分步：
+  - 第 1 步 6 张：`2833017810`、`2916324703`、`3420277613`、`3662390671`、`3811424158`、`3818053626`；
+  - 第 2 步 8 张：`3286859278`、`3319542538`、`3326873240`、`3400241651`、`3516174947`、`3524852519`、`3570560686`、`3826860299`；
+  - 第 3 步 5 张：`dino_run`、`2981249186`、`3351163962`、`3560756264`、`3643916956`；
+  - 第 4 步 2 张：`3000562427`、`3486806915`。`3577990983` 帧表这边全过，只剩 `puppet:draw-order`。
+
+  全库已没有帧表与锚点的键，每一步都没有新增键、没有场景掉出。
+- **编译产物**：全语料在「HEAD」与「HEAD 减去 P6e 四个提交」两份源码上各编一次（同一个翻译器 wasm，`ignore/p6/e5/`），101 张不同：
+  - 79 张只差帧表纹理上新加的 `frames`（多是粒子的帧表），去掉这个字段后逐字节相同；
+  - 另外 22 张是不支持集合变了的（解锁的 21 张与 `3577990983`）。编译照常解码纹理、读视频时长，帧表纹理多了 `frames` / `images`，帧表图层的 `size` 换成格尺寸。
+  
+  程序、材质、绑定等其余字段全部相同。
+- **脚本**（`scriptCorpus`，和 L7 收尾的基线比）：P6e 带来的变化只有 `getTextureAnimation` 能调了。原来报 `is not a function` 的脚本段都跑完 120 帧；`3560756264`、`3826860299` 的 `stateDigest` 因此变了。唯一的新报错在 `3400241651`：puppet 图层「7腿」动画层 `rate` 上的字段脚本调 `thisLayer.getTextureAnimation().getFrame()`，那个图层槽 0 的纹理不是帧表，返回 `null` 后读 `getFrame` 出错。WPE 同样返回 `null`，作者脚本在 WPE 里也报这个错。其余不同的场景都归到同期别的提交（P5f、P13h、P13i、P5g、P7 补漏、P11b2）。
+- **画面**（全库画面哈希 3 档，和 L7 收尾的基线比）：对上 216 张，199 张逐字节不变，变了 17 张，每张都有证据：
+  - **P6e 解锁的 10 张**：dino_run、`2833017810`、`2916324703`、`3286859278`、`3420277613`、`3570560686`、`3643916956`、`3811424158`、`3818053626`、`3826860299`；
+  - **环境与输入**：WPE 的 `reflection` 设置在 L7 之后被改开。`audiophile` 用 `reflection: "disabled"` 渲染，三档逐字节复现 L7；`fantasticcar`、`3808922316` 另有用户改过的属性值，用 L7 时的属性值加反射关同样逐字节复现；
+  - **预热封顶**（`bde7b148`）：`1923929928`（星空 `starttime: 100`）、`3829467967`（萤火虫）。编译产物与 WGSL 在 L7 与 HEAD 之间相同；在 Node 里按提交回放粒子，两张都正好从这个提交起变（前者 45 帧后存活 2002 → 1446），P6e 的提交不改变它们；
+  - **别的阶段解锁的**：`3453730450`（编译产物在 P13g、P13h 上变）、`2515018199`（P13g、P13j-2）。
+  
+  P6e 给粒子帧表纹理加了 `frames` 的 79 张里，两边都有记录的 72 张画面不变的 70 张，变了的就是上面最后两张。另有 12 张视频场景两次都因探针 10 s 内等不到视频第一帧而没比，L7 时同样。
+
 ## 字体引擎 `wpefont`（P6b 1b 起）
 
 文本对象（P6b）照 WPE 的画法：FreeType 栅格化、HarfBuzz 排字，逐字四边形加图集。WPE 的字形位置和位图由这两个库的具体版本与加载参数决定，自己写栅格化器对不上像素，所以直接把同版本的库编成 wasm 放进场景宿主，排版规则（回退链、断行、对齐、图集装箱）另在 TS 里照读码写（1c 起）。静态文本 1d 起照 WPE 画，文字随脚本或属性变化 1e 起就地重排（见下一节「文本对象」）。完整接口契约见 [src-tauri/wpefont/README.md](../../src-tauri/wpefont/README.md)，计划与实测见 [phase-6b-text.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6b-text.md)「步骤 1a」「1b」。
@@ -3706,13 +3792,14 @@ P6d3b 对照时顺带改的两处：
 | 排版（`text/host.ts`） | 宿主主线程的 `SceneTexts` 在声音、脚本与 GPU 资源之前排好全部文本层：wasm 实例与读过的字体跨重编译保留，每次加载新建图集（装箱顺序同 WPE），按对象顺序排、缺字体就读完重排（每对象最多 16 轮），每个 await 后比加载代数。wasm 不在或排版出错报 `text:engine`、退回预览图。`system:<名字>` 按 `wpe_scene_target` 的 `systemFonts` 表读本机文件（后端按平台解析，见「字体引擎」的系统字体一行），表里没有的名字读不到、不回落到目录；没有表时（Node 单测、dev 探针）才按 `fontsDir`、缺省 `C:\Windows\Fonts` 拼。排完后图集留在实例上，`relayouter()` 经 `load` 交给渲染器（1e） |
 | 渲染图（`render/graph.ts`） | `text` 步骤（`part`：`background` / `glyphs` / `color`；`space`：`direct` / `composite`）。直接上屏：`[背景] → 普通字形 → [彩色字形]`，colorBlendMode 31 时全部 additive，否则材质的 translucent。合成：RT 先「清成 (背景色, 图层 alpha)」（`clear` 的 `color: "text-background"`，每帧现算）或 clearalpha（`compose` 角色、读快照），再画字形（translucent），之后 effect 链、passthrough、上屏照图像层，上屏 UV 内缩的分母是文字框的整数部分。合成 RT 是排版的 `compositeSize`（`trunc(w + 2·padding)`）两维 `max(4, ·)`（`textCompositeSize`，1e 更正，见下）。排版为空的层不画；文本层的 effect 开关会改 `padding` 与文字框，切换整场重编译 |
 | 矩阵（`render/uniforms.ts` 的 `textMatrices`） | 直接上屏的字形 `VP · W · T(directTranslation)`；背景 `VP · W · T(−w/2 − pad.x, −h/2 − pad.y)`，四边形 `[0, W] × [0, H]` 取 `textCompositeSize`；画进合成 RT `ortho(0, W, 0, H, ±1000) · T(compositeTranslation)`，W、H 同样是 `textCompositeSize`（对着 RT 像素）。对齐偏移只在本层画自己时右乘（`drawMatrixOf`，P8 步骤 3 起子对象的世界矩阵不带它） |
+| `anchor`（P6e 第 3 步，`render/layout.ts`） | 九种取值都支持。绘制时在**世界空间**给本层画自己的矩阵加平移：`T(ax, ay, 0) · W`（`withAnchor`，只改平移列、f32 加）。实测 `p6e-anchor2`：自身放大 2 倍的仍移 E、自身转 90° 的仍沿世界 x、父对象缩放 0.5 下仍移 E，与自身和父链的缩放、旋转都无关。直接上屏与合成上屏都带，合成 RT 内部的矩阵不动；光标命中同样带（`render/cursor.ts`，WPE 拾取时也调这一项）；`getTransformMatrix` 不带（rea-p6d-layers 第 8 条）。<br>平移表（`anchorOffset`，rea-p6b-layout 3.4，f32），`mx = (E0 − E2)/2`、`my = (E3 − E1)/2`：<br>- `center (mx, my)`、`top (mx, −E1)`、`bottom (mx, E3)`、`left (E0, my)`、`right (−E2, my)`；<br>- `topleft (E0, −E1)`、`topright (−E2, −E1)`、`bottomleft (E0, E3)`、`bottomright (−E2, E3)`；<br>- `none` 为 0，矩阵原样。<br>`E0..E3` 是四边被裁掉的场景单位（WPE 正交投影 `ortho(E0, W − E2, E3, H − E1)` 的边距，rea-render-size 第 1 节），每帧一份（`GpuScene.setAnchorEdges`）：<br>- dev 探针给了 `canvas` 时：正交投影用的同一份 `alignEdges`；<br>- 产品：先按场景分辨率画再铺放，按显示的铺放算 `alignEdges(样式对应的对齐方式, 场景宽高, 画布 CSS 宽高)`（`anchorEdgesFor`）。铺满裁切时和 WPE 一样把贴边的文字收进可见区域；<br>- 拉伸、平铺与透视场景为 0。 |
 | GPU（`render/text.ts`） | 每字形 4 个顶点、6 个索引的三角形列表，索引 uint16（超过 16384 个字形换 uint32）。图集是第一种运行时纹理：每个 `GlyphAtlas` 一张（`r8unorm` / `rgba8unorm`，线性、repeat，同一「字体 + 字号」的层共用），建场景时整张上传，`sync` 按脏区增量上传；扩容（尺寸与 UV 全变）时释放旧纹理、按新尺寸建并整张上传（标签不变），用这张图集的层一起重建（1e） |
 | 运行中重排与重建（`render/scene.ts`，1e） | `sync` 最先 `syncTexts`：对 `dirty.texts` 逐层调重排器，排成的 `setText` 换进状态（偏移变了，本层的矩阵在同一次 `sync` 里刷）。某张图集到 4096 清空重排过（`GlyphAtlas.resets` 变了）时，用它的别的层也重排（1e 已定 5），每层每次 `sync` 至多 2 次（`TEXT_RELAYOUT_LIMIT`，防连环重置），到上限的留到下一次标脏。然后图集纹理增量上传，扩容了的层也进重建集合；最后对集合 `rebuildLayer(…, { force: true })`：签名相同也整层重建 draw（新顶点、新索引）。不另写「只改顶点」的路径，步骤增减（空 ↔ 非空、第一次出现彩色字形）、合成 RT 换尺寸、图集换纹理都走这一条。强制重建不计入 effect 开关的 `rebuildStats`，次数与用时记在 `GpuScene.textStats()` |
 | 独占合成 RT 与 fbo（1e 已定 6） | 文本层的合成 RT 与 effect fbo 由本层独占、不进共享池：共享池只增不减，按尺寸共享的话时钟每换一个宽度就攒一张新 RT。尺寸和新排版不同就销毁旧的、按新尺寸建（WPE 也是每次重排重新分配）。fbo 每个 effect 的每个名字一张（同名同尺寸、`scale` / `fit` 不同的两张换尺寸后会不同，共用一张就换不了），换尺寸时在同一下标换纹理并清成 `clear` 色，swap 状态不变；标签 `fbo text <图层 id>\|<effect>\|<名字>\|<宽>x<高>\|<格式>\|<repeat>`。文字变空（没有合成路径）时释放本层合成 RT，再变非空时按新尺寸重建；fbo 不释放，换成空排版的 4×4 基准 |
 | `max(4, ·)`（1e 更正） | `textCompositeSize` = 排版的 `compositeSize`（WPE `+0x128` 查询的结果，`TextLayout` 里不变）两维各取 `max(4, ·)`，截断后不是有限数时同 `cvttss2si` 取 4。WPE 在 `FUN_1401ea500` 里把查询结果原地改成 `max(4, ·)`，之后读它的三处都套：合成 RT（连同画进 RT 的正交）、effect fbo 的基准、直接上屏的背景四边形。不套的两处：图层尺寸 `TextLayout.size`（上屏四边形、clearalpha 四边形、矩阵里的 w、h），以及上屏 UV 内缩的分母（`trunc(size)`）。所以宽 2 的文字在 4 宽的 RT 里只占左半，上屏时整张 RT 铺到 2 宽的四边形上，字形横向压一半。1d 写「不套」是错的：两组极小文字的工程 `p6b-tiny`、`p6b-tiny2`（WPE 的合成 RT 宽 2、3 的都是 4×6）和开背景的 `p6b-tiny3`（WPE 的背景四边形是 `[0, 4] × [0, 6]`）都和 WPE 整帧逐像素相同 |
 | 异步字体（1e 已定 4） | 帧循环里不能等：重排发现缺字体时保留旧排版、后台读，读完下一帧补上。WPE 同步读，所以第一次出现新回退字时我们晚一到几帧。真机可见预览里，帧循环自己走完 5 轮回退链不到 0.7 秒 |
 | 变体预备（1e） | `variantPlans` 对文本层按「普通字形与彩色字形都有」的假想排版给计划（尺寸取当前排版）；`prepareVariants` 只备程序与管线，不按假想尺寸建 RT、不建快照。管线和尺寸、字数无关，运行中步骤增减不会碰到 `render:variant-missing` |
-| 不支持项 | `text:script:<键>`：运行中字段以外的文本键挂脚本。`font`、`opaquebackground` 运行中改要整场重编译，`backgroundcolor`、MSDF 参数等没有脚本写回目标。12 个运行中字段挂脚本不报（1e-3 去掉了 `text:script`）。另有 `text:msdf:<msdf / outline / blur / dropshadow>`（MSDF 路径，不做）、`text:anchor:<值>`（none / center 以外，要按铺放算裁边）、`text:engine`、`render:text-layout`（没交排版结果） |
+| 不支持项 | `text:script:<键>`：运行中字段以外的文本键挂脚本。`font`、`opaquebackground` 运行中改要整场重编译，`backgroundcolor`、MSDF 参数等没有脚本写回目标。12 个运行中字段挂脚本不报（1e-3 去掉了 `text:script`）。另有 `text:msdf:<msdf / outline / blur / dropshadow>`（MSDF 路径，不做）、`text:engine`、`render:text-layout`（没交排版结果）。P6e 之前 none / center 以外的 `anchor` 报 `text:anchor:<值>`，第 3 步起支持（见上一行） |
 | dev 探针 | `renderFrame` 建场景前同样排好文本层（`dev/probeTexts.ts`），`render_scene` 能直接渲染文本场景。`scriptValues`（1e-3）收文本层的运行中字段，`value` 可以是字符串（最长 4096 个 UTF-16 单元），按宿主同一条写回规整（`textFieldFromScript` → `writeText`），宿主不会写的值报错。探针不跑脚本、没有帧外补画，写进文本值之后回放前**结清**：`sync` 一次，有字体在读（`SceneTexts.idle()`）就等读完，把 `onReady` 记下的层重新标脏再 `sync`，直到没有在读的字体（最多读 16 轮，同 `prepare`），结果的 `textSyncs` 是 `sync` 的次数；没有文本值时不结清、逐字节同以前。vite 的 `/render` 同样放宽（`scripts/kabegame-dev/replay.ts` 的 `TEXT_FIELDS`，图层字段给字符串 400）；MCP 的 `render_scene` 只发 FR 帧号块，按字符串渲染走 REST 或 `host_eval`。`host.texts()`（1e-2）：`textStats()`（有重排或重建的 `sync` 次数、重排器调用与没排成的次数、重建层数，每次的层数、重排用时、重建用时的均值 / p95 / 最大值）与每个文本层当前的文字、字号、`size`、`compositeSize`、字形数 |
 
 **对照结论**（1d，dev，Chrome/149.0.7827.201）：`p6b-geom`、`p6b-align`、`p6b-wrap`、`p6b-fx`、`p6b-fallback`、`p6b-extra` 六个工程按 1920×1080 渲染，和 WPE 的上屏整帧（排除 FR / CLK）比：五个逐像素相同，`p6b-fx` 只有 1 个像素差 1。覆盖直接上屏、合成路径（effect、清成背景色、clearalpha）、背景、CJK 回退与彩色 emoji。宿主实际加载的画面和探针的画面（遮掉 FR / CLK）哈希相同。
@@ -3744,8 +3831,12 @@ P6d3b 对照时顺带改的两处：
   - `3824424509` 的日历格子和 WPE 同一天的画面 0 差异；
   - 语料 183 张干净 88 → 90，解锁 `2861028294`、`3429479356`（后者带 4K 视频纹理，探针等第一帧超时；改用去掉视频层的复制工程，3840×2130 窗口下整帧 0 差异；1920×1080 窗口按窗口尺寸画也是 0 差异，以前两个 `blurprecise` 层的差来自先画再缩）。
 
-**已知差异与后续**：`anchor: center` 当中性是按「居中盖满时裁边相等」推的，留白样式（`fit` / `center`）下没查；回退链里的 Twemoji 只查 WPE `assets`；普通字形为 0 个时不出 `glyphs` 步骤（WPE 画不画空网格没查）；系统字体在 macOS / Linux 上换成本机的同款或替代字体（1d2，候选路径待真机核对，`TODO:[WPE_SCENE]`），画面和 WPE 不会逐像素相同。1e 起：
+**已知差异与后续**：回退链里的 Twemoji 只查 WPE `assets`；普通字形为 0 个时不出 `glyphs` 步骤（WPE 画不画空网格没查）；系统字体在 macOS / Linux 上换成本机的同款或替代字体（1d2，候选路径待真机核对，`TODO:[WPE_SCENE]`），画面和 WPE 不会逐像素相同。1e 起：
 - 缺字体时晚一到几帧：WPE 同步读字体，我们读完下一帧才补上，中间照画旧文字（已定 4）；
 - 不再用的图集不释放：GPU 纹理与 CPU 侧的 `TextAtlases` 留到场景销毁，拖字号滑块会攒新的「字体 + 字号」图集（每张至少 512²）。WPE 的字体管理器也按字体键留着，释不释放没查；
-- `font` / `opaquebackground` 运行中改整场重编译（已定 3），挂脚本报 `text:script:<键>`；经 API 写同样整场重编译（步骤 2），`anchor` 写成 none / center 以外的值后照报 `text:anchor:<值>`、场景退回；
+- `font` / `opaquebackground` 运行中改整场重编译（已定 3），挂脚本报 `text:script:<键>`；经 API 写同样整场重编译（步骤 2）；
+- `anchor`（P6e 第 3 步）：
+  - 产品在 `fit` / `center` 下 E 为负，贴边的文字被推到场景之外，产品只画场景目标，看不到（WPE 按窗口画、留白里也画得到；render-size 的已知差异）；
+  - 脚本或属性运行中改 `anchor` 走单对象重编译（L6），晚一小段才生效（WPE 当帧，语料没有这种写法）；
+  - 带 effect 的文本层：anchor 平移在本层画自己的矩阵里（`GpuScene.drawWorldOf`），效果矩阵与 `g_LayerModelMatrix` 也带上了；WPE 的 effect pass 带不带没有专门实测（语料只有 `2981249186` 的模糊文字，走查时看）；
 - 经 API 写过的重编译类字段，之后读回一直取那次写入的值（`recompileValues`），用户再改同一属性时读回可能和画面不一致（语料没有这种用法）。

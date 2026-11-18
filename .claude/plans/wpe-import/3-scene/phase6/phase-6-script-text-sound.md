@@ -244,6 +244,7 @@ document.addEventListener("pointermove", (event) => {
 ## P6e — 图像层帧表
 
 > 子计划：[phase-6e-sprite-sheets.md](phase-6e-sprite-sheets.md)（2026-11-17 步骤 0 做完：读码两份、WPE 实测 7 个工程；范围加上文本 `anchor`）。下面是当初的提纲。
+> 2026-11-18 第 1–5 步做完（`b5021895`、`66210f51`、`2b21f507`、`9bebcd39` 与文档）：全库已没有帧表与锚点的键，能渲染 199 → 223，P6e 解锁 21 张（dino_run、`3826860299` 都在内），见子计划「实施记录」。走查和 P6d 一起单列。
 
 **步骤 0：**
 - 图像层的 `SPRITESHEET` 宏、帧 uniform 和粒子有何不同；帧率从哪来、循环规则；`getTextureAnimation` 返回对象的 `setFrame` / `play` / `pause` / `getFrame` / `frameCount` 等。

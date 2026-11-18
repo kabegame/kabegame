@@ -265,3 +265,46 @@ export interface SceneTexture {
 2. **产品里的 anchor**：预览 / 桌面按显示铺放算 `E`，铺满时同 WPE；装下 / 居中时推到场景之外的部分看不到（render-size 的已知差异）。推荐这样。
 3. **语料不用的边角**：越界帧号倒播（WPE 读越界帧时长，实测每帧减 1）照实测「每帧一格」；`SPRITESHEET` 配非帧表纹理给恒等帧
    （WPE 读残留 uniform）；`general.spritesheetrefreshsync`（只影响帧数）不做、不报。推荐这样，记有意不同。
+
+## 实施记录
+
+每步由 sonnet 执行代理在独立工作树 `ignore/p6/d1/wt` 实现，Claude 复核（越界检查、重跑测试、变异、对 WPE）后三方合并进主工作区，经临时索引只提交本步的块。数据在 `ignore/p6/e0/`（工程、生成器、回放与比对脚本、各步语料扫描、变异清单）与 `ignore/p6/e5/`（收尾的全库核对）。
+
+- **第 1 步：编译与共享计时器**（点 1 + 点 2，`b5021895`）：
+  - 9 个测试文件 223 条通过；变异 12 处抓到 11 处，另 1 处等价（版本 < 3 的帧表本来没有 gif 宽高）。
+  - 和 WPE 比：`p6e-rate` 的帧表图层五帧 0 差异；`p6e-tex-single`（`p6e-tex` 去掉多图像那层，当时多图像仍照报）的 N1–N4、R1 五帧 0 差异，含「带 effect 的 NPOT 只画出格的左上一块」。
+  - 语料：能渲染 199 → 205，解锁 6 张。
+- **第 2 步：`ITextureAnimation`**（点 3，`66210f51`）：
+  - 61 个文件 1012 条通过；变异 12 处全部抓到。
+  - `p6e-api` 按每帧都记日志的工程重录（`api2`）：378 行日志 376 行相同。不同的两行：模块顶层的 `thisLayer` / `thisObject`（WPE 是 `null`，脚本运行时原有的差异）；`frameCount` / `rate` 的属性描述（访问器）。脱离图层六帧整帧 0 差异；`p6e-shared` 第 2 步之后能跑脚本了，七帧整帧 0 差异，日志 237 行相同。
+  - 语料：205 → 214，P6e 解锁 8 张，另 1 张是 P13i。
+- **第 3 步：文本 `anchor`**（点 5，`2b21f507`）：
+  - 17 个文件 366 条通过；变异 7 处抓到 6 处，另 1 处等价（拉伸时 `alignEdges` 本来就是 0）。
+  - `p6e-anchor` 五种窗口与对齐、`p6e-anchor2` 两种窗口：文本全部 0 差异。
+  - 语料：214 → 221，P6e 解锁 5 张，另 2 张是别的会话修的着色器。
+- **第 4 步：多图像帧表**（点 4，`9bebcd39`）：
+  - 66 个文件 1554 条通过；变异 4 处全部抓到。
+  - 完整 `p6e-tex`（M1 在 f199 换到图像 1）八帧整帧 0 差异，日志 208 行相同。
+  - 语料：221 → 223。
+  - 提交时 HEAD 在建临时索引与提交之间被 P5g 推进，第一次的提交（`907b2bd8`）把 P5g 回退了，随即在 P5g 上重建树换成 `9bebcd39`。
+- **第 5 步：全库核对与文档**（2026-11-18）：
+  - **全库扫描**：当时的 HEAD `f32defcf`（含同期的 P13i、P5g、P4g）干净 223，和第 4 步之后逐场景相同；全库已没有帧表与锚点的键。剩下 10 张都不归 P6e：`prelighting` 2、粒子帧表槽换用户纹理 2、MSDF 文本 2、相机关键帧、puppet 绘制顺序、`layer.perspective`、文本背景色挂脚本各 1，其中一张另缺材质文件。
+  - **编译产物**：「HEAD」与「HEAD 减 P6e 四个提交」（工作树里 `git revert --no-commit`，同一个翻译器 wasm）101 张不同，全部解释：
+    - 79 张只差帧表纹理新加的 `frames`；
+    - 22 张是不支持集合变了的，差在纹理解码、视频时长、`frames` / `images` 与帧表图层的格尺寸。
+  - **`scriptCorpus`**（`ignore/p6/d2/corpus_run.mjs`，和 L7 收尾的 `ignore/live/l7/corpus-after` 比，`ignore/p6/e5/corpus_keys.mjs`、`script_diff.mjs`）：
+    - P6e 的变化只有 `getTextureAnimation` 能调了，原来报 `is not a function` 的段都跑完；
+    - 唯一的新报错是 `3400241651` 里 puppet 图层动画层上的字段脚本，它对槽 0 不是帧表的图层调 `getTextureAnimation().getFrame()`。纹理头标志 2、不带帧表位，WPE 同样返回 `null`；
+    - 其余不同的场景按不支持键归到 P5f、P13h、P13i、P5g、P7 补漏与 P11b2（跑的时候 P11b2 还没提交、已在重建的宿主里，现在是 `9811e34c`）。
+  - **画面哈希**（`ignore/live/l0/hash_all.mjs`，和 `ignore/live/l7/hash-after.json` 比，`ignore/p6/e5/hashdiff.mjs`）：
+    - 第一次跑到第 66 张时宿主产物被别的会话重建（旧的入口与 Worker 文件被删），之后每张都在起编译 Worker 时失败；失败的按每 15 张一批重跑（`run-hash-rest.sh`，每批自己开关宿主），合并成 `hash-all.json`。三版宿主：`f32defcf` 64 张，别的会话两次重建的 183 + 48 张。
+    - 对上 216 张，变了 17 张，按 FINAL_CHECK 第 4 条逐张证明（2026-11-18 用户要求和 FINAL_CHECK 比一下，第一版写的「线索」不算解释）：
+      - P6e 解锁的 10 张，预期；
+      - **环境**：WPE `config.json` 的 `reflection` 在 L7 之后被改开（MCP 备份里是 false）。`recheck.mjs` 用 L7 的输入加 `reflection: "disabled"` 重渲：`audiophile`、`fantasticcar`、`3808922316` 三档都逐字节复现 L7（后两张另有用户改过的属性值）；
+      - **预热封顶 `bde7b148`**：`1923929928`、`3829467967`。编译侧二分（`run-bisect-compile.sh`、`run-bisect3.sh`）在 L7 与各提交之间编译产物相同，翻译器 wasm 换代只多 `interStageLocations` 反射字段、WGSL 逐字节相同；粒子侧二分（`ptrack.test.ts`，产品的 `particleTrack`）两张都正好在 `bde7b148` 变，P6e、P4g 及之后不变；
+      - **别的阶段解锁的**：`3453730450` 的编译产物在 P13g（`mipFramebuffer`、不支持集合）与 P13h（图层、纹理、不支持集合）变，`2515018199` 在 P13g 与 P13j-2（预光照）变；
+      - 79 张粒子帧表场景（编译产物只差 `frames`）里两边都有记录的 72 张，70 张画面不变，变的就是上面两张；
+      - 12 张视频场景两次都是探针等视频第一帧超时（10 s），没比，L7 时同样。
+    - 走查中发现：WPE 的 `reflection` 设置被某个会话改了没还原，影响所有「跟随 WPE」的反射场景，已报给用户。
+  - **文档**：`cocs/wpe/WPE_SCENE.md` 新节「图像层帧表（P6e）」，文本一节加 anchor 一行与已知差异，能力表、粒子帧表的旧说法更新；`cocs/README.md` 加一条主题与适用场景。
+- **没做**：走查（FINAL_CHECK）和 P6d 一起单列：dino_run、音频条、`2887099508`、按钮类帧表场景的复制工程。另有用户要看的回归：第 1 步 T6、第 2 步 T5、第 3 步 T4、第 4 步 T4。
