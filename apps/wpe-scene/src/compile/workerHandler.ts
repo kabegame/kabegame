@@ -12,7 +12,7 @@
  * 它们（`forgetBuffers`）；片段回传时只转移新增纹理的 mip，片段里的 mdl 视图与 puppet 数据照常结构化克隆（复制），会话的缓存不受影响。
  * 另加一道保险：发片段前查一遍增量里有没有已分离的缓冲，有就回 `fragment-error`（`detached`）并把会话标坏——这是缓存漏删的兜底，不应该发生。
  */
-import { openCompileSession, transferableBuffers, type SceneCompileSession } from "./bundle";
+import { openCompileSession, textureBuffers, transferableBuffers, type SceneCompileSession } from "./bundle";
 import type { FragmentDelta, FragmentRequest } from "./fragment";
 import type { SceneReader } from "./fs";
 import {
@@ -81,7 +81,7 @@ export function findDetached(value: unknown): string | null {
 
 /** 片段增量里新增纹理的 mip 缓冲（去重）：回传时只转移这些。 */
 export function deltaTransferables(delta: FragmentDelta): ArrayBuffer[] {
-  const buffers = delta.textures.list.flatMap((texture) => texture.mips.map((mip) => mip.bytes?.buffer));
+  const buffers = delta.textures.list.flatMap((texture) => textureBuffers(texture));
   return [...new Set(buffers.filter((buffer): buffer is ArrayBuffer => buffer instanceof ArrayBuffer))];
 }
 

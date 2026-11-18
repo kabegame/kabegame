@@ -236,6 +236,11 @@ export interface SceneTexture {
   noInterpolation: boolean;
   /** unsupported 非空时可能为空：编译器只读头部，不解码 mip；FreeImage 形态在主线程解码后才填。 */
   mips: SceneMip[];
+  /**
+   * 多图像帧表（P6e 点 4）：第 1 张起的其余图像的 mip 链（第 0 张仍在 `mips`，现有消费者不变）；只有头标志 bit2 置位且图像数 > 1 的纹理有。
+   * 每张图像一张 GPU 纹理，帧的 `image` 选其中之一（`render/scene.ts` 的 `bindSheets`）。
+   */
+  images?: SceneMip[][];
   /** FreeImage 形态的 mip 位置（PNG / JPG 原文件），见 `TexResult.encoded`。 */
   encoded?: TexResult["encoded"];
   /**
@@ -1794,7 +1799,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
 
   /**
    * 一张纹理（按解析后的路径缓存）。帧表纹理不报 `tex:animation`（P6e 点 1：图像层、effect、粒子的帧动画都支持，完整帧表在
-   * `SceneTexture.frames`）；`tex:animation:multi-image`（点 4 才支持）、`tex:animation:empty` 照报。
+   * `SceneTexture.frames`）；多图像帧表（点 4）由 `SceneTexture.images` 带其余图像；FreeImage 形态的多图像报 `tex:animation:multi-image:freeimage`，`tex:animation:empty` 照报。
    * 粒子路径只有槽 0 带帧表语义：WPE 只看槽 0 纹理的头标志置系统的 `0x1000000`（rea-p4b-render.md 2.3），帧表宏与
    * `SceneParticle.spriteSheet` 也只按槽 0 定。其它槽（`REFRACT` 的槽 1 帧表法线图，P4b 步骤 5）
    * 只是一张普通纹理：绑定取第 0 张图像（2.7），片元用和槽 0 相同的 `v_TexCoord.xy` 采它，槽 0 是帧表时那已是帧内 UV，
@@ -1851,6 +1856,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       encoded: tex.encoded,
       video: tex.video,
     });
+    const extra = extraImages(tex);
+    if (extra) bundle.textures[index].images = extra;
     const sheet = spriteSheet(tex, textureWidth, textureHeight);
     if (sheet) bundle.textures[index].sheet = sheet;
     const frames = sheetFrames(tex);
@@ -3620,10 +3627,25 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   };
 }
 
+/** 多图像帧表的其余图像（第 1 张起）的 mip：只收已解码出字节的（编译只读头部时为空链）。图像数不超过 1 或不是帧表时没有。 */
+export function extraImages(tex: Pick<TexResult, "flags" | "images">): SceneMip[][] | undefined {
+  if (!(tex.flags & TEX_FLAGS.animated) || tex.images.length < 2) return undefined;
+  return tex.images
+    .slice(1)
+    .map((image) =>
+      image.mips.flatMap((mip) => (mip.bytes ? [{ width: mip.width, height: mip.height, bytes: mip.bytes }] : [])),
+    );
+}
+
+/** 一张纹理的全部 mip 缓冲（含多图像的其余图像）。 */
+export function textureBuffers(texture: Pick<SceneTexture, "mips" | "images">): (ArrayBufferLike | undefined)[] {
+  return [...texture.mips, ...(texture.images?.flat() ?? [])].map((mip) => mip.bytes?.buffer);
+}
+
 /** 交给主线程时转移的缓冲：纹理 mip 与 mdl 文件（网格与 puppet 的顶点 / 索引是它的视图，同一个 mdl 的对象共用一份）、puppet 的动画帧数据，去重。 */
 export function transferableBuffers(bundle: SceneBundle): ArrayBuffer[] {
   const buffers = [
-    ...bundle.textures.flatMap((texture) => texture.mips.map((mip) => mip.bytes?.buffer)),
+    ...bundle.textures.flatMap((texture) => textureBuffers(texture)),
     ...bundle.layers.flatMap(
       (layer) => layer.model?.meshes.flatMap((mesh) => [mesh.vertices.buffer, mesh.indices.buffer]) ?? [],
     ),

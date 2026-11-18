@@ -801,6 +801,13 @@ interface Draw {
   userAnimations: UserAnim[];
   /** 静态 uniform 被就地改过：下一次 `update` 要整块重写。 */
   dirty: boolean;
+  /**
+   * 绑多图像帧表纹理（P6e 点 4）的槽号（建 draw 时定，没有时为空）。这类 draw 的 bind group 不是静态的：`bindSheets` 每次选格后把各槽当前的图像号
+   * 记进 `sheetImages`，`bindGroupOf` 把它并进缓存键，`entries` 据此绑那张图像的纹理。
+   */
+  multiImage: number[];
+  /** 多图像槽当前的图像号（槽号 → `frames[k].image`），没写过的槽按 0。 */
+  sheetImages: Map<number, number>;
   /** 不引用 fbo 时建一次；引用 fbo 时按当前 swap 状态取（`bindGroups` 缓存）。 */
   bindGroup: GPUBindGroup | null;
   bindGroups: Map<string, GPUBindGroup>;
@@ -820,6 +827,8 @@ interface ReflectionCopy {
   /** 建 bind group 时主 draw 用的那一个：主 draw 换了（用户纹理换图）就重建。 */
   source: GPUBindGroup | null;
   bindGroup: GPUBindGroup | null;
+  /** 多图像帧表（P6e 点 4）：按各槽图像号缓存的 bind group（键同 `bindGroupOf` 的图像部分）；`source` 变了就清空。 */
+  groups?: Map<string, GPUBindGroup>;
 }
 
 /**
@@ -1561,6 +1570,8 @@ export class GpuScene {
   private hdr = false;
   /** 上传后的场景纹理，下标同 `bundle.textures`；没上传的为 null（`uploadableTextures`）。 */
   private textures: (GPUTexture | null)[] = [];
+  /** 多图像帧表（P6e 点 4）第 1 张起的其余图像的 GPU 纹理（下标 k 是图像 k + 1），键同 `textures`；只有这类纹理有条目。 */
+  private readonly extraTextures = new Map<number, GPUTexture[]>();
   private dummies!: ReturnType<GpuScene["createDummies"]>;
   private readonly samplers = new Map<string, GPUSampler>();
   private readonly programs = new Map<number, Promise<GpuProgram>>();
@@ -3320,14 +3331,23 @@ export class GpuScene {
     if (from < bundle.textures.length) {
       const uploadable = uploadableTextures(bundle);
       for (let index = from; index < bundle.textures.length; index++)
-        this.textures[index] = uploadable.has(index)
-          ? this.own(uploadTexture(this.device, bundle.textures[index]))
-          : null;
+        this.textures[index] = uploadable.has(index) ? this.uploadAt(index) : null;
     }
     if (!layer) return;
     for (const index of uploadableTextures({ layers: [layer] }))
-      if (!this.textures[index] && bundle.textures[index])
-        this.textures[index] = this.own(uploadTexture(this.device, bundle.textures[index]));
+      if (!this.textures[index] && bundle.textures[index]) this.textures[index] = this.uploadAt(index);
+  }
+
+  /** 上传第 `index` 张场景纹理；多图像帧表（P6e 点 4）的其余图像各上传一张，记进 `extraTextures`，都由 `own` 随场景释放。 */
+  private uploadAt(index: number): GPUTexture {
+    const texture = this.bundle.textures[index];
+    const extra = texture.images;
+    if (extra?.length)
+      this.extraTextures.set(
+        index,
+        extra.map((mips) => this.own(uploadTexture(this.device, { ...texture, mips, images: undefined }))),
+      );
+    return this.own(uploadTexture(this.device, texture));
   }
 
   /**
@@ -4287,6 +4307,12 @@ export class GpuScene {
       ),
     ];
 
+    // 多图像帧表（P6e 点 4）：绑它的槽，bind group 随帧所在的图像换
+    const multiImage = program.textures.flatMap((binding) => {
+      const ref = step.inputs[binding.slot];
+      return ref?.kind === "texture" && this.extraTextures.has(ref.index) ? [binding.slot] : [];
+    });
+    const sheetImages = new Map<number, number>();
     const entries = (resolveFbo: (effect: number, name: string) => RenderTarget): GPUBindGroupEntry[] => {
       const list: GPUBindGroupEntry[] = [];
       if (uniformBuffer) list.push({ binding: 0, resource: { buffer: uniformBuffer } });
@@ -4313,7 +4339,11 @@ export class GpuScene {
           if (binding.kind === "2d-comparison" ? ref.kind !== "shadow-atlas" : binding.kind !== "2d")
             throw new SceneRenderError([`render:texture-kind:${binding.slot}:${binding.kind}`]);
           if (ref.kind === "texture") {
-            view = this.textures[ref.index]!.createView();
+            // 帧所在的图像（P6e 点 4）：第 k 张（k ≥ 1）取 `extraTextures`；采样器同这张纹理。越界时 WPE 不检查，这里按 0 处理（`bindSheets`）
+            const image = sheetImages.get(binding.slot) ?? 0;
+            const gpu =
+              (image > 0 ? this.extraTextures.get(ref.index)?.[image - 1] : undefined) ?? this.textures[ref.index]!;
+            view = gpu.createView();
             sampler = this.samplerFor(bundle.textures[ref.index]);
           } else {
             const target = ref.kind === "fbo" ? resolveFbo(ref.effect, ref.name) : this.resolveTexture(ref, resources);
@@ -4327,7 +4357,7 @@ export class GpuScene {
       }
       return list;
     };
-    const dynamic = Object.values(step.inputs).some((ref) => ref.kind === "fbo");
+    const dynamic = multiImage.length > 0 || Object.values(step.inputs).some((ref) => ref.kind === "fbo");
     const resolveNow = (effect: number, name: string) => this.targets[resources.fbos.resolve(effect, name)];
     const bindGroup = dynamic
       ? null
@@ -4358,11 +4388,20 @@ export class GpuScene {
       videos,
       userAnimations: this.userAnimationsOf(program, step.inputs),
       dirty: false,
+      multiImage,
+      sheetImages,
       bindGroup,
       bindGroups: new Map(),
       entries,
       layout: program.bindGroupLayout,
     };
+  }
+
+  /** bind group 缓存键：fbo 状态之后追加多图像槽当前的图像号（没有多图像槽时就是原键，单图像不多建）。 */
+  private imageKey(draw: Draw, base: string): string {
+    return draw.multiImage.length
+      ? `${base}|${draw.multiImage.map((slot) => draw.sheetImages.get(slot) ?? 0).join(",")}`
+      : base;
   }
 
   /** 引用 fbo 的 bind group 按当前 swap 状态取（各状态各建一次）。 */
@@ -4375,7 +4414,7 @@ export class GpuScene {
       return this.targets[id];
     };
     const entries = draw.entries(resolve);
-    const key = ids.join(",");
+    const key = this.imageKey(draw, ids.join(","));
     let group = draw.bindGroups.get(key);
     if (!group) {
       group = this.device.createBindGroup({ label: draw.label, layout: draw.layout, entries });
@@ -5459,18 +5498,41 @@ export class GpuScene {
     }
     const main = this.bindGroupOf(draw);
     if (copy.source !== main) {
-      const buffer = copy.buffer;
-      const entries = draw
-        .entries((effect, name) => this.targets[draw.resources.fbos.resolve(effect, name)])
-        .map((entry) => (entry.binding === 0 ? { binding: 0, resource: { buffer } } : entry));
-      copy.bindGroup = this.device.createBindGroup({ label: `${draw.label} reflection`, layout: draw.layout, entries });
+      copy.bindGroup = this.createReflectionGroup(draw, copy);
       copy.source = main;
+      copy.groups = undefined;
     }
     // 每帧：主块（已含这一帧的每帧量与刷新）拷过来，盖上反射视图的相机项，排在本帧提交之前上传
     new Uint8Array(copy.block.data).set(new Uint8Array(draw.block.data));
     for (const [name, value] of Object.entries(copy.overlay)) copy.block.set(name, value);
     this.device.queue.writeBuffer(copy.buffer, 0, copy.block.data);
     return copy;
+  }
+
+  /** 反射副本的 bind group：同主 draw 的绑定，只把 binding 0 换成副本自己的 uniform 缓冲。 */
+  private createReflectionGroup(draw: Draw, copy: ReflectionCopy): GPUBindGroup {
+    const buffer = copy.buffer;
+    const entries = draw
+      .entries((effect, name) => this.targets[draw.resources.fbos.resolve(effect, name)])
+      .map((entry) => (entry.binding === 0 ? { binding: 0, resource: { buffer } } : entry));
+    return this.device.createBindGroup({ label: `${draw.label} reflection`, layout: draw.layout, entries });
+  }
+
+  /**
+   * 反射 pass 里一个 draw 的 bind group：多图像帧表（P6e 点 4）要在 `bindSheets` 选完格之后按图像号取（建副本时的那个是上一帧的图像），
+   * 其余照旧用 `reflectionCopyOf` 给的。
+   */
+  private reflectionGroupOf(
+    draw: Draw,
+    reflection: { bindGroup: GPUBindGroup; copy: ReflectionCopy | null },
+  ): GPUBindGroup {
+    const { copy } = reflection;
+    if (!copy || !draw.multiImage.length) return reflection.bindGroup;
+    const key = this.imageKey(draw, "");
+    const groups = (copy.groups ??= new Map());
+    let group = groups.get(key);
+    if (!group) groups.set(key, (group = this.createReflectionGroup(draw, copy)));
+    return group;
   }
 
   /**
@@ -5480,7 +5542,7 @@ export class GpuScene {
    * `encode` 的 `draw` 闭包在确定要画之后才调它：不可见的图层、被剔除的模型、没有存活粒子的系统都到不了这里，也就不碰计时器——WPE 实测
    * （`p6e-shared`）同一张纹理两个图层一隐一显时隐的回来与显的同格，两个都隐时回来接着隐藏前那一格走、不补时间。合成路径里（effect 链、puppet、
    * 组）用到同一张纹理的 pass 各自调一次，同帧共用同一格。`copy` 是平面反射 pass 的副本块（它的 uniform 是自己的缓冲）。
-   * 多图像帧表换绑图像（点 4）还没有：`tex:animation:multi-image` 照报，到不了这里。
+   * 多图像帧表（点 4）：选格时再记下每个多图像槽这格所在的图像号（`Draw.sheetImages`），`bindGroupOf` 据此换绑。
    */
   private bindSheets(draw: Draw, copy: ReflectionCopy | null): void {
     let slots = this.sheetSlots.get(draw);
@@ -5503,6 +5565,12 @@ export class GpuScene {
       let clock = this.sheetClocks.get(index);
       if (!clock) this.sheetClocks.set(index, (clock = newSheetClock()));
       const frame = sheet.frames[sheetFrameFor(clock, sheet, this.sheetFrameNo, this.sheetDt, override)];
+      // 多图像帧表（P6e 点 4）：记下这格所在的图像，之后 `bindGroupOf` 绑那张图像的纹理。同帧里所有用这张纹理的 draw 取同一格、同一张图像。
+      // `image` 越界（负数或 ≥ 图像数）时 WPE 不检查，这里按 0 处理（编译期越界帧的坐标已是 0，`readFrames`）
+      if (draw.multiImage.includes(slot)) {
+        const count = (this.extraTextures.get(index)?.length ?? 0) + 1;
+        draw.sheetImages.set(slot, frame.image >= 0 && frame.image < count ? frame.image : 0);
+      }
       if (!block) continue;
       if (block.has(`g_Texture${slot}Rotation`)) {
         block.set(`g_Texture${slot}Rotation`, frame.rotation);
@@ -6469,7 +6537,7 @@ export class GpuScene {
       // 选格与写 uniform 都在这里，不另写一份「会不会画」的判断，所以和编码的取舍永远是同一套
       this.bindSheets(item, reflection?.copy ?? null);
       pass.setPipeline(reflection?.pipeline ?? item.pipeline);
-      pass.setBindGroup(0, reflection?.bindGroup ?? this.bindGroupOf(item));
+      pass.setBindGroup(0, reflection ? this.reflectionGroupOf(item, reflection) : this.bindGroupOf(item));
       pass.setVertexBuffer(0, item.vertexBuffer);
       if (item.mesh) {
         // 模型网格（P5c 步骤 2）：mdl 的索引，三角形列表；网格没有的属性从槽 1 的全零占位缓冲读

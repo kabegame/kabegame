@@ -11,7 +11,10 @@ import {
   particleRendererDefines,
   particleSheetDefines,
   particleTex0Format,
+  extraImages,
+  sheetFrames,
   spriteSheet,
+  textureBuffers,
   type ParticleSheetSystem,
 } from "./bundle";
 import { checkParticleProgram, checkProgramFeatures, PARTICLE_UNIFORMS } from "./features";
@@ -63,6 +66,8 @@ interface SheetSpec {
   width: number;
   height: number;
   container?: 2 | 3 | 4;
+  /** TEXB 头里的 FreeImage 格式（缺省 -1：原格式）。 */
+  freeImageFormat?: number;
   /** 每张图像的 mip 尺寸（第一项是第 0 级）。缺省一张图像、一级 mip、纹理尺寸。 */
   images?: [number, number][][];
   /** TEXS 版本；不给时不是帧表。 */
@@ -106,7 +111,7 @@ function sheetTex(spec: SheetSpec): Uint8Array {
     u32(0),
     magic(`TEXB000${container}`),
     u32(images.length),
-    ...(container >= 3 ? [u32(-1)] : []),
+    ...(container >= 3 ? [i32(spec.freeImageFormat ?? -1)] : []),
     ...(container === 4 ? [u32(0)] : []),
     ...imageBytes,
     texs,
@@ -320,7 +325,21 @@ describe("parseTex：TEXS 帧表（rea-p4b-render.md 2.1）", () => {
         }),
       ),
     );
-    expect(multi.unsupported).toEqual(["tex:animation:multi-image"]);
+    // 多图像帧表（P6e 点 4）不再报键：全部图像都解码
+    expect(multi.unsupported).toEqual([]);
+    expect(multi.images[1].mips[0].bytes?.length).toBe(512 * 512);
+    // FreeImage 形态的多图像由主线程解位图、语料里没有，照报细分键
+    const freeImage = await parseTex(
+      memoryFile(
+        sheetTex({
+          ...SAMPLES.rain1,
+          freeImageFormat: 13,
+          images: [[[1024, 1024]], [[512, 512]]],
+          frames: [[0, 0.25, 0, 0, 512, 0, 0, 512]],
+        }),
+      ),
+    );
+    expect(freeImage.unsupported).toContain("tex:animation:multi-image:freeimage");
     // 第二帧按自己所在图像（512²）归一化
     expect(multi.frames![1]).toMatchObject({ image: 1, width: 0.5, height: 0.5 });
     const empty = await parseTex(memoryFile(sheetTex({ ...SAMPLES.rain1, frames: [] })));
@@ -770,4 +789,48 @@ describe.skipIf(!root || !existsSync(wasm))("真翻译器：genericparticle 的�
           expect(result!.vertex!.wgsl, label).toContain("g_RenderVar1");
         }
   }, 120000);
+});
+
+describe("多图像帧表（P6e 点 4，p6e-tex M1）", () => {
+  // multi.tex：图像 0 为 256² 的 4 格（128²），图像 1 为 128² 的 4 格（64²）；8 格、每格 0.1 s，第 4–7 格在图像 1
+  const m1 = (): RawFrame[] => [
+    ...[0, 1, 2, 3].map((i): RawFrame => [0, 0.1, (i % 2) * 128, Math.floor(i / 2) * 128, 128, 0, 0, 128]),
+    ...[0, 1, 2, 3].map((i): RawFrame => [1, 0.1, (i % 2) * 64, Math.floor(i / 2) * 64, 64, 0, 0, 64]),
+  ];
+  const spec = (): SheetSpec => ({
+    format: 0,
+    textureWidth: 256,
+    textureHeight: 256,
+    width: 256,
+    height: 256,
+    images: [[[256, 256]], [[128, 128]]],
+    texs: 3,
+    frames: m1(),
+  });
+
+  it("帧的 image 与按所在图像第 0 级 mip 归一化的坐标：第 4 格 translation (0, 0)、rotation (0.5, 0, 0, 0.5)", async () => {
+    const tex = await parseTex(memoryFile(sheetTex(spec())));
+    expect(tex.unsupported).toEqual([]);
+    const sheet = sheetFrames(tex)!;
+    expect(sheet.frames).toHaveLength(8);
+    expect(sheet.frames.map((frame) => frame.image)).toEqual([0, 0, 0, 0, 1, 1, 1, 1]);
+    expect(sheet.frames[4]).toMatchObject({ image: 1, translation: [0, 0], rotation: [0.5, 0, 0, 0.5] });
+    expect(sheet.frames[5]).toMatchObject({ translation: [0.5, 0] });
+    expect(sheet.frames[3]).toMatchObject({ image: 0, translation: [0.5, 0.5], rotation: [0.5, 0, 0, 0.5] });
+  });
+
+  it("extraImages：第 0 张留在 mips，其余图像的 mip 带字节进 images；单图像帧表与非帧表没有", async () => {
+    const tex = await parseTex(memoryFile(sheetTex(spec())));
+    const extra = extraImages(tex)!;
+    expect(extra).toHaveLength(1);
+    expect(extra[0]).toHaveLength(1);
+    expect([extra[0][0].width, extra[0][0].height, extra[0][0].bytes?.length]).toEqual([128, 128, 128 * 128]);
+    // 传输表带上其余图像的缓冲
+    expect(textureBuffers({ mips: [], images: extra })).toEqual([extra[0][0].bytes!.buffer]);
+    expect(extraImages(await parseTex(memoryFile(sheetTex(SAMPLES.rain1))))).toBeUndefined();
+    expect(extraImages(await parseTex(memoryFile(sheetTex({ ...SAMPLES.rain1, texs: undefined }))))).toBeUndefined();
+    // 只读头部（decode=false）：没有字节就没有 mip
+    const headOnly = extraImages(await parseTex(memoryFile(sheetTex(spec())), false))!;
+    expect(headOnly).toEqual([[]]);
+  });
 });

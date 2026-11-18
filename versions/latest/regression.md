@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 场景壁纸多图像帧表（P6e 第 4 步）
+
+2026-11-18 Windows dev。一张 `.tex` 里有多张图像的帧表不再报 `tex:animation:multi-image`：全部图像进 bundle、每张一张 GPU 纹理，选格时按这一格的 `imageId` 换绑那张图像（同 Wallpaper Engine，帧坐标按该图像归一化，`g_Texture<n>Resolution` 仍是头尺寸）；bind group 按「fbo 状态 + 各多图像槽的图像号」缓存，平面反射的副本同样按图像号缓存。单图像帧表与普通纹理不变。FreeImage 形态的多图像帧表报 `tex:animation:multi-image:freeimage`（语料没有）。多图像场景的显存按图像数涨（单张约 7680×7920 DXT）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：`src/render`、`compile/sheet.test.ts`、`compile/tex.test.ts`、`compile/workerHandler*`、`compile/p6e*`；`tsc` | 全过 | 2026-11-18 Claude：66 个文件 1554 条通过；`tsc` 0 错误；变异 4 处全部抓到 |
+| [x] | T2 和 WPE 逐像素比 | Windows dev，屏外宿主（dev 探针，`canvas` 1280×720，dt 取 WPE 日志） | `ignore/p6/e0/proj/p6e-tex`（含两张图像的 M1）回放到 f192–f207，和 `ignore/p6/e0/out/png/wpe-tex-f*.png` 比；脚本日志逐行比 | 0 差异 | 2026-11-18 Claude：八帧整帧 0 差异（含 M1 在 f199 换到图像 1、之后再换回），日志 208 行逐行相同 |
+| [x] | T3 全库 | Node，`kbp corpus scan` / `diff` | 与第 3 步之后比 | 只去掉 `tex:animation:multi-image` | 2026-11-18 Claude：能渲染 221 → 223（3000562427、3486806915），3577990983 只剩 `puppet:draw-order`；没有新增键；全库已没有 P6e 的键 |
+| [ ] | T4 多图像场景预览 | Windows dev 预览 | 打开 3000562427、3486806915 的预览看一会儿 | 帧表动画跨图像时不跳、不闪 | 需要用户看 |
+
 ## 场景壁纸文本的 anchor（P6e 第 3 步）
 
 2026-11-18 Windows dev。文本对象的 `anchor`（`top`、`topright`、`right`、`bottomright`、`bottom`、`bottomleft`、`left`、`topleft`、`center`）不再报 `text:anchor:*`：绘制时在世界空间加一段平移，让文字跟着可见区域的边或中心走（同 Wallpaper Engine，平移表照 rea-p6b-layout 3.4，与自身和父链的缩放、旋转无关），光标命中同样带上。可见区域由每帧的 `E0..E3`（四边被裁掉的场景单位）给出：dev 探针按窗口画时就是投影用的那份；产品按显示铺放算 `alignEdges(样式对应的对齐方式, 场景宽高, 画布 CSS 宽高)`，铺满时同 WPE；装下 / 居中时 E 为负，贴边的文字被推到场景之外，产品只画场景目标，看不到（render-size 的已知差异）；拉伸、平铺与透视场景为 0。脚本运行中改 `anchor` 走单对象重编译、晚一小段才生效（WPE 当帧，语料没有这种写法）。

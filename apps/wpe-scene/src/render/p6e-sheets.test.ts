@@ -25,13 +25,18 @@ interface FakeBuffer {
 
 class FakeGpu {
   readonly buffers: FakeBuffer[] = [];
+  /** 每次 createBindGroup 的描述；`set` 是每次 setBindGroup 交进去的那个（P6e 点 4 测换绑）。 */
+  readonly groups: { descriptor: GPUBindGroupDescriptor }[] = [];
+  readonly set: { descriptor: GPUBindGroupDescriptor }[] = [];
   readonly device: GPUDevice;
 
   constructor() {
     const pass = () => ({
       setViewport() {},
       setPipeline() {},
-      setBindGroup() {},
+      setBindGroup: (_slot: number, group: { descriptor: GPUBindGroupDescriptor }) => {
+        this.set.push(group);
+      },
       setVertexBuffer() {},
       setIndexBuffer() {},
       draw() {},
@@ -45,7 +50,7 @@ class FakeGpu {
       createTexture: (descriptor: GPUTextureDescriptor) => ({
         label: descriptor.label ?? "",
         descriptor,
-        createView: () => ({ label: descriptor.label ?? "" }),
+        createView: () => ({ label: descriptor.label ?? "", size: descriptor.size }),
         destroy() {},
       }),
       createSampler: () => ({}),
@@ -64,7 +69,11 @@ class FakeGpu {
       createPipelineLayout: () => ({}),
       createRenderPipeline: () => ({ getBindGroupLayout: () => ({}) }),
       createRenderPipelineAsync: async () => ({}),
-      createBindGroup: () => ({}),
+      createBindGroup: (descriptor: GPUBindGroupDescriptor) => {
+        const group = { descriptor };
+        this.groups.push(group);
+        return group;
+      },
       createCommandEncoder: () => ({
         beginRenderPass: () => pass(),
         copyTextureToTexture() {},
@@ -198,7 +207,7 @@ function layer(object: number): SceneLayer {
   };
 }
 
-function bundle(count: number): SceneBundle {
+function bundle(count: number, texture: SceneTexture = sheetTexture()): SceneBundle {
   return {
     general: {
       width: 1280,
@@ -211,7 +220,7 @@ function bundle(count: number): SceneBundle {
     },
     layers: Array.from({ length: count }, (_, i) => layer(i)),
     programs: [SHEET_PROGRAM],
-    textures: [sheetTexture()],
+    textures: [texture],
     bloom: null,
     unsupported: [],
     bindings: [],
@@ -219,9 +228,9 @@ function bundle(count: number): SceneBundle {
   };
 }
 
-async function open(count: number) {
+async function open(count: number, texture?: SceneTexture) {
   const gpu = new FakeGpu();
-  const source = bundle(count);
+  const source = bundle(count, texture);
   const state = SceneState.fromBundle(source);
   const scene = await GpuScene.build(gpu.device, source, state, new Set(), [], { particles: { seed: 1 } });
   return { gpu, state, scene };
@@ -348,5 +357,64 @@ describe("GpuScene：脱离的纹理动画（P6e 点 3）", () => {
     expect(frame(gpu, scene, state, 0.25, [0, 1])).toEqual([1, 0]);
     state.textureAnimations.get(1)!.frame = -1;
     expect(frame(gpu, scene, state, 0.25, [0, 1])).toEqual([2, 2]);
+  });
+});
+
+/** 多图像帧表（P6e 点 4）：图像 0 是 64²，图像 1 是 32²；4 格，第 0、1 格在图像 0，第 2、3 格在图像 1。 */
+const multiTexture = (): SceneTexture => ({
+  ...sheetTexture(),
+  images: [[{ width: 32, height: 32, bytes: new Uint8Array(32 * 32 * 4) }]],
+  frames: { ...SHEET, frames: SHEET.frames.map((f, k) => ({ ...f, image: k >= 2 ? 1 : 0 })) },
+});
+
+/** 一帧之后，这一帧里每次 setBindGroup 交进去的、绑着槽 0 纹理（binding 1）的那些组，各自纹理视图的宽。 */
+function boundWidths(gpu: FakeGpu, from: number): number[] {
+  return gpu.set.slice(from).flatMap((group) => {
+    const entry = (group.descriptor.entries as GPUBindGroupEntry[]).find((e) => e.binding === 1);
+    return entry ? [(entry.resource as unknown as { size: { width: number } }).size.width] : [];
+  });
+}
+
+describe("GpuScene：多图像帧表换绑图像（P6e 点 4）", () => {
+  it("跨图像的帧换绑那张图像的纹理，同帧里多个 draw 一致；回到图像 0 换回来", async () => {
+    const { gpu, state, scene } = await open(2, multiTexture());
+    const widths: number[][] = [];
+    for (let i = 0; i < 5; i++) {
+      const from = gpu.set.length;
+      frame(gpu, scene, state, 0.25, [0, 1]);
+      widths.push(boundWidths(gpu, from));
+    }
+    // 第 1、2、3、0、1 格 → 图像 0、1、1、0、0
+    expect(widths).toEqual([
+      [64, 64],
+      [32, 32],
+      [32, 32],
+      [64, 64],
+      [64, 64],
+    ]);
+  });
+
+  it("bind group 按「各槽图像号」缓存：转一圈之后再转不再新建；单图像帧表不多建", async () => {
+    const multi = await open(1, multiTexture());
+    for (let i = 0; i < 4; i++) frame(multi.gpu, multi.scene, multi.state, 0.25, [0]);
+    const built = multi.gpu.groups.length;
+    for (let i = 0; i < 8; i++) frame(multi.gpu, multi.scene, multi.state, 0.25, [0]);
+    expect(multi.gpu.groups.length).toBe(built);
+    // 单图像帧表：全程只有建 draw 时那一个静态 bind group
+    const single = await open(1);
+    const before = single.gpu.groups.length;
+    for (let i = 0; i < 8; i++) frame(single.gpu, single.scene, single.state, 0.25, [0]);
+    expect(single.gpu.groups.length).toBe(before);
+    expect(new Set(single.gpu.set).size).toBe(1);
+  });
+
+  it("image 越界（≥ 图像数）按 0 处理", async () => {
+    const texture = multiTexture();
+    texture.frames!.frames[2].image = 7;
+    const { gpu, state, scene } = await open(1, texture);
+    frame(gpu, scene, state, 0.25, [0]);
+    const from = gpu.set.length;
+    frame(gpu, scene, state, 0.25, [0]);
+    expect(boundWidths(gpu, from)).toEqual([64]);
   });
 });

@@ -296,10 +296,11 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   // 同样工作，WPE 也是逐槽更新（rea-p9-video 第 2 节），不另报用途键
   // 帧表纹理不再报键（P6e 点 1）：粒子的槽 0（P4b 步骤 2）与图像层 / effect 的帧动画（`render/sheets.ts` 的共享计时器）都支持，
   // `bundle.ts` 把完整帧表放进 `SceneTexture.frames`。
-  // 多图像帧表：渲染器只上传第 0 张图像，帧落在别的图像上会采错（粒子路径 rea-p4b-render.md 2.7【推】，图像层 rea-p6e-sheet 2.3 要
-  // 按帧换绑图像）。P6e 点 4 才支持，之前照报
-  if (flags & TEX_FLAGS.animated && imageCount > 1) unsupported.push("tex:animation:multi-image");
+  // 多图像帧表（P6e 点 4）：每张图像一张 GPU 纹理，帧按 `image` 选，绑定时换绑（`SceneTexture.images`、`GpuScene.bindSheets`）。
+  // 原格式（含 LZ4）支持；FreeImage 形态的多图像由主线程解码位图、语料里没有（本机 233 张），不做，遇到照报
   const freeImageMime = FREE_IMAGE_MIME[freeImageFormat];
+  if (flags & TEX_FLAGS.animated && imageCount > 1 && freeImageMime)
+    unsupported.push("tex:animation:multi-image:freeimage");
   // 原格式上传查格式表；FreeImage 形态由主线程解成 RGBA 位图（`planBitmapUpload` 只收格式 0，本机语料也都是 0）
   if (freeImageMime ? format !== 0 : !textureFormat(format)) unsupported.push(`tex:format:${format}`);
   if (freeImageFormat !== -1 && !freeImageMime) unsupported.push(`tex:freeimage:${freeImageFormat}`);
