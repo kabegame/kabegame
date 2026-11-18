@@ -537,6 +537,38 @@ describe("反投影与射线（FUN_14018e070 / 14018e1a0 / 14018fc40）", () => 
   });
 });
 
+describe("pickablesOf 的 perspective 读状态（P5h）", () => {
+  const layers: PickLayer[] = [
+    { object: 0, pick: "image", perspective: false, fullscreen: false, size: [300, 200] },
+    { object: 1, pick: "image", perspective: true, fullscreen: false, size: [300, 200] },
+  ];
+  const base = (): LayerState => ({
+    origin: [400, 800, 0],
+    scale: [1, 1, 1],
+    angles: [0, 0, 0],
+    alpha: 1,
+    color: [1, 1, 1],
+    brightness: 1,
+    visible: true,
+    parallaxDepth: [1, 1],
+    parent: null,
+  });
+  it("状态没写过取编译期值；脚本写过（true / false）以状态为准", () => {
+    const state: PickState = {
+      layers: new Map<number, LayerState>([
+        [0, base()],
+        [1, base()],
+      ]),
+      texts: new Map(),
+    };
+    const flags = () => Object.fromEntries(pickablesOf(layers, state, false).map((p) => [p.object, p.perspective]));
+    expect(flags()).toEqual({ 0: false, 1: true });
+    state.layers.get(0)!.perspective = true;
+    state.layers.get(1)!.perspective = false;
+    expect(flags()).toEqual({ 0: true, 1: false });
+  });
+});
+
 describe("CursorSession：每帧的 input 快照与（有回调时）命中", () => {
   const layers: PickLayer[] = [{ object: 0, pick: "image", perspective: false, fullscreen: false, size: [300, 200] }];
   const layerState = (): PickState => ({

@@ -37,7 +37,8 @@ export type LayerField =
   | "visible"
   | "parallaxDepth"
   | "alignment"
-  | "solid";
+  | "solid"
+  | "perspective";
 
 /**
  * 图层的向量字段与分量数（P6b 1e-3 复核）：WPE 的对象描述符表（`ignore/p3-userprops/notes/descriptors-decomp.txt`，`FUN_1401e0530` /
@@ -432,7 +433,7 @@ export function bindingValue(
   type: ValueType | LayerField,
 ): number[] | boolean {
   const value: SceneScalar = condition === undefined ? raw : String(raw) === condition;
-  if (type === "bool" || type === "visible" || type === "solid") return value !== false;
+  if (type === "bool" || type === "visible" || type === "solid" || type === "perspective") return value !== false;
   return numbers(value);
 }
 

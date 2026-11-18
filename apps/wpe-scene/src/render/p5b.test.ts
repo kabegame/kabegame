@@ -614,6 +614,27 @@ describe("GpuScene：透视图层的上屏矩阵（p5b-persp，WPE 实测）", (
     expect(bytes(matrixAt(drawOf(scene, "P1", "direct"), 64))).toBe(bytes(perspective));
   });
 
+  it("脚本写 perspective 当帧生效（P5h，p5h-a 实测）：渲染读状态，写 false 退回正交、正交层写 true 换透视，画进合成 RT 的 pass 不变", async () => {
+    const bundle = perspBundle(95, 1, 2);
+    const { scene, state } = await open(bundle);
+    scene.update(FRAME, state);
+    const ortho = sceneViewProjection(bundle.general);
+    const perspective = particleViewProjection(bundle.general);
+    expect(bytes(matrixAt(drawOf(scene, "P1", "direct"), 64))).toBe(bytes(perspective));
+    expect(bytes(matrixAt(drawOf(scene, "Q", "direct"), 64))).toBe(bytes(ortho));
+    const set = (object: number, value: boolean) =>
+      state.write({ property: "test", target: { kind: "layer", object, field: "perspective" } }, value);
+    set(LAYERS.P1.object, false);
+    set(LAYERS.Q.object, true);
+    set(LAYERS.P2.object, false);
+    scene.sync(state);
+    scene.update(FRAME, state);
+    expect(bytes(matrixAt(drawOf(scene, "P1", "direct"), 64))).toBe(bytes(ortho));
+    expect(bytes(matrixAt(drawOf(scene, "Q", "direct"), 64))).toBe(bytes(perspective));
+    // 带 effect 的 P2 末 pass 同样读状态
+    expect(bytes(matrixAt(drawOf(scene, "P2", "final"), 64))).toBe(bytes(ortho));
+  });
+
   it("抖动：透视图层和透视粒子一样右乘 T(−s)", async () => {
     const bundle = perspBundle(95, 1);
     const { scene, state } = await open(bundle);

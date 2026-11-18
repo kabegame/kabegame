@@ -461,7 +461,8 @@ export function pickablesOf(
       origin: own.origin,
       parallaxDepth: own.parallaxDepth,
       solid: own.solid !== false,
-      perspective: layer.perspective,
+      // 读状态（P5h：脚本写 `thisLayer.perspective` 当帧生效）
+      perspective: own.perspective ?? layer.perspective,
       fullscreen: layer.fullscreen,
       blocks: !!layer.disablePropagation && effectiveVisible(layer.object, state.layers),
     });

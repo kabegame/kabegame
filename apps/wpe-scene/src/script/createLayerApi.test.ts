@@ -396,6 +396,20 @@ describe("createLayer 的返回、下标与整理（wpe-bars / wpe-order 的行�
     expect(Object.hasOwn(group, "play")).toBe(false);
   });
 
+  it("待编图像层的 perspective（P5h）：编译前读配置里的值（只认 true），写入照常落到状态；粒子层、分组节点没有这个键", () => {
+    const h = harness(BASE);
+    const plain = h.scene.createLayer("models/a.json");
+    expect(plain.perspective).toBe(false);
+    const persp = h.scene.createLayer({ image: "models/a.json", perspective: true });
+    expect(persp.perspective).toBe(true);
+    expect(h.scene.createLayer({ image: "models/a.json", perspective: 1 }).perspective).toBe(false);
+    persp.perspective = false;
+    expect(persp.perspective).toBe(false);
+    expect(h.state.layers.get(4)?.perspective).toBe(false);
+    expect(Object.hasOwn(h.scene.createLayer("particles/a.json"), "perspective")).toBe(false);
+    expect(Object.hasOwn(h.scene.createLayer({ name: "G" }), "perspective")).toBe(false);
+  });
+
   it("图层字段读写落到状态（origin / scale / color），编译期字段给缺省（size 自动尺寸）", () => {
     const h = harness(BASE);
     const bar = h.scene.createLayer("models/a.json");

@@ -180,7 +180,9 @@ describe("未实现脚本 API 的扫描", () => {
       ),
     ).toEqual(["thisScene.gravitystrength", "thisScene.windstrength"]);
     // 材质 / effect 上的脚本，thisLayer 是所在图层
-    expect(scan("thisLayer.perspective = 1;", { kind: "material" }, 2)).toEqual(["layer.perspective"]);
+    expect(scan("thisLayer.rootmotion = 1;", { kind: "material" }, 2)).toEqual(["layer.rootmotion"]);
+    // P5h：perspective 已实现，不再报
+    expect(scan("thisLayer.perspective = true;", { kind: "material" }, 2)).toEqual([]);
   });
 
   it('成员访问的词法：可选链、["成员"]、数组字面量与条件运算', () => {

@@ -187,7 +187,7 @@ describe("collectAnimations：目标与值类型", () => {
     ]);
   });
 
-  it("灯对象（P13f2）：数值字段进灯目标、变换进图层目标；静态字段报 other；相机对象上的不进列表，报 camera（语料 3465215190、3554161528）", () => {
+  it("灯对象（P13f2）：数值字段进灯目标、变换进图层目标；静态字段报 other；相机对象（P5i）见下一条（语料 3465215190）", () => {
     const light = collect([
       image(),
       { id: 2, light: "lpoint", origin: kf3(), intensity: kf1({}, 1), castshadow: kf1() },
@@ -199,8 +199,35 @@ describe("collectAnimations：目标与值类型", () => {
       { kind: "layer", object: 1, field: "origin" },
     ]);
     expect(light.list.map((item) => item.valueType)).toEqual(["float", "vec3"]);
-    const camera = collect([{ id: 3, camera: "camera", origin: kf3({ parent: { key: "zoom" } }), zoom: kf1({}, 1) }]);
-    expect(camera).toEqual({ list: [], unsupported: ["value:animation:camera"] });
+  });
+
+  it("相机对象（P5i，p5i-cam 实测）：origin 等变换走图层目标，fov / zoom 走相机目标，联动照常；camera / path / queuemode 等报 other，不再有 value:animation:camera", () => {
+    const camera = collect([
+      { id: 3, camera: "camera", origin: kf3({ parent: { key: "zoom" } }), zoom: kf1({}, 1), fov: kf1({}, 50) },
+    ]);
+    expect(camera.unsupported).toEqual([]);
+    expect(camera.list.map((item) => item.target)).toEqual([
+      // 登记顺序按键名（P10b，registration.ts）
+      { kind: "camera", object: 0, field: "fov" },
+      { kind: "layer", object: 0, field: "origin" },
+      { kind: "camera", object: 0, field: "zoom" },
+    ]);
+    expect(camera.list.map((item) => item.valueType)).toEqual(["float", "vec3", "float"]);
+    expect(camera.list.every((item) => item.writes)).toBe(true);
+    // 联动：origin 把 zoom 当父，借它的时钟
+    const parentId = (suffix: string) => {
+      const item = camera.list.find((entry) => entry.id.endsWith(suffix))!;
+      return item.parent === null ? null : camera.list[item.parent].id;
+    };
+    expect(parentId("/origin")).toBe("objects/0/zoom");
+    expect(parentId("/zoom")).toBeNull();
+    // 没有就地目标的键报 other
+    for (const key of ["camera", "path", "queuemode"]) {
+      const other = collect([{ id: 3, camera: "camera", [key]: kf1() }]);
+      expect(other, key).toEqual({ list: [], unsupported: ["value:animation:other"] });
+    }
+    // 不是相机对象的 zoom 仍是 other（普通图层没有 zoom 字段）
+    expect(collect([{ id: 3, zoom: kf1({}, 1) }]).unsupported).toEqual(["value:animation:other"]);
   });
 
   it("没有就地目标的报 other、不进列表：图层的 size、非粒子对象的 instanceoverride、脚本属性、其余顶层键", () => {

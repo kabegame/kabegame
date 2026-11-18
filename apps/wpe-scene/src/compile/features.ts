@@ -719,7 +719,7 @@ export function isMixedCameraObject(object: SceneObject): boolean {
 
 /**
  * 相机对象自己的键（类表 `0x1404e8460`，rea-p5-camera 4.1、4.4）：`camera` 是类型判断；`fov`、`zoom` 已实现（绑属性、挂 `{script}` 登记成
- * 就地目标 `{ kind: "camera" }`，关键帧照旧由 `collectAnimations` 报 `value:animation:camera`）；`queuemode` 只在条目表非空时用，中性；
+ * 就地目标 `{ kind: "camera" }`，关键帧 P5i 起同样走就地目标，`fov` / `zoom` 是 `camera` 目标、变换是图层字段）；`queuemode` 只在条目表非空时用，中性；
  * `path` 的条目动画没做，读出非空 `paths` 或读不到时由 `compileScene` 报 `camera:path`（`compile/camera.ts` 的 `checkCameraObjectPath`）。
  */
 const CAMERA_KEYS = new Set(["camera", "fov", "zoom", "path", "queuemode"]);

@@ -31,7 +31,7 @@ import {
   type LayerPlan,
   type LayerStep,
 } from "./graph";
-import { sceneViewProjection, worldMatrixOf } from "./layout";
+import { particleViewProjection, sceneViewProjection, worldMatrixOf } from "./layout";
 import { multiply, translation, type Mat4 } from "./math";
 import { parallaxOffset } from "./parallax";
 import { GpuScene } from "./scene";
@@ -628,6 +628,34 @@ describe("GpuScene：p5b-cl 五个组合层", () => {
     expect(Buffer.from(mvpOf(drawOf(scene, 0, "compose")).buffer).toString("hex")).toBe(
       Buffer.from(expected.buffer, expected.byteOffset, expected.byteLength).toString("hex"),
     );
+  });
+
+  it("组合层 perspective: true（P5h，p5h-a 实测）：compose 基础 pass 仍用正交场景相机，末 pass 换透视；写状态当帧生效", async () => {
+    const bundle = bundleOf([{ ...clLayer("CL1"), perspective: true }]);
+    const { scene, state } = await open(bundle);
+    scene.update(FRAME, state);
+    const layer = bundle.layers[0];
+    const ortho = drawMatrices(
+      { role: "compose" },
+      worldOf(layer),
+      layer.size,
+      sceneViewProjection(bundle.general),
+    ).modelViewProjection;
+    const persp = drawMatrices(
+      { role: "final" },
+      worldOf(layer),
+      layer.size,
+      particleViewProjection(bundle.general),
+    ).modelViewProjection;
+    const hex = (m: ArrayLike<number>) => Buffer.from(new Float32Array(m).buffer).toString("hex");
+    expect(hex(mvpOf(drawOf(scene, 0, "compose")))).toBe(hex(ortho));
+    expect(hex(mvpOf(drawOf(scene, 0, "final")))).toBe(hex(persp));
+    expect(hex(persp)).not.toBe(hex(ortho));
+    // 脚本写 false：末 pass 退回正交
+    state.write({ property: "test", target: { kind: "layer", object: 0, field: "perspective" } }, false);
+    scene.sync(state);
+    scene.update(FRAME, state);
+    expect(hex(mvpOf(drawOf(scene, 0, "final")))).toBe(hex(ortho));
   });
 
   it("管线：compose 关混合、写 RGBA（同 WPE 事件 62 的写掩码 15）；上屏 translucent、写 RGB", async () => {

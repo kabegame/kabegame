@@ -4493,6 +4493,8 @@ export class GpuScene {
       // 雾（P13f）：同环境光，读状态现算
       fog: fogUniforms(state.general),
     };
+    // 透视覆盖读状态（P5h：脚本写 `thisLayer.perspective` 当帧生效，`p5h-a` 实测），没写过取编译期值
+    const persp = layerState.perspective ?? !!layer.perspective;
     // 组里的图层（P5b 步骤 4，p5-REPORT `p5b-grp-*`、`p5b-grpptc`）：视图投影换成组的局部正交 `ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，
     // 不经 `viewProjectionOf`（组里没有视差、抖动、缩放、透视，它们只作用在组本身，`p5b-grp-par`）。嵌套组自己的 compose 基础 pass
     // 例外，照旧用场景视图投影按屏幕位置采快照（`p5b-nest` 事件 94）；effect 中间 pass 的效果矩阵也按组的局部正交算（WPE 画子树时
@@ -4511,7 +4513,7 @@ export class GpuScene {
         step,
         layer: layerState,
         layout: state.texts.get(layer.object)!,
-        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, !!layer.perspective),
+        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp),
       });
     }
     if (step.kind === "particles") {
@@ -4571,7 +4573,7 @@ export class GpuScene {
         colorScale: 1,
         step: { role: "direct", inputs: step.inputs },
         layer: { ...layerState, color: [1, 1, 1], alpha: 1, size: layer.size },
-        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, !!layer.perspective),
+        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp),
       });
     // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs` 事件 76）：直接上屏以外的角色（effect、末 pass、passthrough 上屏）模型与视图都是
     // 单位阵、投影是 NDC 正交，不经 `viewProjectionOf`：`origin` / `scale` / `angles`、视差、抖动、透视都不起作用，2×2 的四边形
@@ -4605,15 +4607,14 @@ export class GpuScene {
           ? {
               alt: {
                 model: prelitModel(worldMatrixOf(layer.object, state.layers, worlds, this.attachHook), layer, rtSize!),
-                viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, !!layer.perspective),
+                viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp),
               },
             }
           : {}),
         // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
         // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
         // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
-        viewProjection:
-          groupVp ?? this.viewProjectionOf(layer, state, view, !!layer.perspective && step.target.kind === "scene"),
+        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp && step.target.kind === "scene"),
       }),
     );
   }
@@ -6496,7 +6497,12 @@ export class GpuScene {
       width: number;
       height: number;
     }
-    const sceneDrawTarget: DrawTarget = { view: sceneView, texture: sceneTexture, width: this.width, height: this.height };
+    const sceneDrawTarget: DrawTarget = {
+      view: sceneView,
+      texture: sceneTexture,
+      width: this.width,
+      height: this.height,
+    };
     /**
      * 拷快照（P5f）：拷当前目标。场景目标整张拷；组里是组的合成 RT，只拷左上角重叠部分（`min(宽) × min(高)`），快照其余保持上一次的内容
      * （`p5f-a`、`p5f-e` 实测，WPE 的 ResolveSubresource 在 NVIDIA 驱动上的行为）。

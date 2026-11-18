@@ -3088,6 +3088,27 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | 语料 | Node（`kbp corpus scan`） | 扫 `3841256486`、`3348595482` | 前者干净，后者只剩翻译器的 `float2` | 2026-11-18 Claude：符合；重叠的场景只有这 2 张去掉 `object:perspective`，没有新增的键 |
 | [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3841256486（myprojects） | 不退回预览图；透视文字的位置、形状和 Wallpaper Engine 里一样 | |
 
+## 场景壁纸脚本 `layer.perspective` 与组合层的 perspective（P5h）
+
+2026-11-19。脚本读写图像层（含组合层、组）与文本层的 `perspective`（只收布尔、当帧生效）；组合层 / 组带 `perspective: true` 不再报 `object:perspective`。计划、WPE 实测与实施记录见 `.claude/plans/wpe-import/3-scene/phase5/phase-5h-perspective-runtime.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 脚本切换透视、组合层与组的透视 | Windows dev，屏外宿主（`render_scene`，1920×1080，跑脚本） | `p5h-a` 回放到第 199 帧（脚本按帧号奇偶写 SP 的 `perspective`），对 WPE 上屏帧 | 逐像素相同（屏蔽 FR / CLK） | 2026-11-19 Claude：0 差；197 / 201 帧（同为奇数）像素摘要相同 |
+| [x] | 读写规则与键 | 同上 | 看 `p5h-a` 脚本日志：13 种值逐项写入后读回、各对象的键 | 和 WPE 一致：只收布尔；SP / CL / TX 有 `perspective`，PT / GN 没有 | 2026-11-19 Claude：一致 |
+| [x] | 语料 | Node（`kbp corpus scan`，233 张） | 全库扫描，对 P5f 时的扫描 diff | `3808922316` 干净；没有场景新增不支持项 | 2026-11-19 Claude：符合；去掉 `script:api:layer.perspective` 1 张，新增的键 0 |
+| [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3808922316 | 不退回预览图；画面和 Wallpaper Engine 里一样（脚本建的影子层在写死不可见的分组下，看不见） | |
+
+## 场景壁纸相机对象上的关键帧（P5i）
+
+2026-11-19。相机对象的 `origin` 等变换与 `fov` / `zoom` 挂关键帧时按字段写进状态，不再报 `value:animation:camera`；关键帧的值晚一帧进视图（同 WPE）。计划、WPE 实测与实施记录见 `.claude/plans/wpe-import/3-scene/phase5/phase-5i-camera-keyframes.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 相机平移 + 缩放关键帧 | Windows dev，屏外宿主（`render_scene`，1920×1080） | `p5i-cam` 按 WPE 日志与轨迹回放到第 206、207、208 帧，对 WPE 上屏帧 | 逐像素相同（屏蔽 FR / CLK） | 2026-11-19 Claude：三帧 0 差；我们 206 对 WPE 207 交叉比 95% 像素不同（比较灵敏） |
+| [x] | 语料 | Node（`kbp corpus scan`） | 全库扫描；`3841310696`（myprojects）单独按目录扫 | `3554161528` 干净；`3841310696` 只剩 `puppet:draw-order` | 2026-11-19 Claude：符合 |
+| [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3554161528 | 不退回预览图；开场推镜的节奏和 Wallpaper Engine 里一样 | |
+
 ## 场景壁纸透视相机矩阵逐步 float32（P5d 补修）
 
 2026-11-15。透视场景的相机路径插值、lookAt、透视投影（含 DirectXMath `XMScalarSinCos` 多项式）照汇编逐步 float32。计划与实施记录见 `phase-5d-camera-depth.md`「补修：透视相机矩阵逐步 float32」。

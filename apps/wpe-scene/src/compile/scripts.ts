@@ -125,8 +125,7 @@ function isAnimationLayerField(key: string): key is AnimationLayerField {
  * `camera`：相机对象（P5d 步骤 3，`isCameraObject` 且不带别的内容）顶层的 `objects/<i>/fov` / `zoom` 写回到就地目标
  * `{ kind: "camera" }`（rea-p5-camera 4.1：两个 float 描述符可挂脚本），渲染器每帧选相机时读。
  *
- * 属性关键帧动画（P10a，`animations.ts`）用同一个函数推目标，参数照字段脚本的算法给（相机对象上的关键帧在那边先报
- * `value:animation:camera`，不走到这里，所以 `camera` 缺省 false）。
+ * 属性关键帧动画（P10a，`animations.ts`）用同一个函数推目标，参数照字段脚本的算法给（P5i 起相机对象上的关键帧也走到这里，`camera` 传真）。
  */
 export function targetOf(
   path: string,

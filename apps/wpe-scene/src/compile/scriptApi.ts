@@ -129,10 +129,10 @@ export const MISSING_SCRIPT_API: Readonly<Record<ScriptApiGroup, readonly Missin
     ),
     // `getEffect` / `getEffectCount` 已实现（P6d1a）
     ...methods("any", ["transformAttachmentToTexture"], UNIQUE),
+    // `perspective` 已在图像层与文本层上实现（P5h，`script/api.ts`）。
     // 字段：写入在我们这边落成普通属性、不报错也不生效。名字大多通用，只认根对象。`alignment` 已在图像层上实现（P8 步骤 3，
     // `script/api.ts`）；别的图层上 WPE 读回什么由脚本 dll 决定，没查，不再静态报。粒子层的 `instance` 已实现（P4f 步骤 3）
     ...fields([
-      "perspective",
       "rootmotion",
       "fov",
       "zoom",

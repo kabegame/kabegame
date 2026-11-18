@@ -3,7 +3,7 @@
  * - 步骤 1：图像层尺寸的取值顺序（`imageLayerSize`）、图层上的 `noPadding` / `perspective` 两个标志、能力表放开 `nopadding` 与
  *   图像层的 `perspective: true`；
  * - 步骤 2：组合层（无子层）的 `passthroughModel` / `copyBackground`、`projectlayer` 取正交投影宽高、能力表放开 `passthrough` 与
- *   `projectlayer`，带子层报 `model:passthrough:children`、组合层又透视报 `object:perspective`；
+ *   `projectlayer`，带子层报 `model:passthrough:children`、组合层又透视 P5h 起不报；
  * - 步骤 3：`fullscreen` 模型的 `fullscreen` / `fullscreenSize`（几何 2×2，合成 RT 取槽 0 静态纹理的图像尺寸或场景尺寸）、能力表放开
  *   `fullscreen`（fullscreenlayer 不再报）；
  * - 步骤 4：组（带子层的组合层）的归属 `group` 与子树 `subtree`（`assignGroups`）、上屏材质 `groupUpload`，不再报
@@ -445,9 +445,9 @@ describe("compileScene：组合层的两个字段与照报项（P5b 步骤 2）"
     expect(child.layers[1].passthroughModel).toBe(true);
   });
 
-  it("组合层又 perspective: true：报 object:perspective（普通图像层不报）", async () => {
+  it("组合层又 perspective: true：不报（P5h，p5h-a 实测；以前报 object:perspective）", async () => {
     const bundle = await compileObjects([compose(10, { perspective: true })]);
-    expect(bundle.unsupported).toEqual(["object:perspective"]);
+    expect(bundle.unsupported).toEqual([]);
     expect(bundle.layers[0]).toMatchObject({ passthroughModel: true, perspective: true });
     const plain = await compileObjects([{ id: 10, image: "models/a.json", origin: "960 540 0", perspective: true }]);
     expect(plain.unsupported).toEqual([]);

@@ -14,6 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults, type GeneralValues, type SceneBinding } from "../compile/bindings";
 import type { SceneBundle, SceneGeneral, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
 import type { CameraPath, SceneCameraJson } from "../compile/camera";
+import { SceneAnimations } from "../animation/player";
+import type { ParsedKey } from "../animation/curve";
+import type { SceneAnimation } from "../animation/types";
 import { particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import { frameCamera, probeCameraObjects, probePerspective } from "../dev/particleCorners";
@@ -278,6 +281,51 @@ function orthoFrame(origin: number[], options: { angles?: number[]; zoom?: numbe
     general: ORTHO_GENERAL,
   });
 }
+
+describe("相机对象字段上的关键帧（P5i，p5i-cam 实测）", () => {
+  const key = (frame: number, value: number): ParsedKey => ({ frame, value, flags: 0, bx: 0, by: 0, fx: 0, fy: 0 });
+  const anim = (id: string, target: SceneAnimation["target"], channels: ParsedKey[][]): SceneAnimation => ({
+    id,
+    target,
+    valueType: channels.length === 1 ? "float" : "vec3",
+    channels,
+    parent: null,
+    events: [],
+    writes: true,
+    name: "",
+    object: 1,
+    owner: "objects/1",
+    inert: false,
+    clock: { fps: 30, length: 60, mode: 0, startpaused: false },
+  });
+
+  it("zoom 写进 SceneState.cameras、origin.x 写进图层状态：写完后相机求值读到新值，没写之前仍是旧值（先求相机、后跑关键帧 = 晚一帧）", () => {
+    const layers = [layer(0), cameraLayer(1, [960, 540, 8], { camera: { fov: 50, zoom: 1 } })];
+    const bundle = bundleOf(layers);
+    const state = SceneState.fromBundle(bundle);
+    const players = new SceneAnimations([
+      anim("objects/1/zoom", { kind: "camera", object: 1, field: "zoom" }, [[key(0, 1), key(60, 2)]]),
+      anim("objects/1/origin", { kind: "layer", object: 1, field: "origin" }, [
+        [key(0, 0), key(60, 600)],
+        [key(0, 540), key(60, 540)],
+        [key(0, 8), key(60, 8)],
+      ]),
+    ]);
+    // 第 N 帧开头先求相机：用的是前一帧写进状态的值
+    const before = activeCameraObject(bundle, state)!;
+    expect(before.zoom).toBe(1);
+    expect(before.pose.eye[0]).toBe(960);
+    players.frame(1 / 30, state);
+    const first = activeCameraObject(bundle, state)!;
+    // 一个 30 fps 帧：zoom 从 1 往 2 走一点，origin.x 从 960 掉到 0 附近（关键帧 0 → 600 的起点）
+    expect(first.zoom).toBeGreaterThan(1);
+    expect(first.zoom).toBeLessThan(1.05);
+    expect(first.pose.eye[0]).toBeLessThan(100);
+    expect(state.cameras.get(1)!.zoom).toBe(first.zoom);
+    // fov 没动
+    expect(first.fov).toBe(50);
+  });
+});
 
 describe("activeCameraObject：按 objects 倒序找第一个自身与父链都可见的（rea-p5-camera 4.2）", () => {
   it("两个都可见取对象表里靠后的（P6d3）；没有相机对象为 null", () => {

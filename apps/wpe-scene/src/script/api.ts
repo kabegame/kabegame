@@ -523,6 +523,14 @@ export class ScriptApi {
     this.installLight(api, index);
     if (this.findLayer(index)?.particle || kind === "particle") this.installParticle(api, index);
     if (this.findLayer(index)?.alignment !== undefined || kind === "image") this.installAlignment(api, index);
+    // 透视覆盖（P5h）：只有图像层（含组合层）与文本层有，粒子、分组节点没有（`p5h-a` 实测键序）
+    if (
+      this.findLayer(index)?.alignment !== undefined ||
+      this.findLayer(index)?.text ||
+      kind === "image" ||
+      kind === "text"
+    )
+      this.installPerspective(api, index);
     if (this.findLayer(index)?.text || kind === "text") this.installText(api, index);
     this.installHierarchy(api, index);
     this.installEffectAccess(api, index);
@@ -602,6 +610,27 @@ export class ScriptApi {
       "alignment",
       () => alignmentName(this.access.state().layers.get(object)?.alignment),
       (value) => this.write({ kind: "layer", object, field: "alignment" }, alignmentIndex(value), "float"),
+    );
+  }
+
+  /**
+   * `perspective`（P5h，`p5h-a` 实测）：读回布尔（JSON 没写是 false），写入只收 JS 布尔（`1`、`'true'`、`null` 等不写、不抛错），当帧生效
+   * （渲染每次现读状态）。没写过取编译期值，待编对象（P6d3b）取配置里的 `perspective`。WPE 的键序是 `castshadow,perspective,visible`，
+   * 这里的键序不逐键对齐，装在对齐之后。
+   */
+  private installPerspective(api: ApiObject, object: number): void {
+    this.define(
+      api,
+      "perspective",
+      () => {
+        const written = this.access.state().layers.get(object)?.perspective;
+        if (written !== undefined) return written;
+        const layer = this.findLayer(object);
+        if (layer) return layer.perspective === true;
+        const config = this.pending.get(object)?.config;
+        return !!config && !Array.isArray(config) && config.perspective === true;
+      },
+      (value) => this.write({ kind: "layer", object, field: "perspective" }, value, "bool"),
     );
   }
 

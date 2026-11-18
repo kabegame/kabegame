@@ -134,6 +134,12 @@ export interface LayerState {
    * 都能读写，但只有图像层与文本层参与命中。脚本写 `thisLayer.solid`、字段脚本写回、用户属性绑定都落在这里，不标脏（不影响绘制）。
    */
   solid?: boolean;
+  /**
+   * 透视覆盖的开关（P5h，`SceneLayer.perspective`）：脚本写 `thisLayer.perspective`（只有图像层含组合层与文本层有这个键，只收布尔）才有值；
+   * `undefined` = 取编译期的 `layer.perspective`。渲染与光标命中每次现读（`p5h-a` 实测：写入当帧生效）；uniform 只在标脏时重写，
+   * 所以写入标这一个图层脏（`SceneState.write`）。
+   */
+  perspective?: boolean;
   /** 父对象的 `objects` 下标（`SceneLayer.parent`），根节点为 null。运行中由 `setParent` / 删父（`flushDestroy`）改。 */
   parent: number | null;
 }
@@ -303,7 +309,7 @@ export function writeBloomParam(
 }
 
 /** 图层字段的缺省值（与编译期 `numbers(resolveValue(…), 缺省)` 同一套：解析不出分量时退回）。`alignment` 另写（`writeAlignment`）。 */
-const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible" | "alignment" | "solid">, number[]> = {
+const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible" | "alignment" | "solid" | "perspective">, number[]> = {
   origin: [0, 0, 0],
   scale: [1, 1, 1],
   angles: [0, 0, 0],
@@ -316,7 +322,7 @@ const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible" | "alignment" | "soli
 
 function writeLayer(
   layer: LayerState,
-  field: Exclude<LayerField, "alignment" | "solid">,
+  field: Exclude<LayerField, "alignment" | "solid" | "perspective">,
   value: number[] | boolean,
 ): void {
   if (field === "visible") {
@@ -1179,7 +1185,14 @@ export class SceneState {
         layer.solid = bindingValue(raw, binding.condition, field) !== false;
         return "applied";
       }
-      if (layer && field !== "alignment" && field !== "solid") {
+      // 透视覆盖的开关（P5h）：只改状态；WPE 每次画都现读（`p5h-a` 实测当帧生效），我们的 uniform 只在图层标脏时重写，所以标这一个图层脏
+      // （不带子孙：它不继承）；脚本只收布尔（`script/api.ts`）
+      if (layer && field === "perspective") {
+        layer.perspective = bindingValue(raw, binding.condition, field) === true;
+        this.dirtyLayers.add(target.object);
+        return "applied";
+      }
+      if (layer && field !== "alignment" && field !== "solid" && field !== "perspective") {
         // 向量字段（origin / scale / color / parallaxDepth）照 WPE 的向量 setter，同编译期（`layerVectorValue`，P6b 1e-3 复核）：
         // 数字铺满、字符串少写的分量为 0；写不进（布尔）时 WPE 不改字段，这里也不写、不标脏
         if (isLayerVectorField(field)) {

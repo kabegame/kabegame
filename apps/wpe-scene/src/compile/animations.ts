@@ -24,8 +24,7 @@ export interface CollectedAnimations {
    */
   list: SceneAnimation[];
   /**
-   * 不进列表、照报的能力键：相机对象上的 `value:animation:camera`（P5d）、
-   * 没有就地目标的 `value:animation:other`。
+   * 不进列表、照报的能力键：没有就地目标的 `value:animation:other`（P5i 起相机对象上的 `camera` / `path` / `queuemode` 等也落在这里）。
    */
   unsupported: string[];
 }
@@ -198,7 +197,8 @@ type AnimationVisit = (value: unknown, path: string, owner: ScriptOwner | null, 
  * 关键帧没有就地目标，报 `other`。
  *
  * 每处关键帧依次：
- * 1. 相机对象上的：不进列表，报 `value:animation:camera`（丢弃的不报）；灯对象 P13f2 起走 `targetOf`（数值字段 `light`、图层字段 `layer`）；
+ * 1. 灯对象 P13f2 起走 `targetOf`（数值字段 `light`、图层字段 `layer`）；相机对象 P5i 起同样走 `targetOf`（`fov` / `zoom` 是 `camera` 目标，
+ *    变换是图层字段；`camera`、`path`、`queuemode` 等没有目标，落到 2）；
  * 2. 目标（`targetOf`）没有就地目标：不进列表，报 `value:animation:other`（丢弃的不报）；
  * 3. 丢弃（`clockOf`）：WPE 属性保持 `value`、什么都不写，但照样登记、`getAnimation` 找得到（读码第 5 节，P10b 步骤 0 Q7）：进列表、
  *    标 `inert`，`writes` 假、通道与事件为空，时钟参数 `fps` 1、`mode` 0（惰性时钟，`AnimationClock.inert`），`length` 是数时截断、否则 0；
@@ -221,13 +221,11 @@ function collectWith(scene: SceneJson, run: (visit: AnimationVisit) => void): Co
     const options = animation.options;
     const parsed = clockOf(options);
     const object = layer === null ? undefined : objects[layer];
-    // 丢弃的（`parsed` 为 null）照样登记（P10b，读码第 5 节第 1 条）；相机对象与没有就地目标的无论丢不丢都不进列表，
-    // 丢弃的这几种也不报键（WPE 本来就什么都不做，和 P10a 一致）。灯对象 P13f2 起有就地目标（数值字段 `light`、变换与颜色是图层字段，
-    // `p13f-light` 的 L1：V1 灯当帧、遗留灯晚一帧），`light` / `castshadow` 等静态字段落到下面的 `other`
-    if (isRecord(object) && isCameraObject(object)) {
-      if (parsed) unsupported.add("value:animation:camera");
-      return;
-    }
+    // 丢弃的（`parsed` 为 null）照样登记（P10b，读码第 5 节第 1 条）；没有就地目标的无论丢不丢都不进列表，丢弃的也不报键（WPE 本来就
+    // 什么都不做，和 P10a 一致）。灯对象 P13f2 起有就地目标（数值字段 `light`、变换与颜色是图层字段，`p13f-light` 的 L1：V1 灯当帧、
+    // 遗留灯晚一帧），`light` / `castshadow` 等静态字段落到下面的 `other`。相机对象 P5i 起同理（`p5i-cam` 实测：相机在帧开头求、
+    // 关键帧写的 origin 与 zoom 晚一帧进视图，我们先求相机、后跑关键帧，自然一致）：`fov` / `zoom` 写 `SceneState.cameras`，变换写图层状态，
+    // `camera` / `path` / `queuemode` 等落到 `other`
     const key = propertyOf(path);
     const initial = (raw.value ?? null) as SceneScalar;
     const target = owner
@@ -239,7 +237,7 @@ function collectWith(scene: SceneJson, run: (visit: AnimationVisit) => void): Co
           isRecord(object) && isSoundObject(object),
           isRecord(object) && isTextObject(object),
           isRecord(object) && objectKind(object) === "particle",
-          false,
+          isRecord(object) && isCameraObject(object),
           isRecord(object) && isLightObject(object),
         )
       : ({ kind: "unsupported", path } as const);

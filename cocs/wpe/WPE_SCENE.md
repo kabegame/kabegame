@@ -336,7 +336,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | general 的 `bloom` / `hdr` 与全部 `bloom*` 调节项 | 由后处理档位裁决，泛光 / HDR 已实现（P2b，见「泛光与 HDR」）；其中的脚本交给 P3b 运行时 |
 | general 的 `cameraparallax*`、`camerashake*`、`zoom` | 视差、抖动、正交缩放已实现（P5a，见「相机：视差、抖动与缩放（P5a）」）；透视场景的三维抖动 P5d 实现（见「透视相机、相机对象与深度（P5d）」），正交场景里解析出的常量 `zoom` ≤ 0 照报 `general:zoom` |
 | `camerafade`、`camerapreview`、`norecompile`；正交投影下的 `farz` / `fov` / `nearz`；`supportsvideo` | 加载淡入 / 编辑器选项 / 透视场景里每帧读（P5d） / 只决定 D3D 设备标志 |
-| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层报 `model:fullscreen:children`，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及图像层、模型、文本层（P5g）之外的对象、组合层上为真，照报 `object:perspective`。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
+| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层报 `model:fullscreen:children`，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及图像层（含组合层、组，P5h）、模型、文本层（P5g）之外的对象上为真，照报 `object:perspective`；脚本 `layer.perspective` 由 P5h 实现。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
 | 模型对象；它的 `skin`、`castshadow`、`reflected`、`disablepropagation`、`perspective: true` | 静态网格已实现（P5c），见「静态网格（P5c）」。`skin` 选材质，`castshadow` / `reflected` 的消费者（阴影、反射）另外照报，`disablepropagation` 中性；不支持的用法细分成 `mdl:*` / `model:*`，见那一节的「能力表」 |
 | `solid`、`ledsource`、`locktransforms` | 渲染路径不读（推断与鼠标命中有关）/ Razer Chroma 灯效来源 / 编辑器锁定 |
 | `brightness` | 只在 HDR 下乘进 `g_Color4` / `g_Color`（B10），LDR 下不生效 |
@@ -367,7 +367,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **脚本 API**（2026-11-07 改定，`compile/scriptApi.ts`）：会执行的脚本里调用或访问了 WPE 有、我们没实现的 API，报 `script:api:<分组>.<成员>`、整张退回，例如 `script:api:thisScene.createLayer`、`script:api:layer.getParent`、`script:api:input.cursorWorldPosition`。改定前的约定是「不做静态扫描，调用时报错只禁用回调」，结果 3304642534 的音频条静默缺了一整组。导出了运行时还不调的回调（光标、媒体等）同样报 `script:callback:<名>`（P6 前置）。规则见「场景脚本（P3b）」的「脚本 API 检查」。
 - **层级**（P4a）：`object:parent` 只剩灯带父对象时报（`lights.ts` 用本地 `origin`，挂在父链下的位置没和 WPE 比过）；父链成环报 `object:parent-cycle`。
 - **粒子**（P4a）：不再整条报 `object:particle`，按模块表细分成 `particle:*`，键的形态见「粒子（P4a）」的「编译」。
-- **关键帧值**（P4a 报出，P10a 实现）：`{animation: {…}, value}`，`animation` 是对象才算（puppet 的整数 id 不算）。`scene.json` 里的（`general`、图层字段、effect 实例常量、`instanceoverride`、声音音量）由 P10a 求值写入（见「关键帧动画（P10a）」），初值取 `value`；没有就地目标的照报细分键：灯对象上的 `value:animation:light`（P13）、相机对象上的 `value:animation:camera`（相机对象本身 P5d 已实现，关键帧不在内）、其余 `value:animation:other`。材质 JSON 自己的常量、模型 JSON、`effect.json`、粒子系统级键与模块字段、控制点和子系统条目里的关键帧不经 WPE 的属性框架，照报 `value:animation`（`isKeyframedValue` / `scanValue`；语料 0 处）。
+- **关键帧值**（P4a 报出，P10a 实现）：`{animation: {…}, value}`，`animation` 是对象才算（puppet 的整数 id 不算）。`scene.json` 里的（`general`、图层字段、effect 实例常量、`instanceoverride`、声音音量）由 P10a 求值写入（见「关键帧动画（P10a）」），初值取 `value`；没有就地目标的照报 `value:animation:other`（灯对象 P13f2、相机对象 P5i 起按字段有就地目标，见「相机对象上的关键帧（P5i）」；P5i 之前相机对象上的报 `value:animation:camera`）。材质 JSON 自己的常量、模型 JSON、`effect.json`、粒子系统级键与模块字段、控制点和子系统条目里的关键帧不经 WPE 的属性框架，照报 `value:animation`（`isKeyframedValue` / `scanValue`；语料 0 处）。
 
 **FreeImage 形态 `.tex`**（`freeimage` 为 13 PNG / 2 JPEG，mip 数据是整份图片文件）：Worker 不读这些字节，只记 `encoded` 区间。纹理尺寸取头里的**图像**尺寸（WPE 解码前把头里的纹理尺寸强制改成图像尺寸，所以 UV 为 1；razer_vortex 头写 4096×4096、图像 3840×2160，两组都是 3840×2160，见 `tex.ts` 的 `freeImageTextureSize`）。主线程 `decode.ts` 的 `TextureDecodeCache` 按区间读、`createImageBitmap`（`colorSpaceConversion: "none"`、`premultiplyAlpha: "none"`）解码，缓存键是文件路径与字节区间；`WpeSceneView` 每个目标一份，改属性重新编译时直接命中，换目标或卸载时关闭全部位图，每次解码后只留本 bundle 用到的项。其它 FreeImage 格式报 `tex:freeimage:<n>`，LZ4 包着的报 `tex:freeimage-lz4`。
 
@@ -2259,7 +2259,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 | 不画 | 没有启用的 effect、`colorBlendMode` 是 0 / 31、没有子层时整层是空计划。WPE 照拷一次快照，看不出来，我们不拷 | 实测 |
 | 合成 RT 与内缩 | 合成 RT 按 `round(size)`，上屏不内缩 | 实测：600×300，上屏 UV 0–1 |
 | `projectlayer` | 尺寸取正交投影宽高（`autosize`）；排序键 −∞ 只在透视场景的透明排序里起作用（P5d 步骤 4 已实现，见「透视相机、相机对象与深度（P5d）」） | 实测 `p5b-proj`，0 差异 |
-| 照报 | 组合层同时 `perspective: true`：`object:perspective`（基础 pass 与上屏各用哪套相机没测，语料 0 个） | — |
+| 组合层 + `perspective: true` | P5h 起支持：基础 pass 仍用正交场景相机，末 pass 与组的上屏换透视（见「脚本 `layer.perspective` 与组合层的 perspective（P5h）」） | 实测 `p5h-a` |
 
 ### fullscreen
 
@@ -2481,7 +2481,7 @@ P5d 改的是整场的投影与深度，分三块，依赖方向是单向的：�
 | 透视覆盖 | 透视粒子与 `perspective: true` 的图像层 / 模型在相机 V 上做：旋转不变，平移换成 (t.x − W/2, t.y − H/2, −d)，d 按含缩放的可见高算（`zoom 2` 时减半） | 实测 `p5d-camo-pp`（原点投到 NDC (−0.5, −0.5)、w = d = 494.82）、`-ppr`（旋转与 `zoom 2` 都保留）；按「覆盖不看相机」会落在 (+0.5, +0.5) |
 | 视差点与抖动 | 视差点的 eye.xy 是相机的 eye.xy + s；抖动加在相机的 eye 上 | 实测 `-par`（5 个色块的 MVP 与 `o = amount·depth·(origin − P)` 差 ≤ 1.2e-7）、`-shake`（差 ≤ 1.3e-7） |
 | 透视场景 | 来源姿态换成相机的（`perspectiveCamera` 只换 pose），fov 取相机对象的 `fov`（钳制），`zoom` 不起作用 | 实测 `p5d-camp-*`（eye (2, 0, 8)、m11 = cot 30°） |
-| 能力表 | 删 `object:camera`、`object:fov`、`object:zoom`、`object:path`、`object:queuemode`。相机对象同时带别的内容键（图像、模型、粒子、声音、文本、灯、形状）时报 `object:camera:mixed`（不进 `cameras`、不登记 `fov` / `zoom` 目标，只读 `path`）；`camera:path` 的边界（空串、不是字符串、根不是对象都报，`paths` 不是数组按空表）；`fov` / `zoom` 挂关键帧仍报 `value:animation:camera`；图层上的 `fov` / `zoom` 字段访问仍在缺口表（`getCameraTransforms` / `setCameraTransforms` 由 P5e 实现） | 读码；语料 0 处 |
+| 能力表 | 删 `object:camera`、`object:fov`、`object:zoom`、`object:path`、`object:queuemode`。相机对象同时带别的内容键（图像、模型、粒子、声音、文本、灯、形状）时报 `object:camera:mixed`（不进 `cameras`、不登记 `fov` / `zoom` 目标，只读 `path`）；`camera:path` 的边界（空串、不是字符串、根不是对象都报，`paths` 不是数组按空表）；`fov` / `zoom` 挂关键帧仍报 `value:animation:camera`（P5i 起支持，见「相机对象上的关键帧（P5i）」）；图层上的 `fov` / `zoom` 字段访问仍在缺口表（`getCameraTransforms` / `setCameraTransforms` 由 P5e 实现） | 读码；语料 0 处 |
 | 渲染器 | `scene.ts` 新增 `objectCamera` 标志：离开相机对象时不提前返回、视图向量复位；`same` 提成模块级函数 | 变异检查（「离开相机对象时提前返回」补用例后检出） |
 
 ### 透明排序（步骤 4）
@@ -2565,7 +2565,7 @@ P5d 照报的三项（透视场景里的文本、带子层的组合层、透明�
 | 透视场景里脚本 `engine.canvasSize` | 照读码读到 (0, 0)，没测，语料 0 处 | 步骤 2 |
 | 跟随粒子的指针反投影 | 透视场景、带相机对象的场景里没接相机视图，`particleTrackProbe` 给了 `cursors` 时直接抛错（语料 0） | 步骤 2、3 |
 | 加载时的预热与视差点初值 | 不看相机对象；WPE 这时的 eye 没测（`-par` 用的是 delay 0），带相机对象的模板场景开场可能不同 | 步骤 3 |
-| 相机对象的其它写法 | `object:camera:mixed`（语料 0）、`camera:path`（22 个相机都是空表）、图层 `fov` / `zoom` 访问（语料 0 处；`getCameraTransforms` / `setCameraTransforms` 由 P5e 实现）、`fov` / `zoom` 挂关键帧（`value:animation:camera`）；每个相机对象多读一次 `path` 文件，计进请求数 | 步骤 3 |
+| 相机对象的其它写法 | `object:camera:mixed`（语料 0）、`camera:path`（22 个相机都是空表）、图层 `fov` / `zoom` 访问（语料 0 处；`getCameraTransforms` / `setCameraTransforms` 由 P5e 实现）、`fov` / `zoom` 挂关键帧（`value:animation:camera`，P5i 起支持）；每个相机对象多读一次 `path` 文件，计进请求数 | 步骤 3 |
 | 步骤 3 提交树的画面哈希 | `5889b490` + 步骤 3 没重测：共享宿主产物当时正被别的会话的临时插桩使用；变基前后步骤 3 的增删行按文件逐行相同 | 步骤 3 |
 | `3706286085` 的透视走查 | 做不了：它的相机都挂在带骨骼动画的模型下（`CameraBoneMoveMesh` 等，`mdl:skeleton` / `mdl:animation` 没实现），相机的世界矩阵依赖这些模型，复制工程去不掉；换成 `3453730450` | 步骤 3 补充 |
 | 走查里去掉的内容 | `3462279189` 的人物（纹理标志 0x22 视频，视频时刻对不上，属 P9a 的特性）与 `3605722997` 的主图（视频）；走查里的 `shared.*` 写入方删掉了，两边读到的都是 undefined | 步骤 3 补充 |
@@ -2657,6 +2657,50 @@ WPE 的场景有两套相机字段：基准（eye、center、up、zoom，`G+0x11
 **验收**（`ignore/p5/g/`，WPE 抓帧 `A:\p5g\`）：生成工程 `p5g-a`（直接上屏、带背景、带 effect、colorBlendMode 2、`perspective: false` 对照、
 透视图像层对照，全部绕 x 轴转 −0.9 弧度）与 `p5g-par`（同上加相机视差）整帧和 WPE 逐像素相同（屏蔽 FR / CLK）。语料 `3841256486` 变干净，
 `3348595482` 只剩翻译器的 `float2` 解析问题。
+
+## 脚本 `layer.perspective` 与组合层的 perspective（P5h）
+
+`perspective` 是 WPE 图像层属性表（`FUN_1401ee520`，`0x1401ee9a4`）里的一项，读写对象标志 `+0x120` 的 bit7；文本层继承图像层的表。绘制函数
+`FUN_1401e8aa0` 每次画都现读这一位，所以脚本写了**当帧生效**。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 键在哪些对象上 | 图像层（含组合层、带子层的组）与文本层；粒子、分组节点、声音没有（`typeof` 为 `undefined`）。WPE 的键序是 `…,castshadow,perspective,visible,…`，我们装在 `alignment` 之后、不逐键对齐 | 实测 `p5h-a` 的键序日志 |
+| 读 | 总是布尔：脚本写过取状态（`LayerState.perspective`），没写过取编译期的 `layer.perspective`（JSON 只认 true），待编对象（P6d3b）取 `createLayer` 配置里的值 | 实测 |
+| 写 | 只收 JS 布尔；`1`、`0`、`'true'`、`''`、`null`、`undefined`、`{}`、`[1]`、`2.5`、`-1`、`'false'` 都不写、不抛错，保留原值 | 实测（`init` 里逐项写再读回） |
+| 生效 | 当帧：写进 `SceneState`、标这一个图层脏（uniform 只在标脏时重写），渲染器取视图投影（文本、图像、预光照的 `alt`、上屏）与光标命中都读状态 | 实测：`update` 按帧号奇偶写，偶数帧的 MVP 是正交、奇数帧是透视 |
+| 组合层 / 组 + `perspective: true` | 不再照报 `object:perspective`。compose 基础 pass 仍用正交场景相机（画进合成 RT），末 pass 与组的上屏换透视，组里的子层仍用组的局部正交——正是「透视图层」现有的规则（画到场景目标的绘制换透视），渲染器不用改 | 实测 `p5h-a`：CL（无子层带 effect）基础 pass 正交、末 pass 透视；GP（带子层）上屏透视 |
+| 不在本节 | JSON 里 `perspective` 绑属性、挂脚本仍报 `object:perspective`（语料 0）；组里的图层运行中写 `perspective` 仍按组的局部正交画（`groupChildIssues` 只照报 JSON 写死的）；反射名单（`reflection:planar:*`）按编译期值判。运行中写入这几种语料 0 处 | — |
+
+计划与实测见 [phase-5h](../../.claude/plans/wpe-import/3-scene/phase5/phase-5h-perspective-runtime.md)。
+
+**验收**（`ignore/p5/h/`，WPE 抓帧 `A:\p5h\`）：生成工程 `p5h-a`（组合层带 effect、组、脚本按帧号奇偶切 `perspective` 的棋盘层、透视对照层、
+键序用的文本 / 粒子 / 分组节点）跑脚本回放到第 199 帧，整帧和 WPE 逐像素相同（屏蔽 FR / CLK），脚本日志里的读写结果与键序和 WPE 一致。
+语料 `3808922316` 变干净（`objects/181` 的组合层在 `init` 里写 `thisLayer.perspective = true`，并 `createLayer` 一个带 `perspective: true`
+的组合层影子）。
+
+## 相机对象上的关键帧（P5i）
+
+相机对象的变换（`origin` / `angles` / `scale`，相机 eye 取它的世界矩阵平移）是图层字段，`fov` / `zoom` 是 P5d 的就地目标
+`{ kind: "camera" }`，两者都已有运行时状态，属性绑定和脚本都写它们。P5i 让关键帧（P10a）成为第三种写入方：`compile/animations.ts`
+不再把相机对象整体照报 `value:animation:camera`，而是像灯对象（P13f2）那样经 `targetOf` 按字段给目标——变换走图层、`fov` / `zoom`
+走 `camera`，`camera` / `path` / `queuemode` 等没有目标的落到 `value:animation:other`；联动照常。
+
+时序照 WPE：相机在帧开头求（脚本、关键帧之前），关键帧写的相机 `origin` 与 `zoom` **下一帧**才进视图，和关键帧写 `general.zoom` 晚一帧
+同理。我们的渲染器本来就是「先求相机、后跑关键帧」，写进状态后自然晚一帧，播放器（`animation/player.ts`）不用改。
+
+| 帧 | 相机 zoom 反算的关键帧位置 | 相机 eye 反算的关键帧位置 | REF 本帧的关键帧位置 |
+|---|---|---|---|
+| 206 | 8.27 | 8.27 | 9.70 |
+| 207 | 9.70 | 9.70 | 12.24 |
+| 208 | 12.23 | — | 15.01 |
+
+（`p5i-cam`：相机 `origin` x 与 `zoom` 挂同一时钟的关键帧，REF 方块挂同一份 `origin` 关键帧，它这一帧画在哪就是这一帧的值。）
+
+计划与实测见 [phase-5i](../../.claude/plans/wpe-import/3-scene/phase5/phase-5i-camera-keyframes.md)。`path` 的条目动画（`camera:path`）不在本节。
+
+**验收**（`ignore/p5/h/`，WPE 抓帧 `A:\p5i\cam\`）：`p5i-cam` 按 WPE 日志与轨迹回放到 206、207、208 帧，三帧都和 WPE 逐像素相同（屏蔽 FR / CLK；
+相邻帧交叉比 95% 的像素不同，比较是灵敏的）。语料 `3554161528` 变干净，`3841310696`（myprojects）只剩 P12 的 `puppet:draw-order`。
 
 ## 图像层与材质补全（P8）
 
@@ -2908,7 +2952,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 - **`IAnimation`**（P10b）：12 个自有可枚举成员，顺序 `name`、`frameCount`、`duration`、`fps`、`rate`、`play`、`isPlaying`、`stop`、`pause`、`setFrame`、`getFrame`、`getAnimation`；前四个只读（严格模式下赋值抛 `TypeError`）；同一条每次是同一个对象。`rate` 缺省 1、不钳制、只收数字（`NaN` 也收）；`setFrame(f)` 只改时间、下一帧才写值，`f` 不是数按 0；`play` 在 `single` 播完后先归零；`stop` 归零并暂停。子动画上的控制改的是子自己从不推进的时钟，不影响画面。
 - **事件**（P10b）：时钟越过事件帧的那一帧，在越过它的那一条写完之后、下一条之前派发，`loop` 的回绕帧先发回绕前的、再发回绕后的，`mirror` 正反向各一次。接收者是动画所在图层（或 `general`）上导出了 `animationEvent` 且跑完 `init` 的全部脚本，按登记顺序；回调 `animationEvent(event, value)`，`event` 是作者写的整个事件对象（键排序、数字 8 位有效数字），`value` 是接收脚本自己属性的当前值，返回值写回。派发是同步的：回调里对排在后面的动画 `stop()`，那一条本帧就写第 0 帧的值。
 
-**能力表**：`value:animation:light`（灯，P13）、`value:animation:camera`（相机对象，P5d 只做相机本身，`fov` / `zoom` / `origin` 的关键帧仍报）、`value:animation:other` 照报。P10b 起 `script:api:object.getAnimation` / `thisScene.getAnimation`、`script:callback:animationEvent` 不再报。
+**能力表**：没有就地目标的照报 `value:animation:other`。灯对象（P13f2）与相机对象（P5i：变换走图层、`fov` / `zoom` 走 `camera`）按字段有就地目标，原来的 `value:animation:light` / `value:animation:camera` 不再报。P10b 起 `script:api:object.getAnimation` / `thisScene.getAnimation`、`script:callback:animationEvent` 不再报。
 
 **走查**（FINAL_CHECK，2026-11-14）：
 - 四个生成测试工程（`ignore/p10/proj/`，窗口与场景同为 1920×1080）：不受脚本控制的动画整帧逐像素相同（`p10-curves`、`p10-zoom` 18 帧含 FR、CLK）；`p10-zoom` 的缩放和 WPE 一样晚一帧。

@@ -1763,6 +1763,55 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
   });
 });
 
+describe("thisLayer.perspective（P5h，p5h-a 实测）", () => {
+  it("图像层（含组合层）读回布尔：JSON 没写是 false，编译期为真时读回 true；写入只收 JS 布尔，别的类型不写、不报错，当帧进状态", () => {
+    const h = setup();
+    h.bundle.layers[0].alignment = 0;
+    h.bundle.layers[1].alignment = 0;
+    h.bundle.layers[1].passthroughModel = true;
+    h.bundle.layers[1].perspective = true;
+    const layer = h.api.layer(0)!;
+    expect(layer.perspective).toBe(false);
+    expect(h.api.layer(1)!.perspective).toBe(true);
+    layer.perspective = true;
+    expect(layer.perspective).toBe(true);
+    expect(h.state.layers.get(0)!.perspective).toBe(true);
+    for (const ignored of [1, 0, "true", "", null, undefined, {}, [1], 2.5, -1, "false", new Vec3(1, 1, 1)]) {
+      layer.perspective = ignored;
+      expect(layer.perspective, String(ignored)).toBe(true);
+    }
+    layer.perspective = false;
+    expect(layer.perspective).toBe(false);
+    // 写 false 盖掉编译期的真；别的图层不受影响
+    h.api.layer(1)!.perspective = false;
+    expect(h.api.layer(1)!.perspective).toBe(false);
+    expect(h.state.layers.get(1)!.perspective).toBe(false);
+    expect(layer.perspective).toBe(false);
+  });
+
+  it("文本层有这个键；粒子层、分组节点（非图像非文本）没有", () => {
+    const h = setup(undefined, { target: null }, { target: null }, true);
+    const text = h.api.layer(4)!;
+    expect("perspective" in text).toBe(true);
+    expect(text.perspective).toBe(false);
+    text.perspective = true;
+    expect(text.perspective).toBe(true);
+    expect("perspective" in h.api.layer(3)!).toBe(false);
+    expect("perspective" in h.api.layer(2)!).toBe(false);
+    // 没有 alignment 的普通图层（分组节点）也没有
+    expect("perspective" in h.api.layer(0)!).toBe(false);
+  });
+
+  it("写入只标这一个图层脏（uniform 当帧重写，不带子孙），不触发重编译", () => {
+    const h = setup();
+    h.bundle.layers[0].alignment = 0;
+    h.state.takeDirty();
+    h.api.layer(0)!.perspective = true;
+    expect([...h.state.takeDirty().layers]).toEqual([0]);
+    expect(h.recompiles).toEqual([]);
+  });
+});
+
 describe("光标交互：input 与 solid（P6c）", () => {
   it("input 的三个成员每次读都现取：cursorWorldPosition 是 Vec3、cursorScreenPosition 是 Vec2（float32）、cursorLeftDown 是布尔，每次都是新对象", () => {
     const h = setup();
