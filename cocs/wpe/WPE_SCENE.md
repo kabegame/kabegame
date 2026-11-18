@@ -329,7 +329,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | general 的 `bloom` / `hdr` 与全部 `bloom*` 调节项 | 由后处理档位裁决，泛光 / HDR 已实现（P2b，见「泛光与 HDR」）；其中的脚本交给 P3b 运行时 |
 | general 的 `cameraparallax*`、`camerashake*`、`zoom` | 视差、抖动、正交缩放已实现（P5a，见「相机：视差、抖动与缩放（P5a）」）；透视场景的三维抖动 P5d 实现（见「透视相机、相机对象与深度（P5d）」），正交场景里解析出的常量 `zoom` ≤ 0 照报 `general:zoom` |
 | `camerafade`、`camerapreview`、`norecompile`；正交投影下的 `farz` / `fov` / `nearz`；`supportsvideo` | 加载淡入 / 编辑器选项 / 透视场景里每帧读（P5d） / 只决定 D3D 设备标志 |
-| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层报 `model:fullscreen:children`，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及图像层与模型之外的对象、组合层上为真，照报 `object:perspective`。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
+| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层报 `model:fullscreen:children`，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及图像层、模型、文本层（P5g）之外的对象、组合层上为真，照报 `object:perspective`。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
 | 模型对象；它的 `skin`、`castshadow`、`reflected`、`disablepropagation`、`perspective: true` | 静态网格已实现（P5c），见「静态网格（P5c）」。`skin` 选材质，`castshadow` / `reflected` 的消费者（阴影、反射）另外照报，`disablepropagation` 中性；不支持的用法细分成 `mdl:*` / `model:*`，见那一节的「能力表」 |
 | `solid`、`ledsource`、`locktransforms` | 渲染路径不读（推断与鼠标命中有关）/ Razer Chroma 灯效来源 / 编辑器锁定 |
 | `brightness` | 只在 HDR 下乘进 `g_Color4` / `g_Color`（B10），LDR 下不生效 |
@@ -2224,7 +2224,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 | 尺寸来源 | 照 WPE 的顺序（`bundle.ts` 的 `imageLayerSize`）：<br>1. 模型 `width` / `height`（数字，缺了是 1，逐分量）；<br>2. 对象 `size` 逐分量覆盖；<br>3. `autosize` 在「纹理就绪」时再覆盖：`projectlayer` 取正交投影宽高（取整），否则取槽 0 纹理的图像尺寸，没有纹理时不覆盖。<br>三者都缺时是 1×1（原来取纹理尺寸） | 读码 §7；实测 `p5b-autosize`、`p5b-proj`。语料里同时写 `autosize` 和 `size` 的 1514 个对象，两种顺序取值全部一致，所以改顺序对现有场景中性；精灵表的帧尺寸随图像层帧动画（P6） |
 | `fullscreen` 的尺寸 | 排在 `autosize` 之前，几何固定 2×2，合成 RT 另取 `fullscreenSize`（见「fullscreen」） | 读码 §7 |
 | UV 内缩 | 直接上屏（WPE `+0x490`）在模型 `fullscreen`、`nopadding`、`passthrough`、`solidlayer` 时不内缩；末 pass 与 passthrough 上屏（`+0x2e8`）不看 `nopadding`（`graph.ts` 的 `directInset` / `finalInset`）。`solidLayer` 只表示模型那一位，instanced 也不内缩 | 实测 `p5b-nopad-v2`（1845 个像素差 1）、`p5b-inst2` |
-| 透视图层 | 图像层 `perspective: true` 时，画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）把视图投影换成透视粒子那一份 `perspectiveViewProjection`，已带抖动与缩放，相机距离随 `perspectiveoverridefov` 与 `zoom` 变。视差平移照旧右乘：`P_persp · T(o − s) · W`。画进合成 RT 的 pass、effect 中间 pass 不变 | 读码；实测 `p5b-persp*`：fov 30 时距离 2015.3 = 540 / tan 15°，`zoom 1.5` 时距离除以 1.5，视差偏移落在 z = 0 平面上正好是屏幕上的 o 像素；平滑纹理的 `p5b-persp-smooth` 最大差 1 |
+| 透视图层 | 图像层 `perspective: true` 时（文本层同一套，P5g，见「文本层的 perspective（P5g）」），画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）把视图投影换成透视粒子那一份 `perspectiveViewProjection`，已带抖动与缩放，相机距离随 `perspectiveoverridefov` 与 `zoom` 变。视差平移照旧右乘：`P_persp · T(o − s) · W`。画进合成 RT 的 pass、effect 中间 pass 不变 | 读码；实测 `p5b-persp*`：fov 30 时距离 2015.3 = 540 / tan 15°，`zoom 1.5` 时距离除以 1.5，视差偏移落在 z = 0 平面上正好是屏幕上的 o 像素；平滑纹理的 `p5b-persp-smooth` 最大差 1 |
 
 **更正读码：** rea-p5-modelflags 推断纹理标志 `0x20` 表示「未补边」，实际 `0x20` 是视频位（`compile/tex.ts` 的 `TEX_FLAGS.video`）。语料里写了 `nopadding` 的纹理带 `0x20`，是因为编辑器给视频纹理写了 `nopadding`。
 
@@ -2618,6 +2618,24 @@ WPE 的场景有两套相机字段：基准（eye、center、up、zoom，`G+0x11
 **验收**（`ignore/p5/f/`，WPE 抓帧 `A:\p5f\`）：生成工程 `p5f-a`（组 900×500）、`p5f-b`（`copybackground: false`）、`p5f-c`（组与屏幕同尺寸）、
 `p5f-e`（组 2400×600、分组节点下的孙子、嵌套组）整帧和 WPE 逐像素相同（屏蔽 FR / CLK）；`p5f-d`（组转 0.3 弧度）只有 1 个像素差 1 级。
 工坊场景 `3465215190`（组「路面雨滴」里两个 `REFRACT` 的雨滴溅射粒子）不再退回；语料里只差这个键的 `3465215190`、`3233141951` 解锁。
+
+## 文本层的 perspective（P5g）
+
+文本层是图像层的子类，绘制走同一个基类函数 `FUN_1401e8aa0`：直接上屏分支里对 `perspective`（`+0x120 & 0x80`）的图层先压透视相机
+（`0x1401e92b3` 调 `FUN_1401e5b60`），再调文本的直接上屏 `+0xf0`（背景、字形、彩色字形）；合成路径的上屏（末 pass、passthrough）也在同一个
+基类里压透视相机（`0x1401e9eb3`）。所以规则和图像层「透视图层」一样：画到场景目标的绘制换成透视粒子那一份视图投影，画进合成 RT 的字形不变
+（`textMatrices` 用 RT 像素的正交）。实现：编译期文本层取 `layer.perspective`（只认 JSON true），能力表放行，渲染器的 `text` 步骤传
+`viewProjectionOf(…, layer.perspective)`；光标命中、反射名单、组里照报都按 `layer.perspective` 自动跟上。
+
+画面和图像层看起来不一样：文本的字形与背景着色器（`basefont` 一族）把顶点当二维点 `(x, y, 1)`、只取 MVP 的 x、y、w 三列，丢掉 z 列
+（RenderDoc 反汇编 `dp3 … g_ModelViewProjectionMatrix[i].xywx`），绕 x 轴转的文本在透视下塌成一条线；走合成路径的末 pass / passthrough
+用四维乘法，是正常的透视。我们的文本着色器是同一份 WPESL 翻译的，MVP 相同画面就相同，不用另做。
+
+计划与实测见 [phase-5g](../../.claude/plans/wpe-import/3-scene/phase5/phase-5g-text-perspective.md)「步骤 0 结果」。
+
+**验收**（`ignore/p5/g/`，WPE 抓帧 `A:\p5g\`）：生成工程 `p5g-a`（直接上屏、带背景、带 effect、colorBlendMode 2、`perspective: false` 对照、
+透视图像层对照，全部绕 x 轴转 −0.9 弧度）与 `p5g-par`（同上加相机视差）整帧和 WPE 逐像素相同（屏蔽 FR / CLK）。语料 `3841256486` 变干净，
+`3348595482` 只剩翻译器的 `float2` 解析问题。
 
 ## 图像层与材质补全（P8）
 

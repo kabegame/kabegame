@@ -3055,6 +3055,17 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | 3465215190 不再退回 | 同上 | 渲染图片 14292 | `unsupported` 为空，路面雨滴的溅射粒子画出来 | 2026-11-17 Claude：`unsupported` []；3 秒回放后两个溅射系统各有 206 / 176 个父粒子 |
 | [x] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3465215190（雨天站台）看半分钟 | 不退回预览图；台阶和路面上有雨滴溅起的折射水花，没有大块错位的色块 | 2026-11-17 用户：观感和 WPE 差不多 |
 
+## 场景壁纸文本层的 perspective（P5g）
+
+2026-11-18。文本对象的 JSON `perspective: true` 同图像层：画到场景目标的绘制换透视那一份视图投影，不再报 `object:perspective`。计划、WPE 实测与实施记录见 `.claude/plans/wpe-import/3-scene/phase5/phase-5g-text-perspective.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 四种文本透视 | Windows dev，屏外宿主（`render_scene`，1920×1080） | `p5g-a`：直接上屏、带背景、带 effect、colorBlendMode 2 的透视文本，加正交文本与透视图像层对照，对 WPE 上屏帧 | 逐像素相同（屏蔽 FR / CLK） | 2026-11-18 Claude：0 差 |
+| [x] | 加相机视差 | 同上 | `p5g-par` | 逐像素相同 | 2026-11-18 Claude：0 差 |
+| [x] | 语料 | Node（`kbp corpus scan`） | 扫 `3841256486`、`3348595482` | 前者干净，后者只剩翻译器的 `float2` | 2026-11-18 Claude：符合；重叠的场景只有这 2 张去掉 `object:perspective`，没有新增的键 |
+| [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3841256486（myprojects） | 不退回预览图；透视文字的位置、形状和 Wallpaper Engine 里一样 | |
+
 ## 场景壁纸透视相机矩阵逐步 float32（P5d 补修）
 
 2026-11-15。透视场景的相机路径插值、lookAt、透视投影（含 DirectXMath `XMScalarSinCos` 多项式）照汇编逐步 float32。计划与实施记录见 `phase-5d-camera-depth.md`「补修：透视相机矩阵逐步 float32」。

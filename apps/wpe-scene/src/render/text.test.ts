@@ -41,7 +41,7 @@ import { textVertices } from "../text/mesh";
 import { PIXEL_MODE_BGRA, PIXEL_MODE_GRAY, Wpefont } from "../wpefont";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { planLayer, planSignature, textCompositeSize, variantPlans, type LayerPlan, type LayerStep } from "./graph";
-import { drawMatrixOf, sceneViewProjection, worldMatrixOf } from "./layout";
+import { drawMatrixOf, particleViewProjection, sceneViewProjection, worldMatrixOf } from "./layout";
 import { multiply, transformPoint, translation, type Mat4 } from "./math";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
@@ -961,6 +961,48 @@ describe("GpuScene：文本层", () => {
     expect(floatsOf(drawOf(scene, 0, "glyphs"), 64, 4)).toEqual([1, 1, 1, 1]);
     expect(floatsOf(drawOf(scene, 3, "glyphs"), 64, 4)).toEqual([1, 1, 1, 0.5]);
     expect(floatsOf(drawOf(scene, 1, "background"), 64, 4)).toEqual([1, 0, 0, 1]);
+  });
+
+  it("perspective: true（P5g）：直接上屏的字形与背景用透视那一份视图投影，合成路径的字形（RT 像素正交）与上屏不受影响、没开的照旧", async () => {
+    const atlas = new GlyphAtlas(false);
+    const layouts = new Map<number, TextLayout>([
+      [0, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [0, 0] })],
+      [1, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [32, 32], offset: [0, -18] })],
+      [2, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [0, 0], offset: [0, -18] })],
+      [3, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [0, 0] })],
+    ]);
+    const layers = [
+      textLayer(0, "P"),
+      textLayer(1, "B", { opaquebackground: true, background: [1, 0, 0], colorBlendMode: 31 }),
+      textLayer(2, "F", { effect: true }),
+      textLayer(3, "N"),
+    ];
+    for (const layer of layers.slice(0, 3)) layer.perspective = true;
+    const bundle = bundleOf(layers);
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(new FakeGpu().device, bundle, state, new Set(), [], {
+      ignoreUnsupported: true,
+      particles: { seed: 1 },
+      texts: layouts,
+    });
+    scene.update(FRAME, state);
+    const ortho = sceneViewProjection({ width: 1920, height: 1080 });
+    const persp = particleViewProjection(bundle.general);
+    const worlds = new Map<number, Mat4>();
+    const mvp = (object: number, part: "glyphs" | "background", space: "direct" | "composite", vp: Mat4) =>
+      Array.from(
+        textMatrices({ part, space }, drawMatrixOf(object, state.layers, worlds), vp, layouts.get(object)!)
+          .modelViewProjection,
+      );
+    expect(floatsOf(drawOf(scene, 0, "glyphs"), 0, 16)).toEqual(mvp(0, "glyphs", "direct", persp));
+    expect(floatsOf(drawOf(scene, 0, "glyphs"), 0, 16)).not.toEqual(mvp(0, "glyphs", "direct", ortho));
+    expect(floatsOf(drawOf(scene, 1, "background"), 0, 16)).toEqual(mvp(1, "background", "direct", persp));
+    expect(floatsOf(drawOf(scene, 1, "glyphs"), 0, 16)).toEqual(mvp(1, "glyphs", "direct", persp));
+    // 没开 perspective：场景视图投影
+    expect(floatsOf(drawOf(scene, 3, "glyphs"), 0, 16)).toEqual(mvp(3, "glyphs", "direct", ortho));
+    // 合成路径的字形用 RT 像素的正交，不读视图投影：开或不开都与 ortho 那份相同
+    expect(floatsOf(drawOf(scene, 2, "glyphs"), 0, 16)).toEqual(mvp(2, "glyphs", "composite", ortho));
+    expect(floatsOf(drawOf(scene, 2, "glyphs"), 0, 16)).toEqual(mvp(2, "glyphs", "composite", persp));
   });
 
   it("顶点：字形四边形照 WPE 的布局（同 `text/mesh.ts` 的 `textVertices`，UV 从图集字形读）；背景是整数文字框", async () => {

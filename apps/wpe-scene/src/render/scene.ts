@@ -4439,13 +4439,14 @@ export class GpuScene {
         : null;
     if (step.kind === "text") {
       // 文本（P6b 1d）：直接上屏用这次画到场景的视图投影（带视差、抖动；组里是组的局部正交），画进合成 RT 用 RT 像素的正交
-      // （`textMatrices`）。排版结果在建 draw 前已核对过
+      // （`textMatrices`）。排版结果在建 draw 前已核对过。`perspective: true` 的文本直接上屏换透视那一份视图投影（P5g，同图像层，
+      // `FUN_1401e8aa0` 的 `0x1401e92b3`）；合成路径的字形由 `textMatrices` 用 RT 像素的正交，不读它
       return textUniformValues({
         ...common,
         step,
         layer: layerState,
         layout: state.texts.get(layer.object)!,
-        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, false),
+        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, !!layer.perspective),
       });
     }
     if (step.kind === "particles") {

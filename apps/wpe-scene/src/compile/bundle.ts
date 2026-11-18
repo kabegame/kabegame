@@ -585,7 +585,7 @@ export interface SceneLayer {
    */
   noPadding: boolean;
   /**
-   * 对象 `perspective`（只认 JSON true，只在图像层上，P5b 步骤 1）：画到场景目标的绘制换成透视视图投影（`render/scene.ts`，
+   * 对象 `perspective`（只认 JSON true，图像层 P5b 步骤 1、文本层 P5g）：画到场景目标的绘制换成透视视图投影（`render/scene.ts`，
    * p5-REPORT `p5b-persp`）。模型对象同样取（P5c 步骤 1，`p5c-matrix` 实测和透视图层同一套，绘制在步骤 2）。粒子、分组、声音等
    * 图层为 false。
    */
@@ -3076,6 +3076,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     const textObject = isTextObject(object);
     // 文本的构造函数无条件进半透明名单（P5d 步骤 4，rea-p6b-layout 1.1）：不看材质，没有模型标志，不会是 `last`
     if (textObject) layer.sortClass = "translucent";
+    // 文本层的 `perspective`（P5g）：只认 JSON true，同图像层（文本绘制走同一个基类函数 `FUN_1401e8aa0`）；绑属性等由能力表报 `object:perspective`
+    if (textObject) layer.perspective = object.perspective === true;
     // 被依赖的文本层（P8 步骤 4）：WPE 同样置 `0x1010`（rea-p8-render 1.2 认类型 1 与 4），但文本层的合成 RT 随重排换尺寸，引用方的绑定要
     // 跟着换，没做（语料 0 个），照报
     if (textObject && isDepended(object)) unsupported.add("dependency:text");

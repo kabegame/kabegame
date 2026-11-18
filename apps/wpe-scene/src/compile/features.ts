@@ -901,8 +901,11 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
   // 对齐（P8 步骤 3）：图像层已实现，JSON 的任何写法都按 WPE 的 setter 取值（字符串查表，别的是 center），别的对象中性。图像层上挂
   // `{script}` 的字段脚本：写回目标是枚举，运行时没有实现（`compile/scripts.ts` 落成 unsupported），照报
   if (kind === "image" && isScriptValue(object.alignment)) unsupported.add("object:alignment:script");
-  // 图像层（P5b 步骤 1）与模型（P5c 步骤 1）的 perspective：JSON true 已实现；绑属性、挂脚本或别的取值，以及别的对象上为真，照报
-  if (active(object.perspective) && !((kind === "image" || kind === "model") && object.perspective === true))
+  // 图像层（P5b 步骤 1）、模型（P5c 步骤 1）与文本层（P5g）的 perspective：JSON true 已实现；绑属性、挂脚本或别的取值，以及别的对象上为真，照报
+  if (
+    active(object.perspective) &&
+    !((kind === "image" || kind === "model" || kind === "text") && object.perspective === true)
+  )
     unsupported.add("object:perspective");
   // 合成 RT 的采样（P8 步骤 1）：JSON 布尔值已实现（null 同没写）；绑属性、挂脚本时 WPE 不重建 RT（rea-p8-layer §3，推断），
   // 没有实测，照报

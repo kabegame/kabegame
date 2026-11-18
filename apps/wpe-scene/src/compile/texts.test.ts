@@ -179,6 +179,16 @@ describe("能力表：文本对象", () => {
     ).toEqual([]);
   });
 
+  it("perspective（P5g）：文本对象上 true / false 不报，绑属性、挂脚本、写成 1 照报", () => {
+    expect(check({ text: "a", perspective: true })).toEqual([]);
+    expect(check({ text: "a", perspective: false })).toEqual([]);
+    expect(check({ text: "a", perspective: { user: "p", value: true } })).toEqual(["object:perspective"]);
+    expect(check({ text: "a", perspective: { script: "export function update(v) { return v; }" } })).toEqual([
+      "object:perspective",
+    ]);
+    expect(check({ text: "a", perspective: 1 })).toEqual(["object:perspective"]);
+  });
+
   it("运行中字段挂脚本不报（P6b 1e-3：12 个逐个）；其余文本键挂脚本报 text:script:<键>；图层字段的脚本照旧不报", () => {
     const script = (value: unknown) => ({ script: "export function update(value) { return value; }", value });
     const values: Record<(typeof TEXT_RUNTIME_FIELDS)[number], unknown> = {
@@ -260,6 +270,21 @@ describe("compileScene：文本表", () => {
       colorBlendMode: 0,
     });
     expect(layer.text?.font).toEqual({ path: "system:arial.ttf", location: null, size: null });
+  });
+
+  it("perspective（P5g）：JSON true 进 layer.perspective、不报；绑属性或非 true 照报且图层不取；没写为假", async () => {
+    const base = { id: 3, name: "t", text: "ab", origin: "960 540 0" };
+    const on = await compile([{ ...base, perspective: true }]);
+    expect(on.bundle.unsupported).toEqual([]);
+    expect(layerOf(on.bundle).perspective).toBe(true);
+    const bound = await compile([{ ...base, perspective: { user: "p", value: true } }]);
+    expect(bound.bundle.unsupported).toEqual(["object:perspective"]);
+    expect(layerOf(bound.bundle).perspective).toBe(false);
+    const one = await compile([{ ...base, perspective: 1 }]);
+    expect(one.bundle.unsupported).toEqual(["object:perspective"]);
+    expect(layerOf(one.bundle).perspective).toBe(false);
+    expect(layerOf((await compile([{ ...base, perspective: false }])).bundle).perspective).toBe(false);
+    expect(layerOf((await compile([base])).bundle).perspective).toBe(false);
   });
 
   it("字段规整：非字符串的 text 当空串、font 保持缺省；枚举查不到取第一项（left / center）；对象值取 value", async () => {
