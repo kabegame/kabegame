@@ -7,8 +7,11 @@
   dcl_maxout 与各阶段被读到的常量。
 - legacy：没有 kbp-meta.json 的老工程（p4-0、p4a*）。颜色表从 scene.json 与 particles/*.json 的 colorrandom 读，
   四角只给 linear / custom / rot-gs / rot-vs，按 UV 配对。
+- scene：真实壁纸的解包 / 复制工程（`kbp content unpack|isolate --instrument`，只有末尾一个只写日志的 kbp-FR）。没有 FR / CLK 绘制：
+  帧号取 RenderDoc 帧号 + 1，time / dt 取本机读好的 [kbp] 日志；粒子绘制按顶点输入认（同 stats），每粒子一条同 points；系统按本机
+  出的计划（`py/scene_track.py`）分槽，恰好一种分法才起名（键同 kabegame-dev 的 particle_track），否则这一帧按 `draw<k>` 记。
 
-前两个绘制固定是 FR（帧号，像素着色器的 g_Color）、CLK（g_Time、g_Frametime，带指针的版本另有 g_PointerPosition*）。
+前三种认法的前两个绘制固定是 FR（帧号，像素着色器的 g_Color）、CLK（g_Time、g_Frametime，带指针的版本另有 g_PointerPosition*）。
 要兼容 RenderDoc 内嵌的 Python 3.8。
 """
 
@@ -345,6 +348,127 @@ def extract_legacy(bridge, path, table):
     return out
 
 
+# ==================== scene（真实壁纸的解包 / 复制工程） ====================
+
+
+def particle_draw(bridge, event):
+    """按顶点输入认粒子绘制（同 stats.py）：几何着色器路径是 PointList 且有 TEXCOORD / TEXCOORD0；顶点展开路径是 TriangleList 且有
+    TEXCOORD0、TEXCOORD2、COLOR。是粒子返回 vs_in，否则 None。"""
+    state = bridge.call("get_pipeline_state", {"event_id": event})
+    inputs = {v["name"] for v in state["input_assembly"]["vertex_inputs"]}
+    topology = state["input_assembly"]["topology"]
+    geometry = ("TEXCOORD" in inputs or "TEXCOORD0" in inputs) and topology.endswith("PointList")
+    expanded = {"TEXCOORD0", "TEXCOORD2", "COLOR"} <= inputs and topology.endswith("TriangleList")
+    if not (geometry or expanded):
+        return None
+    return bridge.call("get_mesh_data", {"event_id": event, "stage": "vs_in", "max_vertices": 400000})
+
+
+def _block_ok(slot, counts, i):
+    """槽的一块（一个系统或一个事件实例，`renderers` 次连着的绘制）能不能从第 i 次起：画得下、各次粒子数相同（同一份存活粒子）、
+    不超过模板的 maxcount（知道时）。"""
+    r = slot["renderers"]
+    if i + r > len(counts):
+        return False
+    c = counts[i]
+    if any(counts[i + k] != c for k in range(r)):
+        return False
+    cap = slot.get("maxcount")
+    return cap is None or c <= cap
+
+
+def assign_scene(counts, slots):
+    """按计划给非空的粒子绘制分槽：static 槽 0 或 1 块，事件槽 0…cap 块。只在恰好一种分法时返回 [(槽, 第几块)]（每次绘制一项，
+    第几块从 1 起），否则返回 (None, 原因)。分法数封顶到 2。"""
+    if any(s["kind"] == "event-tree" for s in slots):
+        return None, "计划里有带子系统的事件子系统"
+    n, m = len(counts), len(slots)
+    memo = {}
+
+    def options(j, i):
+        """槽 j 从第 i 次绘制起的各种取法：[(取几块, 下一个 i)]，0 块在最前。"""
+        slot = slots[j]
+        out = [(0, i)]
+        limit = 1 if slot["kind"] == "static" else slot["cap"]
+        pos, k = i, 0
+        while k < limit and _block_ok(slot, counts, pos):
+            k += 1
+            pos += slot["renderers"]
+            out.append((k, pos))
+        return out
+
+    def ways(j, i):
+        key = (j, i)
+        if key not in memo:
+            if j == m:
+                memo[key] = 1 if i == n else 0
+            else:
+                total = 0
+                for _, nxt in options(j, i):
+                    total = min(2, total + ways(j + 1, nxt))
+                    if total >= 2:
+                        break
+                memo[key] = total
+        return memo[key]
+
+    found = ways(0, 0)
+    if found == 0:
+        return None, "%d 次非空粒子绘制（粒子数 %s）对不上计划的 %d 槽" % (n, counts, m)
+    if found > 1:
+        return None, "%d 次非空粒子绘制（粒子数 %s）对计划有不止一种分法（有系统存活数为 0 或事件实例数不定）" % (n, counts)
+    out = []
+    i = 0
+    for j in range(m):
+        k, nxt = next((k, nxt) for k, nxt in options(j, i) if ways(j + 1, nxt) == 1)
+        for block in range(1, k + 1):
+            out.extend([(slots[j], block)] * slots[j]["renderers"])
+        i = nxt
+    return out, None
+
+
+def name_scene(assigned):
+    """[(槽, 第几块)] → 每次绘制的键：第几块（事件实例）≥ 2 加 `#k`，同一块里第 r 个 renderer（r ≥ 2）加 `@r`。"""
+    names = []
+    last = None
+    r = 0
+    for slot, block in assigned:
+        base = slot["key"] if block == 1 else "%s#%d" % (slot["key"], block)
+        r = r + 1 if base == last else 1
+        last = base
+        names.append(base if r == 1 else "%s@%d" % (base, r))
+    return names
+
+
+def extract_scene(bridge, path, plan, clock_of):
+    bridge.call("open_capture", {"capture_path": path})
+    rdc = rdc_frame(os.path.basename(path))
+    out = {"frame": rdc + 1, "rdc_frame": rdc}
+    # 时钟取 [kbp] 日志（工程没有 CLK）；日志里没有这一帧时不写，摘要里报
+    clock = clock_of.get(str(rdc + 1))
+    if clock:
+        out["time"], out["dt"] = clock[1], clock[0]
+    actions = bridge.call("get_draw_calls", {"only_actions": True, "flags_filter": ["Drawcall"]})["actions"]
+    draws = []
+    for action in actions:
+        mesh = particle_draw(bridge, action["event_id"])
+        if mesh is None or not mesh.get("vertex_count"):
+            continue
+        try:
+            particles = decode_points(mesh)
+        except KeyError as error:
+            raise DataError("事件 %s 像粒子绘制，但顶点没有 %s（列 %s）" % (action["event_id"], error, sorted(mesh["columns"])))
+        if particles:
+            draws.append((action["event_id"], particles))
+    assigned, reason = assign_scene([len(p) for _, p in draws], plan["slots"])
+    names = name_scene(assigned) if assigned else ["draw%d" % (k + 1) for k in range(len(draws))]
+    out["systems"] = {name: particles for name, (_, particles) in zip(names, draws)}
+    out["events"] = {name: event for name, (event, _) in zip(names, draws)}
+    out["assigned"] = assigned is not None
+    if reason:
+        out["assign_note"] = reason
+    return out
+
+
 # ==================== 入口 ====================
 
 
@@ -362,7 +486,7 @@ def run(bridge, job, log):
     folder, tag, out_path = job["folder"], job["tag"], job["out"]
     if mode == "legacy":
         table = legacy_systems(project_dir)
-    else:
+    elif mode != "scene":
         meta = load_meta(project_dir)
     names = rdc_names(folder)
     frames, items = [], []
@@ -375,15 +499,30 @@ def run(bridge, job, log):
             row = extract_draws(bridge, path, meta, int(params.get("limit") or 20000))
         elif mode == "legacy":
             row = extract_legacy(bridge, path, table)
+        elif mode == "scene":
+            row = extract_scene(bridge, path, params["plan"], params.get("clock") or {})
         else:
             raise DataError("未知的认法 %s" % mode)
         seconds = round(time.time() - start, 3)
-        log("%s FR %s time %.6f dt %.6f %s（%.3f s）" % (name, row["frame"], row["time"], row["dt"],
-                                                      json.dumps(_summary(row, mode), ensure_ascii=False), seconds))
+        clock = ("time %.6f dt %.6f" % (row["time"], row["dt"])) if "time" in row else "日志里没有这一帧的时钟"
+        note = "" if row.get("assigned", True) else "（按绘制序号记：%s）" % row["assign_note"]
+        log("%s FR %s %s %s%s（%.3f s）" % (name, row["frame"], clock, json.dumps(_summary(row, mode), ensure_ascii=False),
+                                        note, seconds))
         frames.append(row)
-        items.append({"rdc": name, "rdc_frame": rdc_frame(name), "frame": row["frame"], "seconds": seconds,
-                      "systems": len(row["systems"])})
+        item = {"rdc": name, "rdc_frame": rdc_frame(name), "frame": row["frame"], "seconds": seconds,
+                "systems": len(row["systems"])}
+        if mode == "scene":
+            item["assigned"] = row["assigned"]
+        items.append(item)
     start = time.time()
-    save_json(out_path, {"source": "renderdoc", "project": params["project"], "tag": tag, "frames": frames})
+    data = {"source": "renderdoc", "project": params["project"], "tag": tag, "frames": frames}
+    if mode == "scene":
+        # 计划一并写出：键从哪个对象、哪一槽来，对不上的帧照它查
+        data["plan"] = params["plan"]
+    save_json(out_path, data)
     log("写出 %s（%.3f s）" % (out_path, time.time() - start))
-    return {"out": out_path, "mode": mode, "project": params["project"], "frames": len(frames), "items": items}
+    result = {"out": out_path, "mode": mode, "project": params["project"], "frames": len(frames), "items": items}
+    if mode == "scene":
+        result["unassigned"] = [r["frame"] for r in frames if not r["assigned"]]
+        result["no_clock"] = [r["frame"] for r in frames if "time" not in r]
+    return result

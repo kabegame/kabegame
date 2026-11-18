@@ -290,10 +290,39 @@ const WINDOW = z.tuple([z.number().positive(), z.number().positive()]).describe(
 const PASSES = z.union([z.literal(1), z.literal(2)]);
 const SEED = z.number().int().describe("随机种子，第 i 个粒子层用 seed + i；缺省 1");
 const RANDOM = z
-  .record(z.string().regex(/^\d+$/), z.array(z.number().min(0).lt(1)))
+  .record(z.string().regex(/^\d+$/), z.union([z.array(z.number().min(0).lt(1)), z.string().min(1)]))
   .describe(
-    "{ <objects 下标>: [R, …] }：按出生顺序顶替这个系统抽到的 R（[0, 1)），用完退回种子随机数。randomframe 系统和 WPE 比像素时填轨迹里的 frame",
+    "{ <objects 下标>: [R, …] }：按出生顺序顶替这个系统抽到的 R（[0, 1)），用完退回种子随机数。randomframe 系统和 WPE 比像素时注入 WPE 的 R" +
+      "（kbp rdc track 的 scene 认法轨迹里 TEXCOORD1 的 w，kbp cmp random 出表）。键是 scene.json objects 数组的下标、不是对象 id，不是粒子对象时探针报错；" +
+      "值可以写成 JSON 数组文件的路径（相对路径按仓库根），表有几百项时不用贴进调用",
   );
+
+/** `random` 里写成文件路径的值读成数组（相对路径按仓库根）；读不了或形状不对报 `[local]`。 */
+export function resolveRandom(
+  root: string,
+  random: Record<string, number[] | string> | undefined,
+): Record<string, number[]> | undefined {
+  if (!random) return undefined;
+  const out: Record<string, number[]> = {};
+  for (const [key, value] of Object.entries(random)) {
+    if (Array.isArray(value)) {
+      out[key] = value;
+      continue;
+    }
+    const file = resolvePath(root, value);
+    let list: unknown;
+    try {
+      list = JSON.parse(readFileSync(file, "utf8"));
+    } catch (error) {
+      throw new ToolError("local", `random 的 ${key} 读不了 ${file}：${(error as Error).message}`);
+    }
+    if (!Array.isArray(list) || list.some((r) => typeof r !== "number" || !(r >= 0 && r < 1))) {
+      throw new ToolError("local", `random 的 ${key}（${file}）要是 [0, 1) 里的数的 JSON 数组`);
+    }
+    out[key] = list as number[];
+  }
+  return out;
+}
 const TIMELINE = z
   .object({
     log: z
@@ -613,25 +642,27 @@ export function resolveReplay(
   lines: string[];
 } {
   if ("particles" in replay) {
-    const p = replay.particles;
+    const { random: given, ...p } = replay.particles;
+    const random = resolveRandom(root, given);
     return {
-      particles: p,
+      particles: { ...p, ...(random ? { random } : {}) },
       timeline: null,
       lines: [
         `回放：直接给的 ${p.dts.length} 帧 dt${p.times ? "（带 times）" : "（g_Time 按 dt 累加）"}；seed ${p.seed ?? 1}；passes ${p.passes ?? 1}` +
-          (p.random ? `；random 顶替 ${Object.keys(p.random).join("、")} 号对象的 R` : ""),
+          (random ? `；random 顶替 ${Object.keys(random).join("、")} 号对象的 R` : ""),
       ],
     };
   }
   const source = replay.timeline;
   const timeline = timelineFor(root, source);
   const passes = passesFor(replay.passes, timeline);
+  const random = resolveRandom(root, replay.random);
   const particles: ParticleReplay = {
     dts: timeline.dts,
     times: timeline.times,
     passes: passes.passes,
     ...(replay.seed !== undefined ? { seed: replay.seed } : {}),
-    ...(replay.random ? { random: replay.random } : {}),
+    ...(random ? { random } : {}),
     // 逐帧频谱（P11a）：录制按帧号对齐好的
     ...(timeline.audio ? { audio: timeline.audio.frames } : {}),
   };
@@ -643,7 +674,7 @@ export function resolveReplay(
     ...(window ? { window } : {}),
     lines: [
       describeTimeline(timeline),
-      `${passes.line}；seed ${replay.seed ?? 1}${replay.random ? `；random 顶替 ${Object.keys(replay.random).join("、")} 号对象的 R` : ""}`,
+      `${passes.line}；seed ${replay.seed ?? 1}${random ? `；random 顶替 ${Object.keys(random).join("、")} 号对象的 R` : ""}`,
     ],
   };
 }
@@ -1666,9 +1697,10 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         overwrite: OVERWRITE,
       },
     },
-    async ({ imageId, timeline: source, frames, passes, seed, random, host, out, overwrite }) => {
+    async ({ imageId, timeline: source, frames, passes, seed, random: given, host, out, overwrite }) => {
       const abs = resolvePath(root, out);
       if (!overwrite && existsSync(abs)) throw new ToolError("local", `${abs} 已存在：换个路径，或传 overwrite: true`);
+      const random = resolveRandom(root, given);
       const timeline = timelineFor(root, source);
       const wanted = frames ?? (timeline.captured.length ? timeline.captured : [timeline.frame]);
       const beyond = wanted.filter((f) => f > timeline.frame);

@@ -107,6 +107,25 @@ export function injectedR(values: readonly number[]): ParticleROverride {
   return (drawn) => (next < values.length ? f32(values[next++]) : drawn);
 }
 
+/**
+ * 注入表（`{ <objects 下标>: [R, …] }`）的键都要是粒子对象的 `objects` 下标（dev 回放，P11b2 走查起）：写成对象 id 或别的下标时
+ * 那一项以前静默不起作用、退回种子随机数，要到比像素才发现对不上。有不认识的键就报错，列出场景里的粒子对象。
+ */
+export function checkInjectedKeys(
+  random: Readonly<Record<number, readonly number[]>> | undefined,
+  layers: readonly { object: number; name: string; particle?: unknown }[],
+): void {
+  if (!random) return;
+  const particles = layers.filter((layer) => layer.particle);
+  const known = new Set(particles.map((layer) => String(layer.object)));
+  const unknown = Object.keys(random).filter((key) => !known.has(key));
+  if (!unknown.length) return;
+  const list = particles.map((layer) => `${layer.object}「${layer.name}」`).join("、") || "没有";
+  throw new Error(
+    `random 的键 ${unknown.join("、")} 不是粒子对象的 objects 下标（键是 scene.json objects 数组的下标，不是对象 id）；场景里的粒子对象：${list}`,
+  );
+}
+
 export class SeededRandom implements ParticleRandom {
   private readonly next: Uint32Source;
   /**

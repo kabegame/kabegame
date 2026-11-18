@@ -498,5 +498,10 @@ describe("场景时间 T（P4b 步骤 4）", () => {
     const summed = particleTrack({ layers, dts, times: [0.1, 0.1 + 0.1, 0.1 + 0.1 + 0.1], frames: [3], passes: 1 });
     expect(implicit.frames).toEqual(summed.frames);
     expect(() => particleTrack({ layers, dts, times: [1, 2], frames: [3], passes: 1 })).toThrow();
+    // 注入表的键要是粒子对象的 objects 下标（P11b2 走查：写成对象 id 时以前静默不起作用）
+    expect(() => particleTrack({ layers, dts, frames: [3], passes: 1, random: { 39: [0.5] } })).toThrow(
+      /random 的键 39 不是粒子对象的 objects 下标.*0「p」/,
+    );
+    expect(particleTrack({ layers, dts, frames: [3], passes: 1, random: { 0: [0.5] } }).frames).toHaveLength(1);
   });
 });

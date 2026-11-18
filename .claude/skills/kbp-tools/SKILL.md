@@ -1,6 +1,6 @@
 ---
 name: kbp-tools
-description: WPE 场景对比工具链（kbp-tools）：测试工程协议（FR 帧号图层、CLK 时钟图层、[kbp] 日志、kbp-meta.json、轨迹 JSON）的唯一属主，以及一个入口 kbp.py 下的子命令：造确定性测试工程（kbp gen，生成库 from kbp import gen，收了 ignore/p4 的 gen.py、gen_b.py、gen_c.py 的通用部分）；从 WPE 的 RenderDoc 抓帧（.rdc）无界面提取粒子轨迹、整帧图、粒子统计量（kbp rdc track|frame|stats，替代 rdc_track_b.py、rdc_rope.py、rdc_track.py、wpe_rt.py、wpe_export.py、wpe_stats_b.py）；在 Node 里用产品源码按 WPE 时间线回放粒子并逐粒子比（kbp replay，案例表 <data>/cases/，替代各步拷来拷去的 replay.test.ts）；全部案例在两份源码上跑并逐字节比较（kbp regress，替代 run_old.sh + cmp_old.py）；产品源码快照与补丁（kbp snapshot export|diff，替代手搭的 c1/ov、c5/head）；读 WPE 语料与 scene.pkg（kbp content，替代 scan_misc_lib.py、pkg_extract.py）；把真实工坊场景解包成带 [kbp] 日志的测试工程、按 WPE 实际帧时间回放（kbp content unpack --instrument，替代 unpack_proto.py 与手写 dt）；最终走查的复制工程（kbp content isolate：只留指定对象及其父链、依赖、合成 RT、脚本按名字找的对象，删掉其余，可把字段换成固定值，WPE 与 Kabegame 两边用同一份）；语料编译扫描与两次结果比较（kbp corpus scan|diff，附加字段插件，regress --corpus，替代各步的 corpus.test.ts、diff_corpus.py、corpus_diff.py）；变异检查（kbp mutate，快照模式按原字节还原、工作区模式反向替换，替代各步的 mutate.py）；比真机结果与 WPE 真值（kbp cmp track|frame|frames|stats，frames 按帧号配对一段录制逐帧比并汇总，按 kbp-meta.json 的 bbox 归类像素差、热图，替代 cmp-wpe.ts、cmp_scene.py、cmp_stats.py、heat.py）；离线四角（kbp corners offline，替代 corners-offline*）；PrintWindow 采样 MCP 开的测试窗口（kbp sample grab|series|read，替代 sampler_pw.py、run.py、w1080.py、wread.py）。凡是要新做一个 P4 / P5 的对照步骤、生成测试工程、从抓帧取 WPE 真值、回放对照、改模拟器前后做回归、在并行会话之外冻结产品源码时都用它。抓帧本身用 wpe-renderdoc MCP，驱动 Kabegame 用 kabegame-dev MCP。
+description: WPE 场景对比工具链（kbp-tools）：测试工程协议（FR 帧号图层、CLK 时钟图层、[kbp] 日志、kbp-meta.json、轨迹 JSON）的唯一属主，以及一个入口 kbp.py 下的子命令：造确定性测试工程（kbp gen，生成库 from kbp import gen，收了 ignore/p4 的 gen.py、gen_b.py、gen_c.py 的通用部分）；从 WPE 的 RenderDoc 抓帧（.rdc）无界面提取粒子轨迹（测试工程，以及真实壁纸的解包 / 复制工程）、整帧图、粒子统计量（kbp rdc track|frame|stats，替代 rdc_track_b.py、rdc_rope.py、rdc_track.py、wpe_rt.py、wpe_export.py、wpe_stats_b.py）；在 Node 里用产品源码按 WPE 时间线回放粒子并逐粒子比（kbp replay，案例表 <data>/cases/，替代各步拷来拷去的 replay.test.ts）；全部案例在两份源码上跑并逐字节比较（kbp regress，替代 run_old.sh + cmp_old.py）；产品源码快照与补丁（kbp snapshot export|diff，替代手搭的 c1/ov、c5/head）；读 WPE 语料与 scene.pkg（kbp content，替代 scan_misc_lib.py、pkg_extract.py）；把真实工坊场景解包成带 [kbp] 日志的测试工程、按 WPE 实际帧时间回放（kbp content unpack --instrument，替代 unpack_proto.py 与手写 dt）；最终走查的复制工程（kbp content isolate：只留指定对象及其父链、依赖、合成 RT、脚本按名字找的对象，删掉其余，可把字段换成固定值，WPE 与 Kabegame 两边用同一份）；语料编译扫描与两次结果比较（kbp corpus scan|diff，附加字段插件，regress --corpus，替代各步的 corpus.test.ts、diff_corpus.py、corpus_diff.py）；变异检查（kbp mutate，快照模式按原字节还原、工作区模式反向替换，替代各步的 mutate.py）；比真机结果与 WPE 真值（kbp cmp track|frame|frames|stats|random，frames 按帧号配对一段录制逐帧比并汇总，random 出 randomframe 粒子的 R 注入表，按 kbp-meta.json 的 bbox 归类像素差、热图，替代 cmp-wpe.ts、cmp_scene.py、cmp_stats.py、heat.py）；离线四角（kbp corners offline，替代 corners-offline*）；PrintWindow 采样 MCP 开的测试窗口（kbp sample grab|series|read，替代 sampler_pw.py、run.py、w1080.py、wread.py）。凡是要新做一个 P4 / P5 的对照步骤、生成测试工程、从抓帧取 WPE 真值、回放对照、改模拟器前后做回归、在并行会话之外冻结产品源码时都用它。抓帧本身用 wpe-renderdoc MCP，驱动 Kabegame 用 kabegame-dev MCP。
 ---
 
 # kbp-tools
@@ -95,7 +95,7 @@ PROJECTS = {"p5x-demo": p5x_demo}
 ### `kbp rdc` — 从抓帧取真值
 
 ```bash
-kbp.py rdc track <抓帧目录> <标签> [工程] [--draws | --points] [--limit N] [--out 文件] [--data 目录]
+kbp.py rdc track <抓帧目录> <标签> [工程] [--draws | --points] [--limit N] [--log 日志] [--out 文件] [--data 目录]
 kbp.py rdc frame <抓帧目录> <标签> [--event N | --present] [--out 目录] [--data 目录]
 kbp.py rdc stats <抓帧目录> <标签> [--out 文件] [--data 目录]
 kbp.py rdc shaders <抓帧目录> <标签> [--out 文件] [--data 目录]
@@ -117,7 +117,10 @@ kbp.py rdc consts <抓帧目录> <标签> [--names 名字,…] [--no-clock] [--o
   - 不给时从标签的 `<工程>-fps<N>…` 推（`p4c-cp-fps60` → `p4c-cp`），老标签（`fps60`）要显式给 `p4-0`。
 - **`track` 的认法**按工程自动选，摘要里的 `mode` 报出来，`mode_source` 说明从哪来（`flag` 命令行、`meta`、`auto`）：
   - `kbp-meta.json` 有 `track: "draws"`（生成库的 `write_project(…, track="draws")` 写）是 `draws`；
-  - 否则有 `kbp-meta.json` 是 `points`，没有 meta 的老工程（`p4-0`、`p4a*`）是 `legacy`；
+  - 否则有 `kbp-meta.json` 是 `points`；
+  - 没有 meta、入口场景的 `objects` 里有 `kbp-FR`（真实壁纸的 `content unpack|isolate --instrument`）是 `scene`，见「轨迹 JSON」的 scene 认法；
+    time / dt 取 `--log`（缺省 `<data>/out/<标签>-log.txt`，`capture_sweep` 的 `log_dir` 约定）；
+  - 其余没有 meta 的老工程（`p4-0`、`p4a*`）是 `legacy`；
   - 命令行优先：`--draws` 强制按绘制（`gen_d.py` 生成的老 `p4d-*` 工程没有 `track`，仍要显式加），`--points` 强制按粒子。
 - **`frame` 的取法**：
   - 缺省取最后一次绘制之后的渲染目标 0；
@@ -284,7 +287,10 @@ kbp.py cmp frame <我们.png> <wpe.png> [--meta kbp-meta.json | --kbp-layers] [-
 kbp.py cmp frames <我们目录> <WPE 目录> [--ours-pattern 'ours-f{frame}.png'] [--wpe-pattern 'wpe-*-f{frame}.png'] [--frames 241,250-255]
                   [--threshold 32] [--cell 32] [--heat-dir 目录 [--heat-gain 8]] [--meta … | --kbp-layers] [--crop …] [--resize] [--out 文件]
 kbp.py cmp stats <real.json> <wpe-标签-stats.json> [--label 样本] [--out 文件]
-# 公共：--overwrite；不给 --out 时报告行放在摘要的 text，给了另写 <out>.json
+kbp.py cmp random-encode <个数> --out 表.json
+kbp.py cmp random <我们第一遍.json> <rd-标签.json> --system 键 --out 表.json [--frames 225-228] [--count N] [--fill 0.5]
+                  [--column TEXCOORD1] [--tolerance 1e-3]
+# 公共：--overwrite；不给 --out 时报告行放在摘要的 text，给了另写 <out>.json（random / random-encode 的 --out 是表本身、必给）
 ```
 
 - **track**（`dev4/cmp-wpe.ts`）：kabegame-dev 的 `particle_track` 结果（或任何「每粒子一行」的轨迹）对 WPE 轨迹：WPE 的每一帧、两边系统
@@ -312,6 +318,14 @@ kbp.py cmp stats <real.json> <wpe-标签-stats.json> [--label 样本] [--out 文
   - **热图**：`--heat-dir` 只给有差的帧写 `heat-f<帧>.png`（同 `frame --heat`）。不加 `--overwrite` 时要比的帧里已有热图就先整批拒绝，
     加了时这次逐像素相同的帧的旧热图删掉（只删本命令起的名字），目录和报告对得上。
   - 摘要：`compared`、`same`（个数）、`differ`（帧列表）、`worst`、`missing: { ours, wpe }`、`heats`。
+- **random-encode / random**（P11b2 走查后补，替代 `ignore/p11/b2/make_random.py`、`merge_random.py`）：randomframe 系统的 `R` 注入表，
+  流程见「真实场景的回放」第 7 步。
+  - `random-encode N`：第一遍的表 `[k / 100000]`（k = 0…N−1，N ≤ 100000），回放后 randomframe 粒子的 frame（就是 `R`）× 100000 是出生序号。
+  - `random`：我们第一遍的轨迹（`particle_track`，注入 `random-encode` 的表）对 WPE 轨迹（`kbp rdc track`，points / scene 认法，每粒子带
+    `TEXCOORD1`），同帧同系统**按数组顺序**配对（P4 起两边的粒子数组顺序相同）；位置差超过 `--tolerance` 报错（顺序或模拟对不上，随机项
+    没收成固定值时就会这样），粒子数不同报错；出生序号 k = round(我们的 `thick[3]` × 100000)，`R` = WPE 的 `TEXCOORD1[3]`，几帧合并、同一
+    序号对到不同的 `R` 报错；没配上的序号填 `--fill`（那些粒子在抓到的帧里已死、不画）。表长缺省最大序号 + 1。
+  - 2026-11-19 `3799462430` 樱花复制工程四帧：184 个出生序号（106–289），和走查时手工按位置配对、合并的表 400 项逐项相同。
 - **stats**（`b3/cmp_stats.py`、`b4v/cmp_stats.py`）：我们是屏外宿主回放的 `real.json`（`samples.<名字>.particles[]` 每层 `alive`、`capacity`、
   `summary`），WPE 是 `kbp rdc stats` 的结果。层按绘制顺序一一对应，WPE 各帧合并取范围（先舍入到 3 位，同 b3），报粒子数、尺寸、x、y、
   alpha；WPE 多出的绘制（我们不支持的子系统）单列。粒子随机，只比统计量。
@@ -510,7 +524,7 @@ kbp.py content isolate <工程> --keep <id|名字>,… [--drop <id|名字>,…] 
   - 正交 1920×1080，`hdr` / `bloom` 关，黑底清屏；
   - `version` 缺省 3，可另给，`None` 时不写这个键。
 - **例外**：`content unpack --instrument` 解包的真实场景只有一个 FR，名字 `kbp-FR`、在 `objects` **末尾**、画面外，没有 CLK、没有
-  `kbp-meta.json`，`kbp rdc track` 不管这种工程（见「真实场景的回放」）。
+  `kbp-meta.json`；`kbp rdc track` 对这种工程走 scene 认法（帧号取文件名、时钟取日志，见「轨迹 JSON」）。
 
 ### `[kbp]` 日志
 
@@ -631,6 +645,22 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
   - 颜色表从 `scene.json` 与 `particles/*.json` 的 `colorrandom.min` 读；
   - 每行只有 `pos`、`size`、`color`、`alpha`、`rot`，没有其余顶点列，也没有 `pointer`；
   - 帧里总有 `corners`：只给 `linear` / `custom` / `rot-gs` / `rot-vs`，形如 `{"u,v": [裁剪 x, 裁剪 y]}`（两条路径角点顺序不同，按 UV 配对）。
+- **scene 认法**（真实壁纸的解包 / 复制工程，`content unpack|isolate --instrument`，P11b2 走查后补；本机 `py/scene_track.py`、
+  RenderDoc 一侧 `rdc/track.py` 的 `extract_scene`）：
+  - **帧级字段**：`frame` 是 RenderDoc 帧号 + 1（同 unpack 的约定），`time` / `dt` 取 `[kbp]` 日志这一帧的累计时间 / 帧时间（`@f64`
+    条目是 WPE 的 float32 值原样，和 CLK 读到的相同）；日志里没有这一帧时不写这两个键，摘要的 `no_clock` 列出来（这样的轨迹不能当
+    时间线的 `track` 用）。没有 `pointer`。另有 `events`（键 → 事件号）、`assigned`，对不上计划时有 `assign_note`。
+  - **粒子绘制**按顶点输入认（同 `stats`），每粒子一条同 points 认法（`pos`、`size`、`color`、`alpha`、`rot` 与其余顶点列，如厚格式
+    与 randomframe 的 `TEXCOORD1`，`R` 在它的 w）；存活数为 0 的系统 WPE 不画。
+  - **计划**（顶层 `plan`，同时写进轨迹）：入口场景的粒子对象按 `objects` 顺序（`visible` 写死为假的对象与父链不画，没有基础材质的
+    系统连子树不画），每个对象一棵系统树按产品 `forEachDrawn` 的先序（父 → 全部 static 子系统各带子树 → 各事件条目的实例），每个系统按
+    `renderer` 数组连着画几次。键和 kabegame-dev 的 `particle_track` 相同，`kbp cmp track` 直接配：对象名（同名第二个起 `名字#<objects 下标>`）、
+    子系统 `<父键>/<下标>`（下标数认得的条目：类型是小写四种之一、文件读得到）、事件实例第 k 个 `#k`，同一系统第 r 个 renderer 那次另加 `@r`
+    （`particle_track` 每个系统只出一份，比的时候 `--skip`）。
+  - **分槽**：每帧把非空的粒子绘制按顺序分进计划的槽（static 槽 0 或 1 块、事件槽 0 到条目 `maxcount` 块，一块是 `renderer` 数那么多次、
+    粒子数相同、不超过系统的 `maxcount`）。**恰好一种分法**才按计划起名；没有或不止一种（有系统存活数为 0、事件实例数不定、事件子系统
+    下面还有要画的子系统）时这一帧按 `draw1`、`draw2`… 记，`assigned: false`，摘要的 `unassigned` 列出来，不猜。
+  - 自测 `tests/scene_track.py`（不起 RenderDoc：计划、日志时钟、分槽与起名）。
 
 ### 整帧图与统计量
 
@@ -774,8 +804,9 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
    - 日志在 `<data>/out/<标签>-log.txt`，`<标签>-errors.txt` 应为空。
 3. **回放我们的**：kabegame-dev 的 `projects_import` 导入副本目录，再
    `render_scene { imageId, replay: { timeline: { log: "<data>/out/<标签>-log.txt", frame: <RenderDoc 帧号 + 1>, cursors: "log" } }, canvas: [<宽>, <高>] }`。
-   - 不给 `track`：没有 CLK，`kbp rdc track` 不管这种工程；
+   - 不用给 `track`：日志是精确的（`@f64`），scene 认法的轨迹的时钟也是从这份日志来的，给不给结果相同；
    - `frame` 是 WPE 脚本帧号，等于抓帧文件名里的 RenderDoc 帧号 + 1；光标逐帧取自日志。
+   - 一段连续帧用 kabegame-chromium 的 `renderFrames.ts`（同样的参数，`--frames 225-228`），输出直接给第 5 步的 `kbp cmp frames`。
    - `canvas` 传和抓帧窗口相同的尺寸（标签里的 `<宽>x<高>`）：探针把这一帧按 `fill` 用产品上屏的同一份着色器铺进这么大的画布再读回，
      读回的就是窗口尺寸，比较不用再缩放（kabegame-chromium 第 5 批，见其 SKILL.md「读回画布」）。和时间线的窗口不同会报 `[local]`；
      不传时读回场景目标（场景分辨率），结果里会提示该传的 `canvas`。
@@ -783,6 +814,18 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 4. **WPE 的图**：`kbp rdc frame A:\<项目>\<标签> <标签> --present --data <data>`（文件名 `wpe-<标签>-f<RenderDoc 帧号 + 1>`）。
 5. **比图**：`kbp cmp frame <我们的.png> <WPE 的.png>`。第 3 步传了 `canvas` 时两张同尺寸；没传、我们的图比 WPE 大时加 `--resize`（按
    cover 缩到同尺寸）。不传 `--meta` / `--kbp-layers`：FR 在画面外，没有要屏蔽的块。
+6. **逐粒子比**（P11b2 走查后补）：`kbp rdc track A:\<项目>\<标签> <标签> [工程] --data <data>`（scene 认法，见「轨迹 JSON」）取 WPE 每个
+   粒子的顶点；kabegame-dev 的 `particle_track { imageId, timeline: { log, cursors: "log" }, frames: […], out }` 出我们的；
+   `kbp cmp track <我们的> <rd-标签.json>` 按系统、按数组顺序配对报各字段最大差。复制工程要先把随机项收成固定值（`content isolate` 的
+   字段替换，粒子 JSON 的 min = max），否则两边的随机数不同、只能比统计量（`kbp rdc stats` + `kbp cmp stats`）。
+7. **randomframe 的 `R`**（帧号由出生时的 `R` 定，收不成固定值）：WPE 的 `R` 在 scene 认法轨迹每个粒子的 `TEXCOORD1` 的 w。按出生顺序
+   注入，三步：
+   - `kbp cmp random-encode 400 --out <enc.json>`，`particle_track { …, frames: [抓到的帧], random: { "<objects 下标>": "<enc.json>" } }`
+     出我们第一遍的轨迹（个数要够这段回放里出生的粒子）；
+   - `kbp cmp random <我们第一遍.json> <rd-标签.json> --system <键> --out <表.json>`：按数组顺序配对，把 WPE 的 `R` 填到出生序号上；
+   - 第二遍用这张表：`render_scene` 的 `replay.random: { "<objects 下标>": "<表.json>" }`，或 `renderFrames.ts --random <objects 下标>=<表.json>`
+     一次回放一段，再 `kbp cmp frames`。表的键是 `objects` **下标**、不是对象 id，写错时探针报错并列出场景里的粒子对象。
+   2026-11-19 `3799462430` 樱花复制工程：第 225–228 帧注入后对 WPE 最大差 2（`rcpps(9)` 与着色器舍入，见 P11b2 子计划「走查」）。
 
 取舍：
 

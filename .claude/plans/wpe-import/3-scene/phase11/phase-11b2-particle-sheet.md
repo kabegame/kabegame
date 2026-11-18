@@ -217,6 +217,24 @@ WPE 的粒子系统只在**加载时**看一次材质槽 0 的纹理：带帧表
 
 **未解释**：无。`leaves7`（85×102）两种参考尺寸算法都得 166，所以第一张没暴露那个 bug——正是 FINAL_CHECK 说的「生成工程的验收证明不了真实壁纸」。
 
-**工具缺口**（没修，记下）：`renderFrames.ts` 不收 `random`，注入 `R` 只能逐帧调 `render_scene`、把几百个数贴进调用；`kbp rdc track` 不认解包的真实工程，取 `R` 靠自己按位置配对。
+**工具缺口**（走查时没修，记下）：`renderFrames.ts` 不收 `random`，注入 `R` 只能逐帧调 `render_scene`、把几百个数贴进调用；`kbp rdc track` 不认解包的真实工程，取 `R` 靠自己按位置配对。
 
 **期间的失误**：命令里三次误带了读 stdin / `-c` 的空 Python 调用（没有执行任何代码），违反「Python 只用脚本文件」。
+
+### 补工具缺口（2026-11-19，用户「修复你提到的两个工具缺口」）
+
+- **`renderFrames.ts --random`**：合成 `replay.random`，每帧都带整张表；`<表>` 是 JSON 对象（串或文件），或 `<objects 下标>=<R 数组的串或文件>`，可以给多次，形状先查。
+- **`kbp rdc track` 的 scene 认法**（`py/scene_track.py`、`rdc/track.py` 的 `extract_scene`）：入口场景有 `kbp-FR`、没有 meta 的工程自动走它；帧号取文件名 + 1、时钟取 `[kbp]` 日志；粒子绘制按顶点输入认，按 `scene.json` 与粒子 JSON 出的计划分槽（先序同 `forEachDrawn`、键同 `particle_track`），恰好一种分法才起名，否则这一帧按 `draw<k>` 记。
+- **顺带**（验证时踩到的）：
+  - **MCP 的 `random` 值可写 JSON 文件路径**：要等 MCP 重连才生效；
+  - **`kbp cmp random-encode` / `kbp cmp random`**：按数组顺序配对出注入表，替代 `make_random.py`、`merge_random.py`；
+  - **探针查注入表的键**：键不是粒子对象的 `objects` 下标时报错。原来写成对象 id（39）会被静默忽略，回放退回种子随机数，比像素才发现差 124。
+- **验证**（复制工程 15616 叶子、15615 樱花，用完已移除）：
+  - **叶子**：`kbp rdc track` 两个系统起名 `叶子 2`、`叶子 2/0`，和走查时经 MCP 手取的 vs_in 逐项 0 差。`particle_track` 对它 `kbp cmp track` 各 180 对，pos / size / color / rot 0 差，alpha 2.44e-3（`rcpps(9)`）。
+  - **樱花**：按数组顺序 720 对，位置 0 差，说明两边的粒子数组顺序相同。`kbp cmp random` 出的表和走查时手工按位置配对、合并的表 400 项逐项相同。`renderFrames.ts --random 0=<表> --frames 225-228` 四帧对 WPE 最大差 2，同走查结论，走查时只手工做了 225、228 两帧。
+- **自测与单测**：
+  - `kbp-tools/tests/scene_track.py` 23 项；
+  - `renderFrames.test.ts`、dev MCP `particles.test.ts`；
+  - wpe-scene `render/particles.test.ts`、`particles/noise.test.ts`；
+  - 变异 4 处（两个探针调用点、唯一分法、位置容差）全部检出。
+- **失误**：验证时又一次在命令末尾带了空的 `python -X utf8 -I -c ""`（没有执行代码），违反「Python 只用脚本文件」。

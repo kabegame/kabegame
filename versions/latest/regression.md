@@ -3239,6 +3239,20 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | U10 大图 | Windows dev | 选一张 6000×3000 的 JPEG，再换回小图 | 解码完成后换上（晚几帧）、不卡死；裁成 3000×3000 | 待真机确认 |
 | [ ] | U11 非 Windows | macOS / Linux | 预览一张带 `scenetexture` 的场景并选图 | 同 Windows | 本机不能测 |
 
+## 场景走查工具：真实壁纸的逐粒子对照与 R 注入（P11b2 走查后补）
+
+2026-11-19 Windows dev。`kbp rdc track` 的 scene 认法、`kbp cmp random-encode` / `random`、`renderFrames.ts --random`、MCP `random` 的文件写法、探针查注入表的键。数据在 `ignore/p11/b2/`（`tracks/`、`out/tools-*`），复制工程 15616（叶子）、15615（樱花）用完已移除。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | R0 单测与检查 | Windows | `kbp-tools/tests/scene_track.py`；`deno test -A --no-check` 跑 `renderFrames.test.ts`、`particles.test.ts`；`deno check` 两个源文件；`apps/wpe-scene` 的 tsc、vitest `render/particles.test.ts`、`particles/noise.test.ts` | 全过 | 2026-11-19 Claude：自测 23 项、deno 9 组 53 步、vitest 90 个全过，tsc 0 error；变异 4 处（两个探针调用点、唯一分法、位置容差）全部检出 |
+| [x] | R1 scene 认法取 WPE 粒子 | RenderDoc 1.47（无界面） | `kbp rdc track A:\p11b2\3812473896-iso-leaves-fps20-1920x1080 <标签> --data ignore/p11/b2` | 自动选 scene，4 帧两个系统按计划起名，顶点和手取的相同 | 2026-11-19 Claude：`叶子 2`、`叶子 2/0` 各 45 个，`unassigned` / `no_clock` 为空；第 226 帧事件 21、34 和走查时经 MCP 手取的 vs_in 逐项 0 差 |
+| [x] | R2 真实壁纸逐粒子比 | Windows dev，屏外宿主 | `particle_track`（时间线带 R1 的轨迹）后 `kbp cmp track` | 位置、尺寸、颜色、旋转 0 差，alpha 只有已知的近似倒数差 | 2026-11-19 Claude：叶子两系统各 180 对、樱花 720 对，pos / size / color / rot 0，alpha 2.44e-3（`rcpps(9)`）；R1 的轨迹当时间线 `track` 收下 |
+| [x] | R3 R 注入表 | Windows dev + Node | `kbp cmp random-encode 400` → `particle_track` 注入 → `kbp cmp random … --system 樱花` | 和走查时手工配对、合并的表相同 | 2026-11-19 Claude：184 个出生序号（106–289），400 项逐项相同；位置容差、R 冲突、粒子数不同各报错（自测） |
+| [x] | R4 一段带注入的回放 | Windows dev | `renderFrames.ts --image 15615 --frames 225-228 --random 0=<表> --canvas 1920x1080 --postprocess ultra` 后 `kbp cmp frames` | 四帧对 WPE 最大差 2（同走查） | 2026-11-19 Claude：四帧最大 2、> 2 的像素 0 |
+| [x] | R5 注入表的键写错 | Windows dev | 同 R4，`--random 39=<表>`（对象 id，不是下标） | 报错并列出粒子对象，不再静默退回种子随机数 | 2026-11-19 Claude：报「random 的键 39 不是粒子对象的 objects 下标…；场景里的粒子对象：0「樱花」」；改之前这样跑最大差 124 |
+| [ ] | R6 MCP `random` 写文件路径 | 会话里的 kabegame-dev MCP | MCP 重连后 `particle_track { …, random: { "0": "<表.json>" } }` | 读成数组转给探针 | 单测覆盖；本会话的 MCP 进程是改之前起的（报 `Expected array`），要重连后再试 |
+
 ## 场景壁纸粒子精灵表槽的用户纹理（P11b2）
 
 2026-11-18。粒子材质槽 0 的缺省是精灵表、又绑了 `scenetexture` 时，按属性的**当前值**定这个粒子系统是不是精灵表：有图（文件读得到）则每个粒子画整张，清空则回到精灵表一格一格播，改值时只重编这个对象、当场生效（WPE 只在加载时定一次、运行中选的图被切成格子，有意不同）。不再报 `usertextures:particle-sheet`。测试工程在 `ignore/p11/proj/`（`p11b-sheet*`，由 `ignore/p11/b2/make_sheet_init.py`、`make_sheet_live.py` 生成），WPE 抓帧在 `A:\p11b2\`，计划与实测见 `.claude/plans/wpe-import/3-scene/phase11/phase-11b2-particle-sheet.md`。

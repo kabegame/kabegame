@@ -4,7 +4,8 @@
  * ```text
  * deno run -A apps/kabegame-dev-mcp/src/renderFrames.ts --image <id> --frames 241,242,250-255 --out <目录>
  *   [--timeline-log <日志> [--timeline-track <轨迹>] [--cursors log|track] [--cursor x,y] [--window WxH] [--gap error|split]
- *    [--audio <录制>] [--seed N] [--passes 1|2] [--no-fr]]
+ *    [--audio <录制>] [--seed N] [--passes 1|2] [--random <表> …] [--no-fr]]
+ *                                                   --random 的 <表>：JSON 对象（串或文件），或 <objects 下标>=<R 数组的串或文件>
  *   [--fps N | --time 秒]                           不给日志时：每帧 g_Time = 帧号 / fps（名义时间），或每帧同一个时刻
  *   [--canvas WxH [--style fill|fit|stretch|center] [--render-mode target|scene]] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON] [--gif-dts 秒,秒…|JSON]
  *   [--user-properties <JSON 文件或 JSON 串>] [--scripts [--clock 毫秒] [--script-seed N] [--prewarm-fragments]]
@@ -17,6 +18,8 @@
  * `InMemoryTransport` 连一个客户端，按帧 `callTool("render_scene", …)`。时间线、canvas 与窗口的校验、FR 涂色、逐 draw 轨迹的落盘都在
  * 工具里，行为和会话里调 MCP 逐字相同；这里不另写时间线逻辑，只拼参数、收结果。
  * - 回放模式（给 `--timeline-log`）：第 f 帧传 `replay: { timeline: { log, track?, frame: f, … } }`，其余参数原样；
+ *   `--random`（合成 `{ "<objects 下标>": [R, …] }`，同 render_scene 的 `replay.random`，可以给多次）每一帧都带整张表：每帧都从第 1 帧
+ *   回放，按出生顺序取用，回放到哪一帧就用掉表的前多少项（randomframe 的系统和 WPE 逐帧比像素时注入 WPE 的 `R`，表通常几百项，放文件里）；
  * - 时刻模式（不给日志）：第 f 帧传 `time: f / fps`（或 `--time` 的固定值），粒子是预热后的状态（同 render_scene 不给 replay）。
  * - 运行中建层的预跑（活的场景图 L5，`--prewarm-fragments`，要和 `--scripts` 一起给）：每一帧都先空跑一遍把脚本 `createLayer` 建出的配置
  *   编进片段缓存，正式那一遍第一轮就命中、当帧画出（和 WPE 逐帧比时用）；不给时照产品行为（第一次出现的配置晚几帧）。
@@ -64,6 +67,8 @@ export interface RenderFramesOptions {
   };
   seed?: number;
   passes?: 1 | 2;
+  /** `replay.random`：按对象顶替粒子系统抽到的 `R`，每一帧都带整张表；不给时不传。 */
+  random?: Record<string, number[]>;
   /** `replay.fr`；缺省不传（工具缺省 true）。 */
   fr?: boolean;
   /** 时刻模式：g_Time = 帧号 / fps。 */
@@ -159,6 +164,40 @@ function jsonArg(text: string, cwd: string, what: string): unknown {
   }
 }
 
+/**
+ * `--random` 的表（同 render_scene 的 `replay.random`：`{ "<objects 下标>": [R, …] }`，R 在 [0, 1)）。可以给多次，每次是下面一种：
+ * - JSON 对象（串或文件）：整张表；
+ * - `<objects 下标>=<数组>`：一个系统的 R，数组是 JSON 串或 JSON 文件（走查时按系统各存一份数组）。
+ * 同一个下标出现两次报错。这里先查，形状不对不开宿主；写错的对象下标（场景里没有这个粒子对象）不查，探针照样回放、那一项不起作用。
+ */
+export function parseRandom(values: readonly string[], cwd: string): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  const put = (key: string, list: unknown) => {
+    if (!/^\d+$/.test(key)) throw new ArgError(`--random 的键要是对象下标（数字）：${JSON.stringify(key)}`);
+    if (key in out) throw new ArgError(`--random 给了两次对象 ${key}`);
+    if (!Array.isArray(list) || list.some((r) => typeof r !== "number" || !(r >= 0 && r < 1))) {
+      throw new ArgError(`--random 的 ${key} 要是 [0, 1) 里的数的数组`);
+    }
+    out[key] = list as number[];
+  };
+  for (const text of values) {
+    const pair = /^(\d+)=(.+)$/s.exec(text.trim());
+    if (pair) {
+      put(pair[1], jsonArg(pair[2], cwd, `--random ${pair[1]}=`));
+      continue;
+    }
+    const table = jsonArg(text, cwd, "--random");
+    if (!table || typeof table !== "object" || Array.isArray(table)) {
+      throw new ArgError(
+        '--random 要是 JSON 对象 { "<objects 下标>": [R, …] }，或 <objects 下标>=<R 数组的 JSON 串或文件>',
+      );
+    }
+    for (const [key, list] of Object.entries(table as Record<string, unknown>)) put(key, list);
+  }
+  if (!Object.keys(out).length) throw new ArgError("--random 是空表");
+  return out;
+}
+
 /** 命令行 → 选项。参数错抛 `ArgError`。 */
 export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptions {
   let parsed;
@@ -180,6 +219,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
         audio: { type: "string" },
         seed: { type: "string" },
         passes: { type: "string" },
+        random: { type: "string", multiple: true },
         "no-fr": { type: "boolean" },
         fps: { type: "string" },
         time: { type: "string" },
@@ -208,7 +248,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
   } catch (error) {
     throw new ArgError((error as Error).message);
   }
-  const v = parsed.values as Record<string, string | boolean | undefined>;
+  const v = parsed.values as Record<string, string | string[] | boolean | undefined>;
   const str = (key: string) => v[key] as string | undefined;
   const image = str("image");
   if (!image || !/^\d+$/.test(image)) throw new ArgError("--image 要给图片 id（数字）");
@@ -222,7 +262,18 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
     overwrite: !!v.overwrite,
   };
   const log = str("timeline-log");
-  const timelineOnly = ["timeline-track", "cursors", "cursor", "window", "gap", "audio", "seed", "passes", "no-fr"];
+  const timelineOnly = [
+    "timeline-track",
+    "cursors",
+    "cursor",
+    "window",
+    "gap",
+    "audio",
+    "seed",
+    "passes",
+    "random",
+    "no-fr",
+  ];
   if (log) {
     if (str("fps") !== undefined || str("time") !== undefined) {
       throw new ArgError("--timeline-log（回放）与 --fps / --time（时刻模式）不能同给");
@@ -249,6 +300,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
       if (passes !== 1 && passes !== 2) throw new ArgError(`--passes 只收 1 / 2：${passes}`);
       options.passes = passes as 1 | 2;
     }
+    if (v.random !== undefined) options.random = parseRandom(v.random as string[], cwd);
     if (v["no-fr"]) options.fr = false;
   } else {
     const given = timelineOnly.filter((key) => v[key] !== undefined);
@@ -416,6 +468,7 @@ export function renderArgs(options: RenderFramesOptions, frame: number, host?: s
       timeline: { ...options.timeline, frame },
       ...(options.seed !== undefined ? { seed: options.seed } : {}),
       ...(options.passes !== undefined ? { passes: options.passes } : {}),
+      ...(options.random ? { random: options.random } : {}),
       ...(options.fr !== undefined ? { fr: options.fr } : {}),
     };
   } else {

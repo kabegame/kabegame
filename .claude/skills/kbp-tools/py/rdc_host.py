@@ -18,7 +18,7 @@ import sys
 import tempfile
 import time
 
-from . import common
+from . import common, scene_track
 from .common import KbpError
 
 RDC_DIR = os.path.join(common.SKILL_DIR, "rdc")
@@ -97,13 +97,30 @@ def plan(action, args):
             if meta_track not in ("draws", "points"):
                 raise KbpError("data", "%s 的 track 只能是 draws 或 points，收到 %r" % (meta_path, meta_track))
             mode, source = meta_track, "meta"
+        elif not has_meta and scene_track.instrumented(project_dir):
+            # 真实壁纸的解包 / 复制工程：只有末尾一个 kbp-FR，没有 CLK、没有 meta
+            mode, source = "scene", "auto"
         else:
             mode, source = ("points", "auto") if has_meta else ("legacy", "auto")
         job["mode_source"] = source
         if mode == "legacy" and not os.path.isfile(os.path.join(project_dir, "scene.json")):
             raise KbpError("data", "工程没有 kbp-meta.json 也没有 scene.json：%s" % project_dir)
+        if args.log and mode != "scene":
+            raise KbpError("kbp", "--log 只给真实壁纸的解包 / 复制工程（scene 认法）用，这个工程是 %s 认法" % mode)
         out = os.path.abspath(args.out) if args.out else os.path.join(data, "tracks", "rd-%s.json" % tag)
         job["params"] = {"project": project, "project_dir": project_dir, "mode": mode, "limit": args.limit}
+        if mode == "scene":
+            plan_ = scene_track.build_plan(project_dir)
+            if not plan_["slots"]:
+                raise KbpError("data", "工程 %s 里没有要画的粒子系统（%s）" % (project_dir, "；".join(plan_["notes"]) or "没有粒子对象"))
+            log = os.path.abspath(args.log) if args.log else os.path.join(data, "out", "%s-log.txt" % tag)
+            if not os.path.isfile(log):
+                raise KbpError("data", "找不到 [kbp] 日志 %s（capture_sweep 的 log_dir 约定是 <data>/out；别处的用 --log）" % log)
+            clock = scene_track.read_log_clock(log)
+            frames = [int(FRAME_RE.search(n).group(1)) + 1 for n in names]
+            job["params"].update({"plan": plan_, "log": log,
+                                  "clock": {str(f): clock[f] for f in frames if f in clock}})
+            job["notes"] = plan_["notes"]
         outputs = [out]
     elif action == "frame":
         out = os.path.abspath(args.out) if args.out else os.path.join(data, "out")
@@ -224,11 +241,13 @@ def run(action, args):
             shutil.rmtree(work, ignore_errors=True)
 
     summary = {"ok": True, "action": action, "tag": job["tag"], "folder": job["folder"], "out": result.get("out")}
-    for key in ("index", "mode", "project", "frames"):
+    for key in ("index", "mode", "project", "frames", "unassigned", "no_clock"):
         if key in result:
             summary[key] = result[key]
     if "mode_source" in job:
         summary["mode_source"] = job["mode_source"]  # flag：命令行；meta：kbp-meta.json 的 track；auto：按有没有 meta
+    if job.get("notes"):
+        summary["notes"] = job["notes"]  # scene 认法出计划时的说明（读不到的粒子文件、带子系统的事件子系统）
     summary["seconds"] = {
         "startup": round(result["ready_at"] - spawned, 3),
         "total": round(finished - spawned, 3),

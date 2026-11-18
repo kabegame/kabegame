@@ -11,7 +11,7 @@
   content isolate：复制工程，只留指定对象及其闭包（最终走查）；
 - corpus scan|diff：语料编译扫描与两次结果的比较，regress --corpus 用它（第 3 批）；
 - mutate --spec <清单>：变异检查（快照模式按原字节还原，工作区模式反向替换）（第 3 批）；
-- cmp track|frame|stats、corners offline：比真机结果与 WPE 真值、离线四角（第 3 批）；cmp frames：按帧序列批量比、汇总（最终走查）；
+- cmp track|frame|stats、corners offline：比真机结果与 WPE 真值、离线四角（第 3 批）；cmp frames：按帧序列批量比、汇总（最终走查）；cmp random-encode|random：randomframe 的 R 注入表（P11b2 走查后补）；
 - sample grab|series|read：PrintWindow 采样 MCP 开的测试窗口（第 3 批）。
 
 输出约定：stdout 一行 JSON 摘要（ok、产物路径、要点），细节写文件；失败退出码非 0，错误开头标层（[data]、[wpe]、
@@ -75,6 +75,9 @@ def _parser():
     track.add_argument("--points", action="store_true",
                        help="强制按粒子认（覆盖 kbp-meta.json 的 track: draws）")
     track.add_argument("--limit", type=int, default=20000, help="--draws 时每次绘制最多读的顶点数，缺省 20000")
+    track.add_argument("--log",
+                       help="真实壁纸的解包 / 复制工程（scene 认法）的 [kbp] 日志，缺省 <data>/out/<标签>-log.txt；"
+                            "帧的 time / dt 取它")
 
     frame = rdc_sub.add_parser("frame", help="整帧图：写 <data>/out/wpe-<标签>-f<脚本帧>.png 与 wpe-<标签>.json")
     rdc_common(frame)
@@ -148,7 +151,8 @@ def _parser():
     cdiff.add_argument("--overwrite", action="store_true")
 
     # ---------- cmp ----------
-    cmpp = top.add_parser("cmp", help="比真机结果和 WPE 真值：轨迹（track）、整帧（frame，按帧序列批量用 frames）、统计量（stats）")
+    cmpp = top.add_parser("cmp", help="比真机结果和 WPE 真值：轨迹（track）、整帧（frame，按帧序列批量用 frames）、统计量（stats）；"
+                                      "randomframe 的 R 注入表（random-encode、random）")
     cmp_sub = cmpp.add_subparsers(dest="action", required=True)
     ctrack = cmp_sub.add_parser("track", help="我们的轨迹（particle_track）对 WPE 轨迹：同帧同系统按顺序配对，报各字段最大差")
     ctrack.add_argument("ours")
@@ -156,6 +160,22 @@ def _parser():
     ctrack.add_argument("--skip", help="不比的系统（逗号分隔）")
     ctrack.add_argument("--out", help="文字报告（另写 <out>.json）；不给就把行放进摘要")
     ctrack.add_argument("--overwrite", action="store_true")
+    crenc = cmp_sub.add_parser("random-encode", help="randomframe 注入第一遍的表：[k / 100000]，回放后 frame × 100000 就是出生序号")
+    crenc.add_argument("count", type=int, help="个数（≥ 这一段回放里出生的粒子数）")
+    crenc.add_argument("--out", required=True, help="表（JSON 数组）")
+    crenc.add_argument("--overwrite", action="store_true")
+    crand = cmp_sub.add_parser("random", help="randomframe 的 R 注入表：我们第一遍（random-encode）的轨迹对 WPE 轨迹，按数组顺序配对，"
+                                              "把 WPE 的 R 填到出生序号上")
+    crand.add_argument("ours", help="我们第一遍的轨迹（particle_track，注入 random-encode 的表）")
+    crand.add_argument("wpe", help="WPE 轨迹（kbp rdc track，scene / points 认法：每粒子带 TEXCOORD1）")
+    crand.add_argument("--system", required=True, help="系统的键（两边轨迹里同一个，如对象名）")
+    crand.add_argument("--column", default="TEXCOORD1", help="WPE 轨迹里放 R 的列（取 w），缺省 TEXCOORD1")
+    crand.add_argument("--frames", help="只用这些帧：225,228 或 225-228；缺省 WPE 轨迹的全部帧")
+    crand.add_argument("--count", type=int, help="表长，缺省最大出生序号 + 1")
+    crand.add_argument("--fill", type=float, default=0.5, help="没配上的出生序号填的 R（那些粒子在抓到的帧里已死、不画），缺省 0.5")
+    crand.add_argument("--tolerance", type=float, default=1e-3, help="按数组顺序配对的位置容差（场景单位），超过就报错，缺省 1e-3")
+    crand.add_argument("--out", required=True, help="表（JSON 数组），交给 random: {\"<objects 下标>\": \"<表>\"} 或 renderFrames --random")
+    crand.add_argument("--overwrite", action="store_true")
     cframe = cmp_sub.add_parser("frame", help="逐像素比两张 PNG：直方图、连通块、按对象归类、热图")
     cframe.add_argument("ours")
     cframe.add_argument("wpe")

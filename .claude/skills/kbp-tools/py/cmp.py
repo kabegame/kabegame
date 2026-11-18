@@ -599,9 +599,85 @@ def stats(args):
     return summary
 
 
+# ==================== random（randomframe 的 R 注入表，P11b2 走查后补） ====================
+
+# 第一遍注入的编码：第 k 个出生的粒子的 R 是 k / ENCODE（R 要在 [0, 1)，所以最多 ENCODE 个）
+ENCODE = 100000
+
+
+def random_encode(args):
+    """第一遍的注入表 [0, 1e-5, 2e-5, …]：回放后每个粒子的 frame（randomframe 的 frame 就是 R）乘 ENCODE 就是它的出生序号。"""
+    if not 0 < args.count <= ENCODE:
+        raise KbpError("kbp", "个数要在 1–%d：%d" % (ENCODE, args.count))
+    out = _prepare(args.out, args.overwrite)
+    common.write_json(out, [k / ENCODE for k in range(args.count)])
+    return {"ok": True, "out": out, "count": args.count,
+            "next": "回放第一遍（random: {\"<objects 下标>\": \"%s\"}，particle_track 抓到的帧），再 kbp cmp random" % out}
+
+
+def build_random(ours, wpe, system, column="TEXCOORD1", tolerance=1e-3, frames=None):
+    """按数组顺序配对两边同一系统的粒子（P4 起两边的粒子数组顺序相同；位置差超过 tolerance 就说明对不上，报错）：
+    我们第一遍的出生序号 k = round(thick[3] · ENCODE)，WPE 的 R = column[3]。返回 ({k: R}, 每帧说明)。"""
+    ours_frames = {f["frame"]: f for f in ours.get("frames", [])}
+    table, notes = {}, []
+    for w in wpe.get("frames", []):
+        frame = w["frame"]
+        if frames and frame not in frames:
+            continue
+        o = ours_frames.get(frame)
+        a = (w.get("systems") or {}).get(system)
+        if o is None or a is None:
+            notes.append({"frame": frame, "skipped": "我们没有这一帧" if o is None else "WPE 这一帧没有 %s" % system})
+            continue
+        b = (o.get("systems") or {}).get(system) or []
+        if len(a) != len(b):
+            raise KbpError("data", "第 %d 帧 %s 的粒子数不同：WPE %d、我们 %d" % (frame, system, len(a), len(b)))
+        worst = 0.0
+        for i, (p, q) in enumerate(zip(a, b)):
+            d = _field_diff(p["pos"], q["pos"])
+            worst = max(worst, d)
+            if not d <= tolerance:
+                raise KbpError("data", "第 %d 帧 %s 第 %d 个粒子的位置差 %g > %g：两边的数组顺序或模拟对不上"
+                                       "（复制工程的随机项收成固定值了吗；先用 kbp cmp track 看 pos）" % (frame, system, i, d, tolerance))
+            if column not in p:
+                raise KbpError("data", "WPE 轨迹的 %s 没有 %s 列（要 kbp rdc track 的 points / scene 认法）" % (system, column))
+            if not q.get("thick"):
+                raise KbpError("data", "我们的轨迹的 %s 没有 thick（厚格式的 [vx, vy, vz, frame]）：不是帧表系统？" % system)
+            k = int(round(q["thick"][3] * ENCODE))
+            r = p[column][3]
+            if k in table and table[k] != r:
+                raise KbpError("data", "出生序号 %d 在两帧里对到不同的 R：%r、%r" % (k, table[k], r))
+            table[k] = r
+        notes.append({"frame": frame, "pairs": len(a), "pos": worst})
+    return table, notes
+
+
+def random_table(args):
+    ours = _read_tolerant(args.ours)
+    wpe = _read_tolerant(args.wpe)
+    frames = set(parse_frames(args.frames)) if args.frames else None
+    table, notes = build_random(ours, wpe, args.system, args.column, args.tolerance, frames)
+    if not table:
+        raise KbpError("data", "%s 一个粒子都没配上（%s）" % (args.system, notes))
+    count = args.count or max(table) + 1
+    if max(table) >= count:
+        raise KbpError("data", "出生序号到 %d，--count %d 装不下" % (max(table), count))
+    out = _prepare(args.out, args.overwrite)
+    common.write_json(out, [table.get(k, args.fill) for k in range(count)])
+    known = sorted(table)
+    return {"ok": True, "out": out, "system": args.system, "count": count, "known": len(known),
+            "range": [known[0], known[-1]], "frames": notes,
+            "text": ["%s：%d 帧配上 %d 个出生序号（%d–%d），表长 %d，其余填 %g" % (
+                args.system, sum(1 for n in notes if "pairs" in n), len(known), known[0], known[-1], count, args.fill)]}
+
+
 def cli(args):
     if args.action == "track":
         return track(args)
+    if args.action == "random-encode":
+        return random_encode(args)
+    if args.action == "random":
+        return random_table(args)
     if args.action == "frame":
         return frame(args)
     if args.action == "frames":

@@ -352,7 +352,7 @@ describe("粒子回放", () => {
   });
 
   test("render_scene 带 timeline：REST 收到时间线的 dts / times；passes 从标签推，参数给的优先", async () => {
-    await withMcp(async (call, _root, rest) => {
+    await withMcp(async (call, root, rest) => {
       const result = await call("render_scene", { imageId: 9, replay: { timeline: TIMELINE, seed: 3 } });
       assert.notEqual(result.isError, true, textOf(result));
       const [body] = bodiesOf(rest, "/render");
@@ -400,6 +400,36 @@ describe("粒子回放", () => {
       ]);
       assert.match(textOf(direct), /回放：直接给的 2 帧 dt（带 times）；seed 2；passes 2；random 顶替 3 号对象的 R/);
       assert.equal(rest.seen.filter((r) => r.method === "POST" && r.path.endsWith("/hosts")).length, 4);
+
+      // random 的值可以是 JSON 数组文件（相对路径按仓库根，P11b2 走查的工具缺口）：读成数组再转给 REST；两种回放写法都收
+      writeFileSync(path.join(root, "out", "r.json"), JSON.stringify([0.25, 0.75]));
+      await call("host_render", {
+        handle: "h-7",
+        imageId: "9",
+        replay: { particles: { dts: [0.1], random: { "0": "out/r.json", "2": [0.5] } } },
+      });
+      assert.deepEqual((bodiesOf(rest, "/hosts/h-7/render")[1].particles as { random: unknown }).random, {
+        0: [0.25, 0.75],
+        2: [0.5],
+      });
+      await call("render_scene", {
+        imageId: 9,
+        replay: { timeline: { log: "out/p4b-fps10-log.txt", frame: 3 }, random: { "0": "out/r.json" } },
+      });
+      assert.deepEqual((bodiesOf(rest, "/render").at(-1)!.particles as { random: unknown }).random, {
+        0: [0.25, 0.75],
+      });
+      writeFileSync(path.join(root, "out", "bad.json"), JSON.stringify([1.5]));
+      for (const value of ["out/bad.json", "out/missing.json"]) {
+        const bad = await call("host_render", {
+          handle: "h-7",
+          imageId: "9",
+          replay: { particles: { dts: [0.1], random: { "0": value } } },
+        });
+        assert.equal(bad.isError, true);
+        assert.match(textOf(bad), /^\[local\][^]*\nrandom 的 0/);
+      }
+      assert.equal(bodiesOf(rest, "/hosts/h-7/render").length, 2, "读不了的表不发请求");
     });
   });
 

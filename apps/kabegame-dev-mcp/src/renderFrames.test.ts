@@ -290,6 +290,51 @@ describe("参数", () => {
     assert.equal("inputTimeline" in renderArgs(base(out), 2) || "buttons" in renderArgs(base(out), 2), false);
   });
 
+  test("--random（P11b2 走查的工具缺口）：JSON 串或文件，只在回放时收、形状先查；每一帧都带整张表", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "kb-render-frames-random-"));
+    try {
+      const head = ["--image", "13", "--frames", "2-3", "--out", "o", "--timeline-log", "l.txt"];
+      writeFileSync(path.join(dir, "r.json"), JSON.stringify({ 39: [0.25, 0, 0.999] }));
+      writeFileSync(path.join(dir, "r40.json"), JSON.stringify([0.5, 0.125]));
+      assert.deepEqual(parseCli([...head, "--random", "r.json"], dir).random, { 39: [0.25, 0, 0.999] });
+      assert.deepEqual(parseCli([...head, "--random", '{"3": [0.5], "7": []}'], dir).random, { 3: [0.5], 7: [] });
+      // 按系统各给一份数组（文件或串），可以和整张表混着给多次
+      assert.deepEqual(
+        parseCli([...head, "--random", "40=r40.json", "--random", "r.json", "--random", "2=[0.75]"], dir).random,
+        {
+          40: [0.5, 0.125],
+          39: [0.25, 0, 0.999],
+          2: [0.75],
+        },
+      );
+      assert.equal(parseCli(head, dir).random, undefined);
+      const bad = (args: string[], re: RegExp) => assert.throws(() => parseCli(args, dir), re);
+      bad([...head, "--random", '{"x": [0.5]}'], /对象下标/);
+      bad([...head, "--random", '{"3": [1]}'], /\[0, 1\)/);
+      bad([...head, "--random", '{"3": [-0.1]}'], /\[0, 1\)/);
+      bad([...head, "--random", '{"3": 0.5}'], /\[0, 1\)/);
+      bad([...head, "--random", "3=[1.5]"], /\[0, 1\)/);
+      bad([...head, "--random", "3=0.5"], /--random 3= 读不了/);
+      bad([...head, "--random", "39=r40.json", "--random", "r.json"], /两次对象 39/);
+      bad([...head, "--random", "[0.5]"], /JSON 对象/);
+      bad([...head, "--random", "{}"], /空表/);
+      bad([...head, "--random", "missing.json"], /--random 读不了/);
+      bad([...head, "--random", "5=missing.json"], /--random 5= 读不了/);
+      bad(["--image", "13", "--frames", "1", "--out", "o", "--fps", "20", "--random", '{"3": [0.5]}'], /只在回放/);
+
+      const options = parseCli([...head, "--random", "r.json", "--seed", "4"], dir);
+      for (const frame of [2, 3]) {
+        assert.deepEqual(renderArgs(options, frame).replay, {
+          timeline: { log: path.join(dir, "l.txt"), frame },
+          seed: 4,
+          random: { 39: [0.25, 0, 0.999] },
+        });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("每帧参数：回放模式填 timeline.frame、时刻模式 time = 帧号 / fps；save 到 ours-f<帧>.png、inline false；trace 只给指定帧", () => {
     const out = path.resolve("/o");
     const replay: RenderFramesOptions = {

@@ -127,6 +127,13 @@ replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor?, window? }, s
 replay: { particles: { dts, times?, seed?, passes?, random? }, fr? }                                  直接给探针（缺省 seed 1、passes 1）
 ```
 
+`random`（`render_scene` / `host_render` / `particle_corners` 的两种写法与 `particle_track` 都收）：`{ "<objects 下标>": [R, …] }`，按出生顺序
+顶替这个粒子系统抽到的 `R`，用完退回种子随机数；randomframe 的系统和 WPE 逐像素比时注入 WPE 的 `R`（表由 kbp-tools 的 `kbp cmp random`
+出，流程见 kbp-tools SKILL.md「真实场景的回放」第 7 步）。
+- 键是 `scene.json` `objects` 数组的**下标**、不是对象 id；不是粒子对象时探针报错并列出场景里的粒子对象（P11b2 走查后补，以前静默不起作用）；
+- 值可以写成 JSON 数组文件的路径（相对路径按仓库根，`{ "0": "ignore/…/r.json" }`），表有几百项时不用贴进调用；读不了或不是 [0, 1) 的数报 `[local]`。
+  这条是 MCP 工具层的，改动后要等 MCP 重连才生效；`renderFrames.ts` 进程内调同一份工具，即改即用。
+
 `fr`（只有 `render_scene` / `host_render` 收，缺省 true）把 kbp 测试工程的 FR 帧号块涂成读回那一帧的颜色，见下方「FR 帧号块」。
 回放时要让场景脚本自己跑（FR 等挂了脚本的字段由脚本自己算），另给 `scripts`，见下方「跑场景脚本」。
 
@@ -385,7 +392,7 @@ render_scene { imageId: <id>, replay: { timeline: { log: "…-log.txt", frame: 2
 ```bash
 deno run -A apps/kabegame-dev-mcp/src/renderFrames.ts --image <id> --frames 241,242,250-255 --out <目录> \
   [--timeline-log <日志> [--timeline-track <轨迹>] [--cursors log|track] [--cursor x,y] [--window WxH] [--gap error|split] \
-   [--audio <录制>] [--seed N] [--passes 1|2] [--no-fr]] \
+   [--audio <录制>] [--seed N] [--passes 1|2] [--random <表> …] [--no-fr]] \
   [--fps N | --time 秒] [--canvas WxH] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] \
   [--video-time 秒|JSON] [--user-properties <JSON 文件或串>] [--scripts [--clock 毫秒] [--script-seed N]] \
   [--trace-frames 250 [--trace-readback 0,"text glyphs"] [--trace-max-vertices N]] [--reuse-host] [--timeout 秒] [--overwrite]
@@ -397,6 +404,10 @@ deno run -A apps/kabegame-dev-mcp/src/renderFrames.ts --image <id> --frames 241,
 - **两种模式**：给 `--timeline-log` 时第 f 帧传 `replay: { timeline: { log, …, frame: f } }`（规则见「粒子回放」，`--no-fr` 即
   `replay.fr: false`）；不给时第 f 帧传 `time: f / fps`（`--fps`，名义时间）或固定的 `--time`，粒子是预热后的状态（同不给 replay）。
   两种模式的参数互斥，回放专用参数在时刻模式下报错。
+- **`--random`**（P11b2 走查后补，回放专用）：合成 `replay.random`，每一帧都带整张表（每帧都从第 1 帧回放，按出生顺序用掉前若干项）。
+  `<表>` 是 JSON 对象（串或文件），或 `<objects 下标>=<R 数组的 JSON 串或文件>`（`kbp cmp random` 的输出就是这种数组）；可以给多次，同一个
+  下标两次报错，形状先查、错了不开宿主。2026-11-19 `3799462430` 樱花复制工程 `--random 0=<表> --frames 225-228`：四帧对 WPE 最大差 2，
+  同 P11b2 走查逐帧调 `render_scene` 的结果。
 - **`--scripts`**（kabegame-chromium 第 7 批）：每一帧的 `render_scene` 都带 `scripts`（`true`，给了 `--clock`（毫秒时间戳）/
   `--script-seed`（0–2³²−1）时是 `{ clock?, seed? }`；这两个只跟着 `--scripts`），探针照宿主跑场景脚本（见「跑场景脚本」）。两种模式都收；
   回放时 FR 由脚本自己画、不再涂色（`--no-fr` 可以同给）。每帧各自从加载开始跑一遍脚本，帧之间不共用脚本状态。

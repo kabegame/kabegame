@@ -923,7 +923,10 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     const json = { animationmode: "randomframe" };
     const bundle = bundleOf([particleLayer(1, json), particleLayer(2, json)]);
     const plain = await open(bundle, { seed: 3 });
-    const injected = await open(bundle, replayParticleOptions({ dts: [], seed: 3, random: { 1: [0.25, 0.5] } }));
+    const injected = await open(
+      bundle,
+      replayParticleOptions({ dts: [], seed: 3, random: { 1: [0.25, 0.5] } }, bundle.layers),
+    );
     for (const { scene, state } of [plain, injected]) stepFrame(scene, frame(0.35), state);
     const columns = (scene: GpuScene, object: number) => particleDraw(scene, object).particles!.system.columns;
     // 0.35 s、每秒 10 个：3 个粒子
@@ -933,6 +936,13 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     // randomframe 的 frame 就是 R
     expect(Array.from(columns(injected.scene, 1).frame.subarray(0, 3))).toEqual([0.25, 0.5, seeded[2]]);
     expect(r(injected.scene, 2)).toEqual(r(plain.scene, 2));
+    // 键不是粒子对象的 objects 下标（写成对象 id、图像层、不存在的下标）时报错并列出粒子对象，不再静默退回种子随机数（P11b2 走查）
+    const withImage = bundleOf([imageLayer(0), particleLayer(1, json)]);
+    for (const key of [0, 39])
+      expect(() => replayParticleOptions({ dts: [], random: { [key]: [0.5] } }, withImage.layers)).toThrow(
+        new RegExp(`random 的键 ${key} 不是粒子对象的 objects 下标.*粒子对象：1「`),
+      );
+    expect(() => replayParticleOptions({ dts: [] }, withImage.layers)).not.toThrow();
   });
 
   it("不可见的粒子层不画、不发射，存活粒子清空；重新可见后照常发射（P4a 步骤 5，C8）", async () => {

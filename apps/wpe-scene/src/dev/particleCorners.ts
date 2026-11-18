@@ -30,7 +30,7 @@ import { TextureDecodeCache } from "../compile/decode";
 import { FetchSceneReader } from "../compile/fs";
 import type { ScenePostprocessSetting } from "../compile/postprocess";
 import { writeParticleAudio, type ParticleAudioFrame } from "../particles/audio";
-import { injectedR } from "../particles/random";
+import { checkInjectedKeys, injectedR } from "../particles/random";
 import type { ParticleSystem } from "../particles/system";
 import { particleSnapshot, type ParticleTrackParticle } from "../particles/track";
 import { CORNER_UVS, trailDrawable } from "../particles/vertices";
@@ -277,9 +277,16 @@ export interface ParticleReplay {
   audio?: (ParticleAudioFrame | null)[];
 }
 
-/** 建场景用的粒子选项：种子缺省 1、遍数缺省 1、`fps` 缺省 60，`random` 换成每个粒子层一个 `injectedR`。 */
-export function replayParticleOptions(replay: ParticleReplay | undefined): ParticleOptions {
+/**
+ * 建场景用的粒子选项：种子缺省 1、遍数缺省 1、`fps` 缺省 60，`random` 换成每个粒子层一个 `injectedR`。`random` 的键要是 `layers` 里
+ * 粒子对象的 `objects` 下标，不是就报错（`checkInjectedKeys`）。
+ */
+export function replayParticleOptions(
+  replay: ParticleReplay | undefined,
+  layers: readonly Pick<SceneLayer, "object" | "name" | "particle">[],
+): ParticleOptions {
   const random = replay?.random;
+  checkInjectedKeys(random, layers);
   return {
     seed: replay?.seed ?? 1,
     passes: replay?.passes ?? 1,
@@ -943,7 +950,7 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
     const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
       ignoreUnsupported: true,
       // 预热用第 0 帧的 cursor（不给 pointers 时是场景中心，同 `GpuScene` 的缺省）
-      particles: { ...replayParticleOptions(options.particles), cursor: pointers.warmup },
+      particles: { ...replayParticleOptions(options.particles, bundle.layers), cursor: pointers.warmup },
       size: target,
     });
     // 关键帧动画（P10a 步骤 3）：同 `renderFrame`，有回放时沿同一串 dt 推进，没有时按第 0 秒写一次（开头的 `sync` 刷进去）

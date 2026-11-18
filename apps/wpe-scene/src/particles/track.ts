@@ -21,7 +21,7 @@ import { shakeOffset, type ShakeFields } from "../render/shake";
 import { silentParticleAudio, writeParticleAudio, type ParticleAudioFrame } from "./audio";
 import { pointerScenePoint } from "./controlpoints";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
-import { injectedR, SeededRandom } from "./random";
+import { checkInjectedKeys, injectedR, SeededRandom } from "./random";
 import { ParticleSystem } from "./system";
 
 export interface ParticleTrackParticle {
@@ -218,6 +218,7 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     return pointerScenePoint(view, cursors?.[i] ?? [0.5, 0.5]);
   };
   const loadPointer = pointerAt(0);
+  checkInjectedKeys(options.random, options.layers);
   const names = new Set<string>();
   const systems: { name: string; system: ParticleSystem; world: Mat4 }[] = [];
   const skipped: Record<string, string[]> = {};

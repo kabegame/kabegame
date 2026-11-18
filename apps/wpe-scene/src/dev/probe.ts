@@ -801,7 +801,7 @@ async function renderFramePass(
       ...(registry ? { particleOrdinal: (object: number) => registry.particleOrdinal(object) } : {}),
       ignoreUnsupported: force,
       particles: {
-        ...replayParticleOptions(options.particles),
+        ...replayParticleOptions(options.particles, bundle.layers),
         cursor: pointers.warmup,
         cursorCrop: pointers.cursorCrop,
       },
