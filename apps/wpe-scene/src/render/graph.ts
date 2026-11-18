@@ -75,7 +75,8 @@
  * - **puppet**（P12a 步骤 4，`SceneLayer.puppet`，rea-p12-mdl 9.2–9.4，p12-REPORT 用例 8）：网格 0 代替上屏的四边形，两条路径在编译期定
  *   （`puppet.composite`，WPE 加载时置 `0x10`）。直接上屏用 `puppet.passes[0]`（基础材质 + puppet 组合键），几何 `puppet`、UV 取「图像 / GPU 纹理」、
  *   不内缩；合成路径同被依赖：基础 pass 照旧画四边形进合成 RT、全部 effect 留在合成链，最后用 `puppet.upload`（passthrough 材质 + puppet
- *   组合键）以 puppet 网格采样合成 RT 上屏（角色 `passthrough`，几何 `puppet`，UV (1, 1)，不内缩）。
+ *   组合键）以 puppet 网格采样合成 RT 上屏（角色 `passthrough`，几何 `puppet`，UV (1, 1)，不内缩）。预光照时（P13j-2，`layer.prelit`）
+ *   基础 pass 改画网格进合成 RT（几何 `puppet`，UV 同基础四边形，不清 RT）。
  * - **用户纹理**（P11b 步骤 2，`ScenePass.userTextures`）：槽上登记了用户纹理时，纹理来源是 `{ kind: "user" }`，带缺省纹理（`fallback`，静态纹理或
  *   被依赖图层的 RT），渲染器按来源当前的值解析：有图用那张（图像尺寸 = 纹理尺寸 = 裁后宽高），没有图用缺省。槽 0 换图后 UV 上界、UV 内缩、
  *   合成 RT 与 effect fbo 都按新纹理重算（WPE 的就绪回调 `FUN_140209360`，rea-p11b 4.2）：`planLayer` 的 `userBase` 是这一刻基础材质槽 0
@@ -169,9 +170,10 @@ export type DrawRole = "direct" | "base" | "effect" | "final" | "passthrough" | 
  *   UV 取步骤的 `uv` / `inset`，矩阵见 `scene.ts`。
  * - `shape`：形状对象的四边形（P8 步骤 2，`layout.ts` 的 `shapeQuad`，按 `SceneShape.points` 与图层 `size`），场景视图投影 × 图层世界矩阵；
  *   效果矩阵取 WPE 给形状的那组值（`uniforms.ts` 的 `drawMatrices`）。`uv` / `inset` 不用（uv 就是点本身）。
- * - `puppet`（P12a 步骤 4，rea-p12-mdl 9.2、9.4）：puppet 的网格 0 代替图层四边形，只用在上屏那一步（直接上屏与 passthrough 上屏），矩阵同
+ * - `puppet`（P12a 步骤 4，rea-p12-mdl 9.2、9.4）：puppet 的网格 0 代替图层四边形，用在上屏那一步（直接上屏与 passthrough 上屏），矩阵同
  *   `layer`（图层世界矩阵，画自己、带对齐偏移与视差，不乘 `size`：网格顶点本来就是图层局部像素）。`uv` 是直接上屏时 `a_TexCoord` 乘的比例
- *   （图像 / GPU 纹理），上屏时是 (1, 1)；不内缩（`inset` 恒为 `NO_INSET`）。
+ *   （图像 / GPU 纹理），上屏时是 (1, 1)；不内缩（`inset` 恒为 `NO_INSET`）。预光照的基础 pass（P13j-2，`prelit`）也画它：矩阵是合成 RT
+ *   的整面正交（同基础四边形），`uv` 同直接上屏。
  * - `texchan`（P12b2-2，rea-texchan-model 2）：puppet 的纹理通道网格（`ScenePuppet.textureChannels`），画进合成 RT、在基础四边形之后（角色 `base`）。
  *   顶点原样（图像像素坐标，原点左下、y 向上）、u16 索引；MVP = 合成 RT 的 `ortho(0, W, 0, H)`、模型矩阵单位阵（WPE 的 `diag(1/s, 1/s, 1, 1)`，我们的 s 恒为 1），
  *   W、H 是步骤的 `rtSize`；`uv` / `inset` 不用。
@@ -1063,7 +1065,29 @@ export function planLayer(
       blending: null,
       raster: rasterState(base, base, null),
     });
-  } else
+  } else if (layer.prelit && puppet)
+    // puppet 的预光照（P13j-2，rea-p12-mdl 9.4：`L+0x4b0` 时基础 pass 画 `P+0x400`，Artorias 事件 332）：画整张网格 0 代替四边形（不分裁切段，
+    // 裁切在上屏时做），原始位置进合成 RT、蒙皮后的位置算光照（着色器里分开）；UV 同基础四边形（图像 / GPU 纹理）、不内缩，带变形时槽 5
+    // 绑变形纹理；关混合、不剔除（变体的 `nocull`）。画之前不清 RT：WPE 同样不清，网格外面留着上一次写进这张 RT 的内容（上一帧 effect 的输出）
+    steps.push({
+      kind: "draw",
+      role: "base",
+      pass: layer.prelit,
+      effect: null,
+      target: nextComposite(),
+      inputs: (() => {
+        const inputs = staticInputs(base, null);
+        if (puppet.morph) inputs[MORPH_SLOT] = { kind: "morph", object: layer.object };
+        return inputs;
+      })(),
+      geometry: "puppet",
+      uv,
+      inset: NO_INSET,
+      blending: null,
+      raster: rasterState(base, layer.prelit, null),
+      prelit: true,
+    });
+  else
     steps.push({
       kind: "draw",
       role: "base",

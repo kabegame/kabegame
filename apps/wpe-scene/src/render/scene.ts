@@ -1239,7 +1239,7 @@ function planProblems(
       else problems.push(...meshVertexLayout(program.attributes ?? [], mesh.format).problems);
     } else if (step.kind === "draw" && step.geometry === "puppet") {
       if (!puppet) problems.push("render:puppet");
-      else problems.push(...meshVertexLayout(program.attributes ?? [], puppet.mesh.format).problems);
+      else problems.push(...meshVertexLayout(program.attributes ?? [], puppet.mesh.format, !!step.prelit).problems);
     } else if (step.kind === "draw" && step.geometry === "texchan") {
       // 纹理通道网格（P12b2-2）：按通道网格自己的格式查
       if (!puppet?.textureChannels) problems.push("render:puppet");
@@ -2256,7 +2256,8 @@ export class GpuScene {
     if (format === undefined)
       throw new SceneRenderError([step.kind === "mesh" ? `render:mesh:${step.mesh}` : "render:puppet"]);
     const program = step.pass.program === null ? undefined : this.bundle.programs[step.pass.program];
-    return meshVertexLayout(program?.attributes ?? [], format);
+    // 预光照的 puppet 基础 pass（P13j-2）：`a_PositionC1` 读位置那一项（WPE 的那份网格里它是位置的拷贝）
+    return meshVertexLayout(program?.attributes ?? [], format, isPrelitDraw(step));
   }
 
   /**

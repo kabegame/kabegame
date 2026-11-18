@@ -30,7 +30,7 @@
  * - 能力表：`dependencies` 不再报 `object:dependencies`，粒子对象有不是数字的元素报 `particle:dependencies`；
  * - 编译：名字解析（被依赖 → `layerComposites`；没被依赖、不存在、`_b`、不是图像层 → 棋盘格，整场一张；`bind` 的槽不动；注解 `default`
  *   同样）、`TEX<n>FORMAT`（LDR 0；HDR 下经依赖置位 0、自带 `0x10` 且在前 14、在后 0）、照报的四键、被依赖时编 `passthrough`
- *   （`BLENDMODE` 0 / cbm）、`lighting:prelighting`、`dependedOn`。
+ *   （`BLENDMODE` 0 / cbm）、预光照变体（P13j-1 起编 `prelit`，之前照报 `lighting:prelighting`）、`dependedOn`。
  * 渲染图、独占 RT 与编码见 `render/p8.test.ts`。
  *
  * P8 步骤 5（同计划「步骤 5 — 写入状态」，rea-p8-render 第 4、5 节，p8-REPORT 结论 10、11）：
@@ -1547,11 +1547,13 @@ describe("compileScene：被依赖图层的编译与照报（P8 步骤 4）", ()
     expect(plain.bundle.unsupported).not.toContain("dependency:text");
   });
 
-  it("lighting:prelighting：被依赖、基础材质开光照（WPE 的 0x10 同样把光照挪到基础 pass）；没被依赖、没有 effect 不报", async () => {
+  it("预光照：被依赖、基础材质开光照（WPE 的 0x10 同样把光照挪到基础 pass）时编预光照变体（P13j-1，不再照报）；没被依赖、没有 effect 不编", async () => {
     const lit = (id: number, name: string) => ({ ...imageObject(id, name), image: "models/lit.json" });
     const depended = await compileDeps([lit(10, "L"), imageObject(20, "B", { dependencies: [10] })]);
-    expect(depended.bundle.unsupported).toContain("lighting:prelighting");
+    expect(depended.bundle.unsupported).not.toContain("lighting:prelighting");
+    expect(depended.bundle.layers[0].prelit).toBeDefined();
     const plain = await compileDeps([lit(10, "L"), imageObject(20, "B")]);
+    expect(plain.bundle.layers[0].prelit).toBeUndefined();
     expect(plain.bundle.unsupported).not.toContain("lighting:prelighting");
   });
 

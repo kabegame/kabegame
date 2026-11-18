@@ -1094,8 +1094,14 @@ export function checkMdlFeatures(file: MdlFile, unsupported: Set<string>): void 
  * - 分量类型和网格数据对不上（`mdl.ts` 的 `attributeTypeMatches`：`a_BlendIndices` 是 uint，其余 float；P5c 步骤 2）：报
  *   `mdl:attribute-type:<名>`。语料 0 个，WPE 的 D3D11 输入布局遇到它怎么样没测；WebGPU 建管线是校验错误。
  */
-export function checkMeshAttributes(program: TranslateResult, format: number, unsupported: Set<string>): void {
-  const present = new Map(meshAttributes(format).map((item) => [semanticKey(item), item]));
+export function checkMeshAttributes(
+  program: TranslateResult,
+  format: number,
+  unsupported: Set<string>,
+  /** 预光照的 puppet 变体（P13j-2）：`a_PositionC1` 读位置那一项（`mdl.ts` 的 `meshAttributes`）。 */
+  dualVertex = false,
+): void {
+  const present = new Map(meshAttributes(format, dualVertex).map((item) => [semanticKey(item), item]));
   for (const attribute of program.attributes ?? []) {
     if (attribute.unused) continue;
     const semantic = attributeSemantic(attribute.name);
@@ -1350,6 +1356,8 @@ export const PUPPET_UNIFORMS: ReadonlySet<string> = new Set([
 export const PUPPET_COMBOS: ReadonlySet<string> = new Set(["SKINNING", "SKINNING_ALPHA", "MORPHING"]);
 /** 预光照变体（P13j，`SceneLayer.prelit`）放行的引擎 COMBO：`PRELIGHTING`。 */
 export const PRELIT_COMBOS: ReadonlySet<string> = new Set(["PRELIGHTING"]);
+/** puppet 的预光照变体（P13j-2）：两组都放行。 */
+export const PUPPET_PRELIT_COMBOS: ReadonlySet<string> = new Set([...PUPPET_COMBOS, ...PRELIT_COMBOS]);
 /**
  * 裁切遮罩 pass（`clippingmaskimage4`，P12b1 步骤 5）放行的引擎 uniform：puppet 的那几个再加 `g_RenderVar0`——WPE 的遮罩绘制写 `ctx+0xa8`，也就是
  * `g_RenderVar0.x`（记录 flags bit1 取反时为 1，否则 0，clip-morph-attach 1(3)、3），编译期在 pass 上固定写 0。别的 puppet pass 读到它仍照报。

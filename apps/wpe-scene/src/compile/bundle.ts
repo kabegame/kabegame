@@ -84,6 +84,7 @@ import {
   PARTICLE_UNIFORMS,
   PUPPET_COMBOS,
   PRELIT_COMBOS,
+  PUPPET_PRELIT_COMBOS,
   PUPPET_CLIP_MASK_UNIFORMS,
   PUPPET_UNIFORMS,
   readsAudioUniforms,
@@ -719,7 +720,8 @@ export interface SceneLayer {
    * 预光照变体（P13j，WPE `L+0x4a0`，`FUN_140209563`）：基础材质开 `LIGHTING` 或 `REFLECTION`（材质标志 `+0x1fc & 0x18`）、又走合成路径
    * （有 effect、colorBlendMode 混合、被依赖、开雾）时，基础 pass 换成「基础材质 + `PRELIGHTING=1`」画进合成 RT：光照与反射的屏幕坐标在这一步
    * 按 `g_AltModelMatrix` / `g_AltNormalModelMatrix` / `g_AltViewProjectionMatrix` 算（渲染器写，`render/uniforms.ts`），之后的 effect 处理
-   * 打过光的画面。同 key 重编（常量与绑定共用 `objects/<i>/passes/0`）。puppet 的变体在 P13j-2，之前照报。
+   * 打过光的画面。同 key 重编（常量与绑定共用 `objects/<i>/passes/0`）。puppet（P13j-2）的变体另带 puppet 组合键（没有
+   * `SKINNING_ALPHA`，skinned 时加 `PRELIGHTINGDUALVERTEX`）、`nocull`，渲染图在这一步画网格（原始位置进 RT，蒙皮后的位置算光照）。
    */
   prelit?: ScenePass;
   /**
@@ -2079,13 +2081,13 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   }
 
   /**
-   * 图像层的基础材质 pass（实例覆盖之后，`compileImageModel` 记；`finalizePuppet` 与预光照变体（P13j）重编时用），按 `objects` 下标。
+   * puppet 图层的基础材质 pass（实例覆盖之后，`compileImageModel` 记、`finalizePuppet` 用），按 `objects` 下标。
    */
   const puppetMaterials = new Map<
     number,
     { passes: MaterialPass[]; instanceSize: { width: number; height: number } | null }
   >();
-  /** 普通图像层基础材质 pass 0 的原文（实例覆盖之后）：预光照变体（P13j）同 key 重编用，按 `objects` 下标。 */
+  /** 图像层（含 puppet）基础材质 pass 0 的原文（实例覆盖之后）：预光照变体（P13j）同 key 重编用，按 `objects` 下标。 */
   const imageMaterials = new Map<
     number,
     { pass: MaterialPass; material: string; instance: boolean; size: SceneObject["size"] }
@@ -2486,7 +2488,13 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
                   ? PUPPET_CLIP_MASK_UNIFORMS
                   : PUPPET_UNIFORMS
                 : undefined,
-        context.puppet ? PUPPET_COMBOS : context.prelit ? PRELIT_COMBOS : undefined,
+        context.puppet
+          ? context.prelit
+            ? PUPPET_PRELIT_COMBOS
+            : PUPPET_COMBOS
+          : context.prelit
+            ? PRELIT_COMBOS
+            : undefined,
         mipSlots,
       );
       // 着色器声明了、材质没给的槽位按注解 `default` 绑定（同 LWE `setupTextureUniforms` 先取着色器默认值）
@@ -3183,7 +3191,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     const fogged = !!layer.fogPassthrough;
     // 预光照（P13j）：基础材质开 LIGHTING 或 REFLECTION（材质标志 `+0x1fc & 0x18`）、又走合成路径（有 effect、colorBlendMode 混合、被依赖
     // （P8 步骤 4 的 `0x10`）、开雾）时，WPE 把光照与反射挪到基础 pass（`PRELIGHTING=1`，`FUN_140209563`），之后的 pass 本来就不带光照。
-    // 普通图层同 key 重编一份变体（`SceneLayer.prelit`）；puppet 的基础 pass 要画网格（P13j-2），之前照报
+    // 同 key 重编一份变体（`SceneLayer.prelit`）；puppet（P13j-2）的基础 pass 画网格，变体另带 puppet 组合键
     const baseProgram0 = layer.passes[0]?.program ?? null;
     const prelitCombo = (name: string) =>
       baseProgram0 !== null &&
@@ -3195,20 +3203,39 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       (layer.effects.length > 0 || blended || depended || fogged)
     ) {
       const source = imageMaterials.get(index);
-      if (layer.puppet) unsupported.add("lighting:prelighting");
-      else if (source && !settled()) {
+      const puppet = layer.puppet;
+      // 纹理通道 + 光照：WPE 另建 RT 预光照，下面照报 `puppet:texture-channels:prelighting`，这里不编
+      if (source && !puppet?.textureChannels && !settled()) {
+        // puppet（P13j-2，`prelit_mat.asm` 的 `0x140209849`–`0x140209a04`）：再加 puppet 的组合键，没有 `SKINNING_ALPHA`，skinned 时
+        // 加 `PRELIGHTINGDUALVERTEX`（`genericimage4` 的光栅位置读 `a_PositionC1`），`cullmode: nocull`（rea-p12-mdl 9.3）
+        const { SKINNING_ALPHA: _alpha, ...skin } = puppet?.combos ?? {};
         const before = bindings.list.length;
-        layer.prelit = await compilePass(
-          { ...source.pass, combos: { ...source.pass.combos, PRELIGHTING: 1 } },
+        const prelit = await compilePass(
+          {
+            ...source.pass,
+            combos: {
+              ...source.pass.combos,
+              PRELIGHTING: 1,
+              ...skin,
+              ...(skin.SKINNING ? { PRELIGHTINGDUALVERTEX: 1 } : {}),
+            },
+          },
           {
             key: `objects/${index}/passes/0`,
             material: source.material,
             prelit: true,
+            ...(puppet ? { puppet: true } : {}),
             ...(source.instance ? { instanceSize: instanceReferenceSize(source.size) } : {}),
           },
         );
         // 同键重编：基础 pass 编译时已登记过同一批绑定，截掉重复的（同 `finalizePuppet`）
         bindings.list.length = before;
+        if (puppet) {
+          prelit.cullmode = "nocull";
+          if (prelit.program !== null)
+            checkMeshAttributes(bundle.programs[prelit.program], puppet.mesh.format, unsupported, true);
+        }
+        layer.prelit = prelit;
       }
     }
     // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报

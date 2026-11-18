@@ -79,8 +79,15 @@ export interface MdlVertexAttribute extends MdlAttribute {
   offset: number;
 }
 
-/** 格式里置位的属性，按表序，带偏移（rea 1.4）。 */
-export function meshAttributes(format: number): MdlVertexAttribute[] {
+/** `a_PositionC1` 的格式位（预光照的第二份位置）。 */
+const POSITION_C1 = 0x2000000;
+
+/**
+ * 格式里置位的属性，按表序，带偏移（rea 1.4）。
+ * `dualVertex`：预光照的 puppet 网格（P13j-2，WPE `P+0x400`，Artorias 事件 332）。WPE 另建一份顶点，格式加 `a_PositionC1`、内容是位置
+ * 的逐字节拷贝；这里不另建缓冲，格式里没有它时补一项指向位置那一项（同偏移，`a_PositionVec4` 时读前三个分量），stride 不变。
+ */
+export function meshAttributes(format: number, dualVertex = false): MdlVertexAttribute[] {
   let offset = 0;
   const out: MdlVertexAttribute[] = [];
   for (const item of MDL_ATTRIBUTES) {
@@ -88,6 +95,9 @@ export function meshAttributes(format: number): MdlVertexAttribute[] {
     out.push({ ...item, offset });
     offset += item.bytes;
   }
+  const position = out.find((item) => item.semantic === "POSITION" && item.semanticIndex === 0);
+  const c1 = MDL_ATTRIBUTES.find((item) => item.mask === POSITION_C1);
+  if (dualVertex && !(format & POSITION_C1) && position && c1) out.push({ ...c1, offset: position.offset });
   return out;
 }
 

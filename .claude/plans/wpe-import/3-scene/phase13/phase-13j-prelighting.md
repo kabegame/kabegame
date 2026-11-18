@@ -39,6 +39,21 @@
 - **新增** `drawMatrices` 的 `base` 角色在预光照时多给 `altModel`（世界矩阵，instanced 乘 size / 图像尺寸）、`altViewProjection`（图层上屏的视图投影）；`staticBuiltins` 写 `g_AltModelMatrix`、`g_AltNormalModelMatrix = normalMatrix(altModel)`、`g_AltViewProjectionMatrix`；进 `LAYER_UNIFORMS`（随变换就地刷新）。
 - **修改** 三个名字从 `UNREAD_UNIFORMS` 移进引擎 uniform 表。
 
+## 实施（P13j-2 puppet）
+
+补读（`ignore/p13/j/rea/asm/prelit_mat.asm`，`0x140209849`–`0x140209a04`）：预光照材质先按材质标志写 `LIGHTING` / `REFLECTION`、写 `PRELIGHTING = 1`；`[rbp+0xc0]`（skinned）为真时再写 `SKINNING = 1`、`BONECOUNT` = 骨骼数（虚函数 `+0xd8`）、`PRELIGHTINGDUALVERTEX = 1`、网格 0 格式含 `0x10000` 时 `MORPHING`、再有网格标志 `0x2000` 时 `MORPHING_MODIFIERS`；没有 `SKINNING_ALPHA`。Artorias 事件 332：顶点步长 64（位置、`POSITION1`、骨骼索引、权重、UV，原网格加了 `0x2000000`），不混合、不剔除、写掩码 RGBA；这一帧里合成 RT 7230 只有 332（网格）、378（第二个 effect 写回）写，**画网格前不清**，网格外面留着上一帧 effect 的输出（两个 effect 是带遮罩的位移，会把网格外的像素拉进边缘）。
+
+### 点 3 — 编译：puppet 的预光照变体（`compile/bundle.ts`、`compile/features.ts`、`compile/mdl.ts`）
+- **修改** 触发条件里的 puppet 分支：不再照报 `lighting:prelighting`，同 key 重编 `SceneLayer.prelit` = 基础材质 pass 0（`puppetMaterials`，实例覆盖之后）+ `PRELIGHTING = 1` + puppet 组合键去掉 `SKINNING_ALPHA`、skinned 时加 `PRELIGHTINGDUALVERTEX = 1`，`cullmode` 改 `nocull`；`PassContext` 同时带 `puppet` 与 `prelit` 时放行两组引擎 COMBO。
+- **新增** `meshAttributes(format, dualVertex)`：预光照时格式里没有 `a_PositionC1` 就补一项指向位置（同偏移、同数据，等于 WPE 拷的那一份），`checkMeshAttributes` / `meshVertexLayout` 跟着带这个参数。
+- **不变** 纹理通道 + 光照仍报 `puppet:texture-channels:prelighting`（WPE 另建 RT），开雾的 puppet 仍报 `fog:puppet`。
+
+### 点 4 — 渲染图：基础 pass 画网格（`render/graph.ts`）
+- **修改** 合成路径的基础步骤：图层有 `prelit` 且是 puppet 时几何换成 `puppet`（整张网格，不分裁切段），UV 同基础四边形（图像 / GPU 纹理）、不内缩，带变形时槽 5 绑变形纹理，剔除取变体的 `nocull`，仍标 `prelit`；不加清屏（照 WPE）。
+
+### 点 5 — 渲染器（`render/scene.ts`）
+- **修改** `meshLayoutOf` 与自查对预光照步骤按 `dualVertex` 配布局；四边形 / 正交 / Alt 矩阵沿用 P13j-1 的 `isPrelitDraw`（尺寸按合成 RT），`g_Bones` 与变形 uniform 沿用 puppet 绘制的每帧写入（几何是 `puppet` 就写）。
+
 ## 实施记录
 
 ### P13j-1 普通图层（2026-11-18）
@@ -47,3 +62,11 @@
 - 确定性工程 `ignore/p13/j/gen_j.py`（tint 的 `alpha` 设 0.3，缺省 1 会把颜色整个换掉、看不出光照）+ `gen_j_inst.py`，抓帧 `A:\p13j\{fx2,tilt2,cbm,fog2,legacy2,inst}`：fx、cbm、legacy、inst 与 WPE **逐像素相同**，tilt 3 个、fog 2 个孤立像素差 1。普通图层的光照按图像尺寸（这里 32×32）的四边形算，画面上明暗变化很小（WPE 同样）；instanced 的 `p13j-inst` 光照铺满整个图层，验证了 AltModel 的缩放。抓帧常量：AltModel = 含父链的世界矩阵、不乘 `size`，AltNormal = 0.9542453 / 0.2951826 / 0.9983081（快速归一化）。
 - 单测 `compile/p13j.test.ts`（变体的编法与触发条件、Alt 矩阵的写法），`lights.test.ts` 两个旧的照报用例改成「编了变体」；相关 13 个测试文件全过，tsc 0 error。
 - 语料（「HEAD」与「HEAD + P13j-1」两份快照，`ignore/p13/j/corpus-{head,mine}.json`）：只有 `3662790108` 去掉 `lighting:prelighting`（还缺 9 个材质文件），没有新增键；干净 223 不变。`3400241651` 的只开反射的图层现在会走预光照（没有法线图，画面不变）。
+
+### P13j-2 puppet（2026-11-18）
+
+- 按点 3–5 实现：预光照分支对 puppet 不再照报，同一份 `imageMaterials` 原文加 puppet 组合键（去 `SKINNING_ALPHA`，skinned 时 `PRELIGHTINGDUALVERTEX`）重编、`cullmode` 改 `nocull`，`PassContext` 同带 `puppet` 与 `prelit` 时放行 `PUPPET_PRELIT_COMBOS`；`meshAttributes(format, dualVertex)` 给 `a_PositionC1` 补一项指向位置，编译期 `checkMeshAttributes`、渲染器 `meshVertexLayout` 与自查都带它；渲染图的基础步骤对 puppet 画整张网格（几何 `puppet`，UV 同基础四边形，槽 5 变形纹理，不清 RT）。纹理通道 + 光照仍报 `puppet:texture-channels:prelighting`，开雾仍报 `fog:puppet`；带裁切的 puppet 预光照时画整张网格（裁切在上屏做，语料 0、没实测）。
+- 走查（FINAL_CHECK）：`ignore/p13/j/walk/make_iso_2515.py` 的复制工程（五个部件 + 三盏遗留 point 灯，去掉背景、粒子、读快照的 Compose），WPE 3840×2160 抓 3 帧（`A:\p13j\2515iso-fps20-3840x2160`，帧率 20，设置没改），我们按日志回放：第 208 帧 524 个像素差 ≤ 2、第 210 帧 1096 个像素差 ≤ 3（占 0.006% / 0.013%），没有成块差异。画面里有 puppet 动画、两组 waterwaves、屏幕空间反射与泛光。
+- 变异：预光照变体不带 puppet 组合键（光照按未蒙皮的姿势算）时第 208 帧 22% 的像素不同、最大差 217；还原后画面哈希回到 `fbe5185a…`。
+- 单测 `compile/p13j.test.ts` 加六例（组合键、去 `SKINNING_ALPHA`、不编的条件、渲染图的基础步骤、`a_PositionC1` 的别名项与顶点布局）；P13j-1 漏改的 `compile/p8.test.ts` 一条旧用例（被依赖 + 光照仍期望照报）一起改成「编了变体」。在「HEAD + P13j-2」快照里 tsc 0 error、相关 10 个文件全过。
+- 语料（`ignore/p13/j/corpus-{head2,mine2}.json`）：干净 223 → 224（`2515018199`），只去掉 `lighting:prelighting`，没有新增键。

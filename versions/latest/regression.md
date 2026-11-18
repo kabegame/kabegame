@@ -3614,6 +3614,18 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PJ2 对照 WPE（确定性工程） | Windows dev + WPE 抓帧（`A:\p13j\`） | `ignore/p13/j/gen_j.py` 的 fx / tilt / cbm / fog / legacy 与 `gen_j_inst.py` 的 inst 整帧比 | 逐像素相同或只有零星取整差 | 2026-11-18：fx、cbm、legacy、inst 逐像素相同；tilt 3 个、fog 2 个孤立像素差 1 |
 | [ ] | PJ3 非 Windows | macOS / Linux | 同 PJ2 的工程导入后预览 | 同 Windows | 本机不能测 |
 
+## 场景壁纸预光照：puppet（P13j-2）
+
+2026-11-18。开光照或反射又走合成路径的 puppet，预光照变体另带 puppet 组合键（没有 `SKINNING_ALPHA`，skinned 时加 `PRELIGHTINGDUALVERTEX`）、`nocull`，基础 pass 画整张网格进合成 RT（原始位置定光栅位置、蒙皮后的位置算光照，`a_PositionC1` 读位置那一项，画前不清 RT），不再报 `lighting:prelighting`；纹理通道 + 光照仍报 `puppet:texture-channels:prelighting`。实测见 `phase-13j-prelighting.md` 与 `p13-REPORT.md`「P13j-2：puppet」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PK0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；`src/compile/p13j.test.ts`、`p8.test.ts`、`lights.test.ts`、`p12b2-tc.test.ts`、`p12a.test.ts`、`mdl.test.ts` 与 render 侧 puppet / 网格的测试 | 0 error、全过 | 2026-11-18：工作区与「HEAD + P13j-2」快照里 tsc 都是 0 error；快照里 10 个文件 355 例全过（新增 6 例：组合键、去 `SKINNING_ALPHA`、不编的条件、基础步骤画网格、`a_PositionC1` 的别名与顶点布局；`p8.test.ts` 补改 P13j-1 漏掉的一条旧期望） |
+| [x] | PK1 语料 | Node，233 个工程 | 「HEAD」与「HEAD + P13j-2」两份快照各扫一遍（同一个翻译器 wasm） | 只去掉 `lighting:prelighting`，没有新增键 | 2026-11-18：干净 223 → 224（`2515018199`），没有新增键 |
+| [x] | PK2 走查（FINAL_CHECK） | Windows dev + WPE 抓帧（`A:\p13j\2515iso-fps20-3840x2160`，帧率 20，设置没改） | `ignore/p13/j/walk/make_iso_2515.py` 的复制工程（五个部件 + 三盏遗留 point 灯）按日志回放，3840×2160 整帧比 | 整帧几乎逐像素相同、没有成块差异 | 2026-11-18：第 208 帧 524 个像素差 ≤ 2，第 210 帧 1096 个像素差 ≤ 3；变异「变体不带 puppet 组合键」时 22% 的像素不同，还原后画面哈希回到原值 |
+| [x] | PK3 真机预览 | Windows dev | 图库里预览 `2515018199`（Knight Artorias） | 不再停在封面、实时渲染；盔甲上的高光随灯光的移动变化，披风与头盔边缘的水波效果正常 | 待用户看 |
+| [ ] | PK4 非 Windows | macOS / Linux | 同 PK3 | 同 Windows | 本机不能测 |
+
 ## WPE 壁纸设置与预览设置
 
 2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。

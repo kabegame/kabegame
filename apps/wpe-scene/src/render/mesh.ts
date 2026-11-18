@@ -51,8 +51,13 @@ function meshFormat(item: Pick<MdlVertexAttribute, "type" | "components">): GPUV
  * 网格有这一项、分量类型却对不上（`attributeTypeMatches`）：没读的同上接占位；读了的画不了，进 `problems`（编译期报
  * `mdl:attribute-type`），WebGPU 的格式与着色器类型的基础类型不同是管线校验错误。
  */
-export function meshVertexLayout(attributes: readonly InterfaceVariable[], format: number): MeshVertexLayout {
-  const items = new Map(meshAttributes(format).map((item) => [semanticKey(item), item]));
+export function meshVertexLayout(
+  attributes: readonly InterfaceVariable[],
+  format: number,
+  /** 预光照的 puppet 绘制（P13j-2）：`a_PositionC1` 读位置那一项（`meshAttributes`）。 */
+  dualVertex = false,
+): MeshVertexLayout {
+  const items = new Map(meshAttributes(format, dualVertex).map((item) => [semanticKey(item), item]));
   const mesh: GPUVertexAttribute[] = [];
   const zeros: GPUVertexAttribute[] = [];
   const problems: string[] = [];
