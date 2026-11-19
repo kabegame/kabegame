@@ -138,7 +138,7 @@ tauri-build = { path = "third/tauri/crates/tauri-build" }
 # 且 tauri-plugin 只依赖 tauri/tauri-utils(无反向类型边界),registry 版经上面的 tauri-utils patch
 # already 复用同一份 tauri-utils,不产生重复。Cargo.lock 将 tauri-utils 钉在 2.10.2(与 monorepo 一致,
 # 满足所有 ^2.x 约束)以让 path patch 全图统一,避免 registry 版本混入。
-cef-dll-sys = { path = "third/cef-rs/sys" } # macOS direct-linked framework (kabegame-149 fork)
+cef-dll-sys = { path = "third/cef-rs/sys" } # macOS direct-linked framework (kabegame fork)
 # 安全封装层与 sys 必须同源:third-patches/cef 给 CefDragHandler 加了 OnDragOver/
 # OnDragLeave/OnDrop,重新生成的 bindings 经 third-patches/cef-rs/0003 入库(先跑
 # `deno task patch cef-rs`)。只 patch sys 而让 `cef` 走 registry 的话,新回调在安全层

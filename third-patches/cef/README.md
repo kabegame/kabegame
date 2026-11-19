@@ -3,11 +3,13 @@
 ## Upstream
 
 - Repository: <https://github.com/chromiumembedded/cef.git>
-- Vendor base: `0d0eeb61160536e447c79335c1ee963f57eb6d60` (branch `7827`)
+- Vendor base: `6028375a4532fb89d23b58635f5c0d3a82c93959` (branch `8078`, CEF 156.0.30, Chromium 156.0.8078.96)
 
 ## Patches
 
-- `01-flat-subprocess-path.patch` — honors an explicit browser subprocess path for every child process type, allowing Kabegame to use one flat helper executable on all desktop platforms.
+Numbering is kept stable even when a patch is dropped, because the code and docs refer to the patches by number ("CEF patch 05", "CEF 补丁 11").
+
+- `01` (removed in the M156 re-vendor) — used to make an explicit `--browser-subprocess-path` apply verbatim to every child process type, skipping the macOS helper-app variant rewrite. Chromium 156 does this upstream: `ChildProcessHost::GetChildPath()` now returns the switch value before anything else, so Kabegame's single flat helper keeps working without a patch.
 - `02-drag-drop-client-events.patch` — extends `CefDragHandler` with `OnDragOver` / `OnDragLeave` / `OnDrop` (all `added=experimental`) so a client can observe a full external drag sequence and consume the drop. Without this, CEF only exposes `OnDragEnter`, whose sole power is cancelling the whole drag — leaving no way to get a drop notification and suppress Chromium's default handling (navigating to the dropped file). Wiring:
   - `AlloyBrowserHostImpl` overrides `content::WebContentsDelegate::PreHandleDragUpdate` / `PreHandleDragExit` → `OnDragOver` / `OnDragLeave`. The update notification carries no operations mask, so the mask captured in `CanDragEnter` is remembered in `current_drag_operations_mask_`.
   - `ChromeWebContentsViewDelegateCef` overrides `OnPerformingDrop` → `OnDrop`; returning true runs the completion callback with `std::nullopt`, which aborts the drop before it reaches the renderer. This is the equivalent of wry's `performDragOperation` returning `YES` without calling `super`.
@@ -25,6 +27,8 @@
   The Windows half reuses the aura hook (gate `IS_LINUX || IS_WIN`; ChromeOS stays out): `OSExchangeDataProviderWin::SetFilenames` turns the injected filenames into a plain `CF_HDROP` of the real paths, which Explorer copies on drop with no delay-rendered download or temp directory. Like macOS it must clear `html` (it becomes `CF_HTML`, which Word / Outlook / OneNote prefer over `CF_HDROP`) and `download_metadata` (it would make `PrepareDragForDownload()` add a second, delay-rendered `CF_HDROP` — the `DownloadURL` path this replaces; the reset is a no-op on Linux), and it must not mark the data with `chromium/x-renderer-taint`: `OSExchangeDataProviderWin` writes the taint as a real clipboard format that crosses process boundaries like the macOS flavor, so `PrepareDragData()` gains a `mark_renderer_tainted` parameter (default `true`) and the delegate branch passes `false` on Windows only.
 
   The Chromium-side patch (`patch/patches/kabegame_drag_source_filenames.patch` plus its `patch.cfg` entry) and the CEF-side API changes are two halves of the same feature and must be added or removed together.
+
+  Chromium 156 added `DropData::drag_id`, an opaque token that lets a receiving Chromium find the source `WebContents` (`kUTTypeChromiumDragId` on macOS, `SetChromeDragId` on aura). The patch leaves it in place: it is only read by `WebContents::FromDragId` and the macOS drop side, never by `FilterDropData()`, so unlike the renderer taint it does not make a receiver drop the filenames.
 
   The generated C API, `libcef_dll` cpptoc/ctocpp glue and API hashes are **not** part of this patch — they are produced by `tools/version_manager.py` during `cef_create_projects.sh`, which `scripts/build-chromium.ts` runs.
 
@@ -69,3 +73,11 @@ deno task patch cef
 2. Update `third/cef` to the desired commit from the upstream repository.
 3. Apply each patch with `git apply --check`, repairing context drift as needed.
 4. Regenerate the numbered patch files against the new vendor base and update this README.
+
+Notes from the 149 → 156 re-vendor (7827 → 7871 → 7922 → 7977 → 8037 → 8078, one CEF branch at a time):
+
+- `patch/patch.cfg` conflicts are always "both sides appended at the end". Do not trust a 3-way merge there (upstream once closed the list with a three-space `}` and once removed an entry that was in our context); rebuild the file from the upstream version and append the `kabegame_*` entries.
+- `deno task patch cef --check` only proves the outer series applies to `//cef`. The inner `patch/patches/kabegame_*.patch` files must also apply to the Chromium tag in `CHROMIUM_BUILD_COMPATIBILITY.txt`, with no fuzz (CEF runs `git apply -p0 --ignore-whitespace`). They can be checked without a Chromium checkout: fetch only the touched files from gitiles (`https://chromium.googlesource.com/chromium/src/+/refs/tags/<tag>/<path>?format=TEXT`, base64), apply the CEF patches from `patch.cfg` that touch the same files in order (e.g. `views_widget` before 09), then ours.
+- Keep each inner patch's own format: `kabegame_drag_source_filenames.patch` has `diff --git` / `index` lines and function context in hunk headers, `kabegame_raf_local_root_only.patch` has neither.
+- 09 mirrors `Page::Animate()` in `PageAnimator::AnimateForLocalRoot`; check that function did not change across the new range (it is unchanged from 149 to 156).
+- Building after a bump needs a new Chromium checkout: run `deno task build:chromium --clean`. With the default shallow checkout (`NO_HISTORY=1`), `automate-git.py` notices that `src/chrome/VERSION` differs from `CHROMIUM_BUILD_COMPATIBILITY.txt` and, given `--force-clean`, deletes `src` and rewrites `.gclient` itself; without it (the incremental path passes `--no-chromium-update`) it stops with "Current Chromium checkout with --no-chromium-history is incorrect". Do not delete `src` by hand: when `src` is missing automate-git keeps the old `.gclient`, which still pins the previous tag. The shallow fetch of `src` is a single multi-GB pack; through a local proxy it can break with `curl 56 … bad decrypt`, in which case just rerun.

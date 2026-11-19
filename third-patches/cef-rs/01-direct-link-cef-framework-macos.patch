@@ -1,56 +1,8 @@
 diff --git a/sys/build.rs b/sys/build.rs
-index d064e51..ec4b5e3 100644
+index c13ea7520377e700d52981ef37bba2f52924f6b2..083b3a1eae49bec6a26e22b9bf1c83e1ad9ff424 100644
 --- a/sys/build.rs
 +++ b/sys/build.rs
-@@ -120,23 +120,6 @@ fn main() -> anyhow::Result<()> {
-     println!("cargo::metadata=CEF_DIR={cef_dir_str}");
-     println!("cargo::rustc-link-search=native={cef_dir_str}");
- 
--    let mut cef_dll_wrapper = cmake::Config::new(&cef_dir);
--    cef_dll_wrapper
--        .generator("Ninja")
--        .profile("RelWithDebInfo")
--        .build_target("libcef_dll_wrapper");
--
--    let project_arch = match os_arch.arch {
--        "aarch64" => "arm64",
--        arch => arch,
--    };
--
--    let sandbox = if cfg!(feature = "sandbox") {
--        "ON"
--    } else {
--        "OFF"
--    };
--
-     match os_arch.os {
-         "linux" => {
-             // On Windows and Linux the cef files usually have to be next to the main binary.
-@@ -150,6 +133,23 @@ fn main() -> anyhow::Result<()> {
-             // On macOS it's more complicated so we'll leave it to tools like tauri-cli for now.
-             copy_cef_runtime_files(&cef_dir, target_dir)?;
- 
-+            let mut cef_dll_wrapper = cmake::Config::new(&cef_dir);
-+            cef_dll_wrapper
-+                .generator("Ninja")
-+                .profile("RelWithDebInfo")
-+                .build_target("libcef_dll_wrapper");
-+
-+            let project_arch = match os_arch.arch {
-+                "aarch64" => "arm64",
-+                arch => arch,
-+            };
-+
-+            let sandbox = if cfg!(feature = "sandbox") {
-+                "ON"
-+            } else {
-+                "OFF"
-+            };
-+
-             let sdk_libs = [
-                 "comctl32.lib",
-                 "delayimp.lib",
-@@ -186,15 +186,30 @@ fn main() -> anyhow::Result<()> {
+@@ -216,15 +216,30 @@ fn main() -> anyhow::Result<()> {
          "macos" => {
              println!("cargo::rustc-link-lib=framework=AppKit");
  
@@ -92,7 +44,7 @@ index d064e51..ec4b5e3 100644
      }
 diff --git a/sys/src/direct_link_loader_stubs.rs b/sys/src/direct_link_loader_stubs.rs
 new file mode 100644
-index 0000000..0fa0e78
+index 0000000000000000000000000000000000000000..0fa0e78b8c573cd0ee61104a0f3dcbc39f320433
 --- /dev/null
 +++ b/sys/src/direct_link_loader_stubs.rs
 @@ -0,0 +1,14 @@
@@ -111,7 +63,7 @@ index 0000000..0fa0e78
 +    1
 +}
 diff --git a/sys/src/lib.rs b/sys/src/lib.rs
-index 7f092d3..21d8ee6 100644
+index 7f092d3262acd3c89a8da8391e79671c48df8208..21d8ee64d89b02c8dce8e1f267437af6776c810f 100644
 --- a/sys/src/lib.rs
 +++ b/sys/src/lib.rs
 @@ -10,6 +10,9 @@

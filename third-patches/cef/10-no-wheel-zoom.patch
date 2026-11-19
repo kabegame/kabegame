@@ -1,5 +1,5 @@
 diff --git a/libcef/browser/alloy/alloy_browser_host_impl.cc b/libcef/browser/alloy/alloy_browser_host_impl.cc
-index fc2ee7ac5b63dab7f5379e7bc0d47f07ed70a37f..e1044e97db252d2ba90df7dcaa0e7429b52b3959 100644
+index a63337cb052ebc1dd9033e9bc61713d9b6ab7aec..e7467f90326e0e24fb51a04f3ed4362498ba0484 100644
 --- a/libcef/browser/alloy/alloy_browser_host_impl.cc
 +++ b/libcef/browser/alloy/alloy_browser_host_impl.cc
 @@ -946,6 +946,18 @@ bool AlloyBrowserHostImpl::DidAddMessageToConsole(

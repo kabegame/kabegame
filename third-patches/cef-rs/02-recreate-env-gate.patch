@@ -1,55 +1,66 @@
 diff --git a/sys/build.rs b/sys/build.rs
-index ec4b5e3..e4246a1 100644
+index 083b3a1eae49bec6a26e22b9bf1c83e1ad9ff424..e15c5ed13d9f2d92d09d2ba4ddf3455f930e8945 100644
 --- a/sys/build.rs
 +++ b/sys/build.rs
-@@ -23,26 +23,26 @@ fn main() -> anyhow::Result<()> {
- 
+@@ -25,31 +25,32 @@ fn main() -> anyhow::Result<()> {
      let resolve_cef_dir = |location: &Path| -> anyhow::Result<PathBuf> {
          let cef_dir = location.join(os_arch.to_string());
--
+ 
 -        if !fs::exists(&cef_dir)? {
--            let download_url = download_cef::default_download_url();
--            let index = CefIndex::download_from(&download_url)?;
--            let platform = index.platform(&target)?;
--            let version = platform.version(&cef_version)?;
+-            if env::var("NIX_CEF_BINARY").is_ok() {
+-                download_cef::install_nix_cef(&cef_version, &cef_dir, false)?;
+-            } else {
+-                use download_cef::CefIndex;
 -
--            let archive = version.download_archive_from(&download_url, location, false)?;
--            let extracted_dir =
--                download_cef::extract_target_archive(&target, &archive, location, false)?;
--            let extracted_dir_canonical = fs::canonicalize(&extracted_dir)?;
--            let cef_dir_canonical = fs::canonicalize(&cef_dir)?;
--            if extracted_dir_canonical != cef_dir_canonical {
--                return Err(anyhow::anyhow!(
--                    "extracted dir {extracted_dir_canonical:?} does not match cef_dir {cef_dir_canonical:?}",
--                ));
+-                let download_url = download_cef::default_download_url();
+-                let index = CefIndex::download_from(&download_url)?;
+-                let platform = index.platform(&target)?;
+-                let version = platform.version(&cef_version)?;
+-
+-                let archive = version.download_archive_from(&download_url, location, false)?;
+-                let extracted_dir =
+-                    download_cef::extract_target_archive(&target, &archive, location, false)?;
+-                let extracted_dir_canonical = fs::canonicalize(&extracted_dir)?;
+-                let cef_dir_canonical = fs::canonicalize(&cef_dir)?;
+-                if extracted_dir_canonical != cef_dir_canonical {
+-                    return Err(anyhow::anyhow!(
+-                        "extracted dir {extracted_dir_canonical:?} does not match cef_dir {cef_dir_canonical:?}",
+-                    ));
+-                }
+-
+-                version.write_archive_json(extracted_dir)?;
 -            }
--
--            version.write_archive_json(extracted_dir)?;
 -        }
 +        // 不主动下载
 +        // if !fs::exists(&cef_dir)? {
-+        //     let download_url = download_cef::default_download_url();
-+        //     let index = CefIndex::download_from(&download_url)?;
-+        //     let platform = index.platform(&target)?;
-+        //     let version = platform.version(&cef_version)?;
++        //     if env::var("NIX_CEF_BINARY").is_ok() {
++        //         download_cef::install_nix_cef(&cef_version, &cef_dir, false)?;
++        //     } else {
++        //         use download_cef::CefIndex;
 +
-+        //     let archive = version.download_archive_from(&download_url, location, false)?;
-+        //     let extracted_dir =
-+        //         download_cef::extract_target_archive(&target, &archive, location, false)?;
-+        //     let extracted_dir_canonical = fs::canonicalize(&extracted_dir)?;
-+        //     let cef_dir_canonical = fs::canonicalize(&cef_dir)?;
-+        //     if extracted_dir_canonical != cef_dir_canonical {
-+        //         return Err(anyhow::anyhow!(
-+        //             "extracted dir {extracted_dir_canonical:?} does not match cef_dir {cef_dir_canonical:?}",
-+        //         ));
++        //         let download_url = download_cef::default_download_url();
++        //         let index = CefIndex::download_from(&download_url)?;
++        //         let platform = index.platform(&target)?;
++        //         let version = platform.version(&cef_version)?;
++
++        //         let archive = version.download_archive_from(&download_url, location, false)?;
++        //         let extracted_dir =
++        //             download_cef::extract_target_archive(&target, &archive, location, false)?;
++        //         let extracted_dir_canonical = fs::canonicalize(&extracted_dir)?;
++        //         let cef_dir_canonical = fs::canonicalize(&cef_dir)?;
++        //         if extracted_dir_canonical != cef_dir_canonical {
++        //             return Err(anyhow::anyhow!(
++        //                 "extracted dir {extracted_dir_canonical:?} does not match cef_dir {cef_dir_canonical:?}",
++        //             ));
++        //         }
++
++        //         version.write_archive_json(extracted_dir)?;
 +        //     }
-+
-+        //     version.write_archive_json(extracted_dir)?;
 +        // }
  
          Ok(cef_dir)
      };
-@@ -197,8 +197,20 @@ fn main() -> anyhow::Result<()> {
+@@ -227,8 +228,20 @@ fn main() -> anyhow::Result<()> {
              std::fs::create_dir_all(&frameworks_dir)?;
              let link = frameworks_dir.join("Chromium Embedded Framework.framework");
              let src = cef_dir.join("Chromium Embedded Framework.framework");

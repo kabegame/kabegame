@@ -337,7 +337,7 @@ index 04127166299fe7eba8159f1ceff1b81685925c23..94b57edbd5b2f66248dd47db48ff9c58
  
    const bool is_main_frame_;
 diff --git a/libcef/renderer/frame_impl.cc b/libcef/renderer/frame_impl.cc
-index a91adcc41c996f99531e135d70241ad48cfdd34c..90b62d3851a4ae75c92fc14de698331d2ef4497e 100644
+index d5899d1a44fb51ad694eb56a9b92fde96b02ee69..0206f032769b4bbdf9a3916f15e66cea8eee5348 100644
 --- a/libcef/renderer/frame_impl.cc
 +++ b/libcef/renderer/frame_impl.cc
 @@ -281,6 +281,35 @@ CefRefPtr<CefURLRequest> CefFrameImpl::CreateURLRequest(
@@ -377,7 +377,7 @@ index a91adcc41c996f99531e135d70241ad48cfdd34c..90b62d3851a4ae75c92fc14de698331d
                                        CefRefPtr<CefProcessMessage> message) {
    CEF_REQUIRE_RT_RETURN_VOID();
 diff --git a/libcef/renderer/frame_impl.h b/libcef/renderer/frame_impl.h
-index 91fe050da1faa66acae038de0e737c02650adfb8..7473255dba606905860c0a75debef67eee602fbf 100644
+index 21fced6d4a83a135c22a597ac04962235db195c2..40111b5e998d05a8a22e7df11aecd39b5afb8342 100644
 --- a/libcef/renderer/frame_impl.h
 +++ b/libcef/renderer/frame_impl.h
 @@ -79,6 +79,22 @@ class CefFrameImpl
@@ -402,4 +402,4 @@ index 91fe050da1faa66acae038de0e737c02650adfb8..7473255dba606905860c0a75debef67e
 +                                  int click_count) override;
  
    // Forwarded from CefRenderFrameObserver.
-   void OnWasShown();
+   void MaybeReconnect();

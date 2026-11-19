@@ -1,5 +1,5 @@
 diff --git a/include/cef_drag_handler.h b/include/cef_drag_handler.h
-index cd354d782..ca449ca76 100644
+index cd354d782960c92b26e663330bfbfdf95c761d97..ca449ca76f7b0d05daef35376e6073377a261f1f 100644
 --- a/include/cef_drag_handler.h
 +++ b/include/cef_drag_handler.h
 @@ -65,6 +65,41 @@ class CefDragHandler : public virtual CefBaseRefCounted {
@@ -45,7 +45,7 @@ index cd354d782..ca449ca76 100644
    /// Called whenever draggable regions for the browser window change. These can
    /// be specified using the '-webkit-app-region: drag/no-drag' CSS-property. If
 diff --git a/libcef/browser/alloy/alloy_browser_host_impl.cc b/libcef/browser/alloy/alloy_browser_host_impl.cc
-index b10a9fd42..fc2ee7ac5 100644
+index 248604ecd28d40da3b1494768f3274667ecfe1cd..a63337cb052ebc1dd9033e9bc61713d9b6ab7aec 100644
 --- a/libcef/browser/alloy/alloy_browser_host_impl.cc
 +++ b/libcef/browser/alloy/alloy_browser_host_impl.cc
 @@ -53,6 +53,7 @@
@@ -97,10 +97,10 @@ index b10a9fd42..fc2ee7ac5 100644
      content::WebContents* web_contents,
      const GURL& target_url,
 diff --git a/libcef/browser/alloy/alloy_browser_host_impl.h b/libcef/browser/alloy/alloy_browser_host_impl.h
-index 705fb3411..16461ab68 100644
+index 9eeb0055cc63f75d162920f3bd8c1136e25fce95..d85b8844bf14bd57747170565c04ce08e11633c5 100644
 --- a/libcef/browser/alloy/alloy_browser_host_impl.h
 +++ b/libcef/browser/alloy/alloy_browser_host_impl.h
-@@ -208,6 +208,9 @@ class AlloyBrowserHostImpl : public CefBrowserHostBase,
+@@ -209,6 +209,9 @@ class AlloyBrowserHostImpl : public CefBrowserHostBase,
    bool CanDragEnter(content::WebContents* source,
                      const content::DropData& data,
                      blink::DragOperationsMask operations_allowed) override;
@@ -124,7 +124,7 @@ index 705fb3411..16461ab68 100644
  
  #endif  // CEF_LIBCEF_BROWSER_ALLOY_ALLOY_BROWSER_HOST_IMPL_H_
 diff --git a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
-index 49118f737..7c56ee576 100644
+index 49118f7373dd3d26e25bde890b3b51979b0b3bb2..7c56ee5765157ba1652ec7bf9d713e285db56cd1 100644
 --- a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
 +++ b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.cc
 @@ -4,7 +4,10 @@
@@ -166,7 +166,7 @@ index 49118f737..7c56ee576 100644
 +                                                      std::move(callback));
 +}
 diff --git a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
-index 7fad0509a..609f8b21f 100644
+index 7fad0509a507161f0e81fb3dea3ca55eab895d47..609f8b21fb8c41f1c053533583e23f597633477b 100644
 --- a/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
 +++ b/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h
 @@ -30,6 +30,8 @@ class ChromeWebContentsViewDelegateCef

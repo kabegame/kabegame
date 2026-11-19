@@ -1,8 +1,8 @@
 diff --git a/cef/src/bindings/x86_64_pc_windows_msvc.rs b/cef/src/bindings/x86_64_pc_windows_msvc.rs
-index a4a5b6a..0175610 100644
+index 033d133ef425cc0375ae35eeb2369997756a5750..b884f85684420659dcdf6be021d4ebefc0f8744e 100644
 --- a/cef/src/bindings/x86_64_pc_windows_msvc.rs
 +++ b/cef/src/bindings/x86_64_pc_windows_msvc.rs
-@@ -5225,6 +5225,8 @@ pub trait ImplDragData: Clone + Sized + Rc {
+@@ -5231,6 +5231,8 @@ pub trait ImplDragData: Clone + Sized + Rc {
      fn image_hotspot(&self) -> Point;
      #[doc = "See [`_cef_drag_data_t::has_image`] for more documentation."]
      fn has_image(&self) -> ::std::os::raw::c_int;
@@ -11,7 +11,7 @@ index a4a5b6a..0175610 100644
      fn get_raw(&self) -> *mut _cef_drag_data_t;
  }
  impl ImplDragData for DragData {
-@@ -5570,6 +5572,22 @@ impl ImplDragData for DragData {
+@@ -5576,6 +5578,22 @@ impl ImplDragData for DragData {
                  .unwrap_or_default()
          }
      }
@@ -34,7 +34,7 @@ index a4a5b6a..0175610 100644
      fn get_raw(&self) -> *mut _cef_drag_data_t {
          unsafe { RefGuard::into_raw(&self.0) }
      }
-@@ -19177,6 +19195,13 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
+@@ -19293,6 +19311,13 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
      ) -> ::std::os::raw::c_int {
          Default::default()
      }
@@ -48,7 +48,7 @@ index a4a5b6a..0175610 100644
      fn init_methods(object: &mut _cef_drag_handler_t) {
          impl_cef_drag_handler_t::init_methods::<Self, _cef_drag_handler_t>(object);
      }
-@@ -19193,6 +19218,7 @@ mod impl_cef_drag_handler_t {
+@@ -19309,6 +19334,7 @@ mod impl_cef_drag_handler_t {
          object.on_drag_over = Some(on_drag_over::<I, R>);
          object.on_drag_leave = Some(on_drag_leave::<I, R>);
          object.on_drop = Some(on_drop::<I, R>);
@@ -56,7 +56,7 @@ index a4a5b6a..0175610 100644
      }
      extern "C" fn on_drag_enter<I: ImplDragHandler, R: Rc>(
          self_: *mut _cef_drag_handler_t,
-@@ -19288,6 +19314,21 @@ mod impl_cef_drag_handler_t {
+@@ -19404,6 +19430,21 @@ mod impl_cef_drag_handler_t {
          let arg_drag_data = arg_drag_data.as_mut();
          ImplDragHandler::on_drop(&arg_self_.interface, arg_browser, arg_drag_data)
      }
@@ -78,7 +78,7 @@ index a4a5b6a..0175610 100644
  }
  impl ImplDragHandler for DragHandler {
      fn on_drag_enter(
-@@ -19436,6 +19477,31 @@ impl ImplDragHandler for DragHandler {
+@@ -19552,6 +19593,31 @@ impl ImplDragHandler for DragHandler {
                  .unwrap_or_default()
          }
      }
@@ -111,10 +111,10 @@ index a4a5b6a..0175610 100644
          unsafe { RefGuard::into_raw(&self.0) }
      }
 diff --git a/sys/src/bindings/x86_64_pc_windows_msvc.rs b/sys/src/bindings/x86_64_pc_windows_msvc.rs
-index 90eb294..ee68ea9 100644
+index 5cd58882adb3145d0ec78f1038c66988c9121f8d..50506f52196b3e4ac1ce8bf941513ff71fff1c55 100644
 --- a/sys/src/bindings/x86_64_pc_windows_msvc.rs
 +++ b/sys/src/bindings/x86_64_pc_windows_msvc.rs
-@@ -5978,10 +5978,17 @@ pub struct _cef_drag_data_t {
+@@ -22813,10 +22813,17 @@ pub struct _cef_drag_data_t {
      pub has_image: ::std::option::Option<
          unsafe extern "C" fn(self_: *mut _cef_drag_data_t) -> ::std::os::raw::c_int,
      >,
@@ -133,7 +133,7 @@ index 90eb294..ee68ea9 100644
      ["Alignment of _cef_drag_data_t"][::std::mem::align_of::<_cef_drag_data_t>() - 8usize];
      ["Offset of field: _cef_drag_data_t::base"]
          [::std::mem::offset_of!(_cef_drag_data_t, base) - 0usize];
-@@ -6039,6 +6046,8 @@ const _: () = {
+@@ -22874,6 +22881,8 @@ const _: () = {
          [::std::mem::offset_of!(_cef_drag_data_t, get_image_hotspot) - 240usize];
      ["Offset of field: _cef_drag_data_t::has_image"]
          [::std::mem::offset_of!(_cef_drag_data_t, has_image) - 248usize];
@@ -142,7 +142,7 @@ index 90eb294..ee68ea9 100644
  };
  #[doc = "\n Structure used to represent drag data. The functions of this structure may\n be called on any thread.\n\n NOTE: This struct is allocated DLL-side.\n"]
  pub type cef_drag_data_t = _cef_drag_data_t;
-@@ -10601,10 +10610,18 @@ pub struct _cef_drag_handler_t {
+@@ -27456,10 +27465,18 @@ pub struct _cef_drag_handler_t {
              dragData: *mut _cef_drag_data_t,
          ) -> ::std::os::raw::c_int,
      >,
@@ -162,7 +162,7 @@ index 90eb294..ee68ea9 100644
      ["Alignment of _cef_drag_handler_t"][::std::mem::align_of::<_cef_drag_handler_t>() - 8usize];
      ["Offset of field: _cef_drag_handler_t::base"]
          [::std::mem::offset_of!(_cef_drag_handler_t, base) - 0usize];
-@@ -10618,6 +10635,8 @@ const _: () = {
+@@ -27473,6 +27490,8 @@ const _: () = {
          [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_leave) - 64usize];
      ["Offset of field: _cef_drag_handler_t::on_drop"]
          [::std::mem::offset_of!(_cef_drag_handler_t, on_drop) - 72usize];

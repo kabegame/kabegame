@@ -23,11 +23,11 @@
 [submodule "third/cef-rs"]
 	path = third/cef-rs
 	url = https://github.com/tauri-apps/cef-rs.git
-	branch = 149-wrapper-path
+	branch = dev
 [submodule "third/cef"]
 	path = third/cef
 	url = https://github.com/chromiumembedded/cef.git
-	branch = 7827
+	branch = 8078
 [submodule "third/rsmpeg"]
 	path = third/rsmpeg
 	url = https://github.com/larksuite/rsmpeg.git

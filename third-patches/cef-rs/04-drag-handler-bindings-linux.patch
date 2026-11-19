@@ -1,8 +1,8 @@
 diff --git a/cef/src/bindings/x86_64_unknown_linux_gnu.rs b/cef/src/bindings/x86_64_unknown_linux_gnu.rs
-index 50f5d3f..4f56497 100644
+index e928185c03bb1a15162dbd8d88e4af6f189306ac..8c759887aadfb4e72eb72afdc48ebe4e8c9b0ec4 100644
 --- a/cef/src/bindings/x86_64_unknown_linux_gnu.rs
 +++ b/cef/src/bindings/x86_64_unknown_linux_gnu.rs
-@@ -19202,6 +19202,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
+@@ -19318,6 +19318,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
          regions: Option<&[DraggableRegion]>,
      ) {
      }
@@ -27,7 +27,7 @@ index 50f5d3f..4f56497 100644
      fn init_methods(object: &mut _cef_drag_handler_t) {
          impl_cef_drag_handler_t::init_methods::<Self, _cef_drag_handler_t>(object);
      }
-@@ -19215,6 +19233,9 @@ mod impl_cef_drag_handler_t {
+@@ -19331,6 +19349,9 @@ mod impl_cef_drag_handler_t {
      pub fn init_methods<I: ImplDragHandler, R: Rc>(object: &mut _cef_drag_handler_t) {
          object.on_drag_enter = Some(on_drag_enter::<I, R>);
          object.on_draggable_regions_changed = Some(on_draggable_regions_changed::<I, R>);
@@ -37,7 +37,7 @@ index 50f5d3f..4f56497 100644
      }
      extern "C" fn on_drag_enter<I: ImplDragHandler, R: Rc>(
          self_: *mut _cef_drag_handler_t,
-@@ -19264,6 +19285,52 @@ mod impl_cef_drag_handler_t {
+@@ -19380,6 +19401,52 @@ mod impl_cef_drag_handler_t {
              arg_regions,
          )
      }
@@ -90,7 +90,7 @@ index 50f5d3f..4f56497 100644
  }
  impl ImplDragHandler for DragHandler {
      fn on_drag_enter(
-@@ -19342,6 +19409,76 @@ impl ImplDragHandler for DragHandler {
+@@ -19458,6 +19525,76 @@ impl ImplDragHandler for DragHandler {
              }
          }
      }
@@ -168,10 +168,10 @@ index 50f5d3f..4f56497 100644
          unsafe { RefGuard::into_raw(&self.0) }
      }
 diff --git a/sys/src/bindings/x86_64_unknown_linux_gnu.rs b/sys/src/bindings/x86_64_unknown_linux_gnu.rs
-index 00b220e..1c14557 100644
+index 43ea441e75ca2e76a5b3f82d9afac2e84bd02a58..45179a6f48f2911d4380089230c792fdd0baccc0 100644
 --- a/sys/src/bindings/x86_64_unknown_linux_gnu.rs
 +++ b/sys/src/bindings/x86_64_unknown_linux_gnu.rs
-@@ -10540,10 +10540,31 @@ pub struct _cef_drag_handler_t {
+@@ -27194,10 +27194,31 @@ pub struct _cef_drag_handler_t {
              regions: *const cef_draggable_region_t,
          ),
      >,
@@ -204,7 +204,7 @@ index 00b220e..1c14557 100644
      ["Alignment of _cef_drag_handler_t"][::std::mem::align_of::<_cef_drag_handler_t>() - 8usize];
      ["Offset of field: _cef_drag_handler_t::base"]
          [::std::mem::offset_of!(_cef_drag_handler_t, base) - 0usize];
-@@ -10551,6 +10572,12 @@ const _: () = {
+@@ -27205,6 +27226,12 @@ const _: () = {
          [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_enter) - 40usize];
      ["Offset of field: _cef_drag_handler_t::on_draggable_regions_changed"]
          [::std::mem::offset_of!(_cef_drag_handler_t, on_draggable_regions_changed) - 48usize];

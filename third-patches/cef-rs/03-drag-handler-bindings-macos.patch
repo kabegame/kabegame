@@ -1,8 +1,8 @@
 diff --git a/cef/src/bindings/aarch64_apple_darwin.rs b/cef/src/bindings/aarch64_apple_darwin.rs
-index 23d4114..22b6682 100644
+index 6593be787c570401fc7c7f66d3bcb9cf013b2782..bed7cbfc6d0a8fe6c1731bfaaf77dd501277a7d6 100644
 --- a/cef/src/bindings/aarch64_apple_darwin.rs
 +++ b/cef/src/bindings/aarch64_apple_darwin.rs
-@@ -19145,6 +19145,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
+@@ -19261,6 +19261,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
          regions: Option<&[DraggableRegion]>,
      ) {
      }
@@ -27,7 +27,7 @@ index 23d4114..22b6682 100644
      fn init_methods(object: &mut _cef_drag_handler_t) {
          impl_cef_drag_handler_t::init_methods::<Self, _cef_drag_handler_t>(object);
      }
-@@ -19158,6 +19176,9 @@ mod impl_cef_drag_handler_t {
+@@ -19274,6 +19292,9 @@ mod impl_cef_drag_handler_t {
      pub fn init_methods<I: ImplDragHandler, R: Rc>(object: &mut _cef_drag_handler_t) {
          object.on_drag_enter = Some(on_drag_enter::<I, R>);
          object.on_draggable_regions_changed = Some(on_draggable_regions_changed::<I, R>);
@@ -37,7 +37,7 @@ index 23d4114..22b6682 100644
      }
      extern "C" fn on_drag_enter<I: ImplDragHandler, R: Rc>(
          self_: *mut _cef_drag_handler_t,
-@@ -19207,6 +19228,52 @@ mod impl_cef_drag_handler_t {
+@@ -19323,6 +19344,52 @@ mod impl_cef_drag_handler_t {
              arg_regions,
          )
      }
@@ -90,7 +90,7 @@ index 23d4114..22b6682 100644
  }
  impl ImplDragHandler for DragHandler {
      fn on_drag_enter(
-@@ -19285,6 +19352,76 @@ impl ImplDragHandler for DragHandler {
+@@ -19401,6 +19468,76 @@ impl ImplDragHandler for DragHandler {
              }
          }
      }
@@ -168,10 +168,10 @@ index 23d4114..22b6682 100644
          unsafe { RefGuard::into_raw(&self.0) }
      }
 diff --git a/cef/src/bindings/x86_64_apple_darwin.rs b/cef/src/bindings/x86_64_apple_darwin.rs
-index 23d4114..22b6682 100644
+index 6593be787c570401fc7c7f66d3bcb9cf013b2782..bed7cbfc6d0a8fe6c1731bfaaf77dd501277a7d6 100644
 --- a/cef/src/bindings/x86_64_apple_darwin.rs
 +++ b/cef/src/bindings/x86_64_apple_darwin.rs
-@@ -19145,6 +19145,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
+@@ -19261,6 +19261,24 @@ pub trait ImplDragHandler: Clone + Sized + Rc {
          regions: Option<&[DraggableRegion]>,
      ) {
      }
@@ -196,7 +196,7 @@ index 23d4114..22b6682 100644
      fn init_methods(object: &mut _cef_drag_handler_t) {
          impl_cef_drag_handler_t::init_methods::<Self, _cef_drag_handler_t>(object);
      }
-@@ -19158,6 +19176,9 @@ mod impl_cef_drag_handler_t {
+@@ -19274,6 +19292,9 @@ mod impl_cef_drag_handler_t {
      pub fn init_methods<I: ImplDragHandler, R: Rc>(object: &mut _cef_drag_handler_t) {
          object.on_drag_enter = Some(on_drag_enter::<I, R>);
          object.on_draggable_regions_changed = Some(on_draggable_regions_changed::<I, R>);
@@ -206,7 +206,7 @@ index 23d4114..22b6682 100644
      }
      extern "C" fn on_drag_enter<I: ImplDragHandler, R: Rc>(
          self_: *mut _cef_drag_handler_t,
-@@ -19207,6 +19228,52 @@ mod impl_cef_drag_handler_t {
+@@ -19323,6 +19344,52 @@ mod impl_cef_drag_handler_t {
              arg_regions,
          )
      }
@@ -259,7 +259,7 @@ index 23d4114..22b6682 100644
  }
  impl ImplDragHandler for DragHandler {
      fn on_drag_enter(
-@@ -19285,6 +19352,76 @@ impl ImplDragHandler for DragHandler {
+@@ -19401,6 +19468,76 @@ impl ImplDragHandler for DragHandler {
              }
          }
      }
@@ -337,28 +337,10 @@ index 23d4114..22b6682 100644
          unsafe { RefGuard::into_raw(&self.0) }
      }
 diff --git a/sys/src/bindings/aarch64_apple_darwin.rs b/sys/src/bindings/aarch64_apple_darwin.rs
-index 91039bf..7132e5d 100644
+index b853a00f39ecc7c54ec8e7a746ce7f8b39e86964..12effcba610852af1ad2df982019e321a5d57079 100644
 --- a/sys/src/bindings/aarch64_apple_darwin.rs
 +++ b/sys/src/bindings/aarch64_apple_darwin.rs
-@@ -30,14 +30,14 @@ pub const CEF_API_VERSION_LAST: i32 = 14900;
- pub const CEF_API_VERSION_EXPERIMENTAL: i32 = 999999;
- pub const CEF_API_VERSION_NEXT: i32 = 999998;
- pub const CEF_API_VERSION: i32 = 999999;
--pub const CEF_VERSION: &[u8; 40] = b"149.0.2+ged5b3fd+chromium-149.0.7827.53\0";
-+pub const CEF_VERSION: &[u8; 41] = b"149.0.6+g0d0eeb6+chromium-149.0.7827.201\0";
- pub const CEF_VERSION_MAJOR: i32 = 149;
- pub const CEF_VERSION_MINOR: i32 = 0;
--pub const CEF_VERSION_PATCH: i32 = 2;
-+pub const CEF_VERSION_PATCH: i32 = 6;
- pub const CHROME_VERSION_MAJOR: i32 = 149;
- pub const CHROME_VERSION_MINOR: i32 = 0;
- pub const CHROME_VERSION_BUILD: i32 = 7827;
--pub const CHROME_VERSION_PATCH: i32 = 53;
-+pub const CHROME_VERSION_PATCH: i32 = 201;
- unsafe extern "C" {
-     #[doc = "\n Load the CEF library at the specified |path|. Returns true (1) on\n success and false (0) on failure.\n"]
-     pub fn cef_load_library(path: *const ::std::os::raw::c_char) -> ::std::os::raw::c_int;
-@@ -7346,7 +7346,7 @@ const _: () = {
+@@ -24267,7 +24267,7 @@ const _: () = {
  #[doc = "\n Structure used for managing cookies. The functions of this structure may be\n called on any thread unless otherwise indicated.\n\n NOTE: This struct is allocated DLL-side.\n"]
  pub type cef_cookie_manager_t = _cef_cookie_manager_t;
  unsafe extern "C" {
@@ -367,7 +349,7 @@ index 91039bf..7132e5d 100644
      pub fn cef_cookie_manager_get_global_manager(
          callback: *mut _cef_completion_callback_t,
      ) -> *mut cef_cookie_manager_t;
-@@ -7490,7 +7490,7 @@ const _: () = {
+@@ -24411,7 +24411,7 @@ const _: () = {
  #[doc = "\n Supports discovery of and communication with media devices on the local\n network via the Cast and DIAL protocols. The functions of this structure may\n be called on any browser process thread unless otherwise indicated.\n\n NOTE: This struct is allocated DLL-side.\n"]
  pub type cef_media_router_t = _cef_media_router_t;
  unsafe extern "C" {
@@ -376,7 +358,7 @@ index 91039bf..7132e5d 100644
      pub fn cef_media_router_get_global(
          callback: *mut _cef_completion_callback_t,
      ) -> *mut cef_media_router_t;
-@@ -10566,10 +10566,31 @@ pub struct _cef_drag_handler_t {
+@@ -27507,10 +27507,31 @@ pub struct _cef_drag_handler_t {
              regions: *const cef_draggable_region_t,
          ),
      >,
@@ -409,7 +391,7 @@ index 91039bf..7132e5d 100644
      ["Alignment of _cef_drag_handler_t"][::std::mem::align_of::<_cef_drag_handler_t>() - 8usize];
      ["Offset of field: _cef_drag_handler_t::base"]
          [::std::mem::offset_of!(_cef_drag_handler_t, base) - 0usize];
-@@ -10577,6 +10598,12 @@ const _: () = {
+@@ -27518,6 +27539,12 @@ const _: () = {
          [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_enter) - 40usize];
      ["Offset of field: _cef_drag_handler_t::on_draggable_regions_changed"]
          [::std::mem::offset_of!(_cef_drag_handler_t, on_draggable_regions_changed) - 48usize];
@@ -422,7 +404,7 @@ index 91039bf..7132e5d 100644
  };
  #[doc = "\n Implement this structure to handle events related to dragging. The functions\n of this structure will be called on the UI thread.\n\n NOTE: This struct is allocated client-side.\n"]
  pub type cef_drag_handler_t = _cef_drag_handler_t;
-@@ -14026,7 +14053,7 @@ const _: () = {
+@@ -30959,7 +30986,7 @@ const _: () = {
  #[doc = "\n Structure that creates cef_resource_handler_t instances for handling scheme\n requests. The functions of this structure will always be called on the IO\n thread.\n\n NOTE: This struct is allocated client-side.\n"]
  pub type cef_scheme_handler_factory_t = _cef_scheme_handler_factory_t;
  unsafe extern "C" {
@@ -431,7 +413,7 @@ index 91039bf..7132e5d 100644
      pub fn cef_register_scheme_handler_factory(
          scheme_name: *const cef_string_t,
          domain_name: *const cef_string_t,
-@@ -14034,7 +14061,7 @@ unsafe extern "C" {
+@@ -30967,7 +30994,7 @@ unsafe extern "C" {
      ) -> ::std::os::raw::c_int;
  }
  unsafe extern "C" {
@@ -441,28 +423,10 @@ index 91039bf..7132e5d 100644
  }
  #[doc = "\n Implement this structure to provide handler implementations. Methods will be\n called by the process and/or thread indicated.\n\n NOTE: This struct is allocated client-side.\n"]
 diff --git a/sys/src/bindings/x86_64_apple_darwin.rs b/sys/src/bindings/x86_64_apple_darwin.rs
-index 91039bf..7132e5d 100644
+index b853a00f39ecc7c54ec8e7a746ce7f8b39e86964..12effcba610852af1ad2df982019e321a5d57079 100644
 --- a/sys/src/bindings/x86_64_apple_darwin.rs
 +++ b/sys/src/bindings/x86_64_apple_darwin.rs
-@@ -30,14 +30,14 @@ pub const CEF_API_VERSION_LAST: i32 = 14900;
- pub const CEF_API_VERSION_EXPERIMENTAL: i32 = 999999;
- pub const CEF_API_VERSION_NEXT: i32 = 999998;
- pub const CEF_API_VERSION: i32 = 999999;
--pub const CEF_VERSION: &[u8; 40] = b"149.0.2+ged5b3fd+chromium-149.0.7827.53\0";
-+pub const CEF_VERSION: &[u8; 41] = b"149.0.6+g0d0eeb6+chromium-149.0.7827.201\0";
- pub const CEF_VERSION_MAJOR: i32 = 149;
- pub const CEF_VERSION_MINOR: i32 = 0;
--pub const CEF_VERSION_PATCH: i32 = 2;
-+pub const CEF_VERSION_PATCH: i32 = 6;
- pub const CHROME_VERSION_MAJOR: i32 = 149;
- pub const CHROME_VERSION_MINOR: i32 = 0;
- pub const CHROME_VERSION_BUILD: i32 = 7827;
--pub const CHROME_VERSION_PATCH: i32 = 53;
-+pub const CHROME_VERSION_PATCH: i32 = 201;
- unsafe extern "C" {
-     #[doc = "\n Load the CEF library at the specified |path|. Returns true (1) on\n success and false (0) on failure.\n"]
-     pub fn cef_load_library(path: *const ::std::os::raw::c_char) -> ::std::os::raw::c_int;
-@@ -7346,7 +7346,7 @@ const _: () = {
+@@ -24267,7 +24267,7 @@ const _: () = {
  #[doc = "\n Structure used for managing cookies. The functions of this structure may be\n called on any thread unless otherwise indicated.\n\n NOTE: This struct is allocated DLL-side.\n"]
  pub type cef_cookie_manager_t = _cef_cookie_manager_t;
  unsafe extern "C" {
@@ -471,7 +435,7 @@ index 91039bf..7132e5d 100644
      pub fn cef_cookie_manager_get_global_manager(
          callback: *mut _cef_completion_callback_t,
      ) -> *mut cef_cookie_manager_t;
-@@ -7490,7 +7490,7 @@ const _: () = {
+@@ -24411,7 +24411,7 @@ const _: () = {
  #[doc = "\n Supports discovery of and communication with media devices on the local\n network via the Cast and DIAL protocols. The functions of this structure may\n be called on any browser process thread unless otherwise indicated.\n\n NOTE: This struct is allocated DLL-side.\n"]
  pub type cef_media_router_t = _cef_media_router_t;
  unsafe extern "C" {
@@ -480,7 +444,7 @@ index 91039bf..7132e5d 100644
      pub fn cef_media_router_get_global(
          callback: *mut _cef_completion_callback_t,
      ) -> *mut cef_media_router_t;
-@@ -10566,10 +10566,31 @@ pub struct _cef_drag_handler_t {
+@@ -27507,10 +27507,31 @@ pub struct _cef_drag_handler_t {
              regions: *const cef_draggable_region_t,
          ),
      >,
@@ -513,7 +477,7 @@ index 91039bf..7132e5d 100644
      ["Alignment of _cef_drag_handler_t"][::std::mem::align_of::<_cef_drag_handler_t>() - 8usize];
      ["Offset of field: _cef_drag_handler_t::base"]
          [::std::mem::offset_of!(_cef_drag_handler_t, base) - 0usize];
-@@ -10577,6 +10598,12 @@ const _: () = {
+@@ -27518,6 +27539,12 @@ const _: () = {
          [::std::mem::offset_of!(_cef_drag_handler_t, on_drag_enter) - 40usize];
      ["Offset of field: _cef_drag_handler_t::on_draggable_regions_changed"]
          [::std::mem::offset_of!(_cef_drag_handler_t, on_draggable_regions_changed) - 48usize];
@@ -526,7 +490,7 @@ index 91039bf..7132e5d 100644
  };
  #[doc = "\n Implement this structure to handle events related to dragging. The functions\n of this structure will be called on the UI thread.\n\n NOTE: This struct is allocated client-side.\n"]
  pub type cef_drag_handler_t = _cef_drag_handler_t;
-@@ -14026,7 +14053,7 @@ const _: () = {
+@@ -30959,7 +30986,7 @@ const _: () = {
  #[doc = "\n Structure that creates cef_resource_handler_t instances for handling scheme\n requests. The functions of this structure will always be called on the IO\n thread.\n\n NOTE: This struct is allocated client-side.\n"]
  pub type cef_scheme_handler_factory_t = _cef_scheme_handler_factory_t;
  unsafe extern "C" {
@@ -535,7 +499,7 @@ index 91039bf..7132e5d 100644
      pub fn cef_register_scheme_handler_factory(
          scheme_name: *const cef_string_t,
          domain_name: *const cef_string_t,
-@@ -14034,7 +14061,7 @@ unsafe extern "C" {
+@@ -30967,7 +30994,7 @@ unsafe extern "C" {
      ) -> ::std::os::raw::c_int;
  }
  unsafe extern "C" {

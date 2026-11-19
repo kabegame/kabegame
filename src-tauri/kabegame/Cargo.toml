@@ -17,7 +17,7 @@ image = {workspace = true}
 serde = {workspace = true}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-cef = { version = "149", default-features = false, optional = true }
+cef = { version = "156", default-features = false, optional = true }
 kabegame-i18n = { workspace = true }
 pathql-rs = { workspace = true }
 dirs = "5.0"
