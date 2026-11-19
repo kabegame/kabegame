@@ -42,6 +42,8 @@ export type ScriptValue = number[] | boolean | string;
 export const RUNTIME_CALLBACKS = [
   "init",
   "update",
+  // 屏幕分辨率变了（`resizeScreen`）：宿主在 `engine.screenResolution` 换成新值后同步调，返回值丢弃
+  "resizeScreen",
   "applyUserProperties",
   "destroy",
   "animationEvent",
@@ -722,6 +724,25 @@ export class ScriptRuntime {
     for (const record of this.records) {
       if (record.state !== "inited" || record.disabled.has(callback) || !this.exported(record, callback)) continue;
       this.call(record, callback, makeEvent(this.realm));
+      if (this.halted) break;
+    }
+  }
+
+  /**
+   * 屏幕分辨率变了（WPE 的 `WM_SIZE` → resize `FUN_14017f1b0`，派发在 wp.asm `0x14017f700`–`0x14017f7c8`）：发给全部已跑完 `init`、导出了
+   * `resizeScreen` 且没被禁用的脚本，按记录顺序（= WPE 的登记顺序，全场景广播、不分对象）。参数是新的屏幕分辨率：每个接收者各建一个原型为
+   * realm `Vec2.prototype` 的对象，自有 `x`、`y` 是单精度值（dll `CallCallback` 第 2 号分支 `0x18164e6fa`，同光标事件的向量）。返回值丢弃
+   * （WPE 只写回 `init` / `update` / `animationEvent`）；出错只禁用这个回调（`invoke`）。宿主在 `engine.screenResolution` 已换成新值之后、
+   * 帧外同步调（WPE 在 resize 函数里改完 `g_Screen` 尺寸、重建 RT 之后调），首次创建时不调。
+   */
+  resizeScreen(width: number, height: number): void {
+    if (this.halted) return;
+    const prototype = this.realm.prototypes.Vec2;
+    const Vec2 = (prototype as { constructor: new (...values: number[]) => unknown }).constructor;
+    for (const record of this.records) {
+      // 禁用的由 `call` 跳过；没导出的先跳过，不白建参数
+      if (record.state !== "inited" || !this.exported(record, "resizeScreen")) continue;
+      this.call(record, "resizeScreen", new Vec2(...scriptNumbers([width, height])));
       if (this.halted) break;
     }
   }

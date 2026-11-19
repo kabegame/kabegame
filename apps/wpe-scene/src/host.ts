@@ -56,7 +56,8 @@ import { SceneMedia, type MediaDelta, type SceneMediaSnapshot } from "./media/sc
 import { closeCover, FLAG_STATUS, EMPTY_PROPS } from "./media/types";
 import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import { emptyCursorInput, type CursorInputSnapshot } from "./render/cursor";
-import type { SceneStyle } from "./render/layout";
+import { canvasSize, type SceneStyle } from "./render/layout";
+import { ScreenResolution } from "./render/screenResolution";
 import { uploadableTextures, visibleObjects } from "./render/scene";
 import { SceneState } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
@@ -79,6 +80,7 @@ import { createIframeRealm, getJsModuleIndex } from "./script/realm";
 import { ScriptRuntime, scriptDiagnostics, type ScriptTarget, type ScriptValue } from "./script/runtime";
 import { readScriptState, recordRecompileWrite, writeScriptState } from "./script/stateWrite";
 import { browserStorage, clearSceneStorage } from "./script/storage";
+import { sameRuntimeTextFields } from "./text/fields";
 import { SceneTexts, type TextRelayouter } from "./text/host";
 import type { TextLayout } from "./text/layout";
 import { shortcutRequest } from "./shortcut/message";
@@ -307,6 +309,12 @@ export class SceneHost {
   /** 用户纹理来源的种类表（名字 → 种类）：加载时按 bundle 建，`addCompiledObject` 带来新来源时补（`state.onUserTexture` 查它）。 */
   private userTextureKinds = new Map<string, UserTextureSource["kind"]>();
   private runtime: ScriptRuntime | null = null;
+  /**
+   * 脚本的 `engine.screenResolution`（显示缩放为 1 的画布像素，`render/screenResolution.ts`），跨渲染器共用：渲染器每次量画布都交给它，变了就调脚本的
+   * `resizeScreen`（WPE 的 `WM_SIZE`；布局或 DPR 变了才算，预览放大只改显示缩放）。运行时只发给跑完 `init` 的脚本；回调里写的字段同属性面板的
+   * 写入，下一次同步生效。首次加载的 `init` 早于建渲染器，见 `scriptScreenResolution`。
+   */
+  private readonly screen = new ScreenResolution((width, height) => this.runtime?.resizeScreen(width, height));
   private scriptApi: ScriptApi | null = null;
   private readonly scriptOverrides = new Map<string, ScriptValue>();
   /**
@@ -1141,6 +1149,7 @@ export class SceneHost {
         onReady: (item) => this.onTextReady(item),
       }));
       const loadingTexts = options.loadingTexts;
+      const compiledFields = fragment.layer.text.fields;
       pending.push(
         texts.layoutInCurrent(fragment.layer).then((layout) => {
           // 排版回来时对象可能又被删 / 换了：状态里没有文本对象就放掉引用
@@ -1149,6 +1158,11 @@ export class SceneHost {
             const current = state.texts.get(object);
             state.setText(object, layout);
             if (current && current !== layout) texts.releaseLayout(current);
+            // 这份排版按编译期字段排，状态里的字段这时可能已被下面第 5 步的脚本重放或运行中写入改过（L6 替换：文本脚本写过「NIGHT」，
+            // 重放先于这份排版回来，期间按「NIGHT」排好的排版被上面盖掉，之后脚本每帧写同一串、不再标脏，就一直停在编译期的初值）。
+            // 不同时标脏，下一次 `sync` 按状态里的字段重排（WPE 重建时按对象当前的字段排）
+            const live = state.textFields.get(object);
+            if (live && compiledFields && !sameRuntimeTextFields(live, compiledFields)) state.touchText(object);
             // 这次加载 `init` 期间接入的：建 GPU 场景时交给渲染器（它按 bundle 另建状态）
             loadingTexts?.set(object, layout);
           } else texts.releaseLayout(layout);
@@ -1441,6 +1455,19 @@ export class SceneHost {
     await this.runtimeTask;
   }
 
+  /**
+   * 脚本读 `engine.screenResolution`：首次加载的 `init` 早于建渲染器（原先这时退回画布元素的缺省 300×150），那时按渲染器的同一规则（布局 × DPR，
+   * `canvasSize` 显示缩放 1；设备纹理上限还不知道，不钳）量一次记下（`seed`，只在从没量过时），渲染器建好后量到的不同就调 `resizeScreen`。
+   */
+  private scriptScreenResolution(): [number, number] {
+    if (!this.renderer) {
+      const rect = this.canvas.getBoundingClientRect();
+      const full = canvasSize(rect.width, rect.height, window.devicePixelRatio || 1, 1, Number.POSITIVE_INFINITY);
+      this.screen.seed(full.width, full.height);
+    }
+    return this.screen.current;
+  }
+
   private async startRuntime(bundle: SceneBundle, sceneAssets: string[]): Promise<void> {
     try {
       // 场景键取地址参数 kbScene（3c 已定 7）：没有图片 id 时只存在内存里，不读写持久存储。
@@ -1469,7 +1496,7 @@ export class SceneHost {
         bundle: () => this.scriptBundle!,
         state: () => this.scriptState!,
         // 按显示缩放为 1 算：预览缩小显示时画布变小，脚本看到的分辨率仍与桌面一致
-        screenResolution: () => this.renderer?.screenResolution ?? [this.canvas.width, this.canvas.height],
+        screenResolution: () => this.scriptScreenResolution(),
         frametime: () => this.renderer?.frameSeconds ?? 0,
         runtime: () => this.renderer?.runtimeSeconds ?? 0,
         timeOfDay: () => daytimeOf(new Date()),
@@ -2102,6 +2129,8 @@ export class SceneHost {
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 原地换尺寸失败，整场重新加载：`, reasons);
         void this.reload();
       },
+      // 脚本的 `engine.screenResolution`：宿主这一份交给渲染器量，变了调脚本的 `resizeScreen`（见 `screen`）
+      screenResolution: this.screen,
     }).then(
       (created) => {
         if (this.rendererTask !== task || this.disposed) {

@@ -1,5 +1,26 @@
 # v4.7.0 regression
 
+## 场景壁纸脚本回调 `resizeScreen`
+
+2026-11-19 Windows dev。脚本导出的 `resizeScreen(size)` 由运行时调用，不再报 `script:callback:resizeScreen`、退回预览图。脚本看到的屏幕分辨率（`engine.screenResolution`，布局 × DPR）由宿主的 `ScreenResolution` 跨渲染器维护：渲染器每次量画布都交给它，和之前不同时同步调 `resizeScreen`，参数是 `Vec2`，返回值丢弃，出错只禁用这个回调，首次创建不调。预览放大不算分辨率变化。顺带修正：首次加载时脚本 `init` 早于建渲染器，原先读到的是画布元素的缺省 300×150，现在是布局 × DPR。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：新增 `script/resizeScreen.test.ts`（全场景广播与顺序、`Vec2` 单精度且每个接收者各一个、返回值丢弃、出错只禁用这个回调；`ScreenResolution` 第一次量不通知、相同不通知、`seed` 只在没量过时记值），以及 `compile/scriptApi`、`script/api`、`host.l3b`、`host.l6`、`host.script`；`tsc`；Prettier | 全过 | 2026-11-19 Claude：6 个文件 220 条通过；`tsc` 0 错误；变异 7 处中 6 处检出，幸存的一处是重复判断，已删 |
+| [x] | T2 语料 | Windows | 语料编译扫描（234 张，含 `myprojects/3838286359`） | `3838286359` 只剩的 `script:callback:resizeScreen` 去掉 | 2026-11-19 Claude：改前 232 张干净、该场景只报这一个键；改后表里只剩 `applyGeneralSettings`，语料无人导出 |
+| [x] | T3 init 读到真实分辨率 | Windows dev，屏外宿主 1920×1080（DPR 1.5） | 打开 3838286359，读四个文本层的 `pointsize` | 按 2880×1620 算（标题 10.8），`resizeScreen` 不调 | 2026-11-19 Claude：10.8 / 9.36 / 6.84；改前是按 300×150 算的 1.125 |
+| [x] | T4 改尺寸调 `resizeScreen` | 同上 | 把宿主 iframe 改成 1280×720，经显示缩放消息让渲染器量一次 | `resizeScreen` 调一次，字号按 1920×1080 重算，脚本没有报错 | 2026-11-19 Claude：调 1 次，7.2 / 6.24 / 4.56；屏外 iframe 被节流、没有帧，重排要等下一帧（P6b 已验） |
+| [ ] | T5 桌面换分辨率 | Windows dev 窗口壁纸 | 把 3838286359 设为桌面，改系统缩放或分辨率 | 标题、歌手、时间的字号跟着变，字形清楚，不重新加载 | 需要用户看 |
+
+## 场景壁纸切 effect 开关后文字停在初值（3840287381）
+
+2026-11-19 Windows dev。文本层带属性控制显隐的 effect 时，切这个属性会按对象重编译那几个文本层。新排版按编译期的初值异步排好、换进状态，盖掉了已经按脚本写入重排的结果；之后脚本每帧写同一串，不再触发重排，文字停在初值（3840287381「余晖来信」切「文字模糊」后问候语、星期、日期回到 MORNING / DAY / `<Date>`）。现在换进状态后，比较状态里的文本字段和排版用的编译期字段，不同就标脏，下一帧按当前字段重排。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：`host.l3b.test.ts` 新增用例（重放过的字段与编译期不同时补一次重排，相同不补），以及 `host.l6`、`host.script`、`src/text`；`tsc`；Prettier | 全过 | 2026-11-19 Claude：12 个文件 208 条通过；去掉补重排那一行，新用例失败 |
+| [ ] | T2 真机 | Windows dev 预览 | 打开 3840287381 的预览，来回切几次「文字模糊」 | 问候语、星期、日期马上回到当前值（同 WPE），不停在 MORNING / DAY / `<Date>` | 需要用户看 |
+
 ## 场景壁纸预览放大更清楚（产品按画布分辨率画 第 3 步）
 
 2026-11-19 Windows dev。图库预览放大场景壁纸时，画布与场景目标跟着放大（以前封顶在「布局 × DPR」，放大只是拉伸），放大后的文字、线条、像素画都按放大后的分辨率画。主窗口（预览、应用背景）的画布不超过 3840×2160 的等量像素，再放大只是拉伸；桌面壁纸窗口不设这个预算（`apps/kabegame` 的 `sceneDisplayScale` / `SCENE_CANVAS_PIXEL_BUDGET`，窗口种类看 `WINDOW_KIND`）。

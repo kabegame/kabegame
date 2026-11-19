@@ -70,6 +70,7 @@ import {
   type ScenePlacement,
   type SceneStyle,
 } from "./layout";
+import { ScreenResolution } from "./screenResolution";
 import { advanceParallax, drawParallax, initialParallaxState, parallaxInput, type ParallaxState } from "./parallax";
 import { cameraObjectLayers, initialCameraPathState, sceneCameraFrame, type CameraPathState } from "./camera";
 import { DEFAULT_CAMERA, type SceneCameraJson } from "../compile/camera";
@@ -155,6 +156,12 @@ export interface SceneRendererOptions {
    * 原地换尺寸失败（`GpuScene.resize` 抛错：重排中途失败，场景已是新尺寸而部分图层仍是旧 draw）：渲染器不再尝试换尺寸，宿主整场重新加载兜底。
    */
   onResizeFailed?: (reasons: string[]) => void;
+  /**
+   * 脚本的屏幕分辨率（`engine.screenResolution`，显示缩放为 1 的画布尺寸，`screenResolution.ts`）：宿主建一份、跨渲染器共用（首次加载的 `init`
+   * 早于建渲染器，宿主先按同一规则量过）。渲染器每次量画布都交给它，和之前的值不同时它在这里同步通知宿主调脚本的 `resizeScreen`（帧外，先于暂停时的
+   * 补画）。预览放大只改显示缩放，不算。不给时渲染器自己建一份、不通知。
+   */
+  screenResolution?: ScreenResolution;
   /**
    * 光标交互（P6c，`render/cursor.ts`）：每个实时帧在相机更新之后、脚本之前，渲染器按本帧的光标世界坐标与左键算出 `input.*` 的快照
    * （`input`，总是给：脚本可能只读 `input`），`active()` 为真（有脚本导出了光标回调）时再按 WPE 的规则命中、派发（`events`）。
@@ -243,7 +250,7 @@ export class SceneRenderer {
   /** 一个布局 CSS 像素对多少画布像素（`canvasSize`），随画布尺寸一起更新；`center` 样式用。 */
   private pixelRatio = 1;
   /** 显示缩放为 1 时的画布尺寸：脚本的 `engine.screenResolution`，预览缩小显示时也和桌面一致。 */
-  private fullResolution: [number, number] = [1, 1];
+  private readonly fullResolution: ScreenResolution;
   /** `g_PointerPosition`：光标在画布上的归一化坐标按样式换算后的值（原点左上、y 向下，PLAN P2a「内置 uniform」）。 */
   private pointer: [number, number] = [0.5, 0.5];
   private pointerLast: [number, number] = [0.5, 0.5];
@@ -320,6 +327,8 @@ export class SceneRenderer {
     const device = gpu.device;
     this.maxFps = options.maxFps ?? 60;
     this.throttle = new FrameThrottle(this.maxFps);
+    // 宿主给的共用一份（它在首次加载 `init` 之前量过，构造末尾这次 `resize` 量到的不同就通知 `resizeScreen`）；没给时自己建、不通知
+    this.fullResolution = options.screenResolution ?? new ScreenResolution();
     if (validDisplayScale(options.displayScale)) this.displayScale = options.displayScale;
     const context = canvas.getContext("webgpu");
     if (!context) throw new SceneRenderError(["webgpu:canvas-context"]);
@@ -386,7 +395,7 @@ export class SceneRenderer {
    * 脚本看到的分辨率仍与桌面一致；桌面上就是画布尺寸。
    */
   get screenResolution(): [number, number] {
-    return this.fullResolution;
+    return this.fullResolution.current;
   }
 
   /** 最近一帧的 `g_Time`（未回绕）：脚本的 `engine.runtime`。 */
@@ -772,7 +781,8 @@ export class SceneRenderer {
     const max = this.gpu.device.limits.maxTextureDimension2D;
     const rect = this.canvas.getBoundingClientRect();
     const full = canvasSize(rect.width, rect.height, dpr, 1, max);
-    this.fullResolution = [full.width, full.height];
+    // 脚本的 `resizeScreen`（宿主给的 `screenResolution` 的通知）在这里同步调：先于下面的补画，回调里写的字段暂停时也画得出来
+    this.fullResolution.measure(full.width, full.height);
     const { width, height, pixelRatio } =
       this.displayScale === 1 ? full : canvasSize(rect.width, rect.height, dpr, this.displayScale, max);
     const sized = this.canvas.width === width && this.canvas.height === height;
@@ -929,7 +939,7 @@ export class SceneRenderer {
   private stepCursor(scene: GpuScene, state: SceneState): void {
     const options = this.options.cursor;
     if (!options) return;
-    const window = this.fullResolution;
+    const window = this.fullResolution.current;
     const { snapshot, dispatches } = this.cursorSession.frame(
       {
         camera: scene.cursorCamera(window),

@@ -10,7 +10,7 @@
  *   （`12` → `"12"`），枚举再查表、查不到取表里第一项。
  * 数字、向量两侧相同；布尔位脚本侧只收布尔（类型 6），属性侧照编译期的 `=== true`。
  */
-import type { TextDecorField, TextRuntimeField } from "../compile/bindings";
+import { TEXT_RUNTIME_FIELDS, type TextDecorField, type TextRuntimeField } from "../compile/bindings";
 import { numbers, type SceneScalar } from "../compile/model";
 
 /**
@@ -252,6 +252,14 @@ export function sameTextField(
 ): boolean {
   if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((part, i) => part === b[i]);
   return a === b;
+}
+
+/**
+ * 两份排版字段在运行中字段（`TEXT_RUNTIME_FIELDS`）上是否逐项相同（同 `sameTextField`）。单对象重编译（L6）的新排版按编译期字段排，排回来时
+ * 状态里的字段可能已被脚本重放或运行中写入改过，宿主据此决定要不要再按状态里的字段重排。
+ */
+export function sameRuntimeTextFields(a: TextFields, b: TextFields): boolean {
+  return TEXT_RUNTIME_FIELDS.every((field) => sameTextField(a[field], b[field]));
 }
 
 /** 运行中改得了的字段的类型索引（`TextRuntimeField` 的值）。 */

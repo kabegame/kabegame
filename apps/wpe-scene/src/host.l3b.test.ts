@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { ObjectFragment } from "./compile/fragment";
+import { TEXT_DEFAULTS } from "./text/fields";
 import type { ScriptRealm } from "./script/runtime";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -175,7 +176,7 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
       replaceObject() {},
       restructure: () => ({ changed: new Set(), issues: new Map() }),
     };
-    host.scriptState = { texts: new Map(), layers, addObject() {}, replaceObject() {}, setText };
+    host.scriptState = { texts: new Map(), textFields: new Map(), layers, addObject() {}, replaceObject() {}, setText };
     host.sceneTexts = stub("texts", { releaseLayout: release, layoutInCurrent: async () => layout });
     const textFragment = fragment(7, { layer: { object: 7, id: 8, text: {} } as never });
     await host.addCompiledObject({ fragment: textFragment }, "add");
@@ -205,6 +206,7 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     };
     host.scriptState = {
       texts,
+      textFields: new Map(),
       layers,
       addObject() {},
       // 同 `SceneState.replaceObject`：清掉这个对象的排版
@@ -232,6 +234,46 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
     await again;
     expect(texts.get(7)).toBe(next);
     expect(release).not.toHaveBeenCalled();
+  });
+
+  it("replace 文本层：排版按编译期字段排，回来时状态里的字段（脚本重放）不同就标脏重排，相同不标（3840287381 切文字模糊后停在初值）", async () => {
+    const { host } = makeHost();
+    const layers = new Map<number, unknown>([[7, {}]]);
+    const textFields = new Map<number, unknown>();
+    const touchText = vi.fn();
+    host.registry = {
+      bundle: { unsupported: [], configs: [], layers: [{ object: 7, subtree: [] }], general: {} },
+      applyDelta() {},
+      addObject() {},
+      replaceObject() {},
+      restructure: () => ({ changed: new Set(), issues: new Map() }),
+    };
+    host.scriptState = {
+      texts: new Map(),
+      textFields,
+      layers,
+      addObject() {},
+      replaceObject() {},
+      setText() {},
+      touchText,
+    };
+    let answer: (layout: unknown) => void = () => {};
+    host.sceneTexts = { releaseLayout() {}, layoutInCurrent: () => new Promise((resolve) => (answer = resolve)) };
+    const compiled = { ...TEXT_DEFAULTS, text: "MORNING" };
+    const textFragment = fragment(7, { layer: { object: 7, id: 8, text: { fields: compiled } } as never });
+    // 重放（第 5 步，同步）在排版回来之前把脚本写过的值放回状态
+    textFields.set(7, { ...compiled, text: "NIGHT" });
+    const done = host.addCompiledObject({ fragment: textFragment }, "replace");
+    answer({ mesh: null });
+    await done;
+    expect(touchText).toHaveBeenCalledWith(7);
+    // 状态里的字段和编译期相同：不多排一次
+    touchText.mockClear();
+    textFields.set(7, { ...compiled });
+    const again = host.addCompiledObject({ fragment: textFragment }, "replace");
+    answer({ mesh: null });
+    await again;
+    expect(touchText).not.toHaveBeenCalled();
   });
 
   it("没有场景（登记表或状态没建）时抛错", () => {

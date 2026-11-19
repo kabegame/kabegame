@@ -467,9 +467,9 @@ export const WPE_SCRIPT_CALLBACKS = [
  * 两者合起来恰好是 `WPE_SCRIPT_CALLBACKS`（这里是 Worker 里跑的编译期代码，不能 import `script/runtime.ts`）。
  */
 export const MISSING_SCRIPT_CALLBACKS: readonly string[] = [
-  // 屏幕尺寸变化、general 设置变化 → 后续
-  "resizeScreen",
+  // general 设置变化 → 后续
   "applyGeneralSettings",
+  // 屏幕分辨率变化 `resizeScreen` 已实现（`script/runtime.ts` 的 `resizeScreen`，渲染器量到 `engine.screenResolution` 变了时由宿主调）
   // 光标回调已在 P6c 实现（`script/runtime.ts` 的 `cursorEvent`；`cursorHitTest` WPE 自己也不调，导出它只打开拾取）
   // 系统媒体集成五个回调已在 P11c 实现（`script/runtime.ts` 的 `mediaEvent`，名字见 `MEDIA_CALLBACKS`）
 ];
