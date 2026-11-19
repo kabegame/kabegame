@@ -255,6 +255,19 @@ describe.skipIf(!existsSync(WASM) || !root)("MSDF 排版", () => {
     return result;
   }
 
+  it("被依赖（P8 步骤 6）同 colorBlendMode 合成加 padding：`p8-deptext` T4 的 6 pt「22:22」合成 RT 137×97（WPE 实测），不加时 73×33", async () => {
+    const fonts = new TextFonts(await engine(), readAsset);
+    const base = { text: "22:22", pointsize: 6 };
+    const plain = await layoutFull(fonts, new TextAtlases(), base);
+    const depended = await layoutFull(fonts, new TextAtlases(), { ...base, dependedOn: true });
+    const blended = await layoutFull(fonts, new TextAtlases(), { ...base, colorBlendMode: 1 });
+    expect(plain.compositeSize).toEqual([73, 33]);
+    expect(depended.compositeSize).toEqual([137, 97]);
+    expect(depended.size).toEqual(blended.size);
+    expect(depended.compositeSize).toEqual(blended.compositeSize);
+    fonts.dispose();
+  });
+
   it("四边形各边外扩 pad（y_ppem 133 → 49.875）；文字框、图层与合成 RT 尺寸不含 pad", async () => {
     const fonts = new TextFonts(await engine(), readAsset);
     const plain = await layoutFull(fonts, new TextAtlases(), { text: "A" });

@@ -1097,6 +1097,168 @@ export function alphaToCoverageEntry(wgsl: string, entryPoint: string): { code: 
 
   单测或比图要能检出。
 
+## 步骤 6 — 被依赖的文本层
+
+2026-11-19 加。P6 d/e 的语料清扫找到第一个用法：myprojects `3837779440` 只差 `dependency:text` 一个键（解包在 `ignore/p6/f3/proj/3837779440-kbp`）。
+- 文本层 1049（`objects[7]`）是字段脚本每帧改写的时钟「22:22」，6 pt `fonts/CursedTimerUlil-Aznm.ttf`，带 perspective、edgedetection、pulse 三个 effect；
+- 图像层 186（`objects[31]`，排在后面）`dependencies: [1049]`，blend effect 的槽 1 读 `_rt_imageLayerComposite_1049_a`。
+
+### 思路
+
+WPE 认被依赖时看的是图层类型 1 与 4（图像与文本，rea-p8-render 1.2），文本层同样置 `0x1010`、建独占 RT、按名字被引用。文本层和图像层只有一处不同：**合成 RT 的尺寸来自排版**（`textCompositeSize`，整数文字框两维 `max(4, ·)`），文字一变宽，RT 就换尺寸。所以这一步是把步骤 4 的规则原样扩到文本层，再补上「排版换尺寸 → 独占 RT 换新 → 引用方重绑」这一条运行时路径。
+
+- **编译**：名字表与 `dependedOn` 的判定从「图像层」扩成「图像层或文本层」；不再报 `dependency:text`；文本表的 `mayComposite` 加上被依赖（让加载时预备合成路径的变体）。passthrough 上屏材质本来就在被依赖时编，文本层按 passthrough JSON 原样的 `FOG_COMPUTED` 1。
+- **独占 RT 的尺寸**：文本层取当前排版的 `textCompositeSize`，不取 `compositeSizeOf`（那是图像层的规则）。
+- **文本层的合成 RT**：本来就是本层独占、随尺寸重建（`ensureTextComposites`）。被依赖时第 0 张换成独占 RT（`layerTargets`），其余张照旧本层独占；尺寸变了，第 0 张也释放、按新尺寸重建、登记回 `layerTargets`。
+- **引用方重绑**：L6b 已有 `rebindDependents`（单对象重编译换了独占 RT 时重绑引用方的 bind group、重写 `g_Texture<n>Resolution`）。`syncTexts` 重建完文本层后，独占 RT 换了的层同样调它，同一帧生效。
+- **空文字**：WPE 不画这一层，独占 RT 换成 4×4 的新 RT（全 0），引用方读它（实测第 5 条）。我们空排版的 `compositeSize` 是 (1, 1)，`textCompositeSize` 正好得 4×4；计划没有合成路径时独占 RT 照样按排版换尺寸，不释放、不画。
+- **释放**：`teardown` 对文本层整组释放合成 RT，被依赖时第 0 张就是 `layerTargets` 里那张，不能释放两次。
+
+要先在 WPE 实测再定的几点（测试工程 `p8-deptext`，见下）：
+1. 引用方读到的 RT：尺寸是不是 `textCompositeSize`（套 `max(4, ·)` 之后），UV 0–1 对整张 RT；
+2. 文字换宽度的那一帧：排在后面的引用方读到新尺寸还是旧尺寸；排在前面的读到什么（上一帧的旧 RT 还是新 RT 的上一帧内容）；之后会不会一直绑着旧的那张（WPE 每次重排重新分配 RT，`+0xb8`，引用方的材质是创建时按名字绑的）；
+3. 文本写死隐藏时还画不画进 RT；
+4. 6 pt 的极小字：RT 是 `max(4, ·)` 之后的尺寸；
+5. 空文字：RT 是什么尺寸、内容是什么。
+
+### 实测（`p8-deptext`，2026-11-19）
+
+工程 `ignore/p8/gen_p8.py deptext`；抓帧 `A:\p8\deptext\deptext-frame241–290.rdc`（1920×1080，50 帧连续）；逐 draw 导出 `ignore/p8/s6/dump.json`，摘要 `ignore/p8/s6/summ.txt`（`summ.py`）。T5 / T6 第 280 帧切换（第 279 帧是旧值）。
+
+| # | 问题 | 实测 | 结论 |
+|---|---|---|---|
+| 1 | 引用方读哪张、多大 | T1（48 pt「AB」）：基础 pass（composelayer_clearalpha 拷屏）与字形画进 294×328 的 RT，上屏读它；B1 / B1a 槽 1 就是这一张。T2（带 kbinv）：基础 → 11057，kbinv → 11054，上屏与 B2 都读 11054（最后一次写入那张）。引用方的 UV 是它自己的 0.00075–0.99925，整张 RT 铺满 | 同图像层：合成链第 0 张就是 `_a`、奇偶照步骤 4 对调；尺寸 = 文本层的合成 RT（`textCompositeSize`） |
+| 2 | 换宽度那一帧 | 第 280 帧 T5「i」→「WWWWWW」：RT 从 172×328（11351）换成新的 780×328（11383），排在前面的 B5p 当帧就绑新的那张、读到全 0（T5 还没画）；排在后面的 B5 / B5a 读新内容；之后一直是 11383 | 重排在渲染之前，当帧换 RT、当帧重绑引用方；新 RT 初值全 0，不会一直绑着旧的 |
+| 3 | 写死隐藏 | T3：清 + 字形照画进 294×328 的 RT，没有上屏；B3 读它 | 同图像层的 `0x1000` |
+| 4 | 6 pt | T4「22:22」：RT 137×97（`2·padding + 文字框`，没碰到 `max(4, ·)`） | 尺寸规则不变；`max(4, ·)` 由 P6b 1e 的 `p6b-tiny2` 证过 |
+| 5 | 空文字 | 第 280 帧 T6「AB」→「」：T6 一次绘制都没有（没清、没上屏），B6 / B6a 读一张新的 4×4 RT（11368），`pick_pixel` 全 0；到第 290 帧不变 | 独占 RT 按空排版换成 4×4、不画 |
+
+### 现状锚点（HEAD `60c0588e`）
+
+**a. 编译期照报，名字表只收图像层**（`compile/bundle.ts:1283`、`:1765`、`:3147`）
+```ts
+function isImageLayerObject(object: SceneObject): boolean {
+  const kind = objectKind(object);
+  return (
+    kind !== "particle" && kind !== "model" && !isSoundObject(object) && !isShapeObject(object) &&
+    !isTextObject(object) &&   // 现状：文本层不进名字表，引用它的名字绑棋盘格
+    !!object.image
+  );
+}
+// compileScene 的对象循环
+    if (textObject && isDepended(object)) unsupported.add("dependency:text"); // 现状：照报
+    if (!textObject) {
+      if (!object.image) return;
+      layer.dependedOn = isDepended(object); // 现状：只有图像层填
+      if (!(await compileImageModel(index, object, layer))) return;
+    }
+// compileText 的参数
+        mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31) || fogged, // 现状：不看被依赖
+```
+
+**b. 独占 RT 按图像层的规则定尺寸**（`render/scene.ts:2663`、`:3793`）
+```ts
+  private createLayerTarget(layer: SceneLayer): RenderTarget {
+    const [width, height] = this.compositeSizeOf(layer); // 现状：文本层应取排版的 textCompositeSize
+    // …
+  }
+// stageObject
+      if (layer.dependedOn) layerTarget = this.createLayerTarget(layer);
+```
+
+**c. 文本层的合成 RT 独占、按尺寸重建，不认 `layerTargets`**（`render/scene.ts:2688`、`:2728`、`:2878`）
+```ts
+    if (runtime.layer.text) {
+      this.ensureTextComposites(runtime, plan.composite); // 现状：提前返回，独占 RT 不放进第 0 张
+      return;
+    }
+  private ensureTextComposites(runtime, { width, height, count }) {
+    if (composites.some((target) => target.width !== width || target.height !== height))
+      for (const target of composites.splice(0)) this.releaseTarget(target); // 现状：尺寸变了整组释放
+    // …按 count 补建
+  }
+  private ensureTextResources(runtime, plan, state) {
+    if (!plan.composite) for (const target of resources.composites.splice(0)) this.releaseTarget(target); // 现状：空文字时整组释放
+  }
+```
+
+**d. 文本重排后只重建本层，引用方不重绑**（`render/scene.ts:5475`）
+```ts
+    for (const object of rebuild) {
+      const runtime = this.runtimeByObject.get(object);
+      if (runtime) this.rebuildLayer(runtime, state, worlds, { force: true }); // 现状：独占 RT 换了，引用方的 bind group 还烤着旧的
+    }
+```
+
+**e. 拆层时文本层整组释放**（`render/scene.ts:1812`）
+```ts
+    const own = this.layerTargets.get(object);
+    if (own && !options.keepTarget) { this.releaseTarget(own); this.layerTargets.delete(object); }
+    if (runtime.layer.text) for (const target of runtime.resources.composites.splice(0)) this.releaseTarget(target); // 现状：被依赖时会再放一次
+```
+
+### 点 1 — 编译（`compile/bundle.ts`、`compile/features.ts` 无改动）
+- **修改**
+  - 名字表的判定改成 `isCompositeLayerObject`（图像层或文本层，rea-p8-render 1.2 的类型 1 与 4）；`isImageLayerObject` 原样留给别处。
+  - 文本层也填 `layer.dependedOn = isDepended(object)`；删掉 `dependency:text` 的照报与那段注释。
+  - `compileText` 的 `mayComposite` 加 `|| depended`（`depended` 的定义挪到 effect 循环之前，图像层与文本层共用）。
+  - `ownComposite` 对文本层同样按 colorBlendMode 求。
+  - （验收时补）`TextFields.dependedOn`：排版加不加 `padding` 看 WPE `+0x304 & 0x10`，被依赖的 `0x1010` 也带它，`padsText` 认它（`text/fields.ts`、`text/layout.ts`、`compile/texts.ts`）。
+
+### 点 2 — 独占 RT 的尺寸（`render/scene.ts`）
+- **修改** `createLayerTarget(layer, size?)`：给了 `size` 就按它建；文本层的调用方传 `textCompositeSize(layout)`（`stageObject` 里已有 `textLayout`；运行中重建传当前排版）。
+
+### 点 3 — 文本层的合成 RT 认独占 RT（`render/scene.ts`）
+- **修改** `ensureTextComposites`：
+```ts
+    const own = this.layerTargets.get(runtime.object) ?? null; // 新增：被依赖时第 0 张是它（备对象时由调用方给，同 ensureComposites）
+    if (composites.some((t) => t.width !== width || t.height !== height)) {
+      for (const target of composites.splice(0)) if (target !== own) this.releaseTarget(target); // 修改：独占的那张不在这里放
+      if (own && (own.width !== width || own.height !== height)) {
+        // 新增：按新排版换独占 RT，登记回 layerTargets；引用方由调用方重绑（rebindDependents）
+        this.releaseTarget(own);
+        this.layerTargets.set(runtime.object, this.createLayerTarget(runtime.layer, [width, height]));
+      }
+    }
+    const current = this.layerTargets.get(runtime.object);
+    if (current && composites[0] !== current) composites.splice(0, composites.length, current); // 新增
+    // …其余张照旧按 count 补建
+```
+  - 备好还没装的对象（L4）：`ensureComposites` 的 `own` 参数原样传进来。
+- **修改** `ensureTextResources`：空文字（`plan.composite` 为 null）时其余张照旧释放；被依赖的按 `textCompositeSize(layout)`（空排版是 4×4）换独占 RT，不画（实测第 5 条）。
+- **修改** `teardown`：文本层整组释放时跳过 `layerTargets` 里那张（它由上面的 `own` 分支管）。
+
+### 点 4 — 引用方重绑（`render/scene.ts`）
+- **修改** `syncTexts`：重建前记下每层的独占 RT，重建后换了的层调 `rebindDependents`（同 `syncUserTextures` 的 `resized`）。重排在 `sync` 里、早于 `encode`，同一帧生效，同 WPE（实测第 2 条：排在前面的引用方当帧读到全 0 的新 RT）。
+
+### 点 5 — 单测
+- **修改** `compile/p8.test.ts` 步骤 4 的 `dependency:text` 用例：改成文本层填 `dependedOn`、名字解析进 `layerComposites`、编 passthrough、不报。
+- **新增** `render/p8.test.ts` 步骤 6 的 `describe`（假设备）：
+  - 被依赖的文本层：独占 RT 尺寸 = `textCompositeSize`、是合成 RT 第 0 张；
+  - 重排换宽度：旧的那张释放一次、新的进 `layerTargets`、引用方的 bind group 重建、`g_Texture1Resolution` 是新尺寸；宽度不变时不换、不重绑；
+  - 空文字：独占 RT 换成 4×4、引用方重绑、没有画进它的 draw；
+  - 拆层：独占 RT 只释放一次；
+  - 写死隐藏的被依赖文本层照建资源、只跳过上屏。
+
+### 实施方式
+
+同前几步：子代理（sonnet）在 HEAD 快照副本 `ignore/p8/s6/ov` 里实现，`ignore/p8/s6/head` 作基线；我验收后逐文件三方合并到工作区，不碰暂存区。
+
+### 验收
+- 快照里 tsc 0 error，相关 vitest 文件全过，Prettier。
+- `kbp regress --corpus`：回放案例全部相同；语料只去掉 `dependency:text`（1 张），`3837779440` 变干净，新出现的键逐张核对（预期没有）。
+- 画面：`p8-deptext` 按日志回放，和 WPE 抓帧逐像素比，屏蔽 FR / CLK；第 279、280、281 帧逐帧比（B5p 第 280 帧是黑的、B6 第 280 帧起是黑的）。
+- 复制工程：`3837779440` 用 `kbp content isolate` 只留 1049、186 及其依赖，`scripts.clock` 固定成录制时的时刻，FINAL_CHECK 和 WPE 整帧比。
+- 变异检查：
+  - 名字表不收文本层；
+  - 独占 RT 按 `compositeSizeOf` 定尺寸；
+  - 换宽度不换独占 RT；
+  - 换了不重绑引用方；
+  - 拆层时释放两次（单测里的假设备记次数）；
+  - 空文字时释放独占 RT 不换新的。
+
+  单测或比图要能检出。
+
 ## 步骤 1–5 的验收
 
 - **每步**：确定性工程和 WPE 逐像素比（`kbp cmp frame --meta`，图层带 `bbox`）；几何类（形状、对齐）另比四角，限值 0.01 像素。
@@ -1316,6 +1478,18 @@ export function alphaToCoverageEntry(wgsl: string, entryPoint: string): { code: 
 
     两张都渲染完成、A2C 管线建成，没有校验错误。
 - **没覆盖的**：组的 alpha MAX 与 A2C 并存、粒子 A2C（语料都是 0 张）只有单测；`msaa: x2` 的 A2C 不做（WPE 缺省 `x2`，我们没有多重采样，本来就对不上）。
+
+### 步骤 6 — 被依赖的文本层（2026-11-19）
+
+- **实测**：见步骤 6「实测」表（`p8-deptext`，50 帧）。
+- **实现**：子代理（sonnet）在 `ignore/p8/s6/ov`（HEAD `60c0588e` 快照）实现点 1–5；渲染器单测放在 `render/text.test.ts`（文本层的假设备脚手架都在那里），6 个用例。
+- **验收时发现并修正**：第一次比图引用方的字比 WPE 大一圈——我们的被依赖文本层没加 `padding`（T4 的 RT 73×33，WPE 137×97）。WPE 加 `padding` 看的是 `0x10`，被依赖置的 `0x1010` 也带它。补 `TextFields.dependedOn`，`padsText` 认它；单测 `text/layout.test.ts`（T4 的 137×97 / 73×33）、`compile/texts.test.ts`。
+- **数据**：
+  - tsc 0 error；相关 5 个测试文件 260 个用例全过（工作区）；Prettier 通过。快照里 `render/state.objects.test.ts`（8）与 `compile/refract.test.ts`（1）的失败在 HEAD 基线上一样，与本步无关。
+  - `kbp regress --corpus`：回放案例逐字节相同；233 张语料逐场景相同（`3837779440` 在 myprojects、不在缺省语料）。单扫 `3837779440`：`dependency:text` → 干净。
+  - `p8-deptext` 第 242、280、281、282、291 帧（含换宽度与空文字那一帧）和 WPE 整帧 0 差异（`ignore/p8/s6/kb2`）。
+  - 复制工程 `3837779440-iso-clock2`（只留 1049、186，时钟固定「22:22」，关掉 186 的 shake / rotate2pos / rotate2pos2）三帧整帧 0 差异。不关这三个动作 effect 的 `-iso-clock` 手臂姿态和 WPE 不同（差在 704×576 的手臂上，和依赖无关，另记）。
+  - 变异（子代理在快照里手做、单测检出）：不重绑引用方、拆层释放两次、空文字不换独占 RT；`padding` 漏掉被依赖由 `text/layout.test.ts` 的 137×97 断言守。
 
 ### P8 收尾（2026-11-14）
 

@@ -272,10 +272,22 @@ describe("compileScene：文本表", () => {
       verticalalign: "center",
       visibleEffects: 0,
       colorBlendMode: 0,
+      dependedOn: false,
       msdf: false,
       decor: TEXT_DECOR_DEFAULTS,
     });
     expect(layer.text?.font).toEqual({ path: "system:arial.ttf", location: null, size: null });
+  });
+
+  it("被依赖（P8 步骤 6）：fields.dependedOn 为真（加 padding）、编 clearalpha；没被依赖的为假", async () => {
+    const { bundle } = await compile([
+      { id: 3, name: "t", text: "ab", origin: "960 540 0" },
+      { id: 4, name: "u", text: "cd", origin: "960 540 0" },
+      { id: 5, name: "b", origin: "960 540 0", dependencies: [3] },
+    ]);
+    expect(layerOf(bundle, 0).text!.fields.dependedOn).toBe(true);
+    expect(layerOf(bundle, 0).text!.clearAlphaPass).not.toBeNull();
+    expect(layerOf(bundle, 1).text!.fields.dependedOn).toBe(false);
   });
 
   it("perspective（P5g）：JSON true 进 layer.perspective、不报；绑属性或非 true 照报且图层不取；没写为假", async () => {

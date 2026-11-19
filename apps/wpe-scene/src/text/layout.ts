@@ -172,11 +172,15 @@ function splitRows(text: string, maxRows: number, ellipsis: boolean): Row[] | nu
   return rows;
 }
 
-/** 加不加 `padding`：有可见 effect、colorBlendMode 合成（0、31 以外）或开了背景（`FUN_140258900`）。 */
+/**
+ * 加不加 `padding`：有可见 effect、走合成（`+0x304 & 0x10`：colorBlendMode 0、31 以外，或被依赖，P8 步骤 6）或开了背景
+ * （`FUN_140258900`）。
+ */
 function padsText(fields: TextFields): boolean {
   return (
     fields.visibleEffects > 0 ||
     (fields.colorBlendMode !== 0 && fields.colorBlendMode !== 31) ||
+    fields.dependedOn ||
     fields.opaquebackground
   );
 }

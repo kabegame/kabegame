@@ -2765,7 +2765,7 @@ WPE 的图层依赖是两件事，各自独立：一个图层「被依赖」时�
 
 | 项 | 规则 | 依据 |
 |---|---|---|
-| 被依赖 | 全部对象（含模型对象）的 `dependencies` 取并集（`compile/dependencies.ts` 的 `dependencyIds`）：值是数组或对象才遍历，元素是非负整数才收。命中的图像层 `SceneLayer.dependedOn` | 读码第 1 节；`3509243656` 的两个模型对象就给图像层置了位 |
+| 被依赖 | 全部对象（含模型对象）的 `dependencies` 取并集（`compile/dependencies.ts` 的 `dependencyIds`）：值是数组或对象才遍历，元素是非负整数才收。命中的图像层与文本层（步骤 6）`SceneLayer.dependedOn` | 读码第 1 节；`3509243656` 的两个模型对象就给图像层置了位 |
 | 合成路径 | 被依赖的图层一律走合成路径（组合层没有 effect 也画），最后一个 effect 不上屏、留在合成链，最后用 passthrough 上屏：`BLENDMODE` 取 cbm ∉ {0, 31} 时的值、否则 0，混合是 cbm 31 时 additive、否则基础材质的，UV 内缩同末 pass，`g_Color4` = 1。排完后最后一次写入落在合成 RT 1 时整份计划的 0、1 对调（`graph.ts` 的 `swapCompositeIndices`），让它落在第 0 张 | 实测 `p8-dep` 的 A2、A9、A11；`p8-dep` 的上屏 UV 是 0.15 / 64，读码 2.4 写的「不内缩」不对 |
 | 独占 RT | 建场景时每个被依赖的图层建一张（`scene.ts` 的 `layerTargets`，尺寸、格式、采样同它的合成 RT），跨帧、跨 effect 开关的重建都保留、不清；它就是本层的合成 RT 0，其余张照旧从池里借 | 读码 2.2；实测 `p8-dep` |
 | 不可见 | 自身或祖先不可见时照画进 RT、只跳过画到「场景」的那一步上屏，在组里也一样（`scene.ts` 的 `layerOpsToRun`）；写死不可见也建资源（`buildableLayers` 的例外）；不做视锥剔除 | 实测 `p8-dep2` 的 A11 / A12、`p8-misc` 的 A13（隐藏的组合层）/ A14（放在画面外） |
@@ -2773,7 +2773,8 @@ WPE 的图层依赖是两件事，各自独立：一个图层「被依赖」时�
 | 引用 | 编译期一次定下名字表（每个图像层的 `_rt_imageLayerComposite_<id>_a`），材质 `textures` 或注解 `default` 写的名字指向被依赖图层时记进 `ScenePass.layerComposites`，渲染图给出纹理来源 `{ kind: "layer", object }`，四种计划（图层、形状、粒子、网格）都认。`bind` 占了的槽 `bind` 胜出 | 读码 2.1、第 3 节 |
 | 棋盘格 | 解析不到的名字（没被依赖、id 不存在、不是图像层、`_b`）绑 6×6 黄黑棋盘格（`checkerTexture`：第一格黑，点采样、重复） | 实测 `p8-dep` 的 B4–B6 逐格对上 |
 | 格式 | 引用槽的 `TEX<n>FORMAT` 取材质创建那一刻纹理表里的格式：经依赖置位的 RT 在全部材质之后才建，是 0；被依赖者自己就有 cbm 混合、排在引用方前面时，HDR 下是 14；LDR 一律 0 | 读码 2.2；语料里都是 0 |
-| 照报（语料都是 0） | `dependency:text`（被依赖的是文本层，合成 RT 随重排换尺寸）、`dependency:group`（被依赖的是组）、`dependency:self`（被依赖的图层在自己的 pass 里读自己的 `_a`）、`dependency:passthrough-undeclared`（名字指向没被依赖、但自己有 cbm 混合的图层，WPE 绑得上）、`particle:dependencies`（粒子对象另一套同名键，元素是发射图与碰撞模型） | 读码 |
+| 文本层（步骤 6） | 同图像层：名字表收文本层，合成链第 0 张是独占 RT。尺寸跟排版（`textCompositeSize`），被依赖时排版加 `padding`（WPE 看 `0x10`，`TextFields.dependedOn`）。重排换尺寸时当帧换新 RT（初值全 0）、当帧重绑引用方（`syncTexts` → `rebindDependents`），排在前面的引用方这一帧读到全 0；空文字不画，RT 换成 4×4 | 实测 `p8-deptext`（50 帧，第 280 帧换宽度与清空）整帧 0 差异；`3837779440` 的复制工程整帧 0 差异 |
+| 照报（语料都是 0） | `dependency:group`（被依赖的是组）、`dependency:self`（被依赖的图层在自己的 pass 里读自己的 `_a`）、`dependency:passthrough-undeclared`（名字指向没被依赖、但自己有 cbm 混合的图层，WPE 绑得上）、`particle:dependencies`（粒子对象另一套同名键，元素是发射图与碰撞模型） | 读码 |
 
 dev 探针的回放只编码读回那一帧，独占 RT 里没有上一帧的内容，和「排在后面读上一帧」对照时要先用 `profile: 1` 在上一帧的时刻编码一帧。
 
@@ -2808,6 +2809,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 | 3 对齐 | `object:alignment` 24、`script:api:layer.alignment` 3 | — | 57 → 57 | — |
 | 4 图层依赖 | `object:dependencies` 9、21 个 `texture:rendertarget:_rt_imageLayerComposite_<id>_a`（9 张） | — | 66 → 66 | — |
 | 5 写入状态 | `material:alphawriting` 7、`blend:alphatocoverage` 2 | — | 87 → 87 | — |
+| 6 被依赖的文本层（2026-11-19） | `dependency:text` 1（myprojects `3837779440`，不在缺省语料） | — | 232 → 232（233 张） | `3837779440` |
 
 - 各步的起点不同，是同期别的 Phase 也在解锁；语料从 173 张变成 183 张。没有场景因 P8 不再能渲染。
 - 收尾时（2026-11-14，183 张）用到 P8 任一项的 57 张场景里，能渲染 10 张，和 P8 有关的键一个都不剩；其余 47 张还差场景脚本的回调与 API（三十多张）、关键帧动画（25）、用户纹理（20）、木偶动画（15）、图像层帧动画（13）等。`3812487163` 去掉对齐后还差 P6 的 `thisScene.createLayer` / `sortLayer`。
@@ -2822,7 +2824,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 - 确定性工程：`gen_p8.py`（自写 `.tex` 与 effect，没走 `kbp gen`），工程在 `proj/`；
 - 读数：`rdc_dump_p8.py` 在 `qrenderdoc --python` 下导出每次绘制（含直接读 D3D11 输出合并状态的 `AlphaToCoverage`），`show.py`、`ana_align.py`、`check_align.py` 摘要；
 - 语料：`scan_p8.py` → `out/scan.json`（P8 各项的逐条清单），`sum_p8.py`、`ana_p8.py`、`rtref.py`；收尾的覆盖数是 `s5/coverage.py`；
-- 各步的快照、补丁、变异清单、语料回归与整帧比对在 `s1/`–`s5/`；
+- 各步的快照、补丁、变异清单、语料回归与整帧比对在 `s1/`–`s6/`；
 - WPE 参照在 `A:\p8\`。
 
 ## 声音（P6a）

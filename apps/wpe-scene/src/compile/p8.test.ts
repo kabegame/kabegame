@@ -1538,13 +1538,16 @@ describe("compileScene：被依赖图层的编译与照报（P8 步骤 4）", ()
     expect(single.bundle.layers[0].passthrough).not.toBeNull();
   });
 
-  it("照报 dependency:text：文本对象的 id 在并集里；文本层不填 dependedOn", async () => {
+  it("文本对象被依赖（P8 步骤 6）：填 dependedOn、编 passthrough、不再报 dependency:text；没被依赖的不填", async () => {
     const text = { id: 10, name: "T", text: "abc", origin: "960 540 0" };
     const depended = await compileDeps([text, imageObject(20, "B", { dependencies: [10] })]);
-    expect(depended.bundle.unsupported).toContain("dependency:text");
-    expect(depended.bundle.layers[0].dependedOn).toBeUndefined();
+    expect(depended.bundle.unsupported).not.toContain("dependency:text");
+    expect(depended.bundle.layers[0].dependedOn).toBe(true);
+    expect(depended.bundle.layers[0].passthrough).not.toBeNull();
+    expect(depended.bundle.layers[0].text).toBeDefined();
     const plain = await compileDeps([text, imageObject(20, "B")]);
-    expect(plain.bundle.unsupported).not.toContain("dependency:text");
+    expect(plain.bundle.layers[0].dependedOn).toBe(false);
+    expect(plain.bundle.layers[0].passthrough).toBeNull();
   });
 
   it("预光照：被依赖、基础材质开光照（WPE 的 0x10 同样把光照挪到基础 pass）时编预光照变体（P13j-1，不再照报）；没被依赖、没有 effect 不编", async () => {

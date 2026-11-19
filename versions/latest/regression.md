@@ -709,7 +709,7 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 
 ## 场景壁纸 P8：图像层与材质补全（合成 RT 的采样、形状、对齐、图层依赖、写入状态）
 
-2026-11-13–14。图像层上五处对齐 WPE：合成 RT 按对象的 `clampuvs` / `nointerpolation` 采样；形状对象按第一个 effect 的四个点画四边形；图像层 `alignment` 的偏移只进图层画自己的矩阵；`dependencies` 让被依赖的图层出独占的合成 RT、材质按名字 `_rt_imageLayerComposite_<id>_a` 引用；材质的 `alphawriting` 与 `alphatocoverage`（单采样下在着色器里丢弃 alpha ≤ 0.5 的片元）。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase8/p8-REPORT.md`，逐步的验收数据见 `phase-8-image-material.md`「实施记录」。
+2026-11-13–14。图像层上五处对齐 WPE：合成 RT 按对象的 `clampuvs` / `nointerpolation` 采样；形状对象按第一个 effect 的四个点画四边形；图像层 `alignment` 的偏移只进图层画自己的矩阵；`dependencies` 让被依赖的图层（图像层与文本层，文本层 2026-11-19 步骤 6）出独占的合成 RT、材质按名字 `_rt_imageLayerComposite_<id>_a` 引用；材质的 `alphawriting` 与 `alphatocoverage`（单采样下在着色器里丢弃 alpha ≤ 0.5 的片元）。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase8/p8-REPORT.md`，逐步的验收数据见 `phase-8-image-material.md`「实施记录」。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -726,6 +726,7 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [ ] | Q10 解锁场景实时运行 | Windows dev | 把 6 张解锁场景分别在图库预览里打开、设为桌面壁纸 | 画面与作者预览一致、不卡、不退回预览图；形状光束随时间流动 | 只做过屏外宿主的回放比图，没在实时预览与桌面看 |
 | [ ] | Q11 A2C 在其它显卡上 | 其它 Windows 机器（AMD / Intel） | 打开 `3611425904`，看 A2C 图层边缘 | 和 WPE 在同一台机器上一致 | 单采样 A2C 的覆盖由驱动决定，阈值是在本机 NVIDIA 上实测的 |
 | [ ] | Q12 被依赖图层的 effect 开关 | Windows dev | 找一张被依赖图层带可开关 effect 的场景（语料暂无），运行中切换 | 引用方画面跟着变、没有闪烁或残留 | 语料 0 张；WPE 切换时销毁重建独占 RT（读码，没实测），我们跨重建保留 |
+| [x] | Q13 被依赖的文本层 | Windows dev + WPE 抓帧 | `p8-deptext`（7 个文本 / 引用组合：可见、带 effect、写死隐藏、6 pt、每 40 帧换宽度、每 40 帧清空）按日志回放第 242、280–282、291 帧；`3837779440` 的复制工程（只留时钟 1049 与引用方 186、时钟固定「22:22」、关掉 186 的三个动作 effect）比三帧 | 整帧 0 差异；换宽度那帧排在前面的引用方读到全 0 | 2026-11-19 Claude：两组全部 0 差异；`3837779440` 的 `dependency:text` 去掉后干净；不关动作 effect 时手臂姿态和 WPE 不同（另记，与依赖无关） |
 
 ## 场景壁纸 P5c：静态网格（mdl 模型对象）
 

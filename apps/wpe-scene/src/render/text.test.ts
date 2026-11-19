@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "../compile/bindings";
+import { layerCompositeName } from "../compile/dependencies";
 import { FRAMEBUFFER_RT, type SceneBundle, type SceneEffect, type SceneLayer, type ScenePass } from "../compile/bundle";
 import { particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
@@ -1620,6 +1621,193 @@ describe("GpuScene：小文字的合成 RT 套 max(4, ·)（P6b 1e，p6b-tiny2 �
       [0, 0, 0],
       [4, 0, 0],
     ]);
+  });
+});
+
+// ———— P8 步骤 6：被依赖的文本层 ————
+
+describe("GpuScene：被依赖的文本层（P8 步骤 6，p8-deptext）", () => {
+  const NAME = layerCompositeName(10);
+  const NAME_E = layerCompositeName(11);
+  /** 引用方的程序（下标 6）：MVP 加 `g_Texture1Resolution`（偏移 64），槽 0、1。 */
+  const REF_PROGRAM = 6;
+  const refProgram = (): TranslateResult =>
+    program("ref", [0, 1], [{ name: "g_Texture1Resolution", type: "vec4<f32>", offset: 64, size: 16 }]);
+  /** 引用方：直接上屏的纯色图像层，槽 1 读 `target` 的独占 RT。 */
+  function refLayer(object: number, target: number): SceneLayer {
+    return {
+      ...textLayer(object, `R${object}`),
+      text: null,
+      passes: [pass(`objects/${object}/passes/0`, { program: REF_PROGRAM, layerComposites: { 1: target } })],
+      solidLayer: true,
+      size: [10, 10],
+    };
+  }
+
+  /** 0 T（被依赖、带 effect、149×176）、1 E（被依赖、起初空文字）、2 引用 T、3 引用 E。 */
+  function depScene(hidden: boolean) {
+    const shared = new GlyphAtlas(1);
+    const layouts = new Map<number, TextLayout>([
+      [0, layoutOf({ glyphs: glyphsIn(shared, 3), box: AG_BOX, padding: [0, 0] })],
+      [1, { ...EMPTY_LAYOUT }],
+    ]);
+    // 被依赖：编译期按 `BLENDMODE` 0 编好 passthrough 上屏（同 `textLayer` 的 colorBlendMode 混合那一份）
+    const passthrough = (object: number) =>
+      pass(`objects/${object}/passthrough`, {
+        program: PROGRAM.passthrough,
+        runtime: { 1: FRAMEBUFFER_RT },
+        framebuffer: true,
+        uniforms: { g_Color4: [1, 1, 1, 1] },
+      });
+    const t = {
+      ...textLayer(0, "T", { effect: true }),
+      dependedOn: true,
+      visible: !hidden,
+      passthrough: passthrough(0),
+    };
+    const e = { ...textLayer(1, "E", { effect: true }), dependedOn: true, passthrough: passthrough(1) };
+    const bundle = bundleOf([t, e, refLayer(2, 0), refLayer(3, 1)]);
+    bundle.programs.push(refProgram());
+    return { bundle, layouts, atlas: shared };
+  }
+
+  async function open(hidden = false) {
+    const { bundle, layouts, atlas } = depScene(hidden);
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const fake = fakeRelayouter();
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], {
+      ignoreUnsupported: true,
+      particles: { seed: 1 },
+      texts: layouts,
+      relayout: fake.relayouter,
+    });
+    scene.update(FRAME, state);
+    return { gpu, scene, state, atlas, ...fake };
+  }
+
+  type Destroyable = { destroy(): void };
+  const spyDestroy = (target: TargetView) => vi.spyOn(target.texture as unknown as Destroyable, "destroy");
+  const ownOf = (scene: GpuScene, object: number) =>
+    (scene as unknown as { layerTargets: Map<number, TargetView> }).layerTargets.get(object)!;
+  const refDraw = (scene: GpuScene, object: number) =>
+    [...internals(scene).draws].find((item) => item.object === object) as unknown as TextDrawView;
+  /** 引用方 draw 的 bind group 绑的资源。 */
+  const boundTo = (gpu: FakeGpu, scene: GpuScene, object: number) => gpu.bound.get(refDraw(scene, object).bindGroup!)!;
+  const resolutionOf = (scene: GpuScene, object: number) =>
+    Array.from(new Float32Array(refDraw(scene, object).uniformBuffer!.bytes.buffer.slice(64, 80)));
+  const wideLayout = (atlas: GlyphAtlas) =>
+    layoutOf({ glyphs: glyphsIn(atlas, 2, 20), box: { ...AG_BOX, maxX: 299 }, padding: [0, 0] });
+
+  it("独占 RT：尺寸是排版的 textCompositeSize（149×176）、是合成 RT 第 0 张；空文字是 4×4；引用方的槽 1 绑它、分辨率是它的尺寸", async () => {
+    const { gpu, scene } = await open();
+    expect(gpu.textures.filter((texture) => texture.label === NAME).map((texture) => texture.size)).toEqual([
+      [149, 176],
+    ]);
+    expect(gpu.textures.filter((texture) => texture.label === NAME_E).map((texture) => texture.size)).toEqual([[4, 4]]);
+    const own = ownOf(scene, 0);
+    expect(layerView(scene, 0).resources.composites[0]).toBe(own);
+    expect(layerView(scene, 0).resources.composites.length).toBe(2);
+    expect(boundTo(gpu, scene, 2)).toContain(own.view);
+    expect(resolutionOf(scene, 2)).toEqual([149, 176, 149, 176]);
+    // 空文字：没有合成 RT，独占 RT 仍在
+    expect(layerView(scene, 1).resources.composites).toEqual([]);
+    expect(resolutionOf(scene, 3)).toEqual([4, 4, 4, 4]);
+  });
+
+  it("重排换宽度：旧的独占 RT 释放一次、新的（299×176）登记回去且是第 0 张，引用方当帧重绑并重写分辨率；宽度不变时不换不重绑", async () => {
+    const { gpu, scene, state, atlas, handler } = await open();
+    const old = ownOf(scene, 0);
+    const destroy = spyDestroy(old);
+    const group = refDraw(scene, 2).bindGroup;
+    // 同尺寸换字：不换、不重绑
+    handler.next = () => layoutOf({ glyphs: glyphsIn(atlas, 4, 30), box: AG_BOX, padding: [0, 0] });
+    state.writeText(0, "text", "same");
+    scene.sync(state);
+    scene.update(FRAME, state);
+    expect(ownOf(scene, 0)).toBe(old);
+    expect(destroy).not.toHaveBeenCalled();
+    expect(refDraw(scene, 2).bindGroup).toBe(group);
+    // 换宽度
+    handler.next = () => wideLayout(atlas);
+    state.writeText(0, "text", "wide");
+    scene.sync(state);
+    scene.update(FRAME, state);
+    const fresh = ownOf(scene, 0);
+    expect(fresh).not.toBe(old);
+    expect([fresh.width, fresh.height]).toEqual([299, 176]);
+    expect(fresh.texture.label).toBe(NAME);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(layerView(scene, 0).resources.composites[0]).toBe(fresh);
+    expect(layerView(scene, 0).resources.composites).not.toContain(old);
+    expect(refDraw(scene, 2).bindGroup).not.toBe(group);
+    expect(boundTo(gpu, scene, 2)).toContain(fresh.view);
+    expect(boundTo(gpu, scene, 2)).not.toContain(old.view);
+    expect(resolutionOf(scene, 2)).toEqual([299, 176, 299, 176]);
+  });
+
+  it("空文字：不画这一层，独占 RT 换成 4×4 的新 RT、引用方重绑；再有文字又换回排版尺寸", async () => {
+    const { gpu, scene, state, atlas, handler } = await open();
+    const old = ownOf(scene, 0);
+    const destroy = spyDestroy(old);
+    handler.next = () => ({ ...EMPTY_LAYOUT });
+    state.writeText(0, "text", "gone");
+    scene.sync(state);
+    scene.update(FRAME, state);
+    const empty = ownOf(scene, 0);
+    expect(empty).not.toBe(old);
+    expect([empty.width, empty.height]).toEqual([4, 4]);
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(layerView(scene, 0).resources.composites).toEqual([]);
+    expect(boundTo(gpu, scene, 2)).toContain(empty.view);
+    expect(resolutionOf(scene, 2)).toEqual([4, 4, 4, 4]);
+    scene.update(FRAME, state);
+    gpu.trace.length = 0;
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    expect(gpu.trace.filter((line) => line.startsWith(`pass ${NAME} `))).toEqual([]);
+    handler.next = () => wideLayout(atlas);
+    state.writeText(0, "text", "again");
+    scene.sync(state);
+    scene.update(FRAME, state);
+    expect([ownOf(scene, 0).width, ownOf(scene, 0).height]).toEqual([299, 176]);
+    expect(layerView(scene, 0).resources.composites[0]).toBe(ownOf(scene, 0));
+    expect(resolutionOf(scene, 2)).toEqual([299, 176, 299, 176]);
+  });
+
+  it("空文字起头的被依赖层：出现文字时独占 RT 从 4×4 换成排版尺寸，引用方重绑", async () => {
+    const { gpu, scene, state, atlas, handler } = await open();
+    const old = ownOf(scene, 1);
+    handler.next = (object) => (object === 1 ? wideLayout(atlas) : null);
+    state.writeText(1, "text", "hi");
+    scene.sync(state);
+    scene.update(FRAME, state);
+    const fresh = ownOf(scene, 1);
+    expect(fresh).not.toBe(old);
+    expect([fresh.width, fresh.height]).toEqual([299, 176]);
+    expect(boundTo(gpu, scene, 3)).toContain(fresh.view);
+    expect(resolutionOf(scene, 3)).toEqual([299, 176, 299, 176]);
+  });
+
+  it("拆层：独占 RT 与另一张合成 RT 各释放一次（独占的是合成 RT 第 0 张，不放第二次）", async () => {
+    const { scene } = await open();
+    const own = ownOf(scene, 0);
+    const other = layerView(scene, 0).resources.composites[1];
+    const destroyOwn = spyDestroy(own);
+    const destroyOther = spyDestroy(other);
+    scene.removeObject(0);
+    expect(destroyOwn).toHaveBeenCalledTimes(1);
+    expect(destroyOther).toHaveBeenCalledTimes(1);
+    expect(ownOf(scene, 0)).toBeUndefined();
+  });
+
+  it("写死隐藏的被依赖文本层：照建资源、字形照画进独占 RT，只是不上屏", async () => {
+    const { gpu, scene, state } = await open(true);
+    expect(layerView(scene, 0).resources.composites[0]).toBe(ownOf(scene, 0));
+    scene.update(FRAME, state);
+    gpu.trace.length = 0;
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    expect(gpu.trace.some((line) => line.startsWith(`pass ${NAME} `))).toBe(true);
+    expect(gpu.trace.some((line) => line.includes("layer 10 T") && line.includes("passthrough"))).toBe(false);
   });
 });
 

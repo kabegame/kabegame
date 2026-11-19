@@ -64,6 +64,8 @@ export interface TextFields {
   visibleEffects: number;
   /** `colorBlendMode`：0、31 以外的值也走合成（WPE `+0x304 & 0x10`）。 */
   colorBlendMode: number;
+  /** 被依赖（P8 步骤 6）：WPE 置 `0x1010`，同 colorBlendMode 合成的 `0x10`，也加 `padding`（实测 `p8-deptext` T4：RT 137×97 = 文字框 + 2·32）。 */
+  dependedOn: boolean;
   /**
    * 走 MSDF 画法（P6f，WPE `O+0x518 != 0`）：`msdf`、`outline`、`blur`、`dropshadow` 四个开关里任意一个开着。由编译期按这四个开关算出，
    * 不是对象字段；决定字体键（`<路径>_msdf`）、图集格式（RGBA8）与四边形外扩。四个开关绑属性时改它走对象级重编译，运行中不变。
@@ -91,12 +93,13 @@ export const TEXT_DEFAULTS: TextFields = {
   verticalalign: "center",
   visibleEffects: 0,
   colorBlendMode: 0,
+  dependedOn: false,
   msdf: false,
   decor: TEXT_DECOR_DEFAULTS,
 };
 
-/** 对象自己的文本字段（`visibleEffects` / `colorBlendMode` 是图层状态、`msdf` 由四个开关算出，不由这两个函数写）。 */
-export type TextFieldKey = Exclude<keyof TextFields, "visibleEffects" | "colorBlendMode" | "msdf">;
+/** 对象自己的文本字段（`visibleEffects` / `colorBlendMode` / `dependedOn` 是图层状态、`msdf` 由四个开关算出，不由这两个函数写）。 */
+export type TextFieldKey = Exclude<keyof TextFields, "visibleEffects" | "colorBlendMode" | "dependedOn" | "msdf">;
 
 /** vec3 键（装饰颜色）：`"r g b"` 三个分量，单个数字铺满，同灯 / 材质向量的规则；分量不足 3 个（且不是 1 个）不写。 */
 function parseVec3(value: unknown): [number, number, number] | undefined {

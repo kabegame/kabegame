@@ -1814,7 +1814,9 @@ export class GpuScene {
       this.releaseTarget(own);
       this.layerTargets.delete(object);
     }
-    if (runtime.layer.text) for (const target of runtime.resources.composites.splice(0)) this.releaseTarget(target);
+    // 被依赖的文本层第 0 张就是独占 RT（P8 步骤 6）：上面已按 `keepTarget` 处理，这里不再放一次
+    if (runtime.layer.text)
+      for (const target of runtime.resources.composites.splice(0)) if (target !== own) this.releaseTarget(target);
     for (const record of this.textFbos.get(object) ?? []) this.dropTarget(record.id);
     this.textFbos.delete(object);
     for (const key of [...this.morphTargets.keys()])
@@ -2657,11 +2659,12 @@ export class GpuScene {
    * 被依赖图层的独占 RT（P8 步骤 4，rea-p8-render 2.2）：尺寸同它的合成 RT（`compositeSize`），格式是场景格式（HDR 为 RGBA16F），采样同它
    * 自己采样合成 RT 的规则（`compositeSampling`），不进共享池。WPE 的名字 `_rt_imageLayerComposite_<id>_a` 作标签。计进显存估算、随场景销毁。
    * 只建不登记：调用方放进 `layerTargets`（L4：备对象时建、装的时候登记）。
+   * `size`（P8 步骤 6）：文本层的尺寸来自排版（`textCompositeSize`），不走 `compositeSizeOf`，调用方给。
    */
-  private createLayerTarget(layer: SceneLayer): RenderTarget {
+  private createLayerTarget(layer: SceneLayer, size?: readonly [number, number]): RenderTarget {
     const baseTexture = this.baseTexture(layer);
     // 槽 0 的用户纹理有图时按它的尺寸（P11b 步骤 2）
-    const [width, height] = this.compositeSizeOf(layer);
+    const [width, height] = size ?? this.compositeSizeOf(layer);
     const { clamp, nearest } = compositeSampling(layer, baseTexture);
     const address: GPUAddressMode = clamp ? "clamp-to-edge" : "repeat";
     const filter: GPUFilterMode = nearest ? "nearest" : "linear";
@@ -2724,14 +2727,21 @@ export class GpuScene {
    * 文本层的合成 RT（P6b 1e，已定 6）：本层独占、不进共享池。尺寸会随文字变，共享池只增不减，按尺寸共享的话时钟每换一个宽度就多攒
    * 一张；独占后尺寸变了就销毁旧的（已提交的帧不受影响）、按新尺寸建，内存有界（WPE 每次重排也重新分配，rea-p8-layer `+0xb8`）。
    * 采样与标签照共享池的写法（组里另加层数），只是每层一组。
+   * 被依赖的文本层（P8 步骤 6）第 0 张是它的独占 RT（`layerTargets`）：尺寸变了释放旧的、按新排版建新的（初值 0）登记回去，其余张照旧独占；
+   * 引用方由调用方重绑（`syncTexts` → `rebindDependents`）。
    */
   private ensureTextComposites(
     runtime: LayerHandle,
     { width, height, count }: NonNullable<LayerPlan["composite"]>,
   ): void {
     const { composites } = runtime.resources;
+    const own = this.resizeTextOwnTarget(runtime, [width, height]);
     if (composites.some((target) => target.width !== width || target.height !== height))
-      for (const target of composites.splice(0)) this.releaseTarget(target);
+      for (const target of composites.splice(0)) if (target !== own) this.releaseTarget(target);
+    if (own && composites[0] !== own) {
+      for (const target of composites.splice(0)) if (target !== own) this.releaseTarget(target);
+      composites.push(own);
+    }
     const { clamp, nearest } = compositeSampling(runtime.layer, this.baseTexture(runtime.layer));
     const depth = this.groupDepth(runtime.layer);
     const key = `${width}x${height}|${clamp}|${nearest}${depth ? `|k${depth}` : ""}`;
@@ -2747,6 +2757,23 @@ export class GpuScene {
           this.sampler({ addressModeU: address, addressModeV: address, magFilter: filter, minFilter: filter }),
         ),
       );
+  }
+
+  /**
+   * 被依赖文本层的独占 RT 按当前排版尺寸换新（P8 步骤 6，实测 `p8-deptext` 第 2、5 条：重排当帧换新 RT、初值全 0，空文字是 4×4）：
+   * 尺寸相同什么都不做；不同则从本层合成 RT 列表里摘掉、释放旧的、建新的登记回 `layerTargets`。不是被依赖的层返回 undefined。
+   */
+  private resizeTextOwnTarget(runtime: LayerHandle, size: readonly [number, number]): RenderTarget | undefined {
+    const object = runtime.layer.object;
+    const own = this.layerTargets.get(object);
+    if (!own || (own.width === size[0] && own.height === size[1])) return own;
+    const { composites } = runtime.resources;
+    const at = composites.indexOf(own);
+    if (at >= 0) composites.splice(at, 1);
+    this.releaseTarget(own);
+    const fresh = this.createLayerTarget(runtime.layer, size);
+    this.layerTargets.set(object, fresh);
+    return fresh;
   }
 
   /** 文本层的一个独占 fbo（P6b 1e）：按合成 RT 尺寸 `size` 算 fbo 尺寸（`fboSize`），标签带图层 id 与 effect 下标。 */
@@ -2876,7 +2903,12 @@ export class GpuScene {
     const { atlases } = this.textAtlasesOf(layout);
     if (atlases) resources.atlases = atlases;
     else delete resources.atlases;
-    if (!plan.composite) for (const target of resources.composites.splice(0)) this.releaseTarget(target);
+    // 被依赖（P8 步骤 6）：独占 RT 按排版换尺寸（空文字是 4×4、不画），不随合成 RT 释放
+    const own = layout
+      ? this.resizeTextOwnTarget(runtime, textCompositeSize(layout))
+      : this.layerTargets.get(runtime.object);
+    if (!plan.composite)
+      for (const target of resources.composites.splice(0)) if (target !== own) this.releaseTarget(target);
     if (layout) this.resizeTextFbos(runtime.object, textCompositeSize(layout));
   }
 
@@ -3790,7 +3822,12 @@ export class GpuScene {
               ),
             ),
         );
-      if (layer.dependedOn) layerTarget = this.createLayerTarget(layer);
+      if (layer.dependedOn)
+        layerTarget = this.createLayerTarget(
+          layer,
+          // 文本层的独占 RT 取排版的尺寸（P8 步骤 6，空排版得 4×4）
+          layer.text ? textCompositeSize(textLayout ?? { compositeSize: [1, 1] }) : undefined,
+        );
       return {
         layer,
         plan,
@@ -5490,7 +5527,11 @@ export class GpuScene {
     const rebuildStarted = performance.now();
     for (const object of rebuild) {
       const runtime = this.runtimeByObject.get(object);
-      if (runtime) this.rebuildLayer(runtime, state, worlds, { force: true });
+      if (!runtime) continue;
+      const before = this.layerTargets.get(object);
+      this.rebuildLayer(runtime, state, worlds, { force: true });
+      // 被依赖的文本层排版换尺寸、独占 RT 换了（P8 步骤 6）：引用方的 bind group 与 `g_Texture<n>Resolution` 当帧重绑
+      if (before && this.layerTargets.get(object) !== before) this.rebindDependents(object, state, worlds);
     }
     if (!relayouts && !rebuild.size) return;
     const counts = this.textCounts;

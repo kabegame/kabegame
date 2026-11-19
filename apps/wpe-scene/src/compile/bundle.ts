@@ -1292,6 +1292,14 @@ function isImageLayerObject(object: SceneObject): boolean {
   );
 }
 
+/**
+ * 能被依赖的图层（P8 步骤 6 的名字表用）：图像层或文本层（WPE 认被依赖时看图层类型 1 与 4，rea-p8-render 1.2）。文本层不走
+ * `compileImageModel`，但同样置 `0x1010`、建独占 RT。
+ */
+function isCompositeLayerObject(object: SceneObject): boolean {
+  return isImageLayerObject(object) || isTextObject(object);
+}
+
 /** 对象 JSON 的 `id`（P8 步骤 4）：非负整数才算（WPE 的 id 是 64 位无符号整数，`dependencies` 也只收这种）；别的写法为 null。 */
 function jsonId(object: SceneObject): number | null {
   const id: unknown = object.id;
@@ -1758,7 +1766,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     return id !== null && dependedIds.has(id);
   };
   /**
-   * 名字表：每个图像层（`isImageLayerObject`）的 `_rt_imageLayerComposite_<id>_a` → `objects` 下标、是否被依赖、自己有没有 `0x10`
+   * 名字表：每个图像层或文本层（`isCompositeLayerObject`）的 `_rt_imageLayerComposite_<id>_a` → `objects` 下标、是否被依赖、自己有没有 `0x10`
    * （`ownComposite`：colorBlendMode ∉ {0, 31}，按属性当前值求、不登记绑定——字段本身在对象循环里已登记成重编译）。id 重复时后面的胜出
    * （WPE 后建的 RT 再次接管同名对象，rea-p8-render 2.1）。
    */
@@ -1766,7 +1774,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   scene.objects.forEach((object, index) => {
     if (!isSceneObject(object) || index >= loadedLength) return;
     const id = jsonId(object);
-    if (id === null || !isImageLayerObject(object)) return;
+    if (id === null || !isCompositeLayerObject(object)) return;
     const cbm = colorBlendModeOf(resolveValue(object.colorBlendMode as SceneValue, properties));
     layerComposites.set(layerCompositeName(id), {
       object: index,
@@ -3142,13 +3150,12 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     if (textObject) layer.sortClass = "translucent";
     // 文本层的 `perspective`（P5g）：只认 JSON true，同图像层（文本绘制走同一个基类函数 `FUN_1401e8aa0`）；绑属性等由能力表报 `object:perspective`
     if (textObject) layer.perspective = object.perspective === true;
-    // 被依赖的文本层（P8 步骤 4）：WPE 同样置 `0x1010`（rea-p8-render 1.2 认类型 1 与 4），但文本层的合成 RT 随重排换尺寸，引用方的绑定要
-    // 跟着换，没做（语料 0 个），照报
-    if (textObject && isDepended(object)) unsupported.add("dependency:text");
+    // 被依赖的文本层（P8 步骤 6）：WPE 同样置 `0x1010`（rea-p8-render 1.2 认类型 1 与 4）；独占 RT 的尺寸随排版换，运行时由渲染器重绑引用方
+    if (textObject) layer.dependedOn = isDepended(object);
     if (!textObject) {
       // 没有 image 的对象到这里为止：分组节点的 `effects` 不读、不编译（P4a 步骤 1）
       if (!object.image) return;
-      // 被依赖（P8 步骤 4）：图像层才填，判定同名字表（`isImageLayerObject`）
+      // 被依赖（P8 步骤 4）：判定同名字表（`isCompositeLayerObject`）
       layer.dependedOn = isDepended(object);
       if (!(await compileImageModel(index, object, layer))) return;
     }
@@ -3299,7 +3306,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         perspective: bundle.general.perspective,
         visibleEffects: layer.effects.filter((effect) => effect.enabled).length,
         colorBlendMode: cbm,
-        mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31) || fogged,
+        dependedOn: depended,
+        mayComposite: layer.effects.length > 0 || (cbm !== 0 && cbm !== 31) || fogged || depended,
         hostPass: compileHostPass,
         unsupported,
       });

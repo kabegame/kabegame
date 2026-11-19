@@ -156,6 +156,8 @@ export interface TextCompileContext {
   /** 编译期启用的 effect 个数（WPE `+0x320`）与 `colorBlendMode`：决定加不加 `padding`。 */
   visibleEffects: number;
   colorBlendMode: number;
+  /** 被依赖（P8 步骤 6）：同样加 `padding`（`TextFields.dependedOn`）。缺省否。 */
+  dependedOn?: boolean;
   /** 图层可能走合成（有任何 effect，或 colorBlendMode ∉ {0, 31}）：要编 `composelayer_clearalpha`。 */
   mayComposite: boolean;
   hostPass: HostPassCompiler;
@@ -267,6 +269,7 @@ export async function compileText(
     verticalalign: field("verticalalign"),
     visibleEffects: ctx.visibleEffects,
     colorBlendMode: ctx.colorBlendMode,
+    dependedOn: ctx.dependedOn ?? false,
     msdf: useMsdf,
     decor,
   };
