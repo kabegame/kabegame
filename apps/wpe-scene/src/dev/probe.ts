@@ -347,6 +347,13 @@ export interface RenderFrameOptions {
    * 显式要 `target` 而没给 `canvas` 报错；透视场景不看它。
    */
   renderMode?: "target" | "scene";
+  /**
+   * 原地换尺寸的验收（`GpuScene.resize`）：先按这个 `[宽, 高]` 建场景（正交场景按它当画布算场景目标、投影边距与清屏色，透视场景按它当画布尺寸），
+   * 建好之后、回放之前调 `scene.resize` 换成真正的尺寸（`canvas`；透视场景是 `canvas ?? window ?? [1920, 1080]`），其余流程不变。
+   * 「建在 A、换到 B」与「直接建在 B」的读回要逐字节相同。只对按指定尺寸画（正交场景给了 `canvas`、没要 `renderMode: scene`）与透视场景有意义，
+   * 否则报错。不给时逐字节同以前。
+   */
+  resizeFrom?: [number, number];
   /** 结果的存放键；PNG 存 `<key>.png`，原始 RGBA（读回的尺寸，alpha 置 255）存 `<key>.rgba`。 */
   key?: string;
   /** 有不支持项也渲染（同 dev 强制渲染）。默认 true。 */
@@ -425,6 +432,8 @@ export interface RenderFrameResult {
   render: RenderDescription;
   /** 读回的画布 `[宽, 高]`；没给 `canvas`（读回场景目标）时为 null。 */
   canvas: [number, number] | null;
+  /** 给了 `resizeFrom` 时：场景先按这个尺寸建、再原地换成真正的尺寸（`GpuScene.resize`）；没给时没有这一项。 */
+  resizedFrom?: [number, number];
   /** 场景目标（离屏渲染目标）的尺寸：场景分辨率（超过设备上限时等比缩小）；按指定尺寸画时是 `canvas`。 */
   sceneTarget: [number, number];
   /** 场景目标的格式（`rgba16float` 是 HDR 场景）；读回的画布总是 `rgba8unorm`。 */
@@ -561,6 +570,7 @@ interface CheckedRenderFrame {
   mediaSteps: ReturnType<typeof checkProbeMedia>;
   traceOptions: ReturnType<typeof traceOptionsOf>;
   scriptsOptions: ReturnType<typeof probeScriptsOptionsOf>;
+  resizeFrom: [number, number] | undefined;
 }
 
 function checkRenderFrame(options: RenderFrameOptions): CheckedRenderFrame {
@@ -583,7 +593,19 @@ function checkRenderFrame(options: RenderFrameOptions): CheckedRenderFrame {
     throw new Error("scripts 与 scriptValues 不能同时给：一个让脚本自己算，一个把脚本的结果塞进去，混用分不清是谁写的");
   if (options.prewarmFragments && !scriptsOptions)
     throw new Error("prewarmFragments 要和 scripts 一起给（预跑的是脚本建的层）");
-  return { canvas, cursorWindow, style, renderMode, videoTime, gifDts, mediaSteps, traceOptions, scriptsOptions };
+  const resizeFrom = options.resizeFrom === undefined ? undefined : checkCanvas(options.resizeFrom);
+  return {
+    canvas,
+    cursorWindow,
+    style,
+    renderMode,
+    videoTime,
+    gifDts,
+    mediaSteps,
+    traceOptions,
+    scriptsOptions,
+    resizeFrom,
+  };
 }
 
 /** 两遍（预跑与正式）共用的编译结果：常驻会话（L5，运行中建层编片段用）、bundle、片段缓存与读文件的缓存。 */
@@ -713,7 +735,8 @@ async function renderFramePass(
   compiled: ProbeCompiled,
   mode: { dry: true } | { dry: false; prewarm: ProbePrewarm | null },
 ): Promise<RenderFrameResult | { created: { config: string }[] }> {
-  const { canvas, cursorWindow, style, renderMode, videoTime, gifDts, mediaSteps, scriptsOptions } = checked;
+  const { canvas, cursorWindow, style, renderMode, videoTime, gifDts, mediaSteps, scriptsOptions, resizeFrom } =
+    checked;
   const traceOptions = mode.dry ? null : checked.traceOptions;
   const { bundle, reader, force, compileMs } = compiled;
   const prewarm = mode.dry ? null : mode.prewarm;
@@ -731,6 +754,7 @@ async function renderFramePass(
   let videos: ProbeVideos | undefined;
   try {
     if (canvas) checkCanvas(canvas, gpu.device.limits.maxTextureDimension2D);
+    if (resizeFrom) checkCanvas(resizeFrom, gpu.device.limits.maxTextureDimension2D);
     // 视频时刻（P9a 步骤 3）：对象里不是视频纹理的路径在这里抛错；读、seek 与建场景并行，第一次编码之前等它。建场景出错时
     // finally 里的 dispose 让它以「已释放」失败，先挂一个空的 catch，不留未处理的拒绝
     // 用户视频（P11b 步骤 4）的值也是 `videoTime` 对象的合法键
@@ -767,6 +791,13 @@ async function renderFramePass(
       ? [...(canvas ?? cursorWindow ?? [1920, 1080])]
       : undefined;
     const perspective = target && probePerspective(bundle, target);
+    // 原地换尺寸的验收：先按 `resizeFrom` 建（正交场景重算 target / edges / 清屏色，样式与清屏色的取值同真正的那份），建好之后 `scene.resize` 换成真正的
+    if (resizeFrom && !sized && !perspectiveScene)
+      throw new Error("resizeFrom 只用于按指定尺寸画（正交场景给 canvas、不要 renderMode: scene）或透视场景");
+    const buildSized =
+      resizeFrom && sized
+        ? planSizedTarget([sceneWidth, sceneHeight], resizeFrom, style, sized.target.clear ?? undefined)
+        : sized;
     // 每一帧的 g_PointerPosition 与 cursor（P5a 收尾）：只给 pointer（或都不给）时每帧相同，同加逐帧指针之前。
     // 换算窗口是 `window ?? canvas`（第 5 批）：读回画布就是模拟的壁纸窗口
     // 输入时间线（P6c）：展开成逐帧指针与左键；左键另交给脚本的光标命中
@@ -808,9 +839,16 @@ async function renderFramePass(
       texts: texts.texts,
       relayout: texts.relayout,
       userTextures,
-      size: target,
-      ...(sized ? { target: sized.target } : {}),
+      size: resizeFrom && perspectiveScene ? resizeFrom : target,
+      ...(buildSized ? { target: buildSized.target } : {}),
     });
+    if (resizeFrom)
+      await scene.resize(
+        sized
+          ? { size: sized.target.size, edges: sized.target.edges, clear: sized.target.clear }
+          : { size: target!, edges: null, clear: null },
+        state,
+      );
     // 脱离的纹理动画图层画自己的帧（P6e 点 3，同宿主的 `sheetOverride`）；推进在 `stepParticles` 里
     scene.setSheetOverrides((object) => textureAnimationOverride(state.textureAnimations.get(object)));
     // 视差（P5a 步骤 2）：从加载时的场景中心起，每一帧（profile 帧、回放帧、读回帧）按它的帧时间推进一次，同渲染器；profile 帧用第 0 项的指针
@@ -1136,6 +1174,7 @@ async function renderFramePass(
         height,
         render,
         canvas: canvas ? [canvas[0], canvas[1]] : null,
+        ...(resizeFrom ? { resizedFrom: [resizeFrom[0], resizeFrom[1]] as [number, number] } : {}),
         sceneTarget: [scene.width, scene.height],
         format,
         unsupported: bundle.unsupported,

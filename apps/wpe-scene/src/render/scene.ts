@@ -1710,6 +1710,15 @@ export class GpuScene {
   private readonly spriteCounters = new Map<number, SpriteCounter>();
   /** 计数 pass 的颜色目标（只为满足附件要求，写掩码 0），和场景目标同尺寸；第一次计数时建。 */
   private spriteTarget: GPUTextureView | null = null;
+  /** `spriteTarget` 的纹理（`resize` 换尺寸时释放）。 */
+  private spriteTexture: GPUTexture | null = null;
+  /** 泛光链、体积光建的资源（`own` 登记的那些）：`resize` 整条重建、旧的整批释放。 */
+  private bloomOwned = new Set<{ destroy(): void }>();
+  private volumetricsOwned = new Set<{ destroy(): void }>();
+  /** `resize` 串行（一次换尺寸做完才开始下一次）。 */
+  private resizing: Promise<void> = Promise.resolve();
+  /** `destroy` 之后为真：进行中的 `resize` 醒来后放弃。 */
+  private disposed = false;
 
   private constructor(
     private readonly device: GPUDevice,
@@ -1953,6 +1962,277 @@ export class GpuScene {
     if (failure !== null) this.freezeVariants(layer, state, failure);
   }
 
+  /**
+   * 换场景目标尺寸（WPE `FUN_14017f1b0`：只重建按窗口分配的 RT、改 g_Screen，场景接着跑）。状态、粒子树、脚本、关键帧、puppet、帧表计时器、
+   * 视频播放器、文本图集、用户纹理都不动，不重新预热。`next` 的规则同 `build` 的 `size` / `target`（`targetPlan`）：正交场景 `edges` 非空时场景目标
+   * = `size`（超设备上限抛 `render:target-size:…`），`edges` 与 `clear` 一并换成新的（投影边距、清屏色）；`edges` 为 null 的正交场景
+   * 按场景分辨率画（`size` 不看）；透视场景只看 `size`（钳设备上限，`edges` / `clear` 忽略）。尺寸、边距、清屏色都没变时什么都不做；
+   * 只有边距 / 清屏色变、尺寸不变时只换投影与清屏色，不重建 RT。
+   *
+   * 异步（泛光链与体积光建管线要等），但换的那一刻是同步的：先在旁边把新的场景目标 / 交替目标 / 深度 / 快照 / 反射两张 RT / 裁切遮罩 /
+   * 计数目标 / 泛光链 / 体积光全建好（这期间 `encode` 照旧画旧尺寸、不受影响），再在一次同步调用里换上、释放旧的、整层强制重建全部图层
+   * （绑定组、fullscreen 合成 RT 与 fbo、`g_Screen` 等静态 uniform）。所以 `resize` 返回的 Promise 兑现之后，下一次 `encode` 画的就是新尺寸；
+   * 调用方在它兑现之前继续画旧尺寸即可（拉伸上屏）。多次调用串行。透视场景的投影宽高比由渲染器每帧的 `setCamera` 更新，调用方在
+   * 下一次 `encode` 之前照常调。重排失败（`rebuildLayer` 抛错）时场景已经换成新尺寸而部分图层仍是旧 draw，调用方应整场重新加载。
+   * `state` 是这个场景的状态（重建 draw 按它写 uniform）。
+   */
+  resize(
+    next: {
+      size: readonly [number, number];
+      edges: Edges | null;
+      clear: readonly [number, number, number] | null;
+    },
+    state: SceneState,
+  ): Promise<void> {
+    const run = this.resizing.then(() => this.resizeNow(next, state));
+    this.resizing = run.catch(() => {});
+    return run;
+  }
+
+  private async resizeNow(next: Parameters<GpuScene["resize"]>[0], state: SceneState): Promise<void> {
+    if (this.disposed) return;
+    const { device, bundle } = this;
+    const plan = this.targetPlan(next.size, next);
+    const dims = plan.dims;
+    const [width, height] = dims;
+    const { sized } = plan;
+    const crop: ProjectionCrop | null = sized ? { edges: sized.edges, window: [width, height] } : null;
+    const clear = sized ? sized.clear : null;
+    const sameSize = width === this.width && height === this.height;
+    const sameClear =
+      this.targetClear === clear ||
+      (!!this.targetClear && !!clear && this.targetClear.every((value, index) => value === clear[index]));
+    const sameCrop =
+      this.crop === crop ||
+      (!!this.crop && !!crop && this.crop.edges.every((value, index) => value === crop.edges[index]));
+    if (sameSize && sameCrop && sameClear) return;
+    if (sameSize) {
+      this.applyCrop(crop, clear);
+      // 全部 draw 的矩阵 uniform 按新投影当场重写（不等渲染器下一帧的 `setParallax`）
+      if (!bundle.general.perspective) this.setParallax(this.parallax, state);
+      return;
+    }
+
+    // 一、旁边建新的：同步段里量出 `createX` 加进 `targetBytes` 的量、先减回去，换的时候一次性记账（建的期间旧的还在画）
+    const bytesBefore = this.targetBytes;
+    const staged = {
+      current: this.createSceneTarget("scene target", 0, dims),
+      alternate: this.alternate ? this.createAlternateTarget(dims) : null,
+      depth: this.depthTarget ? this.createDepthTarget(dims) : null,
+      snapshot: this.snapshot || this.bloom ? this.createSnapshot(dims) : null,
+      reflection: this.reflectionTargets ? ReflectionTargets.create(device, bundle, width, height, this.hdr) : null,
+      clipMask: this.clipMask ? this.createClipMask(dims) : null,
+      sprite: this.spriteTarget ? this.createSpriteTarget(dims) : null,
+    };
+    const stagedBytes = this.targetBytes - bytesBefore + (staged.reflection?.bytes ?? 0);
+    this.targetBytes = bytesBefore;
+    const bloomOwned = new Set<{ destroy(): void }>();
+    const volumetricsOwned = new Set<{ destroy(): void }>();
+    let bloom: BloomChain | null = null;
+    let volumetrics: VolumetricsRenderer | null = null;
+    const discard = () => {
+      for (const resource of [
+        staged.current.texture,
+        staged.alternate?.texture,
+        staged.depth?.texture,
+        staged.snapshot?.texture,
+        staged.clipMask?.texture,
+        staged.sprite?.texture,
+        ...bloomOwned,
+        ...volumetricsOwned,
+      ])
+        if (resource) this.release(resource);
+      staged.reflection?.destroy();
+    };
+    try {
+      if (this.bloom && bundle.bloom)
+        bloom = await BloomChain.create({
+          device,
+          bloom: bundle.bloom,
+          params: state.bloom,
+          programs: this.readyPrograms,
+          format: this.format,
+          width,
+          height,
+          source: staged.snapshot!.view,
+          pipelineFor: (program, blending, target) => this.pipelineFor(program, blending, target, false),
+          own: (resource) => {
+            bloomOwned.add(resource);
+            return this.own(resource);
+          },
+        });
+      if (this.volumetrics && bundle.volumetrics && staged.depth)
+        volumetrics = await VolumetricsRenderer.create({
+          device,
+          volumetrics: bundle.volumetrics,
+          programs: this.readyPrograms,
+          width,
+          height,
+          hdr: this.hdr,
+          sceneFormat: this.format,
+          depth: staged.depth.texture,
+          shadowAtlas: this.shadowAtlas ? { view: this.shadowAtlas.view, sampler: this.shadowAtlas.sampler } : null,
+          own: (resource) => {
+            volumetricsOwned.add(resource);
+            return this.own(resource);
+          },
+        });
+    } catch (error) {
+      discard();
+      throw error;
+    }
+    if (this.disposed) {
+      discard();
+      return;
+    }
+
+    // 二、同步换上（中间不让出，没有 `encode` 能插进来）
+    const old = {
+      width: this.width,
+      height: this.height,
+      current: this.current,
+      alternate: this.alternate,
+      depth: this.depthTarget,
+      snapshot: this.snapshot,
+      reflection: this.reflectionTargets,
+      clipMask: this.clipMask,
+      sprite: this.spriteTexture,
+      bloom: this.bloom,
+      volumetrics: this.volumetrics,
+      bloomOwned: this.bloomOwned,
+      volumetricsOwned: this.volumetricsOwned,
+    };
+    const texel = texelBytes(this.format);
+    let oldBytes = 0;
+    if (old.current) oldBytes += old.width * old.height * texel;
+    if (old.alternate) oldBytes += old.width * old.height * texel;
+    if (old.depth) oldBytes += old.width * old.height * 4;
+    if (old.snapshot) oldBytes += old.snapshot.width * old.snapshot.height * texelBytes(old.snapshot.format);
+    if (old.clipMask) oldBytes += old.clipMask.width * old.clipMask.height * texelBytes(old.clipMask.format);
+    if (old.sprite) oldBytes += old.width * old.height;
+    oldBytes += (old.reflection?.bytes ?? 0) + (old.bloom?.bytes ?? 0) + (old.volumetrics?.bytes ?? 0);
+    this.targetBytes += stagedBytes + (bloom?.bytes ?? 0) + (volumetrics?.bytes ?? 0) - oldBytes;
+
+    this.width = width;
+    this.height = height;
+    this.current = staged.current;
+    // 等待期间才懒建的（脚本第一次关清屏、第一次要快照 / 遮罩 / 计数）这里按新尺寸补建
+    this.alternate = staged.alternate ?? (old.alternate ? this.createAlternateTarget(dims) : null);
+    this.depthTarget = staged.depth;
+    this.snapshot = staged.snapshot ?? (old.snapshot ? this.createSnapshot(dims) : null);
+    this.reflectionTargets = staged.reflection;
+    this.clipMask = staged.clipMask ?? (old.clipMask ? this.createClipMask(dims) : null);
+    const sprite = staged.sprite ?? (old.sprite ? this.createSpriteTarget(dims) : null);
+    this.spriteTexture = sprite?.texture ?? null;
+    this.spriteTarget = sprite?.view ?? null;
+    this.bloom = bloom;
+    this.volumetrics = volumetrics;
+    this.bloomOwned = bloomOwned;
+    this.volumetricsOwned = volumetricsOwned;
+    this.linearBase = null;
+    for (const resource of [
+      old.current?.texture,
+      old.alternate?.texture,
+      old.depth?.texture,
+      old.snapshot?.texture,
+      old.clipMask?.texture,
+      old.sprite,
+      ...old.bloomOwned,
+      ...old.volumetricsOwned,
+    ])
+      if (resource) this.release(resource);
+    old.reflection?.destroy();
+    this.applyCrop(crop, clear);
+    // 透视场景的宽高比变了：先按加载时的相机（同建场景）换上，渲染器每帧的 `setCamera` 随后换成当帧的
+    if (bundle.general.perspective)
+      this.applyPerspective(initialPerspectiveFrame(bundle.general.camera, state.general, width, height));
+
+    // 三、整层强制重建：绑定组指向新的快照 / 反射 / 遮罩 / 深度，fullscreen 的合成 RT 与 fbo 按新尺寸，g_Screen 等静态 uniform 重写。
+    // `syncPipelines`：粒子层沿用粒子树（模拟不重来）、缺的管线当场建（格式不变，正常都在就绪表里）
+    const worlds = new Map<number, Mat4>(this.liveSeeds(state) ?? []);
+    const encoder = device.createCommandEncoder({ label: "scene resize" });
+    const heldBefore = new Set<RenderTarget>(this.layers.flatMap((runtime) => runtime.resources.composites));
+    for (const runtime of [...this.layers]) {
+      const { layer } = runtime;
+      if (layer.fullscreenSize === "scene" && !layer.text && !this.ownsSizing(layer))
+        this.resizeBorrowed(runtime, encoder);
+      this.rebuildLayer(runtime, state, worlds, { force: true, syncPipelines: true });
+    }
+    device.queue.submit([encoder.finish()]);
+    // 共享合成 RT 池里换尺寸之后没有人再借的那几组（旧尺寸的）立刻释放，不等场景销毁
+    const heldAfter = new Set<RenderTarget>(this.layers.flatMap((runtime) => runtime.resources.composites));
+    for (const [key, pool] of [...this.compositePool]) {
+      if (!pool.some((target) => heldBefore.has(target)) || pool.some((target) => heldAfter.has(target))) continue;
+      for (const target of pool) this.releaseTarget(target);
+      this.compositePool.delete(key);
+    }
+  }
+
+  /**
+   * 投影裁切与清屏色换新（`resize`）：两份基准矩阵按当前 zoom 重算，正交相机（没有相机对象时）立刻换上并标记相机变了，下一次 `setParallax`
+   * 把全部 draw 的矩阵 uniform 按新投影重写；有相机对象时视图投影由渲染器下一帧按新裁切交（`applyCameraObject` 比较后更新）。
+   * 透视场景没有裁切，只记清屏色。
+   */
+  private applyCrop(crop: ProjectionCrop | null, clear: readonly [number, number, number] | null): void {
+    this.crop = crop;
+    this.targetClear = clear;
+    const { general } = this.bundle;
+    if (general.perspective) return;
+    this.baseViewProjection = sceneViewProjection(general, this.zoom, crop?.edges);
+    this.basePerspectiveViewProjection = particleViewProjection(general, this.zoom, undefined, crop ?? undefined);
+    this.cameraDirty = true;
+    if (this.objectCamera) return;
+    const [x, y] = this.shake;
+    const still = x === 0 && y === 0;
+    const view = still ? identity() : translation(-x, -y, 0);
+    this.view.sceneCamera = { projection: this.baseViewProjection, view };
+    this.view.viewProjection = still ? this.baseViewProjection : mulAffine(this.baseViewProjection, view);
+    this.view.perspectiveViewProjection = still
+      ? this.basePerspectiveViewProjection
+      : multiply(this.basePerspectiveViewProjection, translation(-x, -y, 0));
+  }
+
+  /**
+   * 尺寸随场景目标的借用式合成 RT 与池化 fbo（`resize`，只 `fullscreenSize: "scene"` 的图层，且不是文本层、槽 0 没有用户纹理：那两种自己独占、
+   * `rebuildLayer` 里按排版 / 图像尺寸原地换）：合成 RT 尺寸不对的丢掉引用（`rebuildLayer` → `ensureComposites` 按新尺寸从池里重借；被依赖层的
+   * 独占第 0 张留着）；fbo 先取新尺寸的引用、再还旧引用（尺寸没变的键同一个，引用先加后减不会释放重建）；`unique` 的 fbo 键里没有尺寸，尺寸变了
+   * 在同一个下标上原地换，清屏记进 `encoder`。
+   */
+  private resizeBorrowed(runtime: LayerRuntime, encoder: GPUCommandEncoder): void {
+    const { layer, resources } = runtime;
+    const size = this.compositeSizeOf(layer, [this.width, this.height]);
+    const keep = this.layerTargets.has(runtime.object) ? 1 : 0;
+    if (resources.composites.slice(keep).some((target) => target.width !== size[0] || target.height !== size[1]))
+      resources.composites.splice(keep);
+    const keys: string[] = [];
+    const maps = layer.effects.map(
+      (effect) =>
+        new Map(
+          effect.fbos.map((fbo) => [fbo.name, this.acquireFbo(layer, effect, fbo, size, encoder, keys)] as const),
+        ),
+    );
+    for (const key of runtime.fboKeys) this.releaseFbo(key);
+    layer.effects.forEach((effect, e) => {
+      for (const fbo of effect.fbos) {
+        if (!fbo.unique) continue;
+        const id = maps[e].get(fbo.name)!;
+        const [fw, fh] = fboSize(fbo, size);
+        const current = this.targets[id];
+        if (current.width === fw && current.height === fh) continue;
+        this.releaseTarget(current);
+        this.targets[id] = this.createFbo(
+          fbo,
+          [fw, fh],
+          fboFormatOf(fbo),
+          `unique|${layer.id}|${effect.id}|${fbo.name}`,
+          encoder,
+        );
+      }
+    });
+    resources.fbos = new FboBindings(maps);
+    runtime.fboKeys = keys;
+  }
+
   /** 这一帧画的那张场景目标（dev 探针同步读回用）。有两张时 `encode` 开头才换，要在它之后取。 */
   get targetTexture(): GPUTexture | null {
     return this.current?.texture ?? null;
@@ -2087,8 +2367,12 @@ export class GpuScene {
     resource.destroy();
   }
 
-  private createSceneTarget(label: string, extraUsage = 0): SceneTarget {
-    const { width, height, format } = this;
+  private createSceneTarget(
+    label: string,
+    extraUsage = 0,
+    [width, height]: readonly [number, number] = [this.width, this.height],
+  ): SceneTarget {
+    const { format } = this;
     const texture = this.own(
       this.device.createTexture({
         label,
@@ -2103,8 +2387,10 @@ export class GpuScene {
   }
 
   /** 场景目标的深度附件（P5d 步骤 1）：场景目标尺寸、`depth32float`，只作附件；计进显存估算（每像素 4 字节）。 */
-  private createDepthTarget(): { texture: GPUTexture; view: GPUTextureView } {
-    const { width, height } = this;
+  private createDepthTarget([width, height]: readonly [number, number] = [this.width, this.height]): {
+    texture: GPUTexture;
+    view: GPUTextureView;
+  } {
     const texture = this.own(
       this.device.createTexture({
         label: "scene depth",
@@ -2308,7 +2594,12 @@ export class GpuScene {
   /** `_rt_FullFrameBuffer`：有图层要读、或要跑泛光链才建（两者共用一张，泛光在全部图层之后再拷一次）。 */
   private ensureSnapshot(): void {
     if (this.snapshot) return;
-    const { width, height, format } = this;
+    this.snapshot = this.createSnapshot([this.width, this.height]);
+  }
+
+  /** `_rt_FullFrameBuffer` 按 `dims` 建一张（建场景与 `resize` 共用）。 */
+  private createSnapshot([width, height]: readonly [number, number]): RenderTarget {
+    const { format } = this;
     const texture = this.own(
       this.device.createTexture({
         label: "_rt_FullFrameBuffer",
@@ -2319,7 +2610,7 @@ export class GpuScene {
       }),
     );
     this.targetBytes += width * height * texelBytes(format);
-    this.snapshot = {
+    return {
       texture,
       view: texture.createView(),
       width,
@@ -3096,22 +3387,25 @@ export class GpuScene {
     meshes.forEach((item, m) => {
       if (item) morphs.set(morphKey(layer.object, m), this.uploadMorph(layer, item, m));
     });
-    if (layer.puppet?.clipping && !this.clipMask) {
-      const [width, height] = clipMaskSize(this.width, this.height);
-      this.clipMask = this.createTarget(
-        "clip mask",
-        width,
-        height,
-        "r8unorm",
-        this.sampler({
-          addressModeU: "clamp-to-edge",
-          addressModeV: "clamp-to-edge",
-          magFilter: "linear",
-          minFilter: "linear",
-        }),
-      );
-    }
+    if (layer.puppet?.clipping && !this.clipMask) this.clipMask = this.createClipMask([this.width, this.height]);
     return morphs;
+  }
+
+  /** puppet 裁切遮罩 RT：场景目标一半大（`clipMaskSize`），建场景与 `resize` 共用。 */
+  private createClipMask([sceneWidth, sceneHeight]: readonly [number, number]): RenderTarget {
+    const [width, height] = clipMaskSize(sceneWidth, sceneHeight);
+    return this.createTarget(
+      "clip mask",
+      width,
+      height,
+      "r8unorm",
+      this.sampler({
+        addressModeU: "clamp-to-edge",
+        addressModeV: "clamp-to-edge",
+        magFilter: "linear",
+        minFilter: "linear",
+      }),
+    );
   }
 
   /** 一个 puppet（或模型网格 `mesh`）的变形纹理上传（`morphTexelData` 转好数据，`writeTexture` 一次）。 */
@@ -3154,6 +3448,34 @@ export class GpuScene {
     };
   }
 
+  /**
+   * 场景目标的尺寸与「按指定尺寸画」的参数（建场景与 `resize` 共用，保证「建在 B」和「换到 B」同一份规则）：
+   * 正交场景给了 `target`（`edges` 非空）时场景目标 = 指定尺寸，超设备上限直接报错、不缩（缩了就不是指定的尺寸）；透视场景按画布尺寸
+   * `size`（P5d 步骤 2，钳设备上限）；正交场景没有 `target`（或 `edges` 为 null）时按场景尺寸。
+   */
+  private targetPlan(
+    size: readonly [number, number] | undefined,
+    target:
+      | { size: readonly [number, number]; edges: Edges | null; clear: readonly [number, number, number] | null }
+      | undefined,
+  ): {
+    dims: [number, number];
+    sized: { size: readonly [number, number]; edges: Edges; clear: readonly [number, number, number] | null } | null;
+  } {
+    const { device, bundle } = this;
+    const { general } = bundle;
+    const max = device.limits.maxTextureDimension2D;
+    const sized = !general.perspective && target && target.edges ? { ...target, edges: target.edges } : null;
+    if (sized && (sized.size[0] > max || sized.size[1] > max))
+      throw new SceneRenderError([`render:target-size:${sized.size[0]}x${sized.size[1]}>${max}`]);
+    const dims: [number, number] = sized
+      ? [sized.size[0], sized.size[1]]
+      : general.perspective
+        ? sceneTargetSize(size?.[0] ?? 1920, size?.[1] ?? 1080, max)
+        : sceneTargetSize(general.width, general.height, max);
+    return { dims, sized };
+  }
+
   private async populate(
     state: SceneState,
     size?: readonly [number, number],
@@ -3162,21 +3484,13 @@ export class GpuScene {
   ): Promise<void> {
     const { device, bundle } = this;
     const { general } = bundle;
-    // 按指定尺寸画（dev 探针）：正交场景的场景目标 = 指定尺寸，超设备上限直接报错、不缩（缩了就不是指定的尺寸）
-    const sized = !general.perspective && target ? target : null;
+    const plan = this.targetPlan(size, target);
+    const { sized } = plan;
     if (sized) {
-      const max = device.limits.maxTextureDimension2D;
-      if (sized.size[0] > max || sized.size[1] > max)
-        throw new SceneRenderError([`render:target-size:${sized.size[0]}x${sized.size[1]}>${max}`]);
       this.crop = { edges: sized.edges, window: [sized.size[0], sized.size[1]] };
       this.targetClear = sized.clear;
     }
-    // 透视场景按画布尺寸（P5d 步骤 2，已定 6）；正交场景按场景尺寸
-    const [width, height] = sized
-      ? [sized.size[0], sized.size[1]]
-      : general.perspective
-        ? sceneTargetSize(size?.[0] ?? 1920, size?.[1] ?? 1080, device.limits.maxTextureDimension2D)
-        : sceneTargetSize(general.width, general.height, device.limits.maxTextureDimension2D);
+    const [width, height] = plan.dims;
     const hdr = (this.hdr = general.postprocess.hdr);
     const format = (this.format = sceneTargetFormat(hdr));
     this.width = width;
@@ -3309,7 +3623,10 @@ export class GpuScene {
         height,
         source: this.snapshot!.view,
         pipelineFor: (program, blending, target) => this.pipelineFor(program, blending, target, false),
-        own: (resource) => this.own(resource),
+        own: (resource) => {
+          this.bloomOwned.add(resource);
+          return this.own(resource);
+        },
       });
       this.bloom = chain;
       this.targetBytes += chain.bytes;
@@ -3326,7 +3643,10 @@ export class GpuScene {
         sceneFormat: format,
         depth: this.depthTarget.texture,
         shadowAtlas: this.shadowAtlas ? { view: this.shadowAtlas.view, sampler: this.shadowAtlas.sampler } : null,
-        own: (resource) => this.own(resource),
+        own: (resource) => {
+          this.volumetricsOwned.add(resource);
+          return this.own(resource);
+        },
       });
       this.targetBytes += this.volumetrics.bytes;
     }
@@ -5204,8 +5524,8 @@ export class GpuScene {
     };
   }
 
-  private createAlternateTarget(): SceneTarget {
-    return this.createSceneTarget("scene target 2", GPUTextureUsage.COPY_DST);
+  private createAlternateTarget(dims?: readonly [number, number]): SceneTarget {
+    return this.createSceneTarget("scene target 2", GPUTextureUsage.COPY_DST, dims);
   }
 
   /** 没有声明的脚本第一次关掉清屏：当场建第二张，把当前画面拷过去。这一帧的底图是 N−1，静止内容相同。 */
@@ -5458,18 +5778,28 @@ export class GpuScene {
 
   private spriteCountTarget(): GPUTextureView {
     if (!this.spriteTarget) {
-      const texture = this.own(
-        this.device.createTexture({
-          label: "sprite count target",
-          size: { width: this.width, height: this.height },
-          format: SPRITE_COUNT_TARGET_FORMAT,
-          usage: GPUTextureUsage.RENDER_ATTACHMENT,
-        }),
-      );
-      this.targetBytes += this.width * this.height;
-      this.spriteTarget = texture.createView();
+      const made = this.createSpriteTarget([this.width, this.height]);
+      this.spriteTexture = made.texture;
+      this.spriteTarget = made.view;
     }
     return this.spriteTarget;
+  }
+
+  /** 计数 pass 的颜色目标按 `dims` 建（建场景时懒建与 `resize` 共用）。 */
+  private createSpriteTarget([width, height]: readonly [number, number]): {
+    texture: GPUTexture;
+    view: GPUTextureView;
+  } {
+    const texture = this.own(
+      this.device.createTexture({
+        label: "sprite count target",
+        size: { width, height },
+        format: SPRITE_COUNT_TARGET_FORMAT,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT,
+      }),
+    );
+    this.targetBytes += width * height;
+    return { texture, view: texture.createView() };
   }
 
   /**
@@ -6880,8 +7210,13 @@ export class GpuScene {
   }
 
   destroy(): void {
+    this.disposed = true;
     for (const resource of this.owned) resource.destroy();
     this.owned.clear();
+    this.bloomOwned.clear();
+    this.volumetricsOwned.clear();
+    this.spriteTexture = null;
+    this.spriteTarget = null;
     this.draws.clear();
     this.layers.length = 0;
     this.runtimeByObject.clear();

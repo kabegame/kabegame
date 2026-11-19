@@ -1,5 +1,14 @@
 # v4.7.0 regression
 
+## 场景壁纸原地换尺寸（产品按画布分辨率画 第 1 步）
+
+2026-11-19 Windows dev。`GpuScene.resize(next, state)`：换场景目标尺寸时只重建按目标尺寸分配的资源（场景目标与交替目标、深度、快照、泛光链、反射两张 RT、体积光、puppet 裁切遮罩、sprite 计数目标），整层强制重建全部图层（绑定组、fullscreen 合成 RT 与 fbo、`g_Screen` 等静态 uniform），状态、粒子、脚本、关键帧、puppet、计时器都不动，同 Wallpaper Engine 改窗口尺寸。新资源先在旁边建好、一次同步换上，等待期间照旧画旧尺寸；旧资源当场释放，共享合成 RT 池里不再被借的旧尺寸条目一并释放。只换投影边距 / 清屏色时不重建 RT。dev 探针 `renderFrame` 加 `resizeFrom`（先按它建、再换到真正的尺寸）。这一步还没接进产品（渲染器、宿主不变），用户看得到的行为不变。计划见 `.claude/plans/wpe-import/3-scene/phase-render-size-product.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：`render/resize.test.ts`（建 A 换 B = 建 B 的资源、pass、绑定、uniform 字节；旧资源释放；A → B → A 回到基线；连发串行；只换边距不建 RT；超上限报错）与 `l4`、`l7`、`bloom`、`reflection`、`p13b2-reflection`、`p13e-volumetrics`、`p5b-fullscreen`、`renderSize`、`rebuild`、`p6e-sheets`、`dev/probe.renderSize`；`tsc` | 全过 | 2026-11-19 Claude：12 个文件 293 条通过；`tsc` 0 错误；变异 10 处全部抓到 |
+| [x] | T2 全库「建 A 换 B」=「建 B」 | Windows dev，屏外宿主（探针 `resizeFrom`，ultra 档） | 每张能渲染的场景 4 组：fill 1920×1080 → 1280×720、fill 800×450 → 2560×1440、fit 1920×1080 → 900×1600、center 1280×1024 → 2560×1080 | 读回逐字节相同 | 2026-11-19 Claude：285 张 1116 组全部相同（12 张透视场景不收 fit / center，跳过 24 组）；含 HDR 泛光、体积光、反射、puppet 裁切、fullscreen 合成层 |
+
 ## 场景壁纸图像层帧表收尾（P6e 第 5 步：全库核对与文档）
 
 2026-11-18 Windows dev。P6e 四步之后的全库核对，产品代码不变，文档见 `cocs/wpe/WPE_SCENE.md`「图像层帧表（P6e）」。数据与脚本在 `ignore/p6/e5/`。
