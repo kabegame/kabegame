@@ -10,8 +10,9 @@
 > P4c（粒子控制点与指针跟随、`controlpointattract`、世界空间与「粒子先于脚本」的帧顺序、`spritetrail` 拖尾与 `sprite` 的三种朝向）已落地：新解锁工坊 `1838478131`、`3832772446`，能渲染的从 20 张到 22 张，带粒子的场景里粒子用法完全覆盖的从 22 张到 44 张。见下「粒子（P4c）」。
 > P4e（粒子子系统 `children` 的四种类型、事件实例池、`audioprocessing*` 与场景频谱）已落地：解锁工坊 `3778592720`、`3811798465`、`1514925620`（`1333579536` 与 P5b 一起），带粒子的场景里粒子用法完全覆盖的从 61 张到 93 张（165 张口径）。见下「粒子（P4e）」。
 > P4f（实例覆盖挂字段脚本与 `rate` 的单独路径、HDR 下的 `instanceoverride.brightness`、粒子层的 `IParticleSystem` 方法与 `instance` 对象、一个系统多个 renderer）已落地：带粒子的场景里粒子用法全部覆盖（93 → 108 张，165 张口径），不解锁新场景。见下「粒子（P4f）」。
+> P4g（粒子颜色 initializer `hsvcolorrandom` / `colorlist`）与 P4h（粒子 operator `boids`）已落地：语料没有场景用到，解锁 WPE `myprojects` 里的 6 张（5 张「followed by mice」与滴水 `3826719942`）。见下「粒子（P4g）」「粒子（P4h）」。
 > 计划：[.claude/plans/wpe-import/3-scene/PLAN.md](../../.claude/plans/wpe-import/3-scene/PLAN.md)；
-> P4 粒子：[phase-4-particles.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4-particles.md)（总计划）、[phase-4a-base.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4a-base.md)（P4a 与实施记录）、[phase-4b-tier2.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4b-tier2.md)（P4b 与实施记录）、[phase-4c-controlpoints.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4c-controlpoints.md)（P4c 与实施记录）、[phase-4d-ropes.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4d-ropes.md)（P4d 与实施记录）、[phase-4e-children.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4e-children.md)（P4e 与实施记录）、[phase-4f-script.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4f-script.md)（P4f 与实施记录）、[p4-particles-REPORT.md](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)（实测与读码结论）；
+> P4 粒子：[phase-4-particles.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4-particles.md)（总计划）、[phase-4a-base.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4a-base.md)（P4a 与实施记录）、[phase-4b-tier2.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4b-tier2.md)（P4b 与实施记录）、[phase-4c-controlpoints.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4c-controlpoints.md)（P4c 与实施记录）、[phase-4d-ropes.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4d-ropes.md)（P4d 与实施记录）、[phase-4e-children.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4e-children.md)（P4e 与实施记录）、[phase-4f-script.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4f-script.md)（P4f 与实施记录）、[phase-4g-color-modules.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4g-color-modules.md)（P4g 与实施记录）、[phase-4h-boids.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4h-boids.md)（P4h 与实施记录）、[p4-particles-REPORT.md](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)（实测与读码结论）；
 > 格式调研：[RESEARCH.md](../../.claude/plans/wpe-import/3-scene/RESEARCH.md)。
 
 ## 总体形态
@@ -1071,7 +1072,7 @@ P4b 在 P4a 的底座上沿三条线扩展，底座的形状不变：
 `colorn` 有两种作用方式，可以同时生效。实现在 `particles/colorn.ts`，依据 rea-p4b-render 7.1–7.4。
 
 - **系统色**（`compile/particles.ts` 的 `particleColorSystem`）：加载时从粒子 JSON 原文推出。
-  - 按 initializer 顺序找，后面的覆盖前面的：`colorrandom` 取 `((max − min)·0.5 + min)·0.003921569`，min、max 是 0–255 原值。
+  - 按 initializer 顺序找，后面的覆盖前面的：`colorrandom` 取 `((max − min)·0.5 + min)·0.003921569`，min、max 是 0–255 原值。P4g 起 `hsvcolorrandom`、`colorlist` 也参与（见「粒子（P4g）」）。
   - 一个 initializer 都没命中时，取第一个 operator `colorchange` 的 `startvalue`。
   - 都没有时是 (1, 1, 1)，`hascolor` 为假。
   - 结果经 `%.5f` 往返一次。
@@ -1084,6 +1085,7 @@ P4b 在 P4a 的底座上沿三条线扩展，底座的形状不变：
   - 色相取模到 [0, 1)，饱和度、明度钳到 [0, 1]；`rgb2hsv` 全用 float32 除法，`hsv2rgb` 的两次 `fmod` 是双精度。
   - `colorrandom`：min、max 两端各自平移，再插值。
   - `colorchange`：`startvalue`、`endvalue` 两端各自平移。WPE 的 0xc 记录写的是 start 与 Δ；我们换两端，每帧按 `f32(end − start)` 算 Δ，结果相同。
+  - `hsvcolorrandom`（0xd）、`colorlist`（0xe）：P4g 起，规则不同（区间搬到 `colorn` 上、出生时加 HSV 差），见「粒子（P4g）」。
 - **实例颜色**（WPE 的系统标志 `0x200000`）：
   - 置位条件：scene.json 根的 **`version` < 5**（缺键为 0），或没有颜色模块。
   - 置位且生效时，新粒子的颜色初值是 `colorn`，颜色模块再乘到它上面。
@@ -1780,6 +1782,72 @@ WPE 对一个系统的 renderer 数组逐条各画一次：每条用同一个基
 - 确定性工程：`defs/p4f0.py`（`kbp gen p4f0`）出 `p4f-instance`、`p4f-api`、`p4f-api2`、`p4f-api3`、`p4f-bright`、`p4f-multi` 与收尾的 `p4f-bright2`。脚本事件写进 WPE 的 log.txt：`[kbpx] <对象名> <engine.runtime> <事件>`（FR 的 `[kbp]` 解析不认这个前缀）。
 - 回放案例 `cases/f1.json`–`f3.json`；kbp-tools 的案例多了 `postprocess` 字段（按档位编译），`observe` 钩子多第 6 个参数（这一帧的控制点输入）；`kbp corners offline` 认 `名字#<r + 1>` 为第 r 条 renderer，并按 `forEachDrawn` 比 static 子系统。
 - WPE 参照在 `A:\p4f\`。各步的快照、补丁与变异清单在 `f0/`–`f4/`。
+
+## 粒子（P4g）
+
+P4g 补两个出生时的颜色 initializer：`hsvcolorrandom`（类型 4）与 `colorlist`（类型 5）。和 P4b 的 `colorrandom` 同一类：在模块表里登记字段，出生时算一个颜色**乘**到初值颜色列上（`particles/initializers.ts`）；系统色与 `colorn` 的重算各多一种记录（`particles/colorn.ts`、`compile/particles.ts` 的 `particleColorSystem`）。语料里没有场景用到，起因是 WPE `myprojects` 里 5 张「followed by mice」场景只差 `hsvcolorrandom`（`colorn` 绑用户属性「颜色可调」）。
+
+依据：读码 [rea-p4g-color](../../.claude/plans/wpe-import/3-scene/phase4/rea-p4g-color.md)；确定性工程的实测 [报告](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)「P4g 语义的实测核对」（读码各条成立，两处以实测更正）；验收数据 [子计划](../../.claude/plans/wpe-import/3-scene/phase4/phase-4g-color-modules.md)「步骤 0、1 实施记录」。
+
+### `hsvcolorrandom`
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 键与缺省 | `huemin` 0、`huemax` 1、`huesteps` 6、`saturationmin` 0.5、`saturationmax` 1、`valuemin` 0.5、`valuemax` 1；不钳制，`huesteps` 截成整数、取 `max(0, ·)`；字符串 `huesteps` 照报 | 读码 |
+| 步长（编译期，`normalizeHsvColor`） | `s ≤ 1` 时没有步长（色相恒为 `huemin`）；否则 `d = huemax − huemin`（可为负），`span = d == 0 ? 1 : d`，整圈（`|d mod 1| < 1/360`）时 `div = s`、否则 `s − 1`，`step = span / div` | 读码；`s ≤ 1` 的 span 为 0 是实测更正 |
+| 出生 | 档位 `k = min(trunc(r/32767·(s+1)), s)`，共 s + 1 档，非整圈时最后一档越过 `huemax`；色相 `huemin + k·step`，不取模（负色相落进 `hsv2rgb` 的「其它」分支得灰色）；之后 S、V 各抽一次 `R`；`hsv2rgb` 后乘到初值颜色 | 读码；实测 `hsv-fwd` / `hsv-rev` / `hsv-neg` 等 |
+| 档位随机数 | WPE 是 MSVC CRT 的 `rand()`（渲染线程启动时用 QPC 播种，和声音选文件共用），**不复刻**：用一个独立的随机源（`particles/random.ts` 的 `HueSource`，种子派生，不占 `R`）。验收时档位确定的组逐粒子比，分档的组比取值集合与比例 | 读码；同 P4a 起「随机数不复刻」 |
+
+### `colorlist`
+
+- **键**：`colors`（数组）、`huenoise` / `saturationnoise` / `valuenoise`（缺省 0）。`colors` 只认能切出三个数的字符串项，不 ÷255、存成 HSV；单个字符串当一项；别的形状照报 `particle:initializer:colorlist:colors`。
+- **缺省**：不写 `colors` 键时是**一项白色**（缺省值字符串 `"1 1 1"` 被当成一项，实测更正）；`[]` 或没有一项有效时补纯红 HSV (0, 1, 1)。
+- **出生**：下标一次 `R`、H / S / V 各一次 `R`（区间 `[max(x − noise, 0), min(x + noise, 1)]`），每粒子 4 次；加上 `colorn` 的平移后色相取小数、S / V 钳到 [0, 1]，乘到初值颜色。
+
+### 系统色与 `colorn`
+
+- **系统色**：initializer 按顺序、后者覆盖前者。`hsvcolorrandom` 取三个区间中点（各钳到 [0, 1]）的 `hsv2rgb`；`colorlist` 取第一个有效项的 RGB，没有有效项时不改系统色。语料写法「`colorrandom` 在前、`hsvcolorrandom` 在后」取后者。
+- **记录 0xd（`hsvcolorrandom`）**：生效时 `huemin' = (hc − (span·0.5 + huemin)) + huemin`（色相按区间中点平移到 `colorn` 的色相，不取模），S / V 区间居中到 `colorn` 的 S / V 并钳到 [0, 1]、超出 1 时截短 range；**步长与档数不重算**。
+- **记录 0xe（`colorlist`）**：生效时出生的平移是 `colorn` 的 HSV 减第一项的 HSV。
+- `flags & 8` 不建记录；运行中改 `colorn`（绑属性）就地重算，只影响之后出生的粒子（实测 `p4g-live`）。
+
+### 验收与覆盖
+
+- 确定性工程 `ignore/p4/defs/p4g0.py`（`p4g-hsv` 13 组、`p4g-hsv5` 6 组、`p4g-list` 8 组、`p4g-live` 2 组），WPE 参照 `A:\p4g\`；dev 应用里 `particle_track` 按 WPE 时间线回放、`ignore/p4/g1/cmp_colors.py` 比颜色：档位确定的组逐粒子颜色差 0，分档的组取值集合相同、比例在采样误差内，S / V 连续随机的组色相档位与区间一致。没有建回放案例（颜色取值集合由脚本比）。
+- 变异检查 7 处全部被单测检出（`ignore/p4/g1/mutate_g1.py`）。
+- 覆盖：165 张口径不变（语料 0 张用到）；myprojects 的 5 张（`3841315879`、`3841322784`、`3841330265`、`3841337134`、`3841390912`）不支持项从 1 项到 0 项。
+
+## 粒子（P4h）
+
+P4h 补粒子 operator `boids`（类型 17，「鸟群」三规则：对齐、聚合、分离）。它是**第一个粒子之间互相读的 operator**，结果取决于遍历顺序、写回时机和 WPE 的一处缺陷，所以全部照读码逐行做（`particles/boids.ts`）。语料里没有场景用到，起因是 WPE `myprojects` 里的滴水场景 `3826719942` 只差它（`alignmentfactor 5`、`cohesionfactor 5`、`separationfactor 0`、`neighborthreshold 150`、`flags 0`，世界空间系统，`ropetrail` 绘制）。
+
+依据：读码 [rea-p4h-boids](../../.claude/plans/wpe-import/3-scene/phase4/rea-p4h-boids.md)；实测 [报告](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)「P4h 语义的实测核对」（读码各条都成立）；验收数据 [子计划](../../.claude/plans/wpe-import/3-scene/phase4/phase-4h-boids.md)「步骤 0、1 实施记录」。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 键与缺省 | `separationthreshold` 20 / 0.02、`neighborthreshold` 50 / 0.2、`maxspeed` 500 / 1（正交 / 透视场景），`separationfactor` 15、`alignmentfactor` 1、`cohesionfactor` 2、`flags` 1（只看 bit0 = 限速）；不钳制，不登记实例覆盖 | 读码 1.2、1.3；实测 `def30` / `def15` |
+| 遍历 | 槽 4 个一组（SIMD），组升序；每组对全部组（含自己）比 16 对，lane `l` 的邻居是 `j + ((l − k4) mod 4)`；没有网格、没有上限 | 读码 2.3 |
+| 存活判定（WPE 缺陷，**照抄**） | 邻居「活着」看的是 `life[j + l]`（和被更新粒子同 lane 的槽），不是邻居自己；所以同组里未出生的槽（位置 0）与死槽会被当成邻居，两颗粒子的系统就会触发；被更新的粒子死了也照算 | 读码 2.4；实测 `sep50`（两颗都被原点的未出生槽推开，不照抄差 1400 像素）、`dead` |
+| 一对的计算 | `d2 = (dy² + dx²) + dz²`，`d2 = 0`（自己、重合）两项都不算；邻居 `d < nbT`、分离 `d < sepT`，严格 `<`；分离权重 `sepT/d − 1` | 读码 2.4；实测 `thr-in` / `thr-out`、`same` |
+| 速度增量 | `Δv = ((v̄ − v)·A' + (Σw·Δp / nS)·Sep') + (p̄ − p)·C'`，`X' = S·X·k`（`k` 是 drag 用的那个系数，不是 `h`；两遍模式各一半）；只改速度、不改位置，不乘实例 `speed`；实例 `rate` 经 `dt'` 进来 | 读码 2.5、第 5 节；实测 fps 20 下乘 `h` 差 4.6、乘 `k` 0.0008 |
+| 写回 | 一组 4 颗算完立即写速度，后面的组读到前面组的新速度（只影响对齐项） | 读码第 3 节；实测 `order8`（全快照差一倍多） |
+| 限速 | `flags & 1` 时 `new² > max(old², maxS²)` 才压到 `maxS`（旧速度已超限、新速度没变快就不管） | 读码 2.6；实测 `lim-a` / `lim-c` |
+| 槽范围 | WPE 的 operator 循环到 `⌈hw/4⌉·4`：带 boids 的系统 operator 的 `count` 取到那里（`movement` 也积分未出生的槽），其它系统不变 | 读码 2.3、rea-framework Q5 |
+| 分帧 | `hw ≥ 200` 时 `S = floor(hw/200) + 1`，一帧只更新 1/S 的组、系数乘 S；帧计数器初值未知，从 0 起（`TODO:[WPE_SCENE]`，语料用不到） | 读码 2.2、2.7 |
+| 空间 | 在列所在的空间里算：本地系统用本地坐标，世界系统用世界坐标（发射器偏移不经对象缩放，同 P4c）；每个系统实例各自独立 | 读码第 4 节；实测 `local-s2` / `world-s2` |
+
+**近似运算不复刻**（用户 2026-11-20 决定，同 P4a 起的惯例）：WPE 的距离用 `rsqrtps`、平均值的 1/n 用 `rcpps`，我们用精确值。已知差异：
+- 「距离正好等于阈值」的判定取决于硬件 `rsqrtps`（`thr-eq`：本机 WPE 判成有作用）。
+- `rcpps(1)` 偏小约 2⁻¹²，在世界坐标（几百到几千像素）里让质心向原点慢慢加速：`world-s2` 11 s 漂 23 像素；滴水场景粒子只活 0.5–1 s，估计不超过约 3 像素。
+
+### 验收与覆盖
+
+- 确定性工程 `ignore/p4/defs/p4h0.py`（`p4h-a` 13 组、`p4h-b` 7 组，每颗粒子一个只发一次的发射器），WPE 参照 `A:\p4h\`（fps 20 / 60）；读码阶段的参考模型 `ignore/p4/h0/model.py` 按 WPE 日志逐帧模拟、和抓帧逐粒子比，并排除了五种别的读法。
+- 回放案例 `ignore/p4/cases/h1.json`：18 组逐粒子比全部通过（近似运算包络）；`thr-eq` 跳过，`thr-out` / `speed2` 放宽 pos——发射器给速度归一化的 `1/Math.sqrt` 不在近似包络里，WPE 的近似让速度差约 2.2e-4，和 boids 无关。
+- 变异检查 10 处全部检出（`ignore/p4/h1/mutate_h1.py`；「组内逐 lane 立即写」是等价变异，换成「全快照」）。
+- 走查：滴水场景解包成 `ignore/p4/proj/3826719942-kbp` 在 dev 应用里回放，和 WPE 抓帧比水流区域，形状、走向、粗细一致（随机发射，不逐粒子比）。
+- 覆盖：165 张口径不变（语料 0 张用到）；myprojects 的 `3826719942` 不支持项从 1 项到 0 项。
+- 对比台注意：WPE 的 log.txt 各会话共用，同时开着别的会话的测试窗口时 `[kbp]` 行会交错（行首进程号不同），回放工具会报「帧号重复」；按进程号拆开（`ignore/p4/h0/split_log.py`，原件留 `*-log.raw.txt`）。
 
 ## 音频频谱 uniform（P11a）
 

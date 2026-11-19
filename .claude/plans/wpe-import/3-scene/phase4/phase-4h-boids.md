@@ -100,3 +100,10 @@
 - 回放案例 `ignore/p4/cases/h1.json`：p4h-a fps20 / fps60、p4h-b fps60 共 18 组逐粒子比全部通过（world-s2 的 rcpps 漂移 23.4 在包络 35.8 内）。thr-eq 跳过（正好等于阈值看硬件 rsqrtps）；thr-out、speed2 另开 run 放宽 pos：发射器给速度归一化用的 `1/Math.sqrt` 不在 approx 包络里，WPE 的近似让速度差约 2.2e-4、两个 fps 正负相反，和 boids 无关（P4b 起的发射器差异，没动）。
 - `kbp mutate`（`ignore/p4/h1/mutate_h1.py`）：10 个变异全部检出、按原字节还原。原清单里「组内逐 lane 立即写」是等价变异（邻居累加在写回前已算完），换成「全快照」；`count-hw`（operator 只跑到高水位）只有单测检出：p4h 工程没有重力，未出生槽不会动，滴水场景有重力时才看得出。
 - 走查：滴水场景 `3826719942` 编译 0 个不支持项；解包成 `ignore/p4/proj/3826719942-kbp` 导入、按 fps 20 回放 80 帧在 1200×800 画，和 `A:\p4h\drip\` 的 WPE 帧比水流区域（`ignore/p4/h1/out/drip-crop.png`）：水流从瓶口落到腿上的形状、走向、粗细一致（随机发射，不逐粒子比）。测试行已用 `projects_remove` 移除。
+
+### 收尾（2026-11-20，P4g、P4h 一起）
+
+- 文档：`cocs/wpe/WPE_SCENE.md` 新增「粒子（P4g）」「粒子（P4h）」两节，状态行与计划链接补上；「粒子（P4b）」的 `colorn` 一节指向 P4g；`cocs/README.md` 加两条主题与适用场景。
+- 回归：`versions/latest/regression.md`「场景壁纸 P4g、P4h」G1–G6、H1–H6；G6、H5（`myprojects` 6 张的真机观感）待用户勾，H6 是已知差异的说明。
+- changelog：用户侧、开发侧各一条。
+- 总计划 [phase-4-particles.md](phase-4-particles.md) 加「P4g、P4h — 补遗」与完成情况。

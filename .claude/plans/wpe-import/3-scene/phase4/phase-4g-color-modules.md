@@ -94,3 +94,10 @@ else if (name === "hsvcolorrandom" || name === "colorlist") hasColor = true; // 
 - `kbp mutate`（`ignore/p4/g1/mutate_g1.py`）：7 个变异（档位不加 1、步长恒 s − 1、span 不换 1、`huesteps = 1` 也算步长、0xd 不截短、colorlist 色相不取小数、档位占用 `R`）全部被单测检出，按原字节还原。
 - 真机（dev 宿主重建后 `particle_track` 按 WPE 时间线回放，`ignore/p4/g1/cmp_colors.py` 比 `rd-` / `kb-` 轨迹）：档位确定的组（hsv-fixed / steps1 / neg / neg-s1 / wrap / after-cr、hsv-colorn-fixed、list-one / bad / empty / empty2 / 255）逐粒子颜色差 0；分档的组取值集合与 WPE 相同、比例在采样误差内（hsv-fwd / rev / zero-span / real、hsv-colorn-neg、list-many、list-colorn）；连续随机的组色相档位相同、S / V 区间一致（hsv-default / corpus / sv、hsv-colorn / flags8 / corpus5、list-noise / noise-sv）。`p4g-live`（运行中改 `colorn`）只有单测覆盖，回放工具不收运行中的属性写入。
 - myprojects 那 5 张（3841315879、3841322784、3841330265、3841337134、3841390912）：`kbp corpus scan --project` 在 HEAD 上都只剩 `particle:initializer:hsvcolorrandom`，实现后 0 项，5 张都能渲染。
+
+### 收尾（2026-11-20，P4g、P4h 一起）
+
+- 文档：`cocs/wpe/WPE_SCENE.md` 新增「粒子（P4g）」「粒子（P4h）」两节，状态行与计划链接补上；「粒子（P4b）」的 `colorn` 一节指向 P4g；`cocs/README.md` 加两条主题与适用场景。
+- 回归：`versions/latest/regression.md`「场景壁纸 P4g、P4h」G1–G6、H1–H6；G6、H5（`myprojects` 6 张的真机观感）待用户勾，H6 是已知差异的说明。
+- changelog：用户侧、开发侧各一条。
+- 总计划 [phase-4-particles.md](phase-4-particles.md) 加「P4g、P4h — 补遗」与完成情况。

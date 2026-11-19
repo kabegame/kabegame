@@ -278,6 +278,20 @@ const OBJECT_FLAGS = [
 - 真实场景没确定、代码里标了 `TODO:[WPE_SCENE]` 的两处：`emitParticles` 的两张（调用在光标回调里，等光标 API）、多 renderer 的 `3465215190`（这张另差 18 项）。
 - 留给后面各节的：粒子的深度与剔除（P5d）；光标输入 API 与回调（`input.cursor*`、`cursor*`，P6）之后补看 `emitParticles` 的真实场景；解锁烟花预设之前 spritetrail 写顶点的开销（风险 8）。
 
+## P4g、P4h — 补遗：颜色 initializer 与 `boids`
+
+P4f 之后语料里带粒子的场景粒子用法已全部覆盖；这两节补的是语料 0 张、但 WPE `myprojects` 里有场景只差它们的模块（2026-11-18、11-20 用户让 P4 接手）。
+
+- **P4g**（子计划 [phase-4g-color-modules.md](phase-4g-color-modules.md)）：initializer `hsvcolorrandom`（类型 4）、`colorlist`（类型 5），系统色与 `colorn` 的记录 0xd / 0xe。档位用的 CRT `rand()` 不复刻（独立随机源）。
+- **P4h**（子计划 [phase-4h-boids.md](phase-4h-boids.md)）：operator `boids`（类型 17）。存活位缺陷照抄；`rcpps` / `rsqrtps` 不复刻（2026-11-20 用户选 A）。
+
+**完成情况（2026-11-20）：** P4g 步骤 0–1（`097e1d7a`）、P4h 步骤 0–1（`aeebf031`）都已提交，收尾一起写进了 `cocs/wpe/WPE_SCENE.md`「粒子（P4g）」「粒子（P4h）」、changelog 与回归文档（「场景壁纸 P4g、P4h」G1–G6、H1–H6）。
+- 覆盖：165 张口径不变（语料 0 张用到）；解锁 `myprojects` 的 6 张：「followed by mice」5 张（`3841315879`、`3841322784`、`3841330265`、`3841337134`、`3841390912`）与滴水 `3826719942`，编译扫描都从 1 项到 0 项。
+- 读码被实测更正的（P4g 两处）：`huesteps ≤ 1` 时 0xd 的 span 是 0；缺 `colors` 键是一项白色。P4h 读码各条都成立。
+- 真机待用户勾：这 6 张在应用里打开的观感（回归 G6、H5）。
+- 已知差异：`boids` 在世界坐标里的 `rcpps` 漂移（滴水估计 ≤ 3 像素）、正好等于阈值的判定；`hw ≥ 200` 的分帧相位没实测（`TODO:[WPE_SCENE]`）。
+- 对比台：WPE 的 log.txt 各会话共用，别的会话同时开着测试窗口时 `[kbp]` 行会交错，回放前按进程号拆开（`ignore/p4/h0/split_log.py`）。
+
 ## 决定
 
 **已定：**

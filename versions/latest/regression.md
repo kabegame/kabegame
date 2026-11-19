@@ -1381,6 +1381,27 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [ ] | A17 重编译保留视差点 | Windows dev，图库预览 | 改一个会整场重编译的属性；换到另一张再换回来 | 改属性时画面不跳回中心；换回来时从初值重新开始 | 可跳过：上面这些场景没有明显会重编译的属性；渲染器单测 `parallax.test.ts`「重编译保留 P」覆盖 |
 | [x] | A18 暂停与应用背景 | Windows，图库预览与应用背景 | 预览里右键「暂停」后移动鼠标，再恢复；把一张视差场景设成应用背景 | 暂停时图层不动，恢复后接着跟；应用背景不跟鼠标，只有静止偏移 | 2026-11-11 用户：和预期一致 |
 
+## 场景壁纸 P4g、P4h：粒子颜色 initializer 与 `boids`
+
+2026-11-18 – 11-20 Windows dev。P4g 补颜色 initializer `hsvcolorrandom` / `colorlist`（步骤 0 调研、1 实现），P4h 补 operator `boids`（步骤 0 调研、1 实现）。两者语料都是 0 张，起因是 WPE `myprojects` 里只差这两项的 6 张场景。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「粒子（P4g）」「粒子（P4h）」，验收数据见 `.claude/plans/wpe-import/3-scene/phase4/phase-4g-color-modules.md`、`phase-4h-boids.md` 的「实施记录」。确定性工程由 `ignore/p4/defs/p4g0.py`、`p4h0.py`（`kbp gen`）生成，WPE 参照在 `A:\p4g\`、`A:\p4h\`；快照与变异清单在 `ignore/p4/g1/`、`h1/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | G1 `hsvcolorrandom` · 确定性工程 | Windows dev 屏外宿主（`particle_track` 按 WPE 时间线回放）+ WPE 抓帧 | `p4g-hsv`（13 组）、`p4g-hsv5`（带 `colorn` 的 5 组），`ignore/p4/g1/cmp_colors.py` 比颜色 | 档位确定的组逐粒子颜色相同；分档的组取值集合相同、比例相近；S / V 区间一致 | 2026-11-18：确定性组差 0；分档组集合相同、比例在采样误差内（档位随机数是 WPE 的 CRT `rand()`，不复刻）；套 `colorn` 后档位 0.637–0.951 与 WPE 相同 |
+| [x] | G2 `colorlist` · 确定性工程 | 同 G1 | `p4g-list`（8 组）与 `p4g-hsv5` 的 `list-colorn` | 同 G1；缺 `colors` 键是白色、`[]` 是纯红、非字符串项丢掉 | 2026-11-18：一致 |
+| [x] | G3 运行中改 `colorn` | WPE 抓帧（`p4g-live`）+ 单测 | WPE 里用 `apply_properties` 把绑定的颜色从紫改绿再抓帧 | 只有之后出生的粒子换色 | 2026-11-18 WPE：新出生的 9 颗是绿、老的 39 颗仍是紫；Kabegame 侧只有单测（回放工具不收运行中的属性写入） |
+| [x] | G4 变异检查与现有回放 | Node（快照模式） | `kbp mutate`（`ignore/p4/g1/mutate_g1.py`）；`kbp regress` HEAD 快照 ↔ 实现快照（含语料） | 全部检出；现有案例逐字节相同、语料不变 | 2026-11-18：7 处全部检出；20 个案例逐字节相同，语料 233 张逐场景相同 |
+| [x] | G5 「followed by mice」5 张 · 编译 | Node，`kbp corpus scan --project` | `3841315879`、`3841322784`、`3841330265`、`3841337134`、`3841390912` | 不支持项为 0 | 2026-11-18：HEAD 每张只剩 `particle:initializer:hsvcolorrandom`，实现后 0 项 |
+| [ ] | G6 「followed by mice」· 真机 | Windows，图库预览（不开强制渲染） | 打开上面任意一张，动鼠标，在属性面板里改「颜色可调」 | 正常渲染（不退回预览图）；跟随鼠标的粒子有 5 档色相（以颜色属性为中心）；改颜色后新出生的粒子换色 | 待用户勾：这几张在 WPE 的 `myprojects` 里，要先在应用里导入 |
+| [x] | H1 `boids` · 确定性工程 | Node 回放 | `kbp replay h1`：`p4h-a` fps 20 / 60、`p4h-b` fps 60 | 逐粒子在包络内 | 2026-11-20：18 组通过；`thr-eq`（正好等于阈值，看硬件 `rsqrtps`）跳过，`thr-out` / `speed2` 放宽到发射器归一化的近似误差 |
+| [x] | H2 存活位缺陷与组级写回 | Node 回放 + 单测 | `h1` 的 `sep50` / `sep25` / `dead` / `order8` | 未出生槽、死槽被当成邻居（照抄 WPE）；一组算完即写 | 2026-11-20：通过；读码阶段不照抄缺陷的读法差 1400 像素、全快照写回差一倍多 |
+| [x] | H3 变异检查与现有回放 | Node（快照模式） | `kbp mutate`（`ignore/p4/h1/mutate_h1.py`）；`kbp regress` | 全部检出；现有案例逐字节相同、语料不变 | 2026-11-20：10 处全部检出（「组内逐 lane 写」是等价变异，换成「全快照」）；20 个旧案例逐字节相同，语料 233 张逐场景相同 |
+| [x] | H4 滴水 `3826719942` · 编译与走查 | Node `corpus scan` + Windows dev 屏外宿主 | 解包成测试工程导入，fps 20 回放 80 帧在 1200×800 画，和 WPE 抓帧比水流区域 | 不支持项为 0；水流形状、走向、粗细一致 | 2026-11-20：0 项；一致（随机发射，不逐粒子比）。测后 `projects_remove` |
+| [ ] | H5 滴水 · 真机 | Windows，图库预览（不开强制渲染） | 打开 `3826719942`，看酒瓶口的水流 | 正常渲染；水流连续落到腿上、有水花与水珠，和 WPE 观感一致 | 待用户勾：这张在 WPE 的 `myprojects` 里，要先在应用里导入 |
+| [ ] | H6 `boids` 的已知差异 | — | 世界坐标里长寿命的 boids 粒子；两颗粒子正好相距阈值 | 允许和 WPE 有小漂移；正好等于阈值时可能判得不同 | `rcpps` / `rsqrtps` 不复刻（用户 2026-11-20 定）：`world-s2` 11 s 漂 23 像素，滴水估计不超过 3 像素；`hw ≥ 200` 的分帧相位（帧计数器初值未知）没有实测，语料用不到，标了 `TODO:[WPE_SCENE]` |
+
 ## 场景壁纸 P4f：粒子的脚本接口与实例覆盖、多 renderer
 
 2026-11-13 – 11-14 Windows dev。P4f 分 5 步加收尾：步骤 0 调研（读码与三轮确定性工程）；1 `instanceoverride` 挂 `{script}` 与 `rate` 的单独路径；2 HDR 下的 `brightness`；3 粒子层的 `IParticleSystem` 方法与 `instance` 对象；4 一个系统多个 renderer；收尾补测 `brightness` 运行中改值。
