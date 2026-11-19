@@ -2720,8 +2720,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     if (layer.passthroughModel) {
       // 组合层 / 组带 `perspective: true`（P5h，`p5h-a` 实测）：compose 基础 pass 仍用正交场景相机（画进合成 RT），末 pass 与组的上屏换透视，
       // 组里的子层仍用组的局部正交——正是图像层现有的规则（画到场景目标的绘制换透视），不用照报
-      // fullscreenlayer 带子层：WPE 这时子层按场景相机画进全屏 RT（rea-p5-modelflags §2.5），没有实测，语料 0 个，照报
-      if (layer.fullscreen && parents.includes(index)) unsupported.add("model:fullscreen:children");
+      // fullscreenlayer 带子层（P5j，`p5j-a` 实测）：基础 pass 拷屏幕、子孙按场景相机画进全屏 RT、上屏画基础材质，不用照报
     }
     if (!model.material) {
       unsupported.add("material:missing");

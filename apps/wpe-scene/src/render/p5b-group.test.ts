@@ -402,7 +402,8 @@ describe("planLayer：组（p5b-grp-*、p5b-nest）", () => {
 
 describe("planLayer：组里读快照的拷贝点（P5f，p5f-a / p5f-e）", () => {
   const fbPass = (object: number) => pass(`objects/${object}/passes/0`, { framebuffer: true });
-  const snapshots = (layer: SceneLayer) => kinds(planLayer(layer, []).steps).filter((kind) => kind === "snapshot").length;
+  const snapshots = (layer: SceneLayer) =>
+    kinds(planLayer(layer, []).steps).filter((kind) => kind === "snapshot").length;
 
   it("直接父是组：基础材质读快照时层首不拷；顶层、隔着分组节点的孙子照拷", () => {
     const direct = image(2, "FB", [0, 0, 0], [100, 100], { parent: 1, group: 1, passes: [fbPass(2)] });
@@ -433,7 +434,12 @@ describe("planLayer：组里读快照的拷贝点（P5f，p5f-a / p5f-e）", () 
 
   it("组的上屏（groupUpload）在组里不拷，顶层照旧", () => {
     const upload = pass("objects/2/groupupload", { program: PROGRAM.upload, blending: "normal", framebuffer: true });
-    const inner = group(2, "I", { origin: [0, 0, 0], size: [300, 300], subtree: [3] }, { parent: 1, group: 1, groupUpload: upload });
+    const inner = group(
+      2,
+      "I",
+      { origin: [0, 0, 0], size: [300, 300], subtree: [3] },
+      { parent: 1, group: 1, groupUpload: upload },
+    );
     inner.passes[0].framebuffer = false;
     expect(snapshots(inner)).toBe(0);
     expect(snapshots({ ...inner, parent: null, group: null })).toBe(1);
@@ -633,8 +639,12 @@ interface FakePipeline {
 class FakeGpu {
   readonly trace: string[] = [];
   /** 一帧里的拷贝（P5f）：源与目标的标签、目标原点、尺寸 */
-  readonly copies: { source: string; target: string; origin: { x: number; y: number } | undefined; size: GPUExtent3DDictStrict }[] =
-    [];
+  readonly copies: {
+    source: string;
+    target: string;
+    origin: { x: number; y: number } | undefined;
+    size: GPUExtent3DDictStrict;
+  }[] = [];
   readonly pipelines: FakePipeline[] = [];
   readonly device: GPUDevice;
 
@@ -1212,7 +1222,12 @@ describe("GpuScene：组里执行快照拷当前目标（P5f，p5f-a / p5f-e）"
     const { gpu, scene, state } = await open(layersOf([800, 400]));
     gpu.encode(scene, state);
     expect(fromTexture(gpu, "scene target")).toEqual([
-      { source: "scene target", target: "_rt_FullFrameBuffer", origin: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } },
+      {
+        source: "scene target",
+        target: "_rt_FullFrameBuffer",
+        origin: { x: 0, y: 0 },
+        size: { width: 1920, height: 1080 },
+      },
     ]);
     expect(fromTexture(gpu, "composite 800x400|true|false #0")).toEqual([
       {
@@ -1238,7 +1253,149 @@ describe("GpuScene：组里执行快照拷当前目标（P5f，p5f-a / p5f-e）"
     const { gpu, scene, state } = await open([image(0, "BG", [960, 540, 0], [1920, 1080]), top]);
     gpu.encode(scene, state);
     expect(gpu.copies).toEqual([
-      { source: "scene target", target: "_rt_FullFrameBuffer", origin: { x: 0, y: 0 }, size: { width: 1920, height: 1080 } },
+      {
+        source: "scene target",
+        target: "_rt_FullFrameBuffer",
+        origin: { x: 0, y: 0 },
+        size: { width: 1920, height: 1080 },
+      },
     ]);
+  });
+});
+
+// ———— P5j：带子层的 fullscreenlayer（全屏组）与组里组合层 compose 的视差 ————
+
+/**
+ * `p5j-a` / `p5j-cam`：0 背景、1 全屏组 F（fullscreenlayer，基础材质是 `passthrough` 着色器，这里用图像程序顶替，槽 0 换成合成 RT）、
+ * 2 F 的子层 A、3 F 里的组合层 N（带 kbfx）、4 N 的子层 NC；5 顶层对照图像 R（与 F 同原点，视差按根对象的原点）、6 顶层组合层 CLP（带 kbfx、子层 7）、
+ * 8 顶层普通组 G（偏离中心）、9 G 里的组合层 M（带 kbfx）、10 M 的子层 MC、11 G 的子层 GC。视差深度都是 8 8（F 的 1 1 以外）。
+ */
+function fsGroupLayers(
+  extra: { copyBackground?: boolean; colorBlendMode?: number; effect?: boolean } = {},
+): SceneLayer[] {
+  const depth = { parallaxDepth: [8, 8] };
+  const fs = baseLayer(1, {
+    name: "F",
+    size: [2, 2],
+    passthroughModel: true,
+    fullscreen: true,
+    fullscreenSize: "scene",
+    copyBackground: extra.copyBackground ?? true,
+    subtree: [2, 3, 4],
+    colorBlendMode: extra.colorBlendMode ?? 0,
+    origin: [1060, 590, 0],
+    angles: [0, 0, 0.2],
+    scale: [0.8, 0.8, 1],
+    passes: [
+      pass("objects/1/passes/0", {
+        program: PROGRAM.image,
+        blending: "translucent",
+        runtime: { 0: FRAMEBUFFER_RT },
+        framebuffer: true,
+      }),
+    ],
+    effects: extra.effect ? [kbfx(1)] : [],
+    ...depth,
+  });
+  return [
+    image(0, "BG", [960, 540, 0], [1920, 1080]),
+    fs,
+    image(2, "A", [0, 0, 0], [100, 100], { parent: 1, group: 1, ...depth }),
+    group(
+      3,
+      "N",
+      { origin: [10, 10, 0], size: [400, 300], effect: true, subtree: [4] },
+      { parent: 1, group: 1, ...depth },
+    ),
+    image(4, "NC", [0, 0, 0], [100, 100], { parent: 3, group: 3, ...depth }),
+    image(5, "R", [1060, 590, 0], [100, 100], depth),
+    group(6, "CLP", { origin: [1160, 640, 0], size: [400, 300], effect: true, subtree: [7] }, depth),
+    image(7, "CC", [0, 0, 0], [100, 100], { parent: 6, group: 6, ...depth }),
+    group(8, "G", { origin: [1260, 640, 0], size: [800, 400], effect: true, subtree: [9, 11] }, depth),
+    group(
+      9,
+      "M",
+      { origin: [10, 10, 0], size: [300, 300], effect: true, subtree: [10] },
+      { parent: 8, group: 8, ...depth },
+    ),
+    image(10, "MC", [0, 0, 0], [100, 100], { parent: 9, group: 9, ...depth }),
+    image(11, "GC", [50, 50, 0], [100, 100], { parent: 8, group: 8, ...depth }),
+  ];
+}
+
+describe("planLayer：全屏组（p5j-a）", () => {
+  it("没有 effect：快照 → 拷贝进合成 RT 0 → 子树 → 基础材质上屏（fullscreen 几何、槽 0 合成 RT、translucent、不内缩）", () => {
+    const plan = planLayer(fsGroupLayers()[1], []);
+    expect(kinds(plan.steps)).toEqual(["snapshot", "copy", "subtree→c0", "final→scene"]);
+    expect(plan.reasons).toEqual([]);
+    expect(stepOf(plan, "final")).toMatchObject({
+      pass: { key: "objects/1/passes/0" },
+      effect: null,
+      inputs: { 0: { kind: "composite", index: 0 } },
+      geometry: "fullscreen",
+      uv: [1, 1],
+      inset: [0, 0],
+      blending: "translucent",
+    });
+  });
+
+  it("copybackground: false 的计划相同（不看 copybackground）；colorBlendMode 31 改 additive", () => {
+    const a = planLayer(fsGroupLayers()[1], []);
+    const b = planLayer(fsGroupLayers({ copyBackground: false })[1], []);
+    expect(kinds(b.steps)).toEqual(kinds(a.steps));
+    expect(stepOf(b, "final")).toMatchObject({ pass: { key: "objects/1/passes/0" }, blending: "translucent" });
+    const add = planLayer(fsGroupLayers({ colorBlendMode: 31 })[1], []);
+    expect(stepOf(add, "final").blending).toBe("additive");
+  });
+
+  it("有 effect：照现有 fullscreen 的 effect 链上屏（不画基础材质）", () => {
+    const plan = planLayer(fsGroupLayers({ effect: true })[1], []);
+    expect(kinds(plan.steps)).toEqual(["snapshot", "copy", "subtree→c0", "final→scene"]);
+    expect(stepOf(plan, "final").pass.key).toBe("objects/1/effects/0/passes/0");
+  });
+});
+
+describe("GpuScene：全屏组的视图投影（p5j-cam）", () => {
+  async function opened() {
+    const opened = await open(fsGroupLayers());
+    opened.scene.setParallax({ point: [960, 540], amount: 0.5 }, opened.state);
+    opened.scene.update(FRAME, opened.state);
+    return opened;
+  }
+  const vpOf = (scene: GpuScene, object: number, role: string) => [...matrixAt(drawOf(scene, object, role), 64)];
+
+  it("全屏组子孙：视图投影与顶层同写法（带视差，不是局部正交）", async () => {
+    const { scene } = await opened();
+    const top = vpOf(scene, 5, "direct");
+    expect(vpOf(scene, 2, "direct")).toEqual(top);
+    expect(top).not.toEqual([...SCENE_VP]);
+    const local = [...groupViewProjection([2, 2], worldsOf(fsGroupLayers())(1))];
+    expect(vpOf(scene, 2, "direct")).not.toEqual(local);
+  });
+
+  it("全屏组里的组合层：compose 不带视差（= 场景视图投影），它的子层仍是局部正交，上屏画回全屏 RT", async () => {
+    const { scene } = await opened();
+    expect(vpOf(scene, 3, "compose")).toEqual([...SCENE_VP]);
+    const layers = fsGroupLayers();
+    expect(vpOf(scene, 4, "direct")).toEqual([...groupViewProjection([400, 300], worldsOf(layers)(3))]);
+  });
+
+  it("普通组里的组合层：compose 同样不带视差；普通组的子孙仍是局部正交", async () => {
+    const { scene } = await opened();
+    expect(vpOf(scene, 9, "compose")).toEqual([...SCENE_VP]);
+    const layers = fsGroupLayers();
+    expect(vpOf(scene, 11, "direct")).toEqual([...groupViewProjection([800, 400], worldsOf(layers)(8))]);
+  });
+
+  it("顶层组合层的 compose 仍带视差", async () => {
+    const { scene } = await opened();
+    expect(vpOf(scene, 6, "compose")).not.toEqual([...SCENE_VP]);
+    expect(vpOf(scene, 8, "compose")).not.toEqual([...SCENE_VP]);
+  });
+
+  it("全屏组的上屏是基础 pass（程序 2、translucent），不是 groupUpload（程序 3）", async () => {
+    const { scene } = await opened();
+    expect(opKinds(scene, 1)).toEqual(["snapshot", "copy", "subtree", "draw final"]);
+    expect(drawOf(scene, 1, "final").pipeline.label).toContain("program 2 translucent");
   });
 });

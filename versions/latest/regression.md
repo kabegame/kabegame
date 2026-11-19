@@ -3198,6 +3198,18 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | 语料不受影响 | Node（`kbp corpus scan`，233 张；mdl 单测带 `KABEGAME_WPE_ROOT`） | 全库扫描对 P5h 时的结果 diff；语料 mdl 逐个解析 | 没有新增的键；语料 mdl 都不截断 | 2026-11-19 Claude：新增 0，去掉的键都来自别的步骤；mdl 相关 188 个用例全过 |
 | [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3840815204 | 不退回预览图；人偶的动画和 Wallpaper Engine 里一样 | |
 
+## 场景壁纸全屏组与组内组合层 compose 的视差（P5j）
+
+2026-11-20。fullscreenlayer 带子层（全屏组）不再报 `model:fullscreen:children`：开头拷屏幕（不看 `copybackground`）、子孙用和顶层相同的场景相机、没有 effect 时上屏画基础材质；顺带更正组里的组合层的 compose 不带视差。计划、WPE 实测与实施记录见 `.claude/plans/wpe-import/3-scene/phase5/phase-5j-fullscreen-children.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 全屏组的拷贝与上屏 | Windows dev，屏外宿主（`render_scene`，1920×1080） | `p5j-b`（两个全屏组之间插顶层方块，第二个 `copybackground: false`）回放到第 164 帧，对 WPE 上屏帧 | 逐像素相同（屏蔽 FR / CLK） | 2026-11-20 Claude：0 差 |
+| [x] | 相机效果（缩放、抖动、视差） | 同上 | `p5j-cam`：全屏组、嵌套组、顶层组合层、普通组里的嵌套组，回放到第 204、205 帧 | 逐像素相同 | 2026-11-20 Claude：两帧 0 差；交叉比 30% 像素不同 |
+| [x] | 带变换的全屏组、嵌套组、带 effect 的全屏组 | 同上 | `p5j-a` 回放到第 209、210 帧 | 和 WPE 最大差 1（effect pass 的 `g_Color4` 残留值，P5b 起的已知差异） | 2026-11-20 Claude：2.6% 像素差 1，逐 draw 轨迹与 WPE 取像素核对来源 |
+| [x] | 语料 | Node（`kbp corpus scan`） | 扫 myprojects/3814353826；全库扫描对上次结果 diff | 3814353826 干净；没有新增的键 | 2026-11-20 Claude：符合，全库 233 张全部干净；语料里没有「组里套组合层又开视差」的场景（嵌套 compose 的更正不改画面） |
+| [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3814353826 | 不退回预览图；时钟的位置、文字和 Wallpaper Engine 里一样 | |
+
 ## 场景壁纸透视相机矩阵逐步 float32（P5d 补修）
 
 2026-11-15。透视场景的相机路径插值、lookAt、透视投影（含 DirectXMath `XMScalarSinCos` 多项式）照汇编逐步 float32。计划与实施记录见 `phase-5d-camera-depth.md`「补修：透视相机矩阵逐步 float32」。

@@ -88,8 +88,10 @@
  *   合成 RT（连着的合进一个 pass），画进自己合成 RT / fbo 的照旧；嵌套组同样递归，它的上屏画进外层组的合成 RT。
  *   - 矩阵：组里图层的绘制（除了嵌套组自己的 `compose` 基础 pass）视图投影换成 `groupViewProjection`（`layout.ts`，
  *     `ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，w、h 是组的 `size`），不经 `viewProjectionOf`：没有视差、抖动、缩放、透视，这些只作用在
- *     组本身（`p5b-grp-par`）。世界矩阵照旧，粒子同样（世界空间系统的单位模型矩阵乘它正好回到本地）。嵌套组的 compose 照旧用场景视图
- *     投影采快照（`p5b-nest` 事件 94）。组的 `W` 变了时子孙随父链标脏（`SceneState.write`），uniform 跟着重写；组的 `size` 改值整场重编译。
+ *     组本身（`p5b-grp-par`）。世界矩阵照旧，粒子同样（世界空间系统的单位模型矩阵乘它正好回到本地）。全屏组（P5j）的子孙不换局部
+ *     正交，用和顶层相同的场景相机（视差按根对象）；组里（普通组、全屏组一样）的组合层的 `compose` 基础 pass 用不带视差的场景视图投影
+ *     （缩放、抖动照带，`p5j-cam`），顶层的 compose 照旧带视差；嵌套组的 compose 采快照见 `p5b-nest` 事件 94。组的 `W` 变了时子孙随
+ *     父链标脏（`SceneState.write`），uniform 跟着重写；组的 `size` 改值整场重编译。
  *   - 管线：组里画到「场景」的绘制写 RGBA（`p5b-grp-cb1` 事件 78–106 写掩码 15）；组 `copyBackground` 为 false 时 alpha 通道换成
  *     One / One / Max，颜色通道照绘制自己的混合、不混合的用 One / Zero（`p5b-grp-cb0` 事件 73–101，红蓝重叠处 alpha 0.5），管线键带
  *     `alphaMax`。例外是 `copyBackground` 为 true 的组里的上屏（`final` / `passthrough`：带 effect 的子层、嵌套组画回组里）只写 RGB：
@@ -4905,13 +4907,21 @@ export class GpuScene {
     const persp = layerState.perspective ?? !!layer.perspective;
     // 组里的图层（P5b 步骤 4，p5-REPORT `p5b-grp-*`、`p5b-grpptc`）：视图投影换成组的局部正交 `ortho(±w/2, ±h/2, ±1000) · inverse(W_组)`，
     // 不经 `viewProjectionOf`（组里没有视差、抖动、缩放、透视，它们只作用在组本身，`p5b-grp-par`）。嵌套组自己的 compose 基础 pass
-    // 例外，照旧用场景视图投影按屏幕位置采快照（`p5b-nest` 事件 94）；effect 中间 pass 的效果矩阵也按组的局部正交算（WPE 画子树时
-    // 投影栈就是它，没有实测）。组的矩阵取它画自己的那个（P8 步骤 3，带组的对齐偏移：`p8-align2` 的 Gc 落在组 RT 的左上角）
+    // 例外，用不带视差的场景视图投影按屏幕位置采快照（`p5b-nest` 事件 94，`p5j-cam`：缩放、抖动带、视差不带）；effect 中间 pass 的效果
+    // 矩阵也按组的局部正交算（WPE 画子树时投影栈就是它，没有实测）。组的矩阵取它画自己的那个（P8 步骤 3，带组的对齐偏移：`p8-align2`
+    // 的 Gc 落在组 RT 的左上角）。全屏组（P5j）的子孙不换，走 `viewProjectionOf`
     const group = this.groupOf(layer);
+    // 文本的 clearalpha 也是 compose 角色
+    const compose = step.kind === "draw" && step.role === "compose";
+    // 全屏组（P5j，`p5j-a` / `p5j-cam`）：子孙用和顶层相同的场景相机（视差按根对象，世界矩阵含全屏层的变换），不换局部正交
     const groupVp =
-      group && !(step.kind === "draw" && step.role === "compose")
+      group && !group.fullscreen && !compose
         ? groupViewProjection(group.size, drawMatrixOf(group.object, state.layers, worlds, this.attachHook))
         : null;
+    // 组里的组合层的 compose（P5j，`p5j-cam` 的 M、N）：不带视差的场景视图投影（缩放、抖动照带），普通组与全屏组一样；顶层的
+    // compose 照旧带视差（`p5j-cam` 的 CLP、G）
+    const composeVp = group && compose ? view.viewProjection : null;
+    const groupOrCompose = groupVp ?? composeVp;
     if (step.kind === "text") {
       // 文本（P6b 1d）：直接上屏用这次画到场景的视图投影（带视差、抖动；组里是组的局部正交），画进合成 RT 用 RT 像素的正交
       // （`textMatrices`）。排版结果在建 draw 前已核对过。`perspective: true` 的文本直接上屏换透视那一份视图投影（P5g，同图像层，
@@ -4921,7 +4931,7 @@ export class GpuScene {
         step,
         layer: layerState,
         layout: state.texts.get(layer.object)!,
-        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp),
+        viewProjection: groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp),
         msdf: this.msdfInput(layer, state),
       });
     }
@@ -4938,7 +4948,7 @@ export class GpuScene {
         layer: layerState,
         // 透视粒子同样带视差：平移加在世界坐标里，z = 0 平面上和正交一致（p5-REPORT `p5a-fx`）；组里的透视粒子照报
         // （`model:passthrough:children:perspective`），强制渲染时按组的局部正交画
-        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, step.perspective),
+        viewProjection: groupOrCompose ?? this.viewProjectionOf(layer, state, view, step.perspective),
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
         // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）：这次绘制的系统自己的 renderer（P4e 步骤 1）里这一步的那一条（P4f 步骤 4，
         // rea-p4f-script.md 8.3：每条按自己的 `rec+4` 算朝向；拖尾那条写 RV0.xyz，sprite 那条照旧写 0，不复刻上一次绘制的残值）
@@ -4982,7 +4992,7 @@ export class GpuScene {
         colorScale: 1,
         step: { role: "direct", inputs: step.inputs },
         layer: { ...layerState, color: [1, 1, 1], alpha: 1, size: layer.size },
-        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp),
+        viewProjection: groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp),
       });
     // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs` 事件 76）：直接上屏以外的角色（effect、末 pass、passthrough 上屏）模型与视图都是
     // 单位阵、投影是 NDC 正交，不经 `viewProjectionOf`：`origin` / `scale` / `angles`、视差、抖动、透视都不起作用，2×2 的四边形
@@ -5016,14 +5026,15 @@ export class GpuScene {
           ? {
               alt: {
                 model: prelitModel(worldMatrixOf(layer.object, state.layers, worlds, this.attachHook), layer, rtSize!),
-                viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp),
+                viewProjection: groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp),
               },
             }
           : {}),
         // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
         // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
         // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
-        viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp && step.target.kind === "scene"),
+        viewProjection:
+          groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp && step.target.kind === "scene"),
       }),
     );
   }

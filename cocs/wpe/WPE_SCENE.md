@@ -337,7 +337,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 | general 的 `bloom` / `hdr` 与全部 `bloom*` 调节项 | 由后处理档位裁决，泛光 / HDR 已实现（P2b，见「泛光与 HDR」）；其中的脚本交给 P3b 运行时 |
 | general 的 `cameraparallax*`、`camerashake*`、`zoom` | 视差、抖动、正交缩放已实现（P5a，见「相机：视差、抖动与缩放（P5a）」）；透视场景的三维抖动 P5d 实现（见「透视相机、相机对象与深度（P5d）」），正交场景里解析出的常量 `zoom` ≤ 0 照报 `general:zoom` |
 | `camerafade`、`camerapreview`、`norecompile`；正交投影下的 `farz` / `fov` / `nearz`；`supportsvideo` | 加载淡入 / 编辑器选项 / 透视场景里每帧读（P5d） / 只决定 D3D 设备标志 |
-| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层报 `model:fullscreen:children`，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及图像层（含组合层、组，P5h）、模型、文本层（P5g）之外的对象上为真，照报 `object:perspective`；脚本 `layer.perspective` 由 P5h 实现。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
+| 模型 `autosize`、`nopadding`、`solidlayer`、`passthrough`、`projectlayer`、`fullscreen`、`instanced`；对象 `copybackground`、`instance`；图像层 `perspective: true` | 已实现（P5b），见「图像模型标志（P5b）」。还不支持的用法细分照报：组里的子孙读快照、fullscreen、透视报 `model:passthrough:children:*`，fullscreenlayer 带子层（全屏组）P5j 起支持，instanced 对象的 `instance` 报 `object:instance:*` / `model:instanced:*`、用户纹理报 `material:usertextures`；`perspective` 绑属性、挂脚本或别的真值，以及图像层（含组合层、组，P5h）、模型、文本层（P5g）之外的对象上为真，照报 `object:perspective`；脚本 `layer.perspective` 由 P5h 实现。`copybackground` 在普通图像模型上没有渲染效果，`instance` 在不是 instanced 的对象上不读 |
 | 模型对象；它的 `skin`、`castshadow`、`reflected`、`disablepropagation`、`perspective: true` | 静态网格已实现（P5c），见「静态网格（P5c）」。`skin` 选材质，`castshadow` / `reflected` 的消费者（阴影、反射）另外照报，`disablepropagation` 中性；不支持的用法细分成 `mdl:*` / `model:*`，见那一节的「能力表」 |
 | `solid`、`ledsource`、`locktransforms` | 渲染路径不读（推断与鼠标命中有关）/ Razer Chroma 灯效来源 / 编辑器锁定 |
 | `brightness` | 只在 HDR 下乘进 `g_Color4` / `g_Color`（B10），LDR 下不生效 |
@@ -2284,7 +2284,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 | 直接上屏 | 没有启用的 effect、cbm 是 0 / 31、不是组合层：几何是 2×2 的 NDC 四边形，MVP 照常算。着色器不乘 MVP 就铺满全屏（neon_sunset 的 `cloudsbg`），乘了是一块被 `W` 变换的 2×2 方块 | 实测 `p5b-fsmvp`，0 差异 |
 | 合成路径 | 不画基础材质：先拍快照，再整张拷进合成 RT 0（`copy`，源是 `framebuffer`），之后照常跑 effect 链。上屏与 effect pass 的模型、视图是单位阵，投影是 `ortho(−1, 1, −1, 1, 1, −1)`（`FULLSCREEN_VIEW_PROJECTION`），`origin` / `scale` / `angles`、视差、抖动都不起作用 | 实测 `p5b-fs`，最大差 1 |
 | 合成 RT 尺寸 | `fullscreenSize` 取槽 0 静态纹理的图像尺寸；槽 0 是 `_rt_FullFrameBuffer`（fullscreenlayer 都是）或没有纹理时取场景目标尺寸。WPE 取的是窗口尺寸；产品离屏按场景分辨率渲染，对应的是场景目标，dev 探针按窗口尺寸画时就是窗口尺寸；两份都不内缩 | 实测 `p5b-fs-1344`（1344×756 窗口）；按指定尺寸复核：合成 RT 1344×756，四个绘制的常量和 WPE 逐位相同 |
-| fullscreenlayer | 组合层加 `fullscreen`：没有 effect、cbm 是 0 / 31 时同组合层整层不画；带子层照报 `model:fullscreen:children`（WPE 这时子层按场景相机画进全屏 RT，没测，语料 0 个） | 读码 §2.5 |
+| fullscreenlayer | 组合层加 `fullscreen`：没有 effect、cbm 是 0 / 31 时同组合层整层不画；带子层是全屏组，P5j 起支持（见「全屏组（P5j）」） | 读码 §2.5；实测 `p5j-a` |
 
 ### 组（带子层的组合层）
 
@@ -2292,7 +2292,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 |---|---|---|
 | 归属 | 编译期定（`bundle.ts` 的 `assignGroups`）：`group` 是最近的组合层祖先；`subtree` 按先序展开，子层按 `objects` 下标排，嵌套组只收它本身。顶层循环跳过 `group` 非空的图层，缺这个字段（手写的图层）当顶层 | 读码 §2.5 |
 | 画子树 | 基础 pass（`compose` / `clear`）之后紧跟 `subtree` 步骤：结束当前 pass，对可见的子孙依次跑它们的 ops，「场景目标」换成组的合成 RT。`subtree` 不算一次合成链的写入 | 实测 `p5b-grp-cb1` / `cb0` |
-| 视图投影 | 子孙画到「场景」的绘制（含粒子）换成 `groupViewProjection = ortho(±w/2, ±h/2, 1000, −1000) · inverse(W_组)`（w、h 取组的 `size`），所以子层落在组的本地坐标系，组矩形外的部分裁掉。组里没有视差、抖动、透视，这些作用在组本身的上屏上。世界空间粒子的顶点乘 `inverse(W_组)` 回到本地。嵌套组的 `compose` 照旧用场景视图投影采快照，采到的是外层开始时那份 | 实测 `p5b-grp-par`、`p5b-grpptc`（最大差 2）、`p5b-nest` |
+| 视图投影 | 子孙画到「场景」的绘制（含粒子）换成 `groupViewProjection = ortho(±w/2, ±h/2, 1000, −1000) · inverse(W_组)`（w、h 取组的 `size`），所以子层落在组的本地坐标系，组矩形外的部分裁掉。组里没有视差、抖动、透视，这些作用在组本身的上屏上。世界空间粒子的顶点乘 `inverse(W_组)` 回到本地。嵌套组的 `compose` 用**不带视差**的场景视图投影采快照（缩放、抖动带；顶层组合层的 compose 带视差，P5j 更正），采到的是外层开始时那份。全屏组的子孙不换局部正交（见「全屏组（P5j）」） | 实测 `p5b-grp-par`、`p5b-grpptc`（最大差 2）、`p5b-nest`；`p5j-cam`（G 里的 M） |
 | 写 alpha | 直接画的子层写 RGBA；组里的上屏（带 effect 子层的末 pass、嵌套组画回外层）只写 RGB。组 `copybackground: false` 时 alpha 用 One / One / Max，颜色照绘制自己的混合（`programs.ts` 的 `groupBlendState`，管线键加 `\|max`） | 实测：`p5b-grp-cb1` 子层写掩码 15，`p5b-grpptc`、`p5b-nest` 的上屏是 7；`p5b-grp-cb0` 重叠处 alpha 0.5 |
 | 无 effect 的组 | 基础 pass → 子树 → 上屏：用 `effectpassthrough` 材质（`version` > 2 用 `_4`，`BLENDMODE 0`，`SceneLayer.groupUpload`，`g_Color4` 置 1）画世界四边形，UV 0–1；`copybackground` 为 true 时用材质的 normal（不混合），false 时 translucent | 实测 `p5b-grp-nofx` / `nofx0`，**推翻读码**（读码推断是 composelayer 着色器铺满全屏并拉伸） |
 | 合成 RT 池 | 组里的图层按父链上组的层数另分一池（键加 `\|k<层数>`），不然和组同尺寸的子孙会共用组的合成 RT | 步骤 4 实现时发现 |
@@ -2717,6 +2717,32 @@ WPE 的场景有两套相机字段：基准（eye、center、up、zoom，`G+0x11
 
 **验收**（`ignore/p5/h/`，WPE 抓帧 `A:\p5i\cam\`）：`p5i-cam` 按 WPE 日志与轨迹回放到 206、207、208 帧，三帧都和 WPE 逐像素相同（屏蔽 FR / CLK；
 相邻帧交叉比 95% 的像素不同，比较是灵敏的）。语料 `3554161528` 变干净，`3841310696`（myprojects）只剩 P12 的 `puppet:draw-order`。
+
+## 全屏组（P5j）
+
+fullscreenlayer 带子层（全屏组）是「把一段子树按场景坐标画进一张屏幕大小的 RT，再整张贴回屏幕」。和普通组（P5b 步骤 4）只差三处：
+子孙不换局部正交、开头一律拷屏幕、没有 effect 时的上屏画基础材质。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 基础 pass | 快照 + 把当前画面整张拷进合成 RT 0，**不看 `copybackground`**（同有 effect 的 fullscreenlayer） | `p5j-a` 事件 46/47；`p5j-b`：F1 与 F2（`copybackground: false`）之间的顶层方块进了 F2 的 RT、上屏后还在 |
+| 合成 RT | 场景目标尺寸（`fullscreenSize` 为 `scene`） | 实测 1920×1080 |
+| 子孙的矩阵 | 和顶层对象相同：场景视图投影（缩放、抖动）、视差按根对象（全屏层自己）算、世界矩阵含全屏层的变换；不用 `groupViewProjection`（`render/scene.ts`） | `p5j-a` 的 A：缩放 0.8、角度 0.5 = 0.2 + 0.3、平移逐位对上；`p5j-cam` 的 A、N 末 pass 带 F1 的视差 |
+| 子孙的混合 | 照普通组：写 RGBA，`copybackground: false` 时 alpha One / One / Max | 事件 64、148 |
+| 嵌套组 | 照普通组：子层用嵌套组的局部正交，末 pass 画回全屏 RT（矩阵同上一行）；compose 用不带视差的场景视图投影，读全屏组开头的快照（P5f：直接父是组，层首不拷） | 事件 80、96、115；`p5j-cam` 的 N |
+| 上屏（无 effect） | 画基础材质本身（`fullscreenlayer.json`：`passthrough` 着色器，不乘 `g_Color4`，translucent），槽 0 换成合成 RT，2×2 NDC，不拷快照；不看 `copybackground`；colorBlendMode 31 改 additive（读码 §2.6，未实测）（`render/graph.ts`） | 事件 128、161：顶点原样输出、像素只采样，SrcAlpha / InvSrcAlpha，写掩码 RGB |
+| 上屏（有 effect） | 照 fullscreen 的 effect 链（NDC 正交） | 事件 200 |
+
+**顺带更正（通用）**：嵌套在组里的组合层（普通组、全屏组一样），它的 compose 基础 pass 用不带视差的场景视图投影（缩放、抖动照带）；
+顶层组合层的 compose 带视差（`p5j-cam` 的 CLP、G）。P5b 的 `p5b-nest` 没开视差、`p5b-grp-par` 的组在屏幕正中，都测不出来。语料里没有
+「组里套组合层又开视差」的场景，画面不变。
+
+计划与实测见 [phase-5j](../../.claude/plans/wpe-import/3-scene/phase5/phase-5j-fullscreen-children.md)。
+
+**验收**（`ignore/p5/j/`，WPE 抓帧 `A:\p5j\`）：`p5j-b`（164 帧）、`p5j-cam`（zoom 1.25、抖动、视差，204 / 205 帧）和 WPE 整帧逐像素相同
+（屏蔽 FR / CLK）；`p5j-a`（209 / 210 帧）2.6% 的像素差 1：全部来自 effect pass 的 `g_Color4` 残留值（WPE 沿用上一个设过颜色的层，我们
+写本层颜色，P5b `p5b-fs` 起的已知差异），测试 effect `kbfx` 加了 `g_Color4 × 0.0001` 才露出来，逐 draw 轨迹与 WPE 取像素核对过。语料
+myprojects/`3814353826` 变干净；全库 233 张全部干净。
 
 ## 图像层与材质补全（P8）
 

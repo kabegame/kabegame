@@ -40,12 +40,15 @@
  *     compose / clear 之前：fullscreenlayer 有 effect 时走拷贝，不看 `copyBackground`（`p5b-fs` 的 F1：一次 Resolve、没有基础 draw）。
  *   - 合成 RT 取 `fullscreenSize`（槽 0 静态纹理的图像尺寸；`_rt_FullFrameBuffer` 或没有纹理时取场景目标尺寸）。
  * - **组**（P5b 步骤 4，带子层的组合层，`SceneLayer.subtree` 非空，p5-REPORT `p5b-grp-*`、`p5b-nest`、`p5b-grpptc`）：基础 pass
- *   （compose / clear；fullscreenlayer 带子层照报，这里照拷贝）之后紧跟 `subtree` 步骤，把 `layer.subtree` 画进当前的合成 RT（组的
+ *   （compose / clear；fullscreenlayer 带子层照拷贝，P5j）之后紧跟 `subtree` 步骤，把 `layer.subtree` 画进当前的合成 RT（组的
  *   子孙在顶层不画，`scene.ts`）。它不算合成链的一次写入（子孙画在基础 pass 写的那张上）。之后有 effect 或 colorBlendMode 混合时
  *   照常往下；都没有时不是空计划，而是用 `layer.groupUpload`（`effectpassthrough`，`采样 × g_Color4`）上屏：角色 `final`、槽 0 是
  *   当前合成 RT、图层四边形、UV 0–1、不内缩；混合 `copyBackground` 为 true 时取材质的（normal，即不混合），false 时 translucent
  *   （`p5b-grp-nofx` 事件 125 关混合、`nofx0` 事件 120 translucent；rea-p5-modelflags §2.6 的 `(flags & 0x60) == 0x20`），
  *   colorBlendMode 31 照普通上屏改 additive（读码，没有实测）。
+ *   - 全屏组（P5j，fullscreenlayer 带子层，`p5j-a` 事件 128 / 161）：没有 effect 时上屏不用 `groupUpload`，画基础材质本身（`fullscreenlayer.json` 的
+ *     passthrough 着色器，translucent，不乘 `g_Color4`），槽 0 是当前合成 RT、2×2 NDC、不看 `copyBackground`（开头的拷贝也不看）、不拷快照；
+ *     colorBlendMode 31 改 additive（读码）。有 effect 时照上面 fullscreen 的 effect 链。
  * - **粒子层**（P4a 步骤 4，`planParticleLayer`）：`particles` 步骤直接画到场景目标，和图像步骤同样按 `objects` 顺序；有子系统时
  *   按模板树先序给出每个模板的步骤（P4e 步骤 1、2），绘制顺序与快照由渲染器每帧现排；一个系统多条 renderer 时每条一个步骤（P4f 步骤 4）。
  * - **文本层**（P6b 1d，`SceneLayer.text`，rea-p6b-layout 3–5，p6b-fx 抓帧）：图像层的一种，基础 pass 换成 `text` 步骤（逐字四边形，
@@ -1243,6 +1246,26 @@ export function planLayer(
           raster: rasterState(base, pass, blending),
         });
     }
+  } else if (finalEffect < 0 && group && layer.fullscreen) {
+    // 全屏组（P5j，`p5j-a` 事件 128 / 161）：没有 effect 时画基础材质本身（`fullscreenlayer.json`：passthrough 着色器、translucent，
+    // 不乘 `g_Color4`），槽 0 换成合成 RT，2×2 NDC 四边形；不看 `copybackground`（开头的拷贝也不看）。colorBlendMode 31 改 additive
+    // （读码 §2.6，未实测）。上屏不拷快照（槽 0 已是合成 RT）
+    const inputs = staticInputs(base, null);
+    inputs[0] = { kind: "composite", index: current };
+    const upload = additive ? "additive" : base.blending;
+    steps.push({
+      kind: "draw",
+      role: "final",
+      pass: base,
+      effect: null,
+      target: { kind: "scene" },
+      inputs,
+      geometry: "fullscreen",
+      uv: [1, 1],
+      inset: NO_INSET,
+      blending: upload,
+      raster: rasterState(base, base, upload),
+    });
   } else if (finalEffect < 0 && group) {
     // 没有 effect 的组（P5b 步骤 4，`p5b-grp-nofx` 事件 125、`nofx0` 事件 120）：`effectpassthrough` 把合成 RT 画到图层四边形上，
     // UV 0–1、不内缩（组合层的上屏本来就不内缩）。混合：colorBlendMode 31 改 additive（读码），`copybackground` 为 true 取材质的

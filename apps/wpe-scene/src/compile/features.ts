@@ -352,7 +352,7 @@ const MODEL_NEUTRAL_FLAGS = ["skin", "castshadow", "reflected"];
  *   上屏不内缩；没有启用的 effect、`colorBlendMode` 是 0 / 31、没有子层时整层不画。带子层的是「组」（步骤 4，p5-REPORT `p5b-grp-*`、
  *   `p5b-nest`、`p5b-grpptc`）：子孙不在顶层画，由组在基础 pass 之后按先序、组的局部正交画进合成 RT（`copybackground: false` 时
  *   alpha 取 MAX），没有 effect 时用 `effectpassthrough` 上屏；组里还不支持的用法由 `groupChildIssues` 报（`bundle.ts` 在全部对象之后
- *   查）。fullscreenlayer 同时带 `fullscreen`，基础 pass 换成拷贝，见下一条；它带子层报 `model:fullscreen:children`。
+ *   查）。fullscreenlayer 同时带 `fullscreen`，基础 pass 换成拷贝，见下一条；它带子层（全屏组）P5j 起支持。
  * - `fullscreen`（P5b 步骤 3，`SceneLayer.fullscreen`，p5-REPORT `p5b-fs`、`p5b-fsnofx`、`p5b-fsmvp`）：几何一律是 2×2 的 NDC 四边形，
  *   两条路径：
  *   - 直接上屏（没有启用的 effect、`colorBlendMode` 是 0 / 31、不是组合层）：MVP 照常（场景视图投影 · 视差 · W），着色器不乘 MVP 就

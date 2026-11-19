@@ -8,7 +8,7 @@
  *   `fullscreen`（fullscreenlayer 不再报）；
  * - 步骤 4：组（带子层的组合层）的归属 `group` 与子树 `subtree`（`assignGroups`）、上屏材质 `groupUpload`，不再报
  *   `model:passthrough:children`，组里还不支持的用法细分成 `:fullscreen` / `:perspective`
- *   （`groupChildIssues`），fullscreenlayer 带子层报 `model:fullscreen:children`。
+ *   （`groupChildIssues`），fullscreenlayer 带子层（全屏组）P5j 起不报。
  * - 步骤 5：`instanced` 模型不再报 `model:instanced`，图层上 `solidLayer` 与 `instanced` 分开记；对象的 `instance` 在编译材质前覆盖
  *   pass 的 `textures`（按槽）与 `combos`，`checkInstanceFeatures` 的细分键；非 instanced 对象上的 `instance` 中性。
  * 依据是 p5-REPORT「P5b 语义的实测核对」：`p5b-autosize`（`autosize` 覆盖 `size`，三者都缺时 1×1）、`p5b-nopad`、`p5b-persp`、
@@ -999,11 +999,9 @@ describe("compileScene：组（P5b 步骤 4）", () => {
     });
   });
 
-  it("fullscreenlayer 带子层：报 model:fullscreen:children（没有子层时不报）", async () => {
+  it("fullscreenlayer 带子层：不报（P5j 起支持，没有子层时也不报）", async () => {
     const files = { ...FULLSCREEN_FILES, ...GROUP_FILES };
-    expect((await compileObjects([f1(10), image(11, 10)], {}, files)).unsupported).toEqual([
-      "model:fullscreen:children",
-    ]);
+    expect((await compileObjects([f1(10), image(11, 10)], {}, files)).unsupported).toEqual([]);
     expect((await compileObjects([f1(10)], {}, files)).unsupported).toEqual([]);
   });
 });
