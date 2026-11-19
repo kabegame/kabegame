@@ -1,7 +1,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, fstatSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { PkgFormatError, ScenePkg, type RangeRead } from "./pkg";
+import { PkgFormatError, ScenePkg, pkgKey, type RangeRead } from "./pkg";
 
 const encoder = new TextEncoder();
 
@@ -92,16 +92,42 @@ describe("ScenePkg", () => {
     expect(decode(await opened.readEntry("materials/m39.json"))).toBe('{"i":39}');
   });
 
-  it("同名条目取第一条", async () => {
+  it("同键取最后一条（同 WPE 的 unordered_map 改写）：完全同名、只差大小写都算同键", async () => {
     const opened = await ScenePkg.open(
       memoryReader(
         buildPkg([
           ["dup", "first"],
           ["dup", "second"],
+          ["Mixed/A.json", "upper"],
+          ["mixed/a.json", "lower"],
         ]),
       ),
     );
-    expect(decode(await opened.readEntry("dup"))).toBe("first");
+    expect(decode(await opened.readEntry("dup"))).toBe("second");
+    expect(decode(await opened.readEntry("MIXED/a.JSON"))).toBe("lower");
+    expect(opened.entry("Mixed/A.json")?.name).toBe("mixed/a.json");
+    // 目录表照包内顺序原样保留
+    expect(opened.entries.map((entry) => entry.name)).toEqual(["dup", "dup", "Mixed/A.json", "mixed/a.json"]);
+  });
+
+  it("查找不分 ASCII 大小写（3662790108：场景写 HUBBLE、包里是 hubble），非 ASCII 字节原样比", async () => {
+    const opened = await ScenePkg.open(
+      memoryReader(
+        buildPkg([
+          ["materials/models/hubble/AO_1_baseColor.json", "ao"],
+          ["材质/Ä.json", "umlaut"],
+        ]),
+      ),
+    );
+    expect(opened.has("materials/models/HUBBLE/AO_1_baseColor.json")).toBe(true);
+    expect(decode(await opened.readEntry("Materials/Models/Hubble/ao_1_basecolor.JSON"))).toBe("ao");
+    expect(opened.entry("materials/models/HUBBLE/AO_1_baseColor.json")?.name).toBe(
+      "materials/models/hubble/AO_1_baseColor.json",
+    );
+    expect(decode(await opened.readEntry("材质/Ä.json"))).toBe("umlaut");
+    // 只有 A–Z 折叠：Ä / ä 不是同一个键
+    expect(await opened.readEntry("材质/ä.json")).toBeNull();
+    expect(pkgKey("Ab/ÄÖ/Z.TEX")).toBe("ab/ÄÖ/z.tex");
   });
 
   it("拒绝非 PKGV 头", async () => {

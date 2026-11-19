@@ -176,7 +176,8 @@ count × { sizedString name, u32 offset, u32 length }
 
 - **只按区间读**：包可达数百 MB（内嵌 4K60 视频纹理），`ScenePkg` 经 `RangeRead` 先读 64 KiB 目录表（不够加倍），条目再按 `[base + offset, + length)` 读。
   主线程用带 `Range` 头的 `fetch(file:)`：应用页主 frame 实测返回 200、正文正好是请求区间、没有 `Content-Range` 头；跨过末尾截短，起点越界则 fetch 失败。
-- **条目名**：UTF-8、正斜杠，按原样精确匹配（有中文和末尾空格）；同名取第一条。没有该条目返回 null，由资源解析层继续查下一个来源。
+- **条目名**：UTF-8、正斜杠（有中文和末尾空格）。没有该条目返回 null，由资源解析层继续查下一个来源。
+- **查找不分 ASCII 大小写**（2026-11-20，照 WPE 2.8.42 `wallpaper64.exe`，`pkgKey`）：挂载 `FUN_140276700` 把每个条目名逐字节过 CRT `tolower` 后作 `unordered_map`（FNV-1a）的键，`try_emplace` 碰到已有的键返回旧节点、随后改写偏移与长度，所以**同键（含只差大小写的）取最后一条**；查找 `FUN_140275ef0` / `FUN_1402760e0` 把要找的路径同样逐字节 `tolower` 再 `memcmp`。exe 不调 `setlocale`，C 区域的 `tolower` 只改 A–Z，非 ASCII 字节原样比。之前照 linux-wallpaperengine 按原样精确匹配、同名取第一条：`3662790108`（哈勃）的场景写 `materials/models/HUBBLE/…`、包里是 `materials/models/hubble/…`，报了 9 个 `material:missing:*`（以前误记成工坊内容缺文件）。Rust 导入取入口 json（`wpe/project.rs` 的 `read_pkg_entry`）与 kbp-tools 的 `content` 同一规则。语料 366 个包里没有只差大小写的条目；完全同名的只有 `3643916956` 的一个字体，两份字节相同。
 - **校验**：头部必须以 `PKGV` 开头；目录表截断、字符串或条目数异常、读到的条目长度不对都抛 `PkgFormatError`。长度过长通常意味着 `Range` 被忽略。
 - **视频纹理**：`.tex` flags 含 Video（32）时唯一的 mip 是完整 MP4；本机工坊样本的 `isVideoMp4` 字段为 0，判断要看 flags。
 - **测试**：`pkg.test.ts` 的单测用内存构造的包；设置 `KABEGAME_WPE_ROOT`（WPE 安装目录）后另跑本机工坊目录里的每个 `scene.pkg`，只读。
@@ -3233,7 +3234,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 **语料**：不解锁任何场景。
 - `3811424158` 只剩精灵表帧动画（`combo:SPRITESHEET`、`tex:animation`）。
 - `3706286085` 只剩 P13 的雾与方向光阴影、挂在模型下的点光（`object:parent`）与动画层脚本（`puppet:layer-script`，P12c 已支持）。
-- `3662790108` 还差预光照、透视文本等十几项。
+- `3662790108` 还差预光照、透视文本等十几项（2026-11-20 起能渲染：预光照 P13j、透视文本 P13h，剩下的 9 个缺材质是 `scene.pkg` 查找区分大小写，见「`scene.pkg`」）。
 
 ## puppet 动画层的脚本 API（P12c）
 

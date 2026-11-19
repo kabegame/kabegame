@@ -70,3 +70,5 @@
 - 变异：预光照变体不带 puppet 组合键（光照按未蒙皮的姿势算）时第 208 帧 22% 的像素不同、最大差 217；还原后画面哈希回到 `fbe5185a…`。
 - 单测 `compile/p13j.test.ts` 加六例（组合键、去 `SKINNING_ALPHA`、不编的条件、渲染图的基础步骤、`a_PositionC1` 的别名项与顶点布局）；P13j-1 漏改的 `compile/p8.test.ts` 一条旧用例（被依赖 + 光照仍期望照报）一起改成「编了变体」。在「HEAD + P13j-2」快照里 tsc 0 error、相关 10 个文件全过。
 - 语料（`ignore/p13/j/corpus-{head2,mine2}.json`）：干净 223 → 224（`2515018199`），只去掉 `lighting:prelighting`，没有新增键。
+
+> 更正（2026-11-20）：`3662790108` 的 9 个缺材质不是工坊内容缺文件，是 `scene.pkg` 查找区分大小写（场景写 `HUBBLE`、包里是 `hubble`），WPE 查找不分 ASCII 大小写；照 WPE 改了之后语料干净，见 `cocs/wpe/WPE_SCENE.md`「`scene.pkg`」。

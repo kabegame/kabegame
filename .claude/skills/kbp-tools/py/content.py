@@ -120,9 +120,15 @@ def project_dir(name):
 # ==================== scene.pkg ====================
 
 
+def pkg_key(name):
+    """包内查找的键，同产品 apps/wpe-scene/src/compile/pkg.ts 的 pkgKey（照 WPE）：只把 A–Z 换成小写，其余字符不变。"""
+    return "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in name)
+
+
 class Pkg(object):
     """scene.pkg 的目录表：version（头部串，如 PKGV0024）、entries（[(名字, 偏移, 长度)]，按包内顺序）、
-    base（数据区起点）、by_name（同名条目先出现的算）。偏移相对 base。"""
+    base（数据区起点）、by_name（列举用：原名，同名条目先出现的算）、by_key（查找用：键是 pkg_key，同键取最后一条，
+    同产品与 WPE）。偏移相对 base。查找一律经 find / read，不分 ASCII 大小写。"""
 
     def __init__(self, path, version, entries, base):
         self.path = path
@@ -130,11 +136,20 @@ class Pkg(object):
         self.entries = entries
         self.base = base
         self.by_name = {}
+        self.by_key = {}
         for name, offset, length in entries:
             self.by_name.setdefault(name, (offset, length))
+            self.by_key[pkg_key(name)] = (offset, length)
+
+    def find(self, name):
+        """(偏移, 长度)；没有为 None。不分 ASCII 大小写，同键取最后一条。"""
+        return self.by_key.get(pkg_key(name))
 
     def read(self, name):
-        offset, length = self.by_name[name]
+        found = self.find(name)
+        if found is None:
+            raise KeyError(name)
+        offset, length = found
         with open(self.path, "rb") as f:
             f.seek(self.base + offset)
             data = f.read(length)
@@ -223,8 +238,9 @@ def locate(project, rel, sources=FROM):
             return {"source": "project", "path": path, "offset": 0, "size": os.path.getsize(path)}
     if "pkg" in sources:
         pkg = _pkg_of(project)
-        if pkg is not None and rel in pkg.by_name:
-            offset, length = pkg.by_name[rel]
+        found = pkg.find(rel) if pkg is not None else None
+        if found is not None:
+            offset, length = found
             return {"source": "pkg", "path": pkg.path, "offset": pkg.base + offset, "size": length, "entry": rel}
     if "assets" in sources:
         path = os.path.join(assets_dir(), rel.replace("/", os.sep))
@@ -423,7 +439,7 @@ def unpack(project, out=None, instrument=False, data=None, overwrite=False):
 
     - 输出缺省 <data>/proj/<工程目录名>-kbp；安全检查见 _check_unpack_out；先在旁边的临时目录写全，成功才换上，失败不留半成品。
     - 散文件照拷（不拷 scene.pkg 与源里的 kbp-unpack.json）；scene.pkg 的条目解成散文件：条目名过 normalize，散文件已有的不覆盖
-      （同 Kabegame 编译管线「散文件 → 包」的优先级），包内同名取第一个（同 Pkg.by_name）。
+      （同 Kabegame 编译管线「散文件 → 包」的优先级），包内同键（不分 ASCII 大小写）取最后一条（同 Pkg.read，照 WPE）。
     - project.json 标题加「 (kbp)」，其余原样（按生成库的 write_json 重新写出）。
     - instrument：入口文件（project.json 的 file，缺省 scene.json）末尾追加 FR，见 _add_fr；入口不是严格 JSON 报 [data]。
     - 写 kbp-unpack.json（标记与来源、计数），不写 kbp-meta.json。"""

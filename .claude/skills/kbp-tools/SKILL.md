@@ -403,15 +403,15 @@ kbp.py content isolate <工程> --keep <id|名字>,… [--drop <id|名字>,…] 
 - **`cat`、`read` 的查找顺序**同 Kabegame 编译管线（`apps/wpe-scene/src/compile/fs.ts`）：
   - 散文件 → `scene.pkg` → WPE `assets/`；
   - `--from pkg` 只取包内条目；
-  - 同名条目先出现的算。
+  - 包内查找不分 ASCII 大小写、同键取最后一条（同产品 `pkgKey`，照 WPE：挂载时条目名逐字节 `tolower` 进 `unordered_map`）；`ls`、`grep` 照列原名。
 - **`grep`** 跳过开头 8 KiB 有 NUL 的二进制文件，最多返回 `--max` 条，摘要里 `truncated` 标出是否截断。
 - **`unpack`**（第 5 批）：把真实场景复制、解包成测试工程，源工程只读。用法与取舍见下面「真实场景的回放」。
   - **输出**：缺省 `<data>/proj/<工程目录名>-kbp`。
     - 必须在仓库 `ignore/` 下（按解析链接后的路径），和 WPE 安装目录、Steam 工坊目录、源工程互不包含，否则 `[kbp]`；
     - 已存在缺省拒绝，`--overwrite` 只删带 `kbp-unpack.json` 的目录（链接、junction 不删），否则 `[data]`；
     - 先写旁边的临时目录、全部成功才换上，失败不留半成品。
-  - **拷贝**：散文件照拷（不拷 `scene.pkg`）；包内条目解成散文件，名字过 `normalize`，散文件已有的不覆盖、包内同名取第一个
-    （同名按落盘算：Windows 上不分大小写）。
+  - **拷贝**：散文件照拷（不拷 `scene.pkg`）；包内条目解成散文件，名字过 `normalize`，散文件已有的不覆盖；包内同键（不分 ASCII 大小写）的内容取最后一条、
+    文件名用先出现的那条（同名按落盘算：Windows 上不分大小写）。
   - **`project.json`**：标题加「 (kbp)」，其余原样（按生成库的 `write_json` 重新写出）。
   - **`--instrument`**：入口文件（`project.json` 的 `file`，缺省 `scene.json`）严格 JSON 解析，带注释报 `[data]`、不猜；`objects`
     末尾加 FR，写 `models/kbp/fr.json`；源里已有 `kbp-FR` 报 `[data]`（防止重复解包加过日志的副本）。

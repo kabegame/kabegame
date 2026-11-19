@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 场景壁纸在 `scene.pkg` 里找资源不分大小写
+
+2026-11-20 Windows dev。照 Wallpaper Engine（挂载时把条目名转成小写进哈希表、查找时把路径也转小写），场景在 `scene.pkg` 里找资源时不区分 ASCII 大小写，同名（含只差大小写）的条目取最后一条；之前按原样精确匹配，`3662790108`（Live Solar System，哈勃）的场景写 `materials/models/HUBBLE/…`、包里是 `…/hubble/…`，报 9 个缺材质、退回封面图。导入时读入口 json（Rust）与 kbp-tools 同一规则。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：`compile/pkg.test.ts`（同键取最后一条、只差大小写同键、非 ASCII 不折叠）、`compile/fs.test.ts`；`tsc`；Prettier；Rust `wpe::project`（新增大小写与同键用例） | 全过 | 2026-11-20 Claude：2 个文件 14 条通过；`tsc` 0 错误；Rust 13 条通过 |
+| [x] | T2 语料 | Windows | 语料编译扫描（234 张），和改前比 | `3662790108` 去掉 9 个 `material:missing:*`，没有新增键 | 2026-11-20 Claude：干净 232 → 234（另一张是 `resizeScreen` 的 3838286359），新增键 0；366 个包里没有只差大小写的条目 |
+| [x] | T3 渲染 | Windows dev，屏外宿主 1600×900，后处理超高，跑脚本 | `3662790108` 回放 150 帧（0.1 s）读回，和 WPE 开窗约 15 s 的抓帧比 | 太阳、行星名、右侧面板位置对得上 | 2026-11-20 Claude：对得上；我们这边多一张白色网格、视角不同，脚本时钟与帧时间都和 WPE 不同，没逐帧走查；开场 5 s 内全黑是淡入（WPE 同）；作者脚本 `[P1] Data` 的 `shared.shared` 在 WPE 里同样抛错 |
+| [ ] | T4 预览 | Windows dev 预览 | 打开 3662790108 的预览，等开场过去，拖动旋转、双击天体 | 不再退回封面；和 WPE 观感一致 | 需要用户看；网格与视角差异见 T3 |
+
 ## 场景壁纸脚本回调 `resizeScreen`
 
 2026-11-19 Windows dev。脚本导出的 `resizeScreen(size)` 由运行时调用，不再报 `script:callback:resizeScreen`、退回预览图。脚本看到的屏幕分辨率（`engine.screenResolution`，布局 × DPR）由宿主的 `ScreenResolution` 跨渲染器维护：渲染器每次量画布都交给它，和之前不同时同步调 `resizeScreen`，参数是 `Vec2`，返回值丢弃，出错只禁用这个回调，首次创建不调。预览放大不算分辨率变化。顺带修正：首次加载时脚本 `init` 早于建渲染器，原先读到的是画布元素的缺省 300×150，现在是布局 × DPR。

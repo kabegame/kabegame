@@ -17,8 +17,20 @@
  * 与原实现的差别：
  * - 不整包读入：包可达数百 MB（含视频纹理），目录表与条目都经 {@link RangeRead} 按区间读。
  *   目录表长度事先未知，先读一段，不够再加倍重读。
- * - 加了越界与长度校验（原实现信任文件内容）；条目名按原样精确匹配，同名时取第一条（同原实现的 `find_if`）。
+ * - 加了越界与长度校验（原实现信任文件内容）。
+ * - 查找照 WPE（2.8.42 `wallpaper64.exe`，下面的 {@link pkgKey}），不照原实现的「按原样精确匹配、同名取第一条」（`find_if`）：
+ *   条目名与要找的路径都按 ASCII 小写比，同键（含只差大小写的）取**最后**一条。
  */
+
+/**
+ * 包内查找的键：逐字节 ASCII 小写（A–Z → a–z），其余字节（含 UTF-8 多字节）不变。照 WPE：挂载 `FUN_140276700` 把每个条目名逐字节过 CRT
+ * `tolower` 后作 `unordered_map`（FNV-1a）的键，`try_emplace` 碰到已有的键就返回旧节点、随后改写偏移与长度，所以同键取最后一条；查找
+ * `FUN_140275ef0`（取偏移与长度）/ `FUN_1402760e0`（在哪个来源）把要找的路径同样逐字节 `tolower` 再 `memcmp`。exe 不调 `setlocale`，C 区域的
+ * `tolower` 只改 A–Z。语料 3662790108 的场景写 `materials/models/HUBBLE/…`、包里是 `materials/models/hubble/…`，WPE 能找到。
+ */
+export function pkgKey(name: string): string {
+  return name.replace(/[A-Z]+/g, (letters) => letters.toLowerCase());
+}
 
 /**
  * 按字节区间读同一个文件，返回 `[start, end)`。跨过文件末尾时截短；`start` 不在文件内时抛错。
@@ -107,6 +119,7 @@ function parseTable(bytes: Uint8Array): ParsedTable {
 }
 
 export class ScenePkg {
+  /** 键是 {@link pkgKey}，同键取最后一条（同 WPE）。 */
   private readonly byName = new Map<string, PkgEntry>();
 
   private constructor(
@@ -118,9 +131,7 @@ export class ScenePkg {
     /** 数据区起点（目录表结束处）。 */
     readonly baseOffset: number,
   ) {
-    for (const entry of entries) {
-      if (!this.byName.has(entry.name)) this.byName.set(entry.name, entry);
-    }
+    for (const entry of entries) this.byName.set(pkgKey(entry.name), entry);
   }
 
   /** 读目录表；格式不对抛 {@link PkgFormatError}。 */
@@ -141,17 +152,19 @@ export class ScenePkg {
     }
   }
 
+  /** 不分 ASCII 大小写（{@link pkgKey}）。 */
   has(name: string): boolean {
-    return this.byName.has(name);
+    return this.byName.has(pkgKey(name));
   }
 
+  /** 不分 ASCII 大小写（{@link pkgKey}），同键取最后一条；返回的条目带包里的原名。 */
   entry(name: string): PkgEntry | undefined {
-    return this.byName.get(name);
+    return this.byName.get(pkgKey(name));
   }
 
-  /** 读一个条目的完整字节；包里没有这个名字时返回 null，交给下一个资源来源。 */
+  /** 读一个条目的完整字节（查找同 {@link entry}）；包里没有这个名字时返回 null，交给下一个资源来源。 */
   async readEntry(name: string): Promise<Uint8Array | null> {
-    const entry = this.byName.get(name);
+    const entry = this.entry(name);
     if (!entry) return null;
     if (entry.length === 0) return new Uint8Array(0);
     const start = this.baseOffset + entry.offset;

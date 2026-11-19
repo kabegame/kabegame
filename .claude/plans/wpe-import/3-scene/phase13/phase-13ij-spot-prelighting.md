@@ -150,3 +150,5 @@ vec4 worldPos = mul(vec4(localPos, 1.0), M_MDL);   // 光照、反射都从这�
 2. **聚光 cookie**（`spotcookie` / `spotshadowcookie`，要 `_alias_lightCookie` 贴图）**与体积光的聚光阴影**（`volumetrics:spot-shadow`）：语料都是 0 张，推荐继续照报，P13i 只做聚光阴影。
 3. **effect 自己开光照**（`lighting:effect`，effect 材质里的 `LIGHTING`）：语料 0 张，和预光照是两回事。推荐继续照报。
 4. **预光照的触发条件**：读码说「`LIGHTING` 或 `REFLECTION`」，我们现在只看 `LIGHTING`。推荐照 WPE 改成两者都算；如果步骤 0 的扫描发现因此多出受影响又暂时做不到的场景，再报给你。
+
+> 更正（2026-11-20）：`3662790108` 的 9 个缺材质不是工坊内容缺文件，是 `scene.pkg` 查找区分大小写（场景写 `HUBBLE`、包里是 `hubble`），WPE 查找不分 ASCII 大小写；照 WPE 改了之后语料干净，见 `cocs/wpe/WPE_SCENE.md`「`scene.pkg`」。

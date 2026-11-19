@@ -163,6 +163,7 @@ fn read_pkg_string(reader: &mut impl Read) -> io::Result<Vec<u8>> {
 
 /// 读 `scene.pkg` 里的一个条目，没有这个条目时是 `None`。格式见 `apps/wpe-scene/src/compile/pkg.ts`：
 /// `sizedString` 头、u32 条目数、条目表（`sizedString` 名、u32 偏移、u32 长度），数据区紧跟在条目表之后，全部小端。
+/// 查找同前端的 `ScenePkg`（照 WPE，见 `pkgKey`）：条目名与 `name` 按 ASCII 不分大小写比，同键取最后一条。
 fn read_pkg_entry(path: &Path, name: &str) -> io::Result<Option<Vec<u8>>> {
     let mut reader = BufReader::new(File::open(path)?);
     read_pkg_string(&mut reader)?;
@@ -172,7 +173,7 @@ fn read_pkg_entry(path: &Path, name: &str) -> io::Result<Option<Vec<u8>>> {
         let entry = read_pkg_string(&mut reader)?;
         let offset = read_pkg_u32(&mut reader)?;
         let length = read_pkg_u32(&mut reader)?;
-        if found.is_none() && entry == name.as_bytes() {
+        if entry.eq_ignore_ascii_case(name.as_bytes()) {
             found = Some((offset, length));
         }
     }
@@ -502,6 +503,34 @@ mod tests {
         ]);
         fs::write(dir.join(WPE_SCENE_PKG), bytes).unwrap();
         assert_eq!(scene_project(&dir).scene_resolution(), Some((2200, 1080)));
+    }
+
+    /// 同前端的 `ScenePkg`（照 WPE）：按 ASCII 不分大小写找，同键取最后一条。
+    #[test]
+    fn packed_entry_lookup_ignores_ascii_case_and_takes_the_last() {
+        let dir = temp_dir("resolution-pkg-case");
+        let bytes = pkg(&[
+            (
+                "Scene.JSON",
+                br#"{"general":{"orthogonalprojection":{"width":1,"height":1}}}"#,
+            ),
+            ("SCENE.json", SCENE_JSON.as_bytes()),
+        ]);
+        fs::write(dir.join(WPE_SCENE_PKG), bytes).unwrap();
+        assert_eq!(scene_project(&dir).scene_resolution(), Some((2200, 1080)));
+        let path = dir.join(WPE_SCENE_PKG);
+        assert_eq!(
+            read_pkg_entry(&path, "scene.json").unwrap().as_deref(),
+            Some(SCENE_JSON.as_bytes())
+        );
+        // 只折叠 A–Z
+        let dir = temp_dir("resolution-pkg-non-ascii");
+        fs::write(dir.join(WPE_SCENE_PKG), pkg(&[("Ä.json", b"{}")])).unwrap();
+        assert_eq!(
+            read_pkg_entry(&dir.join(WPE_SCENE_PKG), "ä.json").unwrap(),
+            None
+        );
+        fs::remove_dir_all(dir).ok();
     }
 
     #[test]
