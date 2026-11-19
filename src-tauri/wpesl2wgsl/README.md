@@ -303,6 +303,7 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
      - varying 数组的长度照 WPE 换算（见「绑定布局」），超过 16 个 location 时装进 vec4（见「varying 超过 16 个时打包」）。
      - 只在片元阶段声明的 varying，也给顶点阶段补一个输出。顶点阶段不写入时值为零，对应 D3D 下的未定义值；不补的话，WebGPU 建管线会失败。
      - 两阶段都声明、类型不同的 varying（不论哪边宽），片元按顶点的类型声明，见「HLSL 隐式转换」。
+     - 片元不声明、正文里用到的顶点 varying 也声明（按顶点的类型）：WPE 两阶段共享一份 `VS_OUTPUT`（rea-p7-shader §2.6），只补用到的，没用到的不声明。打包时同一份集合决定片元拆哪些片段。
      - 全局 `const` 的初始值引用运行期值时改成私有全局、在 `main` 开头赋值，见「HLSL 隐式转换」。
      - `gl_*` 名的全局声明（几何着色器遗留的 `varying uint gl_ViewportIndex`、fur4 的 `in uint gl_InstanceID`）忽略。
      - 阴影投射着色器里的 `gl_ViewportIndex = …;` 整行去掉（P13d）：WebGPU 没有视口数组，渲染器逐视图各画一次、`firstInstance` 取视图号，
@@ -332,7 +333,7 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
      - `texLoad2D(t, uv, res)` 改成 `texelFetch(…, ivec2(uv * res), 0)`。
 
      参数里嵌套的调用一并改写，第一个参数必须是已声明的纹理，或按正文顺序 `#define` 成已声明纹理的对象宏（追多层，`#undef` 生效）。
-   - **内建**：`gl_FragColor` → `kb_FragColor`（`layout(location = 0) out vec4`），`gl_VertexID / gl_InstanceID` → `gl_VertexIndex / gl_InstanceIndex`。
+   - **内建**：`gl_FragColor` → `kb_FragColor`（`layout(location = 0) out vec4`），`gl_VertexID / gl_InstanceID` → `gl_VertexIndex / gl_InstanceIndex`；片元里的 `gl_Position`（WPE 的 `SV_POSITION`，像素坐标）→ `kb_PsPosition`，用到时在声明区加一行宏 `#define kb_PsPosition vec4(gl_FragCoord.xyz, 1.0 / gl_FragCoord.w)`（xy、z 同 `gl_FragCoord`；w 在 D3D 是裁剪空间的 w，WebGPU 是 1/w，所以取倒数）。宏不是左值，片元写 `gl_Position` 编不过，照报；顶点 / 几何阶段的 `gl_Position` 不受影响。
      与 GLSL 450 保留字冲突的标识符改名为 `kb_<名字>`：`sample`、`input`、`output`、`texture`、`smooth`、`flat`、`common`、`buffer` 等，完整列表见 `RESERVED_RENAMES`。精度限定符去掉。
    - **HLSL 风格内建**由宏头补上（`MACRO_HEADER`）：`mul(a, b) → ((b) * (a))`（行向量左乘）、`frac`、`lerp`、`atan2`、`saturate`、`ddx / ddy`、`rsqrt`、`fmod`、`log10`、`clip`、`CAST*`。
      HLSL 类型名也由宏头换回 GLSL（`float2/3/4`、`floatNxM`、`int2/3/4`、`uint2/3/4`、`bool2/3/4`，按名字、数字不变）：WPE 的宏头反方向把 `vec2`
@@ -380,6 +381,7 @@ GLSL 不接受这些写法。翻译器打开嵌入 naga 的 **HLSL 模式**（`n
 - **片元的 varying 按顶点的类型声明**：WPE 两阶段只有一份 `VS_OUTPUT`，片元自己的 varying 声明作废（rea-p7-shader §2.6；`kbwidth` 实测片元声明 `vec2` 也能读顶点写的 `.zw`）。
   两阶段类型不同时不论哪边宽，片元都按顶点的类型声明，正文里的截断交给 HLSL 模式；片元读了顶点没有的分量时 naga 照常报错（`Invalid swizzle`），与 fxc 一致。
   反射里的 `varyings` 也是顶点的类型。只在片元自己声明、顶点没有的 varying 照旧按片元的类型（顶点补的输出是零）。
+  片元不声明也读得到顶点的 varying（P7f，Silk 的 `v_TexCoord`），按顶点的类型声明。`main` 之前的辅助函数里直接读 varying / `gl_Position` 在 WPE 编不过（推断，§4 第 5 条，WPE 只替换 `main` 签名之后的文本），我们是全局声明、读得到，属有意不同。
 - **全局 `const` 现算**：WPE 给每个以 `const` 开头的行前面插 `static `，fxc 接受初始值不是常量的 `static const`，每次调用现算（`ignore/p7/fxc/c4.hlsl`）；
   naga 要求全局 `const` 的初始值是常量表达式（工坊 `radial_blur`：`const float strength = -u_strength * 0.1 / u_samples;`）。初始值引用本阶段的 uniform / attribute / varying、
   `gl_*` 内建、`kb_pack_*` 或已改写的这类 const 时，改成私有全局 `T 名;`，在 `main` 的 `{` 之后按声明顺序赋值（行数不变）。`main` 与它调用的辅助函数读到的都是这次调用的值。
@@ -568,5 +570,10 @@ CARGO_TARGET_DIR=target-check cargo test -p wpesl2wgsl --test corpus -- --nocapt
 2026-11-07 结果：167 对通过 158 对（94.6%），WGSL 回读失败 0；2026-11-10 加几何着色器展开后不变，几何门槛 27/27。失败的 9 对见「已知不支持」；`fur4` 在基线里失败是因为基线只绑槽 0，缺 `TEX8FORMAT`，绑了毛发图就能过（上面的门槛绑了）。
 
 2026-11-15（P13e，`sampler2DBackBuffer` 按 `sampler2D`）：WPE 安装目录 165 → 166/167（新通过 `volumetricsfront`，剩 `puppettexturechannels`），几何门槛 27/27；单测 109 个。
+
+2026-11-20（P7f，片元读顶点的 varying 与 `gl_Position`）：在 `f05e75e9` 重录全语料加 myprojects `3823412318` 的夹具 `ignore/silk/requests`（1369 个请求）、导出基线 `ignore/silk/baseline/head-f05e75e9`（6280 个文件）；
+改后对它相同 6280、变了 0、新失败 0，新通过只有工坊 Silk（`workshop/3649458761/effects/silk`，`50bc303d`）的 4 个文件，在 ALLOW 里；夹具通过 1358 → 1359，
+其余 10 个失败是重放时不补注解缺省纹理格式的 `texture` 阶段（`effects/lightshafts`、`generic4`），与本节无关；`ok` 与夹具全部一致；WPE 安装目录 166/167、几何门槛 27/27 不变；WGSL 回读失败 0；单测 120 个。
+夹具里片元源码提到 `gl_Position` 的只有 Silk 一个请求（只读）。
 
 浏览器自己的 WGSL 编译器（Tint）是否接受这些输出，要在 dev app 里实测：用 `createShaderModule` + `getCompilationInfo` 跑一遍语料。见 `versions/latest/regression.md` 的场景壁纸 P1-0 节。

@@ -116,6 +116,7 @@
 - 场景壁纸运行中改要重新编译才生效的单个图层设置（脚本换文本图层的字体、属性面板改图层的 `size` / `colorBlendMode`、打开用到暂不支持特性的 effect）只重编那一个图层，不再整场重新加载：期间画面不停，别的图层的粒子、动画、声音接着跑；换上时它自己的关键帧从原来的进度接着播，没改到粒子定义时粒子也不重来；连着改几次只以最后一次为准。
 - 场景壁纸的脚本运行中改图层结构（把图层挂进 / 移出组合层、挂到骨骼上、删掉组合层）不再整场重新加载，改动当帧生效，和 Wallpaper Engine 一致：挂进组的图层当帧画进组里、空的组合层挂上子层当帧变成组、删掉组后剩下的子层当帧回到顶层；期间别的图层的粒子、动画不受影响。
 ### Fixed
+- 用到创意工坊效果「Silk」的场景壁纸不再退回预览图：这个效果的着色器直接读了只在顶点着色器里声明的变量与像素位置，Wallpaper Engine 能编译、以前我们报错。创意工坊 3823412318 现在可实时渲染，画面与 Wallpaper Engine 一致。
 - 场景壁纸文字里由字体替换出来的字形（例如数字之间被换成「抬高」的冒号、连字）按 Wallpaper Engine 的方式 hinting，以前有的字形会宽 1 像素。
 - 场景壁纸里粒子写了超长预热时间（如「麻匪 Elisa」的星空要预热 10 万秒）时加载四十多秒、强制渲染也会因超时退回；现在预热有上限，这张从 43 秒降到 4 秒左右。
 - 设置弹窗在窄窗口里（宽度不到 820px）把左侧分类导航挪到顶部，横向排成一行、放不下时横向滚动；原来 200px 的左导航挤得右边面板只剩四百多像素，长说明被压成一词一行。
@@ -388,6 +389,7 @@
   - 设计、实施与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9d-webcodecs.md`。
 
 ### Fixed
+- `wpesl2wgsl` P7f：照 WPE 两阶段共享的一份 `VS_OUTPUT`（rea-p7-shader §2.6），片元声明自己声明的与正文用到的顶点 varying（只补用到的，打包时同一份集合决定拆包）；片元的 `gl_Position` 换成 `kb_PsPosition`（`#define kb_PsPosition vec4(gl_FragCoord.xyz, 1.0 / gl_FragCoord.w)`，D3D 的 `SV_Position.w` 是裁剪空间 w），片元写它照报。全语料加 myprojects 的 1369 个请求对改前基线逐字节相同、只多 Silk 一个请求通过。计划与记录见 `.claude/plans/wpe-import/3-scene/phase7/phase-7f-fragment-interface.md`。
 - `rebind_deduped_metadata` 对 WPE 行直接返回：去重命中不再改挂它的 metadata 与 `plugin_id`。
 - `tauri-plugin-cursor` 的 macOS 探针按窗口内容区算视图坐标，并且每次采样都现查窗口位置（同 Windows 每次现算 `ScreenToClient`）。原来直接把 `kCGWindowBounds`（整个窗口框）当视图原点、每秒才刷新一次：带原生标题栏的主窗口里，注入预览壁纸 iframe 的鼠标位置比光标低一个标题栏高度（macOS 26 为 32pt），拖动窗口时落点停在旧位置。现在窗口框每轮从窗口服务现查（约 0.1 ms，不上主线程），标题栏等内缩每秒在主线程上读一次 `contentRectForFrameRect(frame)`；`position_in_window`（场景开场光标）同样修正。
 - 新增 CEF 补丁 10：建窗 `extra_info` 带 `kabegame.disable_wheel_zoom` 的 browser 忽略 Ctrl+滚轮缩放（`AlloyBrowserHostImpl::ContentsZoomChange` 提前返回），主窗口与壁纸窗口登记（`tauri_runtime_kbcef::disable_wheel_zoom`）。子 frame 里没被页面取消的 Ctrl+滚轮会缩放整个 WebContents，主文档的 `wheel` 监听收不到子 frame 的事件；这两个窗口的主 frame 加载完时，缩放不是默认值就复位，清掉以前按 host 存进 profile 的缩放。需要重新构建 CEF（`deno task build:chromium`）。

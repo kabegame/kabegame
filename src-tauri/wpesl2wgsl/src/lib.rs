@@ -1633,6 +1633,39 @@ void main() {
         assert_eq!(result.phase, Some("parse"), "{result:#?}");
     }
 
+    /// P7f：WPE 两阶段共享一份 `VS_OUTPUT`（rea-p7-shader §2.6），片元不声明也读得到顶点的 varying，
+    /// 读 `gl_Position` 得到 `SV_POSITION`（像素坐标）。Silk 同形的最小对。
+    #[test]
+    fn fragment_reads_vertex_varying_and_position_end_to_end() {
+        let result = translate(&TranslateRequest {
+            vertex: PLAIN_VERT.into(),
+            fragment: "uniform vec4 g_Screen;\nvoid main() { vec2 uv = gl_Position.xy / g_Screen.xy; gl_FragColor = vec4(v_TexCoord, uv); }".into(),
+            ..TranslateRequest::default()
+        });
+        assert!(result.ok, "{result:#?}");
+        assert_wgsl_reparses(&result);
+        let fs = result.fragment.as_ref().unwrap().wgsl.clone().unwrap();
+        assert!(fs.contains("@builtin(position)"), "{fs}");
+        assert!(fs.contains("@location(0)"), "{fs}");
+        let varyings: Vec<_> = result
+            .varyings
+            .iter()
+            .map(|v| (v.name.as_str(), v.ty.as_str()))
+            .collect();
+        assert_eq!(varyings, [("v_TexCoord", "vec2")]);
+    }
+
+    /// 片元写 `gl_Position`：宏不是左值，照报（WPE 里 `IN` 按值传入、可写；语料里没有这种写法）。
+    #[test]
+    fn fragment_writing_gl_position_is_reported() {
+        let result = translate(&TranslateRequest {
+            vertex: PLAIN_VERT.into(),
+            fragment: "void main() { gl_Position = vec4(1.0); gl_FragColor = vec4(v_TexCoord, 0.0, 1.0); }".into(),
+            ..TranslateRequest::default()
+        });
+        assert!(!result.ok, "{result:#?}");
+    }
+
     // ---- P7d 步骤 1：反射的 `unused` ----
 
     /// 只有位置与纹理坐标的顶点段，不读任何 uniform。

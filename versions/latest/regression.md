@@ -3972,3 +3972,16 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | M5 语料 | Windows | `kbp corpus scan`（含 myprojects）前后比 | 干净 286 → 290，只多这 4 张，别的不变 | 2026-11-19 Claude |
 | [ ] | M6 真机预览与桌面 | Windows dev，图库预览与壁纸窗口 | 预览 3829268059（红色描边 + 投影 + 模糊的时钟）、3816870245（带模糊 effect 的日期时钟），再设为桌面 | 文字带描边与投影，时钟每分钟换字不闪、不整场重载；改「场景后处理」等设置后照常 | |
 | [ ] | M7 装饰属性就地改 | Windows dev，图库预览 | 自建工程：文字开描边，`outlinethickness` / `dropshadowoffset` 绑滑块，在右栏拖动 | 拖动时当帧变化、不重新加载；开关（`outline`）绑属性时切换会重编这一个对象 | |
+
+## 场景壁纸 P7f：片元读顶点的 varying 与 `gl_Position`
+
+2026-11-20 Windows。工坊 effect「Silk」（`workshop/3649458761/effects/silk`）的片元着色器没声明就读 `v_TexCoord`，还读 `gl_Position` 当屏幕位置；WPE 两阶段共享一份 `VS_OUTPUT`（片元的 varying 列表整体换成顶点那份，末尾是 `gl_Position : SV_POSITION`），能编译，我们报 `Unknown variable: v_TexCoord`，整张退回预览图（myprojects `3823412318` 的四个对象都挂着它）。翻译器照做两件事：片元声明正文用到的顶点 varying（只补用到的）；片元的 `gl_Position` 换成 `vec4(gl_FragCoord.xyz, 1.0 / gl_FragCoord.w)`（写它照报）。原来能翻译的输出逐字节不变。说明见翻译器 README「改写」「HLSL 隐式转换 → 改写阶段」，记录见 `.claude/plans/wpe-import/3-scene/phase7/phase-7f-fragment-interface.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 WPE 的规则 | Windows，读码 + WPE 抓帧 | rea-p7-shader §2.6 / §4；`capture_wallpaper` 抓 `3823412318`（1280×540，`A:\silk\wpe\`），看 Silk pass 的像素着色器 | WPE 编得过、画的是 Silk 本体 | 2026-11-20 Claude：event 73 是 Silk 本体（不是暗红回退），`dcl_input_ps linear v0.xy`（没声明的 `v_TexCoord`）、`dcl_input_ps_siv linear noperspective v1.xy, position`（`gl_Position`），`div r1.xy, v1.xyxx, g_Screen.xyxx` |
+| [x] | S2 翻译器单测与基线 | Windows，cargo | `cargo test -p wpesl2wgsl --lib`；在 `f05e75e9` 重录全语料加 `3823412318` 的请求夹具（1369 个）并导出基线，改后重放比较 | 全过；只有 Silk 从失败变通过 | 2026-11-20：lib 120 个全过；6280 个文件相同 6280、变了 0、新失败 0，新通过只有 Silk `50bc303d` 的 4 个文件；`ok` 与夹具全部一致；WPE 安装目录 166/167、几何 27/27、WGSL 回读失败 0 不变 |
+| [x] | S3 变异检查 | Windows，cargo | `ignore/silk/mutate/mutate.py`：片元不并入用到的 varying、不换 `gl_Position`、宏的 w 不取倒数、不输出宏 | 都被单测检出 | 2026-11-20：4 / 4，按原字节还原 |
+| [x] | S4 语料 | Node，`kbp corpus scan` / `diff` | 全语料 233 张前后各扫一次；myprojects 210 张用同一份产品源码配新旧 wasm 各扫一次 | 只有 `3823412318` 变干净 | 2026-11-20 Claude：233 张前后都干净、0 变化；myprojects 干净 206 → 207，只多 `3823412318`，没有变坏的（出错的 1 张前后都是缺 `scene.json`） |
+| [x] | S5 与 WPE 整帧对照 | Windows dev，屏外宿主 + WPE 抓帧 | `render_scene` 15851（canvas 1280×540、`g_Time` 13.51435、后处理 ultra，同 WPE 设置）对 WPE 上屏帧，挖掉顶部中间的文字（探针不跑脚本） | Silk 的色调一致 | 2026-11-20 Claude：差 ≤ 1 的 98.86%，p99 = 2，平均 0.40；更大的差是随机的雨滴粒子 |
+| [ ] | S6 预览与桌面 | Windows dev，图库预览与壁纸窗口 | 图库预览打开 `3823412318`，看一会儿；再设为桌面 | 不再停在预览图；花的色调随时间缓慢流动，日期 / 时钟文字也带 Silk 的色调，和 WPE 打开同一张观感一致 | 待用户确认 |

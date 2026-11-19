@@ -1049,6 +1049,12 @@ fn array_suffix(array: Option<u32>) -> String {
     array.map(|n| format!("[{n}]")).unwrap_or_default()
 }
 
+/// 片元的 `gl_Position`（WPE 的 `SV_POSITION`，rea-p7-shader §2.6）。xy、z 与 `gl_FragCoord` 相同；
+/// w 在 D3D 像素着色器里是裁剪空间的 w，WebGPU 的 `position.w` 是插值后的 1/w，所以取一次倒数。
+/// 宏不是左值，片元写 `gl_Position` 会编不过，照报（语料里没有这种写法）。
+const PS_POSITION_MACRO: &str =
+    "#define kb_PsPosition vec4(gl_FragCoord.xyz, 1.0 / gl_FragCoord.w)\n";
+
 /// `renames` 是本阶段的改名表（拆分后改名的 uniform，原名 → 新名），正文里的引用随之改写。
 /// `varyings` 是作者声明的 varying（长度已换算）；`packing` 不为空时按它把浮点 varying 装进 vec4（[`pack_varyings`]）。
 #[allow(clippy::too_many_arguments)]
@@ -1158,10 +1164,23 @@ fn render(
             sampler_name(&texture.name),
         ));
     }
+    // 片元可见的 varying = 自己声明的 ∪ 正文用到的顶点 varying：WPE 的两阶段共享一份 `VS_OUTPUT`，片元自己的声明整体作废、
+    // 换成顶点那份（rea-p7-shader §2.6），所以片元不声明也读得到。只补用到的，原来能翻译的着色器输出不变
+    let referenced = if stage == Stage::Fragment {
+        identifiers(&body)
+    } else {
+        BTreeSet::new()
+    };
     let declared: Vec<&str> = parts
         .decls
         .iter()
         .map(|(decl, _)| decl.name.as_str())
+        .chain(
+            varyings
+                .iter()
+                .filter(|v| referenced.contains(&v.name))
+                .map(|v| v.name.as_str()),
+        )
         .collect();
     match stage {
         Stage::Vertex | Stage::Geometry => {
@@ -1177,7 +1196,7 @@ fn render(
         }
         Stage::Fragment => out.push_str("layout(location = 0) out vec4 kb_FragColor;\n"),
     }
-    // 顶点阶段输出全部 varying（包括只在片元阶段声明的），片元阶段只声明自己用的
+    // 顶点阶段输出全部 varying（包括只在片元阶段声明的），片元阶段声明自己声明的与正文用到的
     let direction = if stage == Stage::Vertex { "out" } else { "in" };
     let interface_line = |varying: &InterfaceDecl| {
         let flat = if is_integer_type(&varying.ty) {
@@ -1233,6 +1252,9 @@ fn render(
         }
     }
 
+    if referenced.contains("kb_PsPosition") {
+        out.push_str(PS_POSITION_MACRO);
+    }
     if calls(&body, "kb_smoothstep0") {
         out.push_str(SMOOTHSTEP0_HELPERS);
     }
@@ -1526,6 +1548,8 @@ fn rewrite_identifiers(stage: Stage, body: &str, renames: &BTreeMap<String, Stri
             let (ident, after) = split_ident(rest);
             let replaced = match ident {
                 "gl_FragColor" if stage == Stage::Fragment => "kb_FragColor".to_string(),
+                // WPE 的共享列表末尾是 `gl_Position : SV_POSITION`，片元读到的是像素坐标（rea-p7-shader §2.6）
+                "gl_Position" if stage == Stage::Fragment => "kb_PsPosition".to_string(),
                 "gl_VertexID" => "gl_VertexIndex".to_string(),
                 "gl_InstanceID" => "gl_InstanceIndex".to_string(),
                 "lowp" | "mediump" | "highp" => String::new(),
@@ -2068,6 +2092,94 @@ void main() { gl_FragColor = texSample2DBackBuffer(g_Texture1, v_TexCoord.xy, g_
         assert!(program
             .fragment_glsl
             .contains("layout(location = 0) in vec2 v_X;"));
+    }
+
+    /// 片元不声明、正文读顶点声明的 varying：照顶点的类型声明（WPE 共享 `VS_OUTPUT`，rea-p7-shader §2.6）。
+    #[test]
+    fn fragment_reads_undeclared_vertex_varying() {
+        let program = build(
+            &lines("varying vec2 v_X;\nvoid main() {}"),
+            &lines("void main() { gl_FragColor = vec4(v_X, 0.0, 1.0); }"),
+        )
+        .unwrap();
+        assert!(program
+            .fragment_glsl
+            .contains("layout(location = 0) in vec2 v_X;"));
+    }
+
+    /// 只补用到的：没读的顶点 varying 片元不声明，输出与改前相同。
+    #[test]
+    fn fragment_does_not_declare_unused_vertex_varyings() {
+        let program = build(
+            &lines("varying vec2 v_X;\nvarying vec2 v_Y;\nvoid main() {}"),
+            &lines("void main() { gl_FragColor = vec4(v_X, 0.0, 1.0); }"),
+        )
+        .unwrap();
+        assert!(program.fragment_glsl.contains("in vec2 v_X;"));
+        assert!(!program.fragment_glsl.contains("v_Y"));
+        assert!(program.vertex_glsl.contains("out vec2 v_Y;"));
+    }
+
+    /// 片元的 `gl_Position` 换成 `kb_PsPosition` 并带宏；不读时没有宏行；顶点的 `gl_Position` 不受影响。
+    #[test]
+    fn fragment_gl_position_becomes_ps_position() {
+        let program = build(
+            &lines(
+                "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }",
+            ),
+            &lines("void main() { gl_FragColor = vec4(gl_Position.xy, 0.0, 1.0); }"),
+        )
+        .unwrap();
+        let fragment = &program.fragment_glsl;
+        assert!(
+            fragment
+                .contains("#define kb_PsPosition vec4(gl_FragCoord.xyz, 1.0 / gl_FragCoord.w)\n"),
+            "{fragment}"
+        );
+        assert!(
+            fragment.contains("kb_FragColor = vec4(kb_PsPosition.xy, 0.0, 1.0);"),
+            "{fragment}"
+        );
+        assert!(!fragment.contains("gl_Position"), "{fragment}");
+        // 宏在声明区、正文之前
+        assert!(
+            fragment.find("#define kb_PsPosition").unwrap() < fragment.find("void main()").unwrap()
+        );
+        let vertex = &program.vertex_glsl;
+        assert!(
+            vertex.contains("gl_Position = vec4(a_Position, 1.0);"),
+            "{vertex}"
+        );
+        assert!(!vertex.contains("kb_PsPosition"), "{vertex}");
+
+        let plain = build(
+            &lines("void main() {}"),
+            &lines("void main() { gl_FragColor = vec4(1.0); }"),
+        )
+        .unwrap();
+        assert!(!plain.fragment_glsl.contains("kb_PsPosition"));
+    }
+
+    /// 打包（31 个 varying）：片元不声明、只读 `v_MotionRadian4`，拆包语句里只有它，只声明装着它的 vec4。
+    #[test]
+    fn packed_fragment_unpacks_undeclared_varying_it_reads() {
+        let vs = format!("{}void main() {{ v_aspect = 2.0; }}", sway_varyings());
+        let fs = "void main() { gl_FragColor = vec4(v_MotionRadian4); }";
+        let program = build(&lines(&vs), &lines(fs)).unwrap();
+        let fragment = &program.fragment_glsl;
+        assert!(
+            fragment
+                .contains("layout(location = 10) in vec4 kb_varying_10;\nfloat v_MotionRadian4;\n"),
+            "{fragment}"
+        );
+        assert_eq!(fragment.matches(" in vec4 ").count(), 1, "{fragment}");
+        assert!(
+            fragment.ends_with(
+                "void main() {\n    v_MotionRadian4 = kb_varying_10.y;\n    kb_main();\n}\n"
+            ),
+            "{fragment}"
+        );
+        assert!(!fragment.contains("v_Len1"), "{fragment}");
     }
 
     #[test]
