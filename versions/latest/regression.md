@@ -295,6 +295,9 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | S13 工坊发现页签 | macOS dev | 登录后切到「工坊发现」 | 搜索框、分级与类型筛选、时间窗与排序；每行有订阅人数；与订阅共用已选 | 2026-11-15 Claude：截图；缺省「本周 · 最热门」共 313.5 万个（排除了预设与程序壁纸）。搜索经命令验证：「芙宁娜」+ 去掉成人 15151 条、相关度排在前面；界面里的搜索与「切到相关度」没点到（对话框被关了） |
 | [ ] | S15 按 id 搜 | macOS dev | 工坊发现的搜索框里填 `3831518461`、工坊链接、几个 id 用逗号隔开、别的游戏的条目 id | 只列出这几条，不受排序与筛选影响；别的游戏的与不存在的不出现 | 2026-11-16 Claude：解析有单测（`item_ids_from_search_text`）；`ignore/steam-p0 details` 实测别的游戏的条目回 `result = 8`、不存在的回 `9`。界面里没测（dev 没在跑） |
 | [x] | S16 翻页组件 | macOS | `ui.test.ts`（`Paginator` 两例）、`TaskDetail.test.ts`、`ImageGrid.previewFollowPage.test.ts`；`check-kabegame --skip cargo` | 翻页抽成 `components/ui/Paginator`，画廊等的 `GalleryBigPaginator` 只剩外框、调用方不变；「从 Steam 导入」的网格改用它 | 2026-11-16 Claude：59 + 2 个用例全过，vue-tsc 0 error。画廊翻页条截图对照见备注；对话框里的样子没看（当时开着别的对话框） |
+| [ ] | S17 记住排序与筛选、勾选未下载、页数上限 | Windows dev | 订阅里换「最近订阅」、去掉「成人」；发现里换「总订阅」、时间窗、去掉「网页」；关掉对话框再打开。本页有「已下载」的条目时点「选中本页未下载」。发现不筛选时看翻页的总页数 | 两个页签各自恢复上次的排序与筛选（搜索字不恢复）；只勾上本页没下载的，已下载 / 有更新的不勾，再点一次取消它们；总页数显示 2500、「共 N 个」仍是三百多万 | 待用户确认 |
+| [x] | S18 Steam 下载的条目认出工坊 id | Windows，`test-kabegame kabegame-core --lib wpe::project`；dev 库只读扫描 | `myprojects/<id>` 登记在 `kabegame_workshop.json` 里时取目录名当 id；不在状态里的数字目录、非数字目录、没有状态文件都不认 | 14 个全过；修之前 dev 库 336 条 Steam 下载里 223 条 `url` 为空、也没挂 Steam 标签（`project.json` 没写 `workshopid`） | 2026-11-20 Claude：dev 库这 223 条已用一次性脚本补上 `url` / `post_url`（这一版之前没发布过 Steam 导入，不做迁移）；它们的 Steam 标签没补 |
+| [ ] | S19 新导入的条目带主页 | Windows dev | 从 Steam 导入一个 `project.json` 没写 `workshopid` 的条目，打开详情 | 来源地址是 `steamcommunity.com/sharedfiles/filedetails/?id=<id>`；挂上了 Steam 标签 | 待用户确认 |
 | [ ] | S14 订阅与发现一起导入 | macOS dev | 订阅里勾「全部 N 个」，发现里再勾几条 → 导入 | 底栏「…另加选中的 M 个」；任务取并集、重复的只下一次 | 未测 |
 | [ ] | S7 「全部 N 个」 | macOS dev | 只勾「全年龄」→ 勾「全部 N 个」→ 导入 | 逐条勾选被锁住；任务按分级重新列，只导入全年龄的 | 未测（全部下载要十几 GB，要挑个小账号或先 dry-run） |
 | [ ] | S8 条目有更新 | 任意 | 等订阅的某条更新后再导入 | 列表标「有更新」；只下载变化的文件、删掉新版本里没有的；行的哈希 / metadata 不重算（已知限制） | 未测（要等作者更新） |

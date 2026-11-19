@@ -123,6 +123,13 @@
 - [ ] 安卓前台服务
 - [x] `4.5.0` 元数据回填，对于内置插件下载的图片，其他插件下载去重会将元数据回填
 
+### WPE 视频壁纸属性
+> 2026-11-20 调研：本机与图库 13 个视频壁纸的 `project.json` 都只有 `schemecolor`，作者基本不写自定义属性；要支持的是 WPE 给每个视频壁纸的内置选项（键名见 `apps/wpe-scene/src/compile/builtinProperties.ts`），现在只读作者默认值、用户改不了。
+- [ ] 核对对齐滑块的刻度：场景宿主实测 `alignmentposition` / `alignmentx` / `alignmenty` 缺省 50（居中），视频这边 `resolve_video_props_from_raw` 却按 ×0.01 当 −1…1 用（作者写 50 会偏到 75%），用 WPE 实测后修
+- [ ] 视频壁纸的属性面板（预览右栏）：位置、水平 / 垂直 / 缩放、翻转、主题色、颜色选项（`wec_e` 开关 + 亮度 / 对比度 / 饱和度 / 色相），用户值按张存进 metadata 的 `userProperties`、合并进 `resolve_video_props`，预览 / 桌面 / 应用背景都生效
+- [ ] `alignment` 的 Free（自由定位）：现在对齐被 Kabegame 全局壁纸样式覆盖，Free 走不到
+- [ ] 图像滤镜 `wcc_v`（24 个 LUT 预设，`assets/materials/lut/*.tex`）+ 滤镜强度 `wcc_amt`：CSS 滤镜做不了 3D 查色表，要解 .tex、走 WebGL / canvas
+
 ### CLI
 - [ ] 读写插件的package.json，操作之
 

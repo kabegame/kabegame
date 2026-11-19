@@ -93,7 +93,7 @@
   "wpeSteamSubsRatingMature": "成人向け",
   "wpeSteamSubsSortUpdated": "更新が新しい順",
   "wpeSteamSubsSortSubscribed": "購読が新しい順",
-  "wpeSteamSubsSelectPage": "このページを選択",
+  "wpeSteamSubsSelectPage": "このページの未ダウンロードを選択",
   "wpeSteamSubsSelectAll": "すべて（{n} 件）",
   "wpeSteamSubsSelected": "{n} 件を選択",
   "wpeSteamSubsLocalCurrent": "ダウンロード済み",

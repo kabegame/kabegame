@@ -111,7 +111,7 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
   场景例外：目录里有 `scene.pkg`（创意工坊发布形态）就算入口存在，这一步不读包。没有 `type` 但 `file` 是 `.json` 的
   （默认项目 audiophile、techno）按场景处理；
   `file` / `preview` 必须是目录内相对路径（拒绝绝对路径与 `..`）；`preview` 缺失或越界归为
-  `None`；`workshopid` 缺失时用 `431960/<纯数字目录名>` 回退，便于拼创意工坊链接。
+  `None`；`workshopid` 缺失时按目录回退：`431960/<纯数字目录名>`（Steam 订阅），或 `myprojects/<纯数字目录名>` 且这个 id 登记在同目录的 `kabegame_workshop.json` 里（「从 Steam 导入」下载的，只看目录名会把用户自己的工程认错），便于拼创意工坊链接（行的 `url` / `post_url`）、按 id 查 Steam 标签。
   跳过原因 `WpeSkip::{NoProject, Unsupported, MissingEntry, Invalid}` 计入任务日志与统计。
 - `properties.rs`：把 `general.properties` 的作者默认值换算成 `WpeVideoProps`，
   不读 WPE 的 `config.json` / `wproperties`（用户改过的值不带入）。

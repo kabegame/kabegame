@@ -140,7 +140,8 @@
  *
  * 只持有当前一页：每次翻页 / 换筛选调一次 `wpe_steam_subscriptions` / `wpe_steam_workshop_query`（后端用账号的
  * 共享 CM 连接），分页、排序、搜索与筛选都由 Steam 做。勾选的条目 id 经 `v-model:selected-ids` 与另一个页签
- * 共用、跨页保留。「全部 N 个」只在订阅里有：表示当前分级下的全部订阅，经 `v-model:all-subscriptions` 交出分级
+ * 共用、跨页保留；「选中本页未下载」只勾 / 取消本页本地还没有的条目。排序与筛选（不含搜索字）按页签记在
+ * localStorage，下次打开沿用；总页数封顶 2500。「全部 N 个」只在订阅里有：表示当前分级下的全部订阅，经 `v-model:all-subscriptions` 交出分级
  * 与总数，提交时只带分级，任务运行时重新列。
  */
 import { computed, nextTick, ref, watch } from "vue";
@@ -192,12 +193,63 @@ const GRID_CLASS = "grid grid-cols-[repeat(auto-fill,minmax(108px,1fr))] gap-2";
 const RATINGS = ["Everyone", "Questionable", "Mature"] as const;
 const KINDS = ["scene", "video", "web"] as const;
 
-const ratings = ref<string[]>([...RATINGS]);
+/**
+ * 总页数上限（每页 20 条即前 50000 条）：工坊发现有约 300 万条，按页码翻不到底（实测第 2000 页还能取），
+ * 翻页只给到这里；「共 N 个」仍显示 Steam 给的总数。
+ */
+const MAX_PAGES = 2500;
+const SUBSCRIPTION_SORTS: readonly SubscriptionSort[] = ["lastUpdated", "subscriptionDate"];
+/** 能记住的发现排序：`relevance` 只在有搜索字时有意义，搜索字不记，所以它也不记 */
+const DISCOVER_SORTS: readonly DiscoverSort[] = ["trend", "mostSubscribed", "topRated", "newest", "recentlyUpdated"];
+const DAY_VALUES = [1, 7, 30, 90, 180, 365] as const;
+
+/** 记住的排序与筛选（每个页签一份，存在本机 localStorage；搜索字不记） */
+interface SavedView {
+  ratings: string[];
+  kinds: string[];
+  sort: SubscriptionSort | DiscoverSort;
+  days: number;
+}
+
+const viewStorageKey = `kabegame-steam-workshop-view:${props.source}`;
+
+/** 读上次的排序与筛选；逐项校验，读不到或不合法的项取默认值。存储不可用（隐私窗口等）时照常工作。 */
+function loadSavedView(): SavedView {
+  const view: SavedView = {
+    ratings: [...RATINGS],
+    kinds: [...KINDS],
+    sort: props.source === "discover" ? "trend" : "lastUpdated",
+    days: 7,
+  };
+  let raw: unknown = null;
+  try {
+    const text = localStorage.getItem(viewStorageKey);
+    raw = text ? JSON.parse(text) : null;
+  } catch {
+    // 忽略：只是少了记忆
+  }
+  if (!raw || typeof raw !== "object") return view;
+  const saved = raw as Partial<Record<keyof SavedView, unknown>>;
+  const pick = (value: unknown, allowed: readonly string[]) =>
+    Array.isArray(value) ? allowed.filter((item) => value.includes(item)) : [];
+  const ratingsSaved = pick(saved.ratings, RATINGS);
+  if (ratingsSaved.length) view.ratings = ratingsSaved;
+  const kindsSaved = pick(saved.kinds, KINDS);
+  if (kindsSaved.length) view.kinds = kindsSaved;
+  const sorts: readonly string[] = props.source === "discover" ? DISCOVER_SORTS : SUBSCRIPTION_SORTS;
+  if (typeof saved.sort === "string" && sorts.includes(saved.sort)) view.sort = saved.sort as SavedView["sort"];
+  if (typeof saved.days === "number" && (DAY_VALUES as readonly number[]).includes(saved.days)) view.days = saved.days;
+  return view;
+}
+
+const savedView = loadSavedView();
+
+const ratings = ref<string[]>(savedView.ratings);
 const ratingItems = computed(() => RATINGS.map((value) => ({ value, label: ratingLabel(value) })));
-const kinds = ref<string[]>([...KINDS]);
+const kinds = ref<string[]>(savedView.kinds);
 const kindItems = computed(() => KINDS.map((value) => ({ value, label: kindLabel(value) })));
 
-const sort = ref<SubscriptionSort | DiscoverSort>(props.source === "discover" ? "trend" : "lastUpdated");
+const sort = ref<SubscriptionSort | DiscoverSort>(savedView.sort);
 const sortOptions = computed(() =>
   props.source === "subscriptions"
     ? [
@@ -214,10 +266,28 @@ const sortOptions = computed(() =>
       ],
 );
 /** 趋势的时间窗（天） */
-const days = ref(7);
+const days = ref(savedView.days);
 const dayOptions = computed(() =>
-  [1, 7, 30, 90, 180, 365].map((value) => ({ value, label: t(`gallery.wpeSteamDiscoverDays${value}`) })),
+  DAY_VALUES.map((value) => ({ value, label: t(`gallery.wpeSteamDiscoverDays${value}`) })),
 );
+
+// 换了就记下；`relevance` 不记（记成上一个能记的排序，搜索时自动换上的相关度不覆盖用户选的排序）
+let rememberedSort = savedView.sort;
+watch([ratings, kinds, sort, days], () => {
+  const sorts: readonly string[] = props.source === "discover" ? DISCOVER_SORTS : SUBSCRIPTION_SORTS;
+  if (sorts.includes(sort.value)) rememberedSort = sort.value;
+  const view: SavedView = {
+    ratings: ratings.value,
+    kinds: kinds.value,
+    sort: rememberedSort,
+    days: days.value,
+  };
+  try {
+    localStorage.setItem(viewStorageKey, JSON.stringify(view));
+  } catch {
+    // 忽略
+  }
+});
 
 /** 输入框里的字；停 500 ms 或回车后才成为 `text` 去查 */
 const textInput = ref("");
@@ -256,7 +326,7 @@ watch(textInput, () => {
 const page = ref(1);
 const total = ref(0);
 const items = ref<WorkshopItem[]>([]);
-const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PER_PAGE)));
+const pageCount = computed(() => Math.min(MAX_PAGES, Math.max(1, Math.ceil(total.value / PER_PAGE))));
 const loading = ref(false);
 const error = ref<string | null>(null);
 
@@ -334,7 +404,8 @@ function toggle(item: WorkshopItem) {
   selectedIds.value = [...next];
 }
 
-const selectableOnPage = computed(() => items.value.filter((item) => item.supported));
+/** 「选中本页未下载」管的条目：本页能选、本地还没有的（已下载的、有更新的都不算） */
+const selectableOnPage = computed(() => items.value.filter((item) => item.supported && item.local === "missing"));
 const pageCheckState = computed<boolean | "indeterminate">(() => {
   const picked = selectableOnPage.value.filter((item) => selectedSet.value.has(item.id)).length;
   if (!picked) return false;

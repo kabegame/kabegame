@@ -39,7 +39,8 @@ const KIND_TAGS: [(&str, &str); 5] = [
 const SUPPORTED_KINDS: [&str; 3] = ["scene", "video", "web"];
 /// 工坊发现里固定排除的类型：导入不了（预设约 14 万条，程序壁纸只有 1 条）。
 const DISCOVER_EXCLUDED: [&str; 2] = ["Application", "Preset"];
-const STATE_FILE: &str = "kabegame_workshop.json";
+/// 条目状态文件；`project.rs` 也读它，从目录认出 Steam 下载的条目 id。
+const STATE_FILE: &str = crate::wpe::project::WORKSHOP_STATE_FILE;
 /// 一次 `GetUserFiles` / `GetDetails` 最多取多少条。
 const MAX_PER_PAGE: u32 = 100;
 

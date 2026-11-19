@@ -250,17 +250,39 @@ fn read_tags(value: &Value) -> Vec<String> {
     tags
 }
 
-/// 创意工坊目录里的壁纸可能不带 `workshopid`，回退用 `431960/<id>` 的目录名。
+/// 「从 Steam 导入」的条目状态文件，放在 `<WPE>/projects/myprojects/` 下，键是条目 id
+/// （写入方见 `wpe::steam::workshop`）。
+pub const WORKSHOP_STATE_FILE: &str = "kabegame_workshop.json";
+
+/// 壁纸目录的创意工坊 id。很多条目的 `project.json` 不带 `workshopid`，按目录回退：
+/// - Steam 订阅：`431960/<id>`；
+/// - Kabegame 从 Steam 下载的：`myprojects/<id>`，且 id 登记在同目录的 [`WORKSHOP_STATE_FILE`] 里
+///   （`myprojects` 里也有用户自己的工程，只看目录名会认错）。
 fn workshop_id_from_path(dir: &Path, value: &Value) -> Option<String> {
     if let Some(id) = read_string(value, "workshopid") {
         return Some(id);
     }
-    let parent = dir.parent()?.file_name()?.to_str()?;
+    let parent_dir = dir.parent()?;
+    let parent = parent_dir.file_name()?.to_str()?;
     let name = dir.file_name()?.to_str()?.trim();
-    if parent == "431960" && !name.is_empty() && name.chars().all(|ch| ch.is_ascii_digit()) {
+    if name.is_empty() || !name.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    if parent == "431960" {
+        return Some(name.to_string());
+    }
+    if parent.eq_ignore_ascii_case("myprojects") && listed_in_workshop_state(parent_dir, name) {
         return Some(name.to_string());
     }
     None
+}
+
+/// `id` 是否登记在 `myprojects` 目录的条目状态文件里；文件缺失或解析失败都当作没有。
+fn listed_in_workshop_state(myprojects: &Path, id: &str) -> bool {
+    std::fs::read(myprojects.join(WORKSHOP_STATE_FILE))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .is_some_and(|state| state.get("items").and_then(|items| items.get(id)).is_some())
 }
 
 /// 解析一个壁纸目录；`dir` 由调用方保证已存在。
@@ -404,6 +426,45 @@ mod tests {
         assert_eq!(project.workshop_id.as_deref(), Some("2725770343"));
         // 预览缺失归为 None，不影响导入。
         assert_eq!(project.preview, None);
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn workshop_id_from_steam_download_in_myprojects() {
+        let root = temp_dir("myprojects");
+        let myprojects = root.join("myprojects");
+        let write_project = |name: &str| {
+            let dir = myprojects.join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("entry.mp4"), b"x").unwrap();
+            fs::write(
+                dir.join(WPE_PROJECT_FILE),
+                r#"{"file":"entry.mp4","title":"T","type":"video"}"#,
+            )
+            .unwrap();
+            dir
+        };
+        let listed = write_project("3839120398");
+        let unlisted = write_project("123456");
+        let named = write_project("my-own");
+
+        // 没有状态文件：数字目录也不认
+        assert_eq!(read_project(&listed).unwrap().workshop_id, None);
+
+        fs::write(
+            myprojects.join(WORKSHOP_STATE_FILE),
+            r#"{"items":{"3839120398":{"manifestId":"1","files":{},"tags":[],"updatedAt":0}}}"#,
+        )
+        .unwrap();
+        let project = read_project(&listed).expect("project should parse");
+        assert_eq!(project.workshop_id.as_deref(), Some("3839120398"));
+        assert_eq!(
+            project.workshop_url().as_deref(),
+            Some("https://steamcommunity.com/sharedfiles/filedetails/?id=3839120398")
+        );
+        // 不在状态里的数字目录、非数字目录都不认
+        assert_eq!(read_project(&unlisted).unwrap().workshop_id, None);
+        assert_eq!(read_project(&named).unwrap().workshop_id, None);
         fs::remove_dir_all(root).ok();
     }
 

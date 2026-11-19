@@ -93,7 +93,7 @@
   "wpeSteamSubsRatingMature": "Mature",
   "wpeSteamSubsSortUpdated": "Recently updated",
   "wpeSteamSubsSortSubscribed": "Recently subscribed",
-  "wpeSteamSubsSelectPage": "Select this page",
+  "wpeSteamSubsSelectPage": "Select not downloaded on this page",
   "wpeSteamSubsSelectAll": "All {n}",
   "wpeSteamSubsSelected": "{n} selected",
   "wpeSteamSubsLocalCurrent": "Downloaded",
