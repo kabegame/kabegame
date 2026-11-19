@@ -201,11 +201,11 @@ fn wpe_import_plugin() -> Plugin {
     builtin_plugin(
         WPE_IMPORT_PLUGIN_ID,
         json!({
-            "default": "Wallpaper Engine",
-            "zh": "壁纸导入",
-            "zhtw": "桌布匯入",
-            "ja": "壁紙インポート",
-            "ko": "월페이퍼 가져오기",
+            "default": "Wallpaper Engine wallpapers",
+            "zh": "Wallpaper Engine 壁纸",
+            "zhtw": "Wallpaper Engine 桌布",
+            "ja": "Wallpaper Engine 壁紙",
+            "ko": "Wallpaper Engine 배경화면",
         }),
         json!({
             "default": "Import Wallpaper Engine wallpapers from this computer or from your Steam Workshop subscriptions",

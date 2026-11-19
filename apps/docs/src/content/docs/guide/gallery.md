@@ -300,10 +300,10 @@ description: 画廊页的完整操作说明——查询与过滤、排序分页�
 
 「开始收集」只有两项：**本地**和**网络**，具体来源在对话框顶部切换，下次打开会停在上次用的来源：
 
-- 本地：「文件夹」（下面这张表）、「WPE 壁纸」（本机的 Wallpaper Engine 壁纸目录，见 [Wallpaper Engine 壁纸](/guide/wallpaper-engine/)）。
+- 本地：「文件夹」（下面这张表）、「Wallpaper Engine 壁纸」（本机的 Wallpaper Engine 壁纸目录，见 [Wallpaper Engine 壁纸](/guide/wallpaper-engine/)）。
 - 网络：「插件」（见[插件使用](/guide/plugins-usage/)）、「网页」（收集一个网页上的图片和视频）、「Steam」（从创意工坊下载壁纸）。
 
-Web 版只有网络里的插件；Android 没有「WPE 壁纸」和「Steam」，本地导入直接打开系统的图片 / 文件夹选择器。
+Web 版只有网络里的插件；Android 没有「Wallpaper Engine 壁纸」和「Steam」，本地导入直接打开系统的图片 / 文件夹选择器。
 
 ![本地导入对话框](../../../assets/screenshots/gallery/local-import.png)
 

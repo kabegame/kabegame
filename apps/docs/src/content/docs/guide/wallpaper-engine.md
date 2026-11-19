@@ -3,9 +3,9 @@ title: Wallpaper Engine 壁纸
 description: 把 Wallpaper Engine 壁纸导入 Kabegame，并自己准备场景壁纸需要的资源。
 ---
 
-Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视频、网页、场景三类。WPE 是 Steam 上的付费应用，Kabegame 不附带它的文件。
+Kabegame 能导入 Wallpaper Engine 的壁纸目录，支持视频、网页、场景三类。Wallpaper Engine 是 Steam 上的付费应用，Kabegame 不附带它的文件。
 
-视频和网页壁纸导入即可，场景壁纸还要读 WPE 的内置资源。如果你用的是 macOS、Linux，或者不想在这台电脑上装 WPE，需要自己把这些资源放到本机，做法见[拿到 WPE 资源](#拿到-wpe-资源)。各平台能做什么见[平台差异](#平台差异)。
+视频和网页壁纸导入即可，场景壁纸还要读 Wallpaper Engine 的内置资源。如果你用的是 macOS、Linux，或者不想在这台电脑上装 Wallpaper Engine，需要自己把这些资源放到本机，做法见[拿到 Wallpaper Engine 资源](#拿到-wallpaper-engine-资源)。各平台能做什么见[平台差异](#平台差异)。
 
 ---
 
@@ -13,7 +13,7 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 
 入口在画廊顶栏的「开始收集」，有两处：
 
-- **本地 → WPE 壁纸**：自动列出本机 Steam 库里的来源：「创意工坊订阅」「官方默认壁纸」「我的项目」。也可以点「添加文件夹」选任意文件夹，然后点「开始导入」。已导入的壁纸会自动跳过。
+- **本地 → Wallpaper Engine 壁纸**：自动列出本机 Steam 库里的来源：「创意工坊订阅」「官方默认壁纸」「我的项目」。也可以点「添加文件夹」选任意文件夹，然后点「开始导入」。已导入的壁纸会自动跳过。
 - **网络 → Steam**：登录 Steam 账号，从你的创意工坊订阅里挑，或者浏览、搜索整个创意工坊，下载并导入，不用装 Steam。见下一节。
 
 「本地」「网络」对话框顶部可以切换来源，下次打开会停在上次用的来源。
@@ -25,7 +25,7 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 ### 从 Steam 导入创意工坊壁纸
 
 1. 在「开始收集」里选「网络」，对话框顶部的来源切到「Steam」。
-2. 登录购买了 WPE 的 Steam 账号，二选一：
+2. 登录购买了 Wallpaper Engine 的 Steam 账号，二选一：
    - **扫码**：打开 Steam 手机 App 的「Steam 令牌 → 扫描二维码」，扫对话框里的二维码，再在手机上确认。不需要输密码。
    - **账号密码**：输入账号和密码。需要邮箱验证码或 Steam 令牌验证码时，对话框里会出现输入框；开着手机确认的账号在手机上点确认即可。
 3. 登录后下面出现「选择壁纸」，有两个页签，一页 20 条，勾选的壁纸两个页签合在一起导入：
@@ -35,7 +35,7 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 
 说明：
 
-- 壁纸下载到「Wallpaper Engine 目录」下的 `projects/myprojects/<条目编号>`。设置里还没有 WPE 目录时，任务会先把 WPE 本身下载下来（见[方法一](#方法一在-kabegame-里从-steam-下载推荐)）。
+- 壁纸下载到「Wallpaper Engine 目录」下的 `projects/myprojects/<条目编号>`。设置里还没有 Wallpaper Engine 目录时，任务会先把 Wallpaper Engine 本身下载下来（见[方法一](#方法一在-kabegame-里从-steam-下载推荐)）。
 - 列表里标着「已下载」的壁纸再导入时不会重新下载；标着「有更新」的只下载变化的部分。标着「不支持」的是程序壁纸或预设，Kabegame 导入不了，不能勾选。
 - 订阅很多时注意磁盘空间，每条的大小写在列表里。
 - 密码只用于这次登录，不会保存。Kabegame 保存的是登录凭证，有效期内再打开对话框会显示「以 <账号> 继续」，不用重新登录。要收回授权，在 Steam 的「已授权的设备」里删掉 Kabegame。
@@ -44,7 +44,7 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 
 ### 其它导入方式
 
-除了「壁纸」入口，下面几种方式遇到 WPE 壁纸目录时，也会把整个目录作为一张壁纸导入，不会把里面的预览图和视频拆成一张张图片：
+除了「壁纸」入口，下面几种方式遇到 Wallpaper Engine 壁纸目录时，也会把整个目录作为一张壁纸导入，不会把里面的预览图和视频拆成一张张图片：
 
 - **本地导入**：在「开始收集 → 本地」的「文件夹」来源里添加，或把文件夹拖进主窗口。选中的文件夹本身是壁纸目录，或者它下面某一层是壁纸目录，都能识别。
 - **文件夹画册**：同步目录里的壁纸目录会出现在这个画册里，不会为它另建子画册。旧版本已经为它建了子画册的目录保持原样。已经同步过的文件夹里原有的壁纸目录，要等这个文件夹下次有变化时才会被识别。
@@ -52,7 +52,7 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 
 ### 从另一台电脑复制壁纸
 
-没法在这台电脑上装 WPE（比如 macOS）时，可以把另一台电脑上已经导入 Kabegame 的壁纸传过来：
+没法在这台电脑上装 Wallpaper Engine（比如 macOS）时，可以把另一台电脑上已经导入 Kabegame 的壁纸传过来：
 
 1. 在源电脑（通常是 Windows）的 Kabegame 里，到「设置 → 高级」开启 Web 服务器。两台电脑的 Kabegame 都需要 4.7.0 或更高版本。
 2. 在这台电脑上安装「Kabegame 服务器」插件，「服务器地址」填源电脑的地址（如 `http://192.168.1.10:7490`），然后开始收集。只想复制壁纸时，用「过滤」模式并在源电脑的「高级查询」里把类型选成 Wallpaper Engine。
@@ -79,16 +79,16 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 
 ---
 
-## 哪些情况需要 WPE 资源
+## 哪些情况需要 Wallpaper Engine 资源
 
 只有**场景壁纸**需要，视频和网页壁纸不需要。
 
-场景壁纸要读 WPE 安装目录里的内置资源，主要是 `assets` 目录（内置着色器、effect、材质等）。读不到时，场景壁纸显示预览图。
+场景壁纸要读 Wallpaper Engine 安装目录里的内置资源，主要是 `assets` 目录（内置着色器、effect、材质等）。读不到时，场景壁纸显示预览图。
 
 | 你的情况 | 要做什么 |
 |---|---|
-| 在 Windows 上通过 Steam 安装了 WPE | 什么都不用做，Kabegame 自动找到 |
-| 在 macOS、Linux 上，或者不想在这台电脑上装 WPE | 在 Kabegame 里从 Steam 下载（推荐），或自己把资源放到本机，见下文 |
+| 在 Windows 上通过 Steam 安装了 Wallpaper Engine | 什么都不用做，Kabegame 自动找到 |
+| 在 macOS、Linux 上，或者不想在这台电脑上装 Wallpaper Engine | 在 Kabegame 里从 Steam 下载（推荐），或自己把资源放到本机，见下文 |
 
 :::note
 场景壁纸目前只能渲染一小部分。用到尚未支持的特性时（例如文字、粒子、声音）显示作者的预览图，这是正常现象。
@@ -96,27 +96,27 @@ Kabegame 能导入 Wallpaper Engine（下称 WPE）的壁纸目录，支持视�
 
 ---
 
-## 拿到 WPE 资源
+## 拿到 Wallpaper Engine 资源
 
 :::caution[付费与版权前提]
-WPE 是 Steam 上的付费应用（app id 431960）。Kabegame 不附带它的文件，只能用你自己已购买的 Steam 账号下载。
+Wallpaper Engine 是 Steam 上的付费应用（app id 431960）。Kabegame 不附带它的文件，只能用你自己已购买的 Steam 账号下载。
 
-默认壁纸（比如 Razer Bedroom）是 WPE 自带的，不是创意工坊条目，没有单独的公开下载。
+默认壁纸（比如 Razer Bedroom）是 Wallpaper Engine 自带的，不是创意工坊条目，没有单独的公开下载。
 
 不要用第三方转存包：那是付费软件里的内容，来源也不可靠。
 :::
 
 ### 方法一：在 Kabegame 里从 Steam 下载（推荐）
 
-按上文[从 Steam 导入创意工坊壁纸](#从-steam-导入创意工坊壁纸)导入任意一张壁纸。设置里还没有「Wallpaper Engine 目录」时，任务会先把 WPE 下载到 Kabegame 的数据目录，并自动写进这项设置。
+按上文[从 Steam 导入创意工坊壁纸](#从-steam-导入创意工坊壁纸)导入任意一张壁纸。设置里还没有「Wallpaper Engine 目录」时，任务会先把 Wallpaper Engine 下载到 Kabegame 的数据目录，并自动写进这项设置。
 
 说明：
 
-- 第一次下载约 380 MB，占用约 800 MB 磁盘。之后每次从 Steam 导入都会顺带检查 WPE 有没有更新，只下载有变化的文件。
-- 设置里已经有「Wallpaper Engine 目录」（比如 Windows 上 Steam 装的 WPE）时不会下载，从 Steam 导入的壁纸放进那个目录。想改用下载的版本，先到设置的壁纸分区点「恢复默认」清空。
-- 官方默认壁纸不会自动导入。WPE 下载好之后，在对话框的「本机」来源里勾「官方默认壁纸」导入。
+- 第一次下载约 380 MB，占用约 800 MB 磁盘。之后每次从 Steam 导入都会顺带检查 Wallpaper Engine 有没有更新，只下载有变化的文件。
+- 设置里已经有「Wallpaper Engine 目录」（比如 Windows 上 Steam 装的 Wallpaper Engine）时不会下载，从 Steam 导入的壁纸放进那个目录。想改用下载的版本，先到设置的壁纸分区点「恢复默认」清空。
+- 官方默认壁纸不会自动导入。Wallpaper Engine 下载好之后，在对话框的「本机」来源里勾「官方默认壁纸」导入。
 
-### 方法二：从装了 WPE 的 Windows 电脑复制
+### 方法二：从装了 Wallpaper Engine 的 Windows 电脑复制
 
 Steam 上的默认位置是 `<Steam 库>\steamapps\common\wallpaper_engine\`，例如 `D:\Applications\Steam\steamapps\common\wallpaper_engine\`。
 
@@ -127,7 +127,7 @@ wallpaper_engine/
 ├── assets/                    # 必需：内置着色器、effect 等
 ├── projects/defaultprojects/  # 可选：官方默认壁纸；导入它之后 Kabegame 能自动定位这个目录
 ├── locale/                    # 可选：壁纸属性里内置文字的翻译
-└── config.json                # 可选：「场景后处理」选「跟随 WPE」时读取
+└── config.json                # 可选：「场景后处理」选「跟随 Wallpaper Engine」时读取
 ```
 
 各项缺失的后果：
@@ -137,13 +137,13 @@ wallpaper_engine/
 | `assets/` | 必需 | 场景壁纸显示预览图 |
 | `projects/defaultprojects/` | 可选 | 没有官方默认壁纸；要在设置里手动指定目录 |
 | `locale/` | 可选 | 壁纸属性里的部分文字显示成 `ui_` 开头的键名 |
-| `config.json` | 可选 | 「跟随 WPE」时视为关闭后处理。这个文件运行过 WPE 才有，直接下载的版本没有它 |
+| `config.json` | 可选 | 「跟随 Wallpaper Engine」时视为关闭后处理。这个文件运行过 Wallpaper Engine 才有，直接下载的版本没有它 |
 
 创意工坊壁纸在 `<Steam 库>\steamapps\workshop\content\431960\`，要用的话也复制过来，放在别处也行，用「添加文件夹」导入。它们和默认壁纸共用同一份 `assets`。
 
 ### 方法三：用 DepotDownloader 手动下载
 
-[DepotDownloader](https://github.com/SteamRE/DepotDownloader) 是开源命令行工具，可以用你自己已购买 WPE 的 Steam 账号，在其它系统上下载 Windows 版文件。
+[DepotDownloader](https://github.com/SteamRE/DepotDownloader) 是开源命令行工具，可以用你自己已购买 Wallpaper Engine 的 Steam 账号，在其它系统上下载 Windows 版文件。
 
 :::caution
 运行时会要求输入 Steam 密码和令牌验证码。这是第三方工具，请自行判断是否使用。
@@ -161,7 +161,7 @@ brew tap steamre/tools && brew install depotdownloader
 depotdownloader -app 431960 -os windows -username <你的账号> -dir ~/wpe/wallpaper_engine
 ```
 
-- `-os windows` 不能省，WPE 只有 Windows 版。
+- `-os windows` 不能省，Wallpaper Engine 只有 Windows 版。
 - 下载的是完整的 Windows 版文件，已经包含 `assets`、`projects/defaultprojects`、`locale`，**没有** `config.json`。
 
 ### 目录要求
@@ -176,7 +176,7 @@ depotdownloader -app 431960 -os windows -username <你的账号> -dir ~/wpe/wall
 
 ## 放好之后
 
-1. 在画廊的「开始收集」里选「本地」，切到「WPE 壁纸」，点「添加文件夹」，选 `wallpaper_engine/projects/defaultprojects`，再点「开始导入」。
+1. 在画廊的「开始收集」里选「本地」，切到「Wallpaper Engine 壁纸」，点「添加文件夹」，选 `wallpaper_engine/projects/defaultprojects`，再点「开始导入」。
 2. 导入后打开一张场景壁纸的预览。Kabegame 会自动找到目录并写入设置，不用重启。
 
 如果没有导入任何该目录下的壁纸（比如只复制了 `assets`），到设置的壁纸分区手动选择「Wallpaper Engine 目录」。
@@ -206,7 +206,7 @@ depotdownloader -app 431960 -os windows -username <你的账号> -dir ~/wpe/wall
 | Windows | 支持 | 支持（窗口模式） | 网页壁纸有音频与媒体数据，可响应桌面鼠标 |
 | macOS | 支持 | 支持（窗口模式） | 网页与场景壁纸有音频数据（macOS 14.2 起，第一次会请求「录制系统音频」权限），没有媒体数据；桌面上不能交互 |
 | Linux | 支持 | 不支持，只能预览和用作应用内背景 | 网页壁纸没有音频与媒体数据；系统不支持 WebGPU 时场景显示预览图 |
-| Android / Web 版 | 不能导入 | 不支持 | 已有的 WPE 壁纸只显示预览图 |
+| Android / Web 版 | 不能导入 | 不支持 | 已有的 Wallpaper Engine 壁纸只显示预览图 |
 
 ---
 

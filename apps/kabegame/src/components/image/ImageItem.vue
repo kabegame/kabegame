@@ -254,11 +254,11 @@ const WPE_KIND_KEYS: Record<string, string> = {
   web: "gallery.wpeKindWeb",
   scene: "gallery.wpeKindScene",
 };
-/** 角标文案：视频沿用「WPE · 视频」，其它类型按种类映射（「WPE · 网页」）。 */
+/** 角标文案：视频沿用「Wallpaper Engine · 视频」，其它类型按种类映射（「Wallpaper Engine · 网页」）。 */
 const wpeBadgeText = computed(() => {
   if (isWpeVideo.value) return t("gallery.wpeVideoBadge");
   const key = WPE_KIND_KEYS[wpeKind(props.image.type) ?? ""];
-  return key ? `WPE · ${t(key)}` : "WPE";
+  return key ? `Wallpaper Engine · ${t(key)}` : "Wallpaper Engine";
 });
 
 /**
