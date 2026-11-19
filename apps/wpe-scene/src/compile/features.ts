@@ -1048,7 +1048,8 @@ const hex = (value: number) => `0x${(value >>> 0).toString(16)}`;
 
 /**
  * 一个 mdl 文件（`mdl.ts` 的 `parseMdl`，P5c 步骤 1）还不支持的用法。静态网格（无段或只有不认识的段、无木偶数据）都不报。
- * - `mdl:truncated`：读越界（语料 0 个，WPE 的读取原语越界返回 0，不猜）；
+ * - `mdl:truncated`：读越界（语料 0 个，WPE 的读取原语越界返回 0，不猜）；段表结尾缺空标签、段末超出文件不算（WPE 当段表结束，
+ *   `MdlReader.tag`，3840815204）；
  * - `mdl:section:<标签>`：`MDLS` / `MDLA` / `MDMP` / `MDAT` 段没恰好读到段末（格式错误，WPE 读进下一段或终止进程，语料 0 处）；
  * - 骨骼、动画层、变形目标、挂点段本身不报（P12b2-1：模型对象的骨骼由 `compile/puppet.ts` 的 `buildModelSkeleton` 整理，用法报 `puppet:*` / `mdl:morph:*`；
  *   没有 `MDLS` 时 WPE 不建骨骼运行时，这些段都不读，中性；`MDLE` 模型不读，中性，rea-texchan-model 7.3）；

@@ -331,7 +331,10 @@ export const MAX_BONES = 0x80;
 /** 并集退化时的包围盒（`0xc8000000` / `0x48000000`，rea 1.6）：等于不剔除。 */
 const UNBOUNDED = [-131072, -131072, -131072, 131072, 131072, 131072];
 
-/** 读越界：WPE 的读取原语这时返回 0 / 空串（rea 1.1），语料全部恰好读到末尾、没有截断的样本，所以不猜，整个文件报截断。 */
+/**
+ * 读越界：WPE 的读取原语这时返回 0 / 空串 / 空指针（rea 1.1），之后带着这些值往下读，语料没有这样的样本，所以不猜，整个文件报截断。
+ * 例外是段表的结尾（`MdlReader.tag`、段末超出文件），那里 WPE 的行为是确定的「段表结束」，照做、不算截断。
+ */
 class Truncated extends Error {}
 
 /** 段内容不合格式（WPE 在这里 `int 0x29` 终止进程，或行为未定义；语料 0 处）：只记这一段（`sectionIssues`）。 */
@@ -395,7 +398,21 @@ class MdlReader {
     new Uint8Array(out.buffer).set(this.bytes.subarray(at, at + n));
     return out;
   }
-  /** 以 `\0` 结尾的字符串；到文件末尾还没有 `\0` 算越界。 */
+  /**
+   * 段标签（`FUN_14009c500`，段循环在 `0x1402623d8` 与循环尾的内联副本）：只在文件末尾之前找 `\0`；找不到（正好在文件末尾，或标签
+   * 只写了半截）时 WPE 不读越界字节、返回空串，段表随之结束（3840815204 的 mdl 最后一段直接顶到文件末尾，没有结尾的空标签）。
+   */
+  tag(): string {
+    const end = this.bytes.indexOf(0, this.pos);
+    if (end < 0) {
+      this.pos = this.bytes.length;
+      return "";
+    }
+    const text = new TextDecoder().decode(this.bytes.subarray(this.pos, end));
+    this.pos = end + 1;
+    return text;
+  }
+  /** 以 `\0` 结尾的字符串；到文件末尾还没有 `\0` 算越界（段标签另见 `tag`）。 */
   cstr(): string {
     const end = this.bytes.indexOf(0, this.pos);
     if (end < 0) throw new Truncated();
@@ -432,7 +449,8 @@ function atoi(text: string): number {
  * - 每个网格：皮肤数个材质路径；v ≥ 4 时 u32 标志，标志 bit1 时多一个 u32（含义未读，`p5c-ver` 的 B1 照常显示）；v ≥ 17 时 6 个 f32
  *   包围盒；v ≥ 15 时 u32 格式；顶点块、索引块；v ≥ 21 时两个可选块（u8 为真时才有）；v ≥ 23 时记录表；
  * - v > 12 时尾部段：标签串 + u32 段末绝对偏移 + 数据，下一个标签从段末读，所以不认识的段整段跳过（`p5c-ver` 的 S14 / S23），
- *   读到空标签结束。段末不在当前位置与文件末尾之间时算越界（WPE 把读取上限设成 `min(段末, 文件长)`，倒退的段末会重读，不猜）。
+ *   读到空标签结束；文件末尾之前找不到 `\0` 也当空标签（`MdlReader.tag`）。WPE 的读取上限始终是文件长，段末只决定下一个标签从哪读
+ *   （`FUN_140261770` 写读取器的 `[3]` = 起点 + min(段末, 文件长)）：超出文件的段末夹到文件末尾；倒退的段末 WPE 会重读，不猜、算越界。
  *   `MDLS`、`MDLA`（只比前 4 个字符，版本 = `atoi(标签 + 4)`，rea-p12-mdl 1.1、4.1）读出内容（`readSkeleton` / `readAnimations`），
  *   读完核对恰好到段末，不一致只记进 `sectionIssues`；无论读成怎样，下一个标签都从段头写的段末读（同 WPE）。
  */
@@ -514,11 +532,14 @@ export function parseMdl(bytes: Uint8Array): MdlFile {
     file.bounds = unionBounds(file.meshes);
     if (version > 12)
       for (;;) {
-        const tag = reader.cstr();
+        const tag = reader.tag();
         if (!tag) break;
         file.sections.push(tag);
-        const end = reader.u32();
-        if (end < reader.pos || end > bytes.length) throw new Truncated();
+        // 段末（`FUN_140261770`）：WPE 只把下一个标签的位置设成 min(段末, 文件长)，读取上限始终是文件长，所以超出文件的段末夹到文件
+        // 末尾、段内容照读，之后读到空标签结束。段末不够 4 字节（WPE 回到文件起点重读标签）或倒退（WPE 回头重读，可能反复读同一段），
+        // 语料 0 处，不复刻、报截断
+        const end = Math.min(reader.u32(), bytes.length);
+        if (end < reader.pos) throw new Truncated();
         readSection(reader, tag, end, file);
         reader.pos = end;
       }

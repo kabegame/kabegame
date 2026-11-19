@@ -516,7 +516,9 @@ describe("checkMdlFeatures：mdl 的细分键", () => {
 
   it("截断、木偶数据、多余的标志位、表外或重复语义的格式", () => {
     const bytes = mdl(quad());
-    expect(keys(bytes.subarray(0, bytes.length - 1))).toEqual(["mdl:truncated"]);
+    // 只少结尾的空标签不算截断（WPE 读到空串，段表结束）；再往前截才是
+    expect(keys(bytes.subarray(0, bytes.length - 1))).toEqual([]);
+    expect(keys(bytes.subarray(0, bytes.length - 2))).toEqual(["mdl:truncated"]);
     expect(keys(mdl(quad({ records: 1 })))).toEqual(["mdl:puppet"]);
     // bit10（MORPHING_NORMALS）与 bit11（切线差，有变形目标时由 buildModelSkeleton 报 mdl:morph:tangent）自 P12b2-1 起不在这里报
     expect(keys(mdl(quad({ flags: 0xc00 })))).toEqual([]);

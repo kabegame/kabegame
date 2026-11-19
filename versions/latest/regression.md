@@ -3144,6 +3144,16 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | 语料 | Node（`kbp corpus scan`） | 全库扫描；`3841310696`（myprojects）单独按目录扫 | `3554161528` 干净；`3841310696` 只剩 `puppet:draw-order` | 2026-11-19 Claude：符合 |
 | [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3554161528 | 不退回预览图；开场推镜的节奏和 Wallpaper Engine 里一样 | |
 
+## 场景壁纸 mdl 段表结尾缺空标签不再报截断（P5c 补修）
+
+2026-11-19。mdl 段表的结尾照 WPE（`FUN_14009c500` 越界返回空串、`FUN_140261770` 只定下一个标签的位置）：标签在文件末尾之前找不到 `\0` 当空标签结束段表，段末超出文件夹到文件末尾；别的读越界照旧报 `mdl:truncated`。读码更正见 `.claude/plans/wpe-import/3-scene/phase5/rea-p5-mesh.md` 1.1、1.7。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | 3840815204 | Node（`kbp corpus scan --project`，myprojects） | 扫原工程 | 不再报 `mdl:truncated`，没有不支持项 | 2026-11-19 Claude：`[]`；它的 `layer_5_puppet.mdl` 最后一段 `MDLA0006` 顶到文件末尾（4800852 字节），没有结尾的空标签 |
+| [x] | 语料不受影响 | Node（`kbp corpus scan`，233 张；mdl 单测带 `KABEGAME_WPE_ROOT`） | 全库扫描对 P5h 时的结果 diff；语料 mdl 逐个解析 | 没有新增的键；语料 mdl 都不截断 | 2026-11-19 Claude：新增 0，去掉的键都来自别的步骤；mdl 相关 188 个用例全过 |
+| [ ] | 真实观感 | Windows dev，图库预览与桌面 | 打开 3840815204 | 不退回预览图；人偶的动画和 Wallpaper Engine 里一样 | |
+
 ## 场景壁纸透视相机矩阵逐步 float32（P5d 补修）
 
 2026-11-15。透视场景的相机路径插值、lookAt、透视投影（含 DirectXMath `XMScalarSinCos` 多项式）照汇编逐步 float32。计划与实施记录见 `phase-5d-camera-depth.md`「补修：透视相机矩阵逐步 float32」。

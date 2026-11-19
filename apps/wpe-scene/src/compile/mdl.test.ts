@@ -293,29 +293,53 @@ describe("parseMdl：尾部段（rea 1.7）", () => {
   });
 });
 
-describe("parseMdl：截断（读越界，WPE 的原语返回 0，不猜）", () => {
-  it("v ≥ 13 缺结尾的空标签", () => {
+describe("parseMdl：段表的结尾（FUN_14009c500 越界返回空串、FUN_140261770 只定下一个标签的位置）", () => {
+  it("v ≥ 13 缺结尾的空标签：文件末尾读到空串，段表结束，不算截断（3840815204）", () => {
     const file = parseMdl(encodeMdl(23, [quad()], { final: false }));
-    expect(file.truncated).toBe(true);
-    // 已读出的网格照留
+    expect(file).toMatchObject({ truncated: false, sections: [] });
     expect(file.meshes).toHaveLength(1);
+    // 最后一段直接顶到文件末尾（3840815204 的 MDLA0006）：段照记，段表结束
+    const last = parseMdl(encodeMdl(23, [quad()], { sections: [["ZZZZ0001", new Uint8Array(4)]], final: false }));
+    expect(last).toMatchObject({ truncated: false, sections: ["ZZZZ0001"] });
   });
 
-  it("顶点块、索引块、文件头被截断", () => {
-    const bytes = encodeMdl(14, [quad()]);
-    for (const cut of [4, 12, 40, 60, bytes.length - 8]) expect(parseMdl(bytes.subarray(0, cut)).truncated).toBe(true);
-    expect(parseMdl(bytes).truncated).toBe(false);
+  it("标签只写了半截（文件末尾之前没有 \\0）：WPE 同样返回空串，段表结束、半截标签不记", () => {
+    const bytes = encodeMdl(23, [quad()], { sections: [["ZZZZ0001", new Uint8Array(4)]], final: false });
+    const half = new Uint8Array(bytes.length + 3);
+    half.set(bytes);
+    half.set(new TextEncoder().encode("MDL"), bytes.length);
+    expect(parseMdl(half)).toMatchObject({ truncated: false, sections: ["ZZZZ0001"] });
   });
 
-  it("段末超出文件或倒退", () => {
+  it("段末超出文件：夹到文件末尾，段内容照读，之后段表结束", () => {
     const valid = encodeMdl(23, [quad()], { sections: [["ZZZZ0001", new Uint8Array(4)]] });
     const at = valid.length - 1 - 4 - 4; // 段末偏移所在处
     const beyond = valid.slice();
     new DataView(beyond.buffer).setUint32(at, valid.length + 10, true);
-    expect(parseMdl(beyond).truncated).toBe(true);
+    expect(parseMdl(beyond)).toMatchObject({ truncated: false, sections: ["ZZZZ0001"] });
+  });
+});
+
+describe("parseMdl：截断（读越界，WPE 的原语返回 0，不猜）", () => {
+  it("顶点块、索引块、文件头被截断", () => {
+    const bytes = encodeMdl(14, [quad()]);
+    for (const cut of [4, 12, 40, 60, bytes.length - 8]) expect(parseMdl(bytes.subarray(0, cut)).truncated).toBe(true);
+    expect(parseMdl(bytes).truncated).toBe(false);
+    // 已读出的网格照留
+    const two = encodeMdl(14, [quad(), quad()]);
+    const cut = parseMdl(two.subarray(0, two.length - 8));
+    expect(cut.truncated).toBe(true);
+    expect(cut.meshes).toHaveLength(1);
+  });
+
+  it("段末倒退（WPE 回头重读）、标签后面不够 4 字节放段末（WPE 回到文件起点重读）", () => {
+    const valid = encodeMdl(23, [quad()], { sections: [["ZZZZ0001", new Uint8Array(4)]] });
+    const at = valid.length - 1 - 4 - 4; // 段末偏移所在处
     const backwards = valid.slice();
     new DataView(backwards.buffer).setUint32(at, 3, true);
     expect(parseMdl(backwards).truncated).toBe(true);
+    const short = valid.subarray(0, at + 2);
+    expect(parseMdl(short)).toMatchObject({ truncated: true, sections: ["ZZZZ0001"] });
   });
 });
 
