@@ -3,7 +3,6 @@
  * 平移表照 rea-p6b-layout 3.4；`E0..E3` 的例子取 rea-p6e-sheet 8.2（`edges.py`，场景 1920×1080）；世界空间照 `p6e-anchor2` 的实测。
  */
 import { describe, expect, it } from "vitest";
-import { checkTextOptions } from "../compile/features";
 import {
   ALIGNMENT_OF_STYLE,
   alignEdges,
@@ -225,25 +224,5 @@ describe("光标命中：文本矩阵带 anchor 平移", () => {
     expect(hit(400, 400)).toBe(true);
     expect(hit(400, 400, E)).toBe(false);
     expect(hit(500, 400, E)).toBe(true);
-  });
-});
-
-describe("features：anchor 九种取值都不报", () => {
-  it("checkTextOptions", () => {
-    const out = new Set<string>();
-    for (const anchor of [
-      "none",
-      "center",
-      "top",
-      "topright",
-      "right",
-      "bottomright",
-      "bottom",
-      "bottomleft",
-      "left",
-      "topleft",
-    ])
-      checkTextOptions({ msdf: false, outline: false, blur: false, dropshadow: false, anchor }, out);
-    expect([...out]).toEqual([]);
   });
 });

@@ -54,3 +54,7 @@
 	path = third/harfbuzz
 	url = https://github.com/harfbuzz/harfbuzz.git
 	shallow = true
+[submodule "third/msdfgen"]
+	path = third/msdfgen
+	url = https://github.com/Chlumsky/msdfgen.git
+	shallow = true

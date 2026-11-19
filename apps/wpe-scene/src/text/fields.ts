@@ -10,8 +10,39 @@
  *   （`12` → `"12"`），枚举再查表、查不到取表里第一项。
  * 数字、向量两侧相同；布尔位脚本侧只收布尔（类型 6），属性侧照编译期的 `=== true`。
  */
-import type { TextRuntimeField } from "../compile/bindings";
+import type { TextDecorField, TextRuntimeField } from "../compile/bindings";
 import { numbers, type SceneScalar } from "../compile/model";
+
+/**
+ * MSDF 的装饰参数（P6f，rea-p6b-raster 6）：开关三个（编译期定，绑属性走重编译，运行中不变）加七个参数（绑属性就地写，不重排）。
+ * 不开 MSDF 时整份不读。生效值（`outline ? max(厚度, 1) : 0` 等）在 `render/uniforms.ts` 的 `msdfRenderVars` 里算，这里存的是对象字段原值。
+ */
+export interface TextDecor {
+  outline: boolean;
+  blur: boolean;
+  dropshadow: boolean;
+  outlinecolor: readonly [number, number, number];
+  outlinethickness: number;
+  blursize: number;
+  dropshadowcolor: readonly [number, number, number];
+  dropshadowopacity: number;
+  dropshadowsize: number;
+  dropshadowoffset: readonly [number, number];
+}
+
+/** 装饰参数的 WPE 缺省值（rea-p6b-raster 6：打开开关但不写参数时）。 */
+export const TEXT_DECOR_DEFAULTS: TextDecor = {
+  outline: false,
+  blur: false,
+  dropshadow: false,
+  outlinecolor: [0, 0, 0],
+  outlinethickness: 4,
+  blursize: 6,
+  dropshadowcolor: [0, 0, 0],
+  dropshadowopacity: 1,
+  dropshadowsize: 6,
+  dropshadowoffset: [4, 4],
+};
 
 /** 排版用到的文本对象字段（rea-p6b-layout 1.2），外加决定 `padding` 的两项图层状态。 */
 export interface TextFields {
@@ -33,6 +64,13 @@ export interface TextFields {
   visibleEffects: number;
   /** `colorBlendMode`：0、31 以外的值也走合成（WPE `+0x304 & 0x10`）。 */
   colorBlendMode: number;
+  /**
+   * 走 MSDF 画法（P6f，WPE `O+0x518 != 0`）：`msdf`、`outline`、`blur`、`dropshadow` 四个开关里任意一个开着。由编译期按这四个开关算出，
+   * 不是对象字段；决定字体键（`<路径>_msdf`）、图集格式（RGBA8）与四边形外扩。四个开关绑属性时改它走对象级重编译，运行中不变。
+   */
+  msdf: boolean;
+  /** MSDF 的装饰（P6f）：只在 `msdf` 为真时读；参数绑属性时就地改（`SceneState.writeTextDecor`），不触发重排。 */
+  decor: TextDecor;
 }
 
 /** WPE 的缺省值（构造 `FUN_140256ae0`）。 */
@@ -53,10 +91,36 @@ export const TEXT_DEFAULTS: TextFields = {
   verticalalign: "center",
   visibleEffects: 0,
   colorBlendMode: 0,
+  msdf: false,
+  decor: TEXT_DECOR_DEFAULTS,
 };
 
-/** 对象自己的文本字段（`visibleEffects` / `colorBlendMode` 是图层状态，不由这两个函数写）。 */
-export type TextFieldKey = Exclude<keyof TextFields, "visibleEffects" | "colorBlendMode">;
+/** 对象自己的文本字段（`visibleEffects` / `colorBlendMode` 是图层状态、`msdf` 由四个开关算出，不由这两个函数写）。 */
+export type TextFieldKey = Exclude<keyof TextFields, "visibleEffects" | "colorBlendMode" | "msdf">;
+
+/** vec3 键（装饰颜色）：`"r g b"` 三个分量，单个数字铺满，同灯 / 材质向量的规则；分量不足 3 个（且不是 1 个）不写。 */
+function parseVec3(value: unknown): [number, number, number] | undefined {
+  const parsed = numbers(value as SceneScalar | undefined, []);
+  if (parsed.length === 1) return [parsed[0], parsed[0], parsed[0]];
+  return parsed.length >= 3 ? [parsed[0], parsed[1], parsed[2]] : undefined;
+}
+
+/**
+ * 装饰参数的属性 / JSON 侧取值（编译期与属性就地写共用）：float 键不合法不写，颜色 vec3（单个数字铺满），偏移 vec2（同 `padding`）；
+ * 缺键不写。返回 undefined 表示不写（保持原值 / 缺省）。
+ */
+export function textDecorFromJson<F extends TextDecorField>(field: F, raw: unknown): TextDecor[F] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  switch (field) {
+    case "outlinecolor":
+    case "dropshadowcolor":
+      return parseVec3(raw) as TextDecor[F] | undefined;
+    case "dropshadowoffset":
+      return parseVec2(raw) as TextDecor[F] | undefined;
+    default:
+      return parseTextFloat(raw) as TextDecor[F] | undefined;
+  }
+}
 
 /** 枚举的取值表：查不到取 WPE 表里的第一项（rea-p6b-layout 1.2：`horizontalalign` → left、`verticalalign` → center）。 */
 export const TEXT_HORIZONTAL = ["left", "center", "right"] as const;
@@ -179,7 +243,10 @@ export function textFieldFromScript<F extends TextFieldKey>(field: F, value: unk
 }
 
 /** 两个字段值是否相同（WPE 逐项比较：浮点按 `==`，向量逐分量）。值没变不重排。 */
-export function sameTextField(a: TextFields[TextFieldKey], b: TextFields[TextFieldKey]): boolean {
+export function sameTextField(
+  a: TextFields[TextFieldKey] | TextDecor[TextDecorField],
+  b: TextFields[TextFieldKey] | TextDecor[TextDecorField],
+): boolean {
   if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((part, i) => part === b[i]);
   return a === b;
 }

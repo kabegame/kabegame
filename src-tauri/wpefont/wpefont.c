@@ -8,30 +8,22 @@
  *   - wpefont_shape：hb_buffer_add_utf32 + guess_segment_properties + hb_shape（无 features），每个字形 6 个 int；
  *   - wpefont_glyph：FT_Load_Glyph(gid, RENDER | COLOR [| FORCE_AUTOHINT])，返回位图指针与位图的 6 个 int；
  *   - wpefont_glyph_box：FT_Load_Glyph(gid, NO_BITMAP [| FORCE_AUTOHINT]) → FT_Get_Glyph →
- *     FT_Glyph_Get_CBox(PIXELS)，即 WPE 取字形框的 FUN_1401addb0（四边形、断行、包围盒用它，图集格子用位图）。
+ *     FT_Glyph_Get_CBox(PIXELS)，即 WPE 取字形框的 FUN_1401addb0（四边形、断行、包围盒用它，图集格子用位图）；
+ *   - wpefont_msdf（msdf.cpp）：MSDF 文本的距离场格子，msdfgen v1.13 + WPE 的外围流程。
  * hinting 规则（2026-11-12 实测，和 WPE 图集一致）：TrueType（有 glyf）没有 fpgm 时强制自动 hinting；CFF 走原生引擎。
  * 排版规则一条都不放在这里，见 apps/wpe-scene/src/wpefont/ 与 README.md。
  */
-#include <ft2build.h>
-#include FT_FREETYPE_H
+#include "wpefont.h"
 #include FT_GLYPH_H
 #include FT_TRUETYPE_TAGS_H
 #include FT_TRUETYPE_TABLES_H
 
-#include <hb.h>
 #include <hb-ft.h>
 
 #include <stdint.h>
 #include <stdlib.h>
 
 #define EXPORT(name) __attribute__((export_name(#name)))
-
-typedef struct {
-  FT_Face face;
-  hb_font_t *hb;
-  FT_Int32 load_flags;
-  unsigned char *data;
-} WpeFont;
 
 static FT_Library library;
 
@@ -83,7 +75,8 @@ EXPORT(wpefont_font_has) int wpefont_font_has(WpeFont *font, uint32_t codepoint)
   return FT_Get_Char_Index(font->face, codepoint) != 0;
 }
 
-/* out[5]：ascender、descender、height（26.6）、units_per_EM、load_flags */
+/* out[7]：ascender、descender、height（26.6）、units_per_EM、load_flags、y_ppem（MSDF 四边形外扩要用）、
+ *         FT_HAS_COLOR（face 带 COLR / CPAL / 彩色点阵：WPE 的 MSDF 对这样的 face 另走自己的距离变换，我们不做） */
 EXPORT(wpefont_font_metrics) void wpefont_font_metrics(WpeFont *font, int32_t *out) {
   FT_Size_Metrics *m = &font->face->size->metrics;
   out[0] = (int32_t)m->ascender;
@@ -91,6 +84,8 @@ EXPORT(wpefont_font_metrics) void wpefont_font_metrics(WpeFont *font, int32_t *o
   out[2] = (int32_t)m->height;
   out[3] = font->face->units_per_EM;
   out[4] = font->load_flags;
+  out[5] = (int32_t)m->y_ppem;
+  out[6] = FT_HAS_COLOR(font->face) ? 1 : 0;
 }
 
 /* out：每个字形 gid、cluster、x_advance、y_advance、x_offset、y_offset（26.6），最多写 cap 个；

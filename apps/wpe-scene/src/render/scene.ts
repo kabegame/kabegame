@@ -208,6 +208,7 @@ import {
 import type { ParticleScriptTarget } from "../script/api";
 import type { GlyphAtlas } from "../text/atlas";
 import type { TextRelayouter } from "../text/host";
+import type { TextDecor } from "../text/fields";
 import type { TextLayout } from "../text/layout";
 import { isDynamicSource, type UserTextureSlot } from "../compile/usertextures";
 import type { CropRect } from "../usertex/crop";
@@ -313,6 +314,7 @@ import {
   frameBuiltins,
   layerRefreshNames,
   LIGHT_UNIFORMS,
+  MSDF_RENDER_VAR_NAMES,
   PARTICLE_REFRESH_UNIFORMS,
   particleUniformValues,
   textUniformValues,
@@ -4834,6 +4836,7 @@ export class GpuScene {
         layer: layerState,
         layout: state.texts.get(layer.object)!,
         viewProjection: groupVp ?? this.viewProjectionOf(layer, state, view, persp),
+        msdf: this.msdfInput(layer, state),
       });
     }
     if (step.kind === "particles") {
@@ -5687,6 +5690,17 @@ export class GpuScene {
    * 图层（或它某个祖先）状态变化：只重写由图层算出的那组内置 uniform（材质值优先，不覆盖）。粒子 draw 的模型矩阵按它当前的系统现算
    * （`particleModel`）；实例化的 draw（P4e 步骤 2）换了实例或实例的 `X` 变了，编码时同样走这里（`assignParticles`）。
    */
+  /**
+   * MSDF 字形的装饰参数与字号（P6f）：本层排版是 MSDF 画法时给，参数取状态里的当前值（`SceneState.textFields`，属性就地写、当帧生效），没有就取编译期的；
+   * 字号取排版结果里钳过的（`TextMesh.pointsize`，WPE `M+0xa8`）。
+   */
+  private msdfInput(layer: SceneLayer, state: SceneState): { decor: TextDecor; pointsize: number } | undefined {
+    const mesh = state.texts.get(layer.object)?.mesh;
+    if (!mesh?.msdf) return undefined;
+    const decor = state.textFields.get(layer.object)?.decor ?? layer.text?.fields.decor;
+    return decor ? { decor, pointsize: mesh.pointsize } : undefined;
+  }
+
   private refreshLayer(draw: Draw, state: SceneState, worlds: Map<number, Mat4>): void {
     // 粒子层的朝向是否 NaN、拖尾的眼位随模型矩阵变（P4c 步骤 5），没有 uniform 块也要跟上
     let model: Mat4 | null = null;
@@ -5698,6 +5712,8 @@ export class GpuScene {
     if (!draw.block || !layerState) return;
     const values = this.uniformValues(draw.step, draw.layer, layerState, draw.textureSizes, state, worlds, model);
     const names = layerRefreshNames(draw.step.pass.uniforms);
+    // MSDF 字形：装饰参数变了（属性就地写）重算 `g_RenderVar0..3`
+    if (draw.step.kind === "text" && draw.step.part === "glyphs") names.push(...MSDF_RENDER_VAR_NAMES);
     // 朝向由模型矩阵算（P4c 步骤 5），对象变换变了一起重写；材质值同样优先
     if (draw.particles) names.push(...PARTICLE_REFRESH_UNIFORMS.filter((name) => !(name in draw.step.pass.uniforms)));
     for (const name of names) {

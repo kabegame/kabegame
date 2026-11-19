@@ -42,6 +42,10 @@ export interface FontMetrics {
   unitsPerEm: number;
   /** 是否强制自动 hinting（TrueType 没有 `fpgm`）。 */
   forceAutohint: boolean;
+  /** `size->metrics.y_ppem`（整数像素）：MSDF 格子大小与四边形外扩都按它。 */
+  yPpem: number;
+  /** `FT_HAS_COLOR(face)`：带 COLR / CPAL 或彩色点阵。WPE 的 MSDF 对这样的 face 另走自己的距离变换（我们不做，宿主报 `text:msdf:color`）。 */
+  color: boolean;
 }
 
 /**
@@ -54,6 +58,26 @@ export interface GlyphBox {
   yMin: number;
   xMax: number;
   yMax: number;
+}
+
+/**
+ * 一个字形的 MSDF 格子（msdfgen v1.13 + WPE 的外围流程，`wpefont_msdf`）：RGBA8、第 0 行在上、alpha 255。
+ * 格子 = `max(1, trunc(包围盒 · f32(32 / yPpem))) + 24`（四周各 12 像素余量）。包围盒为空（空格）时 `generated` 为 false，
+ * 格子是 24 × 24 的全 0（WPE 照样占格、不写像素）。
+ */
+export interface MsdfCell {
+  /** `FT_Glyph_Get_CBox(PIXELS)` 的像素框（y 向上），同 {@link GlyphBox}。 */
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  width: number;
+  height: number;
+  generated: boolean;
+  /** 生成时这个 face 的 `y_ppem`。 */
+  yPpem: number;
+  /** `width · height · 4` 字节，拷贝、不引用 wasm 内存。 */
+  pixels: Uint8Array;
 }
 
 /** 栅格化后的字形（`FT_Load_Glyph(RENDER | COLOR …)` 的字形槽）。 */
@@ -87,6 +111,7 @@ interface Exports {
   wpefont_shape(font: number, text: number, length: number, out: number, cap: number): number;
   wpefont_glyph(font: number, gid: number, out: number): number;
   wpefont_glyph_box(font: number, gid: number, out: number): number;
+  wpefont_msdf(font: number, gid: number, out: number): number;
 }
 
 const ERRNO_SUCCESS = 0;
@@ -217,6 +242,7 @@ export class WpefontFace {
   private handle: number;
   /** {@link box} 的缓存（WPE 也缓存，键 `face 下标 << 24 | gid`）；失败记 null。 */
   private readonly boxes = new Map<number, GlyphBox | null>();
+  private colorFace: boolean | null = null;
 
   /** @internal 由 {@link Wpefont.face} 创建。 */
   constructor(
@@ -241,13 +267,26 @@ export class WpefontFace {
     return this.engine.run((e) => e.wpefont_font_has(handle, codepoint) !== 0);
   }
 
+  /** 字体度量（拷贝，每次调用都问 wasm；排版缓存的是 `ListedFace.metrics`）。 */
   metrics(): FontMetrics {
     const handle = this.live();
     return this.engine.run((e) => {
-      const out = this.engine.scratch(20);
+      const out = this.engine.scratch(28);
       e.wpefont_font_metrics(handle, out);
-      const [ascender, descender, height, unitsPerEm, loadFlags] = new Int32Array(this.engine.buffer, out, 5);
-      return { ascender, descender, height, unitsPerEm, forceAutohint: (loadFlags & LOAD_FORCE_AUTOHINT) !== 0 };
+      const [ascender, descender, height, unitsPerEm, loadFlags, yPpem, color] = new Int32Array(
+        this.engine.buffer,
+        out,
+        7,
+      );
+      return {
+        ascender,
+        descender,
+        height,
+        unitsPerEm,
+        forceAutohint: (loadFlags & LOAD_FORCE_AUTOHINT) !== 0,
+        yPpem,
+        color: color !== 0,
+      };
     });
   }
 
@@ -332,6 +371,30 @@ export class WpefontFace {
     });
     this.boxes.set(gid, box);
     return box;
+  }
+
+  /**
+   * 生成 MSDF 格子（见 {@link MsdfCell}）；加载失败或不是轮廓字形（只有点阵、COLR 彩色字形）返回 null。
+   * 用 face 当前的字号生成，WPE 取「第一个用到这个字形的对象」的字号，由调用方决定传哪个 face。会覆盖字形槽。
+   */
+  msdf(gid: number): MsdfCell | null {
+    const handle = this.live();
+    return this.engine.run((e) => {
+      const out = this.engine.scratch(32);
+      const buffer = e.wpefont_msdf(handle, gid, out) >>> 0;
+      if (!buffer) return null;
+      const [x0, y0, x1, y1, width, height, generated, yPpem] = new Int32Array(this.engine.buffer, out, 8);
+      // 先拷出再释放：free 之后 wasm 内存可能被复用
+      const pixels = new Uint8Array(width * height * 4);
+      pixels.set(new Uint8Array(this.engine.buffer, buffer, pixels.length));
+      e.wpefont_free(buffer);
+      return { x0, y0, x1, y1, width, height, generated: generated !== 0, yPpem, pixels };
+    });
+  }
+
+  /** 是不是彩色 face（{@link FontMetrics.color}），第一次问之后缓存。 */
+  isColor(): boolean {
+    return (this.colorFace ??= this.metrics().color);
   }
 
   /** 释放字体（连同交给它的字体数据）。重复调用无害。 */

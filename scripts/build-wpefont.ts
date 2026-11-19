@@ -1,5 +1,6 @@
 /**
- * 构建 wpefont（场景壁纸的字体引擎：FreeType 2.14.3 + HarfBuzz 15.0.0 + C 胶水 src-tauri/wpefont/wpefont.c）的 wasm：
+ * 构建 wpefont（场景壁纸的字体引擎：FreeType 2.14.3 + HarfBuzz 15.0.0 + msdfgen v1.13 + 胶水
+ * src-tauri/wpefont/wpefont.c、msdf.cpp）的 wasm：
  *
  *   deno task build:wpefont
  *
@@ -7,7 +8,8 @@
  * 不带 `--skip vue` 时，由 WpefontPlugin 拷进 apps/wpe-scene/src/wpefont/；缺产物只告警，文本对象退回预览图。
  *
  * 需要：
- * - 子模块 third/freetype（VER-2-14-3）与 third/harfbuzz（15.0.0），缺失时报错并给出 git submodule 命令；
+ * - 子模块 third/freetype（VER-2-14-3）、third/harfbuzz（15.0.0）与 third/msdfgen（v1.13），缺失时报错并给出
+ *   git submodule 命令；
  * - 带 wasm32 目标的 clang（同目录要有 wasm-ld）：环境变量 WPEFONT_CLANG → PATH 上的 clang → macOS 上 Homebrew 的
  *   LLVM（Apple clang 没有 wasm 后端）。用 `--print-targets` 确认有 wasm32；
  * - wasi-sdk 34 的 wasi-sysroot 与 libclang_rt：首次运行下载到 bin/wasm/wpefont/toolchain/ 并解压（按 SHA-256 校验，
@@ -35,12 +37,24 @@ import {
 
 const FREETYPE_DIR = path.join(THIRD_DIR, "freetype");
 const HARFBUZZ_DIR = path.join(THIRD_DIR, "harfbuzz");
+const MSDFGEN_DIR = path.join(THIRD_DIR, "msdfgen");
 const GLUE_DIR = path.join(ROOT, "src-tauri", "wpefont");
 const OBJ_DIR = path.join(path.dirname(WPEFONT_WASM), "obj");
 
 /** 子模块应有的版本（README 与对照结论都基于它们）。升级时连同 third-patches/{freetype,harfbuzz}/README.md 一起改。 */
 const FREETYPE_VERSION = "2.14.3";
 const HARFBUZZ_VERSION = "15.0.0";
+/** msdfgen 要 v1.13（不能是 v1.13.1：它改了 symmetricalTrichotomy，和 WPE 不同，见 rea-p6f-msdf 第 1 节）。 */
+const MSDFGEN_VERSION = "1.13.0";
+/** msdfgen core/ 里不编的单元：文件输出、SVG 导出、形状描述文本（不进 wasm，也不依赖 libpng / tinyxml）。 */
+const MSDFGEN_SKIP = new Set([
+  "save-bmp.cpp",
+  "save-tiff.cpp",
+  "save-rgba.cpp",
+  "save-fl32.cpp",
+  "export-svg.cpp",
+  "shape-description.cpp",
+]);
 
 const WASI_SDK_RELEASE =
   "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34";
@@ -92,6 +106,7 @@ const EXPORTS = [
   "wpefont_shape",
   "wpefont_glyph",
   "wpefont_glyph_box",
+  "wpefont_msdf",
 ];
 
 // setjmp / longjmp 走 wasm 异常处理（exnref），链接 libsetjmp（wasi-libc 的做法）
@@ -102,7 +117,9 @@ const SJLJ = [
   "-wasm-use-legacy-eh=false",
 ];
 const COMMON = ["-O2", "-g0", "-fvisibility=hidden"];
-const FT_DEFS = ["-DFT2_BUILD_LIBRARY", '-DFT_CONFIG_MODULES_H="ftmodule.h"'];
+// FT_CONFIG_OPTION_USE_HARFBUZZ：自动 hinter 经 HarfBuzz 顺着 GSUB 给只能经替换到达的字形归类（cmap 里没有的上下文替换字形等），
+// WPE 链的 FreeType 是这样编的（P6f 走查：LXGW 文楷的抬高冒号 gid 20066，不开时 hinted 框宽 1 像素）。HarfBuzz 头在 hbSrc
+const FT_DEFS = ["-DFT2_BUILD_LIBRARY", '-DFT_CONFIG_MODULES_H="ftmodule.h"', "-DFT_CONFIG_OPTION_USE_HARFBUZZ"];
 const HB_DEFS = [
   "-DHAVE_FREETYPE=1",
   "-DHB_NO_MT",
@@ -148,21 +165,35 @@ function harfbuzzVersion(): string {
   return /#define\s+HB_VERSION_STRING\s+"([^"]+)"/.exec(header)?.[1] ?? "?";
 }
 
+/** msdfgen 的版本：读 vcpkg.json（上游每次发版都改），不依赖 git 状态。 */
+function msdfgenVersion(): string {
+  const file = path.join(MSDFGEN_DIR, "vcpkg.json");
+  if (!fs.existsSync(file)) return "?";
+  return (JSON.parse(fs.readFileSync(file, "utf8")) as { version?: string })
+    .version ?? "?";
+}
+
 function checkSources(): void {
   ensureSource(
     path.join(FREETYPE_DIR, "include", "ft2build.h"),
     "third/freetype",
   );
   ensureSource(path.join(HARFBUZZ_DIR, "src", "harfbuzz.cc"), "third/harfbuzz");
+  ensureSource(path.join(MSDFGEN_DIR, "msdfgen.h"), "third/msdfgen");
   const ft = freetypeVersion();
   const hb = harfbuzzVersion();
-  if (ft !== FREETYPE_VERSION || hb !== HARFBUZZ_VERSION) {
+  const msdf = msdfgenVersion();
+  if (
+    ft !== FREETYPE_VERSION || hb !== HARFBUZZ_VERSION ||
+    msdf !== MSDFGEN_VERSION
+  ) {
     die(
-      `子模块版本不对：FreeType ${ft}（应为 ${FREETYPE_VERSION}）、HarfBuzz ${hb}（应为 ${HARFBUZZ_VERSION}）。\n` +
-        "先运行 git submodule update --init third/freetype third/harfbuzz；有意升级时改本脚本与 third-patches 的 README。",
+      `子模块版本不对：FreeType ${ft}（应为 ${FREETYPE_VERSION}）、HarfBuzz ${hb}（应为 ${HARFBUZZ_VERSION}）、` +
+        `msdfgen ${msdf}（应为 ${MSDFGEN_VERSION}，即 tag v1.13）。\n` +
+        "先运行 git submodule update --init third/freetype third/harfbuzz third/msdfgen；有意升级时改本脚本与 third-patches 的 README。",
     );
   }
-  log(`FreeType ${ft}、HarfBuzz ${hb}`);
+  log(`FreeType ${ft}、HarfBuzz ${hb}、msdfgen ${msdf}`);
 }
 
 /** Windows 优先用系统自带的 bsdtar：Git Bash 的 GNU tar 会把 `C:` 当成远程主机。 */
@@ -369,6 +400,9 @@ async function main(): Promise<void> {
         GLUE_DIR,
         "-I",
         ftInclude,
+        // FT_CONFIG_OPTION_USE_HARFBUZZ 要 HarfBuzz 的头（hb.h、hb-ot.h）
+        "-I",
+        hbSrc,
         "-c",
         path.join(FREETYPE_DIR, unit),
         "-o",
@@ -403,6 +437,64 @@ async function main(): Promise<void> {
       hbObject,
     ],
   };
+  // C++ 通用参数（HarfBuzz 与 msdfgen 同一套：libc++ 无异常头、无 RTTI、无线程安全静态量）
+  const cxx = [
+    "--driver-mode=g++",
+    ...target,
+    ...COMMON,
+    "-nostdinc++",
+    "-isystem",
+    libcxxInclude,
+    "-std=c++17",
+    "-fno-exceptions",
+    "-fno-rtti",
+    "-fno-threadsafe-statics",
+  ];
+  const msdfJobs: Job[] = [];
+  const coreDir = path.join(MSDFGEN_DIR, "core");
+  for (const name of fs.readdirSync(coreDir).sort()) {
+    if (!name.endsWith(".cpp") || MSDFGEN_SKIP.has(name)) continue;
+    const object = path.join(
+      OBJ_DIR,
+      `msdfgen_${path.basename(name, ".cpp")}.o`,
+    );
+    objects.push(object);
+    msdfJobs.push({
+      label: `msdfgen/core/${name}`,
+      args: [
+        ...cxx,
+        "-DMSDFGEN_PUBLIC=",
+        "-I",
+        MSDFGEN_DIR,
+        "-c",
+        path.join(coreDir, name),
+        "-o",
+        object,
+      ],
+    });
+  }
+  const msdfGlueObject = path.join(OBJ_DIR, "wpefont_msdf.o");
+  objects.push(msdfGlueObject);
+  const msdfGlueJob: Job = {
+    label: "src-tauri/wpefont/msdf.cpp",
+    args: [
+      ...cxx,
+      ...SJLJ, // 包含 FreeType 头（FT_Outline_Decompose 的 setjmp 在 FreeType 里，但头里的宏与 ABI 同一套）
+      "-DMSDFGEN_PUBLIC=",
+      "-I",
+      GLUE_DIR,
+      "-I",
+      ftInclude,
+      "-I",
+      hbSrc,
+      "-I",
+      MSDFGEN_DIR,
+      "-c",
+      path.join(GLUE_DIR, "msdf.cpp"),
+      "-o",
+      msdfGlueObject,
+    ],
+  };
   const glueObject = path.join(OBJ_DIR, "wpefont.o");
   objects.push(glueObject);
   const glueJob: Job = {
@@ -411,6 +503,8 @@ async function main(): Promise<void> {
       ...target,
       ...COMMON,
       ...SJLJ,
+      "-I",
+      GLUE_DIR,
       "-I",
       ftInclude,
       "-I",
@@ -422,7 +516,7 @@ async function main(): Promise<void> {
     ],
   };
   // HarfBuzz 单元最慢，最先开始
-  await runJobs(clang, [hbJob, ...ftJobs, glueJob]);
+  await runJobs(clang, [hbJob, ...ftJobs, ...msdfJobs, glueJob, msdfGlueJob]);
 
   const linked = path.join(OBJ_DIR, "wpefont.wasm");
   const linkArgs = [
@@ -435,6 +529,7 @@ async function main(): Promise<void> {
     "-L",
     path.join(sysroot, "lib", "wasm32-wasip1", "noeh"),
     "-lc++",
+    "-lc++abi",
     "-lsetjmp",
     "-lc",
     builtins,

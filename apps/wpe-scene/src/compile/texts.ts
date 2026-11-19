@@ -3,7 +3,7 @@
  * 图像层一样，只是基础 pass 画的不是一张贴图，而是逐字四边形（`render/graph.ts` 的 `text` 步骤）。这里只做 Worker 能做的部分：
  * - 把对象的排版字段规整成 `text/layout.ts` 的 `TextFields`（取值规则照 WPE 的 JSON setter，rea-p6b-layout 1.2、1.3）；
  * - 定位主字体（工程 → `scene.pkg` → WPE `assets`；`systemfont_*` 由宿主读 `%WINDIR%\Fonts`）；
- * - 编四个宿主指定材质的 pass：`basefont`（普通字形）、`basefontrgba`（彩色字形）、`fontbackground`（直接上屏的背景）、
+ * - 编宿主指定材质的 pass：`basefont`（普通字形，MSDF 画法换 `basefont_msdf`）、`basefontrgba`（彩色字形）、`fontbackground`（直接上屏的背景）、
  *   `composelayer_clearalpha`（合成路径没开背景时 RT 的初值）。正交场景一律用不带 `_depth` 的材质（rea-p6b-raster 1，5.4）；透视场景里
  *   `depthtest` 不是 disabled 时字形与背景换成 `_depth` 材质（P13h，rea-p13-lights 5.2）：只多「测深度」，材质是 translucent、不写深度；
  * - 背景色（`g_Color` = `backgroundcolor` × (HDR ? `backgroundbrightness` : 1)）。
@@ -12,34 +12,43 @@
  * 绑定（P3a）：`TEXT_RUNTIME_FIELDS` 里的排版字段（文字、字号、padding、对齐等）绑用户属性登记成文本目标
  * `{ kind: "text", object, field }`（P6b 1e：就地写进 `SceneState.textFields`、值变了渲染器重排，不整场重编译）；`font`、
  * `opaquebackground`、MSDF 开关、`anchor` 照旧登记成重编译（1e 已定 3）；
+ * MSDF 的七个装饰参数（`TEXT_DECOR_FIELDS`，P6f）绑属性登记成 `{ kind: "text-decor" }` 目标：就地写、不重排、当帧重算 `g_RenderVar0..3`；
+ * 字形 pass 在 MSDF 画法下换 `basefont_msdf`，按三个开关选 COMBO 变体（`msdfVariantCombos`）；
  * `backgroundcolor` 在 LDR（或 HDR 下 `backgroundbrightness` 恒为 1）时登记成背景常量的就地目标（`background.key` 的 `g_Color`），
  * 否则重编译；`backgroundbrightness` 只在 HDR 下读，绑了属性登记成重编译。
  */
 import {
+  isScriptValue,
   isTextRuntimeField,
   isUserBinding,
+  textBackgroundColorTarget,
+  textBackgroundKey,
   type BindingCollector,
   type BindingTarget,
   type TargetKey,
+  type TextDecorField,
 } from "./bindings";
 import type { ScenePass } from "./bundle";
-import { checkTextOptions } from "./features";
 import type { SceneFs } from "./fs";
 import { numbers, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 import {
+  TEXT_DECOR_DEFAULTS,
   TEXT_DEFAULTS,
+  textDecorFromJson,
   textEnum,
   textFieldFromJson,
   textFloat,
+  type TextDecor,
   type TextFieldKey,
   type TextFields,
 } from "../text/fields";
 import { fontPath, SYSTEM_FONT_PREFIX, type FontPath } from "../text/fonts";
 import type { ShaderTextureSlot } from "./shader";
 
-/** 宿主指定的四个材质（WPE 自带，`assets/materials/...`）。 */
+/** 宿主指定的材质（WPE 自带，`assets/materials/...`）。`msdf` 是 MSDF 画法的字形材质（P6f，`MSDF: 1`，装饰的三位变体由编译加 COMBO）。 */
 export const TEXT_MATERIALS = {
   glyphs: "materials/fonts/basefont.json",
+  msdf: "materials/fonts/basefont_msdf.json",
   color: "materials/fonts/basefontrgba.json",
   background: "materials/fonts/fontbackground.json",
   clearAlpha: "materials/util/composelayer_clearalpha.json",
@@ -52,6 +61,7 @@ export const TEXT_MATERIALS = {
  */
 export const TEXT_DEPTH_MATERIALS = {
   glyphs: "materials/fonts/basefont_depth.json",
+  msdf: "materials/fonts/basefont_msdf_depth.json",
   color: "materials/fonts/basefontrgba_depth.json",
   background: "materials/fonts/fontbackground_depth.json",
 } as const;
@@ -112,8 +122,28 @@ export type HostPassCompiler = (
   path: string,
   key: TargetKey,
   planned: ShaderTextureSlot[],
-  options?: { text?: boolean },
+  options?: { text?: boolean; combos?: Record<string, number> },
 ) => Promise<ScenePass | null>;
+
+/**
+ * MSDF 字形 pass 的 COMBO 变体（P6f，rea-p6f-msdf 4.2：`R[0x17 + v]`，v 的三位）：描边（厚度开着时至少 1）、模糊、投影各一位，开关开着一定有对应的位
+ * （开关开着时厚度 ≥ 1、模糊与投影大小 ≥ 0.01，rea-p6b-raster 6）。只开 `msdf` 时没有任何 COMBO（变体 0）。
+ */
+export function msdfVariantCombos(decor: Pick<TextDecor, "outline" | "blur" | "dropshadow">): Record<string, number> {
+  const combos: Record<string, number> = {};
+  if (decor.outline) combos.OUTLINE_ENABLED = 1;
+  if (decor.blur) combos.BLUR_ENABLED = 1;
+  if (decor.dropshadow) combos.DROP_SHADOW_ENABLED = 1;
+  return combos;
+}
+
+/**
+ * `backgroundcolor` 能不能就地写背景常量 `g_Color`（属性绑定与字段脚本共用这一个判断，目标是 `textBackgroundColorTarget`）：LDR，或 HDR 下
+ * `backgroundbrightness` 恒为 1（字面值为 1、没绑属性）。否则要乘 brightness，就地写不了，改走重编译。
+ */
+export function backgroundColorInPlace(hdr: boolean, brightness: number, brightnessBound: boolean): boolean {
+  return !hdr || (brightness === 1 && !brightnessBound);
+}
 
 export interface TextCompileContext {
   fs: SceneFs;
@@ -129,7 +159,7 @@ export interface TextCompileContext {
   /** 图层可能走合成（有任何 effect，或 colorBlendMode ∉ {0, 31}）：要编 `composelayer_clearalpha`。 */
   mayComposite: boolean;
   hostPass: HostPassCompiler;
-  /** 场景级不支持项：`msdf` 等开关与 `anchor` 按生效值（绑了属性的取当前值）报（`features.ts` 的 `checkTextOptions`）。 */
+  /** 场景级不支持项：`anchor` 按生效值（绑了属性的取当前值）报（`features.ts` 的 `checkTextOptions`）；`backgroundcolor` 挂脚本且要走重编译时报 `text:script:backgroundcolor`。 */
   unsupported: Set<string>;
 }
 
@@ -195,6 +225,31 @@ export async function compileText(
     return (Array.isArray(fallback) ? [...fallback] : fallback) as TextFields[F];
   };
 
+  // MSDF 的四个开关：任意一个开着就整层换 MSDF 画法（WPE `O+0x518 != 0`）；绑了属性登记成重编译（改了开关要换图集与几何）
+  const switches = { msdf: flag("msdf"), outline: flag("outline"), blur: flag("blur"), dropshadow: flag("dropshadow") };
+  const useMsdf = switches.msdf || switches.outline || switches.blur || switches.dropshadow;
+  // 装饰参数（P6f）：只在 MSDF 画法下读（不读就不登记绑定）；绑了属性登记成 `text-decor` 目标，就地写、不重排
+  const decorField = <F extends TextDecorField>(key: F): TextDecor[F] => {
+    const target: BindingTarget = { kind: "text-decor", object: index, field: key };
+    const value = textDecorFromJson(key, read(key, target));
+    if (value !== undefined) return value;
+    const fallback = TEXT_DECOR_DEFAULTS[key];
+    return (Array.isArray(fallback) ? [...fallback] : fallback) as TextDecor[F];
+  };
+  const decor: TextDecor = useMsdf
+    ? {
+        outline: switches.outline,
+        blur: switches.blur,
+        dropshadow: switches.dropshadow,
+        outlinecolor: decorField("outlinecolor"),
+        outlinethickness: decorField("outlinethickness"),
+        blursize: decorField("blursize"),
+        dropshadowcolor: decorField("dropshadowcolor"),
+        dropshadowopacity: decorField("dropshadowopacity"),
+        dropshadowsize: decorField("dropshadowsize"),
+        dropshadowoffset: decorField("dropshadowoffset"),
+      }
+    : { ...TEXT_DECOR_DEFAULTS, outlinecolor: [0, 0, 0], dropshadowcolor: [0, 0, 0], dropshadowoffset: [4, 4] };
   const fields: TextFields = {
     text: field("text"),
     font: field("font"),
@@ -212,19 +267,11 @@ export async function compileText(
     verticalalign: field("verticalalign"),
     visibleEffects: ctx.visibleEffects,
     colorBlendMode: ctx.colorBlendMode,
+    msdf: useMsdf,
+    decor,
   };
-  // 只影响能力判断的键：绑了属性同样登记成重编译（改了重编译后按新值重新判断）
+  // `anchor`：只影响脚本 API 读回，绑了属性同样登记成重编译（改了重编译后按新值重新判断）
   const anchor = textEnum(read("anchor"), TEXT_ANCHORS, "none");
-  checkTextOptions(
-    {
-      msdf: flag("msdf"),
-      outline: flag("outline"),
-      blur: flag("blur"),
-      dropshadow: flag("dropshadow"),
-      anchor,
-    },
-    ctx.unsupported,
-  );
 
   // 主字体：`systemfont_*` 与引擎路径（rea-p6b-raster 2.1、2.2）；引擎路径按场景的资源查找顺序定位，宿主按位置读
   const path = fontPath(fields.font);
@@ -243,13 +290,13 @@ export async function compileText(
   }
 
   // 背景色：`backgroundcolor` × (HDR ? `backgroundbrightness` : 1)（rea-p6b-layout 第 4 节；LDR 下 brightness 不读）
-  const backgroundKey = `objects/${index}/text/background`;
+  const backgroundKey = textBackgroundKey(index);
   const brightness = ctx.hdr ? textFloat(read("backgroundbrightness"), 1) : 1;
   // HDR 下 brightness 绑了属性或不为 1：就地写 `g_Color` 只写得了颜色，乘不了它，`backgroundcolor` 改走重编译
-  const inPlace = !ctx.hdr || (brightness === 1 && !isUserBinding(object.backgroundbrightness));
-  const colorTarget: BindingTarget = inPlace
-    ? { kind: "constant", pass: backgroundKey, material: "backgroundcolor", uniforms: ["g_Color"], type: "vec3" }
-    : recompile("backgroundcolor");
+  const inPlace = backgroundColorInPlace(ctx.hdr, brightness, isUserBinding(object.backgroundbrightness));
+  const colorTarget: BindingTarget = inPlace ? textBackgroundColorTarget(index) : recompile("backgroundcolor");
+  // 字段脚本写 `backgroundcolor`：目标同上（`targetOf` 只给就地目标，不知道 HDR）；要走重编译的情形没有就地写法，照报（P6f 点 7）
+  if (!inPlace && isScriptValue(object.backgroundcolor)) ctx.unsupported.add("text:script:backgroundcolor");
   // LDR 下 brightness 不读（读属性要登记绑定），API 读回取字面值或属性默认值
   const rawBrightness = object.backgroundbrightness as unknown;
   const literalBrightness =
@@ -265,12 +312,15 @@ export async function compileText(
   // 四个宿主材质（WPE 自带，`textures` 都没有静态纹理）：字形的槽 0 是图集，由渲染图填。透视场景里 `depthtest` 不是 disabled 就换测深度的
   // 三个（`TEXT_DEPTH_MATERIALS`）；正交场景不读这个键（不登记绑定）。绑了属性登记成重编译，按生效值重选
   const materials = ctx.perspective && read("depthtest") !== "disabled" ? TEXT_DEPTH_MATERIALS : TEXT_MATERIALS;
-  const glyphPass = await ctx.hostPass(
-    materials.glyphs,
-    `objects/${index}/text/glyphs`,
-    [{ slot: 0, format: R8_FORMAT }],
-    { text: true },
-  );
+  // MSDF 画法（P6f）：槽 0 是 RGBA8 距离场图集（不带 R8 格式），按装饰开关选三位变体；彩色字形 pass 不变（MSDF 下彩色字形照报、不画）
+  const glyphPass = fields.msdf
+    ? await ctx.hostPass(materials.msdf, `objects/${index}/text/glyphs`, [{ slot: 0 }], {
+        text: true,
+        combos: msdfVariantCombos(decor),
+      })
+    : await ctx.hostPass(materials.glyphs, `objects/${index}/text/glyphs`, [{ slot: 0, format: R8_FORMAT }], {
+        text: true,
+      });
   const colorPass = await ctx.hostPass(materials.color, `objects/${index}/text/color`, [{ slot: 0 }], {
     text: true,
   });

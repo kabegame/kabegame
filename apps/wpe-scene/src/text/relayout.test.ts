@@ -25,8 +25,10 @@ const fontsDir = join(process.env.WINDIR ?? "C:\\Windows", "Fonts");
 function layoutWith(glyphs: AtlasGlyph[]): TextLayout {
   return {
     missingFonts: [],
+    unsupported: [],
     mesh: {
       key: "k",
+      msdf: false,
       glyphs: [],
       colorGlyphs: [],
       atlas: glyphs[0].atlas,
@@ -60,7 +62,7 @@ function insert(atlas: GlyphAtlas, key: number, width: number): AtlasGlyph {
 
 describe("releaseTextLayout / retainTextLayout（P6b 1e）", () => {
   it("释放减引用、复原加回去，各自重复调用无害；空排版什么都不做", () => {
-    const atlas = new GlyphAtlas(false);
+    const atlas = new GlyphAtlas(1);
     const a = insert(atlas, 1, 4);
     const b = insert(atlas, 2, 4);
     a.refs = 1;
@@ -83,7 +85,7 @@ describe("releaseTextLayout / retainTextLayout（P6b 1e）", () => {
 
 describe("GlyphAtlas.resets（P6b 1e 已定 5）", () => {
   it("清空重排时加一；扩容、放字形不算", () => {
-    const atlas = new GlyphAtlas(false);
+    const atlas = new GlyphAtlas(1);
     insert(atlas, 1, 4);
     insert(atlas, 2, 600);
     expect([atlas.width, atlas.generation, atlas.resets]).toEqual([1024, 1, 0]);

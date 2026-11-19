@@ -3838,12 +3838,12 @@ WPE 的图像层帧表（sprite sheet）不是图层的动画，而是**纹理�
 - **取值**：规则只在 `text/fields.ts` 一份。脚本侧 `textFieldFromScript` 照 WPE 类型 5 的 `ToString`（`null` / `undefined` 不写，`12` → `"12"`），枚举再查表，布尔位只收布尔；属性侧 `textFieldFromJson` 同编译期的 setter（`text` 只收字符串）。`text` 字段脚本的值类型恒为字符串，不按初值猜（`"Song Title"` 按初值猜会当成 vec2）。
 - **状态**：值写进 `SceneState.textFields`，和现值比较（`sameTextField`），变了才标 `dirtyTexts`，所以脚本每帧返回同一串时不重排。脚本写回在帧内第二次 `sync` 里排，当帧生效；属性写在两帧之间，下一帧生效。
 - **重排器**（`SceneTexts.relayouter()`）：排进这次加载的图集，绑定加载代数，更新的加载开始或宿主销毁之后返回 null、不动图集（重编译期间旧场景还在画，不能把字形排进新加载的图集）。先放旧排版的字形引用再排新的（同 WPE「先放旧、再排新」）；缺字体时把引用加回去、旧排版照画，后台读字体，读完 `onReady` 把这一层重新标脏（暂停时补画一帧）。
-- **仍要重编译的**：`font`、`opaquebackground`、MSDF 开关、`anchor`、HDR 下的 `backgroundbrightness` 绑属性照旧整场重编译（1e 已定 3），文本层的 effect 开关也是。
+- **仍要重编译的**：`font`、`opaquebackground`、MSDF 四个开关、`anchor`、HDR 下的 `backgroundbrightness` 绑属性照旧重编译（1e 已定 3；MSDF 开关 P6f 起是对象级重编译），文本层的 effect 开关也是。MSDF 的装饰参数绑属性就地写、当帧生效（P6f）。
 
 | 项 | 内容 |
 |---|---|
-| 认定 | `isTextObject`：`text` 键不为 null（`text: ""` 也算，整层不画）。能力表不再报 `object:text` 与各文本键；`alignment`、`depthtest`（正交场景）、MSDF 的装饰参数在文本上中性 |
-| 编译（`compile/texts.ts`） | 文本对象跳过模型，effect 与 colorBlendMode passthrough 照图像层编，文本表排在它们之后（`padding` 看启用的 effect 个数）。字段照 WPE 的 setter 规整：`text` 只收字符串（或对象的字符串 `value`），枚举查不到取表里第一项（`horizontalalign` → left、`verticalalign` → center、`anchor` → none），vec2 一个分量铺满。主字体按资源查找顺序定位（工程 → `scene.pkg` → WPE `assets`），`system:` 字体由宿主读。四个 WPE 自带材质经宿主 pass 编：`basefont`（R8 图集）、`basefontrgba`（彩色图集）、`fontbackground`（开 `opaquebackground` 时）、`composelayer_clearalpha`（没开背景、可能走合成时）。背景色 `backgroundcolor × (HDR ? backgroundbrightness : 1)` 是常量键 `objects/<i>/text/background` 的 `g_Color`，LDR（或 HDR 下亮度恒为 1）时就地可改。12 个运行中字段绑属性登记文本目标（1e），其余绑定登记成重编译 |
+| 认定 | `isTextObject`：`text` 键不为 null（`text: ""` 也算，整层不画）。能力表不再报 `object:text` 与各文本键；`alignment`、`depthtest`（正交场景）在文本上中性；MSDF 四个开关与装饰参数 P6f 起支持（见下「MSDF（P6f）」） |
+| 编译（`compile/texts.ts`） | 文本对象跳过模型，effect 与 colorBlendMode passthrough 照图像层编，文本表排在它们之后（`padding` 看启用的 effect 个数）。字段照 WPE 的 setter 规整：`text` 只收字符串（或对象的字符串 `value`），枚举查不到取表里第一项（`horizontalalign` → left、`verticalalign` → center、`anchor` → none），vec2 一个分量铺满。主字体按资源查找顺序定位（工程 → `scene.pkg` → WPE `assets`），`system:` 字体由宿主读。四个 WPE 自带材质经宿主 pass 编：`basefont`（R8 图集；MSDF 时换 `basefont_msdf`，按描边、模糊、投影三位带 COMBO）、`basefontrgba`（彩色图集）、`fontbackground`（开 `opaquebackground` 时）、`composelayer_clearalpha`（没开背景、可能走合成时）。背景色 `backgroundcolor × (HDR ? backgroundbrightness : 1)` 是常量键 `objects/<i>/text/background` 的 `g_Color`，LDR（或 HDR 下亮度恒为 1）时就地可改。12 个运行中字段绑属性登记文本目标（1e），其余绑定登记成重编译 |
 | 排版（`text/host.ts`） | 宿主主线程的 `SceneTexts` 在声音、脚本与 GPU 资源之前排好全部文本层：wasm 实例与读过的字体跨重编译保留，每次加载新建图集（装箱顺序同 WPE），按对象顺序排、缺字体就读完重排（每对象最多 16 轮），每个 await 后比加载代数。wasm 不在或排版出错报 `text:engine`、退回预览图。`system:<名字>` 按 `wpe_scene_target` 的 `systemFonts` 表读本机文件（后端按平台解析，见「字体引擎」的系统字体一行），表里没有的名字读不到、不回落到目录；没有表时（Node 单测、dev 探针）才按 `fontsDir`、缺省 `C:\Windows\Fonts` 拼。排完后图集留在实例上，`relayouter()` 经 `load` 交给渲染器（1e） |
 | 渲染图（`render/graph.ts`） | `text` 步骤（`part`：`background` / `glyphs` / `color`；`space`：`direct` / `composite`）。直接上屏：`[背景] → 普通字形 → [彩色字形]`，colorBlendMode 31 时全部 additive，否则材质的 translucent。合成：RT 先「清成 (背景色, 图层 alpha)」（`clear` 的 `color: "text-background"`，每帧现算）或 clearalpha（`compose` 角色、读快照），再画字形（translucent），之后 effect 链、passthrough、上屏照图像层，上屏 UV 内缩的分母是文字框的整数部分。合成 RT 是排版的 `compositeSize`（`trunc(w + 2·padding)`）两维 `max(4, ·)`（`textCompositeSize`，1e 更正，见下）。排版为空的层不画；文本层的 effect 开关会改 `padding` 与文字框，切换整场重编译 |
 | 矩阵（`render/uniforms.ts` 的 `textMatrices`） | 直接上屏的字形 `VP · W · T(directTranslation)`；背景 `VP · W · T(−w/2 − pad.x, −h/2 − pad.y)`，四边形 `[0, W] × [0, H]` 取 `textCompositeSize`；画进合成 RT `ortho(0, W, 0, H, ±1000) · T(compositeTranslation)`，W、H 同样是 `textCompositeSize`（对着 RT 像素）。对齐偏移只在本层画自己时右乘（`drawMatrixOf`，P8 步骤 3 起子对象的世界矩阵不带它） |
@@ -3854,8 +3854,42 @@ WPE 的图像层帧表（sprite sheet）不是图层的动画，而是**纹理�
 | `max(4, ·)`（1e 更正） | `textCompositeSize` = 排版的 `compositeSize`（WPE `+0x128` 查询的结果，`TextLayout` 里不变）两维各取 `max(4, ·)`，截断后不是有限数时同 `cvttss2si` 取 4。WPE 在 `FUN_1401ea500` 里把查询结果原地改成 `max(4, ·)`，之后读它的三处都套：合成 RT（连同画进 RT 的正交）、effect fbo 的基准、直接上屏的背景四边形。不套的两处：图层尺寸 `TextLayout.size`（上屏四边形、clearalpha 四边形、矩阵里的 w、h），以及上屏 UV 内缩的分母（`trunc(size)`）。所以宽 2 的文字在 4 宽的 RT 里只占左半，上屏时整张 RT 铺到 2 宽的四边形上，字形横向压一半。1d 写「不套」是错的：两组极小文字的工程 `p6b-tiny`、`p6b-tiny2`（WPE 的合成 RT 宽 2、3 的都是 4×6）和开背景的 `p6b-tiny3`（WPE 的背景四边形是 `[0, 4] × [0, 6]`）都和 WPE 整帧逐像素相同 |
 | 异步字体（1e 已定 4） | 帧循环里不能等：重排发现缺字体时保留旧排版、后台读，读完下一帧补上。WPE 同步读，所以第一次出现新回退字时我们晚一到几帧。真机可见预览里，帧循环自己走完 5 轮回退链不到 0.7 秒 |
 | 变体预备（1e） | `variantPlans` 对文本层按「普通字形与彩色字形都有」的假想排版给计划（尺寸取当前排版）；`prepareVariants` 只备程序与管线，不按假想尺寸建 RT、不建快照。管线和尺寸、字数无关，运行中步骤增减不会碰到 `render:variant-missing` |
-| 不支持项 | `text:script:<键>`：运行中字段以外的文本键挂脚本。`font`、`opaquebackground` 运行中改要整场重编译，`backgroundcolor`、MSDF 参数等没有脚本写回目标。12 个运行中字段挂脚本不报（1e-3 去掉了 `text:script`）。另有 `text:msdf:<msdf / outline / blur / dropshadow>`（MSDF 路径，不做）、`text:engine`、`render:text-layout`（没交排版结果）。P6e 之前 none / center 以外的 `anchor` 报 `text:anchor:<值>`，第 3 步起支持（见上一行） |
+| 不支持项 | `text:script:<键>`：运行中字段以外的文本键挂脚本。`font`、`opaquebackground` 运行中改要整场重编译，MSDF 的开关与参数没有脚本写回目标（`ITextLayer` 没有这些字段）。12 个运行中字段挂脚本不报（1e-3 去掉了 `text:script`）；`backgroundcolor` 挂脚本 P6f 起不报（目标同属性绑定，只有 HDR 且 `backgroundbrightness` 不恒为 1 时照报）。`text:msdf:color`：MSDF 下的彩色字形（emoji），那个字形不画、运行期经看板娘提示（P6f 已定 2）。另有 `text:engine`、`render:text-layout`（没交排版结果）。P6e 之前 none / center 以外的 `anchor` 报 `text:anchor:<值>`，第 3 步起支持（见上一行） |
 | dev 探针 | `renderFrame` 建场景前同样排好文本层（`dev/probeTexts.ts`），`render_scene` 能直接渲染文本场景。`scriptValues`（1e-3）收文本层的运行中字段，`value` 可以是字符串（最长 4096 个 UTF-16 单元），按宿主同一条写回规整（`textFieldFromScript` → `writeText`），宿主不会写的值报错。探针不跑脚本、没有帧外补画，写进文本值之后回放前**结清**：`sync` 一次，有字体在读（`SceneTexts.idle()`）就等读完，把 `onReady` 记下的层重新标脏再 `sync`，直到没有在读的字体（最多读 16 轮，同 `prepare`），结果的 `textSyncs` 是 `sync` 的次数；没有文本值时不结清、逐字节同以前。vite 的 `/render` 同样放宽（`scripts/kabegame-dev/replay.ts` 的 `TEXT_FIELDS`，图层字段给字符串 400）；MCP 的 `render_scene` 只发 FR 帧号块，按字符串渲染走 REST 或 `host_eval`。`host.texts()`（1e-2）：`textStats()`（有重排或重建的 `sync` 次数、重排器调用与没排成的次数、重建层数，每次的层数、重排用时、重建用时的均值 / p95 / 最大值）与每个文本层当前的文字、字号、`size`、`compositeSize`、字形数 |
+
+### MSDF（P6f）
+
+文本对象打开 `msdf`、`outline`、`blur`、`dropshadow` 任一个，整层换成多通道距离场画法；描边、模糊、投影全在 `font.frag` 的 `MSDF` 分支里。计划与依据见 [phase-6f-msdf.md](../../.claude/plans/wpe-import/3-scene/phase6/phase-6f-msdf.md)、[rea-p6f-msdf.md](../../.claude/plans/wpe-import/3-scene/phase6/rea-p6f-msdf.md)。
+
+- **距离场**：不自写算法，`wpefont` 编进 msdfgen **v1.13**（子模块 `third/msdfgen`，导出 `wpefont_msdf`），照 WPE 的外围流程调：
+  - 轮廓用 `FT_LOAD_NO_BITMAP`（带 hinting、对象字号）加载；
+  - 包围盒 `FT_Glyph_Get_CBox(PIXELS)`；
+  - `normalize` 之后多调一次 `orientContours`；
+  - 投影参数 float32；
+  - 转字节 `×256` 截断、上下翻转、alpha 255。
+
+  v1.13.1 改了 `symmetricalTrichotomy`，和 WPE 不同，不用。
+- **图集与排版**：
+  - 字体键 `<路径>_msdf`，与字号无关，同一字体文件的所有字号共用一张 RGBA8 图集；字形按「第一个用到它的对象」的字号生成，后面的字号复用（同 WPE）。
+  - 格子 = `max(1, trunc(bbox · 32 / y_ppem)) + 24`，装箱与 R8 图集是同一个装箱器；空格占 24×24 不写像素。
+  - 四边形各边外扩 `pad = f32(y_ppem) · 12 · 0.03125`，`y_ppem` 取本对象字号的；文字框不含 `pad`，所以 `padding` 小于 `pad` 时合成路径会裁掉贴边的装饰（同 WPE）。
+- **材质与常量**：
+  - `basefont_msdf` 的 COMBO：`OUTLINE_ENABLED`（厚度 ≥ 1）、`BLUR_ENABLED`、`DROP_SHADOW_ENABLED`；
+  - 每次绘制按装饰参数现算 `g_RenderVar0..3`（`render/uniforms.ts` 的 `msdfRenderVars`，逐条 float32，含 5.1（`0x40a33334`）与 6 的钳制、描边给模糊让位）；
+  - `g_Texture0Resolution = (W, H, W, H)`；
+  - 合成路径与直接上屏用同一个变体和同样的常量。
+- **运行中**：装饰参数（颜色、厚度、模糊、投影大小 / 偏移 / 不透明度）绑属性是就地目标 `text-decor`，当帧生效、不重排；四个开关绑属性走对象级重编译（语料 0 处）。
+- **彩色字形**（emoji）：WPE 在 MSDF 下不经 msdfgen、用自己的距离变换，我们照报 `text:msdf:color`（语料 0 处）。
+- **FreeType 要开 `FT_CONFIG_OPTION_USE_HARFBUZZ`**（走查查出，普通 R8 文字同样受益）：自动 hinter 经 HarfBuzz 顺着 GSUB 给只能经替换到达的字形归类。`3833971732` 的「16:22」里 HarfBuzz 把冒号换成抬高的冒号（LXGW 文楷 gid 20066，字体没有 `fpgm`），不开时 hinted 框宽 13、和 WPE 差 1 像素，开了逐字节相同。见 [wpefont README](../../src-tauri/wpefont/README.md)。
+- **`backgroundcolor` 的字段脚本**（P6f 点 7，`p6f-bg` 实测）：返回值当帧生效（直接上屏的背景与合成 RT 的清屏色同帧）；`Vec3` 原样写、数字铺满、字符串不写（保持上一个值），目标同属性绑定。
+
+**对照结论**（P6f，dev）：
+- **生成工程**：`p6f-atlas`（6 种字体，含 CFF、无指令 TrueType、回退 CJK）、`p6f-deco`（11 组装饰与钳制、缩小 / 放大）、`p6f-fx`（合成路径）、`p6f-grow`（94 个字形跨多行）和 WPE 整帧比（排除 FR / CLK）全部 0 差异。
+- **图集**：9 张、148 个格子与 WPE 逐字节相同。
+- **最终走查**（FINAL_CHECK，复制工程，脚本按录制的 `Date` 起点跑）：`3829268059`、`3833971732`、`3816870245`、`3593919489` 和 WPE 录制帧整帧逐像素相同。过程中解释并处理了两处差异：
+  - `3816870245` 的整组文字偏移：场景开了相机视差，第一次录制没控制光标；改用 `input_start` 喂中心光标、回放 `cursors: "log"` 后为 0。
+  - `3833971732` 冒号的 1 像素：即上面的 `USE_HARFBUZZ`，修后为 0。
+- **语料**：293 张干净 286 → 290，解锁 `3833971732`、`3816870245`、`3829268059`（MSDF）与 `3593919489`（`backgroundcolor` 脚本），别的场景不变。
 
 **对照结论**（1d，dev，Chrome/149.0.7827.201）：`p6b-geom`、`p6b-align`、`p6b-wrap`、`p6b-fx`、`p6b-fallback`、`p6b-extra` 六个工程按 1920×1080 渲染，和 WPE 的上屏整帧（排除 FR / CLK）比：五个逐像素相同，`p6b-fx` 只有 1 个像素差 1。覆盖直接上屏、合成路径（effect、清成背景色、clearalpha）、背景、CJK 回退与彩色 emoji。宿主实际加载的画面和探针的画面（遮掉 FR / CLK）哈希相同。
 

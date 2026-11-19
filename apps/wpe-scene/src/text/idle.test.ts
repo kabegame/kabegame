@@ -20,6 +20,7 @@ vi.mock("./layout", async (original) => ({
   layoutText: (): TextLayout => ({
     missingFonts: [...missing],
     mesh: null,
+    unsupported: [],
     padding: [0, 0],
     size: [2, 2],
     compositeSize: [1, 1],

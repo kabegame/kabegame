@@ -2977,7 +2977,11 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       unsupported.add(`material:missing:${path}`);
       return null;
     }
-    return compilePass(pass, { key, planned, text: options.text });
+    const variant =
+      options.combos && Object.keys(options.combos).length
+        ? { ...pass, combos: { ...pass.combos, ...options.combos } }
+        : pass;
+    return compilePass(variant, { key, planned, text: options.text });
   };
 
   // 加载进度：对象的权重 = 1 + effect 数（读完 scene.json 就知道），每处理一个对象之前报已处理的部分

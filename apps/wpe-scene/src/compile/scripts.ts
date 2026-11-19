@@ -5,6 +5,7 @@ import {
   isLightField,
   type AnimationLayerField,
   isTextRuntimeField,
+  textBackgroundColorTarget,
   type BindingTarget,
   type GeneralKey,
   type SceneBinding,
@@ -148,6 +149,10 @@ export function targetOf(
   // 灯对象的数值字段（P13f2，`LIGHT_FIELDS`）：就地写进 `SceneState.lights`，渲染器每帧现算（`p13f-light` 的 L2：字段脚本当帧生效）
   if (owner.kind === "layer" && light && path === `objects/${owner.object}/${key}` && isLightField(key))
     return { kind: "light", object: owner.object, field: key };
+  // 文本的 `backgroundcolor`（P6f 点 7）：同属性绑定写背景 pass 的常量 `g_Color`（`textBackgroundColorTarget`）。LDR 或 HDR 下亮度恒为 1 时就地写；
+  // HDR 下亮度不为 1 要乘它、就地写不了，那种情形由 `compileText` 报 `text:script:backgroundcolor`（这里不知道场景的 HDR）
+  if (owner.kind === "layer" && text && path === `objects/${owner.object}/backgroundcolor`)
+    return textBackgroundColorTarget(owner.object);
   if (owner.kind === "layer" && sound && path === `objects/${owner.object}/volume`)
     return { kind: "sound", object: owner.object, field: "volume" };
   if (owner.kind === "layer" && text && path === `objects/${owner.object}/${key}` && isTextRuntimeField(key))
@@ -194,6 +199,14 @@ export function targetValueType(
   if (target.kind === "light") return LIGHT_FIELDS[target.field].type;
   if (target.kind === "animation-layer") return target.field === "visible" ? "bool" : "float";
   if (target.kind === "text") return textTypes[target.field];
+  // 文本背景色（P6f 点 7）：WPE 的描述符是 vec3，不按脚本对象的 `value` 猜（返回值转换：Vec3 原样、数字铺满、字符串不写）
+  if (
+    target.kind === "constant" &&
+    owner.kind === "layer" &&
+    key === "backgroundcolor" &&
+    target.uniforms[0] === "g_Color"
+  )
+    return "vec3";
   if (target.kind === "particle-instance")
     return target.field === "colorn" || instanceControlPoint(target.field) ? "vec3" : "float";
   if (owner.kind === "layer" && key in layerTypes) return layerTypes[key];

@@ -37,6 +37,7 @@ import {
   type TextLayout,
   type TextQuad,
 } from "../text/layout";
+import { TEXT_DECOR_DEFAULTS } from "../text/fields";
 import { textVertices } from "../text/mesh";
 import { PIXEL_MODE_BGRA, PIXEL_MODE_GRAY, Wpefont } from "../wpefont";
 import type { TranslateResult } from "../wpesl2wgsl";
@@ -46,7 +47,7 @@ import { multiply, transformPoint, translation, type Mat4 } from "./math";
 import { GpuScene } from "./scene";
 import { SceneState } from "./state";
 import { textIndexData } from "./text";
-import { textMatrices, type FrameInput } from "./uniforms";
+import { msdfRenderVars, textMatrices, type FrameInput } from "./uniforms";
 
 vi.mock("./device", () => ({ acquireGpu: vi.fn() }));
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -137,6 +138,8 @@ interface LayoutDef {
   box: { minX: number; minY: number; maxX: number; maxY: number };
   padding: [number, number];
   offset?: [number, number];
+  /** MSDF 画法（P6f）：`TextMesh.msdf`。 */
+  msdf?: boolean;
 }
 
 /** 一份排版结果：字形依次排在基线上；尺寸照 `finish` 的规则（float32）。 */
@@ -149,11 +152,13 @@ function layoutOf(def: LayoutDef): TextLayout {
   const colorGlyphs = def.colorGlyphs ?? [];
   return {
     missingFonts: [],
+    unsupported: [],
     mesh: {
       key: "test_2048",
+      msdf: def.msdf ?? false,
       glyphs: def.glyphs.map(quad),
       colorGlyphs: colorGlyphs.map(quad),
-      atlas: def.glyphs[0]?.atlas ?? new GlyphAtlas(false),
+      atlas: def.glyphs[0]?.atlas ?? new GlyphAtlas(1),
       colorAtlas: colorGlyphs[0]?.atlas ?? null,
       box: def.box,
       lineHeight: 50,
@@ -309,8 +314,8 @@ const kinds = (steps: LayerStep[]) =>
 const textSteps = (plan: LayerPlan) => plan.steps.filter((step) => step.kind === "text");
 
 describe("planLayer：文本层", () => {
-  const atlas = new GlyphAtlas(false);
-  const colorAtlas = new GlyphAtlas(true);
+  const atlas = new GlyphAtlas(1);
+  const colorAtlas = new GlyphAtlas(4);
   const plain = layoutOf({ glyphs: glyphsIn(atlas, 3), box: AG_BOX, padding: [0, 0] });
   const withColor = layoutOf({
     glyphs: glyphsIn(atlas, 2, 10),
@@ -468,7 +473,7 @@ describe("planLayer：文本层", () => {
 // ———— 矩阵：textMatrices 对上 WPE ————
 
 describe("textMatrices：和 p6b-fx 抓帧的 MVP 相同", () => {
-  const atlas = new GlyphAtlas(false);
+  const atlas = new GlyphAtlas(1);
   const glyphs = glyphsIn(atlas, 2);
   const vp = sceneViewProjection({ width: 1920, height: 1080 });
   /** 图层画自己的矩阵（含对齐偏移，`drawMatrixOf`，P8 步骤 3 起世界矩阵不带它）。 */
@@ -801,10 +806,10 @@ describe("GpuScene：文本层", () => {
    * P 与 F 用同一张主图集（同一「字体 + 字号」），B、FB 各一张。
    */
   function scene4() {
-    const shared = new GlyphAtlas(false);
-    const colorAtlas = new GlyphAtlas(true);
-    const other = new GlyphAtlas(false);
-    const third = new GlyphAtlas(false);
+    const shared = new GlyphAtlas(1);
+    const colorAtlas = new GlyphAtlas(4);
+    const other = new GlyphAtlas(1);
+    const third = new GlyphAtlas(1);
     const layouts = new Map<number, TextLayout>([
       [
         0,
@@ -964,7 +969,7 @@ describe("GpuScene：文本层", () => {
   });
 
   it("perspective: true（P5g）：直接上屏的字形与背景用透视那一份视图投影，合成路径的字形（RT 像素正交）与上屏不受影响、没开的照旧", async () => {
-    const atlas = new GlyphAtlas(false);
+    const atlas = new GlyphAtlas(1);
     const layouts = new Map<number, TextLayout>([
       [0, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [0, 0] })],
       [1, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [32, 32], offset: [0, -18] })],
@@ -1057,6 +1062,55 @@ describe("GpuScene：文本层", () => {
     gpu.trace.length = 0;
     scene.encode(gpu.device.createCommandEncoder(), state);
     expect(gpu.trace).toContain('pass composite 213x240|true|false #0 clear {"r":1,"g":1,"b":0,"a":0.25}');
+  });
+
+  it("MSDF 字形（P6f）：g_RenderVar0..3 按装饰参数写进 uniform；参数绑属性就地改，sync 后重写、不重排；非 MSDF 层不写", async () => {
+    const atlas = new GlyphAtlas(1);
+    const layouts = new Map<number, TextLayout>([
+      [0, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [0, 0], msdf: true })],
+      [1, layoutOf({ glyphs: glyphsIn(atlas, 2), box: AG_BOX, padding: [0, 0] })],
+    ]);
+    const layers = [textLayer(0, "M"), textLayer(1, "P")];
+    layers[0].text!.fields = {
+      ...layers[0].text!.fields,
+      msdf: true,
+      decor: { ...TEXT_DECOR_DEFAULTS, outline: true, outlinecolor: [1, 1, 1] },
+    };
+    const bundle = bundleOf(layers);
+    const entries = [
+      { name: "g_Color4", type: "vec4<f32>", offset: 64, size: 16 },
+      { name: "g_RenderVar0", type: "vec4<f32>", offset: 80, size: 16 },
+      { name: "g_RenderVar1", type: "vec4<f32>", offset: 96, size: 16 },
+      { name: "g_RenderVar3", type: "vec4<f32>", offset: 112, size: 16 },
+    ];
+    bundle.programs[0] = { ...program("font", [0], entries), uniformBlockSize: 128 } as unknown as TranslateResult;
+    bundle.bindings.push({ property: "thick", target: { kind: "text-decor", object: 0, field: "outlinethickness" } });
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(new FakeGpu().device, bundle, state, new Set(), [], {
+      ignoreUnsupported: true,
+      particles: { seed: 1 },
+      texts: layouts,
+    });
+    scene.update(FRAME, state);
+    const vars = (object: number) => ({
+      v0: floatsOf(drawOf(scene, object, "glyphs"), 80, 4),
+      v1: floatsOf(drawOf(scene, object, "glyphs"), 96, 4),
+      v3: floatsOf(drawOf(scene, object, "glyphs"), 112, 4),
+    });
+    const expected = msdfRenderVars(layers[0].text!.fields.decor, 32);
+    expect(vars(0)).toEqual({ v0: expected.g_RenderVar0, v1: expected.g_RenderVar1, v3: expected.g_RenderVar3 });
+    expect(vars(0).v0).toEqual([24, f(0.96), 0, 0].map(f));
+    // 非 MSDF 的层不写（全 0）
+    expect(vars(1)).toEqual({ v0: [0, 0, 0, 0], v1: [0, 0, 0, 0], v3: [0, 0, 0, 0] });
+    // 参数绑属性：就地写，当帧 sync 之后 uniform 重写；排版不动（dirty.texts 为空）
+    const binding = bundle.bindings.find((item) => item.property === "thick")!;
+    expect(state.write(binding, 2)).toBe("applied");
+    scene.sync(state);
+    scene.update(FRAME, state);
+    const next = msdfRenderVars({ ...layers[0].text!.fields.decor, outlinethickness: 2 }, 32);
+    expect(vars(0).v0).toEqual(next.g_RenderVar0);
+    expect(vars(0).v0[1]).toBe(f(0.48));
+    expect(state.textFields.get(0)!.text).toBe(layers[0].text!.fields.text);
   });
 
   it("文本层的 effect 开关走整场重编译（改 padding 与文字框，1d 没有就地重排）", async () => {
@@ -1153,6 +1207,7 @@ function imageLayer(object: number): SceneLayer {
 const EMPTY_LAYOUT: TextLayout = {
   missingFonts: [],
   mesh: null,
+  unsupported: [],
   padding: [0, 0],
   size: [2, 2],
   compositeSize: [1, 1],
@@ -1165,9 +1220,9 @@ describe("GpuScene：文本层运行中重排与重建（P6b 1e）", () => {
    * shared，起初 RT 149×176）、E（合成，起初空文字）、I（图像层，合成 RT 149×176 与 fbo 走共享池）。
    */
   function relayoutScene() {
-    const shared = new GlyphAtlas(false);
-    const colorAtlas = new GlyphAtlas(true);
-    const other = new GlyphAtlas(false);
+    const shared = new GlyphAtlas(1);
+    const colorAtlas = new GlyphAtlas(4);
+    const other = new GlyphAtlas(1);
     const layouts = new Map<number, TextLayout>([
       [
         0,
@@ -1454,7 +1509,7 @@ describe("GpuScene：文本层运行中重排与重建（P6b 1e）", () => {
   it("对齐偏移变了：本层画自己的矩阵在同一次 sync 里刷；子对象的世界矩阵不带它（P8 步骤 3）", async () => {
     // 文本层 P 带一个子对象 C（图像层、直接上屏）：P 画自己的矩阵（`drawMatrixOf`）右乘对齐偏移，C 的世界矩阵经父链只带 P 的世界矩阵，
     // 不带偏移（P8 步骤 3，`p8-align2` 的 Xc），所以 P 重排换了偏移后 C 不动
-    const atlas = new GlyphAtlas(false);
+    const atlas = new GlyphAtlas(1);
     const child: SceneLayer = {
       ...textLayer(1, "C"),
       text: null,
@@ -1519,7 +1574,7 @@ describe("GpuScene：文本层运行中重排与重建（P6b 1e）", () => {
 
 describe("GpuScene：小文字的合成 RT 套 max(4, ·)（P6b 1e，p6b-tiny2 的 2×6 → 4×6）", () => {
   it("合成 RT 4×6、画进 RT 的正交对着 RT 像素；上屏四边形仍是文字框 2×6；直接上屏的背景四边形 [0, 4] × [0, 6]", async () => {
-    const atlas = new GlyphAtlas(false);
+    const atlas = new GlyphAtlas(1);
     const tinyBox = { minX: 0, minY: 0, maxX: 2, maxY: 6 };
     const layouts = new Map<number, TextLayout>([
       [0, layoutOf({ glyphs: glyphsIn(atlas, 1), box: tinyBox, padding: [0, 0] })],

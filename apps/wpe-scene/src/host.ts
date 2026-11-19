@@ -679,6 +679,8 @@ export class SceneHost {
     if (target.kind === "light") return `objects/${target.object}/${target.field}`;
     // 文本字段（P6b 1e）：同脚本运行时重放表的键
     if (target.kind === "text") return `objects/${target.object}/${target.field}`;
+    // MSDF 装饰参数（P6f）：同上，脚本写不到它，只有属性写
+    if (target.kind === "text-decor") return `objects/${target.object}/${target.field}`;
     // 相机对象的 `fov` / `zoom`（P5d 步骤 3）
     if (target.kind === "camera") return `objects/${target.object}/${target.field}`;
     // 场景相机的基准（P5e）：同脚本运行时的 `targetKey`

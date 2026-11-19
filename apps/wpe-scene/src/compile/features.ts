@@ -765,38 +765,25 @@ const TEXT_KEYS = new Set([
   "dropshadowcolor",
 ]);
 
-/** 打开任意一个都改走 MSDF（rea-p6b-raster 1：`O+0x518 != 0`），P6b 不做（语料 2 张、5 个对象）。 */
-const TEXT_MSDF_KEYS = ["msdf", "outline", "blur", "dropshadow"] as const;
-
 /**
  * 文本对象的静态检查（P6b 1d，`checkObjectFeatures` 调）：挂 `{script}` 的文本键。
  * - 运行中字段（`TEXT_RUNTIME_FIELDS`：`text`、`pointsize`、`maxwidth` 等 12 个）挂脚本不报（P6b 1e-3）：字段脚本的返回值经字符串
  *   写回进 `SceneState.textFields`，值变了宿主当帧重排、重建这一层（1e-1、1e-2），同 WPE 写入时当场重排；
- * - 其余文本键（`font`、`opaquebackground`、`backgroundcolor`、MSDF 的开关与参数等）挂脚本报 `text:script:<键>`：`font`、
- *   `opaquebackground` 运行中改要整场重编译（1e 已定 3），别的没有脚本写回目标（`compile/scripts.ts` 落成 `unsupported`）。
- * 生效值相关的项（MSDF 的开关、`anchor`）要按当前用户属性判断，在编译时由 `checkTextOptions` 报（`compile/texts.ts`）。
+ * - `backgroundcolor`（P6f 点 7）：字段脚本写背景常量 `g_Color`，目标同属性绑定（`compile/scripts.ts` 的 `targetOf`），不在这里报；只有要走重编译的
+ *   情形（HDR 且 `backgroundbrightness` 不恒为 1）才报，那要知道场景的 HDR，由 `compile/texts.ts` 报 `text:script:backgroundcolor`；
+ * - 其余文本键（`font`、`opaquebackground`、MSDF 的开关与参数等）挂脚本报 `text:script:<键>`：`font`、`opaquebackground`、四个开关运行中改要整场
+ *   重编译（1e 已定 3），装饰参数与别的没有脚本写回目标（`compile/scripts.ts` 落成 `unsupported`）。
+ * MSDF 的四个开关与 `anchor` 不再有能力项（P6f 点 4、P6e 点 5）：MSDF 画法由渲染器实现，彩色字形的 `text:msdf:color` 由宿主排版时报。
  */
 export function checkTextFeatures(object: SceneObject, unsupported: Set<string>): void {
   for (const key of TEXT_KEYS)
-    if (isScriptValue(object[key]) && !isTextRuntimeField(key)) unsupported.add(`text:script:${key}`);
-}
-
-/**
- * 文本对象按生效值（绑了属性的取当前值）查的能力（P6b 1d，`compile/texts.ts` 解析字段时调）：
- * - `msdf` / `outline` / `blur` / `dropshadow` 打开：`text:msdf:<键>`；
- * - `anchor` 九种取值都支持（P6e 点 5）：绘制与光标命中时在世界空间加一段平移 `(ax, ay)`，由每帧的 `E0..E3` 算（`render/layout.ts` 的
- *   `anchorOffset` / `anchorEdgesFor`，rea-p6b-layout 3.4、rea-p6e-sheet 8），不再报 `text:anchor:<值>`。
- */
-export function checkTextOptions(
-  values: Record<(typeof TEXT_MSDF_KEYS)[number], boolean> & { anchor: string },
-  unsupported: Set<string>,
-): void {
-  for (const key of TEXT_MSDF_KEYS) if (values[key]) unsupported.add(`text:msdf:${key}`);
+    if (isScriptValue(object[key]) && !isTextRuntimeField(key) && key !== "backgroundcolor")
+      unsupported.add(`text:script:${key}`);
 }
 
 /**
  * 字体着色器（`font.frag`）声明的引擎 uniform：`g_RenderVar0–3` 是 MSDF 的描边、模糊、投影参数（rea-p6b-raster 6），普通路径不读
- * （翻译器标 `unused`，本来就不报）。文本 pass 的程序检查放行它们，渲染器不写（MSDF 另报 `text:msdf:*`）。
+ * （翻译器标 `unused`，本来就不报）。文本 pass 的程序检查放行它们，MSDF 画法由渲染器写（`render/uniforms.ts` 的 `msdfRenderVars`）。
  */
 export const TEXT_UNIFORMS: ReadonlySet<string> = new Set([
   "g_RenderVar0",

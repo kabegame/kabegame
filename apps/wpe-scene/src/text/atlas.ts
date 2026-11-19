@@ -24,9 +24,28 @@
  * 然后清零格子四周：上一行与下一行各 `w` 个像素（`y0 = 0` 时上一行是最后一行，下一行是 `y1 % 高`），左一列与右一列
  * 各 `y0 … y1 − 1` 行（`x0 = 0` 时左一列是最后一列，右一列是 `x1 % 宽`）；角不清。零尺寸字形什么也不清。
  *
+ * MSDF（P6f）：图集是同一个装箱器，只是主图集 RGBA8（每像素 4 字节）、格子 = `inner + 24`（四周各 12 像素余量，`wpefont_msdf` 给出）、
+ * 键 `<路径>_msdf` 与字号无关；整格拷进去（逐行 `宽 · 4` 字节），清零四周写 4 字节 0。包围盒为空的字形（空格）照样占 24 × 24 的格子、
+ * 不写像素（回收来的格子里残留的旧像素照 WPE 不清）。彩色 face 的字形 WPE 另走自己的距离变换，这里不做（`rasterizeGlyph` 返回 `text:msdf:color`）。
+ *
  * 和 WPE 的已知差异：单色内嵌点阵（`pixel_mode 1`）WPE 不拷（格子保持原样，字形画不出来），这里展开成 0 / 255。
  */
 import { PIXEL_MODE_BGRA, PIXEL_MODE_GRAY, PIXEL_MODE_MONO, type GlyphBitmap, type WpefontFace } from "../wpefont";
+
+/**
+ * MSDF 图集的一个格子（`WpefontFace.msdf` 的结果）：`rgba` 是 `width · height · 4` 字节、第 0 行在上；为 null（包围盒为空，没有生成）时
+ * 只占格、不写像素。
+ */
+export interface MsdfSource {
+  width: number;
+  height: number;
+  rgba: Uint8Array | null;
+}
+
+/** 这个字形进不了图集、也不画：MSDF 下彩色 face 的字形（WPE 另走自己的距离变换，语料 0 处，照报 `text:msdf:color`）。 */
+export interface AtlasUnsupported {
+  unsupported: string;
+}
 
 /** 初始尺寸（`FUN_1401ac8d0`）。 */
 export const ATLAS_INITIAL_SIZE = 512;
@@ -84,8 +103,8 @@ const fround = Math.fround;
 export class GlyphAtlas {
   width = ATLAS_INITIAL_SIZE;
   height = ATLAS_INITIAL_SIZE;
-  /** 每像素字节数：R8 为 1，RGBA8 为 4。 */
-  readonly bpp: number;
+  /** 每像素字节数：R8 为 1，RGBA8 为 4（彩色字形图集、MSDF 主图集）。 */
+  readonly bpp: 1 | 4;
   pixels: Uint8Array;
   /** 字形表（键见 {@link AtlasGlyph.key}），按插入顺序。 */
   readonly glyphs = new Map<number, AtlasGlyph>();
@@ -102,8 +121,15 @@ export class GlyphAtlas {
   private dirtyRects: AtlasRect[] = [];
   private dirtyAll = false;
 
-  constructor(readonly color: boolean) {
-    this.bpp = color ? 4 : 1;
+  /**
+   * @param bpp 每像素字节数：1 = R8，4 = RGBA8。
+   * @param color 是不是装彩色字形（BGRA 位图）的图集，缺省随 `bpp`；MSDF 主图集是 RGBA8 但装的不是彩色字形，传 false。
+   */
+  constructor(
+    bpp: 1 | 4,
+    readonly color: boolean = bpp === 4,
+  ) {
+    this.bpp = bpp;
     this.pixels = new Uint8Array(this.width * this.height * this.bpp);
   }
 
@@ -134,16 +160,20 @@ export class GlyphAtlas {
    * 放一个字形（`FUN_1401ae080` 栅格化之后的部分）：先找格子，再写像素、清四周。`reuse` 是表里同键、已回收的旧对象。
    * 宽到 4096 还放不下时返回 {@link AtlasFull}。
    */
-  insert(key: number, gid: number, bitmap: GlyphBitmap): AtlasGlyph | AtlasFull {
+  insert(key: number, gid: number, bitmap: GlyphBitmap | MsdfSource): AtlasGlyph | AtlasFull {
     const reuse = this.glyphs.get(key) ?? null;
-    const glyph = this.place(bitmap.width, bitmap.rows, reuse, key, gid);
+    const msdf = "rgba" in bitmap;
+    const w = bitmap.width;
+    const h = msdf ? bitmap.height : bitmap.rows;
+    const glyph = this.place(w, h, reuse, key, gid);
     if (!glyph) return { full: this };
-    glyph.color = bitmap.mode === PIXEL_MODE_BGRA;
+    glyph.color = !msdf && bitmap.mode === PIXEL_MODE_BGRA;
     glyph.atlas = this;
     glyph.recycled = false;
     if (!reuse) this.glyphs.set(key, glyph);
-    this.write(glyph, bitmap);
-    this.clearAround(glyph, bitmap.width);
+    if (msdf) this.writeMsdf(glyph, bitmap);
+    else this.write(glyph, bitmap);
+    this.clearAround(glyph, w);
     return glyph;
   }
 
@@ -272,6 +302,18 @@ export class GlyphAtlas {
     return glyph;
   }
 
+  /** MSDF 格子整格拷进去（RGBA8 图集，逐行 `width · 4` 字节）；没有像素（空包围盒）时不写。 */
+  private writeMsdf(glyph: AtlasGlyph, source: MsdfSource): void {
+    const { width, height, rgba } = source;
+    if (!rgba || this.bpp !== 4) return;
+    const stride = this.width * 4;
+    const base = (glyph.y0 * this.width + glyph.x0) * 4;
+    for (let r = 0; r < height; r++) {
+      this.pixels.set(rgba.subarray(r * width * 4, (r + 1) * width * 4), base + r * stride);
+    }
+    this.markDirty(glyph.x0, glyph.y0, glyph.x0 + width, glyph.y0 + height);
+  }
+
   private write(glyph: AtlasGlyph, bitmap: GlyphBitmap): void {
     const { width, rows, pixels } = bitmap;
     const bpp = this.bpp;
@@ -358,9 +400,11 @@ function maxGap(cells: readonly AtlasGlyph[], width: number): number {
   return best < 2 ? 0 : best;
 }
 
-/** 一个「字体 + 字号」的两张图集。 */
+/** 一个字体键（普通路径是「字体 + 字号」，MSDF 是字体文件）的图集。 */
 export interface FontAtlases {
   readonly key: string;
+  /** MSDF 图集：主图集 RGBA8、字形是距离场格子，没有彩色图集。 */
+  readonly msdf: boolean;
   readonly main: GlyphAtlas;
   color: GlyphAtlas | null;
 }
@@ -369,10 +413,11 @@ export interface FontAtlases {
 export class TextAtlases {
   private readonly entries = new Map<string, FontAtlases>();
 
-  get(key: string): FontAtlases {
+  /** `msdf`：键对应的是不是 MSDF 字体（键里已带 `_msdf`，同一个键不会既是普通又是 MSDF）。 */
+  get(key: string, msdf = false): FontAtlases {
     let entry = this.entries.get(key);
     if (!entry) {
-      entry = { key, main: new GlyphAtlas(false), color: null };
+      entry = { key, msdf, main: new GlyphAtlas(msdf ? 4 : 1, false), color: null };
       this.entries.set(key, entry);
     }
     return entry;
@@ -385,21 +430,35 @@ export class TextAtlases {
 }
 
 /**
- * 取一个字形在图集里的位置，没有就栅格化放进去（`FUN_1401ae080` 的非 MSDF 路径）。
+ * 取一个字形在图集里的位置，没有就栅格化放进去（`FUN_1401ae080`）。
  * 先查主图集、再查彩色图集；栅格化失败（`FT_Load_Glyph` / `FT_Get_Glyph` 出错）返回 null，排版跳过这个字形。
+ * MSDF 图集（`atlases.msdf`）：只查主图集，没有就用传进来的 face（本对象字号的那个，WPE 取「第一个用到这个字形的对象」的字号，先到先得）
+ * 生成距离场格子放进去；彩色 face 的字形返回 {@link AtlasUnsupported}（`text:msdf:color`）。
  */
 export function rasterizeGlyph(
   atlases: FontAtlases,
   face: WpefontFace,
   faceIndex: number,
   gid: number,
-): AtlasGlyph | AtlasFull | null {
+): AtlasGlyph | AtlasFull | AtlasUnsupported | null {
   const key = ((faceIndex << 24) | gid) >>> 0;
+  if (atlases.msdf) {
+    const hit = atlases.main.find(key);
+    if (hit) return hit;
+    if (face.isColor()) return { unsupported: "text:msdf:color" };
+    const cell = face.msdf(gid);
+    if (!cell) return null;
+    return atlases.main.insert(key, gid, {
+      width: cell.width,
+      height: cell.height,
+      rgba: cell.generated ? cell.pixels : null,
+    });
+  }
   const hit = atlases.main.find(key) ?? atlases.color?.find(key) ?? null;
   if (hit) return hit;
   const bitmap = face.glyph(gid);
   if (!bitmap) return null;
-  const atlas = bitmap.mode === PIXEL_MODE_BGRA ? (atlases.color ??= new GlyphAtlas(true)) : atlases.main;
+  const atlas = bitmap.mode === PIXEL_MODE_BGRA ? (atlases.color ??= new GlyphAtlas(4)) : atlases.main;
   const again = atlas.find(key);
   if (again) return again;
   return atlas.insert(key, gid, bitmap);

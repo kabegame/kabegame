@@ -9,6 +9,11 @@
  * - 断行找空白时包括下标 0；每行开头（还没有段时）的空白、ZWJ 与找不到字体的码点在分段时被丢掉（见 fonts.ts）；
  * - 省略号回退量宽时不加 `spacing.x`（WPE 只累加 `x_advance >> 6`）。
  *
+ * MSDF（P6f，`fields.msdf`）：字体键 `<路径>_msdf` 与字号无关、图集 RGBA8、格子 = `inner + 24`（见 atlas.ts）；每个四边形各边外扩
+ * `pad = f32(max(y_ppem, 1)) · 12 · 0.03125`（`y_ppem` 取本对象字号下这个字形所在 face 的，不是生成字形时的那个；`FUN_1401b0410`
+ * 第 958–963 行），UV 取整个格子。**文字框、行宽、`minX` / `minY` 都不含 `pad`**（rea-p6f-msdf 4.1），所以走合成路径时贴边的装饰会被
+ * 合成 RT 裁掉，照 WPE。彩色 face 的字形（`text:msdf:color`）不画、不进图集，字距照排，键记在 `TextLayout.unsupported`。
+ *
  * 字形进图集的时机（决定图集能不能和 WPE 逐字节相同）：逐行、逐段排字时**每个字形先栅格化进图集**，再判断越界——
  * 所以越界的那个字形进了图集、但不一定画；越界后这一段剩下的字形和后面的段都不再碰；省略号回退量宽只取字形框、
  * 不进图集；需要重排的行（折行后、加省略号后）再排一遍，已在图集里的字形直接复用。对象之间按场景里的顺序。
@@ -33,7 +38,7 @@ import type { TextFields } from "./fields";
 // 字段与缺省值在 `fields.ts`（编译 Worker 也用，P6b 1d 拆出），这里原样再导出
 export { TEXT_DEFAULTS, type TextFields } from "./fields";
 
-/** 一个字形四边形：排版坐标（y 向上，第一行基线在 0），左、下、右、上；UV 从 `glyph` 读（图集扩容后会变）。 */
+/** 一个字形四边形：排版坐标（y 向上，第一行基线在 0），左、下、右、上（MSDF 时已含 `pad` 外扩）；UV 从 `glyph` 读（图集扩容后会变）。 */
 export interface TextQuad {
   x0: number;
   y0: number;
@@ -44,9 +49,11 @@ export interface TextQuad {
 
 /** WPE 的排版结果 `L`（`FUN_1401b0410` 返回的 0x108 字节）。 */
 export interface TextMesh {
-  /** 字体键（图集按它共享）。 */
+  /** 字体键（图集按它共享）：普通路径 `<路径>_<size26.6>`，MSDF 路径 `<路径>_msdf`。 */
   key: string;
-  /** 普通字形（R8 主图集）与彩色字形（RGBA8 彩色图集），各按行、段、字形的顺序；零尺寸字形（空格）也在里面。 */
+  /** MSDF 画法：主图集是 RGBA8 距离场，`glyphs` 的四边形已按 `pad` 外扩，没有彩色字形。 */
+  msdf: boolean;
+  /** 普通字形（R8 主图集；MSDF 时是 RGBA8 距离场）与彩色字形（RGBA8 彩色图集），各按行、段、字形的顺序；零尺寸字形（空格）也在里面。 */
   glyphs: TextQuad[];
   colorGlyphs: TextQuad[];
   atlas: GlyphAtlas;
@@ -70,6 +77,11 @@ export interface TextLayout {
   missingFonts: FontPath[];
   /** 空文字、全是丢掉的码点、字体都不可用时为 null（WPE 不画这一层）。 */
   mesh: TextMesh | null;
+  /**
+   * 排版中遇到的、这次画不出的特性键（现在只有 MSDF 下彩色 face 的字形 `text:msdf:color`），去重、已排序。场景不退回，那个字形不画；
+   * 宿主（`SceneTexts`）排完交给运行期不支持项上报（看板娘提示、按键去重）。
+   */
+  unsupported: string[];
   /** 实际加上的 `padding`（不合成、没有背景时为 0，钳到 512）。 */
   padding: [number, number];
   /** 图层尺寸（`+0x2f0`）：包围盒 + 2 · padding；没有 mesh 时 2 + 2 · padding。 */
@@ -81,13 +93,20 @@ export interface TextLayout {
 }
 
 const f = Math.fround;
+
+/** MSDF 四边形的外扩（`FUN_1401b0410` 第 958–963 行）：`f32(max(y_ppem, 1)) · 12 · 0.03125`，整数 `y_ppem` 下精确等于 `y_ppem · 12 / 32`。 */
+export function msdfPad(yPpem: number): number {
+  return f(f(Math.max(yPpem, 1) * 12) * 0.03125);
+}
+
 const ELLIPSIS = 0x2026;
 /** 一行反复重排的上限（WPE 没有：`spacing.x` 让省略号行始终越界时它会死循环）。 */
 const RESHAPE_LIMIT = 64;
 
 /** 一个排好的字形（WPE 0x30 字节的字形记录）。 */
 interface GlyphRecord {
-  glyph: AtlasGlyph;
+  /** null = 这个字形画不出（`text:msdf:color`）：只占字距和取框，不画、不进引用。 */
+  glyph: AtlasGlyph | null;
   cp: number;
   /** 在整行里的码点下标（段起点 + cluster）。 */
   charIndex: number;
@@ -97,6 +116,8 @@ interface GlyphRecord {
   y0: number;
   x1: number;
   y1: number;
+  /** MSDF 四边形各边的外扩（非 MSDF 为 0）。 */
+  pad: number;
 }
 
 interface Run extends FontRun {
@@ -185,6 +206,7 @@ function emptyLayout(fields: TextFields, missingFonts: FontPath[] = []): TextLay
   return {
     missingFonts,
     mesh: null,
+    unsupported: [],
     padding,
     size: [f(f(2 + padding[0]) + padding[0]), f(f(2 + padding[1]) + padding[1])],
     compositeSize: [1, 1],
@@ -237,7 +259,7 @@ export function layoutText(fields: TextFields, fonts: TextFonts, atlases: TextAt
   for (const cp of probe) if (fonts.lookup(list, cp, missing) === undefined) break;
   if (missing.size) return emptyLayout(fields, [...missing]);
 
-  const entry = atlases.get(fontKey(path, size));
+  const entry = atlases.get(fontKey(path, size, fields.msdf), fields.msdf);
   let attempt = run(fields, fonts, list, entry, size, maxWidth, maxRows, false);
   if (attempt && "full" in attempt) {
     // 图集满（宽已到 4096）：清掉这张图集的格子、全部标成已回收，从头再排一次；再满就跳过放不下的字形
@@ -258,7 +280,7 @@ function run(
   maxWidth: number,
   maxRows: number,
   relayout: boolean,
-): { mesh: TextMesh } | { full: GlyphAtlas } | null {
+): { mesh: TextMesh; unsupported: string[] } | { full: GlyphAtlas } | null {
   const ellipsis = fields.limituseellipsis;
   const spacingX = f(fields.spacing[0]);
   const spacingY = f(fields.spacing[1]);
@@ -273,6 +295,7 @@ function run(
   };
 
   const refs = new Set<AtlasGlyph>();
+  const unsupported = new Set<string>();
   const release = () => {
     for (const glyph of refs) glyph.refs--;
     refs.clear();
@@ -310,12 +333,15 @@ function run(
           return { full: glyph.full };
         }
         if (!glyph) continue;
+        // MSDF 下彩色 face 的字形：不画、不进图集，字距与取框照排（记一个不支持项）
+        const drawable = "unsupported" in glyph ? null : glyph;
+        if (!drawable) unsupported.add((glyph as { unsupported: string }).unsupported);
         const box = listed.face.box(shaped.gid) ?? lastBox;
         lastBox = box;
         const xOffset = shaped.xOffset >> 6;
         const yOffset = shaped.yOffset >> 6;
         const record: GlyphRecord = {
-          glyph,
+          glyph: drawable,
           cp: segmentRun.text[shaped.cluster],
           charIndex: segmentRun.start + shaped.cluster,
           advance: f((shaped.xAdvance >> 6) + spacingX),
@@ -324,6 +350,7 @@ function run(
           y0: f(box.yMin + yOffset),
           x1: f(box.xMax + xOffset),
           y1: f(box.yMax + yOffset),
+          pad: fields.msdf ? msdfPad(listed.metrics.yPpem) : 0,
         };
         // 越界：墨迹右沿 + 笔位置 > maxwidth，本行已有字形、不是空白、不和上一个字形同簇
         if (
@@ -350,9 +377,9 @@ function run(
         previousChar = record.charIndex;
         pen = f(pen + record.advance);
         count++;
-        if (!refs.has(glyph)) {
-          glyph.refs++;
-          refs.add(glyph);
+        if (drawable && !refs.has(drawable)) {
+          drawable.refs++;
+          refs.add(drawable);
         }
       }
     }
@@ -430,22 +457,28 @@ function run(
     let x = 0;
     for (const segmentRun of finishedRow.runs) {
       for (const record of segmentRun.records) {
-        const quad: TextQuad = {
-          x0: f(f(x + record.x0) + shift),
-          y0: f(baseline + record.y0),
-          x1: f(f(x + record.x1) + shift),
-          y1: f(baseline + record.y1),
-          glyph: record.glyph,
-        };
-        (record.glyph.color ? colorGlyphs : glyphs).push(quad);
+        const drawn = record.glyph;
+        if (drawn) {
+          // 非 MSDF 的 pad 是 0，`f(v - 0)` 与原结果相同
+          const quad: TextQuad = {
+            x0: f(f(f(x + record.x0) - record.pad) + shift),
+            y0: f(f(baseline + record.y0) - record.pad),
+            x1: f(f(f(x + record.x1) + record.pad) + shift),
+            y1: f(f(baseline + record.y1) + record.pad),
+            glyph: drawn,
+          };
+          (drawn.color ? colorGlyphs : glyphs).push(quad);
+        }
         x = f(x + record.advance);
       }
     }
     baseline = f(baseline - lineHeight);
   }
   return {
+    unsupported: [...unsupported].sort(),
     mesh: {
-      key: list.key,
+      key: atlases.key,
+      msdf: atlases.msdf,
       glyphs,
       colorGlyphs,
       atlas: atlases.main,
@@ -536,7 +569,7 @@ function ellipsizeRow(
 }
 
 /** 文字框、对齐偏移、图层与合成 RT 尺寸（`FUN_140256f20` 尾部、`FUN_140258900`、`FUN_140258ab0`）。 */
-function finish(fields: TextFields, result: { mesh: TextMesh }, list: FaceList): TextLayout {
+function finish(fields: TextFields, result: { mesh: TextMesh; unsupported: string[] }, list: FaceList): TextLayout {
   const mesh = result.mesh;
   const { minX, minY, maxX, maxY } = mesh.box;
   const metrics = list.main.metrics;
@@ -556,6 +589,7 @@ function finish(fields: TextFields, result: { mesh: TextMesh }, list: FaceList):
   return {
     missingFonts: [],
     mesh,
+    unsupported: result.unsupported,
     padding,
     size: [f(f(w + padding[0]) + padding[0]), f(f(h + padding[1]) + padding[1])],
     compositeSize: [Math.trunc(f(f(rtPad[0] + rtPad[0]) + w)), Math.trunc(f(f(rtPad[1] + rtPad[1]) + h))],

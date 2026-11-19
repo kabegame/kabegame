@@ -3864,3 +3864,18 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | PS4 场景壁纸 | Windows dev，图库预览 | 预览一张有动画 / 粒子 / 声音的场景（如带时钟或频谱的），控制条倍速选 4×、0.25× | 动画、粒子、关键帧、视频纹理、声音一起变快 / 变慢，不重新加载；网页壁纸的控制条没有倍速按钮 | |
 | [ ] | PS5 和帧率正交 | Windows dev，图库预览 | 同一张场景，帧率设 10 与 60，各开 2× 看同一段动画的快慢 | 两种帧率下整体速度一样（10 fps 只是更卡），不会因为帧率低变慢 | |
 | [ ] | PS6 设置页与桌面 | Windows dev，壁纸窗口模式 | 设置页「壁纸设置」的「倍速」拖到 4，桌面放场景与视频壁纸 | 滑条范围 0.25–4；桌面的场景与视频都按 4× 放；拖回 1 恢复 | |
+
+## 场景壁纸文字的 MSDF（描边、模糊、投影，P6f）与 `backgroundcolor` 字段脚本
+
+2026-11-19 Windows dev。文本对象打开 `msdf` / `outline` / `blur` / `dropshadow` 任一个时整层走多通道距离场：`wpefont` 编进 msdfgen v1.13（子模块 `third/msdfgen`）生成格子，字体键与字号无关、RGBA8 图集，四边形外扩 `pad`，`basefont_msdf` 按三位 COMBO，每次绘制现算 `g_RenderVar0..3`；装饰参数绑属性就地写。`backgroundcolor` 字段脚本有了写回目标（背景常量，当帧生效）。走查中查出 wpefont 的 FreeType 要开 `FT_CONFIG_OPTION_USE_HARFBUZZ`（只经 GSUB 到达的字形的 hinting），一并修了。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | M0 单测与检查 | Windows | wpe-scene vitest（`text`、`wpefont`、`render/text*`、`msdfVars`、`compile/texts`、`script`、`host.script` 等 48 个文件）、`tsc`；`deno task build:wpefont` | 全过 | 2026-11-19 Claude：48 文件 885 条；MSDF 格子与 WPE 图集逐字节（11 个字形的 SHA-1）、p6f-grow 94 个装箱位置、p6f-deco 11 组 `g_RenderVar`、四边形顶点逐位相同 |
+| [x] | M1 图集逐字节 | Windows，Node 对照 | `ignore/p6/f0/msdf/cmp.mjs`：p6f-atlas / deco / fx / grow 的 WPE 图集（RenderDoc 导出）对 msdfgen v1.13 + WPE 外围流程 | 9 张图集、148 个格子逐字节相同 | 2026-11-19 Claude：开 / 不开 `USE_HARFBUZZ` 都相同 |
+| [x] | M2 生成工程整帧 | Windows dev，屏外宿主（dev 探针，canvas 1920×1080） | `p6f-atlas`、`p6f-deco`、`p6f-fx`、`p6f-grow` 和 WPE 上屏帧比（排除 FR / CLK） | 0 差异 | 2026-11-19 Claude：4 张全 0；deco 覆盖描边 5.1 上限、模糊让位、投影 6 上限 / 负偏移 / 不透明度 > 1、缩小与放大 |
+| [x] | M3 语料复制工程走查 | Windows dev，屏外宿主（脚本按录制的 `Date` 起点，canvas 1280×720） | `ignore/p6/f2/proj/<ID>-iso-msdf`：3833971732、3816870245、3829268059、3593919489 和 WPE 录制帧整帧比 | 逐像素相同 | 2026-11-19 Claude：4 张全 0。3816870245 开了相机视差，用 `input_start` 给 WPE 喂中心光标、回放 `cursors: "log"` 后为 0（第一次录制没控光标，整组文字偏几像素）；3833971732 冒号（HarfBuzz 替换出的 gid 20066）差 1 像素，开 `USE_HARFBUZZ` 后为 0 |
+| [x] | M4 `backgroundcolor` 字段脚本 | Windows，WPE 抓帧 | `p6f-bg`（返回 `Vec3` / 字符串 / 数字轮换） | 当帧生效；数字铺满、字符串不写 | 2026-11-19 Claude：WPE 4 帧逐帧核对；我们的写回规则与之相同（`script/runtime.test.ts`） |
+| [x] | M5 语料 | Windows | `kbp corpus scan`（含 myprojects）前后比 | 干净 286 → 290，只多这 4 张，别的不变 | 2026-11-19 Claude |
+| [ ] | M6 真机预览与桌面 | Windows dev，图库预览与壁纸窗口 | 预览 3829268059（红色描边 + 投影 + 模糊的时钟）、3816870245（带模糊 effect 的日期时钟），再设为桌面 | 文字带描边与投影，时钟每分钟换字不闪、不整场重载；改「场景后处理」等设置后照常 | |
+| [ ] | M7 装饰属性就地改 | Windows dev，图库预览 | 自建工程：文字开描边，`outlinethickness` / `dropshadowoffset` 绑滑块，在右栏拖动 | 拖动时当帧变化、不重新加载；开关（`outline`）绑属性时切换会重编这一个对象 | |

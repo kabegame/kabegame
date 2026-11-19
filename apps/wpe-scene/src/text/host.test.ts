@@ -245,6 +245,43 @@ describe.skipIf(!existsSync(WASM) || !root)("SceneTexts：p6b 基线（真 wasm�
     });
   }
 
+  it("MSDF 下彩色 face 的字形（text:msdf:color）交给运行期不支持项：prepare 与 layoutInCurrent 各报一次，普通路径与无彩色字形不报", async () => {
+    const reported: string[][] = [];
+    const report = {
+      debug() {},
+      warn() {},
+      unsupported: (keys: readonly string[]) => void reported.push([...keys]),
+    };
+    const emoji = textLayer(
+      0,
+      { text: "😀", font: "fonts/TwemojiMozilla.ttf", msdf: true },
+      {
+        path: "fonts/TwemojiMozilla.ttf",
+        location: { path: join(assets, "fonts/TwemojiMozilla.ttf"), offset: 0 },
+        size: null,
+      },
+    );
+    const plain = textLayer(
+      2,
+      { text: "Ag", font: "fonts/RobotoMono-Regular.ttf", msdf: true },
+      {
+        path: "fonts/RobotoMono-Regular.ttf",
+        location: { path: join(assets, "fonts/RobotoMono-Regular.ttf"), offset: 0 },
+        size: null,
+      },
+    );
+    const texts = new SceneTexts({ reader: recordingReader().reader, engine, report });
+    await texts.prepare(bundleOf([plain, emoji]), { sceneAssets: [assets], fontsDir });
+    expect(reported).toEqual([["text:msdf:color"]]);
+    const layout = await texts.layoutInCurrent(emoji as SceneLayer);
+    expect(layout!.unsupported).toEqual(["text:msdf:color"]);
+    expect(reported).toEqual([["text:msdf:color"], ["text:msdf:color"]]); // 上报器按键去重，这里不重复拦
+    reported.length = 0;
+    await texts.layoutInCurrent(plain as SceneLayer);
+    expect(reported).toEqual([]);
+    texts.dispose();
+  });
+
   it("scene.pkg 里的主字体按区间读；读完之前代数变了返回 null", async () => {
     const font = readFileSync(join(assets, "fonts/RobotoMono-Regular.ttf"));
     const pkg = new Uint8Array(100 + font.length + 7);

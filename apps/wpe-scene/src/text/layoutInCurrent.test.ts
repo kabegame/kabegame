@@ -37,6 +37,7 @@ vi.mock("./layout", async (importOriginal) => {
       return {
         missingFonts: next ?? [],
         mesh: null,
+        unsupported: [],
         padding: [0, 0],
         size: [fields.text.length, 1],
         compositeSize: [1, 1],

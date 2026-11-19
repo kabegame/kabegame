@@ -33,6 +33,9 @@ describe("字体位置", () => {
       1,
     ]);
     expect(fontKey("fonts/A.otf", Math.fround(12.3))).toBe("fonts/A.otf_787");
+    // MSDF 的键不带字号：同一字体文件的所有字号共用一张图集
+    expect(fontKey("fonts/A.otf", Math.fround(12.3), true)).toBe("fonts/A.otf_msdf");
+    expect(fontKey("fonts/A.otf", 72, true)).toBe(fontKey("fonts/A.otf", 16, true));
     expect(FALLBACK_CHAIN.filter((p) => !p.startsWith(SYSTEM_FONT_PREFIX))).toEqual(["fonts/TwemojiMozilla.ttf"]);
   });
 });

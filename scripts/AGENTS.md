@@ -151,9 +151,9 @@ deno task build:wpesl2wgsl       # 把 src-tauri/wpesl2wgsl（WPE 着色器 → 
                                  # kabegame 桌面 standard 模式的 dev / start / build / check / test 不带 --skip vue 时，
                                  # Wpesl2wgslPlugin 把它拷进 apps/wpe-scene/src/wpesl2wgsl/；缺失只告警。
                                  # 见 cocs/wpe/WPE_SCENE.md。
-deno task build:wpefont          # 把 FreeType 2.14.3 + HarfBuzz 15.0.0 + 胶水 src-tauri/wpefont/wpefont.c（场景文本的
+deno task build:wpefont          # 把 FreeType 2.14.3 + HarfBuzz 15.0.0 + msdfgen v1.13 + 胶水 src-tauri/wpefont/wpefont.c、msdf.cpp（场景文本的
                                  # 字体引擎）编成 wasm32-wasip1 reactor，输出 bin/wasm/wpefont/wpefont.wasm（已被 git
-                                 # 忽略，与平台无关，约 1.8 MB）。需要子模块 third/freetype、third/harfbuzz（缺失时报错并
+                                 # 忽略，与平台无关，约 1.8 MB）。需要子模块 third/freetype、third/harfbuzz、third/msdfgen（缺失时报错并
                                  # 给出 git submodule 命令，版本不对也报错）；首次运行把 wasi-sdk 34 的 wasi-sysroot 与
                                  # libclang_rt 下到 bin/wasm/wpefont/toolchain/ 并解压（scripts/download.ts 的 fetchPinned：
                                  # SHA-256 校验、已有且摘要对就不下载、可续传；网络不稳时手动把两个 .tar.gz 放进去即可）。

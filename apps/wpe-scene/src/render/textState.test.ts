@@ -104,6 +104,7 @@ const textTarget = (field: Extract<BindingTarget, { kind: "text" }>["field"], ob
 const layoutAt = (offset: [number, number]): TextLayout => ({
   missingFonts: [],
   mesh: null,
+  unsupported: [],
   padding: [0, 0],
   size: [2, 2],
   compositeSize: [1, 1],

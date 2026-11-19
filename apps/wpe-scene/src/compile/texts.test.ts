@@ -4,21 +4,23 @@
  * - 四个宿主材质的 pass（键、渲染图填的槽 0、背景与 clearalpha 什么时候编）、背景色、`padding` 看启用的 effect；
  * - 绑定：运行中可改的排版键（`TEXT_RUNTIME_FIELDS`）登记成文本目标（P6b 1e），`font` / `opaquebackground` 等照旧重编译，
  *   `backgroundcolor` 在 LDR 下是背景常量的就地目标；
- * - 能力表：不再报 `object:text` / `object:font` 等，`text:script:<键>`、`text:msdf:<键>` 照规则报，`anchor` 九种取值都放行（P6e 点 5）；运行中字段
- *   （`TEXT_RUNTIME_FIELDS`）挂脚本不报，`text:script` 键去掉（P6b 1e-3）；
+ * - 能力表：不再报 `object:text` / `object:font` 等，`text:script:<键>` 照规则报，`anchor` 九种取值都放行（P6e 点 5）；MSDF 四个开关不再报 `text:msdf:<键>`（P6f 点 4）；
+ *   运行中字段（`TEXT_RUNTIME_FIELDS`）挂脚本不报，`text:script` 键去掉（P6b 1e-3）；`backgroundcolor` 挂脚本只在要走重编译的情形报（P6f 点 7）；
+ * - MSDF（P6f 点 4）：字形 pass 换 `basefont_msdf`、按开关加 COMBO 变体；装饰参数进 `fields.decor`、绑属性登记 `text-decor` 目标，开关绑属性登记重编译；
  * - `SceneState`：文本 pass 的常量、背景常量、effect 开关走重编译；
  * - 有 WPE 时用真翻译器编 WPE 自带的四个材质（`font`、`flat`、`composelayer` 着色器），程序检查不报。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { TEXT_RUNTIME_FIELDS } from "./bindings";
+import { TEXT_DECOR_FIELDS, TEXT_RUNTIME_FIELDS } from "./bindings";
 import { compileScene, type SceneBundle } from "./bundle";
-import { checkObjectFeatures, checkTextOptions, isTextObject } from "./features";
+import { checkObjectFeatures, isTextObject } from "./features";
 import type { SceneReader } from "./fs";
 import type { SceneObject } from "./model";
-import { TEXT_MATERIALS, textFloat, textVec2 } from "./texts";
+import { backgroundColorInPlace, msdfVariantCombos, TEXT_MATERIALS, textFloat, textVec2 } from "./texts";
 import { SceneState } from "../render/state";
+import { TEXT_DECOR_DEFAULTS } from "../text/fields";
 import { Wpesl2wgsl, type TranslateRequest, type TranslateResult } from "../wpesl2wgsl";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -31,6 +33,18 @@ const MATERIALS: Record<string, unknown> = {
   [`${ASSETS}/${TEXT_MATERIALS.glyphs}`]: {
     passes: [
       { shader: "font", blending: "translucent", depthtest: "disabled", depthwrite: "disabled", cullmode: "nocull" },
+    ],
+  },
+  [`${ASSETS}/${TEXT_MATERIALS.msdf}`]: {
+    passes: [
+      {
+        shader: "font",
+        blending: "translucent",
+        depthtest: "disabled",
+        depthwrite: "disabled",
+        cullmode: "nocull",
+        combos: { MSDF: 1 },
+      },
     ],
   },
   [`${ASSETS}/${TEXT_MATERIALS.color}`]: {
@@ -213,25 +227,15 @@ describe("能力表：文本对象", () => {
     // font / opaquebackground 运行中改要整场重编译（1e 已定 3），backgroundcolor 等没有脚本写回目标
     expect(check({ text: "a", font: script("fonts/a.ttf") })).toEqual(["text:script:font"]);
     expect(check({ text: "a", opaquebackground: script(true) })).toEqual(["text:script:opaquebackground"]);
-    expect(check({ text: "a", backgroundcolor: script("1 0 0") })).toEqual(["text:script:backgroundcolor"]);
+    // backgroundcolor 的脚本写背景常量（P6f 点 7）：能力表这里不报，要走重编译的情形（HDR 亮度不为 1）由编译时报
+    expect(check({ text: "a", backgroundcolor: script("1 0 0") })).toEqual([]);
+    // MSDF 的开关与装饰参数没有脚本写回目标，照报
+    expect(check({ text: "a", outline: script(true) })).toEqual(["text:script:outline"]);
     expect(check({ text: script("a"), font: script("fonts/a.ttf"), outlinecolor: script("0 0 0") })).toEqual([
       "text:script:font",
       "text:script:outlinecolor",
     ]);
     expect(check({ text: "a", alpha: { script: "export function update() { return 1; }", value: 1 } })).toEqual([]);
-  });
-
-  it("生效值的开关与 anchor：MSDF 四个开关报 text:msdf:<键>，anchor 九种取值都不报（P6e 点 5）", () => {
-    const keys = (values: Partial<Parameters<typeof checkTextOptions>[0]>) => {
-      const out = new Set<string>();
-      checkTextOptions({ msdf: false, outline: false, blur: false, dropshadow: false, anchor: "none", ...values }, out);
-      return [...out].sort();
-    };
-    expect(keys({})).toEqual([]);
-    expect(keys({ anchor: "center" })).toEqual([]);
-    for (const anchor of ["top", "topright", "right", "bottomright", "bottom", "bottomleft", "left", "topleft"])
-      expect(keys({ anchor }), anchor).toEqual([]);
-    expect(keys({ outline: true, dropshadow: true })).toEqual(["text:msdf:dropshadow", "text:msdf:outline"]);
   });
 
   it("取值规则：float 收数字与数字串，vec2 一个分量铺满", () => {
@@ -268,6 +272,8 @@ describe("compileScene：文本表", () => {
       verticalalign: "center",
       visibleEffects: 0,
       colorBlendMode: 0,
+      msdf: false,
+      decor: TEXT_DECOR_DEFAULTS,
     });
     expect(layer.text?.font).toEqual({ path: "system:arial.ttf", location: null, size: null });
   });
@@ -355,7 +361,7 @@ describe("compileScene：文本表", () => {
     expect(text.glyphPass).toMatchObject({ blending: "translucent", textures: {}, runtime: {}, framebuffer: false });
     // 着色器请求：字形带槽 0 的 R8 格式，彩色字形带 COLORFONT
     const fonts = requests.filter((request) => request.vertex === "void main(){}");
-    expect(fonts.map((request) => [request.combos, request.textures])).toEqual([
+    expect(fonts.map((request) => [request.combos!, request.textures])).toEqual([
       [{}, [{ slot: 0, format: 9 }]],
       [{ COLORFONT: 1 }, [{ slot: 0 }]],
     ]);
@@ -465,7 +471,7 @@ describe("compileScene：文本表", () => {
     expect(TEXT_RUNTIME_FIELDS).toHaveLength(12);
   });
 
-  it("能力：MSDF 开关与 anchor 按当前属性值报；text 挂脚本不报（P6b 1e-3），font 挂脚本报 text:script:font", async () => {
+  it("能力：MSDF 开关不再报 text:msdf:*（P6f）、anchor 都不报；text 挂脚本不报（P6b 1e-3），font 挂脚本报 text:script:font", async () => {
     const { bundle } = await compile(
       [
         { text: "a", outline: { user: "edge", value: false } },
@@ -476,12 +482,164 @@ describe("compileScene：文本表", () => {
       ],
       { properties: { edge: { value: true } } },
     );
-    expect(bundle.unsupported).toEqual(["text:msdf:msdf", "text:msdf:outline", "text:script:font"]);
+    expect(bundle.unsupported).toEqual(["text:script:font"]);
     expect(bundle.bindings.map((binding) => binding.target)).toContainEqual({
       kind: "recompile",
       reason: "layer-structure",
       path: "objects/0/outline",
     });
+  });
+
+  it("fields.msdf（P6f）：msdf / outline / blur / dropshadow 任意一个开着为真，全关为假；开关用当前属性值判断", async () => {
+    const msdfOf = async (object: Record<string, unknown>, properties: Record<string, { value: unknown }> = {}) => {
+      const { bundle } = await compile([{ text: "a", ...object }], { properties });
+      return layerOf(bundle).text!.fields.msdf;
+    };
+    expect(await msdfOf({})).toBe(false);
+    expect(await msdfOf({ msdf: false, outline: false })).toBe(false);
+    for (const key of ["msdf", "outline", "blur", "dropshadow"]) expect(await msdfOf({ [key]: true }), key).toBe(true);
+    expect(await msdfOf({ outline: { user: "edge", value: false } }, { edge: { value: true } })).toBe(true);
+    expect(await msdfOf({ outline: { user: "edge", value: true } }, { edge: { value: false } })).toBe(false);
+  });
+
+  it("MSDF 变体（P6f 点 4）：字形 pass 换 basefont_msdf、槽 0 不带 R8 格式，按开关加 COMBO（描边 / 模糊 / 投影各一位，只开 msdf 没有）；彩色字形 pass 不变", async () => {
+    const { bundle, requests } = await compile([
+      { text: "p" },
+      { text: "m", msdf: true },
+      { text: "o", outline: true },
+      { text: "b", blur: true },
+      { text: "s", dropshadow: true },
+      { text: "all", outline: true, blur: true, dropshadow: true },
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    const fonts = requests.filter((request) => request.vertex === "void main(){}");
+    // 每个文本对象两次请求：字形、彩色字形（COLORFONT）
+    const glyphs = fonts.filter((request) => !("COLORFONT" in request.combos!));
+    expect(glyphs.map((request) => [request.combos!, request.textures])).toEqual([
+      [{}, [{ slot: 0, format: 9 }]],
+      [{ MSDF: 1 }, [{ slot: 0 }]],
+      [{ MSDF: 1, OUTLINE_ENABLED: 1 }, [{ slot: 0 }]],
+      [{ MSDF: 1, BLUR_ENABLED: 1 }, [{ slot: 0 }]],
+      [{ MSDF: 1, DROP_SHADOW_ENABLED: 1 }, [{ slot: 0 }]],
+      [{ MSDF: 1, OUTLINE_ENABLED: 1, BLUR_ENABLED: 1, DROP_SHADOW_ENABLED: 1 }, [{ slot: 0 }]],
+    ]);
+    expect(fonts.filter((request) => "COLORFONT" in request.combos!).every((r) => r.combos!.COLORFONT === 1)).toBe(
+      true,
+    );
+    expect(msdfVariantCombos({ outline: false, blur: false, dropshadow: false })).toEqual({});
+    expect(msdfVariantCombos({ outline: true, blur: false, dropshadow: true })).toEqual({
+      OUTLINE_ENABLED: 1,
+      DROP_SHADOW_ENABLED: 1,
+    });
+  });
+
+  it("装饰参数（P6f 点 4）：进 fields.decor，缺省同 WPE；绑属性登记 text-decor 目标（不重排）；开关绑属性登记重编译；非 MSDF 不读", async () => {
+    const { bundle } = await compile(
+      [
+        {
+          text: "a",
+          outline: { user: "edge", value: false },
+          outlinethickness: { user: "thick", value: 4 },
+          outlinecolor: { user: "ocolor", value: "0 0 0" },
+          dropshadow: true,
+          dropshadowoffset: { user: "off", value: "4 4" },
+          dropshadowopacity: 0.5,
+          blursize: 3,
+        },
+        // 没开 MSDF：参数不读、不登记
+        { text: "b", outlinethickness: { user: "thick2", value: 4 } },
+      ],
+      {
+        properties: {
+          edge: { value: true },
+          thick: { value: 7 },
+          ocolor: { value: "1 0 0" },
+          off: { value: "-3 5" },
+          thick2: { value: 9 },
+        },
+      },
+    );
+    expect(bundle.unsupported).toEqual([]);
+    expect(layerOf(bundle, 0).text!.fields.decor).toEqual({
+      outline: true,
+      blur: false,
+      dropshadow: true,
+      outlinecolor: [1, 0, 0],
+      outlinethickness: 7,
+      blursize: 3,
+      dropshadowcolor: [0, 0, 0],
+      dropshadowopacity: 0.5,
+      dropshadowsize: 6,
+      dropshadowoffset: [-3, 5],
+    });
+    expect(layerOf(bundle, 1).text!.fields.decor).toEqual(TEXT_DECOR_DEFAULTS);
+    const targets = Object.fromEntries(bundle.bindings.map((binding) => [binding.property, binding.target]));
+    expect(targets.thick).toEqual({ kind: "text-decor", object: 0, field: "outlinethickness" });
+    expect(targets.ocolor).toEqual({ kind: "text-decor", object: 0, field: "outlinecolor" });
+    expect(targets.off).toEqual({ kind: "text-decor", object: 0, field: "dropshadowoffset" });
+    expect(targets.edge).toEqual({ kind: "recompile", reason: "layer-structure", path: "objects/0/outline" });
+    expect(targets.thick2).toBeUndefined();
+    expect(TEXT_DECOR_FIELDS).toHaveLength(7);
+  });
+
+  it("装饰参数绑属性：就地写进 SceneState，只标脏图层、不标重排；值没变不标脏", async () => {
+    const { bundle } = await compile([{ text: "a", msdf: true, outlinethickness: { user: "thick", value: 4 } }], {
+      properties: { thick: { value: 4 } },
+    });
+    const state = SceneState.fromBundle(bundle);
+    state.takeDirty();
+    const binding = bundle.bindings.find((item) => item.property === "thick")!;
+    expect(state.needsRecompile(binding, 8)).toBe(false);
+    expect(state.write(binding, 8)).toBe("applied");
+    expect(state.textFields.get(0)!.decor.outlinethickness).toBe(8);
+    // bundle 里的编译期那份不被改
+    expect(layerOf(bundle).text!.fields.decor.outlinethickness).toBe(4);
+    const dirty = state.takeDirty();
+    expect([...dirty.layers]).toEqual([0]);
+    expect([...dirty.texts]).toEqual([]);
+    // 同值、不合法的值都不标脏
+    state.write(binding, 8);
+    state.write(binding, "abc");
+    const again = state.takeDirty();
+    expect([...again.layers]).toEqual([]);
+    expect(state.textFields.get(0)!.decor.outlinethickness).toBe(8);
+  });
+
+  it("backgroundcolor 挂脚本（P6f 点 7）：目标就是属性绑定的背景常量 g_Color（vec3），LDR 与 HDR 亮度恒为 1 时不报", async () => {
+    const script = { script: "export function update(value) { return value; }", value: "0 0 0" };
+    const objects = [{ text: "a", opaquebackground: true, backgroundcolor: script }];
+    const { bundle } = await compile(objects);
+    expect(bundle.unsupported).toEqual([]);
+    const target = {
+      kind: "constant",
+      pass: "objects/0/text/background",
+      material: "backgroundcolor",
+      uniforms: ["g_Color"],
+      type: "vec3",
+    };
+    const item = bundle.scripts.list.find((entry) => entry.id === "objects/0/backgroundcolor")!;
+    expect(item.target).toEqual(target);
+    expect(item.valueType).toBe("vec3");
+    // 与属性绑定同一个目标
+    expect(layerOf(bundle).text!.script!.backgroundTarget).toEqual(target);
+    // HDR 且亮度恒为 1：仍就地写
+    const hdr = await compile(objects, { general: { bloom: true, hdr: true }, postprocess: "ultra" });
+    // HDR 的泛光材质这里没有，只看文本的键
+    const textKeys = (keys: string[]) => keys.filter((key) => key.startsWith("text:"));
+    expect(textKeys(hdr.bundle.unsupported)).toEqual([]);
+    // HDR 且亮度不为 1：要乘亮度、就地写不了，照报
+    const bright = await compile([{ ...objects[0], backgroundbrightness: 2 }], {
+      general: { bloom: true, hdr: true },
+      postprocess: "ultra",
+    });
+    expect(textKeys(bright.bundle.unsupported)).toEqual(["text:script:backgroundcolor"]);
+    // 脚本初值不是向量时类型也固定为 vec3（WPE 的描述符是 vec3，不按 value 猜）
+    const odd = await compile([{ text: "b", backgroundcolor: { script: script.script, value: "x" } }]);
+    expect(odd.bundle.scripts.list[0].valueType).toBe("vec3");
+    expect(backgroundColorInPlace(false, 5, true)).toBe(true);
+    expect(backgroundColorInPlace(true, 1, false)).toBe(true);
+    expect(backgroundColorInPlace(true, 2, false)).toBe(false);
+    expect(backgroundColorInPlace(true, 1, true)).toBe(false);
   });
 
   it("SceneState：文本 pass 与背景常量登记进常量表；文本层的 effect 开关走重编译", async () => {

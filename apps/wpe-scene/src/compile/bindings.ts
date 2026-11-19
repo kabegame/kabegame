@@ -224,6 +224,41 @@ export const TEXT_RUNTIME_FIELDS = [
 ] as const;
 export type TextRuntimeField = (typeof TEXT_RUNTIME_FIELDS)[number];
 
+/**
+ * 文本对象 MSDF 的装饰参数（P6f，WPE `O+0x518 != 0` 时每帧拷进 `M+0x1c..0x48`，rea-p6b-raster 6）：绑属性时就地写、不重排，下一次绘制
+ * 重算 `g_RenderVar0..3`（rea-p6f-msdf 4.3，当帧生效）。四个开关（`msdf` / `outline` / `blur` / `dropshadow`）不在这里：决定图集与几何，
+ * 绑属性走重编译。
+ */
+export const TEXT_DECOR_FIELDS = [
+  "outlinecolor",
+  "outlinethickness",
+  "blursize",
+  "dropshadowcolor",
+  "dropshadowopacity",
+  "dropshadowsize",
+  "dropshadowoffset",
+] as const;
+export type TextDecorField = (typeof TEXT_DECOR_FIELDS)[number];
+
+/** `key` 是不是 `TEXT_DECOR_FIELDS` 之一。 */
+export function isTextDecorField(key: string): key is TextDecorField {
+  return (TEXT_DECOR_FIELDS as readonly string[]).includes(key);
+}
+
+/** 文本背景（`fontbackground`）pass 的键，背景色 `g_Color` 的常量就在它下面（编译期与字段脚本共用）。 */
+export const textBackgroundKey = (object: number): string => `objects/${object}/text/background`;
+
+/** `backgroundcolor` 就地写的目标：背景 pass 的常量 `g_Color`（vec3）。属性绑定与字段脚本共用这一个定义。 */
+export function textBackgroundColorTarget(object: number): Extract<BindingTarget, { kind: "constant" }> {
+  return {
+    kind: "constant",
+    pass: textBackgroundKey(object),
+    material: "backgroundcolor",
+    uniforms: ["g_Color"],
+    type: "vec3",
+  };
+}
+
 /** `key` 是不是 `TEXT_RUNTIME_FIELDS` 之一（按自有键判，不认原型链上的名字）。 */
 export function isTextRuntimeField(key: string): key is TextRuntimeField {
   return (TEXT_RUNTIME_FIELDS as readonly string[]).includes(key);
@@ -283,6 +318,11 @@ export type BindingTarget =
    * （`textFieldFromScript`）。`object` 是 `objects` 下标。
    */
   | { kind: "text"; object: number; field: TextRuntimeField }
+  /**
+   * 文本对象的 MSDF 装饰参数（P6f，`TEXT_DECOR_FIELDS`）：就地写进 `SceneState.textFields` 的 `decor`，**不重排**，只把这一层标进脏图层，
+   * 下一次刷新按当前值重算 `g_RenderVar0..3`。取值规则 `textDecorFromJson`。`object` 是 `objects` 下标。
+   */
+  | { kind: "text-decor"; object: number; field: TextDecorField }
   /**
    * 相机对象的 `fov` / `zoom`（P5d 步骤 3，rea-p5-camera 4.1：两个 float 描述符，可绑定、可挂脚本）：就地写进 `SceneState.cameras`，
    * 不标脏，渲染器每帧选相机时读（`render/camera.ts` 的 `activeCameraObject`）。取值规则 `cameraValue`。`object` 是 `objects` 下标。

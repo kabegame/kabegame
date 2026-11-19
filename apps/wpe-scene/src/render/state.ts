@@ -47,6 +47,7 @@ import {
   type LightValues,
   type SceneBinding,
   type TargetKey,
+  type TextDecorField,
   type TextRuntimeField,
 } from "../compile/bindings";
 import type { SceneBundle, SceneLayer } from "../compile/bundle";
@@ -73,7 +74,7 @@ import { BLOOM_DEFAULTS, type BloomParams } from "../compile/postprocess";
 import { soundVolume } from "../compile/sounds";
 import { animationLayerValue } from "../compile/puppet";
 import { animationLayerKey, type PuppetLayerFields } from "../puppet/player";
-import { sameTextField, textFieldFromJson, type TextFields } from "../text/fields";
+import { sameTextField, textDecorFromJson, textFieldFromJson, type TextDecor, type TextFields } from "../text/fields";
 import type { TextLayout } from "../text/layout";
 import type { CameraPose } from "./camera";
 import { alignmentOffset } from "./layout";
@@ -208,6 +209,12 @@ function copyTextFields(fields: TextFields): TextFields {
     ...fields,
     padding: [fields.padding[0], fields.padding[1]],
     spacing: [fields.spacing[0], fields.spacing[1]],
+    decor: {
+      ...fields.decor,
+      outlinecolor: [...fields.decor.outlinecolor],
+      dropshadowcolor: [...fields.decor.dropshadowcolor],
+      dropshadowoffset: [...fields.decor.dropshadowoffset],
+    },
   };
 }
 
@@ -748,6 +755,17 @@ export class SceneState {
   }
 
   /**
+   * MSDF 装饰参数的写入（P6f，`kind: "text-decor"`）：`value` 已按 `textDecorFromJson` 规整，undefined 表示不写。值没变不标脏；变了只把这一层标进
+   * 脏图层（下一次刷新重算 `g_RenderVar0..3`），不重排（rea-p6f-msdf 4.3：参数每次绘制从对象现读）。不是 bundle 里的文本层时不做事。
+   */
+  writeTextDecor<F extends TextDecorField>(object: number, field: F, value: TextDecor[F] | undefined): void {
+    const fields = this.textFields.get(object);
+    if (!fields || value === undefined || sameTextField(fields.decor[field], value)) return;
+    fields.decor = { ...fields.decor, [field]: Array.isArray(value) ? [...value] : value };
+    this.dirtyLayers.add(object);
+  }
+
+  /**
    * 不改字段、只把这一层标进 `dirtyTexts`（P6b 1e）：运行中重排缺的字体读完了（宿主收到 `SceneTexts` 的 `onReady`），下一次 `sync`
    * 按当前字段再排一次。不是 bundle 里的文本层时不做事（回调到达时场景可能已经换了）。
    */
@@ -1053,7 +1071,7 @@ export class SceneState {
     const { target } = binding;
     if (target.kind === "recompile") return true;
     // 文本字段就地写、渲染器重排（P6b 1e）：从不整场重编译
-    if (target.kind === "text") return false;
+    if (target.kind === "text" || target.kind === "text-decor") return false;
     if (target.kind === "bloom-enabled")
       return this.bloomMissing && !this.bloomEnabled && bloomFlagOf(binding, raw) === true;
     if (target.kind !== "effect") return false;
@@ -1248,6 +1266,10 @@ export class SceneState {
     if (target.kind === "text") {
       // 属性侧取值规则与编译期相同（`textFieldFromJson`：`text` 只收字符串），条件先换成布尔
       this.writeText(target.object, target.field, textFieldFromJson(target.field, conditioned(binding, raw)));
+      return "applied";
+    }
+    if (target.kind === "text-decor") {
+      this.writeTextDecor(target.object, target.field, textDecorFromJson(target.field, conditioned(binding, raw)));
       return "applied";
     }
     // 用户纹理（P11b 步骤 2）：值只认字符串，别的类型当空串；记下、标脏（RT 参考的槽从这里起才生效，M8），同步交给宿主的来源表解码，

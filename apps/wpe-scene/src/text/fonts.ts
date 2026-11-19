@@ -72,8 +72,12 @@ export function clampPointsize(pointsize: number): number {
 /** 字号的 26.6：`trunc(size · 64)`，`FT_Set_Char_Size` 与字体键都用它。 */
 export const size26_6 = (size: number) => Math.trunc(size * 64);
 
-/** 字体键（WPE 的 `<路径>_<trunc(size · 64)>`）：图集与 face 列表都按它共享。 */
-export const fontKey = (path: FontPath, size: number) => `${path}_${size26_6(size)}`;
+/**
+ * 字体键：图集与 face 列表都按它共享。普通路径是 WPE 的 `<路径>_<trunc(size · 64)>`；MSDF 路径是 `<路径>_msdf`，**不带字号**
+ * （rea-p6f-msdf 2.1：同一字体文件的所有字号共用一张 MSDF 图集，字形用第一个用到它的对象的字号生成）。
+ */
+export const fontKey = (path: FontPath, size: number, msdf = false) =>
+  msdf ? `${path}_msdf` : `${path}_${size26_6(size)}`;
 
 /** 空白：`\t`、`\r`、空格（掩码 `0x100002200`，断行、省略号、两端对齐都用它）。 */
 export function isBreakSpace(cp: number): boolean {

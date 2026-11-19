@@ -68,7 +68,7 @@ export interface TextFontSources {
 
 export interface SceneTextsOptions {
   reader: SceneReader;
-  report?: Pick<SceneReporter, "debug" | "warn">;
+  report?: Pick<SceneReporter, "debug" | "warn" | "unsupported">;
   /** 取 wasm 引擎；缺省 `loadWpefont`（单测注入 Node 里编好的实例）。 */
   engine?: () => Promise<Wpefont | null>;
   /**
@@ -168,6 +168,7 @@ export class SceneTexts {
         if (layout.missingFonts.length)
           throw new Error(`字体读了 ${MAX_FONT_ROUNDS} 轮仍缺：${layout.missingFonts.join(", ")}`);
         layouts.set(layer.object, layout);
+        this.reportUnsupported(layout);
       }
     } catch (error) {
       done();
@@ -216,11 +217,20 @@ export class SceneTexts {
       }
       if (layout.missingFonts.length)
         throw new Error(`字体读了 ${MAX_FONT_ROUNDS} 轮仍缺：${layout.missingFonts.join(", ")}`);
+      this.reportUnsupported(layout);
       return layout;
     } catch (error) {
       this.options.report?.warn("场景文本排版失败：", error);
       throw new SceneRenderError(["text:engine"]);
     }
+  }
+
+  /**
+   * 排版里画不出的特性（`TextLayout.unsupported`，现在只有 MSDF 下彩色字形的 `text:msdf:color`）交给运行期不支持项（L5 的
+   * `wpe-scene-unsupported`：看板娘提示，上报器按键去重）。场景不退回，那个字形不画。
+   */
+  private reportUnsupported(layout: TextLayout): void {
+    if (layout.unsupported.length) this.options.report?.unsupported?.(layout.unsupported);
   }
 
   /** 放回一个排版占的图集字形引用（L3b，删除 / 替换对象时调；重复调无害，`releaseTextLayout` 看 `released`）。 */
@@ -259,7 +269,10 @@ export class SceneTexts {
       this.options.report?.warn(`场景文本重排失败（对象 ${object}）：`, error);
       return null;
     }
-    if (!layout.missingFonts.length) return layout;
+    if (!layout.missingFonts.length) {
+      this.reportUnsupported(layout);
+      return layout;
+    }
     retainTextLayout(previous);
     // 读取器的抛错 `TextFonts.load` 已当读不到，这里的拒绝回调只兜底。整条链记进 `reading`（P6b 1e-3），结束时删掉：
     // `idle()` 等的是「`onReady` 已调过」，不只是字节读完

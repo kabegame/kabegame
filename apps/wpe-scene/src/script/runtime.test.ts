@@ -5,6 +5,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { compileScene } from "../compile/bundle";
+import { textBackgroundColorTarget } from "../compile/bindings";
 import { collectScripts, type SceneScript } from "../compile/scripts";
 import { parseScene } from "../compile/model";
 import type { SceneReader } from "../compile/fs";
@@ -822,5 +823,34 @@ describe("工厂模块的加载（vmRealm）", () => {
     expect(realm.vm.run("globalThis.seenThis.marker")).toBe(7);
     expect(realm.vm.run("globalThis.seenThis.keys")).toBe("init,marker");
     expect(h.runtime.diagnostics[0]).toMatchObject({ exports: ["init", "marker"] });
+  });
+});
+
+describe("文本 backgroundcolor 的字段脚本（P6f 点 7）：返回值转换", () => {
+  // 目标是背景 pass 的常量 g_Color（vec3，`textBackgroundColorTarget`）；`p6f-bg` 抓帧实测：Vec3 原样写、数字铺满三个分量、字符串不写（背景保持上一个值）
+  it("Vec3 原样写、数字铺满、字符串与 undefined / null 不写；每帧当帧写回", async () => {
+    const h = harness();
+    const id = "objects/0/backgroundcolor";
+    const target = textBackgroundColorTarget(0);
+    const returns: unknown[] = [new Vec3(1, 0, 0), "0 1 0", 0.5, new Vec3(0, 0, 1), undefined, null, { x: 1 }];
+    let n = 0;
+    h.realm.modules.set(id, { update: () => returns[n++] });
+    await h.runtime.load({ list: [script(id, { target, valueType: "vec3", initial: "0 0 0" })] });
+    const seen: unknown[] = [];
+    for (let i = 0; i < returns.length; i++) {
+      h.runtime.frame(0.1);
+      seen.push(h.values.get(id));
+    }
+    expect(seen).toEqual([
+      [1, 0, 0],
+      // 字符串不写：保持上一个值
+      [1, 0, 0],
+      [0.5, 0.5, 0.5],
+      [0, 0, 1],
+      [0, 0, 1],
+      [0, 0, 1],
+      // 缺分量的对象不是向量，不写
+      [0, 0, 1],
+    ]);
   });
 });

@@ -13,6 +13,7 @@ import type { SceneLayer, SceneSpriteSheet, SceneTexture } from "../compile/bund
 import { particleRenderer, type ParticleRenderer } from "../compile/particles";
 import { orientationVectors } from "../particles/orientation";
 import { trailRenderVar0 } from "../particles/ropetrail";
+import type { TextDecor } from "../text/fields";
 import { compositeTranslation, directTranslation, type TextLayout } from "../text/layout";
 import type { UniformLayout } from "../wpesl2wgsl";
 import { ORTHO_VIEW_VECTORS, type ViewVectors } from "./camera";
@@ -553,6 +554,60 @@ export interface TextUniformInput {
   skylight?: readonly number[];
   /** 四个雾 uniform（P13f，`compile/fog.ts` 的 `fogUniforms`）。 */
   fog?: Readonly<Record<string, readonly number[]>>;
+  /** MSDF 画法的字形（P6f）：装饰参数的当前值与排版字号；给了才写 `g_RenderVar0..3`（只有字形 pass 读它们）。 */
+  msdf?: { decor: TextDecor; pointsize: number };
+}
+
+/** MSDF 字形 pass 的四个 `g_RenderVar`（`msdfRenderVars` 的返回，每个 vec4）。 */
+export const MSDF_RENDER_VAR_NAMES = ["g_RenderVar0", "g_RenderVar1", "g_RenderVar2", "g_RenderVar3"] as const;
+
+const f32 = Math.fround;
+
+/** 描边与模糊合计的上限 `5.1f`（`0x40a33334`，不是 `Math.fround(5.1)`）。 */
+const RENDER_VAR_LIMIT = 5.100000381469727;
+
+/**
+ * MSDF 字形 pass 的 `g_RenderVar0..3`（`FUN_1401b3b60`，rea-p6f-msdf 4.2，`b3b60_msdf_vars.asm`）：每步都是 float32，运算顺序照汇编。
+ * 参数先按 `FUN_140258b80`（rea-p6b-raster 6）换成生效值：描边厚度 `outline ? max(厚度, 1) : 0`、模糊 `blur ? max(大小, 0.01) : 0`、投影大小
+ * `dropshadow ? max(大小, 0.01) : 0`、偏移 `dropshadow ? 偏移 : (0, 0)`；`pointsize` 是排版用的钳过的字号（`TextMesh.pointsize`，`M+0xa8`）。
+ *
+ * 写 `RV3.x = 投影不透明度`；`RV3.yzw` WPE 不写、留着上一个绘制的残值，`font.frag` 不读，我们写 0。
+ * NaN：`minss(5.1, x)` 与 `> 6` 比较对 NaN 都保留 NaN（照汇编）；`max(参数, 下限)` 的 NaN 取法没查，按 `Math.max`（语料里没有 NaN）。
+ */
+export function msdfRenderVars(
+  decor: TextDecor,
+  pointsize: number,
+): Record<(typeof MSDF_RENDER_VAR_NAMES)[number], number[]> {
+  const thick = decor.outline ? f32(Math.max(f32(decor.outlinethickness), 1)) : 0;
+  const blur = decor.blur ? f32(Math.max(f32(decor.blursize), 0.01)) : 0;
+  const shadow = decor.dropshadow ? f32(Math.max(f32(decor.dropshadowsize), 0.01)) : 0;
+  const offsetX = decor.dropshadow ? f32(decor.dropshadowoffset[0]) : 0;
+  const offsetY = decor.dropshadow ? f32(decor.dropshadowoffset[1]) : 0;
+  // s' = (32 / 字号) · 0.24（0.24f = 0x3e75c28f）
+  const scale = f32(f32(32 / f32(pointsize)) * f32(0.24));
+  // 5.1f 在 exe 里是 0x40a33334（5.1000004），不是 f32(5.1) = 0x40a33333（抓帧 d2 的 `RV0.y` 实测）
+  const limit = RENDER_VAR_LIMIT;
+  let y = f32(scale * thick);
+  let z = f32(scale * blur);
+  let w = f32(scale * shadow);
+  let ox = f32(scale * offsetX);
+  let oy = f32(scale * offsetY);
+  y = limit < y ? limit : y;
+  if (z > 6) z = 6;
+  if (w > 6) w = 6;
+  if (ox > 6) ox = 6;
+  if (oy > 6) oy = 6;
+  // 模糊与描边合计超过 5.1 时，描边让位（留给格子四周 12 像素余量）
+  if (f32(z + y) > limit) {
+    const rest = f32(limit - z);
+    y = rest > 0 ? rest : 0;
+  }
+  return {
+    g_RenderVar0: [24, y, z, w],
+    g_RenderVar1: [...decor.outlinecolor.map(f32), ox],
+    g_RenderVar2: [...decor.dropshadowcolor.map(f32), oy],
+    g_RenderVar3: [f32(decor.dropshadowopacity), 0, 0, 0],
+  };
 }
 
 /** 文本绘制的全部静态 uniform：变换见 `textMatrices`，颜色与其余内置值同图层（`staticBuiltins`），材质常量覆盖。 */
@@ -572,6 +627,9 @@ export function textUniformValues(input: TextUniformInput): Record<string, numbe
     fog: input.fog,
   });
   for (const [name, value] of Object.entries(input.constants)) values[name] = [...value];
+  // MSDF 字形（P6f）：`g_RenderVar0..3`；`g_Texture0Resolution` 已由槽 0 的图集尺寸给出（`(W, H, W, H)`，rea-p6f-msdf 3.1）
+  if (input.msdf && input.step.part === "glyphs")
+    Object.assign(values, msdfRenderVars(input.msdf.decor, input.msdf.pointsize));
   return values;
 }
 
