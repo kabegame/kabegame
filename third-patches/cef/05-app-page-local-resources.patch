@@ -1,5 +1,5 @@
 diff --git a/libcef/browser/browser_info.cc b/libcef/browser/browser_info.cc
-index 77193c87581540263c02418e47bab261e0b48a28..1e56123de6b83db2af420345eef898e29d3fa9bf 100644
+index b23d2e8795fb659de12bf1523acfe718ed34964b..0872f2ee9efa85932ed5518e3ab63697ea18bebe 100644
 --- a/libcef/browser/browser_info.cc
 +++ b/libcef/browser/browser_info.cc
 @@ -14,8 +14,26 @@
@@ -29,7 +29,7 @@ index 77193c87581540263c02418e47bab261e0b48a28..1e56123de6b83db2af420345eef898e2
  
  CefBrowserInfo::FrameInfo::~FrameInfo() {
  #if DCHECK_IS_ON()
-@@ -147,6 +165,22 @@ void CefBrowserInfo::MaybeCreateFrame(content::RenderFrameHost* host) {
+@@ -146,6 +164,22 @@ void CefBrowserInfo::MaybeCreateFrame(content::RenderFrameHost* host) {
                                     ->render_manager()
                                     ->current_frame_host() != host);
  
@@ -53,7 +53,7 @@ index 77193c87581540263c02418e47bab261e0b48a28..1e56123de6b83db2af420345eef898e2
      NotificationStateLock lock_scope(this);
      DCHECK(browser_);
 diff --git a/libcef/renderer/blink_glue.cc b/libcef/renderer/blink_glue.cc
-index a9a030ef95b247c1e05ecad37de0b73eab8eb373..acc9983ce7701475335dd358d26a5fcc3f68d51d 100644
+index f6bf90ee363a1204f3a17672c52f549b115138cf..7a55d0d7a3494b8d865f336969ed1b46cc369c58 100644
 --- a/libcef/renderer/blink_glue.cc
 +++ b/libcef/renderer/blink_glue.cc
 @@ -37,6 +37,7 @@
@@ -64,7 +64,7 @@ index a9a030ef95b247c1e05ecad37de0b73eab8eb373..acc9983ce7701475335dd358d26a5fcc
  #undef LOG
  
  #include "base/logging.h"
-@@ -318,6 +319,27 @@ void StartNavigation(blink::WebLocalFrame* frame,
+@@ -318,4 +319,25 @@ void StartNavigation(blink::WebLocalFrame* frame,
        .StartNavigation(frame_load_request, blink::WebFrameLoadType::kStandard);
  }
  
@@ -89,11 +89,9 @@ index a9a030ef95b247c1e05ecad37de0b73eab8eb373..acc9983ce7701475335dd358d26a5fcc
 +  }
 +}
 +
- void SetUseExternalPopupMenus(blink::WebView* view, bool value) {
-   static_cast<blink::WebViewImpl*>(view)
-       ->GetPage()
+ }  // namespace blink_glue
 diff --git a/libcef/renderer/blink_glue.h b/libcef/renderer/blink_glue.h
-index 1d096de0fc717aa5d9ce806e2d83eee960ab7d45..f470a17b2816a79265e207c1d8db9cfe19199191 100644
+index 048402909952dc594b0ac36e1c55fe2d709c4901..6e5b068f4fa20ab2415f950b6d130fedb6d17a9a 100644
 --- a/libcef/renderer/blink_glue.h
 +++ b/libcef/renderer/blink_glue.h
 @@ -122,6 +122,15 @@ BLINK_EXPORT bool HasPluginFrameOwner(blink::WebLocalFrame* frame);
@@ -109,9 +107,9 @@ index 1d096de0fc717aa5d9ce806e2d83eee960ab7d45..f470a17b2816a79265e207c1d8db9cfe
 +// parent's origin object share it.
 +BLINK_EXPORT void GrantLoadLocalResources(blink::WebLocalFrame* frame);
 +
- // Sets whether select popup menus should be rendered by the browser.
- BLINK_EXPORT void SetUseExternalPopupMenus(blink::WebView* view, bool value);
+ }  // namespace blink_glue
  
+ #endif  // CEF_LIBCEF_RENDERER_BLINK_GLUE_H_
 diff --git a/libcef/renderer/browser_impl.cc b/libcef/renderer/browser_impl.cc
 index f09d1e8341ace58527473d18ca04c98219507747..3cbc0a1a9502e8c188097a800fc6a94b2c2b7dfd 100644
 --- a/libcef/renderer/browser_impl.cc
@@ -167,10 +165,10 @@ index b06678e55bc41d9a7d5660bc07a5591acca240e1..8193b443a66c3d99f77c89aff7dfe32b
    // Map of unique frame tokens to CefFrameImpl references.
    using FrameMap = std::map<blink::LocalFrameToken, CefRefPtr<CefFrameImpl>>;
 diff --git a/libcef/renderer/render_frame_observer.cc b/libcef/renderer/render_frame_observer.cc
-index c416a1ef22b090abd93fab29712a516cae7a12a0..8a4e7f1c7879ac86c96ee254e181fdcf9fa23959 100644
+index 6013d1357598406af7ae841125fb3699e4a6e4bb..6fad0bd4754a97da499a5a8994ac23bd2d2fe196 100644
 --- a/libcef/renderer/render_frame_observer.cc
 +++ b/libcef/renderer/render_frame_observer.cc
-@@ -22,11 +22,13 @@
+@@ -22,12 +22,14 @@
  #include "cef/libcef/renderer/render_frame_observer.h"
  #include "cef/libcef/renderer/v8_impl.h"
  #include "content/public/renderer/render_frame.h"
@@ -179,12 +177,13 @@ index c416a1ef22b090abd93fab29712a516cae7a12a0..8a4e7f1c7879ac86c96ee254e181fdcf
  #include "third_party/blink/public/web/web_document.h"
  #include "third_party/blink/public/web/web_element.h"
  #include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_local_frame_client.h"
  #include "third_party/blink/public/web/web_node.h"
 +#include "url/url_constants.h"
  
  CefRenderFrameObserver::CefRenderFrameObserver(
      content::RenderFrame* render_frame)
-@@ -40,6 +42,24 @@ void CefRenderFrameObserver::DidCommitProvisionalLoad(
+@@ -41,6 +43,24 @@ void CefRenderFrameObserver::DidCommitProvisionalLoad(
      return;
    }
  
@@ -210,7 +209,7 @@ index c416a1ef22b090abd93fab29712a516cae7a12a0..8a4e7f1c7879ac86c96ee254e181fdcf
  
    if (frame_->GetParent() == nullptr) {
 diff --git a/libcef/renderer/render_manager.cc b/libcef/renderer/render_manager.cc
-index c974d479c6d054d723850988f500f1e61cdae566..ce9c9df469769b770311d05fad44b509159507c1 100644
+index 5012d60e6652794e1f5a8134325839e3f4156af2..4afd489e4e42d331f4a7339d78704cdcda4e9afb 100644
 --- a/libcef/renderer/render_manager.cc
 +++ b/libcef/renderer/render_manager.cc
 @@ -320,8 +320,24 @@ CefRefPtr<CefBrowserImpl> CefRenderManager::MaybeCreateBrowser(

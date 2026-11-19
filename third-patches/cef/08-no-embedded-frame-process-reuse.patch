@@ -1,8 +1,8 @@
 diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
-index 34b8930461e95321ed3283e2a2a456fd93e061e4..b51e0e3818c5fe66dab05bfbe1cdc5b7d3c00ada 100644
+index 04661a8c583267ec8ca41c6f270058f6f6f2a833..360aa55859fec2fd565bf84aaf39a1e173fc5fd4 100644
 --- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
 +++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
-@@ -565,6 +565,25 @@ void ChromeContentBrowserClientCef::
+@@ -600,6 +600,25 @@ void ChromeContentBrowserClientCef::
            browser_context->GetPath(), std::move(access_list)));
  }
  
@@ -29,10 +29,10 @@ index 34b8930461e95321ed3283e2a2a456fd93e061e4..b51e0e3818c5fe66dab05bfbe1cdc5b7
      content::BrowserContext* browser_context,
      content::RenderFrameHost* frame,
 diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.h b/libcef/browser/chrome/chrome_content_browser_client_cef.h
-index 2a3ec84af6e2ea0d8d5375c35549662ad5800c98..ecf9e372204eb1c9254f99000118289418d76b6c 100644
+index 8450478458bcf2507d371f0ef641f42e1b602a51..b9c7fecf20f013a9f6ebe92eb75b54b6f7e5a8b2 100644
 --- a/libcef/browser/chrome/chrome_content_browser_client_cef.h
 +++ b/libcef/browser/chrome/chrome_content_browser_client_cef.h
-@@ -76,6 +76,10 @@ class ChromeContentBrowserClientCef : public ChromeContentBrowserClient {
+@@ -80,6 +80,10 @@ class ChromeContentBrowserClientCef : public ChromeContentBrowserClient {
        int render_frame_id,
        const std::optional<url::Origin>& request_initiator_origin,
        NonNetworkURLLoaderFactoryMap* factories) override;

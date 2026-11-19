@@ -95,7 +95,7 @@ index 609f8b21fb8c41f1c053533583e23f597633477b..9e24b63206f6c359f4afd294f027aa57
                          DropCompletionCallback callback) override;
  
 diff --git a/libcef/common/drag_data_impl.cc b/libcef/common/drag_data_impl.cc
-index d01a93898a5a610f8bbaec0e629530d46c7d1e3d..33ef34416fc73f9f7f9d36a83c45a83d6f4e2221 100644
+index 9fdbaf04e4a298a8c69d3792e5fecd96b52161d3..f1ec625663dcf74ad4010855f8fbb48825fad6e7 100644
 --- a/libcef/common/drag_data_impl.cc
 +++ b/libcef/common/drag_data_impl.cc
 @@ -276,3 +276,9 @@ bool CefDragDataImpl::HasImage() {
@@ -121,32 +121,33 @@ index 3a4981c56aeda46aaa8f74da6ca1fc4a38962a48..bf2e74684eddd54f5f919e08640386c3
    // This method is not safe. Use Lock/Unlock to get mutually exclusive access.
    content::DropData* drop_data() { return &data_; }
 diff --git a/patch/patch.cfg b/patch/patch.cfg
-index 33e372fc3016ff6125663107b7ee81af1fe8d497..d610d7463c5e1730e45a57b3657ca513a81fc544 100644
+index f12e6684c516a5c47a11712254575ed626bc0f1a..5aa976c18fdaa67f40f8718fe93640243f1c907d 100644
 --- a/patch/patch.cfg
 +++ b/patch/patch.cfg
-@@ -895,5 +895,11 @@ patches = [
-     # process type (skips the macOS helper-app variant rewrite so a single
-     # flat helper executable next to the main binary can serve all types).
-     'name': 'kabegame_flat_subprocess_path',
+@@ -926,5 +926,11 @@ patches = [
+     # https://crrev.com/c/8589742 in 158.0.8127.0.
+     # https://github.com/chromiumembedded/cef/issues/4313
+     'name': 'viz_capture_native_handle_4313',
+-   }
 +  },
 +  {
 +    # kabegame: let WebContentsViewDelegate turn a renderer-initiated drag into
 +    # a drag of real local files (renderer-supplied filenames are always
 +    # cleared by RenderWidgetHostImpl::FilterDropData).
 +    'name': 'kabegame_drag_source_filenames',
-   }
++  }
  ]
 diff --git a/patch/patches/kabegame_drag_source_filenames.patch b/patch/patches/kabegame_drag_source_filenames.patch
 new file mode 100644
-index 0000000000000000000000000000000000000000..731048ec0ca112b9a12b8db88347653fe5c1f399
+index 0000000000000000000000000000000000000000..1298c86379ea75dc1db7168cee67060f612ab55b
 --- /dev/null
 +++ b/patch/patches/kabegame_drag_source_filenames.patch
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,259 @@
 +diff --git content/app_shim_remote_cocoa/web_drag_source_mac.mm content/app_shim_remote_cocoa/web_drag_source_mac.mm
-+index e7bf29bcceb68c029045eba5e88641647657fd36..65e6823faf00ce389ad82dca79cc311292270ce1 100644
++index 7e707d4..ba32c51 100644
 +--- content/app_shim_remote_cocoa/web_drag_source_mac.mm
 ++++ content/app_shim_remote_cocoa/web_drag_source_mac.mm
-+@@ -96,15 +96,43 @@
++@@ -96,9 +96,23 @@ - (void)webContentsIsGone {
 +   // accept.
 +   [writableTypes addObject:ui::kUTTypeChromiumInitiatedDrag];
 + 
@@ -173,7 +174,8 @@ index 0000000000000000000000000000000000000000..731048ec0ca112b9a12b8db88347653f
 + 
 +   // Tag the drag as coming from a privileged WebContents if needed.
 +   if (_privileged) {
-+     [writableTypes addObject:ui::kUTTypeChromiumPrivilegedInitiatedDrag];
++@@ -108,6 +122,20 @@ - (void)webContentsIsGone {
++     [writableTypes addObject:ui::kUTTypeChromiumDragId];
 +   }
 + 
 ++  // Local files supplied by the WebContentsViewDelegate (see
@@ -193,7 +195,7 @@ index 0000000000000000000000000000000000000000..731048ec0ca112b9a12b8db88347653f
 +   // URL (and title).
 +   if (!_dropData.url_infos.empty()) {
 +     [writableTypes addObject:NSPasteboardTypeURL];
-+@@ -210,6 +238,13 @@
++@@ -221,6 +249,13 @@ - (id)pasteboardPropertyListForType:(NSPasteboardType)type {
 +     return base::SysUTF16ToNSString(kHtmlHeader + *_dropData.html);
 +   }
 + 
@@ -208,10 +210,10 @@ index 0000000000000000000000000000000000000000..731048ec0ca112b9a12b8db88347653f
 +   if ([type isEqualToString:NSPasteboardTypeURL]) {
 +     DCHECK(!_dropData.url_infos.empty());
 +diff --git content/browser/web_contents/web_contents_view_aura.cc content/browser/web_contents/web_contents_view_aura.cc
-+index a71c6b9b9a9b7ce11f7c7e7c14713220cd44a226..3c2732f499a294b2bae02bd5cd05359e344ed59a 100644
++index 9f40205..4fcf1ab 100644
 +--- content/browser/web_contents/web_contents_view_aura.cc
 ++++ content/browser/web_contents/web_contents_view_aura.cc
-+@@ -257,10 +257,17 @@ const ui::ClipboardFormatType& GetFileSystemFileFormatType() {
++@@ -259,10 +259,17 @@ const ui::ClipboardFormatType& GetFileSystemFileFormatType() {
 + }
 + 
 + // Utility to fill a ui::OSExchangeDataProvider object from DropData.
@@ -228,10 +230,10 @@ index 0000000000000000000000000000000000000000..731048ec0ca112b9a12b8db88347653f
 ++    provider->MarkRendererTaintedFromOrigin(
 ++        source_rfh.GetLastCommittedOrigin());
 ++  }
-+ #if BUILDFLAG(IS_WIN)
-+   // Put download before file contents to prefer the download of a image over
-+   // its thumbnail link.
-+@@ -1240,7 +1247,63 @@ void WebContentsViewAura::StartDragging(
++   if (drop_data.drag_id.has_value()) {
++     provider->SetChromeDragId(*drop_data.drag_id);
++   }
++@@ -1262,7 +1269,63 @@ void WebContentsViewAura::StartDragging(
 +     selection_controller->HideAndDisallowShowingAutomatically();
 +   std::unique_ptr<ui::OSExchangeDataProvider> provider =
 +       ui::OSExchangeDataProviderFactory::CreateProvider();
@@ -296,10 +298,10 @@ index 0000000000000000000000000000000000000000..731048ec0ca112b9a12b8db88347653f
 +   auto data = std::make_unique<ui::OSExchangeData>(std::move(provider));
 +   data->SetSource(std::make_unique<ui::DataTransferEndpoint>(
 +diff --git content/browser/web_contents/web_contents_view_mac.mm content/browser/web_contents/web_contents_view_mac.mm
-+index 712da37eaef7c2299e201279a885c9cbfed764e9..3bcea77e645e0823df259559674a44e3ee9dfb83 100644
++index f6a08d0..f37b64a 100644
 +--- content/browser/web_contents/web_contents_view_mac.mm
 ++++ content/browser/web_contents/web_contents_view_mac.mm
-+@@ -250,14 +250,48 @@ void WebContentsViewMac::StartDragging(
++@@ -278,14 +278,48 @@ void SetReadWritePermissionsForFile(base::File& file) {
 +       source_rfh.GetProcess()->GetID();
 +   const blink::DocumentToken& document_token =
 +       static_cast<RenderFrameHostImpl&>(source_rfh).GetDocumentToken();
@@ -353,7 +355,7 @@ index 0000000000000000000000000000000000000000..731048ec0ca112b9a12b8db88347653f
 + }
 + 
 +diff --git content/public/browser/web_contents_view_delegate.cc content/public/browser/web_contents_view_delegate.cc
-+index 45ef37544bfecaa6049472e264b90f21654f6de7..14335087a137f272d4b493b25aa44a729f7b3ef9 100644
++index 45ef375..1433508 100644
 +--- content/public/browser/web_contents_view_delegate.cc
 ++++ content/public/browser/web_contents_view_delegate.cc
 +@@ -64,6 +64,11 @@ void* WebContentsViewDelegate::GetDelegateForHost(
@@ -369,7 +371,7 @@ index 0000000000000000000000000000000000000000..731048ec0ca112b9a12b8db88347653f
 +     const DropData& drop_data,
 +     DropCompletionCallback callback) {
 +diff --git content/public/browser/web_contents_view_delegate.h content/public/browser/web_contents_view_delegate.h
-+index 56e9cc00f1e2e45312f1763c7b33e05d2094e3a5..e776f13a3eff2d671cbac90c72bfdd50e8915fdf 100644
++index 56e9cc0..e776f13 100644
 +--- content/public/browser/web_contents_view_delegate.h
 ++++ content/public/browser/web_contents_view_delegate.h
 +@@ -17,6 +17,7 @@

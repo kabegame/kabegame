@@ -1,5 +1,5 @@
 diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
-index d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff..c1d8998378ddc424576fac30b07dd05fd0ffdcd8 100644
+index 32c6d6dd3c35058c3d2b9f38fcea402d5376bc3b..74fe9bf29025148707b4df89a6c7350db927c719 100644
 --- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
 +++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
 @@ -8,6 +8,7 @@
@@ -10,7 +10,7 @@ index d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff..c1d8998378ddc424576fac30b07dd05f
  #include "base/path_service.h"
  #include "cef/include/wrapper/cef_library_loader.h"
  #include "cef/libcef/browser/browser_frame.h"
-@@ -34,18 +35,24 @@
+@@ -35,18 +36,24 @@
  #include "chrome/common/chrome_paths.h"
  #include "chrome/common/chrome_switches.h"
  #include "components/performance_manager/embedder/performance_manager_registry.h"
@@ -35,7 +35,7 @@ index d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff..c1d8998378ddc424576fac30b07dd05f
  
  #if !BUILDFLAG(IS_MAC)
  #include "cef/libcef/browser/chrome/chrome_web_contents_view_delegate_cef.h"
-@@ -177,6 +184,17 @@ HINSTANCE GetCodeModuleHandle() {
+@@ -185,6 +192,17 @@ HINSTANCE GetCodeModuleHandle() {
  }
  #endif
  
@@ -53,7 +53,7 @@ index d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff..c1d8998378ddc424576fac30b07dd05f
  }  // namespace
  
  ChromeContentBrowserClientCef::ChromeContentBrowserClientCef() = default;
-@@ -458,6 +476,59 @@ void ChromeContentBrowserClientCef::OverrideWebPreferences(
+@@ -493,6 +511,59 @@ void ChromeContentBrowserClientCef::OverrideWebPreferences(
    web_contents->SetPageBaseBackgroundColor(base_background_color);
  }
  
@@ -114,10 +114,10 @@ index d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff..c1d8998378ddc424576fac30b07dd05f
      content::BrowserContext* browser_context,
      content::RenderFrameHost* frame,
 diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.h b/libcef/browser/chrome/chrome_content_browser_client_cef.h
-index c5d61ad97f6c53eeac7c70649b119ffac641935c..2a3ec84af6e2ea0d8d5375c35549662ad5800c98 100644
+index c7dc8039c5fd013bf8bab8a39a8d3e621f8ed518..8450478458bcf2507d371f0ef641f42e1b602a51 100644
 --- a/libcef/browser/chrome/chrome_content_browser_client_cef.h
 +++ b/libcef/browser/chrome/chrome_content_browser_client_cef.h
-@@ -68,6 +68,14 @@ class ChromeContentBrowserClientCef : public ChromeContentBrowserClient {
+@@ -72,6 +72,14 @@ class ChromeContentBrowserClientCef : public ChromeContentBrowserClient {
    void OverrideWebPreferences(content::WebContents* web_contents,
                                content::SiteInstance& main_frame_site,
                                blink::web_pref::WebPreferences* prefs) override;

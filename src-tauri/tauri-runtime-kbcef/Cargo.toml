@@ -27,7 +27,7 @@ cookie = "0.18"
 
 # The Chromium engine binding (tauri-apps/cef-rs). Tracks CEF/Chromium major
 # versions: bumping this version is how we "follow upstream Chromium".
-cef = { version = "149", default-features = false }
+cef = { version = "156", default-features = false }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # 截图：CDP 回包的 base64 解码，以及等待 CEF 回调的 oneshot 与超时。

@@ -1,5 +1,26 @@
 # v4.7.0 regression
 
+## CEF / Chromium 149 → 156（安全更新）
+
+2026-11-16 macOS。`third/cef` 从 7827（Chromium 149.0.7827.201）逐个分支升到 8078（CEF 156.0.30，Chromium 156.0.8078.96）：7871 → 7922 → 7977 → 8037 → 8078，每一级把补丁序列重新生成并校验内层 Chromium 补丁，只在最后编译一次。补丁 01（扁平子进程路径）删除：Chromium 156 的 `ChildProcessHost::GetChildPath()` 已原样使用显式 `--browser-subprocess-path`，不再改写成 macOS helper `.app` 变体——release（bundled）的子进程起不起得来全靠这一点，T4 必须在打包版上验。03 的内层拖出补丁适配上游新增的 `DropData::drag_id`（保留），09 的内层 rAF 补丁适配 `BeginMainFrameReason` 与 `LocalFrameMetricsAggregator`，04 / 05 / 11 只有上下文冲突，其余只有上下文漂移；所有补丁的增删行与 149 版相同（03 / 09 的差异只在内层补丁的上下文行）。`third/cef-rs` 换到上游 `dev` 的 `cef-v156.6.0+156.0.30`（bindings 生成自同一 CEF 提交），01 / 02 在上游重写的 `sys/build.rs` 上重做。`build-chromium.ts` 默认分支 / archive 版本改为 8078 / 156.0.30；升版本后的第一次构建要带 `--clean`（automate-git 在浅 checkout 下会自己删旧 `src`、重写 `.gclient`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T0 补丁序列 | macOS | 每一级 `deno task patch cef --check`；内层补丁按 `CHROMIUM_BUILD_COMPATIBILITY.txt` 的 tag 从 gitiles 取文件、按 `patch.cfg` 顺序先打 CEF 自带补丁再打 kabegame 的（`git apply -p0 --ignore-whitespace`，不容忍 fuzz） | 每一级 CEF 序列与三个内层补丁都能打上 | 2026-11-16 Claude：150 / 151 / 152 / 154 / 156 全过；校验脚本先在 149 上跑一遍确认可信。150、152、156 各迁过一次 raf 内层补丁，156 迁了拖出内层补丁并删 01 |
+| [x] | T1 接口核对 | macOS | 补丁覆盖或调用的 Chromium 接口在 149 与 156 的声明逐项比较；`Page::Animate()` 在 149–156 的六个 tag 上比较 | 无变化 | 2026-11-16 Claude：`PreHandleDrag*`、`OnPerformingDrop`、`RegisterNonNetworkSubresourceURLLoaderFactories`、`ShouldEmbeddedFramesTryToReuseExistingProcess`、`CreateFileURLLoaderFactory`、`GrantRequestScheme`、`GrantLoadLocalResources`、`TransformPointToCoordSpaceForView`、`ForwardMouseEvent`、`GetPendingCommitCrossDocumentNavigations` 等都没变；`Page::Animate()` 六个版本逐字相同 |
+| [x] | T2 cef-rs 绑定 | macOS | 官方 CEF 156.0.30 macosarm64 作 `CEF_PATH`、独立 target 目录：`cargo check -p cef -p cef-dll-sys`；四个目标的 sys 绑定各自单独编译 | 通过；三个扩展结构体的尺寸断言成立 | 2026-11-16 Claude：check 通过；`_cef_drag_handler_t` 88、`_cef_drag_data_t` 264、`_cef_frame_t` 272 四个目标一致。Windows 文件单独编译时 `tagPOINT` 等 3 处失败来自本机 `c_long` 8 字节，上游未打补丁的文件同样失败 |
+| [x] | T3 主应用检查 | macOS | 同上 `CEF_PATH` 与独立 target 目录，`deno task check -c kabegame` | 0 error | 2026-11-16 Claude：vue-tsc 与 cargo check 都过，`tauri-runtime-kbcef` 不用改代码 |
+| [ ] | T4 自编 CEF 156 | macOS | `deno task build:chromium --clean` | automate-git 发现旧 checkout 是 149、自己删掉 `src` 并重写 `.gclient`，浅 checkout 156 后编译，产出 `bin/macos/arm64/cef-build`，`archive.json` 为 `156.0.30` | 不带 `--clean` 时 automate-git 自己会报「Current Chromium checkout with --no-chromium-history is incorrect」。2026-11-16 第一次尝试：我在脚本里预先删了 `src`，automate-git 因此没重写 `.gclient`、又去拉 149，且经本机代理的大包下载断了四次（`curl 56 … bad decrypt`）；预删已撤回 |
+| [ ] | T5 dev 启动与内核版本 | macOS dev | 自编 CEF 就位后 `deno task dev -c kabegame`；主窗口执行 `navigator.userAgent` | 正常启动、画面正常；UA 为 `Chrome/156` | |
+| [ ] | T6 打包版子进程（原补丁 01） | macOS release `.app` | `deno task b -c kabegame` 后从 `.app` 启动 | renderer / GPU 进程都从 `Contents/MacOS/kabegame-cef-helper` 起来，不去找 `Helper (Renderer).app`；首屏正常、无 `ERR_ABORTED` 黑屏 | 删掉 01 后唯一靠上游行为兜底的地方 |
+| [ ] | T7 外部拖入（02） | 三平台 | 从 Finder / 资源管理器把图片拖进画廊与画册 | 拖动中有落点提示、松开后导入，CEF 不把文件打开成预览页 | |
+| [ ] | T8 拖出真实文件（03） | 三平台 | 从图库拖一张到 Finder / 资源管理器、Chrome 上传框、VS Code | 得到原图文件（不是缩略图或链接），库内文件不被移走 | 156 新增的 `drag_id` 保留在拖动数据里，确认 Chrome / Electron 仍收得到文件 |
+| [ ] | T9 网页壁纸与图库 `file:`（04–07） | macOS / Windows | 图库缩略图与原图、网页壁纸预览与桌面、壁纸读同目录文件、越界读 | 图片视频正常显示；壁纸正常加载；越界读被 `deny file:` 拒 | |
+| [ ] | T10 进程隔离与 rAF（08 / 09） | macOS dev | 预览与桌面同时开网页壁纸，看 renderer 进程数；场景宿主里数 rAF 回调次数 | 两个窗口的 iframe 各一个 renderer；每帧 rAF 一次 | |
+| [ ] | T11 Ctrl+滚轮（10） | Windows | 在预览的网页壁纸上 Ctrl+滚轮 | 整个应用不缩放 | |
+| [ ] | T12 鼠标注入（11） | macOS / Windows | 预览与桌面的网页 / 场景壁纸跟鼠标、点击 | 照常跟随与点击，日志无「libcef 不带 frame 鼠标注入」 | |
+| [ ] | T13 Windows / Linux 构建 | Windows、Ubuntu 22.04 | 各自 `deno task build:chromium --clean` 后 check 与 dev | 编译通过、能启动 | 本机只验了 macOS |
+
 ## 视频缩略图改为首帧静图，悬浮播原视频
 
 2026-11-16 macOS dev。桌面的视频缩略图从 2.5 秒 H.264 短片改成第一帧缩到最长边 512 的 JPEG（Android 保持 10fps GIF 与 `gif` 形态不变）（`compress::generate_video_thumbnail`，解码复用 `media::decode::decode_first_video_frame`）；WPE 视频壁纸的缩略图也改成入口视频（`compatible_path`）的首帧，解不出时退回作者 `preview.*`。网格只显示静图，悬浮时 `ImageContent` 的 `poster` 形态才在静图上挂原视频（comp → local），出第一帧前透明、停了就卸载。前端按缩略图本身决定放什么：是图（jpg / WPE 预览）走 `poster`，是 mp4 短片或就是原视频走原来的视频形态。预览的右键菜单新增「设为壁纸封面」（只在桌面，普通视频与 WPE 视频）：前端把 `<video>.currentTime` 交给 `set_video_cover`，后端按时间点解出那一刻显示的帧（`decode_video_frame_at`：seek 到之前的关键帧再逐帧解到越过它）换成缩略图。存量由 v053 登记的回填作业 `video_thumbnail_frame` 重做并删掉 `thumbnails_dir` 里的旧文件（作者的 `preview.*` 不删；Android 上空跑）；整理的「重新生成缩略图」也把旧形态当作需要重做（`is_current_video_thumbnail`：桌面 `.jpg`、Android `.gif`）。

@@ -1,8 +1,8 @@
 diff --git a/patch/patch.cfg b/patch/patch.cfg
-index d610d7463c5e1730e45a57b3657ca513a81fc544..2bf5afde20a7822cc0704b51d4b18b5e25d36370 100644
+index 5aa976c18fdaa67f40f8718fe93640243f1c907d..6d61f334701361f5296179a691fb75111f097728 100644
 --- a/patch/patch.cfg
 +++ b/patch/patch.cfg
-@@ -901,5 +901,13 @@ patches = [
+@@ -932,5 +932,13 @@ patches = [
      # a drag of real local files (renderer-supplied filenames are always
      # cleared by RenderWidgetHostImpl::FilterDropData).
      'name': 'kabegame_drag_source_filenames',
@@ -18,14 +18,14 @@ index d610d7463c5e1730e45a57b3657ca513a81fc544..2bf5afde20a7822cc0704b51d4b18b5e
  ]
 diff --git a/patch/patches/kabegame_raf_local_root_only.patch b/patch/patches/kabegame_raf_local_root_only.patch
 new file mode 100644
-index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae7515d831
+index 0000000000000000000000000000000000000000..424085a48e3f8725f2140f79ddaad56e555a08ff
 --- /dev/null
 +++ b/patch/patches/kabegame_raf_local_root_only.patch
 @@ -0,0 +1,156 @@
 +--- third_party/blink/renderer/core/page/page_animator.h
 ++++ third_party/blink/renderer/core/page/page_animator.h
-+@@ -35,12 +35,19 @@
-+   void ScheduleVisualUpdate(LocalFrame*);
++@@ -38,12 +38,19 @@
++       cc::BeginMainFrameReason reason = cc::BeginMainFrameReason::kOther);
 +   void ServiceScriptedAnimations(
 +       base::TimeTicks monotonic_animation_start_time);
 ++  // Kabegame: Page::Animate() for one frame widget. Runs the same steps but
@@ -45,7 +45,7 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 + 
 +   bool IsServicingAnimations() const { return servicing_animations_; }
 + 
-+@@ -74,6 +81,10 @@
++@@ -77,6 +84,10 @@
 +   void ReportFrameAnimations(cc::AnimationHost* animation_host);
 + 
 +  private:
@@ -58,7 +58,7 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 +   bool updating_layout_and_style_for_painting_;
 +--- third_party/blink/renderer/core/page/page_animator.cc
 ++++ third_party/blink/renderer/core/page/page_animator.cc
-+@@ -18,6 +18,7 @@
++@@ -19,6 +19,7 @@
 + #include "third_party/blink/renderer/core/frame/local_frame.h"
 + #include "third_party/blink/renderer/core/frame/local_frame_view.h"
 + #include "third_party/blink/renderer/core/loader/document_loader.h"
@@ -66,8 +66,8 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 + #include "third_party/blink/renderer/core/page/chrome_client.h"
 + #include "third_party/blink/renderer/core/page/page.h"
 + #include "third_party/blink/renderer/core/page/scrolling/sync_scroll_attempt_heuristic.h"
-+@@ -52,6 +53,23 @@
-+   return documents;
++@@ -64,6 +65,23 @@
++   }
 + }
 + 
 ++// Kabegame: the documents a frame widget controls: |frame| (a local root on the
@@ -90,7 +90,7 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 + }  // namespace
 + 
 + PageAnimator::PageAnimator(Page& page)
-+@@ -65,6 +83,29 @@
++@@ -77,6 +95,29 @@
 + 
 + void PageAnimator::ServiceScriptedAnimations(
 +     base::TimeTicks monotonic_animation_start_time) {
@@ -120,7 +120,7 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 +   base::AutoReset<bool> servicing(&servicing_animations_, true);
 + 
 +   // Once we are inside a frame's lifecycle, the AnimationClock should hold its
-+@@ -72,7 +113,6 @@
++@@ -84,7 +125,6 @@
 +   Clock().SetAllowedToDynamicallyUpdateTime(false);
 +   Clock().UpdateTime(monotonic_animation_start_time);
 + 
@@ -128,7 +128,7 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 +   for (const auto& [document, can_throttle] : documents) {
 +     static TimeClamper time_clamper;
 +     base::TimeTicks animation_time = document->Timeline().CalculateZeroTime();
-+@@ -311,7 +351,7 @@
++@@ -360,7 +400,7 @@
 +   }
 + }
 + 
@@ -137,7 +137,7 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 +   // If we don't have an imminently incoming frame, we need to let the
 +   // AnimationClock update its own time to properly service out-of-lifecycle
 +   // events such as setInterval (see https://crbug.com/995806). This isn't a
-+@@ -319,7 +359,12 @@
++@@ -368,7 +408,12 @@
 +   // RAF we will be getting a new frame and thus don't need to unlock the clock.
 +   if (!next_frame_has_pending_raf_) {
 +     Clock().SetAllowedToDynamicallyUpdateTime(true);
@@ -153,7 +153,7 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 +     }
 +--- third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
 ++++ third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
-+@@ -1684,7 +1684,7 @@
++@@ -1832,7 +1832,7 @@
 +   }
 + 
 +   if (Page* page = local_root_frame->GetPage()) {
@@ -162,8 +162,8 @@ index 0000000000000000000000000000000000000000..b629308e217dad8b6d498e8e4f39edae
 +   }
 + }
 + 
-+@@ -2656,7 +2656,14 @@
-+             LocalFrameUkmAggregator::kAnimate));
++@@ -3073,7 +3073,14 @@
++             ->GetScopedTimer(LocalFrameMetricsAggregator::kAnimate));
 +   }
 + 
 +-  GetPage()->Animate(last_frame_time);

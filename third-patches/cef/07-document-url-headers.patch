@@ -1,8 +1,8 @@
 diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
-index c1d8998378ddc424576fac30b07dd05fd0ffdcd8..698f66122aec1204affcdceeaf09079b743bdf7c 100644
+index 74fe9bf29025148707b4df89a6c7350db927c719..04661a8c583267ec8ca41c6f270058f6f6f2a833 100644
 --- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
 +++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
-@@ -38,6 +38,7 @@
+@@ -39,6 +39,7 @@
  #include "content/public/browser/browser_context.h"
  #include "content/public/browser/client_certificate_delegate.h"
  #include "content/public/browser/file_url_loader.h"
@@ -10,7 +10,7 @@ index c1d8998378ddc424576fac30b07dd05fd0ffdcd8..698f66122aec1204affcdceeaf09079b
  #include "content/public/browser/navigation_throttle.h"
  #include "content/public/browser/render_frame_host.h"
  #include "content/public/browser/render_process_host.h"
-@@ -47,8 +48,10 @@
+@@ -48,8 +49,10 @@
  #include "content/public/browser/shared_cors_origin_access_list.h"
  #include "services/network/public/mojom/cors_origin_pattern.mojom.h"
  #include "content/public/browser/weak_document_ptr.h"
@@ -21,7 +21,7 @@ index c1d8998378ddc424576fac30b07dd05fd0ffdcd8..698f66122aec1204affcdceeaf09079b
  #include "net/ssl/ssl_private_key.h"
  #include "third_party/blink/public/common/web_preferences/web_preferences.h"
  #include "third_party/blink/public/mojom/loader/resource_load_info.mojom-shared.h"
-@@ -64,6 +67,32 @@
+@@ -72,6 +75,32 @@
  
  namespace {
  
@@ -54,7 +54,7 @@ index c1d8998378ddc424576fac30b07dd05fd0ffdcd8..698f66122aec1204affcdceeaf09079b
  class CefSelectClientCertificateCallbackImpl
      : public CefSelectClientCertificateCallback {
   public:
-@@ -486,6 +515,13 @@ void ChromeContentBrowserClientCef::
+@@ -521,6 +550,13 @@ void ChromeContentBrowserClientCef::
    ChromeContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
        render_process_id, render_frame_id, request_initiator_origin, factories);
  
@@ -68,7 +68,7 @@ index c1d8998378ddc424576fac30b07dd05fd0ffdcd8..698f66122aec1204affcdceeaf09079b
    // Kabegame: patch 05 lets the app page pass SecurityOrigin::CanDisplay()
    // and FilterURL for file: URLs, but content only hands a file: subresource
    // factory to documents with a file: precursor scheme
-@@ -607,10 +643,28 @@ void ChromeContentBrowserClientCef::WillCreateURLLoaderFactory(
+@@ -645,10 +681,28 @@ void ChromeContentBrowserClientCef::WillCreateURLLoaderFactory(
    DCHECK(!cef_override->overriding_factory);
    DCHECK(!cef_override->overridden_factory_receiver);
  
@@ -99,7 +99,7 @@ index c1d8998378ddc424576fac30b07dd05fd0ffdcd8..698f66122aec1204affcdceeaf09079b
    net_service::ProxyURLLoaderFactory::CreateProxy(
        browser_context, factory_builder, header_client,
 diff --git a/libcef/browser/net_service/resource_request_handler_wrapper.cc b/libcef/browser/net_service/resource_request_handler_wrapper.cc
-index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8e4e3e341 100644
+index efabfd257a018dac4a3ebecc636b730115a4dd8a..3fa8ec96bdba2626a1571eb7b1d0eb4375ddec9f 100644
 --- a/libcef/browser/net_service/resource_request_handler_wrapper.cc
 +++ b/libcef/browser/net_service/resource_request_handler_wrapper.cc
 @@ -5,8 +5,10 @@
@@ -113,7 +113,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
  #include "cef/libcef/browser/browser_host_base.h"
  #include "cef/libcef/browser/context.h"
  #include "cef/libcef/browser/iothread_state.h"
-@@ -44,6 +46,20 @@ namespace net_service {
+@@ -45,6 +47,20 @@ namespace net_service {
  
  namespace {
  
@@ -134,7 +134,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
  const int kLoadNoCookiesFlags =
      net::LOAD_DO_NOT_SEND_COOKIES | net::LOAD_DO_NOT_SAVE_COOKIES;
  
-@@ -256,6 +272,8 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
+@@ -257,6 +273,8 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
                      bool is_navigation,
                      bool is_download,
                      const url::Origin& request_initiator,
@@ -143,7 +143,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
                      const base::RepeatingClosure& unhandled_request_callback) {
        CEF_REQUIRE_UIT();
  
-@@ -283,6 +301,11 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
+@@ -284,6 +302,11 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
        is_navigation_ = is_navigation;
        is_download_ = is_download;
        request_initiator_ = request_initiator.Serialize();
@@ -155,7 +155,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
        unhandled_request_callback_ = unhandled_request_callback;
  
        // Default values for standard headers.
-@@ -323,6 +346,8 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
+@@ -324,6 +347,8 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
      bool is_navigation_ = true;
      bool is_download_ = false;
      CefString request_initiator_;
@@ -164,7 +164,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
      base::RepeatingClosure unhandled_request_callback_;
  
      // Default values for standard headers.
-@@ -578,6 +603,15 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
+@@ -598,6 +623,15 @@ class InterceptedRequestHandlerWrapper : public InterceptedRequestHandler {
      request->headers.SetHeaderIfMissing(net::HttpRequestHeaders::kUserAgent,
                                          init_state_->user_agent_);
  
@@ -180,7 +180,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
      const bool is_external = IsExternalRequest(request);
  
      // External requests will not have a default handler.
-@@ -1350,7 +1384,9 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
+@@ -1383,7 +1417,9 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
      int render_process_id,
      bool is_navigation,
      bool is_download,
@@ -191,7 +191,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
    CEF_REQUIRE_UIT();
    CHECK(browser_context);
  
-@@ -1379,6 +1415,7 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
+@@ -1412,6 +1448,7 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
        std::make_unique<InterceptedRequestHandlerWrapper::InitState>();
    init_state->Initialize(browser_context, browserPtr, framePtr, global_id,
                           is_navigation, is_download, request_initiator,
@@ -199,7 +199,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
                           base::RepeatingClosure());
  
    auto wrapper = std::make_unique<InterceptedRequestHandlerWrapper>();
-@@ -1460,6 +1497,7 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
+@@ -1493,6 +1530,7 @@ std::unique_ptr<InterceptedRequestHandler> CreateInterceptedRequestHandler(
        std::make_unique<InterceptedRequestHandlerWrapper::InitState>();
    init_state->Initialize(browser_context, browserPtr, framePtr, global_id,
                           is_navigation, is_download, request_initiator,
@@ -208,7 +208,7 @@ index 5a61f1055b7962f231d3d3f5ab58f5a8125648dc..f31f68b7e81e29fccd5fde50b0f30ec8
  
    auto wrapper = std::make_unique<InterceptedRequestHandlerWrapper>();
 diff --git a/libcef/browser/net_service/resource_request_handler_wrapper.h b/libcef/browser/net_service/resource_request_handler_wrapper.h
-index 9ae90f21b8d6557012d6ec464087acdb291ec950..9fa49b05bae0bf47f11231f6857626ae0a6008ea 100644
+index 9ae90f21b8d6557012d6ec464087acdb291ec950..1229c2064142fa74d89f24ef81bddde941694c1a 100644
 --- a/libcef/browser/net_service/resource_request_handler_wrapper.h
 +++ b/libcef/browser/net_service/resource_request_handler_wrapper.h
 @@ -7,6 +7,7 @@

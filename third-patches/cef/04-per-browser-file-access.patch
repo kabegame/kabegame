@@ -1,10 +1,10 @@
 diff --git a/libcef/browser/chrome/chrome_content_browser_client_cef.cc b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
-index 06b6f895433c4ce0fa93dab7d38392ffa4bf48a1..d7b9bf04ef2c6f185a4fcf81bc0637936f3c59ff 100644
+index f990219e75cd0721c1f6851e4c119efc99b08890..32c6d6dd3c35058c3d2b9f38fcea402d5376bc3b 100644
 --- a/libcef/browser/chrome/chrome_content_browser_client_cef.cc
 +++ b/libcef/browser/chrome/chrome_content_browser_client_cef.cc
-@@ -426,6 +426,20 @@ void ChromeContentBrowserClientCef::OverrideWebPreferences(
-   if (browser) {
-     renderer_prefs::SetCefPrefs(browser->settings(), *prefs);
+@@ -457,6 +457,20 @@ void ChromeContentBrowserClientCef::OverrideWebPreferences(
+     }
+ #endif
  
 +    // Kabegame: per-browser opt-in for file:// documents reading other file://
 +    // URLs (fetch / XHR). This is the per-WebContents equivalent of the global

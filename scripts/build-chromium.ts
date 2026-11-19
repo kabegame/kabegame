@@ -92,7 +92,7 @@ interface BuildContext {
   incremental: boolean;
 }
 
-// CEF_BRANCH 对应 CEF 149.0.x / Chromium 149.0.7827.x，与 cef-rs "149" 对齐；
+// CEF_BRANCH 对应 CEF 156.0.x / Chromium 156.0.8078.x，与 cef-rs "156" 对齐；
 // CEF_RS_ARCHIVE_VERSION 对应 Cargo.lock 中 cef-dll-sys 使用的 archive 版本。
 //
 // NO_HISTORY=1 只拉当前分支 tip。完整 chromium/src 历史体积巨大，代理下单次 fetch
@@ -307,8 +307,8 @@ function createContext(parsed: ParsedArgs): BuildContext {
     noHistory: envOr("NO_HISTORY", "1"),
     gclientJobs: envOr("GCLIENT_JOBS", "4"),
     ninjaJobs: envOr("NINJA_JOBS", "16"),
-    cefBranch: envOr("CEF_BRANCH", "7827"),
-    cefRsArchiveVersion: envOr("CEF_RS_ARCHIVE_VERSION", "149.0.2"),
+    cefBranch: envOr("CEF_BRANCH", "8078"),
+    cefRsArchiveVersion: envOr("CEF_RS_ARCHIVE_VERSION", "156.0.30"),
     windows,
     pgoFlags: [],
     distribFlags: [],
@@ -436,7 +436,7 @@ function stageCefPatchesAsCommit(ctx: BuildContext): string {
     die(
       [
         `third/cef 工作区没有任何 kabegame patch（当前就是上游 ${head.slice(0, 9)}）。`,
-        "构建出来的 CEF 会缺少 flat-subprocess-path 等改动且不会报错，故在此拦下。",
+        "构建出来的 CEF 会缺少拖出、file: 访问等改动且不会报错，故在此拦下。",
         "请先套用 patch 系列：deno task patch cef",
       ].join("\n"),
     );
@@ -707,7 +707,7 @@ function bootstrap(ctx: BuildContext): void {
 // build/modules/ 下只有 mac_xcode2600），mac_sdk.gni 的 mac_sdk_official_version 是 26.x。
 // Xcode 27 的 SDK 把 math.h 改成经 clang 的 float.h 引 _Builtin_float，而手工维护的那张
 // 图里 _DarwinFoundation1 缺这条边，叠加 -fno-implicit-modules ⇒ DarwinFoundation1.pcm
-// 直接编不出来。升 CEF 分支绕不开：154 和主干这两处配置与 149 完全一致。
+// 直接编不出来。升 CEF 分支绕不开：156 和主干这两处配置与 149 完全一致。
 //
 // find_sdk.py 只扫 $(xcode-select -p) 下的 SDK，Xcode 原地升级后旧 SDK 就没了。于是在
 // 选中的 SDK 超纲时显式钉 mac_sdk_path 到机器上仍在范围内的那份（Command Line Tools 的
@@ -800,7 +800,7 @@ function checkMacMetalToolchain(): void {
 }
 
 function configureGnArgs(ctx: BuildContext): void {
-  // CEF 7827 的 gn_args.py 硬性要求 optimize_webui=true、enable_widevine=true，
+  // CEF 8078 的 gn_args.py 硬性要求 optimize_webui=true、enable_widevine=true，
   // //cef/BUILD.gn 还有 assert 兜底，不能在这里覆盖。NaCl 已从 Chromium 149 移除，
   // 也不能再写 enable_nacl。official build 默认启用 PGO，全量 checkout 通过
   // --with-pgo-profiles 下载。
