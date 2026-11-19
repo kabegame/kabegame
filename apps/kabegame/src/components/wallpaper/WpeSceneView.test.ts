@@ -36,6 +36,13 @@ vi.mock("@/api", () => ({
 }));
 const loggerMock = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));
 vi.mock("@/utils/logger", () => ({ logger: loggerMock }));
+/** 当前窗口种类（`@/windowKind` 的 `WINDOW_KIND`）：默认主窗口，用例里改成 wallpaper */
+const windowKind = vi.hoisted(() => ({ value: "main" as "main" | "wallpaper" }));
+vi.mock("@/windowKind", () => ({
+  get WINDOW_KIND() {
+    return windowKind.value;
+  },
+}));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: async (_name: string, handler: (event: { payload: unknown }) => void) => {
     status.handler = handler;
@@ -76,6 +83,8 @@ const displayPosts = (post: { mock: { calls: unknown[][] } }) =>
 
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
+  windowKind.value = "main";
+  vi.stubGlobal("devicePixelRatio", 1);
 });
 
 describe("WpeSceneView 样式", () => {
@@ -282,18 +291,40 @@ describe("WpeSceneView 显示缩放", () => {
       return { wrapper, post, frame };
     }
 
-    it("放大时按 sceneDisplayScale 封顶：画布跟着放大到 1 为止", async () => {
+    it("放大时画布跟着放大，不再封顶到 1；超过 3840×2160 预算才等比缩", async () => {
       const zoom = ref(2);
       const { post, frame } = await mountZoomed(zoom);
       // 适应时 0.4，放大 2 倍量到 0.8
       layout(frame, 2560, 1440, 0.8);
       poll();
       expect(post).toHaveBeenLastCalledWith(displayMessage(0.8), "*");
-      // 放大 5 倍量到 2：封顶到 1
+      // 放大 4 倍量到 1.2：超过 1 也照放大（2560×1440×1.44 < 预算）
+      zoom.value = 3;
+      layout(frame, 2560, 1440, 1.2);
+      poll();
+      expect(post).toHaveBeenLastCalledWith(displayMessage(1.2), "*");
+      // 放大到 5 量到 2：封顶到预算（2560×1440 的画布最多 1.5 倍）
       zoom.value = 5;
       layout(frame, 2560, 1440, 2);
       poll();
-      expect(post).toHaveBeenLastCalledWith(displayMessage(1), "*");
+      expect(post).toHaveBeenLastCalledWith(displayMessage(1.5), "*");
+    });
+
+    it("DPR 计入预算：同样的布局，DPR 2 时预算封顶更小", async () => {
+      vi.stubGlobal("devicePixelRatio", 2);
+      const { post, frame } = await mountZoomed(ref(3));
+      // 2560×1440×4 × s² = 8294400 → s = 0.75
+      layout(frame, 2560, 1440, 1.5);
+      poll();
+      expect(post).toHaveBeenLastCalledWith(displayMessage(0.75), "*");
+    });
+
+    it("壁纸窗口不设预算", async () => {
+      windowKind.value = "wallpaper";
+      const { post, frame } = await mountZoomed(ref(5));
+      layout(frame, 2560, 1440, 2);
+      poll();
+      expect(post).toHaveBeenLastCalledWith(displayMessage(2), "*");
     });
 
     it("放大倍数一变就在下一帧补量一次，同一帧内多次变化只量一次", async () => {

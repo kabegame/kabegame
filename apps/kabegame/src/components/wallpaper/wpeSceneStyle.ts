@@ -2,7 +2,7 @@
  * 场景壁纸的父页面 ↔ 宿主消息协议（`postMessage`），父页面一侧是 `WpeSceneView`：宿主启动时发
  * `{ type: WPE_SCENE_STYLE_REQUEST }`，父页面回三条：
  * - `{ type: WPE_SCENE_STYLE, style }`：壁纸样式，变化时再主动推；
- * - `{ type: WPE_SCENE_DISPLAY, scale }`：显示缩放（`displayScaleOf`，预览放大时按 `sceneDisplayScale` 封顶），量到变化时
+ * - `{ type: WPE_SCENE_DISPLAY, scale }`：显示缩放（`displayScaleOf`，主窗口里按 `sceneDisplayScale` 的像素预算封顶），量到变化时
  *   再主动推。宿主按它把画布缩到实际显示大小：预览画布按内容尺寸布局、再整体 `scale`，这个 transform 在 iframe 里量不到。
  * - `{ type: WPE_SCENE_SETTINGS, postprocess, reflection, shadows, volumetrics, forceRender }`：场景后处理 / 反射 / 阴影 / 体积光 /
  *   强制渲染（`wpeSceneSettingsOf`，不能跟随时 `follow` 已换成默认值），变化时再主动推。桌面传全局「壁纸设置」，预览传这张壁纸的
@@ -89,10 +89,26 @@ export function displayScaleOf(element: HTMLElement): number | null {
 export const WALLPAPER_PREVIEW_ZOOM: InjectionKey<Readonly<Ref<number>>> = Symbol("wallpaperPreviewZoom");
 
 /**
- * 交给宿主的显示缩放（`measured` 是 {@link displayScaleOf} 量到的，含预览的放大）。预览放大（`zoom` > 1）时画布跟着
- * 放大，到 1（布局 × DPR）为止：场景目标的分辨率到这里已用满（正交按场景分辨率、透视按布局 × DPR），再大只是浏览器
- * 放大，画布像素白白变多。没放大前就超过 1 的（小场景在大窗口里放大显示）保持原值。`zoom` 为 1 时就是实测值。
+ * 主窗口里的场景（图库预览、应用背景）画布像素预算：3840×2160 的等量像素，超了等比缩（放大到这以后再放大只是
+ * 拉伸）。来历：场景按画布像素画（画布 = 布局 × DPR × 显示缩放），预览放大会让画布无限变大，方案 A 已定 3。
+ * 桌面壁纸窗口不设预算（按窗口实际像素，宿主侧另有设备纹理上限兜底）。
  */
-export function sceneDisplayScale(measured: number, zoom: number): number {
-  return zoom > 1 ? Math.max(measured / zoom, Math.min(measured, 1)) : measured;
+export const SCENE_CANVAS_PIXEL_BUDGET = 3840 * 2160;
+
+/**
+ * 交给宿主的显示缩放。`measured` 是 {@link displayScaleOf} 量到的（含预览的放大，不再按放大倍数封顶）：
+ * - `budget` 给了（主窗口）：画布像素 = 布局宽 × 布局高 × DPR² × 缩放²，缩放封顶到使它不超过 `budget`，
+ *   即 `min(measured, sqrt(budget / (布局宽 × 布局高 × DPR²)))`；
+ * - `budget` 为 null（桌面壁纸窗口）：原样返回 `measured`。
+ * 布局或 DPR 非法（≤ 0、非有限）时不封顶。
+ */
+export function sceneDisplayScale(
+  measured: number,
+  limit: { layout: readonly [number, number]; dpr: number; budget: number | null },
+): number {
+  const { layout, dpr, budget } = limit;
+  if (budget === null) return measured;
+  const pixels = layout[0] * layout[1] * dpr * dpr;
+  if (!(pixels > 0) || !Number.isFinite(pixels)) return measured;
+  return Math.min(measured, Math.sqrt(budget / pixels));
 }

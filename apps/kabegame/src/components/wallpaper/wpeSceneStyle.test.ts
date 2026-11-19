@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { WPE_PLAYBACK_RATE_MAX, WPE_PLAYBACK_RATE_MIN } from "@/utils/wpeSettings";
 import {
+  SCENE_CANVAS_PIXEL_BUDGET,
   WPE_SCENE_DISPLAY,
   WPE_SCENE_POINTER,
   WPE_SCENE_RATE,
@@ -125,22 +126,32 @@ describe("displayScaleOf", () => {
 });
 
 describe("sceneDisplayScale", () => {
-  it("没放大（zoom 1）时就是实测值", () => {
-    expect(sceneDisplayScale(0.4, 1)).toBe(0.4);
-    expect(sceneDisplayScale(1.5, 1)).toBe(1.5);
+  const budget = SCENE_CANVAS_PIXEL_BUDGET;
+
+  it("预算是 3840×2160 的等量像素", () => {
+    expect(budget).toBe(8_294_400);
   });
 
-  it("放大时画布跟着放大", () => {
-    // 适应时显示 0.4，放大 2 倍量到 0.8
-    expect(sceneDisplayScale(0.8, 2)).toBeCloseTo(0.8, 12);
+  it("没超预算时就是实测值，放大到超过 1 也不封顶", () => {
+    expect(sceneDisplayScale(0.4, { layout: [2560, 1440], dpr: 1, budget })).toBe(0.4);
+    // 2560×1440 × 1.5² = 8.29M 正好等于预算
+    expect(sceneDisplayScale(1.5, { layout: [2560, 1440], dpr: 1, budget })).toBeCloseTo(1.5, 12);
+    expect(sceneDisplayScale(3, { layout: [1000, 500], dpr: 1, budget })).toBe(3);
   });
 
-  it("到布局 × DPR（1）封顶：再大只是浏览器放大", () => {
-    expect(sceneDisplayScale(2, 5)).toBe(1);
-    expect(sceneDisplayScale(4, 10)).toBe(1);
+  it("超预算时等比缩到预算", () => {
+    const scale = sceneDisplayScale(10, { layout: [1000, 563], dpr: 1.5, budget });
+    const pixels = 1000 * 563 * 1.5 * 1.5 * scale * scale;
+    expect(scale).toBeLessThan(10);
+    expect(pixels).toBeCloseTo(budget, 3);
   });
 
-  it("没放大前就超过 1 的（小场景放大显示）保持原值", () => {
-    expect(sceneDisplayScale(3, 2)).toBe(1.5);
+  it("不设预算（桌面壁纸窗口）时原样返回", () => {
+    expect(sceneDisplayScale(10, { layout: [1000, 563], dpr: 1.5, budget: null })).toBe(10);
+  });
+
+  it("布局或 DPR 非法时不封顶", () => {
+    expect(sceneDisplayScale(10, { layout: [0, 500], dpr: 1, budget })).toBe(10);
+    expect(sceneDisplayScale(10, { layout: [1000, 500], dpr: Number.NaN, budget })).toBe(10);
   });
 });

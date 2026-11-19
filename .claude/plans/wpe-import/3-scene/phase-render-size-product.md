@@ -252,6 +252,14 @@ export function sceneDisplayScale(measured: number, zoom: number): number {
   - **复核**：改动只在 8 个文件；19 个文件 645 条通过、tsc 0 错误；变异 9 处全部抓到（`ignore/render-size-a/step2/mutate2.py`）；合并进主工作区、重建宿主后真机：
     dino_run 预览场景目标 = 画布像素（976×549），开侧栏原地换到 696×392、没有整场重载；eagleflag 产品画面与探针逐字节相同。
   - `fillCropEdges` / `anchorEdgesFor` 渲染器不再用，只剩探针旧画法与 `replayPointers`，第 4 步写文档时注明。
+  - 提交 `1d8eef6d`。
+- **第 3 步：预览放大与像素预算**（2026-11-19，sonnet 执行代理实现，Claude 复核）：
+  - **改动**（`apps/kabegame/src/components/wallpaper/`）：`wpeSceneStyle.ts` 新增 `SCENE_CANVAS_PIXEL_BUDGET = 3840 × 2160`，`sceneDisplayScale(measured,
+    { layout, dpr, budget })` 不再按放大倍数封顶，给了预算时 `min(measured, √(budget / (布局宽 × 布局高 × DPR²)))`，预算为 null 原样；`WpeSceneView.vue`
+    按 `WINDOW_KIND`（URL `?window=wallpaper`）壁纸窗口不给预算、主窗口给；`WALLPAPER_PREVIEW_ZOOM` 保留给「zoom 变了下一帧补报」。测试改了按旧封顶写的用例。
+  - 宿主侧不改（`canvasSize` 仍只按设备纹理上限兜底）。
+  - **复核**：只改了 4 个文件；4 个文件 79 条通过、`vue-tsc` 0 错误；变异 4 处全部检出（`kbp mutate` 只认场景宿主源码，应用页用 `ignore/render-size-a/step3/mutate_app.py`）；
+    合并进主工作区（HMR）后真机：dino_run 预览 100% 976×549 → 223% 2172×1222 → 1000% 3839×2160（停在预算），不重编译。
 
 ## 风险
 

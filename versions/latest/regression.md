@@ -1,5 +1,15 @@
 # v4.7.0 regression
 
+## 场景壁纸预览放大更清楚（产品按画布分辨率画 第 3 步）
+
+2026-11-19 Windows dev。图库预览放大场景壁纸时，画布与场景目标跟着放大（以前封顶在「布局 × DPR」，放大只是拉伸），放大后的文字、线条、像素画都按放大后的分辨率画。主窗口（预览、应用背景）的画布不超过 3840×2160 的等量像素，再放大只是拉伸；桌面壁纸窗口不设这个预算（`apps/kabegame` 的 `sceneDisplayScale` / `SCENE_CANVAS_PIXEL_BUDGET`，窗口种类看 `WINDOW_KIND`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | 应用页 vitest：`wpeSceneStyle.test.ts`、`WpeSceneView.test.ts`、`WallpaperPreviewCanvas.test.ts`、`WpeWallpaperContent.test.ts`；`vue-tsc` | 全过 | 2026-11-19 Claude：4 个文件 79 条通过；`vue-tsc` 0 错误；变异 4 处全部检出（`ignore/render-size-a/step3/`） |
+| [x] | T2 放大跟着变清楚 | Windows dev 预览（DPR 1） | dino_run 预览从 100% 放大到 223%、1000% | 场景目标 = 画布像素，跟着放大；到预算停住；不重编译 | 2026-11-19 Claude：100% 976×549；223% 2172×1222；1000% 3839×2160（8 292 240 像素，预算 8 294 400）；`recompiled` 一直为空，截图里像素画边缘锐利 |
+| [ ] | T3 放大手感 | Windows dev 预览 | 用 Ctrl+滚轮连续放大缩小、拖动 | 不卡、不闪；松手 300 ms 内画面变清楚 | 需要用户看 |
+
 ## 场景壁纸按画布分辨率画（产品按画布分辨率画 第 2 步：渲染器接线）
 
 2026-11-19 Windows dev。图库预览、桌面壁纸窗口、应用背景里的场景壁纸不再先按场景分辨率画再缩放上屏，而是同 Wallpaper Engine 按画布像素画、壁纸样式做进正交投影（`alignEdges`，留白底色取 `schemecolor`），上屏 1:1；`center` 仍是一个场景单位对一个布局 CSS 像素，`tile` 保留旧画法。画布尺寸变了（窗口、侧栏、全屏、DPR、显示缩放）去抖 300 ms 后原地换（`GpuScene.resize`），期间旧画面拉伸显示，场景不重新加载；只改样式或留白色立即换。透视场景不再「画布一变就整场重新加载」。光标与文本 `anchor` 改走投影里的边距，和 dev 探针同一套。脚本的 `engine.screenResolution` 不变。

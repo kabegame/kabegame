@@ -15,8 +15,9 @@
  *   大小。预览画布（`WallpaperPreviewCanvas`）按内容尺寸布局、再整体 `scale`，这个 transform 在 iframe 里量不到，
  *   只能在这里量。宿主请求时必回；iframe 尺寸变化（ResizeObserver）、窗口尺寸变化时量一次；只有祖先 transform
  *   变了时（弹窗缩放、预览弹窗动画）布局尺寸不变、哪个 observer 都不触发，所以再按 250ms 轮询比较，只在值变时推。
- *   预览放大时（预览画布提供的 `WALLPAPER_PREVIEW_ZOOM` > 1）按 `sceneDisplayScale` 封顶：画布跟着放大到布局 × DPR 为止；
- *   放大倍数一变就在下一帧补量一次（Panzoom 也在 rAF 里写 transform），不等轮询。
+ *   主窗口里（图库预览、应用背景）按 `sceneDisplayScale` 给画布像素预算（3840×2160 等量像素，超了等比缩），预览放大时
+ *   画布跟着放大直到预算；桌面壁纸窗口（`WINDOW_KIND === "wallpaper"`）不设预算。
+ *   预览放大倍数（预览画布提供的 `WALLPAPER_PREVIEW_ZOOM`）一变就在下一帧补量一次（Panzoom 也在 rAF 里写 transform），不等轮询。
  * - 快捷方式（P11d）：脚本的 `engine.openUserShortcut` 经宿主门禁后 `postMessage` 属性名（`wpeSceneShortcut.ts`）。这里是安全边界：
  *   只认可交互实例、`navigator.userActivation.isActive`（真实用户输入）、同一属性 1 秒一次，以本组件持有的图片 id 调
  *   `wpe_open_user_shortcut`（只开给应用页，宿主调不到）；消息里除属性名外的东西都不信。
@@ -30,6 +31,7 @@
  */
 import { invoke } from "@/api";
 import { IS_ANDROID, IS_WEB } from "@/env";
+import { WINDOW_KIND } from "@/windowKind";
 import { logger } from "@/utils/logger";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { inject, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -39,6 +41,7 @@ import {
   WALLPAPER_PREVIEW_ZOOM,
   displayScaleOf,
   isWpeSceneStyleRequest,
+  SCENE_CANVAS_PIXEL_BUDGET,
   sceneDisplayScale,
   scenePointerIn,
   wpeSceneDisplayMessage,
@@ -136,7 +139,7 @@ function postSceneSettings() {
 
 /**
  * 量显示缩放，变了才推；`force`（宿主请求）时照推。量不出来（还没布局、`scale(0)`）就不推，宿主保持上次的值
- * （起初是 1），轮询会在量得出来时补上。预览放大时按 `sceneDisplayScale` 封顶。
+ * （起初是 1），轮询会在量得出来时补上。主窗口按 `sceneDisplayScale` 的像素预算封顶，壁纸窗口不封顶。
  */
 function postDisplay(force = false) {
   const element = frame.value;
@@ -144,7 +147,11 @@ function postDisplay(force = false) {
   if (!element || !target) return;
   const measured = displayScaleOf(element);
   if (measured === null) return;
-  const scale = sceneDisplayScale(measured, previewZoom?.value ?? 1);
+  const scale = sceneDisplayScale(measured, {
+    layout: [element.offsetWidth, element.offsetHeight],
+    dpr: window.devicePixelRatio || 1,
+    budget: WINDOW_KIND === "wallpaper" ? null : SCENE_CANVAS_PIXEL_BUDGET,
+  });
   if (!force && postedScale !== null && Math.abs(scale - postedScale) <= postedScale * DISPLAY_SCALE_EPSILON) return;
   postedScale = scale;
   target.postMessage(wpeSceneDisplayMessage(scale), "*");
