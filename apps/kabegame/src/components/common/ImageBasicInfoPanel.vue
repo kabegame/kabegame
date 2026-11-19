@@ -122,21 +122,19 @@
           {{ imageFileSizeLabel }}
         </button>
         <span v-if="imageDimensionsLabel" :class="CHIP_CLASS">{{ imageDimensionsLabel }}</span>
-        <!-- 宽高比画成与图片同比例的矩形框，放得下就把比值写在框里 -->
+        <!-- 宽高比画成与图片同比例的空矩形框；悬停显示真实的宽 × 高 -->
         <button
-          v-if="aspectFilterTarget && aspectFrame"
+          v-if="aspectFilterTarget && aspectFrameWidth"
           type="button"
-          class="inline-flex cursor-pointer items-center gap-1.25 rounded-[3px] border-0 bg-transparent p-0 text-[11px] text-kb-fg-muted tabular-nums outline-none transition-colors duration-150 hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring"
-          :title="`${t('gallery.filterByAspect')} · ${aspectFrame.label}`"
+          class="inline-flex cursor-pointer items-center rounded-[3px] border-0 bg-transparent p-0 text-kb-fg-muted outline-none transition-colors duration-150 hover:text-kb-fg focus-visible:ring-2 focus-visible:ring-kb-ring"
+          :title="`${t('gallery.filterByAspect')} · ${imageDimensionsLabel}`"
+          :aria-label="`${t('gallery.filterByAspect')} · ${imageDimensionsLabel}`"
           @click="emitGalleryFilter(aspectFilterTarget)"
         >
           <span
-            class="box-border inline-flex h-[22px] items-center justify-center rounded-[3px] border-[1.5px] border-solid border-current leading-none"
-            :style="{ width: `${aspectFrame.width}px` }"
-          >
-            <template v-if="aspectFrame.labelInside">{{ aspectFrame.label }}</template>
-          </span>
-          <span v-if="!aspectFrame.labelInside">{{ aspectFrame.label }}</span>
+            class="box-border inline-block h-[22px] rounded-[3px] border-[1.5px] border-solid border-current"
+            :style="{ width: `${aspectFrameWidth}px` }"
+          />
         </button>
       </div>
 
@@ -415,43 +413,17 @@ const imageDimensionsLabel = computed((): string => {
   return `${Math.round(width as number)} × ${Math.round(height as number)}`;
 });
 
-/** 常见比例；实际比值与之相差 1.5% 内就显示该比例，否则显示小数比值。 */
-const COMMON_ASPECT_RATIOS: Array<[number, number]> = [
-  [1, 1],
-  [5, 4],
-  [4, 3],
-  [3, 2],
-  [5, 3],
-  [16, 10],
-  [16, 9],
-  [2, 1],
-  [21, 9],
-  [32, 9],
-];
-
-/** 框高固定 22px（与芯片同高），宽按比例换算并夹在 [12, 56]；比值文字放得下才写进框里。 */
+/** 框高固定 22px（与芯片同高），宽按比例换算并夹在 [12, 56]。 */
 const ASPECT_FRAME_HEIGHT = 22;
 
-const aspectFrame = computed(() => {
+/** 宽高比框的宽（px）；没有有效尺寸时为 0，不画框。 */
+const aspectFrameWidth = computed((): number => {
   const width = props.image?.width;
   const height = props.image?.height;
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-  if ((width as number) <= 0 || (height as number) <= 0) return null;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return 0;
+  if ((width as number) <= 0 || (height as number) <= 0) return 0;
   const ratio = (width as number) / (height as number);
-  const portrait = ratio < 1;
-  const long = portrait ? 1 / ratio : ratio;
-  const common = COMMON_ASPECT_RATIOS.find(([a, b]) => Math.abs(long / (a / b) - 1) <= 0.015);
-  const label = common
-    ? portrait
-      ? `${common[1]}:${common[0]}`
-      : `${common[0]}:${common[1]}`
-    : portrait
-      ? `1:${long.toFixed(2)}`
-      : `${long.toFixed(2)}:1`;
-  const frameWidth = Math.min(56, Math.max(12, Math.round(ASPECT_FRAME_HEIGHT * ratio)));
-  // 11px 等宽数字约 6.5px/字，左右各留 3px
-  const labelInside = frameWidth >= label.length * 6.5 + 6;
-  return { label, width: frameWidth, labelInside };
+  return Math.min(56, Math.max(12, Math.round(ASPECT_FRAME_HEIGHT * ratio)));
 });
 
 const imageFileSizeLabel = computed((): string => {
