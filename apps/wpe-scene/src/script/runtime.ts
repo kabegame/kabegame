@@ -98,7 +98,8 @@ interface ScriptRecord {
   state: "pending" | "loaded" | "inited" | "failed";
   disabled: Set<Callback>;
   errors: string[];
-  calls: Record<string, { count: number; maxMs: number }>;
+  /** 每个回调的调用次数、单次最长与累计耗时（毫秒；`totalMs` 看每帧平均开销，`scriptCorpus` 比对时只留 `count`）。 */
+  calls: Record<string, { count: number; maxMs: number; totalMs: number }>;
   /** 回调返回值写到重编译目标的次数（API 直接写入由 `ScriptApi` 另计，探针合并）。 */
   recompileWrites: number;
   /**
@@ -289,9 +290,10 @@ export class ScriptRuntime {
       this.options.report.warn(`场景脚本 ${record.script.id} ${callback} 出错：${messageOf(error)}`);
     } finally {
       const elapsed = now() - start;
-      const stats = (record.calls[callback] ??= { count: 0, maxMs: 0 });
+      const stats = (record.calls[callback] ??= { count: 0, maxMs: 0, totalMs: 0 });
       stats.count++;
       stats.maxMs = Math.max(stats.maxMs, elapsed);
+      stats.totalMs += elapsed;
       this.active = previous;
       this.activeCallbackName = previousCallback;
       this.options.enterScript?.(previous?.script ?? null);

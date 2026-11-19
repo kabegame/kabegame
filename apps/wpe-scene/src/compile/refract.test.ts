@@ -171,12 +171,14 @@ describe("compileScene：粒子其它槽位的帧表纹理（P4b 步骤 5）", (
       exhaustive: true,
     });
 
-  it("槽 1 是多图像、空帧表：照报 tex:animation:multi-image / empty（P6e 起 tex:animation 不再报）", async () => {
+  it("槽 1 是多图像帧表：P6e 第 4 步起不报、其余图像进 bundle；空帧表照报 tex:animation:empty（P6e 起 tex:animation 不再报）", async () => {
     const multi = await compile(
       memoryReader(files(particleMaterial(["particle/plain", "particle/multi"]))),
       fakeTranslator().translator,
     );
-    expect(multi.unsupported).toEqual(["tex:animation:multi-image"]);
+    expect(multi.unsupported).toEqual([]);
+    // 两张图像：第 0 张在 `mips`，第 1 张进 `images`（每张图像一张 GPU 纹理，按格换绑）
+    expect(multi.textures.find((texture) => texture.path === "materials/particle/multi.tex")?.images).toHaveLength(1);
     const empty = await compile(
       memoryReader(files(particleMaterial(["particle/plain", "particle/empty"]))),
       fakeTranslator().translator,

@@ -323,6 +323,16 @@ describe("getInitialLayerConfig（点 7）", () => {
     h.state.flushDestroy();
     expect(h.scene.getInitialLayerConfig("B")).toEqual({ x: 0.12345679 });
   });
+
+  it("字符串按 id 命中（没有同名）的待删对象不看待删（同数字），先查一次进了缓存也一样", () => {
+    const h = setup(specs, configs);
+    // 对象 1 的 id 是 11（bundleOf 缺省 object + 10），没有叫「11」的图层
+    expect(h.scene.getInitialLayerConfig("11")).toEqual({ origin: "1 2 3", visible: true, effects: [{ file: "a" }] });
+    h.scene.destroyLayer(1);
+    expect(h.scene.getInitialLayerConfig("11")).toEqual({ origin: "1 2 3", visible: true, effects: [{ file: "a" }] });
+    // getLayer 的 id 命中照常拒绝待删
+    expect(h.scene.getLayer("11")).toBeNull();
+  });
 });
 
 describe("engine.registerAsset（点 7）", () => {
@@ -655,5 +665,46 @@ describe("setParent：挂点（P12 的挂点表）", () => {
     h.layer(1).setParent(h.layer(0), "tipA");
     h.layer(1).setParent(h.layer(0));
     expect(h.changes[1]).toEqual({ object: 1, oldParent: 0, oldBone: "tipA", parent: 0, bone: null });
+  });
+});
+
+describe("按名字解析图层的缓存（3662790108 每帧几百次 getLayer('名字')）：先查一次进缓存，结构、改名、待编对象变了之后拿到新结果", () => {
+  const specs = [{ name: "A" }, { name: "B" }, { name: "C" }, { name: "B", id: 99 }, { name: "E", id: 7 }];
+
+  it("对象表顺序变了（sortLayer，structureVersion 加一）：取新的第一个同名", () => {
+    const h = setup(specs);
+    expect(h.scene.getLayer("B")).toBe(h.layer(1));
+    expect(h.scene.sortLayer(3, 0)).toBe(true);
+    expect(h.scene.getLayer("B")).toBe(h.layer(3));
+    expect(h.scene.getLayerIndex("B")).toBe(0);
+  });
+
+  it("脚本改名：找不到的名字缓存成 null 之后改名能找到，旧名字找不到；名字优先于 id", () => {
+    const h = setup(specs);
+    expect(h.scene.getLayer("Z")).toBeNull();
+    h.layer(4).name = "Z";
+    expect(h.scene.getLayer("Z")).toBe(h.layer(4));
+    expect(h.scene.getLayer("E")).toBeNull();
+    // 没有同名时按 strtol 当 id：「99」先命中 id 99 的对象 3，再有对象改名成「99」后按名字取它
+    expect(h.scene.getLayer("99")).toBe(h.layer(3));
+    h.layer(0).name = "99";
+    expect(h.scene.getLayer("99")).toBe(h.layer(0));
+  });
+
+  it("图层被原地换掉（L6 重编译：登记表 splice、状态 structureVersion 加一）：按新图层的名字找", () => {
+    const h = setup(specs);
+    expect(h.scene.getLayer("C")).toBe(h.layer(2));
+    h.bundle.layers.splice(2, 1, { ...h.bundle.layers[2], name: "Q" } as SceneLayer);
+    h.state.structureVersion++;
+    expect(h.scene.getLayer("Q")).toBe(h.layer(2));
+    expect(h.scene.getLayer("C")).toBeNull();
+  });
+
+  it("命中的对象之后才标待删：缓存只记对象，待删每次照常判断（名字 null，getLayerIndex 不看待删）", () => {
+    const h = setup(specs);
+    expect(h.scene.getLayer("C")).toBe(h.layer(2));
+    h.scene.destroyLayer(2);
+    expect(h.scene.getLayer("C")).toBeNull();
+    expect(h.scene.getLayerIndex("C")).toBe(2);
   });
 });

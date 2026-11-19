@@ -326,6 +326,43 @@ describe("SceneState：父子标脏", () => {
     expect(effectiveVisible(6, state.layers)).toBe(false);
   });
 
+  it("同值写入不标脏（3662790108 每帧把同样的值写回几百个图层），变换写入照记；-0 与 0 算变了；带 3×3 时同值的 angles 也算变了", async () => {
+    const state = SceneState.fromBundle(await compile(p4aObjects()));
+    const write = (
+      object: number,
+      field: "origin" | "angles" | "visible" | "alpha" | "color",
+      value: string | number | boolean,
+    ) => {
+      state.write({ property: "p", target: { kind: "layer", object, field } }, value);
+      return [...state.takeDirty().layers].sort((a, b) => a - b);
+    };
+    expect(write(1, "origin", "1300 700 0")).toEqual([0, 1]);
+    state.takeTransformWrites();
+    expect(write(1, "origin", "1300 700 0")).toEqual([]);
+    // WPE 的描述符回调每写一次都清挂点缓存的戳，不看值变没变
+    expect([...state.takeTransformWrites()]).toEqual([1]);
+    expect(write(5, "visible", true)).toEqual([5, 6]);
+    expect(write(5, "visible", true)).toEqual([]);
+    expect(write(2, "alpha", 0.5)).toEqual([2]);
+    expect(write(2, "alpha", 0.5)).toEqual([]);
+    expect(write(2, "color", "1 0 0")).toEqual([2]);
+    expect(write(2, "color", "1 0 0")).toEqual([]);
+    expect(write(4, "origin", "0 0 0")).toEqual([4]);
+    expect(write(4, "origin", "-0 0 0")).toEqual([4]);
+    // rotateObjectSpace 乘出来的 3×3 在时，同值的角度写入要丢掉它（按角度重建），子树照样标脏
+    state.write(
+      {
+        property: "",
+        target: { kind: "rotation", object: 2, rotation: [0, 1, 0, -1, 0, 0, 0, 0, 1], angles: [0, 0, 1.5] },
+      },
+      0,
+    );
+    state.takeDirty();
+    expect(write(2, "angles", "0 0 1.5")).toEqual([2, 3, 4]);
+    expect(state.layers.get(2)?.rotation).toBeNull();
+    expect(write(2, "angles", "0 0 1.5")).toEqual([]);
+  });
+
   it("就地改父的 origin / angles / scale 后，子孙的 uniform 字节等于用新值整场编译", async () => {
     const properties = {
       g0origin: { type: "text", value: "400 300 0" },

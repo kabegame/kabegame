@@ -1,5 +1,17 @@
 # v4.7.0 regression
 
+## 场景脚本多的壁纸帧率（3662790108）
+
+2026-11-20 Windows dev。`3662790108`（Live Solar System）有 944 段脚本、九百多个对象，预览原先约 2 fps（WPE 正常）。CPU profile 定位到两处：`thisScene.getLayer('名字')` 每次 O(n²)（对象表逐个取名字、每个名字又线性找图层），改成按对象的索引加名字解析缓存；脚本把同样的值写回图层时原先也标脏、重算全部静态 uniform，改成值没变不标脏（变换写入照记，带 3×3 时同值的 `angles` 仍算变了）。运行时回调统计加累计耗时 `totalMs`。顺带修了 P6f 留下的 `state.objects.test.ts` 夹具（文本字段缺 `decor`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：`src/render`、`src/script`、`src/animation`、`src/puppet`、`host.l3b` / `l6` / `script`（新增：名字缓存在 `sortLayer` / 改名 / 图层原地替换 / 待删 / 按 id 命中后的结果，同值写入不标脏与例外）；`tsc`；Prettier | 全过 | 2026-11-20 Claude：119 个文件 2522 条通过（含 pkg、scriptApi）；变异 12 处中 9 处检出，幸存 3 处是重复的失效条件（建层、换 bundle 时结构版本已变） |
+| [x] | T2 profile | Windows dev，屏外宿主 1600×900，后处理超高，跑脚本 | 回放 40 帧（0.05 s），CDP 抓 CPU profile | 脚本每帧稳态耗时大降 | 2026-11-20 Claude：541–653 → 5 ms/帧；回放阶段 CPU 58 → 36 ms/帧（开场推镜头，全部图层在动） |
+| [x] | T3 预览帧率 | Windows dev 预览 | 打开 3662790108 的预览，读宿主的脚本调用数 | 接近帧率上限 | 2026-11-20 Claude：29 fps（上限 30），脚本约 4 ms/帧 |
+| [ ] | T4 手感 | Windows dev 预览与桌面 | 等开场过去，拖动旋转、双击天体切换焦点，把帧率设到 60 再看 | 流畅，和 WPE 观感接近 | 需要用户看；镜头一直在动时每帧仍要全量重算 uniform |
+
+
 ## 场景壁纸在 `scene.pkg` 里找资源不分大小写
 
 2026-11-20 Windows dev。照 Wallpaper Engine（挂载时把条目名转成小写进哈希表、查找时把路径也转小写），场景在 `scene.pkg` 里找资源时不区分 ASCII 大小写，同名（含只差大小写）的条目取最后一条；之前按原样精确匹配，`3662790108`（Live Solar System，哈勃）的场景写 `materials/models/HUBBLE/…`、包里是 `…/hubble/…`，报 9 个缺材质、退回封面图。导入时读入口 json（Rust）与 kbp-tools 同一规则。

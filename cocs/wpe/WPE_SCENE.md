@@ -824,6 +824,12 @@ WPE 改属性不整场重载：加载期把每个 `{user}` 绑定登记成「属
 
 development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（逐段状态、导出、禁用回调、错误与调用统计）、`host.read(path)`（读当前目标）、`host.realmCheck(extraSources?)`（另建 realm 检查导入、环境、错误位置与缓存），以及 `scriptCorpus(imageIds, { frames?, dt?, clock?, seed?, postprocess? })`（逐张独立 realm、不建 GPU；生产构建无这些探针）。P6d2 起脚本环境用 dev 探针的 `createProbeScripts`（固定时钟与 `Math.random` 种子、写回读取同宿主、`localStorage` 只在内存、用户属性含 WPE 内置项），缺省按 1/60 s 跑 120 帧；每张返回逐段诊断（去掉计时）、跑完之后的状态摘要 `stateDigest`（`SceneState` 里脚本写得到的各张表）与 console 行数和摘要。同样的请求两次结果逐张相同，P6d2 在改动前后各对库里全部场景跑一遍比对（驱动 `ignore/p6/d2/corpus_run.mjs`、比较 `corpus_diff.mjs`）。`remainingTestFrames` 是 `{ before, after }`，数的是 `iframe[data-kb-script-realm="1"]`，两者相等才说明没有残留子 frame。`missingApis` 是条目数组（类型、名字、场景数、段数、报错数），连带错误按属性名列出，没有归到根因。不派发 `cursor*` / `media*` 回调。
 
+**性能（2026-11-20，3662790108）**：944 段脚本、九百多个对象，脚本每帧按名字取几百次图层、把位置与可见性写回几百个图层，原先预览只有约 2 fps（WPE 正常）。CPU profile（经 CDP 在屏外宿主上抓，`ignore/p6/f4/prof/`）的热点与修法：
+- **按名字取图层**：`lookup` 沿对象表逐个取名字，`nameOf` 里的 `findLayer` 又对 `bundle().layers` 线性 `find`，一次 `getLayer('名字')` 是 O(n²)，脚本每帧 541–653 ms。`findLayer` 改走按 `object` 的索引（「`layers` 数组、长度、`SceneState`、`structureVersion`」任一变了就重建：登记表原地增删 `layers` 时宿主同一步改状态），`lookup` 的字符串分支再加一层「字符串 → 第一个同名 / 按 id 的对象」缓存（索引换了、脚本改名、待编对象增删时清空；待删照常每次判断）。脚本降到约 5 ms/帧。
+- **同值写入不标脏**：`SceneState.write` 的图层字段原先无条件标脏（继承字段整棵子树），每个脏 draw 重算全部静态 uniform（`staticBuiltins` 的二十多个矩阵、求逆）。现在存下的值没变（逐分量 `Object.is`）就不标脏；`origin` / `angles` / `scale` 的变换写入照记（WPE 每写一次都清挂点缓存的戳），带 `rotateObjectSpace` 的 3×3 时同值的 `angles` 仍算变了。开场推镜头期间 `sync` 从约 36 降到 19 ms/帧。
+- **结果**：预览 29 fps（帧率上限 30），脚本约 4 ms/帧。`staticBuiltins` 按程序实际用到的 uniform 才算，留作以后（镜头一直在动的场景仍要每帧全量重算）。
+- **诊断**：运行时的回调统计多了累计耗时 `totalMs`（`host.scripts()` 的 `calls`，`scriptCorpus` 比对时照旧只留 `count`），`(totalMs − maxMs) / (count − 1)` 估每帧稳态开销。
+
 **已知差异与后续**：realm 无 CSP，用户代码经 `eval` / `Function` 拼出来的 `import()` 不经改写，仍是原生的，可能加载远程模块（P6d2 起源码里直接写的 `import()` 一律 reject）；API 对象可加任意属性，写入未提供字段可能读回成功但画面无变化；回调里排的微任务（Promise）时机不同：WPE 推断在每个最外层回调返回后冲刷，我们要到本帧任务结束才跑（本机样本没用 Promise）；`thisObject.constructor.name` 我们是 `Object`，WPE 是空串，`String(thisObject)` 两边都是 `[object Object]`。不清屏的场景暂停时改属性，补画的那一帧会推进累加链（回归 D46，用户定为不动）。HDR 不清屏累加时，分界线上有约 1 像素宽的残余差异（回归 D37），推断是 FP16 舍入，没有抓帧证实。单层 mip 纹理的差异和非整数 `size` 的四边形（WPE 截断）没有处理，见 3c 计划「后续」。后续按渲染能力阶段补音频、层级、输入、纹理动画、声音和文本 API，并处理材质 JSON 脚本。当前有意不照搬 WPE 两个缺陷：属性增量不会从 `engine.userProperties` 的已有全集中丢键（WPE 注入的 14 个内置项首包补进全集后一直保留，见「属性与快速路径」的取值规则）；CLI 颜色改值也不降成字符串。
 
 ## 层级（P4a）

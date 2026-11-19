@@ -14,6 +14,7 @@ import { particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { SceneSound } from "../compile/sounds";
 import { SceneState, type ObjectStateSlice } from "./state";
+import { TEXT_DECOR_DEFAULTS } from "../text/fields";
 
 const passOf = (key: string, uniforms: Record<string, number[]> = { g_Alpha: [1] }): ScenePass =>
   ({ key, program: 0, uniforms }) as unknown as ScenePass;
@@ -68,7 +69,7 @@ function fullLayer(object: number, partial: Partial<SceneLayer> = {}): SceneLaye
       backgroundPass: null,
       clearAlphaPass: null,
       background: { key: k("text/background"), color: [0, 0, 0] },
-      fields: { padding: [1, 2], spacing: [3, 4] },
+      fields: { padding: [1, 2], spacing: [3, 4], decor: TEXT_DECOR_DEFAULTS },
     },
     camera: { fov: 50, zoom: 1 },
     alignment: 4,

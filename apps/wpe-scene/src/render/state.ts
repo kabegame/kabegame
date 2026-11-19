@@ -327,22 +327,34 @@ const LAYER_DEFAULTS: Record<Exclude<LayerField, "visible" | "alignment" | "soli
   parallaxDepth: [1, 1],
 };
 
+/**
+ * 写一个图层字段，返回存下的值变没变（逐分量 `Object.is`：-0 与 0 算变、NaN 与 NaN 算没变）。同值写入调用方不标脏：脚本每帧把同样的
+ * `origin` / `visible` 写回几百个图层（3662790108）时，原先整棵子树都标脏、每个 draw 重算全部静态 uniform。
+ */
 function writeLayer(
   layer: LayerState,
   field: Exclude<LayerField, "alignment" | "solid" | "perspective">,
   value: number[] | boolean,
-): void {
+): boolean {
   if (field === "visible") {
-    layer.visible = value !== false;
-    return;
+    const next = value !== false;
+    const changed = layer.visible !== next;
+    layer.visible = next;
+    return changed;
   }
   const values = Array.isArray(value) ? value : [value ? 1 : 0];
   if (field === "alpha" || field === "brightness") {
     const first = values[0];
-    layer[field] = Number.isFinite(first) ? first : 1;
-    return;
+    const next = Number.isFinite(first) ? first : 1;
+    const changed = !Object.is(layer[field], next);
+    layer[field] = next;
+    return changed;
   }
-  layer[field] = values.length ? [...values] : [...LAYER_DEFAULTS[field]];
+  const next = values.length ? [...values] : [...LAYER_DEFAULTS[field]];
+  const previous = layer[field];
+  const changed = previous.length !== next.length || next.some((component, i) => !Object.is(previous[i], component));
+  layer[field] = next;
+  return changed;
 }
 
 /**
@@ -1213,10 +1225,11 @@ export class SceneState {
       if (layer && field !== "alignment" && field !== "solid" && field !== "perspective") {
         // 向量字段（origin / scale / color / parallaxDepth）照 WPE 的向量 setter，同编译期（`layerVectorValue`，P6b 1e-3 复核）：
         // 数字铺满、字符串少写的分量为 0；写不进（布尔）时 WPE 不改字段，这里也不写、不标脏
+        let changed: boolean;
         if (isLayerVectorField(field)) {
           const vector = layerVectorValue(field, conditioned(binding, raw));
           if (!vector) return "applied";
-          writeLayer(layer, field, vector);
+          changed = writeLayer(layer, field, vector);
         } else {
           // 标量字段（alpha / brightness）照 WPE 的 float setter 不收布尔（条件换成的、布尔属性本身）：不写、不标脏，同编译期（`bundle.ts`
           // 的 `scalar`，P3a 补测 NC1–NC5、`p3am-bright`）
@@ -1225,12 +1238,17 @@ export class SceneState {
           // `visible` 照 WPE 的 bool setter 只收布尔：数字、字符串属性不写、不标脏，同编译期（`boolFieldValue`，phase-3a「补测」
           // `p3am-empty` W5、`p3am-num` U1–U3）
           if (field === "visible" && typeof conditioned(binding, raw) !== "boolean") return "applied";
-          writeLayer(layer, field, bindingValue(raw, binding.condition, field));
+          changed = writeLayer(layer, field, bindingValue(raw, binding.condition, field));
         }
-        // 角度写入一律按新角度重建 3×3（WPE 的角度 setter `FUN_1401dd630`），乘出来的那份丢掉（P6d1a）
-        if (field === "angles") layer.rotation = null;
-        // 变换写入（属性、关键帧、脚本同一条路；向量写不进时上面已返回）：影子缓存清戳（WPE 描述符回调 `0x1401e0520`，B1）
+        // 角度写入一律按新角度重建 3×3（WPE 的角度 setter `FUN_1401dd630`），乘出来的那份丢掉（P6d1a）：有那份时同值写入也算变了
+        if (field === "angles" && layer.rotation !== null) {
+          layer.rotation = null;
+          changed = true;
+        }
+        // 变换写入（属性、关键帧、脚本同一条路；向量写不进时上面已返回）：影子缓存清戳（WPE 描述符回调 `0x1401e0520`，B1），同值也清
         if (field === "origin" || field === "angles" || field === "scale") this.transformWrites.add(target.object);
+        // 同值写入不标脏：存下的值没变，uniform 与子孙的世界矩阵都不变
+        if (!changed) return "applied";
         // 变换、可见性与视差深度传给子孙：子孙的世界矩阵与视差平移跟着变；alpha、color、brightness 只是自己的
         if (INHERITED_FIELDS.has(field)) for (const object of this.subtree(target.object)) this.dirtyLayers.add(object);
         else this.dirtyLayers.add(target.object);

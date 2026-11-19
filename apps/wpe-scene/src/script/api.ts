@@ -248,6 +248,15 @@ interface PendingLayer {
   config: Record<string, unknown> | unknown[];
 }
 
+/** `bundle().layers` 按 `object` 的索引（`ScriptApi.findLayer`），记下建立时的数组、长度、状态与 `structureVersion`，任一变了就重建。 */
+interface LayerIndex {
+  layers: readonly SceneLayer[];
+  length: number;
+  state: SceneState;
+  version: number;
+  byObject: Map<number, SceneLayer>;
+}
+
 /**
  * `IVideoTexture` 的落点（P9b）：视频纹理的播放器（`video/codecPlayer.ts` 的 `CodecVideoPlayer`）满足它。
  */
@@ -361,6 +370,20 @@ export class ScriptApi {
    * 可读写字符串、存在 API 这边、跨重编译保留，影响之后按名字的查找（`lookup`）；没写过的取 `SceneLayer.name` / 待编对象建出时的名字。
    */
   private readonly layerNames = new Map<number, string>();
+  /** `findLayer` 的按对象索引与它建立时的 `layers` 数组、长度、状态、`structureVersion`（任一变了就重建）。 */
+  private layerIndex: LayerIndex | null = null;
+  /**
+   * `lookup` 字符串参数的解析缓存：字符串 → `order` 里第一个同名对象（`byName`），没有同名时按 `strtol` 当 id 找到的第一个，都没有为 null。
+   * 只缓存「哪个对象」，待删照常每次判断（`hit`）。`findLayer` 的索引换了（结构、对象表顺序、`layers` 变了）或 `namesVersion` 变了（脚本改名、
+   * 待编对象增删）就整张清空。
+   */
+  private nameCache: {
+    index: LayerIndex;
+    names: number;
+    byString: Map<string, { object: number; byName: boolean } | null>;
+  } | null = null;
+  /** 改名（`layerNames`）与待编对象（`pending`）每变一次加一，`nameCache` 据此失效。 */
+  private namesVersion = 0;
   /** `IAnimation` 包装对象（P10b）：按动画 `id`（`scene.json` 路径）缓存，同一条每次 `getAnimation` 返回同一个对象。 */
   private readonly animationApis = new Map<string, ApiObject>();
   /** `IAnimationLayer` 包装对象（P12c）：按 `<对象>:<层 id>` 缓存（P12e：id 稳定，运行中建删层下标会漂），`get(0) === get("walk")`。 */
@@ -471,7 +494,9 @@ export class ScriptApi {
       () => this.nameOf(index) ?? "",
       (value) => {
         const text = scriptToString(value);
-        if (text !== undefined) this.layerNames.set(index, text);
+        if (text === undefined) return;
+        this.layerNames.set(index, text);
+        this.namesVersion++;
       },
     );
     // 图层字段与 `size` 的读取按 WPE 取单精度、角度按 f32 算法换成度（`f32.ts`，P3b 补测 `ignore/p3b-f32`）；状态照旧存 double
@@ -1155,8 +1180,32 @@ export class ScriptApi {
     this.audioBufferCache.set(size, { api, arrays });
     return api;
   }
+  /**
+   * `bundle().layers` 里这个对象的图层（同一对象取第一条，同原先的 `find`）。走按 `object` 的索引：按名字解析图层（`lookup`）沿对象表逐个取名字，
+   * 每次线性 `find` 就是 O(n²)，九百多个对象、每帧几百次 `getLayer('名字')` 的 3662790108 一帧要几百毫秒。`layers` 会被登记表原地增删（L3a），
+   * 宿主同一步里改 `SceneState`（`structureVersion` 加一），所以「数组、长度、状态、`structureVersion`」任一变了就重建。
+   */
   private findLayer(object: number): SceneLayer | undefined {
-    return this.access.bundle().layers.find((layer) => layer.object === object);
+    const index = this.currentLayerIndex();
+    return index ? index.byObject.get(object) : this.access.bundle().layers.find((layer) => layer.object === object);
+  }
+  /** 当前有效的 `findLayer` 索引（过期就重建）；没有状态时 null（调用方退回线性查找、不缓存）。 */
+  private currentLayerIndex(): LayerIndex | null {
+    const layers = this.access.bundle().layers;
+    const state = this.access.state() as SceneState | undefined;
+    if (!state) return null;
+    const index = this.layerIndex;
+    if (
+      index &&
+      index.layers === layers &&
+      index.length === layers.length &&
+      index.state === state &&
+      index.version === state.structureVersion
+    )
+      return index;
+    const byObject = new Map<number, SceneLayer>();
+    for (const layer of layers) if (!byObject.has(layer.object)) byObject.set(layer.object, layer);
+    return (this.layerIndex = { layers, length: layers.length, state, version: state.structureVersion, byObject });
   }
   private write(target: ApiTarget, raw: unknown, type: ValueType | "string"): void {
     let value: ScriptValue;
@@ -1839,10 +1888,8 @@ export class ScriptApi {
       return pending && reject ? null : { object, pending };
     };
     if (typeof value === "string") {
-      for (const object of order) if (this.nameOf(object) === value) return hit(object, rejectPendingName);
-      const id = this.strtol(value);
-      for (const object of order) if (this.idOf(object) === id) return hit(object, rejectPending);
-      return null;
+      const found = this.resolveString(value);
+      return found ? hit(found.object, found.byName ? rejectPendingName : rejectPending) : null;
     }
     if (typeof value === "number") {
       const index = value | 0;
@@ -1854,6 +1901,36 @@ export class ScriptApi {
         if (api === value) return this.alive(object) && order.includes(object) ? hit(object, false) : null;
     }
     return null;
+  }
+
+  /**
+   * `lookup` 的字符串分支（不看待删）：`order` 里第一个同名对象（`byName`），没有同名时按 `strtol` 当 id 的第一个，都没有 null。结果进 `nameCache`
+   * （同一帧里脚本反复按名字取同一批图层，3662790108 每帧几百次）；没有状态时照旧现算、不缓存。
+   */
+  private resolveString(value: string): { object: number; byName: boolean } | null {
+    const index = this.currentLayerIndex();
+    let cache = this.nameCache;
+    if (index && (!cache || cache.index !== index || cache.names !== this.namesVersion))
+      cache = this.nameCache = { index, names: this.namesVersion, byString: new Map() };
+    const cached = index ? cache!.byString.get(value) : undefined;
+    if (cached !== undefined) return cached;
+    const order = this.access.state().order;
+    let found: { object: number; byName: boolean } | null = null;
+    for (const object of order)
+      if (this.nameOf(object) === value) {
+        found = { object, byName: true };
+        break;
+      }
+    if (!found) {
+      const id = this.strtol(value);
+      for (const object of order)
+        if (this.idOf(object) === id) {
+          found = { object, byName: false };
+          break;
+        }
+    }
+    if (index) cache!.byString.set(value, found);
+    return found;
   }
 
   /** `R`：数字、名字、id 命中待删对象时解析不到（null）；图层对象照常解析（见 `lookup`）。 */
@@ -1971,6 +2048,7 @@ export class ScriptApi {
    */
   adoptBundle(): void {
     for (const object of [...this.pending.keys()]) if (this.findLayer(object)) this.pending.delete(object);
+    this.namesVersion++;
     this.seedLayerIds();
   }
 
@@ -2048,6 +2126,7 @@ export class ScriptApi {
       if (!compiled) {
         const shell = layerShellValues((Array.isArray(config) ? {} : config) as SceneObject);
         this.pending.set(object, { name: shell.name, id, kind: createdLayerKind(config), config });
+        this.namesVersion++;
       }
       this.createdIds.set(id, object);
       if (!Array.isArray(config)) {
