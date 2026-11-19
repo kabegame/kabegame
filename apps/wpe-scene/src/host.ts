@@ -2070,9 +2070,12 @@ export class SceneHost {
         this.options.report.warn(`场景壁纸 ${this.options.imageId} 设备丢失，重建渲染器：`, reasons);
         void this.reload();
       },
-      // 透视场景按画布尺寸渲染（P5d 步骤 2，已定 6）：分辨率变了（去抖之后）整场重新加载，bundle 与尺寸无关、编译结果相同，脚本写入照常重放
-      onRenderSizeChange: () => {
-        if (this.rendererTask === task) void this.reload();
+      // 画布分辨率、样式、留白色变了都由渲染器原地换尺寸（`GpuScene.resize`），只有换尺寸中途失败（场景已是新尺寸、部分图层仍是旧 draw）才整场重新加载兜底，
+      // bundle 与尺寸无关、编译结果相同，脚本写入照常重放
+      onResizeFailed: (reasons) => {
+        if (this.rendererTask !== task) return;
+        this.options.report.warn(`场景壁纸 ${this.options.imageId} 原地换尺寸失败，整场重新加载：`, reasons);
+        void this.reload();
       },
     }).then(
       (created) => {

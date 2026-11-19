@@ -238,6 +238,20 @@ export function sceneDisplayScale(measured: number, zoom: number): number {
     重建宿主后全库探针对比 285 张 1116 组「建 A 换 B」=「建 B」逐字节相同（`ignore/render-size-a/step1/equiv.mjs`）。
   - **留给第 2 步**：正交场景带相机对象时 `applyCrop` 只更新基准，视图投影要渲染器下一帧按新裁切交；透视场景依赖渲染器每帧 `setCamera`。
     `rebuildLayer` 中途抛错时场景已是新尺寸，调用方整场重载兜底。
+  - 提交 `59ee7e06`。
+- **第 2 步：渲染器接线**（2026-11-19，sonnet 执行代理实现，Claude 复核）：
+  - **改动**：`render/renderer.ts`：`desiredTarget`（透视：画布像素；正交非 `tile`：画布像素 + `alignEdges(对齐方式, 场景宽高, 画布像素 / pixelRatio)` +
+    `clearsWithSchemeColor` 时的 `background`；`tile`：场景分辨率、`edges: null`），`load` 按它传 `target` / `size`；`syncTarget` / `startResize` 状态机
+    （`requested` 交给场景的、`applied` 兑现后换上的；尺寸变了去抖 300 ms，只换边距 / 清屏色或在画布画法与 `tile` 之间切换立即；失败置 `resizeBroken`、
+    经新选项 `onResizeFailed` 交宿主整场重载）；`placementStyle` 按已换上的目标：按画布画时 `stretch`；光标去掉 `cursorCropOf` 分支（`GpuScene` 有 `crop`
+    时自己用裁过的投影）、不再 `setCursorCrop` / `setAnchorEdges`；`sceneCameraFrame` 带 `crop`（正交相机对象按新边距）。删掉 `checkRenderSize` /
+    `renderSize` / `onRenderSizeChange`。`host.ts` 换成 `onResizeFailed`。新增 `render/productSize.test.ts`（20 例），改了 `p5d-camera`、`p5d3-camera`、
+    `parallax`、`particles`、`host` 测试里按旧画法写的期望。
+  - **代理拿不准、Claude 定的**：光标命中的 `window` 保持「显示缩放为 1」（`input.cursorScreenPosition` 与 `engine.screenResolution` 同量纲，透视覆盖只取宽高比）；
+    `tile` 与画布画法之间切换立即换；resize 失败到宿主重载之间不停帧（只是不再换尺寸）。
+  - **复核**：改动只在 8 个文件；19 个文件 645 条通过、tsc 0 错误；变异 9 处全部抓到（`ignore/render-size-a/step2/mutate2.py`）；合并进主工作区、重建宿主后真机：
+    dino_run 预览场景目标 = 画布像素（976×549），开侧栏原地换到 696×392、没有整场重载；eagleflag 产品画面与探针逐字节相同。
+  - `fillCropEdges` / `anchorEdgesFor` 渲染器不再用，只剩探针旧画法与 `replayPointers`，第 4 步写文档时注明。
 
 ## 风险
 

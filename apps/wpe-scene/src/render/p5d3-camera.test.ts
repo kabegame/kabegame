@@ -825,7 +825,18 @@ describe("渲染器：每帧选相机对象（P5d 步骤 3 点 4）", () => {
     const frame = last.cameraObject!;
     expect(last.zoom).toBe(3);
     const pose = activeCameraObject(bundle, renderer.sceneState!)!.pose;
-    expect(frame).toEqual(orthographicCameraObjectFrame({ pose, shake: [0, 0], zoom: 3, general: bundle.general }));
+    // 方案 A：产品按画布画，相机对象的视图投影带已换上的目标的投影裁切（换尺寸 / 换样式之后下一帧按新边距交）
+    const applied = (renderer as unknown as { applied: { edges: [number, number, number, number]; size: [number, number] } }).applied;
+    expect(applied.edges).not.toBeNull();
+    expect(frame).toEqual(
+      orthographicCameraObjectFrame({
+        pose,
+        shake: [0, 0],
+        zoom: 3,
+        general: bundle.general,
+        crop: { edges: applied.edges, window: applied.size },
+      }),
+    );
     expect(internals(renderer).parallax.point).toEqual([1160, 640]);
     // 相机对象被隐藏：下一帧回到 P5a 那一份
     renderer.sceneState!.write({ property: "v", target: { kind: "layer", object: 1, field: "visible" } }, false);

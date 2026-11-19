@@ -4,7 +4,7 @@
  *   （dna_fragment 抓帧：`g_OrientationForward` = normalize(eye − center) = (0.691, 0.494, 0.528)、`Up` = (−0.392, 0.870, −0.299)）；
  *   正交场景的视图向量是常量；fullscreen 合成 RT 的 `"scene"` 取场景目标尺寸；
  * - 视差：透视场景 P 初值 0、eye (0, 0) 时 `g_ParallaxPosition` 是 NaN、eye.x ≠ 0 时钳成 0 / 1、不移动对象；
- * - 渲染器：透视场景铺满不看样式、路径在实时帧推进（补画帧不推进、重编译保留、新渲染器从头）、分辨率变化去抖后回调一次；正交场景不回调。
+ * - 渲染器：透视场景铺满不看样式、路径在实时帧推进（补画帧不推进、重编译保留、新渲染器从头）、分辨率变化去抖后原地 `GpuScene.resize`（方案 A，不再整场重载）。
  * 假设备与渲染器的搭法照 `parallax.test.ts`。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -511,7 +511,7 @@ const KBCAM: CameraPath[] = [
 const PATH_CAMERA: SceneCameraJson = { eye: [0, 0, 10], center: [0, 0, 0], up: [0, 1, 0], paths: KBCAM };
 
 describe("渲染器：透视场景（P5d 步骤 2 点 4、5）", () => {
-  async function start(options: { onRenderSizeChange?: () => void; dts?: number[] } = {}) {
+  async function start(options: { dts?: number[] } = {}) {
     const frames: FrameRequestCallback[] = [];
     const gpu = new FakeGpu();
     vi.mocked(acquireGpu).mockResolvedValue({
@@ -539,7 +539,6 @@ describe("渲染器：透视场景（P5d 步骤 2 点 4、5）", () => {
     const renderer: SceneRenderer = await SceneRenderer.create(canvas, {
       maxFps: 0,
       beforeFrame: (dt) => options.dts?.push(dt),
-      onRenderSizeChange: options.onRenderSizeChange,
     });
     return { renderer, frames, rect, gpu };
   }
@@ -551,7 +550,7 @@ describe("渲染器：透视场景（P5d 步骤 2 点 4、5）", () => {
       resize(): void;
     };
 
-  it("场景目标取 fullResolution；铺放与指针按 stretch（样式不起作用）；视差点初值 (0, 0)", async () => {
+  it("场景目标取画布像素；铺放与指针按 stretch（样式不起作用）；视差点初值 (0, 0)", async () => {
     vi.spyOn(performance, "now").mockReturnValue(1000);
     const { renderer, rect } = await start();
     renderer.setStyle("center");
@@ -629,55 +628,36 @@ describe("渲染器：透视场景（P5d 步骤 2 点 4、5）", () => {
     second.renderer.destroy();
   });
 
-  it(`分辨率变了：稳定 ${RENDER_SIZE_SETTLE_MS} ms 后回调一次，期间再变重新计时，回到原尺寸取消；正交场景不回调`, async () => {
+  it(`分辨率变了：稳定 ${RENDER_SIZE_SETTLE_MS} ms 后原地 resize 一次（不再整场重载），期间再变重新计时，回到已请求的尺寸取消`, async () => {
     vi.spyOn(performance, "now").mockReturnValue(1000);
-    const onRenderSizeChange = vi.fn();
-    const { renderer, rect } = await start({ onRenderSizeChange });
+    const { renderer, rect } = await start();
     await renderer.load(bundleOf([layer(0)]));
+    const resize = vi.spyOn(renderer.currentScene!, "resize").mockResolvedValue();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const resize = () => internals(renderer).resize();
+    const apply = () => internals(renderer).resize();
     rect.width = 200;
-    resize();
+    apply();
     vi.advanceTimersByTime(RENDER_SIZE_SETTLE_MS - 1);
     rect.width = 240;
-    resize();
+    apply();
     vi.advanceTimersByTime(RENDER_SIZE_SETTLE_MS - 1);
-    expect(onRenderSizeChange).not.toHaveBeenCalled();
+    expect(resize).not.toHaveBeenCalled();
     // 同一尺寸再量一次不重新计时
-    resize();
+    apply();
     vi.advanceTimersByTime(1);
-    expect(onRenderSizeChange).toHaveBeenCalledTimes(1);
+    expect(resize).toHaveBeenCalledTimes(1);
+    expect(resize.mock.calls[0][0]).toEqual({ size: [240, 90], edges: null, clear: null });
     vi.advanceTimersByTime(RENDER_SIZE_SETTLE_MS * 4);
-    expect(onRenderSizeChange).toHaveBeenCalledTimes(1);
-    // 回到建场景时的尺寸：取消
+    expect(resize).toHaveBeenCalledTimes(1);
+    // 回到已请求（= 当前）的尺寸：取消
     rect.width = 300;
-    resize();
-    rect.width = 160;
-    resize();
-    vi.advanceTimersByTime(RENDER_SIZE_SETTLE_MS * 2);
-    expect(onRenderSizeChange).toHaveBeenCalledTimes(1);
-    // 宿主重新加载之后按新尺寸建，不再回调
-    vi.useRealTimers();
+    apply();
     rect.width = 240;
-    resize();
-    await renderer.load(bundleOf([layer(0)]));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    resize();
+    apply();
     vi.advanceTimersByTime(RENDER_SIZE_SETTLE_MS * 2);
-    expect(renderer.sceneStats).toMatchObject({ width: 240, height: 90 });
-    expect(onRenderSizeChange).toHaveBeenCalledTimes(1);
+    expect(resize).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
     renderer.destroy();
-
-    const ortho = vi.fn();
-    const second = await start({ onRenderSizeChange: ortho });
-    await second.renderer.load(bundleOf([layer(0)], false));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    second.rect.width = 400;
-    internals(second.renderer).resize();
-    vi.advanceTimersByTime(RENDER_SIZE_SETTLE_MS * 2);
-    expect(ortho).not.toHaveBeenCalled();
-    second.renderer.destroy();
   });
 });
 

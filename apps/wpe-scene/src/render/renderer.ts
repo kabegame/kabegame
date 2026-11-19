@@ -1,9 +1,14 @@
 /**
  * 场景渲染器：持有设备、画布上下文、时钟与帧循环，当前场景（`GpuScene`）可无缝替换。
  *
- * - **铺放**：场景先画进场景分辨率的离屏目标，再按 cover（等比盖满、居中裁切）铺到画布。三屏等宽高比差很多的场景
- *   在 WPE 里怎么处理还没对照过，P1 先统一 cover。HDR 场景的离屏目标是 `rgba16float`，泛光 combine 已截到 [0, 1]，
- *   画布（8 位）上直接按编码值输出（见 `compile/bloom.ts`）。
+ * - **铺放**（方案 A，`phase-render-size-product.md` 点 2）：正交场景（样式不是 `tile`）的场景目标就是画布像素，壁纸样式照 WPE 做进正交投影的
+ *   四个裁切边距（`alignEdges`，边距按画布 CSS 尺寸 = 画布像素 / `pixelRatio` 算，`center` 保持一个场景单位对一个布局 CSS 像素），`fit` /
+ *   `center` 的留白由场景目标按 `schemecolor` 清成（`clearsWithSchemeColor`），上屏 1:1（`stretch`）；这条画法与 dev 探针给了 `canvas` 时
+ *   同一条路（`GpuScene.build` 的 `target`）。`tile` 没有投影表达，仍按场景分辨率画、平铺上屏。HDR 场景的离屏目标是 `rgba16float`，
+ *   泛光 combine 已截到 [0, 1]，画布（8 位）上直接按编码值输出（见 `compile/bloom.ts`）。
+ * - **原地换尺寸**：画布像素、样式、留白色（`schemecolor`）变了，算出期望的 `{ size, edges, clear }`：只有边距 / 清屏色变（尺寸不变）立即
+ *   `GpuScene.resize`（不建 RT）；尺寸变了去抖 `RENDER_SIZE_SETTLE_MS`，稳定后调一次；去抖与 `resize` 兑现之前照旧画旧目标、上屏时拉伸铺满整块
+ *   画布。多次变化只保留最后一次，换场景（`load`）作废待办，`resize` 抛错经 `onResizeFailed` 交宿主整场重载。
  * - **帧循环**：`requestAnimationFrame`，默认上限 60 fps（`maxFps`）。`paused` 或 `document.hidden` 时停循环、冻结时钟，
  *   恢复后 `g_Time` 从冻结处继续（见 `clock.ts`）。暂停期间画布尺寸变了会补画一帧（同一时刻），避免空白。
  *   帧时间照 WPE 钳到 `[0.0001, 0.25]`，`g_Time` 累加钳后的值（T2，`FrameClock`）。粒子每个实时帧按帧时间步进一次，
@@ -21,10 +26,10 @@
  * - **抖动**（P5a 步骤 3，`shake.ts`）：帧开头、推进视差点之前，按本帧的 `g_Time` 算 eye 偏移 s，同一个 s 作视差点的 eye；粒子步进
  *   之后、脚本之前才交给 `GpuScene.setCamera`，所以粒子模拟用的是上一帧的 s（同 WPE，见 `render`）。渲染器不存 s。
  * - **缩放**（P5a 步骤 4）：`general.zoom` 和 s 同一时刻取（脚本之前），随 s 一起交给 `setCamera`，脚本写 `zoom` 下一帧生效。
- * - **透视相机**（P5d 步骤 2，`camera.ts`）：透视场景按画布尺寸渲染（场景目标取 `fullResolution`，已定 6），上屏铺满、壁纸样式
+ * - **透视相机**（P5d 步骤 2，`camera.ts`）：透视场景按画布尺寸渲染（场景目标取画布像素，含显示缩放，方案 A 起与正交同一口径），上屏铺满、壁纸样式
  *   不起作用（铺放与指针按 `stretch`）。帧开头按路径状态求来源姿态并推进（补画帧 dt 0，不推进），加三维抖动、算 V、P，粒子步进之后
  *   交给 `setCamera`（同抖动的时机）；视差点的 eye 是透视相机的 eye.xy，W = H = 0，不移动对象。路径状态归渲染器，整场重编译保留
- *   （同视差点）。画布分辨率变了（和建场景时不同）且稳定 300 ms 后调 `onRenderSizeChange`，宿主整场重新加载。
+ *   （同视差点）。画布分辨率变了走上面的原地换尺寸，不再整场重载。
  * - **替换**：`load(bundle)` 在同一设备上先建好新场景，再在帧间换掉旧的并释放；时钟不重置。
  * - **失败**：运行期出现未捕获的校验错误或一帧的 CPU 部分抛错时停止渲染、经 `onError` 交出原因；设备丢失（非主动销毁）经 `onLost` 交出。
  */
@@ -53,9 +58,10 @@ import { FrameClock, FrameThrottle, PausableClock } from "./clock";
 import { acquireGpu, type Gpu, type GpuAdapterInfo } from "./device";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
 import {
+  ALIGNMENT_OF_STYLE,
+  alignEdges,
   canvasSize,
-  fillCropEdges,
-  anchorEdgesFor,
+  clearsWithSchemeColor,
   sceneCursor,
   scenePlacement,
   scenePointer,
@@ -79,8 +85,27 @@ import { daytimeOf } from "./uniforms";
  */
 const SIZE_CHECK_INTERVAL_MS = 250;
 
-/** 透视场景的画布分辨率变了之后，稳定这么久才请宿主重新加载（P5d 步骤 2）：拖动窗口边框时不反复重建。 */
+/** 画布分辨率变了之后，稳定这么久才调 `GpuScene.resize`（方案 A，已定 4）：拖动窗口边框、放大手势时不反复重建；期间旧目标拉伸上屏。 */
 export const RENDER_SIZE_SETTLE_MS = 300;
+
+/**
+ * 场景目标的期望（`GpuScene.resize` 的参数）：`size` 是场景目标像素；`edges` 非空是正交场景按画布画（投影带样式边距）；为 null 时是透视场景
+ * 按画布尺寸画（`size` 取画布）或正交 `tile` 按场景分辨率画（`size` 取场景分辨率）。
+ */
+interface SceneTarget {
+  size: [number, number];
+  edges: Edges | null;
+  clear: [number, number, number] | null;
+}
+
+function sameTarget(a: SceneTarget, b: SceneTarget): boolean {
+  if (a.size[0] !== b.size[0] || a.size[1] !== b.size[1]) return false;
+  if ((a.edges === null) !== (b.edges === null) || (a.clear === null) !== (b.clear === null)) return false;
+  return (
+    (a.edges === null || a.edges.every((value, i) => value === b.edges![i])) &&
+    (a.clear === null || a.clear.every((value, i) => value === b.clear![i]))
+  );
+}
 
 function validDisplayScale(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -127,10 +152,9 @@ export interface SceneRendererOptions {
    */
   videos?: VideoSink;
   /**
-   * 透视场景按画布尺寸渲染（P5d 步骤 2，已定 6）：画布分辨率（`fullResolution`）和建场景时不同、稳定 `RENDER_SIZE_SETTLE_MS` 之后调一次，
-   * 宿主走整场重新加载（场景目标、深度、快照、泛光、fullscreen 合成 RT 都跟尺寸有关，不写 resize）。正交场景不调。
+   * 原地换尺寸失败（`GpuScene.resize` 抛错：重排中途失败，场景已是新尺寸而部分图层仍是旧 draw）：渲染器不再尝试换尺寸，宿主整场重新加载兜底。
    */
-  onRenderSizeChange?: () => void;
+  onResizeFailed?: (reasons: string[]) => void;
   /**
    * 光标交互（P6c，`render/cursor.ts`）：每个实时帧在相机更新之后、脚本之前，渲染器按本帧的光标世界坐标与左键算出 `input.*` 的快照
    * （`input`，总是给：脚本可能只读 `input`），`active()` 为真（有脚本导出了光标回调）时再按 WPE 的规则命中、派发（`events`）。
@@ -265,11 +289,16 @@ export class SceneRenderer {
   private sceneGeneral: SceneGeneral | null = null;
   /** 当前场景的全部图层（P6c，光标命中的可拾取对象从它与状态现算），加载时取。 */
   private pickLayers: readonly SceneLayer[] = [];
-  /** 透视场景建场景时的画布分辨率（`GpuScene.build` 的 `size`）；正交场景为 null。 */
-  private renderSize: [number, number] | null = null;
-  /** 分辨率变化的去抖计时器（`RENDER_SIZE_SETTLE_MS`）与它在等的那个分辨率。 */
-  private renderSizeTimer: ReturnType<typeof setTimeout> | null = null;
-  private renderSizeKey = "";
+  /** 当前场景已经换上的场景目标（建场景或 `resize` 兑现之后）：上屏、相机裁切、光标按它；没有场景为 null。 */
+  private applied: SceneTarget | null = null;
+  /** 最近一次交给场景的目标（`resize` 还没兑现时领先 `applied`）：期望和它比，免得重复请求。 */
+  private requested: SceneTarget | null = null;
+  /** 已换上的目标是不是按画布画的（透视，或正交带样式边距）：是则上屏 `stretch`；`tile` 为 false。 */
+  private appliedCanvas = false;
+  /** 原地换尺寸的去抖计时器（`RENDER_SIZE_SETTLE_MS`）与它在等的那个期望；`resize` 抛错之后不再换（等宿主整场重载）。 */
+  private settleTimer: ReturnType<typeof setTimeout> | null = null;
+  private settleTarget: SceneTarget | null = null;
+  private resizeBroken = false;
   private paused = false;
   private failed = false;
   private lost = false;
@@ -485,23 +514,17 @@ export class SceneRenderer {
     if (this.lost) throw new SceneRenderError(["webgpu:device-lost"]);
     const serial = ++this.loadSerial;
     const state = SceneState.fromBundle(bundle);
-    // 透视场景按画布尺寸渲染（P5d 步骤 2，已定 6）：场景目标取显示缩放为 1 的画布尺寸，铺放与指针按 `stretch`
+    // 场景目标（方案 A）：透视与正交（非 `tile`）都取画布像素，正交的样式进投影边距（同 dev 探针给了 `canvas` 时）；`tile` 按场景分辨率
     const perspective = !!bundle.general.perspective;
-    const size: [number, number] | undefined = perspective ? [...this.fullResolution] : undefined;
-    // 加载时的控制点更新和预热用加载时刻的 cursor（WPE 加载时也读当时的指针，rea-p4c-sim.md 1.3、1.7）：按新场景的尺寸现算
-    // 一次铺放，尺寸取法同 `GpuScene.width/height`，和之后 `syncPlacement` 算的一致
-    const [sceneWidth, sceneHeight] = sceneTargetSize(
-      size?.[0] ?? bundle.general.width,
-      size?.[1] ?? bundle.general.height,
-      this.gpu.device.limits.maxTextureDimension2D,
-    );
-    const placementStyle: SceneStyle = perspective ? "stretch" : this.style;
-    // 光标的裁切（P6c 修复 2）：`fill` 且窗口与场景比例不同时，光标按裁过的 `P·V` 与窗口指针反投影（`GpuScene.setCursorCrop`）
-    const cursorCrop = this.cursorCropOf(bundle.general, placementStyle);
+    const next = this.desiredTarget(bundle.general);
+    const canvasMode = perspective || next.edges !== null;
+    // 加载时的控制点更新和预热用加载时刻的 cursor（WPE 加载时也读当时的指针，rea-p4c-sim.md 1.3、1.7）：按新场景的目标现算
+    // 一次铺放，和之后 `syncPlacement` 算的一致（按画布画时 `stretch`，光标就是窗口指针，反投影交给投影里的裁切）
+    const placementStyle: SceneStyle = canvasMode ? "stretch" : this.style;
     const placement = scenePlacement(
       placementStyle,
-      sceneWidth,
-      sceneHeight,
+      next.size[0],
+      next.size[1],
       this.canvas.width,
       this.canvas.height,
       this.pixelRatio,
@@ -513,15 +536,15 @@ export class SceneRenderer {
       particles: {
         passes: particlePasses(fps),
         fps,
-        cursor: this.cursorOf(placement, placementStyle, cursorCrop),
-        cursorCrop,
+        cursor: this.cursorOf(placement, placementStyle),
         // 粒子读场景频谱的 16 段（P4e 步骤 4）；预热在这里跑，首次加载时频谱是 0（rea-p4e-audio.md 3.5）
         audio: { left: this.spectrum.L16, right: this.spectrum.R16 },
       },
       texts: options.texts,
       relayout: options.relayout,
       userTextures: options.userTextures,
-      size,
+      size: perspective ? next.size : undefined,
+      ...(next.edges ? { target: { size: next.size, edges: next.edges, clear: next.clear } } : {}),
       onProgress: (done, total) => options.onProgress?.("gpu", done, total),
       particleOrdinal: options.particleOrdinal,
     });
@@ -548,7 +571,12 @@ export class SceneRenderer {
     this.cameraLayers = cameraObjectLayers(bundle);
     this.sceneGeneral = bundle.general;
     this.pickLayers = bundle.layers;
-    this.renderSize = size ?? null;
+    // 换了场景：旧场景的换尺寸待办作废
+    this.cancelSettle();
+    this.applied = next;
+    this.requested = next;
+    this.appliedCanvas = canvasMode;
+    this.resizeBroken = false;
     // 视差点：新场景回到场景中心（WPE 加载末尾写初值，rea-p5-camera.md 6.2；透视场景是 (0, 0)），重编译（换下的是同一张场景）保留。
     // 透视相机的路径状态同样（P5d 步骤 2）
     if (!old) {
@@ -578,6 +606,8 @@ export class SceneRenderer {
     await this.gpu.device.queue.onSubmittedWorkDone();
     if (this.failed) throw new SceneRenderError(["webgpu:first-frame"]);
     this.sync();
+    // 建场景期间画布 / 样式 / 留白色变了的，补一次期望与已有目标的比较（尺寸变了去抖）
+    this.syncTarget();
   }
 
   setPaused(paused: boolean): void {
@@ -641,11 +671,13 @@ export class SceneRenderer {
     if (style === this.style) return;
     this.style = style;
     this.blitBindGroups.clear();
+    this.syncTarget();
     this.redraw();
   }
 
   setBackground(color: [number, number, number]): void {
     this.background = color;
+    this.syncTarget();
     this.redraw();
   }
 
@@ -663,8 +695,7 @@ export class SceneRenderer {
     if (this.destroyed) return;
     this.destroyed = true;
     this.stop();
-    if (this.renderSizeTimer !== null) clearTimeout(this.renderSizeTimer);
-    this.renderSizeTimer = null;
+    this.cancelSettle();
     this.observer?.disconnect();
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.scene?.destroy();
@@ -681,9 +712,12 @@ export class SceneRenderer {
 
   private readonly onVisibility = () => this.sync();
 
-  /** 铺放与指针用的样式：透视场景铺满（`stretch`，壁纸样式不起作用，P5d 步骤 2），正交场景按壁纸样式。 */
+  /**
+   * 铺放与指针用的样式：场景目标已按画布画（透视场景；正交的样式已在投影里）时 `stretch`（1:1，去抖期间旧目标拉伸铺满），只有 `tile`
+   * 保留壁纸样式。看已换上的目标（`appliedCanvas`），不看期望：模式切换的 `resize` 兑现之前上屏仍按旧目标。
+   */
   private get placementStyle(): SceneStyle {
-    return this.perspective ? "stretch" : this.style;
+    return this.appliedCanvas ? "stretch" : this.style;
   }
 
   private get shouldRun(): boolean {
@@ -739,7 +773,6 @@ export class SceneRenderer {
     const rect = this.canvas.getBoundingClientRect();
     const full = canvasSize(rect.width, rect.height, dpr, 1, max);
     this.fullResolution = [full.width, full.height];
-    this.checkRenderSize();
     const { width, height, pixelRatio } =
       this.displayScale === 1 ? full : canvasSize(rect.width, rect.height, dpr, this.displayScale, max);
     const sized = this.canvas.width === width && this.canvas.height === height;
@@ -750,35 +783,103 @@ export class SceneRenderer {
       this.canvas.width = width;
       this.canvas.height = height;
     }
+    this.syncTarget();
     if (this.scene && !this.shouldRun) this.render();
   }
 
   /**
-   * 透视场景的场景目标按画布尺寸建（P5d 步骤 2）：`fullResolution` 和建场景时不同就（重新）开始 `RENDER_SIZE_SETTLE_MS` 的去抖，到点时
-   * 仍不同才调一次 `onRenderSizeChange`；回到原尺寸时取消。正交场景、没有场景时不做。WPE 只重建 RT、粒子接着跑，我们整场重新加载、
-   * 粒子重新预热，记为已知差异。
+   * 场景目标的期望（方案 A）：透视场景取画布像素；正交非 `tile` 取画布像素 + 样式边距 `alignEdges(对齐方式, 场景宽, 场景高, 画布 CSS 宽, 画布 CSS 高)`
+   * （CSS 尺寸 = 画布像素 / `pixelRatio`：`center` 是一个场景单位对一个布局 CSS 像素，`fill` / `fit` / `stretch` 只看宽高比）+ 对齐方式 1 / 3 时的
+   * 留白清屏色（`clearsWithSchemeColor`，取 `setBackground` 给的 `schemecolor`），和 dev 探针的 `planSizedTarget` 同一份取值；`tile` 没有对齐方式，
+   * 按场景分辨率画（`edges` 为 null，`GpuScene.resize` 对正交场景的语义就是按场景分辨率）。
    */
-  private checkRenderSize(): void {
-    const differs = () => {
-      const size = this.renderSize;
-      return (
-        this.perspective && size !== null && (size[0] !== this.fullResolution[0] || size[1] !== this.fullResolution[1])
-      );
+  private desiredTarget(general: SceneGeneral): SceneTarget {
+    const w = this.canvas.width,
+      h = this.canvas.height;
+    if (general.perspective) return { size: [w, h], edges: null, clear: null };
+    const mode = ALIGNMENT_OF_STYLE[this.style];
+    if (mode === undefined)
+      return {
+        size: sceneTargetSize(general.width, general.height, this.gpu.device.limits.maxTextureDimension2D),
+        edges: null,
+        clear: null,
+      };
+    const ratio = this.pixelRatio > 0 ? this.pixelRatio : 1;
+    return {
+      size: [w, h],
+      edges: alignEdges(mode, general.width, general.height, w / ratio, h / ratio),
+      clear: clearsWithSchemeColor(mode) ? [this.background[0], this.background[1], this.background[2]] : null,
     };
-    if (this.destroyed || !differs()) {
-      if (this.renderSizeTimer !== null) clearTimeout(this.renderSizeTimer);
-      this.renderSizeTimer = null;
+  }
+
+  private cancelSettle(): void {
+    if (this.settleTimer !== null) clearTimeout(this.settleTimer);
+    this.settleTimer = null;
+    this.settleTarget = null;
+  }
+
+  /**
+   * 期望的场景目标和最近一次交给场景的不同时让场景跟上：尺寸不变（只有边距 / 清屏色）、或在「按画布画」与 `tile` 之间切换，立即 `GpuScene.resize`；
+   * 尺寸变了去抖 `RENDER_SIZE_SETTLE_MS`（还在变就从最后一次变化起重新计时，回到已请求的值取消），到点按当时的期望换。多次变化只保留最后一次。
+   * 没有场景、已销毁 / 丢失 / 失败、换尺寸已失败（等宿主整场重载）时不做。
+   */
+  private syncTarget(): void {
+    const scene = this.scene,
+      general = this.sceneGeneral,
+      requested = this.requested;
+    if (!scene || !general || !requested || this.destroyed || this.lost || this.failed || this.resizeBroken) {
+      this.cancelSettle();
       return;
     }
-    // 尺寸还在变：从最后一次变化起重新计时
-    const key = this.fullResolution.join("x");
-    if (this.renderSizeTimer !== null && key === this.renderSizeKey) return;
-    if (this.renderSizeTimer !== null) clearTimeout(this.renderSizeTimer);
-    this.renderSizeKey = key;
-    this.renderSizeTimer = setTimeout(() => {
-      this.renderSizeTimer = null;
-      if (!this.destroyed && differs()) this.options.onRenderSizeChange?.();
+    const next = this.desiredTarget(general);
+    if (sameTarget(next, requested)) {
+      this.cancelSettle();
+      return;
+    }
+    const canvasMode = (target: SceneTarget) => !!general.perspective || target.edges !== null;
+    if (
+      (next.size[0] === requested.size[0] && next.size[1] === requested.size[1]) ||
+      canvasMode(next) !== canvasMode(requested)
+    ) {
+      this.cancelSettle();
+      this.startResize(next);
+      return;
+    }
+    // 尺寸还在变：从最后一次变化起重新计时（同一个期望再量一次不重新计时）
+    if (this.settleTimer !== null && this.settleTarget && sameTarget(this.settleTarget, next)) return;
+    this.cancelSettle();
+    this.settleTarget = next;
+    this.settleTimer = setTimeout(() => {
+      this.settleTimer = null;
+      this.settleTarget = null;
+      if (this.scene !== scene || this.destroyed || this.resizeBroken || !this.requested) return;
+      const latest = this.desiredTarget(general);
+      if (!sameTarget(latest, this.requested)) this.startResize(latest);
     }, RENDER_SIZE_SETTLE_MS);
+  }
+
+  /** 把新目标交给场景；兑现后换上（上屏、相机裁切、光标改按它），抛错经 `onResizeFailed` 交宿主整场重载。 */
+  private startResize(next: SceneTarget): void {
+    const scene = this.scene,
+      state = this.state;
+    if (!scene || !state) return;
+    this.requested = next;
+    scene.resize(next, state).then(
+      () => {
+        if (this.scene !== scene || this.destroyed) return;
+        this.applied = next;
+        this.appliedCanvas = !!this.sceneGeneral?.perspective || next.edges !== null;
+        // 场景目标换了新纹理：上屏 bind group 与铺放按新目标重算
+        this.blitBindGroups.clear();
+        this.placementKey = "";
+        this.redraw();
+      },
+      (error) => {
+        if (this.scene !== scene || this.destroyed) return;
+        this.resizeBroken = true;
+        this.options.onResizeFailed?.(reasonsOf(error, "render:resize"));
+      },
+    );
   }
 
   private blitBindGroup(view: GPUTextureView): GPUBindGroup {
@@ -810,22 +911,14 @@ export class SceneRenderer {
     this.gpu.device.queue.writeBuffer(this.placementBuffer, 0, placementUniform(this.placement));
   }
 
-  /** 光标的裁切边距（`fillCropEdges`）：透视场景（按画布尺寸画、样式按 `stretch`）与没有场景时没有。 */
-  private cursorCropOf(general: SceneGeneral | null, style: SceneStyle): Edges | null {
-    if (!general || general.perspective) return null;
-    return fillCropEdges(style, general.width, general.height, this.canvas.width, this.canvas.height);
-  }
-
-  /** 光标下的场景纹理坐标（`sceneCursor`，P4c 步骤 2）：按当前样式与给定铺放从 `canvasPointer` 现算；没收到过指针时取场景中心。 */
-  private cursorOf(
-    placement: ScenePlacement,
-    style: SceneStyle = this.placementStyle,
-    crop: Edges | null = this.cursorCropOf(this.sceneGeneral, style),
-  ): [number, number] {
+  /**
+   * 光标下的场景纹理坐标（`sceneCursor`，P4c 步骤 2）：按当前样式与给定铺放从 `canvasPointer` 现算；没收到过指针时取场景中心。
+   * 按画布画时样式是 `stretch`，就是窗口归一化指针原样，反投影用投影里已带的裁切边距（`GpuScene` 有 `crop` 时不再另算光标裁切，和 dev 探针
+   * 给了 `canvas` 时同一套）；只有 `tile` 按铺放换算。
+   */
+  private cursorOf(placement: ScenePlacement, style: SceneStyle = this.placementStyle): [number, number] {
     const pointer = this.canvasPointer;
     if (!pointer) return [0.5, 0.5];
-    // 有裁切时反投影吃窗口归一化指针（裁过的 `P·V`），不换到场景纹理坐标（P6c 修复 2）
-    if (crop) return [pointer[0], pointer[1]];
     return sceneCursor(style, placement, this.canvas.width, this.canvas.height, pointer[0], pointer[1]);
   }
 
@@ -840,8 +933,8 @@ export class SceneRenderer {
     const { snapshot, dispatches } = this.cursorSession.frame(
       {
         camera: scene.cursorCamera(window),
-        // 光标下的场景纹理坐标永远按铺放换算（透视覆盖的射线用它）；裁切时世界坐标改用窗口指针（`camera.windowCursor`）
-        cursor: this.cursorOf(this.placement, this.placementStyle, null),
+        // 光标下的场景纹理坐标永远按铺放换算（透视覆盖的射线用它；按画布画时就是窗口指针）
+        cursor: this.cursorOf(this.placement, this.placementStyle),
         pointer: this.canvasPointer ?? [0.5, 0.5],
         window,
         down: this.button,
@@ -874,21 +967,9 @@ export class SceneRenderer {
     if (live) this.userTextures?.beginFrame?.(this.frameClock.frametime);
     const { time, frametime } = this.frameClock;
     const wrapped = time % TIME_WRAP_SECONDS;
-    // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上
-    const cursorCrop = this.cursorCropOf(this.sceneGeneral, this.placementStyle);
-    const cursor = this.cursorOf(this.placement, this.placementStyle, cursorCrop);
-    scene.setCursorCrop(cursorCrop);
-    // 文本 `anchor` 的 E0..E3（P6e 点 5）：每帧按显示的铺放算（画布 CSS 尺寸 = 画布像素 / pixelRatio），样式、尺寸、DPR 变了下一帧生效
-    scene.setAnchorEdges(
-      anchorEdgesFor(
-        this.placementStyle,
-        scene.width,
-        scene.height,
-        this.canvas.width,
-        this.canvas.height,
-        this.pixelRatio,
-      ),
-    );
+    // 每帧现算（`syncPlacement` 之后）：改样式、改尺寸不经 `setPointer` 也跟上。文本 `anchor` 的 E0..E3 不用另设：按画布画时取投影的那份边距
+    // （`GpuScene.anchorEdgesNow`），`tile` 与透视场景为 0
+    const cursor = this.cursorOf(this.placement, this.placementStyle);
     const [width, height] = this.projection;
     // 抖动（P5a 步骤 3）：帧开头、视差点之前，用本帧的 `g_Time` 与脚本之前的字段算 eye 偏移 s（WPE 更新相机时算，在 lookAt 与
     // 视差点之前，脚本之后才跑，rea-p5-camera.md 第 5 节；脚本写 `camerashake*` 下一帧才生效）。交给场景要等粒子步进之后，见下。
@@ -900,6 +981,8 @@ export class SceneRenderer {
       cameraLayers: this.cameraLayers,
       state,
       general: this.sceneGeneral!,
+      // 按画布画时正交相机对象的视图投影带投影裁切（换尺寸 / 换样式之后下一帧按新边距交，`GpuScene.applyCrop` 把这一步留给这里）
+      ...(this.applied?.edges ? { crop: { edges: this.applied.edges, window: this.applied.size } } : {}),
       time: wrapped,
       perspective: this.perspective
         ? { camera: this.camera!, path: this.cameraPath, dt: frametime, width: scene.width, height: scene.height }

@@ -1,5 +1,19 @@
 # v4.7.0 regression
 
+## 场景壁纸按画布分辨率画（产品按画布分辨率画 第 2 步：渲染器接线）
+
+2026-11-19 Windows dev。图库预览、桌面壁纸窗口、应用背景里的场景壁纸不再先按场景分辨率画再缩放上屏，而是同 Wallpaper Engine 按画布像素画、壁纸样式做进正交投影（`alignEdges`，留白底色取 `schemecolor`），上屏 1:1；`center` 仍是一个场景单位对一个布局 CSS 像素，`tile` 保留旧画法。画布尺寸变了（窗口、侧栏、全屏、DPR、显示缩放）去抖 300 ms 后原地换（`GpuScene.resize`），期间旧画面拉伸显示，场景不重新加载；只改样式或留白色立即换。透视场景不再「画布一变就整场重新加载」。光标与文本 `anchor` 改走投影里的边距，和 dev 探针同一套。脚本的 `engine.screenResolution` 不变。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 单测与检查 | Windows | wpe-scene vitest：新增 `render/productSize.test.ts`（建场景 target 与探针 `planSizedTarget` 逐项相等；状态机：去抖、拉伸、只换最后一次、只换样式立即且不建 RT、tile 切换、换场景作废、resize 失败兜底；fit / center 下产品与探针的光标反投影相同；正交相机对象换尺寸后用新裁切）及 `rebuild`、`parallax`、`particles`、`p5d-camera`、`p5d3-camera`、`p9a`、`p12b`、`anchor`、`cursor`、`renderSize`、`resize`、`host*`、`dev/probe*`；`tsc` | 全过 | 2026-11-19 Claude：19 个文件 645 条通过；`tsc` 0 错误；变异 9 处全部抓到 |
+| [x] | T2 产品画面 = 探针画面 | Windows dev，屏外宿主 1920×1080 | eagleflag（2200×1080，铺满时左右裁切）：宿主当前画面 `host.renderFrame(1.5)` 与探针 `renderFrame({ canvas: [1920, 1080], style: "fill", time: 1.5 })` 比 | 逐字节相同 | 2026-11-19 Claude：相同（`c853519e…`）。探针这条路和 WPE 逐像素对过，产品因此同 WPE |
+| [x] | T3 dino_run 预览变清楚 | Windows dev 预览 | 打开 dino_run 的预览，读场景目标与画布像素，截图 | 场景目标 = 画布像素（不再是 343×193），右上角计分字形清晰 | 2026-11-19 Claude：976×549 = 976×549，截图里计分边缘清楚 |
+| [x] | T4 换尺寸不重载 | 同上 | 预览里打开左侧「图片信息」让画布变小 | 300 ms 后场景目标跟上画布，没有新的「开始渲染」，没有重编译 | 2026-11-19 Claude：976×549 → 696×392，日志只有最初一次「开始渲染」，`recompiled` 为空 |
+| [ ] | T5 桌面壁纸 | Windows dev 窗口壁纸 | 把一张小场景（dino_run）和一张大场景（如 3815289650）设为桌面，分别试铺满、装下、居中 | 画面清楚；装下 / 居中的留白是主题配色，越出场景的内容在留白里可见（同 WPE）；帧率正常 | 需要用户看 |
+| [ ] | T6 交互 | Windows dev 预览与桌面 | dino_run 的跟随光标、点击跳跃；fit / center 下光标位置 | 光标对得上画面 | 需要用户看 |
+| [ ] | T7 平铺与应用背景 | Windows dev | 样式切到平铺；开着应用背景切页面、拖窗口 | 平铺照旧；应用背景不闪、不重新加载 | 需要用户看 |
+
 ## 场景壁纸原地换尺寸（产品按画布分辨率画 第 1 步）
 
 2026-11-19 Windows dev。`GpuScene.resize(next, state)`：换场景目标尺寸时只重建按目标尺寸分配的资源（场景目标与交替目标、深度、快照、泛光链、反射两张 RT、体积光、puppet 裁切遮罩、sprite 计数目标），整层强制重建全部图层（绑定组、fullscreen 合成 RT 与 fbo、`g_Screen` 等静态 uniform），状态、粒子、脚本、关键帧、puppet、计时器都不动，同 Wallpaper Engine 改窗口尺寸。新资源先在旁边建好、一次同步换上，等待期间照旧画旧尺寸；旧资源当场释放，共享合成 RT 池里不再被借的旧尺寸条目一并释放。只换投影边距 / 清屏色时不重建 RT。dev 探针 `renderFrame` 加 `resizeFrom`（先按它建、再换到真正的尺寸）。这一步还没接进产品（渲染器、宿主不变），用户看得到的行为不变。计划见 `.claude/plans/wpe-import/3-scene/phase-render-size-product.md`。

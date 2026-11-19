@@ -582,10 +582,10 @@ describe("SceneHost：壁纸样式与留白", () => {
   });
 });
 
-describe("SceneHost：透视场景的分辨率变化（P5d 步骤 2）", () => {
+describe("SceneHost：原地换尺寸失败的兜底（方案 A）", () => {
   /** `SceneRenderer.create` 收到的回调（第 i 次建渲染器）。 */
   const optionsAt = (i: number) =>
-    rendererCreate.mock.calls[i][0] as { onRenderSizeChange?: () => void; onLost?: (reasons: string[]) => void };
+    rendererCreate.mock.calls[i][0] as { onResizeFailed?: () => void; onLost?: (reasons: string[]) => void };
 
   beforeEach(() => {
     vi.stubGlobal("__SCENE_DEV__", false);
@@ -596,14 +596,14 @@ describe("SceneHost：透视场景的分辨率变化（P5d 步骤 2）", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("onRenderSizeChange：整场重新编译、再加载一次（同一个渲染器）；渲染器换掉之后旧回调不触发重载", async () => {
+  it("onResizeFailed（原地 resize 抛错）：整场重新编译、再加载一次（同一个渲染器）；渲染器换掉之后旧回调不触发重载", async () => {
     const report = reporter();
     const host = new SceneHost({} as HTMLCanvasElement, { imageId: "1", report });
     host.applyUserProperties({});
     await vi.waitFor(() => expect(rendererPointer.load).toHaveBeenCalledOnce());
     expect(compile).toHaveBeenCalledOnce();
     const first = optionsAt(0);
-    first.onRenderSizeChange!();
+    first.onResizeFailed!();
     await vi.waitFor(() => expect(rendererPointer.load).toHaveBeenCalledTimes(2));
     expect(compile).toHaveBeenCalledTimes(2);
     expect(rendererCreate).toHaveBeenCalledOnce();
@@ -613,12 +613,12 @@ describe("SceneHost：透视场景的分辨率变化（P5d 步骤 2）", () => {
     expect(rendererCreate).toHaveBeenCalledTimes(2);
     expect(compile).toHaveBeenCalledTimes(3);
     // 旧渲染器的回调：rendererTask 已不是它，不重载
-    first.onRenderSizeChange!();
+    first.onResizeFailed!();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(compile).toHaveBeenCalledTimes(3);
     expect(rendererPointer.load).toHaveBeenCalledTimes(3);
     // 新渲染器的回调照常重载
-    optionsAt(1).onRenderSizeChange!();
+    optionsAt(1).onResizeFailed!();
     await vi.waitFor(() => expect(rendererPointer.load).toHaveBeenCalledTimes(4));
     expect(compile).toHaveBeenCalledTimes(4);
     host.dispose();

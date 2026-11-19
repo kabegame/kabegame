@@ -1643,17 +1643,19 @@ describe("渲染器：帧时钟与遍数", () => {
     renderer.setPointer(0, 0.1);
     const fill = next();
     expect(fill.pointer).toEqual([0, 0.1]);
-    // fill 且比例不同（P6c 修复 2）：cursor 保持窗口指针，反投影用裁过的 P·V（`GpuScene.setCursorCrop`）
+    // 方案 A：非 tile 的样式场景目标就是画布、样式在投影里，cursor 一律是窗口指针原样，反投影用投影里带的裁切边距
     expect(fill.cursor).toEqual([0, 0.1]);
     expect(expected("fill", 0, 0.1)[0]).toBeCloseTo(0.21875, 12);
     // 改样式：不再收到指针，下一帧的 cursor 照新样式算
     renderer.setStyle("stretch");
     expect(next().cursor).toEqual([0, 0.1]);
     renderer.setStyle("fit");
-    const fit = next().cursor;
-    expect(fit).toEqual(expected("fit", 0, 0.1));
-    expect(fit[1]).toBeLessThan(0);
+    expect(next().cursor).toEqual([0, 0.1]);
+    // tile 保留旧画法（场景分辨率 + 平铺上屏）：换上之后 cursor 按铺放换算
+    const resize = vi.spyOn(renderer.currentScene!, "resize");
     renderer.setStyle("tile");
+    await resize.mock.results.at(-1)!.value;
+    await Promise.resolve();
     expect(next().cursor).toEqual(expected("tile", 0, 0.1));
     renderer.destroy();
   });
@@ -1666,10 +1668,10 @@ describe("渲染器：帧时钟与遍数", () => {
     };
     const bundle = bundleOf([particleLayer(1, json, { origin: [960, 540, 0] })]);
     const { renderer } = await start(0, bundle, (r) => r.setPointer(0.25, 0.25));
-    // fill 且比例不同（P6c 修复 2）：cursor 是窗口指针，跟随点按裁过的 P·V 反投影
+    // 方案 A：fill 按画布画，cursor 是窗口指针，跟随点按投影里的裁切边距（`target.edges`，同 `fillCropEdges`）反投影
     const edges = fillCropEdges("fill", 1920, 1080, 100, 100)!;
     expect(build.mock.lastCall![5]!.particles!.cursor).toEqual([0.25, 0.25]);
-    expect(build.mock.lastCall![5]!.particles!.cursorCrop).toEqual(edges);
+    expect(build.mock.lastCall![5]!.target!.edges).toEqual(edges);
     const follow = pointerScenePoint(croppedCursorViewProjection(GENERAL_1080, 1, edges, identity()), [0.25, 0.25]);
     const system = particleDraw(renderer.currentScene!, 1).particles!.system;
     expect(system.alive).toBeGreaterThan(0);
@@ -1745,10 +1747,11 @@ describe("渲染器：帧时钟与遍数", () => {
     expect(system.highWater).toBe(4);
     expectAt(2, [500, 600, 0]);
     expectAt(3, [500, 600, 0]);
-    // 已发出的留在原地；绘制时模型矩阵是单位阵（MVP 就是视图投影），所以画面上也不随对象动
+    // 已发出的留在原地；绘制时模型矩阵是单位阵（MVP 就是视图投影），所以画面上也不随对象动。
+    // 方案 A：产品按画布画，视图投影带 fill 的裁切边距（画布 100×100、场景 16:9）
     expectAt(0, [100, 200, 0]);
     expect(floats(particleDraw(renderer.currentScene!, 1).uniformBuffer, 0, 16)).toEqual(
-      Array.from(sceneViewProjection(GENERAL_1080)),
+      Array.from(sceneViewProjection(GENERAL_1080, 1, fillCropEdges("fill", 1920, 1080, 100, 100)!)),
     );
     renderer.destroy();
   });

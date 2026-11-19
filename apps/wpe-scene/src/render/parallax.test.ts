@@ -1752,8 +1752,8 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     const bundle = bundleOf([layer(0)], { cameraparallaxmouseinfluence: 1 });
     const { renderer } = await start(bundle);
     const build = vi.spyOn(GpuScene, "build");
-    // 画布 100×100、场景 16:9：fit 有留白，换算和画布原始坐标不同
-    renderer.setStyle("fit");
+    // 画布 100×100、场景 16:9：方案 A 起非 tile 的样式按画布画、指针原样（样式在投影里）；tile 保留场景分辨率 + 平铺，换算和画布原始坐标不同
+    renderer.setStyle("tile");
     renderer.setPointer(1, 0);
     const pointers = () => renderer as unknown as { pointer: [number, number]; pointerLast: [number, number] };
     // 还没有场景：只能原样记下
@@ -1761,10 +1761,10 @@ describe("渲染器：视差点的推进、重置与帧顺序", () => {
     let firstFrame: [number, number] | null = null;
     await renderer.load(bundle, { beforeFirstFrame: () => (firstFrame = [...pointers().pointer]) });
     const scene = renderer.currentScene!;
-    const placement = scenePlacement("fit", scene.width, scene.height, 100, 100, 1);
+    const placement = scenePlacement("tile", scene.width, scene.height, 100, 100, 1);
     const options = build.mock.calls[0][5] as { particles: { cursor: [number, number] } };
-    expect(options.particles.cursor).toEqual(sceneCursor("fit", placement, 100, 100, 1, 0));
-    const expected = scenePointer("fit", placement, 100, 100, 1, 0);
+    expect(options.particles.cursor).toEqual(sceneCursor("tile", placement, 100, 100, 1, 0));
+    const expected = scenePointer("tile", placement, 100, 100, 1, 0);
     expect(expected).not.toEqual([1, 0]);
     expect(firstFrame).toEqual(expected);
     expect(pointers().pointer).toEqual(expected);
