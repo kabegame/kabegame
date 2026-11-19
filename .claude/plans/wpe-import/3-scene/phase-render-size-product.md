@@ -2,6 +2,7 @@
 
 > 2026-11-18 用户反馈 dino_run 的文字比 WPE 糊很多，选了方案 A（产品按窗口分辨率画，2026-11-19「好，那就用方案A」）。
 > 2026-11-19 实测：预览放大到 223% 时，dino_run 的场景目标仍是 343×193、上屏画布仍是 1512×851，放大不会提高渲染分辨率。
+> 2026-11-19 第 1–4 步做完（`59ee7e06`、`1d8eef6d`、`aae99bec` 与文档），见文末「实施记录」。
 > 前身：[phase-render-size.md](phase-render-size.md)（2026-11-14 只给 dev 探针做了「按指定尺寸画」，产品维持场景分辨率 + 上屏缩放）。WPE 读码见 [rea-render-size.md](rea-render-size.md)。
 
 ## 总体设计思路
@@ -260,6 +261,14 @@ export function sceneDisplayScale(measured: number, zoom: number): number {
   - 宿主侧不改（`canvasSize` 仍只按设备纹理上限兜底）。
   - **复核**：只改了 4 个文件；4 个文件 79 条通过、`vue-tsc` 0 错误；变异 4 处全部检出（`kbp mutate` 只认场景宿主源码，应用页用 `ignore/render-size-a/step3/mutate_app.py`）；
     合并进主工作区（HMR）后真机：dino_run 预览 100% 976×549 → 223% 2172×1222 → 1000% 3839×2160（停在预算），不重编译。
+  - 提交 `aae99bec`。
+- **第 4 步：文档**（2026-11-19，Claude）：
+  - `cocs/wpe/WPE_SCENE.md`：「铺放与帧循环」改写成按画布分辨率画（含换尺寸、`tile` 旧画法、和探针同一份取值）；「显示」的样式、指针、画布尺寸（预览放大与像素预算）
+    按新规则改；透视相机表的「按画布尺寸渲染」「分辨率变化」两行；P4c / P5d / P10 / P12b1 / 文本 anchor 里「产品先按场景分辨率画再缩」的已知差异标成已消除；
+    「`fill` 裁切（P6c 修复 2）」注明产品不再用；探针 `renderFrame` 补 `resizeFrom`。
+  - `cocs/wpe/WPE_IMPORT.md`「预览放大」的场景画布分辨率；`cocs/README.md` 新增一条主题、改几处旧说法、补适用场景；`FINAL_CHECK.md`「按窗口分辨率画」注明产品已同探针。
+  - `versions/latest/changelog.md` 用户侧 Optimized 一行（用户 2026-11-19「chaneglog记一笔」）。
+  - 待用户看的回归：第 2 步 T5–T7（桌面、交互、平铺与应用背景）、第 3 步 T3（放大手感）。
 
 ## 风险
 

@@ -728,9 +728,10 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   - 右键：冒泡到预览容器弹菜单。
   - 光标：拖得动时 `grab`，平移中 `grabbing`。
 - **注入照常**：`ConvertPointFromView` 用合成器命中测试的变换，已含放大与平移，点击与跟随对得上位置。
-- **场景画布的分辨率**：显示缩放（`displayScaleOf`）含了放大，照原样上报的话放大 10 倍画布就是 10 倍，但场景目标没有那么高的
-  分辨率。`WallpaperPreviewCanvas` 把放大倍数 `provide` 给画布里的场景（`WALLPAPER_PREVIEW_ZOOM`），`WpeSceneView` 上报
-  `sceneDisplayScale(实测, zoom)`，放大时最多到 1（布局 × DPR），见 [WPE_SCENE.md](WPE_SCENE.md)「预览画布尺寸」。网页壁纸不处理：
+- **场景画布的分辨率**（2026-11-19 起）：场景按画布像素画，显示缩放（`displayScaleOf`）含了放大，所以放大多少画布就跟到多少、放大后
+  真的更清楚；主窗口有像素预算（3840×2160 等量），`WpeSceneView` 上报 `sceneDisplayScale(实测, { layout, dpr, budget })`，到预算后再放大只是拉伸。
+  `WallpaperPreviewCanvas` 把放大倍数 `provide` 给画布里的场景（`WALLPAPER_PREVIEW_ZOOM`），放大倍数一变下一帧补量。见 [WPE_SCENE.md](WPE_SCENE.md)
+  「画布尺寸」。（11-15 到 11-18 场景按场景分辨率画，放大时封顶在布局 × DPR。）网页壁纸不处理：
   iframe 内容由 Chromium 按变换栅格化，页面自己的 canvas（WebGL 等）按页面定的分辨率被浏览器拉伸。
 - **设封面**：不复位，截看得见的那一块（见下「封面」）。
 - **视频**（普通视频与视频壁纸）：
