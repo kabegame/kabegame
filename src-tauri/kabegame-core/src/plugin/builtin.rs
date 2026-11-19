@@ -11,8 +11,11 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-// 所有内建插件共用的图标。来源: src-tauri/kabegame/icons/128x128.png；更新应用图标时需同步复制。
+// 内建插件的缺省图标（local-import / webpage）。来源: src-tauri/kabegame/icons/128x128.png；更新应用图标时需同步复制。
 const BUILTIN_PLUGIN_ICON_PNG: &[u8] = include_bytes!("builtin_icon.png");
+// wpe-import（Wallpaper Engine 壁纸）自己的图标。
+#[cfg(feature = "wpe")]
+const WPE_IMPORT_ICON_PNG: &[u8] = include_bytes!("wpe_import_icon.png");
 
 /// 内建插件统一版本：需求版本 1.0，按 `pack_plugin_version` 的 a.b.c 契约写为 1.0.0。
 const BUILTIN_PLUGIN_VERSION: &str = "1.0.0";
@@ -68,6 +71,7 @@ pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
             HashMap::from([("vars".to_string(), Value::Array(local_import_vars))]),
             local_import_var_defs,
             String::new(),
+            BUILTIN_PLUGIN_ICON_PNG,
         );
 
         let webpage_var_defs = webpage::var_defs();
@@ -95,6 +99,7 @@ pub fn builtin_plugins() -> &'static HashMap<String, Arc<Plugin>> {
             HashMap::from([("vars".to_string(), Value::Array(webpage_vars))]),
             webpage_var_defs,
             webpage::PAGE_DISCOVER_JS.to_string(),
+            BUILTIN_PLUGIN_ICON_PNG,
         );
 
         let mut table = HashMap::from([
@@ -217,6 +222,7 @@ fn wpe_import_plugin() -> Plugin {
         HashMap::from([("vars".to_string(), Value::Array(wpe_import_vars))]),
         wpe_import_var_defs,
         String::new(),
+        WPE_IMPORT_ICON_PNG,
     )
 }
 
@@ -228,6 +234,7 @@ fn builtin_plugin(
     config: HashMap<String, Value>,
     var_defs: Vec<super::VarDefinition>,
     builtin_source: String,
+    icon_png: &[u8],
 ) -> Plugin {
     Plugin {
         id: id.to_string(),
@@ -243,7 +250,7 @@ fn builtin_plugin(
         min_app_incompatible: false,
         file_path: None,
 
-        icon_png_base64: Some(BASE64_STANDARD.encode(BUILTIN_PLUGIN_ICON_PNG)),
+        icon_png_base64: Some(BASE64_STANDARD.encode(icon_png)),
         // webpage 的页面快照由详情面板按 metadata.kind 专门渲染，不走 EJS 模板
         var_defs,
         script: PluginScript::new(PluginBackend::Builtin, builtin_source),
@@ -310,5 +317,18 @@ mod tests {
         }
         let local = builtin_plugins().get(LOCAL_FOLDER_PLUGIN_ID).unwrap();
         assert!(local.var_defs[0].required);
+    }
+
+    #[cfg(feature = "wpe")]
+    #[test]
+    fn wpe_import_has_its_own_icon() {
+        let table = builtin_plugins();
+        let wpe = table.get(WPE_IMPORT_PLUGIN_ID).expect("wpe-import");
+        let local = table.get(LOCAL_FOLDER_PLUGIN_ID).expect("local-import");
+        assert_eq!(
+            wpe.icon_png_base64.as_deref(),
+            Some(BASE64_STANDARD.encode(WPE_IMPORT_ICON_PNG).as_str())
+        );
+        assert_ne!(wpe.icon_png_base64, local.icon_png_base64);
     }
 }
