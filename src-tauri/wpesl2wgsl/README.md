@@ -339,6 +339,10 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
      HLSL 类型名也由宏头换回 GLSL（`float2/3/4`、`floatNxM`、`int2/3/4`、`uint2/3/4`、`bool2/3/4`，按名字、数字不变）：WPE 的宏头反方向把 `vec2`
      换成 `float2`、`mat4x3` 换成 `float4x3` 再交给 fxc，所以作者直接写 HLSL 类型名也能编（工坊 `contrast_based_sharpness` 写 `float2`）；
      这些名字在 fxc 里是关键字，作者不会拿来当变量名。`half*` 不在内（`half` 已作为保留字改名，见上）。
+   - **HLSL 流程控制属性**（`strip_flow_attributes`）：`[loop]`、`[unroll]` / `[unroll(n)]`、`[fastopt]`、`[allow_uav_condition]`、`[branch]`、`[flatten]`、
+     `[call]`、`[forcecase]` 后面（跳过空白与连写的属性）是 `for` / `while` / `do` / `if` / `switch` 时换成空白（换行保留，行列号不变）。WPE 整段交给 fxc，
+     作者在循环前写 `[loop]` 也能编（工坊 `audio_yuan`，3784410673）；naga 不认，报 `found LeftBracket`。属性只是给 fxc 的优化提示，不改变结果。
+     只认表里的名字且后面是语句关键字，数组下标（`a[i]`、`a[loop]`）不受影响，没有属性的正文逐字节不变。
      正文用到 `pow` / `max` / `min` 时，补一组「标量扩展」重载：HLSL 允许 `pow(v3, 2.4)`、`max(0, v3)`，GLSL 没有这些重载。
 6. **naga**（`naga_stage.rs`）：
    - GLSL 450 前端负责解析和隐式类型转换：打开了嵌入 naga 的 HLSL 模式（`Options::hlsl_implicit`），GLSL 会报错的地方按 fxc 的隐式规则转换，见「HLSL 隐式转换」；

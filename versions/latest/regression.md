@@ -1278,6 +1278,18 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [ ] | IS5 预览与桌面 | Windows，图库预览、窗口模式 | 预览两张，放音乐看示波器 | 实时渲染、示波器随声音动 | 待真机 |
 | [ ] | IS6 别的显卡 | AMD / Intel / macOS | 预览 3612971233 | 上限够时能渲染，不够时退回预览图并报 `render:program:*:inter-stage:18` | 本机测不了 |
 
+## 场景壁纸：着色器里的 HLSL 流程控制属性（P7 补漏）
+
+2026-11-20 Windows。myprojects 的 3784410673 只挡在工坊 effect `audio_yuan.frag` 循环前的 `[loop]`：翻译器在改写阶段把 `for` / `while` / `do` / `if` / `switch` 前的 fxc 语句属性（`[loop]`、`[unroll(n)]`、`[branch]` 等）换成空白。依据见 `.claude/plans/wpe-import/3-scene/PLAN.md` P7 节「HLSL 流程控制属性」，数据在 `ignore/loop/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | FA1 单测与变异 | Rust | 翻译器 `flow_attributes_are_stripped`、`hlsl_flow_attributes_translate`；去掉 `strip_flow_attributes` 的调用做一次变异 | 全过，变异被抓到 | 2026-11-20：翻译器 122 个全过；变异后 `hlsl_flow_attributes_translate` 失败 |
+| [x] | FA2 语料 | Node，`kbp corpus scan` 两份快照（同一份源码，只差改前 / 改后的 wasm），语料 + myprojects | 比 unsupported | 只去掉 `audio_yuan` 的解析错误、不新增 | 2026-11-20：523 张，干净 521 → 522（3784410673），没有新增键 |
+| [x] | FA3 输出不变 | Rust，翻译请求夹具重放 | 1659 个夹具分别用改前 / 改后的翻译器导出，逐文件比 | 两边都有的逐字节相同 | 2026-11-20：6588 个文件（3294 个 WGSL）全相同，只多出 `audio_yuan` 的 4 个 |
+| [x] | FA4 场景能渲染 | Windows dev，屏外宿主（`render_scene`） | 渲染 3784410673（15990） | `unsupported` 为空、画面正常 | 2026-11-20：画出来了，右侧的音频圆环在没有声音时是一圈点 |
+| [x] | FA5 预览与桌面 | Windows，图库预览、窗口模式 | 预览 3784410673，放音乐 | 实时渲染、圆环随声音起伏 | 2026-11-20 用户：正常 |
+
 ## 场景壁纸 P7d：流体 effect 的条件结构、没被读的 uniform、`g_LayerModelMatrix`
 
 2026-11-13 Windows。四项改动：

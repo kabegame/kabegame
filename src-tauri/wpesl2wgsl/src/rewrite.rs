@@ -1068,7 +1068,8 @@ fn render(
     varyings: &[InterfaceDecl],
     packing: Option<&Packing>,
 ) -> Result<String, RewriteError> {
-    let body = rewrite_identifiers(stage, &parts.body.join("\n"), renames);
+    let body = strip_flow_attributes(&parts.body.join("\n"));
+    let body = rewrite_identifiers(stage, &body, renames);
     // main 之前对 float / int / uint 数组 uniform 的下标访问是 WPE 的打包形态（P7b 步骤 3，见 pack.rs）
     let (body, pack_functions) = if parts.merged_geometry {
         (body, String::new())
@@ -1728,6 +1729,83 @@ fn rewrite_texture_calls_with(
         rest = remaining;
     }
     Ok(out)
+}
+
+/// HLSL 的流程控制属性（[`FLOW_ATTRIBUTES`]，可带括号参数，如 `[unroll(8)]`），后面跟着 `for` / `while` / `do` / `if` / `switch`
+/// 或另一个属性时去掉。
+///
+/// WPE 把整段交给 fxc，作者在循环前写 `[loop]` 也能编（工坊 `audio_yuan`，3784410673）；naga 的 GLSL 前端不认，报
+/// `Expected LeftParen …, found LeftBracket`。这些属性只是给 fxc 的优化提示，不改变结果。只认表里的名字且后面是语句关键字，
+/// 数组下标（`a[i]`、`a[loop]`）不会被误伤；没有属性的正文逐字节不变。
+fn strip_flow_attributes(body: &str) -> String {
+    let bytes = body.as_bytes();
+    let mut out = String::with_capacity(body.len());
+    let mut copied = 0;
+    let mut at = 0;
+    while let Some(offset) = body[at..].find('[') {
+        let start = at + offset;
+        at = start + 1;
+        let Some(end) = flow_attribute_end(body, start) else {
+            continue;
+        };
+        // 属性之后（跳过空白与后续属性）必须是语句关键字
+        let mut next = end;
+        loop {
+            while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+                next += 1;
+            }
+            match flow_attribute_end(body, next) {
+                Some(after) => next = after,
+                None => break,
+            }
+        }
+        let (keyword, _) = split_ident(&body[next..]);
+        if !matches!(keyword, "for" | "while" | "do" | "if" | "switch") {
+            continue;
+        }
+        out.push_str(&body[copied..start]);
+        // 换成空白、保留换行：行号与列号都不变
+        let blank = |c: char| if c == '\n' { c } else { ' ' };
+        out.extend(body[start..end].chars().map(blank));
+        copied = end;
+        at = end;
+    }
+    if copied == 0 {
+        return body.to_string();
+    }
+    out.push_str(&body[copied..]);
+    out
+}
+
+/// fxc 认的语句属性（循环、分支、switch）。
+const FLOW_ATTRIBUTES: &[&str] = &[
+    "loop",
+    "unroll",
+    "fastopt",
+    "allow_uav_condition",
+    "branch",
+    "flatten",
+    "call",
+    "forcecase",
+];
+
+/// `start` 处是 `[名字]` 或 `[名字(参数)]`（名字在 [`FLOW_ATTRIBUTES`] 里，允许内部空白）时返回 `]` 之后的位置。
+fn flow_attribute_end(body: &str, start: usize) -> Option<usize> {
+    let rest = body.get(start..)?.strip_prefix('[')?;
+    let (name, after) = split_ident(rest.trim_start());
+    if !FLOW_ATTRIBUTES.contains(&name) {
+        return None;
+    }
+    let mut after = after.trim_start();
+    if let Some(args) = after.strip_prefix('(') {
+        let close = args.find(')')?;
+        if args[..close].contains(['[', ']', ';', '{', '}']) {
+            return None;
+        }
+        after = args[close + 1..].trim_start();
+    }
+    let after = after.strip_prefix(']')?;
+    Some(body.len() - after.len())
 }
 
 /// 上界是字面量 0 的 `smoothstep(lo, 0.0, x)` → `kb_smoothstep0(lo, x)`（[`SMOOTHSTEP0_HELPERS`]）；参数里嵌套的调用一并改写。
@@ -2870,6 +2948,48 @@ void main() { gl_FragColor = texSample2DBackBuffer(g_Texture1, v_TexCoord.xy, g_
             "{}",
             error.message
         );
+    }
+
+    // ---- HLSL 流程控制属性（P7 补漏，3784410673 的 `[loop]`） ----
+
+    /// 语句关键字前的属性换成等长空白（换行保留）；连写多个、带参数、内部有空白的都认；数组下标与表外名字不动。
+    #[test]
+    fn flow_attributes_are_stripped() {
+        for (source, expected) in [
+            (
+                "[loop]\nfor (int i = 0; i < 4; i++) {}",
+                "      \nfor (int i = 0; i < 4; i++) {}",
+            ),
+            (
+                "x = 1; [unroll(8)] for (;;) {}",
+                "x = 1;             for (;;) {}",
+            ),
+            (
+                "[ branch ] if (a) {} [flatten]\n[fastopt] while (b) {}",
+                "           if (a) {}          \n          while (b) {}",
+            ),
+            (
+                "[forcecase] switch (i) {} [call] do {} while (c);",
+                "            switch (i) {}        do {} while (c);",
+            ),
+            (
+                "[allow_uav_condition][loop] for (;;) {}",
+                "                            for (;;) {}",
+            ),
+        ] {
+            assert_eq!(strip_flow_attributes(source), expected, "{source}");
+        }
+        for source in [
+            "float x = a[loop];",
+            "float x = a[i]; if (x > 0.0) {}",
+            "x = b[branch] + 1.0;",
+            "[nounroll] for (;;) {}",
+            "[loop] x = 1;",
+            "[unroll(n] for (;;) {}",
+            "[loop",
+        ] {
+            assert_eq!(strip_flow_attributes(source), source, "{source}");
+        }
     }
 
     // ---- 上界是字面量 0 的 smoothstep（P7e 收尾，示波器静音时提亮） ----

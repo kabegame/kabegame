@@ -2149,6 +2149,24 @@ void main() {
         assert!(result.ok, "{:?} {:?}", result.phase, result.errors);
     }
 
+    /// 循环前写 HLSL 的 `[loop]` / `[unroll]`（fxc 认、naga 不认）：去掉后照 GLSL 翻译（工坊 `audio_yuan`，3784410673）。
+    #[test]
+    fn hlsl_flow_attributes_translate() {
+        let result = translate(&TranslateRequest {
+            vertex:
+                "attribute vec3 a_Position;\nvoid main() { gl_Position = vec4(a_Position, 1.0); }"
+                    .into(),
+            fragment: "uniform float u_k[4];\nvoid main() {\n\
+                \tfloat s = 0.0;\n\
+                \t[loop]\n\tfor (int i = 0; i < 4; i++) { s += u_k[i]; }\n\
+                \t[branch] if (s > 1.0) { s = 1.0; }\n\
+                \tgl_FragColor = vec4(s);\n}\n"
+                .into(),
+            ..TranslateRequest::default()
+        });
+        assert!(result.ok, "{:?} {:?}", result.phase, result.errors);
+    }
+
     /// 打包后仍超过 16 个：照样翻译，反射报 `interStageLocations`（渲染器按设备上限判断）；超过 32 个才在改写阶段报错。
     #[test]
     fn packing_overflow_is_a_rewrite_failure() {

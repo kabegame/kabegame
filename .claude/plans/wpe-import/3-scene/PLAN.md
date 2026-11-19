@@ -730,6 +730,8 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
   - **varying 超过 16 个**（3612971233 的工坊示波器 `audio_responsive_oscilloscope`，打包后 18 个）：推翻 P7e 的「设备不申请更高的上限」。打包规则不变（超过 16 才打包，翻译结果不随显卡变）；打包后仍超过 16 个的照样输出、反射报 `interStageLocations`，宿主开设备时按适配器申请 `maxInterStageShaderVariables`（本机 28），`createProgram` 比设备上限、超了报 `render:program:<下标>:inter-stage:<个数>`；超过 32 个仍在改写阶段报错。
   - **HLSL 类型名**（3348595482 的 `contrast_based_sharpness` 写 `float2`）：WPE 的宏头把 `vec2` 换成 `float2`、`mat4x3` 换成 `float4x3` 后交给 fxc（rea-p7-shader），作者直接写 HLSL 类型名也能编；翻译器宏头按反方向补 `float2/3/4`、`floatNxM`、`int*`、`uint*`、`bool*`。
   - 复核：1351 个翻译请求夹具重放，之前能翻译的 2672 个 WGSL 逐字节不变，只多出这两个着色器的 5 个程序；两张在 dev 屏外宿主渲染，`unsupported` 为空。没有和 WPE 逐像素比（打包与类型名都只走既有路径）。
+- **HLSL 流程控制属性（2026-11-20，wpe p4 g/g 转来）**：myprojects 的 3784410673 只挡在工坊 effect `audio_yuan.frag` 第 34 行循环前的 `[loop]`（WPE 整段交给 fxc，fxc 认；naga 报 `found LeftBracket`）。翻译器在改写阶段把语句关键字前的 fxc 语句属性换成空白（`strip_flow_attributes`，名字表照 fxc：`loop`、`unroll(n)`、`fastopt`、`allow_uav_condition`、`branch`、`flatten`、`call`、`forcecase`），属性只是优化提示、不改结果。
+  - 复核（`ignore/loop/`）：语料 + myprojects 共 523 张（同一份源码、只差改前 / 改后的 wasm），干净 521 → 522，只去掉这一个键、不新增；1659 个翻译请求夹具重放，改前的 6588 个导出文件（3294 个 WGSL）逐字节不变，只多出 `audio_yuan` 的 4 个；dev 屏外宿主渲染 15990，`unsupported` 为空。没有和 WPE 逐像素比（属性只是优化提示，去掉后走既有路径）。
 
 ## P8 — 图像层与材质补全
 
