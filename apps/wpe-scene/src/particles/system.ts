@@ -109,7 +109,7 @@ import { identity, invert, multiply, translation, type Mat4 } from "../render/ma
 import { TIME_WRAP_SECONDS } from "../sceneTime";
 import { SILENT_PARTICLE_AUDIO, type ParticleAudio } from "./audio";
 import { colornState, instanceBrightness, recenterHsvRange, type Rgb } from "./colorn";
-import { ParticleColumns } from "./columns";
+import { allocatedCount, ParticleColumns } from "./columns";
 import {
   controlPointCount,
   ControlPointSet,
@@ -505,6 +505,13 @@ export class ParticleSystem {
   /** `step` 没给场景时间时用的时钟：收到的帧时间之和（秒，double，按 432000 回绕）。 */
   private elapsed = 0;
   private readonly context: ParticleRunContext;
+  /**
+   * 带 boids 的系统：operator 的 `count` 取到 `⌈高水位/4⌉·4`（P4h，rea-p4h-boids.md 2.3：WPE 的 operator 循环上界；boids 读写 `[hw, ⌈hw/4⌉·4)`
+   * 里未出生的槽，`movement` 也在这些槽上积分）。其它系统保持 `count = 高水位`，结果不变。
+   */
+  private readonly hasBoids: boolean;
+  /** 渲染帧计数（boids 的分帧相位）：每次非预热的 `advance`（`dt > 0`）加一，两遍模式的两遍共用同一个值。 */
+  private frameCounter = 0;
   /** 出生时 `R` 的替换（dev 探针按出生顺序注入 WPE 的值，`random.ts` 的 `injectedR`）；缺省照常用抽到的值。 */
   private readonly rOverride: ParticleROverride | undefined;
   /**
@@ -581,6 +588,7 @@ export class ParticleSystem {
     }));
     this.initializers = resolve("initializer", def.initializers);
     this.operators = resolve("operator", def.operators);
+    this.hasBoids = this.operators.some((operator) => operator.name === "boids");
     this.applyScalars();
     this.applyColorn();
     // 子系统（P4e 步骤 1）：控制点接上父系统；条目 `flags` bit0 时个数强制 8、`i ≥ (u8)startindex` 的点由父粒子写（1.5）
@@ -1429,7 +1437,10 @@ export class ParticleSystem {
       if (env && !prewarming && this.born.length) this.spawnInstances(inputs, env);
     }
     const { h, k } = operatorPass(dt, frameDt, passes);
-    context.count = this.highWater;
+    context.count = this.hasBoids ? allocatedCount(this.highWater) : this.highWater;
+    context.highWater = this.highWater;
+    // TODO:[WPE_SCENE] 帧计数器初值未知（rea-p4h-boids.md 2.7），从 0 起；只影响 boids 在 `hw ≥ 200` 时的分帧相位，语料用不到
+    context.frame = prewarming ? this.frameCounter : this.frameCounter++;
     context.h = h;
     context.k = k;
     for (let pass = 0; pass < passes; pass++) {

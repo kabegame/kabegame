@@ -868,14 +868,14 @@ describe("轨迹", () => {
   });
 
   it("表外模块不执行，记在 skipped", () => {
-    const def = particle(systemJson({ operators: [{ name: "movement" }, { name: "boids", controlpoint: 0 }] }));
+    const def = particle(systemJson({ operators: [{ name: "movement" }, { name: "collisionmodel", controlpoint: 0 }] }));
     const track = particleTrack({
       layers: [{ object: 0, name: "p", particle: def }],
       dts: [0.1],
       frames: [1],
       passes: 1,
     });
-    expect(track.skipped).toEqual({ p: ["operator:boids"] });
+    expect(track.skipped).toEqual({ p: ["operator:collisionmodel"] });
   });
 });
 

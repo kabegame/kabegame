@@ -63,6 +63,7 @@ import {
   REMAP_PROPERTIES,
   type RemapKind,
 } from "./remap";
+import { boids } from "./boids";
 import {
   alphaChange,
   alphaFade,
@@ -250,6 +251,15 @@ export interface ParticleRunContext {
    * 上下文可以不给，按全 0。
    */
   audio?: ParticleAudio;
+  /**
+   * 高水位（P4h，`boids` 用）：`count` 对带 boids 的系统取到 `⌈高水位/4⌉·4`（WPE 的 operator 循环上界，rea-p4h-boids.md 2.3），而 boids 的
+   * 分帧 `S = floor(hw/200) + 1` 与组循环上界要用高水位本身。模拟器总会给；单测手写的上下文可以不给，按 `count`。
+   */
+  highWater?: number;
+  /**
+   * 渲染帧计数（P4h，`boids` 的分帧相位，`ctx+0x144`，rea-p4h-boids.md 2.7）：模拟器每个 `advance` 一次、两遍模式的两遍共用同一个值。单测可以不给，按 0。
+   */
+  frame?: number;
 }
 
 /**
@@ -1199,6 +1209,26 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
     columnFlags: 0,
     normalize: normalizeAudio,
     run: turbulence,
+  },
+  {
+    // rea-p4h-boids.md 1.1–1.3（operator 17，记录类型 0x11、长度 0x50；解析 `0x1401ce3fb`，缺省 `FUN_1401bf700`）：7 个键，没有钳制、
+    // 没有覆盖项（不乘 `speed`）。三个阈值与 `maxspeed` 的缺省按场景正交 / 透视切换，透视值是正交值的 1/1000、1/250、1/500；
+    // `maxspeed` 的键名与 `capvelocity` 共用，缺省不同（500 / 1）。`flags` 缺省 1，只读 bit0（限速）；语料写 `flags 0`。
+    // 执行见 `boids.ts`：不读控制点、不读矩阵，在列所在的空间里算
+    category: "operator",
+    name: "boids",
+    fields: {
+      separationthreshold: num({ orthographic: 20, perspective: 0.02 }),
+      neighborthreshold: num({ orthographic: 50, perspective: 0.2 }),
+      maxspeed: num({ orthographic: 500, perspective: 1 }),
+      separationfactor: num(15),
+      alignmentfactor: num(1),
+      cohesionfactor: num(2),
+      flags: int(1),
+    },
+    columns: ["life", "position", "velocity"],
+    columnFlags: 0,
+    run: boids,
   },
   {
     // `rea-p4b-modules.md` B8：`maxspeed` 没有覆盖项
