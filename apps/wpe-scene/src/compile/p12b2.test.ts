@@ -236,7 +236,7 @@ function animation(id: number, bones: number, extra: Partial<MdlAnimation> = {})
     tracks: Array.from({ length: bones }, () => ({ flags: 0, frames: new Float32Array(27) })),
     boneAlpha: null,
     morphWeights: null,
-    drawOrderTrack: false,
+    drawOrder: null,
     events: [],
     unsupported: false,
     ...extra,
@@ -302,7 +302,7 @@ describe("buildModelSkeleton 的键（语料 0 处的写法照报，WPE 不处�
   });
 
   it("骨骼透明度 / 绘制顺序轨道模型不处理（WPE 的模型更新没有它们），不报 puppet:alpha-track / draw-order；组合键也没有 SKINNING_ALPHA", () => {
-    const tracks = animation(1, 1, { boneAlpha: new Float32Array(3), drawOrderTrack: true });
+    const tracks = animation(1, 1, { boneAlpha: new Float32Array(3), drawOrder: new Float32Array(3) });
     const source = file({ animations: [tracks] });
     expect(issues(source, [layerOf(1)])).toEqual([]);
     expect(modelMeshCombos(source.meshes[0], 1)).toEqual({ SKINNING: 1, BONECOUNT: 16 });

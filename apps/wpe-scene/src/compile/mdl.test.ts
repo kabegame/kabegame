@@ -655,7 +655,7 @@ describe("parseMdl：MDLA（rea-p12-mdl 4.2，P12a）", () => {
       flags: 0,
       boneAlpha: null,
       morphWeights: null,
-      drawOrderTrack: false,
+      drawOrder: null,
       unsupported: false,
       events: [{ time: 1, json: '{"frame":30,"name":"事件1"}' }],
     });
@@ -682,7 +682,7 @@ describe("parseMdl：MDLA（rea-p12-mdl 4.2，P12a）", () => {
         2,
       );
       expect(file.sectionIssues, `v${version}`).toEqual([]);
-      expect(file.animations.map((item) => [item.id, item.boneAlpha !== null, item.drawOrderTrack])).toEqual([
+      expect(file.animations.map((item) => [item.id, item.boneAlpha !== null, item.drawOrder !== null])).toEqual([
         [1, true, version >= 6],
         [2, false, false],
       ]);
@@ -1136,7 +1136,7 @@ describe.skipIf(!root || !existsSync(corpusIndex))("本机语料：ignore/p12/re
         add("boneAlpha", animation.boneAlpha ? 1 : 0);
         add("boneAlphaTracks", animation.boneAlpha ? animation.tracks.length : 0);
         add("morphWeightTracks", animation.morphWeights?.length ?? 0);
-        add("drawOrderTrack", animation.drawOrderTrack ? 1 : 0);
+        add("drawOrderTrack", animation.drawOrder ? 1 : 0);
         add("events", animation.events.length);
         add("unsupported", animation.unsupported ? 1 : 0);
         add("idHi", animation.id >= 2 ** 32 ? 1 : 0);

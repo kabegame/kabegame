@@ -172,7 +172,7 @@ function animation(
     })),
     boneAlpha: null,
     morphWeights: null,
-    drawOrderTrack: false,
+    drawOrder: null,
     events: [],
     unsupported: false,
     ...extra,
@@ -187,7 +187,7 @@ function file(extra: Partial<MdlFile> = {}): MdlFile {
     bounds: [],
     sections: [],
     truncated: false,
-    skeleton: skeleton([bone(-1)]),
+    skeleton: skeleton([bone(-1)], { drawOrder: [0] }),
     animations: [],
     attachments: [],
     sectionIssues: [],
@@ -437,13 +437,18 @@ describe("buildPuppet：P12a 不做、照报的细分键", () => {
       ["puppet:ik"],
     ],
     [
-      "绘制顺序轨道 + bit3",
-      { meshes: [mesh({ flags: 8 })], animations: [anim({ drawOrderTrack: true })] },
-      ["puppet:draw-order"],
+      "绘制顺序轨道 + bit3：P12f 起支持，不报",
+      { meshes: [mesh({ flags: 8 })], animations: [anim({ drawOrder: new Float32Array(4) })] },
+      [],
+    ],
+    [
+      "bit3 而 MDLS 没有每骨骼基数（WPE 加载读空指针）",
+      { meshes: [mesh({ flags: 8 })], skeleton: skeleton([bone(-1)]) },
+      ["puppet:draw-order:base"],
     ],
     [
       "绘制顺序轨道、没有 bit3（WPE 写空指针）",
-      { animations: [anim({ drawOrderTrack: true })] },
+      { animations: [anim({ drawOrder: new Float32Array(4) })] },
       ["puppet:order-track"],
     ],
     [
@@ -475,7 +480,7 @@ describe("buildPuppet：P12a 不做、照报的细分键", () => {
   });
 
   it("运行时的键只在 skinned 时报；没被动画层用到的动画不看", () => {
-    const animations = [anim({ drawOrderTrack: true, boneAlpha: new Float32Array(3), unsupported: true })];
+    const animations = [anim({ drawOrder: new Float32Array(4), boneAlpha: new Float32Array(3), unsupported: true })];
     const physics = skeleton([bone(-1, IDENTITY, { json: '{"t":true,"re":true}' })]);
     expect(keys(file({ meshes: [mesh({ format: 0xf })], animations, skeleton: physics }))).toEqual([]);
     expect(keys(file({ animations }), [])).toEqual([]);
@@ -945,8 +950,8 @@ describe.skipIf(!corpusRoot || !existsSync(mdlIndex) || !existsSync(cmOut))(
         if (puppet.clipping) withClipping++;
         alphaAnimations += puppet.animations.filter((item) => item.alpha).length;
       }
-      // 语料里剩下的键：绘制顺序轨道（3577990983）；物理 P12d-1 起图像层自己做，不再报；P12b1 的四样没有新增键，纹理通道（3811424158）P12b2-2 起不再报
-      expect([...keys].sort()).toEqual(["puppet:draw-order"]);
+      // 语料里剩下的键：绘制顺序轨道（3577990983）P12f 起支持，没有剩下的键；物理 P12d-1 起图像层自己做，不再报；P12b1 的四样没有新增键，纹理通道（3811424158）P12b2-2 起不再报
+      expect([...keys].sort()).toEqual([]);
       // 挂点 38 项（MDAT：1 个文件 14、2 个 5、3 个 2、8 个 1）；bit2 的 puppet 8 个、带透明度轨道的动画 15 条；MORPHING 6 个；裁切 5 个
       expect([attachments, withAlpha, alphaAnimations, withMorph, withClipping]).toEqual([38, 8, 15, 6, 5]);
     });

@@ -1916,6 +1916,19 @@ export class SceneHost {
       /** 摘出（destroyAnimationLayer）还没释放的层数（P12e：看「摘了还没 settle」）。 */
       detached: number;
       layers: { id: number; name: string; frame: number; playing: boolean }[];
+      /**
+       * 绘制顺序（P12f，`ScenePuppets.drawOrder`；不会重排也没有裁切的对象为 null）：`version` 每次真的重排 +1；`commands` 是当前裁切命令表（没有记录为 null；
+       * normal 带段号，clip 带记录号与遮罩 / 目标段号）；`segments` 是命令表各段的索引个数；`indices` 是按当前顺序拼的整张网格 u16 索引
+       * （没重排过是文件顺序）。走查时按帧与 WPE 抓帧的索引顺序（`get_mesh_data`）逐个对。
+       */
+      drawOrder: {
+        version: number;
+        commands:
+          | ({ kind: "normal"; segment: number } | { kind: "clip"; record: number; mask: number; target: number })[]
+          | null;
+        segments: number[] | null;
+        indices: number[];
+      } | null;
     }[];
   } {
     const pending = !this.scenePuppets && !!this.pendingPuppets;
@@ -1924,10 +1937,20 @@ export class SceneHost {
     if (!puppets || !bundle) return { pending, objects: [] };
     const objects = bundle.layers
       .map((layer) => layer.object)
-      .filter((object) => puppets.layerCount(object) > 0)
+      .filter((object) => puppets.layerCount(object) > 0 || puppets.drawOrder(object))
       .map((object) => ({
         object,
         detached: puppets.detachedCount(object),
+        drawOrder: (() => {
+          const order = puppets.drawOrder(object);
+          if (!order) return null;
+          return {
+            version: order.version,
+            commands: order.clipping ? order.clipping.commands.map((command) => ({ ...command })) : null,
+            segments: order.clipping ? order.clipping.segments.map((segment) => segment.length) : null,
+            indices: Array.from(order.indices),
+          };
+        })(),
         layers: puppets.ids(object).map((id) => {
           const control = puppets.control(object, id)!;
           return { id, name: control.name, frame: control.getFrame(), playing: control.isPlaying() };

@@ -825,6 +825,11 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 - 语料键不变（2887 的调用编译期认不出，本来就不报），puppet 动画数据 36.4 → 49.7 MB；P12a–d 生成工程逐字节不变。
 - 用户在预览里点书确认 2887 翻页正常（回归 PE6）。
 
+**进度**（2026-11-19）：**P12f 完成**（[phase-12f-draworder.md](phase12/phase-12f-draworder.md)）：puppet 绘制顺序轨道（`puppet:draw-order`），语料清扫转来，`3577990983`、`3841310696` 只差这一项。
+- 读码 [rea-p12f-draworder](phase12/rea-p12f-draworder.md) 加实测 `p12f-order`（16 个 puppet）全部吻合；补测 `p12f-rebuild` 证实运行中改属性不重置顺序。
+- 稳定排序、顺序跨帧保留、加法层减基数并钳制、有裁切时按新顺序重建命令表（渲染器改为编码时现排）。
+- 两张真实壁纸的复制工程各 100 帧整帧最大差 2，抽帧的索引与 WPE 逐个相同；语料干净 286 → 288，没有新键。
+
 - MDLV0021 / MDLV0023 的骨骼（MDLS）、动画（MDLA）、变形（MDMP），skinning（翻译器经 `defines` 传 `BONECOUNT`），puppet warp。语料 33 张。
 - 对象 `animationlayers`（31 张）、`attachment` 挂点（10 张）；脚本 `getAnimationLayer*`、骨骼与混合形状的 API。
 - **依赖：** P5c 的 mdl 解析。P5c 对带这些段的模型报 `mdl:skeleton` / `mdl:animation` / `mdl:morph`。

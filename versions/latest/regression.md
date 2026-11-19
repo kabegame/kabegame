@@ -3840,6 +3840,29 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PE6 2887099508 点书翻页 | Windows dev，图库预览 | 预览 2887099508，等开场镜头结束后点书 | 手翻一页书，脚本不报 `is not a function`；应用日志里没有这张的脚本出错 | 2026-11-16 用户在预览里点书确认翻页正常（探针模拟点击没点中：开场镜头推近） |
 | [ ] | PE7 非 Windows | macOS、Linux | 同 PE5、PE6 | 同 Windows | 本机不能测 |
 
+## 场景壁纸 puppet 绘制顺序（P12f）
+
+2026-11-19。网格 0 带 bit3 的 puppet 按动画的绘制顺序轨道改变绘制组的先后，连带：
+- 键 = `trunc(f32(骨骼基数 + 组偏移) + cur)`，`cur` 每帧复位成骨骼基数后逐可见层写（覆盖 / 混合 / 加法，加法减骨骼基数并钳制）；
+- 有写入且当前顺序不是非降序时稳定排序，顺序跨帧保留（并列保持上一次的顺序；没写入、层隐藏或删掉、运行中改属性都不重置）；
+- 有裁切记录时按新顺序重建命令表，渲染器改为编码时按当前命令表现排，每个绘制模板一块私有索引缓冲。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase12/phase-12f-draworder.md`；
+- 读码：`rea-p12f-draworder.md`；实测：`ignore/p12/f/meas/REPORT.md`（含补测 `p12f-rebuild`）；
+- 工程与对照：`ignore/p12/f/`（生成器 `defs/p12f.py`、工程 `proj/`、WPE 日志 `logs/`、夹具生成 `fix/mkfix_f.py`、对照与变异脚本 `impl/`、结果 `out/`、回归帧 `reg/`）；
+- 抓帧：`A:\p12f\order\`、`A:\p12f\rebuild\`、`A:\p12f\iso-sl\`、`A:\p12f\iso-eye\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PF0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、相关 vitest、Prettier | 0 error，相关测试全过 | 2026-11-19：tsc 0 error；`puppet/`、`compile/p12*`、`compile/puppet` / `mdl`、`render/` 全过；变异 24 个全部杀死（P12f-1 15 个、P12f-2 9 个）。带 `KABEGAME_WPE_ROOT` 的本机语料用例另有 4 条失败（`refract` 的 `tex:animation:multi-image`、`pipeline` 语料界限、`scriptApi` 的 3304642534 两条），去掉 P12f 的改动在 HEAD 上同样失败，与本节无关 |
+| [x] | PF1 语料 | Node | `kbp corpus scan`，范围同 `ignore/p6/e0/corpus-now4.json`（myprojects 60 个目录用 `--project`） | 只去掉 `puppet:draw-order`，没有新键 | 2026-11-19：293 张，干净 286 → 288（`3577990983`、`3841310696`），`clean_lost` 0，`puppet:draw-order:base` 0 处 |
+| [x] | PF2 生成工程逐帧顺序 | Node 夹具 + Windows dev | `p12f-order` 按 WPE 帧时间回放，第 240 / 242 / 248 / 252 帧比每个 puppet 的绘制组序列 | 与 WPE 抓帧逐个相同 | 2026-11-19：夹具（`puppet/p12f.test.ts`）与 dev 真渲染器的逐 draw 轨迹都 29 个 puppet-帧逐个相同，绘制数同 WPE；补测 `p12f-rebuild`：运行中改 `size` / `colorBlendMode` / 可见性，WPE 不重置顺序 |
+| [x] | PF3 真实壁纸复制工程 | Windows dev | `3577990983` 的 `sl`、`3841310696` 的 `眼睛` 各 100 帧按 WPE 日志回放，整帧比；抽一帧比索引 | 整帧只有取整级差；索引逐个相同 | 2026-11-19：两张 100 帧最大差 2、没有 > 2 的像素；`sl` 第 220 帧 4 次绘制、`眼睛` 第 230 帧 6 次绘制的索引与 WPE 逐个相同（这段时间 `眼睛` 重排 17 次） |
+| [x] | PF4 P12a–e 生成工程不变 | Windows dev | P12e 走查的 8 个生成工程按原时间线重渲 22 帧，和当时的帧比 | 逐字节相同 | 2026-11-19：22 / 22 逐字节相同（含裁切的 `p12-clip2`） |
+| [ ] | PF5 预览里看两张壁纸 | Windows dev，图库预览 | 预览 `3577990983`、`3841310696` 各看半分钟 | 能实时渲染，不再停在预览图；人物部件的前后遮挡随动画变化正常，眼睛等裁切部位不闪、不漏 | 需要人看 |
+| [ ] | PF6 非 Windows | macOS、Linux | 同 PF5 | 同 Windows | 本机不能测 |
+
 ## 场景壁纸「强制渲染」设置
 
 2026-11-17 Windows dev。WPE 设置字段组加开关「强制渲染」（只对场景，默认关）：桌面是全局键 `wpeSceneForceRender`（设置页「壁纸设置」），预览与应用背景是这张壁纸的预览设置 `forceRender`（预览右侧边栏）；打开一律先确认（`confirmWpeForceRender`）。值经场景设置消息交给宿主，变了整场重新加载，开着时有不支持项也照常渲染（原来只有 dev 的 `localStorage` 开关）。预览里场景显示不了时，底部红字原因下面有「我就要看」链接；名称右边的警告色「强制渲染」只看设置。计划见 `.claude/plans/wpe-import/phase-force-render.md`。

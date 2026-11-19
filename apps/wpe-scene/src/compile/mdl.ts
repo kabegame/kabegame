@@ -289,8 +289,11 @@ export interface MdlAnimation {
    * `g_BlendMap` 的第 i 个 float。没有这一段或 n3 为 0 时为空数组。可选同上（手写夹具不动）。
    */
   channels?: Float32Array[];
-  /** v ≥ 6 的每骨骼绘制顺序轨道（rea 4.7 第 15 项）：P12a 只记有没有。 */
-  drawOrderTrack: boolean;
+  /**
+   * v ≥ 6 的每骨骼绘制顺序轨道（rea 4.7 第 15 项；P12f 起保留值）：排成「帧 × 轨道」（同 `boneAlpha`），没有这一段为 null。
+   * 运行时只取 lo 帧、不插值（rea-p12f 2.2）。
+   */
+  drawOrder: Float32Array | null;
   /** 事件：f32 秒 + 事件 JSON（rea 4.7 第 17 项）。P12c 派发。 */
   events: { time: number; json: string }[];
   /** flags bit0 的引用块、v ≥ 2 的记录轨道或约束轨道（语料 0 处，puppet 报 `puppet:animation-ref`）。 */
@@ -794,10 +797,16 @@ function readAnimations(
       }
     // v5 的动画包围盒：六个 f32（min xyz、max xyz）
     const bounds = version >= 5 ? Array.from({ length: 6 }, () => reader.f32()) : null;
-    let drawOrderTrack = false;
+    let drawOrder: Float32Array | null = null;
     if (version >= 6 && reader.u8()) {
-      drawOrderTrack = true;
-      scalars(trackCount);
+      // 每条骨骼轨道一条标量轨道（u32 读了不用 + f32 块），排成「帧 × 轨道」，同骨骼透明度
+      const values = new Float32Array(frames * trackCount);
+      for (let b = 0; b < trackCount; b++) {
+        reader.u32();
+        const track = floatView(checkTrack(reader.block(), 4, frames));
+        for (let k = 0; k < frames; k++) values[k * trackCount + b] = track[k];
+      }
+      drawOrder = values;
     }
     if (flags & 1) reader.skip(2 + 16);
     const events = repeat(reader.u32(), () => ({ time: reader.f32(), json: reader.cstr() }));
@@ -814,7 +823,7 @@ function readAnimations(
       meshMorphs,
       channels,
       bounds,
-      drawOrderTrack,
+      drawOrder,
       events,
       unsupported,
     });

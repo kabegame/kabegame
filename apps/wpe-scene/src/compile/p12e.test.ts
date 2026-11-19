@@ -51,7 +51,7 @@ function skeleton(bones: MdlBone[]): MdlSkeleton {
     count: bones.length,
     bones,
     restMatrices: null,
-    drawOrder: null,
+    drawOrder: bones.map(() => 0),
     extras: { records: 0, constraints: 0, keyMaps: 0, chains: 0 },
   };
 }
@@ -71,7 +71,7 @@ function animation(id: number, bones: number, extra: Partial<MdlAnimation> = {})
     })),
     boneAlpha: null,
     morphWeights: null,
-    drawOrderTrack: false,
+    drawOrder: null,
     events: [{ time: 0.1, json: '{"e":1}' }],
     unsupported: false,
     ...extra,
@@ -148,7 +148,7 @@ describe("buildPuppet：动画全编（P12e 点 1）", () => {
 
   it("图像层：骨骼透明度轨道没有网格 bit2 / 绘制顺序轨道，被引用报键、没被引用只记 stub", () => {
     const alpha = animation(5, 2, { boneAlpha: Float32Array.from({ length: 6 }, () => 1) });
-    const order = animation(6, 2, { drawOrderTrack: true });
+    const order = animation(6, 2, { drawOrder: new Float32Array(6) });
     const source = file([animation(7, 2), alpha, order]);
     const free = buildPuppet(source, [{ animation: 7 }], "p");
     expect([...free.issues]).toEqual([]);
@@ -156,9 +156,12 @@ describe("buildPuppet：动画全编（P12e 点 1）", () => {
     expect(free.puppet!.animations[2].unsupported).toEqual(["puppet:order-track"]);
     expect([...buildPuppet(source, [{ animation: 5 }], "p").issues]).toEqual(["puppet:alpha-track"]);
     expect([...buildPuppet(source, [{ animation: 6 }], "p").issues]).toEqual(["puppet:order-track"]);
-    // 网格 0 标志 bit3：绘制顺序轨道报 draw-order
+    // 网格 0 标志 bit3：绘制顺序轨道 P12f 起支持，不再报 draw-order（也没有 order-track）；动画里转出帧数据
     const withDraw = file([order], { meshes: [mesh({ flags: 8 })] });
-    expect([...buildPuppet(withDraw, [{ animation: 6 }], "p").issues]).toEqual(["puppet:draw-order"]);
+    const built = buildPuppet(withDraw, [{ animation: 6 }], "p");
+    expect([...built.issues]).toEqual([]);
+    expect(built.puppet!.animations[0].drawOrder).toEqual(new Float32Array(6));
+    expect(built.puppet!.order?.dynamic).toBe(true);
   });
 
   it("静态 puppet：动画也按 MDLA 全部列出，但不转帧数据、不查问题", () => {
@@ -210,7 +213,10 @@ describe("buildModelSkeleton：动画全编（P12e 点 1）", () => {
   });
 
   it("模型不查骨骼透明度 / 绘制顺序轨道（同图像层之前的规则）", () => {
-    const alpha = animation(5, 2, { boneAlpha: Float32Array.from({ length: 6 }, () => 1), drawOrderTrack: true });
+    const alpha = animation(5, 2, {
+      boneAlpha: Float32Array.from({ length: 6 }, () => 1),
+      drawOrder: new Float32Array(6),
+    });
     const built = buildModelSkeleton(file([alpha]), [{ animation: 5 }], {});
     expect([...built.issues]).toEqual([]);
     expect("unsupported" in built.skeleton!.animations[0]).toBe(false);

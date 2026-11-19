@@ -181,6 +181,7 @@ import type {
   SceneTexture,
   SortClass,
 } from "../compile/bundle";
+import type { PuppetClipping } from "../compile/puppet";
 import { layerCompositeName } from "../compile/dependencies";
 import { particleDraws, type ParticleRenderer, type SceneParticle } from "../compile/particles";
 import { FBO_FORMATS } from "../compile/tex";
@@ -229,6 +230,7 @@ import {
   planSignature,
   textCompositeSize,
   variantPlans,
+  type ClipSlot,
   type DrawStep,
   type LayerPlan,
   type MeshStep,
@@ -264,13 +266,18 @@ import {
 import { identity, mulAffine, multiply, orthographic, translateGlm, translation, type Mat4 } from "./math";
 import { alignedBytes, frustumCulled, MESH_PLACEHOLDER_BYTES, meshVertexLayout, type MeshVertexLayout } from "./mesh";
 import {
+  clipDrawSequence,
   clipMaskSize,
+  clipTemplateSegments,
+  indexUpload,
   morphTexelData,
   needsScaledVertices,
   morphKey,
+  puppetIndexCapacity,
   scaledPuppetVertices,
   type PuppetSource,
 } from "./puppet";
+import { fileIndices } from "../puppet/drawOrder";
 import { parallaxOffset, type SceneParallax } from "./parallax";
 import {
   createPipeline,
@@ -468,6 +475,11 @@ interface MeshDraw {
    * 共用的（模型网格、UV 为 (1, 1) 的 puppet）为假。
    */
   privateVertices?: boolean;
+  /**
+   * 索引缓冲是本 draw 私有、内容随 puppet 的绘制顺序变（P12f，`syncPuppetIndices`）：`slot` 是裁切模板的槽位（没有裁切为 null，整张网格），
+   * `version` 是已上传的 `ScenePuppets.drawOrder` 版本（建时 −1，编译期数据记 0），`capacity` 是缓冲字节数，`source` 是已上传时 `drawOrder(object)` 返回的那个对象（没有来源为 null）：运行时被换掉（换来源、清空脚本存储不接回顺序）时版本号可能恰好相同、内容却不同，所以「来源对象相同且版本相同」才算已上传。图层重建 / 释放时要释放这块缓冲。
+   */
+  ordered?: { slot: ClipSlot | null; version: number; capacity: number; source: object | null };
 }
 
 /** 一次粒子绘制的系统与 CPU 侧顶点（P4a 步骤 4）。 */
@@ -1051,7 +1063,19 @@ type Op =
   /** 组画子树（P5b 步骤 4）：`layer.subtree` 里可见的子孙依次画进 `target`（组当前的合成 RT）。 */
   | { kind: "subtree"; resources: LayerResources; target: TargetRef; layer: SceneLayer }
   /** 一个模型（P5c 步骤 2）：编码时先做视锥剔除，没被剔就按 `model.order` 画各网格（`draws` 就是这个顺序）。 */
-  | { kind: "model"; layer: SceneLayer; draws: Draw[] };
+  | { kind: "model"; layer: SceneLayer; draws: Draw[] }
+  /**
+   * 有裁切的 puppet（P12f）：编码时按当前命令表现排——第 j 个普通命令画 `normals[j]`，记录 r 先清遮罩 RT、再画 `masks[r]`（画进遮罩 RT）、
+   * 再画 `targets[r]`（回场景）。模板 draw 的索引缓冲是私有的，每帧编码之前由 `syncPuppetIndices` 按绘制顺序的版本写进当前的段。
+   */
+  | {
+      kind: "puppet-clip";
+      layer: SceneLayer;
+      resources: LayerResources;
+      normals: Draw[];
+      masks: Draw[];
+      targets: Draw[];
+    };
 
 /**
  * 决定一条管线的五项：WebGPU 的管线绑定了混合、目标格式、写掩码与图元拓扑（WPE 的 D3D11 着色器不绑），同一个程序要按它们
@@ -1357,7 +1381,7 @@ export function layerOpsToRun<O extends { kind: string }>(
 
 /** op 画到「场景」（顶层是场景目标，组里是组的合成 RT）：目标是 `scene` 的绘制、粒子树、模型。 */
 function drawsToScene(op: { kind: string }): boolean {
-  if (op.kind === "particle-tree" || op.kind === "model") return true;
+  if (op.kind === "particle-tree" || op.kind === "model" || op.kind === "puppet-clip") return true;
   return op.kind === "draw" && (op as { draw?: { step: { target: TargetRef } } }).draw?.step.target.kind === "scene";
 }
 
@@ -1836,6 +1860,7 @@ export class GpuScene {
       else this.drawsByPass.delete(draw.passKey);
     }
     if (!draw.mesh || draw.mesh.privateVertices) this.release(draw.vertexBuffer);
+    if (draw.mesh?.ordered) this.release(draw.mesh.indexBuffer);
     if (draw.uniformBuffer) this.release(draw.uniformBuffer);
     if (draw.text) this.release(draw.text.indexBuffer);
     const copy = this.reflectionCopies.get(draw);
@@ -3326,7 +3351,23 @@ export class GpuScene {
       if (draws.length) ops.push({ kind: "model", layer, draws: [...draws] });
       return { ops, draws, tree: null };
     }
+    // puppet 的裁切模板（P12f）：同一图层的普通 / 遮罩 / 目标模板收成一个 `puppet-clip` op（位置放在第一个模板的地方），遮罩 RT 的清除由 op 编码时做
+    let clipOp: Extract<Op, { kind: "puppet-clip" }> | null = null;
     for (const step of plan.steps) {
+      if (step.kind === "clear" && step.clipRecord !== undefined) continue;
+      if (step.kind === "draw" && step.clipSlot !== undefined) {
+        const draw = this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds);
+        draws.push(draw);
+        if (!clipOp) {
+          clipOp = { kind: "puppet-clip", layer, resources, normals: [], masks: [], targets: [] };
+          ops.push(clipOp);
+        }
+        const slot = step.clipSlot;
+        if (slot.kind === "normal") clipOp.normals[slot.slot] = draw;
+        else if (slot.kind === "mask") clipOp.masks[slot.record] = draw;
+        else clipOp.targets[slot.record] = draw;
+        continue;
+      }
       if (step.kind === "snapshot") ops.push({ kind: "snapshot" });
       else if (step.kind === "swap")
         ops.push({ kind: "swap", resources, effect: step.effect, source: step.source, target: step.target });
@@ -4445,7 +4486,7 @@ export class GpuScene {
           ? `layer ${layer.id} ${layer.name} text ${step.part}`
           : step.kind === "mesh"
             ? `layer ${layer.id} ${layer.name} mesh ${step.mesh}`
-            : `layer ${layer.id} ${layer.name} ${step.role}${step.geometry === "texchan" ? " texchan" : ""}${step.segment === undefined ? "" : ` segment ${step.segment}`}`;
+            : `layer ${layer.id} ${layer.name} ${step.role}${step.geometry === "texchan" ? " texchan" : ""}${step.clipSlot === undefined ? "" : ` clip ${step.clipSlot.kind}${step.clipSlot.kind === "normal" ? step.clipSlot.slot : step.clipSlot.record}`}`;
 
     let vertexBuffer: GPUBuffer;
     let particles: ParticleDraw | null = null;
@@ -4495,21 +4536,29 @@ export class GpuScene {
         );
         device.queue.writeBuffer(vertexBuffer, 0, bytes.buffer, bytes.byteOffset, bytes.byteLength);
       } else vertexBuffer = this.meshBuffer(puppet.mesh.vertices, GPUBufferUsage.VERTEX, `${name} vertices`);
-      // 裁切分段（P12b1 步骤 5）：这一步只画 `segment` 的索引（编译期拼好的 u16，每段自己一块缓冲，起点 0）；没有分段画整张网格
-      const segment = step.segment === undefined ? undefined : puppet.clipping?.segments[step.segment];
-      if (step.segment !== undefined && !segment) throw new SceneRenderError([`render:puppet-segment:${step.segment}`]);
+      // 索引（P12f）：绘制顺序会变的 puppet（`order.dynamic`）与裁切模板（`clipSlot`，每个槽位画哪一段由编码时的当前命令表定）各有一块私有索引缓冲
+      // （`INDEX | COPY_DST`，容量 = 整张网格的索引数；不进 `meshBuffer` 的共用缓存——两个图层可能用同一个 mdl、顺序各自不同），内容每帧编码之前
+      // 按 `drawOrder` 的版本写（`syncPuppetIndices`，建时版本 −1，第一次编码就写一次）；别的 puppet 照旧共用 mdl 视图
+      const slot = step.clipSlot;
+      const ordered = slot !== undefined || puppet.order?.dynamic === true;
+      const capacity = puppetIndexCapacity(puppet.mesh.indexCount);
+      let indexBuffer: GPUBuffer;
+      if (ordered) {
+        indexBuffer = this.own(
+          device.createBuffer({
+            label: `${label} indices`,
+            size: capacity,
+            usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+          }),
+        );
+      } else indexBuffer = this.meshBuffer(puppet.mesh.indices, GPUBufferUsage.INDEX, `${name} indices`);
       meshDraw = {
-        indexBuffer: segment
-          ? this.meshBuffer(
-              new Uint8Array(segment.buffer, segment.byteOffset, segment.byteLength),
-              GPUBufferUsage.INDEX,
-              `${name} segment ${step.segment}`,
-            )
-          : this.meshBuffer(puppet.mesh.indices, GPUBufferUsage.INDEX, `${name} indices`),
+        indexBuffer,
         indexFormat: "uint16",
-        count: segment ? segment.length : puppet.mesh.indexCount,
+        count: ordered ? 0 : puppet.mesh.indexCount,
         placeholder: this.meshLayoutOf(layer, step).placeholders ? this.meshPlaceholderBuffer() : null,
         privateVertices,
+        ...(ordered ? { ordered: { slot: slot ?? null, version: -1, capacity, source: null } } : {}),
       };
     } else if (step.kind === "text") {
       // 文本（P6b 1d）：排版出的逐字四边形或背景四边形，按程序布局打包；索引照 WPE 的顺序，三角形列表
@@ -5647,6 +5696,7 @@ export class GpuScene {
       this.drawsByPass.delete(draw.passKey);
       // 网格的顶点 / 索引缓冲按视图共用（`meshBuffer`），随场景销毁，这里不释放；puppet 乘过 UV 的私有顶点缓冲例外（P12a）
       if (!draw.mesh || draw.mesh.privateVertices) this.release(draw.vertexBuffer);
+      if (draw.mesh?.ordered) this.release(draw.mesh.indexBuffer);
       if (draw.uniformBuffer) this.release(draw.uniformBuffer);
       if (draw.text) this.release(draw.text.indexBuffer);
       const copy = this.reflectionCopies.get(draw);
@@ -6413,6 +6463,63 @@ export class GpuScene {
     return this.attachedLayers;
   }
 
+  /** 一个 puppet 图层当前的裁切命令表（P12f）：运行时重排过的取 `ScenePuppets.drawOrder`，否则（含手写的假来源）是编译期那份。 */
+  private currentClipping(layer: SceneLayer): Pick<PuppetClipping, "commands" | "segments"> | null {
+    return this.puppets?.drawOrder?.(layer.object)?.clipping ?? layer.puppet?.clipping ?? null;
+  }
+
+  /**
+   * 把绘制顺序写进私有索引缓冲（P12f 点 5，`encode` 开头调）：`ordered` 的 draw 已上传的版本与 `ScenePuppets.drawOrder(object).version`（没有来源 / 没重排过为 0，
+   * 编译期数据）不同才写，每个模板一次 `writeBuffer`；没有裁切的写整张 `indices`，裁切模板按当前命令表取自己的段（`clipTemplateSegments`），没用到的槽位 `count = 0`。
+   * 版本相同不写，所以顺序没变的帧一次上传都没有。
+   */
+  private syncPuppetIndices(): void {
+    // 每个对象每次最多算一回（同一图层的模板共用一份当前顺序与段）
+    const plans = new Map<
+      number,
+      { version: number; whole: Uint16Array | null; segments: ReturnType<typeof clipTemplateSegments> | null }
+    >();
+    for (const draw of this.draws) {
+      const mesh = draw.mesh;
+      const ordered = mesh?.ordered;
+      const puppet = draw.layer.puppet;
+      if (!mesh || !ordered || !puppet) continue;
+      const order = this.puppets?.drawOrder?.(draw.object) ?? null;
+      const version = order?.version ?? 0;
+      if (ordered.version === version && ordered.source === order) continue;
+      let plan = plans.get(draw.object);
+      if (!plan) {
+        const clipping = order?.clipping ?? puppet.clipping;
+        plan = {
+          version,
+          whole: null,
+          segments: clipping
+            ? clipTemplateSegments(
+                clipping,
+                (puppet.clipping?.records.length ?? 0) + 1,
+                puppet.clipping?.records.length ?? 0,
+              )
+            : null,
+        };
+        plans.set(draw.object, plan);
+      }
+      const slot = ordered.slot;
+      let indices: Uint16Array;
+      if (!slot) indices = order?.indices ?? (plan.whole ??= fileIndices(puppet.mesh.indices));
+      else if (!plan.segments) continue;
+      else
+        indices =
+          slot.kind === "normal"
+            ? (plan.segments.normals[slot.slot] ?? new Uint16Array(0))
+            : ((slot.kind === "mask" ? plan.segments.masks : plan.segments.targets)[slot.record] ?? new Uint16Array(0));
+      const { bytes, count } = indexUpload(indices, ordered.capacity);
+      this.device.queue.writeBuffer(mesh.indexBuffer, 0, bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      mesh.count = count;
+      ordered.version = version;
+      ordered.source = order;
+    }
+  }
+
   /**
    * puppet 绘制的每帧 uniform（P12a 步骤 4、P12b1 步骤 4，`update` 与建 draw 共用）：蒙皮矩阵 `g_Bones`、骨骼透明度 `g_BonesAlpha`、变形的
    * `g_MorphOffsets`（u32）/ `g_MorphWeights`。直接上屏、合成上屏与裁切的遮罩 / 目标段都用 puppet 自己的值（p12b 步骤 0b 实测：合成路径
@@ -6819,6 +6926,8 @@ export class GpuScene {
     // 两张时每帧都换，清屏开着也换：运行中关掉时手上正好是 N−2（L11）
     if (this.alternate) [this.current, this.alternate] = [this.alternate, this.current];
     if (!this.current) return;
+    // puppet 的绘制顺序（P12f）：推进已经做完，版本变了的模板索引缓冲在编码之前写好（队列写入排在本帧提交之前）
+    this.syncPuppetIndices();
     const { view: sceneView, texture: sceneTexture } = this.current;
     const { clearcolor, clearenabled } = state.general;
     const depthView = this.depthTarget?.view ?? null;
@@ -7009,6 +7118,31 @@ export class GpuScene {
               snapshot(sceneTarget);
             }
           }
+        } else if (op.kind === "puppet-clip") {
+          // 有裁切的 puppet（P12f）：按当前命令表现排（`clipDrawSequence`）。遮罩段画进遮罩 RT（先清、再 load），目标段与普通段回场景
+          const clipping = this.currentClipping(op.layer);
+          if (!clipping) continue;
+          for (const { part, index } of clipDrawSequence(clipping.commands, op.normals.length, op.masks.length)) {
+            if (part === "clear") {
+              end();
+              const target = this.resolveTarget({ kind: "clip-mask" }, op.resources);
+              if (target) this.clearTarget(encoder, target, [0, 0, 0, 0], "clear clip mask");
+              continue;
+            }
+            const item = (part === "normal" ? op.normals : part === "mask" ? op.masks : op.targets)[index];
+            if (!item?.mesh?.count) continue;
+            if (part === "mask") {
+              end();
+              const target = this.resolveTarget(item.step.target, item.resources);
+              if (!target) continue;
+              const pass = encoder.beginRenderPass({
+                label: item.label,
+                colorAttachments: [{ view: target.view, loadOp: "load", storeOp: "store" }],
+              });
+              draw(pass, item);
+              pass.end();
+            } else draw(begin(sceneTarget.view), item);
+          }
         } else if (op.kind === "model" && op.layer.sprite) {
           // sprite（P13c）：不做视锥剔除，光斑 → 计数 pass → 遮挡方块（`encodeSprite`）
           this.encodeSprite(
@@ -7097,6 +7231,15 @@ export class GpuScene {
           if (op.kind === "draw") reflect(op.draw);
           else if (op.kind === "particle-tree") {
             for (const item of arranged(op.tree)) if (item !== "snapshot") reflect(item);
+          } else if (op.kind === "puppet-clip") {
+            // P12f：按当前命令表展开后逐 draw 反射（`reflects` 自己过滤，语义同展开成固定步骤时）
+            const clipping = this.currentClipping(op.layer);
+            if (!clipping) continue;
+            for (const { part, index } of clipDrawSequence(clipping.commands, op.normals.length, op.masks.length)) {
+              if (part === "clear") continue;
+              const item = (part === "normal" ? op.normals : part === "mask" ? op.masks : op.targets)[index];
+              if (item?.mesh?.count) reflect(item);
+            }
           } else if (op.kind === "model" && !this.modelCulled(op.layer, state, worlds, mirrored.viewProjection))
             for (const item of op.draws) reflect(item);
         }

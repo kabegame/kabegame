@@ -420,6 +420,10 @@ const OBJECT_FLAGS = [
   - 生成工程 `p12-phys` / `p12-phys2` 与语料 `2345214324`、`3426865175` 逐帧比骨骼矩阵，在包络以内；
   - 4 张物理场景和 WPE 同一时刻比整帧。
 
+## P12f — 绘制顺序轨道（追加）
+
+**进度**（2026-11-19）：**P12f 完成**，子计划 [phase-12f-draworder.md](phase-12f-draworder.md)（待定 1–4 用户同意按推荐，3 先实测、改为接回）。两张场景变干净，语料没有新键。语料清扫会话转来：`3577990983`（工坊）与 `3841310696`（myprojects）只差 `puppet:draw-order`。读码 [rea-p12f-draworder](rea-p12f-draworder.md)：键 = `trunc(基数 + 组偏移 + cur)`，`cur` 每帧复位成基数后逐可见层写（加法减基数、带钳制），有写入且当前顺序不是非降序时稳定排序、重写索引、按新位置重建裁切命令表，节点顺序跨帧保留；实测 `ignore/p12/f/meas/REPORT.md` 16 个生成 puppet 全部吻合。
+
 ## 和其它节的交界
 
 - **共享文件**：P5、P6、P8、P10、P11 的会话都在改 `compile/bundle.ts`、`compile/features.ts`、`render/graph.ts`、`render/scene.ts`、`render/renderer.ts`、`host.ts`、`script/api.ts`。

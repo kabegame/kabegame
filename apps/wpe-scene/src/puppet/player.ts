@@ -24,6 +24,9 @@
  *   「下标」只在插入位置与 `destroyLayers` 的下标选择器里出现。派发改成 WPE 的形状：本帧确有层播完（`anyEnded`）才进回调循环，回调后复位下标（漏扫），
  *   单次层（`SINGLE_SHOT`）先置 `DOOMED` 再调回调、循环之后当场删除；`destroyLayers` 把层摘到 `detached`，`settle` 在本帧全部脚本之后释放。
  *   `carryOver` 按 id 接回层表顺序、运行时层、删过的编译期层。依据 rea-p12e-createlayer 与 phase-12e-createlayer 点 2。
+ * - P12f：绘制顺序（只图像层 puppet 且网格 0 有 bit3，`drawOrder` 字段，纯函数在 `drawOrder.ts`）。推进时在逐层循环之前把每骨骼当前值 `cur` 复位成骨骼基数，每个可见层
+ *   （不看权重、不可见的跳过）用这层的绘制顺序轨道 lo 帧改写它（覆盖 / 混合 / 加法，叠法判断同 TRS 混合），蒙皮之后只有本帧有层写过才重算键、当前顺序非降序时什么都不做、
+ *   否则稳定排序并重拼索引与裁切命令表；顺序跨帧保留（没有写入的帧、层隐藏 / 删掉之后都保持），`refresh` 不写不排。依据 rea-p12f-draworder 第 2、3、6 节。
  * - P12b2-2：图像层 puppet 多一份 `g_BlendMap`（16 个 float，初值 0，**帧首不复位**），每个可见层按纹理通道轨道写（`blendChannels`）；只在推进时写
  *   （`refresh` 不是 WPE 的更新，加法层会被重复累加）；模型不处理通道轨道。
  */
@@ -32,6 +35,15 @@ import type { AnimationEventDef, AnimationMode } from "../animation/types";
 import type { SceneLayer } from "../compile/bundle";
 import type { ModelSkeleton, PuppetAnimation, PuppetLayerDef, ScenePuppet } from "../compile/puppet";
 import type { BonePhysics } from "../compile/puppet";
+import {
+  blendDrawOrder,
+  clippingTable,
+  fileIndices,
+  orderedIndices,
+  reorder,
+  type DrawNode,
+  type DrawRecord,
+} from "./drawOrder";
 import { drawMatrixOf, effectiveVisible, type LayerTransform } from "../render/layout";
 import {
   BLEND_MAP_FLOATS,
@@ -60,6 +72,7 @@ import { inverse4, mulAffine, mulFull } from "./math";
 import { applyBoneImpulse, createBoneState, resetBoneState, solveBone, type BoneState } from "./physics";
 
 const f = Math.fround;
+const EMPTY_MASK = new Uint8Array(0);
 
 /** 时钟运行时位（P12c，WPE 同位）：`setFrame` 那一帧不判播完；本帧播完（loop 回绕、mirror 换向、single 结束）。 */
 export const SETFRAME = 0x02000000;
@@ -213,6 +226,54 @@ export interface PuppetRig {
   boneAlpha?: boolean;
   morph?: ScenePuppet["morph"];
   morphs?: ModelSkeleton["morphs"];
+  /** 绘制顺序（P12f，图像层 puppet）：`dynamic` 时运行时才建；`mesh.indices` 是文件索引字节。手写的假 rig 可以不给。 */
+  order?: ScenePuppet["order"];
+  mesh?: Pick<ScenePuppet["mesh"], "indices">;
+  clipping?: ScenePuppet["clipping"];
+}
+
+/** 一个 puppet 的绘制顺序运行时（P12f）：`cur` 是 WPE 的 `P+0x280`；`order` 原地改写（节点下标，当前顺序）；`indices` / `clipping` 是按当前顺序拼好的输出。 */
+interface DrawOrderRuntime {
+  readonly nodes: readonly DrawNode[];
+  readonly records: readonly DrawRecord[];
+  readonly base: Int32Array;
+  /** 文件里的原始 u16 索引（重排时从它拼）。 */
+  readonly file: Uint16Array;
+  readonly cur: Float32Array;
+  readonly order: Int32Array;
+  readonly keys: Int32Array;
+  version: number;
+  indices: Uint16Array;
+  clipping: Pick<NonNullable<ScenePuppet["clipping"]>, "commands" | "segments"> | null;
+}
+
+/** 按当前顺序重拼输出（索引整张网格；有记录时重建命令表）。 */
+function rebuildDrawOutput(d: DrawOrderRuntime): void {
+  d.indices = orderedIndices(d.order, d.nodes, d.file);
+  d.clipping = d.records.length ? clippingTable(d.order, d.nodes, d.records, d.file) : null;
+}
+
+/** 两份节点表是否相同（`carryOver` 接回顺序的条件）：数量、每个节点的 base / bone / start / count，与记录。 */
+function sameDrawNodes(a: DrawOrderRuntime, b: DrawOrderRuntime): boolean {
+  if (a.nodes.length !== b.nodes.length || a.records.length !== b.records.length) return false;
+  for (let i = 0; i < a.nodes.length; i++) {
+    const x = a.nodes[i];
+    const y = b.nodes[i];
+    if (x.base !== y.base || x.bone !== y.bone || x.start !== y.start || x.count !== y.count) return false;
+  }
+  for (let i = 0; i < a.records.length; i++) {
+    const x = a.records[i];
+    const y = b.records[i];
+    if (
+      x.name !== y.name ||
+      x.flags !== y.flags ||
+      x.parent !== y.parent ||
+      x.list1.join() !== y.list1.join() ||
+      x.list2.join() !== y.list2.join()
+    )
+      return false;
+  }
+  return true;
 }
 
 /**
@@ -293,6 +354,8 @@ interface PuppetRuntime {
   readonly blendMap: Float32Array | null;
   /** 骨骼物理（P12d-1）；没有物理骨骼（含模型对象）为 null。 */
   readonly physics: PhysicsRuntime | null;
+  /** 绘制顺序（P12f）：只图像层 puppet 且 `order.dynamic` 时有。 */
+  readonly drawOrder: DrawOrderRuntime | null;
 }
 
 /** 一个 puppet 的物理运行时。 */
@@ -467,6 +530,24 @@ export class ScenePuppets {
       if (!skeleton) continue;
       const bones = skeleton.parents.length;
       const layers = puppet.layers.map((def) => buildLayer(def.entry, def, puppet.animations[def.animation]));
+      const orderInfo = kind === "image" && puppet.order?.dynamic ? puppet.order : null;
+      let drawOrder: DrawOrderRuntime | null = null;
+      if (orderInfo) {
+        const file = fileIndices(puppet.mesh?.indices ?? new Uint8Array(0));
+        drawOrder = {
+          nodes: orderInfo.nodes,
+          records: orderInfo.records,
+          base: orderInfo.base,
+          file,
+          cur: new Float32Array(orderInfo.base.length),
+          // 初值 = 组表顺序（加载时不排序）；索引 = 文件原样（不是按 order 拼接），命令表 = 编译期那份
+          order: Int32Array.from(orderInfo.nodes, (_, index) => index),
+          keys: new Int32Array(orderInfo.nodes.length),
+          version: 0,
+          indices: file,
+          clipping: puppet.clipping ?? null,
+        };
+      }
       const runtime: PuppetRuntime = {
         object,
         kind,
@@ -511,6 +592,7 @@ export class ScenePuppets {
         blendMap: kind === "image" ? new Float32Array(BLEND_MAP_FLOATS) : null,
         // 图像层 puppet 都有两份世界骨骼缓冲（脚本读写的 `P+0x340`，P12d-2）；有没有物理骨骼看 `active`
         physics: kind === "image" ? physicsRuntime(skeleton.physics ?? [], bones) : null,
+        drawOrder,
       };
       this.runtimes.push(runtime);
       this.byObject.set(object, runtime);
@@ -839,6 +921,18 @@ export class ScenePuppets {
   }
 
   /**
+   * 当前绘制顺序（P12f）：`version` 每次真的重排时 +1（没重排过为 0）、`indices` 是按当前顺序拼的整张网格 u16 索引（没重排过是文件顺序）、`clipping` 是按当前顺序建的
+   * 命令表（没有 v23 记录为 null，没重排过是编译期那份）。不是图像层 puppet、网格 0 没有 bit3（不会重排）的对象为 null。返回的对象跨帧是同一个，字段原地换新。
+   */
+  drawOrder(object: number): {
+    readonly version: number;
+    readonly indices: Uint16Array;
+    readonly clipping: Pick<NonNullable<ScenePuppet["clipping"]>, "commands" | "segments"> | null;
+  } | null {
+    return this.byObject.get(object)?.drawOrder ?? null;
+  }
+
+  /**
    * `g_BlendMap`（P12b2-2，16 个 float，纹理通道网格的混合权重，rea-texchan-model 3）：每个图像层 puppet 一份，初值 0、帧首不复位，推进时按可见层的通道轨道
    * 叠写（覆盖 / 混合 / 加法，不钳制）；模型与不是 puppet 的对象为 null。每帧原地改写；上传取前 `4 × BLENDROWCOUNT` 个。
    */
@@ -883,6 +977,15 @@ export class ScenePuppets {
       if (!before) continue;
       // `g_BlendMap` 是跨帧的持久状态（WPE 改属性不重载，`P+0x350` 不变），重编译时保留这 16 个 float
       if (runtime.blendMap && before.blendMap) runtime.blendMap.set(before.blendMap);
+      // 绘制顺序（P12f）：WPE 运行中改属性不重置节点顺序（`p12f-rebuild` 实测），所以节点表相同（mdl 没换）时接回当前顺序、按它重拼输出，version 接着旧的 +1；
+      // 不同（换了 mdl，WPE 运行中不会发生）从组表顺序重来。`cur` 不接（每帧复位）。「清空脚本存储」时调用方不 carryOver，顺序随之回到组表顺序
+      const newOrder = runtime.drawOrder;
+      const oldOrder = before.drawOrder;
+      if (newOrder && oldOrder && sameDrawNodes(newOrder, oldOrder)) {
+        newOrder.order.set(oldOrder.order);
+        newOrder.version = oldOrder.version + 1;
+        rebuildDrawOutput(newOrder);
+      }
       // 物理状态与 `prev`（P12d-1，同样是跨帧的持久状态）：骨骼数相同时按下标接回
       const physics = runtime.physics;
       const old = before.physics;
@@ -1020,6 +1123,10 @@ export class ScenePuppets {
       if (meshMorphs) for (const item of meshMorphs) if (item) resetMorph(item.weights, item.active);
     };
     if (model) reset();
+    // 绘制顺序（P12f）：只在真的推进时复位 / 写 / 排（`refresh` 不是 WPE 的更新）；`cur` 每帧先复位成骨骼基数（`0x1401fec12`，循环到基数数组的长度）
+    const order = d !== null ? runtime.drawOrder : null;
+    let wrote = false;
+    if (order) for (let i = 0; i < order.base.length; i++) order.cur[i] = order.base[i];
     for (const layer of runtime.layers) {
       const fields = state?.animationLayer(runtime.object, layer.id) ?? layer.def;
       if (!fields.visible) continue;
@@ -1065,6 +1172,19 @@ export class ScenePuppets {
       const track = layer.animation;
       if (alpha && track.alpha)
         blendScalarAlpha(alpha, track.alpha, track.alphaMask, bones, at.lo, at.hi, at.frac, w, additive);
+      // 绘制顺序轨道：可见层都写（不看权重、暂停与停在末帧照写），只取 lo 帧；叠法判断同 TRS（`blendInto` 的 `!additive && w === 1` 为覆盖）
+      if (order && track.drawOrder)
+        wrote =
+          blendDrawOrder(
+            order.cur,
+            order.base,
+            track.drawOrder,
+            track.drawOrderMask ?? EMPTY_MASK,
+            bones,
+            at.lo,
+            w,
+            additive ? "add" : w === 1 ? "override" : "mix",
+          ) || wrote;
       if (morph && track.morph)
         blendMorphWeights(morph.weights, morph.active, track.morph, at.lo, at.hi, at.frac, w, additive);
       // 纹理通道（P12b2-2）：只在推进时写（`refresh` 不是 WPE 的更新，加法层会重复累加）；不复位，没有可见层时保持上一帧
@@ -1113,6 +1233,11 @@ export class ScenePuppets {
       );
       physics.hasPrev = true;
     } else skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin);
+    // 重排在蒙皮之后（`0x140205507`）：本帧有层写过才重算键；当前顺序已非降序什么都不做，否则稳定排序并重拼索引与命令表
+    if (order && wrote && reorder(order.order, order.nodes, order.cur, order.keys)) {
+      order.version += 1;
+      rebuildDrawOutput(order);
+    }
     runtime.restSkin = !posed;
   }
 

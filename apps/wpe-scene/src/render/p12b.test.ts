@@ -134,10 +134,17 @@ function layerOf(object: number, partial: Partial<SceneLayer> = {}): SceneLayer 
 }
 
 const draws = (plan: LayerPlan): DrawStep[] => plan.steps.filter((step): step is DrawStep => step.kind === "draw");
+/** 裁切模板的槽位标记（P12f）：普通段 `#n<槽位>`，遮罩段 `#m<记录>`，目标段 `#t<记录>`；没有裁切为空。 */
+const slotLabel = (step: DrawStep) =>
+  step.clipSlot === undefined
+    ? ""
+    : step.clipSlot.kind === "normal"
+      ? `#n${step.clipSlot.slot}`
+      : `#${step.clipSlot.kind === "mask" ? "m" : "t"}${step.clipSlot.record}`;
 const kinds = (plan: LayerPlan) =>
   plan.steps.map((step: LayerStep) =>
     step.kind === "draw"
-      ? `${step.role}:${step.pass.key.split("/").slice(2).join("/")}→${step.target.kind}${step.segment === undefined ? "" : `#${step.segment}`}`
+      ? `${step.role}:${step.pass.key.split("/").slice(2).join("/")}→${step.target.kind}${slotLabel(step)}`
       : step.kind === "clear"
         ? `clear:${step.target.kind}`
         : step.kind,
@@ -221,7 +228,7 @@ describe("变形纹理与遮罩 RT 的纯函数（P12b1 步骤 4、5）", () => 
       inset: [0, 0],
       blending: "translucent",
       raster: { test: false, write: false, cull: true },
-      segment: 1,
+      clipSlot: { kind: "mask", record: 0 },
     };
     const spec = stepPipeline(maskStep, "rgba8unorm", () => "rgba8unorm", false, null, "20:0@0:float32x3", true);
     expect(spec).toMatchObject({ format: "r8unorm", topology: "triangle-list", cull: "back", blending: "translucent" });
@@ -229,7 +236,7 @@ describe("变形纹理与遮罩 RT 的纯函数（P12b1 步骤 4、5）", () => 
   });
 });
 
-describe("planLayer：裁切命令展开（P12b1 步骤 5 点 3，3491865410 的 6 段）", () => {
+describe("planLayer：裁切模板（P12b1 步骤 5 点 3，3491865410 的 6 段；P12f 起计划只给模板，命令表在编码时按当前顺序现排）", () => {
   // 基础 pass 测深度：目标段的深度借它（translucent 只测不写）
   const direct = (partial: Partial<ScenePuppetLayer> = {}) =>
     layerOf(0, {
@@ -237,20 +244,25 @@ describe("planLayer：裁切命令展开（P12b1 步骤 5 点 3，3491865410 的
       puppet: puppetOf({ clipping: clipping(), clip: clipPasses(), ...partial }),
     });
 
-  it("直接上屏：normal / clear / mask / target / clear / mask / target / normal，每步用自己的段；遮罩画进 clip-mask、目标回场景", () => {
+  it("直接上屏：普通槽位 记录数 + 1 个，每条记录一组 clear / mask / target；遮罩画进 clip-mask、目标回场景", () => {
     const plan = planLayer(direct(), []);
     expect(plan.reasons).toEqual([]);
     expect(kinds(plan)).toEqual([
-      "direct:passes/0→scene#0",
+      "direct:passes/0→scene#n0",
+      "direct:passes/0→scene#n1",
+      "direct:passes/0→scene#n2",
       "clear:clip-mask",
-      "direct:puppetclip/0→clip-mask#1",
-      "direct:passes/0→scene#2",
+      "direct:puppetclip/0→clip-mask#m0",
+      "direct:passes/0→scene#t0",
       "clear:clip-mask",
-      "direct:puppetclip/1→clip-mask#3",
-      "direct:passes/0→scene#4",
-      "direct:passes/0→scene#5",
+      "direct:puppetclip/1→clip-mask#m1",
+      "direct:passes/0→scene#t1",
     ]);
-    const [normal0, mask0, target0] = draws(plan);
+    // 每个清除步骤带自己的记录号（渲染器编码 puppet-clip op 时自己清）
+    expect(
+      plan.steps.filter((step) => step.kind === "clear").map((step) => (step as { clipRecord?: number }).clipRecord),
+    ).toEqual([0, 1]);
+    const [normal0, , , mask0, target0] = draws(plan);
     // 普通段用 puppet 的直接上屏 pass；遮罩 / 目标固定 translucent，遮罩没有深度，目标深度借基础 pass（translucent 不写）
     expect(normal0.pass.program).toBe(1);
     expect(mask0.pass.program).toBe(2);
@@ -267,10 +279,30 @@ describe("planLayer：裁切命令展开（P12b1 步骤 5 点 3，3491865410 的
     for (const step of draws(plan)) expect(step.geometry).toBe("puppet");
   });
 
+  it("槽位数随记录数：一条记录 → 2 个普通槽位 + 一组；命令表的形状（段号、命令数）不进计划，计划只与记录数有关（P12f）", () => {
+    const one = { ...clipping(), records: [{ mask: "materials/masks/a.tex" }] };
+    const plan = planLayer(direct({ clipping: one, clip: { ...clipPasses(), masks: [clipPasses().masks[0]] } }), []);
+    expect(kinds(plan)).toEqual([
+      "direct:passes/0→scene#n0",
+      "direct:passes/0→scene#n1",
+      "clear:clip-mask",
+      "direct:puppetclip/0→clip-mask#m0",
+      "direct:passes/0→scene#t0",
+    ]);
+    // 同样的记录数、不同的命令表（重排后）得到同一份计划
+    const other = { ...one, commands: [{ kind: "clip" as const, record: 0, mask: 0, target: 1 }] };
+    expect(
+      kinds(planLayer(direct({ clipping: other, clip: { ...clipPasses(), masks: [clipPasses().masks[0]] } }), [])),
+    ).toEqual(kinds(plan));
+  });
+
   it("基础材质 additive（colorBlendMode 31）只改普通段的混合：目标段仍是 translucent，不用基础材质的混合", () => {
     const plan = planLayer(direct({}), []);
     const additive = planLayer({ ...direct(), colorBlendMode: 31 }, []);
     expect(draws(additive)[0].blending).toBe("additive");
+    expect(draws(additive).every((step) => (step.pass.program === 3 ? step.blending === "translucent" : true))).toBe(
+      true,
+    );
     expect(draws(additive).find((step) => step.pass.program === 3)!.blending).toBe("translucent");
     expect(draws(plan)[0].blending).toBe("translucent");
   });
@@ -328,14 +360,15 @@ describe("planLayer：裁切命令展开（P12b1 步骤 5 点 3，3491865410 的
     expect(kinds(plan)).toEqual([
       "base:passes/0→composite",
       "effect:effects/0/passes/0→composite",
-      "passthrough:puppetupload→scene#0",
+      "passthrough:puppetupload→scene#n0",
+      "passthrough:puppetupload→scene#n1",
+      "passthrough:puppetupload→scene#n2",
       "clear:clip-mask",
-      "passthrough:puppetclip/0→clip-mask#1",
-      "passthrough:passes/0→scene#2",
+      "passthrough:puppetclip/0→clip-mask#m0",
+      "passthrough:passes/0→scene#t0",
       "clear:clip-mask",
-      "passthrough:puppetclip/1→clip-mask#3",
-      "passthrough:passes/0→scene#4",
-      "passthrough:puppetupload→scene#5",
+      "passthrough:puppetclip/1→clip-mask#m1",
+      "passthrough:passes/0→scene#t1",
     ]);
     const tail = draws(plan).slice(2);
     // 普通段、遮罩段、目标段的槽 0 都是最后一次写入的合成 RT
@@ -565,7 +598,7 @@ function bundleOf(layers: SceneLayer[]): SceneBundle {
 interface DrawView {
   object: number;
   label: string;
-  step: { kind: string; segment?: number; role?: string };
+  step: { kind: string; clipSlot?: { kind: string; slot?: number; record?: number }; role?: string };
   uniformBuffer: FakeBuffer | null;
   pipeline: { label: string };
   mesh: { indexBuffer: FakeBuffer; count: number } | null;
@@ -814,7 +847,13 @@ describe("GpuScene：裁切遮罩的绘制（P12b1 步骤 5 点 3）", () => {
   const morph = { scale: 1, vertices: 1, targets: 1, side: MORPH_SIDE, texels: morphTexels() };
   const layer = () =>
     layerOf(0, {
-      puppet: puppetOf({ morph, clipping: clipping(), clip: clipPasses() }),
+      // 模板索引缓冲的容量取网格总索引数（P12f）：夹具里最长的段是 18 个，网格也得有 18 个索引
+      puppet: puppetOf({
+        morph,
+        clipping: clipping(),
+        clip: clipPasses(),
+        mesh: { ...puppetOf().mesh, indexCount: 18 },
+      }),
     });
 
   it("直接上屏：遮罩 RT 是 r8unorm、场景目标一半大小；一帧的 pass 与绘制序列 = normal / clear / mask / target / clear / mask / target / normal", async () => {
@@ -825,7 +864,9 @@ describe("GpuScene：裁切遮罩的绘制（P12b1 步骤 5 点 3）", () => {
     const mask = gpu.textures.find((item) => item.label === "clip mask")!;
     expect(mask).toMatchObject({ format: "r8unorm", size: { width: 960, height: 540 } });
     // 画遮罩段的 draw 的管线是 r8unorm
-    const maskDraws = drawsOf(scene, 0).filter((item) => item.label.includes("puppetclip") || item.step.segment === 1);
+    const maskDraws = drawsOf(scene, 0).filter(
+      (item) => item.label.includes("puppetclip") || item.step.clipSlot?.kind === "mask",
+    );
     expect(maskDraws.length).toBeGreaterThan(0);
     const { source, puppets } = fakePuppets();
     void source;
@@ -849,7 +890,7 @@ describe("GpuScene：裁切遮罩的绘制（P12b1 步骤 5 点 3）", () => {
       "  drawIndexed 15", // 目标段 4
       "  drawIndexed 18", // 普通段 5，接着同一个场景 pass
     ]);
-    // 每段自己的索引缓冲，起点 0（label 带段号）、u16
+    // 每个有段的模板各用自己的私有索引缓冲（P12f，label 带槽位），起点 0、u16；用不到的普通槽位（count 0）整次跳过、不绑缓冲
     const indexLines = gpu.trace.filter((line) => line.startsWith("  indices"));
     expect(indexLines).toHaveLength(6);
     expect(indexLines.every((line) => line.includes("uint16"))).toBe(true);
@@ -867,16 +908,24 @@ describe("GpuScene：裁切遮罩的绘制（P12b1 步骤 5 点 3）", () => {
     scene.setPuppets(puppets);
     scene.update(FRAME, state);
     const all = drawsOf(scene, 0);
-    // 6 个绘制：普通 ×2、遮罩 ×2、目标 ×2
-    expect(all).toHaveLength(6);
+    // 7 个模板（P12f）：普通槽位 ×3（记录数 + 1）、遮罩 ×2、目标 ×2
+    expect(all).toHaveLength(7);
     for (const draw of all) {
       expect(draw.puppet).toBe(0);
       expect(floats(draw.uniformBuffer!, 64, 1)).toEqual([0.5]);
       expect(floats(draw.uniformBuffer!, 192, 2, 16)).toEqual([0.25, 0.75]);
       expect(uints(draw.uniformBuffer!, 224, 2, 16)).toEqual([2, 4]);
     }
-    // 每个绘制的索引个数是自己那一段的
-    expect(all.map((draw) => draw.mesh!.count).sort((a, b) => a - b)).toEqual([3, 6, 9, 12, 15, 18]);
+    // 第一次编码之前一律 count 0（缓冲里还没有内容），编码开头 `syncPuppetIndices` 才按当前命令表写进各自的段
+    expect(all.map((draw) => draw.mesh!.count)).toEqual(all.map(() => 0));
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    const countOf = (kind: string, n: number) =>
+      all.find(
+        (draw) => draw.step.clipSlot?.kind === kind && (draw.step.clipSlot.slot ?? draw.step.clipSlot.record) === n,
+      )!.mesh!.count;
+    expect([countOf("normal", 0), countOf("normal", 1), countOf("normal", 2)]).toEqual([3, 18, 0]);
+    expect([countOf("mask", 0), countOf("mask", 1)]).toEqual([6, 12]);
+    expect([countOf("target", 0), countOf("target", 1)]).toEqual([9, 15]);
   });
 
   it("没有裁切的 puppet 不建遮罩 RT（显存不白占）；identity 世界矩阵的辅助：没有挂点时 worldMatrixOf 不被钩子改变", async () => {
@@ -885,6 +934,149 @@ describe("GpuScene：裁切遮罩的绘制（P12b1 步骤 5 点 3）", () => {
     await GpuScene.build(gpu.device, bundle, SceneState.fromBundle(bundle), new Set(), []);
     expect(gpu.textures.some((item) => item.label === "clip mask")).toBe(false);
     expect(identity()).toHaveLength(16);
+  });
+});
+
+describe("GpuScene：绘制顺序的私有索引缓冲（P12f 点 5）", () => {
+  /** 段 i 的内容是 i * 100 + 下标（逐段可辨）。 */
+  const segs = (sizes: number[]) => sizes.map((size, i) => Uint16Array.from({ length: size }, (_, j) => i * 100 + j));
+  const table = (
+    commands: PuppetClipping["commands"],
+    segments: Uint16Array[],
+  ): Pick<PuppetClipping, "commands" | "segments"> => ({ commands, segments });
+  const clipped = () =>
+    layerOf(0, {
+      puppet: puppetOf({
+        clipping: clipping(),
+        clip: clipPasses(),
+        mesh: { ...puppetOf().mesh, indexCount: 18 },
+      }),
+    });
+  const build = async (layers: SceneLayer[]) => {
+    const bundle = bundleOf(layers);
+    const gpu = new FakeGpu();
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), []);
+    return { gpu, scene, state };
+  };
+  /** 一帧编码之后的 `drawIndexed` 个数序列，以及这一帧写进索引缓冲的次数（每次 `writeBuffer` 的目标 label 含 "indices"）。 */
+  const frame = (gpu: FakeGpu, scene: GpuScene, state: SceneState) => {
+    const writes = vi.spyOn(gpu.device.queue, "writeBuffer");
+    gpu.trace.length = 0;
+    scene.update(FRAME, state);
+    writes.mockClear();
+    scene.encode(gpu.device.createCommandEncoder(), state);
+    const indexWrites = writes.mock.calls.filter((call) =>
+      (call[0] as unknown as FakeBuffer).label.includes("indices"),
+    ).length;
+    writes.mockRestore();
+    return {
+      indexWrites,
+      draws: gpu.trace.filter((line) => line.startsWith("  drawIndexed")).map((line) => Number(line.split(" ")[3])),
+    };
+  };
+
+  it("裁切模板：第一次编码写满 7 个模板（版本 −1），顺序没变的帧一次都不写；版本变了才按新命令表重写，没用到的槽位 count 0", async () => {
+    const { gpu, scene, state } = await build([clipped()]);
+    const current: { version: number; indices: Uint16Array; clipping: ReturnType<typeof table> | null } = {
+      version: 0,
+      indices: new Uint16Array(0),
+      clipping: null,
+    };
+    // drawOrder 缺省（null）：按编译期的命令表画，版本记 0
+    const none = { skin: () => new Float32Array(24) } as PuppetSource;
+    scene.setPuppets(none);
+    expect(frame(gpu, scene, state)).toEqual({ indexWrites: 7, draws: [3, 6, 9, 12, 15, 18] });
+    expect(frame(gpu, scene, state)).toEqual({ indexWrites: 0, draws: [3, 6, 9, 12, 15, 18] });
+    // 版本变了：普通命令只剩 1 个，两条记录换了先后（记录 1 在前），段号 / 长度全变
+    current.version = 1;
+    current.clipping = table(
+      [
+        { kind: "normal", segment: 0 },
+        { kind: "clip", record: 1, mask: 1, target: 2 },
+        { kind: "clip", record: 0, mask: 3, target: 4 },
+      ],
+      segs([4, 5, 6, 7, 8]),
+    );
+    scene.setPuppets({ ...none, drawOrder: () => current });
+    const second = frame(gpu, scene, state);
+    expect(second.indexWrites).toBe(7);
+    // normal(4) / clear / 记录 1 的遮罩(5) + 目标(6) / clear / 记录 0 的遮罩(7) + 目标(8)；第二个与第三个普通槽位 count 0 不画
+    expect(second.draws).toEqual([4, 5, 6, 7, 8]);
+    expect(gpu.trace.filter((line) => line.startsWith("pass clip mask clear"))).toHaveLength(2);
+    // 内容真的是新的段：第 0 个普通槽位的缓冲头 4 个 u16 是 0、1、2、3
+    const normal0 = [...internals(scene).draws].find(
+      (item) => item.step.clipSlot?.kind === "normal" && item.step.clipSlot.slot === 0,
+    )!;
+    expect(Array.from(new Uint16Array(normal0.mesh!.indexBuffer.bytes.buffer, 0, 4))).toEqual([0, 1, 2, 3]);
+    // 版本不变不再写
+    expect(frame(gpu, scene, state)).toEqual({ indexWrites: 0, draws: second.draws });
+    // 重排之后的命令表又回到 2 个普通命令
+    current.version = 2;
+    current.clipping = table(
+      [
+        { kind: "normal", segment: 0 },
+        { kind: "clip", record: 0, mask: 1, target: 2 },
+        { kind: "normal", segment: 3 },
+      ],
+      segs([2, 3, 4, 5]),
+    );
+    const third = frame(gpu, scene, state);
+    expect(third.draws).toEqual([2, 3, 4, 5]);
+    expect(third.indexWrites).toBe(7);
+  });
+
+  it("没有裁切的 dynamic puppet：一块私有索引缓冲写整张 indices，版本变了才重写；没有来源时是文件顺序", async () => {
+    const mdl = Uint8Array.from([0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 2, 0]);
+    const layer = layerOf(0, {
+      puppet: puppetOf({
+        mesh: { ...puppetOf().mesh, indices: mdl },
+        order: { dynamic: true, base: new Int32Array(2), nodes: [], records: [] },
+      }),
+    });
+    const { gpu, scene, state } = await build([layer]);
+    const [draw] = [...internals(scene).draws].filter((item) => item.object === 0);
+    expect(draw.mesh!.count).toBe(0);
+    scene.setPuppets({ skin: () => new Float32Array(24) });
+    expect(frame(gpu, scene, state)).toEqual({ indexWrites: 1, draws: [6] });
+    expect(Array.from(new Uint16Array(draw.mesh!.indexBuffer.bytes.buffer, 0, 6))).toEqual([0, 1, 2, 1, 3, 2]);
+    const current = { version: 5, indices: Uint16Array.from([3, 2, 1, 0, 1, 2]), clipping: null };
+    scene.setPuppets({ skin: () => new Float32Array(24), drawOrder: () => current });
+    expect(frame(gpu, scene, state)).toEqual({ indexWrites: 1, draws: [6] });
+    expect(Array.from(new Uint16Array(draw.mesh!.indexBuffer.bytes.buffer, 0, 6))).toEqual([3, 2, 1, 0, 1, 2]);
+    expect(frame(gpu, scene, state).indexWrites).toBe(0);
+    // 私有缓冲不进 mdl 视图的共用缓存：容量是 网格索引数 × 2 字节（补到 4 的倍数）
+    expect(draw.mesh!.indexBuffer.bytes.byteLength).toBe(12);
+  });
+
+  it("换了来源（新运行时）而版本号恰好相同：来源对象不同就必须重写", async () => {
+    const mdl = Uint8Array.from([0, 0, 1, 0, 2, 0, 1, 0, 3, 0, 2, 0]);
+    const layer = layerOf(0, {
+      puppet: puppetOf({
+        mesh: { ...puppetOf().mesh, indices: mdl },
+        order: { dynamic: true, base: new Int32Array(2), nodes: [], records: [] },
+      }),
+    });
+    const { gpu, scene, state } = await build([layer]);
+    const [draw] = [...internals(scene).draws].filter((item) => item.object === 0);
+    const first = { version: 1, indices: Uint16Array.from([0, 1, 2, 1, 3, 2]), clipping: null };
+    scene.setPuppets({ skin: () => new Float32Array(24), drawOrder: () => first });
+    expect(frame(gpu, scene, state).indexWrites).toBe(1);
+    expect(frame(gpu, scene, state).indexWrites).toBe(0);
+    // 另一个来源、版本同样是 1、索引不同
+    const second = { version: 1, indices: Uint16Array.from([5, 4, 3, 2, 1, 0]), clipping: null };
+    scene.setPuppets({ skin: () => new Float32Array(24), drawOrder: () => second });
+    expect(frame(gpu, scene, state).indexWrites).toBe(1);
+    expect(Array.from(new Uint16Array(draw.mesh!.indexBuffer.bytes.buffer, 0, 6))).toEqual([5, 4, 3, 2, 1, 0]);
+    expect(frame(gpu, scene, state).indexWrites).toBe(0);
+  });
+
+  it("没有 dynamic、没有裁切的 puppet 仍走共用的 mdl 视图（不建私有索引缓冲、第一帧就有 count）", async () => {
+    const { gpu, scene, state } = await build([layerOf(0, { puppet: puppetOf() })]);
+    const [draw] = [...internals(scene).draws].filter((item) => item.object === 0);
+    expect(draw.mesh!.count).toBe(6);
+    scene.setPuppets({ skin: () => new Float32Array(24) });
+    expect(frame(gpu, scene, state)).toEqual({ indexWrites: 0, draws: [6] });
   });
 });
 

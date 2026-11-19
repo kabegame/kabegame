@@ -214,6 +214,9 @@ export function rasterState(
   };
 }
 
+/** puppet 裁切模板的槽位（`DrawStep.clipSlot`）：普通段按先后编号，遮罩段与目标段按记录号。 */
+export type ClipSlot = { kind: "normal"; slot: number } | { kind: "mask" | "target"; record: number };
+
 export interface DrawStep {
   kind: "draw";
   role: DrawRole;
@@ -240,10 +243,11 @@ export interface DrawStep {
    */
   prelit?: true;
   /**
-   * puppet 的裁切分段（P12b1 步骤 5，`ScenePuppet.clipping.segments` 的下标）：只画这一段的索引（每段自己一块 u16 索引缓冲）。没有裁切的
-   * puppet 与别的几何没有这个字段，整张网格一次画完。
+   * puppet 的裁切模板（P12f，取代 P12b1 的 `segment` 下标）：有裁切的 puppet 不再按编译期命令表展开成固定步骤——重排之后命令表每帧都可能变，
+   * 所以计划只给「槽位」：普通段 `normal` 的第 `slot` 个、第 `record` 条记录的遮罩段 `mask` 与目标段 `target`。每个槽位一块私有索引缓冲，
+   * 画哪一段由 `scene.ts` 编码时按当前命令表现排（`puppet-clip` op）。没有裁切的 puppet 与别的几何没有这个字段，整张网格一次画完。
    */
-  segment?: number;
+  clipSlot?: ClipSlot;
 }
 /**
  * 粒子层的绘制（P4a 步骤 4）：粒子材质的 pass 直接画到场景目标，和图像步骤一样按 `objects` 顺序执行。几何不是图层四边形，
@@ -350,7 +354,8 @@ export type LayerStep =
    * `color: "text-background"`（P6b 1d）：文本层走合成且开了 `opaquebackground`，RT 清成 `(背景色, 图层 alpha)`（rea-p6b-layout 4），
    * 颜色由渲染器按文本表的背景常量与图层当前的 alpha 现算。
    */
-  | { kind: "clear"; target: TargetRef; color?: "text-background" }
+  /** `clipRecord`（P12f）：puppet 裁切第几条记录的遮罩 RT 清除；渲染器在编码 `puppet-clip` op 时自己清，不建 op。 */
+  | { kind: "clear"; target: TargetRef; color?: "text-background"; clipRecord?: number }
   /**
    * 组画子树（P5b 步骤 4）：按 `layer.subtree` 依次画可见的子孙，它们「画到场景」的绘制改画进 `target`（组当前的合成 RT），视图投影
    * 换成组的局部正交（`scene.ts`）。不算合成链的写入。
@@ -729,12 +734,13 @@ const MORPH_SLOT = 5;
 const CLIP_MASK_SLOT = 8;
 
 /**
- * puppet 上屏的步骤（P12b1 步骤 4、5，clip-morph-attach 第 1 节）：没有裁切时一个绘制，和 P12a 逐字节相同（带变形时槽 5 绑变形纹理）；
- * 有裁切（`puppet.clipping` 与 `puppet.clip` 都在）时照命令表展开：
- * - `normal`：普通程序画一段（自己的 u16 索引，`segment`）；
- * - `clip`：遮罩 RT 清成 0 → 遮罩 pass 画遮罩段（画进遮罩 RT，不挂深度，SrcAlpha / InvSrcAlpha）→ 目标 pass 画目标段（回场景目标，
- *   `g_Texture8` 绑遮罩 RT，混合固定 translucent、不用基础材质的混合，深度借基础 pass、剔除用自己）。
- * 三种 pass 的槽 0 都一样：直接上屏是基础反照率（pass 自己的静态纹理），合成路径（`slot0` 给合成 RT）是合成 RT。
+ * puppet 上屏的步骤（P12b1 步骤 4、5，P12f 改成模板，clip-morph-attach 第 1 节）：没有裁切时一个绘制，和 P12a 逐字节相同（带变形时槽 5 绑变形纹理）；
+ * 有裁切（`puppet.clipping` 与 `puppet.clip` 都在）时给模板，不再照命令表展开（运行中绘制顺序会变，命令表每帧都可能不同，P12f）：
+ * - 普通段槽位 `slot = 0 … 记录数`（`clipSlot: normal`）：同一个普通 pass。一张命令表最多 记录数 + 1 个普通段（每条记录前冲出一段，最后再一段）；
+ * - 每条记录一组：清遮罩 RT（`clear`，`clipRecord`）→ 遮罩绘制（`clipSlot: mask`，画进遮罩 RT，不挂深度，SrcAlpha / InvSrcAlpha）→ 目标绘制
+ *   （`clipSlot: target`，回场景目标，`g_Texture8` 绑遮罩 RT，混合固定 translucent、不用基础材质的混合，深度借基础 pass、剔除用自己）。
+ * 步骤的输入、混合与光栅状态与 P12b1 逐项相同；三种 pass 的槽 0 都一样：直接上屏是基础反照率（pass 自己的静态纹理），合成路径（`slot0` 给
+ * 合成 RT）是合成 RT。
  */
 function puppetSteps(input: {
   layer: SceneLayer;
@@ -766,7 +772,7 @@ function puppetSteps(input: {
     refs: Record<number, TextureRef>,
     blending: string,
     raster: RasterState,
-    segment?: number,
+    clipSlot?: ClipSlot,
   ): DrawStep => ({
     kind: "draw",
     role,
@@ -779,7 +785,7 @@ function puppetSteps(input: {
     inset: NO_INSET,
     blending,
     raster,
-    ...(segment === undefined ? {} : { segment }),
+    ...(clipSlot === undefined ? {} : { clipSlot }),
   });
   const clipping = puppet.clipping;
   const clip = puppet.clip;
@@ -790,26 +796,21 @@ function puppetSteps(input: {
   }
   const mask: TargetRef = { kind: "clip-mask" };
   const steps: LayerStep[] = [];
-  for (const command of clipping.commands) {
-    if (command.kind === "normal") {
-      steps.push(draw(normal, { kind: "scene" }, inputs(normal), input.blending, input.raster, command.segment));
-      continue;
-    }
-    const maskPass = clip.masks[command.record];
+  const records = clipping.records.length;
+  for (let slot = 0; slot <= records; slot++)
+    steps.push(draw(normal, { kind: "scene" }, inputs(normal), input.blending, input.raster, { kind: "normal", slot }));
+  for (let record = 0; record < records; record++) {
+    const maskPass = clip.masks[record];
     if (!maskPass) {
       reasons.push("render:puppet-clip");
       continue;
     }
-    steps.push({ kind: "clear", target: mask });
+    steps.push({ kind: "clear", target: mask, clipRecord: record });
     steps.push(
-      draw(
-        maskPass,
-        mask,
-        inputs(maskPass),
-        "translucent",
-        rasterState(maskPass, maskPass, "translucent"),
-        command.mask,
-      ),
+      draw(maskPass, mask, inputs(maskPass), "translucent", rasterState(maskPass, maskPass, "translucent"), {
+        kind: "mask",
+        record,
+      }),
     );
     steps.push(
       draw(
@@ -818,7 +819,7 @@ function puppetSteps(input: {
         { ...inputs(clip.target), [CLIP_MASK_SLOT]: { kind: "clip-mask" } },
         "translucent",
         rasterState(base, clip.target, "translucent"),
-        command.target,
+        { kind: "target", record },
       ),
     );
   }
