@@ -9,6 +9,8 @@
  * - `visible` 为假的层整层跳过：时钟不走、不采样、不算淡入淡出（rea-RT 3.2）；第一个可见层的来源是静止姿势，之后是上一层的结果
  *   （5.2）；一个可见层都没有时局部矩阵直接取静止来源矩阵（6.1）。
  * - 图层隐藏也推进（这里不看图层可见性，rea-RT 2）；暂停冻结、补画帧不推进由调用方决定是否调 `frame`。
+ * - P12g：事件与回调的派发挪到层循环之后、交换与重写局部矩阵（蒙皮）之前（WPE 同序），回调里写的局部矩阵当帧就被推进覆盖。局部矩阵 `PuppetRuntime.local` 持久保存，
+ *   脚本 `get/setLocalBone*` 读写它，写入后当场重算子树（`localBones.ts`）。
  * - P12c：事件与「播完」回调。每个 puppet 推进完全部层（采样、混合都做完）之后才派发：先把本帧越过的 MDLA 事件按收集顺序（层序 × 事件表顺序）
  *   交给 `PuppetHooks.event`，再按层序调带 `ENDED` 位的层的播完回调表；所以回调里的写入都是下一帧生效。播完检测照 rea-p12-runtime 3.1：
  *   在推进那一步里、权重判断之前做（模型里权重为 0 的层照样检测）。控制口 `PuppetLayerControl` 是脚本 `IAnimationLayer` 的落点。
@@ -69,6 +71,7 @@ import {
   type MorphUniforms,
 } from "./pose";
 import { inverse4, mulAffine, mulFull } from "./math";
+import { localAngles, recomputeSubtree, writeLocalAngles } from "./localBones";
 import { applyBoneImpulse, createBoneState, resetBoneState, solveBone, type BoneState } from "./physics";
 
 const f = Math.fround;
@@ -338,6 +341,12 @@ interface PuppetRuntime {
   readonly world: Float32Array;
   /** 蒙皮矩阵（每骨骼 12 个 f32）。 */
   readonly skin: Float32Array;
+  /**
+   * 局部矩阵（每骨骼 16 个 f32，WPE 的 `P+0x310`，P12g）：每次真的算蒙皮时由 `skinMatrices` 对全部骨骼重写（无可见层取静止来源，有层取混合姿势的 TRS）。
+   * 脚本 `getLocalBone*` 读、`setLocalBone*` 写；写入只管到下一次重写。静止捷径跳过的那几帧它保持上一次的值（= 静止来源，期间只有脚本写入会改它，
+   * 而写入会清 `restSkin`），构造时 `evaluate(null)` 已算过一次，所以任何时候读到的都不是全 0。
+   */
+  readonly local: Float32Array;
   /** 上一次的蒙皮来自静止来源矩阵（没有可见层）：再没有可见层时结果不变，不必重算（骨骼透明度与变形 uniform 同样是复位后的值）。 */
   restSkin: boolean;
   /** `g_BonesAlpha`（每骨骼 1 个 f32）；没有 `boneAlpha` 为 null。 */
@@ -511,6 +520,8 @@ export class ScenePuppets {
   private readonly runtimes: PuppetRuntime[] = [];
   private readonly byObject = new Map<number, PuppetRuntime>();
   private readonly at: FrameIndex = { lo: 0, hi: 0, frac: 0 };
+  /** 最近一次 `frame` / `refresh` 给的 sink：脚本写骨骼时现取调用那一刻的图层矩阵 `W`（P12g，WPE 取调用时刻的 `+0x80`）。 */
+  private sink: PuppetSink | null = null;
 
   /**
    * 只收 skinned 的（`skeleton` 不为 null）；静态 puppet 不进运行时，`skin` 给 null。建好后按 t = 0 算一次姿势（不推进）。`kind` 缺省 `"image"`
@@ -564,6 +575,7 @@ export class ScenePuppets {
         sample: new Float32Array(bones * POSE_STRIDE),
         world: new Float32Array(bones * 16),
         skin: new Float32Array(bones * SKIN_STRIDE),
+        local: new Float32Array(bones * 16),
         restSkin: false,
         alpha: puppet.boneAlpha ? new Float32Array(bones).fill(1) : null,
         morph: puppet.morph
@@ -620,10 +632,14 @@ export class ScenePuppets {
    */
   frame(dt: number, state?: PuppetSink | null, hooks?: PuppetHooks | null): void {
     const d = f(dt);
-    for (const runtime of this.runtimes) {
-      this.evaluate(runtime, d, state ?? null);
-      this.dispatch(runtime, hooks ?? null);
-    }
+    this.sink = state ?? null;
+    // 事件与播完回调在 evaluate 里、层循环之后、交换与重写局部矩阵之前派发（WPE `0x14020028a` 之前，P12g，实测 le4）
+    for (const runtime of this.runtimes) this.evaluate(runtime, d, state ?? null, hooks ?? null);
+  }
+
+  /** 脚本写骨骼用的 `W`：调用那一刻的图层矩阵（sink 现取），没有时退回推进时存下的那份。 */
+  private worldNow(runtime: PuppetRuntime): Float32Array {
+    return this.sink?.world?.(runtime.object) ?? runtime.physics!.layerWorld;
   }
 
   /**
@@ -666,7 +682,7 @@ export class ScenePuppets {
   }
 
   /**
-   * 脚本 `setBoneTransform`（rea-p12d-bones 4）：写三处，`cur[i] = M`、模型空间 `world[i] = W⁻¹·M`（`W` 取这一帧推进时用的）、蒙皮 `skin[i] = world[i]·绑定逆`
+   * 脚本 `setBoneTransform`（rea-p12d-bones 4）：写三处，`cur[i] = M`、模型空间 `world[i] = W⁻¹·M`（`W` 取调用那一刻的，P12g 起，同 WPE）、蒙皮 `skin[i] = world[i]·绑定逆`
    * （WPE 这里两次都是完整 4×4 乘法）。子骨骼与物理状态不动，所以当帧只有这根骨骼的画面变，下一帧全部重算、`M` 只作为物理的 `prev` 留下。
    * 选骨失败、`m` 不足 16 个数时什么都不做。
    */
@@ -679,7 +695,7 @@ export class ScenePuppets {
     const matrix = Float32Array.from(m as ArrayLike<number>).subarray(0, 16);
     physics.cur.set(matrix, i * 16);
     const inverse = new Float32Array(16);
-    inverse4(physics.layerWorld, 0, inverse, 0);
+    inverse4(this.worldNow(runtime), 0, inverse, 0);
     mulFull(inverse, 0, matrix, 0, physics.temp, 0);
     runtime.world.set(physics.temp, i * 16);
     mulFull(runtime.world, i * 16, runtime.skeleton.inverseBind, i * 16, physics.temp, 0);
@@ -687,6 +703,85 @@ export class ScenePuppets {
     runtime.skin.set([t[0], t[1], t[2], t[4], t[5], t[6], t[8], t[9], t[10], t[12], t[13], t[14]], i * SKIN_STRIDE);
     // 蒙皮被改过：静止捷径不能再跳过下一帧的重算（WPE 下一帧交换后全部重算）
     runtime.restSkin = false;
+  }
+
+  /**
+   * 脚本 `getLocalBoneTransform`（WPE `P+0x310[i]`，P12g）：局部矩阵 16 个 f32 的拷贝；选骨同 `boneTransform`（推进过、整数判界、名字取第一个、空串失败），
+   * 失败为 null（API 换成单位阵）。
+   */
+  localBoneTransform(object: number, bone: number | string): Float32Array | null {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return null;
+    const i = this.selectBone(runtime, bone, false);
+    return i < 0 ? null : runtime.local.slice(i * 16, i * 16 + 16);
+  }
+
+  /** 脚本 `getLocalBoneAngles`：局部矩阵的欧拉角（弧度 `[x, y, z]`，`localBones.ts`）；失败为 null。 */
+  localBoneAngles(object: number, bone: number | string): [number, number, number] | null {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return null;
+    const i = this.selectBone(runtime, bone, false);
+    return i < 0 ? null : localAngles(runtime.local, i * 16);
+  }
+
+  /** 脚本 `getLocalBoneOrigin`：局部矩阵的平移列 `[x, y, z]`；失败为 null。 */
+  localBoneOrigin(object: number, bone: number | string): [number, number, number] | null {
+    const runtime = this.byObject.get(object);
+    if (!runtime?.physics) return null;
+    const i = this.selectBone(runtime, bone, false);
+    if (i < 0) return null;
+    const o = i * 16;
+    return [runtime.local[o + 12], runtime.local[o + 13], runtime.local[o + 14]];
+  }
+
+  /**
+   * 局部写入的公共部分（rea-p12g 1、2）：选骨成功就改 `local[i]`，当场重算 i 与子孙的 `Pose` / `K` / `World`（完整乘法、调用时刻的 `W`），并清静止捷径，
+   * 让下一次推进把 `local` / `world` / `skin` 全部复位（写入只管一帧）。物理不补跑：子树里物理骨骼当帧的增量就是被丢掉的。
+   */
+  private writeLocal(
+    object: number,
+    bone: number | string,
+    write: (local: Float32Array, offset: number) => void,
+  ): void {
+    const runtime = this.byObject.get(object);
+    const physics = runtime?.physics;
+    if (!runtime || !physics) return;
+    const i = this.selectBone(runtime, bone, false);
+    if (i < 0) return;
+    write(runtime.local, i * 16);
+    recomputeSubtree(
+      i,
+      runtime.skeleton.parents,
+      runtime.local,
+      runtime.skeleton.inverseBind,
+      this.worldNow(runtime),
+      runtime.world,
+      runtime.skin,
+      physics.cur,
+    );
+    runtime.restSkin = false;
+  }
+
+  /** 脚本 `setLocalBoneTransform`：`local[i] = m`（64 字节原样，不足 16 个数时不做事）。 */
+  setLocalBoneTransform(object: number, bone: number | string, m: ArrayLike<number>): void {
+    if (m.length < 16) return;
+    this.writeLocal(object, bone, (local, o) => {
+      for (let k = 0; k < 16; k++) local[o + k] = m[k];
+    });
+  }
+
+  /** 脚本 `setLocalBoneAngles`：前三列重写成 `Rz·Ry·Rx`（丢缩放），平移列不动。 */
+  setLocalBoneAngles(object: number, bone: number | string, v: readonly [number, number, number]): void {
+    this.writeLocal(object, bone, (local, o) => writeLocalAngles(local, o, v));
+  }
+
+  /** 脚本 `setLocalBoneOrigin`：只改平移列的 xyz。 */
+  setLocalBoneOrigin(object: number, bone: number | string, v: ArrayLike<number>): void {
+    this.writeLocal(object, bone, (local, o) => {
+      local[o + 12] = v[0];
+      local[o + 13] = v[1];
+      local[o + 14] = v[2];
+    });
   }
 
   /**
@@ -887,6 +982,7 @@ export class ScenePuppets {
    * 位的副作用和这一帧已经算过的权重相同（同一个 `t`），重复调不改变结果。
    */
   refresh(state?: PuppetSink | null): void {
+    this.sink = state ?? null;
     for (const runtime of this.runtimes) this.evaluate(runtime, null, state ?? null);
   }
 
@@ -1109,7 +1205,12 @@ export class ScenePuppets {
    * 一个 puppet：`d` 为 null 时不推进（`refresh`）。模型（`kind === "model"`）：推进时对象或父链不可见就整段跳过；每帧开头清全部网格的变形权重；
    * 权重 0 的层整层跳过（时钟照推进，不算「已有层」）；末尾更新剔除盒。
    */
-  private evaluate(runtime: PuppetRuntime, d: number | null, state: PuppetSink | null): void {
+  private evaluate(
+    runtime: PuppetRuntime,
+    d: number | null,
+    state: PuppetSink | null,
+    hooks: PuppetHooks | null = null,
+  ): void {
     const { bones, pose, sample, skeleton, alpha, morph, meshMorphs } = runtime;
     const model = runtime.kind === "model";
     // 更新门（rea-texchan-model 4：`FUN_14021c480` 开头；p12b2-vis 实测：模型自己或父链隐藏时时钟冻结，重新可见的第一帧照画但那一帧的更新已被跳过）。
@@ -1199,6 +1300,9 @@ export class ScenePuppets {
       posed = true;
     }
     if (model) this.updateBounds(runtime, state);
+    // 事件与播完回调：逐层循环之后、静止捷径与物理交换之前（WPE `0x14020028a` 之前，rea-p12g 8.5）。回调里写的局部矩阵与世界骨骼矩阵随即被下面的重算覆盖，
+    // 重算出的 `cur` 经交换成为本帧物理的 `prev`。`refresh` 不是 WPE 的更新，不派发
+    if (d !== null) this.dispatch(runtime, hooks);
     // 有物理骨骼的运行时不走静止捷径：状态每帧在变（P12d-1）
     if (!posed) {
       if (runtime.restSkin && !runtime.physics?.active) {
@@ -1228,11 +1332,16 @@ export class ScenePuppets {
       // 推进开头交换 `P+0x340` / `P+0x348`：上一帧的 `cur`（含脚本 `setBoneTransform` 之后的写入）成了这一帧的 `prev`；`cur` 之后每根骨骼各写一次，
       // 不再拷贝。`W` 为 null（sink 没给、`refresh`）时整段不做：不交换、不写 `cur`、物理不跑
       [physics.prev, physics.cur] = [physics.cur, physics.prev];
-      skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin, (bone) =>
-        this.physicsBone(runtime, physics, layerWorld, scale, d!, bone),
+      skinMatrices(
+        posed ? pose : null,
+        skeleton,
+        runtime.world,
+        runtime.skin,
+        (bone) => this.physicsBone(runtime, physics, layerWorld, scale, d!, bone),
+        runtime.local,
       );
       physics.hasPrev = true;
-    } else skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin);
+    } else skinMatrices(posed ? pose : null, skeleton, runtime.world, runtime.skin, undefined, runtime.local);
     // 重排在蒙皮之后（`0x140205507`）：本帧有层写过才重算键；当前顺序已非降序什么都不做，否则稳定排序并重拼索引与命令表
     if (order && wrote && reorder(order.order, order.nodes, order.cur, order.keys)) {
       order.version += 1;

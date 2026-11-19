@@ -231,6 +231,7 @@ export const SKIN_STRIDE = 12;
  *
  * `afterBone`（P12d-1，骨骼物理的插入点）：每根骨骼的模型空间矩阵 `world[i]` 算完之后调一次（`i` 是骨骼下标），回调可以就地改写
  * `world[i × 16 .. +15]`，之后的子骨骼与蒙皮矩阵都用改过的值（WPE 在 `Pose[i]` 上右乘物理增量，rea-AP 2.5）。不给时逐字节同以前。
+ * `localOut`（P12g）：给了就把每根骨骼的局部矩阵（每骨骼 16 个 f32）另拷一份进去，其余不变。
  */
 export function skinMatrices(
   pose: Float32Array | null,
@@ -238,6 +239,7 @@ export function skinMatrices(
   world: Float32Array,
   out: Float32Array,
   afterBone?: (bone: number) => void,
+  localOut?: Float32Array,
 ): void {
   const { parents, inverseBind, restMatrices } = skeleton;
   const bones = parents.length;
@@ -246,6 +248,8 @@ export function skinMatrices(
   for (let i = 0; i < bones; i++) {
     if (pose) trsMatrix(pose, i * POSE_STRIDE, local, 0);
     else for (let k = 0; k < 16; k++) local[k] = restMatrices[i * 16 + k];
+    // 局部矩阵留一份（WPE 的 `P+0x310`，脚本 `getLocalBone*` 读、`setLocalBone*` 写，P12g）
+    localOut?.set(local, i * 16);
     const parent = parents[i];
     if (parent < 0) world.set(local, i * 16);
     else {

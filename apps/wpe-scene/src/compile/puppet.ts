@@ -199,6 +199,8 @@ export interface ScenePuppet {
    */
   names?: string[];
   boneCount?: number;
+  /** 每根骨骼在 mdl 里的原始父下标（P12g，`getBoneParentIndex`；根 −1，不规整越界，静态 puppet 也有）。 */
+  parents?: number[];
   /** 静态 puppet 为 null。 */
   skeleton: {
     /** 父骨骼下标，根为 −1。 */
@@ -675,6 +677,7 @@ export function buildPuppet(
       : {},
     names: (skeleton?.bones ?? []).map((bone) => bone.name),
     boneCount: skeleton?.bones.length ?? 0,
+    parents: (skeleton?.bones ?? []).map((bone) => bone.parent),
     skeleton: skinned ? buildSkeleton(file) : null,
     animations: file.animations.map((animation, index) => {
       const problems = skinned ? animationIssues(animation, issuesCtx) : [];

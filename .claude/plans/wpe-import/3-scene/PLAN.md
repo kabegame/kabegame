@@ -830,6 +830,11 @@ P6 之后按能力分节，不再按壁纸。原来的 W1–W6、旧 P7 / P8、K
 - 稳定排序、顺序跨帧保留、加法层减基数并钳制、有裁切时按新顺序重建命令表（渲染器改为编码时现排）。
 - 两张真实壁纸的复制工程各 100 帧整帧最大差 2，抽帧的索引与 WPE 逐个相同；语料干净 286 → 288，没有新键。
 
+**进度**（2026-11-20）：**P12g 完成**（[phase-12g-localbones.md](phase12/phase-12g-localbones.md)）：puppet 骨骼的局部读写脚本 API（`getBoneIndex`、`getBoneParentIndex`、`get/setLocalBone*`），语料清扫转来，myprojects `3820240793` 只差这几个方法。
+- 读码 [rea-p12g-localbones](phase12/rea-p12g-localbones.md) 加实测 `p12g-local` / `p12g-args`（19 个用例）全部吻合。
+- 写局部矩阵后当场重算子树（完整乘法、调用时刻的图层矩阵），当帧生效、下一次推进盖掉；事件与播完回调挪到蒙皮之前派发。
+- 生成工程 13 个 puppet 的 `g_Bones` 与 WPE 逐位相同；复制工程 100 帧最大差 2；语料全部干净（294 / 294），没有新键。
+
 - MDLV0021 / MDLV0023 的骨骼（MDLS）、动画（MDLA）、变形（MDMP），skinning（翻译器经 `defines` 传 `BONECOUNT`），puppet warp。语料 33 张。
 - 对象 `animationlayers`（31 张）、`attachment` 挂点（10 张）；脚本 `getAnimationLayer*`、骨骼与混合形状的 API。
 - **依赖：** P5c 的 mdl 解析。P5c 对带这些段的模型报 `mdl:skeleton` / `mdl:animation` / `mdl:morph`。

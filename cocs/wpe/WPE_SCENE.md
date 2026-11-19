@@ -3351,7 +3351,7 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
   - `ScenePuppets.ids` / `control` / `findLayer` 给出每层的控制口 `PuppetLayerControl`（P12e 起按层 id，见「puppet 动画层的建删（P12e）」）；
   - 每层一张播完回调表；
   - 时钟带 MDLA 事件；
-  - `frame(dt, state, hooks)` 在每个 puppet 推进完全部层之后派发：先事件（交给 `hooks.event` → 脚本运行时的 `animationEvent`），再进回调循环（P12e 起照 WPE：本帧有层播完才进、调过回调就复位下标、之后删单次层）。所以回调里的任何写入都是下一帧生效。
+  - `frame(dt, state, hooks)` 在每个 puppet 推进完全部层之后派发：先事件（交给 `hooks.event` → 脚本运行时的 `animationEvent`），再进回调循环（P12e 起照 WPE：本帧有层播完才进、调过回调就复位下标、之后删单次层）。所以回调里的任何写入都是下一帧生效。P12g 起派发在层循环之后、物理交换与蒙皮之前（同 WPE）：回调里读到的骨骼矩阵是上一帧的，回调里写的局部 / 世界骨骼矩阵被本帧的推进盖掉，见「puppet 骨骼的局部读写（P12g）」。
 - **脚本 API**（`script/api.ts`）：
   - 包装对象按「对象:层 id」缓存（P12e 前是层下标），不持有运行时，每次经宿主现取控制口，重编译换了运行时也接得上，同 `IAnimation`。
   - `rate` / `blend` / `visible` 是用户属性、字段脚本、API 三方共写的字段，在 `SceneState.animationLayers`，写入走 `animation-layer` 目标，会记进重放表。
@@ -3443,11 +3443,11 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
 | 选骨 | 整数下标（越界失败），或字符串取第一个全名匹配；空串在读写矩阵时失败，在冲量与复位时落到骨骼 0；第一次推进之前一律失败 |
 | `getBoneCount()` | mdl 的骨骼数；没有 `MDLS` 的静态 puppet 与非 puppet 为 0 |
 | `getBoneTransform(b)` | 本帧（含物理）的世界骨骼矩阵 `W·Pose[i]` 的拷贝，每次新建 `Mat4`；失败返回**单位阵**，不是 `null`；`init` 里全是单位阵 |
-| `setBoneTransform(b, M)` | 写三处：`cur[i] = M`、模型空间 `Pose[i] = W⁻¹·M`、这根骨骼的蒙皮矩阵。当帧画在 `M`，子骨骼当帧不跟；只持续一帧，下一帧全部重算；唯一的残留是 `M` 成为下一帧物理的 `Mp`，所以 `t` 骨骼会被拉向 `M` 再弹回。缺矩阵或元素不是数时写单位阵 |
+| `setBoneTransform(b, M)` | 写三处：`cur[i] = M`、模型空间 `Pose[i] = W⁻¹·M`（P12g 起 `W` 取调用那一刻的图层矩阵，同 WPE；之前取推进时的）、这根骨骼的蒙皮矩阵。当帧画在 `M`，子骨骼当帧不跟；只持续一帧，下一帧全部重算；唯一的残留是 `M` 成为下一帧物理的 `Mp`，所以 `t` 骨骼会被拉向 `M` 再弹回。缺矩阵或元素不是数时写单位阵 |
 | `applyBonePhysicsImpulse(b, dir, ang)` | `vel += dir`、`q ⊗= eulerQuat(ang·DEG/2)`，下一帧的物理里起作用；`ang` 缺省 (0, 0, 0)，只传两个参数不抛错；没开物理的骨骼没有效果 |
 | `resetBonePhysicsSimulation(b)` | 状态置初值，不清 `Mp` |
 
-照报：`getLocalBone*`、`getBoneIndex`、`getBoneParentIndex`、混合形状的方法（语料 0 处）。
+照报：混合形状的方法（语料 0 处）。`getLocalBone*`、`getBoneIndex`、`getBoneParentIndex` P12g 起支持，见「puppet 骨骼的局部读写（P12g）」。
 
 ### 走查
 
@@ -3596,6 +3596,92 @@ WPE 的模型更新和图像层 puppet 用同一组时钟、采样、混合、�
   - `3577990983` 的 `sl`（第 170–269 帧）：100 帧整帧最大差 2，没有大于 2 的像素。这段时间里节点顺序是第 21 帧那次重排的结果（加法层「眼」减基数后被钳住，之后不再变），组 36 换到组 35 前面，遮罩区间随之后移、组 36 移出遮罩段；第 220 帧 4 次绘制（19872 / 7077 / 15 / 201 个索引）与 WPE 逐个相同。
   - `3841310696` 的 `眼睛`（第 159–258 帧）：100 帧整帧最大差 2，第 257 帧逐像素相同；这段时间重排 17 次，第 230 帧 6 次绘制（两条共用遮罩的裁切记录）的索引与 WPE 逐个相同。
 - **语料**（293 张，`ignore/p6/e0/corpus-now4.json` 的范围加 myprojects 60 个目录）：干净 286 → 288（`3577990983`、`3841310696`），只去掉 `puppet:draw-order` 2 张，没有新键，`clean_lost` 0。
+
+## puppet 骨骼的局部读写（P12g）
+
+图像层 puppet 的 8 个骨骼脚本方法：`getBoneIndex`、`getBoneParentIndex`、`get/setLocalBoneTransform`、`get/setLocalBoneAngles`、`get/setLocalBoneOrigin`。它们读写同一份每骨骼的局部矩阵（WPE 的 `P+0x310`）。混合形状的 3 个方法照报（语料 0 处）。
+
+依据：
+- 读码 [rea-p12g-localbones](../../.claude/plans/wpe-import/3-scene/phase12/rea-p12g-localbones.md)；
+- WPE 2.8.42 实测 `ignore/p12/g/meas/REPORT.md`：
+  - 生成工程 `p12g-local`（13 个 puppet）、`p12g-args`；
+  - 生成器 `ignore/p12/g/defs/p12g.py`；
+- 计划与记录见 [phase-12g-localbones.md](../../.claude/plans/wpe-import/3-scene/phase12/phase-12g-localbones.md)。
+
+### 局部矩阵与写入
+
+- **局部矩阵**：`ScenePuppets` 的 `PuppetRuntime.local`（每骨骼 16 个 f32）。每次真的算蒙皮时，`skinMatrices` 对全部骨骼重写它：
+  - 没有可见动画层时，取静止来源（MDLS 的可选静止矩阵，没有就是骨骼的局部矩阵）；
+  - 有可见层时，取混合后姿势的 TRS 矩阵。
+  
+  静止捷径跳过的帧保持上一次的值，期间只有脚本写入会改它，写入会清掉捷径。
+- **写入**（`setLocalBone*`，`ScenePuppets.writeLocal`）：
+  - 改 `local[i]` 后，当场重算骨骼 i 与它的子孙（`puppet/localBones.ts` 的 `recomputeSubtree`），三处都是完整 4×4 乘法（`mulFull`）：
+    - `Pose[j] = Pose[父]·Local[j]`（根直接取 `Local`）；
+    - `K[j] = Pose[j]·绑定逆[j]`；
+    - `World[j] = W·Pose[j]`。
+  - 子树：从 i 起按下标往后扫，父在脏集合里的才算（父下标比子大的骨骼不算，同 WPE）。
+  - `W` 取**调用那一刻**的图层矩阵：从 `PuppetSink.world` 现取，同一帧先改了图层 `origin` 再写，子树就用新的。
+- **生效与保持**：
+  - 绘制在脚本之后上传蒙皮矩阵，所以当帧生效，子骨骼当帧跟着动。
+  - 下一次推进对全部骨骼重写 `local` / `Pose` / `K` / `World`，所以写一次只管一帧；写入不进动画混合，也不进下一帧的静止来源。
+  - 有动画层时，每帧「读 → 改 → 写」等于叠在动画上；每帧写固定的基准等于盖掉这根骨骼的动画。
+  - 跨帧的痕迹只有一处：重算出的 `World` 在下一帧推进开头交换成物理的上一帧矩阵。
+- **完整乘法不能换成仿射乘法**：推进的父链与蒙皮用仿射乘法，两者结合顺序不同。所以原样写回也会改变子树的低位（实测 1e-6 级，`p12g-args` 的 lh / li）。
+
+### 方法
+
+| 方法 | 行为 |
+|---|---|
+| `getBoneIndex(name)` | 只收 JS 字符串，非空时取第一个全名相等（区分大小写）的骨骼下标，否则 −1。不看运行时：`init` 里、静态 puppet 上都能用，非 puppet 图层为 −1 |
+| `getBoneParentIndex(b)` | 选骨规整同下。整数按骨骼数判界，返回 MDLS 的原始父下标（根 −1）；名字取第一个同名**且有父**的骨骼的父（同名的根被跳过）；其余 −1。不看运行时 |
+| `getLocalBoneTransform(b)` | `local[i]` 的拷贝，每次新建 `Mat4`。第一帧推进之后读到的就是静止来源（逐字节），同帧写过之后读回新值。失败返回单位阵 |
+| `getLocalBoneAngles(b)` | 对 `R = Rz·Ry·Rx` 求逆，弧度，不先去缩放（均匀缩放无影响，非均匀缩放让 x / y 失真）。`|y| > π/2` 的角读回等价的另一组（`(0, 2, 0)` 读回 `(π, π − 2, −π)`）。失败返回 `(0, 0, 0)` |
+| `getLocalBoneOrigin(b)` | 平移列 `c3.xyz`。失败返回 `(0, 0, 0)` |
+| `setLocalBoneTransform(b, M)` | 整个 16 个数。Mat4 实参转换同 `setBoneTransform`：不是对象、`m` 不是数组时为单位阵，非数元素保留单位阵对应位 |
+| `setLocalBoneAngles(b, v)` | 前三列重写成 `Rz(v.z)·Ry(v.y)·Rx(v.x)`（w 写 0），**原有缩放丢掉**，平移保留 |
+| `setLocalBoneOrigin(b, v)` | 只改 `c3.xyz` |
+
+- **选骨**：同 `getBoneTransform`，Int32 下标或名字（第一个），空串、`1.5`、越界、第一次推进之前都失败。
+- **失败**：读返回单位阵或 `(0, 0, 0)`，写什么都不做，都不抛错。
+- **实参不对照样写**：第二个参数缺省或类型不对时照样写单位阵 / `(0, 0, 0)`。Vec3 实参取对象的 `x y z`，非数分量为 0（`Vec2` 得 z = 0）。
+- **只在图像层上**：模型对象、文本 / 粒子 / 声音层没有这些方法。
+- **派发时机**（P12g 起，同 WPE）：MDLA 事件与播完回调在层循环之后、物理交换与蒙皮之前派发（`ScenePuppets.evaluate` 里）。所以：
+  - 回调里读到的骨骼矩阵是上一帧的；
+  - 回调里写的局部矩阵被本帧推进盖掉，只改了本帧物理的上一帧矩阵（实测 le4）。
+- **`setBoneTransform` 的先后**：它不写 `Local`。之后对它的子骨骼写局部矩阵，会以它写的姿势为父；对它或它的祖先写，会把它冲掉（实测 t16 / t17）。`setBoneTransform` 的 `W` 也改成调用时刻的。
+
+### 和物理的交互
+
+- 子树里开了物理的骨骼，当帧的物理增量被丢掉，画面上不摆（重算只从 `Local` 算）。
+- 被重算的 `World` 不含增量，成为下一帧物理的上一帧矩阵，所以物理状态的演化也跟着变（实测 lf1–lf3）。
+- 写不在子树里的骨骼不影响物理。
+
+### 能力表
+
+- 缺失表去掉这 8 个方法（`script:api:layer.<名>`），只剩混合形状 3 个。
+- 编译期 `ScenePuppet.parents`：MDLS 原始父下标，静态 puppet 也有，给 `getBoneParentIndex`。
+
+### 有意不同与已知差异
+
+- `getLocalBoneAngles` / `setLocalBoneAngles` 用 `Math.atan2` / `sin` / `cos` 再取 float32。WPE 是 CRT 的 `atan2f` / `sinf` / `cosf`，可能差 1 ulp；实测的读回值全部逐位相同。
+- IK 是否另写局部矩阵没读（语料 0 条 IK 链）。
+
+### 走查
+
+- **生成工程**：
+  - 夹具 `puppet/p12g.test.ts`（`puppet/fixtures/p12g-local.json`）按 WPE 帧时间逐帧回放 `p12g-local` / `p12g-args`：
+    - 日志读回值与 WPE 逐字相同；
+    - 抓帧（第 124–129、525–530 帧，args 112–114）的 `g_Bones` 逐位相同。
+    - 动画驱动的 le1–le4 有 64 个分量不逐位：动画四元数转矩阵本来就不复刻 `rsqrtps`，是已有差异。
+  - dev 里真渲染器跑场景脚本、按同一时间线回放：
+    - 第 129、528 帧 13 个 puppet 的 `g_Bones` 全部与 WPE 逐位相同，含照搬真实壁纸脚本的 `lr`，以及用 WPE `Mat4.rotate` 写的 le1 / le3；
+    - 挂在骨骼上的子图像层 MVP 逐位相同。
+- **真实壁纸复制工程**：`3820240793` 只留对象 0（puppet、4 个 effect、`visible` 上的字段脚本），用 `kbp content isolate` 切出。
+  - WPE 1280×720、20 fps 连抓 100 帧（第 271–370 帧）；我们按 WPE 日志的帧时间与光标回放、跑脚本、后处理跟随 WPE。
+  - 100 帧整帧最大差 2，没有大于 2 的像素，每帧 100 个上下的像素差 1–2。
+  - 第 300 帧 5 根骨骼的 `g_Bones` 与 WPE 逐位相同（胸骨此时偏移 (2.94, 6.22)，呼吸确实在动）。
+- **语料**（294 张：P12f 的范围加 `3820240793`）：同一基点 `aeebf031` 的源码有无 P12g 各扫一次，干净 293 → 294（全部干净）。只去掉 `3820240793` 的 3 个 `script:api:layer.*` 键，没有新键，别的场景不变。
 
 ## 交互（P6c）
 

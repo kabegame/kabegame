@@ -1565,6 +1565,13 @@ export class SceneHost {
                 setBoneTransform: (bone, matrix) => puppets.setBoneTransform(object, bone, matrix),
                 applyBonePhysicsImpulse: (bone, dir, ang) => puppets.applyBonePhysicsImpulse(object, bone, dir, ang),
                 resetBonePhysicsSimulation: (bone) => puppets.resetBonePhysicsSimulation(object, bone),
+                // 局部骨骼读写（P12g）
+                localBoneTransform: (bone) => puppets.localBoneTransform(object, bone),
+                localBoneAngles: (bone) => puppets.localBoneAngles(object, bone),
+                localBoneOrigin: (bone) => puppets.localBoneOrigin(object, bone),
+                setLocalBoneTransform: (bone, matrix) => puppets.setLocalBoneTransform(object, bone, matrix),
+                setLocalBoneAngles: (bone, v) => puppets.setLocalBoneAngles(object, bone, v),
+                setLocalBoneOrigin: (bone, v) => puppets.setLocalBoneOrigin(object, bone, v),
               }
             : null;
         },

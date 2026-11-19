@@ -187,10 +187,12 @@ describe("骨骼方法的装载与 getBoneCount", () => {
     expect(h.layer(2).getBoneCount()).toBe(4);
   });
 
-  it("缺失表里这五个已删，其余骨骼 / 混合形状方法仍在", () => {
+  it("缺失表里这五个已删；P12g 起局部骨骼 / 索引方法也已删，只剩混合形状三个", () => {
     const names = new Set(MISSING_SCRIPT_API.layer.map((entry) => entry.name));
     for (const name of METHODS) expect(names.has(name), name).toBe(false);
-    for (const name of ["getLocalBoneTransform", "getBoneIndex", "getBoneParentIndex", "getBlendShapeWeight"])
+    for (const name of ["getLocalBoneTransform", "getBoneIndex", "getBoneParentIndex", "setLocalBoneAngles"])
+      expect(names.has(name), name).toBe(false);
+    for (const name of ["getBlendShapeIndex", "getBlendShapeWeight", "setBlendShapeWeight"])
       expect(names.has(name), name).toBe(true);
   });
 });

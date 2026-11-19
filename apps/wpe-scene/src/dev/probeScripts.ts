@@ -314,6 +314,12 @@ export interface ProbeScriptsInput {
     | "setBoneTransform"
     | "applyBonePhysicsImpulse"
     | "resetBonePhysicsSimulation"
+    | "localBoneTransform"
+    | "localBoneAngles"
+    | "localBoneOrigin"
+    | "setLocalBoneTransform"
+    | "setLocalBoneAngles"
+    | "setLocalBoneOrigin"
   >;
   /** 系统媒体回放（P11c，`probeMedia.ts`）：`init` 之后给刚 `init` 的脚本补发一轮媒体回调（`SceneMedia.replayAfterInit`）。不给时不补发。 */
   media?: { replayAfterInit(callbacks: MediaCallbacks): void };
@@ -580,6 +586,13 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
                 setBoneTransform: (bone, matrix) => current.setBoneTransform(object, bone, matrix),
                 applyBonePhysicsImpulse: (bone, dir, ang) => current.applyBonePhysicsImpulse(object, bone, dir, ang),
                 resetBonePhysicsSimulation: (bone) => current.resetBonePhysicsSimulation(object, bone),
+                // 局部骨骼读写（P12g）：同宿主
+                localBoneTransform: (bone) => current.localBoneTransform(object, bone),
+                localBoneAngles: (bone) => current.localBoneAngles(object, bone),
+                localBoneOrigin: (bone) => current.localBoneOrigin(object, bone),
+                setLocalBoneTransform: (bone, matrix) => current.setLocalBoneTransform(object, bone, matrix),
+                setLocalBoneAngles: (bone, v) => current.setLocalBoneAngles(object, bone, v),
+                setLocalBoneOrigin: (bone, v) => current.setLocalBoneOrigin(object, bone, v),
               }
             : null;
         },

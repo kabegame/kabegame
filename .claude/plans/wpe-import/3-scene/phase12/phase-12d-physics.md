@@ -212,7 +212,7 @@ export interface PuppetSink {
 
 - **编译期**：
   - `ScenePuppet` 带上骨骼名（`names`）与 mdl 骨骼数（`boneCount`，静态 puppet 也有）。
-  - 缺失表删掉 `getBoneCount`、`getBoneTransform`、`setBoneTransform`、`applyBonePhysicsImpulse`、`resetBonePhysicsSimulation`。其余 11 个（`getLocalBone*`、`getBoneIndex`、`getBoneParentIndex`、混合形状）照报。
+  - 缺失表删掉 `getBoneCount`、`getBoneTransform`、`setBoneTransform`、`applyBonePhysicsImpulse`、`resetBonePhysicsSimulation`。其余 11 个（`getLocalBone*`、`getBoneIndex`、`getBoneParentIndex`、混合形状）照报（P12g 起前 8 个已做，见 [phase-12g-localbones.md](phase-12g-localbones.md)；混合形状仍照报）。
 - **运行时**（`ScenePuppets`）：
   - 选骨：整数下标（越界 → 失败）或名字（第一个全名匹配，空串失败）。冲量与复位的空串落到骨骼 0。
   - `boneTransform(object, b)`：`cur[i]` 的拷贝；失败或还没推进过时返回 null，由 API 换成单位阵。

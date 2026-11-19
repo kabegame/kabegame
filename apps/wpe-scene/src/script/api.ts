@@ -64,6 +64,15 @@ function vec3Arg(value: unknown, fallback: [number, number, number]): [number, n
   };
   return [part("x"), part("y"), part("z")];
 }
+
+/** Mat4 实参的转换（dll 的 `0x80` 实参，`setBoneTransform` 与 `setLocalBoneTransform` 共用）：不是对象或 `m` 不是数组 → 单位阵，`m` 里不是数的元素保留单位阵对应位。 */
+function mat4Arg(value: unknown): number[] {
+  const m = Array.from(IDENTITY_4);
+  const source = value !== null && typeof value === "object" ? (value as ApiObject).m : undefined;
+  if (Array.isArray(source))
+    for (let i = 0; i < 16; i++) if (typeof source[i] === "number") m[i] = Math.fround(source[i] as number);
+  return m;
+}
 type ApiTarget = BindingTarget | { kind: "unsupported"; path: string };
 
 /** 材质对象上登记的一个常量键（P6d1a）：形状同 `constantTargetFields`，`rad2deg` 的 float 键脚本里用度。 */
@@ -141,6 +150,13 @@ export interface PuppetLayersView {
   setBoneTransform?(bone: number | string, matrix: ArrayLike<number>): void;
   applyBonePhysicsImpulse?(bone: number | string, dir: ArrayLike<number>, ang: ArrayLike<number>): void;
   resetBonePhysicsSimulation?(bone: number | string): void;
+  /** 局部骨骼读写（P12g，`ScenePuppets` 的同名方法）：读失败为 null（API 换成单位阵 / (0,0,0)），写失败不做事。 */
+  localBoneTransform?(bone: number | string): Float32Array | null;
+  localBoneAngles?(bone: number | string): readonly [number, number, number] | null;
+  localBoneOrigin?(bone: number | string): readonly [number, number, number] | null;
+  setLocalBoneTransform?(bone: number | string, matrix: ArrayLike<number>): void;
+  setLocalBoneAngles?(bone: number | string, v: readonly [number, number, number]): void;
+  setLocalBoneOrigin?(bone: number | string, v: readonly [number, number, number]): void;
 }
 
 export interface ScriptApiState {
@@ -1570,7 +1586,10 @@ export class ScriptApi {
    * - `getBoneTransform(bone)`：每次新建 `Mat4`，选骨失败（越界、非整数、空串、没推进过、静态 puppet）返回单位阵、不返回 `null`；
    * - `setBoneTransform(bone, mat)`：`mat` 不是对象 / 没有数组 `m` 时当单位阵，`m` 里不是数的元素取单位阵对应位的值（dll 的 Mat4 实参转换）；
    * - `applyBonePhysicsImpulse(bone, dir, ang?)`：`dir` / `ang` 读 `x y z`，不是对象（含缺省）当 `(0, 0, 0)`，不抛错；
-   * - `resetBonePhysicsSimulation(bone)`。
+   * - `resetBonePhysicsSimulation(bone)`；
+   * - P12g（rea-p12g）：`getBoneIndex(name)`（只收字符串，非空取第一个全名相等的下标，失败 −1，不看运行时）、`getBoneParentIndex(bone)`（整数按骨骼数判界返回父下标，
+   *   名字取第一个同名且有父的骨骼的父，失败 −1，不看运行时）、`getLocalBoneTransform` / `getLocalBoneAngles` / `getLocalBoneOrigin`（选骨同 `getBoneTransform`，失败为单位阵 / `Vec3(0, 0, 0)`，
+   *   每次返回新对象）、`setLocalBoneTransform` / `setLocalBoneAngles` / `setLocalBoneOrigin`（缺参或类型不对照写单位阵 / (0, 0, 0)，选骨失败不做事）。都不抛错。
    * `bone` 先按 dll 的规则规整：Int32 数 → 下标，字符串 → 名字，其余（`1.5`、对象、缺省）→ 空串。
    */
   private installBones(api: ApiObject, object: number): void {
@@ -1585,18 +1604,49 @@ export class ScriptApi {
       const puppet = this.findLayer(object)?.puppet;
       return puppet ? (puppet.boneCount ?? puppet.skeleton?.parents.length ?? 0) : 0;
     });
-    this.method(api, "getBoneTransform", (b?: unknown) => {
-      const m = view()?.boneTransform?.(bone(b)) ?? IDENTITY_4;
+    const newMat = (m: ArrayLike<number>): ApiObject => {
       const mat = (this.realm.global.Object as typeof Object).create(this.realm.prototypes.Mat4) as ApiObject;
       mat.m = this.array(Array.from(m));
       return mat;
-    });
+    };
+    // Vec3 返回值照文件里现有的建法（realm 的 Vec3 构造器：原型 `Vec3.prototype`，自有键 x y z）
+    const newVec3 = (v: readonly [number, number, number]) => this.vector(v, 3);
+    this.method(api, "getBoneTransform", (b?: unknown) => newMat(view()?.boneTransform?.(bone(b)) ?? IDENTITY_4));
     this.method(api, "setBoneTransform", (b?: unknown, mat?: unknown) => {
-      const m = Array.from(IDENTITY_4);
-      const source = mat !== null && typeof mat === "object" ? (mat as ApiObject).m : undefined;
-      if (Array.isArray(source))
-        for (let i = 0; i < 16; i++) if (typeof source[i] === "number") m[i] = Math.fround(source[i] as number);
-      view()?.setBoneTransform?.(bone(b), m);
+      view()?.setBoneTransform?.(bone(b), mat4Arg(mat));
+      return undefined;
+    });
+    // —— P12g：按骨骼表回答的两个索引方法（不看运行时，init 里、静态 puppet 上都能用），与局部骨骼读写 ——
+    const names = (): readonly string[] => this.findLayer(object)?.puppet?.names ?? [];
+    this.method(api, "getBoneIndex", (name?: unknown) =>
+      typeof name === "string" && name !== "" ? names().indexOf(name) : -1,
+    );
+    this.method(api, "getBoneParentIndex", (b?: unknown) => {
+      const puppet = this.findLayer(object)?.puppet;
+      const list = puppet?.names ?? [];
+      const parents = puppet?.parents ?? [];
+      const key = bone(b);
+      if (typeof key === "number") return key >= 0 && key < list.length ? (parents[key] ?? -1) : -1;
+      if (key === "") return -1;
+      // 名字：第一个同名且有父的骨骼（同名的根骨骼被跳过）
+      for (let i = 0; i < list.length; i++) if (list[i] === key && (parents[i] ?? -1) !== -1) return parents[i];
+      return -1;
+    });
+    this.method(api, "getLocalBoneTransform", (b?: unknown) =>
+      newMat(view()?.localBoneTransform?.(bone(b)) ?? IDENTITY_4),
+    );
+    this.method(api, "getLocalBoneAngles", (b?: unknown) => newVec3(view()?.localBoneAngles?.(bone(b)) ?? [0, 0, 0]));
+    this.method(api, "getLocalBoneOrigin", (b?: unknown) => newVec3(view()?.localBoneOrigin?.(bone(b)) ?? [0, 0, 0]));
+    this.method(api, "setLocalBoneTransform", (b?: unknown, mat?: unknown) => {
+      view()?.setLocalBoneTransform?.(bone(b), mat4Arg(mat));
+      return undefined;
+    });
+    this.method(api, "setLocalBoneAngles", (b?: unknown, v?: unknown) => {
+      view()?.setLocalBoneAngles?.(bone(b), vec3Arg(v, [0, 0, 0]));
+      return undefined;
+    });
+    this.method(api, "setLocalBoneOrigin", (b?: unknown, v?: unknown) => {
+      view()?.setLocalBoneOrigin?.(bone(b), vec3Arg(v, [0, 0, 0]));
       return undefined;
     });
     this.method(api, "applyBonePhysicsImpulse", (b?: unknown, dir?: unknown, ang?: unknown) => {
