@@ -156,7 +156,8 @@
  *   - 没有槽引用的用户纹理在 `sync` 末尾销毁。
  *   - 建资源：`buildableLayers` 不看被依赖图层自身与祖先的可见性（WPE `0x1000`）。
  *   - 编码：不可见（自身或祖先）时照跑它的 op，只跳过画到「场景」的那一步上屏（`layerOpsToRun`），顶层与组画子树两处同一个判断。
- *     语料里的被依赖者都不是组（是组的照报 `dependency:group`），组隐藏时整棵子树照旧不画。
+ *     被依赖的组（P8 步骤 7）同一个判断：隐藏时照画基础 pass 与 effect 链，`subtree` 照跑，子层各按自己的可见性（祖先隐藏 → 不画，
+ *     本身被依赖的照画进自己的 RT、不画进组的），与 WPE 子层的 `+0x68` 相同（`p8-depgroup` 整帧 0 差异）。
  * - 按对象装卸（L4，`.claude/plans/wpe-import/3-scene/live/phase-l4-gpu-objects.md`）：`populate` = 场景级准备（场景目标、纹理、占位纹理、反射 RT、
  *   阴影图集、深度附件、全部程序、视图、粒子索引、泛光、体积光）→ 全部对象并行 `prepareMain`（`prepareObject` 的主段：变形纹理、fbo、被依赖层的独占 RT、
  *   程序与管线）→ 被依赖层的独占 RT 进表 → 按图层顺序 `installCore`（`installObject` 的主体：运行时、粒子序号、挂点、合成 RT、draw、粒子树预热）。
@@ -254,6 +255,7 @@ import {
   everyAncestor,
   eyePosition,
   croppedCursorViewProjection,
+  groupMvpParts,
   groupViewProjection,
   layerQuad,
   particleViewProjection,
@@ -5145,6 +5147,11 @@ export class GpuScene {
     // compose 照旧带视差（`p5j-cam` 的 CLP、G）
     const composeVp = group && compose ? view.viewProjection : null;
     const groupOrCompose = groupVp ?? composeVp;
+    // 组里图像层的 MVP 照 WPE 的结合顺序（P8 步骤 7 走查，`groupMvpParts`）：先并进 `inverse(W_组)`（float32 求逆）再乘局部正交
+    const groupMvp =
+      groupVp && group
+        ? groupMvpParts(group.size, drawMatrixOf(group.object, state.layers, worlds, this.attachHook))
+        : null;
     if (step.kind === "text") {
       // 文本（P6b 1d）：直接上屏用这次画到场景的视图投影（带视差、抖动；组里是组的局部正交），画进合成 RT 用 RT 像素的正交
       // （`textMatrices`）。排版结果在建 draw 前已核对过。`perspective: true` 的文本直接上屏换透视那一份视图投影（P5g，同图像层，
@@ -5245,6 +5252,7 @@ export class GpuScene {
         ...common,
         step,
         layer: { ...layerState, size: rtSize ?? this.layerSize(layer, state) },
+        group: groupMvp,
         ...(prelit
           ? {
               alt: {

@@ -369,11 +369,15 @@ export function drawMatrices(
   world: Mat4,
   size: readonly number[],
   viewProjection: Mat4,
+  /** 组里的图层（P8 步骤 7 走查，`layout.ts` 的 `groupMvpParts`）：MVP 照 WPE 先并进组的逆、再乘局部正交；其余矩阵不变。 */
+  group?: { projection: Mat4; inverse: Mat4 } | null,
 ) {
   const model = world;
   // MVP = M ⊗ VP：WPE 的仿射乘法（`FUN_1400d4200`，rea-matrix-order 2.1）。下面 effect / final 的 `multiply(…, half)` 不改：每个元素只有
-  // 一个非零乘积，和 WPE 的逐元素缩放逐位相同（rea-matrix-order 4.2）
-  const layerMvp = mulAffine(viewProjection, model);
+  // 一个非零乘积，和 WPE 的逐元素缩放逐位相同（rea-matrix-order 4.2）。组里是 `P ⊗ (inverse(W_组) ⊗ W)`，同一种仿射乘法两次
+  const layerMvp = group
+    ? mulAffine(group.projection, mulAffine(group.inverse, model))
+    : mulAffine(viewProjection, model);
   const hw = (size[0] ?? 0) / 2,
     hh = (size[1] ?? 0) / 2;
   const half = scaling(hw, hh, 1);
@@ -457,6 +461,8 @@ export interface DrawUniformInput {
   fog?: Readonly<Record<string, readonly number[]>>;
   /** 预光照的三个 Alt 矩阵的来源（P13j，`StaticBuiltinInput.alt`）；只有预光照的基础 pass 给。 */
   alt?: { model: Mat4; viewProjection: Mat4 };
+  /** 组里图层 MVP 的两半（`drawMatrices` 的 `group`，P8 步骤 7 走查）；不在组里、全屏组与 compose 不给。 */
+  group?: { projection: Mat4; inverse: Mat4 } | null;
 }
 
 /**
@@ -472,7 +478,7 @@ export function layerRefreshNames(passUniforms: Record<string, number[]>): strin
  * `createDraw` 建 draw 与 `GpuScene.sync` 就地刷新共用同一个函数——两边逐字节一致由单测核对（P3a 验收 4）。
  */
 export function drawUniformValues(input: DrawUniformInput): Record<string, number[]> {
-  const matrices = drawMatrices(input.step, input.world, input.layer.size, input.viewProjection);
+  const matrices = drawMatrices(input.step, input.world, input.layer.size, input.viewProjection, input.group);
   const values = staticBuiltins({
     ...matrices,
     modelViewProjectionInverse: uniformInverse(matrices.modelViewProjection),

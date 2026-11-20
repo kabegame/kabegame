@@ -37,18 +37,13 @@ export function settleDestroyed(state: SceneState, hooks: SettleHooks = {}): num
 }
 
 /**
- * 组自身的不支持项（L7）：组合层运行中挂上子层成了组（`passthroughModel` 且 `subtree` 非空），而编译期按「有子层」才报的两个条件成立：
- * 被依赖（`dependency:group`）、开雾（`fog:group`；没有子层的组合层开雾时编译期置了 `fogPassthrough`）。键和编译期报的相同（`compile/bundle.ts`
- * 的 `compileOne`）。不是组时为空。透视场景里的组 P13h 起照画（`camera:perspective:group` 不再报）。
+ * 组自身的不支持项（L7）：组合层运行中挂上子层成了组（`passthroughModel` 且 `subtree` 非空），而编译期按「有子层」才报的条件成立：
+ * 开雾（`fog:group`；没有子层的组合层开雾时编译期置了 `fogPassthrough`）。键和编译期报的相同（`compile/bundle.ts` 的 `compileOne`）。
+ * 不是组时为空。透视场景里的组 P13h 起照画（`camera:perspective:group` 不再报），被依赖的组 P8 步骤 7 起照画（`dependency:group` 不再报）。
  */
-export function groupSelfIssues(
-  layer: Pick<SceneLayer, "passthroughModel" | "subtree" | "dependedOn" | "fogPassthrough">,
-): string[] {
+export function groupSelfIssues(layer: Pick<SceneLayer, "passthroughModel" | "subtree" | "fogPassthrough">): string[] {
   if (!layer.passthroughModel || !layer.subtree?.length) return [];
-  const keys: string[] = [];
-  if (layer.dependedOn) keys.push("dependency:group");
-  if (layer.fogPassthrough) keys.push("fog:group");
-  return keys;
+  return layer.fogPassthrough ? ["fog:group"] : [];
 }
 
 /** `trackGroupIssues` 的结果：这次新出现（或键变了）的对象 → 键，与不再有问题的对象。 */

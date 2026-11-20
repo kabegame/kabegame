@@ -268,9 +268,10 @@ describe("组内不支持组合（L7，groupSelfIssues / trackGroupIssues）", (
   const layer = (object: number, extra: Partial<SceneLayer> = {}) =>
     ({ object, passthroughModel: false, subtree: [], ...extra }) as SceneLayer;
 
-  it("groupSelfIssues：只有成了组（组合层且子树非空）才报，键同编译期；透视场景不再报（P13h）", () => {
+  it("groupSelfIssues：只有成了组（组合层且子树非空）才报，键同编译期；透视场景（P13h）、被依赖（P8 步骤 7）不再报", () => {
     const group = { passthroughModel: true, subtree: [2], dependedOn: true, fogPassthrough: true as const };
-    expect(groupSelfIssues(group)).toEqual(["dependency:group", "fog:group"]);
+    expect(groupSelfIssues(group)).toEqual(["fog:group"]);
+    expect(groupSelfIssues({ ...group, fogPassthrough: undefined })).toEqual([]);
     expect(groupSelfIssues({ ...group, subtree: [] })).toEqual([]);
     expect(groupSelfIssues({ ...group, passthroughModel: false })).toEqual([]);
     expect(groupSelfIssues({ passthroughModel: true, subtree: [2] })).toEqual([]);
@@ -300,14 +301,16 @@ describe("组内不支持组合（L7，groupSelfIssues / trackGroupIssues）", (
     expect(tracked.size).toBe(0);
   });
 
-  it("trackGroupIssues：组自身的条件并进组的键（组合层成了组且被依赖）；键变了重报", () => {
+  it("trackGroupIssues：组自身的条件并进组的键（组合层成了组且开雾）；键变了重报；被依赖不算（P8 步骤 7）", () => {
     const tracked = new Map<number, string[]>();
     const group = layer(1, { passthroughModel: true, subtree: [2], dependedOn: true });
     let out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map() }, [group]);
-    expect([...out.added]).toEqual([[1, ["dependency:group"]]]);
+    expect(out.added.size).toBe(0);
     group.fogPassthrough = true;
     out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map() }, [group]);
-    expect([...out.added]).toEqual([[1, ["dependency:group", "fog:group"]]]);
+    expect([...out.added]).toEqual([[1, ["fog:group"]]]);
+    out = trackGroupIssues(tracked, { changed: new Set([1]), issues: new Map([[1, ["x:y"]]]) }, [group]);
+    expect([...out.added]).toEqual([[1, ["fog:group", "x:y"]]]);
   });
 });
 

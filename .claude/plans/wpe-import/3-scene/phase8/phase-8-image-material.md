@@ -1259,6 +1259,50 @@ function isImageLayerObject(object: SceneObject): boolean {
 
   单测或比图要能检出。
 
+## 步骤 7 — 被依赖的组
+
+2026-11-20 加。myprojects `3811403844`（【绝区零】佩洛伊斯-铃）只差 `dependency:group` 一个键，是语料里第一个用法：
+- 组合层 32「蒙版」（`composelayer`、7200×3240、可见）下面挂纯色黑层 34，34 下面挂跟光标走的斜线 42（`origin` 字段脚本读 `input.cursorWorldPosition`）和一个绑属性隐藏的粒子 252；
+- 图像层 22「底色1」与 95「底色2」`dependencies: [32]`，blend effect 的槽 7 读 `_rt_imageLayerComposite_32_a` 当遮罩，在两张原图之间按斜线切换。
+
+### 思路
+
+步骤 4 照报 `dependency:group` 的理由是「组隐藏时子层怎么画进它的 RT 没查」。读码（rea-p8-render 1.3、2.4，rea-p5-modelflags 2.2）其实已经给出了答案：被依赖的组带 `0x1000`，`+0x68` 恒真，进 `FUN_1401e8aa0` 照画层首快照、基础 pass 与 effect 链，只跳过上屏；子树由组自己画，每个直接子层先过各自的 `+0x68` = `(visible && 父链可见) || (+0x304 & 0x1100)`，组隐藏时父链不可见，普通子层不画，本身被依赖的子层照画进自己的 RT，但它的上屏块看真可见、也不画进组的 RT。
+
+我们这边不用写新代码：渲染图把被依赖的组排成 compose → 子树 → effect → passthrough 上屏（步骤 4 的 `planLayer` 单测已有），`layerOpsToRun` 在组不可见时只去掉画到「场景」的那一步、`subtree` 照跑，子层各按自己的可见性走同一个函数。所以这一步是**先在 WPE 上实测、和我们逐像素比，对上了就去掉照报**。
+
+### 实测（`p8-depgroup`，2026-11-20）
+
+工程 `ignore/p8/gen_p8.py depgroup`：每个组 200×200、垫一块青色底，子层是 100×100 的 mark、偏 (40, 40)，引用方 B 是纯色层 + kbref。抓帧 `A:\p8\depgroup\depgroup-frame626–628.rdc`（1920×1080），逐 draw 导出 `ignore/p8/s7/dump.json`（`ignore/p8/s6/summ.py` 看摘要）。
+
+| # | 组合 | WPE 的绘制 | 结论 |
+|---|---|---|---|
+| G1 | 可见 | 拷屏 → compose 进 436 → C1 进 436 → 436 上屏；B1 读 436 | `_a` = compose + 子树 |
+| G2 | 写死隐藏 | 拷屏 → compose 进 445；C2 不画、不上屏；B2 读 445 | 只有基础 pass |
+| G3 | 可见性绑属性（false） | 同 G2 | 同 G2 |
+| G4 | 可见、`copybackground: false`、kbinv | 清 466 → C4 进 466 → kbinv 466 → 463 → 463 上屏；B4 读 463 | 最后一次写入落在 `_a`（同步骤 4 的奇偶） |
+| G5 | 写死隐藏、`copybackground: false`、kbinv | 清 466 → kbinv 466 → 475；C5 不画、不上屏；B5 读 475 | effect 链照跑，子层不画 |
+| G6 | 组 → 黑色纯色层 → 孙子 mark，B6p 排在组前面 | B6p 读 484（上一帧）；compose → S6 → C6 都进 484 → 上屏；B6 读 484 | 隔一层的孙子照画进组的 RT（同 3811403844 的结构） |
+| G7 | 写死隐藏、子层 C7 也被依赖 | compose 进 493；C7 画进自己的 502（64×64，纹理尺寸）、不画进 493；B7 读 493、B7c 读 502 | 被依赖的子层照画进自己的 RT，不上屏到组里 |
+
+和读码一致。Kabegame（HEAD，探针给两帧 `replay` 让 B6p 有上一帧）和 WPE 三帧整帧 0 差异（屏蔽 FR / CLK）。
+
+### 点 1 — 编译与运行中的结构变化
+- **删除**
+  - `compile/bundle.ts` 的 `if (depended && hasChildren) unsupported.add("dependency:group")`。
+  - `script/structure.ts` 的 `groupSelfIssues` 里 `dependency:group`（L7 运行中组合层成组时的同一条件）；参数类型去掉 `dependedOn`。
+
+### 点 2 — 单测
+- **修改** `compile/p8.test.ts`：被依赖的组不报、填 `dependedOn` / `subtree`、编 passthrough。
+- **修改** `script/structureRuntime.test.ts`：`groupSelfIssues` 只剩 `fog:group`；`trackGroupIssues` 对只被依赖的组不报。
+- **新增** `render/p8.test.ts`（假设备）：可见性绑属性的被依赖组，隐藏时 compose 进组的独占 RT、普通子层不画、被依赖的子层画进自己的 RT、组不上屏；切到可见后子层画进组的 RT、组 passthrough 上屏。
+
+### 验收
+- 相关 vitest、tsc、Prettier。
+- 语料：HEAD 快照与工作区各扫一遍（加 myprojects `3811403844`、`3837779440`），只去掉 `3811403844` 的 `dependency:group`。
+- 画面：`p8-depgroup` 与 WPE 比；`3811403844` 的复制工程（`kbp content isolate --keep 22,32,34,42`，斜线 `origin` 固定成 JSON 的值）按日志回放比两帧。
+- 真实壁纸：重建 dev 宿主后渲染 `3811403844`，`unsupported` 为空。
+
 ## 步骤 1–5 的验收
 
 - **每步**：确定性工程和 WPE 逐像素比（`kbp cmp frame --meta`，图层带 `bbox`）；几何类（形状、对齐）另比四角，限值 0.01 像素。
@@ -1490,6 +1534,29 @@ function isImageLayerObject(object: SceneObject): boolean {
   - `p8-deptext` 第 242、280、281、282、291 帧（含换宽度与空文字那一帧）和 WPE 整帧 0 差异（`ignore/p8/s6/kb2`）。
   - 复制工程 `3837779440-iso-clock2`（只留 1049、186，时钟固定「22:22」，关掉 186 的 shake / rotate2pos / rotate2pos2）三帧整帧 0 差异。不关这三个动作 effect 的 `-iso-clock` 手臂姿态和 WPE 不同（差在 704×576 的手臂上，和依赖无关，另记）。
   - 变异（子代理在快照里手做、单测检出）：不重绑引用方、拆层释放两次、空文字不换独占 RT；`padding` 漏掉被依赖由 `text/layout.test.ts` 的 137×97 断言守。
+
+### 步骤 7 — 被依赖的组（2026-11-20）
+
+- **实测**：见步骤 7「实测」表（`p8-depgroup`，七种组合）。渲染器原样就和 WPE 相同，改动只有去掉照报。
+- **数据**：
+  - tsc 0 error；`compile/p8.test.ts`、`render/p8.test.ts`、`script/structureRuntime.test.ts` 185 个用例全过；Prettier 通过。
+  - 语料（235 张，含 myprojects 两张）：HEAD 234 张干净 → 工作区 235 张，只有 `3811403844` 去掉 `dependency:group`，没有新增键。
+  - `p8-depgroup` 与 WPE 第 627–629 帧整帧 0 差异（屏蔽 FR / CLK；只画固定时刻一帧时 B6p 读不到上一帧，给两帧 `replay` 后相同）。
+  - 重建 dev 宿主后屏外渲染 `3811403844`（跑脚本）：`unsupported` 为空，斜线遮罩、时钟正常；音频条由脚本 `createLayer` 建 63 层，照产品晚几帧装上。
+  - （先做的 `ignore/p8/s7/proj` 把斜线的 `origin` 脚本换成了固定值，不符合 FINAL_CHECK 原则第 5 条，作废，以下面的走查为准。）
+- **变异**：把两处照报加回去由 `compile/p8.test.ts`、`structureRuntime.test.ts` 检出；`layerOpsToRun` 在不可见时不再放行被依赖的层由新的 `render/p8.test.ts` 用例检出（组的 compose 与 D 的绘制消失）。
+
+#### 走查 `3811403844`（FINAL_CHECK，2026-11-20）
+
+- **复制工程** `ignore/p8/s7/iso-dg`（`kbp content isolate 3811403844 --keep 22,95,32,34,42,252 --instrument`）：遮罩组 32 → 34 → 斜线 42 / 粒子 252，读它的底图 22、95；斜线跟光标的 `origin` 脚本原样保留，没有换字段。删掉的背景、音频条、时钟、拖尾粒子、声音都在 22 之前或与遮罩无关；isolate 报的「22 / 95 读 `_rt_FullFrameBuffer`」是经依赖算到组 32 的 composelayer，组是第一个对象，WPE 每帧只有一次快照（事件 4），不受影响。
+- **录制**：WPE 1920×1080 测试窗口，`input_start` 按正弦轨迹喂光标（`ignore/p8/s7/timeline.json`，1400 帧），同一窗口里依次 默认属性 → `apply_properties` 关「灰/蓝」开「白/蓝」 → 再开「白/灰」（底色2），各连续抓 5 帧（`A:\p8\depgroup-dg\dg{1,2,3}-frame*.rdc`）；`[kbp]` 日志（帧时间 + 屏幕光标）`ignore/p8/s7/out/dg-1920x1080-log.txt`。帧号由画面外 FR draw 的 `g_Color` 解出，`g_Time` 和日志累计时间逐位相同（第 1486–1490、1857–1861、2047–2051 帧）。场景里没有带历史的状态（粒子一直隐藏，effect 只看时间），所以每段按自己的属性从头回放与 WPE 中途改属性等价。
+- **回放**：`renderFrames.ts --timeline-log … --cursors log --scripts --canvas 1920x1080`，每段带对应的 `--user-properties`。
+- **改前**：最大差 254 / 12 / 4（三段），每帧 2–26 个像素。逐张比中间 RT（WPE `save_texture` 对我们 `trace.readback`）：
+  - **遮罩边缘翻转**（bug）：斜线画进组 RT 那次 draw 的 MVP 只有平移差 1 ulp（第 1486 帧 `m13` 1.7505830 / 1.7505829，第 1860 帧 `m12`、`m13`）。WPE 画子树时先并进 `inverse(W_组)`、再乘局部正交，平移是 `(ty − 1620)·s`；我们先拼 `P · invert(W_组)` 再乘，是 `ty·s − 1620·s`（两种写法用 float32 复算分别逐位对上）。斜线左下顶点的 y ×256 = 782136.524，离 1/256 像素对齐的分界只差 0.024，1 ulp 让它对齐到相邻的点、整条边移 1/256 像素；沿边逐个检查被采样的 texel，这样一次移动恰好翻转第 1486 帧那 2 个（(1615, 117)、(311, 566)），不多不少。第 1860 帧遮罩 12 个 texel 翻转，沿边等距（步长约 (273, −94)）。翻转的遮罩 texel 让 blend 换成另一张原图，再经 foliagesway 位移在旁边带出 4–12 的差。
+  - **foliagesway 舍入**（已知差异「片元的零星舍入差」）：基础 pass、blend、iris 逐张 0 差异，1 级差从 foliagesway（噪声 + `g_Time` 约 100 扰动采样坐标）开始；第三段底色2 上的两个 pulse 各把亮度乘 2，三个像素从 1 级放大到 4（(548, 855) 逐级 40 / 39 → 80 / 78 → 4）。
+- **修**：`layout.ts` 的 `groupMvpParts`（局部正交 + `invertF32` 求组的逆）、`drawMatrices` 的 `group`（`MVP = P ⊗ (inverse(W_组) ⊗ W)`，两次 `mulAffine`），只换组里图像层的 MVP（`scene.ts` 图像层那次 `drawUniformValues`）；`g_ModelMatrix` / `g_ViewProjectionMatrix`、文本、粒子、网格照旧。单测（`render/p8.test.ts`）照运行时父链拼三帧斜线的矩阵，16 个分量和抓帧逐位相同、旧写法平移差 1 ulp。
+- **改后**：三段最大差 2 / 1 / 4，第 1486、1860 帧遮罩 RT 和 WPE 0 差异、斜线 MVP 逐位相同；剩下的全是 foliagesway 舍入（第 1487 帧 (678, 255) 差 2 在陡边上，改前就有）与 pulse 放大。
+- **回归**：`p5b-grp-cb1` / `cb0` / `par` 仍最大差 1（差 1 的像素 55195 → 55163、85885 → 85878、57396 → 57364），`nofx` / `nofx0` 0 差异，`nest` 和以前相同（168900 个像素差 1），`p8-depgroup` 像素摘要不变（0 差异）；渲染相关 63 个测试文件 1732 个用例全过，tsc 0 error。
 
 ### P8 收尾（2026-11-14）
 

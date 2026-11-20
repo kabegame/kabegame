@@ -3413,8 +3413,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         layer.prelit = prelit;
       }
     }
-    // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
-    if (depended && hasChildren) unsupported.add("dependency:group");
+    // 被依赖的组（有子层的组合层）P8 步骤 7 起不报：渲染图照被依赖图层的规则排（compose → 子树 → effect → 上屏），组隐藏时只画基础
+    // pass 与 effect 链、子层不画（`p8-depgroup` 七种组合和 WPE 整帧 0 差异）
     // puppet 的上屏路径与材质变体（步骤 3 点 1）：composite 时 passthrough 上屏由 puppet 自己的 `upload` 承担，不再编 `layer.passthrough`
     // 纹理通道网格（P12b2-2）强制合成路径（rea-texchan-model 2：UV 不缩放、`0x10`）；基础材质带光照 / 反射时 WPE 要另建 RT 预光照，照报
     if (layer.puppet?.textureChannels) {

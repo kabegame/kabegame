@@ -78,6 +78,7 @@ import {
 import {
   alignmentOffset,
   drawMatrixOf,
+  groupMvpParts,
   groupViewProjection,
   layerLocalMatrix,
   layerQuad,
@@ -1364,7 +1365,7 @@ describe("planLayer：被依赖的图层（P8 步骤 4，rea-p8-render 2.3、2.4
       "effect c1 → c0",
       "passthrough c0 → scene",
     ]);
-    // 组（编译期照报 dependency:group，渲染图照规则排）：compose → 子树 → effect → 上屏
+    // 组（P8 步骤 7 起编译期不再报 dependency:group，`p8-depgroup` 的 G4）：compose → 子树 → effect → 上屏
     const group = depLayer(0, "G", {
       passthroughModel: true,
       subtree: [1],
@@ -1478,6 +1479,92 @@ describe("planLayer：被依赖的图层（P8 步骤 4，rea-p8-render 2.3、2.4
       0: { kind: "texture", index: 0 },
       1: LAYER_5,
     });
+  });
+});
+
+describe("组里图像层的 MVP 照 WPE 的结合顺序（P8 步骤 7 走查，3811403844 的遮罩斜线）", () => {
+  // 组 32「蒙版」（左下对齐，7200×3240）→ 纯色层 34 → 斜线 42（底边对齐，4444×4444，角度 z 0.33161，缩放 3 1 1，origin 是光标的世界坐标）。
+  // 期望值是 WPE 抓帧 `A:\p8\depgroup-dg\dg{1,2,3}-frame{1485,1859,2050}.rdc` 事件 50（斜线画进组 RT）的 g_ModelViewProjectionMatrix
+  const rotationScale = [
+    0.0007879328331910074, 0.0006028995267115533, 0, 0, -9.0434929006733e-5, 0.0005836539785377681, 0, 0,
+  ];
+  const depth = [0, 0, 0.0005000000237487257, 0];
+  const cases: [string, number, number, number, number][] = [
+    ["第 1486 帧", 4020, 2355, -0.08427971601486206, 1.7505830526351929],
+    ["第 1860 帧", 1638, 789, -0.7459464073181152, 0.7839161157608032],
+    ["第 2051 帧", 5256, 696, 0.2590535581111908, 0.7265087366104126],
+  ];
+  const layersAt = (x: number, y: number) =>
+    new Map<number, Pick<LayerTransform, "origin" | "angles" | "scale" | "offset" | "parent">>([
+      [
+        0,
+        {
+          origin: [0, 0, 0],
+          angles: [0, 0, 0],
+          scale: [1, 1, 1],
+          offset: alignmentOffset(alignmentIndex("bottomleft"), [7200, 3240]),
+          parent: null,
+        },
+      ],
+      [
+        1,
+        {
+          origin: [0, 0, 0],
+          angles: [0, 0, 0],
+          scale: [1, 1, 1],
+          offset: alignmentOffset(alignmentIndex("bottomleft"), [7200, 3240]),
+          parent: 0,
+        },
+      ],
+      [
+        2,
+        {
+          origin: [x, y, 0],
+          angles: [0, 0, 0.33161],
+          scale: [3, 1, 1],
+          offset: alignmentOffset(alignmentIndex("bottom"), [4444, 4444]),
+          parent: 1,
+        },
+      ],
+    ]);
+
+  it.each(cases)(
+    "%s：MVP 与 WPE 逐位相同；先拼 groupViewProjection 再乘的写法平移差 1 ulp",
+    (_name, x, y, m12, m13) => {
+      const layers = layersAt(x, y);
+      const cache = new Map<number, Mat4>();
+      const group = drawMatrixOf(0, layers, cache);
+      const world = drawMatrixOf(2, layers, cache);
+      const parts = groupMvpParts([7200, 3240], group)!;
+      const vp = groupViewProjection([7200, 3240], group);
+      const expected = Float32Array.from([...rotationScale, ...depth, m12, m13, 0.5, 1]);
+      const ours = drawMatrices({ role: "direct" }, world, [4444, 4444], vp, parts).modelViewProjection;
+      expect(Array.from(ours)).toEqual(Array.from(expected));
+      // 旧写法（P5b 起）：组的逆用双精度 `invert`、和投影先拼好，平移有一项差 1 ulp
+      const old = drawMatrices({ role: "direct" }, world, [4444, 4444], vp).modelViewProjection;
+      expect(Array.from(old.slice(0, 12))).toEqual(Array.from(expected.slice(0, 12)));
+      expect(Array.from(old.slice(12, 14))).not.toEqual([m12, m13].map(Math.fround));
+    },
+  );
+
+  it("drawUniformValues 透传 group：MVP 换、g_ModelMatrix 与 g_ViewProjectionMatrix 不变；effect 与上屏的效果矩阵跟着新的 MVP", () => {
+    const layers = layersAt(4020, 2355);
+    const cache = new Map<number, Mat4>();
+    const group = drawMatrixOf(0, layers, cache);
+    const world = drawMatrixOf(2, layers, cache);
+    const parts = groupMvpParts([7200, 3240], group)!;
+    const vp = groupViewProjection([7200, 3240], group);
+    const finalStep = { role: "final" as const };
+    const withGroup = drawMatrices(finalStep, world, [4444, 4444], vp, parts);
+    const without = drawMatrices(finalStep, world, [4444, 4444], vp);
+    expect(withGroup.model).toBe(without.model);
+    expect(withGroup.viewProjection).toBe(vp);
+    expect(withGroup.effectModelViewProjection).toBe(withGroup.modelViewProjection);
+    expect(Array.from(withGroup.effectTextureProjection!)).toEqual(
+      Array.from(multiply(withGroup.modelViewProjection, scaling(2222, 2222, 1))),
+    );
+    // 不可逆的组（缩放为 0）没有两半，退回旧写法
+    expect(groupMvpParts([7200, 3240], scaling(0, 1, 1))).toBeNull();
   });
 });
 
@@ -1789,6 +1876,49 @@ describe("GpuScene：被依赖图层的独占 RT 与编码（P8 步骤 4，p8-de
       "  draw layer 11 C base",
       `pass ${group} load`,
       "  draw layer 11 C passthrough",
+    ]);
+  });
+
+  it("被依赖的组（P8 步骤 7，p8-depgroup 的 G1 / G3 / G7）：组的独占 RT 装 compose + 子树；组隐藏时照画 compose、子层不画、不上屏，被依赖的子层照画进自己的 RT", async () => {
+    // 组的可见性绑属性（G3）：子层照建资源，运行中切到可见能画
+    const bundle = depBundleOf([
+      depLayer(0, "G", {
+        visible: false,
+        visibleBound: true,
+        passthroughModel: true,
+        subtree: [1, 2],
+        passes: [composePass(0)],
+      }),
+      depLayer(1, "C", { parent: 0, group: 0, dependedOn: false, passthrough: null }),
+      depLayer(2, "D", { parent: 0, group: 0 }),
+    ]);
+    const { gpu, scene, state } = await openDep(bundle);
+    const group = layerCompositeName(10);
+    const child = layerCompositeName(12);
+    // G2 / G7：组隐藏——compose 进组的 RT，C 不画，D 画进自己的 RT、不画进组的 RT，组不上屏
+    expect(encodeDep(gpu, scene, state).slice(1)).toEqual([
+      "copy scene target -> _rt_FullFrameBuffer",
+      `pass ${group} load`,
+      "  draw layer 10 G compose",
+      `pass ${child} load`,
+      "  draw layer 12 D base",
+    ]);
+    // G1：组可见——C 画进组的 RT，D 画进自己的 RT 再上屏到组的 RT，组用 passthrough 上屏
+    state.write({ property: "p", target: { kind: "layer", object: 0, field: "visible" } }, true);
+    scene.sync(state);
+    scene.update(ALIGN_FRAME, state);
+    expect(encodeDep(gpu, scene, state).slice(1)).toEqual([
+      "copy scene target -> _rt_FullFrameBuffer",
+      `pass ${group} load`,
+      "  draw layer 10 G compose",
+      `pass ${group} load`,
+      "  draw layer 11 C direct",
+      `pass ${child} load`,
+      "  draw layer 12 D base",
+      `pass ${group} load`,
+      "  draw layer 12 D passthrough",
+      "pass scene target load",
+      "  draw layer 10 G passthrough",
     ]);
   });
 });

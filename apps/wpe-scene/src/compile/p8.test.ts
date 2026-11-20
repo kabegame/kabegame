@@ -1518,7 +1518,7 @@ describe("compileScene：被依赖图层的编译与照报（P8 步骤 4）", ()
     expect(bound.bundle.unsupported).toEqual(["dependency:passthrough-undeclared"]);
   });
 
-  it("照报 dependency:group：被依赖的是组（有子层的组合层）；没有子层的组合层不报、照编 passthrough", async () => {
+  it("被依赖的组（P8 步骤 7）不再报 dependency:group：填 dependedOn、编 passthrough；没有子层的组合层同样", async () => {
     const compose = (id: number, name: string) => ({
       id,
       name,
@@ -1531,7 +1531,9 @@ describe("compileScene：被依赖图层的编译与照报（P8 步骤 4）", ()
       imageObject(11, "child", { parent: 10 }),
       imageObject(20, "B", { dependencies: [10] }),
     ]);
-    expect(group.bundle.unsupported).toEqual(["dependency:group"]);
+    expect(group.bundle.unsupported).toEqual([]);
+    expect(group.bundle.layers[0]).toMatchObject({ dependedOn: true, passthroughModel: true, subtree: [1] });
+    expect(group.bundle.layers[0].passthrough).not.toBeNull();
     const single = await compileDeps([compose(10, "CL"), imageObject(20, "B", { dependencies: [10] })]);
     expect(single.bundle.unsupported).toEqual([]);
     expect(single.bundle.layers[0]).toMatchObject({ dependedOn: true, passthroughModel: true });
