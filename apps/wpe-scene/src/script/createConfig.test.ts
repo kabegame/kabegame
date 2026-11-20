@@ -253,3 +253,39 @@ describe("createLayerConfig：其它类型 null（`arg 5`、`arg undef`）", () 
     for (const value of [5, true, undefined, null, () => 1]) expect(createLayerConfig([value], ctx)).toBeNull();
   });
 });
+
+describe("createLayerConfig：IModelData 句柄（P14，S16）", () => {
+  /** 句柄替身：`toConfigString` 返回整数 token（baseclasses 的 `IModelData`）。 */
+  const handle = { applyData() {}, toConfigString: () => 7 };
+  const handles = new WeakSet<object>([handle]);
+  /** 同 realm 的 `stringifyConfig`：JSON.stringify 的替换器对有 `toConfigString` 的值调它。 */
+  const replacerStringify = (value: unknown): string =>
+    JSON.stringify(value, (_key, item) =>
+      item && typeof (item as { toConfigString?: unknown }).toConfigString === "function"
+        ? (item as { toConfigString(): unknown }).toConfigString()
+        : item,
+    );
+  const ctx = (extra: Partial<CreateConfigContext> = {}) =>
+    context({ stringify: replacerStringify, isModelData: (value) => handles.has(value as object), ...extra });
+
+  it("单参数句柄先包成 { model: 句柄 }：model 序列化成整数 token，不补缺省模型", () => {
+    expect(createLayerConfig([handle], ctx())).toEqual({ model: 7 });
+  });
+
+  it("配置对象里写 model: 句柄 走同一条路", () => {
+    expect(createLayerConfig([{ model: handle, name: "ML", origin: "0 0 0" }], ctx())).toEqual({
+      model: 7,
+      name: "ML",
+      origin: "0 0 0",
+    });
+  });
+
+  it("没有 isModelData 时单参数句柄按普通对象序列化（原行为）", () => {
+    // `toConfigString` 在顶层被当成 Vec 的写法：整个对象变成数字文本，不是对象 → null
+    expect(createLayerConfig([handle], ctx({ isModelData: undefined }))).toBeNull();
+  });
+
+  it("不是句柄的对象不受影响", () => {
+    expect(createLayerConfig([{ image: "models/a.json" }], ctx())).toEqual({ image: "models/workshop/123/a.json" });
+  });
+});

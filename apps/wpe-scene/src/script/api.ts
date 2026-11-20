@@ -44,7 +44,16 @@ import { scriptToString } from "../text/fields";
 import { layerVideoSource } from "../video/sceneVideos";
 import { copySpectrumToBuffers, type AudioBuffers } from "./audio";
 import { animationLayerItem, type RealmJson } from "./animationLayerConfig";
-import { createdLayerKind, createLayerConfig, type CreatedLayerKind, type CreateConfigContext } from "./createConfig";
+import type { ModelDataStore } from "../modeldata/store";
+import type { MaterialCheck } from "../modeldata/types";
+import {
+  createdLayerKind,
+  createLayerConfig,
+  rewriteWorkshopPath,
+  type CreatedLayerKind,
+  type CreateConfigContext,
+} from "./createConfig";
+import { installModelData } from "./modelData";
 import { degreesFromScript, radiansToScript, scriptNumber, scriptNumbers } from "./f32";
 import type { ScriptRealm, ScriptRuntime, ScriptValue } from "./runtime";
 import { materialObjectKeys } from "./materialKeyOrder";
@@ -253,6 +262,10 @@ export interface ScriptApiState {
   createLayer?(config: string, parent: number | null): number | null;
   /** 配置里带的脚本（克隆）当场追加进运行时并在返回前跑完 `init`（`ScriptRuntime.addScripts`）。不传时新对象上的脚本不跑。 */
   addScripts?(scripts: SceneScript[]): void;
+  /** 脚本模型数据仓（P14）：`thisScene.createModelData` 等接到它上面。宿主还没接时不传，`createModelData` 返回 null。 */
+  modelData?: ModelDataStore;
+  /** 建模型数据时的材质检查（模板里查着色器输入，P14 步骤 2）。不传时 `createModelData` 返回 null。 */
+  materialCheck?: MaterialCheck;
 }
 
 /** `createLayer` 建出、还没有编译产物的对象（待编对象，P6d3b）：新 bundle 换上后删掉（`ScriptApi.adoptBundle`）。 */
@@ -2002,6 +2015,7 @@ export class ScriptApi {
    */
   private installLayerTable(): void {
     const state = () => this.access.state();
+    this.installModelDataApi();
     this.installCreateLayer();
     // 不传参数返回 undefined（0c 实测）；传了 undefined 的行为不变（按名字找、找不到 null）。数字、名字、图层对象都按 `R`
     this.sceneMethod("getLayer", (...args) => {
@@ -2139,6 +2153,37 @@ export class ScriptApi {
     return id;
   }
 
+  /** `IModelData` 句柄的判定（`installModelDataApi` 装好后有）：`createLayer(句柄)` 包成 `{ model }`（P14，S16）。 */
+  private modelDataHandle: ((value: unknown) => boolean) | null = null;
+
+  /**
+   * `createModelData` / `destroyModelData`（P14 步骤 1，`script/modelData.ts`）。宿主给了数据仓才装：没接时 `thisScene` 的成员与以前相同，
+   * 和 `MISSING_SCRIPT_API` 里仍登记着这两个方法不矛盾（宿主在步骤 3 接上、同时从缺口表删掉）。
+   */
+  private installModelDataApi(): void {
+    if (!this.access.modelData) return;
+    const handles = installModelData({
+      global: this.realm.global as Record<string, unknown>,
+      store: () => this.access.modelData,
+      materialCheck: () => this.access.materialCheck,
+      activeCallback: () => this.access.activeCallback?.() ?? null,
+      rewriteMaterial: (path) =>
+        rewriteWorkshopPath(path, null, {
+          stringify: () => undefined,
+          orthographic: true,
+          workshopId: this.access.workshopId?.() ?? null,
+          inAssets: (candidate) => new Set(this.access.bundle().assetPaths ?? []).has(candidate),
+        }),
+      syntaxError: (message) => this.syntaxError(message),
+      typeError: (message) => {
+        const Ctor = (this.realm.global.TypeError as ErrorConstructor | undefined) ?? TypeError;
+        return new Ctor(message);
+      },
+      sceneMethod: (name, fn) => this.sceneMethod(name, fn),
+    });
+    this.modelDataHandle = handles.isHandle;
+  }
+
   /**
    * `thisScene.createLayer(...args)`（P6d3b，rea-p6d-script 1.2、1.3，rea-p6d-layers 3–5）：参数整理成配置（`createLayerConfig`）→ 宿主分配下标、建待编
    * 对象 → 配置里带的脚本当场实例化并跑完 `init` → 返回新图层对象。整个过程同步，返回时 `before` → 新层各段 `init` → `after` 的顺序与 WPE 一致。
@@ -2160,6 +2205,7 @@ export class ScriptApi {
         orthographic: !bundle.general.perspective,
         workshopId: this.access.workshopId?.() ?? null,
         inAssets: (path) => assets.has(path),
+        isModelData: (value) => this.modelDataHandle?.(value) ?? false,
       };
       const config = createLayerConfig(args, context);
       if (config === null) return null;

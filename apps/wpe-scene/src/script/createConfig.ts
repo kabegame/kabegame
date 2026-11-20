@@ -16,6 +16,8 @@ export interface CreateConfigContext {
   workshopId: string | null;
   /** 路径在 WPE assets 里存在（编译期名单 `bundle.assetPaths`） */
   inAssets(path: string): boolean;
+  /** 值是 `IModelData` 句柄（P14，S16）：单参数时先包成 `{ model: 句柄 }` 再序列化，`model` 经 `toConfigString` 变成整数 token */
+  isModelData?(value: unknown): boolean;
 }
 
 /** 缺省模型（不带参数、`{ color }` 没有任何内容键时的 `image`）。 */
@@ -134,7 +136,7 @@ function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
 /**
  * `createLayer(...args)` 的参数 → 配置（rea-p6d-script 1.2、1.3）；建不出来返回 null。
  * - 参数个数不是 1：`{ image: 缺省模型 }`；
- * - 对象（含数组）：先过 `stringify` 再 `JSON.parse`，普通对象走整理，数组原样返回（WPE 建出空名的分组节点，配置原文是这个数组），别的 null；
+ * - 对象（含数组）：（`IModelData` 句柄先包成 `{ model }`）先过 `stringify` 再 `JSON.parse`，普通对象走整理，数组原样返回（WPE 建出空名的分组节点，配置原文是这个数组），别的 null；
  * - 字符串：先当 JSON，是普通对象走整理，否则当路径（不补缺省模型、不整理）；
  * - 其它类型 null。
  */
@@ -147,7 +149,7 @@ export function createLayerConfig(
   if (typeof arg === "object" && arg !== null) {
     let text: string | undefined;
     try {
-      text = ctx.stringify(arg);
+      text = ctx.stringify(ctx.isModelData?.(arg) ? { model: arg } : arg);
     } catch {
       return null;
     }
