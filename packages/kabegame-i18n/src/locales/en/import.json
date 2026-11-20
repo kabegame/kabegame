@@ -10,18 +10,20 @@
   "nothingToImport": "Nothing to import",
   "fileDropFailed": "Failed to process file drop",
   "dropUnsupportedHere": "These files can't be dropped here",
-  "dropZone.galleryMedia": "Import {count} files to gallery",
-  "dropZone.galleryFolders": "Import media from {count} folders to gallery",
-  "dropZone.galleryMixed": "Import {count} files and {folders} folders to gallery",
-  "dropZone.albumMedia": "Import {count} files to \"{album}\"",
-  "dropZone.albumFolders": "Import media from {count} folders to \"{album}\"",
-  "dropZone.albumMixed": "Import {count} files and {folders} folders to \"{album}\"",
-  "dropZone.plugins": "Install {count} plugin packages",
+  "dropZone": {
+    "galleryMedia": "Import {count} files to gallery",
+    "galleryFolders": "Import media from {count} folders to gallery",
+    "galleryMixed": "Import {count} files and {folders} folders to gallery",
+    "albumMedia": "Import {count} files to \"{album}\"",
+    "albumFolders": "Import media from {count} folders to \"{album}\"",
+    "albumMixed": "Import {count} files and {folders} folders to \"{album}\"",
+    "plugins": "Install {count} plugin packages",
+    "setPath": "Set to \"{name}\""
+  },
   "pathPickFile": "Click to choose a file",
   "pathPickFolder": "Click to choose a folder",
   "pathDropFile": "Click or drop a file",
   "pathDropFolder": "Click or drop a folder",
   "pathDropEither": "Click or drop a file / folder",
-  "pathChange": "Change",
-  "dropZone.setPath": "Set to \"{name}\""
+  "pathChange": "Change"
 }

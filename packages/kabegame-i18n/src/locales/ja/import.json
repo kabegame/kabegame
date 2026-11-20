@@ -10,18 +10,20 @@
   "nothingToImport": "インポートするものはありません",
   "fileDropFailed": "ファイルドロップの処理に失敗しました",
   "dropUnsupportedHere": "ここにはこれらのファイルをドロップできません",
-  "dropZone.galleryMedia": "{count} 件のファイルをギャラリーにインポート",
-  "dropZone.galleryFolders": "{count} 件のフォルダ内のメディアをギャラリーにインポート",
-  "dropZone.galleryMixed": "{count} 件のファイルと {folders} 件のフォルダをギャラリーにインポート",
-  "dropZone.albumMedia": "{count} 件のファイルを「{album}」にインポート",
-  "dropZone.albumFolders": "{count} 件のフォルダ内のメディアを「{album}」にインポート",
-  "dropZone.albumMixed": "{count} 件のファイルと {folders} 件のフォルダを「{album}」にインポート",
-  "dropZone.plugins": "{count} 件のプラグインパッケージをインストール",
+  "dropZone": {
+    "galleryMedia": "{count} 件のファイルをギャラリーにインポート",
+    "galleryFolders": "{count} 件のフォルダ内のメディアをギャラリーにインポート",
+    "galleryMixed": "{count} 件のファイルと {folders} 件のフォルダをギャラリーにインポート",
+    "albumMedia": "{count} 件のファイルを「{album}」にインポート",
+    "albumFolders": "{count} 件のフォルダ内のメディアを「{album}」にインポート",
+    "albumMixed": "{count} 件のファイルと {folders} 件のフォルダを「{album}」にインポート",
+    "plugins": "{count} 件のプラグインパッケージをインストール",
+    "setPath": "「{name}」に設定"
+  },
   "pathPickFile": "ファイルを選択",
   "pathPickFolder": "フォルダーを選択",
   "pathDropFile": "ファイルを選択またはドロップ",
   "pathDropFolder": "フォルダーを選択またはドロップ",
   "pathDropEither": "ファイル / フォルダーを選択またはドロップ",
-  "pathChange": "変更",
-  "dropZone.setPath": "「{name}」に設定"
+  "pathChange": "変更"
 }

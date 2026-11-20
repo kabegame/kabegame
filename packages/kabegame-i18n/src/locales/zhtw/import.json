@@ -10,18 +10,20 @@
   "nothingToImport": "沒有可匯入的內容",
   "fileDropFailed": "處理檔案拖入失敗",
   "dropUnsupportedHere": "此處不支援拖入這些檔案",
-  "dropZone.galleryMedia": "匯入 {count} 個檔案到畫廊",
-  "dropZone.galleryFolders": "將 {count} 個資料夾中的媒體匯入畫廊",
-  "dropZone.galleryMixed": "將 {count} 個檔案和 {folders} 個資料夾匯入畫廊",
-  "dropZone.albumMedia": "將 {count} 個檔案匯入「{album}」",
-  "dropZone.albumFolders": "將 {count} 個資料夾中的媒體匯入「{album}」",
-  "dropZone.albumMixed": "將 {count} 個檔案和 {folders} 個資料夾匯入「{album}」",
-  "dropZone.plugins": "安裝 {count} 個源插件包",
+  "dropZone": {
+    "galleryMedia": "匯入 {count} 個檔案到畫廊",
+    "galleryFolders": "將 {count} 個資料夾中的媒體匯入畫廊",
+    "galleryMixed": "將 {count} 個檔案和 {folders} 個資料夾匯入畫廊",
+    "albumMedia": "將 {count} 個檔案匯入「{album}」",
+    "albumFolders": "將 {count} 個資料夾中的媒體匯入「{album}」",
+    "albumMixed": "將 {count} 個檔案和 {folders} 個資料夾匯入「{album}」",
+    "plugins": "安裝 {count} 個源插件包",
+    "setPath": "設為「{name}」"
+  },
   "pathPickFile": "點擊選擇檔案",
   "pathPickFolder": "點擊選擇資料夾",
   "pathDropFile": "點擊選擇或拖入檔案",
   "pathDropFolder": "點擊選擇或拖入資料夾",
   "pathDropEither": "點擊選擇或拖入檔案 / 資料夾",
-  "pathChange": "更換",
-  "dropZone.setPath": "設為「{name}」"
+  "pathChange": "更換"
 }

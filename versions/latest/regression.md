@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 拖入落点提示显示成原始 key（`import.dropZone.*`）
+
+2026-11-20 Windows dev。用户拖图进画廊时截图发现落点提示的标题是 `import.dropZone.galleryMedia`，副标题却是正常中文。`import.json` 里这八条写成了**带点的扁平 key**（`"dropZone.galleryMedia": …`），而 `createI18n` 没开 `flatJson`，`t("import.dropZone.galleryMedia")` 被当成路径去找 `import → dropZone → galleryMedia`，必然落空、回显 key 本身。同在 `common.json` 的另外 11 个带点 key 没事，因为调用处用了 vue-i18n 的转义写法（`t('common["reportIssue.envSection"]')`）。调用处本来就按嵌套写，所以改词条：五种语言的 `import.json` 把八个 `dropZone.*` 并成一个嵌套 `dropZone` 对象，key 顺序与原文件一致（`setPath` 从末尾并入）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | I1 八条文案解析 | Windows dev | vite 热更新后在主窗口用 `$t` 逐条求值 | 都出正常文案、参数插值正确 | 2026-11-20 Claude：`导入 3 个文件到画廊`、`导入 2 个文件到「测试画册」`、`设为「a.png」`、`安装 1 个源插件包`、以及 folders / mixed 四条都对 |
+| [x] | I2 其它语言包没写坏 | Windows dev | 同上读 en 的同一条 | `Import 5 files to gallery` | 2026-11-20 Claude：五个文件同一个脚本改写，diff 只含这八行的挪位 |
+| [x] | I3 类型检查 | Windows | `deno task check -c kabegame --skip cargo` | 0 error | 2026-11-20 Claude：vue-tsc 0 error |
+| [ ] | I4 真机拖入 | Windows | 从资源管理器拖图到画廊 / 画册 / 插件页 | 标题是正常文案 | 需要人拖；截图里那次复现的就是修复前的样子 |
+
 ## 自编 CEF 156（Windows 首次）：构建脚本三处修复、补丁的 API 版本守卫、SDK 前提
 
 2026-11-20 Windows。在新构建根（`CEFBUILD=D:\Codes\kabegame-cefbuild`，旧的 149 checkout 原地留作备份）上第一次为 CEF 156 跑 `deno task build:chromium`，连着踩两个脚本缺陷，都与网络无关：`bootstrap()` 的 `git clone --depth 1` 让 automate-git 切不到 `CHROMIUM_BUILD_COMPATIBILITY.txt` 钉的 `depot_tools_checkout`（156 是 `132599ebb`；149 那个 pin 恰好落在浅克隆靠自更新攒下的历史里，所以一直没发作）；`configureUpdate()` 只看 `chromium_git/chromium/src` 目录在不在，而 automate-git 在 `gclient sync` 之前就 `git init` 出了空 src，同步一中断，重跑就会走增量、传 `--no-chromium-update` 跳过同步直接去编译。另记两个外部缺陷：depot_tools 的 `gclient_utils.py` 逐行按 UTF-8 解码子进程输出，中文（GBK）的 git 报错会抛 `UnicodeDecodeError`，把 `gclient_scm.py` 那条 `retry=True` 一起带崩、真实错误也看不到；`.gclient` 里 src 是 `managed: False`，目录一存在 gclient 就只读 `HEAD` 不再管它的 checkout，中断留下的空仓库会让每次重试都死在 `rev-parse --verify HEAD`（exit 128）。所以直接驱动 `gclient sync` 时要在外层套重试循环并自愈空壳；经脚本走则由全量路径的 `--force-clean` 兜底。另有两个与脚本无关的前提：Chromium 156 的 `build/vs_toolchain.py:63` 写死 `SDK_VERSION = '10.0.28000.0'`（149 要的是 `10.0.26100.0`），没装就在 `gn gen` 阶段报 `Path "…\include\10.0.28000.0\um" does not exist`；补丁 03 给 `include/cef_drag_data.h` 加的 `GetCustomData` 漏了 `#if CEF_API_ADDED(CEF_EXPERIMENTAL)` 守卫，`libcef_dll_wrapper` 以 `CEF_API_VERSION=15600` 编时 `CefDragDataCToCpp` 成抽象类（`error C2259`）。chromium/src 的大包最终改从 `github.com/chromium/chromium` 镜像拉（同一个提交），googlesource 侧两种 TLS 栈都报记录校验失败并出现 `HTTP 429`。
@@ -206,15 +217,15 @@
 | [x] | T2 cef-rs 绑定 | macOS | 官方 CEF 156.0.30 macosarm64 作 `CEF_PATH`、独立 target 目录：`cargo check -p cef -p cef-dll-sys`；四个目标的 sys 绑定各自单独编译 | 通过；三个扩展结构体的尺寸断言成立 | 2026-11-16 Claude：check 通过；`_cef_drag_handler_t` 88、`_cef_drag_data_t` 264、`_cef_frame_t` 272 四个目标一致。Windows 文件单独编译时 `tagPOINT` 等 3 处失败来自本机 `c_long` 8 字节，上游未打补丁的文件同样失败 |
 | [x] | T3 主应用检查 | macOS | 同上 `CEF_PATH` 与独立 target 目录，`deno task check -c kabegame` | 0 error | 2026-11-16 Claude：vue-tsc 与 cargo check 都过，`tauri-runtime-kbcef` 不用改代码 |
 | [ ] | T4 自编 CEF 156 | macOS | `deno task build:chromium --clean` | automate-git 发现旧 checkout 是 149、自己删掉 `src` 并重写 `.gclient`，浅 checkout 156 后编译，产出 `bin/macos/arm64/cef-build`，`archive.json` 为 `156.0.30` | 不带 `--clean` 时 automate-git 自己会报「Current Chromium checkout with --no-chromium-history is incorrect」。2026-11-16 第一次尝试：我在脚本里预先删了 `src`，automate-git 因此没重写 `.gclient`、又去拉 149，且经本机代理的大包下载断了四次（`curl 56 … bad decrypt`）；预删已撤回 |
-| [ ] | T5 dev 启动与内核版本 | macOS dev | 自编 CEF 就位后 `deno task dev -c kabegame`；主窗口执行 `navigator.userAgent` | 正常启动、画面正常；UA 为 `Chrome/156` | |
+| [x] | T5 dev 启动与内核版本 | macOS dev、**Windows dev** | 自编 CEF 就位后 `deno task dev -c kabegame`；主窗口执行 `navigator.userAgent` | 正常启动、画面正常；UA 为 `Chrome/156` | 2026-11-20 Claude（Windows）：CDP 握手报 `Chrome/156.0.8078.96`，UA `Chrome/156.0.0.0`、`userAgentData` 品牌 Chromium 156，WebGPU 可用、Tauri IPC 在；画廊 9434 张图正常显示，应用背景的场景壁纸实时渲染（调试面板 MIN 118 AVG 120）。macOS 未做 |
 | [ ] | T6 打包版子进程（原补丁 01） | macOS release `.app` | `deno task b -c kabegame` 后从 `.app` 启动 | renderer / GPU 进程都从 `Contents/MacOS/kabegame-cef-helper` 起来，不去找 `Helper (Renderer).app`；首屏正常、无 `ERR_ABORTED` 黑屏 | 删掉 01 后唯一靠上游行为兜底的地方 |
 | [ ] | T7 外部拖入（02） | 三平台 | 从 Finder / 资源管理器把图片拖进画廊与画册 | 拖动中有落点提示、松开后导入，CEF 不把文件打开成预览页 | |
 | [ ] | T8 拖出真实文件（03） | 三平台 | 从图库拖一张到 Finder / 资源管理器、Chrome 上传框、VS Code | 得到原图文件（不是缩略图或链接），库内文件不被移走 | 156 新增的 `drag_id` 保留在拖动数据里，确认 Chrome / Electron 仍收得到文件 |
-| [ ] | T9 网页壁纸与图库 `file:`（04–07） | macOS / Windows | 图库缩略图与原图、网页壁纸预览与桌面、壁纸读同目录文件、越界读 | 图片视频正常显示；壁纸正常加载；越界读被 `deny file:` 拒 | |
-| [ ] | T10 进程隔离与 rAF（08 / 09） | macOS dev | 预览与桌面同时开网页壁纸，看 renderer 进程数；场景宿主里数 rAF 回调次数 | 两个窗口的 iframe 各一个 renderer；每帧 rAF 一次 | |
-| [ ] | T11 Ctrl+滚轮（10） | Windows | 在预览的网页壁纸上 Ctrl+滚轮 | 整个应用不缩放 | |
-| [ ] | T12 鼠标注入（11） | macOS / Windows | 预览与桌面的网页 / 场景壁纸跟鼠标、点击 | 照常跟随与点击，日志无「libcef 不带 frame 鼠标注入」 | |
-| [ ] | T13 Windows / Linux 构建 | Windows、Ubuntu 22.04 | 各自 `deno task build:chromium --clean` 后 check 与 dev | 编译通过、能启动 | **Windows 已编通、`cargo check` 0 error**（2026-11-20，产出 `cef_binary_156.0.30+windows64_minimal`）；过程中要补的三件事见「自编 CEF 156（Windows 首次）」一节：Windows 11 SDK `10.0.28000.x`、补丁 03 的 API 版本守卫、构建脚本三处修复。Windows 的 dev 启动与 UA（T5）、鼠标注入（T12）待验，Linux 未做 |
+| [x] | T9 网页壁纸与图库 `file:`（04–07） | macOS / **Windows dev** | 图库缩略图与原图、网页壁纸预览与桌面、壁纸读同目录文件、越界读 | 图片视频正常显示；壁纸正常加载；越界读被 `deny file:` 拒 | 2026-11-20 Claude（Windows）：画廊里 25 张 `file://` 图片**零加载失败**（补丁 06）；场景壁纸 15881 在壁纸窗口（3840×2160）与主窗口应用背景（1851×1191）各渲染成功，15 层 11 个程序。闸门工作正常：未授权路径被拒。**注意有一批预期内的 `deny file:` 噪声**——104 条（两个窗口各 52）全在加载那一瞬，拒的是 `shaders/flat.vert`、`models/util/solidlayer.json` 这类**项目目录里根本不存在**的路径，是「项目散文件 → `scene.pkg` → WPE `assets/`」查找顺序的第一步探测，随后从 pkg / assets 取到，不是回归 |
+| [x] | T10 进程隔离与 rAF（08 / 09） | macOS dev、**Windows dev** | 预览与桌面同时开网页壁纸，看 renderer 进程数；场景宿主里数 rAF 回调次数 | 两个窗口的 iframe 各一个 renderer；每帧 rAF 一次 | 2026-11-20 Claude（Windows）：两个窗口各有一个场景宿主 iframe（同一张 15881）。**判别实验**：把主窗口宿主用同步死循环阻塞 2000 ms，壁纸窗口宿主的 rAF 照跑——10.0 s 内 1200 次、119.6 fps、最大间隔 25 ms、**零个 > 100 ms 的间隔**，证明两个 `file:` iframe 在各自的渲染进程里（补丁 08）。显示器 120 Hz、实测 119.6 fps = 每帧一次（补丁 09）。堆内存对比不可用：Chrome 量化了 `performance.memory`，分配 300 MB 读数不变 |
+| [x] | T11 Ctrl+滚轮（10） | Windows | 在预览的网页壁纸上 Ctrl+滚轮 | 整个应用不缩放 | 2026-11-20 Claude：经裸 CDP 往**主窗口里的场景宿主 OOPIF** 派发 5 个 `Input.dispatchMouseEvent` mouseWheel + Ctrl，frame 收到 5 个可信、带 Ctrl、**未被取消**的事件，整窗 `devicePixelRatio` 稳在 1.5、尺寸不变。两次空测要避开：派发到**壁纸窗口**时 frame 收到 0 个（挂在 WorkerW 上，输入路由和截图一样不通）；派发到**主窗口主文档**时 5 个全被页面自己取消（应用页拦了 Ctrl+滚轮），都证明不了补丁 |
+| [~] | T12 鼠标注入（11） | macOS / Windows | 预览与桌面的网页 / 场景壁纸跟鼠标、点击 | 照常跟随与点击，日志无「libcef 不带 frame 鼠标注入」 | 2026-11-20 Claude（Windows）：整个会话 **0 条「不带 frame 鼠标注入」/「frame 坐标换算失败」告警、0 条 ERROR**，说明补丁 11 在、没有走降级。真实跟随与点击要人动鼠标，软件测不了 |
+| [ ] | T13 Windows / Linux 构建 | Windows、Ubuntu 22.04 | 各自 `deno task build:chromium --clean` 后 check 与 dev | 编译通过、能启动 | **Windows 已编通、`cargo check` 0 error**（2026-11-20，产出 `cef_binary_156.0.30+windows64_minimal`）；过程中要补的三件事见「自编 CEF 156（Windows 首次）」一节：Windows 11 SDK `10.0.28000.x`、补丁 03 的 API 版本守卫、构建脚本三处修复。Windows 的 dev 侧已按 T5 / T9 / T10 / T11 验过，T12 只验了「没有降级告警」，Linux 未做 |
 
 ## 视频缩略图改为首帧静图，悬浮播原视频
 
