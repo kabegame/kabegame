@@ -41,6 +41,7 @@ import type { SceneSound } from "./sounds";
 import type { UserTextureSource } from "./usertextures";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
+import type { ModelDataDesc } from "../modeldata/types";
 
 /** 运行中编一个对象的请求（L1；L2 起经 Worker 传）。 */
 export interface FragmentRequest {
@@ -61,6 +62,11 @@ export interface FragmentRequest {
   bone: string | null;
   /** 当前属性全集（用户值）：会话按它重算 `properties`，绑定按它取值 */
   properties: Record<string, unknown>;
+  /**
+   * 脚本模型数据的描述（P14，token → 描述）：配置里 `model` 是整数 token 时宿主带上它的描述（新建与单对象重编译都带），按 token 覆盖会话里的；
+   * 查不到的 token 不带，编出不画的层（S16）。描述里没有字节，结构化克隆很小。
+   */
+  modelData?: Record<number, ModelDataDesc>;
 }
 
 /** 一个对象的编译产物（L1）。下标都是全局的；键是绝对路径 `objects/<object>/…`，克隆由 `rekeyFragment` 改。 */

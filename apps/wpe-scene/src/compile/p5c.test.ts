@@ -563,7 +563,11 @@ describe("compileScene：模型的细分键（点 3、点 4）", () => {
     });
     expect(noMaterial.unsupported).toEqual(["material:missing:materials/x.json"]);
     expect(noMaterial.layers[0].model!.meshes[0]).toMatchObject({ material: "materials/x.json", passes: [] });
-    const id = await compileModels([modelObject(1, { model: 3 })]);
+    // 数字是脚本 `createModelData` 的 token（P14）：没有描述编出不画的层、不报项（S16）；对象等别的类型仍报 model:id
+    const token = await compileModels([modelObject(1, { model: 3 })]);
+    expect(token.unsupported).toEqual([]);
+    expect(token.layers[0].model).toBeNull();
+    const id = await compileModels([modelObject(1, { model: { token: 3 } })]);
     expect(id.unsupported).toEqual(["model:id"]);
   });
 

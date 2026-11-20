@@ -1,5 +1,6 @@
 import type { SceneBundle, SessionCacheStats } from "./bundle";
 import type { FragmentDelta, FragmentRequest } from "./fragment";
+import type { ModelDataDesc } from "../modeldata/types";
 import type {
   SceneReflectionSetting,
   ScenePostprocessSetting,
@@ -37,6 +38,8 @@ export interface OpenRequest {
   userProperties: Record<string, unknown>;
   scriptOverrides: Record<string, number[] | boolean | string>;
   structure: SceneStructure;
+  /** 脚本模型数据的描述（P14）；没有时不带这一项 */
+  modelData?: Record<number, ModelDataDesc>;
   postprocess: ScenePostprocessSetting;
   reflection: SceneReflectionSetting;
   shadows: SceneShadowSetting;

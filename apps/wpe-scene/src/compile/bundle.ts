@@ -180,6 +180,15 @@ import type { SceneVideoSource } from "../video/player";
 import type { SceneAnimation } from "../animation/types";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
+import type { ModelDataDesc } from "../modeldata/types";
+import {
+  layerLiteral,
+  modelDataMesh,
+  modelDataMeshBase,
+  modelDataModel,
+  modelDataSortClass,
+  modelMaterialKey,
+} from "../modeldata/layer";
 import { exportsMediaCallback, usesEffectAccess } from "./scriptApi";
 
 export interface SceneGeneral {
@@ -868,6 +877,11 @@ export interface SceneMesh {
    * 为 alphatocoverage 时另加 `ALPHATOCOVERAGE = 1` 并带 A2C；纹理按 `{"material": 键}` 对槽；材质常量原样拷；剔除、深度不继承。
    */
   shadow?: ScenePass;
+  /**
+   * 脚本模型数据的来源（P14）：有它时 `vertices` / `indices` 是空视图，字节在宿主的 `ModelDataStore`、GPU 缓冲按它取；`indexCount` 为 0 表示没有索引
+   * （`draw(顶点数)`，mdl 网格的索引个数恒 > 0，所以不影响 mdl 网格）。
+   */
+  source?: { token: number; shape: number };
 }
 /** 模型对象（P5c 步骤 1，rea-p5-mesh 第 2 节）。 */
 export interface SceneModel {
@@ -893,6 +907,20 @@ export interface SceneModel {
    */
   skeleton?: ModelSkeleton;
 }
+/**
+ * 模型材质模板（P14，`general.precache` 里 `materials` 开头的路径各编一份）：脚本 `createLayer({ model })` 时主线程用它同步拼模型数据层，
+ * 不必等 Worker 编片段（WPE 的预载同理）。pass 与阴影变体的键是 `modeldata/<n>/passes/<k>` / `modeldata/<n>/shadow`（`n` 是该材质在 precache 里的序号），
+ * 拼装时改成 `objects/<i>/meshes/<m>/passes/<k>`；顶点格式相关的检查（`checkMeshAttributes`）要等拼装时按形状格式做。
+ */
+export interface ModelMaterialTemplate {
+  passes: ScenePass[];
+  shadow?: ScenePass;
+  /**
+   * 能不能同步拼：编它时没有不支持项（含材质读不到、多 pass、读快照）、没有登记绑定 / 用户纹理 / 图层合成 RT、没有翻转场景级位（光照、遗留灯、
+   * 平面反射、mip 帧缓冲）、每个 pass 都有程序、不是 alphatocoverage。不满足的按 Worker 路走（那条路会照常报项或翻转场景位）。
+   */
+  usable: boolean;
+}
 export interface SceneBundle {
   general: SceneGeneral;
   layers: SceneLayer[];
@@ -903,6 +931,8 @@ export interface SceneBundle {
    * 第一帧就是用户图。缺省（测试夹具、旧 bundle）等于空。
    */
   userTextures?: UserTextureSource[];
+  /** 模型材质模板（P14，键是 `modelMaterialKey` 规整后的材质路径）；场景没有 `general.precache` 材质时不写这一项（别的场景字节不变）。 */
+  modelMaterials?: Record<string, ModelMaterialTemplate>;
   /**
    * 泛光链（`bloom.ts`）；档位关闭、场景没有对象，或 `general.bloom` 写死 false（没绑属性、没挂脚本）时为 null，渲染路径与 P2a 相同。
    * 有链不等于开着：当前开不开看 `SceneState.bloomEnabled`，关着时渲染路径同样与 P2a 相同。
@@ -995,6 +1025,8 @@ export interface CompileSceneInput {
   scriptOverrides?: Record<string, number[] | boolean | string>;
   /** 运行中改过的场景结构（P6d3）；缺省空结构（`EMPTY_STRUCTURE`）。 */
   structure?: SceneStructure;
+  /** 脚本模型数据的描述（P14，token → 描述）：配置里 `model` 是整数 token 的对象按它编；查不到的 token 编出不画的层（S16）。 */
+  modelData?: Record<number, ModelDataDesc>;
   reader: SceneReader;
   translator: Wpesl2wgsl | null;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
@@ -1546,6 +1578,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   // HDR 判定读文件里的 `general.bloom`（K3），脚本覆盖不算，要在套用之前取。缺键写成 null：undefined 会落到缺省参数，读到覆盖后的值
   const fileBloom = scene.general?.bloom ?? null;
   const structure = input.structure ?? EMPTY_STRUCTURE;
+  /** 脚本模型数据的描述（P14，token → 描述）：开会话时的，加上之后每个片段请求带来的（按 token 覆盖）；`compileModel` 的数字分支查它。 */
+  const modelDataDescs: Record<number, ModelDataDesc> = { ...input.modelData };
   // 运行中新建的对象（P6d3b，`createLayer`）：配置原文就是它自己，放到 `scene.objects[object]`（中间空位补 null），之后和 `scene.json` 的对象走同一
   // 条路径。配置是数组的（建出空名分组节点，rea-p6d-script 1.2）不当图层：这一项放 `{}`（编成分组节点），`configs[下标]` 仍是数组原文。
   // 依赖标记只看加载时的对象（rea-p6d-layers 11：新建层不重算），`loadedLength` 记下加载时的个数
@@ -2141,8 +2175,13 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   async function compileModel(index: number, object: SceneObject, layer: SceneLayer): Promise<void> {
     // 只认 JSON true（P5b 透视图层那一套，`p5c-matrix` 实测模型相同）；绑属性等由能力表报 `object:perspective`
     layer.perspective = object.perspective === true;
-    // 数字是脚本 `createModelData` 建的模型（rea 2.1），语料 0 个
     const path: unknown = object.model;
+    // 数字是脚本 `createModelData` 的 token（P14，rea 2.1）：按宿主带来的描述编；查不到编出不画的层（`layer.model` 留 null，不报不支持项，S16）
+    if (typeof path === "number") {
+      const desc = modelDataDescs[Math.trunc(path)];
+      if (desc) await compileModelData(index, object, layer, desc);
+      return;
+    }
     if (typeof path !== "string") {
       unsupported.add("model:id");
       return;
@@ -2200,6 +2239,126 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   }
 
   /**
+   * 脚本模型数据的模型（P14，`createModelData` 的 token）：每个形状一个网格，材质按形状的 `material` 编，和 mdl 网格同一段（`compileMesh`：
+   * 键 `objects/<i>/meshes/<m>/passes/<k>`、`checkMeshAttributes`、阴影投射变体）。网格不带字节（`source` 指向数据仓），模型没有骨骼；
+   * `SceneModel` 的组装在纯函数 `modelDataModel`（步骤 3a 的主线程拼装共用）。
+   */
+  async function compileModelData(
+    index: number,
+    object: SceneObject,
+    layer: SceneLayer,
+    desc: ModelDataDesc,
+  ): Promise<void> {
+    const meshes: SceneMesh[] = [];
+    for (const [m, shape] of desc.shapes.entries()) {
+      if (settled()) break;
+      meshes.push(
+        await compileMesh(index, m, modelDataMeshBase(shape), shape.material, undefined, {
+          token: desc.token,
+          shape: m,
+        }),
+      );
+    }
+    // 投射阴影：同 mdl 模型对象（缺省开，绑属性登记重编译）
+    const castSetting = bindings.bind(
+      object.castshadow as SceneValue | undefined,
+      properties,
+      recompile("layer-structure", `objects/${index}/castshadow`),
+    );
+    layer.model = modelDataModel(desc, meshes, { castsShadows, castSetting });
+    layer.sortClass = modelDataSortClass(meshes);
+  }
+
+  /**
+   * 模型材质模板（P14，`general.precache`）：编一份模型网格材质的 pass（和 `compileMesh` 同一段，键换成 `modeldata/<n>/…`），不属于任何对象。
+   * 不支持项记进私有集合，不污染整场；`compilePass` 对整场状态的副作用（登记绑定、用户纹理、反射 / mip 读者、光照位）在这里记下、回滚，
+   * 任何一样发生就 `usable: false`——不能让一个没有对象的模板把场景级位翻过去（那要由真正用到它的对象走 Worker 路径时翻转）。
+   * 程序与纹理照常追加在表尾（已有下标不动，模板本身只引用下标）。
+   */
+  async function compileModelMaterialTemplate(n: number, material: string): Promise<ModelMaterialTemplate> {
+    const issues = new Set<string>();
+    const bindingsFrom = bindings.list.length;
+    const readersFrom = reflectionReaders.length;
+    const mipFrom = mipReads;
+    const userTextures = (bundle.userTextures ??= []);
+    const userTexturesFrom = userTextures.length;
+    const hadLights = bundle.lights;
+    const hadLegacyLights = bundle.legacyLights;
+    const passes: ScenePass[] = [];
+    let shadow: ScenePass | undefined;
+    const text = await fs.text(material);
+    if (!text) issues.add(`material:missing:${material}`);
+    else {
+      const parsed = parseMaterial(text).passes;
+      if (parsed.length > 1) issues.add("mdl:material-passes");
+      for (const [k, pass] of parsed.entries()) {
+        const compiled = await compilePass(pass, {
+          key: `modeldata/${n}/passes/${k}`,
+          material,
+          model: true,
+          unsupported: issues,
+        });
+        if (compiled.framebuffer) issues.add("mdl:framebuffer");
+        passes.push(compiled);
+        if (k === 0 && castsShadows && compiled.program !== null)
+          shadow =
+            (await compileShadowCaster(n, 0, pass, compiled, undefined, { key: `modeldata/${n}/shadow`, issues })) ??
+            undefined;
+      }
+    }
+    let usable = issues.size === 0 && passes.length > 0;
+    if (bindings.list.length > bindingsFrom) {
+      bindings.list.length = bindingsFrom;
+      usable = false;
+    }
+    if (reflectionReaders.length > readersFrom || mipReads > mipFrom) {
+      reflectionReaders.length = readersFrom;
+      mipReads = mipFrom;
+      usable = false;
+    }
+    if (userTextures.length > userTexturesFrom) {
+      userTextures.length = userTexturesFrom;
+      usable = false;
+    }
+    if (!hadLights && bundle.lights) {
+      delete bundle.lights;
+      usable = false;
+    }
+    if (!hadLegacyLights && bundle.legacyLights) {
+      delete bundle.legacyLights;
+      usable = false;
+    }
+    for (const pass of [...passes, ...(shadow ? [shadow] : [])])
+      if (
+        pass.program === null ||
+        pass.blending === "alphatocoverage" ||
+        pass.userTextures?.length ||
+        pass.layerComposites
+      )
+        usable = false;
+    return { passes, ...(shadow ? { shadow } : {}), usable };
+  }
+
+  /**
+   * `general.precache` 里 `materials` 开头（不分大小写）的字符串，去重（按规整后的小写路径）保序（P14）。WPE 的 `precache` 只是加载时预载
+   * 材质进缓存；我们用它在加载时预编模型材质模板。
+   */
+  function precacheMaterials(): string[] {
+    const list: unknown = (scene.general as Record<string, unknown> | undefined)?.precache;
+    if (!Array.isArray(list)) return [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of list) {
+      if (typeof item !== "string" || !/^materials/i.test(item)) continue;
+      const key = modelMaterialKey(item);
+      if (key === null || seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+    return out;
+  }
+
+  /**
    * sprite 对象（P13c，`compile/sprite.ts`）：`material` 是对象的 `sprite` 键（字符串）、光斑的材质，另编 WPE 的 `occlusiontest`；两份 pass 挂成两网格
    * 的常量模型。材质读不到报 `material:missing:<路径>`，多 pass 报 `sprite:material-passes`、读快照报 `sprite:framebuffer`（WPE 的
    * sprite 绘制只画第一个 pass、不拷快照，语料都没有）。
@@ -2236,10 +2395,12 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   async function compileMesh(
     index: number,
     m: number,
-    mesh: MdlMesh,
+    mesh: Pick<MdlMesh, "format" | "stride" | "vertices" | "indices" | "vertexCount" | "indexFormat" | "indexCount">,
     material: string | undefined,
     /** 模型有骨骼时这个网格的组合键（`modelMeshCombos`）：并进材质 pass 的 `combos`，程序检查放行 `g_Bones` 等（`PUPPET_UNIFORMS`）。 */
     combos?: Record<string, number>,
+    /** 脚本模型数据的来源（P14）：原样写进 `SceneMesh.source`，网格的 `vertices` / `indices` 此时是空视图。 */
+    source?: SceneMesh["source"],
   ): Promise<SceneMesh> {
     const out: SceneMesh = {
       format: mesh.format,
@@ -2251,6 +2412,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       indexCount: mesh.indexCount,
       material: material ?? "",
       passes: [],
+      ...(source ? { source } : {}),
     };
     if (!material) {
       unsupported.add("material:missing");
@@ -2290,6 +2452,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
    * 投射变体（P13d，rea-p13-shadows R5，`FUN_140155fc0` 阴影模式）：见 `SceneMesh.shadow`。投射着色器先不带 COMBO 译一次，取它声明的 COMBO
    * （注解不看条件分支）；再按最终的 COMBO 译一次取纹理注解（`ALPHATOCOVERAGE` 下才声明 albedo）、按 `material` 键对上基础材质的纹理，
    * 最后照常 `compilePass`。基础的变形纹理（`morph`，运行时纹理）由渲染器按键换槽，这里不填。稳定键 `objects/<i>/meshes/<m>/shadow`。
+   * `target`（P14）：模型材质模板用，给出稳定键与私有的不支持项集合（缺省是上面的键与整场集合）。
    */
   async function compileShadowCaster(
     index: number,
@@ -2297,14 +2460,16 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     base: MaterialPass,
     compiled: ScenePass,
     combos?: Record<string, number>,
+    target?: { key: string; issues: Set<string> },
   ): Promise<ScenePass | null> {
+    const issues = target?.issues ?? unsupported;
     if (!base.shader || compiled.program === null) return null;
     const fragment = await fs.text(`shaders/${base.shader}.frag`);
     const casterShader =
       /^[ \t]*\/\/[ \t]*\[PASS\][ \t]+shadow[ \t]+(\S+)/m.exec(fragment ?? "")?.[1] ?? "shadowcaster";
     const declared = await shader.compile(casterShader, {}, [], null, new Set());
     if (!declared?.ok) {
-      unsupported.add(`shadow:caster:${casterShader}`);
+      issues.add(`shadow:caster:${casterShader}`);
       return null;
     }
     const baseResult = bundle.programs[compiled.program];
@@ -2332,9 +2497,10 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       ...(base.constantshadervalues ? { constantshadervalues: base.constantshadervalues } : {}),
     };
     const caster = await compilePass(casterPass, {
-      key: `objects/${index}/meshes/${m}/shadow`,
+      key: target?.key ?? `objects/${index}/meshes/${m}/shadow`,
       model: true,
       ...(combos ? { puppet: true } : {}),
+      ...(target ? { unsupported: issues } : {}),
     });
     // 材质常量照 WPE 从基础程序的常量存储按名字拷（`0x140156cb5`）：基础那边的值含它自己注解的缺省（投射着色器的注解只有 `material` 键、
     // 没有缺省，比如 foliage 的风），所以拿基础 pass 解析好的值盖上，名字两边一样
@@ -3040,53 +3206,21 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
             field === "size" ? recompile("layer-structure", `objects/${index}/size`) : at(field),
           ),
     );
-    const layer: SceneLayer = {
-      id: object.id ?? bundle.layers.length,
-      object: index,
-      parent: parents[index],
-      name: shell.name,
-      origin: shell.origin,
-      scale: shell.scale,
-      angles: shell.angles,
-      size: shell.size,
-      alpha: shell.alpha,
-      color: shell.color,
-      brightness: shell.brightness,
-      // bool setter 不收数字、字符串属性，留 `value`（`boolFieldValue`，运行时同 `SceneState.write`）
-      visible: shell.visible,
-      visibleBound: shell.visibleBound,
-      parallaxDepth: shell.parallaxDepth,
-      solidLayer: false,
-      instanced: false,
-      noPadding: false,
-      perspective: false,
-      passthroughModel: false,
-      group: null,
-      subtree: [],
-      groupUpload: null,
-      copyBackground: true,
-      // 合成 RT 的采样（P8 步骤 1，p8-REPORT、rea-p8-layer §3）：图层 +0x304 的两位只由对象 JSON 写，构造时缺省 clampuvs 真、
-      // nointerpolation 假；绑属性、挂脚本的由能力表照报，这里按缺省取
-      clampUVs: object.clampuvs !== false,
-      noInterpolation: object.nointerpolation === true,
-      fullscreen: false,
-      fullscreenSize: null,
-      passes: [],
-      colorBlendMode: colorBlendModeOf(
+    // 图层字面量抽成纯函数 `layerLiteral`（P14，`modeldata/layer.ts`，主线程同步拼装共用）；colorBlendMode 的绑定登记仍在这里
+    const layer: SceneLayer = layerLiteral(
+      object,
+      index,
+      parents[index],
+      shell,
+      colorBlendModeOf(
         bindings.bind(
           object.colorBlendMode as SceneValue,
           properties,
           recompile("layer-structure", `objects/${index}/colorBlendMode`),
         ),
       ),
-      effects: [],
-      passthrough: null,
-      particle: null,
-      text: null,
-      model: null,
-      shape: null,
-      camera: null,
-    };
+      bundle.layers.length,
+    );
     // 光标命中（P6c）：只写不是缺省的值（`solid` 缺省真、`disablepropagation` 缺省假），没有光标信息的图层字节不变；`solid` 绑了属性时登记就地目标
     const pick = cursorPickKind(object);
     if (pick) layer.pick = pick;
@@ -3470,6 +3604,14 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       bundle.bloom = await compileBloom({ fs, shader, unsupported, addProgram }, postprocess.hdr);
     // 没有子层的组合层的 `groupUpload`（L7）：收尾里别的程序（体积光、泛光链）之后编，新程序排在程序表尾，不挪动已有的程序下标
     await flushGroupUploads();
+    // 模型材质模板（P14）：排在 `flushGroupUploads` 之后，所以别的程序（体积光、泛光链、组上屏）的下标不因为模板而挪动；
+    // 场景已确定退回时不编（同上面的泛光 / 体积光，没人会用）。没有 precache 材质的场景不写这一项，产物字节不变
+    if (!settled()) {
+      const templates: Record<string, ModelMaterialTemplate> = {};
+      for (const [n, material] of precacheMaterials().entries())
+        templates[modelMaterialKey(material)!] = await compileModelMaterialTemplate(n, material);
+      if (Object.keys(templates).length) bundle.modelMaterials = templates;
+    }
     if (!input.sceneAssets.length) unsupported.add("assets:missing");
     // 动画层字段脚本的属主核对（P12c；P12e 起层 id = JSON 下标 `entry`，收集时已填好，不再回填）：只留 `layerDefs` 保留下来的层。对象没有运行时
     // （不是 skinned puppet、不是带骨骼的模型），或这一项被 `layerDefs` 丢了（动画找不到、不是对象）时 WPE 不建这一层，字段脚本不会登记，从列表里删掉
@@ -3504,6 +3646,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     if (!finalized) throw new Error("compileFragment 要在 finalize 之后调");
     const at = request.object;
     if (!Number.isInteger(at) || at < 0) throw new Error(`对象下标不合法：${at}`);
+    // 脚本模型数据的描述（P14）：请求带来的按 token 覆盖会话里的（新建与单对象重编译都可能带）
+    if (request.modelData) Object.assign(modelDataDescs, request.modelData);
     const objects = scene.objects as unknown[];
     /** 单对象重编译（L6）时被换下的旧图层：配置里没写 `id` 时新图层沿用它的 id */
     let replaced: SceneLayer | undefined;

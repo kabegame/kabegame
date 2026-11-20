@@ -246,6 +246,8 @@ const NEUTRAL_GENERAL = new Set([
  */
 const PARSED_GENERAL = new Set([
   "perspectiveoverridefov",
+  // P14：加载时按它预编模型材质模板（`SceneBundle.modelMaterials`），不改画面
+  "precache",
   "fogdistance",
   "fogheight",
   "fogdistancecolor",

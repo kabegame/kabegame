@@ -20,7 +20,8 @@ export interface SceneObject extends JsonObject {
   id?: number;
   name?: string;
   image?: string;
-  model?: string;
+  /** 路径，或脚本 `createModelData` 的整数 token（P14） */
+  model?: string | number;
   particle?: string;
   origin?: SceneValue;
   scale?: SceneValue;

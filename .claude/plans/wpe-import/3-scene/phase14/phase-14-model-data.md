@@ -311,6 +311,7 @@ REA 旧快照已失效（REA 升级），不带快照重新打开。
 | E11 | `replaceData` 重建网格并同步通知图层，同一帧换新网格 | `setTimeout` 里把三角形换成带 6 个索引的四边形（形状数不变、参数给全） | ✓ 抓帧里是 6 个索引的四边形 |
 | E14 | 材质加载不加引擎 COMBO；材质 JSON 自己的 `combos` 照常生效（Karin 的 `MASK_COUNT`） | 材质 `combos: {P14C: 1}`，着色器 `#if P14C == 1` 画红、否则蓝 | ✓ 红 |
 | E15 | id 从 1 起连续、只在成功时分配；查不到的 id 建出不画的层；引用计数 = 脚本一份 + 每图层一份 | 见 S12、S15、S16 | ✓（`p14-api` / `p14-api2`） |
+| E16 | 模型网格的 pass 读 `_rt_FullFrameBuffer`：模型绘制不拷快照（rea-p5-mesh 2.6），读到什么没测 | `make_fb.py`：`p14-fb1`（红底 → 左半绿 → 读帧缓冲的模型层）、`p14-fb2`（多一个先拷快照的图像层 SNAP），抓帧 `A:\p14b1b\`、`A:\p14b2\` | ✓ 模型绘制前没有拷贝；fb1 槽里的 `_rt_FullFrameBuffer` 全 0、模型画成黑；fb2 读到 SNAP 在红底时拷的旧快照（底下是绿也画红）。**3834692798 依赖**：全场只有 `clip_119`（`karin_clip_multiply`，用帧缓冲做正片叠底）读它，没有别的层拷快照，所以 WPE 里这个部件是带透明度的黑色。**用户定不照**（WPE 把它画坏了，不是作者的效果建立在缺陷上）：补拷快照、让正片叠底生效，记有意不同 |
 
 不验（缺陷区或 Karin 不用，按「缺陷不复现」原则实现时不照抄，见「步骤 0 的结论」）：没给包围盒时的乱算、无索引网格 `applyData` 后只画 1/4、
 `applyData` 数组变短时的多读、`replaceData` 加形状后的释放后使用、`destroyModelData` 多于引用数、只比语义名不比语义号、模型层的光标命中、
@@ -519,7 +520,6 @@ modelMaterials?: Record<string, ModelMaterialTemplate>;   // 键是材质路径
 ```
   不支持项记进私有集合，不污染整场；程序排在程序表尾（同 `flushGroupUploads` 的约定）。
 - **修改** `PARSED_GENERAL`（`compile/features.ts:247`）加 `precache`，不再报 `general:precache`。
-- **修改** GPU 场景建场景时把模板的程序加进 `used`（同泛光、体积光，`render/scene.ts:3634`），同步拼出的层第一次 `prepareObjectSync` 就有程序。
 - 验收：单测——带描述的数字 `model` 编出的 `SceneModel` 字段、查不到的 token 编出 `model: null`、模板的 `usable` 判定；`kbp corpus scan` 全语料
   除 3834692798 外结果不变，3834692798 只剩两个 `script:api:*`（缺口表在步骤 3b 删）。
 
@@ -580,6 +580,11 @@ if (step.kind === "mesh") {
   draw 的绘制数；一帧多次 `applyData` 只写一次。
 - **新增** 数据仓的 `onStructure` → 释放旧缓冲、重建用到它的图层（`rebuildLayer`）；`onRelease` → 释放缓冲。
 - 视锥剔除照旧用 `model.bounds`（E6）；`g_Color4` 等照旧固定 1（E7）。
+- **修改** 模型网格读 `_rt_FullFrameBuffer`（E16，用户定不照 WPE）：编译期不再报 `mdl:framebuffer`（mdl 模型与脚本模型同一条，语料里 mdl 模型 0 个），
+  模板也不再因它判不可用；渲染时读帧缓冲的模型图层在画之前**拷一次快照**（同图像层的层首拷贝，每图层至多一次），正片叠底按作者意图生效。
+  和 WPE 有意不同：WPE 画模型不拷，读到最近一次别的层拷下的内容（没人拷过是 0）。
+- **修改** GPU 场景建场景时把模板的程序加进 `used`（同泛光、体积光，`render/scene.ts:3634`），同步拼出的层第一次 `prepareObjectSync` 就有程序
+  （原在步骤 2，`render/scene.ts` 当时有别的会话的改动，挪到这里）。
 
 ### 点 8 — 能力表与探针
 - **删除** `MISSING_SCRIPT_API.thisScene` 里的 `createModelData` / `destroyModelData`（`compile/scriptApi.ts:75`），同步 `api.test.ts` 的双向核对。

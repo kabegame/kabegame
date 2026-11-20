@@ -151,6 +151,7 @@ export function createWorkerHandler(
           userProperties: request.userProperties,
           scriptOverrides: request.scriptOverrides,
           structure: request.structure,
+          ...(request.modelData ? { modelData: request.modelData } : {}),
           postprocess: request.postprocess,
           reflection: request.reflection,
           shadows: request.shadows,

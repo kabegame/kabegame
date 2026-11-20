@@ -3,6 +3,7 @@ import { FetchSceneReader, type SceneReader } from "./fs";
 import type { SceneBundle } from "./bundle";
 import { decodeEncodedTextureList, decodeEncodedTextures, type TextureDecodeCache } from "./decode";
 import type { FragmentDelta, FragmentRequest } from "./fragment";
+import type { ModelDataDesc } from "../modeldata/types";
 import type {
   SceneReflectionSetting,
   ScenePostprocessSetting,
@@ -25,6 +26,8 @@ export interface WorkerCompileInput {
   scriptOverrides?: Record<string, number[] | boolean | string>;
   /** 运行中改过的场景结构（P6d3）；缺省空结构。 */
   structure?: SceneStructure;
+  /** 脚本模型数据的描述（P14，token → 描述）；整场加载时宿主按 `structure.created` 里引用到的 token 带上。 */
+  modelData?: Record<number, ModelDataDesc>;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
   postprocess?: ScenePostprocessSetting;
   /** 设置「场景反射」（P13b1）；缺省跟随 WPE。 */
@@ -255,6 +258,7 @@ export async function openSceneSession(
         userProperties: input.userProperties ?? {},
         scriptOverrides: input.scriptOverrides ?? {},
         structure: input.structure ?? { destroyed: [], parents: [], created: [] },
+        ...(input.modelData ? { modelData: input.modelData } : {}),
         postprocess: input.postprocess ?? "follow",
         reflection: input.reflection ?? "follow",
         shadows: input.shadows ?? "follow",
