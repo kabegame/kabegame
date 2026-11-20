@@ -292,6 +292,16 @@ P4f 之后语料里带粒子的场景粒子用法已全部覆盖；这两节补�
 - 已知差异：`boids` 在世界坐标里的 `rcpps` 漂移（滴水估计 ≤ 3 像素）、正好等于阈值的判定；`hw ≥ 200` 的分帧相位没实测（`TODO:[WPE_SCENE]`）。
 - 对比台：WPE 的 log.txt 各会话共用，别的会话同时开着测试窗口时 `[kbp]` 行会交错，回放前按进程号拆开（`ignore/p4/h0/split_log.py`）。
 
+## P4i — 补遗：粒子光照
+
+2026-11-21 用户指出 `myprojects` 的 `3823357259` 只差 `particle:lighting`（工坊 `3778352003` 雷电预设的光晕子系统是 `genericparticle` + `LIGHTING`）。子计划 [phase-4i-particle-lighting.md](phase-4i-particle-lighting.md)。
+
+**完成情况（2026-11-21）：** 步骤 0 用 11 组确定性工程证明现有渲染器在强制渲染下已经画对（光照全在着色器里，引擎侧和图层共用）；步骤 1 只放行能力表（`LIGHTING`、`DOUBLESIDEDLIGHTING` 进 `PARTICLE_COMBOS`），连同收尾写进 `cocs/wpe/WPE_SCENE.md`「粒子（P4i）」、changelog 与回归文档（「场景壁纸 P4i」I1–I6）。
+- 覆盖：语料不变（0 张用到）；`myprojects` 的 `3823357259` 从 1 项到 0 项。
+- 读码各条都成立，没有更正。已知差异只有 rope 一个边缘像素的顶点舍入（像素中心离边小于 1/256 px 吸附网格）。
+- 真机待用户勾：`3823357259` 在应用里打开的观感（回归 I6）。
+- 工具缺口：逐 draw 轨迹没有顶点着色器输出，我们这边的裁剪空间位置量不到（`TODO:[WPE_SCENE_MCP]`，见子计划）；`buildSceneHost.ts` 不设 `CARGO_TARGET_DIR` 时写 `target`，dev 读的是 `target-dev`。
+
 ## 决定
 
 **已定：**

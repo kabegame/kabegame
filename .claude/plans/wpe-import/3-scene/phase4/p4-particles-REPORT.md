@@ -444,3 +444,21 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | 世界空间：位置在世界坐标，发射器偏移不经对象缩放（同 P4c） | `world-s2`（对象 `scale 2`，本地相距 100）在世界坐标相距约 99、有作用；本地空间 `local-s2` 0.03 | 成立 |
 | 实例 `rate` 进 `dt'` 与 `k`、`speed` 只改初速 | `rate2` 0.0008、`speed2` 0.003 | 成立 |
 | 1/n 用 `rcpps`（不是精确除法） | 精确 1/n 时 `world-s2` 两颗整体漂 (−6, −23)：rcpps(1) 偏小 2⁻¹² 让质心在世界坐标（几百像素）里向原点加速，11 s 累积到 23；按 1/n·(1 − 2⁻¹²) 近似后 0.97，`order8` 0.48 → 0.02 | 成立；**大坐标下近似误差会累积成可见漂移** |
+
+## P4i 语义的实测核对（2026-11-21）
+
+计划 [phase-4i-particle-lighting.md](phase-4i-particle-lighting.md)「步骤 0」。工程 `ignore/p4/defs/p4i0.py`（11 个，每格一颗静止粒子），抓帧 `A:\p4i\`，我们的图是 dev 强制渲染（`ignore/p4/i0/ours/`），整帧 `kbp cmp frame --meta` 排除 FR / CLK。
+
+| 读码结论 | 用例与结果 | 结论 |
+|---|---|---|
+| 没有灯时颜色 = `g_LightAmbientColor` × 颜色，天光不读 | `p4i-amb`、`p4i-amb2` 0 差异 | 成立 |
+| 灯的累加走 `PerformLighting_V1`，和图层 / 模型同一块灯光缓冲 | `p4i-point` 0 差异；`p4i-spot` 4 像素差 1 | 成立 |
+| 没有法线图时强制 `DOUBLESIDEDLIGHTING 1`；有法线图时切空间用 `v_WorldRight` 与视线 | `nm` / `nmds` 格、`p4i-xform` 的 `nmr` / `nmx` / `nmw`、`p4i-trail` 的法线图拖尾（1867 像素差 1，切向归一化舍入） | 成立 |
+| `g_ModelMatrix`：本地系统 = 对象世界矩阵，世界空间系统 = 单位阵（P4c） | `p4i-xform` 1 像素差 1 | 成立 |
+| `g_Overbright` 乘在光照之后 | `ob` 格 0 差异 | 成立 |
+| HDR 下 `CombineLighting` 走 `saturate(ambient + light) + light · overbright` | `p4i-hdrb`（hdr + bloom）sRGB 编码后最大差 2，全在泛光渐变（f16 量化） | 成立 |
+| 雾与光照共用 `v_ViewDir` | `p4i-fog` 4 像素差 1 | 成立 |
+| `genericropeparticle` 同一套光照 | `p4i-rope` 光照颜色相同，1 个边缘像素覆盖不同 | 成立 |
+| 阴影灯在场时粒子读阴影图集，没有投射者时不遮 | `p4i-shadow` 1 像素差 1 | 成立 |
+
+现有渲染器在强制渲染下全部画对，读码没有被实测更正。另：`DOUBLESIDEDLIGHTING` 被能力表单独报成 `particle:combo:DOUBLESIDEDLIGHTING`，步骤 1 一起放行。

@@ -1469,6 +1469,12 @@ export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([
  *   alpha 锐化，丢弃由渲染器的 A2C 入口做（同图像层，`ENGINE_COMBOS` 的说明）。
  * - `ADDITIVE`：P13f，混合 `additive` 时编译期加的（同上，WPE 加载时同样加）。WPE 自带着色器里只有 `generic4` / `chroma4` / `foliage4` /
  *   `fur4` 的雾分支读它，粒子着色器与语料的工坊着色器都不读，加不加画面相同。
+ * - `LIGHTING`、`DOUBLESIDEDLIGHTING`：P4i。`genericparticle` / `genericropeparticle` 的光照全在着色器里（法线取视线、有法线图时按
+ *   `v_WorldRight` 搭切空间，`PerformLighting_V1` 累加灯，`CombineLighting(灯光, g_LightAmbientColor · 颜色)`，没有法线图时强制双面），
+ *   引擎要给的 `g_ModelMatrix`、`g_EyePosition`、环境光、灯光缓冲与 `LIGHTS_*`、阴影图集和图层 / 模型共用：开了光照的程序让 bundle 带上
+ *   `lights`（`bundle.ts` 的 `sceneLights`），粒子 draw 与图层同一个构建函数、每帧写灯光数组。`p4i0` 的 11 组工程（环境光、点光、平行光 +
+ *   聚光、对象变换与世界空间、HDR + 泛光、雾、绳、拖尾 + 法线图、阴影图集）和 WPE 整帧比，最大差 2（浮点舍入、f16 量化），
+ *   phase-4i-particle-lighting.md 步骤 0。`DOUBLESIDEDLIGHTING` 只在 `common_pbr_2.h` 里读（`LIGHTING` 关着时不起作用）。
  */
 const PARTICLE_COMBOS = new Set([
   "WORLDBLUR",
@@ -1478,17 +1484,19 @@ const PARTICLE_COMBOS = new Set([
   "NORMALMAP",
   "ALPHATOCOVERAGE",
   "ADDITIVE",
+  "LIGHTING",
+  "DOUBLESIDEDLIGHTING",
 ]);
 
 /**
- * 粒子材质 pass 的 COMBO 与光照（混合由 `checkPassFeatures` 照常检查，剔除、深度按 `normalizeDepthKeys` 规整，引擎 uniform /
+ * 粒子材质 pass 的 COMBO（混合由 `checkPassFeatures` 照常检查，剔除、深度按 `normalizeDepthKeys` 规整，引擎 uniform /
  * COMBO 由 `checkProgramFeatures` 带 `PARTICLE_UNIFORMS` 检查）。
  * - 材质写的、以及纹理槽注解带出的 COMBO（翻译结果 `source` 为 `request` / `texture`），值非 0 的只允许
  *   `PARTICLE_COMBOS` 里的，其余报 `particle:combo:<名字>`。
  * - 着色器注解的缺省值（`source: "default"`）不算：WPE 同样按缺省值编，翻译器照办。`genericparticle` 的 `FOG` 缺省为 1，
  *   它只在引擎的 `FOG_DIST` / `FOG_HEIGHT` 下起作用：P13f 起场景开雾时定义这两个宏（`compile/fog.ts`），粒子读的四个雾 uniform 同图层
  *   （`staticBuiltins`），`p13f-fog` 的粒子与 WPE 逐像素比过。
- * - 最终开了 `LIGHTING`（含着色器缺省值）报 `particle:lighting`：粒子的光照路径没有和 WPE 比过，本机 0 张。
+ * - 光照（`LIGHTING`，含着色器缺省值）P4i 起放行，依据见 `PARTICLE_COMBOS`；之前报 `particle:lighting`。
  */
 export function checkParticleProgram(
   pass: MaterialPass,
@@ -1501,9 +1509,8 @@ export function checkParticleProgram(
     if (combo.source !== "default") combos.set(combo.name.toUpperCase(), combo.value);
   for (const [name, value] of combos) {
     if (value === 0 || PARTICLE_COMBOS.has(name)) continue;
-    unsupported.add(name === "LIGHTING" ? "particle:lighting" : `particle:combo:${name}`);
+    unsupported.add(`particle:combo:${name}`);
   }
-  if (result && usesLighting(result)) unsupported.add("particle:lighting");
 }
 
 /**

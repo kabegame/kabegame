@@ -1,6 +1,6 @@
 /**
  * P4b 步骤 5（`genericparticle` 的 `REFRACT`、`CUTOUT`，以及 `REFRACT` 带出的 `NORMALMAP`）：
- * - 能力表放行这三个 COMBO，`LIGHTING` 与别的 COMBO 照报；
+ * - 能力表放行这三个 COMBO，别的 COMBO 照报（`LIGHTING` P4i 起放行）；
  * - 帧表纹理任何槽位都不报 `tex:animation`（P6e；粒子只在槽 0 当帧表），多图像、空帧表照报；
  * - 本机有 WPE 时用真翻译器编一个仿 `p4b-refract` / `p4b-refract2` 的工程（材质照 `ignore/p4/proj/p4b-refract`），
  *   用假设备建场景，钉住：快照的位置与次数（存活数为 0 也拷）、`NORMALMAP` 由槽 1 的纹理带出、没开折射时 `NORMALMAP`
@@ -46,9 +46,9 @@ describe("能力表：折射、裁切与法线图的 COMBO", () => {
     expect(check({}, result([normal]))).toEqual([]);
   });
 
-  it("LIGHTING 仍报 particle:lighting，别的 COMBO 仍报 particle:combo:<名字>", () => {
-    expect(check({ combos: { REFRACT: 1, LIGHTING: 1 } })).toEqual(["particle:lighting"]);
-    expect(check({ combos: { CUTOUT: 1, DOUBLESIDEDLIGHTING: 1 } })).toEqual(["particle:combo:DOUBLESIDEDLIGHTING"]);
+  it("LIGHTING 和折射一起也放行（P4i），别的 COMBO 仍报 particle:combo:<名字>", () => {
+    expect(check({ combos: { REFRACT: 1, LIGHTING: 1 } })).toEqual([]);
+    expect(check({ combos: { CUTOUT: 1, SPECULARMAP: 1 } })).toEqual(["particle:combo:SPECULARMAP"]);
   });
 });
 

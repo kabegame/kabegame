@@ -11,8 +11,9 @@
 > P4e（粒子子系统 `children` 的四种类型、事件实例池、`audioprocessing*` 与场景频谱）已落地：解锁工坊 `3778592720`、`3811798465`、`1514925620`（`1333579536` 与 P5b 一起），带粒子的场景里粒子用法完全覆盖的从 61 张到 93 张（165 张口径）。见下「粒子（P4e）」。
 > P4f（实例覆盖挂字段脚本与 `rate` 的单独路径、HDR 下的 `instanceoverride.brightness`、粒子层的 `IParticleSystem` 方法与 `instance` 对象、一个系统多个 renderer）已落地：带粒子的场景里粒子用法全部覆盖（93 → 108 张，165 张口径），不解锁新场景。见下「粒子（P4f）」。
 > P4g（粒子颜色 initializer `hsvcolorrandom` / `colorlist`）与 P4h（粒子 operator `boids`）已落地：语料没有场景用到，解锁 WPE `myprojects` 里的 6 张（5 张「followed by mice」与滴水 `3826719942`）。见下「粒子（P4g）」「粒子（P4h）」。
+> P4i（粒子光照：`genericparticle` / `genericropeparticle` 的 `LIGHTING`）已落地：渲染路径和图层共用，只放行能力表；语料没有场景用到，解锁 WPE `myprojects` 的 `3823357259`。见下「粒子（P4i）」。
 > 计划：[.claude/plans/wpe-import/3-scene/PLAN.md](../../.claude/plans/wpe-import/3-scene/PLAN.md)；
-> P4 粒子：[phase-4-particles.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4-particles.md)（总计划）、[phase-4a-base.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4a-base.md)（P4a 与实施记录）、[phase-4b-tier2.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4b-tier2.md)（P4b 与实施记录）、[phase-4c-controlpoints.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4c-controlpoints.md)（P4c 与实施记录）、[phase-4d-ropes.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4d-ropes.md)（P4d 与实施记录）、[phase-4e-children.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4e-children.md)（P4e 与实施记录）、[phase-4f-script.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4f-script.md)（P4f 与实施记录）、[phase-4g-color-modules.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4g-color-modules.md)（P4g 与实施记录）、[phase-4h-boids.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4h-boids.md)（P4h 与实施记录）、[p4-particles-REPORT.md](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)（实测与读码结论）；
+> P4 粒子：[phase-4-particles.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4-particles.md)（总计划）、[phase-4a-base.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4a-base.md)（P4a 与实施记录）、[phase-4b-tier2.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4b-tier2.md)（P4b 与实施记录）、[phase-4c-controlpoints.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4c-controlpoints.md)（P4c 与实施记录）、[phase-4d-ropes.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4d-ropes.md)（P4d 与实施记录）、[phase-4e-children.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4e-children.md)（P4e 与实施记录）、[phase-4f-script.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4f-script.md)（P4f 与实施记录）、[phase-4g-color-modules.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4g-color-modules.md)（P4g 与实施记录）、[phase-4h-boids.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4h-boids.md)（P4h 与实施记录）、[phase-4i-particle-lighting.md](../../.claude/plans/wpe-import/3-scene/phase4/phase-4i-particle-lighting.md)（P4i 与实施记录）、[p4-particles-REPORT.md](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)（实测与读码结论）；
 > 格式调研：[RESEARCH.md](../../.claude/plans/wpe-import/3-scene/RESEARCH.md)。
 
 ## 总体形态
@@ -41,6 +42,7 @@
 - **全局引擎宏**（[hdr-macro-REPORT](../../.claude/plans/wpe-import/3-scene/hdr-macro-REPORT.md)）：`HDR`、`SCENE_ORTHO` 经 `engineDefines` 传给全部着色器，关闭时不写键：`common_blending.h` 用 `#ifdef HDR`，传 0 会让 LDR 场景也走 HDR 分支。`REVERSEDEPTH` 恒为 1（P13c，WPE 用反向深度；见「sprite 对象（P13c）」）。`TEX<n>FORMAT` 只给声明了 `formatcombo` 且按名字绑定的槽位定义，运行时槽位（`previous`、`bind`、passthrough）不定义。`HLSL_GS40_DISABLED` 不能定义，WPE 没有这个宏。
 - **边界**：无 effect 图层直接上屏时算光；开光照或反射的普通图层走合成路径（effect、colorBlendMode 混合、被依赖、开雾）时 P13j 起走预光照（基础 pass 换成 `PRELIGHTING=1` 的变体 `SceneLayer.prelit`，渲染器写 `g_AltModelMatrix`（图层世界矩阵，instanced 乘 size / 图像尺寸）、`g_AltNormalModelMatrix`（逐行快速归一化）、`g_AltViewProjectionMatrix`（图层上屏的视图投影），四边形与正交按合成 RT 尺寸，[phase-13j-prelighting](../../.claude/plans/wpe-import/3-scene/phase13/phase-13j-prelighting.md)）；puppet（P13j-2）的变体另带 puppet 组合键（没有 `SKINNING_ALPHA`，skinned 时加 `PRELIGHTINGDUALVERTEX`，`a_PositionC1` 读位置那一项）、`nocull`，基础 pass 画整张网格进合成 RT（原始位置定光栅位置、蒙皮后的位置算光照，画前不清 RT，同 WPE），纹理通道 + 光照仍报 `puppet:texture-channels:prelighting`；effect 自己开光照报 `lighting:effect`（点光、平行光的阴影 P13d 起支持，聚光阴影 P13i、聚光 cookie P13k 起支持），体积光报 `object:castvolumetrics`，`genericimage2` 开光照报 `uniform:g_LightsPosition`。
 - 本机语料没有一张真的开 `LIGHTING`，这条路径靠 `ignore/lighting/` 的测试工程和 WPE 1:1 对比（最大差 1）。普通图层带法线图时另有 UV 内缩的差异（已知，最大 10）。
+- 粒子（`genericparticle` / `genericropeparticle`）P4i 起也开光照：走同一块灯光缓冲与同一组引擎 uniform，见「粒子（P4i）」。
 
 ## 反射（P13b1：设置与「反射关」；P13b2：平面反射开；P13g：屏幕空间反射开）
 
@@ -894,7 +896,7 @@ development 构建的 `window.__kabegameSceneProbe` 提供 `host.scripts()`（�
 | `particle:flags:<位值>` | 系统 `flags` bit8 起的高位；bit0–7 支持（bit1 关混帧，P4b 起；bit0 世界空间，P4c 起，原先报 `particle:flags:world`） |
 | `particle:children` | 子系统（P4e）。P4a、P4b 时控制点有实际内容报 `particle:controlpoint`，P4c 起控制点全部支持或中性，不再报 |
 | `particle:renderers` | P4f 起只在表内 renderer 多于一个、且其中有 `rope` / `ropetrail` 时报（任意条数的 `sprite` / `spritetrail` 支持，见「粒子（P4f）」）；P4c–P4e 多于一个就报。P4a 时帧表的 `particle:animationmode`、`particle:sequencemultiplier` 也在这一行，P4b 起支持 |
-| `particle:combo:<名字>`、`particle:lighting`、`particle:effects` | 粒子材质放行范围以外的 COMBO（如 `SPECULARMAP`、`DOUBLESIDEDLIGHTING`）；开了光照；带 `effects` 的粒子对象（本机 0 个） |
+| `particle:combo:<名字>`、`particle:effects` | 粒子材质放行范围以外的 COMBO（如 `SPECULARMAP`）；带 `effects` 的粒子对象（本机 0 个）。开了光照的 `particle:lighting` 与 `particle:combo:DOUBLESIDEDLIGHTING` P4i 起不报 |
 | `particle:object:<键>` | 粒子对象上的 `alpha` / `color` / `brightness` 取非默认值或绑了属性 / 脚本（WPE 怎么用没测，语料 0 张） |
 | `particle:instance:<键>`、`particle:binding:instance:<键>` | `instanceoverride` 的未知键；`color` 绑了属性（`particle:instance:color:user`）、`colorn` 带条件（`particle:instance:colorn:condition`）；`color` 等 24 个键（`SCRIPT_INSTANCE_KEYS`）以外的键挂了 `{script}`。`colorn` 本身 P4b 起支持；`controlpoint*` 的静态值 P4c 起支持（原先整个报 `particle:instance:controlpoint`）；P4f 起 HDR 下的 `brightness`、`controlpoint*` 绑属性、24 个键挂 `{script}` 都不再报 |
 | `particle:parse:<文件>` | 粒子 JSON 读不出来 |
@@ -1857,6 +1859,29 @@ P4h 补粒子 operator `boids`（类型 17，「鸟群」三规则：对齐、�
 - 走查：滴水场景解包成 `ignore/p4/proj/3826719942-kbp` 在 dev 应用里回放，和 WPE 抓帧比水流区域，形状、走向、粗细一致（随机发射，不逐粒子比）。
 - 覆盖：165 张口径不变（语料 0 张用到）；myprojects 的 `3826719942` 不支持项从 1 项到 0 项。
 - 对比台注意：WPE 的 log.txt 各会话共用，同时开着别的会话的测试窗口时 `[kbp]` 行会交错（行首进程号不同），回放工具会报「帧号重复」；按进程号拆开（`ignore/p4/h0/split_log.py`，原件留 `*-log.raw.txt`）。
+
+## 粒子（P4i）
+
+P4i 放行粒子光照：粒子材质的 `LIGHTING`（材质写的或着色器缺省值）与它的子开关 `DOUBLESIDEDLIGHTING`。之前能力表报 `particle:lighting` / `particle:combo:DOUBLESIDEDLIGHTING`（`compile/features.ts` 的 `checkParticleProgram`）。语料没有场景用到，起因是 WPE `myprojects` 的 `3823357259` 只差它：工坊 `3778352003` 的雷电预设给每个雷电系统挂一个光晕子系统，材质是 `genericparticle` + `LIGHTING: 1`（additive、`particle/halo`），场景没有灯、环境光 0.3。
+
+**不新增渲染逻辑。** WPE 的粒子光照全在着色器里，引擎侧要给的东西和图层、模型的光照（「光照（`#require LightingV1`）」）完全共用，P4i 只拿掉能力表的门：
+
+| 项 | 规则 | 我们这边 |
+|---|---|---|
+| 着色器 | 顶点多输出 `v_WorldPos`、`v_WorldRight = right · g_ModelMatrix`（3×3）与视线 `g_EyePosition − worldPos`；片元法线取视线方向，有法线图（`NORMALMAP`）时按 `v_WorldRight` 与视线搭切空间，没有法线图时强制 `DOUBLESIDEDLIGHTING 1`；`color = CombineLighting(PerformLighting_V1(…), g_LightAmbientColor · color)`，之后才乘 `g_Overbright`、走折射与雾。`g_LightSkylightColor`、`g_ViewRight`、`g_ViewUp` 声明了不读 | WPE 原件翻译（`genericparticle.*`；rope 的 `genericropeparticle` 几何着色器展开进顶点着色器，同 P4d） |
+| 灯 | `#require LightingV1` 按 `LIGHTS_*`（`general.lightconfig`）生成，灯光缓冲每帧按视线排序写；没有灯时 `sum = 0`，颜色就是环境光 × 颜色 | 开了光照的程序让 bundle 带 `lights`（`bundle.ts` 的 `sceneLights`，粒子 pass 同样调），粒子 draw 与图层同一个构建函数、每帧写灯光数组 |
+| 模型矩阵 | 本地系统是对象世界矩阵，世界空间系统是单位阵 | P4c 的规则，不变 |
+| HDR | `CombineLighting` 的 HDR 分支（`saturate(ambient + light) + light · overbright`）随全局 `HDR` 宏 | `engineDefines`，不变 |
+| 阴影 | 阴影灯在场时粒子读 `_rt_shadowAtlas`（只接收，不投射） | 同模型 |
+
+依据：WPE `assets/shaders/genericparticle.*`、`genericropeparticle.*`、`common_pbr_2.h` 原文；实测 [报告](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)「P4i 语义的实测核对」（读码各条都成立）；验收数据 [子计划](../../.claude/plans/wpe-import/3-scene/phase4/phase-4i-particle-lighting.md)「步骤 0」。
+
+### 验收与覆盖
+
+- 确定性工程 `ignore/p4/defs/p4i0.py`（11 个，每格一颗静止粒子：环境光、换色环境光、点光、平行光 + 聚光、对象变换与世界空间、亮灯、HDR + 泛光、雾、rope、拖尾 + 法线图、阴影图集），WPE 参照 `A:\p4i\`，和 dev 渲染整帧逐像素比：3 组 0 差异，其余最大差 1（浮点舍入）；HDR + 泛光最大差 2，全在泛光渐变（WPE 后备缓冲的 f16 存储量化，同 P13h）。
+- 已知差异：rope 有 1 个三角形边缘像素覆盖不同（WPE 没画）。像素中心离边 0.00085 px，比光栅化的 1/256 px 吸附网格还小，WPE 顶点的 x 离吸附边界只差 1 个 float32 ulp；我们把几何着色器展开进顶点着色器，指令顺序与 FMA 融合和 fxc 不同，顶点末位不同就会翻面，不复刻。
+- 单测 `compile/p4i1.test.ts`（假翻译器与真翻译器：`3823357259` 的光晕材质原样、点光、rope）；变异检查 4 处全部检出（`ignore/p4/i1/mutate_i1.py`）。
+- 覆盖：语料不变（0 张用到）；myprojects 的 `3823357259` 不支持项从 1 项到 0 项。
 
 ## 音频频谱 uniform（P11a）
 

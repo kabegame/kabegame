@@ -1221,15 +1221,17 @@ describe("能力表：粒子材质的 COMBO 与光照", () => {
     return [...keys].sort();
   };
 
-  it("非 0 的 COMBO 只允许 WORLDBLUR、USERCOLORBLEND、REFRACT、CUTOUT、NORMALMAP（后三个是 P4b 步骤 5）", () => {
+  it("非 0 的 COMBO 只允许 WORLDBLUR、USERCOLORBLEND、REFRACT、CUTOUT、NORMALMAP（后三个是 P4b 步骤 5）与光照两个（P4i）", () => {
     expect(check({ combos: { USERCOLORBLEND: 1, WORLDBLUR: 1, REFRACT: 1, CUTOUT: 1, NORMALMAP: 1 } })).toEqual([]);
     expect(check({ combos: { refract: true, cutout: true } })).toEqual([]);
-    expect(check({ combos: { DOUBLESIDEDLIGHTING: 1 } })).toEqual(["particle:combo:DOUBLESIDEDLIGHTING"]);
+    expect(check({ combos: { SPECULARMAP: 1 } })).toEqual(["particle:combo:SPECULARMAP"]);
   });
 
-  it("LIGHTING 非 0 报 particle:lighting（材质写的或着色器缺省值）", () => {
-    expect(check({ combos: { LIGHTING: 1 } })).toEqual(["particle:lighting"]);
-    expect(check({}, result([{ name: "LIGHTING", value: 1, source: "default" }]))).toEqual(["particle:lighting"]);
+  it("LIGHTING、DOUBLESIDEDLIGHTING 不报（P4i；材质写的或着色器缺省值）", () => {
+    expect(check({ combos: { LIGHTING: 1 } })).toEqual([]);
+    expect(check({ combos: { lighting: true, doublesidedlighting: true } })).toEqual([]);
+    expect(check({ combos: { DOUBLESIDEDLIGHTING: 1 } })).toEqual([]);
+    expect(check({}, result([{ name: "LIGHTING", value: 1, source: "default" }]))).toEqual([]);
   });
 
   it("着色器注解缺省值不算（genericparticle 的 FOG 缺省为 1）；纹理槽带出的算", () => {
