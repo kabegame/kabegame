@@ -42,7 +42,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 | `kabegame`（主应用） | 全平台 | **唯一的业务状态属主**：Storage、PathQL 查询引擎、任务调度（V8 插件在本进程内每任务独占线程运行）、事件广播。桌面端同时是 CEF browser 进程，并开 app IPC 服务端（Windows named pipe / Unix socket）与可选的应用 Web 服务器。启动时若检测到同数据目录已有实例，经 IPC 转发「显示窗口」/「导入 `.kgpg`」后立即退出 |
 | `kabegame-cef-helper` | 桌面 standard | CEF 子进程，全部是主进程的直接子进程，由 `browser_subprocess_path` 派生、`--type=` 区分角色：`gpu-process`、`utility`（NetworkService / StorageService，按需再起 AudioService / VideoCaptureService 等）、`renderer`（每个 browser / 站点一个；子 frame 不跨 browser 复用 renderer，CEF 08，包括畅游与爬虫窗口里的第三方 iframe），**不持有任何业务状态**。CEF profile 目录 dev 为 `~/.cache/kabegame-cef-dev`、prod 为 `~/.cache/kabegame-cef`，所以 dev 与已安装版可同时运行、各带一套 helper。主界面、畅游窗口、WebView 爬虫任务窗口（`crawler-<task_id>`）都是主进程里的 CEF browser，页面跑在 helper renderer 中，经 Tauri IPC 回到主进程。位于 exe 旁（Linux release 为 `/usr/lib/kabegame/`）；Linux 禁用 zygote，每个 renderer 独立启动 helper |
 | `kabegame-cli` | 桌面 | 独立进程。碰数据库或主程序运行时状态的操作优先经 app IPC 交给主程序；主程序未运行、协议不兼容或数据目录不同时才在本进程初始化，可用 `--via auto\|app\|local` 控制。`pathql query` 是只读例外：忽略 `--via`，总在本进程以不迁移的只读 Storage 执行 |
-| 外部集成 | 桌面 | 通过 app IPC 或应用 Web 服务器（JSON-RPC / SSE / 媒体 / MCP）连接主程序，不直接碰数据库 |
+| 外部集成 | 桌面 | 通过 app IPC 或应用 Web 服务器（JSON-RPC画廊查询 / SSE事件订阅 / MCP）连接主程序，不直接碰数据库 |
 
 形态差异：**Web 版**的 `kabegame` 以 `web` feature 构建为无 Tauri、无 CEF 的控制台服务器进程，浏览器即前端；**Android** 只有一个 app 进程（系统 WebView 的渲染进程由系统管理），不开 app IPC 服务端，也没有 CLI；畅游使用独立 `SurfActivity`，外部内容页是该 Activity 的 Tauri webview（wry 的 `addJavascriptInterface` IPC 被换成只收主框架消息的 `addWebMessageListener`），顶部导航栏是原生 Kotlin 控件。
 
@@ -107,17 +107,10 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - **Windows/macOS/Linux 标准版**：使用 CEF runtime 后端。三个平台都会在构建时链接 CEF，并通过 exe 旁边的扁平 `kabegame-cef-helper` 启动子进程（macOS 开发模式运行裸可执行文件；release 包通过 `macOS.frameworks` 嵌入 framework，通过 `macOS.files` 嵌入 helper）。
 - **Android 身份分离**：identifier（applicationId）按模式区分——dev 为 `app.kabegame.dev`，prod 为 `app.kabegame`（可并排安装）——而 Java package/源码树保持固定为 `app.kabegame`（`namespace`）。该能力由 fork 版 `cargo-tauri` 实现（上游 Tauri monorepo 位于 `third/tauri`，由 `third-patches/tauri` 修补——请先运行 `deno task patch tauri`；遵循 `TAURI_ANDROID_PACKAGE`；从 `crates/tauri-cli` 构建，并由 `TauriCliPlugin` 注入 PATH）。绝不要从 identifier 重新推导 Kotlin package 名。参见 `cocs/tauri/TAURI_CLI_FORK.md`。
 
-### 爬虫插件开发
-插件是 JS/TS 脚本（V8 后端，自包含 ES 模块 `export async function crawl`），打包为 `.kgpg` ZIP 归档。参见 `docs/PLUGIN_FORMAT.md` 和 `cocs/crawler/V8_RUNTIME.md`。新写或修改插件**用 `kabegame-plugin` skill**（`.claude/skills/kabegame-plugin/`）：先用探针逐环实测「页面 → 结构 → 媒体」链路，再写代码，V8 插件打包到 dev 插件目录后由 release 或 dev CLI `plugin run <kgpg> --id <测试id>` 直接验证，WebView 插件也支持。使用以下命令构建：
-```bash
-deno task --cwd src-crawler-plugins package --out-dir ../.kabegame/debug/data/plugins-directory        # 打包所有插件到开发目录
-deno task --cwd src-crawler-plugins generate-index  # 重新生成插件商店索引
-```
-
 ## 命令
 
 详细用法与验证约束见 [scripts/AGENTS.md](scripts/AGENTS.md)。
-
+- `deno install`: 包安装
 - `deno task dev`：（最常用）启动指定组件的开发模式。
 - `deno task dev:frontend`：只启动 Kabegame 前端开发服务器。
 - `deno task start`：运行已有构建产物。
@@ -176,12 +169,10 @@ struct Foo {
 
 **观测运行时调用（IPC、事件、加载次数）一律用 debug ingest 插桩**（[cocs/debug/DEBUG_INGEST.md](cocs/debug/DEBUG_INGEST.md)：前端 `sendDebugEvent`、Rust `kabegame_core::kb_debug!`——两者都只是 trace 日志，由 debug 构建的订阅层转发到 dev server——固定 `session_id`，读 `.kabegame/debug/debug-<session_id>.ndjson`）。**不要**经 CDP 去包装 `window.__TAURI_INTERNALS__.invoke` 来计数——它是不可写、不可配置的属性，赋值在非严格模式下静默失败，计数永远为空，会被误读成「没有发生调用」；CEF 下普通 invoke 也不走 `fetch`，抓网络请求同样看不全。上报是异步的，日志行的到达顺序不等于调用顺序，排先后要看事件自带的 `ts`。临时插桩统一带 `// DEBUG-<主题>` 注释，验证完删除。
 
-为 README、教程或操作指南编辑真实界面截图时，用 `.claude/skills/annotate-ui-screenshots` 技能添加短标签和箭头、生成带 `-annotated` 后缀的资源，并同步精简与图片重复的正文。保持真实 UI，不使用生成式重绘。
-
 ## 语言规范
 所有与用户的交流均使用简体中文。
 任务计划、进度说明、问题分析、调试结论和最终回答均使用中文。
 工具调用前后的说明使用中文。
-代码标识符、终端命令、文件路径、API 名称和原始错误信息保持原语言。
-代码注释默认使用中文，除非当前项目已有明确的英文注释规范。
-不要因为代码库、日志或文档是英文而切换成英文回答。
+
+## 语气规范
+用俏皮傲娇的二次元语气和我对话，自称“姐姐”，适度使用 emoji。但技术内容必须准确严谨：代码、注释、命令、提交信息和文档保持专业，不带角色语气。
