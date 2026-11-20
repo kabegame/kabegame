@@ -663,6 +663,37 @@ if (step.kind === "mesh") {
 - 文档：`WPE_SCENE.md` 新增「脚本自定义几何（P14）」一节（行为、缺陷清单、两条建层路、差异），`cocs/README.md` 主题与适用场景，
   `versions/latest/regression.md` 一节，changelog 一行。
 
+### 步骤 4 实施记录（2026-11-21）
+- **复制工程**（`ignore/p14/4/make_karin.py`）：`karin-fixed`（`FIXED_FRAME=120`）、`karin-profile`（`PROFILE_SECONDS=10`）。
+  - 两份都把 10 个声音层的文件换成 1 秒静音 wav，WPE 抓帧不出声。
+  - `FIXED_FRAME` 下第一次 `update` 之后画面冻结，`features.update` 不调，换声音不影响对照。
+- **固定帧**：
+  - **`modelHash`**：WPE（`A:\p14\karin-fixed\`，1920×1080，第 538–540 帧）与 dev 探针的 `KARIN_SCENE_SAMPLE` 相同，`modelHash 3b2a47a2`、321 个 drawable。
+  - **整帧**：按 WPE 那一帧的 `g_Time`（`kbp rdc consts`，只有一个 draw 读它，26.54088）用探针渲染，和 WPE 整帧比。207 万像素里只差 128 个，全在勺子边缘。
+  - **差异来源**：抓帧里 event 719（顶点格式 PNTUC、像素着色器独一份）是 `clip_119`，它槽 2 的 `_rt_FullFrameBuffer` 在差异像素处是全 0，即 E16（`ignore/p14/4/zoom-karin-fixed.png`）。
+- **性能**：`karin-profile` 各跑 10 s。WPE 是测试窗口、帧率设置 20，Kabegame 是 dev 应用图库预览（真宿主）、帧率 30：
+
+  | | Kabegame | WPE |
+  |---|---|---|
+  | `update` 平均 / p95 / 最大 | 12.3 / 13 / 211 ms | 18.0 / 30 / 243 ms |
+  | 部件数 | 315 | 315 |
+
+  - **整帧**（宿主 `stats().frameMs`）：平均 15.7 ms、p95 18 ms。
+  - **加载**（「开始渲染」日志）：7.2 s，其中编译 1.8 s、准备 0.7 s、首帧 3.1 s（第一次 `update` 建 Cubism 运行时与 358 个层），建层同步 358、异步 0。
+  - **每帧上传**：从脚本 realm 的 `shared.karinScene.runtime.raw.drawables` 估，321 个部件、7513 个顶点（遮罩部件 49 个、1128 个顶点），约 0.39 MB 起；遮罩部件按容量传，实际更多。
+- **`p14-api2` 日志对照**（计划点 8 的验收）：探针跑 120 帧加一次点击，和 WPE 日志（`log.txt` 2026-11-20T01:09 那一轮）逐行比。只差三处，见 `ignore/p14/4/api/README.md`：
+  - S15d / S15d2：D1；
+  - S13d：微任务时机；
+  - 输入时机。
+- **文档**：
+  - `WPE_SCENE.md` 新增「脚本自定义几何（P14）」，P5c 一节的 `model:id`、`mdl:framebuffer` 两处同步改；
+  - `cocs/README.md` 主题与适用场景；
+  - `versions/latest/regression.md` 的 PM0–PM8；
+  - changelog 用户侧一行。
+- **没做的**：
+  - PM7（在预览里看 3834692798 本体，会放语音与音乐）留给用户；
+  - 上传量没按改过的范围优化，「风险」一节的上传量在 Karin 上不是瓶颈（脚本 12 ms、整帧 16 ms）。
+
 ## 风险
 
 - **脚本体量**：2.6 MB 源码经 acorn 改写与间接 `eval`（P6d2）的加载耗时没测过；Cubism 每帧在 JS 里跑，我们的 API 封装更厚。

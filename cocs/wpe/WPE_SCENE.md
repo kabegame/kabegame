@@ -2474,9 +2474,9 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 ### 能力表
 
 `object:model` 拆成细分键，没实现的照报、整张退回：
-- **对象**（`features.ts` 的 `checkObjectFeatures`）：`skin`、`castshadow`、`reflected`、`disablepropagation` 中性（`MODEL_NEUTRAL_FLAGS`）。`reflected` / `castshadow` 本身没有画面，它们的消费者都照报：读 `_rt_Reflection` 报 `texture:rendertarget:_rt_Reflection`，`REFLECTION` 非 0 报 `combo:REFLECTION`，投影灯报 `lightconfig:*`。`perspective: true` 已实现；`effects` 非空报 `model:effects`；`model` 不是字符串（脚本 `createModelData` 建的）报 `model:id`；`animationlayers`、`dependencies` 照未知键报。
+- **对象**（`features.ts` 的 `checkObjectFeatures`）：`skin`、`castshadow`、`reflected`、`disablepropagation` 中性（`MODEL_NEUTRAL_FLAGS`）。`reflected` / `castshadow` 本身没有画面，它们的消费者都照报：读 `_rt_Reflection` 报 `texture:rendertarget:_rt_Reflection`，`REFLECTION` 非 0 报 `combo:REFLECTION`，投影灯报 `lightconfig:*`。`perspective: true` 已实现；`effects` 非空报 `model:effects`；`model` 是整数时是脚本模型数据的 token（P14，见「脚本自定义几何（P14）」），其余不是字符串的报 `model:id`；`animationlayers`、`dependencies` 照未知键报。
 - **mdl**（`checkMdlFeatures`）：`mdl:missing:<路径>`、`mdl:truncated`；骨骼 / 动画层 / 变形 / 挂点段报 `mdl:skeleton` / `mdl:animation` / `mdl:morph` / `mdl:attachment`（W6）；网格带可选块或记录表（木偶数据）报 `mdl:puppet`；网格标志除 bit0、bit1 外还有位报 `mdl:flags:<多出来的位>`；格式有表外的位或同一语义出现两次报 `mdl:format:<格式>`。
-- **网格**（`compileMesh`、`checkMeshAttributes`）：属性名不在 26 个名字里报 `mdl:attribute:<名>`，读了缺的语义报 `mdl:missing-attribute:<名>`，类型不符报 `mdl:attribute-type:<名>`；材质多于一个 pass 报 `mdl:material-passes`；读 `_rt_FullFrameBuffer` 报 `mdl:framebuffer`（WPE 的模型绘制不拷快照，读到什么没测）。
+- **网格**（`compileMesh`、`checkMeshAttributes`）：属性名不在 26 个名字里报 `mdl:attribute:<名>`，读了缺的语义报 `mdl:missing-attribute:<名>`，类型不符报 `mdl:attribute-type:<名>`；材质多于一个 pass 报 `mdl:material-passes`；读 `_rt_FullFrameBuffer` 不报：P14 起画这个模型之前拷一次快照（`planModelLayer` 的层首 `snapshot`，同图像层），和 WPE 有意不同（WPE 的模型绘制不拷，读到别的层最近一次拷下的内容，没人拷过是全 0），见「脚本自定义几何（P14）」的 E16。
 - **组里的模型**：`model:passthrough:children:model`（`groupChildIssues`）。
 
 ### 已知差异与只记不补
@@ -2485,7 +2485,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 - **组里的模型**：照报，WPE 在组里怎么画（深度、剔除、视锥剔除用哪个相机）没测。语料 0 个。
 - **读了的缺属性**：WPE 画出未定义的值，我们报 `mdl:missing-attribute`；强制渲染时接占位，读到 0。
 - **`g_UserAlpha` / `g_Brightness`**：着色器读了不带 `"material"` 注解的这两个名字时，WPE 给 0，我们给 alpha 与 1（图像层也一样）。语料与 WPE 自带的着色器里这两个名字全部带注解，没有画面差别。
-- **语料 0 个、照报**：`mdl:framebuffer`、`mdl:attribute-type`、`mdl:truncated`（WPE 的读取原语越界返回 0 / 空串 / 空指针后接着读，我们保守报；段表结尾缺空标签、段末超出文件不算，见上面「加载」一行）、`mdl:material-passes`、`model:effects`、`model:id`。
+- **语料 0 个、照报**：`mdl:attribute-type`、`mdl:truncated`（WPE 的读取原语越界返回 0 / 空串 / 空指针后接着读，我们保守报；段表结尾缺空标签、段末超出文件不算，见上面「加载」一行）、`mdl:material-passes`、`model:effects`、`model:id`。
 - **原归 P5d，现状**：透视场景、深度附件、图像层与粒子的剔除 / 深度缺省、`transparentsorting` 都由 P5d 实现，见「透视相机、相机对象与深度（P5d）」。
 
 ### 语料与解锁
@@ -3969,6 +3969,172 @@ P6d3b 对照时顺带改的两处：
 - 纹理的 `mips` 与视频时长。编译只在 `unsupported` 为空时解码纹理（`shouldDecode`），改前这些场景一开始就因 `createLayer` 判了退回，所以没有解码。
 
 所以 `layerShellValues` 的抽取没有改变任何编译结果。
+
+## 脚本自定义几何（P14）
+
+`IModelData` 让场景脚本把顶点 / 索引缓冲直接交给引擎：
+- `thisScene.createModelData({ shapes: [...] })` 返回句柄，`createLayer({ model: 句柄 })` 建模型层；
+- 之后每帧 `applyData` 换顶点（和索引），`replaceData` 整体换形状，`destroyModelData` 释放。
+
+语料里只有 3834692798（Karin，把 Live2D Cubism 运行时整个写进 2.6 MB 场景脚本的移植壁纸）用它。它在第一次 `update` 里建出 358 个模型层，之后每帧 `applyData`。
+
+WPE 建出的就是 mdl 加载出来的同一种模型资源：格式是 mdl 的 26 位掩码、按表序交错，绘制走同一个函数。所以我们把 `IModelData` 当成「内存里的 mdl」：模型层就是 P5c 的模型层，顶点布局、属性配对、占位属性、视锥剔除都沿用 `render/mesh.ts`。新的只有两件事：字节从哪来，以及怎么在运行中当帧建出来。
+
+- **依据**：
+  - 读码：[rea-p14-script.md](../../.claude/plans/wpe-import/3-scene/phase14/rea-p14-script.md)（dll 侧的参数整理与报错串，第 9 节）、[rea-p14-exe.md](../../.claude/plans/wpe-import/3-scene/phase14/rea-p14-exe.md)（exe 侧的建、更新、绘制与释放）。
+  - WPE 实测：工程由 `ignore/p14/0/` 的 `make_api.py`、`make_api2.py`、`make_draw.py`、`make_fb.py` 生成（`p14-api*` 比日志，`p14-format` / `p14-apply` / `p14-fb*` 比抓帧，抓帧在 `A:\p14\`）。
+  - 计划：[phase-14-model-data.md](../../.claude/plans/wpe-import/3-scene/phase14/phase-14-model-data.md)，含 S1–S17 / E1–E16 两张对照表与缺陷表 D1–D14。
+
+### 数据流
+
+方向是「脚本 → 主线程数据仓 → GPU」，编译只看描述：
+
+- **数据仓 `ModelDataStore`**（`modeldata/store.ts`，宿主主线程，随脚本运行时建与丢）：
+  - 按 token 存每个形状的格式、材质、顶点 / 索引字节（调用时拷一份）、索引格式、动态标志、包围盒、版本号；
+  - 引用计数是脚本一份加每个图层一份，最后一个图层删掉后释放；
+  - token 从 1 起，只在创建成功时分配。
+- **编译按描述**：
+  - 对象配置里的 `model` 是整数 token。宿主把 token 的描述 `ModelDataDesc`（每个形状的格式、顶点数、索引格式与个数、材质，加上包围盒）随开会话输入、片段请求、L6 重编带进 Worker；
+  - `compileModel` 的数字分支按描述建 `SceneModel`，每个形状照 mdl 网格编一个材质 pass；
+  - `SceneMesh` 不带字节，只记来源 `source: { token, shape }`。无索引形状记成 `indexCount: 0` 加一个 `uint16` 占位。
+  - 字节不进 Worker、不进 bundle。查不到的 token 编出 `model: null`，建出不画的层（同 WPE）。
+- **GPU 缓冲**：GPU 场景按 `(token, 形状)` 建自己的顶点 / 索引缓冲，多个图层共用，每帧按版本整块重写（下面「GPU 缓冲」）。
+
+### 脚本 API（`script/modelData.ts`）
+
+- **装不装**：宿主给了数据仓才装 `createModelData` / `destroyModelData`。两个方法都是 `sceneMethod`，在模块顶层调抛 `... cannot be called from global scope.`。
+- **参数**：
+  - 没有参数或不是对象，返回 `null`；
+  - `shapes` 是数组就逐个当形状，否则整个配置当一个形状，`shapes: []` 抛 `Shapes missing.`；
+  - 顶点必须是 `Float32Array`，字节数是 stride 的整数倍；索引收 `Uint16Array` / `Uint32Array`，别的类型当没有；
+  - `vertexFormat` 区分大小写按位或，遇到非字符串的元素停下；
+  - `material` 必填，经 `__workshopId` 改写；
+  - 包围盒要两个都是对象才生效，读 `.x .y .z`；
+  - `is*Dynamic` 只认 JS 布尔。
+- **报错**：一律 realm 的 `SyntaxError`，文字逐字照 rea-p14-script 第 9 节（错误码 1–13 的表加 dll 自己的校验）。
+- **材质检查**：材质有预编模板（见下面「precache 与材质模板」）时，`createModelData` / `replaceData` 当场按模板查着色器要的顶点属性，给不出时报码 2 `Shader expecting more vertex data.`。没有模板时当场不知道着色器，创建照常成功，编出来缺属性时那个图层不画、看板娘提示（已知差异，Karin 的材质都预编了）。
+- **句柄**：
+  - 是 realm 里 `IModelData.prototype` 的实例；`__modelDataToken` 不可写、不可枚举、不可配置；
+  - `applyData` / `replaceData` 是自有属性，全部实例共用同一个函数对象；
+  - `toConfigString()` 返回 token，所以 `createLayer` 的配置原文里 `model` 是整数，`createLayer(句柄)` 等同于 `{ model: 句柄 }`。
+- **`applyData`**：
+  - 当场拷贝、当帧生效；
+  - 不许加 / 删形状、删缓冲、换材质、换格式、写非动态缓冲（码 7、9–13）；
+  - 有索引时绘制数 = 这次的索引个数，无索引 = 顶点数。
+- **`replaceData`**：可以重建（换容量、格式、材质、形状数），同一帧换网格；在 `update` 回调里抛 `IModelData.replace cannot be called in update.`，字段脚本的 `update` 也算。
+- **`destroyModelData`**：释放脚本那一份引用。还有图层在用时资源留着，等最后一个图层删掉再释放。
+
+### precache 与材质模板（`compile/bundle.ts`）
+
+- **WPE 的 `general.precache`**：加载时预载列出的材质，不改语义。
+- **我们拿它预编**：`finalize` 里把列出的材质编成「模型材质模板」`bundle.modelMaterials`。
+  - 键是 `modelMaterialKey`（小写、`/` 分隔的路径）；
+  - 每个模板有基础 pass、阴影投射变体，以及 `castsShadows` / `usable`；
+  - 编模板时登记的绑定、反射、用户纹理、灯都回滚，不留在场景里。
+- **不可用的模板**：带 A2C、用户纹理、图层合成 RT 这类要在加载时按对象定的东西时，标 `usable: false`，这样的材质走 Worker。
+- **建 GPU 场景时**：`usable` 模板的程序一并进 `used`、预建管线，所以同步拼出的层第一次准备就有程序。
+
+### 建层的两条路（`modeldata/assemble.ts`、`host.ts` 的 `createOn`）
+
+WPE 的 `createLayer` 当帧建好，Karin 又在第一次 `update` 里一口气建出全部部件，所以模型数据层不走 L5 的片段缓存（`fragmentKey` 对整数 `model` 返回 `null`，键里没有描述，缓存会过期）：
+
+- **同步拼装**：同时满足下面几条时，用编译期同一套纯函数在主线程拼出片段，照 L5 命中缓存那条路当场接进场景、同步装上 GPU，当帧画出：
+  - 配置只有平常字段，白名单是 `id name model origin angles scale visible alpha color brightness perspective parent solid parallaxDepth colorBlendMode castshadow`，值只收数字 / 布尔 / 字符串；
+  - 每个形状的材质都有可用模板；
+  - 不是透视场景，也没有平面反射；
+  - token 与描述相符。
+
+  拼装时图层字面量与 `SceneModel` 按描述建，模板 pass 改键成 `objects/<i>/meshes/<m>/passes/<k>`，再按格式查一遍着色器输入。
+- **Worker**：上面任一条不满足就走这条，片段请求带描述，晚几帧出现（同 L5 没命中）。
+- **两条路等价**：对同一配置、同一描述，拼出的片段与 `compileFragment` 编出的逐字段相同（`assemble.test.ts` 的对照测试；3834692798 的普通、遮罩、合批、游戏特效、正片叠底五种部件用真翻译器对照过）。
+- **结构变化**：`replaceData` 改了结构（形状数、格式、材质、容量）时，宿主对用这个 token 的每个图层重拼，能拼就按替换接回，拼不了走 L6 单对象重编（带新描述）。整场重载时 `collectModelData` 把现有描述带进开会话输入，这些层在重载之后仍在。
+- **引用**：建壳时 `retainLayer`，`removeObjectEverywhere` 里 `releaseLayer`。
+
+### GPU 缓冲（`render/scene.ts`）
+
+- **缓冲组 `ModelBufferSet`**：
+  - 键 `token:形状`，多个图层共用；
+  - 顶点缓冲 `VERTEX | COPY_DST`，索引块非空时另有 `INDEX | COPY_DST`，建时写入数据仓当前的字节（4 字节对齐）。
+- **每帧上传 `syncModelData`**：在 `encode` 开头（`syncPuppetIndices` 之后）逐组比数据仓的版本与记录，变了就整块 `writeBuffer`，并更新共用它的全部 draw 的绘制数。一帧里多次 `applyData` 只写一次；脚本在 `encode` 之前跑完，所以当帧生效。
+- **重建与释放**：
+  - 数据仓里这个形状的字节数组换了（`replaceData`），新图层另建一组；旧组留给还没重拼的图层，容量不符时不再写入，先画旧的；
+  - 缓冲组按引用它的 draw 计数，最后一个 draw 摘掉时销毁；
+  - token 释放后绘制数归零。
+- **无索引绘制**：`MeshDraw.indexBuffer` 为空时主 pass `draw(顶点数, 实例数)`，阴影 pass `draw(顶点数, 1, 0, 视图号)`；无索引的形状也建阴影投射者。
+- **和 mdl 模型层相同的部分**：
+  - `g_Color4` / `g_Alpha` / `g_Color` 恒为 1，`g_ModelMatrix` 含 `scale.z`；
+  - 材质只带自己的 `combos`；
+  - 视锥剔除用描述里的包围盒（建时定一次，`applyData` / `replaceData` 都不改）；
+  - 不参与光标命中。
+
+### 和 WPE 有意不同
+
+WPE 的缺陷按「壁纸依赖才复现」处理。语料里只有 3834692798 用这套 API，它都不依赖，所以都按 d.ts 的意图实现（依据见计划的缺陷表）：
+
+| # | WPE | 我们 |
+|---|---|---|
+| D1 | `destroyModelData` 只收数字 token，传句柄静默无效（d.ts 与 Karin 都传句柄，Karin 的数据从没释放过） | 句柄与 token 都收 |
+| D2 | 不查格式顺序，乱序时顶点与布局错位 | 乱序抛 `Vertex format in incorrect order.` |
+| D3 | `applyData` 变长报码 7（码 5 / 6 走不到） | 报 `Vertex buffer size cannot increase` / `Index buffer size cannot increase` |
+| D4 | 数组比建时短时按容量多读 | 只拷给出的长度 |
+| D5 | 无索引形状 `applyData` 后只画 1/4 | 绘制数 = 顶点数 |
+| D6 | 没给包围盒时把整段交错 float 当 xyz 求范围 | 只取位置分量 |
+| D7 / D8 / D9 | `replaceData` 加形状后旧材质串释放后使用、没写格式时除零、多次 `destroyModelData` 在图层底下释放（会崩溃或写坏堆） | 正确实现、沿用原格式、每个句柄只释放一次 |
+| D10 | 创建时 `undefined` / 数字形状交全零形状、`null` 形状打删除标志 | 创建时按缺 `vertexBuffer` 报错；`applyData` 里照 WPE |
+| D11 | 材质加载失败换成 `error` 着色器，格式没有 UV 时报码 2 | 报 `Invalid material` |
+| D12 | 材质路径截到 255 字节 | 不截 |
+| D13 | `applyData` / `replaceData` 的顶层数组当一个形状（静默无效） | 数组逐个当形状（d.ts 写的是 `Object|Array`） |
+| D14 | `replaceData` 换索引类型不重建、报码 9 | 重建 |
+| E16 | 模型绘制不拷帧缓冲快照，读 `_rt_FullFrameBuffer` 读到别的层最近一次拷下的内容，没人拷过是全 0。Karin 的正片叠底部件 `clip_119` 因此画成半透明黑 | 读帧缓冲的模型图层在画之前拷一次快照（同图像层的层首拷贝，每图层至多一次），正片叠底按作者意图生效 |
+
+另外几处：
+- **无索引形状投不投影**：WPE 没实测，按和有索引的一样处理。
+- **模型层的光标命中**：WPE 按包围盒参与，我们同 mdl 模型层不参与。Karin 的模型层不挂脚本、不挡传播。
+
+### 已知差异
+
+- **微任务时机**：WPE 在 `update` 返回前跑完它排出的微任务，`update` 里的 `async` 续体也算在 `update` 里，`replaceData` 照样抛错。我们的 realm 是浏览器的微任务，整帧脚本之后才跑，这时 `replaceData` 放行。
+- **没预编的材质**：创建时不查着色器输入（见上面「材质检查」），图层晚几帧出现。
+- **上传量**：按形状整块重写，不按改过的范围。Karin 每帧约 0.4 MB 起（321 个部件、7513 个顶点，遮罩部件按容量传），30 fps 下十几 MB/s。
+
+### 对比结果
+
+- **脚本 API**：
+  - S1–S17 的每条都有单测（`script/modelData.test.ts`、`modeldata/store.test.ts`），报错文字逐字照 WPE。
+  - `p14-api2` 用探针跑 120 帧加一次点击，和 WPE 日志逐行比，不同的只有：
+    - S15d / S15d2：D1 收句柄，传句柄那一下就释放了，之后的 `applyData` 报 `Invalid model data token`；
+    - S13d：上面「微任务时机」的差异。探针是同步回放，续体排到最后；
+    - 点击与属性回调的先后：两边输入时机不同，不是行为差异。
+
+    对照存在 `ignore/p14/4/api/`。
+  - `p14-api` 在 WPE 里两次让它堆损坏崩溃，所以那些出错路径的用例只在单测里比，不在 WPE 里跑。
+- **画面**：探针 `render_scene` + `scripts`，和 WPE 抓帧逐像素比：
+
+  | 工程 | 结果 |
+  |---|---|
+  | `p14-format` | 整帧 0 差异：四种顶点格式（stride 48 / 64 / 36 / 32）、材质 COMBO、`g_Color4` 恒为 1、`scale.z` |
+  | `p14-apply`（加 `precache` 的变体） | 回放 140 帧对 WPE 第 140 帧整帧 0 差异：当帧生效、调用时拷贝、两层共用、三种索引、包围盒剔除、`replaceData` 换成四边形 |
+  | `p14-fb1` / `p14-fb2` | E16：模型读到当前画面。差异只在两个 / 一个三角形上，WPE 是全 0 快照的黑或旧快照的红 |
+
+  `p14-apply` 原工程没写 `precache`，全走 Worker，REPLACE 那块探针重拼不了（探针没有单对象重编译，宿主走 L6），其余同样 0 差异。
+- **3834692798**：复制工程（`ignore/p14/4/make_karin.py`，声音换成静音）。
+  - **固定帧**：脚本常量 `FIXED_FRAME=120`。
+    - 两边的 `KARIN_SCENE_SAMPLE` 相同（`modelHash 3b2a47a2`、321 个 drawable）。
+    - 按 WPE 那一帧的 `g_Time` 渲染，整帧 207 万像素里只差 128 个，全在 `clip_119` 上，也就是 E16。
+  - **性能**：`PROFILE_SECONDS=10`。WPE 是帧率 20 的测试窗口，我们是帧率 30 的预览：
+
+    | | Kabegame | WPE |
+    |---|---|---|
+    | 每帧脚本 `update` 平均 / p95 / 最大 | 12.3 / 13 / 211 ms | 18.0 / 30 / 243 ms |
+
+    我们的加载用时 7.2 s，其中编译 1.8 s、首帧 3.1 s（第一次 `update` 建 Cubism 运行时与 358 个层，全部同步拼装、当帧装上）。
+- **语料**：234 张全部干净（3834692798 是最后一张有不支持项的）。
+
+### dev 探针
+
+- **同一套机制**：探针脚本自带数据仓，建层先走同步拼装，片段请求带描述，`replaceData` 改结构时能拼就按替换接回。
+- **探针的限制**：拼不了的记进结果的 `reloads`，因为探针没有单对象重编译。
+- **`prewarmFragments`**：预跑不收集整数 `model` 的配置，它们本来就同步。
 
 ## 图像层帧表（P6e）
 

@@ -4122,3 +4122,33 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | R6 升级迁移真机 | Windows dev | 拿一份带 `albumDriveEnabled` / `albumDriveMountPoint` 的旧 `settings.json` 启动 | 迁移到 `schemaVersion: 6`、两个键消失、生成 `settings.json.bak-v5`，其余设置不变 | 2026-11-20 Claude 实测：日志 23:28:52 出现 `kabegame_core::settings::migrations: v006: drop_album_drive`；`.kabegame/debug/data/settings.json` 的 schemaVersion = 6，两个键均不存在；同目录生成 `settings.json.bak-v5`（1790 → 1726 字节） |
 | [~] | R7 挂载点不残留 | Windows | 旧版本开着画册盘挂载盘符，退出后装新版启动 | 资源管理器里不再出现该虚拟盘盘符 | 2026-11-20 Claude 部分验证：本机盘符为 A/C/D/E/F/G/I/J，无 K:（默认挂载点），当前无残留。完整的「旧版本挂载 → 升级 → 盘符消失」链路需要装旧版本的环境，本机未做 |
 | [~] | R8 插件页「管理来源」 | Windows dev + Android dev | 宽屏标题栏与紧凑折叠菜单两处 | 桌面仍可见可用、Android 仍隐藏 —— 这是 `!IS_LIGHT_MODE` → `!IS_ANDROID` 唯一有行为的替换点 | 2026-11-20 Claude 实测桌面侧：插件页「管理源」「导入源」按钮均存在且 disabled=false；`env.ts` 导出里已无 `IS_LIGHT_MODE`（阶段 5 真机生效）。Android 侧需真机，未做 |
+
+## 场景壁纸脚本自定义几何（P14，`IModelData`）
+
+2026-11-21。场景脚本的 `thisScene.createModelData` / `destroyModelData` 与句柄的 `applyData` / `replaceData`。
+
+实现：
+- 主线程数据仓 `ModelDataStore` 存字节与版本，编译只看描述，`general.precache` 的材质预编成模板；
+- 建层时能拼就在主线程同步拼片段、当帧画出，否则走 Worker；
+- GPU 按 `(token, 形状)` 共用缓冲、每帧按版本重写。
+
+和 WPE 有意不同：
+- WPE 的缺陷 D1–D14 不复现；
+- 读帧缓冲的模型画之前拷快照（E16）。WPE 不拷，3834692798 的正片叠底部件在 WPE 里是半透明黑。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase14/phase-14-model-data.md`；读码：同目录的 `rea-p14-script.md`、`rea-p14-exe.md`；
+- 工程与对照：`ignore/p14/`（`0/` 生成器与 WPE 帧、`3b/` 变异与 `-pc` 变体、`4/` Karin 复制工程与对照）；
+- 抓帧：`A:\p14\format\`、`A:\p14\apply\`、`A:\p14\fb1b\`、`A:\p14\fb2\`、`A:\p14\karin-fixed\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PM0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、相关 vitest、变异 | 0 error，相关测试全过，变异检出 | 2026-11-21：tsc 0 error；步骤 3b 提交树上 94 个文件 2088 过；每一步都做了变异（`ignore/p14/*/mutate.py`），3b 的 28 处杀掉 25 处，剩下 3 处在探针闭包里、由 PM2 的真机渲染覆盖；前几步活下来的是等价变异或已补测试 |
+| [x] | PM1 语料 | Node | `kbp corpus scan` 全语料，步骤 2 与 3b 各扫一次 | 3834692798 干净，没有新键 | 2026-11-21：234 / 234 干净（`ignore/p14/3b/karin.json`），与步骤 2 无键变化 |
+| [x] | PM2 生成工程画面 | Windows dev | `p14-format`、`p14-apply`（含加 `precache` 的变体）探针渲染，和 WPE 抓帧比 | 整帧 0 差异 | 2026-11-21：format 0 差异（Worker 路与同步路像素摘要相同）；apply 回放 140 帧对 WPE 第 140 帧 0 差异（含 `replaceData` 换四边形） |
+| [x] | PM3 读帧缓冲的模型（E16） | Windows dev | `p14-fb1` / `p14-fb2` 探针渲染，逐 draw 轨迹 | 画模型之前拷一次快照、模型读到当前画面；和 WPE 只差三角形 | 2026-11-21：轨迹是「底图 → 快照 → 模型两个 drawIndexed」，绑的是快照；fb1 差两个三角形、fb2 差一个，WPE 那里是黑 / 旧快照 |
+| [x] | PM4 脚本 API 日志 | Windows dev | `p14-api2` 探针跑 120 帧加一次点击，和 WPE 日志逐行比 | 只在有意不同处不同 | 2026-11-21：只差 S15d / S15d2（D1）、S13d（微任务时机）与输入时机，见 `ignore/p14/4/api/README.md` |
+| [x] | PM5 Karin 固定帧 | Windows dev + WPE | 复制工程 `FIXED_FRAME=120`（声音换静音），两边比 `KARIN_SCENE_SAMPLE` 与整帧（按 WPE 那一帧的 `g_Time`） | `modelHash` 相同；整帧只差 E16 | 2026-11-21：`modelHash 3b2a47a2`、321 个 drawable 两边相同；1920×1080 只差 128 个像素，全在 `clip_119`（WPE 读到全 0 快照） |
+| [x] | PM6 Karin 性能 | Windows dev + WPE | 复制工程 `PROFILE_SECONDS=10`，WPE 测试窗口与 Kabegame 图库预览各跑一次 | 每帧脚本耗时不比 WPE 差 | 2026-11-21：`update` 平均 / p95 / 最大，Kabegame 12.3 / 13 / 211 ms，WPE 18.0 / 30 / 243 ms；加载 7.2 s（首帧 3.1 s 建 358 个层，全部同步、当帧装上） |
+| [ ] | PM7 预览里看 3834692798 本体 | Windows dev，图库预览 | 预览这张壁纸看一分钟（会放语音与音乐） | 能实时渲染，不再停在预览图；人物的呼吸、眨眼、口型与动作流畅，没有缺部件、闪烁或错位；字幕与语音对得上 | 需要用户看 |
+| [ ] | PM8 非 Windows | macOS、Linux | 同 PM7 | 同 Windows | 本机不能测 |
