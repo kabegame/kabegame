@@ -92,6 +92,19 @@ fork 的 `cargo-tauri` 则相反——它是构建环节，继续跟着隔离走
 | [x] | S6 Windows SDK 前提 | Windows | 装 Windows 11 SDK `10.0.28000.x` 后重跑 | `gn gen` 通过 | 2026-11-20 用户在 VS Installer 里装好；装前只有 `10.0.26100.0`。`stdint.h` 随 MSVC 工具集发布、不在 UCRT 里，排查时别被它误导 |
 | [x] | S7 补丁的 API 版本守卫 | Windows | 给 `include/cef_drag_data.h` 的 `GetCustomData` 补 `#if CEF_API_ADDED(CEF_EXPERIMENTAL)` 后编 `libcef_dll_wrapper`，再 `deno task check -c kabegame --skip vue` | wrapper 编过、check 0 error | 2026-11-20 Claude：修复前 `error C2259: CefDragDataCToCpp 无法实例化抽象类`；修复后 183/183 链接出 `libcef_dll_wrapper.lib`、cargo check 0 error。生成的 capi / ctocpp 本来就带这道守卫，所以只改头文件、不必重编 libcef；`deno task patch cef --check` 报 `cef: OK dry-run` |
 
+## 场景脚本读到的用户属性全集（2974757317 悬浮窗）
+
+2026-11-21 Windows dev。照 Wallpaper Engine（`kbprops-kinds` 实测）：工程属性里带 `value` 键的每一项都进脚本的属性全集，不看 `type`（`text`、`group`、不认识的类型、没写 `type` 的都算，`null` 也算），没有 `value` 的不进；`engine.userProperties` 就是全集，首次 `applyUserProperties` 的参数再去掉没写 `type` 的。之前后端 `scene_user_from_view`、宿主 `mergeProperties`、dev 探针三层都跳过 `group` / `text` / 空值，2974757317 的 22 段 `origin` 脚本只在收到 `text` 项 `xian` 时给 `speed` 赋值，读不到就把位置算成 NaN，悬浮窗、时间日期、胶囊按钮、底部音频条全部不见。后端改由 `scene_user_props` 补上其余项；网页壁纸（`resolve_web_user_props`）没对照过，不动。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 WPE 实测 | Windows，WPE 测试窗口 960×540 | 测试工程 `ignore/p6/f5/proj/kbprops-kinds`：14 类属性（带值 / 不带值的 `text`、`group`、`bool`，不认识的类型，没写 `type` 的，`null`），脚本在 `init` 与 `applyUserProperties` 里打出键与值 | 记下 WPE 的规则 | 2026-11-21 Claude：全集 24 项、参数 23 项（少了没写 `type` 的 `p_notype_val`）；没有 `value` 键的 4 项都不在；`p_null` 读到 `null` |
+| [x] | T2 单测与检查 | Windows | wpe-scene vitest：`compile/p3a`（`mergeProperties` 新规则）、`dev/probeScripts`（全集照收、没写 `type` 的不进参数），以及 `render/p3a`、`compile/p3a-missing`、`render/p11b`、`script/shortcutApi`；`tsc`；Rust `commands::wpe_web` 新增 `scene_user_props_follow_wpe_value_rule` | 全过 | 2026-11-21 Claude：vitest 6 个文件 129 条通过；`tsc` 0 错误；Rust 见 T3 |
+| [x] | T3 Rust 单测 | Windows | `driver.sh kabegame --lib scene_user`；`cargo fmt` | 通过 | 2026-11-21 Claude：2 条通过（原有的 `scene_user_values_match_property_items` 与新增的 `scene_user_props_follow_wpe_value_rule`）；rustfmt 已套用 |
+| [x] | T4 语料 | Windows | 语料编译扫描（234 张），和改前比 | 没有新增或去掉的键 | 2026-11-21 Claude：改前改后都是 234 张干净，`corpus diff` 0 张变化 |
+| [x] | T5 探针渲染 | Windows dev，屏外宿主 1920×1080，跑脚本 | `render_scene` 2974757317 回放 90 帧 | 中间出现悬浮窗、上方出现时间日期（没有媒体时显示缺省标题） | 2026-11-21 Claude：悬浮窗、时间、日期、署名都出来了，位置和 WPE 抓帧（`A:\p6f\float\wpe2974-frame262.png`）对得上；没有媒体，标题是缺省的「Wallpaper Music」。光标在正中时右侧会滑出胶囊按钮（#18 的 `cursorEnter` 置 `shared.mafeib`），光标挪到角上就收回，是作者的悬停交互；改前这些图层的 `origin` 都是 NaN |
+| [ ] | T6 预览与桌面 | Windows dev 预览 | 重开 dev 后打开 2974757317 的预览，系统在放歌 | 和 WPE 一样：正中悬浮窗带封面、频谱与歌名，上方时间日期；点悬浮窗它滑到底部、再点回来 | 需要重开 dev（后端改了）；背景封面比 WPE 放大约一倍、偏下，另查 |
+
 ## 场景脚本多的壁纸帧率（3662790108）
 
 2026-11-20 Windows dev。`3662790108`（Live Solar System）有 944 段脚本、九百多个对象，预览原先约 2 fps（WPE 正常）。CPU profile 定位到两处：`thisScene.getLayer('名字')` 每次 O(n²)（对象表逐个取名字、每个名字又线性找图层），改成按对象的索引加名字解析缓存；脚本把同样的值写回图层时原先也标脏、重算全部静态 uniform，改成值没变不标脏（变换写入照记，带 3×3 时同值的 `angles` 仍算变了）。运行时回调统计加累计耗时 `totalMs`。顺带修了 P6f 留下的 `state.objects.test.ts` 夹具（文本字段缺 `decor`）。

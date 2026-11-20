@@ -58,6 +58,8 @@ const PROJECT = {
       tint: { type: "color", value: "1 0 0" },
       grp: { type: "group", value: null },
       note: { type: "text", value: "说明" },
+      // 没写 type：WPE 只放进 engine.userProperties，不进首次 applyUserProperties 的参数（kbprops-kinds）
+      bare: { text: "no type", value: 7 },
     },
   },
 };
@@ -349,19 +351,53 @@ describe("Date 与 Math.random 的替换", () => {
 });
 
 describe("用户属性全集（probeUserProperties）", () => {
-  it("工程声明的属性带类型，值取请求给的（裸值或 { value }）、没给的取缺省；分组、文本、空值与工程没声明的键不收；另带 WPE 的 14 个内置项（P3a 修复）", () => {
+  it("工程声明的属性带类型，值取请求给的（裸值或 { value }）、没给的取缺省；照 WPE 分组、文本、null 值照收，没有值的与工程没声明的键不收；另带 WPE 的 14 个内置项（P3a 修复）", () => {
     const properties = probeUserProperties(PROJECT, { speed: 5, tint: { value: "0 1 0" }, extra: 1 });
     expect(Object.fromEntries(properties)).toEqual({
       ...builtinProperties(),
       speed: { type: "slider", value: 5 },
       tint: { type: "color", value: "0 1 0" },
+      grp: { type: "group", value: null },
+      note: { type: "text", value: "说明" },
+      bare: { value: 7 },
     });
     expect(Object.fromEntries(probeUserProperties(PROJECT))).toEqual({
       ...builtinProperties(),
       speed: { type: "slider", value: 2 },
       tint: { type: "color", value: "1 0 0" },
+      grp: { type: "group", value: null },
+      note: { type: "text", value: "说明" },
+      bare: { value: 7 },
     });
     expect(Object.fromEntries(probeUserProperties(null, { speed: 1 }))).toEqual(builtinProperties());
+  });
+
+  it("照 WPE（kbprops-kinds 实测）：带 value 键的都收、不看 type，没写 type 的只带值，没有 value 的不收", () => {
+    const project = {
+      general: {
+        properties: {
+          t: { type: "text", text: "T", value: false },
+          tn: { type: "text", text: "N" },
+          g: { type: "group", text: "G" },
+          gv: { type: "group", text: "G2", value: true },
+          u: { type: "foo", value: 3 },
+          nt: { text: "no type" },
+          ntv: { text: "no type v", value: 7 },
+          z: { type: "slider", value: null },
+          bn: { type: "bool" },
+        },
+      },
+    } as unknown as Parameters<typeof probeUserProperties>[0];
+    const own = Object.fromEntries(
+      [...probeUserProperties(project)].filter(([key]) => !Object.hasOwn(builtinProperties(), key)),
+    );
+    expect(own).toEqual({
+      t: { type: "text", value: false },
+      gv: { type: "group", value: true },
+      u: { type: "foo", value: 3 },
+      ntv: { value: 7 },
+      z: { type: "slider", value: null },
+    });
   });
 
   it("快捷方式（P11d）：给后端形状时照收；裸字符串与工程缺省值同后端没配，isbound 为 false", () => {
@@ -491,22 +527,27 @@ describe("createProbeScripts", () => {
     expect(log).toEqual([]);
     await scripts.load();
     for (let i = 1; i <= 3; i++) scripts.frame(0.1, i * 0.1);
-    // 全集：WPE 的 14 个内置项加工程声明的（P3a 修复），键按字节序（p3am-order）
-    const full = JSON.stringify(
-      Object.fromEntries(
-        Object.entries({
-          ...Object.fromEntries(Object.entries(builtinProperties()).map(([key, item]) => [key, item.value])),
-          speed: 5,
-          tint: "1 0 0",
-        }).sort(([a], [b]) => (a < b ? -1 : 1)),
-      ),
-    );
+    // 全集：WPE 的 14 个内置项加工程声明的（P3a 修复；分组、文本照 WPE 也在，`kbprops-kinds`），键按字节序（p3am-order）
+    const values = (extra: Record<string, unknown>) =>
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries({
+            ...Object.fromEntries(Object.entries(builtinProperties()).map(([key, item]) => [key, item.value])),
+            speed: 5,
+            tint: "1 0 0",
+            grp: null,
+            note: "说明",
+            ...extra,
+          }).sort(([a], [b]) => (a < b ? -1 : 1)),
+        ),
+      );
+    const full = values({ bare: 7 });
     expect(log).toEqual([
       "evaluate objects/0/color",
       "evaluate objects/1/alpha",
-      // init 里 engine.userProperties 已是全集（同 WPE 与宿主）；整份 applyUserProperties 在首帧之前
+      // init 里 engine.userProperties 已是全集（同 WPE 与宿主）；整份 applyUserProperties 在首帧之前，没写 type 的 bare 不在参数里
       `init userProperties=${full}`,
-      `apply ${full} userProperties=${full}`,
+      `apply ${values({})} userProperties=${full}`,
       "update 0.1",
       "update 0.2",
       "update 0.30000000000000004",

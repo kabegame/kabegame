@@ -186,18 +186,19 @@ export function installProbeRandom(global: Record<string, unknown>, seed: number
 
 /**
  * 场景的全部用户属性（带类型，同宿主的累计全集）：`project.json` 声明的属性，值取请求给的（`overrides`，裸值或 `{ value }`，同编译期的
- * `currentProperties`）、没给的取工程缺省值；分组、文本与空值跳过（`mergeProperties`，同宿主）。另有 WPE 注入的 14 个内置项（P3a 修复，
- * 同宿主首包补的）：工程声明了同名的以工程的为准；探针没有壁纸样式，`alignment` 取 fill 的 0。其余工程没声明的键不收（宿主也只有声明的）。
+ * `currentProperties`）、没给的取工程缺省值；照 WPE 只跳过没有值的项（`mergeProperties`，同宿主），`text` / `group` / 不认识的类型照收，
+ * 没写 `type`（或不是字符串）的只带值（同后端 `scene_user_props`）。另有 WPE 注入的 14 个内置项（P3a 修复，同宿主首包补的）：工程声明了
+ * 同名的以工程的为准；探针没有壁纸样式，`alignment` 取 fill 的 0。其余工程没声明的键不收（宿主也只有声明的）。
  */
 export function probeUserProperties(
   project: Pick<ProjectJson, "general"> | null,
   overrides: Record<string, unknown> = {},
 ): Map<string, UserProperty> {
   const delta: Record<string, UserProperty> = {};
-  const add = (key: string, type: string, fallback: unknown) => {
+  const add = (key: string, type: string | undefined, fallback: unknown) => {
     const raw = Object.hasOwn(overrides, key) ? overrides[key] : fallback;
     const value = raw && typeof raw === "object" && "value" in raw ? (raw as { value: unknown }).value : raw;
-    const property: UserProperty = { type, value };
+    const property: UserProperty = type === undefined ? { value } : { type, value };
     // 快捷方式（P11d）：请求可以直接给后端形状 `{ value, isbound, commandtype?, file? }`（`value` 是键，`mergeProperties` 只留已给出的字段）。
     // 没给后端形状（裸字符串，含工程缺省值）时同后端「没配」：`isbound: false`，WPE 对缺省空串也是 `{isbound: false}`
     if (type === "usershortcut") {
@@ -211,8 +212,7 @@ export function probeUserProperties(
   for (const [key, builtin] of Object.entries(builtinProperties())) add(key, builtin.type, builtin.value);
   for (const [key, declared] of Object.entries(project?.general?.properties ?? {})) {
     const type = (declared as { type?: unknown }).type;
-    if (typeof type !== "string") continue;
-    add(key, type, declared.value);
+    add(key, typeof type === "string" ? type : undefined, declared.value);
   }
   const properties = new Map<string, UserProperty>();
   mergeProperties(properties, delta);

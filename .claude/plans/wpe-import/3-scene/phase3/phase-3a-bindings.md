@@ -781,3 +781,16 @@ wpe p11 会话走查 P11c 时发现（用户让它转来）：`p11-media` 的脚
 - 真机：`buildSceneHost.ts` 重建宿主（`index-LwxbD9_J.js`），导入 `p3am-order`（15072）。改前 `render_scene` 带 `scripts` 是内置项在前；改后探针 4 行与 WPE 逐行相同（`out/ours-p3amo-log-fix.txt`），屏外真宿主（`host_open`）应用日志里的 4 行也相同。测后已 `projects_remove`。
 
 **环境**：没改 WPE 设置；测试窗口 `kb-509904-9` 已关；`shaders/blobsSM40` 已用 `cleanup_project` 删掉。
+
+---
+
+## 更正（2026-11-21）：累计全集里有哪些项
+
+本计划「跳过 `group` / `text` 与空值」（`mergeProperties`、后端 `scene_user_from_view`、dev 探针 `probeUserProperties`）只考虑了绑定，没在 WPE 上核对过脚本看到的属性表。2974757317 的 22 段 `origin` 脚本只在 `applyUserProperties` 收到 `text` 项 `xian` 时给 `speed` 赋值，我们读不到，位置算成 NaN，悬浮窗等图层全部不见。
+
+WPE 实测（`ignore/p6/f5/proj/kbprops-kinds`，脚本在 `init` 与 `applyUserProperties` 里打键与值）：
+
+- `engine.userProperties`：工程 `general.properties` 里**带 `value` 键**的每一项，不看 `type`（`text`、`group`、不认识的类型、没写 `type` 的都在，`null` 也在）；没有 `value` 键的不在。
+- 首次 `applyUserProperties` 的参数：同上，再去掉没写 `type` 的项（24 项 vs 23 项，差 `p_notype_val`）。
+
+改法：后端 `scene_user_props` 在面板归一化结果之外补上其余带值的项（原样 `{ type, value }`，没写 `type` 的只给 `{ value }`）；`mergeProperties` 只跳过没有值的；运行时原本就只把带字符串 `type` 的项放进参数，正好挡掉没写 `type` 的。网页壁纸（`resolve_web_user_props`）没对照，不动。见 WPE_SCENE「属性快速路径」的「全集里有哪些项」。

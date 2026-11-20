@@ -105,7 +105,8 @@ interface SceneTarget {
 }
 
 export interface SceneProperty {
-  type: string;
+  /** 工程里没写 `type` 的项没有（后端照原样给 `{ value }`，见 `UserProperty`）。 */
+  type?: string;
   value: unknown;
   /**
    * 快捷方式项（`usershortcut`，P11d）：后端给的形状，`value` 是原值哈希的键（空 = 没配）。`isbound` / `commandtype` / `file` 只进脚本

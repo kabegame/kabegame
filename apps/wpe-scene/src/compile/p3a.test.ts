@@ -133,16 +133,23 @@ describe("取值换算与分类（无 GPU、无语料）", () => {
     expect([...ok]).toEqual([]);
   });
 
-  it("mergeProperties：跳过 group / text / 空值，按值去重，保留 type", () => {
+  it("mergeProperties：照 WPE 只跳过没有值的项（group / text / null / 没写 type 的照收），按值去重，保留 type", () => {
     const properties = new Map<string, UserProperty>();
     const first = mergeProperties(properties, {
       a: { type: "slider", value: 1 },
       group: { type: "group", value: 1 },
       text: { type: "text", value: "x" },
       empty: { type: "slider", value: null },
+      typeless: { value: 7 },
+      missing: { type: "bool", value: undefined },
     });
-    expect([...first.keys()]).toEqual(["a"]);
+    expect([...first.keys()]).toEqual(["a", "group", "text", "empty", "typeless"]);
     expect(properties.get("a")).toEqual({ type: "slider", value: 1 });
+    expect(properties.get("text")).toEqual({ type: "text", value: "x" });
+    expect(properties.get("empty")).toEqual({ type: "slider", value: null });
+    // 没写 type 的不补 type 键（首次 applyUserProperties 按它挡掉，`engine.userProperties` 照收）
+    expect(properties.get("typeless")).toEqual({ value: 7 });
+    expect(properties.has("missing")).toBe(false);
     expect(mergeProperties(properties, { a: { type: "slider", value: 1 } }).size).toBe(0);
     // 类型变了、值没变：对绑定没有影响，不去重触发
     expect(mergeProperties(properties, { a: { type: "color", value: 1 } }).size).toBe(0);

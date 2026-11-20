@@ -382,9 +382,12 @@ export interface SceneBinding {
   target: BindingTarget;
 }
 
-/** 用户属性的形状（`host.ts` 的 `SceneProperty`）：全集只关心 `type` 与 `value`。 */
+/**
+ * 用户属性的形状（`host.ts` 的 `SceneProperty`）：全集只关心 `type` 与 `value`。`type` 可能缺：工程里没写 `type` 的项（WPE 照样进
+ * `engine.userProperties`、不进首次 `applyUserProperties` 的参数，见 {@link mergeProperties}）。
+ */
 export interface UserProperty {
-  type: string;
+  type?: string;
   value: unknown;
   /**
    * 快捷方式项（`type === "usershortcut"`，P11d）的另三个字段，后端给的形状：`value` 是原值哈希的键（空 = 没配），`isbound` 值配好了没有，
@@ -495,7 +498,8 @@ export function valueTypeOf(uniform: { type?: string; declared?: string }): Valu
 
 /** 并进全集的一项：`type` 与 `value`；快捷方式（P11d）再带 `isbound` / `commandtype` / `file`（只有已给出的字段，不补 undefined 键）。 */
 function retainedProperty(property: UserProperty): UserProperty {
-  const kept: UserProperty = { type: property.type, value: property.value };
+  const kept: UserProperty =
+    property.type === undefined ? { value: property.value } : { type: property.type, value: property.value };
   if (property.type !== "usershortcut") return kept;
   if (typeof property.isbound === "boolean") kept.isbound = property.isbound;
   if (typeof property.commandtype === "string") kept.commandtype = property.commandtype;
@@ -505,7 +509,10 @@ function retainedProperty(property: UserProperty): UserProperty {
 
 /**
  * 把一个属性增量并进累计全集（I1 的 `+0x1728`），返回真正变了的键 → 新值。
- * 跳过 `group` / `text` 与空值；不比较 `type`（类型变了值没变对绑定没有影响），也不因增量没给而丢掉已有键（I4）。
+ * 只跳过没有 `value` 的项：照 WPE（2026-11-21 `kbprops-kinds` 实测），工程里带 `value` 键的每一项都在全集里，`text` / `group`、不认识的
+ * 类型、没写 `type` 的、值为 `null` 的都算（脚本的 `engine.userProperties` 看得到，2974757317 靠 `text` 项 `xian` 在首次
+ * `applyUserProperties` 里初始化）；没写 `type` 的不进首次 `applyUserProperties` 的参数，由 `SceneScriptRuntime.applyUserProperties` 挡。
+ * 绑定读到 `null` 时保持 `value`（`resolveValue`）。不比较 `type`（类型变了值没变对绑定没有影响），也不因增量没给而丢掉已有键（I4）。
  */
 export function mergeProperties(
   properties: Map<string, UserProperty>,
@@ -513,8 +520,7 @@ export function mergeProperties(
 ): Map<string, SceneScalar> {
   const changes = new Map<string, SceneScalar>();
   for (const [key, property] of Object.entries(delta)) {
-    if (!property || property.type === "group" || property.type === "text") continue;
-    if (property.value === undefined || property.value === null) continue;
+    if (!property || property.value === undefined) continue;
     const previous = properties.get(key);
     properties.set(key, retainedProperty(property));
     if (!previous || !Object.is(previous.value, property.value)) changes.set(key, property.value as SceneScalar);

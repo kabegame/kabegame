@@ -582,7 +582,8 @@ export class ScriptRuntime {
     if (this.halted) return;
     this.options.setProperties?.(full);
     const converted: Record<string, UserProperty> = {};
-    // 键按 WPE 的字节序（`scriptPropertyEntries`）：宿主首包是内置项在前、工程属性在后
+    // 键按 WPE 的字节序（`scriptPropertyEntries`）：宿主首包是内置项在前、工程属性在后。没写 `type` 的项不进参数（只在
+    // `engine.userProperties` 里），`text` / `group` / 不认识的类型照进（同 WPE，2026-11-21 `kbprops-kinds` 实测）
     for (const [key, property] of scriptPropertyEntries(Object.entries(delta)))
       if (property && typeof property.type === "string" && "value" in property) converted[key] = property;
     const json = JSON.stringify(converted);

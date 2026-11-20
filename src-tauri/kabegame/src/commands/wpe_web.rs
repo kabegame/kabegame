@@ -168,6 +168,8 @@ fn properties_view_for_language(
 /// `value` 是原值的不可逆键（`shortcut_key`，没配为 `""`），`isbound` 是用户配的值能不能解析，`commandtype` / `file`
 /// 只在 `isbound` 时有（WPE 脚本看到的就这三个字段）。只认用户在面板里配过的值（启动命令同规则），作者缺省值不算。
 /// 面板读的是 [`properties_view`] 的原值视图，不经这里。
+///
+/// 这里只有面板能编辑的类型；交给宿主的全集由 [`scene_user_props`] 再补上其余项。
 fn scene_user_from_view(view: WpeWebPropertiesView) -> serde_json::Map<String, Value> {
     view.items
         .into_iter()
@@ -189,6 +191,38 @@ fn scene_user_from_view(view: WpeWebPropertiesView) -> serde_json::Map<String, V
             })
         })
         .collect()
+}
+
+/// 场景宿主的用户属性全集（宿主据此给脚本 `engine.userProperties` 与首次 `applyUserProperties`，也给绑定取值）。
+///
+/// 照 WPE（2026-11-21 `kbprops-kinds` 实测）：工程 `general.properties` 里**带 `value` 键**的每一项都在全集里，不看 `type`：
+/// `text`、`group`、不认识的类型、没写 `type` 的都算，值为 `null` 的也算；没有 `value` 键的不算。面板能编辑的类型取
+/// [`scene_user_from_view`] 的归一化结果，其余项（以及归一化不了的作者值）原样给 `{ type, value }`，没写 `type` 的只给
+/// `{ value }`：宿主把这种项挡在首次 `applyUserProperties` 的参数之外、只留在 `engine.userProperties` 里，同 WPE。
+/// 2974757317 的 22 段脚本靠 `text` 项 `xian` 在首次 `applyUserProperties` 里初始化，缺了它这些图层的位置全是 NaN。
+fn scene_user_props(view: WpeWebPropertiesView, raw: &Value) -> serde_json::Map<String, Value> {
+    let mut user = scene_user_from_view(view);
+    let Some(props) = raw
+        .pointer("/general/properties")
+        .and_then(Value::as_object)
+    else {
+        return user;
+    };
+    for (key, prop) in props {
+        if user.contains_key(key) {
+            continue;
+        }
+        let Some(value) = prop.get("value") else {
+            continue;
+        };
+        let mut entry = serde_json::Map::new();
+        if let Some(kind) = prop.get("type") {
+            entry.insert("type".into(), kind.clone());
+        }
+        entry.insert("value".into(), value.clone());
+        user.insert(key.clone(), Value::Object(entry));
+    }
+    user
 }
 
 /// 一个快捷方式属性给场景宿主的形状，`raw` 是用户配的原值（没配为空串）。
@@ -424,11 +458,8 @@ async fn build_wpe_web_state_with_raw(
     // metadata 缺失时按「作者没有声明属性」处理，页面照常收到空的用户属性。
     let is_scene = wpe_kind(info.media_type.as_deref()).as_deref() == Some("scene");
     let user = if is_scene {
-        scene_user_from_view(properties_view(
-            info.id.clone(),
-            info.metadata_id,
-            raw.as_ref().unwrap_or(&Value::Null),
-        ))
+        let raw = raw.as_ref().unwrap_or(&Value::Null);
+        scene_user_props(properties_view(info.id.clone(), info.metadata_id, raw), raw)
     } else {
         raw.as_ref().map(resolve_web_user_props).unwrap_or_default()
     };
@@ -869,6 +900,58 @@ mod tests {
         assert_eq!(state_user["enabled"]["value"], json!(true));
         assert_eq!(state_user["default_bool"]["value"], json!(false));
         assert!(!state_user.contains_key("label"));
+    }
+
+    /// 场景全集照 WPE（`kbprops-kinds` 实测）：带 `value` 键的项都在，不看 `type`；没有 `value` 的不在；没写 `type` 的只给 `{ value }`。
+    #[test]
+    fn scene_user_props_follow_wpe_value_rule() {
+        use serde_json::json;
+        let raw = json!({
+            "general": { "properties": {
+                "p_bool": { "type": "bool", "text": "B", "value": true },
+                "p_text_val": { "type": "text", "text": "T", "value": false },
+                "p_text_str": { "type": "text", "text": "S", "value": "abc" },
+                "p_text_noval": { "type": "text", "text": "N" },
+                "p_notype": { "text": "no type" },
+                "p_notype_val": { "text": "no type v", "value": 7 },
+                "p_group": { "type": "group", "text": "G" },
+                "p_group_val": { "type": "group", "text": "G2", "value": true },
+                "p_unknown": { "type": "foo", "text": "U", "value": 3 },
+                "p_null": { "type": "slider", "text": "Z", "value": null, "min": 0, "max": 1 },
+                "p_bool_noval": { "type": "bool", "text": "B" }
+            } },
+            "userProperties": {}
+        });
+        let user = super::scene_user_props(
+            super::properties_view_for_language("scene".into(), None, &raw, "en-us"),
+            &raw,
+        );
+        let mut keys: Vec<_> = user.keys().cloned().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            [
+                "p_bool",
+                "p_group_val",
+                "p_notype_val",
+                "p_null",
+                "p_text_str",
+                "p_text_val",
+                "p_unknown"
+            ]
+        );
+        assert_eq!(user["p_bool"], json!({ "type": "bool", "value": true }));
+        assert_eq!(
+            user["p_text_val"],
+            json!({ "type": "text", "value": false })
+        );
+        assert_eq!(
+            user["p_group_val"],
+            json!({ "type": "group", "value": true })
+        );
+        assert_eq!(user["p_unknown"], json!({ "type": "foo", "value": 3 }));
+        assert_eq!(user["p_null"], json!({ "type": "slider", "value": null }));
+        assert_eq!(user["p_notype_val"], json!({ "value": 7 }));
     }
 
     /// 快捷方式属性给宿主的形状：只有键与三个字段，没有原值；没绑定时只有 `isbound`。
