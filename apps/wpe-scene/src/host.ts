@@ -14,10 +14,8 @@ import {
 } from "./compile/bindings";
 import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
-import { checkMeshAttributes } from "./compile/features";
 import type { FragmentDelta, ObjectFragment } from "./compile/fragment";
-import { assembleModelDataFragment, modelTokenOf } from "./modeldata/assemble";
-import { modelMaterialKey } from "./modeldata/layer";
+import { assembleModelDataFragment, modelMaterialCheck, modelTokenOf } from "./modeldata/assemble";
 import { ModelDataStore } from "./modeldata/store";
 import type { ModelDataDesc } from "./modeldata/types";
 import type { PreparedObject } from "./render/scene";
@@ -1024,16 +1022,7 @@ export class SceneHost {
 
   /** 建模型数据时的材质检查（`ModelDataStore.create` / `replace`）：按脚本当前看到的 bundle 里的模板查（P14）。0 通过、1 材质读不到、2 着色器要的顶点属性格式给不出。 */
   private materialCheck(material: string, format: number): 0 | 1 | 2 {
-    const key = modelMaterialKey(material);
-    const bundle = this.scriptBundle ?? this.bundle;
-    const template = key === null ? undefined : bundle?.modelMaterials?.[key];
-    // 没有模板（没进 precache）：此刻不知道着色器，创建照常成功，缺属性留给编译时报（不画 + 看板娘提示）
-    if (!template || !bundle) return 0;
-    if (template.passes.length === 0) return 1;
-    const issues = new Set<string>();
-    for (const pass of [...template.passes, ...(template.shadow ? [template.shadow] : [])])
-      if (pass.program !== null) checkMeshAttributes(bundle.programs[pass.program], format, issues);
-    return issues.size > 0 ? 2 : 0;
+    return modelMaterialCheck(this.scriptBundle ?? this.bundle, material, format);
   }
 
   /** 整场编译 / 会话要带的描述：`structure.created` 里还没删的、配置用数字 token 的对象，各取数据仓里 token 当前的描述（重载后这些层仍在，P14）。 */
@@ -2668,6 +2657,8 @@ export class SceneHost {
         userTextures: this.userTextures,
         puppets,
         particleOrdinal: (object) => registry.particleOrdinal(object),
+        // 脚本模型数据（P14）：数据仓随脚本运行时换（清空脚本存储），GPU 场景每次取当前的
+        modelData: () => this.modelData,
         onProgress: (stage, done, total) => load.report(stage, done, total),
         beforeFirstFrame: (state) => {
           // 重载进行中建的对象（L5 点 4）：编译快照之后建的，新 bundle 里没有。先在新状态上照旧下标建壳（结构接续之前：对象表与父子要接得上），

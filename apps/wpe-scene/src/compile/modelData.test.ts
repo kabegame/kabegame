@@ -25,6 +25,8 @@ const MATERIALS: Record<string, unknown> = {
   "materials/obj_t.json": { passes: [{ shader: "mesh", blending: "translucent" }] },
   // 模板用的材质：着色器 `tmpl` 与对象材质的不同，所以程序排在表尾
   "materials/tmpl.json": { passes: [{ shader: "tmpl", blending: "translucent" }] },
+  // 读帧缓冲的材质（P14 E16：模板与网格都不再报 mdl:framebuffer）
+  "materials/fb.json": { passes: [{ shader: "tmpl", blending: "translucent", textures: ["_rt_FullFrameBuffer"] }] },
   "materials/a2c.json": { passes: [{ shader: "tmpl", blending: "alphatocoverage" }] },
   "materials/bound.json": {
     passes: [{ shader: "tmpl", blending: "translucent", constantshadervalues: { multiply: { user: "p", value: 1 } } }],
@@ -326,6 +328,15 @@ describe("general.precache：模型材质模板（点 5）", () => {
     expect(templates["materials/none.json"].usable).toBe(false);
     expect(templates["materials/none.json"].passes).toEqual([]);
     expect(templates["materials/two.json"].usable).toBe(false);
+  });
+
+  it("读 _rt_FullFrameBuffer 的材质：模板 usable、pass 标 framebuffer，整场与模板都不报 mdl:framebuffer（P14 E16）", async () => {
+    const bundle = await compile([modelObject()], { precache: ["materials/fb.json"] }, { 7: DESC });
+    const template = bundle.modelMaterials!["materials/fb.json"];
+    expect(template.passes[0].framebuffer).toBe(true);
+    expect(template.usable).toBe(true);
+    expect(bundle.unsupported).not.toContain("mdl:framebuffer");
+    expect(bundle.unsupported).toEqual([]);
   });
 
   it("precache 的 materials 前缀不分大小写（同 WPE）", async () => {

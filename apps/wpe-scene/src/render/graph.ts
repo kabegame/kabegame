@@ -656,14 +656,17 @@ export function particleTreeWantsFramebuffer(particle: SceneParticle): boolean {
  * 模型层的计划（P5c 步骤 2）：按 `model.order` 每个网格一个 `mesh` 步骤，画到场景目标，没有合成 RT。
  * - 每个网格取 `passes[0]`；多于一个 pass 编译期已报 `mdl:material-passes`，这里同图像层、粒子另记 `render:multi-pass`（渲染器自查）。
  *   没有 pass 的网格（材质读不到）跳过。
- * - 运行时纹理只认 `_rt_FullFrameBuffer`：编译期已报 `mdl:framebuffer`（WPE 的模型绘制不拷快照，读到的是什么没测），所以这里不排快照
- *   步骤，强制渲染时读到的是快照纹理此刻的内容；其余名字照报 `render:texture-rt:<名>`。
+ * - 运行时纹理只认 `_rt_FullFrameBuffer`；其余名字照报 `render:texture-rt:<名>`。任何网格的 pass 读帧缓冲时，图层的第一步是 `snapshot`
+ *   （同图像层的层首拷贝，每图层至多一次，P14 E16）：WPE 的模型绘制不拷快照、读到别的层最近一次拷下的内容（没人拷过是 0），我们有意不同，
+ *   这样正片叠底之类按作者意图生效。模型在组里本来就照报（`model:passthrough:children:model`），不用管组的特例。
  */
 export function planModelLayer(layer: Pick<SceneLayer, "model" | "sprite"> & { object?: number }): LayerPlan {
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   const model = layer.model;
   if (!model) return { composite: null, steps, reasons };
+  // 层首快照（P14 E16）：sprite 的材质读快照在编译期报 `sprite:framebuffer`，不在这里处理
+  if (!layer.sprite && model.order.some((m) => model.meshes[m]?.passes[0]?.framebuffer)) steps.push({ kind: "snapshot" });
   for (const m of model.order) {
     const mesh = model.meshes[m];
     const pass = mesh?.passes[0];

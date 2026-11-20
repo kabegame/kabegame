@@ -99,6 +99,7 @@ import {
 } from "./renderTarget";
 import type { ParticleAudioFrame } from "../particles/audio";
 import { particleTrack, type ParticleTrack } from "../particles/track";
+import { assembleModelDataFragment, modelTokenOf } from "../modeldata/assemble";
 import {
   BLIT_SAMPLER,
   createBlitBindGroup,
@@ -830,6 +831,8 @@ async function renderFramePass(
     );
     const scene = await GpuScene.build(device, bundle, state, gpu.features, [], {
       ...(registry ? { particleOrdinal: (object: number) => registry.particleOrdinal(object) } : {}),
+      // 脚本模型数据（P14）：探针脚本自己的数据仓（建在 `createProbeScripts`，`init` 之前就有），GPU 场景每次现取
+      modelData: () => probeScripts?.modelData ?? null,
       ignoreUnsupported: force,
       particles: {
         ...replayParticleOptions(options.particles, bundle.layers),
@@ -930,7 +933,10 @@ async function renderFramePass(
       const restructured = { count: 0 };
       if (scriptsOptions && mode.dry)
         liveHooks = {
-          create: (_object, config) => void collected.push({ config }),
+          // 数字 model（脚本模型数据层，P14）本来就同步拼、不进片段缓存，预跑不收集
+          create: (_object, config) => {
+            if (modelTokenOf(config) === null) collected.push({ config });
+          },
           settle: async () => {},
           drain: () => {},
         };
@@ -955,7 +961,38 @@ async function renderFramePass(
         live = objects;
         liveHooks = {
           restructure,
-          create: (object, config, parent) => void objects.create(object, config, parent),
+          // 脚本模型数据层（P14，同宿主 `createOn`）：能同步拼就当场接进场景（这一帧就画出），拼不了（材质没预编等）走会话
+          create: (object, config, parent) => {
+            const store = probeScripts?.modelData;
+            const token = modelTokenOf(config);
+            const desc = token === null ? null : (store?.desc(token) ?? null);
+            const fragment = desc
+              ? assembleModelDataFragment({ object, id: object, parent, config, desc, bundle: registry!.bundle })
+              : null;
+            if (fragment) void objects.landAssembled(fragment);
+            else void objects.create(object, config, parent);
+          },
+          // `replaceData` 改了结构（同宿主 `rebuildModelObject`）：能拼就按替换接回；拼不了探针做不了单对象重编译，记一条
+          modelStructure: (token) => {
+            const store = probeScripts?.modelData;
+            const desc = store?.desc(token);
+            if (!store || !desc) return;
+            for (const object of store.layersOf(token)) {
+              const created = probeScripts?.structure?.().created.find((item) => item.object === object);
+              if (!created || !state.layers.has(object) || !registry!.bundle.layers.some((l) => l.object === object))
+                continue;
+              const fragment = assembleModelDataFragment({
+                object,
+                id: object,
+                parent: state.layers.get(object)?.parent ?? null,
+                config: created.config,
+                desc,
+                bundle: registry!.bundle,
+              });
+              if (fragment) void objects.landAssembled(fragment, "replace");
+              else reloads.push(`模型数据 ${token} 结构变化，对象 ${object} 拼不了（探针没有单对象重编译）`);
+            }
+          },
           settle: async () => {
             // 排着的片段到齐、接上；接上时排出的异步 GPU 对象（文本层等排版）也等完装上
             do {
@@ -1366,6 +1403,12 @@ function createProbeLive(input: ProbeLiveInput): {
     removeGpu: (object) => scene.removeObject(object),
     reload: (reason) => void input.reloads.push(reason),
     properties: () => Object.fromEntries([...input.properties].map(([key, property]) => [key, property.value])),
+    // 脚本模型数据的描述（P14，同宿主）：发片段请求时现取
+    modelData: (config) => {
+      const token = modelTokenOf(config);
+      const desc = token === null ? null : (input.scripts()?.modelData?.desc(token) ?? null);
+      return desc ? { [desc.token]: desc } : undefined;
+    },
   };
   return {
     live: new LiveObjects(

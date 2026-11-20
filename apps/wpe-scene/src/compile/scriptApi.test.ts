@@ -27,17 +27,18 @@ function scan(source: string, owner: ScriptApiContext["owner"] = { kind: "layer"
 
 describe("未实现脚本 API 的扫描", () => {
   it('根对象成员：thisScene / engine / input，含可选链与 ["成员"]', () => {
-    expect(scan("export function init() { let bar = thisScene.createModelData('models/bar.json'); }")).toEqual([
-      "thisScene.createModelData",
+    expect(scan("export function init() { let bar = engine.requestFeatures(['models/bar.json']); }")).toEqual([
+      "engine.requestFeatures",
     ]);
+    // createModelData / destroyModelData（P14）已实现，不再报（Karin 3834692798 一类的脚本扫描结果为空）
+    expect(
+      scan("export function init() { const d = thisScene.createModelData({ shapes: [] }); thisScene.destroyModelData(d); }"),
+    ).toEqual([]);
     // destroyLayer / sortLayer / getInitialLayerConfig / registerAsset（P6d3a）与 createLayer（P6d3b）已实现，不再报
     expect(scan("export function init() { thisScene?.sortLayer(x, 1); thisScene['destroyLayer'](x); }")).toEqual([]);
     expect(scan("export function init() { thisScene.createLayer('a'); }")).toEqual([]);
     expect(scan("const asset = engine.registerAsset('materials/x.json', true);")).toEqual([]);
-    expect(scan("thisScene?.createModelData(x); engine.requestFeatures([]);")).toEqual([
-      "engine.requestFeatures",
-      "thisScene.createModelData",
-    ]);
+    expect(scan("thisScene?.createModelData(x); engine.requestFeatures([]);")).toEqual(["engine.requestFeatures"]);
     // `input` 的三个成员 P6c 已实现，不再报
     expect(scan("export function update() { return input.cursorWorldPosition.x + input?.cursorLeftDown; }")).toEqual(
       [],
@@ -50,7 +51,7 @@ describe("未实现脚本 API 的扫描", () => {
 
   it("根对象的成员只认裸全局名：属性链上的同名对象不算", () => {
     expect(
-      scan("shared.thisScene.createModelData(); foo.engine.requestFeatures('a'); my.input.cursorLeftDown;"),
+      scan("shared.thisScene.windstrength = 1; foo.engine.requestFeatures('a'); my.input.cursorLeftDown;"),
     ).toEqual([]);
   });
 
@@ -117,9 +118,9 @@ describe("未实现脚本 API 的扫描", () => {
       "export function update() { return value; }",
     ].join("\n");
     expect(scan(source)).toEqual([]);
-    expect(scan("const s = `${bar.getAttachmentIndex(null).name} / ${`${thisScene.createModelData('a')}`}`;")).toEqual([
+    expect(scan("const s = `${bar.getAttachmentIndex(null).name} / ${`${engine.requestFeatures('a')}`}`;")).toEqual([
+      "engine.requestFeatures",
       "layer.getAttachmentIndex",
-      "thisScene.createModelData",
     ]);
     // 除号之后不是正则：后面的调用照常扫到
     expect(
@@ -238,7 +239,7 @@ describe("导出回调的扫描", () => {
       "cursorDown",
       "update",
     ]);
-    expect(scan("export function init() { thisScene.createModelData ('a'); }")).toEqual(["thisScene.createModelData"]);
+    expect(scan("export function init() { engine.requestFeatures ('a'); }")).toEqual(["engine.requestFeatures"]);
     // 中文标识符照旧是一个词
     expect(memberAccesses("脚本对象.名字").map((access) => access.name)).toEqual(["名字"]);
   });
@@ -335,12 +336,12 @@ describe("能力表：script:api:*", () => {
     const unsupported = new Set<string>();
     checkScriptFeatures(
       [
-        script("export function init() { thisScene.createModelData('a'); }"),
+        script("export function init() { engine.requestFeatures('a'); }"),
         script("export function init() { engine.registerAsset('b'); }", ["不支持的模块说明符：./x.js"]),
       ],
       unsupported,
     );
-    expect([...unsupported]).toEqual(["script:api:thisScene.createModelData"]);
+    expect([...unsupported]).toEqual(["script:api:engine.requestFeatures"]);
   });
 
   it("报 script:callback:<名>；不会执行的脚本不扫", () => {
@@ -398,8 +399,8 @@ describe("能力表：script:api:*", () => {
         postprocess: "disabled",
         exhaustive: true,
       });
-    const blocked = await compile("export function init() { let bar = thisScene.createModelData('models/bar.json'); }");
-    expect(blocked.unsupported).toEqual(["script:api:thisScene.createModelData"]);
+    const blocked = await compile("export function init() { let bar = engine.requestFeatures(['models/bar.json']); }");
+    expect(blocked.unsupported).toEqual(["script:api:engine.requestFeatures"]);
     expect(blocked.scripts.list).toHaveLength(1);
     const fine = await compile("export function update() { return thisScene.getLayer(0).visible; }");
     expect(fine.unsupported).toEqual([]);

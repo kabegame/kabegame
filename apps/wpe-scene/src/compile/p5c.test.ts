@@ -6,7 +6,7 @@
  * - 模型 pass 的深度 / 剔除按 WPE 缺省推（缺 `cullmode` = normal、缺 `depthtest` / `depthwrite` = enabled）；P5d 步骤 1 起图像层
  *   同一套规则（`normalizeDepthKeys`），三个键都不再报（会写深度的 `depthwrite:enabled`、`cull:*`、`depthtest:*` 都去掉了）；
  * - `mdl:missing-attribute` 只对读了的属性报（真翻译器，`p5c-attr` 的 M1–M5）；分量类型对不上报 `mdl:attribute-type`（步骤 2）；
- * - `mdl:*` 各键（步骤 2 加 `mdl:framebuffer`）、`model:id`、`model:effects`、模型在组里（`model:passthrough:children:model`）；
+ * - `mdl:*` 各键（步骤 2 加的 `mdl:framebuffer` 在 P14 E16 去掉）、`model:id`、`model:effects`、模型在组里（`model:passthrough:children:model`）；
  *   `skin` 等在模型上中性、在图像层上照报（`castshadow` P13d 起在任何对象上都中性）；
  * - 本机有 WPE 时 retro 不再报任何键（步骤 2 解锁）。
  * 依据是 p5-REPORT「P5c 语义的实测核对」。
@@ -297,10 +297,10 @@ describe("模型 pass 的深度与剔除（WPE 缺省：缺 cullmode = normal、
     expect(greater.pass.depthtest).toBe("disabled");
   });
 
-  it("网格材质读 _rt_FullFrameBuffer：mdl:framebuffer（P5c 步骤 2，WPE 的模型绘制不拷快照）；图像层不报这个键", async () => {
+  it("网格材质读 _rt_FullFrameBuffer：不再报 mdl:framebuffer（P14 E16，渲染时层首拷一次快照，不照 WPE）；图像层同样不报", async () => {
     const framebuffer = material({ blending: "translucent", textures: ["_rt_FullFrameBuffer"] });
     const model = await compileModels([modelObject(1)], { "materials/a.json": framebuffer });
-    expect(model.unsupported).toEqual(["mdl:framebuffer"]);
+    expect(model.unsupported).toEqual([]);
     expect(model.layers[0].model!.meshes[0].passes[0]).toMatchObject({
       framebuffer: true,
       runtime: { 0: "_rt_FullFrameBuffer" },

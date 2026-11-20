@@ -193,8 +193,26 @@ describe("planModelLayer：每个网格一个 mesh 步骤（P5c 步骤 2 点 1�
     expect(planSignature(plan)).toContain('"pass":"objects/0/meshes/1/passes/0"');
   });
 
-  it("没有快照步骤（WPE 的模型绘制不拷快照，编译期报 mdl:framebuffer）；别的运行时纹理、多 pass 进 reasons", () => {
+  it("网格不读帧缓冲时没有快照步骤；读时图层第一步是一个快照（P14 E16，不照 WPE：每图层至多一次，正片叠底按作者意图生效）", () => {
     expect(planModelLayer(layer).steps.some((step) => step.kind === "snapshot")).toBe(false);
+    const reads = meshOf(
+      buffer,
+      384,
+      0x9,
+      4,
+      [0, 1, 2],
+      [pass("objects/0/meshes/0/passes/0", { runtime: { 1: "_rt_FullFrameBuffer" }, framebuffer: true })],
+    );
+    const plain = meshOf(buffer, 384, 0x9, 4, [0, 1, 2], [pass("objects/0/meshes/1/passes/0")]);
+    const twoMeshes = planModelLayer(modelLayer(0, "m", { meshes: [plain.mesh, reads.mesh] }));
+    // 两个网格里只有一个读，快照仍只有一个、排在所有 mesh 步骤之前
+    expect(twoMeshes.steps.map((step) => step.kind)).toEqual(["snapshot", "mesh", "mesh"]);
+    expect(twoMeshes.reasons).toEqual([]);
+    const both = planModelLayer(modelLayer(0, "m", { meshes: [reads.mesh, reads.mesh] }));
+    expect(both.steps.filter((step) => step.kind === "snapshot")).toHaveLength(1);
+    // sprite 的材质读快照在编译期报 sprite:framebuffer，不在这里拷
+    const sprite = planModelLayer({ ...modelLayer(0, "m", { meshes: [reads.mesh] }), sprite: {} as never });
+    expect(sprite.steps.some((step) => step.kind === "snapshot")).toBe(false);
     const odd = meshOf(
       buffer,
       384,

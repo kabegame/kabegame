@@ -1724,6 +1724,12 @@ describe("未实现 API 表（compile/scriptApi.ts）与 ScriptApi 一致", () =
         for (const object of groups[group]) expect(name in object, `${group}.${name} 已经实现，从表里删掉`).toBe(false);
   });
 
+  it("createModelData / destroyModelData 已实现（P14），不在缺口表里；宿主给数据仓时 thisScene 才装这两个方法（`script/modelData.test.ts`）", () => {
+    const names = new Set(MISSING_SCRIPT_API.thisScene.map((entry) => entry.name));
+    expect(names.has("createModelData")).toBe(false);
+    expect(names.has("destroyModelData")).toBe(false);
+  });
+
   it("已实现的成员不在表里", () => {
     const groups = objects();
     for (const group of ["thisScene", "engine", "input", "localStorage", "console", "layer", "effect"] as const) {

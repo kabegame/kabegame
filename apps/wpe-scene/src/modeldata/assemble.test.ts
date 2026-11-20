@@ -9,7 +9,7 @@ import { openCompileSession, type SceneBundle, type SceneCompileSession } from "
 import type { SceneReader } from "../compile/fs";
 import type { ObjectFragment } from "../compile/fragment";
 import type { Wpesl2wgsl } from "../wpesl2wgsl";
-import { assembleModelDataFragment, ASSEMBLE_KEYS, modelTokenOf } from "./assemble";
+import { assembleModelDataFragment, ASSEMBLE_KEYS, modelMaterialCheck, modelTokenOf } from "./assemble";
 import type { ModelDataDesc } from "./types";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
@@ -421,5 +421,44 @@ describe("辅助", () => {
         "castshadow",
       ].sort(),
     );
+  });
+});
+
+describe("modelMaterialCheck：建模型数据时的材质检查（宿主与探针共用）", () => {
+  const POSITION_UV = 0x1 | 0x8;
+  const bundle = {
+    programs: [
+      // 只读位置与 uv
+      { attributes: [{ name: "a_Position", type: "vec3", location: 0 }, { name: "a_TexCoord", type: "vec2", location: 1 }] },
+      // 另读法线：格式没有法线时缺属性
+      { attributes: [{ name: "a_Position", type: "vec3", location: 0 }, { name: "a_Normal", type: "vec3", location: 1 }] },
+    ],
+    modelMaterials: {
+      "materials/ok.json": { passes: [{ program: 0 }], usable: true },
+      "materials/empty.json": { passes: [], usable: false },
+      "materials/needs_normal.json": { passes: [{ program: 1 }], usable: true },
+      "materials/shadow_needs_normal.json": { passes: [{ program: 0 }], shadow: { program: 1 }, usable: true },
+    },
+  } as unknown as Parameters<typeof modelMaterialCheck>[0];
+
+  it("没有模板（没进 precache）或没有 bundle：通过（缺属性留给编译时报）", () => {
+    expect(modelMaterialCheck(bundle, "materials/unknown.json", POSITION_UV)).toBe(0);
+    expect(modelMaterialCheck(bundle, "../escape", POSITION_UV)).toBe(0);
+    expect(modelMaterialCheck(null, "materials/ok.json", POSITION_UV)).toBe(0);
+  });
+
+  it("模板没有 pass（材质读不到）：1，Invalid material", () => {
+    expect(modelMaterialCheck(bundle, "materials/empty.json", POSITION_UV)).toBe(1);
+  });
+
+  it("着色器读的属性格式给不出（含投射变体）：2，Shader expecting more vertex data", () => {
+    expect(modelMaterialCheck(bundle, "materials/needs_normal.json", POSITION_UV)).toBe(2);
+    expect(modelMaterialCheck(bundle, "materials/shadow_needs_normal.json", POSITION_UV)).toBe(2);
+  });
+
+  it("属性都有：0；键按规整后的小写路径找", () => {
+    expect(modelMaterialCheck(bundle, "materials/ok.json", POSITION_UV)).toBe(0);
+    expect(modelMaterialCheck(bundle, "Materials\OK.json", POSITION_UV)).toBe(0);
+    expect(modelMaterialCheck(bundle, "materials/needs_normal.json", POSITION_UV | 0x2)).toBe(0);
   });
 });

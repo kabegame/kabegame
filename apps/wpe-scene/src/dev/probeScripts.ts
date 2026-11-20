@@ -30,6 +30,8 @@ import { SceneFs, type SceneReader } from "../compile/fs";
 import { parseProject, type ProjectJson } from "../compile/model";
 import { scriptMediaCallbacks } from "../media/events";
 import type { MediaCallbacks } from "../media/scene";
+import { modelMaterialCheck, modelTokenOf } from "../modeldata/assemble";
+import { ModelDataStore } from "../modeldata/store";
 import { mulberry32 } from "../particles/random";
 import type { ScenePuppets } from "../puppet/player";
 import { CursorSession, emptyCursorInput, type CursorInputSnapshot, type CursorStepInput } from "../render/cursor";
@@ -355,9 +357,18 @@ export interface ProbeLiveHooks {
    * 重算组与挂点，GPU 当帧重排（`probe.ts`）。不给时（`scriptCorpus`、预跑）只改状态。
    */
   restructure?(removed?: readonly number[]): void;
+  /**
+   * 脚本模型数据的结构变了（P14，`replaceData`，同宿主 `onModelDataStructure`）：用这个 token 的图层按新描述重拼。不给时（`scriptCorpus`、预跑）什么都不做。
+   */
+  modelStructure?(token: number): void;
 }
 
 export interface ProbeScripts {
+  /**
+   * 脚本模型数据仓（P14，`thisScene.createModelData`）：探针自己持有一份、随这套脚本运行时；`probe.ts` 的建层钩子按它拼模型数据层，GPU 场景从它读缓冲。
+   * 单测的替身可以不给。
+   */
+  modelData?: ModelDataStore;
   /** 建 realm、换 `Date` 与 `Math.random`、求值模块、跑 `init`，再整份交一次用户属性。场景没有脚本时什么都不做。 */
   load(): Promise<void>;
   /**
@@ -420,6 +431,8 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
   const matched: string[] = [];
   let matchedDropped = 0;
   /** 光标会话与最近一帧的 `input.*` 快照（P6c）：同宿主，快照由 `cursor` 每帧更新、`input` 每次现读。 */
+  const modelData = new ModelDataStore();
+  modelData.onStructure = (token) => input.live?.modelStructure?.(token);
   const cursorSession = new CursorSession();
   /** 快捷方式的点击令牌（P11d）：同宿主，`cursor` 里按下沿在派发之前发、松开沿在派发之后收。 */
   const shortcutToken = new ShortcutToken();
@@ -487,7 +500,12 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
   const createLayer = (config: string, parent: number | null): number | null => {
     syncAllocator(allocator, bundle);
     const object = createStructureObject(state, structure, allocator, config, parent);
-    if (object !== null) input.live?.create(object, config, state.layers.get(object)?.parent ?? null);
+    if (object !== null) {
+      // 脚本模型数据层（P14）：图层引用在壳建好时就记（同宿主 `onCreateLayer`）
+      const token = modelTokenOf(config);
+      if (token !== null) modelData.retainLayer(token, object);
+      input.live?.create(object, config, state.layers.get(object)?.parent ?? null);
+    }
     return object;
   };
 
@@ -534,6 +552,8 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
       installProbeClock(created.global, now);
       installProbeRandom(created.global, options.seed);
       const scriptApi = (api = new ScriptApi(created, {
+        modelData,
+        materialCheck: (material, format) => modelMaterialCheck(bundle, material, format),
         bundle: () => bundle,
         state: () => state,
         screenResolution: () => screen,
@@ -655,12 +675,19 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
         runtime,
         removed: (objects) => {
           cursorSession.forgetObjects(objects);
+          // 脚本模型数据层：放掉图层引用（P14，同宿主 `removeObjectEverywhere`）
+          for (const object of objects) {
+            const config = structure.created.find((item) => item.object === object)?.config;
+            const token = config === undefined ? null : modelTokenOf(config);
+            if (token !== null) modelData.releaseLayer(token, object);
+          }
           input.live?.restructure?.(objects);
         },
       });
       // destroyAnimationLayer 摘出的层在这里释放（P12e，同宿主 `beforeFrame` 里 `settleDestroyed` 之后的 `settle`）
       puppets?.settle({ released: releaseAnimationLayer });
     },
+    modelData,
     createdCount: () => structure.created.length,
     structure: () => structure,
     adoptObject(fragment) {

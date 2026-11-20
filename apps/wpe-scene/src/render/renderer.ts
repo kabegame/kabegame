@@ -38,6 +38,7 @@ import type { SceneBinding } from "../compile/bindings";
 import type { SceneBundle } from "../compile/bundle";
 import type { SceneScalar } from "../compile/model";
 import { particlePasses } from "../particles/system";
+import type { ModelDataReader } from "../modeldata/types";
 import type { PuppetSource } from "./puppet";
 import type { ParticleScriptTarget } from "../script/api";
 import type { TextRelayouter } from "../text/host";
@@ -212,6 +213,11 @@ export interface SceneLoadOptions {
    * 的顺序数（同登记表的规则）。
    */
   particleOrdinal?: (object: number) => number;
+  /**
+   * 脚本模型数据的来源（P14 步骤 3b）：宿主的 `ModelDataStore`（运行时重建时换一份，所以是取当前值的函数），原样交给 `GpuScene.build`；
+   * 网格带 `source` 的模型图层按它建 / 每帧更新 GPU 缓冲。不给时这些网格画不出（绘制数 0）。
+   */
+  modelData?: () => ModelDataReader | null;
 }
 
 /** 一条就地写：绑定 + 新值（宿主按 `planApply` 挑出来）。 */
@@ -556,6 +562,7 @@ export class SceneRenderer {
       ...(next.edges ? { target: { size: next.size, edges: next.edges, clear: next.clear } } : {}),
       onProgress: (done, total) => options.onProgress?.("gpu", done, total),
       particleOrdinal: options.particleOrdinal,
+      modelData: options.modelData,
     });
     if (this.destroyed || serial !== this.loadSerial) {
       scene.destroy();

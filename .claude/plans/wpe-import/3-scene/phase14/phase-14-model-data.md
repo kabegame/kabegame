@@ -608,6 +608,53 @@ if (step.kind === "mesh") {
 - 验收：`p14-format` / `p14-apply` 在 dev 应用里渲染，和 WPE 抓帧（`A:\p14\format\`、`A:\p14\apply\`）逐像素比（`kbp cmp frame`）；`p14-api` /
   `p14-api2` 两边日志逐行比（D1–D12 与微任务差异处按预期不同）；全语料 234/234 干净。
 
+### 步骤 3b 实施记录（2026-11-20）
+- 执行代理（sonnet）实现：
+  - **数据仓进 GPU 场景**：`SceneLoadOptions.modelData` 与 `GpuScene.build` 的 `modelData` 都是「取当前数据仓」的函数，清空脚本存储会换数据仓。
+    只读接口 `ModelDataReader` 放在 `modeldata/types.ts`。
+  - **缓冲组**：`render/scene.ts` 新增 `ModelBufferSet`（键 `token:形状`，多图层共用），配套 `modelBufferSet` / `releaseMeshModel` / `syncModelData`。
+    `syncModelData` 在 `encode` 开头、`syncPuppetIndices` 之后。
+  - **无索引绘制**：`MeshDraw.indexBuffer` 改为可空，主 pass `draw`，阴影 pass `draw(count, 1, 0, view)`。
+  - **E16 快照**：`planModelLayer` 在任一网格读帧缓冲时加层首 `snapshot` 步骤，模型 op 带 `snapshot`，编码时没被剔除才拷。
+  - **编译**：`compileMesh` 与模板不再报 `mdl:framebuffer`；建场景时 usable 模板的程序进 `used`。
+  - **缺口表**：删两个键。
+  - **探针**：自己持有数据仓，建层先走同步拼装，片段请求带描述，结构变化能拼就替换。
+  - **共用**：宿主与探针共用 `modelMaterialCheck`（挪进 `modeldata/assemble.ts`）。
+- 和点 7 的写法不同：释放不靠数据仓的 `onStructure` / `onRelease`（宿主已经占用 `onStructure` 做重拼），改成两条规则：
+  - 缓冲组按引用它的 draw 计数，最后一个 draw 摘掉时销毁。
+  - 数据仓里这个形状的字节数组换了（`replaceData`），新图层另建一组，旧组留给还没重拼的图层。容量不符的旧组不再写入，先画旧的。
+  - token 释放后绘制数归零。
+- 验收时改了一处：`shadowCasterSteps` 原来跳过 `!mesh.indexCount` 的网格（P13d 写的，当时 mdl 网格都有索引），无索引形状因此建不出投射者，阴影 pass 的
+  无索引分支是死代码。改成 `!mesh.indexCount && !mesh.source` 才跳过。WPE 里无索引形状投不投影没实测，语料 0 个，按和有索引的一样投影。
+- 变异（`ignore/p14/3b/mutate.py`）：头一轮 27 处活下来 12 处，执行代理补了 9 处的测试：
+  - 两层共用时逐个重拼；
+  - 模板程序预建；
+  - 读帧缓冲的模板 usable；
+  - 渲染器与宿主交出数据仓；
+  - `modelMaterialCheck` 四种返回；
+  - 探针脚本的数据仓、retain / release。
+
+  剩下的处理：
+  - 「阴影无索引」那条随上面的改动补上。
+  - 探针 `probe.ts` 里的三处（传数据仓、同步拼、请求带描述）在闭包里、要 GPU，由真机 `render_scene` 覆盖。
+- 语料：233/233 干净（`ignore/p14/3b/after.json`），带 3834692798 时 234/234（`karin.json`），与步骤 2 相比没有键变化。
+- 变异第二轮 28 处杀掉 25 处。活下来的是 `probe.ts` 里的三处，由下面的真机渲染覆盖：
+  - 少了「探针传数据仓」或「探针请求带描述」，p14-format 一个三角形都画不出来；
+  - 「探针同步拼」由 `-pc` 变体的「同步 N」覆盖。
+- 真机（dev 应用、探针 `render_scene` + `scripts`，`kbp cmp frame` 比 `ignore/p14/0/wpe-frames/`）：
+  - **步骤 0 的原工程**都没写 `precache`，建层全走 Worker。
+    - `p14-format` 和 WPE 整帧 0 差异。
+    - `p14-apply` 回放 140 帧对 WPE 第 140 帧：只差 REPLACE。原因是 `replaceData` 改结构后拼不了，探针又没有单对象重编译（宿主走 L6）。其余各项 0 差异：
+      TIMING（E3）、COPY（E3b）、SHARE（E9）、三种索引（E2）、BBOX（E6）。
+  - **`-pc` 变体**由 `ignore/p14/3b/make_pc.py` 生成，是同样的工程加上 `general.precache` 列全部材质，建层全走同步拼装、当帧装上：
+    - format 同步 8 个，像素摘要与 Worker 路相同；
+    - apply 同步 10 个，和 WPE 第 140 帧整帧 0 差异，含 REPLACE 的四边形（E11）。
+  - **`p14-fb1` / `fb2`（E16，有意不同）**：两条路都画出「三角形隐形」，即模型读到的是当前画面、原样输出。
+    - 逐 draw 轨迹：红底、绿半边 → 快照 `t0 → t6` → 模型两个 `drawIndexed`，绑的 `_rt_FullFrameBuffer` 是 `t6`。
+    - 和 WPE 的差异只在三角形上：fb1 两个，WPE 是黑的；fb2 只有左边那个，WPE 读到旧的红快照。
+  - 应用日志没有新的告警。
+- Karin（`ignore/p14/3b/karin-parity.test.ts`）：`clip_119`（正片叠底，读帧缓冲）现在能同步拼装，和 `compileFragment` 逐字段相同。
+
 ## 步骤 4 — 走查、性能与文档
 
 - 3834692798：用户同意后抓 WPE 基准（会放语音与音乐）；复制工程改 `FIXED_FRAME`，两边 `KARIN_SCENE_SAMPLE` 的 `modelHash` 相同、整帧对照；

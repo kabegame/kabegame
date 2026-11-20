@@ -50,6 +50,25 @@ export const ASSEMBLE_KEYS: ReadonlySet<string> = new Set([
 const isPlainValue = (value: unknown): boolean =>
   typeof value === "number" || typeof value === "boolean" || typeof value === "string";
 
+/**
+ * 建模型数据时的材质检查（`ModelDataStore.create` / `replace`，宿主与 dev 探针共用）：按 bundle 里的模板查。0 通过、1 材质读不到、2 着色器要的顶点属性格式给不出。
+ * 没有模板（没进 precache）：此刻不知道着色器，创建照常成功，缺属性留给编译时报（不画 + 看板娘提示）。
+ */
+export function modelMaterialCheck(
+  bundle: Pick<SceneBundle, "modelMaterials" | "programs"> | null | undefined,
+  material: string,
+  format: number,
+): 0 | 1 | 2 {
+  const key = modelMaterialKey(material);
+  const template = key === null ? undefined : bundle?.modelMaterials?.[key];
+  if (!template || !bundle) return 0;
+  if (template.passes.length === 0) return 1;
+  const issues = new Set<string>();
+  for (const pass of [...template.passes, ...(template.shadow ? [template.shadow] : [])])
+    if (pass.program !== null) checkMeshAttributes(bundle.programs[pass.program], format, issues);
+  return issues.size > 0 ? 2 : 0;
+}
+
 /** 配置里 `model` 是数字时的 token（取整，同 `compileModel`）；不是数字时 null。配置不合法时也是 null。 */
 export function modelTokenOf(config: string): number | null {
   try {

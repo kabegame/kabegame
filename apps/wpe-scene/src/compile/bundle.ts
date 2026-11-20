@@ -2300,7 +2300,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
           model: true,
           unsupported: issues,
         });
-        if (compiled.framebuffer) issues.add("mdl:framebuffer");
         passes.push(compiled);
         if (k === 0 && castsShadows && compiled.program !== null)
           shadow =
@@ -2391,8 +2390,9 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   }
 
   /**
-   * 模型的一个网格：编选中的材质，按网格格式查程序读到的属性（`checkMeshAttributes`）。材质读 `_rt_FullFrameBuffer` 报
-   * `mdl:framebuffer`（P5c 步骤 2）：WPE 的模型绘制不拷快照（rea-p5-mesh 2.6 没有拷贝这一步），读到的是什么没测，语料 0 个。
+   * 模型的一个网格：编选中的材质，按网格格式查程序读到的属性（`checkMeshAttributes`）。材质读 `_rt_FullFrameBuffer` 不报不支持项
+   * （P14 E16，推翻 P5c 的 `mdl:framebuffer`）：WPE 的模型绘制不拷快照（rea-p5-mesh 2.6），读到的是别的层最近一次拷下的内容；我们有意不同，
+   * 渲染时在画这个图层之前拷一次快照（`planModelLayer`），正片叠底按作者意图生效。
    */
   async function compileMesh(
     index: number,
@@ -2437,7 +2437,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         ...(combos ? { puppet: true } : {}),
       });
       if (compiled.program !== null) checkMeshAttributes(bundle.programs[compiled.program], mesh.format, unsupported);
-      if (compiled.framebuffer) unsupported.add("mdl:framebuffer");
       out.passes.push(compiled);
       if (k === 0 && castsShadows && compiled.program !== null) {
         const shadow = await compileShadowCaster(index, m, pass, compiled, combos);

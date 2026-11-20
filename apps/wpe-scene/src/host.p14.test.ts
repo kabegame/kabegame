@@ -113,7 +113,13 @@ class FakeRenderer {
   /** 最近一次 `load` 收到的 bundle 里的图层（建场景那一刻的拷贝） */
   loadedLayers: number[] = [];
   constructor(private readonly beforeFrame?: (dt: number) => void) {}
-  async load(bundle: SceneBundle, options: { beforeFirstFrame?: (state: SceneState) => void }) {
+  /** 最近一次 `load` 收到的 `modelData`（脚本模型数据来源，P14 步骤 3b） */
+  loadModelData: (() => unknown) | undefined;
+  async load(
+    bundle: SceneBundle,
+    options: { beforeFirstFrame?: (state: SceneState) => void; modelData?: () => unknown },
+  ) {
+    this.loadModelData = options.modelData;
     this.loadedLayers = bundle.layers.map((layer) => layer.object);
     this.sceneState = SceneState.fromBundle(bundle);
     options.beforeFirstFrame?.(this.sceneState);
@@ -535,6 +541,17 @@ describe("脚本模型数据层（P14 步骤 3a）", () => {
     renderer.tick();
     expect(sessions[0].requests).toHaveLength(1);
     expect(gpu.installed).toEqual([]);
+    host.dispose();
+  });
+
+  it("加载时把数据仓来源交给渲染器（P14 步骤 3b）：取当前值的函数，返回宿主现在的数据仓；脚本运行时丢掉后返回 null", async () => {
+    const { host, internals } = await open();
+    expect(typeof renderer.loadModelData).toBe("function");
+    expect(renderer.loadModelData!()).toBe(storeOf(internals));
+    expect(renderer.loadModelData!()).not.toBeNull();
+    // 清空脚本存储会把数据仓丢掉再重建：来源是每次现取的，不是加载时的那一份
+    (internals as unknown as { modelData: unknown }).modelData = null;
+    expect(renderer.loadModelData!()).toBeNull();
     host.dispose();
   });
 

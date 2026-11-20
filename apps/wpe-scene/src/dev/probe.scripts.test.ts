@@ -453,16 +453,16 @@ describe("renderFrame 的运行中建层（L5：会话、两条路、prewarmFrag
   const CONFIG = JSON.stringify({ image: "models/b.json", name: "bar", id: 9 });
 
   /** 脚本替身：`load` 里像 `createLayer` 一样建壳、交给 `live`，再等 `live.settle()`（同真实现）；`firstObject` 给了就用它当下标。 */
-  function scriptsCreatingAt(when: "init" | "frame") {
+  function scriptsCreatingAt(when: "init" | "frame", config: string = CONFIG) {
     const objects: number[] = [];
     vi.mocked(createProbeScripts).mockImplementation((input) => {
       let frames = 0;
       let made = 0;
       const create = () => {
         const object = (input.firstObject ?? 1) + made++;
-        addShellObject(input.state, object, CONFIG, null);
+        addShellObject(input.state, object, config, null);
         objects.push(object);
-        input.live?.create(object, CONFIG, null);
+        input.live?.create(object, config, null);
       };
       return {
         load: async () => {
@@ -548,6 +548,15 @@ describe("renderFrame 的运行中建层（L5：会话、两条路、prewarmFrag
     expect(objects).toEqual([1, 2]);
     expect(log).toContain("install 2");
     expect(result.liveCreate).toMatchObject({ sync: 1, async: 0, pending: 0, prewarmed: 1 });
+  });
+
+  it("prewarmFragments 遇到数字 model（脚本模型数据层，P14）的配置跳过：预跑不请求片段，正式那一遍照常走会话（数字 model 不进片段缓存）", async () => {
+    withGpu();
+    scriptsCreatingAt("frame", JSON.stringify({ model: 5, name: "part", id: 9 }));
+    const result = await renderFrame({ ...BASE, scripts: true, particles: PARTICLES, prewarmFragments: true });
+    // 预跑（dry）不收集这类配置：只有正式那一遍的一次请求（回放同步、赶不上读回帧，同上一条）
+    expect(fragmentRequests).toHaveLength(1);
+    expect(result.liveCreate).toMatchObject({ sync: 0, prewarmed: 0 });
   });
 
   it("prewarmFragments 不和 scripts 一起给：编译之前就抛错", async () => {

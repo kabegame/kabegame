@@ -397,6 +397,17 @@ describe("渲染器：建场景的 target（与探针同输入）", () => {
     renderer.destroy();
   });
 
+  it("load 的 modelData（脚本模型数据来源，P14 步骤 3b）原样交给 GpuScene.build；不给时 build 的选项里没有", async () => {
+    const { renderer } = await start();
+    const build = vi.spyOn(GpuScene, "build");
+    const modelData = () => null;
+    await renderer.load(ortho(), { modelData });
+    expect(build.mock.calls[0][5]!.modelData).toBe(modelData);
+    await renderer.load(ortho());
+    expect(build.mock.calls[1][5]!.modelData).toBeUndefined();
+    renderer.destroy();
+  });
+
   it("tile：不传 target、不传 size，仍按场景分辨率画再平铺上屏", async () => {
     const { renderer } = await start();
     renderer.setStyle("tile");

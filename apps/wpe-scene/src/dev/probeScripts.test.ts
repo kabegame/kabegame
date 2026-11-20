@@ -812,6 +812,71 @@ describe("createLayer 与运行中建层（P6d3b → L5）", () => {
   });
 });
 
+describe("脚本模型数据（P14）：探针脚本自己的数据仓", () => {
+  const shape = (g: Global) => ({
+    vertexBuffer: new g.Float32Array(27),
+    indexBuffer: new g.Uint16Array([0, 1, 2]),
+    vertexFormat: ["position", "uv", "color"],
+    material: "materials/a.json",
+    isVertexBufferDynamic: true,
+    isIndexBufferDynamic: true,
+  });
+
+  it("ScriptApi 接了数据仓：createModelData 可用，句柄的 token 进 scripts.modelData；脚本结束前数据仓里读得到", async () => {
+    let handle: unknown = null;
+    const { scripts } = await setup({
+      "objects/1/alpha": (g) => ({
+        init: (value: unknown) => {
+          g.Uint16Array = Uint16Array;
+          handle = g.thisScene.createModelData(shape(g));
+          return value;
+        },
+      }),
+    });
+    expect(scripts.modelData).toBeDefined();
+    await scripts.load();
+    expect(typeof (handle as { __modelDataToken?: number }).__modelDataToken).toBe("number");
+    const token = (handle as { __modelDataToken: number }).__modelDataToken;
+    expect(scripts.modelData!.desc(token)?.shapes).toHaveLength(1);
+    expect(scripts.modelData!.shape(token, 0)?.drawCount).toBe(3);
+    scripts.dispose();
+  });
+
+  it("数字 model 的 createLayer 记图层引用（layersOf 含该对象）；destroyLayer 生效后释放（layersOf 不含）", async () => {
+    let made: unknown = null;
+    let token = 0;
+    const { scripts } = await setup({
+      "objects/1/alpha": (g) => ({
+        init: (value: unknown) => {
+          g.Uint16Array = Uint16Array;
+          const handle = g.thisScene.createModelData(shape(g));
+          token = (handle as { __modelDataToken: number }).__modelDataToken;
+          // 假 realm 没有 baseclasses 的序列化适配：配置里直接写整数 token（真 realm 里句柄的 toConfigString 就是它）
+          made = g.thisScene.createLayer({ name: "part", model: token });
+          return value;
+        },
+        update: (value: unknown) => value,
+      }),
+      "objects/0/color": (g) => ({
+        update: (value: unknown) => {
+          if (made) {
+            g.thisScene.destroyLayer(made);
+            made = null;
+          }
+          return value;
+        },
+      }),
+    });
+    await scripts.load();
+    expect(scripts.createdCount?.()).toBe(1);
+    const object = scripts.structure!().created[0].object;
+    expect(scripts.modelData!.layersOf(token)).toEqual([object]);
+    scripts.frame(0.1, 0.1);
+    expect(scripts.modelData!.layersOf(token)).toEqual([]);
+    scripts.dispose();
+  });
+});
+
 describe("对象级的重编译写入（L6）", () => {
   /** 对象 1 的字段脚本的写回目标换成对象级重编译目标（同文本层 `opaquebackground` 这类非运行中字段），返回值依次取 `values`。 */
   async function setupRecompile(values: boolean[], live?: ProbeLiveHooks) {

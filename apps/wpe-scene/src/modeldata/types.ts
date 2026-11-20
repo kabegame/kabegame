@@ -32,6 +32,11 @@ export interface ModelDataShape {
   version: number;
 }
 
+/** GPU 场景读脚本模型数据的只读接口（P14 步骤 3b）：`ModelDataStore` 满足；查不到（token 已释放、形状已删）返回 null。 */
+export interface ModelDataReader {
+  shape(token: number, shape: number): ModelDataShape | null;
+}
+
 /** 顶点格式位（mdl 掩码的五项，E1）；顺序即表序（也是 d.ts 要求的顺序）。 */
 export const MODEL_DATA_FORMAT_BITS = {
   position: 0x1,
