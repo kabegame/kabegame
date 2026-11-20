@@ -33,6 +33,7 @@ import {
   type SceneChange,
 } from "../changes";
 import { FragmentCache, fragmentKey } from "../fragmentCache";
+import type { ModelDataDesc } from "../modeldata/types";
 import { targetKey, type ScriptTarget } from "./runtime";
 
 /**
@@ -126,6 +127,11 @@ export interface LiveTarget<P> {
   reload(reason: string): void;
   /** 编片段的请求要的当前属性全集（裸值） */
   properties(): Record<string, unknown>;
+  /**
+   * 配置里 `model` 是整数 token 时它的描述（P14，脚本 `createModelData`）：编片段的请求带上，Worker 才知道 token 是什么形状。查不到（或配置不用 token）时
+   * undefined。每次发请求现取，所以 `replaceData` 之后的单对象重编译用的是最新结构。可选：探针的接入替身没接数据仓。
+   */
+  modelData?(config: string): Record<number, ModelDataDesc> | undefined;
 }
 
 /** 配置原文里的 `id`（`createLayer` 写进去的）；没有或不是数字时 null。 */
@@ -249,6 +255,8 @@ export class LiveObjects<P> {
    * 会话的片段请求：配置原文（单对象重编译只有运行中建的对象带，会话没见过它时用）、覆盖、运行中的父与挂点、当前属性全集（发请求那一刻的）。
    */
   request(change: CompileChange): FragmentRequest {
+    const modelData = this.target.modelData?.(change.config);
+    const described = modelData ? { modelData } : {};
     if (change.kind === "recompile-object")
       return {
         object: change.object,
@@ -257,6 +265,7 @@ export class LiveObjects<P> {
         parent: change.parent,
         bone: change.bone,
         properties: this.target.properties(),
+        ...described,
       };
     return {
       object: change.object,
@@ -264,6 +273,7 @@ export class LiveObjects<P> {
       parent: change.parent,
       bone: change.bone,
       properties: this.target.properties(),
+      ...described,
     };
   }
 
@@ -279,7 +289,8 @@ export class LiveObjects<P> {
   ): "sync" | "pending" | "unsupported" | "reload" | "queued" {
     const change: CreateChange = { kind: "create", object, config, parent, bone: boneOf(config, parent) };
     if (this.disposed) return "queued";
-    const key = fragmentKey(config);
+    // 脚本模型数据的层不查缓存（P14）：配置键里只有 token、不含描述，`replaceData` 改过结构后同一个配置的旧片段就过期了
+    const key = fragmentKey(config); // 脚本模型数据层（P14）的键是 null：不读缓存
     const template = key === null ? undefined : this.cache.get(key);
     const id = configId(config);
     if (!template || id === null) {
@@ -288,6 +299,18 @@ export class LiveObjects<P> {
     }
     const fragment = rekeyFragment(template, { object, id, parent });
     return this.land({ fragment }, true, "create");
+  }
+
+  /**
+   * 主线程同步拼出的片段（P14 步骤 3a，`modeldata/assemble.ts`）当场接进场景，同命中缓存那条路：`"create"`（`createLayer` 当场，壳换成编好的）或
+   * `"replace"`（`replaceData` 改了结构、用新描述重拼，替换同一对象）。返回值同 `create`。已 `dispose` 时什么都不做（返回 `"queued"`）。
+   */
+  landAssembled(
+    fragment: ObjectFragment,
+    mode: LandMode = "create",
+  ): "sync" | "pending" | "unsupported" | "reload" | "queued" {
+    if (this.disposed) return "queued";
+    return this.land({ fragment }, true, mode);
   }
 
   /**

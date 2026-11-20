@@ -557,6 +557,22 @@ live.create(object, config, state.layers.get(object)?.parent ?? null);   // 现�
 - 验收：对照测试——3834692798 的三种部件配置、`p14-format` / `p14-apply` 的配置，主线程拼出的片段与 `compileFragment` 编出的逐字段相同（改键后
   深比较）；改一个白名单外的键、去掉一个材质的模板，都退回 Worker 路。
 
+### 步骤 3a 实施记录（2026-11-20）
+- 执行代理（sonnet）实现：新增 `src/modeldata/assemble.ts`（`assembleModelDataFragment`、`ASSEMBLE_KEYS`、`modelTokenOf`）与对照测试
+  `assemble.test.ts`（18 例）、宿主测试 `src/host.p14.test.ts`（8 例）；修改 `host.ts`（数据仓随脚本运行时建与丢、`access.modelData` /
+  `materialCheck`、`createOn` 两条路、`collectModelData` 让整场重载带描述、建壳时 `retainLayer`、`removeObjectEverywhere` 里 `releaseLayer`、
+  `onStructure` → `rebuildModelObject`：已接进来的层能拼就按替换接回、拼不了走 L6 重编，Worker 片段还在路上的到达时用 `modelFragmentStale`
+  核对过期）、`script/createLayerChange.ts`（`LiveTarget.modelData` 钩子：发请求时现取描述，L6 重编同一处；`landAssembled(fragment, mode)`）、
+  `modeldata/store.ts`（`layersOf`）、`compile/bundle.ts`（模板加 `castsShadows`，拼装据此算 `castShadow`）。
+- 白名单最终是 `id name model origin angles scale visible alpha color brightness perspective parent solid parallaxDepth colorBlendMode castshadow`，
+  值只收数字 / 布尔 / 字符串；透视场景、有平面反射（`bundle.reflection.enabled`，只在有模型读 `_rt_Reflection` 时才有，Karin 没有）、token 与描述不符
+  也退回 Worker。
+- 验收时改了一处：「数字 model 不进片段缓存」从 `createLayerChange.ts` 的两处读写守卫收进 `fragmentKey`（返回 null）与 `seed`（跳过）。原来整场重载后
+  `seed` 会把这类对象预置进缓存（只是读不到），变异「读侧不跳过」因此杀不死；收进一处后补了 `fragmentCache.test.ts` 的两条用例。
+- 真实数据对照（`ignore/p14/3a/karin-parity.test.ts`，3834692798 解包工程 + 真翻译器）：普通部件、遮罩部件、合批、游戏特效四种配置拼装与
+  `compileFragment` 逐字段相同、Worker 不加新程序；`clip_119`（读帧缓冲）拼不了、Worker 报 `mdl:framebuffer`（3b 的 E16 改）。
+- 验证：相关 117 个测试文件 2355 通过；`tsc` 无错；变异（`ignore/p14/3a/mutate.py`）9 处杀掉 8 处，活下来的就是上面收进 `fragmentKey` 的那条。
+
 ## 步骤 3b — GPU 动态缓冲与收尾（`render/scene.ts`、`compile/scriptApi.ts`、`dev/probe.ts`）
 
 ### 点 7 — 缓冲与每帧上传

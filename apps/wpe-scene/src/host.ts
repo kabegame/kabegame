@@ -14,7 +14,12 @@ import {
 } from "./compile/bindings";
 import { builtinProperties, WPE_BUILTIN_PROPERTIES, wpeAlignmentOf } from "./compile/builtinProperties";
 import type { SceneBundle } from "./compile/bundle";
+import { checkMeshAttributes } from "./compile/features";
 import type { FragmentDelta, ObjectFragment } from "./compile/fragment";
+import { assembleModelDataFragment, modelTokenOf } from "./modeldata/assemble";
+import { modelMaterialKey } from "./modeldata/layer";
+import { ModelDataStore } from "./modeldata/store";
+import type { ModelDataDesc } from "./modeldata/types";
 import type { PreparedObject } from "./render/scene";
 import {
   configBone,
@@ -316,6 +321,11 @@ export class SceneHost {
    */
   private readonly screen = new ScreenResolution((width, height) => this.runtime?.resizeScreen(width, height));
   private scriptApi: ScriptApi | null = null;
+  /**
+   * 脚本模型数据仓（P14，`thisScene.createModelData`）：生命周期跟脚本 realm 一致——建运行时（`startRuntime`）时新建，运行时丢掉（清空脚本存储、销毁）时丢掉；
+   * 整场重载保留 realm，token 一直有效。图层引用在 `createLayer` 建壳时记、删除生效时放（`removeObjectEverywhere`）。
+   */
+  private modelData: ModelDataStore | null = null;
   private readonly scriptOverrides = new Map<string, ScriptValue>();
   /**
    * 运行中改过的场景结构（P6d3a）：删掉的对象、换过的父。每次 `reload` 交给编译（删掉的不回来、换过的父保留），跨重编译保留；
@@ -642,6 +652,7 @@ export class SceneHost {
     this.runtime?.destroy();
     this.runtime = null;
     this.scriptApi = null;
+    this.modelData = null;
     // 视频的脚本状态一并复位（P9b）：新脚本的 IVideoTexture 是缺省值（loop 真、rate 1），播放器也要是；旧脚本登记的结束回调不会再调，
     // 留着只会拖住旧的脚本环境
     this.sceneVideos?.resetScriptState();
@@ -967,6 +978,9 @@ export class SceneHost {
     const object = createStructureObject(state, this.structure, this.allocator, config, parent);
     if (object === null) return null;
     this.options.report.debug(`场景脚本建了图层：${object}`);
+    // 脚本模型数据层（P14）：图层引用在壳建好时就记（之后脚本 `destroyModelData` 也不会让它在图层底下释放，S15）
+    const token = modelTokenOf(config);
+    if (token !== null) this.modelData?.retainLayer(token, object);
     const live = this.runtimeTask ? this.loadingLive : this.live;
     if (!live) {
       // 没有会话（不该发生）：退回整场重载，结构里记着它
@@ -974,8 +988,136 @@ export class SceneHost {
       this.requestScriptReload();
       return object;
     }
-    live.create(object, config, state.layers.get(object)?.parent ?? null);
+    this.createOn(
+      live,
+      this.scriptRegistry()?.bundle ?? null,
+      object,
+      config,
+      state.layers.get(object)?.parent ?? null,
+    );
     return object;
+  }
+
+  /**
+   * 运行中建层的两条路之上再分一层（P14 方案甲）：配置里 `model` 是数字 token 且有描述时，先试主线程同步拼片段（`assembleModelDataFragment`，条件见它的文件头），
+   * 拼得出就当场接进场景（同命中缓存，`createLayer` 返回前这一帧就画出）；拼不出（材质没预编、配置带绑定等）或查不到描述就走 Worker 路，请求带描述
+   * （`LiveTarget.modelData`）——查不到 token 的编出不画的层（S16）。别的配置照旧 `live.create`。
+   */
+  private createOn(
+    live: LiveObjects<PreparedObject>,
+    bundle: SceneBundle | null,
+    object: number,
+    config: string,
+    parent: number | null,
+  ): void {
+    const token = modelTokenOf(config);
+    const desc = token === null ? null : (this.modelData?.desc(token) ?? null);
+    if (desc && bundle) {
+      const fragment = assembleModelDataFragment({ object, id: object, parent, config, desc, bundle });
+      if (fragment) {
+        live.landAssembled(fragment);
+        return;
+      }
+    }
+    live.create(object, config, parent);
+  }
+
+  /** 建模型数据时的材质检查（`ModelDataStore.create` / `replace`）：按脚本当前看到的 bundle 里的模板查（P14）。0 通过、1 材质读不到、2 着色器要的顶点属性格式给不出。 */
+  private materialCheck(material: string, format: number): 0 | 1 | 2 {
+    const key = modelMaterialKey(material);
+    const bundle = this.scriptBundle ?? this.bundle;
+    const template = key === null ? undefined : bundle?.modelMaterials?.[key];
+    // 没有模板（没进 precache）：此刻不知道着色器，创建照常成功，缺属性留给编译时报（不画 + 看板娘提示）
+    if (!template || !bundle) return 0;
+    if (template.passes.length === 0) return 1;
+    const issues = new Set<string>();
+    for (const pass of [...template.passes, ...(template.shadow ? [template.shadow] : [])])
+      if (pass.program !== null) checkMeshAttributes(bundle.programs[pass.program], format, issues);
+    return issues.size > 0 ? 2 : 0;
+  }
+
+  /** 整场编译 / 会话要带的描述：`structure.created` 里还没删的、配置用数字 token 的对象，各取数据仓里 token 当前的描述（重载后这些层仍在，P14）。 */
+  private collectModelData(): Record<number, ModelDataDesc> {
+    const out: Record<number, ModelDataDesc> = {};
+    const store = this.modelData;
+    if (!store) return out;
+    for (const { object, config } of this.structure.created) {
+      if (this.structure.destroyed.includes(object)) continue;
+      const token = modelTokenOf(config);
+      if (token === null || token in out) continue;
+      const desc = store.desc(token);
+      if (desc) out[token] = desc;
+    }
+    return out;
+  }
+
+  /**
+   * 数据仓的结构变了（`replaceData` 改了形状数 / 格式 / 材质 / 容量，P14）：对每个引用这个 token 的、在场景里的图层重新拼装并按「替换」接回；
+   * 拼不了的走 L6 的单对象重编译（带新描述，`LiveTarget.modelData`），接不上单对象重编译就整场重载。只管登记表、状态、片段；GPU 侧缓冲随 `source`
+   * 按 token / 形状取，重建是步骤 3b 的事。图层还在排队没接进来（Worker 路没到）时旧描述的片段到达后由 `modelFragmentStale` 的核对发现过期、再重拼。
+   */
+  private onModelDataStructure(token: number): void {
+    const store = this.modelData;
+    if (!store) return;
+    for (const object of store.layersOf(token)) this.rebuildModelObject(object);
+  }
+
+  /** 按数据仓里 token 当前的描述重建一个模型数据层（见 `onModelDataStructure`）。 */
+  private rebuildModelObject(object: number): void {
+    const state = this.scriptState;
+    const created = this.structure.created.find((item) => item.object === object);
+    if (!state?.layers.has(object) || !created || this.structure.destroyed.includes(object)) return;
+    const registry = this.scriptRegistry();
+    // 还没接进登记表（壳；Worker 路的片段在路上）：到达时核对（`modelFragmentStale`）
+    if (!registry?.bundle.layers.some((layer) => layer.object === object)) return;
+    const live = this.runtimeTask ? this.loadingLive : this.live;
+    const token = modelTokenOf(created.config);
+    const desc = token === null ? null : (this.modelData?.desc(token) ?? null);
+    const parent = state.layers.get(object)?.parent ?? null;
+    const fragment =
+      live && desc
+        ? assembleModelDataFragment({
+            object,
+            id: object,
+            parent,
+            config: created.config,
+            desc,
+            bundle: registry.bundle,
+          })
+        : null;
+    if (live && fragment) {
+      live.landAssembled(fragment, "replace");
+      return;
+    }
+    const recompiler = this.objectLive(object);
+    if (recompiler) this.recompileWith(recompiler, object);
+    else {
+      this.stats.recompiled.push({ reason: `script（模型数据 ${token} 结构变化，对象 ${object}）`, keys: [] });
+      this.requestScriptReload();
+    }
+  }
+
+  /**
+   * 片段接进场景之后核对（P14）：模型数据层的片段是按编它（或发请求）那一刻的描述编的，到达前 `replaceData` 可能又改了结构——网格的格式 / 顶点数 /
+   * 索引 / 材质和数据仓现在的不一致就按新描述再拼一次。
+   */
+  private modelFragmentStale(fragment: ObjectFragment): boolean {
+    const token = modelTokenOf(fragment.config);
+    if (token === null) return false;
+    const desc = this.modelData?.desc(token);
+    if (!desc) return false;
+    const meshes = fragment.layer.model?.meshes;
+    if (!meshes) return desc.shapes.length > 0;
+    if (meshes.length !== desc.shapes.length) return true;
+    return desc.shapes.some((shape, i) => {
+      const mesh = meshes[i];
+      return (
+        mesh.format !== shape.format ||
+        mesh.vertexCount !== shape.vertexCount ||
+        mesh.indexCount !== (shape.indexFormat ? shape.indexCount : 0) ||
+        mesh.material !== shape.material
+      );
+    });
   }
 
   /**
@@ -1003,6 +1145,11 @@ export class SceneHost {
           ...(switched ? {} : { loadingTexts: loading.texts }),
         });
         if (!switched) loading.pending.push(pending.catch(() => {}));
+        // 模型数据层（P14）：片段按发请求时的描述编，到达前结构变了就在这一帧装完之后按新描述再来一次（排在 GPU 装入之后）
+        if (this.modelFragmentStale(input.fragment)) {
+          const object = input.fragment.object;
+          queueMicrotask(() => this.rebuildModelObject(object));
+        }
         return pending;
       },
       gpu,
@@ -1042,6 +1189,12 @@ export class SceneHost {
         else this.requestScriptReload();
       },
       properties: () => Object.fromEntries([...this.properties].map(([key, property]) => [key, property.value])),
+      // 脚本模型数据的描述（P14）：发片段请求时现取
+      modelData: (config) => {
+        const token = modelTokenOf(config);
+        const desc = token === null ? null : (this.modelData?.desc(token) ?? null);
+        return desc ? { [desc.token]: desc } : undefined;
+      },
     };
   }
 
@@ -1222,6 +1375,13 @@ export class SceneHost {
     const { structural = true } = options;
     const set = new Set(objects);
     const state = this.scriptState;
+    // 脚本模型数据层：放掉图层引用（P14，S15：最后一个用它的图层删掉后数据才释放）
+    if (this.modelData)
+      for (const object of objects) {
+        const config = this.structure.created.find((item) => item.object === object)?.config;
+        const token = config === undefined ? null : modelTokenOf(config);
+        if (token !== null) this.modelData.releaseLayer(token, object);
+      }
     this.sceneSounds?.remove(objects);
     if (this.sceneTexts && state)
       for (const object of objects) {
@@ -1492,7 +1652,13 @@ export class SceneHost {
         realm.dispose();
         return;
       }
+      // 脚本模型数据仓（P14）：结构变了（`replaceData`）时宿主重拼用它的图层
+      const modelData = new ModelDataStore();
+      modelData.onStructure = (token) => this.onModelDataStructure(token);
+      this.modelData = modelData;
       const api = new ScriptApi(realm, {
+        modelData,
+        materialCheck: (material, format) => this.materialCheck(material, format),
         bundle: () => this.scriptBundle!,
         state: () => this.scriptState!,
         // 按显示缩放为 1 算：预览缩小显示时画布变小，脚本看到的分辨率仍与桌面一致
@@ -2352,6 +2518,8 @@ export class SceneHost {
           parents: this.structure.parents.map((item) => [...item]) as SceneStructure["parents"],
           created: this.structure.created.map((item) => ({ ...item })),
         },
+        // 脚本模型数据层的描述（P14）：重载后这些层仍在
+        modelData: this.collectModelData(),
         postprocess: setting,
         reflection,
         shadows,
@@ -2595,7 +2763,7 @@ export class SceneHost {
           }
           // 重载进行中建的对象：新场景上再走一遍建层的两条路（命中新缓存的当场装上，没命中的排进新会话）
           for (const item of late)
-            sceneLive.create(item.object, item.config, state.layers.get(item.object)?.parent ?? null);
+            this.createOn(sceneLive, bundle, item.object, item.config, state.layers.get(item.object)?.parent ?? null);
         },
       });
       if (id !== this.generation) return;
@@ -2692,6 +2860,7 @@ export class SceneHost {
     this.registry = null;
     this.resetRestructure();
     this.scriptApi = null;
+    this.modelData = null;
     this.textureCache.clear();
     this.disposeLive();
     this.closeCompileSession();

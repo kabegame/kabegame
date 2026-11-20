@@ -69,6 +69,11 @@ describe("fragmentKey", () => {
     expect(fragmentKey("3")).toBeNull();
     expect(fragmentKey("null")).toBeNull();
   });
+
+  it("脚本模型数据层（model 是整数 token，P14）：null，不进缓存；model 是路径的照常", () => {
+    expect(fragmentKey(JSON.stringify({ id: 1000, model: 7, name: "ArtMesh1" }))).toBeNull();
+    expect(fragmentKey(JSON.stringify({ id: 1000, model: "models/a.mdl", name: "m" }))).not.toBeNull();
+  });
 });
 
 describe("FragmentCache", () => {
@@ -89,6 +94,14 @@ describe("FragmentCache", () => {
     expect(cache.get(fragmentKey(JSON.stringify({ ...OBJECTS[0], id: 77 }))!)).toBe(hit);
     // 不预置不改 bundle
     expect(bundle.layers).toHaveLength(4);
+  });
+
+  it("seed：脚本模型数据层（model 是整数 token，P14）不预置", async () => {
+    const bundle = await compile();
+    bundle.configs![0] = normalizeConfig({ model: 7, name: "ArtMesh1", origin: "1920 1080 -10" });
+    const cache = new FragmentCache();
+    expect(cache.seed(bundle, [0])).toBe(0);
+    expect(cache.size).toBe(0);
   });
 
   it("put：同键已有时保留旧的；has / get / clear", () => {

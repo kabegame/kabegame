@@ -328,6 +328,11 @@ export class ModelDataStore {
     this.onRelease?.(token);
   }
 
+  /** 现在引用这个 token 的图层（`objects` 下标，按登记顺序）；`replaceData` 改了结构后宿主据此重拼（P14 步骤 3a）。 */
+  layersOf(token: number): number[] {
+    return [...(this.entries.get(token)?.layers ?? [])];
+  }
+
   desc(token: number): ModelDataDesc | null {
     const entry = this.entries.get(token);
     if (!entry) return null;

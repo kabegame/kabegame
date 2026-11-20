@@ -25,6 +25,9 @@ export function fragmentKey(config: string): string | null {
     return null;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  // 脚本模型数据层（`model` 是整数 token，P14）不进缓存：键里只有 token、没有描述，`replaceData` 改了形状之后同一份配置的旧片段就过期了；
+  // 这类层由主线程按当前描述同步拼（`modeldata/assemble.ts`），拼不了的每次都走会话
+  if (typeof (parsed as { model?: unknown }).model === "number") return null;
   return normalizeConfig(parsed);
 }
 
@@ -44,6 +47,7 @@ export class FragmentCache {
     for (const object of [...exact].sort((a, b) => a - b)) {
       const key = bundle.configs?.[object];
       if (typeof key !== "string" || key.startsWith("[") || this.entries.has(key)) continue;
+      if (fragmentKey(key) === null) continue; // 脚本模型数据层（P14）不预置，同 `fragmentKey`
       if (fragmentBlocker(bundle, object) !== null) continue;
       const fragment = fragmentOf(bundle, object);
       if (!fragment) continue;

@@ -920,6 +920,8 @@ export interface ModelMaterialTemplate {
    * 平面反射、mip 帧缓冲）、每个 pass 都有程序、不是 alphatocoverage。不满足的按 Worker 路走（那条路会照常报项或翻转场景位）。
    */
   usable: boolean;
+  /** 场景有阴影（编它时 `castsShadows` 为真）：同步拼装算 `SceneModel.castShadow` 用（`modeldata/assemble.ts`）；没有阴影时不写这一项。 */
+  castsShadows?: true;
 }
 export interface SceneBundle {
   general: SceneGeneral;
@@ -2336,7 +2338,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         pass.layerComposites
       )
         usable = false;
-    return { passes, ...(shadow ? { shadow } : {}), usable };
+    return { passes, ...(shadow ? { shadow } : {}), usable, ...(castsShadows ? { castsShadows: true as const } : {}) };
   }
 
   /**
