@@ -2,11 +2,12 @@ diff --git a/include/cef_drag_data.h b/include/cef_drag_data.h
 index 382047b9672084af59ad245bdbeffa0ba9a7cec2..3bf45d8c231a053a4aaf2a02f5fae250f468a27e 100644
 --- a/include/cef_drag_data.h
 +++ b/include/cef_drag_data.h
-@@ -228,6 +228,16 @@ class CefDragData : public virtual CefBaseRefCounted {
+@@ -228,6 +228,18 @@ class CefDragData : public virtual CefBaseRefCounted {
    ///
    /*--cef()--*/
    virtual bool HasImage() = 0;
 +
++#if CEF_API_ADDED(CEF_EXPERIMENTAL)
 +  ///
 +  /// Returns the drag data value for the custom format |type|, as set by the
 +  /// page through DataTransfer.setData(). Returns an empty string when absent.
@@ -16,6 +17,7 @@ index 382047b9672084af59ad245bdbeffa0ba9a7cec2..3bf45d8c231a053a4aaf2a02f5fae250
 +  ///
 +  /*--cef(added=experimental)--*/
 +  virtual CefString GetCustomData(const CefString& type) = 0;
++#endif
  };
  
  #endif  // CEF_INCLUDE_CEF_DRAG_DATA_H_

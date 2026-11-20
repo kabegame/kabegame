@@ -671,17 +671,25 @@ function bootstrap(ctx: BuildContext): void {
     fs.existsSync(path.join(depotToolsDir, "gclient.bat"));
   if (!hasGclient) {
     log("拉取 depot_tools...");
+    // 不能浅克隆：automate-git.py 会把 depot_tools 切到
+    // CHROMIUM_BUILD_COMPATIBILITY.txt 里钉住的 depot_tools_checkout，那个提交很少正好是
+    // 分支 tip。--depth 1 的克隆里它不存在，`git checkout --force <hash>` 直接 exit 128
+    // （报 CalledProcessError，不说是对象缺失）。
     run(
       "git",
       [
         "clone",
-        "--depth",
-        "1",
         "https://chromium.googlesource.com/chromium/tools/depot_tools.git",
         depotToolsDir,
       ],
       { env: ctx.env },
     );
+  } else if (fs.existsSync(path.join(depotToolsDir, ".git", "shallow"))) {
+    // 已有的浅克隆（旧版本脚本留下的）补齐历史，同样是为了钉住的提交能 checkout。
+    log("depot_tools 是浅克隆，补齐历史...");
+    run("git", ["-C", depotToolsDir, "fetch", "--unshallow"], {
+      env: ctx.env,
+    });
   }
 
   const automatePy = path.join(ctx.cefBuild, "automate", "automate-git.py");
@@ -832,9 +840,18 @@ function chromiumSourceDir(ctx: BuildContext): string {
   );
 }
 
+/**
+ * src 目录存在不等于 checkout 可用：automate-git 在 `gclient sync` 之前就 `git init` 出了
+ * 空的 `chromium/src`，同步阶段中断（代理断流等）之后目录仍在。只看目录会让下一次运行走增量、
+ * 传 `--no-chromium-update` 跳过同步，直接进编译并以莫名其妙的方式失败。以树根的 `BUILD.gn`
+ * 为准：有它才说明 src 真的 checkout 出来了。
+ */
+function hasChromiumCheckout(ctx: BuildContext): boolean {
+  return fs.existsSync(path.join(chromiumSourceDir(ctx), "BUILD.gn"));
+}
+
 function configureUpdate(ctx: BuildContext): void {
-  const sourceDir = chromiumSourceDir(ctx);
-  if (ctx.clean || !fs.existsSync(sourceDir)) {
+  if (ctx.clean || !hasChromiumCheckout(ctx)) {
     log(
       ctx.clean
         ? "强制全量 checkout (--clean)"
@@ -860,10 +877,10 @@ function configureUpdate(ctx: BuildContext): void {
 
 function ensurePgoProfile(ctx: BuildContext): void {
   // 增量构建不会重跑负责 PGO profile 的 gclient hook，这里按
-  // chrome/build/<target>.pgo.txt 幂等补齐；全量构建在源码目录尚不存在时
+  // chrome/build/<target>.pgo.txt 幂等补齐；全量构建在源码尚未 checkout 出来时
   // 直接返回，仍交给 --with-pgo-profiles。
   const sourceDir = chromiumSourceDir(ctx);
-  if (!fs.existsSync(sourceDir)) return;
+  if (!hasChromiumCheckout(ctx)) return;
 
   let pgoTarget: string;
   if (BUILD_PLATFORM === "macos") {
@@ -986,6 +1003,30 @@ function copyRuntimeDirectoryContents(source: string, destination: string): void
   }
 }
 
+/** 目录改名，撞上 Windows 的文件占用就退避重试（最后一次仍失败则照常抛出）。 */
+function renameWithRetry(from: string, to: string): void {
+  const delaysMs = [0, 1000, 3000, 5000, 10000, 20000];
+  for (let i = 0; i < delaysMs.length; i++) {
+    if (delaysMs[i] > 0) {
+      log(`导出目录改名被占用，${delaysMs[i] / 1000}s 后重试(${i}/${
+        delaysMs.length - 1
+      })...`);
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        delaysMs[i],
+      );
+    }
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (err) {
+      if (i === delaysMs.length - 1) throw err;
+    }
+  }
+}
+
 function exportCefRuntime(ctx: BuildContext, distrib: string): void {
   const tmpDir = `${ctx.exportDir}.tmp`;
   let frameworkDir: string | undefined;
@@ -1082,7 +1123,10 @@ function exportCefRuntime(ctx: BuildContext, distrib: string): void {
   log(`locale 白名单已生效(剔除 ${droppedLocales} 个,见 scripts/cef-locales.ts)`);
 
   fs.rmSync(ctx.exportDir, { recursive: true, force: true });
-  fs.renameSync(tmpDir, ctx.exportDir);
+  // Windows 上目录改名会因为「里面任何一个文件还被开着句柄」整体 EPERM —— 刚写完的
+  // libcef.dll 有 282 MB，杀毒软件扫它的那几秒正好撞上。重试几次即可，不该让一次
+  // 数小时的构建死在最后这一下改名上。
+  renameWithRetry(tmpDir, ctx.exportDir);
 
   log("runtime 导出完成 ✓");
   log(

@@ -1,5 +1,19 @@
 # v4.7.0 regression
 
+## 自编 CEF 156（Windows 首次）：构建脚本三处修复、补丁的 API 版本守卫、SDK 前提
+
+2026-11-20 Windows。在新构建根（`CEFBUILD=D:\Codes\kabegame-cefbuild`，旧的 149 checkout 原地留作备份）上第一次为 CEF 156 跑 `deno task build:chromium`，连着踩两个脚本缺陷，都与网络无关：`bootstrap()` 的 `git clone --depth 1` 让 automate-git 切不到 `CHROMIUM_BUILD_COMPATIBILITY.txt` 钉的 `depot_tools_checkout`（156 是 `132599ebb`；149 那个 pin 恰好落在浅克隆靠自更新攒下的历史里，所以一直没发作）；`configureUpdate()` 只看 `chromium_git/chromium/src` 目录在不在，而 automate-git 在 `gclient sync` 之前就 `git init` 出了空 src，同步一中断，重跑就会走增量、传 `--no-chromium-update` 跳过同步直接去编译。另记两个外部缺陷：depot_tools 的 `gclient_utils.py` 逐行按 UTF-8 解码子进程输出，中文（GBK）的 git 报错会抛 `UnicodeDecodeError`，把 `gclient_scm.py` 那条 `retry=True` 一起带崩、真实错误也看不到；`.gclient` 里 src 是 `managed: False`，目录一存在 gclient 就只读 `HEAD` 不再管它的 checkout，中断留下的空仓库会让每次重试都死在 `rev-parse --verify HEAD`（exit 128）。所以直接驱动 `gclient sync` 时要在外层套重试循环并自愈空壳；经脚本走则由全量路径的 `--force-clean` 兜底。另有两个与脚本无关的前提：Chromium 156 的 `build/vs_toolchain.py:63` 写死 `SDK_VERSION = '10.0.28000.0'`（149 要的是 `10.0.26100.0`），没装就在 `gn gen` 阶段报 `Path "…\include\10.0.28000.0\um" does not exist`；补丁 03 给 `include/cef_drag_data.h` 加的 `GetCustomData` 漏了 `#if CEF_API_ADDED(CEF_EXPERIMENTAL)` 守卫，`libcef_dll_wrapper` 以 `CEF_API_VERSION=15600` 编时 `CefDragDataCToCpp` 成抽象类（`error C2259`）。chromium/src 的大包最终改从 `github.com/chromium/chromium` 镜像拉（同一个提交），googlesource 侧两种 TLS 栈都报记录校验失败并出现 `HTTP 429`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | S1 类型检查 | Windows | `deno check scripts/build-chromium.ts` | 通过 | 2026-11-20 Claude |
+| [x] | S2 depot_tools 钉住的提交 | Windows，新构建根 | 补齐浅克隆历史后重跑 | `git checkout --force 132599ebb…` 通过，进到 `gclient sync` | 2026-11-20 Claude：修复前 exit 128（`git cat-file -t` 证实对象不存在，克隆里只有 3 个提交） |
+| [x] | S3 空 src 不被误判成增量 | Windows，同步中断过的构建根 | 不带 `--clean` 重跑 `deno task build:chromium` | 走全量 checkout，automate-git 经 `--force-clean` 自己删掉空 src 并重写 `.gclient` | 2026-11-20 Claude：改成看 `BUILD.gn` 后，手工铺好 src 的那次运行正确判成增量（日志「增量：复用 Chromium checkout」），没去重拉 |
+| [x] | S4 checkout 与编译 | Windows，`CEFBUILD=D:\Codes\kabegame-cefbuild` | `gclient sync --nohooks --no-history` + `gclient runhooks` 跑通后 `deno task build:chromium` | 产出 `bin\windows\x86_64\cef-build`，`archive.json` 为 `156.0.30` | 2026-11-20 Claude：`cef_binary_156.0.30+windows64_minimal`，`libcef.dll` 282 MB，22 个顶层条目（minimal 发行版不含 `cef_sandbox.lib`，本构建走 no-sandbox 传统 exe 模式、不需要）。耗时：src 11 min、DEPS 13.5 min、runhooks 5 min、编译 + 链接 + make_distrib 6 h 28 min |
+| [x] | S5 大包的拉取路径 | Windows，本机代理 | googlesource 的 depth-1 fetch 反复失败后改从 `github.com/chromium/chromium` 镜像拉 tag | 拿到与 googlesource 同一个提交 | 2026-11-20 Claude：两端 tag 同为 `2ad9b7f5a86846e0b264090723a6a78964bb84c4`，镜像 7.3 MB/s、4.5 min 到手。googlesource 侧 schannel 报 `SEC_E_DECRYPT_FAILURE`、OpenSSL 报 `bad record mac`（同一类错误，TLS 栈不是原因），并出现 `HTTP 429`；限速 2 MB/s 的普通 GET 跑满 5 min 不断，所以不是代理有时长上限 |
+| [x] | S6 Windows SDK 前提 | Windows | 装 Windows 11 SDK `10.0.28000.x` 后重跑 | `gn gen` 通过 | 2026-11-20 用户在 VS Installer 里装好；装前只有 `10.0.26100.0`。`stdint.h` 随 MSVC 工具集发布、不在 UCRT 里，排查时别被它误导 |
+| [x] | S7 补丁的 API 版本守卫 | Windows | 给 `include/cef_drag_data.h` 的 `GetCustomData` 补 `#if CEF_API_ADDED(CEF_EXPERIMENTAL)` 后编 `libcef_dll_wrapper`，再 `deno task check -c kabegame --skip vue` | wrapper 编过、check 0 error | 2026-11-20 Claude：修复前 `error C2259: CefDragDataCToCpp 无法实例化抽象类`；修复后 183/183 链接出 `libcef_dll_wrapper.lib`、cargo check 0 error。生成的 capi / ctocpp 本来就带这道守卫，所以只改头文件、不必重编 libcef；`deno task patch cef --check` 报 `cef: OK dry-run` |
+
 ## 场景脚本多的壁纸帧率（3662790108）
 
 2026-11-20 Windows dev。`3662790108`（Live Solar System）有 944 段脚本、九百多个对象，预览原先约 2 fps（WPE 正常）。CPU profile 定位到两处：`thisScene.getLayer('名字')` 每次 O(n²)（对象表逐个取名字、每个名字又线性找图层），改成按对象的索引加名字解析缓存；脚本把同样的值写回图层时原先也标脏、重算全部静态 uniform，改成值没变不标脏（变换写入照记，带 3×3 时同值的 `angles` 仍算变了）。运行时回调统计加累计耗时 `totalMs`。顺带修了 P6f 留下的 `state.objects.test.ts` 夹具（文本字段缺 `decor`）。
@@ -200,7 +214,7 @@
 | [ ] | T10 进程隔离与 rAF（08 / 09） | macOS dev | 预览与桌面同时开网页壁纸，看 renderer 进程数；场景宿主里数 rAF 回调次数 | 两个窗口的 iframe 各一个 renderer；每帧 rAF 一次 | |
 | [ ] | T11 Ctrl+滚轮（10） | Windows | 在预览的网页壁纸上 Ctrl+滚轮 | 整个应用不缩放 | |
 | [ ] | T12 鼠标注入（11） | macOS / Windows | 预览与桌面的网页 / 场景壁纸跟鼠标、点击 | 照常跟随与点击，日志无「libcef 不带 frame 鼠标注入」 | |
-| [ ] | T13 Windows / Linux 构建 | Windows、Ubuntu 22.04 | 各自 `deno task build:chromium --clean` 后 check 与 dev | 编译通过、能启动 | 本机只验了 macOS |
+| [ ] | T13 Windows / Linux 构建 | Windows、Ubuntu 22.04 | 各自 `deno task build:chromium --clean` 后 check 与 dev | 编译通过、能启动 | **Windows 已编通、`cargo check` 0 error**（2026-11-20，产出 `cef_binary_156.0.30+windows64_minimal`）；过程中要补的三件事见「自编 CEF 156（Windows 首次）」一节：Windows 11 SDK `10.0.28000.x`、补丁 03 的 API 版本守卫、构建脚本三处修复。Windows 的 dev 启动与 UA（T5）、鼠标注入（T12）待验，Linux 未做 |
 
 ## 视频缩略图改为首帧静图，悬浮播原视频
 
