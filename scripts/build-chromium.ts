@@ -90,6 +90,8 @@ interface BuildContext {
   updateFlags: string[];
   /** 增量构建(复用已有 checkout);runBuild 据此走「同步→mtime 恢复→编译」两阶段。 */
   incremental: boolean;
+  /** 钉了回退 SDK 时，要在 gn gen 前建好的输出目录内符号链接（见 configureGnArgs）。 */
+  macSdkLink?: { target: string; link: string };
 }
 
 // CEF_BRANCH 对应 CEF 156.0.x / Chromium 156.0.8078.x，与 cef-rs "156" 对齐；
@@ -819,8 +821,22 @@ function configureGnArgs(ctx: BuildContext): void {
   if (BUILD_PLATFORM === "macos") {
     // 引号是给 gn_args.py 的 shlex.split 分词用的（路径含空格时必需），它随后会被
     // ParseValue 剥掉、由 FormatValue 在写 args.gn 时补回。
+    //
+    // 156 起 //build/config/mac:sdk_inputs 把 SDK 里的几个 .defs 声明成 action 的
+    // outputs，GN 要求 outputs 落在 root_build_dir 之内，SDK 的绝对路径直接报
+    // 「File is not inside output directory」。不钉 SDK 时 sdk_info.py 的做法是在
+    // out/<配置>/sdk/xcode_links/ 下建符号链接、再用源码绝对路径引用，这里照做：
+    // 链接放 sdk/kabegame_links/（不和它的 xcode_links 抢目录），由 ensureMacSdkLink
+    // 在 gn gen 之前建好。
     const macSdkPath = resolveMacSdkPath();
-    if (macSdkPath) defines += ` mac_sdk_path="${macSdkPath}"`;
+    if (macSdkPath) {
+      const rel = `out/${ctx.gnOut}/sdk/kabegame_links/${path.basename(macSdkPath)}`;
+      ctx.macSdkLink = {
+        target: macSdkPath,
+        link: path.join(chromiumSourceDir(ctx), rel),
+      };
+      defines += ` mac_sdk_path="//${rel}"`;
+    }
   }
 
   ctx.env.GN_DEFINES = defines;
@@ -829,6 +845,23 @@ function configureGnArgs(ctx: BuildContext): void {
   ctx.distribFlags = ["--minimal-distrib-only", "--no-distrib-docs"];
   ctx.pgoFlags = ["--with-pgo-profiles"];
   log(`GN_DEFINES=${ctx.env.GN_DEFINES}`);
+}
+
+/** 建（或改指）输出目录里指向回退 SDK 的符号链接；不钉 SDK 时什么都不做。 */
+function ensureMacSdkLink(ctx: BuildContext): void {
+  const pin = ctx.macSdkLink;
+  if (!pin) return;
+  fs.mkdirSync(path.dirname(pin.link), { recursive: true });
+  let current: string | undefined;
+  try {
+    current = fs.readlinkSync(pin.link);
+  } catch {
+    current = undefined;
+  }
+  if (current === pin.target) return;
+  if (current !== undefined) fs.unlinkSync(pin.link);
+  fs.symlinkSync(pin.target, pin.link);
+  log(`SDK 链接: ${pin.link} -> ${pin.target}`);
 }
 
 function chromiumSourceDir(ctx: BuildContext): string {
@@ -1410,7 +1443,25 @@ async function runBuild(ctx: BuildContext): Promise<void> {
       );
       restoreUnchangedMtimes(ctx, snapshot);
     }
-    await runWithTee(ctx.pythonBin, args, logfile, ctx.env);
+    if (ctx.macSdkLink && !ctx.incremental) {
+      // 全量 checkout 会先整删 src，事先建的 SDK 链接留不住，而 gn gen 和 checkout 在
+      // automate 的同一次运行里。拆开：先只同步，建好链接，再按增量参数编译。
+      const syncLogfile = path.join(ctx.cefBuild, "sync.log");
+      log(`同步阶段开始(日志: ${syncLogfile})`);
+      await runWithTee(
+        ctx.pythonBin,
+        [...args, "--no-build", "--no-distrib"],
+        syncLogfile,
+        ctx.env,
+      );
+      ensureMacSdkLink(ctx);
+      const buildArgs = args.filter((a) => a !== "--force-clean");
+      buildArgs.push("--no-chromium-update", "--force-build", "--force-distrib");
+      await runWithTee(ctx.pythonBin, buildArgs, logfile, ctx.env);
+    } else {
+      ensureMacSdkLink(ctx);
+      await runWithTee(ctx.pythonBin, args, logfile, ctx.env);
+    }
   } catch (error) {
     die(error instanceof Error ? error.message : String(error));
   }
