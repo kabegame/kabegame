@@ -96,9 +96,39 @@ deno task --cwd apps/kabegame test:watch            # watch 模式，改哪跑�
 新增前端包要接测试时，在 `Component.feTestDirs` 登记目录、给 package.json 补 `test`
 脚本，并按实际运行环境配置 `vitest.config.ts`。
 
+### 产物目录隔离（`CARGO_TARGET_DIR`）
+
+| 命令 | cargo 产物目录 |
+|---|---|
+| `deno task b` | `target/` |
+| `deno task dev` / `start` / `check` / `test` | `target-dev/` |
+| rust-analyzer（VSCode 后台 `cargo check`） | `target/rust-analyzer/`（`.vscode/settings.json` 的 `rust-analyzer.cargo.targetDir`，**该文件被 gitignore，要各自在本地配**） |
+
+由 `scripts/target-dir.ts` 在 `scripts/run.ts` 的第一个 import 里按命令注入（显式设了
+`CARGO_TARGET_DIR` 时一律以它为准），之后统一经 `scripts/paths.ts` 的 `TARGET_DIR` 分发。
+
+**为什么要分开**：cargo 把 build script 读到的环境变量值记进 fingerprint，值一变就
+`EnvVarChanged` → build script 重跑 → 依赖它的整个 crate 连同全部 bin 重编重链。而这些命令
+注入的环境**本来就不同**（`KABEGAME_DATA` 按 `--release` 取值、`build` 还会往 RUSTFLAGS 加
+`-Awarnings`），共用一个 `target/` 时就会来回掀翻：
+
+- `KABEGAME_DATA` → `kabegame` / `kabegame-core` 的 build script → 两个 crate +
+  `kabegame.exe` + `kabegame-cef-helper` 全量重编
+- `CEF_PATH` → `cef-dll-sys` → `cef` → `tauri-runtime-kbcef` → `kabegame-cef-helper` 重链
+- `FFMPEG_INCLUDE_DIR` / `FFMPEG_PKG_CONFIG_PATH` → `rusty_ffmpeg` → `rsmpeg` →
+  `kabegame-core` 全量重编
+
+排查时把 `CARGO_LOG=cargo::core::compiler::fingerprint=info` 加到 cargo 环境，日志会直接
+报出 `dirty: EnvVarChanged { name, old_value, new_value }` 和 `stale: changed <文件>`。
+
+代价是每个目录各存一份依赖产物（CEF / V8 / FFmpeg 都不小），换来的是「改完代码 → check →
+dev」不再每轮全量重编。`kabegame-cli` 由 `deno task b -c kabegame-cli` 构建，仍在
+`target/debug/kabegame-cli`（`kabegame-plugin` skill 用的就是这个路径）。
+
 ### 数据目录模式（`--data`）
-- `dev`（`deno task dev` 与不带 `--release` 的 `deno task b` 的默认值）：使用仓库内的 `.kabegame/debug/data`、`.kabegame/debug/cache` 和 `.kabegame/debug/tmp` 目录——与已安装应用隔离
-- `prod`（带 `--release` 的 `deno task b`，以及 `start` / `check` / `test` 的默认值）：使用系统用户数据目录（Windows 上为 `%LOCALAPPDATA%\Kabegame`，Linux/macOS 上为 `~/.local/share/Kabegame`）
+- `dev`（所有不带 `--release` 的命令的默认值：`dev` / `b` / `start` / `check` / `test`）：使用仓库内的 `.kabegame/debug/data`、`.kabegame/debug/cache` 和 `.kabegame/debug/tmp` 目录——与已安装应用隔离
+- `prod`（只在带 `--release` 时成为默认值）：使用系统用户数据目录（Windows 上为 `%LOCALAPPDATA%\Kabegame`，Linux/macOS 上为 `~/.local/share/Kabegame`）
+- 默认值按 `--release` 而不是按命令区分，是为了让同一个 cargo profile 下所有命令的 `kabegame_data` cfg 一致：值一变，`kabegame` / `kabegame-core` 的 build script 就 `EnvVarChanged`，两个 crate 连同 `kabegame.exe` / `kabegame-cef-helper` 全量重编
 - 开发时使用 `--data prod` 可针对实际安装数据进行测试；release 构建中使用 `--data dev` 可实现 CI/测试隔离
 - 由 `src-tauri/{kabegame-core,kabegame}/build.rs` 注入的 `kabegame_data` Rust cfg 控制
 

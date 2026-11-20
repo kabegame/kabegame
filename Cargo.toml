@@ -152,10 +152,23 @@ rsmpeg = { path = "third/rsmpeg" }
 # CCExtractor/rusty_ffmpeg 3a0752a + third-patches/rusty_ffmpeg（先 bun run patch rusty_ffmpeg）
 rusty_ffmpeg = { path = "third/rusty_ffmpeg" }
 
-# [profile.release]
-# on when release
-# codegen-units = 1
-# lto = "thin"
+# 发布构建。cargo 只认工作区根的 profile，非根包的 [profile.*] 会被忽略（只打一行
+# "profiles for the non root package will be ignored" warning），所以这里是唯一生效的位置；
+# src-tauri/kabegame/Cargo.toml 里曾有一份同名配置，长期无效，已删除。
+#
+# 不设 panic = "abort"：crawler/task_scheduler（插件任务）、providers/sql_executor（PathQL
+# 执行）与 kabegame/src/lib.rs 的 init_heavy_globals 都靠 catch_unwind 把 panic 关在局部，
+# abort 会让一个插件 panic 直接带走整个进程，启动失败也不再有错误提示。
+#
+# lto / codegen-units 不写在这里：它们让链接慢几倍，而主应用的 `deno task b` 恒是 release
+# 构建（tauri build），日常验证不该付这个代价。只在 `deno task b --release`（发版，CI 用的
+# 就是它）时由 ReleasePlugin 经 CARGO_PROFILE_RELEASE_* 打开。
+[profile.release]
+opt-level = 3
+debug = false
+strip = true
+overflow-checks = false
+rpath = false
 
 # dev/debug 构建下，把所有第三方依赖按 opt-level 2 编译（工作区成员不受影响，仍 opt-level 0、可调试）。
 # 原因：image crate 的缩放/解码是纯 Rust 像素运算，未优化的 debug 下慢几十倍

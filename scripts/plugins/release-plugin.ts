@@ -138,7 +138,12 @@ export class ReleasePlugin extends BasePlugin {
   apply(bs: BuildSystem): void {
     if (!isReleaseBuild(bs)) return;
     bs.hooks.prepareEnv.tap(this.name, () => {
-      this.addRustFlags("-C codegen-units=1");
+      // 只有发版才付链接时间的代价。用 CARGO_PROFILE_RELEASE_* 覆盖 profile 而不是 RUSTFLAGS：
+      // cargo 在非 LTO 构建里给依赖传 `-C embed-bitcode=no`，与 RUSTFLAGS 里的 `-C lto` 互斥
+      // （直接编译失败），走 profile 才能让 cargo 把 bitcode 选项配对好。其余 release 配置
+      // （opt-level / strip 等）在根 Cargo.toml 的 [profile.release]。
+      this.setEnv("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "1");
+      this.setEnv("CARGO_PROFILE_RELEASE_LTO", "thin");
     });
 
     // `deno task b` 不再对直接 cargo build 的组件(kabegame-cli)

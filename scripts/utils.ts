@@ -140,6 +140,25 @@ export function ensureDir(p: string): void {
   fs.mkdirSync(p, { recursive: true });
 }
 
+/**
+ * 内容有变化才写，返回是否真的写了。
+ *
+ * 构建流程里的生成文件（tauri.conf.json、capabilities/main.json、index.html）每次都重新
+ * 渲染，内容通常一字不差；但 cargo 判新鲜度比的是 mtime 而不是内容（tauri-build 对
+ * tauri.conf.json 发 `cargo:rerun-if-changed`），无条件 write 会让 kabegame 的 build script
+ * 与整个 crate（lib + kabegame.exe + kabegame-cef-helper）每次都重编。
+ */
+export function writeFileIfChanged(p: string, content: string): boolean {
+  try {
+    if (fs.readFileSync(p, { encoding: "utf-8" }) === content) return false;
+  } catch {
+    // 不存在或读不出来：照常写
+  }
+  ensureDir(path.dirname(p));
+  fs.writeFileSync(p, content);
+  return true;
+}
+
 export function existsFile(p: string): boolean {
   try {
     return fs.existsSync(p) && fs.statSync(p).isFile();

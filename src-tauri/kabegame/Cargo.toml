@@ -239,17 +239,5 @@ name = "cef-example"
 path = "examples/cef-example.rs"
 required-features = ["standard"]
 
-[profile.dev]
-opt-level = 0
-debug = true
-incremental = true
-
-[profile.release]
-panic = "abort"
-codegen-units = 1
-lto = "thin"
-opt-level = 3
-debug = false
-strip = true
-overflow-checks = false
-rpath = false
+# 这里不写 [profile.*]：cargo 只认工作区根的 profile，非根包的会被忽略并打
+# "profiles for the non root package will be ignored" 警告。见根 Cargo.toml。

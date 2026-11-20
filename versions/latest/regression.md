@@ -1,5 +1,64 @@
 # v4.7.0 regression
 
+## release 的 profile 一直没生效（非根包的 `[profile.*]` 被 cargo 忽略）
+
+2026-11-21 Windows。排查构建缓存时发现 cargo 每次都打的第一行 warning 就是
+`profiles for the non root package will be ignored`：`[profile.dev]` / `[profile.release]` 写在
+`src-tauri/kabegame/Cargo.toml`，cargo 只认工作区根的 profile，而根 `Cargo.toml` 里那份是注释掉的
+（`# on when release`）。所以 `panic = "abort"` / `codegen-units = 1` / `lto = "thin"` / `strip` /
+`opt-level = 3` 全都没生效，release 用的是 cargo 默认值；只有 `codegen-units = 1` 另由
+`ReleasePlugin` 经 RUSTFLAGS 在 `--release` 时生效。`[profile.dev]` 那份三项都等于 cargo 默认值，
+删掉即可。搬迁时两处刻意不照搬：`panic = "abort"` 会废掉 `crawler/task_scheduler`（插件任务）、
+`providers/sql_executor`（PathQL 执行）与 `kabegame/src/lib.rs` 的 `init_heavy_globals` 三处
+`catch_unwind`——一个插件 panic 就能带走整个进程、启动失败也不再有错误提示；`lto` 与
+`codegen-units` 放到 `deno task b --release`（发版，CI 用的就是它）时经 `CARGO_PROFILE_RELEASE_*`
+打开，因为主应用的 `deno task b` 恒是 release 构建（`tauri build`），日常验证不该付几倍的链接时间。
+`codegen-units` 从 RUSTFLAGS 换成 profile 环境变量是必须的：RUSTFLAGS 里的 `-C lto` 与 cargo 给
+依赖传的 `-C embed-bitcode=no` 互斥，会直接编译失败。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | RP1 warning 消失 | Windows | `cargo metadata --no-deps` | 不再打 `profiles for the non root package will be ignored` | 2026-11-21 Claude |
+| [x] | RP2 cargo 接受新 profile | Windows | 同上一条命令 | 五个字段都被解析，不报 unused manifest key / 字段类型错 | 2026-11-21 Claude：exit=0、stderr 空、`Cargo.lock` 未被改动（带 `--locked`）。`strip` 是否真的作用到产物归 RP4 / RP5 验，这里只证解析通过 |
+| [x] | RP3 构建脚本类型检查 | Windows | `deno check scripts/run.ts` | 通过 | 2026-11-21 Claude |
+| [ ] | RP4 日常 b 不开 lto | Windows | `deno task b -c kabegame`，看 cargo 环境 | 不出现 `CARGO_PROFILE_RELEASE_LTO`，链接时间与改动前相当 | 没做：一次完整 release 构建 |
+| [ ] | RP5 发版 b --release 开 lto | Windows | `deno task b -c kabegame --release`，看 ReleasePlugin 的日志行 | 打印 `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` 与 `CARGO_PROFILE_RELEASE_LTO=thin`，构建成功 | 没做：thin LTO + codegen-units=1 的全量 release 很慢；这一条是 `-C lto` 与 `-C embed-bitcode=no` 互斥的实证点，发版前必须先过 |
+| [ ] | RP6 strip 的影响 | Linux / macOS | 发版产物跑一次 panic | 产物变小；backtrace 只有地址、没有符号名（接受） | 没做：本机是 Windows，MSVC 的符号本来在 PDB 里，strip 基本无感 |
+
+## 构建缓存被命令之间反复掀翻（每次都全量重编 `kabegame-core` 与两个 exe）
+
+2026-11-20 Windows。用户报「`kabegame-cef-helper` 每次都要慢慢编，即使相关代码没改；`kabegame` 也一样，一行没改再编也要重新编最后的 exe」。
+证据就在仓库里：`target/flycheck0/stderr`（rust-analyzer 跑 `cargo check` 时带着 `CARGO_LOG=cargo::core::compiler::fingerprint=info`）直接写着
+`dirty: EnvVarChanged { name: "CEF_PATH", old_value: Some(…), new_value: None }`、`KABEGAME_DATA` 从 `Some("prod")` 变 `None`、
+`FFMPEG_INCLUDE_DIR` 同样，以及 `stale: changed …\tauri.conf.json`（它比 build script 的 `output` 新）。
+cargo 把 build script 读到的环境变量**值**记进 fingerprint，值一变整个 crate 连同全部 bin 重编重链，传导链是：
+`KABEGAME_DATA` → `kabegame` / `kabegame-core` 的 build script（`--cfg kabegame_data=…`）→ 两个 crate + `kabegame.exe` + `kabegame-cef-helper`；
+`CEF_PATH` → `cef-dll-sys` → `cef` → `tauri-runtime-kbcef` → `kabegame-cef-helper`（这个 bin 只有 7 行，但 cargo 的 bin unit 依赖整包的依赖图）；
+`FFMPEG_INCLUDE_DIR` → `rusty_ffmpeg` → `rsmpeg` → `kabegame-core`。
+对着 `target/debug/build/kabegame*/output` 数了一晚上的翻转：21:11 dev → 22:59 prod → 23:11 dev → 23:18 prod → 23:23 dev，四次全量重编。
+来源有三个：`deno task check` / `test` / `start` 的 `--data` 默认 prod 而 `dev` / `b` 默认 dev，却共用 `target/debug`；
+VSCode 的 rust-analyzer 用同一个 `target/` 跑 `cargo check`，环境里没有 `deno task` 注入的那些变量（而且它自己那次 check 是失败的）；
+`tauri.conf.json` / `capabilities/main.json` / `index.html` 每次 `beforeBuild` 无条件重写，内容一字不差也刷新 mtime。
+改动：产物目录按命令隔离（`b` → `target/`，其余 → `target-dev/`，新增 `scripts/target-dir.ts`，显式 `CARGO_TARGET_DIR` 优先，`.mcp.json` 给 `kabegame-dev` MCP 配同一个目录）、
+`--data` 默认值统一成「带 `--release` 为 prod，否则 dev」、三个生成文件改成内容有变才写（`writeFileIfChanged`）、rust-analyzer 配 `cargo.targetDir`（`.vscode/` 不入库）。
+另有一处**本次没改**：`src-tauri/kabegame/Cargo.toml` 的 `[profile.dev]` / `[profile.release]` 被 cargo 忽略（非根包 profile 无效，`flycheck0/stderr` 第一行就是这个 warning），
+根 `Cargo.toml` 又没有 `[profile.release]`，所以 `lto = "thin"` / `strip` / `panic = "abort"` / `opt-level = 3` 一直没生效，release 用的是 cargo 默认值；
+`codegen-units = 1` 另由 `ReleasePlugin` 经 RUSTFLAGS 在 `--release` 时生效。搬到根里会让 release 构建变慢并触发一次全量重编，
+且 `panic = "abort"` 会废掉 `task_scheduler` / `sql_executor` / `init_heavy_globals` 三处 `catch_unwind`，另开一次评估。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | B1 命令 → 产物目录 | Windows | `deno eval` 按 `dev` / `check` / `test` / `start` / `build` 分别求 `TARGET_DIR` | 前四个 `target-dev`，`build` 为 `target` | 2026-11-20 Claude：五次输出与预期一致 |
+| [x] | B2 显式 env 优先 | Windows | 设 `CARGO_TARGET_DIR=mytarget` 再按 `dev` 求值 | `D:\Codes\kabegame\mytarget`，脚本不插手 | 2026-11-20 Claude |
+| [x] | B3 构建脚本类型检查 | Windows | `deno check scripts/run.ts` | 通过 | 2026-11-20 Claude：含新增的 `target-dir.ts` 与改过的 data-plugin / component-plugin / utils |
+| [x] | B4 `writeFileIfChanged` | Windows | 在不存在的多级路径上写三次（新建 / 同内容 / 改内容） | `true` / `false` / `true`，父目录自动建，内容正确 | 2026-11-20 Claude |
+| [x] | B5 `.mcp.json` 仍合法 | Windows | `JSON.parse` 整个文件 | 合法，`kabegame-dev` 带 `env.CARGO_TARGET_DIR=target-dev` | 2026-11-20 Claude：注释键没留（`env` 的键会真的变成环境变量） |
+| [ ] | B6 首次 dev 全量编译 | Windows | 停掉在跑的 dev 后 `deno task dev -c kabegame` | 在 `target-dev/` 下全量编一次后正常起来 | 没做：`target-dev/` 是空的，这一次要全量编（CEF / V8 / FFmpeg 都在里面）。想省掉就把现有 `target` 改名成 `target-dev`（同盘改名是瞬时的，当前 `target/debug` 里正是 dev 产物；`target/release` 只剩 11-03 的 `kabegame-cli`），改名前须先停掉 dev app，否则占用 |
+| [ ] | B7 check → dev 不再重编 | Windows | 连着跑 `deno task check -c kabegame --skip vue` 与 `deno task dev -c kabegame`，各两遍 | 第二遍起 cargo 直接 `Finished`，`kabegame-core` / 两个 exe 都不重编 | 没做：要等 B6 把 `target-dev/` 填满。验证时可带 `CARGO_LOG=cargo::core::compiler::fingerprint=info` 看有没有 `EnvVarChanged` |
+| [ ] | B8 MCP 跟到新目录 | Windows | 重启 Claude Code（让 `kabegame-dev` MCP 带上新 env），调它的 `status` / 重建场景宿主 | 场景宿主产物指向 `target-dev/debug/resources/wpe-scene` | 没做：要重启 MCP 进程才生效 |
+| [ ] | B9 `deno task b` 仍落 `target/` | Windows | `deno task b -c kabegame-cli` | 产物在 `target/debug/kabegame-cli.exe`（`kabegame-plugin` skill 用的就是这个路径） | 没做 |
+| [ ] | B10 三个生成文件跳过重写 | Windows | 连着跑两次 `deno task b -c kabegame --skip cargo` | 第二次日志打「内容未变，跳过」，`tauri.conf.json` 的 mtime 不动 | 没做：会跑完整前端构建并重打包插件 |
+
 ## 拖入落点提示显示成原始 key（`import.dropZone.*`）
 
 2026-11-20 Windows dev。用户拖图进画廊时截图发现落点提示的标题是 `import.dropZone.galleryMedia`，副标题却是正常中文。`import.json` 里这八条写成了**带点的扁平 key**（`"dropZone.galleryMedia": …`），而 `createI18n` 没开 `flatJson`，`t("import.dropZone.galleryMedia")` 被当成路径去找 `import → dropZone → galleryMedia`，必然落空、回显 key 本身。同在 `common.json` 的另外 11 个带点 key 没事，因为调用处用了 vue-i18n 的转义写法（`t('common["reportIssue.envSection"]')`）。调用处本来就按嵌套写，所以改词条：五种语言的 `import.json` 把八个 `dropZone.*` 并成一个嵌套 `dropZone` 对象，key 顺序与原文件一致（`setPath` 从末尾并入）。

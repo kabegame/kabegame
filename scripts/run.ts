@@ -14,6 +14,9 @@
  * - kabegame 的前端由各自 tauri.conf.json 的 beforeDev/BuildCommand 触发
  */
 
+// 必须排在其它 import 之前：它按命令选定 CARGO_TARGET_DIR，而 paths.ts 在模块加载时
+// 就把 TARGET_DIR 冻结下来了（ESM 按 import 出现的顺序求值）。
+import "./target-dir.ts";
 import { Command } from "commander";
 import { BuildSystem } from "./build-system.ts";
 import { Component } from "./plugins/component-plugin.ts";
@@ -102,7 +105,7 @@ program
     "构建模式：standard | android",
     Mode.STANDARD,
   )
-  .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
+  .option("--data <data>", "数据目录模式：dev | prod（默认：带 --release 为 prod，否则 dev）")
   .option("--trace", "启用 Rust backtrace（设置 RUST_BACKTRACE=full）", false)
   .argument("[args...]", "剩余参数（放在 -- 之后）")
   .action(async (args: string[], options: BuildOptions) => {
@@ -155,7 +158,7 @@ program
     "构建模式：standard | android",
     Mode.STANDARD,
   )
-  .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
+  .option("--data <data>", "数据目录模式：dev | prod（默认：带 --release 为 prod，否则 dev）")
   .action(async (options: BuildOptions) => {
     await check(options);
   });
@@ -183,7 +186,7 @@ program
     "构建模式：standard",
     Mode.STANDARD,
   )
-  .option("--data <data>", "数据目录模式：dev | prod（默认 prod）")
+  .option("--data <data>", "数据目录模式：dev | prod（默认：带 --release 为 prod，否则 dev）")
   .argument(
     "[args...]",
     "剩余参数（放在 -- 之后），原样追加给 cargo test：可以是测试名过滤、" +
