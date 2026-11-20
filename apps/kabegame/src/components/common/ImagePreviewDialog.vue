@@ -497,7 +497,6 @@ import PhotoSwipe from "photoswipe-vue/vue";
 import "photoswipe-vue/photoswipe.css";
 import { usePanzoomPreview } from "../../composables/usePanzoomPreview";
 import { useAudioKeepAlive } from "../../composables/useAudioKeepAlive";
-import { usePreviewMediaSession } from "../../composables/usePreviewMediaSession";
 import { useModal } from "../../composables/useModal";
 import { compatibleToUrl, fileToUrl, thumbnailToUrl } from "../../utils/fileUrl";
 import { fetchImageById } from "../../utils/imageRow";
@@ -652,7 +651,6 @@ const isPreviewStatic = computed(() => !isPreviewVideo.value && !isPreviewWallpa
 
 // 桌面预览视频期间保持音频输出设备常驻，避免暂停后恢复播放漏掉开头声音
 const audioKeepAlive = useAudioKeepAlive();
-usePreviewMediaSession(previewImage, previewVisible);
 const desktopVideoActive = computed(
   () => !USE_PSWP && previewVisible.value && (isPreviewVideo.value || isPreviewWallpaper.value),
 );

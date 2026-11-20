@@ -1025,9 +1025,15 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
     `set_wpe_preview_settings` 写完调）。重新打开时监视若已在运行（别的订阅开着）就照新订阅补发快照。没有打开的 media 订阅
     时停监视、清快照。
 
-Kabegame 自己的会话不过滤。主窗口预览期间，`usePreviewMediaSession` 在应用页主 frame 把 `navigator.mediaSession` 设成
-当前预览项（标题为图片 `displayName`，封面为左上角应用图标）；预览网页壁纸时声音来自 iframe，但垫片不访问 mediaSession，
-Chromium 会退回主 frame 的这份。所以预览里放声音时，其它网页壁纸收到的是 Kabegame 自己的会话（图片名 + 应用图标）。
+Kabegame 自己没有系统媒体会话（2026-11-21）。CEF 启动参数照 WPE 禁用 `HardwareMediaKeyHandling`
+（`tauri-runtime-kbcef` 的 `SYSTEM_MEDIA_DISABLED_FEATURES`；WPE 的 `webwallpaper64.exe` / `wallpaperui.exe` 也带这一项），
+Chromium 就不建媒体键监听器。于是：
+- 壁纸里的 `<audio>`（场景声音、网页壁纸的音乐）和图库预览的视频都不再登记成系统媒体会话。Windows SMTC、macOS「正在播放」、Linux MPRIS 都一样。
+- 媒体键不再控制 Kabegame。
+- 监视器读到的只有别的应用的会话，不用过滤。
+
+开着这项时，壁纸自己的声音会被当成系统媒体。例如场景 3819637149 的脚本收到「播放中」就暂停自带的歌，会话变成暂停后它又恢复，
+按 `windowupdaterate` 每秒自激一次，听起来一顿一顿。原来预览期间给 `navigator.mediaSession` 设元数据的 `usePreviewMediaSession` 已一并删除。
 
 数据源按平台：`audio` 在 Windows 与 macOS，`media` 只在 Windows（`wpe_media::kind_available`，订阅命令据此放行）。`realfft`、`rustfft`
 在 Windows 与 macOS 两个依赖段各登记一次，`windows` 的音频 / WinRT feature 只在 Windows 段，都由 `wpe` feature 开启。没有数据源的

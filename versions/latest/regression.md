@@ -1,5 +1,25 @@
 # v4.7.0 regression
 
+## 关掉 Chromium 的系统媒体集成（3819637149 音乐一顿一顿）
+
+2026-11-21 Windows dev。`3819637149`（Somewhere In Nowhere）的场景音乐放约 1 s、停约 1 s，WPE 里很顺。原因是自激：
+1. 场景的 `<audio>` 被 Chromium 登记成 Kabegame 自己的系统媒体会话（SMTC，标题 "Kabegame"、时长 131 s 正是这首 mp3）。
+2. `wpe_media` 把这个会话当成系统媒体交给场景。
+3. 「Song Title」图层的脚本收到 `mediaPlaybackChanged` state 1 就 `soundLayer.pause()`，会话变成 state 2 后又 `play()`。
+4. 按 `windowupdaterate` 1000 ms 一翻。
+
+WPE 的 `webwallpaper64.exe` / `wallpaperui.exe` 都带 `--disable-features=…,HardwareMediaKeyHandling,…`，所以没有这个问题。Chromium 只在这个特性开着时建 `MediaKeysListenerManagerImpl`（`browser_main_loop.cc`），SMTC / macOS「正在播放」/ Linux MPRIS 和媒体键都挂在它下面。
+
+改法：`tauri-runtime-kbcef` 照 WPE 关掉它（三个桌面平台，用户同意关掉整个应用的媒体集成），前端删掉失效的 `usePreviewMediaSession`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 改前定位 | Windows dev，3819637149 设为桌面壁纸 | CDP 每 100 ms 采样桌面宿主的 `host.sounds()` 与 `host.media()`，6 s | 找到断续的来源 | 2026-11-21 Claude：元素进度速率「1.0 × 约 10 次 → 0 × 约 10 次」交替；停的时候 `scriptPaused: true`；媒体消息每 1000 ms 在 playback 1 / 2 之间翻，场景投影的 `props.title` 是 "Kabegame"、`duration` 131；帧间隔 p99 8.5 ms，和渲染负载无关 |
+| [x] | T2 检查 | Windows | `vue-tsc`（删了 `usePreviewMediaSession` 与它的单测、`ImagePreviewDialog` 的调用）；`rustfmt --check` `runtime.rs` | 全过 | 2026-11-21 Claude：`vue-tsc` 0 错误；rustfmt 通过；dev 开着时 `deno task check` 的 `cargo check` 被 `cef-dll-sys` 的 os error 5 挡住，另用独立 target 目录 `cargo check -p tauri-runtime-kbcef` 通过 |
+| [ ] | T3 场景音乐连续 | Windows dev（重开 dev，CEF 启动参数改了） | 3819637149 设为桌面壁纸，再按 T1 采样 | 元素进度速率一直约 1.0，`scriptPaused` 一直 false；`host.media()` 里没有标题为 Kabegame 的会话 | 需要重开 dev |
+| [ ] | T4 系统媒体控件 | Windows dev | 预览一个有声视频、一张带音乐的网页壁纸；按键盘的播放 / 暂停键 | Windows 音量浮窗里没有 Kabegame；媒体键不暂停 Kabegame 的视频或壁纸音乐，别的音乐播放器照常响应 | 需要重开 dev |
+| [ ] | T5 别的播放器仍然生效 | Windows dev | 3819637149 在放时，用别的播放器（如 Spotify、浏览器）放歌，再暂停 | 壁纸的歌暂停、歌名换成那首歌；那边暂停后壁纸的歌恢复（作者脚本的本意） | 需要重开 dev |
+
 ## release 的 profile 一直没生效（非根包的 `[profile.*]` 被 cargo 忽略）
 
 2026-11-21 Windows。排查构建缓存时发现 cargo 每次都打的第一行 warning 就是
