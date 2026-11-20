@@ -47,7 +47,7 @@ import {
   compileLightObject,
   compileLightObjects,
   engineDefines,
-  lightConfigIssues,
+  lightCookieName,
   lightCounts,
   shadowCount,
   litDefines,
@@ -1060,6 +1060,11 @@ export const REFLECTION_RT = "_rt_Reflection";
 /** 屏幕空间反射用的 mip 帧缓冲（P13b1〔g1〕）：反射关时加载时清成 (0, 0, 0, 1)、之后不更新。 */
 /** 阴影图集（P13d，rea-p13-passes 2.2）：深度 RT，`generic4` / `genericimage4` 的 `g_Texture6` 注解缺省。 */
 export const SHADOW_ATLAS_RT = "_rt_shadowAtlas";
+/**
+ * 聚光 cookie 的全局别名（P13k，phase-13k R2）：着色器在 `LIGHTS_COOKIE` 下的 cookie 槽注解缺省（`generic4` / `genericimage4` 的 `g_Texture7`、
+ * `genericparticle` 的 `g_Texture5`），渲染器每帧解析到排序后最后一盏 cookie 聚光的 cookie。不是 `_rt_` 前缀，名字照 WPE。
+ */
+export const LIGHT_COOKIE_ALIAS = "_alias_lightCookie";
 export const MIP_FRAMEBUFFER_RT = "_rt_MipMappedFrameBuffer";
 
 /**
@@ -1728,7 +1733,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         shadowSetting === "follow" ? await readWpeShadows(input.reader, input.sceneAssets) : undefined,
       );
   const counts = lightCounts(general, shadowQuality);
-  for (const issue of lightConfigIssues(general, shadowQuality)) unsupported.add(issue);
   const shader = new ShaderCompiler(
     fs,
     input.translator,
@@ -2535,6 +2539,9 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       } else if (name === SHADOW_ATLAS_RT) {
         // 阴影图集（P13d）：着色器只在 LIGHTS_SHADOW_MAPPING 时声明它（比较采样器），渲染器按帧打包的尺寸建
         runtime[slot] = name;
+      } else if (name === LIGHT_COOKIE_ALIAS) {
+        // 聚光 cookie 的别名（P13k）：着色器只在 LIGHTS_COOKIE 时声明它，渲染器按帧解析
+        runtime[slot] = name;
       } else return false;
       return true;
     };
@@ -2579,7 +2586,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       if (!name || planned.has(slot)) continue;
       // 别的图层的合成 RT（P8 步骤 4）：排在 `_rt_*` 之前（前缀相同），`planned` 的槽（`bind` 胜出，rea-p8-render 第 3 节）上面已跳过
       if (bindLayerComposite(slot, name, true)) continue;
-      if (name.startsWith("_rt_")) {
+      if (name.startsWith("_rt_") || name === LIGHT_COOKIE_ALIAS) {
         if (bindRuntime(slot, name)) formats.push({ slot, format: runtimeFormat(name) });
         else issues.add(`texture:rendertarget:${name}`);
         continue;
@@ -2703,7 +2710,7 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
           continue;
         // 注解缺省写的别的图层的合成 RT（P8 步骤 4）：同材质 `textures` 的规则；着色器已经编好，不再加格式（同下面的静态纹理）
         if (bindLayerComposite(binding.slot, fallback, false)) continue;
-        if (fallback.startsWith("_rt_")) {
+        if (fallback.startsWith("_rt_") || fallback === LIGHT_COOKIE_ALIAS) {
           if (!bindRuntime(binding.slot, fallback)) issues.add(`texture:rendertarget:${fallback}`);
           continue;
         }
@@ -3554,6 +3561,16 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         bundle.mipFramebuffer = { update: reflectionOn };
       }
     }
+    // 聚光的 cookie 纹理（P13k，rea R1）：`usecookie` 的聚光按 `lightCookieName` 加载进纹理表，体积光正面的槽 2 绑它。放在这里是因为
+    // `getTexture` 要等纹理表建好；点光的 cookie 只有体积光读，那一支照报（`volumetrics:cookie:point`），不加载。文件不存在时 WPE 的纹理表
+    // 照样建占位（`p13k-vol-bad` 实测 6×6 棋盘格），这里报 `texture:missing:*` 并同样绑棋盘格（强制渲染时和 WPE 一样）
+    if (!settled())
+      for (const light of lightObjects) {
+        const object = scene.objects[light.object];
+        const name = light.kind === "spot" && isSceneObject(object) ? lightCookieName(object, light.flags) : null;
+        if (name === null) continue;
+        light.cookie = (await getTexture(name, null))?.index ?? checkerIndex();
+      }
     // 体积光（P13e）：有会画的灯才去读档位（跟随时读 WPE 的 `config.json`）。带阴影的点光每帧要取自己的阴影条目，灯光记录在没有光照程序时也要建
     {
       if (!settled() && wantsVolumetrics(lightObjects)) {
@@ -3732,6 +3749,9 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         unsupported,
       );
       if (light && wantsVolumetrics([light])) flips.add("volumetrics");
+      // 聚光的 cookie（P13k）：同整场（`lightCookieName`），纹理随本次的纹理增量交给渲染器，别名按帧解析时就认得这盏灯
+      const cookieName = light?.kind === "spot" ? lightCookieName(object, light.flags) : null;
+      if (light && cookieName !== null) light.cookie = (await getTexture(cookieName, null))?.index ?? checkerIndex();
       // 关键帧：`parent` 是对象内的下标，追加进整场列表时加偏移
       const collected = collectObjectAnimations(scene, at);
       for (const animation of collected.list)

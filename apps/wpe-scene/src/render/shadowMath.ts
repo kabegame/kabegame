@@ -292,3 +292,15 @@ export function planShadows(
   });
   return { width, height, views, layout };
 }
+
+/**
+ * 只开 cookie 的聚光（P13k，phase-13k R7 `0x140192f1e`–`0x140193173`）：`ShadowProjection[slot]` 写这盏灯不偏的视图投影（灯的 `+0x338`，
+ * 同阴影条目写的那份），方块变换不写。没有阴影图集也要写（档位 0 时 `spotshadowcookie` 并进 cookie 段），所以不经 `planShadows`。
+ */
+export function writeCookieProjections(frame: LightFrame, orthographic: boolean): void {
+  for (const { light, slot } of frame.cookieProjections) {
+    const vp = spotViewProjection(light.matrix, light.outercone, light.radius, orthographic);
+    const at = frame.layout.projection + slot * 16;
+    for (let k = 0; k < 16; k++) if (at + k < frame.buffer.length) frame.buffer[at + k] = vp[k];
+  }
+}

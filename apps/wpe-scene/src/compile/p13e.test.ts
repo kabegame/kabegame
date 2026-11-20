@@ -3,7 +3,7 @@
  * - 灯体网格（点光球、聚光圆柱）与 GLM 求逆：对 WPE 抓帧逐位相同（`ignore/p13/e/` 的导出、`ignore/p13/out/wpe-p13e-*-consts.json`）；
  * - 聚光的灯体矩阵与常量：`p13e-spot` 抓帧；
  * - 真翻译器编确定性工程：`p13e-po`（正交点光）、`p13e-spot`（透视聚光）不报任何键，常量与抓帧一致；
- * - 照报：cookie、聚光阴影、聚光分不到槽、点光分不到阴影条目、管光 / 平行光不收、档位 0 不建。
+ * - 照报：点光的 cookie（聚光的 cookie 与阴影 P13k 起支持）、聚光分不到槽、点光分不到阴影条目、管光 / 平行光不收、档位 0 不建。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -276,15 +276,16 @@ describe("compileVolumetrics 的取舍（V5、V6，待定 2、3）", () => {
     ).toEqual([]);
   });
 
-  it("聚光：聚光（含隐藏的，P13f2）多于聚光槽报 spot-unassigned，带阴影报 spot-shadow；任何灯 usecookie 报 cookie", async () => {
+  it("聚光：聚光（含隐藏的，P13f2）多于聚光槽报 spot-unassigned；聚光阴影与 cookie P13k 起支持，点光的 cookie 仍报", async () => {
     const spot = { light: "lspot", castvolumetrics: true };
     expect((await compileRules([spot, { light: "lspot" }])).unsupported).toEqual(["volumetrics:spot-unassigned"]);
     // 可见性是运行时状态（P13f2）：按全部可见判，隐藏的也算（待定 3）
     expect((await compileRules([spot, { light: "lspot", visible: false }])).unsupported).toEqual([
       "volumetrics:spot-unassigned",
     ]);
-    expect((await compileRules([{ ...spot, castshadow: true }])).unsupported).toEqual(["volumetrics:spot-shadow"]);
-    expect((await compileRules([point({ usecookie: true })])).unsupported).toEqual(["volumetrics:cookie"]);
+    expect((await compileRules([{ ...spot, castshadow: true }])).unsupported).toEqual([]);
+    expect((await compileRules([{ ...spot, usecookie: true }])).unsupported).toEqual([]);
+    expect((await compileRules([point({ usecookie: true })])).unsupported).toEqual(["volumetrics:cookie:point"]);
   });
 
   it("COMBO：点光带 LIGHTS_SHADOW_MAPPING_QUALITY，聚光不带", async () => {

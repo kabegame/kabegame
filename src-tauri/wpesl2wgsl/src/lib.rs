@@ -158,7 +158,7 @@ pub struct TranslateResult {
     /// `phase: "texture"` 时要格式的注解缺省纹理（见请求的 `defaultFormats`）。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub missing_textures: Vec<MissingTexture>,
-    /// `phase: "require"` 时展开不了的库：未知的名字，或要聚光 cookie 的 `LightingV1/spot-cookie`。
+    /// `phase: "require"` 时展开不了的库：未知的名字。
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
 }
@@ -1255,14 +1255,41 @@ vec3 PointSegmentDelta(vec3 p, vec3 a, vec3 b) { return a - p; }
         assert!(has_marker(&bare), "材质自己写 FOG 1");
     }
 
+    /// 聚光的两段 cookie 能翻译（P13k）：着色器在 `LIGHTS_COOKIE` 下声明 cookie 槽、定义 `COOKIE_SAMPLER`（同 WPE 的 `generic4` 等），
+    /// 反射里是缺省 `_alias_lightCookie` 的 2d 槽；投影与采样函数用桩。
     #[test]
-    fn lighting_shadows_stay_reported() {
+    fn lighting_spot_cookies_translate() {
         let mut req = lit_request();
-        req.lit_defines
-            .insert("LIGHTS_SPOT_COOKIE".into(), "1".into());
+        req.fragment = format!(
+            "#if LIGHTS_COOKIE\n#define COOKIE_SAMPLER g_Texture7\nuniform sampler2D g_Texture7; // {{\"hidden\":true,\"default\":\"_alias_lightCookie\"}}\n#endif\nuniform sampler2DComparison g_Texture6;\nvec3 CalculateProjectedCoords(vec3 p, mat4 m) {{ return mul(vec4(p, 1.0), m).xyz; }}\nfloat PerformShadowMapping(vec3 c, vec4 t) {{ return texSample2DCompare(g_Texture6, c.xy * t.zw + t.xy, c.z).r; }}\n{}",
+            req.fragment
+        );
+        for (name, value) in [
+            ("LIGHTS_SPOT", "3"),
+            ("LIGHTS_SPOT_SHADOW_COOKIE", "1"),
+            ("LIGHTS_SPOT_COOKIE", "1"),
+            ("LIGHTS_COOKIE", "1"),
+        ] {
+            req.lit_defines.insert(name.into(), value.into());
+        }
         let result = translate(&req);
-        assert_eq!(result.phase, Some("require"));
-        assert_eq!(result.requires, ["LightingV1/spot-cookie"]);
+        assert!(result.ok, "{:?} {:?}", result.phase, result.errors);
+        let projection = result
+            .uniforms
+            .iter()
+            .find(|u| u.name == "g_LFeature_ShadowProjection")
+            .expect("ShadowProjection");
+        assert_eq!(projection.array, Some(2), "阴影 + cookie 1 + cookie 1");
+        let cookie = result
+            .textures
+            .iter()
+            .find(|t| t.slot == 7)
+            .expect("cookie 槽");
+        assert_eq!(cookie.kind, "2d");
+        assert_eq!(
+            cookie.meta.as_ref().and_then(|m| m.get("default")),
+            Some(&Value::from("_alias_lightCookie"))
+        );
     }
 
     /// 点光、聚光、平行光的阴影分支能翻译（P13d、P13i）：投影与采样函数用桩，真实实现在 WPE 的 `common_pbr_2.h`。

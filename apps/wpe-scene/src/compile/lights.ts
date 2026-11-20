@@ -31,23 +31,19 @@ export interface LightCounts {
   pointShadow: number;
   directionalShadow: number;
   /**
-   * 聚光的阴影 / cookie 数。阴影 P13i 起支持；cookie 两项（`spotcookie`、`spotshadowcookie`）照报 `lightconfig:spot*cookie`，只为照报与宏。
-   * 档位 0 时 `spotshadowcookie` 并进 `spotcookie`。
+   * 聚光的阴影 / cookie 数（阴影 P13i、cookie P13k 起支持）。档位 0 时 `spotshadowcookie` 并进 `spotcookie`。
    */
   spotShadow: number;
   spotCookie: number;
   spotShadowCookie: number;
 }
 
-/** 聚光的 cookie 键：要 `_alias_lightCookie`（语料 0 张），照报。聚光阴影 P13i 起支持。 */
-const SPOT_COOKIE_KEYS = ["spotshadowcookie", "spotcookie"] as const;
-
 function count(value: unknown): number {
   // WPE 只取低 4 位（FUN_140186c90）
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) & 0xf : 0;
 }
 
-/** 会进阴影图集的计数之和：点光、平行光（P13d）、聚光阴影与阴影 + cookie（P13i；后者照报）。为 0 时不建图集、不编投射变体。 */
+/** 会进阴影图集的计数之和：点光、平行光（P13d）、聚光阴影与阴影 + cookie（P13i、P13k）。为 0 时不建图集、不编投射变体。 */
 export function shadowCount(counts: LightCounts): number {
   return counts.pointShadow + counts.directionalShadow + counts.spotShadow + counts.spotShadowCookie;
 }
@@ -80,18 +76,6 @@ export function lightCounts(general: Record<string, unknown>, quality = 0): Ligh
     spotCookie: shadows ? count2(source.spotcookie) : count2(source.spotcookie) | count2(source.spotshadowcookie),
     spotShadowCookie: shadows ? count2(source.spotshadowcookie) : 0,
   };
-}
-
-/**
- * `lightconfig` 里聚光的 cookie（按档位解析之后）：照报，不生成缺 cookie 的画面。点光、平行光的阴影 P13d 起支持，聚光阴影 P13i 起支持。
- */
-export function lightConfigIssues(general: Record<string, unknown>, quality = 0): string[] {
-  const counts = lightCounts(general, quality);
-  const values: Record<(typeof SPOT_COOKIE_KEYS)[number], number> = {
-    spotshadowcookie: counts.spotShadowCookie,
-    spotcookie: counts.spotCookie,
-  };
-  return SPOT_COOKIE_KEYS.filter((key) => values[key] > 0).map((key) => `lightconfig:${key}`);
 }
 
 /**
@@ -240,6 +224,25 @@ export interface SceneLightObject {
   /** `castvolumetrics`（JSON 值，运行中变照报） */
   castVolumetrics: boolean;
   values: LightValues;
+  /**
+   * cookie 纹理在 `bundle.textures` 里的下标（P13k）：`usecookie` 的聚光由 `bundle.ts` 按 {@link lightCookieName} 加载；其它灯、加载失败
+   * （已报 `texture:missing:*`）没有这个字段。
+   */
+  cookie?: number;
+}
+
+/** 缺省 cookie（P13k，`FUN_14025d080` 的 `0x140491ad8`）：纹理名，落在 `materials/cookie/flashlight1.tex`。 */
+export const DEFAULT_LIGHT_COOKIE = "cookie/flashlight1";
+
+/**
+ * 灯的 cookie 纹理名（P13k，rea R1 `FUN_14025d080`）：`usecookie` 为真时读 JSON 键 `cookie`，只认非空字符串（`{user}` 等对象不认，运行中
+ * 没有描述符、不能改），否则 {@link DEFAULT_LIGHT_COOKIE}；`usecookie` 为假返回 null。名字指向不存在的文件时 WPE 用棋盘格占位、不退回缺省，
+ * 我们照材质纹理报 `texture:missing:<路径>`。
+ */
+export function lightCookieName(object: Record<string, unknown>, flags: number): string | null {
+  if (!(flags & 2)) return null;
+  const raw = object.cookie;
+  return typeof raw === "string" && raw !== "" ? raw : DEFAULT_LIGHT_COOKIE;
 }
 
 /** 编译期定、运行中变会重建资源的灯字段（rea-p13-lights 3.1 的回调 `0x14025c610`）：挂属性 / 脚本 / 关键帧照报 `light:runtime:<键>`。 */
@@ -456,6 +459,16 @@ export interface LightFrame {
   /** 整块缓冲：阴影的投影与方块变换由 `render/shadows.ts` 打包之后再写 */
   buffer: Float32Array;
   entries: ShadowEntry[];
+  /**
+   * 占了投影槽、没有阴影条目的 cookie 聚光（P13k，phase-13k R7）：`ShadowProjection[slot]` 写这盏灯不偏的视图投影（`writeCookieProjections`），
+   * 方块变换那一格不写（cookie 段不读它）。
+   */
+  cookieProjections: { light: SceneLight; slot: number }[];
+  /**
+   * `_alias_lightCookie` 这一帧该换成哪盏灯的 cookie（P13k，R2 `0x140192f04`）：排序后最后一盏可见、分到聚光槽、`usecookie` 的聚光；没有为
+   * null（别名保持上一次绑的那张，渲染器处理）。
+   */
+  cookie: SceneLight | null;
 }
 
 /** 排序键（R2.3）：类型升序 → `flags` 降序 → `dot(局部 origin, g_ViewForward)` 升序；同键保持原顺序（WPE 是 ≤ 32 个的插入排序）。 */
@@ -487,7 +500,8 @@ export function sortLights(lights: readonly SceneLight[], forward: readonly numb
  * - 聚光（P13i，`0x140192dbf`）：段 `= flags & (档位 ≠ 0 ? 3 : 2)`（bit0 `castshadow`、bit1 `usecookie`）选四段之一的指针写四个数组，
  *   四段依次是阴影 + cookie（从槽 0）、cookie（`SSC`）、阴影（`SSC + SC`）、普通（`SSC + SC + SS`）；之后 `castshadow`（档位 ≠ 0）或
  *   `usecookie` 为真、且 N 余量 > 0 时余量 −1、按同一段的投影指针（阴影 + cookie 0、cookie `SSC`、阴影 `SSC + SC`）占一个投影槽，带阴影的
- *   生成一条条目（只有 cookie 的不进图集；cookie 照报，这里不写它的投影）；灯按类型排序，聚光先于平行光用掉 N 余量；
+ *   生成一条条目，只开 cookie 的记进 `cookieProjections`（不进图集，P13k R7）；灯按类型排序，聚光先于平行光用掉 N 余量。`usecookie` 的
+ *   聚光写完槽位就成为本帧的别名 cookie（`cookie`，不看投影余量，R2）；
  * - 管光照旧；
  * - 用完的平行光槽把方向补成 (0, 1, 0, 0)、颜色保持 0（`0x1401931bb`：方向是 0 向量时着色器归一化出 NaN，颜色 0 也挡不住）。
  * 越界写落进整块缓冲的下一段，越过整块末尾的丢掉（WPE 会写坏别的内存，语料不会走到）。
@@ -518,6 +532,8 @@ export function lightFrame(
   const spotSlots = [SSC + SC + SS, SSC + SC, SSC, 0];
   const spotProjectionSlots = [0, SSC + SC, SSC, 0];
   let tubeSlot = 0;
+  const cookieProjections: LightFrame["cookieProjections"] = [];
+  let cookieLight: SceneLight | null = null;
   const { point: P, spot: S, tube: T, directional: D } = counts;
   for (const light of sortLights(lights, forward)) {
     if (!light.visible || remaining[light.kind] <= 0) continue;
@@ -557,7 +573,9 @@ export function lightFrame(
         projectionsLeft--;
         const projection = spotProjectionSlots[segment]++;
         if (flag) entries.push({ kind: "spot", light, cascade: null, slot: projection });
+        else cookieProjections.push({ light, slot: projection });
       }
+      if (cookie) cookieLight = light;
     } else {
       const slot = tubeSlot++;
       write(layout.tube + slot * 4, [...color, light.radius]);
@@ -570,7 +588,7 @@ export function lightFrame(
     write(layout.directional + 4 * D + slot * 4, [0, 1, 0, 0]);
   for (let slot = Math.max(dirPlainSlot, counts.directionalShadow); slot < D; slot++)
     write(layout.directional + 4 * D + slot * 4, [0, 1, 0, 0]);
-  return { layout, buffer, entries };
+  return { layout, buffer, entries, cookieProjections, cookie: cookieLight };
 }
 
 /** 整块缓冲 → 各 uniform 的值（`lightFrame` 与阴影写完之后）。 */

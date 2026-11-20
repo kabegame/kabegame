@@ -295,7 +295,7 @@ import {
 import { ReflectionTargets } from "./reflection";
 import { SHADOW_ATLAS_FORMAT, ShadowAtlas, type ShadowCasterDraw } from "./shadows";
 import { VolumetricsRenderer } from "./volumetrics";
-import type { ShadowView } from "./shadowMath";
+import { writeCookieProjections, type ShadowView } from "./shadowMath";
 import {
   LEGACY_LIGHT_UNIFORMS,
   LIGHT_FRAME_UNIFORMS,
@@ -390,6 +390,18 @@ interface RenderTarget {
   format: GPUTextureFormat;
   sampler: GPUSampler;
 }
+
+/**
+ * 聚光 cookie 别名的采样器（P13k，`p13k-surf-two` 实测 WPE 是钳到黑色边框 + 三线性、无各向异性，`flags | 0x4000000`）：WebGPU 没有边框寻址，
+ * 用钳边代替（内置 cookie 的边缘一圈是 0，见 `GpuScene.lightCookieBinding`）。
+ */
+const LIGHT_COOKIE_SAMPLER: GPUSamplerDescriptor = {
+  addressModeU: "clamp-to-edge",
+  addressModeV: "clamp-to-edge",
+  magFilter: "linear",
+  minFilter: "linear",
+  mipmapFilter: "linear",
+};
 
 /**
  * 两张渲染目标的形状相同（L6b）：尺寸、格式与采样器（`sampler()` 按描述缓存，同参数是同一个对象）。替换被依赖的图层时据此沿用旧的独占 RT，
@@ -875,6 +887,8 @@ interface Draw {
   multiImage: number[];
   /** 多图像槽当前的图像号（槽号 → `frames[k].image`），没写过的槽按 0。 */
   sheetImages: Map<number, number>;
+  /** 有槽绑聚光 cookie 的别名（P13k）：bind group 随别名当前的纹理换，`bindGroupOf` 把它并进缓存键。 */
+  lightCookie: boolean;
   /** 不引用 fbo 时建一次；引用 fbo 时按当前 swap 状态取（`bindGroups` 缓存）。 */
   bindGroup: GPUBindGroup | null;
   bindGroups: Map<string, GPUBindGroup>;
@@ -1425,10 +1439,14 @@ function drawsToScene(op: { kind: string }): boolean {
  * 要上传的纹理：除了只被「关着且带不支持项」的 effect 用到的，其余全部上传。这种 effect 打开时整场重编译，用不到这份
  * GPU 纹理；它的纹理可能没有 mip 或格式不认识，上传会抛错，让本来能画的场景退回（3c）。关着的 effect 编译到一半出错时
  * 步骤不留，已解析的纹理同样不被引用。没有可变 effect 的场景，bundle 里的纹理都有 pass 引用，结果是全集。
- * 粒子材质的纹理同样上传（P4a 步骤 4），含系统树里全部子系统的（P4e 步骤 1）。
+ * 粒子材质的纹理同样上传（P4a 步骤 4），含系统树里全部子系统的（P4e 步骤 1）。聚光的 cookie（P13k，`SceneLightObject.cookie`）也上传：
+ * 体积光正面与表面的 `_alias_lightCookie` 读它，不经图层的 pass。
  */
-export function uploadableTextures(bundle: Pick<SceneBundle, "layers">): Set<number> {
+export function uploadableTextures(
+  bundle: Pick<SceneBundle, "layers"> & Pick<Partial<SceneBundle>, "lightObjects">,
+): Set<number> {
   const used = new Set<number>();
+  for (const light of bundle.lightObjects ?? []) if (light.cookie !== undefined) used.add(light.cookie);
   const add = (pass: ScenePass) => {
     for (const index of Object.values(pass.textures)) used.add(index);
   };
@@ -1530,6 +1548,10 @@ export class GpuScene {
   private lightFrameCache: LightFrame | null = null;
   /** 最近一次 `sync` / 建场景的状态（P13f2）：`update` 没给状态时按它组灯记录。 */
   private lightState: SceneState | null = null;
+  /**
+   * `_alias_lightCookie` 当前绑的纹理（P13k，R2）：`bundle.textures` 下标，最近一次有 cookie 聚光那一帧的那盏的 cookie；还没有过为 null。
+   */
+  private lightCookie: number | null = null;
   /** 遗留灯（P13f2）：这一帧画的值、按本帧末状态算的下一帧的值、换代用的帧时刻（`frameLightValues`）。 */
   private legacyCurrent: Record<string, number[]> | null = null;
   private legacyNext: Record<string, number[]> | null = null;
@@ -2141,6 +2163,7 @@ export class GpuScene {
           sceneFormat: this.format,
           depth: staged.depth.texture,
           shadowAtlas: this.shadowAtlas ? { view: this.shadowAtlas.view, sampler: this.shadowAtlas.sampler } : null,
+          cookieTexture: (index) => this.cookieTextureOf(index),
           own: (resource) => {
             volumetricsOwned.add(resource);
             return this.own(resource);
@@ -2546,6 +2569,30 @@ export class GpuScene {
 
   private samplerFor(texture: SceneTexture): GPUSampler {
     return this.sampler(samplerDescriptor(texture));
+  }
+
+  /**
+   * 聚光 cookie 的视图与采样器（P13k，体积光正面槽 2）：纹理自己的采样状态（`p13k-vol` 实测钳边、各向异性，同普通纹理）。还没上传就当场传
+   * （`uploadableTextures` 已把 cookie 算进去，这里兜住建体积光早于上传的顺序）。
+   */
+  private cookieTextureOf(index: number): { view: GPUTextureView; sampler: GPUSampler } | null {
+    const texture = this.bundle.textures[index];
+    if (!texture) return null;
+    const gpu = (this.textures[index] ??= this.uploadAt(index));
+    return { view: gpu.createView(), sampler: this.samplerFor(texture) };
+  }
+
+  /**
+   * 聚光 cookie 的别名（P13k，phase-13k R2）当前的视图与采样器：`lightCookie` 那张；还没有过 cookie 聚光时 WPE 绑的是 `error` 棋盘格，那时
+   * cookie 段的灯颜色全是 0、读到什么都看不出来，这里给空纹理。采样器固定钳边、三线性、无各向异性（`p13k-surf-two` 实测 WPE 是钳到黑色边框，
+   * WebGPU 没有边框寻址；内置 cookie 的 0–2 级 mip 最外一圈都是 0，最多差一级）。
+   */
+  private lightCookieBinding(): { view: GPUTextureView; sampler: GPUSampler } {
+    const sampler = this.sampler(LIGHT_COOKIE_SAMPLER);
+    const index = this.lightCookie;
+    if (index === null || !this.bundle.textures[index]) return { view: this.dummies.views["2d"], sampler };
+    const gpu = (this.textures[index] ??= this.uploadAt(index));
+    return { view: gpu.createView(), sampler };
   }
 
   /**
@@ -3871,6 +3918,7 @@ export class GpuScene {
         sceneFormat: format,
         depth: this.depthTarget.texture,
         shadowAtlas: this.shadowAtlas ? { view: this.shadowAtlas.view, sampler: this.shadowAtlas.sampler } : null,
+        cookieTexture: (index) => this.cookieTextureOf(index),
         own: (resource) => {
           this.volumetricsOwned.add(resource);
           return this.own(resource);
@@ -4948,6 +4996,8 @@ export class GpuScene {
               (image > 0 ? this.extraTextures.get(ref.index)?.[image - 1] : undefined) ?? this.textures[ref.index]!;
             view = gpu.createView();
             sampler = this.samplerFor(bundle.textures[ref.index]);
+          } else if (ref.kind === "light-cookie") {
+            ({ view, sampler } = this.lightCookieBinding());
           } else {
             const target = ref.kind === "fbo" ? resolveFbo(ref.effect, ref.name) : this.resolveTexture(ref, resources);
             if (!target) throw new SceneRenderError([`render:texture-rt:${ref.kind}`]);
@@ -4960,7 +5010,9 @@ export class GpuScene {
       }
       return list;
     };
-    const dynamic = multiImage.length > 0 || Object.values(step.inputs).some((ref) => ref.kind === "fbo");
+    const lightCookie = Object.values(step.inputs).some((ref) => ref.kind === "light-cookie");
+    const dynamic =
+      multiImage.length > 0 || lightCookie || Object.values(step.inputs).some((ref) => ref.kind === "fbo");
     const resolveNow = (effect: number, name: string) => this.targets[resources.fbos.resolve(effect, name)];
     const bindGroup = dynamic
       ? null
@@ -4993,6 +5045,7 @@ export class GpuScene {
       dirty: false,
       multiImage,
       sheetImages,
+      lightCookie,
       bindGroup,
       bindGroups: new Map(),
       entries,
@@ -5000,11 +5053,14 @@ export class GpuScene {
     };
   }
 
-  /** bind group 缓存键：fbo 状态之后追加多图像槽当前的图像号（没有多图像槽时就是原键，单图像不多建）。 */
+  /**
+   * bind group 缓存键：fbo 状态之后追加多图像槽当前的图像号（没有多图像槽时就是原键，单图像不多建），绑 cookie 别名的再追加别名当前的纹理（P13k）。
+   */
   private imageKey(draw: Draw, base: string): string {
-    return draw.multiImage.length
+    const key = draw.multiImage.length
       ? `${base}|${draw.multiImage.map((slot) => draw.sheetImages.get(slot) ?? 0).join(",")}`
       : base;
+    return draw.lightCookie ? `${key}|c${this.lightCookie ?? "-"}` : key;
   }
 
   /** 引用 fbo 的 bind group 按当前 swap 状态取（各状态各建一次）。 */
@@ -6490,6 +6546,13 @@ export class GpuScene {
     const records = lightRecords(this.bundle.lightObjects ?? [], current, new Map(), this.attachHook);
     const frame = lightFrame(records, lights.counts, lights.quality, forward);
     this.shadowAtlas?.frame(frame, forward, this.view.eye);
+    // 只开 cookie 的聚光的投影（P13k R7）；别名在有 cookie 聚光时换成那盏的 cookie，没有时保持上一次的（R2）
+    writeCookieProjections(frame, !this.bundle.general.perspective);
+    if (frame.cookie) {
+      const object = frame.cookie.object;
+      const cookie = this.bundle.lightObjects?.find((light) => light.object === object)?.cookie;
+      if (cookie !== undefined) this.lightCookie = cookie;
+    }
     this.lightFrameCache = frame;
     return { ...values, ...lightFrameUniforms(frame) };
   }
@@ -7495,7 +7558,10 @@ export class GpuScene {
       const lights = this.lightFrameCache;
       volumetrics.frame((object) => {
         const layer = this.bundle.layers.find((item) => item.object === object);
-        const entry = lights?.entries.find((item) => item.kind === "point" && item.light.object === object);
+        // 阴影条目：点光与聚光（P13k，rea R5：非点光条目的方块变换同时写进 `light+0x310`，体积光的 `g_RenderVar0` 读它）
+        const entry = lights?.entries.find(
+          (item) => (item.kind === "point" || item.kind === "spot") && item.light.object === object,
+        );
         const slice = (start: number) => lights!.buffer.subarray(start + entry!.slot * 4, start + entry!.slot * 4 + 4);
         // 灯的几何与常量按这一帧的状态（P13f2）：字段取 `SceneState.lights`，颜色取图层状态，位置与方向取世界矩阵（沿父链）
         const light = volumetricLights.get(object);
@@ -7516,14 +7582,16 @@ export class GpuScene {
           viewProjection: layer ? this.viewProjectionOf(layer, state, this.view, false) : this.view.viewProjection,
           eye: this.view.eye,
           forward: this.view.viewVectors.forward,
-          ...(entry
+          ...(entry?.kind === "point"
             ? {
                 shadow: {
                   transform: slice(lights!.layout.pointProjectionTransform),
                   projection: slice(lights!.layout.pointProjection),
                 },
               }
-            : {}),
+            : entry
+              ? { shadow: { transform: slice(lights!.layout.projectionTransform) } }
+              : {}),
         };
       });
     }

@@ -3876,6 +3876,20 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PK3 真机预览 | Windows dev | 图库里预览 `2515018199`（Knight Artorias） | 不再停在封面、实时渲染；盔甲上的高光随灯光的移动变化，披风与头盔边缘的水波效果正常 | 待用户看 |
 | [ ] | PK4 非 Windows | macOS / Linux | 同 PK3 | 同 Windows | 本机不能测 |
 
+## 场景壁纸聚光 cookie 与体积光的聚光阴影（P13k）
+
+2026-11-21。聚光的 cookie（投影图样）在表面着色与体积光里都画出来：`usecookie` 的聚光加载时读 `cookie` 字段（缺省 `cookie/flashlight1`，文件不存在时绑棋盘格并报 `texture:missing:*`）。翻译器生成「阴影 + cookie」「cookie」两段（不乘锥角，采 `COOKIE_SAMPLER`），`LIGHTS_COOKIE` 由宿主定义，着色器的 cookie 槽缺省 `_alias_lightCookie`，渲染器每帧解析到排序后最后一盏 cookie 聚光的 cookie（钳边 + 三线性，WPE 是黑边框）；只开 cookie 的灯写投影、不进图集。体积光加 `COOKIE`（槽 2、NDC 立方体灯体、`eye + 0.1·F` 的在内判定），带阴影的聚光取自己聚光阴影条目的方块变换。`lightconfig:spot*cookie`、`LightingV1/spot-cookie`、`volumetrics:cookie`、`volumetrics:spot-shadow` 不再报，点光开 cookie 改报 `volumetrics:cookie:point`。读码与实测见 `phase-13k-spot-cookie.md` 与 `p13-REPORT.md`「P13k 的实测」。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | CK0 单测与检查 | Windows | 翻译器 `cargo test --lib` 并重编 wasm；`apps/wpe-scene` 的 tsc；`src/compile/p13k.test.ts`、`lights.test.ts`、`p13e.test.ts`、`fragment.test.ts` 与 P13 其余测试文件 | 0 error、全过 | 2026-11-21：翻译器 124 例全过；工作区与「HEAD + P13k」快照（HEAD `a47b9aea`）里 tsc 都是 0 error，快照里 13 个文件 228 例全过 |
+| [x] | CK1 语料 | Node，233 个工程 + myprojects `3839619935` | 「HEAD」与「HEAD + P13k」两份快照各扫一遍（各配自己的翻译器 wasm） | 233 张不变；`3839619935` 变干净，没有新增键 | 2026-11-21：233 张前后一致、全部干净；`3839619935` 去掉 `lightconfig:spotshadowcookie`、`volumetrics:cookie`、`volumetrics:spot-shadow`，变干净 |
+| [x] | CK2 对照 WPE（体积光） | Windows dev + WPE 抓帧（`A:\p13k\`，阴影 low、体积光 low、后处理 ultra） | `ignore/p13/k/gen_k.py` 的 `p13k-vol*` 六个工程整帧比 | 逐像素相同或只有零星取整差 | 2026-11-20：五个逐像素相同（排除帧号角），`p13k-vol` 64 个像素差 1（含帧号块）；变异（不加 `COOKIE`、聚光不取阴影条目）各差 107 万 / 80 万个像素 |
+| [x] | CK3 对照 WPE（表面着色） | 同上 | `p13k-surf`、`-surf-shadow`（low 与 disabled）、`-surf-two` 整帧比 | 同上；两盏 cookie 灯都采排在后面那盏的图样 | 2026-11-21：分别 1、1、1、3 个像素差 1；变异（cookie 段乘锥角、别名取前一盏）各差 37 万 / 79 万个像素。disabled 档由 `capture_sweep` 临时改、跑完改回 low |
+| [x] | CK4 走查（FINAL_CHECK） | Windows dev + WPE 抓帧（`A:\p13k\3839iso-fps20-2278x1280`） | `ignore/p13/k/walk/make_iso_3839.py` 的复制工程（背景、猫、puppet、聚光）按日志与光标回放第 283 帧，2278×1280 整帧比 | 没有成块差异 | 2026-11-20 / 21：最大差 5（背景纹理解码的 8×8 块纹路，已知差异）；关掉体积光再比差到最大 67、121 万个像素；k-2 之后重渲染和 k-1 的图逐字节相同 |
+| [ ] | CK5 真机预览 | Windows dev | 图库里预览 `3839619935`（myprojects） | 不再停在封面、实时渲染；聚光灯的光柱里能看到图样 | 待用户看 |
+| [ ] | CK6 非 Windows | macOS / Linux | 同 CK3 的工程导入后预览 | 同 Windows | 本机不能测 |
+
 ## WPE 壁纸设置与预览设置
 
 2026-11-15 Windows dev。暂停、音量、视频倍速、媒体集成、场景后处理 / 反射 / 阴影抽成一个字段组（`WpeSettingsFields.vue`）。桌面仍用全局设置键（设置页全部显示）；预览与应用背景改用每张壁纸 metadata 的 `previewSettings`（`get_wpe_preview_settings` / `set_wpe_preview_settings`，没设取 Kabegame 默认值）。预览的暂停仍是弹窗内存状态，应用背景强制暂停。场景三项改由父页面经 `kabegame:wpe-scene-settings` 下发，宿主不再读全局设置；媒体集成按订阅判定（壁纸窗口跟全局、主窗口跟这张的预览设置）。「跟随 WPE」只在 `get_wpe_follow_available` 为真时提供。计划见 `.claude/plans/wpe-import/phase-wallpaper-settings.md`。

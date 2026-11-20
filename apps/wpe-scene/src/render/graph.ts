@@ -87,6 +87,7 @@
  */
 import {
   FRAMEBUFFER_RT,
+  LIGHT_COOKIE_ALIAS,
   MIP_FRAMEBUFFER_RT,
   REFLECTION_RT,
   SHADOW_ATLAS_RT,
@@ -112,6 +113,11 @@ export type TextureRef =
   | { kind: "mip-framebuffer" }
   /** 阴影图集（P13d，`render/shadows.ts`）：深度 RT，比较采样 */
   | { kind: "shadow-atlas" }
+  /**
+   * 聚光 cookie 的别名 `_alias_lightCookie`（P13k，phase-13k R2）：渲染器每帧按灯光数组解析到最后一盏 cookie 聚光的 cookie 纹理，没有 cookie
+   * 聚光的那一帧保持上一次的；采样器固定为钳边、三线性、无各向异性（WPE 是钳到黑边框，见 `GpuScene.lightCookieTarget`）。
+   */
+  | { kind: "light-cookie" }
   /**
    * 文本层的字形图集（P6b 1d）：本层排版结果所在的 R8 主图集（`color: false`）或 RGBA8 彩色图集（`true`），按字体键共享，渲染器建场景时
    * 整张上传。线性过滤、repeat、没有 mip（rea-p6b-raster 3.2，p6b 抓帧的采样器是 Wrap）。
@@ -140,7 +146,7 @@ export type TextureRef =
    */
   | { kind: "clip-mask" };
 /**
- * 运行时名字 → 纹理来源（`ScenePass.runtime` 的值）：快照与 P13b1 的两张反射 RT。effect 自己的 fbo 由调用方先判；
+ * 运行时名字 → 纹理来源（`ScenePass.runtime` 的值）：快照、P13b1 的两张反射 RT、阴影图集与聚光 cookie 的别名。effect 自己的 fbo 由调用方先判；
  * 认不出返回 null，调用方报 `render:texture-rt:<名>`。
  */
 function runtimeInput(name: string): TextureRef | null {
@@ -148,6 +154,7 @@ function runtimeInput(name: string): TextureRef | null {
   if (name === REFLECTION_RT) return { kind: "reflection" };
   if (name === MIP_FRAMEBUFFER_RT) return { kind: "mip-framebuffer" };
   if (name === SHADOW_ATLAS_RT) return { kind: "shadow-atlas" };
+  if (name === LIGHT_COOKIE_ALIAS) return { kind: "light-cookie" };
   return null;
 }
 

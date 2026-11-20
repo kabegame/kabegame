@@ -137,6 +137,23 @@ export function spotLightCylinder(): VolumetricMesh {
 }
 
 /**
+ * 开 cookie 的聚光灯体（P13k，`0x1401970a4`，rea-p13-volumetrics V1.2）：NDC 立方体 `[−1, 1]² × [z10, z11]`（z10 = 0 远、z11 = 1 近），
+ * 顶点 0–3 是 z10 的四个角 `(−1,−1) (1,−1) (1,1) (−1,1)`、4–7 同四个角在 z11；12 个三角形照 WPE 的索引常量。经 `inverse(聚光 VP)` 变回
+ * 世界后是整个方形视锥（cookie 铺满它）。`p13k-vol` 抓帧：背面、正面各 36 个索引。
+ */
+export function spotLightCube(): VolumetricMesh {
+  const z10 = 0;
+  const z11 = 1;
+  const corners = [-1, -1, 1, -1, 1, 1, -1, 1];
+  const positions: number[] = [];
+  for (const z of [z10, z11]) for (let k = 0; k < 4; k++) positions.push(corners[k * 2], corners[k * 2 + 1], z);
+  const indices = [
+    1, 0, 2, 2, 0, 3, 4, 5, 6, 4, 6, 7, 3, 0, 4, 3, 4, 7, 1, 2, 5, 5, 2, 6, 2, 3, 6, 6, 3, 7, 0, 1, 5, 0, 5, 4,
+  ];
+  return { positions: new Float32Array(positions), indices: new Uint16Array(indices) };
+}
+
+/**
  * GLM `detail::compute_inverse<4, 4, float>` 的标量展开（`FUN_14005f730`，V3）：18 个 2×2 子式 → 6 组余子式 → 乘符号 → 行列式
  * `(D0 + D1) + (D2 + D3)` → 乘 `1/det`，全程 float32。`m` 的内存布局同 `Mat4`（GLM 的 `m[c][r]` = `m[c·4 + r]`）。对抓帧的
  * `g_EffectModelMatrix` 连正负零逐位相同（`p13e-spot`、`p13e-po`、`3287715210`）。
@@ -241,8 +258,16 @@ export interface VolumetricLight extends VolumetricGeometry {
   /** `objects` 下标：渲染器按它把灯插进图层序列。 */
   object: number;
   kind: "point" | "spot";
-  /** `SHADOW` 变体（castshadow ∧ 阴影档 ≠ 0，V6）：点光的 `g_RenderVar0` / `g_RenderVar3` 每帧取这盏灯的阴影条目。 */
+  /**
+   * `SHADOW` 变体（castshadow ∧ 阴影档 ≠ 0，V6）：点光的 `g_RenderVar0` / `g_RenderVar3`、聚光的 `g_RenderVar0`（P13k，rea R5）每帧取这盏灯的
+   * 阴影条目。
+   */
   shadow: boolean;
+  /**
+   * `COOKIE` 变体的 cookie 纹理（P13k，`bundle.textures` 下标，`SceneLightObject.cookie`）：正面槽 2 绑它；灯体换成 NDC 立方体
+   * （`spotLightCube`），相机在不在灯内改按灯视锥判（`insideLightVolume`）。只有聚光有；不开 cookie 为 null。
+   */
+  cookie: number | null;
   back: ScenePass;
   front: ScenePass;
   fullscreen: ScenePass;
@@ -394,10 +419,13 @@ export async function compileVolumetrics(
     const index = light.object;
     const kind = volumetricKind(light)!;
     if (input.inGroup(index)) issues.add("volumetrics:group");
-    if (light.flags & 2) issues.add("volumetrics:cookie");
+    // `COOKIE` 只看 usecookie、不分类型（`0x14019817e`，rea R6 补正）：点光开 cookie 时着色器拿点光阴影投影的坐标采 cookie，没分到阴影
+    // 条目时是残留值（V6），语料 0 张，照报
+    if (kind === "point" && light.flags & 2) issues.add("volumetrics:cookie:point");
     const shadow = (light.flags & 1) !== 0 && shadowQuality !== 0;
+    // 聚光的 cookie（P13k）：纹理在 `bundle.ts` 已按 R1 加载（缺文件绑棋盘格）
+    const cookie = kind === "spot" && light.flags & 2 ? (light.cookie ?? null) : null;
     if (kind === "spot") {
-      if (shadow) issues.add("volumetrics:spot-shadow");
       if (spots > counts.spot) issues.add("volumetrics:spot-unassigned");
     } else if (shadow && castingPoints > Math.min(counts.pointShadow, counts.point))
       issues.add("volumetrics:shadow-unassigned");
@@ -417,27 +445,25 @@ export async function compileVolumetrics(
       POINTLIGHT: kind === "point" ? 1 : 0,
       SHADOW: shadow ? 1 : 0,
       QUALITY: quality,
+      // `COOKIE = 1` ⇔ usecookie（`0x14019817e`）；着色器用 `#ifdef COOKIE`，不开时不写键
+      ...(cookie !== null ? { COOKIE: 1 } : {}),
       // 只给点光（`0x1401982fa`），值是阴影档
       ...(kind === "point" ? { LIGHTS_SHADOW_MAPPING_QUALITY: shadowQuality } : {}),
     };
+    // 槽 2 是 cookie（`#ifdef COOKIE` 才声明）；格式只影响 `TEX<n>FORMAT`，这个槽没有 formatcombo
+    const slots = cookie !== null ? [...FRONT_SLOTS, { slot: 2, format: FBO_FORMATS.rgba8888.tex }] : FRONT_SLOTS;
     const key = `volumetrics/${index}`;
     const back = await compileVolumetricsPass(context, `${key}/back`, VOLUMETRICS_MATERIALS.back, {}, []);
-    const front = await compileVolumetricsPass(
-      context,
-      `${key}/front`,
-      VOLUMETRICS_MATERIALS.front,
-      combos,
-      FRONT_SLOTS,
-    );
+    const front = await compileVolumetricsPass(context, `${key}/front`, VOLUMETRICS_MATERIALS.front, combos, slots);
     const fullscreen = await compileVolumetricsPass(
       context,
       `${key}/fullscreen`,
       VOLUMETRICS_MATERIALS.fullscreen,
       combos,
-      FRONT_SLOTS,
+      slots,
     );
     if (!back || !front || !fullscreen) continue;
-    lights.push({ object: index, kind, shadow, ...geometry, back, front, fullscreen });
+    lights.push({ object: index, kind, shadow, cookie, ...geometry, back, front, fullscreen });
   }
   const blurs = volumetricsBlurs(quality);
   const blurH = blurs
@@ -469,6 +495,7 @@ const BLUR_SLOTS: ShaderTextureSlot[] = [{ slot: 0, format: FBO_FORMATS.rgba8888
 const VOLUMETRICS_COMBOS: ReadonlySet<string> = new Set([
   "POINTLIGHT",
   "SHADOW",
+  "COOKIE",
   "QUALITY",
   "LIGHTS_SHADOW_MAPPING_QUALITY",
   "FULLSCREEN",

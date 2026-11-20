@@ -388,3 +388,39 @@ F7 是我们第一次对照时整帧差 25 级的原因：透视工程里 FR 的
 
 - **变异**：预光照变体不带 puppet 组合键（光照按未蒙皮的姿势算）时第 208 帧 1 834 018 个像素不同（22%）、最大 217；还原后画面哈希回到 `fbe5185a…`。
 
+
+## P13k 的实测：聚光 cookie 与体积光的聚光阴影（2026-11-20）
+
+读码与抓帧核对见 `phase-13k-spot-cookie.md`「步骤 0」。
+
+### P13k-1：体积光
+
+确定性工程 `ignore/p13/k/gen_k.py`（正交 1920×1080，地面不开光照，画面上只有光柱；WPE 阴影 low、体积光 low、后处理 ultra），抓帧 `A:\p13k\<工程>\`：
+
+| 工程 | 内容 | 和 WPE（排除 FR / CLK 角） |
+|---|---|---|
+| `p13k-vol` | 缺省 cookie，不投影 | 64 个像素差 1（含 FR 块） |
+| `p13k-vol-shadow` | 聚光阴影，光柱里一个立方体 | 逐像素相同 |
+| `p13k-vol-both` | 阴影 + cookie，参数照 `3839619935` 的灯 | 逐像素相同 |
+| `p13k-vol-explicit` | `cookie: cookie/flashlight3` | 逐像素相同 |
+| `p13k-vol-bad` | `cookie` 指向不存在的文件（棋盘格） | 逐像素相同 |
+| `p13k-vol-inside` | 相机在 cookie 灯视锥里（全屏三角形） | 逐像素相同 |
+
+- **变异**：聚光不取阴影条目，`p13k-vol-shadow` 80 万个像素不同（最大 7）；不加 `COOKIE`，`p13k-vol` 107 万个不同（最大 18）。
+- **走查 `3839619935`**（复制工程 `ignore/p13/k/walk/make_iso_3839.py`，2278×1280，第 283 帧）：最大差 5、没有成块差异，是背景纹理解码的 8×8 块纹路；关掉体积光再比，差到最大 67、121 万个像素。
+
+### P13k-2：表面着色（2026-11-21）
+
+同一组确定性工程里的 `p13k-surf*`（地面与立方体是 `generic4`、另有一个 `genericimage4` 图层，都开 `LIGHTING`；灯从上往下照，cookie 投到地面上）：
+
+| 工程 | 内容 | 和 WPE（排除 FR / CLK 角） |
+|---|---|---|
+| `p13k-surf` | 只开 cookie（缺省 `flashlight1`） | 1 个像素差 1 |
+| `p13k-surf-shadow` | 阴影 + cookie（low） | 1 个像素差 1 |
+| `p13k-surf-shadow`，阴影 disabled | `spotshadowcookie` 并进 cookie 段（`capture_sweep` 临时改档，跑完改回 low） | 1 个像素差 1 |
+| `p13k-surf-two` | 两盏 cookie 灯（`flashlight1` 在前、`flashlight3` 在后）+ 一盏普通聚光 | 3 个像素差 1；两盏都采 `flashlight3`（别名取排在后面的那盏） |
+
+- **采样器**：别名在 WPE 里是钳到黑色边框 + 三线性，我们用钳边；内置 cookie 边缘一圈是 0，这几张图上看不出差别。
+- **变异**：cookie 段乘锥角，`p13k-surf` 37 万个像素不同（最大 30）；别名取排在前面的灯，`p13k-surf-two` 79 万个不同（最大 156）。还原后重建的宿主产物与变异前同一个哈希。
+- **走查 `3839619935`**：同一个复制工程按最终代码再渲染一次，和 k-1 的图逐字节相同。
+- **语料**：「HEAD」与「HEAD + P13k」两份快照（`ignore/p13/k/head2`、`mine2`，各配自己的翻译器 wasm）：默认 233 张前后一致、全部干净；`3839619935`（myprojects）从 `lightconfig:spotshadowcookie`、`volumetrics:cookie`、`volumetrics:spot-shadow` 变成干净。

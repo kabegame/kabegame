@@ -199,7 +199,7 @@ const ENGINE_COMBOS = new Set(["SKINNING", "SKINNING_ALPHA", "MORPHING", "PRELIG
  * 不影响画面、或由别处裁决的 general 键。
  * - `orthogonalprojection` / `clearcolor` / `clearenabled`：已实现。
  * - `ambientcolor` / `skylightcolor`：只进 `g_LightAmbientColor` / `g_LightSkylightColor`，渲染器照写。
- * - `lightconfig`：灯数进 `LIGHTS_*`（`lights.ts`），要阴影 / cookie 的项由 `lightConfigIssues` 另报。
+ * - `lightconfig`：灯数进 `LIGHTS_*`（`lights.ts`）；阴影（P13d、P13i）与聚光 cookie（P13k）都支持，不另报。
  * - `norecompile`、`camerapreview`：编辑器选项。
  * - `camerafade`：加载时的淡入，不改变稳定画面。
  * - `bloom`、`hdr` 与全部 `bloom*` 调节项：由后处理档位裁决（`postprocess.ts`），泛光 / HDR 由 `bloom.ts` 与 `render/bloom.ts` 实现。
@@ -592,7 +592,8 @@ export function cursorPickKind(object: SceneObject): "image" | "text" | undefine
 /**
  * 灯对象自己的键（`FUN_14025da80`）。这些键只影响 `lights.ts` 算出的 uniform 与体积光（`volumetrics.ts`，P13e：`castvolumetrics`、`density`、
  * `volumetricsexponent`；不支持的组合由那里照报 `volumetrics:*`），`cascadedistance*` 之后的项给阴影用。
- * `castshadow` / `usecookie` 单独不起作用：要 `lightconfig` 里的阴影灯数才生效，那时报 `lightconfig:*`。
+ * `castshadow` / `usecookie` 单独不起作用：要 `lightconfig` 里的阴影 / cookie 灯数才生效。`cookie`（P13k）是 `usecookie` 的聚光的
+ * cookie 纹理名（`lights.ts` 的 `lightCookieName`，加载进纹理表）。
  */
 const LIGHT_KEYS = new Set([
   "light",
@@ -611,6 +612,7 @@ const LIGHT_KEYS = new Set([
   "lightsourcesize",
   "castshadow",
   "usecookie",
+  "cookie",
 ]);
 
 /**

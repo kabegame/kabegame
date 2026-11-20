@@ -13,6 +13,7 @@ import type { ScenePass } from "../compile/bundle";
 import {
   glmInverse,
   pointLightSphere,
+  spotLightCube,
   spotLightCylinder,
   volumetricsBlurs,
   volumetricsTargetSize,
@@ -24,6 +25,7 @@ import {
 import { SceneRenderError } from "./errors";
 import { fullscreenTriangle } from "./layout";
 import type { Mat4 } from "./math";
+import { frustumPlanes } from "./mesh";
 import { createPipeline, SCENE_DEPTH_FORMAT, type GpuProgram } from "./programs";
 import { textureBuiltins, UniformBlock, type UniformEntry } from "./uniforms";
 
@@ -37,12 +39,22 @@ export const VOLUMETRICS_DEPTH_COPY_FORMAT: GPUTextureFormat = "r32float";
  * - 点光：`r·r > (dx² + dy²) + dz²`（严格大于，r 是原始 radius）；
  * - 聚光：沿灯轴投影 `t = (a.y·d.y + a.z·d.z) + a.x·d.x`、离轴距离 `perp = |d − a·t|`，`t > 0 ∧ radius ≥ t ∧ (t / radius)·R_far ≥ perp`。
  * 正交场景照样判（eye 是 `g_EyePosition`，F = (0, 0, −1)）。
+ * - 开 cookie 的聚光（P13k，`0x1401979c3`，灯体是整个方形视锥）：`p = eye + F·0.1`（不是 0.2），由灯的 VP（`cookieViewProjection`，
+ *   即 `g_AltModelMatrix`）求六个视锥平面（`FUN_1401849e0`，D3D 的深度 0…1），六面都 `dot(n, p) + w ≥ 0` 才在内（任一为负就在外，NaN 当在内）。
+ *   `p13k-vol-inside` 实测：正面换成全屏三角形。
  */
 export function insideLightVolume(
   light: Pick<VolumetricLight, "kind" | "radius" | "position" | "spot">,
   eye: readonly number[],
   forward: readonly number[],
+  cookieViewProjection?: ArrayLike<number> | null,
 ): boolean {
+  if (cookieViewProjection) {
+    const q = [0, 1, 2].map((k) => f(f(f(forward[k]) * f(0.1)) + f(eye[k])));
+    return frustumPlanes(cookieViewProjection as Mat4).every(
+      ([a, b, c, w]) => !(0 > f(f(f(f(f(a) * q[0]) + f(f(b) * q[1])) + f(f(c) * q[2])) + f(w))),
+    );
+  }
   const p = [0, 1, 2].map((k) => f(f(f(forward[k]) * f(0.2)) + f(eye[k])));
   const d = [0, 1, 2].map((k) => f(p[k] - f(light.position[k])));
   const r = f(light.radius);
@@ -61,8 +73,11 @@ export interface VolumetricLightFrame {
   viewProjection: Mat4;
   eye: readonly number[];
   forward: readonly number[];
-  /** 带阴影的点光：这一帧阴影条目的方块变换（`g_RenderVar0`）与点光阴影投影（`g_RenderVar3`）。 */
-  shadow?: { transform: ArrayLike<number>; projection: ArrayLike<number> };
+  /**
+   * 带阴影的灯：这一帧阴影条目的方块变换（`g_RenderVar0`，`light+0x310`）；点光另有点光阴影投影（`g_RenderVar3`）。聚光（P13k，rea R5）只有
+   * 方块变换，`g_RenderVar3` 仍是世界矩阵第 0 行（几何常量）。
+   */
+  shadow?: { transform: ArrayLike<number>; projection?: ArrayLike<number> };
   /** 这一帧的几何与常量（P13f2，按 `SceneState` 现算的 `volumetricGeometry`）；缺省用编译期的初值。 */
   geometry?: VolumetricGeometry;
 }
@@ -107,8 +122,12 @@ export interface VolumetricsInput {
   sceneFormat: GPUTextureFormat;
   /** 场景深度（要 `TEXTURE_BINDING`）。 */
   depth: GPUTexture;
-  /** 阴影图集（带阴影的点光读它，P13d）。 */
+  /** 阴影图集（带阴影的点光、聚光读它，P13d / P13k）。 */
   shadowAtlas: { view: GPUTextureView; sampler: GPUSampler } | null;
+  /**
+   * cookie 纹理（P13k）：`bundle.textures` 下标 → 视图与采样器（纹理自己的采样状态，`p13k-vol` 实测钳边、各向异性）。正面槽 2 绑它。
+   */
+  cookieTexture(index: number): { view: GPUTextureView; sampler: GPUSampler } | null;
   own<T extends { destroy(): void }>(resource: T): T;
 }
 
@@ -219,10 +238,13 @@ export class VolumetricsRenderer {
 
     const sphere = pointLightSphere();
     const cylinder = spotLightCylinder();
+    const cube = spotLightCube();
     const size = (t: Target) => ({ width: t.width, height: t.height, textureWidth: t.width, textureHeight: t.height });
     const atlas = input.shadowAtlas;
     for (const light of volumetrics.lights) {
-      const mesh = light.kind === "point" ? sphere : cylinder;
+      // 开 cookie 的聚光是 NDC 立方体（P13k），其余聚光是圆柱
+      const mesh = light.kind === "point" ? sphere : light.cookie !== null ? cube : cylinder;
+      const cookie = light.cookie !== null ? input.cookieTexture(light.cookie) : null;
       const backProgram = programOf(light.back, "back");
       const back = this.createDraw(
         input,
@@ -240,10 +262,12 @@ export class VolumetricsRenderer {
               ? atlas?.view
               : binding.slot === 1
                 ? this.back.view
-                : binding.slot === 3
-                  ? this.single.view
-                  : null;
-          const sampler = binding.slot === 0 ? atlas?.sampler : backSampler;
+                : binding.slot === 2
+                  ? cookie?.view
+                  : binding.slot === 3
+                    ? this.single.view
+                    : null;
+          const sampler = binding.slot === 0 ? atlas?.sampler : binding.slot === 2 ? cookie?.sampler : backSampler;
           if (!view || !sampler) throw new SceneRenderError([`render:volumetrics-slot:${binding.slot}`]);
           return [
             { binding: binding.binding, resource: view },
@@ -436,9 +460,11 @@ export class VolumetricsRenderer {
       Object.assign(values, geometry.constants);
       if (input.shadow) {
         values.g_RenderVar0 = input.shadow.transform;
-        values.g_RenderVar3 = input.shadow.projection;
+        if (input.shadow.projection) values.g_RenderVar3 = input.shadow.projection;
       }
-      draws.inside = insideLightVolume({ kind: draws.light.kind, ...geometry }, input.eye, input.forward);
+      // 开 cookie 的聚光按灯视锥判（P13k）：灯的 VP 就是这一帧的 `g_AltModelMatrix`
+      const cookieVp = draws.light.cookie !== null ? geometry.constants.g_AltModelMatrix : null;
+      draws.inside = insideLightVolume({ kind: draws.light.kind, ...geometry }, input.eye, input.forward, cookieVp);
       this.write(draws.back, values);
       this.write(draws.inside ? draws.fullscreen : draws.front, values);
     }

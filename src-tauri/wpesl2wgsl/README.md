@@ -89,7 +89,7 @@ interface TranslateRequest {
 |---|---|
 | `request` | 请求 JSON 无法解析，或 COMBO 值不是整数 / 布尔 |
 | `include` | 缺头文件，见 `missing`；只有几何段缺时 `stage` 为 `"geometry"` |
-| `require` | `#require` 展开不了，见 `requires`：未知的库名，或聚光的 cookie（`LightingV1/spot-cookie`；点光、平行光的阴影 P13d 起展开，聚光阴影 P13i 起展开） |
+| `require` | `#require` 展开不了，见 `requires`：未知的库名（`LightingV1` 的各种灯、阴影与聚光 cookie 都展开：P13d、P13i、P13k） |
 | `texture` | 缺缺省纹理的格式，见 `missingTextures` 与「缺纹理格式」；补上 `defaultFormats` 再调一次 |
 | `preprocess` | `#if` 没有闭合、`#if` 里宏展开过深、未知预处理指令（`file` / `line` 指向原文） |
 | `rewrite` | 不支持的全局声明、两阶段同名的引擎 uniform（都没有 `material`）类型不同、纹理函数参数不是已声明的纹理；几何着色器展开不支持的写法（`IN[1]`、`OUT.RestartStrip()` 等）；`int` / `uint` / 矩阵数组的 varying；varying 打包后仍超过 16 个 location、要打包却认不出 `main` 或正文里已有 `kb_main` / `kb_varying_*` |
@@ -289,7 +289,9 @@ WPE 在 D3D11 下每个阶段有自己的常量缓冲，但材质常量**按材�
    - `#require` 按 WPE 语义现场展开（`library.rs`）：`LightingV1` 在 `LIGHTING` 非 0 时按 `LIGHTS_*` 生成灯光 uniform 与 `PerformLighting_V1`，
      否则什么都不插；逐灯计算在公开头文件 `common_pbr_2.h`，这里只负责遍历。P13d 起照 WPE 的生成器展开点光与平行光的阴影
      （`LIGHTS_POINT_SHADOW` / `LIGHTS_DIRECTIONAL_SHADOW`，带阴影的灯占前几个槽，后面的普通灯从阴影数之后开始；平行光的级联下标照抄 WPE
-     的 `B0 + k + c`，两盏以上会读错，见 rea-p13-shadows R1）。未知的库、聚光的阴影与 cookie 报 `phase: "require"`。
+     的 `B0 + k + c`，两盏以上会读错，见 rea-p13-shadows R1）。聚光照 WPE 分四段（阴影 + cookie → cookie → 阴影 → 普通，P13i、P13k），
+     cookie 两段不乘锥角、颜色乘 `texSample2D(COOKIE_SAMPLER, 投影坐标.xy).rgb`（`COOKIE_SAMPLER` 由着色器在 `LIGHTS_COOKIE` 下定义），
+     级联基址 `B0 = SSC + SC + SS`。未知的库报 `phase: "require"`。
    - `#version` / `#extension` / `#pragma` 去掉。
    - 带几何段时，几何段在顶点段之后预处理，顶点段展开过的头文件只求宏、不出行（见下节第 1 条）。
 4. **几何着色器展开**（`geometry.rs`，只在带几何段时）：顶点段与几何段拼成一段顶点着色器，再交给下一步，见「几何着色器展开」。
@@ -482,7 +484,6 @@ void main() {
 
 | 现象 | 原因 |
 |---|---|
-| `phase: "require"`，`LightingV1/spot-cookie` | 聚光的 cookie 要 `_alias_lightCookie`，渲染器没有（语料 0 张）；聚光阴影 P13i 起展开 |
 | `Array size must be greater than zero` | `BONECOUNT` 等引擎宏未定义（骨骼蒙皮），可经 `defines` 传入 |
 
 另外，glsl-in 只认 Vulkan 语义的 GLSL 450，这正是改写这一步存在的原因；naga 的 `glsl-in` / `wgsl-out` 在其支持表里是二档（维护但测试较少）。
