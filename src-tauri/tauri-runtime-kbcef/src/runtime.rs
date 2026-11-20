@@ -82,6 +82,13 @@ mod imp {
         "PrivateNetworkAccessSendPreflights",
         "BlockInsecurePrivateNetworkRequests",
     ];
+    // 不接系统媒体集成（Windows SMTC、macOS「正在播放」、Linux MPRIS）与媒体键:
+    // Chromium 只在这个特性开着时建 MediaKeysListenerManagerImpl,系统媒体控件
+    // 挂在它下面。开着时壁纸里的 <audio>(场景声音、网页壁纸的音乐)会被登记成
+    // 应用自己的系统媒体会话,壁纸的媒体集成又读到这个会话,脚本按「有媒体在放」
+    // 暂停自己的音乐、会话变暂停后再恢复,每秒自激一次;媒体键也会被壁纸的声音抢走。
+    // WPE 的 webwallpaper64.exe / wallpaperui.exe 同样带着这一项。
+    const SYSTEM_MEDIA_DISABLED_FEATURES: &[&str] = &["HardwareMediaKeyHandling"];
     // Chromium 桌面默认 15s(Android 5s)无输入回执才判渲染进程卡死,之后再等 1s
     // 主线程 ping。我们的 on_render_process_unresponsive 直接 terminate + reload,
     // 15s 体感太长,改用 Android 的 5s。
@@ -1085,6 +1092,7 @@ mod imp {
                 // features assume tabs::TabInterface exists and crash on SPA
                 // soft navigations when variations enable them.
                 merge_feature_switch(cl, "disable-features", CHROME_ONLY_DISABLED_FEATURES);
+                merge_feature_switch(cl, "disable-features", SYSTEM_MEDIA_DISABLED_FEATURES);
                 merge_feature_switch(cl, "enable-features", &[RENDERER_HANG_WATCHER_FEATURE]);
                 #[cfg(target_os = "linux")]
                 {
