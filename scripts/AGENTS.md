@@ -122,8 +122,18 @@ deno task --cwd apps/kabegame test:watch            # watch 模式，改哪跑�
 报出 `dirty: EnvVarChanged { name, old_value, new_value }` 和 `stale: changed <文件>`。
 
 代价是每个目录各存一份依赖产物（CEF / V8 / FFmpeg 都不小），换来的是「改完代码 → check →
-dev」不再每轮全量重编。`kabegame-cli` 由 `deno task b -c kabegame-cli` 构建，仍在
-`target/debug/kabegame-cli`（`kabegame-plugin` skill 用的就是这个路径）。
+dev」不再每轮全量重编。
+
+**预先构建好的工具不跟着隔离走**。打包 `.kgpg` 用的 `kabegame-cli` 由 `deno task b -c kabegame-cli`
+（build 命令）产出，固定在 `target/`；dev / check / test 流程只是拿来用，所以 `target-dir.ts` 在注入
+`target-dev` 的同时用 `KABEGAME_CLI` 把它指回 `target/release`（没有就退 `target/debug`）。
+`src-crawler-plugins/package-plugin.ts` 默认按 `CARGO_TARGET_DIR` 找 cli——那是给
+`CARGO_TARGET_DIR=target-22` 的隔离构建准备的（那种场景下 cli 确实同处一个 target），不指回去的话
+dev 启动时的插件打包会报「找不到 cli `target-dev/release/kabegame-cli.exe`」。
+`kabegame-plugin` skill 用的也是 `target/debug/kabegame-cli`，路径不变。
+
+反过来，fork 的 `cargo-tauri`（`TauriCliPlugin`）**要**跟着隔离走：它是构建环节的一部分，和主构建
+共享依赖产物，各目录内自洽才不会被 `-Awarnings` 之类的差异掀翻，代价只是 `target-dev` 里多编一份。
 
 ### 数据目录模式（`--data`）
 - `dev`（所有不带 `--release` 的命令的默认值：`dev` / `b` / `start` / `check` / `test`）：使用仓库内的 `.kabegame/debug/data`、`.kabegame/debug/cache` 和 `.kabegame/debug/tmp` 目录——与已安装应用隔离

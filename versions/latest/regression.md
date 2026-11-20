@@ -39,6 +39,13 @@ cargo 把 build script 读到的环境变量**值**记进 fingerprint，值一�
 来源有三个：`deno task check` / `test` / `start` 的 `--data` 默认 prod 而 `dev` / `b` 默认 dev，却共用 `target/debug`；
 VSCode 的 rust-analyzer 用同一个 `target/` 跑 `cargo check`，环境里没有 `deno task` 注入的那些变量（而且它自己那次 check 是失败的）；
 `tauri.conf.json` / `capabilities/main.json` / `index.html` 每次 `beforeBuild` 无条件重写，内容一字不差也刷新 mtime。
+**一处回归**（用户实测抓到）：打包 `.kgpg` 用的 `kabegame-cli` 是 `deno task b` 的产物、固定在 `target/`，
+而 `src-crawler-plugins/package-plugin.ts` 默认按 `CARGO_TARGET_DIR` 找它（那是给 `target-22` 隔离构建
+准备的），于是 dev 启动时的插件打包去 `target-dev/release/` 找、五个插件连续报「请在 kabegame 父仓库
+构建 cli 工具」。修成在 `target-dir.ts` 注入 `target-dev` 的同时用 `KABEGAME_CLI`（打包脚本本来就支持
+这个变量）把 cli 指回 `target/release`（没有就退 `target/debug`），不碰子仓库、也不破坏 `target-22`。
+fork 的 `cargo-tauri` 则相反——它是构建环节，继续跟着隔离走。
+
 改动：产物目录按命令隔离（`b` → `target/`，其余 → `target-dev/`，新增 `scripts/target-dir.ts`，显式 `CARGO_TARGET_DIR` 优先，`.mcp.json` 给 `kabegame-dev` MCP 配同一个目录）、
 `--data` 默认值统一成「带 `--release` 为 prod，否则 dev」、三个生成文件改成内容有变才写（`writeFileIfChanged`）、rust-analyzer 配 `cargo.targetDir`（`.vscode/` 不入库）。
 另有一处**本次没改**：`src-tauri/kabegame/Cargo.toml` 的 `[profile.dev]` / `[profile.release]` 被 cargo 忽略（非根包 profile 无效，`flycheck0/stderr` 第一行就是这个 warning），
@@ -56,7 +63,8 @@ VSCode 的 rust-analyzer 用同一个 `target/` 跑 `cargo check`，环境里没
 | [ ] | B6 首次 dev 全量编译 | Windows | 停掉在跑的 dev 后 `deno task dev -c kabegame` | 在 `target-dev/` 下全量编一次后正常起来 | 没做：`target-dev/` 是空的，这一次要全量编（CEF / V8 / FFmpeg 都在里面）。想省掉就把现有 `target` 改名成 `target-dev`（同盘改名是瞬时的，当前 `target/debug` 里正是 dev 产物；`target/release` 只剩 11-03 的 `kabegame-cli`），改名前须先停掉 dev app，否则占用 |
 | [ ] | B7 check → dev 不再重编 | Windows | 连着跑 `deno task check -c kabegame --skip vue` 与 `deno task dev -c kabegame`，各两遍 | 第二遍起 cargo 直接 `Finished`，`kabegame-core` / 两个 exe 都不重编 | 没做：要等 B6 把 `target-dev/` 填满。验证时可带 `CARGO_LOG=cargo::core::compiler::fingerprint=info` 看有没有 `EnvVarChanged` |
 | [ ] | B8 MCP 跟到新目录 | Windows | 重启 Claude Code（让 `kabegame-dev` MCP 带上新 env），调它的 `status` / 重建场景宿主 | 场景宿主产物指向 `target-dev/debug/resources/wpe-scene` | 没做：要重启 MCP 进程才生效 |
-| [ ] | B9 `deno task b` 仍落 `target/` | Windows | `deno task b -c kabegame-cli` | 产物在 `target/debug/kabegame-cli.exe`（`kabegame-plugin` skill 用的就是这个路径） | 没做 |
+| [x] | B9 `deno task b` 仍落 `target/` | Windows | 用户为解决 B11 跑了 `deno task b -c kabegame-cli` 与 `--release` 版 | 产物在 `target/debug/` 与 `target/release/` | 2026-11-21：02:25 的 debug（107 MB）与 02:41 的 release（85 MB）都在 `target/` 下，`kabegame-plugin` skill 的路径不变 |
+| [x] | B11 插件打包用的 cli（回归） | Windows | 用 `target-dir.ts` 注入的 dev 环境跑 `deno task package --only konachan --out-dir <临时>` | 不再找 `target-dev/release/kabegame-cli.exe`，打包成功 | 2026-11-21 Claude：`KABEGAME_CLI=D:\Codes\kabegame\target\release\kabegame-cli.exe`、`konachan.kgpg (568.79 KB)`、exit=0。修复前用户实测报「找不到 cli … 请在 kabegame 父仓库构建 cli 工具！」（5 个插件连续失败） |
 | [ ] | B10 三个生成文件跳过重写 | Windows | 连着跑两次 `deno task b -c kabegame --skip cargo` | 第二次日志打「内容未变，跳过」，`tauri.conf.json` 的 mtime 不动 | 没做：会跑完整前端构建并重打包插件 |
 
 ## 拖入落点提示显示成原始 key（`import.dropZone.*`）
