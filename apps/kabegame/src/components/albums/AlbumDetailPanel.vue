@@ -157,7 +157,7 @@ import { albumEmptyImageUrl } from "@/assets/illustrations";
 /**
  * 画册页右栏「画册信息」面板：纯展示 + 派发，无副作用。
  * 精简操作（轮播 / 重命名 / 新建子画册-或-立即同步）直接触发；其余操作（移动到…、
- * 打开虚拟盘、删除等）通过标题栏「⋯」交给宿主复用右键菜单那套 ActionRenderer。
+ * 删除等）通过标题栏「⋯」交给宿主复用右键菜单那套 ActionRenderer。
  */
 
 export type AlbumPanelCommand =

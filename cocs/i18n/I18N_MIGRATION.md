@@ -184,7 +184,7 @@
 
 | 文件 | 待迁移内容 |
 |------|------------|
-| `apps/kabegame/src/views/Settings.vue` | `StyledTabs` 的 `title="设置"`；应用设置内所有 `SettingRow` 的 `label` / `description`（开机启动、画册盘、图片点击行为、应用内预览/系统默认打开、图片宽高比、画廊列数、图片对齐方式、居中/靠上/靠下、清理应用数据、自动打开 WebView、生成测试图片、桌面端开发 WebView 窗口、打开 WebView 窗口）；tab 标签「壁纸设置」「下载设置」；壁纸区块「壁纸轮播设置」「启用壁纸轮播」「选择画册」「当前壁纸：」；下载区块所有 label/description；清理数据等按钮与确认对话框文案 |
+| `apps/kabegame/src/views/Settings.vue` | `StyledTabs` 的 `title="设置"`；应用设置内所有 `SettingRow` 的 `label` / `description`（开机启动、图片点击行为、应用内预览/系统默认打开、图片宽高比、画廊列数、图片对齐方式、居中/靠上/靠下、清理应用数据、自动打开 WebView、生成测试图片、桌面端开发 WebView 窗口、打开 WebView 窗口）；tab 标签「壁纸设置」「下载设置」；壁纸区块「壁纸轮播设置」「启用壁纸轮播」「选择画册」「当前壁纸：」；下载区块所有 label/description；清理数据等按钮与确认对话框文案 |
 | `apps/kabegame/src/components/settings/items/WallpaperTransitionSetting.vue` | 过渡方式选项 label/文案 |
 | `apps/kabegame/src/components/settings/items/WallpaperStyleSetting.vue` | 壁纸样式选项 |
 | `apps/kabegame/src/components/settings/items/WallpaperRotationTargetSetting.vue` | 轮播目标选项 |

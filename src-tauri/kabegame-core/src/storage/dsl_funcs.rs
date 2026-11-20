@@ -5,8 +5,7 @@
 //! 当前提供:
 //! - [`get_plugin`](plugin_id [, locale]) → JSON_TEXT
 //!   返回 `{"id","name","description","baseUrl"}`; plugin 不存在 → `"null"`。
-//!   name / description 按 locale 解析 (locale 缺省走 [`kabegame_i18n::current_vd_locale`])。
-//! - `vd_display_name(canonical)` → 当前 VD locale 下的路径显示名。
+//!   name / description 按 locale 解析 (locale 缺省走 [`kabegame_i18n::current_display_locale`])。
 //! - `crawled_at_seconds(timestamp)` → 规整秒/毫秒时间戳。
 //! - `name_language_bucket(name)` / `name_language_rank(bucket)` → 名称语言分桶与排序。
 //! - `kb_rand(seed, id)` → 基于 SplitMix64 finalizer 的确定性随机排序值。
@@ -64,7 +63,6 @@ pub(crate) fn register_dsl_functions(conn: &Connection) -> Result<(), rusqlite::
     register_kb_rand(conn)?;
     register_get_plugin(conn)?;
     register_crawled_at_seconds(conn)?;
-    register_vd_display_name(conn)?;
     register_name_language_functions(conn)?;
     register_is_search_dummy_url(conn)?;
     register_kb_palette_distance(conn)?;
@@ -235,21 +233,6 @@ fn name_language_rank(bucket: &str) -> i64 {
     }
 }
 
-/// `vd_display_name(canonical)` — 当前全局 locale 下 canonical 段名 (如
-/// `'subAlbums'` / `'hidden-album'` / `'image'`) 的本地化字符串。读取 thread-local
-/// `current_vd_locale()`, 与 programmatic 的 `kabegame_i18n::vd_display_name` 等价。
-fn register_vd_display_name(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.create_scalar_function(
-        "vd_display_name",
-        1,
-        FunctionFlags::SQLITE_UTF8,
-        |ctx| -> rusqlite::Result<String> {
-            let canonical: String = ctx.get(0)?;
-            Ok(kabegame_i18n::vd_display_name(&canonical))
-        },
-    )
-}
-
 /// `crawled_at_seconds(t)` — 把 `images.crawled_at` (可能 ms 或 s 时间戳) 规整为秒。
 /// 阈值 253402300799 (= 9999-12-31 23:59:59 unix epoch seconds): 大于此值视作毫秒
 /// (除以 1000), 否则原样。用于替换全工程 4 处重复的 `CASE WHEN crawled_at > 253402300799 ...`
@@ -310,7 +293,7 @@ fn get_plugin_json(plugin_id: &str, locale: Option<&str>) -> String {
     let locale_str: &str = match locale {
         Some(l) => l,
         None => {
-            locale_owned = kabegame_i18n::current_vd_locale().to_string();
+            locale_owned = kabegame_i18n::current_display_locale().to_string();
             locale_owned.as_str()
         }
     };

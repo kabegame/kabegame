@@ -1816,7 +1816,6 @@ mod tests {
             vec!["kabegame-cli", "pathql", "generate"],
             vec!["kabegame-cli", "data", "import-image"],
             vec!["kabegame-cli", "plugin", "pack"],
-            vec!["kabegame-cli", "vd", "mount"],
             vec!["kabegame-cli", "plugin", "run", "--plugin", "x"],
             vec!["kabegame-cli", "ipc-status"],
         ] {

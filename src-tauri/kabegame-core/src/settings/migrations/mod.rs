@@ -33,6 +33,7 @@ mod v002_mcp_settings;
 mod v003_wallpaper_rotation_path;
 mod v004_wallpaper_enabled;
 mod v005_wallpaper_targets;
+mod v006_drop_album_drive;
 
 type MigrationFn = fn(&mut Value) -> Result<(), String>;
 
@@ -69,9 +70,14 @@ const MIGRATIONS: &[Migration] = &[
         name: "wallpaper_targets",
         up: v005_wallpaper_targets::up,
     },
+    Migration {
+        version: 6,
+        name: "drop_album_drive",
+        up: v006_drop_album_drive::up,
+    },
 ];
 
-pub const LATEST_VERSION: u32 = 5;
+pub const LATEST_VERSION: u32 = 6;
 pub const VERSION_KEY: &str = "schemaVersion";
 
 pub fn current_version(json: &Value) -> u32 {

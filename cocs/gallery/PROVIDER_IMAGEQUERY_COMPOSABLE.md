@@ -1,12 +1,12 @@
 # Provider + ImageQuery 可组合系统
 
-本文档记录画廊与虚拟盘共用的 Provider 查询系统，说明当前实现、调用链和扩展原理。
+本文档记录画廊使用的 Provider 查询系统，说明当前实现、调用链和扩展原理。
 
 ## 目标
 
 - 把 SQL 语义拆成三个正交维度：`JOIN`（数据源）、`WHERE`（过滤）、`ORDER BY`（排序）。
 - 让上层 Provider 组合片段，下层 Provider 只接收组合后的 `ImageQuery` 并执行。
-- Gallery 与 VD 复用同一套查询表达，不再依赖字符串嗅探。
+- 画廊的各条查询路径复用同一套查询表达，不再依赖字符串嗅探。
 
 ## 当前 DSL 路由与行查询
 
@@ -92,14 +92,13 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 3. 列表与分页时，`Storage` 通过：
    - `build_count_sql()` 执行总数查询
    - `build_sql()` 执行分页查询
-4. Gallery Browse 与 VD 删除逻辑均复用同一个 `ImageQuery`。
+4. Gallery Browse 复用同一个 `ImageQuery`。
 
 关键文件：
 
 - [`src-tauri/kabegame-core/src/providers/main_root.rs`](/src-tauri/kabegame-core/src/providers/main_root.rs)
 - [`src-tauri/kabegame-core/src/providers/common.rs`](/src-tauri/kabegame-core/src/providers/common.rs)
 - [`src-tauri/kabegame-core/src/gallery/browse.rs`](/src-tauri/kabegame-core/src/gallery/browse.rs)
-- [`src-tauri/kabegame-core/src/providers/vd_ops.rs`](/src-tauri/kabegame-core/src/providers/vd_ops.rs)
 - [`src-tauri/kabegame-core/src/storage/gallery.rs`](/src-tauri/kabegame-core/src/storage/gallery.rs)
 
 画册详情路径 `album/<albumId>/…` 先贡献画册成员条件，再复用画廊路由：默认按抓取时间排序，
@@ -107,7 +106,7 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 `_kb_desc`。另支持 `image-only` / `video-only` 根段，在画册内叠加媒体类型过滤。语义与根级
 `all` / `wallpaper-order` 对齐。前端路径拼装见 [`apps/kabegame/src/utils/albumPath.ts`](/apps/kabegame/src/utils/albumPath.ts)。
 
-画廊根级由 `gallery_media_type_router` 列举 `media-type/image`、`media-type/video`、`media-type/x-wpe`，按 `video/*` / `x-wpe/*` / 其余分组计数，三类互补；只列出当前上下文里有数据的分类（不补 0，字母序），三个段名都可直接路由，所以选中后计数为 0 也不会 not found。前端枚举见 `GALLERY_MEDIA_KINDS`，WPE 显示为 Wallpaper Engine，其子类显示为视频 / 网页 / 场景；详情面板的类型芯片两段都是筛选。虚拟盘复用媒体分类与格式 provider，中文根目录为「按媒体」→「图片」/「视频」，不含 WPE（`vd_image_entry_from_row` 已隐藏 `x-wpe/*` 行）。
+画廊根级由 `gallery_media_type_router` 列举 `media-type/image`、`media-type/video`、`media-type/x-wpe`，按 `video/*` / `x-wpe/*` / 其余分组计数，三类互补；只列出当前上下文里有数据的分类（不补 0，字母序），三个段名都可直接路由，所以选中后计数为 0 也不会 not found。前端枚举见 `GALLERY_MEDIA_KINDS`，WPE 显示为 Wallpaper Engine，其子类显示为视频 / 网页 / 场景；详情面板的类型芯片两段都是筛选。
 
 `images.type` 由 Rust 写入口保证非空、小写且为「主类/子类」。格式列举直接按 `SUBSTR(sub.type, INSTR(sub.type, '/') + 1)` 分组计数，格式过滤同样直接取子类，不再做 LOWER / COALESCE 或过滤空格式。新入库使用规范后缀（如 `jpg` / `mov` / `mkv`）；v049 不归并已合规的历史别名（例如 `image/jpeg`）。执行计划约束见 `cocs/provider-dsl/RULES.md` §2.2。
 
@@ -119,13 +118,6 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 - 切换到 desc：`query.to_desc()`
 
 这样 `CommonProvider`、`MainWallpaperOrderProvider`、`MainSurfRecordProvider` 和 `browse.rs` 使用同一规则，不再手写分支。
-
-## VD 复用点
-
-- `vd_ops::album_id_from_query` 已改为 `query.album_id()`。
-- 删除文件能力判断 `query_can_delete_child_file` 依赖结构化内省，而非 SQL 字符串包含判断。
-
-这保证了后续 SQL 片段重排、补充条件时 VD 逻辑仍稳定。
 
 ## 缓存兼容策略
 
@@ -147,7 +139,6 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 1. 在 `ImageQuery` 增加组件函数（如 `landscape_filter()`）。
 2. 在对应 Provider 路径分支中把该过滤与既有数据源/排序 `merge`。
 3. 不改 `Storage` 查询执行层（它只认 `build_sql/build_count_sql`）。
-4. 若需要 VD 能力控制，补充结构化内省函数，避免字符串匹配。
 
 ### B. 新增一个排序策略（ORDER BY）
 
@@ -164,7 +155,7 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 1. 增加 `collection_source(id)`（JOIN + 主键过滤）。
 2. 增加对应排序（如 `sort_by_collection_order()`）。
 3. 组合为别名构造函数（如 `by_collection(id)`）。
-4. 在 Main/VD 路由 Provider 中接入该构造函数。
+4. 在 Main 路由 Provider 中接入该构造函数。
 
 ## 设计约束与最佳实践
 
@@ -187,8 +178,6 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 - **应用的桶**：`-3x4` 竖屏 / `3x4-4x3` 方正 / `4x3-16x9` 横屏 / `16x9-` 宽屏 / `unknown`（前端 `GALLERY_ASPECT_BUCKETS`）。
   过窄、过宽分别并入竖屏、宽屏，五个桶合起来正好是全部图片；恰为 3:4 的图归竖屏（右闭）。
   详情面板的「按此宽高比筛选」用 `aspectBucketForDimensions`，与后端同一判定。
-- **VD「按尺寸」** 目录显示各语言友好名称，每项带具体上下界落到 `vd_aspect_bucket_router`（区间）或
-  `vd_aspect_unknown_router`，与前端同一组桶；e2e 逐语言逐目录与对应画廊段比对结果集。
 - **筛选**：区间走 [`aspect_range_provider`](/src-tauri/kabegame-core/src/providers/dsl/shared/aspect_range_provider.yaml)，
   整数交叉乘法 `w*min_h > h*min_w AND w*max_h <= h*max_w`，缺下界补 `0x1`、缺上界补 `1x0`（∞），不需特判；
   有效性由 `+images.aspect_ratio IS NOT NULL` 判定，无效时整条谓词为 FALSE 而非 NULL，`~not` 取非留得住这些图。
@@ -235,7 +224,7 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 
 | 维度 | 列举 SQL 所在 | 说明 |
 | --- | --- | --- |
-| 年 / 月 / 日 | `shared/dates_provider`、`year_provider`、`month_provider`（VD 共用） | `DISTINCT` 改 `GROUP BY` + `COUNT(*) AS count`；画廊三层 router 把 `${out.meta.count}` 透传进 meta |
+| 年 / 月 / 日 | `shared/dates_provider`、`year_provider`、`month_provider` | `DISTINCT` 改 `GROUP BY` + `COUNT(*) AS count`；画廊三层 router 把 `${out.meta.count}` 透传进 meta |
 | 媒体格式 | `gallery_media_type_provider` | 原本就按格式分组计数，仅把计数放进 meta |
 | image / video / x-wpe | `gallery_media_type_router.yaml` | 按 kind 分组，与三类固定行 JOIN（无数据的分类不列出）；`image` / `video` / `x-wpe` 三条 resolve，路由不跑 SQL |
 | 大小 | `gallery_size_router.yaml` | 八个应用桶（`unknown` 在前、其余按大小升序）按 CASE 分组，与固定桶表 LEFT JOIN 补 0；字节值同 `size_bucket_router` |
@@ -255,7 +244,7 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
   40%～50%，日期与插件基本持平。
 - **排序** `sort/by-aspect` 为 `ORDER BY images.aspect_ratio, images.id`，索引（含 rowid）正好覆盖，翻页按索引顺序读
   （100 万图一页约 3.5s → 1ms）；`/_kb_desc` 反向扫描同样走索引。
-- **收藏 / 隐藏标记与 `hide/` 用相关 `EXISTS`**（`gallery_route` / `vd_root_router` 的 `is_favorite` / `is_hidden`，
+- **收藏 / 隐藏标记与 `hide/` 用相关 `EXISTS`**（`gallery_route` 的 `is_favorite` / `is_hidden`，
   `gallery_hide_router` / `albums_images_hide_provider` 的 `NOT EXISTS`），不 LEFT JOIN `album_images`。
   - **语义等价**：JOIN 的 ON 固定主键 `(album_id, image_id)` 两列，最多匹配一行，不改行数；两种写法都只给 0/1，不出 NULL。
   - **为什么不是 JOIN**：COUNT 把整条查询包成子查询，外层不读这两列时 SQLite 不求值未用到的子查询列，探测随之省掉；
@@ -288,7 +277,6 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 - **`GalleryTimeFilterPayload`**：`{ months, days }`，一次返回给前端；Tauri 命令 `get_gallery_time_filter_data`。
 - **`providers` 对 `gallery_time` 的再导出**：`kabegame_core::providers` 仍导出 `GalleryTimeFilterPayload` 等与 `storage::gallery_time` 相同符号（便于与插件分组等并列使用）。
 - **Gallery Main `date/*`**：`MainDateGroupProvider` 根目录为**年份**（`main_date_browse::gallery_distinct_years`）；子路径解析为 `MainDateScopedProvider`（年→月→日），与画廊 `date/<YYYY|YYYY-MM|YYYY-MM-DD>` 一致。
-- **VD「按时间」**：`VdByDateProvider` 复用 `list_main_date_browse_root_entries` / `main_date_child_provider`，并额外提供「范围」与说明文件；时间层级与 Main 相同，不再单独按月平铺。
 
 ## 前端（画廊路径控件位置）
 
@@ -314,7 +302,5 @@ ImageGrid 只在行读取出口调用 `toLookupRowsPath`，rows 观察方和请�
 - [`src-tauri/kabegame-core/src/providers/main_date_browse.rs`](/src-tauri/kabegame-core/src/providers/main_date_browse.rs)
 - [`src-tauri/kabegame-core/src/providers/common.rs`](/src-tauri/kabegame-core/src/providers/common.rs)
 - [`src-tauri/kabegame-core/src/providers/main_root.rs`](/src-tauri/kabegame-core/src/providers/main_root.rs)
-- [`src-tauri/kabegame-core/src/providers/date_group.rs`](/src-tauri/kabegame-core/src/providers/date_group.rs)（`VdByDateProvider` + 范围）
 - [`src-tauri/kabegame-core/src/gallery/browse.rs`](/src-tauri/kabegame-core/src/gallery/browse.rs)
-- [`src-tauri/kabegame-core/src/providers/vd_ops.rs`](/src-tauri/kabegame-core/src/providers/vd_ops.rs)
 - [`src-tauri/kabegame-core/src/providers/cache.rs`](/src-tauri/kabegame-core/src/providers/cache.rs)

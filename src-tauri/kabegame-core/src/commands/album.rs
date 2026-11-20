@@ -7,10 +7,6 @@ use crate::storage::image_events::{
     remove_images_from_album_with_event,
 };
 use crate::storage::Storage;
-#[cfg(feature = "virtual-driver")]
-use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(feature = "virtual-driver")]
-use crate::virtual_driver::VirtualDriveService;
 use kabegame_i18n::t;
 use serde_json::Value;
 
@@ -31,8 +27,6 @@ pub fn get_album_preview(album_id: String, limit: usize) -> Result<Value, String
 
 pub fn rename_album(album_id: String, new_name: String) -> Result<Value, String> {
     Storage::global().rename_album(&album_id, &new_name)?;
-    #[cfg(feature = "virtual-driver")]
-    crate::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)
 }
 
@@ -55,15 +49,11 @@ pub fn delete_album(album_id: String) -> Result<Value, String> {
             config.set_rotation_path(None);
         }
     })?;
-    #[cfg(feature = "virtual-driver")]
-    crate::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)
 }
 
 pub fn move_album(album_id: String, new_parent_id: Option<String>) -> Result<Value, String> {
     Storage::global().move_album(&album_id, new_parent_id.as_deref())?;
-    #[cfg(feature = "virtual-driver")]
-    crate::virtual_driver::VirtualDriveService::global().bump_albums();
     Ok(Value::Null)
 }
 
@@ -104,8 +94,6 @@ pub async fn convert_local_folder_album_to_normal(album_id: String) -> Result<Va
         return Err(t!("albums.localFolderErrors.syncInProgress").to_string());
     }
     let converted_ids = Storage::global().convert_local_folder_album_to_normal(&album_id)?;
-    #[cfg(feature = "virtual-driver")]
-    VirtualDriveService::global().bump_albums();
     serde_json::to_value(converted_ids).map_err(|e| e.to_string())
 }
 
@@ -140,8 +128,6 @@ pub async fn add_images_to_album(
 ) -> Result<Value, String> {
     Storage::global().ensure_album_is_writable(&album_id)?;
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
-    #[cfg(feature = "virtual-driver")]
-    VirtualDriveService::global().notify_album_dir_changed(&album_id);
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
@@ -157,8 +143,6 @@ pub async fn add_task_images_to_album(task_id: String, album_id: String) -> Resu
         }));
     }
     let r = add_images_to_album_with_event(&album_id, &image_ids)?;
-    #[cfg(feature = "virtual-driver")]
-    VirtualDriveService::global().notify_album_dir_changed(&album_id);
     serde_json::to_value(r).map_err(|e| e.to_string())
 }
 
@@ -168,8 +152,6 @@ pub async fn remove_images_from_album(
 ) -> Result<Value, String> {
     Storage::global().ensure_album_is_writable(&album_id)?;
     let removed = remove_images_from_album_with_event(&album_id, &image_ids)?;
-    #[cfg(feature = "virtual-driver")]
-    VirtualDriveService::global().notify_album_dir_changed(&album_id);
     Ok(serde_json::json!({
         "removed": removed.len(),
     }))
@@ -232,25 +214,6 @@ pub async fn add_local_folder_album(
     let sync_canon = sync_folder
         .canonicalize()
         .unwrap_or_else(|_| sync_folder.to_path_buf());
-
-    // 唯一需要刻意避开的「禁区根」：VD 挂载点。根命中直接报错；递归子目录由同步钩子 forbidden_roots 静默剪枝。
-    // （下载输出目录不再禁止：同步时按路径复用图库已有图片，不会产生 local_path 冲突。）
-    #[cfg(feature = "virtual-driver")]
-    {
-        if let Some(mount_point) = VirtualDriveService::global().current_mount_point() {
-            let mount_path = Path::new(&mount_point);
-            let mount_canon = mount_path
-                .canonicalize()
-                .unwrap_or_else(|_| mount_path.to_path_buf());
-            if sync_canon == mount_canon || sync_canon.starts_with(&mount_canon) {
-                return Err(t!(
-                    "albums.localFolderErrors.virtualDrivePathForbidden",
-                    path = mount_point
-                )
-                .to_string());
-            }
-        }
-    }
 
     // 已存在同步画册的目录：根目录重复直接报错（前端亦会禁用创建按钮）。
     let existing_sync_folders: Vec<std::path::PathBuf> = Storage::global()

@@ -26,7 +26,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 
 ## Provider DSL（`provider-dsl/`）
 
-- 状态：基于 SQL 的内置 Provider（root/gallery/shared/VD）均由 `dsl_loader::DSL_FILES` 中的 DSL 提供；
+- 状态：基于 SQL 的内置 Provider（root/gallery/shared）均由 `dsl_loader::DSL_FILES` 中的 DSL 提供；
   唯一保留的 programmatic provider 是 `src-tauri/kabegame-core/src/providers/programmatic/plugin_resource.rs`
   （`plugin://` schema，按 `installed/<id>/<version>`、`byStore/<sourceId>/<id>/<version>`、
   `byPreview/<token>/<id>/<version>` 寻址；预览不可列举，商店只读缓存，元数据来自 `PluginManager`，recommended 行附带 Storage 当前导入态；不走 SQL provider），由 `providers/init.rs` 经
@@ -37,9 +37,6 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：实现引擎 loader / 解析器；随机 / 名称等排序翻深页慢、想让内层只排 id 再回表；编写 *.provider.json5 / *.yaml 文件；编写或迁移插件的 extend provider；调整 `_kb_*` 全局续接段、透传或排序链；给 where 写 OR / NOT；分页之后按行计数（`~~` + `group_by`）或排查子查询慢；排查解析优先级、缓存失效、跨字段约束、组内贡献或未闭合组错误；排查某个参数化路径段只对个别取值（纯数字、前导零、含 `e`）查不到或报错；设计第三方插件可贡献的 provider。
   - 配套：[../src-tauri/kabegame-core/src/providers/schema.json5](../src-tauri/kabegame-core/src/providers/schema.json5) 为语法 schema。
 
-- [provider-dsl/VD_INTEGRATION.md](provider-dsl/VD_INTEGRATION.md)
-  - 主题：VD 作为 Provider DSL 引擎**消费者**的落地方案。涵盖 i18n 路径分发（`i18n-<locale>` 静态层 + 每语言独立 router）、插件维度的 `get_plugin` SQL 函数桥（主机注册的 SQL 函数把 PluginManager 元数据和按 locale 解析的 `displayName` 接入 SQL 上下文）、`vd_plugins_router` 与 `plugins_provider` 双层结构、典型路径折叠示例。
-  - 适用场景：新增 / 修改 VD 维度路径树；接入需要主机协调的非 SQL 数据；理解 i18n 切换、插件装卸的缓存行为。
 
 - [provider-dsl/ALBUM_SUB_TREE.md](provider-dsl/ALBUM_SUB_TREE.md)
   - 主题：`albums://by_sub_tree` 的按名称递归画册树查询，以及 CLI `--album` 通过父路径直接子项解析目标画册 id 的契约。
@@ -88,12 +85,12 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## 画廊与查询（`gallery/`）
 
 - [gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)
-  - 主题：Gallery/VD 共用的 Provider + ImageQuery 可组合查询系统与前端唯一查询对象 `GalleryQuery`。涵盖 `gallery_router` 窄路由与 `gallery_route` 字段层拆分、宽入口在组外折默认排序、行分页后 rank 取序与 lookup 回表（子 provider 全部回指窄路由）、四个页面共用的查询行、搜索表达式与高级条件持久化边界、宽高比生成列和区间段、**维度列举带分组计数**（过滤树列举 `{维度路径}/_kb_co` 并读 `meta.count`，插件扩展读插件 router 的 `meta.image_count`、缺失不显示，面板顶层直接列维度子项、没有根节点与根 COUNT）、侧栏树的逐页 pathql 观察 / 可见分支刷新 / 隐藏停观察 / 插件签名刷新、Phase F 的画册敏感上下文（album / album-tree / no-album / 标签搜索，hide 单独门控）、高级查询 diff 逐候选预测与常驻候选观察，以及收藏 / 隐藏标记的相关 EXISTS 取舍。
+  - 主题：Gallery 的 Provider + ImageQuery 可组合查询系统与前端唯一查询对象 `GalleryQuery`。涵盖 `gallery_router` 窄路由与 `gallery_route` 字段层拆分、宽入口在组外折默认排序、行分页后 rank 取序与 lookup 回表（子 provider 全部回指窄路由）、四个页面共用的查询行、搜索表达式与高级条件持久化边界、宽高比生成列和区间段、**维度列举带分组计数**（过滤树列举 `{维度路径}/_kb_co` 并读 `meta.count`，插件扩展读插件 router 的 `meta.image_count`、缺失不显示，面板顶层直接列维度子项、没有根节点与根 COUNT）、侧栏树的逐页 pathql 观察 / 可见分支刷新 / 隐藏停观察 / 插件签名刷新、Phase F 的画册敏感上下文（album / album-tree / no-album / 标签搜索，hide 单独门控）、高级查询 diff 逐候选预测与常驻候选观察，以及收藏 / 隐藏标记的相关 EXISTS 取舍。
   - 适用场景：新增过滤、排序、数据源；排查 provider 查询路径或高级查询路由；排查过滤树或 MCP 的列举计数与筛选结果不一致；排查侧栏下载中不刷新、隐藏期补刷、插件增删后候选不更新或高级查询 `+N/−N` 刷新时机；排查宽高比分桶、排序、收藏 / 隐藏标记或 `hide` 计数性能。
 
 - [gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md](gallery/GALLERY_PAGINATION_AND_IMAGE_LOAD.md)
   - 主题：画廊 SimplePage 分页与每页条数（100/500/1000）的前后端数据流；路由只保存不含分页尾的 `viewBody`，`usePagedGallery` 本地持有页码并通过唯一的 `withPaged(viewBody, pageSize, page)` 生成 `rowsPath`，页大小唯一来自 `settings.galleryPageSize`，改变时保持旧页首张图位置；行取数出口通过 `toLookupRowsPath` 转为 `filter/…/~~/rank/~~p/lookup/gallery`（分页路径仍供 loadedKey / 校验 / 定位，rows 观察方使用转换后的 key），`pathql_fetch` 行读取与 `pathql_all` 计数批分开维护，计数批在阻塞线程钉住连接并开读事务，分子与 adapter 可选分母同一 WAL 快照，按序返回、整批失败（非 SQL 的 `plugin://` 不受快照约束），翻页只读行；ImageGrid 经 `services/kbEvents`（rxjs）维护行与总数：事件源 `kbEvent$` 与 pathql 核心 rows / all 数据源分离，行读 `pathql_fetch`、总数由 `useLookAll` 观察 `pathql_all` 计数批，ImageGrid 向工具栏注入 `{ total, unfilteredTotal }`，唯一请求入口 `pathqlRequest$.next` 即发即返回，主动请求只有事件窗口与用户操作（路径变化、手动刷新、`ctx.mutate` 完成后）两条通路，每个 key 维护 pending 窗口（任一请求返回即取消更早的 pending），观察方只看最后可得的数据与最新请求的 loading / error；adapter `refreshOn` 每条只对一种事件（写命令不再带 `view` / 返回快照），`ctx.patch` 就地改行，后端字段补丁经 `imagePatches$`（单图 / 多图补丁共用窗口，收藏与隐藏成员分别防抖合并，ImageGrid 与预览弹窗共用）；`images-added` 携带完整行、`images-deleted` 只带 id，`image-changed { patch }` / `images-change { patches }` 按图片数量分流，同流补丁按字段依赖 / 查询 / 排序判断是否触发查询，新增按顶层条件与归属判断，网格行删除只比较当前持有行、总数默认对任何删除刷新，画册以 deletesViaMembership 改由本画册成员删除定位；隐藏只发成员事件，hide 开启不打灰而刷新剔除，裸 id 预览字段只补丁；删除 / 清理任务发 taskId 置空补丁并离开当前任务详情；500ms 批次合并、行/总数独立 `seq`、画册 `ancestorPath` 相关性、wildcard 粗过滤和防闪回协议；Phase E 的画册行增删、移动与单条 / 批量补丁，成员增删 / 排序分流、隐藏即隐藏画册自身成员增删（hide 开刷新、关时只打 isHidden 补丁，删图用 imagesDeleted 区分），已持有子孙的路径前缀改写；Phase F 收藏只补丁、无画册 / 标签搜索共用触发、页头按画册类型计数与树分区刷新；写入方只请求自身 key（无本地事件投递）、预览标签面板的观察方例外，以及画册目录由 `~~/children`、`~~/images` 的 `GROUP BY` 计数行与 `album-tree` 按需组合计数；**列表不带 `metadata`**与 per-page 缓存；**预览深链接与后台刷新跟页**由 `images://<视图>/~~/rank/~~/id_<id>` 给出该图在当前排序下的 1 起序号，前端除以页大小跳页；定位和目标页加载期间保留原 `ImageInfo`，快照找到同一 id 才更新对象以保留缩放；各 sort provider 以 `images.id` 收尾保证全序。
-  - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、SimplePage 与 VD Greedy 差异、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、并列排序下定位落到相邻页、或预览切图时弹窗先关闭再打开。预览协调不对称：目标 id 在当前快照里就直接采用（切图不经过 `null`，避免读取在途时弹窗先关再开），不在时才等当前路径快照应用与 `rowsQuery.loading` 结束再定位或降级；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
+  - 适用场景：排查翻页/总数、删除后未立即更新或旧列表闪回、下载/同步后不刷新、任务/畅游事件过滤、`seq` 过期结果、详情 metadata 缓存，以及带 `pvwimgid` 的深链接没有跳到目标图所在页、并列排序下定位落到相邻页、或预览切图时弹窗先关闭再打开。预览协调不对称：目标 id 在当前快照里就直接采用（切图不经过 `null`，避免读取在途时弹窗先关再开），不在时才等当前路径快照应用与 `rowsQuery.loading` 结束再定位或降级；URL 先记目标 id，目标页确认后才显示，已有预览保持对象和缩放。
 
 - [gallery/SAVED_VIEWS.md](gallery/SAVED_VIEWS.md)
   - 主题：查询行 ⋯ 视图菜单（只剩轮播与收藏视图，chip 显隐开关已删除）的收藏视图。
@@ -145,7 +142,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     `downloadWpeWallpaper` 把另一台机器上的壁纸整目录传过来）、格式表占位条目、
     **`wpe` feature 门控**（桌面主程序与 CLI 开启，Android / Web 不开；三个桌面平台都能导入与预览，Linux 没有桌面壁纸）、Steam 库发现与手选文件夹的两层扫描、导入时的 `WPE/<genre|rating|feature>/<tag>` 标签（作者 `tags` + WPE 工坊缓存的 Steam 标签，缓存没有时从 `project.json` 推导；key 是 Steam 原文，名称按语言翻译）、WPE 安装目录设置 `wpeEngineDir`（为空时查 Steam 库或从库内壁纸往上找并写入，壁纸设置可覆盖）、`wpe-import` 内建任务与「壁纸」收集入口、
     WPE 行的色盘来源（视频从 `compatible_path` 抽帧，网页 / 场景取 `schemecolor` 的作者值、没有则预览图）、
-    删除 / 整理 / 虚拟盘 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口（窗口模式每块在线屏一个，label 池见 [wallpaper/MULTI_SCREEN.md](wallpaper/MULTI_SCREEN.md)）为 `index.html?window=wallpaper&slot=<序号>` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手，按后端的布置读壁纸目标）+ 纯渲染组件 `Wallpaper.vue`（铺放与过渡，每个壁纸一层 `ImageContent` 壁纸变体）；
+    删除 / 整理 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口（窗口模式每块在线屏一个，label 池见 [wallpaper/MULTI_SCREEN.md](wallpaper/MULTI_SCREEN.md)）为 `index.html?window=wallpaper&slot=<序号>` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手，按后端的布置读壁纸目标）+ 纯渲染组件 `Wallpaper.vue`（铺放与过渡，每个壁纸一层 `ImageContent` 壁纸变体）；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`WpeWallpaperContent` 的网页 iframe（sandbox `file:` iframe，`src` 直接取壁纸目标的 `webEntry`，由补丁 05 允许应用页赋 `file:` src；不参与双层过渡、切走即销毁）、
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览画布 `WallpaperPreviewCanvas`（按内容固有尺寸，和单独的图片一样显示；网页壁纸按主屏尺寸排版）、`get_wallpaper_target_for_image`、应用背景与预览同走原图形态实时渲染（不交互、静音），以及子 frame 也有 IPC 桥之后由 ACL 兜底的纵深防御；
     **网页壁纸 iframe**（tauri 补丁 18–19 起预览与桌面统一）：图库预览（主窗口）与桌面（壁纸窗口）都是 `WpeWallpaperContent` 里的 `file:` iframe，两个窗口建窗前都登记 `allow_file_documents` 与 `allow_app_local_resources`，壁纸窗口不再整窗导航，窗口后端的 `set_wallpaper` 不再有要做的事（桌面鼠标由 iframe 自己登记，见下「鼠标」）；ping 在网页壁纸显示期间交给 iframe 里的垫片应答；`localStorage` 预览与桌面同一分区、互通；CSP `frame-src … file:`；
@@ -534,8 +531,8 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 ## 构建打包（`build/`）
 
 - [build/PLATFORM_SHARED_LIBS.md](build/PLATFORM_SHARED_LIBS.md)
-   - 主题：三平台动态库与 CEF 运行时打包。涵盖 `OSPlugin.bundleLibs`、`kabegame-cef-helper` 的编译方式（build 经 `tauri build -- --bin` 随主编译产出；dev 与 Windows build 由 ComponentPlugin 预构建）、主程序/helper 的 Linux rpath 差异、macOS framework/files 注入、Windows NSIS 搬运，以及虚拟盘驱动/系统依赖策略。
-  - 适用场景：新增/升级运行时动态库;排查最终用户报 `libx264.so.X: cannot open`、macOS `Library not loaded` 或画册盘驱动缺失;调整 build-ffmpeg / DLL 复制 / dmg fixup / NSIS hook 流程。
+   - 主题：三平台动态库与 CEF 运行时打包。涵盖 `OSPlugin.bundleLibs`、`kabegame-cef-helper` 的编译方式（build 经 `tauri build -- --bin` 随主编译产出；dev 与 Windows build 由 ComponentPlugin 预构建）、主程序/helper 的 Linux rpath 差异、macOS framework/files 注入、Windows NSIS 搬运。
+  - 适用场景：新增/升级运行时动态库;排查最终用户报 `libx264.so.X: cannot open`、macOS `Library not loaded`;调整 build-ffmpeg / DLL 复制 / dmg fixup / NSIS hook 流程。
 
 - [build/LINUX_BUILD_WORKFLOW.md](build/LINUX_BUILD_WORKFLOW.md)
   - 主题：**本机 Linux 构建工作流**——因本机 glibc 2.43 太新，出货用的 `.deb` 在 Ubuntu 22.04 guest（glibc 2.35）里做最终链接（不重编 CEF/Chromium/V8）。核心是 **profile 隔离 + 构建属地**模型：guest 完整挂载仓库、等同一台开发机（无 `target-22`、无 `.vm/cef-prod` 侧拷贝、无 `-22`/`-web` 后缀）；host 只跑 debug（`target/debug`），**release 与 FFmpeg/x264 产物构建只在 guest**（`target/release`），由 `requireUbuntu2204()` 守卫强制（逃生阀 `KB_ALLOW_HOST_BUILD=1`），chromium/v8 构建豁免。涵盖 virtiofs 同路径挂载、`paths.ts` 的路径/target 单一来源、glibc 地板验证；以及踩坑：**预编译 `.a` 的 `__isoc23_*`（2.38 新名符号、无版本标签、易漏判）必须重编 x264+FFmpeg**、`.pc` 烧死的绝对路径、构建脚本写死 `target/release`、`package-plugin.ts` 误跑 host cli、web docker 构建会覆盖树内 Linux FFmpeg 产物。

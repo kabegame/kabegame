@@ -146,7 +146,7 @@
 
     <!-- 商店源管理 -->
     <Dialog
-      v-if="!IS_LIGHT_MODE"
+      v-if="!IS_ANDROID"
       v-model:open="sourcesOpen"
       :title="$t('plugins.sourcesDialogTitle')"
       :description="$t('plugins.sourcesIntro')"
@@ -201,7 +201,7 @@
 
     <!-- 新增/编辑源 -->
     <Dialog
-      v-if="!IS_LIGHT_MODE"
+      v-if="!IS_ANDROID"
       v-model:open="editSourceOpen"
       :title="editingSourceIndex === null ? $t('plugins.newSource') : $t('plugins.editSource')"
       :width="560"
@@ -281,7 +281,7 @@ import PluginGridSkeleton from "@/components/plugin/PluginGridSkeleton.vue";
 import PluginQuickPreviewPanel, { type QuickPreviewPluginLike } from "@/components/plugin/PluginQuickPreviewPanel.vue";
 import HoverRevealPanel from "@/components/common/HoverRevealPanel.vue";
 import { bannerPreviewImages } from "@/utils/assetPath";
-import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@/env";
+import { IS_ANDROID, IS_WEB } from "@/env";
 import { useUiStore } from "@/stores/ui";
 import { useSettingsStore } from "@/stores/settings";
 import { trackEvent } from "@/track/umami";

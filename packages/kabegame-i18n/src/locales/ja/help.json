@@ -20,8 +20,7 @@
 
   "tips": {
     "tag": {
-      "androidUnavailable": "Androidでは利用不可",
-      "lightModeUnavailable": "ライトモードでは利用不可"
+      "androidUnavailable": "Androidでは利用不可"
     },
     "category": {
       "gallery": { "title": "ギャラリー", "description": "収集した画像の閲覧と管理" },
@@ -30,10 +29,6 @@
       "plugins": { "title": "プラグイン", "description": "プラグインのインストール、ストアソース、プラグインエディタ" },
       "tasks": { "title": "タスク", "description": "収集タスクの閲覧と管理" },
       "tray": { "title": "トレイ", "description": "システムトレイアイコンの位置と機能" },
-      "virtual-driver": {
-        "title": "仮想ドライブ（VD）",
-        "description": "エクスプローラー（Windows）でディスクのようにアルバムを閲覧"
-      },
       "command-line": { "title": "コマンドライン", "description": "CLIでプラグインの実行、パック、インポート" },
       "easter-egg": { "title": "イースターエッグ", "description": "機能に影響しない小さなサプライズ" }
     },
@@ -101,14 +96,6 @@
       "tray-introduction": {
         "title": "トレイの位置と機能",
         "summary": "トレイアイコンの位置、左/右クリックの動作、メニューオプションを学ぶ。"
-      },
-      "virtual-driver-basics": {
-        "title": "エクスプローラーで仮想ドライブ経由で画像を閲覧",
-        "summary": "「アルバムドライブ」を有効にして、エクスプローラーでアルバムと画像をファイルとして閲覧。"
-      },
-      "virtual-driver-directories": {
-        "title": "仮想ドライブのディレクトリ構造",
-        "summary": "各ディレクトリ（All、By plugin、By time、By task、Albums）の用途を学ぶ。"
       },
       "command-line-basics": {
         "title": "CLIの基礎",

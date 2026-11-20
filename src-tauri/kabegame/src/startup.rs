@@ -22,8 +22,6 @@ use kabegame_core::ipc::{AppEvent, EventBroadcaster};
 use kabegame_core::plugin::PluginManager;
 use kabegame_core::settings::Settings;
 use kabegame_core::storage::Storage;
-#[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
 #[cfg(all(target_os = "android", not(feature = "web")))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -573,7 +571,7 @@ pub fn try_forward_to_existing_instance_and_exit() {
     std::process::exit(0);
 }
 
-/// 启动 IPC 服务（仅需 app_handle，DedupeService / VirtualDriveService 等由全局单例提供）
+/// 启动 IPC 服务（仅需 app_handle，DedupeService 等由全局单例提供）
 #[cfg(not(target_os = "android"))]
 pub fn start_ipc_server<#[cfg(not(feature = "web"))] R: Runtime>(
     #[cfg(not(feature = "web"))] app_handle: AppHandle<R>,

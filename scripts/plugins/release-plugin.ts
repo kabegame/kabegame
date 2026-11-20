@@ -2,8 +2,6 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { glob } from "glob";
-import os from "os";
-import { spawnSync } from "child_process";
 import { BasePlugin } from "./base-plugin.ts";
 import { BuildSystem } from "../build-system.ts";
 import { Component } from "./component-plugin.ts";
@@ -130,53 +128,6 @@ function isReleaseBuild(bs: BuildSystem): boolean {
   return Boolean(bs.context.cmd?.isBuild && bs.options.release);
 }
 
-function commandOutput(cmd: string, args: string[], cwd?: string): string {
-  const res = spawnSync(cmd, args, {
-    cwd,
-    encoding: "utf8",
-  });
-  if (res.status !== 0) {
-    const output = `${res.stdout ?? ""}${res.stderr ?? ""}`.trim();
-    throw new Error(
-      `${cmd} ${args.join(" ")} failed${output ? `:\n${output}` : ""}`,
-    );
-  }
-  return `${res.stdout ?? ""}${res.stderr ?? ""}`;
-}
-
-// Linux 策略:fuser 关闭 `libfuse` feature 走纯 Rust 挂载,二进制**根本不链接** libfuse
-// (挂载时懒执行 fusermount3,语义同 Windows delay-load dokan2.dll)。因此正常产物没有
-// DT_NEEDED libfuse 条目;若误开 libfuse feature 导致动态依赖回归,此校验会拦下。
-function assertNoLinuxLibfuseLink(debPath: string): void {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "kabegame-deb-check-"));
-  try {
-    commandOutput("dpkg-deb", ["-x", debPath, tmpDir]);
-    const binDir = path.join(tmpDir, "usr", "bin");
-    const binaries = ["kabegame"]
-      .map((name) => path.join(binDir, name))
-      .filter((p) => fs.existsSync(p) && fs.statSync(p).isFile());
-
-    for (const binary of binaries) {
-      const dynamicSection = commandOutput("readelf", ["-d", binary]);
-      const fuseNeeded = dynamicSection
-        .split(/\r?\n/)
-        .filter((line) => /NEEDED.*libfuse/i.test(line));
-      if (fuseNeeded.length > 0) {
-        throw new Error(
-          [
-            `Linux release binary must not link libfuse at all: ${path.relative(ROOT, debPath)}`,
-            `binary: ${path.relative(tmpDir, binary)}`,
-            ...fuseNeeded,
-            "On Linux fuser must be built WITHOUT the `libfuse` feature (pure-rust mount); libfuse is never linked. Runtime mounting lazily execs fusermount3 (apt fuse3), like Windows delay-loads dokan2.dll.",
-          ].join("\n"),
-        );
-      }
-    }
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
-}
-
 export class ReleasePlugin extends BasePlugin {
   static readonly NAME = "ReleasePlugin";
 
@@ -260,9 +211,6 @@ export class ReleasePlugin extends BasePlugin {
 
       ensureDir(releaseDir);
       for (const srcPath of assets) {
-        if (OSPlugin.isLinux && srcPath.endsWith(".deb")) {
-          assertNoLinuxLibfuseLink(srcPath);
-        }
         const dstName = releaseAssetFileName({
           mode,
           version,

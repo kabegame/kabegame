@@ -119,7 +119,7 @@ ssh ubuntu22 'setsid bash /home/cm/i/kabegame/.vm/run-build.sh > \
    会调用它（踩坑 4）。
 3. **构建主程序 + deb**：`deno task b -c kabegame --release` → `target/release/bundle/deb/*.deb`
    （Linux 打包目标仅 `deb`，无 appimage/rpm）。`--release` 触发 **ReleasePlugin**：
-   `-C codegen-units=1`、deb 的 libfuse 链接校验、构建后自动把 deb 以规范名
+   `-C codegen-units=1`、构建后自动把 deb 以规范名
    `Kabegame-<mode>_<ver>_amd64.deb` 复制到共享盘的 `release/`（host 直接可见），无需手拷。
 
 ## 验证（务必做）
@@ -212,7 +212,7 @@ virtiofs passthrough 按数字 uid 映射（host `cm`=1000=guest `ubuntu-test`=1
 - `scripts/utils.ts` —— re-export paths.ts + `FFMPEG_INSTALL_DIR` 等派生常量、`stageResourceBinary`。
 - `scripts/build-system.ts` —— macOS run 的 exe 路径。
 - `scripts/plugins/mode-plugin.ts` —— `CEF_PATH`/`FFMPEG_PKG_CONFIG_PATH` 注入、release 守卫调用。
-- `scripts/plugins/os-plugin.ts` —— CEF helper、dokan2.dll 路径、`bin/{platform}/` 暂存清理
+- `scripts/plugins/os-plugin.ts` —— CEF helper、`bin/{platform}/` 暂存清理
   （跳过 `{arch}/` 子目录）。
 - `scripts/plugins/release-plugin.ts` —— bundle（deb/dmg/nsis）目录。
 - `scripts/plugins/tauri-cli-plugin.ts` —— fork cargo-tauri 显式 `--target-dir`、`BIN_DIR`。

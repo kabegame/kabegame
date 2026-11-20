@@ -27,8 +27,6 @@
         <AlbumsPageHeader
           class="albums-page-header"
           :class="{ 'ml-5': !isCompact }"
-          :album-drive-enabled="albumDriveEnabled"
-          @view-vd="openVirtualDrive"
           @refresh="handleRefresh"
           @create-album="openCreateDialogWithParent(null)"
           @open-tree="treeDrawerOpen = true"
@@ -345,7 +343,7 @@ import AlbumsPageHeader from "@/components/header/AlbumsPageHeader.vue";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useSettingKeyState } from "@/composables/useSettingKeyState";
-import { IS_LIGHT_MODE, IS_ANDROID, IS_WEB } from "@/env";
+import { IS_ANDROID, IS_WEB } from "@/env";
 import { useI18n } from "@kabegame/i18n";
 import {
   querySearchTerm,
@@ -621,23 +619,8 @@ const onQueryNavigate = (patch: GalleryQueryPatch, options?: { push?: boolean })
   void albumDetailRouteStore.navigate(patch, options);
 };
 
-// ---------- 虚拟磁盘 ----------
 const settingsStore = useSettingsStore();
 const { set: setWallpaperRotationEnabled } = useSettingKeyState("wallpaperRotationEnabled");
-const albumDriveEnabled = computed(
-  () => !IS_ANDROID && !IS_WEB && !IS_LIGHT_MODE && !!settingsStore.values.albumDriveEnabled,
-);
-const albumDriveMountPoint = computed(() => settingsStore.values.albumDriveMountPoint || "K:\\");
-
-const openVirtualDrive = async () => {
-  try {
-    await invoke("open_path", { path: albumDriveMountPoint.value });
-  } catch (e) {
-    console.error("打开虚拟磁盘失败:", e);
-    kameMessage.error(`${String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
-  }
-};
-
 // 各活跃壁纸目标的轮播来源（逐屏独立下每块屏一个）
 const rotationSources = useWallpaperRotationSources();
 // 当前轮播画册 id：任一活跃壁纸目标的轮播路径直接以某画册为根时才有
@@ -908,7 +891,6 @@ const albumMenuContext = computed<AlbumActionContext>(() => {
     isLocalFolder: album?.type === "local_folder",
     isLabel: album?.type === "label",
     isLabelDir: album?.type === "label_dir",
-    albumDriveEnabled: albumDriveEnabled.value,
   };
 });
 
@@ -936,7 +918,6 @@ type AlbumCommand =
   | "createSubLabel"
   | "createSubLabelDir"
   | "setLabelKey"
-  | "openVirtualDrive"
   | `setSyncMode:${AlbumSyncMode}`;
 
 /** 画册操作的唯一入口：树右键、右栏「⋯」、右栏精简按钮共用同一份实现。
@@ -1009,16 +990,6 @@ const runAlbumCommand = async (command: AlbumCommand, album: Album | null) => {
         const errorMessage = typeof error === "string" ? error : (error as any)?.message || String(error);
         kameMessage.error(errorMessage);
       }
-    }
-    return;
-  }
-
-  if (command === "openVirtualDrive") {
-    try {
-      await invoke("open_album_virtual_drive_folder", { albumId: id });
-    } catch (e: any) {
-      console.error("打开画册虚拟盘失败:", e);
-      kameMessage.error(`${e?.message || String(e)} ${t("settings.albumDriveOpenErrorHint")}`);
     }
     return;
   }

@@ -20,8 +20,7 @@
 
   "tips": {
     "tag": {
-      "androidUnavailable": "Android에서 사용 불가",
-      "lightModeUnavailable": "라이트 모드 사용 불가"
+      "androidUnavailable": "Android에서 사용 불가"
     },
     "category": {
       "gallery": { "title": "갤러리", "description": "수집한 이미지 보기 및 관리" },
@@ -30,7 +29,6 @@
       "plugins": { "title": "플러그인", "description": "플러그인 설치, 스토어 소스 및 플러그인 편집기" },
       "tasks": { "title": "작업", "description": "수집 작업 보기 및 관리" },
       "tray": { "title": "트레이", "description": "시스템 트레이 아이콘 위치 및 기능" },
-      "virtual-driver": { "title": "가상 드라이브 (VD)", "description": "탐색기(Windows)에서 디스크처럼 앨범 탐색" },
       "command-line": { "title": "명령줄", "description": "CLI로 플러그인 실행, 패킹 및 가져오기" },
       "easter-egg": { "title": "이스터 에그", "description": "기능에 영향을 주지 않는 작은 서프라이즈" }
     },
@@ -98,14 +96,6 @@
       "tray-introduction": {
         "title": "트레이 위치 및 기능",
         "summary": "트레이 아이콘 위치, 왼쪽/오른쪽 클릭 동작, 메뉴 옵션 배우기."
-      },
-      "virtual-driver-basics": {
-        "title": "탐색기에서 가상 드라이브로 이미지 탐색",
-        "summary": "\"앨범 드라이브\" 사용으로 탐색기에서 앨범과 이미지를 파일로 탐색."
-      },
-      "virtual-driver-directories": {
-        "title": "가상 드라이브 디렉터리 구조",
-        "summary": "각 디렉터리(전체, 플러그인별, 시간별, 작업별, 앨범)의 용도 배우기."
       },
       "command-line-basics": { "title": "CLI 기본", "summary": "Kabegame CLI 배우기: 플러그인 실행, 패킹, 가져오기." },
       "command-line-examples": {

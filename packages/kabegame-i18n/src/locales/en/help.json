@@ -18,8 +18,7 @@
   "drawerTitleDefault": "Help",
   "tips": {
     "tag": {
-      "androidUnavailable": "N/A on Android",
-      "lightModeUnavailable": "Light mode unavailable"
+      "androidUnavailable": "N/A on Android"
     },
     "category": {
       "gallery": {
@@ -45,10 +44,6 @@
       "tray": {
         "title": "Tray",
         "description": "System tray icon location and functions"
-      },
-      "virtual-driver": {
-        "title": "Virtual Drive (VD)",
-        "description": "Browse albums like a disk in Explorer (Windows)"
       },
       "command-line": {
         "title": "Command Line",
@@ -123,14 +118,6 @@
       "tray-introduction": {
         "title": "Tray location and functions",
         "summary": "Learn tray icon location, left/right click behavior, and menu options."
-      },
-      "virtual-driver-basics": {
-        "title": "Browse images via virtual drive in Explorer",
-        "summary": "Enable \"Album drive\" to browse albums and images as files in Explorer."
-      },
-      "virtual-driver-directories": {
-        "title": "Virtual drive directory structure",
-        "summary": "Learn the purpose of each directory (All, By plugin, By time, By task, Albums)."
       },
       "command-line-basics": {
         "title": "CLI basics",
@@ -641,60 +628,7 @@
       "notePara1": "Closing the main window usually hides the app instead of quitting.",
       "notePara2": "Use Quit from the tray menu to exit completely."
     },
-    "virtual-driver-basics": {
-      "lightModeNote": "Not available in Light mode",
-      "whatTitle": "What it is",
-      "whatPara1": "Virtual Drive (VD) mounts your library as a drive letter in File Explorer.",
-      "whatPara2": "Browse albums and files like normal folders—drag, copy paths, open in other apps.",
-      "enableTitle": "Enable",
-      "enablePara1": "Settings → App → Album drive.",
-      "enablePara2": "Default mount is often K:\\ (see your settings).",
-      "openTitle": "Open",
-      "openItem1": "Album list → Open in VD",
-      "openItem2": "Album detail → Open in VD",
-      "openItem3": "Or type the drive letter in the address bar, e.g. K:\\",
-      "noteTitle": "Notes",
-      "notePara1": "VD is an on-demand view—some advanced file ops may not apply.",
-      "notePara2": "If you don’t see the drive, check Album drive is on and the letter isn’t taken."
-    },
-    "virtual-driver-directories": {
-      "rootTitle": "Root layout",
-      "rootPara": "Open the mount (default K:\\) to see:",
-      "allTitle": "All",
-      "allPara1": "All gallery images, paged (~100 per page).",
-      "allPara2": "Good for quick browsing.",
-      "pluginTitle": "By plugin",
-      "pluginPara1": "Grouped by source plugin (e.g. konachan, …).",
-      "pluginPara2": "One folder per plugin with its images.",
-      "pluginPara3": "Good for per-source review.",
-      "timeTitle": "By time",
-      "timePara1": "Grouped by collection year-month.",
-      "timePara2": "Folders like YYYY-MM (e.g. 2024-01).",
-      "timePara3": "Good for timelines.",
-      "taskTitle": "By task",
-      "taskPara1": "Grouped by collection task.",
-      "taskPara2": "Folder name: task name - task id.",
-      "taskPara3": "Good for task output review.",
-      "albumTitle": "Albums",
-      "albumPara1": "Your albums.",
-      "albumPara2": "One folder per album name.",
-      "albumPara3": "Browse and manage album contents.",
-      "albumNote": "Some file ops may be allowed; image files are often read-only.",
-      "readmeTitle": "在这里你可以自由查看图片.txt",
-      "readmePara1": "Readme at the root explaining VD.",
-      "readmePara2": "Double-click to read.",
-      "suggestTitle": "Tips",
-      "suggestItem1": "Browse everything under All",
-      "suggestItem2": "Per plugin under By plugin",
-      "suggestItem3": "Chronological under By time",
-      "suggestItem4": "Per task under By task",
-      "suggestItem5": "Album-centric view under Albums",
-      "noteTitle": "Notes",
-      "notePara1": "VD is for browsing; not all file manager features apply.",
-      "notePara2": "Advanced ops may be limited—follow in-app behavior."
-    },
     "command-line-basics": {
-      "lightModeNote": "Not available in Light mode",
       "whatTitle": "CLI",
       "whatPara1": "Kabegame ships kabegame-cli for terminal-based plugin operations.",
       "whatPara2": "Useful for scripts, batch jobs, or headless runs.",

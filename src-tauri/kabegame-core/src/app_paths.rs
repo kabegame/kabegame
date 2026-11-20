@@ -243,14 +243,6 @@ impl AppPaths {
         self.temp_dir.join("surf-sessions").join(handle.to_string())
     }
 
-    // ========== 虚拟驱动相关（仅桌面） ==========
-
-    /// 虚拟驱动备注文件目录
-    #[cfg(not(target_os = "android"))]
-    pub fn virtual_driver_notes(&self) -> PathBuf {
-        self.data_dir.join("virtual-driver").join("notes")
-    }
-
     // ========== IPC Socket（仅桌面非 Windows） ==========
 
     /// virtual driver IPC socket 路径

@@ -1,7 +1,6 @@
 # 画廊分页与 SimplePage 图片加载数据流
 
 本文档说明**主应用内**通过 `provider` 路径浏览图片列表时的分页、每页条数设置与前后端调用链，便于排查「翻页不对」「改每页条数不刷新」「列表为空」等问题。  
-虚拟盘（VD）Greedy 目录树仍使用后端固定的 `LEAF_SIZE`（与 SimplePage 可配置页大小无关），详见下文「与 VD 的区别」。
 
 ## 与 `PROVIDER_IMAGEQUERY_COMPOSABLE.md` 的关系
 
@@ -18,7 +17,6 @@
 | **行路径 `rowsPath`** | `ImageGrid` 查询出口把分页尾追加到视图本体：`withPaged(viewBody, pageSize, page)` → `<viewBody>/_kb_x<N>x/<页>`。 |
 | **取数路径** | `toLookupRowsPath(withGalleryPrefix(rowsPath))` → `images://filter/<视图>/_kb_x<N>x/<页>/~~/rank/~~p/lookup/gallery`；只用于行请求。 |
 | **SimplePage（历史实现）** | Provider 解析结果为「叶子」：`ProviderDescriptor::SimplePage { query, page }`。后端按 `ImageQuery` 计数 + **offset/limit** 取一页。 |
-| **Greedy / 非 SimplePage** | 目录树、range 分解等；后端 `browse.rs` 内仍用固定 `LEAF_SIZE = 100` 做贪心分段，**不使用**用户配置的每页条数。 |
 | **每页条数 `galleryPageSize`** | 用户设置 `100 / 500 / 1000`，持久化在 Rust `Settings`（JSON 键 `galleryPageSize`），仅影响 **SimplePage** 的 `limit` 与 offset 计算。 |
 
 ## 后端
@@ -73,11 +71,6 @@ Tauri 与 Web JSON-RPC 复用 core 命令；Web 只对 `fetch` 下标的结果�
 `useLookAll` 是 `usePathqlLooker` 的薄包装，只观察 `results`，不发请求。
 ImageGrid 一批读 `[count(分子)]` 或 `[count(分子), count(分母)]`，分子只读一次；分子分母共享 SQL 读快照，
 行仍独立请求。翻页不改变计数批 key，不重读计数。
-
-### 与 VD / Greedy 的区别
-
-- **网格分页**：一页行数 = 用户设置的 `galleryPageSize`（前端归一为 100 / 500 / 1000）。
-- **Greedy 等路径**：`browse.rs` 仍使用文件内 `LEAF_SIZE = 100` 做目录拆分，**不**读 `galleryPageSize`。
 
 ### 设置持久化
 
@@ -361,8 +354,6 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
   `imageMetadataId` 后自然更换 metadata cache key。排序、搜索成员与分面变化按字段依赖触发权威查询。
 - 裸 id 预览对字段只打补丁，删除 / 非系统画册成员增删包含当前 id 时重解析；新增不影响已在手的图。
 - 删除事件仍可带请求中的不存在 id；网格统一只在当前持有行命中时刷新。
-  Windows 虚拟盘对新增从完整行提取 taskId 通知任务目录，图片增删 / 字段补丁刷新画廊树；
-  删除不再携带 taskId，正在浏览的任务目录不会因图片删除立即更新。
 - `GalleryToolbar` 只注入 `gridTotalKey` 的 `{ total, unfilteredTotal }`；分子与可选分母仍由同一
   `pathql_all` 读快照读取，工具栏不另注册观察方。
 
@@ -386,7 +377,7 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
   删画册只发根删除事件，不补发空 order；依赖原空 order 的观察方改听 `albums-deleted`。
 - 移动、文件夹改链与转换提升均发 `album-moved`。改链同时动祖先与子孙时，祖先在前，子孙旧路径接续祖先移动后的路径。
   树（含收起的已加载节点）、页头自身与祖先、标签面板收到移动即改写路径前缀，移动根 parentId 从新路径计算。
-- IPC 加入 / 移出 / 排序 / 删除画册统一走 core 命令；MCP 两个改序入口发排序事件；虚拟盘按 albumId 通知目录，隐藏画册事件整体失效画册目录。
+- IPC 加入 / 移出 / 排序 / 删除画册统一走 core 命令；MCP 两个改序入口发排序事件。
   外部 IPC 订阅者需迁移事件名，VS Code 扩展由其仓库独立修改。
 - Phase E 完成协议迁移，Phase F 在现有查询上收紧 `refreshOn`，详见前述 Phase F 依赖；隐藏仍按 hide 开关整体刷新。
 - 前端不维护全量画册列表或计数。`albumPageQueries` 描述每页结构批次：`albums://<过滤段>/x<N>x/<页>`
@@ -410,17 +401,16 @@ ImageGrid 的行与总数不依赖后端 `seq`，只靠前端请求序列：
    `rowsPath === withPaged(viewBody, pageSize, currentPage)`；翻页不应触发 route store 导航。
 2. **改每页条数后仍显示旧页**：确认入口只写 `settings.galleryPageSize`，`ImageGrid` 的归一化
    `pageSize` 已更新，且本地页码按旧页首张图位置换算后触发新的 `rowsPath` 读取。
-3. **VD 下列表仍是 100 一段**：符合设计；Greedy 路径不使用 `galleryPageSize`。
-4. **删除后列表延迟或闪回**：确认写操作经 `ctx.mutate` 发起，操作后行与总数都经 `pathqlRequest$` 请求并从
+3. **删除后列表延迟或闪回**：确认写操作经 `ctx.mutate` 发起，操作后行与总数都经 `pathqlRequest$` 请求并从
    观察方落地；不要靠事件防抖回刷当前操作，也不要直接写入命令返回值。
-5. **切回页面后网格为空但总数正常**（dev）：改 `kbEvents` 源码后的 HMR 会让 `@/router` 重建出未挂到 app 的
+4. **切回页面后网格为空但总数正常**（dev）：改 `kbEvents` 源码后的 HMR 会让 `@/router` 重建出未挂到 app 的
    实例，adapter `isActive` 恒为 false、key 一直是 null。整页重载即恢复，真机测试前先重载。
-6. **任务/畅游详情收到无关刷新**：检查新增事件行里的 `taskId` / `surfRecordId`；字段补丁按依赖表判断，删除时行只检查当前持有行，总数任何删除都重读。
-7. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
+5. **任务/畅游详情收到无关刷新**：检查新增事件行里的 `taskId` / `surfRecordId`；字段补丁按依赖表判断，删除时行只检查当前持有行，总数任何删除都重读。
+6. **带 `pvwimgid` 的链接没跳到目标图所在页**：先直接查
    `images://<视图>/~~/rank/~~/id_<id>`（`kabegame-cli pathql query … --fetch`）。返回空集说明图确实不在
    该视图（检查 `hide/` 与过滤段）；有 `row_index` 但页码不对，查前端是否误用了
    `stripComposablePathTail` 而把 `_kb_desc` 剥掉了。
-8. **定位落到相邻页 / 分页在某处重复或漏行**：当前排序不是全序。检查该 sort provider 的 `order` 是否
+7. **定位落到相邻页 / 分页在某处重复或漏行**：当前排序不是全序。检查该 sort provider 的 `order` 是否
    以 `images.id asc` 收尾；排序路由负责先清空上游排序，下游 provider 必须自己补回这条兜底。
 
 ## 涉及文件（速查）

@@ -2,8 +2,6 @@ use kabegame_core::storage::hidden_cleanup::HiddenCleanupService;
 #[cfg(not(target_os = "android"))]
 use kabegame_core::storage::organize::OrganizeService;
 use kabegame_core::storage::startup_state::{self, StartupPhase};
-#[cfg(all(not(target_os = "android"), feature = "standard"))]
-use kabegame_core::virtual_driver::VirtualDriveService;
 use kabegame_core::{
     crawler::{DownloadQueue, TaskScheduler},
     plugin::PluginManager,
@@ -122,45 +120,6 @@ pub fn init_heavy_globals() -> Result<(), String> {
     #[cfg(not(target_os = "android"))]
     OrganizeService::init_global(Arc::new(OrganizeService::new()))?;
     HiddenCleanupService::init_global(Arc::new(HiddenCleanupService::new()))?;
-
-    // 桌面端 standard mode：VD 等全局单例（light 与 android 桌面分支跳过 VD）
-    #[cfg(all(not(target_os = "android"), feature = "standard"))]
-    {
-        VirtualDriveService::init_global()
-            .map_err(|e| format!("Failed to init VD service: {}", e))?;
-        let virtual_drive_service = VirtualDriveService::global();
-        tracing::info!("Virtual drive support enabled");
-
-        #[cfg(target_os = "windows")]
-        {
-            let vd_service_for_listener = virtual_drive_service.clone();
-            spawn_bg(async move {
-                crate::vd_listener::start_vd_event_listener(vd_service_for_listener).await;
-                tracing::info!("Virtual drive event listener started");
-            });
-        }
-
-        let vd_service_for_mount = virtual_drive_service.clone();
-        spawn_bg(async move {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            let enabled = Settings::global().get_album_drive_enabled();
-            let mount_point = Settings::global().get_album_drive_mount_point();
-            if enabled && !mount_point.is_empty() {
-                use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-                let mount_result = tokio::task::spawn_blocking({
-                    let vd_service = vd_service_for_mount.clone();
-                    let mount_point = mount_point.clone();
-                    move || vd_service.mount(mount_point.as_str())
-                })
-                .await;
-                if let Err(e) = mount_result {
-                    tracing::warn!("Auto mount failed: {}", e);
-                } else if let Ok(Err(e)) = mount_result {
-                    tracing::warn!("Auto mount failed: {}", e);
-                }
-            }
-        });
-    }
 
     #[cfg(any(feature = "web", not(target_os = "android")))]
     crate::web::init_registry();

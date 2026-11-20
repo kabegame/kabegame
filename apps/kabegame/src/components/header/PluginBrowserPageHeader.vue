@@ -11,7 +11,7 @@ import { useUiStore } from "@/stores/ui";
 import { useApp } from "@/stores/app";
 import { storeToRefs } from "pinia";
 import { usePageBridgeStore } from "@/stores/pageBridge";
-import { IS_LIGHT_MODE } from "@/env";
+import { IS_ANDROID } from "@/env";
 
 const { t } = useI18n();
 
@@ -43,8 +43,8 @@ const showIds = computed(() => {
     return [];
   }
   const ids = [HeaderFeatureId.ImportSource];
-  // 源的编辑（改名 / 改 index 地址）只能在源管理弹窗里做；light 模式不渲染该弹窗
-  if (!IS_LIGHT_MODE) ids.push(HeaderFeatureId.ManageSources);
+  // 源的编辑（改名 / 改 index 地址）只能在源管理弹窗里做；Android 不渲染该弹窗
+  if (!IS_ANDROID) ids.push(HeaderFeatureId.ManageSources);
   if (isSuper.value) ids.unshift(HeaderFeatureId.Refresh);
   return ids;
 });
@@ -52,7 +52,7 @@ const showIds = computed(() => {
 const foldIds = computed(() => {
   if (!isCompact.value) return [];
   const ids = [HeaderFeatureId.ImportSource];
-  if (!IS_LIGHT_MODE) ids.push(HeaderFeatureId.ManageSources);
+  if (!IS_ANDROID) ids.push(HeaderFeatureId.ManageSources);
   if (isSuper.value) ids.unshift(HeaderFeatureId.Refresh);
   return ids;
 });

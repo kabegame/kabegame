@@ -240,8 +240,8 @@ mod tests {
         assert!(key_uses_dynamic_var("${a.b}-${c.d}"));
         assert!(key_uses_dynamic_var("${row.id}"));
         assert!(key_uses_dynamic_var("${child.meta.foo}"));
-        assert!(key_uses_dynamic_var("${global:vd_en_US_month|root.name}"));
-        assert!(!key_uses_dynamic_var("${global:vd_en_US_month.01}"));
+        assert!(key_uses_dynamic_var("${global:demo_en_US_month|root.name}"));
+        assert!(!key_uses_dynamic_var("${global:demo_en_US_month.01}"));
 
         // 混: properties + data_var → 仍 dynamic (因含 data_var)
         assert!(key_uses_dynamic_var("${properties.x}-${row.id}"));

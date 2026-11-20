@@ -75,29 +75,3 @@ pub fn open_file_folder<R: Runtime>(app: AppHandle<R>, file_path: String) -> Res
         }
     }
 }
-
-/// 在资源管理器中打开虚拟盘内指定画册文件夹（含子画册路径，与 VD 目录结构一致）。
-#[tauri::command]
-pub async fn open_album_virtual_drive_folder<R: Runtime>(
-    app: AppHandle<R>,
-    album_id: String,
-) -> Result<(), String> {
-    #[cfg(not(feature = "standard"))]
-    {
-        let _ = (app, album_id);
-        return Err("当前模式不支持虚拟盘".to_string());
-    }
-    #[cfg(feature = "standard")]
-    {
-        use kabegame_core::settings::Settings;
-        use kabegame_core::virtual_driver::album_folder_abs_path_for_explorer;
-
-        let id = album_id.trim();
-        if id.is_empty() {
-            return Err("画册 ID 不能为空".to_string());
-        }
-        let mount = Settings::global().get_album_drive_mount_point();
-        let path = album_folder_abs_path_for_explorer(&mount, id)?;
-        open_with_default(&app, &path)
-    }
-}

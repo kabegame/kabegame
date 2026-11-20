@@ -8,7 +8,6 @@ import {
   FolderOpen,
   FolderPlus,
   Funnel,
-  HardDrive,
   Info,
   LayoutGrid,
   PanelLeft,
@@ -73,11 +72,6 @@ export function registerHeaderFeatures() {
       id: HeaderFeatureId.CreateAlbum,
       label: t("header.createAlbum"),
       icon: FolderPlus,
-    },
-    {
-      id: HeaderFeatureId.OpenVirtualDrive,
-      label: t("header.openVirtualDrive"),
-      icon: HardDrive,
     },
     {
       id: HeaderFeatureId.AddToAlbum,

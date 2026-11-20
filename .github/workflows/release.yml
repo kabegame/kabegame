@@ -63,14 +63,13 @@ jobs:
             nasm \
             libx264-dev
 
-      - name: macOS FUSE (for fuser crate) + x264 (for FFmpeg/rsmpeg)
+      - name: macOS x264 (for FFmpeg/rsmpeg)
         if: runner.os == 'macOS'
         run: |
-          brew install macfuse x264 nasm
-          echo "PKG_CONFIG_PATH=$(brew --prefix macfuse)/lib/pkgconfig" >> $GITHUB_ENV
+          brew install x264 nasm
 
       # Windows：FFmpeg 须用 MinGW 编出动态库（libav* DLL），并用 gendef + MSVC lib.exe 生成导入库。
-      # 主程序仍是 windows-msvc（Dokan 兼容），经导入库链接这些 DLL。
+      # 主程序仍是 windows-msvc，经导入库链接这些 DLL。
       - name: Setup MSYS2 (MinGW x264 + gendef) [Windows]
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2

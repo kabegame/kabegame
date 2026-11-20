@@ -15,10 +15,6 @@ use crate::media::image_type::is_media_by_path;
 use crate::settings::Settings;
 use crate::storage::image_events::delete_images_with_events;
 use crate::storage::{Album, Storage};
-#[cfg(all(feature = "virtual-driver", target_os = "windows"))]
-use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(all(feature = "virtual-driver", not(target_os = "android")))]
-use crate::virtual_driver::VirtualDriveService;
 use serde_json::json;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -31,25 +27,6 @@ use url::Url;
 
 const CANCEL_MARKER: &str = "__folder_sync_canceled__";
 const SYNC_WRITE_THROTTLE_MS: u64 = 100;
-
-/// 递归同步/创建时需要刻意避开的禁区根（规范化）：仅 VD 挂载点。
-pub(crate) fn local_folder_forbidden_roots() -> Vec<PathBuf> {
-    #[cfg(all(feature = "virtual-driver", not(target_os = "android")))]
-    {
-        return VirtualDriveService::global()
-            .current_mount_point()
-            .map(|mount_point| {
-                let path = Path::new(&mount_point);
-                path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-            })
-            .into_iter()
-            .collect();
-    }
-    #[cfg(not(all(feature = "virtual-driver", not(target_os = "android"))))]
-    {
-        Vec::new()
-    }
-}
 
 fn normalize_path(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
@@ -171,18 +148,9 @@ async fn handle_subdirs(
         return Ok(());
     }
 
-    let forbidden = local_folder_forbidden_roots();
     let dirs: Vec<_> = dirs
         .into_iter()
-        .filter(|dir| {
-            let Some(path) = dir.path.as_deref() else {
-                return false;
-            };
-            let canon = normalize_path(path);
-            !forbidden
-                .iter()
-                .any(|root| canon == *root || canon.starts_with(root))
-        })
+        .filter(|dir| dir.path.is_some())
         .collect();
     let present: HashSet<PathBuf> = dirs
         .iter()

@@ -1,4 +1,4 @@
-import { IS_ANDROID, IS_LIGHT_MODE, IS_LINUX, IS_MACOS, IS_WEB, IS_WINDOWS } from "../env";
+import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WEB, IS_WINDOWS } from "../env";
 import type { AppSettingKey, AppSettings } from "./settings";
 import { DEFAULT_GALLERY_PAGE_SIZE } from "../utils/galleryPageSize";
 import { DEFAULT_COLOR_THEME_ID } from "../theme/colorTheme";
@@ -234,14 +234,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(tauri("surfFreezePage", "get_surf_freeze_page", "set_surf_freeze_page", "enabled"));
   }
 
-  if (!IS_ANDROID && !IS_LIGHT_MODE) {
-    entries.push(
-      tauri("albumDriveEnabled", "get_album_drive_enabled", "set_album_drive_enabled", "enabled"),
-      tauri("albumDriveMountPoint", "get_album_drive_mount_point", "set_album_drive_mount_point", "mountPoint"),
-      tauri("albumDriveDriverInstalled", "get_album_drive_driver_installed"),
-    );
-  }
-
   // 应用 Web 服务器（仅桌面）：一个端口同时提供 RPC、SSE、文件与 MCP
   if (!IS_ANDROID && !IS_WEB) {
     entries.push(
@@ -301,9 +293,6 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
       readonly("wallpaperDefaultScreen", null),
       readonly("wallpaperMode", "native"),
       readonly("windowState", null),
-      readonly("albumDriveEnabled", false),
-      readonly("albumDriveMountPoint", ""),
-      readonly("albumDriveDriverInstalled", false),
       readonly("defaultDownloadDir", null),
       readonly("autoLaunch", false),
     ];

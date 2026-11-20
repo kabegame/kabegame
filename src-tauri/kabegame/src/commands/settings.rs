@@ -1,14 +1,6 @@
 // Settings related commands
 
-#[cfg(all(feature = "standard", target_os = "windows"))]
-use kabegame_core::app_paths::AppPaths;
 use kabegame_core::settings::Settings;
-#[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-#[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::VirtualDriveService;
-#[cfg(feature = "standard")]
-use std::path::Path;
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::GetSystemMetrics;
 
@@ -203,143 +195,11 @@ pub fn get_window_state() -> Option<serde_json::Value> {
     serde_json::to_value(window_state).ok()
 }
 
-#[cfg(feature = "standard")]
-#[tauri::command]
-pub fn get_album_drive_enabled() -> bool {
-    Settings::global().get_album_drive_enabled()
-}
-
-#[cfg(feature = "standard")]
-#[tauri::command]
-pub fn get_album_drive_mount_point() -> String {
-    Settings::global().get_album_drive_mount_point()
-}
-
-#[cfg(feature = "standard")]
-#[tauri::command]
-pub fn get_album_drive_driver_installed() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
-        let windir = Path::new(&windir);
-        return windir.join("SysNative\\drivers\\dokan2.sys").is_file()
-            || windir.join("System32\\drivers\\dokan2.sys").is_file();
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        return Path::new("/Library/Frameworks/macFUSE.framework").exists()
-            || Path::new("/Library/Filesystems/macfuse.fs").exists();
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        return Path::new("/dev/fuse").exists()
-            && std::process::Command::new("fusermount3")
-                .arg("--version")
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false);
-    }
-
-    #[allow(unreachable_code)]
-    false
-}
-
-#[cfg(all(feature = "standard", target_os = "windows"))]
-#[tauri::command]
-pub fn install_album_drive_driver() -> Result<(), String> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-    fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
-        value.as_ref().encode_wide().chain(Some(0)).collect()
-    }
-
-    let installer_path = AppPaths::global()
-        .resource_dir
-        .join("bin")
-        .join("dokan-installer.exe");
-    if !installer_path.is_file() {
-        return Err(format!(
-            "Dokan installer not found: {}",
-            installer_path.display()
-        ));
-    }
-
-    let operation = wide("runas");
-    let file = wide(installer_path.as_os_str());
-    let params = wide("/S");
-
-    let result = unsafe {
-        ShellExecuteW(
-            0,
-            operation.as_ptr(),
-            file.as_ptr(),
-            params.as_ptr(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-
-    if result as isize <= 32 {
-        return Err(format!(
-            "Failed to launch Dokan installer: {}",
-            result as isize
-        ));
-    }
-
-    Ok(())
-}
-
 /// 收藏画册 id 是常量而非设置项：走 core 复用 `kabegame_core::storage::FAVORITE_ALBUM_ID`，
 /// 不要再抄字面量。
 #[tauri::command]
 pub fn get_favorite_album_id() -> Result<serde_json::Value, String> {
     kabegame_core::commands::settings::get_favorite_album_id()
-}
-
-#[tauri::command]
-#[cfg(feature = "standard")]
-pub async fn set_album_drive_enabled(enabled: bool) -> Result<(), String> {
-    let settings = Settings::global();
-
-    if enabled {
-        // 启用：先挂载虚拟盘
-        let mount_point = settings.get_album_drive_mount_point();
-        tracing::debug!("mount point: {}", mount_point);
-        let vd_service = VirtualDriveService::global();
-        let mount_result = tokio::task::spawn_blocking({
-            let mount_point = mount_point.clone();
-            move || vd_service.mount(mount_point.as_str())
-        })
-        .await
-        .map_err(|e| format!("Task join error: {}", e))?;
-        tracing::debug!("mount over {:?}", mount_result);
-        if let Err(e) = mount_result {
-            return Err(e);
-        }
-    } else {
-        // 禁用：先卸载虚拟盘
-        let vd_service = VirtualDriveService::global();
-        let unmount_result = tokio::task::spawn_blocking(move || vd_service.unmount())
-            .await
-            .map_err(|e| format!("Task join error: {}", e))?;
-
-        if let Err(e) = unmount_result {
-            return Err(e);
-        }
-    }
-
-    settings.set_album_drive_enabled(enabled)
-}
-
-#[tauri::command]
-#[cfg(feature = "standard")]
-pub fn set_album_drive_mount_point(mount_point: String) -> Result<(), String> {
-    Settings::global().set_album_drive_mount_point(mount_point)
 }
 
 /// 语言变更的落地点：写入 → `sync_locale` → 刷新依赖 locale 的后端派生物

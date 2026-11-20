@@ -427,8 +427,6 @@
               <SettingRow v-if="IS_WEB" :label="$t('settings.superMode')" :description="$t('settings.superModeDesc')">
                 <SuperModeSetting />
               </SettingRow>
-              <!-- 画册盘自带两行（开关 + 挂载点），不再套外层 SettingRow -->
-              <AlbumDriveSetting v-if="!IS_WEB && !isLightMode" />
               <WebServerSettingsPanel v-if="!IS_WEB" />
               <McpSettingsPanel v-if="!IS_WEB" class="mx-[-8px] mb-1 mt-[18px]" />
             </SettingsSection>
@@ -482,14 +480,13 @@ import WallpaperStyleSetting from "@/components/settings/items/WallpaperStyleSet
 import WallpaperTransitionSetting from "@/components/settings/items/WallpaperTransitionSetting.vue";
 import WallpaperModeSetting from "@/components/settings/items/WallpaperModeSetting.vue";
 import WallpaperDisplayModeSetting from "@/components/settings/items/WallpaperDisplayModeSetting.vue";
-import AlbumDriveSetting from "@/components/settings/items/AlbumDriveSetting.vue";
 import LanguageSetting from "@/components/settings/items/LanguageSetting.vue";
 import SuperModeSetting from "@/components/settings/items/SuperModeSetting.vue";
 import WebServerSettingsPanel from "@/components/settings/WebServerSettingsPanel.vue";
 import McpSettingsPanel from "@/components/settings/McpSettingsPanel.vue";
 import PluginDefaultConfigsPanel from "@/components/settings/PluginDefaultConfigsPanel.vue";
 import SettingsSection from "@/components/settings/SettingsSection.vue";
-import { APP_VERSION, IS_WINDOWS, IS_LINUX, IS_LIGHT_MODE, IS_ANDROID, IS_MACOS, IS_WEB } from "@/env";
+import { APP_VERSION, IS_WINDOWS, IS_LINUX, IS_ANDROID, IS_MACOS, IS_WEB } from "@/env";
 import { vLoading } from "@/components/ui/loading";
 import Button from "@/components/ui/Button.vue";
 
@@ -781,7 +778,6 @@ watch(wallpaperDisabled, (disabled, prev) => {
     kameMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
   }
 });
-const isLightMode = IS_LIGHT_MODE;
 
 const settingsShowIds = computed(() => []);
 

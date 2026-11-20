@@ -512,7 +512,7 @@ impl PluginManager {
     pub fn get_cached_plugin_display_name_sync(&self, plugin_id: &str) -> Option<String> {
         let plugin = self.get(plugin_id)?;
         let name =
-            manifest_value_display_for_locale(&plugin.name, kabegame_i18n::current_vd_locale())
+            manifest_value_display_for_locale(&plugin.name, kabegame_i18n::current_display_locale())
                 .trim()
                 .to_string();
         if name.is_empty() {

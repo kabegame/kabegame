@@ -1,9 +1,9 @@
 ---
 title: 安装与首次启动
-description: 按平台下载 Kabegame 发行包、安装虚拟盘依赖，并了解首次启动后数据目录的位置。
+description: 按平台下载 Kabegame 发行包，并了解首次启动后数据目录的位置。
 ---
 
-Kabegame 面向 Windows、macOS、Linux 桌面与 Android 发布。桌面端是单一的标准（standard）构建，带有虚拟盘；`kabegame-cli` 命令行工具是**独立下载**，不随主程序打包。本页说明在各平台下载哪个包、如何处理虚拟盘依赖，以及首次启动后数据落在哪里。
+Kabegame 面向 Windows、macOS、Linux 桌面与 Android 发布。桌面端是单一的标准（standard）构建；`kabegame-cli` 命令行工具是**独立下载**，不随主程序打包。本页说明在各平台下载哪个包、以及首次启动后数据落在哪里。
 
 ## 选择发行包
 
@@ -17,20 +17,14 @@ Kabegame 面向 Windows、macOS、Linux 桌面与 Android 发布。桌面端是�
 | Android | `Kabegame_<版本>_android-preview.apk` | 不适用 |
 
 :::note
-桌面主程序自带虚拟盘。`kabegame-cli` 需要用时到发布页单独下载，见 [kabegame-cli 用法](/reference/cli/)。Android 版不含虚拟盘与 CLI。
+`kabegame-cli` 需要用时到发布页单独下载，见 [kabegame-cli 用法](/reference/cli/)。Android 版不含 CLI。
 :::
 
 ## Windows
 
 下载 `Kabegame-standard_<版本>_x64-setup.exe`，双击运行 NSIS 安装向导。
 
-首次安装时，如果系统缺少 Dokan 2.x 驱动，安装器会通过 UAC 提权自动调起捆绑的 Dokan 安装程序。完成后安装目录默认位于 `C:\Program Files\Kabegame\`，开始菜单会出现 Kabegame 图标。
-
-:::caution
-Dokan 驱动的关键文件是 `dokan2.sys`，只有 `dokan2.dll` 不足以正常挂载。如果之前装过 Dokan 但虚拟盘仍然无法使用，建议重新安装 Dokan 2.x 运行时。
-:::
-
-虚拟盘的进一步配置请见 [虚拟盘](/guide/virtual-drive/)。
+安装完成后安装目录默认位于 `C:\Program Files\Kabegame\`，开始菜单会出现 Kabegame 图标。
 
 ## macOS
 
@@ -44,16 +38,6 @@ xattr -d com.apple.quarantine /Applications/Kabegame.app
 
 命令完成后即可正常启动。最低系统要求为 macOS 11（Big Sur）。
 
-:::caution
-如果你希望启用虚拟盘，需要先安装 macFUSE：
-
-```bash
-brew install macfuse
-```
-
-具体挂载说明见 [虚拟盘](/guide/virtual-drive/)。
-:::
-
 ## Linux
 
 下载 `Kabegame-standard_<版本>_amd64.deb`，在终端执行：
@@ -66,12 +50,6 @@ sudo dpkg -i Kabegame-*.deb
 
 ```bash
 sudo apt-get install -f
-```
-
-deb 会声明对 `fuse3` 的依赖，apt 会自动拉取。若你的系统未预装 fuse3，也可以先手动安装：
-
-```bash
-sudo apt install fuse3
 ```
 
 最低支持 Ubuntu 24.04。
@@ -91,20 +69,8 @@ sudo apt install fuse3
 最低 Android 8.0（API 26+）。
 
 :::note
-Android 版不包含虚拟盘与 `kabegame-cli`。
+Android 版不包含 `kabegame-cli`。
 :::
-
-## 虚拟盘依赖一览
-
-虚拟盘只存在于桌面版。各平台所需依赖：
-
-| 平台 | 依赖 | 为什么需要 |
-|---|---|---|
-| Windows | Dokan 2.x 驱动（含 `dokan2.sys`） | 将图库挂载为本地磁盘 |
-| macOS | macFUSE | 通过 FUSE 在 `~` 下暴露挂载点 |
-| Linux | `fuse3` | 通过 FUSE 在本地目录挂载，`fusermount3` 用于卸载 |
-
-各平台的挂载点配置、常见错误处理均在 [虚拟盘](/guide/virtual-drive/) 中展开。
 
 ## `.kgpg` 文件关联
 
@@ -141,16 +107,12 @@ Android 的大文件目录位于 `/storage/emulated/0/Android/data/app.kabegame/
 
 ## 排障
 
-- **Windows 挂载虚拟盘提示「Dokan 驱动不可用」** → Dokan 2.x 运行时未正确安装或缺少 `dokan2.sys` → 重新安装 Dokan 2.x 驱动。
-- **Windows 挂载提示「Dokan 版本不兼容」** → `dokan2.dll` 与系统驱动版本不匹配 → 升级或重装 Dokan 2.x 驱动到与应用匹配的版本。
 - **macOS 启动提示「已损坏」或无法打开** → 安装包未签名被 Gatekeeper 隔离 → 执行 `xattr -d com.apple.quarantine /Applications/Kabegame.app`。
-- **Linux `dpkg -i` 报依赖错误** → `fuse3` 等依赖缺失 → 执行 `sudo apt-get install -f` 自动补齐。
 - **Linux 在 Wayland 下看起来仍然走 X11** → 应用主动设置了 `GDK_BACKEND=x11` 作为兼容方案 → 这是正常行为，无需处理。
 
 ## 延伸阅读
 
 - [快速上手](/guide/quickstart/) — 装好之后的第一步。
-- [虚拟盘](/guide/virtual-drive/) — 挂载点配置与深入说明。
 - [kabegame-cli 用法](/reference/cli/) — 从发布页单独下载的命令行工具。
 - [Android 专版说明](/guide/android/) — Android 限制、返回键、分享体验。
 - [故障排查](/guide/troubleshooting/) — 更完整的 FAQ 与常见错误。

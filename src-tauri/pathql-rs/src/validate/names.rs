@@ -3,7 +3,7 @@ use crate::validate::{ValidateError, ValidateErrorKind};
 
 /// 校验 namespace / name 字符模式。
 ///
-/// - `name`：`^[A-Za-z_][A-Za-z0-9_]*$`（兼容 `vd_zh_CN_root_router` 等 i18n 路由名）
+/// - `name`：`^[A-Za-z_][A-Za-z0-9_]*$`（兼容 `demo_zh_CN_root_router` 等 i18n 路由名）
 /// - `namespace`：dot-separated 段，每段允许 `-`；空串 (root namespace) 合法
 pub fn validate_names(
     ns: &Namespace,
@@ -98,8 +98,8 @@ mod tests {
 
     #[test]
     fn valid_name_with_caps() {
-        // matches real data: vd_zh_CN_root_router
-        assert!(run("kabegame", "vd_zh_CN_root_router").is_empty());
+        // matches real data: demo_zh_CN_root_router
+        assert!(run("kabegame", "demo_zh_CN_root_router").is_empty());
     }
 
     #[test]

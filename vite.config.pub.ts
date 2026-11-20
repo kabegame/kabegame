@@ -41,7 +41,6 @@ export default {
     __MACOS__: !isAndroid && !isWeb && isMacOS,
     __ANDROID__: isAndroid,
     __WEB__: isWeb,
-    __LIGHT_MODE__: isAndroid,
     // 切换此开关来强制重启vite服务器
     __REBOOT__: true,
   },

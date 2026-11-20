@@ -22,7 +22,6 @@ globset = { workspace = true }
 image = { workspace = true }
 infer = "0.22"
 kamadak-exif = { workspace = true }
-lru = "0.18"
 regex = "1.11"
 r2d2 = "0.8"
 r2d2_sqlite = "0.35"
@@ -114,31 +113,14 @@ reqwest = { version = "0.11", features = [
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libc = "0.2"
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# Linux 不链接 C libfuse:不开 `libfuse` feature,fuser 走纯 Rust 挂载路径
-# (build.rs `fuser_mount_impl="pure-rust"`,仅 Linux 支持)。二进制启动时**没有任何**
-# libfuse DT_NEEDED,挂载时才懒执行 SUID `fusermount3`(apt `fuse3` 提供)——
-# 语义与 Windows delay-load dokan2.dll 一致:缺库不影响启动,仅虚拟盘功能不可用。
-# 因此不需要 libfuse3.a/.so,构建期也不再需要 FUSE3_STATIC;deb 运行时仍 depends fuse3。
-fuser = { version = "0.18", optional = true }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
-# macOS 保持 `libfuse`:fuser 0.18 的 build.rs 对 macOS 有专用分支,无条件
-# pkg_config probe `fuse`(macFUSE 4.x)并置 `fuser_mount_impl="libfuse2"` +
-# 自动开 `macfuse-4-compat`——「0.17 起优先 libfuse3」只作用于非 macOS 分支,
-# 所以**不需要**显式加 `libfuse2`。
-fuser = { version = "0.18", features = ["libfuse"], optional = true }
 
 # Android 交叉编译时无系统 OpenSSL，使用 vendored 从源码编译
 [target.'cfg(target_os = "android")'.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
 
 [target.'cfg(windows)'.dependencies]
-dokan = { version = "0.3.1", optional = true }
-memmap2 = "0.9"
-widestring = "0.4.3"
-winapi = { version = "0.3.9", features = ["ntstatus", "winnt", "winbase"] }
 winreg = "0.55"
 windows-sys = { version = "0.52", features = [
   "Win32_Foundation",
@@ -150,7 +132,6 @@ windows-sys = { version = "0.52", features = [
   "Win32_System_IO",
   "Win32_System_Memory",
   "Win32_System_Threading",
-  "Win32_UI_Shell",
 ] }
 
 [features]
@@ -171,9 +152,6 @@ wpe = [
 ]
 ipc-client = []
 ipc-server = []
-virtual-driver = ["dep:fuser", "dep:dokan"]
-# Phase 6b: 6c 通过 SqlExecutor 接入后再启用 VD module
-vd-legacy = []
 plugin-runtime = [
   "dep:deno_core",
   "dep:deno_error",

@@ -17,8 +17,8 @@ fn main() {
 
     // Build-time injection:
     // - KABEGAME_DATA=dev | prod
-    // Mode (standard / light / android / web) is now expressed entirely via Cargo features
-    // on the consumer crate (kabegame). Core only sees feature flags like `virtual-driver`.
+    // Mode (standard / android / web) is now expressed entirely via Cargo features
+    // on the consumer crate (kabegame). Core only sees feature flags like `wpe`.
     println!("cargo:rerun-if-env-changed=KABEGAME_DATA");
     // rsmpeg/rusty_ffmpeg 经此环境变量定位 bin/{platform}/{arch}/FFmpeg-build/install 的 libav* 库（由 scripts 注入）。
     println!("cargo:rerun-if-env-changed=FFMPEG_PKG_CONFIG_PATH");

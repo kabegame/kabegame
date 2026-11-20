@@ -1,8 +1,6 @@
 use crate::local_folder::fs_listener::FsBatch;
 use crate::local_folder::scan_service::ScannedDir;
-use crate::local_folder::sync::{
-    create_child_albums, local_folder_forbidden_roots, remove_album_tree,
-};
+use crate::local_folder::sync::{create_child_albums, remove_album_tree};
 use crate::local_folder::synchronizer::{submit, Descend, FullSyncOptions, SyncCmd, SyncOrigin};
 use crate::local_folder::SyncMode;
 use crate::media::image_type::is_media_by_path;
@@ -124,7 +122,6 @@ pub(crate) async fn process_batch(batch: FsBatch) -> Result<Vec<DiffRequest>, St
         index = album_index(&albums);
     }
 
-    let forbidden = local_folder_forbidden_roots();
     let mut new_dirs: HashMap<String, Vec<ScannedDir>> = HashMap::new();
     for path in batch.changes.keys() {
         let metadata = match std::fs::metadata(path) {
@@ -143,13 +140,6 @@ pub(crate) async fn process_batch(batch: FsBatch) -> Result<Vec<DiffRequest>, St
         // WPE 壁纸目录按「文件」对待：不建子画册，走下面的 diff 挂到父画册
         #[cfg(feature = "wpe")]
         if crate::crawler::wpe_import::is_importable_wpe_dir(path) {
-            continue;
-        }
-        let canon = normalize_path(path);
-        if forbidden
-            .iter()
-            .any(|root| canon == *root || canon.starts_with(root))
-        {
             continue;
         }
         let Some(parent_path) = path.parent().map(normalize_path) else {

@@ -111,17 +111,6 @@ fn register_fixture_functions(conn: &Connection) {
     .unwrap();
 
     conn.create_scalar_function(
-        "vd_display_name",
-        1,
-        FunctionFlags::SQLITE_UTF8,
-        |ctx| -> rusqlite::Result<String> {
-            let canonical: String = ctx.get(0)?;
-            Ok(kabegame_i18n::vd_display_name(&canonical))
-        },
-    )
-    .unwrap();
-
-    conn.create_scalar_function(
         "get_plugin",
         -1,
         FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
@@ -131,10 +120,10 @@ fn register_fixture_functions(conn: &Connection) {
                 let raw: rusqlite::types::Value = ctx.get(1)?;
                 match raw {
                     rusqlite::types::Value::Text(s) => s,
-                    _ => kabegame_i18n::current_vd_locale().to_string(),
+                    _ => kabegame_i18n::current_display_locale().to_string(),
                 }
             } else {
-                kabegame_i18n::current_vd_locale().to_string()
+                kabegame_i18n::current_display_locale().to_string()
             };
             let name = if locale.starts_with("zh") {
                 "像素插件"
@@ -1057,7 +1046,7 @@ fn run_configs_join_latest_task_filters_facets_and_sorts() {
 }
 
 #[test]
-fn root_gallery_and_vd_topology_uses_images_schema() {
+fn root_and_gallery_topology_uses_images_schema() {
     let runtime = build_runtime();
 
     assert_eq!(runtime.count("images://").unwrap(), 122);
@@ -1078,15 +1067,6 @@ fn root_gallery_and_vd_topology_uses_images_schema() {
         "years={:?}",
         years.iter().map(|child| &child.name).collect::<Vec<_>>()
     );
-
-    let vd = runtime.list("images://vd/i18n-en_US").unwrap();
-    let vd_names = vd
-        .iter()
-        .map(|child| child.name.as_str())
-        .collect::<Vec<_>>();
-    for expected in ["Albums", "By Plugin", "By Dimensions"] {
-        assert!(vd_names.contains(&expected), "vd names={vd_names:?}");
-    }
 }
 
 #[test]
@@ -1286,7 +1266,7 @@ fn gallery_page_number_resolves_without_listing_pages() {
             .len(),
         total - 100
     );
-    // 列举仍保留给 VD 目录与 MCP。
+    // 列举仍保留给 MCP。
     let pages = runtime.list("images://gallery/all/_kb_x100x").unwrap();
     assert_eq!(
         pages.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
@@ -1990,89 +1970,6 @@ fn gallery_aspect_ranges_are_left_open_right_closed_and_partition_with_unknown()
             "bad={bad}"
         );
     }
-
-    // VD 友好目录落到与前端同一组桶：逐个目录与对应画廊段的结果集一致
-    let _locale_guard = lock_locale_tests();
-    let vd_cases = [
-        (
-            "zh",
-            "images://vd/i18n-zh_CN/按尺寸",
-            [
-                "竖屏 (3x4 及更窄)",
-                "方正 (3x4-4x3)",
-                "横屏 (4x3-16x9)",
-                "宽屏 (宽于 16x9)",
-                "未知比例",
-            ],
-        ),
-        (
-            "zhtw",
-            "images://vd/i18n-zhtw/按尺寸",
-            [
-                "豎屏 (3x4 及更窄)",
-                "方正 (3x4-4x3)",
-                "橫屏 (4x3-16x9)",
-                "寬屏 (寬於 16x9)",
-                "未知比例",
-            ],
-        ),
-        (
-            "en",
-            "images://vd/i18n-en_US/By Dimensions",
-            [
-                "Portrait (3x4 or narrower)",
-                "Square-ish (3x4-4x3)",
-                "Landscape (4x3-16x9)",
-                "Widescreen (wider than 16x9)",
-                "Unknown ratio",
-            ],
-        ),
-        (
-            "ja",
-            "images://vd/i18n-ja/寸法別",
-            [
-                "縦長 (3x4 以下)",
-                "スクエア寄り (3x4-4x3)",
-                "横長 (4x3-16x9)",
-                "ワイド (16x9 より横長)",
-                "比率不明",
-            ],
-        ),
-        (
-            "ko",
-            "images://vd/i18n-ko/크기 비율별",
-            [
-                "세로형 (3x4 이하)",
-                "정방형 (3x4-4x3)",
-                "가로형 (4x3-16x9)",
-                "와이드 (16x9보다 넓음)",
-                "비율 알 수 없음",
-            ],
-        ),
-    ];
-    for (locale, root, names) in vd_cases {
-        kabegame_i18n::set_locale(locale);
-        let mut listed = runtime
-            .list(root)
-            .unwrap()
-            .into_iter()
-            .map(|c| c.name)
-            .collect::<Vec<_>>();
-        listed.sort();
-        let mut expected_names = names.map(String::from).to_vec();
-        expected_names.sort();
-        assert_eq!(listed, expected_names, "{root}");
-        for (name, segment) in names.iter().zip(APP_ASPECT_BUCKETS) {
-            assert!(is_windows_safe_vd_dir_name(name), "{name}");
-            let mut vd = ids(runtime.fetch(&format!("{root}/{name}/x1000x/1")).unwrap());
-            vd.sort_by_key(|id| id.parse::<i64>().unwrap());
-            assert_eq!(
-                vd,
-                gallery_ids(segment),
-                "{root}/{name} vs aspect/{segment}"
-            );
-        }
-    }
 }
 
 /// 应用的大小桶：(段, 下界含, 上界不含)；`unknown` 为 size 缺失或非正。与前端过滤树 SIZE_BUCKETS 同序。
@@ -2247,7 +2144,6 @@ fn favorite_and_hidden_flags_come_from_exists_without_album_join() {
     };
     for path in [
         "images://gallery/sort/by-id/_kb_x100x/1",
-        "images://vd/i18n-zh_CN/按媒体/所有格式/1",
     ] {
         let rows = flags(path);
         assert!(rows.len() >= 10, "path={path}");
@@ -2582,180 +2478,6 @@ fn album_sort_path_paginates_and_rejects_legacy_entries() {
 }
 
 #[test]
-fn vd_album_i18n_roots_resolve_to_same_image_set() {
-    let _locale_guard = lock_locale_tests();
-    let runtime = build_runtime();
-    kabegame_i18n::set_locale("zh");
-    let zh = ids(runtime
-        .fetch("images://vd/i18n-zh_CN/画册/AlbumA/x100x/1")
-        .unwrap());
-    kabegame_i18n::set_locale("en");
-    let en = ids(runtime
-        .fetch("images://vd/i18n-en_US/By Album/AlbumA/x100x/1")
-        .unwrap());
-    assert_eq!(zh, ["1", "2", "3", "4", "5"]);
-    assert_eq!(zh, en);
-}
-
-#[test]
-fn vd_media_type_lists_all_formats_and_specific_formats() {
-    let _locale_guard = lock_locale_tests();
-    let runtime = build_runtime();
-    kabegame_i18n::set_locale("zh");
-
-    let all = runtime
-        .fetch("images://vd/i18n-zh_CN/按媒体/所有格式/1")
-        .unwrap();
-    let all_ids = ids(all);
-    assert_eq!(&all_ids[..3], ["1", "2", "3"]);
-
-    let mp4 = runtime
-        .fetch("images://vd/i18n-zh_CN/按媒体/视频/mp4/1")
-        .unwrap();
-    assert_eq!(ids(mp4), ["118"]);
-}
-
-#[test]
-fn vd_aspect_i18n_roots_list_localized_ratio_buckets() {
-    let _locale_guard = lock_locale_tests();
-    let runtime = build_runtime();
-
-    kabegame_i18n::set_locale("zh");
-    let zh = runtime.list("images://vd/i18n-zh_CN/按尺寸").unwrap();
-    let zh_names = zh.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
-    assert!(
-        zh_names
-            .iter()
-            .all(|name| is_windows_safe_vd_dir_name(name)),
-        "{zh_names:?}"
-    );
-    assert!(zh_names.contains(&"横屏 (4x3-16x9)"), "{zh_names:?}");
-    assert!(zh_names.contains(&"宽屏 (宽于 16x9)"), "{zh_names:?}");
-    assert_eq!(zh_names.len(), 5, "{zh_names:?}");
-    assert_eq!(
-        ids(runtime
-            .fetch("images://vd/i18n-zh_CN/按尺寸/横屏 (4x3-16x9)/x100x/1")
-            .unwrap()),
-        ["114", "118"]
-    );
-
-    kabegame_i18n::set_locale("en");
-    let en = runtime
-        .list("images://vd/i18n-en_US/By Dimensions")
-        .unwrap();
-    let en_names = en.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
-    assert!(
-        en_names
-            .iter()
-            .all(|name| is_windows_safe_vd_dir_name(name)),
-        "{en_names:?}"
-    );
-    assert!(en_names.contains(&"Landscape (4x3-16x9)"), "{en_names:?}");
-    assert_eq!(en_names.len(), 5, "{en_names:?}");
-    assert_eq!(
-        ids(runtime
-            .fetch("images://vd/i18n-en_US/By Dimensions/Landscape (4x3-16x9)/x100x/1")
-            .unwrap()),
-        ["114", "118"]
-    );
-}
-
-fn is_windows_safe_vd_dir_name(name: &str) -> bool {
-    !name
-        .chars()
-        .any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'))
-}
-
-#[test]
-fn vd_plugin_meta_name_tracks_current_locale() {
-    let _locale_guard = lock_locale_tests();
-    let runtime = build_runtime();
-
-    kabegame_i18n::set_locale("zh");
-    let zh = runtime.list("images://vd/i18n-zh_CN/按插件").unwrap();
-    let zh_plugin = zh.iter().find(|c| c.name == "像素插件 - pixiv").unwrap();
-    assert_eq!(
-        zh_plugin.meta.as_ref().unwrap().get("name").unwrap(),
-        "像素插件"
-    );
-
-    kabegame_i18n::set_locale("en");
-    let en = runtime.list("images://vd/i18n-en_US/By Plugin").unwrap();
-    let en_plugin = en
-        .iter()
-        .find(|c| c.name == "Pixel Plugin - pixiv")
-        .unwrap();
-    assert_eq!(
-        en_plugin.meta.as_ref().unwrap().get("name").unwrap(),
-        "Pixel Plugin"
-    );
-}
-
-#[test]
-fn vd_root_routers_cover_all_supported_locales() {
-    let _locale_guard = lock_locale_tests();
-    let runtime = build_runtime();
-
-    let cases = [
-        (
-            "zh",
-            "images://vd/i18n-zh_CN",
-            "画册",
-            "按插件",
-            "按尺寸",
-            "AlbumA",
-        ),
-        (
-            "en",
-            "images://vd/i18n-en_US",
-            "Albums",
-            "By Plugin",
-            "By Dimensions",
-            "AlbumA",
-        ),
-        (
-            "ja",
-            "images://vd/i18n-ja",
-            "アルバム",
-            "プラグイン別",
-            "寸法別",
-            "AlbumA",
-        ),
-        (
-            "ko",
-            "images://vd/i18n-ko",
-            "앨범",
-            "플러그인별",
-            "크기 비율별",
-            "AlbumA",
-        ),
-        (
-            "zhtw",
-            "images://vd/i18n-zhtw",
-            "畫冊",
-            "按外掛",
-            "按尺寸",
-            "AlbumA",
-        ),
-    ];
-
-    for (locale, root, album_root, plugin_root, aspect_root, album_name) in cases {
-        kabegame_i18n::set_locale(locale);
-        let children = runtime.list(root).unwrap();
-        let names = children.iter().map(|c| c.name.as_str()).collect::<Vec<_>>();
-        assert!(names.contains(&album_root), "{root} names={names:?}");
-        assert!(names.contains(&plugin_root), "{root} names={names:?}");
-        assert!(names.contains(&aspect_root), "{root} names={names:?}");
-
-        let album_path = format!("{root}/{album_root}/{album_name}/x100x/1");
-        assert_eq!(
-            ids(runtime.fetch(&album_path).unwrap()),
-            ["1", "2", "3", "4", "5"]
-        );
-    }
-}
-
-#[test]
 fn resolving_many_pages_uses_bounded_prefix_cache_shape() {
     let runtime = build_runtime();
     for page in 1..=100 {
@@ -2823,9 +2545,6 @@ fn image_collection_paths_decode_into_image_info() {
         "images://gallery/sort/by-name/_kb_x2x/1",
         "images://gallery/media-type/image/_kb_x2x/1",
         "images://gallery/hide/all/_kb_x2x/1",
-        // VD 侧走 vd_root_router 的 fields，与 gallery 是两条独立的字段贡献链，
-        // 所以必须各测一条。
-        "images://vd/i18n-en_US/By Album/AlbumA/x100x/1",
     ] {
         let rows = runtime
             .fetch(path)
@@ -3359,7 +3078,7 @@ fn media_filters_plan_with_query_stats() {
     }
 }
 
-/// 分类按主类：video/* 归视频，x-wpe/* 归 WPE，其余归图片，三类互补；画廊、画册、列举与 VD 入口是同一判定。
+/// 分类按主类：video/* 归视频，x-wpe/* 归 WPE，其余归图片，三类互补；画廊、画册、列举是同一判定。
 #[test]
 fn media_kind_filters_partition_images() {
     const ALBUM: &str = "33333333-3333-3333-3333-333333333333";
@@ -3440,17 +3159,6 @@ fn media_kind_filters_partition_images() {
         reference(&format!(
             "{album} AND NOT (images.type GLOB 'video/*') AND NOT (images.type GLOB 'x-wpe/*')"
         ))
-    );
-
-    assert_eq!(fetched("images://vd/i18n-zh_CN/按媒体/视频/1"), videos);
-    let vd_children = runtime.list("images://vd/i18n-zh_CN/按媒体").unwrap();
-    assert!(
-        vd_children.iter().any(|child| child.name == "视频"),
-        "{:?}",
-        vd_children
-            .iter()
-            .map(|child| &child.name)
-            .collect::<Vec<_>>()
     );
 }
 

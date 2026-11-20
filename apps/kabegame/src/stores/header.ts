@@ -9,7 +9,6 @@ export enum HeaderFeatureId {
   Organize = "organize",
   Collect = "collect",
   CreateAlbum = "createAlbum",
-  OpenVirtualDrive = "openVirtualDrive",
   ImportSource = "importSource",
   ManageSources = "manageSources",
   TaskDrawer = "taskDrawer",

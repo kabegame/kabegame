@@ -22,18 +22,6 @@ pub enum IpcRequest {
     /// 探活
     Status,
 
-    /// 虚拟盘：挂载（Windows + virtual-driver）
-    #[cfg(feature = "virtual-driver")]
-    VdMount,
-
-    /// 虚拟盘：卸载（Windows + virtual-driver）
-    #[cfg(feature = "virtual-driver")]
-    VdUnmount,
-
-    /// 虚拟盘：状态（Windows + virtual-driver）
-    #[cfg(feature = "virtual-driver")]
-    VdStatus,
-
     /// 导入插件请求（从 .kgpg 文件）
     AppImportPlugin {
         /// .kgpg 文件路径
@@ -391,10 +379,6 @@ pub enum IpcRequest {
     SettingsGetDefaultImagesDir,
     /// 解析后的界面语言（如 `zh` / `en`）
     SettingsGetLanguage,
-    #[cfg(feature = "virtual-driver")]
-    SettingsGetAlbumDriveEnabled,
-    #[cfg(feature = "virtual-driver")]
-    SettingsGetAlbumDriveMountPoint,
 
     // ======== Settings Setter（保留 core::Settings 的校验逻辑）========
     SettingsSetGalleryImageAspectRatio {
@@ -420,14 +404,6 @@ pub enum IpcRequest {
     },
     SettingsSetWallpaperMode {
         mode: String,
-    },
-    #[cfg(feature = "virtual-driver")]
-    SettingsSetAlbumDriveEnabled {
-        enabled: bool,
-    },
-    #[cfg(feature = "virtual-driver")]
-    SettingsSetAlbumDriveMountPoint {
-        mount_point: String,
     },
     SettingsSetAutoLaunch {
         enabled: bool,
@@ -512,16 +488,6 @@ pub struct IpcResponse {
     #[serde(default)]
     pub task_id: Option<String>,
 
-    /// 对 VD：是否已挂载
-    #[serde(default)]
-    #[cfg(feature = "virtual-driver")]
-    pub mounted: Option<bool>,
-
-    /// 对 VD：当前挂载点
-    #[serde(default)]
-    #[cfg(feature = "virtual-driver")]
-    pub mount_point: Option<String>,
-
     /// 对 Status：应用版本与能力信息（可选，后续扩展）
     #[serde(default)]
     pub info: Option<serde_json::Value>,
@@ -548,10 +514,6 @@ impl IpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(feature = "virtual-driver")]
-            mounted: None,
-            #[cfg(feature = "virtual-driver")]
-            mount_point: None,
             info: None,
             data: serde_json::Value::Null,
             bytes: None,
@@ -565,10 +527,6 @@ impl IpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(feature = "virtual-driver")]
-            mounted: None,
-            #[cfg(feature = "virtual-driver")]
-            mount_point: None,
             info: None,
             data: serde_json::Value::Null,
             bytes: None,
@@ -582,10 +540,6 @@ impl IpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(feature = "virtual-driver")]
-            mounted: None,
-            #[cfg(feature = "virtual-driver")]
-            mount_point: None,
             info: None,
             data: data,
             bytes: None,
@@ -603,10 +557,6 @@ impl IpcResponse {
             message: Some(message.into()),
             request_id: None,
             task_id: None,
-            #[cfg(feature = "virtual-driver")]
-            mounted: None,
-            #[cfg(feature = "virtual-driver")]
-            mount_point: None,
             info: None,
             data: serde_json::Value::Null,
             bytes: Some(ByteBuf::from(bytes)),

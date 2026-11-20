@@ -4,7 +4,6 @@ export const IS_MACOS = __MACOS__;
 export const IS_ANDROID = __ANDROID__;
 export const IS_WEB = __WEB__;
 export const IS_DEV = __DEV__;
-export const IS_LIGHT_MODE = __LIGHT_MODE__;
 
 /**
  * 应用版本号。由 `apps/kabegame/.env` 的 `VITE_APP_VERSION` 编译期注入，

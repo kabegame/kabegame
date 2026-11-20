@@ -90,34 +90,11 @@ albums:
     rootPathForbidden: "sync_folder にルートディレクトリ '/' は指定できません"
     notDirectory: sync_folder はフォルダではありません
     folderAccessFailed: "sync_folder にアクセスできません: {detail}"
-    virtualDrivePathForbidden: "仮想ドライブのマウント先（{path}）配下のパスは同期元にできません"
     duplicateSyncFolder: このパスのローカルフォルダ同期アルバムは既に存在します
     readOnly: ローカルフォルダ同期アルバムでは画像を手動で追加・削除できません
 
 plugins:
   officialGithubReleaseSourceName: 公式 GitHub Releases ソース
-
-vd:
-  all: すべて
-  plugin: プラグイン別
-  name: 名前別
-  date: 日付別
-  dateRange: 期間別
-  album: アルバム
-  task: タスク別
-  surf: サーフ別
-  mediaType: 種類別
-  wallpaperOrder: 壁紙設定順
-  desc: 降順
-  image: 画像
-  video: 動画
-  allFormats: すべての形式
-  subAlbums: サブアルバム
-  albumOrder: アルバム順
-  wallpaperOrderSub: 壁紙順
-  imageOnly: 画像のみ
-  videoOnly: 動画のみ
-  hiddenAlbum: 非表示アルバム
 
 surf:
   toolbar:

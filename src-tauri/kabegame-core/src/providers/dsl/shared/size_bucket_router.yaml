@@ -1,8 +1,8 @@
 namespace: kabegame
 name: size_bucket_router
 # 从 ${composed} 统计各大小分桶的行数，只列出非空分组。
-# SQL 结果列 min_bytes / max_bytes 由 runtime 自动作为 meta 暴露给上层（如 vd_size_router）。
-# 不直接路由到任何 provider，由调用方决定路由策略（便于 VD 做独立 i18n 改造）。
+# SQL 结果列 min_bytes / max_bytes 由 runtime 自动作为 meta 暴露给上层。
+# 不直接路由到任何 provider，由调用方决定路由策略。
 # unknown 桶：min_bytes=max_bytes=-1，由 size_range_provider 的哨兵逻辑处理。
 list:
   "${out.bucket}":

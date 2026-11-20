@@ -87,7 +87,7 @@
     SetFileAttributes "$INSTDIR\desktop.ini" NORMAL
     Delete "$INSTDIR\desktop.ini"
 
-  ; Delete all DLLs we moved from resources/bin (dokan2.dll and other bin/*.dll)
+  ; Delete all DLLs we moved from resources/bin (bin/*.dll)
   ; This sweep also removes the CEF DLLs (libcef.dll, chrome_elf.dll, ...).
   FindFirst $0 $1 "$INSTDIR\*.dll"
   dll_del_loop:

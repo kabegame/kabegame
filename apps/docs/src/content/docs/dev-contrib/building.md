@@ -61,7 +61,7 @@ deno task check -c kabegame
 
 | 模式 | 用途 |
 |---|---|
-| `standard` | 默认桌面版本，包含插件商店、虚拟磁盘和桌面视频摄入能力。 |
+| `standard` | 默认桌面版本，包含插件商店和桌面视频摄入能力。 |
 | `android` | Android 应用；开发时使用 `deno task dev -c kabegame --mode android`。 |
 | `web` | Web 目标，不包含 Tauri 原生栈。 |
 
@@ -89,8 +89,8 @@ deno task build:ffmpeg --target android
 
 | 模式 | 默认场景 | 位置与用途 |
 |---|---|---|
-| `dev` | `deno task dev` | 使用仓库内 `.kabegame/debug/data`、`.kabegame/debug/cache` 与 `.kabegame/debug/tmp`，不会污染已安装版本。 |
-| `prod` | 其他顶层命令 | 使用系统用户数据目录，与正式安装版共享数据。 |
+| `dev` | 所有不带 `--release` 的命令 | 使用仓库内 `.kabegame/debug/data`、`.kabegame/debug/cache` 与 `.kabegame/debug/tmp`，不会污染已安装版本。 |
+| `prod` | 带 `--release` 时 | 使用系统用户数据目录，与正式安装版共享数据。 |
 
 需要用真实数据调试时，可以运行：
 

@@ -38,8 +38,6 @@ mod tray;
 mod updater;
 #[cfg(not(feature = "web"))]
 mod utils;
-#[cfg(feature = "standard")]
-mod vd_listener;
 #[cfg(not(feature = "web"))]
 mod wallpaper;
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
@@ -94,9 +92,6 @@ use kabegame_core::ipc::events::{AppEvent, AppEventKind};
 use kabegame_core::ipc::server::{EventBroadcaster, SubscriptionManager};
 #[cfg(all(not(feature = "web"), not(target_os = "android")))]
 use kabegame_core::storage::organize::OrganizeService;
-
-#[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::VirtualDriveService;
 
 use std::net::SocketAddr;
 
@@ -888,19 +883,6 @@ pub(crate) fn configure_app(
             set_wallpaper_enabled,
             #[cfg(target_os = "macos")]
             fix_wallpaper_zorder,
-            // --- Virtual Drive ---
-            #[cfg(feature = "standard")]
-            get_album_drive_enabled,
-            #[cfg(feature = "standard")]
-            set_album_drive_enabled,
-            #[cfg(feature = "standard")]
-            get_album_drive_mount_point,
-            #[cfg(feature = "standard")]
-            set_album_drive_mount_point,
-            #[cfg(feature = "standard")]
-            get_album_drive_driver_installed,
-            #[cfg(all(feature = "standard", target_os = "windows"))]
-            install_album_drive_driver,
             // --- Window ---
             #[cfg(not(target_os = "android"))]
             toggle_fullscreen,
@@ -918,7 +900,6 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             open_logs_dir,
             open_file_folder,
-            open_album_virtual_drive_folder,
             // --- Misc ---
             exit_app,
             get_startup_state,

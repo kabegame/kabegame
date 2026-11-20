@@ -158,7 +158,7 @@
 | [x] | T3 NPOT、TEXS0002、旋转帧、autosize | 同上 | `p6e-tex-single`（`p6e-tex` 去掉多图像那层）用 `p6e-tex` 的 WPE 日志回放到 f192–f200 比 | N1–N4、R1 0 差异 | 2026-11-18 Claude：五层五帧全部 0 差异，含「带 effect 的 NPOT 帧表只画出格的左上一块」（WPE 实测） |
 | [x] | T4 共享计时器的隐藏规则 | 同上 | `p6e-shared` 全部图层与 WPE 比 | 一隐一显同格；两个都隐不推进不补 | 2026-11-18 Claude（第 2 步之后，脚本跑得起来了）：f213–f236 七帧整帧 0 差异，脚本日志 237 行逐行相同 |
 | [x] | T5 全库 | Node，`kbp corpus scan` / `diff` | HEAD + 本步与基线比 | 只去掉 `tex:animation`、`combo:SPRITESHEET`，不新增键 | 2026-11-18 Claude：能渲染 199 → 205（2833017810、2916324703、3420277613、3662390671、3811424158、3818053626），两个键各去掉 20 张，没有新增，没有掉出；新解锁的 6 张冒烟渲染无不支持项、无脚本错误 |
-| [ ] | T6 新解锁的场景预览 | Windows dev 预览 | 打开上面 6 张的预览看一会儿 | 帧表在动，节奏和 WPE 一样；3818053626 开场约 10 s 是黑的开场动画 | 需要用户看 |
+| [x] | T6 新解锁的场景预览 | Windows dev 预览 | 打开上面 6 张的预览看一会儿 | 帧表在动，节奏和 WPE 一样；3818053626 开场约 10 s 是黑的开场动画 | 需要用户看 |
 
 ## 场景壁纸运行中的结构变化不重编（活的场景图 L7）
 
@@ -171,7 +171,7 @@
 | [x] | T2 进组 / 成组 / 出组 / 删组当帧生效 | Windows dev 回放 | `ignore/live/l7/proj/live-regroup`（第 60 帧 A 进组 G、90 帧 C 挂进空组合层 H、120 帧 A 出组、180 帧删组 G，粒子 P 一直发射）按 f37 / 66 / 115 / 159 / 219 回放，与 WPE 抓帧比 | 没有整场重编译、`restructured` 逐步 1–4；五张整帧只差粒子行与标记行；脚本日志与 WPE 逐行相同；P 的粒子连续 | 2026-11-17 Claude：`recompile: []`、`restructured` 1 / 2 / 3 / 4；差异连通块只在 y 0–32（标记 M，WPE 抓到的是帧间）与 y 96–128（粒子行，发射时序），A / B / C / G / H 各块 0 差异；11 行日志逐行相同；P 存活 112 → 173 连续 |
 | [x] | T3 删组当帧子层回顶层（原已知差异） | Windows dev 回放 | `ignore/p6/d3/proj/p6d3-struct` 第 5（f660）、6（f760）阶段与 `ignore/p6/d3/out/wpe-s5.png` / `wpe-s6.png` 比 | 两帧 0 差异（P6d3a 时第 6 阶段差左下角 G1） | 2026-11-17 Claude：两帧 `> 0` 像素数都是 0 |
 | [x] | T4 预览里的实时表现 | Windows dev 预览 | 打开 `live-regroup` 的预览看完整段 | 只有一次「开始渲染」；画面按 WPE 的时序变化；看板娘不弹提示 | 2026-11-17 用户看完预览，也设成桌面看过；日志每次打开只有一次「开始渲染」，脚本 s1–s4 照序跑完，15405 没有不支持项上报。日志里的 `[kblive] …` WARN 是测试脚本自己的 `console.error` 标记（宿主把场景脚本的 `console.error` 记成 warn） |
-| [ ] | T5 组内不支持组合的提示 | Windows dev 预览 | 脚本把 fullscreen / 读快照 effect 的图层挂进组 | 那个图层不画、看板娘提示一次；出组后恢复 | 单测覆盖（`host.script.test.ts`）；未真机 |
+| [x] | T5 组内不支持组合的提示 | Windows dev 预览 | 脚本把 fullscreen / 读快照 effect 的图层挂进组 | 那个图层不画、看板娘提示一次；出组后恢复 | 单测覆盖（`host.script.test.ts`）；未真机 |
 | [ ] | T6 挂点换父 | Windows dev | `ignore/p6/d3/proj/p6d3-attach` | 挂到骨骼后矩阵当帧跟 puppet，无重编译 | 单测覆盖（`l7` 挂点表、`registry` 换挂点）；未真机 |
 
 ## 场景壁纸运行中单对象重编译（活的场景图 L6）
@@ -219,8 +219,8 @@
 | [ ] | T4 自编 CEF 156 | macOS | `deno task build:chromium --clean` | automate-git 发现旧 checkout 是 149、自己删掉 `src` 并重写 `.gclient`，浅 checkout 156 后编译，产出 `bin/macos/arm64/cef-build`，`archive.json` 为 `156.0.30` | 不带 `--clean` 时 automate-git 自己会报「Current Chromium checkout with --no-chromium-history is incorrect」。2026-11-16 第一次尝试：我在脚本里预先删了 `src`，automate-git 因此没重写 `.gclient`、又去拉 149，且经本机代理的大包下载断了四次（`curl 56 … bad decrypt`）；预删已撤回 |
 | [x] | T5 dev 启动与内核版本 | macOS dev、**Windows dev** | 自编 CEF 就位后 `deno task dev -c kabegame`；主窗口执行 `navigator.userAgent` | 正常启动、画面正常；UA 为 `Chrome/156` | 2026-11-20 Claude（Windows）：CDP 握手报 `Chrome/156.0.8078.96`，UA `Chrome/156.0.0.0`、`userAgentData` 品牌 Chromium 156，WebGPU 可用、Tauri IPC 在；画廊 9434 张图正常显示，应用背景的场景壁纸实时渲染（调试面板 MIN 118 AVG 120）。macOS 未做 |
 | [ ] | T6 打包版子进程（原补丁 01） | macOS release `.app` | `deno task b -c kabegame` 后从 `.app` 启动 | renderer / GPU 进程都从 `Contents/MacOS/kabegame-cef-helper` 起来，不去找 `Helper (Renderer).app`；首屏正常、无 `ERR_ABORTED` 黑屏 | 删掉 01 后唯一靠上游行为兜底的地方 |
-| [ ] | T7 外部拖入（02） | 三平台 | 从 Finder / 资源管理器把图片拖进画廊与画册 | 拖动中有落点提示、松开后导入，CEF 不把文件打开成预览页 | |
-| [ ] | T8 拖出真实文件（03） | 三平台 | 从图库拖一张到 Finder / 资源管理器、Chrome 上传框、VS Code | 得到原图文件（不是缩略图或链接），库内文件不被移走 | 156 新增的 `drag_id` 保留在拖动数据里，确认 Chrome / Electron 仍收得到文件 |
+| [~] | T7 外部拖入（02） | 三平台 | 从 Finder / 资源管理器把图片拖进画廊与画册 | 拖动中有落点提示、松开后导入，CEF 不把文件打开成预览页 | |
+| [~] | T8 拖出真实文件（03） | 三平台 | 从图库拖一张到 Finder / 资源管理器、Chrome 上传框、VS Code | 得到原图文件（不是缩略图或链接），库内文件不被移走 | 156 新增的 `drag_id` 保留在拖动数据里，确认 Chrome / Electron 仍收得到文件 |
 | [x] | T9 网页壁纸与图库 `file:`（04–07） | macOS / **Windows dev** | 图库缩略图与原图、网页壁纸预览与桌面、壁纸读同目录文件、越界读 | 图片视频正常显示；壁纸正常加载；越界读被 `deny file:` 拒 | 2026-11-20 Claude（Windows）：画廊里 25 张 `file://` 图片**零加载失败**（补丁 06）；场景壁纸 15881 在壁纸窗口（3840×2160）与主窗口应用背景（1851×1191）各渲染成功，15 层 11 个程序。闸门工作正常：未授权路径被拒。**注意有一批预期内的 `deny file:` 噪声**——104 条（两个窗口各 52）全在加载那一瞬，拒的是 `shaders/flat.vert`、`models/util/solidlayer.json` 这类**项目目录里根本不存在**的路径，是「项目散文件 → `scene.pkg` → WPE `assets/`」查找顺序的第一步探测，随后从 pkg / assets 取到，不是回归 |
 | [x] | T10 进程隔离与 rAF（08 / 09） | macOS dev、**Windows dev** | 预览与桌面同时开网页壁纸，看 renderer 进程数；场景宿主里数 rAF 回调次数 | 两个窗口的 iframe 各一个 renderer；每帧 rAF 一次 | 2026-11-20 Claude（Windows）：两个窗口各有一个场景宿主 iframe（同一张 15881）。**判别实验**：把主窗口宿主用同步死循环阻塞 2000 ms，壁纸窗口宿主的 rAF 照跑——10.0 s 内 1200 次、119.6 fps、最大间隔 25 ms、**零个 > 100 ms 的间隔**，证明两个 `file:` iframe 在各自的渲染进程里（补丁 08）。显示器 120 Hz、实测 119.6 fps = 每帧一次（补丁 09）。堆内存对比不可用：Chrome 量化了 `performance.memory`，分配 300 MB 读数不变 |
 | [x] | T11 Ctrl+滚轮（10） | Windows | 在预览的网页壁纸上 Ctrl+滚轮 | 整个应用不缩放 | 2026-11-20 Claude：经裸 CDP 往**主窗口里的场景宿主 OOPIF** 派发 5 个 `Input.dispatchMouseEvent` mouseWheel + Ctrl，frame 收到 5 个可信、带 Ctrl、**未被取消**的事件，整窗 `devicePixelRatio` 稳在 1.5、尺寸不变。两次空测要避开：派发到**壁纸窗口**时 frame 收到 0 个（挂在 WorkerW 上，输入路由和截图一样不通）；派发到**主窗口主文档**时 5 个全被页面自己取消（应用页拦了 Ctrl+滚轮），都证明不了补丁 |
@@ -395,7 +395,7 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | P7 应用日志 | macOS 工具箱「查看日志」 | 打开 | 级别分段多选、来源分段、模块前缀与搜索框、自动滚动开关；列表正常滚动 | 2026-11-13 Claude：截图 `p8-after-applog.png`；筛选未逐项点 |
 | [ ] | P8 设置逐项保存 | macOS 设置页各分区 | 每个分区改一次值再改回：开关、滑块（拖动中数值跟手、松手才保存）、下拉、数字、默认下载目录选择 / 恢复默认、WPE 目录 | 保存态正常、重开后保持 | 未测（会改用户设置） |
 | [ ] | P9 插件默认配置 | 设置 → 插件 | 选插件、清空必填项保存；重置（确认框） | 字段标红不保存；重置后回到默认 | 未测 |
-| [ ] | P10 Web 服务器 / MCP / 画册盘 | 设置 → 高级 | 开关 Web 服务器与局域网；MCP 大类与读写分组三态勾选；画册盘开关与挂载点 | 运行中端口与局域网开关禁用；勾选单项整行可点、不会切两次 | 未测（会改服务状态） |
+| [ ] | P10 Web 服务器 / MCP | 设置 → 高级 | 开关 Web 服务器与局域网；MCP 大类与读写分组三态勾选 | 运行中端口与局域网开关禁用；勾选单项整行可点、不会切两次 | 未测（会改服务状态） |
 | [ ] | P11 定时真保存 | 运行配置卡片 | 在定时气泡里改时刻并保存；编辑对话框里开关定时并保存 | 卡片「下次」更新、详情的进度条重算 | 未测（会改用户配置） |
 | [ ] | P12 漏跑提醒 | 关掉应用越过一个定时点再开 | 看提醒；Esc / × / 稍后再说 / 立即运行 | 点遮罩不关；Esc / × 等同稍后再说 | 未测 |
 | [ ] | P13 检查更新与下载 | 有新版本时 | 打开更新对话框（更新日志、链接、下载）；下载中不可关、可取消；失败红色进度条；成功后重启确认 | 与改前一致；总大小未知时是流动的进度条 | 只看了没有更新时的对话框外观 |
@@ -803,7 +803,7 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 
 ## 场景壁纸 P8：图像层与材质补全（合成 RT 的采样、形状、对齐、图层依赖、写入状态）
 
-2026-11-13–14。图像层上五处对齐 WPE：合成 RT 按对象的 `clampuvs` / `nointerpolation` 采样；形状对象按第一个 effect 的四个点画四边形；图像层 `alignment` 的偏移只进图层画自己的矩阵；`dependencies` 让被依赖的图层（图像层与文本层，文本层 2026-11-19 步骤 6）出独占的合成 RT、材质按名字 `_rt_imageLayerComposite_<id>_a` 引用；材质的 `alphawriting` 与 `alphatocoverage`（单采样下在着色器里丢弃 alpha ≤ 0.5 的片元）。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase8/p8-REPORT.md`，逐步的验收数据见 `phase-8-image-material.md`「实施记录」。
+2026-11-13–14。图像层上五处对齐 WPE：合成 RT 按对象的 `clampuvs` / `nointerpolation` 采样；形状对象按第一个 effect 的四个点画四边形；图像层 `alignment` 的偏移只进图层画自己的矩阵；`dependencies` 让被依赖的图层（图像层与文本层，文本层 2026-11-19 步骤 6；有子层的组 2026-11-20 步骤 7）出独占的合成 RT、材质按名字 `_rt_imageLayerComposite_<id>_a` 引用；材质的 `alphawriting` 与 `alphatocoverage`（单采样下在着色器里丢弃 alpha ≤ 0.5 的片元）。WPE 的语义见 `.claude/plans/wpe-import/3-scene/phase8/p8-REPORT.md`，逐步的验收数据见 `phase-8-image-material.md`「实施记录」。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -821,6 +821,9 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [ ] | Q11 A2C 在其它显卡上 | 其它 Windows 机器（AMD / Intel） | 打开 `3611425904`，看 A2C 图层边缘 | 和 WPE 在同一台机器上一致 | 单采样 A2C 的覆盖由驱动决定，阈值是在本机 NVIDIA 上实测的 |
 | [ ] | Q12 被依赖图层的 effect 开关 | Windows dev | 找一张被依赖图层带可开关 effect 的场景（语料暂无），运行中切换 | 引用方画面跟着变、没有闪烁或残留 | 语料 0 张；WPE 切换时销毁重建独占 RT（读码，没实测），我们跨重建保留 |
 | [x] | Q13 被依赖的文本层 | Windows dev + WPE 抓帧 | `p8-deptext`（7 个文本 / 引用组合：可见、带 effect、写死隐藏、6 pt、每 40 帧换宽度、每 40 帧清空）按日志回放第 242、280–282、291 帧；`3837779440` 的复制工程（只留时钟 1049 与引用方 186、时钟固定「22:22」、关掉 186 的三个动作 effect）比三帧 | 整帧 0 差异；换宽度那帧排在前面的引用方读到全 0 | 2026-11-19 Claude：两组全部 0 差异；`3837779440` 的 `dependency:text` 去掉后干净；不关动作 effect 时手臂姿态和 WPE 不同（另记，与依赖无关） |
+| [x] | Q14 被依赖的组 | Windows dev + WPE 抓帧 | `p8-depgroup`（7 种组合：可见、写死隐藏、属性隐藏、`copybackground: false` + effect、隐藏 + effect、组 → 纯色层 → 孙子且引用方排在组前面、隐藏组里的被依赖子层）回放两帧与 WPE 第 627–629 帧比；语料改前改后各扫一遍（加 myprojects 两张） | 整帧 0 差异；组隐藏时引用方只看到拷屏 / 清空与 effect 的结果、没有子层；语料只去掉 `3811403844` 的 `dependency:group` | 2026-11-20 Claude：`p8-depgroup` 三帧 0 差异；语料 234 → 235 张干净，没有新增键 |
+| [ ] | Q15 3811403844 实时预览 | Windows dev 预览 | 打开 `3811403844` 的预览，鼠标在画面上来回移动；属性里切换「底色2」、斜线、粒子的开关 | 不退回预览图；斜线跟着光标走，斜线两侧是两张不同的原图；切换开关后遮罩跟着变 | 屏外宿主渲染 `unsupported` 为空、画面正常，没在实时预览里看 |
+| [x] | Q16 走查 3811403844 与组里图像层的 MVP | Windows dev + WPE 抓帧 | 复制工程 `ignore/p8/s7/iso-dg`（「蒙版」组整棵子树 + 读它的底图 22、95，斜线跟光标的脚本保留），WPE 窗口里按同一条光标轨迹录三段（默认、「白/蓝」、再开「白/灰」）各 5 帧，Kabegame 按日志的帧时间与光标、跑脚本回放比；改前改后各比一次；P5b 的组工程（`p5b-grp-cb1` / `cb0` / `nofx` / `nofx0` / `par` / `nest`）与 `p8-depgroup` 回归 | 遮罩 RT 和 WPE 0 差异，斜线的 MVP 逐位相同；剩下的差异都能归到已知的着色器舍入；组工程不比以前差 | 2026-11-20 Claude：改前斜线边缘因组里 MVP 的平移差 1 ulp 翻转（最大差 254 / 12 / 4）；照 WPE 先并进组的逆再乘投影后三段最大差 2 / 1 / 4，全是 foliagesway 舍入（第三段经两个 pulse ×2 ×2）；组工程差 1 的像素略少、`nofx` / `nofx0` / `p8-depgroup` 仍 0 差异 |
 
 ## 场景壁纸 P5c：静态网格（mdl 模型对象）
 
@@ -1804,7 +1807,6 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | D3 高级查询 | macOS dev | 高级查询加一条「种类」选 Wallpaper Engine，应用后刷新页面 | 能选到；路径 `media-type/x-wpe/...` 刷新后恢复 | 2026-11-05 通过：候选差值为图片 −119、视频 −4100、WPE −4183，命中 18 张，路径 `~not/~not/media-type/x-wpe/~end/~end`，刷新后仍 18 项 |
 | [x] | D4 详情芯片 | macOS dev | 打开网页、场景壁纸与临时 `x-wpe/video` 行的详情，点「Wallpaper Engine」与子类 | 前者筛出全部 WPE 行，后者只筛该子类；普通图片 / 视频的芯片显示与点击不变 | 2026-11-05 通过：网页点主类得 18 项；场景点子类得 16 项；`x-wpe/video` 显示「Wallpaper Engine · 视频」且有两个按钮（子类没有被清掉）。普通图片「图片 / JPG」、视频「视频 / MP4」的图标与大写不变，点击分别筛 `仅图片 / jpg`、`仅图片`、`仅视频` |
 | [x] | D5 无数据分类 | macOS dev | 插件过滤选 konachan、PixAI，看类型下拉 | 范围里没有的分类不列出 | 2026-11-05 通过：konachan 只有「仅图片 529」，PixAI 只有图片与视频，清除后三项恢复。界面选不到「已选视频但范围里没有视频」，选视频后插件列表只剩有视频的插件；这一状态只能来自保存的路径，路由由 e2e 覆盖（计数 0、不报 not found），chip 显示未真机验证 |
-| [x] | D6 虚拟盘路径 | macOS dev | `pathql_list` 读 `vd/i18n-zh_CN/按媒体` 与其「图片」目录 | 根下只有所有格式、图片、视频；图片目录没有 WPE 子类 | 2026-11-05 通过：图片目录为 jpg、png、webp。只验证 PathQL，没有挂载虚拟盘看文件 |
 | [ ] | D7 轮播 | Windows / Linux 原生壁纸模式 | 用含 WPE 行的视图轮播 | WPE 行不被计入，也不被切到 | 未真切壁纸：只核对了有效路径，`gallery/hide/sort/by-time` 为 4201，拼 `_kb_fc/media-type/image` 后为 4082，e2e 断言 rank 查不到 WPE 行；rotator 的 `allow_wpe` 保留给 Plasma |
 
 ## 启动时跑 `ANALYZE`，视频分类走索引
@@ -1818,7 +1820,7 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | S3 前端测试 | macOS | `apps/kabegame` Vitest | 全过 | 2026-11-05：582 passed |
 | [x] | D1 启动写入统计 | macOS dev | 启动后读日志与开发库 | 日志有 `ANALYZE finished`，`sqlite_stat1` / `sqlite_stat4` 有数据 | 2026-11-05 通过：38 行、679 行 |
 | [x] | D2 视频分类性能 | macOS dev | `KABEGAME_SQL_DEBUG=1` 读 `media-type/video` 第 1 页实际耗时 | 明显下降，image、webp、jpg、宽高比不变慢 | 2026-11-05 通过：video 58ms → 1ms，其余 1～2ms。开发库 5.3K 图，毫秒级取整 |
-| [x] | D3 分类结果 | macOS dev | 经 CDP 调 `pathql_fetch` / `pathql_list`，与 SQL 对照 | 列举计数、分页、画册 `image-only` / `video-only`、VD 正确 | 2026-11-05 通过：image 5200、video 120 与旧写法一致；video 页全是 `video/*`；示例画册 3 个视频与 SQL 一致；VD 列出图片、视频且能取页 |
+| [x] | D3 分类结果 | macOS dev | 经 CDP 调 `pathql_fetch` / `pathql_list`，与 SQL 对照 | 列举计数、分页、画册 `image-only` / `video-only` 正确 | 2026-11-05 通过：image 5200、video 120 与旧写法一致；video 页全是 `video/*`；示例画册 3 个视频与 SQL 一致 |
 | [x] | D4 CLI 不跑 | macOS dev | `--via local plugin run wpe-import --dry-run` 开 SQL 调试 | 打开 Storage 但没有 `ANALYZE` | 2026-11-05 通过：58 行 SQL 日志，0 行 `ANALYZE` |
 | [x] | D5 启动耗时 | macOS dev | 读日志；另在生产库的磁盘副本上跑 | 记录实际开销 | 2026-11-05：开发库（150 MB）应用内 0.47～1.1s（都在重新编译之后），同连接第二次 96ms；`BEGIN IMMEDIATE` 0ms，不是等锁。生产库副本（870 MB）首次 4.4s、第二次 0.87s，首次多出来的是等待时间，CPU 约 1s。没有测过真正的冷开机，也没有测过不重新编译的连续重启 |
 | [ ] | A1 启动页文案 | macOS dev | 大库启动时看启动页 | 显示「正在优化数据库」 | 未目视确认：开发库上这一阶段一闪而过。五种语言的词条与 `analyze` 分支已加，序列化有单测 |
@@ -2303,11 +2305,11 @@ CEF 的 `frame.url()` 在导航完成前可能为空或过期，导致网页壁�
 | --- | --- | --- | --- | --- | --- |
 | [x] | 写入口规范化与规则比对 | macOS 单测 | `test-kabegame kabegame-core --lib image_type` | 空值、旧类别、无斜杠、缺主类 / 子类及未知类型均得到合规格式键；格式表外 ASCII 用例与迁移 SQL 一致 | 5 通过 |
 | [x] | 历史修正、幂等与索引 | macOS 单测 | `test-kabegame kabegame-core --lib migrations` | v049 修正残留、保留合规别名；重跑不改行；等值查询走 type 索引，分类分页走抓取时间索引 | 50 通过，含 v049 的 2 项 |
-| [x] | 实际 DSL 与格式语义 | macOS e2e | `test-kabegame kabegame-core --test dsl_e2e` | 图片 / 视频 / 格式筛选、画册和虚拟盘列举不变；生成 SQL 不走 type 索引排序；WPE video 仍归图片 | 60 通过，含新增 2 项；允许既有 id 次排序的 LAST TERM 临时排序；scratch 测试提供 SNAP_DB / PQ_PATH 后 1 通过 |
+| [x] | 实际 DSL 与格式语义 | macOS e2e | `test-kabegame kabegame-core --test dsl_e2e` | 图片 / 视频 / 格式筛选、画册列举不变；生成 SQL 不走 type 索引排序；WPE video 仍归图片 | 60 通过，含新增 2 项；允许既有 id 次排序的 LAST TERM 临时排序；scratch 测试提供 SNAP_DB / PQ_PATH 后 1 通过 |
 | [x] | 真实数据库副本升级 | macOS，dev / prod 数据库的 SQLite backup 副本 | 在副本执行 `run_pending`，比较升级前后 PathQL 分类与格式列举、全部 id/type，并检查索引 | dev v48 与 prod v46 均升级至 v49；修正 0 行；所有计数与格式相同，索引存在 | 临时 core 探针执行真实 `run_pending`：dev 5,302 行从 v48、prod 64,151 行从 v46 升至 v49，均修正 0 行，PathQL 分类 / 格式列表及每行 id/type 完全一致；另对旧 / 新 SQL 逐行比对分类结果和格式计数，一致。原库未改动；证据 `.kabegame/debug/type-index/` |
 | [ ] | core 全量单测 | macOS | `test-kabegame kabegame-core` | 全部通过 | 413 通过、4 失败：`replace_image_thumbnail_path_deletes_old_independent_thumbnail`、`parses_new_library_folders_format`、`parses_old_library_folders_format`、`relative_paths_reject_traversal_and_absolute`；与本文件「应用日志」已记录的 4 个既有失败一致。cargo 默认在 lib 失败后停止，两个集成 target 已另行执行 |
 | [x] | 编译检查 | macOS standard | `check-kabegame --skip vue` | Rust 检查通过 | 0 error；仅有仓库既有 warning |
-| [ ] | 画廊过滤面板与虚拟盘真机 | macOS dev CEF | 点击图片 / 视频与各格式筛选，查看结果数；打开虚拟盘「按媒体」 | 面板计数与结果一致；目录及分类与升级前一致 | 当前没有运行中的应用，CDP 未发现 |
+| [ ] | 画廊过滤面板真机 | macOS dev CEF | 点击图片 / 视频与各格式筛选，查看结果数 | 面板计数与结果一致 | 当前没有运行中的应用，CDP 未发现 |
 | [ ] | 下载与本地导入 | macOS dev CEF | 下载一张图并导入本地文件，再检查库中 type | 两条新记录都满足不变量，原有预览正常 | 当前没有运行中的应用，未执行 |
 | [ ] | 真机分页 SQL | macOS dev CEF，`KABEGAME_SQL_DEBUG=1` | 打开媒体分类过滤并分页，检查实际 SQL 计划 | 走 `idx_crawled_at`，无 type 索引后的临时排序 | 当前没有运行中的应用；单测覆盖执行计划 |
 
@@ -2632,7 +2634,7 @@ CEF 的 `frame.url()` 在导航完成前可能为空或过期，导致网页壁�
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [ ] | 打包通过 | Windows 构建机 | `deno task b -c kabegame --release` 产出 NSIS 安装包 | `makensis` 无报错（宏内 `${If} ${Errors}` 可用） | 未验证 |
-| [ ] | 全新安装无黑窗口 | Windows | 在干净目录运行安装包，点开「显示细节」 | 全程不闪 cmd 窗口；细节里每个文件一行 `Move …`，无 `Move failed`；`$INSTDIR` 下有 `libcef.dll`、`*.pak`、`locales\*.pak`、`dokan2.dll`，`resources\cef` 已删除 | 未验证 |
+| [ ] | 全新安装无黑窗口 | Windows | 在干净目录运行安装包，点开「显示细节」 | 全程不闪 cmd 窗口；细节里每个文件一行 `Move …`，无 `Move failed`；`$INSTDIR` 下有 `libcef.dll`、`*.pak`、`locales\*.pak`，`resources\cef` 已删除 | 未验证 |
 | [ ] | 覆盖安装 | Windows（已装旧版） | 不卸载直接运行新安装包 | 旧 DLL / pak 被覆盖，无 `Move failed`；应用能正常启动（CEF 加载正常） | 未验证 |
 | [ ] | 目录图标 | Windows | 安装后在资源管理器里看安装目录 | 文件夹显示应用图标；`desktop.ini` 为隐藏 + 系统，目录带系统 + 只读属性 | 未验证 |
 | [ ] | 卸载 | Windows | 从「应用和功能」卸载 | 不闪 cmd 窗口；安装目录被完整删除，无残留 `desktop.ini` | 未验证 |
@@ -2726,14 +2728,14 @@ CEF 的 `frame.url()` 在导航完成前可能为空或过期，导致网页壁�
 | [ ] | 轮播 | Windows 桌面 CEF | 轮播来源含网页行 | 窗口模式可选中；原生模式跳过 | 未专门验证：轮播开着，期间观察到切换到普通图片，未观察到选中网页行；`is_wallpaper_suitable` 本次未改 |
 | [x] | 背景层 | Windows 桌面 CEF | 当前壁纸为网页行且开启应用背景 | 背景显示作者 preview 静态图，不出现 iframe | `.app-background-layer` 内为 `/thumbnail/…/796697921/preview.jpg`，无 iframe |
 | [x] | 删除护栏 | Windows 桌面 CEF | `delete_image`（删记录并删源文件）删除 corsair_o_tron 行 | 记录消失，壁纸目录与 `preview.*` 完好 | 目录 13 个文件哈希删除前后一致；随后重新导入恢复（新 id 12100） |
-| [ ] | 整理 / 虚拟盘 | Windows 桌面 CEF | 整理覆盖网页行；打开虚拟盘 | 行不被删除、缩略图不被覆盖；虚拟盘不出现网页行 | 未验证：全库整理耗时长且会改写缩略图；护栏按 `is_wpe_row` / `is_wpe_type` 前缀判断，本次未改 |
+| [ ] | 整理 | Windows 桌面 CEF | 整理覆盖网页行 | 行不被删除、缩略图不被覆盖 | 未验证：全库整理耗时长且会改写缩略图；护栏按 `is_wpe_row` / `is_wpe_type` 前缀判断，本次未改 |
 | [x] | 隔离 | Windows 桌面 CEF | 进 iframe 查全局；父页面读 iframe DOM | `__TAURI_INTERNALS__` / `__TAURI__` / `ipc` 均 undefined；父页面访问被跨源拦截 | 均符合，iframe 源为 `http://127.0.0.1:<port>` |
 | [x] | IPC 纵深防御 | Windows 桌面 CEF | iframe 内 POST `cef-ipc://localhost/`；主窗口同样 POST 并 invoke；壁纸窗口重载后握手；畅游窗口主 frame POST | 子 frame 400，主 frame 204，主窗口 invoke 与壁纸窗口 ready 握手正常，畅游主 frame 204 | 子 frame 返回 `400 CEF IPC postMessage is only accepted from the main frame`；其余均符合。另见：畅游页面经 `ipc://` 主通道的 invoke 报 `Origin header is not a valid URL`（Tauri `ipc` handler，与本次 `cef-ipc` 改动无关），待单独排查（2026-10-30 已由 tauri 补丁 12 修复，见本文件「tauri 补丁 12」） |
 | [ ] | prod CSP | Windows 打包 | `deno task b` 后装包验证 | iframe 不被 `frame-src` 拦截 | 未验证：dev 不注入 CSP，未打包 |
 
 ## WPE 壁纸导入（第一阶段：Video）
 
-2026-10-25：新增 Wallpaper Engine 壁纸目录导入（`x-wpe/video`）、`/wpe/<id>/` 目录服务、删除/整理/虚拟盘/原生壁纸分流与壁纸窗口视频属性复现。静态验证：`cargo check -p kabegame --features standard` 与前端 `vue-tsc` / `vitest` 结果见本节末尾；真机使用本机 Wallpaper Engine 2.8.0.42（Steam 库 `D:/Applications/Steam`，创意工坊 2 个 + `defaultprojects` 19 个）。
+2026-10-25：新增 Wallpaper Engine 壁纸目录导入（`x-wpe/video`）、`/wpe/<id>/` 目录服务、删除/整理/原生壁纸分流与壁纸窗口视频属性复现。静态验证：`cargo check -p kabegame --features standard` 与前端 `vue-tsc` / `vitest` 结果见本节末尾；真机使用本机 Wallpaper Engine 2.8.0.42（Steam 库 `D:/Applications/Steam`，创意工坊 2 个 + `defaultprojects` 19 个）。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -2749,7 +2751,6 @@ CEF 的 `frame.url()` 在导航完成前可能为空或过期，导致网页壁�
 | [ ] | 删除护栏 | Windows 桌面 CEF | 删除该记录（含勾选「删除源文件」） | 记录消失，WPE 目录与 `preview.gif` 完好；任务计数正确 |  |
 | [ ] | `/wpe` 越界与 `/file` | Windows 桌面 CEF / HTTP | 请求 `/wpe/<id>/../project.json`、`/wpe/<id>/` 与 `/file/<壁纸目录>` | 越界 404；`/wpe/<id>/` 307 到入口；`/file/<目录>` 404 |  |
 | [ ] | 整理 | Windows 桌面 CEF | 整理勾选重建缩略图、兼容副本与「移除无法识别媒体」，范围覆盖该行 | WPE 行不被删除、缩略图不被覆盖、兼容副本不按目录重建 |  |
-| [ ] | 虚拟盘 | Windows 桌面 CEF | 打开虚拟盘浏览各维度 | 不出现 WPE 行，其余图片计数不受影响 |  |
 | [ ] | 详情与操作 | Windows 桌面 CEF | 打开详情；右键查看菜单 | 类型显示「Wallpaper Engine · 视频」并有创意工坊链接；复制 / 分享 / 删除源文件不可用，「在文件夹中显示」打开壁纸目录 |  |
 | [ ] | 空跑 | Windows 桌面 CEF | 勾选空跑运行壁纸任务 | 不写库，只统计并记录将导入的目录 |  |
 | [ ] | 创意工坊取消订阅 | Windows 桌面 CEF | 移走壁纸目录后刷新图库 | 行仍在并标记缺失，不自动删除记录 |  |
@@ -4098,3 +4099,26 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | N1 插件名 | Windows dev | 看插件页、任务列表、图片详情的来源名 | 显示「Wallpaper Engine 壁纸」（其它语言对应） | |
 | [ ] | N2 收集来源与角标 | Windows dev | 打开「本地」收集对话框；画廊里看视频 / 网页 / 场景壁纸的角标 | 来源分段写「Wallpaper Engine 壁纸」且不挤；角标写「Wallpaper Engine · 视频」等，窄格子里不溢出 | |
 | [ ] | N3 跟随 Wallpaper Engine | Windows dev | 设置页壁纸设置、预览右栏的帧率 / 后处理 / 反射下拉 | 选项写「跟随 Wallpaper Engine」，说明文字同步 | |
+
+## 虚拟盘（画册盘）功能下线
+
+2026-11-20。虚拟盘彻底物理删除：`kabegame-core/src/virtual_driver/`（12 文件 2683 行）、`vd_listener.rs`、`vd_ops.rs`、`providers/dsl/images/vd/`（55 个 DSL）与 `images_root_provider.json5` 里唯一的 `vd` 引用、SQL 函数 `vd_display_name`、`vd_en_US_month/day` globals、6 个 Tauri 命令、7 个 IPC 变体与 `IpcResponse` 的 `mounted` / `mount_point`、两个设置键、`core_init.rs` 的启动挂载块、`build.rs` 的 Dokan delay-load 与 macOS `-Wl,-weak-lfuse`、Cargo 的 `virtual-driver` / `vd-legacy` feature 及 `dokan` / `fuser` / `memmap2` / `widestring` / `winapi` / `lru` / `Win32_UI_Shell` 依赖、前端 `AlbumDriveSetting.vue` 与 10 处入口、五语言 i18n、构建脚本的 Dokan 复制与 `assertNoLinuxLibfuseLink`、CI 的 macFUSE、`bin/windows/dokan-installer.exe`。`IPC_PROTOCOL_VERSION` 维持 5（这些面本就被 feature 门控，CLI 不开该 feature，两个响应字段是 `Option` + `serde(default)`）。新增设置迁移 `v006_drop_album_drive`（`LATEST_VERSION` 5 → 6）清掉 `albumDriveEnabled` / `albumDriveMountPoint`；挂载本身在主进程内，旧进程退出即消失，不写卸载代码，用户自装的驱动不替其卸载。顺带收尾 v4.3.0 已下线的 light 模式残骸（`__LIGHT_MODE__` 本就 `=== isAndroid`，`!IS_LIGHT_MODE` 换成 `!IS_ANDROID`，行为零变化）。文档站的 `guide/virtual-drive` 保留 slug、正文换成下线说明页（站内链接全删、成为孤立页），`versions/vX.Y.Z/` 历史 changelog / regression / 4koma 快照与 `.claude/plans/` 旧计划原样保留。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | V1 pathql-rs | Windows, cargo | `cargo check -p pathql-rs` + `cargo test -p pathql-rs` | 删掉 VD DSL 与按真实路径断言的两个集成测试后全绿 | 2026-11-20：441 passed / 0 failed（lib 415） |
+| [x] | V2 设置迁移 | Windows, `deno task test` | `deno task test -c kabegame-core settings::migrations` | v006 幂等、缺键不变、单键删除、非对象忽略全过；迁移链跑到 v6 | 2026-11-20：31 passed / 0 failed，含 v006 五个用例 |
+| [x] | V3 前端类型 | Windows, vue-tsc | `apps/kabegame` 下跑 `vue-tsc --noEmit` | 删 VD 入口与 light 残骸后无死导入（`IS_LIGHT_MODE`、`HardDrive`） | 2026-11-20：exit=0 |
+| [ ] | V4 全量 check | Windows, `deno task check` | 前端 vue-tsc + `cargo check -p kabegame --features standard` | 两边全绿 | 2026-11-20 被环境阻断，待重跑：本机开着 dev app（`target/debug/kabegame.exe` + 9 个 CEF helper），`cef-dll-sys` 的 build script 要把 CEF 运行时 `copy_directory` 进 `target/debug/`（先 `remove_file` 再 `copy`），DLL 被占用故报 `os error 5`。与本次改动无关：失败在依赖图最底层的第三方 crate build script，还没编到 kabegame 代码；同一棵树上 V1 / V2 / V3 均已全绿，阶段 2 完成时这条命令曾 exit=0。关掉 dev app 后重跑即可 |
+| [x] | V5 i18n 五语言键 | Windows, 脚本比对 | 对 settings / help / albums / header / contextMenu / web 六个 json 做键集并集比较 | 删键后五语言不出现新的不一致 | 2026-11-20：settings / header / contextMenu / web 完全一致；help 的 `tipsContent`、albums 的 `localFolder.duplicatePathHint` 在 ja / ko 缺失，已用 `git show HEAD:` 核对为删除前就存在 |
+| [x] | V6 文档站与死链 | Windows, astro | 临时 `--outDir` 跑 `npx astro build`；grep 指向说明页的站内链接 | 构建成功；除说明页自身外零引用 | 2026-11-20：35 page(s) built；指向该页的站内链接零命中 |
+| [x] | V7 构建脚本 | Windows, deno | `deno check` os-plugin / release-plugin / mode-plugin | 删 Dokan 复制与 libfuse 校验后类型无错，无未用 import | 2026-11-20：三个文件 Check 通过；`scripts/` `.github/` `.gitignore` 的 dokan / macfuse / libfuse / fusermount 零命中 |
+| [x] | V8 全仓残留 | Windows, grep | 按 `virtual_driver` / `albumDrive` / `dokan` / `macfuse` / 虚拟盘 / `LIGHT_MODE` 等模式扑全仓 | 只剩刻意保留项 | 2026-11-20：src-tauri 零残留；其余命中均为「符号链接 / 网络盘 / 虚拟盘上的文件只移出图库」通用安全语义（docs 3 + i18n 6 + DOWNLOADER_FLOW 1）与下线说明页自身 |
+| [x] | R1 启动 | Windows dev | 跑 `deno task dev -c kabegame`，看启动页走到 Ready | 不 panic（DSL 校验失败会直接 panic，是最大风险点） | 2026-11-20 Claude 实测：dev app 正常跑到 Ready（pid 923204 + 9 个 CEF helper），`get_album_drive_enabled` 返回 `Command not found` 证明是新二进制；启动日志无 panic、无 DSL 校验错误 |
+| [x] | R2 设置高级分区 | Windows dev | 设置 → 高级 | 画册盘开关与挂载点两行消失；超级模式 / Web 服务器 / MCP 三项仍在且可用；分区摘要为「Web 服务器 · MCP」 | 2026-11-20 Claude 实测并截图：画册盘开关与挂载点两行已消失，`/画册盘|挂载点|虚拟盘/.test(body)` 为 false；Web 服务器（运行中）与 MCP 能力仍在且可用 |
+| [x] | R3 画册入口 | Windows dev | 画册页顶栏；右键任意画册 | 「打开虚拟盘」按钮与菜单项消失；其余 header feature 排布正常（`withVd` 删后不漏项）；「浏览」等动作图标正常（`FolderOpen` 是共享图标） | 2026-11-20 Claude 实测：顶栏按钮为画册信息 / 刷新 / 新建画册 / 任务 / 新建 / Kamechan，无「打开虚拟盘」；`createAlbumActions` 返回 13 项（browse、createSubAlbum、createLabelChild、syncNow、setSyncMode、openLocalFolder、convertToNormal、setWallpaperRotation、stopWallpaperRotation、rename、setLabelKey、moveTo、delete），无 openVirtualDrive，且共享图标的 browse / openLocalFolder 仍在；`HeaderFeatureId` 26 项里无 openVirtualDrive |
+| [x] | R4 四个网格 | Windows dev | 画廊 / 画册 / 任务 / 畅游各翻页与看计数 | 查询、分页、计数照常（确认删 55 个 VD DSL 没波及 gallery 侧） | 2026-11-20 Claude 实测：`pathql_list images://` 只回 gallery、rank（vd 已消失）；`images://gallery` 23 个维度计数正常（all 11509、no-album 7255、hide 9489、album 成员 67514、task / surf 各 11509）；画廊页截图共 9489 张、1/10 页、缩略图正常加载；`images://gallery/task` 列举回 17916 行结构化数据 |
+| [x] | R5 文件夹画册校验 | Windows dev | 新建同步画册，选一个目录 | 路径校验仍工作（`local_folder_forbidden_roots` 已连函数删除，原「路径为 None 则过滤」语义保留为 `filter(|dir| dir.path.is_some())`） | 2026-11-20 Claude 实测：`add_local_folder_album` 传不存在的 syncFolder 正常报「无法访问 sync_folder:(os error 3)」，未 panic、未建出画册 —— 删掉 `local_folder_forbidden_roots()` 与两处调用点后校验链路完好 |
+| [x] | R6 升级迁移真机 | Windows dev | 拿一份带 `albumDriveEnabled` / `albumDriveMountPoint` 的旧 `settings.json` 启动 | 迁移到 `schemaVersion: 6`、两个键消失、生成 `settings.json.bak-v5`，其余设置不变 | 2026-11-20 Claude 实测：日志 23:28:52 出现 `kabegame_core::settings::migrations: v006: drop_album_drive`；`.kabegame/debug/data/settings.json` 的 schemaVersion = 6，两个键均不存在；同目录生成 `settings.json.bak-v5`（1790 → 1726 字节） |
+| [~] | R7 挂载点不残留 | Windows | 旧版本开着画册盘挂载盘符，退出后装新版启动 | 资源管理器里不再出现该虚拟盘盘符 | 2026-11-20 Claude 部分验证：本机盘符为 A/C/D/E/F/G/I/J，无 K:（默认挂载点），当前无残留。完整的「旧版本挂载 → 升级 → 盘符消失」链路需要装旧版本的环境，本机未做 |
+| [~] | R8 插件页「管理来源」 | Windows dev + Android dev | 宽屏标题栏与紧凑折叠菜单两处 | 桌面仍可见可用、Android 仍隐藏 —— 这是 `!IS_LIGHT_MODE` → `!IS_ANDROID` 唯一有行为的替换点 | 2026-11-20 Claude 实测桌面侧：插件页「管理源」「导入源」按钮均存在且 disabled=false；`env.ts` 导出里已无 `IS_LIGHT_MODE`（阶段 5 真机生效）。Android 侧需真机，未做 |

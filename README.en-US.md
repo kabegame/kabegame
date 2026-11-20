@@ -89,7 +89,7 @@ Kabegame doesn't just download: plugins can automatically classify tags such as 
 - **Unified collection**: Batch-fetch content from sources like Pixiv, Bilibili, Danbooru, wallpaper sites, and communities through plugins—or browse and collect on the fly in the built-in browser.
 - **Unified search**: Different sources land in the same gallery, filterable by combinations of time, plugin, tag, media type, dimensions, file size, and metadata search.
 - **Unified management**: Organize themes by hand with plain albums, auto-classify with tag directories, follow disk folders with synced albums, and handle a library accumulated over the long term with deduplication and hiding.
-- **Locally owned**: Original files and library data are in your hands; customize the download directory, and access albums from other applications through a virtual disk.
+- **Locally owned**: Original files and library data are in your hands; and customize the download directory.
 - **Keep extending**: Crawler plugins are written in JavaScript / TypeScript; MCP lets AI agents search and organize the library under explicit permissions.
 
 What Kabegame tries to solve isn't "how to download an image" but how to preserve context and organize images over the long term as they cross sources and keep accumulating. It frees your hands from organizing images, and suits AI trainers, anime fans, and people slacking off at work. PNGs and other images can even have their metadata parsed—you might just discover the prompts behind AI-generated images! (I've salvaged several of my own workflows with Kabegame.)
@@ -112,7 +112,7 @@ See [Quick Start](https://kabegame.com/guide/quickstart/) for the full five-minu
 | Tags and metadata | Plugins can auto-classify tags, save original posts, authors, comments, and generation parameters, and contribute detail views and search fields. |
 | Gallery and search | Browse images and videos, filtering by combinations of time, source, tag, media, dimensions, file size, and metadata. |
 | Albums and folders | Manual albums support multi-level organization; synced albums continuously follow local directories and their subdirectories. |
-| Local library integration | Custom download directory, drag-and-drop import, batch operations, deduplication, virtual disk, and native metadata parsing. |
+| Local library integration | Custom download directory, drag-and-drop import, batch operations, deduplication, and native metadata parsing. |
 | Automation and open interfaces | Scheduled collection, CLI, and MCP; wallpaper setting and album rotation are provided as additional desktop capabilities. |
 
 ## Plugin Ecosystem
@@ -133,21 +133,15 @@ The desktop version is the primary release; `kabegame-cli` is a separate, option
 
 | Platform | Download | Notes |
 | --- | --- | --- |
-| Windows x64 | `Kabegame-standard_<version>_x64-setup.exe` | Double-click to install. The album virtual disk needs Dokan 2.x; the app prompts you to install it the first time you enable it. |
+| Windows x64 | `Kabegame-standard_<version>_x64-setup.exe` | Double-click to install. |
 | macOS Apple silicon | `Kabegame-standard_<version>_aarch64.dmg` | Supports macOS 11 and later; the installer is not yet signed. |
-| Linux amd64 | `Kabegame-standard_<version>_amd64.deb` | Install with `apt`; the album virtual disk depends on `fuse3`. |
+| Linux amd64 | `Kabegame-standard_<version>_amd64.deb` | Install with `apt`. |
 | Android | `Kabegame_<version>_android-preview.apk` | Android 8.0 and later; download the latest version from Releases. |
 
 If macOS reports an unverified developer or a damaged app on first launch:
 
 ```bash
 xattr -d com.apple.quarantine /Applications/Kabegame.app
-```
-
-To use the album virtual disk on macOS, install macFUSE as well:
-
-```bash
-brew install --cask macfuse
 ```
 
 Linux installation:

@@ -39,8 +39,6 @@ export interface AlbumActionContext extends ActionContext<Album> {
   isLabel: boolean;
   /** 标签目录：允许新建子标签/子目录，但不能放图片。 */
   isLabelDir: boolean;
-  /** 虚拟盘门禁（宿主已算好：Albums.vue albumDriveEnabled） */
-  albumDriveEnabled: boolean;
 }
 
 /**
@@ -95,16 +93,6 @@ export function createAlbumActions(): ActionItem<Album>[] {
           command: "createSubLabelDir",
         },
       ],
-    },
-    {
-      key: "openVirtualDrive",
-      label: t("contextMenu.openVirtualDrive"),
-      icon: FolderOpen,
-      command: "openVirtualDrive",
-      visible: (ctx) => {
-        const ext = ctx as AlbumActionContext;
-        return ext.albumDriveEnabled && ext.target?.id !== HIDDEN_ALBUM_ID;
-      },
     },
     {
       key: "syncNow",

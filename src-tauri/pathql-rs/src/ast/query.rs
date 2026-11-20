@@ -22,7 +22,7 @@ pub struct ContribQuery {
     pub where_: Option<WhereQuery>,
     /// 7c: 折叠期 substring 移除已有 WHERE 子句; 在新 `where` 写入前生效。
     /// 匹配对象是**坍缩后的整条字符串** —— 清除粒度是整棵树, 摘不掉树内某一支。
-    /// 用例: VD `vd_sub_album_gate_provider` 进入子画册 gate 时, 剥除父
+    /// 用例: `demo_sub_album_gate_provider` 进入子画册 gate 时, 剥除父
     /// `ai.album_id = ?` WHERE, 让下游 entry 写入新 album_id 不形成
     /// 永远空的 `A AND B`。
     #[serde(default)]

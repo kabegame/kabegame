@@ -11,12 +11,9 @@ pub mod storage;
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::emitter::GlobalEmitter;
 use kabegame_core::ipc::ipc::{IpcRequest, IpcResponse, IPC_PROTOCOL_VERSION};
-use kabegame_core::settings::Settings;
 #[cfg(not(target_os = "android"))]
 use kabegame_core::storage::organize::OrganizeService;
 use kabegame_core::storage::Storage;
-#[cfg(feature = "standard")]
-use kabegame_core::virtual_driver::VirtualDriveService;
 use std::sync::Arc;
 #[cfg(not(feature = "web"))]
 use tauri::{AppHandle, Emitter, Runtime};
@@ -131,19 +128,6 @@ pub async fn dispatch_request<#[cfg(not(feature = "web"))] R: Runtime>(
     if let Some(resp) = gallery::handle_gallery_request(&req).await {
         return resp;
     }
-    #[cfg(feature = "standard")]
-    {
-        if matches!(req, IpcRequest::VdMount) {
-            return handle_vd_mount().await;
-        }
-        if matches!(req, IpcRequest::VdUnmount) {
-            return handle_vd_unmount().await;
-        }
-        if matches!(req, IpcRequest::VdStatus) {
-            return handle_vd_status().await;
-        }
-    }
-
     // 未知请求
     IpcResponse::err(format!("Unknown request: {:?}", req))
 }
@@ -315,106 +299,7 @@ fn handle_status() -> IpcResponse {
             "settings": true,
             "events": true,
             "pluginRun": true,
-            "virtualDrive": cfg!(feature = "standard")
         }
-    }));
-    resp
-}
-
-#[cfg(feature = "standard")]
-async fn handle_vd_mount() -> IpcResponse {
-    use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-
-    if !cfg!(target_os = "windows") {
-        return IpcResponse::err("Virtual drive is not available".to_string());
-    }
-
-    let path = Settings::global().get_album_drive_mount_point();
-
-    let vd_service = VirtualDriveService::global().clone();
-
-    // 检查是否已挂载（幂等处理）
-    if vd_service.current_mount_point().is_some() {
-        return IpcResponse::ok("Already mounted");
-    }
-
-    // 执行挂载（使用 spawn_blocking 避免阻塞 tokio worker）
-    let mount_result = match tokio::task::spawn_blocking({
-        let vd_service = vd_service.clone();
-        let path = path.clone();
-        move || vd_service.mount(path.as_str())
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(e) => return IpcResponse::err(format!("Spawn blocking error: {}", e)),
-    };
-
-    match mount_result {
-        Ok(()) => {
-            // 挂载成功后，设置 enabled 为 true（会自动发送 SettingChange 事件）
-            let settings = Settings::global();
-            if let Err(e) = settings.set_album_drive_enabled(true) {
-                return IpcResponse::err(format!("Failed to set enabled: {}", e));
-            }
-
-            IpcResponse::ok("Mount successful")
-        }
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
-#[cfg(feature = "standard")]
-async fn handle_vd_unmount() -> IpcResponse {
-    use kabegame_core::virtual_driver::driver_service::VirtualDriveServiceTrait;
-
-    if !cfg!(target_os = "windows") {
-        return IpcResponse::err("Virtual drive is not available".to_string());
-    }
-
-    let vd_service = VirtualDriveService::global().clone();
-
-    // 检查是否已卸载（幂等处理）
-    if vd_service.current_mount_point().is_none() {
-        return IpcResponse::ok("Already unmounted");
-    }
-
-    // 执行卸载（使用 spawn_blocking 避免阻塞 tokio worker）
-    let unmount_result = match tokio::task::spawn_blocking({
-        let vd_service = vd_service.clone();
-        move || vd_service.unmount()
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(e) => return IpcResponse::err(format!("Spawn blocking error: {}", e)),
-    };
-
-    match unmount_result {
-        Ok(true) => {
-            // 卸载成功后，设置 enabled 为 false（会自动发送 SettingChange 事件）
-            let settings = Settings::global();
-            if let Err(e) = settings.set_album_drive_enabled(false) {
-                return IpcResponse::err(format!("Failed to set enabled: {}", e));
-            }
-
-            IpcResponse::ok("Unmount successful")
-        }
-        Ok(false) => {
-            // 卸载失败但可能已经卸载，返回成功（幂等）
-            IpcResponse::ok("Already unmounted")
-        }
-        Err(e) => IpcResponse::err(e),
-    }
-}
-
-#[cfg(feature = "standard")]
-async fn handle_vd_status() -> IpcResponse {
-    let enabled = cfg!(target_os = "windows");
-    let mut resp = IpcResponse::ok("ok");
-    resp.info = Some(serde_json::json!({
-        "status": if enabled { "ready" } else { "disabled" },
-        "virtualDrive": enabled
     }));
     resp
 }

@@ -987,7 +987,7 @@ mod tests {
     #[test]
     fn runtime_path_keeps_existing_scheme() {
         assert_eq!(runtime_path("images://x100x/1"), "images://x100x/1");
-        assert_eq!(runtime_path("vd://locale"), "vd://locale");
+        assert_eq!(runtime_path("demo://locale"), "demo://locale");
         assert_eq!(runtime_path("albums://all"), "albums://all");
     }
 

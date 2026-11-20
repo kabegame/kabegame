@@ -148,12 +148,6 @@ pub enum SettingKey {
     WpeEngineDir,
     /// 窗口状态（窗口位置、大小、是否最大化）
     WindowState,
-    /// 画册盘启用
-    #[cfg(feature = "virtual-driver")]
-    AlbumDriveEnabled,
-    /// 画册盘挂载点
-    #[cfg(feature = "virtual-driver")]
-    AlbumDriveMountPoint,
     /// 导入插件推荐运行配置时，是否默认启用定时（可在设置中关闭）
     ImportRecommendedScheduleEnabled,
     /// 界面语言（空/None 表示跟随系统）
@@ -370,12 +364,6 @@ impl Settings {
             }
             SettingKey::WpeFps => wpe_fps_setting_value(WpeFps::default()),
             SettingKey::WindowState => SettingValue::OptionWindowState(None),
-            #[cfg(feature = "virtual-driver")]
-            SettingKey::AlbumDriveEnabled => SettingValue::Bool(false),
-            #[cfg(feature = "virtual-driver")]
-            SettingKey::AlbumDriveMountPoint => {
-                SettingValue::String(Self::default_album_drive_mount_point())
-            }
             SettingKey::ImportRecommendedScheduleEnabled => SettingValue::Bool(true),
             SettingKey::Language => SettingValue::OptionString(None),
             SettingKey::WebServerEnabled => SettingValue::Bool(false),
@@ -393,28 +381,6 @@ impl Settings {
         #[cfg(not(target_os = "windows"))]
         {
             "native".to_string()
-        }
-    }
-
-    #[cfg(feature = "virtual-driver")]
-    fn default_album_drive_mount_point() -> String {
-        #[cfg(target_os = "windows")]
-        {
-            "K:\\".to_string()
-        }
-        #[cfg(target_os = "linux")]
-        {
-            // 使用用户 home 目录下的 kabegame-vd，避免需要 root 权限
-            dirs::home_dir()
-                .map(|p| p.join("kabegame-vd").to_string_lossy().to_string())
-                .unwrap_or_else(|| "/tmp/kabegame-vd".to_string())
-        }
-        #[cfg(target_os = "macos")]
-        {
-            // macOS 也可以使用用户目录，避免需要 root 权限
-            dirs::home_dir()
-                .map(|p| p.join("kabegame-vd").to_string_lossy().to_string())
-                .unwrap_or_else(|| "/tmp/kabegame-vd".to_string())
         }
     }
 
@@ -457,10 +423,6 @@ impl Settings {
             SettingKey::WpeFps,
             SettingKey::WpeEngineDir,
             SettingKey::WindowState,
-            #[cfg(feature = "virtual-driver")]
-            SettingKey::AlbumDriveEnabled,
-            #[cfg(feature = "virtual-driver")]
-            SettingKey::AlbumDriveMountPoint,
             SettingKey::ImportRecommendedScheduleEnabled,
             SettingKey::Language,
             SettingKey::WebServerEnabled,
@@ -614,10 +576,6 @@ impl Settings {
             SettingKey::WpeFps => Ok(wpe_fps_setting_value(
                 WpeFps::from_json(json).unwrap_or_default(),
             )),
-            #[cfg(feature = "virtual-driver")]
-            SettingKey::AlbumDriveEnabled => {
-                Ok(SettingValue::Bool(json.as_bool().unwrap_or(false)))
-            }
             SettingKey::MaxConcurrentDownloads
             | SettingKey::MaxConcurrentTasks
             | SettingKey::NetworkRetryCount
@@ -648,10 +606,6 @@ impl Settings {
                     .filter(|value| wallpaper_targets::is_wallpaper_display_mode(value))
                     .unwrap_or(TARGET_MULTIPLE)
                     .to_string(),
-            )),
-            #[cfg(feature = "virtual-driver")]
-            SettingKey::AlbumDriveMountPoint => Ok(SettingValue::String(
-                json.as_str().unwrap_or("").to_string(),
             )),
             SettingKey::GalleryImageAspectRatio
             | SettingKey::DefaultDownloadDir
@@ -810,10 +764,6 @@ impl Settings {
             SettingKey::WpeFps => "wpeFps".to_string(),
             SettingKey::WpeEngineDir => "wpeEngineDir".to_string(),
             SettingKey::WindowState => "windowState".to_string(),
-            #[cfg(feature = "virtual-driver")]
-            SettingKey::AlbumDriveEnabled => "albumDriveEnabled".to_string(),
-            #[cfg(feature = "virtual-driver")]
-            SettingKey::AlbumDriveMountPoint => "albumDriveMountPoint".to_string(),
             SettingKey::ImportRecommendedScheduleEnabled => {
                 "importRecommendedScheduleEnabled".to_string()
             }
@@ -1177,26 +1127,6 @@ impl Settings {
             .get(&SettingKey::WindowState)
             .and_then(|c| c.load().as_option_window_state())
             .flatten()
-    }
-
-    #[cfg(feature = "virtual-driver")]
-    pub fn get_album_drive_enabled(&self) -> bool {
-        Self::cells()
-            .get(&SettingKey::AlbumDriveEnabled)
-            .map(|c| c.load().as_bool().unwrap_or(false))
-            .unwrap_or(false)
-    }
-
-    #[cfg(feature = "virtual-driver")]
-    pub fn get_album_drive_mount_point(&self) -> String {
-        Self::cells()
-            .get(&SettingKey::AlbumDriveMountPoint)
-            .map(|c| {
-                c.load()
-                    .as_string()
-                    .unwrap_or_else(|| Self::default_album_drive_mount_point())
-            })
-            .unwrap_or_else(|| Self::default_album_drive_mount_point())
     }
 
     /// 解析后的界面语言（受支持的语言码；未设置时为系统语言），与 `sync_locale` 同口径。
@@ -1673,32 +1603,6 @@ impl Settings {
             cell.store(Arc::new(new_value.clone()));
         }
         Self::emit_setting_change(SettingKey::WindowState, &new_value);
-        Ok(())
-    }
-
-    #[cfg(feature = "virtual-driver")]
-    pub fn set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
-        let cells = Self::cells();
-        let new_value = SettingValue::Bool(enabled);
-        if let Some(cell) = cells.get(&SettingKey::AlbumDriveEnabled) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::AlbumDriveEnabled, &new_value);
-        Ok(())
-    }
-
-    #[cfg(feature = "virtual-driver")]
-    pub fn set_album_drive_mount_point(&self, mount_point: String) -> Result<(), String> {
-        let t = mount_point.trim().to_string();
-        if t.is_empty() {
-            return Err("挂载点不能为空".to_string());
-        }
-        let cells = Self::cells();
-        let new_value = SettingValue::String(t);
-        if let Some(cell) = cells.get(&SettingKey::AlbumDriveMountPoint) {
-            cell.store(Arc::new(new_value.clone()));
-        }
-        Self::emit_setting_change(SettingKey::AlbumDriveMountPoint, &new_value);
         Ok(())
     }
 

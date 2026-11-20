@@ -11,6 +11,7 @@ import {
   ARTIFACT_DIR,
   isArchDirName,
   run,
+  writeFileIfChanged,
 } from "../utils.ts";
 import { OSPlugin } from "./os-plugin.ts";
 import {
@@ -19,7 +20,6 @@ import {
   unlinkSync,
   existsSync,
   readFileSync,
-  writeFileSync,
 } from "fs";
 import Handlebars from "handlebars";
 
@@ -236,8 +236,7 @@ export class ComponentPlugin extends BasePlugin {
         isWindows: !isAndroid && !isWeb && OSPlugin.isWindows,
         isMacOS: !isAndroid && !isWeb && OSPlugin.isMacOS,
         isLinux: !isAndroid && !isWeb && OSPlugin.isLinux,
-        isLight: isAndroid,
-        isDev: bs.context.cmd!.isDev,
+            isDev: bs.context.cmd!.isDev,
         isAndroid,
         isWeb,
         isWindowEffect:
@@ -263,8 +262,13 @@ export class ComponentPlugin extends BasePlugin {
           const indexTemplate = Handlebars.compile(
             readFileSync(indexHandlebars, { encoding: "utf-8" }).toString(),
           );
-          writeFileSync(indexOut, indexTemplate(templateCtx));
-          this.log(`生成 ${indexOut}`);
+          const wroteIndex = writeFileIfChanged(
+            indexOut,
+            indexTemplate(templateCtx),
+          );
+          this.log(
+            wroteIndex ? `生成 ${indexOut}` : `${indexOut} 内容未变，跳过`,
+          );
         }
       }
 
@@ -287,7 +291,14 @@ export class ComponentPlugin extends BasePlugin {
             encoding: "utf-8",
           }).toString(),
         );
-        writeFileSync(tauriConfig, template(templateCtx));
+        // 必须按内容判断：cargo 只比 mtime，无条件重写会让整个 kabegame crate 每次重编。
+        const wroteConfig = writeFileIfChanged(
+          tauriConfig,
+          template(templateCtx),
+        );
+        this.log(
+          wroteConfig ? `生成 ${tauriConfig}` : `${tauriConfig} 内容未变，跳过`,
+        );
         // Android 的 Java 包/源码目录固定为 app.kabegame,不随 identifier(按 mode)变化——
         // 由 fork 的 cargo-tauri 按 TAURI_ANDROID_PACKAGE 解耦(见 tauri-cli-plugin.ts /
         // cocs/tauri/TAURI_CLI_FORK.md),这里无需再按 mode 渲染 Kotlin 源码。
@@ -308,7 +319,13 @@ export class ComponentPlugin extends BasePlugin {
             const capTemplate = Handlebars.compile(
               readFileSync(capHandlebars, { encoding: "utf-8" }).toString(),
             );
-            writeFileSync(capOut, capTemplate(templateCtx));
+            const wroteCap = writeFileIfChanged(
+              capOut,
+              capTemplate(templateCtx),
+            );
+            this.log(
+              wroteCap ? `生成 ${capOut}` : `${capOut} 内容未变，跳过`,
+            );
           }
         }
       }

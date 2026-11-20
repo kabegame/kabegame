@@ -90,34 +90,11 @@ albums:
     rootPathForbidden: "sync_folder cannot be the root directory '/'"
     notDirectory: sync_folder is not a directory
     folderAccessFailed: "Cannot access sync_folder: {detail}"
-    virtualDrivePathForbidden: "Cannot use a path inside the virtual drive mount ({path}) as a sync source"
     duplicateSyncFolder: A local folder sync album for this path already exists
     readOnly: Local folder sync albums cannot be edited manually
 
 plugins:
   officialGithubReleaseSourceName: Official GitHub Releases source
-
-vd:
-  all: All
-  plugin: By Plugin
-  name: By Name
-  date: By Date
-  dateRange: By Date Range
-  album: Albums
-  task: By Task
-  surf: By Surf
-  mediaType: By Type
-  wallpaperOrder: By Wallpaper Order
-  desc: Descending
-  image: Image
-  video: Video
-  allFormats: All Formats
-  subAlbums: Sub Albums
-  albumOrder: By Album Order
-  wallpaperOrderSub: By Wallpaper Order
-  imageOnly: Images Only
-  videoOnly: Videos Only
-  hiddenAlbum: Hidden Album
 
 surf:
   toolbar:

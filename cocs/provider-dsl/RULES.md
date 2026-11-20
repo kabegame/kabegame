@@ -40,7 +40,7 @@ delegate symmetry, instance-static keys, typed JSON meta bridges, host SQL funct
   - YAML 的 `note` 用折叠块 `>-`，折叠后与单行字符串逐字节相同。
 - 顶层 `$schema` 字段建议指向 `./schema.json5` 相对路径，启用 IDE 补全（仅 json5）
 - 位置约定：`src-tauri/kabegame-core/src/providers/dsl/<scope>/<name>.{json5,yaml}`
-  - `<scope>` 为 `root` / `shared` / `gallery` / `vd` 之一
+  - `<scope>` 为 `root` / `shared` / `gallery` 之一
   - 文件 `name` 字段必须等于文件名（不含后缀），便于反查
 - `__` 前缀路径段为**约定上的私有路径**（非引擎强制），不期望被外部 list 暴露
 
@@ -402,7 +402,7 @@ FROM (SELECT pm.data AS plugin_metadata
 没有 metadata 的图本来就不属于任何细分。
 
 不要为了这些列举把 facet 改写成 `~~` + `group_by` 的 fetch 节点：facet 子项必须来自 `list`（§4），
-`pathql_list`、VD 目录和高级查询的发现都依赖它。
+`pathql_list` 和高级查询的发现都依赖它。
 
 **缓存**：只有组深度归 0 的路径前缀参与前缀缓存读写——组内中间态只在当前分支基线下
 成立。闭合处（`~end` 所在的完整路径）是合法的缓存边界。
@@ -492,7 +492,7 @@ query:
 
 ### 4.0 路由表与说明字段约定
 
-- gallery 路由表已统一使用 `list` 范式，与 VD 一致。新增纯字面量路由表必须写在 `list`，
+- gallery 路由表已统一使用 `list` 范式。新增纯字面量路由表必须写在 `list`，
   不要写进 `resolve`；`resolve` 虽可解析字面量，但该层无法被 `runtime.list` 和 MCP
   `list_pathql_entry` 枚举。
 - 反过来，**动态 list 层必须同时配 resolve 兜底**：动态 list 的路由靠「枚举后按 key
@@ -502,7 +502,7 @@ query:
   resolve 直接实例化对应 provider；resolve 按声明顺序匹配（§5.2），兜底正则放最后。
   兜底同时是性能要求：resolve 先于动态 list 反查（§5.2），命中就不跑列举数据源。分页页号是典型——
   `page_size_provider` 的列举要把上游结果整个跑一遍数行，画廊每次翻页都要解析 `_kb_x<N>x/<页>`，
-  所以 `gallery_paginate_router` 等分页层的 list 只留给 VD 目录 / MCP 枚举，页号一律由
+  所以 `gallery_paginate_router` 等分页层的 list 只留给 MCP 枚举，页号一律由
   `([1-9][0-9]*)` resolve 直接实例化 `query_page_provider`（越过末页时取行为空）。
 - `note` 与 `meta` 职责分离：`note` 是面向人和模型的可读节点说明，写在**被说明的 provider
   自己身上**；`meta` 是 ChildEntry 的 JSON 实体数据，例如 album 行、plugin manifest 或
@@ -822,10 +822,10 @@ DSL 内所有 `${...}` 表达式都是 **从某个上下文命名空间取值** 
 `global` 方法用于 host-owned 显示映射，不用于 SQL inline。例：
 
 ```json5
-"${global:vd_en_US_month|root.name}"
+"${global:month_names_en_US|root.name}"
 ```
 
-若 `root.name = "01"`，引擎读取 runtime global `vd_en_US_month.01`。该形态在
+若 `root.name = "01"`，引擎读取 runtime global `month_names_en_US.01`。该形态在
 list key 中若读取 `data_var` / `child_var`，该 key 仍归类为动态 key。
 
 ### 6.4 约束
@@ -1014,8 +1014,7 @@ DSL 内核只处理 **SQL 可读 + 路径折叠** 两类信息。某些数据**�
 - 数据是 ID 类标识符（plugin_id、album_id、task_id） → DSL 持有 ID，前端做显示
 - 数据是配置 / 偏好 / locale / 环境变量 → 主机层决定路径前缀，或注册 SQL 函数桥接
 
-具体落地（VD 路径树、插件 router 设计、`get_plugin` SQL 桥）见
-[VD_INTEGRATION.md](./VD_INTEGRATION.md)。VD 是引擎的消费者，与内核规则解耦——本节只列出原则，
+引擎是独立的内核，消费者（如 kabegame-core 的画廊与插件 router）与内核规则解耦——本节只列出原则，
 具体实现示例不进入 RULES.md。
 
 ### 11.1 主机 SQL 函数（host scalar functions）
@@ -1027,7 +1026,7 @@ JSON1 函数（`json_extract` 等）拆解返回值。
 **命名约定**：`get_<entity>(id [, locale]) -> JSON_TEXT`
 
 - 返回单 JSON 字符串而非多列 — 标量函数语言侧限制；JSON1 函数拆字段；扩展字段不破坏调用方
-- locale 缺省走 host 侧全局当前 locale（kabegame: `kabegame_i18n::current_vd_locale()`）
+- locale 缺省走 host 侧全局当前 locale
 - 实体不存在 → 返回 SQL JSON `"null"`（DSL 侧用 `IFNULL(json_extract(..., '$.field'), '')` 兜底）
 - 标记 `SQLITE_DETERMINISTIC` — sqlite 同 query 内同参数缓存
 
@@ -1048,9 +1047,6 @@ crawled_at_seconds(timestamp) -> INTEGER
 is_search_dummy_url(url) -> INTEGER
   URL 搜索维度的排除判定：去重 dummy 集合不含 file://，搜索 dummy 集合在其上增加
   file://；NULL 也返回 1，使 DSL 用 `is_search_dummy_url(x) = 0` 同时排除 NULL 与占位值。
-
-vd_display_name(canonical) -> TEXT
-  读取当前 VD locale, 把 canonical 段名映射为本地化路径显示名。
 
 kb_palette_distance(palette, hex) -> INTEGER
   色盘到参考色的距离，`media::palette::distance_to` 的 SQL 外壳（纯计算，不访问连接）。
@@ -1251,7 +1247,6 @@ Contract:
 ## 14. 引用
 
 - 语法 schema：[../../src-tauri/kabegame-core/src/providers/dsl/schema.json5](../../src-tauri/kabegame-core/src/providers/dsl/schema.json5)
-- VD 消费者实现：[VD_INTEGRATION.md](./VD_INTEGRATION.md)
 - Rust trait 实现：[../../src-tauri/kabegame-core/src/providers/provider.rs](../../src-tauri/kabegame-core/src/providers/provider.rs)
 - Runtime LRU：[../../src-tauri/kabegame-core/src/providers/runtime.rs](../../src-tauri/kabegame-core/src/providers/runtime.rs)
 - 旧文档（迁移前 ImageQuery 系统）：[../gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md](../gallery/PROVIDER_IMAGEQUERY_COMPOSABLE.md)

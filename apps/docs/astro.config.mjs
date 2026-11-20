@@ -36,7 +36,6 @@ export default defineConfig({
             { label: "任务", slug: "guide/tasks" },
             { label: "壁纸", slug: "guide/wallpaper" },
             { label: "Wallpaper Engine 壁纸", slug: "guide/wallpaper-engine" },
-            { label: "虚拟盘", slug: "guide/virtual-drive" },
             { label: "托盘", slug: "guide/tray" },
             { label: "插件使用", slug: "guide/plugins-usage" },
             { label: "MCP 总览", slug: "guide/mcp" },

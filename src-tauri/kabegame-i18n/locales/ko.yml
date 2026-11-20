@@ -90,34 +90,11 @@ albums:
     rootPathForbidden: "sync_folder는 루트 디렉터리 '/'일 수 없습니다"
     notDirectory: sync_folder가 폴더가 아닙니다
     folderAccessFailed: "sync_folder에 접근할 수 없습니다: {detail}"
-    virtualDrivePathForbidden: "가상 드라이브 마운트 경로({path}) 안의 경로는 동기화 원본으로 사용할 수 없습니다"
     duplicateSyncFolder: 이 경로에 대한 로컬 폴더 동기화 앨범이 이미 존재합니다
     readOnly: 로컬 폴더 동기화 앨범은 이미지를 수동으로 추가하거나 제거할 수 없습니다
 
 plugins:
   officialGithubReleaseSourceName: 공식 GitHub Releases 소스
-
-vd:
-  all: 전체
-  plugin: 플러그인별
-  name: 이름별
-  date: 날짜별
-  dateRange: 기간별
-  album: 앨범
-  task: 작업별
-  surf: 서프별
-  mediaType: 종류별
-  wallpaperOrder: 배경화면 순서
-  desc: 내림차순
-  image: 이미지
-  video: 비디오
-  allFormats: 모든 형식
-  subAlbums: 하위 앨범
-  albumOrder: 앨범 순서
-  wallpaperOrderSub: 배경화면 순서
-  imageOnly: 이미지 전용
-  videoOnly: 비디오 전용
-  hiddenAlbum: 숨김 앨범
 
 surf:
   toolbar:

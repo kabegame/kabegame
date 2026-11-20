@@ -13,9 +13,6 @@ pub mod provider;
 pub mod query;
 pub mod sql_executor;
 
-#[cfg(feature = "virtual-driver")]
-pub(crate) mod vd_ops;
-
 // ── 公开 re-exports ──────────────────────────────────────────────────────────
 
 pub use dsl_loader::is_provider_file_path;
@@ -28,23 +25,6 @@ pub use query::{
     metadata_at, metadata_full_at, organize_batch_at, query_all, query_entry, query_fetch,
     query_list, runtime_path, PathqlQuery, ProviderEntry, ProviderListChild, ProviderNote,
 };
-
-/// VD 专用：从 PluginManager 缓存读取插件显示名（用于「按任务」目录名展示）。
-#[cfg(feature = "virtual-driver")]
-#[allow(unused_variables)]
-pub fn plugin_display_name_from_manifest(plugin_id: &str) -> Option<String> {
-    let pid = plugin_id.trim();
-    if pid.is_empty() {
-        return None;
-    }
-    let pm = crate::plugin::PluginManager::global_opt()?;
-    let name = pm.get_cached_plugin_display_name_sync(pid)?;
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
-}
 
 pub use crate::storage::gallery_time::{
     gallery_month_groups_from_days, GalleryTimeFilterPayload, GalleryTimeGroupIndex,

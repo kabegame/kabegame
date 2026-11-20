@@ -9,7 +9,6 @@
 //! - `test://gallery/all/_kb_x100x` 由全局表捕获 -> gallery_paginate_router{page_size=100}
 //! - `test://gallery/all/_kb_x100x/1` 走动态反查 -> query_page_provider{page_size=100, page_num=1}
 //!   再走 query.delegate ./__provider -> query_page_provider 贡献 OFFSET/LIMIT
-//! - `test://vd/i18n-zh_CN/画册` 中文路径段穿透 vd_root_router -> vd/zh_CN/vd_zh_CN_root_router
 
 #![cfg(feature = "json5")]
 
@@ -60,8 +59,6 @@ const PROVIDER_FILES: &[&str] = &[
     "images/gallery/all_router/x_page_x/gallery_paginate_router.json5",
     "shared/page_size_provider.json5",
     "shared/query_page_provider.json5",
-    "images/vd/vd_root_router.json5",
-    "images/vd/zh_CN/vd_zh_CN_root_router.json5",
 ];
 
 fn providers_dir() -> PathBuf {
@@ -218,14 +215,6 @@ fn build_runtime() -> Arc<ProviderRuntime> {
         "gallery_dates_router",
         "gallery_albums_router",
         "gallery_search_router",
-        "vd_en_US_root_router",
-        "vd_albums_provider",
-        "vd_plugins_provider",
-        "vd_tasks_provider",
-        "vd_surfs_provider",
-        "vd_media_type_provider",
-        "vd_dates_provider",
-        "vd_all_provider",
     ] {
         register_stub(&mut registry, "kabegame", name);
     }
@@ -258,12 +247,12 @@ fn build_runtime() -> Arc<ProviderRuntime> {
 }
 
 #[test]
-fn root_lists_gallery_and_vd() {
+fn root_lists_gallery() {
     let runtime = build_runtime();
     let children = runtime.list("test://").unwrap();
     let names: Vec<&str> = children.iter().map(|c| c.name.as_str()).collect();
     assert!(names.contains(&"gallery"));
-    assert!(names.contains(&"vd"));
+    assert!(!names.contains(&"vd"));
 }
 
 #[test]
@@ -318,13 +307,6 @@ fn gallery_hide_all_page_resolves_and_builds_with_globals() {
     assert!(sql.contains("hid_ex.album_id = ?"));
     assert!(params.contains(&TemplateValue::Text("favorite-album".to_string())));
     assert!(params.contains(&TemplateValue::Text("hidden-album".to_string())));
-}
-
-#[test]
-fn vd_zh_cn_chinese_segment_resolves() {
-    let runtime = build_runtime();
-    let resolved = runtime.resolve("test://vd/i18n-zh_CN/画册").unwrap();
-    let _ = resolved;
 }
 
 // 注意: gallery_paginate_router 的动态 list 通过 page_size_provider 跑 SQL,

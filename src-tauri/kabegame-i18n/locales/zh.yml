@@ -90,34 +90,11 @@ albums:
     rootPathForbidden: "sync_folder 不能是根目录 '/'"
     notDirectory: sync_folder 不是目录
     folderAccessFailed: "无法访问 sync_folder: {detail}"
-    virtualDrivePathForbidden: "不能选择虚拟磁盘挂载目录内的路径（{path}）作为同步源"
     duplicateSyncFolder: 该路径已存在对应的本地文件夹同步画册
     readOnly: 本地文件夹同步画册不可手动增删图片
 
 plugins:
   officialGithubReleaseSourceName: 官方 GitHub Releases 源
-
-vd:
-  all: 全部
-  plugin: 按插件
-  name: 按名称
-  date: 按时间
-  dateRange: 按时间范围
-  album: 画册
-  task: 按任务
-  surf: 按畅游
-  mediaType: 按媒体
-  wallpaperOrder: 按壁纸顺序
-  desc: 倒序
-  image: 图片
-  video: 视频
-  allFormats: 所有格式
-  subAlbums: 子画册
-  albumOrder: 按画册顺序
-  wallpaperOrderSub: 按壁纸顺序
-  imageOnly: 仅图片
-  videoOnly: 仅视频
-  hiddenAlbum: 隐藏画册
 
 surf:
   toolbar:

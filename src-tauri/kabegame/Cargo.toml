@@ -183,14 +183,13 @@ wpe = [
     "windows/Win32_UI_WindowsAndMessaging",
 ]
 
-# Standard desktop build: shared Tauri stack + virtual driver + video ingestion
+# Standard desktop build: shared Tauri stack + video ingestion
 standard = [
     "wpe",
     "dep:tauri-plugin-wemt",
     "dep:tauri-plugin-cursor",
     "dep:cef",
     "dep:gtk",
-    "kabegame-core/virtual-driver",
     "dep:tauri",
     "dep:tauri-runtime-kbcef",
     "dep:tauri-plugin-clipboard-manager",
@@ -202,7 +201,7 @@ standard = [
     "dep:tauri-build",
 ]
 
-# Android build: shared Tauri stack + android-only plugins, no virtual driver
+# Android build: shared Tauri stack + android-only plugins
 android = [
     "dep:tauri",
     "dep:tauri-plugin-clipboard-manager",
@@ -219,11 +218,11 @@ android = [
     "dep:tauri-build",
 ]
 
-# Web build: no Tauri stack (mutually exclusive with standard/light/android)
+# Web build: no Tauri stack (mutually exclusive with standard/android)
 web = []
 
 # Activated by `tauri build` in production — serves embedded assets via tauri://localhost on desktop.
-# Must NOT be pulled in by standard/light/android, or dev mode would bypass devUrl (Vite).
+# Must NOT be pulled in by standard/android, or dev mode would bypass devUrl (Vite).
 custom-protocol = ["tauri?/custom-protocol"]
 
 [[bin]]

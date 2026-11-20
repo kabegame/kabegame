@@ -18,8 +18,7 @@
   "drawerTitleDefault": "說明",
   "tips": {
     "tag": {
-      "androidUnavailable": "安卓無",
-      "lightModeUnavailable": "Light 模式不可用"
+      "androidUnavailable": "安卓無"
     },
     "category": {
       "gallery": {
@@ -45,10 +44,6 @@
       "tray": {
         "title": "托盤",
         "description": "系統托盤圖示的位置和功能說明"
-      },
-      "virtual-driver": {
-        "title": "虛擬磁碟（VD）",
-        "description": "在檔案總管裡像磁碟一樣瀏覽畫冊（Windows）"
       },
       "command-line": {
         "title": "命令列",
@@ -123,14 +118,6 @@
       "tray-introduction": {
         "title": "托盤位置及功能",
         "summary": "了解系統托盤圖示的位置、左鍵/右鍵功能，以及托盤選單的各項功能。"
-      },
-      "virtual-driver-basics": {
-        "title": "用虛擬磁碟在檔案總管裡瀏覽圖片",
-        "summary": "開啟「畫冊磁碟」後，可在檔案總管中以檔案方式瀏覽畫冊與圖片檔案。"
-      },
-      "virtual-driver-directories": {
-        "title": "虛擬磁碟各目錄說明",
-        "summary": "了解虛擬磁碟根目錄下的各個目錄（全部、依外掛、依時間、依任務、畫冊）的用途和使用情境。"
       },
       "command-line-basics": {
         "title": "命令列基本說明",
@@ -641,60 +628,7 @@
       "notePara1": "关闭主視窗时，应用預設会隐藏窗口而不是結束，这样可以保持应用在背景运行。",
       "notePara2": "如果需要完全結束应用，请使用托盤菜单中的 結束 选项。"
     },
-    "virtual-driver-basics": {
-      "lightModeNote": "Light 模式不支持此功能",
-      "whatTitle": "这是什么",
-      "whatPara1": "\"虛擬磁碟（VD）\"会把你的图库以一个磁碟代號的形式挂载到檔案總管里。",
-      "whatPara2": "这样你可以像浏览普通資料夾一样浏览畫冊和图片檔案（适合拖拽、复制路径、外部工具打开等）。",
-      "enableTitle": "如何开启",
-      "enablePara1": "到 設定 → 應用設定 → 畫冊磁碟 开启。",
-      "enablePara2": "开启后，預設掛載點通常是 K:\\（具体以你的設定为准）。",
-      "openTitle": "如何打开",
-      "openItem1": "在\"畫冊列表\"页右上角點擊 去 VD 檢視",
-      "openItem2": "或在\"畫冊詳情\"页右上角點擊 去 VD 檢視",
-      "openItem3": "也可以直接在檔案總管網址列输入掛載點，例如 K:\\",
-      "noteTitle": "注意事项",
-      "notePara1": "虛擬磁碟属于\"按需對應\"的檔案视图，一些高级檔案操作可能不完全支持（以应用说明/实际表现为准）。",
-      "notePara2": "如果你在檔案總管里没看到磁碟代號，先检查是否已开启\"畫冊磁碟\"，以及掛載點磁碟代號是否被其他软件占用。"
-    },
-    "virtual-driver-directories": {
-      "rootTitle": "虛擬磁碟根目录结构",
-      "rootPara": "开启虛擬磁碟后，在檔案總管中打开掛載點（預設 K:\\），你会看到以下目录：",
-      "allTitle": "全部",
-      "allPara1": "包含畫廊中的所有图片，按分頁组织（每頁约 100 张）。",
-      "allPara2": "适合：快速浏览所有图片、查找特定图片。",
-      "pluginTitle": "依外掛",
-      "pluginPara1": "按收集源外掛（如 konachan、anihonet-wallpaper 等）分组显示图片。",
-      "pluginPara2": "每个外掛一个子目录，里面是该外掛收集到的所有图片。",
-      "pluginPara3": "适合：按来源查看图片、管理特定外掛的收集结果。",
-      "timeTitle": "依時間",
-      "timePara1": "按图片的收集时间（年月）分组显示。",
-      "timePara2": "子目录格式为 YYYY-MM（例如 2024-01），包含该月收集的所有图片。",
-      "timePara3": "适合：依時間线浏览、查找特定时期的图片。",
-      "taskTitle": "依任務",
-      "taskPara1": "按收集任務分组显示图片。",
-      "taskPara2": "每个任務一个子目录，目录名为 任務名稱 - 任務ID，包含该任務收集到的所有图片。",
-      "taskPara3": "适合：查看特定任務的收集结果、追踪任務产出。",
-      "albumTitle": "畫冊",
-      "albumPara1": "包含你创建的所有畫冊。",
-      "albumPara2": "每个畫冊一个子目录，目录名为畫冊名称，里面是该畫冊中的所有图片。",
-      "albumPara3": "适合：按畫冊浏览、管理畫冊内容、拖拽图片到畫冊。",
-      "albumNote": "畫冊目录支持部分檔案操作（如刪除、重新命名），但图片檔案本身是唯讀的。",
-      "readmeTitle": "在这里你可以自由查看图片.txt",
-      "readmePara1": "根目录下的说明檔案，介绍虛擬磁碟的基本用法。",
-      "readmePara2": "雙擊可以查看详细说明。",
-      "suggestTitle": "使用建议",
-      "suggestItem1": "快速浏览：使用\"全部\"目录，按分頁查看所有图片",
-      "suggestItem2": "按来來源管理：使用\"依外掛\"目录，查看特定外掛的收集结果",
-      "suggestItem3": "时间线查看：使用\"依時間\"目录，按月份浏览图片",
-      "suggestItem4": "任務追踪：使用\"依任務\"目录，查看特定任務的产出",
-      "suggestItem5": "畫冊管理：使用\"畫冊\"目录，管理你的畫冊和图片",
-      "noteTitle": "注意事项",
-      "notePara1": "虛擬磁碟是\"按需對應\"的檔案视图，主要用途是浏览和查看图片。",
-      "notePara2": "部分高级檔案操作可能不完全支持，具体以应用说明和实际表现为准。"
-    },
     "command-line-basics": {
-      "lightModeNote": "Light 模式不支持此功能",
       "whatTitle": "什么是命令列工具",
       "whatPara1": "Kabegame 提供了一个命令列工具（CLI），可以通过终端/命令提示字元来执行外掛相关操作。",
       "whatPara2": "适合：自动化脚本、批次處理、不打开主視窗的情况下运行外掛等场景。",

@@ -26,7 +26,6 @@ fn recursive_scan_excludes_non_provider_files() {
 
     assert!(rels.contains(&"images/images_root_provider.json5".to_string()));
     assert!(rels.contains(&"images/image_basic_provider.json5".to_string()));
-    assert!(rels.contains(&"images/vd/zh_CN/vd_zh_CN_root_router.json5".to_string()));
     assert!(rels.contains(&"shared/tasks_provider.yaml".to_string()));
     assert!(!rels.contains(&"schema.json5".to_string()));
     assert!(
@@ -35,7 +34,7 @@ fn recursive_scan_excludes_non_provider_files() {
 }
 
 #[test]
-fn images_root_provider_routes_to_gallery_and_vd() {
+fn images_root_provider_routes_to_gallery() {
     let r = common::build_real_registry();
     let root_ns = Namespace("kabegame".into());
     let root = r
@@ -44,7 +43,7 @@ fn images_root_provider_routes_to_gallery_and_vd() {
     let list = root.list.as_ref().expect("root list");
     let names: Vec<&str> = list.entries.iter().map(|(k, _)| k.as_str()).collect();
     assert!(names.contains(&"gallery"));
-    assert!(names.contains(&"vd"));
+    assert!(!names.contains(&"vd"));
 }
 
 #[test]
@@ -81,21 +80,6 @@ fn yaml_provider_registers_with_multiline_sql() {
         json.contains("FROM tasks t\\n"),
         "block scalar keeps newlines: {json}"
     );
-}
-
-#[test]
-fn vd_zh_cn_router_loads_via_loader() {
-    let r = common::build_real_registry();
-    let root_ns = Namespace("kabegame".into());
-    let vd = r
-        .resolve(&root_ns, &ProviderName("vd_zh_CN_root_router".into()))
-        .expect("vd_zh_CN_root_router");
-    let list = vd.list.as_ref().expect("list");
-    assert_eq!(list.entries.len(), 10);
-    assert_eq!(list.entries[0].0, "画册");
-    assert!(list.entries.iter().any(|(name, _)| name == "按名称"));
-    assert!(list.entries.iter().any(|(name, _)| name == "按时间"));
-    assert!(list.entries.iter().any(|(name, _)| name == "按尺寸"));
 }
 
 #[test]

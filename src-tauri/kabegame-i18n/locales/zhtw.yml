@@ -90,34 +90,11 @@ albums:
     rootPathForbidden: "sync_folder 不能是根目錄 '/'"
     notDirectory: sync_folder 不是資料夾
     folderAccessFailed: "無法存取 sync_folder: {detail}"
-    virtualDrivePathForbidden: "不能選擇虛擬磁碟掛載目錄內的路徑（{path}）作為同步來源"
     duplicateSyncFolder: 此路徑已存在對應的本機資料夾同步畫冊
     readOnly: 本機資料夾同步畫冊不可手動新增或移除圖片
 
 plugins:
   officialGithubReleaseSourceName: 官方 GitHub Releases 源
-
-vd:
-  all: 全部
-  plugin: 按外掛
-  name: 按名稱
-  date: 按時間
-  dateRange: 按時間範圍
-  album: 畫冊
-  task: 按任務
-  surf: 按暢遊
-  mediaType: 按媒體
-  wallpaperOrder: 按壁紙順序
-  desc: 倒序
-  image: 圖片
-  video: 影片
-  allFormats: 所有格式
-  subAlbums: 子畫冊
-  albumOrder: 按畫冊順序
-  wallpaperOrderSub: 按壁紙順序
-  imageOnly: 僅圖片
-  videoOnly: 僅影片
-  hiddenAlbum: 隱藏畫冊
 
 surf:
   toolbar:

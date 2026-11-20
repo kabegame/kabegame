@@ -104,17 +104,6 @@ fn register_fixture_functions(conn: &Connection) {
     .unwrap();
 
     conn.create_scalar_function(
-        "vd_display_name",
-        1,
-        FunctionFlags::SQLITE_UTF8,
-        |ctx| -> rusqlite::Result<String> {
-            let canonical: String = ctx.get(0)?;
-            Ok(kabegame_i18n::vd_display_name(&canonical))
-        },
-    )
-    .unwrap();
-
-    conn.create_scalar_function(
         "get_plugin",
         -1,
         FunctionFlags::SQLITE_DETERMINISTIC | FunctionFlags::SQLITE_UTF8,
@@ -124,10 +113,10 @@ fn register_fixture_functions(conn: &Connection) {
                 let raw: rusqlite::types::Value = ctx.get(1)?;
                 match raw {
                     rusqlite::types::Value::Text(s) => s,
-                    _ => kabegame_i18n::current_vd_locale().to_string(),
+                    _ => kabegame_i18n::current_display_locale().to_string(),
                 }
             } else {
-                kabegame_i18n::current_vd_locale().to_string()
+                kabegame_i18n::current_display_locale().to_string()
             };
             let name = if locale.starts_with("zh") {
                 "像素插件"

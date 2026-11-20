@@ -7,7 +7,6 @@ import {
   isArchDirName,
   existsFile,
   FFMPEG_INSTALL_DIR,
-  findFirstExisting,
   repoBuildDir,
   RESOURCES_BIN_DIR,
   RESOURCES_DIR,
@@ -198,14 +197,8 @@ export class OSPlugin extends BasePlugin {
   private bundleLibs(bs: BuildSystem): void {
     this.verifyFFmpegBuildArtifacts();
     if (OSPlugin.isWindows) {
-      // standard 需要 Dokan + 安装器
-      if (bs.context.mode?.isStandard) {
-        this.copyDokan2DllToResources();
-        this.copyDokanInstallerToResources();
-      }
       this.collectWindowsFFmpegDlls();
       this.copyFFmpegDllsToResources();
-      this.copyDokan2DllToTauriReleaseDirBestEffort();
       // Windows standard 用 CEF runtime;打包其运行时文件(libcef.dll + 资源 + locales)。
       if (bs.context.mode?.isStandard) {
         this.verifyCefArtifacts();
@@ -290,8 +283,6 @@ export class OSPlugin extends BasePlugin {
     OSPlugin.clearRuntimeStagingDir();
     ensureDir(dst);
 
-    // Linux 不捆 libfuse.so:fuser 关闭 libfuse feature 走纯 Rust 挂载,二进制根本不链接
-    // libfuse(启动无 DT_NEEDED,挂载时懒执行 fusermount3),运行时只需 SUID fusermount3(apt fuse3)。
     // FFmpeg、x264 均已静态链接；这里只处理显式附加的动态库。
     const packages: string[] = [];
     for (const pkg of packages) {
@@ -459,7 +450,7 @@ export class OSPlugin extends BasePlugin {
     );
   }
 
-  // ===== macOS:仅保留 KABEGAME_BUNDLE_LIBS_EXTRA 逃生口(x264 已静态嵌入 FFmpeg,libfuse 弱链接懒加载) =====
+  // ===== macOS:仅保留 KABEGAME_BUNDLE_LIBS_EXTRA 逃生口(x264 已静态嵌入 FFmpeg) =====
   private collectMacOSDylibs(): void {
     const dst = OSPlugin.binDir;
     OSPlugin.clearRuntimeStagingDir();
@@ -554,145 +545,5 @@ export class OSPlugin extends BasePlugin {
         );
       }
     }
-  }
-
-  // ===== Dokan2.dll → resources/bin =====
-  copyDokan2DllToResources(): void {
-    if (!OSPlugin.isWindows) return;
-    const dst = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
-    if (existsFile(dst)) return;
-    const src = OSPlugin.findDokan2DllOnWindows();
-    if (!src) {
-      this.log(
-        chalk.yellow(
-          `⚠ 未在系统中找到 dokan2.dll,将继续构建/启动,但"虚拟磁盘"功能将不可用。\n\n` +
-            `如果你需要虚拟磁盘:\n` +
-            `1) 安装 Dokan 2.x;或\n` +
-            `2) 设置环境变量 DOKAN2_DLL 指向 dokan2.dll,例如:\n` +
-            `   $env:DOKAN2_DLL="C:\\\\Program Files\\\\Dokan\\\\Dokan Library-2.3.1\\\\dokan2.dll"\n`,
-        ),
-      );
-      return;
-    }
-    ensureDir(RESOURCES_BIN_DIR);
-    fs.copyFileSync(src, dst);
-    this.log(
-      chalk.cyan(
-        `[build] Staged dokan2.dll resource: ${
-          path.relative(
-            ROOT,
-            dst,
-          )
-        } (from: ${src})`,
-      ),
-    );
-  }
-
-  copyDokanInstallerToResources(): void {
-    if (!OSPlugin.isWindows) return;
-    const fromEnv = (process.env.DOKAN_INSTALLER ?? "").trim();
-    const fixed = path.join(OSPlugin.binDir, "dokan-installer.exe");
-    let src = findFirstExisting([fromEnv, fixed].filter(Boolean));
-    if (!src) {
-      try {
-        if (fs.existsSync(OSPlugin.binDir)) {
-          const files = fs.readdirSync(OSPlugin.binDir);
-          const hit = files.find((f: string) => {
-            const lower = f.toLowerCase();
-            return (
-              lower.includes("dokan") &&
-              (lower.endsWith(".exe") || lower.endsWith(".msi"))
-            );
-          });
-          if (hit) {
-            const p = path.join(OSPlugin.binDir, hit);
-            if (existsFile(p)) src = p;
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-    if (!src) {
-      this.log(
-        chalk.yellow(
-          `[build] Dokan installer not staged (optional). To bundle it, set env DOKAN_INSTALLER or put bin/windows/dokan-installer.exe`,
-        ),
-      );
-      return;
-    }
-    stageResourceFile(src, "dokan-installer.exe");
-  }
-
-  copyDokan2DllToTauriReleaseDirBestEffort(): void {
-    if (!OSPlugin.isWindows) return;
-    const src = path.join(RESOURCES_BIN_DIR, "dokan2.dll");
-    if (!existsFile(src)) return;
-    const dst = path.join(ARTIFACT_DIR, "release", "dokan2.dll");
-    try {
-      fs.copyFileSync(src, dst);
-      this.log(
-        chalk.cyan(
-          `[build] Copied dokan2.dll next to target/release exe: ${
-            path.relative(
-              ROOT,
-              dst,
-            )
-          }`,
-        ),
-      );
-    } catch {
-      // ignore (some environments may lock the file)
-    }
-  }
-
-  // ===== Dokan2.dll 发现:env / 仓库 bin / 系统 / Program Files =====
-  static findDokan2DllOnWindows(): string | null {
-    if (!OSPlugin.isWindows) return null;
-
-    const bundled = path.join(OSPlugin.binDir, "dokan2.dll");
-    if (existsFile(bundled)) return bundled;
-
-    const fromEnv = (process.env.DOKAN2_DLL ?? "").trim();
-    if (fromEnv) {
-      if (existsFile(fromEnv)) return fromEnv;
-      throw new Error(
-        `环境变量 DOKAN2_DLL 指向的文件不存在: ${fromEnv}\n` +
-          `请改为 dokan2.dll 的绝对路径。`,
-      );
-    }
-
-    const sysCandidates = [
-      path.join(process.env.WINDIR ?? "C:\\Windows", "System32", "dokan2.dll"),
-      path.join(process.env.WINDIR ?? "C:\\Windows", "SysWOW64", "dokan2.dll"),
-    ];
-    const sys = findFirstExisting(sysCandidates);
-    if (sys) return sys;
-
-    const programFiles = process.env["ProgramFiles"] ?? "C:\\Program Files";
-    const dokanRoot = path.join(programFiles, "Dokan");
-    try {
-      if (fs.existsSync(dokanRoot) && fs.statSync(dokanRoot).isDirectory()) {
-        const entries = fs.readdirSync(dokanRoot, { withFileTypes: true });
-        const dirs = entries
-          .filter((e: any) => e.isDirectory())
-          .map((e: any) => e.name)
-          .filter((name: string) => name.toLowerCase().includes("dokan"));
-
-        const candidates: string[] = [];
-        for (const d of dirs) {
-          candidates.push(path.join(dokanRoot, d, "dokan2.dll"));
-          candidates.push(path.join(dokanRoot, d, "x64", "dokan2.dll"));
-          candidates.push(path.join(dokanRoot, d, "bin", "dokan2.dll"));
-          candidates.push(path.join(dokanRoot, d, "bin", "x64", "dokan2.dll"));
-        }
-        const found = findFirstExisting(candidates);
-        if (found) return found;
-      }
-    } catch {
-      // ignore
-    }
-
-    return null;
   }
 }

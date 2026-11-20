@@ -1,7 +1,7 @@
 namespace: kabegame
 name: tasks_provider
 # Shared task scan source. It enumerates task ids and task metadata only;
-# gallery/vd routers decide the visible label and target task provider.
+# gallery routers decide the visible label and target task provider.
 list:
   "${out.id}":
     # display：插件有名称时为「插件名 - 任务 id」，否则只用任务 id。
@@ -41,6 +41,3 @@ list:
           startTime: "${out.start_time}"
           endTime: "${out.end_time}"
           error: "${out.error}"
-      vd:
-        task_id: "${out.id}"
-        display: "${out.display}"

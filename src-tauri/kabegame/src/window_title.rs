@@ -5,7 +5,7 @@ use std::sync::{LazyLock, Mutex};
 
 use kabegame_core::crawler::TaskScheduler;
 use kabegame_core::plugin::manifest_value_display_for_locale;
-use kabegame_i18n::{current_vd_locale, t};
+use kabegame_i18n::{current_display_locale, t};
 use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
 
 #[derive(Clone)]
@@ -60,7 +60,7 @@ fn compose(kind: &WebPageWindow, page_title: &str) -> String {
         WebPageWindow::Crawler { task_id } => TaskScheduler::global()
             .get_run(task_id)
             .map(|run| {
-                manifest_value_display_for_locale(&run.params.plugin.name, current_vd_locale())
+                manifest_value_display_for_locale(&run.params.plugin.name, current_display_locale())
             })
             .unwrap_or_default(),
     };

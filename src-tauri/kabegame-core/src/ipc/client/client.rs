@@ -673,22 +673,6 @@ impl IpcClient {
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
     }
 
-    #[cfg(feature = "virtual-driver")]
-    pub async fn settings_get_album_drive_enabled(&self) -> Result<bool, String> {
-        let v = self
-            .request_data(IpcRequest::SettingsGetAlbumDriveEnabled)
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
-    #[cfg(feature = "virtual-driver")]
-    pub async fn settings_get_album_drive_mount_point(&self) -> Result<String, String> {
-        let v = self
-            .request_data(IpcRequest::SettingsGetAlbumDriveMountPoint)
-            .await?;
-        serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
     pub async fn settings_set_gallery_image_aspect_ratio(
         &self,
         aspect_ratio: Option<String>,
@@ -734,21 +718,6 @@ impl IpcClient {
 
     pub async fn settings_set_wallpaper_mode(&self, mode: String) -> Result<(), String> {
         self.request_ok(IpcRequest::SettingsSetWallpaperMode { mode })
-            .await
-    }
-
-    #[cfg(feature = "virtual-driver")]
-    pub async fn settings_set_album_drive_enabled(&self, enabled: bool) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetAlbumDriveEnabled { enabled })
-            .await
-    }
-
-    #[cfg(feature = "virtual-driver")]
-    pub async fn settings_set_album_drive_mount_point(
-        &self,
-        mount_point: String,
-    ) -> Result<(), String> {
-        self.request_ok(IpcRequest::SettingsSetAlbumDriveMountPoint { mount_point })
             .await
     }
 
@@ -881,38 +850,6 @@ impl IpcClient {
     pub async fn organize_cancel(&self) -> Result<bool, String> {
         let v = self.request_data(IpcRequest::OrganizeCancel).await?;
         serde_json::from_value(v).map_err(|e| format!("Failed to parse response: {}", e))
-    }
-
-    // ==================== Virtual Driver ====================
-
-    /// 挂载虚拟盘
-    #[cfg(feature = "virtual-driver")]
-    pub async fn vd_mount(&self) -> Result<(), String> {
-        let resp = self.request_raw(IpcRequest::VdMount).await?;
-        if !resp.ok {
-            return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
-        }
-        Ok(())
-    }
-
-    /// 卸载虚拟盘
-    #[cfg(feature = "virtual-driver")]
-    pub async fn vd_unmount(&self) -> Result<(), String> {
-        let resp = self.request_raw(IpcRequest::VdUnmount).await?;
-        if !resp.ok {
-            return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
-        }
-        Ok(())
-    }
-
-    /// 获取虚拟盘状态
-    #[cfg(feature = "virtual-driver")]
-    pub async fn vd_status(&self) -> Result<(bool, Option<String>), String> {
-        let resp = self.request_raw(IpcRequest::VdStatus).await?;
-        if !resp.ok {
-            return Err(resp.message.unwrap_or_else(|| "Unknown error".to_string()));
-        }
-        Ok((resp.mounted.unwrap_or(false), resp.mount_point))
     }
 
     // ==================== Events ====================

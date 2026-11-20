@@ -77,19 +77,6 @@ fn main() {
     };
     println!("cargo:rustc-cfg=kabegame_data=\"{}\"", normalized_data);
 
-    // On Windows, the virtual-driver feature depends on dokan2.dll.
-    // Use delay-load so the app can start even when dokan2.dll isn't present;
-    // we can then show a friendly error only when the user actually tries to mount VD.
-    //
-    // This only works on MSVC toolchain.
-    #[cfg(all(feature = "standard", target_os = "windows", target_env = "msvc"))]
-    {
-        // Needed for /DELAYLOAD.
-        println!("cargo:rustc-link-arg-bin=kabegame=delayimp.lib");
-        // Delay-load dokan2.dll; binary won't fail to launch if the DLL is absent.
-        println!("cargo:rustc-link-arg-bin=kabegame=/DELAYLOAD:dokan2.dll");
-    }
-
     // Bundled shared libs live in:
     //   Linux .deb → /usr/lib/kabegame/   (binary at /usr/bin/kabegame)
     //   macOS .app → Contents/Frameworks/ (binary at Contents/MacOS/Kabegame)
@@ -158,10 +145,6 @@ fn main() {
                     .join("macos/embedded-Info.plist")
                     .display()
             );
-        }
-        // libfuse 弱链接:有 macFUSE 则可用虚拟盘,无则不崩(设置页检测并提示安装)
-        if std::env::var("CARGO_FEATURE_STANDARD").is_ok() {
-            println!("cargo:rustc-link-arg-bin=kabegame=-Wl,-weak-lfuse");
         }
     }
 

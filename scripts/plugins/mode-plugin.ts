@@ -311,9 +311,6 @@ export class ModePlugin extends BasePlugin {
             this.setEnv("LD_LIBRARY_PATH", libraryPath.join(path.delimiter));
           }
         }
-        // Linux 虚拟盘:不再链接 libfuse。fuser 关闭 `libfuse` feature 走纯 Rust 挂载
-        // (见 kabegame-core/Cargo.toml),二进制不含 libfuse DT_NEEDED,挂载时懒执行
-        // fusermount3。因此无需 FUSE3_STATIC / libfuse3.a,构建期不设任何 fuse 相关 env。
         // macOS: clang (used by bindgen/rusty_ffmpeg) cannot find system headers like
         // errno.h without an explicit sysroot. BINDGEN_EXTRA_CLANG_ARGS is read by
         // bindgen and passed straight to clang before binding generation.

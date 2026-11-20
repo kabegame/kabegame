@@ -75,7 +75,7 @@ fn serialize_plugin_lite(plugin: &Arc<Plugin>) -> Value {
             "displayName".to_string(),
             Value::String(manifest_value_display_for_locale(
                 &plugin.name,
-                kabegame_i18n::current_vd_locale(),
+                kabegame_i18n::current_display_locale(),
             )),
         );
         map.remove("iconPngBase64");

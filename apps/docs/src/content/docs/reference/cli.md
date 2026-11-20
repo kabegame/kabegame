@@ -303,5 +303,4 @@ CLI 使用三种退出码：
 ## 延伸阅读
 
 - [插件管理](/guide/plugins-usage/)
-- [虚拟磁盘](/guide/virtual-drive/)
 - [命令行（入门指南）](/guide/command-line/)

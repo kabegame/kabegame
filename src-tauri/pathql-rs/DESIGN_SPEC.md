@@ -578,8 +578,8 @@ Use `${global.X}` for host constants that are not true provider configuration.
 
 Use `${global:prefix|selector}` when a host-owned map should translate a stable
 runtime value into a path/display string. Example: a host may inject
-`vd_en_US_month.01 = "January"` and a provider may render
-`${global:vd_en_US_month|root.name}` while delegating to a shared month provider
+`demo_en_US_month.01 = "January"` and a provider may render
+`${global:demo_en_US_month|root.name}` while delegating to a shared month provider
 that still returns canonical month numbers.
 
 Use `${properties.X}` for provider parameters that callers may intentionally
@@ -740,26 +740,26 @@ PathQL is not:
 ```json5
 {
   "list": {
-    "${global:vd_en_US_month|root.name}": {
+    "${global:demo_en_US_month|root.name}": {
       "delegate": {
         "provider": "year_provider",
         "properties": { "year": "${properties.year}" }
       },
       "child_var": "root",
-      "provider": "vd_month_en_US_provider",
+      "provider": "demo_month_en_US_provider",
       "properties": {
         "year_month": "${properties.year}-${root.name}"
       },
       "meta": {
         "month": "${root.name}",
-        "label": "${global:vd_en_US_month|root.name}"
+        "label": "${global:demo_en_US_month|root.name}"
       }
     }
   }
 }
 ```
 
-The host injects keys such as `vd_en_US_month.01 = "January"`. The shared
+The host injects keys such as `demo_en_US_month.01 = "January"`. The shared
 provider keeps canonical month ids, while the visible path segment and metadata
 label use the host-owned display map.
 

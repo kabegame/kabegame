@@ -132,12 +132,6 @@ fn native_metadata_payload(data: &str, parser_version: u32) -> Result<Value, Str
 
 pub fn toggle_image_favorite(image_id: String, favorite: bool) -> Result<Value, String> {
     toggle_image_favorite_with_event(&image_id, favorite)?;
-    #[cfg(feature = "virtual-driver")]
-    {
-        use crate::virtual_driver::driver_service::VirtualDriveServiceTrait;
-        crate::virtual_driver::VirtualDriveService::global()
-            .notify_album_dir_changed(crate::storage::FAVORITE_ALBUM_ID);
-    }
     Ok(Value::Null)
 }
 

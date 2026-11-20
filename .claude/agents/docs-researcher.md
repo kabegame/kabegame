@@ -67,7 +67,7 @@ audience: <end user | plugin author | all users>
 | ... | ✅ | ✅ | ✅ | ❌ |
 
 ## External resources to link from the doc
-<Wallpaper Engine docs, Dokan installer, macFUSE page, etc. Only include URLs that already appear in the repo (README, code comments, i18n strings) — do NOT invent URLs.>
+<Wallpaper Engine docs, Steam Workshop page, etc. Only include URLs that already appear in the repo (README, code comments, i18n strings) — do NOT invent URLs.>
 
 ## Inheritable prose
 <If `/docs/` root or an existing docs page already has user-level text that can be reused verbatim or lightly edited, point to it here. E.g. "CRAWLER_BACKENDS.md §2 can migrate as-is except for the `tauri-plugin-webview2` paragraph.">

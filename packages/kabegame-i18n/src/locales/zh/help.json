@@ -18,8 +18,7 @@
   "drawerTitleDefault": "帮助",
   "tips": {
     "tag": {
-      "androidUnavailable": "安卓无",
-      "lightModeUnavailable": "Light 模式不可用"
+      "androidUnavailable": "安卓无"
     },
     "category": {
       "gallery": {
@@ -45,10 +44,6 @@
       "tray": {
         "title": "托盘",
         "description": "系统托盘图标的位置和功能说明"
-      },
-      "virtual-driver": {
-        "title": "虚拟盘（VD）",
-        "description": "在资源管理器里像磁盘一样浏览画册（Windows）"
       },
       "command-line": {
         "title": "命令行",
@@ -123,14 +118,6 @@
       "tray-introduction": {
         "title": "托盘位置及功能",
         "summary": "了解系统托盘图标的位置、左键/右键功能，以及托盘菜单的各项功能。"
-      },
-      "virtual-driver-basics": {
-        "title": "用虚拟盘在资源管理器里浏览图片",
-        "summary": "开启\"画册盘\"后，可在资源管理器中文件方式浏览画册与图片文件。"
-      },
-      "virtual-driver-directories": {
-        "title": "虚拟盘各目录说明",
-        "summary": "了解虚拟盘根目录下的各个目录（全部、按插件、按时间、按任务、画册）的用途和使用场景。"
       },
       "command-line-basics": {
         "title": "命令行基本说明",
@@ -618,60 +605,7 @@
       "notePara1": "关闭主窗口时，应用默认会隐藏窗口而不是退出，这样可以保持应用在后台运行。",
       "notePara2": "如果需要完全退出应用，请使用托盘菜单中的 退出 选项。"
     },
-    "virtual-driver-basics": {
-      "lightModeNote": "Light 模式不支持此功能",
-      "whatTitle": "这是什么",
-      "whatPara1": "\"虚拟盘（VD）\"会把你的图库以一个盘符的形式挂载到资源管理器里。",
-      "whatPara2": "这样你可以像浏览普通文件夹一样浏览画册和图片文件（适合拖拽、复制路径、外部工具打开等）。",
-      "enableTitle": "如何开启",
-      "enablePara1": "到 设置 → 应用设置 → 画册盘 开启。",
-      "enablePara2": "开启后，默认挂载点通常是 K:\\（具体以你的设置为准）。",
-      "openTitle": "如何打开",
-      "openItem1": "在\"画册列表\"页右上角点击 去VD查看",
-      "openItem2": "或在\"画册详情\"页右上角点击 去VD查看",
-      "openItem3": "也可以直接在资源管理器地址栏输入挂载点，例如 K:\\",
-      "noteTitle": "注意事项",
-      "notePara1": "虚拟盘属于\"按需映射\"的文件视图，一些高级文件操作可能不完全支持（以应用说明/实际表现为准）。",
-      "notePara2": "如果你在资源管理器里没看到盘符，先检查是否已开启\"画册盘\"，以及挂载点盘符是否被其他软件占用。"
-    },
-    "virtual-driver-directories": {
-      "rootTitle": "虚拟盘根目录结构",
-      "rootPara": "开启虚拟盘后，在资源管理器中打开挂载点（默认 K:\\），你会看到以下目录：",
-      "allTitle": "全部",
-      "allPara1": "包含画廊中的所有图片，按分页组织（每页约 100 张）。",
-      "allPara2": "适合：快速浏览所有图片、查找特定图片。",
-      "pluginTitle": "按插件",
-      "pluginPara1": "按收集源插件（如 konachan、anihonet-wallpaper 等）分组显示图片。",
-      "pluginPara2": "每个插件一个子目录，里面是该插件收集到的所有图片。",
-      "pluginPara3": "适合：按来源查看图片、管理特定插件的收集结果。",
-      "timeTitle": "按时间",
-      "timePara1": "按图片的收集时间（年月）分组显示。",
-      "timePara2": "子目录格式为 YYYY-MM（例如 2024-01），包含该月收集的所有图片。",
-      "timePara3": "适合：按时间线浏览、查找特定时期的图片。",
-      "taskTitle": "按任务",
-      "taskPara1": "按收集任务分组显示图片。",
-      "taskPara2": "每个任务一个子目录，目录名为 任务名称 - 任务ID，包含该任务收集到的所有图片。",
-      "taskPara3": "适合：查看特定任务的收集结果、追踪任务产出。",
-      "albumTitle": "画册",
-      "albumPara1": "包含你创建的所有画册。",
-      "albumPara2": "每个画册一个子目录，目录名为画册名称，里面是该画册中的所有图片。",
-      "albumPara3": "适合：按画册浏览、管理画册内容、拖拽图片到画册。",
-      "albumNote": "画册目录支持部分文件操作（如删除、重命名），但图片文件本身是只读的。",
-      "readmeTitle": "在这里你可以自由查看图片.txt",
-      "readmePara1": "根目录下的说明文件，介绍虚拟盘的基本用法。",
-      "readmePara2": "双击可以查看详细说明。",
-      "suggestTitle": "使用建议",
-      "suggestItem1": "快速浏览：使用\"全部\"目录，按分页查看所有图片",
-      "suggestItem2": "按来源管理：使用\"按插件\"目录，查看特定插件的收集结果",
-      "suggestItem3": "时间线查看：使用\"按时间\"目录，按月份浏览图片",
-      "suggestItem4": "任务追踪：使用\"按任务\"目录，查看特定任务的产出",
-      "suggestItem5": "画册管理：使用\"画册\"目录，管理你的画册和图片",
-      "noteTitle": "注意事项",
-      "notePara1": "虚拟盘是\"按需映射\"的文件视图，主要用途是浏览和查看图片。",
-      "notePara2": "部分高级文件操作可能不完全支持，具体以应用说明和实际表现为准。"
-    },
     "command-line-basics": {
-      "lightModeNote": "Light 模式不支持此功能",
       "whatTitle": "什么是命令行工具",
       "whatPara1": "Kabegame 提供了一个命令行工具（CLI），可以通过终端/命令提示符来执行插件相关操作。",
       "whatPara2": "适合：自动化脚本、批量处理、不打开主窗口的情况下运行插件等场景。",

@@ -97,6 +97,7 @@
 
 - 场景壁纸的文字支持描边、模糊和投影（Wallpaper Engine 的 MSDF 文字）：字形距离场用和 Wallpaper Engine 相同的 msdfgen 版本与参数生成，描边粗细、颜色、模糊与投影的大小、偏移、不透明度按它的规则取值，改这些属性即时生效；文字的背景色由脚本按时间变化时也照常变。测试场景和 4 张创意工坊壁纸（3833971732、3816870245、3829268059、3593919489）的文字与 Wallpaper Engine 逐像素一致，这 4 张现在可以实时渲染。MSDF 文字里的彩色表情暂不显示（语料里没有用到）。
 - 场景壁纸支持脚本的 `resizeScreen` 回调：壁纸的分辨率变了（换分辨率、改系统缩放）时通知场景脚本重新排版，同 Wallpaper Engine；创意工坊 3838286359（Liquid Glass Now Playing）现在可实时渲染。
+- 场景壁纸支持把带子图层的组合层当遮罩被别的图层引用：组里的子图层（如跟着鼠标走的斜线）画进遮罩，组隐藏时遮罩里只剩组自己的底，同 Wallpaper Engine，测试场景与它的输出逐像素一致。创意工坊 3811403844（【绝区零】佩洛伊斯-铃）现在可实时渲染。
 ### Optimized
 - 脚本很多的场景壁纸不再卡成幻灯片：脚本按名字找图层、把同样的值写回图层时不再做大量重复计算，创意工坊 3662790108（Live Solar System）的预览从约 2 帧每秒提到 30 帧上限。
 - 场景壁纸改为按显示分辨率渲染（和 Wallpaper Engine 一样）：分辨率小的场景（如自带的 Dino Run）在图库预览、桌面和应用背景上不再模糊，文字与线条清晰；预览里放大后按放大后的分辨率重画，越放大越清楚（主窗口里最多按 4K 画，再放大只是拉伸）；「适应」「居中」显示方式下，留白处和 Wallpaper Engine 一样能看到超出场景范围的内容；调整窗口大小、开关侧栏或全屏时场景接着播放，不再重新加载。「平铺」显示方式不变。
@@ -207,6 +208,9 @@
 - 图库里 Wallpaper Engine 网页 / 场景壁纸右上角「WPE · …」角标的图标换成 Wallpaper Engine 图标（原为显示器图标），视频壁纸仍是播放图标。
 - 「开始收集」收成「本地」「网络」两项：本地里有「文件夹」和「WPE 壁纸」（本机 Wallpaper Engine 目录），网络里有「插件」「网页」「Steam」，在对话框顶部切换；每组记住上次用的来源，下次打开直接停在那里。原来的「网页」「壁纸」两个菜单项并入其中，Steam 导入从壁纸对话框挪到了「网络」。自动配置页页头的「开始收集」以前点了没有反应，现在和画廊一样能用。
 
+### Removed
+- 下线「画册盘（虚拟盘）」：不再把图库挂载成本地磁盘或目录（Windows 的 Dokan、macOS 的 macFUSE、Linux 的 FUSE 一并移除），设置「高级」里的画册盘开关与挂载点、画册页顶栏和画册右键菜单里的「打开虚拟盘」都已移除，升级后旧的画册盘设置会自动清理。下线的原因：图库本身的浏览、筛选、排序与画册组织已经够用；想在应用之外按条件找图、取图，可以开启「设置 → 高级」里的 Web 服务器，它提供的画廊查询比文件系统目录视图表达力强得多；而虚拟盘要求安装 Dokan / macFUSE / FUSE 这类系统级驱动，带来的安装与分发负担和它能提供的只读目录视图不成比例。如果你此前专为 Kabegame 安装过 Dokan（Windows）或 macFUSE（macOS），现在可以自行卸载。
+
 ## 插件开发侧
 
 ### Changed
@@ -303,6 +307,8 @@
   - 图层依赖：新增 `compile/dependencies.ts`（`dependencyIds`、`layerCompositeName`、`checkerTexture`）；`SceneLayer.dependedOn`、`ScenePass.layerComposites`、纹理来源 `{ kind: "layer", object }`、`swapCompositeIndices`、`layerOpsToRun`、`GpuScene` 的独占 RT 表。删 `object:dependencies` 与 `texture:rendertarget:_rt_imageLayerComposite_*`，新增 `dependency:group` / `dependency:self` / `dependency:passthrough-undeclared`、`particle:dependencies`（`dependency:text` 步骤 6 去掉）。`compile/pipeline.test.ts` 的快速路径上限放宽到 450 次 / 80 MiB，另断言同一路径同一区间不请求第二次。
   - 写入状态：新增 `compile/writeState.ts`（`passAlphaWriting`、`materialCombos`）与 `render/writeState.ts`（`writesAlpha`、`alphaToCoverage`）；`ScenePass.alphaWriting`；`render/programs.ts` 的 `alphaToCoverageEntry` 与 `GpuProgram.alphaToCoverage()`（A2C 片元模块按程序懒建）；`PipelineSpec.alphaToCoverage`（管线键 `|a2c`）。能力表放行 `alphatocoverage`，`alphawriting` 只报三个合法值以外的取值，`ENGINE_COMBOS` 去掉 `ALPHATOCOVERAGE`、`PARTICLE_COMBOS` 加上它。
   - 被依赖的文本层（步骤 6，2026-11-19）：名字表与 `dependedOn` 收文本层（`bundle.ts` 的 `isCompositeLayerObject`），删 `dependency:text`；`TextFields.dependedOn` 让排版加 `padding`；`render/scene.ts` 的 `resizeTextOwnTarget`（独占 RT 跟 `textCompositeSize`，空文字 4×4）、`ensureTextComposites` / `ensureTextResources` / `teardown` 认独占 RT，`syncTexts` 换了 RT 就 `rebindDependents`。myprojects `3837779440` 变干净。
+  - 被依赖的组（步骤 7，2026-11-20）：WPE 实测（`p8-depgroup`）与现有渲染图、`layerOpsToRun` 的排法一致（组隐藏时照画基础 pass 与 effect 链、子层按各自可见性），只删编译期与 `script/structure.ts` 的 `groupSelfIssues` 里的 `dependency:group`。myprojects `3811403844` 变干净。
+  - 组里图像层的 MVP 照 WPE 的结合顺序（`3811403844` 走查）：`layout.ts` 的 `groupMvpParts`（局部正交 + `invertF32` 求组的逆）、`drawMatrices` 的 `group`，`MVP = P ⊗ (inverse(W_组) ⊗ W)`；原来先拼 `P · invert(W_组)` 再乘，平移差 1 ulp，遮罩斜线边缘的 texel 会整个翻转。`g_ModelMatrix` / `g_ViewProjectionMatrix`、文本、粒子、网格照旧。
   - 计划与对照见 `.claude/plans/wpe-import/3-scene/phase8/phase-8-image-material.md`、`p8-REPORT.md`。
 - 场景壁纸 P6b 1d：场景里的静态文本对象照 WPE 渲染，不再因文本退回预览图。编译期 `compile/texts.ts` 规整字段、定位主字体、编 WPE 自带的四个字体材质；宿主 `text/host.ts` 在建 GPU 资源前排好全部文本层（wasm 与字体跨重编译保留）；渲染图新增 `text` 步骤（直接上屏或画进合成 RT 后走 effect 链），字形图集是运行时纹理。能力表改报 `text:script`、`text:script:<键>`、`text:msdf:<键>`、`text:anchor:<值>`；会随时间变的文字（时钟）要等 1e。六个测试工程和 WPE 整帧逐像素相同。
 - 场景壁纸 P6b 1d2：文本对象的系统字体改由后端按平台解析成本机文件，`wpe_scene_target` 新增 `systemFonts`（名字 → 路径），宿主按表读、表里没有的当读不到。Windows 取 `%WINDIR%\Fonts`（系统不装在 C 盘也能读到）；macOS / Linux 按候选表换成同款或接近的字体（路径待真机核对，`TODO:[WPE_SCENE]`），彩色 emoji 不给替代、交给 Twemoji。`file:` 闸门放行的就是这份表里的文件。另更正 `wpefont` README：没有 libpng，sbix / CBDT 彩色字形读不了，只有 COLR 能读。
@@ -364,7 +370,7 @@
 - app IPC 协议升到 v4（`PluginRunParams.freezeTemplate`），新 CLI 连接旧主程序时自动回退本地执行。
 - 生产 web 构建（`isWeb && command === "build"`）的 Vite `base` 指向 `https://cdn.kabegame.com/web/`，`index.html` 仍由二进制内嵌返回。`scripts/deploy-web.sh` 新增第 0 步：先经服务器暂存目录把 `dist-kabegame-web/`（除 `index.html`）`cp` 进 OSS 挂载目录 `/mnt/oss/web/`，校验入口脚本 MIME 后才停服换二进制，OSS 上只增不删。详见 `cocs/web/CDN_MEDIA.md`。
 - `public/` 下的吉祥物、空状态、失物、冲浪插画移到 `apps/kabegame/src/assets/`，经 `src/assets/illustrations.ts` 按 `IS_WEB` 取 WebP 或原图；`vite.config.ts` 新增 `dropUnreferencedSrcAssets` 插件，删掉产物中未被引用的那一份。吉祥物启动时只预取挥手图。
-- 新增目录型媒体格式 `x-wpe/video` / `x-wpe/web` / `x-wpe/scene`（`extensions` 为空，不可按扩展名摄入）与 `is_wpe_type` / `wpe_kind` / `is_video_like_type`；`images.local_path` 在目录型行上是 WPE 壁纸目录，所有把它当文件用的调用点按 type 分流：`/file` 返回 404、新增 `/wpe/<imageId>/<rel>` 目录服务（307 到 `project.json` 入口、越界拒绝，供网页壁纸的相对资源）、整理跳过缩略图 / 兼容副本 / 哈希去重 / 无法识别清理、虚拟盘隐藏、原生壁纸与 Plasma 拒绝、WPE 行删除不进源文件回收。
+- 新增目录型媒体格式 `x-wpe/video` / `x-wpe/web` / `x-wpe/scene`（`extensions` 为空，不可按扩展名摄入）与 `is_wpe_type` / `wpe_kind` / `is_video_like_type`；`images.local_path` 在目录型行上是 WPE 壁纸目录，所有把它当文件用的调用点按 type 分流：`/file` 返回 404、新增 `/wpe/<imageId>/<rel>` 目录服务（307 到 `project.json` 入口、越界拒绝，供网页壁纸的相对资源）、整理跳过缩略图 / 兼容副本 / 哈希去重 / 无法识别清理、原生壁纸与 Plasma 拒绝、WPE 行删除不进源文件回收。
 - 新增 cargo feature `wpe`（桌面主程序与 `kabegame-cli` 开启，Android / Web 不开），取代运行时的 `platform_supported()` 和按 Windows 的门控；Android / Web 不再编译 WPE 的发现、导入与内建插件，也不再同步 `wpesl2wgsl` wasm、不跑场景宿主 Vitest。
 - 手选 WPE 文件夹改为统一的两层扫描：只看目录自身、`<folder>/*`、`<folder>/*/*`，去掉 Steam 库根、WPE 安装目录等分类（`RecognizedKind`、`classify_dir`、`recognized` 字段）；手选这两类目录不再识别，由自动发现覆盖。
 - 修复 `src-tauri/kabegame/src/lib.rs` 的 Web 入口缺少 `axum` 导入，`--mode web` 编译不过。

@@ -2,14 +2,13 @@
     "namespace": "kabegame",
     "name": "images_root_provider",
     "query": {
-        // 根只贡献 id，不用 `images.*`：gallery / vd / 原始行各自枚举需要的列
+        // 根只贡献 id，不用 `images.*`：gallery / 原始行各自枚举需要的列
         // （以同名 `as: "id"` 覆盖本条）。窄的根让 `…/_kb_x<N>x/<页>/~~<别名>` 内层只排 id，
         // 外层再 join 回 images 取列。
         "fields": [{ "sql": "images.id", "as": "id" }],
     },
     "list": {
         "gallery": { "provider": "gallery_route" },
-        "vd": { "provider": "vd_root_router" },
         // 只在 `~~` 之后有意义 —— 边界把 provider 视角切回本 schema 根,所以挂在这里。
         // 用法见 rank_provider 的注释。
         "rank": { "provider": "rank_provider" }

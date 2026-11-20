@@ -384,7 +384,7 @@ mod tests {
         let ctx = TemplateContext::new()
             .with_globals(Arc::new(
                 [(
-                    "vd_en_US_month.05".to_string(),
+                    "demo_en_US_month.05".to_string(),
                     TemplateValue::Text("May".into()),
                 )]
                 .into_iter()
@@ -393,7 +393,7 @@ mod tests {
             .with_child_var("root", serde_json::json!({"name": "05"}));
 
         let rendered =
-            render_template_to_string("${global:vd_en_US_month|root.name}", &ctx).unwrap();
+            render_template_to_string("${global:demo_en_US_month|root.name}", &ctx).unwrap();
 
         assert_eq!(rendered, "May");
     }
@@ -402,12 +402,12 @@ mod tests {
     fn to_string_global_lookup_method_reports_missing_mapped_key() {
         let ctx = TemplateContext::new().with_child_var("root", serde_json::json!({"name": "13"}));
         let err =
-            render_template_to_string("${global:vd_en_US_month|root.name}", &ctx).unwrap_err();
+            render_template_to_string("${global:demo_en_US_month|root.name}", &ctx).unwrap_err();
 
         assert!(matches!(
             err,
             RenderError::Eval(EvalError::UnboundGlobal(key))
-                if key == "vd_en_US_month.13"
+                if key == "demo_en_US_month.13"
         ));
     }
 
