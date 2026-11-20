@@ -1,0 +1,35 @@
+{
+  "rust-analyzer.cargo.features": ["standard"],
+  "rust-analyzer.check.features": ["standard"],
+  // rust-analyzer 必须用自己的 target 目录。它在后台跑 `cargo check`，环境里没有
+  // deno task 注入的 CEF_PATH / FFMPEG_* / KABEGAME_DATA，共用 target/ 时这些 build script
+  // 全部 EnvVarChanged，会把 dev / build 的缓存整条掀翻（cef-dll-sys → tauri-runtime-kbcef →
+  // kabegame-cef-helper 重链，rusty_ffmpeg → rsmpeg → kabegame-core 全量重编）。
+  "rust-analyzer.cargo.targetDir": true,
+  // 不查 test / example / bench 目标：本仓库 unit 数量本来就大，--all-targets 会再翻一倍。
+  "rust-analyzer.check.allTargets": false,
+  "files.exclude": {
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true,
+  },
+  "git.ignoreLimitWarning": true,
+  "i18n-ally-next.autoDetection": false,
+  "i18n-ally-next.enabledFrameworks": [
+    "vue"
+  ],
+  "i18n-ally-next.localesPaths": [
+    "packages/kabegame-i18n/src/locales"
+  ],
+  "i18n-ally-next.sourceLanguage": "en",
+  "i18n-ally-next.displayLanguage": "zh",
+  "i18n-ally-next.languageTagSystem": "none",
+  "i18n-ally-next.dirStructure": "dir",
+  "i18n-ally-next.namespace": true,
+  "i18n-ally-next.pathMatcher": "{locale}/{namespace}.json",
+  "i18n-ally-next.keystyle": "nested",
+  "i18n-ally-next.annotations": true,
+  "i18n-ally-next.annotationInPlace": false
+}
