@@ -7,22 +7,22 @@
 //! 丢弃、发送照样成功，所以不能只靠它。
 //!
 //! 有 audio 订阅才开系统音频回环采集（`audio/`：Windows 是 WASAPI 回环，macOS 是 Core Audio 进程 tap，Linux 是 PipeWire
-//! 的输出设备监听），有 media 订阅且「媒体集成」打开才开系统媒体会话监视（Windows 是 `media.rs` 直接读 SMTC，macOS 经
-//! `tauri-plugin-sysmedia` 的读数走 `sysmedia.rs`）；最后一个订阅离开即停。订阅命令按平台放行：Windows、macOS 两类都收，
-//! Linux 只收 audio。
+//! 的输出设备监听），有 media 订阅且「媒体集成」打开才开系统媒体会话监视（Windows 是 `media.rs` 直接读 SMTC，macOS 与
+//! Linux 经 `tauri-plugin-sysmedia` 的读数走 `sysmedia.rs`，读的分别是 Now Playing 与 MPRIS）；最后一个订阅离开即停。
+//! 订阅命令按平台放行：三个桌面平台两类都收。
 //! 见 `cocs/wpe/WPE_IMPORT.md`「音频与媒体集成」。
 
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod audio;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod colors;
 #[cfg(target_os = "windows")]
 mod media;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod projection;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod spectrum;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod sysmedia;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod wpe_spectrum;
@@ -567,14 +567,14 @@ fn scene_resets(cache: &[Option<WpeMediaMessage>; 4]) -> Vec<WpeMediaMessage> {
 type StartMedia = Box<dyn Fn() -> Box<dyn Send> + Send + Sync>;
 
 /// 系统实现：音频回环在 Windows（WASAPI）、macOS（进程 tap）与 Linux（PipeWire 输出设备监听）；媒体会话 Windows 是
-/// `media.rs`（SMTC），macOS 经插件（`sysmedia.rs`），其余不产生数据。
+/// `media.rs`（SMTC），macOS（Now Playing）与 Linux（MPRIS）经插件（`sysmedia.rs`），其余不产生数据。
 struct SystemSources {
     start_media: StartMedia,
 }
 
 impl SystemSources {
     fn new<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Self {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let start_media: StartMedia = {
             let app = app.clone();
             Box::new(move || Box::new(sysmedia::SysmediaBridge::start(&app, broadcast_media_output)))
@@ -585,7 +585,7 @@ impl SystemSources {
             let _ = app;
             Box::new(|| Box::new(media::MediaWatcher::start(broadcast_media_output)))
         };
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
         let start_media: StartMedia = {
             let _ = app;
             Box::new(|| Box::new(()))
@@ -595,7 +595,7 @@ impl SystemSources {
 }
 
 /// 媒体监视的输出交给 hub（hub 一定已建好：监视是它启动的）。
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 fn broadcast_media_output(output: projection::Output) {
     if let Some(hub) = WpeMediaHub::existing() {
         hub.broadcast_media(output.flavor, &output.message)

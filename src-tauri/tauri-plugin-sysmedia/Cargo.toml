@@ -2,7 +2,7 @@
 name = "tauri-plugin-sysmedia"
 version = "0.1.0"
 authors = ["Kabegame"]
-description = "System now-playing media session reader (Windows SMTC / macOS MediaRemote)."
+description = "System now-playing media session reader (Windows SMTC / macOS MediaRemote / Linux MPRIS)."
 edition = "2021"
 rust-version = "1.77.2"
 exclude = ["/android/build", "/android/.gradle", "/android/.tauri"]
@@ -18,8 +18,26 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+# macOS：适配器输出的封面；Linux：`data:` 封面
 base64 = { workspace = true }
+
+# Linux 的 MPRIS（desktop/linux.rs）：zbus 与 tauri-plugin-opener 用的是同一份；http(s) 封面用 reqwest 的阻塞客户端，
+# 和应用同一份 reqwest 0.11 / native-tls，不另编一套 TLS
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5.9"
+futures-util = "0.3"
+futures-channel = "0.3"
+percent-encoding = { workspace = true }
+reqwest = { version = "0.11", default-features = false, features = ["blocking", "native-tls"] }
+
+[features]
+# 假的 MPRIS 播放器（`examples/mpris_fixture.rs` 用），只供开发时走查
+mpris-fixture = []
+
+[[example]]
+name = "mpris_fixture"
+required-features = ["mpris-fixture"]
 
 [build-dependencies]
 tauri-plugin = { version = "2.5.3", features = ["build"] }

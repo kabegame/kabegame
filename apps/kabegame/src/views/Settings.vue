@@ -759,7 +759,7 @@ const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any 
 /** 只有窗口模式的桌面上有在播放的视频、网页与场景（原生模式交给系统，Android / Web 没有窗口壁纸），暂停只在这时显示 */
 const desktopWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && wallpaperMode.value === "window");
 /** 桌面「壁纸设置」按平台显示的字段：暂停只在窗口模式（只有那时桌面上有在播放的实例），音量 / 倍速同原来的条件，
- *  媒体集成要本平台有数据源（Windows、macOS），帧率与场景各项只在桌面端 */
+ *  媒体集成要本平台有数据源（三个桌面平台都有），帧率与场景各项只在桌面端 */
 const wpeWallpaperSettingFields = computed<WpeSettingKey[]>(() => {
   const playback = IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma.value);
   const desktop = !IS_ANDROID && !IS_WEB;

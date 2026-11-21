@@ -3,8 +3,13 @@ use tauri::{plugin::PluginApi, AppHandle, Runtime};
 
 use crate::{MediaEvent, Watch};
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+
+#[cfg(all(target_os = "linux", feature = "mpris-fixture"))]
+pub use linux::fixture as mpris_fixture;
 
 pub fn init<R: Runtime, C: DeserializeOwned>(
     app: &AppHandle<R>,
@@ -19,7 +24,7 @@ pub struct Sysmedia<R: Runtime>(#[allow(dead_code)] AppHandle<R>);
 impl<R: Runtime> Sysmedia<R> {
     /// 本平台有没有数据源（没有时 [`Self::watch`] 只推一次「没有会话」）。
     pub fn available(&self) -> bool {
-        cfg!(target_os = "macos")
+        cfg!(any(target_os = "macos", target_os = "linux"))
     }
 
     /// 开始监视当前的媒体会话：先推一次 [`MediaEvent::Session`]，之后随变化推送。丢弃返回值即停止。
@@ -37,7 +42,14 @@ impl<R: Runtime> Sysmedia<R> {
                 Err(error) => tracing::warn!("取应用缓存目录失败，系统媒体会话不可用: {error}"),
             }
         }
-        on_event(MediaEvent::Session(None));
-        Watch::inert()
+        #[cfg(target_os = "linux")]
+        {
+            Watch::new(linux::LinuxWatch::start(Box::new(on_event)))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            on_event(MediaEvent::Session(None));
+            Watch::inert()
+        }
     }
 }

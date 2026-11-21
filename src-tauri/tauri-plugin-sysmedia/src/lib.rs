@@ -7,7 +7,8 @@
 //! - macOS：MediaRemote，经嵌入的 mediaremote-adapter（`macos/mediaremote-adapter/`，由 `/usr/bin/perl` 加载，
 //!   macOS 15.4 起只有系统程序能读到数据）。
 //! - Windows：SMTC，现在仍在应用的 `wpe_media/media.rs` 里，待迁入（`.claude/plans/sysmedia/README.md` S2）。
-//! - Linux（MPRIS）、Android（要用户授予通知使用权）：还没有，`available()` 为假，`watch` 只推一次「没有会话」。
+//! - Linux：MPRIS（会话总线上的 `org.mpris.MediaPlayer2.*`）；系统不指定当前会话，按「最近开始播放的那个」选。
+//! - Android（要用户授予通知使用权）：还没有，`available()` 为假，`watch` 只推一次「没有会话」。
 //! - 项目不支持 iOS。
 
 use tauri::{
@@ -27,6 +28,9 @@ mod models;
 
 pub use error::{Error, Result};
 
+/// 假的 MPRIS 播放器（开发走查用，`examples/mpris_fixture.rs`）
+#[cfg(all(target_os = "linux", feature = "mpris-fixture"))]
+pub use desktop::mpris_fixture;
 #[cfg(desktop)]
 pub use desktop::Sysmedia;
 #[cfg(mobile)]

@@ -18,7 +18,7 @@
  * 「我就要看」共用），和四个场景选项一起经场景设置消息交给宿主，变了宿主整场重新加载。
  */
 import type { AppSettingKey } from "@/stores/settings";
-import { IS_MACOS, IS_WINDOWS } from "@/env";
+import { IS_LINUX, IS_MACOS, IS_WINDOWS } from "@/env";
 import { isWpeSceneType, isWpeVideoType, isWpeWebType } from "./mediaMime";
 
 export type WpeSettingKey =
@@ -36,8 +36,8 @@ export type WpeSettingKey =
 /** 帧率设置的取值：固定帧率，或跟随 WPE */
 export type WpeFpsValue = number | "follow";
 
-/** 本平台有没有系统媒体会话数据源（「媒体集成」）：Windows 是 SMTC，macOS 经 `tauri-plugin-sysmedia` 读 Now Playing。 */
-export const WPE_MEDIA_AVAILABLE = IS_WINDOWS || IS_MACOS;
+/** 本平台有没有系统媒体会话数据源（「媒体集成」）：Windows 是 SMTC，macOS / Linux 经 `tauri-plugin-sysmedia` 读 Now Playing / MPRIS。 */
+export const WPE_MEDIA_AVAILABLE = IS_WINDOWS || IS_MACOS || IS_LINUX;
 
 /** 帧率下限（同 WPE 设置界面的 floor）；上限是显示器的最高刷新率（`useDisplayMaxFps`） */
 export const WPE_FPS_MIN = 10;

@@ -1498,8 +1498,7 @@ export class SceneHost {
       this.recordMediaMessage(message);
       this.mediaPending?.push(message);
     };
-    // TODO:[WPE_SCENE] 在 Linux 上测试：场景媒体集成。后端还没有 Linux 的媒体会话数据源（MPRIS），订阅总被拒（脚本收到 `{ enabled: false }`、
-    // 封面槽是缺省纹理）；后端接上后这里不用改，核对标题与封面随播放器变化。Windows（SMTC）与 macOS（`tauri-plugin-sysmedia`）已有。
+    // 三个桌面平台都有数据源：Windows 是 SMTC，macOS / Linux 经 `tauri-plugin-sysmedia` 读 Now Playing / MPRIS
     invoke("wpe_web_media_subscribe", { kind: "media", channel, imageId }).catch((error: unknown) => {
       this.mediaError = String(error);
       this.sceneMedia?.push({

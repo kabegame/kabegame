@@ -2,6 +2,7 @@ import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WEB, IS_WINDOWS } from "../env";
 import type { AppSettingKey, AppSettings } from "./settings";
 import { DEFAULT_GALLERY_PAGE_SIZE } from "../utils/galleryPageSize";
 import { DEFAULT_COLOR_THEME_ID } from "../theme/colorTheme";
+import { WPE_MEDIA_AVAILABLE } from "../utils/wpeSettings";
 
 /** localStorage 后端的存储键：`kabegame-setting-<key>`（`useLocalStorage` 对字符串值原样存取）。 */
 export function localSettingStorageKey(key: AppSettingKey): string {
@@ -210,8 +211,8 @@ export function buildSettingsDescriptors(): SettingsDescriptorMap {
     entries.push(tauri("fastFolderSync", "get_fast_folder_sync", "set_fast_folder_sync", "enabled"));
   }
 
-  // 网页壁纸媒体集成：系统媒体会话与音频采集只有 Windows 有数据源
-  if (IS_WINDOWS && !IS_WEB) {
+  // 网页 / 场景壁纸的媒体集成：本平台有系统媒体会话数据源才注册（同设置页与预览设置显示开关的条件）
+  if (WPE_MEDIA_AVAILABLE && !IS_WEB) {
     entries.push(tauri("wpeMediaIntegration", "get_wpe_media_integration", "set_wpe_media_integration", "enabled"));
   }
 

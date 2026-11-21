@@ -106,7 +106,7 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 | 桌面壁纸的鼠标 | 有 | 有（第二版未实测） | 无 |
 | 图库预览的鼠标：光标在画面外、应用外也跟随 | 有 | 有（未实测） | 无：iframe 直接收真实鼠标，只在 iframe 上 |
 | 音频数据（频谱） | 有（WASAPI 回环） | 有（14.2+，Core Audio 进程 tap） | 有（PipeWire 输出设备监听；只有 PulseAudio 的系统没有） |
-| 媒体数据（正在播放的曲目、封面） | 有（SMTC） | 有（2026-11-21：经 `tauri-plugin-sysmedia` 读系统的 Now Playing） | 无 |
+| 媒体数据（正在播放的曲目、封面） | 有（SMTC） | 有（2026-11-21：经 `tauri-plugin-sysmedia` 读系统的 Now Playing） | 有（2026-11-22：经 `tauri-plugin-sysmedia` 读 MPRIS） |
 | 场景快捷方式（`usershortcut`） | 有 | 有（2026-11-21：图标取 QuickLook 缩略图与系统图标，命令在用户的登录 shell 里跑，同终端） | 无：面板不显示、宿主一律未绑定 |
 | 「跟随 WPE」 | WPE 安装目录里有 `config.json` 时 | 无：WPE 只能在 Windows 上运行，没有可跟随的设置（拷来的 `config.json` 也不认） | 无 |
 
@@ -1038,7 +1038,7 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
   归入 64 段取最大，得到线性原值（样本正好是 −1 时虚部 `1/re` 溢出，那一批该声道整段为 0，同 WPE：削波重的音乐会偶尔闪一帧 0）；静音标志的包、读取失败立即清零，缺包 1 s 后清零），随同一条消息的 `raw` 字段推出，只给场景宿主用
   （它再照 WPE 做每帧的自适应归一化，见 [scene/PARTICLES_ROPE_CHILDREN.md](scene/PARTICLES_ROPE_CHILDREN.md)「粒子（P4e）」的「音频：场景频谱」）。网页壁纸仍用上面的自定频谱：WPE 给网页壁纸的其实是这份原值
   （rea 3.4），2026-11-13 用户比较两者后选择保留自定算法的观感。
-- **媒体**（数据源 + `projection.rs` + `colors.rs`）：两个平台的数据源不同，之后的投影共用。
+- **媒体**（数据源 + `projection.rs` + `colors.rs`）：三个平台的数据源不同，之后的投影共用。
   - **Windows**（`wpe_media/media.rs`）：专用线程持有 SMTC 管理器与当前会话
     （`CurrentSessionChanged`、`SessionsChanged` 都只是重取当前会话），WinRT 事件只发信号，读取与比较在线程里做。
     信号照 WPE `winrtutil64.exe` 的主循环处理：收到第一个后把 100 ms 内到的攒成一批，会话上的事件带挂接代数、旧会话的丢掉，
@@ -1048,6 +1048,11 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
     一批（批里有会话切换就丢掉切换之前的读数，同类只认最后一条，规则同上），把微秒 / Unix 纪元换成投影用的 FILETIME。
     拿不到的字段（副标题、专辑艺人）是空串；来源应用取宿主应用的 bundle id（网页播放器经 WebKit 的 GPU 进程播放）。
     自然切歌时新时长与「播放中」比新标题早约 300 ms 到，100 ms 的批盖不住，这段「旧标题 + 新时长」接受。
+  - **Linux**（2026-11-22，`tauri-plugin-sysmedia` 的 `desktop/linux.rs` + 同一个 `wpe_media/sysmedia.rs`）：插件在会话总线上读 MPRIS。
+    系统不指定当前会话，插件按「最近开始播放的那个」选（暂停的留在原地，同 Windows 上暂停的会话仍是当前会话），会话身份是进程
+    （VLC 一个进程挂两个内容相同的播放器）；`Position` 没有变化信号，只在换会话、播放状态变、换曲、速率变时重读，`Seeked` 直接用；
+    封面 `file://` / `data:` 当场读，`http(s)://`（Spotify）另起线程取、取回前读数整体延后（最多 2 s）。MPRIS 没有媒体类型，
+    `contentType` 为空串；副标题空串；歌手、专辑艺人是数组，用「, 」连。细节见插件 README。
   每次读到的数据交给两个投影（P11c），订阅按调用方文档归属其一：
   - **网页投影**（网页壁纸目录里的文档）：变化才推。
     - `Properties`：标题、艺人、副标题、专辑、专辑艺人、逗号拼接的流派、`music` / `video` / `image`，缺省 `music`。
@@ -1077,7 +1082,7 @@ Chromium 就不建媒体键监听器。于是：
 开着这项时，壁纸自己的声音会被当成系统媒体。例如场景 3819637149 的脚本收到「播放中」就暂停自带的歌，会话变成暂停后它又恢复，
 按 `windowupdaterate` 每秒自激一次，听起来一顿一顿。原来预览期间给 `navigator.mediaSession` 设元数据的 `usePreviewMediaSession` 已一并删除。
 
-数据源按平台：`audio` 在三个桌面平台，`media` 在 Windows 与 macOS（macOS 问 `tauri-plugin-sysmedia` 的 `available()`；`wpe_media::kind_available`，订阅命令据此放行）。`realfft`、`rustfft`
+数据源按平台：`audio` 与 `media` 都在三个桌面平台（`media` 在 macOS / Linux 问 `tauri-plugin-sysmedia` 的 `available()`；`wpe_media::kind_available`，订阅命令据此放行）。`realfft`、`rustfft`
 在三个桌面平台的依赖段各登记一次，`windows` 的音频 / WinRT feature 只在 Windows 段，Linux 的 `pipewire` 只在 Linux 段，都由 `wpe` feature 开启。没有数据源的
 订阅命令直接返回错误，垫片忽略，页面收不到对应回调（场景脚本收到 `enabled: false`）。
 

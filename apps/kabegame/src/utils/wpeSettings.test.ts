@@ -18,7 +18,7 @@ import {
 } from "./wpeSettings";
 
 describe("wpeSettingFieldsFor", () => {
-  it("按壁纸类型选字段，媒体集成只在 Windows，帧率给网页与场景", () => {
+  it("按壁纸类型选字段，媒体集成看本平台有没有数据源，帧率给网页与场景", () => {
     expect(wpeSettingFieldsFor("x-wpe/video", true)).toEqual(["paused", "volume", "playbackRate"]);
     expect(wpeSettingFieldsFor("x-wpe/web", true)).toEqual(["paused", "volume", "mediaIntegration", "fps"]);
     expect(wpeSettingFieldsFor("x-wpe/web", false)).toEqual(["paused", "volume", "fps"]);

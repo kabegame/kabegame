@@ -9,7 +9,7 @@
 //! 每秒醒一次给网页投影的播放中时间轴外推（场景投影不外推）。投影的时间单位是 FILETIME（100 ns、1601 起），
 //! 插件的是微秒与 Unix 纪元，在这里换算。
 //!
-//! 现在只有 macOS 走这里；Windows 仍是 `media.rs` 直接读 SMTC，迁进插件后（S2）也走这里。
+//! 现在 macOS（Now Playing）与 Linux（MPRIS）走这里；Windows 仍是 `media.rs` 直接读 SMTC，迁进插件后（S2）也走这里。
 
 use super::projection::{Output, Projections, RawProperties, RawTimeline};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};

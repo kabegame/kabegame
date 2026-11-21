@@ -1,5 +1,25 @@
 # v4.7.0 regression
 
+## Linux 媒体集成（MPRIS）
+
+2026-11-22 Linux（Ubuntu 26.04、KDE Plasma 6.6.4 Wayland）。`tauri-plugin-sysmedia` 新增 Linux 数据源：在会话总线上读 MPRIS（zbus，`desktop/linux.rs` + 纯逻辑 `desktop/linux/mpris.rs`），按「最近开始播放的那个」选当前会话，会话身份是进程；应用侧 `wpe_media` 的媒体分支与前端「媒体集成」开关扩到 Linux。消费方（攒批、投影、配色）没改。
+
+走查中发现并改掉一处：VLC 3 一个进程开两条连接，`vlc` 与 `vlc.instance<pid>` 各挂一个内容相同的播放器，最初按总线名认会话，暂停 / 继续时当前会话在两个镜像之间来回换，各推两次 `Session`；改成按进程认后只推 `Playback`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | LM1 插件单测 | Linux | `cargo test -p tauri-plugin-sysmedia --features mpris-fixture` | 全过 | 2026-11-22 Claude：17 passed（元数据类型变体、选会话、镜像同一会话、上报、封面地址分类、回环判断、读取上限） |
+| [x] | LM2 真总线测试 | Linux，先停掉本机别的播放器 | 同上加 `-- --ignored follows artwork`：测试进程里起假播放器 | 会话、暂停、换曲、跳转、第二个播放器接手与退出、播放器全退出；封面 `file://`（含中文与空格路径）、`data:`、本地 http、取不到的 http | 2026-11-22 Claude：2 passed，0.37 s。第一次跑时 VLC 还在播，A 一暂停 VLC 就成了当前会话（正确行为），测试说明里写了要先停掉别的播放器 |
+| [x] | LM3 真播放器 VLC | Linux，`cvlc --aout=dummy --control dbus` 静音放一首带内嵌封面的 mp3 | 打印读数的手动测试；期间经 MPRIS `Pause`、`Play`、`SetPosition` | 会话带标题、歌手、专辑、流派、`file://` 封面；暂停 / 继续只推 `Playback`；跳转推 `Timeline` | 2026-11-22 Claude：`app_id` 为 `vlc`，封面 2174 字节 PNG；修镜像前每次各推两条 `Session`，修后只推 `Playback`；位置重读偶尔连着两条（镜像各一次，相隔几微秒，消费方攒批合并） |
+| [x] | LM4 应用侧检查与单测 | Linux | `check-kabegame`；`test-kabegame kabegame --lib wpe_media` | 0 error；全过 | 2026-11-22 Claude：0 error、新代码无告警；64 passed（`projection` / `colors` / `sysmedia` 的单测现在也在 Linux 上跑，原来 38 条） |
+| [x] | LM5 「媒体集成」开关 | Linux dev | 设置页壁纸分区；预览网页 / 场景壁纸的预览设置 | 都有「媒体集成」，缺省开 | 2026-11-22 Claude：设置页「倍速」与「帧率」之间出现、开着；19757 的预览设置里也有 |
+| [x] | LM6 网页壁纸收到媒体数据 | Linux dev，后台跑 `mpris_fixture` | 预览带媒体回调的网页壁纸 19757「音域回响」；夹具里换标题 / 歌手 / 封面、暂停 / 继续、跳转 | 歌名、歌手、封面、播放状态、进度跟着变 | 2026-11-22 Claude：从 iframe 里读卡片：两位歌手「, 」连起来，`file://` 封面；换歌后进度从 0 走；暂停停在 0:30 不动；跳到 1:30 后 2 s 走到 1:32；换成本地 http 封面（本地服务器记一次 GET 200）后卡片换图 |
+| [x] | LM7 场景收到媒体数据 | 同上 | 预览带 `media*Changed` 回调的场景 19655「麻匪 音频识别 悬浮窗 Media Player」，宿主探针 `host.media()`；夹具退出 | 标题、封面、播放状态、时间轴随夹具变化；退出后复位 | 2026-11-22 Claude：`status enabled`，`properties`（`contentType` 为空串）、`sceneThumbnail`（配色首色 (223, 62, 110) 即 http 封面的 #E04070）、`playback`、`timeline`；换歌 → `properties`，暂停 → `playback 2` + 重读位置 45，跳转 → `timeline 120`；画面上卡片显示封面、标题、歌手；夹具退出后 `properties` 清空、封面没了、`playback 0`、`timeline 0/0` |
+| [x] | LM8 订阅离开即停 | 同上 | 19757 切到 19655、关预览 | 日志「监视已停止」；插件的监视线程退出 | 2026-11-22 Claude：切换时先停后启，关预览后 `kabegame-sysmedia` 与 `kabegame-wpe-media` 两条线程都不在了（总线连接随线程关闭）；验收期间没有 warn。「媒体集成」开关的门控是三个平台共用的旧逻辑，没在 Linux 上再拨一次 |
+| [x] | LM9 真实播放器 | Linux dev，用户自己的播放器 | 放歌，预览同 LM6 | 显示的是正在放的那个，封面能取到 | 2026-11-22 用户：实测能正常工作 |
+| [ ] | LM10 Windows / macOS 不回归 | Windows、macOS | `check-kabegame`；macOS 媒体走查（MM5、MM6） | 编过、和以前一样 | 插件 `desktop.rs` 的 `watch` 结尾改成按平台的两个块，macOS 分支逻辑没变；本机编不了 |
+| [x] | LM11 设置页「媒体集成」开关能拨 | Linux dev | 设置页拨关再拨开，每次读 `get_wpe_media_integration` | 后端值跟着变，没有 `No setting descriptor found` | 2026-11-22 Claude：修前拨了界面与后端都不变、控制台警告（描述符只在 Windows 注册，macOS 同样）；修后 true → false → true，无警告，已拨回原值。macOS 上请顺手核对一次 |
+
 ## Linux 系统音频回环（PipeWire 输出设备监听）
 
 2026-11-21 Linux（KDE Plasma 6.6.4 Wayland、PipeWire 1.6.2 + WirePlumber）。网页与场景壁纸的音频订阅在 Linux 上有了数据源：`wpe_media/audio/sink_monitor.rs`，一条 `stream.capture.sink = true`、`node.passive = true` 的 PipeWire 采集流，由 WirePlumber 链到默认输出设备的 monitor 端口；要 F32 立体声、采样率跟图；主循环挂在采集线程上、每轮读前非阻塞迭代。`kind_available` 的 audio 放开 Linux，`realfft` / `rustfft` 加进 Linux 依赖段，`wpe` feature 开启 `pipewire`。属性取舍先用 `pw-record` 带同样属性实测（LA5、LA6），后端再用一个临时 `#[ignore]` 用例接真 PipeWire 实测（LA2–LA4、LA7，用完已删）；为了不从音箱出声，LA3 / LA4 把默认输出临时切到 `module-null-sink` 建的空 sink 再往里放正弦波（左 440 Hz、右 3000 Hz），结束后切回。应用里的端到端（LA8–LA11）在 dev 里放音乐做：「停止」用 `pactl set-sink-input-mute` 把播放流静音几秒（监听端口上实测是精确的 0），宿主 / iframe 里连续采样、按墙钟时间对齐。

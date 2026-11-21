@@ -2,6 +2,7 @@
 
 > 状态：总纲已确认（2026-11-21）。S1 完成：单测、编译检查与 dev 走查（回归 MM1–MM8，网易云）都通过；S2 未开始。
 > 待定三项按倾向定了：Android 只放骨架、Linux MPRIS 以后、解到应用缓存目录。
+> 2026-11-22：Linux MPRIS 提前做了（另一个会话在做 Linux 插件模式的桌面壁纸，不再只影响预览），见下「分期」与插件 README「Linux」。
 
 ## 总体设计思路
 
@@ -55,7 +56,8 @@ macOS 数据源用 mediaremote-adapter（`/usr/bin/perl` 加载我们的动态�
 | --- | --- | --- |
 | S1 | 插件骨架（官方模板结构、android 骨架）、读数模型、macOS 数据源（嵌入、解出、子进程、增量合并、映射）；`wpe_media` 在 macOS 上改接插件，`kind_available(Media)` 放行 macOS | 本机：插件单测（增量合并、映射、单位换算）；dev 里用 Amazon 走查暂停 / 切歌 / 封面 / 播放器退出 / 从 Kabegame 拉起，网页壁纸与场景的媒体回调 |
 | S2 | Windows SMTC 迁入插件，`wpe_media/media.rs` 两个平台都只做「读数 → 投影」 | 本机编不了 Windows：需要在 Windows 上编译、跑单测，并按 P11c 的媒体走查回归 |
-| 以后 | Linux MPRIS、Android 通知使用权 | — |
+| L | Linux MPRIS（`desktop/linux.rs` + `linux/mpris.rs`，zbus；最近开始播放的当前会话、会话身份是进程、封面三种来源）；`wpe_media` 在 Linux 上改接插件，`kind_available(Media)` 放行 Linux | 插件单测与真总线测试（假播放器夹具）、真 VLC；dev 里网页壁纸与场景的媒体回调 |
+| 以后 | Android 通知使用权 | — |
 
 先做 macOS 再迁 Windows：S1 能在本机完整验证，S2 的改动只是搬家，单独一期便于在 Windows 上对照回归。
 读数模型在 S1 就按 Windows 现有的读取语义（三类事件、会话切换全量重读、旧会话丢弃）设计，S2 不用改接口。
