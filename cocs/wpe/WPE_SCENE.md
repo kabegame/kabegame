@@ -2982,6 +2982,10 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 - `loop` 单文件：元素自己无缝循环。`loop` 多文件：每个放一遍、到时长后带放回随机换下一个（可以连选同一个），中间不留空，切换落在帧边界。
 - `single`：放一遍，`isPlaying` 在时长内为真、之后为假，不自动重放。放完之后 `pause` 再 `play` 会从头重放一遍而 `isPlaying` 仍为假（包装层状态自然放完不变，照搬）。
 - `random`：从开始播放算起，等「时长 + U(mintime, maxtime)」秒再随机选下一个；两段之间 `isPlaying` 仍为真。选文件与等待的随机数用宿主自己的随机源（WPE 用 CRT `rand()` 与粒子共用的 mt19937，序列本来对不上），只照规则。
+  `mintime` / `maxtime` 在每次开始播放时现读（P6a2）：它们是就地目标（`{ kind: "sound" }`，`SceneState.sounds`，排期器经 `SceneSounds` 的 `timingOf` 读状态），
+  绑用户属性、挂字段脚本或属性关键帧，运行中改了，正在等的这次不变，下一次排期用新值。WPE 这两个字段没有改值回调，但 setter 照样写字段，`P` 读字段算等待
+  （rea-p6a 2.1、rea-p10-keyframes 第 4 条）；`p6a-delay` 的回环录音与 WPE 探针频谱两边一致（属性与脚本两路，1.5 s → 3.5 s，跨过改值时刻的那一段仍是旧值）。
+  它们不进排期器签名（`soundKey`），改过之后别的原因触发的重编译不会打断播放。
 - `startsilent`：不放，直到脚本 `play()`。对象音量或全局音量为 0 时不开始、不读文件，变成正数时才从文件开头放（`single` 例外，WPE 的音量回调跳过它）。
 - 可见性不影响声音：自身或父层不可见照样放。多个声音在同一次调用里按对象顺序开始。
 
@@ -2991,7 +2995,7 @@ WPE 的设备有一个「写不写 alpha」的状态：稳态不写，进合成�
 
 **脚本控制**（步骤 2）：只有声音对象的图层有 WPE `ISoundLayer` 的 `play`（= `P`：暂停中续播，否则停掉、重新随机选、从头放）、`pause`、`stop`（= `X`：停并回到开头）、`isPlaying()` 和可读写的 `volume`，别的图层调用照旧报 `TypeError`（WPE 的方法按对象类型登记）。`volume` 读 `SceneState.sounds`，写入落到就地目标、不钳制，宿主写完当场交给排期器（暂停时也生效）；声音对象的 `volume` 挂 `{script}` 时，字段脚本的返回值每帧写回同一个目标。没有播放器时（宿主没建、或已退回预览图）方法什么都不做，`isPlaying` 为假。真机和 WPE 逐条对过 `p6a-play` / `p6a-single` 的调用前后 `isPlaying` 与录音段序列（含 `single` 放完后 `pause` 再 `play` 会重放而 `isPlaying` 仍假）。
 
-**能力表**：不再报 `object:sound` 与声音对象自己的键（`muteineditor`、`attenuation`、`mindistance` 中性）。新键：`object:spatialization`（三维声音，语料 0 张打开）、`sound:playbackmode:<值>`、`sound:binding:<键>`（`playbackmode` / `mintime` / `maxtime` / `startsilent` / `spatialization` 绑了属性或脚本，WPE 没有回调）。粒子层的同名方法 P4f 步骤 3 实现之后，`play` / `pause` / `stop` / `isPlaying` 按对象类型在运行时分派，编译期不再报（P6a 到 P4f 之间，场景里有粒子层时任意接收者上的这四个名字都报 `script:api:particle.<名>`，`PARTICLE_LAYER_METHODS` 已删）。
+**能力表**：不再报 `object:sound` 与声音对象自己的键（`muteineditor`、`attenuation`、`mindistance` 中性）。新键：`object:spatialization`（三维声音，语料 0 张打开）、`sound:playbackmode:<值>`、`sound:binding:<键>`（`playbackmode` / `startsilent` / `spatialization` 绑了属性或脚本，WPE 没有回调，运行中改的效果没有实测；`mintime` / `maxtime` P6a2 起不报，见上「播放规则」）。粒子层的同名方法 P4f 步骤 3 实现之后，`play` / `pause` / `stop` / `isPlaying` 按对象类型在运行时分派，编译期不再报（P6a 到 P4f 之间，场景里有粒子层时任意接收者上的这四个名字都报 `script:api:particle.<名>`，`PARTICLE_LAYER_METHODS` 已删）。
 
 **已知差异**：
 - 开始是异步的：元素拿到元数据才从头放并回报时长，`T` / `Rm` 从那一刻起算；WPE 是同步读完整个文件。等回报期间 `isPlaying` 按 WPE 当场的值（真）。

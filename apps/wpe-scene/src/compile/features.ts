@@ -796,12 +796,12 @@ export const TEXT_UNIFORMS: ReadonlySet<string> = new Set([
   "g_RenderVar3",
 ]);
 
-/** 声音对象上 WPE 没有回调、运行时改了不生效的键（rea 1.2）：绑了属性或挂了脚本报 `sound:binding:<键>`（语料 0 个）。 */
-const SOUND_UNBOUND_KEYS = ["playbackmode", "mintime", "maxtime", "startsilent", "spatialization"];
+/** 声音对象上运行时改了照报的键（rea 1.2；`mintime` / `maxtime` 自 P6a2 起就地写、下一次排期生效，不在此列）：绑了属性或挂了脚本报 `sound:binding:<键>`（语料 0 个）。 */
+const SOUND_UNBOUND_KEYS = ["playbackmode", "startsilent", "spatialization"];
 
 /**
  * 声音对象的键（P6a 步骤 1）。已实现：三种播放模式、`mintime` / `maxtime`、`startsilent`、`volume`（数字与 `{user}`，就地更新；
- * 挂 `{script}` 时字段脚本每帧写回到同一个就地目标，P6a 步骤 2）。
+ * 挂 `{script}` 时字段脚本每帧写回到同一个就地目标，P6a 步骤 2；`mintime` / `maxtime` 同，P6a2）。
  * - `spatialization` 为真：`object:spatialization`（三维声音，步骤 0b 取消，语料 0 张）；
  * - `playbackmode` 不是 `loop` / `single` / `random`：`sound:playbackmode:<值>`（WPE 的枚举解析怎么处理未知值没读）；
  * - `SOUND_UNBOUND_KEYS` 绑了属性或挂了脚本：`sound:binding:<键>`。

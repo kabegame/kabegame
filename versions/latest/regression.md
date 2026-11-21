@@ -4281,3 +4281,17 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PM6 Karin 性能 | Windows dev + WPE | 复制工程 `PROFILE_SECONDS=10`，WPE 测试窗口与 Kabegame 图库预览各跑一次 | 每帧脚本耗时不比 WPE 差 | 2026-11-21：`update` 平均 / p95 / 最大，Kabegame 12.3 / 13 / 211 ms，WPE 18.0 / 30 / 243 ms；加载 7.2 s（首帧 3.1 s 建 358 个层，全部同步、当帧装上） |
 | [ ] | PM7 预览里看 3834692798 本体 | Windows dev，图库预览 | 预览这张壁纸看一分钟（会放语音与音乐） | 能实时渲染，不再停在预览图；人物的呼吸、眨眼、口型与动作流畅，没有缺部件、闪烁或错位；字幕与语音对得上 | 需要用户看 |
 | [ ] | PM8 非 Windows | macOS、Linux | 同 PM7 | 同 Windows | 本机不能测 |
+
+## 场景壁纸 P6a2：声音的 `mintime` / `maxtime` 绑属性、挂脚本
+
+2026-11-21 Windows。myprojects `3798696286`（Hades Asylum Depths）把 `random` 咆哮声的 `mintime` / `maxtime` 绑在两个滑块上，以前报 `sound:binding:mintime; sound:binding:maxtime`、整张退回预览图。WPE 写字段走类型化 setter，没有改值回调的字段照样写入（rea-p10-keyframes 第 4 条），`random` 模式在每次开始播放时读这两个字段算等待（rea-p6a 2.1）。所以改成就地目标，排期器开始播放时现读：运行中改了，正在等的这次不变，下一次排期用新值。属性、字段脚本、关键帧三种写法都支持。`playbackmode` / `startsilent` / `spatialization` 维持照报。记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6a2-sound-delay.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | D1 单测与检查 | Windows | 宿主 tsc；声音、绑定、字段脚本、状态写入、能力表、关键帧相关的 18 个 vitest 文件；Prettier | 全过 | 2026-11-21：486 个用例全过（工作树与合并后的主树各一次） |
+| [x] | D2 变异检查 | Windows | `ignore/p6/a4/mutate.py`：random 分支读编译期常量、签名仍含两键、`SceneSounds` 不传 `timingOf`、能力表仍报、`targetOf` 不认两键、编译期不登记目标、状态写错字段、脚本读回固定读 `volume`、宿主不给 `timingOf` | 都被检出 | 2026-11-21：8 / 9；「宿主不给 `timingOf`」单测抓不到，由 D4 的真机录音兜住 |
+| [x] | D3 WPE 的行为 | Windows，WPE 测试窗口 | `p6a-delay`：D 绑属性 `dmin` / `dmax`（1 → 3，运行中 `apply_properties`），S 挂字段脚本（8 s 起返回 3），看 WPE 探针的频谱与回环录音 | 两路间隔都从 1.5 s 变成 3.5 s，跨过改值时刻的那一段仍是 1.5 s | 2026-11-21 Claude：S 开始 … 7.66、9.26、12.81，间隔 1.60 → 3.55；D 开始 … 13.91、15.31、18.91，间隔 1.40 → 3.60 |
+| [x] | D4 Kabegame 真机 | Windows dev，屏外宿主（临时挪进视口、推宿主音量） | 同一个工程导入 dev，运行 8.35 s 改属性、脚本 8.0 s 切换，回环录音 | 同 D3 | 2026-11-21 Claude：两路同步，开始 … 5.92、7.42、10.92、14.46，间隔 1.50 → 3.50，与 WPE 同 |
+| [x] | D5 语料 | Node，`kbp corpus scan` / `diff` | HEAD 快照与主树各扫默认语料与 myprojects | 只有 `3798696286` 变干净 | 2026-11-21 Claude：默认语料 233 张 0 变化；myprojects 437 张干净 431 → 432，只多 `3798696286` |
+| [x] | D6 预览与桌面看 3798696286 | Windows dev，图库预览 | 预览 Hades Asylum Depths，开着声音等一两分钟；把「Roar Minimum / Maximum Delay Time」拖到最小（10 / 30 秒）再等 | 能实时渲染；咆哮声隔一阵随机响一次，改小间隔后从下一次起明显变密 | 2026-11-21 用户：改小间隔后确实变密 |
+| [ ] | D7 非 Windows | macOS、Linux | 同 D6 | 同 Windows | 本机不能测 |

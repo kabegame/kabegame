@@ -62,7 +62,7 @@ import { emptyCursorInput, type CursorInputSnapshot } from "./render/cursor";
 import { canvasSize, type SceneStyle } from "./render/layout";
 import { ScreenResolution } from "./render/screenResolution";
 import { uploadableTextures, visibleObjects } from "./render/scene";
-import { SceneState } from "./render/state";
+import { SceneState, type SoundValues } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
 import { PLAYBACK_RATE_MAX, PLAYBACK_RATE_MIN, schemeColor } from "./sceneStyle";
@@ -733,7 +733,8 @@ export class SceneHost {
     if (result === "unsupported" || target.kind === "unsupported") return false;
     // 声音的 `volume`（P6a 步骤 2：API 写入与字段脚本写回）当场交给排期器：WPE 的回调 `V` 在改值时调、没有渐变，暂停时也生效。
     // 读脚本看到的状态：首次加载 `init` 期间它还不是渲染器的状态（首帧前重放写入时再同步一次）
-    if (target.kind === "sound") {
+    // `mintime` / `maxtime` 不用推：排期器在开始播放时现读状态（P6a2）
+    if (target.kind === "sound" && target.field === "volume") {
       const volume = state.sounds.get(target.object)?.volume;
       if (volume !== undefined) this.sceneSounds?.scheduler(target.object)?.setVolume(volume);
     }
@@ -1814,8 +1815,8 @@ export class SceneHost {
     if (layer)
       return state.layers.get(Number(layer[1]))?.[layer[2] as keyof import("./render/state").LayerState] ?? null;
     // 声音的 `volume`（P6a 步骤 1）：状态里的值，排期器下一帧（或改值时当场）读到的就是它
-    const sound = /^objects\/(\d+)\/volume$/.exec(path);
-    if (sound) return state.sounds.get(Number(sound[1]))?.volume ?? null;
+    const sound = /^objects\/(\d+)\/(volume|mintime|maxtime)$/.exec(path);
+    if (sound) return state.sounds.get(Number(sound[1]))?.[sound[2] as keyof SoundValues] ?? null;
     // 粒子 `instanceoverride` 的就地值（P4a 步骤 5）：状态里的值，与模拟器正在用的相同；控制点（P4f 步骤 3）按键取那一项，没设为 null
     const instance = /^objects\/(\d+)\/instanceoverride\/(\w+)$/.exec(path);
     if (instance) {
@@ -2040,11 +2041,16 @@ export class SceneHost {
       const imageId = this.options.imageId;
       this.soundPlayer = new ScenePlayer({ reader: this.reader }, this.options.report);
       if (this.playbackRate !== 1) this.soundPlayer.setRate(this.playbackRate);
-      this.sceneSounds = new SceneSounds(this.soundPlayer, Math.random, (object, file, error) =>
-        this.options.report.warn(
-          `场景壁纸 ${imageId} 声音对象 ${object} 的文件读不出，已从列表删掉：${file.path}`,
-          error,
-        ),
+      this.sceneSounds = new SceneSounds(
+        this.soundPlayer,
+        Math.random,
+        (object, file, error) =>
+          this.options.report.warn(
+            `场景壁纸 ${imageId} 声音对象 ${object} 的文件读不出，已从列表删掉：${file.path}`,
+            error,
+          ),
+        // mintime / maxtime 现读绘制状态（同 pushSoundVolume 的来源）
+        (object) => this.drawnState?.sounds.get(object),
       );
       this.syncSoundGlobal();
     }

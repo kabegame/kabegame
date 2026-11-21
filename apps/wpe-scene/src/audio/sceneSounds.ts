@@ -4,7 +4,7 @@
  *
  * - **开始时机**：宿主收到 bundle 就 `load`，不等 GPU 资源（WPE 在对象加载时就开始放，不等第一帧，实测 `p6a-calib`）；全部声音在同一次
  *   调用里按对象顺序启动（实测 `p6a-misc` 两个声音同一个 10 ms 窗口出声）。
- * - **重编译**：同一对象的声音表没变（文件、模式、时间、`startsilent`）就保留排期器，播放不中断；变了才重建该对象的。`volume` 不比较：
+ * - **重编译**：同一对象的声音表没变（文件、模式、`startsilent`；`mintime` / `maxtime` 由状态现读、不比较）就保留排期器，播放不中断；变了才重建该对象的。`volume` 不比较：
  *   它由 `SceneState.sounds` 每帧交来。
  * - **全局音量**：宿主音量 h，暂停或文档隐藏时为 0（`setGlobal`）。暂停与恢复另交给播放器做淡变（`active`）。
  */
@@ -33,10 +33,10 @@ export interface SceneSoundProbe extends SoundSchedulerSnapshot {
   files: string[];
 }
 
-/** 声音表里决定排期的部分：相同就保留排期器。 */
+/** 声音表里决定排期的部分：相同就保留排期器。`mintime` / `maxtime` 是运行中的状态（P6a2，排期器现读），不进签名。 */
 function soundKey(sound: SceneSound): string {
   const files = sound.files.map((file) => [file.location.path, file.location.offset, file.size]);
-  return JSON.stringify([files, sound.mode, sound.mintime, sound.maxtime, sound.startSilent]);
+  return JSON.stringify([files, sound.mode, sound.startSilent]);
 }
 
 interface Entry {
@@ -54,6 +54,8 @@ export class SceneSounds {
     private readonly player: SoundPlayer,
     private readonly random: () => number = Math.random,
     private readonly onFailed?: (object: number, file: SceneSoundFile, error: unknown) => void,
+    /** 状态里的 `mintime` / `maxtime`（P6a2），排期器在 random 模式开始播放时现读。 */
+    private readonly timingOf?: (object: number) => { mintime: number; maxtime: number } | undefined,
   ) {}
 
   /** 换上一张 bundle 的声音表：保留没变的、重建变了的、释放不在了的，新建的按对象顺序立即开始（音量为 0 时不开始）。 */
@@ -85,7 +87,7 @@ export class SceneSounds {
         },
       };
       const backend = this.player.voice(sound.object, sound.files, events);
-      const scheduler = new SoundScheduler(sound, backend, this.random);
+      const scheduler = new SoundScheduler(sound, backend, this.random, () => this.timingOf?.(sound.object));
       this.entries.set(sound.object, { key, sound, scheduler });
       scheduler.load(this.globalVolume);
     }

@@ -53,7 +53,7 @@ export function readScriptState(state: SceneState, target: ScriptTarget): Script
     return typeof value === "number" ? [value] : value;
   }
   if (target.kind === "sound") {
-    const value = state.sounds.get(target.object)?.volume;
+    const value = state.sounds.get(target.object)?.[target.field];
     return value === undefined ? null : [value];
   }
   // 灯字段（P13f2）：`update(value)` 收到当前值

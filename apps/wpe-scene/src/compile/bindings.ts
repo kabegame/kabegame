@@ -264,6 +264,9 @@ export function isTextRuntimeField(key: string): key is TextRuntimeField {
   return (TEXT_RUNTIME_FIELDS as readonly string[]).includes(key);
 }
 
+/** 声音对象的就地字段（P6a 步骤 1 的 volume；P6a2 的 mintime / maxtime）。 */
+export type SoundField = "volume" | "mintime" | "maxtime";
+
 export type BindingTarget =
   | { kind: "script-property"; script: string; key: string }
   | { kind: "layer"; object: number; field: LayerField }
@@ -308,10 +311,12 @@ export type BindingTarget =
    */
   | { kind: "particle-instance"; object: number; field: InstanceKey }
   /**
-   * 声音对象的 `volume`（P6a 步骤 1，rea-p6a-sound.md 5.2）：WPE 改值经回调 `V` 立即生效、没有渐变。就地写进
-   * `SceneState.sounds`，不标脏，宿主的排期器每帧读（`audio/scheduler.ts`）。`object` 是 `objects` 下标。
+   * 声音对象的就地字段（`SoundField`）。`volume`（P6a 步骤 1，rea-p6a-sound.md 5.2）：WPE 改值经回调 `V` 立即生效、没有渐变，
+   * 宿主当场推给排期器。`mintime` / `maxtime`（P6a2）：WPE 没有改值回调，`random` 模式在开始播放（`P`）时现读字段（rea-p6a 2.1），
+   * 写进去的值下一次排期生效（rea-p10-keyframes 第 4 条：没有回调的字段照样写入），所以不用推，排期器开始时现读。
+   * 都就地写进 `SceneState.sounds`，不标脏。`object` 是 `objects` 下标。
    */
-  | { kind: "sound"; object: number; field: "volume" }
+  | { kind: "sound"; object: number; field: SoundField }
   /**
    * 文本对象的排版字段（P6b 1e，`TEXT_RUNTIME_FIELDS`）：就地写进 `SceneState.textFields`，值变了才标 `dirtyTexts`、由渲染器重排
    * （WPE 逐项比较，变了才重排）。字符串只在这种目标上流通：属性侧按 JSON setter（`textFieldFromJson`），脚本侧按 `ToString`

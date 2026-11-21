@@ -81,6 +81,17 @@ import { alignmentOffset } from "./layout";
 
 const f32 = Math.fround;
 
+/** 声音对象的就地值（P6a2：`volume` 之外 `mintime` / `maxtime` 也在这里，排期器开始播放时现读）。 */
+export interface SoundValues {
+  volume: number;
+  mintime: number;
+  maxtime: number;
+}
+
+function soundValuesOf(sound: SceneSound): SoundValues {
+  return { volume: sound.volume, mintime: sound.mintime, maxtime: sound.maxtime };
+}
+
 /** 正交且没有路径的场景，加载末尾把相机基准重置成的值（rea-p5-camera / p3 L2）：视图恒为单位阵。 */
 export const ORTHOGRAPHIC_CAMERA_BASE: Readonly<Pick<CameraPose, "eye" | "center" | "up">> = {
   eye: [0, 0, 0],
@@ -413,10 +424,10 @@ export class SceneState {
    */
   readonly particleInstances = new Map<number, ParticleInstanceValues>();
   /**
-   * 声音对象的就地值（P6a 步骤 1，`objects` 下标 → 值），起始值 = 编译期的 `SceneSound.volume`。写入不标脏：宿主的排期器
-   * 每帧读（`audio/sceneSounds.ts`），值变了才走 WPE 的音量回调。
+   * 声音对象的就地值（P6a 步骤 1，`objects` 下标 → 值），起始值 = 编译期的 `SceneSound` 的 `volume` / `mintime` / `maxtime`。写入不标脏：
+   * 宿主的排期器每帧读 `volume`（`audio/sceneSounds.ts`），值变了才走 WPE 的音量回调；`mintime` / `maxtime`（P6a2）在 `random` 模式开始播放时现读。
    */
-  readonly sounds = new Map<number, { volume: number }>();
+  readonly sounds = new Map<number, SoundValues>();
   /**
    * 灯对象的数值字段（P13f2，`objects` 下标 → `LightValues`），起始值 = 编译期的 `SceneLightObject.values`。写入不标脏：渲染器每帧现算
    * 灯光 uniform、遗留灯与体积光（WPE 这些字段没有改值回调，逐帧读，rea-p13-lights 3.1）。
@@ -558,7 +569,7 @@ export class SceneState {
     // 没有图层的声音 / 灯（手写的测试 bundle）：只写它们自己的表
     const layered = new Set(bundle.layers.map((layer) => layer.object));
     for (const sound of bundle.sounds ?? [])
-      if (!layered.has(sound.object)) state.sounds.set(sound.object, { volume: sound.volume });
+      if (!layered.has(sound.object)) state.sounds.set(sound.object, soundValuesOf(sound));
     for (const light of bundle.lightObjects ?? [])
       if (!layered.has(light.object)) state.lights.set(light.object, structuredClone(light.values));
     return state;
@@ -627,7 +638,7 @@ export class SceneState {
         putConstant(text.background.key, { g_Color: [...text.background.color] });
     }
     if (layer.alignment !== undefined) this.alignmentSizes.set(object, [...layer.size]);
-    if (slice.sound) this.sounds.set(object, { volume: slice.sound.volume });
+    if (slice.sound) this.sounds.set(object, soundValuesOf(slice.sound));
     if (slice.light) this.lights.set(object, structuredClone(slice.light.values));
     // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
     if (layer.camera) this.cameras.set(object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
@@ -1160,7 +1171,7 @@ export class SceneState {
       const sound = this.sounds.get(target.object);
       // 取值规则与编译期相同（`soundVolume`），条件先换成布尔；不合法的值不改字段（WPE 的 float 解析器不收时不写）
       const value = soundVolume(conditioned(binding, raw));
-      if (sound && value !== undefined) sound.volume = value;
+      if (sound && value !== undefined) sound[target.field] = value;
       return "applied";
     }
     if (target.kind === "camera") {

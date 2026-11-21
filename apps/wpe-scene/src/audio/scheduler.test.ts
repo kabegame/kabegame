@@ -32,7 +32,12 @@ function soundOf(over: Partial<SceneSound> & { count?: number } = {}): SceneSoun
  */
 function setup(
   over: Partial<SceneSound> & { count?: number } = {},
-  options: { durations?: number[]; random?: number[]; global?: number } = {},
+  options: {
+    durations?: number[];
+    random?: number[];
+    global?: number;
+    timing?: () => { mintime: number; maxtime: number } | undefined;
+  } = {},
 ) {
   const sound = soundOf(over);
   const durations = options.durations ?? sound.files.map(() => 2);
@@ -64,7 +69,7 @@ function setup(
     if (!randoms.length) throw new Error("随机数用完了");
     return randoms.shift()!;
   };
-  const scheduler = new SoundScheduler(sound, backend, random);
+  const scheduler = new SoundScheduler(sound, backend, random, options.timing);
   let volume = sound.volume;
   let global = options.global ?? 1;
   const flush = () => {
@@ -189,6 +194,35 @@ describe("排期器：random", () => {
       expect(gap).toBeGreaterThanOrEqual(1.5);
       expect(gap).toBeLessThan(4 + DT);
     }
+  });
+
+  it("timing 现读：等待中改值，正在等的这次不变，下一次排期用新值（P6a2）", () => {
+    let timing = { mintime: 1, maxtime: 1 };
+    const env = setup(
+      { mode: "random", mintime: 1, maxtime: 1 },
+      { durations: [1], random: [0, 0, 0, 0, 0, 0], timing: () => timing },
+    );
+    env.load();
+    env.run(1);
+    timing = { mintime: 3, maxtime: 3 };
+    env.run(8);
+    // 第一次等待 1 + 1 = 2 s 不变，之后每段 1 + 3 = 4 s
+    expect(env.starts()).toEqual([0, 2, 6]);
+  });
+
+  it("没有 timing 时用声音表的值；maxtime < mintime 照公式算（P6a2）", () => {
+    const plain = setup({ mode: "random", mintime: 1, maxtime: 1 }, { durations: [1], random: [0, 0, 0, 0] });
+    plain.load();
+    plain.run(3);
+    expect(plain.starts()).toEqual([0, 2]);
+    // u = 1 取不到，用 0.5：0.5 · (1 − 3) + 3 = 2，加 1 s 时长
+    const inverted = setup(
+      { mode: "random" },
+      { durations: [1], random: [0, 0.5, 0, 0], timing: () => ({ mintime: 3, maxtime: 1 }) },
+    );
+    inverted.load();
+    inverted.run(4);
+    expect(inverted.starts()).toEqual([0, 3]);
   });
 
   it("isPlaying 在两段之间的等待里仍为真（p6a-random 两个对象 1065 帧全是真）", () => {
