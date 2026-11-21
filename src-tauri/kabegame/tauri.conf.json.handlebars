@@ -98,6 +98,7 @@
           "libasound2", "libcups2", "libdbus-1-3", "libudev1", "libexpat1", "libayatana-appindicator3-1",
           "zlib1g"
         ],
+        "recommends": ["nvidia-vaapi-driver"],
         "files": {
           {{#each linuxBins}}
           "/usr/lib/kabegame/{{this}}": "../../bin/linux/{{this}}",

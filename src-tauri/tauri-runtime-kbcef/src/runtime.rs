@@ -301,6 +301,38 @@ mod imp {
         })
     }
 
+    /// 是否让 Chromium 在 NVIDIA 显卡上用 VA-API 硬解视频。
+    ///
+    /// Linux 版 Chromium 的硬解只有 VA-API 一条路,而 NVIDIA 闭源驱动不提供 VA-API,
+    /// 要靠第三方 `nvidia-vaapi-driver`(`nvidia_drv_video.so`,经 NVDEC 解码;deb 包
+    /// 以 Recommends 带上)。Chromium 在 x64 上默认跳过 `nvidia-drm` 设备
+    /// (crbug.com/1492880),要开实验性特性 `VaapiOnNvidiaGPUs` 才放行。
+    ///
+    /// 默认在 libva 能找到这个驱动时打开;没有 NVIDIA 显卡时该特性不起作用。
+    /// `KABEGAME_CEF_VAAPI_NVIDIA=1|0` 可强制打开 / 关闭,用于对比排查或驱动出问题时退回软解。
+    #[cfg(target_os = "linux")]
+    fn linux_vaapi_on_nvidia() -> bool {
+        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            match std::env::var("KABEGAME_CEF_VAAPI_NVIDIA").as_deref().map(str::trim) {
+                Ok("1") => return true,
+                Ok("0") => return false,
+                _ => {}
+            }
+            // 照 libva 的查找顺序:设了 LIBVA_DRIVERS_PATH 就只看它,否则看各发行版的缺省目录。
+            let dirs: Vec<std::path::PathBuf> = match std::env::var("LIBVA_DRIVERS_PATH") {
+                Ok(paths) if !paths.trim().is_empty() => {
+                    paths.split(':').filter(|dir| !dir.is_empty()).map(Into::into).collect()
+                }
+                _ => ["/usr/lib/x86_64-linux-gnu/dri", "/usr/lib64/dri", "/usr/lib/dri"]
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            };
+            dirs.iter().any(|dir| dir.join("nvidia_drv_video.so").is_file())
+        })
+    }
+
     /// CEF runtime 的主状态。
     ///
     /// 它只应在 tao 主事件循环线程上被实际驱动。`RefCell` 存储窗口/webview
@@ -1102,6 +1134,9 @@ mod imp {
                     // 导致 Tauri IPC 全断、ACL 因 `is_local=false` 拒命令。关掉 zygote
                     // 后每个 renderer 都会启动独立 helper,并自行注册自定义 scheme。
                     cl.append_switch(Some(&CefString::from("no-zygote")));
+                    if linux_vaapi_on_nvidia() {
+                        merge_feature_switch(cl, "enable-features", &["VaapiOnNvidiaGPUs"]);
+                    }
                 }
                 // NOTE: 不要开 `single-process`。CEF/Chromium 单进程模式已弃用且极不
                 // 稳定(并伴随 "Cannot use V8 Proxy resolver in

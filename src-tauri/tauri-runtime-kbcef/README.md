@@ -21,6 +21,7 @@ Tauri Builder
 - `BrowserView` 尺寸由 CEF Window client area 布局，不转发 tao resize、鼠标、键盘或 IME 事件。
 - `KABEGAME_CEF_WINDOW_MODE` 已废弃且不再读取；CEF 始终 windowed。
 - GPU 模式可用 `KABEGAME_CEF_GPU_MODE`（或 `CEF_WINDOWED_GPU_MODE`）覆盖：`default`（不加开关）/ `disabled` / 任意 ANGLE 后端名（`gl`、`d3d11`、`vulkan`…）。默认值：Linux `gl`（Vulkan 后端曾触发 GPU device-lost），Windows `default`（Chromium 自选，ANGLE D3D11）。
+- Linux 视频硬解只走 VA-API。NVIDIA 闭源驱动不提供 VA-API，要靠第三方 `nvidia-vaapi-driver`（`nvidia_drv_video.so`，经 NVDEC 解码；deb 包 `Recommends` 它）；Chromium 在 x64 上默认跳过 `nvidia-drm` 设备（crbug.com/1492880），`linux_vaapi_on_nvidia` 在 libva 找得到这个驱动时（设了 `LIBVA_DRIVERS_PATH` 只看它，否则看 `/usr/lib/x86_64-linux-gnu/dri`、`/usr/lib64/dri`、`/usr/lib/dri`）合并 `--enable-features=VaapiOnNvidiaGPUs`。`KABEGAME_CEF_VAAPI_NVIDIA=1|0` 强制打开 / 关闭（驱动出问题时退回软解）。核对：WebCodecs `VideoDecoder.isConfigSupported({ hardwareAcceleration: "prefer-hardware" })` 由 false 变 true，或 `vainfo` 显示 `VA-API NVDEC driver`。
 - 不包含替代的离屏渲染、软件帧缓冲或 dmabuf/wgpu 合成路径。
 
 CEF `KeyboardHandler` 提供 DevTools 快捷键：macOS 使用 `Command+Shift+D`，

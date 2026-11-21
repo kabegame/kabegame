@@ -1,5 +1,22 @@
 # v4.7.0 regression
 
+## Linux N 卡的场景视频硬解（VA-API + nvidia-vaapi-driver）
+
+2026-11-21 Linux dev（RTX 4090 D + RTX 4070，驱动 580.178.04）。场景 2903412088 的 4K H.264 视频日志报「场景视频改用软件解码（显卡不能硬解这段视频）」，同一块卡在 Windows 上能硬解。原因：Linux 版 Chromium 的硬解只有 VA-API，NVIDIA 闭源驱动不提供 VA-API；第三方 `nvidia-vaapi-driver` 能补上，但 Chromium 156 在 x64 上默认跳过 `nvidia-drm` 设备（`vaapi_wrapper.cc`，特性 `VaapiOnNvidiaGPUs` 默认关）。
+
+改法：deb 包 `Recommends: nvidia-vaapi-driver`；`tauri-runtime-kbcef` 新增 `linux_vaapi_on_nvidia`，libva 能找到 `nvidia_drv_video.so` 时合并 `--enable-features=VaapiOnNvidiaGPUs`，`KABEGAME_CEF_VAAPI_NVIDIA=1|0` 强制开关。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | NV1 驱动本身可用 | Linux dev，装 `nvidia-vaapi-driver` 0.0.14 | 两块卡各跑 `vainfo --display drm --device /dev/dri/renderD12x` | `VA-API NVDEC driver [direct backend]`，列出 H.264 / HEVC / VP9 / AV1 的 VLD | 2026-11-21 Claude：不设 `LIBVA_DRIVER_NAME` 也能自动选到 nvidia 驱动 |
+| [x] | NV2 没装驱动 / 没开特性时是软解 | Linux dev，未装驱动 | 主窗口里 `VideoDecoder.isConfigSupported({ hardwareAcceleration: "prefer-hardware" })` | 4K H.264、1080p H.264、4K HEVC、4K VP9 全部 false | 2026-11-21 Claude（改动前的基线） |
+| [x] | NV3 装了驱动自动打开 | Linux dev，装了驱动、不设任何相关环境变量重启 dev | 看 GPU 进程命令行；同 NV2 求值 | GPU 进程带 `--enable-features=VaapiOnNvidiaGPUs`；四项全部 true | 2026-11-21 Claude |
+| [x] | NV4 场景视频实际硬解 | 同上 | 预览 2903412088（`avc1.4d4033` 3840×2160），场景宿主里 `host.videos()`；读日志 | `acceleration: "hardware"`、不失败、照常出帧；日志没有「改用软件解码」 | 2026-11-21 Claude：13 s 处已解 348 帧、丢 0 帧、`stallResets` 0 |
+| [x] | NV5 deb 配置带 Recommends | Linux dev | dev 生成的 `src-tauri/kabegame/tauri.conf.json` | `bundle.linux.deb.recommends` 为 `["nvidia-vaapi-driver"]` | 2026-11-21 Claude |
+| [ ] | NV6 环境变量强制关闭 | Linux dev，装了驱动 | `KABEGAME_CEF_VAAPI_NVIDIA=0` 重启 dev，同 NV3、NV4 | GPU 进程不带 `VaapiOnNvidiaGPUs`；isConfigSupported 为 false，场景视频软解并记 warn | 没做：要重启 dev |
+| [ ] | NV7 打包安装 | 22.04 guest 出 release deb，在 N 卡机器上 `apt install ./kabegame_*.deb` | 看 `dpkg -I` 的 Recommends；apt 是否带上驱动；重复 NV3、NV4 | 控制文件有 `Recommends: nvidia-vaapi-driver`，apt 默认一并安装 | 没做：release 只在 guest 构建。22.04 仓库里的驱动版本较老，是否能用未验证 |
+| [ ] | NV8 没有 N 卡 / 没装驱动的机器 | Intel / AMD 或没装驱动的 Linux | 同 NV3 | 没装驱动时不加特性、行为与改动前相同；Intel / AMD 照常走各自的 VA-API 驱动 | 没做：本机只有 N 卡 |
+
 ## WPE 壁纸的 macOS 缺口走查（第 1 步：文档与注释对齐）
 
 2026-11-21 macOS 26.6.2 dev。走查 WPE 壁纸在 macOS 上还缺什么：真缺的功能只剩媒体集成（系统「正在播放」）与场景快捷方式（`usershortcut`），留给后面几步。这一步只改文档与注释里过时的平台说法：`WPE_IMPORT.md` 的三平台能力表把「音频与媒体数据｜有｜无｜无」拆成音频（macOS 14.2+ 有）、媒体、快捷方式、跟随四行；删掉旧阶段的「macOS 不渲染网页壁纸」与「`setPaused` 尚未实现」；`scene/AUDIO_MEDIA.md`、`PARTICLES_ROPE_CHILDREN.md`、`host.ts` 里「非 Windows 没有回环采集」改成只说 Linux；macOS 系统字体表与图库 `file://` 记上本次核对结果。「跟随 WPE」保持只在 Windows 上提供（WPE 只能在 Windows 上运行），`get_wpe_follow_available` 的门控处补上这条理由。
