@@ -558,7 +558,8 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     };
     // TODO:[WPE_SCENE] 在 Linux 上测试：场景音频。Linux 还没有回环采集，场景宿主订阅被拒后频谱全 0（`g_AudioSpectrum*`、音频粒子、
     // 脚本音频缓冲都读 0）；接上系统音频回环、在 `kind_available` 放开后，核对三者都随音乐变化。
-    if !crate::wpe_media::kind_available(kind) {
+    let app = tauri::Manager::app_handle(&webview);
+    if !crate::wpe_media::kind_available(app, kind) {
         return Err(format!(
             "web wallpaper {kind:?} data is not available on this platform"
         ));
@@ -584,10 +585,10 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     // 「媒体集成」开关：壁纸窗口跟全局设置，主窗口（预览与应用背景）跟这张壁纸的预览设置
     let label = webview.label();
     if crate::wallpaper::is_wallpaper_label(label) {
-        WpeMediaHub::global().subscribe(label, frame, kind, flavor, Box::new(channel));
+        WpeMediaHub::global(app).subscribe(label, frame, kind, flavor, Box::new(channel));
     } else {
         let enabled = kind == WpeMediaKind::Media && preview_media_integration(&id).await?;
-        WpeMediaHub::global().subscribe_gated(
+        WpeMediaHub::global(app).subscribe_gated(
             label,
             frame,
             kind,

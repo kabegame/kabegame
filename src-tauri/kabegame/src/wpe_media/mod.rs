@@ -7,20 +7,22 @@
 //! 丢弃、发送照样成功，所以不能只靠它。
 //!
 //! 有 audio 订阅才开系统音频回环采集（`audio/`：Windows 是 WASAPI 回环，macOS 是 Core Audio 进程 tap），有 media
-//! 订阅且「媒体集成」打开才开系统媒体会话监视（`media.rs`，只在 Windows）；最后一个订阅离开即停。订阅命令按平台放行：
-//! Windows 两类都收，macOS 只收 audio，Linux 都拒。
+//! 订阅且「媒体集成」打开才开系统媒体会话监视（Windows 是 `media.rs` 直接读 SMTC，macOS 经 `tauri-plugin-sysmedia`
+//! 的读数走 `sysmedia.rs`）；最后一个订阅离开即停。订阅命令按平台放行：Windows、macOS 两类都收，Linux 都拒。
 //! 见 `cocs/wpe/WPE_IMPORT.md`「音频与媒体集成」。
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod audio;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod colors;
 #[cfg(target_os = "windows")]
 mod media;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 mod projection;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod spectrum;
+#[cfg(target_os = "macos")]
+mod sysmedia;
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 mod wpe_spectrum;
 
@@ -184,11 +186,12 @@ pub struct WpeMediaHub {
 }
 
 impl WpeMediaHub {
-    /// 首次调用时创建并读取「媒体集成」设置，只在订阅路径（Settings 已就绪）调用。
-    pub fn global() -> &'static Self {
+    /// 首次调用时创建并读取「媒体集成」设置，只在订阅路径（Settings 已就绪）调用。`app` 只在创建时用：
+    /// 系统媒体会话经 `tauri-plugin-sysmedia`（`app.sysmedia()`）读。
+    pub fn global<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> &'static Self {
         HUB.get_or_init(|| {
             Self::new(
-                Box::new(SystemSources),
+                Box::new(SystemSources::new(app)),
                 Settings::global().get_wpe_media_integration(),
             )
         })
@@ -559,20 +562,58 @@ fn scene_resets(cache: &[Option<WpeMediaMessage>; 4]) -> Vec<WpeMediaMessage> {
         .collect()
 }
 
-/// 系统实现：音频回环在 Windows（WASAPI）与 macOS（进程 tap），媒体会话只在 Windows（SMTC），其余不产生数据。
-struct SystemSources;
+/// 启动媒体会话监视的闭包：返回的句柄丢弃即停止。
+type StartMedia = Box<dyn Fn() -> Box<dyn Send> + Send + Sync>;
+
+/// 系统实现：音频回环在 Windows（WASAPI）与 macOS（进程 tap）；媒体会话 Windows 是 `media.rs`（SMTC），
+/// macOS 经插件（`sysmedia.rs`），其余不产生数据。
+struct SystemSources {
+    start_media: StartMedia,
+}
+
+impl SystemSources {
+    fn new<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Self {
+        #[cfg(target_os = "macos")]
+        let start_media: StartMedia = {
+            let app = app.clone();
+            Box::new(move || Box::new(sysmedia::SysmediaBridge::start(&app, broadcast_media_output)))
+        };
+        // TODO(sysmedia S2): Windows 的 SMTC 迁进插件后同样走 `sysmedia.rs`
+        #[cfg(target_os = "windows")]
+        let start_media: StartMedia = {
+            let _ = app;
+            Box::new(|| Box::new(media::MediaWatcher::start(broadcast_media_output)))
+        };
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let start_media: StartMedia = {
+            let _ = app;
+            Box::new(|| Box::new(()))
+        };
+        Self { start_media }
+    }
+}
+
+/// 媒体监视的输出交给 hub（hub 一定已建好：监视是它启动的）。
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn broadcast_media_output(output: projection::Output) {
+    if let Some(hub) = WpeMediaHub::existing() {
+        hub.broadcast_media(output.flavor, &output.message)
+    }
+}
 
 impl MediaSources for SystemSources {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     fn start_audio(&self) -> Box<dyn Send> {
         Box::new(audio::AudioCapture::start(|web, raw| {
-            WpeMediaHub::global().broadcast(
-                WpeMediaKind::Audio,
-                &WpeMediaMessage::Audio {
-                    data: web.to_vec(),
-                    raw: raw.to_vec(),
-                },
-            )
+            if let Some(hub) = WpeMediaHub::existing() {
+                hub.broadcast(
+                    WpeMediaKind::Audio,
+                    &WpeMediaMessage::Audio {
+                        data: web.to_vec(),
+                        raw: raw.to_vec(),
+                    },
+                )
+            }
         }))
     }
 
@@ -581,25 +622,18 @@ impl MediaSources for SystemSources {
         Box::new(())
     }
 
-    #[cfg(target_os = "windows")]
     fn start_media(&self) -> Box<dyn Send> {
-        Box::new(media::MediaWatcher::start(|output| {
-            WpeMediaHub::global().broadcast_media(output.flavor, &output.message)
-        }))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn start_media(&self) -> Box<dyn Send> {
-        Box::new(())
+        (self.start_media)()
     }
 }
 
 /// 本平台能不能订阅这一类数据（`wpe_web_media_subscribe` 的门控）：有数据源才放行，没有的直接拒，垫片与宿主按
-/// 「不可用」处理（场景脚本收到 `enabled: false`）。
-pub fn kind_available(kind: WpeMediaKind) -> bool {
+/// 「不可用」处理（场景脚本收到 `enabled: false`）。媒体会话问插件；Windows 的还没迁进插件（S2），先按平台放行。
+pub fn kind_available<R: tauri::Runtime>(app: &tauri::AppHandle<R>, kind: WpeMediaKind) -> bool {
+    use tauri_plugin_sysmedia::SysmediaExt;
     match kind {
         WpeMediaKind::Audio => cfg!(any(target_os = "windows", target_os = "macos")),
-        WpeMediaKind::Media => cfg!(target_os = "windows"),
+        WpeMediaKind::Media => cfg!(target_os = "windows") || app.sysmedia().available(),
     }
 }
 

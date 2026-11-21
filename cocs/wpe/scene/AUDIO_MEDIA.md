@@ -193,7 +193,8 @@ P11c 照这三段做，每段放在对应的位置。依据：
 - **Spotify 预处理**：来源 App ID 以 `spotify` 开头时裁掉透明边或把角标区改灰。两处读码标【推】的细节（判定行、「否则若」的归属）按 `projection.rs` 的注释实现，测试只覆盖裁切分支。
 - **订阅的补发**照 `AddMediaListener`：先发 `status`；监视在跑时再补非空的几类（`title` 非空、有封面、状态非 0、`duration` 非 0）。
 - **「媒体集成」开关**：关掉时场景订阅当场收到 `status { enabled: false }` 和非缺省类的复位。
-- 非 Windows 没有数据源，订阅被拒（`TODO:[WPE_SCENE]`）。macOS 的音频（频谱）有数据源，媒体没有：系统的「正在播放」在私有框架 MediaRemote 里，还没接。
+- **macOS**（2026-11-21）：经 `tauri-plugin-sysmedia` 读系统的 Now Playing（MediaRemote），读数攒 100 ms 后走同一个场景投影（[../WPE_IMPORT.md](../WPE_IMPORT.md)「音频与媒体集成」）。和 Windows 的数据差别：`subTitle` / `albumArtist` 拿不到、是空串；播放器不给 `mediaType` 时（实测 Amazon 网页应用与网易云都不给）`contentType` 为空串，同 Windows 的「类型未知」；自然切歌时新时长与「播放中」比新标题早约 300 ms，脚本会先收到一次「旧标题 + 新时长」。WPE 不在 macOS 上跑，没有逐行对照的对象。
+- Linux 没有数据源（MPRIS 还没接），订阅被拒（`TODO:[WPE_SCENE]`）。
 
 **合并**（宿主 `src/media/pending.ts`）：
 - 消息先进 `MediaPending`，照 WPE 主进程的待发事件：同类只留最后一条，flags 按位或（1 属性、2 封面、4 播放、8 时间轴、0x10 状态）。

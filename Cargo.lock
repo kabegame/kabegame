@@ -4721,6 +4721,7 @@ dependencies = [
  "tauri-plugin-pathes",
  "tauri-plugin-picker",
  "tauri-plugin-share",
+ "tauri-plugin-sysmedia",
  "tauri-plugin-task-notification",
  "tauri-plugin-tracing",
  "tauri-plugin-wallpaper",
@@ -9372,6 +9373,19 @@ dependencies = [
  "tauri",
  "tauri-plugin",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "tauri-plugin-sysmedia"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]

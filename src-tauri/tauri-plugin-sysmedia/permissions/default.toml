@@ -1,0 +1,4 @@
+# 本期不开 JS 命令：消费方都在 Rust（`app.sysmedia()`），默认权限为空。
+[default]
+description = "No commands are exposed to the webview; the plugin is consumed from Rust."
+permissions = []

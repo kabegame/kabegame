@@ -1499,8 +1499,8 @@ export class SceneHost {
       this.recordMediaMessage(message);
       this.mediaPending?.push(message);
     };
-    // TODO:[WPE_SCENE] 在 macOS / Linux 上测试：场景媒体集成。后端还没有这两个系统的媒体会话数据源，订阅总被拒（脚本收到 `{ enabled: false }`、
-    // 封面槽是缺省纹理）；后端接上后这里不用改，核对标题与封面随播放器变化。
+    // TODO:[WPE_SCENE] 在 Linux 上测试：场景媒体集成。后端还没有 Linux 的媒体会话数据源（MPRIS），订阅总被拒（脚本收到 `{ enabled: false }`、
+    // 封面槽是缺省纹理）；后端接上后这里不用改，核对标题与封面随播放器变化。Windows（SMTC）与 macOS（`tauri-plugin-sysmedia`）已有。
     invoke("wpe_web_media_subscribe", { kind: "media", channel, imageId }).catch((error: unknown) => {
       this.mediaError = String(error);
       this.sceneMedia?.push({
@@ -2011,7 +2011,7 @@ export class SceneHost {
    * `type === "usershortcut"` 且 `isbound === true` 时把属性名 `postMessage` 给父页面（`shortcut/message.ts`，真正启动由应用页核对用户激活后调
    * `wpe_open_user_shortcut`）并返回 1，否则 0。这里的门禁只约束守规矩的脚本（脚本 realm 同源、能拿到 `parent`），安全边界在应用页与后端。
    *
-   * 非 Windows：后端给的 `isbound` 一律为 false，这里恒返回 0。TODO:[WPE_SCENE] macOS / Linux 的快捷方式（本机测不了）。
+   * Linux：后端给的 `isbound` 一律为 false，这里恒返回 0（Windows、macOS 有，`wpe_shortcut::SUPPORTED`）。TODO:[WPE_SCENE] Linux 的快捷方式。
    */
   private openUserShortcut(name: string): 0 | 1 | 2 {
     if (!this.shortcutToken.take()) return 2;

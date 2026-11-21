@@ -94,6 +94,8 @@ tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))'.dependencies]
 tauri-plugin-cursor = { workspace = true, optional = true }
+# 系统「正在播放」（WPE 媒体集成的数据源），随 `wpe` 开
+tauri-plugin-sysmedia = { workspace = true, optional = true }
 tauri = { version = "2.12.4", default-features = false, features = [
   "tray-icon", "devtools", "image-png", "unstable",
   "compression", "common-controls-v6", "dynamic-acl", "x11", "dbus",
@@ -190,6 +192,7 @@ default = []
 # realfft / rustfft 在 Windows 与 macOS 段各登记一次（两个平台都有音频回环）。
 wpe = [
     "kabegame-core/wpe",
+    "dep:tauri-plugin-sysmedia",
     "dep:realfft",
     "dep:rustfft",
     # 场景快捷方式（macOS）：QuickLook 缩略图与位图上下文、`sh -c` 命令行

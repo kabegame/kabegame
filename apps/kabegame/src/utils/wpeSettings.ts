@@ -18,6 +18,7 @@
  * 「我就要看」共用），和四个场景选项一起经场景设置消息交给宿主，变了宿主整场重新加载。
  */
 import type { AppSettingKey } from "@/stores/settings";
+import { IS_MACOS, IS_WINDOWS } from "@/env";
 import { isWpeSceneType, isWpeVideoType, isWpeWebType } from "./mediaMime";
 
 export type WpeSettingKey =
@@ -34,6 +35,9 @@ export type WpeSettingKey =
 
 /** 帧率设置的取值：固定帧率，或跟随 WPE */
 export type WpeFpsValue = number | "follow";
+
+/** 本平台有没有系统媒体会话数据源（「媒体集成」）：Windows 是 SMTC，macOS 经 `tauri-plugin-sysmedia` 读 Now Playing。 */
+export const WPE_MEDIA_AVAILABLE = IS_WINDOWS || IS_MACOS;
 
 /** 帧率下限（同 WPE 设置界面的 floor）；上限是显示器的最高刷新率（`useDisplayMaxFps`） */
 export const WPE_FPS_MIN = 10;
@@ -170,13 +174,13 @@ export function clampWpeFps(value: number, max: number): number {
 }
 
 /**
- * 某类壁纸用得上的字段；`type` 为空时给全部字段（设置页）。媒体集成只有 Windows 有数据源；
+ * 某类壁纸用得上的字段；`type` 为空时给全部字段（设置页）。媒体集成要本平台有数据源（`hasMedia`，即 `WPE_MEDIA_AVAILABLE`）；
  * 倍速作用于视频与场景（同一个值，用户定；网页收不到）；帧率作用于网页（经 `applyGeneralProperties` 推给页面）与场景（限帧）；
  * 后处理 / 反射 / 阴影 / 体积光 / 强制渲染只有场景。
  */
-export function wpeSettingFieldsFor(type: string | null | undefined, windows: boolean): WpeSettingKey[] {
-  const media = windows ? (["mediaIntegration"] as const) : [];
-  if (!type) return WPE_SETTING_KEYS.filter((key) => windows || key !== "mediaIntegration");
+export function wpeSettingFieldsFor(type: string | null | undefined, hasMedia: boolean): WpeSettingKey[] {
+  const media = hasMedia ? (["mediaIntegration"] as const) : [];
+  if (!type) return WPE_SETTING_KEYS.filter((key) => hasMedia || key !== "mediaIntegration");
   if (isWpeVideoType(type)) return ["paused", "volume", "playbackRate"];
   if (isWpeWebType(type)) return ["paused", "volume", ...media, "fps"];
   if (isWpeSceneType(type))
@@ -199,9 +203,9 @@ export function wpeSettingFieldsFor(type: string | null | undefined, windows: bo
  * 预览右栏的字段：同 `wpeSettingFieldsFor`，只是 `x-wpe/video` 只有倍速——预览里视频壁纸按普通视频播放，暂停与音量
  * 由视频控制条管（音量是全部视频共用的 `kabegame-video-volume`），字段组再给一份会两头抢同一个值。
  */
-export function wpePreviewFieldsFor(type: string | null | undefined, windows: boolean): WpeSettingKey[] {
+export function wpePreviewFieldsFor(type: string | null | undefined, hasMedia: boolean): WpeSettingKey[] {
   if (type && isWpeVideoType(type)) return ["playbackRate"];
-  return type ? wpeSettingFieldsFor(type, windows) : [];
+  return type ? wpeSettingFieldsFor(type, hasMedia) : [];
 }
 
 /** 预览设置：存了的键（后端规整过）叠在默认值上；暂停不在其中，由调用方另给 */

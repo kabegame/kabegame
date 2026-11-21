@@ -1,5 +1,21 @@
 # v4.7.0 regression
 
+## WPE 壁纸的 macOS 缺口走查（第 3 步：媒体集成，`tauri-plugin-sysmedia` S1）
+
+2026-11-21 macOS 26.6.2 dev。新增跨端插件 `src-tauri/tauri-plugin-sysmedia`（Tauri 官方模板的 `desktop.rs` / `mobile.rs` 写法，Android 只有回答不可用的骨架），只推平台无关的读数；macOS 经嵌入的 mediaremote-adapter（`build.rs` 编动态库、`include_bytes!`、运行时解到应用缓存目录、`/usr/bin/perl` 加载）读系统的 Now Playing。`wpe_media/sysmedia.rs` 照 winrtutil 攒 100 ms、换成 FILETIME 后交给原有的网页 / 场景投影；`kind_available(Media)` 问插件；设置页与预览设置的「媒体集成」在 macOS 上显示（`WPE_MEDIA_AVAILABLE`）。Windows 仍走 `media.rs`（S2 迁入）。计划见 `.claude/plans/sysmedia/README.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MM1 插件单测 | macOS | `cargo test -p tauri-plugin-sysmedia`（实测行的增量合并、映射、会话切换、解出目录）；`-- --ignored` 起真 perl | 全过；真机测试能拉起 perl、加载嵌入的动态库、报一次会话 | 2026-11-21 Claude：9 passed；真机测试 1 passed，当时没在播，报 `Session(None)`（上游 `get` 同为 `null`）。动态库 `minos 11.0`、arm64、ad-hoc 签名 |
+| [x] | MM2 `wpe_media` 单测 | macOS | `kabegame` crate 过滤 `wpe_media`（含新的 `sysmedia` 攒批规则与单位换算，以及原来只在 Windows 编译的 `projection` / `colors`） | 全过 | 2026-11-21 Claude：66 passed。test driver 在 `target-dev` 下找不到 CEF 框架（`@executable_path/../Frameworks`），用 `DYLD_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 直接跑测试二进制 |
+| [x] | MM3 编译检查与前端 | macOS | `check-kabegame`；vitest `wpeSettings` / `WpeSettingsFields` / `useWpePreviewSettings` | 0 error；全过 | 2026-11-21 Claude：vue-tsc + cargo 0 error，vitest 18 passed |
+| [x] | MM4 「媒体集成」开关出现 | macOS dev | 设置页壁纸分区；预览网页壁纸 9242、场景 9107 的预览设置 | 都有「媒体集成」 | 2026-11-21 Claude：设置页与 9242 的预览设置都有，全局值为开 |
+| [x] | MM5 网页壁纸收到媒体数据 | 同上，网易云（`com.netease.163music`）在播 | 预览 9242「音域回响」；经适配器的 `send` 暂停、继续、下一首 | 显示歌名、歌手、封面，暂停 / 继续、切歌跟着变 | 2026-11-21 Claude：显示「离开我的依赖 / 王艳薇」、封面与进度条（截图）；暂停后进度停住，继续后接着走，下一首换成「两 难 / 加木 / 0:02/2:50」 |
+| [x] | MM6 场景收到媒体数据 | 同上 | 预览 9107「TOKYO SAKURA TRAIN STATION [MEDIA PLAYER]」，宿主探针 `host.media()`；下一首 | 标题、封面、播放状态、时间轴随播放器变化；切歌时可能先到新时长（约 300 ms，接受） | 2026-11-21 Claude：`status enabled` → 属性 → 封面（PNG + 五色）→ 播放 1 → 时间轴 170 s，左下角显示封面与「两 难」；下一首后标题 / 歌手 / 时长更新，封面槽 `mediaThumbnail_2`、上一张 `_1`，配色换了。`contentType` 为空串（网易云不给 `mediaType`） |
+| [x] | MM7 播放器退出 | 同上，预览 9242 的同时开屏外宿主 9107（宿主不跑帧，看它收到的消息） | 退出网易云；再退出 Amazon | 切到别的应用时两边跟着切；都退出后网页壁纸清空，场景各类复位 | 2026-11-21 Claude：退出网易云后系统切到还开着、暂停的 Amazon，网页壁纸换成「My Dearest (Album Mix) / supercell / 4:34/5:36」，场景收到属性、无封面、播放 2、时间轴，37 ms 后封面单独到（Amazon 的封面本来就晚到）；再退出 Amazon 后系统为 `null`，网页壁纸显示 `-- / --`，场景收到空属性、空封面（五色全黑）、播放 0、时间轴 0/0。测完关宿主与预览（perl 0 个）、重新打开网易云 |
+| [x] | MM8 启停 | 同上 | 关预览 / 关「媒体集成」；再打开 | 没有订阅时 `mediaremote-adapter` 的 perl 子进程退出，重开后重新拉起 | 2026-11-21 Claude：9242 → 9107 切换时日志「监视已停止」后 1 s 内重新启动；Esc 关预览后 perl 0 个；9242 预览里关「媒体集成」perl 0 个、再开 1 个且页面接着更新，测完预览设置回到原样 |
+| [ ] | MM9 Windows 不回归 | Windows dev | P11c 的媒体走查（网页壁纸与场景各一张） | 和以前一样 | 改动只碰了 hub 的接线（启动闭包、`kind_available` 接收 `AppHandle`），`media.rs` 没动；本机编不了 Windows |
+
 ## WPE 壁纸的 macOS 缺口走查（第 2 步：场景快捷方式）
 
 2026-11-21 macOS 26.6.2 dev。场景快捷方式（`usershortcut`，P11d）原来只有 Windows，macOS 上面板不显示、宿主一律未绑定。这一步新增 `wallpaper/wpe_shortcut/mac.rs`：图标先取 QuickLook 内容缩略图（同 Windows 的 Shell 缩略图：图片、视频、PDF 出内容），再退到 `NSWorkspace` 的系统图标；启动时文件夹、网址、不带参数的文件交给 opener，命令整条交给用户的登录 shell（`$SHELL -i -l -c`，同终端：从 Finder 启动时应用的 `PATH` 只有系统目录，Homebrew、nvm 等写在 `.zshrc` 里），带参数的 `.app` 经 `/bin/sh -c` 跑 `open -a … --args`。平台开关 `wpe_shortcut::SUPPORTED`，面板在 macOS 上把「文件」写成「文件或 App」。测试场景是 9135（Minimalist Landscape）的 24 格应用栏，测完属性还原。
