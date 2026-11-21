@@ -289,6 +289,27 @@ const POINT = z.tuple([z.number(), z.number()]);
 const WINDOW = z.tuple([z.number().positive(), z.number().positive()]).describe("抓帧窗口尺寸 [宽, 高]（像素）");
 const PASSES = z.union([z.literal(1), z.literal(2)]);
 const SEED = z.number().int().describe("随机种子，第 i 个粒子层用 seed + i；缺省 1");
+const MT19937 = z
+  .number()
+  .int()
+  .min(0)
+  .max(0xffffffff)
+  .describe(
+    "全场所有粒子系统共用一个标准 std::mt19937(种子)（0…4294967295 的整数）：和「WPE 侧换成同一种子」的抓帧逐值对照用（wpe-renderdoc 的 seed，kbp-tools 的「注入 WPE 的随机数」）；" +
+      "预热与每帧步进按对象表顺序从同一串里取，同 WPE 一个场景一个随机引擎。不和 seed 同给（报 [local]）；前提是工程里没有别的随机消费者（声音 random、相机路径 random 等）或它们的顺序也对得上，" +
+      "hsvcolorrandom 走 CRT rand()、管不到。结果里写用了哪个随机源",
+  );
+/** `seed` 与 `mt19937` 只能给一个：前者每个粒子层各一串（seed + i），后者全场一串。 */
+function checkSeedExclusive(seed: number | undefined, mt19937: number | undefined): void {
+  if (seed !== undefined && mt19937 !== undefined)
+    throw new ToolError(
+      "local",
+      "seed 与 mt19937 只能给一个：seed 是每个粒子层各一串（seed + i），mt19937 是全场粒子系统共用一串",
+    );
+}
+/** 回放摘要里随机源那一段。 */
+const randomText = (seed: number | undefined, mt19937: number | undefined): string =>
+  mt19937 !== undefined ? `mt19937 ${mt19937}（全场粒子系统共用一串）` : `seed ${seed ?? 1}`;
 const RANDOM = z
   .record(z.string().regex(/^\d+$/), z.union([z.array(z.number().min(0).lt(1)), z.string().min(1)]))
   .describe(
@@ -381,6 +402,7 @@ const TIMELINE = z
 const TIMELINE_REPLAY = z.object({
   timeline: TIMELINE,
   seed: SEED.optional(),
+  mt19937: MT19937.optional(),
   passes: PASSES.optional().describe("operator 遍数；缺省按标签里的 fps<N> 推（1–20 两遍，否则一遍），推不出就 1"),
   random: RANDOM.optional(),
 });
@@ -390,13 +412,14 @@ const PARTICLES_REPLAY = z.object({
       dts: z.array(z.number().positive()).min(1).describe("每帧 g_Frametime，dts[0] 是第 1 帧，最后一帧是读回的那一帧"),
       times: z.array(z.number()).optional().describe("每帧 g_Time，和 dts 等长；不给时按 dts 累加"),
       seed: SEED.optional(),
+      mt19937: MT19937.optional(),
       passes: PASSES.optional().describe("缺省 1"),
       random: RANDOM.optional(),
     })
     .strict(),
 });
 const REPLAY_TEXT =
-  "确定性粒子回放：{ timeline, seed?, passes?, random? }（按 WPE 的一次抓帧组时间线，常用），或 { particles: { dts, times?, seed?, passes?, random? } }（直接给探针）。" +
+  "确定性粒子回放：{ timeline, seed? | mt19937?, passes?, random? }（按 WPE 的一次抓帧组时间线，常用），或 { particles: { dts, times?, seed? | mt19937?, passes?, random? } }（直接给探针；seed 与 mt19937 只能给一个）。" +
   "给了就不收 time：读回那一帧的 g_Time 取时间线（或 times）的末项";
 /** `particle_corners` 的回放：不渲染，没有 `fr`。 */
 const REPLAY = z.union([TIMELINE_REPLAY.strict(), PARTICLES_REPLAY.strict()]).describe(REPLAY_TEXT);
@@ -643,17 +666,19 @@ export function resolveReplay(
 } {
   if ("particles" in replay) {
     const { random: given, ...p } = replay.particles;
+    checkSeedExclusive(p.seed, p.mt19937);
     const random = resolveRandom(root, given);
     return {
       particles: { ...p, ...(random ? { random } : {}) },
       timeline: null,
       lines: [
-        `回放：直接给的 ${p.dts.length} 帧 dt${p.times ? "（带 times）" : "（g_Time 按 dt 累加）"}；seed ${p.seed ?? 1}；passes ${p.passes ?? 1}` +
+        `回放：直接给的 ${p.dts.length} 帧 dt${p.times ? "（带 times）" : "（g_Time 按 dt 累加）"}；${randomText(p.seed, p.mt19937)}；passes ${p.passes ?? 1}` +
           (random ? `；random 顶替 ${Object.keys(random).join("、")} 号对象的 R` : ""),
       ],
     };
   }
   const source = replay.timeline;
+  checkSeedExclusive(replay.seed, replay.mt19937);
   const timeline = timelineFor(root, source);
   const passes = passesFor(replay.passes, timeline);
   const random = resolveRandom(root, replay.random);
@@ -662,6 +687,7 @@ export function resolveReplay(
     times: timeline.times,
     passes: passes.passes,
     ...(replay.seed !== undefined ? { seed: replay.seed } : {}),
+    ...(replay.mt19937 !== undefined ? { mt19937: replay.mt19937 } : {}),
     ...(random ? { random } : {}),
     // 逐帧频谱（P11a）：录制按帧号对齐好的
     ...(timeline.audio ? { audio: timeline.audio.frames } : {}),
@@ -674,7 +700,7 @@ export function resolveReplay(
     ...(window ? { window } : {}),
     lines: [
       describeTimeline(timeline),
-      `${passes.line}；seed ${replay.seed ?? 1}${random ? `；random 顶替 ${Object.keys(random).join("、")} 号对象的 R` : ""}`,
+      `${passes.line}；${randomText(replay.seed, replay.mt19937)}${random ? `；random 顶替 ${Object.keys(random).join("、")} 号对象的 R` : ""}`,
     ],
   };
 }
@@ -1364,6 +1390,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         userTexturesLine(response.meta) ?? "",
         `像素摘要（RGBA）${response.meta.sha256}，原图 PNG 文件 sha256 ${response.pngSha256}`,
         `读回那一帧 g_Time ${response.meta.time}，g_Frametime ${response.meta.frametime}`,
+        response.meta.particleRandom ? `粒子随机源（探针回报）：${response.meta.particleRandom}` : "",
         particleStatsLine(response.meta) ?? "",
       ].filter(Boolean),
       tail: [JSON.stringify(response.meta, null, 2)],
@@ -1691,13 +1718,15 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
           "operator 遍数；缺省按标签里的 fps<N> 推（1–20 两遍，否则一遍），推不出就 1",
         ),
         seed: SEED.optional(),
+        mt19937: MT19937.optional(),
         random: RANDOM.optional(),
         host: z.string().optional().describe("用已开的宿主句柄"),
         out: OUT,
         overwrite: OVERWRITE,
       },
     },
-    async ({ imageId, timeline: source, frames, passes, seed, random: given, host, out, overwrite }) => {
+    async ({ imageId, timeline: source, frames, passes, seed, mt19937, random: given, host, out, overwrite }) => {
+      checkSeedExclusive(seed, mt19937);
       const abs = resolvePath(root, out);
       if (!overwrite && existsSync(abs)) throw new ToolError("local", `${abs} 已存在：换个路径，或传 overwrite: true`);
       const random = resolveRandom(root, given);
@@ -1718,6 +1747,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         frames: wanted,
         passes: resolvedPasses.passes,
         ...(seed !== undefined ? { seed } : {}),
+        ...(mt19937 !== undefined ? { mt19937 } : {}),
         ...(random ? { random } : {}),
         // 逐帧频谱（P11a）：粒子读其中的 16 段
         ...(timeline.audio ? { audio: timeline.audio.frames } : {}),
@@ -1735,7 +1765,7 @@ export function registerTools(server: McpServer, deps: DevMcpDeps): void {
         `轨迹：${result.project}（图片 ${imageId}，标签 ${result.tag || "无"}），${result.frames.length} 帧（${frameRanges(result.frames.map((f) => f.frame))}）× ${systems.size} 个系统`,
         `已写入：${file}（${Buffer.byteLength(text)} 字节）`,
         describeTimeline(timeline),
-        `${resolvedPasses.line}；seed ${seed ?? 1}${random ? `；random 顶替 ${Object.keys(random).join("、")} 号对象的 R` : ""}`,
+        `${resolvedPasses.line}；${randomText(seed, mt19937)}${random ? `；random 顶替 ${Object.keys(random).join("、")} 号对象的 R` : ""}`,
         hostLine,
         "",
         ...summarizeTrack(result),

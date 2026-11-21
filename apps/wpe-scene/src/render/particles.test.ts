@@ -945,6 +945,32 @@ describe("GpuScene：粒子绘制（假设备）", () => {
     expect(() => replayParticleOptions({ dts: [] }, withImage.layers)).not.toThrow();
   });
 
+  it("mt19937（P4j 步骤 4a）：replayParticleOptions 只带 mt19937 不带 seed；两个粒子层共用一串，和各取 seed + i 不同；不给时不变", async () => {
+    const json = { animationmode: "randomframe" };
+    const bundle = bundleOf([particleLayer(1, json), particleLayer(2, json)]);
+    expect(replayParticleOptions({ dts: [], mt19937: 7 }, bundle.layers)).toMatchObject({ mt19937: 7 });
+    expect(replayParticleOptions({ dts: [], mt19937: 7 }, bundle.layers)).not.toHaveProperty("seed");
+    expect(replayParticleOptions({ dts: [] }, bundle.layers)).toMatchObject({ seed: 1 });
+    expect(() => replayParticleOptions({ dts: [], mt19937: 7, seed: 1 }, bundle.layers)).toThrow(/只能给一个/);
+    for (const bad of [-1, 1.5, 2 ** 32])
+      expect(() => replayParticleOptions({ dts: [], mt19937: bad }, bundle.layers)).toThrow(
+        /mt19937 要是 0–4294967295/,
+      );
+    const randoms = async (particles: ParticleOptions) => {
+      const { scene, state } = await open(bundle, particles);
+      stepFrame(scene, frame(0.35), state);
+      return [1, 2].map((object) =>
+        Array.from(particleDraw(scene, object).particles!.system.columns.random.subarray(0, 3)),
+      );
+    };
+    const shared = await randoms(replayParticleOptions({ dts: [], mt19937: 7 }, bundle.layers));
+    expect(await randoms(replayParticleOptions({ dts: [], mt19937: 7 }, bundle.layers))).toEqual(shared);
+    const separate = await randoms({ seed: 7 });
+    expect(shared).not.toEqual(separate);
+    // 两层从同一串里依次取，所以第二层不是第一层的同一串
+    expect(shared[0]).not.toEqual(shared[1]);
+  });
+
   it("不可见的粒子层不画、不发射，存活粒子清空；重新可见后照常发射（P4a 步骤 5，C8）", async () => {
     const { gpu, state, scene } = await open(bundleOf([imageLayer(0), particleLayer(1, {}, { visibleBound: true })]));
     stepFrame(scene, frame(0.5), state);

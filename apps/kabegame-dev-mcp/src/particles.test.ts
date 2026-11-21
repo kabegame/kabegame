@@ -1133,6 +1133,71 @@ describe("轨迹与四角", () => {
     });
   });
 
+  test("replay.mt19937（P4j 步骤 4a）：两种回放写法原样转给 REST，摘要写随机源；和 seed 同给、越界报错且不发请求", async () => {
+    await withMcp(async (call, _root, rest) => {
+      const viaTimeline = await call("render_scene", { imageId: 9, replay: { timeline: TIMELINE, mt19937: 1007 } });
+      assert.notEqual(viaTimeline.isError, true, textOf(viaTimeline));
+      const [body] = bodiesOf(rest, "/render");
+      assert.deepEqual(body.particles, {
+        dts: [0.1, 0.1, 0.1, 0.25, 0.25],
+        times: [0.1, 0.2, 0.3, 0.45, 0.55],
+        passes: 1,
+        mt19937: 1007,
+      });
+      assert.equal("seed" in (body.particles as object), false);
+      assert.match(textOf(viaTimeline), /passes 1（标签 p4c-cp-fps60[^\n]*；mt19937 1007（全场粒子系统共用一串）/);
+
+      const particles = { dts: [0.1, 0.2], mt19937: 4294967295 };
+      const direct = await call("host_render", { handle: "h-7", imageId: "9", replay: { particles } });
+      assert.notEqual(direct.isError, true, textOf(direct));
+      assert.deepEqual(bodiesOf(rest, "/hosts/h-7/render")[0].particles as object, particles);
+      assert.match(
+        textOf(direct),
+        /回放：直接给的 2 帧 dt（g_Time 按 dt 累加）；mt19937 4294967295（全场粒子系统共用一串）；passes 1/,
+      );
+
+      const corners = await call("particle_corners", {
+        imageId: "13815",
+        replay: { particles: { dts: [0.1], mt19937: 5489 } },
+        out: "c.json",
+      });
+      assert.notEqual(corners.isError, true, textOf(corners));
+      assert.deepEqual(bodiesOf(rest, "/particle-corners")[0], {
+        imageId: "13815",
+        particles: { dts: [0.1], mt19937: 5489 },
+      });
+
+      const track = await call("particle_track", {
+        imageId: "9",
+        timeline: { log: "out/p4b-fps10-log.txt", frame: 3 },
+        frames: [3],
+        mt19937: 7,
+        out: "t.json",
+      });
+      assert.notEqual(track.isError, true, textOf(track));
+      const trackBody = bodiesOf(rest, "/particle-track")[0];
+      assert.equal(trackBody.mt19937, 7);
+      assert.equal("seed" in trackBody, false);
+      assert.match(textOf(track), /mt19937 7（全场粒子系统共用一串）/);
+
+      const before = rest.seen.length;
+      for (const [tool, args] of [
+        ["render_scene", { imageId: 9, replay: { timeline: TIMELINE, mt19937: 1, seed: 1 } }],
+        ["host_render", { handle: "h-7", imageId: "9", replay: { particles: { dts: [0.1], mt19937: 1, seed: 1 } } }],
+        ["particle_track", { imageId: "9", timeline: TIMELINE, mt19937: 1, seed: 1, out: "t2.json" }],
+      ] as const) {
+        const both = await call(tool, args);
+        assert.equal(both.isError, true, tool);
+        assert.match(textOf(both), /^\[local\][^\n]*\nseed 与 mt19937 只能给一个/, tool);
+      }
+      for (const mt19937 of [-1, 1.5, 4294967296]) {
+        const bad = await call("render_scene", { imageId: 9, replay: { timeline: TIMELINE, mt19937 } });
+        assert.equal(bad.isError, true, `mt19937 ${mt19937} 被 schema 拒绝`);
+      }
+      assert.equal(rest.seen.length, before, "参数错时不发请求");
+    });
+  });
+
   test("particle_corners：转参数、写 out、摘要列前 3 个粒子的像素角；不给 replay 时是预热后的状态", async () => {
     await withMcp(async (call, root, rest) => {
       const dts = Array(720).fill(1 / 60);

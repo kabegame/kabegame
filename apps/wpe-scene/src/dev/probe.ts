@@ -124,6 +124,7 @@ import {
   probeCameraObjects,
   probePerspective,
   replayParticleOptions,
+  replayRandomLine,
   replayReadback,
   type ParticleReplay,
 } from "./particleCorners";
@@ -365,7 +366,8 @@ export interface RenderFrameOptions {
    */
   profile?: number;
   /**
-   * 确定性粒子回放（P4a 步骤 4）：种子固定（缺省 1，第 i 个粒子层用 `seed + i`，同 `particleTrack`）、遍数固定（缺省 1）；
+   * 确定性粒子回放（P4a 步骤 4）：种子固定（缺省 1，第 i 个粒子层用 `seed + i`，同 `particleTrack`；或 P4j 步骤 4a 的 `mt19937`：全场共用一个
+   * 标准 std::mt19937，不和 `seed` 同给，结果的 `particleRandom` 写用了哪个）、遍数固定（缺省 1）；
    * 建场景（含预热）后按 `dts` 步进，`dts[0]` 是第 1 帧，最后一帧就是读回的那一帧，`g_Time` 取 `times`（P4b 步骤 4，和 WPE
    * 比时填日志的 `runtime` 列），没给时用 dt 的累计值；粒子的场景时间 `T` 与它同一个值。
    * 不传时种子同样固定为 1、不步进，画的是预热后的状态。
@@ -471,6 +473,8 @@ export interface RenderFrameResult {
   frametime: number;
   /** 各粒子层读回时的数量：存活数（即画了几个）、高水位、容量，以及分布（位置范围、尺寸、alpha，`summarizeParticles`）。 */
   particles: ReturnType<GpuScene["particleStats"]>;
+  /** 回放用的随机源一行说明（P4j 步骤 4a，`replayRandomLine`：`std::mt19937(种子)` 全场共用，或 `seed + i`）；只在给了 `particles` 时有。 */
+  particleRandom?: string;
   /** 每一项脚本值写没写进状态（`applied`；跳过时带 `reason`），顺序同请求；没给 `scriptValues` 时空数组。 */
   scriptValues: ScriptValueResult[];
   /**
@@ -1246,6 +1250,7 @@ async function renderFramePass(
         time,
         frametime,
         particles: scene.particleStats(true),
+        ...(options.particles ? { particleRandom: replayRandomLine(options.particles) } : {}),
         scriptValues,
         animations: animations?.probe().list ?? [],
         ...(textSyncs === undefined ? {} : { textSyncs }),
@@ -1634,6 +1639,8 @@ export interface ParticleTrackProbeOptions {
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。 */
   passes: 1 | 2;
   seed?: number;
+  /** 全场共用一个 `std::mt19937(种子)`（P4j 步骤 4a），同 `renderFrame` 的 `particles.mt19937`；不和 `seed` 同给。 */
+  mt19937?: number;
   /** 按 `objects` 下标、按出生顺序顶替 `R`，同 `renderFrame` 的 `particles.random`。 */
   random?: Record<number, number[]>;
   /**
@@ -1686,6 +1693,7 @@ export async function particleTrackProbe(options: ParticleTrackProbeOptions): Pr
       frames: options.frames,
       passes: options.passes,
       seed: options.seed,
+      mt19937: options.mt19937,
       random: options.random,
       audio: options.audio,
       // 窗口归一化 → 光标下的场景纹理坐标（P5a 收尾，换算放在 dev 里，`particles/track.ts` 只收场景坐标）

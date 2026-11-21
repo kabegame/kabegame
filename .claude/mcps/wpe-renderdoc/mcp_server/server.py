@@ -620,7 +620,7 @@ def ensure_running() -> dict:
 
 @mcp.tool
 def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20, borderless: bool | None = None,
-                   x: int | None = None, y: int | None = None) -> dict:
+                   x: int | None = None, y: int | None = None, seed: int | None = None) -> dict:
     """
     在本会话自己的测试窗口里打开一个工程（-playInWindow），先 ensure_running。
 
@@ -631,12 +631,17 @@ def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20, borde
         borderless: 无边框窗口（WPE 的 -borderless，窗口 = 客户区 = size）。不给时自动：带边框的窗口放不进显示器
             工作区（如 4K 屏上要 3840x2160）就用无边框，否则带边框（系统会把放不下的窗口压小，客户区跟着变小）
         x, y: 窗口左上角（物理像素，两个都给或都不给）。无边框时缺省为显示器左上角
+        seed: 可选，0 … 4294967295 的整数。开窗前给 WPE 挂一次性的 Frida 钩子，把下一个新建的场景渲染器的 MT19937
+            种子换成它，让 WPE 与 Kabegame 的回放吃同一串随机数（逐粒子对照随机发射；回放侧用 `std::mt19937(种子)`：
+            kabegame-dev 的 `replay.mt19937`、kbp 的 `mt19937`）。只换本次开窗新建的那个渲染器，一次性；桌面壁纸与别的窗口
+            不受影响。开窗期间握着窗口表锁，挡住别的会话开窗；命中后读回 x[0]、x[1] 核对，没命中或核对不过就关窗报错。
+            结果加 seed: {value, tid, x0, x1, ok, old}（有人在握锁期间用窗口表之外的办法开了窗口时带 others_opened）
 
     返回窗口名（kb-<MCP 进程号>-<序号>）、hwnd、窗口与客户区矩形（物理像素）、开窗前的日志游标（给 log_since）、
     placement（用没用无边框、是不是自动选的、扣掉的边框厚度与 DPI、实际发给 WPE 的尺寸），以及前台有没有被它拿走。
     """
     return wpe_session.open_wallpaper(project, size, wait, ensure=wpe_ensure.ensure_running, borderless=borderless,
-                                      x=x, y=y)
+                                      x=x, y=y, seed=seed)
 
 
 @mcp.tool
@@ -820,7 +825,8 @@ def capture(window: str, out: str, frames: int = 3, tag: str | None = None, time
 @mcp.tool
 def capture_wallpaper(project: str, out: str, frames: int = 3, size: str = "1280x720", wait: float = 8,
                       tag: str | None = None, log_grep: str | None = None, open_first: bool = True,
-                      borderless: bool | None = None, x: int | None = None, y: int | None = None) -> dict:
+                      borderless: bool | None = None, x: int | None = None, y: int | None = None,
+                      seed: int | None = None) -> dict:
     """
     一步抓一张壁纸的对照帧：ensure_running → 开本会话的测试窗口 → 等 wait 秒让场景加载 → capture → 关窗 →
     截日志 → open_first 时在本会话的回放进程里打开第一张（之后直接调 get_draw_calls 等回放工具）。
@@ -836,12 +842,17 @@ def capture_wallpaper(project: str, out: str, frames: int = 3, size: str = "1280
         log_grep: 日志只要匹配这个正则的行（如 "\\[kbp\\]"）
         open_first: 抓完在本会话回放进程里打开第一张
         borderless, x, y: 同 open_wallpaper（不给 borderless 时放不下就自动用无边框）
+        seed: 可选，0 … 4294967295 的整数。开窗前给 WPE 挂一次性的 Frida 钩子，把下一个新建的场景渲染器的 MT19937
+            种子换成它，让 WPE 与 Kabegame 的回放吃同一串随机数（逐粒子对照随机发射；回放侧用 `std::mt19937(种子)`：
+            kabegame-dev 的 `replay.mt19937`、kbp 的 `mt19937`）。只换本次开窗新建的那个渲染器，一次性；桌面壁纸与别的窗口
+            不受影响。开窗期间握着窗口表锁，挡住别的会话开窗；命中后读回 x[0]、x[1] 核对，没命中或核对不过就关窗报错。
+            结果加 seed: {value, tid, x0, x1, ok, old}（有人在握锁期间用窗口表之外的办法开了窗口时带 others_opened）
 
     返回窗口、capture 的结果、关窗结果、日志（从开窗前截起，含加载期的报错；各会话共用，同时开着别的窗口时会混进
     别人的行）、打开的抓帧。
     """
     return wpe_capture.capture_wallpaper(worker, project, out, frames, size, wait, tag, log_grep, open_first,
-                                         ensure=wpe_ensure.ensure_running, borderless=borderless, x=x, y=y)
+                                         ensure=wpe_ensure.ensure_running, borderless=borderless, x=x, y=y, seed=seed)
 
 
 @mcp.tool
@@ -849,10 +860,11 @@ def capture_sweep(jobs: list[dict[str, Any]], out_root: str, log_dir: str | None
     """
     一组「工程 × 帧数 × 设置」依次抓完（每个 job 一次 capture_wallpaper，不打开抓帧），抓帧放 out_root\\<tag>。
 
-    - jobs：[{project, frames?=3, size?="1280x720", wait?=8, settings?, tag?, borderless?, x?, y?}]。settings 是
+    - jobs：[{project, frames?=3, size?="1280x720", wait?=8, settings?, tag?, borderless?, x?, y?, seed?}]。settings 是
       get_settings 列出的键（如 {"fps": 60}），没给的键取扫描开始时的值；tag 缺省为「工程名-键值…[-尺寸]」，如
       p4c-attract-fps60。borderless / x / y 同 open_wallpaper（不给 borderless 时放不下就自动用无边框，结果里的
-      borderless 项列出扣掉的边框）。
+      borderless 项列出扣掉的边框）。seed 同 capture_wallpaper（每个 job 各自换种子，逐 job 的 seed 项报
+      {value, tid, x0, x1, ok}；某个 job 没命中或核对不过，该 job 报错、扫描继续）。
     - 按 settings 分组、相同的连在一起；和当前设置一样的那组先跑。要改设置时调 restart_wpe（有别的会话的窗口、外来窗口
       或设置界面开着就拒绝，整次扫描停下报告）；全部跑完后，改过的再 restart_wpe 改回扫描开始时的值。
     - log_dir 给了就照 ignore/p4/sweep_b.py 写 <tag>-log.txt（含 [kbp] 的行）和 <tag>-errors.txt（含 error、不含 [kbp]

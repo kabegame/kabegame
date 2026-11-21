@@ -197,7 +197,7 @@ import {
   type OrthographicCameraFrame,
   type PerspectiveCameraFrame,
 } from "./camera";
-import { SeededRandom, type ParticleROverride } from "../particles/random";
+import { mt19937, SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
 import { ParticleSystem, particleNode, particlePasses } from "../particles/system";
@@ -781,6 +781,12 @@ export interface ParticleOptions {
   fps?: number;
   /** 随机种子：第 i 个粒子层（`bundle.layers` 里带 `particle` 的，按顺序）用 `seed + i`，同 `particles/track.ts`。缺省随机。 */
   seed?: number;
+  /**
+   * 全场共用一个标准 `std::mt19937(种子)`（P4j 步骤 4a，只给 dev 回放用）：全部粒子树（含运行中新建的）共用一个 `SeededRandom(mt19937(种子))`，
+   * 按建树 / 步进顺序（对象表顺序）从同一串里取，同 WPE 一个场景一个随机引擎；用于和「WPE 侧换成同一种子」的抓帧逐值对照
+   * （`wpe-renderdoc` 的 `seed`）。不和 `seed` 同给；不给时照旧 `seed + 序号`，逐字节不变。
+   */
+  mt19937?: number;
   /**
    * 按粒子层（`objects` 下标）给出生时 `R` 的替换（`ParticleROverride`），每建一个模拟器调一次。只给 dev 探针用（`renderFrame` 的
    * `particles.random`，替换的实现在探针侧），产品路径不传。
@@ -1640,6 +1646,11 @@ export class GpuScene {
   /** 宿主的帧上限（`ParticleOptions.fps`，运行中由 `setFrameRate` 改）：rope 的 `TL`、`TP0`（`writeRopeSegments`）。 */
   private particleFps: number;
   private readonly particleSeed: number;
+  /**
+   * 全场共用的随机源（P4j 步骤 4a，`ParticleOptions.mt19937`）：给了时每个粒子树（含运行中新建的）都用它，不再按 `particleSeed + 序号` 各取一个；
+   * 没给为 null。
+   */
+  private readonly particleShared: SeededRandom | null;
   private readonly particleROverride: ParticleOptions["rOverride"];
   /**
    * 全部粒子层共用的 16 段频谱（P4e 步骤 4，`ParticleOptions.audio`）：建树时交给每个根系统（`ParticleSystem.setAudio`，子系统与实例沿用），
@@ -1835,6 +1846,9 @@ export class GpuScene {
     this.particlePasses = particles.passes ?? 1;
     this.particleFps = particles.fps ?? 60;
     this.particleSeed = particles.seed ?? Math.floor(Math.random() * 2 ** 32);
+    if (particles.mt19937 !== undefined && particles.seed !== undefined)
+      throw new Error("ParticleOptions 的 mt19937 与 seed 只能给一个");
+    this.particleShared = particles.mt19937 === undefined ? null : new SeededRandom(mt19937(particles.mt19937));
     this.particleROverride = particles.rOverride;
     this.particleCursor = particles.cursor ?? [0.5, 0.5];
     this.cursorCrop = particles.cursorCrop ?? null;
@@ -4581,7 +4595,7 @@ export class GpuScene {
     const ordinal = this.particleOrdinals.get(layer.object) ?? 0;
     const system = new ParticleSystem(
       def,
-      new SeededRandom((this.particleSeed + ordinal) >>> 0),
+      this.particleShared ?? new SeededRandom((this.particleSeed + ordinal) >>> 0),
       this.particlePasses,
       this.particleROverride?.(layer.object),
     );

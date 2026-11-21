@@ -1883,6 +1883,65 @@ P4i 放行粒子光照：粒子材质的 `LIGHTING`（材质写的或着色器�
 - 单测 `compile/p4i1.test.ts`（假翻译器与真翻译器：`3823357259` 的光晕材质原样、点光、rope）；变异检查 4 处全部检出（`ignore/p4/i1/mutate_i1.py`）。
 - 覆盖：语料不变（0 张用到）；myprojects 的 `3823357259` 不支持项从 1 项到 0 项。
 
+## 粒子（P4j）
+
+P4j 补发射器 `layerimage`（类型 3）：粒子的出生点不在球 / 盒里随机，而是在**另一个图层的画面**上按像素抽。被抽的图层由粒子对象的 `dependencies` 指定（`{id, type: "emitterimage", index, mask}`）。语料里没有别的场景用到，起因是 WPE `myprojects` 的 `3834803915`（战锤 40k 雨景：水花落在人物身上，人物的遮罩图层 229 就是候选区）。
+
+表是 **GPU 读回**来的：WPE 把被依赖图层的合成 RT 用 WPE 原件 `materials/util/downsample_quarter` 降到约 1/4，读回后 alpha ≥ 127 的像素按列优先入表，每颗粒子用场景的 MT19937 无偏地抽一项。所以我们这边分三块：编译期解析依赖并绑定（`compile/dependencies.ts`）、运行时建表（`particles/layerImage.ts` 的状态机 + `render/emitterImages.ts` 的降采样与读回）、按表发射（`particles/emitters.ts` 的 `layerImage`）。
+
+依据：读码 [rea-p4j-layerimage](../../.claude/plans/wpe-import/3-scene/phase4/rea-p4j-layerimage.md)；确定性工程的实测 [报告](../../.claude/plans/wpe-import/3-scene/phase4/p4-particles-REPORT.md)「P4j 语义的实测核对」（读码各条都成立，一处更正）；验收数据 [子计划](../../.claude/plans/wpe-import/3-scene/phase4/phase-4j-layerimage.md)「步骤 0–4 实施记录」。
+
+### 依赖与绑定（编译期）
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 依赖的三道门 | `id` 是 uint64、`index` 是 uint32 且不能缺、`type` 是字符串，大小写敏感：`emitterimage` → 1、`collisionmodel` → 3，别的丢掉 | 读码 1.4 |
+| 并集 | 过了门的 `id` 进对象依赖的并集（同图层依赖，「图层依赖」一节），被引用的图层强制走合成路径、隐藏也画 | 读码 1.4 第 8 条（更正 rea-p8-render） |
+| 槽 | `index` 是本系统里同类型槽的序号，子系统各自从 0 数；同槽多条取**最后一条**；`id 0` 永远绑不上 | 读码 1.5 |
+| `mask` | 纹理路径，降采样时 `mask.r` 乘 alpha（材质加 `OPACITYMASK`）；读不到时退回不带遮罩的变体 | 读码 2.3 |
+| 照报 | 被引用的是 puppet（`particle:layerimage:puppet`，骨骼号的分配没读全）或文本层（`particle:layerimage:text`）；运行中新建的、场景里第一个用发射图的粒子对象报 `particle:layerimage:runtime`（片段没有场景级增量通道，同 `bloom`）；`collisionmodel` 只进并集，用它的 operator 照报 `particle:operator:collisionmodel`；引用的对象不存在或别的类型时中性（WPE 永远不发） | 用户 2026-11-21 定 |
+
+### 发射器的键
+
+`speedmin` 0.1、`speedmax` 0.2、`offsetmin` / `offsetmax`（正交 ±5 5 0、透视 0）；`flags` 缺省 **0x10000**，四个位：0x10000 颜色乘像素、0x20000 每秒重建表、0x40000 出生速度取像素点的移动速度、0x80000 三轴抖动；这四个位与发射器通用的低 3 位之外的位照报。
+
+### 候选表（运行时）
+
+- **尺寸**：被依赖图层的合成 RT 宽或高超过 3840 × 2160 时先按宽高比压（float32、截断），`w4 = max(2, W′/4)`、`h4 = max(2, H′/4)`；降采样画到 RGBA8 的 `w4 × h4`（`WRITEALPHA`，有 `mask` 时加 `OPACITYMASK`）。GPU 上正好 `.5` 的值往下取（127.5 → 127）。
+- **建表**：`s = W / w4`（只算 x 方向，y 也用它）；x 外层、y 内层，alpha < 127 跳过，一项一个像素：`x′ = trunc((s·x − (W >> 1)) + s/2)`，y 同式（`H >> 1`），逐步 float32。表项另存像素 rgb。
+- **状态机**（每个 `(id, mask)` 一条共享记录）：过门 → 渲染拷贝 → 读回建表，前两个发射帧不发、**不记欠账**；预热只过门，所以有 `starttime` 预热时只丢 1 个发射帧（实测更正）。同一帧里后调的发射器接着推进同一条记录，比先调的早一帧拿到表。
+- **快照时机**：每帧末对过了门的记录拍快照；状态 0 锁定**上一帧末**的快照（没有就是本帧末）。
+- **`0x20000`**：计时器在**每个发射器**上（`rec+0x7c`），严格大于 1 时取 `fmodf`、让共享记录重建；重建期间照用旧表。
+- **产品与回放的差别**：WebGPU 的读回是异步的（`mapAsync`），WPE 是第 3 个发射帧同步 `Map`。产品里表晚到就晚几帧开始发射（**已知差异**，只影响开场几帧）；dev 探针回放时每帧等读回，和 WPE 同帧。
+
+### 每颗粒子
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 数量 | 同 `sphererandom`（存活 < 容量才算、发射欠账）；没拿到表时整批丢掉 | 读码 3.1、rea-p4b A1 |
+| 抽取顺序 | 表项下标（MSVC `uniform_int_distribution`：Lemire 乘法加拒绝，每次取一个原始 u32，`uniformIndex`）→ 抖动 x、y、z（`0x80000`，各一次 `uA`）→ 速率（`0x40000`，一次 `uA`）→ 照常的 `R` 与各 initializer；全部从系统的同一个随机源取 | 读码 3.3、3.10 |
+| 出生点 | `P = A·p`，`p = (x′ + jx, −y′ + jy, jz)`；`A` 本地系统是 `M⁻¹·L`、世界系统是 `L`。`L` 是被依赖图层本帧的绘制矩阵（世界矩阵含父链、`angles`、`scale`，再右乘 `alignment` 偏移），只在状态 2 与建表时刷新进记录；`M⁻¹` 照 GLM 的 4×4 求逆（float32），乘法按 3.5 的括号顺序 | 读码 3.2–3.5 |
+| 颜色（`0x10000`） | 实例颜色先乘 `像素 / 255`（float32），再进 initializer | 读码 3.6 |
+| 速度（`0x40000`） | 用**上一次取到表时**的 `L`（`rec[0xb8]`，每个发射器一份，初值单位阵，取到表的发射帧末尾写回）算出生点在这一帧里的移动，除以不含实例 `rate` 的帧时间，再乘 `uA·(speedmax − speedmin) + speedmin`；第一次取到表那帧是单位阵，速度会异常大，同 WPE | 读码 3.7 |
+| 传给 initializer 的 `M3` | 本地系统单位阵，世界系统 `mat3(M)` | 读码 3.2 |
+
+### 注入 WPE 的随机数（步骤 4）
+
+WPE 一个场景只有一个 MT19937（按时间播种，播种只在渲染器构造里一处，取数没有内联副本），粒子的全部随机抽取都从它来。随机发射只有让两边吃同一串随机数才能逐颗比，所以做成了工具（用户 2026-11-21 要求）：
+- **WPE 侧**：`wpe-renderdoc` MCP 的 `open_wallpaper` / `capture_wallpaper` / `capture_sweep` 的 `seed`。开窗之前用 Frida 在 `wallpaper64.exe+0x17D6BC`（`mov [rdi+0x1cd4], edx`）把种子换掉，一次性，命中后读回 `x[0]`、`x[1]` 核对（见 MCP 的 README「换随机数种子」）。
+- **我们这边**：dev 探针与 kabegame-dev MCP 的 `replay.mt19937`、kbp 回放的 `mt19937`：全场所有粒子系统（含子系统与事件实例）共用一个 `SeededRandom(mt19937(种子))`，预热与每帧步进都按对象表顺序从同一串里取（`ParticleOptions.mt19937`，只给 dev 用，产品路径不引用）。
+- **管不到的**：场景脚本的 `Math.random`（V8 自己的）、`hsvcolorrandom` 的档位（CRT `rand()`）。流程见 kbp-tools SKILL「注入 WPE 的随机数」。
+
+### 验收与覆盖
+
+- **确定性工程**（`ignore/p4/defs/p4j0.py`：`p4j-li-map` / `-xform` / `-large` / `-jit` / `-move` / `-flags0`，WPE 侧各注入种子 1001–1006，参照在 `A:\p4j\`）：回放案例 `ignore/p4/cases/j3.json`，6 个工程 8 个系统、7778 颗逐颗对上，逐帧粒子数相同，位置、颜色、尺寸逐位相同（`li-move` 位置差 1.2e-4，脚本移动图层的 `sin`）；候选表和参考模型 `ignore/p4/j0/model.py` 的预测逐项相同（`li-large` 8381 项连颜色 SHA-256 一致）。
+- **雨景走查**（FINAL_CHECK，解包副本 `ignore/p4/proj/3834803915-kbp`，WPE 注入种子 1007，252–254 帧，1920×1080）：三个粒子系统的逐帧数量（含水花的事件实例 59 / 63 / 63）全部相同；整帧差异逐个落到 draw 与数值，都不是 P4j 的问题：
+  - 人物头部一块：对象 10 `rotate2dmask` 的 `noisevalue` 来自 SharedNoise 脚本的 `Math.random()`；
+  - 一条离镜头很近的透视雨滴错开不到 1 像素：位置相对差 ≤ 4.3e-4，近似倒数不复刻，透视放大；
+  - 一个水花环暗一半：`t = 0.49999` 卡在 `fadeintime` 0.5 的边上，`alphafade` 的按位或（照抄的 WPE 缺陷）把 `rcpps` 的末位差放大。
+- **变异检查**：步骤 1 9 处、2 7 处、3 6 处、4 4 处，全部检出（`ignore/p4/j1/`–`j4/` 的 `mutate_*.py`）。
+- **覆盖**：缺省 233 张不变（0 张用到）；myprojects 的 `3834803915` 不支持项从 2 项（`particle:dependencies`、`particle:emitter:layerimage`）到 0 项。
+
 ## 音频频谱 uniform（P11a）
 
 六个 `g_AudioSpectrum{16,32,64}{Left,Right}` 就是场景频谱（上一节的 `SceneSpectrum`）的三块左右声道。WPE 每次绘制把渲染线程归一化好的数组按 `4n`

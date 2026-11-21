@@ -723,4 +723,115 @@ if (emitter.name === "layerimage") {
   - 「下标不做拒绝」只有单测能检出：表长几十到几千时拒绝概率约 1e-8，抓帧里没发生过。
 - **语料**：缺省 233 张 0 变化；`3834803915` 0 项。
 
-**遗留：** 执行代理误建了一个空文件 `D:	mp_edit.py`，它删的时候被权限拒了，已告诉用户手动删。
+**遗留：** 执行代理误建了一个空文件 `D:\tmp_edit.py`，它删的时候被权限拒了，已告诉用户手动删。
+
+**用户 2026-11-21：** 步骤 3 可以提交（`033a195d`），做步骤 4。
+
+## 步骤 4 — 注入工具落地与雨景走查
+
+### 总体设计思路
+
+步骤 0 证明了 WPE 的随机数可以换成约定种子：Frida 在渲染器构造里换种子，我们用同一种子的 `std::mt19937`。当时是手工流程：
+- WPE 侧：一个独立脚本，先挂钩再开窗；
+- 我们侧：每个回放案例自己写钩子。
+
+这一步把它做成工具，三处各自从「种子」这一个参数出发，下游都不用知道 Frida 或 MT19937 的细节：
+
+- **WPE 侧**（`wpe-renderdoc` MCP）：`open_wallpaper`、`capture_wallpaper`、`capture_sweep` 的 job 加 `seed`。
+  - 给了就在开窗**之前**挂上一次性的换种子钩子，命中后读回 `x[0]`、`x[1]` 核对，结果里报出（线程号、种子、核对结果）。
+  - 没命中或核对失败照报、不静默。
+  - Frida 驱动放在 `frida_input/` 那个已有的 uv 工程里。
+- **回放侧**：
+  - 产品源码的 dev 部分：`GpuScene` 与 `particleTrack` 收 `mt19937` 种子，**全场所有粒子系统共用一个** `SeededRandom(mt19937(种子))`。它们在预热（建树）与 `stepParticles` 里都按对象表顺序推进，和 WPE 一个场景一个引擎、按对象顺序更新相同。
+  - `kabegame-dev` MCP 的 `render_scene` / `particle_track` / `particle_corners` 与 `renderFrames.ts` 把 `replay.mt19937` 转给探针。
+  - kbp 回放的 run 加 `mt19937: 种子`，内置成共用随机源，步骤 0、3 的钩子里手写的那份可以去掉。
+
+**雨景走查**用步骤 0 抓的 `3834803915-kbp-fps20-1920x1080-s1007`（解包副本、注入种子 1007、三帧），按 FINAL_CHECK 的做法：
+- 探针按日志时间线、种子 1007、跑脚本，回放到抓帧那一帧；
+- 整帧和 WPE 比，有差就定位到 draw 和数值。
+
+场景里三个粒子系统共用一串：两层透视雨 197、215，与水花 188（`eventspawn` 子系统）。所以这一步也验证多系统共用随机源的顺序，以及事件子系统里的抽取。
+
+### 现状锚点
+
+**a. 回放的随机源**（`render/scene.ts` 建树处）
+```ts
+new SeededRandom((this.particleSeed + ordinal) >>> 0)   // 现状：每个粒子层一个种子 seed + i，互不相干
+```
+`particles/track.ts` 同样 `new SeededRandom(seed + systems.length)`。
+
+**b. 钩子里的 MT19937**（`ignore/p4/cases/j0rng.hook.ts`）：`mt19937(seed)` 只在 kbp 钩子里。
+
+**c. WPE 侧**：`ignore/p4/j0/rng/seed.py` 是手工脚本，命中即 `os._exit`（在 `unload` 里卡住过一次）。
+
+### 4a — 回放侧
+
+- **新增** `particles/random.ts` 的 `mt19937(seed): Uint32Source`：标准 `std::mt19937`，挪自钩子，自检值 `mt19937(5489)` 第一个是 3499211612、第 10000 个是 4123659995。
+- **修改** `GpuScene` 构造选项：加 `particleMt19937?: number`。给了时全部粒子树共用一个 `SeededRandom(mt19937(种子))`，不给时照旧 `seed + i`。
+- **修改** dev 探针：`renderFrame` / `particleTrack` / `particleCorners` 的回放选项加 `mt19937`，和 `seed` 互斥；结果里写一行用的随机源。
+- **修改** `particles/track.ts`：同样共用一个源。
+- **修改** `apps/kabegame-dev-mcp`：
+  - `tools.ts` 的 `replay` schema 加 `mt19937`（0 … 2³² − 1 的整数）、写进说明；
+  - `renderFrames.ts` 加 `--mt19937`；
+  - `scripts/kabegame-dev` 的 REST 若有逐键白名单，照样放行。
+- **修改** kbp：
+  - `replayLib` 的 run 选项加 `mt19937`：等于 `sharedRandom: () => new SeededRandom(mt19937(种子))`；
+  - SKILL.md 写进「注入 WPE 的随机数」一节，包括 WPE 侧怎么抓。
+- **测试**：
+  - `mt19937` 的自检值；
+  - 共用随机源时两个系统按对象顺序交替抽（单测里用两个系统核对抽取序列）；
+  - MCP 的 schema 测试（`mcp.test.ts` 一类）。
+
+### 4b — WPE 侧（`.claude/mcps/wpe-renderdoc`）
+
+- **新增**：
+  - `frida_input/seed.py`：照 `ignore/p4/j0/rng/seed.py`，协议同 `frida_input/driver.py`（stdout 一行一个 JSON：`armed` / `hit` / `error`）；
+  - `mcp_server/wpe/seed.py`：启动驱动、等 `armed`、交出句柄，开窗后等 `hit`（超时报错），结束进程。
+- **修改**：
+  - `open_wallpaper(seed=None)`、`capture_wallpaper(seed=None)`、`capture_sweep` 的 job `seed`。给了时，在开窗前、拿着开窗的锁的那段里挂钩，结果加 `seed: { value, tid, ok }`。
+  - 别的会话同时开窗会被同一把锁挡在外面，否则会被误换种子；锁的范围照现有代码核对，写进说明。
+  - README 与工具说明各补一段。
+- **测试**：驱动协议的纯函数部分（种子解析、递推的 `x[1]`）；真机由 Claude 用 MCP 重连后验证。
+
+### 4c — 雨景走查（Claude）
+
+- `projects_import` 导入 `ignore/p4/proj/3834803915-kbp`。
+- `render_scene`：
+  - `replay.timeline` 取日志与轨迹；
+  - `replay.mt19937: 1007`、`scripts: true`、`canvas: [1920, 1080]`。
+- 同一帧用 `kbp rdc frame --present` 出 WPE 的图，`kbp cmp frame` 比，有差的块定位到 draw（`trace`）。
+- 结果写进报告与回归；差异解释不了的，按 FINAL_CHECK 记下。
+
+### 步骤 4 实施记录（2026-11-21）
+
+4a、4b 各一个执行代理（sonnet）并行实现，Claude 独立验收；4c 由 Claude 做。
+
+**4a 回放侧（和计划的出入）：**
+- 选项名是 `ParticleOptions.mt19937`，不是计划写的 `GpuScene.particleMt19937`：现有的粒子选项都在 `ParticleOptions` 里。
+- 合法性（0…2³²−1、和 `seed` 互斥）在探针的 `replayParticleOptions` 里查，`GpuScene` 构造器只保留「同给就抛错」。
+- `particleCorners` 的返回是图层数组，放不下「用了哪个随机源」，这一行在 MCP 摘要里。
+- kbp 的 `replayLib.ts` 另留一份 `mt19937`（带自检）：`kbp regress` 的旧源码快照没有产品那份导出。`j0rng.hook.ts`、`j3.hook.ts` 去掉手写的一份，`prepare` 返回 `{ mt19937 }`。
+- REST 有逐键白名单（`scripts/kabegame-dev/replay.ts`），`mt19937` 加进了 `REPLAY_FIELDS` / `TRACK_FIELDS`。
+- 验收时补的：`particles/track.ts` 不接 `layerimage` 的候选表（纯 TS、表要 GPU 读回），这类系统在 `particleTrack` 里一颗不生、不抽随机数，全场共用一串时排在它后面的系统会和 WPE 错开。标了 `TODO:[WPE_SCENE_MCP]`，kabegame-chromium SKILL 写明改用 `render_scene` 的 `trace` 逐颗比。kbp-tools SKILL 的「前提」更正两句（`hueRand` 的名字；多个粒子系统全部保留也对得上，不必先 `isolate`）。
+
+**4b WPE 侧（和计划的出入）：**
+- 原来的 `open_wallpaper` 只在「查重 + 登记」时握窗口表锁，发 `openWallpaper` 与等窗口时不握，挡不住别的会话同时开窗。给了 `seed` 时把「挂钩 → 发 `openWallpaper` → 窗口出现 → 命中」整段握在锁里（`ensure_running` 在拿锁之前做完，锁次序不变；锁同线程可重入）。
+- 挡不住不走窗口表的开窗（用户在 WPE 里开的、旧脚本、桌面壁纸重建渲染器）：开窗前后比屏幕上的测试窗口，新冒出的别人的窗口写进 `seed.others_opened`，只报不判失败。
+- 驱动挂钩前核对 `wallpaper64.exe+0x17D6BC` 的 6 个字节，不对就报错不挂；MCP 不采信驱动自报的 `seed_ok`，按 `x0` / `x1` 再算一遍；换种子失败时关掉自己开的窗口再报错，`capture_sweep` 里只让那个 job 报错。
+- 验收时改了一处：`mcp_server/wpe/seed.py` 报错文字里的 `"\s"` 是非法转义（Python 3.12 的 SyntaxWarning），改成拼好的路径。
+- **真机没测**：要用户重连 MCP 后才有 `seed` 参数（回归 J8）。
+
+**4c 雨景走查（FINAL_CHECK）：** 解包副本 `ignore/p4/proj/3834803915-kbp` 导入 dev（图片 16250），`renderFrames.ts --mt19937 1007 --scripts --canvas 1920x1080` 按日志时间线回放到 252–254 帧，和 WPE 的 Present 比（`ignore/p4/j0/rain/`）；数据在 `ignore/p4/j4/`。
+- **数量**：三帧逐系统相同。透视雨 1999 / 2002 / 2047 与 1038，水花 999 / 1000 / 1000，水花的事件实例 59 / 63 / 63。缺省种子（`seed + i`）时水花 978、实例 76。
+- **整帧**：缺省种子时头部以外最大差 233、> 8 的像素 77090 个；换成 `mt19937 1007` 后三帧分别是最大差 10 / 7 / 28，> 8 的像素 18 / 0 / 18。剩下的差异逐个落到 draw 与数值：
+  1. **头部一块**（(896, 32)–(1280, 448)，三帧都有）：对象 10「Warhammer 40k-M5」的 `rotate2dmask`，常量 `noisevalue` 读 `SharedNoise.angles.x`，SharedNoise（对象 0）的可见性脚本每隔几秒用 `Math.random()` 定头部转速。场景脚本的 `Math.random` 是 V8 自己的随机数，不在 MT19937 这一串里（探针按 `scripts.seed` 固定，WPE 每次不同），对不上是预期。
+  2. **252 帧右边缘一条雨丝**（1911–1919, 809–833，差 ≤ 10，一正一负的条纹）：一颗离镜头很近的透视雨滴错开不到 1 像素。`trace` 逐颗配对两层透视雨（抓到的 683 颗都能唯一配上）：尺寸、alpha 逐位相同，位置差 ≤ 0.23、相对 |p| ≤ 4.3e-4，属近似倒数不复刻，透视把它放大。
+  3. **254 帧一个水花环**（784–790, 150–153，差 ≤ 28，我们暗）：水花 (−345, 776)，WPE 的帧表 `w = 1.49996`（`sequencemultiplier 3`，t = w / 3 = 0.49999），正好卡在 `fadeintime` 0.5 的边上。`alphafade` 在 `fadein > fadeout` 且两段同时命中时取两个浮点数的按位或（照抄的 WPE 缺陷），WPE 的 `rcpps` 让 t < 0.5、进了按位或，alpha 0.9997；我们是精确倒数，t ≥ 0.5 只走淡出分支，系数约 0.505。
+- **水花逐颗**（`trace` 抓到的 682 颗）：全部能在 WPE 里找到，位置、颜色（乘候选表像素）、旋转逐位相同；帧表 `w` 的相对差 ≤ 2.87e-4（`rcpps` 包络 3.7e-4 以内）；alpha 的大差只在按位或区间（0.01 < t < 0.5，298 颗，最大 0.077），区间外只在 t ≈ 0.999、alpha ≈ 0.001 的粒子上相对大，绝对 7.5e-5。
+- 用时：一帧回放 252 帧约 7 s。
+
+**验收：**
+- **测试**：vitest `random.test.ts`、`render/particles.test.ts`、`layerImageEmit.test.ts`、`layerImage.test.ts` 118 过；deno `kabegame-dev-mcp` 的 `particles.test.ts`、`renderFrames.test.ts` 与 `scripts/kabegame-dev/replay.test.ts` 13 个 84 步全过；wpe-renderdoc `tests/test_seed.py` 6 例过；tsc 0 error。
+- **回放**：`kbp replay j0rng`、`j3` 全部通过（钩子改成内置的 `mt19937` 之后）。
+- **变异**（`ignore/p4/j4/mutate_j4.py`，工作区模式）：4 处全部检出、按原字节还原。twist 偏移、回火少一步（单测与回放都检出）；`GpuScene` / `particleTrack` 不共用一串（单测检出；j0rng / j3 走 kbp 自己的一份，检不出）。
+- **语料**：步骤 4 不改编译期，`3834803915` 仍 0 项。

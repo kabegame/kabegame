@@ -255,6 +255,12 @@ export interface ParticleReplay {
   times?: number[];
   /** 随机种子：第 i 个粒子层用 `seed + i`（同 `particleTrack`）。缺省 1。 */
   seed?: number;
+  /**
+   * 全场共用一个标准 `std::mt19937(种子)`（P4j 步骤 4a，0…2³²−1 的整数）：和 WPE 侧换成同一种子的抓帧对照用（`wpe-renderdoc` 的 `seed`）。
+   * 全部粒子系统（含子系统与运行中新建的）按对象顺序从同一串里取；不和 `seed` 同给（同给抛错）；不给时照旧 `seed + i`。
+   * 前提：工程里没有别的随机消费者（声音 random、相机路径 random 等），或它们的抽取顺序也对得上；`hsvcolorrandom` 走 CRT `rand()`，管不到。
+   */
+  mt19937?: number;
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍。缺省 1。 */
   passes?: 1 | 2;
   /**
@@ -277,6 +283,13 @@ export interface ParticleReplay {
   audio?: (ParticleAudioFrame | null)[];
 }
 
+/** 回放用的随机源的一行说明（写进 `renderFrame` 的结果与轨迹，P4j 步骤 4a）。 */
+export function replayRandomLine(replay: Pick<ParticleReplay, "seed" | "mt19937"> | undefined): string {
+  return replay?.mt19937 !== undefined
+    ? `std::mt19937(${replay.mt19937})，全场粒子系统共用一串`
+    : `mulberry32，第 i 个粒子层 seed + i（seed ${replay?.seed ?? 1}）`;
+}
+
 /**
  * 建场景用的粒子选项：种子缺省 1、遍数缺省 1、`fps` 缺省 60，`random` 换成每个粒子层一个 `injectedR`。`random` 的键要是 `layers` 里
  * 粒子对象的 `objects` 下标，不是就报错（`checkInjectedKeys`）。
@@ -287,8 +300,14 @@ export function replayParticleOptions(
 ): ParticleOptions {
   const random = replay?.random;
   checkInjectedKeys(random, layers);
+  const mt = replay?.mt19937;
+  if (mt !== undefined) {
+    if (replay?.seed !== undefined) throw new Error("particles 的 mt19937 与 seed 只能给一个");
+    if (!(Number.isInteger(mt) && mt >= 0 && mt <= 0xffffffff))
+      throw new Error(`particles.mt19937 要是 0–4294967295 的整数，收到 ${String(mt)}`);
+  }
   return {
-    seed: replay?.seed ?? 1,
+    ...(mt === undefined ? { seed: replay?.seed ?? 1 } : { mt19937: mt }),
     passes: replay?.passes ?? 1,
     fps: replay?.fps ?? 60,
     rOverride: random ? (object) => (random[object] ? injectedR(random[object]) : undefined) : undefined,

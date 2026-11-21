@@ -123,9 +123,17 @@ P4 和 WPE 真机核对的三种用法，都是屏外宿主里一次跑完、结
 `replay` 两种写法，给了就不收 `time`（读回那一帧的 `g_Time` 取时间线或 `times` 的末项）：
 
 ```text
-replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor?, window? }, seed?, passes?, random?, fr? }   常用：从 WPE 的一次抓帧组时间线
-replay: { particles: { dts, times?, seed?, passes?, random? }, fr? }                                  直接给探针（缺省 seed 1、passes 1）
+replay: { timeline: { log, track?, frame?, gap?, cursors?, cursor?, window? }, seed? | mt19937?, passes?, random?, fr? }   常用：从 WPE 的一次抓帧组时间线
+replay: { particles: { dts, times?, seed? | mt19937?, passes?, random? }, fr? }                                  直接给探针（缺省 seed 1、passes 1）
 ```
+
+`seed` 与 `mt19937`（P4j 步骤 4a）二选一，同给报 `[local]`（REST 回 400）：`seed` 是每个粒子层各一串 mulberry32（第 i 个用 `seed + i`）；`mt19937`
+（0…2³²−1 的整数）是**全场所有粒子系统（含子系统与运行中新建的）共用一个标准 `std::mt19937(种子)`**，预热与每帧步进按对象表顺序从同一串里取，
+同 WPE 一个场景一个随机引擎，用于和「WPE 侧换成同一种子」的抓帧（`wpe-renderdoc` 的 `seed`）逐值对照，流程见 kbp-tools SKILL.md「注入 WPE 的随机数」。
+`render_scene` 的结果多一行「粒子随机源（探针回报）」（`meta.particleRandom`）；`particle_track` 的轨迹 JSON 多一个 `random` 字段（只在用了 `mt19937` 时）。
+`renderFrames.ts` 对应 `--mt19937 N`（不和 `--seed` 同给）。会话里的 MCP 要重连才认这个字段；`renderFrames.ts` 在进程内用新代码，不用等。
+`particle_track` 是纯 TS 模拟器、不接 `layerimage` 的候选表（表要 GPU 读回）：这类系统在轨迹里一颗不生、也不抽随机数，全场共用一串时排在它后面的
+系统会和 WPE 错开，所以有 `layerimage` 的场景逐颗比要用 `render_scene` 的 `trace`（顶点按索引顺序列，每颗 6 个，`maxVertices` 上限 4096）。
 
 `random`（`render_scene` / `host_render` / `particle_corners` 的两种写法与 `particle_track` 都收）：`{ "<objects 下标>": [R, …] }`，按出生顺序
 顶替这个粒子系统抽到的 `R`，用完退回种子随机数；randomframe 的系统和 WPE 逐像素比时注入 WPE 的 `R`（表由 kbp-tools 的 `kbp cmp random`
@@ -392,7 +400,7 @@ render_scene { imageId: <id>, replay: { timeline: { log: "…-log.txt", frame: 2
 ```bash
 deno run -A apps/kabegame-dev-mcp/src/renderFrames.ts --image <id> --frames 241,242,250-255 --out <目录> \
   [--timeline-log <日志> [--timeline-track <轨迹>] [--cursors log|track] [--cursor x,y] [--window WxH] [--gap error|split] \
-   [--audio <录制>] [--seed N] [--passes 1|2] [--random <表> …] [--no-fr]] \
+   [--audio <录制>] [--seed N | --mt19937 N] [--passes 1|2] [--random <表> …] [--no-fr]] \
   [--fps N | --time 秒] [--canvas WxH] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] \
   [--video-time 秒|JSON] [--user-properties <JSON 文件或串>] [--scripts [--clock 毫秒] [--script-seed N]] \
   [--trace-frames 250 [--trace-readback 0,"text glyphs"] [--trace-max-vertices N]] [--reuse-host] [--timeout 秒] [--overwrite]
@@ -474,8 +482,8 @@ deno run -A apps/kabegame-dev-mcp/src/buildSceneHost.ts [--out-dir <目录>] [--
 | `GET /android/screen` | `adb exec-out screencap` → PNG；`?scale=&maxWidth=&maxHeight=` 同 `resize` | 安卓 |
 | `GET /hosts`、`POST /hosts`、`DELETE /hosts/:h` | 列出 / 开（`{ hidden?, scene? }`）/ 关场景宿主 | 桌面 |
 | `POST /hosts/:h/eval` | 在宿主里求值 | 桌面 |
-| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, scriptValues?, scripts?, videoTime?, gifDts?, media?, trace?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size, trace?, traceImages? }`；`particles: { dts, times?, seed?, passes?, random?, audio? }` 原样交给探针回放，和 `time` 互斥（`audio` 见「粒子回放」的频谱）；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」）；`scriptValues` 是 `[{ object, field, value, optional? }]`（最多 64 项，`object` 是非负整数或非空字符串、`field` 是图层字段或文本字段，或不给 `field` 改给 `constant` 与可选的 `effect`（材质常量的脚本值，P11a）、`value` 是 1–4 个有限数或布尔，文本字段另收最长 4096 的字符串、图层字段给字符串 400，不合法 400 带 `field`），探针写进状态，`meta.scriptValues` 逐项回 `applied`，有文本值时结清重排、`meta.textSyncs` 回 `sync` 次数（见「FR 帧号块」的文本字段）；`scripts` 是 `true` 或 `{ clock?: 毫秒时间戳（有限数、绝对值不超过 8.64e15）, seed?: 0–2³²−1 的整数 }`（不认识的字段、不合法、和 `scriptValues` 同给 400 带 `field`），探针照宿主跑场景脚本，`meta.scripts` 见「跑场景脚本」，宿主产物不认识时 409；`videoTime` 是非负秒数或 `{ <纹理 path>: 秒 }`（最多 64 项，不合法 400 带 `field`，键不是视频纹理时探针报错回 422），`meta.videos` 回每段实际取的时刻（`path`、`time`、`duration`、`width`、`height`、`failed`、`error?`），宿主产物不认识时 409；`videoTime` 也作用于用户视频（键可以是用户视频的值）；`gifDts` 是非负有限数（秒）的数组（最多 10000 项，空数组也转，不合法 400 带 `field`），逐项推进用户纹理里的 GIF，`meta.userTextures` 里有项缺 `kind` 时（宿主产物早于 P11b 步骤 4、不认识）409，场景没有属性来源时不回 `userTextures`、不报；`media` 是 `[{ frame, messages }]`（最多 10000 步、每步 64 条，`frame` 是从 1 起的整数、每条消息是带字符串 `type` 的对象，不合法 400 带 `field`），探针按帧派发系统媒体消息（P11c），`meta.media` 回步数、事件数、各帧派发的 flags 与场景媒体状态；`trace` 是 `true` 或 `{ readback?: (非负整数 \| 非空字符串)[]（最多 64 项）, maxVertices?: 1–4096 }`（不认识的字段、不合法 400 带 `field`），响应多 `trace`（解析后的轨迹 JSON）与 `traceImages: [{ pass, format, kind: "png" \| "f32", width, height, bytes, data(base64) }]`，`meta.trace` 是探针的摘要（键、大小、计数、`readbackErrors`），合计超过 64 MB 回 413、宿主产物不认识时 409（见「逐 draw 轨迹」） | 桌面 |
-| `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed?, random?, cursors?, window?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`）；`cursors` 是逐帧的 `g_PointerPosition`，`window` 要和它一起给 | 桌面 |
+| `POST /hosts/:h/render` | `{ imageId, time? \| particles?, postprocess?, userProperties?, pointer? \| pointers?, window?, canvas?, scriptValues?, scripts?, videoTime?, gifDts?, media?, trace?, resize? }` → `{ meta, png(base64), pngSha256, pngBytes, size, trace?, traceImages? }`；`particles: { dts, times?, seed? | mt19937?, passes?, random?, audio? }` 原样交给探针回放，和 `time` 互斥（`audio` 见「粒子回放」的频谱）；`pointers` 是逐帧的 `g_PointerPosition`（和 `particles.dts` 等长、要有 `particles`、不和 `pointer` 同给），`window` 是抓帧窗口 `[宽, 高]`；`canvas` 是读回画布 `[宽, 高]`（两个正整数、各不超过 16384，和 `window` 都给时要相同，否则 400 `field: "canvas"`），`meta` 带 `canvas`、`sceneTarget`（见「读回画布」）；`scriptValues` 是 `[{ object, field, value, optional? }]`（最多 64 项，`object` 是非负整数或非空字符串、`field` 是图层字段或文本字段，或不给 `field` 改给 `constant` 与可选的 `effect`（材质常量的脚本值，P11a）、`value` 是 1–4 个有限数或布尔，文本字段另收最长 4096 的字符串、图层字段给字符串 400，不合法 400 带 `field`），探针写进状态，`meta.scriptValues` 逐项回 `applied`，有文本值时结清重排、`meta.textSyncs` 回 `sync` 次数（见「FR 帧号块」的文本字段）；`scripts` 是 `true` 或 `{ clock?: 毫秒时间戳（有限数、绝对值不超过 8.64e15）, seed?: 0–2³²−1 的整数 }`（不认识的字段、不合法、和 `scriptValues` 同给 400 带 `field`），探针照宿主跑场景脚本，`meta.scripts` 见「跑场景脚本」，宿主产物不认识时 409；`videoTime` 是非负秒数或 `{ <纹理 path>: 秒 }`（最多 64 项，不合法 400 带 `field`，键不是视频纹理时探针报错回 422），`meta.videos` 回每段实际取的时刻（`path`、`time`、`duration`、`width`、`height`、`failed`、`error?`），宿主产物不认识时 409；`videoTime` 也作用于用户视频（键可以是用户视频的值）；`gifDts` 是非负有限数（秒）的数组（最多 10000 项，空数组也转，不合法 400 带 `field`），逐项推进用户纹理里的 GIF，`meta.userTextures` 里有项缺 `kind` 时（宿主产物早于 P11b 步骤 4、不认识）409，场景没有属性来源时不回 `userTextures`、不报；`media` 是 `[{ frame, messages }]`（最多 10000 步、每步 64 条，`frame` 是从 1 起的整数、每条消息是带字符串 `type` 的对象，不合法 400 带 `field`），探针按帧派发系统媒体消息（P11c），`meta.media` 回步数、事件数、各帧派发的 flags 与场景媒体状态；`trace` 是 `true` 或 `{ readback?: (非负整数 \| 非空字符串)[]（最多 64 项）, maxVertices?: 1–4096 }`（不认识的字段、不合法 400 带 `field`），响应多 `trace`（解析后的轨迹 JSON）与 `traceImages: [{ pass, format, kind: "png" \| "f32", width, height, bytes, data(base64) }]`，`meta.trace` 是探针的摘要（键、大小、计数、`readbackErrors`），合计超过 64 MB 回 413、宿主产物不认识时 409（见「逐 draw 轨迹」） | 桌面 |
+| `POST /hosts/:h/particle-track` | `{ imageId, dts, times?, frames, passes, seed? | mt19937?, random?, cursors?, window?, tag? }` → 探针 `particleTrack` 的轨迹 JSON（同 `rd-*.json`）；`cursors` 是逐帧的 `g_PointerPosition`，`window` 要和它一起给 | 桌面 |
 | `POST /hosts/:h/particle-corners` | `{ imageId, particles?, pointers?, window?, layer?, limit?, postprocess?, userProperties?, wgsl? }` → 探针 `particleCorners` 的各层结果；`pointers` / `window` 同 render | 桌面 |
 | `POST /projects/remove` | `{ manifest, allowPrefix? }` | 桌面 |
 | `POST /jobs` | `{ kind: "host-task" \| "hash-baseline" \| "projects-import", params }` → 任务记录 | 桌面 |

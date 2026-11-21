@@ -1543,9 +1543,9 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [ ] | A17 重编译保留视差点 | Windows dev，图库预览 | 改一个会整场重编译的属性；换到另一张再换回来 | 改属性时画面不跳回中心；换回来时从初值重新开始 | 可跳过：上面这些场景没有明显会重编译的属性；渲染器单测 `parallax.test.ts`「重编译保留 P」覆盖 |
 | [x] | A18 暂停与应用背景 | Windows，图库预览与应用背景 | 预览里右键「暂停」后移动鼠标，再恢复；把一张视差场景设成应用背景 | 暂停时图层不动，恢复后接着跟；应用背景不跟鼠标，只有静止偏移 | 2026-11-11 用户：和预期一致 |
 
-## 场景壁纸 P4j：粒子 `layerimage` 发射器（进行中）
+## 场景壁纸 P4j：粒子 `layerimage` 发射器
 
-2026-11-21 Windows dev。P4j 让粒子按另一个图层的画面抽出生点（发射器 `layerimage`，粒子对象 `dependencies` 的 `emitterimage`），起因是 WPE `myprojects` 的 `3834803915`（战锤 40k 雨景的水花）。步骤 0 调研（读码与注入 WPE 随机数的实测），步骤 1 编译期（依赖的解析与绑定、模块表、能力表），发射在步骤 2、3。计划与读码见 `.claude/plans/wpe-import/3-scene/phase4/phase-4j-layerimage.md`、`rea-p4j-layerimage.md`，实测见同目录 `p4-particles-REPORT.md`「P4j 语义的实测核对」。数据在 `ignore/p4/j0/`、`ignore/p4/j1/`，WPE 抓帧在 `A:\p4j\`。
+2026-11-21 Windows dev。P4j 让粒子按另一个图层的画面抽出生点（发射器 `layerimage`，粒子对象 `dependencies` 的 `emitterimage`），起因是 WPE `myprojects` 的 `3834803915`（战锤 40k 雨景的水花）。步骤 0 调研（读码与注入 WPE 随机数的实测），步骤 1 编译期（依赖的解析与绑定、模块表、能力表），步骤 2 运行时的候选表，步骤 3 发射，步骤 4 注入随机数的工具（`wpe-renderdoc` 的 `seed`、回放侧的 `mt19937`）与雨景走查。说明见 `cocs/wpe/WPE_SCENE.md`「粒子（P4j）」，计划与读码见 `.claude/plans/wpe-import/3-scene/phase4/phase-4j-layerimage.md`、`rea-p4j-layerimage.md`，实测见同目录 `p4-particles-REPORT.md`「P4j 语义的实测核对」。数据在 `ignore/p4/j0/`–`j4/`，WPE 抓帧在 `A:\p4j\`。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -1556,6 +1556,12 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | J4 候选表 · 单测与变异 | Node | `particles/layerImage.test.ts`、`render/emitterImages.test.ts`、`compile/p4j2.test.ts`、`src/dev`（回放改异步）等 54 个文件；`kbp mutate`（`ignore/p4/j2/mutate_j2.py`） | 全过；变异全部检出 | 2026-11-21 Claude：1281 过；建表与夹具（`model.py` 对 `p4j-li-map` 的预测）36 项逐项相同；状态机的开场帧数照 WPE 实测（无预热丢 2 个发射帧、有预热丢 1 个、共享记录后调的早一帧）；7 处变异（不锁上一帧末、像素序、阈值、y 的 `s`、行尾填充、不拍快照、计时不取余）全部检出 |
 | [x] | J5 候选表 · dev 实测 | Windows dev，图库预览（强制渲染） | 预览 `p4j-li-map`、`p4j-li-large`，`host.emitterImages({ includeEntries: true })` 读出表，和 `model.py` 的预测、WPE 抓帧的粒子颜色比 | 表项的位置与顺序逐项相同 | 2026-11-21 Claude：`li-map` 36 项全同；`li-large` 8381 项位置与顺序全同，边缘两档颜色是 127 / 64（模型的 numpy 舍入是 128，WPE 抓帧里的粒子也是 127）；探针按 WPE 时间线回放 201 帧（每帧等读回）正常 |
 | [x] | J6 发射 · 注入 WPE 种子逐粒子比 | Node `kbp replay j3` | 步骤 0 的 6 组抓帧（`p4j-li-map` / `-jit` / `-flags0` / `-xform` / `-large` / `-move`，种子 1001–1006），回放用同一种子的 `std::mt19937`、全部系统共用一个随机源，候选表取 `ignore/p4/j0/snap/`；单测；`kbp mutate`（`ignore/p4/j3/mutate_j3.py`，检出方含回放）；语料 | 逐粒子对上；变异全部检出；`3834803915` 变干净 | 2026-11-21 Claude：6 个工程 8 个系统、7778 颗粒子全部对上，逐帧粒子数相同，位置 / 颜色 / 尺寸逐位相同（`li-move` 位置差 1.2e-4，脚本移动图层的 sin），共享记录的一帧差（`liw` 比 `li` 多一颗）也照出；相关 53 个文件 1162 过；6 处变异（拒绝抽样、抖动顺序、本地不乘 `M⁻¹`、颜色、速度用本帧 `L`、不写回上一次的 `L`）全部检出；缺省语料 233 张不变，`3834803915` 0 项 |
+| [x] | J7 回放侧 `mt19937` · 单测与变异 | Node + Deno | `particles/random.test.ts`、`render/particles.test.ts` 等；kabegame-dev MCP 的 `particles.test.ts`、`renderFrames.test.ts`，REST 的 `replay.test.ts`；`kbp replay j0rng` / `j3`（钩子改用内置的 `mt19937`）；`kbp mutate`（`ignore/p4/j4/mutate_j4.py`） | 全过；回放照旧通过；变异全部检出 | 2026-11-21 Claude：vitest 4 个文件 118 过；deno 13 个 84 步过；j0rng、j3 全部通过；4 处变异（twist 偏移、回火、`GpuScene` / `particleTrack` 不共用一串）全部检出，源码按原字节还原 |
+| [x] | J8 WPE 侧 `seed` · 单测 | Python | `.claude/mcps/wpe-renderdoc/tests/test_seed.py`（种子解析与越界、`x[1]` 递推、命中核对、协议行、结果摘要） | 全过 | 2026-11-21 Claude：6 例过；`mt19937(5489)` 的 `x[1]` = 1301868182，驱动与 MCP 两份一致 |
+| [ ] | J9 WPE 侧 `seed` · 真机 | Windows + WPE（MCP 重连后） | `capture_wallpaper(project=<雨景副本>, out="A:\\p4j\\seed-mcp", frames=3, size="1920x1080", seed=1007)`；再给一个 `capture_sweep` 的 job 带 `seed` | 结果有 `seed: { value: 1007, tid, x0: 1007, x1: 4054152268, ok: true }`；换种子失败时关窗报错 | 待 MCP 重连：本会话的 MCP 进程是旧代码，没有 `seed` 参数。步骤 0 的手工脚本（同一个钩子）已经实测可用 |
+| [x] | J10 雨景 · 最终走查（FINAL_CHECK） | Windows dev 屏外宿主 + WPE 抓帧（1920×1080、fps 20、种子 1007） | 解包副本 `ignore/p4/proj/3834803915-kbp` 导入，`renderFrames.ts --mt19937 1007 --scripts --canvas 1920x1080` 回放到 252–254 帧，和 WPE Present 比（`kbp cmp frame`），差异处 `trace` 逐颗配对 | 逐帧数量相同；差异落到具体的 draw 与值 | 2026-11-21 Claude：三帧逐系统数量相同（水花事件实例 59 / 63 / 63；缺省种子时水花 978、实例 76）；头部以外最大差 10 / 7 / 28（缺省种子 233）。剩下三处：头部 `rotate2dmask` 的 `noisevalue` 来自脚本 `Math.random()`；一颗近镜头透视雨滴错开不到 1 像素（位置相对差 ≤ 4.3e-4，近似倒数）；一个水花环暗一半（t = 0.49999 卡在 `fadeintime` 0.5 上，`alphafade` 的按位或放大 `rcpps` 的末位差）。水花逐颗：位置、颜色、旋转逐位相同，帧表 `w` 相对差 ≤ 2.87e-4 |
+| [x] | J11 雨景 · 预览（产品路径） | Windows dev，图库预览（不开强制渲染） | 打开雨景副本（图片 16250），读宿主 `host.particles()` / `host.emitterImages()` | 正常渲染（不退回预览图）；水花在人物身上发射 | 2026-11-21 Claude：实时渲染；候选表第 3 帧建好（476820 项，4025×2460 压成 883×540），水花 983 / 1000 颗、事件实例在跑。看完换回原来的预览 |
+| [ ] | J12 雨景 · 真机（原工程） | Windows，图库预览与桌面（不开强制渲染） | 在应用里导入 WPE `myprojects` 的 `3834803915`，看人物肩膀、手臂上的水花；设为桌面壁纸看一会儿 | 正常渲染；雨落在人物身上溅起水花，和 WPE 观感一致；开场头几帧水花可能晚一点出现（已知差异） | 待用户勾：原工程在 WPE 的 `myprojects` 里，要先在应用里导入 |
 
 ## 场景壁纸 P4i：粒子光照
 

@@ -99,6 +99,41 @@ export function mulberry32(seed: number): Uint32Source {
 }
 
 /**
+ * 标准 MT19937（C++ `std::mt19937`）：种子 → 每次一个 u32（P4j 步骤 4a）。WPE 的粒子随机数是 MT19937（`rea-p4a.md`「基础」），
+ * 把 WPE 侧的种子换成约定值（`wpe-renderdoc` 的 `seed`）后，回放侧用同一个种子的这个生成器就能得到同一串 u32（j0rng 实测）。
+ * 初始化是 `mt[i] = 1812433253·(mt[i−1] ^ (mt[i−1] >> 30)) + i`，每 624 个一轮 twist；MSVC 的实现换了缓冲布局、不改输出序列。
+ * 自检值（C++ 标准 [rand.predef]）：种子 5489 的第 1 个是 3499211612、第 10000 个是 4123659995。
+ * 只给 dev 回放用（`GpuScene` 的 `ParticleOptions.mt19937`、`particleTrack`），产品路径不引用。
+ */
+export function mt19937(seed: number): Uint32Source {
+  const mt = new Uint32Array(624);
+  mt[0] = seed >>> 0;
+  for (let i = 1; i < 624; i++) {
+    const prev = mt[i - 1] ^ (mt[i - 1] >>> 30);
+    mt[i] = (Math.imul(1812433253, prev) + i) >>> 0;
+  }
+  let index = 624;
+  const twist = (): void => {
+    for (let i = 0; i < 624; i++) {
+      const y = (mt[i] & 0x80000000) | (mt[(i + 1) % 624] & 0x7fffffff);
+      let v = mt[(i + 397) % 624] ^ (y >>> 1);
+      if (y & 1) v ^= 0x9908b0df;
+      mt[i] = v >>> 0;
+    }
+    index = 0;
+  };
+  return () => {
+    if (index >= 624) twist();
+    let y = mt[index++];
+    y ^= y >>> 11;
+    y ^= (y << 7) & 0x9d2c5680;
+    y ^= (y << 15) & 0xefc60000;
+    y ^= y >>> 18;
+    return y >>> 0;
+  };
+}
+
+/**
  * 出生时 `R` 的替换（`ParticleSystem` 的可选参数）：参数是这次照常抽到的值，返回写进 `R` 列的值。只给 dev 探针与回放工具用，
  * 产品路径不传。
  */

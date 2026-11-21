@@ -22,10 +22,10 @@
 | 类 | 工具 | 做什么 |
 |---|---|---|
 | 抓帧 | `capture_wallpaper` | 见上；中途出错也关掉自己开的窗口。日志从开窗前截起（含加载期的报错） |
-| | `capture_sweep(jobs, out_root, log_dir?)` | `jobs`：`[{project, frames?, size?, wait?, settings?, tag?, borderless?, x?, y?}]`，抓帧放 `out_root\<tag>`。按 `settings` 分组，要改设置时 `restart_wpe`，跑完改回扫描开始时的值；`log_dir` 给了就写 `<tag>-log.txt`（`[kbp]` 行）与 `<tag>-errors.txt` |
+| | `capture_sweep(jobs, out_root, log_dir?)` | `jobs`：`[{project, frames?, size?, wait?, settings?, tag?, borderless?, x?, y?, seed?}]`，抓帧放 `out_root\<tag>`。按 `settings` 分组，要改设置时 `restart_wpe`，跑完改回扫描开始时的值；`log_dir` 给了就写 `<tag>-log.txt`（`[kbp]` 行）与 `<tag>-errors.txt` |
 | | `capture(window, out, frames, tag?, timeout?, overwrite?)` | 在本会话开着的窗口上抓 N 帧，文件 `<tag>-frame<帧号>.rdc`；`out` 里已有同 tag 的抓帧时拒绝，除非 `overwrite` |
 | WPE | `ensure_running` | 在跑且已注入就不动；在跑没注入就原地注入；没在跑就 `-silent` 普通启动再注入（崩溃标记为 1 先清） |
-| | `open_wallpaper` / `close_wallpaper` / `apply_properties` / `windows` | 本会话的测试窗口；`open_wallpaper`、`capture_wallpaper` 与 sweep 的 job 收 `borderless`、`x`、`y`，见「无边框窗口」 |
+| | `open_wallpaper` / `close_wallpaper` / `apply_properties` / `windows` | 本会话的测试窗口；`open_wallpaper`、`capture_wallpaper` 与 sweep 的 job 收 `borderless`、`x`、`y`，见「无边框窗口」；还收 `seed`，见「换随机数种子」 |
 | | `status(target?)` | 进程、注入、窗口表、外来窗口、抓帧锁由谁持有；`target=True` 另读 RenderDoc 目标的 API 与可抓窗口数 |
 | | `get_settings` / `restart_wpe(settings?)` | 只读 `config.json`；改设置只能重启 |
 | | `input_play` / `input_start` / `input_status` / `input_stop` | 给本会话测试窗口按帧喂光标与左键，或录下真实光标，见「输入（光标与左键）」 |
@@ -53,6 +53,15 @@
 - **注意：** WPE 暂停时帧不前进（`ready` 前 2 s 内认不出渲染线程就报错）；WPE 一帧内完整的按下抬起会被丢掉，所以按下至少持续 1 帧；
   日志各会话共用，真实鼠标在测试窗口上动时也会混进挂钩期间之外的事件，只看挂钩期间的帧；第一次用会经 uv 下载 Frida（`ready` 最多等 60 s）。
   只能操作本会话自己的窗口（同 `apply_properties`）。内部函数（`mcp_server/wpe/input.py` 的 `launch` / `run_play`）只认 pid 与渲染窗口 hwnd，不依赖窗口表。
+
+### 换随机数种子（`seed`）
+
+- **用途：** 让 WPE 与 Kabegame 的回放吃同一串随机数，逐粒子对照随机发射。`open_wallpaper`、`capture_wallpaper` 与 `capture_sweep` 的 job 收 `seed`（0 … 4294967295 的整数，或十进制 / `0x` 字符串）；回放侧用 `std::mt19937(种子)`（kabegame-dev 的 `replay.mt19937`、kbp 的 `mt19937`）。
+- **原理：** 渲染器构造函数在 `wallpaper64.exe+0x17D6BC` 执行 `mov dword ptr [rdi+0x1cd4], edx`，`edx` 是按时间算的种子。驱动 `frida_input/seed.py`（子进程，协议同 `driver.py`：stdout 一行一个 JSON，`armed` / `hit` / `error`）挂前先核对这 6 个字节（不对就报错不挂），在这条指令上把 `rdx` 换成约定种子；命中 100 ms 后读回 `x[0]`（应等于种子）、`x[1]`（应等于 `1812433253·(x0 ^ (x0 >> 30)) + 1`），MCP 这边再核对一遍，随后驱动 `os._exit`（Frida 随进程退出卸钩，不调 `unload` / `detach`：命中后在那里卡住过）。
+- **范围：** 只换挂钩之后第一个构造的渲染器，一次性；开窗时挂、窗口出现后收；桌面壁纸与已经开着的窗口不受影响。
+- **结果：** `seed: { value, tid, x0, x1, ok, old }`。没命中（超时）或读回对不上就关掉自己开的窗口并报错（`capture_wallpaper` 同样关窗）；`capture_sweep` 里只让那个 job 报错、扫描继续。
+- **锁：** `open_wallpaper` 平时只在「查重 + 登记」时握窗口表锁 `windows.lock`，真正发 `openWallpaper` 时不握，所以挡不住别的会话同时开窗。给了 `seed` 就把「挂钩 → 发 `openWallpaper` → 窗口出现 → 命中」整段都握在这把锁里（`ensure_running` 在拿锁之前做完，保持先 `wpe.lock` 后 `windows.lock`）：别的会话的 `open_wallpaper` 要先拿它登记，所以被挡在外面（等 60 s 超时），不会被误换种子。挡不住的是不走窗口表的开窗（用户自己在 WPE 里开的窗口、旧脚本、桌面壁纸重建渲染器）：开窗前后对比屏幕上的测试窗口，新冒出的别人的窗口报在 `seed.others_opened`，这时核对 `tid` 与读回值。
+- **依赖：** Frida 只在 `frida_input` 工程里，不进 MCP 依赖。纯函数（种子解析、`x[1]` 递推、协议行解析）的单测：`python -X utf8 tests/test_seed.py`。
 
 ### `out` 的约定
 
@@ -151,8 +160,9 @@ mcp_server/          MCP 服务端（uv 的 Python ≥ 3.10）
   wpe/               第 2 批：常驻共享的 WPE（ensure_running、restart_wpe）、本会话的测试窗口与机器级窗口表、
                      config.json 读写、log.txt 游标（计划见 wpe-renderdoc-mcp-p2.md）
     input.py         输入驱动：拉起 frida_input 子进程（play / record），窗口表检查的薄层
+    seed.py          换 MT19937 种子：拉起 frida_input/seed.py，开窗前挂钩、开窗后等命中（见「换随机数种子」）
     capture.py       第 3 批：capture、capture_wallpaper、capture_sweep，抓帧锁里调工作进程的 target_*
-frida_input/         输入驱动子进程的独立 uv 工程（driver.py、pyproject.toml、uv.lock；不进 MCP 依赖）
+frida_input/         输入驱动与换种子子进程的独立 uv 工程（driver.py、seed.py、pyproject.toml、uv.lock；不进 MCP 依赖）
 renderdoc_worker/    在 qrenderdoc --python 里跑（RenderDoc 内嵌的 Python 3.8）
   worker.py          常驻循环
   context.py         ctx 垫片：服务层用到的 CaptureContext 子集，背后是裸 ReplayController
