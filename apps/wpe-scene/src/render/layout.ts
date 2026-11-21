@@ -741,8 +741,9 @@ export function groupViewProjection(size: readonly number[], world: Mat4): Mat4 
  * （`FUN_14005f730`，即 {@link invertF32}）、视图换成单位阵、投影换成局部正交，子层的世界矩阵先并进模型栈（仿射乘法），最后才乘投影：
  * `MVP = P ⊗ (inverse(W_组) ⊗ W)`（`drawMatrices` 的 `group`）。和先拼好 {@link groupViewProjection} 再乘 `W` 数学上相等，float32 的结合
  * 顺序不同，平移可差 1 ulp：`3811403844` 遮罩斜线的平移 WPE 是 `(ty − 1620)·s`、先拼的是 `ty·s − 1620·s`，压在光栅化 1/256 像素的对齐分界上时
- * 边缘的 texel 整个翻转（`A:\p8\depgroup-dg`）。只给图像层的 MVP 用：`g_ModelMatrix` / `g_ViewProjectionMatrix` 仍是世界矩阵与
- * {@link groupViewProjection}（WPE 组里这两个是组内局部矩阵与 P，读码所得、没有抓帧验证），文本、粒子、网格照旧。`W_组` 不可逆时为 null。
+ * 边缘的 texel 整个翻转（`A:\p8\depgroup-dg`）。图像层（P14c）与网格（P14b）的 `g_ModelMatrix` / `g_ViewProjectionMatrix` 也由它出：组内局部的
+ * `inverse(W_组) ⊗ W`（图像层仿射乘法、网格 glm 乘法）与 P（`p14c-gi`、`p14b-gm-*` 实测）；文本、粒子照旧用 {@link groupViewProjection}。
+ * `W_组` 不可逆时为 null。
  */
 export function groupMvpParts(size: readonly number[], world: Mat4): { projection: Mat4; inverse: Mat4 } | null {
   if (!invert(world)) return null;

@@ -30,7 +30,7 @@ import { parseParticle, particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { planLayer, planSignature, variantPlans, type DrawStep, type LayerPlan, type LayerStep } from "./graph";
-import { groupViewProjection, sceneViewProjection, worldMatrixOf } from "./layout";
+import { groupMvpParts, groupViewProjection, sceneViewProjection, worldMatrixOf } from "./layout";
 import { multiply, transformPoint, translation, type Mat4 } from "./math";
 import { parallaxOffset } from "./parallax";
 import { GpuScene, pipelineKey, stepPipeline } from "./scene";
@@ -998,7 +998,7 @@ describe("GpuScene：p5b-grp 的组", () => {
     }
   });
 
-  it("uniform：R、B、Y 的 MVP 对上事件 78 / 92 / 106，组的 compose / 上屏对上事件 62 / 125；子层的视图投影是组的局部正交", async () => {
+  it("uniform：R、B、Y 的 MVP 对上事件 78 / 92 / 106，组的 compose / 上屏对上事件 62 / 125；子层的视图投影是组的局部正交 P 本身（P14c）", async () => {
     for (const tag of ["cb1", "cb0", "nofx"] as const) {
       const { scene } = await open(grpLayers(tag));
       expectMvp(matrixAt(drawOf(scene, 2, "direct"), 0), WPE_MVP.cb1R, `${tag} R`);
@@ -1007,7 +1007,7 @@ describe("GpuScene：p5b-grp 的组", () => {
       expectMvp(matrixAt(drawOf(scene, 1, "final"), 0), WPE_MVP.group, `${tag} 上屏`);
       if (tag !== "cb0") expectMvp(matrixAt(drawOf(scene, 1, "compose"), 0), WPE_MVP.group, `${tag} compose`);
       const layers = grpLayers(tag);
-      const expected = groupViewProjection([800, 400], worldsOf(layers)(1));
+      const expected = groupMvpParts([800, 400], worldsOf(layers)(1))!.projection;
       expect([...matrixAt(drawOf(scene, 2, "direct"), 64)]).toEqual([...expected]);
     }
   });
@@ -1048,7 +1048,7 @@ describe("GpuScene：p5b-grp 的组", () => {
     ]);
   });
 
-  it("组的变换改了：子孙随父链标脏，视图投影按新的 W_组 重写，MVP 仍是本地的（事件 78）", async () => {
+  it("组的变换改了：子孙的矩阵都是组内局部的，视图投影仍是 P、MVP 仍是本地的（事件 78）", async () => {
     const { scene, state } = await open(grpLayers("cb1"));
     state.write({ property: "p", target: { kind: "layer", object: 1, field: "origin" } }, "600 300 0");
     scene.sync(state);
@@ -1056,7 +1056,7 @@ describe("GpuScene：p5b-grp 的组", () => {
     const layers = grpLayers("cb1");
     layers[1].origin = [600, 300, 0];
     expect([...matrixAt(drawOf(scene, 2, "direct"), 64)]).toEqual([
-      ...groupViewProjection([800, 400], worldsOf(layers)(1)),
+      ...groupMvpParts([800, 400], worldsOf(layers)(1))!.projection,
     ]);
     expectMvp(matrixAt(drawOf(scene, 2, "direct"), 0), WPE_MVP.cb1R, "移动后的 R");
   });
@@ -1377,14 +1377,14 @@ describe("GpuScene：全屏组的视图投影（p5j-cam）", () => {
     const { scene } = await opened();
     expect(vpOf(scene, 3, "compose")).toEqual([...SCENE_VP]);
     const layers = fsGroupLayers();
-    expect(vpOf(scene, 4, "direct")).toEqual([...groupViewProjection([400, 300], worldsOf(layers)(3))]);
+    expect(vpOf(scene, 4, "direct")).toEqual([...groupMvpParts([400, 300], worldsOf(layers)(3))!.projection]);
   });
 
   it("普通组里的组合层：compose 同样不带视差；普通组的子孙仍是局部正交", async () => {
     const { scene } = await opened();
     expect(vpOf(scene, 9, "compose")).toEqual([...SCENE_VP]);
     const layers = fsGroupLayers();
-    expect(vpOf(scene, 11, "direct")).toEqual([...groupViewProjection([800, 400], worldsOf(layers)(8))]);
+    expect(vpOf(scene, 11, "direct")).toEqual([...groupMvpParts([800, 400], worldsOf(layers)(8))!.projection]);
   });
 
   it("顶层组合层的 compose 仍带视差", async () => {

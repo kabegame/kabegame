@@ -5337,9 +5337,12 @@ export class GpuScene {
           : {}),
         // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
         // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
-        // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
+        // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）：`g_ViewProjectionMatrix` 是 P 本身、模型矩阵是组内局部的
+        // （P14c，`drawMatrices` 的 `group`，p14c-gi 实测）；`groupMvp` 为 null（组的世界矩阵不可逆）时退回旧写法
         viewProjection:
-          groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp && step.target.kind === "scene"),
+          groupMvp?.projection ??
+          groupOrCompose ??
+          this.viewProjectionOf(layer, state, view, persp && step.target.kind === "scene"),
       }),
     );
   }

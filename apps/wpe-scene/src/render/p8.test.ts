@@ -89,7 +89,7 @@ import {
   worldMatrixOf,
   type LayerTransform,
 } from "./layout";
-import { identity, multiply, scaling, transformPoint, translation, type Mat4 } from "./math";
+import { identity, mulAffine, multiply, scaling, transformPoint, translation, type Mat4 } from "./math";
 import { alphaToCoverageEntry, WGSL_PRELUDE } from "./programs";
 import { buildableLayers, GpuScene, layerOpsToRun, pipelineKey, stepPipeline } from "./scene";
 import { SceneState, scriptWriteValue } from "./state";
@@ -1547,18 +1547,18 @@ describe("组里图像层的 MVP 照 WPE 的结合顺序（P8 步骤 7 走查，
     },
   );
 
-  it("drawUniformValues 透传 group：MVP 换、g_ModelMatrix 与 g_ViewProjectionMatrix 不变；effect 与上屏的效果矩阵跟着新的 MVP", () => {
+  it("drawUniformValues 透传 group：MVP 与 g_ModelMatrix 换成组内局部的（P14c）；效果矩阵与 g_LayerModelMatrix 仍是世界矩阵，效果投影跟着新的 MVP", () => {
     const layers = layersAt(4020, 2355);
     const cache = new Map<number, Mat4>();
     const group = drawMatrixOf(0, layers, cache);
     const world = drawMatrixOf(2, layers, cache);
     const parts = groupMvpParts([7200, 3240], group)!;
-    const vp = groupViewProjection([7200, 3240], group);
     const finalStep = { role: "final" as const };
-    const withGroup = drawMatrices(finalStep, world, [4444, 4444], vp, parts);
-    const without = drawMatrices(finalStep, world, [4444, 4444], vp);
-    expect(withGroup.model).toBe(without.model);
-    expect(withGroup.viewProjection).toBe(vp);
+    const withGroup = drawMatrices(finalStep, world, [4444, 4444], parts.projection, parts);
+    expect(Array.from(withGroup.model)).toEqual(Array.from(mulAffine(parts.inverse, world)));
+    expect(withGroup.viewProjection).toBe(parts.projection);
+    expect(withGroup.effectModel).toBe(world);
+    expect(withGroup.layerModel).toBe(world);
     expect(withGroup.effectModelViewProjection).toBe(withGroup.modelViewProjection);
     expect(Array.from(withGroup.effectTextureProjection!)).toEqual(
       Array.from(multiply(withGroup.modelViewProjection, scaling(2222, 2222, 1))),

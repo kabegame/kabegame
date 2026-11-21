@@ -2434,7 +2434,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 |---|---|---|
 | 归属 | 编译期定（`bundle.ts` 的 `assignGroups`）：`group` 是最近的组合层祖先；`subtree` 按先序展开，子层按 `objects` 下标排，嵌套组只收它本身。顶层循环跳过 `group` 非空的图层，缺这个字段（手写的图层）当顶层 | 读码 §2.5 |
 | 画子树 | 基础 pass（`compose` / `clear`）之后紧跟 `subtree` 步骤：结束当前 pass，对可见的子孙依次跑它们的 ops，「场景目标」换成组的合成 RT。`subtree` 不算一次合成链的写入 | 实测 `p5b-grp-cb1` / `cb0` |
-| 视图投影 | 子孙画到「场景」的绘制（含粒子）换成 `groupViewProjection = ortho(±w/2, ±h/2, 1000, −1000) · inverse(W_组)`（w、h 取组的 `size`），所以子层落在组的本地坐标系，组矩形外的部分裁掉。组里没有视差、抖动、透视，这些作用在组本身的上屏上。世界空间粒子的顶点乘 `inverse(W_组)` 回到本地。图像层的 MVP 照 WPE 的结合顺序算（2026-11-20，P8 步骤 7 走查）：WPE 画子树时模型栈是 `inverse(W_组)`（`FUN_14005f730`），子层并进模型栈再乘局部正交，`MVP = P ⊗ (inverse(W_组) ⊗ W)`（`groupMvpParts` + `drawMatrices` 的 `group`，组的逆用 `invertF32`）；先拼好再乘平移会差 1 ulp，压在光栅化 1/256 像素的对齐分界上时边缘的 texel 整个翻转。`g_ModelMatrix` / `g_ViewProjectionMatrix`（WPE 是组内局部矩阵与 P，读码、未实测）、文本、粒子、网格仍用先拼好的 `groupViewProjection`。嵌套组的 `compose` 用**不带视差**的场景视图投影采快照（缩放、抖动带；顶层组合层的 compose 带视差，P5j 更正），采到的是外层开始时那份。全屏组的子孙不换局部正交（见「全屏组（P5j）」） | 实测 `p5b-grp-par`、`p5b-grpptc`（最大差 2）、`p5b-nest`；`p5j-cam`（G 里的 M） |
+| 视图投影 | 子孙画到「场景」的绘制（含粒子）换成 `groupViewProjection = ortho(±w/2, ±h/2, 1000, −1000) · inverse(W_组)`（w、h 取组的 `size`），所以子层落在组的本地坐标系，组矩形外的部分裁掉。组里没有视差、抖动、透视，这些作用在组本身的上屏上。世界空间粒子的顶点乘 `inverse(W_组)` 回到本地。图像层的 MVP 照 WPE 的结合顺序算（2026-11-20，P8 步骤 7 走查）：WPE 画子树时模型栈是 `inverse(W_组)`（`FUN_14005f730`），子层并进模型栈再乘局部正交，`MVP = P ⊗ (inverse(W_组) ⊗ W)`（`groupMvpParts` + `drawMatrices` 的 `group`，组的逆用 `invertF32`）；先拼好再乘平移会差 1 ulp，压在光栅化 1/256 像素的对齐分界上时边缘的 texel 整个翻转。图像层（P14c）与网格（P14b）的 `g_ModelMatrix` 是组内局部的 `inverse(W_组) ⊗ W`（图像层仿射乘法、网格 glm 乘法）、`g_ViewProjectionMatrix` 是 P 本身；图像层的 `g_EffectModelMatrix`、`g_LayerModelMatrix` 仍是世界矩阵 W，效果投影矩阵和 WPE 有意不同（见「组里图像层的矩阵（P14c）」）；文本、粒子仍用先拼好的 `groupViewProjection`。嵌套组的 `compose` 用**不带视差**的场景视图投影采快照（缩放、抖动带；顶层组合层的 compose 带视差，P5j 更正），采到的是外层开始时那份。全屏组的子孙不换局部正交（见「全屏组（P5j）」） | 实测 `p5b-grp-par`、`p5b-grpptc`（最大差 2）、`p5b-nest`；`p5j-cam`（G 里的 M） |
 | 写 alpha | 直接画的子层写 RGBA；组里的上屏（带 effect 子层的末 pass、嵌套组画回外层）只写 RGB。组 `copybackground: false` 时 alpha 用 One / One / Max，颜色照绘制自己的混合（`programs.ts` 的 `groupBlendState`，管线键加 `\|max`） | 实测：`p5b-grp-cb1` 子层写掩码 15，`p5b-grpptc`、`p5b-nest` 的上屏是 7；`p5b-grp-cb0` 重叠处 alpha 0.5 |
 | 无 effect 的组 | 基础 pass → 子树 → 上屏：用 `effectpassthrough` 材质（`version` > 2 用 `_4`，`BLENDMODE 0`，`SceneLayer.groupUpload`，`g_Color4` 置 1）画世界四边形，UV 0–1；`copybackground` 为 true 时用材质的 normal（不混合），false 时 translucent | 实测 `p5b-grp-nofx` / `nofx0`，**推翻读码**（读码推断是 composelayer 着色器铺满全屏并拉伸） |
 | 合成 RT 池 | 组里的图层按父链上组的层数另分一池（键加 `\|k<层数>`），不然和组同尺寸的子孙会共用组的合成 RT | 步骤 4 实现时发现 |
@@ -4248,8 +4248,21 @@ WPE 的缺陷按「壁纸依赖才复现」处理。语料里只有 3834692798 �
 各 3 个像素差 1。3816948983 的复制工程（控制脚本的 `Math.random` 换成固定种子，`ignore/p14/b/seed_random.py`）按 WPE 日志回放到第 313 帧：
 整帧只有 37 个像素差 1，`height-copy` 组 RT（224×126）的 RGBA 逐位相同。
 
-**另记**：同一次抓帧里组里的**图像层**也是 `g_ModelMatrix` = 局部、`g_ViewProjectionMatrix` = P，我们给的是世界矩阵与 `P · inverse(W_组)`
-（MVP 已对，P8 步骤 7）。只影响分开读这两个矩阵的着色器（光照、效果矩阵），不在本步。
+**组里图像层的矩阵（P14c）**：同一次抓帧里组里的**图像层**也是 `g_ModelMatrix` = 局部、`g_ViewProjectionMatrix` = P，P14c 另开一步修了：
+- **依据**：工程 `ignore/p14/c/gen_p14c.py` 的 `p14c-gi`（组带 x / y 旋转，组里与顶层各一份直接上屏、两个探针 effect、预光照、本地 / 世界空间粒子），
+  抓帧 `A:\p14c\gi\`，常量用 `kbp rdc consts` 导出，我们的用 `render_scene` 的逐 draw 轨迹，`ignore/p14/c/cmp_consts.py` 逐 draw 逐常量比；
+  计划 [phase-14c-group-image-matrices.md](../../.claude/plans/wpe-import/3-scene/phase14/phase-14c-group-image-matrices.md)。
+- **规则**（`render/uniforms.ts` 的 `drawMatrices` 收到 `group` 时）：模型矩阵是 `inverse(W_组) ⊗ W`（图像层画自己时 `FUN_1401e8aa0` 内联的仿射乘法，
+  `mulAffine`；glm 乘法差 1 ulp），`g_ViewProjectionMatrix` 是组的局部正交 P，MVP 不变（`P ⊗ M`，P8 步骤 7 的抓帧照样逐位）；effect 中间 pass 与末
+  pass 的 `g_EffectModelMatrix`（中间 pass 再乘半尺寸）、`g_LayerModelMatrix` 仍是世界矩阵 W（WPE 的 `this+0x384`）。直接上屏、末 pass 的这些矩阵和
+  WPE 逐位相同；预光照的 Alt 矩阵改动前就相同。
+- **和 WPE 有意不同**：组里 effect 的 `g_EffectModelViewProjectionMatrix` / `g_EffectTextureProjectionMatrix`，WPE 是 `P_组 ⊗ W`（`this+0x344` 是模型栈顶被
+  换成 W 之后算的 MVP，漏了组的逆；铺满全屏、居中不转的组就差半个屏幕），读它们采屏幕或换算光标的 effect（`godrays` / `shine` 的合成、`cursorripple`、
+  `fluidsimulation`、`xray`、`depthparallax`）在组里会错位。语料里组里没有读它们的 effect（`ignore/p14/c/scan_group_fx.py`），按缺陷不复现，取图层 MVP。
+- **语料**：组里读 `g_ModelMatrix` / `g_ViewProjectionMatrix` 等的只有 3 张（3784630846、3838255453、3838495182 的 `genericimage4`），都没开光照、反射、
+  雾，着色器实际不读它们，画面不变。
+- **没覆盖的**：组里的文本、粒子仍用 `groupViewProjection`；`p14c-gi` 里组带 x / y 旋转时组里的两颗粒子和 WPE 差几个像素（改动前后相同，粒子的常量
+  `kbp rdc consts` 没导出来），没有查。
 
 ## 图像层帧表（P6e）
 

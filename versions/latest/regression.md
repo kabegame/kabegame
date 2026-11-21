@@ -4351,6 +4351,23 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [ ] | PB5 预览里看 3816948983 本体 | Windows dev，图库预览 | 预览这张壁纸看一会儿，点水面、拖动鼠标 | 水面清澈、不偏青，没有上边与左边的拉丝；锦鲤与涟漪正常；看板娘不提示不支持的特性 | 需要用户看 |
 | [ ] | PB6 非 Windows | macOS、Linux | 同 PB5 | 同 Windows | 本机不能测 |
 
+## 场景壁纸组里图像层的矩阵（P14c）
+
+2026-11-21。P14b 的抓帧里发现组里的图像层 `g_ModelMatrix` / `g_ViewProjectionMatrix` 在 WPE 是组内局部矩阵与组的局部正交 P，我们给的是世界矩阵与 `P · inverse(W_组)`（MVP 早已对齐）。只影响分开读这两个矩阵的着色器（光照、法线、`g_ModelMatrixInverse`）。
+
+实现：组里的图像层（直接上屏、effect 的中间 pass 与末 pass、passthrough 上屏）模型矩阵换成 `inverse(W_组) ⊗ W`（仿射乘法），视图投影换成 P；`g_EffectModelMatrix`、`g_LayerModelMatrix` 保持世界矩阵（WPE 也是）。
+
+和 WPE 有意不同：组里 effect 的 `g_EffectModelViewProjectionMatrix` / `g_EffectTextureProjectionMatrix`，WPE 漏了组的逆，读它们的 effect 在组里错位；语料不依赖，取图层 MVP。
+
+依据与记录：计划 `.claude/plans/wpe-import/3-scene/phase14/phase-14c-group-image-matrices.md`；工程与对照 `ignore/p14/c/`；抓帧 `A:\p14c\gi\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PC0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`render/` 全部 vitest、变异 | 0 error，相关测试全过，变异检出 | 2026-11-21：tsc 0 error；`render/` 70 个文件 1597 过，3 个失败（`p3a` 泛光两条、`render.test` 的 BC3 一条）在 HEAD 上同样失败、和本步无关；变异 7 / 7 检出（`ignore/p14/c/mutate.py`） |
+| [x] | PC1 逐常量对照 | Windows dev + WPE | `p14c-gi` 抓帧的常量（`kbp rdc consts`）对探针逐 draw 轨迹（`ignore/p14/c/cmp_consts.py`） | 组里直接上屏、末 pass 的模型矩阵、逆、法线矩阵、视图投影、效果模型矩阵、`g_LayerModelMatrix` 和 WPE 逐位相同 | 2026-11-21：全部逐位相同；剩下的差异是效果投影矩阵（有意不同）、WPE 在该角色不写的残留值、顶层也有的中间 pass / 基础 pass 写法 |
+| [x] | PC2 语料 | Windows | `scan_group_fx.py` 找组里读这些矩阵的作品 | 画面不变 | 2026-11-21：读效果投影矩阵的 0 张；读模型 / 视图投影的 3 张（`genericimage4`）都没开光照、反射、雾，着色器实际不读 |
+| [ ] | PC3 非 Windows | macOS、Linux | 同 PC1 | 同 Windows | 本机不能测 |
+
 ## 场景壁纸 P6a2：声音的 `mintime` / `maxtime` 绑属性、挂脚本
 
 2026-11-21 Windows。myprojects `3798696286`（Hades Asylum Depths）把 `random` 咆哮声的 `mintime` / `maxtime` 绑在两个滑块上，以前报 `sound:binding:mintime; sound:binding:maxtime`、整张退回预览图。WPE 写字段走类型化 setter，没有改值回调的字段照样写入（rea-p10-keyframes 第 4 条），`random` 模式在每次开始播放时读这两个字段算等待（rea-p6a 2.1）。所以改成就地目标，排期器开始播放时现读：运行中改了，正在等的这次不变，下一次排期用新值。属性、字段脚本、关键帧三种写法都支持。`playbackmode` / `startsilent` / `spatialization` 维持照报。记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6a2-sound-delay.md`。
