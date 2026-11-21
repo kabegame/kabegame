@@ -207,25 +207,6 @@ Wayland 会话里离屏 browser 的设备缩放原先恒为 1：CEF 的 `GetScre
 | [x] | MG2 图库 `file://` | 同上 | 画廊一页里数 `file://` 的 `<img>` | 没有加载失败 | 2026-11-21 Claude：100 个 `file://`，已加载 41 个全部成功、0 个失败，其余是懒加载没轮到 |
 | [x] | MG3 macOS 上没有「跟随 WPE」 | 同上，WPE 安装目录里临时放一份 `config.json` | 调 `get_wpe_follow_available`；看设置页壁纸分区 | false，帧率、后处理等没有「跟随 Wallpaper Engine」 | 2026-11-21 Claude：放了 `{"kbtest":{"general":{"user":{"fps":24}}}}` 后命令仍是 false；帧率只有滑条、没有跟随开关，后处理只有 Off / On / Ultra（说明文字里提到跟随是静态文案）。测完删掉临时文件 |
 
-## dev 产物移到 `target-dev/` 后 Linux 找不到场景宿主
-
-2026-11-21 Linux dev。日志 `WARN webview:main: 场景宿主不可用: scene host is not built: /usr/lib/Kabegame/resources/wpe-scene/index.html`。
-桌面端的 `AppPaths.resource_dir` 由 `tauri-plugin-pathes` 经 `BaseDirectory::Resource` 取，而 tauri-utils 的
-`resource_dir_from` 只在 exe 的父目录名正好是 `target`（`target/<profile>` 或 `target/<triple>/<profile>`）且同目录有
-`.cargo-lock` 时才认作开发机、返回 exe 目录；`target-dev/debug` 不满足，Linux 回落到安装包路径 `/usr/lib/<productName>`，
-macOS 去找 `target-dev/Resources`（不存在，`AppPaths` 初始化失败）。Windows 恒返回 exe 目录，所以没有暴露。
-`resource_dir` 的使用者只有这一处。
-
-改法：`tauri-plugin-pathes` 桌面分支先看 exe 同目录有没有 `.cargo-lock`，有就直接用 `<exe 目录>/resources`，
-不看目录名；没有（安装包）仍走 tauri。
-
-| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
-| --- | --- | --- | --- | --- | --- |
-| [ ] | TD1 检查 | Linux | `check-kabegame` 的 `--skip vue` | 通过 | |
-| [ ] | TD2 Linux dev 场景宿主 | Linux dev（`target-dev/debug`） | 重启 dev，预览一张场景壁纸 | 不再出现「场景宿主不可用」，场景实时渲染；预置插件目录也来自 `target-dev/debug/resources` | 需要用户重开 dev |
-| [ ] | TD3 macOS dev 启动 | macOS dev | `deno task dev -c kabegame` | 正常启动，没有 `Failed to resolve resource dir` | 没做：本机只有 Linux |
-| [ ] | TD4 安装包不受影响 | Linux deb / macOS .app / Windows 安装版 | 安装后预览场景壁纸 | 资源目录仍是 `/usr/lib/Kabegame` / `Contents/Resources` / 安装目录（这些目录里没有 `.cargo-lock`） | 发版前走查 |
-
 ## `build:wpefont` 编译前预检 wasm 链接器
 
 2026-11-21 Linux（Ubuntu clang 21.1.8）。`deno task build:wpefont` 编完 42 个单元后链接报
@@ -308,7 +289,7 @@ VSCode 的 rust-analyzer 用同一个 `target/` 跑 `cargo check`，环境里没
 构建 cli 工具」。修成在 `target-dir.ts` 注入 `target-dev` 的同时用 `KABEGAME_CLI`（打包脚本本来就支持
 这个变量）把 cli 指回 `target/release`（没有就退 `target/debug`），不碰子仓库、也不破坏 `target-22`。
 fork 的 `cargo-tauri` 则相反——它是构建环节，继续跟着隔离走。
-**第二处回归**（2026-11-21 macOS 实测抓到）：macOS 上 `deno task dev` 编完一启动就 panic：`PluginInitialization("pathes", "Failed to resolve resource dir: unknown path")`。`tauri-utils` 的 `resource_dir_from` 在 Windows 上一律返回 exe 目录，在 macOS / Linux 上只认 exe 目录形如 `target/<profile>` 或 `target/<triple>/<profile>`（且旁边有 `.cargo-lock`）的开发态，否则按安装包找 `../Resources` / `/usr/lib/<name>`——`target-dev/debug` 不满足，而只在 Windows 上验不出来。修成 tauri 补丁 20：同样的形状也认 `CARGO_TARGET_DIR` 指的目录（`cargo run` 会把它传给 exe；相对值按当前目录解析，同 cargo），`.cargo-lock` 的检查保留，安装包不受影响；`target-dev` 的目录名不变。
+**第二处回归**（2026-11-21 macOS 实测抓到）：macOS 上 `deno task dev` 编完一启动就 panic：`PluginInitialization("pathes", "Failed to resolve resource dir: unknown path")`。`tauri-utils` 的 `resource_dir_from` 在 Windows 上一律返回 exe 目录，在 macOS / Linux 上只认 exe 目录形如 `target/<profile>` 或 `target/<triple>/<profile>`（且旁边有 `.cargo-lock`）的开发态，否则按安装包找 `../Resources` / `/usr/lib/<name>`——`target-dev/debug` 不满足，而只在 Windows 上验不出来。修成 tauri 补丁 20：同样的形状也认 `CARGO_TARGET_DIR` 指的目录（`cargo run` 会把它传给 exe；相对值按当前目录解析，同 cargo），落在这个目录里就认作开发态、不再加查 `.cargo-lock`（上游名叫 `target` 的那条照旧），安装包不受影响；`target-dev` 的目录名不变。Linux 上同一个原因不 panic：`resource_dir_from` 的 Linux 分支直接返回 `/usr/lib/<productName>`，`AppPaths.resource_dir` 静默落到安装包路径，2026-11-21 Linux dev 的症状是 `WARN webview:main: 场景宿主不可用: scene host is not built: /usr/lib/Kabegame/resources/wpe-scene/index.html`。
 
 改动：产物目录按命令隔离（`b` → `target/`，其余 → `target-dev/`，新增 `scripts/target-dir.ts`，显式 `CARGO_TARGET_DIR` 优先，`.mcp.json` 给 `kabegame-dev` MCP 配同一个目录）、
 `--data` 默认值统一成「带 `--release` 为 prod，否则 dev」、三个生成文件改成内容有变才写（`writeFileIfChanged`）、rust-analyzer 配 `cargo.targetDir`（`.vscode/` 不入库）。
@@ -332,6 +313,8 @@ fork 的 `cargo-tauri` 则相反——它是构建环节，继续跟着隔离走
 | [ ] | B10 三个生成文件跳过重写 | Windows | 连着跑两次 `deno task b -c kabegame --skip cargo` | 第二次日志打「内容未变，跳过」，`tauri.conf.json` 的 mtime 不动 | 没做：会跑完整前端构建并重打包插件 |
 | [x] | B12 tauri 补丁 20 单测与序列 | macOS | `cargo test -p tauri-utils --lib platform`（在 `third/tauri` 里）；`deno task patch tauri --check` | 新加的 `cargo_target_dir_recognized` 与原有 `resolve_resource_dir` 都过；20 个补丁链式预检通过 | 2026-11-21 Claude：2 passed；`tauri: OK dry-run` |
 | [ ] | B13 macOS dev 启动（第二处回归） | macOS dev | `deno task dev -c kabegame` | 正常起来，不再 panic `Failed to resolve resource dir: unknown path`；exe 在 `target-dev/debug/` | 修复前 2026-11-21 用户实测：一启动就在 `lib.rs:468` panic |
+| [x] | B14 tauri 补丁 20 单测 · Linux | Linux | `cargo test -p tauri-utils --lib platform`（在 `third/tauri` 里，补丁已应用） | `cargo_target_dir_recognized` 与 `resolve_resource_dir` 都过 | 2026-11-21 Claude：2 passed |
+| [ ] | B15 Linux dev 场景宿主（第二处回归） | Linux dev | 补丁 20 应用后重启 `deno task dev -c kabegame`（`tauri-utils` 变了会连带重编），预览一张场景壁纸 | 不再出现「场景宿主不可用」，场景实时渲染 | 需要用户重开 dev |
 
 ## 拖入落点提示显示成原始 key（`import.dropZone.*`）
 

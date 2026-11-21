@@ -111,10 +111,11 @@ deno task --cwd apps/kabegame test:watch            # watch 模式，改哪跑�
 
 **macOS / Linux 靠 tauri 补丁 20**：上游 Tauri 只在 exe 目录形如 `target/<profile>` 或
 `target/<triple>/<profile>` 时把它当开发态、用 exe 目录作 resource 目录，否则按安装包去找
-`../Resources` / `/usr/lib/<name>`，`pathes` 插件初始化就 panic（`Failed to resolve resource dir: unknown path`）。
+`../Resources` / `/usr/lib/<name>`：macOS 上 `pathes` 插件初始化就 panic（`Failed to resolve resource dir: unknown path`），
+Linux 不 panic、静默落到 `/usr/lib/<productName>/resources`，症状是场景宿主报 `scene host is not built`。
 `third-patches/tauri/20-tauri-utils-cargo-target-dir.patch` 让它也认 `CARGO_TARGET_DIR` 指的目录
 （`cargo run` 把这个变量传给 exe）。Windows 不看目录名，只在 Windows 上验不出来；直接从 Finder / 终端裸跑
-`target-dev/debug/kabegame` 而不带 `CARGO_TARGET_DIR` 时仍会 panic，要经 `deno task dev` / `start`。
+`target-dev/debug/kabegame` 而不带 `CARGO_TARGET_DIR` 时仍会这样，要经 `deno task dev` / `start`。
 
 **为什么要分开**：cargo 把 build script 读到的环境变量值记进 fingerprint，值一变就
 `EnvVarChanged` → build script 重跑 → 依赖它的整个 crate 连同全部 bin 重编重链。而这些命令
@@ -129,8 +130,6 @@ deno task --cwd apps/kabegame test:watch            # watch 模式，改哪跑�
 
 排查时把 `CARGO_LOG=cargo::core::compiler::fingerprint=info` 加到 cargo 环境，日志会直接
 报出 `dirty: EnvVarChanged { name, old_value, new_value }` 和 `stale: changed <文件>`。
-
-tauri 判断「开发机上的 cargo 产物」时只认父目录名正好是 `target`，`target-dev/<profile>` 在 Linux 上会把资源目录解析成 `/usr/lib/<productName>`、macOS 上解析失败；桌面 `AppPaths.resource_dir` 因此由 `tauri-plugin-pathes` 按 exe 同目录的 `.cargo-lock` 自己认开发产物，新增依赖 tauri 资源目录的代码要走 `AppPaths`，不要直接用 `BaseDirectory::Resource`。
 
 代价是每个目录各存一份依赖产物（CEF / V8 / FFmpeg 都不小），换来的是「改完代码 → check →
 dev」不再每轮全量重编。

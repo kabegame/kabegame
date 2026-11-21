@@ -108,25 +108,14 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                     .map(|dev_debug_dir| dev_debug_dir.join("tmp"))
                     .unwrap_or_else(|| std::env::temp_dir().join("Kabegame"));
 
+                let resource_dir = app
+                    .path()
+                    .resolve("resources", tauri::path::BaseDirectory::Resource)
+                    .map_err(|e| format!("Failed to resolve resource dir: {}", e))?;
+
                 let exe_dir = std::env::current_exe()
                     .ok()
                     .and_then(|exe| exe.parent().map(|p| p.to_path_buf()));
-
-                // tauri 只把父目录名正好是 `target` 的 cargo 产物（`target/<profile>`、
-                // `target/<triple>/<profile>`）当开发机，dev 的 `target-dev/debug` 在 Linux 上会回落到
-                // `/usr/lib/<productName>`、macOS 上找不到 `../Resources`。这里照它的另一半判据
-                // （exe 同目录有 cargo 的 `.cargo-lock`）认开发产物，不看目录名：资源与 exe 同目录，
-                // dev 构建脚本直接写进 `<target>/<profile>/resources`。
-                let resource_dir = match exe_dir
-                    .as_deref()
-                    .filter(|dir| dir.join(".cargo-lock").exists())
-                {
-                    Some(dir) => dir.join("resources"),
-                    None => app
-                        .path()
-                        .resolve("resources", tauri::path::BaseDirectory::Resource)
-                        .map_err(|e| format!("Failed to resolve resource dir: {}", e))?,
-                };
 
                 let external_data_dir = None;
                 let pictures_dir = dirs::picture_dir();

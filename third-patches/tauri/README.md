@@ -69,8 +69,9 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   directories are absent.
 - `20-tauri-utils-cargo-target-dir.patch` — `resource_dir` also treats the executable as a
   development build when its directory is `<CARGO_TARGET_DIR>/<profile>` or
-  `<CARGO_TARGET_DIR>/<triple>/<profile>` (still requiring `.cargo-lock` beside it). Upstream
-  only recognizes a directory literally named `target`, so on macOS / Linux an executable in a
+  `<CARGO_TARGET_DIR>/<triple>/<profile>`; that location alone is enough, without the upstream
+  `.cargo-lock` check. Upstream only recognizes a directory literally named `target`, so on
+  macOS / Linux an executable in a
   renamed target directory (kabegame's `target-dev`, see `scripts/target-dir.ts`) was taken for
   an installed app and plugin setup panicked with `Failed to resolve resource dir: unknown path`.
   `cargo run` passes `CARGO_TARGET_DIR` on to the executable; a relative value is resolved
