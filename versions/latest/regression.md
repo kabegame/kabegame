@@ -1,5 +1,22 @@
 # v4.7.0 regression
 
+## WPE 壁纸的 macOS 缺口走查（第 2 步：场景快捷方式）
+
+2026-11-21 macOS 26.6.2 dev。场景快捷方式（`usershortcut`，P11d）原来只有 Windows，macOS 上面板不显示、宿主一律未绑定。这一步新增 `wallpaper/wpe_shortcut/mac.rs`：图标先取 QuickLook 内容缩略图（同 Windows 的 Shell 缩略图：图片、视频、PDF 出内容），再退到 `NSWorkspace` 的系统图标；启动时文件夹、网址、不带参数的文件交给 opener，命令整条交给用户的登录 shell（`$SHELL -i -l -c`，同终端：从 Finder 启动时应用的 `PATH` 只有系统目录，Homebrew、nvm 等写在 `.zshrc` 里），带参数的 `.app` 经 `/bin/sh -c` 跑 `open -a … --args`。平台开关 `wpe_shortcut::SUPPORTED`，面板在 macOS 上把「文件」写成「文件或 App」。测试场景是 9135（Minimalist Landscape）的 24 格应用栏，测完属性还原。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MS1 单测 | macOS | `kabegame` crate 的 `wpe_shortcut`、`commands::wpe_web`；前端 `WpeWebPropertiesPanel.test.ts` | 全过 | 2026-11-21 Claude：45 + 9 passed（新增 mac 5 个），前端 11 passed；`check-kabegame` 0 error。crate 测试二进制要给 `DYLD_FALLBACK_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 才找得到 CEF |
+| [x] | MS2 图标核对 | macOS | 核对测试 `dump_shortcut_icons`：Safari.app、Calculator.app、`/Applications`、主目录、JPG、PDF、`.webloc`、不存在的 `foo.txt` / `foo`、`cmd:open -a Calculator`、`cmd:say hi`、PATH 里没有的命令、`web:` 维基百科 | 应用 / 文件夹系统图标，图片与 PDF 内容缩略图，不存在的按扩展名，网址取网站图标 | 2026-11-21 Claude：全部符合；没有扩展名的不存在路径与找不到的命令没有图标。第一版 Safari 带替身箭头（`/Applications/Safari.app` 是指向 Cryptex 的符号链接），改成先解析符号链接后没了 |
+| [x] | MS3 宿主拿到的形状 | macOS dev，9135 配五格（Safari.app、`/Applications`、一张 JPG、`www.wikipedia.org`、`open -a Calculator`） | 主窗口调 `wpe_web_get_state`；宿主里调 `wpe_scene_shortcut_icon` 与 `wpe_open_user_shortcut` | `isbound: true`，`commandtype` / `file` 对；状态里没有完整路径；图标有字节，没配的 0 字节；宿主调启动被 ACL 拒 | 2026-11-21 Claude：符合（网址按 WPE 给整串）；图标 256×256 / 256×181 / 160×160 |
+| [x] | MS4 应用栏图标 | 同 MS3，打开 9135 的预览 | 截图 | 五格显示各自的图标，没配的格子是「添加」占位；改值后当场换图 | 2026-11-21 Claude：符合；第 6 格改成 Chess.app 后不重载就换了图 |
+| [x] | MS5 启动 | 同 MS3 | 主窗口逐格调 `wpe_open_user_shortcut`（面板「测试」按钮调的就是它） | 各自打开；没配返回 false；属性不是快捷方式报错 | 2026-11-21 Claude：Safari、Finder 的 `/Applications`、预览打开图片、Chrome（默认浏览器）打开补了 `https://` 的维基百科、Calculator 都起来了；`Chess.app|--kb-test "a b"` 的进程参数是 `--kb-test`、`a b`；PATH 里没有的命令返回 true、日志记退出码 127。测完关掉了打开的程序与窗口 |
+| [x] | MS6 面板 | 同 MS3 | 读预览属性面板的快捷方式编辑器 | macOS 上有这类属性，「文件」标为「文件或 App」，路径与命令的占位换成 macOS 的 | 2026-11-21 Claude：8 个编辑器，英文界面显示「File or app」与「Path of an app or file」 |
+| [x] | MS7 命令用登录 shell | macOS dev；另用测试二进制在 `env -i`（`PATH` 只有系统目录，模拟从 Finder 启动）里跑 `reads_login_shell_path` | 配 `cmd:node -e …`（往草稿目录写文件）、`cmd:ll -d / > 文件`、`cmd:node --version` 并启动、取图标 | node（只在 nvm 里）跑出结果；别名能用；`node` 有图标；干净环境里读到的 `PATH` 含 Homebrew、nvm、pyenv | 2026-11-21 Claude：全部符合，从调用到 node 写完约 0.9 s（zsh 启动 0.63 s）。第一版 dev 里命令不执行：交互 shell 在后台进程组里被 SIGTTOU 停在 `T`（dev 从终端启动、带控制终端），改成子进程 `setsid` 后正常 |
+| [ ] | MS8 场景里点击启动 | macOS dev，9135 配好应用栏 | 在预览或桌面壁纸上用真实鼠标点应用栏的格子 | 打开对应目标；同一次点击只启动一次 | 要真实鼠标：macOS 上 iframe 的鼠标由全局光标注入，CDP 点不到 |
+| [ ] | MS9 面板浏览选 App | macOS dev | 快捷方式编辑器类型选「文件或 App」，点「浏览」 | 系统对话框能选中 `.app` | 要手动操作对话框 |
+| [ ] | MS10 Windows 不回归 | Windows dev | 按 P11d 的走查配几格、看图标、点「测试」 | 和以前一样 | Windows 分支只抽出了 `prefill`，逻辑没变 |
+
 ## WPE 壁纸的 macOS 缺口走查（第 1 步：文档与注释对齐）
 
 2026-11-21 macOS 26.6.2 dev。走查 WPE 壁纸在 macOS 上还缺什么：真缺的功能只剩媒体集成（系统「正在播放」）与场景快捷方式（`usershortcut`），留给后面几步。这一步只改文档与注释里过时的平台说法：`WPE_IMPORT.md` 的三平台能力表把「音频与媒体数据｜有｜无｜无」拆成音频（macOS 14.2+ 有）、媒体、快捷方式、跟随四行；删掉旧阶段的「macOS 不渲染网页壁纸」与「`setPaused` 尚未实现」；`scene/AUDIO_MEDIA.md`、`PARTICLES_ROPE_CHILDREN.md`、`host.ts` 里「非 Windows 没有回环采集」改成只说 Linux；macOS 系统字体表与图库 `file://` 记上本次核对结果。「跟随 WPE」保持只在 Windows 上提供（WPE 只能在 Windows 上运行），`get_wpe_follow_available` 的门控处补上这条理由。

@@ -228,9 +228,11 @@ fn scene_user_props(view: WpeWebPropertiesView, raw: &Value) -> serde_json::Map<
 
 /// 一个快捷方式属性给场景宿主的形状，`raw` 是用户配的原值（没配为空串）。
 fn scene_shortcut_entry(raw: &str) -> Value {
-    // TODO:[WPE_SCENE] macOS / Linux 上做快捷方式（取图标与启动）：目前只有 Windows，其它平台一律未绑定，
-    // 脚本的 `openUserShortcut` 返回 false、图标槽用缺省纹理。
-    let parsed = cfg!(windows).then(|| parse_user_shortcut(raw)).flatten();
+    // 平台不支持快捷方式（Linux，见 `wpe_shortcut::SUPPORTED`）时一律未绑定：脚本的 `openUserShortcut` 返回 false、
+    // 图标槽用缺省纹理。
+    let parsed = crate::wallpaper::wpe_shortcut::SUPPORTED
+        .then(|| parse_user_shortcut(raw))
+        .flatten();
     let mut entry = serde_json::json!({
         "type": "usershortcut",
         "value": shortcut_key(raw),
@@ -971,7 +973,7 @@ mod tests {
         let bad = user["bad"].as_object().unwrap();
         assert_eq!(bad["isbound"], json!(false));
         assert!(!bad.contains_key("commandtype") && !bad.contains_key("file"));
-        if cfg!(windows) {
+        if crate::wallpaper::wpe_shortcut::SUPPORTED {
             assert_eq!(app["isbound"], json!(true));
             assert_eq!(app["commandtype"], json!("command"));
             assert_eq!(app["file"], json!("calc"));

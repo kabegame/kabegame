@@ -55,12 +55,16 @@
  *
  * 「测试」调和脚本点击同一条启动命令 `wpe_open_user_shortcut`（应用页独有的命令，由用户在这里点击，本身就是用户激活）；命令读的是
  * 已保存的值，所以点之前先等待面板把草稿写完（`save`）。
+ *
+ * macOS 上「文件」写成「文件或 App」（`.app` 在 macOS 上是目录，免得用户去选「文件夹」），「命令」整条交给 `/bin/sh -c`，
+ * 占位例子换成 macOS 的；值格式不变。
  */
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Play, X } from "@lucide/vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@/api";
+import { IS_MACOS } from "@/env";
 import KbSelect from "@/components/common/form/KbSelect.vue";
 import KbText from "@/components/common/form/KbText.vue";
 import { Button, Spinner } from "@/components/ui";
@@ -102,17 +106,17 @@ watch(
 );
 
 const kindLabels: Record<WpeShortcutKind, string> = {
-  file: "gallery.wpeShortcutKindFile",
+  file: IS_MACOS ? "gallery.wpeShortcutKindFileMac" : "gallery.wpeShortcutKindFile",
   directory: "gallery.wpeShortcutKindDirectory",
   web: "gallery.wpeShortcutKindWeb",
   cmd: "gallery.wpeShortcutKindCmd",
 };
 const kindOptions = computed(() => WPE_SHORTCUT_KINDS.map((item) => ({ name: t(kindLabels[item]), variable: item })));
 const placeholders: Record<WpeShortcutKind, string> = {
-  file: "gallery.wpeShortcutPathFile",
+  file: IS_MACOS ? "gallery.wpeShortcutPathFileMac" : "gallery.wpeShortcutPathFile",
   directory: "gallery.wpeShortcutPathDirectory",
   web: "gallery.wpeShortcutPathWeb",
-  cmd: "gallery.wpeShortcutPathCmd",
+  cmd: IS_MACOS ? "gallery.wpeShortcutPathCmdMac" : "gallery.wpeShortcutPathCmd",
 };
 const pathPlaceholder = computed(() => t(placeholders[kind.value]));
 const canBrowse = computed(() => kind.value === "file" || kind.value === "directory");

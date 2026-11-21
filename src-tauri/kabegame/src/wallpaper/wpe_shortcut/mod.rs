@@ -2,12 +2,15 @@
 //!
 //! 两个入口 [`icon`] 与 [`launch`] 共用同一组检查：图片在库里且是场景、属性在 `project.json` 里是 `usershortcut`、
 //! 值只取 metadata 的 `userProperties`（用户在面板里配的，不取作者缺省值）、值能解析。图标按原值在内存里缓存。
-//! 取图标与启动的平台部分只在 Windows（`windows.rs`），其它平台 [`icon`] 返回 `None`、[`launch`] 报错。
+//! 取图标与启动的平台部分在 Windows（`windows.rs`）与 macOS（`mac.rs`）；网址图标（`web.rs`）与透明区填色（`cv.rs`）
+//! 不分平台。其它平台（Linux）[`icon`] 返回 `None`、[`launch`] 报错。
 
-// 非 Windows 上平台部分不编译，取图标 / 启动的调用链里有一批只在 Windows 用的函数
-#![cfg_attr(not(windows), allow(dead_code))]
+// Linux 上平台部分不编译，取图标 / 启动的调用链里有一批用不到的函数
+#![cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 
 pub mod cv;
+#[cfg(target_os = "macos")]
+pub mod mac;
 pub mod web;
 #[cfg(windows)]
 pub mod windows;
@@ -20,6 +23,11 @@ use kabegame_core::wpe::user_props::{
     parse_defs, parse_user_shortcut, user_values, ShortcutKind, UserShortcut, WpePropKind,
 };
 use serde_json::Value;
+
+/// 本平台有没有快捷方式（取图标与启动）。没有时后端给场景宿主的快捷方式一律未绑定、面板不显示这类属性
+/// （前端同规则：`WpeWebPropertiesPanel.vue`）。
+/// TODO:[WPE_SCENE] Linux 上做快捷方式（启动用 `xdg-open` / `sh -c`，图标要走 GTK 图标主题）。
+pub const SUPPORTED: bool = cfg!(any(windows, target_os = "macos"));
 
 /// 图标：直通 alpha 的 RGBA，`rgba.len() == width·height·4`。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,7 +125,7 @@ impl IconCache {
 
 static ICON_CACHE: Mutex<IconCache> = Mutex::new(IconCache::new(48));
 
-/// 取图标。没配置、取不到、非 Windows 返回 `None`；图片不是库内场景、属性类型不对报错。
+/// 取图标。没配置、取不到、平台不支持返回 `None`；图片不是库内场景、属性类型不对报错。
 pub async fn icon(image_id: &str, name: &str) -> Result<Option<Icon>, String> {
     let Some((raw, shortcut)) = lookup(image_id, name).await? else {
         return Ok(None);
@@ -134,28 +142,37 @@ pub async fn icon(image_id: &str, name: &str) -> Result<Option<Icon>, String> {
     Ok(Some(icon))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 async fn render(shortcut: UserShortcut) -> Option<Icon> {
     match shortcut.kind {
         ShortcutKind::Web => web::icon(&shortcut.path).await,
-        _ => tauri::async_runtime::spawn_blocking(move || {
-            windows::prefill_icon(&shortcut.path).map(finish)
-        })
-        .await
-        .ok()
-        .flatten(),
+        _ => tauri::async_runtime::spawn_blocking(move || prefill(&shortcut).map(finish))
+            .await
+            .ok()
+            .flatten(),
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 async fn render(_shortcut: UserShortcut) -> Option<Icon> {
-    // TODO:[WPE_SCENE] macOS / Linux 上做快捷方式图标：Windows 照 winrtutil 取 Shell 缩略图与系统图标，
-    // 其它平台没有对应接口，先一律没有图标（场景里的图标槽用缺省纹理）。
+    // TODO:[WPE_SCENE] Linux 上做快捷方式图标（见 [`SUPPORTED`]），先一律没有图标（场景里的图标槽用缺省纹理）。
     None
 }
 
-/// 启动。没配返回 `false`；图片不是库内场景、属性类型不对、非 Windows 报错；Windows 上
-/// `ShellExecuteW` 返回值 > 32 为 `true`。
+/// 文件 / 文件夹 / 命令的图标，还没做透明区填色。在阻塞线程里调。
+#[cfg(windows)]
+fn prefill(shortcut: &UserShortcut) -> Option<Icon> {
+    windows::prefill_icon(&shortcut.path)
+}
+
+/// 文件 / 文件夹 / 命令的图标，还没做透明区填色。在阻塞线程里调。命令取 shell 命令行里的程序。
+#[cfg(target_os = "macos")]
+fn prefill(shortcut: &UserShortcut) -> Option<Icon> {
+    mac::prefill_icon(&mac::icon_target(shortcut))
+}
+
+/// 启动。没配返回 `false`；图片不是库内场景、属性类型不对、平台不支持报错。Windows 上 `ShellExecuteW` 返回值 > 32
+/// 为 `true`；macOS 上启动请求发出去了为 `true`（命令只看 `sh` 起没起来）。
 pub async fn launch(image_id: &str, name: &str) -> Result<bool, String> {
     let Some((_, shortcut)) = lookup(image_id, name).await? else {
         return Ok(false);
@@ -176,10 +193,17 @@ async fn launch_shortcut(shortcut: UserShortcut) -> Result<bool, String> {
     Ok(ok)
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+async fn launch_shortcut(shortcut: UserShortcut) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || mac::launch(&shortcut))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 async fn launch_shortcut(_shortcut: UserShortcut) -> Result<bool, String> {
-    // TODO:[WPE_SCENE] macOS / Linux 上做快捷方式启动（`open` / `xdg-open`）；目前只有 Windows。
-    Err("scene shortcuts can only be launched on Windows".into())
+    // TODO:[WPE_SCENE] Linux 上做快捷方式启动（见 [`SUPPORTED`]）。
+    Err("scene shortcuts can only be launched on Windows and macOS".into())
 }
 
 #[cfg(test)]
@@ -272,10 +296,10 @@ mod tests {
         assert_eq!(cache.get("a").unwrap().rgba[0], 9);
     }
 
-    /// 核对用（`#[ignore]`，Windows）：按 `KB_SHORTCUT_DUMP`（`名字=原值;名字=原值`，原值是 `<类型>:<路径>[|<参数>]`）
-    /// 取图标，跳过 metadata 检查，写成 `<KB_SHORTCUT_DUMP_DIR>/<名字>.png`；文件 / 文件夹 / 命令另写一份透明区填色之前的
-    /// `<名字>.prefill.png`。网址项会联网。
-    #[cfg(windows)]
+    /// 核对用（`#[ignore]`，Windows / macOS）：按 `KB_SHORTCUT_DUMP`（`名字=原值;名字=原值`，原值是
+    /// `<类型>:<路径>[|<参数>]`）取图标，跳过 metadata 检查，写成 `<KB_SHORTCUT_DUMP_DIR>/<名字>.png`；文件 / 文件夹 / 命令
+    /// 另写一份透明区填色之前的 `<名字>.prefill.png`。网址项会联网。
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     #[ignore]
     fn dump_shortcut_icons() {
@@ -300,14 +324,13 @@ mod tests {
             let icon = match shortcut.kind {
                 ShortcutKind::Web => runtime.block_on(web::icon(&shortcut.path)),
                 _ => {
-                    let path = shortcut.path.clone();
-                    let prefill = std::thread::spawn(move || windows::prefill_icon(&path))
+                    let raw = std::thread::spawn(move || prefill(&shortcut))
                         .join()
                         .unwrap();
-                    if let Some(prefill) = &prefill {
-                        save(prefill, format!("{name}.prefill.png"));
+                    if let Some(raw) = &raw {
+                        save(raw, format!("{name}.prefill.png"));
                     }
-                    prefill.map(finish)
+                    raw.map(finish)
                 }
             };
             match icon {

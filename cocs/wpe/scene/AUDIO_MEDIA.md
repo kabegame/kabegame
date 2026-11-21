@@ -258,7 +258,7 @@ P11c 照这三段做，每段放在对应的位置。依据：
 - 图层的 `usertextures` 槽显示它的图标。这是 P11b 来源表的第三种来源，前两种是属性文件和封面。
 - 脚本在光标回调里调 `engine.openUserShortcut(属性名)` 启动它。
 
-只做 Windows。其它平台面板不显示这类属性，宿主拿到的一律未绑定，`openUserShortcut` 返回 `false`，图标槽用缺省纹理。非 Windows 的代码处标 `TODO:[WPE_SCENE]`。
+Windows 与 macOS（macOS 2026-11-21 起，`wpe_shortcut/mac.rs`）。Linux 面板不显示这类属性，宿主拿到的一律未绑定，`openUserShortcut` 返回 `false`，图标槽用缺省纹理；平台开关是 `wpe_shortcut::SUPPORTED`，前端面板同规则，Linux 的代码处标 `TODO:[WPE_SCENE]`。
 
 依据：
 - 读码 [rea-p11d](../../../.claude/plans/wpe-import/3-scene/phase11/rea-p11d.md)；
@@ -276,7 +276,7 @@ P11c 照这三段做，每段放在对应的位置。依据：
 - 宿主把这一项原样放进 `applyUserProperties` 的增量。`engine.userProperties` 出口由 `scriptUserProperties` 剥掉这三项，脚本读到 `{}`，同 WPE。
 
 **图标。** 宿主经 `wpe_scene_shortcut_icon(imageId, name)` 取，这条命令登记在 `wpe-scene-host.toml`：
-- 返回 `[宽 u32 LE][高 u32 LE][直通 alpha 的 RGBA]`；没配、取不到、非 Windows 时是 0 字节。值只取 metadata 的 `userProperties`，不取工程缺省值。
+- 返回 `[宽 u32 LE][高 u32 LE][直通 alpha 的 RGBA]`；没配、取不到、Linux 上是 0 字节。值只取 metadata 的 `userProperties`，不取工程缺省值。
 - 取法照 `winrtutil`（`wallpaper/wpe_shortcut/`）：
   - **文件、文件夹、命令**：
     - `SearchPathW` 补 `.exe`，再取 Shell 缩略图缓存（`IThumbnailCache`，256）；
@@ -290,6 +290,13 @@ P11c 照这三段做，每段放在对应的位置。依据：
     - 取不到时用 WPE 的 `webthumbnailfallback.png`（300×300），同样乘遮罩；
     - 缩放的滤镜没读清，先用 Catmull-Rom，标了 `TODO:[WPE_SCENE]`。
   - OpenCV 4.4.0 的三处（8 位定点线性 `resize`、`inpaint` TELEA、`circle` 抗锯齿）逐行移植进 `cv.rs`，只依赖标准库。4.13 重写过 `inpaint`，结果不同，以 4.4.0 为准。
+  - **macOS 的文件、文件夹、命令**（`mac.rs`，网址同上、不分平台）。顺序和 Windows 一样，先内容缩略图、再系统图标：
+    - 路径不存在、又不带 `/` 时按 `PATH` 找同名的可执行文件（对应 `SearchPathW`）；命令取 shell 命令行（照 shell 规则拆）的第一个词。`PATH` 用登录 shell 的：第一次用到时让 `$SHELL -i -l -c` 打印一次（前后加标记，`.zshrc` 往标准输出打的东西不影响）、进程内缓存，5 s 没打出来就杀掉、用应用自己的 `PATH`，之后不再重试；
+    - 符号链接先解析到目标（`iconForFile` 会给符号链接加替身箭头，macOS 26 的 `/Applications/Safari.app` 就是指向 Cryptex 的链接）；
+    - QuickLook（`QLThumbnailGenerator`，`Thumbnail` 表示、最长边 256、不要图标装饰）：图片、视频、PDF 在这里得到内容缩略图，对应 Windows 的 Shell 缩略图缓存；回调在 QuickLook 自己的队列上，阻塞线程里同步等，3 s 没回来就取消、退到系统图标；
+    - 系统图标（`NSWorkspace.iconForFile`，`CGImageForProposedRect` 取 256 的那一级画成 256×256）：应用、文件夹、可执行文件、`.webloc` 在这里；路径不存在时按扩展名取通用图标（`iconForFileType`），没有扩展名就没有图标；
+    - 都画进 sRGB、预乘 alpha 的位图再四舍五入去预乘，最后同样做透明区填色（`finish`）。
+    - 没有和 WPE 逐像素对照的对象（WPE 不在 macOS 上跑），实测见下面的走查。
 - 宿主侧是 `usertex/sources.ts` 的 `usershortcut` 来源：
   - 键变了才取，解码结果按键缓存；
   - 照 WPE 补透明边到槽的比例（`crop.ts` 的 `padRect`）：比例按 float32，`(int)` 截断，`>> 1` 居中，不裁切；精灵表槽取帧的比例；
@@ -310,7 +317,12 @@ P11c 照这三段做，每段放在对应的位置。依据：
   - 同一属性 1 秒内至多一次。
 - **启动命令**：`WpeSceneView` 用**自己持有的**图片 id 调 `wpe_open_user_shortcut(imageId, name)`。这条命令只登记进 `generate_handler!`，不进任何 `permissions/*.toml`，只有主窗口与壁纸窗口的应用页（免 ACL）调得到；场景宿主调它被 ACL 拒绝（走查实测）。
 - **后端**只启动这张图（必须是库内场景）上 `project.json` 类型为 `usershortcut`、且用户在面板里配过的那一项：
-  - 调 `ShellExecuteW(NULL, NULL, 路径, 参数, NULL, SW_SHOWNORMAL)`，返回值 > 32 时返回 `true`；
+  - Windows 调 `ShellExecuteW(NULL, NULL, 路径, 参数, NULL, SW_SHOWNORMAL)`，返回值 > 32 时返回 `true`；
+  - macOS（`mac.rs`）按类型分：
+    - 文件夹、网址、不带参数的文件交给 `tauri-plugin-opener`（NSWorkspace 用默认程序打开，`.app` 会被启动）；网址照取图标的规则补协议（`www.` 开头的值保存时不补 `https://`，NSWorkspace 不认没有协议的地址）；
+    - 命令整条交给用户的登录 shell（`$SHELL -i -l -c`，没有 `$SHELL` 用 `/bin/zsh`）：和在终端里敲一样，`.zprofile` / `.zshrc` 里配的 `PATH`（Homebrew、nvm、pyenv 等）、别名、函数都在，改了立即生效。从 Finder / Dock 启动的应用自己的 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，`/bin/sh -c` 找不到这些命令；只读 `.zprofile` 的登录 shell（`-l`）也不够，nvm、pyenv 等写在 `.zshrc` 里，只有交互 shell 才读。代价是每次多一次 shell 启动（本机 oh-my-zsh 加 nvm 约 0.63 s，从调用到命令跑完约 0.9 s）。不接标准输入输出、不等它结束（另起线程收尸，退出码不为 0 时记 warn），工作目录是用户主目录；子进程先 `setsid()` 脱离控制终端——从终端启动的 Kabegame（dev）带着控制终端，后台的交互 shell 一碰终端就被 SIGTTOU 停住（实测停在 `T` 状态）；
+    - 带参数的 `.app` 经 `/bin/sh -c` 跑 `exec /usr/bin/open -a <转义后的路径> --args <参数>`，参数照 POSIX shell 规则拆（`open` 是绝对路径，不必等登录 shell；同样 `setsid`）；其它文件带参数时参数忽略；
+    - 启动请求发出去了（opener 成功、`sh` 起来了）就返回 `true`；
   - 没配返回 `false`；
   - 属性不是快捷方式、属性不存在、图片不是场景都报错。
 
@@ -333,8 +345,14 @@ P11c 照这三段做，每段放在对应的位置。依据：
   - 场景宿主调启动命令被 ACL 拒绝；
   - 没配、不是快捷方式、不是场景、只有工程缺省值时都不启动。
 
+**macOS 走查**（2026-11-21，macOS 26.6.2 dev，9135 Minimalist Landscape 的 24 格应用栏）：
+- **图标**（核对测试 `dump_shortcut_icons` 加 dev 应用）：Safari.app、Calculator.app、`/Applications`、主目录是系统图标；JPG 与 PDF 是 QuickLook 内容缩略图（256×181、198×256）；`.webloc`、不存在的 `foo.txt` 按类型 / 扩展名取通用图标，没有扩展名的不存在路径没有图标；`cmd:open -a Calculator` 是可执行文件图标，PATH 里找不到的命令没有图标；`web:www.wikipedia.org` 是网站图标。应用栏里五格都出了图标，改值后当场换图。
+- **形状**：宿主拿到 `isbound: true` 与对的 `commandtype` / `file`，状态里没有完整路径（网址按 WPE 给整串）；宿主调启动命令被 ACL 拒绝。
+- **启动**：Safari、Finder 的 `/Applications`、预览打开图片、Chrome（默认浏览器）打开补了协议的维基百科、`open -a Calculator`、`Chess.app|--kb-test "a b"`（进程参数是 `--kb-test`、`a b`）都起来了；只在 nvm 里有的 `node -e …` 跑出了结果、oh-my-zsh 的别名 `ll` 能用，命令图标按登录 shell 的 `PATH` 找到了 `node`；模拟从 Finder 启动的干净环境（`env -i`，`PATH` 只有系统目录）里读到的登录 shell `PATH` 含 Homebrew、nvm、pyenv、`~/.local/bin`；PATH 里没有的命令返回 `true`、日志记退出码 127；没配返回 `false`，属性不是快捷方式报错。
+
 **已知差异**：
 - **返回值**：WPE 的 `true` 表示 `ShellExecuteW` 成功；我们的启动是异步的，`true` 只表示值已配好，启动失败只记日志。
+- **macOS 的命令**：整条交给用户的登录 shell，比 Windows 的 `ShellExecuteW`（程序加参数串、不经 shell）能力大：管道、重定向、变量、别名都能用，语法是用户自己 shell 的（fish 用户写 fish 语法）。值只能由本机用户在面板里配，脚本只能触发配好的那一条。
 - **类型**：WPE 不查属性类型，`textinput` 里写合法格式的值也能启动；我们只认 `usershortcut`，也只认用户配过的值，不认工程缺省值。
 - **本机哈希**：WPE 的值中间有 6 位本机哈希，用来拒绝别的机器上配的值。哈希是 `sha256(MachineGuid 的 UTF-16 连结尾 NUL ‖ 14 27 db 88 1d)` 的前 6 位，走查实测。我们的值只来自本机面板，不带这一段。
 - **应用页的两道检查**：用户激活与 1 秒限频，WPE 没有。

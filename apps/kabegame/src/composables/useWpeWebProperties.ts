@@ -7,7 +7,7 @@ import { useI18n } from "@kabegame/i18n";
 export interface WpeWebPropertyItem {
   key: string;
   /**
-   * `usershortcut`（P11d，只在 Windows 的场景壁纸上编辑）：`value` 是原值字符串 `<类型>:<路径>[|<参数>]`（`utils/wpeShortcut.ts`），
+   * `usershortcut`（P11d，只在 Windows / macOS 的场景壁纸上编辑）：`value` 是原值字符串 `<类型>:<路径>[|<参数>]`（`utils/wpeShortcut.ts`），
    * 面板里是它自己的编辑器（`WpeShortcutField.vue`）。
    */
   kind:
