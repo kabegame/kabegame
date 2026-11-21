@@ -105,7 +105,7 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 | 桌面壁纸（窗口模式） | 有 | 有 | 没有窗口模式，设为壁纸直接报错 |
 | 桌面壁纸的鼠标 | 有 | 有（第二版未实测） | 无 |
 | 图库预览的鼠标：光标在画面外、应用外也跟随 | 有 | 有（未实测） | 无：iframe 直接收真实鼠标，只在 iframe 上 |
-| 音频数据（频谱） | 有（WASAPI 回环） | 有（14.2+，Core Audio 进程 tap） | 无 |
+| 音频数据（频谱） | 有（WASAPI 回环） | 有（14.2+，Core Audio 进程 tap） | 有（PipeWire 输出设备监听；只有 PulseAudio 的系统没有） |
 | 媒体数据（正在播放的曲目、封面） | 有（SMTC） | 无 | 无 |
 | 场景快捷方式（`usershortcut`） | 有 | 无：面板不显示、宿主一律未绑定 | 无 |
 | 「跟随 WPE」 | WPE 安装目录里有 `config.json` 时 | 无：WPE 只能在 Windows 上运行，没有可跟随的设置（拷来的 `config.json` 也不认） | 无 |
@@ -1006,7 +1006,7 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
 都受它管。最后一个订阅离开即停（`info!` 记启停，增删订阅 `debug!` 记 label / frame / 类型 / 订阅数）。停止线程
 （丢弃句柄会 join）一律在订阅表的锁外，采集线程自己触发的停止不 join 自己。
 
-- **音频**（`wpe_media/audio/` + `spectrum.rs`）：采集线程与推帧循环在 `audio/mod.rs`，两个平台只提供「默认输出设备 id +
+- **音频**（`wpe_media/audio/` + `spectrum.rs`）：采集线程与推帧循环在 `audio/mod.rs`，三个平台只提供「默认输出设备 id +
   打开回环流 + 读样本」（`Devices` / `LoopbackStream`，按 cfg 选后端）。每 10ms 读包、每 33ms 出一帧 128 个浮点（左 0–63、右
   64–127，低频在前）。推送定时器与采集包解耦：静音包或这段时间没有包都按静音补零，页面收到逐帧衰减到 0 的数据，「空闲」判断才生效；
   打不开设备也照样推静音帧。默认设备每秒比对 id、读取失败立即重开。
@@ -1020,12 +1020,21 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
     第一次启动时系统弹「录制系统音频」授权，用途说明 `NSAudioCaptureUsageDescription` 写在 `src-tauri/kabegame/Info.plist`（release
     打包合并）与 `macos/embedded-Info.plist`（dev 裸可执行文件），两处同步；拒绝时 tap 只送静音。权限记在负责进程名下，dev 从
     VS Code 终端拉起时记在 VS Code 名下。全局 tap 跟随系统混音、不绑设备，换默认输出设备仍重开一次（采样率可能变）。
+  - **Linux**（`audio/sink_monitor.rs`，2026-11-21）：PipeWire 的一条 `Stream/Input/Audio` 流，`stream.capture.sink = true`、不指定目标，
+    由会话管理器（WirePlumber）链到默认输出设备的 monitor 端口。默认设备换了会话管理器自己重链（实测），所以 `default_id` 恒为同一个值、
+    只在出错时重开。格式要 32 位浮点立体声（FL / FR，多声道设备由 PipeWire 下混），采样率跟图；打开时最多等 200 ms 协商，等不到先按
+    48000 报，协商出的采样率与报的不同就让读取报错、重开。`node.passive = true`：这条链接不让输出设备保持运行，没有声音时设备照常挂起、
+    一个包都没有（推帧循环按「没有包」处理），有声音时数据照常来；不加的话开着订阅输出设备就一直不挂起。不另起线程、不要实时回调：
+    主循环挂在采集线程上，每轮读之前非阻塞地跑一次，`process` 回调在这里把样本攒进缓冲、同一轮取走。连不上 PipeWire（系统只有
+    PulseAudio）时打开报错、推静音帧、每秒重试。实测（空 sink + 正弦波）：设备在跑时 6 ms 协商完，每秒 47104 / 49152 帧交替、平均正好
+    48000，10 ms 轮询不丢包；应用里（Plasma 6.6 Wayland）网页壁纸每秒 30 帧回调、场景订阅成功且音频粒子随音乐变化，静音后原始频谱 250 ms 内归 0、
+    网页频谱约 1 s 衰减到 0，切走壁纸即停、节点与麦克风指示一起消失。依赖与插件模式推流共用 `pipewire` crate，`wpe` feature 也开启它。
   频谱算法自定（WPE 未公开）：Hann 窗 → 2048 点实数 FFT（`realfft`）→ 64 个对数频段（30 Hz – 16 kHz，不超过奈奎斯特的
   95%）取段内峰值 → dB + 高频补偿（相对 1 kHz 每倍频程 +3 dB）→ `(dB − (−70)) / 60` 映射、上限 1.2 → 上升即时、下降每帧
   保留 0.75。常数集中在 `SpectrumTuning`，真机按样本调。
   同一批样本另喂给 WPE 采集线程的原始频谱（`wpe_spectrum.rs`，P4e 步骤 4，照 `.claude/plans/wpe-import/3-scene/phase4/rea-p4e-audio.md`
   3.2 逐行复刻：每攒够约 29 ms 的样本做一次 1920 / 2089 点复数 FFT（`rustfft`），不加窗、样本写成 `127·s + 127`，乘频率倾斜后按四次方根
-  归入 64 段取最大，得到线性原值；静音标志的包、读取失败立即清零，缺包 1 s 后清零），随同一条消息的 `raw` 字段推出，只给场景宿主用
+  归入 64 段取最大，得到线性原值（样本正好是 −1 时虚部 `1/re` 溢出，那一批该声道整段为 0，同 WPE：削波重的音乐会偶尔闪一帧 0）；静音标志的包、读取失败立即清零，缺包 1 s 后清零），随同一条消息的 `raw` 字段推出，只给场景宿主用
   （它再照 WPE 做每帧的自适应归一化，见 [scene/PARTICLES_ROPE_CHILDREN.md](scene/PARTICLES_ROPE_CHILDREN.md)「粒子（P4e）」的「音频：场景频谱」）。网页壁纸仍用上面的自定频谱：WPE 给网页壁纸的其实是这份原值
   （rea 3.4），2026-11-13 用户比较两者后选择保留自定算法的观感。
 - **媒体**（`wpe_media/media.rs` + `projection.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话
@@ -1061,8 +1070,8 @@ Chromium 就不建媒体键监听器。于是：
 开着这项时，壁纸自己的声音会被当成系统媒体。例如场景 3819637149 的脚本收到「播放中」就暂停自带的歌，会话变成暂停后它又恢复，
 按 `windowupdaterate` 每秒自激一次，听起来一顿一顿。原来预览期间给 `navigator.mediaSession` 设元数据的 `usePreviewMediaSession` 已一并删除。
 
-数据源按平台：`audio` 在 Windows 与 macOS，`media` 只在 Windows（`wpe_media::kind_available`，订阅命令据此放行）。`realfft`、`rustfft`
-在 Windows 与 macOS 两个依赖段各登记一次，`windows` 的音频 / WinRT feature 只在 Windows 段，都由 `wpe` feature 开启。没有数据源的
+数据源按平台：`audio` 在三个桌面平台，`media` 只在 Windows（`wpe_media::kind_available`，订阅命令据此放行）。`realfft`、`rustfft`
+在三个桌面平台的依赖段各登记一次，`windows` 的音频 / WinRT feature 只在 Windows 段，Linux 的 `pipewire` 只在 Linux 段，都由 `wpe` feature 开启。没有数据源的
 订阅命令直接返回错误，垫片忽略，页面收不到对应回调（场景脚本收到 `enabled: false`）。
 
 ## 七、已知边界
@@ -1071,6 +1080,9 @@ Chromium 就不建媒体键监听器。于是：
 - **macOS / Linux 的限制**：Steam 上装不了 WPE，`libraryfolders.vdf` 通常不含 431960，自动发现大概率为空，主要靠手选文件夹，或用「从 Steam 拉取」把 WPE 下载到 `plugins-data/wpe-import/`（`discover_roots` 把它当作一个 Steam 库，见 [WPE_STEAM.md](WPE_STEAM.md)）。
   场景壁纸依赖 WPE 安装目录的 `assets`，找不到时退回预览图（`assets:missing`）。Linux 的 CEF 未启用 WebGPU 时同样退回（`webgpu:unavailable`）。
   Linux 没有窗口壁纸模式，设为壁纸直接报错；图库预览里壁纸只在 iframe 上收鼠标（拿不到全局光标）。
+- **Linux 的音频回环**：有音频订阅期间（显示带音频的网页 / 场景壁纸），KDE Plasma 托盘会出现「麦克风在用」的指示：plasma-pa 把挂在
+  客户端名下的录音流一律算作麦克风，不区分输出设备的监听（[KDE bug 410637](https://bugs.kde.org/show_bug.cgi?id=410637)，cava、EasyEffects
+  同样），没有正当办法避开，同 macOS 的录音指示。只有 PulseAudio、没有 PipeWire 的系统没有音频数据（频谱全 0）。
 - **WPE 安装目录**：只有一个，存在设置 `wpeEngineDir`（`wpe::discover::engine_dir`），三个桌面平台通用，场景的 `assets`、`config.json` 与 `ui_` 词条都读它。
   设置为空时先看 Steam 库，再把库里的场景 / 网页壁纸逐张从上一级往上找，判据是 `assets/shaders/common.h`（壁纸自身不算，作者的项目可以自带 `assets`；不能只看 `assets` 目录名，这个目录会放行给场景宿主），找到就写入设置。
   设置里的目录失效时不另找，清空才重新查找；找不到时 `scene_assets_of` 打 warn，场景退回预览图。用户在壁纸设置里覆盖（`set_wpe_engine_dir` 校验同一判据、刷新宿主范围，传空时立即重新查找）。

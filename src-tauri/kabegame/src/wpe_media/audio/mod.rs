@@ -1,5 +1,6 @@
 //! 系统音频回环采集：专用线程读默认输出设备的混音，每 33ms 产出一帧频谱。平台只提供「设备 + 回环流」：
-//! Windows 是 WASAPI 共享模式回环（`wasapi.rs`），macOS 是 Core Audio 进程 tap（`process_tap.rs`，14.2+）。
+//! Windows 是 WASAPI 共享模式回环（`wasapi.rs`），macOS 是 Core Audio 进程 tap（`process_tap.rs`，14.2+），Linux 是 PipeWire 的
+//! 默认输出设备监听（`sink_monitor.rs`）。
 //!
 //! 推送定时器与采集包解耦：系统静音时回环不送包（或送静音包），这段时间没有样本就按静音补零，页面照常收到逐帧
 //! 衰减到 0 的数据，它的「空闲」判断才会生效。打不开设备（没有输出设备、系统版本不够等）也照样推静音帧。
@@ -11,11 +12,15 @@
 
 #[cfg(target_os = "macos")]
 mod process_tap;
+#[cfg(target_os = "linux")]
+mod sink_monitor;
 #[cfg(target_os = "windows")]
 mod wasapi;
 
 #[cfg(target_os = "macos")]
 use process_tap as backend;
+#[cfg(target_os = "linux")]
+use sink_monitor as backend;
 #[cfg(target_os = "windows")]
 use wasapi as backend;
 

@@ -13,7 +13,7 @@
   翻译器把 `uniform float g_AudioSpectrum16Left[16]` 反射成 `array<vec4<f32>, 16>`、`declared: "float"`，`UniformBlock.set` 每个元素只写 `.x`。
   没给频谱时写全 0。渲染器把自己的 `spectrum` 交给 `GpuScene.update`：频谱在帧开头推进，粒子、脚本、uniform 这一帧读的是同一份值，同 WPE。
 - **订阅**：`bundle.audio` 也认读这六个 uniform 的程序（`readsAudioUniforms`：翻译器标了 `unused` 的、带 `meta.material` 的同名作者常量都不算），
-  开关仍只看 `project.json` 的 `supportsaudioprocessing`。Windows（WASAPI）与 macOS 14.2+（Core Audio 进程 tap，见 [../WPE_IMPORT.md](../WPE_IMPORT.md)「音频与媒体集成」）有回环采集；Linux 没有，订阅被拒、频谱全 0（代码里标了 `TODO:[WPE_SCENE]`）。
+  开关仍只看 `project.json` 的 `supportsaudioprocessing`。三个桌面平台都有回环采集：Windows（WASAPI）、macOS 14.2+（Core Audio 进程 tap）、Linux（PipeWire 输出设备监听，2026-11-21 真机核对过：订阅成功、频谱与音频粒子随音乐变化、静音后归 0），见 [../WPE_IMPORT.md](../WPE_IMPORT.md)「音频与媒体集成」；采集打不开（macOS 14.2 以下、Linux 没有 PipeWire）时频谱全 0。
 - **确定性回放**：dev 探针的 `ParticleAudioFrame` 另带 32 / 64 段，读回那一帧把截至这一帧的频谱交给 `update`；kabegame-dev 的
   `replay.timeline.audio` 读录制（`kbp rdc consts --no-clock` 的输出或带 `frames[].audio` 的轨迹），按帧号对齐、缺的段按两两取大往下推。
 - **验收**：生成工程 `p11-bars`（六个数组各画一排色块，`ignore/p11/defs/p11a.py`）4 帧和 WPE 整帧逐像素相同。真实壁纸的复制工程走查

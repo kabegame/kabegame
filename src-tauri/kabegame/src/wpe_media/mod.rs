@@ -6,12 +6,12 @@
 //! 再订阅同一类替换旧条，窗口销毁释放整个 label，发送失败只作兜底——Channel 发往已销毁的 frame 会被运行时静默
 //! 丢弃、发送照样成功，所以不能只靠它。
 //!
-//! 有 audio 订阅才开系统音频回环采集（`audio/`：Windows 是 WASAPI 回环，macOS 是 Core Audio 进程 tap），有 media
-//! 订阅且「媒体集成」打开才开系统媒体会话监视（`media.rs`，只在 Windows）；最后一个订阅离开即停。订阅命令按平台放行：
-//! Windows 两类都收，macOS 只收 audio，Linux 都拒。
+//! 有 audio 订阅才开系统音频回环采集（`audio/`：Windows 是 WASAPI 回环，macOS 是 Core Audio 进程 tap，Linux 是 PipeWire
+//! 的输出设备监听），有 media 订阅且「媒体集成」打开才开系统媒体会话监视（`media.rs`，只在 Windows）；最后一个订阅离开
+//! 即停。订阅命令按平台放行：Windows 两类都收，macOS 与 Linux 只收 audio。
 //! 见 `cocs/wpe/WPE_IMPORT.md`「音频与媒体集成」。
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod audio;
 #[cfg(target_os = "windows")]
 mod colors;
@@ -19,9 +19,9 @@ mod colors;
 mod media;
 #[cfg(target_os = "windows")]
 mod projection;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod spectrum;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 mod wpe_spectrum;
 
 use kabegame_core::settings::Settings;
@@ -559,11 +559,12 @@ fn scene_resets(cache: &[Option<WpeMediaMessage>; 4]) -> Vec<WpeMediaMessage> {
         .collect()
 }
 
-/// 系统实现：音频回环在 Windows（WASAPI）与 macOS（进程 tap），媒体会话只在 Windows（SMTC），其余不产生数据。
+/// 系统实现：音频回环在 Windows（WASAPI）、macOS（进程 tap）与 Linux（PipeWire 输出设备监听），媒体会话只在 Windows（SMTC），
+/// 其余不产生数据。
 struct SystemSources;
 
 impl MediaSources for SystemSources {
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     fn start_audio(&self) -> Box<dyn Send> {
         Box::new(audio::AudioCapture::start(|web, raw| {
             WpeMediaHub::global().broadcast(
@@ -576,7 +577,7 @@ impl MediaSources for SystemSources {
         }))
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     fn start_audio(&self) -> Box<dyn Send> {
         Box::new(())
     }
@@ -598,7 +599,11 @@ impl MediaSources for SystemSources {
 /// 「不可用」处理（场景脚本收到 `enabled: false`）。
 pub fn kind_available(kind: WpeMediaKind) -> bool {
     match kind {
-        WpeMediaKind::Audio => cfg!(any(target_os = "windows", target_os = "macos")),
+        WpeMediaKind::Audio => cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        )),
         WpeMediaKind::Media => cfg!(target_os = "windows"),
     }
 }

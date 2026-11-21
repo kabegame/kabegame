@@ -103,6 +103,12 @@ tauri = { version = "2.12.4", default-features = false, features = [
 arboard = "3.6"
 gtk = { version = "0.18", features = ["v3_24"], optional = true }
 libc = "0.2"
+# 插件模式的壁纸推流（wallpaper/pipewire）：用底层 FFI（pw_sys）与 spa 的 pod 序列化器，帧回调在 CEF UI 线程上直接入队
+pipewire = { version = "0.10", optional = true }
+# 网页壁纸 / 场景音频频谱的两份 FFT（同 Windows 段的说明），由 wpe feature 开启；样本来自 PipeWire 的输出设备监听
+# （wpe_media/audio/sink_monitor.rs，同样用上面的 pipewire，wpe feature 也开启它）
+realfft = { version = "3.4", optional = true }
+rustfft = { version = "6.4", optional = true }
 tauri-runtime-kbcef = { path = "../tauri-runtime-kbcef", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -156,11 +162,13 @@ default = []
 
 # Wallpaper Engine 壁纸：发现、导入与运行。三个桌面平台随 standard 开启，Android / Web 不开。
 # windows 的这些 feature 都是 wpe_media 的系统接口；macOS / Linux 没有这个依赖，写在这里不生效。
-# realfft / rustfft 在 Windows 与 macOS 段各登记一次（两个平台都有音频回环）。
+# realfft / rustfft 在三个桌面平台的段里各登记一次（都有音频回环）。
 wpe = [
     "kabegame-core/wpe",
     "dep:realfft",
     "dep:rustfft",
+    # 网页壁纸音频：Linux 的 PipeWire 输出设备监听（依赖只在 Linux 段，别的平台写在这里不生效）
+    "dep:pipewire",
     # 网页壁纸音频：WASAPI 回环采集（IMMDevice::Activate 需要 StructuredStorage / Variant）
     "windows/Win32_Media_Audio",
     "windows/Win32_System_Com_StructuredStorage",

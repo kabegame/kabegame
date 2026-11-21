@@ -554,8 +554,6 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     let tauri::ipc::CallerFrame::Sub(frame) = frame else {
         return Err("only web wallpaper frames can subscribe".to_string());
     };
-    // TODO:[WPE_SCENE] 在 Linux 上测试：场景音频。Linux 还没有回环采集，场景宿主订阅被拒后频谱全 0（`g_AudioSpectrum*`、音频粒子、
-    // 脚本音频缓冲都读 0）；接上系统音频回环、在 `kind_available` 放开后，核对三者都随音乐变化。
     if !crate::wpe_media::kind_available(kind) {
         return Err(format!(
             "web wallpaper {kind:?} data is not available on this platform"

@@ -1,5 +1,29 @@
 # v4.7.0 regression
 
+## Linux 系统音频回环（PipeWire 输出设备监听）
+
+2026-11-21 Linux（KDE Plasma 6.6.4 Wayland、PipeWire 1.6.2 + WirePlumber）。网页与场景壁纸的音频订阅在 Linux 上有了数据源：`wpe_media/audio/sink_monitor.rs`，一条 `stream.capture.sink = true`、`node.passive = true` 的 PipeWire 采集流，由 WirePlumber 链到默认输出设备的 monitor 端口；要 F32 立体声、采样率跟图；主循环挂在采集线程上、每轮读前非阻塞迭代。`kind_available` 的 audio 放开 Linux，`realfft` / `rustfft` 加进 Linux 依赖段，`wpe` feature 开启 `pipewire`。属性取舍先用 `pw-record` 带同样属性实测（LA5、LA6），后端再用一个临时 `#[ignore]` 用例接真 PipeWire 实测（LA2–LA4、LA7，用完已删）；为了不从音箱出声，LA3 / LA4 把默认输出临时切到 `module-null-sink` 建的空 sink 再往里放正弦波（左 440 Hz、右 3000 Hz），结束后切回。应用里的端到端（LA8–LA11）在 dev 里放音乐做：「停止」用 `pactl set-sink-input-mute` 把播放流静音几秒（监听端口上实测是精确的 0），宿主 / iframe 里连续采样、按墙钟时间对齐。
+
+验收中查过一个疑点：放音乐时场景的原始频谱偶尔出现全 0 帧（15 s 里 9 帧）。用临时用例把后端收到的样本原样落盘：每秒 47923 帧、不丢数据，9 个全 0 帧之前那一批里左右声道都有样本正好是 −1.0。这是 `wpe_spectrum.rs` 照 WPE 复刻的行为（`encode` 的虚部 `1/re` 在 −1 处溢出，那一批该声道为 0），这首歌削波很重（±1.0 的样本很多），不是 Linux 后端的问题，Windows / macOS 放同一首歌也一样。
+
+另一个发现：Plasma 的麦克风指示（`plasmashell` 注册的 `microphone` 状态项）对监听流同样亮起。plasma-pa 的 `recordingApplications()` 只跳过没有 PulseAudio 客户端的流（`info->client == PA_INVALID_INDEX`），不区分 monitor（KDE bug 410637），没有正当办法避开，记为已知边界。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | LA1 单测与检查 | Linux | `check-kabegame --skip vue`；`test-kabegame kabegame --lib wpe_media` | 0 error；全过 | 2026-11-21 Claude：cargo check 0 error，新文件无告警（`wpe_media/mod.rs` 里媒体相关的 dead code 告警原本就有）；38 条全过，含新增 3 条（格式参数是 F32 立体声 FL / FR、不带采样率；缓冲有效区间只取整帧；越界区间截断） |
+| [x] | LA2 设备空闲时打开 | 同上，默认输出空闲（已挂起） | 打开回环流读 6 s | 不报错；等满协商上限后按 48000 报；一个包都没有 | 2026-11-21 Claude：open 502 ms（当时上限 500 ms，之后降到 200 ms）、协商结果 None，6 s 里 0 帧 0 包：passive 链到挂起的设备上，格式要等设备跑起来才协商 |
+| [x] | LA3 播放中打开 | 默认输出切到空 sink，先放正弦波 | 打开回环流读 6 s | 几毫秒协商完；每秒约 48000 帧不丢；两份频谱非零 | 2026-11-21 Claude：open 5.9 ms、协商 48000；每秒 47104 / 49152 帧交替（23 / 24 个 2048 帧的包，平均正好 48000）；网页频谱峰值 1.069、WPE 原始频谱峰值 4.453 |
+| [x] | LA4 中途开始放、再停 | 同 LA3，打开 1 s 后放 3 s | 同上 | 放声后数据立刻进来，采样率一致不重开；停后归零 | 2026-11-21 Claude：t=1s 43008 帧（从中途开始）、t=2–3s 47104 / 49152、t=4s 4096 帧后为 0；全程没有报错重开 |
+| [x] | LA5 passive 的作用 | `pw-record -P '{ stream.capture.sink = true node.passive = … }'` | 空闲时对比 passive 开关；passive 下往空 sink 放 3 s 正弦波 | passive：设备挂起、不收数据，有声音时收满；不 passive：设备保持运行 | 2026-11-21 Claude：passive 时 USB 音箱 `SUSPENDED`、录到 0 字节；不 passive 时 `IDLE`、一直收静音；passive 下放 3 s 收到 147456 帧、峰值 0.5 |
+| [x] | LA6 默认输出切换 | 采集中 `wpctl set-default` 切到空 sink 再切回 | 看 `pw-link -l` | 流跟着默认设备重链，不用重开 | 2026-11-21 Claude：monitor 来源从 USB 音箱换到 kbtest、再换回 |
+| [x] | LA7 连不上 PipeWire | `PIPEWIRE_REMOTE` 指向不存在的 socket | 打开回环流 | 立即报「连接 PipeWire 失败」；推帧循环记一次 warn、每秒重试、推静音帧 | 2026-11-21 Claude：0 s 报 `连接 PipeWire 失败: Creation failed`（推帧循环的行为是共用代码，没在应用里看） |
+| [x] | LA8 网页壁纸的音频回调 | Linux dev（Plasma 6.6.4 Wayland），19757「音域回响」，Chrome 在放音乐 | 预览；在 iframe 里另挂一个只计数的 `wallpaperRegisterAudioListener`；中途静音 3 s | 日志「网页壁纸音频回环已打开 sample_rate=48000 channels=2」；频谱条随音乐动，停止后逐帧回落到 0 | 2026-11-21 Claude：订阅后 11 ms 打开回环；3 s 收 90 帧（每秒 30）、全部非零，峰值 0.76–0.93 变化、左右均值 0.56；静音后逐帧 0.559 → 0.056 → 0.0075 → 0.0007 → 0（约 1 s），期间回调照常，恢复后下一次采样回到 0.92 |
+| [x] | LA9 场景音频 | Linux dev，19602「墟蓝绽絮」（脚本音频缓冲）、19592「伊蕾娜『星夜』」（音频粒子 + `g_AudioSpectrum*`） | 预览；探针 `host.audio()` / `host.particles()` 每 250 ms 采样；中途静音 4 s | 订阅成功；频谱随音乐变化；音频粒子随声音发射；静音后归 0 | 2026-11-21 Claude：19602 订阅成功、每秒 30 帧、脚本登记 16 段缓冲，16 段频谱两次读数明显不同；19592 静音后 250 ms 内原始频谱峰值与 16 段频谱都精确为 0，音频粒子「Star Reactive」逐步掉到 0（有音乐时一度 74 颗），恢复后下一次采样数据回来。`wpe_web.rs` / `host.ts` 的 `TODO:[WPE_SCENE]` 已删 |
+| [x] | LA10 订阅离开即停 | Linux dev | 预览里从带音频的壁纸切到另一张、关掉预览 | 日志「网页壁纸音频采集已停止」；`pw-cli ls Node` 里没有 `kabegame-wallpaper-audio`；托盘麦克风指示消失 | 2026-11-21 Claude：切换时「释放 … subscriptions=0 → 已停止」，新壁纸订阅后 10 ms 内重开；关预览后录音流、PipeWire 节点、`plasmashell_microphone` 状态项都没了 |
+| [x] | LA11 麦克风指示（已知边界） | Linux Plasma dev | 预览带音频的壁纸，读托盘状态项 | 出现麦克风指示，显示的应用名为 Kabegame | 2026-11-21 Claude：状态项 `plasmashell_microphone`，提示「麦克风 / Kabegame 正在使用麦克风」 |
+| [ ] | LA12 只有 PulseAudio 的系统 | Ubuntu 22.04 默认安装 | 预览带音频的壁纸 | 不崩；一条「打开音频回环失败…连接 PipeWire 失败」；频谱保持 0 | 本机是 PipeWire，没法测 |
+| [ ] | LA13 Windows / macOS 不回归 | Windows、macOS | `check-kabegame` | 编过 | 只动了 `wpe_media` 的 cfg 与 `kind_available`，两个平台的后端没改；本机编不了 |
+
 ## Linux N 卡的场景视频硬解（VA-API + nvidia-vaapi-driver）
 
 2026-11-21 Linux dev（RTX 4090 D + RTX 4070，驱动 580.178.04）。场景 2903412088 的 4K H.264 视频日志报「场景视频改用软件解码（显卡不能硬解这段视频）」，同一块卡在 Windows 上能硬解。原因：Linux 版 Chromium 的硬解只有 VA-API，NVIDIA 闭源驱动不提供 VA-API；第三方 `nvidia-vaapi-driver` 能补上，但 Chromium 156 在 x64 上默认跳过 `nvidia-drm` 设备（`vaapi_wrapper.cc`，特性 `VaapiOnNvidiaGPUs` 默认关）。
