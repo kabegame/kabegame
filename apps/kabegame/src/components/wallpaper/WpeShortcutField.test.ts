@@ -11,7 +11,7 @@ const failure = vi.hoisted(() => vi.fn());
 
 vi.mock("@/api", () => ({ invoke }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open }));
-vi.mock("@/components/ui/toast", () => ({ toast: { success, warning, error: failure } }));
+vi.mock("@/utils/kameMessage", () => ({ kameMessage: { success, warning, error: failure } }));
 vi.mock("@kabegame/i18n", () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
 const KbSelectStub = {
@@ -83,8 +83,11 @@ describe("WpeShortcutField：值与各字段", () => {
     expect(lastEmitted(w)).toBe("");
     await w.setProps({ modelValue: "" });
     expect((kindSelect(w).element as HTMLSelectElement).value).toBe("web");
-    // 保存后后端补了网址前缀：外部的值变了，路径跟着更新
+    // 保存回来的就是自己发出的原值（后端不再补网址前缀）：输入框不被改写
     await pathInput(w).setValue("example.com");
+    await w.setProps({ modelValue: "web:example.com" });
+    expect((pathInput(w).element as HTMLInputElement).value).toBe("example.com");
+    // 外部的值变了（别处改了）：路径跟着更新
     await w.setProps({ modelValue: "web:https://example.com" });
     expect((pathInput(w).element as HTMLInputElement).value).toBe("https://example.com");
   });
@@ -153,7 +156,7 @@ describe("WpeShortcutField：测试按钮", () => {
     expect(success).toHaveBeenCalledWith("gallery.wpeShortcutTestStarted");
   });
 
-  it("命令返回 false 提示无法启动；抛错提示失败原因；都不抛出", async () => {
+  it("命令返回 false 提示无法启动；抛错时原因由后端的 user-message 通道提示，这里不重复；都不抛出", async () => {
     invoke.mockResolvedValueOnce(false);
     const w = mountField("file:C:\\a.exe");
     await testButton(w).trigger("click");
@@ -162,8 +165,7 @@ describe("WpeShortcutField：测试按钮", () => {
     invoke.mockRejectedValueOnce(new Error("拒绝"));
     await testButton(w).trigger("click");
     await flushPromises();
-    expect(failure).toHaveBeenCalledWith(expect.stringContaining("gallery.wpeShortcutTestFailed"));
-    expect(failure).toHaveBeenCalledWith(expect.stringContaining("拒绝"));
+    expect(failure).not.toHaveBeenCalled();
   });
 
   it("没有图片 id 时不调命令", async () => {

@@ -167,6 +167,8 @@ struct Foo {
 
 **应用日志一律用 `tracing` 宏**（`error!` / `warn!` / `info!` / `debug!` / `trace!`，不加 `[模块]` 前缀，模块路径即 target），不要再写 `println!` / `eprintln!`；前端用 `@/utils/logger`。日志按天写入 `<data_dir>/logs/`，经事件循环的 opt-in `log` 事件推给工具箱「查看日志」、`kabegame-cli log tail` 与 Web super 的 `/logs`；事件管线上的逐事件日志只能用 `trace!`，否则会自激放大。细节见 [cocs/debug/APP_LOGGING.md](cocs/debug/APP_LOGGING.md)。
 
+**后端要直接告诉用户的事走 `user-message` 通道**：`GlobalEmitter::emit_user_message(级别, 前端 i18n 键, 命名参数)`，主窗口的 `services/userMessages.ts` 翻译后用看板娘显示（只在主窗口显示一次）。用在调用方看不见（壁纸窗口、后台线程）或事后才知道的失败上，不要为单个功能另开事件、另写监听；发了提示的，前端调用方出错时只记日志。见 [cocs/ui/USER_MESSAGES.md](cocs/ui/USER_MESSAGES.md)。
+
 在需要真测的时候用 `.claude/skills/kabegame-chromium` 技能连接正在运行的程序操作界面，只有在需要打开外部网站或调试web版本才允许用 ageng-browser。
 
 **观测运行时调用（IPC、事件、加载次数）一律用 debug ingest 插桩**（[cocs/debug/DEBUG_INGEST.md](cocs/debug/DEBUG_INGEST.md)：前端 `sendDebugEvent`、Rust `kabegame_core::kb_debug!`——两者都只是 trace 日志，由 debug 构建的订阅层转发到 dev server——固定 `session_id`，读 `.kabegame/debug/debug-<session_id>.ndjson`）。**不要**经 CDP 去包装 `window.__TAURI_INTERNALS__.invoke` 来计数——它是不可写、不可配置的属性，赋值在非严格模式下静默失败，计数永远为空，会被误读成「没有发生调用」；CEF 下普通 invoke 也不走 `fetch`，抓网络请求同样看不全。上报是异步的，日志行的到达顺序不等于调用顺序，排先后要看事件自带的 `ts`。临时插桩统一带 `// DEBUG-<主题>` 注释，验证完删除。

@@ -228,8 +228,8 @@ fn scene_user_props(view: WpeWebPropertiesView, raw: &Value) -> serde_json::Map<
 
 /// 一个快捷方式属性给场景宿主的形状，`raw` 是用户配的原值（没配为空串）。
 fn scene_shortcut_entry(raw: &str) -> Value {
-    // 平台不支持快捷方式（Linux，见 `wpe_shortcut::SUPPORTED`）时一律未绑定：脚本的 `openUserShortcut` 返回 false、
-    // 图标槽用缺省纹理。
+    // 平台不支持快捷方式（见 `wpe_shortcut::SUPPORTED`，三个桌面平台都支持）时一律未绑定：脚本的 `openUserShortcut`
+    // 返回 false、图标槽用缺省纹理。
     let parsed = crate::wallpaper::wpe_shortcut::SUPPORTED
         .then(|| parse_user_shortcut(raw))
         .flatten();

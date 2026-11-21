@@ -270,20 +270,10 @@ pub fn normalize_value(def: &WpePropDef, value: &Value) -> Result<Value, String>
             if text.is_empty() {
                 return Ok(Value::String(String::new()));
             }
-            let shortcut = parse_user_shortcut(text).ok_or_else(bad)?;
-            if shortcut.kind != ShortcutKind::Web {
-                return Ok(Value::String(text.to_owned()));
-            }
-            // 照 WPE 面板的 JS：网址不以这四个前缀（区分大小写）开头时补 https://
-            let url = if ["http://", "https://", "www.", "steam://"]
-                .iter()
-                .any(|prefix| shortcut.path.starts_with(prefix))
-            {
-                shortcut.path
-            } else {
-                format!("https://{}", shortcut.path)
-            };
-            Ok(Value::String(format!("web:{url}")))
+            // 原样存，网址也不补协议：面板边输入边保存（300 ms 防抖），保存时补会把正在输入的值改掉。WPE 面板保存时补的
+            // `https://` 改到用的时候补：给脚本看的 `file` 见 [`wpe_web_url`]，打开时由应用的启动代码补
+            parse_user_shortcut(text).ok_or_else(bad)?;
+            Ok(Value::String(text.to_owned()))
         }
         WpePropKind::Group | WpePropKind::Text => Err(bad()),
     }
@@ -338,9 +328,22 @@ pub fn parse_user_shortcut(value: &str) -> Option<UserShortcut> {
     })
 }
 
+/// WPE 面板保存网址时的规则（面板的 JS）：不以 `http://`、`https://`、`www.`、`steam://`（区分大小写）开头时补 `https://`。
+/// 我们保存时不补（见 [`normalize_value`]），给脚本看的网址按它现算，和 WPE 存下的一样。
+pub fn wpe_web_url(path: &str) -> String {
+    if ["http://", "https://", "www.", "steam://"]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+    {
+        path.to_owned()
+    } else {
+        format!("https://{path}")
+    }
+}
+
 impl UserShortcut {
     /// 脚本看到的 `(commandtype, file)`（WPE 实测）：`commandtype` 是 file / directory / website / command；
-    /// 文件与文件夹把 `\` 换成 `/` 后只给最后一段名字，网址给整串，命令只给程序部分。
+    /// 文件与文件夹把 `\` 换成 `/` 后只给最后一段名字，网址给 WPE 存下的整串（[`wpe_web_url`]），命令只给程序部分。
     pub fn script_fields(&self) -> (&'static str, String) {
         let last_segment = |path: &str| {
             let path = path.replace(char::from(92), "/");
@@ -349,7 +352,7 @@ impl UserShortcut {
         match self.kind {
             ShortcutKind::File => ("file", last_segment(&self.path)),
             ShortcutKind::Directory => ("directory", last_segment(&self.path)),
-            ShortcutKind::Web => ("website", self.path.clone()),
+            ShortcutKind::Web => ("website", wpe_web_url(&self.path)),
             ShortcutKind::Cmd => ("command", self.path.clone()),
         }
     }
@@ -792,6 +795,15 @@ mod tests {
             fields("web:https://example.com/a?b=1"),
             ("website", "https://example.com/a?b=1".to_owned())
         );
+        // 存的是用户输入的原样，给脚本的照 WPE 保存时的规则补协议
+        assert_eq!(
+            fields("web:example.com"),
+            ("website", "https://example.com".to_owned())
+        );
+        assert_eq!(
+            fields("web:www.example.com"),
+            ("website", "www.example.com".to_owned())
+        );
         // 实测：`calc /x` 的 file 只有程序部分
         assert_eq!(fields("cmd:calc /x"), ("command", "calc".to_owned()));
     }
@@ -832,28 +844,31 @@ mod tests {
             normalize_value(def, &json!(r"file:C:\a.exe|-x")).unwrap(),
             json!(r"file:C:\a.exe|-x")
         );
-        // web：四个前缀（区分大小写）不补，其余补 https://
-        for (input, expected) in [
-            ("web:example.com", "web:https://example.com"),
-            ("web:http://a.com", "web:http://a.com"),
-            ("web:https://a.com", "web:https://a.com"),
-            ("web:www.a.com", "web:www.a.com"),
-            ("web:steam://run/1", "web:steam://run/1"),
-            ("web:HTTPS://a.com", "web:https://HTTPS://a.com"),
+        // web：原样存，不补协议（输入中保存不改写用户的值）
+        for input in [
+            "web:example.com",
+            "web:www.a.com",
+            "web:HTTPS://a.com",
+            "web:ex",
         ] {
-            assert_eq!(
-                normalize_value(def, &json!(input)).unwrap(),
-                json!(expected)
-            );
+            assert_eq!(normalize_value(def, &json!(input)).unwrap(), json!(input));
+        }
+        // WPE 面板保存时的规则：四个前缀（区分大小写）不补，其余补 https://
+        for (input, expected) in [
+            ("example.com", "https://example.com"),
+            ("http://a.com", "http://a.com"),
+            ("https://a.com", "https://a.com"),
+            ("www.a.com", "www.a.com"),
+            ("steam://run/1", "steam://run/1"),
+            ("HTTPS://a.com", "https://HTTPS://a.com"),
+        ] {
+            assert_eq!(wpe_web_url(input), expected);
         }
         // 写入与清空：写入后存键，清空（空串等于缺省值）删键
         let mut changes = Map::new();
         changes.insert("app".into(), json!("web:example.com"));
         let changed = apply_changes(&raw, &changes).unwrap().unwrap();
-        assert_eq!(
-            user_values(&changed)["app"],
-            json!("web:https://example.com")
-        );
+        assert_eq!(user_values(&changed)["app"], json!("web:example.com"));
         changes.insert("app".into(), json!(""));
         let cleared = apply_changes(&changed, &changes).unwrap().unwrap();
         assert!(cleared.get(USER_PROPERTIES_KEY).is_none());

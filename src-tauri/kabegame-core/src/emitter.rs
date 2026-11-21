@@ -9,6 +9,7 @@ use crate::crawler::downloader::DownloadState;
 pub use crate::ipc::events::AlbumFieldPatch;
 #[cfg(feature = "ipc-server")]
 use crate::ipc::events::AppEvent;
+pub use crate::ipc::events::UserMessageLevel;
 use crate::ipc::events::{DeletedAlbum, ImageFieldPatch};
 #[cfg(feature = "ipc-server")]
 use crate::ipc::server::EventBroadcaster;
@@ -224,6 +225,18 @@ impl GlobalEmitter {
             kept_files,
             canceled,
             error,
+        });
+        EventBroadcaster::global().broadcast(event);
+    }
+
+    /// 后端往前端发给用户看的提示（`user-message`）的统一通道：`key` 是前端 i18n 的完整键，`params` 是文案里的命名参数
+    /// （对象）。前端主窗口按当前语言翻译后用看板娘显示（被挡住时降级成提示消息），Web 版经 SSE 同样收到。
+    /// 不管哪个窗口、哪条入口触发的都只在主窗口显示一次；壁纸窗口没有看板娘，在那里发生的事也走这里。
+    pub fn emit_user_message(&self, level: UserMessageLevel, key: &str, params: serde_json::Value) {
+        let event = std::sync::Arc::new(AppEvent::UserMessage {
+            level,
+            key: key.to_owned(),
+            params,
         });
         EventBroadcaster::global().broadcast(event);
     }
@@ -607,6 +620,14 @@ impl GlobalEmitter {
         _kept_files: usize,
         _canceled: bool,
         _error: Option<String>,
+    ) {
+    }
+
+    pub fn emit_user_message(
+        &self,
+        _level: UserMessageLevel,
+        _key: &str,
+        _params: serde_json::Value,
     ) {
     }
 

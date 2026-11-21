@@ -2,15 +2,23 @@
 //!
 //! 两个入口 [`icon`] 与 [`launch`] 共用同一组检查：图片在库里且是场景、属性在 `project.json` 里是 `usershortcut`、
 //! 值只取 metadata 的 `userProperties`（用户在面板里配的，不取作者缺省值）、值能解析。图标按原值在内存里缓存。
-//! 取图标与启动的平台部分在 Windows（`windows.rs`）与 macOS（`mac.rs`）；网址图标（`web.rs`）与透明区填色（`cv.rs`）
-//! 不分平台。其它平台（Linux）[`icon`] 返回 `None`、[`launch`] 报错。
+//! 取图标与启动的平台部分在 Windows（`windows.rs`）、macOS（`mac.rs`）与 Linux（`linux.rs`），后两者共用 `unix.rs`；
+//! 网址图标（`web.rs`）与透明区填色（`cv.rs`）不分平台。别的平台（没有 `wpe` 的 Android / Web 本来不编译这里）
+//! [`icon`] 返回 `None`、[`launch`] 报错。
 
-// Linux 上平台部分不编译，取图标 / 启动的调用链里有一批用不到的函数
-#![cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+// 没有平台部分的目标上，取图标 / 启动的调用链里有一批用不到的函数
+#![cfg_attr(
+    not(any(windows, target_os = "macos", target_os = "linux")),
+    allow(dead_code)
+)]
 
 pub mod cv;
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod mac;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub mod unix;
 pub mod web;
 #[cfg(windows)]
 pub mod windows;
@@ -25,9 +33,8 @@ use kabegame_core::wpe::user_props::{
 use serde_json::Value;
 
 /// 本平台有没有快捷方式（取图标与启动）。没有时后端给场景宿主的快捷方式一律未绑定、面板不显示这类属性
-/// （前端同规则：`WpeWebPropertiesPanel.vue`）。
-/// TODO:[WPE_SCENE] Linux 上做快捷方式（启动用 `xdg-open` / `sh -c`，图标要走 GTK 图标主题）。
-pub const SUPPORTED: bool = cfg!(any(windows, target_os = "macos"));
+/// （前端同规则：`WpeWebPropertiesPanel.vue`）。三个桌面平台都有。
+pub const SUPPORTED: bool = cfg!(any(windows, target_os = "macos", target_os = "linux"));
 
 /// 图标：直通 alpha 的 RGBA，`rgba.len() == width·height·4`。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,7 +149,7 @@ pub async fn icon(image_id: &str, name: &str) -> Result<Option<Icon>, String> {
     Ok(Some(icon))
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 async fn render(shortcut: UserShortcut) -> Option<Icon> {
     match shortcut.kind {
         ShortcutKind::Web => web::icon(&shortcut.path).await,
@@ -153,9 +160,8 @@ async fn render(shortcut: UserShortcut) -> Option<Icon> {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn render(_shortcut: UserShortcut) -> Option<Icon> {
-    // TODO:[WPE_SCENE] Linux 上做快捷方式图标（见 [`SUPPORTED`]），先一律没有图标（场景里的图标槽用缺省纹理）。
     None
 }
 
@@ -168,11 +174,18 @@ fn prefill(shortcut: &UserShortcut) -> Option<Icon> {
 /// 文件 / 文件夹 / 命令的图标，还没做透明区填色。在阻塞线程里调。命令取 shell 命令行里的程序。
 #[cfg(target_os = "macos")]
 fn prefill(shortcut: &UserShortcut) -> Option<Icon> {
-    mac::prefill_icon(&mac::icon_target(shortcut))
+    mac::prefill_icon(&unix::icon_target(shortcut))
 }
 
-/// 启动。没配返回 `false`；图片不是库内场景、属性类型不对、平台不支持报错。Windows 上 `ShellExecuteW` 返回值 > 32
-/// 为 `true`；macOS 上启动请求发出去了为 `true`（命令只看 `sh` 起没起来）。
+/// 文件 / 文件夹 / 命令的图标，还没做透明区填色。在阻塞线程里调（按主题渲染时会等 GTK 主线程）。
+#[cfg(target_os = "linux")]
+fn prefill(shortcut: &UserShortcut) -> Option<Icon> {
+    linux::prefill_icon(shortcut)
+}
+
+/// 启动。没配返回 `Ok(false)`，启动请求发出去了返回 `Ok(true)`；图片不是库内场景、属性类型不对、平台不支持，以及当场能知道的
+/// 启动失败（目标不存在、系统打不开、程序起不来）返回给用户看的原因，由命令层经 `user-message` 通道交给前端。程序起来后很快
+/// 出错退出的（拼错的命令等）事后由 `unix.rs` 经同一个通道报。
 pub async fn launch(image_id: &str, name: &str) -> Result<bool, String> {
     let Some((_, shortcut)) = lookup(image_id, name).await? else {
         return Ok(false);
@@ -180,30 +193,45 @@ pub async fn launch(image_id: &str, name: &str) -> Result<bool, String> {
     launch_shortcut(shortcut).await
 }
 
+/// Windows：`ShellExecuteW` 返回值 > 32 为成功。网址在这里补协议（保存时不补，见 [`web::launch_url`]）。
 #[cfg(windows)]
 async fn launch_shortcut(shortcut: UserShortcut) -> Result<bool, String> {
-    let ok = tauri::async_runtime::spawn_blocking(move || {
-        windows::shell_execute(&shortcut.path, &shortcut.args)
-    })
-    .await
-    .map_err(|error| error.to_string())?;
-    if !ok {
-        tracing::warn!("启动场景快捷方式失败（ShellExecute 返回值 ≤ 32）");
+    let path = match shortcut.kind {
+        ShortcutKind::Web => web::launch_url(&shortcut.path)
+            .map(String::from)
+            .ok_or_else(|| format!("网址不合法：{}", shortcut.path))?,
+        _ => shortcut.path.clone(),
+    };
+    let args = shortcut.args.clone();
+    let ok = tauri::async_runtime::spawn_blocking(move || windows::shell_execute(&path, &args))
+        .await
+        .map_err(|error| error.to_string())?;
+    if ok {
+        Ok(true)
+    } else {
+        Err(format!("系统没能打开：{}", shortcut.path))
     }
-    Ok(ok)
 }
 
 #[cfg(target_os = "macos")]
 async fn launch_shortcut(shortcut: UserShortcut) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || mac::launch(&shortcut))
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?
+        .map(|()| true)
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+async fn launch_shortcut(shortcut: UserShortcut) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || linux::launch(&shortcut))
+        .await
+        .map_err(|error| error.to_string())?
+        .map(|()| true)
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 async fn launch_shortcut(_shortcut: UserShortcut) -> Result<bool, String> {
-    // TODO:[WPE_SCENE] Linux 上做快捷方式启动（见 [`SUPPORTED`]）。
-    Err("scene shortcuts can only be launched on Windows and macOS".into())
+    Err("scene shortcuts can only be launched on desktop platforms".into())
 }
 
 #[cfg(test)]
@@ -296,13 +324,16 @@ mod tests {
         assert_eq!(cache.get("a").unwrap().rgba[0], 9);
     }
 
-    /// 核对用（`#[ignore]`，Windows / macOS）：按 `KB_SHORTCUT_DUMP`（`名字=原值;名字=原值`，原值是
+    /// 核对用（`#[ignore]`，三个桌面平台）：按 `KB_SHORTCUT_DUMP`（`名字=原值;名字=原值`，原值是
     /// `<类型>:<路径>[|<参数>]`）取图标，跳过 metadata 检查，写成 `<KB_SHORTCUT_DUMP_DIR>/<名字>.png`；文件 / 文件夹 / 命令
     /// 另写一份透明区填色之前的 `<名字>.prefill.png`。网址项会联网。
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
     #[test]
     #[ignore]
     fn dump_shortcut_icons() {
+        // Linux：按主题渲染要有人转 GTK 主上下文，本线程初始化 GTK、取图标在别的线程跑时本线程转（见 [`gtk_pump`]）
+        #[cfg(target_os = "linux")]
+        gtk::init().expect("初始化 GTK 失败（要有图形会话）");
         let spec = std::env::var("KB_SHORTCUT_DUMP").expect("缺 KB_SHORTCUT_DUMP");
         let dir = std::path::PathBuf::from(
             std::env::var("KB_SHORTCUT_DUMP_DIR").expect("缺 KB_SHORTCUT_DUMP_DIR"),
@@ -324,9 +355,7 @@ mod tests {
             let icon = match shortcut.kind {
                 ShortcutKind::Web => runtime.block_on(web::icon(&shortcut.path)),
                 _ => {
-                    let raw = std::thread::spawn(move || prefill(&shortcut))
-                        .join()
-                        .unwrap();
+                    let raw = gtk_pump(std::thread::spawn(move || prefill(&shortcut)));
                     if let Some(raw) = &raw {
                         save(raw, format!("{name}.prefill.png"));
                     }
@@ -341,5 +370,20 @@ mod tests {
                 None => println!("{name}: 没有图标"),
             }
         }
+    }
+
+    /// 等 `handle` 结束；Linux 上等的同时转默认主上下文，让 [`linux`] 交给「主线程」的渲染在本线程执行。
+    #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
+    fn gtk_pump<T>(handle: std::thread::JoinHandle<T>) -> T {
+        #[cfg(target_os = "linux")]
+        {
+            let context = gtk::glib::MainContext::default();
+            while !handle.is_finished() {
+                if !context.iteration(false) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+            }
+        }
+        handle.join().unwrap()
     }
 }

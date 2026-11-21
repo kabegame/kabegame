@@ -2009,7 +2009,7 @@ export class SceneHost {
    * `type === "usershortcut"` 且 `isbound === true` 时把属性名 `postMessage` 给父页面（`shortcut/message.ts`，真正启动由应用页核对用户激活后调
    * `wpe_open_user_shortcut`）并返回 1，否则 0。这里的门禁只约束守规矩的脚本（脚本 realm 同源、能拿到 `parent`），安全边界在应用页与后端。
    *
-   * Linux：后端给的 `isbound` 一律为 false，这里恒返回 0（Windows、macOS 有，`wpe_shortcut::SUPPORTED`）。TODO:[WPE_SCENE] Linux 的快捷方式。
+   * 平台不支持快捷方式时后端给的 `isbound` 一律为 false，这里恒返回 0（`wpe_shortcut::SUPPORTED`，三个桌面平台都支持）。
    */
   private openUserShortcut(name: string): 0 | 1 | 2 {
     if (!this.shortcutToken.take()) return 2;

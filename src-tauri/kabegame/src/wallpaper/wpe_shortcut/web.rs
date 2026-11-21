@@ -75,6 +75,27 @@ async fn fetch_icon(input: &str) -> Option<Icon> {
     None
 }
 
+/// 打开网址快捷方式时用的地址：带 `协议://` 的原样用（`https://`、`steam://` 等），其余（`example.com`、`www.example.com`）
+/// 补 `https://`。值是用户输入的原样（保存时不补，见 `wpe::user_props::normalize_value`），xdg-open、NSWorkspace 不认没有协议的地址，
+/// `ShellExecuteW` 也只认得 `www.` 开头的，所以三个平台都在打开时补。建不成地址返回 `None`。
+pub fn launch_url(input: &str) -> Option<Url> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+    let has_scheme = input.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if has_scheme {
+        Url::parse(input).ok()
+    } else {
+        Url::parse(&format!("https://{input}")).ok()
+    }
+}
+
 /// 用户填的串 → 可请求的地址，按 WPE 的顺序：原串、`https://` + 串、`https://www.` + 串，建得成的留下。
 pub(super) fn page_urls(input: &str) -> Vec<Url> {
     [
@@ -218,6 +239,29 @@ fn fallback_icon() -> Option<Icon> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launch_urls_add_https_only_without_a_scheme() {
+        let url = |input: &str| launch_url(input).map(String::from);
+        assert_eq!(url("example.com").as_deref(), Some("https://example.com/"));
+        assert_eq!(url("www.kde.org").as_deref(), Some("https://www.kde.org/"));
+        assert_eq!(
+            url("  kde.org/a?b=1 ").as_deref(),
+            Some("https://kde.org/a?b=1")
+        );
+        // `localhost:3000` 不是协议，补 https://
+        assert_eq!(
+            url("localhost:3000").as_deref(),
+            Some("https://localhost:3000/")
+        );
+        assert_eq!(url("http://a.com").as_deref(), Some("http://a.com/"));
+        assert_eq!(
+            url("steam://run/431960").as_deref(),
+            Some("steam://run/431960")
+        );
+        assert_eq!(url(""), None);
+        assert_eq!(url("   "), None);
+    }
 
     #[test]
     fn page_urls_follow_wpes_order() {

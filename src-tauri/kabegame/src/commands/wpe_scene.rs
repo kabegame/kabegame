@@ -104,11 +104,21 @@ pub async fn wpe_scene_shortcut_icon(
 
 /// 启动场景的快捷方式（P11d）。只登记进 `generate_handler!`、不进任何 `permissions/*.toml`：只有主窗口与壁纸窗口的
 /// 应用页（免 ACL）调得到，场景宿主与网页壁纸都调不到；应用页负责核对用户激活并传自己持有的图片 id。
-/// 图片要是库内场景；属性在 `project.json` 里要是 `usershortcut`；值只取用户配过的。Windows 上
-/// `ShellExecuteW` 返回值 > 32 为成功（`true`），macOS 上启动请求发出去了为 `true`，没配返回 `false`，Linux 报错。
+/// 图片要是库内场景；属性在 `project.json` 里要是 `usershortcut`；值只取用户配过的。启动请求发出去了为 `true`，
+/// 没配为 `false`；失败时除了返回原因，还经 `user-message` 通道告诉用户（主窗口的看板娘显示）：点击可能发生在
+/// 没有看板娘的壁纸窗口里，这样不管从哪里点的都在同一个地方提示。
 #[tauri::command]
 pub async fn wpe_open_user_shortcut(image_id: String, name: String) -> Result<bool, String> {
-    crate::wallpaper::wpe_shortcut::launch(&image_id, &name).await
+    let result = crate::wallpaper::wpe_shortcut::launch(&image_id, &name).await;
+    if let Err(reason) = &result {
+        tracing::warn!("启动场景 {image_id} 的快捷方式 {name} 失败：{reason}");
+        kabegame_core::emitter::GlobalEmitter::global().emit_user_message(
+            kabegame_core::emitter::UserMessageLevel::Error,
+            "gallery.wpeShortcutLaunchFailed",
+            serde_json::json!({ "reason": reason }),
+        );
+    }
+    result
 }
 
 #[derive(Debug, serde::Deserialize)]

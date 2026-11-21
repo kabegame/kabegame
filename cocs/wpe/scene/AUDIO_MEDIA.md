@@ -259,7 +259,7 @@ P11c 照这三段做，每段放在对应的位置。依据：
 - 图层的 `usertextures` 槽显示它的图标。这是 P11b 来源表的第三种来源，前两种是属性文件和封面。
 - 脚本在光标回调里调 `engine.openUserShortcut(属性名)` 启动它。
 
-Windows 与 macOS（macOS 2026-11-21 起，`wpe_shortcut/mac.rs`）。Linux 面板不显示这类属性，宿主拿到的一律未绑定，`openUserShortcut` 返回 `false`，图标槽用缺省纹理；平台开关是 `wpe_shortcut::SUPPORTED`，前端面板同规则，Linux 的代码处标 `TODO:[WPE_SCENE]`。
+三个桌面平台都有：Windows（`wpe_shortcut/windows.rs`）、macOS（2026-11-21 起，`mac.rs`）、Linux（2026-11-22 起，`linux.rs`）；macOS 与 Linux 共用 `unix.rs`（按登录 shell 的 `PATH` 找程序、登录 shell 跑命令、`setsid`、opener）。平台开关是 `wpe_shortcut::SUPPORTED`，前端面板同规则；不支持的平台上面板不显示这类属性，宿主拿到的一律未绑定，`openUserShortcut` 返回 `false`，图标槽用缺省纹理。
 
 依据：
 - 读码 [rea-p11d](../../../.claude/plans/wpe-import/3-scene/phase11/rea-p11d.md)；
@@ -277,7 +277,7 @@ Windows 与 macOS（macOS 2026-11-21 起，`wpe_shortcut/mac.rs`）。Linux 面�
 - 宿主把这一项原样放进 `applyUserProperties` 的增量。`engine.userProperties` 出口由 `scriptUserProperties` 剥掉这三项，脚本读到 `{}`，同 WPE。
 
 **图标。** 宿主经 `wpe_scene_shortcut_icon(imageId, name)` 取，这条命令登记在 `wpe-scene-host.toml`：
-- 返回 `[宽 u32 LE][高 u32 LE][直通 alpha 的 RGBA]`；没配、取不到、Linux 上是 0 字节。值只取 metadata 的 `userProperties`，不取工程缺省值。
+- 返回 `[宽 u32 LE][高 u32 LE][直通 alpha 的 RGBA]`；没配、取不到时是 0 字节。值只取 metadata 的 `userProperties`，不取工程缺省值。
 - 取法照 `winrtutil`（`wallpaper/wpe_shortcut/`）：
   - **文件、文件夹、命令**：
     - `SearchPathW` 补 `.exe`，再取 Shell 缩略图缓存（`IThumbnailCache`，256）；
@@ -298,6 +298,12 @@ Windows 与 macOS（macOS 2026-11-21 起，`wpe_shortcut/mac.rs`）。Linux 面�
     - 系统图标（`NSWorkspace.iconForFile`，`CGImageForProposedRect` 取 256 的那一级画成 256×256）：应用、文件夹、可执行文件、`.webloc` 在这里；路径不存在时按扩展名取通用图标（`iconForFileType`），没有扩展名就没有图标；
     - 都画进 sRGB、预乘 alpha 的位图再四舍五入去预乘，最后同样做透明区填色（`finish`）。
     - 没有和 WPE 逐像素对照的对象（WPE 不在 macOS 上跑），实测见下面的走查。
+  - **Linux 的文件、文件夹、命令**（`linux.rs`，网址同上）。顺序同上，用应用已经链接的 GIO 与 GTK 3，图标主题跟随桌面（KDE 上是 breeze），SVG 图标由系统 gdk-pixbuf 的加载器画：
+    - 路径与命令的程序同 macOS（`unix.rs`）：不存在的裸名字按登录 shell 的 `PATH` 找；符号链接解析到目标；
+    - 内容缩略图：先查 freedesktop 缩略图缓存（GIO 的 `thumbnail::path-large` / `-xlarge` / `-xxlarge` / `thumbnail::path`，按对应的 `thumbnail::is-valid*` 跳过过期的），缓存是文件管理器生成的，含 PDF、文档；没有时图片用 `image` 解、视频解第一帧（core 的 `decode_first_video_frame`），最长边 256、不放大；
+    - 系统图标：`.desktop`（Linux 上的「应用」）取它声明的图标；可执行文件与命令在已安装的应用里找启动它的那个（`Exec` 程序同名，或解析符号链接后就是这个文件），多个时依次比应用 id 与程序名一致、显示在菜单里、去掉字段码后的命令行更短（装成应用的网页也用浏览器启动、`Exec` 带 `--app-id`），找不到用 GIO 的可执行文件图标；其余文件与文件夹取 GIO 的 `standard::icon`（`~/Pictures` 得到 `folder-pictures`）；路径不存在时只按文件名猜类型（传 NULL 数据，gio-rs 的 `content_type_guess` 传空切片会被判成 `application/x-zerosize`）取通用图标，没有扩展名就没有图标；
+    - GIO 查询在阻塞线程，图标序列化成字符串；按主题渲染（`IconTheme::lookup_by_gicon`，`FORCE_SIZE` 256）只能在 GTK 主线程，经默认主上下文的空闲源（`glib::idle_add_once`）交给主线程、最多等 2 s。不用 `MainContext::invoke`：调用线程拿得到上下文的所有权时它会就地执行。pixbuf 本来就是直通 alpha，按行跨距拷成紧凑的 RGBA，同样做透明区填色；
+    - gio-rs 0.18 的 `AppInfoExt::executable` 把可能为 NULL 的返回值直接转成路径，遇到只靠 D-Bus 激活的条目会崩（实测 SIGSEGV），改为直接调 `g_app_info_get_executable` 并判空。
 - 宿主侧是 `usertex/sources.ts` 的 `usershortcut` 来源：
   - 键变了才取，解码结果按键缓存；
   - 照 WPE 补透明边到槽的比例（`crop.ts` 的 `padRect`）：比例按 float32，`(int)` 截断，`>> 1` 居中，不裁切；精灵表槽取帧的比例；
@@ -318,14 +324,25 @@ Windows 与 macOS（macOS 2026-11-21 起，`wpe_shortcut/mac.rs`）。Linux 面�
   - 同一属性 1 秒内至多一次。
 - **启动命令**：`WpeSceneView` 用**自己持有的**图片 id 调 `wpe_open_user_shortcut(imageId, name)`。这条命令只登记进 `generate_handler!`，不进任何 `permissions/*.toml`，只有主窗口与壁纸窗口的应用页（免 ACL）调得到；场景宿主调它被 ACL 拒绝（走查实测）。
 - **后端**只启动这张图（必须是库内场景）上 `project.json` 类型为 `usershortcut`、且用户在面板里配过的那一项：
-  - Windows 调 `ShellExecuteW(NULL, NULL, 路径, 参数, NULL, SW_SHOWNORMAL)`，返回值 > 32 时返回 `true`；
+  - Windows 调 `ShellExecuteW(NULL, NULL, 路径, 参数, NULL, SW_SHOWNORMAL)`（网址先补协议，见下），返回值 > 32 时返回 `true`，否则报「系统没能打开」；
   - macOS（`mac.rs`）按类型分：
-    - 文件夹、网址、不带参数的文件交给 `tauri-plugin-opener`（NSWorkspace 用默认程序打开，`.app` 会被启动）；网址照取图标的规则补协议（`www.` 开头的值保存时不补 `https://`，NSWorkspace 不认没有协议的地址）；
+    - 文件夹、网址、不带参数的文件交给 `tauri-plugin-opener`（NSWorkspace 用默认程序打开，`.app` 会被启动）；网址先补协议（见下）；
     - 命令整条交给用户的登录 shell（`$SHELL -i -l -c`，没有 `$SHELL` 用 `/bin/zsh`）：和在终端里敲一样，`.zprofile` / `.zshrc` 里配的 `PATH`（Homebrew、nvm、pyenv 等）、别名、函数都在，改了立即生效。从 Finder / Dock 启动的应用自己的 `PATH` 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，`/bin/sh -c` 找不到这些命令；只读 `.zprofile` 的登录 shell（`-l`）也不够，nvm、pyenv 等写在 `.zshrc` 里，只有交互 shell 才读。代价是每次多一次 shell 启动（本机 oh-my-zsh 加 nvm 约 0.63 s，从调用到命令跑完约 0.9 s）。不接标准输入输出、不等它结束（另起线程收尸，退出码不为 0 时记 warn），工作目录是用户主目录；子进程先 `setsid()` 脱离控制终端——从终端启动的 Kabegame（dev）带着控制终端，后台的交互 shell 一碰终端就被 SIGTTOU 停住（实测停在 `T` 状态）；
     - 带参数的 `.app` 经 `/bin/sh -c` 跑 `exec /usr/bin/open -a <转义后的路径> --args <参数>`，参数照 POSIX shell 规则拆（`open` 是绝对路径，不必等登录 shell；同样 `setsid`）；其它文件带参数时参数忽略；
+    - 文件夹、文件先查在不在（「文件夹不存在」「不是文件夹」「文件不存在」），opener 交出去之后的失败（没有关联的程序等）拿不到；
     - 启动请求发出去了（opener 成功、`sh` 起来了）就返回 `true`；
+  - Linux（`linux.rs`）按类型分，分派是纯函数 `plan_launch`：
+    - 网址、文件夹、普通文件交给 `tauri-plugin-opener`（xdg-open / 门户），网址同样先补协议；普通文件带参数时参数忽略；文件夹、文件同 macOS 先查在不在；
+    - `.desktop`：不带参数用 GIO 启动（`DesktopAppInfo::launch`，`Terminal`、D-Bus 激活由 GIO 处理）；带参数时把 `Exec` 去掉字段码（`%f %F %u %U` 等，`%%` 还原成 `%`）后拼上参数、经 `/bin/sh -c` 跑。xdg-open 一个 `.desktop` 会用文本编辑器打开它，所以单独处理；GIO 只认 `Exec` 的程序在 `PATH` 里的条目，没装的应用启动失败；
+    - 可执行的普通文件（ELF、脚本、AppImage）直接起进程，参数照 POSIX shell 规则拆（对应 Windows 的 `ShellExecute` 跑 exe）；xdg-open 不会执行它们；
+    - 命令同 macOS，整条交给用户的登录 + 交互 shell（`.bashrc` / `.zshrc` 里的 `PATH`、nvm、别名都在）；没有 `$SHELL` 时取 passwd 里的登录 shell，再没有用 `/bin/sh`；
+    - 返回值同 macOS；
   - 没配返回 `false`；
   - 属性不是快捷方式、属性不存在、图片不是场景都报错。
+- **网址补协议**：值原样存（面板边输入边保存，保存时补会把正在输入的值改掉），三个平台都在打开时补（`web::launch_url`）：带 `协议://` 的原样用（`https://`、`steam://` 等），其余（`www.` 开头的也算）补 `https://`。xdg-open、NSWorkspace 不认没有协议的地址，`ShellExecuteW` 只认 `www.` 开头的。取图标按 WPE 的顺序试（`page_urls`），脚本读到的 `file` 照 WPE 面板存下的样子（`wpe_web_url`），都不受影响。
+- **失败的反馈**：经后端的用户提示通道（`user-message`，见 [../../ui/USER_MESSAGES.md](../../ui/USER_MESSAGES.md)）由主窗口的看板娘显示「快捷方式没能打开：<原因>」，预览里点的、桌面上点的、面板的「测试」按钮都在这一处提示（壁纸窗口没有看板娘）。分两种：
+  - 当场知道的（目标不存在、`.desktop` 读不了、网址不合法、系统打不开、程序起不来）：`launch` 返回原因，`wpe_open_user_shortcut` 记 warn、发提示，照样把错误返回给调用方；面板的「测试」按钮出错时只记日志，免得提示两遍；
+  - 起来以后很快出错退出的（macOS / Linux 的命令与可执行文件，拼错的命令经登录 shell 跑退出码是 127）：收尸线程在起来后 5 s（`unix.rs` 的 `FAILURE_WINDOW`）内看到非 0 退出就发提示，原因按退出码写（127「找不到命令」、126「命令不能执行」、其它「启动后立刻出错退出」、被信号终止），之后才退出的只记日志，用户关掉一个开了很久的程序不算失败。不在命令里同步等：登录 + 交互 shell 本身就要 1 s 上下（dev 实测 1.3 s）。Windows 的 `ShellExecuteW` 不给子进程，没有这一种。
 
 这样一来，恶意脚本最多在用户刚点过壁纸的几秒内，重复打开用户自己给这张壁纸配的目标。
 
@@ -351,9 +368,13 @@ Windows 与 macOS（macOS 2026-11-21 起，`wpe_shortcut/mac.rs`）。Linux 面�
 - **形状**：宿主拿到 `isbound: true` 与对的 `commandtype` / `file`，状态里没有完整路径（网址按 WPE 给整串）；宿主调启动命令被 ACL 拒绝。
 - **启动**：Safari、Finder 的 `/Applications`、预览打开图片、Chrome（默认浏览器）打开补了协议的维基百科、`open -a Calculator`、`Chess.app|--kb-test "a b"`（进程参数是 `--kb-test`、`a b`）都起来了；只在 nvm 里有的 `node -e …` 跑出了结果、oh-my-zsh 的别名 `ll` 能用，命令图标按登录 shell 的 `PATH` 找到了 `node`；模拟从 Finder 启动的干净环境（`env -i`，`PATH` 只有系统目录）里读到的登录 shell `PATH` 含 Homebrew、nvm、pyenv、`~/.local/bin`；PATH 里没有的命令返回 `true`、日志记退出码 127；没配返回 `false`，属性不是快捷方式报错。
 
+**Linux 走查**（2026-11-22，Ubuntu 26.04 / KDE Plasma 6.6.4 dev）：
+- **图标**（核对测试 `dump_shortcut_icons`，测试线程里 `gtk::init` 并替主线程转主上下文；加 dev 应用的 `wpe_scene_shortcut_icon`）：`org.kde.dolphin.desktop`、`cmd:dolphin`、`cmd:konsole`、`cmd:code`（VS Code）、`/usr/bin/firefox`、`cmd:google-chrome` 与 `/usr/bin/google-chrome-stable` 是各自应用的图标；`~/Pictures`、主目录是 `folder-pictures` / `folder-home`；PNG 与 2 s 的 mp4 是内容缩略图（视频 256×144）；mp3 与不存在的 `foo.txt` 是类型图标，`cmd:ls` 是可执行文件图标，不存在的裸名字没有图标；网址取到站点图标（64×64）并乘圆形遮罩。修前 `cmd:google-chrome` 挑到了一个装成应用的网页（ChatGPT），见上面的排序规则。
+- **启动**（19601 的 8 格，dev 应用里调启动命令，目标都只往日志里记参数）：命令经登录 shell 跑、`.desktop` 不带参数经 GIO（`%U` 去掉）、脚本带参数 `hello 'a b'` 拆成两个参数、`.desktop` 带参数拼在 `Exec` 后面，都返回 `true` 并留下记录；面板显示 Linux 的文案（「文件或应用」、`.desktop` 与 `xdg-open` 的占位）。场景里的真实点击与面板的「测试」按钮请用户确认（这张场景的按钮要悬停才展开）。
+
 **已知差异**：
 - **返回值**：WPE 的 `true` 表示 `ShellExecuteW` 成功；我们的启动是异步的，`true` 只表示值已配好，启动失败只记日志。
-- **macOS 的命令**：整条交给用户的登录 shell，比 Windows 的 `ShellExecuteW`（程序加参数串、不经 shell）能力大：管道、重定向、变量、别名都能用，语法是用户自己 shell 的（fish 用户写 fish 语法）。值只能由本机用户在面板里配，脚本只能触发配好的那一条。
+- **macOS / Linux 的命令**：整条交给用户的登录 shell，比 Windows 的 `ShellExecuteW`（程序加参数串、不经 shell）能力大：管道、重定向、变量、别名都能用，语法是用户自己 shell 的（fish 用户写 fish 语法）。值只能由本机用户在面板里配，脚本只能触发配好的那一条。
 - **类型**：WPE 不查属性类型，`textinput` 里写合法格式的值也能启动；我们只认 `usershortcut`，也只认用户配过的值，不认工程缺省值。
 - **本机哈希**：WPE 的值中间有 6 位本机哈希，用来拒绝别的机器上配的值。哈希是 `sha256(MachineGuid 的 UTF-16 连结尾 NUL ‖ 14 27 db 88 1d)` 的前 6 位，走查实测。我们的值只来自本机面板，不带这一段。
 - **应用页的两道检查**：用户激活与 1 秒限频，WPE 没有。

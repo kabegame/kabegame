@@ -9,8 +9,8 @@ const confirm = vi.hoisted(() => vi.fn());
 const success = vi.hoisted(() => vi.fn());
 const failure = vi.hoisted(() => vi.fn());
 const invoke = vi.hoisted(() => vi.fn());
-/** `IS_WINDOWS` / `IS_MACOS` 在用例里可切（快捷方式只在 Windows / macOS 的场景上显示，P11d） */
-const envState = vi.hoisted(() => ({ windows: true, macos: false }));
+/** `IS_WINDOWS` / `IS_MACOS` / `IS_LINUX` 在用例里可切（快捷方式在三个桌面平台的场景上显示，P11d） */
+const envState = vi.hoisted(() => ({ windows: true, macos: false, linux: false }));
 /** 后端的 `customCover`：面板挂载时与 `reload` 时读取 */
 const cover = vi.hoisted(() => ({ custom: false, items: [] as Record<string, unknown>[] }));
 
@@ -29,6 +29,9 @@ vi.mock("@/env", async (original) => {
     },
     get IS_MACOS() {
       return envState.macos;
+    },
+    get IS_LINUX() {
+      return envState.linux;
     },
   };
 });
@@ -90,6 +93,7 @@ beforeEach(() => {
   cover.items = [];
   envState.windows = true;
   envState.macos = false;
+  envState.linux = false;
 });
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
@@ -139,7 +143,7 @@ describe("WpeWebPropertiesPanel 快捷方式（P11d）", () => {
   });
   const shown = (imageType: string) => mountPanel({ imageType }).text().includes("label-sc");
 
-  it("只在 Windows / macOS 的场景壁纸上显示；Linux 的场景、网页壁纸都滤掉", () => {
+  it("三个桌面平台的场景壁纸上都显示；网页壁纸、不是桌面平台时滤掉", () => {
     cover.items = [item("c", "color"), item("sc", "usershortcut")];
     expect(shown("x-wpe/scene")).toBe(true);
     expect(shown("x-wpe/web")).toBe(false);
@@ -148,11 +152,15 @@ describe("WpeWebPropertiesPanel 快捷方式（P11d）", () => {
     expect(shown("x-wpe/scene")).toBe(true);
     expect(shown("x-wpe/web")).toBe(false);
     envState.macos = false;
+    envState.linux = true;
+    expect(shown("x-wpe/scene")).toBe(true);
+    expect(shown("x-wpe/web")).toBe(false);
+    envState.linux = false;
     expect(shown("x-wpe/scene")).toBe(false);
     expect(mountPanel({ imageType: "x-wpe/scene" }).text()).toContain("label-c");
   });
 
-  it("场景上只剩快捷方式、又在 Linux 上时按没有属性处理", () => {
+  it("场景上只剩快捷方式、又不是桌面平台时按没有属性处理", () => {
     envState.windows = false;
     cover.items = [item("sc", "usershortcut")];
     expect(mountPanel({ imageType: "x-wpe/scene" }).text()).toContain("gallery.wpePropsEmpty");

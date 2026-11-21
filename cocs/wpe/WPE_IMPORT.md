@@ -107,7 +107,7 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 | 图库预览的鼠标：光标在画面外、应用外也跟随 | 有 | 有（未实测） | 无：iframe 直接收真实鼠标，只在 iframe 上 |
 | 音频数据（频谱） | 有（WASAPI 回环） | 有（14.2+，Core Audio 进程 tap） | 有（PipeWire 输出设备监听；只有 PulseAudio 的系统没有） |
 | 媒体数据（正在播放的曲目、封面） | 有（SMTC） | 有（2026-11-21：经 `tauri-plugin-sysmedia` 读系统的 Now Playing） | 有（2026-11-22：经 `tauri-plugin-sysmedia` 读 MPRIS） |
-| 场景快捷方式（`usershortcut`） | 有 | 有（2026-11-21：图标取 QuickLook 缩略图与系统图标，命令在用户的登录 shell 里跑，同终端） | 无：面板不显示、宿主一律未绑定 |
+| 场景快捷方式（`usershortcut`） | 有 | 有（2026-11-21：图标取 QuickLook 缩略图与系统图标，命令在用户的登录 shell 里跑，同终端） | 有（2026-11-22：图标取 freedesktop 缩略图缓存与图标主题，应用是 `.desktop`、用 GIO 启动，命令在用户的登录 shell 里跑） |
 | 「跟随 WPE」 | WPE 安装目录里有 `config.json` 时 | 无：WPE 只能在 Windows 上运行，没有可跟随的设置（拷来的 `config.json` 也不认） | 无 |
 
 `kabegame_core::wpe`：
@@ -908,15 +908,15 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 场景的 `scenetexture`（用户纹理，P11b；渲染一侧见 [scene/AUDIO_MEDIA.md](scene/AUDIO_MEDIA.md)「用户纹理（P11b）」）：`WpePropKind::SceneTexture`，面板用和 `file` 相同的文件选择与清空按钮。`project.json` 里没有 `filter`，过滤固定为 WPE 那一条（`jpg jpeg jfif png gif mp4`，`SCENE_TEXTURE_EXTENSIONS`），所以没有「WPE 收、浏览器解不了」的格式。校验同 `file`（绝对路径、是文件、不是符号链接，空串表示清空）；存之前照 WPE 整理路径（`wpe_slash_path`：`\` 换成 `/`、非开头的连续 `/` 合并，UNC 的开头 `//` 保留，不拷贝、不改大小写）。`user_file_grants` 同样收它：网页壁纸目录索引的场景条目除目录外再存这些文件，`scene_grants` 一起返回给场景宿主的访问范围，覆盖时机同上两处（`wpe_web_get_state` 返回前也写）。宿主是一份文档，放行对全部场景宿主实例生效；文件都是用户自己选的。`usershortcut` 不进放行：它不读文件，图标与启动都在后端。
 
 场景的 `usershortcut`（快捷方式，P11d；图标、门禁与启动见 [scene/AUDIO_MEDIA.md](scene/AUDIO_MEDIA.md)「快捷方式（P11d）」）：
-- **面板**：`WpePropKind::UserShortcut`，只在场景、只在 Windows / macOS 上显示（`WpeShortcutField.vue`，同后端 `wpe_shortcut::SUPPORTED`）。
+- **面板**：`WpePropKind::UserShortcut`，只在场景、三个桌面平台上显示（`WpeShortcutField.vue`，同后端 `wpe_shortcut::SUPPORTED`；「文件」在 macOS 上叫「文件或 App」、在 Linux 上叫「文件或应用」，占位例子按平台换）。
   - macOS 上「文件」写成「文件或 App」（`.app` 在 macOS 上是目录，免得去选「文件夹」），命令的占位例子是 `open -a Calculator`；值格式不变。
   - 先选类型：文件、文件夹、网址、命令；再填路径，文件与文件夹可以浏览选取；文件类型另有参数输入框。
   - 「测试」按钮先 `saveNow()` 存下，再调启动命令 `wpe_open_user_shortcut`。主窗口里的点击本身就是用户激活。
 - **值**：格式是 `<类型>:<路径>`，类型 `file` / `directory` / `web` / `cmd`，空串表示清空。
   - 拆参数照 WPE（`parse_user_shortcut`）：`file` 在第一个 `|` 处拆成「路径 | 参数」，`cmd` 在第一个空格处拆成「程序 参数」；拆完路径为空不收。
-  - `web` 不以 `http://`、`https://`、`www.`、`steam://` 开头时，存之前补 `https://`（区分大小写，照 WPE 面板的 JS）。
+  - `web` 原样存、不补协议：面板边输入边保存，保存时补会把正在输入的值改掉。打开时才补（`web::launch_url`，没写 `协议://` 的都补 `https://`）；交给脚本的 `file` 照 WPE 面板的规则（`wpe_web_url`：不以 `http://`、`https://`、`www.`、`steam://` 开头时补 `https://`，区分大小写）。WPE 面板是存之前补。
   - WPE 的值中间还有一段 6 位本机哈希，用来拒绝别的机器上配的值。我们的值只来自本机面板，不复刻这一段。
-- **交给场景宿主的**：`wpe_web_get_state`（由 `WpeSceneView` 推给宿主）不给原值，给 `{ value: 原值 SHA-256 的前 16 位十六进制, isbound, commandtype?, file? }`（`scene_user_from_view`）。完整路径不离开后端；Linux 上 `isbound` 一律为假。
+- **交给场景宿主的**：`wpe_web_get_state`（由 `WpeSceneView` 推给宿主）不给原值，给 `{ value: 原值 SHA-256 的前 16 位十六进制, isbound, commandtype?, file? }`（`scene_user_from_view`）。完整路径不离开后端。
 - **网页壁纸**不读这类属性，面板也不显示。
 
 ### 壁纸设置与预览设置

@@ -124,6 +124,7 @@ app_event_kinds! {
     WallpaperPing,
     WallpaperPong,
     ColorBucketsChange,
+    UserMessage,
 }
 
 impl AppEventKind {
@@ -169,6 +170,7 @@ impl AppEventKind {
             AppEventKind::WallpaperPing => "wallpaper-ping",
             AppEventKind::WallpaperPong => "wallpaper-pong",
             AppEventKind::ColorBucketsChange => "color-buckets-change",
+            AppEventKind::UserMessage => "user-message",
         }
         .to_string()
     }
@@ -209,6 +211,7 @@ impl AppEventKind {
             "wallpaper-ping" => Some(AppEventKind::WallpaperPing),
             "wallpaper-pong" => Some(AppEventKind::WallpaperPong),
             "color-buckets-change" => Some(AppEventKind::ColorBucketsChange),
+            "user-message" => Some(AppEventKind::UserMessage),
             "TaskAdded" | "TaskDeleted" | "TaskChanged" => Some(AppEventKind::TasksChange),
             _ => None,
         }
@@ -486,11 +489,56 @@ pub enum AppEvent {
         #[serde(flatten)]
         record: crate::logging::LogRecord,
     },
+
+    /// 给用户看的一条提示：后端往前端发提示的统一通道（`GlobalEmitter::emit_user_message`）。前端主窗口按当前语言翻译
+    /// `key`（前端 i18n 的完整键，如 `gallery.wpeShortcutLaunchFailed`）、填入 `params`，用看板娘显示（被挡住时降级成提示消息）。
+    UserMessage {
+        level: UserMessageLevel,
+        key: String,
+        /// 文案里的命名参数；不是对象时按没有参数处理
+        params: serde_json::Value,
+    },
+}
+
+/// 用户提示的级别，对应看板娘消息的四种类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UserMessageLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AppEvent, AppEventKind};
+    use super::{AppEvent, AppEventKind, UserMessageLevel};
+
+    #[test]
+    fn user_message_serializes_for_the_frontend() {
+        let event = AppEvent::UserMessage {
+            level: UserMessageLevel::Error,
+            key: "gallery.wpeShortcutLaunchFailed".into(),
+            params: serde_json::json!({ "reason": "文件夹不存在" }),
+        };
+        assert_eq!(event.kind(), AppEventKind::UserMessage);
+        assert_eq!(AppEventKind::UserMessage.as_event_name(), "user-message");
+        assert_eq!(
+            AppEventKind::from_event_name("user-message"),
+            Some(AppEventKind::UserMessage)
+        );
+        // 「订阅全部」里有它（主窗口、Web 的 SSE、CLI 都收得到）
+        assert!(AppEventKind::default_kinds().contains(&AppEventKind::UserMessage));
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            serde_json::json!({
+                "type": "user-message",
+                "level": "error",
+                "key": "gallery.wpeShortcutLaunchFailed",
+                "params": { "reason": "文件夹不存在" }
+            })
+        );
+    }
 
     #[test]
     fn plugin_changed_serializes_patch_and_roundtrips_event_kind() {
@@ -695,6 +743,7 @@ impl AppEvent {
             AppEvent::WallpaperPing { .. } => AppEventKind::WallpaperPing,
             AppEvent::WallpaperPong { .. } => AppEventKind::WallpaperPong,
             AppEvent::ColorBucketsChange { .. } => AppEventKind::ColorBucketsChange,
+            AppEvent::UserMessage { .. } => AppEventKind::UserMessage,
         }
     }
 }

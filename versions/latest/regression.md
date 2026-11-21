@@ -1,5 +1,29 @@
 # v4.7.0 regression
 
+## Linux 场景快捷方式（`usershortcut`，P11d）
+
+2026-11-22 Linux dev（Ubuntu 26.04、KDE Plasma 6.6.4 Wayland，图标主题 breeze）。新增 `wallpaper/wpe_shortcut/linux.rs`：图标先查 freedesktop 缩略图缓存、再自己解图片 / 视频首帧，系统图标用 GIO + GTK 图标主题（渲染经空闲源交给 GTK 主线程）；启动按类型分派（opener、GIO 启动 `.desktop`、可执行文件直接运行、命令交给登录 shell）。`mac.rs` 里与平台无关的部分移到 macOS / Linux 共用的 `unix.rs`。前端面板在 Linux 上显示快捷方式编辑器，「文件」叫「文件或应用」。
+
+走查中改掉两处：`cmd:google-chrome` 最初挑到一个装成应用的网页（ChatGPT 的 PWA 也用 `google-chrome` 启动），正牌 `google-chrome.desktop` 的 `Exec` 写的是 `google-chrome-stable`、按名字比漏掉了，改为同时认解析后的同一文件、并按应用 id 与程序名一致优先；gio-rs 0.18 的 `AppInfoExt::executable` 对返回 NULL 的条目崩溃（核对测试里 SIGSEGV），改为直接调 C 接口判空。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | SL1 单测 | Linux | `test-kabegame kabegame --lib wpe_` | 全过 | 2026-11-22 Claude：146 passed（含 `unix.rs` 移过来的单测、`plan_launch` 各分支、`strip_field_codes`、pixbuf 行跨距、GIO 系统图标、passwd 的登录 shell；`wpe_web` 的形状测试现在在 Linux 上走「已绑定」分支） |
+| [x] | SL2 检查与前端单测 | Linux | `check-kabegame`；vitest `components/wallpaper`；Prettier、rustfmt | 0 error；全过；格式无差异 | 2026-11-22 Claude：0 error、新代码无告警；225 passed（面板用例改成三个桌面平台都显示） |
+| [x] | SL3 图标核对 | Linux 图形会话 | `dump_shortcut_icons`（`KB_SHORTCUT_DUMP` 列 14 项） | 应用、文件夹、内容缩略图、类型图标、可执行文件图标、站点图标各对；不存在的裸名字没有图标 | 2026-11-22 Claude：Dolphin（`.desktop` 与 `cmd:dolphin`）、Konsole、VS Code、Firefox、Chrome（`cmd:google-chrome` 与 `/usr/bin/google-chrome-stable`）、`folder-pictures`、`folder-home`、PNG 与 mp4 的内容缩略图（视频 256×144）、mp3 与 `foo.txt` 的类型图标、`ls` 的可执行文件图标、kde.org 站点图标 64×64 |
+| [x] | SL4 dev 里取图标 | Linux dev，19601 配 8 格 | 主窗口逐格调 `wpe_scene_shortcut_icon` | 8 格都有图标 | 2026-11-22 Claude：7 格 256×256、网址 64×64；第一次 1.2 s（加载图标主题），之后几十毫秒，网址 2.9 s（联网） |
+| [x] | SL5 启动 | 同上，目标只往日志里记参数 | 主窗口调 `wpe_open_user_shortcut`（面板「测试」调的就是它）：命令、`.desktop`、`run.sh\|hello 'a b'`、`.desktop\|extra` | 都返回 `true`，日志依次是命令的标记、`desk`、`hello a b`、`desk extra` | 2026-11-22 Claude：符合（`.desktop` 的 `%U` 去掉了，带引号的参数没被拆开） |
+| [x] | SL6 面板 | 同上 | 预览 19601，读属性面板 | 开着的 4 个按钮各有快捷方式编辑器；「文件或应用」、`.desktop` 与 `xdg-open` 的占位 | 2026-11-22 Claude：符合；测完 8 格恢复默认，`userProperties` 回到没有 |
+| [ ] | SL7 场景里点击与「测试」按钮 | Linux dev | 预览配了快捷方式的场景，用真鼠标点场景里的格子、点面板的「测试」 | 打开对应目标；一次点击只启动一次 | 要用户操作：19601 的按钮要悬停才展开，工具点不到 |
+| [ ] | SL8 文件夹与网址 | Linux dev | 配一个文件夹、一个网址，点一下 | 文件管理器 / 默认浏览器打开 | 会弹窗口，请用户确认 |
+| [ ] | SL9 macOS 不回归 | macOS | `check-kabegame`；`test-kabegame kabegame wpe_shortcut`；9135 应用栏点一格命令 | 编过、全过、照常启动 | `mac.rs` 只是把平台无关的部分移到 `unix.rs`，本机编不了 macOS |
+| [x] | SL10 网址原样存 | Linux dev，19601 | 面板给一格选「网址」、输入 `kde.org` | 输入框不被改写，`userProperties` 里是 `web:kde.org`；打开时按 `https://kde.org` 打开 | 2026-11-22 Claude：写入后读回仍是 `web:kde.org`（后端不再改写）；输入框不被改写由 `WpeShortcutField.test.ts` 覆盖，打开时补协议由 `launch_urls_add_https_only_without_a_scheme` 覆盖，真打开见 SL8 |
+| [x] | SL11 当场知道的失败 | 同上 | 配 `directory:/tmp/kabegame-nope-dir`，主窗口调 `wpe_open_user_shortcut` | 命令报「文件夹不存在：…」，看板娘提示「快捷方式没能打开：文件夹不存在：…」，只提示一次 | 2026-11-22 Claude：符合，气泡只有一个 |
+| [x] | SL12 事后才知道的失败 | 同上 | 配 `cmd:kabegame-no-such-cmd --x`，调 `wpe_open_user_shortcut` | 命令返回 `true`；几秒内看板娘提示「快捷方式没能打开：找不到命令（退出码 127）」，日志一条 warn | 2026-11-22 Claude：约 1.5 s 出气泡（登录 shell 启动约 1.3 s），日志 `场景快捷方式启动后出错退出：找不到命令（退出码 127）`；测完 3 格还原 |
+| [ ] | SL13 长时间运行的程序不误报 | Linux / macOS dev | 配一个会开很久的命令或应用，打开后 5 s 之后再关掉 | 不提示 | 单测 `early_failures_are_reported_and_running_programs_are_not` 覆盖；真机没做 |
+| [ ] | SL14 桌面壁纸上点的失败 | Linux 插件模式 / Windows / macOS 窗口模式 | 桌面上的场景壁纸点一个配错的快捷方式 | 主窗口的看板娘提示（壁纸窗口里不出现）；看板娘被挡或关着时降级成顶部提示 | 要用户操作 |
+| [ ] | SL15 Windows 失败 | Windows | 配一个不存在的文件，点「测试」 | 看板娘提示「快捷方式没能打开：系统没能打开：…」 | 本机编不了 Windows |
+
 ## Linux 媒体集成（MPRIS）
 
 2026-11-22 Linux（Ubuntu 26.04、KDE Plasma 6.6.4 Wayland）。`tauri-plugin-sysmedia` 新增 Linux 数据源：在会话总线上读 MPRIS（zbus，`desktop/linux.rs` + 纯逻辑 `desktop/linux/mpris.rs`），按「最近开始播放的那个」选当前会话，会话身份是进程；应用侧 `wpe_media` 的媒体分支与前端「媒体集成」开关扩到 Linux。消费方（攒批、投影、配色）没改。

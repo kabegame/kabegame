@@ -191,6 +191,7 @@ import { useMissedRunsWatch } from "./composables/useMissedRunsWatch";
 import * as updaterService from "@/services/updater";
 import * as organizeService from "@/services/organize";
 import * as hiddenCleanupService from "@/services/hiddenCleanup";
+import * as userMessageService from "@/services/userMessages";
 import * as folderSyncService from "@/services/folderSync";
 import * as metadataMigrationService from "@/services/metadataMigration";
 import * as backfillService from "@/services/backfill";
@@ -654,6 +655,8 @@ onMounted(async () => {
   // 桌面端应用自动更新：hydrate 后端状态 + 订阅事件（调度在后端；web / android 内部 noop）
   void updaterService.init();
   await Promise.all([
+    // 后端给用户的提示（`user-message`），经看板娘显示
+    userMessageService.init(),
     organizeService.init(),
     hiddenCleanupService.init(),
     folderSyncService.init(),
@@ -684,6 +687,7 @@ onUnmounted(() => {
   updaterService.dispose();
   organizeService.dispose();
   hiddenCleanupService.dispose();
+  userMessageService.dispose();
   folderSyncService.dispose();
   metadataMigrationService.dispose();
   backfillService.dispose();

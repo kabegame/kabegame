@@ -105,6 +105,8 @@ tauri = { version = "2.12.4", default-features = false, features = [
 arboard = "3.6"
 gtk = { version = "0.18", features = ["v3_24"], optional = true }
 libc = "0.2"
+# 场景快捷方式（wallpaper/wpe_shortcut/unix.rs，与 macOS 共用）：拆启动参数、取命令行的程序名，由 wpe feature 开启
+shlex = { version = "1.3", optional = true }
 # 插件模式的壁纸推流（wallpaper/pipewire）：用底层 FFI（pw_sys）与 spa 的 pod 序列化器，帧回调在 CEF UI 线程上直接入队
 pipewire = { version = "0.10", optional = true }
 # 插件模式的 dmabuf 推流（wallpaper/pipewire/gpu.rs）：运行时 dlopen 系统的 libEGL / libGLESv2 / libgbm，装不上就退回共享内存
@@ -210,12 +212,15 @@ wpe = [
     "dep:rustfft",
     # 网页壁纸音频：Linux 的 PipeWire 输出设备监听（依赖只在 Linux 段，别的平台写在这里不生效）
     "dep:pipewire",
-    # 场景快捷方式（macOS）：QuickLook 缩略图与位图上下文、`sh -c` 命令行
+    # 场景快捷方式（macOS）：QuickLook 缩略图与位图上下文
     "dep:objc2-quick-look-thumbnailing",
     "dep:objc2-core-graphics",
     "dep:objc2-core-foundation",
     "dep:block2",
+    # 场景快捷方式（macOS / Linux 共用的 unix.rs）：`sh -c` 命令行与参数按 shell 规则拆
     "dep:shlex",
+    # 场景快捷方式（Linux）：GIO 查图标与缩略图、GTK 按图标主题渲染（依赖只在 Linux 段；standard 本来也开）
+    "dep:gtk",
     # 网页壁纸音频：WASAPI 回环采集（IMMDevice::Activate 需要 StructuredStorage / Variant）
     "windows/Win32_Media_Audio",
     "windows/Win32_System_Com_StructuredStorage",

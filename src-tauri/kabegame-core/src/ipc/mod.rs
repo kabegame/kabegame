@@ -11,7 +11,7 @@ pub mod events;
 pub mod ipc;
 
 // 共享导出（客户端和服务端都需要）
-pub use events::AppEvent;
+pub use events::{AppEvent, UserMessageLevel};
 pub use ipc::{IpcRequest, IpcResponse};
 
 // ==================== 服务器模块（需要 ipc-server feature） ====================

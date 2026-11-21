@@ -231,6 +231,7 @@ function onWindowMessage(event: MessageEvent) {
     if (!props.interactive) logger.debug(`快捷方式 ${shortcut} 未启动：本实例不可交互`);
     else if (!navigator.userActivation?.isActive) logger.debug(`快捷方式 ${shortcut} 未启动：没有用户激活`);
     else if (!shortcutThrottle.take(shortcut)) logger.debug(`快捷方式 ${shortcut} 未启动：1 秒内重复`);
+    // 启动失败的原因由后端经 `user-message` 通道交给主窗口的看板娘（壁纸窗口里点的也一样），这里只记日志
     else
       void invoke<boolean>("wpe_open_user_shortcut", { imageId: props.target.id, name: shortcut }).catch((error) =>
         logger.warn(`启动快捷方式失败: ${error}`),

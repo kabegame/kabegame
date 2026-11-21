@@ -137,7 +137,7 @@ import { useI18n } from "@kabegame/i18n";
 import { ChevronRight, RotateCcw } from "@lucide/vue";
 import { Button, Spinner, Tooltip } from "@/components/ui";
 import { invoke } from "@/api";
-import { IS_MACOS, IS_WINDOWS } from "@/env";
+import { IS_LINUX, IS_MACOS, IS_WINDOWS } from "@/env";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
 import { hasWpeUserProperties, isWpeSceneType } from "@/utils/mediaMime";
@@ -216,7 +216,9 @@ const usableItems = computed(() => {
   return isScene.value
     ? items.filter(
         (item) =>
-          item.kind !== "file" && item.kind !== "directory" && (item.kind !== "usershortcut" || IS_WINDOWS || IS_MACOS),
+          item.kind !== "file" &&
+          item.kind !== "directory" &&
+          (item.kind !== "usershortcut" || IS_WINDOWS || IS_MACOS || IS_LINUX),
       )
     : items.filter((item) => item.kind !== "scenetexture" && item.kind !== "usershortcut");
 });

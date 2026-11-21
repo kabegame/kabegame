@@ -54,21 +54,24 @@
  * `metadataId` 补丁回来后重读）。
  *
  * 「测试」调和脚本点击同一条启动命令 `wpe_open_user_shortcut`（应用页独有的命令，由用户在这里点击，本身就是用户激活）；命令读的是
- * 已保存的值，所以点之前先等待面板把草稿写完（`save`）。
+ * 已保存的值，所以点之前先等待面板把草稿写完（`save`）。结果用看板娘提示；启动失败的原因由后端经 `user-message` 通道发
+ * （`services/userMessages.ts`），这里不再重复提示。
  *
- * macOS 上「文件」写成「文件或 App」（`.app` 在 macOS 上是目录，免得用户去选「文件夹」），「命令」整条交给 `/bin/sh -c`，
- * 占位例子换成 macOS 的；值格式不变。
+ * macOS 上「文件」写成「文件或 App」（`.app` 在 macOS 上是目录，免得用户去选「文件夹」），「命令」整条交给用户的登录 shell，
+ * 占位例子换成 macOS 的；Linux 上「文件」写成「文件或应用」（应用是 `.desktop`，后端用 GIO 启动它），占位提示可选 `.desktop`、
+ * 命令的例子换成 Linux 的。值格式不变。
  */
 import { computed, ref, watch } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { Play, X } from "@lucide/vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@/api";
-import { IS_MACOS } from "@/env";
+import { IS_LINUX, IS_MACOS } from "@/env";
 import KbSelect from "@/components/common/form/KbSelect.vue";
 import KbText from "@/components/common/form/KbText.vue";
 import { Button, Spinner } from "@/components/ui";
-import { toast } from "@/components/ui/toast";
+import { kameMessage } from "@/utils/kameMessage";
+import { logger } from "@/utils/logger";
 import { composeWpeShortcut, parseWpeShortcut, WPE_SHORTCUT_KINDS, type WpeShortcutKind } from "@/utils/wpeShortcut";
 
 const props = defineProps<{
@@ -92,7 +95,7 @@ const testing = ref(false);
 const composed = computed(() => composeWpeShortcut(kind.value, path.value, args.value));
 const hasValue = computed(() => typeof props.modelValue === "string" && props.modelValue !== "");
 
-/** 外部的值变了（保存后补全网址前缀、重置、换图）才重新拆；自己刚发出的值不回灌，免得空路径时丢掉选好的类型 */
+/** 外部的值变了（重置、换图、别处改了）才重新拆；自己刚发出的值不回灌，免得空路径时丢掉选好的类型 */
 watch(
   () => props.modelValue,
   (value) => {
@@ -106,17 +109,29 @@ watch(
 );
 
 const kindLabels: Record<WpeShortcutKind, string> = {
-  file: IS_MACOS ? "gallery.wpeShortcutKindFileMac" : "gallery.wpeShortcutKindFile",
+  file: IS_MACOS
+    ? "gallery.wpeShortcutKindFileMac"
+    : IS_LINUX
+      ? "gallery.wpeShortcutKindFileLinux"
+      : "gallery.wpeShortcutKindFile",
   directory: "gallery.wpeShortcutKindDirectory",
   web: "gallery.wpeShortcutKindWeb",
   cmd: "gallery.wpeShortcutKindCmd",
 };
 const kindOptions = computed(() => WPE_SHORTCUT_KINDS.map((item) => ({ name: t(kindLabels[item]), variable: item })));
 const placeholders: Record<WpeShortcutKind, string> = {
-  file: IS_MACOS ? "gallery.wpeShortcutPathFileMac" : "gallery.wpeShortcutPathFile",
+  file: IS_MACOS
+    ? "gallery.wpeShortcutPathFileMac"
+    : IS_LINUX
+      ? "gallery.wpeShortcutPathFileLinux"
+      : "gallery.wpeShortcutPathFile",
   directory: "gallery.wpeShortcutPathDirectory",
   web: "gallery.wpeShortcutPathWeb",
-  cmd: IS_MACOS ? "gallery.wpeShortcutPathCmdMac" : "gallery.wpeShortcutPathCmd",
+  cmd: IS_MACOS
+    ? "gallery.wpeShortcutPathCmdMac"
+    : IS_LINUX
+      ? "gallery.wpeShortcutPathCmdLinux"
+      : "gallery.wpeShortcutPathCmd",
 };
 const pathPlaceholder = computed(() => t(placeholders[kind.value]));
 const canBrowse = computed(() => kind.value === "file" || kind.value === "directory");
@@ -155,10 +170,11 @@ async function test() {
   try {
     await props.save?.();
     const started = await invoke<boolean>("wpe_open_user_shortcut", { imageId: props.imageId, name: props.name });
-    if (started) toast.success(t("gallery.wpeShortcutTestStarted"));
-    else toast.warning(t("gallery.wpeShortcutTestRejected"));
+    if (started) kameMessage.success(t("gallery.wpeShortcutTestStarted"));
+    else kameMessage.warning(t("gallery.wpeShortcutTestRejected"));
   } catch (failure) {
-    toast.error(`${t("gallery.wpeShortcutTestFailed")}: ${String(failure)}`);
+    // 原因已由后端经 `user-message` 通道交给看板娘
+    logger.warn(`测试快捷方式失败: ${failure}`);
   } finally {
     testing.value = false;
   }
