@@ -228,9 +228,11 @@ fn scene_user_props(view: WpeWebPropertiesView, raw: &Value) -> serde_json::Map<
 
 /// 一个快捷方式属性给场景宿主的形状，`raw` 是用户配的原值（没配为空串）。
 fn scene_shortcut_entry(raw: &str) -> Value {
-    // TODO:[WPE_SCENE] macOS / Linux 上做快捷方式（取图标与启动）：目前只有 Windows，其它平台一律未绑定，
-    // 脚本的 `openUserShortcut` 返回 false、图标槽用缺省纹理。
-    let parsed = cfg!(windows).then(|| parse_user_shortcut(raw)).flatten();
+    // 平台不支持快捷方式（Linux，见 `wpe_shortcut::SUPPORTED`）时一律未绑定：脚本的 `openUserShortcut` 返回 false、
+    // 图标槽用缺省纹理。
+    let parsed = crate::wallpaper::wpe_shortcut::SUPPORTED
+        .then(|| parse_user_shortcut(raw))
+        .flatten();
     let mut entry = serde_json::json!({
         "type": "usershortcut",
         "value": shortcut_key(raw),
@@ -554,7 +556,8 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     let tauri::ipc::CallerFrame::Sub(frame) = frame else {
         return Err("only web wallpaper frames can subscribe".to_string());
     };
-    if !crate::wpe_media::kind_available(kind) {
+    let app = tauri::Manager::app_handle(&webview);
+    if !crate::wpe_media::kind_available(app, kind) {
         return Err(format!(
             "web wallpaper {kind:?} data is not available on this platform"
         ));
@@ -580,10 +583,10 @@ pub async fn wpe_web_media_subscribe<R: tauri::Runtime>(
     // 「媒体集成」开关：壁纸窗口跟全局设置，主窗口（预览与应用背景）跟这张壁纸的预览设置
     let label = webview.label();
     if crate::wallpaper::is_wallpaper_label(label) {
-        WpeMediaHub::global().subscribe(label, frame, kind, flavor, Box::new(channel));
+        WpeMediaHub::global(app).subscribe(label, frame, kind, flavor, Box::new(channel));
     } else {
         let enabled = kind == WpeMediaKind::Media && preview_media_integration(&id).await?;
-        WpeMediaHub::global().subscribe_gated(
+        WpeMediaHub::global(app).subscribe_gated(
             label,
             frame,
             kind,
@@ -969,7 +972,7 @@ mod tests {
         let bad = user["bad"].as_object().unwrap();
         assert_eq!(bad["isbound"], json!(false));
         assert!(!bad.contains_key("commandtype") && !bad.contains_key("file"));
-        if cfg!(windows) {
+        if crate::wallpaper::wpe_shortcut::SUPPORTED {
             assert_eq!(app["isbound"], json!(true));
             assert_eq!(app["commandtype"], json!("command"));
             assert_eq!(app["file"], json!("calc"));

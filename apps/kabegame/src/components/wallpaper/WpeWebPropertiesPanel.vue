@@ -137,7 +137,7 @@ import { useI18n } from "@kabegame/i18n";
 import { ChevronRight, RotateCcw } from "@lucide/vue";
 import { Button, Spinner, Tooltip } from "@/components/ui";
 import { invoke } from "@/api";
-import { IS_WINDOWS } from "@/env";
+import { IS_MACOS, IS_WINDOWS } from "@/env";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeWebProperties, type WpeWebPropertyItem } from "@/composables/useWpeWebProperties";
 import { hasWpeUserProperties, isWpeSceneType } from "@/utils/mediaMime";
@@ -208,13 +208,15 @@ const coverBusy = ref(false);
 
 /**
  * 这张壁纸用得上的条目：场景去掉 `file` / `directory`，网页去掉 `scenetexture`（见 props 注释）。
- * `usershortcut`（P11d）只在场景、且只在 Windows 上显示：别的平台后端给宿主的快捷方式一律未绑定、也没有启动实现；网页壁纸不读它。
+ * `usershortcut`（P11d）只在场景、且只在 Windows / macOS 上显示（同后端 `wpe_shortcut::SUPPORTED`）：Linux 上后端给宿主的快捷方式
+ * 一律未绑定、也没有启动实现；网页壁纸不读它。
  */
 const usableItems = computed(() => {
   const items = view.value?.items ?? [];
   return isScene.value
     ? items.filter(
-        (item) => item.kind !== "file" && item.kind !== "directory" && (item.kind !== "usershortcut" || IS_WINDOWS),
+        (item) =>
+          item.kind !== "file" && item.kind !== "directory" && (item.kind !== "usershortcut" || IS_WINDOWS || IS_MACOS),
       )
     : items.filter((item) => item.kind !== "scenetexture" && item.kind !== "usershortcut");
 });

@@ -35,11 +35,10 @@ import { computed, toRef } from "vue";
 import { useI18n } from "@kabegame/i18n";
 import { RotateCcw } from "@lucide/vue";
 import { Button } from "@/components/ui";
-import { IS_WINDOWS } from "@/env";
 import CollapsibleDrawerPanel from "@/components/common/CollapsibleDrawerPanel.vue";
 import { useWpeFollowAvailable } from "@/composables/useWpeFollowAvailable";
 import { useWpePreviewSettings, type WpePreviewSettingKey } from "@/composables/useWpePreviewSettings";
-import { wpePreviewFieldsFor, type WpeSettingKey } from "@/utils/wpeSettings";
+import { WPE_MEDIA_AVAILABLE, wpePreviewFieldsFor, type WpeSettingKey } from "@/utils/wpeSettings";
 import WpeSettingsFields from "./WpeSettingsFields.vue";
 
 /**
@@ -58,7 +57,7 @@ const { t } = useI18n();
 const followAvailable = useWpeFollowAvailable();
 const { values, modified, anyModified, set, reset, resetAll } = useWpePreviewSettings(toRef(props, "imageId"));
 
-const fields = computed(() => wpePreviewFieldsFor(props.imageType, IS_WINDOWS));
+const fields = computed(() => wpePreviewFieldsFor(props.imageType, WPE_MEDIA_AVAILABLE));
 const shownValues = computed(() => ({ ...values.value, paused: props.paused === true }));
 
 function onUpdate(key: WpeSettingKey, value: boolean | number | string) {

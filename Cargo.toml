@@ -10,6 +10,7 @@ members = [
   "src-tauri/tauri-plugin-picker",
   "src-tauri/tauri-plugin-pathes",
   "src-tauri/tauri-plugin-share",
+  "src-tauri/tauri-plugin-sysmedia",
   "src-tauri/tauri-plugin-wallpaper",
   "src-tauri/tauri-plugin-task-notification",
   "src-tauri/tauri-plugin-wemt",
@@ -83,6 +84,7 @@ tauri-plugin-cursor = {path = "./src-tauri/tauri-plugin-cursor"}
 tauri-plugin-pathes = {path = "./src-tauri/tauri-plugin-pathes"}
 tauri-plugin-picker = {path = "./src-tauri/tauri-plugin-picker"}
 tauri-plugin-share = {path = "./src-tauri/tauri-plugin-share"}
+tauri-plugin-sysmedia = {path = "./src-tauri/tauri-plugin-sysmedia"}
 tauri-plugin-task-notification = {path = "./src-tauri/tauri-plugin-task-notification"}
 tauri-plugin-wallpaper = {path = "./src-tauri/tauri-plugin-wallpaper"}
 tauri-plugin-wemt = {path = "./src-tauri/tauri-plugin-wemt"}

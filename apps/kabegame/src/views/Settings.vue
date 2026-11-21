@@ -463,7 +463,7 @@ import WpeWebPropertiesDialog from "@/components/wallpaper/WpeWebPropertiesDialo
 import { fetchImageById } from "@/utils/imageRow";
 import { hasWpeUserProperties } from "@/utils/mediaMime";
 import { defaultScreenId, screenIdOfTarget } from "@/utils/wallpaperTargets";
-import { WPE_SETTING_KEYS, type WpeSettingKey } from "@/utils/wpeSettings";
+import { WPE_MEDIA_AVAILABLE, WPE_SETTING_KEYS, type WpeSettingKey } from "@/utils/wpeSettings";
 import SettingSwitchControl from "@/components/settings/controls/SettingSwitchControl.vue";
 import SettingNumberControl from "@/components/settings/controls/SettingNumberControl.vue";
 import SettingSliderControl from "@/components/settings/controls/SettingSliderControl.vue";
@@ -759,14 +759,14 @@ const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any 
 /** 只有窗口模式的桌面上有在播放的视频、网页与场景（原生模式交给系统，Android / Web 没有窗口壁纸），暂停只在这时显示 */
 const desktopWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && wallpaperMode.value === "window");
 /** 桌面「壁纸设置」按平台显示的字段：暂停只在窗口模式（只有那时桌面上有在播放的实例），音量 / 倍速同原来的条件，
- *  媒体集成只有 Windows 有数据源，帧率与场景各项只在桌面端 */
+ *  媒体集成要本平台有数据源（Windows、macOS），帧率与场景各项只在桌面端 */
 const wpeWallpaperSettingFields = computed<WpeSettingKey[]>(() => {
   const playback = IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma.value);
   const desktop = !IS_ANDROID && !IS_WEB;
   return WPE_SETTING_KEYS.filter((key) => {
     if (key === "paused") return desktopWallpaperLive.value;
     if (key === "volume" || key === "playbackRate") return playback;
-    if (key === "mediaIntegration") return IS_WINDOWS;
+    if (key === "mediaIntegration") return WPE_MEDIA_AVAILABLE;
     return desktop;
   });
 });

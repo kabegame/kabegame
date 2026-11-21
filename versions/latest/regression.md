@@ -41,6 +41,39 @@
 | [ ] | NV7 打包安装 | 22.04 guest 出 release deb，在 N 卡机器上 `apt install ./kabegame_*.deb` | 看 `dpkg -I` 的 Recommends；apt 是否带上驱动；重复 NV3、NV4 | 控制文件有 `Recommends: nvidia-vaapi-driver`，apt 默认一并安装 | 没做：release 只在 guest 构建。22.04 仓库里的驱动版本较老，是否能用未验证 |
 | [ ] | NV8 没有 N 卡 / 没装驱动的机器 | Intel / AMD 或没装驱动的 Linux | 同 NV3 | 没装驱动时不加特性、行为与改动前相同；Intel / AMD 照常走各自的 VA-API 驱动 | 没做：本机只有 N 卡 |
 
+## WPE 壁纸的 macOS 缺口走查（第 3 步：媒体集成，`tauri-plugin-sysmedia` S1）
+
+2026-11-21 macOS 26.6.2 dev。新增跨端插件 `src-tauri/tauri-plugin-sysmedia`（Tauri 官方模板的 `desktop.rs` / `mobile.rs` 写法，Android 只有回答不可用的骨架），只推平台无关的读数；macOS 经嵌入的 mediaremote-adapter（`build.rs` 编动态库、`include_bytes!`、运行时解到应用缓存目录、`/usr/bin/perl` 加载）读系统的 Now Playing。`wpe_media/sysmedia.rs` 照 winrtutil 攒 100 ms、换成 FILETIME 后交给原有的网页 / 场景投影；`kind_available(Media)` 问插件；设置页与预览设置的「媒体集成」在 macOS 上显示（`WPE_MEDIA_AVAILABLE`）。Windows 仍走 `media.rs`（S2 迁入）。计划见 `.claude/plans/sysmedia/README.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MM1 插件单测 | macOS | `cargo test -p tauri-plugin-sysmedia`（实测行的增量合并、映射、会话切换、解出目录）；`-- --ignored` 起真 perl | 全过；真机测试能拉起 perl、加载嵌入的动态库、报一次会话 | 2026-11-21 Claude：9 passed；真机测试 1 passed，当时没在播，报 `Session(None)`（上游 `get` 同为 `null`）。动态库 `minos 11.0`、arm64、ad-hoc 签名 |
+| [x] | MM2 `wpe_media` 单测 | macOS | `kabegame` crate 过滤 `wpe_media`（含新的 `sysmedia` 攒批规则与单位换算，以及原来只在 Windows 编译的 `projection` / `colors`） | 全过 | 2026-11-21 Claude：66 passed。test driver 在 `target-dev` 下找不到 CEF 框架（`@executable_path/../Frameworks`），用 `DYLD_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 直接跑测试二进制 |
+| [x] | MM3 编译检查与前端 | macOS | `check-kabegame`；vitest `wpeSettings` / `WpeSettingsFields` / `useWpePreviewSettings` | 0 error；全过 | 2026-11-21 Claude：vue-tsc + cargo 0 error，vitest 18 passed |
+| [x] | MM4 「媒体集成」开关出现 | macOS dev | 设置页壁纸分区；预览网页壁纸 9242、场景 9107 的预览设置 | 都有「媒体集成」 | 2026-11-21 Claude：设置页与 9242 的预览设置都有，全局值为开 |
+| [x] | MM5 网页壁纸收到媒体数据 | 同上，网易云（`com.netease.163music`）在播 | 预览 9242「音域回响」；经适配器的 `send` 暂停、继续、下一首 | 显示歌名、歌手、封面，暂停 / 继续、切歌跟着变 | 2026-11-21 Claude：显示「离开我的依赖 / 王艳薇」、封面与进度条（截图）；暂停后进度停住，继续后接着走，下一首换成「两 难 / 加木 / 0:02/2:50」 |
+| [x] | MM6 场景收到媒体数据 | 同上 | 预览 9107「TOKYO SAKURA TRAIN STATION [MEDIA PLAYER]」，宿主探针 `host.media()`；下一首 | 标题、封面、播放状态、时间轴随播放器变化；切歌时可能先到新时长（约 300 ms，接受） | 2026-11-21 Claude：`status enabled` → 属性 → 封面（PNG + 五色）→ 播放 1 → 时间轴 170 s，左下角显示封面与「两 难」；下一首后标题 / 歌手 / 时长更新，封面槽 `mediaThumbnail_2`、上一张 `_1`，配色换了。`contentType` 为空串（网易云不给 `mediaType`） |
+| [x] | MM7 播放器退出 | 同上，预览 9242 的同时开屏外宿主 9107（宿主不跑帧，看它收到的消息） | 退出网易云；再退出 Amazon | 切到别的应用时两边跟着切；都退出后网页壁纸清空，场景各类复位 | 2026-11-21 Claude：退出网易云后系统切到还开着、暂停的 Amazon，网页壁纸换成「My Dearest (Album Mix) / supercell / 4:34/5:36」，场景收到属性、无封面、播放 2、时间轴，37 ms 后封面单独到（Amazon 的封面本来就晚到）；再退出 Amazon 后系统为 `null`，网页壁纸显示 `-- / --`，场景收到空属性、空封面（五色全黑）、播放 0、时间轴 0/0。测完关宿主与预览（perl 0 个）、重新打开网易云 |
+| [x] | MM8 启停 | 同上 | 关预览 / 关「媒体集成」；再打开 | 没有订阅时 `mediaremote-adapter` 的 perl 子进程退出，重开后重新拉起 | 2026-11-21 Claude：9242 → 9107 切换时日志「监视已停止」后 1 s 内重新启动；Esc 关预览后 perl 0 个；9242 预览里关「媒体集成」perl 0 个、再开 1 个且页面接着更新，测完预览设置回到原样 |
+| [ ] | MM9 Windows 不回归 | Windows dev | P11c 的媒体走查（网页壁纸与场景各一张） | 和以前一样 | 改动只碰了 hub 的接线（启动闭包、`kind_available` 接收 `AppHandle`），`media.rs` 没动；本机编不了 Windows |
+
+## WPE 壁纸的 macOS 缺口走查（第 2 步：场景快捷方式）
+
+2026-11-21 macOS 26.6.2 dev。场景快捷方式（`usershortcut`，P11d）原来只有 Windows，macOS 上面板不显示、宿主一律未绑定。这一步新增 `wallpaper/wpe_shortcut/mac.rs`：图标先取 QuickLook 内容缩略图（同 Windows 的 Shell 缩略图：图片、视频、PDF 出内容），再退到 `NSWorkspace` 的系统图标；启动时文件夹、网址、不带参数的文件交给 opener，命令整条交给用户的登录 shell（`$SHELL -i -l -c`，同终端：从 Finder 启动时应用的 `PATH` 只有系统目录，Homebrew、nvm 等写在 `.zshrc` 里），带参数的 `.app` 经 `/bin/sh -c` 跑 `open -a … --args`。平台开关 `wpe_shortcut::SUPPORTED`，面板在 macOS 上把「文件」写成「文件或 App」。测试场景是 9135（Minimalist Landscape）的 24 格应用栏，测完属性还原。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MS1 单测 | macOS | `kabegame` crate 的 `wpe_shortcut`、`commands::wpe_web`；前端 `WpeWebPropertiesPanel.test.ts` | 全过 | 2026-11-21 Claude：45 + 9 passed（新增 mac 5 个），前端 11 passed；`check-kabegame` 0 error。crate 测试二进制要给 `DYLD_FALLBACK_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 才找得到 CEF |
+| [x] | MS2 图标核对 | macOS | 核对测试 `dump_shortcut_icons`：Safari.app、Calculator.app、`/Applications`、主目录、JPG、PDF、`.webloc`、不存在的 `foo.txt` / `foo`、`cmd:open -a Calculator`、`cmd:say hi`、PATH 里没有的命令、`web:` 维基百科 | 应用 / 文件夹系统图标，图片与 PDF 内容缩略图，不存在的按扩展名，网址取网站图标 | 2026-11-21 Claude：全部符合；没有扩展名的不存在路径与找不到的命令没有图标。第一版 Safari 带替身箭头（`/Applications/Safari.app` 是指向 Cryptex 的符号链接），改成先解析符号链接后没了 |
+| [x] | MS3 宿主拿到的形状 | macOS dev，9135 配五格（Safari.app、`/Applications`、一张 JPG、`www.wikipedia.org`、`open -a Calculator`） | 主窗口调 `wpe_web_get_state`；宿主里调 `wpe_scene_shortcut_icon` 与 `wpe_open_user_shortcut` | `isbound: true`，`commandtype` / `file` 对；状态里没有完整路径；图标有字节，没配的 0 字节；宿主调启动被 ACL 拒 | 2026-11-21 Claude：符合（网址按 WPE 给整串）；图标 256×256 / 256×181 / 160×160 |
+| [x] | MS4 应用栏图标 | 同 MS3，打开 9135 的预览 | 截图 | 五格显示各自的图标，没配的格子是「添加」占位；改值后当场换图 | 2026-11-21 Claude：符合；第 6 格改成 Chess.app 后不重载就换了图 |
+| [x] | MS5 启动 | 同 MS3 | 主窗口逐格调 `wpe_open_user_shortcut`（面板「测试」按钮调的就是它） | 各自打开；没配返回 false；属性不是快捷方式报错 | 2026-11-21 Claude：Safari、Finder 的 `/Applications`、预览打开图片、Chrome（默认浏览器）打开补了 `https://` 的维基百科、Calculator 都起来了；`Chess.app|--kb-test "a b"` 的进程参数是 `--kb-test`、`a b`；PATH 里没有的命令返回 true、日志记退出码 127。测完关掉了打开的程序与窗口 |
+| [x] | MS6 面板 | 同 MS3 | 读预览属性面板的快捷方式编辑器 | macOS 上有这类属性，「文件」标为「文件或 App」，路径与命令的占位换成 macOS 的 | 2026-11-21 Claude：8 个编辑器，英文界面显示「File or app」与「Path of an app or file」 |
+| [x] | MS7 命令用登录 shell | macOS dev；另用测试二进制在 `env -i`（`PATH` 只有系统目录，模拟从 Finder 启动）里跑 `reads_login_shell_path` | 配 `cmd:node -e …`（往草稿目录写文件）、`cmd:ll -d / > 文件`、`cmd:node --version` 并启动、取图标 | node（只在 nvm 里）跑出结果；别名能用；`node` 有图标；干净环境里读到的 `PATH` 含 Homebrew、nvm、pyenv | 2026-11-21 Claude：全部符合，从调用到 node 写完约 0.9 s（zsh 启动 0.63 s）。第一版 dev 里命令不执行：交互 shell 在后台进程组里被 SIGTTOU 停在 `T`（dev 从终端启动、带控制终端），改成子进程 `setsid` 后正常 |
+| [ ] | MS8 场景里点击启动 | macOS dev，9135 配好应用栏 | 在预览或桌面壁纸上用真实鼠标点应用栏的格子 | 打开对应目标；同一次点击只启动一次 | 要真实鼠标：macOS 上 iframe 的鼠标由全局光标注入，CDP 点不到 |
+| [ ] | MS9 面板浏览选 App | macOS dev | 快捷方式编辑器类型选「文件或 App」，点「浏览」 | 系统对话框能选中 `.app` | 要手动操作对话框 |
+| [ ] | MS10 Windows 不回归 | Windows dev | 按 P11d 的走查配几格、看图标、点「测试」 | 和以前一样 | Windows 分支只抽出了 `prefill`，逻辑没变 |
+
 ## WPE 壁纸的 macOS 缺口走查（第 1 步：文档与注释对齐）
 
 2026-11-21 macOS 26.6.2 dev。走查 WPE 壁纸在 macOS 上还缺什么：真缺的功能只剩媒体集成（系统「正在播放」）与场景快捷方式（`usershortcut`），留给后面几步。这一步只改文档与注释里过时的平台说法：`WPE_IMPORT.md` 的三平台能力表把「音频与媒体数据｜有｜无｜无」拆成音频（macOS 14.2+ 有）、媒体、快捷方式、跟随四行；删掉旧阶段的「macOS 不渲染网页壁纸」与「`setPaused` 尚未实现」；`scene/AUDIO_MEDIA.md`、`PARTICLES_ROPE_CHILDREN.md`、`host.ts` 里「非 Windows 没有回环采集」改成只说 Linux；macOS 系统字体表与图库 `file://` 记上本次核对结果。「跟随 WPE」保持只在 Windows 上提供（WPE 只能在 Windows 上运行），`get_wpe_follow_available` 的门控处补上这条理由。

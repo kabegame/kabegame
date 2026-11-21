@@ -28,7 +28,7 @@
  *   - **推进**：GIF 只在画到时推进、每个渲染帧最多一次（帧号由 `beginFrame` 走，宿主暂停时不走）；视频的 30 帧规则与暂停同 `SceneVideos`。
  *     已知小差异：暂停期间改值新建的 GIF 第一次画到时用的是上一个实时帧的 frametime。HDR 视频（PQ / HLG，WPE 用 `rgba16float`）不做，照常 RGBA8。
  * - **快捷方式图标**（P11d，`setValue(名字, 键, "usershortcut")`）：值是后端给的键（原值哈希，空串 = 没配），不是路径。键变了经注入的依赖
- *   `shortcutIcon(名字)` 取图标（宿主实现为 `wpe_scene_shortcut_icon`，`parseShortcutIcon` 解字节），没有图标（0 字节、非 Windows、取不到）记成
+ *   `shortcutIcon(名字)` 取图标（宿主实现为 `wpe_scene_shortcut_icon`，`parseShortcutIcon` 解字节），没有图标（0 字节、平台不支持、取不到）记成
  *   「无图」、槽用缺省纹理。图标是整张直通 alpha 的 RGBA，不按参考尺寸裁，而是补透明边到槽的比例（`padRect`，居中、不裁）：`crop` 给出补边后的
  *   纹理尺寸与图标的摆放（`UserTextureCrop.pad`），纹理名 `usershortcut_<键>x<round(比例·10)>`。解码结果按键缓存（同静态图）。
  */
@@ -105,7 +105,7 @@ export interface ShortcutIcon {
 }
 
 /**
- * 解 `wpe_scene_shortcut_icon` 的返回字节：`[宽 u32 LE][高 u32 LE][RGBA，宽·高·4 字节]`。0 字节（没配、取不到、非 Windows）、头不全、宽高为 0、
+ * 解 `wpe_scene_shortcut_icon` 的返回字节：`[宽 u32 LE][高 u32 LE][RGBA，宽·高·4 字节]`。0 字节（没配、取不到、平台不支持）、头不全、宽高为 0、
  * 长度对不上都返回 null（用缺省纹理）。
  */
 export function parseShortcutIcon(bytes: ArrayBuffer | ArrayBufferView): ShortcutIcon | null {

@@ -76,7 +76,7 @@ async fn fetch_icon(input: &str) -> Option<Icon> {
 }
 
 /// 用户填的串 → 可请求的地址，按 WPE 的顺序：原串、`https://` + 串、`https://www.` + 串，建得成的留下。
-fn page_urls(input: &str) -> Vec<Url> {
+pub(super) fn page_urls(input: &str) -> Vec<Url> {
     [
         input.to_owned(),
         format!("https://{input}"),

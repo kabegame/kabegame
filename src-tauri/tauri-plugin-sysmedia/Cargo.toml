@@ -1,0 +1,25 @@
+[package]
+name = "tauri-plugin-sysmedia"
+version = "0.1.0"
+authors = ["Kabegame"]
+description = "System now-playing media session reader (Windows SMTC / macOS MediaRemote)."
+edition = "2021"
+rust-version = "1.77.2"
+exclude = ["/android/build", "/android/.gradle", "/android/.tauri"]
+links = "tauri-plugin-sysmedia"
+
+[lib]
+name = "tauri_plugin_sysmedia"
+
+[dependencies]
+tauri = { version = "2.12.4", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+base64 = { workspace = true }
+
+[build-dependencies]
+tauri-plugin = { version = "2.5.3", features = ["build"] }

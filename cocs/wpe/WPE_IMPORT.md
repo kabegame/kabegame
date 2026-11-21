@@ -106,8 +106,8 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 | 桌面壁纸的鼠标 | 有 | 有（第二版未实测） | 无 |
 | 图库预览的鼠标：光标在画面外、应用外也跟随 | 有 | 有（未实测） | 无：iframe 直接收真实鼠标，只在 iframe 上 |
 | 音频数据（频谱） | 有（WASAPI 回环） | 有（14.2+，Core Audio 进程 tap） | 有（PipeWire 输出设备监听；只有 PulseAudio 的系统没有） |
-| 媒体数据（正在播放的曲目、封面） | 有（SMTC） | 无 | 无 |
-| 场景快捷方式（`usershortcut`） | 有 | 无：面板不显示、宿主一律未绑定 | 无 |
+| 媒体数据（正在播放的曲目、封面） | 有（SMTC） | 有（2026-11-21：经 `tauri-plugin-sysmedia` 读系统的 Now Playing） | 无 |
+| 场景快捷方式（`usershortcut`） | 有 | 有（2026-11-21：图标取 QuickLook 缩略图与系统图标，命令在用户的登录 shell 里跑，同终端） | 无：面板不显示、宿主一律未绑定 |
 | 「跟随 WPE」 | WPE 安装目录里有 `config.json` 时 | 无：WPE 只能在 Windows 上运行，没有可跟随的设置（拷来的 `config.json` 也不认） | 无 |
 
 `kabegame_core::wpe`：
@@ -907,14 +907,15 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 场景的 `scenetexture`（用户纹理，P11b；渲染一侧见 [scene/AUDIO_MEDIA.md](scene/AUDIO_MEDIA.md)「用户纹理（P11b）」）：`WpePropKind::SceneTexture`，面板用和 `file` 相同的文件选择与清空按钮。`project.json` 里没有 `filter`，过滤固定为 WPE 那一条（`jpg jpeg jfif png gif mp4`，`SCENE_TEXTURE_EXTENSIONS`），所以没有「WPE 收、浏览器解不了」的格式。校验同 `file`（绝对路径、是文件、不是符号链接，空串表示清空）；存之前照 WPE 整理路径（`wpe_slash_path`：`\` 换成 `/`、非开头的连续 `/` 合并，UNC 的开头 `//` 保留，不拷贝、不改大小写）。`user_file_grants` 同样收它：网页壁纸目录索引的场景条目除目录外再存这些文件，`scene_grants` 一起返回给场景宿主的访问范围，覆盖时机同上两处（`wpe_web_get_state` 返回前也写）。宿主是一份文档，放行对全部场景宿主实例生效；文件都是用户自己选的。`usershortcut` 不进放行：它不读文件，图标与启动都在后端。
 
 场景的 `usershortcut`（快捷方式，P11d；图标、门禁与启动见 [scene/AUDIO_MEDIA.md](scene/AUDIO_MEDIA.md)「快捷方式（P11d）」）：
-- **面板**：`WpePropKind::UserShortcut`，只在场景、只在 Windows 上显示（`WpeShortcutField.vue`）。
+- **面板**：`WpePropKind::UserShortcut`，只在场景、只在 Windows / macOS 上显示（`WpeShortcutField.vue`，同后端 `wpe_shortcut::SUPPORTED`）。
+  - macOS 上「文件」写成「文件或 App」（`.app` 在 macOS 上是目录，免得去选「文件夹」），命令的占位例子是 `open -a Calculator`；值格式不变。
   - 先选类型：文件、文件夹、网址、命令；再填路径，文件与文件夹可以浏览选取；文件类型另有参数输入框。
   - 「测试」按钮先 `saveNow()` 存下，再调启动命令 `wpe_open_user_shortcut`。主窗口里的点击本身就是用户激活。
 - **值**：格式是 `<类型>:<路径>`，类型 `file` / `directory` / `web` / `cmd`，空串表示清空。
   - 拆参数照 WPE（`parse_user_shortcut`）：`file` 在第一个 `|` 处拆成「路径 | 参数」，`cmd` 在第一个空格处拆成「程序 参数」；拆完路径为空不收。
   - `web` 不以 `http://`、`https://`、`www.`、`steam://` 开头时，存之前补 `https://`（区分大小写，照 WPE 面板的 JS）。
   - WPE 的值中间还有一段 6 位本机哈希，用来拒绝别的机器上配的值。我们的值只来自本机面板，不复刻这一段。
-- **交给场景宿主的**：`wpe_web_get_state`（由 `WpeSceneView` 推给宿主）不给原值，给 `{ value: 原值 SHA-256 的前 16 位十六进制, isbound, commandtype?, file? }`（`scene_user_from_view`）。完整路径不离开后端；非 Windows 时 `isbound` 一律为假。
+- **交给场景宿主的**：`wpe_web_get_state`（由 `WpeSceneView` 推给宿主）不给原值，给 `{ value: 原值 SHA-256 的前 16 位十六进制, isbound, commandtype?, file? }`（`scene_user_from_view`）。完整路径不离开后端；Linux 上 `isbound` 一律为假。
 - **网页壁纸**不读这类属性，面板也不显示。
 
 ### 壁纸设置与预览设置
@@ -926,7 +927,7 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 - **壁纸设置**（桌面）：全局设置键（`wallpaperPaused`、`wallpaperVolume`、`wallpaperVideoPlaybackRate`、`wpeMediaIntegration`、`wpeFps`、
   `wpeScenePostprocess`、`wpeSceneReflection`、`wpeSceneShadows`、`wpeSceneVolumetrics`、`wpeSceneForceRender`），所有壁纸共用、只给壁纸窗口。设置页
   `components/settings/items/WpeWallpaperSettings.vue` 显示全部字段（当前壁纸用不上的照样显示，只是不起作用），每个字段接
-  `useSettingKeyState`；暂停只在窗口模式显示，媒体集成只在 Windows。
+  `useSettingKeyState`；暂停只在窗口模式显示，媒体集成只在有数据源的平台（Windows、macOS，`WPE_MEDIA_AVAILABLE`）。
 - **预览设置**（预览与应用背景）：每张 `x-wpe/*` 壁纸一份，存在 metadata 顶层的 `previewSettings`（与 `userProperties` 并列，
   只存与 Kabegame 默认值不同的键），读写 `get_wpe_preview_settings` / `set_wpe_preview_settings`（`kabegame_core::wpe::preview_settings`
   解析、钳制与改写，经 `rewrite_image_metadata` 后发 `metadataId` 补丁），没设的项取 Kabegame 自己的默认值（暂停否、音量 1、倍速 1、
@@ -1000,7 +1001,7 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
   大于 8 KB 的消息（封面）还会存进 Channel 数据队列等页面来取。所以 frame 级释放必须靠销毁事件。
 - 没有退订命令：WPE 没有取消登记的接口。
 
-有 `audio` 订阅才开采集线程，有打开了「媒体集成」的 `media` 订阅才开媒体会话监视（仅 Windows 有开关）。开关按订阅算
+有 `audio` 订阅才开采集线程，有打开了「媒体集成」的 `media` 订阅才开媒体会话监视（Windows、macOS 有开关）。开关按订阅算
 （`MediaGate`，由 `wpe_web_media_subscribe` 按调用方窗口定）：壁纸窗口的订阅跟全局设置 `wpeMediaIntegration`（默认开），
 主窗口的订阅（预览与应用背景）跟这张壁纸预览设置的 `mediaIntegration`（默认开），见下「壁纸设置与预览设置」。网页与场景壁纸
 都受它管。最后一个订阅离开即停（`info!` 记启停，增删订阅 `debug!` 记 label / frame / 类型 / 订阅数）。停止线程
@@ -1037,11 +1038,17 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
   归入 64 段取最大，得到线性原值（样本正好是 −1 时虚部 `1/re` 溢出，那一批该声道整段为 0，同 WPE：削波重的音乐会偶尔闪一帧 0）；静音标志的包、读取失败立即清零，缺包 1 s 后清零），随同一条消息的 `raw` 字段推出，只给场景宿主用
   （它再照 WPE 做每帧的自适应归一化，见 [scene/PARTICLES_ROPE_CHILDREN.md](scene/PARTICLES_ROPE_CHILDREN.md)「粒子（P4e）」的「音频：场景频谱」）。网页壁纸仍用上面的自定频谱：WPE 给网页壁纸的其实是这份原值
   （rea 3.4），2026-11-13 用户比较两者后选择保留自定算法的观感。
-- **媒体**（`wpe_media/media.rs` + `projection.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话
-  （`CurrentSessionChanged`、`SessionsChanged` 都只是重取当前会话），WinRT 事件只发信号，读取与比较在线程里做。
-  信号照 WPE `winrtutil64.exe` 的主循环处理：收到第一个后把 100 ms 内到的攒成一批，会话上的事件带挂接代数、旧会话的丢掉，
-  批里有会话切换就只重新挂接（P11c，会话退出时那条瞬时的播放状态不再发出）。每次读到的数据交给两个投影（P11c），
-  订阅按调用方文档归属其一：
+- **媒体**（数据源 + `projection.rs` + `colors.rs`）：两个平台的数据源不同，之后的投影共用。
+  - **Windows**（`wpe_media/media.rs`）：专用线程持有 SMTC 管理器与当前会话
+    （`CurrentSessionChanged`、`SessionsChanged` 都只是重取当前会话），WinRT 事件只发信号，读取与比较在线程里做。
+    信号照 WPE `winrtutil64.exe` 的主循环处理：收到第一个后把 100 ms 内到的攒成一批，会话上的事件带挂接代数、旧会话的丢掉，
+    批里有会话切换就只重新挂接（P11c，会话退出时那条瞬时的播放状态不再发出）。要迁进插件（`.claude/plans/sysmedia/README.md` S2）。
+  - **macOS**（2026-11-21，`tauri-plugin-sysmedia` + `wpe_media/sysmedia.rs`）：插件读系统的 Now Playing（MediaRemote），读到就推
+    四种平台无关的读数（会话切换带完整快照、属性、播放状态、时间轴），见插件 README。`sysmedia.rs` 照 winrtutil 把读数攒 100 ms
+    一批（批里有会话切换就丢掉切换之前的读数，同类只认最后一条，规则同上），把微秒 / Unix 纪元换成投影用的 FILETIME。
+    拿不到的字段（副标题、专辑艺人）是空串；来源应用取宿主应用的 bundle id（网页播放器经 WebKit 的 GPU 进程播放）。
+    自然切歌时新时长与「播放中」比新标题早约 300 ms 到，100 ms 的批盖不住，这段「旧标题 + 新时长」接受。
+  每次读到的数据交给两个投影（P11c），订阅按调用方文档归属其一：
   - **网页投影**（网页壁纸目录里的文档）：变化才推。
     - `Properties`：标题、艺人、副标题、专辑、专辑艺人、逗号拼接的流派、`music` / `video` / `image`，缺省 `music`。
     - `Thumbnail`：封面字节变了才解码，长边缩到 512 的 PNG data URL，格式 `rgb(r, g, b)` 的五个颜色。
@@ -1070,7 +1077,7 @@ Chromium 就不建媒体键监听器。于是：
 开着这项时，壁纸自己的声音会被当成系统媒体。例如场景 3819637149 的脚本收到「播放中」就暂停自带的歌，会话变成暂停后它又恢复，
 按 `windowupdaterate` 每秒自激一次，听起来一顿一顿。原来预览期间给 `navigator.mediaSession` 设元数据的 `usePreviewMediaSession` 已一并删除。
 
-数据源按平台：`audio` 在三个桌面平台，`media` 只在 Windows（`wpe_media::kind_available`，订阅命令据此放行）。`realfft`、`rustfft`
+数据源按平台：`audio` 在三个桌面平台，`media` 在 Windows 与 macOS（macOS 问 `tauri-plugin-sysmedia` 的 `available()`；`wpe_media::kind_available`，订阅命令据此放行）。`realfft`、`rustfft`
 在三个桌面平台的依赖段各登记一次，`windows` 的音频 / WinRT feature 只在 Windows 段，Linux 的 `pipewire` 只在 Linux 段，都由 `wpe` feature 开启。没有数据源的
 订阅命令直接返回错误，垫片忽略，页面收不到对应回调（场景脚本收到 `enabled: false`）。
 

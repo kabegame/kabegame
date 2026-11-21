@@ -528,6 +528,12 @@ pub(crate) fn configure_app(
         builder = builder.plugin(tauri_plugin_wemt::init());
     }
 
+    // 系统「正在播放」：WPE 网页壁纸 / 场景的媒体集成经它读数据（`wpe_media`）
+    #[cfg(feature = "wpe")]
+    {
+        builder = builder.plugin(tauri_plugin_sysmedia::init());
+    }
+
     // 网页壁纸 / 场景宿主 iframe 的原生鼠标（图库预览与桌面壁纸窗口同一条路）：iframe 自己登记
     // （`plugin:cursor|attach_frame`），插件轮询全局光标，这里经 CEF 补丁 11 把事件直接注入那个 frame（钳进
     // frame），父页面盖在 iframe 上的覆盖层挡不住。壁纸窗口的点击只认落在桌面上的，其它窗口只认落在本窗口上的。
