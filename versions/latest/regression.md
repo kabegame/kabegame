@@ -4413,3 +4413,29 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | E10 web RPC 的参数兜底 | Node | `start_hidden_cleanup` 的 `Args` 解析：`null`（完全不带 params）、`{}`、`{deleteFiles:true/false}`、错类型 | 前三种分别得 false / false / true，错类型报 invalid_params | 2026-11-21 Claude：独立最小 crate 实测如此。直接 `from_value::<Args>(Null)` 会报「invalid type: null」，所以过一层 `Option` + `unwrap_or_default`，本来就不带 params 的老调用方照常可用 |
 | [ ] | E10b web 版实跑 | Web dev | 不带 `deleteFiles` 调一次 `start_hidden_cleanup` | 清理跑起来，只删库记录 | |
 | [ ] | E11 非 Windows | macOS、Linux | 同 E3–E8 | 同 Windows（目录进各自的回收站） | 本机不能测 |
+
+## 壁纸功能没开时引导开启，而不是报错
+
+2026-11-21 Windows。壁纸功能（`wallpaperEnabled`）关着时，「设为壁纸」「设为轮播」「用当前视图轮播」都会撞上后端
+`reject_if_wallpaper_disabled` 的「壁纸功能已关闭，请先在设置中重新开启」，用户得自己去设置页找那个开关。现在改成
+引导式确认框，形式与「这张图需要窗口模式」一致：同意就经设置状态机开启（`save` 会 await `set_wallpaper_enabled`，
+后端在那之后已经拉起壁纸后端并恢复了上次的壁纸），再接着做原来的操作。
+
+引导放在**三个入口共用的关口** `pickWallpaperTarget` 里（设置页以外的壁纸操作都先经它选目标），所以三个入口零改动、
+将来新增入口也不会漏；顺序上先问开壁纸、再选屏，和窗口模式引导一样都在下命令之前。只在明确读到「关」时拦，设置还没
+读到就放过去由后端兜底。后端错误码与文案没动，IPC / CLI 调用方不受影响。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | F1 类型检查 | Windows | `deno task check -c kabegame --skip cargo` | 0 error | 2026-11-21 Claude：vue-tsc 通过（本次只改前端与 i18n，没动 Rust） |
+| [x] | F2 单测 | Windows | `useWallpaperTargetPicker.test.ts`（原 11 + 新 3） | 全过 | 2026-11-21 Claude：14 / 14 |
+| [x] | F3 变异检查 | Windows | 去掉前置引导调用、取消时照常继续、忙时不提示直接继续、判断写反 | 四个都被检出 | 2026-11-21 Claude：分别 3 / 1 / 1 / 3 个用例失败，恢复后 14 过 |
+| [ ] | F4 单屏「设为壁纸」 | Windows dev | 设置里关掉「打开壁纸」，回图库右键一张图「设为壁纸」 | 弹「壁纸功能当前是关闭的…现在开启吗？」；点「开启壁纸」后壁纸设置成功、设置页开关变成开 | |
+| [ ] | F5 取消引导 | Windows dev | 同 F4，这次点「取消」 | 什么都不发生：没有错误 toast，壁纸仍关着，不弹选屏窗 | |
+| [ ] | F6 画册「设为轮播」 | Windows dev | 关掉壁纸，画册详情栏点「设为轮播」 | 同 F4 的引导，开启后轮播正常起来 | |
+| [ ] | F7 查询行「用当前视图轮播」 | Windows dev | 关掉壁纸，查询行 ⋯ →「用当前视图轮播」 | 同 F6 | |
+| [ ] | F8 多屏下的先后 | Windows dev，两块屏 + 逐屏独立 | 关掉壁纸，「设为壁纸」 | 先问开壁纸，开了之后才弹选屏窗；选屏取消则不设 | 需要两块屏 |
+| [ ] | F9 壁纸开着时不打扰 | Windows dev | 壁纸开着，正常「设为壁纸」 | 不出现任何额外确认框，行为与以前一致 | |
+| [ ] | F10 连续两道引导 | Windows dev，非窗口模式 | 关掉壁纸且壁纸模式不是窗口模式，对一张视频 / WPE 壁纸「设为壁纸」 | 先引导开壁纸，开了之后再引导切窗口模式，两道都同意则设置成功 | |
+| [ ] | F11 Web 版不受影响 | Web dev | 「设为壁纸」（记应用背景） | 不出现壁纸开关的引导 | |
+| [ ] | F12 非 Windows | macOS、Linux | 同 F4–F10 | 同 Windows | 本机不能测 |
