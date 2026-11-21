@@ -124,7 +124,11 @@ struct Slot<R: Runtime> {
 }
 
 /// 窗口模式壁纸管理器：**每块在线屏一个壁纸窗口**，窗口矩形就是那块屏，各自完整渲染一幅画面。
-/// label 取自固定的池 [`WALLPAPER_LABELS`]。窗口是**懒建**的：只在 `wallpaperMode == "window"` 且壁纸开着期间存在。
+/// label 取自固定的池 [`WALLPAPER_LABELS`]。窗口是**懒建**的：只在 `wallpaperMode` 为本后端的壁纸模式且壁纸开着期间存在。
+///
+/// 两种用法：Windows / macOS 的窗口模式（`window`，窗口挂到桌面层），Linux 的插件模式（`plasma-plugin`，由
+/// [`super::PlasmaPluginWallpaperManager`] 包一层）：Linux 没有桌面层可挂，壁纸窗口是离屏 browser，每一帧推到一路
+/// PipeWire 流，由 Plasma 壁纸插件显示（见 `wallpaper::window` 与 `wallpaper::pipewire`）。
 ///
 /// 窗口集合的**生命周期**：`init()` 进入窗口模式并把窗口集合对齐到当前布局，`reconcile()` 在显示器模式或在线屏
 /// 变化后重新对齐（同一块屏保留原窗口、屏矩形变了重铺、布置变了推一条新的、多的销毁、缺的新建），`cleanup()`
@@ -140,6 +144,8 @@ struct Slot<R: Runtime> {
 /// 窗口表的瞬间持有，持有期间不调用会同步等主线程的窗口接口——页面初始化时的命令、轮播线程都要读它。
 pub struct WindowWallpaperManager<R: Runtime> {
     app: AppHandle<R>,
+    /// 本后端所属的壁纸模式（`window` / `plasma-plugin`）：布局按这个模式下生效的显示器模式现算。
+    wallpaper_mode: &'static str,
     /// 值：是否处于窗口模式（`init` 之后、`cleanup` 之前）。锁本身让对齐串行。
     active: Mutex<bool>,
     /// label → 窗口
@@ -147,9 +153,10 @@ pub struct WindowWallpaperManager<R: Runtime> {
 }
 
 impl<R: Runtime> WindowWallpaperManager<R> {
-    pub fn new(app: AppHandle<R>) -> Self {
+    pub fn new(app: AppHandle<R>, wallpaper_mode: &'static str) -> Self {
         Self {
             app,
+            wallpaper_mode,
             active: Mutex::new(false),
             slots: Mutex::new(BTreeMap::new()),
         }
@@ -167,11 +174,11 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// 窗口后端此刻该对齐到的布局：按「窗口模式下生效的显示器模式」现算（切入窗口模式时 `wallpaperMode`
-    /// 还没落盘，不能读当前模式），缺的目标顺带补种。
-    fn current_layout() -> Layout {
+    /// 窗口后端此刻该对齐到的布局：按「本后端的壁纸模式下生效的显示器模式」现算（切入这个模式时
+    /// `wallpaperMode` 还没落盘，不能读当前模式），缺的目标顺带补种。
+    fn current_layout(&self) -> Layout {
         let controller = WallpaperController::global();
-        controller.layout_for(controller.display_mode_for("window"), None)
+        controller.layout_for(controller.display_mode_for(self.wallpaper_mode), None)
     }
 
     /// 绊线：本 manager 的内容类方法**不会**兜底建窗（窗口不存在时 `set_wallpaper`
@@ -207,6 +214,23 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         tauri_runtime_kbcef::allow_app_local_resources(label);
         // 补丁 10：壁纸 iframe 上的 Ctrl+滚轮不缩放；缩放按 host 存，这里和主窗口是同一个 host
         tauri_runtime_kbcef::disable_wheel_zoom(label);
+        // Linux（插件模式）：不建原生窗口，建离屏 browser，帧由挂载时建的 PipeWire 流接走。尺寸按屏的逻辑尺寸与缩放；
+        // 没有屏幕信息时给 0，runtime 换成主显示器。
+        #[cfg(target_os = "linux")]
+        tauri_runtime_kbcef::register_offscreen(
+            label,
+            tauri_runtime_kbcef::OffscreenOptions {
+                geometry: tauri_runtime_kbcef::OffscreenGeometry {
+                    width: screen.map_or(0, |screen| screen.width),
+                    height: screen.map_or(0, |screen| screen.height),
+                    scale_factor: screen.map_or(1.0, |screen| screen.scale),
+                },
+                frame_rate: crate::wallpaper::window::OFFSCREEN_MAX_FPS,
+                // GPU 上下文可用（Wayland、合成器的主设备上 EGL / GBM 正常）时走共享纹理：帧是 dmabuf，GPU 拷进流的缓冲；
+                // 否则软件绘制、整帧像素拷进共享内存
+                shared_texture: crate::wallpaper::pipewire::dmabuf_enabled(),
+            },
+        );
 
         // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。
         // `slot` 是 label 在池里的序号，页面不读它：各壁纸窗口的地址因此互不相同，调试工具能按 URL 认出是哪一个。
@@ -268,6 +292,12 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             }
             None => Ok(()),
         };
+        // Linux：摘掉帧接收器（通常已随 WallpaperWindow 丢弃摘掉）并撤销离屏登记，label 复用时由下次建窗重新登记
+        #[cfg(target_os = "linux")]
+        {
+            tauri_runtime_kbcef::set_offscreen_frame_sink(label, None);
+            tauri_runtime_kbcef::unregister_offscreen(label);
+        }
         // ready 标记按 label 记在进程级静态里、label 会复用，必须随窗口一起撤销，否则下次用这个 label
         // 重建时 wait_ready 会立刻返回，挂载会打在一个前端尚未加载的新窗口上。
         WallpaperWindow::<R>::reset_ready(label);
@@ -352,8 +382,21 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         }
         for (label, screen) in moved {
             // Windows 目前没有显示器枚举，窗口不绑定屏，走不到这里；有了枚举之后在这里按新矩形重挂
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             let _ = (label, screen);
+            // Linux：离屏视图换尺寸，PipeWire 流在下一帧按新尺寸重新协商
+            #[cfg(target_os = "linux")]
+            if let Err(e) = tauri_runtime_kbcef::resize_offscreen(
+                &label,
+                tauri_runtime_kbcef::OffscreenGeometry {
+                    width: screen.width,
+                    height: screen.height,
+                    scale_factor: screen.scale,
+                },
+            ) {
+                tracing::warn!("壁纸窗口 {label} 换尺寸失败: {e}");
+                first_error.get_or_insert(e);
+            }
             #[cfg(target_os = "macos")]
             if let Some(window) = self.app.get_webview_window(&label) {
                 tracing::debug!(
@@ -493,7 +536,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
             // 不在窗口模式（或壁纸关着）：窗口不该存在，屏幕变化与本后端无关
             return Ok(());
         }
-        self.align(&Self::current_layout())
+        self.align(&self.current_layout())
     }
 
     fn window_assignment(&self, label: &str) -> Option<WindowAssignment> {
@@ -529,7 +572,7 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
             *active = true;
         }
         // 已在窗口模式时等同于一次对齐（幂等）：窗口都在就什么都不做。
-        self.align(&Self::current_layout())
+        self.align(&self.current_layout())
     }
 }
 

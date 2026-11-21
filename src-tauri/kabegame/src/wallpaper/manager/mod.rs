@@ -2,17 +2,20 @@ pub mod native;
 #[cfg(target_os = "macos")]
 mod native_mac;
 #[cfg(target_os = "linux")]
+pub mod plasma_install;
+#[cfg(target_os = "linux")]
 pub mod plasma_plugin;
 #[cfg(target_os = "linux")]
 pub mod plasma_qdbus;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+// 壁纸窗口集合：Windows / macOS 的窗口模式直接用，Linux 的插件模式包一层（离屏窗口 + PipeWire）
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub mod window;
 
 // 导出管理器类型
 pub use native::NativeWallpaperManager;
 #[cfg(target_os = "linux")]
 pub use plasma_plugin::PlasmaPluginWallpaperManager;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub use window::WindowWallpaperManager;
 
 use std::collections::HashMap;
@@ -374,6 +377,14 @@ pub(crate) fn outputs_for_new_screens(
     outputs
 }
 
+/// 由 Kabegame 自己渲染壁纸页面（壁纸窗口）的壁纸模式：Windows / macOS 是窗口模式（窗口挂到桌面层），Linux 是
+/// Plasma 插件模式（离屏壁纸窗口经 PipeWire 推给插件）。WPE 壁纸只在这个模式下能设为桌面，壁纸窗口的布置也由它的后端给。
+pub const RENDERED_WALLPAPER_MODE: &str = if cfg!(target_os = "linux") {
+    "plasma-plugin"
+} else {
+    "window"
+};
+
 /// 全新目标的平台默认过渡：Windows 为淡入淡出，其余平台就是能力表第一项（不写）。
 const PLATFORM_DEFAULT_TRANSITION: &str = if cfg!(target_os = "windows") {
     "fade"
@@ -425,7 +436,8 @@ impl WallpaperController {
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         let window =
-            Arc::new(WindowWallpaperManager::new(app)) as Arc<dyn WallpaperManager + Send + Sync>;
+            Arc::new(WindowWallpaperManager::new(app, "window"))
+                as Arc<dyn WallpaperManager + Send + Sync>;
 
         Self {
             native,
@@ -482,8 +494,9 @@ impl WallpaperController {
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         modes.push(wallpaper_option("window", "settings.modeWindow", None));
 
+        // Plasma 6 会话且有内置插件（或已经装着能用的）：切过去时会自动装 / 升级插件
         #[cfg(target_os = "linux")]
-        if plasma_qdbus::is_kabegame_plasma_plugin_installed() {
+        if plasma_install::available() {
             modes.push(wallpaper_option(
                 "plasma-plugin",
                 "settings.modePlugin",
@@ -754,7 +767,8 @@ impl WallpaperController {
         if !crate::wallpaper::is_wallpaper_label(label) {
             return None;
         }
-        self.manager_for_mode("window").window_assignment(label)
+        self.manager_for_mode(RENDERED_WALLPAPER_MODE)
+            .window_assignment(label)
     }
 
     /// 把壁纸模式 `wallpaper_mode` 的后端对齐到当前布局，再把各活跃目标重新输出一次
@@ -799,9 +813,11 @@ impl WallpaperController {
             return;
         }
         match settings.get_wallpaper_mode().as_str() {
-            "window" => {
+            mode if mode == RENDERED_WALLPAPER_MODE => {
                 tauri::async_runtime::spawn(async {
-                    Self::global().realign_outputs("window").await;
+                    Self::global()
+                        .realign_outputs(RENDERED_WALLPAPER_MODE)
+                        .await;
                 });
             }
             // 逐屏独立可用 = 后端能只设一块屏；不能逐屏的后端（系统自己把同一张铺到新屏上）不补
@@ -861,7 +877,8 @@ impl WallpaperController {
 
     /// 拉起**当前应该活跃**的后端。
     ///
-    /// 不变量：**壁纸窗口存在 ⟺ `wallpaperMode == "window"` ∧ `wallpaperEnabled`**。
+    /// 不变量：**壁纸窗口存在 ⟺ `wallpaperMode == RENDERED_WALLPAPER_MODE` ∧ `wallpaperEnabled`**
+    /// （Windows / macOS 为 `window`，Linux 为 `plasma-plugin`）。
     /// 本函数是该不变量的唯一实现处，两个条件缺一不可：
     /// - 不看 mode：`WindowWallpaperManager::init()` 会建窗并挂到桌面层，native 模式下
     ///   调用它等于凭空在桌面上盖一层窗口。

@@ -26,6 +26,7 @@
     "build:v8": "deno run -A scripts/build-v8.ts",
     "build:wpesl2wgsl": "deno run -A scripts/build-wpesl2wgsl.ts",
     "build:wpefont": "deno run -A scripts/build-wpefont.ts",
+    "build:plasma-plugin": "deno run -A scripts/build-plasma-plugin.ts",
     "build:web": "deno run -A scripts/build-web.ts",
     "pathql:generate": "deno run -A scripts/generate-pathql-client.ts",
     "prepare": "husky",

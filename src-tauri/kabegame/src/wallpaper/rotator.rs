@@ -99,7 +99,7 @@ fn count_source(
         effective,
         count,
         fallback,
-        allow_wpe: wallpaper_mode == "window",
+        allow_wpe: wallpaper_mode == crate::wallpaper::manager::RENDERED_WALLPAPER_MODE,
     })
 }
 

@@ -107,6 +107,13 @@ gtk = { version = "0.18", features = ["v3_24"], optional = true }
 libc = "0.2"
 # 插件模式的壁纸推流（wallpaper/pipewire）：用底层 FFI（pw_sys）与 spa 的 pod 序列化器，帧回调在 CEF UI 线程上直接入队
 pipewire = { version = "0.10", optional = true }
+# 插件模式的 dmabuf 推流（wallpaper/pipewire/gpu.rs）：运行时 dlopen 系统的 libEGL / libGLESv2 / libgbm，装不上就退回共享内存
+libloading = { version = "0.8", optional = true }
+# 找合成器的主显示设备（linux-dmabuf v4 的 main_device，wallpaper/pipewire/device.rs）：dmabuf 要分配在这张卡上
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = ["client"], optional = true }
+# 插件模式里经 KWin 的 D-Bus 查主窗口在屏上的位置（wallpaper/kwin_window.rs），与 tauri-plugin-sysmedia / opener 用的是同一份
+zbus = { version = "5.9", optional = true }
 # 网页壁纸 / 场景音频频谱的两份 FFT（同 Windows 段的说明），由 wpe feature 开启；样本来自 PipeWire 的输出设备监听
 # （wpe_media/audio/sink_monitor.rs，同样用上面的 pipewire，wpe feature 也开启它）
 realfft = { version = "3.4", optional = true }
@@ -240,6 +247,12 @@ standard = [
     "dep:gtk",
     "dep:tauri",
     "dep:tauri-runtime-kbcef",
+    # 只在 Linux 有这几个依赖（插件模式推流）
+    "dep:pipewire",
+    "dep:libloading",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+    "dep:zbus",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",
     "dep:tauri-plugin-global-shortcut",

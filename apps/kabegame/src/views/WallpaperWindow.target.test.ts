@@ -26,6 +26,8 @@ const backend = vi.hoisted(() => ({
 }));
 
 vi.mock("@tauri-apps/api/webviewWindow", () => ({ getCurrentWebviewWindow: () => ({ label: "wallpaper" }) }));
+// 壁纸窗口读哪个壁纸模式名下的样式 / 过渡看平台（Linux 是 plasma-plugin，其余 window）；这里固定成非 Linux，结果不随跑测试的机器变
+vi.mock("@/env", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/env")>()), IS_LINUX: false }));
 vi.mock("@/api/rpc", () => ({
   invoke: vi.fn(async (command: string, args?: Record<string, unknown>) => {
     backend.calls.push(command);

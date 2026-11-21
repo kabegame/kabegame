@@ -35,7 +35,7 @@ pub async fn fix_wallpaper_zorder<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 /// 壁纸窗口前端 ready 后调用：按调用方 label 标记该窗口已完全初始化，后端等到它才挂载并显示这个窗口
 /// （每个壁纸窗口各握各的手）。不是壁纸窗口的调用方不作数。
 #[tauri::command]
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub fn wallpaper_window_ready<R: tauri::Runtime>(webview: tauri::Webview<R>) -> Result<(), String> {
     let label = webview.label();
     if !crate::wallpaper::is_wallpaper_label(label) {
@@ -49,7 +49,7 @@ pub fn wallpaper_window_ready<R: tauri::Runtime>(webview: tauri::Webview<R>) -> 
 /// 壁纸窗口对 `wallpaper-ping` 的应答；应用页与网页壁纸垫片共用。
 /// label 取调用方 webview，页面替不了别的窗口应答。只发 opt-in 的 pong，不进窗口 / SSE。
 #[tauri::command]
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub async fn wallpaper_pong<R: tauri::Runtime>(webview: tauri::Webview<R>, seq: u64) {
     kabegame_core::emitter::GlobalEmitter::global().emit_wallpaper_pong(webview.label(), seq);
 }

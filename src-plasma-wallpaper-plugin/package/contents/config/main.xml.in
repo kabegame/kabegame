@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+  <kcfgfile name=""/>
+  <group name="General">
+    <!-- 当前版本的内容文件（相对 contents/ui）。main.qml 永不改；Kabegame 装好新版本后经 evaluateScript 改这一项换到新文件 -->
+    <entry name="Entry" type="String">
+      <default>@KB_QML_URI@.qml</default>
+    </entry>
+  </group>
+</kcfg>

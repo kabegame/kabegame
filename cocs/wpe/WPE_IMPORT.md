@@ -346,7 +346,7 @@ Web 发布版与 Android 硬门控为主窗口。
 
 | 字段 | 来源 |
 |---|---|
-| 对齐 | Kabegame 壁纸样式：`fill`→cover、`fit`→contain、`stretch`→fill、`center`→none、`tile`→cover |
+| 对齐 | Kabegame 壁纸样式：`fill`→cover、`fit`→contain、`stretch`→fill、`center`→none、`tile`→contain（居中那一格，2026-11-22 起桌面在上面盖 `VideoTile` 画布逐帧重复铺满，颜色与翻转加在画布上；以前是 cover） |
 | 位置 `position` | 作者 `alignmentposition` × 0.01（cover / contain 时作用于溢出轴） |
 | 偏移 / 缩放 | 作者 `alignmentx` / `alignmenty` / `alignmentz`（center 时整体位移；free 走不到，不做） |
 | 翻转 / 背景 / 颜色 | 作者 `alignmentfliph` / `schemecolor` / `wec_*` |
@@ -868,7 +868,8 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   丢失图先到的那个），默认变体的 `ready` 不变（骨架、丢失不发）；视频静音起播、成功后按 `playback.volume` 出声，倍速取
   `playback.playbackRate`（钳到 0.25…3）；wallpaper 形态的场景铺放取 `playback.style`（桌面的壁纸样式，含 tile）。`displaySource()`
   交出当前画面（已出来的原图层、否则缩略层，或视频）的地址与固有尺寸，给平铺用，画面换了（缩略层、原图层、视频出来）发
-  `displayChange`，平铺据此从缩略图换成原图。图库（`variant` 缺省）的行为不变。
+  `displayChange`，平铺据此从缩略图换成原图；视频的平铺另取暴露的 `videoEl`，由 `Wallpaper.vue` 的 `VideoTile` 逐帧画进画布（格子算法
+  `tileLayout.ts`，与图片的 CSS 背景同规则）。图库（`variant` 缺省）的行为不变。
 - 网格（`ImageItem`）对所有 WPE 行固定用缩略形态，不悬停加载原图形态；角标「WPE · 视频」/「WPE · 网页」。
 - 预览弹窗对非视频 WPE 行渲染 `components/wallpaper/WallpaperPreviewCanvas.vue`：给一块固定尺寸的画布，整体
   `scale` 进可用区域并居中，没有背景，和单独的图片一样显示。尺寸取图片行的 `width` / `height`（场景入库时写的分辨率）；

@@ -674,6 +674,18 @@ mod imp {
 
     pub(crate) enum CefWindowKind {
         Windowed(WindowedWindowState),
+        /// 离屏窗口（`offscreen.rs`）：没有原生窗口，只有一个 windowless browser。
+        Offscreen(OffscreenWindowState),
+    }
+
+    /// 离屏窗口的运行期状态。窗口操作映射到 browser host：显示 / 隐藏 → `WasHidden`，改尺寸 → `WasResized`，
+    /// 关闭 / 销毁 → `CloseBrowser`（不经 `CloseRequested`）；browser 关掉后由 `on_before_close` 上报 `Destroyed`。
+    pub(crate) struct OffscreenWindowState {
+        browser: webview::OffscreenBrowser,
+        title: String,
+        visible: bool,
+        /// browser 已经关掉（`on_before_close` 置位）；退出时等它。
+        closed: Arc<AtomicBool>,
     }
 
     pub(crate) struct WindowedWindowState {
@@ -1906,6 +1918,9 @@ mod imp {
             // localStorage / cookies 跨会话持久化。
             cache_path: CefString::from(cef_root_cache_dir().to_string_lossy().as_ref()),
             root_cache_path: CefString::from(cef_root_cache_dir().to_string_lossy().as_ref()),
+            // 离屏 browser（offscreen.rs）只在 Linux 有使用者（插件模式的壁纸）。CEF 注明打开它可能拖慢普通窗口，
+            // 2026-11-21 实测 60 Hz 下窗口 browser 的帧率与帧时间分布看不出差别。
+            windowless_rendering_enabled: cfg!(target_os = "linux") as _,
             ..Default::default()
         };
         // 开发期 CDP：仅在显式设置 KABEGAME_CEF_DEBUG_PORT 时监听（dev 由
@@ -2495,6 +2510,11 @@ mod imp {
             pending: PendingWindow<T, Cef<T>>,
             after_window_creation: Option<Box<dyn Fn(RawWindow) + Send>>,
         ) -> Result<DetachedWindow<T, Cef<T>>> {
+            if let Some(opts) = crate::offscreen::options_for(&pending.label) {
+                return Self::create_offscreen_window_on_cef_ui(
+                    context, windows, webviews, window_id, pending, opts,
+                );
+            }
             if after_window_creation.is_some() {
                 tracing::warn!("windowed mode cannot expose a tao RawWindow during create_window");
             }
@@ -2662,6 +2682,82 @@ mod imp {
             })
         }
 
+        /// 建离屏窗口（`offscreen.rs`）：不建原生窗口，只建窗口自带的那个 webview 的 windowless browser。
+        /// browser 关掉时（`on_before_close`）置 `closed` 并上报 `Destroyed`，主循环照常回收窗口与 webview 状态。
+        fn create_offscreen_window_on_cef_ui(
+            context: CefContext<T>,
+            windows: Arc<CefWindows>,
+            webviews: Arc<CefWebviews>,
+            window_id: WindowId,
+            pending: PendingWindow<T, Cef<T>>,
+            mut opts: crate::offscreen::OffscreenOptions,
+        ) -> Result<DetachedWindow<T, Cef<T>>> {
+            // 应用登记时没给尺寸：铺主显示器
+            opts.geometry = opts.geometry.or_primary_display();
+            let label = pending.label.clone();
+            let attrs = pending.window_builder.inner.window.clone();
+            let Some(webview) = pending.webview else {
+                tracing::warn!("offscreen window '{label}' has no webview");
+                return Err(Error::CreateWindow);
+            };
+            let use_https_scheme = webview.webview_attributes.use_https_scheme;
+            let webview_label = webview.label.clone();
+            let webview_id = context.next_webview_id();
+            let closed = Arc::new(AtomicBool::new(false));
+            let on_closed: webview::OffscreenClosed = {
+                let context = context.clone();
+                let closed = closed.clone();
+                Arc::new(move || {
+                    closed.store(true, Ordering::Release);
+                    let _ = context.enqueue(Message::CefWindowEvent(
+                        window_id,
+                        WindowEvent::Destroyed,
+                    ));
+                })
+            };
+            let (state, browser) = webview::create_cef_offscreen_browser(
+                window_id,
+                webview_id,
+                context.clone(),
+                webview,
+                &opts,
+                on_closed,
+            )?;
+            if !attrs.visible {
+                if let Some(host) = browser.browser.host() {
+                    host.was_hidden(1);
+                }
+            }
+            webviews.0.borrow_mut().insert(webview_id, state);
+            windows.0.borrow_mut().insert(
+                window_id,
+                CefWindowState {
+                    label: label.clone(),
+                    kind: CefWindowKind::Offscreen(OffscreenWindowState {
+                        browser,
+                        title: attrs.title,
+                        visible: attrs.visible,
+                        closed,
+                    }),
+                    listeners: Vec::new(),
+                    webviews: vec![webview_id],
+                },
+            );
+            tracing::debug!("offscreen window '{label}' created");
+            Ok(DetachedWindow {
+                id: window_id,
+                label,
+                dispatcher: window::CefWindowDispatcher {
+                    window_id,
+                    context: context.clone(),
+                },
+                webview: Some(DetachedWindowWebview {
+                    webview: webview::detached_webview(webview_label, window_id, webview_id, context),
+                    use_https_scheme,
+                }),
+            })
+        }
+
         /// 在已存在的 CEF Views 窗口上创建 BrowserView。
         fn create_webview_now(
             &self,
@@ -2697,13 +2793,24 @@ mod imp {
             pending: PendingWebview<T, Cef<T>>,
         ) -> Result<DetachedWebview<T, Cef<T>>> {
             let label = pending.label.clone();
+            if matches!(
+                windows.0.borrow().get(&window_id).map(|w| &w.kind),
+                Some(CefWindowKind::Offscreen(_))
+            ) {
+                tracing::warn!("offscreen windows host only their own webview; '{label}' rejected");
+                return Err(Error::CreateWebview(Box::new(std::io::Error::other(
+                    "offscreen windows host only their own webview",
+                ))));
+            }
             let (state, browser_view) =
                 webview::create_cef_browser_view(window_id, webview_id, context.clone(), pending)?;
             let mut window_states = windows.0.borrow_mut();
             let Some(window) = window_states.get_mut(&window_id) else {
                 return Err(Error::WindowNotFound);
             };
-            let CefWindowKind::Windowed(windowed) = &mut window.kind;
+            let CefWindowKind::Windowed(windowed) = &mut window.kind else {
+                return Err(Error::WindowNotFound);
+            };
             let mut view = View::from(&browser_view);
             {
                 let mut shared = windowed
@@ -2798,16 +2905,20 @@ mod imp {
             // 仍存活)。协议:对每个存活窗口置 `close_confirmed` 绕过 CloseRequested
             // 裁决 → 锁外 `close()` 走 CEF 销毁握手 → 泵消息直到全部
             // `on_window_destroyed`,再短暂排空 browser/子系统 teardown。
-            let remaining: Vec<_> = self
-                .windows
-                .0
-                .borrow()
-                .values()
-                .map(|state| {
-                    let CefWindowKind::Windowed(w) = &state.kind;
-                    w.shared.clone()
-                })
-                .collect();
+            // 离屏窗口没有 Views 窗口：直接关 browser，等 on_before_close 置 closed。
+            let mut remaining = Vec::new();
+            let mut remaining_offscreen = Vec::new();
+            for state in self.windows.0.borrow().values() {
+                match &state.kind {
+                    CefWindowKind::Windowed(w) => remaining.push(w.shared.clone()),
+                    CefWindowKind::Offscreen(o) => {
+                        if let Some(host) = o.browser.browser.host() {
+                            host.close_browser(1);
+                        }
+                        remaining_offscreen.push(o.closed.clone());
+                    }
+                }
+            }
             for shared in &remaining {
                 let cef_window = {
                     let mut s = shared.lock().expect("windowed state mutex poisoned");
@@ -2822,7 +2933,10 @@ mod imp {
             while Instant::now() < close_deadline {
                 let all_destroyed = remaining
                     .iter()
-                    .all(|shared| shared.lock().map(|s| s.window.is_none()).unwrap_or(true));
+                    .all(|shared| shared.lock().map(|s| s.window.is_none()).unwrap_or(true))
+                    && remaining_offscreen
+                        .iter()
+                        .all(|closed| closed.load(Ordering::Acquire));
                 if all_destroyed {
                     break;
                 }
@@ -3019,6 +3133,9 @@ mod imp {
             let Some(state) = self.windows.0.borrow_mut().remove(&window_id) else {
                 return;
             };
+            if let CefWindowKind::Offscreen(offscreen) = &state.kind {
+                offscreen.browser.view.unregister();
+            }
             // 连带回收该窗口的 webview 状态(协议表由 on_browser_destroyed 自清)。
             {
                 let mut webviews = self.webviews.0.borrow_mut();
@@ -3064,7 +3181,10 @@ mod imp {
                 let Some(state) = windows.get_mut(&window_id) else {
                     return;
                 };
-                let CefWindowKind::Windowed(ref w) = state.kind;
+                // 关窗请求只来自 Views 窗口的 can_close；离屏窗口的关闭直接关 browser，不走这里
+                let CefWindowKind::Windowed(ref w) = state.kind else {
+                    return;
+                };
                 let shared = w.shared.clone();
                 let label = state.label.clone();
                 let listeners = std::mem::take(&mut state.listeners);
@@ -3171,8 +3291,9 @@ mod imp {
                 }
                 WindowMessage::Set(set) => apply_window_set(&mut state.kind, set),
                 WindowMessage::Center => {
-                    let CefWindowKind::Windowed(window) = &state.kind;
-                    window.with_cef_window(|w| w.center_window(None));
+                    if let CefWindowKind::Windowed(window) = &state.kind {
+                        window.with_cef_window(|w| w.center_window(None));
+                    }
                 }
                 WindowMessage::RequestUserAttention(_) => {}
             }
@@ -3185,7 +3306,12 @@ mod imp {
             kind: WindowGetterKind,
             target: &tao::event_loop::EventLoopWindowTarget<Message<T>>,
         ) -> Result<Box<dyn Any + Send>> {
-            let CefWindowKind::Windowed(window) = &state.kind;
+            let window = match &state.kind {
+                CefWindowKind::Windowed(window) => window,
+                CefWindowKind::Offscreen(offscreen) => {
+                    return offscreen_window_get(offscreen, kind, target)
+                }
+            };
             let value: Box<dyn Any + Send> = match kind {
                 WindowGetterKind::ScaleFactor => Box::new(
                     window
@@ -3336,6 +3462,9 @@ mod imp {
                     if let Some(browser_view) = &state.browser_view {
                         browser_view.inner.set_visible(i32::from(visible));
                     }
+                    if let Some(host) = state.offscreen.as_ref().and_then(|o| o.browser.host()) {
+                        host.was_hidden(i32::from(!visible));
+                    }
                     state.visible = visible;
                 }
                 WebviewMessage::Eval(script) => {
@@ -3391,6 +3520,9 @@ mod imp {
                         size.width.max(1) as u32,
                         size.height.max(1) as u32,
                     ))
+                } else if let Some(offscreen) = &state.offscreen {
+                    let (width, height) = offscreen.view.geometry().physical_size();
+                    Box::new(PhysicalSize::new(width, height))
                 } else {
                     Box::new(PhysicalSize::new(1, 1))
                 }
@@ -3724,8 +3856,100 @@ mod imp {
 
     /// 把 runtime 的窗口命令映射到 CEF Views API。
     fn apply_window_set(kind: &mut CefWindowKind, set: WindowSet) {
-        let CefWindowKind::Windowed(window) = kind;
-        apply_windowed_window_set(window, set);
+        match kind {
+            CefWindowKind::Windowed(window) => apply_windowed_window_set(window, set),
+            CefWindowKind::Offscreen(window) => apply_offscreen_window_set(window, set),
+        }
+    }
+
+    /// 离屏窗口只认显示 / 隐藏、尺寸、标题与关闭；其余对没有原生窗口的 browser 没有意义，忽略。
+    fn apply_offscreen_window_set(window: &mut OffscreenWindowState, set: WindowSet) {
+        let host = window.browser.browser.host();
+        match set {
+            WindowSet::Title(v) => window.title = v,
+            WindowSet::Show => {
+                if let Some(host) = &host {
+                    host.was_hidden(0);
+                }
+                window.visible = true;
+            }
+            WindowSet::Hide => {
+                if let Some(host) = &host {
+                    host.was_hidden(1);
+                }
+                window.visible = false;
+            }
+            WindowSet::Close | WindowSet::Destroy => {
+                if let Some(host) = &host {
+                    host.close_browser(1);
+                }
+                window.visible = false;
+            }
+            WindowSet::Size(v) => {
+                let mut geometry = window.browser.view.geometry();
+                let scale = geometry.scale_factor.max(0.01);
+                let (width, height) = match v {
+                    Size::Logical(s) => (s.width, s.height),
+                    Size::Physical(s) => (s.width as f64 / scale, s.height as f64 / scale),
+                };
+                geometry.width = width.round().max(1.0) as u32;
+                geometry.height = height.round().max(1.0) as u32;
+                window.browser.view.set_geometry(geometry);
+                if let Some(host) = &host {
+                    host.was_resized();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 离屏窗口的 getter：几何取视图，位置恒为原点，显示器取主屏。
+    fn offscreen_window_get<T: UserEvent>(
+        window: &OffscreenWindowState,
+        kind: WindowGetterKind,
+        target: &tao::event_loop::EventLoopWindowTarget<Message<T>>,
+    ) -> Result<Box<dyn Any + Send>> {
+        let geometry = window.browser.view.geometry();
+        let (width, height) = geometry.physical_size();
+        let value: Box<dyn Any + Send> = match kind {
+            WindowGetterKind::ScaleFactor => Box::new(geometry.scale_factor),
+            WindowGetterKind::InnerPosition | WindowGetterKind::OuterPosition => {
+                Box::new(PhysicalPosition::new(0, 0))
+            }
+            WindowGetterKind::InnerSize | WindowGetterKind::OuterSize => {
+                Box::new(PhysicalSize::new(width, height))
+            }
+            WindowGetterKind::IsFullscreen
+            | WindowGetterKind::IsMinimized
+            | WindowGetterKind::IsMaximized
+            | WindowGetterKind::IsFocused
+            | WindowGetterKind::IsDecorated
+            | WindowGetterKind::IsResizable
+            | WindowGetterKind::IsMaximizable
+            | WindowGetterKind::IsMinimizable
+            | WindowGetterKind::IsAlwaysOnTop => Box::new(false),
+            WindowGetterKind::IsClosable | WindowGetterKind::IsEnabled => Box::new(true),
+            WindowGetterKind::IsVisible => Box::new(window.visible),
+            WindowGetterKind::Title => Box::new(window.title.clone()),
+            WindowGetterKind::CurrentMonitor | WindowGetterKind::PrimaryMonitor => {
+                Box::new(target.primary_monitor())
+            }
+            WindowGetterKind::AvailableMonitors => {
+                Box::new(target.available_monitors().collect::<Vec<_>>())
+            }
+            #[cfg(target_os = "linux")]
+            WindowGetterKind::GtkWindow | WindowGetterKind::GtkBox => {
+                return Err(Error::CreateWindow);
+            }
+            WindowGetterKind::RawWindowHandle => Box::new(Err::<
+                SendRawWindowHandle,
+                raw_window_handle::HandleError,
+            >(
+                raw_window_handle::HandleError::Unavailable
+            )),
+            WindowGetterKind::Theme => Box::new(Theme::Light),
+        };
+        Ok(value)
     }
 
     fn apply_windowed_window_set(window: &mut WindowedWindowState, set: WindowSet) {

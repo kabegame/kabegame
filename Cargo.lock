@@ -4720,6 +4720,7 @@ dependencies = [
  "kabegame-core",
  "kabegame-i18n",
  "libc",
+ "libloading 0.8.9",
  "objc2",
  "objc2-app-kit",
  "objc2-core-foundation",
@@ -4761,10 +4762,13 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wayland-client",
+ "wayland-protocols",
  "windows 0.52.0",
  "windows-sys 0.52.0",
  "winreg 0.55.0",
  "winver",
+ "zbus",
 ]
 
 [[package]]

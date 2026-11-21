@@ -1,0 +1,17 @@
+{
+    "KPackageStructure": "Plasma/Wallpaper",
+    "KPlugin": {
+        "Authors": [{ "Name": "Kabegame" }],
+        "Description": "Shows the wallpaper rendered by Kabegame (PipeWire stream); needs Kabegame running in plugin mode",
+        "Description[zh_CN]": "显示 Kabegame 渲染的壁纸（PipeWire 推流），需要 Kabegame 以插件模式运行",
+        "Icon": "preferences-desktop-wallpaper",
+        "Id": "org.kabegame.wallpaper",
+        "License": "GPL-3.0-or-later",
+        "Name": "Kabegame",
+        "Version": "@KB_PLUGIN_REVISION@"
+    },
+    "X-Kabegame-StreamProtocol": @KB_STREAM_PROTOCOL@,
+    "X-Kabegame-PluginRevision": @KB_PLUGIN_REVISION@,
+    "X-Kabegame-Entry": "@KB_QML_URI@.qml",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

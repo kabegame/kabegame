@@ -118,6 +118,28 @@ export const WPEFONT_TOOLCHAIN_DIR: string = path.join(
   "toolchain",
 );
 
+/** 插件模式（Linux）的 Plasma 壁纸插件源码，见 src-plasma-wallpaper-plugin/README.md。 */
+export const PLASMA_WALLPAPER_SOURCE_DIR: string = path.join(
+  ROOT,
+  "src-plasma-wallpaper-plugin",
+);
+
+/**
+ * Plasma 壁纸插件的构建目录：`deno task build:plasma-plugin` 写入（git 忽略）。放在架构子目录里，OSPlugin 清平台暂存目录、
+ * 收集 deb files 时都会跳过它。
+ */
+export const PLASMA_WALLPAPER_BUILD_DIR: string = repoBuildDir(
+  "plasma-wallpaper-plugin",
+  { platform: "linux" },
+);
+
+/** 拼好的 KPackage 目录（目录名就是插件 id），由 PlasmaWallpaperPlugin 拷进应用的 resources/plasma-wallpaper/。 */
+export const PLASMA_WALLPAPER_PACKAGE: string = path.join(
+  PLASMA_WALLPAPER_BUILD_DIR,
+  "package",
+  "org.kabegame.wallpaper",
+);
+
 /** chromium checkout 工作区（build-chromium 的构建根，原仓库外 cefbuild）。 */
 export const CHROMIUM_DIR: string = path.join(THIRD_DIR, "chromium");
 

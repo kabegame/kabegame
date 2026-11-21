@@ -1,4 +1,5 @@
-//! 轮询中心：进程级的一条后台线程，每 16 ms 采样一次全部订阅窗口的光标与左键。
+//! 轮询中心：进程级的一条后台线程，每 16 ms 采样一次全部订阅窗口的光标与左键（Linux 的外部来源是取走两轮之间推来的
+//! 样本，见 `platform::linux`）。
 //!
 //! 线程只在有订阅时存在：第一个 [`watch`] 启动它，最后一个订阅被移除后它自行退出，没有订阅时不占 CPU、
 //! 不忙等。所有回调都在这条线程上依次调用；订阅被丢弃（[`Watch`] drop）或窗口不在了，回调也在这条线程上
@@ -14,12 +15,15 @@ use crate::platform::{self, NativeWindow};
 const POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 /// 一次采样：光标在窗口客户区里的视图坐标（CSS 像素 / DIP，光标在窗口外也给出，可为负或越界）、
-/// 是否在窗口内、左键是否按着。
+/// 是否在窗口内、左键是否按着、位置是否可知。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Sample {
     pub view: (f64, f64),
     pub inside: bool,
     pub left_down: bool,
+    /// 光标位置可知。读全局光标的平台恒为真；外部来源（Linux，见 `platform::linux`）在光标离开它的范围后为假，
+    /// 这时 `view` 是离开前最后的位置，frame 收到一次离开。
+    pub present: bool,
 }
 
 /// 回调里按需问「上一次采样的光标下是什么」。只在需要时求值（Windows 一次 `WindowFromPoint`，
@@ -35,8 +39,13 @@ pub trait HitTest {
 pub(crate) trait Probe: Send + 'static {
     /// 窗口还在不在；不在就移除订阅。每轮调用一次。
     fn alive(&mut self) -> bool;
-    /// 读一次光标与左键；读不到返回 `None`，本轮跳过。
+    /// 读一次光标与左键；读不到（外部来源：没有新样本）返回 `None`，本轮跳过。
     fn sample(&mut self) -> Option<Sample>;
+    /// 本轮还有没交出的样本（外部来源在两轮之间攒下的按下 / 抬起，一轮全部交出，边沿不丢）。读全局光标的平台
+    /// 一轮只有一个。
+    fn has_more(&mut self) -> bool {
+        false
+    }
     /// 上一次 [`Self::sample`] 的光标下是不是桌面。
     fn over_desktop(&mut self) -> bool;
     /// 上一次 [`Self::sample`] 的光标下的顶层窗口是不是被观察的窗口。
@@ -158,9 +167,12 @@ fn run(shared: Arc<Shared>) {
             if !entry.probe.alive() {
                 return false;
             }
-            if let Some(sample) = entry.probe.sample() {
+            while let Some(sample) = entry.probe.sample() {
                 let mut hit = Hit(entry.probe.as_mut());
                 (entry.callback)(sample, &mut hit);
+                if !entry.probe.has_more() {
+                    break;
+                }
             }
             true
         });
@@ -205,6 +217,7 @@ mod tests {
                 view: (1.5, 2.5),
                 inside: true,
                 left_down: false,
+                present: true,
             })
         }
         fn over_desktop(&mut self) -> bool {
@@ -344,6 +357,51 @@ mod tests {
         wait_until("重启后回调被调", || {
             calls.load(Ordering::Acquire) >= 1
         });
+    }
+
+    /// 攒了几个样本的探针（外部来源）：一轮全部交出。
+    struct BatchProbe {
+        pending: Arc<Mutex<Vec<f64>>>,
+    }
+
+    impl Probe for BatchProbe {
+        fn alive(&mut self) -> bool {
+            true
+        }
+        fn sample(&mut self) -> Option<Sample> {
+            let mut pending = self.pending.lock().unwrap();
+            (!pending.is_empty()).then(|| Sample {
+                view: (pending.remove(0), 0.0),
+                inside: true,
+                left_down: false,
+                present: true,
+            })
+        }
+        fn has_more(&mut self) -> bool {
+            !self.pending.lock().unwrap().is_empty()
+        }
+        fn over_desktop(&mut self) -> bool {
+            true
+        }
+        fn over_window(&mut self) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn queued_samples_are_all_delivered_in_order() {
+        let hub = Hub::new();
+        let pending = Arc::new(Mutex::new(vec![1.0, 2.0, 3.0]));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        let _watch = hub.watch_probe(
+            Box::new(BatchProbe {
+                pending: pending.clone(),
+            }),
+            move |sample, _| s.lock().unwrap().push(sample.view.0),
+        );
+        wait_until("三个样本都交出", || seen.lock().unwrap().len() == 3);
+        assert_eq!(*seen.lock().unwrap(), [1.0, 2.0, 3.0]);
     }
 
     #[test]

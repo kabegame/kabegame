@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import Wallpaper from "./Wallpaper.vue";
 import type { WallpaperTarget } from "./types";
 
-/** ImageContent 的替身：记录挂载 / 卸载与 props，测试里按需 emit；displaySource、delegatesPing 由测试给。 */
+/** ImageContent 的替身：记录挂载 / 卸载与 props，测试里按需 emit；displaySource、videoEl、delegatesPing 由测试给。 */
 const stub = vi.hoisted(() => ({
   contents: [] as {
     id: string;
@@ -12,6 +12,7 @@ const stub = vi.hoisted(() => ({
     props: Record<string, unknown>;
     emit: (event: string, ...args: unknown[]) => void;
     source: { kind: "image" | "video"; url: string; width: number; height: number } | null;
+    videoEl: HTMLVideoElement | null;
     pinged: boolean;
   }[],
 }));
@@ -39,13 +40,20 @@ vi.mock("@/components/image/ImageContent.vue", async () => {
           props: props as Record<string, unknown>,
           emit: emit as (event: string, ...args: unknown[]) => void,
           source: null as (typeof stub.contents)[number]["source"],
+          videoEl: null as HTMLVideoElement | null,
           pinged: false,
         };
         stub.contents.push(record);
         onBeforeUnmount(() => {
           record.unmounted = true;
         });
-        expose({ displaySource: () => record.source, delegatesPing: () => record.pinged });
+        expose({
+          displaySource: () => record.source,
+          delegatesPing: () => record.pinged,
+          get videoEl() {
+            return record.videoEl;
+          },
+        });
         return () => h("div", { class: "content-stub" });
       },
     }),
@@ -291,7 +299,7 @@ describe("Wallpaper 的样式与参数", () => {
       ["fill", "cover"],
       ["fit", "contain"],
       ["stretch", "fill"],
-      ["tile", "cover"],
+      ["tile", "contain"],
     ] as const) {
       await wrapper.setProps({ styleMode: style });
       expect(stub.contents[0].props.fit).toBe(fit);
@@ -326,6 +334,43 @@ describe("Wallpaper 的样式与参数", () => {
     await settle();
     expect(wrapper.find(".wallpaper-tile").exists()).toBe(false);
     expect(stub.contents[0].props.fit).toBe("contain");
+  });
+
+  it("平铺：视频 ready 后盖一层画布逐帧重复，ImageContent 照常显示；WPE 的颜色与翻转带到画布上；换走平铺就撤掉", async () => {
+    const target: WallpaperTarget = {
+      ...clip("v"),
+      type: "x-wpe/video",
+      wpeVideo: {
+        alignment: "cover",
+        position: 0,
+        offsetX: 0,
+        offsetY: 0,
+        zoom: 1,
+        flipH: true,
+        background: null,
+        rate: null,
+        volume: null,
+        color: { brightness: 0.5, contrast: 0, saturation: 0, hue: 0 },
+      },
+    };
+    const wrapper = mountWallpaper(target, { styleMode: "tile" });
+    await settle();
+    const video = document.createElement("video");
+    stub.contents[0].videoEl = video;
+    stub.contents[0].source = { kind: "video", url: "file:///v.mp4", width: 960, height: 960 };
+    stub.contents[0].emit("ready");
+    await settle();
+    expect(wrapper.find(".wallpaper-tile").exists()).toBe(false);
+    const canvas = wrapper.find("canvas.wallpaper-video-tile");
+    expect(canvas.exists()).toBe(true);
+    expect((canvas.element as HTMLElement).style.transform).toBe("scaleX(-1)");
+    expect((canvas.element as HTMLElement).style.filter).toContain("brightness(1.5)");
+    expect(wrapper.find(".content-stub").classes()).not.toContain("opacity-0");
+    expect(stub.contents[0].props.fit).toBe("contain");
+    await wrapper.setProps({ styleMode: "fill" });
+    await settle();
+    expect(wrapper.find("canvas.wallpaper-video-tile").exists()).toBe(false);
+    expect(stub.contents[0].props.fit).toBe("cover");
   });
 
   it("ping 转问任一层；调试快照给当前层的类型、路径与显示不了的原因", async () => {

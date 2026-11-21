@@ -2,6 +2,7 @@
 
 use crate::wallpaper::manager::{
     DisplayMode, Placement, WallpaperCapabilities, WallpaperController, WindowAssignment,
+    RENDERED_WALLPAPER_MODE,
 };
 use crate::wallpaper::rotator::pick_random_gallery_wallpaper;
 use crate::wallpaper::screens::{self, ScreenInfo};
@@ -237,13 +238,13 @@ pub async fn set_wallpaper_by_image_id(
     let media_type = info.media_type.clone();
     let local_path = info.local_path;
 
-    // 目录型 WPE 壁纸第一阶段只支持窗口模式；用与视频相同的错误码让前端引导切换模式。
-    // Linux 没有窗口模式，引导过去也切不了，直接报错。
+    // 目录型 WPE 壁纸只能由壁纸窗口渲染（Windows / macOS 的窗口模式、Linux 的插件模式）；
+    // 用与视频相同的错误码让前端引导切换模式。
     if kabegame_core::media::image_type::is_wpe_type(media_type.as_deref())
-        && settings.get_wallpaper_mode() != "window"
+        && settings.get_wallpaper_mode() != RENDERED_WALLPAPER_MODE
     {
         return Err(if cfg!(target_os = "linux") {
-            "Linux 暂不支持把 Wallpaper Engine 壁纸设为桌面".to_string()
+            "REQUIRES_PLUGIN_MODE".to_string()
         } else {
             "REQUIRES_WINDOW_MODE".to_string()
         });
@@ -695,11 +696,11 @@ pub async fn set_wallpaper_mode(mode: String) -> Result<(), String> {
             .trim_start_matches(r"\\?\")
             .to_string();
 
-        // 目录型 WPE 壁纸只在窗口模式有内容；切到原生 / 插件模式时换成画廊里可用的兜底图。
+        // 目录型 WPE 壁纸只在壁纸窗口渲染的模式有内容；切到别的模式时换成画廊里可用的兜底图。
         let current_is_wpe =
             kabegame_core::media::image_type::is_wpe_type(current.media_type.as_deref());
 
-        let resolved_wallpaper = if current_is_wpe && mode != "window" {
+        let resolved_wallpaper = if current_is_wpe && mode != RENDERED_WALLPAPER_MODE {
             match pick_random_gallery_wallpaper(&mode) {
                 Some(p) => {
                     tracing::warn!(
@@ -714,7 +715,7 @@ pub async fn set_wallpaper_mode(mode: String) -> Result<(), String> {
                         let _ = rotator.start().await;
                     }
                     return Err(
-                        "当前壁纸是 Wallpaper Engine 壁纸，只能使用窗口模式；画廊中没有其它可用图片可兜底。"
+                        "当前壁纸是 Wallpaper Engine 壁纸，只能使用窗口模式（Linux 为插件模式）；画廊中没有其它可用图片可兜底。"
                             .to_string(),
                     );
                 }

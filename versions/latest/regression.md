@@ -20,6 +20,82 @@
 | [ ] | LM10 Windows / macOS 不回归 | Windows、macOS | `check-kabegame`；macOS 媒体走查（MM5、MM6） | 编过、和以前一样 | 插件 `desktop.rs` 的 `watch` 结尾改成按平台的两个块，macOS 分支逻辑没变；本机编不了 |
 | [x] | LM11 设置页「媒体集成」开关能拨 | Linux dev | 设置页拨关再拨开，每次读 `get_wpe_media_integration` | 后端值跟着变，没有 `No setting descriptor found` | 2026-11-22 Claude：修前拨了界面与后端都不变、控制台警告（描述符只在 Windows 注册，macOS 同样）；修后 true → false → true，无警告，已拨回原值。macOS 上请顺手核对一次 |
 
+## Linux 插件模式：插件的安装、升级与卸载（P3）
+
+2026-11-22 Linux dev（KDE Plasma 6.6.4 Wayland）。计划见 `.claude/plans/plasma-pipewire/README.md` 点 6。插件源码放进仓库 `src-plasma-wallpaper-plugin/`（`.gitmodules` 里没检出的同名子模块条目删掉），`deno task build:plasma-plugin` 拼出 KPackage 目录，Linux 的 dev / build 拷进应用的 `resources/plasma-wallpaper/`。切到插件模式与启动对齐时 `wallpaper/manager/plasma_install.rs` 照 Plasma 的查找顺序看装着的那份，没有、约定版本不同或修订号比内置的旧就拷进 `~/.local/share/plasma/wallpapers/org.kabegame.wallpaper`，再把各桌面的 `General/Entry` 写成新修订的内容文件（壳 `main.qml` 永不改、按它加载，模块 URI 与内容文件名带修订号，plasmashell 不用重启）。能力表在 Plasma 6 会话且有内置包（或装着能用的）时列出插件模式；删掉 `is_plasma_wallpaper_plugin_installed` 命令与前端的同名判断。deb 卸载（`postrm.sh`）把各用户用着插件的桌面换回 `org.kde.image`、删掉用户目录里带 Kabegame 标记的插件。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PI1 单测与检查 | Linux | `test-kabegame kabegame plasma_`；`check-kabegame`；`deno check` 新脚本；`sh -n postrm.sh` | 全过 | 5 例：读三个约定键与旧版当 0、能代替的条件（同约定版本、修订不旧；新的不降级）、整目录替换且不留临时目录、插件源码的 `PROTOCOL` 与应用一致、切换脚本只在内容文件名合规时写 `Entry` |
+| [x] | PI2 构建插件 | Linux（Qt 6.10.2） | `deno task build:plasma-plugin` | 产出 `KabegameWallpaperR1`：`metadata.json` 三个键、壳、带修订号的内容与 `content.qml`、`Plugin/KabegameWallpaperR1/{qmldir, .qmltypes, .so}`；`.so` 直接依赖只有 Qt 与 libpipewire | 打印用到的 Qt 版本与兼容提醒 |
+| [x] | PI3 构建插件拷进 resources | 同上 | 直接调 `PlasmaWallpaperPlugin` 的拷贝两次 | 第一次拷进 `<out>/plasma-wallpaper/org.kabegame.wallpaper`，第二次内容相同不重拷 | dev 启动时的整条路径（`prepareEnv`）等下次重启 dev 时看 |
+| [x] | PI4 从旧插件升级 | Linux dev，插件模式，装着试验插件 P2V4（没有修订号） | 关开一次壁纸（`set_wallpaper_enabled` false → true） | 日志「修订 0 比内置的旧，装内置的」「修订 1 装到 …」；用户目录换成 R1；两个桌面的 `Entry` 都是 `KabegameWallpaperR1.qml`；plasmashell PID 不变、日志 `[kabegame-wallpaper] r1 … serial=…`；dmabuf 推流 `streaming=true`；plasmashell 没有 GL 报错 | |
+| [x] | PI5 卸载逻辑 | 同上 | 以当前用户跑 `postrm.sh` 的删除函数（先 `KABEGAME_POSTRM_DRY_RUN=1` 空跑一次） | 两个桌面换回 `org.kde.image`、回到之前的图片；用户目录的插件删掉、别的壁纸插件不动 | 真卸载 deb 时以 root 经 `runuser` 对每个用户跑，没在本机装 deb 验证 |
+| [x] | PI6 没登录的用户 | 假的家目录 | 配置里三个容器：本插件、`org.kde.image`、`org.kabegame.wallpaper.other`；调重置函数（uid 没有会话总线） | 只有第一个换成 `org.kde.image` | |
+| [x] | PI7 全新安装 | 同 PI4，插件已删 | 关开一次壁纸 | 装上 R1、写好 `Entry`、plasmashell 当场加载并推流 | |
+| [ ] | PI8 deb 装、升、卸 | Ubuntu / Kubuntu（Plasma 6），release 构建 | 装 deb → 切插件模式 → 升级 deb（插件加了修订号）→ 卸载 deb | 切过去自动装插件；升级后启动时换到新修订、不重启 plasmashell；卸载时桌面换回系统壁纸、插件删掉；`upgrade` 时不删 | 出货构建要在 Qt 6.6 的环境里做（计划「待定」1） |
+| [ ] | PI10 plasmashell 的 GL 报错 | 同 PI4 | 装上 R1 后观察 plasmashell 日志 | 不出现 `eglError` / `Failed to start frame`，内核不报 `invalid sync FD` | **未过**：03:34 起每 5 s 左右报一次 `eglError 0x3006`（同一个上下文），内核在插件加载时（03:33:10）与 03:34:00 各一次 `invalid sync FD: 0`；plasmashell 没卡住、推流正常。R1 不用任务管理器模型，P2 的归因不成立；两次都在运行中的 plasmashell 里重新加载了插件内容，原因待查 |
+| [ ] | PI9 系统目录里有旧版 | 装着旧的 C++ / IPC 版 deb（`/usr/share/plasma/wallpapers/org.kabegame.wallpaper`） | 切插件模式 | 用户目录装一份新的盖过它，系统目录不动；旧版若本次会话加载过、又是同路径，要重启 plasmashell（只记日志） | |
+
+## Linux 插件模式：鼠标（P2）
+
+2026-11-22 Linux dev（KDE Plasma 6.6.4 Wayland）。计划见 `.claude/plans/plasma-pipewire/README.md` 点 4、点 7。Plasma 壁纸插件在桌面窗口上装事件过滤器（只看不吞），把落在壁纸范围里的移动 / 按键与离开按 32 字节的定长消息发到节点属性 `kabegame.wallpaper.input` 给的 Unix 数据报 socket；Kabegame 的 `wallpaper/pointer_socket.rs` 按 slot 找到离屏壁纸窗口、按它的逻辑尺寸换成视图坐标，推给 `tauri-plugin-cursor` 的 Linux 外部来源（建流时登记、窗口销毁时注销）。之后与 Windows / macOS 的壁纸窗口相同：网页 / 场景壁纸的 iframe 登记 frame 注入，点击规则是「光标下是桌面」（插件只在桌面窗口收到事件时才发，恒为真），经 CEF 补丁 11 注入。光标离开时 frame 收到一次离开，回来后重新进入。插件侧的参考实现在 P0 试验插件里（`ignore/plasma-p0/plugin/PointerForwarder.cpp`，现装成 `KabegameP2V4`）。主窗口（图库预览）也跟桌面上的光标：消息带光标的全局逻辑坐标，Kabegame 经 KWin 的 D-Bus（krunner 窗口搜索 + `getWindowInfo`）查主窗口的框架几何，扣掉装饰换成主窗口视图坐标推给主窗口的外部来源，只带移动、不点击。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PM1 单测与检查 | Linux | `cargo test -p tauri-plugin-cursor`；`test-kabegame kabegame pointer_socket`；`check-kabegame` | 全过；0 error、本次改动无新 warning | 光标插件 24 例（新增：离开只发一次且之后照常移动、离开前没有位置时不发、按着离开后回来的松开不配对、回来后再按是新的一次、队列合并保留按键边沿与离开、每个订阅各一条队列且从最近一次推送开始、注销后探针失效与重新登记换标识、队列封顶、一轮交出全部攒下的样本）；socket 3 例（定长解析、长度 / 版本 / 类型不对拒收、归一化坐标换算与离开沿用最后位置、只按右键不算左键、滚轮丢弃） |
+| [x] | PM2 模拟插件发消息 | Linux dev，插件模式，网页壁纸 19748 | 从 Python 往 socket 发：移动 (0.25, 0.5)、(0.5, 0.5)，紧接着按下与抬起左键（中间不等），移动 (0.55, 0.5)，离开，移动 (0.6, 0.5)；在 iframe 里记录鼠标事件 | iframe 收到 `isTrusted` 的事件：移动到 (662, 745)、(1324, 745)，按下 / 抬起 / 点击都在 (1324, 745)，离开时 `mouseout` / `mouseleave`，回来时 `pointerenter` 与移动 | 视图 2648×1490（离屏的逻辑尺寸），坐标换算对；按下与抬起落在同一个 16 ms 轮询里也都到了 |
+| [x] | PM3 节点属性与插件发现 | 同上 | `pw-dump` 看节点；装 `KabegameP2V1` 后看 plasmashell 日志 | 节点带 `kabegame.wallpaper.input = /run/user/1000/kabegame-dev/wallpaper-input.sock`、`slot = 0`；插件选中节点、读到输入路径与 slot，dmabuf 3840×2161 照常 | socket 所在目录 0700 |
+| [x] | PM4 真鼠标：跟随与点击 | 同上 | 回到桌面，在网页壁纸上移动、左键点击可交互的地方 | 页面跟随光标、点击生效；插件诊断行 `pointer sent` 增长、`failed` 为 0 | 2026-11-22 用户真鼠标试了网页与场景壁纸，桌面上响应正常 |
+| [ ] | PM5 桌面照常 | 同上 | 在桌面图标上单击 / 双击、拖动图标；桌面空白处右键 | 图标选中、打开、拖动照常，右键菜单照常弹出（事件过滤器只看不吞）；点在图标上时壁纸也收到点击（同 Windows） | |
+| [ ] | PM6 进出其它窗口 | 同上 | 光标从桌面移进一个普通窗口、面板，再移回桌面 | 移进去时页面收到离开（悬停效果消失），移回来重新进入并跟随 | |
+| [ ] | PM7 切走与切回 | 同上 | 插件模式 → 原生模式 → 插件模式 | 切走时 frame 收尾，切回后鼠标照常；socket 只建一次、重启 Kabegame 后插件不用重连 | |
+| [x] | PM8 主窗口跟桌面上的光标（模拟） | Linux dev，插件模式，主窗口预览网页壁纸 19748 | 从 KWin 读主窗口几何（(187, 292) 1199×828，含 28 的标题栏），往 socket 发全局坐标在主窗口左侧 (100, 600)、(150, 600) 的移动，在那里按下抬起左键，再移到上方 (700, 150)，最后离开 | 预览 iframe 收到可信的移动，钳在左边（x = 0，y 沿「frame 中心到光标」的连线）、上边（y = 0）；桌面上的点击不进主窗口；离开时 `mouseout` | 2026-11-22 通过。单测：全局坐标换到主窗口视图（扣标题栏与边框，尺寸差超过装饰不认、无边框窗口）、KWin 返回值的解析与认窗口（类名、标题前缀、` <2>` 后缀）、krunner 匹配 id 取 uuid、缓存过期 |
+| [x] | PM9 主窗口跟桌面上的光标（真鼠标） | 同上 | 主窗口开着网页 / 场景壁纸的预览、不挡住整个桌面；光标在桌面上移动、点击，再移进主窗口、移进别的窗口 | 光标在桌面上时预览里的壁纸跟着（钳到边上）、不被点击；移进主窗口后照旧直接收真实鼠标；移进别的窗口时收到离开；最小化主窗口后不再注入 | 2026-11-22 用户真鼠标确认：主窗口预览跟着桌面上的光标正常（插件 P2V4）。移进别的窗口、最小化主窗口两项没单独报 |
+| [x] | PM10 plasmashell 卡死与插件回退 | Linux，plasmashell 6.6.4 | 试验插件 P2V2 / P2V3 在壁纸里建任务管理器模型（取窗口几何）；去掉后的 P2V4 | P2V2 装上 20 s 后 plasmashell 开始报 `eglError 0x3006` / `Failed to start frame`、内核报 `invalid sync FD`（此前 4 小时都没有），约 5 分钟后主线程空转、D-Bus 无应答；去掉模型、用户重启 plasmashell 后半小时 0 报错，P2V4 装上后同样 0 报错 | 原因没能坐实（不能 ptrace / perf 抓栈），只按时间对应回退；插件端不要用任务管理器模型，几何改由 Kabegame 问 KWin。**更正**：同日 03:34 起换成不用它的 R1 后，同样的 `eglError 0x3006` 与内核 `invalid sync FD` 又出现了（在插件刚装上 / 刚加载时），所以元凶未必是它，原因未明，见 PI10 |
+
+## 视频平铺
+
+2026-11-22 Linux dev（插件模式）。壁纸样式「平铺」以前对视频按盖满，和填充看不出差别（图片才重复铺开）。现在 `Wallpaper.vue` 在视频 ready 后盖一层 `VideoTile`：把 `ImageContent` 的 `<video>` 逐帧（`requestVideoFrameCallback`，暂停时停在最后一帧）画进画布，格子由 `tileLayout.ts` 的 `tileRects` 按和图片 CSS 背景同一规则算（等比放进、居中一格、向四周重复，边取整不留缝），画布按设备像素（`ResizeObserver` 的 `device-pixel-content-box`）；视频本身改按放进、压在画布下面。WPE 视频的颜色调整与水平翻转加在画布上。窗口模式与插件模式共用这一个组件，Windows / macOS 窗口模式同样生效。
+
+顺带修了 P1 带进来的测试问题：`WallpaperWindow.target.test.ts` 在 Linux 上跑时壁纸窗口按 `plasma-plugin` 读样式、测试数据存在 `window` 名下，10 例失败；测试里固定 `IS_LINUX` 为假。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | VT1 单测与检查 | Linux | vitest 跑 `components/wallpaper` 与 `views/WallpaperWindow*`；`check-kabegame --skip cargo`；Prettier | 全过；0 error | 22 个文件 249 例全过。新增 `tileLayout.test.ts`（一格正好铺满、方形放进横屏左右各补一格、宽视频上下重复、相邻格共边、尺寸未知没有格子）与 `Wallpaper.test.ts` 的视频平铺用例（盖画布、`ImageContent` 不隐藏、颜色与翻转带到画布、换走平铺撤掉、`fit` 为放进） |
+| [x] | VT2 视频平铺画面 | Linux dev，插件模式 | 当前壁纸 224（960×960、24 fps 视频）切到平铺，从插件实际收到的画面隔 1 s 抓两帧 | 中间一格放满高度，左右各一格被裁，三格同步播放、两帧之间都在动、格间无缝 | 画布 3840×2161（设备像素）、`z-index` 5 |
+| [x] | VT3 帧率 | 同上 | 平铺与填充下各数 3 s 的 `requestVideoFrameCallback` 与 rAF | 两种样式相同 | 都是 24 帧/s（源帧率）、rAF 60/s。第一次量平铺只有 14 帧/s，当时主窗口正在图库里播多个视频，重量时恢复 24 |
+| [x] | VT4 来回切样式 | 同上 | 平铺 → 换一张图 → 换回视频 → 平铺 20 s → 填充 20 s | 画布出现 / 撤掉，视频一直在播、没有报错 | 每秒采样 `readyState` 4、`error` 为空。之前有一次切到填充后视频报错、层上换成丢失图（`failedSources` 为 `local`），重做没复现，控制台无输出；当时主窗口在图库里同时解码多个视频，疑为硬解资源，留意 |
+| [ ] | VT5 Windows 窗口模式 | Windows dev，窗口模式 | 视频壁纸（含带颜色调整 / 翻转的 WPE 视频）切平铺、暂停、换回填充 | 同 VT2；暂停停在当前帧；WPE 视频的颜色与翻转每格一致 | 需要用户看 |
+
+## Linux 插件模式：离屏渲染 + PipeWire 推流（P1）
+
+2026-11-21 Linux dev（KDE Plasma 6.6.4 Wayland，分数缩放 1.45，PipeWire 1.6.2，KPipeWire 6.6.4）。计划见 `.claude/plans/plasma-pipewire/README.md`。插件模式改为「离屏的窗口模式」：`PlasmaPluginWallpaperManager` 包一层窗口后端，Linux 上壁纸窗口在建窗前登记离屏（`tauri_runtime_kbcef::register_offscreen`），runtime 建 windowless browser；挂载时建一路 PipeWire `Video/Source`（`wallpaper/pipewire/`，BGRA、本流做驱动；P1a 只有 memfd 共享内存，P1b 加 dmabuf，见 PP14），帧接收器把 CEF 的 `OnPaint` 整帧拷进去；插件只读流。测试用 P0 的插件（`ignore/plasma-p0`，装成 `org.kabegame.wallpaper`，左上角带诊断），抓帧用 `gst-launch-1.0 pipewiresrc target-object=<serial>` 另开一个消费者。
+
+联调中发现并修掉两处：一是静态页面不出帧，后连上的消费者一直拿不到画面，流加了 1 s 心跳（推流中超过 1 s 没有新帧就请离屏 browser 整帧重画）；二是桌面壁纸的淡入整段看不到、结束时新图一下跳出来——`Wallpaper.vue` 的旧层完全不透明时不成层叠上下文，层里 `z-2` 的图按 z-index 盖在正在淡入的新层（透明度 < 1，自成层叠上下文）之上，给每层加 `isolation: isolate`；这是共用组件，Windows / macOS 的窗口模式同样受影响。另外壁纸变体的图片改为 `decode()` 完再报 ready（大图在合成器动画期间没解码完会画成空，淡入前一段看不到；自建图层实测 6312×3942 的图 decode 前约 230 ms 空白、decode 后从第一帧起渐变）。
+
+Wayland 会话里离屏 browser 的设备缩放原先恒为 1：CEF 的 `GetScreenInfo` 交了 1.45，但 Chromium `RenderWidgetHostViewBase::UpdateScreenInfo` 在 `supports_per_window_scaling`（viewporter 可用）时用原生窗口的缩放覆盖，离屏 view 没有原生窗口，落到 `value_or(1.0)`，按 2648×1490 出帧、插件放大显示。CEF 补丁 12（Chromium 侧 `kabegame_osr_device_scale.patch`：没有原生 view 时不覆盖）修掉，重编 CEF 后 dev 需完全重启（运行中的进程占着 `target-dev` 里的 `libcef.so`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PP1 检查与单测 | Linux | `check-kabegame`；`deno task test src/components/image src/components/wallpaper`（apps/kabegame） | 0 error；全过 | 2026-11-21 Claude：vue-tsc 与 cargo check 0 error，新文件无告警；27 个文件 320 条全过 |
+| [x] | PP2 启动即插件模式 | Linux dev，设置为插件模式，装了插件 | 启动 dev；`pw-dump` 看节点与链接；qdbus 看各桌面的壁纸插件 | 各桌面切到 `org.kabegame.wallpaper`；有 `kabegame-wallpaper-0`（`Video/Source`，带 `kabegame.wallpaper.protocol/slot`）；plasmashell 链上、流 `streaming=true` | 2026-11-21 Claude：插件找到节点、桌面上显示（用户确认看到）；首帧尺寸与宣告不同时按帧尺寸重新协商一次 |
+| [x] | PP3 场景壁纸 | 同上 | 当前壁纸 19636（场景）；另开消费者抓帧 | 画面正确；页面帧率 60 | 2026-11-21 Claude：调试面板 fps MIN 60 / AVG 60 |
+| [x] | PP4 网页壁纸 | 同上 | 设 19748（`x-wpe/web`） | 画面正确 | 2026-11-21 Claude |
+| [x] | PP5 普通视频 | 同上 | 设 224（mp4）；录 5 s | 连续出帧、不丢 | 2026-11-21 Claude：5 s 119 张各不相同；生产端每 2 s 收到 48–49 帧、全部入队、0 帧拿不到空缓冲 |
+| [x] | PP6 WPE 视频壁纸 | 同上 | 设 19635（`x-wpe/video`）；录 3 s | 画面正确、在动 | 2026-11-21 Claude：3 s 54 张各不相同 |
+| [x] | PP7 图片淡入 | 同上，插件模式的过渡设为淡入 | 图片切图片，录切换前后 | 新图从第一帧起逐渐盖过旧图 | 2026-11-21 Claude：修前 40 多帧全是旧图、最后一帧跳成新图；加 `isolation: isolate` 后与末帧的差从 106 平滑降到 0。壁纸窗口原先按窗口模式读样式 / 过渡（`WallpaperWindow.vue` 写死 `window`），一并改成 Linux 读插件模式 |
+| [x] | PP8 后连上的消费者 | 同上，当前是静态图片 | 另开 `pipewiresrc` 抓一帧 | 1 s 内拿到画面 | 2026-11-21 Claude：加心跳前超时拿不到帧，加后正常 |
+| [x] | PP9 切原生再切回 | 同上 | `set_wallpaper_mode native`，再切回 `plasma-plugin` | 切走：各桌面换回 `org.kde.image`、`kabegame-wallpaper-0` 节点与流的两个线程都没了；切回：重新建窗、建流、换插件、出帧 | 2026-11-21 Claude：当前是 WPE 壁纸，切原生时按既有规则换成画廊兜底图（会改掉 `org.kde.image` 的图，测完已还原） |
+| [x] | PP10 分数缩放下的清晰度 | Linux Wayland，缩放 1.45，带 CEF 补丁 12 | 看流的尺寸、壁纸页与主窗口的 `devicePixelRatio`、场景宿主的渲染目标 | 按物理像素出帧；壁纸页 DPR 1.45；主窗口不变 | 2026-11-22 Claude：补丁前 2648×1490、DPR 1；补丁后流 3840×2161（宣告即定型、不再重新协商），壁纸页 DPR 1.4502，场景目标 3840×2161，原尺寸裁切清晰；主窗口 DPR 1.45（有窗口的 view 照旧取逐窗口缩放） |
+| [x] | PP11 插件不再拉流时停帧 | 同上 | 各桌面的壁纸插件临时换成 `org.kde.image`，过几秒换回 | 流离开 Streaming，离屏 browser 隐藏、不再出帧；换回后重新协商、恢复出帧 | 2026-11-22 Claude：换走后立即 `streaming=false`，3 s 内只有切走前的 4 帧；换回约 6 s（插件加载）后重新定型 dmabuf 并出帧。切活动 / 锁屏时插件是否把 item 设为不可见没单独看（P0 ⑦ 实测 item 不可见约 20 ms 内生产端 paused） |
+| [x] | PP12 样式 | 同上 | 插件模式下改适应 / 居中 / 填充 / 平铺 | 与窗口模式相同 | 2026-11-22：竖图 19584（681×1000）依次切四种，经 KPipeWire 抓帧：适应居中留黑边、居中按原尺寸、填充盖满、平铺从中间等比放进后向两侧重复，四种各不相同。视频（224，960×960）当时平铺按盖满、和填充一样（窗口模式本来的规则，见 WD4；之后改成真平铺，见上面「视频平铺」），16:9 场景（19844）平铺与填充看不出差别 |
+| [ ] | PP13 窗口模式不回归 | Windows、macOS | 窗口模式下图片切图片，过渡为淡入 / 缩放 / 滑入 | 淡入与缩放从开头就看得到新图逐渐出现（修前应同样是结束时跳出来）；滑入不变 | 本机没法测；`Wallpaper.vue` 与 `ImageContent.vue` 是共用组件 |
+| [x] | PP14 dmabuf（P1b） | 同上 | 启动；看日志与 `pw-dump`；用 KPipeWire 另开一个消费者（`qml` + `PipeWireSourceItem` + `grabToImage`）抓帧，与壁纸页的 CDP 截图比各通道均值；4K 视频壁纸下量每帧 GPU 拷贝用时（临时插桩，已删） | 合成器主设备上建 EGL / GBM；与 plasmashell 定型 dmabuf；画面方向、颜色正确；拷贝不拖 UI 线程 | 2026-11-22 Claude：`main_device` 226:128 → renderD128（4090 D，合成器所在卡），12 个可渲染 modifier；消费者交回 15 个、定为 `0x300000000e08014`（NVIDIA block-linear），dmabuf 3840×2161、1 个 plane；第二个 KPipeWire 消费者 `dmabuf=true`；与 CDP 截图各通道均值差 0.1、逐像素均差约 2（R/B 交换时约 26）；视频 24 fps 每帧平均 1.1 ms、最长 3 ms，无失败 |
+| [x] | PP15 dmabuf 帧给只收共享内存的消费者 | 同上 | 插件临时换走后用 `gst-launch-1.0 pipewiresrc` 拉流 | 定型共享内存，GPU 读回出帧，颜色正确 | 2026-11-22 Claude：定型 `Shm`，3 s 71 帧各不相同、肤色正常；读回每帧平均 6–8 ms、最长 27 ms（同步 `glReadPixels` 33 MB）。只有不收 dmabuf 的消费者走这里，Plasma 不会 |
+| [ ] | PP16 关掉 dmabuf | 同上 | `KABEGAME_PIPEWIRE_RENDER_NODE=none` 启动 dev | 日志说不用 dmabuf；离屏 browser 软件绘制、流只给共享内存（即 P1a 的路径） | 没做：要重启 dev。P1a 的软件绘制路径已按 PP2–PP9 验过 |
+| [ ] | PP17 X11 会话 | Plasma X11 | 插件模式 | 不找主设备、走软件绘制 + 共享内存，桌面正常显示 | 本机是 Wayland，没测 |
+
 ## Linux 系统音频回环（PipeWire 输出设备监听）
 
 2026-11-21 Linux（KDE Plasma 6.6.4 Wayland、PipeWire 1.6.2 + WirePlumber）。网页与场景壁纸的音频订阅在 Linux 上有了数据源：`wpe_media/audio/sink_monitor.rs`，一条 `stream.capture.sink = true`、`node.passive = true` 的 PipeWire 采集流，由 WirePlumber 链到默认输出设备的 monitor 端口；要 F32 立体声、采样率跟图；主循环挂在采集线程上、每轮读前非阻塞迭代。`kind_available` 的 audio 放开 Linux，`realfft` / `rustfft` 加进 Linux 依赖段，`wpe` feature 开启 `pipewire`。属性取舍先用 `pw-record` 带同样属性实测（LA5、LA6），后端再用一个临时 `#[ignore]` 用例接真 PipeWire 实测（LA2–LA4、LA7，用完已删）；为了不从音箱出声，LA3 / LA4 把默认输出临时切到 `module-null-sink` 建的空 sink 再往里放正弦波（左 440 Hz、右 3000 Hz），结束后切回。应用里的端到端（LA8–LA11）在 dev 里放音乐做：「停止」用 `pactl set-sink-input-mute` 把播放流静音几秒（监听端口上实测是精确的 0），宿主 / iframe 里连续采样、按墙钟时间对齐。

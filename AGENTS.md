@@ -32,6 +32,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `src-tauri/wpefont/` — 场景文本的字体引擎：FreeType 2.14.3（`third/freetype`）+ HarfBuzz 15.0.0（`third/harfbuzz`）+ C 胶水，编成 wasm 给场景宿主用、不链进应用；见 [wpefont 说明](src-tauri/wpefont/README.md)
 - `src-tauri/tauri-plugin-wemt/` — Windows 窗口壁纸的 WorkerW 挂载插件；主应用不再对 Progman 图标层反复修正 Z-order，见 [挂载说明](cocs/wallpaper/WINDOW_MOUNT_WEMT.md)
 - `src-crawler-plugins/` — JS/TS 爬虫插件子仓库，一个单独的 pnpm workspace 根
+- `src-plasma-wallpaper-plugin/` — Linux 插件模式的 Plasma 6 壁纸插件（C++ QML 模块 + KPackage）：找 Kabegame 的 PipeWire 壁纸节点铺满显示、把桌面上的鼠标发回；`deno task build:plasma-plugin` 构建，随应用 resources 分发，切到插件模式时由应用按修订号装进用户目录，deb 卸载时删掉；见其 README
 - `third-patches/` — 带编号的补丁序列，用于保持 `third/` 子模块gitlink指向上游，但运行时附带仓库的补丁
 
 ### 关键架构规则
@@ -125,6 +126,7 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `deno task build:ffmpeg`：构建桌面端或 Android 的 FFmpeg 静态库。
 - `deno task build:chromium`：构建 CEF/Chromium 运行时。
 - `deno task build:wpesl2wgsl`：构建场景壁纸着色器翻译器的 wasm（产物 `bin/wasm/wpesl2wgsl/`；kabegame 命令不带 `--skip vue` 时自动拷进前端，缺失只告警）。
+- `deno task build:plasma-plugin`：构建 Linux 插件模式的 Plasma 壁纸插件（产物 `bin/linux/<arch>/plasma-wallpaper-plugin-build/package/`；kabegame 的 Linux dev / build 拷进 resources，缺失只告警）。
 - `deno task build:wpefont`：构建场景文本的字体引擎 wasm（FreeType + HarfBuzz，产物 `bin/wasm/wpefont/`；首次下载 wasi-sdk 工具链到 `bin/wasm/wpefont/toolchain/`，要带 wasm32 目标的 LLVM clang；kabegame 命令不带 `--skip vue` 时自动拷进场景宿主，缺失只告警）。
 
 ### 计划与变更说明格式

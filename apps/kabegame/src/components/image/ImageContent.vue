@@ -791,6 +791,17 @@ const onLoad = (e: Event) => {
     if (wallpaperReadySent) return;
     wallpaperReadySent = true;
   }
+  // 壁纸变体的图片先解码完再报 ready（ready 之后上层开始过渡）：`decoding="async"` 的图在合成器动画期间还没解码完
+  // 就被画成空，新层淡入的前一段看不到、解码完才跳出来，大图整段淡入都看不到（Linux 离屏壁纸窗口上实测）。
+  // 解码失败也照常报 ready，由 load / error 的既有逻辑决定画面。
+  const target = e.target;
+  if (isWallpaperVariant.value && target instanceof HTMLImageElement && typeof target.decode === "function") {
+    void target
+      .decode()
+      .catch(() => {})
+      .finally(emitReady);
+    return;
+  }
   emitReady();
 };
 

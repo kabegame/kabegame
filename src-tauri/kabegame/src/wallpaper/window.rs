@@ -32,7 +32,14 @@ pub struct WallpaperWindow<R: Runtime> {
     window: WebviewWindow<R>,
     /// ping 看门狗：mount 完成后启动，随本对象丢弃而停止。
     pinger: Option<super::ping::Pinger>,
+    /// Linux（插件模式）：离屏 browser 的帧推到这一路 PipeWire 流；随本对象丢弃而断开，帧接收器同时摘掉。
+    #[cfg(target_os = "linux")]
+    stream: Option<std::sync::Arc<super::pipewire::WallpaperStream>>,
 }
+
+/// Linux 离屏壁纸窗口的最高帧率（CEF `windowless_frame_rate`，也是 PipeWire 流的 `maxFramerate`）。
+#[cfg(target_os = "linux")]
+pub const OFFSCREEN_MAX_FPS: u32 = 60;
 
 impl<R: Runtime> WallpaperWindow<R> {
     /// 由 `WindowWallpaperManager::init()` 在确保窗口已创建后调用。
@@ -40,6 +47,8 @@ impl<R: Runtime> WallpaperWindow<R> {
         Self {
             window,
             pinger: None,
+            #[cfg(target_os = "linux")]
+            stream: None,
         }
     }
 
@@ -103,9 +112,15 @@ impl<R: Runtime> WallpaperWindow<R> {
         crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window, screen)?;
 
         // 建窗时是 visible(false)（避免挂载前闪一下窗口），挂好后转常显。
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
         self.window
             .show()
             .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
+
+        // Linux：没有桌面层可挂，离屏 browser 的帧推到 PipeWire，由 Plasma 壁纸插件显示。离屏 browser 建成时是隐藏的，
+        // 有消费者拉流才显示、出帧（流的状态回调）。
+        #[cfg(target_os = "linux")]
+        self.attach_stream(screen)?;
 
         let target = self.window.clone();
         self.pinger = Some(super::ping::Pinger::start(
@@ -124,6 +139,85 @@ impl<R: Runtime> WallpaperWindow<R> {
         Ok(())
     }
 
+    /// 建这个窗口的 PipeWire 流并挂成离屏 browser 的帧接收器。流的状态变了就让离屏 browser 停帧或恢复：没有消费者时
+    /// 不出帧省 GPU，恢复时请一整帧（静态页面不会自己再出帧）。
+    ///
+    /// 同时把窗口登记成光标的外部来源：插件经节点属性里的输入 socket 把桌面上的鼠标发回来（`pointer_socket`），
+    /// iframe 照 Windows / macOS 登记 frame 注入。
+    #[cfg(target_os = "linux")]
+    fn attach_stream(&mut self, screen: Option<&ScreenInfo>) -> Result<(), String> {
+        use super::pipewire::{StreamProps, WallpaperStream};
+
+        let label = self.window.label().to_string();
+        let slot = super::WALLPAPER_LABELS
+            .iter()
+            .position(|pooled| *pooled == label)
+            .unwrap_or(0) as u32;
+        let size = self
+            .window
+            .inner_size()
+            .map_err(|e| format!("读取壁纸窗口 {label} 的尺寸失败: {e}"))?;
+        let state_label = label.clone();
+        let idle_label = label.clone();
+        let stream = WallpaperStream::new(
+            StreamProps {
+                node_name: format!("kabegame-wallpaper-{slot}"),
+                description: format!("Kabegame Wallpaper {slot}"),
+                slot,
+                screen: screen.map(|screen| screen.id.clone()),
+                input: super::pointer_socket::ensure_started(|| {
+                    // 主窗口的标题（在 KWin 里认窗口）与视图逻辑尺寸（扣窗口装饰）：桌面上的光标按它们换算到主窗口里。
+                    // kbcef 的窗口 browser 的 `inner_size` 给的是 CEF Views `GetSize()`（DIP），类型却是 `PhysicalSize`；
+                    // 两种读法都交出去，由匹配挑（runtime 以后改成真的物理像素也照样认得）
+                    let app = tauri::Manager::app_handle(&self.window).clone();
+                    Box::new(move || {
+                        let main = tauri::Manager::get_webview_window(&app, "main")?;
+                        let size = main.inner_size().ok()?;
+                        let scale = main.scale_factor().ok()?.max(0.01);
+                        let raw = (f64::from(size.width), f64::from(size.height));
+                        Some(super::pointer_socket::MainWindowInfo {
+                            title: main.title().ok()?,
+                            view_sizes: vec![raw, (raw.0 / scale, raw.1 / scale)],
+                        })
+                    })
+                }),
+                max_fps: OFFSCREEN_MAX_FPS,
+                // 与建窗时登记的共享纹理一致（manager::window::create_window）
+                dmabuf: super::pipewire::dmabuf_enabled(),
+            },
+            size.width,
+            size.height,
+            Box::new(move |streaming| {
+                if let Err(e) = tauri_runtime_kbcef::set_offscreen_hidden(&state_label, !streaming) {
+                    tracing::warn!("切换壁纸窗口 {state_label} 的离屏出帧失败: {e}");
+                }
+                if streaming {
+                    if let Err(e) = tauri_runtime_kbcef::invalidate_offscreen(&state_label) {
+                        tracing::warn!("请壁纸窗口 {state_label} 重画失败: {e}");
+                    }
+                }
+            }),
+            // 静态页面不出帧：后连上来的消费者靠它拿到第一帧
+            Box::new(move || {
+                if let Err(e) = tauri_runtime_kbcef::invalidate_offscreen(&idle_label) {
+                    tracing::debug!("请壁纸窗口 {idle_label} 重画失败: {e}");
+                }
+            }),
+        )
+        .map_err(|e| format!("建壁纸窗口 {label} 的 PipeWire 流失败: {e}"))?;
+        tracing::info!(
+            "壁纸窗口 {label} 推流到 PipeWire 节点 {}（{}x{}）",
+            stream.node_name(),
+            size.width,
+            size.height
+        );
+        let stream = std::sync::Arc::new(stream);
+        tauri_runtime_kbcef::set_offscreen_frame_sink(&label, Some(stream.clone()));
+        tauri_plugin_cursor::register_external_pointer(&label);
+        self.stream = Some(stream);
+        Ok(())
+    }
+
     /// 已挂载的壁纸窗口重新铺到 `screen`（屏的位置 / 尺寸变了、系统重排后）。只动窗口的 frame 与层级，
     /// 页面不重载。会同步等主线程，调用方不能持 manager 的窗口表锁。
     ///
@@ -131,5 +225,17 @@ impl<R: Runtime> WallpaperWindow<R> {
     #[cfg(target_os = "macos")]
     pub fn place(window: &WebviewWindow<R>, screen: &ScreenInfo) -> Result<(), String> {
         crate::wallpaper::window_mount_macos::mount_to_desktop(window, Some(screen)).map(|_| ())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<R: Runtime> Drop for WallpaperWindow<R> {
+    fn drop(&mut self) {
+        // 帧接收器表里还有一份流的引用：先摘掉，流随本对象最后一份引用断开、销毁节点。外部光标来源一并注销：
+        // 已登记的 frame 下一轮收到收尾（补抬起与离开）
+        if self.stream.take().is_some() {
+            tauri_runtime_kbcef::set_offscreen_frame_sink(self.window.label(), None);
+            tauri_plugin_cursor::unregister_external_pointer(self.window.label());
+        }
     }
 }

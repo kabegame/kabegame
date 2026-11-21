@@ -6,6 +6,8 @@
 //! - 移动：位置变了才发。
 //! - 按下：只在左键按下沿、光标在窗口范围内、且满足这个窗口的点击规则（[`ClickRule`]）时发；抬起沿只在
 //!   按下发过时发，保证成对。登记时左键已按着不算一次按下。
+//! - 离开：外部来源（Linux）说光标离开了它的范围（`Sample::present` 为假）时发一次 [`FrameInput::Leave`]（注入器补抬起
+//!   与离开），之后再有位置时照常移动（页面看到重新进入）；离开期间不发按下。
 //! - 收尾：解除登记、frame 销毁、主文档重新加载、窗口销毁时发一次 [`FrameInput::Release`]（注入器补抬起与离开）。
 
 use std::collections::HashMap;
@@ -33,6 +35,8 @@ pub enum FrameInput {
         x: f64,
         y: f64,
     },
+    /// 光标离开了（外部来源给不出位置）：补未配对的抬起与一次离开，之后的移动照常注入。
+    Leave,
     /// 停止向这个 frame 注入：补未配对的抬起与一次离开。
     Release,
 }
@@ -96,6 +100,8 @@ struct FrameDriver {
     was_down: Option<bool>,
     /// 按下已发出、还没抬起。
     down_sent: bool,
+    /// 已发过离开、还没再有位置。
+    gone: bool,
 }
 
 impl FrameDriver {
@@ -107,6 +113,18 @@ impl FrameDriver {
         emit: &mut dyn FnMut(FrameInput),
     ) {
         let (x, y) = sample.view;
+        if !sample.present {
+            // 离开只发一次；注入器补抬起，这边的按下随之作废（之后的松开不再配对）
+            if !self.gone && self.last.is_some() {
+                emit(FrameInput::Leave);
+            }
+            self.gone = true;
+            self.last = None;
+            self.down_sent = false;
+            self.was_down = Some(sample.left_down);
+            return;
+        }
+        self.gone = false;
         if self.last != Some(sample.view) {
             emit(FrameInput::Move { x, y });
             self.last = Some(sample.view);
@@ -160,7 +178,8 @@ impl Drop for FrameFeed {
 }
 
 /// 子 frame 登记自己：之后它所在窗口的光标移动与（按规则的）左键注入到它。已登记时什么都不做。
-/// 返回是否在注入：平台不支持（Linux）或应用没设注入器时 `false`。只能由子 frame 调用。
+/// 返回是否在注入：拿不到光标（Linux 上没登记成外部来源的窗口，见 `register_external_pointer`）或应用没设注入器时
+/// `false`。只能由子 frame 调用。
 /// 异步命令：取窗口句柄在 macOS 上要等主线程。
 #[tauri::command]
 pub async fn attach_frame<R: Runtime>(
@@ -260,6 +279,7 @@ mod tests {
             view: (x, y),
             inside,
             left_down,
+            present: true,
         }
     }
 
@@ -289,16 +309,19 @@ mod tests {
             view: (5.0, 5.0),
             inside: true,
             left_down: false,
+            present: true,
         },
         Sample {
             view: (5.0, 5.0),
             inside: true,
             left_down: true,
+            present: true,
         },
         Sample {
             view: (5.0, 5.0),
             inside: true,
             left_down: false,
+            present: true,
         },
     ];
 
@@ -379,6 +402,97 @@ mod tests {
             ],
         );
         assert_eq!(out, [Move { x: 5.0, y: 5.0 }, Move { x: 6.0, y: 5.0 }]);
+    }
+
+    /// 外部来源说光标离开了：位置不可知的样本。
+    fn gone(x: f64, y: f64, left_down: bool) -> Sample {
+        Sample {
+            present: false,
+            ..sample(x, y, false, left_down)
+        }
+    }
+
+    #[test]
+    fn leave_is_sent_once_and_moves_resume_after_it() {
+        let (out, _) = drive(
+            ClickRule::OverDesktop,
+            true,
+            false,
+            &[
+                sample(5.0, 5.0, true, false),
+                gone(5.0, 5.0, false),
+                gone(5.0, 5.0, false),
+                // 回来：同一个位置也要重新发移动（页面看到重新进入）
+                sample(5.0, 5.0, true, false),
+            ],
+        );
+        assert_eq!(
+            out,
+            [
+                Move { x: 5.0, y: 5.0 },
+                FrameInput::Leave,
+                Move { x: 5.0, y: 5.0 }
+            ]
+        );
+    }
+
+    #[test]
+    fn leave_before_any_position_sends_nothing() {
+        let (out, _) = drive(ClickRule::OverDesktop, true, false, &[gone(0.0, 0.0, false)]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn leave_while_pressed_drops_the_pending_release() {
+        // 按着离开：注入器在离开时补抬起，回来后的松开不再配对
+        let (out, _) = drive(
+            ClickRule::OverDesktop,
+            true,
+            false,
+            &[
+                sample(5.0, 5.0, true, false),
+                sample(5.0, 5.0, true, true),
+                gone(5.0, 5.0, true),
+                sample(7.0, 5.0, true, true),
+                sample(7.0, 5.0, true, false),
+            ],
+        );
+        assert_eq!(
+            out,
+            [
+                Move { x: 5.0, y: 5.0 },
+                Down { x: 5.0, y: 5.0 },
+                FrameInput::Leave,
+                Move { x: 7.0, y: 5.0 }
+            ]
+        );
+    }
+
+    #[test]
+    fn press_after_coming_back_is_a_new_click() {
+        // 离开期间松开、回来后再按：是一次新的按下
+        let (out, _) = drive(
+            ClickRule::OverDesktop,
+            true,
+            false,
+            &[
+                sample(5.0, 5.0, true, false),
+                gone(5.0, 5.0, false),
+                sample(6.0, 5.0, true, false),
+                sample(6.0, 5.0, true, true),
+                sample(6.0, 5.0, true, false),
+            ],
+        );
+        assert_eq!(
+            out,
+            [
+                Move { x: 5.0, y: 5.0 },
+                FrameInput::Leave,
+                Move { x: 6.0, y: 5.0 },
+                Down { x: 6.0, y: 5.0 },
+                Up { x: 6.0, y: 5.0 }
+            ]
+        );
     }
 
     #[test]

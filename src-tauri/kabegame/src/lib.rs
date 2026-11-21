@@ -537,7 +537,8 @@ pub(crate) fn configure_app(
     // 网页壁纸 / 场景宿主 iframe 的原生鼠标（图库预览与桌面壁纸窗口同一条路）：iframe 自己登记
     // （`plugin:cursor|attach_frame`），插件轮询全局光标，这里经 CEF 补丁 11 把事件直接注入那个 frame（钳进
     // frame），父页面盖在 iframe 上的覆盖层挡不住。壁纸窗口的点击只认落在桌面上的，其它窗口只认落在本窗口上的。
-    // Linux 上插件不轮询，登记返回 false。
+    // Linux 读不到全局光标：插件模式的离屏壁纸窗口由 Plasma 壁纸插件把鼠标发回来（`wallpaper::pointer_socket`），
+    // 其余窗口登记返回 false。
     #[cfg(feature = "standard")]
     {
         tauri_plugin_cursor::set_frame_injector(|label, frame, input| {
@@ -547,7 +548,8 @@ pub(crate) fn configure_app(
                 FrameInput::Move { x, y } => FrameMouse::Move { x, y },
                 FrameInput::Down { x, y } => FrameMouse::Down { x, y },
                 FrameInput::Up { x, y } => FrameMouse::Up { x, y },
-                FrameInput::Release => FrameMouse::Release,
+                // 离开（Linux 外部来源）与收尾在注入侧相同：补抬起与离开、清状态，之后的移动照常注入
+                FrameInput::Leave | FrameInput::Release => FrameMouse::Release,
             };
             // 只在 CEF 已退出时失败（退出时轮询线程可能还剩一两轮）
             if let Err(error) = tauri_runtime_kbcef::frame_mouse(label, frame, input) {
@@ -893,9 +895,9 @@ pub(crate) fn configure_app(
             #[cfg(not(target_os = "android"))]
             toggle_fullscreen,
             get_window_state,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             wallpaper_window_ready,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
+            #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             wallpaper_pong,
             // --- Filesystem ---
             open_path,
@@ -1039,7 +1041,6 @@ pub(crate) fn configure_app(
             wpe_open_user_shortcut,
             get_busy_tasks_snapshot,
             get_linux_desktop_env,
-            is_plasma_wallpaper_plugin_installed,
             #[cfg(target_os = "android")]
             get_http_server_base_url,
             commands::plugin::read_plugin_file,

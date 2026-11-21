@@ -10,15 +10,15 @@
       @transitionend="onTransitionEnd(layer, $event)"
     >
       <!-- 平铺的图片：用 ImageContent 交出的当前图源画重复背景，ImageContent 本身留着（加载、ready、出错照旧）但不显示 -->
-      <div v-if="layer.tile" class="wallpaper-tile" :style="tileStyle(layer.tile)" />
+      <div v-if="layer.tile?.kind === 'image'" class="wallpaper-tile" :style="tileStyle(layer.tile.url)" />
       <ImageContent
         :ref="(el) => setContentRef(layer.key, el)"
         class="absolute inset-0"
-        :class="{ 'opacity-0': !!layer.tile }"
+        :class="{ 'opacity-0': layer.tile?.kind === 'image' }"
         variant="wallpaper"
         :image="layer.image"
         prefer="original"
-        :fit="fitOf(layer.target)"
+        :fit="FIT[styleMode]"
         :wpe-video="layer.target.wpeVideo ?? null"
         :wallpaper-target="layer.target"
         :video-playing="!paused"
@@ -30,6 +30,13 @@
         @wallpaper-fail="(reasons: string[]) => (layer.failure = reasons.join('; '))"
         @wallpaper-contextmenu="emit('contextmenu', $event)"
         @display-change="onDisplayChange(layer)"
+      />
+      <!-- 平铺的视频：把 ImageContent 的 <video> 逐帧画进画布重复铺满，盖在它上面 -->
+      <VideoTile
+        v-if="layer.tile?.kind === 'video'"
+        :video="layer.tile.video"
+        :filter="wpeVideoFilter(layer.target.wpeVideo)"
+        :flip="!!layer.target.wpeVideo?.flipH"
       />
     </div>
   </div>
@@ -51,18 +58,19 @@
  * - **新层显示不了**：同预览（用户定），`ImageContent` 画丢失图并照样 `ready`，桌面照常过渡到它；`error` 只记进调试快照（以前丢掉
  *   新层、保留上一张）。网页 / 场景壁纸的实时画面显示不了只是停在缩略图上、底部红字原因（`ImageContent` 管）。
  * - **样式**：fill / fit / stretch / center 换成 `ImageContent` 的 `fit`（cover / contain / fill / none）；tile 时图片用 `displaySource()`
- *   的地址画重复背景（同 Stage：等比放进、居中重复；先是缩略图，原图出来后 `displayChange` 换成原图），视频按 cover，网页忽略样式，
- *   场景把样式交给宿主（`playback.style`）。
+ *   的地址画重复背景（同 Stage：等比放进、居中重复；先是缩略图，原图出来后 `displayChange` 换成原图），视频由 `VideoTile` 把
+ *   `<video>` 逐帧画进画布、按同一规则重复（2026-11-22 起，以前按 cover），网页忽略样式，场景把样式交给宿主（`playback.style`）。
  * - 只靠 props 驱动：不 invoke、不 listen、不读 settingsStore；数据绑定由壁纸窗口（`WallpaperWindow.vue`）负责。
  */
 import { computed, reactive, ref, watch, type ComponentPublicInstance } from "vue";
 import ImageContent from "@/components/image/ImageContent.vue";
+import VideoTile from "./VideoTile.vue";
 import type { ImageInfo } from "@/types/image";
 import { WPE_FOLLOW_SCENE_SETTINGS, type WpeSceneSettings } from "@/utils/wpeSettings";
 import { isVideoTarget, stageMediaOf } from "./targetKind";
 import type { Mode, Transition, WallpaperDebugState, WallpaperPlayback, WallpaperTarget } from "./types";
 import type { ViewportPoint } from "./wpeContextMenu";
-import type { MediaFit } from "./wpeVideoStyle";
+import { wpeVideoFilter, type MediaFit } from "./wpeVideoStyle";
 
 /** 各过渡的时长（经 `--wallpaper-transition-ms` 交给样式，这里是唯一来源）。滑入 1.5 s 是用户定的，推得慢一点才看得出是滑动。 */
 const TRANSITION_MS: Record<Transition, number> = { none: 0, fade: 800, slide: 1_500, zoom: 900 };
@@ -99,14 +107,16 @@ const emit = defineEmits<{
   contextmenu: [point: ViewportPoint];
 }>();
 
+type TileSource = { kind: "image"; url: string } | { kind: "video"; video: HTMLVideoElement };
+
 interface Layer {
   key: number;
   target: WallpaperTarget;
   image: ImageInfo;
   /** `loading`：等 ready，不可见；`entering`：过渡中；`shown`：当前层 */
   phase: "loading" | "entering" | "shown";
-  /** 平铺时的图片地址（`displaySource()`）；不平铺、或不是图片时 null */
-  tile: string | null;
+  /** 平铺时的图源：图片是 `displaySource()` 的地址，视频是 `ImageContent` 的 `<video>`；不平铺、或还没有画面时 null */
+  tile: TileSource | null;
   /** 网页 / 场景显示不了的原因（只进调试快照） */
   failure: string;
 }
@@ -129,12 +139,8 @@ const playback = computed<WallpaperPlayback>(() => ({
   style: props.styleMode,
 }));
 
-/** 壁纸样式 → `ImageContent` 的 `fit`；平铺时图片按放进（底下另画重复背景），视频按盖满 */
+/** 壁纸样式 → `ImageContent` 的 `fit`；平铺时按放进（居中那一格），图片底下另画重复背景、视频上面另盖画布 */
 const FIT: Record<Mode, MediaFit> = { fill: "cover", fit: "contain", stretch: "fill", center: "none", tile: "contain" };
-function fitOf(target: WallpaperTarget): MediaFit {
-  if (props.styleMode === "tile" && isVideoTarget(target)) return "cover";
-  return FIT[props.styleMode];
-}
 
 /** 平铺的重复背景（同 Stage）：等比放进、居中、重复 */
 function tileStyle(url: string): Record<string, string> {
@@ -241,8 +247,12 @@ function setTarget(raw: WallpaperTarget) {
 }
 
 function refreshTile(layer: Layer) {
-  const source = props.styleMode === "tile" ? contentRefs.get(layer.key)?.displaySource() : null;
-  layer.tile = source?.kind === "image" ? source.url : null;
+  const content = props.styleMode === "tile" ? contentRefs.get(layer.key) : undefined;
+  const source = content?.displaySource();
+  const video = content?.videoEl;
+  if (source?.kind === "image") layer.tile = { kind: "image", url: source.url };
+  else if (source?.kind === "video" && video) layer.tile = { kind: "video", video };
+  else layer.tile = null;
 }
 
 function onLayerReady(layer: Layer) {
@@ -340,9 +350,12 @@ defineExpose({ debugState, delegatesPing });
  * `--wallpaper-transition-ms`（脚本里的 TRANSITION_MS）：fade 新层淡入；zoom 新层从 1.06 倍缩回并淡入（曲线同 Stage）；
  * slide 新层从右侧整屏滑进来、不淡入，旧层（`is-leaving`）同时被推出左边。
  */
+/* 每层各自成一个层叠上下文：层里的媒体带 z-index（ImageContent 的 z-1 / z-2），不隔离的话完全不透明的旧层（不成层叠上下文）
+ * 里的图会按 z-index 盖到正在淡入的新层（透明度 < 1 才成层叠上下文）之上，淡入整段看不到、结束时新图一下跳出来 */
 .wallpaper-layer {
   position: absolute;
   inset: 0;
+  isolation: isolate;
 }
 
 /* 还没 ready：不可见、不收指针；slide / zoom 停在过渡的起点 */

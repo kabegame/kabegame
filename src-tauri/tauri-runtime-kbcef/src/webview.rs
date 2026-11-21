@@ -110,6 +110,32 @@ mod imp {
             .map_err(|_| "CEF start_download timed out".to_string())?
     }
 
+    /// 投递到 CEF UI 线程，对 `webview_label` 的离屏 browser 做一件事（不等回执）。browser 不在、或不是离屏
+    /// browser 时什么都不做；投递失败（CEF 未运行）返回 Err。
+    pub(crate) fn with_offscreen_browser(
+        webview_label: &str,
+        f: impl FnOnce(&Browser, &crate::offscreen::OffscreenView) + Send + 'static,
+    ) -> std::result::Result<(), String> {
+        let label = webview_label.to_string();
+        let mut task = CefUiTask::new(Arc::new(Mutex::new(Some(Box::new(move || {
+            let Some(view) = crate::offscreen::view_for(&label) else {
+                return;
+            };
+            let browser_id = webview_browser_ids()
+                .lock()
+                .ok()
+                .and_then(|map| map.get(&label).copied());
+            let Some(browser) = browser_id.and_then(browser_host_get_browser_by_identifier) else {
+                return;
+            };
+            f(&browser, &view);
+        }) as CefUiTaskCallback))));
+        if cef::post_task(ThreadId::UI, Some(&mut task)) == 0 {
+            return Err(format!("CEF failed to post an offscreen task for '{webview_label}'"));
+        }
+        Ok(())
+    }
+
     /// 截图的超时：覆盖 UI 线程排队、合成一帧、编码与回传。
     const CAPTURE_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -1529,8 +1555,11 @@ mod imp {
             life_span_handler: Option<LifeSpanHandler>,
             drag_handler: Option<DragHandler>,
             frame_handler: FrameHandler,
+            // 只有离屏 browser 有
+            render_handler: Option<RenderHandler>,
         }
         impl Client {
+            fn render_handler(&self) -> Option<RenderHandler> { self.render_handler.clone() }
             fn load_handler(&self) -> Option<LoadHandler> { Some(self.load_handler.clone()) }
             fn display_handler(&self) -> Option<DisplayHandler> { self.display_handler.clone() }
             fn keyboard_handler(&self) -> Option<KeyboardHandler> { Some(self.keyboard_handler.clone()) }
@@ -1605,8 +1634,31 @@ mod imp {
             initialization_scripts_payload: String,
             subframe_bridge_payload: String,
             redirect_tab_popups: bool,
+            // 离屏 browser 才有：建好时按 label 登记、写协议表，关掉时注销并通知窗口状态（窗口 browser 的这两件事由
+            // ViewsBrowserViewDelegate 做）。离屏 browser 一律不开弹窗。
+            offscreen: Option<OffscreenLifecycle>,
         }
         impl LifeSpanHandler {
+            fn on_after_created(&self, browser: Option<&mut Browser>) {
+                let (Some(offscreen), Some(browser)) = (&self.offscreen, browser) else {
+                    return;
+                };
+                let id = browser.identifier();
+                register_webview_browser(&offscreen.label, id);
+                if let Some(p) = offscreen.pending_protocols.lock().unwrap().take() {
+                    protocol::insert_browser_protocols(id, p);
+                }
+            }
+
+            fn on_before_close(&self, browser: Option<&mut Browser>) {
+                let (Some(offscreen), Some(browser)) = (&self.offscreen, browser) else {
+                    return;
+                };
+                remove_webview_browser(browser.identifier());
+                protocol::remove_browser_protocols(browser.identifier());
+                (offscreen.on_closed)();
+            }
+
             fn on_before_popup(
                 &self,
                 browser: Option<&mut Browser>,
@@ -1633,6 +1685,9 @@ mod imp {
                             "failed to attach popup initialization scripts: {error}"
                         ),
                     }
+                }
+                if self.offscreen.is_some() {
+                    return 1;
                 }
                 // 返回 0 = 放行,让 CEF 以默认弹窗行为生成真实窗口(见上方注释)。
                 if target_disposition == WindowOpenDisposition::NEW_POPUP {
@@ -1776,9 +1831,32 @@ mod imp {
     #[allow(clippy::non_send_fields_in_send_ty)]
     unsafe impl Sync for CefBrowserView {}
 
+    /// 离屏 browser（见 `offscreen.rs`）：没有 BrowserView，browser 与视图几何由窗口状态持有。
+    #[derive(Clone)]
+    pub(crate) struct OffscreenBrowser {
+        pub(crate) browser: Browser,
+        pub(crate) view: Arc<crate::offscreen::OffscreenView>,
+    }
+    #[allow(clippy::non_send_fields_in_send_ty)]
+    unsafe impl Send for OffscreenBrowser {}
+    #[allow(clippy::non_send_fields_in_send_ty)]
+    unsafe impl Sync for OffscreenBrowser {}
+
+    /// 离屏 browser 关掉时的回调（在 CEF UI 线程上）。
+    pub(crate) type OffscreenClosed = Arc<dyn Fn() + Send + Sync>;
+
+    /// 离屏 browser 的生命周期钩子，挂在 `PopupToNavigationLifeSpanHandler` 上。
+    #[derive(Clone)]
+    pub(crate) struct OffscreenLifecycle {
+        label: String,
+        pending_protocols: Arc<Mutex<Option<protocol::WebviewProtocols>>>,
+        on_closed: OffscreenClosed,
+    }
+
     pub(crate) struct CefWebviewState {
         pub(crate) label: String,
         pub(crate) browser_view: Option<CefBrowserView>,
+        pub(crate) offscreen: Option<OffscreenBrowser>,
         pub(crate) url: String,
         pub(crate) auto_resize: bool,
         pub(crate) visible: bool,
@@ -1790,24 +1868,35 @@ mod imp {
             self.browser_view
                 .as_ref()
                 .and_then(|view| view.inner.browser())
+                .or_else(|| self.offscreen.as_ref().map(|o| o.browser.clone()))
         }
     }
 
-    pub(crate) fn create_cef_browser_view<T: UserEvent>(
+    /// 建 browser 前两种形态共用的部分：IPC 桥、协议表、初始化脚本、`extra_info` 与 client。
+    struct PreparedBrowser {
+        client: Client,
+        url: String,
+        extra_info: DictionaryValue,
+        webview_label: String,
+        pending_protocols: Arc<Mutex<Option<protocol::WebviewProtocols>>>,
+    }
+
+    fn prepare_browser<T: UserEvent>(
         window_id: WindowId,
         webview_id: runtime::WebviewId,
         context: runtime::CefContext<T>,
-        mut pending: PendingWebview<T, Cef<T>>,
-    ) -> Result<(CefWebviewState, BrowserView)> {
+        pending: &mut PendingWebview<T, Cef<T>>,
+        offscreen: Option<(Arc<crate::offscreen::OffscreenView>, OffscreenClosed)>,
+    ) -> Result<PreparedBrowser> {
         let context_for_drag = context.clone();
         let frame_events = runtime::webview_event_emitter(webview_id, context.clone());
         let detached = detached_webview(pending.label.clone(), window_id, webview_id, context);
-        ipc::install_post_message_bridge(&mut pending, detached);
+        ipc::install_post_message_bridge(pending, detached);
         // 从 pending 取出所有协议 handler 并向 CEF 全局注册各 scheme factory(每个
         // scheme 首次注册时才实际调用 register_scheme_handler_factory)。
         // 协议表在 on_browser_created 时通过 delegate 以 browser id 为键写入注册表。
         let webview_label = pending.label.clone();
-        let (label, schemes) = protocol::take_webview_protocols(&mut pending)?;
+        let (label, schemes) = protocol::take_webview_protocols(pending)?;
         let pending_protocols = Arc::new(Mutex::new(Some(protocol::WebviewProtocols {
             label,
             schemes,
@@ -1840,7 +1929,7 @@ mod imp {
                 "failed to encode CEF subframe bridge scripts: {error}"
             ))))
         })?;
-        let mut initialization_scripts_extra_info =
+        let initialization_scripts_extra_info =
             crate::subprocess::initialization_scripts_extra_info(
                 &initialization_scripts_payload,
                 &subframe_bridge_payload,
@@ -1900,10 +1989,18 @@ mod imp {
         // 无法在 Linux 上调用 new_window_handler 本体(见 PopupToNavigationLifeSpanHandler
         // 注释),仅以其存在与否作为「取消 popup 改本页导航」的开关。
         let redirect_tab_popups = pending.new_window_handler.take().is_some();
+        let render_handler = offscreen
+            .as_ref()
+            .map(|(view, _)| crate::offscreen::OffscreenRenderHandler::new(view.clone()));
         let life_span_handler = Some(PopupToNavigationLifeSpanHandler::new(
             initialization_scripts_payload,
             subframe_bridge_payload,
             redirect_tab_popups,
+            offscreen.map(|(_, on_closed)| OffscreenLifecycle {
+                label: webview_label.clone(),
+                pending_protocols: pending_protocols.clone(),
+                on_closed,
+            }),
         ));
         // 与 wry 后端一致:`drag_drop_handler_enabled` 为 false 时不挂 handler,
         // 拖放回落到 CEF/Chromium 默认行为(页面自己的 HTML5 dnd 可用)。
@@ -1918,7 +2015,7 @@ mod imp {
                     webview_label.clone(),
                 )
             });
-        let mut client = ViewsClient::new(
+        let client = ViewsClient::new(
             InitializationLoadHandler::new(
                 on_page_load,
                 crate::page_zoom::wheel_zoom_disabled(&webview_label),
@@ -1932,16 +2029,33 @@ mod imp {
             life_span_handler,
             drag_handler,
             SubframeLifecycleHandler::new(frame_events),
+            render_handler,
         );
-        let mut delegate = ViewsBrowserViewDelegate::new(webview_label, pending_protocols);
-        let url = pending.url.clone();
+        Ok(PreparedBrowser {
+            client,
+            url: pending.url.clone(),
+            extra_info: initialization_scripts_extra_info,
+            webview_label,
+            pending_protocols,
+        })
+    }
+
+    pub(crate) fn create_cef_browser_view<T: UserEvent>(
+        window_id: WindowId,
+        webview_id: runtime::WebviewId,
+        context: runtime::CefContext<T>,
+        mut pending: PendingWebview<T, Cef<T>>,
+    ) -> Result<(CefWebviewState, BrowserView)> {
+        let mut prepared = prepare_browser(window_id, webview_id, context, &mut pending, None)?;
+        let mut delegate =
+            ViewsBrowserViewDelegate::new(prepared.webview_label, prepared.pending_protocols);
         // request_context = None: 使用全局 RequestContext(由 CefSettings.cache_path 决定落盘)。
         // 全局 context 在 cef_initialize 期间同步初始化,不会触发异步 15s 超时。
         let browser_view = browser_view_create(
-            Some(&mut client),
-            Some(&CefString::from(url.as_str())),
+            Some(&mut prepared.client),
+            Some(&CefString::from(prepared.url.as_str())),
             Some(&BrowserSettings::default()),
-            Some(&mut initialization_scripts_extra_info),
+            Some(&mut prepared.extra_info),
             None,
             Some(&mut delegate),
         )
@@ -1955,12 +2069,58 @@ mod imp {
             browser_view: Some(CefBrowserView {
                 inner: browser_view.clone(),
             }),
-            url,
+            offscreen: None,
+            url: prepared.url,
             auto_resize: true,
             visible: true,
             listeners: Vec::new(),
         };
         Ok((state, browser_view))
+    }
+
+    /// 建离屏 browser（`offscreen.rs`）：同一套 client 加上渲染回调，`CreateBrowserSync` 直接建、不建 BrowserView。
+    /// label 登记与协议表在 `on_after_created` 里写，`on_closed` 在 browser 关掉时调用。
+    pub(crate) fn create_cef_offscreen_browser<T: UserEvent>(
+        window_id: WindowId,
+        webview_id: runtime::WebviewId,
+        context: runtime::CefContext<T>,
+        mut pending: PendingWebview<T, Cef<T>>,
+        opts: &crate::offscreen::OffscreenOptions,
+        on_closed: OffscreenClosed,
+    ) -> Result<(CefWebviewState, OffscreenBrowser)> {
+        let view = crate::offscreen::OffscreenView::register(&pending.label, opts.geometry);
+        let mut prepared = prepare_browser(
+            window_id,
+            webview_id,
+            context,
+            &mut pending,
+            Some((view.clone(), on_closed)),
+        )?;
+        let browser = browser_host_create_browser_sync(
+            Some(&crate::offscreen::window_info(opts)),
+            Some(&mut prepared.client),
+            Some(&CefString::from(prepared.url.as_str())),
+            Some(&crate::offscreen::browser_settings(opts)),
+            Some(&mut prepared.extra_info),
+            None,
+        )
+        .ok_or_else(|| {
+            view.unregister();
+            Error::CreateWebview(Box::new(std::io::Error::other(
+                "CEF failed to create an offscreen browser",
+            )))
+        })?;
+        let offscreen = OffscreenBrowser { browser, view };
+        let state = CefWebviewState {
+            label: pending.label,
+            browser_view: None,
+            offscreen: Some(offscreen.clone()),
+            url: prepared.url,
+            auto_resize: true,
+            visible: true,
+            listeners: Vec::new(),
+        };
+        Ok((state, offscreen))
     }
 
     pub(crate) fn detached_webview<T: UserEvent>(

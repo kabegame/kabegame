@@ -11,7 +11,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 import { invoke, listen, type UnlistenFn } from "@/api/rpc";
 import { resolveLanguage, setLocale } from "@kabegame/i18n";
-import { IS_DEV } from "@/env";
+import { IS_DEV, IS_LINUX } from "@/env";
 import Wallpaper from "@/components/wallpaper/Wallpaper.vue";
 import { isPausableTarget } from "@/components/wallpaper/targetKind";
 import type { Mode, Transition, WallpaperTarget } from "@/components/wallpaper/types";
@@ -101,12 +101,15 @@ const targetId = computed(() => assignment.value?.targetId ?? TARGET_MULTIPLE);
  */
 const targetSource: {
   targets: WallpaperTargets;
-  /** 窗口模式下列出的显示器模式及各自的样式 / 过渡；读不到能力表时为空，样式 / 过渡直接用存下来的值 */
+  /** 本窗口所属壁纸模式下列出的显示器模式及各自的样式 / 过渡；读不到能力表时为空，样式 / 过渡直接用存下来的值 */
   combos: DisplayModeCapability[];
 } = { targets: {}, combos: [] };
 
-/** 壁纸窗口只属于窗口模式：目标里按壁纸模式存的样式 / 过渡取这一份。 */
-const WINDOW_MODE = "window";
+/**
+ * 壁纸窗口所属的壁纸模式：Windows / macOS 是窗口模式，Linux 是插件模式（离屏壁纸窗口经 PipeWire 推给 Plasma 插件）。
+ * 目标里按壁纸模式存的样式 / 过渡取这一份，与后端 `RENDERED_WALLPAPER_MODE` 一致。
+ */
+const WINDOW_MODE = IS_LINUX ? "plasma-plugin" : "window";
 
 /** 上一次看到的本窗口目标的当前壁纸 id；`undefined` 表示还没读过目标。 */
 let lastImageId: string | null | undefined;

@@ -1,0 +1,45 @@
+diff --git a/patch/patch.cfg b/patch/patch.cfg
+index 6d61f334701361f5296179a691fb75111f097728..052df1ba10359be5589b25a9b13d9aba6445d7ee 100644
+--- a/patch/patch.cfg
++++ b/patch/patch.cfg
+@@ -940,5 +940,13 @@ patches = [
+     # web_frame_widget_impl.cc is also modified by views_widget.patch; this
+     # patch is relative to that state. Do not resave it with patch_updater.py.
+     'name': 'kabegame_raf_local_root_only',
++  },
++  {
++    # kabegame: on Ozone platforms with per-window scaling (Wayland with
++    # viewporter), RenderWidgetHostViewBase::UpdateScreenInfo() replaced the
++    # device scale factor with the platform window's scale. Windowless (CEF
++    # off-screen) views have no native view and got the 1.0 fallback, ignoring
++    # CefRenderHandler::GetScreenInfo(). Skip the override for such views.
++    'name': 'kabegame_osr_device_scale',
+   }
+ ]
+diff --git a/patch/patches/kabegame_osr_device_scale.patch b/patch/patches/kabegame_osr_device_scale.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..6e3e9cc7500e9d21fe5fc90667a795d36422d641
+--- /dev/null
++++ b/patch/patches/kabegame_osr_device_scale.patch
+@@ -0,0 +1,21 @@
++diff --git content/browser/renderer_host/render_widget_host_view_base.cc content/browser/renderer_host/render_widget_host_view_base.cc
++index 8e538f62aa..43a309762e 100644
++--- content/browser/renderer_host/render_widget_host_view_base.cc
+++++ content/browser/renderer_host/render_widget_host_view_base.cc
++@@ -572,9 +572,15 @@ void RenderWidgetHostViewBase::UpdateScreenInfo() {
++   // contents, override the display scale with the preferred window scale here.
++   // TODO(crbug.com/336007385): Consolidate screen representation and a less
++   // hacky scale handling in platforms that support per-window scaling.
+++  //
+++  // Kabegame: only views backed by a platform window have a window scale.
+++  // Windowless (CEF off-screen) views have no native view, and the platform
+++  // would report the 1.0 fallback for them, discarding the scale the embedder
+++  // provided through GetNewScreenInfosForUpdate().
++   if (ui::OzonePlatform::GetInstance()
++           ->GetPlatformRuntimeProperties()
++-          .supports_per_window_scaling) {
+++          .supports_per_window_scaling &&
+++      GetNativeView()) {
++     const float window_scale =
++         display::Screen::Get()
++             ->GetPreferredScaleFactorForView(GetNativeView())

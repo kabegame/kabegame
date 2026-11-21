@@ -114,6 +114,7 @@ impl Probe for WindowsProbe {
             view: client_to_css(client.x, client.y, dpi),
             inside,
             left_down,
+            present: true,
         })
     }
 

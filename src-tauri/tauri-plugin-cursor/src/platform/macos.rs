@@ -193,6 +193,7 @@ impl Probe for MacProbe {
             view,
             inside,
             left_down: NSEvent::pressedMouseButtons() & 1 != 0,
+            present: true,
         })
     }
 

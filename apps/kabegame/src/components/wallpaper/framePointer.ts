@@ -5,12 +5,14 @@
  * 直接注入它（钳进 frame），父页面盖在上面的东西挡不住。iframe 元素在父页面里一律不收真实鼠标，预览画布盖一层只拦截、
  * 不转发的覆盖层。
  *
- * Linux 拿不到全局光标（插件登记返回 false），退回原来的做法：可交互的 iframe 直接收真实鼠标，预览不盖覆盖层。
+ * Linux 拿不到全局光标：插件模式的离屏壁纸窗口由 Plasma 壁纸插件把桌面上的鼠标发回 Rust（`wallpaper::pointer_socket`），
+ * 照样登记注入；其余窗口（图库预览）登记返回 false，退回原来的做法：可交互的 iframe 直接收真实鼠标，预览不盖覆盖层。
+ * 离屏 browser 本来就收不到真实鼠标，壁纸窗口里 iframe 的 `pointer-events` 不影响注入。
  */
 import { IS_LINUX } from "@/env";
 
-// TODO:[WPE_SCENE] Linux 未实测：退回 iframe 直接收真实鼠标，光标在 iframe 外不跟随
-/** 鼠标由 Rust 注入 iframe（不是 iframe 自己收真实鼠标）。 */
+// TODO:[WPE_SCENE] Linux 预览未实测：退回 iframe 直接收真实鼠标，光标在 iframe 外不跟随
+/** 图库预览的鼠标由 Rust 注入 iframe（不是 iframe 自己收真实鼠标）。 */
 export const NATIVE_FRAME_POINTER = !IS_LINUX;
 
 /**

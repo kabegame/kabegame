@@ -46,6 +46,7 @@ use tauri_runtime::UserEvent;
 mod app_mac;
 mod file_access;
 mod frame_mouse;
+mod offscreen;
 mod page_zoom;
 mod runtime;
 mod subprocess;
@@ -125,6 +126,7 @@ pub enum FrameMouse {
     /// 左键抬起：只在按下被注入过时注入（钳进 frame）。
     Up { x: f64, y: f64 },
     /// 停止向这个 frame 注入：按下未抬起就补抬起，再发一次离开，然后清掉它的状态。frame 已不在时只清状态。
+    /// 之后再来移动照常注入（页面看到重新进入），所以「光标离开」也用它。
     Release,
 }
 
@@ -141,6 +143,60 @@ pub fn frame_mouse(webview_label: &str, frame_id: &str, input: FrameMouse) -> Re
 }
 
 pub use frame_mouse::clamp_to_frame;
+
+// ---- 离屏 browser ----
+
+pub use offscreen::{
+    DmaBufPlane, OffscreenFrame, OffscreenFrameSink, OffscreenGeometry, OffscreenOptions,
+    OffscreenPixelFormat,
+};
+
+/// 建窗前给 `webview_label` 登记离屏：这个 label 的窗口不建原生窗口，改建 windowless browser，每一帧交给
+/// [`set_offscreen_frame_sink`] 登记的接收器。窗口操作照常经 Tauri：`show` / `hide` → `WasHidden`、`set_size`（逻辑尺寸）
+/// → `WasResized`、`close` / `destroy` → 关掉 browser（不经 `CloseRequested`，browser 关掉后照常上报 `Destroyed`）。
+/// 只在 Linux 的 CEF 打开了离屏渲染支持。
+pub fn register_offscreen(webview_label: &str, options: OffscreenOptions) {
+    offscreen::register_offscreen(webview_label, options)
+}
+
+/// 撤销登记：之后再建这个 label 的窗口就是普通窗口。不影响已经建好的离屏 browser。
+pub fn unregister_offscreen(webview_label: &str) {
+    offscreen::unregister_offscreen(webview_label)
+}
+
+/// 登记（`Some`）或摘掉（`None`）`webview_label` 的帧接收器；可以在建窗前后任意时刻换，没有接收器时帧被丢弃。
+pub fn set_offscreen_frame_sink(
+    webview_label: &str,
+    sink: Option<std::sync::Arc<dyn OffscreenFrameSink>>,
+) {
+    offscreen::set_frame_sink(webview_label, sink)
+}
+
+/// 改离屏视图的几何（逻辑尺寸与缩放）。缩放变了先 `NotifyScreenInfoChanged`，再 `WasResized`。只投递、不等回执。
+pub fn resize_offscreen(webview_label: &str, geometry: OffscreenGeometry) -> Result<(), String> {
+    offscreen::resize(webview_label, geometry)
+}
+
+/// 隐藏（停止出帧、页面 `visibilitychange` 为 hidden）或恢复离屏 browser，不改 Tauri 窗口的可见性状态。
+pub fn set_offscreen_hidden(webview_label: &str, hidden: bool) -> Result<(), String> {
+    offscreen::set_hidden(webview_label, hidden)
+}
+
+/// 改离屏 browser 的最高帧率（CEF 下限 1）。
+pub fn set_offscreen_frame_rate(webview_label: &str, frame_rate: u32) -> Result<(), String> {
+    offscreen::set_frame_rate(webview_label, frame_rate)
+}
+
+/// 请 CEF 重画一整帧（新的消费者接上时用，静态页面不会自己再出帧）。
+pub fn invalidate_offscreen(webview_label: &str) -> Result<(), String> {
+    offscreen::invalidate(webview_label)
+}
+
+/// 离屏 browser 当前的视图几何（逻辑尺寸即浏览器视图坐标的范围，外部来源的指针按它换算）；browser 还没建好或已关掉时
+/// `None`。任意线程可调。
+pub fn offscreen_geometry(webview_label: &str) -> Option<OffscreenGeometry> {
+    offscreen::view_for(webview_label).map(|view| view.geometry())
+}
 
 // ---- 截图 ----
 

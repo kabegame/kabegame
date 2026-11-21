@@ -756,8 +756,11 @@ watch([currentWallpaperImageId, selectedTargetId], () => {
   void refreshCurrentWallpaperPath();
 });
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
-/** 只有窗口模式的桌面上有在播放的视频、网页与场景（原生模式交给系统，Android / Web 没有窗口壁纸），暂停只在这时显示 */
-const desktopWallpaperLive = computed(() => !IS_ANDROID && !IS_WEB && wallpaperMode.value === "window");
+/** 只有壁纸窗口渲染的模式（Windows / macOS 的窗口模式、Linux 的插件模式）桌面上有在播放的视频、网页与场景
+ *  （原生模式交给系统，Android / Web 没有壁纸窗口），暂停只在这时显示 */
+const desktopWallpaperLive = computed(
+  () => !IS_ANDROID && !IS_WEB && (wallpaperMode.value === "window" || wallpaperMode.value === "plasma-plugin"),
+);
 /** 桌面「壁纸设置」按平台显示的字段：暂停只在窗口模式（只有那时桌面上有在播放的实例），音量 / 倍速同原来的条件，
  *  媒体集成要本平台有数据源（三个桌面平台都有），帧率与场景各项只在桌面端 */
 const wpeWallpaperSettingFields = computed<WpeSettingKey[]>(() => {

@@ -25,6 +25,7 @@ import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.ts";
 import { Wpesl2wgslPlugin } from "./plugins/wpesl2wgsl-plugin.ts";
 import { WpefontPlugin } from "./plugins/wpefont-plugin.ts";
 import { WpeSceneHostPlugin } from "./plugins/wpe-scene-host-plugin.ts";
+import { PlasmaWallpaperPlugin } from "./plugins/plasma-wallpaper-plugin.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -202,6 +203,9 @@ export class BuildSystem {
 
     // 场景宿主 apps/wpe-scene：桌面 dev / build 不带 --skip vue 时构建进应用的 resources/wpe-scene
     this.use(new WpeSceneHostPlugin());
+
+    // Linux 插件模式的 Plasma 壁纸插件：dev / build 把 build:plasma-plugin 的产物拷进 resources/plasma-wallpaper，缺了只告警
+    this.use(new PlasmaWallpaperPlugin());
   }
 
   commonBefore(): void {
