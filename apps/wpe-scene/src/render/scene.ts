@@ -4756,9 +4756,25 @@ export class GpuScene {
    * `*(ctx+0x30)`）。
    * 子系统与事件实例的绘制（P4e 步骤 1、2，rea-p4e-children 第 6 节）：本地 static 子系统是 `父绘制栈顶 · L`、本地实例是 `父绘制栈顶 · X`，
    * 世界的都是单位阵（`ParticleSystem.drawTransform`，和 `forEachDrawn` 同一串运算）。
+   * 组里（P14d）：绘制栈从 `inverse(W_组)` 起（`particleBase`），本地系统 `inverse(W_组) · W`、世界系统 `inverse(W_组)`，朝向、拖尾眼位与
+   * `g_ModelMatrix` 都是组内局部的，视图投影是组的局部正交 P（`uniformValues`）。
    */
   private particleModel(particles: ParticleDraw, object: number, state: SceneState, worlds: Map<number, Mat4>): Mat4 {
-    return particles.system.drawTransform(worldMatrixOf(object, state.layers, worlds, this.attachHook)).model;
+    return particles.system.drawTransform(
+      worldMatrixOf(object, state.layers, worlds, this.attachHook),
+      this.particleBase(object, state, worlds),
+    ).model;
+  }
+
+  /**
+   * 组里粒子绘制栈的起点（P14d，`phase-14d-group-particles.md`）：对象在非全屏组里、组的世界矩阵可逆时是 `inverse(W_组)`（`groupMvpParts`，
+   * 和组里图像层、网格同一份；WPE 画组的子树时模型栈与 `ctx+0xaf0` 都是它，`p14d-gp` 实测），否则 undefined（顶层与全屏组照旧）。
+   */
+  private particleBase(object: number, state: SceneState, worlds: Map<number, Mat4>): Mat4 | undefined {
+    const layer = this.layerByObject.get(object);
+    const group = layer ? this.groupOf(layer) : null;
+    if (!group || group.fullscreen) return undefined;
+    return groupMvpParts(group.size, drawMatrixOf(group.object, state.layers, worlds, this.attachHook))?.inverse;
   }
 
   /**
@@ -5260,8 +5276,10 @@ export class GpuScene {
         world: model ?? identity(),
         layer: layerState,
         // 透视粒子同样带视差：平移加在世界坐标里，z = 0 平面上和正交一致（p5-REPORT `p5a-fx`）；组里的透视粒子照报
-        // （`model:passthrough:children:perspective`），强制渲染时按组的局部正交画
-        viewProjection: groupOrCompose ?? this.viewProjectionOf(layer, state, view, step.perspective),
+        // （`model:passthrough:children:perspective`），强制渲染时按组的局部正交画。组里（P14d）是 P 本身，模型矩阵已从 `inverse(W_组)`
+        // 起算（`particleModel`）；`groupMvp` 为 null（组的世界矩阵不可逆）时两边一起退回旧写法
+        viewProjection:
+          groupMvp?.projection ?? groupOrCompose ?? this.viewProjectionOf(layer, state, view, step.perspective),
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
         // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）：这次绘制的系统自己的 renderer（P4e 步骤 1）里这一步的那一条（P4f 步骤 4，
         // rea-p4f-script.md 8.3：每条按自己的 `rec+4` 算朝向；拖尾那条写 RV0.xyz，sprite 那条照旧写 0，不复刻上一次绘制的残值）
@@ -7071,24 +7089,30 @@ export class GpuScene {
   private walkParticles(
     tree: ParticleTree,
     object: Mat4,
+    /** 绘制栈的起点（P14d，`particleBase`）：组里是 `inverse(W_组)`。 */
+    base: Mat4 | undefined,
     visit: (system: ParticleSystem, template: ParticleTemplate, occurrence: number, model: Mat4) => void,
     framebuffer?: () => void,
   ): void {
     let snapped = false;
     const counts = new Map<ParticleTemplate, number>();
-    tree.system.forEachDrawn((system, path, model) => {
-      const pass = system.def.passes[0];
-      if (!pass) return false;
-      if (pass.framebuffer && !snapped) {
-        snapped = true;
-        framebuffer?.();
-      }
-      const template = tree.templates.get(path.join("/"));
-      if (!template || (template.instanced && !system.alive)) return;
-      const occurrence = counts.get(template) ?? 0;
-      counts.set(template, occurrence + 1);
-      visit(system, template, occurrence, model);
-    }, object);
+    tree.system.forEachDrawn(
+      (system, path, model) => {
+        const pass = system.def.passes[0];
+        if (!pass) return false;
+        if (pass.framebuffer && !snapped) {
+          snapped = true;
+          framebuffer?.();
+        }
+        const template = tree.templates.get(path.join("/"));
+        if (!template || (template.instanced && !system.alive)) return;
+        const occurrence = counts.get(template) ?? 0;
+        counts.set(template, occurrence + 1);
+        visit(system, template, occurrence, model);
+      },
+      object,
+      base,
+    );
   }
 
   /**
@@ -7106,6 +7130,7 @@ export class GpuScene {
     this.walkParticles(
       tree,
       object,
+      this.particleBase(tree.object, state, worlds),
       (system, template, occurrence, model) => {
         if (!template.instanced) {
           items.push(...template.pool[0]);
@@ -7220,7 +7245,7 @@ export class GpuScene {
   }[] {
     const out: ReturnType<GpuScene["particleStats"]> = [];
     for (const tree of this.trees.values())
-      this.walkParticles(tree, tree.world, (system, { node }, occurrence) =>
+      this.walkParticles(tree, tree.world, undefined, (system, { node }, occurrence) =>
         out.push({
           object: tree.object,
           name: tree.layer.name,

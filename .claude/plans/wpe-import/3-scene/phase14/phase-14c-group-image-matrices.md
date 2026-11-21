@@ -63,7 +63,7 @@ effect 角色的 `effectModel = W · half`、`layerModel = W`。
 | 组里 effect 的中间 pass（事件 118） | `g_EffectModelMatrix` = W · 半尺寸、`g_LayerModelMatrix` = W；效果投影同末 pass | 前两项对；效果投影 = 图层 MVP · 半尺寸 |
 | 预光照（L20 基础 pass，事件 157） | Alt 三个矩阵 | 相同 |
 | 组的 compose / 上屏、顶层 | — | 相同（顶层中间 pass 的视图投影、基础 pass 的深度项、各角色不写的残留值本来就不同，不在本步） |
-| 粒子（事件 189 / 202） | `kbp rdc consts` 没导出常量 | 整帧两颗粒子差几个像素，没查 |
+| 粒子（事件 189 / 202） | `kbp rdc consts` 没导出常量（在几何阶段读） | 整帧两颗粒子差几个像素：朝向用的模型矩阵不同，P14d（`phase-14d-group-particles.md`）修了 |
 
 决定：效果投影矩阵是缺陷（铺满全屏、居中不转的组差半个屏幕，读它采屏幕或换算光标的 effect 在组里错位），语料里组里没有读它的 effect
 （`ignore/p14/c/scan_group_fx.py`），按「壁纸不依赖的缺陷不复现」保持我们的写法。

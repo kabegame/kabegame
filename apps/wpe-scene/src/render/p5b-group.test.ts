@@ -26,13 +26,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "../compile/bindings";
 import { FRAMEBUFFER_RT, type SceneBundle, type SceneEffect, type SceneLayer, type ScenePass } from "../compile/bundle";
-import { parseParticle, particleFov } from "../compile/particles";
+import { childLocalMatrix, parseParticle, particleFov } from "../compile/particles";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { TranslateResult } from "../wpesl2wgsl";
 import { planLayer, planSignature, variantPlans, type DrawStep, type LayerPlan, type LayerStep } from "./graph";
 import { groupMvpParts, groupViewProjection, sceneViewProjection, worldMatrixOf } from "./layout";
-import { multiply, transformPoint, translation, type Mat4 } from "./math";
+import { mulAffine, multiply, transformPoint, translation, type Mat4 } from "./math";
 import { parallaxOffset } from "./parallax";
+import type { ParticleSystem } from "../particles/system";
+import { uniformInverse } from "./inverseF32";
 import { GpuScene, pipelineKey, stepPipeline } from "./scene";
 import { SceneState } from "./state";
 import { drawMatrices, type FrameInput } from "./uniforms";
@@ -1191,10 +1193,9 @@ describe("GpuScene：组里的粒子与带 effect 的子层（p5b-grpptc）", ()
     const world = ndcOf(4);
     expect(world[0]).toBeCloseTo(0.625, 5);
     expect(world[1]).toBeCloseTo(-0.4, 5);
-    // 世界空间系统的 MVP 就是组的视图投影（模型矩阵是单位阵）
-    expect([...matrixAt(drawOf(scene, 4, "particles"), 0)]).toEqual([
-      ...groupViewProjection([800, 400], worldsOf(grpptcLayers())(1)),
-    ]);
+    // 世界空间系统（P14d，p14d-gp 实测）：模型矩阵是 inverse(W_组)、视图投影是组的局部正交 P，MVP = P ⊗ inverse(W_组)
+    const parts = groupMvpParts([800, 400], worldsOf(grpptcLayers())(1))!;
+    expect([...matrixAt(drawOf(scene, 4, "particles"), 0)]).toEqual([...mulAffine(parts.projection, parts.inverse)]);
   });
 
   it("子层的合成 RT 和组同尺寸时也不共用同一张（按层数分池）：C 的末 pass 采自己的 RT、画进组的 RT，假设备的读写冲突检查不报", async () => {
@@ -1202,6 +1203,89 @@ describe("GpuScene：组里的粒子与带 effect 的子层（p5b-grpptc）", ()
     const trace = gpu.encode(scene, state);
     expect(trace).toContain("pass composite 800x400|true|false|k1 #0 load");
     expect(trace.filter((line) => line === `pass ${GRP_RT} load`).length).toBe(2);
+  });
+});
+
+describe("GpuScene：组里的粒子用组内局部的绘制矩阵（P14d，p14d-gp）", () => {
+  /** 这次绘制的 `g_ModelMatrixInverse`（`PARTICLE_PROGRAM` 偏移 64）：模型矩阵的单精度逆。 */
+  const inverseOf = (draw: DrawView) => Array.from(matrixAt(draw, 64));
+  const expectedInverse = (model: Mat4) => Array.from(uniformInverse(model)!);
+
+  it("本地系统 pl 的模型矩阵是 inverse(W_组) · W，世界空间系统 pw 是 inverse(W_组)，MVP = P ⊗ M", async () => {
+    const layers = grpptcLayers();
+    const { scene, state } = await open(layers);
+    scene.stepParticles(0.2, 1, state);
+    scene.update(FRAME, state);
+    const world = worldsOf(layers);
+    const parts = groupMvpParts([800, 400], world(1))!;
+    const local = multiply(parts.inverse, world(3));
+    expect(inverseOf(drawOf(scene, 3, "particles"))).toEqual(expectedInverse(local));
+    expect([...matrixAt(drawOf(scene, 3, "particles"), 0)]).toEqual([...mulAffine(parts.projection, local)]);
+    expect(inverseOf(drawOf(scene, 4, "particles"))).toEqual(expectedInverse(parts.inverse));
+  });
+
+  it("全屏组（P5j）的子孙不换：模型矩阵仍是世界矩阵", async () => {
+    const layers = fsGroupLayers();
+    layers[1] = { ...layers[1], subtree: [...layers[1].subtree!, 12] };
+    layers.push(particleLayer(12, "fp", [40, -30, 0], 0));
+    const { scene, state } = await open(layers);
+    scene.stepParticles(0.2, 1, state);
+    scene.update(FRAME, state);
+    expect(inverseOf(drawOf(scene, 12, "particles"))).toEqual(expectedInverse(worldsOf(layers)(12)));
+  });
+
+  it("组里的事件实例（每帧现排、池化的 draw）：模型矩阵同样从 inverse(W_组) 起，世界空间的实例是 inverse(W_组)；不动时不再刷新", async () => {
+    const layers = grpptcLayers();
+    const pl = layers.find((layer) => layer.object === 3)!;
+    // 条目 0 本地 eventfollow、条目 1 世界空间 eventfollow；父粒子不动，实例的 X 每帧相同
+    for (const flags of [0, 1]) {
+      const child = parseParticle(
+        {
+          maxcount: 4,
+          flags,
+          emitter: [{ name: "sphererandom", origin: "0 0 0", distancemax: 0, rate: 10 }],
+          initializer: [{ name: "lifetimerandom", min: 100, max: 100 }],
+        },
+        { file: `particles/ple${flags}.json`, orthographic: true },
+      );
+      const index = pl.particle!.children.length;
+      child.passes = [
+        pass(`objects/3/particle/children/${index}/passes/0`, { program: PROGRAM.particle, blending: "additive" }),
+      ];
+      pl.particle!.children.push({
+        index,
+        type: "eventfollow",
+        flags: 0,
+        controlPointStartIndex: 0,
+        probability: 1,
+        maxcount: 10,
+        local: childLocalMatrix([0, 0, 0], [0, 0, 0], [1, 1, 1]),
+        system: child,
+      });
+    }
+    const { gpu, scene, state } = await open(layers);
+    const frame = () => {
+      scene.stepParticles(0.2, 1, state);
+      scene.update(FRAME, state);
+      gpu.encode(scene, state);
+    };
+    for (let i = 0; i < 3; i++) frame();
+    const instanceOf = (template: string) =>
+      [...internals(scene).draws].find((draw) => draw.object === 3 && draw.label.endsWith(`particles ${template}`));
+    const world = worldsOf(layers);
+    const parts = groupMvpParts([800, 400], world(1))!;
+    const local = instanceOf("0");
+    expect(local).toBeDefined();
+    const system = local!.particles!.system as unknown as ParticleSystem;
+    const model = system.drawTransform(world(3), parts.inverse).model;
+    expect(Array.from(model)).not.toEqual(Array.from(system.drawTransform(world(3)).model));
+    expect(inverseOf(local!)).toEqual(expectedInverse(model));
+    expect([...matrixAt(local!, 0)]).toEqual([...mulAffine(parts.projection, model)]);
+    expect(inverseOf(instanceOf("1")!)).toEqual(expectedInverse(parts.inverse));
+    // 每帧现排给的模型矩阵和上次写进 uniform 的同一个起点：没变就不刷新（`assignParticles` 逐位比）
+    const refresh = vi.spyOn(scene as unknown as { refreshLayer: () => void }, "refreshLayer");
+    frame();
+    expect(refresh).not.toHaveBeenCalled();
   });
 });
 

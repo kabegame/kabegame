@@ -2493,7 +2493,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 |---|---|---|
 | 归属 | 编译期定（`bundle.ts` 的 `assignGroups`）：`group` 是最近的组合层祖先；`subtree` 按先序展开，子层按 `objects` 下标排，嵌套组只收它本身。顶层循环跳过 `group` 非空的图层，缺这个字段（手写的图层）当顶层 | 读码 §2.5 |
 | 画子树 | 基础 pass（`compose` / `clear`）之后紧跟 `subtree` 步骤：结束当前 pass，对可见的子孙依次跑它们的 ops，「场景目标」换成组的合成 RT。`subtree` 不算一次合成链的写入 | 实测 `p5b-grp-cb1` / `cb0` |
-| 视图投影 | 子孙画到「场景」的绘制（含粒子）换成 `groupViewProjection = ortho(±w/2, ±h/2, 1000, −1000) · inverse(W_组)`（w、h 取组的 `size`），所以子层落在组的本地坐标系，组矩形外的部分裁掉。组里没有视差、抖动、透视，这些作用在组本身的上屏上。世界空间粒子的顶点乘 `inverse(W_组)` 回到本地。图像层的 MVP 照 WPE 的结合顺序算（2026-11-20，P8 步骤 7 走查）：WPE 画子树时模型栈是 `inverse(W_组)`（`FUN_14005f730`），子层并进模型栈再乘局部正交，`MVP = P ⊗ (inverse(W_组) ⊗ W)`（`groupMvpParts` + `drawMatrices` 的 `group`，组的逆用 `invertF32`）；先拼好再乘平移会差 1 ulp，压在光栅化 1/256 像素的对齐分界上时边缘的 texel 整个翻转。图像层（P14c）与网格（P14b）的 `g_ModelMatrix` 是组内局部的 `inverse(W_组) ⊗ W`（图像层仿射乘法、网格 glm 乘法）、`g_ViewProjectionMatrix` 是 P 本身；图像层的 `g_EffectModelMatrix`、`g_LayerModelMatrix` 仍是世界矩阵 W，效果投影矩阵和 WPE 有意不同（见「组里图像层的矩阵（P14c）」）；文本、粒子仍用先拼好的 `groupViewProjection`。嵌套组的 `compose` 用**不带视差**的场景视图投影采快照（缩放、抖动带；顶层组合层的 compose 带视差，P5j 更正），采到的是外层开始时那份。全屏组的子孙不换局部正交（见「全屏组（P5j）」） | 实测 `p5b-grp-par`、`p5b-grpptc`（最大差 2）、`p5b-nest`；`p5j-cam`（G 里的 M） |
+| 视图投影 | 子孙画到「场景」的绘制（含粒子）换成 `groupViewProjection = ortho(±w/2, ±h/2, 1000, −1000) · inverse(W_组)`（w、h 取组的 `size`），所以子层落在组的本地坐标系，组矩形外的部分裁掉。组里没有视差、抖动、透视，这些作用在组本身的上屏上。世界空间粒子的顶点乘 `inverse(W_组)` 回到本地（P14d 起由模型矩阵乘，见下）。图像层的 MVP 照 WPE 的结合顺序算（2026-11-20，P8 步骤 7 走查）：WPE 画子树时模型栈是 `inverse(W_组)`（`FUN_14005f730`），子层并进模型栈再乘局部正交，`MVP = P ⊗ (inverse(W_组) ⊗ W)`（`groupMvpParts` + `drawMatrices` 的 `group`，组的逆用 `invertF32`）；先拼好再乘平移会差 1 ulp，压在光栅化 1/256 像素的对齐分界上时边缘的 texel 整个翻转。图像层（P14c）与网格（P14b）的 `g_ModelMatrix` 是组内局部的 `inverse(W_组) ⊗ W`（图像层仿射乘法、网格 glm 乘法）、`g_ViewProjectionMatrix` 是 P 本身；图像层的 `g_EffectModelMatrix`、`g_LayerModelMatrix` 仍是世界矩阵 W，效果投影矩阵和 WPE 有意不同（见「组里图像层的矩阵（P14c）」）；粒子（P14d）的绘制栈从 `inverse(W_组)` 起，本地系统 `inverse(W_组) · W`、世界系统 `inverse(W_组)`，视图投影是 P（见「组里的粒子（P14d）」）；文本仍用先拼好的 `groupViewProjection`。嵌套组的 `compose` 用**不带视差**的场景视图投影采快照（缩放、抖动带；顶层组合层的 compose 带视差，P5j 更正），采到的是外层开始时那份。全屏组的子孙不换局部正交（见「全屏组（P5j）」） | 实测 `p5b-grp-par`、`p5b-grpptc`（最大差 2）、`p5b-nest`；`p5j-cam`（G 里的 M） |
 | 写 alpha | 直接画的子层写 RGBA；组里的上屏（带 effect 子层的末 pass、嵌套组画回外层）只写 RGB。组 `copybackground: false` 时 alpha 用 One / One / Max，颜色照绘制自己的混合（`programs.ts` 的 `groupBlendState`，管线键加 `\|max`） | 实测：`p5b-grp-cb1` 子层写掩码 15，`p5b-grpptc`、`p5b-nest` 的上屏是 7；`p5b-grp-cb0` 重叠处 alpha 0.5 |
 | 无 effect 的组 | 基础 pass → 子树 → 上屏：用 `effectpassthrough` 材质（`version` > 2 用 `_4`，`BLENDMODE 0`，`SceneLayer.groupUpload`，`g_Color4` 置 1）画世界四边形，UV 0–1；`copybackground` 为 true 时用材质的 normal（不混合），false 时 translucent | 实测 `p5b-grp-nofx` / `nofx0`，**推翻读码**（读码推断是 composelayer 着色器铺满全屏并拉伸） |
 | 合成 RT 池 | 组里的图层按父链上组的层数另分一池（键加 `\|k<层数>`），不然和组同尺寸的子孙会共用组的合成 RT | 步骤 4 实现时发现 |
@@ -4320,8 +4320,25 @@ WPE 的缺陷按「壁纸依赖才复现」处理。语料里只有 3834692798 �
   `fluidsimulation`、`xray`、`depthparallax`）在组里会错位。语料里组里没有读它们的 effect（`ignore/p14/c/scan_group_fx.py`），按缺陷不复现，取图层 MVP。
 - **语料**：组里读 `g_ModelMatrix` / `g_ViewProjectionMatrix` 等的只有 3 张（3784630846、3838255453、3838495182 的 `genericimage4`），都没开光照、反射、
   雾，着色器实际不读它们，画面不变。
-- **没覆盖的**：组里的文本、粒子仍用 `groupViewProjection`；`p14c-gi` 里组带 x / y 旋转时组里的两颗粒子和 WPE 差几个像素（改动前后相同，粒子的常量
-  `kbp rdc consts` 没导出来），没有查。
+- **没覆盖的**：组里的文本仍用 `groupViewProjection`。`p14c-gi` 里两颗粒子和 WPE 不同的原因是朝向，P14d 修了（见下）。
+
+**组里的粒子（P14d）**：`p14c-gi` 里组带 x / y 旋转时，组里两颗粒子的位置和 WPE 相同（质心差 0.05 像素），四边形的形状不同：WPE 的跟着组 RT
+一起斜，我们的正对屏幕。
+- **依据**：读码 rea-p4c-sim 5.3（组合层离屏渲染时 `ctx+0xaf0` 临时设成当时的模型矩阵，`0x1401ecd0a` / `0x1402083e4`）与 rea-p4e-children
+  第 6 节；工程 `ignore/p14/d/gen_p14d.py` 的 `p14d-gp`（组同 `p14c-gi`，组里与顶层各一份 sprite / 世界 sprite / `upright` / `fixed` /
+  spritetrail / `LIGHTING` / 本地父带本地与世界 static 子 / 世界父带本地 static 子），抓帧 `A:\p14d\gp\`，`kbp rdc consts` 起导出几何阶段
+  （`gs`：粒子的 MVP 与 `g_Orientation*` 在几何着色器里读，P14c 因此没导出来），`ignore/p14/d/cmp_consts.py` 逐 draw 逐常量比；计划
+  [phase-14d-group-particles.md](../../.claude/plans/wpe-import/3-scene/phase14/phase-14d-group-particles.md)。
+- **规则**：WPE 画组的子树时粒子的绘制栈从 `inverse(W_组)` 起：本地系统的模型矩阵 `inverse(W_组) · W`（压栈的 glm 乘法，仿射乘法差 1 ulp），
+  世界系统与世界子系统 `inverse(W_组)`（`ctx+0xaf0`），本地子系统与事件实例在栈顶上照 P4e 乘局部矩阵；视图投影是组的局部正交 P，
+  MVP = `P ⊗ M`。`g_ModelMatrix`、`g_Orientation*`、拖尾的 `g_ModelMatrixInverse` 都从 M 来，所以 sprite 正对组自己的相机，组 RT 斜着上屏时
+  跟着斜；`g_ViewForward` / `g_ViewUp`、`g_EyePosition` 仍是场景的。实现：`ParticleSystem.forEachDrawn` / `drawTransform` 的起点 `base`，
+  渲染器 `particleBase`（非全屏组、组的世界矩阵可逆时取 `groupMvpParts(...).inverse`），粒子分支的视图投影换成 P；不在组里时逐字节不变。
+- **和 WPE 有意不同**：世界空间系统画完，WPE 把栈顶恢复成 `sys+0x3a0` = W（不带组的逆），挂在它下面的本地 static 子系统按 `W · L` 配 P 画到
+  组 RT 外（`p14d-gp` 的 WCa，事件 260，MVP 与朝向都逐位对上 `W · L`）。语料里没有组里的粒子（`ignore/p14/d/scan_group_particles.py`：有父的
+  粒子 16 个，父都是粒子、puppet 或分组节点），缺陷不复现，取 `inverse(W_组) · W`，子系统画在组里该在的位置。
+- **对比结果**：`p14d-gp` 组里 11 次粒子绘制除 WCa 外全部常量逐位相同，整帧只有 WCa 那一颗（173 个像素）不同；`p14c-gi` 整帧 0 差异（改动前
+  308 个像素）。
 
 ## 图像层帧表（P6e）
 

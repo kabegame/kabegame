@@ -4390,6 +4390,24 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PC2 语料 | Windows | `scan_group_fx.py` 找组里读这些矩阵的作品 | 画面不变 | 2026-11-21：读效果投影矩阵的 0 张；读模型 / 视图投影的 3 张（`genericimage4`）都没开光照、反射、雾，着色器实际不读 |
 | [ ] | PC3 非 Windows | macOS、Linux | 同 PC1 | 同 Windows | 本机不能测 |
 
+## 场景壁纸组里的粒子（P14d）
+
+2026-11-21。P14c 的 `p14c-gi` 里组带 x / y 旋转时，组里两颗粒子的位置和 WPE 相同、形状不同：WPE 画组的子树时粒子的绘制栈从 `inverse(W_组)` 起，sprite 正对组自己的相机、随组 RT 斜着上屏；我们用世界矩阵算朝向，粒子正对屏幕。
+
+实现：`ParticleSystem.forEachDrawn` / `drawTransform` 加绘制栈的起点，组里（非全屏组）由渲染器传 `inverse(W_组)`：本地系统 `inverse(W_组) · W`（glm 乘法），世界系统与世界子系统 `inverse(W_组)`；粒子的视图投影换成组的局部正交 P。朝向、`g_ModelMatrix`、拖尾的 `g_ModelMatrixInverse` 跟着变成组内局部的。不在组里时逐字节不变。`kbp rdc consts` 加了几何阶段（`gs`），粒子的 MVP 与朝向在那里读。
+
+和 WPE 有意不同：组里世界空间粒子画完，WPE 把栈顶恢复成不带组逆的 W，挂在它下面的本地 static 子系统画到组 RT 外；语料里没有组里的粒子，不复现，子系统画在组里该在的位置。
+
+依据与记录：计划 `.claude/plans/wpe-import/3-scene/phase14/phase-14d-group-particles.md`；工程与对照 `ignore/p14/d/`；抓帧 `A:\p14d\gp\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PD0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`render/` 与 `particles/` 全部 vitest、变异 | 0 error，相关测试全过，变异检出 | 2026-11-21：tsc 0 error；103 个文件 2336 过，3 个失败（`p3a` 泛光两条、`render.test` 的 BC3 一条）在 HEAD 上同样失败、和本步无关；变异 13 / 13 检出（`ignore/p14/d/mutate.py`） |
+| [x] | PD1 逐常量对照 | Windows dev + WPE | `p14d-gp` 抓帧的几何阶段常量对探针逐 draw 轨迹（`ignore/p14/d/cmp_consts.py`） | 组里 sprite / 世界 sprite / `upright` / `fixed` / spritetrail / `LIGHTING` / 本地父的本地与世界子系统 / 世界父：MVP、`g_Orientation*`、`g_ModelMatrix`、`g_ModelMatrixInverse`、`g_EyePosition` 和 WPE 逐位相同 | 2026-11-21：全部逐位相同，只有世界父下的本地子系统（事件 260）不同，WPE 的值逐位等于 `P ⊗ (W · L)`（有意不同） |
+| [x] | PD2 整帧 | Windows dev + WPE | `p14d-gp`、`p14c-gi` 探针渲染和 WPE 整帧比 | `p14c-gi` 0 差异；`p14d-gp` 只差有意不同的那一颗 | 2026-11-21：`p14c-gi` 0 差异（改动前 308 个像素）；`p14d-gp` 只有那颗子系统粒子 173 个像素（WPE 画在组 RT 外看不见） |
+| [x] | PD3 语料 | Windows | `scan_group_particles.py` 找组里的粒子 | 画面不变 | 2026-11-21：静态挂在非全屏组里的粒子 0 个（有父的粒子 16 个，父都是粒子、puppet 或分组节点）；脚本运行中 `setParent` 进组的没法静态扫 |
+| [ ] | PD4 非 Windows | macOS、Linux | 同 PD1 | 同 Windows | 本机不能测 |
+
 ## 场景壁纸 P6a2：声音的 `mintime` / `maxtime` 绑属性、挂脚本
 
 2026-11-21 Windows。myprojects `3798696286`（Hades Asylum Depths）把 `random` 咆哮声的 `mintime` / `maxtime` 绑在两个滑块上，以前报 `sound:binding:mintime; sound:binding:maxtime`、整张退回预览图。WPE 写字段走类型化 setter，没有改值回调的字段照样写入（rea-p10-keyframes 第 4 条），`random` 模式在每次开始播放时读这两个字段算等待（rea-p6a 2.1）。所以改成就地目标，排期器开始播放时现读：运行中改了，正在等的这次不变，下一次排期用新值。属性、字段脚本、关键帧三种写法都支持。`playbackmode` / `startsilent` / `spatialization` 维持照报。记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6a2-sound-delay.md`。

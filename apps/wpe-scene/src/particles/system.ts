@@ -750,38 +750,54 @@ export class ParticleSystem {
    * 所以世界 static 子系统的本地孙辈绘制时是 `L·L₂`，模拟时却是 `W·L·L₂`（3.3「两处不一致」，照复刻）。只有 static 时和 P4e 步骤 1 的
    * `particleDrawModel` 逐字节相同（同一串 `multiply`）。模板路径是每层 `def.children` 下标（实例不计序号），同一模板可能出现多次。
    * 回调返回 `false` 时不递归这个系统的子孙。脚本阶段新建的事件实例（`createdByScript`，P4f 步骤 3）本帧不画，连同子孙跳过。
+   *
+   * `base` 是绘制栈的起点（P14d，`phase-14d-group-particles.md`）：组里（非全屏组）是 `inverse(W_组)`。WPE 画组的子树时模型栈是它，
+   * 世界空间系统整个覆盖栈顶用的 `ctx+0xaf0` 也临时设成它（rea-p4c-sim 5.3），所以上表的 `I` 换成 `base`、顶层的 `W` 换成
+   * `base · W`（glm 乘法，`p14d-gp` / `p14c-gi` 抓帧逐位）。世界顶层画完的栈顶 WPE 是 `W`（不带组的逆，挂在下面的本地 static 子系统在组里
+   * 画错位置），缺陷不复现，取 `base · W`。不给时同以前，逐字节不变。
    */
-  forEachDrawn(callback: ParticleDrawnCallback, object: Mat4 = identity()): void {
-    this.visitDrawn(callback, this.def.flags & 1 ? identity() : object, object, []);
+  forEachDrawn(callback: ParticleDrawnCallback, object: Mat4 = identity(), base?: Mat4): void {
+    const top = base ? multiply(base, object) : object;
+    this.visitDrawn(callback, this.def.flags & 1 ? (base ?? identity()) : top, top, [], base);
   }
 
-  private visitDrawn(callback: ParticleDrawnCallback, model: Mat4, top: Mat4, template: readonly number[]): void {
+  private visitDrawn(
+    callback: ParticleDrawnCallback,
+    model: Mat4,
+    top: Mat4,
+    template: readonly number[],
+    base: Mat4 | undefined,
+  ): void {
     if (callback(this, template, model) === false) return;
     for (const child of this.statics) {
       const world = (child.system.def.flags & 1) !== 0;
-      const childModel = world ? identity() : multiply(top, child.local);
-      child.system.visitDrawn(callback, childModel, world ? child.local : childModel, [...template, child.index]);
+      const childModel = world ? (base ?? identity()) : multiply(top, child.local);
+      child.system.visitDrawn(callback, childModel, world ? child.local : childModel, [...template, child.index], base);
     }
     for (const pool of this.events)
       for (const instance of pool.active) {
         if (instance.createdByScript) continue;
         const x = instance.instanceMatrix!;
         const world = (instance.def.flags & 1) !== 0;
-        const childModel = world ? identity() : multiply(top, x);
-        instance.visitDrawn(callback, childModel, world ? x : childModel, [...template, pool.index]);
+        const childModel = world ? (base ?? identity()) : multiply(top, x);
+        instance.visitDrawn(callback, childModel, world ? x : childModel, [...template, pool.index], base);
       }
   }
 
   /**
    * 本系统这次绘制的模型矩阵与画完后的栈顶（第 6 节）：沿父链自底向上，和 `forEachDrawn` 自顶向下是同一串运算，结果逐字节相同。`object`
-   * 是对象世界矩阵 `W`。渲染器在就地刷新 uniform（对象变换、相机、视差变了）时用它，不必遍历整棵树。
+   * 是对象世界矩阵 `W`，`base` 是绘制栈的起点（同 `forEachDrawn`，组里是 `inverse(W_组)`）。渲染器在就地刷新 uniform（对象变换、相机、
+   * 视差变了）时用它，不必遍历整棵树。
    */
-  drawTransform(object: Mat4): { model: Mat4; top: Mat4 } {
+  drawTransform(object: Mat4, base?: Mat4): { model: Mat4; top: Mat4 } {
     const world = (this.def.flags & 1) !== 0;
     const parent = this.parent;
-    if (!parent) return { model: world ? identity() : object, top: object };
+    if (!parent) {
+      const top = base ? multiply(base, object) : object;
+      return { model: world ? (base ?? identity()) : top, top };
+    }
     const x = this.instanceMatrix ?? this.localMatrix!;
-    const model = world ? identity() : multiply(parent.drawTransform(object).top, x);
+    const model = world ? (base ?? identity()) : multiply(parent.drawTransform(object, base).top, x);
     return { model, top: world ? x : model };
   }
 
