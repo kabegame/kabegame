@@ -11,12 +11,16 @@
  *   Segment → Tracks → TrackEntry → Video → Colour 五层，不会被畸形文件带着无限递归。
  * - **未知大小**（size 的值位全 1，流式写出）：Segment 读到下一个 EBML 头 / Segment 或视频末尾；Cluster 读到下一个 Segment 级元素
  *   （下一个 Cluster、Cues、Tags …）或上级元素为止，即「读到下一个同级或上级 ID」。其它元素未知大小时失败。
- * - **轨**：只认第一条视频轨，CodecID 只认 `V_MPEG4/ISO/AVC` 与 `V_MPEGH/ISO/HEVC`，`CodecPrivate` 就是 avcC / hvcC（Matroska 规范
- *   codec 映射），`sampleEntry` 记 avc1 / hvc1（codec 串照 MP4 的写法，`decoderConfig` 直接可用）；带 `ContentEncodings`（压缩或
- *   加密，如 mkvmerge 的头部剥离）的轨不支持。在 Tracks 里就认定，编码不支持或没有视频轨时不往下读 Cluster。
+ * - **轨**：只认第一条视频轨，CodecID 只认 `V_MPEG4/ISO/AVC`、`V_MPEGH/ISO/HEVC` 与 `V_VP9`（P9e）。H.264 / H.265 的
+ *   `CodecPrivate` 就是 avcC / hvcC（Matroska 规范 codec 映射），`sampleEntry` 记 avc1 / hvc1（codec 串照 MP4 的写法，`decoderConfig`
+ *   直接可用）；VP9 的 `CodecPrivate` 可有可无（VP9 codec feature metadata，只取里面的 level），`sampleEntry` 记 vp09。带
+ *   `ContentEncodings`（压缩或加密，如 mkvmerge 的头部剥离）的轨不支持。在 Tracks 里就认定，编码不支持或没有视频轨时不往下读 Cluster。
  * - **帧**：只收这条轨的块（别的轨的块连 lacing 也不看，音轨常用 lacing）。块头 = 轨号（EBML 变长整数，去标记位）+ 有符号 16 位
  *   相对时间码 + 标志；SimpleBlock 标志 0x80 是关键帧，BlockGroup 没有 `ReferenceBlock` 是关键帧；lacing（标志 0x06 非 0）失败。
- *   偏移 / 长度是块数据（去掉块头）在视频里的区间。块在文件里按解码顺序排，时间码是显示时间。
+ *   偏移 / 长度是块数据（去掉块头）在视频里的区间。块在文件里按解码顺序排，时间码是显示时间。VP9 在第一个关键帧的块开头读
+ *   `VP9_HEADER_BYTES` 字节解析帧头（`vp9.ts`，profile、位深、色度采样、颜色、画面尺寸），解析失败或整条轨没有关键帧时失败；
+ *   level 取 `CodecPrivate` 里的，没有时按帧头的尺寸与帧率（相邻显示时间之差的中位数）查表。superframe（隐藏的 alt-ref 与显示帧
+ *   打在同一块里）整块是一帧，解码器自己拆、出一帧。
  * - **时间**：`times` = (Cluster 时间码 + 相对时间码 − 最小值) × `TimecodeScale` / 1e9 秒：减去全部帧里最小的显示时间，让最早显示的帧
  *   为 0（照 MP4 扣编辑列表之后首帧为 0 的口径；有 B 帧时解码顺序第一帧的显示时间未必最小）。`editMediaTime` 记扣掉的量，单位是
  *   Matroska 时间码（`TimecodeScale` 纳秒），`timescale` = 1e9 / `TimecodeScale`（每秒的时间码数），`editMediaTime / timescale`
@@ -29,7 +33,8 @@
  *   Tracks）≤ `MAX_MASTER_BYTES`、帧数 ≤ `MAX_FRAMES`。
  */
 import { DEFAULT_TIMECODE_SCALE, elementId, elementSize, MAX_EBML_HEADER } from "../container";
-import type { Mp4Colr, ReadRange, VideoSampleEntry, VideoTrackIndex } from "./mp4";
+import type { Mp4Colr, ReadRange, VideoTrackIndex } from "./mp4";
+import { parseVp9KeyFrame, vp9CodecPrivateLevel, vp9Level, type Vp9Info, type Vp9KeyFrame } from "./vp9";
 
 /** 顺序读的块大小。 */
 export const CHUNK_BYTES = 4 * 1024 * 1024;
@@ -89,10 +94,18 @@ const CLUSTER_END_IDS = new Set<number>([
   ID.EBML,
 ]);
 
-const CODECS: Record<string, { codec: "avc" | "hevc"; sampleEntry: VideoSampleEntry; config: string; min: number }> = {
+const CODECS: Record<
+  string,
+  { codec: VideoTrackIndex["codec"]; sampleEntry: VideoTrackIndex["sampleEntry"]; config: string; min: number }
+> = {
   "V_MPEG4/ISO/AVC": { codec: "avc", sampleEntry: "avc1", config: "avcC", min: 7 },
   "V_MPEGH/ISO/HEVC": { codec: "hevc", sampleEntry: "hvc1", config: "hvcC", min: 23 },
+  // VP9（P9e）：CodecPrivate 可有可无（VP9 codec feature metadata），解码配置取第一个关键帧的帧头
+  V_VP9: { codec: "vp9", sampleEntry: "vp09", config: "VP9 codec feature metadata", min: 0 },
 };
+
+/** VP9 关键帧帧头最多读这么多字节：帧头到 frame_size 为止不超过 10 字节，多留一些。 */
+const VP9_HEADER_BYTES = 32;
 
 /** 内部失败：`indexMatroska` 统一接住变成 `{ error }`。 */
 class MkvError extends Error {}
@@ -108,7 +121,7 @@ export interface MatroskaReadStats {
 }
 
 /**
- * 顺序读 Segment，解析第一条视频轨的帧表；不是 Matroska、没有视频轨、编码不是 H.264 / H.265、有 lacing 等时返回带原因的失败。
+ * 顺序读 Segment，解析第一条视频轨的帧表；不是 Matroska、没有视频轨、编码不是 H.264 / H.265 / VP9、有 lacing 等时返回带原因的失败。
  * `length` 是视频数据总长。从不抛错（`read` reject 也一样）。`stats` 给出时累计读的次数与字节数。
  */
 export async function indexMatroska(
@@ -310,6 +323,8 @@ interface State {
   duration: number | undefined;
   track: VideoTrack | null;
   frames: Frames;
+  /** VP9 轨第一个关键帧的帧头（P9e）；还没遇到或不是 VP9 时 null。 */
+  vp9: Vp9KeyFrame | null;
 }
 
 async function parse(stream: Stream): Promise<VideoTrackIndex> {
@@ -335,6 +350,7 @@ async function parse(stream: Stream): Promise<VideoTrackIndex> {
     duration: undefined,
     track: null,
     frames: new Frames(),
+    vp9: null,
   };
   let tracksSeen = false;
   const end = segment.end;
@@ -381,10 +397,12 @@ function parseTracks(bytes: Uint8Array): VideoTrack {
     const codecElement = find(ID.CodecID) ?? fail("视频轨缺少 CodecID");
     const codecId = text(bytes, codecElement);
     const codec = CODECS[codecId];
-    if (!codec) fail(`视频编码 ${codecId} 不支持（只支持 V_MPEG4/ISO/AVC / V_MPEGH/ISO/HEVC）`);
+    if (!codec) fail(`视频编码 ${codecId} 不支持（只支持 V_MPEG4/ISO/AVC / V_MPEGH/ISO/HEVC / V_VP9）`);
     if (find(ID.ContentEncodings)) fail("视频轨带 ContentEncodings（压缩或加密）不支持");
-    const privateElement = find(ID.CodecPrivate) ?? fail(`${codecId} 视频轨缺少 CodecPrivate（${codec.config}）`);
-    const description = bytes.slice(privateElement.content, privateElement.end);
+    const privateElement =
+      find(ID.CodecPrivate) ??
+      (codec.codec === "vp9" ? null : fail(`${codecId} 视频轨缺少 CodecPrivate（${codec.config}）`));
+    const description = privateElement ? bytes.slice(privateElement.content, privateElement.end) : new Uint8Array(0);
     if (description.length < codec.min) fail(`${codec.config} 太短（${description.length} 字节）`);
     const video = find(ID.Video) ?? fail("视频轨缺少 Video");
     const videoKids = childrenOf(bytes, video.content, video.end, "Video");
@@ -486,7 +504,29 @@ async function block(state: State, element: Element, timecode: number | undefine
   const flags = stream.bytes[at + 2];
   if (flags & 0x06) fail(`视频块用了 lacing（偏移 ${element.start}），不支持`);
   const data = element.content + number.length + 3;
-  state.frames.push(data, element.end - data, timecode + relative, key ?? (flags & 0x80) !== 0);
+  const isKey = key ?? (flags & 0x80) !== 0;
+  if (track.codec.codec === "vp9" && isKey && !state.vp9) {
+    // 解码配置取第一个关键帧的帧头；superframe 的块里关键帧在最前（libvpx 的写法），只看块开头
+    const n = Math.min(VP9_HEADER_BYTES, element.end - data);
+    if (!stream.has(data, n)) await stream.need(data, n);
+    const j = stream.index(data);
+    try {
+      state.vp9 = parseVp9KeyFrame(stream.bytes.subarray(j, j + n));
+    } catch (error) {
+      fail(`VP9 第一个关键帧的帧头解析失败（偏移 ${data}）：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  state.frames.push(data, element.end - data, timecode + relative, isKey);
+}
+
+/** 相邻显示时间之差（只算正的）的中位数，偶数个取较小的那个；不到两个不同的时间时 null。 */
+function medianStep(times: Float64Array): number | null {
+  const sorted = Float64Array.from(times).sort();
+  const steps: number[] = [];
+  for (let i = 1; i < sorted.length; i++) if (sorted[i] > sorted[i - 1]) steps.push(sorted[i] - sorted[i - 1]);
+  if (!steps.length) return null;
+  steps.sort((a, b) => a - b);
+  return steps[(steps.length - 1) >> 1];
 }
 
 function finish(state: State): VideoTrackIndex {
@@ -499,26 +539,32 @@ function finish(state: State): VideoTrackIndex {
   const times = new Float64Array(count);
   for (let i = 0; i < count; i++) times[i] = ((frames.ticks[i] - min) * scale) / 1e9;
 
+  const step = medianStep(times);
   let duration =
     state.duration !== undefined && Number.isFinite(state.duration) && state.duration > 0
       ? (state.duration * scale) / 1e9
       : undefined;
   if (duration === undefined) {
-    const sorted = Float64Array.from(times).sort();
-    const steps: number[] = [];
-    for (let i = 1; i < count; i++) if (sorted[i] > sorted[i - 1]) steps.push(sorted[i] - sorted[i - 1]);
-    steps.sort((a, b) => a - b);
-    const step = steps.length
-      ? steps[(steps.length - 1) >> 1]
-      : track.defaultDuration !== undefined
-        ? track.defaultDuration / 1e9
-        : 0;
-    duration = sorted[count - 1] + step;
+    let last = 0;
+    for (let i = 0; i < count; i++) if (times[i] > last) last = times[i];
+    duration = last + (step ?? (track.defaultDuration !== undefined ? track.defaultDuration / 1e9 : 0));
+  }
+  let vp9: Vp9Info | null = null;
+  if (track.codec.codec === "vp9") {
+    if (!state.vp9) fail("VP9 视频轨没有关键帧");
+    // level：CodecPrivate 写了就用，否则按帧头的画面尺寸与帧率（相邻显示时间之差的中位数）查表
+    const written = vp9CodecPrivateLevel(track.description);
+    vp9 = {
+      ...state.vp9,
+      level: written ?? vp9Level(state.vp9.width, state.vp9.height, step ? 1 / step : null),
+      levelSource: written !== null ? "codecprivate" : "table",
+    };
   }
   return {
     codec: track.codec.codec,
     sampleEntry: track.codec.sampleEntry,
     description: track.description,
+    vp9,
     codedWidth: track.width,
     codedHeight: track.height,
     timescale: 1e9 / scale,

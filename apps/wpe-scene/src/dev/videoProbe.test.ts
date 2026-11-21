@@ -129,8 +129,8 @@ function env(option: VideoTimeOption | undefined, options: EnvOptions = {}) {
       if (options.haltOnSeek) {
         const configure = decoder.configure.bind(decoder);
         let configures = 0;
-        decoder.configure = () => {
-          configure();
+        decoder.configure = (config: VideoDecoderConfig) => {
+          configure(config);
           if (++configures === 2) decoder.halted = true;
         };
       }
@@ -162,8 +162,26 @@ describe("ProbeVideos", () => {
     ]);
     // 3.25 超过时长 1：循环取模到 0.25，正好是第 3 帧的显示时间
     expect(videos.results()).toEqual([
-      { path: "materials/v1.tex", time: 0.25, frameTime: 0.25, duration: 1, width: 1920, height: 1080, failed: false },
-      { path: "materials/v3.tex", time: 0.25, frameTime: 0.25, duration: 1, width: 1920, height: 1080, failed: false },
+      {
+        path: "materials/v1.tex",
+        time: 0.25,
+        frameTime: 0.25,
+        duration: 1,
+        width: 1920,
+        height: 1080,
+        acceleration: "hardware",
+        failed: false,
+      },
+      {
+        path: "materials/v3.tex",
+        time: 0.25,
+        frameTime: 0.25,
+        duration: 1,
+        width: 1920,
+        height: 1080,
+        acceleration: "hardware",
+        failed: false,
+      },
     ]);
     // 播放器都已释放，只剩探针留的两份 clone
     expect(fake.opened).toBe(2);
@@ -254,8 +272,21 @@ describe("ProbeVideos", () => {
     }
   });
 
+  it("显卡不能硬解：退到软解照常取帧，结果的 acceleration 是 software、不算失败", async () => {
+    const softwareOnly = (config: VideoDecoderConfig) => config.hardwareAcceleration === "prefer-software";
+    const { videos } = env(0.25, { supported: softwareOnly });
+    await videos.prepare();
+    for (const result of videos.results()) {
+      expect(result).toMatchObject({ acceleration: "software", failed: false, frameTime: 0.25 });
+      expect(result.error).toBeUndefined();
+    }
+    videos.dispose();
+  });
+
   it("解码器出错：这段标为失败，不当成总时限", async () => {
-    const { videos, fake } = env(0, { halted: true });
+    // 软解的解码器出错才失败（硬解出错先换软解，见 codecPlayer.test「硬解优先、退到软解」）
+    const softwareOnly = (config: VideoDecoderConfig) => config.hardwareAcceleration === "prefer-software";
+    const { videos, fake } = env(0, { halted: true, supported: softwareOnly });
     const preparing = videos.prepare();
     await flush();
     for (const decoder of fake.decoders) decoder.init.error(new DOMException("坏了", "EncodingError"));

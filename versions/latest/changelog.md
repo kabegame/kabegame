@@ -128,6 +128,8 @@
 - 场景壁纸运行中改要重新编译才生效的单个图层设置（脚本换文本图层的字体、属性面板改图层的 `size` / `colorBlendMode`、打开用到暂不支持特性的 effect）只重编那一个图层，不再整场重新加载：期间画面不停，别的图层的粒子、动画、声音接着跑；换上时它自己的关键帧从原来的进度接着播，没改到粒子定义时粒子也不重来；连着改几次只以最后一次为准。
 - 场景壁纸的脚本运行中改图层结构（把图层挂进 / 移出组合层、挂到骨骼上、删掉组合层）不再整场重新加载，改动当帧生效，和 Wallpaper Engine 一致：挂进组的图层当帧画进组里、空的组合层挂上子层当帧变成组、删掉组后剩下的子层当帧回到顶层；期间别的图层的粒子、动画不受影响。
 ### Fixed
+- 背景是 WebM（VP9）视频的场景壁纸（如创意工坊 3662390671「Angels of Delusion」）不再只剩前景、背景一片灰：以前只认 H.264 / HEVC 视频，VP9 的背景整层透明。现在和 Wallpaper Engine 一样播放。
+- 场景壁纸里的视频在显卡不能硬件解码时改用软件解码，不再整层透明：比如老显卡不支持 VP9 硬解、视频太小（低于约 128 像素）显卡不肯解，或显卡驱动解码出错。HEVC 视频暂时还只能硬解。
 - 把随机播放的声音「两次之间的间隔」做成可调属性的场景壁纸（如 myprojects 3798696286「Hades Asylum Depths」的咆哮声）不再退回预览图；运行中拖动间隔滑块，下一次播放就按新间隔排，和 Wallpaper Engine 一致。
 - 带「有别的音乐在放就让路」脚本的场景壁纸（如创意工坊 3819637149「Somewhere In Nowhere」），自带的音乐不再一顿一顿：以前壁纸自己的声音会被当成系统里正在播放的媒体，脚本每秒把它暂停一次、又恢复一次。网页壁纸的音乐同理。
 - 从资源管理器 / 访达往画廊、画册、插件页拖文件时，落点提示的标题不再显示成 `import.dropZone.galleryMedia` 这样的原始 key，而是正常的「导入 N 个文件到画廊」。八条文案（画廊 / 画册 / 插件 / 路径选择各档）在五种语言下都受影响。
@@ -424,6 +426,8 @@
   - dev 探针 `videoTime` 精确解到那一刻（结果加 `frameTime`），删掉主窗口隐藏时报错的 `checkVideoVisibility`；`host.videos()` 的字段改为解码计数与色彩说明。测试替身 `video/fakeDecoder.ts` 换掉 `fakeVideo.ts`。
   - 补喂由 `VideoDecoder` 的 `dequeue` 事件驱动（`CodecDecoderInit.dequeue`），另有已喂未出上限 `MAX_IN_FLIGHT`：level 6.0 等高 level 视频要攒满 16 帧重排缓冲才出第一帧，dev 探针不跑帧循环时原先会卡到 10 s 超时（12 张场景）。
   - 设计、实施与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9d-webcodecs.md`。
+- 场景壁纸 P9e：Matroska 拆包认 `V_VP9`。新增 `video/demux/vp9.ts`（关键帧未压缩帧头、`CodecPrivate` 的 level、附录 A 的 level 表、color_space → 矩阵码）；`VideoTrackIndex` 加 `vp9` 字段、`codec` 加 `"vp9"`；`codecString` 出 `vp09.PP.LL.DD`，`decoderConfig` 对 VP9 不给 `description`；用户视频的颜色来源多一个「VP9 帧头」（`ColorSource` / `rangeSource` 的 `"vp9"`）。样例 `vp9.webm`（带 superframe）、`vp9-10bit.webm`。设计与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9e-vp9.md`。
+- `CodecVideoPlayer` 硬解优先、退到软解：`isConfigSupported` 先问 `prefer-hardware`、不支持再问 `prefer-software`（`softwareConfig`，`no-preference` 的检查不可靠不用）；硬解的解码器出错（`error` 回调，或 `decode` / `configure` 同步抛错）走 `decoderFailed` → `fallBackToSoftware`，只退一次，解码器按代数（`decoderGeneration`）丢弃旧解码器迟到的回调；`CodecVideoProbe` 与 dev 探针结果加 `acceleration`，探针改用最后一条 warn 当失败原因。测试替身 `FakeDecoder` 记 `configs`，可注入 `throwOnDecode` / `throwOnConfigure`，`supported` 可按配置定。
 
 ### Fixed
 - `build:chromium` 三处修复：depot_tools 改为完整克隆（已有的浅克隆自动 `fetch --unshallow`）——automate-git 会把它切到 `CHROMIUM_BUILD_COMPATIBILITY.txt` 钉的 `depot_tools_checkout`（156 是 `132599ebb`），`--depth 1` 的克隆里没有那个提交，`git checkout --force` 直接 exit 128；全量 / 增量的判定从「`chromium_git/chromium/src` 目录在不在」改为「树根有没有 `BUILD.gn`」（`hasChromiumCheckout()`，`ensurePgoProfile()` 的守卫同改）——automate-git 在 `gclient sync` 之前就 `git init` 出了空 src，同步一中断，下一次运行就会走增量、传 `--no-chromium-update` 跳过同步直接去编译；导出目录改名改走 `renameWithRetry`，撞上 Windows 的文件占用退避重试到 20 s——刚写完的 `libcef.dll` 有 282 MB，杀毒软件扫它那几秒正好让一次数小时的构建死在最后一下 `rename` 上（EPERM）。

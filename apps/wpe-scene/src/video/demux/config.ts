@@ -4,18 +4,22 @@
  * - **codec 串**：H.264 是 `<样本项>.PPCCLL`（avcC 第 1–3 字节，各两位十六进制）；H.265 照 ISO/IEC 14496-15 附录 E：
  *   `<样本项>.<profile_space 字母><profile_idc>.<兼容标志按位反序的十六进制>.<L|H><level_idc>.<约束字节>`，约束字节 6 个、
  *   去掉末尾的 0 之后各自十六进制用 `.` 连接（步骤 0 实测 3822149301 为 `hvc1.1.6.L153.90`）。前缀照样本项（avc1 / avc3 /
- *   hvc1 / hev1），十六进制用小写（步骤 0 在 Chromium 里实测过的写法）。
+ *   hvc1 / hev1），十六进制用小写（步骤 0 在 Chromium 里实测过的写法）。VP9（P9e，只来自 Matroska）是 `vp09.PP.LL.DD`（两位十进制：
+ *   profile、level、位深，取自帧表的 `vp9`），4:2:2 / 4:4:4 再加色度采样 `.02` / `.03`（4:2:0 与没有码的 4:4:0 不加）；VP9 不给
+ *   `description`。
  * - **颜色照 WPE**：步骤 0 实测 WebCodecs 不读码流的色彩标签、缺省一律按 BT.709，所以必须自己给。两条路径（`ColorRule`）：
  *   - **场景视频**（`"scene"`，`.tex` 视频纹理）：矩阵恒为 BT.709，不看码流的标签、也不按分辨率。步骤 4 走查（phase-9d「步骤 4
  *     走查第一轮」）抓了 WPE 的视频纹理、从原始 YUV 重建：标 bt709 的 1080p / 1440p HEVC、标 bt470bg 的 540p 与 4K 四段都是 709
  *     （按 601 重建，后两段最大差 7 与 22）。
- *   - **用户视频**（`"user"`，P11b 的 `scenetexture`，WPE 走另一条读取路径）：矩阵依次取 `colr` 盒 → H.264 SPS 的 VUI → 没标时按分辨率
+ *   - **用户视频**（`"user"`，P11b 的 `scenetexture`，WPE 走另一条读取路径）：矩阵依次取 `colr` 盒 → H.264 SPS 的 VUI 或 VP9 关键帧
+ *     帧头的 color_space（`vp9MatrixCode`，P9e；VP9 用户视频实际进不来，面板只给 `.mp4`，只为规则完整）→ 没标时按分辨率
  *     （Media Foundation 的 SD / HD 规则：高 > `MF_SD_MAX_HEIGHT`（576）用 709，否则 601，宽度不参与）；码值 2（未指定）当作没标、往下一个来源找。
  *     **和 WPE 有意不同**：走查第二轮实测 WPE 读用户视频不看标签、只按高度（高 > 576 用 709，否则 601；480² 标 709 → 601、
  *     720² 标 601 → 709）。不看标签算 WPE 的缺陷（用户定，2026-11-16），用户视频不在语料里、没有画面依赖它，我们照标签。
  *     没标时的分界照 WPE 实测（720×576 → 601、720×578 → 709、1280×480 → 601、480×720 → 709）。
  *   两条路径共同：原色与传递函数恒报 bt709，即不做色域与传递函数转换（WPE 不做，phase-9c「步骤 3」）；范围取 `colr` 的 full_range，
- *   没有 `colr` 时取 VUI 的 video_full_range_flag，都没有为 false（limited）（走查的四段都是 limited，full 没有对过）。
+ *   没有 `colr` 时取 VUI 的 video_full_range_flag 或 VP9 帧头的 color_range，都没有为 false（limited）（走查的四段都是 limited，
+ *   full 没有对过）。
  *   HEVC 先只认 `colr`，HEVC 的 VUI 等需要时再解。
  *   色度上采样的位置照不了：WPE 纵向第 k 个色度样本在亮度第 2k − 0.5 行，Chromium 拷 `VideoFrame` 时在 2k + 0.5 行（标准），
  *   颜色剧烈变化的横向边缘差到几十级（走查 3823859141 整帧最大 45、平均 1.22）。要照它得读回 YUV 自己转换，用户定不做（已知差异）。
@@ -25,6 +29,7 @@
  * `track` 由 `indexMp4` 给出，avcC / hvcC 的长度已在那边检查过，这里的函数不抛错（SPS 解析失败时退到分辨率规则，原因进说明）。
  */
 import type { VideoTrackIndex } from "./mp4";
+import { vp9MatrixCode } from "./vp9";
 
 /** 没有色彩标签时按分辨率选矩阵（Media Foundation 的规则，走查第二轮在 WPE 实测）：高 > 这个值用 BT.709，否则 BT.601（smpte170m）。 */
 export const MF_SD_MAX_HEIGHT = 576;
@@ -35,8 +40,8 @@ export type WpeMatrix = VideoMatrixCoefficients | "bt2020-ncl";
 /** 视频走哪条路径的颜色规则：场景视频纹理（矩阵恒为 BT.709），或用户视频（照码流标签、没标按分辨率）。 */
 export type ColorRule = "scene" | "user";
 
-/** 矩阵从哪里来：`colr` 盒、H.264 SPS 的 VUI、没标时的分辨率规则，或场景视频的固定规则。 */
-export type ColorSource = "colr" | "vui" | "resolution" | "scene";
+/** 矩阵从哪里来：`colr` 盒、H.264 SPS 的 VUI、VP9 关键帧帧头（P9e）、没标时的分辨率规则，或场景视频的固定规则。 */
+export type ColorSource = "colr" | "vui" | "vp9" | "resolution" | "scene";
 
 export interface WpeColor {
   colorSpace: VideoColorSpaceInit;
@@ -46,21 +51,21 @@ export interface WpeColor {
   code: number | null;
   /** 码值不在映射表里、按 bt709 处理。 */
   unknownCode: boolean;
-  /** 范围从哪里来：`colr`、VUI 的 video_signal_type，或都没有（false）。 */
-  rangeSource: "colr" | "vui" | "default";
+  /** 范围从哪里来：`colr`、VUI 的 video_signal_type、VP9 帧头的 color_range，或都没有（false）。 */
+  rangeSource: "colr" | "vui" | "vp9" | "default";
   /** SPS 解析失败的原因（有 VUI 也读不出来），没有为 undefined。 */
   spsError?: string;
   /** 一句话的色彩来源说明，日志与语料扫描用。 */
   note: string;
 }
 
-/** codec 串、description、色彩空间（按 `rule`）：交给 VideoDecoder.configure。 */
+/** codec 串、description（VP9 不给）、色彩空间（按 `rule`）：交给 VideoDecoder.configure。 */
 export function decoderConfig(track: VideoTrackIndex, rule: ColorRule): VideoDecoderConfig {
   return {
     codec: codecString(track),
     codedWidth: track.codedWidth,
     codedHeight: track.codedHeight,
-    description: track.description,
+    ...(track.codec === "vp9" ? {} : { description: track.description }),
     colorSpace: wpeColorSpace(track, rule),
     hardwareAcceleration: "prefer-hardware",
   };
@@ -96,6 +101,9 @@ export function wpeColor(track: VideoTrackIndex, rule: ColorRule): WpeColor {
       }
     }
   }
+  // VP9 的关键帧帧头总带 color_space 与 color_range，地位同 H.264 的 VUI
+  const vp9 = track.vp9;
+  const vp9Code = vp9 ? vp9MatrixCode(vp9.colorSpace) : 2;
   // 矩阵：第一个标了（码值不是 2「未指定」）的来源
   let source: ColorSource = "resolution";
   let code: number | null = null;
@@ -105,13 +113,16 @@ export function wpeColor(track: VideoTrackIndex, rule: ColorRule): WpeColor {
   } else if (vui?.matrix !== undefined && vui.matrix !== 2) {
     source = "vui";
     code = vui.matrix;
+  } else if (vp9Code !== 2) {
+    source = "vp9";
+    code = vp9Code;
   }
   const mapped = code === null ? null : matrixFromCode(code);
   const unknownCode = code !== null && mapped === null;
-  const rangeSource = track.colr ? "colr" : vui?.fullRange !== undefined ? "vui" : "default";
-  const fullRange = track.colr ? track.colr.fullRange : (vui?.fullRange ?? false);
+  const rangeSource = track.colr ? "colr" : vui?.fullRange !== undefined ? "vui" : vp9 ? "vp9" : "default";
+  const fullRange = track.colr ? track.colr.fullRange : (vui?.fullRange ?? vp9?.fullRange ?? false);
 
-  const where = source === "colr" ? "colr" : "SPS VUI";
+  const where = source === "colr" ? "colr" : source === "vp9" ? "VP9 帧头" : "SPS VUI";
   let matrix: WpeMatrix;
   let note: string;
   if (rule === "scene") {
@@ -128,7 +139,8 @@ export function wpeColor(track: VideoTrackIndex, rule: ColorRule): WpeColor {
           ? `${where} 矩阵码 ${code} 不认识，按 bt709`
           : `${where} 矩阵码 ${code} → ${matrix}`;
   }
-  note += `；范围 ${fullRange ? "full" : "limited"}（${rangeSource === "default" ? "未标" : rangeSource === "colr" ? "colr" : "VUI"}）`;
+  const rangeWhere = { default: "未标", colr: "colr", vui: "VUI", vp9: "VP9 帧头" }[rangeSource];
+  note += `；范围 ${fullRange ? "full" : "limited"}（${rangeWhere}）`;
   if (spsError) note += `；SPS 解析失败：${spsError}`;
   return {
     // TS 的 VideoMatrixCoefficients 里没有 bt2020-ncl，Chromium 认（WebCodecs 规范的枚举里有）
@@ -149,8 +161,21 @@ function hex2(value: number): string {
   return value.toString(16).padStart(2, "0");
 }
 
-/** codec 串：`avc1.PPCCLL` / `hvc1.<space><idc>.<compat 反序>.<L|H><level>.<约束>`，前缀照样本项。 */
+/** 两位十进制（VP9 codec 串的字段）。 */
+function dec2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/**
+ * codec 串：`avc1.PPCCLL` / `hvc1.<space><idc>.<compat 反序>.<L|H><level>.<约束>`，前缀照样本项；VP9 为 `vp09.PP.LL.DD`，
+ * 4:2:2 / 4:4:4 时再加色度采样 `.02` / `.03`（缺省即 4:2:0）。
+ */
 export function codecString(track: VideoTrackIndex): string {
+  if (track.codec === "vp9" && track.vp9) {
+    const { profile, level, bitDepth, subsamplingX, subsamplingY } = track.vp9;
+    const chroma = subsamplingX && !subsamplingY ? ".02" : !subsamplingX && !subsamplingY ? ".03" : "";
+    return `vp09.${dec2(profile)}.${dec2(level)}.${dec2(bitDepth)}${chroma}`;
+  }
   const c = track.description;
   if (track.codec === "avc") return `${track.sampleEntry}.${hex2(c[1])}${hex2(c[2])}${hex2(c[3])}`;
   // hvcC：configurationVersion(1)，general_profile_space(2) tier(1) profile_idc(5)，兼容标志(4)，约束(6)，level_idc(1)

@@ -17,7 +17,7 @@
  * - **释放**：`dispose` 关掉留下的帧，取消还在等的 Promise；`renderFrame` 在 finally 里调，出错也释放。
  */
 import type { SceneTexture } from "../compile/bundle";
-import { CodecVideoPlayer, type CodecFactories } from "../video/codecPlayer";
+import { CodecVideoPlayer, type Acceleration, type CodecFactories } from "../video/codecPlayer";
 import { SEEK_END_MARGIN, type SceneVideoSource } from "../video/player";
 import type { VideoSink } from "../video/sceneVideos";
 
@@ -37,6 +37,8 @@ export interface ProbeVideoResult {
   /** 画面的显示尺寸（`displayWidth` / `displayHeight`）；失败时 0。 */
   width: number;
   height: number;
+  /** 解码路径：硬解，或显卡不能硬解时退到的软解（`CodecVideoPlayer`）；没走到解码（读不到、拆不了包、都不支持）为 null。 */
+  acceleration: Acceleration | null;
   /** 读不到、拆不了包或解码出错：这段视频保持透明（同产品），原因在 `error`。 */
   failed: boolean;
   error?: string;
@@ -98,6 +100,7 @@ interface Entry {
   time: number;
   frameTime: number | null;
   duration: number | null;
+  acceleration: Acceleration | null;
   failed: boolean;
   error?: string;
 }
@@ -134,6 +137,7 @@ export class ProbeVideos implements VideoSink {
         time: requested,
         frameTime: null,
         duration: null,
+        acceleration: null,
         failed: false,
       };
       this.entries.push(entry);
@@ -175,6 +179,7 @@ export class ProbeVideos implements VideoSink {
       duration: entry.duration,
       width: entry.failed ? 0 : (entry.frame?.displayWidth ?? 0),
       height: entry.failed ? 0 : (entry.frame?.displayHeight ?? 0),
+      acceleration: entry.acceleration,
       failed: entry.failed,
       ...(entry.error !== undefined ? { error: entry.error } : {}),
     }));
@@ -190,12 +195,12 @@ export class ProbeVideos implements VideoSink {
 
   private async prepareOne(entry: Entry, deadline: number): Promise<void> {
     const where = `${entry.path} [${entry.source.start}, ${entry.source.end})`;
-    // 播放器失败时记一条 warn：留下第一条当原因
+    // 播放器失败时记一条 warn，失败之后不再记：留下最后一条当原因（之前可能有「改用软件解码」这类提示）
     let reason: string | undefined;
     const player = new CodecVideoPlayer(entry.source, 0, {
       ...this.factories,
       report: {
-        warn: (message, detail) => void (reason ??= detail === undefined ? message : `${message}：${describe(detail)}`),
+        warn: (message, detail) => void (reason = detail === undefined ? message : `${message}：${describe(detail)}`),
       },
     });
     try {
@@ -208,6 +213,7 @@ export class ProbeVideos implements VideoSink {
         await this.beforeDeadline(player.seeked(), deadline, `等 ${where} 跳到 ${target} s`);
       }
       if (this.disposed) return;
+      entry.acceleration = player.probe().acceleration;
       const frame = player.failed ? null : player.drawn(0, true);
       if (!frame) {
         entry.failed = true;

@@ -56,10 +56,16 @@ export class FakeDecoder implements CodecDecoder {
   /** 喂入的时间戳，reset 记作 "reset"。 */
   fed: (number | "reset")[] = [];
   configures = 0;
+  /** 每次 `configure` 收到的配置（退到软解的用例看 `hardwareAcceleration`）。 */
+  configs: VideoDecoderConfig[] = [];
   resets = 0;
   flushes = 0;
   closed = false;
   halted = false;
+  /** 给了时下一次 `decode` 抛它（模拟硬解失败后 Chromium 已关掉解码器、`decode` 抛 `InvalidStateError`）。 */
+  throwOnDecode: unknown = null;
+  /** 同上，下一次 `configure` 抛它（跳转时 reset + configure）。 */
+  throwOnConfigure: unknown = null;
   private needKey = true;
   private scheduled = false;
 
@@ -73,11 +79,22 @@ export class FakeDecoder implements CodecDecoder {
   get decodeQueueSize() {
     return this.queue.length;
   }
-  configure() {
+  configure(config: VideoDecoderConfig) {
+    if (this.throwOnConfigure !== null) {
+      const error = this.throwOnConfigure;
+      this.throwOnConfigure = null;
+      throw error;
+    }
     this.configures++;
+    this.configs.push(config);
     this.needKey = true;
   }
   decode(chunk: EncodedVideoChunkInit) {
+    if (this.throwOnDecode !== null) {
+      const error = this.throwOnDecode;
+      this.throwOnDecode = null;
+      throw error;
+    }
     if (this.needKey && chunk.type !== "key") throw new DOMException("需要关键帧", "DataError");
     this.needKey = false;
     this.fed.push(chunk.timestamp);
@@ -143,8 +160,8 @@ export class FakeDecoder implements CodecDecoder {
 export interface FakeDecoderOptions {
   /** 重排缓冲（DPB）深度：攒够这么多帧才按时间戳吐最早的一帧，缺省 0（按喂入顺序出）。收进缓冲的帧不算在 `decodeQueueSize` 里。 */
   depth?: number;
-  /** `isConfigSupported` 的结果，缺省支持。 */
-  supported?: boolean;
+  /** `isConfigSupported` 的结果，缺省支持；给函数时按配置定（如只支持 `prefer-software`）。 */
+  supported?: boolean | ((config: VideoDecoderConfig) => boolean);
   /** 解码器一建好就不出帧。 */
   halted?: boolean;
 }
@@ -158,7 +175,9 @@ export function fakeFactories(env: FakeEnv, options: FakeDecoderOptions = {}): C
       env.decoders.push(decoder);
       return decoder;
     },
-    isConfigSupported: async () => ({ supported: options.supported ?? true }),
+    isConfigSupported: async (config) => ({
+      supported: typeof options.supported === "function" ? options.supported(config) : (options.supported ?? true),
+    }),
     now: () => env.now,
   };
 }

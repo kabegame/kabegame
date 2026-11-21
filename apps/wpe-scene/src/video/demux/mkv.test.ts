@@ -8,6 +8,15 @@
  * - `hevc.mkv`（7199 字节，24 帧，B 帧，关键帧在 0 / 10）：
  *   `ffmpeg -f lavfi -i testsrc2=size=64x64:rate=30 -frames:v 24 -c:v libx265 -preset veryfast
  *   -x265-params "bframes=2:keyint=12:min-keyint=12:scenecut=0:log-level=error" -pix_fmt yuv420p -bitexact hevc.mkv`
+ * - `vp9.webm`（6066 字节，40 帧，30 fps，关键帧在 0 / 20，没有 `CodecPrivate`、`Colour` 只有 Range 1（同语料 3662390671）；8 块是
+ *   superframe——隐藏的 alt-ref 与显示帧打在一块里，另有 1 字节的 show_existing_frame 块；P9e），两遍编码：
+ *   `ffmpeg -f lavfi -i testsrc2=size=64x48:rate=30 -frames:v 40 -c:v libvpx-vp9 -pass 1 -passlogfile p4 -g 20 -keyint_min 20
+ *   -auto-alt-ref 6 -lag-in-frames 25 -arnr-maxframes 7 -arnr-strength 4 -b:v 100k -threads 1 -f null -`，第二遍把 `-pass 1` 换成
+ *   `-pass 2`、加 `-pix_fmt yuv420p -bitexact vp9.webm`（一遍编码与 `testsrc` 都出不了 superframe）。
+ * - `vp9-10bit.webm`（2105 字节，8 帧，24 fps，profile 2，帧头 color_space BT.709、full range，`Colour` 矩阵 1、Range 2；P9e）：
+ *   `ffmpeg -f lavfi -i testsrc=size=64x48:rate=24 -frames:v 8 -c:v libvpx-vp9 -profile:v 2 -pix_fmt yuv420p10le -g 8 -auto-alt-ref 0
+ *   -b:v 200k -deadline good -cpu-used 4 -threads 1 -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range pc
+ *   -bitexact vp9-10bit.webm`
  * - 核对：`ffprobe -v error -select_streams v:0 -show_entries packet=pts_time,flags,pos,size -of csv=p=0 <文件>`（Matroska 的
  *   `pos` 是块内容的起点，块数据在它之后 4 字节：1 字节轨号 + 2 字节时间码 + 1 字节标志）。
  *
@@ -36,6 +45,10 @@ import {
 import { AVCC, buildMp4, concat, HVCC, memoryRead } from "./testMp4";
 
 const fixture = (name: string) => new Uint8Array(readFileSync(new URL(`./${name}`, import.meta.url)));
+
+function hex(text: string): Uint8Array {
+  return new Uint8Array(text.match(/../g)!.map((byte) => parseInt(byte, 16)));
+}
 
 async function index(bytes: Uint8Array, options: { chunkBytes?: number; stats?: MatroskaReadStats } = {}) {
   const result = await indexMatroska(memoryRead(bytes).read, bytes.length, options);
@@ -139,8 +152,80 @@ describe("indexMatroska：ffmpeg 现编的样例", () => {
     expect(codecString(track)).toBe("hvc1.1.6.L30.90");
   });
 
+  it("VP9（P9e）：帧表与 ffprobe 一致；没有 CodecPrivate，解码配置取第一个关键帧的帧头，level 按表；superframe 一块一帧", async () => {
+    const bytes = fixture("vp9.webm");
+    const track = await index(bytes);
+    expect(track).toMatchObject({
+      codec: "vp9",
+      sampleEntry: "vp09",
+      codedWidth: 64,
+      codedHeight: 48,
+      timescale: 1000,
+      duration: 1.333,
+      editMediaTime: 0,
+      // ffmpeg 写了只有 Range 1（broadcast）的 Colour，同语料 3662390671；三个码值缺省 2（未指定）
+      colr: { primaries: 2, transfer: 2, matrix: 2, fullRange: false },
+      vp9: {
+        profile: 0,
+        bitDepth: 8,
+        subsamplingX: 1,
+        subsamplingY: 1,
+        colorSpace: 0,
+        fullRange: false,
+        width: 64,
+        height: 48,
+        level: 10,
+        levelSource: "table",
+      },
+    });
+    expect(track.description.length).toBe(0);
+    // ffprobe 的 pts_time（VP9 没有 B 帧，解码顺序即显示顺序；毫秒时间码）
+    expect(Array.from(track.times)).toEqual(
+      [
+        0, 33, 67, 100, 133, 167, 200, 233, 267, 300, 333, 367, 400, 433, 467, 500, 533, 567, 600, 633, 667, 700, 733,
+        767, 800, 833, 867, 900, 933, 967, 1000, 1033, 1067, 1100, 1133, 1167, 1200, 1233, 1267, 1300,
+      ].map((t) => t / 1000),
+    );
+    expect(Array.from(track.keys).flatMap((key, i) => (key ? [i] : []))).toEqual([0, 20]);
+    // 块的大小原样（superframe 整块一帧：第 1 块 330 字节是 4 个隐藏帧 + 1 个显示帧，1 字节的是 show_existing_frame）
+    expect(Array.from(track.sizes)).toEqual([
+      1659, 330, 15, 1, 16, 1, 36, 56, 1, 15, 1, 173, 19, 1, 15, 1, 35, 1, 41, 1, 1663, 712, 1, 16, 1, 35, 1, 16, 1, 66,
+      1, 16, 1, 15, 15, 1, 362, 1, 15, 1,
+    ]);
+    const pos = [
+      424, 2090, 2426, 2447, 2454, 2476, 2483, 2525, 2587, 2594, 2615, 2623, 2802, 2827, 2834, 2855, 2862, 2903, 2910,
+      2957, 2965, 4635, 5353, 5360, 5382, 5389, 5430, 5437, 5459, 5466, 5538, 5545, 5567, 5574, 5595, 5616, 5624, 5992,
+      5999, 6020,
+    ];
+    expect(Array.from(track.offsets)).toEqual(pos.map((at) => at + 4));
+    // superframe 的末字节是索引标记 0b110xxxxx（VP9 规范附录 B）
+    const second = bytes.subarray(track.offsets[1], track.offsets[1] + track.sizes[1]);
+    expect(second[second.length - 1] & 0xe0).toBe(0xc0);
+    expect(codecString(track)).toBe("vp09.00.10.08");
+    const config = decoderConfig(track, "scene");
+    expect(config).toMatchObject({ codec: "vp09.00.10.08", codedWidth: 64, codedHeight: 48 });
+    expect("description" in config).toBe(false);
+    expect(wpeColor(track, "scene")).toMatchObject({ source: "scene", matrix: "bt709", rangeSource: "colr" });
+    // 用户规则：Colour 矩阵未指定 → 帧头 color_space 未知 → 按分辨率（48 ≤ 576 → smpte170m）；范围取 Colour 的 Range
+    expect(wpeColor(track, "user")).toMatchObject({ source: "resolution", matrix: "smpte170m", rangeSource: "colr" });
+  });
+
+  it("VP9 profile 2（P9e）：10 位进 codec 串；帧头记下 color_space BT.709 与 full range，Colour 也标了、优先", async () => {
+    const track = await index(fixture("vp9-10bit.webm"));
+    expect(track.vp9).toMatchObject({ profile: 2, bitDepth: 10, colorSpace: 2, fullRange: true, level: 10 });
+    // ffmpeg 把 -colorspace bt709 -color_range pc 同时写进帧头与 Colour（矩阵 1、Range 2）
+    expect(track.colr).toEqual({ primaries: 2, transfer: 2, matrix: 1, fullRange: true });
+    expect(Array.from(track.times)).toEqual([0, 0.042, 0.083, 0.125, 0.167, 0.208, 0.25, 0.292]);
+    expect(Array.from(track.keys).flatMap((key, i) => (key ? [i] : []))).toEqual([0]);
+    expect(Array.from(track.offsets)).toEqual([428, 1326, 1384, 1467, 1560, 1651, 1810, 1933].map((at) => at + 4));
+    expect(codecString(track)).toBe("vp09.02.10.10");
+    expect(wpeColor(track, "user")).toMatchObject({ source: "colr", code: 1, matrix: "bt709", rangeSource: "colr" });
+    expect(wpeColor(track, "user").colorSpace.fullRange).toBe(true);
+    expect(wpeColor(track, "scene")).toMatchObject({ matrix: "bt709", code: 1 });
+  });
+
   it("真实样例按任意块大小读，结果都相同（跨块边界的元素接得上）", async () => {
-    for (const name of ["h264-bframes.mkv", "hevc.mkv"]) {
+    for (const name of ["h264-bframes.mkv", "hevc.mkv", "vp9.webm", "vp9-10bit.webm"]) {
       const bytes = fixture(name);
       const whole = await index(bytes);
       for (const chunkBytes of [1, 2, 3, 5, 7, 13, 64, 500, 1000, 4096]) {
@@ -387,6 +472,71 @@ describe("indexMatroska：未知大小", () => {
   });
 });
 
+describe("indexMatroska：VP9（P9e）", () => {
+  /** 语料 3662390671 背景视频的关键帧帧头（profile 0、1920×1080），后面补到 40 字节。 */
+  const KEY_1080 = concat(hex("824983420077f04376003824"), new Uint8Array(28));
+  /** 帧间帧：frame_marker 2、profile 0、show_existing 0、frame_type 1。 */
+  const INTER = Uint8Array.of(0x86, 0, 0, 0);
+  const VP9: TrackSpec = { number: 1, type: 1, codecId: "V_VP9", width: 1920, height: 1080 };
+
+  it("帧率取相邻显示时间之差的中位数：1080p 每帧 16 ms（62.5 fps）→ level 41；只有一帧时只看画面 → 40", async () => {
+    const many = buildMkv([
+      info(),
+      tracks(VP9),
+      cluster(0, simpleBlock(1, 0, KEY, KEY_1080), simpleBlock(1, 16, 0, INTER), simpleBlock(1, 32, 0, INTER)),
+    ]);
+    expect((await index(many)).vp9).toMatchObject({ width: 1920, height: 1080, level: 41, levelSource: "table" });
+    const one = buildMkv([info(), tracks(VP9), cluster(0, simpleBlock(1, 0, KEY, KEY_1080))]);
+    expect((await index(one)).vp9).toMatchObject({ level: 40 });
+  });
+
+  it("CodecPrivate（VP9 codec feature metadata）写了 level 就用它，原样留在 description", async () => {
+    const privateBytes = Uint8Array.of(1, 1, 0, 2, 1, 52, 3, 1, 8);
+    const bytes = buildMkv([
+      info(),
+      tracks({ ...VP9, codecPrivate: privateBytes }),
+      cluster(0, simpleBlock(1, 0, KEY, KEY_1080)),
+    ]);
+    const track = await index(bytes);
+    expect(track.vp9).toMatchObject({ level: 52, levelSource: "codecprivate" });
+    expect(Array.from(track.description)).toEqual(Array.from(privateBytes));
+    expect(codecString(track)).toBe("vp09.00.52.08");
+  });
+
+  it("只解析第一个关键帧：之后的关键帧帧头坏了也不管；BlockGroup 里没有 ReferenceBlock 的块同样算关键帧", async () => {
+    const bytes = buildMkv([
+      info(),
+      tracks(VP9),
+      cluster(0, simpleBlock(1, 0, 0, INTER), blockGroup(1, 16, KEY_1080), simpleBlock(1, 32, KEY, INTER)),
+    ]);
+    const track = await index(bytes);
+    expect(Array.from(track.keys)).toEqual([0, 1, 1]);
+    expect(track.vp9).toMatchObject({ width: 1920, height: 1080 });
+  });
+
+  it("关键帧的块不到 32 字节：只读块本身（帧头 12 字节够用）", async () => {
+    const bytes = buildMkv([info(), tracks(VP9), cluster(0, simpleBlock(1, 0, KEY, hex("824983420077f04376003824")))]);
+    expect((await index(bytes)).vp9).toMatchObject({ width: 1920 });
+  });
+
+  it("失败：第一个关键帧的帧头坏了、整条轨没有关键帧", async () => {
+    const bad = buildMkv([info(), tracks(VP9), cluster(0, simpleBlock(1, 0, KEY, INTER))]);
+    expect(await failure(bad)).toMatch(/VP9 第一个关键帧的帧头解析失败.*不是关键帧/);
+    const short = buildMkv([info(), tracks(VP9), cluster(0, simpleBlock(1, 0, KEY, Uint8Array.of(0x82, 0x49)))]);
+    expect(await failure(short)).toMatch(/帧头解析失败.*截断/);
+    const none = buildMkv([info(), tracks(VP9), cluster(0, simpleBlock(1, 0, 0, INTER))]);
+    expect(await failure(none)).toMatch(/VP9 视频轨没有关键帧/);
+  });
+
+  it("H.264 / H.265 仍然必须有 CodecPrivate，VP9 不用", async () => {
+    expect(await failure(buildMkv([info(), tracks({ ...VIDEO, codecPrivate: undefined })]))).toMatch(
+      /缺少 CodecPrivate/,
+    );
+    const vp9 = buildMkv([info(), tracks(VP9), cluster(0, simpleBlock(1, 0, KEY, KEY_1080))]);
+    expect((await index(vp9)).codec).toBe("vp9");
+  });
+});
+
 describe("indexMatroska：失败", () => {
   const good = () => buildMkv([info(), tracks(VIDEO), cluster(0, simpleBlock(1, 0, KEY, payload(1)))]);
 
@@ -401,7 +551,7 @@ describe("indexMatroska：失败", () => {
     expect(await failure(buildMkv([info(), tracks(AUDIO), cluster(0, simpleBlock(2, 0, KEY, payload(1)))]))).toMatch(
       /没有视频轨/,
     );
-    expect(await failure(buildMkv([info(), tracks({ ...VIDEO, codecId: "V_VP9" })]))).toMatch(/V_VP9 不支持/);
+    expect(await failure(buildMkv([info(), tracks({ ...VIDEO, codecId: "V_VP8" })]))).toMatch(/V_VP8 不支持/);
     expect(await failure(buildMkv([info(), tracks({ ...VIDEO, codecPrivate: undefined })]))).toMatch(
       /缺少 CodecPrivate/,
     );

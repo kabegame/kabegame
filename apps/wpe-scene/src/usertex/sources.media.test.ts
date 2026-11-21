@@ -373,7 +373,11 @@ describe("UserTextureSources：视频", () => {
   });
 
   it("读不出、拆不了包、解码出错都是 failed（槽用缺省纹理），失败的播放器被释放", async () => {
-    const fixture = setup({ halted: true });
+    // 软解的解码器出错才失败（硬解出错先换软解，见 codecPlayer.test「硬解优先、退到软解」）
+    const fixture = setup({
+      halted: true,
+      supported: (config) => config.hardwareAcceleration === "prefer-software",
+    });
     const { sources, failing, fake } = fixture;
     failing.add("bad.mp4");
     sources.setValue("a", "bad.mp4");

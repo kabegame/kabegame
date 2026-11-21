@@ -3259,6 +3259,24 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | Y10 拆不了包的视频 | Windows dev | 场景或用户视频用一段分片 MP4 / WebM | 场景视频图层透明、用户视频用缺省纹理，日志一条「场景视频不能拆包」，场景不退回 | 只有单测 |
 | [x] | Y11 高 level 视频的确定性回放 | Windows dev | 屏外宿主按画面哈希的参数（`time` 1.5、`disabled`、不给 `videoTime`）渲染 13566、13581、13603、13605、13606、13615、13624、14296、14297、14693、15010、15017 | 都出图、视频取到 0 s 那一帧，不再报 `ProbeVideoTimeout` | 2026-11-19 Claude：12 张都出图，单张 1.6–6.2 s，复跑摘要相同；原因是 level 6.0 等高 level 视频的解码器要攒满 16 帧重排缓冲才出帧、探针不跑帧循环时没人补喂，改为由 `VideoDecoder` 的 `dequeue` 事件补喂 |
 
+## 场景壁纸 VP9 视频纹理（P9e）
+
+2026-11-21。15026（工坊 3662390671）的背景图层是 WebM（Matroska）封装的 VP9，以前拆包报「视频编码 V_VP9 不支持」、整张背景透明。现在 Matroska 认 `V_VP9`：`CodecPrivate` 可有可无，解码配置（profile、位深、色度采样、颜色）取第一个关键帧的帧头（`video/demux/vp9.ts`），level 按 VP9 规范附录 A 的表用画面与帧率挑，codec 串 `vp09.PP.LL.DD`、不给 `description`；颜色规则不变（场景视频恒为 709）。同一张壁纸日志里的「No valid audio layers found. Script sopped.」是作者删光了歌曲图层，WPE 的日志里是同一句，不改。
+
+同日另加「硬解优先、退到软解」：Chromium 把 `prefer-hardware` 当成必须硬解，显卡没有这种编码的硬解（老显卡的 VP9、HEVC）或画面小于硬解的最小尺寸时以前整层透明；现在先问硬解、不支持再问软解，硬解说支持却在配置或解码时出错也换软解一次（从出错时的媒体时间接着解），软解再出错才失败。本机自编的 CEF 没有 HEVC 的软解。设计、实施与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9e-vp9.md`，复制工程与测试工程在 `ignore/p9/p9e/`，WPE 抓帧在 `A:\p9e\vp9\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | VP0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（`src/video/`、引用视频模块的文件与 `src/dev`）、Prettier；变异检查 | 0 error；全过；变异各有测试挂掉 | 2026-11-21：tsc 0 error；`src/video/` 与引用视频模块的文件加 `src/dev` 共 49 个文件 864 例全过；VP9 拆包 15 个变异、退到软解 16 个变异全部挂掉 |
+| [x] | VP1 拆包与 ffprobe | Node | 语料 3662390671 的 VP9 段、ffmpeg 样例 `vp9.webm`（带 superframe）与 `vp9-10bit.webm`，再跑一次 P9d 的 Matroska 段（3816870245）回归 | 帧数、显示时间、大小、位置、关键帧逐包相同；codec 串、位深对 | 2026-11-21 Claude：3662390671 共 480 帧、4 个关键帧，`vp09.00.41.08`；3816870245 共 7049 帧，仍然逐包相同；两段样例同 ffprobe（`ignore/p9/p9e/corpus.ts`） |
+| [x] | VP2 真解码器逐块出帧 | Windows dev | 主窗口页面里用 `VideoDecoder` 把带 superframe 与 1 字节 show_existing_frame 块的样例逐块喂进去 | 块数 = 输出帧数，时间戳顺序不变 | 2026-11-21 Claude：64×48 的 `vp9.webm` 软解 40 块 40 帧（硬解不支持这个尺寸）；256×144 的同类样例（`ignore/p9/p9e/vp9-256.webm`）硬解、软解都是 40 块 40 帧 |
+| [x] | VP3 背景出来 | Windows dev | `render_scene` 15026，`videoTime` 2.5 | 背景视频在，不再报「V_VP9 不支持」，走硬解 | 2026-11-21 Claude：取到 2.5 s（时长 8 s，1920×1080），整张画面完整，`acceleration` 是 `hardware`；加了退软解之后画面逐字节不变 |
+| [x] | VP4 对照 WPE | Windows dev + WPE 抓帧 | 复制工程只留 `Scene`，WPE 抓一帧，找出是第几帧，Kabegame 按同一帧 `videoTime` 渲染，从原始 YUV 按两边各自的写法重建 | 只剩色度纵向位置的已知差异 | 2026-11-21 Claude：WPE 显示的是 7.000 s；两边都是 709、limited，各按自己的色度位置（WPE 2k − 0.5、我们 2k + 0.5）重建最大差 1；两边之间平均 2.63、最大 89（锐利彩色描边多） |
+| [x] | VP5 小视频退到软解 | Windows dev | 导入 `ignore/p9/p9e/gen_small.py` 生成的 64×48 VP9 与 H.264 工程（硬解都不支持这个尺寸），`render_scene` 取 0.5 s，看应用日志 | 视频出图、`acceleration` 是 `software`，日志各一条「场景视频改用软件解码」 | 2026-11-21 Claude：两段都取到 0.5 s、画面完整；以前这两段「解码配置不支持」、整层透明；用完 `projects_remove` |
+| [ ] | VP6 硬解运行中出错换软解 | 有驱动问题的显卡 | 硬解说支持、实际解码出错的视频 | 日志「场景视频硬件解码出错，改用软件解码」，画面停一下后从出错处接着播 | 本机造不出，只有单测（出错回调、`decode` / `configure` 同步抛错、迟到的输出与出错、只退一次、换的期间的跳转与时钟） |
+| [ ] | VP7 别的显卡 | 不支持 VP9 硬解的显卡（如 GTX 950 以前的 NVIDIA） | 打开 15026 | 软解播放；HEVC 的场景视频仍透明（自编 CEF 没有 HEVC 软解） | 待有条件时测 |
+| [ ] | VP8 预览里实时播放 | Windows dev | 打开 15026 的预览，读 `host.videos()` 10 s | 每秒解 60 帧、媒体时间每秒 1 s、8 s 处绕回、`stallResets` 0 | 待用户（测时用户正开着别的预览，没打断） |
+
 ## 按颜色排序与代表色
 
 2026-11-11。每张图入库时算一份色盘（最多 5 个代表色 + 占比，`images.palette`），详情「基本信息」里画成色带；排序新增「颜色」维度。迁移 v052 加色盘列、色桶表 `color_buckets`（12 个基本色桶，黄 / 绿 / 青为 `e6c200` / `2e9e3f` / `1fb5b5`，不是纯色）与关系表 `image_color_distances`，给存量图 × 每个色桶铺一行 65536；回填作业 `image_palette` 在后台给 `palette IS NULL` 的图补算。排序有两个段：`sort/by-color_0x<rrggbb>`（色桶，预计算、沿索引读）与 `sort/by-any-color_0x<rrggbb>`（任意颜色，现算），前端按色桶列表（`color_buckets://`）选段并在列表变化时校正；用户可把颜色保存成色桶（`add_color_bucket`，最多 24 个）或删除（`delete_color_bucket`），提交后发 `color-buckets-change`。机制见 `cocs/gallery/COLOR_PALETTE.md`。

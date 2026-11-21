@@ -8,8 +8,15 @@
  *   Blob 切片，`blobRangeReader`）。先 `indexVideo` 拿帧表（MP4 / Matroska 按魔数分派）；拆不了（分片 MP4、编码不支持、Matroska 的
  *   lacing 等）与读失败（文件不在、长度不符）一样按失败处理，没有别的路可退。之后按解码
  *   顺序连续读约 4 MiB 一块（`BLOCK_BYTES`），至多两块在手：正在喂的一块与预读的下一块，喂过去的丢掉。
- * - **解码**：`decoderConfig(track, colorRule)`（codec 串、description、照 WPE 的色彩空间，步骤 1 点 2）；`isConfigSupported` 不支持、解码器
- *   `error`、`decode` 抛错 → 失败。解码器只解不播（决策「解码器只解不播」）：按解码顺序吃进、按显示顺序吐出，时钟与挑帧都在这里。
+ * - **解码**：`decoderConfig(track, colorRule)`（codec 串、description、照 WPE 的色彩空间，步骤 1 点 2）。解码器只解不播（决策「解码器只解不播」）：
+ *   按解码顺序吃进、按显示顺序吐出，时钟与挑帧都在这里。
+ * - **硬解优先、退到软解**（P9e 之后，`Acceleration`）：Chromium 把 `prefer-hardware` 当成必须硬解，显卡没有这种编码的硬解或画面小于
+ *   硬解的最小尺寸（本机 VP9 约 128、HEVC 约 144、H.264 在 64 与 96 之间）时 `isConfigSupported` 说不支持；`no-preference` 的
+ *   `isConfigSupported` 不可靠（硬解、软解都不支持的 HEVC 64×48 也说支持）。所以先问硬解，不支持再问 `prefer-software`，都不支持才失败；
+ *   退到软解记一条 warn。硬解说支持、配置或解码时才出错（`error` 回调，或解码器已被 Chromium 关掉时 `decode` / `configure` 同步抛错）
+ *   也换软解一次：关掉旧解码器（代数加一，它之后的回调不理），从出错时的媒体时间接着解；软解再出错才失败。本机自编的 CEF 没有 HEVC
+ *   的软解，HEVC 退不了。WPE 的 Media Foundation 同样会退到软解。
+ * - **失败**的来源：`isConfigSupported` 硬解、软解都不支持，软解的解码器 `error` / 抛错，读不到，拆不了包。
  * - **流控**：解码队列（`decodeQueueSize`）+ 已解出未显示的帧合计不超过 `MAX_AHEAD`（8）。硬件解码的输出帧来自一个有限的池子，
  *   握着不放会让解码器拿不到空闲输出缓冲而停住（P9c 步骤 0 的卡住就是这样，见下面「卡住」一条）；所以不在放时也不多喂。
  *   解码器收下的帧不算在 `decodeQueueSize` 里：码流没写 `max_dec_frame_buffering` 时，解码器按 level 留足重排缓冲（DPB），
@@ -109,6 +116,16 @@ export interface CodecVideoProbe {
   stallResets: number;
   /** `wpeColor` 的说明，拆包之前为 null。 */
   color: string | null;
+  /** 解码路径：硬解，或退到的软解；还没定（拆包、问配置中）为 null。 */
+  acceleration: Acceleration | null;
+}
+
+/** 解码路径：硬解优先，显卡不能硬解时退到软解（`hardwareAcceleration` 分别是 `prefer-hardware` / `prefer-software`）。 */
+export type Acceleration = "hardware" | "software";
+
+/** 同一份配置换成软解（Chromium 把 `prefer-hardware` 当成必须硬解，`no-preference` 的 `isConfigSupported` 不可靠）。 */
+export function softwareConfig(config: VideoDecoderConfig): VideoDecoderConfig {
+  return { ...config, hardwareAcceleration: "prefer-software" };
 }
 
 /** 缺省的区间读取：`fetch(file:)` 带 Range 头，偏移加 `source.start`。CEF 的 `file:` 响应是 200、不带 Content-Range，所以只认长度。 */
@@ -190,6 +207,10 @@ export class CodecVideoPlayer {
   private decoder: CodecDecoder | null = null;
   /** 解码器配置过（之后的跳转先 reset 再 configure）。 */
   private opened = false;
+  /** 当前解码器走的路径；退到软解只退一次。 */
+  private acceleration: Acceleration | null = null;
+  /** 解码器的代数：退到软解时换新解码器，旧解码器之后的回调（输出、出错、dequeue）一律不理。 */
+  private decoderGeneration = 0;
 
   // —— 喂帧 ——
   /** 下一个要喂的样本（解码顺序）。 */
@@ -286,36 +307,59 @@ export class CodecVideoPlayer {
 
   // —— 生命周期 ——
 
-  /** 帧表到手：算解码配置、显示顺序，问解码器支不支持，支持就建解码器、从 0（或拆包期间脚本写的时间）开始。 */
+  /**
+   * 帧表到手：算解码配置、显示顺序，问解码器支不支持，支持就建解码器、从 0（或拆包期间脚本写的时间）开始。先问硬解，不支持
+   * （显卡没有这种编码的硬解、画面小于硬解的最小尺寸）再问软解，软解也不支持才失败。
+   */
   private prepare(track: VideoTrackIndex): void {
     this.track = track;
     const config = decoderConfig(track, this.colorRule);
-    this.config = config;
     this.color = wpeColor(track, this.colorRule).note;
     const order = Array.from(track.times.keys()).sort((a, b) => track.times[a] - track.times[b] || a - b);
     this.displayOrder = Uint32Array.from(order);
     const firstKey = track.keys.indexOf(1);
     this.firstKey = firstKey < 0 ? 0 : firstKey;
-    new Promise<{ supported?: boolean }>((resolve) => resolve(this.isConfigSupported(config))).then(
-      (support) => {
-        if (this.disposed || this.failed) return;
-        if (!support?.supported) {
-          this.fail("场景视频的解码配置不支持", `${config.codec} ${track.codedWidth}×${track.codedHeight}`);
-          return;
-        }
-        this.open();
-      },
-      (error: unknown) => this.fail("场景视频的解码配置不支持", error),
-    );
+    const what = `${config.codec} ${track.codedWidth}×${track.codedHeight}`;
+    void (async () => {
+      const hardware = await this.supported(config);
+      if (this.disposed || this.failed) return;
+      if (hardware.ok) {
+        this.open(config, "hardware");
+        return;
+      }
+      const software = softwareConfig(config);
+      const fallback = await this.supported(software);
+      if (this.disposed || this.failed) return;
+      if (!fallback.ok) {
+        this.fail("场景视频的解码配置不支持", fallback.error ?? hardware.error ?? `${what}（硬解、软解都不支持）`);
+        return;
+      }
+      this.report.warn(`场景视频改用软件解码（显卡不能硬解这段视频）：${this.source.path}`, what);
+      this.open(software, "software");
+    })();
   }
 
-  private open(): void {
+  /** `isConfigSupported` 包一层：同步抛错与 reject 都当作不支持，并带回原因。 */
+  private async supported(config: VideoDecoderConfig): Promise<{ ok: boolean; error?: unknown }> {
+    try {
+      return { ok: (await this.isConfigSupported(config))?.supported === true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+
+  /** 按 `config` 建解码器（这一代的回调才算数），从 `pendingSeek`（拆包或换软解期间记下的时间，缺省 0）开始。 */
+  private open(config: VideoDecoderConfig, acceleration: Acceleration): void {
+    this.config = config;
+    this.acceleration = acceleration;
+    const generation = ++this.decoderGeneration;
+    const current = () => generation === this.decoderGeneration && !this.disposed;
     try {
       this.decoder = this.createDecoder({
-        output: (frame) => this.onOutput(frame),
-        error: (error) => this.fail("场景视频解码失败", error),
+        output: (frame) => (current() ? this.onOutput(frame) : frame.close()),
+        error: (error) => current() && this.decoderFailed(error),
         // 解码器收下了输入（可能憋在重排缓冲里不出帧）：接着喂，不等下一个渲染帧
-        dequeue: () => this.pump(),
+        dequeue: () => current() && this.pump(),
       });
     } catch (error) {
       this.fail("场景视频解码器建不出来", error);
@@ -540,6 +584,7 @@ export class CodecVideoPlayer {
       decodeQueue: this.decoder?.decodeQueueSize ?? 0,
       stallResets: this.stallResets,
       color: this.color,
+      acceleration: this.acceleration,
     };
   }
 
@@ -687,7 +732,7 @@ export class CodecVideoPlayer {
       decoder.configure(config);
       this.opened = true;
     } catch (error) {
-      this.fail("场景视频解码器配置失败", error);
+      this.decoderFailed(error);
       return;
     }
     const target = this.targetSample(time);
@@ -756,7 +801,7 @@ export class CodecVideoPlayer {
           data: block.bytes!.subarray(offset, offset + track.sizes[i]),
         });
       } catch (error) {
-        this.fail("场景视频解码失败", error);
+        this.decoderFailed(error);
         return;
       }
       this.pending.set(timestamp, (this.pending.get(timestamp) ?? 0) + 1);
@@ -851,6 +896,57 @@ export class CodecVideoPlayer {
       `媒体时间 ${time} s，已解 ${this.decoded} 帧，待解 ${this.pendingCount} 个`,
     );
     this.seekTo(time);
+  }
+
+  // —— 内部：退到软解 ——
+
+  /**
+   * 解码器出错（`error` 回调，或 `decode` / `configure` 同步抛错——硬解失败时 Chromium 先关掉解码器、之后才回调，这之间的调用会抛
+   * `InvalidStateError`）：硬解时换软解重来，软解时失败。
+   */
+  private decoderFailed(error: unknown): void {
+    if (this.failed || this.disposed) return;
+    if (this.acceleration === "hardware" && this.config) this.fallBackToSoftware(error);
+    else this.fail("场景视频解码失败", error);
+  }
+
+  /**
+   * 硬解出错（`isConfigSupported` 说支持、实际配置或解码时才失败：驱动问题、设备丢失等）：关掉旧解码器（代数加一，之后它的回调都不理），
+   * 问软解支不支持，支持就建软解的解码器、从出错时的媒体时间接着解（跳转中就是跳转目标）。只退一次；当前帧留着，直到新的目标帧到手。
+   * 换的期间没有解码器：喂帧与卡住判定都跳过，脚本写的时间记进 `pendingSeek`。
+   */
+  private fallBackToSoftware(error: unknown): void {
+    const hardware = this.config!;
+    this.advance();
+    const time = this.mediaTime();
+    const old = this.decoder;
+    this.decoder = null;
+    this.opened = false;
+    this.acceleration = null;
+    this.decoderGeneration++;
+    for (const frame of this.ready) frame.close();
+    this.ready = [];
+    this.pending.clear();
+    this.pendingCount = 0;
+    try {
+      old?.close();
+    } catch {
+      // 出错的解码器已经关了
+    }
+    this.pendingSeek = time;
+    // 同跳转：换的期间时钟停着（`running` 要求不在跳转），新解码器的目标帧到了才接着走、才换当前帧
+    this.seeking = true;
+    const software = softwareConfig(hardware);
+    const detail = `${hardware.codec} ${hardware.codedWidth}×${hardware.codedHeight}：${String(error)}`;
+    void this.supported(software).then((fallback) => {
+      if (this.disposed || this.failed) return;
+      if (!fallback.ok) {
+        this.fail("场景视频硬件解码出错、软件解码不支持", fallback.error ?? detail);
+        return;
+      }
+      this.report.warn(`场景视频硬件解码出错，改用软件解码：${this.source.path}`, detail);
+      this.open(software, "software");
+    });
   }
 
   // —— 内部：其它 ——
