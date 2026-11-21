@@ -215,6 +215,7 @@ import type { TextRelayouter } from "../text/host";
 import type { TextDecor } from "../text/fields";
 import type { TextLayout } from "../text/layout";
 import { isDynamicSource, type UserTextureSlot } from "../compile/usertextures";
+import { sameSelection, selectVariants } from "../compile/textureVariants";
 import type { CropRect } from "../usertex/crop";
 import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextureProvider } from "../usertex/sources";
 import type { VideoSink } from "../video/sceneVideos";
@@ -319,7 +320,7 @@ import type { DirtyState, LayerState, SceneState } from "./state";
 import { WorldStamps } from "./worldStamps";
 import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
 import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
-import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
+import { requiredFeatures, samplerDescriptor, uploadTexture, writeBitmapMips } from "./textures";
 import { traceUniforms } from "./trace";
 import {
   drawUniformValues,
@@ -1678,6 +1679,12 @@ export class GpuScene {
   private textures: (GPUTexture | null)[] = [];
   /** 多图像帧表（P6e 点 4）第 1 张起的其余图像的 GPU 纹理（下标 k 是图像 k + 1），键同 `textures`；只有这类纹理有条目。 */
   private readonly extraTextures = new Map<number, GPUTexture[]>();
+  /**
+   * 纹理变体（P11e）：条件属性的当前值（就是 `SceneState.variantValues`，建场景时接过来，状态写入后这里同步可见），与已上传的变体纹理当前的
+   * 命中表（键同 `textures`）。上传与换选择都按当前值选，选择不变不重写。
+   */
+  private variantValues: ReadonlyMap<string, unknown> = new Map();
+  private readonly variantSelected = new Map<number, ReadonlyMap<number, number>>();
   private dummies!: ReturnType<GpuScene["createDummies"]>;
   private readonly samplers = new Map<string, GPUSampler>();
   private readonly programs = new Map<number, Promise<GpuProgram>>();
@@ -2426,6 +2433,7 @@ export class GpuScene {
     scene.userProvider = options.userTextures ?? null;
     scene.modelDataSource = options.modelData ?? null;
     scene.userWritten = state.userWritten;
+    scene.variantValues = state.variantValues;
     // 加载时（宿主排版期间）的图集重置不算：运行中重置了才连带重排
     for (const atlas of layoutAtlases(...state.texts.values())) scene.atlasResets.set(atlas, atlas.resets);
     device.pushErrorScope("out-of-memory");
@@ -3957,7 +3965,10 @@ export class GpuScene {
       if (!this.textures[index] && bundle.textures[index]) this.textures[index] = this.uploadAt(index);
   }
 
-  /** 上传第 `index` 张场景纹理；多图像帧表（P6e 点 4）的其余图像各上传一张，记进 `extraTextures`，都由 `own` 随场景释放。 */
+  /**
+   * 上传第 `index` 张场景纹理；多图像帧表（P6e 点 4）的其余图像各上传一张，记进 `extraTextures`，都由 `own` 随场景释放。
+   * 纹理变体（P11e）按条件属性的当前值选（运行中改过值之后才上传的纹理也对），记下命中表。
+   */
   private uploadAt(index: number): GPUTexture {
     const texture = this.bundle.textures[index];
     const extra = texture.images;
@@ -3966,7 +3977,27 @@ export class GpuScene {
         index,
         extra.map((mips) => this.own(uploadTexture(this.device, { ...texture, mips, images: undefined }))),
       );
-    return this.own(uploadTexture(this.device, texture));
+    if (!texture.variants) return this.own(uploadTexture(this.device, texture));
+    const selected = selectVariants(texture.variants.conditions, this.variantValues);
+    this.variantSelected.set(index, selected);
+    return this.own(uploadTexture(this.device, texture, selected));
+  }
+
+  /**
+   * 纹理变体（P11e）：条件属性写过的纹理按当前值重新选择，命中表变了才把这张 GPU 纹理的内容重写一遍（底图 + 变体，`writeBitmapMips`）。
+   * 尺寸、格式不变，绑定组与着色器都不动，下一帧画新的（WPE 在帧间原地重载这张纹理、下一帧画新变体，rea-p11e 2 节）。没上传的（还没有
+   * 图层用到）不管，上传时按当时的值选。同一张 `.tex` 只有一个下标（按文件缓存），被几个材质用时一起换。
+   */
+  private syncTextureVariants(dirty: DirtyState): void {
+    if (!dirty.textureVariants.size) return;
+    this.bundle.textures.forEach((texture, index) => {
+      const gpu = this.textures[index];
+      if (!texture.variants || !gpu || !dirty.textureVariants.has(texture.path) || !texture.mips[0]?.bitmap) return;
+      const selected = selectVariants(texture.variants.conditions, this.variantValues);
+      if (sameSelection(selected, this.variantSelected.get(index) ?? new Map())) return;
+      this.variantSelected.set(index, selected);
+      writeBitmapMips(this.device, gpu, texture, selected);
+    });
   }
 
   /**
@@ -5525,6 +5556,8 @@ export class GpuScene {
     this.syncTexts(dirty, state, worlds);
     // 用户纹理（P11b 步骤 2）：来源写过或解码完成的，换 bind group / 整层重建，在结构与刷新之前，新 draw 照当前状态写 uniform
     this.syncUserTextures(dirty, state, worlds);
+    // 纹理变体（P11e）：条件属性写过的纹理重新选择、重写内容（不动绑定）
+    this.syncTextureVariants(dirty);
     // 材质状态字段（P6d1b）：写过的与管线刚备好的图层按有效 pass 强制重建
     this.syncPassStates(dirty, state, worlds);
     // 结构先处理：新 draw 按当前状态写 uniform，后面的刷新也落在新 draw 上

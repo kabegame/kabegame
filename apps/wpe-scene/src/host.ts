@@ -706,6 +706,8 @@ export class SceneHost {
     if (target.kind === "recompile") return target.path;
     // 用户纹理（P11b）：同脚本运行时的 `targetKey`
     if (target.kind === "user-texture") return `usertextures/${target.name}`;
+    // 纹理变体的条件属性（P11e）：同脚本运行时的 `targetKey`
+    if (target.kind === "texture-variant") return `texturevariants/${target.path}/${target.name}`;
     // puppet 动画层字段（P12a 步骤 3 点 3）：同脚本运行时的 `targetKey`
     if (target.kind === "animation-layer")
       return `objects/${target.object}/animationlayers/${target.layer}/${target.field}`;

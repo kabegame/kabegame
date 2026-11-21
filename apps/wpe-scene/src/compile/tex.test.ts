@@ -325,7 +325,7 @@ const VIDEO_LENGTH = 256 * 1024;
 
 /**
  * 照 `ignore/p9/gen_v.py` 的 `make_tex`（头照语料 3828359750）：格式 0、标志 34（Video + ClampUVs）、纹理与图像都是 1280×720、
- * 一张图、一个 mip、uncompressedSize 0。`TEXB0004` 多一个 isVideoMp4（0），头共 91 字节；`TEXB0003` 87 字节。
+ * 一张图、一个 mip、uncompressedSize 0。`TEXB0004` 多一个条件数（0，P11e；LWE 叫它 isVideoMp4），头共 91 字节；`TEXB0003` 87 字节。
  */
 function videoTex(container: 3 | 4, video: Uint8Array): Uint8Array {
   return parts(

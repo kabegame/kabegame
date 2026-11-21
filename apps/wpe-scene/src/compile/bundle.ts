@@ -21,6 +21,7 @@ import {
   type TargetKey,
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
+import { variantPropertyNames, type TexVariantCondition, type TexVariantPatch } from "./textureVariants";
 import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
 import { reflectionKind, reflectionList } from "./reflection";
 import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from "./sprite";
@@ -164,7 +165,7 @@ import {
 import { checkCameraObjectPath, compileCamera, type SceneCameraJson } from "./camera";
 import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
-import { FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
+import { FBO_FORMATS, FREE_IMAGE_MIME, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import { materialCombos, passAlphaWriting, type AlphaWriting } from "./writeState";
 import {
   defaultOfTexture,
@@ -268,6 +269,25 @@ export interface SceneTexture {
    * 换格）。和 `sheet`（粒子只取第 0 帧的宽高）并存。
    */
   frames?: SceneSheetFrames;
+  /** 纹理变体（P11e，`SceneTextureVariants`）：带条件的 FreeImage 纹理才有。 */
+  variants?: SceneTextureVariants;
+}
+
+/**
+ * 纹理变体（P11e，rea-p11e）：`.tex` 里按用户属性条件贴到底图上的补丁。底图照旧在 `encoded` / `mips`；这里是条件表、每级 mip 的变体条目
+ * （区间同 `encoded`，主线程按区间读、解码后填 `bitmap`），以及编译时条件里各属性的值（`values`，属性不存在的不写），宿主据此选出初始的
+ * 命中表；运行中改值经绑定目标 `{ kind: "texture-variant" }` 写进 `SceneState.variantValues`，`GpuScene.sync` 重新选择、重写纹理内容。
+ */
+export interface SceneTextureVariants {
+  conditions: TexVariantCondition[];
+  /** 第 l 项是第 l 级 mip 的变体条目，文件顺序。`mime` 缺时是浏览器解不了的格式（已照报 `tex:variant:raw`），强制渲染时不贴。 */
+  mips: SceneVariantPatch[][];
+  values: Record<string, SceneScalar>;
+}
+export interface SceneVariantPatch extends TexVariantPatch {
+  mime?: "image/png" | "image/jpeg";
+  /** 主线程解码后填（`decode.ts`）；解码失败或尺寸和条目不符的不填，不贴。 */
+  bitmap?: ImageBitmap;
 }
 
 /**
@@ -1868,6 +1888,41 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   const settled = () => unsupported.recorder === null && unsupported.size > 0 && !input.force && !input.exhaustive;
 
   /**
+   * 纹理变体（P11e）：条件里每个属性登记一条就地绑定 `texture-variant`，记下它编译时的值（属性不存在的不记，判定为假）。纹理按文件路径
+   * 缓存，同 WPE 只按文件名缓存：同一张 `.tex` 被几个材质用时选择相同、一起换（rea-p11e 2 节）。
+   */
+  function textureVariants(path: string, tex: TexResult, issues: Set<string>): SceneTextureVariants | undefined {
+    if (!tex.variants) return undefined;
+    const { conditions } = tex.variants;
+    const values: Record<string, SceneScalar> = {};
+    for (const name of variantPropertyNames(conditions)) {
+      bindings.bindTextureVariant(path, name);
+      if (!Object.hasOwn(properties, name)) continue;
+      const value = properties[name];
+      if (value === undefined) {
+        // TODO:[WPE_SCENE] 属性定义里没有 `value` 键：WPE 对象形式的判定对空指针解引用（`0x140174d30`，rea-p11e 1.2），崩溃组合照报；
+        // bool 形式在 WPE 里判假，不报
+        if (conditions.some((condition) => condition.test.name === name && "equals" in condition.test)) {
+          tex.unsupported.push("tex:variant:no-value");
+          issues.add("tex:variant:no-value");
+        }
+        continue;
+      }
+      values[name] = value;
+    }
+    return {
+      conditions,
+      values,
+      mips: tex.variants.mips.map((level) =>
+        level.map((patch) => {
+          const mime = FREE_IMAGE_MIME[patch.freeImageFormat];
+          return mime ? { ...patch, mime } : { ...patch };
+        }),
+      ),
+    };
+  }
+
+  /**
    * 一张纹理（按解析后的路径缓存）。帧表纹理不报 `tex:animation`（P6e 点 1：图像层、effect、粒子的帧动画都支持，完整帧表在
    * `SceneTexture.frames`）；多图像帧表（点 4）由 `SceneTexture.images` 带其余图像；FreeImage 形态的多图像报 `tex:animation:multi-image:freeimage`，`tex:animation:empty` 照报。
    * 粒子路径只有槽 0 带帧表语义：WPE 只看槽 0 纹理的头标志置系统的 `0x1000000`（rea-p4b-render.md 2.3），帧表宏与
@@ -1926,6 +1981,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       encoded: tex.encoded,
       video: tex.video,
     });
+    const variants = textureVariants(path, tex, issues);
+    if (variants) bundle.textures[index].variants = variants;
     const extra = extraImages(tex);
     if (extra) bundle.textures[index].images = extra;
     const sheet = spriteSheet(tex, textureWidth, textureHeight);

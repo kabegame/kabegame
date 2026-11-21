@@ -190,7 +190,7 @@ count × { sizedString name, u32 offset, u32 length }
 - **条目名**：UTF-8、正斜杠（有中文和末尾空格）。没有该条目返回 null，由资源解析层继续查下一个来源。
 - **查找不分 ASCII 大小写**（2026-11-20，照 WPE 2.8.42 `wallpaper64.exe`，`pkgKey`）：挂载 `FUN_140276700` 把每个条目名逐字节过 CRT `tolower` 后作 `unordered_map`（FNV-1a）的键，`try_emplace` 碰到已有的键返回旧节点、随后改写偏移与长度，所以**同键（含只差大小写的）取最后一条**；查找 `FUN_140275ef0` / `FUN_1402760e0` 把要找的路径同样逐字节 `tolower` 再 `memcmp`。exe 不调 `setlocale`，C 区域的 `tolower` 只改 A–Z，非 ASCII 字节原样比。之前照 linux-wallpaperengine 按原样精确匹配、同名取第一条：`3662790108`（哈勃）的场景写 `materials/models/HUBBLE/…`、包里是 `materials/models/hubble/…`，报了 9 个 `material:missing:*`（以前误记成工坊内容缺文件）。Rust 导入取入口 json（`wpe/project.rs` 的 `read_pkg_entry`）与 kbp-tools 的 `content` 同一规则。语料 366 个包里没有只差大小写的条目；完全同名的只有 `3643916956` 的一个字体，两份字节相同。
 - **校验**：头部必须以 `PKGV` 开头；目录表截断、字符串或条目数异常、读到的条目长度不对都抛 `PkgFormatError`。长度过长通常意味着 `Range` 被忽略。
-- **视频纹理**：`.tex` flags 含 Video（32）时唯一的 mip 是完整 MP4；本机工坊样本的 `isVideoMp4` 字段为 0，判断要看 flags。
+- **视频纹理**：`.tex` flags 含 Video（32）时唯一的 mip 是完整 MP4，判断要看 flags。`TEXB0004` 头里 LWE 叫 `isVideoMp4` 的那个字段其实是纹理变体的条件数（P11e，见「纹理变体（P11e）」），视频纹理里都是 0。
 - **测试**：`pkg.test.ts` 的单测用内存构造的包；设置 `KABEGAME_WPE_ROOT`（WPE 安装目录）后另跑本机工坊目录里的每个 `scene.pkg`，只读。
 
 ## 编译管线
@@ -1993,6 +1993,46 @@ pass 级的 `keepaspect` WPE 不读，改中性。
 - 显存：用户纹理按原分辨率、只裁不缩（6000×3000 → 3000×3000），一张 4K 方图约 36 MB；合成 RT 池只增不减，反复换不同尺寸的图时旧尺寸的 RT 不回收。
 
 **语料**（183 个工程）：能渲染 88 → 90（`3462279189`、`3783690410`，原来都只差 `usertextures`），没有场景掉出；去掉 `material:usertextures` 30 张、`effect:*:pass:usertextures` 21 张，新增 `usertextures:system` 19 张、`:usershortcut` 3 张、`:particle-sheet` 2 张。用到 `usertextures` 的场景多数还差媒体回调、脚本 API、文本、关键帧等别的节。P11b2（233 个工程）只去掉 `:particle-sheet` 的 2 张，`3799462430`、`3812473896` 解锁，干净 223 → 225。
+
+## 纹理变体（P11e）
+
+WPE 的资源编译器可以把一张底图和若干张「满足某个用户属性条件才贴上去」的补丁编进同一个 `.tex`（源 JSON 的 `variants[]`）。加载时按属性的当前值逐条判定，把命中的变体贴到底图上；运行中改了相关属性，WPE 在帧间原地重载这张纹理、重新判定，下一帧画新的。读码见 [rea-p11e.md](../../.claude/plans/wpe-import/3-scene/phase11/rea-p11e.md)，计划与实测见 [phase-11e-texture-variants.md](../../.claude/plans/wpe-import/3-scene/phase11/phase-11e-texture-variants.md)。语料只有 myprojects 的 `3817265356`（属性「腿」切换三种贴图）用到。
+
+**格式**（`compile/tex.ts` 的 `parseTex`，`FUN_14015c8d0`）：
+- `TEXB0004` 的 imageCount、FreeImage 格式之后是**条件数 N**（以前照 LWE 当成 `isVideoMp4`、为 1 时每级 mip 前多读一段，WPE 里没有这种布局，语料也一张没有，已删）。N 条 `[u32 组号, u32 变体号, u32 标志, 以 0 结尾的 JSON]`，JSON 是 `{"condition": variantcondition}`。组号 = 源 JSON `variants[]` 的下标 + 1，变体号跨组从 1 连续编号。
+- N > 0 时每级 mip 的底图数据之后跟这一级的变体块：`u32 组数`，每组 `u32 条数`，每条 `[组号, 变体号, x, y, w, h, FreeImage 格式, 长度, 数据]`；x、y、w、h 是这一级 mip 上的矩形（每级各写各的，不按比例推）。Worker 只记数据在磁盘上的区间（`TexResult.variants`），同 FreeImage 底图由主线程按区间读、解码。
+
+**判定与选择**（`compile/textureVariants.ts`，`FUN_140174a60`）：
+- 对象形式 `{name, condition}`：属性值必须是 **JSON 字符串**且与条件逐字节相等。数字、布尔一律为假（数字 2 不等于 `"2"`），和场景对象 `{user:{…}}` 绑定的判定（`asString` 后比较）不同。
+- 字符串形式 `"<属性名>"`：属性值必须是布尔 true。
+- 属性不存在为假；JSON 不合规的条件什么都不做（不进表，但每级的变体块照样按 N 读）。
+- 按头里的顺序判，**同一组只认第一条命中的**，得到「变体号 → 标志」。
+
+**贴法**（`render/textures.ts` 的 `writeBitmapMips`，`FUN_14015c480`）：每级先写底图，再按文件顺序贴命中的变体；最后一条带标志位 2 的之前的丢掉、它之后的不贴。
+- 标志 0：在 (x, y) 处逐行覆盖。我们用 `copyExternalImageToTexture` 写到目标矩形（位图按 `premultiplyAlpha: "none"` 解码、`premultipliedAlpha: false` 写入），逐字节相同。
+- 标志位 1（资源编译器的 `blend: "alphablend"`）：只对 RGBA8888，rgb `dst + ((src − dst)·a >> 8)`（r、b 打在一个 32 位里算）、alpha 取较大。**照报** `tex:variant:alphablend`（语料 0 处，`TODO:[WPE_SCENE]`；公式与 WPE 逐像素相同的参考实现在 `ignore/p11/e/ref_variants.py`），强制渲染时不贴。
+- 标志位 2：整张替换。**有意不同**：变体是 PNG 时 WPE 把编码后的字节当像素上传，还越界读到文件里下一组变体的头（P11e 点 0 实测）；资源编译器不产生位 2，语料 0 处，我们解码后贴在它的矩形上。
+- 出界（宽高为 0、矩形不在这一级里）的条目跳过；解码失败或位图尺寸和条目不符的跳过，不让整张纹理失败。
+
+**运行中换值**：
+- 编译期给每张变体纹理条件里的每个属性登记一条就地绑定 `{ kind: "texture-variant", path, name }`，并把编译时的值记进 `SceneTexture.variants.values`（属性不存在的不记）。
+- 宿主改值经绑定写进 `SceneState.variantValues`（值照原样，判定要看类型）并标脏；下一次 `GpuScene.sync`（`syncTextureVariants`）重新选择，**命中表变了才**把这张 GPU 纹理的内容重写一遍（底图 + 变体）。尺寸、格式不变，绑定组与着色器都不动，不重编译。
+- 纹理按文件路径缓存（同 WPE 只按文件名缓存），同一张 `.tex` 被几个材质用时选择相同、一起换。
+- 全部变体位图在加载时一起解码（`decodeEncodedTextureList`），换选择当帧就能重写，不晚帧。
+- WPE 的两个副作用不复刻：没有命中时记 `$__default`，此后每次应用该属性都白白重载一次；每次重载重复登记绑定。都不改画面。WPE 开纹理降级（跳过第 0 级 mip）时没读走它后面的变体块、后面解析错位的缺陷也不复刻，我们没有纹理降级。
+
+**照报**（2026-11-21 用户定，语料 0 处，代码里标 `TODO:[WPE_SCENE]`）：
+- `tex:variant:raw`：底图或变体是原格式（含 LZ4），WPE 按格式逐行拷（DXT 按块行）。
+- `tex:variant:alphablend`：标志位 1。
+- `tex:variant:multi-image`：多图像的纹理带条件。
+- `tex:variant:no-value`：条件引用的属性定义里没有 `value` 键。WPE 对象形式的判定对空指针解引用（`0x140174d30`），崩溃组合照报；bool 形式在 WPE 里判假，不报。
+
+**实测与走查**：
+- **生成工程**（`ignore/p11/defs/p11e.py`）：底图三级 mip、8 条条件、6 组，覆盖同组第一条、跨组先后、每级各自的矩形、数字值、bool 形式、标志位 1 与 2。读回 WPE 抓帧里的纹理各级 mip，和参考实现逐像素比：除标志位 2（WPE 的缺陷）外全部 0 差；运行中 `apply_properties` 换值、换回没有命中的值也都 0 差。
+- **我们的渲染**：同一批工程在 1:1 下（窗口等于场景分辨率）和 WPE 整帧逐像素相同（屏蔽 FR / CLK）。
+- **`3817265356` 复制工程**（`kbp content isolate --keep 91`，三个取值各一份）：
+  - 和 WPE 整帧比，最大差 1–2，每帧 ≤ 617 个像素有差；没有命中、只有底图的那份同样量级，是 3127×2000 的纹理缩小采样的差异，和变体无关；
+  - 语料（工坊 + 默认工程）前后 0 张变化；`3817265356` 从 `tex:parse` 退回变成干净。
 
 ## 媒体（P11c）
 

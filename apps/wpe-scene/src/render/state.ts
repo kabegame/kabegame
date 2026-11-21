@@ -191,6 +191,11 @@ export interface DirtyState {
    * 只在写入时进来（WPE 每次绑定现读字节、没有「变没变」的判断，同值也重建一次无妨，但不每帧重建）。
    */
   passStates: Set<number>;
+  /**
+   * 条件属性写过的变体纹理（P11e，纹理路径）：`GpuScene.sync` 按 `variantValues` 重新选择变体，命中表变了才重写纹理内容。只在写入时进来，
+   * 同值写入也进来（选择不变就什么都不做，不必在这里比较）。
+   */
+  textureVariants: Set<string>;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -488,6 +493,12 @@ export class SceneState {
   private rateParticles = new Set<number>();
   private dirtyUserTextures = new Set<string>();
   private dirtyPassStates = new Set<number>();
+  private dirtyTextureVariants = new Set<string>();
+  /**
+   * 纹理变体条件属性的当前值（P11e，属性名 → 值，类型照原样；属性不存在的没有键）：加载时取 bundle 各变体纹理的 `variants.values`
+   * （编译时的值），运行中由绑定目标 `texture-variant` 改写。判定（`selectVariants`）只读这一份，同 WPE 读绑定管理器的属性全集。
+   */
+  readonly variantValues = new Map<string, unknown>();
   /**
    * 脚本写过的材质状态字段（P6d1b，pass 稳定键 → 字段 → 规范名）：只存写过的字段，没写过的取 bundle 的 `ScenePass`（`render/passState.ts` 的
    * `applyPassStates` 拼出有效的 pass）。值已按字段的表规整。
@@ -540,6 +551,9 @@ export class SceneState {
     );
     // 子表以编译产物为准（P6d3：带换父的先后）；手写的测试 bundle 没有时按 `layers` 的 `parent` 现推（`install` 的 `appendChild`）
     if (bundle.children) for (const [parent, list] of bundle.children) state.children.set(parent, [...list]);
+    // 纹理变体（P11e）：条件属性编译时的值，加载时的选择照它
+    for (const texture of bundle.textures)
+      for (const [name, value] of Object.entries(texture.variants?.values ?? {})) state.variantValues.set(name, value);
     // 相机基准（P5e）：正交（含手写的 bundle 没有 `perspective` 标记）= 重置值，`init` 之后一律重置；透视 = JSON 解析值，
     // 只有 `scene.json` 里是字符串的项覆盖 `init` 写的值（`given`，缺省当全给了；没有相机时都不覆盖）
     const camera = bundle.general.camera;
@@ -1311,6 +1325,13 @@ export class SceneState {
       this.onUserTexture?.(target.name, value);
       return "applied";
     }
+    // 纹理变体的条件属性（P11e）：值照原样记（判定看类型：对象形式只认字符串、bool 形式只认 true），条件无意义；把纹理标脏，下一次 `sync`
+    // 重新选择（WPE 的 setter 只比较、置脏，重载在帧间的回调里，rea-p11e 2 节）
+    if (target.kind === "texture-variant") {
+      this.variantValues.set(target.name, raw);
+      this.dirtyTextureVariants.add(target.path);
+      return "applied";
+    }
     // 材质状态字段（P6d1b）：值按字段的表规整（`null` / `undefined` 不写，其余先 `ToString`，查不到取表的第一项），条件无意义、不看；
     // 写入当场把图层记进「要重建」，同值也记（WPE 每次绑定现读，没有变没变的判断）
     if (target.kind === "pass-state") {
@@ -1363,6 +1384,7 @@ export class SceneState {
       rates: this.rateParticles,
       userTextures: this.dirtyUserTextures,
       passStates: this.dirtyPassStates,
+      textureVariants: this.dirtyTextureVariants,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
@@ -1374,6 +1396,7 @@ export class SceneState {
     this.rateParticles = new Set();
     this.dirtyUserTextures = new Set();
     this.dirtyPassStates = new Set();
+    this.dirtyTextureVariants = new Set();
     return dirty;
   }
 }

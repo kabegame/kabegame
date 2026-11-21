@@ -345,6 +345,12 @@ export type BindingTarget =
    */
   | { kind: "user-texture"; name: string }
   /**
+   * 纹理变体的条件属性（P11e，`compile/textureVariants.ts`）：属性 `name` 换了值，就地记进 `SceneState.variantValues`（值照原样，判定要看类型），
+   * 下一帧 `GpuScene.sync` 对纹理 `path` 重新选择变体、选择变了就重写纹理内容，不重编译（WPE 在帧间原地重载这张纹理，rea-p11e 2 节）。
+   * 每张纹理的每个条件属性登记一条，条件无意义。
+   */
+  | { kind: "texture-variant"; path: string; name: string }
+  /**
    * 材质 pass 的五个状态字段（P6d1b，只由脚本 API 产生，`script/api.ts` 材质对象的 `blending` 等）：写进 `SceneState.passStates`，
    * 值按字段的表规整（`passState.ts` 的 `normalizePassState`）；`GpuScene.sync` 对这个 pass 所属的图层强制重建，规划时取「bundle 值 +
    * 覆盖」，程序（着色器）不换。`pass` 是 pass 的稳定键（`objects/<i>/…`）。
@@ -468,6 +474,14 @@ export class BindingCollector {
   bindUserTexture(name: string): void {
     const exists = this.list.some((item) => item.target.kind === "user-texture" && item.target.name === name);
     if (!exists) this.list.push({ property: name, target: { kind: "user-texture", name } });
+  }
+
+  /** 登记纹理变体的条件属性（P11e）：同一张纹理的同一个属性只登记一条。 */
+  bindTextureVariant(path: string, name: string): void {
+    const exists = this.list.some(
+      (item) => item.target.kind === "texture-variant" && item.target.path === path && item.target.name === name,
+    );
+    if (!exists) this.list.push({ property: name, target: { kind: "texture-variant", path, name } });
   }
 }
 

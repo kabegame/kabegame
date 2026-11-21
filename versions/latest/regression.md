@@ -3572,6 +3572,22 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | U10 大图 | Windows dev | 选一张 6000×3000 的 JPEG，再换回小图 | 解码完成后换上（晚几帧）、不卡死；裁成 3000×3000 | 待真机确认 |
 | [ ] | U11 非 Windows | macOS / Linux | 预览一张带 `scenetexture` 的场景并选图 | 同 Windows | 本机不能测 |
 
+## 场景壁纸按属性切换的纹理变体（P11e）
+
+2026-11-21 Windows dev。`TEXB0004` 的条件与变体：加载时按用户属性选、运行中改值下一帧换图（只重写纹理内容，不重编译）。计划、读码与实测见 `.claude/plans/wpe-import/3-scene/phase11/phase-11e-texture-variants.md`、`rea-p11e.md`，文档见 `cocs/wpe/WPE_SCENE.md`「纹理变体（P11e）」。数据在 `ignore/p11/e/`，WPE 抓帧在 `A:\p11e\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | V0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；vitest `compile/textureVariants.test.ts`、`compile/tex.test.ts`、`render/p11b.test.ts`（纹理变体两条）、`host.usertextures.test.ts`；Prettier | 0 error、全过 | 2026-11-21 Claude：tsc 0 error，4 个文件 96 个用例全过；变异 5 处（同组不去重、判定不看类型、整张替换不截断、选择不变也重写、不读每级变体块）全部检出 |
+| [x] | V1 WPE 的选择与贴法 | Windows + WPE 抓帧，1280×720 | `kbp gen p11e`（底图三级 mip、8 条条件），五个工程各抓 1 帧，读回图像层 `g_Texture0` 的三级 mip，和参考实现 `ref_variants.py` 逐像素比 | 同组只认第一条、跨组按顺序覆盖、每级用自己的矩形、数字值判假、bool 形式只认 true | 2026-11-21 Claude：四个工程三级 mip 都是 0 差；标志位 1 的混合公式也 0 差（照报不做）；标志位 2 时 WPE 把 PNG 编码字节当像素上传（缺陷，不复刻） |
+| [x] | V2 WPE 运行中换值 | 同 V1 | `apply_properties` 改 leg、flag，再改回没有命中的值 | 换图、改回底图 | 2026-11-21 Claude：两次都和参考实现 0 差 |
+| [x] | V3 我们的渲染 | Windows dev，屏外宿主，1920×1080 | 生成工程 `p11e-var-l1`、`p11e-var-s` 用 `renderFrames.ts` 渲染，和 WPE 同尺寸抓帧整帧比（屏蔽 FR / CLK） | 逐像素相同 | 2026-11-21 Claude：两个工程各 2 帧 0 差 |
+| [x] | V4 3817265356 复制工程 | Windows dev + WPE 抓帧，1920×1080、fps 20、ultra | `kbp content isolate --keep 91`，属性「腿」"1" / "2" / "3" 各一份，按日志回放逐帧比 | 差异都能解释 | 2026-11-21 Claude：最大差 1–2、每帧 ≤ 617 个像素有差；没有命中的 "2"（只有底图）同样量级，是缩小采样的差异，和变体无关 |
+| [x] | V5 语料 | Node | `kbp regress --corpus --no-cases`（HEAD 快照对本步）；`kbp corpus scan --project …/myprojects/3817265356` | 工坊与默认工程不变；3817265356 变干净 | 2026-11-21 Claude：0 张变化；3817265356 从 `tex:parse:…纹理数据越界` 变成没有不支持项 |
+| [x] | V6 预览里切换选项 | Windows dev，图库预览 | 预览 `3817265356`，在属性面板把「腿」在黑丝 / 白丝 / 无之间切换 | 画面当场换，不重新加载、不闪 | 需要用户看（重开预览以用上新的宿主产物） |
+| [x] | V7 桌面壁纸 | Windows dev，窗口模式 | 把 `3817265356` 设为桌面壁纸，在设置页「当前壁纸」里切换「腿」 | 同 V6 | 需要用户看 |
+| [ ] | V8 非 Windows | macOS / Linux | 同 V6 | 同 Windows | 本机不能测 |
+
 ## 场景走查工具：真实壁纸的逐粒子对照与 R 注入（P11b2 走查后补）
 
 2026-11-19 Windows dev。`kbp rdc track` 的 scene 认法、`kbp cmp random-encode` / `random`、`renderFrames.ts --random`、MCP `random` 的文件写法、探针查注入表的键。数据在 `ignore/p11/b2/`（`tracks/`、`out/tools-*`），复制工程 15616（叶子）、15615（樱花）用完已移除。
