@@ -128,6 +128,8 @@ deno task --cwd apps/kabegame test:watch            # watch 模式，改哪跑�
 排查时把 `CARGO_LOG=cargo::core::compiler::fingerprint=info` 加到 cargo 环境，日志会直接
 报出 `dirty: EnvVarChanged { name, old_value, new_value }` 和 `stale: changed <文件>`。
 
+tauri 判断「开发机上的 cargo 产物」时只认父目录名正好是 `target`，`target-dev/<profile>` 在 Linux 上会把资源目录解析成 `/usr/lib/<productName>`、macOS 上解析失败；桌面 `AppPaths.resource_dir` 因此由 `tauri-plugin-pathes` 按 exe 同目录的 `.cargo-lock` 自己认开发产物，新增依赖 tauri 资源目录的代码要走 `AppPaths`，不要直接用 `BaseDirectory::Resource`。
+
 代价是每个目录各存一份依赖产物（CEF / V8 / FFmpeg 都不小），换来的是「改完代码 → check →
 dev」不再每轮全量重编。
 
@@ -204,7 +206,7 @@ deno task build:wpefont          # 把 FreeType 2.14.3 + HarfBuzz 15.0.0 + msdfg
                                  # 给出 git submodule 命令，版本不对也报错）；首次运行把 wasi-sdk 34 的 wasi-sysroot 与
                                  # libclang_rt 下到 bin/wasm/wpefont/toolchain/ 并解压（scripts/download.ts 的 fetchPinned：
                                  # SHA-256 校验、已有且摘要对就不下载、可续传；网络不稳时手动把两个 .tar.gz 放进去即可）。
-                                 # 要带 wasm32 目标的 LLVM clang（同目录有 wasm-ld）：WPEFONT_CLANG → PATH 上的 clang →
+                                 # 要带 wasm32 目标的 LLVM clang 与它调得起的 wasm-ld（编译前预检；Ubuntu 的 clang-N 找 wasm-ld-N，装 lld-N）：WPEFONT_CLANG → PATH 上的 clang →
                                  # macOS Homebrew 的 llvm（Apple clang 没有 wasm 后端，要 brew install llvm lld）。
                                  # 每次全量重编（约 1 分钟），不加改变数值结果的优化开关。
                                  # kabegame 桌面 standard 模式的 dev / start / build / check / test 不带 --skip vue 时，

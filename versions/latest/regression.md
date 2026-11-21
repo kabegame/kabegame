@@ -10,6 +10,42 @@
 | [x] | MG2 图库 `file://` | 同上 | 画廊一页里数 `file://` 的 `<img>` | 没有加载失败 | 2026-11-21 Claude：100 个 `file://`，已加载 41 个全部成功、0 个失败，其余是懒加载没轮到 |
 | [x] | MG3 macOS 上没有「跟随 WPE」 | 同上，WPE 安装目录里临时放一份 `config.json` | 调 `get_wpe_follow_available`；看设置页壁纸分区 | false，帧率、后处理等没有「跟随 Wallpaper Engine」 | 2026-11-21 Claude：放了 `{"kbtest":{"general":{"user":{"fps":24}}}}` 后命令仍是 false；帧率只有滑条、没有跟随开关，后处理只有 Off / On / Ultra（说明文字里提到跟随是静态文案）。测完删掉临时文件 |
 
+## dev 产物移到 `target-dev/` 后 Linux 找不到场景宿主
+
+2026-11-21 Linux dev。日志 `WARN webview:main: 场景宿主不可用: scene host is not built: /usr/lib/Kabegame/resources/wpe-scene/index.html`。
+桌面端的 `AppPaths.resource_dir` 由 `tauri-plugin-pathes` 经 `BaseDirectory::Resource` 取，而 tauri-utils 的
+`resource_dir_from` 只在 exe 的父目录名正好是 `target`（`target/<profile>` 或 `target/<triple>/<profile>`）且同目录有
+`.cargo-lock` 时才认作开发机、返回 exe 目录；`target-dev/debug` 不满足，Linux 回落到安装包路径 `/usr/lib/<productName>`，
+macOS 去找 `target-dev/Resources`（不存在，`AppPaths` 初始化失败）。Windows 恒返回 exe 目录，所以没有暴露。
+`resource_dir` 的使用者只有这一处。
+
+改法：`tauri-plugin-pathes` 桌面分支先看 exe 同目录有没有 `.cargo-lock`，有就直接用 `<exe 目录>/resources`，
+不看目录名；没有（安装包）仍走 tauri。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [ ] | TD1 检查 | Linux | `check-kabegame` 的 `--skip vue` | 通过 | |
+| [ ] | TD2 Linux dev 场景宿主 | Linux dev（`target-dev/debug`） | 重启 dev，预览一张场景壁纸 | 不再出现「场景宿主不可用」，场景实时渲染；预置插件目录也来自 `target-dev/debug/resources` | 需要用户重开 dev |
+| [ ] | TD3 macOS dev 启动 | macOS dev | `deno task dev -c kabegame` | 正常启动，没有 `Failed to resolve resource dir` | 没做：本机只有 Linux |
+| [ ] | TD4 安装包不受影响 | Linux deb / macOS .app / Windows 安装版 | 安装后预览场景壁纸 | 资源目录仍是 `/usr/lib/Kabegame` / `Contents/Resources` / 安装目录（这些目录里没有 `.cargo-lock`） | 发版前走查 |
+
+## `build:wpefont` 编译前预检 wasm 链接器
+
+2026-11-21 Linux（Ubuntu clang 21.1.8）。`deno task build:wpefont` 编完 42 个单元后链接报
+`clang: error: unable to execute command: posix_spawn failed: No such file or directory`：Ubuntu 的 clang-21 链接 wasm
+目标时调的是带版本号的 `wasm-ld-21`（`clang --target=wasm32-wasip1 -###` 可见），机器上没装 `lld-21`。`findClang` 只用
+`--print-targets` 查 wasm32 后端，没查链接器，所以要等全部单元编完才暴露，报错也看不出缺的是什么。
+
+改法：`scripts/build-wpefont.ts` 新增 `checkLinker`，在 `findClang` 之后、编译之前带 `-Wl,--version` 真跑一次链接器；
+失败时用 `-###` 取出 clang 要找的可执行文件名，报出它与安装命令（名字带版本号时给 `apt install lld-<N>`）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | W1 类型检查 | Linux | `deno check scripts/build-wpefont.ts` | 通过 | 2026-11-21 Claude |
+| [x] | W2 缺链接器时提前报错 | Linux，装了 clang-20、没装 lld-20 | `WPEFONT_CLANG=clang-20 deno run -A scripts/build-wpefont.ts` | 不编译任何单元，报「clang-20 调不起 wasm 链接器 wasm-ld-20」、clang 原始错误与 `apt install lld-20`，退出码 1 | 2026-11-21 Claude |
+| [x] | W3 有链接器时照常构建 | Linux，clang-21 + lld-21 | `deno task build:wpefont` | 日志多一行 `wasm-ld：Ubuntu LLD 21.1.8`，编译、链接成功，产出 `bin/wasm/wpefont/wpefont.wasm` | 2026-11-21 Claude：产物 1984 KiB |
+| [ ] | W4 macOS / Windows 预检 | macOS（Homebrew llvm + lld）、Windows（LLVM 官方安装包） | `deno task build:wpefont` | 预检通过、日志打印 wasm-ld 版本，构建成功 | 没做：本机只有 Linux；`-Wl,--version` 与 `-###` 是 clang 驱动的通用行为，Windows 上 `-###` 的路径会转义反斜杠，脚本已还原 |
+
 ## 关掉 Chromium 的系统媒体集成（3819637149 音乐一顿一顿）
 
 2026-11-21 Windows dev。`3819637149`（Somewhere In Nowhere）的场景音乐放约 1 s、停约 1 s，WPE 里很顺。原因是自激：

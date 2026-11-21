@@ -191,6 +191,12 @@ virtiofs passthrough 按数字 uid 映射（host `cm`=1000=guest `ubuntu-test`=1
 （almalinux8，glibc 2.28）会把自己那份 FFmpeg/x264 种进 `bin/linux/x86_64/`，覆盖 guest 产的
 那份，且容器里 `.pc` 烧的是 `/src` 前缀（宿主无效）。在 Linux 开发机上跑过 web 构建后，
 需要回 guest 重跑 `deno task build:ffmpeg`。macOS 宿主无此问题（树内本无 linux 产物）。
+只把 `.pc` 的 `/src` 改成本机路径**不够**：容器在 glibc 2.28 上用 `-ffast-math` 编的 `libx264.a`
+经 `<bits/math-finite.h>` 引用了 9 个 `__exp2_finite` / `__log2f_finite` / `__pow_finite` 之类的符号，
+glibc 2.31 起它们只剩非默认版本的兼容符号（`objdump -T libm.so.6` 显示为 `(GLIBC_2.15)`），新链接绑不上，
+22.04 guest 与宿主都会在链接 `kabegame` / `kabegame-cli` 时报 `undefined symbol: __exp2_finite`（引用方
+`set.c` 的 `x264_8_cqm_init`）。FFmpeg 的六个库不受影响，但照样整套重编。
+另外容器种进来的 `install/` 归 root 所有，guest 重编前先在宿主 `sudo chown -R cm:cm bin/linux/x86_64/{FFmpeg,x264}-build/install`。
 
 ## 路径与 target 的单一来源
 

@@ -10,8 +10,9 @@
  * 需要：
  * - 子模块 third/freetype（VER-2-14-3）、third/harfbuzz（15.0.0）与 third/msdfgen（v1.13），缺失时报错并给出
  *   git submodule 命令；
- * - 带 wasm32 目标的 clang（同目录要有 wasm-ld）：环境变量 WPEFONT_CLANG → PATH 上的 clang → macOS 上 Homebrew 的
- *   LLVM（Apple clang 没有 wasm 后端）。用 `--print-targets` 确认有 wasm32；
+ * - 带 wasm32 目标的 clang 与它调得起的 wasm-ld：环境变量 WPEFONT_CLANG → PATH 上的 clang → macOS 上 Homebrew 的
+ *   LLVM（Apple clang 没有 wasm 后端）。用 `--print-targets` 确认有 wasm32，编译前用 `-Wl,--version` 预检链接器
+ *   （Ubuntu 的 clang-N 找的是 `wasm-ld-N`，要装 lld-N）；
  * - wasi-sdk 34 的 wasi-sysroot 与 libclang_rt：首次运行下载到 bin/wasm/wpefont/toolchain/ 并解压（按 SHA-256 校验，
  *   已有且摘要对就不下载；网络不稳时可以手动把压缩包放进去）。
  *
@@ -298,6 +299,41 @@ function findClang(): string {
   );
 }
 
+/**
+ * 确认 clang 调得起 wasm 链接器：带 `-Wl,--version` 真跑一次 wasm-ld（`--version` 打印后即退出、不写输出文件）。
+ * 链接器缺失时 clang 只在最后链接那一步报 `posix_spawn failed` / `Executable ... doesn't exist`，要等全部单元编完才暴露，
+ * 这里提前拦下，并说出它找的是哪个可执行文件——发行版的 clang 可能找带版本号的名字（Ubuntu 的 clang-21 找 `wasm-ld-21`），
+ * 不一定是同目录的 `wasm-ld`。
+ */
+function checkLinker(clang: string): void {
+  const probe = ["--target=wasm32-wasip1", "-nostdlib", "-Wl,--version"];
+  const res = spawnSync(clang, probe, { cwd: os.tmpdir(), encoding: "utf8" });
+  if (!res.error && res.status === 0) {
+    log(`wasm-ld：${res.stdout.trim().split(/\r?\n/)[0]}`);
+    return;
+  }
+  // `-###` 只打印命令不执行：找到的链接器是完整路径，找不到时是 clang 要找的裸名字
+  const plan = spawnSync(clang, [...probe, "-###"], {
+    cwd: os.tmpdir(),
+    encoding: "utf8",
+  });
+  const linker = plan.stderr?.match(/^\s*"((?:[^"\\]|\\.)+)"/m)?.[1]
+    .replace(/\\(.)/g, "$1") ?? "wasm-ld";
+  const versioned = /wasm-ld-(\d+)(?:\.exe)?$/.exec(linker)?.[1];
+  die(
+    [
+      `${clang} 调不起 wasm 链接器 ${linker}：`,
+      (res.error ? String(res.error) : `${res.stderr}${res.stdout}`).trim(),
+      "安装与 clang 同版本的 lld，或设环境变量 WPEFONT_CLANG 指向自带 wasm-ld 的 clang：",
+      versioned
+        ? `  Ubuntu / Debian：apt install lld-${versioned}（提供 wasm-ld-${versioned}）`
+        : "  Linux：发行版的 lld（与 clang 同版本）",
+      "  macOS：brew install lld",
+      "  Windows：LLVM 官方安装包自带 wasm-ld.exe，确认它在 clang 同目录",
+    ].join("\n"),
+  );
+}
+
 interface Job {
   label: string;
   args: string[];
@@ -365,6 +401,7 @@ async function main(): Promise<void> {
   );
   if (!fs.existsSync(builtins)) die(`没有找到 ${builtins}`);
   const clang = findClang();
+  checkLinker(clang);
 
   fs.rmSync(OBJ_DIR, { recursive: true, force: true });
   fs.mkdirSync(OBJ_DIR, { recursive: true });

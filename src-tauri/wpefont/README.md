@@ -19,7 +19,8 @@ deno task build:wpefont   # → bin/wasm/wpefont/wpefont.wasm（git 忽略，约
   2. 用 `scripts/download.ts` 的 `fetchPinned` 把 wasi-sdk 34 的 `wasi-sysroot-34.0.tar.gz`、`libclang_rt-34.0.tar.gz`
      下到 `bin/wasm/wpefont/toolchain/`（SHA-256 校验，已有且摘要对就不下载，能续传）并解压；
   3. 找 clang：`WPEFONT_CLANG` → `PATH` 上的 `clang` → macOS 的 `/opt/homebrew/opt/llvm/bin/clang`、
-     `/usr/local/opt/llvm/bin/clang`，要求 `--print-targets` 里有 wasm32（同目录要有 `wasm-ld`）。Apple clang 没有 wasm
+     `/usr/local/opt/llvm/bin/clang`，要求 `--print-targets` 里有 wasm32，再用 `-Wl,--version` 预检它调得起 wasm 链接器
+     （找不到时报出 clang 要找的名字与安装命令；Ubuntu 的 clang-N 找的是 `wasm-ld-N`，要装 `lld-N`）。Apple clang 没有 wasm
      后端，macOS 要 Homebrew 的 `llvm` 与 `lld`。1a / 1b 用的是 LLVM clang 22.1.6；
   4. 并行编译 FreeType 的 21 个单元、`harfbuzz.cc`、msdfgen 的 `core/*.cpp`（去掉文件输出、SVG 导出、形状描述文本）、`wpefont.c` 与
      `msdf.cpp`，链接成 reactor。
