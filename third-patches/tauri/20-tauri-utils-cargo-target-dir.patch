@@ -1,0 +1,97 @@
+diff --git a/crates/tauri-utils/src/platform.rs b/crates/tauri-utils/src/platform.rs
+index 9a148d2eb82bd8c82cf3958d75b6a189b7d597b1..58578c21499d36b854066d2701db3092b22028cd 100644
+--- a/crates/tauri-utils/src/platform.rs
++++ b/crates/tauri-utils/src/platform.rs
+@@ -254,6 +254,41 @@ fn is_cargo_output_directory(path: &std::path::Path) -> bool {
+     .any(|dirname| &last_component.as_os_str() == dirname)
+ }
+ 
++/// kabegame: whether `exe_dir` is `<target>/<profile>` or `<target>/<triple>/<profile>` of the
++/// target directory cargo was pointed at with `CARGO_TARGET_DIR` (`cargo run` passes its own
++/// environment on to the executable). Upstream only recognizes a directory literally named
++/// `target`, so on macOS / Linux an executable built into a renamed target directory is taken
++/// for an installed app and the resource directory cannot be resolved. A relative value is
++/// resolved against the current directory, the same way cargo resolves it.
++#[cfg(not(target_os = "android"))]
++fn is_in_cargo_target_dir(
++  exe_dir: &std::path::Path,
++  target_dir: Option<std::ffi::OsString>,
++) -> bool {
++  let Some(target_dir) = target_dir.filter(|dir| !dir.is_empty()) else {
++    return false;
++  };
++  let target_dir = std::path::PathBuf::from(target_dir);
++  let target_dir = if target_dir.is_absolute() {
++    target_dir
++  } else {
++    match std::env::current_dir() {
++      Ok(cwd) => cwd.join(target_dir),
++      Err(_) => return false,
++    }
++  };
++  let canonical = |path: &std::path::Path| {
++    path
++      .canonicalize()
++      .unwrap_or_else(|_| path.to_path_buf())
++  };
++  let target_dir = canonical(&target_dir);
++  let exe_dir = canonical(exe_dir);
++  let parent = exe_dir.parent();
++  parent == Some(target_dir.as_path())
++    || parent.and_then(std::path::Path::parent) == Some(target_dir.as_path())
++}
++
+ /// Computes the resource directory of the current environment.
+ ///
+ /// ## Platform-specific
+@@ -302,8 +337,12 @@ fn resource_dir_from<P: AsRef<std::path::Path>>(
+   // and see if there's a .cargo-lock file along the executable
+   // This ensures the check is safer so it doesn't affect apps in production
+   // Windows also includes the resources in the executable folder so we check that too
++  // kabegame: the target directory may also be the one named by `CARGO_TARGET_DIR` (e.g.
++  // `target-dev`), not only a directory literally called `target`
+   if cfg!(target_os = "windows")
+-    || ((len >= 2 && parts[len - 2] == "target") || (len >= 3 && parts[len - 3] == "target"))
++    || ((len >= 2 && parts[len - 2] == "target")
++      || (len >= 3 && parts[len - 3] == "target")
++      || is_in_cargo_target_dir(exe_dir, std::env::var_os("CARGO_TARGET_DIR")))
+       && is_cargo_output_directory(exe_dir)
+   {
+     return Ok(exe_dir.to_path_buf());
+@@ -439,4 +478,36 @@ mod tests {
+     #[cfg(windows)]
+     assert_eq!(resource_dir.unwrap(), path.parent().unwrap());
+   }
++
++  #[test]
++  #[cfg(not(target_os = "android"))]
++  fn cargo_target_dir_recognized() {
++    use std::{ffi::OsString, path::Path};
++
++    let target = || Some(OsString::from("/path/to/target-dev"));
++    assert!(super::is_in_cargo_target_dir(
++      Path::new("/path/to/target-dev/debug"),
++      target()
++    ));
++    assert!(super::is_in_cargo_target_dir(
++      Path::new("/path/to/target-dev/aarch64-apple-darwin/debug"),
++      target()
++    ));
++    assert!(!super::is_in_cargo_target_dir(
++      Path::new("/path/to/target-dev/a/b/debug"),
++      target()
++    ));
++    assert!(!super::is_in_cargo_target_dir(
++      Path::new("/path/to/other/debug"),
++      target()
++    ));
++    assert!(!super::is_in_cargo_target_dir(
++      Path::new("/path/to/target-dev/debug"),
++      None
++    ));
++    assert!(!super::is_in_cargo_target_dir(
++      Path::new("/path/to/target-dev/debug"),
++      Some(OsString::new())
++    ));
++  }
+ }

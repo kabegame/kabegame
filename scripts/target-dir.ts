@@ -15,6 +15,8 @@
  * `FFMPEG_*` 掀 `rusty_ffmpeg` → `rsmpeg` → `kabegame-core`。
  *
  * 相对值由 `paths.ts` 的 `TARGET_DIR` 按仓库根解析并回写成绝对路径，派生进程一致。
+ * 目录名不是 `target` 时，macOS / Linux 的 Tauri 要靠 tauri 补丁 20 读 `CARGO_TARGET_DIR` 才认得出
+ * 开发态（否则找不到 resource 目录、`pathes` 插件初始化 panic）。
  * 详见 `scripts/AGENTS.md`「产物目录隔离」。
  */
 import fs from "node:fs";

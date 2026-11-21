@@ -75,6 +75,7 @@ VSCode 的 rust-analyzer 用同一个 `target/` 跑 `cargo check`，环境里没
 构建 cli 工具」。修成在 `target-dir.ts` 注入 `target-dev` 的同时用 `KABEGAME_CLI`（打包脚本本来就支持
 这个变量）把 cli 指回 `target/release`（没有就退 `target/debug`），不碰子仓库、也不破坏 `target-22`。
 fork 的 `cargo-tauri` 则相反——它是构建环节，继续跟着隔离走。
+**第二处回归**（2026-11-21 macOS 实测抓到）：macOS 上 `deno task dev` 编完一启动就 panic：`PluginInitialization("pathes", "Failed to resolve resource dir: unknown path")`。`tauri-utils` 的 `resource_dir_from` 在 Windows 上一律返回 exe 目录，在 macOS / Linux 上只认 exe 目录形如 `target/<profile>` 或 `target/<triple>/<profile>`（且旁边有 `.cargo-lock`）的开发态，否则按安装包找 `../Resources` / `/usr/lib/<name>`——`target-dev/debug` 不满足，而只在 Windows 上验不出来。修成 tauri 补丁 20：同样的形状也认 `CARGO_TARGET_DIR` 指的目录（`cargo run` 会把它传给 exe；相对值按当前目录解析，同 cargo），`.cargo-lock` 的检查保留，安装包不受影响；`target-dev` 的目录名不变。
 
 改动：产物目录按命令隔离（`b` → `target/`，其余 → `target-dev/`，新增 `scripts/target-dir.ts`，显式 `CARGO_TARGET_DIR` 优先，`.mcp.json` 给 `kabegame-dev` MCP 配同一个目录）、
 `--data` 默认值统一成「带 `--release` 为 prod，否则 dev」、三个生成文件改成内容有变才写（`writeFileIfChanged`）、rust-analyzer 配 `cargo.targetDir`（`.vscode/` 不入库）。
@@ -96,6 +97,8 @@ fork 的 `cargo-tauri` 则相反——它是构建环节，继续跟着隔离走
 | [x] | B9 `deno task b` 仍落 `target/` | Windows | 用户为解决 B11 跑了 `deno task b -c kabegame-cli` 与 `--release` 版 | 产物在 `target/debug/` 与 `target/release/` | 2026-11-21：02:25 的 debug（107 MB）与 02:41 的 release（85 MB）都在 `target/` 下，`kabegame-plugin` skill 的路径不变 |
 | [x] | B11 插件打包用的 cli（回归） | Windows | 用 `target-dir.ts` 注入的 dev 环境跑 `deno task package --only konachan --out-dir <临时>` | 不再找 `target-dev/release/kabegame-cli.exe`，打包成功 | 2026-11-21 Claude：`KABEGAME_CLI=D:\Codes\kabegame\target\release\kabegame-cli.exe`、`konachan.kgpg (568.79 KB)`、exit=0。修复前用户实测报「找不到 cli … 请在 kabegame 父仓库构建 cli 工具！」（5 个插件连续失败） |
 | [ ] | B10 三个生成文件跳过重写 | Windows | 连着跑两次 `deno task b -c kabegame --skip cargo` | 第二次日志打「内容未变，跳过」，`tauri.conf.json` 的 mtime 不动 | 没做：会跑完整前端构建并重打包插件 |
+| [x] | B12 tauri 补丁 20 单测与序列 | macOS | `cargo test -p tauri-utils --lib platform`（在 `third/tauri` 里）；`deno task patch tauri --check` | 新加的 `cargo_target_dir_recognized` 与原有 `resolve_resource_dir` 都过；20 个补丁链式预检通过 | 2026-11-21 Claude：2 passed；`tauri: OK dry-run` |
+| [ ] | B13 macOS dev 启动（第二处回归） | macOS dev | `deno task dev -c kabegame` | 正常起来，不再 panic `Failed to resolve resource dir: unknown path`；exe 在 `target-dev/debug/` | 修复前 2026-11-21 用户实测：一启动就在 `lib.rs:468` panic |
 
 ## 拖入落点提示显示成原始 key（`import.dropZone.*`）
 

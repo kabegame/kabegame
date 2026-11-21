@@ -67,6 +67,15 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   `resources/**/*` when the `resources/` directory does not exist) are silently skipped
   instead of failing the build with `GlobPathNotFound`. Allows builds where optional resource
   directories are absent.
+- `20-tauri-utils-cargo-target-dir.patch` — `resource_dir` also treats the executable as a
+  development build when its directory is `<CARGO_TARGET_DIR>/<profile>` or
+  `<CARGO_TARGET_DIR>/<triple>/<profile>` (still requiring `.cargo-lock` beside it). Upstream
+  only recognizes a directory literally named `target`, so on macOS / Linux an executable in a
+  renamed target directory (kabegame's `target-dev`, see `scripts/target-dir.ts`) was taken for
+  an installed app and plugin setup panicked with `Failed to resolve resource dir: unknown path`.
+  `cargo run` passes `CARGO_TARGET_DIR` on to the executable; a relative value is resolved
+  against the current directory, as cargo does. Windows is unaffected (it always uses the
+  executable directory).
 
 `tauri-runtime` (library, consumed via `[patch.crates-io]`):
 

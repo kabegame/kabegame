@@ -107,6 +107,13 @@ deno task --cwd apps/kabegame test:watch            # watch 模式，改哪跑�
 由 `scripts/target-dir.ts` 在 `scripts/run.ts` 的第一个 import 里按命令注入（显式设了
 `CARGO_TARGET_DIR` 时一律以它为准），之后统一经 `scripts/paths.ts` 的 `TARGET_DIR` 分发。
 
+**macOS / Linux 靠 tauri 补丁 20**：上游 Tauri 只在 exe 目录形如 `target/<profile>` 或
+`target/<triple>/<profile>` 时把它当开发态、用 exe 目录作 resource 目录，否则按安装包去找
+`../Resources` / `/usr/lib/<name>`，`pathes` 插件初始化就 panic（`Failed to resolve resource dir: unknown path`）。
+`third-patches/tauri/20-tauri-utils-cargo-target-dir.patch` 让它也认 `CARGO_TARGET_DIR` 指的目录
+（`cargo run` 把这个变量传给 exe）。Windows 不看目录名，只在 Windows 上验不出来；直接从 Finder / 终端裸跑
+`target-dev/debug/kabegame` 而不带 `CARGO_TARGET_DIR` 时仍会 panic，要经 `deno task dev` / `start`。
+
 **为什么要分开**：cargo 把 build script 读到的环境变量值记进 fingerprint，值一变就
 `EnvVarChanged` → build script 重跑 → 依赖它的整个 crate 连同全部 bin 重编重链。而这些命令
 注入的环境**本来就不同**（`KABEGAME_DATA` 按 `--release` 取值、`build` 还会往 RUSTFLAGS 加
