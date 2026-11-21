@@ -70,6 +70,18 @@ class SeedTests(unittest.TestCase):
         self.assertEqual(s, {"value": 7, "tid": 9, "x0": 7, "x1": mseed.expected_x1(7), "ok": True, "old": 123})
         self.assertFalse(mseed.summarize({"x0": 7, "x1": 0}, seed)["ok"])
 
+    def test_build_source(self):
+        # 两处地址与期望字节都填进去、没有残留占位符；读回挂在循环出口（不是命中后定时读）
+        src = dseed.build_source(2001)
+        self.assertNotIn("%", src.replace("%2", ""))  # 只剩 JS 里没有的 %
+        self.assertIn(hex(dseed.RVA), src)
+        self.assertIn(hex(dseed.LOOP_END_RVA), src)
+        self.assertIn("[72, 141, 84, 36, 96]", src)  # lea rdx, [rsp + 0x60]
+        self.assertIn("[137, 151, 212, 28, 0, 0]", src)  # mov [rdi + 0x1cd4], edx
+        self.assertIn(hex(2001), src)
+        self.assertNotIn("setTimeout", src)
+        self.assertEqual(dseed.build_source(-1).count(hex(0xFFFFFFFF)), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

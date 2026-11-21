@@ -4658,8 +4658,9 @@ export class GpuScene {
    * 脚本拿不到，rea-p4f-script.md 1.5）。`stop` 与 `emitParticles` 改了粒子，标 `stale`（暂停中补画的帧也重写顶点）；`emitParticles` 带
    * 这一层最近一次交给根系统的控制点输入（`ParticleTree.inputs`）。没有这一层的树（不是粒子层、没有可画的模板）时为 null。
    *
-   * TODO:[WPE_SCENE] 真实场景没确定：语料里调 `emitParticles` 的两处都在光标回调里（3286859278 的 `Thunderbolt` 要 `input.cursor*`，
-   * 3570560686 的按钮挂在 `cursorClick` 上），这两个 API 实现之后在这两张上看脚本发射与 eventspawn 实例（只用确定性工程对过 WPE）。
+   * 真实场景（2026-11-21，回归 F15）：语料里唯一真调 `emitParticles` 的是 3286859278 的 `Thunderbolt`（实例 `count` 0，周期与点击两条路
+   * 都只靠脚本发射，点击要 `input.cursorLeftDown` / `cursorWorldPosition`，P6c 起有）：预览里按周期发射、带 eventspawn 实例，探针喂左键
+   * 调到一次。3570560686 的 `particles.emitParticles(4)` 在作者源码里是注释掉的。和 WPE 只用确定性工程 `p4f-api` 逐粒子对过。
    */
   particleScript(object: number): ParticleScriptTarget | null {
     const tree = this.trees.get(object);

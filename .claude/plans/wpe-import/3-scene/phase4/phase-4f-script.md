@@ -741,11 +741,11 @@ renderer: particleNode(layer.particle, step.node).draws[step.renderer].renderer,
 | 全量 vitest（步骤 1–3 的合并后工作区没跑） | — | HEAD `79800ab7` 快照（含 P4f 全部提交、不含别的会话未提交的改动）跑全量：137 个文件里 135 个通过、2 个跳过，3234 个用例里 3192 个通过、42 个跳过，0 失败 |
 | `brightness` 运行中改值（步骤 2） | `2833017810` 的 12 个粒子对象把 `brightness` 绑了用户属性 | **补测**：生成 `p4f-bright2`（`defs/p4f0.py`，三个系统的 `brightness` 绑同一个属性，粒子匀速右移、越右越老，对照 `flags 8` 与带 `colorn`），WPE 超高档（当时已是超高，是别的会话补测泛光时改的，没动）用 `apply_properties` 改值后抓帧（`A:\p4f\p4f-bright2-*`）：改成 2 后新粒子 0.941、改回 1 时最近出生的 4 颗 0.471、更老的 12 颗仍是 0.941，`flags 8` 始终 0.471，带 `colorn` 的同样切开。Kabegame 预览（应用「场景后处理」超高）用 `set_wpe_web_user_properties` 改同一个属性，截图同样一刀切开（`ignore/p4/f4/out/frames/real-bright2-after.png`）。和读码一致 |
 | `brightness` 的三张真实场景（步骤 2） | 都还差别的项、不能渲染 | 确定性工程已和 WPE 逐像素比过，不补测 |
-| `emitParticles` 的真实场景（步骤 3） | `3286859278`（`Thunderbolt`）、`3570560686`（按钮的 `particles.emitParticles(4)`），调用都在光标回调里 | 测不了：要 `input.cursor*` 与 `cursorClick`（P6）。按 Rainy Day 的先例在 `render/scene.ts` 的 `particleScript` 处标 `TODO:[WPE_SCENE]` |
+| `emitParticles` 的真实场景（步骤 3） | `3286859278`（`Thunderbolt`）、`3570560686`（按钮的 `particles.emitParticles(4)`），调用都在光标回调里 | 测不了：要 `input.cursor*` 与 `cursorClick`（P6）。按 Rainy Day 的先例在 `render/scene.ts` 的 `particleScript` 处标 `TODO:[WPE_SCENE]`。**2026-11-21 补测**（P6c 之后，回归 F15）：`3286859278` 预览里周期发射正常、带 eventspawn 实例，探针喂左键调到一次；`3570560686` 的那句在作者源码里是注释掉的，不调 `emitParticles`。TODO 已换成结论 |
 | 已定 5–7 有意和 WPE 不同的三处（步骤 3） | 语料里没有对自然结束的系统调 `play`、`stop` 后改系数、脚本发射触发世界空间事件实例的写法（`emitParticles` 只有上面两处，父子都是本地空间） | 不补测，回归文档 F17 留 `[ ]` |
 | 子代理按推断定的几条（步骤 3：参数越界、`stop` → `play` 复位计时、「被 stop 停下」的解除、重建沿用、`init` 里调方法、控制点条件绑定得到布尔值） | 脚本直接读写 `layer.instance.*` 0 处；`emitParticles` 只有字面量 1 与 4 | 碰不到，只有单测 |
 | 控制点覆盖写进子系统与事件实例、`controlpointangleN`、rope 类跳过脚本出生的粒子、暂停中的 eventdeath（步骤 3） | 0 处，或只经上面两张测不了的场景 | 只有单测 |
-| Rainy Day 的 `Snow`（步骤 4） | 唯一的多 renderer 系统 | 这张另差 18 项、不能渲染；用户要求标 `TODO:[WPE_SCENE]`（步骤 4 提交里已标） |
+| Rainy Day 的 `Snow`（步骤 4） | 唯一的多 renderer 系统 | 这张另差 18 项、不能渲染；用户要求标 `TODO:[WPE_SCENE]`（步骤 4 提交里已标）。**2026-11-21 补测**（这张已 0 项，回归 F16）：复制工程只留 `Snow`，WPE 注入种子 2001 逐颗比，三帧数量相同，两次绘制的位置在近似倒数包络内、尺寸与拖尾速度逐位相同。TODO 已换成结论 |
 | 帧表与拖尾混挂、rope 类混挂、`g_RenderVar0` 残值、多写一次顶点的开销（步骤 4） | 0 处（唯一的多 renderer 是 `Snow`：sprite + spritetrail） | 只有单测或读码 |
 
 **过程问题**：收尾时又误跑了一次 `python -X utf8 -I - < /dev/null`（空的 `python -`，没执行代码），违反约定；之前验收时还有一次空的 `python -X utf8 -I -c ""`（步骤 4 实施记录已记）。

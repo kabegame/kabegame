@@ -57,7 +57,7 @@
 ### 换随机数种子（`seed`）
 
 - **用途：** 让 WPE 与 Kabegame 的回放吃同一串随机数，逐粒子对照随机发射。`open_wallpaper`、`capture_wallpaper` 与 `capture_sweep` 的 job 收 `seed`（0 … 4294967295 的整数，或十进制 / `0x` 字符串）；回放侧用 `std::mt19937(种子)`（kabegame-dev 的 `replay.mt19937`、kbp 的 `mt19937`）。
-- **原理：** 渲染器构造函数在 `wallpaper64.exe+0x17D6BC` 执行 `mov dword ptr [rdi+0x1cd4], edx`，`edx` 是按时间算的种子。驱动 `frida_input/seed.py`（子进程，协议同 `driver.py`：stdout 一行一个 JSON，`armed` / `hit` / `error`）挂前先核对这 6 个字节（不对就报错不挂），在这条指令上把 `rdx` 换成约定种子；命中 100 ms 后读回 `x[0]`（应等于种子）、`x[1]`（应等于 `1812433253·(x0 ^ (x0 >> 30)) + 1`），MCP 这边再核对一遍，随后驱动 `os._exit`（Frida 随进程退出卸钩，不调 `unload` / `detach`：命中后在那里卡住过）。
+- **原理：** 渲染器构造函数在 `wallpaper64.exe+0x17D6BC` 执行 `mov dword ptr [rdi+0x1cd4], edx`，`edx` 是按时间算的种子。驱动 `frida_input/seed.py`（子进程，协议同 `driver.py`：stdout 一行一个 JSON，`armed` / `hit` / `error`）挂前先核对这 6 个字节与初始化循环出口 `+0x17D6F3`（`lea rdx, [rsp+0x60]`）的 5 个字节（不对就报错不挂），在第一条指令上把 `rdx` 换成约定种子；同一线程走到循环出口时当场读回 `x[0]`（应等于种子）、`x[1]`（应等于 `1812433253·(x0 ^ (x0 >> 30)) + 1`），这时一次数都还没取。不能「命中后过一会儿再读」：带 `starttime` 预热的场景加载时一口气取几千次，取满 1248 次 `x[0]` 就被 twist 重写，会误报核对失败（`3465215190` 的 Snow 实测过）。MCP 这边再核对一遍，随后驱动 `os._exit`（Frida 随进程退出卸钩，不调 `unload` / `detach`：命中后在那里卡住过）。
 - **范围：** 只换挂钩之后第一个构造的渲染器，一次性；开窗时挂、窗口出现后收；桌面壁纸与已经开着的窗口不受影响。
 - **结果：** `seed: { value, tid, x0, x1, ok, old }`。没命中（超时）或读回对不上就关掉自己开的窗口并报错（`capture_wallpaper` 同样关窗）；`capture_sweep` 里只让那个 job 报错、扫描继续。
 - **锁：** `open_wallpaper` 平时只在「查重 + 登记」时握窗口表锁 `windows.lock`，真正发 `openWallpaper` 时不握，所以挡不住别的会话同时开窗。给了 `seed` 就把「挂钩 → 发 `openWallpaper` → 窗口出现 → 命中」整段都握在这把锁里（`ensure_running` 在拿锁之前做完，保持先 `wpe.lock` 后 `windows.lock`）：别的会话的 `open_wallpaper` 要先拿它登记，所以被挡在外面（等 60 s 超时），不会被误换种子。挡不住的是不走窗口表的开窗（用户自己在 WPE 里开的窗口、旧脚本、桌面壁纸重建渲染器）：开窗前后对比屏幕上的测试窗口，新冒出的别人的窗口报在 `seed.others_opened`，这时核对 `tid` 与读回值。

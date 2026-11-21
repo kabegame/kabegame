@@ -1608,8 +1608,8 @@ export function checkParticleFeatures(
     }
     const readings = entries.map((entry) => readParticleModule(category, entry, orthographic));
     // 一个系统多个 renderer（P4f 步骤 4，见上）：只有表内的多于一个、且其中有 rope 类时照报
-    // TODO:[WPE_SCENE] 真实场景没确定：语料里唯一用到多 renderer 的 3465215190（Rainy Day）的 `Snow`（sprite + spritetrail）只看了强制
-    // 渲染的一帧，没和 WPE 抓帧比（这张另差人偶、挂接等 18 项，不能渲染）。它能渲染之后抓帧对比雪花与拖尾（phase-4f-script.md 步骤 4「没测到的」）
+    // 真实场景（2026-11-21，回归 F16）：语料里唯一用到多 renderer 的 3465215190（Rainy Day）的 `Snow`（sprite + spritetrail），复制工程
+    // 注入 WPE 种子逐颗比：三帧数量相同，两次绘制的位置在近似倒数包络内、尺寸与拖尾速度逐位相同
     if (category === "renderer") {
       const drawn = readings.filter((reading) => reading.known);
       if (drawn.length > 1 && drawn.some((reading) => isRopeRenderer(reading.name as ParticleRenderer["kind"])))
