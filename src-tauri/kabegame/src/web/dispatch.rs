@@ -2179,9 +2179,21 @@ pub fn init_registry() {
         "start_hidden_cleanup",
         MethodEntry {
             requires_super: true,
-            handler: Arc::new(|_p| {
+            handler: Arc::new(|p| {
                 Box::pin(async move {
-                    kabegame_core::commands::hidden_cleanup::start_hidden_cleanup()
+                    #[derive(serde::Deserialize, Default)]
+                    #[serde(rename_all = "camelCase")]
+                    struct Args {
+                        /// 省略即不删源文件，与界面勾选的默认一致。
+                        #[serde(default)]
+                        delete_files: bool,
+                    }
+                    // 整个 params 可以不给：缺省是 `Value::Null`，直接 from_value 到结构体会报
+                    // 「invalid type: null」，所以先过 Option（本来就没有参数的老调用方照常可用）。
+                    let args = serde_json::from_value::<Option<Args>>(p)
+                        .map_err(RpcError::invalid_params)?
+                        .unwrap_or_default();
+                    kabegame_core::commands::hidden_cleanup::start_hidden_cleanup(args.delete_files)
                         .await
                         .map_err(RpcError::internal)
                 })

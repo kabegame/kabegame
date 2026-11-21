@@ -163,8 +163,8 @@ pub async fn cancel_organize() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-pub async fn start_hidden_cleanup() -> Result<serde_json::Value, String> {
-    kabegame_core::commands::hidden_cleanup::start_hidden_cleanup().await
+pub async fn start_hidden_cleanup(delete_files: bool) -> Result<serde_json::Value, String> {
+    kabegame_core::commands::hidden_cleanup::start_hidden_cleanup(delete_files).await
 }
 
 #[tauri::command]

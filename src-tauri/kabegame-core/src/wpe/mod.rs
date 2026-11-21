@@ -48,6 +48,65 @@ pub fn normalize_local_dir(path: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(trimmed))
 }
 
+/// 从图库删除 WPE 壁纸行时，判断它的目录该不该一并回收。
+///
+/// 目录型 WPE 壁纸的 `local_path` 是用户机器上的真实目录，删除前必须按来源分流：
+/// - **创意工坊订阅**与 **WPE 自带工程**：只删库记录，目录留在磁盘上（Steam 管理的内容，
+///   删了也会被同步回来，且自带工程属于 WPE 安装内容）；
+/// - `myprojects` 与用户手选的任意目录：照常随图片行一起进回收站。
+///
+/// 受保护的根只在构造时发现一次（要读注册表与 Steam 的 vdf），之后逐行比较只是字符串前缀匹配。
+/// 没有 `wpe` feature 的构建（Android / Web）拿不到 Steam 库信息，一律保留目录。
+pub struct WpeDeleteGuard {
+    /// 受保护根的 `path_key`；`None` = 无法判断，全部保留。
+    protected: Option<Vec<String>>,
+}
+
+impl WpeDeleteGuard {
+    pub fn new() -> Self {
+        #[cfg(feature = "wpe")]
+        let protected = Some(
+            discover::protected_roots()
+                .iter()
+                .map(|root| dir_key(&root.to_string_lossy()))
+                .collect(),
+        );
+        #[cfg(not(feature = "wpe"))]
+        let protected = None;
+        Self { protected }
+    }
+
+    /// `true` = 这个壁纸目录必须留在磁盘上，只删库记录。
+    pub fn must_keep_dir(&self, dir: &str) -> bool {
+        let Some(protected) = self.protected.as_ref() else {
+            return true;
+        };
+        let key = dir_key(dir);
+        protected
+            .iter()
+            .any(|root| key == *root || key.starts_with(&format!("{root}/")))
+    }
+}
+
+impl Default for WpeDeleteGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 比较用的路径键：统一分隔符与尾分隔符，Windows 上再忽略大小写。
+///
+/// 不能直接用 `scan::path_key`：那个保留 `\`，而受保护根与 `local_path` 的分隔符不一定一致。
+fn dir_key(path: &str) -> String {
+    let unified = path.trim().replace('\\', "/");
+    let trimmed = unified.trim_end_matches('/');
+    if cfg!(target_os = "windows") {
+        trimmed.to_ascii_lowercase()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// 目录内相对路径的安全校验：拒绝绝对路径、盘符、`..` 与空段。
 ///
 /// WPE 的 `file` / `preview` 必须是目录内相对路径；媒体服务按它拼目录并再次做

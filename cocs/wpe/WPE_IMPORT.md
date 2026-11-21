@@ -32,8 +32,23 @@ Kabegame 把整个目录作为一行 `images`：
 
 **原地入库不复制、不转码、不写用户目录**。`local_path` 的唯一约束保证同一个目录只入库一次；
 取消订阅、壁纸更新只影响磁盘上那一个目录，Kabegame 不持有副本。只有**下载产物**（插件下到任务 VFS 里的
-目录）会被移动到下载目录，或在去重命中时删除。从图库删除只删记录，`x-wpe/*` 行的 `local_path` 永远不进
-源文件回收（`batch_delete_images` 按 type 分流）——移进下载目录的壁纸目录同样不随删记录删除。
+目录）会被移动到下载目录，或在去重命中时删除。
+
+**删除时按来源分流**（`wpe::WpeDeleteGuard`，`batch_delete_images` 先按 type 认出 `x-wpe/*` 行再问它）：
+
+| 来源 | 删除「源文件」时 | 理由 |
+|---|---|---|
+| 创意工坊订阅（`steamapps/workshop/content/431960/<id>`） | **只删记录**，目录留在磁盘 | Steam 管理的内容，还订阅着就会被同步回来；也是 corpus 语料 |
+| WPE 自带工程（`projects/defaultprojects/<name>`） | **只删记录** | WPE 的安装内容，不是用户资产 |
+| `projects/myprojects/<id>`、用户手选的任意目录 | 整个目录移入系统回收站 | 用户自己的壁纸，删了就该走 |
+
+受保护的根由 `wpe::discover::protected_roots()` 发现（读 Steam 库的 vdf），在拿 DB 锁之前算一次，
+循环里只做规范化后的前缀比较（`dir_key`：统一分隔符、Windows 上忽略大小写）。没有 `wpe` feature 的
+构建（Android / Web）拿不到 Steam 库信息，**一律保留目录**。移进下载目录的壁纸目录不属于受保护的根，
+随删记录一起回收。
+
+目录进回收站由 `storage::safe_delete` 执行：它原来只收普通文件，现在也收目录，并拒绝卷根；
+软链接路径与网络/虚拟文件系统的护栏不变（命中就只删记录、保留磁盘）。
 
 `type` 以 `x-wpe/` 开头即表示「目录型壁纸」。凡把 `local_path` 当文件用的地方都必须按类型
 分流，不能按扩展名猜：

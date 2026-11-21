@@ -4387,3 +4387,29 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | D5 语料 | Node，`kbp corpus scan` / `diff` | HEAD 快照与主树各扫默认语料与 myprojects | 只有 `3798696286` 变干净 | 2026-11-21 Claude：默认语料 233 张 0 变化；myprojects 437 张干净 431 → 432，只多 `3798696286` |
 | [x] | D6 预览与桌面看 3798696286 | Windows dev，图库预览 | 预览 Hades Asylum Depths，开着声音等一两分钟；把「Roar Minimum / Maximum Delay Time」拖到最小（10 / 30 秒）再等 | 能实时渲染；咆哮声隔一阵随机响一次，改小间隔后从下一次起明显变密 | 2026-11-21 用户：改小间隔后确实变密 |
 | [ ] | D7 非 Windows | macOS、Linux | 同 D6 | 同 Windows | 本机不能测 |
+
+## WPE 壁纸目录删除按来源分流 + 清理隐藏图片的「移到回收站」勾选
+
+2026-11-21 Windows。原来 `batch_delete_images` 对全部 `x-wpe/*` 行一律跳过源文件回收：`local_path` 是用户目录，
+整目录进回收站的风险太大。但这样一来，用户自己下到 `myprojects` 或手选目录里的壁纸也永远删不掉，只能手工去磁盘上清。
+现在改成按来源分流（`wpe::WpeDeleteGuard`）：创意工坊订阅与 WPE 自带工程仍只删记录（Steam 管理的内容，还订阅着就会被同步
+回来；自带工程属于 WPE 安装内容，也是 corpus 语料），其余随记录进回收站。配套把 `safe_delete` 从「只收普通文件」放宽到
+也收目录，并拒绝卷根；软链接与网络盘护栏不变。
+
+同时给「清理隐藏图片」加一个勾选「同时把源文件移到回收站」，**默认不勾**——以前这个入口硬编码删源文件，
+一键清空隐藏画册会连带删掉磁盘上的原图，没有回旋余地。勾选不持久化，每次打开确认框都回到只删记录。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | E1 编译与类型检查 | Windows | `deno task check -c kabegame --skip cargo`；core 的 `cargo check`（默认 features 与 `--no-default-features --features ipc-client,plugin-runtime` 各一次） | 0 error，改动文件 0 warning | 2026-11-21 Claude：vue-tsc 通过；core 两种 feature 组合均 exit 0，改动的文件没有新 warning（无 wpe 时多出的一条在 `plugin/builtin.rs`，原有） |
+| [ ] | E2 `kabegame` crate 编译 | Windows | `deno task check -c kabegame` | 0 error | 本次被运行中的 app 占着 `cef-build` 挡住（`cef-dll-sys` build script os error 5），需关掉 app 后重跑 |
+| [ ] | E3 工坊壁纸删除 | Windows dev，图库 | 删一张 `steamapps/workshop/content/431960/<id>` 的 WPE 壁纸，勾上「删除源文件」 | 库里没了；磁盘上的工坊目录仍在；回收站里没有它 | |
+| [ ] | E4 自带工程删除 | Windows dev，图库 | 同 E3，换 `projects/defaultprojects/<name>` 的一张 | 同 E3 | |
+| [ ] | E5 myprojects 删除 | Windows dev，图库 | 同 E3，换 `projects/myprojects/<id>` 的一张（先确认不是正在用的壁纸） | 库里没了；整个壁纸目录进了系统回收站，能还原 | |
+| [ ] | E6 不删源文件 | Windows dev，图库 | 删一张 myprojects 的壁纸，但**不**勾「删除源文件」 | 库里没了；磁盘目录原样留着 | |
+| [ ] | E7 清理隐藏图片默认不删文件 | Windows dev | 隐藏几张普通图片和一张 myprojects 壁纸，点「清理隐藏图片」，确认框里不勾 | 确认框有一个默认不勾的「同时把源文件移到回收站」；清理后库里没了，磁盘上的原图与壁纸目录都在 | |
+| [ ] | E8 清理隐藏图片勾选后 | Windows dev | 同 E7，这次勾上 | 勾上后显示「创意工坊订阅与 WPE 自带的壁纸目录会保留」提示；清理后普通图片与 myprojects 壁纸进回收站，工坊 / 自带工程的目录仍在 | |
+| [ ] | E9 勾选不持久化 | Windows dev | E8 之后再打开一次确认框 | 勾选回到未勾状态 | |
+| [x] | E10 web RPC 的参数兜底 | Node | `start_hidden_cleanup` 的 `Args` 解析：`null`（完全不带 params）、`{}`、`{deleteFiles:true/false}`、错类型 | 前三种分别得 false / false / true，错类型报 invalid_params | 2026-11-21 Claude：独立最小 crate 实测如此。直接 `from_value::<Args>(Null)` 会报「invalid type: null」，所以过一层 `Option` + `unwrap_or_default`，本来就不带 params 的老调用方照常可用 |
+| [ ] | E10b web 版实跑 | Web dev | 不带 `deleteFiles` 调一次 `start_hidden_cleanup` | 清理跑起来，只删库记录 | |
+| [ ] | E11 非 Windows | macOS、Linux | 同 E3–E8 | 同 Windows（目录进各自的回收站） | 本机不能测 |

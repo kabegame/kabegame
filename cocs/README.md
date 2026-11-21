@@ -142,7 +142,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
     `downloadWpeWallpaper` 把另一台机器上的壁纸整目录传过来）、格式表占位条目、
     **`wpe` feature 门控**（桌面主程序与 CLI 开启，Android / Web 不开；三个桌面平台都能导入与预览，Linux 没有桌面壁纸）、Steam 库发现与手选文件夹的两层扫描、导入时的 `WPE/<genre|rating|feature>/<tag>` 标签（作者 `tags` + WPE 工坊缓存的 Steam 标签，缓存没有时从 `project.json` 推导；key 是 Steam 原文，名称按语言翻译）、WPE 安装目录设置 `wpeEngineDir`（为空时查 Steam 库或从库内壁纸往上找并写入，壁纸设置可覆盖）、`wpe-import` 内建任务与「壁纸」收集入口、
     WPE 行的色盘来源（视频从 `compatible_path` 抽帧，网页 / 场景取 `schemecolor` 的作者值、没有则预览图）、
-    删除 / 整理 / 原生壁纸的按类型分流护栏，以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口（窗口模式每块在线屏一个，label 池见 [wallpaper/MULTI_SCREEN.md](wallpaper/MULTI_SCREEN.md)）为 `index.html?window=wallpaper&slot=<序号>` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手，按后端的布置读壁纸目标）+ 纯渲染组件 `Wallpaper.vue`（铺放与过渡，每个壁纸一层 `ImageContent` 壁纸变体）；
+    删除 / 整理 / 原生壁纸的按类型分流护栏（删除再按来源分流：工坊订阅与 WPE 自带工程只删记录、目录留在磁盘，`myprojects` 与手选目录随记录进回收站，见 `wpe::WpeDeleteGuard`），以及壁纸窗口复现作者视频属性（作者值取自图片 metadata + Kabegame 覆盖）；壁纸窗口（窗口模式每块在线屏一个，label 池见 [wallpaper/MULTI_SCREEN.md](wallpaper/MULTI_SCREEN.md)）为 `index.html?window=wallpaper&slot=<序号>` + `WallpaperWindow.vue`（IPC / init 看门狗 + 后端 ping 看门狗 / 握手，按后端的布置读壁纸目标）+ 纯渲染组件 `Wallpaper.vue`（铺放与过渡，每个壁纸一层 `ImageContent` 壁纸变体）；
     **web 导入与预览内嵌**：`x-wpe/web` 入库（`compatible_path` 为空）、`WpeWallpaperContent` 的网页 iframe（sandbox `file:` iframe，`src` 直接取壁纸目标的 `webEntry`，由补丁 05 允许应用页赋 `file:` src；不参与双层过渡、切走即销毁）、
     `ImageContent` 的 `wallpaper` 形态 + `WpeWallpaperContent` + 预览画布 `WallpaperPreviewCanvas`（按内容固有尺寸，和单独的图片一样显示；网页壁纸按主屏尺寸排版）、`get_wallpaper_target_for_image`、应用背景与预览同走原图形态实时渲染（不交互、静音），以及子 frame 也有 IPC 桥之后由 ACL 兜底的纵深防御；
     **网页壁纸 iframe**（tauri 补丁 18–19 起预览与桌面统一）：图库预览（主窗口）与桌面（壁纸窗口）都是 `WpeWallpaperContent` 里的 `file:` iframe，两个窗口建窗前都登记 `allow_file_documents` 与 `allow_app_local_resources`，壁纸窗口不再整窗导航，窗口后端的 `set_wallpaper` 不再有要做的事（桌面鼠标由 iframe 自己登记，见下「鼠标」）；ping 在网页壁纸显示期间交给 iframe 里的垫片应答；`localStorage` 预览与桌面同一分区、互通；CSP `frame-src … file:`；
@@ -156,7 +156,7 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：新增 WPE 类型或阶段（web / scene）、排查壁纸目录被当文件处理、
     本地导入把壁纸目录拆成散图、同一张壁纸入库两次或去重不命中、下载的壁纸目录没有移到下载目录 / 临时目录有残留、
     `/file` 取壁纸清单或目录内文件 404、mac 上经 `kabegame-server` 传 Windows 壁纸失败、
-    删除记录误删 `preview.*`、整理误删目录行、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
+    删除记录误删 `preview.*`、整理误删目录行、删除壁纸时目录该删没删或不该删却删了（工坊订阅 / 自带工程 / `myprojects` 的分流、没有 `wpe` feature 时一律保留）、WPE 壁纸在非窗口模式下不可用，或想了解视频属性来源；修改壁纸窗口的渲染 / 过渡 / 入口分发；
     排查桌面换壁纸没有过渡、滑入看不出是滑动、当前是视频时切到图片迟迟不换（懒加载）、桌面出现加载骨架或丢失图（同预览，预期）；
     排查「强制渲染」打开没弹确认 / 取消后仍打开、打开或关掉后没有回到加载初态（看着没反应）、预览里「我就要看」不出现或点不动、开了强制渲染场景仍退回、标题的警告标记不对；
     排查网页壁纸白屏 / iframe 被 CSP 拦截 / 页面 `fetch` 同目录文件失败或越界读被放行（`deny file:` 日志，看 `requester`）/ 新导入的网页壁纸被闸门拒绝（目录索引没跟上）/ 预览画布比例或交互 / 切走后渲染进程未回收、非 Windows 平台的 WPE 行为；

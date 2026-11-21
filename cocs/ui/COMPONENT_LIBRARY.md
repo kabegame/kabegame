@@ -58,6 +58,10 @@ token map、`el-` 前缀、`KbTab` / `KbFilterDropdown` 放进 vendored 包等�
   - `alert`：只有一个按钮，怎么关都 resolve，不会抛。
   - `dangerouslyUseHTMLString` 的正文经 DOMPurify 清洗，插进去的用户数据仍要调用方自己转义；`danger: true` 让确定按钮用危险色。
     `type` / `center` / `customClass` 照收但不改变外观（中性风格不按类型配图标）。
+  - `checkbox: { label, model, hint? }`：正文下方放一个勾选项（确认框带选项时用，如清空隐藏画册的「同时把源文件移到回收站」）。
+    `model` 是调用方持有的 `Ref<boolean>`，勾选直接写回它；`hint` 只在勾上时显示（放不可逆提醒）。
+    结果仍是普通的 `"confirm"` / `"cancel"`——确定之后自己读 `model.value`，取消了就别读。每次打开前自己复位，
+    门面不记忆上次的勾选。
   - 有触发按钮、要转圈等异步操作完成的确认，用 `AlertDialog` 的 `action`，不用 `messageBox`。
 - `vLoading`（`components/ui/loading.ts`）：在 `<script setup>` 里导入即可，模板写 `v-loading="busy"`（没有全局注册）。
 - service / composable / util 里直接从 `@/components/ui/toast`、`@/components/ui/messageBox` 导入，不经 `@/components/ui`（免得把全部组件拉进来）；测试里 mock 这两个模块。

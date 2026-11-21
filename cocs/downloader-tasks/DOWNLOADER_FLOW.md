@@ -422,6 +422,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 删除图片时，`Storage::delete_image` / `batch_delete_images` 只在 DB 锁内删除记录、缩略图和应用拥有的兼容副本，并返回待清除的 `local_path`。`image_events::delete_images_with_events` 在 DB 事务提交和 `images-deleted` / `album-images-deleted`（imagesDeleted: true）发射完成后，统一异步调用 `storage::source_purge::purge_source_files`；调用方不能自行绕过该入口。
 
 - 桌面：进入 `safe_delete::trash_source_files_batch`，保留软链接、网络盘、虚拟盘与未知文件系统护栏。安全路径按 256 条分块调用 `trash::delete_all`；任一块失败后只对该块逐条降级到 `trash_source_file`，避免 macOS Finder AppleScript 触发 `ARG_MAX` / 超时，也避免单条路径竞态消失拖垮整批。
+- 目录型 WPE 壁纸（`x-wpe/*`，`local_path` 是整个壁纸目录）在 `batch_delete_images` 里先经 `wpe::WpeDeleteGuard` 按来源分流：创意工坊订阅与 WPE 自带工程只删记录、目录留在磁盘，`myprojects` 与用户手选的目录照常进回收站（规则与理由见 [WPE 导入文档](../wpe/WPE_IMPORT.md)）。`safe_delete` 因此也收目录，并拒绝卷根。
 - Android：`content://` URI 交给 picker 插件的 `deleteMediaUris`。先逐条 `ContentResolver.delete`，app 自己写入 MediaStore 的媒体通常无需弹窗即可直接删除；权限异常项在 API 30+ 合并成一次 `MediaStore.createDeleteRequest` 系统授权。API 26–29 没有批量授权 API，权限异常项保留并计入 `skipped`。非 `content://` 值按普通文件路径执行 `remove_file`，覆盖旧系统 `copyFileToPicturesLegacy` 写入的真实文件。
 - iOS：项目不支持，仅保留空 cfg 分支保证条件编译完整。
 
@@ -431,7 +432,7 @@ Android 下载池也走 `postprocess_downloaded_image`：
 
 固定隐藏画册 `HIDDEN_ALBUM_ID` 的一键清理由 `HiddenCleanupService` 管理，命令契约为：
 
-- `start_hidden_cleanup`：不可重入，启动时固定记录隐藏图片总数，之后每批从画册头部读取 200 个 id 并删除。
+- `start_hidden_cleanup { deleteFiles }`：不可重入，启动时固定记录隐藏图片总数，之后每批从画册头部读取 200 个 id 并删除。`deleteFiles` 决定这一趟是否连源文件一起回收（走上面那条统一清除链路，WPE 目录仍按来源分流）；**默认不删**——界面的确认框里是一个默认不勾的「同时把源文件移到回收站」，web RPC 省略该字段时同样按 false，只删库记录。
 - `get_busy_tasks_snapshot`：聚合返回隐藏清理 `{ running, total, processed, removed, keptFiles }`；未运行时为全零默认值。
 - `cancel_hidden_cleanup`：设置批次间检查的取消标志，返回是否确实存在运行任务。
 

@@ -49,17 +49,26 @@ const buttonTitle = computed(() => {
   return t("header.cleanHidden");
 });
 
+// 勾选不持久化：每次打开确认框都回到「只删记录」，免得上次勾过就一直删源文件
+const deleteFiles = ref(false);
+
 async function handleClick() {
   if (disabled.value) return;
   const count = hiddenCount.value;
   emit("done");
+  deleteFiles.value = false;
   try {
     await messageBox.confirm(t("gallery.hiddenCleanupConfirm", { count }), t("gallery.hiddenCleanupConfirmTitle"), {
       type: "warning",
+      checkbox: {
+        label: t("gallery.hiddenCleanupDeleteFiles"),
+        model: deleteFiles,
+        hint: t("gallery.hiddenCleanupDeleteFilesHint"),
+      },
     });
   } catch {
     return; // 用户取消
   }
-  await hiddenCleanupService.start(count);
+  await hiddenCleanupService.start(count, deleteFiles.value);
 }
 </script>

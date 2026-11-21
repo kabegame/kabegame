@@ -1277,6 +1277,10 @@ impl Storage {
             return Ok(Vec::new());
         }
 
+        // WPE 壁纸目录按来源分流，受保护的根只发现一次（要读注册表与 Steam 的 vdf）；
+        // 必须在拿 DB 锁之前算好，循环里只做字符串比较。
+        let wpe_guard = crate::wpe::WpeDeleteGuard::new();
+
         let mut conn = self.db.lock().map_err(|e| format!("Lock error: {}", e))?;
         let tx = conn
             .transaction()
@@ -1355,9 +1359,12 @@ impl Storage {
                 remove_thumbnail_file_if_needed(Some(&local_path), Some(&thumbnail_path));
                 remove_compatible_file_if_owned(compatible_path.as_deref());
                 remove_compatible_file_if_owned(wallpaper_compatible_path.as_deref());
-                // 目录型 WPE 壁纸的 local_path 是用户目录：从图库删除只删记录，
-                // 绝不把整个壁纸目录（或其中文件）送进回收站。
-                if !crate::media::image_type::is_wpe_type(media_type.as_deref()) {
+                // 目录型 WPE 壁纸的 local_path 是用户目录，按来源分流（`WpeDeleteGuard`）：
+                // 创意工坊订阅与 WPE 自带工程只删记录、目录留在磁盘上，其余（myprojects、
+                // 用户手选的目录）随图片行一起进回收站。
+                let keep_dir = crate::media::image_type::is_wpe_type(media_type.as_deref())
+                    && wpe_guard.must_keep_dir(&local_path);
+                if !keep_dir {
                     local_paths_to_purge.push(local_path);
                 }
             }
