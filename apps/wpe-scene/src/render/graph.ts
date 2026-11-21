@@ -665,15 +665,23 @@ export function particleTreeWantsFramebuffer(particle: SceneParticle): boolean {
  *   没有 pass 的网格（材质读不到）跳过。
  * - 运行时纹理只认 `_rt_FullFrameBuffer`；其余名字照报 `render:texture-rt:<名>`。任何网格的 pass 读帧缓冲时，图层的第一步是 `snapshot`
  *   （同图像层的层首拷贝，每图层至多一次，P14 E16）：WPE 的模型绘制不拷快照、读到别的层最近一次拷下的内容（没人拷过是 0），我们有意不同，
- *   这样正片叠底之类按作者意图生效。模型在组里本来就照报（`model:passthrough:children:model`），不用管组的特例。
+ *   这样正片叠底之类按作者意图生效。组里（P14b）照图像层的层首拷贝：直接父是组时不拷（`isDirectGroupChild`，读到上一次拷下的内容，同 WPE），
+ *   隔着分组节点的孙子照拷（拷组的合成 RT）。
  */
-export function planModelLayer(layer: Pick<SceneLayer, "model" | "sprite"> & { object?: number }): LayerPlan {
+export function planModelLayer(
+  layer: Pick<SceneLayer, "model" | "sprite"> & Partial<Pick<SceneLayer, "group" | "parent">> & { object?: number },
+): LayerPlan {
   const reasons: string[] = [];
   const steps: LayerStep[] = [];
   const model = layer.model;
   if (!model) return { composite: null, steps, reasons };
   // 层首快照（P14 E16）：sprite 的材质读快照在编译期报 `sprite:framebuffer`，不在这里处理
-  if (!layer.sprite && model.order.some((m) => model.meshes[m]?.passes[0]?.framebuffer)) steps.push({ kind: "snapshot" });
+  if (
+    !layer.sprite &&
+    !isDirectGroupChild({ group: layer.group ?? null, parent: layer.parent ?? null }) &&
+    model.order.some((m) => model.meshes[m]?.passes[0]?.framebuffer)
+  )
+    steps.push({ kind: "snapshot" });
   for (const m of model.order) {
     const mesh = model.meshes[m];
     const pass = mesh?.passes[0];

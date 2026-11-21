@@ -172,6 +172,9 @@ export function targetKey(target: ScriptTarget): string {
     // 材质状态字段（P6d1b）：同宿主 `targetPath`，重编译后按它重放
     case "pass-state":
       return `${target.pass}/state/${target.field}`;
+    // 纹理变体的条件属性（P11e）：只有用户属性写它；同宿主 `targetPath`（`path` 是纹理路径，要带上属性名，否则落进 default 和同纹理的别的属性撞键）
+    case "texture-variant":
+      return `texturevariants/${target.path}/${target.name}`;
     default:
       return target.path;
   }

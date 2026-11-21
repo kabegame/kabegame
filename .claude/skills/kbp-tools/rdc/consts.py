@@ -8,7 +8,8 @@
 - `params.names`：只收这些名字（缺省全收）；
 - `params.clock`（缺省真）：假时不读 FR / CLK（真实壁纸解包的工程，P11a 走查起），frame 取 RenderDoc 帧号 + 1（同 unpack 的约定），
   time / dt 不收（从 [kbp] 日志取），全部绘制都收常量；
-- 每次绘制记 `event`、顶点 / 像素阶段的常量（名字 → 值，矩阵是 16 个数）。
+- 每次绘制记 `event`、顶点 / 几何 / 像素阶段的常量（名字 → 值，矩阵是 16 个数）；几何阶段（P14d 起，`gs`）只在这次绘制有几何着色器时有，
+  粒子（`genericparticle` 的 sprite / spritetrail）的 MVP 与 `g_Orientation*` 都在这里读。
 写 <out>（缺省 <data>/out/wpe-<标签>-consts.json），indent=1。要兼容 RenderDoc 内嵌的 Python 3.8。
 """
 
@@ -66,7 +67,7 @@ def run(bridge, job, log):
         for action in rest:
             event = action["event_id"]
             row = {"event": event}
-            for stage, key in (("vertex", "vs"), ("pixel", "ps")):
+            for stage, key in (("vertex", "vs"), ("geometry", "gs"), ("pixel", "ps")):
                 dynamic = []
                 consts = _stage(bridge, event, stage, names, dynamic)
                 if consts:

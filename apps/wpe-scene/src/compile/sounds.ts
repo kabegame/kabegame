@@ -5,7 +5,7 @@
  * 依据：`.claude/plans/wpe-import/3-scene/phase6/rea-p6a-sound.md` 第 1 节（键表与缺省值、文件读取）与 `p6-REPORT.md`
  * 「P6a 声音语义的实测核对」（实测，冲突时以它为准）。能力检查在 `features.ts` 的 `checkSoundFeatures`。
  */
-import type { BindingCollector } from "./bindings";
+import type { BindingCollector, SoundField } from "./bindings";
 import type { SceneFs } from "./fs";
 import { resolveValue, type SceneObject, type SceneScalar, type SceneValue } from "./model";
 
@@ -49,7 +49,7 @@ export interface SceneSound {
 }
 
 /**
- * `volume` 的取值，编译与就地写共用（「就地 = 重编译」靠它）：数字原样；非空字符串整串解析成有限数；布尔按 1 / 0（条件绑定
+ * `volume` / `mintime` / `maxtime`（P6a2）共用的 float 取值，编译与就地写共用（「就地 = 重编译」靠它）：数字原样；非空字符串整串解析成有限数；布尔按 1 / 0（条件绑定
  * `{user: {name, condition}}` 的值是布尔，同 `instanceScalar`）。不合法时返回 undefined：编译取缺省 1，就地写不改值（WPE 的 float
  * 解析器不收时不写字段）。
  */
@@ -91,14 +91,14 @@ export function soundExtension(path: string): string | null {
   return ext in SOUND_TYPES ? ext : null;
 }
 
-/** float 键（`mintime` / `maxtime`）：数字或 `{user, value}`，解析不出来取缺省。 */
+/** float 键（`mintime` / `maxtime`）：数字或 `{user, value}`（含已解析的绑定值），解析不出来取缺省。 */
 function floatOf(value: SceneScalar | undefined, fallback: number): number {
   return soundVolume(value) ?? fallback;
 }
 
 /**
  * 解析一个声音对象（`isSoundObject` 为真）。`volume` 登记成就地目标 `{ kind: "sound" }`（`SceneState.sounds`，排期器每帧读）；
- * 其余字段 WPE 没有回调（rea 1.2），绑了属性时按当前属性取一次（能力表报 `sound:binding:<键>`）。
+ * `mintime` / `maxtime` 同样登记（P6a2，运行中改了下一次排期生效）；其余字段 WPE 没有回调（rea 1.2），绑了属性时按当前属性取一次（能力表报 `sound:binding:<键>`）。
  * 文件按场景的资源查找顺序定位（项目 → scene.pkg → assets）；路径非法、找不到、格式不对的都跳过。
  */
 export async function compileSound(
@@ -121,17 +121,18 @@ export async function compileSound(
     if (file) files.push({ path: name, location: { ...file.location }, size: file.size });
   }
   const value = (key: string) => resolveValue(object[key] as SceneValue | undefined, properties);
-  const volume = bindings.bind(object.volume as SceneValue | undefined, properties, {
-    kind: "sound",
-    object: index,
-    field: "volume",
-  });
+  // 三个 float 字段同一类就地目标：`volume` 由宿主推给排期器，`mintime` / `maxtime` 由排期器在开始播放时现读（P6a2）
+  const field = (key: SoundField) =>
+    bindings.bind(object[key] as SceneValue | undefined, properties, { kind: "sound", object: index, field: key });
+  const volume = field("volume");
+  const mintime = field("mintime");
+  const maxtime = field("maxtime");
   return {
     object: index,
     files,
     mode: soundMode(value("playbackmode")),
-    mintime: floatOf(value("mintime"), 1),
-    maxtime: floatOf(value("maxtime"), 5),
+    mintime: floatOf(mintime, 1),
+    maxtime: floatOf(maxtime, 5),
     startSilent: soundFlag(object.startsilent) || value("startsilent") === true,
     volume: soundVolume(volume) ?? 1,
   };

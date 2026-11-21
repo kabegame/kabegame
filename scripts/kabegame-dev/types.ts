@@ -351,6 +351,8 @@ export interface ParticleReplay {
   times?: number[];
   /** 随机种子（整数），第 i 个粒子层用 `seed + i`；缺省 1。 */
   seed?: number;
+  /** 全场粒子系统共用一个标准 `std::mt19937(种子)`（0–2³²−1 的整数，P4j 步骤 4a）；不和 `seed` 同给。 */
+  mt19937?: number;
   /** operator 遍数：WPE 设置 `fps` 在 1–20 时两遍，否则一遍；缺省 1。 */
   passes?: 1 | 2;
   /** `{ <objects 下标>: [R, …] }`，按出生顺序顶替该系统抽到的 `R`（[0, 1)），用完退回种子随机数。 */
@@ -693,6 +695,8 @@ export interface ParticleTrackRequest {
   frames: number[];
   passes: 1 | 2;
   seed?: number;
+  /** 全场共用一个 `std::mt19937(种子)`（P4j 步骤 4a），同 `ParticleReplay.mt19937`；不和 `seed` 同给。 */
+  mt19937?: number;
   random?: Record<string, number[]>;
   /** 逐帧频谱（P11a 起 REST 也收，同 `ParticleReplay.audio`）：粒子读其中的 16 段。 */
   audio?: (SpectrumFrame | null)[];
@@ -808,6 +812,8 @@ export interface RenderMeta {
   bloomLevels: number | null;
   time: number;
   frametime: number;
+  /** 回放用的随机源一行说明（P4j 步骤 4a）：只在请求带 `particles` 时有（之前的宿主产物没有这一项）。 */
+  particleRandom?: string;
   /** 每一项脚本值写没写进状态（第 6 批；没给时空数组，之前的宿主产物没有这一项）。 */
   scriptValues?: ScriptValueResult[];
   /**

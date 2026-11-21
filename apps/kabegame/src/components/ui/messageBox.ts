@@ -12,9 +12,11 @@
  *   返回字符串就显示成错误、留在框里。
  * - alert：只有一个按钮，怎么关都 resolve `"confirm"`（不会抛，调用方不必 catch）。
  *
+ * confirm 还能带一个勾选项（`options.checkbox`，勾选值写回调用方的 ref，结果不变）。
+ *
  * 同时只显示一个，后来的排队。`type` / `center` / `customClass` 照收不报错，但不改变外观（中性风格不分类型配图标）。
  */
-import { shallowReactive } from "vue";
+import { shallowReactive, type Ref } from "vue";
 
 export type MessageBoxAction = "confirm" | "cancel" | "close";
 export type MessageBoxKind = "confirm" | "alert" | "prompt";
@@ -30,6 +32,17 @@ export interface MessageBoxOptions {
   dangerouslyUseHTMLString?: boolean;
   /** 确定按钮用危险色 */
   danger?: boolean;
+  /**
+   * 正文下方的一个勾选项（确认框带选项时用，如「源文件移到回收站」）。
+   * 勾选值写回调用方给的 `model`，结果仍是普通的 `"confirm"` / `"cancel"`：
+   * 确定之后自己读 `model.value`，取消了就别读。
+   */
+  checkbox?: {
+    label: string;
+    model: Ref<boolean>;
+    /** 勾上后显示的补充说明（如不可逆提醒） */
+    hint?: string;
+  };
   inputValue?: string;
   inputPlaceholder?: string;
   /** 返回 true 放行；返回字符串作为错误文字；返回 false 显示 inputErrorMessage */

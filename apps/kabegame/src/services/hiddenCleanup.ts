@@ -46,14 +46,18 @@ export function dispose(): void {
   unlistenFinished = null;
 }
 
-/** `total` 仅用于启动窗口内先填充进度分母，后端快照仍是权威。 */
-export async function start(total: number): Promise<void> {
+/**
+ * `total` 仅用于启动窗口内先填充进度分母，后端快照仍是权威。
+ * `deleteFiles` 为真时源文件一并移入回收站（目录型 WPE 壁纸里，创意工坊订阅与 WPE
+ * 自带工程的目录仍由后端保留）；默认只删库记录。
+ */
+export async function start(total: number, deleteFiles = false): Promise<void> {
   const store = useHiddenCleanupStore();
   if (store.running) return;
 
   store.begin(total);
   try {
-    await invoke("start_hidden_cleanup");
+    await invoke("start_hidden_cleanup", { deleteFiles });
   } catch (error) {
     console.error("[hiddenCleanup] start_hidden_cleanup failed:", error);
     store.applyFinished({

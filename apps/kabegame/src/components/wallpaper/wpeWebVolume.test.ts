@@ -15,6 +15,7 @@ import {
   wpeVolumeMessage,
 } from "./wpeWebVolume";
 import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
+import { WPE_STATE_MESSAGE, fullStateMessage, readyStateMessage, stateDelta, type WpeWebState } from "./wpeWebState";
 
 const SHIM_SOURCE = readFileSync(
   fileURLToPath(new URL("../../../../../src-tauri/kabegame/src/webview_js/wpe_shim.js", import.meta.url)),
@@ -262,7 +263,7 @@ function createClock() {
 }
 type Clock = ReturnType<typeof createClock>;
 
-function createShimEnv(initialState: unknown = null, search = "", clock?: Clock) {
+function createShimEnv(search = "", clock?: Clock) {
   const fakes = createFakes();
   const {
     FakeMediaElement,
@@ -306,7 +307,8 @@ function createShimEnv(initialState: unknown = null, search = "", clock?: Clock)
     document: { getAnimations: () => animations, querySelectorAll: () => mediaElements },
     URLSearchParams,
     __TAURI_INTERNALS__: {
-      invoke: vi.fn((command: string) => Promise.resolve(command === "wpe_web_pull_state" ? initialState : null)),
+      // 属性由父页面推送，垫片不再拉；这里只剩 ping、鼠标登记、媒体订阅
+      invoke: vi.fn(() => Promise.resolve(null)),
       transformCallback: () => 1,
       metadata: { currentWebview: { label: "wallpaper" } },
     },
@@ -322,6 +324,11 @@ function createShimEnv(initialState: unknown = null, search = "", clock?: Clock)
     MediaElementAudioSourceNode: FakeSourceNode,
     MessageEvent: FakeMessageEvent,
     Event: FakeEvent,
+    // 垫片在页面脚本之前包装 History 的 pushState / replaceState（installHistory），这里给一个最小的原型
+    History: class {
+      pushState() {}
+      replaceState() {}
+    },
     DOMException,
     setTimeout: clock?.setTimeout ?? setTimeout,
     clearTimeout: clock?.clearTimeout ?? clearTimeout,
@@ -383,18 +390,18 @@ function createShimEnv(initialState: unknown = null, search = "", clock?: Clock)
 }
 
 const plain = (value: unknown) => JSON.parse(JSON.stringify(value));
+const EMPTY_STATE: WpeWebState = { imageId: "1", user: {}, general: { language: "en-us", fps: 30 }, directories: {} };
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
 
 describe("wpe_shim 音量接管", () => {
-  it("暂停消息在首次全量属性交付后补调，此后只在变化时调用", async () => {
-    const env = createShimEnv({ imageId: "scene", user: {}, general: {}, directories: {} });
+  it("暂停消息在首次全量属性交付后补调，此后只在变化时调用", () => {
+    const env = createShimEnv();
     const setPaused = vi.fn();
     const applyUserProperties = vi.fn();
     env.sandbox.wallpaperPropertyListener = { setPaused, applyUserProperties };
     env.sendFromHost(wpeVolumeMessage(0, true));
     expect(setPaused).not.toHaveBeenCalled();
-    env.dispatch("load", {});
-    await tick();
+    env.sendFromHost(fullStateMessage(EMPTY_STATE));
     expect(applyUserProperties).toHaveBeenCalledOnce();
     expect(setPaused).toHaveBeenCalledTimes(1);
     expect(setPaused).toHaveBeenCalledWith(true);
@@ -582,7 +589,7 @@ describe("wpe_shim 音量接管", () => {
 describe("wpe_shim 暂停冻结", () => {
   /** 页面已加载完：之后的暂停立即冻结。 */
   function loaded(search = "", clock?: Clock) {
-    const env = createShimEnv(null, search, clock);
+    const env = createShimEnv(search, clock);
     env.dispatch("load", {});
     return env;
   }
@@ -695,12 +702,11 @@ describe("wpe_shim 暂停冻结", () => {
     expect(play).not.toHaveBeenCalled();
   });
 
-  it("暂停与恢复时照旧调页面的 setPaused", async () => {
-    const env = createShimEnv({ imageId: "web", user: {}, general: {}, directories: {} });
+  it("暂停与恢复时照旧调页面的 setPaused", () => {
+    const env = createShimEnv();
     const setPaused = vi.fn();
     env.sandbox.wallpaperPropertyListener = { setPaused, applyUserProperties: vi.fn() };
-    env.dispatch("load", {});
-    await tick();
+    env.sendFromHost(fullStateMessage(EMPTY_STATE));
     pause(env);
     resume(env);
     expect(setPaused.mock.calls).toEqual([[true], [false]]);
@@ -813,8 +819,8 @@ describe("wpe_shim 暂停冻结", () => {
     expect(env.consoleSpy.warn).not.toHaveBeenCalled();
   });
 
-  it("照 WPE：页面的 setPaused(true) 在冻结之前、setPaused(false) 在解冻之后调", async () => {
-    const env = createShimEnv({ imageId: "web", user: {}, general: {}, directories: {} });
+  it("照 WPE：页面的 setPaused(true) 在冻结之前、setPaused(false) 在解冻之后调", () => {
+    const env = createShimEnv();
     const seen: [boolean, boolean][] = [];
     const media = fakeMedia(false);
     env.mediaElements.push(media);
@@ -822,8 +828,7 @@ describe("wpe_shim 暂停冻结", () => {
       setPaused: (paused: boolean) => seen.push([paused, media.paused]),
       applyUserProperties: vi.fn(),
     };
-    env.dispatch("load", {});
-    await tick();
+    env.sendFromHost(fullStateMessage(EMPTY_STATE));
     pause(env);
     resume(env);
     expect(seen).toEqual([
@@ -845,7 +850,7 @@ describe("wpe_shim 暂停冻结", () => {
 
   it("暂停中打开：画面组在 load 后两帧冻，脚本组从页面 load 后的第一帧起跑满 3 秒再冻", () => {
     const clock = createClock();
-    const env = createShimEnv(null, "", clock);
+    const env = createShimEnv("", clock);
     const media = fakeMedia(false);
     env.mediaElements.push(media);
     const ctx = new env.page.AudioContext();
@@ -892,7 +897,7 @@ describe("wpe_shim 暂停冻结", () => {
 
   it("暂停中打开、加载期间只用计时器的页面（Unity）：等它主循环的第一帧起预热 3 秒再冻", () => {
     const clock = createClock();
-    const env = createShimEnv(null, "", clock);
+    const env = createShimEnv("", clock);
     pause(env);
     env.dispatch("load", {});
     const tickFn = vi.fn();
@@ -917,7 +922,7 @@ describe("wpe_shim 暂停冻结", () => {
 
   it("暂停中打开、从不用 rAF 的页面：这次暂停不冻脚本组，恢复后再暂停就冻", () => {
     const clock = createClock();
-    const env = createShimEnv(null, "", clock);
+    const env = createShimEnv("", clock);
     pause(env);
     env.dispatch("load", {});
     const tickFn = vi.fn();
@@ -934,7 +939,7 @@ describe("wpe_shim 暂停冻结", () => {
 
   it("预热期间恢复：不再按预热冻结，之后的暂停立刻冻", () => {
     const clock = createClock();
-    const env = createShimEnv(null, "", clock);
+    const env = createShimEnv("", clock);
     const media = fakeMedia(false);
     env.mediaElements.push(media);
     pause(env);
@@ -976,7 +981,7 @@ describe("wpe_shim 原生鼠标登记", () => {
   }
 
   it("可交互且没暂停时登记，暂停或不交互时解除，只在变化时调", async () => {
-    const env = createShimEnv(null);
+    const env = createShimEnv();
     // 应用背景：不交互，不登记
     env.sendFromHost(wpeVolumeMessage(1, false, false));
     await tick();
@@ -1001,7 +1006,7 @@ describe("wpe_shim 原生鼠标登记", () => {
   });
 
   it("前一次调用返回之前不发下一次，失败只警告", async () => {
-    const env = createShimEnv(null);
+    const env = createShimEnv();
     const invoke = (env.sandbox.__TAURI_INTERNALS__ as { invoke: ReturnType<typeof vi.fn> }).invoke;
     let finishAttach: (value: unknown) => void = () => {};
     invoke.mockImplementation((command: string) =>
@@ -1024,7 +1029,7 @@ describe("wpe_shim 右键转发", () => {
   });
 
   it("可信的右键发给父页面（坐标是本视口），页面停止冒泡也照发；合成事件不发", () => {
-    const env = createShimEnv(null);
+    const env = createShimEnv();
     // 页面自己的监听：冒泡阶段取消并停止传播（垫片在捕获阶段，先于它）
     (env.sandbox.addEventListener as (type: string, fn: (event: { stopped?: boolean }) => void) => void)(
       "contextmenu",
@@ -1037,5 +1042,131 @@ describe("wpe_shim 右键转发", () => {
     expect(plain(posts())).toEqual([{ data: { type: WPE_CONTEXT_MENU, x: 120, y: 45 }, origin: "*" }]);
     env.dispatch("contextmenu", { isTrusted: false, clientX: 1, clientY: 1 } as never);
     expect(posts()).toHaveLength(1);
+  });
+});
+
+describe("wpe_shim 属性推送（父页面推、垫片只交给页面）", () => {
+  const STATE: WpeWebState = {
+    imageId: "1",
+    user: { zeta: { type: "slider", value: 1 }, alpha: { type: "bool", value: true } },
+    general: { language: "zh-chs", fps: 30 },
+    directories: {
+      pics: { mode: "fetchall", files: ["a.jpg", "b.jpg"] },
+      lazy: { mode: "ondemand", files: ["x.jpg"] },
+    },
+  };
+  function listenerOf(env: ReturnType<typeof createShimEnv>) {
+    const calls: [string, unknown[]][] = [];
+    const record =
+      (name: string) =>
+      (...args: unknown[]) =>
+        calls.push([name, plain(args)]);
+    env.sandbox.wallpaperPropertyListener = {
+      applyUserProperties: record("user"),
+      applyGeneralProperties: record("general"),
+      userDirectoryFilesAddedOrChanged: record("added"),
+      userDirectoryFilesRemoved: record("removed"),
+      setPaused: record("paused"),
+    };
+    return calls;
+  }
+
+  it("垫片的字面量与 wpeWebState.ts 一致", () => {
+    expect(SHIM_SOURCE).toContain(`STATE_MESSAGE = "${WPE_STATE_MESSAGE}"`);
+  });
+
+  it("整份：用户属性与通用属性按键排序交给页面，fetchall 目录的文件全部当新增，ondemand 不派发", () => {
+    const env = createShimEnv();
+    const calls = listenerOf(env);
+    const event = env.sendFromHost(fullStateMessage(STATE));
+    expect(calls).toEqual([
+      ["user", [{ alpha: { type: "bool", value: true }, zeta: { type: "slider", value: 1 } }]],
+      ["general", [{ fps: 30, language: "zh-chs" }]],
+      ["added", ["pics", ["a.jpg", "b.jpg"]]],
+    ]);
+    expect(Object.keys((calls[0][1] as Record<string, unknown>[])[0])).toEqual(["alpha", "zeta"]);
+    // 宿主消息不交给页面
+    expect(event.stopped).toBe(true);
+    expect(env.pageMessages).toHaveLength(0);
+  });
+
+  it("增量：只交给页面变了的部分，目录按增删回调", () => {
+    const env = createShimEnv();
+    env.sendFromHost(fullStateMessage(STATE));
+    const calls = listenerOf(env);
+    const next: WpeWebState = {
+      ...STATE,
+      user: { ...STATE.user, zeta: { type: "slider", value: 2 } },
+      directories: { ...STATE.directories, pics: { mode: "fetchall", files: ["b.jpg", "c.jpg"] } },
+    };
+    env.sendFromHost(stateDelta(STATE, next));
+    expect(calls).toEqual([
+      ["user", [{ zeta: { type: "slider", value: 2 } }]],
+      ["removed", ["pics", ["a.jpg"]]],
+      ["added", ["pics", ["c.jpg"]]],
+    ]);
+  });
+
+  it("就绪（页面自己 reload 出来的文档）：不调任何属性回调，暂停中补一次 setPaused(true)", () => {
+    const env = createShimEnv();
+    const calls = listenerOf(env);
+    env.sendFromHost(wpeVolumeMessage(0, true));
+    expect(calls).toEqual([]);
+    env.sendFromHost(readyStateMessage(STATE.directories));
+    expect(calls).toEqual([["paused", [true]]]);
+    // 之后的暂停变化照调
+    env.sendFromHost(wpeVolumeMessage(1, false));
+    expect(calls.at(-1)).toEqual(["paused", [false]]);
+  });
+
+  it("只认父窗口的可信消息：别的来源、不可信的一律不理", () => {
+    const env = createShimEnv();
+    const calls = listenerOf(env);
+    env.sendFromHost(fullStateMessage(STATE), { source: {} });
+    env.sendFromHost(fullStateMessage(STATE), { isTrusted: false });
+    expect(calls).toEqual([]);
+  });
+
+  it("换 listener：收过整份之后补投（含之后的增量）；只收到就绪的文档不补投", async () => {
+    const env = createShimEnv();
+    env.sendFromHost(fullStateMessage(STATE));
+    const next: WpeWebState = { ...STATE, user: { ...STATE.user, alpha: { type: "bool", value: false } } };
+    env.sendFromHost(stateDelta(STATE, next));
+    const calls = listenerOf(env);
+    await tick();
+    expect(calls[0]).toEqual(["user", [{ alpha: { type: "bool", value: false }, zeta: { type: "slider", value: 1 } }]]);
+
+    const reloaded = createShimEnv();
+    reloaded.sendFromHost(readyStateMessage({}));
+    const none = listenerOf(reloaded);
+    await tick();
+    expect(none).toEqual([]);
+  });
+
+  it("随机文件：第一条属性消息之前排队，之后按最新目录回答", async () => {
+    const env = createShimEnv();
+    const answers: unknown[] = [];
+    (env.sandbox.wallpaperRequestRandomFileForProperty as (key: string, cb: (...args: unknown[]) => void) => void)(
+      "lazy",
+      (...args) => answers.push(args),
+    );
+    await tick();
+    expect(answers).toEqual([]);
+    env.sendFromHost(readyStateMessage(STATE.directories));
+    await tick();
+    expect(answers).toEqual([["lazy", "x.jpg"]]);
+  });
+
+  it("不再自己拉状态，也不再监听设置与图片事件（只剩 ping）", async () => {
+    const env = createShimEnv();
+    await tick();
+    const invoke = (env.sandbox.__TAURI_INTERNALS__ as { invoke: ReturnType<typeof vi.fn> }).invoke;
+    const commands = invoke.mock.calls.map((call) => call[0]);
+    expect(commands).not.toContain("wpe_web_pull_state");
+    const events = invoke.mock.calls
+      .filter((call) => call[0] === "plugin:event|listen")
+      .map((call) => (call[1] as { event: string }).event);
+    expect(events).toEqual(["wallpaper-ping"]);
+    expect(SHIM_SOURCE).not.toContain("wpe_web_pull_state");
   });
 });

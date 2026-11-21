@@ -1,5 +1,5 @@
 /**
- * 纹理上传：`compile/tex.ts` 的 `TEXTURE_FORMATS` 里的格式（RGBA8888、DXT5 / DXT3 / DXT1 → BC3 / BC2 / BC1、RG88、R8）
+ * 纹理上传：`compile/tex.ts` 的 `TEXTURE_FORMATS` 里的格式（RGBA8888、DXT5 / DXT3 / DXT1 → BC3 / BC2 / BC1、RG88、R8、BC7）
  * 连同全部 mip 按原格式直接交给 GPU，不做 CPU 解码、不改通道；格式表是编译期与渲染器共用的唯一来源。
  * FreeImage 形态（PNG / JPG）由主线程解成 `ImageBitmap`（`compile/decode.ts`），这里 `copyExternalImageToTexture`。
  * 视频纹理（P9a）只建空纹理，帧由 `GpuScene` 在画到它时拷进来。
@@ -10,6 +10,7 @@
  */
 import type { SceneTexture } from "../compile/bundle";
 import { textureFormat } from "../compile/tex";
+import { selectVariants, VARIANT_FLAGS, variantPlan } from "../compile/textureVariants";
 import { SceneRenderError } from "./errors";
 
 export interface MipCopyLayout {
@@ -110,8 +111,54 @@ export function samplerDescriptor(texture: Pick<SceneTexture, "clampUVs" | "noIn
   };
 }
 
-/** 建 GPU 纹理并写入全部 mip。 */
-export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUTexture {
+/**
+ * 主线程解码的纹理（FreeImage 形态）写进 GPU 纹理的全部 mip：每级先写底图，再按纹理变体（P11e）的命中表贴变体（`variantPlan`：文件顺序、
+ * 最后一条整张替换之前的丢掉）。贴图是 `copyExternalImageToTexture` 写到变体的矩形（位图按 `premultiplyAlpha: "none"` 解码、
+ * `premultipliedAlpha: false` 写入，逐字节覆盖），等价于 WPE `FUN_14015c480` 的逐行拷；整张替换的解码后同样贴在它的矩形上（WPE 把编码后的
+ * PNG 字节当像素上传，P11e 点 0 实测的缺陷，不复刻）。标志位 1（按 alpha 混合）照报 `tex:variant:alphablend`，强制渲染时不贴。
+ * 换选择时（`GpuScene` 的 `syncTextureVariants`）对同一张 GPU 纹理再调一次：尺寸不变，绑定组与着色器都不动。
+ */
+export function writeBitmapMips(
+  device: GPUDevice,
+  gpu: GPUTexture,
+  texture: SceneTexture,
+  selected: ReadonlyMap<number, number>,
+): void {
+  texture.mips.forEach((mip, level) => {
+    device.queue.copyExternalImageToTexture(
+      { source: mip.bitmap! },
+      { texture: gpu, mipLevel: level, premultipliedAlpha: false },
+      { width: mip.width, height: mip.height },
+    );
+    const patches = texture.variants?.mips[level];
+    if (!patches || !selected.size) return;
+    for (const { patch, flags } of variantPlan(patches, selected, mip.width, mip.height)) {
+      if (flags & VARIANT_FLAGS.alphaBlend && !(flags & VARIANT_FLAGS.replace)) continue;
+      if (!patch.bitmap) continue;
+      device.queue.copyExternalImageToTexture(
+        { source: patch.bitmap },
+        { texture: gpu, mipLevel: level, origin: { x: patch.x, y: patch.y }, premultipliedAlpha: false },
+        { width: patch.width, height: patch.height },
+      );
+    }
+  });
+}
+
+/** 纹理变体编译时的命中表：按 `variants.values`（条件属性编译时的值）选。没有变体时为空表。 */
+export function initialVariantSelection(texture: SceneTexture): Map<number, number> {
+  if (!texture.variants) return new Map();
+  return selectVariants(texture.variants.conditions, new Map(Object.entries(texture.variants.values)));
+}
+
+/**
+ * 建 GPU 纹理并写入全部 mip。`selected`：纹理变体（P11e）的命中表，缺省取编译时的选择（`initialVariantSelection`）；宿主运行中改过条件属性、
+ * 纹理又是之后才上传的（运行中建层、片段），传当前状态的选择。
+ */
+export function uploadTexture(
+  device: GPUDevice,
+  texture: SceneTexture,
+  selected: ReadonlyMap<number, number> = initialVariantSelection(texture),
+): GPUTexture {
   // 视频纹理（P9a）：同 WPE 是一张普通纹理（rea-p9-video 第 2 节：R8G8B8A8_UNORM、一级 mip、尺寸取 `.tex` 头的纹理尺寸，语料 60 段
   // 都等于视频尺寸）。不写数据，初值全 0：第一帧之前与解不了时图层透明，同 WPE（第 8 节 memset 0、p9-REPORT「坏视频」）。之后由
   // GpuScene 画到它时 `copyExternalImageToTexture`（要 RENDER_ATTACHMENT）
@@ -132,13 +179,7 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
       // copyExternalImageToTexture 要求目标带 RENDER_ATTACHMENT
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
     });
-    texture.mips.forEach((mip, level) =>
-      device.queue.copyExternalImageToTexture(
-        { source: mip.bitmap! },
-        { texture: gpu, mipLevel: level, premultipliedAlpha: false },
-        { width: mip.width, height: mip.height },
-      ),
-    );
+    writeBitmapMips(device, gpu, texture, selected);
     return gpu;
   }
   const plan = planTextureUpload(texture);

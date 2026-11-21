@@ -31,7 +31,6 @@ import {
   userBindingOf,
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
-import { hasNonNumericDependency } from "./dependencies";
 import { normalizeJsonPassState, PASS_STATE_TABLES, type PassStateField } from "./passState";
 import { resolveParents } from "./hierarchy";
 import { LEGACY_LIGHT_UNIFORMS } from "./lights";
@@ -73,7 +72,7 @@ export const SUPPORTED = {
    * （`writeState.ts` 的 `materialCombos`），渲染器在 A2C 管线的片元入口里丢弃锐化后 alpha 小于 0.5 + 2⁻¹² 的片元（`render/programs.ts`）。
    */
   blending: PASS_STATE_TABLES.blending,
-  /** 按原格式上传的 `.tex` 格式（0、4、6–9），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
+  /** 按原格式上传的 `.tex` 格式（0、4、6–9、12），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
   textureFormats: Object.keys(TEXTURE_FORMATS).map(Number),
   /** FreeImage 形态 `.tex`（mip 是整份图片文件）：2 JPEG、13 PNG，主线程 `createImageBitmap` 解码。 */
   freeImageFormats: [2, 13],
@@ -290,7 +289,8 @@ const PARSED_GENERAL = new Set([
  *   推断），和就地写的语义对不上，没有实测（语料 0 个）。
  * - `dependencies`：图层依赖（P8 步骤 4，rea-p8-render 第 1 节，`compile/dependencies.ts`）。各种对象上都中性：只进全部对象的并集
  *   （`dependencyIds`），命中的图像层被依赖（`SceneLayer.dependedOn`），写法不合规的元素 WPE 跳过。粒子对象另有一套同名键（元素是
- *   `{id, type, …}` 对象，发射图与碰撞模型，`FUN_14022af30`），有不是数字的元素时报 `particle:dependencies`。被依赖的文本层、组、
+ *   `{id, type, …}` 对象，发射图与碰撞模型，`FUN_14022af30`）：对象元素进并集并绑到 `layerimage` 发射器（P4j 步骤 1，`particleDependencies`、
+ *   `bindLayerImages`），不再整张退回。被依赖的文本层、组、
  *   读自己的 `_a` 等照报的用法由 `bundle.ts` 报 `dependency:*`。
  */
 const SUPPORTED_OBJECT = new Set([
@@ -796,12 +796,12 @@ export const TEXT_UNIFORMS: ReadonlySet<string> = new Set([
   "g_RenderVar3",
 ]);
 
-/** 声音对象上 WPE 没有回调、运行时改了不生效的键（rea 1.2）：绑了属性或挂了脚本报 `sound:binding:<键>`（语料 0 个）。 */
-const SOUND_UNBOUND_KEYS = ["playbackmode", "mintime", "maxtime", "startsilent", "spatialization"];
+/** 声音对象上运行时改了照报的键（rea 1.2；`mintime` / `maxtime` 自 P6a2 起就地写、下一次排期生效，不在此列）：绑了属性或挂了脚本报 `sound:binding:<键>`（语料 0 个）。 */
+const SOUND_UNBOUND_KEYS = ["playbackmode", "startsilent", "spatialization"];
 
 /**
  * 声音对象的键（P6a 步骤 1）。已实现：三种播放模式、`mintime` / `maxtime`、`startsilent`、`volume`（数字与 `{user}`，就地更新；
- * 挂 `{script}` 时字段脚本每帧写回到同一个就地目标，P6a 步骤 2）。
+ * 挂 `{script}` 时字段脚本每帧写回到同一个就地目标，P6a 步骤 2；`mintime` / `maxtime` 同，P6a2）。
  * - `spatialization` 为真：`object:spatialization`（三维声音，步骤 0b 取消，语料 0 张）；
  * - `playbackmode` 不是 `loop` / `single` / `random`：`sound:playbackmode:<值>`（WPE 的枚举解析怎么处理未知值没读）；
  * - `SOUND_UNBOUND_KEYS` 绑了属性或挂了脚本：`sound:binding:<键>`。
@@ -853,8 +853,6 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
     if (hasEffects) unsupported.add("particle:effects");
     for (const [key, defaults] of Object.entries(PARTICLE_OBJECT_DEFAULTS))
       if (particleObjectValueUsed(object[key], defaults)) unsupported.add(`particle:object:${key}`);
-    // 粒子自己那套 `dependencies`（P8 步骤 4，rea-p8-render 1.1：元素是对象的发射图 / 碰撞模型依赖）没做；数字元素只进并集，中性
-    if (hasNonNumericDependency(object)) unsupported.add("particle:dependencies");
   } else if (kind === "model") {
     // 模型对象的 effect（WPE 怎么画没读，语料 0 个）：`bundle.ts` 也不编译它
     if (hasEffects) unsupported.add("model:effects");
@@ -1119,7 +1117,8 @@ function someParticleSystem(system: SceneParticle, test: (system: SceneParticle)
  * - `model:passthrough:children:fullscreen`：fullscreen 模型。当前目标是组的合成 RT，没有实测。
  * - `model:passthrough:children:perspective`：图层 `perspective: true`，或粒子系统树里有透视系统（`flags & 4`）。组里的投影是局部正交，
  *   没有实测。
- * - `model:passthrough:children:model`：模型对象（P5c 步骤 1）。语料 0 个，组里的网格怎么画（深度、剔除、视锥剔除用哪个相机）没有实测。
+ * - 模型对象（P5c 步骤 1）P14b 起不报（`p14b-gm-*` 实测，rea-p14b-group-models）：画进组的合成 RT，`g_ModelMatrix` = `inverse(W_组) ⊗ W`、
+ *   视图投影是组的局部正交，组 RT 没有深度，阴影 pass 不画组的子孙（不投射），不按场景相机做视锥剔除（D1，和 WPE 有意不同）；sprite 照报。
  * - `model:passthrough:children:shape`：形状对象（P8 步骤 2）。WPE 由组代画进它的合成 RT（rea-p8-layer 1.4，`FUN_1401ecb20`），没有实测；
  *   语料 24 个形状的父对象都是分组节点。
  */
@@ -1148,7 +1147,6 @@ export function groupChildIssues(
     keys.push("model:passthrough:children:perspective");
   // sprite（P13c）也挂着 `model`：组里它的遮挡测试读哪张深度、画在哪没测，单独照报
   if (layer.sprite) keys.push("model:passthrough:children:sprite");
-  else if (layer.model) keys.push("model:passthrough:children:model");
   if (layer.shape) keys.push("model:passthrough:children:shape");
   return keys;
 }
@@ -1469,6 +1467,12 @@ export const PARTICLE_UNIFORMS: ReadonlySet<string> = new Set([
  *   alpha 锐化，丢弃由渲染器的 A2C 入口做（同图像层，`ENGINE_COMBOS` 的说明）。
  * - `ADDITIVE`：P13f，混合 `additive` 时编译期加的（同上，WPE 加载时同样加）。WPE 自带着色器里只有 `generic4` / `chroma4` / `foliage4` /
  *   `fur4` 的雾分支读它，粒子着色器与语料的工坊着色器都不读，加不加画面相同。
+ * - `LIGHTING`、`DOUBLESIDEDLIGHTING`：P4i。`genericparticle` / `genericropeparticle` 的光照全在着色器里（法线取视线、有法线图时按
+ *   `v_WorldRight` 搭切空间，`PerformLighting_V1` 累加灯，`CombineLighting(灯光, g_LightAmbientColor · 颜色)`，没有法线图时强制双面），
+ *   引擎要给的 `g_ModelMatrix`、`g_EyePosition`、环境光、灯光缓冲与 `LIGHTS_*`、阴影图集和图层 / 模型共用：开了光照的程序让 bundle 带上
+ *   `lights`（`bundle.ts` 的 `sceneLights`），粒子 draw 与图层同一个构建函数、每帧写灯光数组。`p4i0` 的 11 组工程（环境光、点光、平行光 +
+ *   聚光、对象变换与世界空间、HDR + 泛光、雾、绳、拖尾 + 法线图、阴影图集）和 WPE 整帧比，最大差 2（浮点舍入、f16 量化），
+ *   phase-4i-particle-lighting.md 步骤 0。`DOUBLESIDEDLIGHTING` 只在 `common_pbr_2.h` 里读（`LIGHTING` 关着时不起作用）。
  */
 const PARTICLE_COMBOS = new Set([
   "WORLDBLUR",
@@ -1478,17 +1482,19 @@ const PARTICLE_COMBOS = new Set([
   "NORMALMAP",
   "ALPHATOCOVERAGE",
   "ADDITIVE",
+  "LIGHTING",
+  "DOUBLESIDEDLIGHTING",
 ]);
 
 /**
- * 粒子材质 pass 的 COMBO 与光照（混合由 `checkPassFeatures` 照常检查，剔除、深度按 `normalizeDepthKeys` 规整，引擎 uniform /
+ * 粒子材质 pass 的 COMBO（混合由 `checkPassFeatures` 照常检查，剔除、深度按 `normalizeDepthKeys` 规整，引擎 uniform /
  * COMBO 由 `checkProgramFeatures` 带 `PARTICLE_UNIFORMS` 检查）。
  * - 材质写的、以及纹理槽注解带出的 COMBO（翻译结果 `source` 为 `request` / `texture`），值非 0 的只允许
  *   `PARTICLE_COMBOS` 里的，其余报 `particle:combo:<名字>`。
  * - 着色器注解的缺省值（`source: "default"`）不算：WPE 同样按缺省值编，翻译器照办。`genericparticle` 的 `FOG` 缺省为 1，
  *   它只在引擎的 `FOG_DIST` / `FOG_HEIGHT` 下起作用：P13f 起场景开雾时定义这两个宏（`compile/fog.ts`），粒子读的四个雾 uniform 同图层
  *   （`staticBuiltins`），`p13f-fog` 的粒子与 WPE 逐像素比过。
- * - 最终开了 `LIGHTING`（含着色器缺省值）报 `particle:lighting`：粒子的光照路径没有和 WPE 比过，本机 0 张。
+ * - 光照（`LIGHTING`，含着色器缺省值）P4i 起放行，依据见 `PARTICLE_COMBOS`；之前报 `particle:lighting`。
  */
 export function checkParticleProgram(
   pass: MaterialPass,
@@ -1501,9 +1507,8 @@ export function checkParticleProgram(
     if (combo.source !== "default") combos.set(combo.name.toUpperCase(), combo.value);
   for (const [name, value] of combos) {
     if (value === 0 || PARTICLE_COMBOS.has(name)) continue;
-    unsupported.add(name === "LIGHTING" ? "particle:lighting" : `particle:combo:${name}`);
+    unsupported.add(`particle:combo:${name}`);
   }
-  if (result && usesLighting(result)) unsupported.add("particle:lighting");
 }
 
 /**
@@ -1603,8 +1608,8 @@ export function checkParticleFeatures(
     }
     const readings = entries.map((entry) => readParticleModule(category, entry, orthographic));
     // 一个系统多个 renderer（P4f 步骤 4，见上）：只有表内的多于一个、且其中有 rope 类时照报
-    // TODO:[WPE_SCENE] 真实场景没确定：语料里唯一用到多 renderer 的 3465215190（Rainy Day）的 `Snow`（sprite + spritetrail）只看了强制
-    // 渲染的一帧，没和 WPE 抓帧比（这张另差人偶、挂接等 18 项，不能渲染）。它能渲染之后抓帧对比雪花与拖尾（phase-4f-script.md 步骤 4「没测到的」）
+    // 真实场景（2026-11-21，回归 F16）：语料里唯一用到多 renderer 的 3465215190（Rainy Day）的 `Snow`（sprite + spritetrail），复制工程
+    // 注入 WPE 种子逐颗比：三帧数量相同，两次绘制的位置在近似倒数包络内、尺寸与拖尾速度逐位相同
     if (category === "renderer") {
       const drawn = readings.filter((reading) => reading.known);
       if (drawn.length > 1 && drawn.some((reading) => isRopeRenderer(reading.name as ParticleRenderer["kind"])))

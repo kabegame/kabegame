@@ -28,6 +28,16 @@
           {{ current.message }}
         </AlertDialogDescription>
 
+        <div v-if="current.options.checkbox" class="mt-3 flex flex-col gap-1">
+          <Checkbox v-model="current.options.checkbox.model.value" :label="current.options.checkbox.label" />
+          <p
+            v-if="current.options.checkbox.hint && current.options.checkbox.model.value"
+            class="m-0 pl-6 text-[12px] leading-[1.5] text-kb-fg-subtle"
+          >
+            {{ current.options.checkbox.hint }}
+          </p>
+        </div>
+
         <div v-if="current.kind === 'prompt'" class="mt-3 flex flex-col gap-1">
           <Input
             ref="inputRef"
@@ -71,6 +81,7 @@ import {
 import { useI18n } from "@kabegame/i18n";
 import { useModalBack } from "@/composables/useModalBack";
 import Button from "./Button.vue";
+import Checkbox from "./Checkbox.vue";
 import Input from "./Input.vue";
 import { keepOpenOnToast, useLayerZIndex } from "./layer";
 import { messageBoxQueue, type MessageBoxRequest } from "./messageBox";

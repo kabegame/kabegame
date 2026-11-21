@@ -72,6 +72,28 @@ describe("SceneSounds", () => {
     expect(log).toEqual(["release 2", "release 1", "voice 1", "1 start 0 loop"]);
   });
 
+  it("只差 mintime / maxtime 的新声音表保留排期器；timingOf 传到排期器现读（P6a2）", () => {
+    const { player, log, events } = fakePlayer();
+    const timing = { mintime: 3, maxtime: 3 };
+    const sounds = new SceneSounds(
+      player,
+      () => 0,
+      undefined,
+      (object) => (object === 0 ? timing : undefined),
+    );
+    sounds.setGlobal(1, true);
+    sounds.load([sound(0, ["a.wav"], { mode: "random", mintime: 1, maxtime: 1 })]);
+    log.length = 0;
+    sounds.load([sound(0, ["a.wav"], { mode: "random", mintime: 9, maxtime: 9 })]);
+    expect(log).toEqual([]);
+    // 第一次开始已发生；时长 1 s，等待 = 1 + 3 = 4 s（timing 现读，而不是声音表的 1 / 9）
+    events.get(0)!.started(0, 1);
+    sounds.step(3.9, () => 1);
+    expect(log.filter((line) => line.startsWith("0 start"))).toEqual([]);
+    sounds.step(0.2, () => 1);
+    expect(log.filter((line) => line.startsWith("0 start"))).toEqual(["0 start 0"]);
+  });
+
   it("remove：停掉被删的声音对象（stop 全部实例）、释放播放器、不再排期；别的对象与不是声音的对象不受影响（P6d3a）", () => {
     const { player, log } = fakePlayer();
     const sounds = new SceneSounds(player, () => 0);

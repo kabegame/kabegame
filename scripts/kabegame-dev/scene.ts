@@ -137,9 +137,22 @@ export async function openHost(s: DevSession, options: { hidden?: boolean; scene
         document.body.append(frame);
         // 宿主首次加载等父页面下发场景设置（kabegame:wpe-scene-settings）：这个屏外宿主没有 WpeSceneView 替它回，
         // 照桌面的全局「壁纸设置」回（follow 原样交给宿主解析，同以前宿主自己读设置）
+        let statePushed = false;
         const onRequest = async (event) => {
           if (!frame.isConnected) return window.removeEventListener("message", onRequest);
           if (event.source !== frame.contentWindow || event.data?.type !== "kabegame:wpe-scene-style-request") return;
+          // 属性也由父页面推（phase-9-parent-delivery，宿主等到第一包属性才加载）：宿主启动时发的这条请求说明文档已就绪，
+          // 第一次收到时照 WpeSceneView 取状态、推整份（kabegame:wpe-state，形状见 wpeWebState.ts）。之后不跟库里的变化，要新值就重开宿主
+          if (!statePushed) {
+            statePushed = true;
+            window.__TAURI_INTERNALS__
+              .invoke("wpe_web_get_state", { imageId: ${JSON.stringify(scene)} })
+              .then((state) => {
+                if (state && frame.isConnected)
+                  frame.contentWindow?.postMessage({ type: "kabegame:wpe-state", full: true, state }, "*");
+              })
+              .catch(() => {});
+          }
           const read = (command) => window.__TAURI_INTERNALS__.invoke(command, {}).catch(() => "follow");
           const [postprocess, reflection, shadows, volumetrics] = await Promise.all([
             read("get_wpe_scene_postprocess"),

@@ -129,7 +129,8 @@ kbp.py rdc consts <抓帧目录> <标签> [--names 名字,…] [--no-clock] [--o
   - 文件名一律按脚本帧号（= RenderDoc 帧号 + 1）。
 - **`stats`** 按顶点布局认粒子绘制，不依赖测试工程，创意工坊场景也能用。
 - **`consts`**（P10 起）：每张抓帧一行 `{frame, rdc_frame, time, dt, [pointer…], rdc, draws}`，时钟同 `track`（前两个绘制是 FR、CLK）；
-  `draws` 是其余每次绘制的 `{event, vs, ps}`，`vs` / `ps` 是该阶段被着色器读到的常量（名字 → 值，矩阵 16 个数，数组按元素展开），
+  `draws` 是其余每次绘制的 `{event, vs, gs, ps}`，`vs` / `gs` / `ps` 是该阶段被着色器读到的常量（名字 → 值，矩阵 16 个数，数组按元素展开；
+  `gs` 只在有几何着色器时有，P14d 起：粒子的 MVP 与 `g_Orientation*` 在几何阶段读），
   `referenced` 为 false 的不收（垃圾值）。`--names` 只收这些名字。用来读 WPE 每帧写进字段的值：图层字段看 `g_ModelViewProjectionMatrix` /
   `g_Color4`，effect 常量看材质常量。
   - `--no-clock`（P11a）：真实壁纸解包的工程（`content unpack --instrument`）只有末尾一个只写日志的 FR、没有 CLK，不读时钟：`frame` 取
@@ -571,7 +572,7 @@ kbp.py content isolate <工程> --keep <id|名字>,… [--drop <id|名字>,…] 
 ```
 
 - `order`：FR、CLK 之后的对象顺序（= `scene.json` 顺序 = 绘制顺序）。
-- `kind`：`image`（每帧画一次，没有粒子）或 `particle`。
+- `kind`：`image`（每帧画一次，没有粒子；`draws: n` 时连着画 n 次，如被依赖的图层先画进合成 RT 再上屏，P4j）或 `particle`。
 - `ident`：系统怎么认。
   - `color`：按 `rgb` 认，即 `colorrandom` 的 min，0–1；
   - `order`：颜色会变或没有 `colorrandom` 的系统，按绘制顺序认。
@@ -621,7 +622,7 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
   - `pos = POSITION`，`color = COLOR.rgb`，`alpha = COLOR.a`。
   - 其余顶点列原样保存，列名照 RenderDoc，如厚格式的 `TEXCOORD1`；同名列第二个起是 `名字#2`。
   - **认系统**：
-    - 按 `order` 走游标；图像层的绘制让游标跳过下一个 `image`；
+    - 按 `order` 走游标；图像层的绘制让游标跳过下一个 `image`（该图层 `draws: n` 时，紧跟的第 2…n 次图像绘制仍算它、不推游标）；
     - 粒子绘制先在游标之后的 `ident: color` 系统里按首个粒子的颜色找，L1 距离 ≤ 0.03；
     - 找不到取游标之后第一个 `ident: order` 的系统；
     - 某帧没有存活粒子时那次绘制为空，跳过。
@@ -739,6 +740,7 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 | `compare` | `history`（坐标分档用粒子出生以来的最大坐标，缺省 true；P4a 段为 false）、`historyUnborn`（预热出生、没有出生序号的粒子：`ignore` 查不到，b3–c2 的写法；`pool` 合成一份，c3 起）、`windowOnly`（这些系统只比出生帧 ≥ 第一个抓帧的粒子）、`requireParticles`（通过要求比过至少一个粒子，缺省 true；c3 为 false） |
 | `unsupported` | 编译的不支持项：`expect`（精确相等，缺省 `[]`）、`allow`（正则，只许出现匹配的）、`report`（只报不判） |
 | `options` | 给钩子的自由参数 |
+| `mt19937` | 全部粒子系统共用一个标准 `std::mt19937(种子)`（P4j 步骤 4a）：数字对全部标签生效，对象按标签取；见下「注入 WPE 的随机数」 |
 | `hook` | 钩子模块（相对 `cases/`），缺省 `<名字>.hook.ts` 存在就用 |
 
 - 标准流程（每段）：编译工程 → 时间线（`apps/kabegame-dev-mcp/src/timeline.ts`，抓到的帧 dt / g_Time 取轨迹的 float32 原值）→ 钩子
@@ -755,7 +757,7 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 | `timeline(ctx, sec)` | 准备阶段：直接改 `sec.dts`、`sec.times`、`sec.sources`（b4 用定好的拆分、d1 用 R9 反推缺帧的 dt） |
 | `world(ctx, sec)` | `inputs.world` 为 `hook` 时：返回 `(layer, frame) => 世界矩阵`，frame 0 是预热（c4、d1 的脚本驱动对象） |
 | `section(ctx, sec)` | 完全接管一段（b3 的模块段、b4）；可以调 `ctx.standard(sec)` 走标准流程 |
-| `prepare(ctx, sec)` | 标准流程里模拟的额外选项（`r` 注入 R、`random` 包随机源、`patch` 改模块） |
+| `prepare(ctx, sec)` | 标准流程里模拟的额外选项（`r` 注入 R、`random` 按系统名包随机源、`sharedRandom` 全部系统共用一个随机源、`mt19937` 同前但直接给种子（内置标准 MT19937）、`emitterImages` 接 `layerimage` 的候选表来源、`patch` 改模块） |
 | `compareOptions(ctx, sec, name, ref)` | 标准流程里每个系统的比较选项（`map`、`skip`、`sim`、`history`） |
 | `after(ctx, sec, ref)` | 标准流程比完之后：额外核对（`ctx.check`）、变体、particleTrack 对照（`ctx.checkParticleTrack`） |
 | `finish(ctx)` | 整个案例跑完 |
@@ -765,11 +767,40 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
   `ctx.reference(sec, 覆盖)`、`ctx.addParticles(sec, 名字, ref, 选项)`、`ctx.addSystem`、`ctx.check`、`ctx.note`、`ctx.line`、
   `ctx.fork(sec, 标签)`（同一段的输入再比一轮，报告里另起一段）、`ctx.systemsOf(sec)`、`ctx.checkParticleTrack`；纯函数在 `ctx.lib`
   （`compareParticles`、`statsOk`、`perturb`…）。
+- `sharedRandom` 与 `emitterImages`（P4j 步骤 3，`SimOptions`）：都是**每次 `simulate` 调一次的工厂**（记录与随机源带状态，包络、`fork` 各跑各的，不能跨模拟复用）。
+  - `sharedRandom: () => RandomLike`：全部粒子系统共用返回的**一个**随机源，按回放的系统顺序（= objects 顺序）抽同一串，对应 WPE 一个场景一串 MT19937（缺省每个系统自己的 `SeededRandom(1 + i)`）；`random` 的按系统名包装仍在它之上生效。
+  - `emitterImages: () => (layer) => EmitterImageSource | undefined`：外层调一次、内层按粒子层取来源（`undefined` 的层不接）。建好系统后、预热之前 `setEmitterImages` 并把帧号写成 0，每步之前写成这一帧的帧号 i（预热 0、第 i 帧 i，同渲染器的 `sheetFrameNo`）。候选表记录按 (图层 id, mask) 在全部系统间共享，所以通常让内层对每个层返回**同一个** `EmitterImageRecords`。典型：`new EmitterImageRecords(new ScriptedEmitterImageView({ layerSize, snapshotAt, layerMatrix }))`，`snapshotAt(id, mask, frame)` 给第 frame 帧末的降采样快照，`layerMatrix(id, frame)` 给被依赖图层这一帧的绘制矩阵（脚本移动图层的案例按上一帧的 runtime 算）。范例：`ignore/p4/cases/j3.hook.ts`。
 - 钩子只 `import type` 回放库；运行期要库里的函数一律从 `ctx.lib` 取：每个案例前 `vi.resetModules()`，自己 import 会得到另一份模块实例
   （偏置开关不是同一个）。
 - 只有写了 `envelope.approx` 的案例才挂 `particles/f32` 的 mock（mock 让热循环多一层调用：b4 挂着 49 s、不挂 17 s，结果逐字节相同）。
 - 类型检查：`node node_modules/typescript/bin/tsc -p .claude/skills/kbp-tools/ts/tsconfig.json`；钩子可以另写一个 extends 它、include
   `<data>/cases/*.ts` 的 tsconfig（放在仓库里）。
+
+## 注入 WPE 的随机数（P4j 步骤 4）
+
+粒子的随机数是场景里**一个** MT19937（按时间做种）。要让 WPE 与我们逐值对得上，两边各换成同一个约定种子：
+
+- **WPE 侧**：`wpe-renderdoc` MCP 的 `open_wallpaper` / `capture_wallpaper` / `capture_sweep`（job 里）的 `seed`（步骤 4b 落地）：开窗**之前**挂上一次性的
+  Frida 钩子，把渲染器构造里的 MT19937 种子换成 `seed`，命中后读回 `x[0]`、`x[1]` 核对，结果里写线程号、种子与核对结果（没命中或核对失败照报，不静默）。
+  手工脚本是 `ignore/p4/j0/rng/seed.py`（步骤 0 用的）。抓帧照常放 `A:\<项目>\<档位>\`，标签里记下种子（例如 `…-s1007`）。
+- **回放侧**（我们这边）：全场所有粒子系统共用一个 `SeededRandom(mt19937(种子))`，预热与每帧步进都按对象表顺序从同一串里取，
+  同 WPE 一个场景一个随机引擎；不给时照旧每个粒子层一个 `seed + i`。三处入口，都是同一个数：
+  - `kabegame-dev` MCP：`render_scene` / `host_render` / `particle_track` / `particle_corners` 的 `replay.mt19937`（`particle_track` 是顶层 `mt19937`），整数
+    0…4294967295，不和 `seed` 同给；`renderFrames.ts` 用 `--mt19937 N`。结果里写用了哪个随机源（`meta.particleRandom`；轨迹 JSON 的 `random`）。
+  - dev 探针（`__kabegameSceneProbe.renderFrame` 的 `particles.mt19937`、`particleTrack` 的 `mt19937`、`particleCorners` 的 `particles.mt19937`）：MCP 没重连时可以直接经
+    `host_eval` 调它（`seed` 与 `mt19937` 同给抛错）。
+  - **kbp 回放**：案例的 `mt19937`（`RunSpec`，数字对全部标签生效，对象按标签取，如 `"mt19937": { "p4j-li-map-fps60-s1007": 1007 }`），或钩子的 `prepare`
+    返回 `{ mt19937: 种子 }`（`SimOptions.mt19937`，按别的规则取种子时用，例子 `ignore/p4/cases/j0rng.hook.ts`、`j3.hook.ts`）；等价于 `sharedRandom: () => new
+    SeededRandom(mt19937(种子))`，不和 `sharedRandom` 同给。`replayLib.ts` 里有一份自己的 `mt19937`（带 C++ 标准的自检值：种子 5489 的第 1 个是 3499211612、
+    第 10000 个是 4123659995），因为 `kbp regress` 的旧源码快照没有产品那份导出。
+- **前提**（不满足时对不上不是模拟器的错）：
+  - 工程里没有别的随机消费者，或它们的抽取顺序也对得上：声音 `random` 模式、相机路径 `random` 也在**同一串**里取。多个粒子系统（含子系统、
+    事件实例）按对象表顺序共用这一串，回放侧照这个顺序抽，全部保留也对得上（雨景 `3834803915` 三个系统逐颗对上）；有声音 `random` 之类时
+    先用 `isolate` 去掉；
+  - 不在这一串里、种子换了也管不到的：`hsvcolorrandom` 的档位走 MSVC CRT `rand()`（我们是独立的 `hueRand` / `HueSource`），场景脚本的
+    `Math.random` 是 V8 自己的随机数（探针按 `scripts.seed` 固定，WPE 那边每次不同），靠它驱动的图层与 effect 常量只能目视；
+  - 抓帧与回放的时间线要一致（dt、g_Time、帧数），因为抽取次数随帧数增长，少一帧或多一帧后面全错位；
+  - 两边都要从加载（预热）起算：预热也消耗这一串。
 
 ## 新步骤的标准流程
 

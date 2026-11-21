@@ -369,11 +369,19 @@ export function drawMatrices(
   world: Mat4,
   size: readonly number[],
   viewProjection: Mat4,
+  /**
+   * 组里的图层（P8 步骤 7 走查、P14c，`layout.ts` 的 `groupMvpParts`）：WPE 组画子树时模型栈是 `inverse(W_组)`、视图单位阵、投影是组的局部
+   * 正交，图层画自己时把世界矩阵并进模型栈（`FUN_1401e8aa0` 的内联仿射乘法），所以 `g_ModelMatrix` 是组内局部的 `inverse(W_组) ⊗ W`、
+   * MVP = `P ⊗ (inverse(W_组) ⊗ W)`；调用方同时把 `viewProjection` 给成 P（`g_ViewProjectionMatrix`）。效果矩阵与 `g_LayerModelMatrix` 仍取
+   * 世界矩阵 W（`this+0x384` 存的是虚函数 +0x80 的 W，p14c-gi 实测），效果投影矩阵见下面 effect / final 两支。
+   */
+  group?: { projection: Mat4; inverse: Mat4 } | null,
 ) {
-  const model = world;
+  // 组里（P14c，`p14c-gi` 的事件 88 / 135 / 173 逐位）：模型矩阵是组内局部的
+  const model = group ? mulAffine(group.inverse, world) : world;
   // MVP = M ⊗ VP：WPE 的仿射乘法（`FUN_1400d4200`，rea-matrix-order 2.1）。下面 effect / final 的 `multiply(…, half)` 不改：每个元素只有
-  // 一个非零乘积，和 WPE 的逐元素缩放逐位相同（rea-matrix-order 4.2）
-  const layerMvp = mulAffine(viewProjection, model);
+  // 一个非零乘积，和 WPE 的逐元素缩放逐位相同（rea-matrix-order 4.2）。组里是 `P ⊗ (inverse(W_组) ⊗ W)`，同一种仿射乘法两次
+  const layerMvp = group ? mulAffine(group.projection, model) : mulAffine(viewProjection, model);
   const hw = (size[0] ?? 0) / 2,
     hh = (size[1] ?? 0) / 2;
   const half = scaling(hw, hh, 1);
@@ -399,16 +407,19 @@ export function drawMatrices(
       return { modelViewProjection: fill, model: identity(), viewProjection: fill };
     }
     case "effect": {
+      // 效果投影矩阵（中间 pass 与末 pass 同一个底）：组里 WPE 给 `P_组 ⊗ W`（`this+0x344` 是模型栈顶被换成 W 后算的 MVP，漏了组的逆，
+      // p14c-gi 事件 118 / 135 / 173 逐位），组在原点、不转时就差半个组的尺寸，读它采屏幕或换算光标的 effect（godrays / shine 的合成、
+      // cursorripple、fluidsimulation）在组里错位。语料里组里没有读它的 effect（`ignore/p14/c/scan_group_fx.py`），按缺陷不复现：取图层 MVP
       const effectMvp = multiply(layerMvp, half);
       return {
         modelViewProjection: identity(),
         model: identity(),
         viewProjection,
-        effectModel: multiply(model, half),
+        effectModel: multiply(world, half),
         effectModelViewProjection: effectMvp,
         effectTextureProjection: effectMvp,
-        // 图层世界矩阵，不缩放（effect-matrices-REPORT S3：非 final 的 pass 也是 `L = W`）
-        layerModel: model,
+        // 图层世界矩阵，不缩放（effect-matrices-REPORT S3：非 final 的 pass 也是 `L = W`）；组里同样是 W（P14c）
+        layerModel: world,
       };
     }
     case "final":
@@ -417,11 +428,11 @@ export function drawMatrices(
         modelViewProjection: layerMvp,
         model,
         viewProjection,
-        effectModel: model,
+        effectModel: world,
         effectModelViewProjection: layerMvp,
         effectTextureProjection: multiply(layerMvp, half),
         // 上屏的末 pass 是 effect 的 pass，给 `g_LayerModelMatrix`（同中间 pass）；passthrough 上屏不是（WPE 不写，残留值）
-        layerModel: step.role === "final" ? model : undefined,
+        layerModel: step.role === "final" ? world : undefined,
       };
     case "compose":
     case "direct":
@@ -457,6 +468,8 @@ export interface DrawUniformInput {
   fog?: Readonly<Record<string, readonly number[]>>;
   /** 预光照的三个 Alt 矩阵的来源（P13j，`StaticBuiltinInput.alt`）；只有预光照的基础 pass 给。 */
   alt?: { model: Mat4; viewProjection: Mat4 };
+  /** 组里图层 MVP 的两半（`drawMatrices` 的 `group`，P8 步骤 7 走查）；不在组里、全屏组与 compose 不给。 */
+  group?: { projection: Mat4; inverse: Mat4 } | null;
 }
 
 /**
@@ -472,7 +485,7 @@ export function layerRefreshNames(passUniforms: Record<string, number[]>): strin
  * `createDraw` 建 draw 与 `GpuScene.sync` 就地刷新共用同一个函数——两边逐字节一致由单测核对（P3a 验收 4）。
  */
 export function drawUniformValues(input: DrawUniformInput): Record<string, number[]> {
-  const matrices = drawMatrices(input.step, input.world, input.layer.size, input.viewProjection);
+  const matrices = drawMatrices(input.step, input.world, input.layer.size, input.viewProjection, input.group);
   const values = staticBuiltins({
     ...matrices,
     modelViewProjectionInverse: uniformInverse(matrices.modelViewProjection),

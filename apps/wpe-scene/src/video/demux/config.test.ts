@@ -16,6 +16,7 @@ import {
   wpeColorSpace,
 } from "./config";
 import type { Mp4Colr, VideoTrackIndex } from "./mp4";
+import type { Vp9Info } from "./vp9";
 
 function hex(text: string): Uint8Array {
   return new Uint8Array(text.match(/../g)!.map((byte) => parseInt(byte, 16)));
@@ -173,6 +174,7 @@ function track(over: Partial<VideoTrackIndex> & { sps?: Uint8Array }): VideoTrac
     codec: "avc",
     sampleEntry: "avc1",
     description: avcC(sps ?? SPS_BASELINE),
+    vp9: null,
     codedWidth: 1920,
     codedHeight: 1080,
     timescale: 15360,
@@ -471,5 +473,85 @@ describe("codecString / decoderConfig", () => {
       fullRange: false,
     });
     expect(decoderConfig(t, "scene").description).toBe(t.description);
+  });
+});
+
+describe("VP9（P9e）：codec 串、不给 description、帧头的颜色", () => {
+  /** 帧表的 `vp9` 字段：缺省 profile 0、8 位、4:2:0、color_space 未知、limited、1920×1080、level 41。 */
+  function vp9(over: Partial<Vp9Info> = {}): Vp9Info {
+    return {
+      profile: 0,
+      bitDepth: 8,
+      subsamplingX: 1,
+      subsamplingY: 1,
+      colorSpace: 0,
+      fullRange: false,
+      width: 1920,
+      height: 1080,
+      level: 41,
+      levelSource: "table",
+      ...over,
+    };
+  }
+  const vp9Track = (info: Partial<Vp9Info> = {}, over: Partial<VideoTrackIndex> = {}) =>
+    track({ codec: "vp9", sampleEntry: "vp09", description: new Uint8Array(0), vp9: vp9(info), ...over });
+
+  it("vp09.PP.LL.DD（两位十进制）；4:2:2 / 4:4:4 加 .02 / .03，4:2:0 与 4:4:0 不加", () => {
+    expect(codecString(vp9Track())).toBe("vp09.00.41.08");
+    expect(codecString(vp9Track({ profile: 2, bitDepth: 10, level: 51 }))).toBe("vp09.02.51.10");
+    expect(codecString(vp9Track({ profile: 3, bitDepth: 12, level: 62 }))).toBe("vp09.03.62.12");
+    expect(codecString(vp9Track({ profile: 1, subsamplingX: 1, subsamplingY: 0 }))).toBe("vp09.01.41.08.02");
+    expect(codecString(vp9Track({ profile: 1, subsamplingX: 0, subsamplingY: 0 }))).toBe("vp09.01.41.08.03");
+    expect(codecString(vp9Track({ profile: 1, subsamplingX: 0, subsamplingY: 1 }))).toBe("vp09.01.41.08");
+  });
+
+  it("decoderConfig：不给 description（H.264 照给）", () => {
+    const config = decoderConfig(vp9Track({}, { description: Uint8Array.of(2, 1, 41) }), "scene");
+    expect(config).toMatchObject({ codec: "vp09.00.41.08", codedWidth: 1920, codedHeight: 1080 });
+    expect(config).not.toHaveProperty("description");
+  });
+
+  it("场景视频：矩阵恒为 bt709，帧头标的码只进说明；范围取帧头", () => {
+    const bt601 = wpeColor(vp9Track({ colorSpace: 1, fullRange: true }, { codedHeight: 480 }), "scene");
+    expect(bt601).toMatchObject({ source: "scene", matrix: "bt709", code: 5, rangeSource: "vp9" });
+    expect(bt601.colorSpace.fullRange).toBe(true);
+    expect(bt601.note).toMatch(/VP9 帧头 矩阵码 5/);
+    expect(wpeColor(vp9Track(), "scene").note).toMatch(/码流未标/);
+  });
+
+  it("用户视频：colr → VP9 帧头 → 分辨率；帧头 color_space 未知时按分辨率", () => {
+    // 帧头 BT.601 → 矩阵码 5 → smpte170m
+    expect(wpeColor(vp9Track({ colorSpace: 1 }), "user")).toMatchObject({
+      source: "vp9",
+      code: 5,
+      matrix: "smpte170m",
+    });
+    // 帧头 SMPTE 170 → 6；BT.2020 → 9
+    expect(wpeColor(vp9Track({ colorSpace: 3 }), "user").matrix).toBe("smpte170m");
+    expect(wpeColor(vp9Track({ colorSpace: 5 }), "user").matrix).toBe("bt2020-ncl");
+    // RGB → 矩阵码 0，不认识，按 bt709 并记下
+    expect(wpeColor(vp9Track({ colorSpace: 7, fullRange: true }), "user")).toMatchObject({
+      source: "vp9",
+      code: 0,
+      unknownCode: true,
+      matrix: "bt709",
+    });
+    // colr（Matroska 的 Colour）优先于帧头，范围也取 colr
+    expect(wpeColor(vp9Track({ colorSpace: 1, fullRange: true }, { colr: colr(1) }), "user")).toMatchObject({
+      source: "colr",
+      matrix: "bt709",
+      rangeSource: "colr",
+    });
+    // colr 矩阵 2（未指定）→ 往下取帧头
+    expect(wpeColor(vp9Track({ colorSpace: 2 }, { colr: colr(2), codedHeight: 480 }), "user")).toMatchObject({
+      source: "vp9",
+      matrix: "bt709",
+    });
+    // 帧头未知 → 按分辨率
+    expect(wpeColor(vp9Track({}, { codedHeight: 480 }), "user")).toMatchObject({
+      source: "resolution",
+      matrix: "smpte170m",
+      rangeSource: "vp9",
+    });
   });
 });

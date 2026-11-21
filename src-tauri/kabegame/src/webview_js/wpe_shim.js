@@ -5,7 +5,7 @@
 // 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。音频与媒体是例外：页面登记监听后垫片向宿主订阅，
 // 宿主经 Channel 推（「音频与媒体集成」）。音量也是例外：不走 IPC，垫片经 postMessage 向父页面
 // （WpeWallpaperContent）要宿主音量，父页面回复、变化时再推，垫片把它乘到页面的媒体元素与 Web Audio 上（「音量」），
-// 另放成只读的 window.__kabegameHostVolume 并派发 kabegame-host-volume，给场景宿主的声音播放器用（WPE_SCENE.md「声音」）。
+// 另放成只读的 window.__kabegameHostVolume 并派发 kabegame-host-volume，给场景宿主的声音播放器用（cocs/wpe/scene/SOUND_VIDEO.md「声音（P6a）」）。
 // 鼠标不经垫片合成：同一条音量消息里父页面说可交互且没暂停时，本 frame 向 tauri-plugin-cursor 登记，Rust 轮询全局
 // 光标、把原生事件直接注入本 frame（钳进视口），页面收到的是可信事件（WPE_IMPORT.md「鼠标」）。
 (function () {
@@ -407,6 +407,8 @@
   function installVolume() {
     var VOLUME_REQUEST = "kabegame:wpe-volume-request";
     var VOLUME_MESSAGE = "kabegame:wpe-volume";
+    // 父页面推属性（wpeWebState.ts 的 WPE_STATE_MESSAGE）
+    var STATE_MESSAGE = "kabegame:wpe-state";
     var host = window.parent;
     // 收到父页面第一次回复之前按静音：页面一开始就放的声音不会先响一下
     var hostVolume = 0;
@@ -694,9 +696,14 @@
       function (event) {
         if (!event.isTrusted || read(event, sourceDesc, "source") !== host) return;
         var data = read(event, dataDesc, "data");
-        if (!data || typeof data !== "object" || data.type !== VOLUME_MESSAGE || typeof data.volume !== "number") {
+        if (!data || typeof data !== "object") return;
+        // 属性（父页面推送，wpeWebState.ts）：整份 / 增量 / 就绪。同样不交给页面
+        if (data.type === STATE_MESSAGE) {
+          event.stopImmediatePropagation();
+          receiveState(data);
           return;
         }
+        if (data.type !== VOLUME_MESSAGE || typeof data.volume !== "number") return;
         // 宿主自己的消息不交给页面（捕获阶段、最先登记，页面的 message 监听都在后面）
         event.stopImmediatePropagation();
         hostVolume = clamp01(data.volume);
@@ -704,10 +711,10 @@
         if (hostPaused !== paused) {
           hostPaused = paused;
           // 照 WPE：页面的 setPaused(true) 在冻结之前、setPaused(false) 在解冻之后（页面在里面排的 timeout 照常到点）。
-          // 首次投递之前到达的留给 deliverFull 补
-          if (paused && delivered) call("setPaused", true);
+          // 第一条属性消息之前到达的留给 receiveState 补
+          if (paused && stateReady) call("setPaused", true);
           if (freezer) freezer.set(paused);
-          if (!paused && delivered) call("setPaused", false);
+          if (!paused && stateReady) call("setPaused", false);
         }
         // 可交互（预览、桌面）且没暂停才收鼠标；应用背景不交互
         setPointerAttached(data.interactive === true && !paused);
@@ -795,18 +802,21 @@
   var randomQueue = [];
   window.wallpaperRequestRandomFileForProperty = function (key, cb) {
     if (typeof cb !== "function") return;
-    if (!latest) return void randomQueue.push([key, cb]);
+    if (!stateReady) return void randomQueue.push([key, cb]);
     answerRandom(key, cb);
   };
   window.wallpaperGetUtilities = function () {
     return {};
   };
 
-  // ---- 投递：load 后首次全量；之后用户属性按键差异、通用属性整份；首次之后换 listener 补投全量 ----
+  // ---- 投递：父页面推送（2026-11-21 起，wpeWebState.ts / useWpeStateDelivery），垫片只把消息交给页面 ----
+  // 父页面在它新建的 iframe 第一次真实 load 后推整份、之后推增量；页面自己 reload / 改地址出来的文档只收到不带属性的「就绪」
+  // （照 WPE：只有主程序的加载命令复位就绪标志，2-web/API.md §4.8，kbweb-reload 实测）。本文档收到过整份之后页面换
+  // listener 时补投全量（我们自己的规则）。
   var listener;
-  var latest = null; // 收到的最新状态
-  var delivered = null; // 上次投递给页面的状态
-  var loaded = false;
+  var delivered = null; // 本文档收到的整份状态（合进之后的增量），供换 listener 补投；没收到整份为 null
+  var directories = {}; // 最新的目录列表（随机文件用）
+  var stateReady = false; // 收到过第一条属性消息（整份、增量或就绪）：之后暂停变化照调 setPaused
   // 访问器装在 window 上：页面写 `window.x = …` 或顶层 `var x = …` 都会走到 setter
   Object.defineProperty(window, "wallpaperPropertyListener", {
     configurable: true,
@@ -818,7 +828,9 @@
       listener = value;
       if (delivered) {
         queueMicrotask(function () {
-          if (listener === value) deliverFull(delivered);
+          if (listener !== value) return;
+          deliverFull(delivered);
+          if (hostPaused) call("setPaused", true);
         });
       }
     },
@@ -848,33 +860,8 @@
       }
     }
   }
-  function fetchallFiles(dirs, key) {
-    var dir = dirs && dirs[key];
-    return dir && dir.mode !== "ondemand" ? dir.files : [];
-  }
-  function deliverDirectories(prev, next) {
-    var keys = {};
-    Object.keys(prev || {})
-      .concat(Object.keys(next || {}))
-      .forEach(function (key) {
-        keys[key] = true;
-      });
-    Object.keys(keys).forEach(function (key) {
-      var before = new Set(fetchallFiles(prev, key));
-      var after = fetchallFiles(next, key);
-      var afterSet = new Set(after);
-      var removed = Array.from(before).filter(function (file) {
-        return !afterSet.has(file);
-      });
-      var added = after.filter(function (file) {
-        return !before.has(file);
-      });
-      if (removed.length) call("userDirectoryFilesRemoved", key, removed);
-      if (added.length) call("userDirectoryFilesAddedOrChanged", key, added);
-    });
-  }
   function answerRandom(key, cb) {
-    var dir = latest.directories && latest.directories[key];
+    var dir = directories[key];
     var files = dir ? dir.files : [];
     if (!files.length) return;
     var file = files[Math.floor(Math.random() * files.length)];
@@ -886,59 +873,62 @@
       }
     }, 0);
   }
+  // 整份：用户属性、通用属性，`fetchall` 目录的全部文件当作新增
   function deliverFull(state) {
-    call("applyUserProperties", sortedByKey(clone(state.user)));
-    call("applyGeneralProperties", sortedByKey(clone(state.general)));
-    deliverDirectories(null, state.directories);
-    delivered = state;
-    if (hostPaused) call("setPaused", true);
-  }
-  function changedUser(prev, next) {
-    var out = null;
-    Object.keys(next).forEach(function (key) {
-      if (JSON.stringify(prev[key]) !== JSON.stringify(next[key])) {
-        (out || (out = {}))[key] = clone(next[key]);
+    call("applyUserProperties", sortedByKey(clone(state.user || {})));
+    call("applyGeneralProperties", sortedByKey(clone(state.general || {})));
+    var dirs = state.directories || {};
+    Object.keys(dirs).forEach(function (key) {
+      var dir = dirs[key];
+      if (dir && dir.mode !== "ondemand" && dir.files && dir.files.length) {
+        call("userDirectoryFilesAddedOrChanged", key, dir.files.slice());
       }
     });
-    // 无默认值的 file / directory 重置后键会消失；页面仍需收到空路径以撤销旧选择。
-    Object.keys(prev).forEach(function (key) {
-      if (!(key in next) && (prev[key].type === "file" || prev[key].type === "directory")) {
-        (out || (out = {}))[key] = { type: prev[key].type, value: "" };
-      }
-    });
-    return out;
+    delivered = clone(state);
   }
-  function receive(next) {
-    latest = next;
+  // 增量：父页面已经算好（用户属性只含变了的键、通用属性整份、目录增删）；「就绪」三样都空
+  function deliverDelta(data) {
+    if (data.user) call("applyUserProperties", sortedByKey(clone(data.user)));
+    if (data.general) call("applyGeneralProperties", sortedByKey(clone(data.general)));
+    var changes = data.directoryChanges || {};
+    Object.keys(changes).forEach(function (key) {
+      var change = changes[key] || {};
+      if (change.removed && change.removed.length) call("userDirectoryFilesRemoved", key, change.removed.slice());
+      if (change.added && change.added.length) call("userDirectoryFilesAddedOrChanged", key, change.added.slice());
+    });
+    if (delivered) {
+      if (data.user) {
+        Object.keys(data.user).forEach(function (key) {
+          delivered.user[key] = clone(data.user[key]);
+        });
+      }
+      if (data.general) delivered.general = clone(data.general);
+      delivered.directories = clone(directories);
+    }
+  }
+  function receiveState(data) {
+    var first = !stateReady;
+    stateReady = true;
+    if (data.full === true) {
+      if (!data.state || typeof data.state !== "object") return;
+      directories = data.state.directories || {};
+      deliverFull(data.state);
+    } else {
+      directories = data.directories || {};
+      deliverDelta(data);
+    }
+    // 第一条之前就已暂停的：交付后补调（页面自己 reload 出来的文档收到的是「就绪」，同样补）
+    if (first && hostPaused) call("setPaused", true);
     randomQueue.splice(0).forEach(function (request) {
       answerRandom(request[0], request[1]);
     });
-    // load 之前只记下来，不提前回调（为 WPE 写的页面默认回调时 DOM 已就绪）
-    if (!loaded) return;
-    if (!delivered) return deliverFull(next);
-    // WPE 没有整份替换的接口：只推值变化的键；作者删掉的键页面无从撤销，不推
-    var changed = changedUser(delivered.user, next.user);
-    if (changed) call("applyUserProperties", sortedByKey(changed));
-    if (JSON.stringify(delivered.general) !== JSON.stringify(next.general)) {
-      call("applyGeneralProperties", sortedByKey(clone(next.general)));
-    }
-    deliverDirectories(delivered.directories, next.directories);
-    delivered = next;
   }
-  window.addEventListener("load", function () {
-    loaded = true;
-    if (latest && !delivered) deliverFull(latest);
-  });
 
-  // ---- 传输：iframe 自己直接 invoke / listen，事件只投递到本 frame ----
-  // 权限只来自 wpe-web-capability（listen 只放行 wallpaper-ping / setting-change / image-changed / images-change，
-  // 以及场景宿主用的 wpe-scene-clear-storage，新增监听要同步改 capability；另可订阅音频 / 媒体，数据经 Channel 只回本 frame，
-  // frame 销毁即由宿主释放）。来源由 CEF 补丁 07 在建工厂时确定，首批请求即可用，不做重试。
+  // ---- 传输：iframe 自己直接 invoke / listen，事件只投递到本 frame（属性不走这里，由父页面推送）----
+  // 权限只来自 wpe-web-capability（listen 只放行 wallpaper-ping 与场景宿主用的 wpe-scene-clear-storage，新增监听要同步改
+  // capability；另可订阅音频 / 媒体，数据经 Channel 只回本 frame，frame 销毁即由宿主释放）。来源由 CEF 补丁 07 在建工厂时确定，
+  // 首批请求即可用，不做重试。
   var transport = {
-    pull: function () {
-      var sceneImage = new URLSearchParams(location.search).get("kbScene");
-      return internals.invoke("wpe_web_pull_state", sceneImage ? { imageId: sceneImage } : {});
-    },
     // 手写 Tauri Channel 的序号协议（同 @tauri-apps/api 的 Channel）：消息带 index，大消息由 Tauri 生成的脚本
     // 在本 frame 里 fetch 取回后才回调，可能晚到，先存后按序投递；结束标记忽略（WPE 没有退订）
     subscribe: function (kind, onMessage) {
@@ -982,54 +972,4 @@
     .catch(function (error) {
       console.warn("[kb-wpe] listen ping", error);
     });
-
-  // 拉取编号：某次结果落地后，丢弃更早发出、更晚返回的结果
-  var issued = 0;
-  var applied = 0;
-  function pull() {
-    var seq = ++issued;
-    transport.pull().then(
-      function (state) {
-        if (!state || seq <= applied) return;
-        applied = seq;
-        receive(state);
-      },
-      function (error) {
-        console.warn("[kb-wpe] pull", error);
-      },
-    );
-  }
-
-  function patchesOf(event) {
-    var payload = event.payload || {};
-    if (event.name === "image-changed") return payload.patch ? [payload.patch] : [];
-    if (event.name === "images-change") return Array.isArray(payload.patches) ? payload.patches : [];
-    return [];
-  }
-  function shouldPull(event) {
-    if (event.name === "setting-change") {
-      var payload = event.payload || {};
-      var changes = payload.changes && typeof payload.changes === "object" ? payload.changes : payload;
-      // 语言与桌面帧率进 general；预览的帧率在 metadata 的 previewSettings 里，随 metadataId 补丁重拉
-      return (
-        Object.prototype.hasOwnProperty.call(changes, "language") ||
-        Object.prototype.hasOwnProperty.call(changes, "wpeFps")
-      );
-    }
-    // 图片 metadata 按 id 不可变：属性改了就换 metadataId。首个状态到达前不知道本张 id，任何 metadataId 补丁都重拉
-    var id = latest && latest.imageId;
-    return patchesOf(event).some(function (patch) {
-      return patch && typeof patch === "object" && "metadataId" in patch && (!id || String(patch.id) === id);
-    });
-  }
-
-  // 先订阅再拉取：订阅生效之后的变化都会触发重拉
-  transport
-    .listen(["setting-change", "image-changed", "images-change"], function (event) {
-      if (shouldPull(event)) pull();
-    })
-    .catch(function (error) {
-      console.warn("[kb-wpe] listen", error);
-    })
-    .then(pull);
 })();

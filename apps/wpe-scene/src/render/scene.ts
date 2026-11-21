@@ -156,7 +156,8 @@
  *   - 没有槽引用的用户纹理在 `sync` 末尾销毁。
  *   - 建资源：`buildableLayers` 不看被依赖图层自身与祖先的可见性（WPE `0x1000`）。
  *   - 编码：不可见（自身或祖先）时照跑它的 op，只跳过画到「场景」的那一步上屏（`layerOpsToRun`），顶层与组画子树两处同一个判断。
- *     语料里的被依赖者都不是组（是组的照报 `dependency:group`），组隐藏时整棵子树照旧不画。
+ *     被依赖的组（P8 步骤 7）同一个判断：隐藏时照画基础 pass 与 effect 链，`subtree` 照跑，子层各按自己的可见性（祖先隐藏 → 不画，
+ *     本身被依赖的照画进自己的 RT、不画进组的），与 WPE 子层的 `+0x68` 相同（`p8-depgroup` 整帧 0 差异）。
  * - 按对象装卸（L4，`.claude/plans/wpe-import/3-scene/live/phase-l4-gpu-objects.md`）：`populate` = 场景级准备（场景目标、纹理、占位纹理、反射 RT、
  *   阴影图集、深度附件、全部程序、视图、粒子索引、泛光、体积光）→ 全部对象并行 `prepareMain`（`prepareObject` 的主段：变形纹理、fbo、被依赖层的独占 RT、
  *   程序与管线）→ 被依赖层的独占 RT 进表 → 按图层顺序 `installCore`（`installObject` 的主体：运行时、粒子序号、挂点、合成 RT、draw、粒子树预热）。
@@ -196,7 +197,7 @@ import {
   type OrthographicCameraFrame,
   type PerspectiveCameraFrame,
 } from "./camera";
-import { SeededRandom, type ParticleROverride } from "../particles/random";
+import { mt19937, SeededRandom, type ParticleROverride } from "../particles/random";
 import { ropeVertexLayout, writeRopeSegments, type RopeVertexLayout } from "../particles/rope";
 import { trailRenderVar0, trailVertexLayout, writeTrailSegments, type TrailVertexLayout } from "../particles/ropetrail";
 import { ParticleSystem, particleNode, particlePasses } from "../particles/system";
@@ -214,11 +215,13 @@ import type { TextRelayouter } from "../text/host";
 import type { TextDecor } from "../text/fields";
 import type { TextLayout } from "../text/layout";
 import { isDynamicSource, type UserTextureSlot } from "../compile/usertextures";
+import { sameSelection, selectVariants } from "../compile/textureVariants";
 import type { CropRect } from "../usertex/crop";
 import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextureProvider } from "../usertex/sources";
 import type { VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
+import { GpuEmitterImages, type EmitterImageProbe, type EmitterImageSourceTarget } from "./emitterImages";
 import { applyPassStates } from "./passState";
 import type { CursorCamera } from "./cursor";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
@@ -254,6 +257,7 @@ import {
   everyAncestor,
   eyePosition,
   croppedCursorViewProjection,
+  groupMvpParts,
   groupViewProjection,
   layerQuad,
   particleViewProjection,
@@ -317,7 +321,7 @@ import type { DirtyState, LayerState, SceneState } from "./state";
 import { WorldStamps } from "./worldStamps";
 import { createGammaPass, encodeGamma, type GammaPass } from "./userGamma";
 import { ATLAS_SAMPLER, backgroundQuadVertices, TextAtlasTextures, textIndexData, textQuadVertices } from "./text";
-import { requiredFeatures, samplerDescriptor, uploadTexture } from "./textures";
+import { requiredFeatures, samplerDescriptor, uploadTexture, writeBitmapMips } from "./textures";
 import { traceUniforms } from "./trace";
 import {
   drawUniformValues,
@@ -777,6 +781,12 @@ export interface ParticleOptions {
   fps?: number;
   /** 随机种子：第 i 个粒子层（`bundle.layers` 里带 `particle` 的，按顺序）用 `seed + i`，同 `particles/track.ts`。缺省随机。 */
   seed?: number;
+  /**
+   * 全场共用一个标准 `std::mt19937(种子)`（P4j 步骤 4a，只给 dev 回放用）：全部粒子树（含运行中新建的）共用一个 `SeededRandom(mt19937(种子))`，
+   * 按建树 / 步进顺序（对象表顺序）从同一串里取，同 WPE 一个场景一个随机引擎；用于和「WPE 侧换成同一种子」的抓帧逐值对照
+   * （`wpe-renderdoc` 的 `seed`）。不和 `seed` 同给；不给时照旧 `seed + 序号`，逐字节不变。
+   */
+  mt19937?: number;
   /**
    * 按粒子层（`objects` 下标）给出生时 `R` 的替换（`ParticleROverride`），每建一个模拟器调一次。只给 dev 探针用（`renderFrame` 的
    * `particles.random`，替换的实现在探针侧），产品路径不传。
@@ -1452,6 +1462,8 @@ export function uploadableTextures(
   };
   const addParticle = (particle: SceneParticle) => {
     particle.passes.forEach(add);
+    // 发射图的 `mask` 纹理（P4j 步骤 2b）：候选表的降采样 pass 的槽 1，没有图层材质引用它，照样上传
+    for (const slot of particle.emitterImages ?? []) if (slot?.maskTexture != null) used.add(slot.maskTexture);
     // 第 2 条起的 renderer 的变体（P4f 步骤 4）：同一个材质，纹理和上面相同，照样过一遍
     for (const draw of particleDraws(particle).slice(1)) draw.passes.forEach(add);
     for (const child of particle.children ?? []) addParticle(child.system);
@@ -1542,6 +1554,11 @@ export class GpuScene {
   /** 真正重建图层的次数与用时（毫秒）：计划签名没变的切换不算。dev 探针读。 */
   readonly rebuildStats = { count: 0, totalMs: 0, maxMs: 0 };
   private bloom: BloomChain | null = null;
+  /**
+   * 发射图候选表的 GPU 半边（P4j 步骤 2b，`render/emitterImages.ts`）：bundle 里有粒子系统绑上了 `layerimage` 的发射图依赖时才有（populate 里在装任何
+   * 图层之前建好，建树的预热就读得到它）；没有时为 null，别的场景的调用序列不变。
+   */
+  private emitterImages: GpuEmitterImages | null = null;
   /** 体积光（P13e，`render/volumetrics.ts`）：bundle 有 `volumetrics` 时才有。 */
   private volumetrics: VolumetricsRenderer | null = null;
   /** 最近一帧的灯光缓冲与阴影条目（`frameLightValues`）：带阴影的体积光点光取自己的阴影投影与方块变换。 */
@@ -1629,6 +1646,11 @@ export class GpuScene {
   /** 宿主的帧上限（`ParticleOptions.fps`，运行中由 `setFrameRate` 改）：rope 的 `TL`、`TP0`（`writeRopeSegments`）。 */
   private particleFps: number;
   private readonly particleSeed: number;
+  /**
+   * 全场共用的随机源（P4j 步骤 4a，`ParticleOptions.mt19937`）：给了时每个粒子树（含运行中新建的）都用它，不再按 `particleSeed + 序号` 各取一个；
+   * 没给为 null。
+   */
+  private readonly particleShared: SeededRandom | null;
   private readonly particleROverride: ParticleOptions["rOverride"];
   /**
    * 全部粒子层共用的 16 段频谱（P4e 步骤 4，`ParticleOptions.audio`）：建树时交给每个根系统（`ParticleSystem.setAudio`，子系统与实例沿用），
@@ -1676,6 +1698,12 @@ export class GpuScene {
   private textures: (GPUTexture | null)[] = [];
   /** 多图像帧表（P6e 点 4）第 1 张起的其余图像的 GPU 纹理（下标 k 是图像 k + 1），键同 `textures`；只有这类纹理有条目。 */
   private readonly extraTextures = new Map<number, GPUTexture[]>();
+  /**
+   * 纹理变体（P11e）：条件属性的当前值（就是 `SceneState.variantValues`，建场景时接过来，状态写入后这里同步可见），与已上传的变体纹理当前的
+   * 命中表（键同 `textures`）。上传与换选择都按当前值选，选择不变不重写。
+   */
+  private variantValues: ReadonlyMap<string, unknown> = new Map();
+  private readonly variantSelected = new Map<number, ReadonlyMap<number, number>>();
   private dummies!: ReturnType<GpuScene["createDummies"]>;
   private readonly samplers = new Map<string, GPUSampler>();
   private readonly programs = new Map<number, Promise<GpuProgram>>();
@@ -1818,6 +1846,9 @@ export class GpuScene {
     this.particlePasses = particles.passes ?? 1;
     this.particleFps = particles.fps ?? 60;
     this.particleSeed = particles.seed ?? Math.floor(Math.random() * 2 ** 32);
+    if (particles.mt19937 !== undefined && particles.seed !== undefined)
+      throw new Error("ParticleOptions 的 mt19937 与 seed 只能给一个");
+    this.particleShared = particles.mt19937 === undefined ? null : new SeededRandom(mt19937(particles.mt19937));
     this.particleROverride = particles.rOverride;
     this.particleCursor = particles.cursor ?? [0.5, 0.5];
     this.cursorCrop = particles.cursorCrop ?? null;
@@ -2424,6 +2455,7 @@ export class GpuScene {
     scene.userProvider = options.userTextures ?? null;
     scene.modelDataSource = options.modelData ?? null;
     scene.userWritten = state.userWritten;
+    scene.variantValues = state.variantValues;
     // 加载时（宿主排版期间）的图集重置不算：运行中重置了才连带重排
     for (const atlas of layoutAtlases(...state.texts.values())) scene.atlasResets.set(atlas, atlas.resets);
     device.pushErrorScope("out-of-memory");
@@ -3575,7 +3607,8 @@ export class GpuScene {
         if (step.kind === "mesh")
           draws.push(this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds));
       const snapshot = plan.steps.some((step) => step.kind === "snapshot");
-      if (draws.length) ops.push({ kind: "model", layer, draws: [...draws], ...(snapshot ? { snapshot: true as const } : {}) });
+      if (draws.length)
+        ops.push({ kind: "model", layer, draws: [...draws], ...(snapshot ? { snapshot: true as const } : {}) });
       return { ops, draws, tree: null };
     }
     // puppet 的裁切模板（P12f）：同一图层的普通 / 遮罩 / 目标模板收成一个 `puppet-clip` op（位置放在第一个模板的地方），遮罩 RT 的清除由 op 编码时做
@@ -3824,6 +3857,9 @@ export class GpuScene {
           used.add(step.pass.program);
     for (const pass of Object.values(bundle.bloom?.passes ?? {}))
       if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
+    // 发射图候选表的降采样材质（P4j 步骤 2b）
+    for (const pass of Object.values(bundle.emitterImagePasses ?? {}))
+      if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
     // 模型材质模板（P14，`general.precache`）：运行中脚本建的模型数据层第一次备对象时要同步拿到程序（同泛光、体积光），所以加载时一并建好
     for (const template of Object.values(bundle.modelMaterials ?? {}))
       if (template.usable)
@@ -3885,6 +3921,26 @@ export class GpuScene {
     const prepared = await Promise.all(
       built.map((layer, index) => this.prepareMain(layer, state, plans[index], setup)),
     );
+    // 发射图候选表（P4j 步骤 2b）：要早于任何粒子树的预热（`installCore` → `createParticleTree`）。被依赖图层的独占 RT 在下面、装图层之前进
+    // `layerTargets`，预热在装图层时才走，所以预热的第一次调用（过门）就查得到合成 RT（WPE 有预热时只丢 1 个发射帧）
+    if (bundle.emitterImagePasses) {
+      this.emitterImages = await GpuEmitterImages.create(
+        {
+          device,
+          passes: bundle.emitterImagePasses,
+          programs,
+          pipelineFor: (program, blending, target) => this.pipelineFor(program, blending, target, true),
+          layerSource: (id) => this.emitterImageSource(id),
+          layerMatrix: (id) => this.emitterImageMatrix(id),
+          maskTexture: (index) => {
+            const texture = this.bundle.textures[index];
+            const gpu = texture ? this.cookieTextureOf(index) : null;
+            return texture && gpu ? { ...gpu, width: texture.textureWidth, height: texture.textureHeight } : null;
+          },
+        },
+        bundle.layers.flatMap((layer) => (layer.particle ? [layer.particle] : [])),
+      );
+    }
     // 泛光：全部图层之后（A1 / A3）
     if (bundle.bloom) {
       this.ensureSnapshot();
@@ -3955,7 +4011,10 @@ export class GpuScene {
       if (!this.textures[index] && bundle.textures[index]) this.textures[index] = this.uploadAt(index);
   }
 
-  /** 上传第 `index` 张场景纹理；多图像帧表（P6e 点 4）的其余图像各上传一张，记进 `extraTextures`，都由 `own` 随场景释放。 */
+  /**
+   * 上传第 `index` 张场景纹理；多图像帧表（P6e 点 4）的其余图像各上传一张，记进 `extraTextures`，都由 `own` 随场景释放。
+   * 纹理变体（P11e）按条件属性的当前值选（运行中改过值之后才上传的纹理也对），记下命中表。
+   */
   private uploadAt(index: number): GPUTexture {
     const texture = this.bundle.textures[index];
     const extra = texture.images;
@@ -3964,7 +4023,27 @@ export class GpuScene {
         index,
         extra.map((mips) => this.own(uploadTexture(this.device, { ...texture, mips, images: undefined }))),
       );
-    return this.own(uploadTexture(this.device, texture));
+    if (!texture.variants) return this.own(uploadTexture(this.device, texture));
+    const selected = selectVariants(texture.variants.conditions, this.variantValues);
+    this.variantSelected.set(index, selected);
+    return this.own(uploadTexture(this.device, texture, selected));
+  }
+
+  /**
+   * 纹理变体（P11e）：条件属性写过的纹理按当前值重新选择，命中表变了才把这张 GPU 纹理的内容重写一遍（底图 + 变体，`writeBitmapMips`）。
+   * 尺寸、格式不变，绑定组与着色器都不动，下一帧画新的（WPE 在帧间原地重载这张纹理、下一帧画新变体，rea-p11e 2 节）。没上传的（还没有
+   * 图层用到）不管，上传时按当时的值选。同一张 `.tex` 只有一个下标（按文件缓存），被几个材质用时一起换。
+   */
+  private syncTextureVariants(dirty: DirtyState): void {
+    if (!dirty.textureVariants.size) return;
+    this.bundle.textures.forEach((texture, index) => {
+      const gpu = this.textures[index];
+      if (!texture.variants || !gpu || !dirty.textureVariants.has(texture.path) || !texture.mips[0]?.bitmap) return;
+      const selected = selectVariants(texture.variants.conditions, this.variantValues);
+      if (sameSelection(selected, this.variantSelected.get(index) ?? new Map())) return;
+      this.variantSelected.set(index, selected);
+      writeBitmapMips(this.device, gpu, texture, selected);
+    });
   }
 
   /**
@@ -4516,7 +4595,7 @@ export class GpuScene {
     const ordinal = this.particleOrdinals.get(layer.object) ?? 0;
     const system = new ParticleSystem(
       def,
-      new SeededRandom((this.particleSeed + ordinal) >>> 0),
+      this.particleShared ?? new SeededRandom((this.particleSeed + ordinal) >>> 0),
       this.particlePasses,
       this.particleROverride?.(layer.object),
     );
@@ -4525,6 +4604,12 @@ export class GpuScene {
     if (values) values.rate = system.instanceScalar("rate");
     // 频谱（P4e 步骤 4）：预热之前换上，预热读到的是当时的值（首次加载为 0，rea-p4e-audio.md 3.5【推】）
     system.setAudio(this.particleAudio);
+    // 发射图候选表（P4j 步骤 2b）：预热之前换上；运行中新建的粒子层（`createLayer`）的绑定在这里补登记
+    if (this.emitterImages) {
+      this.emitterImages.register(compiled);
+      system.setEmitterImages(this.emitterImages.records);
+      system.setEmitterImageFrame(this.sheetFrameNo);
+    }
     const world = worldMatrixOf(layer.object, state.layers, new Map(), this.attachHook);
     const inputs = { world, pointer: pointerScenePoint(this.cursorViewProjection(), this.particleCursor) };
     system.prewarm(inputs);
@@ -4573,8 +4658,9 @@ export class GpuScene {
    * 脚本拿不到，rea-p4f-script.md 1.5）。`stop` 与 `emitParticles` 改了粒子，标 `stale`（暂停中补画的帧也重写顶点）；`emitParticles` 带
    * 这一层最近一次交给根系统的控制点输入（`ParticleTree.inputs`）。没有这一层的树（不是粒子层、没有可画的模板）时为 null。
    *
-   * TODO:[WPE_SCENE] 真实场景没确定：语料里调 `emitParticles` 的两处都在光标回调里（3286859278 的 `Thunderbolt` 要 `input.cursor*`，
-   * 3570560686 的按钮挂在 `cursorClick` 上），这两个 API 实现之后在这两张上看脚本发射与 eventspawn 实例（只用确定性工程对过 WPE）。
+   * 真实场景（2026-11-21，回归 F15）：语料里唯一真调 `emitParticles` 的是 3286859278 的 `Thunderbolt`（实例 `count` 0，周期与点击两条路
+   * 都只靠脚本发射，点击要 `input.cursorLeftDown` / `cursorWorldPosition`，P6c 起有）：预览里按周期发射、带 eventspawn 实例，探针喂左键
+   * 调到一次。3570560686 的 `particles.emitParticles(4)` 在作者源码里是注释掉的。和 WPE 只用确定性工程 `p4f-api` 逐粒子对过。
    */
   particleScript(object: number): ParticleScriptTarget | null {
     const tree = this.trees.get(object);
@@ -4671,9 +4757,25 @@ export class GpuScene {
    * `*(ctx+0x30)`）。
    * 子系统与事件实例的绘制（P4e 步骤 1、2，rea-p4e-children 第 6 节）：本地 static 子系统是 `父绘制栈顶 · L`、本地实例是 `父绘制栈顶 · X`，
    * 世界的都是单位阵（`ParticleSystem.drawTransform`，和 `forEachDrawn` 同一串运算）。
+   * 组里（P14d）：绘制栈从 `inverse(W_组)` 起（`particleBase`），本地系统 `inverse(W_组) · W`、世界系统 `inverse(W_组)`，朝向、拖尾眼位与
+   * `g_ModelMatrix` 都是组内局部的，视图投影是组的局部正交 P（`uniformValues`）。
    */
   private particleModel(particles: ParticleDraw, object: number, state: SceneState, worlds: Map<number, Mat4>): Mat4 {
-    return particles.system.drawTransform(worldMatrixOf(object, state.layers, worlds, this.attachHook)).model;
+    return particles.system.drawTransform(
+      worldMatrixOf(object, state.layers, worlds, this.attachHook),
+      this.particleBase(object, state, worlds),
+    ).model;
+  }
+
+  /**
+   * 组里粒子绘制栈的起点（P14d，`phase-14d-group-particles.md`）：对象在非全屏组里、组的世界矩阵可逆时是 `inverse(W_组)`（`groupMvpParts`，
+   * 和组里图像层、网格同一份；WPE 画组的子树时模型栈与 `ctx+0xaf0` 都是它，`p14d-gp` 实测），否则 undefined（顶层与全屏组照旧）。
+   */
+  private particleBase(object: number, state: SceneState, worlds: Map<number, Mat4>): Mat4 | undefined {
+    const layer = this.layerByObject.get(object);
+    const group = layer ? this.groupOf(layer) : null;
+    if (!group || group.fullscreen) return undefined;
+    return groupMvpParts(group.size, drawMatrixOf(group.object, state.layers, worlds, this.attachHook))?.inverse;
   }
 
   /**
@@ -5145,6 +5247,11 @@ export class GpuScene {
     // compose 照旧带视差（`p5j-cam` 的 CLP、G）
     const composeVp = group && compose ? view.viewProjection : null;
     const groupOrCompose = groupVp ?? composeVp;
+    // 组里图像层的 MVP 照 WPE 的结合顺序（P8 步骤 7 走查，`groupMvpParts`）：先并进 `inverse(W_组)`（float32 求逆）再乘局部正交
+    const groupMvp =
+      groupVp && group
+        ? groupMvpParts(group.size, drawMatrixOf(group.object, state.layers, worlds, this.attachHook))
+        : null;
     if (step.kind === "text") {
       // 文本（P6b 1d）：直接上屏用这次画到场景的视图投影（带视差、抖动；组里是组的局部正交），画进合成 RT 用 RT 像素的正交
       // （`textMatrices`）。排版结果在建 draw 前已核对过。`perspective: true` 的文本直接上屏换透视那一份视图投影（P5g，同图像层，
@@ -5170,8 +5277,10 @@ export class GpuScene {
         world: model ?? identity(),
         layer: layerState,
         // 透视粒子同样带视差：平移加在世界坐标里，z = 0 平面上和正交一致（p5-REPORT `p5a-fx`）；组里的透视粒子照报
-        // （`model:passthrough:children:perspective`），强制渲染时按组的局部正交画
-        viewProjection: groupOrCompose ?? this.viewProjectionOf(layer, state, view, step.perspective),
+        // （`model:passthrough:children:perspective`），强制渲染时按组的局部正交画。组里（P14d）是 P 本身，模型矩阵已从 `inverse(W_组)`
+        // 起算（`particleModel`）；`groupMvp` 为 null（组的世界矩阵不可逆）时两边一起退回旧写法
+        viewProjection:
+          groupMvp?.projection ?? groupOrCompose ?? this.viewProjectionOf(layer, state, view, step.perspective),
         sheet: base?.kind === "texture" ? this.bundle.textures[base.index]?.sheet : undefined,
         // 朝向与拖尾的 g_RenderVar0（P4c 步骤 5）：这次绘制的系统自己的 renderer（P4e 步骤 1）里这一步的那一条（P4f 步骤 4，
         // rea-p4f-script.md 8.3：每条按自己的 `rec+4` 算朝向；拖尾那条写 RV0.xyz，sprite 那条照旧写 0，不复刻上一次绘制的残值）
@@ -5209,13 +5318,18 @@ export class GpuScene {
       // 模型网格（P5c 步骤 2）：同图像层直接上屏（`direct` 角色：`g_ModelMatrix` 是世界矩阵、MVP = VP · W，不乘 `size`），只换颜色组：
       // WPE 画网格之前把 `g_Color` / `g_Alpha` 写成 1（rea-p5-mesh 2.5，p5-REPORT `p5c-color`：对象写 `color 1 0 0`、`alpha 0.5`、
       // `brightness 3` 时 `g_Color4` 仍是 (1, 1, 1, 1)，HDR 同样）。视图投影带视差、抖动、缩放，`perspective: true` 换透视那一份
-      // （`p5c-matrix` 的视差、缩放、透视三份，和图像层相同）；组里的模型照报，强制渲染时用组的局部正交
+      // （`p5c-matrix` 的视差、缩放、透视三份，和图像层相同）。
+      // 组里（P14b，rea-p14b-group-models 1 节，`p14b-gm-basic` 抓帧逐位）：组画子树时模型栈是 `inverse(W_组)`、视图单位阵、投影是组的局部正交，
+      // 网格把世界矩阵并进模型栈（`FUN_14005ecb0`，glm 的完整乘法，`p14b-gm-rot3d` 带 x / y 旋转时和仿射乘法差 1 ulp），所以
+      // `g_ModelMatrix` = `inverse(W_组) · W`、`g_ViewProjectionMatrix` = 局部正交 P、MVP = `P ⊗ M`；`g_EyePosition` 仍是场景的。灯光与阴影是
+      // 场景空间的，组里的网格按局部坐标算光照，同 WPE
       return drawUniformValues({
         ...common,
+        ...(groupMvp ? { world: multiply(groupMvp.inverse, common.world) } : {}),
         colorScale: 1,
         step: { role: "direct", inputs: step.inputs },
         layer: { ...layerState, color: [1, 1, 1], alpha: 1, size: layer.size },
-        viewProjection: groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp),
+        viewProjection: groupMvp?.projection ?? groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp),
       });
     // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs` 事件 76）：直接上屏以外的角色（effect、末 pass、passthrough 上屏）模型与视图都是
     // 单位阵、投影是 NDC 正交，不经 `viewProjectionOf`：`origin` / `scale` / `angles`、视差、抖动、透视都不起作用，2×2 的四边形
@@ -5245,6 +5359,7 @@ export class GpuScene {
         ...common,
         step,
         layer: { ...layerState, size: rtSize ?? this.layerSize(layer, state) },
+        group: groupMvp,
         ...(prelit
           ? {
               alt: {
@@ -5255,9 +5370,12 @@ export class GpuScene {
           : {}),
         // 图像层 perspective（P5b 步骤 1，p5-REPORT `p5b-persp`）：画到场景目标的绘制（直接上屏、末 pass、passthrough 上屏）换成透视粒子
         // 那一份视图投影（相机距离随 perspectiveoverridefov 与 zoom 变，已带抖动），视差平移照旧右乘；画进合成 RT / fbo 的 pass 不变。
-        // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）
+        // 组里的图层用组的局部正交（组里的透视图层照报，强制渲染时不换透视）：`g_ViewProjectionMatrix` 是 P 本身、模型矩阵是组内局部的
+        // （P14c，`drawMatrices` 的 `group`，p14c-gi 实测）；`groupMvp` 为 null（组的世界矩阵不可逆）时退回旧写法
         viewProjection:
-          groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp && step.target.kind === "scene"),
+          groupMvp?.projection ??
+          groupOrCompose ??
+          this.viewProjectionOf(layer, state, view, persp && step.target.kind === "scene"),
       }),
     );
   }
@@ -5517,6 +5635,8 @@ export class GpuScene {
     this.syncTexts(dirty, state, worlds);
     // 用户纹理（P11b 步骤 2）：来源写过或解码完成的，换 bind group / 整层重建，在结构与刷新之前，新 draw 照当前状态写 uniform
     this.syncUserTextures(dirty, state, worlds);
+    // 纹理变体（P11e）：条件属性写过的纹理重新选择、重写内容（不动绑定）
+    this.syncTextureVariants(dirty);
     // 材质状态字段（P6d1b）：写过的与管线刚备好的图层按有效 pass 强制重建
     this.syncPassStates(dirty, state, worlds);
     // 结构先处理：新 draw 按当前状态写 uniform，后面的刷新也落在新 draw 上
@@ -6356,7 +6476,8 @@ export class GpuScene {
    * 建一个 draw，走 `createDraw`（顶点布局、索引、纹理、材质常量、骨骼同网格步骤），管线是只写深度的 `createShadowPipeline`。draw 经 `indexDraw` 进索引，
    * 每帧的量（`g_Time`、骨骼）随 `update` 写；按图集条目各一份 uniform 副本（`g_ModelMatrix` 每帧按当前状态、`g_ViewportViewProjectionMatrices`
    * 是这一条的视图），逐视图 `firstInstance` 取视图号。`fur4` 的投射变体不带 `INSTANCECOUNT`，只画基础网格一层（R6）。
-   * 帧级剔正面（`alignmentfliph`）在我们这里没有接，剔除一律 NONE（WPE 材质缺省剔除时的实际状态）。
+   * 帧级剔正面（`alignmentfliph`）在我们这里没有接，剔除一律 NONE（WPE 材质缺省剔除时的实际状态）。组里的模型照样建投射者，`encode` 按当前的
+   * 组归属筛掉（P14b，`casterInGroup`）。
    * 整场加载时在变体之后逐对象跑（L4：单个对象的同一段是 `prepareObject` 备管线、`installObject` 建 draw）。
    */
   async buildShadowCasters(state: SceneState): Promise<void> {
@@ -6463,6 +6584,12 @@ export class GpuScene {
       this.shadowCasters.push(caster);
       this.shadowCasterRecords.set(caster, record);
     }
+  }
+
+  /** 投射者的对象这一刻在组里（P14b：组的子孙不投射）。 */
+  private casterInGroup(caster: ShadowCasterDraw): boolean {
+    const object = this.shadowCasterRecords.get(caster)?.object;
+    return object !== undefined && this.layerByObject.get(object)?.group != null;
   }
 
   /** 一个投射者 draw 的逐条目副本（同反射副本的做法，`reflectionCopyOf`）；副本记在 `record.copies`，卸对象时释放。 */
@@ -6631,6 +6758,12 @@ export class GpuScene {
     this.particleCursor = cursor;
     // 渲染帧号（共享计时器去重用）：每帧恰好一次，补画帧（帧时间 0）也算一帧、只是 dt 为 0
     this.sheetFrameNo++;
+    // 发射图的帧号（P4j 步骤 2b）：门与「锁定快照」按它判断，补画帧（帧时间 0）也记；快照在本帧编码末尾按同一个帧号标记
+    if (state) this.emitterLayers = state.layers;
+    if (this.emitterImages) {
+      this.emitterImages.setFrame(this.sheetFrameNo);
+      for (const tree of this.trees.values()) tree.system.setEmitterImageFrame(this.sheetFrameNo);
+    }
     if (!(frametime > 0)) return;
     // 脱离的图层私有推进（P6e 点 3，WPE 帧函数第 2 步图像层更新的末尾）：不看可见性、不看这张纹理本帧画不画
     if (state)
@@ -6957,24 +7090,30 @@ export class GpuScene {
   private walkParticles(
     tree: ParticleTree,
     object: Mat4,
+    /** 绘制栈的起点（P14d，`particleBase`）：组里是 `inverse(W_组)`。 */
+    base: Mat4 | undefined,
     visit: (system: ParticleSystem, template: ParticleTemplate, occurrence: number, model: Mat4) => void,
     framebuffer?: () => void,
   ): void {
     let snapped = false;
     const counts = new Map<ParticleTemplate, number>();
-    tree.system.forEachDrawn((system, path, model) => {
-      const pass = system.def.passes[0];
-      if (!pass) return false;
-      if (pass.framebuffer && !snapped) {
-        snapped = true;
-        framebuffer?.();
-      }
-      const template = tree.templates.get(path.join("/"));
-      if (!template || (template.instanced && !system.alive)) return;
-      const occurrence = counts.get(template) ?? 0;
-      counts.set(template, occurrence + 1);
-      visit(system, template, occurrence, model);
-    }, object);
+    tree.system.forEachDrawn(
+      (system, path, model) => {
+        const pass = system.def.passes[0];
+        if (!pass) return false;
+        if (pass.framebuffer && !snapped) {
+          snapped = true;
+          framebuffer?.();
+        }
+        const template = tree.templates.get(path.join("/"));
+        if (!template || (template.instanced && !system.alive)) return;
+        const occurrence = counts.get(template) ?? 0;
+        counts.set(template, occurrence + 1);
+        visit(system, template, occurrence, model);
+      },
+      object,
+      base,
+    );
   }
 
   /**
@@ -6992,6 +7131,7 @@ export class GpuScene {
     this.walkParticles(
       tree,
       object,
+      this.particleBase(tree.object, state, worlds),
       (system, template, occurrence, model) => {
         if (!template.instanced) {
           items.push(...template.pool[0]);
@@ -7015,11 +7155,13 @@ export class GpuScene {
   /**
    * 模型被视锥剔除（P5c 步骤 2，p5-REPORT `p5c-frustum`，rea-p5-mesh 4.4）：被剔就整个模型不画。`viewProjection` 是这个 pass 的场景级视图
    * 投影：主 pass 是带抖动与缩放、不带每个对象的视差的那一份（WPE 在场景绘制开头从相机算一次平面），平面反射 pass 是反射视图的（P13b2，
-   * p13-REPORT C8）。世界矩阵不含视差；`perspective: true` 的模型也按它判（WPE 先剔除、后换透视投影，rea 2.6）。组里的模型照报
-   * （`model:passthrough:children:model`），强制渲染时不剔：组的局部正交下 WPE 用哪组平面没有实测。
+   * p13-REPORT C8）。世界矩阵不含视差；`perspective: true` 的模型也按它判（WPE 先剔除、后换透视投影，rea 2.6）。
    */
   private modelCulled(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>, viewProjection: Mat4): boolean {
     const model = layer.model;
+    // 组里的模型（P14b D1）画进组 RT、用组的局部正交，不按场景相机剔除。WPE 照样拿场景相机的平面测场景空间的外接球（组画子树不重算平面，
+    // rea-p14b-group-models 2 节），组在画面外而组 RT 被别的图层读时把模型错剔：缺陷，不复现。按组自己的视锥剔掉的只会是画不进组 RT 的，
+    // 和不剔画面相同，所以也不剔
     if (!model || layer.group != null) return false;
     // 带骨骼的模型（P12b2-1）：剔除盒随动画变（可见层动画包围盒的并，没有有效的退回 mdl 的，`ScenePuppets.bounds`）
     return frustumCulled(
@@ -7104,7 +7246,7 @@ export class GpuScene {
   }[] {
     const out: ReturnType<GpuScene["particleStats"]> = [];
     for (const tree of this.trees.values())
-      this.walkParticles(tree, tree.world, (system, { node }, occurrence) =>
+      this.walkParticles(tree, tree.world, undefined, (system, { node }, occurrence) =>
         out.push({
           object: tree.object,
           name: tree.layer.name,
@@ -7229,7 +7371,13 @@ export class GpuScene {
     // 反射开（P13b2）时改由下面的反射 pass 清屏并作画
     // 阴影 pass（P13d）：在反射与主 pass 之前（帧函数 `0x14018031a`），每帧清图集、画投射者
     this.encodingState = state;
-    this.shadowAtlas?.encode(encoder, this.shadowCasters);
+    // 组的子孙不投射（P14b，rea-p14b-group-models 4 节，`p14b-gm-shadow` 实测）：WPE 的阴影 pass 跳过带 `0x2` 的对象，组本身不是不透明模型、
+    // 也不画。投射者按对象建、换父不重建，所以每帧按当前的组归属（`SceneLayer.group`，L7 换父后就是新值）筛
+    if (this.shadowAtlas)
+      this.shadowAtlas.encode(
+        encoder,
+        this.shadowCasters.filter((caster) => !this.casterInGroup(caster)),
+      );
     const reflectionTarget = this.reflectionSet ? (this.reflectionTargets?.reflection ?? null) : null;
     if (!reflectionTarget) this.reflectionTargets?.encode(encoder, clear);
     if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);
@@ -7667,10 +7815,67 @@ export class GpuScene {
     }
     if (!started) begin();
     end();
+    // 发射图候选表的快照（P4j 步骤 2b）：全部图层画完之后，被依赖图层的独占合成 RT 就是「本帧末的画面」，下一帧更新阶段的锁定读到它
+    this.emitterImages?.encode(encoder);
+  }
+
+  /**
+   * 每次 `queue.submit` 之后调（渲染器、dev 探针）：把本帧拷过的发射图快照缓冲 `mapAsync` 读回（P4j 步骤 2b）。没有发射图时什么都不做。
+   */
+  afterSubmit(): void {
+    this.emitterImages?.afterSubmit();
+  }
+
+  /** 等全部在途的发射图快照读回（探针的确定性回放：每帧提交之后等，同一帧里候选表的 0 → 1 → 2 和 WPE 一样成立）。 */
+  async emitterImagesSettled(): Promise<void> {
+    await this.emitterImages?.settled();
+  }
+
+  /** dev 探针（P4j 步骤 2b）：每条候选表记录的状态与表（`includeEntries` 时带全部表项 `[x, y, r, g, b]`）；没有发射图时为空。 */
+  emitterImageRecords(includeEntries = false): EmitterImageProbe[] {
+    return this.emitterImages?.probe(includeEntries) ?? [];
+  }
+
+  /**
+   * 发射图的被依赖图层（P4j 步骤 2b）：按 scene.json 的对象 id 找，要求是图像层（不是粒子层、文本层）且有独占合成 RT（`layerTargets`）。
+   * id 重复时后面的胜出（同 WPE 后建的 RT 接管同名对象，`layerComposites`）。
+   */
+  /**
+   * 发射图的被依赖图层的绘制矩阵 `L`（P4j 步骤 3，rea-p4j-layerimage.md 3.2：每个发射帧现取）：按 scene.json 的对象 id 找（同
+   * {@link emitterImageSource}，id 重复时后面的胜出），用最近一次 `stepParticles` 收到的 `state.layers`（没给 `state` 的 dev 回放用加载时的图层），
+   * 走图层画自己的 `drawMatrixOf`。
+   */
+  private emitterImageMatrix(id: number): Mat4 | null {
+    let object: number | null = null;
+    for (const [candidate, layer] of this.layerByObject)
+      if (layer.id === id && !layer.particle && !layer.text) object = candidate;
+    if (object === null) return null;
+    return drawMatrixOf(object, this.emitterLayers ?? this.layerByObject, new Map(), this.attachHook);
+  }
+
+  /** `stepParticles` 最近一次收到的图层状态（发射图的 `L` 用，P4j 步骤 3）；从没给过 `state` 时为 null。 */
+  private emitterLayers: ReadonlyMap<number, LayerState> | null = null;
+
+  private emitterImageSource(id: number): EmitterImageSourceTarget | null {
+    let found: EmitterImageSourceTarget | null = null;
+    for (const [object, target] of this.layerTargets) {
+      const layer = this.layerByObject.get(object);
+      if (!layer || layer.id !== id || layer.particle || layer.text) continue;
+      found = {
+        width: target.width,
+        height: target.height,
+        texture: target.texture,
+        view: target.view,
+        sampler: target.sampler,
+      };
+    }
+    return found;
   }
 
   destroy(): void {
     this.disposed = true;
+    this.emitterImages?.destroy();
+    this.emitterImages = null;
     for (const resource of this.owned) resource.destroy();
     this.owned.clear();
     this.bloomOwned.clear();

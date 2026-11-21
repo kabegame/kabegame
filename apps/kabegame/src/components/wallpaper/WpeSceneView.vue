@@ -7,6 +7,8 @@
  * - 状态：宿主经 `wpe_scene_report` 报 `ready` / `fallback`，后端以 `wpe-scene-status` 发回本窗口，这里只认本实例号，
  *   照旧 emit `ready` / `fallback(reasons)`；取不到宿主地址时 emit `fallback(["host:unavailable"])`。
  * - 加载进度：宿主首次加载时经 postMessage 按阶段报（`wpeSceneProgress.ts`），只认自己的 iframe，原样 emit `progress`。
+ * - 属性：由这里推给宿主里的垫片（照 WPE 宿主推送，`useWpeStateDelivery`）：宿主 iframe 的 load 后推整份，之后只推增量；
+ *   换宿主实例时重来。宿主首次加载等第一份属性到了才开始（`SceneHost`）。
  * - 暂停与音量：回应本 iframe 里垫片的音量请求（`wpeWebVolume.ts` 的协议，消息带 `paused`，垫片转成
  *   `setPaused`），`volume` / `paused` / `interactive` 变化时主动推。第一次收到请求说明垫片已在跑，emit `alive`：
  *   壁纸窗口从此把 ping 交给宿主里的垫片应答。
@@ -56,6 +58,7 @@ import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 import { framePointerEvents } from "./framePointer";
 import { createShortcutThrottle, wpeShortcutName } from "./wpeSceneShortcut";
 import { isWpeSceneProgressMessage, type WpeSceneProgress } from "./wpeSceneProgress";
+import { useWpeStateDelivery } from "@/composables/useWpeStateDelivery";
 
 /**
  * 祖先 transform 变化不触发任何 observer，按这个间隔核对显示缩放。不用 rAF：桌面壁纸窗口里场景一直在，
@@ -95,6 +98,11 @@ let alive = false;
 let generation = 0;
 let disposed = false;
 let unlisten: UnlistenFn | null = null;
+/** 属性推送（见文件头）：换宿主实例时 `reset`，宿主 iframe 的 load 时 `frameLoaded`。 */
+const sceneState = useWpeStateDelivery({
+  imageId: () => props.target.id,
+  target: () => frame.value?.contentWindow ?? null,
+});
 /** 最近推给当前宿主的显示缩放；换宿主（重建 iframe）时清空。 */
 let postedScale: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
@@ -183,6 +191,12 @@ async function postPointer() {
   target.postMessage(wpeScenePointerMessage(...position), "*");
 }
 
+/** 宿主 iframe 的文档加载完：问一次开场指针，属性就绪（第一次推整份）。 */
+function onFrameLoad() {
+  void postPointer();
+  sceneState.frameLoaded();
+}
+
 /** 窗口 resize 在祖先的 ResizeObserver 之前派发：预览画布要在那里重算 scale，等这一轮渲染更新跑完再量。 */
 function onWindowResize() {
   window.setTimeout(() => postDisplay(), 0);
@@ -236,6 +250,7 @@ async function start() {
   src.value = "";
   alive = false;
   postedScale = null;
+  sceneState.reset();
   instance = crypto.randomUUID();
   try {
     const base = await invoke<string>("get_wpe_scene_host_url");
@@ -346,6 +361,6 @@ onBeforeUnmount(() => {
     title="wallpaper-scene"
     class="block w-full h-full border-0"
     :style="{ pointerEvents: framePointerEvents(interactive) }"
-    @load="postPointer"
+    @load="onFrameLoad"
   />
 </template>

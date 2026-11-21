@@ -354,3 +354,7 @@ export function uploadTexture(device: GPUDevice, texture: SceneTexture): GPUText
 - 步骤 1：`VideoTexturePlayer.watchStall`，2 s 没前进就原地跳、两次无效重新加载、三次重载后停手；真机上第三次卡住时自动恢复。
 
 留给步骤 2：多实例开销（回归 V7）、反复加载的落盘量。
+
+### P9e — Matroska 里的 VP9（2026-11-21）
+
+见 [phase-9e](phase-9e-vp9.md)：3662390671 的背景是 WebM 封装的 VP9，拆包补上 `V_VP9`（解码配置取第一个关键帧的帧头，level 按表）；和 WPE 的视频纹理只差色度纵向位置。

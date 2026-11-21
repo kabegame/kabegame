@@ -1,6 +1,6 @@
 {
   "identifier": "wpe-web-capability",
-  "description": "WPE web wallpaper pages: the file: iframe of WallpaperStage in the main window (gallery preview) and in the wallpaper window (desktop). Pull state, answer pings, listen to five events, subscribe to audio / media data over a channel, attach itself to native mouse injection (tauri-plugin-cursor). Only subframes match: both windows' main frames are app pages, covered by the ACL exemption",
+  "description": "WPE web wallpaper pages and the scene host: the file: iframes of WpeWallpaperContent / WpeSceneView in the main window (gallery preview, app background) and in the wallpaper windows (desktop). Answer pings, listen to wallpaper-ping and wpe-scene-clear-storage, subscribe to audio / media data over a channel, attach itself to native mouse injection (tauri-plugin-cursor). Properties are pushed by the parent page (wpe_web_get_state is app-page only), so the iframe cannot read state or app events. Only subframes match: both windows' main frames are app pages, covered by the ACL exemption",
   "local": false,
   "windows": ["main", "wallpaper", "wallpaper-1", "wallpaper-2", "wallpaper-3", "wallpaper-4", "wallpaper-5", "wallpaper-6", "wallpaper-7"],
   "frames": "sub",
@@ -12,9 +12,6 @@
       "identifier": "core:event:allow-listen",
       "allow": [
         { "event": "wallpaper-ping" },
-        { "event": "setting-change" },
-        { "event": "image-changed" },
-        { "event": "images-change" },
         { "event": "wpe-scene-clear-storage" }
       ]
     },

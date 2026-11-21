@@ -1,14 +1,15 @@
-//! WPE 网页壁纸（`x-wpe/web`）与场景宿主的状态协议：页面里的垫片（`webview_js/wpe_shim.js`）向宿主
-//! **拉取**完整状态，自己订阅应用事件、看到相关变化就重拉，差异与投递时机全由垫片决定。
+//! WPE 网页壁纸（`x-wpe/web`）与场景宿主的状态协议。照 WPE 由宿主**推送**（2026-11-21 起，
+//! `.claude/plans/wpe-import/2-web/phase-9-parent-delivery.md`）：父页面（应用页里的 `WpeWallpaperContent` /
+//! `WpeSceneView`）调 [`wpe_web_get_state`] 取完整状态、自己订阅变化，经 `postMessage` 推给 iframe 里的垫片
+//! （`webview_js/wpe_shim.js`）；就绪标志、增量与投递时机都在父页面（`useWpeStateDelivery`），页面自己 reload 不重推。
 //!
-//! 网页壁纸一律是 `WpeWallpaperContent` 里的 `file:` iframe（图库预览在主窗口，桌面在壁纸窗口），垫片只有
-//! 一种传输：iframe 里有 Tauri 的 IPC 桥（runtime 无条件注入每个子 frame），直接调 [`wpe_web_pull_state`]
-//! 与 `plugin:event|listen`。权限只来自 `wpe-web-capability`（绑定 `main` 与 `wallpaper`、`frames: "sub"`、
-//! 来源 `file:///*`），事件只投递到这个 iframe，iframe 销毁时它的监听随 `SubframeDestroyed` 清掉。
-//! iframe 的 `file:` 请求由运行时闸门按网页壁纸目录索引（`wallpaper::wpe_web_dir_index`）裁决。
+//! 网页壁纸一律是 `WpeWallpaperContent` 里的 `file:` iframe（图库预览在主窗口，桌面在壁纸窗口）。iframe 里仍有
+//! Tauri 的 IPC 桥（runtime 无条件注入每个子 frame），只用来答 ping、订阅音频 / 媒体（[`wpe_web_media_subscribe`]）、
+//! 登记原生鼠标；权限只来自 `wpe-web-capability`（绑定 `main` 与 `wallpaper`、`frames: "sub"`、来源 `file:///*`），
+//! iframe 拿不到状态、也收不到设置与图片事件。iframe 的 `file:` 请求由运行时闸门按网页壁纸目录索引
+//! （`wallpaper::wpe_web_dir_index`）裁决。
 //!
-//! 状态只在这里计算、每次都读图片当前的 metadata；宿主不推状态、不排队、不记版本号，乱序由垫片
-//! 按自己的拉取编号丢弃。
+//! 状态只在这里计算、每次都读图片当前的 metadata；乱序由父页面按自己的请求编号丢弃。
 
 use crate::wallpaper::wpe_scene_host;
 use crate::wallpaper::wpe_web_dir_index::WpeWebDirIndex;
@@ -34,17 +35,17 @@ use std::path::Path;
 /// 垫片注入脚本（壁纸窗口与主窗口共用，all-frames；只在顶层的直接子 `file:` iframe 里启用）。
 pub const WPE_SHIM_JS: &str = include_str!("../webview_js/wpe_shim.js");
 
-/// 网页壁纸页面拉取的完整状态。乱序由垫片按自己的拉取序号丢弃，这里不带版本号。
+/// 父页面推给网页壁纸 / 场景宿主的完整状态。乱序由父页面按自己的请求序号丢弃，这里不带版本号。
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WpeWebState {
-    /// 垫片按它过滤 `metadataId` 补丁（只认本张）。
+    /// 这张壁纸的 id（父页面已知，原样带回）。
     pub image_id: String,
     /// 推给 `applyUserProperties` 的用户属性：`{ key: { type, value } }`。
     pub user: serde_json::Map<String, serde_json::Value>,
     /// 推给 `applyGeneralProperties` 的通用属性。
     pub general: WpeWebGeneral,
-    /// 设了值的 `directory` 属性的文件列表；`fetchall` 由垫片按差异回调，`ondemand` 由垫片随机取。
+    /// 设了值的 `directory` 属性的文件列表；`fetchall` 由父页面算差异、垫片回调，`ondemand` 由垫片随机取。
     pub directories: BTreeMap<String, WpeWebDirectory>,
 }
 
@@ -511,51 +512,31 @@ async fn build_wpe_web_state_with_raw(
     )))
 }
 
-/// 网页壁纸页面（`file:` iframe，wpe-web-capability，`frames: "sub"`）拉取状态。普通网页壁纸不看传入的 id：
-/// 按调用方自己的文档 URL（CEF runtime 把 `file:` frame 的 `Origin` 改写成完整文档 URL，页面伪造不了）
-/// 在网页壁纸目录索引里找到它所在的那张，页面拿不到别的图片的 metadata。场景宿主的确切入口文档
-/// 则必须传库内场景壁纸的 id；场景的 `scenetexture` 文件放行同样在这里覆盖。
+/// 父页面（主窗口 / 壁纸窗口的应用页，免 ACL，不进任何 permission）取一张网页 / 场景壁纸要推给 iframe 的状态
+/// （`useWpeStateDelivery`）。照 WPE 由宿主推送：iframe 不再自己拉，页面自己 reload 时父页面不重推。
 ///
-/// 返回之前用同一份 metadata 覆盖这张壁纸的 `file:` 放行：页面只能从拉取结果得知用户新选的路径，拿到时
-/// 闸门一定已经认它；撤销旧选择由目录索引跟随 `metadataId` 补丁完成。
+/// 返回之前用同一份 metadata 覆盖这张壁纸的 `file:` 放行（网页壁纸的 `file` / `directory`、场景的 `scenetexture`）：
+/// 页面只能从推来的状态得知用户新选的路径，拿到时闸门一定已经认它；撤销旧选择由目录索引跟随 `metadataId` 补丁完成。
 ///
-/// `general.fps` 按调用方所在窗口取设置（[`WpeSettingsSource`]）：桌面改全局 `wpeFps` 时垫片因 `setting-change`
-/// 重拉，预览改 `previewSettings` 时因 `metadataId` 补丁重拉。
+/// `general.fps` 按调用方所在窗口取设置（[`WpeSettingsSource`]）：桌面改全局 `wpeFps` 时父页面因 `setting-change`
+/// 重取，预览改 `previewSettings` 时因 `metadataId` 补丁重取。行不存在或不是 `x-wpe/web` / `x-wpe/scene` 时返回 None。
 #[tauri::command]
-pub async fn wpe_web_pull_state<R: tauri::Runtime>(
+pub async fn wpe_web_get_state<R: tauri::Runtime>(
     webview: tauri::Webview<R>,
-    caller: tauri::ipc::CallerOrigin,
-    image_id: Option<String>,
-) -> Result<WpeWebState, String> {
-    let doc = caller_document(&caller.0).ok_or("caller is not a file: document")?;
+    image_id: String,
+) -> Result<Option<WpeWebState>, String> {
     let source = WpeSettingsSource::of_label(webview.label());
-    let index = WpeWebDirIndex::global();
-    if let Some(id) = index.image_id_of(&doc) {
-        let (state, raw) = build_wpe_web_state_with_raw(&id, source)
-            .await?
-            .ok_or_else(|| "web wallpaper row missing".to_string())?;
-        index.replace_grants(&id, user_file_grants(&raw));
-        return Ok(state);
-    }
-    if wpe_scene_host::is_host_document(&doc) {
-        let id = image_id.ok_or("the scene host must pass imageId")?;
-        if !index.is_scene(&id) {
-            return Err("not a scene wallpaper in the library".into());
-        }
-        let (state, raw) = build_wpe_web_state_with_raw(&id, source)
-            .await?
-            .ok_or_else(|| "scene wallpaper row missing".to_string())?;
-        // 场景的 `scenetexture` 文件放行与网页壁纸同两个时机：这里在交出状态前覆盖，`metadataId` 补丁时由目录索引重算
-        index.replace_grants(&id, user_file_grants(&raw));
-        return Ok(state);
-    }
-    Err("not inside a web wallpaper".into())
+    let Some((state, raw)) = build_wpe_web_state_with_raw(&image_id, source).await? else {
+        return Ok(None);
+    };
+    WpeWebDirIndex::global().replace_grants(&state.image_id, user_file_grants(&raw));
+    Ok(Some(state))
 }
 
 /// 网页壁纸订阅音频（`audio`）或媒体会话（`media`）数据，经 `channel` 推回调用的 iframe。
 ///
-/// 预览（主窗口）与桌面（壁纸窗口）的网页壁纸 iframe 走同一条路：按调用方文档认出是哪张（同
-/// [`wpe_web_pull_state`]）；场景宿主也是子 frame，它的确切入口文档必须传库内场景壁纸的 `image_id`
+/// 预览（主窗口）与桌面（壁纸窗口）的网页壁纸 iframe 走同一条路：按调用方文档在网页壁纸目录索引里认出是哪张
+/// （CEF runtime 把 `file:` frame 的 `Origin` 改写成完整文档 URL，页面伪造不了）；场景宿主也是子 frame，它的确切入口文档必须传库内场景壁纸的 `image_id`
 /// （SceneScript 的 `engine.registerAudioBuffers`），网页壁纸的垫片不传。订阅归属调用方 frame，frame 销毁
 /// 即释放（`lib.rs` 的 `on_webview_event`），同一 frame 再订阅同一类替换旧条，所以没有退订命令。只接受
 /// 子 frame：两个窗口的主 frame 是应用页。`audio` 只对 `general.supportsaudioprocessing: true` 的壁纸放行
@@ -847,7 +828,7 @@ mod tests {
         assert!(!pattern.test(&Url::parse("https://example.com/").unwrap()));
     }
 
-    /// `wpe_web_pull_state` 按调用方来源认文档：`file://localhost/…` 归一后能还原成本地路径，
+    /// `wpe_web_media_subscribe` 按调用方来源认文档：`file://localhost/…` 归一后能还原成本地路径，
     /// 非 `file:` 来源（应用页、远程站点、占位来源）一律不认，命令报错。
     #[test]
     fn caller_origin_maps_to_a_document_path() {

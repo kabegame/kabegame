@@ -81,6 +81,17 @@ import { alignmentOffset } from "./layout";
 
 const f32 = Math.fround;
 
+/** 声音对象的就地值（P6a2：`volume` 之外 `mintime` / `maxtime` 也在这里，排期器开始播放时现读）。 */
+export interface SoundValues {
+  volume: number;
+  mintime: number;
+  maxtime: number;
+}
+
+function soundValuesOf(sound: SceneSound): SoundValues {
+  return { volume: sound.volume, mintime: sound.mintime, maxtime: sound.maxtime };
+}
+
 /** 正交且没有路径的场景，加载末尾把相机基准重置成的值（rea-p5-camera / p3 L2）：视图恒为单位阵。 */
 export const ORTHOGRAPHIC_CAMERA_BASE: Readonly<Pick<CameraPose, "eye" | "center" | "up">> = {
   eye: [0, 0, 0],
@@ -180,6 +191,11 @@ export interface DirtyState {
    * 只在写入时进来（WPE 每次绑定现读字节、没有「变没变」的判断，同值也重建一次无妨，但不每帧重建）。
    */
   passStates: Set<number>;
+  /**
+   * 条件属性写过的变体纹理（P11e，纹理路径）：`GpuScene.sync` 按 `variantValues` 重新选择变体，命中表变了才重写纹理内容。只在写入时进来，
+   * 同值写入也进来（选择不变就什么都不做，不必在这里比较）。
+   */
+  textureVariants: Set<string>;
 }
 
 /** 一个 effect 的运行时开关；`unsupported`：带不支持项，打开要整场重编译（不算可变，见 `variantPlans`）。 */
@@ -413,10 +429,10 @@ export class SceneState {
    */
   readonly particleInstances = new Map<number, ParticleInstanceValues>();
   /**
-   * 声音对象的就地值（P6a 步骤 1，`objects` 下标 → 值），起始值 = 编译期的 `SceneSound.volume`。写入不标脏：宿主的排期器
-   * 每帧读（`audio/sceneSounds.ts`），值变了才走 WPE 的音量回调。
+   * 声音对象的就地值（P6a 步骤 1，`objects` 下标 → 值），起始值 = 编译期的 `SceneSound` 的 `volume` / `mintime` / `maxtime`。写入不标脏：
+   * 宿主的排期器每帧读 `volume`（`audio/sceneSounds.ts`），值变了才走 WPE 的音量回调；`mintime` / `maxtime`（P6a2）在 `random` 模式开始播放时现读。
    */
-  readonly sounds = new Map<number, { volume: number }>();
+  readonly sounds = new Map<number, SoundValues>();
   /**
    * 灯对象的数值字段（P13f2，`objects` 下标 → `LightValues`），起始值 = 编译期的 `SceneLightObject.values`。写入不标脏：渲染器每帧现算
    * 灯光 uniform、遗留灯与体积光（WPE 这些字段没有改值回调，逐帧读，rea-p13-lights 3.1）。
@@ -477,6 +493,12 @@ export class SceneState {
   private rateParticles = new Set<number>();
   private dirtyUserTextures = new Set<string>();
   private dirtyPassStates = new Set<number>();
+  private dirtyTextureVariants = new Set<string>();
+  /**
+   * 纹理变体条件属性的当前值（P11e，属性名 → 值，类型照原样；属性不存在的没有键）：加载时取 bundle 各变体纹理的 `variants.values`
+   * （编译时的值），运行中由绑定目标 `texture-variant` 改写。判定（`selectVariants`）只读这一份，同 WPE 读绑定管理器的属性全集。
+   */
+  readonly variantValues = new Map<string, unknown>();
   /**
    * 脚本写过的材质状态字段（P6d1b，pass 稳定键 → 字段 → 规范名）：只存写过的字段，没写过的取 bundle 的 `ScenePass`（`render/passState.ts` 的
    * `applyPassStates` 拼出有效的 pass）。值已按字段的表规整。
@@ -529,6 +551,9 @@ export class SceneState {
     );
     // 子表以编译产物为准（P6d3：带换父的先后）；手写的测试 bundle 没有时按 `layers` 的 `parent` 现推（`install` 的 `appendChild`）
     if (bundle.children) for (const [parent, list] of bundle.children) state.children.set(parent, [...list]);
+    // 纹理变体（P11e）：条件属性编译时的值，加载时的选择照它
+    for (const texture of bundle.textures)
+      for (const [name, value] of Object.entries(texture.variants?.values ?? {})) state.variantValues.set(name, value);
     // 相机基准（P5e）：正交（含手写的 bundle 没有 `perspective` 标记）= 重置值，`init` 之后一律重置；透视 = JSON 解析值，
     // 只有 `scene.json` 里是字符串的项覆盖 `init` 写的值（`given`，缺省当全给了；没有相机时都不覆盖）
     const camera = bundle.general.camera;
@@ -558,7 +583,7 @@ export class SceneState {
     // 没有图层的声音 / 灯（手写的测试 bundle）：只写它们自己的表
     const layered = new Set(bundle.layers.map((layer) => layer.object));
     for (const sound of bundle.sounds ?? [])
-      if (!layered.has(sound.object)) state.sounds.set(sound.object, { volume: sound.volume });
+      if (!layered.has(sound.object)) state.sounds.set(sound.object, soundValuesOf(sound));
     for (const light of bundle.lightObjects ?? [])
       if (!layered.has(light.object)) state.lights.set(light.object, structuredClone(light.values));
     return state;
@@ -627,7 +652,7 @@ export class SceneState {
         putConstant(text.background.key, { g_Color: [...text.background.color] });
     }
     if (layer.alignment !== undefined) this.alignmentSizes.set(object, [...layer.size]);
-    if (slice.sound) this.sounds.set(object, { volume: slice.sound.volume });
+    if (slice.sound) this.sounds.set(object, soundValuesOf(slice.sound));
     if (slice.light) this.lights.set(object, structuredClone(slice.light.values));
     // 相机对象（P5d 步骤 3）：拷一份，运行中改它不动 bundle
     if (layer.camera) this.cameras.set(object, { fov: layer.camera.fov, zoom: layer.camera.zoom });
@@ -1160,7 +1185,7 @@ export class SceneState {
       const sound = this.sounds.get(target.object);
       // 取值规则与编译期相同（`soundVolume`），条件先换成布尔；不合法的值不改字段（WPE 的 float 解析器不收时不写）
       const value = soundVolume(conditioned(binding, raw));
-      if (sound && value !== undefined) sound.volume = value;
+      if (sound && value !== undefined) sound[target.field] = value;
       return "applied";
     }
     if (target.kind === "camera") {
@@ -1300,6 +1325,13 @@ export class SceneState {
       this.onUserTexture?.(target.name, value);
       return "applied";
     }
+    // 纹理变体的条件属性（P11e）：值照原样记（判定看类型：对象形式只认字符串、bool 形式只认 true），条件无意义；把纹理标脏，下一次 `sync`
+    // 重新选择（WPE 的 setter 只比较、置脏，重载在帧间的回调里，rea-p11e 2 节）
+    if (target.kind === "texture-variant") {
+      this.variantValues.set(target.name, raw);
+      this.dirtyTextureVariants.add(target.path);
+      return "applied";
+    }
     // 材质状态字段（P6d1b）：值按字段的表规整（`null` / `undefined` 不写，其余先 `ToString`，查不到取表的第一项），条件无意义、不看；
     // 写入当场把图层记进「要重建」，同值也记（WPE 每次绑定现读，没有变没变的判断）
     if (target.kind === "pass-state") {
@@ -1352,6 +1384,7 @@ export class SceneState {
       rates: this.rateParticles,
       userTextures: this.dirtyUserTextures,
       passStates: this.dirtyPassStates,
+      textureVariants: this.dirtyTextureVariants,
     };
     this.dirtyLayers = new Set();
     this.dirtyPasses = new Set();
@@ -1363,6 +1396,7 @@ export class SceneState {
     this.rateParticles = new Set();
     this.dirtyUserTextures = new Set();
     this.dirtyPassStates = new Set();
+    this.dirtyTextureVariants = new Set();
     return dirty;
   }
 }

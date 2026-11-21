@@ -9,7 +9,7 @@ import { blobRangeReader, CodecVideoPlayer, fileRangeReader, MAX_AHEAD, MAX_IN_F
 import { buildMkv, cluster, el, info, MKV, payload, simpleBlock, trackEntry } from "./demux/testMkv";
 import { AVCC, buildMp4, memoryRead, type Spec } from "./demux/testMp4";
 import type { ReadRange } from "./demux/mp4";
-import { FakeFrame, fakeFactories, flush, newFakeEnv, type FakeEnv } from "./fakeDecoder";
+import { FakeFrame, fakeFactories, flush, newFakeEnv, type FakeDecoderOptions, type FakeEnv } from "./fakeDecoder";
 import type { SceneVideoSource } from "./player";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => `file:///${path}` }));
@@ -56,7 +56,7 @@ const B_FRAMES: Spec = {
 interface SetupOptions {
   bytes?: Uint8Array;
   depth?: number;
-  supported?: boolean;
+  supported?: FakeDecoderOptions["supported"];
   read?: ReadRange;
   blockBytes?: number;
   source?: Partial<SceneVideoSource>;
@@ -126,6 +126,11 @@ afterEach(() => {
 });
 
 const ms = (seconds: number) => Math.round(seconds * 1e6);
+
+/** 只支持软解（显卡不能硬解：没有这种编码的硬解、画面小于硬解的最小尺寸）。 */
+const SOFTWARE_ONLY = (config: VideoDecoderConfig) => config.hardwareAcceleration === "prefer-software";
+/** 只支持硬解（本机自编 CEF 的 HEVC：没有软解）。 */
+const HARDWARE_ONLY = (config: VideoDecoderConfig) => config.hardwareAcceleration === "prefer-hardware";
 
 // ———— 用例 ————
 
@@ -557,8 +562,8 @@ describe("CodecVideoPlayer：卡住与失败", () => {
     expect(driver.tick(0)).toBeNull();
   });
 
-  it("解码器 error：失败、关掉全部帧与解码器", async () => {
-    const { player, driver, decoder, env } = track(setup());
+  it("软解的解码器 error：失败、关掉全部帧与解码器（硬解出错先换软解，见「硬解优先、退到软解」）", async () => {
+    const { player, driver, decoder, env } = track(setup({ supported: SOFTWARE_ONLY }));
     await flush();
     driver.tick(0);
     decoder().init.error(new DOMException("坏了", "EncodingError"));
@@ -566,7 +571,10 @@ describe("CodecVideoPlayer：卡住与失败", () => {
     expect(env.opened).toBe(0);
     expect(decoder().closed).toBe(true);
     expect(driver.tick(125)).toBeNull();
-    expect(env.warnings[0][0]).toContain("解码失败");
+    expect(env.warnings.map(([message]) => message)).toEqual([
+      expect.stringContaining("改用软件解码"),
+      expect.stringContaining("解码失败"),
+    ]);
   });
 
   it("读失败：失败、记 warn、不建解码器", async () => {
@@ -607,6 +615,183 @@ describe("CodecVideoPlayer：卡住与失败", () => {
   });
 });
 
+describe("CodecVideoPlayer：硬解优先、退到软解", () => {
+  it("硬解支持：配置是 prefer-hardware、不记 warn；acceleration 拆包前为 null、之后是 hardware", async () => {
+    const { player, decoder, env } = track(setup());
+    expect(player.probe().acceleration).toBeNull();
+    await flush();
+    expect(decoder().configs.map((config) => config.hardwareAcceleration)).toEqual(["prefer-hardware"]);
+    expect(player.probe().acceleration).toBe("hardware");
+    expect(env.warnings).toEqual([]);
+  });
+
+  it("显卡不能硬解（isConfigSupported 只认软解）：先问硬解再问软解，用 prefer-software、记一条 warn、照常出帧", async () => {
+    const asked: (string | undefined)[] = [];
+    const supported = (config: VideoDecoderConfig) => (asked.push(config.hardwareAcceleration), SOFTWARE_ONLY(config));
+    const { player, driver, decoder, env } = track(setup({ supported }));
+    await flush();
+    expect(asked).toEqual(["prefer-hardware", "prefer-software"]);
+    expect(env.decoders).toHaveLength(1);
+    expect(decoder().configs.map((config) => config.hardwareAcceleration)).toEqual(["prefer-software"]);
+    expect(player.probe().acceleration).toBe("software");
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0][0]).toContain("改用软件解码（显卡不能硬解这段视频）");
+    expect(env.warnings[0][1]).toMatch(/^avc1\.\w+ \d+×\d+$/);
+    expect(driver.tick(0)).toBe(0);
+    expect(driver.tick(125)).toBe(ms(0.125));
+  });
+
+  it("硬解、软解都不支持：失败，原因写明两个都问过", async () => {
+    const { player, env } = track(setup({ supported: false }));
+    await flush();
+    expect(player.failed).toBe(true);
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0][1]).toMatch(/硬解、软解都不支持/);
+  });
+
+  it("硬解运行中出错：换软解的新解码器，从出错时的媒体时间接着解（换的期间时钟停着、画面停在当前帧）", async () => {
+    const { player, driver, env } = track(setup());
+    await flush();
+    expect(driver.tick(0)).toBe(0);
+    expect(driver.tick(125)).toBe(ms(0.125));
+    expect(driver.tick(250)).toBe(ms(0.375));
+    const hardware = env.decoders[0];
+    hardware.init.error(new DOMException("硬解坏了", "OperationError"));
+    expect(player.failed).toBe(false);
+    expect(hardware.closed).toBe(true);
+    expect(driver.tick(500)).toBeNull();
+    expect(player.currentTime).toBe(0.375);
+    await flush();
+    expect(env.decoders).toHaveLength(2);
+    const software = env.decoders[1];
+    expect(software.configs.map((config) => config.hardwareAcceleration)).toEqual(["prefer-software"]);
+    // 0.375 之前最近的关键帧是 0（关键帧在 0 与 0.5）
+    expect(software.fed[0]).toBe(0);
+    expect(player.probe().acceleration).toBe("software");
+    expect(driver.tick(0)).toBe(ms(0.375));
+    expect(driver.tick(125)).toBe(ms(0.5));
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0][0]).toContain("硬件解码出错，改用软件解码");
+    expect(env.warnings[0][1]).toMatch(/硬解坏了/);
+  });
+
+  it("出错时先结清时钟：离上一次画到过了 0.2 s 才出错，软解从 0.575 接着解（取 0.5 那一帧）", async () => {
+    const { player, driver, env } = track(setup());
+    await flush();
+    driver.tick(0);
+    expect(driver.tick(375)).toBe(ms(0.375));
+    env.now += 200;
+    env.decoders[0].init.error(new DOMException("硬解坏了", "OperationError"));
+    expect(player.currentTime).toBeCloseTo(0.575, 9);
+    await flush();
+    expect(env.decoders[1].fed[0]).toBe(ms(0.5));
+    expect(driver.tick(0)).toBe(ms(0.5));
+  });
+
+  it("换了之后，旧解码器迟到的输出直接关掉（时间戳正好是新解码器在等的也不收）、出错不理；软解再出错才失败（只退一次）", async () => {
+    // 解码器都不出帧：新解码器喂进去的时间戳都还在登记里，只有代数能把旧解码器的帧挡住
+    const { player, env } = track(setup({ halted: true }));
+    await flush();
+    const hardware = env.decoders[0];
+    hardware.init.error(new DOMException("硬解坏了", "OperationError"));
+    await flush();
+    expect(env.decoders[1].fed[0]).toBe(0);
+    const opened = env.opened;
+    hardware.init.output(new FakeFrame(env, 0) as unknown as VideoFrame);
+    expect(env.opened).toBe(opened);
+    expect(player.hasFirstFrame).toBe(false);
+    hardware.init.error(new DOMException("又坏了", "OperationError"));
+    expect(player.failed).toBe(false);
+    env.decoders[1].init.error(new DOMException("软解也坏了", "EncodingError"));
+    expect(player.failed).toBe(true);
+    expect(env.decoders).toHaveLength(2);
+    expect(env.warnings.map(([message]) => message)).toEqual([
+      expect.stringContaining("改用软件解码"),
+      expect.stringContaining("解码失败"),
+    ]);
+  });
+
+  it("decode 同步抛错（Chromium 已关掉出错的硬解解码器、错误回调还没到）也换软解", async () => {
+    const { player, driver, env } = track(setup());
+    await flush();
+    driver.tick(0);
+    env.decoders[0].throwOnDecode = new DOMException("Cannot call 'decode' on a closed codec.", "InvalidStateError");
+    for (let i = 0; i < 16 && env.decoders.length === 1; i++) {
+      driver.tick(125);
+      await flush();
+    }
+    expect(player.failed).toBe(false);
+    expect(env.decoders).toHaveLength(2);
+    expect(env.decoders[1].configs[0].hardwareAcceleration).toBe("prefer-software");
+    expect(env.warnings[0][1]).toMatch(/InvalidStateError|closed codec/);
+  });
+
+  it("跳转时 configure 同步抛错也换软解，软解从跳转目标开始", async () => {
+    const { player, driver, env } = track(setup());
+    await flush();
+    driver.tick(0);
+    env.decoders[0].throwOnConfigure = new DOMException(
+      "Cannot call 'configure' on a closed codec.",
+      "InvalidStateError",
+    );
+    player.currentTime = 0.25;
+    await flush();
+    expect(player.failed).toBe(false);
+    expect(env.decoders).toHaveLength(2);
+    expect(env.decoders[1].fed[0]).toBe(0);
+    expect(driver.tick(0)).toBe(ms(0.25));
+  });
+
+  it("换的期间脚本写 currentTime：软解的解码器从写的时间开始", async () => {
+    const { player, driver, env } = track(setup());
+    await flush();
+    driver.tick(0);
+    env.decoders[0].init.error(new DOMException("硬解坏了", "OperationError"));
+    player.currentTime = 0.5;
+    await flush();
+    expect(env.decoders[1].fed[0]).toBe(ms(0.5));
+    expect(driver.tick(0)).toBe(ms(0.5));
+  });
+
+  it("第一帧之前硬解出错：firstFrame 等到软解的第一帧", async () => {
+    const { player, env } = track(setup({ halted: true }));
+    let first = false;
+    void player.firstFrame().then(() => (first = true));
+    await flush();
+    env.decoders[0].init.error(new DOMException("硬解坏了", "OperationError"));
+    await flush();
+    expect(first).toBe(false);
+    expect(env.decoders).toHaveLength(2);
+    env.decoders[1].resume();
+    await flush();
+    expect(first).toBe(true);
+    expect(player.failed).toBe(false);
+  });
+
+  it("硬解出错、软解不支持（本机自编 CEF 的 HEVC 没有软解）：失败，只记一条", async () => {
+    const { player, driver, env } = track(setup({ supported: HARDWARE_ONLY }));
+    await flush();
+    driver.tick(0);
+    env.decoders[0].init.error(new DOMException("硬解坏了", "OperationError"));
+    await flush();
+    expect(player.failed).toBe(true);
+    expect(env.decoders).toHaveLength(1);
+    expect(env.warnings).toHaveLength(1);
+    expect(env.warnings[0][0]).toContain("硬件解码出错、软件解码不支持");
+  });
+
+  it("释放之后迟到的硬解出错不再换软解", async () => {
+    const { player, env } = track(setup());
+    await flush();
+    const hardware = env.decoders[0];
+    player.dispose();
+    hardware.init.error(new DOMException("硬解坏了", "OperationError"));
+    await flush();
+    expect(env.decoders).toHaveLength(1);
+    expect(env.warnings).toEqual([]);
+  });
+});
+
 describe("CodecVideoPlayer：Matroska", () => {
   it("Matroska 也自己拆包解码：时间戳按块的显示时间，挑帧照常", async () => {
     // 解码顺序 I0 P2 B1 I3（数字是显示的帧号，每帧 0.125 s），时长 0.5 s（Info.Duration 500 ms）
@@ -631,6 +816,36 @@ describe("CodecVideoPlayer：Matroska", () => {
     expect(driver.tick(125)).toBe(ms(0.125));
     expect(driver.tick(125)).toBe(ms(0.25));
     expect(player.duration).toBe(0.5);
+  });
+
+  it("VP9（P9e）：配置是 vp09 串、不带 description，帧照常喂、照常挑", async () => {
+    // 语料 3662390671 的关键帧帧头（1920×1080），之后 3 个帧间帧；每帧 0.125 s、时长 0.5 s
+    const key = Uint8Array.from([0x82, 0x49, 0x83, 0x42, 0x00, 0x77, 0xf0, 0x43, 0x76, 0x00, 0x38, 0x24]);
+    const inter = Uint8Array.of(0x86, 0, 0, 0);
+    const bytes = buildMkv([
+      info(undefined, 500),
+      el(MKV.Tracks, trackEntry({ number: 1, type: 1, codecId: "V_VP9", width: 1920, height: 1080 })),
+      cluster(0, simpleBlock(1, 0, 0x80, key), simpleBlock(1, 125, 0, inter), simpleBlock(1, 250, 0, inter)),
+      cluster(375, simpleBlock(1, 0, 0, inter)),
+    ]);
+    const env = newFakeEnv();
+    let seen: VideoDecoderConfig | null = null;
+    const player = new CodecVideoPlayer({ path: "P:/p/v.tex", start: 0, end: bytes.length }, 0, {
+      report: { warn: (message, detail) => void env.warnings.push([message, detail]) },
+      readRange: () => memoryRead(bytes).read,
+      ...fakeFactories(env),
+      isConfigSupported: async (config) => ((seen = config), { supported: true }),
+    });
+    track({ player, env });
+    await player.firstFrame();
+    expect(env.warnings).toEqual([]);
+    expect(seen).toMatchObject({ codec: "vp09.00.40.08", codedWidth: 1920, codedHeight: 1080 });
+    expect(seen).not.toHaveProperty("description");
+    const driver = new Driver(player, env);
+    const decoder = env.decoders[env.decoders.length - 1];
+    expect(decoder.fed.slice(0, 4)).toEqual([0, ms(0.125), ms(0.25), ms(0.375)]);
+    expect(driver.tick(0)).toBe(0);
+    expect(driver.tick(125)).toBe(ms(0.125));
   });
 });
 
@@ -673,7 +888,8 @@ describe("CodecVideoPlayer：seeked()", () => {
   });
 
   it("失败或释放时 resolve，不 reject", async () => {
-    const failing = track(setup({ halted: true }));
+    // 软解的解码器出错才失败（硬解出错先换软解）
+    const failing = track(setup({ halted: true, supported: SOFTWARE_ONLY }));
     await flush();
     failing.player.currentTime = 0.5;
     const failed = failing.player.seeked();

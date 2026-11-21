@@ -3,7 +3,8 @@
  * 不合法时抛 400（`badRequest`），错误体的 `field` 说明是哪一项（例如 `particles.dts[3]`）。
  *
  * 规则对齐 dev 探针（`apps/wpe-scene/src/dev/probe.ts`、`particleCorners.ts`）：
- * - `dts` 非空、都是有限正数；`times` 与 `dts` 等长、都是有限数；`passes` 只能 1 / 2；`seed` 是整数；
+ * - `dts` 非空、都是有限正数；`times` 与 `dts` 等长、都是有限数；`passes` 只能 1 / 2；`seed` 是整数；`mt19937`（P4j 步骤 4a）是 0–2³²−1 的整数、
+ *   不和 `seed` 同给（全场粒子系统共用一个标准 std::mt19937）；
  * - `random` 的键是 `objects` 下标（非负整数），值是 [0, 1) 内的数组成的数组；
  * - 轨迹的 `frames` 是 [1, dts.length] 内的整数；`cursors` 与 `dts` 等长、每项两个有限数（WPE 的指针可以超出 [0, 1]，不限范围）。
  * - 逐帧光标（P5a 收尾）：单位都是 `g_PointerPosition`（抓帧窗口归一化），渲染与四角的 `pointers` 要有 `particles`、和
@@ -96,7 +97,7 @@ export const SCRIPTS_FIELDS = ["clock", "seed"] as const;
 export const MAX_SCRIPT_CLOCK = 8.64e15;
 /** `scripts.seed` 的上限：mulberry32 的状态是 32 位（探针 `MAX_PROBE_SEED` 的抄本）。 */
 export const MAX_SCRIPT_SEED = 0xffffffff;
-export const REPLAY_FIELDS = ["dts", "times", "seed", "passes", "random", "audio"] as const;
+export const REPLAY_FIELDS = ["dts", "times", "seed", "mt19937", "passes", "random", "audio"] as const;
 /** 一帧频谱的键与段数（P11a，探针 `ParticleAudioFrame`）。 */
 export const SPECTRUM_BANDS = { left: 16, right: 16, left32: 32, right32: 32, left64: 64, right64: 64 } as const;
 export const TRACK_FIELDS = [
@@ -106,6 +107,7 @@ export const TRACK_FIELDS = [
   "frames",
   "passes",
   "seed",
+  "mt19937",
   "random",
   "audio",
   "cursors",
@@ -189,6 +191,14 @@ export function checkTimes(value: unknown, field: string, length: number): numbe
 
 export function checkSeed(value: unknown, field = "seed"): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) fail(field, `要是整数，收到 ${shown(value)}`);
+  return value;
+}
+
+/** `mt19937`（P4j 步骤 4a）：0–2³²−1 的整数，全场粒子系统共用一个标准 std::mt19937 的种子（探针 `replayParticleOptions` 同样查）。 */
+export const MAX_MT19937_SEED = 0xffffffff;
+export function checkMt19937(value: unknown, field = "mt19937"): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > MAX_MT19937_SEED)
+    fail(field, `要是 0–${MAX_MT19937_SEED} 的整数，收到 ${shown(value)}`);
   return value;
 }
 
@@ -378,15 +388,21 @@ function replayFields(body: Obj, prefix: string): ParticleReplay {
   const replay: ParticleReplay = { dts };
   if (body.times !== undefined) replay.times = checkTimes(body.times, join(prefix, "times"), dts.length);
   if (body.seed !== undefined) replay.seed = checkSeed(body.seed, join(prefix, "seed"));
+  if (body.mt19937 !== undefined) {
+    if (body.seed !== undefined)
+      fail(join(prefix, "mt19937"), "和 seed 只能给一个（mt19937 是全场共用一串，seed 是每个粒子层 seed + i）");
+    replay.mt19937 = checkMt19937(body.mt19937, join(prefix, "mt19937"));
+  }
   if (body.passes !== undefined) replay.passes = checkPasses(body.passes, join(prefix, "passes"));
   if (body.random !== undefined) replay.random = checkRandom(body.random, join(prefix, "random"));
   if (body.audio !== undefined) replay.audio = checkAudio(body.audio, join(prefix, "audio"), dts.length);
   return replay;
 }
 
-/** 确定性粒子回放 `{ dts, times?, seed?, passes?, random?, audio? }`。 */
+/** 确定性粒子回放 `{ dts, times?, seed?, mt19937?, passes?, random?, audio? }`（`seed` 与 `mt19937` 只能给一个）。 */
 export function checkReplay(value: unknown, field = "particles"): ParticleReplay {
-  if (!isObject(value)) fail(field, `要是 { dts, times?, seed?, passes?, random?, audio? }，收到 ${shown(value)}`);
+  if (!isObject(value))
+    fail(field, `要是 { dts, times?, seed?, mt19937?, passes?, random?, audio? }，收到 ${shown(value)}`);
   rejectUnknown(value, REPLAY_FIELDS, field);
   return replayFields(value, field);
 }

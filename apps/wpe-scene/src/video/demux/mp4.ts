@@ -16,6 +16,8 @@
  *   对不上、超过上限、`read` 自己 reject：一律返回 `{ error: 中文原因 }`，从不抛错。
  */
 
+import type { Vp9Info } from "./vp9";
+
 /** 按区间读字节（`[start, end)` 相对视频起点），文件区间或 Blob 切片都实现它。 */
 export type ReadRange = (start: number, end: number) => Promise<Uint8Array>;
 
@@ -32,11 +34,16 @@ export interface Mp4Colr {
 }
 
 export interface VideoTrackIndex {
-  codec: "avc" | "hevc";
-  /** 样本项的类型（codec 串的前缀照它）。 */
-  sampleEntry: VideoSampleEntry;
-  /** avcC / hvcC 盒的内容（不含盒头），即 VideoDecoderConfig.description。 */
+  codec: "avc" | "hevc" | "vp9";
+  /** codec 串的前缀：MP4 的样本项类型；Matroska 的 VP9 记 vp09。 */
+  sampleEntry: VideoSampleEntry | "vp09";
+  /**
+   * avcC / hvcC 盒的内容（不含盒头），即 VideoDecoderConfig.description。VP9（P9e）是 Matroska `CodecPrivate` 原样（可能为空），
+   * 不交给解码器。
+   */
   description: Uint8Array;
+  /** VP9 第一个关键帧的帧头与 level（P9e）；H.264 / H.265 为 null。 */
+  vp9: Vp9Info | null;
   /** 视觉样本项里的宽高。 */
   codedWidth: number;
   codedHeight: number;
@@ -408,6 +415,7 @@ function parseVideoTrak(
     codec: kind.codec,
     sampleEntry,
     description,
+    vp9: null,
     codedWidth,
     codedHeight,
     timescale,

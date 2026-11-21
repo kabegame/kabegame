@@ -1,6 +1,7 @@
 import { collectAnimations, collectObjectAnimations, settleConstantAnimation } from "./animations";
 import { alignmentIndex } from "./alignment";
 import { compileBloom, type SceneBloom } from "./bloom";
+import { compileEmitterImages, type SceneEmitterImagePasses } from "./emitterImages";
 import {
   BindingCollector,
   CAMERA_DEFAULTS,
@@ -21,7 +22,15 @@ import {
   type TargetKey,
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
-import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
+import { variantPropertyNames, type TexVariantCondition, type TexVariantPatch } from "./textureVariants";
+import {
+  bindLayerImages,
+  checkerTexture,
+  dependencyIds,
+  LAYER_COMPOSITE_PREFIX,
+  layerCompositeName,
+  particleDependencies,
+} from "./dependencies";
 import { reflectionKind, reflectionList } from "./reflection";
 import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from "./sprite";
 import { compileVolumetrics, wantsVolumetrics, type SceneVolumetrics } from "./volumetrics";
@@ -164,7 +173,7 @@ import {
 import { checkCameraObjectPath, compileCamera, type SceneCameraJson } from "./camera";
 import { compileSound, type SceneSound } from "./sounds";
 import { compileText, type HostPassCompiler, type SceneText } from "./texts";
-import { FBO_FORMATS, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
+import { FBO_FORMATS, FREE_IMAGE_MIME, freeImageTextureSize, parseTex, TEX_FLAGS, type TexResult } from "./tex";
 import { materialCombos, passAlphaWriting, type AlphaWriting } from "./writeState";
 import {
   defaultOfTexture,
@@ -268,6 +277,25 @@ export interface SceneTexture {
    * 换格）。和 `sheet`（粒子只取第 0 帧的宽高）并存。
    */
   frames?: SceneSheetFrames;
+  /** 纹理变体（P11e，`SceneTextureVariants`）：带条件的 FreeImage 纹理才有。 */
+  variants?: SceneTextureVariants;
+}
+
+/**
+ * 纹理变体（P11e，rea-p11e）：`.tex` 里按用户属性条件贴到底图上的补丁。底图照旧在 `encoded` / `mips`；这里是条件表、每级 mip 的变体条目
+ * （区间同 `encoded`，主线程按区间读、解码后填 `bitmap`），以及编译时条件里各属性的值（`values`，属性不存在的不写），宿主据此选出初始的
+ * 命中表；运行中改值经绑定目标 `{ kind: "texture-variant" }` 写进 `SceneState.variantValues`，`GpuScene.sync` 重新选择、重写纹理内容。
+ */
+export interface SceneTextureVariants {
+  conditions: TexVariantCondition[];
+  /** 第 l 项是第 l 级 mip 的变体条目，文件顺序。`mime` 缺时是浏览器解不了的格式（已照报 `tex:variant:raw`），强制渲染时不贴。 */
+  mips: SceneVariantPatch[][];
+  values: Record<string, SceneScalar>;
+}
+export interface SceneVariantPatch extends TexVariantPatch {
+  mime?: "image/png" | "image/jpeg";
+  /** 主线程解码后填（`decode.ts`）；解码失败或尺寸和条目不符的不填，不贴。 */
+  bitmap?: ImageBitmap;
 }
 
 /**
@@ -940,6 +968,11 @@ export interface SceneBundle {
    * 有链不等于开着：当前开不开看 `SceneState.bloomEnabled`，关着时渲染路径同样与 P2a 相同。
    */
   bloom: SceneBloom | null;
+  /**
+   * 发射图候选表的降采样材质（P4j 步骤 2a，`emitterImages.ts`）：场景里有粒子系统绑上了 `layerimage` 的发射图依赖时才写（没有时不带这一项，
+   * 别的场景字节不变）；`masked` 只在有任何依赖带 `mask` 时编。
+   */
+  emitterImagePasses?: SceneEmitterImagePasses;
   /**
    * 平面反射 RT（P13b1，`_rt_Reflection`）：只有模型的网格材质读它时 WPE 才建这张 RT，才有反射 pass（rea-p13-passes 1.1、1.4）；
    * 只有图像层 / 粒子读它时 WPE 不建，那一槽绑的是棋盘格占位（编译期已改成静态纹理，不记这个键）。`compileScene` 在有模型读时才写。
@@ -1868,6 +1901,41 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   const settled = () => unsupported.recorder === null && unsupported.size > 0 && !input.force && !input.exhaustive;
 
   /**
+   * 纹理变体（P11e）：条件里每个属性登记一条就地绑定 `texture-variant`，记下它编译时的值（属性不存在的不记，判定为假）。纹理按文件路径
+   * 缓存，同 WPE 只按文件名缓存：同一张 `.tex` 被几个材质用时选择相同、一起换（rea-p11e 2 节）。
+   */
+  function textureVariants(path: string, tex: TexResult, issues: Set<string>): SceneTextureVariants | undefined {
+    if (!tex.variants) return undefined;
+    const { conditions } = tex.variants;
+    const values: Record<string, SceneScalar> = {};
+    for (const name of variantPropertyNames(conditions)) {
+      bindings.bindTextureVariant(path, name);
+      if (!Object.hasOwn(properties, name)) continue;
+      const value = properties[name];
+      if (value === undefined) {
+        // TODO:[WPE_SCENE] 属性定义里没有 `value` 键：WPE 对象形式的判定对空指针解引用（`0x140174d30`，rea-p11e 1.2），崩溃组合照报；
+        // bool 形式在 WPE 里判假，不报
+        if (conditions.some((condition) => condition.test.name === name && "equals" in condition.test)) {
+          tex.unsupported.push("tex:variant:no-value");
+          issues.add("tex:variant:no-value");
+        }
+        continue;
+      }
+      values[name] = value;
+    }
+    return {
+      conditions,
+      values,
+      mips: tex.variants.mips.map((level) =>
+        level.map((patch) => {
+          const mime = FREE_IMAGE_MIME[patch.freeImageFormat];
+          return mime ? { ...patch, mime } : { ...patch };
+        }),
+      ),
+    };
+  }
+
+  /**
    * 一张纹理（按解析后的路径缓存）。帧表纹理不报 `tex:animation`（P6e 点 1：图像层、effect、粒子的帧动画都支持，完整帧表在
    * `SceneTexture.frames`）；多图像帧表（点 4）由 `SceneTexture.images` 带其余图像；FreeImage 形态的多图像报 `tex:animation:multi-image:freeimage`，`tex:animation:empty` 照报。
    * 粒子路径只有槽 0 带帧表语义：WPE 只看槽 0 纹理的头标志置系统的 `0x1000000`（rea-p4b-render.md 2.3），帧表宏与
@@ -1926,6 +1994,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       encoded: tex.encoded,
       video: tex.video,
     });
+    const variants = textureVariants(path, tex, issues);
+    if (variants) bundle.textures[index].variants = variants;
     const extra = extraImages(tex);
     if (extra) bundle.textures[index].images = extra;
     const sheet = spriteSheet(tex, textureWidth, textureHeight);
@@ -2067,6 +2137,17 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       hdr: postprocess.hdr,
     });
     checkParticleInstance(object.instanceoverride, { flags }, unsupported);
+    // `layerimage` 发射器的依赖（P4j 步骤 1，rea-p4j-layerimage.md 1.5）：顶层与子系统各按自己的发射器数、从 0 数，列表都取自这个对象
+    const bound = bindLayerImages(particle.emitters, particleDependencies(object));
+    for (const slot of bound) {
+      let maskTexture: number | null = null;
+      if (slot && slot.mask) maskTexture = (await getTexture(slot.mask, null))?.index ?? null;
+      particle.emitterImages.push(slot ? { ...slot, maskTexture } : null);
+    }
+    // 运行中新建的粒子对象（片段编译，`finalize` 之后）若是场景里第一个用发射图的：场景级的降采样材质已经定稿、片段不带场景级增量，
+    // 渲染器没有 pass 可用，整张照报。
+    // TODO:[WPE_SCENE] 片段编译补场景级 pass（`emitterImagePasses` 作只增的场景级增量，同 `addProgram` 的程序增量），随 L 系列的增量协议一起做
+    if (finalized && bound.some(Boolean) && !bundle.emitterImagePasses) unsupported.add("particle:layerimage:runtime");
     await compileParticleMaterial(system, particle, flags, key);
     if (!nested || !Array.isArray(system.children)) return particle;
     for (const [n, raw] of system.children.entries()) {
@@ -3413,8 +3494,8 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         layer.prelit = prelit;
       }
     }
-    // 被依赖的组（有子层的组合层，P8 步骤 4）：组隐藏时子层怎么画进它的 RT 没查（语料 0 个），照报
-    if (depended && hasChildren) unsupported.add("dependency:group");
+    // 被依赖的组（有子层的组合层）P8 步骤 7 起不报：渲染图照被依赖图层的规则排（compose → 子树 → effect → 上屏），组隐藏时只画基础
+    // pass 与 effect 链、子层不画（`p8-depgroup` 七种组合和 WPE 整帧 0 差异）
     // puppet 的上屏路径与材质变体（步骤 3 点 1）：composite 时 passthrough 上屏由 puppet 自己的 `upload` 承担，不再编 `layer.passthrough`
     // 纹理通道网格（P12b2-2）强制合成路径（rea-texchan-model 2：UV 不缩放、`0x10`）；基础材质带光照 / 反射时 WPE 要另建 RT 预光照，照报
     if (layer.puppet?.textureChannels) {
@@ -3529,6 +3610,40 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     bundle.children = children;
     for (const keys of applyGroupRules(bundle.layers, new Map(children)).values())
       for (const key of keys) unsupported.add(key);
+    // 发射图引用的图层（P4j 步骤 1，rea-p4j-layerimage.md 2.6、第 7 节）：puppet 的骨骼号分配没读全、文本层的 `L+0x2c8` 是不是独占 RT 没读，照报；
+    // 不存在或别的类型的对象中性（WPE 永远不发，我们运行时同样找不到）
+    for (const layer of bundle.layers) {
+      if (!layer.particle) continue;
+      const referenced = (system: SceneParticle): void => {
+        for (const slot of system.emitterImages) {
+          if (!slot) continue;
+          for (const target of bundle.layers) {
+            const object = scene.objects[target.object];
+            if (!isSceneObject(object) || jsonId(object) !== slot.id) continue;
+            if (target.puppet) unsupported.add("particle:layerimage:puppet");
+            if (target.text) unsupported.add("particle:layerimage:text");
+          }
+        }
+        for (const child of system.children) referenced(child.system);
+      };
+      referenced(layer.particle);
+    }
+    // 发射图候选表的降采样材质（P4j 步骤 2a）：有任何粒子系统（含子系统）绑上了发射图依赖时才编；有 `mask` 时多编一个变体
+    {
+      let bound = false;
+      let masked = false;
+      const scan = (system: SceneParticle): void => {
+        for (const slot of system.emitterImages) {
+          if (!slot) continue;
+          bound = true;
+          if (slot.mask) masked = true;
+        }
+        for (const child of system.children) scan(child.system);
+      };
+      for (const layer of bundle.layers) if (layer.particle) scan(layer.particle);
+      if (bound && !settled())
+        bundle.emitterImagePasses = await compileEmitterImages({ fs, shader, unsupported, addProgram }, masked);
+    }
     // 反射（P13b1）。设置解析成「反射开」一个布尔：跟随时读 WPE `config.json` 的 `general.user.reflection`，只在有读者时才读
     if (reflectionReaders.length || mipReaders) {
       const reflectionOn = await reflectionEnabled();

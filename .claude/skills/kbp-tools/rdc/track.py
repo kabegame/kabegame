@@ -118,6 +118,7 @@ def assign_points(draws, meta):
     result = {}
     cursor = 0
     last, repeat = None, 0
+    image, image_repeat = None, 0
     for event, particles in draws:
         # 连续绘制记成 `名字#n`。按颜色认的系统还要颜色对得上（P4e 起：事件子系统的实例数不定，后面紧跟别的系统时不能吞进来）；
         # 多 renderer 的系统各次绘制颜色相同，结果不变
@@ -128,11 +129,18 @@ def assign_points(draws, meta):
             result["%s#%d" % (last, repeat)] = particles
             continue
         if particles is None:
-            # 图像层每帧都画：对象表里下一个图像层
+            # 图像层每帧都画：对象表里下一个图像层。meta 里 `draws: n` 的图像层（P4j：被依赖的图层先画进合成 RT 再上屏，
+            # 每帧两次）连着的第 2…n 次图像绘制仍算它，不推游标
+            if image is not None and image_repeat < meta["objects"][image].get("draws", 1):
+                image_repeat += 1
+                continue
             while cursor < len(order) and meta["objects"][order[cursor]]["kind"] != "image":
                 cursor += 1
+            image = order[cursor] if cursor < len(order) else None
+            image_repeat = 1
             cursor += 1
             continue
+        image = None
         if not particles:
             continue
         rest = order[cursor:]

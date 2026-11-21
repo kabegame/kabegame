@@ -97,14 +97,22 @@ const C = screen("C", false);
 /** 模拟后端发来的在线屏变化 */
 const emitScreens = (screens: unknown[]) => listeners.get("wallpaper-screens-change")?.({ payload: { screens } });
 
+const confirmMock = vi.hoisted(() => vi.fn());
+const warningMock = vi.hoisted(() => vi.fn());
+vi.mock("@/components/ui/messageBox", () => ({ messageBox: { confirm: confirmMock } }));
+vi.mock("@/utils/kameMessage", () => ({ kameMessage: { warning: warningMock } }));
+
+const saveSetting = vi.fn();
 const store = reactive({
   values: {
     wallpaperMode: "window" as string,
     wallpaperDisplayMode: "single" as string,
     wallpaperDefaultScreen: null as string | null,
     wallpaperTargets: {},
+    wallpaperEnabled: true as boolean | undefined,
   },
   isLoading: () => false,
+  save: saveSetting,
 });
 vi.mock("@/stores/settings", () => ({ useSettingsStore: () => store }));
 
@@ -129,6 +137,10 @@ beforeEach(async () => {
   store.values.wallpaperMode = "window";
   store.values.wallpaperDisplayMode = "single";
   store.values.wallpaperDefaultScreen = null;
+  store.values.wallpaperEnabled = true;
+  saveSetting.mockReset().mockResolvedValue(true);
+  confirmMock.mockReset().mockResolvedValue("confirm");
+  warningMock.mockReset();
   // 在线屏是模块级状态：首次使用读一次，之后只跟事件。先等首次读取，再用事件摆成两块屏
   await wallpaperScreensLoaded();
   emitScreens([A, B]);
@@ -185,6 +197,44 @@ describe("pickWallpaperTarget", () => {
     expect(wallpaperTargetPickRequest.value).toEqual({ action: "setRotation" });
     resolveWallpaperTargetPick("screen:A");
     expect(await second).toBe("screen:A");
+  });
+
+  it("壁纸功能关着时先引导开启，开了才继续选目标", async () => {
+    store.values.wallpaperDisplayMode = "multiple"; // 唯一目标，省掉选屏那一步
+    store.values.wallpaperEnabled = false;
+
+    expect(await pickWallpaperTarget({ action: "setWallpaper" })).toBe("multiple");
+    expect(confirmMock).toHaveBeenCalledOnce();
+    expect(saveSetting).toHaveBeenCalledWith("wallpaperEnabled", true);
+
+    // 开着（或还没读到设置）时不该问
+    store.values.wallpaperEnabled = true;
+    confirmMock.mockClear();
+    saveSetting.mockClear();
+    expect(await pickWallpaperTarget({ action: "setWallpaper" })).toBe("multiple");
+    store.values.wallpaperEnabled = undefined;
+    expect(await pickWallpaperTarget({ action: "setWallpaper" })).toBe("multiple");
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(saveSetting).not.toHaveBeenCalled();
+  });
+
+  it("引导里取消：不开壁纸、不选目标，按取消返回 null", async () => {
+    store.values.wallpaperEnabled = false;
+    confirmMock.mockRejectedValue("cancel");
+
+    // 本来有多个活跃目标，取消后连选屏弹窗都不该出现
+    expect(await pickWallpaperTarget({ action: "setRotation" })).toBeNull();
+    expect(wallpaperTargetPickRequest.value).toBeNull();
+    expect(saveSetting).not.toHaveBeenCalled();
+  });
+
+  it("开关正忙（save 被拒）时说明原因并按取消返回", async () => {
+    store.values.wallpaperDisplayMode = "multiple";
+    store.values.wallpaperEnabled = false;
+    saveSetting.mockResolvedValue(false);
+
+    expect(await pickWallpaperTarget({ action: "setWallpaper" })).toBeNull();
+    expect(warningMock).toHaveBeenCalledOnce();
   });
 
   it("成功提示里的屏名：多个目标时才有，没名字的屏用序号", async () => {

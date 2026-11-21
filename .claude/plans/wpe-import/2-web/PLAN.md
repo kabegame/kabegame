@@ -428,6 +428,9 @@ resolver 收紧为普通文件（拒 `x-wpe/*` 目录）；前端桌面三平台
     - 预览 iframe 用 `postMessage` 向主 frame（应用页）拉取，由应用页调用 Tauri 命令；订阅也 `postMessage` 登记，由应用页代为 listen 并转发（2026-10-28）；
     - `listen` 没有事件名作用域，壁纸页面因此能订阅应用全局事件，用户确认这是可接受的取舍，也算开放给壁纸的一项能力。
     - 依据与 WPE 的对照见 [API.md §4.8](API.md)，方案见 [phase-5-shim-host.md](phase-5-shim-host.md)。
+    - **2026-11-21 改为父页面推送**（[phase-9-parent-delivery.md](phase-9-parent-delivery.md)）：属性不再由 iframe 拉，改由 `WpeWallpaperContent` /
+      `WpeSceneView` 取状态、订阅变化、经 `postMessage` 推给垫片；父页面持有 WPE 那样的就绪标志，页面自己 reload 不重推（3841846165
+      无限重载）。iframe 不再有 `wpe_web_pull_state`，也不再监听 `setting-change` / `image-changed` / `images-change`。
 11. **WPE 目前只提供 Windows 桌面**（2026-10-28）：发现 / 导入（`platform_supported` 收窄到 Windows）、桌面 `file://` 宿主、预览 `file:` iframe
     全部按 `target_os = "windows"` 门控；macOS / Linux / Android / Web 对 `x-wpe/*` 行只显示预览图。`/wpe` HTTP 目录服务随 Phase 6a 删除。
     落地见 [phase-6a-file-preview.md](phase-6a-file-preview.md) 点 5c。

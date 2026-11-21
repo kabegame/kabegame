@@ -519,6 +519,14 @@ app IPC 的对应变体（协议 v5）见 [../cli/CLI_IPC.md](../cli/CLI_IPC.md)
 - **目标选择弹窗**：设置页以外凡是要落到某个目标的操作都先经它。
   - 入口是命令式函数 `pickWallpaperTarget({ action })`（`composables/useWallpaperTargetPicker.ts`，写法同 `askSettingChoice`）：模块级的待处理请求，加挂在 `App.vue` 的宿主 `components/wallpaper/WallpaperTargetPickerHost.vue`，调用方 `await` 结果。`action` 是 `"setWallpaper"` 或 `"setRotation"`，只决定标题。
   - 返回值是目标 id，可以直接当命令的 `target`；用户取消返回 `null`，调用方此时什么都不做。
+  - **它也是这些操作的前置关口**：壁纸功能关着（`wallpaperEnabled === false`）时先弹确认框引导开启
+    （`ensureWallpaperEnabled`，形式同「这张图需要窗口模式」那条），用户同意就经设置状态机 `save("wallpaperEnabled", true)`
+    ——`save` 会 await `set_wallpaper_enabled`，后端在那之后已经拉起壁纸后端并恢复了上次的壁纸，所以回来直接下命令
+    不会再撞后端的 `reject_if_wallpaper_disabled`。用户不开、或开关正忙（`save` 返回 `false`，这时提示一句
+    `settings.wallpaperEnableBusy`）都按取消返回 `null`。
+    只在**明确读到「关」**时拦：设置还没读到（`undefined`）就放过去，由后端的禁用检查兜底，免得首屏挡住正常操作；
+    Web 版不插手（那里没有壁纸后端，轮播类写入由 `writeTarget` 的 `guardDesktopOnly` 拦）。
+    放在这里而不是各入口自己判，是为了新增入口只要经过它就不会漏。
   - **只有一个活跃目标时不弹**，直接返回它：各屏复制、跨屏拼接，或逐屏独立但只接一块屏。判断用的是 `activeWallpaperTargets()`，与后端布局同规则；调用前先等 `wallpaperScreensLoaded()`。
   - 同时只有一个请求：后来的顶掉前一个，前一个按取消返回，弹窗不关、标题与预选按新请求重置。
   - 弹窗里是布局图（固定按逐屏独立画、不列断开的屏），预选默认屏，打开后焦点在预选的屏块上。点一块屏选中；「确认」、双击屏块、回车返回；「取消」、右上角、Esc、点遮罩、Android 返回键返回 `null`。不带「记住选择」，默认屏只作预选。
@@ -614,7 +622,7 @@ macOS 原生模式改用逐屏接口带来的变化：
 - **给目标加字段**：改 `WallpaperTargetConfig`（含 `from_json` 的宽松解析）与前端同名类型；注意种子是整份复制，新字段会随之复制到新目标。
 - **新增按目标读写的命令**：加可选 `target`，经 `resolve_target` 解析；需要对外时给 IPC 变体加 `#[serde(default)] target`。
 - **新增读目标的前端入口**：用 `useWallpaperTarget` 系列，不要直接读 `settingsStore.values.wallpaperTargets[...]` 后自己算默认目标。
-- **新增一个要落到某个目标的操作入口**（设置页以外）：先 `const target = await pickWallpaperTarget({ action })`，为 `null` 就返回，再带 `target` 调命令；成功提示用 `pickedScreenName(target)` 决定带不带屏名。关全局开关这类不属于某个目标的操作不弹。
+- **新增一个要落到某个目标的操作入口**（设置页以外）：先 `const target = await pickWallpaperTarget({ action })`，为 `null` 就返回，再带 `target` 调命令；成功提示用 `pickedScreenName(target)` 决定带不带屏名。关全局开关这类不属于某个目标的操作不弹。`pickWallpaperTarget` 顺带把「壁纸功能没开」引导掉了（为 `null` 的情况之一），所以不用自己判 `wallpaperEnabled`。
 - **新增轮播来源的标记**：用 `useWallpaperRotationSources()` 加 `rotatingTargetIds`，区分「有目标命中」与「全部命中」，不要只看 `useActiveWallpaperRotationPaths()`。
 - **改活跃目标、默认目标或归一化规则**：后端 `compute_layout` / `pick_option` 与前端 `utils/wallpaperTargets.ts` 要同步改，两边各有单测。
 

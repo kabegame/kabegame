@@ -389,6 +389,7 @@ describe("compileScene：每条 renderer 一个变体材质（rea-p4f-script.md 
           "sequenceMultiplier",
           "spriteSheet",
           "emitters",
+          "emitterImages",
           "initializers",
           "operators",
           "renderers",

@@ -50,6 +50,64 @@ export const DEFAULT_LIMITS: Limits = {
   tp: 1e-4,
 };
 
+/**
+ * 标准 MT19937（`std::mt19937`）：种子 → 每次一个 u32。和产品 `particles/random.ts` 的 `mt19937` 同一个算法（那边给 dev 回放用），这里留一份
+ * 是因为 kbp 要在旧的源码快照上也跑（`kbp regress` 的两份源码里可能有 4a 之前的，没有那个导出）。自检：种子 5489 的第 1 个是 3499211612、
+ * 第 10000 个是 4123659995（C++ 标准）。
+ */
+export function mt19937(seed: number): () => number {
+  const mt = new Uint32Array(624);
+  mt[0] = seed >>> 0;
+  for (let i = 1; i < 624; i++) {
+    const prev = mt[i - 1] ^ (mt[i - 1] >>> 30);
+    mt[i] = (Math.imul(1812433253, prev) + i) >>> 0;
+  }
+  let index = 624;
+  const twist = () => {
+    for (let i = 0; i < 624; i++) {
+      const y = (mt[i] & 0x80000000) | (mt[(i + 1) % 624] & 0x7fffffff);
+      let v = mt[(i + 397) % 624] ^ (y >>> 1);
+      if (y & 1) v ^= 0x9908b0df;
+      mt[i] = v >>> 0;
+    }
+    index = 0;
+  };
+  return () => {
+    if (index >= 624) twist();
+    let y = mt[index++];
+    y ^= y >>> 11;
+    y ^= (y << 7) & 0x9d2c5680;
+    y ^= (y << 15) & 0xefc60000;
+    y ^= y >>> 18;
+    return y >>> 0;
+  };
+}
+
+let mtChecked = false;
+/** `mt19937` 的自检（只做一次）：实现不对时报错，免得整套对照都建在错的随机数上。 */
+function checkMt19937(): void {
+  if (mtChecked) return;
+  const next = mt19937(5489);
+  let value = next();
+  if (value !== 3499211612) throw new KbpReplayError("data", `mt19937 自检失败：第 1 个是 ${value}，应为 3499211612`);
+  for (let i = 1; i < 10000; i++) value = next();
+  if (value !== 4123659995)
+    throw new KbpReplayError("data", `mt19937 自检失败：第 10000 个是 ${value}，应为 4123659995`);
+  mtChecked = true;
+}
+
+/** 这一段的 `mt19937` 种子（`RunSpec.mt19937`：数字、或按标签取的表）；没有时返回空对象。 */
+function mt19937Of(sec: Section): { mt19937?: number } {
+  const given = sec.run.mt19937;
+  if (given === undefined) return {};
+  const seed = typeof given === "number" ? given : given[sec.tag];
+  if (seed === undefined) return {};
+  if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff)
+    throw new KbpReplayError("data", `${sec.project}：mt19937 要是 0–4294967295 的整数，收到 ${seed}`);
+  checkMt19937();
+  return { mt19937: seed };
+}
+
 /** 案例里的一组回放（一个工程 × 若干抓帧标签）；案例顶层是这些字段的缺省值，`runs` 逐项覆盖。 */
 export interface RunSpec {
   /** 报告里的段名前缀（缺省就用标签）。 */
@@ -107,6 +165,11 @@ export interface RunSpec {
   unsupported?: { expect?: string[]; allow?: string; report?: boolean };
   /** 给钩子的自由参数。 */
   options?: Record<string, unknown>;
+  /**
+   * 全部粒子系统共用一个标准 `std::mt19937(种子)`（P4j 步骤 4a，内置的 `sharedRandom`）：对应 WPE 侧用 `wpe-renderdoc` 的 `seed` 把场景的
+   * MT19937 种子换成约定值的抓帧。数字对全部标签生效，对象按标签取（没列的标签不用）。钩子要按别的规则取种子时直接返回 `SimOptions.mt19937`。
+   */
+  mt19937?: number | Record<string, number>;
 }
 
 export interface ReplayCase extends Partial<RunSpec> {
@@ -254,6 +317,23 @@ export interface SimOptions {
   random?: Record<string, (base: RandomLike) => RandomLike>;
   /** 按系统名、出生序号注入 R（`injectedR`）。 */
   r?: Record<string, number[]>;
+  /**
+   * 全部粒子系统共用**一个**随机源（P4j 步骤 3：WPE 一个场景只有一串 MT19937，几个系统按对象顺序抽同一串）：每次 `simulate` 调一次，
+   * 返回的对象交给每个系统（缺省每个系统自己的 `SeededRandom(1 + i)`）；`random` 的按系统名包装仍在它之上生效。
+   */
+  sharedRandom?: () => RandomLike;
+  /**
+   * 全部粒子系统共用一个标准 `std::mt19937(种子)`（P4j 步骤 4a）：等于 `sharedRandom: () => new SeededRandom(mt19937(种子))`，每次 `simulate`
+   * 新建一个。不和 `sharedRandom` 同给；`RunSpec.mt19937` 在 `simDefaults` 里换成它。
+   */
+  mt19937?: number;
+  /**
+   * 发射图候选表的来源（P4j 步骤 3，`layerimage` 发射器）：**每次 `simulate` 调一次**（候选表记录按 (图层 id, mask) 在全部系统间共享、
+   * 带状态，不能跨 `simulate`——包络、同一段的多轮比较各跑各的），返回「按粒子层取来源」的函数；返回 undefined 的层不接来源。建好系统后、
+   * 预热之前 `setEmitterImages`，并把帧号写成 0（预热）；每步之前写成这一帧的帧号 i（同渲染器的 `sheetFrameNo`）。典型写法：
+   * `new EmitterImageRecords(new ScriptedEmitterImageView({ layerSize, snapshotAt, layerMatrix }))`。
+   */
+  emitterImages?: () => (layer: any) => unknown | undefined;
   /**
    * 逐帧的 16 段频谱（P4e 步骤 4，下标 = 帧号 − 1）：抓到的帧取 CLK 读到的 `g_AudioSpectrum16Left/Right`，其余为 null（沿用前一帧；第一个
    * 有值的帧之前是 0，同加载时）。原样写进粒子共用的频谱（`particles/audio` 的 `writeParticleAudio`），不经归一化。轨迹没有 `audio` 时不给。
@@ -901,6 +981,7 @@ export class CaseContext {
       world: sec.world,
       follows: sec.follows,
       audio: audioTimeline(sec),
+      ...mt19937Of(sec),
     };
   }
 
@@ -958,13 +1039,32 @@ export class CaseContext {
     // 频谱（P4e 步骤 4）：全场景一份，各根系统共用（子系统与实例由 setAudio 递归带上）；预热时是 0（同 WPE 加载期）
     const audioMod = o.audio ? await this.mod("particles/audio") : null;
     const sharedAudio = audioMod ? audioMod.silentParticleAudio() : null;
+    // 发射图与共用随机源（P4j 步骤 3）：每次模拟新建（记录、MT 状态都带着上一轮的就不对了）
+    if (o.mt19937 !== undefined && o.sharedRandom)
+      throw new KbpReplayError("data", `${sec.project}：mt19937 与 sharedRandom 只能给一个`);
+    if (o.mt19937 !== undefined) checkMt19937();
+    const sharedRandom =
+      o.sharedRandom?.() ?? (o.mt19937 !== undefined ? new SeededRandom(mt19937(o.mt19937)) : undefined);
+    const imageSourceOf = o.emitterImages?.();
+    let imageFrames = false;
     for (const layer of o.layers ?? sec.layers) {
       if (!layer.particle) continue;
-      let random: RandomLike = new SeededRandom(1 + entries.length);
+      let random: RandomLike = sharedRandom ?? new SeededRandom(1 + entries.length);
       if (o.random?.[layer.name]) random = o.random[layer.name](random);
       const injected = o.r?.[layer.name];
       const system = new ParticleSystem(layer.particle, random, o.passes, injected ? injectedR(injected) : undefined);
       o.patch?.(system, layer);
+      const imageSource = imageSourceOf?.(layer);
+      if (imageSource) {
+        if (typeof system.setEmitterImages !== "function")
+          throw new KbpReplayError(
+            "src",
+            `${sec.project}：案例给了 emitterImages，但这份源码的 ParticleSystem 没有 setEmitterImages（P4j 步骤 2 之前）`,
+          );
+        system.setEmitterImages(imageSource);
+        system.setEmitterImageFrame(0);
+        imageFrames = true;
+      }
       if (sharedAudio) {
         if (typeof system.setAudio !== "function")
           throw new KbpReplayError(
@@ -1010,6 +1110,7 @@ export class CaseContext {
       for (const entry of entries) {
         const before = entry.system.alive;
         const stepInputs = inputs(entry.layer, frame);
+        if (imageFrames) entry.system.setEmitterImageFrame(frame);
         entry.system.step(o.dts[frame - 1], timeArg(frame), stepInputs as never);
         const c = entry.system.columns;
         for (let slot = 0; slot < entry.system.highWater; slot++) {

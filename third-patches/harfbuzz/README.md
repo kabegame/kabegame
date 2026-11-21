@@ -4,7 +4,7 @@
 `src/harfbuzz.cc` (with `hb-ft`) is compiled together with FreeType and the C glue in
 `src-tauri/wpefont/` into `wpefont.wasm`, the font engine of the scene-wallpaper renderer; it is
 never linked into the app. See [src-tauri/wpefont/README.md](../../src-tauri/wpefont/README.md)
-and [cocs/wpe/WPE_SCENE.md](../../cocs/wpe/WPE_SCENE.md) ("字体引擎 wpefont").
+and [cocs/wpe/scene/TEXT.md](../../cocs/wpe/scene/TEXT.md) ("字体引擎 wpefont").
 
 ## Upstream
 

@@ -129,8 +129,8 @@ function small(format: number, flags: number = TEX_FLAGS.clampUVs): Uint8Array {
 }
 
 describe("格式表是唯一来源", () => {
-  it("0、4、6–9 在表里；DXGI 对应照 WPE（都不是 sRGB），BC 三项要 BC 特性", () => {
-    expect(Object.keys(TEXTURE_FORMATS).map(Number)).toEqual([0, 4, 6, 7, 8, 9]);
+  it("0、4、6–9、12 在表里；DXGI 对应照 WPE（都不是 sRGB），BC 四项要 BC 特性", () => {
+    expect(Object.keys(TEXTURE_FORMATS).map(Number)).toEqual([0, 4, 6, 7, 8, 9, 12]);
     expect(
       Object.entries(TEXTURE_FORMATS).map(([format, info]) => [Number(format), info.gpu, info.feature ?? null]),
     ).toEqual([
@@ -140,30 +140,30 @@ describe("格式表是唯一来源", () => {
       [7, "bc1-rgba-unorm", "texture-compression-bc"],
       [8, "rg8unorm", null],
       [9, "r8unorm", null],
+      [12, "bc7-rgba-unorm", "texture-compression-bc"],
     ]);
     // 能力表的格式列表从表里取，不另写一份
-    expect(SUPPORTED.textureFormats).toEqual([0, 4, 6, 7, 8, 9]);
+    expect(SUPPORTED.textureFormats).toEqual([0, 4, 6, 7, 8, 9, 12]);
     expect(textureFormat(9)?.bytesPerBlock).toBe(1);
     expect(textureFormat(10)).toBeUndefined();
+    // BC7 每个 4×4 块 16 字节：3816948983 的 `water-0.tex`（1672×944）mip 存储长度正好 1578368
+    expect(mipCopyLayout(12, 1672, 944).byteLength).toBe(1578368);
   });
 });
 
 describe("parseTex：格式支持范围（P4b 步骤 1）", () => {
-  it.each([0, 4, 6, 7, 8, 9])("格式 %i 在表里：不报 tex:format，mip 照常解码", async (format) => {
+  it.each([0, 4, 6, 7, 8, 9, 12])("格式 %i 在表里：不报 tex:format，mip 照常解码", async (format) => {
     const result = await parseTex(memoryFile(small(format)));
     expect(result.format).toBe(format);
     expect(result.unsupported).toEqual([]);
     expect(result.images[0].mips[0].bytes?.length).toBe(mipCopyLayout(format, 4, 4).byteLength);
   });
 
-  it.each([1, 2, 3, 5, 10, 11, 12, 13, 14, 15])(
-    "格式 %i 不在表里：照报 tex:format:<n>，不读 mip 字节",
-    async (format) => {
-      const result = await parseTex(memoryFile(small(format)));
-      expect(result.unsupported).toEqual([`tex:format:${format}`]);
-      expect(result.images[0].mips[0].bytes).toBeUndefined();
-    },
-  );
+  it.each([1, 2, 3, 5, 10, 11, 13, 14, 15])("格式 %i 不在表里：照报 tex:format:<n>，不读 mip 字节", async (format) => {
+    const result = await parseTex(memoryFile(small(format)));
+    expect(result.unsupported).toEqual([`tex:format:${format}`]);
+    expect(result.images[0].mips[0].bytes).toBeUndefined();
+  });
 
   it.each([8, 9])("格式 %i 带 alpha-priority（0x80000）不报：WPE 运行时不读这一位", async (format) => {
     const result = await parseTex(memoryFile(small(format, TEX_FLAGS.alphaPriority | TEX_FLAGS.clampUVs)));
@@ -325,7 +325,7 @@ const VIDEO_LENGTH = 256 * 1024;
 
 /**
  * 照 `ignore/p9/gen_v.py` 的 `make_tex`（头照语料 3828359750）：格式 0、标志 34（Video + ClampUVs）、纹理与图像都是 1280×720、
- * 一张图、一个 mip、uncompressedSize 0。`TEXB0004` 多一个 isVideoMp4（0），头共 91 字节；`TEXB0003` 87 字节。
+ * 一张图、一个 mip、uncompressedSize 0。`TEXB0004` 多一个条件数（0，P11e；LWE 叫它 isVideoMp4），头共 91 字节；`TEXB0003` 87 字节。
  */
 function videoTex(container: 3 | 4, video: Uint8Array): Uint8Array {
   return parts(

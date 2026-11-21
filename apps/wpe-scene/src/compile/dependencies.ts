@@ -7,6 +7,7 @@
  * - 材质槽里写的这个名字在材质创建时按名字绑到那张 RT（`ScenePass.layerComposites`），绑不上的一直是 6×6 的黄黑棋盘格（`checkerTexture`）。
  */
 import type { SceneTexture } from "./bundle";
+import { objectKind } from "./features";
 import { isSceneObject, type SceneObject } from "./model";
 
 /** 合成 RT 的名字前缀（rea-p8-render 2.1，字符串 `0x1404906f8`）。 */
@@ -30,24 +31,80 @@ function dependencyElements(value: unknown): unknown[] {
 /**
  * 全部对象 `dependencies` 的并集（rea-p8-render 第 1 节：对象基类构造 `FUN_1401ddbb0` 读、场景构造 `FUN_140186c90` 的依赖段
  * `0x140187f93`–`0x140188084` 取并集）：元素是非负整数才收（`FUN_140088800` 能否转成整数、`FUN_140086000` 取成 64 位无符号整数），
- * 别的元素（负数、小数、字符串、null、粒子自己那套 `{id, type, …}` 对象）跳过。不分是谁列的：模型对象列的也算（`3509243656` 的两个模型
+ * 别的元素（负数、小数、字符串、null）跳过。不分是谁列的：模型对象列的也算（`3509243656` 的两个模型
  * 对象就给图像层置了位），重复的只算一次。
+ *
+ * 粒子对象（P4j 步骤 1，rea-p4j-layerimage.md 1.4 第 8 条）另有一套同名键：元素是 `{id, type, index, mask}` 对象，过三道门的
+ * （`particleDependencies`）`id` 也进并集，两种类型都进、`id 0` 也进。这更正了 P8 的「对象元素不进集合」：被发射图引用的图层和数字依赖一样
+ * 「被依赖」，步骤 2 要读的合成 RT 由此存在。
  */
 export function dependencyIds(objects: readonly SceneObject[]): Set<number> {
   const ids = new Set<number>();
-  for (const object of objects)
-    if (isSceneObject(object))
-      for (const element of dependencyElements(object.dependencies))
-        if (typeof element === "number" && Number.isInteger(element) && element >= 0) ids.add(element);
+  for (const object of objects) {
+    if (!isSceneObject(object)) continue;
+    for (const element of dependencyElements(object.dependencies))
+      if (typeof element === "number" && Number.isInteger(element) && element >= 0) ids.add(element);
+    // 判定与 `features.ts` 的 `objectKind(object) === "particle"` 一致
+    if (objectKind(object) === "particle")
+      for (const dependency of particleDependencies(object)) ids.add(dependency.id);
+  }
   return ids;
 }
 
+/** 粒子对象 `dependencies` 的一项（rea-p4j-layerimage.md 1.4，`FUN_14022af30`）。 */
+export interface ParticleDependency {
+  /** 1 发射图（`emitterimage`）、3 碰撞模型（`collisionmodel`）。 */
+  type: 1 | 3;
+  id: number;
+  /** u32；本系统同类型槽的序号（1.5）。 */
+  index: number;
+  /** 纹理路径；不是字符串时为空串。 */
+  mask: string;
+  /** `id != 0`：0 进集合但永远绑不上。 */
+  valid: boolean;
+}
+
 /**
- * `dependencies` 里有不是数字的元素（P8 步骤 4，`features.ts` 的粒子检查用）：粒子对象另有一套同名键（`FUN_14022af30`，元素是
- * `{id, type: "emitterimage" | "collisionmodel", index, mask}`），那是发射图与碰撞模型，没做。遍历规则同 `dependencyIds`。
+ * 粒子对象的依赖（1.4）：元素是对象（非数组）才读；三道门 `id` 非负整数（< 2⁶⁴）、`index` 是 [0, 2³²) 的整数（缺了不过）、
+ * `type` 是字符串；`type` 只认 "emitterimage" / "collisionmodel"（大小写敏感），其余跳过。JSON 顺序。
+ * 不是对象的元素（数字等）WPE 这里怎么处理没读到【推：jsoncpp 的 operator[] 对非对象断言】，跳过；数字元素照旧进并集。
  */
-export function hasNonNumericDependency(object: SceneObject): boolean {
-  return dependencyElements(object.dependencies).some((element) => typeof element !== "number");
+export function particleDependencies(object: SceneObject): ParticleDependency[] {
+  const result: ParticleDependency[] = [];
+  for (const element of dependencyElements(object.dependencies)) {
+    if (!isSceneObject(element)) continue;
+    const { id, index, type, mask } = element as Record<string, unknown>;
+    if (typeof id !== "number" || !Number.isInteger(id) || id < 0 || id >= 2 ** 64) continue;
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= 2 ** 32) continue;
+    if (typeof type !== "string") continue;
+    const kind = type === "emitterimage" ? 1 : type === "collisionmodel" ? 3 : null;
+    if (kind === null) continue;
+    result.push({ type: kind, id, index, mask: typeof mask === "string" ? mask : "", valid: id !== 0 });
+  }
+  return result;
+}
+
+/**
+ * 一个系统里每个 `layerimage` 发射器配到的依赖（1.5）：第 k 个 `layerimage`（只数 `layerimage`，别的发射器不占序号）配
+ * `type 1`、`valid`、`index === k` 的最后一条（后面的覆盖前面的），没有为 null。结果按 `layerimage` 发射器的先后，每个一项。
+ * 子系统与事件实例用同一个对象的列表，调用方对每个系统各调一次（序号从 0 数）。
+ */
+export function bindLayerImages(
+  emitters: readonly { name: string }[],
+  dependencies: readonly ParticleDependency[],
+): ({ id: number; mask: string } | null)[] {
+  const bound: ({ id: number; mask: string } | null)[] = [];
+  let slot = 0;
+  for (const emitter of emitters) {
+    if (emitter.name !== "layerimage") continue;
+    const k = slot++;
+    const matches = dependencies.filter(
+      (dependency) => dependency.type === 1 && dependency.valid && dependency.index === k,
+    );
+    const last = matches[matches.length - 1];
+    bound.push(last ? { id: last.id, mask: last.mask } : null);
+  }
+  return bound;
 }
 
 /** 棋盘格的边长（`texload_fallback_1400ec330.asm` 的 `edi = 6`）。 */

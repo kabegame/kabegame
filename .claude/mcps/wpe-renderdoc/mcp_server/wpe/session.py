@@ -22,6 +22,7 @@ from .. import paths
 from . import control as ctl
 from . import log as wlog
 from . import process, projects, registry
+from . import seed as wseed
 from . import windows as win
 from .common import WpeError, now_iso
 
@@ -204,83 +205,145 @@ def _placement(w: int, h: int, borderless: bool | None, x: int | None, y: int | 
 
 
 def open_wallpaper(project: str, size: str = "1280x720", wait: float = 20.0, ensure=None,
-                   borderless: bool | None = None, x: int | None = None, y: int | None = None) -> dict[str, Any]:
+                   borderless: bool | None = None, x: int | None = None, y: int | None = None,
+                   seed: Any = None) -> dict[str, Any]:
+    """开测试窗口。给了 seed 时，整段「挂钩 → openWallpaper → 窗口出现 → 命中」都握着窗口表锁。
+
+    窗口表锁在不给 seed 时只覆盖「查重 + 登记」，开窗本身不在锁里；给了 seed 就多握到命中为止。别的会话的
+    open_wallpaper 要先拿这把锁登记，所以会被挡在外面，不会被误换种子。挡不住的是不走窗口表的开窗（用户在 WPE 里
+    自己开的窗口、旧脚本、桌面壁纸重建渲染器）：开窗前后对比屏幕上的测试窗口，新冒出的别人的窗口报在
+    seed.others_opened 里。锁次序仍是先 wpe.lock（ensure 在拿窗口表锁之前做完）后 windows.lock。
+    """
     with _op_lock:
         check_placement(borderless, x, y)
+        value = None if seed is None else wseed.parse_seed(seed)
         ensured = ensure() if ensure else None
-        path = projects.resolve_project(project)
-        w, h = parse_size(size)
-        size_text = f"{w}x{h}"
-        placement = _placement(w, h, borderless, x, y)
-        with registry.windows_lock.held(60) as lock:
-            view = survey()
-            conflicts = _size_conflicts(view, (w, h))
-            if conflicts:
-                raise WpeError(
-                    f"拒绝开窗：已有和 {size_text} 相差不超过 {SIZE_TOL} 像素的测试窗口，抓帧时会分不清是谁的。占用方："
-                    + json.dumps([{k: c.get(k) for k in ("name", "owner_label", "owner_pid", "project", "size", "hwnd")}
-                                  for c in conflicts], ensure_ascii=False)
-                    + "。换一个尺寸，或等对方关窗")
-            taken = {e["name"] for e in view["registered"]} | {f["name"] for f in view["foreign"]}
-            name = registry.next_name(taken)
-            entry = registry.new_entry(name, path, (w, h))
-            registry.write(entry)
-            lock_wait = lock.waited
-        cursor = wlog.mark()
-        fg_before = win.foreground()
-        t0 = time.monotonic()
+        if value is None:
+            return _open_locked(project, size, wait, ensured, borderless, x, y, None)
+        with registry.windows_lock.held(60):
+            return _open_locked(project, size, wait, ensured, borderless, x, y, value)
+
+
+def _open_locked(project: str, size: str, wait: float, ensured: Any, borderless: bool | None, x: int | None,
+             y: int | None, seed: int | None) -> dict[str, Any]:
+    path = projects.resolve_project(project)
+    w, h = parse_size(size)
+    size_text = f"{w}x{h}"
+    placement = _placement(w, h, borderless, x, y)
+    with registry.windows_lock.held(60) as lock:
+        view = survey()
+        conflicts = _size_conflicts(view, (w, h))
+        if conflicts:
+            raise WpeError(
+                f"拒绝开窗：已有和 {size_text} 相差不超过 {SIZE_TOL} 像素的测试窗口，抓帧时会分不清是谁的。占用方："
+                + json.dumps([{k: c.get(k) for k in ("name", "owner_label", "owner_pid", "project", "size", "hwnd")}
+                              for c in conflicts], ensure_ascii=False)
+                + "。换一个尺寸，或等对方关窗")
+        taken = {e["name"] for e in view["registered"]} | {f["name"] for f in view["foreign"]}
+        name = registry.next_name(taken)
+        entry = registry.new_entry(name, path, (w, h))
+        registry.write(entry)
+        lock_wait = lock.waited
+    cursor = wlog.mark()
+    fg_before = win.foreground()
+    hook = None
+    seen_before: set[str] = set()
+    if seed is not None:
         try:
-            sent = ctl.control(f'openWallpaper -file "{path}" -playInWindow "{name}" {placement["args"]}')
-            info = win.wait_test_window(name, wait, _main_pids())
+            pid = process.main_pid()
+            if pid is None:
+                raise WpeError("WPE 没在跑，没法换种子")
+            seen_before = {w["name"] for w in win.test_windows(_main_pids())}
+            hook = wseed.arm(pid, seed, timeout=max(30.0, float(wait) + 30.0))
         except BaseException:
             registry.delete(name)
             raise
-        if not info:
-            # 超时：保底发一次关窗，免得之后才冒出来变成没人管的窗口
+    t0 = time.monotonic()
+    try:
+        sent = ctl.control(f'openWallpaper -file "{path}" -playInWindow "{name}" {placement["args"]}')
+        info = win.wait_test_window(name, wait, _main_pids())
+    except BaseException:
+        if hook is not None:
+            hook.kill()
+        registry.delete(name)
+        raise
+    if not info:
+        if hook is not None:
+            hook.kill()
+        # 超时：保底发一次关窗，免得之后才冒出来变成没人管的窗口
+        try:
+            ctl.control(f"closeWallpaper -location {name}")
+        except WpeError:
+            pass
+        registry.delete(name)
+        raise WpeError(f"{wait:g} s 内没等到窗口 {name} 出现（工程 {path}），已撤销登记并补发关窗")
+    appeared = round(time.monotonic() - t0, 2)
+    seed_info: dict[str, Any] | None = None
+    seed_error: str | None = None
+    if hook is not None:
+        try:
+            seed_info = wseed.summarize(hook.wait_hit(max(10.0, float(wait))), seed)
+            if not seed_info["ok"]:
+                seed_error = (f"换种子后读回对不上：x[0]={seed_info['x0']}、x[1]={seed_info['x1']}，"
+                              f"期望 x[0]={seed}、x[1]={wseed.expected_x1(seed)}")
+        except WpeError as e:
+            seed_error = str(e)
+        finally:
+            hook.kill()
+        if seed_info is not None:
+            others = [w["name"] for w in win.test_windows(_main_pids())
+                      if w["name"] not in seen_before and w["name"] != name]
+            if others:
+                seed_info["others_opened"] = others
+                seed_info["note"] = ("握锁期间屏幕上还冒出了不是本窗口的测试窗口（不走窗口表开的）；"
+                                     "种子可能落在它们的渲染器上，核对 tid 与 x[0] / x[1]")
+    # 系统把窗口缩小过（窗口加标题栏超出屏幕）时，实际客户区可能和别的窗口撞上：撞了就关掉、撤销登记
+    client = info.get("client")
+    if client and (client[2], client[3]) != (w, h):
+        with registry.windows_lock.held(60):
+            clash = [c for c in _size_conflicts(survey(), (client[2], client[3])) if c.get("name") != name]
+        if clash:
             try:
-                ctl.control(f"closeWallpaper -location {name}")
-            except WpeError:
-                pass
-            registry.delete(name)
-            raise WpeError(f"{wait:g} s 内没等到窗口 {name} 出现（工程 {path}），已撤销登记并补发关窗")
-        appeared = round(time.monotonic() - t0, 2)
-        # 系统把窗口缩小过（窗口加标题栏超出屏幕）时，实际客户区可能和别的窗口撞上：撞了就关掉、撤销登记
-        client = info.get("client")
-        if client and (client[2], client[3]) != (w, h):
-            with registry.windows_lock.held(60):
-                clash = [c for c in _size_conflicts(survey(), (client[2], client[3])) if c.get("name") != name]
-            if clash:
-                try:
-                    _close_by_name(name)
-                finally:
-                    registry.delete(name)
-                raise WpeError(
-                    f"开了 {size_text} 的窗口，但系统把客户区缩成了 {client[2]}x{client[3]}，和已有的测试窗口相差不超过 "
-                    f"{SIZE_TOL} 像素，抓帧时会分不清，已关掉并撤销登记。占用方："
-                    + json.dumps([{k: c.get(k) for k in ("name", "owner_label", "owner_pid", "size")} for c in clash],
-                                 ensure_ascii=False))
-        fg = win.settle_foreground(fg_before)
-        entry.update(hwnd=info["hwnd"], state="open", opened_at=now_iso())
-        registry.write(entry)
-        result = {
-            "window": name, "hwnd": info["hwnd"], "project": path, "size": size_text,
-            "rect": info["rect"], "client": info["client"], "wpe_pid": sent["wpe_pid"],
-            "appeared_after_s": appeared, "log_mark": cursor, "registry_lock_wait_s": lock_wait,
-            "foreground": fg, "placement": {k: v for k, v in placement.items() if k != "args"},
-        }
-        if info["size"] != size_text:
-            if placement["borderless"]:
-                result["warning"] = (f"客户区是 {info['size']}，和请求的 {size_text} 不同：无边框窗口按边框厚度 "
-                                     f"{placement['frame_extra']}（{placement['dpi']} DPI）扣过，WPE 实际加的不一样")
-            else:
-                result["warning"] = (f"客户区是 {info['size']}，和请求的 {size_text} 不同（窗口加边框放不进显示器时系统会"
-                                     "压小窗口；要准确的客户区用 borderless）")
-        if fg["changed"]:
-            after = fg["after"] or {}
-            result["foreground_taken"] = after.get("hwnd") == info["hwnd"]
-        if ensured is not None:
-            result["ensure_running"] = ensured
-        return result
+                _close_by_name(name)
+            finally:
+                registry.delete(name)
+            raise WpeError(
+                f"开了 {size_text} 的窗口，但系统把客户区缩成了 {client[2]}x{client[3]}，和已有的测试窗口相差不超过 "
+                f"{SIZE_TOL} 像素，抓帧时会分不清，已关掉并撤销登记。占用方："
+                + json.dumps([{k: c.get(k) for k in ("name", "owner_label", "owner_pid", "size")} for c in clash],
+                             ensure_ascii=False))
+    fg = win.settle_foreground(fg_before)
+    entry.update(hwnd=info["hwnd"], state="open", opened_at=now_iso())
+    registry.write(entry)
+    if seed_error is not None:
+        # 种子没换成：对照没有意义，窗口是本会话开的，关掉再报错
+        closed = "已关窗"
+        try:
+            close_wallpaper(name)
+        except WpeError as e:
+            closed = f"关窗也失败了：{e}"
+        raise WpeError(f"seed {seed} 没生效：{seed_error}（窗口 {name} {closed}）")
+    result = {
+        "window": name, "hwnd": info["hwnd"], "project": path, "size": size_text,
+        "rect": info["rect"], "client": info["client"], "wpe_pid": sent["wpe_pid"],
+        "appeared_after_s": appeared, "log_mark": cursor, "registry_lock_wait_s": lock_wait,
+        "foreground": fg, "placement": {k: v for k, v in placement.items() if k != "args"},
+    }
+    if info["size"] != size_text:
+        if placement["borderless"]:
+            result["warning"] = (f"客户区是 {info['size']}，和请求的 {size_text} 不同：无边框窗口按边框厚度 "
+                                 f"{placement['frame_extra']}（{placement['dpi']} DPI）扣过，WPE 实际加的不一样")
+        else:
+            result["warning"] = (f"客户区是 {info['size']}，和请求的 {size_text} 不同（窗口加边框放不进显示器时系统会"
+                                 "压小窗口；要准确的客户区用 borderless）")
+    if fg["changed"]:
+        after = fg["after"] or {}
+        result["foreground_taken"] = after.get("hwnd") == info["hwnd"]
+    if ensured is not None:
+        result["ensure_running"] = ensured
+    if seed_info is not None:
+        result["seed"] = seed_info
+    return result
 
 
 def _own_entry(window: str) -> dict[str, Any]:

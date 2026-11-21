@@ -61,8 +61,9 @@ import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import { emptyCursorInput, type CursorInputSnapshot } from "./render/cursor";
 import { canvasSize, type SceneStyle } from "./render/layout";
 import { ScreenResolution } from "./render/screenResolution";
+import type { EmitterImageProbe } from "./render/emitterImages";
 import { uploadableTextures, visibleObjects } from "./render/scene";
-import { SceneState } from "./render/state";
+import { SceneState, type SoundValues } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
 import type { SceneReporter } from "./report";
 import { PLAYBACK_RATE_MAX, PLAYBACK_RATE_MIN, schemeColor } from "./sceneStyle";
@@ -706,6 +707,8 @@ export class SceneHost {
     if (target.kind === "recompile") return target.path;
     // 用户纹理（P11b）：同脚本运行时的 `targetKey`
     if (target.kind === "user-texture") return `usertextures/${target.name}`;
+    // 纹理变体的条件属性（P11e）：同脚本运行时的 `targetKey`
+    if (target.kind === "texture-variant") return `texturevariants/${target.path}/${target.name}`;
     // puppet 动画层字段（P12a 步骤 3 点 3）：同脚本运行时的 `targetKey`
     if (target.kind === "animation-layer")
       return `objects/${target.object}/animationlayers/${target.layer}/${target.field}`;
@@ -733,7 +736,8 @@ export class SceneHost {
     if (result === "unsupported" || target.kind === "unsupported") return false;
     // 声音的 `volume`（P6a 步骤 2：API 写入与字段脚本写回）当场交给排期器：WPE 的回调 `V` 在改值时调、没有渐变，暂停时也生效。
     // 读脚本看到的状态：首次加载 `init` 期间它还不是渲染器的状态（首帧前重放写入时再同步一次）
-    if (target.kind === "sound") {
+    // `mintime` / `maxtime` 不用推：排期器在开始播放时现读状态（P6a2）
+    if (target.kind === "sound" && target.field === "volume") {
       const volume = state.sounds.get(target.object)?.volume;
       if (volume !== undefined) this.sceneSounds?.scheduler(target.object)?.setVolume(volume);
     }
@@ -1814,8 +1818,8 @@ export class SceneHost {
     if (layer)
       return state.layers.get(Number(layer[1]))?.[layer[2] as keyof import("./render/state").LayerState] ?? null;
     // 声音的 `volume`（P6a 步骤 1）：状态里的值，排期器下一帧（或改值时当场）读到的就是它
-    const sound = /^objects\/(\d+)\/volume$/.exec(path);
-    if (sound) return state.sounds.get(Number(sound[1]))?.volume ?? null;
+    const sound = /^objects\/(\d+)\/(volume|mintime|maxtime)$/.exec(path);
+    if (sound) return state.sounds.get(Number(sound[1]))?.[sound[2] as keyof SoundValues] ?? null;
     // 粒子 `instanceoverride` 的就地值（P4a 步骤 5）：状态里的值，与模拟器正在用的相同；控制点（P4f 步骤 3）按键取那一项，没设为 null
     const instance = /^objects\/(\d+)\/instanceoverride\/(\w+)$/.exec(path);
     if (instance) {
@@ -2040,11 +2044,16 @@ export class SceneHost {
       const imageId = this.options.imageId;
       this.soundPlayer = new ScenePlayer({ reader: this.reader }, this.options.report);
       if (this.playbackRate !== 1) this.soundPlayer.setRate(this.playbackRate);
-      this.sceneSounds = new SceneSounds(this.soundPlayer, Math.random, (object, file, error) =>
-        this.options.report.warn(
-          `场景壁纸 ${imageId} 声音对象 ${object} 的文件读不出，已从列表删掉：${file.path}`,
-          error,
-        ),
+      this.sceneSounds = new SceneSounds(
+        this.soundPlayer,
+        Math.random,
+        (object, file, error) =>
+          this.options.report.warn(
+            `场景壁纸 ${imageId} 声音对象 ${object} 的文件读不出，已从列表删掉：${file.path}`,
+            error,
+          ),
+        // mintime / maxtime 现读绘制状态（同 pushSoundVolume 的来源）
+        (object) => this.drawnState?.sounds.get(object),
       );
       this.syncSoundGlobal();
     }
@@ -2085,6 +2094,15 @@ export class SceneHost {
   /** dev 探针（P9a）：每段视频的位置、`currentTime`、`paused`、`lastDrawn`、`fresh`、`failed`、尺寸与丢帧数；没有视频时为空。 */
   videos(): SceneVideoProbe[] {
     return this.sceneVideos?.probe() ?? [];
+  }
+
+  /**
+   * dev 探针（P4j 步骤 2b）：`layerimage` 发射器候选表的每条记录——`id`、`mask`、状态（0 待渲染 / 1 待读回 / 2 有表）、是否过了门与过门的帧号、
+   * 建表时的合成 RT 尺寸、降采样尺寸 `w4 × h4`、表项数；`includeEntries` 时另带全部表项 `[x, y, r, g, b]`（和 `ignore/p4/j0/model.py` 的预测逐项比）。
+   * 场景没有发射图依赖（或还没加载）时为空表。
+   */
+  emitterImages(options: { includeEntries?: boolean } = {}): EmitterImageProbe[] {
+    return this.renderer?.currentScene?.emitterImageRecords(options.includeEntries ?? false) ?? [];
   }
 
   /**

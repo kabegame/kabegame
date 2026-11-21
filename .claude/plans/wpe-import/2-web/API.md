@@ -298,6 +298,8 @@ V.evalCondition = function (e) {
   - 加载期间到达的推送，等 Chromium 报告整页停止加载（晚于 `window` `load` 事件的同步处理）后一次性投递；之后到达的立即投递。
   - 页面不需要也没有任何缓存，listener 在投递那一刻不存在就丢掉（§3.1）。
   - 页面自己 `location.reload()` 不会让标志复位（只有命令 1 复位），刷新后的页面能否再收到属性取决于主程序是否重推。
+    **实测（2026-11-21，`ignore/p6/f5/proj/kbweb-reload`）**：不重推。页面 reload 之后 `applyUserProperties` / `applyGeneralProperties`
+    都不调；之后 `applyProperties` 改一个属性，reload 后的页面照常收到只含这个键的增量。2026-11-21 起改为父页面推送、父页面持就绪标志（[phase-9-parent-delivery.md](phase-9-parent-delivery.md)，WPE_IMPORT「投递语义」）。
 - 渲染侧 `OnLoadEnd`（`FUN_140012a80`）另发 `OnRendererLoadEnded` 给浏览器进程，浏览器进程经管道回报主程序命令 14。
   主程序收到后做什么没有分析（`wallpaper64.exe` 未反编译），见第九节。
 
@@ -312,7 +314,9 @@ V.evalCondition = function (e) {
 - 请求 / 应答：`wallpaperRequestRandomFileForProperty` 走 `RequestRandomFile` → `RequestRandomFileResponse`。
 - [推断] 新一次加载开始时（`OnLoadingStateChange(isLoading=true)`）渲染侧释放已登记的回调引用。
 
-**对 Kabegame 的含义**（2026-10-27 决定不照搬，PLAN 已确认决策 10，方案见 [phase-5-shim-host.md](phase-5-shim-host.md)）：
+**对 Kabegame 的含义**（2026-10-27 决定不照搬，PLAN 已确认决策 10，方案见 [phase-5-shim-host.md](phase-5-shim-host.md)；
+**2026-11-21 改回宿主推送**：父页面取状态、持就绪标志、算增量，经 `postMessage` 推给垫片，页面自己 reload 不重推，见
+[phase-9-parent-delivery.md](phase-9-parent-delivery.md)。下面是当时的设计，留作记录）：
 - 只借用两条结论：首次投递不早于 `load`；页面没有 listener 时丢弃。
 - 其余换成 Tauri 的拉取 + 订阅：
   - 传输只有 `pull` / `listen` 两个原语：桌面 `file://` 页面经受限 capability 直接调用拉取命令与 `listen`；

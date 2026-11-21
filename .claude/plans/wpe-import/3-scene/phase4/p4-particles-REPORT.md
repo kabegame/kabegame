@@ -444,3 +444,54 @@ WPE 2.8.42，`wallpaper64.exe` SHA-256 前缀 `40e2ce02`。工程和工具在 `i
 | 世界空间：位置在世界坐标，发射器偏移不经对象缩放（同 P4c） | `world-s2`（对象 `scale 2`，本地相距 100）在世界坐标相距约 99、有作用；本地空间 `local-s2` 0.03 | 成立 |
 | 实例 `rate` 进 `dt'` 与 `k`、`speed` 只改初速 | `rate2` 0.0008、`speed2` 0.003 | 成立 |
 | 1/n 用 `rcpps`（不是精确除法） | 精确 1/n 时 `world-s2` 两颗整体漂 (−6, −23)：rcpps(1) 偏小 2⁻¹² 让质心在世界坐标（几百像素）里向原点加速，11 s 累积到 23；按 1/n·(1 − 2⁻¹²) 近似后 0.97，`order8` 0.48 → 0.02 | 成立；**大坐标下近似误差会累积成可见漂移** |
+
+## P4i 语义的实测核对（2026-11-21）
+
+计划 [phase-4i-particle-lighting.md](phase-4i-particle-lighting.md)「步骤 0」。工程 `ignore/p4/defs/p4i0.py`（11 个，每格一颗静止粒子），抓帧 `A:\p4i\`，我们的图是 dev 强制渲染（`ignore/p4/i0/ours/`），整帧 `kbp cmp frame --meta` 排除 FR / CLK。
+
+| 读码结论 | 用例与结果 | 结论 |
+|---|---|---|
+| 没有灯时颜色 = `g_LightAmbientColor` × 颜色，天光不读 | `p4i-amb`、`p4i-amb2` 0 差异 | 成立 |
+| 灯的累加走 `PerformLighting_V1`，和图层 / 模型同一块灯光缓冲 | `p4i-point` 0 差异；`p4i-spot` 4 像素差 1 | 成立 |
+| 没有法线图时强制 `DOUBLESIDEDLIGHTING 1`；有法线图时切空间用 `v_WorldRight` 与视线 | `nm` / `nmds` 格、`p4i-xform` 的 `nmr` / `nmx` / `nmw`、`p4i-trail` 的法线图拖尾（1867 像素差 1，切向归一化舍入） | 成立 |
+| `g_ModelMatrix`：本地系统 = 对象世界矩阵，世界空间系统 = 单位阵（P4c） | `p4i-xform` 1 像素差 1 | 成立 |
+| `g_Overbright` 乘在光照之后 | `ob` 格 0 差异 | 成立 |
+| HDR 下 `CombineLighting` 走 `saturate(ambient + light) + light · overbright` | `p4i-hdrb`（hdr + bloom）sRGB 编码后最大差 2，全在泛光渐变（f16 量化） | 成立 |
+| 雾与光照共用 `v_ViewDir` | `p4i-fog` 4 像素差 1 | 成立 |
+| `genericropeparticle` 同一套光照 | `p4i-rope` 光照颜色相同，1 个边缘像素覆盖不同 | 成立 |
+| 阴影灯在场时粒子读阴影图集，没有投射者时不遮 | `p4i-shadow` 1 像素差 1 | 成立 |
+
+现有渲染器在强制渲染下全部画对，读码没有被实测更正。另：`DOUBLESIDEDLIGHTING` 被能力表单独报成 `particle:combo:DOUBLESIDEDLIGHTING`，步骤 1 一起放行。
+
+## P4j 语义的实测核对（2026-11-21）
+
+计划 [phase-4j-layerimage.md](phase-4j-layerimage.md)「步骤 0」，读码 [rea-p4j-layerimage.md](rea-p4j-layerimage.md)。工程 `ignore/p4/defs/p4j0.py`（遮罩纹理在生成器里画），抓帧 `A:\p4j\`，参考模型 `ignore/p4/j0/model.py`（照读码预测降采样表、按位置配表项、按种子拟合抽取顺序）。
+
+**随机数注入（0b）。** `ignore/p4/j0/rng/seed.py` 用 Frida 在 `wallpaper64.exe+0x17d6bc`（渲染器构造里 `mov [rdi+0x1cd4], edx`）把下一个新建的场景渲染器的 MT19937 种子换成约定值，命中后读回 `x[0]`、`x[1]` 与递推一致才算数，一次性、命中就退出。我们这边 `kbp replay` 的钩子（`ignore/p4/cases/j0rng.hook.ts`）把系统随机源换成同一种子的标准 `std::mt19937`，不改产品代码。
+
+| 用例 | 结果 |
+|---|---|
+| `p4j-rng-a`（`sphererandom` 出生点随机，initializer 定值） | 302 颗逐个对上，粒子数逐帧相同，位置最大差 0.044（近似倒数包络内，差 / 限 0.735） |
+| `p4j-rng-b`（出生点、寿命、尺寸、速度都随机，会死、槽位复用） | 129 颗逐个对上，位置最大差 0.027，尺寸 0 差 |
+
+所以 WPE 的随机数可以注入，而且我们现有的 `sphererandom` 与 initializer 抽取顺序和 WPE 逐个相同（之前只用定值工程验过）。
+
+**layerimage（0c）。** 每个工程注入一个种子（1001–1007）。
+
+| 读码结论 | 用例与结果 | 结论 |
+|---|---|---|
+| 表 = 合成 RT 经 `downsample_quarter`（四个对角双线性样本平均）到 `w4 × h4` 后，alpha ≥ 127 的像素各一项 | `p4j-li-map` 三帧 301 颗全部落在预测表项上、位置差 0、颜色差 3e-8，36 项每项都被抽到；alpha 126 的块不出、127 / 128 出 | 成立 |
+| 表列优先，下标用 MSVC `uniform_int`（Lemire），之后 `R`、各 initializer | `p4j-li-map` 按种子拟合：起点 0、每颗 7 个 u32，对全部 301 颗成立 | 成立 |
+| 坐标 `x' = trunc((s·x − (W>>1)) + s/2)`，y 同式且用 x 方向的 `s`，发射时 y 取负 | `p4j-li-large`（4025×2460 缩 0.4，表 8381 项、`s = 4.5583`）711 颗全部对上，起点 0 步长 7；反证「y 用 H / h4」463 颗对不上 | 成立 |
+| 本地系统 `A = M⁻¹·L`，世界系统 `A = L`，`L` 含图层的 `angles` / `scale` | `p4j-li-xform` 本地 / 世界两个系统位置差 3e-5；反证「本地不乘 `M⁻¹`」全部对不上 | 成立 |
+| 被依赖图层隐藏照常出表 | `p4j-li-xform` 的 `lih`（`visible: false`）照常发射，粒子数同 `li` | 成立 |
+| `(id, mask)` 相同的依赖共享一条记录，同一帧里后调的发射器接着推进状态 | `p4j-li-xform` 的 `liw` 比 `li` 早一帧拿到表，粒子多 1 颗（读码 2.1 末尾的【推】） | 成立 |
+| 启动延迟：第 1 个发射帧过门、第 2 个渲染拷贝、第 3 个才有表，前两帧要发的粒子丢掉、不欠账；预热不发、不抽随机数 | `p4j-li-map` 三帧 298 / 300 / 301 = 「丢前两个发射帧」的计数；`p4j-li-flags0`（`starttime 2`）拟合起点 0 | 成立 |
+| （读码第 8 节实验 2 预测「有预热时开场同样延迟两帧」） | `p4j-li-flags0` 三帧 304 / 306 / 308 = 「只丢第一个发射帧」：预热在加载那一帧已经过了门 | **更正**：有预热时只丢 1 个发射帧（与 2.1 的状态机一致，是预测错了） |
+| `0x80000` 抖动：下标之后按 x、y、z 各抽一个 `uA`，`uA·(max − min) + min` | `p4j-li-jit` 305 颗逐颗按种子预测，位置最大差 3e-5（每颗 10 个 u32） | 成立 |
+| `flags` 缺省 0x10000（颜色乘像素 RGB / 255），写了 `flags` 就是写的值 | `p4j-li-map` 颜色逐项对上（灰块 72 / 96 / 128、红绿块 143）；`p4j-li-flags0` 全白 | 成立 |
+
+另：
+- 被依赖图层的 `id` 照读码 1.4 第 8 条进了对象的依赖集合：WPE 每帧给它画两次（合成 RT + 上屏），隐藏的只画进 RT。`kbp rdc track` 的认法因此补了「图像层 `draws: n`」（`rdc/track.py`），p4j0 的工程在 `kbp-meta.json` 里写上。
+- `p4j-li-move`（`0x40000` 出生速度 + 脚本移动图层）已注入种子抓帧，速度要按每帧的图层矩阵逐颗算，留给步骤 1 的逐粒子回放验。
+- 雨景解包副本 `ignore/p4/proj/3834803915-kbp` 注入种子 1007 抓了三帧（`A:\p4j\3834803915-kbp-fps20-1920x1080-s1007\`，整帧图 `ignore/p4/j0/rain/`），给步骤 1 的走查用。场景里三个粒子系统共用一串随机数，我们这边要按 WPE 的更新顺序共用一个源才能逐粒子比。

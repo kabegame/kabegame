@@ -4,7 +4,7 @@
  * ```text
  * deno run -A apps/kabegame-dev-mcp/src/renderFrames.ts --image <id> --frames 241,242,250-255 --out <目录>
  *   [--timeline-log <日志> [--timeline-track <轨迹>] [--cursors log|track] [--cursor x,y] [--window WxH] [--gap error|split]
- *    [--audio <录制>] [--seed N] [--passes 1|2] [--random <表> …] [--no-fr]]
+ *    [--audio <录制>] [--seed N | --mt19937 N] [--passes 1|2] [--random <表> …] [--no-fr]]
  *                                                   --random 的 <表>：JSON 对象（串或文件），或 <objects 下标>=<R 数组的串或文件>
  *   [--fps N | --time 秒]                           不给日志时：每帧 g_Time = 帧号 / fps（名义时间），或每帧同一个时刻
  *   [--canvas WxH [--style fill|fit|stretch|center] [--render-mode target|scene]] [--postprocess disabled|enabled|ultra|follow] [--pointer x,y] [--video-time 秒|JSON] [--gif-dts 秒,秒…|JSON]
@@ -66,6 +66,8 @@ export interface RenderFramesOptions {
     audio?: string;
   };
   seed?: number;
+  /** `replay.mt19937`（P4j 步骤 4a）：全场粒子系统共用一个标准 std::mt19937；不和 `seed` 同给；不给时不传。 */
+  mt19937?: number;
   passes?: 1 | 2;
   /** `replay.random`：按对象顶替粒子系统抽到的 `R`，每一帧都带整张表；不给时不传。 */
   random?: Record<string, number[]>;
@@ -218,6 +220,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
         gap: { type: "string" },
         audio: { type: "string" },
         seed: { type: "string" },
+        mt19937: { type: "string" },
         passes: { type: "string" },
         random: { type: "string", multiple: true },
         "no-fr": { type: "boolean" },
@@ -270,6 +273,7 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
     "gap",
     "audio",
     "seed",
+    "mt19937",
     "passes",
     "random",
     "no-fr",
@@ -295,6 +299,14 @@ export function parseCli(argv: string[], cwd = process.cwd()): RenderFramesOptio
     if (str("window")) timeline.window = parseSize(str("window")!, "--window");
     options.timeline = timeline;
     if (str("seed") !== undefined) options.seed = parseNumber(str("seed")!, "--seed", Number.isInteger);
+    if (str("mt19937") !== undefined) {
+      if (options.seed !== undefined) throw new ArgError("--seed 与 --mt19937 只能给一个");
+      options.mt19937 = parseNumber(
+        str("mt19937")!,
+        "--mt19937",
+        (x) => Number.isInteger(x) && x >= 0 && x <= 0xffffffff,
+      );
+    }
     if (str("passes") !== undefined) {
       const passes = parseNumber(str("passes")!, "--passes");
       if (passes !== 1 && passes !== 2) throw new ArgError(`--passes 只收 1 / 2：${passes}`);
@@ -467,6 +479,7 @@ export function renderArgs(options: RenderFramesOptions, frame: number, host?: s
     args.replay = {
       timeline: { ...options.timeline, frame },
       ...(options.seed !== undefined ? { seed: options.seed } : {}),
+      ...(options.mt19937 !== undefined ? { mt19937: options.mt19937 } : {}),
       ...(options.passes !== undefined ? { passes: options.passes } : {}),
       ...(options.random ? { random: options.random } : {}),
       ...(options.fr !== undefined ? { fr: options.fr } : {}),

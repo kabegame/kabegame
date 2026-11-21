@@ -252,7 +252,7 @@ describe("SceneHost 的 IVideoTexture（P9b）", () => {
         get decodeQueueSize() {
           return this.inner.decodeQueueSize;
         }
-        configure = () => this.inner.configure();
+        configure = (config: VideoDecoderConfig) => this.inner.configure(config);
         decode = (chunk: EncodedVideoChunkInit) => this.inner.decode(chunk);
         flush = () => this.inner.flush();
         reset = () => this.inner.reset();

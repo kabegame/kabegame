@@ -48,7 +48,7 @@ function fakeState(calls: unknown[]): SceneState {
   } as unknown as SceneState;
 }
 
-function run(particles: ParticleReplay | undefined, animations: "none" | "fake" | SceneAnimations, time = 0) {
+async function run(particles: ParticleReplay | undefined, animations: "none" | "fake" | SceneAnimations, time = 0) {
   const calls: unknown[] = [];
   const scene = {
     stepParticles: (dt: number, at: number) => void calls.push(["step", dt, at]),
@@ -60,7 +60,7 @@ function run(particles: ParticleReplay | undefined, animations: "none" | "fake" 
   };
   const state = fakeState(calls);
   const pointers = replayPointers({}, SCENE, particles?.dts.length);
-  const result = replayReadback(scene, state, {
+  const result = await replayReadback(scene, state, {
     particles,
     time,
     pointers,
@@ -93,8 +93,8 @@ function withoutAnimation(calls: unknown[]): unknown[] {
 }
 
 describe("回放到读回帧里的关键帧动画（P10a 步骤 3）", () => {
-  it("每一帧在步进粒子、设相机之后按这一帧的 dt 推进，接着 sync；读回帧之后才设视差、写 update", () => {
-    const { calls } = run(PARTICLES, "fake");
+  it("每一帧在步进粒子、设相机之后按这一帧的 dt 推进，接着 sync；读回帧之后才设视差、写 update", async () => {
+    const { calls } = await run(PARTICLES, "fake");
     expect(calls.map(kind)).toEqual([
       ...["step", "camera", "animate", "sync"],
       ...["step", "camera", "animate", "sync"],
@@ -107,21 +107,21 @@ describe("回放到读回帧里的关键帧动画（P10a 步骤 3）", () => {
     );
   });
 
-  it("不给 animations：调用序列同给了之后去掉动画的两项；没有回放时不推进", () => {
-    const fake = run(PARTICLES, "fake");
-    const none = run(PARTICLES, "none");
+  it("不给 animations：调用序列同给了之后去掉动画的两项；没有回放时不推进", async () => {
+    const fake = await run(PARTICLES, "fake");
+    const none = await run(PARTICLES, "none");
     expect(none.calls).toEqual(withoutAnimation(fake.calls));
     expect(none.result).toEqual(fake.result);
     // 对照有效：给了动画时确实多出调用
     expect(fake.calls.length).toBeGreaterThan(none.calls.length);
     for (const particles of [undefined, { dts: [] }]) {
-      const still = run(particles, "fake", 2.5);
+      const still = await run(particles, "fake", 2.5);
       expect(still.calls.map(kind)).not.toContain("animate");
-      expect(still.calls).toEqual(run(particles, "none", 2.5).calls);
+      expect(still.calls).toEqual((await run(particles, "none", 2.5)).calls);
     }
   });
 
-  it("真的 SceneAnimations：写在 sync 之前，最后的值同一串 dt 逐帧推进", () => {
+  it("真的 SceneAnimations：写在 sync 之前，最后的值同一串 dt 逐帧推进", async () => {
     const list: SceneAnimation[] = [
       {
         id: "objects/0/alpha",
@@ -144,7 +144,7 @@ describe("回放到读回帧里的关键帧动画（P10a 步骤 3）", () => {
       },
     ];
     const players = new SceneAnimations(list);
-    const { calls } = run(PARTICLES, players);
+    const { calls } = await run(PARTICLES, players);
     const kinds = calls.map(kind);
     expect(kinds.filter((item) => item === "write")).toHaveLength(PARTICLES.dts.length);
     kinds.forEach((item, i) => {
@@ -158,7 +158,7 @@ describe("回放到读回帧里的关键帧动画（P10a 步骤 3）", () => {
     );
     expect(calls.filter((call) => kind(call) === "write")).toEqual(recorded);
     // 去掉动画之后同不给动画
-    expect(withoutAnimation(calls)).toEqual(run(PARTICLES, "none").calls);
+    expect(withoutAnimation(calls)).toEqual((await run(PARTICLES, "none")).calls);
   });
 });
 
@@ -325,7 +325,7 @@ describe("跑脚本的回放里的动画控制与事件（P10b 步骤 3）", () 
       setParallax: () => void calls.push("parallax"),
       update: () => void calls.push("update"),
     };
-    replayReadback(scene, state, {
+    await replayReadback(scene, state, {
       particles: PARTICLES,
       time: 0,
       pointers: replayPointers({}, SCENE, PARTICLES.dts.length),

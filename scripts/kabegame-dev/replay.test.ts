@@ -58,6 +58,27 @@ describe("checkReplay", () => {
     rejects400(() => checkReplay({ dts: [0.1], seed: 1.5 }), "particles.seed", /整数/);
   });
 
+  test("mt19937（P4j 步骤 4a）：0–2³²−1 的整数，不和 seed 同给；轨迹请求体同样收", () => {
+    assert.deepEqual(checkReplay({ dts: [0.1], mt19937: 1007 }), { dts: [0.1], mt19937: 1007 });
+    assert.equal(checkReplay({ dts: [0.1], mt19937: 4294967295 }).mt19937, 4294967295);
+    assert.equal(checkReplay({ dts: [0.1], mt19937: 0 }).mt19937, 0);
+    for (const bad of [-1, 1.5, 4294967296, "1", null])
+      rejects400(() => checkReplay({ dts: [0.1], mt19937: bad }), "particles.mt19937", /0–4294967295 的整数/);
+    rejects400(() => checkReplay({ dts: [0.1], mt19937: 1, seed: 1 }), "particles.mt19937", /和 seed 只能给一个/);
+    const track = checkTrackRequest({ imageId: "9", dts: [0.1, 0.1], frames: [2], passes: 1, mt19937: 7 });
+    assert.equal(track.mt19937, 7);
+    rejects400(
+      () => checkTrackRequest({ imageId: "9", dts: [0.1], frames: [1], passes: 1, mt19937: 7, seed: 7 }),
+      "mt19937",
+      /只能给一个/,
+    );
+    assert.equal(
+      checkCornersRequest({ imageId: "9", particles: { dts: [0.1], mt19937: 5489 } }).particles?.mt19937,
+      5489,
+    );
+    assert.equal(checkRenderReplay({ particles: { dts: [0.1], mt19937: 5489 }, canvas: [64, 64] })?.mt19937, 5489);
+  });
+
   test("random：键是 objects 下标、值是 [0, 1) 内的数", () => {
     rejects400(() => checkReplay({ dts: [0.1], random: [[0.5]] }), "particles.random");
     rejects400(() => checkReplay({ dts: [0.1], random: { a: [0.5] } }), "particles.random.a", /objects 下标/);

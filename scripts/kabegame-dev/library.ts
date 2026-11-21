@@ -6,7 +6,6 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import { DevError, badRequest } from "./errors.ts";
 import { invoke, sleep } from "./app.ts";
-import { sceneTarget } from "./scene.ts";
 import { comparablePath, isWithin } from "./paths.ts";
 import type { DevSession } from "./session.ts";
 import type { ProjectManifest, ProjectsRemoveResult } from "./types.ts";
@@ -22,18 +21,32 @@ export const rowPath = (row: SceneRow): string => String(row.local_path ?? row.l
 
 const PAGE = 500;
 
-/** 库里全部场景壁纸行（`pathql_fetch` 翻页）。 */
-export async function listSceneRows(s: DevSession): Promise<SceneRow[]> {
+/** 库里全部某类 WPE 壁纸行（缺省场景；`pathql_fetch` 翻页）。 */
+export async function listSceneRows(s: DevSession, kind: "scene" | "web" = "scene"): Promise<SceneRow[]> {
   const rows: SceneRow[] = [];
   for (let page = 1; page <= 200; page++) {
     const batch = await invoke<SceneRow[]>(s, "pathql_fetch", {
-      path: `images://gallery/media-type/x-wpe/scene/_kb_x${PAGE}x/${page}`,
+      path: `images://gallery/media-type/x-wpe/${kind}/_kb_x${PAGE}x/${page}`,
     });
     if (!Array.isArray(batch) || !batch.length) break;
     rows.push(...batch);
     if (batch.length < PAGE) break;
   }
   return rows;
+}
+
+/** 测试工程可以是场景或网页壁纸：导入后按目录在这两类里找行。 */
+async function listProjectRows(s: DevSession): Promise<SceneRow[]> {
+  return [...(await listSceneRows(s, "scene")), ...(await listSceneRows(s, "web"))];
+}
+
+/** 一行场景 / 网页壁纸的目录（`get_wallpaper_target_for_image`）；行不存在或不是这两类时 null。 */
+async function projectDir(s: DevSession, imageId: string): Promise<string | null> {
+  const target = await invoke<{ path?: string; type?: string | null } | null>(s, "get_wallpaper_target_for_image", {
+    imageId,
+  });
+  if (!target || (target.type !== "x-wpe/scene" && target.type !== "x-wpe/web")) return null;
+  return target.path ?? null;
 }
 
 interface TaskRow {
@@ -62,7 +75,7 @@ export interface ImportProgress {
 }
 
 /**
- * 导入测试工程：逐个 `wpe_recognize_dir`，再一次 `start_task(wpe-import, extraDirs)`，等任务结束、按目录找到库里的行。
+ * 导入测试工程（场景或网页壁纸）：逐个 `wpe_recognize_dir`，再一次 `start_task(wpe-import, extraDirs)`，等任务结束、按目录找到库里的行。
  * 返回 `{ <目录>: { image, task, preexisting } }`；`preexisting` 表示导入前库里已有这一行（被去重跳过）。
  */
 export async function importProjects(
@@ -88,7 +101,7 @@ export async function importProjects(
     if (!isDir) throw badRequest(`不是目录：${dir}`);
   }
 
-  const before = new Map((await listSceneRows(s)).map((row) => [comparablePath(rowPath(row)), String(row.id)]));
+  const before = new Map((await listProjectRows(s)).map((row) => [comparablePath(rowPath(row)), String(row.id)]));
   ctx.progress({ phase: "recognize", found: 0, total: absolute.length });
   for (const dir of absolute) await invoke(s, "wpe_recognize_dir", { path: dir });
 
@@ -112,7 +125,7 @@ export async function importProjects(
     const info = await invoke<TaskRow | null>(s, "get_task", { taskId }).catch(() => null);
     status = String(info?.status ?? "");
     found.clear();
-    const now = new Map((await listSceneRows(s)).map((row) => [comparablePath(rowPath(row)), String(row.id)]));
+    const now = new Map((await listProjectRows(s)).map((row) => [comparablePath(rowPath(row)), String(row.id)]));
     for (const dir of absolute) {
       const id = now.get(comparablePath(dir));
       if (id) found.set(dir, id);
@@ -144,7 +157,7 @@ export async function importProjects(
 }
 
 /**
- * 移除测试工程：先用 `wpe_scene_target` 核对每行都在 `allowPrefix` 之下（且与清单里的目录一致），任务都是
+ * 移除测试工程：先用 `get_wallpaper_target_for_image` 核对每行都是场景 / 网页壁纸、都在 `allowPrefix` 之下（且与清单里的目录一致），任务都是
  * `extraDirs` 在 `allowPrefix` 之下的 `wpe-import`；任一不符整批拒绝。再 `batch_remove_images`、`delete_task`。
  */
 export async function removeProjects(
@@ -169,19 +182,23 @@ export async function removeProjects(
       problems.push(`${dir}：image 不是图片 id（${JSON.stringify(entry?.image)}）`);
       continue;
     }
-    let target;
+    let dirOf: string | null;
     try {
-      target = await sceneTarget(s, image);
+      dirOf = await projectDir(s, image);
     } catch (error) {
-      problems.push(`${dir}：${image} 查不到场景目录（${(error as Error).message}）`);
+      problems.push(`${dir}：${image} 查不到目录（${(error as Error).message}）`);
       continue;
     }
-    if (!isWithin(target.path, allowPrefix)) {
-      problems.push(`${image} 的目录 ${target.path} 不在 ${allowPrefix} 之下`);
+    if (!dirOf) {
+      problems.push(`${dir}：${image} 不在库里，或不是场景 / 网页壁纸`);
       continue;
     }
-    if (comparablePath(target.path) !== comparablePath(path.resolve(s.paths.root, dir))) {
-      problems.push(`${image} 的目录是 ${target.path}，清单写的是 ${dir}（清单过期？）`);
+    if (!isWithin(dirOf, allowPrefix)) {
+      problems.push(`${image} 的目录 ${dirOf} 不在 ${allowPrefix} 之下`);
+      continue;
+    }
+    if (comparablePath(dirOf) !== comparablePath(path.resolve(s.paths.root, dir))) {
+      problems.push(`${image} 的目录是 ${dirOf}，清单写的是 ${dir}（清单过期？）`);
       continue;
     }
     images.push(image);
@@ -218,8 +235,8 @@ export async function removeProjects(
 
   let imagesGone = true;
   for (const image of images) {
-    const still = await sceneTarget(s, image).then(
-      () => true,
+    const still = await projectDir(s, image).then(
+      (dir) => dir !== null,
       () => false,
     );
     if (still) imagesGone = false;

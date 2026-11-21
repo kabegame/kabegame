@@ -21,7 +21,7 @@ import { shakeOffset, type ShakeFields } from "../render/shake";
 import { silentParticleAudio, writeParticleAudio, type ParticleAudioFrame } from "./audio";
 import { pointerScenePoint } from "./controlpoints";
 import { TIME_WRAP_SECONDS } from "../sceneTime";
-import { checkInjectedKeys, injectedR, SeededRandom } from "./random";
+import { checkInjectedKeys, injectedR, mt19937, SeededRandom } from "./random";
 import { ParticleSystem } from "./system";
 
 export interface ParticleTrackParticle {
@@ -50,6 +50,8 @@ export interface ParticleTrack {
   frames: ParticleTrackFrame[];
   /** 每个系统里模拟器跳过的模块（表外模块），没有时为空对象。 */
   skipped: Record<string, string[]>;
+  /** 用了共用的 `std::mt19937` 时写一行说明（P4j 步骤 4a）；没给 `mt19937`（`seed + i`）时没有这一项，输出同以前逐字节相同。 */
+  random?: string;
 }
 
 /**
@@ -103,6 +105,13 @@ export interface ParticleTrackOptions {
   cursorCrop?: Edges;
   /** 随机种子；第 i 个粒子层用 `seed + i`。缺省 1。 */
   seed?: number;
+  /**
+   * 全场共用一个标准 `std::mt19937(种子)`（P4j 步骤 4a）：全部粒子系统（含子系统与事件实例）共用一个 `SeededRandom(mt19937(种子))`，
+   * 预热按对象表顺序、每帧步进也按这个顺序从同一串里取，同 WPE 一个场景一个随机引擎。不和 `seed` 同给；不给时照旧 `seed + i`。
+   * TODO:[WPE_SCENE_MCP] 这里不接 `layerimage` 的候选表（要 GPU 读回）：这类系统一颗不生、不抽随机数，排在它后面的系统会和 WPE 错开；
+   * 有 `layerimage` 的场景用 `renderFrame` 的 `trace` 逐颗比。
+   */
+  mt19937?: number;
   /** 按 `objects` 下标、按出生顺序顶替 `R`（`injectedR`，用完退回种子随机数），同 dev 探针 `renderFrame` 的 `particles.random`。 */
   random?: Record<number, readonly number[]>;
   /**
@@ -197,6 +206,9 @@ export function summarizeParticles(system: ParticleSystem): ParticleSummary {
 
 export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
   const seed = options.seed ?? 1;
+  if (options.mt19937 !== undefined && options.seed !== undefined) throw new Error("mt19937 与 seed 只能给一个");
+  /** 全场共用的随机源（P4j 步骤 4a）：给了 `mt19937` 时所有系统用它，没给为 null（逐个 `seed + i`）。 */
+  const shared = options.mt19937 === undefined ? null : new SeededRandom(mt19937(options.mt19937));
   const { cursors, size } = options;
   if (cursors && !size) throw new Error("给了 cursors 时要给 size（场景的投影尺寸）");
   if (cursors && cursors.length !== options.dts.length)
@@ -242,7 +254,7 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
     const injected = options.random?.[layer.object];
     const system = new ParticleSystem(
       layer.particle,
-      new SeededRandom(seed + systems.length),
+      shared ?? new SeededRandom(seed + systems.length),
       options.passes,
       injected ? injectedR(injected) : undefined,
     );
@@ -286,7 +298,14 @@ export function particleTrack(options: ParticleTrackOptions): ParticleTrack {
       }
     frames.push({ frame, dt, systems: out });
   }
-  return { source: "sim", project: options.project ?? "", tag: options.tag ?? "", frames, skipped };
+  return {
+    source: "sim",
+    project: options.project ?? "",
+    tag: options.tag ?? "",
+    frames,
+    skipped,
+    ...(shared ? { random: `std::mt19937(${options.mt19937})，全场粒子系统共用一串` } : {}),
+  };
 }
 
 /** 一个系统在轨迹里的键：顶层是对象名，子系统 `<名字>/<模板路径>`（每层 `def.children` 下标，P4e 步骤 1）。 */

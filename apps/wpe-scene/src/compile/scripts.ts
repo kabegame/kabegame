@@ -112,8 +112,9 @@ function isAnimationLayerField(key: string): key is AnimationLayerField {
 }
 
 /**
- * 字段脚本的写回目标。`sound`：声音对象自己的 `volume`（P6a 步骤 2）写回到就地目标 `{ kind: "sound" }`，返回值每帧写回、
- * 当场交给排期器（同 API 写 `thisLayer.volume`）。只认对象顶层的 `objects/<i>/volume`。
+ * 字段脚本的写回目标。`sound`：声音对象自己的 `volume`（P6a 步骤 2）与 `mintime` / `maxtime`（P6a2）写回到就地目标 `{ kind: "sound" }`，返回值每帧写回；
+ * `volume` 当场交给排期器（同 API 写 `thisLayer.volume`），`mintime` / `maxtime` 由排期器在 `random` 模式开始播放时现读。
+ * 只认对象顶层的 `objects/<i>/volume|mintime|maxtime`。
  * `text`：文本对象顶层的 `objects/<i>/<TEXT_RUNTIME_FIELDS 之一>`（P6b 1e）写回到文本目标，值变了才重排；`font`、
  * `opaquebackground` 等其余文本键仍是 `unsupported`（能力表另报 `text:script:<键>`）。
  *
@@ -153,8 +154,14 @@ export function targetOf(
   // HDR 下亮度不为 1 要乘它、就地写不了，那种情形由 `compileText` 报 `text:script:backgroundcolor`（这里不知道场景的 HDR）
   if (owner.kind === "layer" && text && path === `objects/${owner.object}/backgroundcolor`)
     return textBackgroundColorTarget(owner.object);
-  if (owner.kind === "layer" && sound && path === `objects/${owner.object}/volume`)
-    return { kind: "sound", object: owner.object, field: "volume" };
+  // 声音的 `volume` / `mintime` / `maxtime`（P6a2）：同一类就地目标；属性关键帧（P10a）经此函数取目标，一并支持
+  if (
+    owner.kind === "layer" &&
+    sound &&
+    (key === "volume" || key === "mintime" || key === "maxtime") &&
+    path === `objects/${owner.object}/${key}`
+  )
+    return { kind: "sound", object: owner.object, field: key };
   if (owner.kind === "layer" && text && path === `objects/${owner.object}/${key}` && isTextRuntimeField(key))
     return { kind: "text", object: owner.object, field: key };
   if (owner.kind === "layer" && path === `objects/${owner.object}/instanceoverride/${key}`)

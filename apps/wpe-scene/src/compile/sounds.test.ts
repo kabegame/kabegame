@@ -132,18 +132,63 @@ describe("声音表", () => {
       { sound: "sounds/a.mp3", volume: { user: { name: "quiet", condition: "true" }, value: 1 } },
     ]);
     const state = SceneState.fromBundle(bundle);
-    expect(state.sounds.get(0)).toEqual({ volume: 0 });
+    expect(state.sounds.get(0)).toEqual({ volume: 0, mintime: 1, maxtime: 5 });
     const plan = planApply(bundle.bindings, new Map([["quiet", true]]));
     expect(plan.recompile).toEqual([]);
     expect(plan.writes).toHaveLength(1);
     expect(state.write(plan.writes[0].binding, true)).toBe("applied");
-    expect(state.sounds.get(0)).toEqual({ volume: 1 });
+    expect(state.sounds.get(0)).toEqual({ volume: 1, mintime: 1, maxtime: 5 });
     const plain = { property: "v", target: { kind: "sound", object: 0, field: "volume" } } as const;
     state.write(plain, "0.3");
     expect(state.sounds.get(0)?.volume).toBe(0.3);
     state.write(plain, "abc");
     expect(state.sounds.get(0)?.volume).toBe(0.3);
     expect(state.takeDirty().layers.size).toBe(0);
+  });
+
+  it("mintime / maxtime 绑属性：登记就地目标、编译值取当前属性、不合法取缺省；就地写不合法的值不改（P6a2）", async () => {
+    const bundle = await compile(
+      [
+        {
+          sound: "sounds/a.mp3",
+          playbackmode: "random",
+          mintime: { user: "dmin", value: 2 },
+          maxtime: { user: "dmax", value: "abc" },
+        },
+      ],
+      {},
+      { dmin: 7 },
+    );
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.sounds?.[0]).toMatchObject({ mintime: 7, maxtime: 5 });
+    expect(bundle.bindings).toEqual(
+      expect.arrayContaining([
+        { property: "dmin", target: { kind: "sound", object: 0, field: "mintime" } },
+        { property: "dmax", target: { kind: "sound", object: 0, field: "maxtime" } },
+      ]),
+    );
+    const state = SceneState.fromBundle(bundle);
+    const plan = planApply(bundle.bindings, new Map([["dmin", 3]]));
+    expect(plan.recompile).toEqual([]);
+    expect(state.write(plan.writes[0].binding, 3)).toBe("applied");
+    expect(state.sounds.get(0)).toEqual({ volume: 1, mintime: 3, maxtime: 5 });
+    const max = { property: "m", target: { kind: "sound", object: 0, field: "maxtime" } } as const;
+    state.write(max, "9");
+    state.write(max, "abc");
+    expect(state.sounds.get(0)?.maxtime).toBe(9);
+    expect(state.sounds.get(0)?.mintime).toBe(3);
+  });
+
+  it("字段脚本挂在 mintime 上：目标是 sound 的 mintime，不报 sound:binding:mintime（P6a2）", async () => {
+    const bundle = await compile([
+      {
+        sound: "sounds/a.mp3",
+        playbackmode: "random",
+        mintime: { script: "export function update(v) { return 3; }", value: 1 },
+      },
+    ]);
+    expect(bundle.unsupported).toEqual([]);
+    expect(bundle.scripts.list.map((item) => item.target)).toEqual([{ kind: "sound", object: 0, field: "mintime" }]);
   });
 
   it("取值规则", () => {
@@ -206,9 +251,10 @@ describe("能力表：声音对象", () => {
         sound: "a.mp3",
         startsilent: { user: "s", value: false },
         mintime: { user: "m", value: 1 },
+        maxtime: { script: "export function update(v) { return v; }", value: 5 },
         playbackmode: { user: "p", value: "loop" },
       }),
-    ).toEqual(["sound:binding:mintime", "sound:binding:playbackmode", "sound:binding:startsilent"]);
+    ).toEqual(["sound:binding:playbackmode", "sound:binding:startsilent"]);
   });
 
   it("不是声音对象时这些键照未知键报", () => {

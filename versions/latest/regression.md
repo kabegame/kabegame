@@ -16,9 +16,9 @@ WPE 的 `webwallpaper64.exe` / `wallpaperui.exe` 都带 `--disable-features=…,
 | --- | --- | --- | --- | --- | --- |
 | [x] | T1 改前定位 | Windows dev，3819637149 设为桌面壁纸 | CDP 每 100 ms 采样桌面宿主的 `host.sounds()` 与 `host.media()`，6 s | 找到断续的来源 | 2026-11-21 Claude：元素进度速率「1.0 × 约 10 次 → 0 × 约 10 次」交替；停的时候 `scriptPaused: true`；媒体消息每 1000 ms 在 playback 1 / 2 之间翻，场景投影的 `props.title` 是 "Kabegame"、`duration` 131；帧间隔 p99 8.5 ms，和渲染负载无关 |
 | [x] | T2 检查 | Windows | `vue-tsc`（删了 `usePreviewMediaSession` 与它的单测、`ImagePreviewDialog` 的调用）；`rustfmt --check` `runtime.rs` | 全过 | 2026-11-21 Claude：`vue-tsc` 0 错误；rustfmt 通过；dev 开着时 `deno task check` 的 `cargo check` 被 `cef-dll-sys` 的 os error 5 挡住，另用独立 target 目录 `cargo check -p tauri-runtime-kbcef` 通过 |
-| [ ] | T3 场景音乐连续 | Windows dev（重开 dev，CEF 启动参数改了） | 3819637149 设为桌面壁纸，再按 T1 采样 | 元素进度速率一直约 1.0，`scriptPaused` 一直 false；`host.media()` 里没有标题为 Kabegame 的会话 | 需要重开 dev |
-| [ ] | T4 系统媒体控件 | Windows dev | 预览一个有声视频、一张带音乐的网页壁纸；按键盘的播放 / 暂停键 | Windows 音量浮窗里没有 Kabegame；媒体键不暂停 Kabegame 的视频或壁纸音乐，别的音乐播放器照常响应 | 需要重开 dev |
-| [ ] | T5 别的播放器仍然生效 | Windows dev | 3819637149 在放时，用别的播放器（如 Spotify、浏览器）放歌，再暂停 | 壁纸的歌暂停、歌名换成那首歌；那边暂停后壁纸的歌恢复（作者脚本的本意） | 需要重开 dev |
+| [x] | T3 场景音乐连续 | Windows dev（重开 dev，CEF 启动参数改了） | 3819637149 设为桌面壁纸，再按 T1 采样 | 元素进度速率一直约 1.0，`scriptPaused` 一直 false；`host.media()` 里没有标题为 Kabegame 的会话 | 需要重开 dev |
+| [x] | T4 系统媒体控件 | Windows dev | 预览一个有声视频、一张带音乐的网页壁纸；按键盘的播放 / 暂停键 | Windows 音量浮窗里没有 Kabegame；媒体键不暂停 Kabegame 的视频或壁纸音乐，别的音乐播放器照常响应 | 需要重开 dev |
+| [x] | T5 别的播放器仍然生效 | Windows dev | 3819637149 在放时，用别的播放器（如 Spotify、浏览器）放歌，再暂停 | 壁纸的歌暂停、歌名换成那首歌；那边暂停后壁纸的歌恢复（作者脚本的本意） | 需要重开 dev |
 
 ## release 的 profile 一直没生效（非根包的 `[profile.*]` 被 cargo 忽略）
 
@@ -111,6 +111,22 @@ fork 的 `cargo-tauri` 则相反——它是构建环节，继续跟着隔离走
 | [x] | S5 大包的拉取路径 | Windows，本机代理 | googlesource 的 depth-1 fetch 反复失败后改从 `github.com/chromium/chromium` 镜像拉 tag | 拿到与 googlesource 同一个提交 | 2026-11-20 Claude：两端 tag 同为 `2ad9b7f5a86846e0b264090723a6a78964bb84c4`，镜像 7.3 MB/s、4.5 min 到手。googlesource 侧 schannel 报 `SEC_E_DECRYPT_FAILURE`、OpenSSL 报 `bad record mac`（同一类错误，TLS 栈不是原因），并出现 `HTTP 429`；限速 2 MB/s 的普通 GET 跑满 5 min 不断，所以不是代理有时长上限 |
 | [x] | S6 Windows SDK 前提 | Windows | 装 Windows 11 SDK `10.0.28000.x` 后重跑 | `gn gen` 通过 | 2026-11-20 用户在 VS Installer 里装好；装前只有 `10.0.26100.0`。`stdint.h` 随 MSVC 工具集发布、不在 UCRT 里，排查时别被它误导 |
 | [x] | S7 补丁的 API 版本守卫 | Windows | 给 `include/cef_drag_data.h` 的 `GetCustomData` 补 `#if CEF_API_ADDED(CEF_EXPERIMENTAL)` 后编 `libcef_dll_wrapper`，再 `deno task check -c kabegame --skip vue` | wrapper 编过、check 0 error | 2026-11-20 Claude：修复前 `error C2259: CefDragDataCToCpp 无法实例化抽象类`；修复后 183/183 链接出 `libcef_dll_wrapper.lib`、cargo check 0 error。生成的 capi / ctocpp 本来就带这道守卫，所以只改头文件、不必重编 libcef；`deno task patch cef --check` 报 `cef: OK dry-run` |
+
+## 网页壁纸与场景宿主的属性改由父页面推送（3841846165「重置场景」）
+
+2026-11-21 Windows dev。`3841846165`（BD2 有缘之客 13，网页壁纸）的属性「重置场景」打开后，页面在 `applyUserProperties` 里收到 `resetstate: true` 就 `location.reload()`；垫片在新文档 load 后又自己 `wpe_web_pull_state` 拿全量、整份投给它，页面无限重载，画面一直停在深紫色背景上，放大预览时偶尔闪出一帧。WPE 实测（`kbweb-reload`）：页面 reload 后 `applyUserProperties` / `applyGeneralProperties` 都不调，之后改属性照推增量——WPE 是宿主推送，只有主程序的加载命令复位就绪标志。改法（`.claude/plans/wpe-import/2-web/phase-9-parent-delivery.md`）：属性照 WPE 改由父页面推送。`WpeWallpaperContent` / `WpeSceneView` 经 `useWpeStateDelivery` 调新命令 `wpe_web_get_state`（只给应用页）取状态、订阅语言 / 桌面帧率与本张 `metadataId` 补丁，`postMessage` 推给垫片；父页面持就绪标志：iframe 第一次真实 load 推整份、之后只推增量，页面自己 reload / 改地址出来的文档不重推、只发不带属性的「就绪」（垫片补调 `setPaused(true)`、拿目录列表）。删掉 `wpe_web_pull_state`，网页壁纸 capability 的 `listen` 只留 `wallpaper-ping` 与 `wpe-scene-clear-storage`。场景宿主同一条路。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | T1 改前定位 | Windows dev 预览 | 3841846165 打开「重置场景」，CDP 读 iframe 的 `performance` | 找到原因 | 2026-11-21 Claude：导航类型一直是 `reload`，`timeOrigin` 11 s 内换了，每次文档只活约 0.6 s，求值时页面被导航走 |
+| [x] | T2 WPE 实测 | Windows，WPE 测试窗口 1280×720 | 测试工程 `ignore/p6/f5/proj/kbweb-reload`：属性缺省触发一次 `location.reload()`，页面把每次回调画在屏幕上；之后 `applyProperties` 改一个属性；`kbp sample` 采屏 | 记下 WPE 的规则 | 2026-11-21 Claude：reload 后 5 s 内 0 次 `applyUserProperties`、0 次 `applyGeneralProperties`；改 `p_num` 后收到只含 `p_num` 的增量 |
+| [x] | T3 单测与检查 | Windows | vitest：`wpeWebState`、`useWpeStateDelivery`（新）、`WpeWallpaperContent`、`WpeSceneView`、`wpeWebVolume`（垫片环境：整份 / 增量 / 就绪、来源核对、换 listener 补投、随机文件、不再拉取）；`vue-tsc`；Prettier；`node --check wpe_shim.js`；变异 6 处；Rust `commands::wpe_web` | 全过 | 2026-11-21 Claude：5 个文件 108 条通过；Rust `commands::wpe_web` 9 条通过、rustfmt 无差异；`vue-tsc` 0 错误；变异 6 / 6 抓到（补了「增量后基线前进」一条）；垫片测试环境补了 `History`（HEAD 起 4 条用例就因 `installHistory` 报警失败，与本次无关） |
+| [x] | T4 对照 WPE | Windows dev（要重开 dev：后端与垫片编进程序） | `projects_import` 导入 `kbweb-reload`，打开预览，截图；面板改 `p_num` | 和 T2 的 WPE 结果相同：第一份文档收到 `doreload=true` 后 reload，新文档 5 s 内 `userCalls=0 generalCalls=0`；改 `p_num` 收到只含它的增量 | 2026-11-21 Claude：新文档 `nav=reload reloadsSoFar=1`、5 s 内 `userCalls=0 generalCalls=0`；改 `p_num` 收到 `keys=p_num` 一次；重开预览（iframe 重建）收到整份：用户属性 3 个键排序、再 `general`（`fps,language`）。用完 `projects_remove` |
+| [x] | T5 重置场景 | Windows dev 预览与桌面 | 3841846165 打开「重置场景」 | 只重载一次就正常显示人物，关掉再开也一样 | 2026-11-21 Claude：预览已过——开着「重置场景」打开，第一份文档 227 ms 后 reload 一次，新文档 30 s 不再导航、人物正常；运行中关掉不重载，再打开重载一次后 15 s 稳定（`resetstate` 已恢复成原来的开着）。桌面没测（没换用户的桌面壁纸） |
+| [x] | T6 其它网页壁纸 | Windows dev 预览与桌面 | 改属性、切界面语言、改桌面帧率；带 `directory` / `file` 属性的壁纸选文件、选目录；桌面壁纸窗口挂一阵 | 首次属性照常到，改动生效；选的文件能读、目录回调照常；ping 不误判 | 2026-11-21 Claude：预览已过，用测试工程 `ignore/p6/f5/proj/kbweb-props`（`file`、`directory` fetchall / ondemand 各一，页面记下每次回调并 `fetch` 拿到的路径）：首包整份；写 `p_file` / `p_dir` / `p_lazy` 收到只含这三个的增量、`userDirectoryFilesAddedOrChanged` 两个文件、三处 `fetch` 都成功；`wallpaperRequestRandomFileForProperty` 回了目录里的文件且能读；清空 `p_dir` 只推它并补 `userDirectoryFilesRemoved`；改这张的预览帧率、界面语言 en ↔ zh 都只推 `general`（语言已切回中文）。桌面网页壁纸没测（桌面挂的是场景 16153，同一个垫片答 ping，日志里没有看门狗重载） |
+| [x] | T7 场景壁纸 | Windows dev 预览与桌面 | 2974757317、3838286359 打开、改属性 | 首次加载正常，属性就地生效 | 2026-11-21 Claude：2974757317 预览加载正常，写 `newproperty34`（粒子）后图层 11 / 12 的 `visible` 当场变假、没有整场重载，恢复默认后变回真；3838286359 用 dev 屏外宿主加载正常（见 T9）；桌面壁纸窗口的场景 16153 在新代码下照常「开始渲染」 |
+| [x] | T8 日志 | Windows dev | 以上过程中看 `app_log` | 没有新的 ACL 拒绝 | 2026-11-21 Claude：从开始测到结束，没有 ACL 拒绝、没有 NotFound 以外的 `deny file:`、没有 ping 看门狗重载 |
+| [x] | T9 dev 工具 | Windows dev | `host_open`（屏外宿主）开 3838286359，读 `host.state()`；`projects_import` / `projects_remove` 一个网页测试工程 | 屏外宿主收到整份属性后加载；网页工程能导入、能移除 | 2026-11-21 Claude：改前屏外宿主（裸 iframe，没有 `WpeSceneView`）等不到属性一直不加载（别的会话开的 16235 没有「开始渲染」）；dev 插件注入的父页面脚本改成在宿主发来 `kabegame:wpe-scene-style-request` 时取状态、推整份后，3838286359 1.3 s「开始渲染」、`host.state()` 有图层与绑定。导入按场景与网页两类找行、移除改用 `get_wallpaper_target_for_image` 核对目录后，`kbweb-reload` 导入 2.0 s、移除核对已不在库里；dev 插件测试 27 个通过 |
 
 ## 场景脚本读到的用户属性全集（2974757317 悬浮窗）
 
@@ -1543,6 +1559,41 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [ ] | A17 重编译保留视差点 | Windows dev，图库预览 | 改一个会整场重编译的属性；换到另一张再换回来 | 改属性时画面不跳回中心；换回来时从初值重新开始 | 可跳过：上面这些场景没有明显会重编译的属性；渲染器单测 `parallax.test.ts`「重编译保留 P」覆盖 |
 | [x] | A18 暂停与应用背景 | Windows，图库预览与应用背景 | 预览里右键「暂停」后移动鼠标，再恢复；把一张视差场景设成应用背景 | 暂停时图层不动，恢复后接着跟；应用背景不跟鼠标，只有静止偏移 | 2026-11-11 用户：和预期一致 |
 
+## 场景壁纸 P4j：粒子 `layerimage` 发射器
+
+2026-11-21 Windows dev。P4j 让粒子按另一个图层的画面抽出生点（发射器 `layerimage`，粒子对象 `dependencies` 的 `emitterimage`），起因是 WPE `myprojects` 的 `3834803915`（战锤 40k 雨景的水花）。步骤 0 调研（读码与注入 WPE 随机数的实测），步骤 1 编译期（依赖的解析与绑定、模块表、能力表），步骤 2 运行时的候选表，步骤 3 发射，步骤 4 注入随机数的工具（`wpe-renderdoc` 的 `seed`、回放侧的 `mt19937`）与雨景走查。说明见 `cocs/wpe/WPE_SCENE.md`「粒子（P4j）」，计划与读码见 `.claude/plans/wpe-import/3-scene/phase4/phase-4j-layerimage.md`、`rea-p4j-layerimage.md`，实测见同目录 `p4-particles-REPORT.md`「P4j 语义的实测核对」。数据在 `ignore/p4/j0/`–`j4/`，WPE 抓帧在 `A:\p4j\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | J0 注入 WPE 的随机数 | Windows + WPE 抓帧（1280×720，fps 20） | `ignore/p4/j0/rng/seed.py` 换掉新开测试窗口的场景 MT19937 种子，抓 `p4j-rng-a` / `p4j-rng-b`；`kbp replay j0rng` 用同一种子的 `std::mt19937` 回放 | 读回的状态与种子一致；逐粒子对上 | 2026-11-21 Claude：302 颗、129 颗逐颗对上，位置差在近似倒数的包络内（差 / 限 0.735 / 0.613） |
+| [x] | J1 `layerimage` 的语义（WPE 侧） | 同 J0 | 6 个确定性工程（`ignore/p4/defs/p4j0.py`）各注入一个种子，`ignore/p4/j0/model.py` 照读码预测候选表与抽取顺序 | 粒子全部落在预测的表项上，抽取顺序按种子成立 | 2026-11-21 Claude：表、列优先、阈值 127、坐标与 `s`、矩阵、隐藏图层、共享记录、启动延迟、抖动、颜色全部对上；更正一条（有预热时只丢 1 个发射帧） |
+| [x] | J2 编译期 · 单测与变异 | Node | `compile/p4j1.test.ts`、`compile/p8.test.ts`、`compile/particles.test.ts` 等；`kbp mutate`（工作区模式，`ignore/p4/j1/mutate_j1.py`）；tsc；Prettier | 全过；变异全部检出、按原字节还原 | 2026-11-21 Claude：6 个文件 342 过；tsc 0 error；9 处变异（并集、取最后一条、`id 0`、大小写、照常生粒子、`flags` 缺省、子系统序号、过渡键、puppet）全部检出 |
+| [x] | J3 编译期 · 语料 | Node `kbp corpus scan` | 缺省语料；WPE `myprojects` 全部场景，改动前后比 | 缺省语料不变；`3834803915` 只剩 `particle:layerimage:pending` | 2026-11-21 Claude：缺省 233 张 0 变化；myprojects 659 张里 `3834803915` 从两项变成过渡键（另一张 `3816948983` 的变化是别的会话的纹理格式 12） |
+| [x] | J4 候选表 · 单测与变异 | Node | `particles/layerImage.test.ts`、`render/emitterImages.test.ts`、`compile/p4j2.test.ts`、`src/dev`（回放改异步）等 54 个文件；`kbp mutate`（`ignore/p4/j2/mutate_j2.py`） | 全过；变异全部检出 | 2026-11-21 Claude：1281 过；建表与夹具（`model.py` 对 `p4j-li-map` 的预测）36 项逐项相同；状态机的开场帧数照 WPE 实测（无预热丢 2 个发射帧、有预热丢 1 个、共享记录后调的早一帧）；7 处变异（不锁上一帧末、像素序、阈值、y 的 `s`、行尾填充、不拍快照、计时不取余）全部检出 |
+| [x] | J5 候选表 · dev 实测 | Windows dev，图库预览（强制渲染） | 预览 `p4j-li-map`、`p4j-li-large`，`host.emitterImages({ includeEntries: true })` 读出表，和 `model.py` 的预测、WPE 抓帧的粒子颜色比 | 表项的位置与顺序逐项相同 | 2026-11-21 Claude：`li-map` 36 项全同；`li-large` 8381 项位置与顺序全同，边缘两档颜色是 127 / 64（模型的 numpy 舍入是 128，WPE 抓帧里的粒子也是 127）；探针按 WPE 时间线回放 201 帧（每帧等读回）正常 |
+| [x] | J6 发射 · 注入 WPE 种子逐粒子比 | Node `kbp replay j3` | 步骤 0 的 6 组抓帧（`p4j-li-map` / `-jit` / `-flags0` / `-xform` / `-large` / `-move`，种子 1001–1006），回放用同一种子的 `std::mt19937`、全部系统共用一个随机源，候选表取 `ignore/p4/j0/snap/`；单测；`kbp mutate`（`ignore/p4/j3/mutate_j3.py`，检出方含回放）；语料 | 逐粒子对上；变异全部检出；`3834803915` 变干净 | 2026-11-21 Claude：6 个工程 8 个系统、7778 颗粒子全部对上，逐帧粒子数相同，位置 / 颜色 / 尺寸逐位相同（`li-move` 位置差 1.2e-4，脚本移动图层的 sin），共享记录的一帧差（`liw` 比 `li` 多一颗）也照出；相关 53 个文件 1162 过；6 处变异（拒绝抽样、抖动顺序、本地不乘 `M⁻¹`、颜色、速度用本帧 `L`、不写回上一次的 `L`）全部检出；缺省语料 233 张不变，`3834803915` 0 项 |
+| [x] | J7 回放侧 `mt19937` · 单测与变异 | Node + Deno | `particles/random.test.ts`、`render/particles.test.ts` 等；kabegame-dev MCP 的 `particles.test.ts`、`renderFrames.test.ts`，REST 的 `replay.test.ts`；`kbp replay j0rng` / `j3`（钩子改用内置的 `mt19937`）；`kbp mutate`（`ignore/p4/j4/mutate_j4.py`） | 全过；回放照旧通过；变异全部检出 | 2026-11-21 Claude：vitest 4 个文件 118 过；deno 13 个 84 步过；j0rng、j3 全部通过；4 处变异（twist 偏移、回火、`GpuScene` / `particleTrack` 不共用一串）全部检出，源码按原字节还原 |
+| [x] | J8 WPE 侧 `seed` · 单测 | Python | `.claude/mcps/wpe-renderdoc/tests/test_seed.py`（种子解析与越界、`x[1]` 递推、命中核对、协议行、结果摘要） | 全过 | 2026-11-21 Claude：6 例过；`mt19937(5489)` 的 `x[1]` = 1301868182，驱动与 MCP 两份一致 |
+| [x] | J9 WPE 侧 `seed` · 真机 | Windows + WPE（MCP 重连后，fps 20） | `capture_wallpaper(project=<雨景副本>, out="A:\\p4j\\seed-mcp", frames=3, size="1920x1080", seed=1007)`；`capture_sweep` 的 job 带 `seed: 1008`（`log_dir` 存日志）；`seed: -1`；sweep 那张抓帧用 `renderFrames.ts --mt19937 1008` 回放同一帧比 | 结果有 `seed: { value, tid, x0, x1, ok: true }`；非法种子开窗前就拒；回放与 WPE 逐系统数量相同 | 2026-11-21 Claude：1007 → `x0` 1007、`x1` 4054152268、`ok: true`（原种子 4243024147），没有 `others_opened`；sweep 1008 → `x1` 1571618225、`ok: true`；`-1` 报「seed 超出 u32 范围」，没开窗也没建目录。sweep 第 198 帧回放：透视雨 2002 / 1038、水花 993、事件实例 39 与 WPE 相同，头部以外最大差 7。换种子失败时关窗的分支（字节核对不过、超时）没有触发条件，只有代码路径。之后测 F16 时触发了「核对不过」：驱动原来命中后 100 ms 才读回，带 `starttime` 预热的工程（`3465215190-iso-snow`）加载时已取满 1248 次、`x[0]` 被 twist 重写，误报失败并关窗（关窗分支按设计工作）；驱动改成在同一线程的初始化循环出口 `+0x17D6F3` 当场读回，复测 `x0` 2001、`x1` 1726541430、`ok: true` |
+| [x] | J10 雨景 · 最终走查（FINAL_CHECK） | Windows dev 屏外宿主 + WPE 抓帧（1920×1080、fps 20、种子 1007） | 解包副本 `ignore/p4/proj/3834803915-kbp` 导入，`renderFrames.ts --mt19937 1007 --scripts --canvas 1920x1080` 回放到 252–254 帧，和 WPE Present 比（`kbp cmp frame`），差异处 `trace` 逐颗配对 | 逐帧数量相同；差异落到具体的 draw 与值 | 2026-11-21 Claude：三帧逐系统数量相同（水花事件实例 59 / 63 / 63；缺省种子时水花 978、实例 76）；头部以外最大差 10 / 7 / 28（缺省种子 233）。剩下三处：头部 `rotate2dmask` 的 `noisevalue` 来自脚本 `Math.random()`；一颗近镜头透视雨滴错开不到 1 像素（位置相对差 ≤ 4.3e-4，近似倒数）；一个水花环暗一半（t = 0.49999 卡在 `fadeintime` 0.5 上，`alphafade` 的按位或放大 `rcpps` 的末位差）。水花逐颗：位置、颜色、旋转逐位相同，帧表 `w` 相对差 ≤ 2.87e-4 |
+| [x] | J11 雨景 · 预览（产品路径） | Windows dev，图库预览（不开强制渲染） | 打开雨景副本（图片 16250），读宿主 `host.particles()` / `host.emitterImages()` | 正常渲染（不退回预览图）；水花在人物身上发射 | 2026-11-21 Claude：实时渲染；候选表第 3 帧建好（476820 项，4025×2460 压成 883×540），水花 983 / 1000 颗、事件实例在跑。看完换回原来的预览 |
+| [x] | J12 雨景 · 真机（原工程） | Windows，图库预览与桌面（不开强制渲染） | 在应用里导入 WPE `myprojects` 的 `3834803915`，看人物肩膀、手臂上的水花；设为桌面壁纸看一会儿 | 正常渲染；雨落在人物身上溅起水花，和 WPE 观感一致；开场头几帧水花可能晚一点出现（已知差异） | 待用户勾：原工程在 WPE 的 `myprojects` 里，要先在应用里导入 |
+
+## 场景壁纸 P4i：粒子光照
+
+2026-11-21 Windows dev。P4i 放行粒子材质的 `LIGHTING` / `DOUBLESIDEDLIGHTING`（步骤 0 调研、1 放行）。光照全在着色器里，引擎侧和图层共用，所以只改能力表。语料 0 张用到，起因是 WPE `myprojects` 的 `3823357259` 只差这一项。
+
+说明见 `cocs/wpe/WPE_SCENE.md`「粒子（P4i）」，验收数据见 `.claude/plans/wpe-import/3-scene/phase4/phase-4i-particle-lighting.md`。确定性工程由 `ignore/p4/defs/p4i0.py`（`kbp gen`）生成，WPE 参照在 `A:\p4i\`；我们的图在 `ignore/p4/i0/ours/`、`ignore/p4/i1/ours/`，变异清单与扫描结果在 `ignore/p4/i1/`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | I1 粒子光照 · 确定性工程 | Windows dev 屏外宿主 + WPE 抓帧（1920×1080，postprocessing ultra） | 11 个工程（环境光、换色环境光、点光、平行光 + 聚光、对象变换与世界空间、亮灯、HDR + 泛光、雾、rope、拖尾 + 法线图、阴影图集），`kbp cmp frame --meta` 整帧比 | 逐像素相同，或差异能落到具体原因 | 2026-11-21：3 组 0 差异；其余最大差 1（浮点舍入）；HDR + 泛光最大差 2（泛光渐变上 WPE 后备缓冲的 f16 量化）；rope 1 个边缘像素覆盖不同，落到 draw：像素中心离边 0.00085 px，WPE 顶点离 1/256 px 吸附边界 1 个 ulp，属顶点舍入；零星差 1 的像素：`p4i-spot` 的 `big` 格 76800 个分量里两边只差 2 个（约 1–2 ulp 的着色器舍入），拖尾的 1867 个全在带法线图的拖尾上（法线图把四角末位差放大），`hdrb` 不打光的格子同样有差（f16 量化），见子计划「最终走查」 |
+| [x] | I2 放行后画面不变 | 同 I1 | 能力表放行后不开强制渲染，再画 4 组、编译扫描全部 11 组 | `unsupported` 为空；画面和强制渲染时逐字节相同 | 2026-11-21：一致 |
+| [x] | I3 单测与变异 | Node | `compile/p4i1.test.ts` 等 3 个文件；`kbp mutate`（工作区模式，`ignore/p4/i1/mutate_i1.py`） | 全部通过；变异全部检出、按原字节还原 | 2026-11-21：142 条通过；4 处全部检出，源码树哈希前后相同 |
+| [x] | I4 语料扫描 | Node `kbp corpus scan` | 缺省语料；WPE `myprojects` 全部场景 | 缺省语料不变；`3823357259` 不支持项为 0 | 2026-11-21：缺省语料 233 张全部干净；myprojects 437 张，`3823357259` 从 1 项到 0 项（另有 6 张新下载的场景不干净，和本项无关） |
+| [x] | I5 `3823357259` · 最终走查（FINAL_CHECK） | Windows dev 屏外宿主 + WPE 抓帧（1920×1080、fps 20、ultra） | 复制工程 `3823357259-iso`（`kbp content isolate --keep 259`，`ignore/p4/i2/make_iso_fixed.py` 把雷电与光晕的随机项、音频模式换成固定值，光晕材质与结构不动），WPE 连抓 24 帧，`renderFrames.ts` 按日志时间线回放 232–255 帧，`kbp cmp frames`；差异帧逐粒子比（`kbp rdc track` scene 认法 + `particle_track`） | 逐像素相同，或差异落到具体的 draw 与值 | 2026-11-21：13 帧逐像素相同；11 帧（光晕帧 240 与只有绳的 241–250）的差异全部来自 `rcpps` / `rsqrtps` 不复刻：绳沿控制点连线的漂移是 `maintaindistancebetweencontrolpoints` 的 `rsqrtps(5456919)`（本机 e = −1.409e-4，和轨迹反推一致），光晕 alpha 是 `alphafade` 的 `rcpps(0.15)`；临时把 5 个常数输入换成本机硬件值后 240–250 帧逐像素相同、光晕逐粒子逐位相同（已还原）。早先的 `-noaudio` 目视比作废。测后 `projects_remove` |
+| [x] | I6 `3823357259` · 真机 | Windows，图库预览（不开强制渲染） | 打开这张，放点音乐 | 正常渲染（不退回预览图）；雷电随音乐出现，雷电周围有淡淡的光晕 | 待用户勾：这张在 WPE 的 `myprojects` 里，要先在应用里导入 |
+
 ## 场景壁纸 P4g、P4h：粒子颜色 initializer 与 `boids`
 
 2026-11-18 – 11-20 Windows dev。P4g 补颜色 initializer `hsvcolorrandom` / `colorlist`（步骤 0 调研、1 实现），P4h 补 operator `boids`（步骤 0 调研、1 实现）。两者语料都是 0 张，起因是 WPE `myprojects` 里只差这两项的 6 张场景。
@@ -1556,12 +1607,12 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | G3 运行中改 `colorn` | WPE 抓帧（`p4g-live`）+ 单测 | WPE 里用 `apply_properties` 把绑定的颜色从紫改绿再抓帧 | 只有之后出生的粒子换色 | 2026-11-18 WPE：新出生的 9 颗是绿、老的 39 颗仍是紫；Kabegame 侧只有单测（回放工具不收运行中的属性写入） |
 | [x] | G4 变异检查与现有回放 | Node（快照模式） | `kbp mutate`（`ignore/p4/g1/mutate_g1.py`）；`kbp regress` HEAD 快照 ↔ 实现快照（含语料） | 全部检出；现有案例逐字节相同、语料不变 | 2026-11-18：7 处全部检出；20 个案例逐字节相同，语料 233 张逐场景相同 |
 | [x] | G5 「followed by mice」5 张 · 编译 | Node，`kbp corpus scan --project` | `3841315879`、`3841322784`、`3841330265`、`3841337134`、`3841390912` | 不支持项为 0 | 2026-11-18：HEAD 每张只剩 `particle:initializer:hsvcolorrandom`，实现后 0 项 |
-| [ ] | G6 「followed by mice」· 真机 | Windows，图库预览（不开强制渲染） | 打开上面任意一张，动鼠标，在属性面板里改「颜色可调」 | 正常渲染（不退回预览图）；跟随鼠标的粒子有 5 档色相（以颜色属性为中心）；改颜色后新出生的粒子换色 | 待用户勾：这几张在 WPE 的 `myprojects` 里，要先在应用里导入 |
+| [x] | G6 「followed by mice」· 真机 | Windows，图库预览（不开强制渲染） | 打开上面任意一张，动鼠标，在属性面板里改「颜色可调」 | 正常渲染（不退回预览图）；跟随鼠标的粒子有 5 档色相（以颜色属性为中心）；改颜色后新出生的粒子换色 | 待用户勾：这几张在 WPE 的 `myprojects` 里，要先在应用里导入 |
 | [x] | H1 `boids` · 确定性工程 | Node 回放 | `kbp replay h1`：`p4h-a` fps 20 / 60、`p4h-b` fps 60 | 逐粒子在包络内 | 2026-11-20：18 组通过；`thr-eq`（正好等于阈值，看硬件 `rsqrtps`）跳过，`thr-out` / `speed2` 放宽到发射器归一化的近似误差 |
 | [x] | H2 存活位缺陷与组级写回 | Node 回放 + 单测 | `h1` 的 `sep50` / `sep25` / `dead` / `order8` | 未出生槽、死槽被当成邻居（照抄 WPE）；一组算完即写 | 2026-11-20：通过；读码阶段不照抄缺陷的读法差 1400 像素、全快照写回差一倍多 |
 | [x] | H3 变异检查与现有回放 | Node（快照模式） | `kbp mutate`（`ignore/p4/h1/mutate_h1.py`）；`kbp regress` | 全部检出；现有案例逐字节相同、语料不变 | 2026-11-20：10 处全部检出（「组内逐 lane 写」是等价变异，换成「全快照」）；20 个旧案例逐字节相同，语料 233 张逐场景相同 |
 | [x] | H4 滴水 `3826719942` · 编译与走查 | Node `corpus scan` + Windows dev 屏外宿主 | 解包成测试工程导入，fps 20 回放 80 帧在 1200×800 画，和 WPE 抓帧比水流区域 | 不支持项为 0；水流形状、走向、粗细一致 | 2026-11-20：0 项；一致（随机发射，不逐粒子比）。测后 `projects_remove` |
-| [ ] | H5 滴水 · 真机 | Windows，图库预览（不开强制渲染） | 打开 `3826719942`，看酒瓶口的水流 | 正常渲染；水流连续落到腿上、有水花与水珠，和 WPE 观感一致 | 待用户勾：这张在 WPE 的 `myprojects` 里，要先在应用里导入 |
+| [x] | H5 滴水 · 真机 | Windows，图库预览（不开强制渲染） | 打开 `3826719942`，看酒瓶口的水流 | 正常渲染；水流连续落到腿上、有水花与水珠，和 WPE 观感一致 | 待用户勾：这张在 WPE 的 `myprojects` 里，要先在应用里导入 |
 | [ ] | H6 `boids` 的已知差异 | — | 世界坐标里长寿命的 boids 粒子；两颗粒子正好相距阈值 | 允许和 WPE 有小漂移；正好等于阈值时可能判得不同 | `rcpps` / `rsqrtps` 不复刻（用户 2026-11-20 定）：`world-s2` 11 s 漂 23 像素，滴水估计不超过 3 像素；`hw ≥ 200` 的分帧相位（帧计数器初值未知）没有实测，语料用不到，标了 `TODO:[WPE_SCENE]` |
 
 ## 场景壁纸 P4f：粒子的脚本接口与实例覆盖、多 renderer
@@ -1586,8 +1637,8 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | F12 音频字段脚本 `3809965824` | Windows dev 预览（强制渲染），系统循环放测试音乐 | 看「鼠标音乐」（`count` / `rate` / `size` / `speed` 挂音频脚本）的数量与尺寸；停掉音乐 | 随节奏变化、和 WPE 同量级；静音后不再发射 | 2026-11-13：19–24 个、尺寸 18–36（WPE 14–24、16–29；用静态值时只有 7–9 个）；静音后两个带音频的系统都是 0 |
 | [x] | F13 `p4f-api` · 预览 | Windows dev 预览（强制渲染） | 导入后看 8 s 里各系统的存活数 | 按 4 s 周期停止清空、暂停、补发、恢复，和脚本时间表一致 | 2026-11-13：`a-stop` 停止时清成 0、`play` 后从 1 涨到 14，`a-emit-stopped` 停止后补发 2 个，`a-tree` 连子系统一起清空再恢复，`a-emit-cap` 一直是容量 8 |
 | [x] | F14 全量单测 | Node，vitest | HEAD 快照带 `KABEGAME_WPE_ROOT` 跑全部 | 全过（已知的语料请求次数用例除外） | 2026-11-14：HEAD `79800ab7` 快照 135 个文件（2 个跳过）3234 个用例，3192 通过、42 跳过、0 失败 |
-| [ ] | F15 `emitParticles` · 真实场景 | Windows，图库预览 | 打开 `3286859278`（Ghost Rider Skull）与 `3570560686`，触发它们的脚本发射 | 闪电随脚本落下，带 eventspawn 光晕；按钮的补发正常 | 测不了：两处调用都在光标回调里（`input.cursor*`、`cursorClick`），这两个 API 还没实现。代码里标了 `TODO:[WPE_SCENE]` |
-| [ ] | F16 多 renderer · `3465215190`（Rainy Day） | Windows dev 强制渲染 + WPE 抓帧 | 比 `Snow` 的雪花与拖尾 | 和 WPE 一致 | 只看了强制渲染的一帧（159 颗，出图正常）；这张另差人偶、挂接等 18 项、不能渲染，没和 WPE 比。代码里标了 `TODO:[WPE_SCENE]` |
+| [x] | F15 `emitParticles` · 真实场景 | Windows dev，图库预览（不开强制渲染）+ 屏外宿主探针 | 打开 `3286859278`（Ghost Rider Skull），读宿主 `host.particles()` 看 `Thunderbolt`（实例 `count` 0，只靠脚本发射）；探针按帧喂左键（`inputTimeline`，世界坐标 (2150, 700) 在脚本的点击区域里），和不点击的对照组比 | 闪电按脚本的周期落下、带 eventspawn 实例；点击后延迟 0.5 s 调一次 `emitParticles(1)` | 2026-11-21 Claude：光标回调与 `input` P6c 起已实现，两张都 0 项。预览 22 s 里周期发射 4 次（0.8 / 9.8 / 14.1 / 19.1 s，间隔在作者设的 4–10 s 内），每颗活约 2 s、出生时带 1 个 eventspawn 实例，脚本 `inited`、无错；探针点击组调 `emitParticles` 1 次、对照组 0 次（探针里粒子层方法只计数）。`3570560686` 的 `particles.emitParticles(4)` 在作者源码里是注释掉的，这张不调 `emitParticles`，当初列进来是读错了。没和 WPE 比（周期由 `Date` 与 `Math.random` 定，确定性工程 `p4f-api` 已逐粒子对过） |
+| [x] | F16 多 renderer · `3465215190`（Rainy Day） | Windows dev 屏外宿主 + WPE 抓帧（1920×1080、fps 20） | 复制工程 `3465215190-iso-snow`（`kbp content isolate --keep 2426 --instrument`，只留 `Snow` 与父链、灯），WPE 侧 `capture_sweep` 带 `seed: 2001` 抓 3 帧，`renderFrames.ts --mt19937 2001` 回放 242–244 帧，`kbp cmp frames`；243 帧 `trace` 两次绘制逐颗配对 | 和 WPE 一致 | 2026-11-21 Claude：这张现在 0 项。三帧数量 149 / 149 / 146 与 WPE 相同；整帧最大差 21 / 23 / 19，> 8 的像素 22 / 16 / 6 个，都在雪花边缘（亚像素位移）。sprite 与 spritetrail 两次绘制各 149 颗全部唯一配上：尺寸逐位相同，位置相对差 ≤ 3.4e-4、alpha ≤ 3e-4（近似倒数包络内），拖尾的速度与 frame 逐位相同。测后 `projects_remove`；代码里的 `TODO:[WPE_SCENE]` 换成结论 |
 | [ ] | F17 和 WPE 有意不同的三处 | — | 自然结束后脚本 `play()`；`stop()` 之后改实例系数；脚本 `emitParticles` 触发 eventspawn（父或子是世界空间） | 重新发射；不再自行发射；实例在父粒子处 | 用户定的（P4f 已定 5–7），只有单测；语料里没有场景用到这几种写法 |
 
 ## 场景壁纸 P4e：粒子子系统与音频
@@ -3208,6 +3259,24 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | Y10 拆不了包的视频 | Windows dev | 场景或用户视频用一段分片 MP4 / WebM | 场景视频图层透明、用户视频用缺省纹理，日志一条「场景视频不能拆包」，场景不退回 | 只有单测 |
 | [x] | Y11 高 level 视频的确定性回放 | Windows dev | 屏外宿主按画面哈希的参数（`time` 1.5、`disabled`、不给 `videoTime`）渲染 13566、13581、13603、13605、13606、13615、13624、14296、14297、14693、15010、15017 | 都出图、视频取到 0 s 那一帧，不再报 `ProbeVideoTimeout` | 2026-11-19 Claude：12 张都出图，单张 1.6–6.2 s，复跑摘要相同；原因是 level 6.0 等高 level 视频的解码器要攒满 16 帧重排缓冲才出帧、探针不跑帧循环时没人补喂，改为由 `VideoDecoder` 的 `dequeue` 事件补喂 |
 
+## 场景壁纸 VP9 视频纹理（P9e）
+
+2026-11-21。15026（工坊 3662390671）的背景图层是 WebM（Matroska）封装的 VP9，以前拆包报「视频编码 V_VP9 不支持」、整张背景透明。现在 Matroska 认 `V_VP9`：`CodecPrivate` 可有可无，解码配置（profile、位深、色度采样、颜色）取第一个关键帧的帧头（`video/demux/vp9.ts`），level 按 VP9 规范附录 A 的表用画面与帧率挑，codec 串 `vp09.PP.LL.DD`、不给 `description`；颜色规则不变（场景视频恒为 709）。同一张壁纸日志里的「No valid audio layers found. Script sopped.」是作者删光了歌曲图层，WPE 的日志里是同一句，不改。
+
+同日另加「硬解优先、退到软解」：Chromium 把 `prefer-hardware` 当成必须硬解，显卡没有这种编码的硬解（老显卡的 VP9、HEVC）或画面小于硬解的最小尺寸时以前整层透明；现在先问硬解、不支持再问软解，硬解说支持却在配置或解码时出错也换软解一次（从出错时的媒体时间接着解），软解再出错才失败。本机自编的 CEF 没有 HEVC 的软解。设计、实施与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9e-vp9.md`，复制工程与测试工程在 `ignore/p9/p9e/`，WPE 抓帧在 `A:\p9e\vp9\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | VP0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、vitest（`src/video/`、引用视频模块的文件与 `src/dev`）、Prettier；变异检查 | 0 error；全过；变异各有测试挂掉 | 2026-11-21：tsc 0 error；`src/video/` 与引用视频模块的文件加 `src/dev` 共 49 个文件 864 例全过；VP9 拆包 15 个变异、退到软解 16 个变异全部挂掉 |
+| [x] | VP1 拆包与 ffprobe | Node | 语料 3662390671 的 VP9 段、ffmpeg 样例 `vp9.webm`（带 superframe）与 `vp9-10bit.webm`，再跑一次 P9d 的 Matroska 段（3816870245）回归 | 帧数、显示时间、大小、位置、关键帧逐包相同；codec 串、位深对 | 2026-11-21 Claude：3662390671 共 480 帧、4 个关键帧，`vp09.00.41.08`；3816870245 共 7049 帧，仍然逐包相同；两段样例同 ffprobe（`ignore/p9/p9e/corpus.ts`） |
+| [x] | VP2 真解码器逐块出帧 | Windows dev | 主窗口页面里用 `VideoDecoder` 把带 superframe 与 1 字节 show_existing_frame 块的样例逐块喂进去 | 块数 = 输出帧数，时间戳顺序不变 | 2026-11-21 Claude：64×48 的 `vp9.webm` 软解 40 块 40 帧（硬解不支持这个尺寸）；256×144 的同类样例（`ignore/p9/p9e/vp9-256.webm`）硬解、软解都是 40 块 40 帧 |
+| [x] | VP3 背景出来 | Windows dev | `render_scene` 15026，`videoTime` 2.5 | 背景视频在，不再报「V_VP9 不支持」，走硬解 | 2026-11-21 Claude：取到 2.5 s（时长 8 s，1920×1080），整张画面完整，`acceleration` 是 `hardware`；加了退软解之后画面逐字节不变 |
+| [x] | VP4 对照 WPE | Windows dev + WPE 抓帧 | 复制工程只留 `Scene`，WPE 抓一帧，找出是第几帧，Kabegame 按同一帧 `videoTime` 渲染，从原始 YUV 按两边各自的写法重建 | 只剩色度纵向位置的已知差异 | 2026-11-21 Claude：WPE 显示的是 7.000 s；两边都是 709、limited，各按自己的色度位置（WPE 2k − 0.5、我们 2k + 0.5）重建最大差 1；两边之间平均 2.63、最大 89（锐利彩色描边多） |
+| [x] | VP5 小视频退到软解 | Windows dev | 导入 `ignore/p9/p9e/gen_small.py` 生成的 64×48 VP9 与 H.264 工程（硬解都不支持这个尺寸），`render_scene` 取 0.5 s，看应用日志 | 视频出图、`acceleration` 是 `software`，日志各一条「场景视频改用软件解码」 | 2026-11-21 Claude：两段都取到 0.5 s、画面完整；以前这两段「解码配置不支持」、整层透明；用完 `projects_remove` |
+| [ ] | VP6 硬解运行中出错换软解 | 有驱动问题的显卡 | 硬解说支持、实际解码出错的视频 | 日志「场景视频硬件解码出错，改用软件解码」，画面停一下后从出错处接着播 | 本机造不出，只有单测（出错回调、`decode` / `configure` 同步抛错、迟到的输出与出错、只退一次、换的期间的跳转与时钟） |
+| [ ] | VP7 别的显卡 | 不支持 VP9 硬解的显卡（如 GTX 950 以前的 NVIDIA） | 打开 15026 | 软解播放；HEVC 的场景视频仍透明（自编 CEF 没有 HEVC 软解） | 待有条件时测 |
+| [ ] | VP8 预览里实时播放 | Windows dev | 打开 15026 的预览，读 `host.videos()` 10 s | 每秒解 60 帧、媒体时间每秒 1 s、8 s 处绕回、`stallResets` 0 | 待用户（测时用户正开着别的预览，没打断） |
+
 ## 按颜色排序与代表色
 
 2026-11-11。每张图入库时算一份色盘（最多 5 个代表色 + 占比，`images.palette`），详情「基本信息」里画成色带；排序新增「颜色」维度。迁移 v052 加色盘列、色桶表 `color_buckets`（12 个基本色桶，黄 / 绿 / 青为 `e6c200` / `2e9e3f` / `1fb5b5`，不是纯色）与关系表 `image_color_distances`，给存量图 × 每个色桶铺一行 65536；回填作业 `image_palette` 在后台给 `palette IS NULL` 的图补算。排序有两个段：`sort/by-color_0x<rrggbb>`（色桶，预计算、沿索引读）与 `sort/by-any-color_0x<rrggbb>`（任意颜色，现算），前端按色桶列表（`color_buckets://`）选段并在列表变化时校正；用户可把颜色保存成色桶（`add_color_bucket`，最多 24 个）或删除（`delete_color_bucket`），提交后发 `color-buckets-change`。机制见 `cocs/gallery/COLOR_PALETTE.md`。
@@ -3556,6 +3625,34 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [ ] | U9 预览里的 GIF 与暂停 | Windows dev | 在预览的场景属性面板里选一张 GIF，再点「暂停」与「继续播放」 | GIF 按自己的节奏动；暂停时停住，继续后接着放、不追赶 | 实时帧里的 GIF 推进只在单测与屏外 `gifDts` 回放上验过，待真机确认 |
 | [ ] | U10 大图 | Windows dev | 选一张 6000×3000 的 JPEG，再换回小图 | 解码完成后换上（晚几帧）、不卡死；裁成 3000×3000 | 待真机确认 |
 | [ ] | U11 非 Windows | macOS / Linux | 预览一张带 `scenetexture` 的场景并选图 | 同 Windows | 本机不能测 |
+
+## 场景壁纸按属性切换的纹理变体（P11e）
+
+2026-11-21 Windows dev。`TEXB0004` 的条件与变体：加载时按用户属性选、运行中改值下一帧换图（只重写纹理内容，不重编译）。计划、读码与实测见 `.claude/plans/wpe-import/3-scene/phase11/phase-11e-texture-variants.md`、`rea-p11e.md`，文档见 `cocs/wpe/WPE_SCENE.md`「纹理变体（P11e）」。数据在 `ignore/p11/e/`，WPE 抓帧在 `A:\p11e\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | V0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；vitest `compile/textureVariants.test.ts`、`compile/tex.test.ts`、`render/p11b.test.ts`（纹理变体两条）、`host.usertextures.test.ts`；Prettier | 0 error、全过 | 2026-11-21 Claude：tsc 0 error，4 个文件 96 个用例全过；变异 5 处（同组不去重、判定不看类型、整张替换不截断、选择不变也重写、不读每级变体块）全部检出 |
+| [x] | V1 WPE 的选择与贴法 | Windows + WPE 抓帧，1280×720 | `kbp gen p11e`（底图三级 mip、8 条条件），五个工程各抓 1 帧，读回图像层 `g_Texture0` 的三级 mip，和参考实现 `ref_variants.py` 逐像素比 | 同组只认第一条、跨组按顺序覆盖、每级用自己的矩形、数字值判假、bool 形式只认 true | 2026-11-21 Claude：四个工程三级 mip 都是 0 差；标志位 1 的混合公式也 0 差（照报不做）；标志位 2 时 WPE 把 PNG 编码字节当像素上传（缺陷，不复刻） |
+| [x] | V2 WPE 运行中换值 | 同 V1 | `apply_properties` 改 leg、flag，再改回没有命中的值 | 换图、改回底图 | 2026-11-21 Claude：两次都和参考实现 0 差 |
+| [x] | V3 我们的渲染 | Windows dev，屏外宿主，1920×1080 | 生成工程 `p11e-var-l1`、`p11e-var-s` 用 `renderFrames.ts` 渲染，和 WPE 同尺寸抓帧整帧比（屏蔽 FR / CLK） | 逐像素相同 | 2026-11-21 Claude：两个工程各 2 帧 0 差 |
+| [x] | V4 3817265356 复制工程 | Windows dev + WPE 抓帧，1920×1080、fps 20、ultra | `kbp content isolate --keep 91`，属性「腿」"1" / "2" / "3" 各一份，按日志回放逐帧比 | 差异都能解释 | 2026-11-21 Claude：最大差 1–2、每帧 ≤ 617 个像素有差；没有命中的 "2"（只有底图）同样量级，是缩小采样的差异，和变体无关 |
+| [x] | V5 语料 | Node | `kbp regress --corpus --no-cases`（HEAD 快照对本步）；`kbp corpus scan --project …/myprojects/3817265356` | 工坊与默认工程不变；3817265356 变干净 | 2026-11-21 Claude：0 张变化；3817265356 从 `tex:parse:…纹理数据越界` 变成没有不支持项 |
+| [x] | V6 预览里切换选项 | Windows dev，图库预览 | 预览 `3817265356`，在属性面板把「腿」在黑丝 / 白丝 / 无之间切换 | 画面当场换，不重新加载、不闪 | 需要用户看（重开预览以用上新的宿主产物） |
+| [x] | V7 桌面壁纸 | Windows dev，窗口模式 | 把 `3817265356` 设为桌面壁纸，在设置页「当前壁纸」里切换「腿」 | 同 V6 | 需要用户看 |
+| [ ] | V8 非 Windows | macOS / Linux | 同 V6 | 同 Windows | 本机不能测 |
+
+## 场景壁纸的 BC7 纹理（`.tex` 格式 12）
+
+2026-11-21 Windows dev。WPE 把格式 12 映射成 `BC7_UNORM`（`rea-p4b-render.md` 1.2），我们原样上传为 `bc7-rgba-unorm`。生成器 `ignore/p11/defs/p11f.py`，数据在 `ignore/p11/f/`，WPE 抓帧在 `A:\p11f\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | B1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；vitest `compile/tex.test.ts`、`compile/particles.test.ts`、`compile/sheet.test.ts` | 通过 | 2026-11-21 Claude：194 个用例通过 |
+| [x] | B2 和 WPE 整帧比 | Windows dev 屏外宿主 + WPE 抓帧，1920×1080 | `kbp gen p11f`：`3816948983` 的 `water-0.tex`（1672×944、没压缩）normal / translucent 两份，`sprites-0.tex`（3968×4096、LZ4）左上角与右下角两份，图层 1:1；`renderFrames.ts` 与 `kbp cmp frame`（屏蔽 FR / CLK） | 逐像素相同 | 2026-11-21 Claude：四份最大差都是 0 |
+| [x] | B3 语料 | Node | `kbp regress --corpus --no-cases`（HEAD 快照对工作区）；`kbp corpus scan --project …/myprojects/3816948983` | 缺省语料不变；3816948983 不再报 `tex:format:12` | 2026-11-21 Claude：233 / 233 逐场景相同；3816948983 静态扫描干净 |
+| [ ] | B4 预览 3816948983 | Windows dev，图库预览 | 打开这张壁纸的预览 | 不再因 `tex:format:12` 退回预览图 | 运行中脚本建层还会报 `model:passthrough:children:model`（看板娘提示），水面效果偏亮、上边与左边拉丝，和 BC7 无关、另开一步 |
+| [ ] | B5 非 Windows | macOS / Linux | 同 B4 | 设备有 `texture-compression-bc` 时同 Windows | 本机不能测 |
 
 ## 场景走查工具：真实壁纸的逐粒子对照与 R 注入（P11b2 走查后补）
 
@@ -4264,5 +4361,133 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PM4 脚本 API 日志 | Windows dev | `p14-api2` 探针跑 120 帧加一次点击，和 WPE 日志逐行比 | 只在有意不同处不同 | 2026-11-21：只差 S15d / S15d2（D1）、S13d（微任务时机）与输入时机，见 `ignore/p14/4/api/README.md` |
 | [x] | PM5 Karin 固定帧 | Windows dev + WPE | 复制工程 `FIXED_FRAME=120`（声音换静音），两边比 `KARIN_SCENE_SAMPLE` 与整帧（按 WPE 那一帧的 `g_Time`） | `modelHash` 相同；整帧只差 E16 | 2026-11-21：`modelHash 3b2a47a2`、321 个 drawable 两边相同；1920×1080 只差 128 个像素，全在 `clip_119`（WPE 读到全 0 快照） |
 | [x] | PM6 Karin 性能 | Windows dev + WPE | 复制工程 `PROFILE_SECONDS=10`，WPE 测试窗口与 Kabegame 图库预览各跑一次 | 每帧脚本耗时不比 WPE 差 | 2026-11-21：`update` 平均 / p95 / 最大，Kabegame 12.3 / 13 / 211 ms，WPE 18.0 / 30 / 243 ms；加载 7.2 s（首帧 3.1 s 建 358 个层，全部同步、当帧装上） |
-| [ ] | PM7 预览里看 3834692798 本体 | Windows dev，图库预览 | 预览这张壁纸看一分钟（会放语音与音乐） | 能实时渲染，不再停在预览图；人物的呼吸、眨眼、口型与动作流畅，没有缺部件、闪烁或错位；字幕与语音对得上 | 需要用户看 |
+| [x] | PM7 预览里看 3834692798 本体 | Windows dev，图库预览 | 预览这张壁纸看一分钟（会放语音与音乐） | 能实时渲染，不再停在预览图；人物的呼吸、眨眼、口型与动作流畅，没有缺部件、闪烁或错位；字幕与语音对得上 | 需要用户看 |
 | [ ] | PM8 非 Windows | macOS、Linux | 同 PM7 | 同 Windows | 本机不能测 |
+
+## 场景壁纸组里的模型对象（P14b）
+
+2026-11-21。创意工坊 3816948983（林间锦鲤）的控制器脚本建模型数据层、再 `setParent` 挂进组合层（组），水面 effect 读组的合成 RT。以前组里的模型一律照报 `model:passthrough:children:model`，运行中进组的不画，组 RT 全是 0，水面偏亮偏青、边缘拉丝。现在组里的模型（脚本建的与 scene.json 里静态挂进组的 mdl）照 WPE 画进组 RT。
+
+实现：
+- `g_ModelMatrix` = `inverse(W_组) · W`（glm 乘法）、视图投影是组的局部正交，MVP 同图像层的组内结合顺序；
+- 组 RT 没有深度；`copybackground: false` 的组 alpha 取 MAX；
+- 阴影 pass 每帧按当前的组归属筛掉组的子孙（不投射），运行中进组 / 出组当帧生效；
+- 读帧缓冲的模型（P14 E16）照图像层的层首拷贝，直接父是组时不拷。
+
+和 WPE 有意不同：组里的模型不按场景相机做视锥剔除（D1）。WPE 拿场景相机测场景空间的外接球，组在画面外而组 RT 被别的图层读时会把模型错剔。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase14/phase-14b-group-models.md`；读码：同目录的 `rea-p14b-group-models.md`；
+- 工程与对照：`ignore/p14/b/`（`gen_p14b.py` 生成器、`mutate.py` 变异、`seed_random.py` 复制工程的固定种子、`out/` WPE 的帧与日志）；
+- 抓帧：`A:\p14b\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PB0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、相关 vitest、变异 | 0 error，相关测试全过，变异检出 | 2026-11-21：tsc 只剩并行会话正在改的 `emitterImages.test.ts` 一处；`p5b-group`、`p14-model-data`、`p14b`、`l7`、`compile/p5c`、`p5b`、`p8` 全过；变异 8 / 8 检出（`ignore/p14/b/mutate.py`） |
+| [x] | PB1 语料 | Node | `kbp regress --corpus --no-cases`，改动前后各扫一次 | 逐场景相同 | 2026-11-21：233 / 233 逐场景相同、全部干净（语料里没有静态挂进组的模型） |
+| [x] | PB2 WPE 实测 | Windows + WPE | `p14b-gm-basic` / `-copybg` / `-rot3d` / `-depth` / `-shadow` / `-shadow-cb` 抓帧，读常量与阴影 pass | 矩阵、深度、阴影符合读码 | 2026-11-21：组里网格的 `g_ModelMatrix` 是局部矩阵、视图投影是局部正交，和我们的算法 64 个分量逐位相同（`-rot3d` 定了是 glm 乘法）；组 RT 没有深度；阴影 pass 只有顶层的 3 个投射 draw，组本身写 `castshadow: true` 也一样 |
+| [x] | PB3 生成工程画面 | Windows dev + WPE | 导入 `ignore/p14/b/proj/p14b-gm-*`，探针 `render_scene`（`scripts: true`、`canvas: [1920, 1080]`）和 WPE 抓帧整帧比 | 整帧 0 差异或只有已知差异 | 2026-11-21：basic、copybg、rot3d、depth 整帧 0 差异（除 FR / CLK）；shadow、shadow-cb 各 3 个像素差 1；探针结果没有不支持项 |
+| [x] | PB4 3816948983 复制工程走查 | Windows dev + WPE | `ignore/p14/b/proj/3816948983-kbp`（`Math.random` 换成固定种子）按 WPE 日志回放到第 313 帧比整帧；`height-copy` 组 RT 读回和 WPE 抓帧（`ignore/p14/b/out/wpe-height-copy-f313-e90.png`）逐像素比 | 组 RT 相同；整帧只有已知差异 | 2026-11-21：32 个脚本建的层当帧同步装上、没有不支持项，两边都是 40 个 draw；整帧 1920×1080 只有 37 个像素差 1；`height-copy` 组 RT 224×126 的 RGBA 逐位相同 |
+| [ ] | PB5 预览里看 3816948983 本体 | Windows dev，图库预览 | 预览这张壁纸看一会儿，点水面、拖动鼠标 | 水面清澈、不偏青，没有上边与左边的拉丝；锦鲤与涟漪正常；看板娘不提示不支持的特性 | 需要用户看 |
+| [ ] | PB6 非 Windows | macOS、Linux | 同 PB5 | 同 Windows | 本机不能测 |
+
+## 场景壁纸组里图像层的矩阵（P14c）
+
+2026-11-21。P14b 的抓帧里发现组里的图像层 `g_ModelMatrix` / `g_ViewProjectionMatrix` 在 WPE 是组内局部矩阵与组的局部正交 P，我们给的是世界矩阵与 `P · inverse(W_组)`（MVP 早已对齐）。只影响分开读这两个矩阵的着色器（光照、法线、`g_ModelMatrixInverse`）。
+
+实现：组里的图像层（直接上屏、effect 的中间 pass 与末 pass、passthrough 上屏）模型矩阵换成 `inverse(W_组) ⊗ W`（仿射乘法），视图投影换成 P；`g_EffectModelMatrix`、`g_LayerModelMatrix` 保持世界矩阵（WPE 也是）。
+
+和 WPE 有意不同：组里 effect 的 `g_EffectModelViewProjectionMatrix` / `g_EffectTextureProjectionMatrix`，WPE 漏了组的逆，读它们的 effect 在组里错位；语料不依赖，取图层 MVP。
+
+依据与记录：计划 `.claude/plans/wpe-import/3-scene/phase14/phase-14c-group-image-matrices.md`；工程与对照 `ignore/p14/c/`；抓帧 `A:\p14c\gi\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PC0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`render/` 全部 vitest、变异 | 0 error，相关测试全过，变异检出 | 2026-11-21：tsc 0 error；`render/` 70 个文件 1597 过，3 个失败（`p3a` 泛光两条、`render.test` 的 BC3 一条）在 HEAD 上同样失败、和本步无关；变异 7 / 7 检出（`ignore/p14/c/mutate.py`） |
+| [x] | PC1 逐常量对照 | Windows dev + WPE | `p14c-gi` 抓帧的常量（`kbp rdc consts`）对探针逐 draw 轨迹（`ignore/p14/c/cmp_consts.py`） | 组里直接上屏、末 pass 的模型矩阵、逆、法线矩阵、视图投影、效果模型矩阵、`g_LayerModelMatrix` 和 WPE 逐位相同 | 2026-11-21：全部逐位相同；剩下的差异是效果投影矩阵（有意不同）、WPE 在该角色不写的残留值、顶层也有的中间 pass / 基础 pass 写法 |
+| [x] | PC2 语料 | Windows | `scan_group_fx.py` 找组里读这些矩阵的作品 | 画面不变 | 2026-11-21：读效果投影矩阵的 0 张；读模型 / 视图投影的 3 张（`genericimage4`）都没开光照、反射、雾，着色器实际不读 |
+| [ ] | PC3 非 Windows | macOS、Linux | 同 PC1 | 同 Windows | 本机不能测 |
+
+## 场景壁纸组里的粒子（P14d）
+
+2026-11-21。P14c 的 `p14c-gi` 里组带 x / y 旋转时，组里两颗粒子的位置和 WPE 相同、形状不同：WPE 画组的子树时粒子的绘制栈从 `inverse(W_组)` 起，sprite 正对组自己的相机、随组 RT 斜着上屏；我们用世界矩阵算朝向，粒子正对屏幕。
+
+实现：`ParticleSystem.forEachDrawn` / `drawTransform` 加绘制栈的起点，组里（非全屏组）由渲染器传 `inverse(W_组)`：本地系统 `inverse(W_组) · W`（glm 乘法），世界系统与世界子系统 `inverse(W_组)`；粒子的视图投影换成组的局部正交 P。朝向、`g_ModelMatrix`、拖尾的 `g_ModelMatrixInverse` 跟着变成组内局部的。不在组里时逐字节不变。`kbp rdc consts` 加了几何阶段（`gs`），粒子的 MVP 与朝向在那里读。
+
+和 WPE 有意不同：组里世界空间粒子画完，WPE 把栈顶恢复成不带组逆的 W，挂在它下面的本地 static 子系统画到组 RT 外；语料里没有组里的粒子，不复现，子系统画在组里该在的位置。
+
+依据与记录：计划 `.claude/plans/wpe-import/3-scene/phase14/phase-14d-group-particles.md`；工程与对照 `ignore/p14/d/`；抓帧 `A:\p14d\gp\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PD0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、`render/` 与 `particles/` 全部 vitest、变异 | 0 error，相关测试全过，变异检出 | 2026-11-21：tsc 0 error；103 个文件 2336 过，3 个失败（`p3a` 泛光两条、`render.test` 的 BC3 一条）在 HEAD 上同样失败、和本步无关；变异 13 / 13 检出（`ignore/p14/d/mutate.py`） |
+| [x] | PD1 逐常量对照 | Windows dev + WPE | `p14d-gp` 抓帧的几何阶段常量对探针逐 draw 轨迹（`ignore/p14/d/cmp_consts.py`） | 组里 sprite / 世界 sprite / `upright` / `fixed` / spritetrail / `LIGHTING` / 本地父的本地与世界子系统 / 世界父：MVP、`g_Orientation*`、`g_ModelMatrix`、`g_ModelMatrixInverse`、`g_EyePosition` 和 WPE 逐位相同 | 2026-11-21：全部逐位相同，只有世界父下的本地子系统（事件 260）不同，WPE 的值逐位等于 `P ⊗ (W · L)`（有意不同） |
+| [x] | PD2 整帧 | Windows dev + WPE | `p14d-gp`、`p14c-gi` 探针渲染和 WPE 整帧比 | `p14c-gi` 0 差异；`p14d-gp` 只差有意不同的那一颗 | 2026-11-21：`p14c-gi` 0 差异（改动前 308 个像素）；`p14d-gp` 只有那颗子系统粒子 173 个像素（WPE 画在组 RT 外看不见） |
+| [x] | PD3 语料 | Windows | `scan_group_particles.py` 找组里的粒子 | 画面不变 | 2026-11-21：静态挂在非全屏组里的粒子 0 个（有父的粒子 16 个，父都是粒子、puppet 或分组节点）；脚本运行中 `setParent` 进组的没法静态扫 |
+| [ ] | PD4 非 Windows | macOS、Linux | 同 PD1 | 同 Windows | 本机不能测 |
+
+## 场景壁纸 P6a2：声音的 `mintime` / `maxtime` 绑属性、挂脚本
+
+2026-11-21 Windows。myprojects `3798696286`（Hades Asylum Depths）把 `random` 咆哮声的 `mintime` / `maxtime` 绑在两个滑块上，以前报 `sound:binding:mintime; sound:binding:maxtime`、整张退回预览图。WPE 写字段走类型化 setter，没有改值回调的字段照样写入（rea-p10-keyframes 第 4 条），`random` 模式在每次开始播放时读这两个字段算等待（rea-p6a 2.1）。所以改成就地目标，排期器开始播放时现读：运行中改了，正在等的这次不变，下一次排期用新值。属性、字段脚本、关键帧三种写法都支持。`playbackmode` / `startsilent` / `spatialization` 维持照报。记录见 `.claude/plans/wpe-import/3-scene/phase6/phase-6a2-sound-delay.md`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | D1 单测与检查 | Windows | 宿主 tsc；声音、绑定、字段脚本、状态写入、能力表、关键帧相关的 18 个 vitest 文件；Prettier | 全过 | 2026-11-21：486 个用例全过（工作树与合并后的主树各一次） |
+| [x] | D2 变异检查 | Windows | `ignore/p6/a4/mutate.py`：random 分支读编译期常量、签名仍含两键、`SceneSounds` 不传 `timingOf`、能力表仍报、`targetOf` 不认两键、编译期不登记目标、状态写错字段、脚本读回固定读 `volume`、宿主不给 `timingOf` | 都被检出 | 2026-11-21：8 / 9；「宿主不给 `timingOf`」单测抓不到，由 D4 的真机录音兜住 |
+| [x] | D3 WPE 的行为 | Windows，WPE 测试窗口 | `p6a-delay`：D 绑属性 `dmin` / `dmax`（1 → 3，运行中 `apply_properties`），S 挂字段脚本（8 s 起返回 3），看 WPE 探针的频谱与回环录音 | 两路间隔都从 1.5 s 变成 3.5 s，跨过改值时刻的那一段仍是 1.5 s | 2026-11-21 Claude：S 开始 … 7.66、9.26、12.81，间隔 1.60 → 3.55；D 开始 … 13.91、15.31、18.91，间隔 1.40 → 3.60 |
+| [x] | D4 Kabegame 真机 | Windows dev，屏外宿主（临时挪进视口、推宿主音量） | 同一个工程导入 dev，运行 8.35 s 改属性、脚本 8.0 s 切换，回环录音 | 同 D3 | 2026-11-21 Claude：两路同步，开始 … 5.92、7.42、10.92、14.46，间隔 1.50 → 3.50，与 WPE 同 |
+| [x] | D5 语料 | Node，`kbp corpus scan` / `diff` | HEAD 快照与主树各扫默认语料与 myprojects | 只有 `3798696286` 变干净 | 2026-11-21 Claude：默认语料 233 张 0 变化；myprojects 437 张干净 431 → 432，只多 `3798696286` |
+| [x] | D6 预览与桌面看 3798696286 | Windows dev，图库预览 | 预览 Hades Asylum Depths，开着声音等一两分钟；把「Roar Minimum / Maximum Delay Time」拖到最小（10 / 30 秒）再等 | 能实时渲染；咆哮声隔一阵随机响一次，改小间隔后从下一次起明显变密 | 2026-11-21 用户：改小间隔后确实变密 |
+| [ ] | D7 非 Windows | macOS、Linux | 同 D6 | 同 Windows | 本机不能测 |
+
+## WPE 壁纸目录删除按来源分流 + 清理隐藏图片的「移到回收站」勾选
+
+2026-11-21 Windows。原来 `batch_delete_images` 对全部 `x-wpe/*` 行一律跳过源文件回收：`local_path` 是用户目录，
+整目录进回收站的风险太大。但这样一来，用户自己下到 `myprojects` 或手选目录里的壁纸也永远删不掉，只能手工去磁盘上清。
+现在改成按来源分流（`wpe::WpeDeleteGuard`）：创意工坊订阅与 WPE 自带工程仍只删记录（Steam 管理的内容，还订阅着就会被同步
+回来；自带工程属于 WPE 安装内容，也是 corpus 语料），其余随记录进回收站。配套把 `safe_delete` 从「只收普通文件」放宽到
+也收目录，并拒绝卷根；软链接与网络盘护栏不变。
+
+同时给「清理隐藏图片」加一个勾选「同时把源文件移到回收站」，**默认不勾**——以前这个入口硬编码删源文件，
+一键清空隐藏画册会连带删掉磁盘上的原图，没有回旋余地。勾选不持久化，每次打开确认框都回到只删记录。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | E1 编译与类型检查 | Windows | `deno task check -c kabegame --skip cargo`；core 的 `cargo check`（默认 features 与 `--no-default-features --features ipc-client,plugin-runtime` 各一次） | 0 error，改动文件 0 warning | 2026-11-21 Claude：vue-tsc 通过；core 两种 feature 组合均 exit 0，改动的文件没有新 warning（无 wpe 时多出的一条在 `plugin/builtin.rs`，原有） |
+| [ ] | E2 `kabegame` crate 编译 | Windows | `deno task check -c kabegame` | 0 error | 本次被运行中的 app 占着 `cef-build` 挡住（`cef-dll-sys` build script os error 5），需关掉 app 后重跑 |
+| [ ] | E3 工坊壁纸删除 | Windows dev，图库 | 删一张 `steamapps/workshop/content/431960/<id>` 的 WPE 壁纸，勾上「删除源文件」 | 库里没了；磁盘上的工坊目录仍在；回收站里没有它 | |
+| [ ] | E4 自带工程删除 | Windows dev，图库 | 同 E3，换 `projects/defaultprojects/<name>` 的一张 | 同 E3 | |
+| [ ] | E5 myprojects 删除 | Windows dev，图库 | 同 E3，换 `projects/myprojects/<id>` 的一张（先确认不是正在用的壁纸） | 库里没了；整个壁纸目录进了系统回收站，能还原 | |
+| [ ] | E6 不删源文件 | Windows dev，图库 | 删一张 myprojects 的壁纸，但**不**勾「删除源文件」 | 库里没了；磁盘目录原样留着 | |
+| [ ] | E7 清理隐藏图片默认不删文件 | Windows dev | 隐藏几张普通图片和一张 myprojects 壁纸，点「清理隐藏图片」，确认框里不勾 | 确认框有一个默认不勾的「同时把源文件移到回收站」；清理后库里没了，磁盘上的原图与壁纸目录都在 | |
+| [ ] | E8 清理隐藏图片勾选后 | Windows dev | 同 E7，这次勾上 | 勾上后显示「创意工坊订阅与 WPE 自带的壁纸目录会保留」提示；清理后普通图片与 myprojects 壁纸进回收站，工坊 / 自带工程的目录仍在 | |
+| [ ] | E9 勾选不持久化 | Windows dev | E8 之后再打开一次确认框 | 勾选回到未勾状态 | |
+| [x] | E10 web RPC 的参数兜底 | Node | `start_hidden_cleanup` 的 `Args` 解析：`null`（完全不带 params）、`{}`、`{deleteFiles:true/false}`、错类型 | 前三种分别得 false / false / true，错类型报 invalid_params | 2026-11-21 Claude：独立最小 crate 实测如此。直接 `from_value::<Args>(Null)` 会报「invalid type: null」，所以过一层 `Option` + `unwrap_or_default`，本来就不带 params 的老调用方照常可用 |
+| [ ] | E10b web 版实跑 | Web dev | 不带 `deleteFiles` 调一次 `start_hidden_cleanup` | 清理跑起来，只删库记录 | |
+| [ ] | E11 非 Windows | macOS、Linux | 同 E3–E8 | 同 Windows（目录进各自的回收站） | 本机不能测 |
+
+## 壁纸功能没开时引导开启，而不是报错
+
+2026-11-21 Windows。壁纸功能（`wallpaperEnabled`）关着时，「设为壁纸」「设为轮播」「用当前视图轮播」都会撞上后端
+`reject_if_wallpaper_disabled` 的「壁纸功能已关闭，请先在设置中重新开启」，用户得自己去设置页找那个开关。现在改成
+引导式确认框，形式与「这张图需要窗口模式」一致：同意就经设置状态机开启（`save` 会 await `set_wallpaper_enabled`，
+后端在那之后已经拉起壁纸后端并恢复了上次的壁纸），再接着做原来的操作。
+
+引导放在**三个入口共用的关口** `pickWallpaperTarget` 里（设置页以外的壁纸操作都先经它选目标），所以三个入口零改动、
+将来新增入口也不会漏；顺序上先问开壁纸、再选屏，和窗口模式引导一样都在下命令之前。只在明确读到「关」时拦，设置还没
+读到就放过去由后端兜底。后端错误码与文案没动，IPC / CLI 调用方不受影响。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | F1 类型检查 | Windows | `deno task check -c kabegame --skip cargo` | 0 error | 2026-11-21 Claude：vue-tsc 通过（本次只改前端与 i18n，没动 Rust） |
+| [x] | F2 单测 | Windows | `useWallpaperTargetPicker.test.ts`（原 11 + 新 3） | 全过 | 2026-11-21 Claude：14 / 14 |
+| [x] | F3 变异检查 | Windows | 去掉前置引导调用、取消时照常继续、忙时不提示直接继续、判断写反 | 四个都被检出 | 2026-11-21 Claude：分别 3 / 1 / 1 / 3 个用例失败，恢复后 14 过 |
+| [ ] | F4 单屏「设为壁纸」 | Windows dev | 设置里关掉「打开壁纸」，回图库右键一张图「设为壁纸」 | 弹「壁纸功能当前是关闭的…现在开启吗？」；点「开启壁纸」后壁纸设置成功、设置页开关变成开 | |
+| [ ] | F5 取消引导 | Windows dev | 同 F4，这次点「取消」 | 什么都不发生：没有错误 toast，壁纸仍关着，不弹选屏窗 | |
+| [ ] | F6 画册「设为轮播」 | Windows dev | 关掉壁纸，画册详情栏点「设为轮播」 | 同 F4 的引导，开启后轮播正常起来 | |
+| [ ] | F7 查询行「用当前视图轮播」 | Windows dev | 关掉壁纸，查询行 ⋯ →「用当前视图轮播」 | 同 F6 | |
+| [ ] | F8 多屏下的先后 | Windows dev，两块屏 + 逐屏独立 | 关掉壁纸，「设为壁纸」 | 先问开壁纸，开了之后才弹选屏窗；选屏取消则不设 | 需要两块屏 |
+| [ ] | F9 壁纸开着时不打扰 | Windows dev | 壁纸开着，正常「设为壁纸」 | 不出现任何额外确认框，行为与以前一致 | |
+| [ ] | F10 连续两道引导 | Windows dev，非窗口模式 | 关掉壁纸且壁纸模式不是窗口模式，对一张视频 / WPE 壁纸「设为壁纸」 | 先引导开壁纸，开了之后再引导切窗口模式，两道都同意则设置成功 | |
+| [ ] | F11 Web 版不受影响 | Web dev | 「设为壁纸」（记应用背景） | 不出现壁纸开关的引导 | |
+| [ ] | F12 非 Windows | macOS、Linux | 同 F4–F10 | 同 Windows | 本机不能测 |

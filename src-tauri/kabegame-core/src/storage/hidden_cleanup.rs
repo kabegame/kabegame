@@ -46,7 +46,14 @@ impl HiddenCleanupService {
             .clone()
     }
 
-    pub async fn start(self: Arc<Self>, storage: Arc<Storage>) -> Result<(), String> {
+    /// `delete_files` 为真时把源文件一并移入回收站（目录型 WPE 壁纸按来源分流，
+    /// 见 `wpe::WpeDeleteGuard`）；为假只删库记录，磁盘上的文件原样保留。
+    /// 调用方必须显式给出，默认由界面决定（清空隐藏画册的勾选默认不勾）。
+    pub async fn start(
+        self: Arc<Self>,
+        storage: Arc<Storage>,
+        delete_files: bool,
+    ) -> Result<(), String> {
         let mut guard = self
             .cancel_flag
             .lock()
@@ -75,10 +82,22 @@ impl HiddenCleanupService {
         let handle = tokio::runtime::Handle::current();
         let service = Arc::clone(&self);
         tokio::task::spawn_blocking(move || {
-            tracing::info!("开始清理，共 {total} 条");
-            if let Err(error) =
-                run_hidden_cleanup(&handle, storage, cancel, total, Arc::clone(&service))
-            {
+            tracing::info!(
+                "开始清理，共 {total} 条（源文件{}）",
+                if delete_files {
+                    "移入回收站"
+                } else {
+                    "保留"
+                }
+            );
+            if let Err(error) = run_hidden_cleanup(
+                &handle,
+                storage,
+                cancel,
+                total,
+                Arc::clone(&service),
+                delete_files,
+            ) {
                 let state = service.get_run_state();
                 GlobalEmitter::global().emit_hidden_cleanup_finished(
                     state.removed,
@@ -158,6 +177,7 @@ fn run_hidden_cleanup(
     cancel: Arc<AtomicBool>,
     _total: usize,
     service: Arc<HiddenCleanupService>,
+    delete_files: bool,
 ) -> Result<(), String> {
     let mut processed = 0usize;
     let mut removed = 0usize;
@@ -187,7 +207,7 @@ fn run_hidden_cleanup(
         }
         previous_batch = Some(signature);
 
-        let purge = handle.block_on(delete_images_with_events(&batch, true))?;
+        let purge = handle.block_on(delete_images_with_events(&batch, delete_files))?;
         // 被移除的图若是某个壁纸目标的当前壁纸，清空该目标
         let _ = Settings::global().clear_wallpaper_targets_current_images(&batch);
         processed += batch.len();

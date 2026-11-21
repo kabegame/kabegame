@@ -372,6 +372,12 @@ export interface SceneParticle {
   spriteSheet: boolean;
   /** JSON 顺序，不排序（O2，实测）。 */
   emitters: ParticleModule[];
+  /**
+   * `layerimage` 发射器的依赖（P4j 步骤 1，rea-p4j-layerimage.md 1.5、1.6）：每个 `layerimage` 发射器一项，按它们在 `emitters` 里的
+   * 先后；没配上依赖为 null（运行时永远不发）。`maskTexture` 是 `mask` 纹理在 `bundle.textures` 的下标（`mask` 为空串或读不到时 null）。
+   * 运行时（步骤 2）按 `(id, mask)` 合并成一张共享的表。`parseParticle` 给空数组，`compileParticleSystem` 填。
+   */
+  emitterImages: ({ id: number; mask: string; maskTexture: number | null } | null)[];
   initializers: ParticleModule[];
   operators: ParticleModule[];
   /**
@@ -959,6 +965,7 @@ export function parseParticle(json: JsonObject, options: ParseParticleOptions): 
     ...readParticleSystem(json),
     spriteSheet: false,
     emitters,
+    emitterImages: [],
     initializers,
     operators: modules("operator"),
     renderers,

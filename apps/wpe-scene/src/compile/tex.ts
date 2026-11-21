@@ -8,6 +8,12 @@
 import { containerDuration } from "../video/container";
 import type { SceneVideoSource } from "../video/player";
 import type { SceneFile } from "./fs";
+import {
+  parseVariantCondition,
+  VARIANT_FLAGS,
+  type TexVariantCondition,
+  type TexVariantPatch,
+} from "./textureVariants";
 
 export const TEX_FLAGS = {
   noInterpolation: 1,
@@ -71,6 +77,11 @@ export const TEXTURE_FORMATS: Readonly<Record<number, TextureFormatInfo>> = {
   8: { gpu: "rg8unorm", block: 1, bytesPerBlock: 2 },
   /** R8 → `R8_UNORM`，采样得 `(r, 0, 0, 1)`。 */
   9: { gpu: "r8unorm", block: 1, bytesPerBlock: 1 },
+  /**
+   * BC7 → `BC7_UNORM`（DXGI 98）。着色器一侧 WPE 的 `common_fragment.h` 已经认 `FORMAT_BC7 12`（法线解码同 DXT，
+   * `ConvertTexture<n>Format` 原样返回）；BC7 的解码在 D3D 里逐位规定，WebGPU 同一个硬件格式。
+   */
+  12: { gpu: "bc7-rgba-unorm", block: 4, bytesPerBlock: 16, feature: "texture-compression-bc" },
 };
 
 /** 格式表里的一项；不在表里返回 undefined（不走原型链）。 */
@@ -147,11 +158,19 @@ export interface TexResult {
    * 只给出它们在磁盘上的位置（`SceneFile.location`），由主线程区间读、`createImageBitmap` 解码并跨重新编译缓存。
    */
   encoded?: { mime: "image/png" | "image/jpeg"; path: string; mips: { start: number; end: number }[] };
+  /**
+   * 纹理变体（P11e，rea-p11e）：`TEXB0004` 头里的条件表与第 0 张图像每级 mip 的变体条目（第 l 项是第 l 级，数据只给磁盘上的绝对区间）。
+   * 没有条件时不写。
+   */
+  variants?: { conditions: TexVariantCondition[]; mips: TexVariantPatch[][] };
   unsupported: string[];
 }
 
 /** FreeImage 格式枚举（FIF_*）→ MIME；只认浏览器能解码的两种。 */
-const FREE_IMAGE_MIME: Record<number, "image/png" | "image/jpeg"> = { 2: "image/jpeg", 13: "image/png" };
+export const FREE_IMAGE_MIME: Readonly<Record<number, "image/png" | "image/jpeg">> = {
+  2: "image/jpeg",
+  13: "image/png",
+};
 
 class Cursor {
   pos = 0;
@@ -286,11 +305,21 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   const containerVersion = Number(container.at(-1)),
     imageCount = await c.u32();
   if (imageCount > 10000) throw new Error("纹理图像数异常");
-  let freeImageFormat = -1,
-    videoMp4 = 0;
+  let freeImageFormat = -1;
   if (containerVersion >= 3) freeImageFormat = await c.i32();
-  if (containerVersion === 4) videoMp4 = await c.u32();
-  const mipLayoutVersion = containerVersion === 4 && videoMp4 === 1 ? 4 : Math.min(containerVersion, 3);
+  // TEXB0004 的第三个字段是变体的条件数（P11e，rea-p11e；以前照 LWE 当成 `isVideoMp4`、为 1 时每级 mip 前多读一段，WPE 里没有那种布局，
+  // 语料也一张没有）。每条 `[组号, 变体号, 标志, 以 0 结尾的 JSON]`；JSON 不合规的条件 WPE 什么都不做，但每级 mip 的变体块照样按条件数读
+  const conditionCount = containerVersion === 4 ? await c.u32() : 0;
+  if (conditionCount > 10000) throw new Error("纹理条件数异常");
+  const conditions: TexVariantCondition[] = [];
+  for (let k = 0; k < conditionCount; k++) {
+    const group = await c.u32(),
+      id = await c.u32(),
+      conditionFlags = await c.u32();
+    const test = parseVariantCondition(await c.zstr());
+    if (test) conditions.push({ group, id, flags: conditionFlags, test });
+  }
+  const mipLayoutVersion = Math.min(containerVersion, 3);
   const unsupported: string[] = [];
   // 视频纹理（Video 标志）不报键（P9a 步骤 3 解锁）：播放与纹理在 `video/` 与 `GpuScene.copyVideo`，槽 0 以外（effect pass、粒子）
   // 同样工作，WPE 也是逐槽更新（rea-p9-video 第 2 节），不另报用途键
@@ -305,22 +334,27 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
   if (freeImageMime ? format !== 0 : !textureFormat(format)) unsupported.push(`tex:format:${format}`);
   if (freeImageFormat !== -1 && !freeImageMime) unsupported.push(`tex:freeimage:${freeImageFormat}`);
   if (flags & TEX_FLAGS.clampBorder) unsupported.push("tex:clamp-border");
+  // 纹理变体（P11e）只做 FreeImage 形态、单图像、覆盖与整张替换（2026-11-21 用户定，语料只有 3817265356 一张，PNG、标志 0）
+  if (conditionCount > 0) {
+    // TODO:[WPE_SCENE] 原格式（含 LZ4）的变体：WPE 按 `FUN_14015c480` 的格式表逐行拷（DXT 按块行）。语料 0 处，照报
+    if (!freeImageMime) unsupported.push("tex:variant:raw");
+    // TODO:[WPE_SCENE] 标志位 1（资源编译器的 `blend: "alphablend"`）：RGBA8888 按变体 alpha 混合，公式在 rea-p11e 与
+    // `ignore/p11/e/ref_variants.py` 的 `blend`（P11e 点 0 与 WPE 逐像素相同）。语料 0 处，照报
+    if (conditions.some((condition) => condition.flags & VARIANT_FLAGS.alphaBlend))
+      unsupported.push("tex:variant:alphablend");
+    if (imageCount > 1) unsupported.push("tex:variant:multi-image");
+  }
   // FreeImage 的 mip 交给主线程解码，这里永远不读字节。`tex:animation:empty` 在 mip 之后才读到，不挡
   // 视频的 mip 就是整段视频（语料最大 674 MiB）：按 Video 标志跳过，这就是唯一的一道（视频纹理不报任何键，`unsupported` 挡不住），
   // 去掉它 Worker 会经主线程代读整段视频。只给区间，由主线程的播放器读（P9a）
   const shouldDecode = decode && !(flags & TEX_FLAGS.video) && unsupported.length === 0 && !freeImageMime;
   const images: TexImage[] = [];
+  const variantMips: TexVariantPatch[][] = [];
   for (let image = 0; image < imageCount; image++) {
     const mipCount = await c.u32();
     if (mipCount > 64) throw new Error("mip 数异常");
     const mips: TexMip[] = [];
     for (let i = 0; i < mipCount; i++) {
-      if (mipLayoutVersion === 4) {
-        await c.u32();
-        await c.u32();
-        await c.zstr();
-        await c.u32();
-      }
       const mipWidth = await c.u32(),
         mipHeight = await c.u32();
       const compression = mipLayoutVersion >= 2 ? await c.u32() : 0;
@@ -344,6 +378,44 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
         mip.bytes = compression === 1 ? decodeLz4Block(bytes, uncompressedSize) : bytes;
       } else c.skip(length);
       mips.push(mip);
+      // 这一级的变体块（P11e）：条件数 > 0 时底图数据之后 `u32 组数`，每组 `u32 条数`，每条
+      // `[组号, 变体号, x, y, w, h, FreeImage 格式, 长度, 数据]`。只记区间，数据由主线程按区间读、解码（同 FreeImage 底图）
+      if (conditionCount > 0) {
+        const patches: TexVariantPatch[] = [];
+        const groups = await c.u32();
+        if (groups > 10000) throw new Error("纹理变体组数异常");
+        for (let g = 0; g < groups; g++) {
+          const count = await c.u32();
+          if (count > 10000) throw new Error("纹理变体条数异常");
+          for (let k = 0; k < count; k++) {
+            const group = await c.u32(),
+              id = await c.u32(),
+              x = await c.u32(),
+              y = await c.u32(),
+              patchWidth = await c.u32(),
+              patchHeight = await c.u32(),
+              patchFormat = await c.i32(),
+              patchLength = await c.u32();
+            const start = file.location.offset + c.pos;
+            c.skip(patchLength);
+            // 变体自己的格式：原格式（-1）或浏览器解不了的 FreeImage 格式同样照报（见上 `tex:variant:raw` 的 TODO）
+            if (!FREE_IMAGE_MIME[patchFormat] && !unsupported.includes("tex:variant:raw"))
+              unsupported.push("tex:variant:raw");
+            patches.push({
+              group,
+              id,
+              x,
+              y,
+              width: patchWidth,
+              height: patchHeight,
+              freeImageFormat: patchFormat,
+              start,
+              end: start + patchLength,
+            });
+          }
+        }
+        if (image === 0) variantMips.push(patches);
+      }
     }
     images.push({ mips });
   }
@@ -413,6 +485,7 @@ export async function parseTex(file: SceneFile, decode = true): Promise<TexResul
     frames,
     video,
     encoded,
+    ...(conditionCount > 0 ? { variants: { conditions, mips: variantMips } } : {}),
     unsupported,
   };
 }

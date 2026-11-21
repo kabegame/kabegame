@@ -1084,6 +1084,8 @@ export class SceneRenderer {
       this.blitBindGroup(scene.targetView!),
     );
     device.queue.submit([encoder.finish()]);
+    // 发射图候选表的快照读回（P4j 步骤 2b）：提交之后 `mapAsync`，读完交给状态机；没有发射图依赖时什么都不做
+    scene.afterSubmit();
     this.frameCosts.push(performance.now() - started);
     if (this.frameCosts.length > 600) this.frameCosts.splice(0, this.frameCosts.length - 600);
   }

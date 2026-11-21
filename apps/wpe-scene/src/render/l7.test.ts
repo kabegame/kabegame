@@ -8,7 +8,7 @@
  * - 删组：当帧剩下的子层由顶层画；
  * - 嵌套组换归属：组里子孙的合成 RT 换到按层数分开的池；
  * - 挂点表随 `layer.attachment` 更新；组的子表只换顺序时不重建（`rebuildStats` 不增），子树按新顺序画；
- * - 重排失败（回到顶层而场景没有深度附件）抛错并卸掉那个对象；粒子层进组沿用粒子树。
+ * - 重排失败（回到顶层而场景没有深度附件）抛错并卸掉那个对象；粒子层进组沿用粒子树；模型层进组（P14b）网格画进组 RT、管线换成没有深度的。
  * 假设备照 `p5b-group.test.ts`：模拟 WebGPU 会拒绝的情况（拷贝用途、pass 嵌套、在已结束的 pass 上编码、管线格式 / 深度和 pass 不符、同一张纹理既是
  * 目标又被采样），任何一条都抛错；同步与异步建管线都记下来。
  */
@@ -594,6 +594,58 @@ describe("GpuScene.restructure（L7）", () => {
     expect(scene.hasObject(3)).toBe(false);
     // 组照常重排（另一个对象不受影响）
     expect(scene.hasObject(1)).toBe(true);
+  });
+
+  it("模型层进组（P14b）：网格画进组的合成 RT、管线换成没有深度的（同步建）；出组回顶层、管线换回带深度的", async () => {
+    const mesh = {
+      format: 0x9,
+      stride: 20,
+      vertices: new Uint8Array(4 * 20),
+      indices: new Uint8Array(new Uint16Array([0, 1, 2, 0, 2, 3]).buffer),
+      vertexCount: 4,
+      indexFormat: "uint16" as const,
+      indexCount: 6,
+      material: "materials/m.json",
+      passes: [
+        pass("objects/3/meshes/0/passes/0", { depthtest: "enabled", depthwrite: "enabled", blending: "normal" }),
+      ],
+    };
+    const layers = [
+      image(0, "BG", { size: [1920, 1080] }),
+      compose(1, "G", [800, 400], { effects: [kbfx(1)] }),
+      image(3, "M", {
+        size: [0, 0],
+        passes: [],
+        model: {
+          path: "models/m.mdl",
+          version: 23,
+          meshes: [mesh],
+          order: [0],
+          bounds: [-131072, -131072, -131072, 131072, 131072, 131072],
+        },
+      }),
+    ];
+    const { gpu, state, scene, restructure } = await open(layers);
+    const meshLine = (trace: readonly string[]) => drawTargets(trace).filter((line) => line.includes("models/m.mdl"));
+    const pipelineOfMesh = (trace: readonly string[]) => {
+      const at = trace.findIndex((line) => line.includes("models/m.mdl"));
+      for (let i = at; i >= 0; i--) if (trace[i].startsWith("  pipeline ")) return trace[i].slice(11);
+      throw new Error("没有 M 的网格");
+    };
+    let trace = gpu.encode(scene, state);
+    expect(meshLine(trace)).toEqual([expect.stringContaining(`@ ${SCENE}`)]);
+    const top = pipelineOfMesh(trace);
+    expect(top).toContain("depth:");
+    state.setParent(3, 1);
+    expect(restructure()).toEqual([1, 3]);
+    trace = gpu.encode(scene, state);
+    expect(meshLine(trace)).toEqual([expect.stringContaining(`@ ${G_RT}`)]);
+    expect(pipelineOfMesh(trace)).not.toContain("depth:");
+    state.setParent(3, null);
+    expect(restructure()).toEqual([1, 3]);
+    trace = gpu.encode(scene, state);
+    expect(meshLine(trace)).toEqual([expect.stringContaining(`@ ${SCENE}`)]);
+    expect(pipelineOfMesh(trace)).toBe(top);
   });
 
   it("粒子层进组：沿用粒子树（模拟不重来），绘制画进组的合成 RT", async () => {

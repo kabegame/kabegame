@@ -15,9 +15,13 @@
  * `origin` 是世界坐标里的直接偏移、不经 `W`（实测 `w-origin`），3×3 含 `W` 的旋转与缩放。
  */
 import { moduleAudio, type ParticleAudio } from "./audio";
+import { glmInverse } from "../render/adjust";
+import { identity, multiply, type Mat4 } from "../render/math";
+import { IDENTITY_BASIS } from "./controlpoints";
 import { f32, lerp, mulBasis, PI, rcp, TWO_PI } from "./f32";
+import type { EmitterImageTable, LayerImageFrame } from "./layerImage";
 import type { ParticleFields, ParticleRunContext } from "./modules";
-import type { ParticleRandom } from "./random";
+import { uniformIndex, type ParticleRandom } from "./random";
 
 /** emitter 的模块级状态（WPE 存在流记录里，每实例一份，Q5；偏移见 `rea-p4b-modules.md` A0）。 */
 export interface EmitterState {
@@ -272,6 +276,98 @@ export function sphereRandom(fields: ParticleFields, context: ParticleRunContext
   );
   const scale = d2 > 0 ? f32(speed * f32(1 / Math.sqrt(d2))) : 0;
   for (let i = 0; i < 3; i++) columns.velocity[i][slot] = f32(scale * direction[i]);
+}
+
+/**
+ * `layerimage` 一帧的发射输入（rea-p4j-layerimage.md 3.2，`0x140238c75`–`0x140238de4`）：
+ * ```
+ * 世界系统：A = Ap = I（Ap 给速度用）          本地系统：A = Ap = M⁻¹（glm 4×4 求逆，`FUN_14005f730`）
+ * Bprev = Ap · rec[0xb8]                       // rec[0xb8]：上一次取到表时的图层矩阵（解析时单位阵）
+ * A = A · L                                    // L：这次取表返回的图层矩阵
+ * ```
+ * `model` 是模拟用的模型栈顶 `M`（`inputs.world`），`previous` 是发射器上的 `rec[0xb8]`。乘法同图层 MVP 用的 glm 乘法（`multiply`，k 从 0 到 3 逐步 f32）。
+ */
+export function layerImageFrame(input: {
+  table: EmitterImageTable;
+  model: Mat4;
+  world: boolean;
+  matrix: Mat4;
+  previous: Mat4;
+  frameDt: number;
+}): LayerImageFrame {
+  const base = input.world ? identity() : glmInverse(input.model);
+  return {
+    table: input.table,
+    A: multiply(base, input.matrix),
+    prev: multiply(base, input.previous),
+    frameDt: f32(input.frameDt),
+  };
+}
+
+/**
+ * `layerimage`（P4j 步骤 3，rea-p4j-layerimage.md 第 3 节，`0x140238f0a`–`0x14023ae1f`）。`context.layerImage` 是这一帧的输入（`layerImageFrame`）；
+ * 没有它（没取到表）不会走到这里。每颗粒子的抽取顺序（3.10）：表项下标（`uniformIndex`，Lemire）→ `0x80000` 时抖动 x、y、z（`uA`）→
+ * `0x40000` 时速率（`uA`），之后由 `spawn` 抽 `R` 与各 initializer。
+ *
+ * - **表项**：`ix = f32(x[i])`、`iy = f32(−y[i])`（int16 先取负再转浮点，y 向下 → 向上，3.3）；
+ * - **抖动**（3.4）：`j = f32(f32(uA·range) + min)`，`range = offsetmax − offsetmin`（float32，解析时算好存的）；`p = (ix + jx, iy + jy, jz)`，加在表坐标上、早于 `A`；
+ * - **出生点**（3.5，括号就是 `mulss` / `addss` 的顺序，无 FMA）：`A3` 的列 i、行 j 是 `a_ij = A[4i + j]`，`t` 是 `A` 第 3 列：
+ *   `X = tx + ((a10·py + a00·px) + a20·pz)`、`Y = ty + ((a11·py + a01·px) + a21·pz)`、`Z = tz + ((a02·px + a12·py) + a22·pz)`；
+ * - **颜色**（3.6，`0x10000`）：记 `context.colorScale = (r, g, b) / 255`（float32 除法），`spawn` 把实例颜色乘上它（像素色在前，`mulss` 可交换）；
+ * - **速度**（3.7，`0x40000`）：`prev = Bprev·(p, 1)`，求和顺序 `(c3·1 + c2·pz) + (c1·py + c0·px)`（`c_k` 是 `Bprev` 第 k 列）；
+ *   `dv = (P − prev) / frameDt`，`k = uA·(speedmax − speedmin) + speedmin`，`v = k·dv`；没有这一位速度恒为 0（`speedmin` / `speedmax` 不起作用）；
+ * - **`M3`**（3.2）：本地系统单位阵，世界系统 `mat3(M)`（`context.model`），和 `sphererandom` / `boxrandom` 的 `mat3(cp)` 不同。
+ *
+ * `frameDt` 为 0 时速度是 inf / NaN（回放预热不会走到，表要等第 3 个发射帧）；不特判，同 WPE。
+ */
+export function layerImage(fields: ParticleFields, context: ParticleRunContext): void {
+  const frame = context.layerImage;
+  if (!frame) return;
+  const { table, A, prev, frameDt } = frame;
+  const { columns, random, slot } = context;
+  const flags = fields.flags as number;
+  context.basis = context.world ? context.model : IDENTITY_BASIS;
+  const index = uniformIndex(random, table.count);
+  const ix = f32(table.x[index]);
+  const iy = f32(0 - table.y[index]);
+  let jx = 0;
+  let jy = 0;
+  let jz = 0;
+  if (flags & 0x80000) {
+    const min = fields.offsetmin as number[];
+    const max = fields.offsetmax as number[];
+    jx = f32(f32(random.a() * f32(max[0] - min[0])) + min[0]);
+    jy = f32(f32(random.a() * f32(max[1] - min[1])) + min[1]);
+    jz = f32(f32(random.a() * f32(max[2] - min[2])) + min[2]);
+  }
+  const px = f32(ix + jx);
+  const py = f32(iy + jy);
+  const pz = f32(jz + 0);
+  const X = f32(A[12] + f32(f32(f32(A[4] * py) + f32(A[0] * px)) + f32(A[8] * pz)));
+  const Y = f32(A[13] + f32(f32(f32(A[5] * py) + f32(A[1] * px)) + f32(A[9] * pz)));
+  const Z = f32(A[14] + f32(f32(f32(A[2] * px) + f32(A[6] * py)) + f32(A[10] * pz)));
+  columns.position[0][slot] = X;
+  columns.position[1][slot] = Y;
+  columns.position[2][slot] = Z;
+  if (flags & 0x10000) {
+    const rgb = table.rgb;
+    context.colorScale = [f32(rgb[index * 3] / 255), f32(rgb[index * 3 + 1] / 255), f32(rgb[index * 3 + 2] / 255)];
+  }
+  let vx = 0;
+  let vy = 0;
+  let vz = 0;
+  if (flags & 0x40000) {
+    const before = (j: number): number =>
+      f32(f32(prev[12 + j] + f32(prev[8 + j] * pz)) + f32(f32(prev[4 + j] * py) + f32(prev[j] * px)));
+    const speedMin = fields.speedmin as number;
+    const k = f32(f32(random.a() * f32((fields.speedmax as number) - speedMin)) + speedMin);
+    vx = f32(k * f32(f32(X - before(0)) / frameDt));
+    vy = f32(k * f32(f32(Y - before(1)) / frameDt));
+    vz = f32(k * f32(f32(Z - before(2)) / frameDt));
+  }
+  columns.velocity[0][slot] = vx;
+  columns.velocity[1][slot] = vy;
+  columns.velocity[2][slot] = vz;
 }
 
 /** `boxrandom` 回退判断的阈值（`0x14023896e` 比较的常量）。 */

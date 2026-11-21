@@ -97,6 +97,8 @@ export class SoundScheduler {
     sound: SceneSound,
     private readonly backend: SoundBackend,
     private readonly random: () => number,
+    /** 现读 `mintime` / `maxtime`（P6a2）：WPE 的 `P` 在开始播放时读字段，状态里的值下一次排期生效；缺省用声音表的值。 */
+    private readonly timing?: () => { mintime: number; maxtime: number } | undefined,
   ) {
     this.sound = sound;
     this.available = sound.files.map((_, index) => index);
@@ -263,7 +265,9 @@ export class SoundScheduler {
       // 只在等待计时归零时动作；在放、在等（含等后端回报）时什么都不做
       if (this.T === 0 && !this.pending) {
         const file = this.pick();
-        const wait = this.random() * (this.sound.maxtime - this.sound.mintime) + this.sound.mintime;
+        // mintime / maxtime 没有改值回调，WPE 在 P 里现读字段（rea-p6a 2.1）：属性、脚本、关键帧写过的值在下一次排期生效，正在等的这次不变
+        const { mintime, maxtime } = this.timing?.() ?? this.sound;
+        const wait = this.random() * (maxtime - mintime) + mintime;
         this.begin({ file, mode, multi: false, wait }, false);
       }
     } else this.begin({ file: this.pick(), mode, multi: false, wait: 0 }, false);

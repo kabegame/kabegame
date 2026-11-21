@@ -71,7 +71,8 @@ export async function decodeEncodedTextureList(
 ): Promise<Set<string>> {
   const used = new Set<string>();
   const pending = textures.filter((texture) => texture.encoded && !texture.mips.length);
-  const total = pending.reduce((sum, texture) => sum + texture.encoded!.mips.length, 0);
+  const patchesOf = (texture: SceneTexture) => texture.variants?.mips.flat().filter((patch) => patch.mime) ?? [];
+  const total = pending.reduce((sum, texture) => sum + texture.encoded!.mips.length + patchesOf(texture).length, 0);
   let done = 0;
   onProgress?.(0, total);
   await Promise.all(
@@ -84,6 +85,20 @@ export async function decodeEncodedTextureList(
             onProgress?.(++done, total);
             return bitmap;
           });
+        }),
+      );
+      // 纹理变体（P11e）：全部变体在加载时一起解码，运行中换选择当帧就能重写纹理（WPE 改值后下一帧画新变体）。解不了或尺寸和条目不符的
+      // 不填 `bitmap`、不贴（WPE 按条目的宽高解码，失败就跳过这一条），不让整张纹理失败
+      await Promise.all(
+        patchesOf(texture).map(async (patch) => {
+          used.add(`${encoded.path}|${patch.start}|${patch.end}`);
+          try {
+            const bitmap = await cache.get(encoded.path, patch.start, patch.end, patch.mime!);
+            if (bitmap.width === patch.width && bitmap.height === patch.height) patch.bitmap = bitmap;
+          } catch {
+            // 跳过这一条
+          }
+          onProgress?.(++done, total);
         }),
       );
       texture.mips = bitmaps.map((bitmap) => ({ width: bitmap.width, height: bitmap.height, bitmap }));

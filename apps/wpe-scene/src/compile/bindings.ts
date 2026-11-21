@@ -264,6 +264,9 @@ export function isTextRuntimeField(key: string): key is TextRuntimeField {
   return (TEXT_RUNTIME_FIELDS as readonly string[]).includes(key);
 }
 
+/** 声音对象的就地字段（P6a 步骤 1 的 volume；P6a2 的 mintime / maxtime）。 */
+export type SoundField = "volume" | "mintime" | "maxtime";
+
 export type BindingTarget =
   | { kind: "script-property"; script: string; key: string }
   | { kind: "layer"; object: number; field: LayerField }
@@ -308,10 +311,12 @@ export type BindingTarget =
    */
   | { kind: "particle-instance"; object: number; field: InstanceKey }
   /**
-   * 声音对象的 `volume`（P6a 步骤 1，rea-p6a-sound.md 5.2）：WPE 改值经回调 `V` 立即生效、没有渐变。就地写进
-   * `SceneState.sounds`，不标脏，宿主的排期器每帧读（`audio/scheduler.ts`）。`object` 是 `objects` 下标。
+   * 声音对象的就地字段（`SoundField`）。`volume`（P6a 步骤 1，rea-p6a-sound.md 5.2）：WPE 改值经回调 `V` 立即生效、没有渐变，
+   * 宿主当场推给排期器。`mintime` / `maxtime`（P6a2）：WPE 没有改值回调，`random` 模式在开始播放（`P`）时现读字段（rea-p6a 2.1），
+   * 写进去的值下一次排期生效（rea-p10-keyframes 第 4 条：没有回调的字段照样写入），所以不用推，排期器开始时现读。
+   * 都就地写进 `SceneState.sounds`，不标脏。`object` 是 `objects` 下标。
    */
-  | { kind: "sound"; object: number; field: "volume" }
+  | { kind: "sound"; object: number; field: SoundField }
   /**
    * 文本对象的排版字段（P6b 1e，`TEXT_RUNTIME_FIELDS`）：就地写进 `SceneState.textFields`，值变了才标 `dirtyTexts`、由渲染器重排
    * （WPE 逐项比较，变了才重排）。字符串只在这种目标上流通：属性侧按 JSON setter（`textFieldFromJson`），脚本侧按 `ToString`
@@ -339,6 +344,12 @@ export type BindingTarget =
    * 不管它绑在几个槽上。值只认字符串，别的类型当空串（缺省纹理）。
    */
   | { kind: "user-texture"; name: string }
+  /**
+   * 纹理变体的条件属性（P11e，`compile/textureVariants.ts`）：属性 `name` 换了值，就地记进 `SceneState.variantValues`（值照原样，判定要看类型），
+   * 下一帧 `GpuScene.sync` 对纹理 `path` 重新选择变体、选择变了就重写纹理内容，不重编译（WPE 在帧间原地重载这张纹理，rea-p11e 2 节）。
+   * 每张纹理的每个条件属性登记一条，条件无意义。
+   */
+  | { kind: "texture-variant"; path: string; name: string }
   /**
    * 材质 pass 的五个状态字段（P6d1b，只由脚本 API 产生，`script/api.ts` 材质对象的 `blending` 等）：写进 `SceneState.passStates`，
    * 值按字段的表规整（`passState.ts` 的 `normalizePassState`）；`GpuScene.sync` 对这个 pass 所属的图层强制重建，规划时取「bundle 值 +
@@ -463,6 +474,14 @@ export class BindingCollector {
   bindUserTexture(name: string): void {
     const exists = this.list.some((item) => item.target.kind === "user-texture" && item.target.name === name);
     if (!exists) this.list.push({ property: name, target: { kind: "user-texture", name } });
+  }
+
+  /** 登记纹理变体的条件属性（P11e）：同一张纹理的同一个属性只登记一条。 */
+  bindTextureVariant(path: string, name: string): void {
+    const exists = this.list.some(
+      (item) => item.target.kind === "texture-variant" && item.target.path === path && item.target.name === name,
+    );
+    if (!exists) this.list.push({ property: name, target: { kind: "texture-variant", path, name } });
   }
 }
 

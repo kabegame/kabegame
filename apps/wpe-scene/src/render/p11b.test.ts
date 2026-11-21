@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults, mergeProperties, planApply } from "../compile/bindings";
 import type { SceneBundle, SceneEffect, SceneLayer, ScenePass, SceneTexture } from "../compile/bundle";
+import type { SceneScalar } from "../compile/model";
 import { BLOOM_DEFAULTS } from "../compile/postprocess";
 import type { UserTextureSlot } from "../compile/usertextures";
 import type { CropRect } from "../usertex/crop";
@@ -48,6 +49,8 @@ class FakeGpu {
   readonly textures: FakeTexture[] = [];
   readonly copies: { source: unknown; texture: string; origin: unknown; size: { width: number; height: number } }[] =
     [];
+  /** 每次 `copyExternalImageToTexture` 的目标（P11e 纹理变体：贴到哪一级 mip 的哪个位置）。和 `copies` 一一对应，另放一份不改它的形状。 */
+  readonly copyTargets: { source: unknown; texture: string; mipLevel: number; origin: unknown }[] = [];
   /** `writeTexture` 的调用（P11b 步骤 4，GIF 上传）：目标纹理名、数据、布局与尺寸。 */
   readonly writes: {
     texture: string;
@@ -154,6 +157,12 @@ class FakeGpu {
             origin: source.origin,
             texture: (destination.texture as unknown as FakeTexture).label,
             size,
+          });
+          this.copyTargets.push({
+            source: source.source,
+            texture: (destination.texture as unknown as FakeTexture).label,
+            mipLevel: destination.mipLevel ?? 0,
+            origin: destination.origin,
           });
         },
         submit() {},
@@ -1392,5 +1401,111 @@ describe("粒子材质槽 0 换图（P11b2）：粒子 draw 也重绑，清空�
     expect(draw.bindGroup!.key).not.toContain("user");
     live.scene.update(FRAME);
     expect(uniform(draw, PARTICLE_RES0, 4)).toEqual([128, 128, 128, 128]);
+  });
+});
+
+// ———— 纹理变体（P11e 点 4，借用本文件的假设备）：换选择只重写同一张 GPU 纹理的内容，选择不变不写 ————
+
+/** 假位图：只有尺寸，`copyTargets` 按对象认是哪一张。 */
+const bitmap = (name: string, width: number, height: number) => ({ name, width, height }) as unknown as ImageBitmap;
+
+function variantBundle(values: Record<string, string | boolean>): { bundle: SceneBundle; patches: ImageBitmap[][] } {
+  const base = [bitmap("base0", 8, 4), bitmap("base1", 4, 2)];
+  const patches = [
+    [bitmap("a0", 3, 2), bitmap("d0", 4, 4)],
+    [bitmap("a1", 2, 1), bitmap("d1", 2, 2)],
+  ];
+  const patch = (level: number, k: number, id: number, x: number, y: number) => ({
+    group: id,
+    id,
+    x,
+    y,
+    width: (patches[level][k] as unknown as { width: number }).width,
+    height: (patches[level][k] as unknown as { height: number }).height,
+    freeImageFormat: 13,
+    start: 1000 + 100 * level + 10 * k,
+    end: 1005 + 100 * level + 10 * k,
+    mime: "image/png" as const,
+    bitmap: patches[level][k],
+  });
+  const texture: SceneTexture = {
+    path: "materials/v.tex",
+    source: "project",
+    format: 0,
+    width: 8,
+    height: 4,
+    textureWidth: 8,
+    textureHeight: 4,
+    flags: 2,
+    clampUVs: true,
+    noInterpolation: false,
+    mips: base.map((b) => ({ width: b.width, height: b.height, bitmap: b })),
+    variants: {
+      conditions: [
+        { group: 1, id: 1, flags: 0, test: { name: "leg", equals: "1" } },
+        { group: 2, id: 2, flags: 0, test: { name: "flag", bool: true } },
+      ],
+      mips: [
+        [patch(0, 0, 1, 1, 2), patch(0, 1, 2, 4, 0)],
+        [patch(1, 0, 1, 0, 1), patch(1, 1, 2, 2, 0)],
+      ],
+      values,
+    },
+  };
+  return { bundle: bundleOf([layer(0, { size: [8, 4] })], [texture], []), patches };
+}
+
+describe("纹理变体（P11e）：上传按编译时的值选，运行中改值只重写内容（rea-p11e 2 节）", () => {
+  const write = (live: Live, name: string, value: SceneScalar) => {
+    live.state.write({ property: name, target: { kind: "texture-variant", path: "materials/v.tex", name } }, value);
+    advance(live.scene, live.state);
+  };
+  const targets = (live: Live) =>
+    live.gpu.copyTargets
+      .filter((copy) => copy.texture === "materials/v.tex")
+      .map((copy) => [(copy.source as unknown as { name: string }).name, copy.mipLevel, copy.origin ?? null]);
+
+  it("上传：每级先写底图再按文件顺序贴命中的变体，位置是变体在这一级的矩形", async () => {
+    const live = await open(variantBundle({ leg: "1", flag: true }).bundle);
+    expect(targets(live)).toEqual([
+      ["base0", 0, null],
+      ["a0", 0, { x: 1, y: 2 }],
+      ["d0", 0, { x: 4, y: 0 }],
+      ["base1", 1, null],
+      ["a1", 1, { x: 0, y: 1 }],
+      ["d1", 1, { x: 2, y: 0 }],
+    ]);
+  });
+
+  it("改值：选择变了才重写同一张纹理（不新建 GPU 纹理）；同值、数字值都按判定规则", async () => {
+    const live = await open(variantBundle({ leg: "2" }).bundle);
+    const created = live.gpu.textures.filter((t) => t.label === "materials/v.tex").length;
+    expect(targets(live)).toEqual([
+      ["base0", 0, null],
+      ["base1", 1, null],
+    ]);
+    live.gpu.copyTargets.length = 0;
+    write(live, "leg", "1");
+    expect(targets(live)).toEqual([
+      ["base0", 0, null],
+      ["a0", 0, { x: 1, y: 2 }],
+      ["base1", 1, null],
+      ["a1", 1, { x: 0, y: 1 }],
+    ]);
+    live.gpu.copyTargets.length = 0;
+    // 同值写入：选择不变，不重写
+    write(live, "leg", "1");
+    expect(targets(live)).toEqual([]);
+    // 数字 1 不等于 "1"：回到只有底图
+    write(live, "leg", 1);
+    expect(targets(live)).toEqual([
+      ["base0", 0, null],
+      ["base1", 1, null],
+    ]);
+    live.gpu.copyTargets.length = 0;
+    write(live, "flag", true);
+    expect(targets(live).map(([name]) => name)).toEqual(["base0", "d0", "base1", "d1"]);
+    expect(live.gpu.textures.filter((t) => t.label === "materials/v.tex")).toHaveLength(created);
+    expect(live.state.variantValues.get("leg")).toBe(1);
   });
 });

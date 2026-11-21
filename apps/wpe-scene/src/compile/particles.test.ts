@@ -40,10 +40,11 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项、P4d 步骤 3 的 2 项、步骤 4a 的 2 项、步骤 5 的 4 项、P4g 步骤 1 的 2 项（hsvcolorrandom、colorlist）、P4h 的 boids，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）、ropetrail（P4d 步骤 2）；每项都有列和执行函数，renderer 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项、P4d 步骤 3 的 2 项、步骤 4a 的 2 项、步骤 5 的 4 项、P4g 步骤 1 的 2 项（hsvcolorrandom、colorlist）、P4h 的 boids、P4j 的 emitter layerimage，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）、ropetrail（P4d 步骤 2）；每项都有列和执行函数，renderer 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "emitter:boxrandom",
+      "emitter:layerimage",
       "initializer:lifetimerandom",
       "initializer:sizerandom",
       "initializer:colorrandom",
@@ -713,14 +714,14 @@ describe("能力表：粒子", () => {
   it("表外模块：particle:<类别>:<名字>", () => {
     expect(
       particleKeys({
-        emitter: [{ name: "layerimage" }],
+        emitter: [{ name: "foo" }],
         initializer: [{ name: "remapinitialvalue" }],
         operator: [{ name: "collisionmodel" }],
         renderer: [{ name: "foo" }],
       }),
     ).toEqual([
       // remapinitialvalue 从 P4d 步骤 4a 起在表里，只写名字时没有键
-      "particle:emitter:layerimage",
+      "particle:emitter:foo",
       "particle:operator:collisionmodel",
       "particle:renderer:foo",
     ]);
@@ -1221,15 +1222,17 @@ describe("能力表：粒子材质的 COMBO 与光照", () => {
     return [...keys].sort();
   };
 
-  it("非 0 的 COMBO 只允许 WORLDBLUR、USERCOLORBLEND、REFRACT、CUTOUT、NORMALMAP（后三个是 P4b 步骤 5）", () => {
+  it("非 0 的 COMBO 只允许 WORLDBLUR、USERCOLORBLEND、REFRACT、CUTOUT、NORMALMAP（后三个是 P4b 步骤 5）与光照两个（P4i）", () => {
     expect(check({ combos: { USERCOLORBLEND: 1, WORLDBLUR: 1, REFRACT: 1, CUTOUT: 1, NORMALMAP: 1 } })).toEqual([]);
     expect(check({ combos: { refract: true, cutout: true } })).toEqual([]);
-    expect(check({ combos: { DOUBLESIDEDLIGHTING: 1 } })).toEqual(["particle:combo:DOUBLESIDEDLIGHTING"]);
+    expect(check({ combos: { SPECULARMAP: 1 } })).toEqual(["particle:combo:SPECULARMAP"]);
   });
 
-  it("LIGHTING 非 0 报 particle:lighting（材质写的或着色器缺省值）", () => {
-    expect(check({ combos: { LIGHTING: 1 } })).toEqual(["particle:lighting"]);
-    expect(check({}, result([{ name: "LIGHTING", value: 1, source: "default" }]))).toEqual(["particle:lighting"]);
+  it("LIGHTING、DOUBLESIDEDLIGHTING 不报（P4i；材质写的或着色器缺省值）", () => {
+    expect(check({ combos: { LIGHTING: 1 } })).toEqual([]);
+    expect(check({ combos: { lighting: true, doublesidedlighting: true } })).toEqual([]);
+    expect(check({ combos: { DOUBLESIDEDLIGHTING: 1 } })).toEqual([]);
+    expect(check({}, result([{ name: "LIGHTING", value: 1, source: "default" }]))).toEqual([]);
   });
 
   it("着色器注解缺省值不算（genericparticle 的 FOG 缺省为 1）；纹理槽带出的算", () => {
@@ -1473,8 +1476,8 @@ describe("compileScene：粒子对象", () => {
     );
     expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([expected]);
     expect(bundle.textures.map((texture) => texture.format)).toEqual([format]);
-    // 格式 10 起不在格式表里，纹理照报；宏照 WPE 的条件写
-    expect(bundle.unsupported).toEqual(format >= 10 ? [`tex:format:${format}`] : []);
+    // 格式 10、11 不在格式表里，纹理照报；宏照 WPE 的条件写（12 是 BC7，在表里、不写宏）
+    expect(bundle.unsupported).toEqual(format === 10 || format === 11 ? [`tex:format:${format}`] : []);
   });
 
   it("拖尾的宏（P4c 步骤 5，rea-p4c-render.md 6.2）：THICKFORMAT、TRAILRENDERER；TEX0FORMAT 只在 8–11 写；sprite 不变", async () => {

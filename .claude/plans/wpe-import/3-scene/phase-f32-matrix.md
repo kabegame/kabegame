@@ -21,7 +21,7 @@ WPE 的矩阵运算全部是 float32 的单步运算：每个乘积舍入一次�
 - 求逆：WPE 是 `FUN_14005f730` 的标量余子式，我们的 `invert` 运算顺序不同，只影响读 `g_*Inverse` 的着色器；**uniform 这部分已改**（2026-11-15，[phase-f32-inverse.md](phase-f32-inverse.md)：`uniformInverse`，和 WPE 逐位相同），粒子模拟里的求逆照旧；
 - `lookAtRH` 仍在 double 里算：正交场景没有相机对象时它退化成平移，结果精确；有相机对象或透视场景时差几个 ulp；**已修**（2026-11-15，P5d 补修「透视相机矩阵逐步 float32」：lookAt、`XMScalarSinCos` 透视投影、相机路径插值都照汇编逐步 f32，ricepod 逐 draw 0 ULP）；
 - `perspective: true` 图层的透视覆盖、透视粒子那份视图投影（`particleViewProjection`）：WPE 的顺序没读；
-- 组的局部正交（`groupViewProjection`，里面有求逆）、合成 RT 基础 pass 的 `fill` 正交、effect 中间 pass 的单位阵：WPE 的写法另有出入（读码 2.4），这次不动。
+- 组的局部正交（`groupViewProjection`，里面有求逆）、合成 RT 基础 pass 的 `fill` 正交、effect 中间 pass 的单位阵：WPE 的写法另有出入（读码 2.4），这次不动。**组里图像层的 MVP 已改**（2026-11-20，P8 步骤 7 走查 `3811403844`）：WPE 画子树时模型栈是 `inverse(W_组)`（`FUN_14005f730`），子层并进模型栈再乘局部正交，`MVP = P ⊗ (inverse(W_组) ⊗ W)`；我们原来先拼 `P · invert(W_组)`（double 求逆）再乘，平移差 1 ulp，压在光栅化 1/256 像素的对齐分界上时遮罩斜线边缘的 texel 整个翻转。改成 `layout.ts` 的 `groupMvpParts`（`invertF32`）+ `drawMatrices` 的 `group`，三帧斜线 MVP 和抓帧逐位相同、遮罩 RT 0 差异（`phase-8-image-material.md`「步骤 7」）。`g_ModelMatrix` / `g_ViewProjectionMatrix`（WPE 组里是组内局部矩阵与 P，读码所得、没有抓帧）、文本、粒子、网格照旧。
 
 ## 现状锚点
 

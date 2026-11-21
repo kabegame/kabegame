@@ -1,10 +1,12 @@
-//! 原始文件（图库 `local_path` 指向的图片/视频）的安全删除。
+//! 原始文件（图库 `local_path` 指向的图片/视频，以及目录型 WPE 壁纸的整个目录）的安全删除。
 //!
 //! 策略（不可配置）：
 //! - 删除一律走系统**回收站**（`trash` crate），不做永久 `remove_file`，删错也可恢复。
-//! - 仅对「正常本机路径」的文件执行删除：**拒绝软链接路径**与**网络/虚拟文件系统**
+//! - 仅对「正常本机路径」执行删除：**拒绝软链接路径**与**网络/虚拟文件系统**
 //!   （NFS/SMB/FUSE/网络盘等）。这类文件只从数据库移除记录、**保留磁盘文件**。
 //!   这是为了避免历史事故：`~/Pictures` 软链到外置盘后，删除穿过软链误删共享物理文件。
+//! - 目录只在调用方已经分流过时才会到这里：`local_path` 是目录的只有 WPE 壁纸，
+//!   哪些壁纸目录可以删由 `wpe::WpeDeleteGuard` 决定（工坊订阅与 WPE 自带工程一律保留）。
 //! - 移入回收站失败、或路径不安全时返回 `false`；调用方据此知道"文件仍在盘上"，
 //!   但**无论真假都照常删除数据库记录**（仅文件去留不同）。
 //!
@@ -115,11 +117,18 @@ fn is_local_filesystem(path: &Path) -> bool {
     t == DRIVE_FIXED || t == DRIVE_REMOVABLE
 }
 
-/// 判定路径是否为「可安全自动删除的正常本机文件」。
+/// 判定路径是否为「可安全自动删除的正常本机文件或目录」。
+///
+/// 目录是给目录型 WPE 壁纸（`local_path` 是整个壁纸目录）开的；哪些壁纸目录可以删由
+/// `wpe::WpeDeleteGuard` 在上游决定，这里只负责本机路径的安全性。卷根一律拒绝：
+/// 库里不该出现这种 `local_path`，真出现了也绝不能整盘送进回收站。
 fn path_is_normal_local(path: &Path) -> Result<(), String> {
     let meta = std::fs::symlink_metadata(path).map_err(|e| format!("无法读取文件信息: {e}"))?;
-    if !meta.is_file() {
-        return Err("不是普通文件（可能是符号链接或目录）".to_string());
+    if !meta.is_file() && !meta.is_dir() {
+        return Err("不是普通文件或目录（可能是符号链接）".to_string());
+    }
+    if meta.is_dir() && path.parent().is_none() {
+        return Err("是卷根目录，拒绝删除".to_string());
     }
     if has_symlink_in_path(path) {
         return Err("路径经过符号链接，跳过删除以免误删共享文件".to_string());

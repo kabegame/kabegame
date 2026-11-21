@@ -52,7 +52,7 @@ describe("readScriptState", () => {
       bloom: { strength: 2, tint: [1, 0.5, 0.25] },
       bloomEnabled: true,
       general: { fov: 60, clearcolor: [0.1, 0.2, 0.3], camerashake: true },
-      sounds: new Map([[3, { volume: 0.75 }]]),
+      sounds: new Map([[3, { volume: 0.75, mintime: 2, maxtime: 6 }]]),
       cameras: new Map([[4, { fov: 30, zoom: 2 }]]),
       textFields: new Map([[5, { text: "12:34", pointsize: 48, padding: [1, 2], limitwidth: true }]]),
       particleInstances: new Map([
@@ -110,6 +110,8 @@ describe("readScriptState", () => {
   it("声音的 volume 与相机对象的 fov / zoom：有值铺成一项，对象没有时为 null", () => {
     const state = fakeState();
     expect(readScriptState(state, { kind: "sound", object: 3, field: "volume" })).toEqual([0.75]);
+    expect(readScriptState(state, { kind: "sound", object: 3, field: "mintime" })).toEqual([2]);
+    expect(readScriptState(state, { kind: "sound", object: 3, field: "maxtime" })).toEqual([6]);
     expect(readScriptState(state, { kind: "sound", object: 9, field: "volume" })).toBeNull();
     expect(readScriptState(state, { kind: "camera", object: 4, field: "fov" })).toEqual([30]);
     expect(readScriptState(state, { kind: "camera", object: 4, field: "zoom" })).toEqual([2]);

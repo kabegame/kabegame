@@ -141,7 +141,7 @@ EBADF；模块将来多导入了别的函数，`fd_*` / `path_*` 返回 EBADF、
 `has` / `metrics` / `isColor` / `shape` / `glyph` / `box` / `msdf` / `dispose`（`msdf(gid)` 返回 `MsdfCell`：像素框、格子宽高、`generated`、`yPpem`、拷出的 RGBA 像素）。位图拷出成按行紧排的 `Uint8Array`，不暴露 wasm 内存；wasm 内存会
 增长，每次访问都重新取 `memory.buffer`。`box(gid)` 按 gid 缓存（WPE 也缓存），失败为 null。
 
-排版、回退链与图集在 `apps/wpe-scene/src/text/`（P6b 1c），见 `cocs/wpe/WPE_SCENE.md`「字体引擎 `wpefont`」。
+排版、回退链与图集在 `apps/wpe-scene/src/text/`（P6b 1c），见 `cocs/wpe/scene/TEXT.md`「字体引擎 `wpefont`」。
 
 `index.test.ts`：wasm 不存在就整组跳过；`KABEGAME_WPE_ROOT` 指向 WPE 安装目录时，用 WPE 自带字体跑基础用例与
 `fixtures/baseline.json` 的逐项基线（由 `apps/wpe-scene/scripts/fixtures/make_wpefont_baseline.py` 从 1a 的结果生成）。

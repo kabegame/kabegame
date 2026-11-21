@@ -335,6 +335,22 @@ describe("参数", () => {
     }
   });
 
+  test("--mt19937（P4j 步骤 4a）：进每一帧的 replay、不和 --seed 同给、范围 0–2³²−1、只跟着回放", () => {
+    const head = ["--image", "13", "--frames", "2", "--out", "o", "--timeline-log", "l.txt"];
+    const options = parseCli([...head, "--mt19937", "1007"], process.cwd());
+    assert.equal(options.mt19937, 1007);
+    assert.equal(options.seed, undefined);
+    assert.deepEqual(renderArgs(options, 2).replay, {
+      timeline: { log: path.resolve("l.txt"), frame: 2 },
+      mt19937: 1007,
+    });
+    assert.equal(parseCli([...head, "--mt19937", "4294967295"], process.cwd()).mt19937, 4294967295);
+    const bad = (argv: string[], pattern: RegExp) => assert.throws(() => parseCli(argv, process.cwd()), pattern);
+    bad([...head, "--mt19937", "1", "--seed", "1"], /--seed 与 --mt19937 只能给一个/);
+    for (const text of ["-1", "1.5", "4294967296", "x"]) bad([...head, "--mt19937", text], /--mt19937/);
+    bad(["--image", "13", "--frames", "1", "--out", "o", "--fps", "20", "--mt19937", "1"], /只在回放/);
+  });
+
   test("每帧参数：回放模式填 timeline.frame、时刻模式 time = 帧号 / fps；save 到 ours-f<帧>.png、inline false；trace 只给指定帧", () => {
     const out = path.resolve("/o");
     const replay: RenderFramesOptions = {

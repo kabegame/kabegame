@@ -309,6 +309,23 @@ pub fn roots_in_library(library: &Path) -> Vec<WpeRoot> {
     roots
 }
 
+/// 从图库删除壁纸时必须留在磁盘上的根：创意工坊订阅与 WPE 自带工程。
+///
+/// 两类都不是用户自己的资产：工坊目录由 Steam 管理（删掉只要还订阅着，下次同步又会下回来），
+/// 自带工程属于 WPE 的安装内容。`myprojects` 与用户手选的任意目录不在此列，照常回收。
+pub fn protected_roots() -> Vec<PathBuf> {
+    discover_roots()
+        .into_iter()
+        .filter(|root| {
+            matches!(
+                root.kind,
+                WpeRootKind::Workshop | WpeRootKind::DefaultProjects
+            )
+        })
+        .map(|root| root.path)
+        .collect()
+}
+
 /// 发现全部 WPE 根：读 Steam 库列表 → 每个含 WPE 的库展开三类根。
 pub fn discover_roots() -> Vec<WpeRoot> {
     // 注册表里的 SteamPath 与 vdf 里的库路径大小写、分隔符常不一致（如
