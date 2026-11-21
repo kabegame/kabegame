@@ -685,6 +685,7 @@ pub async fn set_wpe_preview_settings(
 #[tauri::command]
 pub async fn get_wpe_follow_available() -> Result<bool, String> {
     if !cfg!(target_os = "windows") {
+        // WPE 只能在 Windows 上运行，别的系统没有在跑的 WPE 可跟随；从别的机器拷来的 `config.json` 也不算
         return Ok(false);
     }
     tauri::async_runtime::spawn_blocking(|| {

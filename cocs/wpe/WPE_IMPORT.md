@@ -105,7 +105,10 @@ CLI 开启 `wpe` 后能解析 `wpe-import`，但本地模式的 `plugin run` 只
 | 桌面壁纸（窗口模式） | 有 | 有 | 没有窗口模式，设为壁纸直接报错 |
 | 桌面壁纸的鼠标 | 有 | 有（第二版未实测） | 无 |
 | 图库预览的鼠标：光标在画面外、应用外也跟随 | 有 | 有（未实测） | 无：iframe 直接收真实鼠标，只在 iframe 上 |
-| 音频与媒体数据 | 有 | 无 | 无 |
+| 音频数据（频谱） | 有（WASAPI 回环） | 有（14.2+，Core Audio 进程 tap） | 无 |
+| 媒体数据（正在播放的曲目、封面） | 有（SMTC） | 无 | 无 |
+| 场景快捷方式（`usershortcut`） | 有 | 无：面板不显示、宿主一律未绑定 | 无 |
+| 「跟随 WPE」 | WPE 安装目录里有 `config.json` 时 | 无：WPE 只能在 Windows 上运行，没有可跟随的设置（拷来的 `config.json` 也不认） | 无 |
 
 `kabegame_core::wpe`：
 
@@ -563,8 +566,7 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 - **可见事件**：网页壁纸只能监听 `wpe-web.json` 作用域里的 `wallpaper-ping` 与场景宿主用的 `wpe-scene-clear-storage`（tauri 补丁 15），
   其它事件名（`setting-change`、`images-added` 等）`listen` 被 ACL 拒绝；垫片新增监听要同步改 capability。命令层只开 ping 应答与
   音频 / 媒体订阅；iframe 拿不到属性状态。
-- **不做**（后续 Phase）：暂停冻结与 `setPaused`、`fps`；音频与媒体数据（Phase 8，数据回程沿用 `listen`）；Web 发布版 /
-  Android / macOS / Linux 不渲染网页壁纸。
+- **平台**：Web 发布版与 Android 不渲染网页壁纸（`wpe` feature 不开）；三个桌面平台都渲染，差别见上「三个桌面平台的能力不同」那张表。
 - **待真机确认**（Windows）：iframe 统一后的整条链路见 `versions/latest/regression.md`「frame 级 IPC（tauri 补丁 18–19）」。
 
 #### 音量
@@ -957,7 +959,7 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
   其余取这张壁纸的预览设置。
 - **作者的用户属性**（上节）只有一份，桌面与预览共用，不分作用域。
 - **「跟随 WPE」**：只在能读到 WPE `config.json` 时提供（`get_wpe_follow_available`：只有 Windows，且 WPE 安装目录里有
-  `config.json`；`useWpeFollowAvailable` 全应用一份，`wpeEngineDir` 变了重读）。不能跟随时选项里没有这一档，存着的 `follow`
+  `config.json`。WPE 只能在 Windows 上运行，别的系统即使拷来 `config.json` 也不提供；`useWpeFollowAvailable` 全应用一份，`wpeEngineDir` 变了重读）。不能跟随时选项里没有这一档，存着的 `follow`
   显示为 Kabegame 默认值，交给场景宿主前也换成默认值（`wpeSceneSettingsOf`）。媒体集成只有开 / 关两档。
 - **场景四项怎么到宿主**：父页面经 postMessage 下发（`kabegame:wpe-scene-settings`，见 [scene/COMPILE.md](scene/COMPILE.md)「场景后处理档位」），
   壁纸窗口传全局值，预览传预览设置；宿主不再自己读全局设置。
@@ -1076,7 +1078,7 @@ Chromium 就不建媒体键监听器。于是：
 - 导入 `video`、`web` 与 `scene`；`application` 只占位并计入跳过。场景壁纸目前只有少数能实时渲染（P1：eagleflag、deep_space、beach），其余在预览、应用背景与桌面显示作者预览图。
 - 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言与帧率（`applyGeneralProperties({ language, fps })`，
   帧率见上「壁纸设置与预览设置」；只是告诉页面，Kabegame 不限网页自己的刷新，WPE 改帧率时会重启网页壁纸的 CEF 进程）；
-  `setPaused` 尚未实现。目录内容不监视，下次父页面重取状态时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
+  目录内容不监视，下次父页面重取状态时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
   WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`（取值算法 P11c 起同 WPE）；回环会采到 Kabegame 自己的声音（与 WPE 一致）。
 - 网页壁纸只能监听 `wallpaper-ping` 与 `wpe-scene-clear-storage`（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开
   `wallpaper_pong` 与 `wpe_web_media_subscribe`；属性由父页面推送。
@@ -1087,7 +1089,7 @@ Chromium 就不建媒体键监听器。于是：
 - 网页壁纸的音量（桌面与预览跟随壁纸音量、应用背景静音）靠垫片接管 `HTMLMediaElement` 与 Web Audio，尽力而为：壁纸里再嵌套的
   iframe 发出的声音、页面经嵌套 frame 拿原始原型绕过接管、shadow DOM 里或 DOM 外只靠 `autoplay` 的元素都管不到（见「音量」）。
 - 未带 CEF 补丁 07 的构建会拒绝网页壁纸 iframe 导航并退回作者预览图；`file:` 文档的 worker 不能读取 `file:`。
-- 图库媒体走 `file://`（Phase 6b）的真机验证只在 Windows 做；Linux / macOS 待测。Phase 6c 的 `fetch(file:)`、XHR 改动仍待重编 CEF 后真机验证；Windows `DownloadURL` 拖出路线已放弃，由 Phase 6d 的真实文件链路取代（同样待重编 CEF 后真机验证）。
+- 图库媒体走 `file://`（Phase 6b）在 Windows 与 macOS 上做过真机验证（macOS 2026-11-21：画廊一页 100 个 `file://` 缩略图，已加载的全部成功、0 个失败）；Linux 待测。Phase 6c 的 `fetch(file:)`、XHR 改动仍待重编 CEF 后真机验证；Windows `DownloadURL` 拖出路线已放弃，由 Phase 6d 的真实文件链路取代（同样待重编 CEF 后真机验证）。
 - `wcc_v` 图像滤镜预设（WPE 浏览属性）未实现，忽略。
 - 创意工坊取消订阅后目录消失：行仍在，`local_exists` 为 false，图库标记缺失。（文件夹同步目录里的壁纸子目录例外：
   整个目录消失时同步会删行。）

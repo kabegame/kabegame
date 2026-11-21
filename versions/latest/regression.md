@@ -1,5 +1,15 @@
 # v4.7.0 regression
 
+## WPE 壁纸的 macOS 缺口走查（第 1 步：文档与注释对齐）
+
+2026-11-21 macOS 26.6.2 dev。走查 WPE 壁纸在 macOS 上还缺什么：真缺的功能只剩媒体集成（系统「正在播放」）与场景快捷方式（`usershortcut`），留给后面几步。这一步只改文档与注释里过时的平台说法：`WPE_IMPORT.md` 的三平台能力表把「音频与媒体数据｜有｜无｜无」拆成音频（macOS 14.2+ 有）、媒体、快捷方式、跟随四行；删掉旧阶段的「macOS 不渲染网页壁纸」与「`setPaused` 尚未实现」；`scene/AUDIO_MEDIA.md`、`PARTICLES_ROPE_CHILDREN.md`、`host.ts` 里「非 Windows 没有回环采集」改成只说 Linux；macOS 系统字体表与图库 `file://` 记上本次核对结果。「跟随 WPE」保持只在 Windows 上提供（WPE 只能在 Windows 上运行），`get_wpe_follow_available` 的门控处补上这条理由。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MG1 macOS 系统字体 | macOS dev | 候选表逐项查文件；`wpe_scene_target` 的 `systemFonts`；屏外宿主里逐个 `fetch(file:)` | 除 `seguiemj.ttf` 外都解析到文件；宿主读得到表里的、读不到表外的 | 2026-11-21 Claude：12 / 13（装了 Office，Calibri / Cambria / Consolas 取 Word 包里的）；后备 Georgia / Menlo / Helvetica 都在；宿主读到 9 个抽查文件（TrueType / TTC 头正确），表外的 Georgia 被拒。实际画出的字形没看 |
+| [x] | MG2 图库 `file://` | 同上 | 画廊一页里数 `file://` 的 `<img>` | 没有加载失败 | 2026-11-21 Claude：100 个 `file://`，已加载 41 个全部成功、0 个失败，其余是懒加载没轮到 |
+| [x] | MG3 macOS 上没有「跟随 WPE」 | 同上，WPE 安装目录里临时放一份 `config.json` | 调 `get_wpe_follow_available`；看设置页壁纸分区 | false，帧率、后处理等没有「跟随 Wallpaper Engine」 | 2026-11-21 Claude：放了 `{"kbtest":{"general":{"user":{"fps":24}}}}` 后命令仍是 false；帧率只有滑条、没有跟随开关，后处理只有 Off / On / Ultra（说明文字里提到跟随是静态文案）。测完删掉临时文件 |
+
 ## 关掉 Chromium 的系统媒体集成（3819637149 音乐一顿一顿）
 
 2026-11-21 Windows dev。`3819637149`（Somewhere In Nowhere）的场景音乐放约 1 s、停约 1 s，WPE 里很顺。原因是自激：

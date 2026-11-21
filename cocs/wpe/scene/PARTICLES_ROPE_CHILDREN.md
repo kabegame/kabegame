@@ -302,7 +302,7 @@ f = clamp01(powf(smoothstep(clamp01((v − lo)/(hi − lo))), exponent))   // Na
 - **`vortex`**：`f·speedinner`、`f·range` 再乘 `k`；**`vortex_v2`**：`(speedinner·f)·k`、`(Δspeed·f)·k`（乘法顺序不同，照抄）。
 - 两遍模式下 operator 每遍各取一次（值相同）；一帧里各系统、各遍读到的是同一份频谱。
 
-**开关**只有 `project.json` 的 `general.supportsaudioprocessing`（JSON `true`）。没声明、非 Windows、订阅被拒或还没收到数据时频谱全 0、`f = 0`：带音频的发射器不发、速度项为 0，不报不支持（和 WPE 没声音时的画面相同）。`scene.json` 里的同名键 WPE 不读，改为中性。编译结果的 `SceneBundle.audio` 是「声明了开关，且有系统（含子系统）带 `mode ≠ 0` 的模块」，为真时宿主加载就订阅 `WpeMediaHub`；脚本注册音频缓冲时照旧订阅。
+**开关**只有 `project.json` 的 `general.supportsaudioprocessing`（JSON `true`）。没声明、平台没有回环采集（Linux；Windows 与 macOS 14.2+ 有）、订阅被拒或还没收到数据时频谱全 0、`f = 0`：带音频的发射器不发、速度项为 0，不报不支持（和 WPE 没声音时的画面相同）。`scene.json` 里的同名键 WPE 不读，改为中性。编译结果的 `SceneBundle.audio` 是「声明了开关，且有系统（含子系统）带 `mode ≠ 0` 的模块」，为真时宿主加载就订阅 `WpeMediaHub`；脚本注册音频缓冲时照旧订阅。
 
 ### 音频：场景频谱
 

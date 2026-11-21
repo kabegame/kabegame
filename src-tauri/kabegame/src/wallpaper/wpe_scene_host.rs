@@ -62,9 +62,11 @@ const SYSTEM_FONT_FILES: &[&str] = &[
     "Malgun.ttf",
 ];
 
-// TODO:[WPE_SCENE] 在 macOS 上测试：下面的候选路径没在真机上核对过，是按 macOS 自带字体与 Office for Mac 的
-// 常见位置写的。
-// - 要核对：各路径在当前系统版本上是否存在、`wpe_scene_target` 交给宿主的表、文本场景实际画出来的字形；
+// 候选路径按 macOS 自带字体与 Office for Mac 的常见位置写。2026-11-21 在 macOS 26.6.2（装了 Office）上核对过：13 个名字里
+// 除 `seguiemj.ttf` 外都解析到文件，`wpe_scene_target` 交给宿主的表与之一致，宿主经 `file:` 能读到每一个，表外的文件被闸门拒；
+// 不装 Office 时的后备 Georgia、Menlo、Helvetica 在同一系统上也都在。`/Library/Fonts/Arial Unicode.ttf` 在这个版本上是指向
+// `Supplemental/` 的符号链接，排在后面、会被跳过，不影响结果。
+// TODO:[WPE_SCENE] 在 macOS 上测试：文本场景实际画出来的字形；没装 Office 的机器上走后备时的结果。
 // - 先同一款字体（`Supplemental/` 自带的 Arial、Comic Sans MS、Microsoft Sans Serif、Verdana、Arial Unicode）；
 //   Calibri / Cambria / Consolas 只有装了 Office for Mac（字体在 Word 的 app 包里）或装进 `/Library/Fonts` 时才有，
 //   否则 cambria 退到 Georgia、consola 退到 Menlo；segoeui、msyh、Malgun 没有同款，用外观接近的系统字体

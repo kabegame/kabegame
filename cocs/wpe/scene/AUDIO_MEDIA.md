@@ -13,7 +13,7 @@
   翻译器把 `uniform float g_AudioSpectrum16Left[16]` 反射成 `array<vec4<f32>, 16>`、`declared: "float"`，`UniformBlock.set` 每个元素只写 `.x`。
   没给频谱时写全 0。渲染器把自己的 `spectrum` 交给 `GpuScene.update`：频谱在帧开头推进，粒子、脚本、uniform 这一帧读的是同一份值，同 WPE。
 - **订阅**：`bundle.audio` 也认读这六个 uniform 的程序（`readsAudioUniforms`：翻译器标了 `unused` 的、带 `meta.material` 的同名作者常量都不算），
-  开关仍只看 `project.json` 的 `supportsaudioprocessing`。非 Windows 后端没有回环采集，订阅被拒、频谱全 0（代码里标了 `TODO:[WPE_SCENE]`）。
+  开关仍只看 `project.json` 的 `supportsaudioprocessing`。Windows（WASAPI）与 macOS 14.2+（Core Audio 进程 tap，见 [../WPE_IMPORT.md](../WPE_IMPORT.md)「音频与媒体集成」）有回环采集；Linux 没有，订阅被拒、频谱全 0（代码里标了 `TODO:[WPE_SCENE]`）。
 - **确定性回放**：dev 探针的 `ParticleAudioFrame` 另带 32 / 64 段，读回那一帧把截至这一帧的频谱交给 `update`；kabegame-dev 的
   `replay.timeline.audio` 读录制（`kbp rdc consts --no-clock` 的输出或带 `frames[].audio` 的轨迹），按帧号对齐、缺的段按两两取大往下推。
 - **验收**：生成工程 `p11-bars`（六个数组各画一排色块，`ignore/p11/defs/p11a.py`）4 帧和 WPE 整帧逐像素相同。真实壁纸的复制工程走查
@@ -193,7 +193,7 @@ P11c 照这三段做，每段放在对应的位置。依据：
 - **Spotify 预处理**：来源 App ID 以 `spotify` 开头时裁掉透明边或把角标区改灰。两处读码标【推】的细节（判定行、「否则若」的归属）按 `projection.rs` 的注释实现，测试只覆盖裁切分支。
 - **订阅的补发**照 `AddMediaListener`：先发 `status`；监视在跑时再补非空的几类（`title` 非空、有封面、状态非 0、`duration` 非 0）。
 - **「媒体集成」开关**：关掉时场景订阅当场收到 `status { enabled: false }` 和非缺省类的复位。
-- 非 Windows 没有数据源，订阅被拒（`TODO:[WPE_SCENE]`）。
+- 非 Windows 没有数据源，订阅被拒（`TODO:[WPE_SCENE]`）。macOS 的音频（频谱）有数据源，媒体没有：系统的「正在播放」在私有框架 MediaRemote 里，还没接。
 
 **合并**（宿主 `src/media/pending.ts`）：
 - 消息先进 `MediaPending`，照 WPE 主进程的待发事件：同类只留最后一条，flags 按位或（1 属性、2 封面、4 播放、8 时间轴、0x10 状态）。
