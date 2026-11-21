@@ -2541,7 +2541,7 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 | 占位属性 | 网格没有的属性接到槽 1 的占位缓冲：全场一份 256 字节的全零缓冲，`arrayStride` 0，每项 16 字节，格式按着色器自己的类型。WGSL 入口可能仍带这个 location，WebGPU 建管线要有 | 实测 `p5c-attr-ok` 的 M3 |
 | 缓冲 | 顶点缓冲按「文件缓冲 + 用途 + 偏移 + 长度」去重共用，图层重建不释放、随场景销毁；索引按 4 字节补齐（`writeBuffer` 的要求），`drawIndexed` | — |
 | 剔除 | 模型 pass 的 `cullmode` 为 normal 时 `frontFace: "ccw"`、`cullMode: "back"`，只看屏幕上的绕序（镜像不补偿）；nocull 不剔。管线键只在出现时加 `\|mesh:<布局键>`、`\|cull:back`，现有管线的键逐字不变 | 实测 `p5c-cull`：`CullMode.Back`、`FrontCounterClockwise`；`scale −1` 的对象不翻转正面 |
-| 视锥剔除 | 每帧画模型前判一次（`mesh.ts` 的 `frustumCulled`）：包围盒并集的两个角经世界矩阵（不含视差）变换，中点为球心、半对角线为半径，和场景视图投影（带抖动、缩放，不带每个对象的视差，WPE 在场景绘制开头算一次平面）的六个平面比，球完全在某个平面外就整个模型不画。组里的模型不剔（照报，只有强制渲染才到这里） | 实测 `p5c-frustum`、`p5c-frustum3`：盒子在外、z 远在深度范围外的不画，跨边缘、外接球伸进来的画，十个包围盒逐个和 WPE 相同。retro 这类不乘矩阵的着色器也会被剔（看的是包围盒，不是画出来的位置） |
+| 视锥剔除 | 每帧画模型前判一次（`mesh.ts` 的 `frustumCulled`）：包围盒并集的两个角经世界矩阵（不含视差）变换，中点为球心、半对角线为半径，和场景视图投影（带抖动、缩放，不带每个对象的视差，WPE 在场景绘制开头算一次平面）的六个平面比，球完全在某个平面外就整个模型不画。组里的模型不剔（P14b D1，和 WPE 有意不同，见「脚本自定义几何（P14）」的「组里的模型（P14b）」） | 实测 `p5c-frustum`、`p5c-frustum3`：盒子在外、z 远在深度范围外的不画，跨边缘、外接球伸进来的画，十个包围盒逐个和 WPE 相同。retro 这类不乘矩阵的着色器也会被剔（看的是包围盒，不是画出来的位置） |
 | uniform | 和图像层直接上屏同一个函数，只换三处输入：颜色 (1, 1, 1)、alpha 1、颜色系数 1（WPE 不读模型的 `color` / `alpha` / `brightness`）；模型矩阵就是世界矩阵（没有 `size`）；视图投影同图像层（带视差、抖动、缩放，`perspective` 换透视那一份）。网格 pass 的材质常量进 `SceneState`（`fromBundle`），属性绑定与就地写照常 | 实测 `p5c-color`：`g_Color4` = (1, 1, 1, 1)、`g_Color` = (1, 1, 1)、`g_Alpha` = 1；`p5c-matrix`：MVP = VP · W，含视差与 `zoom 1.5` |
 | 法线矩阵 | `g_NormalModelMatrix` 全局改成 WPE 的算法（`math.ts` 的 `normalMatrix`，原来是逆转置）：世界矩阵 3×3 的三个本地轴各自归一化，长度平方按 float32 累加，用 `0x5f375a86` 快速倒数平方根加一次牛顿迭代（照 Quake 原式 `y·(1.5 − ((0.5x·y)·y))`）。WPE 的 uniform 写入函数所有对象共用，图像层 genericimage 的光照路径也读它 | 实测 `p5c-matrix`：三个模型 27 个值逐位相同；精确归一化差 1e-3 量级，逆转置差 0.4–0.67。语料里能渲染的场景没有打开 `LIGHTING` 的图像层，对现有画面中性 |
 
@@ -2551,12 +2551,12 @@ P5b 的标志都作用在图像层上，不新增图层种类，改的是一个�
 - **对象**（`features.ts` 的 `checkObjectFeatures`）：`skin`、`castshadow`、`reflected`、`disablepropagation` 中性（`MODEL_NEUTRAL_FLAGS`）。`reflected` / `castshadow` 本身没有画面，它们的消费者都照报：读 `_rt_Reflection` 报 `texture:rendertarget:_rt_Reflection`，`REFLECTION` 非 0 报 `combo:REFLECTION`，投影灯报 `lightconfig:*`。`perspective: true` 已实现；`effects` 非空报 `model:effects`；`model` 是整数时是脚本模型数据的 token（P14，见「脚本自定义几何（P14）」），其余不是字符串的报 `model:id`；`animationlayers`、`dependencies` 照未知键报。
 - **mdl**（`checkMdlFeatures`）：`mdl:missing:<路径>`、`mdl:truncated`；骨骼 / 动画层 / 变形 / 挂点段报 `mdl:skeleton` / `mdl:animation` / `mdl:morph` / `mdl:attachment`（W6）；网格带可选块或记录表（木偶数据）报 `mdl:puppet`；网格标志除 bit0、bit1 外还有位报 `mdl:flags:<多出来的位>`；格式有表外的位或同一语义出现两次报 `mdl:format:<格式>`。
 - **网格**（`compileMesh`、`checkMeshAttributes`）：属性名不在 26 个名字里报 `mdl:attribute:<名>`，读了缺的语义报 `mdl:missing-attribute:<名>`，类型不符报 `mdl:attribute-type:<名>`；材质多于一个 pass 报 `mdl:material-passes`；读 `_rt_FullFrameBuffer` 不报：P14 起画这个模型之前拷一次快照（`planModelLayer` 的层首 `snapshot`，同图像层），和 WPE 有意不同（WPE 的模型绘制不拷，读到别的层最近一次拷下的内容，没人拷过是全 0），见「脚本自定义几何（P14）」的 E16。
-- **组里的模型**：`model:passthrough:children:model`（`groupChildIssues`）。
+- **组里的模型**：P14b 起不报（见「脚本自定义几何（P14）」的「组里的模型（P14b）」）；组里的 sprite 照报 `model:passthrough:children:sprite`。
 
 ### 已知差异与只记不补
 
 - **视差、抖动下的视锥平面**：照读码，用场景视图投影、世界矩阵不带每个对象的视差，没有实测。收尾统计：正交的模型场景只有 retro（mdl v14 没有包围盒，不剔；视差、抖动都没开）和 3354366708（视差、抖动都关，还差 11 项），没有受影响的场景。透视场景的三维抖动 P5d 已实现，视锥平面带抖动的部分仍没有实测（ricepod 还差 `object:sprite`，3706286085 有骨骼动画）。
-- **组里的模型**：照报，WPE 在组里怎么画（深度、剔除、视锥剔除用哪个相机）没测。语料 0 个。
+- **组里的模型**：P14b 实测并实现（矩阵、深度、阴影、视锥剔除），见「脚本自定义几何（P14）」的「组里的模型（P14b）」。
 - **读了的缺属性**：WPE 画出未定义的值，我们报 `mdl:missing-attribute`；强制渲染时接占位，读到 0。
 - **`g_UserAlpha` / `g_Brightness`**：着色器读了不带 `"material"` 注解的这两个名字时，WPE 给 0，我们给 alpha 与 1（图像层也一样）。语料与 WPE 自带的着色器里这两个名字全部带注解，没有画面差别。
 - **语料 0 个、照报**：`mdl:attribute-type`、`mdl:truncated`（WPE 的读取原语越界返回 0 / 空串 / 空指针后接着读，我们保守报；段表结尾缺空标签、段末超出文件不算，见上面「加载」一行）、`mdl:material-passes`、`model:effects`、`model:id`。
@@ -4215,6 +4215,41 @@ WPE 的缺陷按「壁纸依赖才复现」处理。语料里只有 3834692798 �
 - **同一套机制**：探针脚本自带数据仓，建层先走同步拼装，片段请求带描述，`replaceData` 改结构时能拼就按替换接回。
 - **探针的限制**：拼不了的记进结果的 `reloads`，因为探针没有单对象重编译。
 - **`prewarmFragments`**：预跑不收集整数 `model` 的配置，它们本来就同步。
+
+### 组里的模型（P14b）
+
+3816948983（锦鲤水景）的控制器脚本用 `createModelData` + `createLayer` 建模型层，再 `setParent(组, false)` 挂进组合层：224×126 的高度场网格
+画进 `height-copy`，一部分锦鲤批次画进 `rain-copy`，水面 effect 读这两张组 RT。P5b 起组里的模型一律照报 `model:passthrough:children:model`，
+运行中进组的按 L7「不画 + 看板娘提示」，组 RT 全是 0，水面偏亮偏青、上边与左边拉丝。P14b 起组里的模型照 WPE 画（静态 `parent` 指向组的 mdl
+模型同样适用）。
+
+- **依据**：
+  - 读码：[rea-p14b-group-models.md](../../.claude/plans/wpe-import/3-scene/phase14/rea-p14b-group-models.md)（网格绘制的模型栈、剔除平面、阴影 pass 的对象判定）。
+  - WPE 实测：`ignore/p14/b/gen_p14b.py` 生成的 `p14b-gm-basic` / `-copybg` / `-rot3d` / `-depth` / `-shadow` / `-shadow-cb`，抓帧在 `A:\p14b\`。
+  - 计划：[phase-14b-group-models.md](../../.claude/plans/wpe-import/3-scene/phase14/phase-14b-group-models.md)。
+
+| 项 | 规则 | 依据 |
+|---|---|---|
+| 不再照报 | `groupChildIssues` 去掉 `model:passthrough:children:model`；sprite（P13c）照报 | — |
+| 矩阵 | 组画子树时 WPE 的模型栈是 `inverse(W_组)`、视图单位阵、投影是组的局部正交 `ortho(±w/2, ±h/2, ±1000)`，网格把世界矩阵并进模型栈：`g_ModelMatrix` = `inverse(W_组) · W`（`multiply`，即 glm 的 `FUN_14005ecb0`）、`g_ViewProjectionMatrix` = P、MVP = `P ⊗ M`（仿射），`g_EyePosition` 仍是场景的。`render/scene.ts` 网格那次 `drawUniformValues` 在组里换掉世界矩阵与视图投影 | `p14b-gm-basic` 的静态 S1、脚本 T1 与 `p14b-gm-rot3d`（组与子层都带 x / y 旋转）的 S1、R1 逐位相同；带 x / y 旋转时仿射乘法差 1 ulp。T1 的平移 y 是 19.999969…，WPE 真的做了这次乘法 |
+| 光照 | 灯与阴影是场景空间的，组里的网格按局部坐标算光照（同 WPE，画面更暗） | `p14b-gm-shadow` |
+| 深度 | 组的合成 RT 没有深度附件，深度状态不起作用，后画的盖住先画的；管线按目标有无深度各建一份（已有） | `p14b-gm-depth`：组里后画的 z −100 盖住 z +100，顶层对照 z +100 在前 |
+| alpha | `copybackground: false` 的组 alpha 取 MAX，同图像层 | `p14b-gm-basic` |
+| 阴影 | 组的子孙不投射：WPE 阴影 pass 跳过带 `0x2` 的对象，组本身不是不透明模型、也不画。我们的投射者照旧按对象建（换父不重建），`encode` 每帧按当前的组归属筛（`casterInGroup`），运行中进组 / 出组当帧生效 | 读码 4 节；`p14b-gm-shadow` / `-shadow-cb`（组写 `castshadow: true`）：阴影 pass 都只有顶层的 3 个投射 draw |
+| 读帧缓冲 | E16 的层首快照照图像层的层首拷贝（P5f）：直接父是组时不拷，读到上一次拷下的内容（同 WPE），隔着分组节点的孙子照拷（拷组的合成 RT） | 照规则推，没有实测（语料 0 个） |
+| 运行中换父 | L7 的重排对模型层照常：进组画进组 RT、管线换成没有深度的（同步建），出组换回 | `render/l7.test.ts` |
+
+**和 WPE 有意不同（D1）**：WPE 组里的模型照样拿场景相机的六个平面测场景空间的外接球（平面只在场景绘制开头与阴影、体积光的视图函数里算，
+组画子树不重算），组在画面外而组 RT 被别的图层读时，模型被错剔、引用方读到全空。这是缺陷，3816948983 不依赖它，语料里组里放模型的也只有
+它，所以组里的模型不按场景相机剔除（`modelCulled` 见组就返回 false）。按组自己的视锥剔掉的只会是画不进组 RT 的东西，和不剔画面相同，所以
+也不剔。只读了码、没有实测。
+
+**对比结果**：探针 `render_scene`（`scripts: true`）和 WPE 抓帧整帧比，`p14b-gm-basic` / `-copybg` / `-rot3d` / `-depth` 0 差异，两个阴影工程
+各 3 个像素差 1。3816948983 的复制工程（控制脚本的 `Math.random` 换成固定种子，`ignore/p14/b/seed_random.py`）按 WPE 日志回放到第 313 帧：
+整帧只有 37 个像素差 1，`height-copy` 组 RT（224×126）的 RGBA 逐位相同。
+
+**另记**：同一次抓帧里组里的**图像层**也是 `g_ModelMatrix` = 局部、`g_ViewProjectionMatrix` = P，我们给的是世界矩阵与 `P · inverse(W_组)`
+（MVP 已对，P8 步骤 7）。只影响分开读这两个矩阵的着色器（光照、效果矩阵），不在本步。
 
 ## 图像层帧表（P6e）
 

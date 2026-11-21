@@ -5,7 +5,8 @@
  * - 多个图层共用一组缓冲（E9）：最后一个 draw 释放时才销毁；
  * - 无索引形状 `draw(顶点数)`、不绑索引缓冲；
  * - `replaceData` 换了容量：新图层另建一组，旧组留给旧 draw、旧 draw 摘掉后销毁；token 释放后绘制数归零；
- * - 读帧缓冲的模型图层画之前拷一次快照（E16），不读的不拷。
+ * - 读帧缓冲的模型图层画之前拷一次快照（E16），不读的不拷；
+ * - 组里的投射者不进阴影 pass（P14b），按这一刻的组归属每帧筛。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generalDefaults } from "../compile/bindings";
@@ -260,12 +261,7 @@ const bytes = (length: number, seed: number) => Uint8Array.from({ length }, (_, 
 const u16 = (...values: number[]) => new Uint8Array(new Uint16Array(values).buffer);
 
 /** 数据仓里建一个 token：一个形状，有索引（`indexed`）时是 `indexValues`，否则无索引；顶点 `vertexCount` 个。 */
-function createToken(
-  store: ModelDataStore,
-  vertexCount: number,
-  indexValues: number[] | null,
-  dynamic = true,
-): number {
+function createToken(store: ModelDataStore, vertexCount: number, indexValues: number[] | null, dynamic = true): number {
   return store.create(
     {
       shapes: [
@@ -404,7 +400,11 @@ describe("脚本模型数据的 GPU 缓冲（P14 步骤 3b）", () => {
     const old = gpu.modelBuffers();
     expect(old).toHaveLength(2);
     // 重建成 8 个顶点、6 个索引
-    store.replace(1, [{ vertices: bytes(8 * STRIDE, 3), index: { format: "uint16", bytes: u16(0, 1, 2, 3, 4, 5) } }], () => 0);
+    store.replace(
+      1,
+      [{ vertices: bytes(8 * STRIDE, 3), index: { format: "uint16", bytes: u16(0, 1, 2, 3, 4, 5) } }],
+      () => 0,
+    );
     // 旧 draw 还在时容量不符，先画旧的（不写、不崩）
     expect(frame(gpu, scene, state)).toEqual(["setIndexBuffer", "drawIndexed 3"]);
     // 宿主按新描述重拼：装同一对象的新图层（替换），旧 draw 摘掉
@@ -430,7 +430,11 @@ describe("脚本模型数据的 GPU 缓冲（P14 步骤 3b）", () => {
     });
     const old = gpu.modelBuffers();
     expect(old).toHaveLength(2);
-    store.replace(1, [{ vertices: bytes(8 * STRIDE, 3), index: { format: "uint16", bytes: u16(0, 1, 2, 3, 4, 5) } }], () => 0);
+    store.replace(
+      1,
+      [{ vertices: bytes(8 * STRIDE, 3), index: { format: "uint16", bytes: u16(0, 1, 2, 3, 4, 5) } }],
+      () => 0,
+    );
     const swap = (object: number) => {
       const layer = modelLayer(object, meshOf(object, 1, 0, 8, 6));
       bundle.layers = bundle.layers.map((item) => (item.object === object ? layer : item));
@@ -461,7 +465,8 @@ describe("脚本模型数据的 GPU 缓冲（P14 步骤 3b）", () => {
   });
 
   it("建场景时预建 usable 模板的 pass 与阴影变体程序，unusable 的不建（modelMaterials，同泛光 / 体积光的做法）", async () => {
-    const variant = (name: string) => ({ ...MESH_PROGRAM, vertex: { wgsl: `// ${name} v`, entryPoint: "main" } }) as TranslateResult;
+    const variant = (name: string) =>
+      ({ ...MESH_PROGRAM, vertex: { wgsl: `// ${name} v`, entryPoint: "main" } }) as TranslateResult;
     const { scene } = await setup(
       (s) => {
         const token = createToken(s, 4, [0, 1, 2]);
@@ -502,7 +507,10 @@ describe("脚本模型数据的 GPU 缓冲（P14 步骤 3b）", () => {
       quality: 1,
     };
     const casting = (object: number, token: number, vertexCount: number, indexCount: number): SceneLayer => {
-      const mesh = { ...meshOf(object, token, 0, vertexCount, indexCount), shadow: pass(`objects/${object}/meshes/0/shadow`) };
+      const mesh = {
+        ...meshOf(object, token, 0, vertexCount, indexCount),
+        shadow: pass(`objects/${object}/meshes/0/shadow`),
+      };
       const layer = modelLayer(object, mesh);
       layer.model!.castShadow = true;
       return layer;
@@ -519,8 +527,9 @@ describe("脚本模型数据的 GPU 缓冲（P14 步骤 3b）", () => {
         (bundle as { lights?: unknown }).lights = lights;
       },
     );
-    const casters = (scene as unknown as { shadowCasters: { draw(pass: unknown, entry: number, view: number): void }[] })
-      .shadowCasters;
+    const casters = (
+      scene as unknown as { shadowCasters: { draw(pass: unknown, entry: number, view: number): void }[] }
+    ).shadowCasters;
     // 无索引形状（indexCount 0）也有投射者（`shadowCasterSteps` 对 `source` 网格放宽）：阴影 pass 里 `draw(顶点数, 1, 0, 视图号)`
     expect(casters).toHaveLength(2);
     const calls: string[] = [];
@@ -536,6 +545,59 @@ describe("脚本模型数据的 GPU 缓冲（P14 步骤 3b）", () => {
     casters[1].draw(fakePass, 0, 5);
     expect(calls).toEqual(["draw 6,1,0,5", "setIndexBuffer", "drawIndexed 3,1,0,0,5"]);
     void gpu;
+  });
+
+  it("组里的投射者不进阴影 pass（P14b，p14b-gm-shadow）：按这一刻的组归属每帧筛，运行中进组 / 出组当帧生效", async () => {
+    const lights = {
+      counts: {
+        point: 1,
+        spot: 0,
+        tube: 0,
+        directional: 0,
+        pointShadow: 1,
+        directionalShadow: 0,
+        spotShadow: 0,
+        spotCookie: 0,
+        spotShadowCookie: 0,
+      },
+      quality: 1,
+    };
+    const casting = (object: number, token: number): SceneLayer => {
+      const mesh = { ...meshOf(object, token, 0, 4, 3), shadow: pass(`objects/${object}/meshes/0/shadow`) };
+      const layer = modelLayer(object, mesh);
+      layer.model!.castShadow = true;
+      return layer;
+    };
+    const { scene, gpu, bundle, state } = await setup(
+      (s) => {
+        const a = createToken(s, 4, [0, 1, 2]);
+        const b = createToken(s, 4, [0, 1, 2]);
+        s.retainLayer(a, 0);
+        s.retainLayer(b, 1);
+        return [casting(0, a), casting(1, b)];
+      },
+      (b) => {
+        (b as { lights?: unknown }).lights = lights;
+      },
+    );
+    const atlas = (scene as unknown as { shadowAtlas: { encode(encoder: unknown, casters: unknown[]): void } })
+      .shadowAtlas;
+    const encoded: number[] = [];
+    const original = atlas.encode.bind(atlas);
+    vi.spyOn(atlas, "encode").mockImplementation((encoder, casters) => {
+      encoded.push(casters.length);
+      original(encoder, casters);
+    });
+    frame(gpu, scene, state);
+    // 进组（L7 换父后 `SceneLayer.group` 就是新值；99 是组的对象号，这里不需要它真的在场景里）
+    bundle.layers[1].group = 99;
+    frame(gpu, scene, state);
+    // 出组
+    bundle.layers[1].group = null;
+    frame(gpu, scene, state);
+    expect(encoded).toEqual([2, 1, 2]);
+    // 投射者本身没删（按对象建、换父不重建）
+    expect((scene as unknown as { shadowCasters: unknown[] }).shadowCasters).toHaveLength(2);
   });
 
   it("数据仓里查不到（token 已释放）时绘制数归零、不画", async () => {

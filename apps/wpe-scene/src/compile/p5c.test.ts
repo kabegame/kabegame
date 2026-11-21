@@ -6,7 +6,7 @@
  * - 模型 pass 的深度 / 剔除按 WPE 缺省推（缺 `cullmode` = normal、缺 `depthtest` / `depthwrite` = enabled）；P5d 步骤 1 起图像层
  *   同一套规则（`normalizeDepthKeys`），三个键都不再报（会写深度的 `depthwrite:enabled`、`cull:*`、`depthtest:*` 都去掉了）；
  * - `mdl:missing-attribute` 只对读了的属性报（真翻译器，`p5c-attr` 的 M1–M5）；分量类型对不上报 `mdl:attribute-type`（步骤 2）；
- * - `mdl:*` 各键（步骤 2 加的 `mdl:framebuffer` 在 P14 E16 去掉）、`model:id`、`model:effects`、模型在组里（`model:passthrough:children:model`）；
+ * - `mdl:*` 各键（步骤 2 加的 `mdl:framebuffer` 在 P14 E16 去掉）、`model:id`、`model:effects`、模型在组里（P14b 起不报）；
  *   `skin` 等在模型上中性、在图像层上照报（`castshadow` P13d 起在任何对象上都中性）；
  * - 本机有 WPE 时 retro 不再报任何键（步骤 2 解锁）。
  * 依据是 p5-REPORT「P5c 语义的实测核对」。
@@ -14,7 +14,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { compileScene, transferableBuffers, type SceneBundle } from "./bundle";
+import { compileScene, transferableBuffers, type SceneBundle, type SceneLayer } from "./bundle";
 import {
   checkMdlFeatures,
   checkMeshAttributes,
@@ -577,9 +577,9 @@ describe("compileScene：模型的细分键（点 3、点 4）", () => {
     expect(bundle.layers[0].effects).toEqual([]);
   });
 
-  it("模型在组里：model:passthrough:children:model", async () => {
+  it("模型在组里（P14b 起不报，castshadow 也不报；sprite 照报）", async () => {
     const bundle = await compileModels(
-      [{ id: 1, image: "models/c.json", origin: "960 540 0" }, modelObject(2, { parent: 1 })],
+      [{ id: 1, image: "models/c.json", origin: "960 540 0" }, modelObject(2, { parent: 1, castshadow: true })],
       {
         "models/c.json": JSON.stringify({ material: "materials/c.json", passthrough: true }),
         "materials/c.json": material({ blending: "translucent" }),
@@ -587,19 +587,22 @@ describe("compileScene：模型的细分键（点 3、点 4）", () => {
       },
     );
     expect(bundle.layers[1].group).toBe(0);
-    expect(bundle.unsupported).toEqual(["model:passthrough:children:model"]);
-    expect(
-      groupChildIssues({
-        passthroughModel: false,
-        passes: [],
-        effects: [],
-        colorBlendMode: 0,
-        fullscreen: false,
-        perspective: false,
-        particle: null,
-        model: null,
-      }),
-    ).toEqual([]);
+    expect(bundle.layers[1].model).not.toBeNull();
+    expect(bundle.unsupported).toEqual([]);
+    const layer = {
+      passthroughModel: false,
+      passes: [],
+      effects: [],
+      colorBlendMode: 0,
+      fullscreen: false,
+      perspective: false,
+      particle: null,
+      model: bundle.layers[1].model,
+    };
+    expect(groupChildIssues(layer)).toEqual([]);
+    expect(groupChildIssues({ ...layer, sprite: {} as NonNullable<SceneLayer["sprite"]> })).toEqual([
+      "model:passthrough:children:sprite",
+    ]);
   });
 });
 

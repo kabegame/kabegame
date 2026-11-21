@@ -1117,7 +1117,8 @@ function someParticleSystem(system: SceneParticle, test: (system: SceneParticle)
  * - `model:passthrough:children:fullscreen`：fullscreen 模型。当前目标是组的合成 RT，没有实测。
  * - `model:passthrough:children:perspective`：图层 `perspective: true`，或粒子系统树里有透视系统（`flags & 4`）。组里的投影是局部正交，
  *   没有实测。
- * - `model:passthrough:children:model`：模型对象（P5c 步骤 1）。语料 0 个，组里的网格怎么画（深度、剔除、视锥剔除用哪个相机）没有实测。
+ * - 模型对象（P5c 步骤 1）P14b 起不报（`p14b-gm-*` 实测，rea-p14b-group-models）：画进组的合成 RT，`g_ModelMatrix` = `inverse(W_组) ⊗ W`、
+ *   视图投影是组的局部正交，组 RT 没有深度，阴影 pass 不画组的子孙（不投射），不按场景相机做视锥剔除（D1，和 WPE 有意不同）；sprite 照报。
  * - `model:passthrough:children:shape`：形状对象（P8 步骤 2）。WPE 由组代画进它的合成 RT（rea-p8-layer 1.4，`FUN_1401ecb20`），没有实测；
  *   语料 24 个形状的父对象都是分组节点。
  */
@@ -1146,7 +1147,6 @@ export function groupChildIssues(
     keys.push("model:passthrough:children:perspective");
   // sprite（P13c）也挂着 `model`：组里它的遮挡测试读哪张深度、画在哪没测，单独照报
   if (layer.sprite) keys.push("model:passthrough:children:sprite");
-  else if (layer.model) keys.push("model:passthrough:children:model");
   if (layer.shape) keys.push("model:passthrough:children:shape");
   return keys;
 }

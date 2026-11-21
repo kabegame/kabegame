@@ -3593,7 +3593,8 @@ export class GpuScene {
         if (step.kind === "mesh")
           draws.push(this.createDraw(layer, step, resources, prepared.get(step)!, state, worlds));
       const snapshot = plan.steps.some((step) => step.kind === "snapshot");
-      if (draws.length) ops.push({ kind: "model", layer, draws: [...draws], ...(snapshot ? { snapshot: true as const } : {}) });
+      if (draws.length)
+        ops.push({ kind: "model", layer, draws: [...draws], ...(snapshot ? { snapshot: true as const } : {}) });
       return { ops, draws, tree: null };
     }
     // puppet 的裁切模板（P12f）：同一图层的普通 / 遮罩 / 目标模板收成一个 `puppet-clip` op（位置放在第一个模板的地方），遮罩 RT 的清除由 op 编码时做
@@ -5284,13 +5285,18 @@ export class GpuScene {
       // 模型网格（P5c 步骤 2）：同图像层直接上屏（`direct` 角色：`g_ModelMatrix` 是世界矩阵、MVP = VP · W，不乘 `size`），只换颜色组：
       // WPE 画网格之前把 `g_Color` / `g_Alpha` 写成 1（rea-p5-mesh 2.5，p5-REPORT `p5c-color`：对象写 `color 1 0 0`、`alpha 0.5`、
       // `brightness 3` 时 `g_Color4` 仍是 (1, 1, 1, 1)，HDR 同样）。视图投影带视差、抖动、缩放，`perspective: true` 换透视那一份
-      // （`p5c-matrix` 的视差、缩放、透视三份，和图像层相同）；组里的模型照报，强制渲染时用组的局部正交
+      // （`p5c-matrix` 的视差、缩放、透视三份，和图像层相同）。
+      // 组里（P14b，rea-p14b-group-models 1 节，`p14b-gm-basic` 抓帧逐位）：组画子树时模型栈是 `inverse(W_组)`、视图单位阵、投影是组的局部正交，
+      // 网格把世界矩阵并进模型栈（`FUN_14005ecb0`，glm 的完整乘法，`p14b-gm-rot3d` 带 x / y 旋转时和仿射乘法差 1 ulp），所以
+      // `g_ModelMatrix` = `inverse(W_组) · W`、`g_ViewProjectionMatrix` = 局部正交 P、MVP = `P ⊗ M`；`g_EyePosition` 仍是场景的。灯光与阴影是
+      // 场景空间的，组里的网格按局部坐标算光照，同 WPE
       return drawUniformValues({
         ...common,
+        ...(groupMvp ? { world: multiply(groupMvp.inverse, common.world) } : {}),
         colorScale: 1,
         step: { role: "direct", inputs: step.inputs },
         layer: { ...layerState, color: [1, 1, 1], alpha: 1, size: layer.size },
-        viewProjection: groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp),
+        viewProjection: groupMvp?.projection ?? groupOrCompose ?? this.viewProjectionOf(layer, state, view, persp),
       });
     // fullscreen（P5b 步骤 3，p5-REPORT `p5b-fs` 事件 76）：直接上屏以外的角色（effect、末 pass、passthrough 上屏）模型与视图都是
     // 单位阵、投影是 NDC 正交，不经 `viewProjectionOf`：`origin` / `scale` / `angles`、视差、抖动、透视都不起作用，2×2 的四边形
@@ -6434,7 +6440,8 @@ export class GpuScene {
    * 建一个 draw，走 `createDraw`（顶点布局、索引、纹理、材质常量、骨骼同网格步骤），管线是只写深度的 `createShadowPipeline`。draw 经 `indexDraw` 进索引，
    * 每帧的量（`g_Time`、骨骼）随 `update` 写；按图集条目各一份 uniform 副本（`g_ModelMatrix` 每帧按当前状态、`g_ViewportViewProjectionMatrices`
    * 是这一条的视图），逐视图 `firstInstance` 取视图号。`fur4` 的投射变体不带 `INSTANCECOUNT`，只画基础网格一层（R6）。
-   * 帧级剔正面（`alignmentfliph`）在我们这里没有接，剔除一律 NONE（WPE 材质缺省剔除时的实际状态）。
+   * 帧级剔正面（`alignmentfliph`）在我们这里没有接，剔除一律 NONE（WPE 材质缺省剔除时的实际状态）。组里的模型照样建投射者，`encode` 按当前的
+   * 组归属筛掉（P14b，`casterInGroup`）。
    * 整场加载时在变体之后逐对象跑（L4：单个对象的同一段是 `prepareObject` 备管线、`installObject` 建 draw）。
    */
   async buildShadowCasters(state: SceneState): Promise<void> {
@@ -6541,6 +6548,12 @@ export class GpuScene {
       this.shadowCasters.push(caster);
       this.shadowCasterRecords.set(caster, record);
     }
+  }
+
+  /** 投射者的对象这一刻在组里（P14b：组的子孙不投射）。 */
+  private casterInGroup(caster: ShadowCasterDraw): boolean {
+    const object = this.shadowCasterRecords.get(caster)?.object;
+    return object !== undefined && this.layerByObject.get(object)?.group != null;
   }
 
   /** 一个投射者 draw 的逐条目副本（同反射副本的做法，`reflectionCopyOf`）；副本记在 `record.copies`，卸对象时释放。 */
@@ -7099,11 +7112,13 @@ export class GpuScene {
   /**
    * 模型被视锥剔除（P5c 步骤 2，p5-REPORT `p5c-frustum`，rea-p5-mesh 4.4）：被剔就整个模型不画。`viewProjection` 是这个 pass 的场景级视图
    * 投影：主 pass 是带抖动与缩放、不带每个对象的视差的那一份（WPE 在场景绘制开头从相机算一次平面），平面反射 pass 是反射视图的（P13b2，
-   * p13-REPORT C8）。世界矩阵不含视差；`perspective: true` 的模型也按它判（WPE 先剔除、后换透视投影，rea 2.6）。组里的模型照报
-   * （`model:passthrough:children:model`），强制渲染时不剔：组的局部正交下 WPE 用哪组平面没有实测。
+   * p13-REPORT C8）。世界矩阵不含视差；`perspective: true` 的模型也按它判（WPE 先剔除、后换透视投影，rea 2.6）。
    */
   private modelCulled(layer: SceneLayer, state: SceneState, worlds: Map<number, Mat4>, viewProjection: Mat4): boolean {
     const model = layer.model;
+    // 组里的模型（P14b D1）画进组 RT、用组的局部正交，不按场景相机剔除。WPE 照样拿场景相机的平面测场景空间的外接球（组画子树不重算平面，
+    // rea-p14b-group-models 2 节），组在画面外而组 RT 被别的图层读时把模型错剔：缺陷，不复现。按组自己的视锥剔掉的只会是画不进组 RT 的，
+    // 和不剔画面相同，所以也不剔
     if (!model || layer.group != null) return false;
     // 带骨骼的模型（P12b2-1）：剔除盒随动画变（可见层动画包围盒的并，没有有效的退回 mdl 的，`ScenePuppets.bounds`）
     return frustumCulled(
@@ -7313,7 +7328,13 @@ export class GpuScene {
     // 反射开（P13b2）时改由下面的反射 pass 清屏并作画
     // 阴影 pass（P13d）：在反射与主 pass 之前（帧函数 `0x14018031a`），每帧清图集、画投射者
     this.encodingState = state;
-    this.shadowAtlas?.encode(encoder, this.shadowCasters);
+    // 组的子孙不投射（P14b，rea-p14b-group-models 4 节，`p14b-gm-shadow` 实测）：WPE 的阴影 pass 跳过带 `0x2` 的对象，组本身不是不透明模型、
+    // 也不画。投射者按对象建、换父不重建，所以每帧按当前的组归属（`SceneLayer.group`，L7 换父后就是新值）筛
+    if (this.shadowAtlas)
+      this.shadowAtlas.encode(
+        encoder,
+        this.shadowCasters.filter((caster) => !this.casterInGroup(caster)),
+      );
     const reflectionTarget = this.reflectionSet ? (this.reflectionTargets?.reflection ?? null) : null;
     if (!reflectionTarget) this.reflectionTargets?.encode(encoder, clear);
     if (this.hdr && !clearenabled) this.linearizeBase(encoder, this.current);

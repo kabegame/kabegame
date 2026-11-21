@@ -1399,3 +1399,134 @@ describe("GpuScene：全屏组的视图投影（p5j-cam）", () => {
     expect(drawOf(scene, 1, "final").pipeline.label).toContain("program 2 translucent");
   });
 });
+
+describe("GpuScene：组里的网格（P14b，p14b-gm-basic 抓帧 A:\p14b\gm-basic\gm-basic-frame222.rdc 事件 97）", () => {
+  // 组 G（copybackground false）：中心 (900, 560)、缩放 1.25×0.8、转 0.35 rad，800×600；里面的模型层 T1 局部 (−120, 20) 转 0.2 rad。
+  // 期望值是 WPE 抓帧里 T1 的 g_ModelMatrix、g_ModelViewProjectionMatrix、g_ViewProjectionMatrix（逐位）
+  const T1_MODEL = [
+    0.9800665378570557, 0.19866934418678284, 0, 0, -0.19866934418678284, 0.9800665974617004, 0, 0, 0, 0, 1, 0, -120,
+    19.999969482421875, 0, 1,
+  ];
+  const T1_MVP = [
+    0.002450166270136833, 0.0006622311775572598, 0, 0, -0.0004966733395121992, 0.0032668886706233025, 0, 0, 0, 0,
+    0.0005000000237487257, 0, -0.29999998211860657, 0.06666656583547592, 0.5, 1,
+  ];
+  const GROUP_P = [
+    0.0024999999441206455, 0, 0, 0, 0, 0.0033333334140479565, 0, 0, 0, 0, 0.0005000000237487257, 0, 0, 0, 0.5, 1,
+  ];
+  /** 网格程序：MVP（0）、视图投影（64）、模型矩阵（128）。 */
+  const MESH_PROGRAM = {
+    ...program("kbgm", []),
+    uniforms: [
+      { name: "g_ModelViewProjectionMatrix", type: "mat4x4<f32>", declared: "mat4", offset: 0, size: 64 },
+      { name: "g_ViewProjectionMatrix", type: "mat4x4<f32>", declared: "mat4", offset: 64, size: 64 },
+      { name: "g_ModelMatrix", type: "mat4x4<f32>", declared: "mat4", offset: 128, size: 64 },
+    ],
+    uniformBlockSize: 192,
+  } as unknown as TranslateResult;
+  const MESH = 6;
+
+  function layers(
+    groupOrigin = [900, 560, 0],
+    bounds = [-131072, -131072, -131072, 131072, 131072, 131072],
+  ): SceneLayer[] {
+    // 一个四边形网格（格式 0x9：位置 + uv，stride 20），索引 0 1 2 0 2 3
+    const vertices = new Uint8Array(4 * 20);
+    const indices = new Uint8Array(new Uint16Array([0, 1, 2, 0, 2, 3]).buffer);
+    const mesh = {
+      format: 0x9,
+      stride: 20,
+      vertices,
+      indices,
+      vertexCount: 4,
+      indexFormat: "uint16" as const,
+      indexCount: 6,
+      material: "materials/kbgm_t1.json",
+      passes: [pass("objects/2/meshes/0/passes/0", { program: MESH })],
+    };
+    return [
+      image(0, "BG", [960, 540, 0], [1920, 1080]),
+      group(
+        1,
+        "G",
+        { origin: groupOrigin, size: [800, 600], angles: [0, 0, 0.35], copyBackground: false, subtree: [2] },
+        { scale: [1.25, 0.8, 1] },
+      ),
+      baseLayer(2, {
+        name: "T1",
+        parent: 1,
+        group: 1,
+        origin: [-120, 20, 0],
+        angles: [0, 0, 0.2],
+        size: [0, 0],
+        passes: [],
+        model: {
+          path: "models/t1.mdl",
+          version: 23,
+          meshes: [mesh],
+          order: [0],
+          bounds,
+        },
+      }),
+    ];
+  }
+
+  async function opened(sceneLayers = layers()) {
+    const gpu = new FakeGpu();
+    const bundle = bundleOf(sceneLayers);
+    bundle.programs.push(MESH_PROGRAM);
+    const state = SceneState.fromBundle(bundle);
+    const scene = await GpuScene.build(gpu.device, bundle, state, new Set(), [], { particles: { seed: 1 } });
+    scene.update(FRAME, state);
+    return { gpu, scene, state };
+  }
+
+  it("g_ModelMatrix = inverse(W_组) ⊗ W、g_ViewProjectionMatrix = 组的局部正交、MVP = P ⊗ (inverse(W_组) ⊗ W)，和 WPE 逐位相同", async () => {
+    const { scene } = await opened();
+    const draw = drawOf(scene, 2, "mesh");
+    expect([...matrixAt(draw, 128)]).toEqual(T1_MODEL);
+    expect([...matrixAt(draw, 0)]).toEqual(T1_MVP);
+    // 局部正交的平移我们是 −0、WPE 是 0，数值相同
+    expect([...matrixAt(draw, 64)].map((v) => v + 0)).toEqual(GROUP_P);
+  });
+
+  it("组与子层带 x / y 旋转（p14b-gm-rot3d 事件 83 的 R1）：g_ModelMatrix 用 glm 的完整乘法，和 WPE 逐位相同", async () => {
+    const R1_MODEL = [
+      1.0445585250854492, 0.2117425501346588, 0.2721443772315979, 0, -0.24966877698898315, 0.7952044606208801,
+      0.3395810127258301, 0, -0.18975624442100525, -0.555005669593811, 1.1601557731628418, 0, -119.99993896484375,
+      20.000030517578125, 15.000015258789062, 1,
+    ];
+    const R1_MVP = [
+      0.0026113963685929775, 0.0007058085175231099, 0.00013607219443656504, 0, -0.0006241719238460064,
+      0.0026506816502660513, 0.00016979050997179002, 0, -0.0004743906029034406, -0.0018500189762562513,
+      0.0005800779326818883, 0, -0.29999983310699463, 0.06666676700115204, 0.5074999928474426, 1,
+    ];
+    const rot3d = layers([900, 560, 30]);
+    Object.assign(rot3d[1], { angles: [0.3, 0.2, 0.35], scale: [1.25, 0.8, 1.1] });
+    Object.assign(rot3d[2], { origin: [-120, 20, 15], angles: [0.4, -0.25, 0.2], scale: [1.1, 0.9, 1.3] });
+    const { scene } = await opened(rot3d);
+    const draw = drawOf(scene, 2, "mesh");
+    expect([...matrixAt(draw, 128)]).toEqual(R1_MODEL);
+    expect([...matrixAt(draw, 0)]).toEqual(R1_MVP);
+  });
+
+  it("顶层不画、由组的子树画进组的合成 RT（copybackground false：alpha 取 MAX、写 RGBA）", async () => {
+    const { gpu, scene, state } = await opened();
+    expect(opKinds(scene, 1)).toEqual(["snapshot", "clear", "subtree", "draw final"]);
+    const trace = gpu.encode(scene, state);
+    const group = trace.indexOf('pass composite 800x600|true|false #0 clear {"r":0,"g":0,"b":0,"a":0}');
+    expect(group).toBeGreaterThan(0);
+    expect(trace.slice(group + 1, group + 3)).toEqual([
+      "pass composite 800x600|true|false #0 load",
+      "  pipeline scene program 6 translucent rgba8unorm list max mesh mask 15",
+    ]);
+    expect(trace.filter((line) => line.includes("program 6"))).toHaveLength(1);
+  });
+
+  it("组在画面外、模型的场景空间外接球在场景视锥外：照画进组 RT，不按场景相机剔除（D1，和 WPE 有意不同）", async () => {
+    // 组中心 (−3000, 560)：T1 的世界位置在场景左边很远，包围盒 ±50
+    const { gpu, scene, state } = await opened(layers([-3000, 560, 0], [-50, -50, -1, 50, 50, 1]));
+    const trace = gpu.encode(scene, state);
+    expect(trace.filter((line) => line.includes("program 6"))).toHaveLength(1);
+  });
+});

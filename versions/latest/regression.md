@@ -4321,8 +4321,35 @@ WPE 的两处模型变形缺陷不照抄（语料不依赖）。
 | [x] | PM4 脚本 API 日志 | Windows dev | `p14-api2` 探针跑 120 帧加一次点击，和 WPE 日志逐行比 | 只在有意不同处不同 | 2026-11-21：只差 S15d / S15d2（D1）、S13d（微任务时机）与输入时机，见 `ignore/p14/4/api/README.md` |
 | [x] | PM5 Karin 固定帧 | Windows dev + WPE | 复制工程 `FIXED_FRAME=120`（声音换静音），两边比 `KARIN_SCENE_SAMPLE` 与整帧（按 WPE 那一帧的 `g_Time`） | `modelHash` 相同；整帧只差 E16 | 2026-11-21：`modelHash 3b2a47a2`、321 个 drawable 两边相同；1920×1080 只差 128 个像素，全在 `clip_119`（WPE 读到全 0 快照） |
 | [x] | PM6 Karin 性能 | Windows dev + WPE | 复制工程 `PROFILE_SECONDS=10`，WPE 测试窗口与 Kabegame 图库预览各跑一次 | 每帧脚本耗时不比 WPE 差 | 2026-11-21：`update` 平均 / p95 / 最大，Kabegame 12.3 / 13 / 211 ms，WPE 18.0 / 30 / 243 ms；加载 7.2 s（首帧 3.1 s 建 358 个层，全部同步、当帧装上） |
-| [ ] | PM7 预览里看 3834692798 本体 | Windows dev，图库预览 | 预览这张壁纸看一分钟（会放语音与音乐） | 能实时渲染，不再停在预览图；人物的呼吸、眨眼、口型与动作流畅，没有缺部件、闪烁或错位；字幕与语音对得上 | 需要用户看 |
+| [x] | PM7 预览里看 3834692798 本体 | Windows dev，图库预览 | 预览这张壁纸看一分钟（会放语音与音乐） | 能实时渲染，不再停在预览图；人物的呼吸、眨眼、口型与动作流畅，没有缺部件、闪烁或错位；字幕与语音对得上 | 需要用户看 |
 | [ ] | PM8 非 Windows | macOS、Linux | 同 PM7 | 同 Windows | 本机不能测 |
+
+## 场景壁纸组里的模型对象（P14b）
+
+2026-11-21。创意工坊 3816948983（林间锦鲤）的控制器脚本建模型数据层、再 `setParent` 挂进组合层（组），水面 effect 读组的合成 RT。以前组里的模型一律照报 `model:passthrough:children:model`，运行中进组的不画，组 RT 全是 0，水面偏亮偏青、边缘拉丝。现在组里的模型（脚本建的与 scene.json 里静态挂进组的 mdl）照 WPE 画进组 RT。
+
+实现：
+- `g_ModelMatrix` = `inverse(W_组) · W`（glm 乘法）、视图投影是组的局部正交，MVP 同图像层的组内结合顺序；
+- 组 RT 没有深度；`copybackground: false` 的组 alpha 取 MAX；
+- 阴影 pass 每帧按当前的组归属筛掉组的子孙（不投射），运行中进组 / 出组当帧生效；
+- 读帧缓冲的模型（P14 E16）照图像层的层首拷贝，直接父是组时不拷。
+
+和 WPE 有意不同：组里的模型不按场景相机做视锥剔除（D1）。WPE 拿场景相机测场景空间的外接球，组在画面外而组 RT 被别的图层读时会把模型错剔。
+
+依据与记录：
+- 计划：`.claude/plans/wpe-import/3-scene/phase14/phase-14b-group-models.md`；读码：同目录的 `rea-p14b-group-models.md`；
+- 工程与对照：`ignore/p14/b/`（`gen_p14b.py` 生成器、`mutate.py` 变异、`seed_random.py` 复制工程的固定种子、`out/` WPE 的帧与日志）；
+- 抓帧：`A:\p14b\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PB0 单测与检查 | Windows | `apps/wpe-scene` 的 tsc、相关 vitest、变异 | 0 error，相关测试全过，变异检出 | 2026-11-21：tsc 只剩并行会话正在改的 `emitterImages.test.ts` 一处；`p5b-group`、`p14-model-data`、`p14b`、`l7`、`compile/p5c`、`p5b`、`p8` 全过；变异 8 / 8 检出（`ignore/p14/b/mutate.py`） |
+| [x] | PB1 语料 | Node | `kbp regress --corpus --no-cases`，改动前后各扫一次 | 逐场景相同 | 2026-11-21：233 / 233 逐场景相同、全部干净（语料里没有静态挂进组的模型） |
+| [x] | PB2 WPE 实测 | Windows + WPE | `p14b-gm-basic` / `-copybg` / `-rot3d` / `-depth` / `-shadow` / `-shadow-cb` 抓帧，读常量与阴影 pass | 矩阵、深度、阴影符合读码 | 2026-11-21：组里网格的 `g_ModelMatrix` 是局部矩阵、视图投影是局部正交，和我们的算法 64 个分量逐位相同（`-rot3d` 定了是 glm 乘法）；组 RT 没有深度；阴影 pass 只有顶层的 3 个投射 draw，组本身写 `castshadow: true` 也一样 |
+| [x] | PB3 生成工程画面 | Windows dev + WPE | 导入 `ignore/p14/b/proj/p14b-gm-*`，探针 `render_scene`（`scripts: true`、`canvas: [1920, 1080]`）和 WPE 抓帧整帧比 | 整帧 0 差异或只有已知差异 | 2026-11-21：basic、copybg、rot3d、depth 整帧 0 差异（除 FR / CLK）；shadow、shadow-cb 各 3 个像素差 1；探针结果没有不支持项 |
+| [x] | PB4 3816948983 复制工程走查 | Windows dev + WPE | `ignore/p14/b/proj/3816948983-kbp`（`Math.random` 换成固定种子）按 WPE 日志回放到第 313 帧比整帧；`height-copy` 组 RT 读回和 WPE 抓帧（`ignore/p14/b/out/wpe-height-copy-f313-e90.png`）逐像素比 | 组 RT 相同；整帧只有已知差异 | 2026-11-21：32 个脚本建的层当帧同步装上、没有不支持项，两边都是 40 个 draw；整帧 1920×1080 只有 37 个像素差 1；`height-copy` 组 RT 224×126 的 RGBA 逐位相同 |
+| [ ] | PB5 预览里看 3816948983 本体 | Windows dev，图库预览 | 预览这张壁纸看一会儿，点水面、拖动鼠标 | 水面清澈、不偏青，没有上边与左边的拉丝；锦鲤与涟漪正常；看板娘不提示不支持的特性 | 需要用户看 |
+| [ ] | PB6 非 Windows | macOS、Linux | 同 PB5 | 同 Windows | 本机不能测 |
 
 ## 场景壁纸 P6a2：声音的 `mintime` / `maxtime` 绑属性、挂脚本
 
