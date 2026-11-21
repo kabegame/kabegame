@@ -4,8 +4,8 @@
  * - `particleDependencies`：三道门、`type` 大小写敏感、`mask` / `id 0` / 非对象元素；
  * - `dependencyIds`：粒子对象的对象元素进并集（两种类型、`id 0`），非粒子对象的不进，数字元素照旧；
  * - `bindLayerImages`：只数 `layerimage` 的槽序号、同槽后者覆盖前者、`id 0` 与碰撞模型不配；
- * - 模块表 / 能力表：缺省值、`flags` 白名单、过渡键 `particle:layerimage:pending`、不再报 `particle:dependencies`；
- * - 系统步进：`layerimage` 照常走发射计时、一颗不生；
+ * - 模块表 / 能力表：缺省值、`flags` 白名单、不再报 `particle:dependencies`；
+ * - 系统步进：没有候选表来源时 `layerimage` 照常走发射计时、一颗不生；
  * - bundle：被依赖、顶层与子系统各自从 0 数、`mask` 纹理进 `bundle.textures`、引用 puppet / 文本层的照报键。
  */
 import { gunzipSync } from "node:zlib";
@@ -155,15 +155,15 @@ describe("模块表与能力表", () => {
     expect(persp.offsetmax).toEqual([0, 0, 0]);
   });
 
-  it("flags 白名单：0x90006 不报字段问题；0x100000 报 particle:emitter:layerimage:flags（外加过渡键）", () => {
+  it("flags 白名单：0x90006 不报字段问题；0x100000 报 particle:emitter:layerimage:flags", () => {
     expect(read({ flags: 0x90006 }).issues).toEqual([]);
     expect(read({ flags: 0x100000 }).issues.map((issue) => issue.field)).toEqual(["flags"]);
-    expect(keys({ flags: 0x90006 })).toEqual(["particle:layerimage:pending"]);
-    expect(keys({ flags: 0x100000 })).toEqual(["particle:emitter:layerimage:flags", "particle:layerimage:pending"]);
+    expect(keys({ flags: 0x90006 })).toEqual([]);
+    expect(keys({ flags: 0x100000 })).toEqual(["particle:emitter:layerimage:flags"]);
   });
 
-  it("只报过渡键 particle:layerimage:pending，不再报 particle:emitter:layerimage", () => {
-    expect(keys()).toEqual(["particle:layerimage:pending"]);
+  it("layerimage 不报任何键（过渡键 particle:layerimage:pending 已在 P4j 步骤 3 删除）", () => {
+    expect(keys()).toEqual([]);
   });
 
   it("粒子对象的对象依赖不再报 particle:dependencies（字符串 / 数字元素也不报）", () => {
@@ -179,7 +179,7 @@ describe("模块表与能力表", () => {
   });
 });
 
-describe("系统步进：layerimage 照常算发射数、不生粒子", () => {
+describe("系统步进：layerimage 没有候选表（没有来源）时照常算发射数、不生粒子", () => {
   const make = (name: string) =>
     new ParticleSystem(
       parseParticle(
@@ -194,7 +194,7 @@ describe("系统步进：layerimage 照常算发射数、不生粒子", () => {
       1,
     );
 
-  it("rate 10 步进：layerimage 一颗不生，发射计时与 sphererandom 的相同", () => {
+  it("rate 10 步进：没有候选表来源时 layerimage 一颗不生，发射计时与 sphererandom 的相同", () => {
     const layer = make("layerimage");
     const sphere = make("sphererandom");
     for (const system of [layer, sphere]) system.step(0.5);
@@ -354,7 +354,7 @@ describe("compileScene：发射图依赖进 bundle（P4j 步骤 1）", () => {
     expect(slot).toMatchObject({ id: 2, mask: "masks/m" });
     expect(slot!.maskTexture).not.toBeNull();
     expect(bundle.textures[slot!.maskTexture!].path).toContain("masks/m");
-    expect(keys).toEqual(["particle:layerimage:pending"]);
+    expect(keys).toEqual([]);
   });
 
   it("没有 mask：maskTexture 为 null；没配上依赖的发射器为 null；id 引用不存在的对象中性", async () => {
@@ -362,7 +362,7 @@ describe("compileScene：发射图依赖进 bundle（P4j 步骤 1）", () => {
       "particles/p.json": { material: "materials/pm.json", maxcount: 4, emitter: [LAYERIMAGE, LAYERIMAGE] },
     });
     expect(particleLayer(bundle).emitterImages).toEqual([{ id: 99, mask: "", maskTexture: null }, null]);
-    expect(keys).toEqual(["particle:layerimage:pending"]);
+    expect(keys).toEqual([]);
   });
 
   it("顶层与 static 子系统各自从 0 数，用同一个对象的依赖列表", async () => {

@@ -1622,8 +1622,6 @@ export function checkParticleFeatures(
         continue;
       }
       if (category === "emitter" && (reading.fields.flags as number) & 4) periodic = true;
-      // 过渡键（P4j 步骤 3 删）：`layerimage` 的发射还没做（候选表与出生点），整张退回
-      if (module === "emitter:layerimage") unsupported.add("particle:layerimage:pending");
       if (module === "initializer:mapsequencearoundcontrolpoint") around = true;
       for (const issue of reading.issues)
         unsupported.add(

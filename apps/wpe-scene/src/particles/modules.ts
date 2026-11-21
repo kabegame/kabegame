@@ -24,6 +24,7 @@ import {
   vortexV2,
 } from "./distance";
 import { boxRandom, layerImage, sphereRandom } from "./emitters";
+import type { LayerImageFrame } from "./layerImage";
 import { f32 } from "./f32";
 import { colorListHsv, colorListRgb } from "./colorn";
 import {
@@ -232,6 +233,16 @@ export interface ParticleRunContext {
    * 从控制点抄出 9 个分量（`0x140237c42`、`0x1402384c8` 起），不看旋转条件。
    */
   basis: Float32Array;
+  /**
+   * `layerimage` 发射器这一帧的输入（P4j 步骤 3，`ParticleSystem.emit` 在取到表的发射帧写、生完这个发射器的粒子后清）：`layerImage` 执行函数读它；
+   * 没有（单测手写的上下文）时不生粒子。
+   */
+  layerImage?: LayerImageFrame;
+  /**
+   * 这颗新粒子的颜色乘数（`layerimage` 的 `0x10000`，rea-p4j-layerimage.md 3.6：像素 RGB / 255）：emitter 写，`spawn` 把实例颜色乘上它再进
+   * initializer，写完清掉。其它 emitter 不写。
+   */
+  colorScale?: [number, number, number] | null;
   /**
    * 系统时间 `St`（`sys+0x3f0`，P4d 步骤 4a，rea-p4d-modules.md 2.2）：`remapinitialvalue` 的输入 `particlesystemtime` 读它（op 读的是
    * `time`）。模拟器每帧在模拟之前 `+= dt′`（乘过 `instanceoverride.rate`，float32，`FUN_1402308a0` 开头 `0x1402308c2`），系统复位
@@ -671,7 +682,8 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
   },
   {
     // `FUN_1401b9930` 缺省（先调公共 `FUN_1401b8df0`），解析 `0x1401c6af1`，rea-p4j-layerimage.md 1.1–1.3。
-    // 候选表是运行时从被依赖图层的合成 RT 读回的（步骤 2），发射在步骤 3；步骤 1 起系统对它照常算发射数、不生粒子（`system.ts`）
+    // 候选表是运行时从被依赖图层的合成 RT 读回的（步骤 2，`layerImage.ts`）；发射（出生点、颜色、速度）是步骤 3（`emitters.ts` 的 `layerImage`）。
+    // 没有候选表来源（单测、没绑依赖）时系统照常算发射数、不生粒子（`system.ts`）
     category: "emitter",
     name: "layerimage",
     fields: {

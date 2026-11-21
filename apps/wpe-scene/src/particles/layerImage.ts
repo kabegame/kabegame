@@ -14,9 +14,10 @@
  * `0x20000` 的计时器（2.5，`rec+0x7c`）是**发射器记录**的字段（同一记录 `+0x78` 是槽号），每个发射器各一个，在 `ParticleSystem` 的发射循环
  * 里累加；过 1 时调共享记录的 `refresh`，所以任何一个带 `0x20000` 的发射器都会让共享表重建，但两个发射器不会把一个计时器累加成两倍速。
  *
- * 系统本身不生粒子（出生点是步骤 3）：发射循环在要发的帧（`n > 0`）走一次 `0x20000` 计时（带这一位时）与 `acquire`，仅此而已。
+ * 发射循环在要发的帧（`n > 0`）走一次 `0x20000` 计时（带这一位时）与 `acquire`，取到表就按它生粒子（步骤 3，`emitters.ts` 的 `layerImage`）。
  */
 import { f32 } from "./f32";
+import { identity, type Mat4 } from "../render/math";
 
 /** 候选表（2.3）：列优先（x 外层、y 内层），每项一个像素。x / y 是 int16（合成 RT 像素，原点在中心，y 向下），rgb 是降采样后的 8 位值。 */
 export interface EmitterImageTable {
@@ -95,6 +96,28 @@ export function buildEmitterImageTable(snapshot: EmitterImageSnapshot): EmitterI
   return { count, x: x.slice(0, count), y: y.slice(0, count), rgb: rgb.slice(0, count * 3) };
 }
 
+/**
+ * 一次取表的结果（步骤 3）：候选表与被依赖图层的绘制矩阵 `L`（记录的 `dep+0x98`，rea 2.1：只在状态 2 的调用与建表时刷新，重建期间照用旧的）。
+ * 发射器用 `A = M⁻¹·L`（本地）或 `L`（世界）搬出生点，`L` 也是下一帧速度的「上一次图层矩阵」。
+ */
+export interface EmitterImageAcquired {
+  table: EmitterImageTable;
+  matrix: Mat4;
+}
+
+/**
+ * 一个发射器一帧的发射输入（步骤 3，rea 3.2 的矩阵准备）：取到表的发射帧由 `ParticleSystem.emit` 算好，交给 `layerImage` 逐颗粒子用。
+ * - `A`：出生点矩阵，世界系统 `L`（`I·L`），本地系统 `M⁻¹·L`；
+ * - `prev`：`Bprev = Ap·rec[0xb8]`，`Ap` 世界单位阵、本地 `M⁻¹`，速度算「上一次取到表时图层矩阵」下的出生点用；
+ * - `frameDt`：`ctx+0x14c`，不含实例 `rate` 的帧时间（速度的除数）。
+ */
+export interface LayerImageFrame {
+  table: EmitterImageTable;
+  A: Mat4;
+  prev: Mat4;
+  frameDt: number;
+}
+
 /** 一条绑定（编译期 `SceneParticle.emitterImages` 的一项去掉 `maskTexture`）：共享记录的键。 */
 export interface EmitterImageBinding {
   id: number;
@@ -114,12 +137,17 @@ export interface EmitterImageView {
    * 状态 0 的「锁定快照」：`frame` 的上一帧末有就锁它，没有就锁本帧末的那份；两者都没法给时返回 null（留在状态 0）。
    */
   lock(id: number, mask: string, frame: number): EmitterImageHandle | null;
+  /**
+   * 图层此刻的绘制矩阵 `L`（`FUN_1401d3ae0` 里的 `L.vfunc_0x80()`，rea 3.2：世界矩阵含父链、`angles`、`scale`，再右乘 `alignment` 偏移）。
+   * 状态 2 的每次调用与建表时现取；图层找不到时返回 null（记录保留上一份）。`frame` 给回放用（脚本移动图层的案例按帧号算）。
+   */
+  layerMatrix(id: number, frame: number): Mat4 | null;
 }
 
 /** 发射循环看到的来源（每个场景一份）。 */
 export interface EmitterImageSource {
-  /** 第 `frame` 帧、某个发射器取表（`n > 0` 的帧才调）：返回可用的非空表，或 null。 */
-  acquire(binding: EmitterImageBinding, frame: number): EmitterImageTable | null;
+  /** 第 `frame` 帧、某个发射器取表（`n > 0` 的帧才调）：返回可用的非空表与图层矩阵，或 null。 */
+  acquire(binding: EmitterImageBinding, frame: number): EmitterImageAcquired | null;
   /**
    * `0x20000` 的重建（2.5，`FUN_1401d42b0`）：记录状态不是 1 就置 0。计时器在发射器上（`rec+0x7c` 是发射器记录的偏移，每个发射器
    * 各一个，`ParticleSystem` 的发射循环里累加），过 1 时调这里；记录是共享的，所以任何一个带 `0x20000` 的发射器都会让共享表重建。
@@ -134,7 +162,8 @@ export interface EmitterImageSource {
  * - 门：`started` 为假，或 `startFrame === frame` 时记下并返回 null（只挡第一次与同一帧，之后不再清）；
  * - 状态 0：锁定快照，进状态 1，返回旧表（没有为 null）；
  * - 状态 1：锁定的快照读回了就建表、记 W / H，进状态 2；没读回留在状态 1（同 WPE 重建期间照用旧表）；
- * - 返回的表为空时返回 null（WPE「表非空才发」，3.1）。
+ * - 返回的表为空时返回 null（WPE「表非空才发」，3.1）；
+ * - 图层矩阵 `matrix`（`rec+0x98`，2.1）：状态 2 的每次调用在尺寸检查之前刷新，建表时再刷新一次；其它状态返回上一份（解析时单位阵）。
  */
 export class EmitterImageRecord {
   readonly id: number;
@@ -145,6 +174,8 @@ export class EmitterImageRecord {
   started = false;
   startFrame = 0;
   table: EmitterImageTable | null = null;
+  /** 图层矩阵 `L`（`rec+0x98`）：初值单位阵，见类注释。 */
+  matrix: Mat4 = identity();
   /** 建表时的合成 RT 尺寸（`rec+0x5c` / `+0x60`）。 */
   width = 0;
   height = 0;
@@ -155,10 +186,11 @@ export class EmitterImageRecord {
     this.mask = binding.mask;
   }
 
-  acquire(frame: number, view: EmitterImageView): EmitterImageTable | null {
+  acquire(frame: number, view: EmitterImageView): EmitterImageAcquired | null {
     const size = view.layerSize(this.id);
     if (!size) return null;
     if (this.state === 2) {
+      this.matrix = view.layerMatrix(this.id, frame) ?? this.matrix;
       if (size.width !== this.width || size.height !== this.height) {
         this.state = 0;
         this.handle = null;
@@ -180,6 +212,7 @@ export class EmitterImageRecord {
       const snapshot = this.handle?.snapshot();
       if (snapshot) {
         this.table = buildEmitterImageTable(snapshot);
+        this.matrix = view.layerMatrix(this.id, frame) ?? this.matrix;
         // 建表时的 W / H 是此刻合成 RT 的尺寸（2.3 末尾，`dep+0x5c/+0x60 = W/H`）
         this.width = size.width;
         this.height = size.height;
@@ -198,8 +231,8 @@ export class EmitterImageRecord {
     }
   }
 
-  private current(): EmitterImageTable | null {
-    return this.table && this.table.count > 0 ? this.table : null;
+  private current(): EmitterImageAcquired | null {
+    return this.table && this.table.count > 0 ? { table: this.table, matrix: this.matrix } : null;
   }
 }
 
@@ -221,7 +254,7 @@ export class EmitterImageRecords implements EmitterImageSource {
     return this.records.values();
   }
 
-  acquire(binding: EmitterImageBinding, frame: number): EmitterImageTable | null {
+  acquire(binding: EmitterImageBinding, frame: number): EmitterImageAcquired | null {
     return this.record(binding).acquire(frame, this.view);
   }
 
@@ -239,6 +272,8 @@ export class ScriptedEmitterImageView implements EmitterImageView {
     private readonly options: {
       layerSize(id: number): { width: number; height: number } | null;
       snapshotAt(id: number, mask: string, frame: number): EmitterImageSnapshot | null;
+      /** 第 `frame` 帧取到的图层矩阵；缺省单位阵。 */
+      layerMatrix?(id: number, frame: number): Mat4 | null;
     },
   ) {}
 
@@ -250,5 +285,9 @@ export class ScriptedEmitterImageView implements EmitterImageView {
     const previous = this.options.snapshotAt(id, mask, frame - 1);
     if (previous) return { snapshot: () => previous };
     return { snapshot: () => this.options.snapshotAt(id, mask, frame) };
+  }
+
+  layerMatrix(id: number, frame: number): Mat4 | null {
+    return this.options.layerMatrix ? this.options.layerMatrix(id, frame) : identity();
   }
 }

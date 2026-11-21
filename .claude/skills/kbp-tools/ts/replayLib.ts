@@ -255,6 +255,18 @@ export interface SimOptions {
   /** 按系统名、出生序号注入 R（`injectedR`）。 */
   r?: Record<string, number[]>;
   /**
+   * 全部粒子系统共用**一个**随机源（P4j 步骤 3：WPE 一个场景只有一串 MT19937，几个系统按对象顺序抽同一串）：每次 `simulate` 调一次，
+   * 返回的对象交给每个系统（缺省每个系统自己的 `SeededRandom(1 + i)`）；`random` 的按系统名包装仍在它之上生效。
+   */
+  sharedRandom?: () => RandomLike;
+  /**
+   * 发射图候选表的来源（P4j 步骤 3，`layerimage` 发射器）：**每次 `simulate` 调一次**（候选表记录按 (图层 id, mask) 在全部系统间共享、
+   * 带状态，不能跨 `simulate`——包络、同一段的多轮比较各跑各的），返回「按粒子层取来源」的函数；返回 undefined 的层不接来源。建好系统后、
+   * 预热之前 `setEmitterImages`，并把帧号写成 0（预热）；每步之前写成这一帧的帧号 i（同渲染器的 `sheetFrameNo`）。典型写法：
+   * `new EmitterImageRecords(new ScriptedEmitterImageView({ layerSize, snapshotAt, layerMatrix }))`。
+   */
+  emitterImages?: () => (layer: any) => unknown | undefined;
+  /**
    * 逐帧的 16 段频谱（P4e 步骤 4，下标 = 帧号 − 1）：抓到的帧取 CLK 读到的 `g_AudioSpectrum16Left/Right`，其余为 null（沿用前一帧；第一个
    * 有值的帧之前是 0，同加载时）。原样写进粒子共用的频谱（`particles/audio` 的 `writeParticleAudio`），不经归一化。轨迹没有 `audio` 时不给。
    */
@@ -958,13 +970,28 @@ export class CaseContext {
     // 频谱（P4e 步骤 4）：全场景一份，各根系统共用（子系统与实例由 setAudio 递归带上）；预热时是 0（同 WPE 加载期）
     const audioMod = o.audio ? await this.mod("particles/audio") : null;
     const sharedAudio = audioMod ? audioMod.silentParticleAudio() : null;
+    // 发射图与共用随机源（P4j 步骤 3）：每次模拟新建（记录、MT 状态都带着上一轮的就不对了）
+    const sharedRandom = o.sharedRandom?.();
+    const imageSourceOf = o.emitterImages?.();
+    let imageFrames = false;
     for (const layer of o.layers ?? sec.layers) {
       if (!layer.particle) continue;
-      let random: RandomLike = new SeededRandom(1 + entries.length);
+      let random: RandomLike = sharedRandom ?? new SeededRandom(1 + entries.length);
       if (o.random?.[layer.name]) random = o.random[layer.name](random);
       const injected = o.r?.[layer.name];
       const system = new ParticleSystem(layer.particle, random, o.passes, injected ? injectedR(injected) : undefined);
       o.patch?.(system, layer);
+      const imageSource = imageSourceOf?.(layer);
+      if (imageSource) {
+        if (typeof system.setEmitterImages !== "function")
+          throw new KbpReplayError(
+            "src",
+            `${sec.project}：案例给了 emitterImages，但这份源码的 ParticleSystem 没有 setEmitterImages（P4j 步骤 2 之前）`,
+          );
+        system.setEmitterImages(imageSource);
+        system.setEmitterImageFrame(0);
+        imageFrames = true;
+      }
       if (sharedAudio) {
         if (typeof system.setAudio !== "function")
           throw new KbpReplayError(
@@ -1010,6 +1037,7 @@ export class CaseContext {
       for (const entry of entries) {
         const before = entry.system.alive;
         const stepInputs = inputs(entry.layer, frame);
+        if (imageFrames) entry.system.setEmitterImageFrame(frame);
         entry.system.step(o.dts[frame - 1], timeArg(frame), stepInputs as never);
         const c = entry.system.columns;
         for (let slot = 0; slot < entry.system.highWater; slot++) {

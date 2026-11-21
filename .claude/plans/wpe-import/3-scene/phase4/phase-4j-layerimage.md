@@ -581,3 +581,146 @@ export interface EmitterImageSource {
 - **别的会话带来的已有失败**，和 P4j 无关：
   - `compile/materialValues.test.ts` 7 个、`compile/pipeline.test.ts` 1 个：HEAD（`82e63fa0`）与不含 P4j 的 `82176594` 的快照上同样失败；
   - `render/render.test.ts` 1 个（BC3 行跨度）、`render/p3a.test.ts` 2 个（泛光脏项）：HEAD 快照上同样失败（只在 HEAD 上跑过；P4j 步骤 1 没碰 `render/`）。
+
+**用户 2026-11-21：** 步骤 2 可以提交（`d63088b3`）。
+
+## 步骤 3 — 发射
+
+### 总体设计思路
+
+有了表，`layerimage` 每颗粒子照 rea 第 3 节逐行生，抽取顺序同 3.10：表项下标 → 抖动 x / y / z（`0x80000`）→ 速率（`0x40000`）→ 照常的 `R` 与各 initializer。随机数全部来自系统的同一个随机源：
+- 下标用 MSVC `uniform_int_distribution` 的 Lemire 乘法加拒绝，每次取一个原始 u32（`FUN_14007d8f0`）；
+- 抖动和速率用 `uA`（`[0, 1)`，即 `random.a()`）；
+- 两者推进的是同一串（WPE 也是同一个 MT19937）。
+
+所以 `ParticleRandom` 要多一个取原始 u32 的入口，`SeededRandom` 从同一个来源取。
+
+**出生点**：`P = A·p`，`p = (x′ + jx, −y′ + jy, jz)`。`A` 本地系统是 `M⁻¹·L`、世界系统是 `L`，按 3.5 的 float32 乘加顺序算。
+- `L` 是被依赖图层**本帧**的绘制矩阵：世界矩阵含父链、`angles`、`scale`，再右乘 `alignment` 偏移。由取表的来源一起给出（`acquire` 返回 `{ table, matrix }`）。
+- 记录的 `L` 只在状态 2 与建表时刷新（2.1），重建期间照用旧的。
+- 渲染器按 `state.layers` 现算 `L`；回放由调用方给。
+
+**颜色**（`0x10000`）：这颗粒子的实例颜色先乘 `像素 / 255`（float32），再进 initializer。
+**速度**（`0x40000`）：
+- 用上一次取到表时的 `L`（`rec[0xb8]`，每个发射器一份，解析时单位阵，取到表的发射帧末尾写回）算出生点在这一帧里的移动，除以不含实例 `rate` 的帧时间，再乘 `uA·(max − min) + min`。
+- 第一次取到表那帧 `rec[0xb8]` 还是单位阵，速度会异常大：这是 WPE 的原样，照做。
+
+**`M3`**：传给 initializer 的 3×3，本地系统单位阵、世界系统 `mat3(M)`。
+
+步骤 1 的过渡键 `particle:layerimage:pending` 删掉，雨景从此能渲染。验收靠回放逐粒子比：
+- 用步骤 0 注入种子抓的 WPE 帧（`A:\p4j\`），`kbp replay` 的钩子把系统随机源换成同一种子的 `std::mt19937`；
+- 一个工程里几个系统共用**一个**随机源，按 WPE 的更新顺序抽；
+- 候选表来自 `ignore/p4/j0/snap/`。那是参考模型的快照，已和 dev 的 GPU 读回逐项相同：`li-large` 整表 SHA-256 一致。
+
+### 现状锚点
+
+**a. 发射循环**（`particles/system.ts`，步骤 2）
+```ts
+if (emitter.name === "layerimage") {
+  if (count > 0 && emitter.image) {
+    … 0x20000 计时 …
+    source.acquire(emitter.image, root.emitterImageFrame);   // 现状：只推进状态机，结果丢掉
+  }
+  continue;                                                   // 现状：一颗不生
+}
+```
+
+**b. 出生**（`particles/system.ts` 的 `spawn`）：`emitter.run(fields, context)` 写位置与速度 → 抽 `R` → 缺省值 → `c.color0 = this.instanceColor` → initializer（JSON 顺序）。
+
+**c. 随机源**（`particles/random.ts`）：`ParticleRandom` 只有 `a()` / `b()`（和可选的 `hueRand`），`SeededRandom` 的 32 位来源是私有的。
+
+**d. 取表**（`particles/layerImage.ts`）：`acquire` 返回 `EmitterImageTable | null`，记录不存 `L`；`EmitterImageView` 只有 `layerSize` / `lock`。
+
+### 点 1 — 原始 u32 与 Lemire 下标（`particles/random.ts`）
+
+- **新增**：
+  - `ParticleRandom.u32?(): number`：从 `a()` / `b()` 的同一个来源取一个原始 u32；没实现的（单测手写的）退到 `Math.floor(a() * 2³²)` 并注释。
+  - `SeededRandom` 实现它。
+  - `uniformIndex(random, n)`：照 rea 3.3。
+    - `m = u32 · n`（64 位，乘法拆成 16 位两半或 BigInt，保证高低 32 位精确）；
+    - `(m mod 2³²) < n` 时 `t = (2³² − n) mod n`，`while ((m mod 2³²) < t)` 重抽；
+    - 返回 `⌊m / 2³²⌋`。
+
+### 点 2 — 记录给出 `L`（`particles/layerImage.ts`、`render/emitterImages.ts`）
+
+- **修改**：
+  - `EmitterImageView` 加 `layerMatrix(id): Mat4 | null`；
+  - 记录在状态 2 与建表时刷新 `matrix`（2.1）；
+  - `acquire` 返回 `{ table, matrix } | null`。
+- `GpuEmitterImages.layerMatrix`：按当前 `state.layers` 现算图层的绘制矩阵，同图层画自己用的 `drawMatrixOf`（世界矩阵 × 自身偏移）。`GpuScene.stepParticles` 每帧把 `state` 交给它。
+- `ScriptedEmitterImageView` 加 `layerMatrix(id, frame)` 回调。
+
+### 点 3 — 出生点、颜色、速度（`particles/emitters.ts` 的 `layerImage`、`particles/system.ts`）
+
+- **修改** 发射循环：取到表时把 `{ table, matrix }` 交给这个发射器的这一帧，照常 `spawn` `count` 次；全部生完后 `emitter.prevLayer = matrix`（`rec[0xb8]`，初值单位阵）。没取到表时照旧丢掉。
+- **新增** `layerImage(fields, context)`，照 3.2–3.7 逐行：
+  - `A`：世界系统 `L`，本地系统 `inverse(M)·L`（`M` 是本系统的 `inputs.world`，`inverse` 照 GLM 的 4×4 求逆，float32）；`Ap` 世界单位阵、本地 `inverse(M)`；`Bprev = Ap·prevLayer`。
+  - 下标 `uniformIndex(random, count)`，`ix = x[i]`、`iy = −y[i]`。
+  - `0x80000` 时 `jx/jy/jz = f32(f32(uA·range) + min)`，按 x、y、z 顺序各抽一个 `a()`。
+  - 位置按 3.5 的括号顺序写进位置列。
+  - 颜色（`0x10000`）：在 context 上记一个 `colorScale = [r/255, g/255, b/255]`（float32），`spawn` 写 `color0` 时乘上去，写完清掉。
+  - 速度：没有 `0x40000` 写 0；有时按 3.7：`prev = Bprev·(p, 1)`，`d = frameDt`，`k = f32(uA·(speedmax − speedmin) + speedmin)`（`fields` 的 speed 已乘过 `instanceoverride.speed`），`v = k·(P − prev)/d`。
+  - `context.basis`：世界系统 `mat3(M)`、本地单位阵（3.2，传给 initializer）。
+- `sphererandom` / `boxrandom` 不受影响。
+
+### 点 4 — 能力表与文档（`compile/features.ts`）
+
+- **删除** 过渡键 `particle:layerimage:pending` 和 `p4j1.test.ts` 里期望它的用例（改成「`layerimage` 不报任何键」）。
+
+### 点 5 — 回放（`.claude/skills/kbp-tools/ts/replayLib.ts`、`ignore/p4/cases/`）
+
+- **修改** `replayLib`：
+  - `SimOptions` 加 `emitterImages?: (layer) => EmitterImageSource | undefined`，建系统后、预热之前 `setEmitterImages`；
+  - 每步之前 `setEmitterImageFrame(帧号)`：预热 0，第 i 帧 i，同渲染器的 `sheetFrameNo`；
+  - 加 `sharedRandom?: () => RandomLike`：全部系统共用一个随机源，按回放的系统顺序抽。
+  - 写进 kbp-tools SKILL.md。
+- **新增** 钩子 `ignore/p4/cases/j3.hook.ts`（复用 `j0rng.hook.ts` 的 `mt19937`）：
+  - 共用的 `SeededRandom(mt19937(种子))`；
+  - `ScriptedEmitterImageView`：`layerSize` 与快照取 `ignore/p4/j0/snap/<名字>.json/.rgba`，帧 ≥ 1 都返回同一份，内容是静态的；
+  - `layerMatrix` 照图层的 `origin` / `angles` / `scale` 算，`p4j-li-move` 按脚本 `MOVE_ORIGIN` 用上一帧的 `engine.runtime` 算 origin，写法同 `d5.hook.ts`。
+- **新增** 案例 `ignore/p4/cases/j3.json`：`p4j-li-map`、`p4j-li-jit`、`p4j-li-flags0`、`p4j-li-xform`、`p4j-li-large`、`p4j-li-move`，各用步骤 0 的抓帧（种子 1001–1006、`passes: 2`）。
+  - 案例里 `envelope.approx` 照近似倒数的惯例。
+  - `p4j-li-move` 的速度、`liw` / `li` 的共享记录一帧差，都在逐粒子比里体现。
+
+### 测试与验收
+
+- **单测**（`particles/layerImage.test.ts` 或新文件）：
+  - `uniformIndex`：拒绝分支，手造一个会被拒的 u32 序列；
+  - 位置公式的括号顺序；
+  - 颜色只在 `0x10000` 时乘；
+  - 速度用上一帧的 `L`，第一次是单位阵；
+  - 抽取顺序与个数：每颗 下标 1、抖动 3、速率 1，再 `R`；
+  - 世界 / 本地系统的 `basis`。
+- **回放**：`kbp replay j3` 逐粒子对上 WPE，位置差在近似倒数的包络内，颜色、尺寸逐位相同。
+- **变异**：
+  - 下标不做拒绝；
+  - 抖动顺序 y、x；
+  - 本地不乘 `M⁻¹`；
+  - 颜色不乘；
+  - 速度用本帧 `L`；
+  - `prevLayer` 不写回。
+- **语料**：缺省不变；雨景 `3834803915` 变干净。
+
+### 步骤 3 实施记录（2026-11-21）
+
+执行代理（sonnet）实现，Claude 独立验收（自己跑回放、语料、变异）。
+
+**和计划的出入：**
+- `layerMatrix(id, frame)` 多了帧号参数：`p4j-li-move` 的钩子要按帧算脚本移动的 origin，GPU 实现忽略它。
+- 回放选项 `emitterImages` / `sharedRandom` 是工厂：包络与 `fork` 的多轮模拟各要一份带状态的记录与随机源。
+- `A·L`、`Ap·prev` 按 `multiply(左, 右)`（rea 3.2）。回放逐位相同，证明顺序对。
+- 代理担心的「只在 `count > 0` 时取表」不是偏差：WPE 的 A1 段同样是「存活 < 容量」才算数量（rea-p4b A1），容量没满时 `count > 0` ⇔ `n > 0`。
+- 没核对：`instanceoverride.speed` 时速度范围是「`max·s − min·s`」还是「`(max − min)·s`」，两者只差 float32 舍入，语料不涉及。
+
+**参考模型的一处校准：** 降采样后正好 `.5` 的值，GPU 往下取（`li-large` 的边缘 127.5 → 127）。`model.py` 改成 `ceil(x·255 − 0.5)` 之后，和 dev 读出的 `li-large` 整表（8381 项，连颜色）SHA-256 一致。快照 `ignore/p4/j0/snap/` 由它生成；夹具 `p4j-map-table.json` 只变了一个被阈值排除的像素。
+
+**验收：**
+- **回放**：`kbp replay j3`，6 个工程 8 个系统、7778 颗（三帧合计）逐粒子对上，逐帧粒子数相同，位置、颜色、尺寸逐位相同。
+  - 例外是 `li-move`：位置差 1.2e-4（限值的 0.12），来自脚本移动图层的 `sin`。
+  - `liw` 比 `li` 早一帧拿到表（共享记录），同样照出。
+- **测试**：相关 53 个文件 1162 过，tsc 0 error，Prettier 通过。
+- **变异**（`ignore/p4/j3/mutate_j3.py`，检出方单测 + 回放案例）：6 处全部检出。
+  - 「下标不做拒绝」只有单测能检出：表长几十到几千时拒绝概率约 1e-8，抓帧里没发生过。
+- **语料**：缺省 233 张 0 变化；`3834803915` 0 项。
+
+**遗留：** 执行代理误建了一个空文件 `D:	mp_edit.py`，它删的时候被权限拒了，已告诉用户手动删。

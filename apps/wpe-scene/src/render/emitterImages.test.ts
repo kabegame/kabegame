@@ -124,6 +124,7 @@ describe("登记（register）与读数（probe）", () => {
           throw new Error("没有 pass，不该建管线");
         },
         layerSource: (id) => (id === 7 ? ({ width: 96, height: 64 } as never) : null),
+        layerMatrix: () => null,
         maskTexture: () => null,
       },
       systems as never,
@@ -191,6 +192,7 @@ describe("与状态机联动（真实 GpuEmitterImages 当视图用，快照由�
           throw new Error("x");
         },
         layerSource: () => ({ width: 8, height: 8 }) as never,
+        layerMatrix: () => null,
         maskTexture: () => null,
       },
       [
@@ -229,7 +231,7 @@ describe("与状态机联动（真实 GpuEmitterImages 当视图用，快照由�
     const { gpu, binding, endFrame } = await harness();
     const got: (number | null)[] = [];
     for (const frame of [1, 2, 3]) {
-      got.push(gpu.records.acquire(binding, frame)?.count ?? null);
+      got.push(gpu.records.acquire(binding, frame)?.table.count ?? null);
       endFrame(frame);
     }
     expect(got).toEqual([null, null, 4]);
@@ -243,7 +245,7 @@ describe("与状态机联动（真实 GpuEmitterImages 当视图用，快照由�
     expect(first).toBeNull();
     expect(record.state).toBe(1);
     endFrame(1);
-    expect(gpu.records.acquire(binding, 2)?.count).toBe(4);
+    expect(gpu.records.acquire(binding, 2)?.table.count).toBe(4);
     expect(record.state).toBe(2);
   });
 });

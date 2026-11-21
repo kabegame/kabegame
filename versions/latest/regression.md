@@ -1555,6 +1555,7 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [x] | J3 编译期 · 语料 | Node `kbp corpus scan` | 缺省语料；WPE `myprojects` 全部场景，改动前后比 | 缺省语料不变；`3834803915` 只剩 `particle:layerimage:pending` | 2026-11-21 Claude：缺省 233 张 0 变化；myprojects 659 张里 `3834803915` 从两项变成过渡键（另一张 `3816948983` 的变化是别的会话的纹理格式 12） |
 | [x] | J4 候选表 · 单测与变异 | Node | `particles/layerImage.test.ts`、`render/emitterImages.test.ts`、`compile/p4j2.test.ts`、`src/dev`（回放改异步）等 54 个文件；`kbp mutate`（`ignore/p4/j2/mutate_j2.py`） | 全过；变异全部检出 | 2026-11-21 Claude：1281 过；建表与夹具（`model.py` 对 `p4j-li-map` 的预测）36 项逐项相同；状态机的开场帧数照 WPE 实测（无预热丢 2 个发射帧、有预热丢 1 个、共享记录后调的早一帧）；7 处变异（不锁上一帧末、像素序、阈值、y 的 `s`、行尾填充、不拍快照、计时不取余）全部检出 |
 | [x] | J5 候选表 · dev 实测 | Windows dev，图库预览（强制渲染） | 预览 `p4j-li-map`、`p4j-li-large`，`host.emitterImages({ includeEntries: true })` 读出表，和 `model.py` 的预测、WPE 抓帧的粒子颜色比 | 表项的位置与顺序逐项相同 | 2026-11-21 Claude：`li-map` 36 项全同；`li-large` 8381 项位置与顺序全同，边缘两档颜色是 127 / 64（模型的 numpy 舍入是 128，WPE 抓帧里的粒子也是 127）；探针按 WPE 时间线回放 201 帧（每帧等读回）正常 |
+| [x] | J6 发射 · 注入 WPE 种子逐粒子比 | Node `kbp replay j3` | 步骤 0 的 6 组抓帧（`p4j-li-map` / `-jit` / `-flags0` / `-xform` / `-large` / `-move`，种子 1001–1006），回放用同一种子的 `std::mt19937`、全部系统共用一个随机源，候选表取 `ignore/p4/j0/snap/`；单测；`kbp mutate`（`ignore/p4/j3/mutate_j3.py`，检出方含回放）；语料 | 逐粒子对上；变异全部检出；`3834803915` 变干净 | 2026-11-21 Claude：6 个工程 8 个系统、7778 颗粒子全部对上，逐帧粒子数相同，位置 / 颜色 / 尺寸逐位相同（`li-move` 位置差 1.2e-4，脚本移动图层的 sin），共享记录的一帧差（`liw` 比 `li` 多一颗）也照出；相关 53 个文件 1162 过；6 处变异（拒绝抽样、抖动顺序、本地不乘 `M⁻¹`、颜色、速度用本帧 `L`、不写回上一次的 `L`）全部检出；缺省语料 233 张不变，`3834803915` 0 项 |
 
 ## 场景壁纸 P4i：粒子光照
 

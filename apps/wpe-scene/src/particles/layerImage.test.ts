@@ -135,6 +135,55 @@ function setup(options: { has: (frame: number) => boolean; snapshot?: () => Emit
   return { state, records: new EmitterImageRecords(view) };
 }
 
+describe("EmitterImageRecord：图层矩阵 L（rec+0x98，2.1）", () => {
+  const translate = (x: number) => {
+    const m = new Float32Array(16);
+    m[0] = m[5] = m[10] = m[15] = 1;
+    m[12] = x;
+    return m;
+  };
+
+  it("状态 2 的每次调用刷新；建表时刷新一次；其它状态返回上一份（解析时单位阵）", () => {
+    let x = 10;
+    let size = 8;
+    const view = new ScriptedEmitterImageView({
+      layerSize: () => ({ width: size, height: size }),
+      snapshotAt: (_id, _mask, frame) => (frame >= 1 ? solid() : null),
+      layerMatrix: () => translate(x),
+    });
+    const records = new EmitterImageRecords(view);
+    const record = records.record(BINDING);
+    expect(record.matrix[12]).toBe(0);
+    records.acquire(BINDING, 1);
+    records.acquire(BINDING, 2);
+    expect(record.matrix[12]).toBe(0); // 状态 0、1：不取
+    x = 20;
+    expect(records.acquire(BINDING, 3)!.matrix[12]).toBe(20); // 建表
+    x = 30;
+    expect(records.acquire(BINDING, 4)!.matrix[12]).toBe(30); // 状态 2：每次调用刷新
+    // 尺寸变了回状态 0：先刷新再比尺寸（FUN_1401d3ae0 的顺序），之后的状态 0 / 1 调用不再刷新
+    x = 40;
+    size = 16;
+    expect(records.acquire(BINDING, 5)!.matrix[12]).toBe(40);
+    expect(record.state).toBe(0);
+    x = 50;
+    expect(records.acquire(BINDING, 6)!.matrix[12]).toBe(40);
+  });
+
+  it("图层找不到矩阵（null）时保留上一份", () => {
+    let on = true;
+    const view = new ScriptedEmitterImageView({
+      layerSize: () => ({ width: 8, height: 8 }),
+      snapshotAt: (_id, _mask, frame) => (frame >= 1 ? solid() : null),
+      layerMatrix: () => (on ? translate(7) : null),
+    });
+    const records = new EmitterImageRecords(view);
+    for (const frame of [1, 2, 3]) records.acquire(BINDING, frame);
+    on = false;
+    expect(records.acquire(BINDING, 4)!.matrix[12]).toBe(7);
+  });
+});
+
 describe("EmitterImageRecord：2.1 的状态机", () => {
   it("无预热：第 1 个发射帧过门、第 2 个锁定、第 3 个出表，前两帧返回 null", () => {
     const { records } = setup({ has: (frame) => frame >= 1 });
@@ -179,7 +228,7 @@ describe("EmitterImageRecord：2.1 的状态机", () => {
     // 第 1 帧：A 过门，B 与门同一帧；第 2 帧：A 0 → 1，B 1 → 2 出表；第 3 帧 A 才有表
     expect(a.map((v) => v !== null)).toEqual([false, false, true]);
     expect(b.map((v) => v !== null)).toEqual([false, true, true]);
-    expect(a[2]).toBe(b[1]);
+    expect((a[2] as { table: unknown }).table).toBe((b[1] as { table: unknown }).table);
   });
 
   it("不同 mask 是不同的记录", () => {
@@ -199,12 +248,12 @@ describe("EmitterImageRecord：2.1 的状态机", () => {
     expect(old.rgb[0]).toBe(100);
     version = 1;
     state.size = { width: 16, height: 16 };
-    expect(records.acquire(BINDING, 4)).toBe(old);
+    expect(records.acquire(BINDING, 4)!.table).toBe(old);
     expect(records.record(BINDING).state).toBe(0);
-    expect(records.acquire(BINDING, 5)).toBe(old); // 0 → 1
+    expect(records.acquire(BINDING, 5)!.table).toBe(old); // 0 → 1
     const fresh = records.acquire(BINDING, 6);
-    expect(fresh).not.toBe(old);
-    expect(fresh!.rgb[0]).toBe(50);
+    expect(fresh!.table).not.toBe(old);
+    expect(fresh!.table.rgb[0]).toBe(50);
     expect(records.record(BINDING).width).toBe(16);
   });
 
@@ -250,7 +299,7 @@ describe("EmitterImageRecord：2.1 的状态机", () => {
     records.refresh(BINDING);
     expect(record.state).toBe(0);
     expect(record.table).toBe(table);
-    expect(records.acquire(BINDING, 4)).toBe(table); // 状态 0：锁定，返回旧表
+    expect(records.acquire(BINDING, 4)!.table).toBe(table); // 状态 0：锁定，返回旧表
     expect(record.state).toBe(1);
     records.refresh(BINDING);
     expect(record.state).toBe(1);

@@ -117,7 +117,14 @@ import {
   NO_INSTANCE_OVERRIDE,
   type ControlPointInputs,
 } from "./controlpoints";
-import { emissionCount, emitterState, resetEmitterTiming, scriptEmitCount, type EmitterState } from "./emitters";
+import {
+  emissionCount,
+  emitterState,
+  layerImageFrame,
+  resetEmitterTiming,
+  scriptEmitCount,
+  type EmitterState,
+} from "./emitters";
 import { f32 } from "./f32";
 import type { EmitterImageBinding, EmitterImageSource } from "./layerImage";
 import {
@@ -241,6 +248,11 @@ interface ResolvedEmitter extends ResolvedModule {
    * 严格大于 1 时取 `fmodf` 并让共享的依赖记录重建（`EmitterImageSource.refresh`）。
    */
   imageTimer?: number;
+  /**
+   * 上一次取到表时的图层矩阵（记录 `rec[0xb8]`，rea-p4j-layerimage.md 3.7，初值单位阵，每个发射器一份）：`0x40000` 的速度用它算「出生点在这一帧里
+   * 随图层移动了多少」；取到表的发射帧末写回本帧的 `L`，所以第一次取到表那帧用的是单位阵（WPE 的原样）。
+   */
+  prevLayer?: Mat4;
 }
 
 /**
@@ -597,7 +609,9 @@ export class ParticleSystem {
     this.emitters = resolve("emitter", def.emitters).map((emitter) => ({
       ...emitter,
       state: emitterState(emitter.fields),
-      ...(emitter.name === "layerimage" ? { image: def.emitterImages?.[imageSlot++] ?? null } : {}),
+      ...(emitter.name === "layerimage"
+        ? { image: def.emitterImages?.[imageSlot++] ?? null, prevLayer: identity() }
+        : {}),
     }));
     this.initializers = resolve("initializer", def.initializers);
     this.operators = resolve("operator", def.operators);
@@ -653,6 +667,12 @@ export class ParticleSystem {
   /** 发射图候选表的来源（P4j 步骤 2a，`layerImage.ts`）与当前帧号：整棵树共用根上的一份（子系统、事件实例沿着 `parent` 找到根）。 */
   private emitterImageSource: EmitterImageSource | undefined;
   private emitterImageFrame = 0;
+  /**
+   * `layerimage` 发射用的模拟矩阵 `M`（模型栈顶，本系统的 `inputs.world`）与不含实例 `rate` 的帧时间（`ctx+0x14c`，速度的除数）：`advance` 每帧写；
+   * 脚本 `emitParticles` 写 `M`、帧时间沿用最近一次。
+   */
+  private emitModel: Mat4 = identity();
+  private emitFrameDt = 0;
 
   /**
    * 换上这棵树的发射图来源（渲染器建树时、预热之前调；缺省没有来源，`layerimage` 只算发射数）。只有根上的起作用；子系统与事件实例
@@ -956,6 +976,7 @@ export class ParticleSystem {
     const w = inputs.world;
     context.model.set([w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]]);
     context.origin!.set([w[12], w[13], w[14]]);
+    this.emitModel = w;
     const before = this.events.map((pool) => pool.active.length);
     this.spawningByScript = true;
     try {
@@ -1469,6 +1490,8 @@ export class ParticleSystem {
     context.model.set([w[0], w[1], w[2], w[4], w[5], w[6], w[8], w[9], w[10]]);
     // 对象原点 `W.t`（P4d 步骤 4a，remap 的 `layerorigin`：对象虚函数 +0x80 的第 3 列，子系统读的也是对象的）
     context.origin!.set([object[12], object[13], object[14]]);
+    this.emitModel = inputs.world;
+    this.emitFrameDt = frameDt;
     if (emit) {
       this.emit(dt, env !== null && !prewarming && this.watchesBirths);
       // 全部发射器发完之后（4.3，`0x14023ae9a` 起）：逐条目、逐新粒子建 eventfollow / eventspawn 实例（P4e 步骤 2、3）；预热时 `born` 本来
@@ -1658,7 +1681,7 @@ export class ParticleSystem {
         for (const child of this.statics) if (child.entry.flags & 2) child.system.restart();
       }
       // `layerimage`（P4j）：只在要发的帧（`n > 0`）动候选表的状态（2.5、3.1：非发射帧不动）——`0x20000` 计时，再取表；
-      // 候选表是运行时读回的，步骤 3 之前一直当作「没有表」，要发的直接丢、不欠账（3.1）
+      // 没取到表（读回没好、图层不对）时要发的直接丢、不欠账（3.1）；取到表就按它生 `count` 颗，生完把这一帧的 `L` 记成发射器的上一次图层矩阵（3.7）
       if (emitter.name === "layerimage") {
         if (count > 0 && emitter.image) {
           const root = this.emitterImageRoot();
@@ -1671,7 +1694,24 @@ export class ParticleSystem {
                 source.refresh(emitter.image);
               }
             }
-            source.acquire(emitter.image, root.emitterImageFrame);
+            const got = source.acquire(emitter.image, root.emitterImageFrame);
+            if (got) {
+              const previous = emitter.prevLayer ?? identity();
+              this.context.layerImage = layerImageFrame({
+                table: got.table,
+                model: this.emitModel,
+                world: this.context.world,
+                matrix: got.matrix,
+                previous,
+                frameDt: this.emitFrameDt,
+              });
+              try {
+                for (let n = 0; n < count; n++) this.spawn(emitter);
+              } finally {
+                this.context.layerImage = undefined;
+              }
+              emitter.prevLayer = got.matrix;
+            }
           }
         }
         continue;
@@ -1690,6 +1730,9 @@ export class ParticleSystem {
     const context = this.context;
     context.slot = slot;
     emitter.run(emitter.fields, context);
+    // 只有 `layerimage` 写；取走就清，下一颗不会带着上一颗的
+    const colorScale: readonly number[] | null | undefined = context.colorScale;
+    context.colorScale = null;
     // 照常抽一次再替换：注入只改 `R` 本身，后面各模块抽到的随机数和不注入时相同
     const drawn = this.random.a();
     const r = this.rOverride ? this.rOverride(drawn) : drawn;
@@ -1704,7 +1747,8 @@ export class ParticleSystem {
       if (c.angularVelocity) c.angularVelocity[i][slot] = 0;
       // 实例颜色（`FUN_14023b340` 在 initializer 之前拷 `sys+0x3e0..0x3e8`，rea-p4b-render.md 7.4 第 4 小节）：`0x200000`
       // 且 `colorn` 生效时是 `colorn`，否则 1；颜色 initializer 乘在它上面，`colorchange` 每遍从这里复制后再乘
-      c.color0[i][slot] = this.instanceColor[i];
+      // `layerimage` 的 `0x10000`：像素色 / 255 乘在实例颜色上（`0x140239765`，rea-p4j-layerimage.md 3.6）
+      c.color0[i][slot] = colorScale ? f32(colorScale[i] * this.instanceColor[i]) : this.instanceColor[i];
     }
     c.alpha0[slot] = this.alpha0;
     for (const initializer of this.initializers) initializer.run(initializer.fields, context, initializer.state);

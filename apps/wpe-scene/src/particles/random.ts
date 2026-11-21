@@ -16,6 +16,12 @@ export interface ParticleRandom {
   /** B 区间 `[1e-5, 1)`。 */
   b(): number;
   /**
+   * 一个原始 u32（P4j 步骤 3，`layerimage` 的表项下标，rea-p4j-layerimage.md 3.3）：和 `a()` / `b()` 取自**同一个**来源、推进同一串
+   * （WPE 也是同一个 MT19937，`FUN_14007d8f0` 与 `uA` 的 `FUN_1401f4bc0` 共用状态）。可选：没实现的随机源（单测手写的）由
+   * {@link uniformIndex} 退到 `⌊a()·2³²⌋`。
+   */
+  u32?(): number;
+  /**
    * 色相分档的独立随机源（P4g 步骤 1，`hsvcolorrandom`，rea-p4g-color.md 2.1 / 2.4）：返回 MSVC CRT `rand()` 的值，整数 0..32767。
    * WPE 的 `rand()` 是每条场景渲染线程一个、种子取 QPC 的 LCG，和粒子的 MT19937（`a` / `b`）不是同一个流，所以这里**不占 `R` 的流**：
    * 抽它不会推动 `a()` / `b()` 的序列。可选：不实现的随机源（单测里手写的）由 `hueRandOf` 退到全局的缺省源。
@@ -149,6 +155,10 @@ export class SeededRandom implements ParticleRandom {
     return this.hue();
   }
 
+  u32(): number {
+    return this.next() >>> 0;
+  }
+
   a(): number {
     return intervalValue(this.next(), LO_A, HI_A);
   }
@@ -156,4 +166,33 @@ export class SeededRandom implements ParticleRandom {
   b(): number {
     return intervalValue(this.next(), LO_B, HI_B);
   }
+}
+
+/**
+ * `std::uniform_int_distribution<u32>(0, n − 1)` 在 MSVC 上的取法（rea-p4j-layerimage.md 3.3，`0x140238f0a`–`0x140238f8d`）：Lemire 乘法加拒绝。
+ * `m = u32·n`（64 位）；`(m mod 2³²) < n` 时 `t = (2³² − n) mod n`，低 32 位 `< t` 就重抽；结果是 `⌊m / 2³²⌋`。通常取 1 个 u32，`n` 不是 2 的幂时
+ * 以 `(2³² mod n)/2³²` 的概率多取。随机源没有 `u32` 时退到 `⌊a()·2³²⌋`（只给单测手写的随机源用，序列本来就不对应 WPE）。
+ * 64 位乘法拆成 16 位两半算，不靠 BigInt，高低 32 位都是精确整数。
+ */
+export function uniformIndex(random: ParticleRandom, n: number): number {
+  if (!(n > 0)) return 0;
+  const draw = (): number => (random.u32 ? random.u32() >>> 0 : Math.floor(random.a() * 2 ** 32) >>> 0);
+  const nl = n % 65536;
+  const nh = Math.floor(n / 65536);
+  let hi = 0;
+  let lo = 0;
+  const multiply = (u: number): void => {
+    const ul = u % 65536;
+    const uh = Math.floor(u / 65536);
+    const ll = ul * nl;
+    const mid = ul * nh + uh * nl + Math.floor(ll / 65536); // < 2³⁴，精确
+    lo = (mid % 65536) * 65536 + (ll % 65536);
+    hi = uh * nh + Math.floor(mid / 65536);
+  };
+  multiply(draw());
+  if (lo < n) {
+    const t = (2 ** 32 - n) % n;
+    while (lo < t) multiply(draw());
+  }
+  return hi;
 }

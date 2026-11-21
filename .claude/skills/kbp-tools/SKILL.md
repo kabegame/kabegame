@@ -755,7 +755,7 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
 | `timeline(ctx, sec)` | 准备阶段：直接改 `sec.dts`、`sec.times`、`sec.sources`（b4 用定好的拆分、d1 用 R9 反推缺帧的 dt） |
 | `world(ctx, sec)` | `inputs.world` 为 `hook` 时：返回 `(layer, frame) => 世界矩阵`，frame 0 是预热（c4、d1 的脚本驱动对象） |
 | `section(ctx, sec)` | 完全接管一段（b3 的模块段、b4）；可以调 `ctx.standard(sec)` 走标准流程 |
-| `prepare(ctx, sec)` | 标准流程里模拟的额外选项（`r` 注入 R、`random` 包随机源、`patch` 改模块） |
+| `prepare(ctx, sec)` | 标准流程里模拟的额外选项（`r` 注入 R、`random` 按系统名包随机源、`sharedRandom` 全部系统共用一个随机源、`emitterImages` 接 `layerimage` 的候选表来源、`patch` 改模块） |
 | `compareOptions(ctx, sec, name, ref)` | 标准流程里每个系统的比较选项（`map`、`skip`、`sim`、`history`） |
 | `after(ctx, sec, ref)` | 标准流程比完之后：额外核对（`ctx.check`）、变体、particleTrack 对照（`ctx.checkParticleTrack`） |
 | `finish(ctx)` | 整个案例跑完 |
@@ -765,6 +765,9 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
   `ctx.reference(sec, 覆盖)`、`ctx.addParticles(sec, 名字, ref, 选项)`、`ctx.addSystem`、`ctx.check`、`ctx.note`、`ctx.line`、
   `ctx.fork(sec, 标签)`（同一段的输入再比一轮，报告里另起一段）、`ctx.systemsOf(sec)`、`ctx.checkParticleTrack`；纯函数在 `ctx.lib`
   （`compareParticles`、`statsOk`、`perturb`…）。
+- `sharedRandom` 与 `emitterImages`（P4j 步骤 3，`SimOptions`）：都是**每次 `simulate` 调一次的工厂**（记录与随机源带状态，包络、`fork` 各跑各的，不能跨模拟复用）。
+  - `sharedRandom: () => RandomLike`：全部粒子系统共用返回的**一个**随机源，按回放的系统顺序（= objects 顺序）抽同一串，对应 WPE 一个场景一串 MT19937（缺省每个系统自己的 `SeededRandom(1 + i)`）；`random` 的按系统名包装仍在它之上生效。
+  - `emitterImages: () => (layer) => EmitterImageSource | undefined`：外层调一次、内层按粒子层取来源（`undefined` 的层不接）。建好系统后、预热之前 `setEmitterImages` 并把帧号写成 0，每步之前写成这一帧的帧号 i（预热 0、第 i 帧 i，同渲染器的 `sheetFrameNo`）。候选表记录按 (图层 id, mask) 在全部系统间共享，所以通常让内层对每个层返回**同一个** `EmitterImageRecords`。典型：`new EmitterImageRecords(new ScriptedEmitterImageView({ layerSize, snapshotAt, layerMatrix }))`，`snapshotAt(id, mask, frame)` 给第 frame 帧末的降采样快照，`layerMatrix(id, frame)` 给被依赖图层这一帧的绘制矩阵（脚本移动图层的案例按上一帧的 runtime 算）。范例：`ignore/p4/cases/j3.hook.ts`。
 - 钩子只 `import type` 回放库；运行期要库里的函数一律从 `ctx.lib` 取：每个案例前 `vi.resetModules()`，自己 import 会得到另一份模块实例
   （偏置开关不是同一个）。
 - 只有写了 `envelope.approx` 的案例才挂 `particles/f32` 的 mock（mock 让热循环多一层调用：b4 挂着 49 s、不挂 17 s，结果逐字节相同）。

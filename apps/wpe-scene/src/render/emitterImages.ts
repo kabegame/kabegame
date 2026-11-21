@@ -33,6 +33,7 @@ import {
   type EmitterImageView,
 } from "../particles/layerImage";
 import { fullscreenTriangle } from "./layout";
+import type { Mat4 } from "./math";
 import type { GpuProgram } from "./programs";
 import { screenBuiltins, textureBuiltins, UniformBlock, type UniformEntry } from "./uniforms";
 
@@ -124,6 +125,11 @@ export interface GpuEmitterImagesInput {
   pipelineFor(program: GpuProgram, blending: string | null, format: GPUTextureFormat): Promise<GPURenderPipeline>;
   /** 按图层 id（scene.json 的对象 id）找被依赖图层的独占合成 RT；不是图像层或没有独占 RT 时为 null。 */
   layerSource(id: number): EmitterImageSourceTarget | null;
+  /**
+   * 被依赖图层此刻的绘制矩阵（世界矩阵 × 自身偏移，同图层画自己用的 `drawMatrixOf`，rea 3.2）：按当前 `state.layers` 现算，`GpuScene.stepParticles`
+   * 每帧把 `state` 交给它（没给时用加载时的图层）。找不到图层时为 null。
+   */
+  layerMatrix(id: number): Mat4 | null;
   /** `mask` 纹理（`bundle.textures` 下标）的 GPU 视图；没上传时为 null。 */
   maskTexture(index: number): EmitterImageMaskTexture | null;
 }
@@ -267,6 +273,10 @@ export class GpuEmitterImages implements EmitterImageView {
 
   lock(id: number, mask: string, frame: number): EmitterImageHandle | null {
     return this.ensure({ id, mask }, false).ledger.lock(frame);
+  }
+
+  layerMatrix(id: number): Mat4 | null {
+    return this.input.layerMatrix(id);
   }
 
   /** 渲染帧号（`GpuScene.stepParticles` 每帧写，同 WPE `ctx+0x144`）：快照按它标记「第几帧末」。 */

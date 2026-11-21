@@ -3916,6 +3916,7 @@ export class GpuScene {
           programs,
           pipelineFor: (program, blending, target) => this.pipelineFor(program, blending, target, true),
           layerSource: (id) => this.emitterImageSource(id),
+          layerMatrix: (id) => this.emitterImageMatrix(id),
           maskTexture: (index) => {
             const texture = this.bundle.textures[index];
             const gpu = texture ? this.cookieTextureOf(index) : null;
@@ -6709,6 +6710,7 @@ export class GpuScene {
     // 渲染帧号（共享计时器去重用）：每帧恰好一次，补画帧（帧时间 0）也算一帧、只是 dt 为 0
     this.sheetFrameNo++;
     // 发射图的帧号（P4j 步骤 2b）：门与「锁定快照」按它判断，补画帧（帧时间 0）也记；快照在本帧编码末尾按同一个帧号标记
+    if (state) this.emitterLayers = state.layers;
     if (this.emitterImages) {
       this.emitterImages.setFrame(this.sheetFrameNo);
       for (const tree of this.trees.values()) tree.system.setEmitterImageFrame(this.sheetFrameNo);
@@ -7774,6 +7776,22 @@ export class GpuScene {
    * 发射图的被依赖图层（P4j 步骤 2b）：按 scene.json 的对象 id 找，要求是图像层（不是粒子层、文本层）且有独占合成 RT（`layerTargets`）。
    * id 重复时后面的胜出（同 WPE 后建的 RT 接管同名对象，`layerComposites`）。
    */
+  /**
+   * 发射图的被依赖图层的绘制矩阵 `L`（P4j 步骤 3，rea-p4j-layerimage.md 3.2：每个发射帧现取）：按 scene.json 的对象 id 找（同
+   * {@link emitterImageSource}，id 重复时后面的胜出），用最近一次 `stepParticles` 收到的 `state.layers`（没给 `state` 的 dev 回放用加载时的图层），
+   * 走图层画自己的 `drawMatrixOf`。
+   */
+  private emitterImageMatrix(id: number): Mat4 | null {
+    let object: number | null = null;
+    for (const [candidate, layer] of this.layerByObject)
+      if (layer.id === id && !layer.particle && !layer.text) object = candidate;
+    if (object === null) return null;
+    return drawMatrixOf(object, this.emitterLayers ?? this.layerByObject, new Map(), this.attachHook);
+  }
+
+  /** `stepParticles` 最近一次收到的图层状态（发射图的 `L` 用，P4j 步骤 3）；从没给过 `state` 时为 null。 */
+  private emitterLayers: ReadonlyMap<number, LayerState> | null = null;
+
   private emitterImageSource(id: number): EmitterImageSourceTarget | null {
     let found: EmitterImageSourceTarget | null = null;
     for (const [object, target] of this.layerTargets) {
