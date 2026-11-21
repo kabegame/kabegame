@@ -1,5 +1,5 @@
 /**
- * 纹理上传：`compile/tex.ts` 的 `TEXTURE_FORMATS` 里的格式（RGBA8888、DXT5 / DXT3 / DXT1 → BC3 / BC2 / BC1、RG88、R8）
+ * 纹理上传：`compile/tex.ts` 的 `TEXTURE_FORMATS` 里的格式（RGBA8888、DXT5 / DXT3 / DXT1 → BC3 / BC2 / BC1、RG88、R8、BC7）
  * 连同全部 mip 按原格式直接交给 GPU，不做 CPU 解码、不改通道；格式表是编译期与渲染器共用的唯一来源。
  * FreeImage 形态（PNG / JPG）由主线程解成 `ImageBitmap`（`compile/decode.ts`），这里 `copyExternalImageToTexture`。
  * 视频纹理（P9a）只建空纹理，帧由 `GpuScene` 在画到它时拷进来。

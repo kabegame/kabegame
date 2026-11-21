@@ -3588,6 +3588,18 @@ targetSdk 36 强制 edge-to-edge，`MainActivity` 把系统栏 inset 注入成 `
 | [x] | V7 桌面壁纸 | Windows dev，窗口模式 | 把 `3817265356` 设为桌面壁纸，在设置页「当前壁纸」里切换「腿」 | 同 V6 | 需要用户看 |
 | [ ] | V8 非 Windows | macOS / Linux | 同 V6 | 同 Windows | 本机不能测 |
 
+## 场景壁纸的 BC7 纹理（`.tex` 格式 12）
+
+2026-11-21 Windows dev。WPE 把格式 12 映射成 `BC7_UNORM`（`rea-p4b-render.md` 1.2），我们原样上传为 `bc7-rgba-unorm`。生成器 `ignore/p11/defs/p11f.py`，数据在 `ignore/p11/f/`，WPE 抓帧在 `A:\p11f\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | B1 单测与检查 | Windows | `apps/wpe-scene` 的 tsc；vitest `compile/tex.test.ts`、`compile/particles.test.ts`、`compile/sheet.test.ts` | 通过 | 2026-11-21 Claude：194 个用例通过 |
+| [x] | B2 和 WPE 整帧比 | Windows dev 屏外宿主 + WPE 抓帧，1920×1080 | `kbp gen p11f`：`3816948983` 的 `water-0.tex`（1672×944、没压缩）normal / translucent 两份，`sprites-0.tex`（3968×4096、LZ4）左上角与右下角两份，图层 1:1；`renderFrames.ts` 与 `kbp cmp frame`（屏蔽 FR / CLK） | 逐像素相同 | 2026-11-21 Claude：四份最大差都是 0 |
+| [x] | B3 语料 | Node | `kbp regress --corpus --no-cases`（HEAD 快照对工作区）；`kbp corpus scan --project …/myprojects/3816948983` | 缺省语料不变；3816948983 不再报 `tex:format:12` | 2026-11-21 Claude：233 / 233 逐场景相同；3816948983 静态扫描干净 |
+| [ ] | B4 预览 3816948983 | Windows dev，图库预览 | 打开这张壁纸的预览 | 不再因 `tex:format:12` 退回预览图 | 运行中脚本建层还会报 `model:passthrough:children:model`（看板娘提示），水面效果偏亮、上边与左边拉丝，和 BC7 无关、另开一步 |
+| [ ] | B5 非 Windows | macOS / Linux | 同 B4 | 设备有 `texture-compression-bc` 时同 Windows | 本机不能测 |
+
 ## 场景走查工具：真实壁纸的逐粒子对照与 R 注入（P11b2 走查后补）
 
 2026-11-19 Windows dev。`kbp rdc track` 的 scene 认法、`kbp cmp random-encode` / `random`、`renderFrames.ts --random`、MCP `random` 的文件写法、探针查注入表的键。数据在 `ignore/p11/b2/`（`tracks/`、`out/tools-*`），复制工程 15616（叶子）、15615（樱花）用完已移除。

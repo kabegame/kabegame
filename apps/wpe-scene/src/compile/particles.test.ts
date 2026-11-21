@@ -1475,8 +1475,8 @@ describe("compileScene：粒子对象", () => {
     );
     expect(requests.map((request) => request.defines?.TEX0FORMAT)).toEqual([expected]);
     expect(bundle.textures.map((texture) => texture.format)).toEqual([format]);
-    // 格式 10 起不在格式表里，纹理照报；宏照 WPE 的条件写
-    expect(bundle.unsupported).toEqual(format >= 10 ? [`tex:format:${format}`] : []);
+    // 格式 10、11 不在格式表里，纹理照报；宏照 WPE 的条件写（12 是 BC7，在表里、不写宏）
+    expect(bundle.unsupported).toEqual(format === 10 || format === 11 ? [`tex:format:${format}`] : []);
   });
 
   it("拖尾的宏（P4c 步骤 5，rea-p4c-render.md 6.2）：THICKFORMAT、TRAILRENDERER；TEX0FORMAT 只在 8–11 写；sprite 不变", async () => {

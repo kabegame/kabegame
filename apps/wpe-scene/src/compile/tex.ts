@@ -77,6 +77,11 @@ export const TEXTURE_FORMATS: Readonly<Record<number, TextureFormatInfo>> = {
   8: { gpu: "rg8unorm", block: 1, bytesPerBlock: 2 },
   /** R8 → `R8_UNORM`，采样得 `(r, 0, 0, 1)`。 */
   9: { gpu: "r8unorm", block: 1, bytesPerBlock: 1 },
+  /**
+   * BC7 → `BC7_UNORM`（DXGI 98）。着色器一侧 WPE 的 `common_fragment.h` 已经认 `FORMAT_BC7 12`（法线解码同 DXT，
+   * `ConvertTexture<n>Format` 原样返回）；BC7 的解码在 D3D 里逐位规定，WebGPU 同一个硬件格式。
+   */
+  12: { gpu: "bc7-rgba-unorm", block: 4, bytesPerBlock: 16, feature: "texture-compression-bc" },
 };
 
 /** 格式表里的一项；不在表里返回 undefined（不走原型链）。 */

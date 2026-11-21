@@ -73,7 +73,7 @@ export const SUPPORTED = {
    * （`writeState.ts` 的 `materialCombos`），渲染器在 A2C 管线的片元入口里丢弃锐化后 alpha 小于 0.5 + 2⁻¹² 的片元（`render/programs.ts`）。
    */
   blending: PASS_STATE_TABLES.blending,
-  /** 按原格式上传的 `.tex` 格式（0、4、6–9），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
+  /** 按原格式上传的 `.tex` 格式（0、4、6–9、12），从 `tex.ts` 的 `TEXTURE_FORMATS` 取，不另写一份；不支持的由 `parseTex` 报 `tex:format:<n>`。 */
   textureFormats: Object.keys(TEXTURE_FORMATS).map(Number),
   /** FreeImage 形态 `.tex`（mip 是整份图片文件）：2 JPEG、13 PNG，主线程 `createImageBitmap` 解码。 */
   freeImageFormats: [2, 13],
