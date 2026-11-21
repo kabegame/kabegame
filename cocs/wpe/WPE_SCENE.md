@@ -2941,7 +2941,7 @@ WPE 的图层依赖是两件事，各自独立：一个图层「被依赖」时�
 
 | 项 | 规则 | 依据 |
 |---|---|---|
-| 被依赖 | 全部对象（含模型对象）的 `dependencies` 取并集（`compile/dependencies.ts` 的 `dependencyIds`）：值是数组或对象才遍历，元素是非负整数才收。命中的图像层与文本层（步骤 6）`SceneLayer.dependedOn` | 读码第 1 节；`3509243656` 的两个模型对象就给图像层置了位 |
+| 被依赖 | 全部对象（含模型对象）的 `dependencies` 取并集（`compile/dependencies.ts` 的 `dependencyIds`）：值是数组或对象才遍历，元素是非负整数才收；粒子对象另一套同名键的对象元素（发射图 / 碰撞模型，过三道门的 `id`，P4j 步骤 1）也进并集。命中的图像层与文本层（步骤 6）`SceneLayer.dependedOn` | 读码第 1 节；`3509243656` 的两个模型对象就给图像层置了位；粒子的那套见 rea-p4j-layerimage 1.4 第 8 条（更正 rea-p8-render「对象元素不进集合」） |
 | 合成路径 | 被依赖的图层一律走合成路径（组合层没有 effect 也画），最后一个 effect 不上屏、留在合成链，最后用 passthrough 上屏：`BLENDMODE` 取 cbm ∉ {0, 31} 时的值、否则 0，混合是 cbm 31 时 additive、否则基础材质的，UV 内缩同末 pass，`g_Color4` = 1。排完后最后一次写入落在合成 RT 1 时整份计划的 0、1 对调（`graph.ts` 的 `swapCompositeIndices`），让它落在第 0 张 | 实测 `p8-dep` 的 A2、A9、A11；`p8-dep` 的上屏 UV 是 0.15 / 64，读码 2.4 写的「不内缩」不对 |
 | 独占 RT | 建场景时每个被依赖的图层建一张（`scene.ts` 的 `layerTargets`，尺寸、格式、采样同它的合成 RT），跨帧、跨 effect 开关的重建都保留、不清；它就是本层的合成 RT 0，其余张照旧从池里借 | 读码 2.2；实测 `p8-dep` |
 | 不可见 | 自身或祖先不可见时照画进 RT、只跳过画到「场景」的那一步上屏，在组里也一样（`scene.ts` 的 `layerOpsToRun`）；写死不可见也建资源（`buildableLayers` 的例外）；不做视锥剔除 | 实测 `p8-dep2` 的 A11 / A12、`p8-misc` 的 A13（隐藏的组合层）/ A14（放在画面外） |
@@ -2951,7 +2951,7 @@ WPE 的图层依赖是两件事，各自独立：一个图层「被依赖」时�
 | 格式 | 引用槽的 `TEX<n>FORMAT` 取材质创建那一刻纹理表里的格式：经依赖置位的 RT 在全部材质之后才建，是 0；被依赖者自己就有 cbm 混合、排在引用方前面时，HDR 下是 14；LDR 一律 0 | 读码 2.2；语料里都是 0 |
 | 文本层（步骤 6） | 同图像层：名字表收文本层，合成链第 0 张是独占 RT。尺寸跟排版（`textCompositeSize`），被依赖时排版加 `padding`（WPE 看 `0x10`，`TextFields.dependedOn`）。重排换尺寸时当帧换新 RT（初值全 0）、当帧重绑引用方（`syncTexts` → `rebindDependents`），排在前面的引用方这一帧读到全 0；空文字不画，RT 换成 4×4 | 实测 `p8-deptext`（50 帧，第 280 帧换宽度与清空）整帧 0 差异；`3837779440` 的复制工程整帧 0 差异 |
 | 组（步骤 7） | 被依赖的组（有子层的组合层）同图像层：组的合成链第 0 张是独占 RT，装 compose（拷屏或清空）+ 子树 + effect 链的结果，可见时再上屏。组隐藏（写死或属性）时照画基础 pass 与 effect 链、不上屏，`subtree` 照跑但子层按各自的可见性（祖先隐藏 → 不画），本身被依赖的子层照画进自己的 RT、不画进组的 RT（WPE 子层的 `+0x68`）。没有新代码：渲染图与 `layerOpsToRun` 本来就这么排，只是编译期不再报 `dependency:group` | 实测 `p8-depgroup`（七种组合：可见、写死隐藏、属性隐藏、`copybackground: false` + effect、隐藏 + effect、组 → 纯色层 → 孙子、隐藏组里的被依赖子层）三帧整帧 0 差异；`3811403844` 的复制工程（「蒙版」组整棵子树 + 读它的两张底图，斜线跟光标的脚本保留）按录制光标三段 15 帧：遮罩 RT 0 差异，余下最大差 2 / 1 / 4 都是 foliagesway 舍入（pulse 放大），见 phase-8「走查 `3811403844`」 |
-| 照报（语料都是 0） | `dependency:self`（被依赖的图层在自己的 pass 里读自己的 `_a`）、`dependency:passthrough-undeclared`（名字指向没被依赖、但自己有 cbm 混合的图层，WPE 绑得上）、`particle:dependencies`（粒子对象另一套同名键，元素是发射图与碰撞模型） | 读码 |
+| 照报（语料都是 0） | `dependency:self`（被依赖的图层在自己的 pass 里读自己的 `_a`）、`dependency:passthrough-undeclared`（名字指向没被依赖、但自己有 cbm 混合的图层，WPE 绑得上） | 读码 |
 
 dev 探针只画固定时刻的一帧（不给 `replay`）时，独占 RT 里没有上一帧的内容，排在被依赖者前面的引用方读到全 0；和「排在后面读上一帧」对照时给 `replay`（P10a 起回放的每一帧都编码），两帧就够。
 

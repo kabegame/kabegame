@@ -1543,6 +1543,17 @@ P1：内建插件 `wpe-import` 新增来源「从 Steam 拉取」：导入对话
 | [ ] | A17 重编译保留视差点 | Windows dev，图库预览 | 改一个会整场重编译的属性；换到另一张再换回来 | 改属性时画面不跳回中心；换回来时从初值重新开始 | 可跳过：上面这些场景没有明显会重编译的属性；渲染器单测 `parallax.test.ts`「重编译保留 P」覆盖 |
 | [x] | A18 暂停与应用背景 | Windows，图库预览与应用背景 | 预览里右键「暂停」后移动鼠标，再恢复；把一张视差场景设成应用背景 | 暂停时图层不动，恢复后接着跟；应用背景不跟鼠标，只有静止偏移 | 2026-11-11 用户：和预期一致 |
 
+## 场景壁纸 P4j：粒子 `layerimage` 发射器（进行中）
+
+2026-11-21 Windows dev。P4j 让粒子按另一个图层的画面抽出生点（发射器 `layerimage`，粒子对象 `dependencies` 的 `emitterimage`），起因是 WPE `myprojects` 的 `3834803915`（战锤 40k 雨景的水花）。步骤 0 调研（读码与注入 WPE 随机数的实测），步骤 1 编译期（依赖的解析与绑定、模块表、能力表），发射在步骤 2、3。计划与读码见 `.claude/plans/wpe-import/3-scene/phase4/phase-4j-layerimage.md`、`rea-p4j-layerimage.md`，实测见同目录 `p4-particles-REPORT.md`「P4j 语义的实测核对」。数据在 `ignore/p4/j0/`、`ignore/p4/j1/`，WPE 抓帧在 `A:\p4j\`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | J0 注入 WPE 的随机数 | Windows + WPE 抓帧（1280×720，fps 20） | `ignore/p4/j0/rng/seed.py` 换掉新开测试窗口的场景 MT19937 种子，抓 `p4j-rng-a` / `p4j-rng-b`；`kbp replay j0rng` 用同一种子的 `std::mt19937` 回放 | 读回的状态与种子一致；逐粒子对上 | 2026-11-21 Claude：302 颗、129 颗逐颗对上，位置差在近似倒数的包络内（差 / 限 0.735 / 0.613） |
+| [x] | J1 `layerimage` 的语义（WPE 侧） | 同 J0 | 6 个确定性工程（`ignore/p4/defs/p4j0.py`）各注入一个种子，`ignore/p4/j0/model.py` 照读码预测候选表与抽取顺序 | 粒子全部落在预测的表项上，抽取顺序按种子成立 | 2026-11-21 Claude：表、列优先、阈值 127、坐标与 `s`、矩阵、隐藏图层、共享记录、启动延迟、抖动、颜色全部对上；更正一条（有预热时只丢 1 个发射帧） |
+| [x] | J2 编译期 · 单测与变异 | Node | `compile/p4j1.test.ts`、`compile/p8.test.ts`、`compile/particles.test.ts` 等；`kbp mutate`（工作区模式，`ignore/p4/j1/mutate_j1.py`）；tsc；Prettier | 全过；变异全部检出、按原字节还原 | 2026-11-21 Claude：6 个文件 342 过；tsc 0 error；9 处变异（并集、取最后一条、`id 0`、大小写、照常生粒子、`flags` 缺省、子系统序号、过渡键、puppet）全部检出 |
+| [x] | J3 编译期 · 语料 | Node `kbp corpus scan` | 缺省语料；WPE `myprojects` 全部场景，改动前后比 | 缺省语料不变；`3834803915` 只剩 `particle:layerimage:pending` | 2026-11-21 Claude：缺省 233 张 0 变化；myprojects 659 张里 `3834803915` 从两项变成过渡键（另一张 `3816948983` 的变化是别的会话的纹理格式 12） |
+
 ## 场景壁纸 P4i：粒子光照
 
 2026-11-21 Windows dev。P4i 放行粒子材质的 `LIGHTING` / `DOUBLESIDEDLIGHTING`（步骤 0 调研、1 放行）。光照全在着色器里，引擎侧和图层共用，所以只改能力表。语料 0 张用到，起因是 WPE `myprojects` 的 `3823357259` 只差这一项。

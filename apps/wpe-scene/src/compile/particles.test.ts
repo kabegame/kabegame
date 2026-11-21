@@ -40,10 +40,11 @@ const withModule = (category: ParticleCategory, module: JsonObject): JsonObject 
 });
 
 describe("模块表", () => {
-  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项、P4d 步骤 3 的 2 项、步骤 4a 的 2 项、步骤 5 的 4 项、P4g 步骤 1 的 2 项（hsvcolorrandom、colorlist）、P4h 的 boids，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）、ropetrail（P4d 步骤 2）；每项都有列和执行函数，renderer 由绘制负责", () => {
+  it("档 1 的 12 项、P4b 步骤 3 的 8 项、步骤 4 的 3 项、P4c 步骤 3 的 1 项、P4d 步骤 3 的 2 项、步骤 4a 的 2 项、步骤 5 的 4 项、P4g 步骤 1 的 2 项（hsvcolorrandom、colorlist）、P4h 的 boids、P4j 的 emitter layerimage，外加 renderer sprite、spritetrail（P4c 步骤 5）、rope（P4d 步骤 1）、ropetrail（P4d 步骤 2）；每项都有列和执行函数，renderer 由绘制负责", () => {
     expect(PARTICLE_MODULES.map((def) => `${def.category}:${def.name}`)).toEqual([
       "emitter:sphererandom",
       "emitter:boxrandom",
+      "emitter:layerimage",
       "initializer:lifetimerandom",
       "initializer:sizerandom",
       "initializer:colorrandom",
@@ -713,14 +714,14 @@ describe("能力表：粒子", () => {
   it("表外模块：particle:<类别>:<名字>", () => {
     expect(
       particleKeys({
-        emitter: [{ name: "layerimage" }],
+        emitter: [{ name: "foo" }],
         initializer: [{ name: "remapinitialvalue" }],
         operator: [{ name: "collisionmodel" }],
         renderer: [{ name: "foo" }],
       }),
     ).toEqual([
       // remapinitialvalue 从 P4d 步骤 4a 起在表里，只写名字时没有键
-      "particle:emitter:layerimage",
+      "particle:emitter:foo",
       "particle:operator:collisionmodel",
       "particle:renderer:foo",
     ]);

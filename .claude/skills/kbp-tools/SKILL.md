@@ -571,7 +571,7 @@ kbp.py content isolate <工程> --keep <id|名字>,… [--drop <id|名字>,…] 
 ```
 
 - `order`：FR、CLK 之后的对象顺序（= `scene.json` 顺序 = 绘制顺序）。
-- `kind`：`image`（每帧画一次，没有粒子）或 `particle`。
+- `kind`：`image`（每帧画一次，没有粒子；`draws: n` 时连着画 n 次，如被依赖的图层先画进合成 RT 再上屏，P4j）或 `particle`。
 - `ident`：系统怎么认。
   - `color`：按 `rgb` 认，即 `colorrandom` 的 min，0–1；
   - `order`：颜色会变或没有 `colorrandom` 的系统，按绘制顺序认。
@@ -621,7 +621,7 @@ Python `json.dump` 写，`ensure_ascii=False`、LF、不缩进；可能含 `NaN`
   - `pos = POSITION`，`color = COLOR.rgb`，`alpha = COLOR.a`。
   - 其余顶点列原样保存，列名照 RenderDoc，如厚格式的 `TEXCOORD1`；同名列第二个起是 `名字#2`。
   - **认系统**：
-    - 按 `order` 走游标；图像层的绘制让游标跳过下一个 `image`；
+    - 按 `order` 走游标；图像层的绘制让游标跳过下一个 `image`（该图层 `draws: n` 时，紧跟的第 2…n 次图像绘制仍算它、不推游标）；
     - 粒子绘制先在游标之后的 `ident: color` 系统里按首个粒子的颜色找，L1 距离 ≤ 0.03；
     - 找不到取游标之后第一个 `ident: order` 的系统；
     - 某帧没有存活粒子时那次绘制为空，跳过。

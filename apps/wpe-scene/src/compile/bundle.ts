@@ -22,7 +22,14 @@ import {
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
 import { variantPropertyNames, type TexVariantCondition, type TexVariantPatch } from "./textureVariants";
-import { checkerTexture, dependencyIds, LAYER_COMPOSITE_PREFIX, layerCompositeName } from "./dependencies";
+import {
+  bindLayerImages,
+  checkerTexture,
+  dependencyIds,
+  LAYER_COMPOSITE_PREFIX,
+  layerCompositeName,
+  particleDependencies,
+} from "./dependencies";
 import { reflectionKind, reflectionList } from "./reflection";
 import { OCCLUSION_MATERIAL, SPRITE_FORMAT, spriteModel, type SceneSprite } from "./sprite";
 import { compileVolumetrics, wantsVolumetrics, type SceneVolumetrics } from "./volumetrics";
@@ -2124,6 +2131,13 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       hdr: postprocess.hdr,
     });
     checkParticleInstance(object.instanceoverride, { flags }, unsupported);
+    // `layerimage` 发射器的依赖（P4j 步骤 1，rea-p4j-layerimage.md 1.5）：顶层与子系统各按自己的发射器数、从 0 数，列表都取自这个对象
+    const bound = bindLayerImages(particle.emitters, particleDependencies(object));
+    for (const slot of bound) {
+      let maskTexture: number | null = null;
+      if (slot && slot.mask) maskTexture = (await getTexture(slot.mask, null))?.index ?? null;
+      particle.emitterImages.push(slot ? { ...slot, maskTexture } : null);
+    }
     await compileParticleMaterial(system, particle, flags, key);
     if (!nested || !Array.isArray(system.children)) return particle;
     for (const [n, raw] of system.children.entries()) {
@@ -3586,6 +3600,24 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     bundle.children = children;
     for (const keys of applyGroupRules(bundle.layers, new Map(children)).values())
       for (const key of keys) unsupported.add(key);
+    // 发射图引用的图层（P4j 步骤 1，rea-p4j-layerimage.md 2.6、第 7 节）：puppet 的骨骼号分配没读全、文本层的 `L+0x2c8` 是不是独占 RT 没读，照报；
+    // 不存在或别的类型的对象中性（WPE 永远不发，我们运行时同样找不到）
+    for (const layer of bundle.layers) {
+      if (!layer.particle) continue;
+      const referenced = (system: SceneParticle): void => {
+        for (const slot of system.emitterImages) {
+          if (!slot) continue;
+          for (const target of bundle.layers) {
+            const object = scene.objects[target.object];
+            if (!isSceneObject(object) || jsonId(object) !== slot.id) continue;
+            if (target.puppet) unsupported.add("particle:layerimage:puppet");
+            if (target.text) unsupported.add("particle:layerimage:text");
+          }
+        }
+        for (const child of system.children) referenced(child.system);
+      };
+      referenced(layer.particle);
+    }
     // 反射（P13b1）。设置解析成「反射开」一个布尔：跟随时读 WPE `config.json` 的 `general.user.reflection`，只在有读者时才读
     if (reflectionReaders.length || mipReaders) {
       const reflectionOn = await reflectionEnabled();

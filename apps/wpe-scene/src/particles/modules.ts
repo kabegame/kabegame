@@ -23,7 +23,7 @@ import {
   reduceMovementNearControlPoint,
   vortexV2,
 } from "./distance";
-import { boxRandom, sphereRandom } from "./emitters";
+import { boxRandom, layerImage, sphereRandom } from "./emitters";
 import { f32 } from "./f32";
 import { colorListHsv, colorListRgb } from "./colorn";
 import {
@@ -668,6 +668,32 @@ export const PARTICLE_MODULES: readonly ParticleModuleDef[] = [
       fields.controlpoint = clampControlPoint(fields.controlpoint as number);
     },
     run: boxRandom,
+  },
+  {
+    // `FUN_1401b9930` 缺省（先调公共 `FUN_1401b8df0`），解析 `0x1401c6af1`，rea-p4j-layerimage.md 1.1–1.3。
+    // 候选表是运行时从被依赖图层的合成 RT 读回的（步骤 2），发射在步骤 3；步骤 1 起系统对它照常算发射数、不生粒子（`system.ts`）
+    category: "emitter",
+    name: "layerimage",
+    fields: {
+      // 乘 `speed`（类型 6，`rec+0x80` / `+0x84`）；只在 flags 0x40000 时读（3.7）
+      speedmin: by("speed", num(0.1)),
+      speedmax: by("speed", num(0.2)),
+      // 0x80000 的抖动（3.4）；缺省按正交 / 透视
+      offsetmin: vec3({ orthographic: "-5 -5 0", perspective: "0 0 0" }),
+      offsetmax: vec3({ orthographic: "5 5 0", perspective: "0 0 0" }),
+      ...EMITTER_FIELDS,
+      // 缺省 0x10000（`0x1401b999c`；公共缺省不补 flags，写了就是写的值）。bit0（sign）不读、bit1 / bit2 公共，
+      // 0x10000 颜色乘像素、0x20000 每秒重建表、0x40000 速度、0x80000 抖动（1.3）；其余位没读到含义，照报
+      flags: int(0x10000, (value) => (Number(value) & ~(7 | 0xf0000)) === 0),
+      ...AUDIO_FIELDS,
+    },
+    columns: ["position", "velocity"],
+    columnFlags: 0,
+    normalize(fields) {
+      normalizeEmitter(fields);
+      normalizeAudio(fields);
+    },
+    run: layerImage,
   },
   {
     // 绝对写入 `life = max(0.001, …)`

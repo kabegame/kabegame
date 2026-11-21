@@ -1618,6 +1618,8 @@ export class ParticleSystem {
         // 同一处（`FUN_14022f790`，rea-p4e-children 3.7）：条目 `flags` bit1 的 static 子系统复位并重开，每个周期发射器的新周期各一次
         for (const child of this.statics) if (child.entry.flags & 2) child.system.restart();
       }
+      // `layerimage`（P4j 步骤 1）：候选表是运行时读回的，步骤 3 之前一直当作「没有表」，要发的直接丢、不欠账（rea-p4j-layerimage.md 3.1）
+      if (emitter.name === "layerimage") continue;
       for (let n = 0; n < count; n++) this.spawn(emitter);
     }
   }

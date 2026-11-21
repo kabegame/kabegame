@@ -274,6 +274,12 @@ export function sphereRandom(fields: ParticleFields, context: ParticleRunContext
   for (let i = 0; i < 3; i++) columns.velocity[i][slot] = f32(scale * direction[i]);
 }
 
+/**
+ * `layerimage`（P4j，rea-p4j-layerimage.md 第 3 节）的执行函数：步骤 3 实现。步骤 1 起系统不调它——`ParticleSystem.emit` 对 `layerimage`
+ * 照常算发射数、不生粒子（候选表是步骤 2 的运行时读回，此前等同 WPE「没有表」：要发的直接丢，3.1）。
+ */
+export function layerImage(): void {}
+
 /** `boxrandom` 回退判断的阈值（`0x14023896e` 比较的常量）。 */
 const BOX_FALLBACK = f32(0.0001);
 const fastFloat = new Float32Array(1);

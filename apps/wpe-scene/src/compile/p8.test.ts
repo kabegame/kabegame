@@ -27,7 +27,7 @@
  *
  * P8 步骤 4（同计划「步骤 4 — 图层依赖」，rea-p8-render 第 1、2 节，p8-REPORT「图层依赖」与结论 7–9、12）：
  * - `dependencyIds`：数组、对象取值、重复、负数 / 小数 / 字符串 / null 跳过、模型对象列的也算；`layerCompositeName`；棋盘格逐像素、标志与采样；
- * - 能力表：`dependencies` 不再报 `object:dependencies`，粒子对象有不是数字的元素报 `particle:dependencies`；
+ * - 能力表：`dependencies` 不再报 `object:dependencies`，粒子对象的对象元素（P4j 步骤 1 起）进并集、不再报 `particle:dependencies`；
  * - 编译：名字解析（被依赖 → `layerComposites`；没被依赖、不存在、`_b`、不是图像层 → 棋盘格，整场一张；`bind` 的槽不动；注解 `default`
  *   同样）、`TEX<n>FORMAT`（LDR 0；HDR 下经依赖置位 0、自带 `0x10` 且在前 14、在后 0）、照报的四键、被依赖时编 `passthrough`
  *   （`BLENDMODE` 0 / cbm）、预光照变体（P13j-1 起编 `prelit`，之前照报 `lighting:prelighting`）、`dependedOn`。
@@ -1132,7 +1132,7 @@ const YELLOW = [255, 255, 0, 255];
 const BLACK = [0, 0, 0, 255];
 
 describe("dependencyIds / layerCompositeName / checkerTexture（P8 步骤 4，rea-p8-render 1.1、2.1、2.6）", () => {
-  it("并集：数组、对象取值都收，重复只算一次；负数、小数、字符串、null、布尔、对象元素跳过；不是数组 / 对象的值等于没写；模型、粒子对象列的数字也算", () => {
+  it("并集：数组、对象取值都收，重复只算一次；负数、小数、字符串、null、布尔、非粒子对象的对象元素跳过；不是数组 / 对象的值等于没写；模型、粒子对象列的数字也算；粒子对象的发射图对象元素（P4j 步骤 1）进并集", () => {
     const ids = dependencyIds([
       { id: 1, image: "models/a.json", dependencies: [10, 11, 10] },
       { id: 2, image: "models/a.json", dependencies: { a: 12, b: 11 } },
@@ -1143,7 +1143,7 @@ describe("dependencyIds / layerCompositeName / checkerTexture（P8 步骤 4，re
       { id: 7, image: "models/a.json", dependencies: "20" },
       { id: 8, image: "models/a.json" },
     ]);
-    expect([...ids].sort((a, b) => a - b)).toEqual([10, 11, 12, 15, 16, 18]);
+    expect([...ids].sort((a, b) => a - b)).toEqual([10, 11, 12, 15, 16, 17, 18]);
   });
 
   it("名字：前缀 + 十进制 id + `_a`（后缀写死，没有 `_b`）", () => {
@@ -1220,14 +1220,14 @@ describe("能力表：dependencies（P8 步骤 4）", () => {
     expect([...keys]).toEqual([]);
   });
 
-  it("粒子对象的 dependencies 有不是数字的元素：particle:dependencies（发射图 / 碰撞模型依赖没做）", () => {
+  it("粒子对象的 dependencies 有对象元素不再报 particle:dependencies（P4j 步骤 1：进并集并绑到 layerimage）；字符串 / 数字元素也不报", () => {
     const particle = (extra: Record<string, unknown>) => objectKeys({ id: 1, particle: "particles/p.json", ...extra });
     const base = particle({});
-    const reported = [...base, "particle:dependencies"].sort();
-    expect(particle({ dependencies: [{ id: 2, type: "emitterimage", index: 0, mask: "" }] })).toEqual(reported);
-    expect(particle({ dependencies: [2, "3"] })).toEqual(reported);
-    expect(particle({ dependencies: { a: { id: 2, type: "collisionmodel" } } })).toEqual(reported);
+    expect(particle({ dependencies: [{ id: 2, type: "emitterimage", index: 0, mask: "" }] })).toEqual(base);
+    expect(particle({ dependencies: [2, "3"] })).toEqual(base);
+    expect(particle({ dependencies: { a: { id: 2, type: "collisionmodel" } } })).toEqual(base);
     expect(particle({ dependencies: [] })).toEqual(base);
+    expect(base).not.toContain("particle:dependencies");
   });
 });
 

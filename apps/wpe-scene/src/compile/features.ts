@@ -31,7 +31,6 @@ import {
   userBindingOf,
 } from "./bindings";
 import { conditionsHold, removedFbos } from "./conditions";
-import { hasNonNumericDependency } from "./dependencies";
 import { normalizeJsonPassState, PASS_STATE_TABLES, type PassStateField } from "./passState";
 import { resolveParents } from "./hierarchy";
 import { LEGACY_LIGHT_UNIFORMS } from "./lights";
@@ -290,7 +289,8 @@ const PARSED_GENERAL = new Set([
  *   推断），和就地写的语义对不上，没有实测（语料 0 个）。
  * - `dependencies`：图层依赖（P8 步骤 4，rea-p8-render 第 1 节，`compile/dependencies.ts`）。各种对象上都中性：只进全部对象的并集
  *   （`dependencyIds`），命中的图像层被依赖（`SceneLayer.dependedOn`），写法不合规的元素 WPE 跳过。粒子对象另有一套同名键（元素是
- *   `{id, type, …}` 对象，发射图与碰撞模型，`FUN_14022af30`），有不是数字的元素时报 `particle:dependencies`。被依赖的文本层、组、
+ *   `{id, type, …}` 对象，发射图与碰撞模型，`FUN_14022af30`）：对象元素进并集并绑到 `layerimage` 发射器（P4j 步骤 1，`particleDependencies`、
+ *   `bindLayerImages`），不再整张退回。被依赖的文本层、组、
  *   读自己的 `_a` 等照报的用法由 `bundle.ts` 报 `dependency:*`。
  */
 const SUPPORTED_OBJECT = new Set([
@@ -853,8 +853,6 @@ export function checkObjectFeatures(object: SceneObject, unsupported: Set<string
     if (hasEffects) unsupported.add("particle:effects");
     for (const [key, defaults] of Object.entries(PARTICLE_OBJECT_DEFAULTS))
       if (particleObjectValueUsed(object[key], defaults)) unsupported.add(`particle:object:${key}`);
-    // 粒子自己那套 `dependencies`（P8 步骤 4，rea-p8-render 1.1：元素是对象的发射图 / 碰撞模型依赖）没做；数字元素只进并集，中性
-    if (hasNonNumericDependency(object)) unsupported.add("particle:dependencies");
   } else if (kind === "model") {
     // 模型对象的 effect（WPE 怎么画没读，语料 0 个）：`bundle.ts` 也不编译它
     if (hasEffects) unsupported.add("model:effects");
@@ -1624,6 +1622,8 @@ export function checkParticleFeatures(
         continue;
       }
       if (category === "emitter" && (reading.fields.flags as number) & 4) periodic = true;
+      // 过渡键（P4j 步骤 3 删）：`layerimage` 的发射还没做（候选表与出生点），整张退回
+      if (module === "emitter:layerimage") unsupported.add("particle:layerimage:pending");
       if (module === "initializer:mapsequencearoundcontrolpoint") around = true;
       for (const issue of reading.issues)
         unsupported.add(
