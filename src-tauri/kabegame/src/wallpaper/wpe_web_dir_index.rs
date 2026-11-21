@@ -3,20 +3,20 @@
 //! 它是两处的唯一数据源，只在内存里、不落库：
 //! - CEF runtime 的 `file:` 闸门（[`tauri_runtime_kbcef::set_file_scope_resolver`]）：`file:` 文档只能访问
 //!   它自己所在的网页壁纸目录与这张壁纸的用户选择，应用页发起的子 frame 导航只能落进库里某个网页壁纸目录；
-//! - [`crate::commands::wpe_web::wpe_web_pull_state`]：按调用方文档路径认出是哪张壁纸。
+//! - [`crate::commands::wpe_web::wpe_web_media_subscribe`]：按调用方文档路径认出是哪张壁纸。
 //!
 //! 生命周期：桌面 Windows 在 `core_init::init_heavy_globals` 里 Storage 就绪之后调用
 //! [`init_wpe_web_dir_index`]——先订阅图片事件、再全量扫描（走 `idx_images_type`），然后向 runtime 注册
 //! 解析器、后台跟随事件。主窗口要等启动页 Ready 才会打开预览，壁纸窗口在 `init_post` 才建，所以表一定先于
-//! 任何网页壁纸 iframe 就绪。建表失败时保持空表：闸门全拒、拉取报错，不放宽。
+//! 任何网页壁纸 iframe 就绪。建表失败时保持空表：闸门全拒、订阅报错，不放宽。
 //!
 //! 放行（grants）有两条写入路：事件跟随在收到 `metadataId` 补丁时按新 metadata 重算（撤销旧选择不必等
-//! 页面重拉）；`wpe_web_pull_state` 在把状态交给页面之前按同一份 metadata 覆盖（页面拿到新路径时闸门一定
-//! 已经认它）。两条路写的都是「这张壁纸当前 metadata 算出的放行」，先后到达结果相同。
+//! 父页面重取）；[`crate::commands::wpe_web::wpe_web_get_state`] 在把状态交给父页面之前按同一份 metadata 覆盖（父页面推给
+//! 页面时闸门一定已经认它）。两条路写的都是「这张壁纸当前 metadata 算出的放行」，先后到达结果相同。
 //!
 //! 同一张表还顺带记着库内每张场景壁纸（`x-wpe/scene`）的目录与用户选的文件（`scenetexture` 属性）：
 //! 场景宿主（[`super::wpe_scene_host`]）的 `file:` 访问范围放行库里全部场景壁纸目录与这些文件，
-//! 要和网页壁纸目录一样随图片事件维护（`metadataId` 补丁到达时按新 metadata 重算，宿主拉取状态前再写一次）。
+//! 要和网页壁纸目录一样随图片事件维护（`metadataId` 补丁到达时按新 metadata 重算，父页面取状态时再写一次）。
 //! 场景目录**不**构成网页壁纸范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
 //! 宿主是一份文档、范围按文档路径算：用户为某张场景选的文件对全部场景宿主实例可读（总计划已接受）。
 //!
@@ -140,7 +140,7 @@ impl WpeWebDirIndex {
         }
     }
 
-    /// 全局实例。尚未 [`init_wpe_web_dir_index`] 时是空表：闸门全拒、拉取报错。
+    /// 全局实例。尚未 [`init_wpe_web_dir_index`] 时是空表：闸门全拒、订阅报错。
     pub fn global() -> &'static Self {
         static INDEX: OnceLock<WpeWebDirIndex> = OnceLock::new();
         INDEX.get_or_init(Self::new)
@@ -346,7 +346,7 @@ pub fn init_wpe_web_dir_index() {
         .iter()
         .map(|kind| EventBroadcaster::global().subscribe(*kind))
         .collect();
-    // 2. 全量建表；失败就保持空表：闸门全拒、拉取报错，网页壁纸加载不出来，但不放宽
+    // 2. 全量建表；失败就保持空表：闸门全拒、订阅报错，网页壁纸加载不出来，但不放宽
     match scan_library() {
         Ok(rows) => {
             let (web, scenes) = (rows.web.len(), rows.scenes.len());

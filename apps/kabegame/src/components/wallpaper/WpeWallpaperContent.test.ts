@@ -50,6 +50,25 @@ vi.mock("./WpeSceneView.vue", async () => {
 const rpc = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@/api/rpc", () => ({ invoke: rpc.invoke }));
 
+/** 属性推送（useWpeStateDelivery）的替身：记下每个实例的取值函数与 frameLoaded / reset 的调用。 */
+const delivery = vi.hoisted(() => ({
+  instances: [] as {
+    imageId: () => string | null;
+    target: () => Window | null;
+    calls: string[];
+  }[],
+}));
+vi.mock("@/composables/useWpeStateDelivery", () => ({
+  useWpeStateDelivery: (options: { imageId: () => string | null; target: () => Window | null }) => {
+    const instance = { ...options, calls: [] as string[] };
+    delivery.instances.push(instance);
+    return {
+      frameLoaded: () => instance.calls.push("frameLoaded"),
+      reset: () => instance.calls.push("reset"),
+    };
+  },
+}));
+
 const wrappers: ReturnType<typeof mount>[] = [];
 
 const web = (id: string, webEntry: string | null = `about:blank#${id}`): WallpaperTarget => ({
@@ -120,6 +139,7 @@ function captureTimeout(delay: number) {
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
   stub.scenes.splice(0);
+  delivery.instances.splice(0);
   rpc.invoke.mockReset();
 });
 
@@ -212,6 +232,53 @@ describe("WpeWallpaperContent 网页壁纸的右键", () => {
     expect(wrapper.emitted("contextmenu")).toBeUndefined();
     contextMenuFrom(frame.contentWindow);
     expect(wrapper.emitted("contextmenu")).toEqual([[{ x: 30, y: 35 }]]);
+  });
+});
+
+describe("WpeWallpaperContent 网页壁纸的属性推送", () => {
+  it("建 iframe 前 reset；第一次真实 load 后 frameLoaded（推整份），页面自己导航出来的 load 再调（只发就绪）", async () => {
+    const wrapper = mountContent({ imageId: "a", target: web("a", "about:blank") });
+    await settle();
+    const [instance] = delivery.instances;
+    expect(instance.imageId()).toBe("a");
+    const frame = frameOf(wrapper);
+    expect(instance.target()).toBe(frame.contentWindow);
+    // 初始空文档的 load 不算
+    instance.calls.splice(0, instance.calls.indexOf("reset") + 1);
+    fakeDocument(frame, "about:blank");
+    frame.dispatchEvent(new Event("load"));
+    expect(instance.calls).toEqual([]);
+    fakeDocument(frame, null);
+    frame.dispatchEvent(new Event("load"));
+    expect(instance.calls).toEqual(["frameLoaded"]);
+    // 页面自己 reload：又一次 load
+    frame.dispatchEvent(new Event("load"));
+    expect(instance.calls).toEqual(["frameLoaded", "frameLoaded"]);
+  });
+
+  it("被拦的导航不推；场景壁纸的属性由 WpeSceneView 推，这里不取", async () => {
+    const blocked = mountContent({ imageId: "a", target: web("a", "about:blank") });
+    await settle();
+    const frame = frameOf(blocked);
+    fakeDocument(frame, "about:blank#blocked");
+    frame.dispatchEvent(new Event("load"));
+    expect(delivery.instances[0].calls).not.toContain("frameLoaded");
+
+    mountContent({ imageId: "s", target: scene("s") });
+    await settle();
+    expect(delivery.instances[1].imageId()).toBeNull();
+  });
+
+  it("换目标：新 iframe 建出来之前 reset，target 指向新 iframe", async () => {
+    const wrapper = mountContent({ imageId: "a", target: web("a") });
+    await settle();
+    const [instance] = delivery.instances;
+    const resets = instance.calls.filter((call) => call === "reset").length;
+    await wrapper.setProps({ imageId: "b", target: web("b") });
+    await settle();
+    expect(instance.calls.filter((call) => call === "reset").length).toBe(resets + 1);
+    expect(instance.imageId()).toBe("b");
+    expect(instance.target()).toBe(frameOf(wrapper).contentWindow);
   });
 });
 

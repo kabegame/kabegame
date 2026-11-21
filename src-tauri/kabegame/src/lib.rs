@@ -1014,7 +1014,7 @@ pub(crate) fn configure_app(
             #[cfg(feature = "wpe")]
             restore_wallpaper_cover,
             #[cfg(feature = "wpe")]
-            wpe_web_pull_state,
+            wpe_web_get_state,
             #[cfg(feature = "wpe")]
             wpe_web_media_subscribe,
             #[cfg(feature = "wpe")]

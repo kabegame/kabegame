@@ -50,6 +50,21 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }));
 
+/** 属性推送（useWpeStateDelivery）的替身：记下取值函数与 frameLoaded / reset 的调用。 */
+const delivery = vi.hoisted(() => ({
+  instances: [] as { imageId: () => string | null; target: () => Window | null; calls: string[] }[],
+}));
+vi.mock("@/composables/useWpeStateDelivery", () => ({
+  useWpeStateDelivery: (options: { imageId: () => string | null; target: () => Window | null }) => {
+    const instance = { ...options, calls: [] as string[] };
+    delivery.instances.push(instance);
+    return {
+      frameLoaded: () => instance.calls.push("frameLoaded"),
+      reset: () => instance.calls.push("reset"),
+    };
+  },
+}));
+
 const wrappers: ReturnType<typeof mount>[] = [];
 
 async function mountView(styleMode = "fit", interactive = false) {
@@ -83,8 +98,30 @@ const displayPosts = (post: { mock: { calls: unknown[][] } }) =>
 
 afterEach(() => {
   wrappers.splice(0).forEach((wrapper) => wrapper.unmount());
+  delivery.instances.splice(0);
   windowKind.value = "main";
   vi.stubGlobal("devicePixelRatio", 1);
+});
+
+describe("WpeSceneView 属性推送", () => {
+  it("开宿主实例前 reset；宿主 iframe 的 load 时 frameLoaded（第一次推整份，由 useWpeStateDelivery 判断）", async () => {
+    const { frame } = await mountView();
+    const [instance] = delivery.instances;
+    expect(instance.imageId()).toBe("7");
+    expect(instance.target()).toBe(frame.contentWindow);
+    expect(instance.calls).toEqual(["reset"]);
+    frame.dispatchEvent(new Event("load"));
+    expect(instance.calls).toEqual(["reset", "frameLoaded"]);
+  });
+
+  it("换目标：重开宿主实例前再 reset", async () => {
+    const { wrapper } = await mountView();
+    const [instance] = delivery.instances;
+    await wrapper.setProps({ target: { id: "8", path: "D:/wpe/8" } });
+    await flushPromises();
+    expect(instance.calls.filter((call) => call === "reset")).toHaveLength(2);
+    expect(instance.imageId()).toBe("8");
+  });
 });
 
 describe("WpeSceneView 样式", () => {

@@ -59,16 +59,18 @@
 - `capabilities/wpe-web.json`：WPE 网页壁纸页面，即 `WpeWallpaperContent` 里的 `file:` iframe（`wpe-web-capability`，
   `windows` 是 `main` 加整个壁纸窗口 label 池——图库预览在主窗口、桌面在各壁纸窗口，同一份；`frames: "sub"`——只给 iframe，
   这些窗口的主 frame 都是应用页、靠特赦；`local: false`、`remote.urls: ["file:///*"]`）。`listen` 只能听 `wallpaper-ping` /
-  `setting-change` / `image-changed` / `images-change`，外加 `allow-unlisten` 与 `permissions/wpe-web.toml` 的
-  `wpe_web_pull_state` / `wallpaper_pong`；只在桌面分支的 `tauri.conf.json.handlebars` 里启用。网页壁纸里再嵌的 `file:`
+  `wpe-scene-clear-storage`，外加 `allow-unlisten`、原生鼠标登记与 `permissions/wpe-web.toml` 的 `wallpaper_pong` /
+  `wpe_web_media_subscribe`；只在桌面分支的 `tauri.conf.json.handlebars` 里启用。用户属性不在这里：2026-11-21 起由父页面
+  （应用页，特赦）调 `wpe_web_get_state` 取、`postMessage` 推给 iframe（`useWpeStateDelivery`），iframe 拿不到状态，也收不到
+  `setting-change` 与图片事件。网页壁纸里再嵌的 `file:`
   iframe 同样匹配（同一作者的内容，信任级别相同）。
 - **运行时注册** `wpe-scene-host-capability`（场景宿主 `apps/wpe-scene`，P3-0，`wallpaper/wpe_scene_host.rs` 的
   `register_capability`，`init_pre` 里 `add_capability`，只 Windows）：`remote.urls` 只有宿主 `index.html` 的**确切**
   `file:///` 地址（运行时由 `resource_dir` 算出，URLPattern 特殊字符逐个转义；盘符冒号不转义会被当成具名组而解析失败），
     不用路径通配——工坊内容可以造同名目录冒充；`frames: "sub"`，窗口是 main 与整个壁纸窗口 label 池，`local: false`。权限只有
   `permissions/wpe-scene-host.toml`（场景专用命令：`get_wpe_scene_postprocess`、`wpe_scene_target`、`wpe_scene_report`）。状态事件 `wpe-scene-status` 由后端 `emit_to` 调用方 webview label，应用页按实例号认领。场景宿主是一种特殊的网页壁纸：
-  它同样匹配 `wpe-web-capability` 的 `file:///*`，网页壁纸的命令与四个事件都从那里拿（应答 ping、按 `image-changed`
-  跟随用户属性等），这里不重复。
+  它同样匹配 `wpe-web-capability` 的 `file:///*`，网页壁纸的命令与事件都从那里拿（应答 ping、订阅音频 / 媒体、`wpe-scene-clear-storage`；
+  用户属性由父页面 `WpeSceneView` 推送），这里不重复。
 
 ### 3) build 入口
 
@@ -248,7 +250,7 @@ frame 始终是应用页（网页壁纸是子 frame 里的 iframe，窗口不再
 | 请求方 | frame | invoke 应用命令 | listen `images-added` | listen `setting-change` |
 | --- | --- | --- | --- | --- |
 | 主窗口 / 壁纸窗口应用页 | 主 | 放行（特赦） | 放行 | 放行 |
-| 预览网页壁纸 `file:` iframe（主窗口） | 子 | 只有 `wpe_web_pull_state` / `wallpaper_pong`（`wpe-web-capability`） | 拒绝 | 放行 |
+| 预览网页壁纸 `file:` iframe（主窗口） | 子 | 只有 `wallpaper_pong` / `wpe_web_media_subscribe`（`wpe-web-capability`） | 拒绝 | 放行 |
 | 桌面网页壁纸 `file:` iframe（壁纸窗口） | 子 | 同上 | 拒绝 | 放行 |
 | 网页壁纸里再嵌的 `file:` iframe | 子 | 同上（同一份 capability） | 拒绝 | 放行 |
 | 场景宿主 `file:` iframe（主窗口 / 壁纸窗口） | 子 | 网页壁纸的命令（`wpe-web-capability`）+ `get_wpe_scene_postprocess` / `wpe_scene_target` / `wpe_scene_report`（`wpe-scene-host-capability`） | 拒绝 | 放行（同网页壁纸的四个事件） |
@@ -295,7 +297,7 @@ frame 是 IPC 的基本单位：子 frame 有自己的 Tauri 桥，Tauri 送回�
   时先建、后销毁的临时 frame 也会报一次，删除是空操作。
 - **关闭拦截只看主 frame**：`tauri://close-requested` 的监听只有在主 frame 才算数，子 frame 是客人，不能阻止窗口关闭。
 - **调用方来源**：命令可以收 `tauri::ipc::CallerOrigin(Url)`，即 ACL 判定所用的来源（请求的 `Origin`）。普通页面只有
-  scheme + host + port；`file:` frame 的完整文档 URL 由 CEF 07 建工厂时捕获，再由 runtime 写入 `Origin`，`wpe_web_pull_state` 靠它认出调用的
+  scheme + host + port；`file:` frame 的完整文档 URL 由 CEF 07 建工厂时捕获，再由 runtime 写入 `Origin`，`wpe_web_media_subscribe` 靠它认出调用的
   是哪张网页壁纸（`Url::to_file_path` 不看 scheme，用之前先确认是 `file:`）。
 - **调用方 frame**：命令可以收 `tauri::ipc::CallerFrame`（`Main` / `Sub(SubframeId)`，取不到 frame 时与 Channel 参数一样报错），
   读自 runtime 上报、不读载荷。应用按调用方 frame 保存的东西（例如网页壁纸的音频 / 媒体订阅，Channel 只投递到这个 frame）

@@ -481,7 +481,7 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 设置「帧率」（桌面全局键 `wpeFps`，预览与应用背景是每张壁纸的 `previewSettings.fps`；整数或 `"follow"`，默认 30）限制场景宿主的帧循环，也推给网页壁纸。
 
 - **范围**：同 WPE 设置界面的帧率滑块，10 到显示器最高刷新率（`runtime.frequencymax`，rea-wpe-settings.md）。上限由 `get_display_max_refresh_rate` 现查（macOS `NSScreen.maximumFramesPerSecond`，Windows `EnumDisplaySettingsW` 的当前模式，取所有在线屏的最大值；Linux 取不到按 60），只用于界面；存储层只钳 [10, 1000]（`kabegame_core::wpe::fps`）。
-- **生效值只在 Rust 算一次**：`wpe_web_pull_state` 按调用方窗口取设置（壁纸窗口取全局，主窗口取这张图的预览设置，同媒体集成的分流），`"follow"` 解析成 WPE `config.json` 的 `general.user.fps`（缺键按 WPE 的缺省 15；跟随不可用时 30），放进 `general.fps`。垫片照 WPE 网页壁纸协议调 `applyGeneralProperties(general)`，场景宿主在 `main.ts` 的 `wallpaperPropertyListener` 上接同一个回调，所以帧率不走父页面的场景设置消息。
+- **生效值只在 Rust 算一次**：`wpe_web_get_state` 按调用方（父页面）窗口取设置（壁纸窗口取全局，主窗口取这张图的预览设置，同媒体集成的分流），`"follow"` 解析成 WPE `config.json` 的 `general.user.fps`（缺键按 WPE 的缺省 15；跟随不可用时 30），放进 `general.fps`。垫片照 WPE 网页壁纸协议调 `applyGeneralProperties(general)`，场景宿主在 `main.ts` 的 `wallpaperPropertyListener` 上接同一个回调，所以帧率不走父页面的场景设置消息。
 - **跟随只读一次**：`config.json` 第一次读成功后缓存到进程退出（WPE 自己也只在启动时读它），文件不存在时不缓存。
 - **改值就地生效**：桌面改全局键 → `setting-change` 带 `wpeFps` → 垫片重拉；预览改设置 → `metadataId` 补丁 → 垫片重拉；`general` 变了才回调。宿主 `setGeneral` → `SceneRenderer.setMaxFps`：节流器改上限，`GpuScene.setFrameRate` 改粒子 operator 遍数（1–20 两遍，`particlePasses`）与 rope 读的 `fps`，下一帧生效，不重新加载、不重新预热（预热固定一遍，drag 用实际帧时间，切遍数没有残留状态）。`load` 在 `await GpuScene.build` 期间收到的新值，换上新场景前补设一次。WPE 运行中改 fps 也是就地推给场景（0x467 → +0x18c）；粒子遍数是否同样当帧切换没有实测【推】。
 - **高于刷新率**：rAF 按刷新率回调，实际帧率封顶在刷新率；粒子遍数与 rope 的 `min(fps, R)` 仍按设置值算，与 WPE 读设置一致。
@@ -680,12 +680,12 @@ pass（`ScenePass`）里：`key` 是本 pass 的稳定键（scene.json 坐标：
 - **开发与测试**：dev 构建用 `--mode development`，`vite.config.ts` 的 `__SCENE_DEV__` 只在该模式安装 `window.__kabegameSceneProbe`。CDP 应先按 frame URL 中的 `/wpe-scene/index.html` 选宿主 frame，再调探针。`deno task test -c kabegame --skip cargo` 依次运行 `apps/kabegame` 与 `apps/wpe-scene` 的 Vitest；宿主可单独运行 `deno task --cwd apps/wpe-scene test`，语料测试继续使用 `KABEGAME_WPE_ROOT`。
 - **`file:` 访问范围**（`wallpaper/wpe_scene_host.rs` 的 `access_scope_of`，就是注册给 runtime 的解析器：宿主目录优先，其它路径照旧按网页壁纸目录）：
   - 宿主目录里的文档：根为宿主目录，另放行 WPE 安装目录（`wpe::discover::engine_dir`）的 `assets/` 与 `config.json`、文本对象要读的系统字体文件（后端按平台把 13 个 WPE 字体名解析成本机文件、逐个放行，P6b 1b / 1d2，见「字体引擎 `wpefont`」），以及库里全部 `x-wpe/scene` 行的目录和用户为各场景选的 `scenetexture` 文件（P11b）。
-  - 场景目录与用户选的纹理文件由网页壁纸目录索引顺带维护（`WpeWebDirIndex::scene_grants`；目录随 `images-added` / `images-deleted` / 带 `localPath` 的补丁更新，纹理文件按这张场景当前的 metadata **覆盖**，`metadataId` 补丁到达时与 `wpe_web_pull_state` 返回前各写一次，同网页壁纸的 `file` 属性），但**不**构成网页壁纸范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
+  - 场景目录与用户选的纹理文件由网页壁纸目录索引顺带维护（`WpeWebDirIndex::scene_grants`；目录随 `images-added` / `images-deleted` / 带 `localPath` 的补丁更新，纹理文件按这张场景当前的 metadata **覆盖**，`metadataId` 补丁到达时与 `wpe_web_get_state` 返回前各写一次，同网页壁纸的 `file` 属性），但**不**构成网页壁纸范围：场景目录里的 `file:` 文档什么都读不到，应用页也不能把 iframe 导航进场景目录。
   - 应用页导航 iframe：目标只能落在宿主目录（runtime 对导航目标去掉放行项）。
   - 宿主目录、WPE 安装目录与系统字体在启动时（`init_heavy_globals`）和每次取地址时刷新，闸门只读内存。
   - 范围按文档路径算、不分实例：宿主能读库里所有场景目录与 WPE 资源。按实例收窄要让解析器拿到文档 URL 的 query，以后再做。
 - **IPC**：两份 capability 叠加。
-  - 网页壁纸的 `wpe-web-capability`（`file:///*`）同样匹配宿主，网页壁纸的命令与事件宿主都有：`wallpaper_pong`、`setting-change` / `image-changed` / `images-change` / `wallpaper-ping` 监听。垫片拉 `wpe_web_pull_state` 时带 `kbScene` 的 `imageId`；后端只在调用方是宿主入口且 id 是库内场景壁纸时接受，返回与网页壁纸同形的 `user`，`directories` 为空；返回前按同一份 metadata 覆盖这张场景的 `scenetexture` 放行（P11b）。普通网页壁纸仍按文档目录认图，忽略传入的 id。
+  - 网页壁纸的 `wpe-web-capability`（`file:///*`）同样匹配宿主，网页壁纸的命令与事件宿主都有：`wallpaper_pong`、`wpe_web_media_subscribe`、`wallpaper-ping` / `wpe-scene-clear-storage` 监听。用户属性（2026-11-21 起）由父页面 `WpeSceneView` 推送：它按图片 id 调 `wpe_web_get_state`（只给应用页），宿主 iframe 的 load 后推整份、之后推增量（`useWpeStateDelivery`，协议 `wpeWebState.ts`），返回前按同一份 metadata 覆盖这张场景的 `scenetexture` 放行（P11b）；宿主拿不到状态，也收不到设置与图片事件。
   - 暂停与音量沿用父页面到垫片的 `kabegame:wpe-volume` 消息，新增 `paused`；垫片只在值变化时调 `setPaused`，首次全量属性交付前就已暂停的，交付后补调一次 `setPaused(true)`。`SceneHost` 首次属性包到达后才加载，渲染完成后经 `wpe_scene_report` 报 `ready`，日志经同一命令进入应用日志。
   - 场景专用命令：`init_pre` 里 `add_capability` 注册 `wpe-scene-host-capability`，`remote.urls` 只有宿主 `index.html` 的确切地址（URLPattern 特殊字符逐个转义），不用路径通配；`frames: "sub"`，窗口是 main 与壁纸窗口 label 池（`wallpaper::WALLPAPER_LABELS`，每块屏一个壁纸窗口）；放行 `wpe_scene_target`（场景目录与 `sceneAssets`）和 `wpe_scene_report`（`ready` / `fallback` 以 `wpe-scene-status` 事件回到调用方窗口，带实例号；`log` 写 tracing）。
 
@@ -2262,7 +2262,7 @@ P11c 照这三段做，每段放在对应的位置。依据：
 - `renderFrame` 收 `shortcutIcons`（属性名 → `{ width, height, rgba }`，`rgba` 是 base64 的直通 alpha 像素）。
 - 结果的 `scripts.shortcuts` 按发生顺序列出经过门禁的调用：帧、属性名、返回码（0 失败、1 受理、2 没有令牌）。探针不启动、不发消息。
 - 快捷方式属性的 `userProperties` 可以直接给后端形状；裸字符串（含库里的面板值与工程缺省值）当作没配，`isbound: false`。
-- MCP `render_scene` 还不转发 `shortcutIcons`，所以缺省的库内用户属性里配过的快捷方式在探针里也当作没配。要看图标，就在屏外宿主里调 `wpe_web_pull_state` 与 `wpe_scene_shortcut_icon`，再自己调 `renderFrame`。
+- MCP `render_scene` 还不转发 `shortcutIcons`，所以缺省的库内用户属性里配过的快捷方式在探针里也当作没配。要看图标，就在主窗口里调 `wpe_web_get_state` 取后端形状、在屏外宿主里调 `wpe_scene_shortcut_icon`，再自己调 `renderFrame`。
 
 **走查**（2026-11-15，生成工程 `p11-shortcut` / `p11-shortcut-v`，`ignore/p11/d/`）：
 - **图标**：dev 应用里取到的 7 张和 WPE 的纹理逐像素相同：notepad.exe、`.lnk`、`.url`、文件夹、`calc`、维基百科，以及 `example.com` 取不到图标时的缺省图。

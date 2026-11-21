@@ -2,7 +2,7 @@
 //!
 //! 桌面用全局设置 `wpeFps`，预览 / 应用背景用每张壁纸 metadata 的 `previewSettings.fps`；两处存的形状相同：
 //! 整数（钳到 [`WPE_FPS_MIN`, `WPE_FPS_MAX`]）或字符串 `"follow"`。生效值只在 app 的
-//! `wpe_web_pull_state` 里解析一次，经垫片的 `applyGeneralProperties({ fps })` 同时交给网页壁纸与场景宿主。
+//! `wpe_web_get_state` 里解析一次，由父页面推给垫片、经 `applyGeneralProperties({ fps })` 同时交给网页壁纸与场景宿主。
 //!
 //! 范围同 WPE 设置界面的帧率滑块：下限 10，上限是显示器最高刷新率（`runtime.frequencymax`，
 //! `.claude/plans/tools/rea-wpe-settings.md`）。上限要运行时才知道，这里只钳一个宽松的上界，界面按刷新率再钳。

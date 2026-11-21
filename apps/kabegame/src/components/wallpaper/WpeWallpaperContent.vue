@@ -27,6 +27,8 @@
  *   时为 0）；`volume` / `paused` / `interactive` 变化时主动推（协议见 `wpeWebVolume.ts`）。`paused` 也经这条消息交给垫片：iframe
  *   保持可见，垫片照 WPE 冻结 rAF、计时器、`AudioContext`、CSS 动画与媒体元素并调页面的 `setPaused`（暂停中打开的先让页面
  *   画起来，见垫片 `installFreeze`）。
+ * - 属性：由这里推给垫片（照 WPE 宿主推送，`useWpeStateDelivery`）：iframe 第一次真实 load 后推整份，之后只推增量；页面自己
+ *   reload / 改地址出来的新文档不重推，只发一条不带属性的「就绪」。iframe 自己不取状态。
  * - 鼠标：iframe 不收真实鼠标（`pointer-events: none`）。`interactive` 经音量消息交给垫片，垫片在可交互且没暂停时向
  *   `tauri-plugin-cursor` 登记本 frame，Rust 把全局光标直接注入它。Linux 拿不到全局光标，退回可交互的 iframe 直接收真实鼠标
  *   （`framePointer.ts`）。
@@ -45,6 +47,7 @@ import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
 import { framePointerEvents } from "./framePointer";
 import { WEB_SANDBOX } from "./webSandbox";
 import type { WpeSceneProgress } from "./wpeSceneProgress";
+import { useWpeStateDelivery } from "@/composables/useWpeStateDelivery";
 import WpeSceneView from "./WpeSceneView.vue";
 
 /** iframe 没有 error 事件（404 也会触发 load），只能靠超时判断导航到底启动了没有。 */
@@ -167,6 +170,11 @@ async function resolveTarget() {
 const webContainerRef = ref<HTMLElement | null>(null);
 let webFrameEl: HTMLIFrameElement | null = null;
 let webLoadTimer: number | null = null;
+/** 属性由这里推给 iframe（照 WPE 宿主推送）；场景的属性由 `WpeSceneView` 自己那份推，这里只管网页壁纸 */
+const webState = useWpeStateDelivery({
+  imageId: () => (kind.value === "web" ? (resolved.value?.id ?? null) : null),
+  target: () => webFrameEl?.contentWindow ?? null,
+});
 
 /** iframe 当前文档的地址：仍与父页面同源（初始 about:blank、被改写成的 about:blank#blocked）时可读，导航到 `file:` 后返回 null。 */
 function sameOriginHref(frame: HTMLIFrameElement): string | null {
@@ -240,9 +248,15 @@ async function startWeb(id: number) {
   frame.setAttribute("referrerpolicy", "no-referrer");
   frame.setAttribute("title", "wallpaper-web");
   frame.addEventListener("load", () => {
-    if (frame !== webFrameEl || result !== "loading") return;
+    if (frame !== webFrameEl) return;
     // 插入时初始空文档的 load：忽略
     if (isInitialBlank(frame)) return;
+    // 已经显示之后的 load：页面自己导航出来的新文档（reload、改地址），属性照 WPE 不重推（见 useWpeStateDelivery）
+    if (result === "live") {
+      if (sameOriginHref(frame) === null) webState.frameLoaded();
+      return;
+    }
+    if (result !== "loading") return;
     clearWebLoadTimer();
     // 仍与父页面同源却不是初始文档：导航被浏览器改写（about:blank#blocked 等），壁纸页面没有加载
     const blocked = sameOriginHref(frame);
@@ -252,7 +266,9 @@ async function startWeb(id: number) {
       return;
     }
     setLive();
+    webState.frameLoaded();
   });
+  webState.reset();
   webFrameEl = frame;
   applyWebPointerEvents();
   webLoadTimer = window.setTimeout(() => {

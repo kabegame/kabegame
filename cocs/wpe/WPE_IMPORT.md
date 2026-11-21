@@ -478,7 +478,7 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
 ### 网页壁纸目录索引
 
 `wallpaper/wpe_web_dir_index.rs` 的 `WpeWebDirIndex`：库内每张网页壁纸的**规范化目录键 → 图片 id + 壁纸目录 + 用户选择算出的
-放行**，外加图片 id → 目录键。只在内存里、不落库，是 `file:` 闸门与 `wpe_web_pull_state` 的唯一数据源（取代原来按 webview
+放行**，外加图片 id → 目录键。只在内存里、不落库，是 `file:` 闸门与 `wpe_web_media_subscribe` 认图的唯一数据源（取代原来按 webview
 存的「根目录 + 追加放行」与 `set_wpe_web_preview`）。
 
 - **键**：与闸门同一套规范化，`tauri_runtime_kbcef::file_path_key`（canonicalize、去 Windows `\\?\` 前缀、Windows 不分大小写、去尾
@@ -495,49 +495,58 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
   落地，与各订阅之间的到达顺序无关；某个订阅落后丢事件（`Lagged`）时整张重建。逐事件路径只改内存、按 id 读库、不发事件，
   不打 trace 以上的日志。
 - **放行的两条写入路**：事件跟随在收到 `metadataId` 补丁时按新 metadata 重算（改了目录属性，旧目录**立即**不可读，不必等
-  页面重拉）；`wpe_web_pull_state` 在把状态交给页面之前用同一份 metadata 覆盖（页面拿到新路径时闸门一定已经认它）。两条路写的
+  父页面重取）；`wpe_web_get_state` 在把状态交给父页面之前用同一份 metadata 覆盖（父页面推给页面时闸门一定已经认它）。两条路写的
   都是「这张壁纸当前 metadata 算出的放行」，先后到达结果相同；覆盖，不是追加。
-- **失败时全拒**：建表失败只记 error 并保持空表，闸门全拒、拉取报错，网页壁纸加载不出来，但不放宽。
+- **失败时全拒**：建表失败只记 error 并保持空表，闸门全拒、订阅报错，网页壁纸加载不出来，但不放宽。
 
 ### 运行时垫片与宿主协议
 
-P3-0a 起场景宿主复用这份垫片。地址带 `kbScene` 时，拉取 `wpe_web_pull_state` 会传 `imageId`；后端只在调用文档是场景宿主入口、id 是库内场景壁纸时按 id 返回状态，`directories` 为空且不写用户文件 grants。普通网页壁纸仍按文档目录认图，传入的 `imageId` 被忽略。父页面的 `kabegame:wpe-volume` 消息另带 `paused`（旧消息缺字段按 `false`），垫片只在状态变化时调 `wallpaperPropertyListener.setPaused`（页面起来时按未暂停，不会收到多余的 `setPaused(false)`）；首次全量属性交付之前就已暂停的，交付后补调一次 `setPaused(true)`。网页壁纸也适用。
+P3-0a 起场景宿主复用这份垫片，属性同样由父页面（`WpeSceneView`）推送。父页面的 `kabegame:wpe-volume` 消息另带 `paused`（旧消息缺字段按 `false`），垫片只在状态变化时调 `wallpaperPropertyListener.setPaused`（页面起来时按未暂停，不会收到多余的 `setPaused(false)`）；第一条属性消息（整份，或页面自己 reload 出来的文档收到的「就绪」）之前就已暂停的，交付后补调一次 `setPaused(true)`。网页壁纸也适用。
 
 WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关键的是 `window.wallpaperPropertyListener.applyUserProperties`：
-宿主把作者默认值推给它之后，多数壁纸才开始画。Kabegame 用一份 JS 垫片 `webview_js/wpe_shim.js` 定义这组接口并投递属性，
-**不照搬 WPE 的「宿主拼 JS、加载完成前排队」**（`API.md` §4.8），改成垫片驱动：垫片向宿主**拉取**完整状态、**订阅**
-应用事件后重拉；宿主只回答「当前完整状态」和「转发事件」，不推状态、不排队、不记页面收到过什么。例外是音频 / 媒体数据
-（Channel 推，见「音频与媒体集成」）与宿主音量（父页面经 `postMessage` 回复与推送，见下「音量」）；右键也经 `postMessage` 交给父页面（见下「右键」）。
+宿主把作者默认值推给它之后，多数壁纸才开始画。Kabegame 用一份 JS 垫片 `webview_js/wpe_shim.js` 定义这组接口，属性照 WPE 由
+**宿主推送**（2026-11-21 起，`.claude/plans/wpe-import/2-web/phase-9-parent-delivery.md`；之前是垫片自己拉，页面自己 reload 时会被
+整份重推，3841846165 因此无限重载）：父页面（`WpeWallpaperContent` / `WpeSceneView`，经 `composables/useWpeStateDelivery.ts`）调
+`wpe_web_get_state` 取完整状态、自己订阅变化，经 `postMessage`（协议 `components/wallpaper/wpeWebState.ts`）推给垫片，就绪标志、
+增量与投递时机都在父页面；垫片只认父窗口的可信消息、把它交给页面。音频 / 媒体数据仍由 iframe 自己订阅（Channel 推，见「音频与媒体集成」），
+宿主音量与暂停、右键同样走 `postMessage`（见下「音量」「右键」）。
 
 - **注入与启用**：同一份垫片以 `initialization_script_for_all_frames` 挂在壁纸窗口（`wallpaper/manager/window.rs`）与
   主窗口（`startup.rs`）上，按地址自判：只在「父窗口就是 top 的 `file:` 子 frame」（网页壁纸 iframe，预览与桌面同一份）且
   有 `__TAURI_INTERNALS__`（CEF 注入的子 frame 桥）时启用，其它文档第一行就返回、不定义任何全局。壁纸自己更深的嵌套 iframe 不启用。启用后先装音量接管（见下「音量」），再定义 `wallpaperMediaIntegration` 常量、六个 `wallpaperRegister*Listener`（收下回调、Phase 8 前
   不回调）、空的 `wallpaperRequestRandomFileForProperty` 与 `wallpaperGetUtilities`，并标记 `window.__kbWpeShim === true`。
-- **状态**（只在 Rust 侧计算，`commands/wpe_web.rs` 的 `build_wpe_web_state`）：`{ imageId, user, general: { language } }`。
+- **状态**（只在 Rust 侧计算，`commands/wpe_web.rs` 的 `build_wpe_web_state_with_raw`）：`{ imageId, user, general: { language, fps }, directories }`。
   `user` 取自图片 metadata（导入时存的 `project.json` 原文）里 `general.properties` 中带 `value` 的条目，形如
   `{ key: { type, value } }`（`kabegame_core::wpe::properties::resolve_web_user_props`；分组、说明行、无默认值的 `file`
   属性不推）；`language` 是界面语言换成的 WPE 语言码（`wpe_language_code`：`zh-chs` / `zh-cht` / `ja-jp` / `ko-kr`，其余
   `en-us`）。`fps` 留给 Phase 6（推 0 会让按 `1000 / fps` 算间隔的页面停住）。Rust 不带版本号。
-- **一种传输**：iframe 自己就是调用方，直接 `invoke` / `listen`，预览与桌面逐字节同一份：
-  - `pull()` = `invoke("wpe_web_pull_state", { imageId? })`：普通网页壁纸不传 id；场景宿主从地址的 `kbScene` 传 id。命令按 `tauri::ipc::CallerOrigin`（ACL 判定所用的
-    调用方来源；运行时由 initiator 与 07 文档 URL 合成完整来源，页面伪造不了）。它把来源还原成文档路径（只认 `file:`），
-    在网页壁纸目录索引里找到所在的那张，按 id 组装状态，返回前用同一份 metadata 覆盖这张壁纸的放行；页面拿不到别的图片的
-    metadata。宿主入口文档按传入 id 读取库内场景壁纸；其它不在网页壁纸里的文档、非 `file:` 来源都报错。
-  - `listen(names, onEvent)` = 逐个 `plugin:event|listen`（`core:event:allow-listen`），事件只投递到本 frame；失败记录日志，等待下一次相关事件。
+- **取状态**：父页面（应用页，特赦）按图片 id 调 `wpe_web_get_state`，不进任何 permission，iframe 调不到；返回前用同一份
+  metadata 覆盖这张壁纸的放行（网页壁纸的 `file` / `directory`、场景的 `scenetexture`），`general.fps` 按调用方窗口取设置。请求编号
+  递增，某次结果落地后丢弃更早发出、更晚返回的结果；图片 id 变了就重取。
+- **iframe 里的传输**：垫片仍直接 `invoke` / `listen`（预览与桌面逐字节同一份），但只用于答 ping、订阅音频 / 媒体
+  （`wpe_web_media_subscribe` 按 `tauri::ipc::CallerOrigin` 认出是哪张）与原生鼠标登记；`listen(names, onEvent)` = 逐个
+  `plugin:event|listen`，事件只投递到本 frame。
 - **ping 应答**：垫片监听 `wallpaper-ping`，从 `__TAURI_INTERNALS__.metadata.currentWebview.label` 取自身 label、过滤后调用
   `wallpaper_pong(seq)`；不等 load 或属性拉取成功。只有壁纸窗口里的 iframe 应答（预览的 label 是 `main`）。`wallpaper_pong`
   只替调用方窗口发应答，不读取数据。
-- **重拉触发**：`setting-change` 带 `language`（界面语言变了）或 `wpeFps`（桌面帧率变了）；`image-changed` / `images-change` 里有**本张**图片
-  （`state.imageId`）的 `metadataId` 补丁——图片 metadata 按 id 不可变，属性一改就换 `metadataId`（Phase 7 的设置面板保存时
-  写新 metadata 行）；首个状态到达前任何 `metadataId` 补丁都重拉。垫片**先订阅再拉取**，订阅生效后的变化都会触发重拉。
-- **投递语义**（我们自己的规则）：
-  - 首次投递在 `window` 的 `load` 之后，用户属性与通用属性各推一份完整的（先 `applyUserProperties` 再
-    `applyGeneralProperties`，WPE 的实际顺序未确认）；`load` 之前到达的状态只记下来。
-  - 之后每次重拉都拿到完整状态：用户属性只推**值变化的键**（WPE 的 `applyUserProperties` 本来就是「只含变化的键」，页面
-    没有整份替换的接口；作者删掉的键不推，页面没有撤销接口）；通用属性有变化就推一整份。
-  - 首次投递之后页面换了 `wallpaperPropertyListener` 对象，下一个微任务把当前完整状态补投给它：垫片在 `window` 上装这个
-    属性的访问器，页面写 `window.x = …` 或顶层 `var x = …` 都走到 setter。
-  - 乱序：垫片给每次拉取编号，某次结果落地后丢弃编号更早、返回更晚的结果（同 pathql 的 pending 窗口）。
+- **重取触发**（父页面订阅，`kbEvent$`）：`setting-change` 带 `language`（界面语言变了）或 `wpeFps`（桌面帧率变了）；
+  `image-changed` / `images-change` 里有**本张**图片的 `metadataId` 补丁——图片 metadata 按 id 不可变，属性、预览设置一改就换
+  `metadataId`（Phase 7 的设置面板保存时写新 metadata 行）。
+- **投递语义**（照 WPE 的就绪标志，父页面持有）：
+  - 父页面新建 iframe（换目标就销毁重建）之后，**第一次**真实文档 `load`（初始空文档、被拦的导航不算）把标志置真，状态到了就推
+    **整份**：垫片先 `applyUserProperties` 再 `applyGeneralProperties`（WPE 的实际顺序未确认），`fetchall` 目录的文件全部当新增。
+    标志置真之前到达的状态只记下来。
+  - 之后只推**增量**（父页面按「上次推给这个 iframe 的状态」算，`stateDelta`）：用户属性只含值变了的键（WPE 的
+    `applyUserProperties` 本来就是「只含变化的键」，页面没有整份替换的接口；作者删掉的键不推，例外是没有默认值的 `file` /
+    `directory` 重置后补空路径）；通用属性有变化就推一整份；目录按增删回调。
+  - **页面自己导航不重推**：iframe 之后再触发的 `load`（页面自己 `location.reload()`、改地址、前进后退）父页面不重推属性，只发一条
+    不带属性的「就绪」（垫片据此补调 `setPaused(true)`、拿到目录列表回答随机文件请求）；基线跟着 iframe 实例走、跨页面自己的
+    reload 保留，之后照推增量。WPE 实测（`ignore/p6/f5/proj/kbweb-reload`）：页面 reload 之后 `applyUserProperties` /
+    `applyGeneralProperties` 都不调，之后改属性照推增量（只有主程序的加载命令复位就绪标志，`2-web/API.md` §4.8）。否则「收到某属性就
+    `location.reload()`」的页面会无限重载（3841846165 的「重置场景」，画面停在深色背景上）。
+  - 本文档收到过整份之后页面换了 `wallpaperPropertyListener` 对象，下一个微任务把当前完整状态（合进之后的增量）补投给它（我们自己的
+    规则）：垫片在 `window` 上装这个属性的访问器，页面写 `window.x = …` 或顶层 `var x = …` 都走到 setter。只收到「就绪」的文档不补投。
+  - 垫片只认 `isTrusted` 且来自父窗口的属性消息（`source` 用启动时的原生 getter 读），并且不交给页面的 `message` 监听。
   - 页面回调抛错只记 `console.error("[kb-wpe] …")`，不影响后续投递。
   - **键序**（2026-11-16）：交给页面的属性对象（`applyUserProperties` 的全量与增量、`applyGeneralProperties`）顶层键按名字排序。
     WPE 用 jsoncpp 拼回调参数，对象键按 `std::map` 排序【推，没在 WPE 上实测】；有壁纸依赖它：corsair_collection 的
@@ -551,9 +560,9 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 - **监听随 frame 清理**：监听按「webview → frame → 事件」登记，iframe 销毁时 runtime 报 `SubframeDestroyed`，Tauri 删掉该
   frame 的全部监听。同一 frame 内重新导航后旧条目还在、投递进新文档时找不到 id 等于空操作，直到 frame 销毁；`WpeWallpaperContent`
   每次切换都销毁重建 iframe，不会积累。补丁 11 的 `clear_js_listeners()` 只剩看门狗整页重载时调用。
-- **可见事件**：网页壁纸只能监听 `wpe-web.json` 作用域里的四个事件（`wallpaper-ping`、`setting-change`、`image-changed`、
-  `images-change`，tauri 补丁 15），其它事件名（如 `images-added`）`listen` 被 ACL 拒绝；垫片新增监听要同步改 capability。
-  命令层只开拉取状态与 ping 应答两个命令。
+- **可见事件**：网页壁纸只能监听 `wpe-web.json` 作用域里的 `wallpaper-ping` 与场景宿主用的 `wpe-scene-clear-storage`（tauri 补丁 15），
+  其它事件名（`setting-change`、`images-added` 等）`listen` 被 ACL 拒绝；垫片新增监听要同步改 capability。命令层只开 ping 应答与
+  音频 / 媒体订阅；iframe 拿不到属性状态。
 - **不做**（后续 Phase）：暂停冻结与 `setPaused`、`fps`；音频与媒体数据（Phase 8，数据回程沿用 `listen`）；Web 发布版 /
   Android / macOS / Linux 不渲染网页壁纸。
 - **待真机确认**（Windows）：iframe 统一后的整条链路见 `versions/latest/regression.md`「frame 级 IPC（tauri 补丁 18–19）」。
@@ -885,15 +894,15 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 ### 用户属性（第二阶段 Phase 7）
 
-`x-wpe/web` 的用户改动存于该图片 metadata 顶层的 `userProperties` 对象，只保存与作者默认值不同的键。写命令 `set_wpe_web_user_properties` 在 `Storage::rewrite_image_metadata` 的单个事务中读取旧数据、插入新 metadata 行、只改指这张图片并清理无引用旧行；搜索词映射、插件信息和模板沿用旧行。提交后广播 `metadataId` 字段补丁。`get_wpe_web_properties` 返回有序、已本地化的属性视图；桌面与预览的状态拉取按「作者默认值 + 用户值」组装。
+`x-wpe/web` 的用户改动存于该图片 metadata 顶层的 `userProperties` 对象，只保存与作者默认值不同的键。写命令 `set_wpe_web_user_properties` 在 `Storage::rewrite_image_metadata` 的单个事务中读取旧数据、插入新 metadata 行、只改指这张图片并清理无引用旧行；搜索词映射、插件信息和模板沿用旧行。提交后广播 `metadataId` 字段补丁。`get_wpe_web_properties` 返回有序、已本地化的属性视图；父页面取的推送状态（`wpe_web_get_state`）按「作者默认值 + 用户值」组装。
 
 带作者 `step` 的滑块，拖动与输入框键入的值都对齐到 `min + k×step`（缺 `min` 从 0 起算）：前端 `KbNumber` 的 `stepStrictly` 提交前对齐，后端 `apply_changes` 写入前再对齐一次，外部写入也得到同样的值；作者默认值不对齐，没有用户值时页面拿到原值。
 
 预览右栏和设置页「当前壁纸」对网页与场景壁纸都可打开属性面板（场景与网页同一格式，后端 `has_user_properties`；面板对场景隐藏 `file` / `directory`，场景渲染器不读它们；场景特有的 `scenetexture` 只在场景上显示，网页壁纸上没有这一类，见下）。面板本地草稿立即改变显示条件，300ms 防抖后串行提交；同张图片的 `metadataId` 补丁和界面语言变化触发重读。条件由受限解释器处理字面量、运算、三元、数组、`<key>.value` 及五个字符串 / 数组方法；不认识的条件默认显示，不执行任意脚本。属性说明和标签经 HTML 白名单净化。
 
-`file` 与 `directory` 仅使用用户所选路径；无作者默认值时清空路径会删除该用户键，垫片向页面补发空路径以撤销旧值。core 生成文件 / 目录放行项（`user_file_grants`），网页壁纸目录索引按这张壁纸当前的 metadata **覆盖**它的放行（`metadataId` 补丁到达时、`wpe_web_pull_state` 返回前各写一次，见上「网页壁纸目录索引」）：改了目录属性，旧目录立即不可读；另一张网页壁纸读不到这张的用户选择。预览与桌面共用这套闸门。目录属性递归列举浏览器安全的媒体文件，最多 10000 个；垫片对 `fetchall` 发送文件增删回调，对 `ondemand` 随机返回一个文件。
+`file` 与 `directory` 仅使用用户所选路径；无作者默认值时清空路径会删除该用户键，垫片向页面补发空路径以撤销旧值。core 生成文件 / 目录放行项（`user_file_grants`），网页壁纸目录索引按这张壁纸当前的 metadata **覆盖**它的放行（`metadataId` 补丁到达时、`wpe_web_get_state` 返回前各写一次，见上「网页壁纸目录索引」）：改了目录属性，旧目录立即不可读；另一张网页壁纸读不到这张的用户选择。预览与桌面共用这套闸门。目录属性递归列举浏览器安全的媒体文件，最多 10000 个；垫片对 `fetchall` 发送文件增删回调，对 `ondemand` 随机返回一个文件。
 
-场景的 `scenetexture`（用户纹理，P11b；渲染一侧见 [WPE_SCENE.md](WPE_SCENE.md)「用户纹理（P11b）」）：`WpePropKind::SceneTexture`，面板用和 `file` 相同的文件选择与清空按钮。`project.json` 里没有 `filter`，过滤固定为 WPE 那一条（`jpg jpeg jfif png gif mp4`，`SCENE_TEXTURE_EXTENSIONS`），所以没有「WPE 收、浏览器解不了」的格式。校验同 `file`（绝对路径、是文件、不是符号链接，空串表示清空）；存之前照 WPE 整理路径（`wpe_slash_path`：`\` 换成 `/`、非开头的连续 `/` 合并，UNC 的开头 `//` 保留，不拷贝、不改大小写）。`user_file_grants` 同样收它：网页壁纸目录索引的场景条目除目录外再存这些文件，`scene_grants` 一起返回给场景宿主的访问范围，覆盖时机同上两处（`wpe_web_pull_state` 的场景分支返回前也写）。宿主是一份文档，放行对全部场景宿主实例生效；文件都是用户自己选的。`usershortcut` 不进放行：它不读文件，图标与启动都在后端。
+场景的 `scenetexture`（用户纹理，P11b；渲染一侧见 [WPE_SCENE.md](WPE_SCENE.md)「用户纹理（P11b）」）：`WpePropKind::SceneTexture`，面板用和 `file` 相同的文件选择与清空按钮。`project.json` 里没有 `filter`，过滤固定为 WPE 那一条（`jpg jpeg jfif png gif mp4`，`SCENE_TEXTURE_EXTENSIONS`），所以没有「WPE 收、浏览器解不了」的格式。校验同 `file`（绝对路径、是文件、不是符号链接，空串表示清空）；存之前照 WPE 整理路径（`wpe_slash_path`：`\` 换成 `/`、非开头的连续 `/` 合并，UNC 的开头 `//` 保留，不拷贝、不改大小写）。`user_file_grants` 同样收它：网页壁纸目录索引的场景条目除目录外再存这些文件，`scene_grants` 一起返回给场景宿主的访问范围，覆盖时机同上两处（`wpe_web_get_state` 返回前也写）。宿主是一份文档，放行对全部场景宿主实例生效；文件都是用户自己选的。`usershortcut` 不进放行：它不读文件，图标与启动都在后端。
 
 场景的 `usershortcut`（快捷方式，P11d；图标、门禁与启动见 [WPE_SCENE.md](WPE_SCENE.md)「快捷方式（P11d）」）：
 - **面板**：`WpePropKind::UserShortcut`，只在场景、只在 Windows 上显示（`WpeShortcutField.vue`）。
@@ -903,7 +912,7 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
   - 拆参数照 WPE（`parse_user_shortcut`）：`file` 在第一个 `|` 处拆成「路径 | 参数」，`cmd` 在第一个空格处拆成「程序 参数」；拆完路径为空不收。
   - `web` 不以 `http://`、`https://`、`www.`、`steam://` 开头时，存之前补 `https://`（区分大小写，照 WPE 面板的 JS）。
   - WPE 的值中间还有一段 6 位本机哈希，用来拒绝别的机器上配的值。我们的值只来自本机面板，不复刻这一段。
-- **交给场景宿主的**：`wpe_web_pull_state` 的场景分支不给原值，给 `{ value: 原值 SHA-256 的前 16 位十六进制, isbound, commandtype?, file? }`（`scene_user_from_view`）。完整路径不离开后端；非 Windows 时 `isbound` 一律为假。
+- **交给场景宿主的**：`wpe_web_get_state`（由 `WpeSceneView` 推给宿主）不给原值，给 `{ value: 原值 SHA-256 的前 16 位十六进制, isbound, commandtype?, file? }`（`scene_user_from_view`）。完整路径不离开后端；非 Windows 时 `isbound` 一律为假。
 - **网页壁纸**不读这类属性，面板也不显示。
 
 ### 壁纸设置与预览设置
@@ -953,7 +962,7 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 - **场景四项怎么到宿主**：父页面经 postMessage 下发（`kabegame:wpe-scene-settings`，见 [WPE_SCENE.md](WPE_SCENE.md)「场景后处理档位」），
   壁纸窗口传全局值，预览传预览设置；宿主不再自己读全局设置。
 - **帧率**（整数或 `"follow"`，默认 30）：范围 10 到显示器最高刷新率（`get_display_max_refresh_rate`，同 WPE 滑块的
-  `runtime.frequencymax`），「跟随 WPE」是滑块上方的开关。它不走上面的 postMessage：生效值由 `wpe_web_pull_state` 按调用方窗口
+  `runtime.frequencymax`），「跟随 WPE」是滑块上方的开关。它不走上面的设置 postMessage：生效值由 `wpe_web_get_state` 按调用方窗口
   取全局或预览设置、解析跟随（WPE `config.json` 只读一次）后放进 `general.fps`，垫片经 `applyGeneralProperties` 同时交给网页壁纸与
   场景宿主，场景就地改限帧（见 [WPE_SCENE.md](WPE_SCENE.md)「帧率」）。
 
@@ -974,8 +983,8 @@ WPE 行的 `thumbnail_path` 默认是作者目录里的 `preview.*`，场景的�
 WPE 的音频与媒体数据是「页面登记、宿主推送」：页面调 `wallpaperRegisterAudioListener` / `wallpaperRegisterMedia*Listener`
 之后才开始收数据。垫片在页面第一次登记某类监听时调 `wpe_web_media_subscribe({ kind: "audio" | "media", channel })`，
 交出一个 Tauri Channel（手写 `{ message, index }` 序号协议，乱序先存、按序投递），之后每类监听都从这条 Channel 回调；
-媒体每类缓存最后一条，晚登记的回调补一次。预览（主窗口）与桌面（壁纸窗口）的 iframe 走同一条路，命令同
-`wpe_web_pull_state` 按 `CallerOrigin` 经网页壁纸目录索引认出是哪张；`audio` 只对 `general.supportsaudioprocessing: true`
+媒体每类缓存最后一条，晚登记的回调补一次。预览（主窗口）与桌面（壁纸窗口）的 iframe 走同一条路，命令按
+`CallerOrigin` 经网页壁纸目录索引认出是哪张；`audio` 只对 `general.supportsaudioprocessing: true`
 的壁纸放行（照 WPE），被拒时页面永远收不到音频回调，与 WPE 一致。不用全局事件：每秒 30 帧的频谱不进事件系统，
 tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
 
@@ -1067,10 +1076,10 @@ Chromium 就不建媒体键监听器。于是：
 - 导入 `video`、`web` 与 `scene`；`application` 只占位并计入跳过。场景壁纸目前只有少数能实时渲染（P1：eagleflag、deep_space、beach），其余在预览、应用背景与桌面显示作者预览图。
 - 网页壁纸接收作者默认值与逐壁纸用户值（`applyUserProperties`）及界面语言与帧率（`applyGeneralProperties({ language, fps })`，
   帧率见上「壁纸设置与预览设置」；只是告诉页面，Kabegame 不限网页自己的刷新，WPE 改帧率时会重启网页壁纸的 CEF 进程）；
-  `setPaused` 尚未实现。目录内容不监视，下次状态拉取时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
+  `setPaused` 尚未实现。目录内容不监视，下次父页面重取状态时更新。音频与媒体数据见上「音频与媒体集成」：频谱算法与
   WPE 不同、观感靠调参；封面颜色格式官方未写，暂用 `rgb()`（取值算法 P11c 起同 WPE）；回环会采到 Kabegame 自己的声音（与 WPE 一致）。
-- 网页壁纸只能监听四个事件（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开 `wpe_web_pull_state`、
-  `wallpaper_pong` 与 `wpe_web_media_subscribe`。
+- 网页壁纸只能监听 `wallpaper-ping` 与 `wpe-scene-clear-storage`（`wpe-web.json` 的 `allow-listen` 作用域），应用命令只开
+  `wallpaper_pong` 与 `wpe_web_media_subscribe`；属性由父页面推送。
 - 网页壁纸页面里跨源 `http(s)` 请求仍受 CORS 约束（WPE 是全局 `--disable-web-security`，Kabegame 不放开）；
   壁纸样式 / 倍速对网页壁纸不生效；桌面与预览都只注入鼠标移动与左键，无键盘 / 滚轮 / 右键（预览里右键弹应用的菜单），见「鼠标」。
 - 图库预览与桌面的网页壁纸 iframe 顶层都是应用页，Chromium 按顶层站点分区存储，两处 `localStorage` / `indexedDB` 是**同一分区、
@@ -1117,8 +1126,8 @@ Chromium 就不建媒体键监听器。于是：
   `composables/useImageOperations.ts`（下载 / 复制兜底）、`components/image/ImageContent.vue`（拖出：桌面写 image id、Web 写 `DownloadURL`，见 Phase 6d）、
   `components/common/ImagePluginDescriptionPanel.vue`（opaque origin + `DESCRIPTION_CSP`）、`src-tauri/kabegame/src/http_server.rs`
   （删除 `/proxy`）
-- 运行时垫片与宿主协议：`src-tauri/kabegame/src/webview_js/wpe_shim.js`、`commands/wpe_web.rs`（`WpeWebState`、
-  `wpe_web_pull_state` / `caller_document`、`remote.urls` 匹配单测）、`capabilities/wpe-web.json`、`permissions/wpe-web.toml`、
+- 运行时垫片与宿主协议：`src-tauri/kabegame/src/webview_js/wpe_shim.js`、`components/wallpaper/wpeWebState.ts`、
+  `composables/useWpeStateDelivery.ts`、`commands/wpe_web.rs`（`WpeWebState`、`wpe_web_get_state` / `caller_document`、`remote.urls` 匹配单测）、`capabilities/wpe-web.json`、`permissions/wpe-web.toml`、
   `kabegame-core/src/wpe/properties.rs`（`resolve_web_user_props` / `wpe_language_code`）、
   音频与媒体：`src-tauri/kabegame/src/wpe_media/{mod.rs,spectrum.rs,audio.rs,media.rs,colors.rs}`、`commands/wpe_web.rs`
   （`wpe_web_media_subscribe`）、`lib.rs`（`on_webview_event` / `WindowEvent::Destroyed` 释放）、`commands/settings.rs`
