@@ -1,6 +1,7 @@
 import { collectAnimations, collectObjectAnimations, settleConstantAnimation } from "./animations";
 import { alignmentIndex } from "./alignment";
 import { compileBloom, type SceneBloom } from "./bloom";
+import { compileEmitterImages, type SceneEmitterImagePasses } from "./emitterImages";
 import {
   BindingCollector,
   CAMERA_DEFAULTS,
@@ -967,6 +968,11 @@ export interface SceneBundle {
    * 有链不等于开着：当前开不开看 `SceneState.bloomEnabled`，关着时渲染路径同样与 P2a 相同。
    */
   bloom: SceneBloom | null;
+  /**
+   * 发射图候选表的降采样材质（P4j 步骤 2a，`emitterImages.ts`）：场景里有粒子系统绑上了 `layerimage` 的发射图依赖时才写（没有时不带这一项，
+   * 别的场景字节不变）；`masked` 只在有任何依赖带 `mask` 时编。
+   */
+  emitterImagePasses?: SceneEmitterImagePasses;
   /**
    * 平面反射 RT（P13b1，`_rt_Reflection`）：只有模型的网格材质读它时 WPE 才建这张 RT，才有反射 pass（rea-p13-passes 1.1、1.4）；
    * 只有图像层 / 粒子读它时 WPE 不建，那一槽绑的是棋盘格占位（编译期已改成静态纹理，不记这个键）。`compileScene` 在有模型读时才写。
@@ -2138,6 +2144,10 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       if (slot && slot.mask) maskTexture = (await getTexture(slot.mask, null))?.index ?? null;
       particle.emitterImages.push(slot ? { ...slot, maskTexture } : null);
     }
+    // 运行中新建的粒子对象（片段编译，`finalize` 之后）若是场景里第一个用发射图的：场景级的降采样材质已经定稿、片段不带场景级增量，
+    // 渲染器没有 pass 可用，整张照报。
+    // TODO:[WPE_SCENE] 片段编译补场景级 pass（`emitterImagePasses` 作只增的场景级增量，同 `addProgram` 的程序增量），随 L 系列的增量协议一起做
+    if (finalized && bound.some(Boolean) && !bundle.emitterImagePasses) unsupported.add("particle:layerimage:runtime");
     await compileParticleMaterial(system, particle, flags, key);
     if (!nested || !Array.isArray(system.children)) return particle;
     for (const [n, raw] of system.children.entries()) {
@@ -3617,6 +3627,22 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         for (const child of system.children) referenced(child.system);
       };
       referenced(layer.particle);
+    }
+    // 发射图候选表的降采样材质（P4j 步骤 2a）：有任何粒子系统（含子系统）绑上了发射图依赖时才编；有 `mask` 时多编一个变体
+    {
+      let bound = false;
+      let masked = false;
+      const scan = (system: SceneParticle): void => {
+        for (const slot of system.emitterImages) {
+          if (!slot) continue;
+          bound = true;
+          if (slot.mask) masked = true;
+        }
+        for (const child of system.children) scan(child.system);
+      };
+      for (const layer of bundle.layers) if (layer.particle) scan(layer.particle);
+      if (bound && !settled())
+        bundle.emitterImagePasses = await compileEmitterImages({ fs, shader, unsupported, addProgram }, masked);
     }
     // 反射（P13b1）。设置解析成「反射开」一个布尔：跟随时读 WPE `config.json` 的 `general.user.reflection`，只在有读者时才读
     if (reflectionReaders.length || mipReaders) {

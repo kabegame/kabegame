@@ -345,3 +345,239 @@ emitterImages: ({ id: number; mask: string; maskTexture: number | null } | null)
   - `cocs/wpe/WPE_SCENE.md`「图层依赖」：被依赖一行补粒子的那套，照报一行去掉 `particle:dependencies`；
   - changelog 一行；
   - 回归「场景壁纸 P4j」J0–J3。
+
+**用户 2026-11-21：** 步骤 1 可以提交（`82e63fa0`），开始步骤 2。
+
+## 步骤 2 — 运行时的候选表
+
+### 总体设计思路
+
+WPE 的候选表要走「过门 → 渲染拷贝 → 读回建表」三步（rea 2.1）。三步都在**发射调用里**同步推进：第 2 步在更新阶段把被依赖图层合成 RT 里**上一帧末的画面**降采样、拷进 staging；第 3 步同步 `Map` 读回。我们的模拟在 CPU 上同步跑，WebGPU 读回只能异步，所以把「GPU 画面」和「状态机」拆开。
+
+**快照（GPU，`render/emitterImages.ts`）。** 每帧编码的末尾，对需要快照的记录做三件事：
+- 用 WPE 原件 `downsample_quarter`（`WRITEALPHA = 1`，有 `mask` 再加 `OPACITYMASK = 1`）把被依赖图层的独占 RT 画到 `w4 × h4` 的 RGBA8；
+- `copyTextureToBuffer` 进一块可读的缓冲；
+- 提交之后 `mapAsync`，读完把紧凑的像素存成这条记录的「最新快照」。
+
+这正是「本帧末的合成 RT」，也就是下一帧更新阶段 WPE 降采样时读到的内容。需要快照的记录：
+- 状态还没到 2 的；
+- 带 `0x20000` 的；
+- 合成 RT 尺寸变了的。
+
+**状态机（纯 TS，`particles/layerImage.ts`）。** 照 2.1 逐条：门、状态 0 / 1 / 2、同一帧不连做、共享记录、尺寸变了回 0、`0x20000` 的重建。
+- 状态 0 那次调用不再「当场渲染」，改为**锁定快照**：
+  - 上一帧末有快照就锁它；
+  - 没有就锁「本帧末的那份」。这种情况只出在加载后的第一帧：预热在加载时就过了门，WPE 的第一帧更新读的是加载那一帧画出的内容，我们没有那一帧。
+- 状态 1 的调用：锁定的快照已读回就在 CPU 上建表（列优先、alpha ≥ 127、坐标照 2.3 的 float32 截断），进状态 2；
+  - 还没读回就留在状态 1、返回假，下一个发射帧再试。
+  - WPE 这里是阻塞等 GPU。产品里表晚到就晚几帧开始发射，记为已知差异。
+
+**确定性。** dev 探针的逐帧回放在每帧提交之后等读回完成（`replayEncoded` 改成异步），保证同一帧里「0 → 1 → 2」（共享记录、后调用的接着推进，`p4j-li-xform` 实测）和 WPE 一样当帧成立；产品靠帧间隔，`mapAsync` 通常一帧之内就回来。
+
+步骤 2 里系统仍不生粒子：发射循环只在要发的帧（`n > 0`）调一次取表，推进状态机与 `0x20000` 计时；出生点是步骤 3。验收靠 dev 探针读出每条记录的表，和 `ignore/p4/j0/model.py` 的预测逐项比（`p4j-li-map`、`p4j-li-large`）；状态机的时序用单测按 WPE 实测的计数核对（无预热丢 2 个发射帧、有预热丢 1 个、共享记录后调用的早一帧）。
+
+### 现状锚点
+
+**a. 发射循环**（`particles/system.ts`，步骤 1）
+```ts
+for (const emitter of this.emitters) {
+  const count = emissionCount(…);
+  if (emitter.state.periodStarted) { … }
+  if (emitter.name === "layerimage") continue;   // 现状：一直当作没有表
+  for (let n = 0; n < count; n++) this.spawn(emitter);
+}
+```
+
+**b. 绑定**（`compile/particles.ts`，步骤 1）
+```ts
+emitterImages: ({ id: number; mask: string; maskTexture: number | null } | null)[];   // 现状：编译期定，运行时没人读
+```
+
+**c. 帧号与步进**（`render/scene.ts`）
+```ts
+stepParticles(frametime, time, state?, cursor?) {
+  this.sheetFrameNo++;            // 现状：WPE ctx+0x144，每帧开头加 1；预热在建树时，帧号为 0
+  if (!(frametime > 0)) return;
+  … root.step(frametime, time, tree.inputs) …
+}
+private readonly layerTargets = new Map<number, RenderTarget>();   // 现状：被依赖图层的独占 RT，按 objects 下标
+```
+
+**d. 泛光的原件材质**（`compile/bloom.ts`）：`materials/util/*.json` 经 `parseMaterial` + 翻译器编成 `ScenePass`，放在 `bundle.bloom.passes`，渲染器在 `render/bloom.ts` 里画。
+
+**e. 探针的逐帧回放**（`dev/particleCorners.ts`）：`replayReadback` / `replayEncoded` 是同步循环，前 n − 1 帧每帧 `encodeFrame(i)`（编码并提交），帧之间不让出事件循环。
+
+### 2a — 状态机、绑定到系统、降采样材质（纯 TS 与编译期）
+
+**点 1 — 候选表的状态机（新文件 `particles/layerImage.ts`）**
+
+- **新增**
+```ts
+/** 候选表（rea 2.3）：列优先，每项一个像素。x / y 是 int16（合成 RT 像素，原点在中心，y 向下），rgb 是降采样后的 8 位值。 */
+export interface EmitterImageTable {
+  count: number;
+  x: Int16Array;
+  y: Int16Array;
+  rgb: Uint8Array;        // 3 × count
+}
+
+/** 一次快照：降采样后紧凑的 RGBA8（w4 × h4，行优先）与源合成 RT 的尺寸。 */
+export interface EmitterImageSnapshot {
+  pixels: Uint8Array;
+  w4: number;
+  h4: number;
+  /** 合成 RT 的宽高（u16），`s` 与坐标偏移用。 */
+  width: number;
+  height: number;
+}
+
+/** 按 2.2 / 2.3 建表：s = f32(W) / f32(w4)，hs = s·0.5，x 外层 y 内层，alpha < 127 跳过，坐标 cvttss2si 的截断。 */
+export function buildEmitterImageTable(snapshot: EmitterImageSnapshot): EmitterImageTable;
+
+/** 2.2 的尺寸：大于 3840×2160 先按宽高比压，w4 = max(2, W'/4)，h4 = max(2, H'/4)（有符号整除）。 */
+export function emitterImageSize(width: number, height: number): { w4: number; h4: number };
+
+/**
+ * 一条记录（rea 1.6）：按 (图层 id, mask) 共享。状态机照 2.1：
+ * - 图层不存在、不是图像层、没有独占 RT：返回 null，不过门；
+ * - 门：started 为假或 startFrame === frame 时记 started、startFrame = frame，返回 null；
+ * - 状态 0：锁定快照（上一帧末有就锁它，否则锁本帧末的那份），进状态 1；返回旧表（没有为 null）；
+ * - 状态 1：锁定的快照已到就建表、记下 W / H，进状态 2、返回表；没到就返回旧表（同 WPE 重建期间照用旧表；第一次时为 null）；
+ * - 状态 2：当前合成 RT 尺寸和建表时不同就回状态 0；返回表（表为空时返回 null，同 WPE「表非空才发」）。
+ */
+export class EmitterImageRecord { … }
+
+/** 场景里全部记录与快照的来源（渲染器实现 GPU 那半，单测用假的）。 */
+export interface EmitterImageSource {
+  /** 第 frame 帧、某个发射器取表（`n > 0` 的帧才调）；返回可用的表或 null。 */
+  acquire(binding: { id: number; mask: string }, frame: number): EmitterImageTable | null;
+  /** `0x20000` 计时过 1 时调（2.5）：记录状态不是 1 就置 0。 */
+  refresh(binding: { id: number; mask: string }): void;
+}
+```
+- 头注释写明 2.1–2.5 的对应、「锁定快照」代替「当场渲染」的理由，以及产品里表晚到的已知差异。
+
+**点 2 — 发射循环接上取表（`particles/system.ts`、`emitters.ts`）**
+
+- **新增**：`ParticleSystem` 的构造选项 `emitterImages?: EmitterImageSource`，子系统与事件实例沿用父的（同 `audio` 经 `link` 传下去）。每个 `layerimage` 发射器在建系统时按序号取到自己的绑定（`def.emitterImages[k]`）。
+- **修改**：发射循环在 `count > 0` 时：
+  - `0x20000`：`timer = f32(dt' + timer)`；`timer > 1` 时 `timer = timer % 1`（`fmodf`），再 `refresh(binding)`；
+  - `acquire(binding, frame)`（帧号由渲染器经 `setEmitterImageFrame` 或步进参数给，预热时为 0）；
+  - 照旧 `continue`，不生粒子（步骤 3 才生）；`count === 0` 的帧什么都不做（2.5、3.1：非发射帧不动状态）。
+- 计时器放进发射器状态（`EmitterState` 加一个可选字段，或 `layerimage` 专用的状态），复位规则同 WPE（解析时 0）。
+
+**点 3 — 降采样材质（`compile/emitterImages.ts`，新）**
+
+- 照 `compile/bloom.ts`：场景里有任何绑上的 `layerimage` 时，编 `materials/util/downsample_quarter.json` 的两个变体：
+  - `WRITEALPHA = 1`；
+  - 有任何 `mask` 时，另编 `WRITEALPHA = 1` + `OPACITYMASK = 1`。
+  - 进 `bundle.emitterImagePasses: { plain?: ScenePass; masked?: ScenePass }`，缺材质照报 `material:missing:…`。
+- 引擎 uniform `g_Texture0Texel` 由渲染器按合成 RT 尺寸写；不读 `g_RenderVar0`。读码 2.2 写了槽 0 合成 RT、槽 1 `mask`。
+
+**2a 的测试（`particles/layerImage.test.ts`、`compile/p4j2.test.ts`）**
+- `emitterImageSize`：
+  - 96×64 → 24×16；4025×2460 → 883×540；
+  - 3840×2160 不压；5000×1000 → 3840×768 → 960×192；1×1 → 2×2。
+- `buildEmitterImageTable`：
+  - 手写 4×4 快照，核对列优先、alpha 126 / 127、坐标的截断与 y 用 x 方向的 `s`；
+  - 用 `ignore/p4/j0/model.py` 对 `map_mask()` 的预测作夹具，逐项相同（夹具 JSON 进 `particles/fixtures/`）。
+- 状态机（假快照源）：
+  - 无预热：第 1 个发射帧过门、第 2 个锁定、第 3 个出表，前两帧返回 null；
+  - 有预热（帧号 0 过门）：第 1 帧锁定「本帧末」、第 2 帧出表；
+  - 两个发射器共享记录：同一帧里后调的接着推进，早一帧出表；
+  - 快照没到：留在状态 1、下一帧再试；
+  - 尺寸变了回状态 0、期间返回旧表；`refresh` 在状态 1 时不动；
+  - 空表返回 null；图层不存在不过门。
+- 系统：`layerimage` 系统 `count > 0` 的帧才调 `acquire`，`0x20000` 的计时（`fmodf`、严格大于 1）。
+- 编译：有绑定时 bundle 带两个 pass（有 `mask` 时），没有时不带。
+
+### 2b — GPU 快照与读回、探针
+
+**点 4 — GPU 快照（`render/emitterImages.ts`，新；`render/scene.ts` 接线）**
+
+- **新增** `GpuEmitterImages implements EmitterImageSource`：
+  - 建场景时按全部系统（含子系统）的 `emitterImages` 建记录（按 `(id, mask)` 去重），找到 `id` 对应的图像层（`layer.object`）；
+  - `encode(encoder)`：在 `GpuScene.encode` 的最末尾（全部图层画完之后），对需要快照的记录：
+    - 用 `bundle.emitterImagePasses` 把 `layerTargets.get(object)` 的颜色纹理画到 `w4 × h4` 的 `rgba8unorm`（采样器照这个图层的 `compositeSampling`；槽 1 绑 `mask` 纹理）；
+    - `copyTextureToBuffer` 进 `MAP_READ` 缓冲（`bytesPerRow` 按 256 对齐，读的时候去掉行尾填充）；
+  - `afterSubmit()`：对本帧拷过的缓冲 `mapAsync`，完成后转成紧凑像素交给记录，作为「最新快照」；
+  - `settled(): Promise<void>`：等全部在途的读回（探针用）。
+- **修改** `GpuScene`：
+  - 构造时建 `GpuEmitterImages`，交给建树（预热之前）；
+  - `stepParticles` 把帧号交给它；
+  - `encode` 末尾调它的 `encode`；
+  - 新增 `afterSubmit()` 转调。
+- **修改** 渲染器（`render/renderer.ts`）与探针的每个 `queue.submit` 之后调 `scene.afterSubmit()`。
+- 缓冲与目标按记录复用，尺寸变了重建；释放场景时销毁。
+
+**点 5 — 探针（`dev/particleCorners.ts`、`dev/probe.ts`）**
+
+- **修改** `replayEncoded` / `replayReadback` 改成 `async`：`encodeFrame` 可以返回 Promise，每帧 `await`。
+- 探针的 `encodeFrame`：提交 → `scene.afterSubmit()` → `await scene.emitterImagesSettled()`。
+- 调用点（`probe.ts`、`particleCorners.ts` 内部）与三个测试文件（`replayAnimations.test.ts`、`replayEncoded.test.ts`，以及别处的调用）跟着改 `await`。
+- **新增** 宿主探针 `host.emitterImages()`：每条记录的 `id`、`mask`、状态、`W` / `H`、`w4` / `h4`、表项数，以及按 `includeEntries` 给出全部表项 `[x, y, r, g, b]`，供和 `model.py` 比。
+
+**2b 的验收**
+- 单测：`replayEncoded` 异步化后原有用例照过；`GpuEmitterImages` 的去重、需要快照的判定、行尾填充去除（假设备或纯函数部分）。
+- dev 实测（Claude）：`p4j-li-map`、`p4j-li-large` 导入 dev（`projects_import`），屏外宿主回放若干帧（强制渲染），`host.emitterImages()` 的表和 `model.py` 的预测逐项相同；表出现的帧号和单测的时序一致。
+- tsc、相关 vitest、Prettier；变异：
+  - 不锁定快照（状态 0 直接用最新的）；
+  - 行优先建表；
+  - 阈值 128；
+  - `s` 按 y 方向；
+  - 不去行尾填充；
+  - 回放不等读回。
+- 语料扫描不变（步骤 2 不改能力表）。
+
+### 2a 实施记录（2026-11-21）
+
+执行代理（sonnet）实现，Claude 验收时改了一处。
+
+- **更正：`0x20000` 计时器的位置。**
+  - 代理把计时器放在共享的依赖记录上；反编译里是 `pcVar10 + 0x7c`，`pcVar10` 是**发射器记录**（同记录 `+0x78` 是槽号）。所以计时器每个发射器各一个，共享的只是被它重置的那张表。
+  - 放在共享记录上的话，两个发射器共用一条依赖时会累加成两倍速。
+  - 改成发射器上的 `imageTimer`：严格大于 1 时取 `fmodf`、调共享记录的 `refresh`。接口里的 `tick` 换成 `refresh`。
+  - 补了「两个发射器共享一条记录，各自计时」的用例。
+- **其余照计划做的：**
+  - `particles/layerImage.ts`：状态机；`ScriptedEmitterImageView` 给单测与 Node 回放用。
+  - `ParticleSystem.setEmitterImages` / `setEmitterImageFrame`：只在根上起作用，子系统沿 `parent` 找根。
+  - `compile/emitterImages.ts` 与 `SceneBundle.emitterImagePasses`。
+  - 运行中新建的、场景里第一个用发射图的粒子对象报 `particle:layerimage:runtime`：片段没有场景级增量通道，同 `bloom`；代码里标了 `TODO:[WPE_SCENE]`。
+  - `p4f4.test.ts` 的粒子键清单补 `emitterImages`：步骤 1 漏了这个断言，那时没跑这个文件。
+- **测试：**
+  - `layerImage.test.ts` 22 例、`p4j2.test.ts` 7 例，`src/particles` 全目录与相关编译测试全过，tsc 0 error，Prettier 通过。
+  - `compile/materialValues.test.ts`（7 个）与 `compile/pipeline.test.ts`（1 个）失败，但在 HEAD（`82e63fa0`）和它的前一个提交（`82176594`，不含 P4j）的快照上同样失败。是别的会话的 P11e / BC7 提交带来的，和 P4j 无关。
+
+### 2b 实施记录（2026-11-21）
+
+执行代理（sonnet）实现，Claude 独立验收。
+
+**实现**
+- `render/emitterImages.ts`：`GpuEmitterImages`。
+  - 每条记录一个降采样目标与 bind group；uniform 用泛光链同一套内置量，`g_Texture0Texel` 按合成 RT 尺寸算。
+  - 读回缓冲按大小池化，`unmap` 之后才还池。
+  - 纯逻辑拆成可单测的函数：`compactRows`、`needsSnapshot`、`SnapshotLedger`。
+- `GpuScene`：建树后、预热之前把来源交给根；`stepParticles` 写帧号；`encode` 最末尾拍快照；新增 `afterSubmit` / `emitterImagesSettled` / `emitterImageRecords`。
+- 渲染器与探针的每次提交之后都调 `afterSubmit`；`replayEncoded` / `replayReadback` 改成异步，探针每帧等读回。
+- 宿主探针 `host.emitterImages()`。
+
+**和计划的出入**
+- **只拍过门之后的记录**：从没过门的不读回。门在更新阶段、早于本帧编码，所以第一个发射帧末就开始拍，下一个发射帧的状态 0 正好锁到它。
+- **找图层用 `SceneLayer.id`**：就是 JSON id，同独占 RT 的命名。
+- **`mask` 纹理读不到时退回不带遮罩的变体。**
+- **预热时 `layerTargets` 已经有独占 RT**：`populate` 先放独占 RT 再建树，没有改顺序。
+- **mask 纹理要上传**：没有图层材质引用它，代理在 `uploadableTextures` 里补了。
+
+**验收**
+- **测试**：相关 54 个文件 1281 过，tsc 0 error。
+  - 新增：`render/emitterImages.test.ts` 16 例；`layerImage.test.ts` 补了「取了 `fmodf` 之后不再重建」一帧，原来的用例走的帧数不够，计时不取余的变异漏检。
+  - Prettier：改动的文件都通过。`scene.ts` 有一行没格式化，那行在 HEAD 里就有、不在本步的块里，没动。
+- **变异**（`ignore/p4/j2/mutate_j2.py`）：7 处全部检出。「回放不等读回」只有 GPU 实测能检出，没列进去。
+- **dev 实测**（图库预览，强制渲染，产品路径的异步读回）：
+  - `p4j-li-map`：36 项和 `model.py` 的预测逐项相同。
+  - `p4j-li-large`：8381 项的位置与顺序逐项相同（坐标的 SHA-256 一致）。颜色只有边缘两档不同：我们是 127 / 64，模型是 128。0.5 × 255 = 127.5 在舍入分界上，模型的 numpy 取了 128；WPE 抓帧里这两档的粒子颜色是 127，和我们一致。
+  - 探针按 WPE 时间线回放 `p4j-li-map` 201 帧（每帧等读回）正常走完。
+- **语料**：缺省 233 张 0 变化。
+- **别的会话带来的已有失败**，和 P4j 无关：
+  - `compile/materialValues.test.ts` 7 个、`compile/pipeline.test.ts` 1 个：HEAD（`82e63fa0`）与不含 P4j 的 `82176594` 的快照上同样失败；
+  - `render/render.test.ts` 1 个（BC3 行跨度）、`render/p3a.test.ts` 2 个（泛光脏项）：HEAD 快照上同样失败（只在 HEAD 上跑过；P4j 步骤 1 没碰 `render/`）。

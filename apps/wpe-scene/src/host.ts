@@ -61,6 +61,7 @@ import { reasonsOf, SceneRenderError, SceneRenderer } from "./render";
 import { emptyCursorInput, type CursorInputSnapshot } from "./render/cursor";
 import { canvasSize, type SceneStyle } from "./render/layout";
 import { ScreenResolution } from "./render/screenResolution";
+import type { EmitterImageProbe } from "./render/emitterImages";
 import { uploadableTextures, visibleObjects } from "./render/scene";
 import { SceneState, type SoundValues } from "./render/state";
 import { daytimeOf } from "./render/uniforms";
@@ -2093,6 +2094,15 @@ export class SceneHost {
   /** dev 探针（P9a）：每段视频的位置、`currentTime`、`paused`、`lastDrawn`、`fresh`、`failed`、尺寸与丢帧数；没有视频时为空。 */
   videos(): SceneVideoProbe[] {
     return this.sceneVideos?.probe() ?? [];
+  }
+
+  /**
+   * dev 探针（P4j 步骤 2b）：`layerimage` 发射器候选表的每条记录——`id`、`mask`、状态（0 待渲染 / 1 待读回 / 2 有表）、是否过了门与过门的帧号、
+   * 建表时的合成 RT 尺寸、降采样尺寸 `w4 × h4`、表项数；`includeEntries` 时另带全部表项 `[x, y, r, g, b]`（和 `ignore/p4/j0/model.py` 的预测逐项比）。
+   * 场景没有发射图依赖（或还没加载）时为空表。
+   */
+  emitterImages(options: { includeEntries?: boolean } = {}): EmitterImageProbe[] {
+    return this.renderer?.currentScene?.emitterImageRecords(options.includeEntries ?? false) ?? [];
   }
 
   /**

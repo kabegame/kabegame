@@ -556,7 +556,7 @@ export interface ReadbackReplayOptions {
    * （`2251857160` 的折射读 `_rt_imageLayerComposite_356_a`，只画读回帧时是空的）、`clearenabled: false` 的场景目标照常交替累加。
    * 不给时只画读回帧，调用序列同以前（`particleCorners` 只读 uniform，不给）。跑脚本时每一帧的顺序见 `scripts`。
    */
-  encodeFrame?: (index: number) => void;
+  encodeFrame?: (index: number) => void | Promise<void>;
   /**
    * 场景脚本（kabegame-chromium 第 7 批，`probeScripts.ts`）：每一帧（前 n − 1 帧与读回帧）设好这一帧的相机、推进完关键帧动画之后调一次
    * `frame(g_Frametime, g_Time)`，同渲染器 `beforeFrame` 里的位置（`host.ts`：先 `SceneAnimations.frame`，再 `runtime.frame`）。给了时每一帧
@@ -640,14 +640,15 @@ export function stepPuppets(
  * 给了 `encodeFrame` 且有回放时走 `replayEncoded`（每一帧都画）。
  * 返回读回帧的 `g_Time`、`g_Frametime`、视差状态，以及交给 `update` 的帧输入（`frame`：探针结清文本重排之后要再写一次时用）。
  */
-export function replayReadback(
+export async function replayReadback(
   scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
     Partial<Pick<GpuScene, "particleAudio" | "drawPhase">>,
   state: SceneState,
   options: ReadbackReplayOptions,
-): { time: number; frametime: number; parallax: ParallaxState; frame: FrameInput } {
+): Promise<{ time: number; frametime: number; parallax: ParallaxState; frame: FrameInput }> {
   const { particles, pointers, animations, scripts } = options;
-  if (options.encodeFrame && particles?.dts.length) return replayEncoded(scene, state, options, options.encodeFrame);
+  if (options.encodeFrame && particles?.dts.length)
+    return await replayEncoded(scene, state, options, options.encodeFrame);
   const [width, height] = options.size;
   const last = pointers.pointers.length - 1;
   const shake = frameCamera(scene, state, height, options.perspective, particles?.dts, options.cameraObjects);
@@ -742,13 +743,13 @@ export function replayReadback(
  * `setParallax` → `sync` → `update`（动画之后不另 `sync`），视差点按这一帧开头（动画、脚本之前）的 general 推进，`g_Daytime` 按
  * `options.daytime`。不跑脚本时调用序列同以前。
  */
-function replayEncoded(
+async function replayEncoded(
   scene: Pick<GpuScene, "stepParticles" | "setCamera" | "sync" | "setParallax" | "update"> &
     Partial<Pick<GpuScene, "particleAudio" | "cursorCamera" | "drawPhase">>,
   state: SceneState,
   options: ReadbackReplayOptions,
-  encodeFrame: (index: number) => void,
-): { time: number; frametime: number; parallax: ParallaxState; frame: FrameInput } {
+  encodeFrame: (index: number) => void | Promise<void>,
+): Promise<{ time: number; frametime: number; parallax: ParallaxState; frame: FrameInput }> {
   const { pointers, animations, scripts } = options;
   const replay = options.particles!;
   const { dts, times } = replay;
@@ -831,7 +832,7 @@ function replayEncoded(
       ...(audio ? { audio } : {}),
     };
     scene.update(frame, state);
-    if (i < dts.length - 1) encodeFrame(i);
+    if (i < dts.length - 1) await encodeFrame(i);
   }
   return { time, frametime, parallax, frame: frame! };
 }
@@ -965,7 +966,7 @@ export async function particleCorners(options: ParticleCornersOptions): Promise<
       // 最后一帧先步进再写 uniform（顺序同渲染器，P4c 步骤 4）。四角读的是 draw 的 uniform 缓冲（`particleProbe`），世界空间系统
       // 的模型矩阵已是单位阵（`GpuScene.uniformValues`），这里不另算。视差（P5a 步骤 2）：从加载时的场景中心起按同一串帧时间、每帧的 s
       // 与每帧的指针推进（同 `renderFrame`），四角带视差。没有脚本，`setParallax` 放在 `sync` 之后不影响结果（相机或视差变了它整体重写）
-      replayReadback(scene, state, {
+      await replayReadback(scene, state, {
         particles: options.particles,
         time: 0,
         pointers,

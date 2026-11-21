@@ -49,6 +49,11 @@ export function installSceneDevProbe(host: SceneHost): void {
       /** P9a 步骤 2：每段视频纹理的位置、`currentTime`、`paused`、`lastDrawn`、`fresh`、`failed`、尺寸与丢帧数、当前帧号。 */
       videos: () => host.videos(),
       /**
+       * P4j 步骤 2b：`layerimage` 发射器候选表的每条记录（状态、过门帧号、尺寸、表项数），`includeEntries` 时带全部表项 `[x, y, r, g, b]`；
+       * 没有发射图依赖时为空。
+       */
+      emitterImages: (options?: { includeEntries?: boolean }) => host.emitterImages(options),
+      /**
        * P11b 步骤 2：每个用户纹理属性来源（`scenetexture`）的当前值、状态（`ready` / `empty` / `failed` / `unsupported`…）、解码后的整张尺寸、
        * 最近一次解码用时与已登记的纹理名（`值x比例·10`）。
        */

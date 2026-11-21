@@ -221,6 +221,7 @@ import type { UserTextureAnimation, UserTextureCrop, UserTextureFrame, UserTextu
 import type { VideoSink } from "../video/sceneVideos";
 import type { TextureBinding } from "../wpesl2wgsl";
 import { BloomChain } from "./bloom";
+import { GpuEmitterImages, type EmitterImageProbe, type EmitterImageSourceTarget } from "./emitterImages";
 import { applyPassStates } from "./passState";
 import type { CursorCamera } from "./cursor";
 import { oneLine, reasonsOf, SceneRenderError } from "./errors";
@@ -1455,6 +1456,8 @@ export function uploadableTextures(
   };
   const addParticle = (particle: SceneParticle) => {
     particle.passes.forEach(add);
+    // 发射图的 `mask` 纹理（P4j 步骤 2b）：候选表的降采样 pass 的槽 1，没有图层材质引用它，照样上传
+    for (const slot of particle.emitterImages ?? []) if (slot?.maskTexture != null) used.add(slot.maskTexture);
     // 第 2 条起的 renderer 的变体（P4f 步骤 4）：同一个材质，纹理和上面相同，照样过一遍
     for (const draw of particleDraws(particle).slice(1)) draw.passes.forEach(add);
     for (const child of particle.children ?? []) addParticle(child.system);
@@ -1545,6 +1548,11 @@ export class GpuScene {
   /** 真正重建图层的次数与用时（毫秒）：计划签名没变的切换不算。dev 探针读。 */
   readonly rebuildStats = { count: 0, totalMs: 0, maxMs: 0 };
   private bloom: BloomChain | null = null;
+  /**
+   * 发射图候选表的 GPU 半边（P4j 步骤 2b，`render/emitterImages.ts`）：bundle 里有粒子系统绑上了 `layerimage` 的发射图依赖时才有（populate 里在装任何
+   * 图层之前建好，建树的预热就读得到它）；没有时为 null，别的场景的调用序列不变。
+   */
+  private emitterImages: GpuEmitterImages | null = null;
   /** 体积光（P13e，`render/volumetrics.ts`）：bundle 有 `volumetrics` 时才有。 */
   private volumetrics: VolumetricsRenderer | null = null;
   /** 最近一帧的灯光缓冲与阴影条目（`frameLightValues`）：带阴影的体积光点光取自己的阴影投影与方块变换。 */
@@ -3834,6 +3842,9 @@ export class GpuScene {
           used.add(step.pass.program);
     for (const pass of Object.values(bundle.bloom?.passes ?? {}))
       if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
+    // 发射图候选表的降采样材质（P4j 步骤 2b）
+    for (const pass of Object.values(bundle.emitterImagePasses ?? {}))
+      if (pass?.program !== null && pass?.program !== undefined) used.add(pass.program);
     // 模型材质模板（P14，`general.precache`）：运行中脚本建的模型数据层第一次备对象时要同步拿到程序（同泛光、体积光），所以加载时一并建好
     for (const template of Object.values(bundle.modelMaterials ?? {}))
       if (template.usable)
@@ -3895,6 +3906,25 @@ export class GpuScene {
     const prepared = await Promise.all(
       built.map((layer, index) => this.prepareMain(layer, state, plans[index], setup)),
     );
+    // 发射图候选表（P4j 步骤 2b）：要早于任何粒子树的预热（`installCore` → `createParticleTree`）。被依赖图层的独占 RT 在下面、装图层之前进
+    // `layerTargets`，预热在装图层时才走，所以预热的第一次调用（过门）就查得到合成 RT（WPE 有预热时只丢 1 个发射帧）
+    if (bundle.emitterImagePasses) {
+      this.emitterImages = await GpuEmitterImages.create(
+        {
+          device,
+          passes: bundle.emitterImagePasses,
+          programs,
+          pipelineFor: (program, blending, target) => this.pipelineFor(program, blending, target, true),
+          layerSource: (id) => this.emitterImageSource(id),
+          maskTexture: (index) => {
+            const texture = this.bundle.textures[index];
+            const gpu = texture ? this.cookieTextureOf(index) : null;
+            return texture && gpu ? { ...gpu, width: texture.textureWidth, height: texture.textureHeight } : null;
+          },
+        },
+        bundle.layers.flatMap((layer) => (layer.particle ? [layer.particle] : [])),
+      );
+    }
     // 泛光：全部图层之后（A1 / A3）
     if (bundle.bloom) {
       this.ensureSnapshot();
@@ -4558,6 +4588,12 @@ export class GpuScene {
     if (values) values.rate = system.instanceScalar("rate");
     // 频谱（P4e 步骤 4）：预热之前换上，预热读到的是当时的值（首次加载为 0，rea-p4e-audio.md 3.5【推】）
     system.setAudio(this.particleAudio);
+    // 发射图候选表（P4j 步骤 2b）：预热之前换上；运行中新建的粒子层（`createLayer`）的绑定在这里补登记
+    if (this.emitterImages) {
+      this.emitterImages.register(compiled);
+      system.setEmitterImages(this.emitterImages.records);
+      system.setEmitterImageFrame(this.sheetFrameNo);
+    }
     const world = worldMatrixOf(layer.object, state.layers, new Map(), this.attachHook);
     const inputs = { world, pointer: pointerScenePoint(this.cursorViewProjection(), this.particleCursor) };
     system.prewarm(inputs);
@@ -6672,6 +6708,11 @@ export class GpuScene {
     this.particleCursor = cursor;
     // 渲染帧号（共享计时器去重用）：每帧恰好一次，补画帧（帧时间 0）也算一帧、只是 dt 为 0
     this.sheetFrameNo++;
+    // 发射图的帧号（P4j 步骤 2b）：门与「锁定快照」按它判断，补画帧（帧时间 0）也记；快照在本帧编码末尾按同一个帧号标记
+    if (this.emitterImages) {
+      this.emitterImages.setFrame(this.sheetFrameNo);
+      for (const tree of this.trees.values()) tree.system.setEmitterImageFrame(this.sheetFrameNo);
+    }
     if (!(frametime > 0)) return;
     // 脱离的图层私有推进（P6e 点 3，WPE 帧函数第 2 步图像层更新的末尾）：不看可见性、不看这张纹理本帧画不画
     if (state)
@@ -7708,10 +7749,51 @@ export class GpuScene {
     }
     if (!started) begin();
     end();
+    // 发射图候选表的快照（P4j 步骤 2b）：全部图层画完之后，被依赖图层的独占合成 RT 就是「本帧末的画面」，下一帧更新阶段的锁定读到它
+    this.emitterImages?.encode(encoder);
+  }
+
+  /**
+   * 每次 `queue.submit` 之后调（渲染器、dev 探针）：把本帧拷过的发射图快照缓冲 `mapAsync` 读回（P4j 步骤 2b）。没有发射图时什么都不做。
+   */
+  afterSubmit(): void {
+    this.emitterImages?.afterSubmit();
+  }
+
+  /** 等全部在途的发射图快照读回（探针的确定性回放：每帧提交之后等，同一帧里候选表的 0 → 1 → 2 和 WPE 一样成立）。 */
+  async emitterImagesSettled(): Promise<void> {
+    await this.emitterImages?.settled();
+  }
+
+  /** dev 探针（P4j 步骤 2b）：每条候选表记录的状态与表（`includeEntries` 时带全部表项 `[x, y, r, g, b]`）；没有发射图时为空。 */
+  emitterImageRecords(includeEntries = false): EmitterImageProbe[] {
+    return this.emitterImages?.probe(includeEntries) ?? [];
+  }
+
+  /**
+   * 发射图的被依赖图层（P4j 步骤 2b）：按 scene.json 的对象 id 找，要求是图像层（不是粒子层、文本层）且有独占合成 RT（`layerTargets`）。
+   * id 重复时后面的胜出（同 WPE 后建的 RT 接管同名对象，`layerComposites`）。
+   */
+  private emitterImageSource(id: number): EmitterImageSourceTarget | null {
+    let found: EmitterImageSourceTarget | null = null;
+    for (const [object, target] of this.layerTargets) {
+      const layer = this.layerByObject.get(object);
+      if (!layer || layer.id !== id || layer.particle || layer.text) continue;
+      found = {
+        width: target.width,
+        height: target.height,
+        texture: target.texture,
+        view: target.view,
+        sampler: target.sampler,
+      };
+    }
+    return found;
   }
 
   destroy(): void {
     this.disposed = true;
+    this.emitterImages?.destroy();
+    this.emitterImages = null;
     for (const resource of this.owned) resource.destroy();
     this.owned.clear();
     this.bloomOwned.clear();

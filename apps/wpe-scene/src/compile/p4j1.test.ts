@@ -295,8 +295,10 @@ const BASE_FILES: Record<string, unknown> = {
   [`${ASSETS}/${TEXT_MATERIALS.clearAlpha}`]: {
     passes: [{ ...FONT_PASS, shader: "composelayer", textures: ["_rt_FullFrameBuffer"], combos: { CLEARALPHA: 1 } }],
   },
+  // 发射图的降采样材质（P4j 步骤 2a）：有绑定时 bundle 会编它
+  [`${ASSETS}/materials/util/downsample_quarter.json`]: { passes: [{ ...FONT_PASS, shader: "downsample_quarter" }] },
   ...Object.fromEntries(
-    ["font", "flat", "composelayer"].flatMap((name) => [
+    ["font", "flat", "composelayer", "downsample_quarter"].flatMap((name) => [
       [`${ASSETS}/shaders/${name}.vert`, "void main(){}"],
       [`${ASSETS}/shaders/${name}.frag`, "void main(){}"],
     ]),

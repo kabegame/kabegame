@@ -1069,6 +1069,7 @@ async function renderFramePass(
           const encoder = device.createCommandEncoder({ label: "probe profile" });
           scene.encode(encoder, state);
           device.queue.submit([encoder.finish()]);
+          scene.afterSubmit();
           await device.queue.onSubmittedWorkDone();
           samples.push(performance.now() - t0);
         }
@@ -1102,7 +1103,7 @@ async function renderFramePass(
       }
       // 场景脚本（第 7 批）：每一帧设好相机、推进完动画之后跑一帧，`g_Daytime` 跟着脚本的时钟；不跑脚本时这两项不给，逐字节同以前
       const scriptsClock = scriptsOptions?.clock;
-      const { time, frametime, frame } = replayReadback(scene, state, {
+      const { time, frametime, frame } = await replayReadback(scene, state, {
         particles: options.particles,
         time: startTime,
         pointers,
@@ -1124,10 +1125,14 @@ async function renderFramePass(
           : {}),
         // 回放时前 n − 1 帧每帧都在 GPU 上画（P10a 走查）：被依赖图层的合成 RT、`clearenabled: false` 的累加等跨帧状态同渲染器；
         // 只画场景目标，读回画布与读回只在最后一帧。轨迹从读回帧起记，这些帧只进登记表
-        encodeFrame: () => {
+        // 发射图的快照读回（P4j 步骤 2b）：提交之后等读回完成，下一帧的候选表状态机在 CPU 上读到的就是这一帧末的画面，同一帧里
+        // 「0 → 1 → 2」和 WPE 的同步读回一样成立（确定性回放；产品靠帧间隔，`mapAsync` 通常一帧之内就回来）
+        encodeFrame: async () => {
           const replayEncoder = device.createCommandEncoder({ label: "probe replay frame" });
           scene.encode(replayEncoder, state);
           device.queue.submit([replayEncoder.finish()]);
+          scene.afterSubmit();
+          await scene.emitterImagesSettled();
         },
         ...(probeScripts && scriptsClock !== undefined
           ? { scripts: probeScripts, daytime: (at: number) => probeDaytime(scriptsClock, at) }
@@ -1167,6 +1172,7 @@ async function renderFramePass(
         try {
           const read = scheduleReadback(device, encoder, blit.texture, canvas[0], canvas[1], "rgba8unorm");
           device.queue.submit([encoder.finish()]);
+          scene.afterSubmit();
           const error = await device.popErrorScope();
           if (error) throw new Error(`读回画布时 WebGPU 校验出错：${error.message}`);
           raw = await read();
@@ -1176,8 +1182,10 @@ async function renderFramePass(
       } else {
         const read = scheduleReadback(device, encoder, scene.targetTexture!, scene.width, scene.height, format);
         device.queue.submit([encoder.finish()]);
+        scene.afterSubmit();
         raw = await read();
       }
+      await scene.emitterImagesSettled();
       const spritesAfter = await scene.spriteSamples();
       const sprites = spritesAfter.map(({ object, samples }) => {
         const previous = spritesBefore.find((item) => item.object === object)?.samples ?? 0;
@@ -1557,7 +1565,9 @@ export async function hostRenderFrame(
   const format = texture.format as ReadbackFormat;
   const read = scheduleReadback(device, encoder, texture, scene.width, scene.height, format);
   device.queue.submit([encoder.finish()]);
+  scene.afterSubmit();
   const raw = await read();
+  await scene.emitterImagesSettled();
   const rgba = raw instanceof Uint8Array ? raw : quantize8(raw);
   for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
   if (key !== undefined) stored.set(`${key}.rgba`, rgba);

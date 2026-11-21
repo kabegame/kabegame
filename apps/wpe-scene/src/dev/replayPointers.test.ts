@@ -104,11 +104,15 @@ function legacyReadback(
 
 const PARTICLES: ParticleReplay = { dts: [0.05, 0.0625, 0.04, 0.05], times: [0.05, 0.1125, 0.1525, 0.2025] };
 
-function readback(options: Parameters<typeof replayPointers>[0], particles: ParticleReplay | undefined, time = 0) {
+async function readback(
+  options: Parameters<typeof replayPointers>[0],
+  particles: ParticleReplay | undefined,
+  time = 0,
+) {
   const { calls, scene } = recorder();
   const s = state();
   const pointers = replayPointers(options, SCENE, particles?.dts.length);
-  const result = replayReadback(scene, s, {
+  const result = await replayReadback(scene, s, {
     particles,
     time,
     pointers,
@@ -232,24 +236,26 @@ describe("读回画布与光标窗口（第 5 批：checkCanvas、pointerWindow�
 });
 
 describe("回放到读回帧（replayReadback）", () => {
-  it("每帧同一个点时，调用序列与改动前逐项相同（不给新字段、只给 pointer、逐帧给同一个点且窗口同尺寸、没有回放）", () => {
-    expect(readback({}, PARTICLES).calls).toEqual(legacy([0.5, 0.5], PARTICLES));
-    expect(readback({ pointer: [0.3, 0.7] }, PARTICLES).calls).toEqual(legacy([0.3, 0.7], PARTICLES));
+  it("每帧同一个点时，调用序列与改动前逐项相同（不给新字段、只给 pointer、逐帧给同一个点且窗口同尺寸、没有回放）", async () => {
+    expect((await readback({}, PARTICLES)).calls).toEqual(legacy([0.5, 0.5], PARTICLES));
+    expect((await readback({ pointer: [0.3, 0.7] }, PARTICLES)).calls).toEqual(legacy([0.3, 0.7], PARTICLES));
     const same = Array.from({ length: PARTICLES.dts.length }, () => [0.3, 0.7] as Point);
-    expect(readback({ pointers: same, window: [1920, 1080] }, PARTICLES).calls).toEqual(legacy([0.3, 0.7], PARTICLES));
-    expect(readback({ pointer: [0.2, 0.4] }, undefined, 2.5).calls).toEqual(legacy([0.2, 0.4], undefined, 2.5));
+    expect((await readback({ pointers: same, window: [1920, 1080] }, PARTICLES)).calls).toEqual(
+      legacy([0.3, 0.7], PARTICLES),
+    );
+    expect((await readback({ pointer: [0.2, 0.4] }, undefined, 2.5)).calls).toEqual(legacy([0.2, 0.4], undefined, 2.5));
     // 对照本身是有效的：换个点调用序列就不同
-    expect(readback({ pointer: [0.3, 0.71] }, PARTICLES).calls).not.toEqual(legacy([0.3, 0.7], PARTICLES));
+    expect((await readback({ pointer: [0.3, 0.71] }, PARTICLES)).calls).not.toEqual(legacy([0.3, 0.7], PARTICLES));
   });
 
-  it("逐帧指针：第 i 帧步进用第 i 项、视差点逐帧推进；读回帧的 pointerLast 是上一帧的", () => {
+  it("逐帧指针：第 i 帧步进用第 i 项、视差点逐帧推进；读回帧的 pointerLast 是上一帧的", async () => {
     const pointers: Point[] = [
       [0.1, 0.2],
       [0.3, 0.4],
       [0.5, 0.6],
       [0.7, 0.8],
     ];
-    const { calls, result } = readback({ pointers }, PARTICLES);
+    const { calls, result } = await readback({ pointers }, PARTICLES);
     const steps = calls.filter((c) => (c as unknown[])[0] === "step") as [string, number, number, Point][];
     expect(steps.map((s) => s[3])).toEqual(pointers);
     expect(steps.map((s) => s[2])).toEqual(PARTICLES.times);
@@ -271,8 +277,8 @@ describe("回放到读回帧（replayReadback）", () => {
     expect(update.parallax).toEqual(manual.position);
   });
 
-  it("只有一帧时 pointerLast 取自己；窗口不同尺寸时步进用换算后的 cursor、uniform 用窗口坐标", () => {
-    const one = readback({ pointers: [[0.25, 0.75]] }, { dts: [0.05] });
+  it("只有一帧时 pointerLast 取自己；窗口不同尺寸时步进用换算后的 cursor、uniform 用窗口坐标", async () => {
+    const one = await readback({ pointers: [[0.25, 0.75]] }, { dts: [0.05] });
     const update = (one.calls.at(-1) as [string, Record<string, unknown>])[1];
     expect(update.pointer).toEqual([0.25, 0.75]);
     expect(update.pointerLast).toEqual([0.25, 0.75]);
@@ -284,7 +290,7 @@ describe("回放到读回帧（replayReadback）", () => {
       [0.3, 0.3],
       [0.4, 0.4],
     ];
-    const { calls, pointers: converted } = readback({ pointers, window }, PARTICLES);
+    const { calls, pointers: converted } = await readback({ pointers, window }, PARTICLES);
     const steps = calls.filter((c) => (c as unknown[])[0] === "step") as [string, number, number, Point][];
     expect(steps.map((s) => s[3])).toEqual(converted.cursors);
     expect(converted.cursors).not.toEqual(pointers);
@@ -327,9 +333,9 @@ describe("跑场景脚本（kabegame-chromium 第 7 批，replayReadback 的 scr
   }
   const names = (calls: unknown[]) => calls.map((c) => (c as unknown[])[0]);
 
-  it("每一帧设好相机之后跑一帧脚本：前 n − 1 帧 sync → 步进 → 相机 → 脚本，读回帧再 setParallax → sync → update", () => {
+  it("每一帧设好相机之后跑一帧脚本：前 n − 1 帧 sync → 步进 → 相机 → 脚本，读回帧再 setParallax → sync → update", async () => {
     const { calls, scene, s, scripts } = scripted();
-    replayReadback(scene, s, {
+    await replayReadback(scene, s, {
       particles: PARTICLES,
       time: 0,
       pointers: replayPointers({}, SCENE, PARTICLES.dts.length),
@@ -345,10 +351,10 @@ describe("跑场景脚本（kabegame-chromium 第 7 批，replayReadback 的 scr
     );
   });
 
-  it("有关键帧动画时：动画在相机之后、脚本之前（同渲染器 beforeFrame），跑脚本时动画之后不另 sync；不跑脚本时照旧动画后 sync", () => {
-    const run = (withScripts: boolean, particles: ParticleReplay | undefined) => {
+  it("有关键帧动画时：动画在相机之后、脚本之前（同渲染器 beforeFrame），跑脚本时动画之后不另 sync；不跑脚本时照旧动画后 sync", async () => {
+    const run = async (withScripts: boolean, particles: ParticleReplay | undefined) => {
       const { calls, scene, s, scripts } = scripted();
-      replayReadback(scene, s, {
+      await replayReadback(scene, s, {
         particles,
         time: 2.5,
         pointers: replayPointers({}, SCENE, particles?.dts.length),
@@ -360,10 +366,18 @@ describe("跑场景脚本（kabegame-chromium 第 7 批，replayReadback 的 scr
       return calls;
     };
     const frame = ["sync", "step", "camera", "animate", "script"];
-    expect(names(run(true, PARTICLES))).toEqual([...frame, ...frame, ...frame, ...frame, "parallax", "sync", "update"]);
+    expect(names(await run(true, PARTICLES))).toEqual([
+      ...frame,
+      ...frame,
+      ...frame,
+      ...frame,
+      "parallax",
+      "sync",
+      "update",
+    ]);
     // 不跑脚本：同 P10a 步骤 3 的写法（动画之后 sync，读回帧没有第二次 sync）
     const legacy = ["step", "camera", "animate", "sync"];
-    expect(names(run(false, PARTICLES))).toEqual([
+    expect(names(await run(false, PARTICLES))).toEqual([
       ...legacy,
       ...legacy,
       ...legacy,
@@ -376,12 +390,20 @@ describe("跑场景脚本（kabegame-chromium 第 7 批，replayReadback 的 scr
       "update",
     ]);
     // 没有回放：动画不推进（调用方已 seek、写过），脚本照常跑读回那一帧
-    expect(names(run(true, undefined))).toEqual(["sync", "step", "camera", "script", "parallax", "sync", "update"]);
+    expect(names(await run(true, undefined))).toEqual([
+      "sync",
+      "step",
+      "camera",
+      "script",
+      "parallax",
+      "sync",
+      "update",
+    ]);
   });
 
-  it("没有回放时只有读回那一帧：脚本跑一次，帧时间 0、g_Time 取 time", () => {
+  it("没有回放时只有读回那一帧：脚本跑一次，帧时间 0、g_Time 取 time", async () => {
     const { calls, scene, s, scripts } = scripted();
-    replayReadback(scene, s, {
+    await replayReadback(scene, s, {
       time: 2.5,
       pointers: replayPointers({}, SCENE, undefined),
       parallax: initialParallaxState(...SCENE),
@@ -392,10 +414,10 @@ describe("跑场景脚本（kabegame-chromium 第 7 批，replayReadback 的 scr
     expect(calls[3]).toEqual(["script", 0, 2.5]);
   });
 
-  it("g_Daytime：给了 daytime 时按读回帧的 g_Time 算，不给时 0.5；返回的 frame 就是交给 update 的帧输入", () => {
-    const run = (daytime?: (time: number) => number) => {
+  it("g_Daytime：给了 daytime 时按读回帧的 g_Time 算，不给时 0.5；返回的 frame 就是交给 update 的帧输入", async () => {
+    const run = async (daytime?: (time: number) => number) => {
       const { calls, scene, s, scripts } = scripted();
-      const result = replayReadback(scene, s, {
+      const result = await replayReadback(scene, s, {
         particles: PARTICLES,
         time: 0,
         pointers: replayPointers({}, SCENE, PARTICLES.dts.length),
@@ -408,11 +430,11 @@ describe("跑场景脚本（kabegame-chromium 第 7 批，replayReadback 的 scr
       expect(update).toEqual(structuredClone(result.frame));
       return update.daytime;
     };
-    expect(run((time) => time / 10)).toBe(PARTICLES.times!.at(-1)! / 10);
-    expect(run()).toBe(0.5);
+    expect(await run((time) => time / 10)).toBe(PARTICLES.times!.at(-1)! / 10);
+    expect(await run()).toBe(0.5);
   });
 
-  it("脚本改了视差的 general：视差点逐帧按那一帧开头（脚本之前）的 general 推进；绘制用脚本之后的", () => {
+  it("脚本改了视差的 general：视差点逐帧按那一帧开头（脚本之前）的 general 推进；绘制用脚本之后的", async () => {
     // 第 k 帧的脚本把 cameraparallaxmouseinfluence 改成 1 − 0.2k：第 k + 1 帧开头才用它推进
     const { calls, scene, s, scripts } = scripted((st, k) => {
       st.general = { ...st.general, cameraparallaxmouseinfluence: 1 - 0.2 * k };
@@ -423,7 +445,7 @@ describe("跑场景脚本（kabegame-chromium 第 7 批，replayReadback 的 scr
       [0.5, 0.6],
       [0.7, 0.8],
     ];
-    const result = replayReadback(scene, s, {
+    const result = await replayReadback(scene, s, {
       particles: PARTICLES,
       time: 0,
       pointers: replayPointers({ pointers }, SCENE, PARTICLES.dts.length),
@@ -467,7 +489,7 @@ describe("跑场景脚本（kabegame-chromium 第 7 批，replayReadback 的 scr
 describe("逐帧频谱（P4e 步骤 4，ParticleReplay.audio）", () => {
   const frame = (v: number) => ({ left: Array<number>(16).fill(v), right: Array<number>(16).fill(v / 2) });
 
-  it("每帧步进之前原样写进场景的粒子频谱（含读回那一帧），null 沿用前一帧；不给时不写", () => {
+  it("每帧步进之前原样写进场景的粒子频谱（含读回那一帧），null 沿用前一帧；不给时不写", async () => {
     const { scene } = recorder();
     const particleAudio = silentParticleAudio();
     const seen: number[][] = [];
@@ -487,7 +509,7 @@ describe("逐帧频谱（P4e 步骤 4，ParticleReplay.audio）", () => {
         parallax: initialParallaxState(...SCENE),
         size: SCENE,
       });
-    run({ dts: [0.1, 0.1, 0.1, 0.1], audio: [frame(0.5), null, frame(0.25), null] });
+    await run({ dts: [0.1, 0.1, 0.1, 0.1], audio: [frame(0.5), null, frame(0.25), null] });
     expect(seen).toEqual([
       [0.5, 0.25],
       [0.5, 0.25],
@@ -495,17 +517,17 @@ describe("逐帧频谱（P4e 步骤 4，ParticleReplay.audio）", () => {
       [0.25, 0.125],
     ]);
     seen.length = 0;
-    run({ dts: [0.1, 0.1] });
+    await run({ dts: [0.1, 0.1] });
     expect(seen).toEqual([
       [0.25, 0.125],
       [0.25, 0.125],
     ]);
   });
 
-  it("读回帧的音频 uniform（P11a）：取截至读回帧最后一个非 null 项，32 / 64 段取新字段、没给的为 0，舍入成 float32；全是 null 或不给时 update 不带 audio", () => {
-    const updates = (particles: ParticleReplay) => {
+  it("读回帧的音频 uniform（P11a）：取截至读回帧最后一个非 null 项，32 / 64 段取新字段、没给的为 0，舍入成 float32；全是 null 或不给时 update 不带 audio", async () => {
+    const updates = async (particles: ParticleReplay) => {
       const { calls, scene } = recorder();
-      replayReadback({ ...scene, particleAudio: silentParticleAudio() }, state(), {
+      await replayReadback({ ...scene, particleAudio: silentParticleAudio() }, state(), {
         particles,
         time: 0,
         pointers: replayPointers({}, SCENE, particles.dts.length),
@@ -524,7 +546,7 @@ describe("逐帧频谱（P4e 步骤 4，ParticleReplay.audio）", () => {
       left64: ramp(64, 0.003),
       right64: ramp(64, 0.004),
     };
-    const audio = updates({ dts: [0.1, 0.1, 0.1], audio: [frame(0.9), full, null] })!;
+    const audio = (await updates({ dts: [0.1, 0.1, 0.1], audio: [frame(0.9), full, null] }))!;
     const f32 = (values: number[]) => [...Float32Array.from(values)];
     expect(Array.from(audio.L16)).toEqual(f32(Array(16).fill(0.5)));
     expect(Array.from(audio.R16)).toEqual(f32(Array(16).fill(0.25)));
@@ -533,12 +555,12 @@ describe("逐帧频谱（P4e 步骤 4，ParticleReplay.audio）", () => {
     expect(Array.from(audio.L64)).toEqual(f32(full.left64));
     expect(Array.from(audio.R64)).toEqual(f32(full.right64));
     // 只给 16 段：32 / 64 段为 0
-    const only16 = updates({ dts: [0.1, 0.1], audio: [full, frame(0.75)] })!;
+    const only16 = (await updates({ dts: [0.1, 0.1], audio: [full, frame(0.75)] }))!;
     expect(Array.from(only16.L16)).toEqual(Array(16).fill(0.75));
     expect(Array.from(only16.L32)).toEqual(Array(32).fill(0));
     expect(Array.from(only16.R64)).toEqual(Array(64).fill(0));
-    expect(updates({ dts: [0.1, 0.1], audio: [null, null] })).toBeUndefined();
-    expect(updates({ dts: [0.1, 0.1] })).toBeUndefined();
+    expect(await updates({ dts: [0.1, 0.1], audio: [null, null] })).toBeUndefined();
+    expect(await updates({ dts: [0.1, 0.1] })).toBeUndefined();
   });
 
   it("32 / 64 段的个数不对时回放之前就抛错（P11a）", () => {

@@ -87,6 +87,9 @@ function fakeScene(size: readonly [number, number] | undefined) {
     setParallax: () => {},
     update: (frame: { pointer: [number, number] }) => void updatePointers.push(frame.pointer),
     encode: () => {},
+    // 发射图候选表的快照读回（P4j 步骤 2b）：没有发射图
+    afterSubmit: () => {},
+    emitterImagesSettled: async () => {},
     // sprite 的遮挡计数（P13c 走查）：没有 sprite
     spriteSamples: async () => [],
     profileParticles: () => {},

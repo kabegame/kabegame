@@ -119,6 +119,7 @@ import {
 } from "./controlpoints";
 import { emissionCount, emitterState, resetEmitterTiming, scriptEmitCount, type EmitterState } from "./emitters";
 import { f32 } from "./f32";
+import type { EmitterImageBinding, EmitterImageSource } from "./layerImage";
 import {
   INSTANCE_DISABLE_FLAGS,
   particleModuleDef,
@@ -230,6 +231,16 @@ interface ResolvedModule {
 interface ResolvedEmitter extends ResolvedModule {
   /** emitter 的状态是发射计时（`emitters.ts`），模块表的 emitter 都没有 `createState`。 */
   state: EmitterState;
+  /**
+   * `layerimage` 发射器配到的发射图依赖（P4j 步骤 2a，rea-p4j-layerimage.md 1.5）：第 k 个 `layerimage` 取 `def.emitterImages[k]`，
+   * 没配上为 null；别的发射器不带这一项。
+   */
+  image?: EmitterImageBinding | null;
+  /**
+   * `0x20000` 的计时器（rea-p4j-layerimage.md 2.5，发射器记录 `rec+0x7c`，float32，解析时 0）：每个发射器各一个，只在要发的帧累加 `dt′`，
+   * 严格大于 1 时取 `fmodf` 并让共享的依赖记录重建（`EmitterImageSource.refresh`）。
+   */
+  imageTimer?: number;
 }
 
 /**
@@ -582,9 +593,11 @@ export class ParticleSystem {
         const state = known.createState?.(fields);
         return [{ name: module.name, def: known, base: module.fields, fields, run: known.run, state }];
       });
+    let imageSlot = 0;
     this.emitters = resolve("emitter", def.emitters).map((emitter) => ({
       ...emitter,
       state: emitterState(emitter.fields),
+      ...(emitter.name === "layerimage" ? { image: def.emitterImages?.[imageSlot++] ?? null } : {}),
     }));
     this.initializers = resolve("initializer", def.initializers);
     this.operators = resolve("operator", def.operators);
@@ -635,6 +648,32 @@ export class ParticleSystem {
           system: new ParticleSystem(entry.system, random, passes, undefined, { parent: this, entry }),
         });
       });
+  }
+
+  /** 发射图候选表的来源（P4j 步骤 2a，`layerImage.ts`）与当前帧号：整棵树共用根上的一份（子系统、事件实例沿着 `parent` 找到根）。 */
+  private emitterImageSource: EmitterImageSource | undefined;
+  private emitterImageFrame = 0;
+
+  /**
+   * 换上这棵树的发射图来源（渲染器建树时、预热之前调；缺省没有来源，`layerimage` 只算发射数）。只有根上的起作用；子系统与事件实例
+   * 取根的（同 `audio` 的「整棵树一份」，但不需要向下传，每次用时沿 `parent` 找根）。
+   */
+  setEmitterImages(source: EmitterImageSource | undefined): void {
+    this.emitterImageSource = source;
+  }
+
+  /**
+   * 当前渲染帧号（WPE `ctx+0x144`，每帧开头加一，预热期间保持 0）：发射图的门与锁定快照按它判断。渲染器每帧在步进之前写根；
+   * 缺省 0（预热、回放里没人写时）。
+   */
+  setEmitterImageFrame(frame: number): void {
+    this.emitterImageFrame = frame;
+  }
+
+  private emitterImageRoot(): ParticleSystem {
+    let root: ParticleSystem = this;
+    while (root.parent) root = root.parent;
+    return root;
   }
 
   /** 这棵树读的 16 段频谱（P4e 步骤 4，`audio.ts`）。 */
@@ -1618,8 +1657,25 @@ export class ParticleSystem {
         // 同一处（`FUN_14022f790`，rea-p4e-children 3.7）：条目 `flags` bit1 的 static 子系统复位并重开，每个周期发射器的新周期各一次
         for (const child of this.statics) if (child.entry.flags & 2) child.system.restart();
       }
-      // `layerimage`（P4j 步骤 1）：候选表是运行时读回的，步骤 3 之前一直当作「没有表」，要发的直接丢、不欠账（rea-p4j-layerimage.md 3.1）
-      if (emitter.name === "layerimage") continue;
+      // `layerimage`（P4j）：只在要发的帧（`n > 0`）动候选表的状态（2.5、3.1：非发射帧不动）——`0x20000` 计时，再取表；
+      // 候选表是运行时读回的，步骤 3 之前一直当作「没有表」，要发的直接丢、不欠账（3.1）
+      if (emitter.name === "layerimage") {
+        if (count > 0 && emitter.image) {
+          const root = this.emitterImageRoot();
+          const source = root.emitterImageSource;
+          if (source) {
+            if ((emitter.fields.flags as number) & 0x20000) {
+              emitter.imageTimer = f32(dt + (emitter.imageTimer ?? 0));
+              if (emitter.imageTimer > 1) {
+                emitter.imageTimer = f32(emitter.imageTimer % 1);
+                source.refresh(emitter.image);
+              }
+            }
+            source.acquire(emitter.image, root.emitterImageFrame);
+          }
+        }
+        continue;
+      }
       for (let n = 0; n < count; n++) this.spawn(emitter);
     }
   }
