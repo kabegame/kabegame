@@ -5,7 +5,7 @@
 // 宿主不推状态；什么时候回调页面、回调哪些键，全由这里决定。音频与媒体是例外：页面登记监听后垫片向宿主订阅，
 // 宿主经 Channel 推（「音频与媒体集成」）。音量也是例外：不走 IPC，垫片经 postMessage 向父页面
 // （WpeWallpaperContent）要宿主音量，父页面回复、变化时再推，垫片把它乘到页面的媒体元素与 Web Audio 上（「音量」），
-// 另放成只读的 window.__kabegameHostVolume 并派发 kabegame-host-volume，给场景宿主的声音播放器用（WPE_SCENE.md「声音」）。
+// 另放成只读的 window.__kabegameHostVolume 并派发 kabegame-host-volume，给场景宿主的声音播放器用（cocs/wpe/scene/SOUND_VIDEO.md「声音（P6a）」）。
 // 鼠标不经垫片合成：同一条音量消息里父页面说可交互且没暂停时，本 frame 向 tauri-plugin-cursor 登记，Rust 轮询全局
 // 光标、把原生事件直接注入本 frame（钳进视口），页面收到的是可信事件（WPE_IMPORT.md「鼠标」）。
 (function () {

@@ -152,5 +152,38 @@ export function checkParticleProgram(pass, result, unsupported): void {
 - **语料**：缺省语料 233 张全部干净（`ignore/p4/i1/default.json`）；myprojects 现在 437 张（`ignore/p4/i1/my.json`），`3823357259` 干净；另有 6 张新下载的不干净（`3834803915` 的 `particle:dependencies` / `particle:emitter:layerimage`、`3798696286` 的声音 min/max time 绑定、`3816948983` 纹理格式 12、`3817265356` 纹理越界、两张缺场景入口），和 P4i 无关；上次转给 P7、P14 的 `3784410673`、`3834692798` 已经干净。
 - **走查 `3823357259`**：
   - 解包成 `ignore/p4/proj/3823357259-kbp`（`--instrument`），WPE 抓 `A:\p4i\3823357259-kbp-fps20-1920x1080\`。按日志时间线回放第 222 帧不报不支持项，但 17 个雷电系统一颗都没发：雷电预设按音频发射（`audioprocessingmode 3`），WPE 抓帧时本机在放声音，探针没给频谱。
-  - 于是做复制工程 `3823357259-noaudio`（16 个雷电粒子文件的 `audioprocessingmode` 改 0，两边同一份），WPE 抓 `A:\p4i\3823357259-noaudio-fps20-1920x1080\`，回放第 248 帧（`ignore/p4/i1/ours/talia-noaudio-f248.png` 对 `ignore/p4/i1/wpe/…-f248.png`）：雷电的颜色、光晕亮度、分布区域一致；雷电随机发射，只目视比，光照的逐像素证明在步骤 0（`halo` 格就是这张的光晕材质，0 差异）。顶部 / 底部文字是脚本写的日期时间，探针没跑脚本。
+  - 于是做复制工程 `3823357259-noaudio`（16 个雷电粒子文件的 `audioprocessingmode` 改 0，两边同一份），WPE 抓 `A:\p4i\3823357259-noaudio-fps20-1920x1080\`，回放第 248 帧（`ignore/p4/i1/ours/talia-noaudio-f248.png` 对 `ignore/p4/i1/wpe/…-f248.png`）：雷电的颜色、光晕亮度、分布区域一致；雷电随机发射，只目视比，光照的逐像素证明在步骤 0（`halo` 格就是这张的光晕材质，0 差异）。顶部 / 底部文字是脚本写的日期时间，探针没跑脚本。**这一条按 FINAL_CHECK 不算结论（目视比），由下面的「最终走查」取代。**
   - 测试工程全部 `projects_remove`。
+
+## 最终走查（2026-11-21，用户「按 FINAL_CHECK 验收」）
+
+按 [FINAL_CHECK.md](../FINAL_CHECK.md) 原则 1–5 重做 `3823357259`，并把步骤 0 里归成「浮点舍入」的残差落到值上。脚本与数据在 `ignore/p4/i2/`。
+
+### 复制工程 `3823357259-iso`
+
+- **复制**：`kbp content isolate 3823357259 --keep 259 --instrument`（只留雷电 259 与插桩 FR；259 是根，没有父链；它下面挂的 16 个子雷电删掉）。再用 `ignore/p4/i2/make_iso_fixed.py` 换固定值（WPE 粒子随机数按时间做种、不可复现，同 P11b2）：
+  - 雷电本体：发射器 `audioprocessingmode` 3 → 0（随系统音频发射，录不下整段历史）；`sizerandom` / `colorrandom` / `velocityrandom` 收成一个值；`oscillatealpha` 频率、幅度收成一个值、相位 0；去掉 `oscillateposition`（y 方向无条件加 `2π·R`，收不掉）和 eventfollow 分叉子系统（`probability 0.2`，分叉全是随机项，和光晕无关）；
+  - 光晕：`sphererandom` 距离 0，寿命 / 尺寸 / 颜色 / alpha 收成区间中点。
+  - 不动：光晕材质（`genericparticle` + `LIGHTING`、additive、halo）、eventspawn 结构、renderer、对象 259 的变换与 `instanceoverride`（`colorn`、控制点）。`turbulence`（速度 min = max、相位区间缺省 0）、`positionoffsetrandom`（只看时间）、`mapsequencebetweencontrolpoints`（不抽随机数）、周期发射（min = max）本来就确定。
+- **WPE**：`capture_sweep` 24 帧，1920×1080、fps 20、后处理 ultra（WPE 当前设置，没改），`A:\p4i\3823357259-iso-fps20-1920x1080\`，日志 `ignore/p4/out/`，整帧图 `ignore/p4/i2/wpe/`。一个发射周期里光晕只在第 240 帧（10 个 eventspawn 实例、各 1 颗，尺寸随 `sizechange` 涨到铺满全屏）；第 240 帧 rdc 的光晕片元着色器就是 `纹理 × 顶点色 × g_LightAmbientColor(0.3) × g_Overbright`（没有灯时编译器把灯光累加消掉了），和读码一致。
+- **Kabegame**：导入后 `renderFrames.ts` 按日志时间线回放 232–255 帧（`--cursors log`、`--canvas 1920x1080`、ultra），`kbp cmp frames`。
+
+| 帧 | 结果 | 定位 | 结论 |
+|---|---|---|---|
+| 232–239、251–255（13 帧，没有雷电） | 逐像素相同 | — | 相同 |
+| 240（光晕铺满全屏 + 绳） | 1423 像素不同，最大 61 | 光晕区（离绳 > 30 px）11.6 万个染色像素里 673 个差 1，全是我们偏亮（只在 R、B；G 被 `colorn` 乘成 0）；其余在绳上 | 见下 |
+| 241–250（只有绳） | 482–4237 像素不同，最大 13–52 | 全在绳周围 30 px 内 | 见下 |
+
+**逐粒子**（`kbp rdc track … --log`，scene 认法；我们 `particle_track` 同一时间线；`ignore/p4/i2/tracks/`）：
+- 光晕 10 个实例每帧都配上：位置、颜色差 0，alpha 最大差 1.74e-5、尺寸 0.10。
+- 绳在 WPE 里按段画（几何着色器输入 N−1 段），scene 认法把段当粒子，所以每帧「少 1 颗」；按段起点对（`rope_cmp`，脚本在 scratchpad）：颜色差 0，位置差沿控制点 0 → 1 的连线线性增长（第 k 颗 ≈ k·(−0.019, +0.082)，相对 1.1e-3），第 240 帧 0.74 → 第 250 帧 15.9 像素。
+- **根因**：`maintaindistancebetweencontrolpoints` 的 `q = rsqrtps(n)`（rea 3.2）。控制点静止时每做一次，粒子沿连线的分量乘 (1 + 2e)，e = rsqrtps 的相对误差；我们按精确值，e = 0。本机 CPU 的 `rsqrtps(n = 5456919) = 4.2802095e-4`（`0x39e06800`），e = −1.409e-4，和从轨迹反推的 −1.45e-4 一致（两遍模式每帧两次）。光晕的 alpha / 尺寸差是 `alphafade` / `sizechange` 的 `age · rcpps(life)`。
+- **验证**：临时把 `rcp` / `rsqrt` 对 5 个常数输入换成本机硬件值（`rsqrt(5456919)`、`rcp(0.15)`、`rcp(1)`、`rcp(0.5)`、`rcp(30)`，`// DEBUG-p4i-hw`，已删、宿主重建回原产物）：光晕 10 个实例位置 / 尺寸 / alpha / 颜色**逐位相同**；绳位置最大差 3e-5（float32 末位，余下的是逐粒子长度的 `rsqrtps`，`reducemovementnearcontrolpoint`）、alpha 3e-8、尺寸 0；**整帧 240–250 逐像素相同**（`ignore/p4/i2/ours-hw/`）。
+- **结论**：24 帧在产品下 13 帧逐像素相同，11 帧的差异全部来自 `rcpps` / `rsqrtps` 不复刻（已知差异，P4a 起的决定，P4d「maintaindistance 的 rsqrtps」、P11b2 走查同类）；换上硬件值后 24 帧全部逐像素相同。被测的光晕光照没有差异。
+
+### 步骤 0 残差的定位
+
+- **差 1 的零星像素**（spot 4、xform 1、hdr 2、shadow 1、fog 4）：每个只有一个通道差 1。照 `common_pbr_2.h` 与 WPE 抓帧的灯光常量用 float64 算精确值，差的那个通道离 0.5 级边界 0.002–0.047 级，没差的通道远（0.09–0.46）。整格对照（`p4i-spot` 的 `big` 格 76800 个分量）：float64 模型和 WPE、和我们各差约 3770 个，WPE 和我们之间只差 2 个，即两块 GPU 的 float 结果几乎一致，翻 2 个对应平均约 2.6e-5 级（约 1e-7，1–2 个 float32 ulp）的差：fxc 与 Tint / DXC 编出的指令顺序、FMA 不同。已知差异（着色器舍入）。
+- **`p4i-trail` 的 1867 像素**：全在带法线图的拖尾上（`tnm` 0.21%、`tnmd` 0.68%、`tnmr` 1.04%、`tnmw` 0.33%，按格子分时伸进 `tu` 格的 395 个也是它们的；纯白 255 的 `tu` 不可能差 1），白色带光照的 `tw` / `twd` 0 差异。拖尾四角 WPE 在几何着色器、我们在顶点着色器里算，末位不同；白色粒子的光照随位置平滑变化，翻不过整数级；`drop_normal` 梯度陡，uv 的末位差被放大成光照值的差。已知差异（着色器舍入经法线图放大）。
+- **`p4i-hdrb` 的 8 万像素、最大差 2**：不打光的 `unlit`（1448）、`halou`（398）格同样有差，和光照无关；全在泛光渐变，是 WPE 后备缓冲 RGBA16F 的存储量化（同 P13h `3509243656`）。
+- **`p4i-rope` 的 143**：见步骤 0「`p4i-rope` 那个边缘像素的解释」（顶点吸附 1/256 px 的舍入）。

@@ -1532,7 +1532,7 @@ function isImageLayerObject(object: SceneObject): boolean {
   - tsc 0 error；相关 5 个测试文件 260 个用例全过（工作区）；Prettier 通过。快照里 `render/state.objects.test.ts`（8）与 `compile/refract.test.ts`（1）的失败在 HEAD 基线上一样，与本步无关。
   - `kbp regress --corpus`：回放案例逐字节相同；233 张语料逐场景相同（`3837779440` 在 myprojects、不在缺省语料）。单扫 `3837779440`：`dependency:text` → 干净。
   - `p8-deptext` 第 242、280、281、282、291 帧（含换宽度与空文字那一帧）和 WPE 整帧 0 差异（`ignore/p8/s6/kb2`）。
-  - 复制工程 `3837779440-iso-clock2`（只留 1049、186，时钟固定「22:22」，关掉 186 的 shake / rotate2pos / rotate2pos2）三帧整帧 0 差异。不关这三个动作 effect 的 `-iso-clock` 手臂姿态和 WPE 不同（差在 704×576 的手臂上，和依赖无关，另记）。
+  - 复制工程 `3837779440-iso-clock2`（只留 1049、186，时钟固定「22:22」，关掉 186 的 shake / rotate2pos / rotate2pos2）三帧整帧 0 差异。不关这三个动作 effect 的 `-iso-clock` 手臂姿态和 WPE 不同（差在 704×576 的手臂上，和依赖无关）：两个 rotate2pos 的 `noisevalue` 读 `SharedNoise` / `SharedNoise2` 的 `angles.x`，那两个图层的 `visible` 字段脚本用 `Math.random()` 每隔几秒随机换目标速度、再累计相位取余弦，是随机输入。WPE 第 238 帧 `g_Noise` 为 2.5666 / −1.2942，我们探针种子 1 / 2 / 3 分别是 −9.28 / 9.82、−9.71 / 6.49、−9.17 / 0.64；同帧的 shake `g_Speed`（2.1）与 `g_Time` 两边相同。不是渲染差异，没法逐像素比。
   - 变异（子代理在快照里手做、单测检出）：不重绑引用方、拆层释放两次、空文字不换独占 RT；`padding` 漏掉被依赖由 `text/layout.test.ts` 的 137×97 断言守。
 
 ### 步骤 7 — 被依赖的组（2026-11-20）

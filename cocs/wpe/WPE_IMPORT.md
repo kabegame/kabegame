@@ -360,7 +360,7 @@ Web 发布版与 Android 硬门控为主窗口。
   `src = webEntry`（见下「网页壁纸 iframe」）；`webEntry` 为空时报「无法加载网页壁纸」，预览退回作者预览图、桌面保持原画面。
 - `x-wpe/scene`：`sceneAssets` 是 WPE 安装目录的 `assets`，`previewPath` 是退回用的作者预览图（行的 `thumbnail_path`，缩略图为空或
   回落成目录本身时不填），其它类型两者都为空。`WpeWallpaperContent` 挂 `WpeSceneView` 编译渲染；loading → live / failed 的
-  状态流转、超时与过渡见 [WPE_SCENE.md](WPE_SCENE.md)「显示」。
+  状态流转、超时与过渡见 [scene/HOST.md](scene/HOST.md)「显示」。
 
 不生成任何按屏幕分辨率缩放的壁纸副本（WPE 也不做），不复刻 WPE 的解码后端选择。
 
@@ -753,7 +753,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
 - **注入照常**：`ConvertPointFromView` 用合成器命中测试的变换，已含放大与平移，点击与跟随对得上位置。
 - **场景画布的分辨率**（2026-11-19 起）：场景按画布像素画，显示缩放（`displayScaleOf`）含了放大，所以放大多少画布就跟到多少、放大后
   真的更清楚；主窗口有像素预算（3840×2160 等量），`WpeSceneView` 上报 `sceneDisplayScale(实测, { layout, dpr, budget })`，到预算后再放大只是拉伸。
-  `WallpaperPreviewCanvas` 把放大倍数 `provide` 给画布里的场景（`WALLPAPER_PREVIEW_ZOOM`），放大倍数一变下一帧补量。见 [WPE_SCENE.md](WPE_SCENE.md)
+  `WallpaperPreviewCanvas` 把放大倍数 `provide` 给画布里的场景（`WALLPAPER_PREVIEW_ZOOM`），放大倍数一变下一帧补量。见 [scene/HOST.md](scene/HOST.md)
   「画布尺寸」。（11-15 到 11-18 场景按场景分辨率画，放大时封顶在布局 × DPR。）网页壁纸不处理：
   iframe 内容由 Chromium 按变换栅格化，页面自己的 canvas（WebGL 等）按页面定的分辨率被浏览器拉伸。
 - **设封面**：不复位，截看得见的那一块（见下「封面」）。
@@ -792,7 +792,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   downloads）、`allow="autoplay; fullscreen"`、`referrerpolicy="no-referrer"`。换目标、卸载时 **销毁** iframe（先 `about:blank`
   再移除），frame 销毁后它的监听随 `SubframeDestroyed` 清掉。`volume` / `paused` / `interactive` 经音量消息交给垫片（见上「音量」
   「鼠标」），暂停由垫片冻结页面、iframe 保持可见（见上「暂停」）；iframe 的 `pointer-events` 一律 `none`（Linux 退回时可交互才收）。
-- **场景**：挂一个 `WpeSceneView`（见 [WPE_SCENE.md](WPE_SCENE.md)「显示」）。
+- **场景**：挂一个 `WpeSceneView`（见 [scene/HOST.md](scene/HOST.md)「显示」）。
 - **事件**：
   - `live`：网页 `load`（导航了但 8 s 没 load 也算，页面已在画，只记 warn）；场景出首帧，退回后又能渲染时再发。
   - `fail(reasons)`：显示不了，调用方当「原图加载失败」。网页：`web:no-entry`（`webEntry` 为空，不建 iframe）、
@@ -819,7 +819,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
 - **图片立即加载**：壁纸变体的 `<img>` 是 `eager`。懒加载的图在新层还透明、当前层是播放中的视频时一直不开始（实测 8 s 以上），新层等
   不到 `ready`，看上去就是没换。
 - **样式**：fill / fit / stretch / center → `fit` 的 cover / contain / fill / none；tile 时图片用 `displaySource()` 画重复背景（等比放进、
-  居中重复），视频按 cover，网页忽略样式，场景把样式交给宿主（`playback.style`，留白是 `schemecolor`，见 [WPE_SCENE.md](WPE_SCENE.md)
+  居中重复），视频按 cover，网页忽略样式，场景把样式交给宿主（`playback.style`，留白是 `schemecolor`，见 [scene/HOST.md](scene/HOST.md)
   「样式」「留白颜色」）。
 - **参数**：`volume` / `playbackRate` / 场景设置 / 样式合成 `playback` 交给每层，`paused` 反过来给 `videoPlaying`，`interactive` 原样，
   WPE 视频的作者属性经 `wpeVideo`、后端目标经 `wallpaperTarget` 下传（网页 / 场景不用再按 id 取一次）。
@@ -848,7 +848,7 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
     正中是阶段文字（技术名词，用户定：「初始化场景宿主 / 解析场景并编译着色器（WPESL → WGSL） / 解码纹理 mipmap / 初始化 WebGPU 设备、
     场景脚本与字体排版 / 创建 GPU 渲染管线 / 提交首帧」，五种语言）、细进度条与一行「当前阶段的 done / total · 总百分比（两位小数）」
     （计数只在编译、解码、建管线这几个有计数的阶段），预览、应用背景都显示（用户定：只看到
-    清晰的缩略图、没有文字，就是没加载出来）；场景按宿主上报的进度画（规则见 [WPE_SCENE.md](WPE_SCENE.md)「加载进度」），网页壁纸
+    清晰的缩略图、没有文字，就是没加载出来）；场景按宿主上报的进度画（规则见 [scene/HOST.md](scene/HOST.md)「加载进度」），网页壁纸
     只有不定进度条与「加载中」。实时画面出来时走满、停 200 ms 再淡出（模糊一起淡掉）；换一张从头再来。Android / Web 没有。
     **显示不了**（`fail(reasons)`，用户定）：文字与进度条变红、走满，标题「喵呜，这张壁纸渲染失败了呢」（用户定；超时是「加载超时」），下面一行是原因（宿主报的键，
     `; ` 连接，最多两行；超时不列）；停 200 ms 后模糊与中间那块淡出，红字原因换到缩略图底部（`placement="bottom"`，不模糊、没有进度条）
@@ -902,9 +902,9 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 
 `file` 与 `directory` 仅使用用户所选路径；无作者默认值时清空路径会删除该用户键，垫片向页面补发空路径以撤销旧值。core 生成文件 / 目录放行项（`user_file_grants`），网页壁纸目录索引按这张壁纸当前的 metadata **覆盖**它的放行（`metadataId` 补丁到达时、`wpe_web_get_state` 返回前各写一次，见上「网页壁纸目录索引」）：改了目录属性，旧目录立即不可读；另一张网页壁纸读不到这张的用户选择。预览与桌面共用这套闸门。目录属性递归列举浏览器安全的媒体文件，最多 10000 个；垫片对 `fetchall` 发送文件增删回调，对 `ondemand` 随机返回一个文件。
 
-场景的 `scenetexture`（用户纹理，P11b；渲染一侧见 [WPE_SCENE.md](WPE_SCENE.md)「用户纹理（P11b）」）：`WpePropKind::SceneTexture`，面板用和 `file` 相同的文件选择与清空按钮。`project.json` 里没有 `filter`，过滤固定为 WPE 那一条（`jpg jpeg jfif png gif mp4`，`SCENE_TEXTURE_EXTENSIONS`），所以没有「WPE 收、浏览器解不了」的格式。校验同 `file`（绝对路径、是文件、不是符号链接，空串表示清空）；存之前照 WPE 整理路径（`wpe_slash_path`：`\` 换成 `/`、非开头的连续 `/` 合并，UNC 的开头 `//` 保留，不拷贝、不改大小写）。`user_file_grants` 同样收它：网页壁纸目录索引的场景条目除目录外再存这些文件，`scene_grants` 一起返回给场景宿主的访问范围，覆盖时机同上两处（`wpe_web_get_state` 返回前也写）。宿主是一份文档，放行对全部场景宿主实例生效；文件都是用户自己选的。`usershortcut` 不进放行：它不读文件，图标与启动都在后端。
+场景的 `scenetexture`（用户纹理，P11b；渲染一侧见 [scene/AUDIO_MEDIA.md](scene/AUDIO_MEDIA.md)「用户纹理（P11b）」）：`WpePropKind::SceneTexture`，面板用和 `file` 相同的文件选择与清空按钮。`project.json` 里没有 `filter`，过滤固定为 WPE 那一条（`jpg jpeg jfif png gif mp4`，`SCENE_TEXTURE_EXTENSIONS`），所以没有「WPE 收、浏览器解不了」的格式。校验同 `file`（绝对路径、是文件、不是符号链接，空串表示清空）；存之前照 WPE 整理路径（`wpe_slash_path`：`\` 换成 `/`、非开头的连续 `/` 合并，UNC 的开头 `//` 保留，不拷贝、不改大小写）。`user_file_grants` 同样收它：网页壁纸目录索引的场景条目除目录外再存这些文件，`scene_grants` 一起返回给场景宿主的访问范围，覆盖时机同上两处（`wpe_web_get_state` 返回前也写）。宿主是一份文档，放行对全部场景宿主实例生效；文件都是用户自己选的。`usershortcut` 不进放行：它不读文件，图标与启动都在后端。
 
-场景的 `usershortcut`（快捷方式，P11d；图标、门禁与启动见 [WPE_SCENE.md](WPE_SCENE.md)「快捷方式（P11d）」）：
+场景的 `usershortcut`（快捷方式，P11d；图标、门禁与启动见 [scene/AUDIO_MEDIA.md](scene/AUDIO_MEDIA.md)「快捷方式（P11d）」）：
 - **面板**：`WpePropKind::UserShortcut`，只在场景、只在 Windows 上显示（`WpeShortcutField.vue`）。
   - 先选类型：文件、文件夹、网址、命令；再填路径，文件与文件夹可以浏览选取；文件类型另有参数输入框。
   - 「测试」按钮先 `saveNow()` 存下，再调启动命令 `wpe_open_user_shortcut`。主窗口里的点击本身就是用户激活。
@@ -935,8 +935,8 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
   归视频控制条，音量是全部视频共用的 `kabegame-video-volume`）。
 - **控制条的倍速**（2026-11-17 用户定）：预览的视频（含视频壁纸）与场景壁纸，控制条上全屏按钮左边有倍速按钮（`PreviewSpeedControl`，显示当前倍数、
   悬停出 0.25–4 的档位、点按钮回到 1×）。它是这次观看的临时值：换图时回到起步值（视频壁纸与场景取这张的「倍速」预览设置，普通视频 1），
-  改了不写回设置；视频直接设到 `<video>`，场景经 `playback.playbackRate` 交给宿主（见 WPE_SCENE「播放速度」）。网页壁纸没有。
-- **强制渲染**（2026-11-17 用户定，只对场景）：有暂不支持的特性也照常渲染，不退回封面（宿主的处理见 [WPE_SCENE.md](WPE_SCENE.md)
+  改了不写回设置；视频直接设到 `<video>`，场景经 `playback.playbackRate` 交给宿主（见 [scene/RENDERER.md](scene/RENDERER.md)「播放速度」）。网页壁纸没有。
+- **强制渲染**（2026-11-17 用户定，只对场景）：有暂不支持的特性也照常渲染，不退回封面（宿主的处理见 [scene/RENDERER.md](scene/RENDERER.md)
   「强制渲染」）。打开一律先确认（`utils/wpeForceRender.ts` 的 `confirmWpeForceRender`，警告样式，提示画面可能缺东西、错位或和
   WPE 不一致）：设置页与预览侧栏在字段组 `WpeSettingsFields` 里拦 `update`，取消就不报；预览的「我就要看」由预览弹窗确认后写这张的
   预览设置；关掉不确认。值和四个场景选项一起经场景设置消息（`wpeSceneSettingsOf` 的 `forceRender`）交给宿主，桌面由壁纸窗口读
@@ -959,12 +959,12 @@ tauri 补丁 19 起，CEF 下**每个子 frame 都有 Tauri 的 IPC 桥**（包�
 - **「跟随 WPE」**：只在能读到 WPE `config.json` 时提供（`get_wpe_follow_available`：只有 Windows，且 WPE 安装目录里有
   `config.json`；`useWpeFollowAvailable` 全应用一份，`wpeEngineDir` 变了重读）。不能跟随时选项里没有这一档，存着的 `follow`
   显示为 Kabegame 默认值，交给场景宿主前也换成默认值（`wpeSceneSettingsOf`）。媒体集成只有开 / 关两档。
-- **场景四项怎么到宿主**：父页面经 postMessage 下发（`kabegame:wpe-scene-settings`，见 [WPE_SCENE.md](WPE_SCENE.md)「场景后处理档位」），
+- **场景四项怎么到宿主**：父页面经 postMessage 下发（`kabegame:wpe-scene-settings`，见 [scene/COMPILE.md](scene/COMPILE.md)「场景后处理档位」），
   壁纸窗口传全局值，预览传预览设置；宿主不再自己读全局设置。
 - **帧率**（整数或 `"follow"`，默认 30）：范围 10 到显示器最高刷新率（`get_display_max_refresh_rate`，同 WPE 滑块的
   `runtime.frequencymax`），「跟随 WPE」是滑块上方的开关。它不走上面的设置 postMessage：生效值由 `wpe_web_get_state` 按调用方窗口
   取全局或预览设置、解析跟随（WPE `config.json` 只读一次）后放进 `general.fps`，垫片经 `applyGeneralProperties` 同时交给网页壁纸与
-  场景宿主，场景就地改限帧（见 [WPE_SCENE.md](WPE_SCENE.md)「帧率」）。
+  场景宿主，场景就地改限帧（见 [scene/RENDERER.md](scene/RENDERER.md)「帧率」）。
 
 ### 封面
 
@@ -1024,7 +1024,7 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
   同一批样本另喂给 WPE 采集线程的原始频谱（`wpe_spectrum.rs`，P4e 步骤 4，照 `.claude/plans/wpe-import/3-scene/phase4/rea-p4e-audio.md`
   3.2 逐行复刻：每攒够约 29 ms 的样本做一次 1920 / 2089 点复数 FFT（`rustfft`），不加窗、样本写成 `127·s + 127`，乘频率倾斜后按四次方根
   归入 64 段取最大，得到线性原值；静音标志的包、读取失败立即清零，缺包 1 s 后清零），随同一条消息的 `raw` 字段推出，只给场景宿主用
-  （它再照 WPE 做每帧的自适应归一化，见 [WPE_SCENE.md](WPE_SCENE.md)）。网页壁纸仍用上面的自定频谱：WPE 给网页壁纸的其实是这份原值
+  （它再照 WPE 做每帧的自适应归一化，见 [scene/PARTICLES_ROPE_CHILDREN.md](scene/PARTICLES_ROPE_CHILDREN.md)「粒子（P4e）」的「音频：场景频谱」）。网页壁纸仍用上面的自定频谱：WPE 给网页壁纸的其实是这份原值
   （rea 3.4），2026-11-13 用户比较两者后选择保留自定算法的观感。
 - **媒体**（`wpe_media/media.rs` + `projection.rs` + `colors.rs`）：专用线程持有 SMTC 管理器与当前会话
   （`CurrentSessionChanged`、`SessionsChanged` 都只是重取当前会话），WinRT 事件只发信号，读取与比较在线程里做。
@@ -1039,7 +1039,7 @@ tauri 补丁 18 起作为命令参数的 Channel 只投递到调用方 frame。
       因为很多播放器的读数停在上次跳转；播放器不给时间轴就不推。
     - 没有会话时推 `Playback 0` 与空属性、空封面。
   - **场景投影**（场景宿主的入口文档）：照 `winrtutil` 取值，整秒时间轴、不外推，原尺寸封面（`sceneThumbnail`），超长字段清空，
-    每类和上次发出的值比，见 [WPE_SCENE.md](WPE_SCENE.md)「媒体（P11c）」。
+    每类和上次发出的值比，见 [scene/AUDIO_MEDIA.md](scene/AUDIO_MEDIA.md)「媒体（P11c）」。
   - **五个颜色**两个投影共用（P11c 起照 WPE，`colors.rs`）：在原尺寸、Spotify 预处理之后的像素上算 360 格色相直方图的三色。
     `textColor` 取对比度 ≥ 2.5 的次色 / 第三色、否则同 `highContrastColor`；`highContrastColor` 按主色对黑的对比度取黑或白。
     **没有封面时五色全黑**：Phase 8 原来是深灰底白字，P11c 照 WPE 改了。
