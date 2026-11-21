@@ -2,19 +2,90 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FOCUS_RETURN_DELAY_MS,
-  framePointerEvents,
   keepFocusOutOfFrames,
-  NATIVE_FRAME_POINTER,
+  startWindowPointerFeed,
+  type WindowPointer,
 } from "./framePointer";
 
-describe("framePointerEvents", () => {
-  it("注入时 iframe 一律不收真实鼠标；退回（Linux）时可交互才收", () => {
-    if (NATIVE_FRAME_POINTER) {
-      expect(framePointerEvents(true)).toBe("none");
-    } else {
-      expect(framePointerEvents(true)).toBe("auto");
-    }
-    expect(framePointerEvents(false)).toBe("none");
+describe("startWindowPointerFeed", () => {
+  let frames: FrameRequestCallback[] = [];
+  let sent: WindowPointer[] = [];
+  let stop: () => void = () => {};
+
+  function start() {
+    frames = [];
+    sent = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames[id - 1] = () => {};
+    });
+    stop = startWindowPointerFeed((pointer) => sent.push(pointer));
+  }
+
+  function runFrames() {
+    const pending = frames;
+    frames = [];
+    for (const callback of pending) callback(0);
+  }
+
+  function pointer(type: string, init: MouseEventInit) {
+    window.dispatchEvent(new MouseEvent(type, { bubbles: true, ...init }));
+  }
+
+  afterEach(() => {
+    stop();
+    vi.restoreAllMocks();
+  });
+
+  it("一帧里的移动合并成最后一个，按下 / 抬起当场发并先补上没发的移动", () => {
+    start();
+    pointer("pointermove", { clientX: 10, clientY: 20 });
+    pointer("pointermove", { clientX: 30, clientY: 40 });
+    expect(sent).toEqual([]);
+    runFrames();
+    expect(sent.map((p) => [p.x, p.y])).toEqual([[30, 40]]);
+    pointer("pointermove", { clientX: 31, clientY: 40 });
+    pointer("pointerdown", { clientX: 31, clientY: 40, button: 0, buttons: 1 });
+    pointer("pointerup", { clientX: 32, clientY: 40, button: 0, buttons: 0 });
+    expect(sent.map((p) => [p.x, p.leftDown])).toEqual([
+      [30, false],
+      [31, false],
+      [31, true],
+      [32, false],
+    ]);
+    // 补发过的移动不会在下一帧再发一次
+    runFrames();
+    expect(sent).toHaveLength(4);
+    expect(sent[0]).toMatchObject({ width: window.innerWidth, height: window.innerHeight, present: true });
+  });
+
+  it("右键不算一次按下；离开窗口发一次离开，回来照常移动", () => {
+    start();
+    pointer("pointermove", { clientX: 5, clientY: 5 });
+    runFrames();
+    pointer("pointerdown", { clientX: 5, clientY: 5, button: 2, buttons: 2 });
+    expect(sent).toHaveLength(1);
+    pointer("mouseout", { clientX: -1, clientY: 5, relatedTarget: null });
+    pointer("mouseout", { clientX: -1, clientY: 5, relatedTarget: null });
+    expect(sent.map((p) => p.present)).toEqual([true, false]);
+    // 在页面里从一个元素移到另一个（有 relatedTarget）不算离开
+    pointer("mouseout", { clientX: 6, clientY: 5, relatedTarget: document.body });
+    expect(sent).toHaveLength(2);
+    pointer("pointermove", { clientX: 7, clientY: 5 });
+    runFrames();
+    expect(sent.at(-1)).toMatchObject({ x: 7, present: true });
+  });
+
+  it("停止后不再发", () => {
+    start();
+    pointer("pointermove", { clientX: 1, clientY: 1 });
+    stop();
+    runFrames();
+    pointer("pointerdown", { clientX: 1, clientY: 1, button: 0, buttons: 1 });
+    expect(sent).toEqual([]);
   });
 });
 

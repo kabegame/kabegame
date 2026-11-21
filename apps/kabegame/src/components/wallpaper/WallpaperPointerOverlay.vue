@@ -14,12 +14,9 @@
  *
  * 画布里要能点的元素（带 `data-wallpaper-clickable`，如缩略图底部的「我就要看」）在覆盖层下面收不到点击：左键按下时按位置
  * （`document.elementsFromPoint`）找到它就不平移，松开时还在同一个元素上就 `click()` 它；悬停时光标为手形。
- *
- * Linux 不盖：iframe 直接收真实鼠标（`NATIVE_FRAME_POINTER`）。
  */
-// TODO:[WPE_SCENE] Linux 未实测：没有覆盖层，壁纸上的滚轮、拖动进了 iframe，只有留白处（Panzoom 自己的左键平移）与工具条能缩放 / 平移
 import { ref } from "vue";
-import { NATIVE_FRAME_POINTER, WALLPAPER_CLICKABLE_SELECTOR } from "./framePointer";
+import { WALLPAPER_CLICKABLE_SELECTOR } from "./framePointer";
 
 const props = defineProps<{
   /** 现在拖得动（已放大） */
@@ -93,7 +90,6 @@ function onPointerCancel() {
 
 <template>
   <div
-    v-if="NATIVE_FRAME_POINTER"
     class="absolute inset-0"
     :class="panning ? 'cursor-grabbing' : overClickable ? 'cursor-pointer' : pannable ? 'cursor-grab' : ''"
     data-wallpaper-pointer-overlay

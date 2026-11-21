@@ -58,7 +58,7 @@ export function intersectRect(
  */
 import { computed, onBeforeUnmount, onMounted, provide, ref } from "vue";
 import { primaryMonitor } from "@tauri-apps/api/window";
-import { NATIVE_FRAME_POINTER, keepFocusOutOfFrames } from "./framePointer";
+import { keepFocusOutOfFrames } from "./framePointer";
 import { WALLPAPER_PREVIEW_ZOOM } from "./wpeSceneStyle";
 
 const props = withDefaults(
@@ -151,9 +151,7 @@ function measure() {
 let stopFrameFocus: (() => void) | null = null;
 
 onMounted(() => {
-  if (NATIVE_FRAME_POINTER) {
-    stopFrameFocus = keepFocusOutOfFrames((frame) => canvasRef.value?.contains(frame) ?? false);
-  }
+  stopFrameFocus = keepFocusOutOfFrames((frame) => canvasRef.value?.contains(frame) ?? false);
   measure();
   observer = new ResizeObserver(() => measure());
   if (containerRef.value) observer.observe(containerRef.value);

@@ -30,8 +30,7 @@
  * - 属性：由这里推给垫片（照 WPE 宿主推送，`useWpeStateDelivery`）：iframe 第一次真实 load 后推整份，之后只推增量；页面自己
  *   reload / 改地址出来的新文档不重推，只发一条不带属性的「就绪」。iframe 自己不取状态。
  * - 鼠标：iframe 不收真实鼠标（`pointer-events: none`）。`interactive` 经音量消息交给垫片，垫片在可交互且没暂停时向
- *   `tauri-plugin-cursor` 登记本 frame，Rust 把全局光标直接注入它。Linux 拿不到全局光标，退回可交互的 iframe 直接收真实鼠标
- *   （`framePointer.ts`）。
+ *   `tauri-plugin-cursor` 登记本 frame，Rust 把光标直接注入它（光标从哪来见 `framePointer.ts`）。
  *
  * 壁纸窗口的 ping：网页 iframe 存在（含加载中），或场景宿主的垫片已经发过音量请求时，交给 iframe 里的垫片应答
  * （`delegatesPing`）；页面卡死就不应答、照样触发重载。
@@ -44,7 +43,6 @@ import { isSceneTarget, isWebTarget } from "./targetKind";
 import type { Mode, WallpaperTarget } from "./types";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
-import { framePointerEvents } from "./framePointer";
 import { WEB_SANDBOX } from "./webSandbox";
 import type { WpeSceneProgress } from "./wpeSceneProgress";
 import { useWpeStateDelivery } from "@/composables/useWpeStateDelivery";
@@ -197,9 +195,9 @@ function clearWebLoadTimer() {
   }
 }
 
-/** iframe 的 `pointer-events`：鼠标由 Rust 注入时一律 `none`，Linux 退回时可交互才 `auto`。 */
+/** iframe 不收真实鼠标：鼠标由 Rust 注入（`framePointer.ts`）。 */
 function applyWebPointerEvents() {
-  if (webFrameEl) webFrameEl.style.pointerEvents = framePointerEvents(props.interactive);
+  if (webFrameEl) webFrameEl.style.pointerEvents = "none";
 }
 
 /** 把宿主音量（含暂停、可交互）发给 iframe 里的垫片；iframe 还停在初始 about:blank 时也照发，页面起来后垫片会自己再要。 */
@@ -366,13 +364,7 @@ watch(
     if (!disposed) void resolveTarget();
   },
 );
-watch(
-  () => props.interactive,
-  () => {
-    applyWebPointerEvents();
-    postWebVolume();
-  },
-);
+watch(() => props.interactive, postWebVolume);
 watch(() => [props.volume, props.paused], postWebVolume);
 
 onMounted(() => {

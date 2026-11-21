@@ -165,21 +165,11 @@ impl<R: Runtime> WallpaperWindow<R> {
                 description: format!("Kabegame Wallpaper {slot}"),
                 slot,
                 screen: screen.map(|screen| screen.id.clone()),
+                // 应用启动时已经起好（init_post），这里只取路径
                 input: super::pointer_socket::ensure_started(|| {
-                    // 主窗口的标题（在 KWin 里认窗口）与视图逻辑尺寸（扣窗口装饰）：桌面上的光标按它们换算到主窗口里。
-                    // kbcef 的窗口 browser 的 `inner_size` 给的是 CEF Views `GetSize()`（DIP），类型却是 `PhysicalSize`；
-                    // 两种读法都交出去，由匹配挑（runtime 以后改成真的物理像素也照样认得）
-                    let app = tauri::Manager::app_handle(&self.window).clone();
-                    Box::new(move || {
-                        let main = tauri::Manager::get_webview_window(&app, "main")?;
-                        let size = main.inner_size().ok()?;
-                        let scale = main.scale_factor().ok()?.max(0.01);
-                        let raw = (f64::from(size.width), f64::from(size.height));
-                        Some(super::pointer_socket::MainWindowInfo {
-                            title: main.title().ok()?,
-                            view_sizes: vec![raw, (raw.0 / scale, raw.1 / scale)],
-                        })
-                    })
+                    super::pointer_socket::main_window_probe(
+                        tauri::Manager::app_handle(&self.window).clone(),
+                    )
                 }),
                 max_fps: OFFSCREEN_MAX_FPS,
                 // 与建窗时登记的共享纹理一致（manager::window::create_window）

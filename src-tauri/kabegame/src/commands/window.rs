@@ -46,6 +46,30 @@ pub fn wallpaper_window_ready<R: tauri::Runtime>(webview: tauri::Webview<R>) -> 
     Ok(())
 }
 
+/// 主窗口的页面把自己收到的鼠标交给应用（Linux 读不到全局光标）：应用照壁纸鼠标回传的协议发到那个 socket，和 Plasma 壁纸
+/// 插件的消息在同一条线程里处理（`wallpaper::pointer_socket`），图库预览里的网页 / 场景壁纸经它注入（同 Windows / macOS 的全局
+/// 光标）。`x` / `y` 是主窗口视图坐标（CSS 像素），`width` / `height` 是视口宽高，`present` 为假是光标离开了主窗口。
+/// 只认主窗口的主 frame。同步命令：在主线程上按调用顺序执行，按下与抬起不会乱序。
+#[tauri::command]
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+pub fn push_window_pointer<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    frame: tauri::ipc::CallerFrame,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    left_down: bool,
+    present: bool,
+) -> Result<(), String> {
+    if webview.label() != "main" || !matches!(frame, tauri::ipc::CallerFrame::Main) {
+        return Err("push_window_pointer 只给主窗口的主 frame".into());
+    }
+    crate::wallpaper::pointer_socket::send_window_pointer((x, y), (width, height), left_down, present);
+    Ok(())
+}
+
 /// 壁纸窗口对 `wallpaper-ping` 的应答；应用页与网页壁纸垫片共用。
 /// label 取调用方 webview，页面替不了别的窗口应答。只发 opt-in 的 pong，不进窗口 / SSE。
 #[tauri::command]

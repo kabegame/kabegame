@@ -10,7 +10,9 @@ import "@/styles/tokens.css";
 import "../styles/hscroll-fade.css";
 import { vPullToRefresh } from "@/directives/pullToRefresh";
 import { vHscrollFade } from "@/directives/hscrollFade";
-import { IS_ANDROID, IS_MACOS, IS_WEB } from "@/env";
+import { IS_ANDROID, IS_LINUX, IS_MACOS, IS_WEB } from "@/env";
+import { invoke } from "@/api/rpc";
+import { startWindowPointerFeed } from "@/components/wallpaper/framePointer";
 import { registerHeaderFeatures } from "@/header/headerFeatures";
 import { createMinAppVersionBeforeAddTaskGuard } from "@/composables/pluginMinAppVersionGate";
 import { usePluginStore } from "@/stores/plugins";
@@ -38,6 +40,14 @@ if (!IS_WEB) {
   });
   window.addEventListener("unhandledrejection", (event) => {
     logger.error(`[unhandledrejection] ${describeError(event.reason)}`);
+  });
+}
+
+// Linux 读不到全局光标：主窗口把自己收到的鼠标交给应用，应用照壁纸鼠标回传的协议发进那个 socket，图库预览里的网页 / 场景
+// 壁纸经它注入（Windows / macOS 由 Rust 轮询全局光标）。同步命令，按调用顺序执行；失败（应用退出中）不管。
+if (IS_LINUX) {
+  startWindowPointerFeed((pointer) => {
+    void invoke("push_window_pointer", { ...pointer }).catch(() => {});
   });
 }
 

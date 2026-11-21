@@ -10,7 +10,7 @@ mod windows;
 #[cfg(target_os = "linux")]
 pub use linux::{
     native_window, position_in_window, push_external_pointer, register_external_pointer,
-    unregister_external_pointer,
+    unregister_external_pointer, PointerOrigin,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{native_window, position_in_window};

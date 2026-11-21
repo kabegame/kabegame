@@ -16,7 +16,6 @@ import {
 import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
 import { WPE_SCENE_SHORTCUT } from "./wpeSceneShortcut";
 import { WPE_VOLUME_MESSAGE, WPE_VOLUME_REQUEST } from "./wpeWebVolume";
-import { framePointerEvents } from "./framePointer";
 
 /** `wpe_scene_cursor` 的返回（开场指针）；其余命令都当取宿主地址。 */
 const cursor = vi.hoisted(() => ({ value: null as { x: number; y: number } | null }));
@@ -564,7 +563,7 @@ describe("WpeSceneView 鼠标", () => {
     const volumePosts = () =>
       post.mock.calls.filter(([data]) => (data as { type?: unknown }).type === WPE_VOLUME_MESSAGE);
     fromHost({ type: WPE_VOLUME_REQUEST });
-    expect(frame.style.pointerEvents).toBe(framePointerEvents(true));
+    expect(frame.style.pointerEvents).toBe("none");
     expect(volumePosts().at(-1)?.[0]).toEqual({
       type: WPE_VOLUME_MESSAGE,
       volume: 1,

@@ -1,12 +1,17 @@
 //! Linux：读不到全局光标（Wayland 不给任何客户端），光标由外部来源推进来。应用把某个窗口登记成外部来源
-//! （[`register_external_pointer`]），之后把收到的指针状态推给它（[`push_external_pointer`]）。Kabegame 的来源是
-//! Plasma 壁纸插件转发的鼠标（插件模式的离屏壁纸窗口），插件只在光标落在桌面上时才有事件。
+//! （[`register_external_pointer`]），之后把收到的指针状态推给它（[`push_external_pointer`]），每个样本带来源
+//! （[`PointerOrigin`]）：
+//! - **桌面**：光标在桌面上。Kabegame 的来源是 Plasma 壁纸插件转发的鼠标（插件模式），离屏壁纸窗口只有这一种；主窗口的
+//!   也是它换算过来的（只带移动）。
+//! - **窗口**：窗口自己的页面收到的鼠标（光标在这个窗口里，页面经 `plugin:cursor|push_pointer` 推）。主窗口（图库预览）用它。
 //!
-//! - 没登记的窗口 [`native_window`] 为 `None`：`attach_frame` 返回 `false`（图库预览的 iframe 照旧直接收真实鼠标）。
-//! - 每个订阅（每个登记的 frame）一条自己的样本队列：推送时连续的同状态样本合并成最后一个，按下 / 抬起 / 离开
-//!   另起一项，轮询线程一轮全部交出（两轮之间的一次点击也不丢）；队列封顶，超出丢最旧的。
-//! - 新订阅先拿到最近一次推送（登记时光标已在桌面上，立刻有位置）。
-//! - 光标下恒为桌面（`over_desktop` 为真、`over_window` 为假）：事件只在光标落在桌面上时才来。
+//! - 没登记的窗口 [`native_window`] 为 `None`：`attach_frame` 返回 `false`。
+//! - 每个订阅（每个登记的 frame）一条自己的样本队列：推送时连续的同状态（左键、位置可知、来源）样本合并成最后一个，
+//!   按下 / 抬起 / 离开 / 换来源另起一项，轮询线程一轮全部交出（两轮之间的一次点击也不丢）；队列封顶，超出丢最旧的。
+//! - 新订阅先拿到最近一次推送（登记时光标已在里面，立刻有位置）。
+//! - 光标下是什么看样本的来源：桌面来的 `over_desktop` 为真，窗口来的 `over_window` 为真。
+//! - 两种来源交接（光标从桌面移进窗口、或反过来）时，一边的离开可能晚于另一边的进入到达：另一边还有光标时，这一边的离开
+//!   不算（不交给 frame）。
 //! - 注销后订阅随下一轮 `alive` 为假被移除，frame 收到收尾。
 
 use std::collections::{HashMap, VecDeque};
@@ -19,30 +24,50 @@ use crate::hub::{Probe, Sample};
 /// 一个订阅的队列最多攒多少项（正常一轮只有几项；轮询线程卡住时丢最旧的）。
 const QUEUE_LIMIT: usize = 64;
 
+/// 外部来源的样本从哪来，决定「光标下是什么」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerOrigin {
+    /// 光标在桌面上（壁纸插件转发）：光标下是桌面。
+    Desktop,
+    /// 窗口自己的页面收到的（光标在这个窗口里）：光标下是本窗口。
+    Window,
+}
+
+impl PointerOrigin {
+    fn index(self) -> usize {
+        match self {
+            Self::Desktop => 0,
+            Self::Window => 1,
+        }
+    }
+}
+
+type Item = (Sample, PointerOrigin);
+
 #[derive(Default)]
 struct Queue {
-    items: VecDeque<Sample>,
-    /// 最后入队那一项的（左键, 位置可知）。
-    tail_state: Option<(bool, bool)>,
+    items: VecDeque<Item>,
+    /// 最后入队那一项的（左键, 位置可知, 来源）。
+    tail_state: Option<(bool, bool, PointerOrigin)>,
     /// 最后入队那一项可以被同状态的新样本覆盖（它不是状态变化的那一项）。
     tail_mergeable: bool,
 }
 
 impl Queue {
-    fn push(&mut self, sample: Sample) {
-        let state = (sample.left_down, sample.present);
+    fn push(&mut self, item: Item) {
+        let state = (item.0.left_down, item.0.present, item.1);
         let same = self.tail_state == Some(state);
         if same && self.tail_mergeable {
             if let Some(back) = self.items.back_mut() {
-                *back = sample;
+                *back = item;
                 return;
             }
         }
         if self.items.len() >= QUEUE_LIMIT {
             self.items.pop_front();
         }
-        self.items.push_back(sample);
-        // 状态变化的那一项（按下、抬起、离开、回来）保留原位置，之后同状态的移动另起一项再合并
+        self.items.push_back(item);
+        // 状态变化的那一项（按下、抬起、离开、回来、换来源）保留原位置，之后同状态的移动另起一项再合并
         self.tail_mergeable = same;
         self.tail_state = Some(state);
     }
@@ -50,7 +75,9 @@ impl Queue {
 
 struct Source {
     id: NativeWindow,
-    last: Option<Sample>,
+    last: Option<Item>,
+    /// 各来源现在有没有光标（按 [`PointerOrigin::index`]）。
+    present: [bool; 2],
     queues: Vec<Weak<Mutex<Queue>>>,
 }
 
@@ -69,6 +96,7 @@ pub fn register_external_pointer(label: &str) {
     sources().entry(label.to_string()).or_insert_with(|| Source {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         last: None,
+        present: [false; 2],
         queues: Vec::new(),
     });
 }
@@ -78,19 +106,24 @@ pub fn unregister_external_pointer(label: &str) {
     sources().remove(label);
 }
 
-/// 推一个指针样本给 `label` 窗口（视图坐标，同 [`Sample`]）。没登记的窗口忽略。可在任意线程调用。
-pub fn push_external_pointer(label: &str, sample: Sample) {
+/// 推一个指针样本给 `label` 窗口（视图坐标，同 [`Sample`]），`origin` 是它从哪来。没登记的窗口忽略。可在任意线程调用。
+pub fn push_external_pointer(label: &str, sample: Sample, origin: PointerOrigin) {
     let mut map = sources();
     let Some(source) = map.get_mut(label) else {
         return;
     };
-    source.last = Some(sample);
+    source.present[origin.index()] = sample.present;
+    // 另一种来源还有光标（交接时这边的离开晚到了）：这次离开不算
+    if !sample.present && source.present[1 - origin.index()] {
+        return;
+    }
+    source.last = Some((sample, origin));
     source.queues.retain(|weak| match weak.upgrade() {
         Some(queue) => {
             queue
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(sample);
+                .push((sample, origin));
             true
         }
         None => false,
@@ -108,14 +141,16 @@ pub fn position_in_window(native: NativeWindow) -> Option<(f64, f64)> {
         .values()
         .find(|source| source.id == native)
         .and_then(|source| source.last)
-        .filter(|sample| sample.present)
-        .map(|sample| sample.view)
+        .filter(|(sample, _)| sample.present)
+        .map(|(sample, _)| sample.view)
 }
 
 pub(crate) struct ExternalProbe {
     label: String,
     id: NativeWindow,
     queue: Arc<Mutex<Queue>>,
+    /// 上一次交出的样本从哪来（命中测试按它答）。
+    current: Option<PointerOrigin>,
 }
 
 impl ExternalProbe {
@@ -132,6 +167,7 @@ impl ExternalProbe {
             label: label.clone(),
             id: native,
             queue,
+            current: None,
         })
     }
 
@@ -150,7 +186,9 @@ impl Probe for ExternalProbe {
     }
 
     fn sample(&mut self) -> Option<Sample> {
-        self.queue().items.pop_front()
+        let (sample, origin) = self.queue().items.pop_front()?;
+        self.current = Some(origin);
+        Some(sample)
     }
 
     fn has_more(&mut self) -> bool {
@@ -158,17 +196,18 @@ impl Probe for ExternalProbe {
     }
 
     fn over_desktop(&mut self) -> bool {
-        true
+        self.current == Some(PointerOrigin::Desktop)
     }
 
     fn over_window(&mut self) -> bool {
-        false
+        self.current == Some(PointerOrigin::Window)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use PointerOrigin::{Desktop, Window};
 
     fn at(x: f64, left_down: bool) -> Sample {
         Sample {
@@ -216,7 +255,7 @@ mod tests {
             at(7.0, false), // 回来
             at(8.0, false),
         ] {
-            push_external_pointer(label, sample);
+            push_external_pointer(label, sample, Desktop);
         }
         let xs: Vec<(f64, bool, bool)> = drain(&mut probe)
             .into_iter()
@@ -246,13 +285,46 @@ mod tests {
         let label = "test-fanout";
         register_external_pointer(label);
         let mut first = probe_for(label);
-        push_external_pointer(label, at(1.0, false));
+        push_external_pointer(label, at(1.0, false), Desktop);
         let mut second = probe_for(label);
-        push_external_pointer(label, at(2.0, true));
+        push_external_pointer(label, at(2.0, true), Desktop);
         assert_eq!(drain(&mut first).len(), 2);
         // 第二个订阅先拿到登记时的最近位置，再是之后的按下
         let seen: Vec<f64> = drain(&mut second).iter().map(|s| s.view.0).collect();
         assert_eq!(seen, [1.0, 2.0]);
+        unregister_external_pointer(label);
+    }
+
+    #[test]
+    fn hit_tests_follow_the_origin_of_each_sample() {
+        let label = "test-origin";
+        register_external_pointer(label);
+        let mut probe = probe_for(label);
+        push_external_pointer(label, at(1.0, false), Desktop);
+        push_external_pointer(label, at(2.0, false), Window);
+        probe.sample().unwrap();
+        assert!(probe.over_desktop() && !probe.over_window());
+        probe.sample().unwrap();
+        assert!(probe.over_window() && !probe.over_desktop());
+        unregister_external_pointer(label);
+    }
+
+    #[test]
+    fn a_late_leave_from_one_origin_is_ignored_while_the_other_has_the_pointer() {
+        let label = "test-handover";
+        register_external_pointer(label);
+        let mut probe = probe_for(label);
+        // 光标从桌面移进窗口：窗口的进入先到，桌面的离开后到
+        push_external_pointer(label, at(1.0, false), Desktop);
+        push_external_pointer(label, at(2.0, false), Window);
+        push_external_pointer(label, gone(), Desktop);
+        // 再从窗口出去、回到桌面：窗口离开时桌面还没有光标，这次离开要交给 frame
+        push_external_pointer(label, gone(), Window);
+        push_external_pointer(label, at(3.0, false), Desktop);
+        let seen: Vec<(f64, bool)> = drain(&mut probe).iter().map(|s| (s.view.0, s.present)).collect();
+        assert_eq!(seen, [(1.0, true), (2.0, true), (0.0, false), (3.0, true)]);
+        let id = sources().get(label).unwrap().id;
+        assert_eq!(position_in_window(id), Some((3.0, 0.0)));
         unregister_external_pointer(label);
     }
 
@@ -263,15 +335,15 @@ mod tests {
         let id = sources().get(label).unwrap().id;
         let mut probe = ExternalProbe::new(id).unwrap();
         assert!(probe.alive());
-        push_external_pointer(label, at(3.0, false));
+        push_external_pointer(label, at(3.0, false), Desktop);
         assert_eq!(position_in_window(id), Some((3.0, 0.0)));
-        push_external_pointer(label, gone());
+        push_external_pointer(label, gone(), Desktop);
         assert_eq!(position_in_window(id), None, "离开后不给位置");
         unregister_external_pointer(label);
         assert!(!probe.alive());
         assert!(ExternalProbe::new(id).is_none());
         // 注销后推送忽略，重新登记换新标识
-        push_external_pointer(label, at(4.0, false));
+        push_external_pointer(label, at(4.0, false), Desktop);
         register_external_pointer(label);
         assert_ne!(sources().get(label).unwrap().id, id);
         unregister_external_pointer(label);
@@ -282,11 +354,11 @@ mod tests {
         let mut queue = Queue::default();
         for i in 0..(QUEUE_LIMIT * 2) {
             // 交替按下抬起：每一项都是状态变化，不合并
-            queue.push(at(i as f64, i % 2 == 0));
+            queue.push((at(i as f64, i % 2 == 0), Desktop));
         }
         assert_eq!(queue.items.len(), QUEUE_LIMIT);
         assert_eq!(
-            queue.items.back().unwrap().view.0,
+            queue.items.back().unwrap().0.view.0,
             (QUEUE_LIMIT * 2 - 1) as f64
         );
     }

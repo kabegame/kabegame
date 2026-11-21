@@ -9,8 +9,10 @@
 //! - 插件只在事件到达 plasmashell 的桌面窗口时才发，事件到了就说明光标下是桌面（图标上也算，同 Windows）。
 //! - 主窗口（图库预览里的网页 / 场景壁纸）也跟桌面上的光标，同 Windows 的全局光标：消息带光标的全局逻辑坐标，主窗口在哪由
 //!   KWin 给（`kwin_window`，Wayland 下应用自己不知道），扣掉窗口装饰换成主窗口的视图坐标，推给主窗口的外部来源。主窗口的
-//!   点击规则是「光标下是本窗口」，桌面上的光标只带移动、不点击；光标进了主窗口时插件收到离开、这边停注入，iframe 照旧直接收
-//!   真实鼠标。
+//!   点击规则是「光标下是本窗口」，桌面上的光标只带移动、不点击。
+//! - 光标在主窗口里时，主窗口的页面把自己收到的鼠标经命令 `push_window_pointer` 交给应用，应用也发到这个 socket（[`Kind::Window`]
+//!   / [`Kind::WindowLeave`]，与插件的消息在同一条线程里依次处理）：主窗口的外部来源收「窗口」来源的样本（移动与点击，同 Windows 的
+//!   预览），桌面壁纸经 KWin 的主窗口几何换回全局坐标、只收移动。桌面与窗口两种来源交接时晚到的离开由 `tauri-plugin-cursor` 忽略。
 
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -19,7 +21,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use tauri_plugin_cursor::Sample;
+use tauri::{Manager, Runtime};
+use tauri_plugin_cursor::{PointerOrigin, Sample};
 
 use super::kwin_window::{FrameGeometry, KwinWindowLocator};
 
@@ -38,6 +41,10 @@ enum Kind {
     Leave,
     /// 滚轮（预留，收下丢弃）。
     Axis,
+    /// 光标在主窗口里（应用自己发）：x, y 是主窗口视图坐标，dx, dy 是视口宽高。
+    Window,
+    /// 光标离开了主窗口（应用自己发）。
+    WindowLeave,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,7 +55,7 @@ struct Message {
     y: f32,
     /// 事件之后按着的键：bit0 左、bit1 右、bit2 中。
     buttons: u32,
-    /// kind = 1 / 2：光标的全局逻辑坐标；kind = 4：滚轮。
+    /// kind = 1 / 2：光标的全局逻辑坐标；kind = 4：滚轮；kind = 5：主窗口视口的宽高。
     dx: f32,
     dy: f32,
 }
@@ -58,12 +65,13 @@ impl Message {
     ///
     /// ```text
     /// u16 version = 1
-    /// u16 kind      // 1 move, 2 button, 3 leave, 4 axis（预留）
-    /// u32 slot      // 节点属性 kabegame.wallpaper.slot
-    /// f32 x, y      // 在插件壁纸 item 里的归一化坐标 0..1（可越界）；3 不用
+    /// u16 kind      // 插件发：1 move, 2 button, 3 leave, 4 axis（预留）；应用自己发：5 window, 6 window-leave
+    /// u32 slot      // 节点属性 kabegame.wallpaper.slot；5 / 6 不用
+    /// f32 x, y      // 1 / 2：在插件壁纸 item 里的归一化坐标 0..1（可越界）；5：主窗口视图坐标（CSS 像素）；3 / 6 不用
     /// u32 button    // kind = 2：变化的那个键（Linux BTN_*），这边只看 buttons
     /// u32 buttons   // 事件之后按着的键：bit0 左、bit1 右、bit2 中
-    /// f32 dx, dy    // 1 / 2：光标的全局逻辑坐标（屏的左上角 + 桌面窗口里的位置，与 KWin 的窗口几何同一套）；4：滚轮
+    /// f32 dx, dy    // 1 / 2：光标的全局逻辑坐标（屏的左上角 + 桌面窗口里的位置，与 KWin 的窗口几何同一套）；4：滚轮；
+    ///               // 5：主窗口视口的宽高
     /// ```
     ///
     /// 每条消息都带按键全集（而不是只在按键消息里带变化），丢一条按键消息也不会让左键一直按着。
@@ -82,6 +90,8 @@ impl Message {
             2 => Kind::Button,
             3 => Kind::Leave,
             4 => Kind::Axis,
+            5 => Kind::Window,
+            6 => Kind::WindowLeave,
             _ => return None,
         };
         Some(Self {
@@ -112,7 +122,7 @@ struct SlotState {
 fn to_sample(state: &mut SlotState, message: &Message, size: (f64, f64)) -> Option<Sample> {
     let left_down = message.buttons & LEFT_BUTTON_BIT != 0;
     match message.kind {
-        Kind::Axis => None,
+        Kind::Axis | Kind::Window | Kind::WindowLeave => None,
         Kind::Leave => Some(Sample {
             view: state.last,
             inside: false,
@@ -152,6 +162,14 @@ fn window_view_point(global: (f64, f64), frame: FrameGeometry, view_size: (f64, 
     let side = (extra_w / 2.0).max(0.0);
     let top = (extra_h - side).max(0.0);
     Some((global.0 - frame.x - side, global.1 - frame.y - top))
+}
+
+/// [`window_view_point`] 的反方向：主窗口视图坐标换回全局坐标。
+fn window_global_point(view: (f64, f64), frame: FrameGeometry, view_size: (f64, f64)) -> (f64, f64) {
+    let (extra_w, extra_h) = (frame.width - view_size.0, frame.height - view_size.1);
+    let side = (extra_w / 2.0).max(0.0);
+    let top = (extra_h - side).max(0.0);
+    (view.0 + frame.x + side, view.1 + frame.y + top)
 }
 
 /// 主窗口的 label。
@@ -246,6 +264,15 @@ fn receive(socket: UnixDatagram, main_window: MainWindowProbe) {
             continue;
         };
         match (message.kind, message.global()) {
+            // 主窗口自己发的：不经下面按 slot 的桌面路径
+            (Kind::Window, _) => {
+                main.on_window(&message);
+                continue;
+            }
+            (Kind::WindowLeave, _) => {
+                main.on_window_leave();
+                continue;
+            }
             (Kind::Leave, _) => main.on_leave(),
             (_, Some(global)) => main.on_global(global, message.buttons & LEFT_BUTTON_BIT != 0),
             _ => {}
@@ -259,7 +286,7 @@ fn receive(socket: UnixDatagram, main_window: MainWindowProbe) {
         let size = (f64::from(geometry.width), f64::from(geometry.height));
         let state = slots.entry(message.slot).or_default();
         if let Some(sample) = to_sample(state, &message, size) {
-            tauri_plugin_cursor::push_external_pointer(label, sample);
+            tauri_plugin_cursor::push_external_pointer(label, sample, PointerOrigin::Desktop);
         }
     }
 }
@@ -332,11 +359,13 @@ impl MainWindow {
                 left_down,
                 present: true,
             },
+            PointerOrigin::Desktop,
         );
     }
 
+    /// 光标离开了桌面（插件的离开）。
     fn on_leave(&mut self) {
-        if let Some(view) = self.last.take() {
+        if let Some(view) = self.last {
             tauri_plugin_cursor::push_external_pointer(
                 MAIN_LABEL,
                 Sample {
@@ -345,27 +374,170 @@ impl MainWindow {
                     left_down: false,
                     present: false,
                 },
+                PointerOrigin::Desktop,
             );
         }
     }
+
+    /// 光标在主窗口里（主窗口的页面经应用发来）：主窗口收移动与点击；桌面壁纸经 KWin 的主窗口几何换回全局坐标，只收移动
+    /// （主窗口里的点击不是点在桌面上）。
+    fn on_window(&mut self, message: &Message) {
+        let view = (f64::from(message.x), f64::from(message.y));
+        let size = (f64::from(message.dx), f64::from(message.dy));
+        if ![view.0, view.1, size.0, size.1].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        self.last = Some(view);
+        tauri_plugin_cursor::push_external_pointer(
+            MAIN_LABEL,
+            Sample {
+                view,
+                inside: (0.0..size.0).contains(&view.0) && (0.0..size.1).contains(&view.1),
+                left_down: message.buttons & LEFT_BUTTON_BIT != 0,
+                present: true,
+            },
+            PointerOrigin::Window,
+        );
+        let probe = &self.probe;
+        let Some(info) = self.info.get(|| probe()) else {
+            return;
+        };
+        let locator = &mut self.locator;
+        let Some(frame) = self.frame.get(|| locator.locate(&info.title)) else {
+            return;
+        };
+        let global = window_global_point(view, frame, size);
+        // 桌面壁纸的视图就是它铺满的那块屏（目前只有一路、屏在全局坐标原点）
+        for label in super::WALLPAPER_LABELS {
+            let Some(geometry) = tauri_runtime_kbcef::offscreen_geometry(label) else {
+                continue;
+            };
+            let (width, height) = (f64::from(geometry.width), f64::from(geometry.height));
+            tauri_plugin_cursor::push_external_pointer(
+                label,
+                Sample {
+                    view: global,
+                    inside: (0.0..width).contains(&global.0) && (0.0..height).contains(&global.1),
+                    left_down: false,
+                    present: true,
+                },
+                PointerOrigin::Desktop,
+            );
+        }
+    }
+
+    /// 光标离开了主窗口（主窗口的页面经应用发来）。桌面壁纸不动：光标若到了桌面上，插件接着发。
+    fn on_window_leave(&mut self) {
+        if let Some(view) = self.last {
+            tauri_plugin_cursor::push_external_pointer(
+                MAIN_LABEL,
+                Sample {
+                    view,
+                    inside: false,
+                    left_down: false,
+                    present: false,
+                },
+                PointerOrigin::Window,
+            );
+        }
+    }
+}
+
+/// 主窗口的标题与视图尺寸（[`ensure_started`] 用）。
+pub fn main_window_probe<R: Runtime>(app: tauri::AppHandle<R>) -> MainWindowProbe {
+    Box::new(move || {
+        let main = app.get_webview_window(MAIN_LABEL)?;
+        let size = main.inner_size().ok()?;
+        let scale = main.scale_factor().ok()?.max(0.01);
+        // kbcef 的窗口 browser 的 `inner_size` 给的是 CEF Views `GetSize()`（DIP），类型却是 `PhysicalSize`；
+        // 两种读法都交出去，由匹配挑（runtime 以后改成真的物理像素也照样认得）
+        let raw = (f64::from(size.width), f64::from(size.height));
+        Some(MainWindowInfo {
+            title: main.title().ok()?,
+            view_sizes: vec![raw, (raw.0 / scale, raw.1 / scale)],
+        })
+    })
+}
+
+/// 应用自己往这个 socket 发的发送端（不绑地址，发完就丢）。
+static SENDER: OnceLock<Option<UnixDatagram>> = OnceLock::new();
+
+/// 主窗口的页面把自己收到的鼠标交过来：照协议拼成 [`Kind::Window`] / [`Kind::WindowLeave`] 发到 socket，和插件的消息在同一条线程
+/// 里依次处理。`view` 是主窗口视图坐标（CSS 像素），`viewport` 是视口宽高。socket 没起来时丢掉。
+pub fn send_window_pointer(view: (f64, f64), viewport: (f64, f64), left_down: bool, present: bool) {
+    let Some(Some(path)) = SOCKET_PATH.get() else {
+        return;
+    };
+    let Some(sender) = SENDER
+        .get_or_init(|| {
+            let socket = UnixDatagram::unbound().ok()?;
+            socket.set_nonblocking(true).ok()?;
+            Some(socket)
+        })
+        .as_ref()
+    else {
+        return;
+    };
+    let kind: u16 = if present { 5 } else { 6 };
+    let message = encode_message(
+        kind,
+        0,
+        (view.0 as f32, view.1 as f32),
+        if left_down { LEFT_BUTTON_BIT } else { 0 },
+        (viewport.0 as f32, viewport.1 as f32),
+    );
+    // 发不出去（缓冲满）就丢，同插件
+    let _ = sender.send_to(&message, path);
+}
+
+/// 照 [`Message::parse`] 的格式拼一条消息（`button` 字段恒为 0）。
+fn encode_message(kind: u16, slot: u32, (x, y): (f32, f32), buttons: u32, (dx, dy): (f32, f32)) -> [u8; MESSAGE_LEN] {
+    let mut out = [0u8; MESSAGE_LEN];
+    out[0..2].copy_from_slice(&PROTOCOL_VERSION.to_le_bytes());
+    out[2..4].copy_from_slice(&kind.to_le_bytes());
+    out[4..8].copy_from_slice(&slot.to_le_bytes());
+    out[8..12].copy_from_slice(&x.to_le_bytes());
+    out[12..16].copy_from_slice(&y.to_le_bytes());
+    out[20..24].copy_from_slice(&buttons.to_le_bytes());
+    out[24..28].copy_from_slice(&dx.to_le_bytes());
+    out[28..32].copy_from_slice(&dy.to_le_bytes());
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn encode(kind: u16, slot: u32, x: f32, y: f32, buttons: u32, (dx, dy): (f32, f32)) -> [u8; MESSAGE_LEN] {
-        let mut out = [0u8; MESSAGE_LEN];
-        out[0..2].copy_from_slice(&PROTOCOL_VERSION.to_le_bytes());
-        out[2..4].copy_from_slice(&kind.to_le_bytes());
-        out[4..8].copy_from_slice(&slot.to_le_bytes());
-        out[8..12].copy_from_slice(&x.to_le_bytes());
-        out[12..16].copy_from_slice(&y.to_le_bytes());
-        out[16..20].copy_from_slice(&0x110u32.to_le_bytes());
-        out[20..24].copy_from_slice(&buttons.to_le_bytes());
-        out[24..28].copy_from_slice(&dx.to_le_bytes());
-        out[28..32].copy_from_slice(&dy.to_le_bytes());
-        out
+    fn encode(kind: u16, slot: u32, x: f32, y: f32, buttons: u32, delta: (f32, f32)) -> [u8; MESSAGE_LEN] {
+        encode_message(kind, slot, (x, y), buttons, delta)
+    }
+
+    #[test]
+    fn window_messages_parse_and_stay_out_of_the_desktop_path() {
+        let message = Message::parse(&encode(5, 0, 120.5, 80.0, 1, (1199.0, 799.0))).unwrap();
+        assert_eq!(message.kind, Kind::Window);
+        assert_eq!((message.x, message.y, message.dx, message.dy, message.buttons), (120.5, 80.0, 1199.0, 799.0, 1));
+        assert_eq!(Message::parse(&encode(6, 0, 0.0, 0.0, 0, (0.0, 0.0))).unwrap().kind, Kind::WindowLeave);
+        // 没有全局坐标、也不会被当成桌面壁纸的样本
+        assert_eq!(message.global(), None);
+        let mut state = SlotState::default();
+        assert!(to_sample(&mut state, &message, (2648.0, 1490.0)).is_none());
+    }
+
+    #[test]
+    fn global_and_view_points_round_trip_through_the_frame() {
+        let frame = FrameGeometry {
+            x: 187.0,
+            y: 292.5,
+            width: 1199.25,
+            height: 827.5,
+        };
+        let view = (1199.0, 799.0);
+        let global = window_global_point((100.0, 200.0), frame, view);
+        let back = window_view_point(global, frame, view).unwrap();
+        assert!((back.0 - 100.0).abs() < 1e-9 && (back.1 - 200.0).abs() < 1e-9);
+        // 视图左上角在框架里扣掉标题栏（28.375）与一侧边框（0.125）的位置
+        assert_eq!(window_global_point((0.0, 0.0), frame, view), (187.125, 320.875));
     }
 
     #[test]
@@ -399,7 +571,7 @@ mod tests {
         let mut version = good;
         version[0] = 2;
         assert!(Message::parse(&version).is_none());
-        assert!(Message::parse(&encode(5, 0, 0.0, 0.0, 0, (0.0, 0.0))).is_none());
+        assert!(Message::parse(&encode(7, 0, 0.0, 0.0, 0, (0.0, 0.0))).is_none());
     }
 
     #[test]

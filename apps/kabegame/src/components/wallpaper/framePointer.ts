@@ -1,30 +1,18 @@
 /**
- * 壁纸 iframe（网页壁纸、场景宿主）的鼠标。
+ * 壁纸 iframe（网页壁纸、场景宿主）的鼠标：iframe 元素在父页面里一律不收真实鼠标（`pointer-events: none`），iframe 里的垫片向
+ * `tauri-plugin-cursor` 登记本 frame，Rust 拿到光标后经 CEF 补丁 11 把原生事件直接注入它（钳进 frame），父页面盖在上面的东西
+ * 挡不住；预览画布盖一层只拦截、不转发的覆盖层（`WallpaperPointerOverlay`）。三个桌面平台同一套。
  *
- * Windows / macOS：iframe 里的垫片向 `tauri-plugin-cursor` 登记本 frame，Rust 轮询全局光标、经 CEF 补丁 11 把原生事件
- * 直接注入它（钳进 frame），父页面盖在上面的东西挡不住。iframe 元素在父页面里一律不收真实鼠标，预览画布盖一层只拦截、
- * 不转发的覆盖层。
- *
- * Linux 拿不到全局光标：插件模式的离屏壁纸窗口由 Plasma 壁纸插件把桌面上的鼠标发回 Rust（`wallpaper::pointer_socket`），
- * 照样登记注入；其余窗口（图库预览）登记返回 false，退回原来的做法：可交互的 iframe 直接收真实鼠标，预览不盖覆盖层。
- * 离屏 browser 本来就收不到真实鼠标，壁纸窗口里 iframe 的 `pointer-events` 不影响注入。
+ * 光标从哪来：Windows / macOS 由 Rust 轮询全局光标。Linux 读不到全局光标：桌面上的光标由 Plasma 壁纸插件发回
+ * （`wallpaper::pointer_socket`），主窗口里的光标由主窗口的页面交给应用（{@link startWindowPointerFeed}），应用照同一个协议发进
+ * 那个 socket。
  */
-import { IS_LINUX } from "@/env";
-
-// TODO:[WPE_SCENE] Linux 预览未实测：退回 iframe 直接收真实鼠标，光标在 iframe 外不跟随
-/** 图库预览的鼠标由 Rust 注入 iframe（不是 iframe 自己收真实鼠标）。 */
-export const NATIVE_FRAME_POINTER = !IS_LINUX;
 
 /**
  * 预览画布里要能点的元素（缩略图底部的「我就要看」）带这个属性：画布上盖着拦指针的覆盖层（`WallpaperPointerOverlay`），
  * 覆盖层按点击位置找到它就把左键点击转交过去。
  */
 export const WALLPAPER_CLICKABLE_SELECTOR = "[data-wallpaper-clickable]";
-
-/** iframe 元素在父页面里的 `pointer-events`：注入时一律 `none`，退回时可交互才 `auto`。 */
-export function framePointerEvents(interactive: boolean): "auto" | "none" {
-  return !NATIVE_FRAME_POINTER && interactive ? "auto" : "none";
-}
 
 /**
  * 真实左键松开后再等多久还焦点（毫秒）：插件每 16 ms 轮询一次，注入的抬起最晚一个周期后才到，要让它先到。
@@ -41,8 +29,7 @@ export const FOCUS_RETURN_DELAY_MS = 100;
  * - 左键松开后等 {@link FOCUS_RETURN_DELAY_MS}（注入的抬起先到），父窗口失焦（焦点进了 iframe）时等这一轮事件处理完，
  *   再看 `document.activeElement`：是 `owns` 认的 iframe 就 `blur()` 它，焦点回到父页面。
  *
- * 只在注入时用（{@link NATIVE_FRAME_POINTER}）：Linux 上真实鼠标直接进 iframe，父页面看不到按下。桌面壁纸窗口不是前台窗口，
- * 不用管焦点。返回解除函数。
+ * 桌面壁纸窗口不是前台窗口，不用管焦点。返回解除函数。
  */
 export function keepFocusOutOfFrames(owns: (frame: HTMLIFrameElement) => boolean, win: Window = window): () => void {
   let pressed = false;
@@ -76,5 +63,78 @@ export function keepFocusOutOfFrames(owns: (frame: HTMLIFrameElement) => boolean
     win.removeEventListener("pointerup", onUp, true);
     win.removeEventListener("pointercancel", onUp, true);
     win.removeEventListener("blur", onBlur);
+  };
+}
+
+/** 主窗口里的一次指针状态（{@link startWindowPointerFeed} 交给应用的，字段同命令 `push_window_pointer`）。 */
+export interface WindowPointer {
+  /** 视口的 CSS 像素（按住拖出窗口时可越界） */
+  x: number;
+  y: number;
+  /** 视口宽高 */
+  width: number;
+  height: number;
+  leftDown: boolean;
+  /** 假：光标离开了窗口 */
+  present: boolean;
+}
+
+/**
+ * Linux：主窗口的页面把自己收到的鼠标交给应用（应用照壁纸鼠标回传的协议发进那个 socket，`tauri-plugin-cursor` 再注入预览里的
+ * 壁纸 iframe；Windows / macOS 由 Rust 轮询全局光标，不用这个）。
+ * - 移动按帧合并（`requestAnimationFrame`），按下 / 抬起左键当场发（先补上还没发的移动），左键状态取 `buttons`；
+ * - 光标离开窗口（`mouseout` 且没有 `relatedTarget`）时发一次离开；
+ * - 都在捕获阶段听，页面里取消事件、停止冒泡、指针捕获都拦不住。
+ * 返回停止函数。
+ */
+export function startWindowPointerFeed(send: (pointer: WindowPointer) => void, win: Window = window): () => void {
+  let pending: WindowPointer | null = null;
+  let frame = 0;
+  let last: WindowPointer | null = null;
+  const pointerOf = (event: MouseEvent): WindowPointer => ({
+    x: event.clientX,
+    y: event.clientY,
+    width: win.innerWidth,
+    height: win.innerHeight,
+    leftDown: (event.buttons & 1) !== 0,
+    present: true,
+  });
+  const emit = (pointer: WindowPointer) => {
+    last = pointer;
+    send(pointer);
+  };
+  const flush = () => {
+    if (frame) win.cancelAnimationFrame(frame);
+    frame = 0;
+    if (pending) emit(pending);
+    pending = null;
+  };
+  const onMove = (event: MouseEvent) => {
+    pending = pointerOf(event);
+    if (!frame) frame = win.requestAnimationFrame(flush);
+  };
+  const onButton = (event: MouseEvent) => {
+    if (event.button !== 0) return;
+    flush();
+    emit(pointerOf(event));
+  };
+  const onOut = (event: MouseEvent) => {
+    if (event.relatedTarget) return;
+    flush();
+    if (last?.present) emit({ ...last, leftDown: false, present: false });
+  };
+  const options = { capture: true, passive: true } as const;
+  win.addEventListener("pointermove", onMove, options);
+  win.addEventListener("pointerdown", onButton, options);
+  win.addEventListener("pointerup", onButton, options);
+  win.addEventListener("mouseout", onOut, options);
+  return () => {
+    if (frame) win.cancelAnimationFrame(frame);
+    frame = 0;
+    pending = null;
+    win.removeEventListener("pointermove", onMove, options);
+    win.removeEventListener("pointerdown", onButton, options);
+    win.removeEventListener("pointerup", onButton, options);
+    win.removeEventListener("mouseout", onOut, options);
   };
 }

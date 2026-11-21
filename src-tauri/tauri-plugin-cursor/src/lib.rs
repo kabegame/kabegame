@@ -8,8 +8,8 @@
 //! - Rust 的 [`watch`] 与 [`position_in_window`] 也给别处用（场景开场时问一次真实光标）。
 //! - 平台：Windows（`GetCursorPos` / `GetAsyncKeyState` / `WindowFromPoint`）与 macOS（`NSEvent` +
 //!   窗口服务）读全局光标；Linux 读不到，应用把窗口登记成外部来源（[`register_external_pointer`]）后推送指针
-//!   （[`push_external_pointer`]，Kabegame 是 Plasma 壁纸插件转发的鼠标），没登记的窗口同其它平台：`watch` 返回
-//!   `None`，`attach_frame` 返回 `false`。
+//!   （[`push_external_pointer`]，带来源 [`PointerOrigin`]：桌面上的光标是 Plasma 壁纸插件转发的，窗口里的光标是窗口自己的
+//!   页面交给应用的），没登记的窗口同其它平台：`watch` 返回 `None`，`attach_frame` 返回 `false`。
 //!
 //! 插件只给「光标位置、左键是否按着、光标下是什么」，什么时候算一次点击由点击规则定，怎么注入由应用定
 //! （插件不依赖 CEF runtime）。
@@ -26,7 +26,9 @@ pub use frames::{set_click_rule, set_frame_injector, ClickRule, FrameInput};
 pub use hub::{watch, HitTest, Sample, Watch};
 pub use platform::{native_window, position_in_window, NativeWindow};
 #[cfg(target_os = "linux")]
-pub use platform::{push_external_pointer, register_external_pointer, unregister_external_pointer};
+pub use platform::{
+    push_external_pointer, register_external_pointer, unregister_external_pointer, PointerOrigin,
+};
 
 /// 插件名（前端 `plugin:cursor|...`）。
 pub const PLUGIN_NAME: &str = "cursor";

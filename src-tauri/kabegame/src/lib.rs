@@ -283,6 +283,16 @@ fn init_post(
         crate::linux_desktop::init_linux_desktop();
     }
 
+    // Linux 读不到全局光标：壁纸鼠标回传 socket 在启动时就起（不只插件模式），主窗口登记成外部光标来源。插件模式下 Plasma
+    // 壁纸插件把桌面上的鼠标发进来，主窗口的页面也经 `push_window_pointer` 发进来，图库预览里的网页 / 场景壁纸靠它注入。
+    #[cfg(all(target_os = "linux", feature = "standard"))]
+    {
+        let app = app_handle.clone();
+        crate::wallpaper::pointer_socket::ensure_started(move || {
+            crate::wallpaper::pointer_socket::main_window_probe(app)
+        });
+    }
+
     // 三个桌面平台(Windows / macOS / Linux)的 CEF standard 模式都安装 resolver:不安装
     // 即关闭真实文件注入。平台启用门控集中在此处一次完成;CEF API 与三份 cef-rs
     // bindings 保持相同 struct 布局,避免按平台分叉 ABI 并成倍增加维护成本。
@@ -899,6 +909,8 @@ pub(crate) fn configure_app(
             wallpaper_window_ready,
             #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
             wallpaper_pong,
+            #[cfg(target_os = "linux")]
+            push_window_pointer,
             // --- Filesystem ---
             open_path,
             // --- App logs ---

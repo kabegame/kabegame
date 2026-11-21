@@ -4,11 +4,7 @@ import { nextTick } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WallpaperPointerOverlay from "./WallpaperPointerOverlay.vue";
 
-const env = vi.hoisted(() => ({ native: true }));
 vi.mock("./framePointer", () => ({
-  get NATIVE_FRAME_POINTER() {
-    return env.native;
-  },
   WALLPAPER_CLICKABLE_SELECTOR: "[data-wallpaper-clickable]",
 }));
 const originalElementsFromPoint = document.elementsFromPoint;
@@ -34,7 +30,6 @@ function pointer(type: string, init: { button?: number; ctrlKey?: boolean } = {}
 }
 
 beforeEach(() => {
-  env.native = true;
   startPan = vi.fn(() => true);
   endPan = vi.fn();
 });
@@ -171,17 +166,5 @@ describe("WallpaperPointerOverlay 转交点击", () => {
     element.dispatchEvent(pointer("pointerdown", { button: 0 }));
     expect(startPan).toHaveBeenCalledTimes(1);
     link.remove();
-  });
-});
-
-describe("WallpaperPointerOverlay Linux", () => {
-  it("iframe 直接收真实鼠标时不盖覆盖层", () => {
-    env.native = false;
-    const wrapper = mount(WallpaperPointerOverlay, {
-      attachTo: document.body,
-      props: { pannable: true, startPan, endPan },
-    });
-    wrappers.push(wrapper);
-    expect(document.querySelector("[data-wallpaper-pointer-overlay]")).toBeNull();
   });
 });

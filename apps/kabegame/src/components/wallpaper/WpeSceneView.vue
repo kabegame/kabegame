@@ -25,8 +25,8 @@
  *   `wpe_open_user_shortcut`（只开给应用页，宿主调不到）；消息里除属性名外的东西都不信。
  * - 指针：iframe 不收真实鼠标（`pointer-events: none`）。`interactive` 经音量消息交给宿主里的垫片，垫片在可交互且
  *   没暂停时向 `tauri-plugin-cursor` 登记本 frame，Rust 把全局光标直接注入（钳进 frame），宿主照常从 `pointermove` 等
- *   自己算 `g_PointerPosition`；注入的点击把焦点切进 iframe 时由预览画布还给父页面。Linux 拿不到全局光标，退回可交互的
- *   iframe 直接收真实鼠标（`framePointer.ts`）。开场（P5a 收尾）宿主还没收到过事件，
+ *   自己算 `g_PointerPosition`；注入的点击把焦点切进 iframe 时由预览画布还给父页面（光标从哪来见 `framePointer.ts`）。
+ *   开场（P5a 收尾）宿主还没收到过事件，
  *   iframe 建好（`load`）与宿主报 ready 时各问一次 Rust 光标在本窗口里的位置（`wpe_scene_cursor`，桌面壁纸窗口的页面
  *   收不到鼠标事件，只能问 Rust），按 iframe 显示矩形换成归一化坐标交给宿主当初值；命令返回 null（非 Windows）或
  *   非桌面环境时用本页最近一次 `pointermove` / `pointerdown` 的位置，也没有就不发。不交互时不发。
@@ -55,7 +55,6 @@ import {
 import { WPE_FOLLOW_SCENE_SETTINGS, type WpeSceneSettings } from "@/utils/wpeSettings";
 import { isWpeVolumeRequest, webHostVolume, wpeVolumeMessage } from "./wpeWebVolume";
 import { wpeContextMenuPoint, type ViewportPoint } from "./wpeContextMenu";
-import { framePointerEvents } from "./framePointer";
 import { createShortcutThrottle, wpeShortcutName } from "./wpeSceneShortcut";
 import { isWpeSceneProgressMessage, type WpeSceneProgress } from "./wpeSceneProgress";
 import { useWpeStateDelivery } from "@/composables/useWpeStateDelivery";
@@ -361,7 +360,7 @@ onBeforeUnmount(() => {
     referrerpolicy="no-referrer"
     title="wallpaper-scene"
     class="block w-full h-full border-0"
-    :style="{ pointerEvents: framePointerEvents(interactive) }"
+    style="pointer-events: none"
     @load="onFrameLoad"
   />
 </template>

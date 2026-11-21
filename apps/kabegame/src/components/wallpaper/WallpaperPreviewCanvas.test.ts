@@ -3,7 +3,6 @@ import { mount } from "@vue/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, inject, type Ref } from "vue";
 import WallpaperPreviewCanvas, { intersectRect, type CoverRegion } from "./WallpaperPreviewCanvas.vue";
-import { NATIVE_FRAME_POINTER } from "./framePointer";
 import { WALLPAPER_PREVIEW_ZOOM } from "./wpeSceneStyle";
 
 vi.mock("@tauri-apps/api/window", () => ({ primaryMonitor: async () => null }));
@@ -238,11 +237,11 @@ describe("WallpaperPreviewCanvas 焦点", () => {
       const blur = vi.spyOn(frame, "blur");
       window.dispatchEvent(new Event("blur"));
       vi.advanceTimersByTime(0);
-      expect(blur).toHaveBeenCalledTimes(NATIVE_FRAME_POINTER ? 1 : 0);
+      expect(blur).toHaveBeenCalledTimes(1);
       wrapper.unmount();
       window.dispatchEvent(new Event("blur"));
       vi.advanceTimersByTime(0);
-      expect(blur).toHaveBeenCalledTimes(NATIVE_FRAME_POINTER ? 1 : 0);
+      expect(blur).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

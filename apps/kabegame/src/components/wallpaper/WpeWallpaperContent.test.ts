@@ -5,7 +5,6 @@ import WpeWallpaperContent from "./WpeWallpaperContent.vue";
 import type { WallpaperTarget } from "./types";
 import { WPE_VOLUME_MESSAGE, WPE_VOLUME_REQUEST } from "./wpeWebVolume";
 import { WPE_CONTEXT_MENU } from "./wpeContextMenu";
-import { framePointerEvents } from "./framePointer";
 
 /** WpeSceneView 的替身：记录挂载 / 卸载与 props，测试里按需 emit ready / fallback / alive。 */
 const stub = vi.hoisted(() => ({
@@ -198,7 +197,7 @@ describe("WpeWallpaperContent 网页壁纸的音量消息", () => {
     expect(frame.style.pointerEvents).toBe("none");
     await wrapper.setProps({ interactive: true });
     // 鼠标由 Rust 直接注入 frame 时一律不收；Linux 退回时可交互才收
-    expect(frame.style.pointerEvents).toBe(framePointerEvents(true));
+    expect(frame.style.pointerEvents).toBe("none");
     await wrapper.setProps({ interactive: false });
     expect(posts.mock.calls.map(([message]) => (message as { interactive: boolean }).interactive)).toEqual([
       true,

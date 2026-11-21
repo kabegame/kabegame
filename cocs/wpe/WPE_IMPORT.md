@@ -655,8 +655,8 @@ WPE 网页壁纸要靠宿主提供的一组全局接口完成初始化，最关�
 
 iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片把它转给父页面。场景宿主也加载这份垫片，网页与场景同一条路。
 
-2026-11-15 起 Windows / macOS 上 iframe 不收真实鼠标（见下「鼠标」），预览里的右键落在覆盖层（`WallpaperPointerOverlay`）上、
-冒泡到预览容器的 `@contextmenu` 弹菜单，这条路不再触发。Linux 退回 iframe 直接收真实鼠标，仍走这条路。
+2026-11-15 起 Windows / macOS 上 iframe 不收真实鼠标（见下「鼠标」，Linux 2026-11-22 起同样），预览里的右键落在覆盖层
+（`WallpaperPointerOverlay`）上、冒泡到预览容器的 `@contextmenu` 弹菜单，这条路不再触发。
 
 - **消息**：`{ type: "kabegame:wpe-contextmenu", x, y }`，垫片 → 父页面，`x` / `y` 是 iframe 视口里的 CSS 像素。字面量集中在
   `components/wallpaper/wpeContextMenu.ts`，`wpeWebVolume.test.ts` 读垫片原文核对。
@@ -723,8 +723,15 @@ iframe 里的右键到不了父页面（DOM 事件不跨 frame），所以垫片
   - 同进程的子 frame 不支持（换算失败）。我们的 `file:` iframe 与应用页跨站，都是独立进程。frame 刚登记、还没合成时第一次
     采样也会换算失败，之后就好，所以连续失败 30 次（`MAPPING_WARN_AFTER`）才记一次 warn。
   - 不做键盘、滚轮、右键。
-- **Linux**：拿不到全局光标，`attach_frame` 返回 `false`。前端（`framePointer.ts` 的 `NATIVE_FRAME_POINTER`）退回原来的做法：
-  可交互的 iframe 直接收真实鼠标，预览不盖覆盖层，光标在 iframe 外不跟随。Linux 也没有窗口壁纸模式。
+- **Linux**（2026-11-22 起与 Windows / macOS 同一套：iframe 不收真实鼠标、预览盖覆盖层）：读不到全局光标，光标由应用推进
+  `tauri-plugin-cursor` 的外部来源（`register_external_pointer` / `push_external_pointer`，每个样本带来源 `PointerOrigin`）：
+  - 桌面上的光标：插件模式下 Plasma 壁纸插件发进 `wallpaper/pointer_socket.rs` 的 socket，给桌面壁纸（「桌面」来源，点击规则
+    「光标下是桌面」）；也经 KWin 的主窗口几何换算给主窗口（只带移动）。
+  - 主窗口里的光标：主窗口的页面（`framePointer.ts` 的 `startWindowPointerFeed`，`bootstrap/app.ts` 在 Linux 上启动）把移动
+    （按帧合并）、左键按下抬起与离开交给命令 `push_window_pointer`，应用照同一个协议发进那个 socket（消息 5 / 6），给主窗口
+    （「窗口」来源，点击规则「光标下是本窗口」），桌面壁纸也跟着移动、不点击。
+  - socket 在应用启动时就起（不只插件模式），主窗口启动时登记成外部来源；两种来源交接时晚到的离开不算（另一边还有光标）。
+  - 主窗口在屏上哪里：Wayland 下应用不知道，`wallpaper/kwin_window.rs` 问 KWin（krunner 窗口搜索 + `getWindowInfo`）。
 
 ### 预览放大
 
@@ -1092,7 +1099,7 @@ Chromium 就不建媒体键监听器。于是：
 - **Android / Web 没有 WPE**（`wpe` feature 不开）：不发现、不导入、不渲染，`x-wpe/*` 行只显示作者预览图。
 - **macOS / Linux 的限制**：Steam 上装不了 WPE，`libraryfolders.vdf` 通常不含 431960，自动发现大概率为空，主要靠手选文件夹，或用「从 Steam 拉取」把 WPE 下载到 `plugins-data/wpe-import/`（`discover_roots` 把它当作一个 Steam 库，见 [WPE_STEAM.md](WPE_STEAM.md)）。
   场景壁纸依赖 WPE 安装目录的 `assets`，找不到时退回预览图（`assets:missing`）。Linux 的 CEF 未启用 WebGPU 时同样退回（`webgpu:unavailable`）。
-  Linux 没有窗口壁纸模式，设为壁纸直接报错；图库预览里壁纸只在 iframe 上收鼠标（拿不到全局光标）。
+  Linux 的桌面壁纸走插件模式（离屏渲染 + PipeWire 推流）；鼠标见上「鼠标」的 Linux 一条。
 - **Linux 的音频回环**：有音频订阅期间（显示带音频的网页 / 场景壁纸），KDE Plasma 托盘会出现「麦克风在用」的指示：plasma-pa 把挂在
   客户端名下的录音流一律算作麦克风，不区分输出设备的监听（[KDE bug 410637](https://bugs.kde.org/show_bug.cgi?id=410637)，cava、EasyEffects
   同样），没有正当办法避开，同 macOS 的录音指示。只有 PulseAudio、没有 PipeWire 的系统没有音频数据（频谱全 0）。

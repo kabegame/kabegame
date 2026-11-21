@@ -275,6 +275,14 @@ pub(crate) trait Probe: Send + 'static {
   （socket 起来时登记）。主窗口的点击规则是「光标下是本窗口」，桌面上的光标只带移动；光标进了主窗口时插件发离开、注入停下，
   iframe 照旧直接收真实鼠标。kbcef 窗口 browser 的 `inner_size` 给的是 DIP（CEF Views `GetSize()`，类型却是 `PhysicalSize`），
   原样值与除以缩放的值都拿去匹配。
+- **主窗口自己的鼠标也走这个 socket**（2026-11-22 用户定，预览恢复覆盖层、与 Windows / macOS 同一套注入）：主窗口的页面
+  （`framePointer.ts` 的 `startWindowPointerFeed`，`bootstrap/app.ts` 在 Linux 上启动）把移动（按帧合并）、左键按下抬起与离开交给
+  同步命令 `push_window_pointer`，应用照协议拼成消息 5（`x` / `y` 主窗口视图坐标、`dx` / `dy` 视口宽高、按键全集）/ 6（离开主窗口）
+  发进同一个 socket，和插件的消息在一条线程里依次处理：主窗口收「窗口」来源的样本（移动与点击），桌面壁纸经 KWin 的主窗口几何换回
+  全局坐标、只收移动。`tauri-plugin-cursor` 的外部来源样本因此带来源（`PointerOrigin::{Desktop, Window}`）：命中测试按来源答
+  （桌面来的「光标下是桌面」、窗口来的「光标下是本窗口」），一边离开时另一边还有光标就不算离开（交接时晚到的离开）。socket 改在
+  应用启动时起（`init_post`），主窗口那时就登记成外部来源：原生模式下预览也能注入。前端删掉 `NATIVE_FRAME_POINTER` /
+  `framePointerEvents` 与预览不盖覆盖层的 Linux 分支。
 - 滚轮：`FrameInput` 现在只有移动与左键，`axis` 消息先收下丢弃，留作以后（Windows / macOS 也还没有滚轮）。
 - 垫片：网页 / 场景壁纸在离屏壁纸窗口里照常判定 `interactive`，与 Windows / macOS 一致；不再需要「Linux 退回 iframe 直接收真实鼠标」
   这条特例（它只对预览生效，预览不变）。
