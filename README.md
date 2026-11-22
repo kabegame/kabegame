@@ -2,7 +2,7 @@
 
 > 中文 | [日本語](README.ja.md) | [한국어](README.ko.md) | [English](README.en-US.md)
 
-在网上看到好看的图片，想一键下载到本地？还希望自动化订阅更新，不想每天手动打开网页浏览？—— `Kabegame `能运行 js 插件实现从任意站点爬取以及几乎任意复杂逻辑。并能配置一定的时间自动运行，每天都会有图片自动从图库里冒出来。
+在网上看到好看的图片，想一键下载到本地？还希望自动化订阅更新，不想每天手动打开网页浏览？—— `Kabegame` 能运行 js 插件实现从任意站点爬取以及几乎任意复杂逻辑。并能配置一定的时间自动运行，每天都会有图片自动从图库里冒出来。
 
 想要一个自动爬取标签、元数据的爬虫框架？——`Kabegame` 插件能为图片提供源站标签、原帖ejs预览，之后可以通过画廊标签过滤，或者通过mcp帮你过滤。
 
@@ -10,7 +10,7 @@
 
 想要最简单的登录授权方法，不用手动复制 cookie？—— `Kabegame` 插件不需要接收账号密码，你只需要从应用内置浏览器打开一个网站，登录。之后同一网站的登录凭证会在下载时复用，比大多数爬虫工具更便利。webview js插件甚至还能直接驱动内置浏览器，通过webview 模拟人的操作爬取入库。x.com 等流式视频也能通过 webview 自动爬取或手动右键下载。
 
-`v4.7.0` 想要用全社区最好的 Wallpaper Engine 壁纸开源实现在桌面端自动下载、预览、设置它们为壁纸？—— `Kabegame` 4.7.0 用强大的 `Opus5.5` + `REA MCP` + `RenderDOC MCP` + 像素对比 `harness` 框架将 Wallpaper Engine 场景壁纸格式、web壁纸和视频搬到了`WebGL`，保证99.9%以上的像素级还原度。可以在桌面平台上预览、设置它们为壁纸！（下载用的是购买WE的Steam账号凭证）
+`v4.7.0` 想要用全社区最好的 Wallpaper Engine 壁纸开源实现在桌面端自动下载、预览、设置它们为壁纸？—— `Kabegame` 4.7.0 用强大的 `Opus5.5` + `REA MCP` + `RenderDOC MCP` + 像素对比 `harness` 框架将 Wallpaper Engine 场景壁纸格式、web壁纸和视频搬到了`WebGPU`，保证99.9%以上的像素级还原度。可以在桌面平台上预览、设置它们为壁纸！（下载用的是购买WE的Steam账号凭证）
 
 ### kabegame (/ka.be.ɡa.me/) 能满足你关于本地图库收集的几乎所有愿望，基于它强大的 `js` 爬虫插件脚本以及基于 `Tauri 2` 和定制 `Chromium` + 自研 `kbcef` 运行时的强大跨平台能力。外加一个自研的极其灵活的基于路径的折叠式查询引擎 `PathQL`。
 
@@ -51,7 +51,7 @@
 
 - **本地文件夹持续同步**：把磁盘目录映射为画册，目录中的新增与删除会反映到图库，子目录还能按原有层级生成子画册；适合持续接收绘图软件、AI 生图工具或其他下载器的输出。
 
-- **登录一次，后续自动复用**：在内置浏览器”畅游“中正常登录网站，Kabegame 会保存所有站点 Cookie；插件不读取 Cookie，宿主会在对应站点中注入登录态，不必反复复制 Cookie 或确认 Chrome 的数据目录。
+- **登录一次，后续自动复用**：在内置浏览器“畅游”中正常登录网站，Kabegame 会保存所有站点 Cookie；插件不读取 Cookie，宿主会在对应站点中注入登录态，不必反复复制 Cookie 或确认 Chrome 的数据目录。
 
 - **内置浏览器直接下载**：在内置浏览器“畅游”里看视频或图片时右键“下载视频”或者“下载图片”，视频即使是 `blob:` / MSE 流式播放器也能按清晰度捕获音视频分片并合流入库，右下角实时显示每路流的捕获进度。
 
@@ -169,6 +169,7 @@ sudo apt install ./Kabegame-standard_*_amd64.deb
 ### 兼容性表格
 🖼️ 能设图片，🎬 能设视频 / Web / 场景（「Web / 场景」指 Wallpaper Engine 的网页壁纸与场景壁纸），没有标的就是不支持。窗口模式（Windows、macOS）与插件模式（Linux）由 Kabegame 自己渲染壁纸，所有类型都能设为桌面。
 
+以下 gnome 版本通过 `gnome-shell --version` 可获得。 桌面环境通过 `echo $XDG_SESSION_DESKTOP` 可得，显示协议（Wayland / X11）通过 `echo $XDG_SESSION_TYPE` 可得。
 <table>
   <thead>
     <tr>
@@ -215,12 +216,12 @@ sudo apt install ./Kabegame-standard_*_amd64.deb
     <tr>
       <td>GNOME 42–48 · X11</td>
       <td>🖼️</td>
-      <td>🖼️ 🎬<br>同上（未实测）</td>
+      <td>🖼️ 🎬<br>同上</td>
     </tr>
     <tr>
       <td>GNOME 42–48 · Wayland</td>
       <td>🖼️</td>
-      <td>🖼️ 🎬<br>有局限：壁纸是压在最底层的普通窗口，铺不到顶栏和 Dock 下面，会盖住桌面图标（未实测）</td>
+      <td>🖼️ 🎬<br>⚠️ 未实测，可能会盖住图标</td>
     </tr>
     <tr>
       <td>GNOME 41 及更早、52 及更新</td>
@@ -266,8 +267,9 @@ sudo apt install ./Kabegame-standard_*_amd64.deb
 Kabegame 使用 Vue 3、Tauri 2 与 Rust 构建，并针对图库查询、插件运行时和桌面浏览器能力做了多项扩展：
 
 - [WebviewHandler](./src-tauri/kabegame-core/src/crawler/webview.rs)：基于真实页面环境运行需要登录态或页面交互的插件。
-- [tauri-runtime-kbcef](./src-tauri/tauri-runtime-kbcef/)：为桌面端定制的 CEF Tauri runtime。
+- [tauri-runtime-kbcef](./src-tauri/tauri-runtime-kbcef/)：为 Kabegame 桌面端定制的 CEF Tauri runtime。为了避免与 `Tauri3` 的 `tauri-runtime-cef` 名称冲突，从 `v4.7.0` 开始改名 `tauri-runtime-kbcef`。 
 - [PathQL](./src-tauri/pathql-rs/)：用路径组合过滤、排序、分页和 Provider DSL 的数据库查询引擎。
+- [wpe-scene](./apps/wpe-scene/): 渲染 Wallpaper Engine 核心代码（8w+行）。用纯TS驱动WebGPU画。壁纸则是通过一个tauri窗口或cef的离屏窗口(plasma)实现。
 
 项目结构、进程模型与关键模块见[架构与项目结构](https://kabegame.com/dev-contrib/architecture/)。
 
