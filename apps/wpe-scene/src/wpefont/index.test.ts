@@ -1,6 +1,6 @@
 /**
  * wpefont 的包装与字形基线。
- * - wasm 由 `deno task build:wpefont` 产出、kabegame 命令拷进本目录；没有就整组跳过。
+ * - wasm 由 `deno task build:wpefont` 产出、vitest 开跑前拷进本目录（wasmDeps.ts）；没有就整组跳过。
  * - 用到字体的用例要 `KABEGAME_WPE_ROOT` 指向 WPE 安装目录（字体在它的 `assets/fonts/`），不碰系统字体。
  * - `fixtures/baseline.json`：1a 用发布包编出的 wasm 的结果（已和 WPE 图集核对），由
  *   `apps/wpe-scene/scripts/fixtures/make_wpefont_baseline.py` 生成，来源写在文件的 `source`。

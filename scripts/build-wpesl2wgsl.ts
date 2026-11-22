@@ -3,9 +3,9 @@
  *
  *   deno task build:wpesl2wgsl
  *
- * 产物 bin/wasm/wpesl2wgsl/wpesl2wgsl.wasm（git 忽略，与平台无关）。kabegame 的 dev / start / build / check / test
- * 不带 `--skip vue` 时，由 Wpesl2wgslPlugin 拷进 apps/wpe-scene/src/wpesl2wgsl/；缺产物只告警，
- * 场景壁纸退回预览图。
+ * 产物 bin/wasm/wpesl2wgsl/wpesl2wgsl.wasm（git 忽略，与平台无关）。场景宿主（apps/wpe-scene）的 vite build 与 vitest
+ * 开始前都跑一次本脚本（cargo 增量，最新时约 0.5 s，`apps/wpe-scene/wasmDeps.ts`），再把产物拷进
+ * apps/wpe-scene/src/wpesl2wgsl/；构建失败只告警、沿用已有产物，没有产物时场景壁纸退回预览图。
  *
  * 需要 rustup 的 wasm32-unknown-unknown 目标（`rustup target add wasm32-unknown-unknown`），缺失时直接报错并给出命令。
  * 用工作区根 Cargo.toml 的 `[profile.wpesl2wgsl]`（按体积优化、panic = abort），不影响其它 crate 的 release 构建。

@@ -22,8 +22,6 @@ import { Skip, SkipPlugin } from "./plugins/skip-plugin.ts";
 import { ReleasePlugin } from "./plugins/release-plugin.ts";
 import { DataPlugin } from "./plugins/data-plugin.ts";
 import { TauriCliPlugin } from "./plugins/tauri-cli-plugin.ts";
-import { Wpesl2wgslPlugin } from "./plugins/wpesl2wgsl-plugin.ts";
-import { WpefontPlugin } from "./plugins/wpefont-plugin.ts";
 import { WpeSceneHostPlugin } from "./plugins/wpe-scene-host-plugin.ts";
 import { PlasmaWallpaperPlugin } from "./plugins/plasma-wallpaper-plugin.ts";
 
@@ -195,13 +193,8 @@ export class BuildSystem {
     // fork 的 cargo-tauri(third/tauri/crates/tauri-cli):PATH 前置 + dev/build 前确保构建
     this.use(new TauriCliPlugin());
 
-    // wpesl2wgsl 的 wasm：不带 --skip vue 时拷进前端，缺了只告警
-    this.use(new Wpesl2wgslPlugin());
-
-    // wpefont（字体引擎）的 wasm：同上，必须在构建宿主之前拷进去
-    this.use(new WpefontPlugin());
-
     // 场景宿主 apps/wpe-scene：桌面 dev / build 不带 --skip vue 时构建进应用的 resources/wpe-scene
+    // （宿主的 vite build 先确保 wpesl2wgsl / wpefont 两个 wasm 是最新的，见 apps/wpe-scene/wasmDeps.ts）
     this.use(new WpeSceneHostPlugin());
 
     // Linux 插件模式的 Plasma 壁纸插件：dev / build 把 build:plasma-plugin 的产物拷进 resources/plasma-wallpaper，缺了只告警
@@ -476,7 +469,7 @@ export class BuildSystem {
 
     if (!this.context.skip?.isVue) {
       for (const feTestDir of component.feTestDirs) {
-        // 场景宿主依赖的 wasm 只在 standard 模式同步
+        // 场景宿主只属于桌面 standard 模式（它的 vitest 开跑前会同步两个 wasm，见 apps/wpe-scene/wasmDeps.ts）
         if (feTestDir === Component.WPE_SCENE_DIR && !this.context.mode?.isStandard) continue;
         run("test", [], { bin: "deno-task", cwd: feTestDir });
       }

@@ -24,8 +24,11 @@ deno task build:wpefont   # → bin/wasm/wpefont/wpefont.wasm（git 忽略，约
      后端，macOS 要 Homebrew 的 `llvm` 与 `lld`。1a / 1b 用的是 LLVM clang 22.1.6；
   4. 并行编译 FreeType 的 21 个单元、`harfbuzz.cc`、msdfgen 的 `core/*.cpp`（去掉文件输出、SVG 导出、形状描述文本）、`wpefont.c` 与
      `msdf.cpp`，链接成 reactor。
-- kabegame 的 dev / start / build / check / test 不带 `--skip vue` 时，`scripts/plugins/wpefont-plugin.ts` 把产物拷进
-  `apps/wpe-scene/src/wpefont/wpefont.wasm`（git 忽略，内容相同不重写）。找不到产物只告警，文本对象退回预览图。
+- `--if-stale`：按输入指纹（构建脚本、本目录除 README 外的源文件、三个子模块的提交与本地改动，记在
+  `bin/wasm/wpefont/wpefont.wasm.inputs.json`）判断，没变就直接退出、不碰工具链。
+- 场景宿主的 vite build 与 vitest 开始前（`apps/wpe-scene/wasmDeps.ts`）都以 `--if-stale` 跑一次，再把产物拷进
+  `apps/wpe-scene/src/wpefont/wpefont.wasm`（git 忽略，内容相同不重写），改了胶水、编译参数或子模块不用记得手动重建。
+  构建失败（缺 clang、子模块没初始化等）只告警、沿用已有产物；没有产物时文本对象退回预览图，产物过旧时报 `text:engine`。
 - 路径常量 `WPEFONT_WASM`、`WPEFONT_FE_WASM`、`WPEFONT_TOOLCHAIN_DIR` 在 `scripts/paths.ts`。
 
 ### 编译参数（照 P6b 1a，和 WPE 图集逐字节一致的那一版）

@@ -2,7 +2,7 @@
  * 排版与图集和 WPE 抓帧逐坐标、逐字节相同（P6b 1c）。
  * - 基线 `fixtures/p6b.json` 由 `apps/wpe-scene/scripts/fixtures/make_text_fixture.py` 从 WPE 2.8.42 的抓帧生成：`p6b-*`
  *   六个静态工程、44 个文本对象、21 张图集。
- * - 要 wasm（`deno task build:wpefont`，kabegame 命令拷进 `src/wpefont/`）与 `KABEGAME_WPE_ROOT`（WPE 安装目录，字体在
+ * - 要 wasm（`deno task build:wpefont`，vitest 开跑前拷进 `src/wpefont/`）与 `KABEGAME_WPE_ROOT`（WPE 安装目录，字体在
  *   `assets/fonts/`）；`systemfont_*` 与回退链读 `%WINDIR%\Fonts`，和抓帧那台机器的字体（文件有无、SHA-256 前 16 位）
  *   不同时跳过这个工程。
  * - 图集按「字体 + 字号」跨对象共享，所以每个工程按场景里的对象顺序整个排一遍，再逐个比对象、比图集。

@@ -1,5 +1,27 @@
 # v4.7.0 regression
 
+## 场景宿主构建前自动重建 wasm 依赖
+
+2026-11-22 macOS。场景「鸣潮清宵_qingxiao 时间组件+音频」整张退回预览图、报 `text:engine`：它的三个文本层（Clock / D a y / Date）
+都是 `outline: true`，走 P6f 的 MSDF 路径要调 `wpefont_msdf`，而本机 `bin/wasm/wpefont/wpefont.wasm` 是 11-16 构建的、没有这个导出
+（P6f 是 11-19），`third/msdfgen` 子模块也没初始化；`WpefontPlugin` 只拷贝、不判断新旧。wpesl2wgsl 的 wasm 同样停在 11-16（源码 11-21 有改动）。
+
+改法：`scripts/build-wpefont.ts` 记输入指纹 `wpefont.wasm.inputs.json`（构建脚本、`src-tauri/wpefont/` 的源文件、三个子模块的提交与
+本地改动）并加 `--if-stale`；新增 `apps/wpe-scene/wasmDeps.ts`（vite 插件，`vite.config.ts` 与 `vitest.config.ts` 共用，`configResolved`
+里每进程一次），先跑 `build-wpesl2wgsl.ts`（cargo 增量）与 `build-wpefont.ts --if-stale`，再把产物拷进 `src/`，失败只告警、沿用旧产物；
+删掉 `WpefontPlugin` / `Wpesl2wgslPlugin`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WA1 指纹跳过 | macOS | 连跑两次 `deno task build:wpefont --if-stale` | 第一次「需要重建：产物没有输入记录」，构建并写下指纹；第二次「已是最新，跳过」 | 2026-11-22 Claude：重建约 12 s，跳过 0.19 s |
+| [x] | WA2 输入变了 | macOS | 把指纹文件里 `third/msdfgen` 一项改掉后 `--if-stale` | 「需要重建：输入变了：third/msdfgen」，重建后再跑跳过 | 2026-11-22 Claude |
+| [x] | WA3 宿主构建带上新 wasm | macOS | `src/` 下是旧 wasm 时 `CARGO_TARGET_DIR=target-dev deno task --cwd apps/wpe-scene build --mode development`（`WpeSceneHostPlugin` 在 dev 下跑的同一条） | 先跑两个构建脚本，`src/` 两份 wasm 换成新产物，宿主产物里的 wasm 换新哈希文件名；再跑一次只多约 0.5 s | 2026-11-22 Claude：`wpefont-BmXi3LN4.wasm`；`target-dev` 首次编 wpesl2wgsl 约 20 s，之后 0.27 s |
+| [x] | WA4 构建失败只告警 | macOS | 判为过旧且 `WPEFONT_CLANG=/nonexistent/clang` 时同 WA3 | `[build:wpefont]` 报找不到 clang；`[scene-wasm]` 告警「构建失败…沿用已有…可能过旧…text:engine」；宿主照常构建完 | 2026-11-22 Claude |
+| [x] | WA5 vitest 也同步 | macOS | `deno task --cwd apps/wpe-scene test src/wpefont src/text src/render/text.test.ts src/compile/texts.test.ts` | 开跑前打出两个构建脚本的日志；用例通过 | 2026-11-22 Claude：11 个文件通过、1 个跳过，126 passed / 64 skipped（要 Windows 系统字体的跳过） |
+| [x] | WA6 类型检查 | macOS | wpe-scene 的 `tsc`；`deno check scripts/build-wpefont.ts scripts/build-system.ts` | 通过 | 2026-11-22 Claude |
+| [ ] | WA7 鸣潮清宵实时渲染 | macOS dev | `deno task dev` 后在图库预览这张场景 | 时钟、星期、日期三个描边文本层画出来，不再报 `text:engine` | 没做：本轮 dev 没在跑 |
+| [ ] | WA8 Windows | Windows | 同 WA3 | `spawnSync("deno")` 找得到 `deno.exe`，行为相同 | 未测 |
+
 ## 打包不再收集 CEF 的 ANGLE 空壳库（CEF 156）
 
 2026-11-22。CEF 156 的分发包不再带 `libEGL` / `libGLESv2`（Chromium M151 起 ANGLE 静态链进 libcef，上游 `12add0082`），Linux 出货构建在收集 CEF 运行时时报缺 `libEGL.so`。两份清单去掉这两项。
@@ -358,7 +380,7 @@ Wayland 会话里离屏 browser 的设备缩放原先恒为 1：CEF 的 `GetScre
 | [x] | W1 类型检查 | Linux | `deno check scripts/build-wpefont.ts` | 通过 | 2026-11-21 Claude |
 | [x] | W2 缺链接器时提前报错 | Linux，装了 clang-20、没装 lld-20 | `WPEFONT_CLANG=clang-20 deno run -A scripts/build-wpefont.ts` | 不编译任何单元，报「clang-20 调不起 wasm 链接器 wasm-ld-20」、clang 原始错误与 `apt install lld-20`，退出码 1 | 2026-11-21 Claude |
 | [x] | W3 有链接器时照常构建 | Linux，clang-21 + lld-21 | `deno task build:wpefont` | 日志多一行 `wasm-ld：Ubuntu LLD 21.1.8`，编译、链接成功，产出 `bin/wasm/wpefont/wpefont.wasm` | 2026-11-21 Claude：产物 1984 KiB |
-| [ ] | W4 macOS / Windows 预检 | macOS（Homebrew llvm + lld）、Windows（LLVM 官方安装包） | `deno task build:wpefont` | 预检通过、日志打印 wasm-ld 版本，构建成功 | 没做：本机只有 Linux；`-Wl,--version` 与 `-###` 是 clang 驱动的通用行为，Windows 上 `-###` 的路径会转义反斜杠，脚本已还原 |
+| [ ] | W4 macOS / Windows 预检 | macOS（Homebrew llvm + lld）、Windows（LLVM 官方安装包） | `deno task build:wpefont` | 预检通过、日志打印 wasm-ld 版本，构建成功 | 2026-11-22 Claude：macOS 通过（PATH 上的 Apple clang 21 带 wasm32，链接器 Homebrew LLD 23.1.5，日志 `wasm-ld：Homebrew LLD 23.1.5`）；Windows 没做。之前：本机只有 Linux；`-Wl,--version` 与 `-###` 是 clang 驱动的通用行为，Windows 上 `-###` 的路径会转义反斜杠，脚本已还原 |
 
 ## 关掉 Chromium 的系统媒体集成（3819637149 音乐一顿一顿）
 

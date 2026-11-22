@@ -126,9 +126,9 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `deno task patch`：重置或应用 `third-patches` 补丁序列；`--gen --from <x> --out <file>` 只读工作树、不 reset，生成系列之外的剩余改动为新 patch。
 - `deno task build:ffmpeg`：构建桌面端或 Android 的 FFmpeg 静态库。
 - `deno task build:chromium`：构建 CEF/Chromium 运行时。
-- `deno task build:wpesl2wgsl`：构建场景壁纸着色器翻译器的 wasm（产物 `bin/wasm/wpesl2wgsl/`；kabegame 命令不带 `--skip vue` 时自动拷进前端，缺失只告警）。
+- `deno task build:wpesl2wgsl`：构建场景壁纸着色器翻译器的 wasm（产物 `bin/wasm/wpesl2wgsl/`；场景宿主的 vite build 与 vitest 开始前自动跑一次（cargo 增量）并拷进 `apps/wpe-scene/src/`，构建失败只告警、沿用旧产物，见 `apps/wpe-scene/wasmDeps.ts`）。
 - `deno task build:plasma-plugin`：构建 Linux 插件模式的 Plasma 壁纸插件（产物 `bin/linux/<arch>/plasma-wallpaper-plugin-build/package/`；kabegame 的 Linux dev / build 拷进 resources，缺失只告警；出货加 `--qt <Qt 6.6 安装前缀>`，见插件 README）。
-- `deno task build:wpefont`：构建场景文本的字体引擎 wasm（FreeType + HarfBuzz，产物 `bin/wasm/wpefont/`；首次下载 wasi-sdk 工具链到 `bin/wasm/wpefont/toolchain/`，要带 wasm32 目标的 LLVM clang；kabegame 命令不带 `--skip vue` 时自动拷进场景宿主，缺失只告警）。
+- `deno task build:wpefont`：构建场景文本的字体引擎 wasm（FreeType + HarfBuzz，产物 `bin/wasm/wpefont/`；首次下载 wasi-sdk 工具链到 `bin/wasm/wpefont/toolchain/`，要带 wasm32 目标的 LLVM clang；`--if-stale` 按输入指纹（脚本、`src-tauri/wpefont/`、三个子模块）没变就跳过，场景宿主的 vite build 与 vitest 开始前都这样调一次再拷进宿主，构建失败只告警）。
 
 完整的构建文档在 [BUILD.md](./BUILD.md).
 

@@ -64,7 +64,7 @@ export function isArchDirName(name: string): boolean {
 
 /**
  * wpesl2wgsl（WPE 着色器 → WGSL 翻译器）的 wasm 产物：`deno task build:wpesl2wgsl` 写入，
- * kabegame 命令不带 `--skip vue` 时由 Wpesl2wgslPlugin 拷进场景宿主。与平台无关，所以不按 platform/arch 分目录。
+ * 场景宿主的 vite build 与 vitest 开始前由 `apps/wpe-scene/wasmDeps.ts` 重建（cargo 增量）并拷进宿主。与平台无关，所以不按 platform/arch 分目录。
  */
 export const WPESL2WGSL_WASM: string = path.join(
   ROOT,
@@ -86,7 +86,7 @@ export const WPESL2WGSL_FE_WASM: string = path.join(
 
 /**
  * wpefont（FreeType + HarfBuzz 编成的字体引擎）的 wasm 产物：`deno task build:wpefont` 写入，
- * kabegame 命令不带 `--skip vue` 时由 WpefontPlugin 拷进场景宿主。与平台无关，所以不按 platform/arch 分目录。
+ * 场景宿主的 vite build 与 vitest 开始前由 `apps/wpe-scene/wasmDeps.ts` 按输入指纹重建（`--if-stale`）并拷进宿主。与平台无关，所以不按 platform/arch 分目录。
  */
 export const WPEFONT_WASM: string = path.join(
   ROOT,

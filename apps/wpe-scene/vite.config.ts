@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
+import { sceneWasmDeps } from "./wasmDeps.ts";
 
 // 场景宿主（P3-0）：主窗口 / 壁纸窗口的应用页以 `file:` iframe 加载它（见
 // src-tauri/kabegame/src/wallpaper/wpe_scene_host.rs），所以：
@@ -22,6 +23,8 @@ function outDir(): string {
 
 export default defineConfig(({ mode }) => ({
   define: { __SCENE_DEV__: JSON.stringify(mode === "development") },
+  // 构建前确保 wpesl2wgsl / wpefont 两个 wasm 是最新的并拷进 src/（见 wasmDeps.ts）
+  plugins: [sceneWasmDeps()],
   base: "./",
   worker: { format: "iife" },
   build: {

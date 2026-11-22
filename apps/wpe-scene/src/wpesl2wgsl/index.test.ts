@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { Wpesl2wgsl, translateWithIncludes } from "./index";
 
-// wasm 由 `deno task build:wpesl2wgsl` 产出、kabegame 命令拷进本目录；没有就跳过
+// wasm 由 `deno task build:wpesl2wgsl` 产出、vitest 开跑前拷进本目录（wasmDeps.ts）；没有就跳过
 const WASM = fileURLToPath(new URL("./wpesl2wgsl.wasm", import.meta.url));
 
 const VERTEX = `

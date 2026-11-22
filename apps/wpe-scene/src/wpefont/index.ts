@@ -2,7 +2,7 @@
  * wpefont（FreeType 2.14.3 + HarfBuzz 15.0.0 编成的 wasm，C 胶水 `src-tauri/wpefont/wpefont.c`）的 JS 包装：
  * 文本对象的「加载字体、查字、度量、排字、取字形位图与字形框」。排版规则一条都不在这里（见 P6b 1c 的 `text/`）。
  *
- * - wasm 由 `deno task build:wpefont` 产出到 `bin/wasm/wpefont/`，kabegame 命令不带 `--skip vue` 时拷到本目录
+ * - wasm 由 `deno task build:wpefont` 产出到 `bin/wasm/wpefont/`，宿主的 vite build / vitest 开始前按需重建并拷到本目录
  *   （git 忽略）。缺失时 {@link loadWpefont} 返回 null，{@link wpefontLoadError} 给出原因，调用方把文本对象标成不支持。
  * - wasm 是 wasm32-wasip1 reactor：实例化时给 `wasi_snapshot_preview1` 一组桩（不读文件、不写 stdout），再调
  *   `_initialize`。光栅化器的 setjmp / longjmp 走 wasm 异常处理（exnref），宿主要支持它。
@@ -458,7 +458,7 @@ export function wpefontLoadError(): string | null {
 export function loadWpefont(): Promise<Wpefont | null> {
   const url = WPEFONT_WASM_URL;
   if (!url) {
-    loadError = "wpefont.wasm 没有拷进场景宿主：先运行 deno task build:wpefont";
+    loadError = "wpefont.wasm 没有拷进场景宿主：构建宿主时没能构建它，看构建日志里 [build:wpefont] 的报错";
     return Promise.resolve(null);
   }
   loading ??= (async () => {

@@ -2,10 +2,12 @@
  * 构建 wpefont（场景壁纸的字体引擎：FreeType 2.14.3 + HarfBuzz 15.0.0 + msdfgen v1.13 + 胶水
  * src-tauri/wpefont/wpefont.c、msdf.cpp）的 wasm：
  *
- *   deno task build:wpefont
+ *   deno task build:wpefont [--if-stale]
  *
- * 产物 bin/wasm/wpefont/wpefont.wasm（git 忽略，与平台无关）。kabegame 的 dev / start / build / check / test
- * 不带 `--skip vue` 时，由 WpefontPlugin 拷进 apps/wpe-scene/src/wpefont/；缺产物只告警，文本对象退回预览图。
+ * 产物 bin/wasm/wpefont/wpefont.wasm（git 忽略，与平台无关），旁边的 wpefont.wasm.inputs.json 记录构建时的输入指纹
+ * （本脚本、src-tauri/wpefont/ 的源文件、三个子模块的提交与本地改动）。`--if-stale` 时指纹没变就直接退出，不碰工具链；
+ * 场景宿主（apps/wpe-scene）的 vite build 与 vitest 开始前都这样调一次（`apps/wpe-scene/wasmDeps.ts`），再把产物拷进
+ * apps/wpe-scene/src/wpefont/，所以改了胶水、编译参数或子模块后不用记得手动重建。
  *
  * 需要：
  * - 子模块 third/freetype（VER-2-14-3）、third/harfbuzz（15.0.0）与 third/msdfgen（v1.13），缺失时报错并给出
@@ -27,6 +29,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { fetchPinned } from "./download.ts";
 import {
@@ -41,6 +45,8 @@ const HARFBUZZ_DIR = path.join(THIRD_DIR, "harfbuzz");
 const MSDFGEN_DIR = path.join(THIRD_DIR, "msdfgen");
 const GLUE_DIR = path.join(ROOT, "src-tauri", "wpefont");
 const OBJ_DIR = path.join(path.dirname(WPEFONT_WASM), "obj");
+/** 产物的输入指纹（`--if-stale` 比较用），构建成功后与产物一起写。 */
+const INPUTS_STAMP = `${WPEFONT_WASM}.inputs.json`;
 
 /** 子模块应有的版本（README 与对照结论都基于它们）。升级时连同 third-patches/{freetype,harfbuzz}/README.md 一起改。 */
 const FREETYPE_VERSION = "2.14.3";
@@ -195,6 +201,64 @@ function checkSources(): void {
     );
   }
   log(`FreeType ${ft}、HarfBuzz ${hb}、msdfgen ${msdf}`);
+}
+
+function sha256(data: string | Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+/** 子模块的检出状态：HEAD 提交，有本地改动时再带上 `git diff HEAD` 的摘要；没初始化返回 `missing`。 */
+function submoduleState(dir: string): string {
+  // 没初始化的子模块只是个空目录，`git -C` 会一路找到外层仓库，所以先认 `.git`
+  if (!fs.existsSync(path.join(dir, ".git"))) return "missing";
+  const git = (args: string[]) => {
+    const res = spawnSync("git", ["-C", dir, ...args], {
+      encoding: "utf8",
+      maxBuffer: 1 << 28,
+    });
+    if (res.error || res.status !== 0) {
+      return `error:${String(res.error ?? res.stderr).trim()}`;
+    }
+    return res.stdout.trim();
+  };
+  const head = git(["rev-parse", "HEAD"]);
+  const diff = git(["diff", "--no-ext-diff", "HEAD"]);
+  return diff ? `${head}+${sha256(diff)}` : head;
+}
+
+/**
+ * 决定产物内容的输入，各取一个摘要：本脚本（编译参数、单元表、导出表、工具链摘要都写在这里）、胶水目录的源文件、
+ * 三个子模块的检出状态。不含 clang 版本：同一份源码换编译器不算「过旧」。
+ */
+function currentInputs(): Record<string, string> {
+  const inputs: Record<string, string> = {
+    "scripts/build-wpefont.ts": sha256(
+      fs.readFileSync(fileURLToPath(import.meta.url)),
+    ),
+  };
+  for (const name of fs.readdirSync(GLUE_DIR).sort()) {
+    const file = path.join(GLUE_DIR, name);
+    if (name === "README.md" || !fs.statSync(file).isFile()) continue;
+    inputs[`src-tauri/wpefont/${name}`] = sha256(fs.readFileSync(file));
+  }
+  inputs["third/freetype"] = submoduleState(FREETYPE_DIR);
+  inputs["third/harfbuzz"] = submoduleState(HARFBUZZ_DIR);
+  inputs["third/msdfgen"] = submoduleState(MSDFGEN_DIR);
+  return inputs;
+}
+
+/** 产物为什么要重建；是最新的返回 null。 */
+function staleReason(inputs: Record<string, string>): string | null {
+  if (!fs.existsSync(WPEFONT_WASM)) return "还没有产物";
+  let recorded: Record<string, string>;
+  try {
+    recorded = JSON.parse(fs.readFileSync(INPUTS_STAMP, "utf8"));
+  } catch {
+    return "产物没有输入记录（旧版脚本构建的）";
+  }
+  const changed = [...new Set([...Object.keys(inputs), ...Object.keys(recorded)])]
+    .filter((key) => inputs[key] !== recorded[key]);
+  return changed.length ? `输入变了：${changed.join("、")}` : null;
 }
 
 /** Windows 优先用系统自带的 bsdtar：Git Bash 的 GNU tar 会把 `C:` 当成远程主机。 */
@@ -389,6 +453,16 @@ async function runJobs(clang: string, jobs: Job[]): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // 构建前取指纹、成功后原样写下：构建期间改了输入的，下次照样判为过旧
+  const inputs = currentInputs();
+  const stale = staleReason(inputs);
+  if (process.argv.includes("--if-stale")) {
+    if (!stale) {
+      log(`${path.relative(ROOT, WPEFONT_WASM)} 已是最新，跳过`);
+      return;
+    }
+    log(`需要重建：${stale}`);
+  }
   checkSources();
   const [sysroot, clangRt] = [
     await prepareToolchain(TOOLCHAIN[0].name, TOOLCHAIN[0].sha256),
@@ -599,6 +673,7 @@ async function main(): Promise<void> {
 
   fs.mkdirSync(path.dirname(WPEFONT_WASM), { recursive: true });
   fs.copyFileSync(linked, WPEFONT_WASM);
+  fs.writeFileSync(INPUTS_STAMP, `${JSON.stringify(inputs, null, 2)}\n`);
   const kib = (fs.statSync(WPEFONT_WASM).size / 1024).toFixed(0);
   log(`产物 ${path.relative(ROOT, WPEFONT_WASM)}（${kib} KiB）`);
 }

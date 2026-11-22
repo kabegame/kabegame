@@ -17,7 +17,7 @@ deno task dev:frontend            # 仅启动前端（不含 Tauri，端口 1420
 
 桌面三平台的 `deno task dev -c kabegame` 统一走 `tauri dev`；`kabegame-cef-helper` bin 在 dev 下由 ComponentPlugin `beforeBuild` 在主程序编译前先行构建（`tauri dev` 走 `cargo run`，无法同调用多编一个 bin）；build 下由 tauri.conf.json 顶层 `bins`（fork patch 09，见 cocs/tauri/TAURI_CLI_FORK.md）驱动 `tauri build` 随主编译一并产出——cargo 收到逐个 `--bin` 而非 `--bins` 全量（cef-example 不进 release），Windows 的 helper 由 NSIS 原生装到安装根（不再 stage 进 resources/bin）。CEF framework 为构建期直链（`third/cef-rs` fork），经 `target/Frameworks` 符号链接（cef-dll-sys 自动创建，指向 `CEF_PATH`）由 dyld 解析；helper 是 exe 旁的扁平 `kabegame-cef-helper`，三平台一致。
 
-场景宿主 `apps/wpe-scene`（P3-0）：桌面 dev / build 不带 `--skip vue` 时由 `WpeSceneHostPlugin` 先构建；Android / Web 不构建，Android 还会删掉 `resources/wpe-scene` 的 prod 残留，免得被注入 APK。dev 用 `--mode development` 直接写进 `<target>/debug/resources/wpe-scene`（不经 tauri-build 复制，改宿主后跑 `deno task --cwd apps/wpe-scene build --mode development` 或带同一 mode 的 `watch`、重载 iframe 即生效，不重编 Rust），并删掉 `src-tauri/kabegame/resources/wpe-scene` 的 prod 残留；build 写进 `src-tauri/kabegame/resources/wpe-scene` 随安装包分发。见 `cocs/wpe/scene/HOST.md`「场景宿主」。
+场景宿主 `apps/wpe-scene`（P3-0）：桌面 dev / build 不带 `--skip vue` 时由 `WpeSceneHostPlugin` 先构建（宿主的 vite build 与 vitest 开始前先确保 wpesl2wgsl / wpefont 两个 wasm 是最新的并拷进 `src/`，见 `apps/wpe-scene/wasmDeps.ts`）；Android / Web 不构建，Android 还会删掉 `resources/wpe-scene` 的 prod 残留，免得被注入 APK。dev 用 `--mode development` 直接写进 `<target>/debug/resources/wpe-scene`（不经 tauri-build 复制，改宿主后跑 `deno task --cwd apps/wpe-scene build --mode development` 或带同一 mode 的 `watch`、重载 iframe 即生效，不重编 Rust），并删掉 `src-tauri/kabegame/resources/wpe-scene` 的 prod 残留；build 写进 `src-tauri/kabegame/resources/wpe-scene` 随安装包分发。见 `cocs/wpe/scene/HOST.md`「场景宿主」。
 
 Plasma 壁纸插件 `src-plasma-wallpaper-plugin/`（Linux 插件模式）：`deno task build:plasma-plugin` 用 cmake 构建 C++ QML 模块、拼出 KPackage 到 `bin/linux/<arch>/plasma-wallpaper-plugin-build/package/org.kabegame.wallpaper`（架构子目录，OSPlugin 清暂存目录时不删）。Linux standard 的 dev / build 由 `PlasmaWallpaperPlugin` 拷进 resources（dev 直接写 `<target>/debug/resources/plasma-wallpaper` 并删掉 prod 残留，build 写 `src-tauri/kabegame/resources/plasma-wallpaper`）；其它平台与 Android 删掉 prod 残留；没有产物只告警。改了插件要加 `REVISION`；用户的 Qt 不能比构建时的旧，出货要对着 Qt 6.6 构建：`--qt <Qt 安装前缀>` 指向 Qt 官方二进制装的 6.6（如 `~/Qt/6.6.3/gcc_64`），不带时用系统 Qt、只适合开发；CMake 构建目录按系统与 Qt 分开（`cmake-r<修订>-<系统>-<Qt>`），见插件 README「构建与分发」。
 
@@ -206,8 +206,8 @@ deno task build:wpesl2wgsl       # 把 src-tauri/wpesl2wgsl（WPE 着色器 → 
                                  # 输出 bin/wasm/wpesl2wgsl/wpesl2wgsl.wasm（已被 git 忽略，与平台无关）。
                                  # 需要 rustup 目标 wasm32-unknown-unknown（缺失时报错并给出 rustup target add 命令）；
                                  # 用根 Cargo.toml 的 [profile.wpesl2wgsl]（按体积优化、panic = abort）。
-                                 # kabegame 桌面 standard 模式的 dev / start / build / check / test 不带 --skip vue 时，
-                                 # Wpesl2wgslPlugin 把它拷进 apps/wpe-scene/src/wpesl2wgsl/；缺失只告警。
+                                 # 不用手动跑：场景宿主的 vite build 与 vitest 开始前都会跑一次（cargo 增量，最新时约 0.5 s）
+                                 # 并拷进 apps/wpe-scene/src/wpesl2wgsl/（apps/wpe-scene/wasmDeps.ts）；构建失败只告警、沿用旧产物。
                                  # 见 cocs/wpe/scene/COMPILE.md「着色器翻译器 `wpesl2wgsl`」。
 deno task build:wpefont          # 把 FreeType 2.14.3 + HarfBuzz 15.0.0 + msdfgen v1.13 + 胶水 src-tauri/wpefont/wpefont.c、msdf.cpp（场景文本的
                                  # 字体引擎）编成 wasm32-wasip1 reactor，输出 bin/wasm/wpefont/wpefont.wasm（已被 git
@@ -218,9 +218,11 @@ deno task build:wpefont          # 把 FreeType 2.14.3 + HarfBuzz 15.0.0 + msdfg
                                  # 要带 wasm32 目标的 LLVM clang 与它调得起的 wasm-ld（编译前预检；Ubuntu 的 clang-N 找 wasm-ld-N，装 lld-N）：WPEFONT_CLANG → PATH 上的 clang →
                                  # macOS Homebrew 的 llvm（Apple clang 没有 wasm 后端，要 brew install llvm lld）。
                                  # 每次全量重编（约 1 分钟），不加改变数值结果的优化开关。
-                                 # kabegame 桌面 standard 模式的 dev / start / build / check / test 不带 --skip vue 时，
-                                 # WpefontPlugin 把它拷进 apps/wpe-scene/src/wpefont/（内容相同不重写）；缺失只告警，
-                                 # 文本对象退回预览图。见 src-tauri/wpefont/README.md。
+                                 # --if-stale：按输入指纹（本脚本、src-tauri/wpefont/ 的源文件、三个子模块的提交与本地改动，
+                                 # 记在 bin/wasm/wpefont/wpefont.wasm.inputs.json）判断，没变就直接退出、不碰工具链。
+                                 # 场景宿主的 vite build 与 vitest 开始前都以 --if-stale 跑一次并拷进 apps/wpe-scene/src/wpefont/
+                                 # （apps/wpe-scene/wasmDeps.ts）；构建失败只告警、沿用旧产物（可能过旧，文本层报 text:engine）。
+                                 # 见 src-tauri/wpefont/README.md。
 deno task build:ffmpeg --target android  # 通过环境中的 NDK（NDK_HOME 等）交叉编译 aarch64 FFmpeg
                                  # 输出到已被 git 忽略的 bin/android/arm64/FFmpeg-build/（可通过
                                  # 命令重现，不提交）。执行 Android Cargo 构建/检查前必须先运行此命令。

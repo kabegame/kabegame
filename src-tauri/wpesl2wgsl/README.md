@@ -15,8 +15,8 @@ deno task build:wpesl2wgsl                 # → bin/wasm/wpesl2wgsl/wpesl2wgsl.
 - 脚本是 `scripts/build-wpesl2wgsl.ts`，执行 `cargo build -p wpesl2wgsl --lib --target wasm32-unknown-unknown --profile wpesl2wgsl`。
   根 `Cargo.toml` 的 `[profile.wpesl2wgsl]` 按体积优化（`opt-level = "z"`、`lto`、`panic = "abort"`），不影响其它 crate。
   缺 wasm 目标时脚本报错，并给出 `rustup target add` 命令。
-- kabegame 的 dev / start / build / check / test 不带 `--skip vue` 时，`scripts/plugins/wpesl2wgsl-plugin.ts` 在 `prepareEnv` 阶段把产物拷进场景宿主
-  `apps/wpe-scene/src/wpesl2wgsl/wpesl2wgsl.wasm`（git 忽略，内容相同不重写）。找不到产物只告警，宿主照常构建。
+- 场景宿主的 vite build 与 vitest 开始前（`apps/wpe-scene/wasmDeps.ts`）都跑一次构建（cargo 增量，最新时约 0.5 s），再把产物拷进
+  `apps/wpe-scene/src/wpesl2wgsl/wpesl2wgsl.wasm`（git 忽略，内容相同不重写）。构建失败只告警、沿用已有产物，宿主照常构建。
 - 胶水 `apps/wpe-scene/src/wpesl2wgsl/index.ts` 提供以下接口：
   - `loadWpesl2wgsl()`：wasm 没拷进来时返回 null，调用方应把场景标成不支持；
   - `Wpesl2wgsl.translate(request)`；

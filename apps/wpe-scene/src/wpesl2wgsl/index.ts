@@ -1,7 +1,7 @@
 /**
  * wpesl2wgsl（Wallpaper Engine 着色器语言 → WGSL，Rust 编成的 wasm，源码 `src-tauri/wpesl2wgsl`）的 JS 胶水。
  *
- * - wasm 由 `deno task build:wpesl2wgsl` 产出到 `bin/wasm/wpesl2wgsl/`，kabegame 命令不带 `--skip vue` 时拷到本目录
+ * - wasm 由 `deno task build:wpesl2wgsl` 产出到 `bin/wasm/wpesl2wgsl/`，宿主的 vite build / vitest 开始前按需重建并拷到本目录
  *   （git 忽略）。缺失时 {@link loadWpesl2wgsl} 返回 null，调用方把场景标成不支持。
  * - 一次翻译一个材质 pass 的着色器对：传顶点 / 片元源码原文，预处理与翻译都在 wasm 里做。头文件按需提供：
  *   结果是 `phase: "include"` 时按 `missing` 读文件再调一次（{@link translateWithIncludes} 封装了这个循环）。

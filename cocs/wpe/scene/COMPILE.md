@@ -11,7 +11,7 @@
 |---|---|
 | 位置 | `src-tauri/wpesl2wgsl/`，workspace 成员；编成 wasm，不链进应用。naga 30.0.1 的源码嵌在 `naga/`（P7a）：裁掉了用不到的前后端，GLSL 前端的行为补丁也改在这里，清单见 `naga/KABEGAME.md` |
 | 构建 | `deno task build:wpesl2wgsl` → `bin/wasm/wpesl2wgsl/wpesl2wgsl.wasm`（git 忽略，约 1.4 MB），需要 rustup 目标 `wasm32-unknown-unknown` |
-| 进前端 | kabegame 命令不带 `--skip vue` 时，`Wpesl2wgslPlugin` 拷到 `apps/wpe-scene/src/wpesl2wgsl/`；缺失只告警，场景退回预览图 |
+| 进前端 | 场景宿主的 vite build 与 vitest 开始前（`apps/wpe-scene/wasmDeps.ts`）先跑一次 `build:wpesl2wgsl`（cargo 增量，最新时约 0.5 s），再拷到 `apps/wpe-scene/src/wpesl2wgsl/`；构建失败只告警、沿用旧产物，没有产物时场景退回预览图 |
 | 前端接口 | `apps/wpe-scene/src/wpesl2wgsl/index.ts`：`loadWpesl2wgsl()`、`translateWithIncludes(translator, request, readInclude)` |
 | 输入 | 一个材质 pass 的 `.vert` / `.frag` 原文、按需提供的头文件、COMBO、绑定的纹理槽位与格式 |
 | 输出 | 两段 WGSL；uniform 块（group 0 / binding 0，两阶段共用，std140 偏移）；纹理绑定（槽位 n → 纹理 `1 + 2n`、采样器 `2 + 2n`）；attribute / varying 的 location；最终 COMBO |
