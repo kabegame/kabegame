@@ -450,6 +450,11 @@ impl WallpaperController {
         Ok(())
     }
 
+    /// 已经初始化过的全局控制器；没有（启动早期、只转发请求就退出的第二个实例）时 `None`。
+    pub fn try_global() -> Option<&'static WallpaperController> {
+        WALLPAPER_CONTROLLER.get()
+    }
+
     /// 获取全局 WallpaperController 引用
     pub fn global() -> &'static WallpaperController {
         WALLPAPER_CONTROLLER.get().expect(

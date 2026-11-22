@@ -157,6 +157,99 @@ sudo apt install ./Kabegame-standard_*_amd64.deb
 
 图片默认保存在用户图片目录的 `Pictures/Kabegame`，卸载应用不会删除这里的图片。更完整的平台要求、数据目录和排障方法见[安装文档](https://kabegame.com/guide/installation/)。
 
+## 壁纸说明
+
+### 壁纸模式
+
+壁纸模式通过 点击kamechan -> 设置 -> 壁纸 -> 壁纸模式 来切换。
+
+- **原生模式**: 调用系统原生的壁纸接口，能够在 Kabegame 退出的时候也显示，缺点是只支持图片。
+- **窗口/插件模式**: Kabegame 通过一个全屏窗口通过离屏渲染、叠放底层等方式渲染壁纸，支持所有壁纸，效果和应用内预览几乎完全相同。
+
+### 兼容性表格
+🖼️ 能设图片，🎬 能设视频 / Web / 场景（「Web / 场景」指 Wallpaper Engine 的网页壁纸与场景壁纸），没有标的就是不支持。窗口模式（Windows、macOS）与插件模式（Linux）由 Kabegame 自己渲染壁纸，所有类型都能设为桌面。
+
+<table>
+  <thead>
+    <tr>
+      <th>操作系统</th>
+      <th>桌面 / 显示协议</th>
+      <th>原生模式</th>
+      <th>窗口 / 插件模式</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Windows</td>
+      <td>系统桌面</td>
+      <td>🖼️</td>
+      <td>🖼️ 🎬</td>
+    </tr>
+    <tr>
+      <td>macOS</td>
+      <td>系统桌面</td>
+      <td>🖼️</td>
+      <td>🖼️ 🎬</td>
+    </tr>
+    <tr>
+      <td rowspan="8">Linux</td>
+      <td>KDE Plasma 6 · Wayland</td>
+      <td>🖼️</td>
+      <td>🖼️ 🎬<br>能用显卡时直传画面</td>
+    </tr>
+    <tr>
+      <td>KDE Plasma 6 · X11</td>
+      <td>🖼️</td>
+      <td>🖼️ 🎬<br>画面经共享内存传，占用更高</td>
+    </tr>
+    <tr>
+      <td>KDE Plasma 5</td>
+      <td>🖼️</td>
+      <td>没有插件模式</td>
+    </tr>
+    <tr>
+      <td>GNOME 49–51（Wayland、X11）</td>
+      <td>🖼️</td>
+      <td>🖼️ 🎬<br>需要 Kabegame 的 GNOME Shell 扩展，切换时可一键安装</td>
+    </tr>
+    <tr>
+      <td>GNOME 42–48 · X11</td>
+      <td>🖼️</td>
+      <td>🖼️ 🎬<br>同上（未实测）</td>
+    </tr>
+    <tr>
+      <td>GNOME 42–48 · Wayland</td>
+      <td>🖼️</td>
+      <td>🖼️ 🎬<br>有局限：壁纸是压在最底层的普通窗口，铺不到顶栏和 Dock 下面，会盖住桌面图标（未实测）</td>
+    </tr>
+    <tr>
+      <td>GNOME 41 及更早、52 及更新</td>
+      <td>🖼️</td>
+      <td>切换时提示 GNOME 版本不支持</td>
+    </tr>
+    <tr>
+      <td>其它桌面</td>
+      <td>🖼️<br>按 GNOME、Plasma 的方式依次尝试，桌面不认就设不上</td>
+      <td>没有插件模式</td>
+    </tr>
+    <tr>
+      <td>Android</td>
+      <td>系统桌面</td>
+      <td>🖼️</td>
+      <td>—</td>
+    </tr>
+  </tbody>
+</table>
+
+### 其他说明
+
+- 原生模式下设视频、Web、场景壁纸时，会引导切到窗口 / 插件模式；macOS、Linux 的原生模式不支持 GIF 所以也需要切换壁纸模式。Android 上只支持原生壁纸。
+- 原生模式会把 WebP、AVIF、HEIC 等系统不一定认的格式先转成 JPEG / PNG 副本再设。
+- Linux 插件模式在 KDE Plasma 6 上经 `PipeWire` 把画面推给 Kabegame 的 Plasma 壁纸插件（切换到插件模式时自动安装）；在 GNOME 上由 Kabegame 的 GNOME Shell 扩展把壁纸窗口放到桌面，没装扩展时切换模式会提示安装，装完需要注销重新登录，再打开 Kabegame 设置为插件模式。GNOME 的插件模式还在实验阶段：扩展在 GNOME 50 上实测过，42–48 只按系统接口核对过；插件模式下扩展被关掉或 GNOME Shell 重启时，Kabegame 会切回原生模式并提示。
+- 当前壁纸在当前壁纸模式下显示不了（比如视频、Wallpaper Engine 壁纸切到原生模式）时，桌面保持不变并警告。如果切换到窗口或插件模式失败，则不会切换成功，而是自动退回原生模式。
+- 场景壁纸要用显卡（WebGPU）渲染，没有可用显卡时只显示预览图。
+- Web 版没有桌面壁纸，「设为壁纸」只设成Web背景。
+
 ## 参与项目
 
 不必先熟悉整个 Tauri / Rust 单体仓库，也可以参与 Kabegame：

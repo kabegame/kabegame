@@ -1,5 +1,18 @@
 # v4.7.0 regression
 
+## Plasma 插件模式退出时换回系统壁纸插件
+
+2026-11-22。插件模式下退出应用后，桌面仍挂着 Kabegame 的 Plasma 壁纸插件，推流一断就是一片黑。现在 `RunEvent::Exit` 时把各桌面换回 `org.kde.image`，下次启动时由 `ensure_plasma_plugin_aligned` 换回来。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PX1 编译 | 本机 Linux | `check-kabegame --skip vue` | 0 error | 2026-11-22 Claude：0 error，kabegame 告警 19（Linux 上 `app.run` 闭包的 `event` 用上了，少一个 unused） |
+| [x] | PX2 托盘退出 | Plasma 6，插件模式开着 | 托盘「退出」 | 桌面换回插件模式之前的系统壁纸，不黑屏、不闪黑；日志「退出：各桌面的壁纸插件换回 org.kde.image」 | 要用新代码重启 dev |
+| [ ] | PX3 关主窗口时确认退出 | 同上 | 关主窗口，在询问里选直接退出 | 同 PX2 | |
+| [ ] | PX4 再启动 | 接 PX2 | 启动 Kabegame | 桌面换回 Kabegame 插件，壁纸照常 | |
+| [ ] | PX5 不该换的情况 | Plasma 6 | 原生模式下退出；壁纸开关关着时退出；已有实例时再启动一次（第二个实例转发后退出） | 都不改桌面的壁纸插件；第二个实例不影响正在运行的那个 | |
+| [ ] | PX6 GNOME 不受影响 | GNOME 插件模式 | 退出 | 不调 Plasma 的脚本（不是 Plasma 6 会话），壁纸窗口随进程关掉，露出 GNOME 自己的壁纸 | |
+
 ## GNOME 插件模式：Shell 扩展正式化、版本检查与安装、掉线退回原生
 
 2026-11-22。扩展从 `ignore/gnome-b0/` 搬进 `src-gnome-shell-extension/`：共享的 `core.js` 加 GNOME 42–44（`imports.*`）或 45+（ES 模块）的包装，应用安装时拼成 `extension.js`。挂到桌面的手段按 49 分：49+ 设成桌面类型；42–48 的 X11 窗口经 `xprop` 设桌面类型；Wayland 窗口压在最底层，并滤出 Alt+Tab 与概览。

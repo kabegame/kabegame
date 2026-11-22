@@ -478,6 +478,11 @@ pub fn run() {
         .expect("error while building tauri CEF application");
 
     app.run(|app_handle, event| {
+        // 正常退出（托盘「退出」、关主窗口时确认退出）：Plasma 插件模式下把桌面换回系统壁纸插件，否则推流一断桌面就黑了
+        #[cfg(target_os = "linux")]
+        if matches!(event, tauri::RunEvent::Exit) {
+            crate::wallpaper::manager::plasma::restore_system_plugin_on_exit();
+        }
         #[cfg(target_os = "macos")]
         handle_macos_run_event(app_handle, event);
     });

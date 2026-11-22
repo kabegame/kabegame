@@ -57,6 +57,9 @@ deno task build:plasma-plugin --qt ~/Qt/6.6.3/gcc_64
   约定版本不同或修订号比内置的旧，就把内置包拷进 `~/.local/share/plasma/wallpapers/org.kabegame.wallpaper`（系统目录里别的包装的
   旧版不碰，用户目录的盖过它），再经 `evaluateScript` 把各桌面换成本插件、`General/Entry` 写成新修订的内容文件，plasmashell
   不用重启。
+- 应用正常退出（托盘「退出」、关主窗口时确认退出，都经 `RunEvent::Exit`）时，插件模式下把各桌面换回 `org.kde.image`
+  （`plasma::restore_system_plugin_on_exit`）：不换的话推流随进程结束而断，桌面一片黑。下次启动时再换回本插件。崩溃、被杀、
+  注销时没有这一步，桌面会停在本插件上，直到 Kabegame 再次启动。
 - deb 卸载（`src-tauri/kabegame/deb/postrm.sh`）把各用户用着本插件的桌面换回 `org.kde.image`，删掉用户目录里带
   `X-Kabegame-StreamProtocol` 的这份。
 

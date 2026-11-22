@@ -81,6 +81,26 @@ fn switch_to_org_kde_image() -> Result<(), String> {
     qdbus::run_qdbus_evaluate_script(script)
 }
 
+/// 应用正常退出时（托盘「退出」、关主窗口时确认退出等，都经 `RunEvent::Exit`）：插件模式下把各桌面换回 `org.kde.image`。
+/// 不换的话桌面仍挂着 Kabegame 的插件，推流随进程结束而断，桌面一片黑；下次启动时 [`ensure_plasma_plugin_aligned`] 再换回来。
+/// `RunEvent::Exit` 在销毁壁纸窗口之前发，此时推流还在，先换插件不会闪黑。
+///
+/// 只在本进程拉起过插件模式时换：壁纸控制器初始化过（启动页出错退出、只转发请求就退出的第二个实例都没有）、Plasma 6 会话、
+/// 设置是插件模式且壁纸开着（关着时 `cleanup` 已经换回去了）。
+pub fn restore_system_plugin_on_exit() {
+    if super::WallpaperController::try_global().is_none() || !install::is_plasma6_session() {
+        return;
+    }
+    let settings = kabegame_core::settings::Settings::global();
+    if !settings.get_wallpaper_enabled() || settings.get_wallpaper_mode() != "plasma-plugin" {
+        return;
+    }
+    match switch_to_org_kde_image() {
+        Ok(()) => tracing::info!("退出：各桌面的壁纸插件换回 org.kde.image"),
+        Err(e) => tracing::warn!("退出时换回 org.kde.image 失败，桌面会停在 Kabegame 插件上（无画面）: {e}"),
+    }
+}
+
 /// 启动时对齐：设置是插件模式时，确保插件装好且不旧（应用升级带来新修订时在这里装上），各桌面换成它、`Entry` 指向生效的
 /// 内容文件（与 Windows / macOS 窗口模式启动时挂载窗口一致）。
 pub fn ensure_plasma_plugin_aligned() -> Result<(), String> {
