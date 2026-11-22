@@ -1,11 +1,13 @@
 //! GNOME 上查 Kabegame 窗口在全局逻辑坐标里的位置（同 Plasma 上的 `kwin_window`）：Wayland 不让应用知道自己的窗口在屏上哪里，
-//! 问 Kabegame 的 GNOME Shell 扩展（`org.gnome.Shell` 上的 `/app/kabegame/Shell`，接口 `app.kabegame.Shell1`）。
+//! 问 Kabegame 的 GNOME Shell 扩展（总线名字 `app.kabegame.Shell` 上的 `/app/kabegame/Shell`，接口 `app.kabegame.Shell1`，
+//! 常量在 [`super::extension`]）。
 //!
 //! - `GetWindowFrame(标题) -> (找到, x, y, 宽, 高)`：扩展只回答调用方进程自己的窗口（按 D-Bus 连接核对进程号），最小化的算找不到。
 //!   几何是 mutter 的框架矩形（逻辑像素；客户端自绘的标题栏算在里面，阴影不算）。
 //! - 主窗口的几何把壁纸窗口上的光标换到主窗口里（桌面 → 预览），反过来把主窗口里的光标换到壁纸上；壁纸窗口的几何给出它在
 //!   全局坐标里的原点。
-//! - 扩展不在（没装、没启用、shell 重启中）时给 `None`，两边就不互相跟光标。
+//! - 扩展不在（没装、没启用、shell 重启中）时给 `None`，两边就不互相跟光标；开始失败的那一刻确认扩展是否真的掉线，
+//!   掉线就退回原生模式（[`super::extension_lost_if_offline`]）。
 
 use std::time::{Duration, Instant};
 
@@ -15,9 +17,7 @@ use crate::wallpaper::manager::pointer_socket::FrameGeometry;
 const CALL_TIMEOUT: Duration = Duration::from_millis(300);
 /// 连不上 session bus 时多久再试。
 const CONNECT_INTERVAL: Duration = Duration::from_secs(10);
-const SERVICE: &str = "org.gnome.Shell";
-const PATH: &str = "/app/kabegame/Shell";
-const INTERFACE: &str = "app.kabegame.Shell1";
+use super::extension::{BUS_NAME as SERVICE, INTERFACE, OBJECT_PATH as PATH};
 
 /// 经 Shell 扩展找 Kabegame 的窗口。不是线程安全的，给鼠标线程独占。
 pub struct GnomeWindowLocator {
@@ -75,6 +75,7 @@ impl GnomeWindowLocator {
             Err(error) => {
                 if !self.failing {
                     tracing::debug!("问 GNOME Shell 扩展窗口位置失败（扩展没装或没启用？）: {error}");
+                    super::extension_lost_if_offline("问窗口位置失败");
                 }
                 self.failing = true;
                 return None;

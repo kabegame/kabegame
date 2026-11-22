@@ -507,6 +507,10 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
 - [wallpaper/WINDOW_MOUNT_WEMT.md](wallpaper/WINDOW_MOUNT_WEMT.md)
   - 主题：Windows 窗口壁纸按 WPE 运行时层级挂到 WorkerW，移除旧 Progman 同级 Z-order 修正；列出证据、实现边界与真机验证项。
 
+- [../src-gnome-shell-extension/README.md](../src-gnome-shell-extension/README.md)
+  - 主题：GNOME 下插件模式的 Shell 扩展（GNOME 42–51）。共享的 `core.js` 加两个包装（42–44 的 `imports.*`、45+ 的 ES 模块），应用安装时拼成 `extension.js` 并生成 `metadata.json`（`shell-version` 分两段、`session-modes` 含 `unlock-dialog`）；挂到桌面的手段另按 49 分（mutter 49 才公开 `Meta.Window.set_type`，按 42–51 各版本 typelib 核对过）：49+ 设成桌面类型，42–48 的 X11 窗口经 `xprop` 写桌面类型，Wayland 窗口压在最底层并滤出 Alt+Tab 与概览（已知局限）；与应用的约定（`PROTOCOL`、总线名字 `app.kabegame.Shell`、`app.kabegame.Shell1` 的 `Protocol` / `GetWindowFrame`）；应用侧的版本检查、安装（写进用户扩展目录、改 `enabled-extensions`、提示重新登录）、在线要求与掉线退回原生模式、开机等待；用嵌套 Shell 测试。
+  - 适用场景：GNOME 上切插件模式提示版本不支持 / 要装扩展、装完重新登录仍不生效（扩展总开关、`disabled-extensions`）、插件模式自己退回原生模式（扩展掉线、锁屏、Shell 重启）、壁纸窗口没挂到桌面或在 Alt+Tab / 概览里出现、改扩展后要加 `PROTOCOL`、支持新的 GNOME 版本（核对接口后扩大 `SUPPORTED_SHELL`）。
+
 - [wallpaper/NATIVE_WALLPAPER_COMPAT.md](wallpaper/NATIVE_WALLPAPER_COMPAT.md)
   - 主题：Linux / Windows 原生壁纸的图片格式兼容层。涵盖独立的 `wallpaper_compatible_path`、惰性 JPEG/PNG 转码与复用、样式重应用路径、best-effort 回退，以及删除图片时对兼容副本的安全清理；macOS 的原生后端经 `NSWorkspace` 逐屏设图、直接交原图，不接入这一层。
   - 适用场景：排查 GNOME/Windows 设置 WebP、AVIF、HEIC、HEIF 后壁纸空白；扩展原生壁纸格式白名单；维护兼容副本生命周期。

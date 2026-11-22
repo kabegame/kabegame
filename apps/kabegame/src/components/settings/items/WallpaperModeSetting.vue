@@ -17,6 +17,7 @@ import { useUiStore } from "@/stores/ui";
 import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
 import KbSegmentedControl from "@/components/common/form/KbSegmentedControl.vue";
 import { messageBox } from "@/components/ui/messageBox";
+import { pluginModeConfirmMessage, preparePluginMode } from "@/utils/wallpaperMode";
 
 const { t, locale } = useI18n();
 const capabilities = useWallpaperCapabilities();
@@ -57,9 +58,18 @@ const handleChange = async (mode: string) => {
     }
   }
   if (mode === "plasma-plugin") {
+    // GNOME：先确认 Shell 版本与扩展（不满足时已经提示用户，必要时帮忙装好扩展），这次不切
+    let ready: { gnome: boolean } | null;
+    try {
+      ready = await preparePluginMode();
+    } catch (e: any) {
+      kameMessage.error(`${t("settings.wallpaperModeSwitchFailed")}: ${e?.message || String(e)}`);
+      return;
+    }
+    if (!ready) return;
     try {
       await messageBox.confirm(
-        t("settings.wallpaperModePluginConfirmMessage"),
+        pluginModeConfirmMessage(ready.gnome),
         t("settings.wallpaperModeConfirmTitle"),
         {
           confirmButtonText: t("settings.wallpaperModeConfirmOk"),

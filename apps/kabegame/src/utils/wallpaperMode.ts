@@ -1,6 +1,6 @@
 import { invoke } from "@/api/rpc";
 import { i18n } from "@kabegame/i18n";
-import { IS_WEB } from "@/env";
+import { IS_LINUX, IS_WEB } from "@/env";
 import { useSettingsStore } from "@/stores/settings";
 import { useWallpaperScreens } from "@/composables/useWallpaperScreens";
 import {
@@ -35,9 +35,67 @@ async function ensureWindowModeByUserConfirm(): Promise<void> {
   await invoke("set_wallpaper_mode", { mode: "window" });
 }
 
+/** `get_plugin_mode_readiness` 的返回值（后端 `gnome::extension::Readiness`）。 */
+type PluginModeReadiness =
+  | { status: "ready"; gnome: boolean }
+  | { status: "gnomeShellUnsupported"; version: string; min: number; max: number }
+  | { status: "gnomeExtensionMissing"; version: string };
+
+/**
+ * 切到插件模式之前的检查（Linux）。GNOME 会话要 Shell 版本在支持范围内、Kabegame 的 Shell 扩展在线：版本不支持时提示升级系统
+ * （或等 Kabegame 更新）；扩展不在线时问用户要不要安装，装完提示注销重新登录，这次不切。
+ *
+ * @returns 可以切时返回 `{ gnome }`（是不是 GNOME 会话，确认文案据此选）；不能切时返回 null（原因已经告诉用户）。
+ * @throws 读不到 Shell 版本等检查本身出错时抛后端的错误。
+ */
+export async function preparePluginMode(): Promise<{ gnome: boolean } | null> {
+  if (!IS_LINUX) return { gnome: false };
+  const t = i18n.global.t;
+  const readiness = await invoke<PluginModeReadiness>("get_plugin_mode_readiness");
+  if (readiness.status === "ready") return { gnome: readiness.gnome };
+
+  const title = t("settings.gnomeExtensionTitle");
+  if (readiness.status === "gnomeShellUnsupported") {
+    const { version, min, max } = readiness;
+    const tooNew = Number.parseInt(version, 10) > max;
+    await messageBox.alert(t(tooNew ? "settings.gnomeShellTooNew" : "settings.gnomeShellTooOld", { version, min, max }), title, {
+      type: "warning",
+    });
+    return null;
+  }
+
+  try {
+    await messageBox.confirm(t("settings.gnomeExtensionInstallConfirm"), title, {
+      confirmButtonText: t("settings.gnomeExtensionInstallOk"),
+      cancelButtonText: t("common.cancel"),
+      type: "info",
+    });
+  } catch {
+    return null;
+  }
+  try {
+    const outcome = await invoke<{ userExtensionsDisabled: boolean }>("install_gnome_shell_extension");
+    const lines = [t("settings.gnomeExtensionInstalled")];
+    if (outcome.userExtensionsDisabled) lines.push(t("settings.gnomeExtensionsSwitchedOff"));
+    await messageBox.alert(lines.join(" "), title, { type: "success" });
+  } catch (error) {
+    const reason = typeof error === "string" ? error : (error as any)?.message || String(error);
+    await messageBox.alert(t("settings.gnomeExtensionInstallFailed", { reason }), title, { type: "error" });
+  }
+  return null;
+}
+
+/** 插件模式的确认文案：GNOME 下是 Shell 扩展把壁纸窗口放到桌面，Plasma 下是换系统的壁纸插件。 */
+export function pluginModeConfirmMessage(gnome: boolean): string {
+  return i18n.global.t(gnome ? "settings.wallpaperModePluginConfirmMessageGnome" : "settings.wallpaperModePluginConfirmMessage");
+}
+
 async function ensurePluginModeByUserConfirm(): Promise<void> {
+  const ready = await preparePluginMode();
+  // 同用户在确认框里取消：调用方按取消处理
+  if (!ready) throw "cancel";
   await messageBox.confirm(
-    i18n.global.t("settings.wallpaperModePluginConfirmMessage"),
+    pluginModeConfirmMessage(ready.gnome),
     i18n.global.t("settings.wallpaperModeConfirmTitle"),
     {
       confirmButtonText: i18n.global.t("settings.wallpaperModeConfirmOk"),

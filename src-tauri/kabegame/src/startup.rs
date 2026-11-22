@@ -318,6 +318,10 @@ pub fn init_wallpaper_controller(app_handle: &AppHandle<crate::AppRuntime>) {
     }
 
     tauri::async_runtime::spawn(async move {
+        // GNOME 的插件模式要 Kabegame 的 Shell 扩展在线：开机自启时等它上线，等不到就退回原生模式（再往下按原生模式初始化）
+        #[cfg(target_os = "linux")]
+        crate::wallpaper::manager::gnome::settle_on_startup().await;
+
         // 初始化壁纸控制器（如创建窗口等）
         if let Err(e) = WallpaperController::global().init() {
             tracing::warn!("Failed to initialize wallpaper controller: {}", e);
@@ -998,15 +1002,23 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
             clear_current(&target_id);
             continue;
         }
+        // 当前模式显示不了（WPE 壁纸 / 视频在原生模式）：不设、保留记录，同切换壁纸模式
+        if let Err(reason) = crate::wallpaper::manager::displayable_in_mode(
+            &settings.get_wallpaper_mode(),
+            img_info.media_type.as_deref(),
+            &path,
+        ) {
+            tracing::debug!("启动恢复壁纸：目标 {target_id} 的当前壁纸{reason}，不设置: {path}");
+            continue;
+        }
 
-        // 恢复不带过渡
+        // 恢复不带过渡。设置失败（后端一时不可用，如 GNOME 扩展掉线正在退回原生模式）只记日志、保留记录：文件不在的情况上面已经清了
         let style = controller.effective_style(&config);
-        if manager
+        if let Err(e) = manager
             .set_wallpaper(&path, &style, "none", &placement)
             .await
-            .is_err()
         {
-            clear_current(&target_id);
+            tracing::warn!("启动恢复壁纸：目标 {target_id} 设置失败: {e}");
         }
     }
 

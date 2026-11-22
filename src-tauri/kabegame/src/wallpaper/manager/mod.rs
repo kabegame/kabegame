@@ -390,6 +390,32 @@ pub const RENDERED_WALLPAPER_MODE: &str = if cfg!(target_os = "linux") {
     "window"
 };
 
+/// 壁纸模式 `mode` 能不能显示这张壁纸；不能时给原因（写日志用）。规则同「设为壁纸」时要求切模式的判断：
+/// 目录型 WPE 壁纸只有 [`RENDERED_WALLPAPER_MODE`] 能显示，`requires_window_mode` / `requires_plugin_mode` 命中的
+/// 视频 / GIF 只有对应的模式能显示，文件不在了哪个模式都不能。切换壁纸模式与启动恢复壁纸都按它决定设不设，不换成别的图。
+pub fn displayable_in_mode(mode: &str, media_type: Option<&str>, path: &str) -> Result<(), &'static str> {
+    use kabegame_core::media::image_type::{is_wpe_type, requires_plugin_mode, requires_window_mode};
+    if is_wpe_type(media_type) {
+        return if mode == RENDERED_WALLPAPER_MODE {
+            Ok(())
+        } else {
+            Err("是 Wallpaper Engine 壁纸，只有壁纸窗口能显示")
+        };
+    }
+    let file = std::path::Path::new(path);
+    // Android 上为 content:// URI，不能用 Path::exists 判断
+    if !path.starts_with("content://") && !file.exists() {
+        return Err("文件不存在");
+    }
+    if requires_window_mode(file) && mode != "window" {
+        return Err("要窗口模式才能显示");
+    }
+    if requires_plugin_mode(file) && mode != "plasma-plugin" {
+        return Err("要插件模式才能显示");
+    }
+    Ok(())
+}
+
 /// 全新目标的平台默认过渡：Windows 为淡入淡出，其余平台就是能力表第一项（不写）。
 const PLATFORM_DEFAULT_TRANSITION: &str = if cfg!(target_os = "windows") {
     "fade"

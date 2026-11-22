@@ -24,23 +24,6 @@ use tauri::AppHandle;
 use tokio::sync::Notify;
 use tokio::time::{interval, Duration};
 
-/// 从当前时间戳生成均匀分布的随机索引（splitmix64 位混合）。
-/// 避免直接 `nanos % len`：Windows 上 nanos 精度为 100ns（始终是 100 的倍数），
-/// 当 len 整除 100 时取模结果恒为 0。
-pub(crate) fn random_index(len: usize) -> usize {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let mut x = nanos as u64;
-    x ^= x >> 30;
-    x = x.wrapping_mul(0xbf58476d1ce4e5b9);
-    x ^= x >> 27;
-    x = x.wrapping_mul(0x94d049bb133111eb);
-    x ^= x >> 31;
-    (x as usize) % len
-}
-
 /// 文件是否还在。媒体类型不在这里判断：原生模式的有效路径已带 `_kb_fc/media-type/image`
 /// （见 `rotation_path::effective_path`），前端「用当前视图轮播」的视频跳过提示与此对应。
 /// Android 的 `content://` 无法用 `Path::exists` 判断，视为存在。
@@ -319,21 +302,6 @@ pub fn validate_rotation_path(path: &str, wallpaper_mode: &str) -> Result<(), St
     images_at(&rotation_path::rows_path(&effective, 1, 1))
         .map_err(|e| format!("轮播路径无效: {e}"))?;
     Ok(())
-}
-
-/// 模式切换 / 兜底场景：从默认随机路径里随机取一张文件仍在的图，返回 local_path。
-/// `commands::wallpaper::set_wallpaper_mode` 在原壁纸文件不存在时用作 fallback。
-pub fn pick_random_gallery_wallpaper(wallpaper_mode: &str) -> Option<String> {
-    let src = count_source(rotation_path::default_path(), wallpaper_mode, false).ok()?;
-    if src.count == 0 {
-        return None;
-    }
-    let start = random_index(src.count.min(usize::MAX as u64) as usize) as u64;
-    collect_available(&src, start, 1, 1)
-        .ok()?
-        .into_iter()
-        .next()
-        .map(|(_, img)| img.local_path)
 }
 
 /// Android：WorkManager Worker 在冷进程里跑、没有 PathQL，由这里预取后续可用图写成队列文件，

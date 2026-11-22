@@ -1,10 +1,9 @@
 // 壁纸相关命令和函数
 
 use crate::wallpaper::manager::{
-    DisplayMode, Placement, WallpaperCapabilities, WallpaperController, WindowAssignment,
-    RENDERED_WALLPAPER_MODE,
+    displayable_in_mode, DisplayMode, Placement, WallpaperCapabilities, WallpaperController,
+    WindowAssignment, RENDERED_WALLPAPER_MODE,
 };
-use crate::wallpaper::rotator::pick_random_gallery_wallpaper;
 use crate::wallpaper::screens::{self, ScreenInfo};
 use crate::wallpaper::WallpaperRotator;
 use kabegame_core::emitter::GlobalEmitter;
@@ -643,14 +642,24 @@ fn apply_backend_lifecycle(
     Ok(())
 }
 
-/// 切换壁纸模式（原生 / 窗口 / 插件）。
-///
-/// 当前显示器模式在新模式下不可用时先回落 `multiple`；随后对新布局里的每个活跃目标做
-/// 「WPE / 文件不存在时兜底换图」并用新模式下的样式、过渡输出一次。任何一个目标无图可用都中止切换，
-/// 中止时不留下半切换状态（后端生命周期在所有检查之后才动）。
+/// 切换壁纸模式（原生 / 窗口 / 插件），见 [`switch_wallpaper_mode`]。GNOME 会话切到插件模式前先确认 Shell 版本与扩展
+/// （前端已按 `get_plugin_mode_readiness` 引导过，这里防直接调用）。
 #[tauri::command]
 pub async fn set_wallpaper_mode(mode: String) -> Result<(), String> {
     reject_if_wallpaper_disabled()?;
+    #[cfg(target_os = "linux")]
+    if mode == "plasma-plugin" {
+        crate::wallpaper::manager::gnome::ensure_ready()?;
+    }
+    switch_wallpaper_mode(&mode).await
+}
+
+/// 切换壁纸模式，设置里的切换与 GNOME 扩展掉线时退回原生模式共用。
+///
+/// 当前显示器模式在新模式下不可用时先回落 `multiple`。**不换壁纸**：新布局里每个活跃目标的当前壁纸在新模式下能显示
+/// （[`displayable_in_mode`]）就用新模式下的样式、过渡输出一次，不能显示（WPE 壁纸 / 视频切到原生模式、文件不在了）或输出失败
+/// 就不设、保留目标的当前壁纸记录；有这样的目标时经 `user-message` 警告用户。
+pub async fn switch_wallpaper_mode(mode: &str) -> Result<(), String> {
     let settings = Settings::global();
     let old_mode = settings.get_wallpaper_mode();
 
@@ -667,21 +676,17 @@ pub async fn set_wallpaper_mode(mode: String) -> Result<(), String> {
     }
 
     let rotation_enabled = settings.get_wallpaper_rotation_enabled();
-    let backend = controller.manager_for_mode(&mode);
+    let backend = controller.manager_for_mode(mode);
 
     // 新模式下的布局：显示器模式回落时，缺的目标从切换前的默认目标复制
     let old_layout = controller.layout();
-    let new_display = controller.display_mode_for(&mode);
+    let new_display = controller.display_mode_for(mode);
     let seed = settings.get_wallpaper_target(&old_layout.default_target);
     let layout = controller.layout_for(new_display, seed.as_ref());
 
-    #[cfg(not(target_os = "linux"))]
-    let is_plugin_mode = false;
-    #[cfg(target_os = "linux")]
-    let is_plugin_mode = mode == "plasma-plugin";
-
-    // 逐目标确定新模式下要显示的文件；没有当前壁纸的目标内容无从谈起，跳过
+    // 逐目标看当前壁纸在新模式下能不能显示；没有当前壁纸的目标跳过
     let mut outputs: Vec<(String, Placement, String)> = Vec::new();
+    let mut not_shown = 0usize;
     for (target_id, placement) in &layout.targets {
         let current = settings
             .get_wallpaper_target(target_id)
@@ -690,104 +695,91 @@ pub async fn set_wallpaper_mode(mode: String) -> Result<(), String> {
         let Some(current) = current else {
             continue;
         };
-        let current_wallpaper = current.local_path;
-        let current_cleaned = current_wallpaper
+        let path = current
+            .local_path
             .trim()
             .trim_start_matches(r"\\?\")
             .to_string();
-
-        // 目录型 WPE 壁纸只在壁纸窗口渲染的模式有内容；切到别的模式时换成画廊里可用的兜底图。
-        let current_is_wpe =
-            kabegame_core::media::image_type::is_wpe_type(current.media_type.as_deref());
-
-        let resolved_wallpaper = if current_is_wpe && mode != RENDERED_WALLPAPER_MODE {
-            match pick_random_gallery_wallpaper(&mode) {
-                Some(p) => {
-                    tracing::warn!(
-                        "set_wallpaper_mode: 当前壁纸是 WPE 目录型壁纸，切到 {} 模式改用兜底图片: {}",
-                        mode,
-                        p
-                    );
-                    p
-                }
-                None => {
-                    if was_running {
-                        let _ = rotator.start().await;
-                    }
-                    return Err(
-                        "当前壁纸是 Wallpaper Engine 壁纸，只能使用窗口模式（Linux 为插件模式）；画廊中没有其它可用图片可兜底。"
-                            .to_string(),
-                    );
-                }
+        match displayable_in_mode(mode, current.media_type.as_deref(), &path) {
+            Ok(()) => outputs.push((target_id.clone(), placement.clone(), path)),
+            Err(reason) => {
+                tracing::info!("切到 {mode} 模式：目标 {target_id} 的当前壁纸{reason}，不设置: {path}");
+                not_shown += 1;
             }
-        } else if Path::new(&current_cleaned).exists() {
-            current_cleaned.clone()
-        } else if let Some(p) = pick_random_gallery_wallpaper(&mode) {
-            tracing::warn!(
-                "set_wallpaper_mode: 当前壁纸文件不存在，将从画廊选择兜底图片: {} (原路径: {})",
-                p,
-                current_wallpaper
-            );
-            p
-        } else {
-            current_cleaned.clone()
-        };
-
-        if !is_plugin_mode && !Path::new(&resolved_wallpaper).exists() {
-            let error_msg = if old_mode == "native" {
-                format!(
-                    "无法切换到窗口模式：当前系统壁纸文件不存在（可能是主题缓存或临时文件），且画廊中没有可用图片。请先在画廊中添加图片，或手动设置一张壁纸后再切换。\n原路径: {}",
-                    resolved_wallpaper
-                )
-            } else {
-                format!(
-                    "无法切换到窗口模式：壁纸文件不存在，且画廊中没有可用图片作为兜底。请先在画廊中添加图片。\n路径: {}",
-                    resolved_wallpaper
-                )
-            };
-            if was_running {
-                let _ = rotator.start().await;
-            }
-            return Err(error_msg);
         }
-        outputs.push((target_id.clone(), placement.clone(), resolved_wallpaper));
     }
 
     // 样式 / 过渡按壁纸模式各记各的：目标在新模式名下还没有值（第一次进入）时才把旧模式的值带过去。
     // 必须排在建窗之前：窗口后端 init 会阻塞到壁纸页面初始化完成，页面初始化时就读目标配置，
     // 晚写的话新窗口会先按旧的窗口样式渲染、再被事件纠正。
-    if let Err(e) = controller.carry_style_to_mode(&old_mode, &mode) {
-        tracing::warn!("set_wallpaper_mode: 沿用样式 / 过渡失败: {}", e);
+    if let Err(e) = controller.carry_style_to_mode(&old_mode, mode) {
+        tracing::warn!("switch_wallpaper_mode: 沿用样式 / 过渡失败: {}", e);
     }
     if new_display != old_layout.display_mode {
         settings.set_wallpaper_display_mode(new_display.as_str())?;
     }
 
-    // 放在所有可能中止切换的检查之后：中止时不应留下半切换状态
-    // （窗口已建但模式没落 / 窗口已毁但模式还是 window）。
-    apply_backend_lifecycle(controller, &old_mode, &mode)?;
+    // 后端初始化失败（如 GNOME 扩展不在线）就中止：模式不变，轮播照旧
+    if let Err(e) = apply_backend_lifecycle(controller, &old_mode, mode) {
+        if was_running {
+            let _ = rotator.start().await;
+        }
+        return Err(e);
+    }
 
     for (target_id, placement, path) in &outputs {
         let config = settings.get_wallpaper_target(target_id).unwrap_or_default();
-        backend
+        if let Err(e) = backend
             .set_wallpaper(
                 path,
-                &controller.effective_style_in(&mode, new_display, &config),
-                &controller.effective_transition_in(&mode, new_display, &config),
+                &controller.effective_style_in(mode, new_display, &config),
+                &controller.effective_transition_in(mode, new_display, &config),
                 placement,
             )
-            .await?;
+            .await
+        {
+            tracing::warn!("切到 {mode} 模式：目标 {target_id} 设置当前壁纸失败，不设置: {e}");
+            not_shown += 1;
+        }
     }
 
-    settings.set_wallpaper_mode(mode.clone())?;
+    settings.set_wallpaper_mode(mode.to_string())?;
     // 有效路径随模式加 / 去媒体过滤：按当前壁纸 id 重定位，保持「下一张」语义
-    crate::wallpaper::rotator::relocate_position_for_mode(&mode);
+    crate::wallpaper::rotator::relocate_position_for_mode(mode);
+
+    if not_shown > 0 {
+        kabegame_core::emitter::GlobalEmitter::global().emit_user_message(
+            kabegame_core::emitter::UserMessageLevel::Warning,
+            "settings.wallpaperModeCurrentNotShown",
+            serde_json::json!({}),
+        );
+    }
 
     if rotation_enabled {
         let _ = rotator.start().await;
     }
 
     Ok(())
+}
+
+/// 切到插件模式之前的检查：GNOME 会话看 Shell 版本与 Kabegame 的 Shell 扩展是否在线，其它会话总是可以。
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn get_plugin_mode_readiness(
+) -> Result<crate::wallpaper::manager::gnome::extension::Readiness, String> {
+    tauri::async_runtime::spawn_blocking(crate::wallpaper::manager::gnome::readiness)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 按当前 GNOME Shell 的版本安装并启用 Kabegame 的 Shell 扩展（覆盖已有的）。要注销重新登录才会加载。
+#[cfg(target_os = "linux")]
+#[tauri::command]
+pub async fn install_gnome_shell_extension(
+) -> Result<crate::wallpaper::manager::gnome::extension::InstallOutcome, String> {
+    tauri::async_runtime::spawn_blocking(crate::wallpaper::manager::gnome::extension::install)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

@@ -1,10 +1,11 @@
 import { reactive } from "vue";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setWallpaperByImageIdWithModeFallback, setWallpaperOrBackground } from "./wallpaperMode";
+import { preparePluginMode, setWallpaperByImageIdWithModeFallback, setWallpaperOrBackground } from "./wallpaperMode";
 
 const invoke = vi.hoisted(() => vi.fn());
 const confirm = vi.hoisted(() => vi.fn());
-const env = vi.hoisted(() => ({ web: false }));
+const alert = vi.hoisted(() => vi.fn());
+const env = vi.hoisted(() => ({ web: false, linux: false }));
 /** 模拟后端：壁纸模式、显示器模式，以及哪些图要窗口模式 */
 const backend = vi.hoisted(() => ({
   mode: "native",
@@ -12,6 +13,12 @@ const backend = vi.hoisted(() => ({
   /** 切到窗口模式后显示器模式变成什么（模拟新模式不支持逐屏独立时回落） */
   displayModeAfterSwitch: "single",
   windowOnly: new Set<string>(["video"]),
+  /** Linux 上只有插件模式能显示的图（WPE） */
+  pluginOnly: new Set<string>(["wpe"]),
+  /** `get_plugin_mode_readiness` 的返回值 */
+  readiness: { status: "ready", gnome: false } as Record<string, unknown>,
+  /** `install_gnome_shell_extension` 的返回值；为字符串时抛出它 */
+  install: { userExtensionsDisabled: false } as unknown,
   activeTargets: () => [] as string[],
 }));
 
@@ -20,8 +27,11 @@ vi.mock("@/env", () => ({
   get IS_WEB() {
     return env.web;
   },
+  get IS_LINUX() {
+    return env.linux;
+  },
 }));
-vi.mock("@/components/ui/messageBox", () => ({ messageBox: { confirm } }));
+vi.mock("@/components/ui/messageBox", () => ({ messageBox: { confirm, alert } }));
 vi.mock("@kabegame/i18n", () => ({ i18n: { global: { t: (key: string) => key } } }));
 
 const screen = (id: string, primary: boolean) => ({
@@ -53,6 +63,10 @@ const setCalls = () =>
 
 beforeEach(() => {
   env.web = false;
+  env.linux = false;
+  backend.readiness = { status: "ready", gnome: false };
+  backend.install = { userExtensionsDisabled: false };
+  alert.mockReset().mockResolvedValue("confirm");
   backend.mode = "native";
   backend.displayMode = "single";
   backend.displayModeAfterSwitch = "single";
@@ -68,6 +82,7 @@ beforeEach(() => {
         throw `壁纸目标不在当前显示器模式的活跃集合里: ${String(args.target)}`;
       }
       if (backend.windowOnly.has(args?.imageId as string) && backend.mode !== "window") throw "REQUIRES_WINDOW_MODE";
+      if (backend.pluginOnly.has(args?.imageId as string) && backend.mode !== "plasma-plugin") throw "REQUIRES_PLUGIN_MODE";
       return undefined;
     }
     if (command === "set_wallpaper_mode") {
@@ -76,6 +91,11 @@ beforeEach(() => {
       return undefined;
     }
     if (command === "get_wallpaper_display_mode") return backend.displayMode;
+    if (command === "get_plugin_mode_readiness") return backend.readiness;
+    if (command === "install_gnome_shell_extension") {
+      if (typeof backend.install === "string") throw backend.install;
+      return backend.install;
+    }
     return undefined;
   });
 });
@@ -137,5 +157,97 @@ describe("setWallpaperOrBackground", () => {
     expect((store.values.wallpaperTargets as Record<string, { currentImageId: string }>).multiple.currentImageId).toBe(
       "img",
     );
+  });
+});
+
+describe("preparePluginMode", () => {
+  const installed = () => invoke.mock.calls.some(([command]) => command === "install_gnome_shell_extension");
+
+  it("不是 Linux：不问后端，直接可以切", async () => {
+    await expect(preparePluginMode()).resolves.toEqual({ gnome: false });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("已就绪：带回是不是 GNOME", async () => {
+    env.linux = true;
+    backend.readiness = { status: "ready", gnome: true };
+    await expect(preparePluginMode()).resolves.toEqual({ gnome: true });
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it("GNOME 太旧：提示升级系统，不装扩展", async () => {
+    env.linux = true;
+    backend.readiness = { status: "gnomeShellUnsupported", version: "41.5", min: 42, max: 51 };
+    await expect(preparePluginMode()).resolves.toBeNull();
+    expect(alert).toHaveBeenCalledWith("settings.gnomeShellTooOld", "settings.gnomeExtensionTitle", { type: "warning" });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installed()).toBe(false);
+  });
+
+  it("GNOME 比支持的还新：提示等 Kabegame 更新", async () => {
+    env.linux = true;
+    backend.readiness = { status: "gnomeShellUnsupported", version: "52.0", min: 42, max: 51 };
+    await expect(preparePluginMode()).resolves.toBeNull();
+    expect(alert).toHaveBeenCalledWith("settings.gnomeShellTooNew", "settings.gnomeExtensionTitle", { type: "warning" });
+  });
+
+  it("扩展不在线：确认后安装并提示重新登录，这次不切", async () => {
+    env.linux = true;
+    backend.readiness = { status: "gnomeExtensionMissing", version: "42.9" };
+    await expect(preparePluginMode()).resolves.toBeNull();
+    expect(installed()).toBe(true);
+    expect(alert).toHaveBeenCalledWith("settings.gnomeExtensionInstalled", "settings.gnomeExtensionTitle", {
+      type: "success",
+    });
+  });
+
+  it("扩展总开关关着：安装后的提示里一并说明", async () => {
+    env.linux = true;
+    backend.readiness = { status: "gnomeExtensionMissing", version: "42.9" };
+    backend.install = { userExtensionsDisabled: true };
+    await preparePluginMode();
+    expect(alert).toHaveBeenCalledWith(
+      "settings.gnomeExtensionInstalled settings.gnomeExtensionsSwitchedOff",
+      "settings.gnomeExtensionTitle",
+      { type: "success" },
+    );
+  });
+
+  it("用户不装：不调安装", async () => {
+    env.linux = true;
+    backend.readiness = { status: "gnomeExtensionMissing", version: "42.9" };
+    confirm.mockRejectedValue("cancel");
+    await expect(preparePluginMode()).resolves.toBeNull();
+    expect(installed()).toBe(false);
+  });
+
+  it("安装失败：提示原因", async () => {
+    env.linux = true;
+    backend.readiness = { status: "gnomeExtensionMissing", version: "42.9" };
+    backend.install = "gsettings 失败";
+    await expect(preparePluginMode()).resolves.toBeNull();
+    expect(alert).toHaveBeenCalledWith("settings.gnomeExtensionInstallFailed", "settings.gnomeExtensionTitle", {
+      type: "error",
+    });
+  });
+
+  it("设壁纸要插件模式、但扩展不在线：引导装扩展，不切模式、按取消抛出", async () => {
+    env.linux = true;
+    backend.readiness = { status: "gnomeExtensionMissing", version: "50.1" };
+    await expect(setWallpaperByImageIdWithModeFallback("wpe")).rejects.toBe("cancel");
+    expect(installed()).toBe(true);
+    expect(invoke).not.toHaveBeenCalledWith("set_wallpaper_mode", expect.anything());
+  });
+
+  it("设壁纸要插件模式且已就绪：确认后切到插件模式再设", async () => {
+    env.linux = true;
+    backend.readiness = { status: "ready", gnome: true };
+    await expect(setWallpaperByImageIdWithModeFallback("wpe")).resolves.toBeNull();
+    expect(confirm).toHaveBeenCalledWith(
+      "settings.wallpaperModePluginConfirmMessageGnome",
+      "settings.wallpaperModeConfirmTitle",
+      expect.anything(),
+    );
+    expect(invoke).toHaveBeenCalledWith("set_wallpaper_mode", { mode: "plasma-plugin" });
   });
 });

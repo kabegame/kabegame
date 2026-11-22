@@ -1,5 +1,40 @@
 # v4.7.0 regression
 
+## GNOME 插件模式：Shell 扩展正式化、版本检查与安装、掉线退回原生
+
+2026-11-22。扩展从 `ignore/gnome-b0/` 搬进 `src-gnome-shell-extension/`：共享的 `core.js` 加 GNOME 42–44（`imports.*`）或 45+（ES 模块）的包装，应用安装时拼成 `extension.js`。挂到桌面的手段按 49 分：49+ 设成桌面类型；42–48 的 X11 窗口经 `xprop` 设桌面类型；Wayland 窗口压在最底层，并滤出 Alt+Tab 与概览。
+- 切到插件模式前查 Shell 版本（支持 42–51）。扩展不在线就问用户要不要安装，装完提示注销重新登录。
+- 插件模式里任何地方发现扩展不在线，都退回原生模式并提示。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | GE1 后端单测 | 本机 | `test-kabegame kabegame --lib gnome::` | 通过：约定版本与名字、两份扩展的拼法与 `shell-version`、主版本解析、先查版本再查扩展、gsettings 数组解析 | 2026-11-22 Claude：6 passed |
+| [x] | GE2 前端单测 | 本机 | `vitest run src/utils/wallpaperMode.test.ts` | 预检的各分支（不是 Linux、已就绪、太旧 / 太新、安装 / 取消 / 失败 / 总开关关着、设壁纸引导时被拦下或放行）都符合 | 2026-11-22 Claude：17 passed（新增 10 条） |
+| [x] | GE3 两份扩展的语法 | 本机 | 拼出旧式与 ESM 两份后 `node --check` | 都能解析 | 2026-11-22 Claude：符合 |
+| [x] | GE4 GNOME 50 加载（ESM，桌面类型） | 宿主机嵌套 GNOME 50.1（devkit，1600×900） | 装 ESM 那份、起嵌套 Shell，开一个标题为 `kabegame-wallpaper 0` 的 640×400 窗口，由它自己调 `GetWindowFrame` | 日志 `enabled (protocol 1, desktop window type)` 与 `managing`；`ShellVersion` 50.1、`Protocol` 1；窗口铺满主屏 | 2026-11-22 Claude：框架 `[0,0,1600,900]`，窗口 1600×900 |
+| [x] | GE5 扩展开关与总线名字 | 同 GE4 | `gnome-extensions disable` / `enable` | 关掉后 `app.kabegame.Shell` 没有属主，打开后回来；`disable()` 不报错 | 2026-11-22 Claude：符合（应用的掉线监听就看这个名字） |
+| [x] | GE6 42–48 的路径在真实 Shell 里能跑 | 同 GE4，临时把 `CAN_SET_WINDOW_TYPE` 写成 `false` | 同 GE4 | 日志 `kept at the bottom`，替换了 `get_tab_list`、概览与缩略图的 `_isOverviewWindow` 共 3 处，不报错 | 2026-11-22 Claude：符合；窗口框架 `[0,29,1600,871]`，普通窗口让出了顶栏（已知局限） |
+| [ ] | GE7 GNOME 42 X11（旧式那份 + `xprop`） | Ubuntu 22.04 虚拟机：扩展已装进用户目录并加进 `enabled-extensions`，解锁后注销重新登录 | `journalctl --user -b \| grep kabegame`；插件模式开着时看壁纸窗口 | `enabled (protocol 1, kept at the bottom)`；壁纸窗口的 `_NET_WM_WINDOW_TYPE` 是 DESKTOP、铺满主屏、不在 Alt+Tab 里、桌面图标在它上面 | 2026-11-22 在锁屏的虚拟机里起嵌套 Shell 没起来，待在主会话里测 |
+| [ ] | GE8 GNOME 42–48 Wayland | GNOME 42–48 的 Wayland 会话 | 插件模式 | 壁纸在最底层，不在 Alt+Tab 与概览里；已知局限：铺不到顶栏 / Dock 下面、盖住桌面图标 | 没有测试环境 |
+| [ ] | GE9 版本不支持 | GNOME 41 及更早 / 52 及更新 | 设置里切插件模式 | 太旧提示升级系统、太新提示等 Kabegame 更新，都不切 | 目前只有前端单测覆盖 |
+| [ ] | GE10 扩展缺失 → 安装 | 没装扩展的 GNOME 42–51 | 切插件模式 → 确认安装 → 注销重新登录 → 再切 | 写进 `~/.local/share/gnome-shell/extensions/kabegame@kabegame.app/`，`enabled-extensions` 里有它；重新登录后能切过去，壁纸窗口挂到桌面 | 要用新代码重启 dev |
+| [ ] | GE11 掉线退回原生 | 插件模式开着 | `gnome-extensions disable kabegame@kabegame.app` | 自动切回原生模式，看板娘提示，设置页显示原生模式，壁纸窗口销毁 | 要用新代码重启 dev |
+| [ ] | GE12 开机等待 | 插件模式下开机自启 | 登录 | 扩展稍晚上线也不退回；扩展不在时约 15 s 后退回原生模式并提示 | 要用新代码重启 dev |
+| [ ] | GE13 锁屏不退回 | 插件模式开着 | 锁屏再解锁 | 不退回原生模式（`session-modes` 含 `unlock-dialog`） | |
+| [ ] | GE14 Plasma 不受影响 | Plasma 6 | 切插件模式 | 不做 GNOME 的检查，确认文案仍是「换系统的壁纸插件」，照常切换 | 预检在 Plasma 上直接返回 `ready` |
+
+## 切换壁纸模式不换壁纸
+
+2026-11-22。之前切模式时，当前壁纸在新模式下显示不了（WPE 壁纸、视频切到原生模式）或文件不在了，会从画廊随机挑一张代替，画廊里没有可用图片时还会中止切换。现在逐目标判断能不能显示（`manager::displayable_in_mode`）：能就照原样输出，不能或输出失败就不设、保留当前壁纸的记录，有这样的目标时经 `user-message` 警告。启动恢复壁纸按同样的规则跳过，`set_wallpaper` 失败也不再清掉当前壁纸的记录。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MS1 编译 | 本机 Linux | `check-kabegame` | 0 error，告警不变 | 2026-11-22 Claude：前后端都通过，kabegame 告警 20 |
+| [ ] | MS2 WPE 壁纸切到原生模式 | 当前壁纸是 WPE 壁纸，处在插件 / 窗口模式 | 切到原生模式 | 切换成功，系统壁纸不变，看板娘提示「当前壁纸在这个壁纸模式下无法显示」；切回去后又显示它 | 要用新代码重启 dev |
+| [ ] | MS3 视频切到原生模式 | 当前壁纸是视频 | 同 MS2 | 同 MS2 | |
+| [ ] | MS4 普通图片 | 当前壁纸是图片 | 来回切模式 | 每次都显示同一张，不提示 | |
+| [ ] | MS5 启动恢复 | 原生模式，当前壁纸是 WPE 壁纸（例如 GNOME 扩展掉线退回后） | 重启应用 | 不设，当前壁纸的记录还在 | |
+
 ## pipewire-rs 对着 Ubuntu 22.04 的 PipeWire 0.3.48 头文件编（third-patches/pipewire-rs）
 
 2026-11-22。22.04 虚拟机里 `deno task dev -c kabegame` 在 `libspa` 0.10.1 上失败：`spa_meta_region_is_valid` / `spa_meta_first` 找不到，`spa_video_info_raw` 没有 `flags`，`modifier` 是 i64 不是 u64。`libspa` 按 `v0_3_*` / `v1_*` feature 分档，这几处漏了门控，0.7 到 0.10.1 的每一版都这样，降 crate 版本解决不了。`third/pipewire-rs` 子模块钉在 `v0.10.1`，补丁 01 修掉这几处，四个 crate 经 `[patch.crates-io]` 同源替换。`stream.rs` 自己定义 0.3.48 头文件里没有的 `SPA_DATA_FLAG_MAPPABLE`（`1 << 3`）。对着最老的头文件编，用了更新的接口就在构建机上编译失败，不会等到 22.04 用户那里才缺符号。

@@ -869,6 +869,10 @@ pub(crate) fn configure_app(
             // --- Wallpaper ---
             // set_wallpaper,
             set_wallpaper_mode,
+            #[cfg(target_os = "linux")]
+            get_plugin_mode_readiness,
+            #[cfg(target_os = "linux")]
+            install_gnome_shell_extension,
             set_wallpaper_by_image_id,
             get_current_wallpaper_image_id,
             clear_current_wallpaper_image_id,
