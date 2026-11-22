@@ -16,7 +16,7 @@
 
 基本使用流程：打开应用 -> 右上角选择本地/网络 -> 填写表单开始导入 -> 等待入库。
 
-<!-- 10秒以内gif短视频 -->
+https://github.com/user-attachments/assets/7654b2b5-4273-4acd-81b2-24d3e05c26f1
 
 <p align="center">
   <a href="https://github.com/kabegame/kabegame/releases/latest"><b>下载最新版</b></a>

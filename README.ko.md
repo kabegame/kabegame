@@ -16,7 +16,7 @@ Cookie를 직접 복사할 필요 없는 가장 간단한 로그인 방법을 �
 
 기본 사용 흐름: 앱 열기 -> 오른쪽 위에서 로컬/네트워크 선택 -> 양식을 채워 가져오기 시작 -> 라이브러리에 들어올 때까지 대기.
 
-<!-- 10秒以内gif短视频 -->
+https://github.com/user-attachments/assets/7654b2b5-4273-4acd-81b2-24d3e05c26f1
 
 <p align="center">
   <a href="https://github.com/kabegame/kabegame/releases/latest"><b>최신 버전 다운로드</b></a>

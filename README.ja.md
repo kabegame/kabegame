@@ -16,7 +16,7 @@ Cookie を手でコピーしなくて済む、いちばん簡単なログイン�
 
 基本的な使い方：アプリを開く -> 右上でローカル／ネットワークを選ぶ -> フォームに入力してインポートを開始 -> ライブラリへの取り込みを待つ。
 
-<!-- 10秒以内gif短视频 -->
+https://github.com/user-attachments/assets/7654b2b5-4273-4acd-81b2-24d3e05c26f1
 
 <p align="center">
   <a href="https://github.com/kabegame/kabegame/releases/latest"><b>最新版をダウンロード</b></a>
