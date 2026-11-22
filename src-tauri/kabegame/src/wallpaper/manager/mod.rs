@@ -1,20 +1,25 @@
 pub mod native;
 #[cfg(target_os = "macos")]
 mod native_mac;
+// Linux 插件模式（GNOME）：普通壁纸窗口 + Kabegame 的 Shell 扩展
 #[cfg(target_os = "linux")]
-pub mod plasma_install;
+pub mod gnome;
+// Linux 插件模式（Plasma）：离屏壁纸窗口 + PipeWire 推流 + Kabegame 的 Plasma 壁纸插件
 #[cfg(target_os = "linux")]
-pub mod plasma_plugin;
+pub mod plasma;
+// Linux 的壁纸鼠标回传（Plasma 壁纸插件、GNOME 下的壁纸页面、主窗口页面）→ tauri-plugin-cursor 的外部来源
 #[cfg(target_os = "linux")]
-pub mod plasma_qdbus;
-// 壁纸窗口集合：Windows / macOS 的窗口模式直接用，Linux 的插件模式包一层（离屏窗口 + PipeWire）
+pub mod pointer_socket;
+// 壁纸窗口集合与壁纸窗口本体：Windows / macOS 的窗口模式直接用，Linux 的插件模式包一层
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub mod window;
 
 // 导出管理器类型
+#[cfg(target_os = "linux")]
+pub use gnome::GnomeShellWallpaperManager;
 pub use native::NativeWallpaperManager;
 #[cfg(target_os = "linux")]
-pub use plasma_plugin::PlasmaPluginWallpaperManager;
+pub use plasma::PlasmaPluginWallpaperManager;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 pub use window::WindowWallpaperManager;
 
@@ -430,9 +435,15 @@ impl WallpaperController {
         let native = Arc::new(NativeWallpaperManager::new(app.clone()))
             as Arc<dyn WallpaperManager + Send + Sync>;
 
+        // 插件模式的后端按桌面选：GNOME 是普通窗口 + Shell 扩展，其余（Plasma）是离屏窗口 + PipeWire + Plasma 壁纸插件
         #[cfg(target_os = "linux")]
-        let plasma_plugin = Arc::new(PlasmaPluginWallpaperManager::new(app.clone()))
-            as Arc<dyn WallpaperManager + Send + Sync>;
+        let plasma_plugin = if gnome::available() {
+            Arc::new(GnomeShellWallpaperManager::new(app.clone()))
+                as Arc<dyn WallpaperManager + Send + Sync>
+        } else {
+            Arc::new(PlasmaPluginWallpaperManager::new(app.clone()))
+                as Arc<dyn WallpaperManager + Send + Sync>
+        };
 
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         let window =
@@ -494,9 +505,10 @@ impl WallpaperController {
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         modes.push(wallpaper_option("window", "settings.modeWindow", None));
 
-        // Plasma 6 会话且有内置插件（或已经装着能用的）：切过去时会自动装 / 升级插件
+        // Plasma 6 会话且有内置插件（或已经装着能用的）：切过去时会自动装 / 升级插件。GNOME 会话：壁纸窗口由 Shell 扩展挂到
+        // 桌面（实验阶段，扩展要手动装）
         #[cfg(target_os = "linux")]
-        if plasma_install::available() {
+        if plasma::install::available() || gnome::available() {
             modes.push(wallpaper_option(
                 "plasma-plugin",
                 "settings.modePlugin",

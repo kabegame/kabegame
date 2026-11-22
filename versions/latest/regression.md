@@ -1,5 +1,37 @@
 # v4.7.0 regression
 
+## Linux GNOME 插件模式（B0b，实验）
+
+2026-11-22 Linux dev，嵌套 GNOME Shell 50.1（`scripts/gnome-nested.sh`，devkit，宿主是 KDE Plasma 6.6.4 Wayland）。GNOME 会话里插件模式由 `wallpaper/manager/gnome/` 提供：壁纸窗口是普通窗口（`WindowWallpaperManager::new_windowed`，不登记离屏、不推流，标题 `kabegame-wallpaper <序号>`），由 Kabegame 的 GNOME Shell 扩展按标题认出，改成桌面类型窗口（`set_type(DESKTOP)`、`stick`、`hide_from_window_list`）、铺满对应的屏、压到最底层，并跟着 `monitors-changed` 重新铺放。鼠标直接进壁纸窗口；壁纸页面与主窗口页面都经 `push_window_pointer` 把收到的鼠标交给应用（壁纸窗口是新的内部消息 7 / 8），窗口在全局坐标里的位置问扩展的 `app.kabegame.Shell1.GetWindowFrame`（只回答调用方进程自己的窗口），两个方向互相跟光标。扩展还在 `ignore/gnome-b0/`（不进仓库、不随应用分发，要手动链进 `~/.local/share/gnome-shell/extensions/` 并启用），Linux 没有显示器枚举，只有一个壁纸窗口，扩展把它放到主屏。
+
+走查中改掉两处：扩展最初只在认出窗口时铺一次，devkit 自带的屏跟着查看器窗口变大小（等于改分辨率）时壁纸不跟，切模式重建窗口后又落回主屏，改成每次铺放现算目标屏并监听 `monitors-changed`；桌面上的光标换不进主窗口，因为运行时的 `inner_size` 在 Wayland 客户端自绘标题栏时给的是含标题栏与阴影的 1200×800（框架 1122×722、视口 1122×674），比框架还大，改成用页面报的视口（光标不在窗口里时页面在启动与变大小时以离开报一次）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | GN1 检查与单测 | Linux | `check-kabegame`；`test-kabegame kabegame --lib wallpaper::manager`；vitest `framePointer` | 0 error；全过 | 2026-11-22 Claude：0 error、新代码无告警；manager 56 passed（新增消息 7 / 8 带 slot 且不进桌面路径、GNOME 自绘标题栏的框架与页面视口对得上而运行时尺寸对不上）；vitest 8 passed（新增光标不在窗口里时启动与变大小报视口） |
+| [x] | GN2 插件模式出现在 GNOME 里 | 嵌套 GNOME | 设置页壁纸模式 | 有「插件模式」，切过去建普通壁纸窗口 | 2026-11-22 用户：切换正常 |
+| [x] | GN3 壁纸窗口挂到桌面 | 同上，场景壁纸 | 扩展日志、窗口表、截图 | `kabegame-wallpaper 0` 被认出：桌面类型、最底层（layer 0）、铺满一块屏、所有工作区可见、不在 Alt+Tab 里；顶栏与普通窗口压在它上面 | 2026-11-22 Claude：符合，场景 52–63 fps；测试窗口在两块虚拟屏上同样各占一块 |
+| [x] | GN4 跟着屏变 | 同上 | 拖 devkit 窗口改屏的大小 | 壁纸跟着铺满 | 2026-11-22 用户：正常 |
+| [x] | GN5 切模式 | 同上 | 插件模式 → 原生模式 → 插件模式 | 原生模式设 GNOME 背景；切回后壁纸窗口重建、回到原来的屏 | 2026-11-22 用户：正常 |
+| [x] | GN6 桌面上的鼠标 | 同上，网页 / 场景壁纸 | 真鼠标在桌面上移动、点击 | 壁纸跟随、点击生效 | 2026-11-22 用户：正常。虚拟指针实测：移动与按下 / 抬起都进壁纸窗口，点桌面会把键盘焦点给壁纸窗口（同 DING） |
+| [x] | GN7 主窗口跟桌面上的光标 | 同上，主窗口预览网页 / 场景壁纸 | 光标在桌面上移动 | 预览跟着 | 2026-11-22 用户：正常（修视口之后） |
+| [x] | GN8 桌面壁纸跟主窗口里的光标 | 同上 | 光标在主窗口里移动 | 桌面壁纸跟着，只跟移动 | 2026-11-22 用户：正常 |
+| [x] | GN9 窗口位置只给自己的窗口 | 同上 | 用 `gdbus` 问 `GetWindowFrame("kabegame-wallpaper 0")` | 返回找不到（调用方进程不是窗口的主人） | 2026-11-22 Claude：`(false, 0, 0, 0, 0)`，扩展记到的调用方是 gdbus 的进程号 |
+| [ ] | GN10 Plasma 插件模式不回归 | KDE Plasma 6 | 插件模式下设网页壁纸，桌面上移动点击，主窗口预览跟桌面光标 | 同 P2 / P3：离屏窗口推流、插件显示、两个方向的鼠标照常 | 本次改了挂载与鼠标路由（离屏窗口仍按 `offscreen_geometry` 走推流；鼠标登记挪到挂载里）；还没在 Plasma 上重跑 |
+| [ ] | GN11 真 GNOME 会话 | GNOME 会话（注销后选 GNOME） | 同 GN3–GN8，加多显示器、锁屏 | 同上；主屏就是眼前那块 | 嵌套会话里多出的 devkit 屏不代表真实情况 |
+| [ ] | GN12 被盖住时停帧 | 同上 | 用全屏窗口盖住壁纸 | （待做）壁纸暂停 | 已知：实测被完全盖住时照样 60 fps，合成器不停发帧，要扩展判断遮挡再通知 Kabegame |
+| [ ] | GN13 概览里的动态壁纸 | 同上 | 打开概览 | （待做）工作区卡片里是动态画面 | 实验扩展里把窗口的 `Clutter.Clone` 贴进概览的背景已验证可行，产品里还没做 |
+
+## 壁纸模块重组
+
+2026-11-22。`wallpaper/` 下只属于某个后端的模块挪进 `wallpaper/manager/`：`window/`（`WindowWallpaperManager`、`WallpaperWindow`、`ping`）、`plasma/`（插件模式管理器、`install`、`qdbus`、`kwin_window`、`pipewire/`）、`gnome/`（管理器、`window_locator`）、`pointer_socket.rs`；`FrameGeometry` 挪进 `pointer_socket.rs`。macOS 的桌面层挂载从应用移进 `tauri-plugin-wemt`（`src/macos.rs`，`mount_to_desktop(window, Option<DesktopRect>)`），参数从 `ScreenInfo` 换成左上原点的矩形，kabegame 在 macOS 上也依赖 wemt。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | MR1 Linux 编译与单测 | Linux | `check-kabegame`；`test-kabegame kabegame --lib wallpaper::manager` | 0 error；全过 | 2026-11-22 Claude：0 error，告警数与重组前相同（20），挪过的文件没有告警；56 passed（含 `plasma/install.rs` 改过相对路径的 `include_str!`） |
+| [ ] | MR2 macOS 编译与窗口模式 | macOS | `check-kabegame`；窗口模式设壁纸、插拔显示器、最小化主窗口后修 Z-order | 编过；壁纸照常挂在桌面层、铺满各自的屏 | 本机编不了 macOS：wemt 新加的 objc2 依赖与 feature（`NSGeometry`、`NSResponder` 等）要在 Mac 上核对 |
+| [ ] | MR3 Windows 编译 | Windows | `check-kabegame` | 编过 | wemt 的 Windows 部分没改，只加了 macOS 依赖表 |
+
 ## Linux 场景快捷方式（`usershortcut`，P11d）
 
 2026-11-22 Linux dev（Ubuntu 26.04、KDE Plasma 6.6.4 Wayland，图标主题 breeze）。新增 `wallpaper/wpe_shortcut/linux.rs`：图标先查 freedesktop 缩略图缓存、再自己解图片 / 视频首帧，系统图标用 GIO + GTK 图标主题（渲染经空闲源交给 GTK 主线程）；启动按类型分派（opener、GIO 启动 `.desktop`、可执行文件直接运行、命令交给登录 shell）。`mac.rs` 里与平台无关的部分移到 macOS / Linux 共用的 `unix.rs`。前端面板在 Linux 上显示快捷方式编辑器，「文件」叫「文件或应用」。
@@ -46,7 +78,7 @@
 
 ## Linux 插件模式：插件的安装、升级与卸载（P3）
 
-2026-11-22 Linux dev（KDE Plasma 6.6.4 Wayland）。计划见 `.claude/plans/plasma-pipewire/README.md` 点 6。插件源码放进仓库 `src-plasma-wallpaper-plugin/`（`.gitmodules` 里没检出的同名子模块条目删掉），`deno task build:plasma-plugin` 拼出 KPackage 目录，Linux 的 dev / build 拷进应用的 `resources/plasma-wallpaper/`。切到插件模式与启动对齐时 `wallpaper/manager/plasma_install.rs` 照 Plasma 的查找顺序看装着的那份，没有、约定版本不同或修订号比内置的旧就拷进 `~/.local/share/plasma/wallpapers/org.kabegame.wallpaper`，再把各桌面的 `General/Entry` 写成新修订的内容文件（壳 `main.qml` 永不改、按它加载，模块 URI 与内容文件名带修订号，plasmashell 不用重启）。能力表在 Plasma 6 会话且有内置包（或装着能用的）时列出插件模式；删掉 `is_plasma_wallpaper_plugin_installed` 命令与前端的同名判断。deb 卸载（`postrm.sh`）把各用户用着插件的桌面换回 `org.kde.image`、删掉用户目录里带 Kabegame 标记的插件。
+2026-11-22 Linux dev（KDE Plasma 6.6.4 Wayland）。计划见 `.claude/plans/plasma-pipewire/README.md` 点 6。插件源码放进仓库 `src-plasma-wallpaper-plugin/`（`.gitmodules` 里没检出的同名子模块条目删掉），`deno task build:plasma-plugin` 拼出 KPackage 目录，Linux 的 dev / build 拷进应用的 `resources/plasma-wallpaper/`。切到插件模式与启动对齐时 `wallpaper/manager/plasma/install.rs` 照 Plasma 的查找顺序看装着的那份，没有、约定版本不同或修订号比内置的旧就拷进 `~/.local/share/plasma/wallpapers/org.kabegame.wallpaper`，再把各桌面的 `General/Entry` 写成新修订的内容文件（壳 `main.qml` 永不改、按它加载，模块 URI 与内容文件名带修订号，plasmashell 不用重启）。能力表在 Plasma 6 会话且有内置包（或装着能用的）时列出插件模式；删掉 `is_plasma_wallpaper_plugin_installed` 命令与前端的同名判断。deb 卸载（`postrm.sh`）把各用户用着插件的桌面换回 `org.kde.image`、删掉用户目录里带 Kabegame 标记的插件。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -63,7 +95,7 @@
 
 ## Linux 插件模式：鼠标（P2）
 
-2026-11-22 Linux dev（KDE Plasma 6.6.4 Wayland）。计划见 `.claude/plans/plasma-pipewire/README.md` 点 4、点 7。Plasma 壁纸插件在桌面窗口上装事件过滤器（只看不吞），把落在壁纸范围里的移动 / 按键与离开按 32 字节的定长消息发到节点属性 `kabegame.wallpaper.input` 给的 Unix 数据报 socket；Kabegame 的 `wallpaper/pointer_socket.rs` 按 slot 找到离屏壁纸窗口、按它的逻辑尺寸换成视图坐标，推给 `tauri-plugin-cursor` 的 Linux 外部来源（建流时登记、窗口销毁时注销）。之后与 Windows / macOS 的壁纸窗口相同：网页 / 场景壁纸的 iframe 登记 frame 注入，点击规则是「光标下是桌面」（插件只在桌面窗口收到事件时才发，恒为真），经 CEF 补丁 11 注入。光标离开时 frame 收到一次离开，回来后重新进入。插件侧的参考实现在 P0 试验插件里（`ignore/plasma-p0/plugin/PointerForwarder.cpp`，现装成 `KabegameP2V4`）。主窗口（图库预览）也跟桌面上的光标：消息带光标的全局逻辑坐标，Kabegame 经 KWin 的 D-Bus（krunner 窗口搜索 + `getWindowInfo`）查主窗口的框架几何，扣掉装饰换成主窗口视图坐标推给主窗口的外部来源，只带移动、不点击。
+2026-11-22 Linux dev（KDE Plasma 6.6.4 Wayland）。计划见 `.claude/plans/plasma-pipewire/README.md` 点 4、点 7。Plasma 壁纸插件在桌面窗口上装事件过滤器（只看不吞），把落在壁纸范围里的移动 / 按键与离开按 32 字节的定长消息发到节点属性 `kabegame.wallpaper.input` 给的 Unix 数据报 socket；Kabegame 的 `wallpaper/manager/pointer_socket.rs` 按 slot 找到离屏壁纸窗口、按它的逻辑尺寸换成视图坐标，推给 `tauri-plugin-cursor` 的 Linux 外部来源（建流时登记、窗口销毁时注销）。之后与 Windows / macOS 的壁纸窗口相同：网页 / 场景壁纸的 iframe 登记 frame 注入，点击规则是「光标下是桌面」（插件只在桌面窗口收到事件时才发，恒为真），经 CEF 补丁 11 注入。光标离开时 frame 收到一次离开，回来后重新进入。插件侧的参考实现在 P0 试验插件里（`ignore/plasma-p0/plugin/PointerForwarder.cpp`，现装成 `KabegameP2V4`）。主窗口（图库预览）也跟桌面上的光标：消息带光标的全局逻辑坐标，Kabegame 经 KWin 的 D-Bus（krunner 窗口搜索 + `getWindowInfo`）查主窗口的框架几何，扣掉装饰换成主窗口视图坐标推给主窗口的外部来源，只带移动、不点击。
 
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
@@ -97,7 +129,7 @@
 
 ## Linux 插件模式：离屏渲染 + PipeWire 推流（P1）
 
-2026-11-21 Linux dev（KDE Plasma 6.6.4 Wayland，分数缩放 1.45，PipeWire 1.6.2，KPipeWire 6.6.4）。计划见 `.claude/plans/plasma-pipewire/README.md`。插件模式改为「离屏的窗口模式」：`PlasmaPluginWallpaperManager` 包一层窗口后端，Linux 上壁纸窗口在建窗前登记离屏（`tauri_runtime_kbcef::register_offscreen`），runtime 建 windowless browser；挂载时建一路 PipeWire `Video/Source`（`wallpaper/pipewire/`，BGRA、本流做驱动；P1a 只有 memfd 共享内存，P1b 加 dmabuf，见 PP14），帧接收器把 CEF 的 `OnPaint` 整帧拷进去；插件只读流。测试用 P0 的插件（`ignore/plasma-p0`，装成 `org.kabegame.wallpaper`，左上角带诊断），抓帧用 `gst-launch-1.0 pipewiresrc target-object=<serial>` 另开一个消费者。
+2026-11-21 Linux dev（KDE Plasma 6.6.4 Wayland，分数缩放 1.45，PipeWire 1.6.2，KPipeWire 6.6.4）。计划见 `.claude/plans/plasma-pipewire/README.md`。插件模式改为「离屏的窗口模式」：`PlasmaPluginWallpaperManager` 包一层窗口后端，Linux 上壁纸窗口在建窗前登记离屏（`tauri_runtime_kbcef::register_offscreen`），runtime 建 windowless browser；挂载时建一路 PipeWire `Video/Source`（`wallpaper/manager/plasma/pipewire/`，BGRA、本流做驱动；P1a 只有 memfd 共享内存，P1b 加 dmabuf，见 PP14），帧接收器把 CEF 的 `OnPaint` 整帧拷进去；插件只读流。测试用 P0 的插件（`ignore/plasma-p0`，装成 `org.kabegame.wallpaper`，左上角带诊断），抓帧用 `gst-launch-1.0 pipewiresrc target-object=<serial>` 另开一个消费者。
 
 联调中发现并修掉两处：一是静态页面不出帧，后连上的消费者一直拿不到画面，流加了 1 s 心跳（推流中超过 1 s 没有新帧就请离屏 browser 整帧重画）；二是桌面壁纸的淡入整段看不到、结束时新图一下跳出来——`Wallpaper.vue` 的旧层完全不透明时不成层叠上下文，层里 `z-2` 的图按 z-index 盖在正在淡入的新层（透明度 < 1，自成层叠上下文）之上，给每层加 `isolation: isolate`；这是共用组件，Windows / macOS 的窗口模式同样受影响。另外壁纸变体的图片改为 `decode()` 完再报 ready（大图在合成器动画期间没解码完会画成空，淡入前一段看不到；自建图层实测 6312×3942 的图 decode 前约 230 ms 空白、decode 后从第一帧起渐变）。
 
@@ -2674,7 +2706,7 @@ CEF 的 `frame.url()` 在导航完成前可能为空或过期，导致网页壁�
 | [x] | W10 文件 / 目录属性（由 D5 取代） | Windows | 选目录后页面读其中文件；换目录；另一张网页壁纸读这张的选择 | 能读；换目录后旧目录的请求**立即**被拒（不必重开预览或切走桌面）；另一张读不到 | 见 D5（2026-10-31 通过） |
 | [x] | W11 首批请求（由 D1 取代） | Windows | iframe 形态见 07 节 D1；经 `set_wallpaper_by_image_id` 在网页壁纸之间反复切换，回放新文档 console | 首批 listen / pull 全部成功，闸门判定正确 | 见 D1（2026-10-31 未通过：网页壁纸之间直接切换时偶发新文档没有 Tauri 桥，垫片没运行）；修复后复测通过，见 D1 / W13 |
 | [x] | W13 网页壁纸直接互切的桥注入 | Windows CEF dev（重启 dev，helper 只在启动时编译） | 从 12097 直接切到另一张网页壁纸 ×10、网页壁纸之间互切 ×10，预览里方向键在网页壁纸之间切；每个新文档查 `__TAURI_INTERNALS__` 与 `__kbWpeShim` | 每个新文档都有桥、垫片运行，无 ping 未应答、无看门狗重载 | 修 D1 / W11 的失败：`subprocess.rs` 的脚本表改成按 browser id 计数（`ScriptTable`），同一 browser 的最后一个渲染侧对象销毁才删脚本；单测 `scripts_survive_overlapping_browser_objects` 通过。2026-10-31 修复后复测（W13，新 helper 20:42 编译、app 20:43 启动）：桌面从 12097 直接切到 12094 / 12096 / 12099 / 12100 / 12098 共 10 次（停 8s）、其余网页壁纸之间互切 10 次（停 5s）、12097 停 20s 后直切 2 次，34 个新文档都有 Tauri 桥与垫片；预览方向键在 12094–12100 的网页壁纸之间切 18 次同样全部正常；20:45–20:55 日志无 WARN / ERROR（无 ping 未应答、无看门狗重载） |
-| [ ] | W12 Windows / Linux 编译 | Windows、Linux | `check-kabegame` | 0 error | 未测：本机 macOS。只在 Windows 编译的新代码：`core_init.rs` 里 `init_wpe_web_dir_index()` 调用、`WallpaperWindow::set_mouse_forwarding` 的 Windows 分支、`manager/window.rs` 里 `allow_file_documents` 登记（既有） |
+| [ ] | W12 Windows / Linux 编译 | Windows、Linux | `check-kabegame` | 0 error | 未测：本机 macOS。只在 Windows 编译的新代码：`core_init.rs` 里 `init_wpe_web_dir_index()` 调用、`WallpaperWindow::set_mouse_forwarding` 的 Windows 分支、`manager/window/mod.rs` 里 `allow_file_documents` 登记（既有） |
 | [ ] | A1 Android 不变 | Android dev | 冒烟：主界面、畅游 | 行为不变（wry 不上报 frame，`subframe_bridge_scripts` 被忽略） | 未测 |
 
 ## `images.type` 规范化与索引（v049）
@@ -2729,7 +2761,7 @@ CEF 的 `frame.url()` 在导航完成前可能为空或过期，导致网页壁�
 | 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
 | --- | --- | --- | --- | --- | --- |
 | [x] | 事件协议单测 | 带环境注入的 test-kabegame | 运行 kabegame-core 的 `ipc::events` 用例 | 默认种类含 ping、不含 pong；两事件序列化、反序列化与名称正反映射一致 | 2026-10-30 macOS：`ipc::events` 5 个通过 |
-| [x] | ping 状态机单测 | 带环境注入的 test-kabegame | 运行 kabegame 的 `wallpaper::ping` 用例 | 持续应答不重载；无应答第 40s 重载；停止应答、label 隔离、reset 迟到应答、3 → 6 → 12 退避 / 60 上限 / 应答恢复、睡眠不补 tick、句柄丢弃退出均通过 | 2026-10-30 macOS：9 个通过。`test-kabegame kabegame` 能编译，但测试二进制在 `target/debug/deps/` 下按 `@executable_path/../Frameworks` 找不到 CEF framework（SIGABRT，与本次无关），改为对已编好的二进制加 `DYLD_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 直接运行 |
+| [x] | ping 状态机单测 | 带环境注入的 test-kabegame | 运行 kabegame 的 `wallpaper::manager::window::ping` 用例 | 持续应答不重载；无应答第 40s 重载；停止应答、label 隔离、reset 迟到应答、3 → 6 → 12 退避 / 60 上限 / 应答恢复、睡眠不补 tick、句柄丢弃退出均通过 | 2026-10-30 macOS：9 个通过。`test-kabegame kabegame` 能编译，但测试二进制在 `target/debug/deps/` 下按 `@executable_path/../Frameworks` 找不到 CEF framework（SIGABRT，与本次无关），改为对已编好的二进制加 `DYLD_FRAMEWORK_PATH=bin/macos/arm64/cef-build` 直接运行 |
 | [x] | 编译与格式 | 带环境注入的 check-kabegame | 运行 vue-tsc 与 cargo check；逐个检查改动 Rust 文件的 rustfmt 和前端 Prettier | 无新增错误，改动文件格式正确 | 2026-10-30 macOS：vue-tsc 0 error、cargo check 0 error，改动文件无新增 warning；rustfmt `--check` 与 Prettier `--check` 均通过。Windows 专属分支本机编不到 |
 | [ ] | 正常不误报与序号往返 | macOS dev，窗口模式 | 用 kabegame-chromium 连 wallpaper target；以 `// DEBUG-wallpaper-ping` 临时 debug ingest 插桩记录 ping / pong，空闲 3 分钟后删除插桩 | 序号逐个对应，日志无「ping 未应答」 | |
 | [ ] | 遮挡不误报 | macOS dev，窗口模式 | 用最大化 / 全屏窗口覆盖桌面 6 分钟以上，CDP 读取 `document.visibilityState`，观察日志 | 状态为 hidden 且无未应答；若连续未应答则停下报告，不调大阈值掩盖 | |

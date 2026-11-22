@@ -175,7 +175,7 @@ impl<R: Runtime> NativeWallpaperManager<R> {
 
     #[cfg(target_os = "linux")]
     fn run_qdbus_evaluate_script(script: &str) -> Result<(), String> {
-        super::plasma_qdbus::run_qdbus_evaluate_script(script)
+        super::plasma::qdbus::run_qdbus_evaluate_script(script)
     }
 
     #[cfg(target_os = "linux")]

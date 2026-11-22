@@ -288,8 +288,8 @@ fn init_post(
     #[cfg(all(target_os = "linux", feature = "standard"))]
     {
         let app = app_handle.clone();
-        crate::wallpaper::pointer_socket::ensure_started(move || {
-            crate::wallpaper::pointer_socket::main_window_probe(app)
+        crate::wallpaper::manager::pointer_socket::ensure_started(move || {
+            crate::wallpaper::manager::pointer_socket::main_window_probe(app)
         });
     }
 
@@ -547,8 +547,8 @@ pub(crate) fn configure_app(
     // 网页壁纸 / 场景宿主 iframe 的原生鼠标（图库预览与桌面壁纸窗口同一条路）：iframe 自己登记
     // （`plugin:cursor|attach_frame`），插件轮询全局光标，这里经 CEF 补丁 11 把事件直接注入那个 frame（钳进
     // frame），父页面盖在 iframe 上的覆盖层挡不住。壁纸窗口的点击只认落在桌面上的，其它窗口只认落在本窗口上的。
-    // Linux 读不到全局光标：插件模式的离屏壁纸窗口由 Plasma 壁纸插件把鼠标发回来（`wallpaper::pointer_socket`），
-    // 其余窗口登记返回 false。
+    // Linux 读不到全局光标：壁纸窗口与主窗口登记成外部来源，鼠标由 Plasma 壁纸插件（Plasma 的离屏壁纸窗口）或窗口自己的页面
+    // （主窗口、GNOME 的普通壁纸窗口）交给应用，经 `wallpaper::manager::pointer_socket` 推进来；没登记的窗口登记 frame 返回 false。
     #[cfg(feature = "standard")]
     {
         tauri_plugin_cursor::set_frame_injector(|label, frame, input| {

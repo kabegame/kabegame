@@ -4,7 +4,7 @@
  * 挡不住；预览画布盖一层只拦截、不转发的覆盖层（`WallpaperPointerOverlay`）。三个桌面平台同一套。
  *
  * 光标从哪来：Windows / macOS 由 Rust 轮询全局光标。Linux 读不到全局光标：桌面上的光标由 Plasma 壁纸插件发回
- * （`wallpaper::pointer_socket`），主窗口里的光标由主窗口的页面交给应用（{@link startWindowPointerFeed}），应用照同一个协议发进
+ * （`wallpaper::manager::pointer_socket`），主窗口里的光标由主窗口的页面交给应用（{@link startWindowPointerFeed}），应用照同一个协议发进
  * 那个 socket。
  */
 
@@ -66,7 +66,7 @@ export function keepFocusOutOfFrames(owns: (frame: HTMLIFrameElement) => boolean
   };
 }
 
-/** 主窗口里的一次指针状态（{@link startWindowPointerFeed} 交给应用的，字段同命令 `push_window_pointer`）。 */
+/** 窗口里的一次指针状态（{@link startWindowPointerFeed} 交给应用的，字段同命令 `push_window_pointer`）。 */
 export interface WindowPointer {
   /** 视口的 CSS 像素（按住拖出窗口时可越界） */
   x: number;
@@ -80,10 +80,13 @@ export interface WindowPointer {
 }
 
 /**
- * Linux：主窗口的页面把自己收到的鼠标交给应用（应用照壁纸鼠标回传的协议发进那个 socket，`tauri-plugin-cursor` 再注入预览里的
- * 壁纸 iframe；Windows / macOS 由 Rust 轮询全局光标，不用这个）。
+ * Linux：页面把自己收到的鼠标交给应用（Windows / macOS 由 Rust 轮询全局光标，不用这个）。主窗口的由应用照壁纸鼠标回传的协议
+ * 发进那个 socket，`tauri-plugin-cursor` 再注入预览里的壁纸 iframe；GNOME 下壁纸窗口是普通窗口，它的直接推给
+ * `tauri-plugin-cursor`，注入桌面上的壁纸 iframe。
  * - 移动按帧合并（`requestAnimationFrame`），按下 / 抬起左键当场发（先补上还没发的移动），左键状态取 `buttons`；
  * - 光标离开窗口（`mouseout` 且没有 `relatedTarget`）时发一次离开；
+ * - 光标不在窗口里时，启动与窗口变大小时也以一次离开报上视口宽高：桌面上的光标换算到窗口里要用它（运行时给的窗口尺寸在
+ *   Wayland 下客户端自绘标题栏时含标题栏与阴影，对不上）；光标在窗口里时移动消息自己带着；
  * - 都在捕获阶段听，页面里取消事件、停止冒泡、指针捕获都拦不住。
  * 返回停止函数。
  */
@@ -123,7 +126,20 @@ export function startWindowPointerFeed(send: (pointer: WindowPointer) => void, w
     flush();
     if (last?.present) emit({ ...last, leftDown: false, present: false });
   };
+  const reportViewport = () => {
+    if (last?.present) return;
+    send({
+      x: last?.x ?? 0,
+      y: last?.y ?? 0,
+      width: win.innerWidth,
+      height: win.innerHeight,
+      leftDown: false,
+      present: false,
+    });
+  };
   const options = { capture: true, passive: true } as const;
+  reportViewport();
+  win.addEventListener("resize", reportViewport, options);
   win.addEventListener("pointermove", onMove, options);
   win.addEventListener("pointerdown", onButton, options);
   win.addEventListener("pointerup", onButton, options);
@@ -132,6 +148,7 @@ export function startWindowPointerFeed(send: (pointer: WindowPointer) => void, w
     if (frame) win.cancelAnimationFrame(frame);
     frame = 0;
     pending = null;
+    win.removeEventListener("resize", reportViewport, options);
     win.removeEventListener("pointermove", onMove, options);
     win.removeEventListener("pointerdown", onButton, options);
     win.removeEventListener("pointerup", onButton, options);

@@ -9543,6 +9543,10 @@ dependencies = [
 name = "tauri-plugin-wemt"
 version = "0.1.0"
 dependencies = [
+ "dispatch2",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
  "serde",
  "tauri",
  "thiserror 2.0.18",

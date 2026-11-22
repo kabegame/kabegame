@@ -2,7 +2,7 @@
 set -e
 
 # 插件模式的 Plasma 壁纸插件（Kabegame 装在每个用户的 ~/.local/share/plasma/wallpapers/ 里，见
-# src-tauri/kabegame/src/wallpaper/manager/plasma_install.rs）跟着应用一起卸载：
+# src-tauri/kabegame/src/wallpaper/manager/plasma/install.rs）跟着应用一起卸载：
 # - 正在用它的桌面先换回 org.kde.image：登录着的用户经他自己的会话总线让 plasmashell 换（换回之前的图片），
 #   没登录的用户改 Plasma 的桌面配置文件；
 # - 再删掉用户目录里带 Kabegame 标记（X-Kabegame-StreamProtocol）的那份。

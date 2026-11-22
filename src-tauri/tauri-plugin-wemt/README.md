@@ -1,6 +1,7 @@
 # tauri-plugin-wemt
 
-把 Tauri 2 窗口挂到 Windows 桌面图标层后方（Wallpaper Engine 式的桌面壁纸挂载）。
+把 Tauri 2 窗口挂到 Windows 桌面图标层后方（Wallpaper Engine 式的桌面壁纸挂载）。macOS 上 `mount_to_desktop` 把窗口放到桌面层
+（图标下方）并铺满一块屏（`src/macos.rs`，原 Kabegame 的 `wallpaper/window_mount_macos.rs`）。
 
 目标是 **Tauri 2.12.x**；插件本身不依赖 Wallpaper Engine，也不复用它的任何二进制。
 

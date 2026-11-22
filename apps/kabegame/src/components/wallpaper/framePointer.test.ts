@@ -23,6 +23,8 @@ describe("startWindowPointerFeed", () => {
       frames[id - 1] = () => {};
     });
     stop = startWindowPointerFeed((pointer) => sent.push(pointer));
+    // 启动时报的视口（见下面的用例），其余用例从空开始
+    sent = [];
   }
 
   function runFrames() {
@@ -38,6 +40,25 @@ describe("startWindowPointerFeed", () => {
   afterEach(() => {
     stop();
     vi.restoreAllMocks();
+  });
+
+  it("光标不在窗口里时，启动与窗口变大小时以离开报上视口；光标在窗口里时不报", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    sent = [];
+    stop = startWindowPointerFeed((pointer) => sent.push(pointer));
+    expect(sent).toEqual([
+      { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight, leftDown: false, present: false },
+    ]);
+    window.dispatchEvent(new Event("resize"));
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ width: window.innerWidth, height: window.innerHeight, present: false });
+    pointer("pointerdown", { clientX: 5, clientY: 6, button: 0, buttons: 1 });
+    window.dispatchEvent(new Event("resize"));
+    expect(sent).toHaveLength(3);
+    expect(sent[2]).toMatchObject({ x: 5, present: true });
   });
 
   it("一帧里的移动合并成最后一个，按下 / 抬起当场发并先补上没发的移动", () => {

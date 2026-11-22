@@ -3,7 +3,7 @@ name = "tauri-plugin-wemt"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.77"
-description = "Mount a Tauri window behind desktop icons as a Windows wallpaper host child (WorkerW), modelled on observed Wallpaper Engine 2.8 behaviour."
+description = "Mount a Tauri window behind desktop icons as a desktop wallpaper: a Windows wallpaper host child (WorkerW), modelled on observed Wallpaper Engine 2.8 behaviour, and the macOS desktop window level."
 license = "MIT OR Apache-2.0"
 keywords = ["tauri", "wallpaper", "workerw", "windows"]
 categories = ["gui"]
@@ -23,6 +23,23 @@ plugin = ["dep:tauri"]
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 tauri = { version = "2.12", default-features = false, optional = true }
+
+# macOS 的桌面层挂载（src/macos.rs）
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3"
+objc2 = { version = "0.6", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSColor",
+  "NSResponder",
+  "NSScreen",
+  "NSWindow",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSGeometry",
+] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

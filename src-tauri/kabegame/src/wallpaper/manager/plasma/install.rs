@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use kabegame_core::app_paths::AppPaths;
 
-use super::plasma_qdbus::KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID as PLUGIN_ID;
+use super::qdbus::KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID as PLUGIN_ID;
 
 /// 内置包在 resources 下的目录名，与 `scripts/plugins/plasma-wallpaper-plugin.ts` 一致。
 const BUNDLED_DIR_NAME: &str = "plasma-wallpaper";
@@ -109,7 +109,7 @@ pub fn available() -> bool {
 
 /// 本应用讲的约定版本（节点属性 `kabegame.wallpaper.protocol`）。
 fn current_protocol() -> u32 {
-    crate::wallpaper::pipewire::PROTOCOL_VERSION
+    super::pipewire::PROTOCOL_VERSION
 }
 
 /// 确保 plasmashell 会加载的插件能和本应用对上：没有、约定版本不同或修订号比内置的旧时，把内置包装进用户目录。返回之后
@@ -308,7 +308,7 @@ mod tests {
     #[test]
     fn plugin_source_protocol_matches_the_app() {
         // 插件源码的约定版本（src-plasma-wallpaper-plugin/PROTOCOL）与节点属性用的同一个数
-        let text = include_str!("../../../../../src-plasma-wallpaper-plugin/PROTOCOL");
+        let text = include_str!("../../../../../../src-plasma-wallpaper-plugin/PROTOCOL");
         assert_eq!(text.trim().parse::<u32>().unwrap(), current_protocol());
     }
 }

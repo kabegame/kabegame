@@ -959,7 +959,7 @@ pub async fn init_wallpaper_on_startup() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         use crate::linux_desktop::{linux_desktop, LinuxDesktop};
-        use crate::wallpaper::manager::plasma_plugin::ensure_plasma_plugin_aligned;
+        use crate::wallpaper::manager::plasma::ensure_plasma_plugin_aligned;
         let mode = Settings::global().get_wallpaper_mode();
         if linux_desktop() == LinuxDesktop::Plasma && mode == "plasma-plugin" {
             if let Err(e) = ensure_plasma_plugin_aligned() {

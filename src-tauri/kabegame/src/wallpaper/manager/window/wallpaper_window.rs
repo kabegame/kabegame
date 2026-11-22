@@ -22,7 +22,7 @@ fn ready_notify() -> &'static ReadyNotify {
     })
 }
 
-/// 一个壁纸窗口。窗口模式下每块在线屏一个（见 `manager::window`），各有各的就绪握手与 ping 看门狗。
+/// 一个壁纸窗口。窗口模式下每块在线屏一个（见 [`super::WindowWallpaperManager`]），各有各的就绪握手与 ping 看门狗。
 ///
 /// 窗口始终停在应用页（`index.html?window=wallpaper`，`WallpaperWindow.vue`），图片 / 视频 / 网页壁纸
 /// 都由 `Wallpaper` 自驱动渲染：网页壁纸（`x-wpe/web`）是 `WpeWallpaperContent` 里的 `file:` iframe，与图库预览
@@ -34,7 +34,10 @@ pub struct WallpaperWindow<R: Runtime> {
     pinger: Option<super::ping::Pinger>,
     /// Linux（插件模式）：离屏 browser 的帧推到这一路 PipeWire 流；随本对象丢弃而断开，帧接收器同时摘掉。
     #[cfg(target_os = "linux")]
-    stream: Option<std::sync::Arc<super::pipewire::WallpaperStream>>,
+    stream: Option<std::sync::Arc<crate::wallpaper::manager::plasma::pipewire::WallpaperStream>>,
+    /// Linux：窗口登记成了光标的外部来源（挂载后为真），随本对象丢弃注销。
+    #[cfg(target_os = "linux")]
+    external_pointer: bool,
 }
 
 /// Linux 离屏壁纸窗口的最高帧率（CEF `windowless_frame_rate`，也是 PipeWire 流的 `maxFramerate`）。
@@ -49,6 +52,8 @@ impl<R: Runtime> WallpaperWindow<R> {
             pinger: None,
             #[cfg(target_os = "linux")]
             stream: None,
+            #[cfg(target_os = "linux")]
+            external_pointer: false,
         }
     }
 
@@ -109,7 +114,7 @@ impl<R: Runtime> WallpaperWindow<R> {
         tauri_plugin_wemt::attach_window(&self.window, None).map_err(|e| e.to_string())?;
 
         #[cfg(target_os = "macos")]
-        crate::wallpaper::window_mount_macos::mount_to_desktop(&self.window, screen)?;
+        tauri_plugin_wemt::mount_to_desktop(&self.window, screen.map(desktop_rect))?;
 
         // 建窗时是 visible(false)（避免挂载前闪一下窗口），挂好后转常显。
         #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -117,10 +122,25 @@ impl<R: Runtime> WallpaperWindow<R> {
             .show()
             .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
 
-        // Linux：没有桌面层可挂，离屏 browser 的帧推到 PipeWire，由 Plasma 壁纸插件显示。离屏 browser 建成时是隐藏的，
+        // Linux（Plasma）：没有桌面层可挂，离屏 browser 的帧推到 PipeWire，由 Plasma 壁纸插件显示。离屏 browser 建成时是隐藏的，
         // 有消费者拉流才显示、出帧（流的状态回调）。
+        // Linux（GNOME）：普通窗口，显示出来后由 Kabegame 的 Shell 扩展按标题认出、挂到桌面层。
         #[cfg(target_os = "linux")]
-        self.attach_stream(screen)?;
+        if tauri_runtime_kbcef::offscreen_geometry(self.window.label()).is_some() {
+            self.attach_stream(screen)?;
+        } else {
+            self.window
+                .show()
+                .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
+            crate::wallpaper::manager::pointer_socket::set_windowed_wallpaper(self.window.label(), true);
+        }
+        // 外部光标来源：Plasma 插件经输入 socket 把桌面上的鼠标发回来（`pointer_socket`），GNOME 下页面自己收到鼠标、经
+        // `push_window_pointer` 交给应用；iframe 照 Windows / macOS 登记 frame 注入
+        #[cfg(target_os = "linux")]
+        {
+            tauri_plugin_cursor::register_external_pointer(self.window.label());
+            self.external_pointer = true;
+        }
 
         let target = self.window.clone();
         self.pinger = Some(super::ping::Pinger::start(
@@ -140,16 +160,13 @@ impl<R: Runtime> WallpaperWindow<R> {
     }
 
     /// 建这个窗口的 PipeWire 流并挂成离屏 browser 的帧接收器。流的状态变了就让离屏 browser 停帧或恢复：没有消费者时
-    /// 不出帧省 GPU，恢复时请一整帧（静态页面不会自己再出帧）。
-    ///
-    /// 同时把窗口登记成光标的外部来源：插件经节点属性里的输入 socket 把桌面上的鼠标发回来（`pointer_socket`），
-    /// iframe 照 Windows / macOS 登记 frame 注入。
+    /// 不出帧省 GPU，恢复时请一整帧（静态页面不会自己再出帧）。节点属性里带输入 socket，插件把桌面上的鼠标发回来。
     #[cfg(target_os = "linux")]
     fn attach_stream(&mut self, screen: Option<&ScreenInfo>) -> Result<(), String> {
-        use super::pipewire::{StreamProps, WallpaperStream};
+        use crate::wallpaper::manager::plasma::pipewire::{StreamProps, WallpaperStream};
 
         let label = self.window.label().to_string();
-        let slot = super::WALLPAPER_LABELS
+        let slot = crate::wallpaper::WALLPAPER_LABELS
             .iter()
             .position(|pooled| *pooled == label)
             .unwrap_or(0) as u32;
@@ -166,14 +183,14 @@ impl<R: Runtime> WallpaperWindow<R> {
                 slot,
                 screen: screen.map(|screen| screen.id.clone()),
                 // 应用启动时已经起好（init_post），这里只取路径
-                input: super::pointer_socket::ensure_started(|| {
-                    super::pointer_socket::main_window_probe(
+                input: crate::wallpaper::manager::pointer_socket::ensure_started(|| {
+                    crate::wallpaper::manager::pointer_socket::main_window_probe(
                         tauri::Manager::app_handle(&self.window).clone(),
                     )
                 }),
                 max_fps: OFFSCREEN_MAX_FPS,
                 // 与建窗时登记的共享纹理一致（manager::window::create_window）
-                dmabuf: super::pipewire::dmabuf_enabled(),
+                dmabuf: crate::wallpaper::manager::plasma::pipewire::dmabuf_enabled(),
             },
             size.width,
             size.height,
@@ -203,7 +220,6 @@ impl<R: Runtime> WallpaperWindow<R> {
         );
         let stream = std::sync::Arc::new(stream);
         tauri_runtime_kbcef::set_offscreen_frame_sink(&label, Some(stream.clone()));
-        tauri_plugin_cursor::register_external_pointer(&label);
         self.stream = Some(stream);
         Ok(())
     }
@@ -214,18 +230,32 @@ impl<R: Runtime> WallpaperWindow<R> {
     /// Windows 目前没有显示器枚举（只有一个窗口、铺主屏），不会走到这里。
     #[cfg(target_os = "macos")]
     pub fn place(window: &WebviewWindow<R>, screen: &ScreenInfo) -> Result<(), String> {
-        crate::wallpaper::window_mount_macos::mount_to_desktop(window, Some(screen)).map(|_| ())
+        tauri_plugin_wemt::mount_to_desktop(window, Some(desktop_rect(screen))).map(|_| ())
     }
+}
+
+/// macOS：屏的矩形（左上原点的点坐标）交给 `tauri-plugin-wemt` 的桌面层挂载。
+#[cfg(target_os = "macos")]
+fn desktop_rect(screen: &ScreenInfo) -> tauri_plugin_wemt::DesktopRect {
+    (
+        f64::from(screen.x),
+        f64::from(screen.y),
+        f64::from(screen.width),
+        f64::from(screen.height),
+    )
 }
 
 #[cfg(target_os = "linux")]
 impl<R: Runtime> Drop for WallpaperWindow<R> {
     fn drop(&mut self) {
-        // 帧接收器表里还有一份流的引用：先摘掉，流随本对象最后一份引用断开、销毁节点。外部光标来源一并注销：
-        // 已登记的 frame 下一轮收到收尾（补抬起与离开）
+        // 帧接收器表里还有一份流的引用：先摘掉，流随本对象最后一份引用断开、销毁节点
         if self.stream.take().is_some() {
             tauri_runtime_kbcef::set_offscreen_frame_sink(self.window.label(), None);
+        }
+        // 外部光标来源一并注销：已登记的 frame 下一轮收到收尾（补抬起与离开）
+        if self.external_pointer {
             tauri_plugin_cursor::unregister_external_pointer(self.window.label());
         }
+        crate::wallpaper::manager::pointer_socket::set_windowed_wallpaper(self.window.label(), false);
     }
 }

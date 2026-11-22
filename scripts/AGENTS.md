@@ -154,6 +154,14 @@ dev 启动时的插件打包会报「找不到 cli `target-dev/release/kabegame-
 
 ### 其他
 
+#### 嵌套 GNOME Shell
+
+`scripts/gnome-nested.sh [WxH ...]` 在当前桌面会话里开一个窗口里的 GNOME Shell（GNOME 49 起 `--devkit`，
+要 `mutter-dev-bin`；更早 `--nested`），开发 GNOME 支持时不用注销；每个 `WxH` / `WxH@R` 一块虚拟屏（只对 49+）。
+`scripts/gnome-nested.sh run <命令...>` 在开着的嵌套会话里跑程序（例如 `deno task dev -c kabegame`）：换成嵌套会话的
+`WAYLAND_DISPLAY` 与会话总线、桌面标识换成 GNOME、去掉 KDE 会话变量与 `DISPLAY`。PipeWire 与宿主会话共用。
+多显示器、真实桌面层级与输入仍要在真的 GNOME 会话里验收。
+
 #### 四格漫画合成
 
 `python3 scripts/compose-comic.py TL TR BL BR --output-size 3072x2048 --out comic.png`

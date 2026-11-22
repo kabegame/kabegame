@@ -13,6 +13,9 @@
 //! - 光标在主窗口里时，主窗口的页面把自己收到的鼠标经命令 `push_window_pointer` 交给应用，应用也发到这个 socket（[`Kind::Window`]
 //!   / [`Kind::WindowLeave`]，与插件的消息在同一条线程里依次处理）：主窗口的外部来源收「窗口」来源的样本（移动与点击，同 Windows 的
 //!   预览），桌面壁纸经 KWin 的主窗口几何换回全局坐标、只收移动。桌面与窗口两种来源交接时晚到的离开由 `tauri-plugin-cursor` 忽略。
+//! - GNOME：壁纸窗口是普通窗口，鼠标直接进窗口，壁纸页面同主窗口经 `push_window_pointer` 交给应用、发到这个 socket（[`Kind::Wallpaper`]
+//!   / [`Kind::WallpaperLeave`]）：壁纸窗口收自己的样本，主窗口经壁纸窗口的位置换成全局坐标后跟着走。窗口位置问 Kabegame 的
+//!   GNOME Shell 扩展（`manager::gnome::window_locator`），不问 KWin；主窗口里的光标换到壁纸窗口上也按壁纸窗口的位置换。
 
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
@@ -24,10 +27,11 @@ use std::time::{Duration, Instant};
 use tauri::{Manager, Runtime};
 use tauri_plugin_cursor::{PointerOrigin, Sample};
 
-use super::kwin_window::{FrameGeometry, KwinWindowLocator};
+use super::gnome::window_locator::GnomeWindowLocator;
+use super::plasma::kwin_window::KwinWindowLocator;
 
 /// 输入消息的版本：就是约定版本（节点属性 `kabegame.wallpaper.protocol`、插件的 `PROTOCOL`）。
-pub const PROTOCOL_VERSION: u16 = super::pipewire::PROTOCOL_VERSION as u16;
+pub const PROTOCOL_VERSION: u16 = super::plasma::pipewire::PROTOCOL_VERSION as u16;
 /// 每条消息的字节数。
 const MESSAGE_LEN: usize = 32;
 /// `buttons` 里左键的位。
@@ -43,8 +47,12 @@ enum Kind {
     Axis,
     /// 光标在主窗口里（应用自己发）：x, y 是主窗口视图坐标，dx, dy 是视口宽高。
     Window,
-    /// 光标离开了主窗口（应用自己发）。
+    /// 光标离开了主窗口（应用自己发）：dx, dy 是视口宽高。
     WindowLeave,
+    /// 光标在普通壁纸窗口里（GNOME，应用自己发）：x, y 是壁纸窗口视图坐标，dx, dy 是视口宽高，slot 是窗口在池里的序号。
+    Wallpaper,
+    /// 光标离开了普通壁纸窗口（GNOME，应用自己发）。
+    WallpaperLeave,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,7 +63,7 @@ struct Message {
     y: f32,
     /// 事件之后按着的键：bit0 左、bit1 右、bit2 中。
     buttons: u32,
-    /// kind = 1 / 2：光标的全局逻辑坐标；kind = 4：滚轮；kind = 5：主窗口视口的宽高。
+    /// kind = 1 / 2：光标的全局逻辑坐标；kind = 4：滚轮；kind = 5–8：窗口视口的宽高。
     dx: f32,
     dy: f32,
 }
@@ -65,13 +73,14 @@ impl Message {
     ///
     /// ```text
     /// u16 version = 1
-    /// u16 kind      // 插件发：1 move, 2 button, 3 leave, 4 axis（预留）；应用自己发：5 window, 6 window-leave
-    /// u32 slot      // 节点属性 kabegame.wallpaper.slot；5 / 6 不用
-    /// f32 x, y      // 1 / 2：在插件壁纸 item 里的归一化坐标 0..1（可越界）；5：主窗口视图坐标（CSS 像素）；3 / 6 不用
+    /// u16 kind      // 插件发：1 move, 2 button, 3 leave, 4 axis（预留）；应用自己发：5 window, 6 window-leave,
+    ///               // 7 wallpaper, 8 wallpaper-leave（GNOME 的普通壁纸窗口）
+    /// u32 slot      // 节点属性 kabegame.wallpaper.slot；7 / 8 是壁纸窗口在池里的序号；5 / 6 不用
+    /// f32 x, y      // 1 / 2：在插件壁纸 item 里的归一化坐标 0..1（可越界）；5 / 7：窗口视图坐标（CSS 像素）；3 / 6 / 8 不用
     /// u32 button    // kind = 2：变化的那个键（Linux BTN_*），这边只看 buttons
     /// u32 buttons   // 事件之后按着的键：bit0 左、bit1 右、bit2 中
     /// f32 dx, dy    // 1 / 2：光标的全局逻辑坐标（屏的左上角 + 桌面窗口里的位置，与 KWin 的窗口几何同一套）；4：滚轮；
-    ///               // 5：主窗口视口的宽高
+    ///               // 5 / 6 / 7 / 8：窗口视口的宽高（页面在光标不在窗口里时也以离开报视口）
     /// ```
     ///
     /// 每条消息都带按键全集（而不是只在按键消息里带变化），丢一条按键消息也不会让左键一直按着。
@@ -92,6 +101,8 @@ impl Message {
             4 => Kind::Axis,
             5 => Kind::Window,
             6 => Kind::WindowLeave,
+            7 => Kind::Wallpaper,
+            8 => Kind::WallpaperLeave,
             _ => return None,
         };
         Some(Self {
@@ -122,7 +133,7 @@ struct SlotState {
 fn to_sample(state: &mut SlotState, message: &Message, size: (f64, f64)) -> Option<Sample> {
     let left_down = message.buttons & LEFT_BUTTON_BIT != 0;
     match message.kind {
-        Kind::Axis | Kind::Window | Kind::WindowLeave => None,
+        Kind::Axis | Kind::Window | Kind::WindowLeave | Kind::Wallpaper | Kind::WallpaperLeave => None,
         Kind::Leave => Some(Sample {
             view: state.last,
             inside: false,
@@ -172,12 +183,71 @@ fn window_global_point(view: (f64, f64), frame: FrameGeometry, view_size: (f64, 
     (view.0 + frame.x + side, view.1 + frame.y + top)
 }
 
+/// 窗口的框架几何（全局逻辑坐标，含装饰；KWin 与 GNOME Shell 扩展给的都是它）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameGeometry {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 /// 主窗口的 label。
 const MAIN_LABEL: &str = "main";
+
+/// 挂载着的普通壁纸窗口（GNOME）的 slot：只给这些窗口查位置（KWin 的定位器只缓存一个窗口，换着标题查会冲掉主窗口的）。
+static WINDOWED_WALLPAPERS: std::sync::Mutex<std::collections::BTreeSet<u32>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+/// 普通壁纸窗口 `label` 挂载（`true`）或丢弃（`false`）。
+pub fn set_windowed_wallpaper(label: &str, mounted: bool) {
+    let Some(slot) = crate::wallpaper::WALLPAPER_LABELS.iter().position(|pooled| *pooled == label) else {
+        return;
+    };
+    let mut slots = WINDOWED_WALLPAPERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if mounted {
+        slots.insert(slot as u32);
+    } else {
+        slots.remove(&(slot as u32));
+    }
+}
+
+fn is_windowed_wallpaper(slot: u32) -> bool {
+    WINDOWED_WALLPAPERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&slot)
+}
 /// 主窗口的标题与视图尺寸隔多久重新取一次（取它们要经 runtime，不能每个鼠标事件都取）。
 const MAIN_INFO_TTL: Duration = Duration::from_millis(500);
-/// KWin 给的主窗口几何隔多久重新取一次（光标在桌面上时主窗口很少同时在动）。
+/// 窗口几何（KWin / Shell 扩展给的）隔多久重新取一次（光标在桌面上时主窗口很少同时在动）。
 const MAIN_FRAME_TTL: Duration = Duration::from_millis(250);
+
+/// 查窗口在全局坐标里的位置：Plasma 问 KWin，GNOME 问 Kabegame 的 Shell 扩展。
+enum Locator {
+    Kwin(KwinWindowLocator),
+    Gnome(GnomeWindowLocator),
+}
+
+impl Locator {
+    fn new() -> Self {
+        use crate::linux_desktop::{linux_desktop, LinuxDesktop};
+        if linux_desktop() == LinuxDesktop::Gnome {
+            Self::Gnome(GnomeWindowLocator::new())
+        } else {
+            Self::Kwin(KwinWindowLocator::new())
+        }
+    }
+
+    fn locate(&mut self, title: &str) -> Option<FrameGeometry> {
+        match self {
+            Self::Kwin(locator) => locator.locate(title),
+            Self::Gnome(locator) => locator.locate(title),
+        }
+    }
+}
 
 /// 主窗口的标题（在 KWin 里认窗口）与视图逻辑尺寸的候选（取尺寸的接口单位不确定时给几种读法，取第一个对得上的）。
 #[derive(Debug, Clone, PartialEq)]
@@ -270,14 +340,22 @@ fn receive(socket: UnixDatagram, main_window: MainWindowProbe) {
                 continue;
             }
             (Kind::WindowLeave, _) => {
-                main.on_window_leave();
+                main.on_window_leave(&message);
+                continue;
+            }
+            (Kind::Wallpaper, _) => {
+                main.on_wallpaper(&message);
+                continue;
+            }
+            (Kind::WallpaperLeave, _) => {
+                main.on_wallpaper_leave(message.slot);
                 continue;
             }
             (Kind::Leave, _) => main.on_leave(),
             (_, Some(global)) => main.on_global(global, message.buttons & LEFT_BUTTON_BIT != 0),
             _ => {}
         }
-        let Some(label) = super::WALLPAPER_LABELS.get(message.slot as usize) else {
+        let Some(label) = crate::wallpaper::WALLPAPER_LABELS.get(message.slot as usize) else {
             continue;
         };
         let Some(geometry) = tauri_runtime_kbcef::offscreen_geometry(label) else {
@@ -314,13 +392,20 @@ impl<T: Clone> Cached<T> {
     }
 }
 
-/// 主窗口这一路：主窗口信息与 KWin 几何的缓存、最后的位置（离开时用）。
+/// 主窗口这一路：主窗口信息与窗口几何的缓存、最后的位置（离开时用）；GNOME 下还有普通壁纸窗口的几何与最后的位置。
 struct MainWindow {
     probe: MainWindowProbe,
     info: Cached<Option<MainWindowInfo>>,
     frame: Cached<Option<FrameGeometry>>,
-    locator: KwinWindowLocator,
+    locator: Locator,
     last: Option<(f64, f64)>,
+    /// 主窗口页面报的视口宽高（移动与离开消息都带）。运行时给的窗口尺寸在 Wayland 下客户端自绘标题栏时（GNOME）含标题栏与
+    /// 阴影、对不上框架几何，这个是准的，排在候选尺寸最前面
+    viewport: Option<(f64, f64)>,
+    /// slot → 普通壁纸窗口（GNOME）的几何
+    wallpaper_frames: HashMap<u32, Cached<Option<FrameGeometry>>>,
+    /// slot → 普通壁纸窗口里最后的位置
+    wallpaper_last: HashMap<u32, (f64, f64)>,
 }
 
 impl MainWindow {
@@ -329,9 +414,69 @@ impl MainWindow {
             probe,
             info: Cached::new(MAIN_INFO_TTL),
             frame: Cached::new(MAIN_FRAME_TTL),
-            locator: KwinWindowLocator::new(),
+            locator: Locator::new(),
             last: None,
+            viewport: None,
+            wallpaper_frames: HashMap::new(),
+            wallpaper_last: HashMap::new(),
         }
+    }
+
+    /// 普通壁纸窗口（GNOME）`slot` 的几何（Shell 扩展按标题找，见 `manager::window::WINDOWED_TITLE_PREFIX`）。
+    fn wallpaper_frame(&mut self, slot: u32) -> Option<FrameGeometry> {
+        let locator = &mut self.locator;
+        self.wallpaper_frames
+            .entry(slot)
+            .or_insert_with(|| Cached::new(MAIN_FRAME_TTL))
+            .get(|| locator.locate(&format!("{}{slot}", super::window::WINDOWED_TITLE_PREFIX)))
+    }
+
+    /// 光标在普通壁纸窗口里（GNOME，壁纸页面经应用发来）：壁纸窗口收移动与点击（光标下是桌面）；主窗口经壁纸窗口的位置换成全局
+    /// 坐标后跟着走（同插件发来的桌面光标）。
+    fn on_wallpaper(&mut self, message: &Message) {
+        let view = (f64::from(message.x), f64::from(message.y));
+        let size = (f64::from(message.dx), f64::from(message.dy));
+        if ![view.0, view.1, size.0, size.1].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        let Some(label) = crate::wallpaper::WALLPAPER_LABELS.get(message.slot as usize) else {
+            return;
+        };
+        let left_down = message.buttons & LEFT_BUTTON_BIT != 0;
+        self.wallpaper_last.insert(message.slot, view);
+        tauri_plugin_cursor::push_external_pointer(
+            label,
+            Sample {
+                view,
+                inside: (0.0..size.0).contains(&view.0) && (0.0..size.1).contains(&view.1),
+                left_down,
+                present: true,
+            },
+            PointerOrigin::Desktop,
+        );
+        if let Some(frame) = self.wallpaper_frame(message.slot) {
+            self.on_global((frame.x + view.0, frame.y + view.1), left_down);
+        }
+    }
+
+    /// 光标离开了普通壁纸窗口（GNOME）。
+    fn on_wallpaper_leave(&mut self, slot: u32) {
+        let Some(label) = crate::wallpaper::WALLPAPER_LABELS.get(slot as usize) else {
+            return;
+        };
+        if let Some(view) = self.wallpaper_last.get(&slot).copied() {
+            tauri_plugin_cursor::push_external_pointer(
+                label,
+                Sample {
+                    view,
+                    inside: false,
+                    left_down: false,
+                    present: false,
+                },
+                PointerOrigin::Desktop,
+            );
+        }
+        self.on_leave();
     }
 
     fn on_global(&mut self, global: (f64, f64), left_down: bool) {
@@ -343,10 +488,11 @@ impl MainWindow {
         let Some(frame) = self.frame.get(|| locator.locate(&info.title)) else {
             return;
         };
-        let Some((view, size)) = info
-            .view_sizes
-            .iter()
-            .find_map(|&size| window_view_point(global, frame, size).map(|view| (view, size)))
+        let Some((view, size)) = self
+            .viewport
+            .into_iter()
+            .chain(info.view_sizes.iter().copied())
+            .find_map(|size| window_view_point(global, frame, size).map(|view| (view, size)))
         else {
             return;
         };
@@ -388,6 +534,7 @@ impl MainWindow {
             return;
         }
         self.last = Some(view);
+        self.viewport = Some(size);
         tauri_plugin_cursor::push_external_pointer(
             MAIN_LABEL,
             Sample {
@@ -407,17 +554,24 @@ impl MainWindow {
             return;
         };
         let global = window_global_point(view, frame, size);
-        // 桌面壁纸的视图就是它铺满的那块屏（目前只有一路、屏在全局坐标原点）
-        for label in super::WALLPAPER_LABELS {
-            let Some(geometry) = tauri_runtime_kbcef::offscreen_geometry(label) else {
+        for (slot, label) in crate::wallpaper::WALLPAPER_LABELS.iter().enumerate() {
+            // 离屏壁纸（Plasma）的视图就是它铺满的那块屏（目前只有一路、屏在全局坐标原点）；普通壁纸窗口（GNOME）按它的位置换
+            let (origin, (width, height)) = if let Some(geometry) = tauri_runtime_kbcef::offscreen_geometry(label) {
+                ((0.0, 0.0), (f64::from(geometry.width), f64::from(geometry.height)))
+            } else if is_windowed_wallpaper(slot as u32) {
+                match self.wallpaper_frame(slot as u32) {
+                    Some(frame) => ((frame.x, frame.y), (frame.width, frame.height)),
+                    None => continue,
+                }
+            } else {
                 continue;
             };
-            let (width, height) = (f64::from(geometry.width), f64::from(geometry.height));
+            let wallpaper_view = (global.0 - origin.0, global.1 - origin.1);
             tauri_plugin_cursor::push_external_pointer(
                 label,
                 Sample {
-                    view: global,
-                    inside: (0.0..width).contains(&global.0) && (0.0..height).contains(&global.1),
+                    view: wallpaper_view,
+                    inside: (0.0..width).contains(&wallpaper_view.0) && (0.0..height).contains(&wallpaper_view.1),
                     left_down: false,
                     present: true,
                 },
@@ -426,8 +580,13 @@ impl MainWindow {
         }
     }
 
-    /// 光标离开了主窗口（主窗口的页面经应用发来）。桌面壁纸不动：光标若到了桌面上，插件接着发。
-    fn on_window_leave(&mut self) {
+    /// 光标离开了主窗口（主窗口的页面经应用发来；页面在启动与窗口变大小时也以离开报视口）。桌面壁纸不动：光标若到了桌面上，
+    /// 插件接着发。
+    fn on_window_leave(&mut self, message: &Message) {
+        let size = (f64::from(message.dx), f64::from(message.dy));
+        if size.0.is_finite() && size.1.is_finite() && size.0 > 0.0 && size.1 > 0.0 {
+            self.viewport = Some(size);
+        }
         if let Some(view) = self.last {
             tauri_plugin_cursor::push_external_pointer(
                 MAIN_LABEL,
@@ -465,6 +624,22 @@ static SENDER: OnceLock<Option<UnixDatagram>> = OnceLock::new();
 /// 主窗口的页面把自己收到的鼠标交过来：照协议拼成 [`Kind::Window`] / [`Kind::WindowLeave`] 发到 socket，和插件的消息在同一条线程
 /// 里依次处理。`view` 是主窗口视图坐标（CSS 像素），`viewport` 是视口宽高。socket 没起来时丢掉。
 pub fn send_window_pointer(view: (f64, f64), viewport: (f64, f64), left_down: bool, present: bool) {
+    send_page_pointer(if present { 5 } else { 6 }, 0, view, viewport, left_down);
+}
+
+/// 普通壁纸窗口（GNOME）的页面把自己收到的鼠标交过来：拼成 [`Kind::Wallpaper`] / [`Kind::WallpaperLeave`] 发到 socket。`slot` 是窗口
+/// 在池里的序号，其余同 [`send_window_pointer`]。
+pub fn send_wallpaper_pointer(
+    slot: u32,
+    view: (f64, f64),
+    viewport: (f64, f64),
+    left_down: bool,
+    present: bool,
+) {
+    send_page_pointer(if present { 7 } else { 8 }, slot, view, viewport, left_down);
+}
+
+fn send_page_pointer(kind: u16, slot: u32, view: (f64, f64), viewport: (f64, f64), left_down: bool) {
     let Some(Some(path)) = SOCKET_PATH.get() else {
         return;
     };
@@ -478,10 +653,9 @@ pub fn send_window_pointer(view: (f64, f64), viewport: (f64, f64), left_down: bo
     else {
         return;
     };
-    let kind: u16 = if present { 5 } else { 6 };
     let message = encode_message(
         kind,
-        0,
+        slot,
         (view.0 as f32, view.1 as f32),
         if left_down { LEFT_BUTTON_BIT } else { 0 },
         (viewport.0 as f32, viewport.1 as f32),
@@ -562,6 +736,23 @@ mod tests {
     }
 
     #[test]
+    fn gnome_client_side_title_bar_fits_with_the_page_viewport() {
+        // 实测（GNOME 50 嵌套会话，缩放 1.45）：mutter 的框架含 Chromium 自绘的标题栏，页面视口 1122x674
+        let frame = FrameGeometry {
+            x: 2592.0,
+            y: 147.0,
+            width: 1122.0,
+            height: 722.0,
+        };
+        assert_eq!(
+            window_view_point((2600.0, 200.0), frame, (1122.0, 674.0)),
+            Some((8.0, 5.0))
+        );
+        // 运行时给的窗口尺寸含标题栏与阴影（1200x800），比框架还大，对不上
+        assert_eq!(window_view_point((2600.0, 200.0), frame, (1200.0, 800.0)), None);
+    }
+
+    #[test]
     fn rejects_wrong_length_version_and_kind() {
         let good = encode(1, 0, 0.0, 0.0, 0, (0.0, 0.0));
         assert!(Message::parse(&good[..31]).is_none());
@@ -571,7 +762,19 @@ mod tests {
         let mut version = good;
         version[0] = 2;
         assert!(Message::parse(&version).is_none());
-        assert!(Message::parse(&encode(7, 0, 0.0, 0.0, 0, (0.0, 0.0))).is_none());
+        assert!(Message::parse(&encode(9, 0, 0.0, 0.0, 0, (0.0, 0.0))).is_none());
+    }
+
+    #[test]
+    fn wallpaper_window_messages_carry_the_slot_and_stay_out_of_the_desktop_path() {
+        let message = Message::parse(&encode(7, 1, 300.5, 20.0, 1, (1280.0, 800.0))).unwrap();
+        assert_eq!(message.kind, Kind::Wallpaper);
+        assert_eq!((message.slot, message.x, message.dx, message.buttons), (1, 300.5, 1280.0, 1));
+        // dx / dy 是视口宽高，不是全局坐标：不能被当成插件发来的桌面光标
+        assert_eq!(message.global(), None);
+        assert_eq!(to_sample(&mut SlotState::default(), &message, (1.0, 1.0)), None);
+        let leave = Message::parse(&encode(8, 1, 0.0, 0.0, 0, (0.0, 0.0))).unwrap();
+        assert_eq!((leave.kind, leave.slot), (Kind::WallpaperLeave, 1));
     }
 
     #[test]

@@ -76,5 +76,5 @@ stderr: {}",
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Kabegame Plasma 壁纸插件 ID（与 plasma_plugin.rs 中 switch_to_kabegame_plugin 一致）。
+/// Kabegame Plasma 壁纸插件 ID（与 plasma/mod.rs 中 switch_to_kabegame_plugin 一致）。
 pub const KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID: &str = "org.kabegame.wallpaper";

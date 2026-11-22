@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 use zbus::zvariant::OwnedValue;
 
+use crate::wallpaper::manager::pointer_socket::FrameGeometry;
+
 /// D-Bus 调用的超时：KWin 卡住时不能拖住鼠标线程。
 const CALL_TIMEOUT: Duration = Duration::from_millis(300);
 /// 找不到主窗口时多久再搜一次（搜索结果带窗口图标，比较大）。
@@ -21,15 +23,6 @@ const SEARCH_INTERVAL: Duration = Duration::from_secs(2);
 const CONNECT_INTERVAL: Duration = Duration::from_secs(10);
 /// Kabegame 窗口的类名（Wayland app_id / X11 WM_CLASS）。
 const RESOURCE_CLASS: &str = "kabegame";
-
-/// 窗口的框架几何（全局逻辑坐标，含装饰）。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FrameGeometry {
-    pub x: f64,
-    pub y: f64,
-    pub width: f64,
-    pub height: f64,
-}
 
 /// `getWindowInfo` 里用到的几项。
 #[derive(Debug, Clone, PartialEq)]

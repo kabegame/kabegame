@@ -7,7 +7,7 @@ import { BuildSystem } from "../build-system.ts";
 import { PLASMA_WALLPAPER_PACKAGE, ROOT, TARGET_DIR } from "../paths.ts";
 import { RESOURCES_DIR } from "../utils.ts";
 
-/** 插件包在 resources 下的目录名，与 `src-tauri/kabegame/src/wallpaper/manager/plasma_install.rs` 的 `BUNDLED_DIR_NAME` 一致。 */
+/** 插件包在 resources 下的目录名，与 `src-tauri/kabegame/src/wallpaper/manager/plasma/install.rs` 的 `BUNDLED_DIR_NAME` 一致。 */
 const BUNDLED_DIR_NAME = "plasma-wallpaper";
 
 /**

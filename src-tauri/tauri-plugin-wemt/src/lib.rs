@@ -1,4 +1,6 @@
-//! Tauri 2 plugin that mounts a webview window as a Windows desktop wallpaper.
+//! Tauri 2 plugin that mounts a webview window as a desktop wallpaper: Windows
+//! (below the desktop icons, as a child of the background `WorkerW`) and macOS
+//! (desktop window level, see [`mount_to_desktop`]).
 //!
 //! The mount target is the background `WorkerW` that Explorer creates below
 //! `Progman`. Observable behaviour was derived from Wallpaper Engine 2.8.0.42
@@ -52,3 +54,8 @@ mod commands_surface {
 
 #[cfg(feature = "plugin")]
 pub use commands::{attach_window, detach_window};
+
+#[cfg(all(target_os = "macos", feature = "plugin"))]
+mod macos;
+#[cfg(all(target_os = "macos", feature = "plugin"))]
+pub use macos::{mount_to_desktop, DesktopRect};

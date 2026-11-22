@@ -103,7 +103,7 @@ its consumed sub-crates: `crates/tauri`, `crates/tauri-runtime`, `crates/tauri-r
   `Listeners::remove_webview_js_listeners` `pub(crate)` and adds public
   `Webview::clear_js_listeners()` / `WebviewWindow::clear_js_listeners()` (Rust-side `listen`
   handlers are untouched). Kabegame calls it after the wallpaper window's ping watchdog reloads
-  the page (`wallpaper/window.rs`); since 18 web wallpapers are iframes and the wallpaper window no
+  the page (`wallpaper/manager/window/wallpaper_window.rs`); since 18 web wallpapers are iframes and the wallpaper window no
   longer navigates (a subframe's listeners go with `SubframeDestroyed`). It drops the listeners of
   every frame of the webview. Re-check on bump: `event/listener.rs` `remove_webview_js_listeners`.
 - `12-tauri-ipc-origin-referrer-policy.patch` — the custom-protocol IPC `fetch` in

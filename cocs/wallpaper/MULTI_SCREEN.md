@@ -261,7 +261,7 @@ pub trait WallpaperManager: Send + Sync {
   - macOS：系统只有逐屏的入口。`Placement::All` 对布置里的每块屏各设一次，`Placement::One` 设一次，`Placement::Span` 报错；样式随每次调用带给系统。见下文「原生模式：macOS 逐屏」。
   - 其余平台：`Placement::All` 走 `set_all`，其余两种布置报错。Windows 先把样式写进注册表的壁纸位置，再设一次壁纸让它生效，过渡为 `fade` 时由这一次设壁纸触发系统淡入；Linux 把样式随壁纸一起交给 GNOME / Plasma；Android 把样式交给壁纸插件。
 - **窗口**（`window.rs`）：样式、过渡与当前壁纸由壁纸页面从 `setting-change` 里自己读。`set_wallpaper` 在后端没有要做的事：桌面鼠标由各窗口里的 iframe 自己登记。详见下文「窗口模式：每屏一窗」。
-- **Plasma 插件**（`plasma_plugin.rs`）：`set_wallpaper` 什么都不做。当前壁纸、样式、过渡由调用方写进 `multiple` 目标，Plasma 侧的插件（源码不在本仓库）经 IPC 与 `setting-change` 自己读取并显示。
+- **Plasma 插件**（`manager/plasma/mod.rs`）：`set_wallpaper` 什么都不做。当前壁纸、样式、过渡由调用方写进 `multiple` 目标，Plasma 侧的插件（源码不在本仓库）经 IPC 与 `setting-change` 自己读取并显示。
 
 ## 窗口模式：每屏一窗
 
@@ -285,7 +285,7 @@ pub trait WallpaperManager: Send + Sync {
 | ACL 特赦 `acl_exempt_webview` | `lib.rs` | Builder 期，之后不能再加 |
 | `main-capability`、`wpe-web-capability` 的 `windows` | `capabilities/main.json(.handlebars)`、`wpe-web.json` | 静态文件；有单测比对它们与池一致 |
 | 场景宿主的运行时 capability | `wallpaper/wpe_scene_host.rs` | 启动时 |
-| `allow_file_documents` / `allow_app_local_resources` / `disable_wheel_zoom` | `manager/window.rs` 的 `create_window` | 每个窗口建窗前，按它的 label |
+| `allow_file_documents` / `allow_app_local_resources` / `disable_wheel_zoom` | `manager/window/mod.rs` 的 `create_window` | 每个窗口建窗前，按它的 label |
 
 所以池里每个窗口的待遇与原来唯一的 `wallpaper` 窗口相同：应用页免 ACL，网页壁纸与场景宿主的 iframe 能加载、能调它们被授权的命令。超过 8 块屏时只给前 8 块（主屏第一，其余按 `(y, x)`）开窗口并记一条告警。
 
@@ -326,7 +326,7 @@ label 先到先得：建窗时取池里第一个空闲的（正在销毁、还�
 
 ### 挂载
 
-- **macOS**：`window_mount_macos::mount_to_desktop(window, screen)` 把窗口设成无边框、桌面图标层之下、忽略鼠标，frame 设成那块屏的矩形。屏的矩形是左上原点的点坐标，换回 Cocoa 屏幕坐标时用主屏高度翻转 y（与枚举时的换算互逆）。建窗时位置与大小就按目标屏给，挂载时再精确铺一次。各窗口各自 frame 到各自的屏，与系统「显示器具有单独的空间」的设置无关。
+- **macOS**：`tauri_plugin_wemt::mount_to_desktop(window, 屏的矩形)` 把窗口设成无边框、桌面图标层之下、忽略鼠标，frame 设成那块屏的矩形。屏的矩形是左上原点的点坐标，换回 Cocoa 屏幕坐标时用主屏高度翻转 y（与枚举时的换算互逆）。建窗时位置与大小就按目标屏给，挂载时再精确铺一次。各窗口各自 frame 到各自的屏，与系统「显示器具有单独的空间」的设置无关。
 - **Windows**：没有显示器枚举，窗口不绑定屏，仍是建一个全屏窗口、经 `tauri-plugin-wemt` 挂到 WorkerW（见 [WINDOW_MOUNT_WEMT.md](WINDOW_MOUNT_WEMT.md)）。
 
 ### 布置
@@ -634,7 +634,7 @@ macOS 原生模式改用逐屏接口带来的变化：
 - `src-tauri/kabegame/src/wallpaper/manager/{native,window,plasma_plugin}.rs`：三个后端；`window.rs` 里是窗口表、`plan_windows` / `diff_windows` 与对齐
 - `src-tauri/kabegame/src/wallpaper/manager/native_mac.rs`：macOS 逐屏设桌面图片、样式 → 选项的映射、能不能显示的判断
 - `src-tauri/kabegame/src/wallpaper/mod.rs`：壁纸窗口 label 池 `WALLPAPER_LABELS`、`is_wallpaper_label`
-- `src-tauri/kabegame/src/wallpaper/window.rs`、`window_mount_macos.rs`：单个壁纸窗口（按 label 的就绪握手、挂载、看门狗）与 macOS 按屏铺放
+- `src-tauri/kabegame/src/wallpaper/manager/window/wallpaper_window.rs`、`tauri-plugin-wemt` 的 `src/macos.rs`：单个壁纸窗口（按 label 的就绪握手、挂载、看门狗）与 macOS 按屏铺放
 - `src-tauri/kabegame/src/commands/window.rs`、`capabilities/main.json.handlebars`、`capabilities/wpe-web.json`、`wallpaper/wpe_scene_host.rs`：按 label 的就绪命令与各处窗口列表
 - `src-tauri/kabegame/src/wallpaper/screens.rs`：`ScreenInfo`、缓存、watcher、去抖与提交；`screens/mac.rs`：macOS 枚举、坐标换算与按 id 查 `NSScreen`
 - `src-tauri/kabegame/src/wallpaper/rotator.rs`：按目标选图与轮播线程
@@ -650,4 +650,4 @@ macOS 原生模式改用逐屏接口带来的变化：
 - `apps/kabegame/src/components/settings/items/WallpaperDisplayModeSetting.vue`、`components/common/form/KbSegmentedControl.vue`
 - `apps/kabegame/src/stores/settings.ts`、`stores/settingsDescriptors.ts`、`stores/localSettingsMigrations.ts`
 - `apps/kabegame/src/views/WallpaperWindow.vue`、`views/Settings.vue`、`components/settings/items/WallpaperStyleSetting.vue`、`WallpaperTransitionSetting.vue`
-- 测试：`wallpaper_targets.rs`、`v005_wallpaper_targets.rs`、`manager/mod.rs`（布局、光标所在屏对应的目标、切壁纸模式沿用样式的规则、屏幕变化后给哪些屏补输出）、`manager/native_mac.rs`（样式 → 选项、能不能显示）、`manager/window.rs`（窗口表、比对、布置落在哪些窗口）、`wallpaper/mod.rs`（label 池、capability 文件与池一致）、`window_mount_macos.rs`（坐标翻转）、`rotator.rs`、`ipc.rs`、`screens.rs`（排序、光标命中、去抖）、`screens/mac.rs`（Y 翻转、主屏判定，另有读真机屏幕的用例：枚举、按 id 查回、光标换算）内的单测；前端 `utils/wallpaperTargets.test.ts`、`utils/wallpaperScreenLayout.test.ts`、`composables/useWallpaperTarget.test.ts`、`composables/useWallpaperScreens.test.ts`、`composables/useWallpaperTargetPicker.test.ts`（含宿主组件）、`utils/wallpaperMode.test.ts`、`utils/wallpaperRotationPath.test.ts`、`views/WallpaperWindow.target.test.ts`、`stores/localSettingsMigrations.test.ts`
+- 测试：`wallpaper_targets.rs`、`v005_wallpaper_targets.rs`、`manager/mod.rs`（布局、光标所在屏对应的目标、切壁纸模式沿用样式的规则、屏幕变化后给哪些屏补输出）、`manager/native_mac.rs`（样式 → 选项、能不能显示）、`manager/window/mod.rs`（窗口表、比对、布置落在哪些窗口）、`wallpaper/mod.rs`（label 池、capability 文件与池一致）、`tauri-plugin-wemt` 的 `src/macos.rs`（坐标翻转）、`rotator.rs`、`ipc.rs`、`screens.rs`（排序、光标命中、去抖）、`screens/mac.rs`（Y 翻转、主屏判定，另有读真机屏幕的用例：枚举、按 id 查回、光标换算）内的单测；前端 `utils/wallpaperTargets.test.ts`、`utils/wallpaperScreenLayout.test.ts`、`composables/useWallpaperTarget.test.ts`、`composables/useWallpaperScreens.test.ts`、`composables/useWallpaperTargetPicker.test.ts`（含宿主组件）、`utils/wallpaperMode.test.ts`、`utils/wallpaperRotationPath.test.ts`、`views/WallpaperWindow.target.test.ts`、`stores/localSettingsMigrations.test.ts`

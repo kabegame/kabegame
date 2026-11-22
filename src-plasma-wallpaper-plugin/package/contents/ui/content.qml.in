@@ -4,7 +4,7 @@ import org.kde.pipewire as PipeWire
 import "Plugin/@KB_QML_URI@" as KB
 
 // 插件修订 @KB_PLUGIN_REVISION@ 的内容：找 Kabegame 的壁纸节点、铺满显示，把桌面上的鼠标发回 Kabegame。
-// 不连 app IPC、不读 Kabegame 的设置、不认识壁纸类型（约定见 src-tauri/kabegame/src/wallpaper/pipewire/ 与 pointer_socket.rs）。
+// 不连 app IPC、不读 Kabegame 的设置、不认识壁纸类型（约定见 src-tauri/kabegame/src/wallpaper/manager/plasma/pipewire/ 与 manager/pointer_socket.rs）。
 Item {
     id: root
     anchors.fill: parent

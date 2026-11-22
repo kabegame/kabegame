@@ -1,10 +1,14 @@
 //! Plasma 壁纸插件模式管理器：Kabegame 自己渲染壁纸（离屏壁纸窗口），每一帧经 PipeWire 推给 Kabegame 的
 //! Plasma 壁纸插件显示；插件只读流、不渲染内容。见 `.claude/plans/plasma-pipewire/README.md`。
 //!
-//! 切到插件模式（`init`）与启动对齐（[`ensure_plasma_plugin_aligned`]）前先确保插件装好且不旧（`plasma_install`），切换时
+//! 切到插件模式（`init`）与启动对齐（[`ensure_plasma_plugin_aligned`]）前先确保插件装好且不旧（[`install`]），切换时
 //! 把各桌面的配置项 `General/Entry` 写成生效那份的内容文件：插件刚升级时 plasmashell 不用重启就换到新修订。
 
-use super::{plasma_install, plasma_qdbus};
+pub mod install;
+pub mod kwin_window;
+pub mod pipewire;
+pub mod qdbus;
+
 use super::{
     DisplayMode, Placement, WallpaperManager, WallpaperOption, WindowAssignment,
     WindowWallpaperManager,
@@ -39,7 +43,7 @@ fn is_safe_entry(entry: &str) -> bool {
 /// 各桌面换成 Kabegame 插件的脚本：已经是的不动插件；`entry` 非空时把配置项 `General/Entry` 写成它（插件的壳按它加载内容，
 /// 值变了就换到新修订）。
 fn kabegame_plugin_script(entry: &str) -> String {
-    let id = plasma_qdbus::KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID;
+    let id = qdbus::KABEGAME_PLASMA_WALLPAPER_PLUGIN_ID;
     let write_entry = if is_safe_entry(entry) {
         format!(
             "d.currentConfigGroup = ['Wallpaper', '{id}', 'General']; d.writeConfig('Entry', '{entry}');"
@@ -61,8 +65,8 @@ fn kabegame_plugin_script(entry: &str) -> String {
 
 /// 确保插件装好（没有或旧了就装内置的），再把所有桌面换成它、写好 `Entry`。
 fn switch_to_kabegame_plugin() -> Result<(), String> {
-    let package = plasma_install::ensure_installed()?;
-    plasma_qdbus::run_qdbus_evaluate_script(&kabegame_plugin_script(&package.entry))
+    let package = install::ensure_installed()?;
+    qdbus::run_qdbus_evaluate_script(&kabegame_plugin_script(&package.entry))
 }
 
 /// 将所有桌面的 wallpaperPlugin 恢复为 org.kde.image
@@ -74,7 +78,7 @@ fn switch_to_org_kde_image() -> Result<(), String> {
             d.wallpaperPlugin = 'org.kde.image';
         }
     "#;
-    plasma_qdbus::run_qdbus_evaluate_script(script)
+    qdbus::run_qdbus_evaluate_script(script)
 }
 
 /// 启动时对齐：设置是插件模式时，确保插件装好且不旧（应用升级带来新修订时在这里装上），各桌面换成它、`Entry` 指向生效的

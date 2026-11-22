@@ -9,7 +9,7 @@
 - `src/StreamFinder.*`：连默认 PipeWire，找带 `kabegame.wallpaper.protocol` 的 `Video/Source` 节点，按屏选一路
   （`kabegame.wallpaper.screen` 等于本屏的优先，其次不绑屏的；同级取 `object.serial` 最大的）。
 - `src/PointerForwarder.*`：在桌面窗口上装事件过滤器（只看不吞），把移动 / 按键 / 离开按定长 32 字节的消息用
-  `SOCK_DGRAM` 发到节点属性 `kabegame.wallpaper.input` 给的 socket（协议见 `src-tauri/kabegame/src/wallpaper/pointer_socket.rs`）。
+  `SOCK_DGRAM` 发到节点属性 `kabegame.wallpaper.input` 给的 socket（协议见 `src-tauri/kabegame/src/wallpaper/manager/pointer_socket.rs`）。
   主窗口在哪由 Kabegame 自己问 KWin，插件里不用任务管理器模型（`TaskManager.TasksModel`）：试验时壁纸里建了它，之后 plasmashell
   报 GL 上下文错误并卡死过（2026-11-22；后来不用它也出现过同样的报错，元凶未必是它，原因未明）。
 - `package/contents/ui/main.qml`：永不改的壳，按配置项 `General/Entry` 加载内容文件，加载失败退回 `content.qml`。
@@ -19,7 +19,7 @@
 ## 版本
 
 - `PROTOCOL`：与 Kabegame 的约定版本，节点属性 `kabegame.wallpaper.protocol`、输入消息的 `version`、`metadata.json` 的
-  `X-Kabegame-StreamProtocol` 都是它（应用的单测核对它与 `wallpaper::pipewire::PROTOCOL_VERSION` 相等）。改约定时两边一起升。
+  `X-Kabegame-StreamProtocol` 都是它（应用的单测核对它与 `wallpaper::manager::plasma::pipewire::PROTOCOL_VERSION` 相等）。改约定时两边一起升。
 - `REVISION`：插件修订号，**改了插件就要加一**。QML 模块 URI、`.so` 名与内容文件名都带它（`KabegameWallpaperR<修订号>`）：
   plasmashell 按 URL 缓存 QML 组件、已加载的 `.so` 卸不掉、注册过的模块 URI 不能再注册，不换名字就只能重启 plasmashell 才生效。
 
@@ -35,7 +35,7 @@ deno task build:plasma-plugin
 
 ## 安装、升级与卸载（应用侧）
 
-- 切到插件模式与启动对齐时，`src-tauri/kabegame/src/wallpaper/manager/plasma_install.rs` 照 Plasma 的查找顺序看装着的那份：没有、
+- 切到插件模式与启动对齐时，`src-tauri/kabegame/src/wallpaper/manager/plasma/install.rs` 照 Plasma 的查找顺序看装着的那份：没有、
   约定版本不同或修订号比内置的旧，就把内置包拷进 `~/.local/share/plasma/wallpapers/org.kabegame.wallpaper`（系统目录里别的包装的
   旧版不碰，用户目录的盖过它），再经 `evaluateScript` 把各桌面换成本插件、`General/Entry` 写成新修订的内容文件，plasmashell
   不用重启。

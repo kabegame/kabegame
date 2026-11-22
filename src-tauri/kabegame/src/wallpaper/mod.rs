@@ -1,23 +1,7 @@
 pub mod manager;
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-pub mod ping;
-// 插件模式（Linux）：离屏壁纸窗口的 PipeWire 推流（dmabuf / 共享内存）
-#[cfg(target_os = "linux")]
-pub mod pipewire;
-// 插件模式（Linux）：Plasma 壁纸插件转发的鼠标（只收不回的 Unix 数据报 socket）→ tauri-plugin-cursor 的外部来源
-#[cfg(target_os = "linux")]
-pub mod pointer_socket;
-// 插件模式（Linux）：经 KWin 的 D-Bus 查主窗口在屏上的位置（桌面上的光标换算到主窗口里）
-#[cfg(target_os = "linux")]
-mod kwin_window;
 pub mod rotator;
 // 显示器枚举与热插拔 watcher（目前只有 macOS 有平台实现，其余平台列表恒为空）
 pub mod screens;
-// 壁纸窗口：Windows / macOS 的窗口模式挂到桌面层，Linux 的插件模式是离屏 browser + PipeWire 推流
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-pub mod window;
-#[cfg(target_os = "macos")]
-pub mod window_mount_macos;
 // 网页壁纸目录索引：file: 闸门与 wpe_web_media_subscribe 认图的数据源
 #[cfg(feature = "wpe")]
 pub mod wpe_web_dir_index;
@@ -31,7 +15,7 @@ pub mod wpe_shortcut;
 // 轮播器
 pub use rotator::WallpaperRotator;
 #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-pub use window::WallpaperWindow;
+pub use manager::window::WallpaperWindow;
 
 // 蟇ｼ蜃ｺ邂｡逅・勣邀ｻ蝙・
 pub use manager::WallpaperController;

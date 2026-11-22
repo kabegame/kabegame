@@ -10,8 +10,19 @@ import "virtual:uno.css";
 import "@/styles/anime-theme.css";
 import "@/styles/tokens.css";
 import WallpaperWindow from "@/views/WallpaperWindow.vue";
+import { invoke } from "@/api/rpc";
+import { IS_LINUX } from "@/env";
+import { startWindowPointerFeed } from "@/components/wallpaper/framePointer";
 
 const app = createApp(WallpaperWindow);
 app.use(createPinia());
 app.use(i18n);
 app.mount("#app");
+
+// Linux 读不到全局光标。GNOME 下壁纸窗口是普通窗口、鼠标直接进来：页面把收到的鼠标交给应用，桌面上的网页 / 场景壁纸经它注入
+// （同主窗口）。Plasma 下壁纸窗口是离屏的，收不到真实鼠标，这里不会发出任何东西。
+if (IS_LINUX) {
+  startWindowPointerFeed((pointer) => {
+    void invoke("push_window_pointer", { ...pointer }).catch(() => {});
+  });
+}

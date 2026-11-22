@@ -3,7 +3,10 @@ use super::{
     WallpaperManager, WallpaperOption, WindowAssignment,
 };
 use crate::wallpaper::screens::ScreenInfo;
-use crate::wallpaper::window::WallpaperWindow;
+mod ping;
+pub mod wallpaper_window;
+
+pub use wallpaper_window::WallpaperWindow;
 use crate::wallpaper::WALLPAPER_LABELS;
 use async_trait::async_trait;
 use kabegame_i18n::t;
@@ -128,7 +131,7 @@ struct Slot<R: Runtime> {
 ///
 /// 两种用法：Windows / macOS 的窗口模式（`window`，窗口挂到桌面层），Linux 的插件模式（`plasma-plugin`，由
 /// [`super::PlasmaPluginWallpaperManager`] 包一层）：Linux 没有桌面层可挂，壁纸窗口是离屏 browser，每一帧推到一路
-/// PipeWire 流，由 Plasma 壁纸插件显示（见 `wallpaper::window` 与 `wallpaper::pipewire`）。
+/// PipeWire 流，由 Plasma 壁纸插件显示（见 [`wallpaper_window`] 与 `manager::plasma::pipewire`）。
 ///
 /// 窗口集合的**生命周期**：`init()` 进入窗口模式并把窗口集合对齐到当前布局，`reconcile()` 在显示器模式或在线屏
 /// 变化后重新对齐（同一块屏保留原窗口、屏矩形变了重铺、布置变了推一条新的、多的销毁、缺的新建），`cleanup()`
@@ -150,7 +153,15 @@ pub struct WindowWallpaperManager<R: Runtime> {
     active: Mutex<bool>,
     /// label → 窗口
     slots: Mutex<BTreeMap<String, Slot<R>>>,
+    /// Linux：壁纸窗口建成离屏 browser（Plasma，帧推到 PipeWire）还是普通窗口（GNOME，由 Kabegame 的 Shell 扩展
+    /// 按标题认出、挂到桌面层，见 [`WINDOWED_TITLE_PREFIX`]）。
+    #[cfg(target_os = "linux")]
+    offscreen: bool,
 }
+
+/// Linux 普通壁纸窗口的标题前缀，后跟 label 在池里的序号（`kabegame-wallpaper 0`）。GNOME Shell 扩展按它认出壁纸窗口。
+#[cfg(target_os = "linux")]
+pub const WINDOWED_TITLE_PREFIX: &str = "kabegame-wallpaper ";
 
 impl<R: Runtime> WindowWallpaperManager<R> {
     pub fn new(app: AppHandle<R>, wallpaper_mode: &'static str) -> Self {
@@ -159,6 +170,17 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             wallpaper_mode,
             active: Mutex::new(false),
             slots: Mutex::new(BTreeMap::new()),
+            #[cfg(target_os = "linux")]
+            offscreen: true,
+        }
+    }
+
+    /// Linux：壁纸窗口是普通窗口（GNOME）。
+    #[cfg(target_os = "linux")]
+    pub fn new_windowed(app: AppHandle<R>, wallpaper_mode: &'static str) -> Self {
+        Self {
+            offscreen: false,
+            ..Self::new(app, wallpaper_mode)
         }
     }
 
@@ -214,23 +236,25 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         tauri_runtime_kbcef::allow_app_local_resources(label);
         // 补丁 10：壁纸 iframe 上的 Ctrl+滚轮不缩放；缩放按 host 存，这里和主窗口是同一个 host
         tauri_runtime_kbcef::disable_wheel_zoom(label);
-        // Linux（插件模式）：不建原生窗口，建离屏 browser，帧由挂载时建的 PipeWire 流接走。尺寸按屏的逻辑尺寸与缩放；
-        // 没有屏幕信息时给 0，runtime 换成主显示器。
+        // Linux（Plasma 插件模式）：不建原生窗口，建离屏 browser，帧由挂载时建的 PipeWire 流接走。尺寸按屏的逻辑尺寸与缩放；
+        // 没有屏幕信息时给 0，runtime 换成主显示器。GNOME 建普通窗口，不登记。
         #[cfg(target_os = "linux")]
-        tauri_runtime_kbcef::register_offscreen(
-            label,
-            tauri_runtime_kbcef::OffscreenOptions {
-                geometry: tauri_runtime_kbcef::OffscreenGeometry {
-                    width: screen.map_or(0, |screen| screen.width),
-                    height: screen.map_or(0, |screen| screen.height),
-                    scale_factor: screen.map_or(1.0, |screen| screen.scale),
+        if self.offscreen {
+            tauri_runtime_kbcef::register_offscreen(
+                label,
+                tauri_runtime_kbcef::OffscreenOptions {
+                    geometry: tauri_runtime_kbcef::OffscreenGeometry {
+                        width: screen.map_or(0, |screen| screen.width),
+                        height: screen.map_or(0, |screen| screen.height),
+                        scale_factor: screen.map_or(1.0, |screen| screen.scale),
+                    },
+                    frame_rate: wallpaper_window::OFFSCREEN_MAX_FPS,
+                    // GPU 上下文可用（Wayland、合成器的主设备上 EGL / GBM 正常）时走共享纹理：帧是 dmabuf，GPU 拷进流的缓冲；
+                    // 否则软件绘制、整帧像素拷进共享内存
+                    shared_texture: super::plasma::pipewire::dmabuf_enabled(),
                 },
-                frame_rate: crate::wallpaper::window::OFFSCREEN_MAX_FPS,
-                // GPU 上下文可用（Wayland、合成器的主设备上 EGL / GBM 正常）时走共享纹理：帧是 dmabuf，GPU 拷进流的缓冲；
-                // 否则软件绘制、整帧像素拷进共享内存
-                shared_texture: crate::wallpaper::pipewire::dmabuf_enabled(),
-            },
-        );
+            );
+        }
 
         // 与主窗口同一个 index.html，前端 main.ts 按 ?window= 分发到壁纸 bootstrap。
         // `slot` 是 label 在池里的序号，页面不读它：各壁纸窗口的地址因此互不相同，调试工具能按 URL 认出是哪一个。
@@ -238,19 +262,33 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             .iter()
             .position(|pooled| *pooled == label)
             .unwrap_or(0);
+        // 固定标题，便于脚本/调试定位到正确窗口。Linux 的普通壁纸窗口由 GNOME Shell 扩展按标题认出，标题不翻译、带序号。
+        #[cfg(target_os = "linux")]
+        let title = if self.offscreen {
+            t!("window.wallpaperTitle").to_string()
+        } else {
+            format!("{WINDOWED_TITLE_PREFIX}{slot}")
+        };
+        #[cfg(not(target_os = "linux"))]
+        let title = t!("window.wallpaperTitle").to_string();
         let builder = WebviewWindowBuilder::new(
             &self.app,
             label,
             WebviewUrl::App(format!("index.html?window=wallpaper&slot={slot}").into()),
         )
-        // 固定标题，便于脚本/调试定位到正确窗口。
-        .title(t!("window.wallpaperTitle"))
+        .title(title)
         // WPE 网页壁纸垫片：只在顶层的直接子 file: iframe 里启用，应用页里第一行就返回。
         .initialization_script_for_all_frames(crate::commands::wpe_web::WPE_SHIM_JS)
         .decorations(false)
         .skip_taskbar(true);
 
+        // Linux 的普通窗口（GNOME）不能自己定位与全屏：位置与尺寸由 Shell 扩展按屏设，全屏会把它抬到全屏层
+        #[cfg(target_os = "linux")]
+        let positioned_by_shell = !self.offscreen;
+        #[cfg(not(target_os = "linux"))]
+        let positioned_by_shell = false;
         let builder = match screen {
+            _ if positioned_by_shell => builder,
             // 建窗时就放到目标屏的矩形上（挂载时再精确铺一次），避免挂载前落在主屏。
             // 坐标是屏幕枚举给的平台桌面坐标；目前只有 macOS 有枚举，单位是点，与这里的逻辑坐标一致。
             Some(screen) => builder
@@ -384,9 +422,11 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             // Windows 目前没有显示器枚举，窗口不绑定屏，走不到这里；有了枚举之后在这里按新矩形重挂
             #[cfg(target_os = "windows")]
             let _ = (label, screen);
-            // Linux：离屏视图换尺寸，PipeWire 流在下一帧按新尺寸重新协商
+            // Linux：离屏视图换尺寸，PipeWire 流在下一帧按新尺寸重新协商；普通窗口由 Shell 扩展跟着屏铺
             #[cfg(target_os = "linux")]
-            if let Err(e) = tauri_runtime_kbcef::resize_offscreen(
+            if !self.offscreen {
+                let _ = (label, screen);
+            } else if let Err(e) = tauri_runtime_kbcef::resize_offscreen(
                 &label,
                 tauri_runtime_kbcef::OffscreenGeometry {
                     width: screen.width,

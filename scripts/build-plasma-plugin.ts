@@ -5,7 +5,7 @@
  *
  * 产物是一个 KPackage 目录 bin/linux/<arch>/plasma-wallpaper-plugin-build/package/org.kabegame.wallpaper（git 忽略，
  * 在架构子目录里，OSPlugin 清平台暂存目录时不会删掉它）。kabegame 的 dev / build 由 PlasmaWallpaperPlugin 拷进应用的
- * resources/plasma-wallpaper/，应用在切到插件模式时按修订号装进用户目录（`wallpaper/manager/plasma_install.rs`）。
+ * resources/plasma-wallpaper/，应用在切到插件模式时按修订号装进用户目录（`wallpaper/manager/plasma/install.rs`）。
  *
  * - 修订号取 `src-plasma-wallpaper-plugin/REVISION`，约定版本取同目录的 `PROTOCOL`。QML 模块 URI、`.so` 名与内容文件名
  *   都带修订号（`KabegameWallpaperR<修订号>`）：plasmashell 不重启时只有换名字才能加载新版本。改了插件就要加修订号。

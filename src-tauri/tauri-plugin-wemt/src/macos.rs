@@ -1,3 +1,6 @@
+//! macOS：把壁纸窗口放到桌面层（图标下方）并铺满一块屏，同 Windows 的 WorkerW 挂载。从 Kabegame 的
+//! `wallpaper/window_mount_macos.rs` 原样移过来，只把目标屏从应用的 `ScreenInfo` 换成矩形。
+
 #[cfg(target_os = "macos")]
 use dispatch2::run_on_main;
 #[cfg(target_os = "macos")]
@@ -11,30 +14,27 @@ use objc2_foundation::{NSPoint, NSRect, NSSize};
 #[cfg(target_os = "macos")]
 use tauri::WebviewWindow;
 
+/// 目标屏矩形：左上原点（主屏左上角）、y 向下的点坐标，`(x, y, width, height)`。
 #[cfg(target_os = "macos")]
-use crate::wallpaper::screens::ScreenInfo;
-
-/// 目标屏矩形：左上原点、y 向下的点坐标（[`ScreenInfo`] 的坐标系），`(x, y, width, height)`。
-#[cfg(target_os = "macos")]
-type TopLeftRect = (f64, f64, f64, f64);
+pub type DesktopRect = (f64, f64, f64, f64);
 
 /// 左上原点的屏矩形换成 Cocoa 屏幕坐标（主屏左下为原点、y 向上）下的 `(x, y, width, height)`：
-/// 两个坐标系的原点都在主屏上，只差主屏高度（与 `screens/mac.rs` 的换算互逆）。
+/// 两个坐标系的原点都在主屏上，只差主屏高度。
 #[cfg(target_os = "macos")]
-fn to_cocoa_frame(main_height: f64, (x, y, width, height): TopLeftRect) -> TopLeftRect {
+fn to_cocoa_frame(main_height: f64, (x, y, width, height): DesktopRect) -> DesktopRect {
     (x, main_height - (y + height), width, height)
 }
 
 /// 将 wallpaper WebView 窗口放到 macOS 桌面层（图标下方）并铺满 `screen`，返回窗口号（`NSWindow.windowNumber`）。
 ///
-/// `screen` 为 `None`（没有屏幕信息）时铺满窗口所在的屏，否则铺满指定的屏——每屏一窗时各窗口各自
+/// `screen` 是目标屏的矩形（[`DesktopRect`]），为 `None`（没有屏幕信息）时铺满窗口所在的屏——每屏一窗时各窗口各自
 /// frame 到各自的屏，不受「显示器具有单独的空间」设置影响。可以重复调用：屏的位置 / 尺寸变了之后
 /// 再调一次即重新铺放。
 /// 通过 dispatch2::run_on_main 保证 NSWindow 属性在主线程上设置（若已在主线程则直接执行）。
 #[cfg(target_os = "macos")]
 pub fn mount_to_desktop<R: tauri::Runtime>(
     window: &WebviewWindow<R>,
-    screen: Option<&ScreenInfo>,
+    screen: Option<DesktopRect>,
 ) -> Result<isize, String> {
     let ns_window_ptr = window
         .ns_window()
@@ -46,25 +46,17 @@ pub fn mount_to_desktop<R: tauri::Runtime>(
 
     // 用 usize 中转，使闭包只捕获 Send 类型，避免 *mut c_void 跨线程约束
     let ptr_as_usize = ns_window_ptr as usize;
-    let rect: Option<TopLeftRect> = screen.map(|screen| {
-        (
-            f64::from(screen.x),
-            f64::from(screen.y),
-            f64::from(screen.width),
-            f64::from(screen.height),
-        )
-    });
-    run_on_main(move |_| apply_desktop_window_props(ptr_as_usize as *mut std::ffi::c_void, rect))
+    run_on_main(move |_| apply_desktop_window_props(ptr_as_usize as *mut std::ffi::c_void, screen))
 }
 
 /// 实际设置 NSWindow 属性（必须在主线程调用，由 run_on_main 保证）。
 /// 与 LiveWallpaperMacOS 一致：无边框（无红绿灯）、铺满目标屏幕、桌面下层、透明、忽略鼠标。
-/// 窗口忽略鼠标，真实点击穿透给 Finder 的桌面；网页 / 场景壁纸的 iframe 自己向 `tauri-plugin-cursor` 登记，
-/// 由插件旁路观察光标后直接注入那个 frame。
+/// 窗口忽略鼠标，真实点击穿透给 Finder 的桌面（Kabegame 的网页 / 场景壁纸由 `tauri-plugin-cursor` 旁路观察光标后
+/// 直接注入 iframe）。
 #[cfg(target_os = "macos")]
 fn apply_desktop_window_props(
     ns_window_ptr: *mut std::ffi::c_void,
-    rect: Option<TopLeftRect>,
+    rect: Option<DesktopRect>,
 ) -> Result<isize, String> {
     const DESKTOP_WINDOW_LEVEL_MINUS_ONE: i64 = -2_147_483_623;
 
