@@ -55,3 +55,6 @@
 	path = third/msdfgen
 	url = https://github.com/Chlumsky/msdfgen.git
 	shallow = true
+[submodule "third/pipewire-rs"]
+	path = third/pipewire-rs
+	url = https://gitlab.freedesktop.org/pipewire/pipewire-rs.git

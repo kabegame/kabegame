@@ -1,0 +1,100 @@
+diff --git a/libspa/src/buffer/meta.rs b/libspa/src/buffer/meta.rs
+index 559edef89046cd51d5ffa8a395d0d358838e58dd..2eff002fb0e8d356e390fb8fdcfdbecce85bd389 100644
+--- a/libspa/src/buffer/meta.rs
++++ b/libspa/src/buffer/meta.rs
+@@ -104,7 +104,7 @@ impl MetaRegion {
+     }
+ 
+     pub fn is_valid(&self) -> bool {
+-        unsafe { spa_sys::spa_meta_region_is_valid(self.as_raw()) }
++        self.0.region.size.width != 0 && self.0.region.size.height != 0
+     }
+ }
+ 
+@@ -154,7 +154,7 @@ impl<'a> VideoDamageIter<'a> {
+     fn new(video_damage: &'a MetaVideoDamage) -> Self {
+         Self {
+             video_damage,
+-            pos: unsafe { spa_sys::spa_meta_first(video_damage.as_raw()) }.cast(),
++            pos: video_damage.as_raw().data.cast(),
+         }
+     }
+ }
+diff --git a/libspa/src/param/video/raw.rs b/libspa/src/param/video/raw.rs
+index 4ff42df2765cb755cda68cc911f2d3c9f03d6937..c5e38cb1355d8c1baa74f51b1c990260d09ce65a 100644
+--- a/libspa/src/param/video/raw.rs
++++ b/libspa/src/param/video/raw.rs
+@@ -223,27 +223,12 @@ pub struct VideoInfoRaw(spa_sys::spa_video_info_raw);
+ 
+ impl VideoInfoRaw {
+     pub fn new() -> Self {
+-        Self(spa_sys::spa_video_info_raw {
+-            format: VideoFormat::Unknown.as_raw(),
+-            flags: 0,
+-            modifier: 0,
+-            size: Rectangle {
+-                width: 0,
+-                height: 0,
+-            },
+-            framerate: Fraction { num: 0, denom: 0 },
+-            max_framerate: Fraction { num: 0, denom: 0 },
+-            views: 0,
+-            interlace_mode: VideoInterlaceMode::Progressive.as_raw(),
+-            pixel_aspect_ratio: Fraction { num: 0, denom: 0 },
+-            multiview_mode: 0,
+-            multiview_flags: 0,
+-            chroma_site: 0,
+-            color_range: 0,
+-            color_matrix: 0,
+-            transfer_function: 0,
+-            color_primaries: 0,
+-        })
++        // Zero-initialised so the struct literal does not name fields that only newer SPA headers
++        // have (`flags` since 0.3.65); zero is the value every field had here before.
++        let mut raw: spa_sys::spa_video_info_raw = unsafe { std::mem::zeroed() };
++        raw.format = VideoFormat::Unknown.as_raw();
++        raw.interlace_mode = VideoInterlaceMode::Progressive.as_raw();
++        Self(raw)
+     }
+ 
+     pub fn set_format(&mut self, format: VideoFormat) {
+@@ -254,20 +239,22 @@ impl VideoInfoRaw {
+         VideoFormat::from_raw(self.0.format)
+     }
+ 
++    #[cfg(feature = "v0_3_65")]
+     pub fn set_flags(&mut self, flags: VideoFlags) {
+         self.0.flags = flags.bits();
+     }
+ 
++    #[cfg(feature = "v0_3_65")]
+     pub fn flags(self) -> VideoFlags {
+         VideoFlags::from_bits_retain(self.0.flags)
+     }
+ 
+     pub fn set_modifier(&mut self, modifier: u64) {
+-        self.0.modifier = modifier;
++        self.0.modifier = modifier as _;
+     }
+ 
+     pub fn modifier(self) -> u64 {
+-        self.0.modifier
++        self.0.modifier as u64
+     }
+ 
+     pub fn set_size(&mut self, size: Rectangle) {
+@@ -404,9 +391,11 @@ impl Debug for VideoInfoRaw {
+         #[cfg(not(feature = "v0_3_65"))]
+         let interlace_mode = self.interlace_mode().as_raw();
+ 
+-        f.debug_struct("VideoInfoRaw")
+-            .field("format", &self.format())
+-            .field("flags", &self.flags())
++        let mut debug = f.debug_struct("VideoInfoRaw");
++        debug.field("format", &self.format());
++        #[cfg(feature = "v0_3_65")]
++        debug.field("flags", &self.flags());
++        debug
+             .field("modifier", &self.modifier())
+             .field("size", &self.size())
+             .field("framerate", &self.framerate())

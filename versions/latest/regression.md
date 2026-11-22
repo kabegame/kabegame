@@ -1,5 +1,34 @@
 # v4.7.0 regression
 
+## pipewire-rs 对着 Ubuntu 22.04 的 PipeWire 0.3.48 头文件编（third-patches/pipewire-rs）
+
+2026-11-22。22.04 虚拟机里 `deno task dev -c kabegame` 在 `libspa` 0.10.1 上失败：`spa_meta_region_is_valid` / `spa_meta_first` 找不到，`spa_video_info_raw` 没有 `flags`，`modifier` 是 i64 不是 u64。`libspa` 按 `v0_3_*` / `v1_*` feature 分档，这几处漏了门控，0.7 到 0.10.1 的每一版都这样，降 crate 版本解决不了。`third/pipewire-rs` 子模块钉在 `v0.10.1`，补丁 01 修掉这几处，四个 crate 经 `[patch.crates-io]` 同源替换。`stream.rs` 自己定义 0.3.48 头文件里没有的 `SPA_DATA_FLAG_MAPPABLE`（`1 << 3`）。对着最老的头文件编，用了更新的接口就在构建机上编译失败，不会等到 22.04 用户那里才缺符号。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PW1 补丁序列 | 本机 | `deno task patch pipewire-rs --check` | 从纯净基线重放 01 通过 | 2026-11-22 Claude：OK dry-run |
+| [x] | PW2 crate 单独对照 | 本机，单独的空 crate | `pipewire = "=0.10.1"` + `libspa = "=0.10.1"`，打补丁后分别对着 22.04 的 0.3.48 头文件、本机 1.6.2 头文件、1.6.2 加 `pipewire/v1_2_0` + `libspa/v1_6_0` 做 `cargo check` | 三种都编过；不打补丁时 0.3.48 下 `libspa` 报 7 个 error | 2026-11-22 Claude：符合 |
+| [x] | PW3 整个应用对着 0.3.48 | 本机，`PKG_CONFIG_PATH` 指向解出来的 22.04 `libspa-0.2-dev` / `libpipewire-0.3-dev`（0.3.48-1ubuntu3.2），单独的 `CARGO_TARGET_DIR` | `check-kabegame --skip vue` | 0 error | 2026-11-22 Claude：0 error，告警 20 不变；生成的 `spa_video_info_raw` 里 `format` 后面紧跟 `modifier`、没有 `flags`，确认用的是 0.3.48 头文件 |
+| [x] | PW4 本机头文件不回归 | 本机（PipeWire 1.6.2） | `check-kabegame --skip vue`；`test-kabegame kabegame --lib sink_monitor` | 0 error；单测通过 | 2026-11-22 Claude：0 error、告警 20；3 passed |
+| [x] | PW5 虚拟机 dev / 构建 | Ubuntu 22.04 虚拟机 | `deno task patch pipewire-rs`（或 `--all`）后 `deno task dev -c kabegame`，再出一次 deb | `libspa` 不再报错，构建完成 | 2026-11-22 用户：虚拟机里 dev 编过；出 deb 还没做 |
+| [ ] | PW6 22.04 上运行 | 22.04 虚拟机装出货的 deb | 对主程序 `ldd -r`；打开声明了处理音频的网页壁纸 | 没有 undefined symbol；启动正常，22.04 默认是 PulseAudio，频谱不动但不出错 | 链接用的库与编译用的头文件同为 0.3.48 |
+| [ ] | PW7 Plasma 推流不回归 | Plasma 6 dev | 插件模式显示壁纸，共享内存与 dmabuf 两条路各看一次 | 和以前一样 | `SPA_DATA_FLAG_MAPPABLE` 换成自己定义的常量，值与 1.6.2 头文件里的 `(1u<<3)` 相同，预计无变化 |
+
+## 桌面构建不再带 wry / WebKitGTK（tauri 补丁 21）
+
+2026-11-22。在新开的 Ubuntu 22.04 虚拟机里构建时，`soup3-sys` 找不到 `libsoup-3.0.pc` 失败。追下来，是 crates.io 的 `tauri-plugin-tracing` 用默认 feature 依赖 tauri，把 `wry` 打开了，连带 `tauri-runtime-wry`、`wry`、`webkit2gtk`、`soup3`、`javascriptcore` 一起进了桌面构建（kabegame 自己的桌面 tauri 依赖早已关掉默认 feature）。实际上这些库一个都没链接：dev 与 release 二进制的 `NEEDED` 里只有 GTK3、GDK、gdk-pixbuf，用户机器不受影响，只是构建机要多装开发包。tauri 补丁 21 把 `wry` 移出 tauri 的默认 feature，Android（用 Wry）在 `src-tauri/kabegame/Cargo.toml` 里显式开 `wry`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | TW1 依赖图 | 本机 | `cargo tree -p kabegame --features standard --target <三个桌面目标>`；Android 目标 `-i tauri-runtime-wry` | Linux、macOS 上没有 `soup3-sys` / `webkit2gtk` / `javascriptcore` / `wry` / `tauri-runtime-wry`；Android 仍有 `tauri-runtime-wry` | 2026-11-22 Claude：符合；Windows 只剩 `tauri-runtime` 上游无条件依赖的 `webview2-com`（纯 Rust 绑定，不要系统包） |
+| [x] | TW2 Linux 编译 | 本机 Linux | `check-kabegame --skip vue` | 0 error，告警数不变 | 2026-11-22 Claude：tauri、tauri-runtime 按新 feature 重编，日志里没有任何 webkit / soup / wry crate；告警 20，与之前相同 |
+| [x] | TW3 补丁序列 | 本机 | `deno task patch tauri --check` | 从纯净基线重放 01–21 通过 | 2026-11-22 Claude：OK dry-run |
+| [x] | TW4 新虚拟机构建 | 没装 `libwebkit2gtk-4.1-dev` / `libsoup-3.0-dev` 的 Ubuntu 22.04 | 在虚拟机里构建 kabegame | 不再要 libsoup / WebKitGTK 的开发包 | 2026-11-22 用户：新虚拟机里 dev 编过 |
+| [ ] | TW5 Linux 运行不回归 | Linux dev | 启动 dev：托盘、文件对话框、通知、主窗口与壁纸 | 和以前一样 | 运行时本来就没链接 WebKit，预计无变化 |
+| [ ] | TW6 Windows / macOS 编译 | Windows、macOS | `check-kabegame` | 编过 | 两个平台上 wry 同样不再被打开（2026-10-29 引入 `tauri-plugin-tracing` 之前就是这样构建的）；本机编不了 |
+| [ ] | TW7 Android | Android 构建环境 | `check-kabegame --mode android` 或打一次包 | 编过，Wry runtime 照常 | Android 的 tauri 依赖显式加了 `wry` |
+| [ ] | TW8 deb 声明 PipeWire 依赖 | 22.04 虚拟机打 deb | `dpkg-deb -f <deb> Depends`；在没装 libpipewire 的系统上 `apt install ./<deb>` | `Depends` 里有 `libpipewire-0.3-0`，apt 会一并装上 | 插件模式推流与 Linux 音频频谱直接链接 `libpipewire-0.3.so.0`（`NEEDED` 里有），之前 `tauri.conf.json.handlebars` 的 `depends` 漏了它，没装 PipeWire 库的系统上会连启动都失败；24.04 起的 `libpipewire-0.3-0t64` 在 amd64 上 Provides 旧名 |
+
 ## Linux GNOME 插件模式（B0b，实验）
 
 2026-11-22 Linux dev，嵌套 GNOME Shell 50.1（`scripts/gnome-nested.sh`，devkit，宿主是 KDE Plasma 6.6.4 Wayland）。GNOME 会话里插件模式由 `wallpaper/manager/gnome/` 提供：壁纸窗口是普通窗口（`WindowWallpaperManager::new_windowed`，不登记离屏、不推流，标题 `kabegame-wallpaper <序号>`），由 Kabegame 的 GNOME Shell 扩展按标题认出，改成桌面类型窗口（`set_type(DESKTOP)`、`stick`、`hide_from_window_list`）、铺满对应的屏、压到最底层，并跟着 `monitors-changed` 重新铺放。鼠标直接进壁纸窗口；壁纸页面与主窗口页面都经 `push_window_pointer` 把收到的鼠标交给应用（壁纸窗口是新的内部消息 7 / 8），窗口在全局坐标里的位置问扩展的 `app.kabegame.Shell1.GetWindowFrame`（只回答调用方进程自己的窗口），两个方向互相跟光标。扩展还在 `ignore/gnome-b0/`（不进仓库、不随应用分发，要手动链进 `~/.local/share/gnome-shell/extensions/` 并启用），Linux 没有显示器枚举，只有一个壁纸窗口，扩展把它放到主屏。

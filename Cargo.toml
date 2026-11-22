@@ -26,7 +26,7 @@ members = [
 # It is NOT a [patch] target — it is the reproducible SOURCE for the Android from-source build
 # (`bun run build:v8`). Excluded so that script's in-place `cargo build` inside it doesn't collide with
 # this workspace. Desktop/Android app builds keep the crates.io `v8` (see [patch.crates-io] note below).
-exclude = ["third/cef-rs", "third/deno", "third/tauri", "third/rusty_v8"]
+exclude = ["third/cef-rs", "third/deno", "third/tauri", "third/rusty_v8", "third/pipewire-rs"]
 resolver = "2"
 
 [workspace.package]
@@ -153,6 +153,13 @@ deno_core = { path = "third/deno/libs/core" }
 rsmpeg = { path = "third/rsmpeg" }
 # CCExtractor/rusty_ffmpeg 3a0752a + third-patches/rusty_ffmpeg（先 bun run patch rusty_ffmpeg）
 rusty_ffmpeg = { path = "third/rusty_ffmpeg" }
+# pipewire/pipewire-rs v0.10.1 + third-patches/pipewire-rs（先 `deno task patch pipewire-rs`）：libspa 0.10.1 不分档地用到
+# 0.3.65 起才有的 SPA 头文件内容，补丁让它对着 Ubuntu 22.04 自带的 0.3.48 头文件也能编。四个 crate 同源一起 patch：只换
+# libspa 的话，它经路径依赖拉到的 libspa-sys 与 registry 那份是两个包，撞 `links`。
+libspa = { path = "third/pipewire-rs/libspa" }
+libspa-sys = { path = "third/pipewire-rs/libspa-sys" }
+pipewire = { path = "third/pipewire-rs/pipewire" }
+pipewire-sys = { path = "third/pipewire-rs/pipewire-sys" }
 
 # 发布构建。cargo 只认工作区根的 profile，非根包的 [profile.*] 会被忽略（只打一行
 # "profiles for the non root package will be ignored" warning），所以这里是唯一生效的位置；

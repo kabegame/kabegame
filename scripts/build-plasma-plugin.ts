@@ -10,11 +10,19 @@
  * - 修订号取 `src-plasma-wallpaper-plugin/REVISION`，约定版本取同目录的 `PROTOCOL`。QML 模块 URI、`.so` 名与内容文件名
  *   都带修订号（`KabegameWallpaperR<修订号>`）：plasmashell 不重启时只有换名字才能加载新版本。改了插件就要加修订号。
  * - 需要 cmake（有 ninja 就用）、Qt 6.6 以上的 Quick / Qml 开发包、libpipewire-0.3 开发包。
- * - 用户的 Qt 不能比构建时用的 Qt 旧（moc 生成的代码按构建时的版本要符号）。出货要在 Qt 6.6 的环境里构建，本机构建只适合
- *   开发；构建时会打印用到的 Qt 版本。
+ * - 用户的 Qt 不能比构建时用的 Qt 旧（moc 生成的代码按构建时的版本要符号）。插件跑在 plasmashell 里、用的是用户系统的
+ *   Qt，Plasma 6 要求 Qt ≥ 6.6，所以出货要对着 Qt 6.6 构建：发行版的包管理器多半没有 6.6，用 Qt 官方二进制（aqtinstall）
+ *   装到一个目录，再用 `--qt` 指过去：
+ *
+ *     deno task build:plasma-plugin --qt ~/Qt/6.6.3/gcc_64
+ *
+ *   不带 `--qt` 时用系统的 Qt，只适合开发；构建时会打印用到的 Qt 版本，不是 6.6 时提醒。
+ * - CMake 构建目录按「系统 + Qt」分开（`cmake-r<修订>-<系统>-<Qt>`）：仓库在宿主机与构建虚拟机之间共享，CMake 缓存里记着
+ *   Qt 的路径与生成器，混用会拿错 Qt 或报生成器不一致。
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
@@ -60,6 +68,43 @@ function render(from: string, to: string, values: Record<string, string>): void 
   fs.writeFileSync(to, text);
 }
 
+/** `--qt <目录>` / `--qt=<目录>`：Qt 的安装前缀（下面有 `lib/cmake/Qt6`）。`~/` 开头的自己展开（`--qt=~/…` 时 shell 不展开）。 */
+function qtPrefixArg(): string | undefined {
+  const args = process.argv.slice(2);
+  let value: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--qt") value = args[++i];
+    else if (args[i].startsWith("--qt=")) value = args[i].slice("--qt=".length);
+    else fail(`认不出的参数 ${args[i]}（只有 --qt <Qt 安装目录>）`);
+  }
+  if (value === undefined) return undefined;
+  if (!value) fail("--qt 后面要跟 Qt 的安装目录，例如 ~/Qt/6.6.3/gcc_64");
+  const expanded = value === "~" || value.startsWith("~/") ? path.join(os.homedir(), value.slice(1)) : value;
+  const prefix = path.resolve(expanded);
+  if (!fs.existsSync(path.join(prefix, "lib", "cmake", "Qt6", "Qt6Config.cmake"))) {
+    fail(`${prefix} 下面没有 lib/cmake/Qt6/Qt6Config.cmake：--qt 要指到 Qt 的安装前缀（如 ~/Qt/6.6.3/gcc_64）`);
+  }
+  return prefix;
+}
+
+/** 构建目录名里的系统标识（`/etc/os-release` 的 ID 与 VERSION_ID，如 `ubuntu-22.04`）。 */
+function osTag(): string {
+  try {
+    const text = fs.readFileSync("/etc/os-release", "utf8");
+    const field = (key: string) => text.match(new RegExp(`^${key}="?([^"\\n]*)"?$`, "m"))?.[1] ?? "";
+    const tag = [field("ID"), field("VERSION_ID")].filter(Boolean).join("-");
+    return tag.replace(/[^A-Za-z0-9._-]/g, "_") || "linux";
+  } catch {
+    return "linux";
+  }
+}
+
+/** 构建目录名里的 Qt 标识：系统的叫 `system`，`--qt` 的取前缀最后两段（如 `6.6.3-gcc_64`）。 */
+function qtTag(prefix: string | undefined): string {
+  if (!prefix) return "system";
+  return `${path.basename(path.dirname(prefix))}-${path.basename(prefix)}`.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
 /** CMakeCache 里的 Qt 版本（打印给构建者看兼容下限）。 */
 function qtVersion(cmakeDir: string): string {
   const cache = fs.readFileSync(path.join(cmakeDir, "CMakeCache.txt"), "utf8");
@@ -73,10 +118,11 @@ function qtVersion(cmakeDir: string): string {
 function main(): void {
   if (process.platform !== "linux") fail("Plasma 壁纸插件只在 Linux 上构建");
   if (!has("cmake")) fail("找不到 cmake");
+  const qtPrefix = qtPrefixArg();
   const revision = readInteger("REVISION");
   const protocol = readInteger("PROTOCOL");
   const uri = `KabegameWallpaperR${revision}`;
-  const cmakeDir = path.join(PLASMA_WALLPAPER_BUILD_DIR, `cmake-r${revision}`);
+  const cmakeDir = path.join(PLASMA_WALLPAPER_BUILD_DIR, `cmake-r${revision}-${osTag()}-${qtTag(qtPrefix)}`);
 
   run("cmake", [
     "-S",
@@ -87,6 +133,8 @@ function main(): void {
     "-DCMAKE_BUILD_TYPE=Release",
     `-DKB_PLUGIN_REVISION=${revision}`,
     `-DKB_STREAM_PROTOCOL=${protocol}`,
+    // 显式给 Qt6_DIR：只设 CMAKE_PREFIX_PATH 时，find_package 仍会优先用缓存里的旧路径
+    ...(qtPrefix ? [`-DCMAKE_PREFIX_PATH=${qtPrefix}`, `-DQt6_DIR=${path.join(qtPrefix, "lib", "cmake", "Qt6")}`] : []),
   ]);
   run("cmake", ["--build", cmakeDir]);
 
@@ -123,7 +171,11 @@ function main(): void {
   fs.rmSync(PLASMA_WALLPAPER_PACKAGE, { recursive: true, force: true });
   fs.renameSync(staging, PLASMA_WALLPAPER_PACKAGE);
   log(`修订 ${revision}（URI ${uri}，约定版本 ${protocol}）→ ${path.relative(ROOT, PLASMA_WALLPAPER_PACKAGE)}`);
-  log(`用的 Qt ${qtVersion(cmakeDir)}：用户的 Qt 不能比它旧，出货要在 Qt 6.6 的环境里构建`);
+  const version = qtVersion(cmakeDir);
+  log(`用的 Qt ${version}（${qtPrefix ?? "系统"}）：用户的 Qt 不能比它旧`);
+  if (!version.startsWith("6.6.")) {
+    log(`注意：不是 Qt 6.6，这份插件只适合开发；出货用 --qt 指向 Qt 6.6（见 src-plasma-wallpaper-plugin/README.md）`);
+  }
 }
 
 main();

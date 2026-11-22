@@ -31,7 +31,25 @@ deno task build:plasma-plugin
 
 产物是 KPackage 目录 `bin/linux/<arch>/plasma-wallpaper-plugin-build/package/org.kabegame.wallpaper`。kabegame 的 dev / build
 （Linux standard）由 `PlasmaWallpaperPlugin` 拷进应用的 `resources/plasma-wallpaper/`，随 deb 分发；没有产物只告警。
-需要 cmake、Qt ≥ 6.6 的 Quick / Qml 开发包与 libpipewire-0.3 开发包。用户的 Qt 不能比构建时的旧，出货要在 Qt 6.6 的环境里构建。
+需要 cmake、Qt ≥ 6.6 的 Quick / Qml 开发包与 libpipewire-0.3 开发包。
+
+**出货要对着 Qt 6.6 构建。** 插件被 plasmashell 加载进它的进程，用的是用户系统里的 Qt（我们不带 Qt，带了会在同一进程里
+冲突）；Qt 的二进制兼容只往前：对着 6.6 编的能在 6.6 及以后加载，对着 6.10 编的在 6.6 上找不到新符号。Plasma 6 要求
+Qt ≥ 6.6，所以对着 6.6 编就覆盖全部 Plasma 6 用户。发行版的包管理器多半没有 6.6（Ubuntu 22.04 是 6.2、24.04 是 6.4），
+用 Qt 官方二进制装到一个目录，再用 `--qt` 指过去：
+
+```bash
+sudo apt install python3-pip                                      # Ubuntu 22.04 默认没有 pip
+python3 -m pip install --user aqtinstall
+python3 -m aqt install-qt linux desktop 6.6.3 gcc_64 -O ~/Qt      # 6.6 的 arch 名是 gcc_64，6.7 起是 linux_gcc_64
+deno task build:plasma-plugin --qt ~/Qt/6.6.3/gcc_64
+```
+
+- 出货在 Ubuntu 22.04 构建虚拟机里做（glibc 2.35，比所有 Plasma 6 发行版都旧），见
+  `cocs/build/LINUX_BUILD_WORKFLOW.md`「构建步骤」。Ubuntu 22.04 本身没有 Plasma 6，那里的用户照常用 Kabegame，只是没有插件模式。
+- 不带 `--qt` 时用系统的 Qt，只适合开发；脚本最后打印用到的 Qt 版本，不是 6.6 时提醒。
+- CMake 构建目录按系统与 Qt 分开（`cmake-r<修订>-<系统>-<Qt>`）：仓库在 host 与构建虚拟机之间共享，CMake 缓存记着 Qt 的
+  路径与生成器，混用会拿错 Qt。产物目录是同一个，出货时构建完插件紧接着打包，中间别在 host 上重新构建插件。
 
 ## 安装、升级与卸载（应用侧）
 

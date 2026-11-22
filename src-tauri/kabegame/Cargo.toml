@@ -111,7 +111,9 @@ gtk = { version = "0.18", features = ["v3_24"], optional = true }
 libc = "0.2"
 # 场景快捷方式（wallpaper/wpe_shortcut/unix.rs，与 macOS 共用）：拆启动参数、取命令行的程序名，由 wpe feature 开启
 shlex = { version = "1.3", optional = true }
-# 插件模式的壁纸推流（wallpaper/manager/plasma/pipewire）：用底层 FFI（pw_sys）与 spa 的 pod 序列化器，帧回调在 CEF UI 线程上直接入队
+# 插件模式的壁纸推流（wallpaper/manager/plasma/pipewire）：用底层 FFI（pw_sys）与 spa 的 pod 序列化器，帧回调在 CEF UI 线程上直接入队。
+# 源码经根 Cargo.toml 的 [patch.crates-io] 来自 third/pipewire-rs（third-patches/pipewire-rs：对着 Ubuntu 22.04 的 0.3.48 头文件也能编）；
+# 不开 v0_3_* / v1_* feature，用到更新的 PipeWire 接口会在构建机上编译失败，而不是在老系统的用户那里缺符号。
 pipewire = { version = "0.10", optional = true }
 # 插件模式的 dmabuf 推流（wallpaper/manager/plasma/pipewire/gpu.rs）：运行时 dlopen 系统的 libEGL / libGLESv2 / libgbm，装不上就退回共享内存
 libloading = { version = "0.8", optional = true }

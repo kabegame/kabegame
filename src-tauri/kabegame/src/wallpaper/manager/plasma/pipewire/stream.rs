@@ -70,6 +70,10 @@ pub type IdleCallback = Box<dyn Fn() + Send + Sync>;
 /// 推流期间多久没有新帧就请一整帧（同时是新消费者最多等多久拿到第一帧）。
 const IDLE_REFRESH: Duration = Duration::from_secs(1);
 
+/// `SPA_DATA_FLAG_MAPPABLE`（数据能直接 mmap）：比 0.3.65 还新的 PipeWire 才有这个宏，构建机（Ubuntu 22.04）的 0.3.48
+/// 头文件里没有，所以自己写。它只是 `spa_data.flags` 里的一位，不认识它的消费端忽略。
+const SPA_DATA_FLAG_MAPPABLE: u32 = 1 << 3;
+
 static PW_INIT: Once = Once::new();
 
 /// 一路壁纸流。drop 时断开并销毁节点。
@@ -936,7 +940,7 @@ unsafe extern "C" fn on_add_buffer(data: *mut c_void, buffer: *mut pw_sys::pw_bu
                 return;
             }
             d.type_ = spa_sys::SPA_DATA_MemFd;
-            d.flags = spa_sys::SPA_DATA_FLAG_READWRITE | spa_sys::SPA_DATA_FLAG_MAPPABLE;
+            d.flags = spa_sys::SPA_DATA_FLAG_READWRITE | SPA_DATA_FLAG_MAPPABLE;
             d.fd = fd as i64;
             d.mapoffset = 0;
             d.maxsize = size as u32;

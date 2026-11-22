@@ -163,7 +163,7 @@ sudo apt install ./Kabegame-standard_*_amd64.deb
 
 - 遇到问题，请提交 [Bug report](https://github.com/kabegame/kabegame/issues/new?template=bug_report.md)。
 - 希望支持新的来源，可以在[插件仓库](https://github.com/kabegame/crawler-plugins)提交插件或提出需求。
-- 想改进应用本体，目前暂不支持，因为需要被 Kabegame 补丁后的 Chromium，而目前还没有发布二进制，这也是没有走 github action 流水线构建的一个很大的原因。
+- 想改进应用本体，见正在撰写的 [构建文档](./BUILD.md)。应用需要被 Kabegame 补丁后的 Chromium，而目前还没有发布二进制，这也是没有走 github action 流水线构建的一个很大的原因。
 - 文档站文档、应用内文本翻译、截图和插件说明同样是很有价值的贡献。
 
 如果 Kabegame 对你有帮助，欢迎点一个 Star。它会让更多用户和潜在插件作者发现这个项目，对 Kabegame 来说也是一份鼓励。

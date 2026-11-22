@@ -556,8 +556,12 @@ Rust 应用、共享库与自定义 Tauri 插件统一位于 `src-tauri/`；插�
   - 适用场景：新增/升级运行时动态库;排查最终用户报 `libx264.so.X: cannot open`、macOS `Library not loaded`;调整 build-ffmpeg / DLL 复制 / dmg fixup / NSIS hook 流程。
 
 - [build/LINUX_BUILD_WORKFLOW.md](build/LINUX_BUILD_WORKFLOW.md)
-  - 主题：**本机 Linux 构建工作流**——因本机 glibc 2.43 太新，出货用的 `.deb` 在 Ubuntu 22.04 guest（glibc 2.35）里做最终链接（不重编 CEF/Chromium/V8）。核心是 **profile 隔离 + 构建属地**模型：guest 完整挂载仓库、等同一台开发机（无 `target-22`、无 `.vm/cef-prod` 侧拷贝、无 `-22`/`-web` 后缀）；host 只跑 debug（`target/debug`），**release 与 FFmpeg/x264 产物构建只在 guest**（`target/release`），由 `requireUbuntu2204()` 守卫强制（逃生阀 `KB_ALLOW_HOST_BUILD=1`），chromium/v8 构建豁免。涵盖 virtiofs 同路径挂载、`paths.ts` 的路径/target 单一来源、glibc 地板验证；以及踩坑：**预编译 `.a` 的 `__isoc23_*`（2.38 新名符号、无版本标签、易漏判）必须重编 x264+FFmpeg**、`.pc` 烧死的绝对路径、构建脚本写死 `target/release`、`package-plugin.ts` 误跑 host cli、web docker 构建会覆盖树内 Linux FFmpeg 产物。
+  - 主题：**本机 Linux 构建工作流**——因本机 glibc 2.43 太新，出货用的 `.deb` 在 Ubuntu 22.04 guest（glibc 2.35）里做最终链接（不重编 CEF/Chromium/V8）。核心是 **profile 隔离 + 构建属地**模型：guest 完整挂载仓库、等同一台开发机（无 `target-22`、无 `.vm/cef-prod` 侧拷贝、无 `-22`/`-web` 后缀）；host 只跑 debug（`target/debug`），**release 与 FFmpeg/x264 产物构建只在 guest**（`target/release`），由 `requireUbuntu2204()` 守卫强制（逃生阀 `KB_ALLOW_HOST_BUILD=1`），chromium/v8 构建豁免。涵盖 virtiofs 同路径挂载、`paths.ts` 的路径/target 单一来源、glibc 地板验证、guest 要装的包（含 PipeWire 开发包，22.04 的 0.3.48 头文件靠 `third-patches/pipewire-rs` 编过；补丁 21 起不再要 WebKitGTK / libsoup）、出货的 Plasma 壁纸插件对着 Qt 官方 6.6 构建（aqtinstall + `build:plasma-plugin --qt`）；以及踩坑：**预编译 `.a` 的 `__isoc23_*`（2.38 新名符号、无版本标签、易漏判）必须重编 x264+FFmpeg**、`.pc` 烧死的绝对路径、构建脚本写死 `target/release`、`package-plugin.ts` 误跑 host cli、web docker 构建会覆盖树内 Linux FFmpeg 产物。
   - 适用场景：出货 Linux deb（标准流程）；判断某个预编译 `.a`（x264/FFmpeg/v8）能否跨 glibc 复用；排查 `version 'GLIBC_2.xx' not found`、`undefined symbol: __isoc23_*`、`.pc` prefix 失效、构建被守卫拒绝、`CARGO_TARGET_DIR` 未被某脚本尊重；复现/维护 22.04 构建 guest。
+
+- [../third-patches/pipewire-rs/README.md](../third-patches/pipewire-rs/README.md)
+  - 主题：PipeWire 的 Rust 绑定 pipewire-rs 的上游 vendor base 与补丁。`third/pipewire-rs` 钉在 `v0.10.1`（crates.io 四个包的发布提交 `70b20f09`），`libspa` / `libspa-sys` / `pipewire` / `pipewire-sys` 一起经 `[patch.crates-io]` 指过去（只换 `libspa` 会多出第二份 `libspa-sys`、撞 `links`）；补丁 01 让 `libspa` 不开版本 feature 时不碰 0.3.65 起才有的头文件内容（`spa_meta_region_is_valid` / `spa_meta_first` 改在 Rust 里算，`VideoInfoRaw` 的 `flags` 按 `v0_3_65` 门控、`modifier` 两种布局都转成 u64），从而对着 Ubuntu 22.04 的 0.3.48 头文件也能编；为什么要对着最老的头文件编、怎么验证与 re-vendor。
+  - 适用场景：22.04 构建机上 `libspa` 报 `spa_meta_region_is_valid` / `spa_meta_first` 找不到、`spa_video_info_raw` 没有 `flags` 或 `modifier` 类型不符；新 checkout 后准备 Linux 构建（先 `deno task patch pipewire-rs`）；升级 pipewire-rs；给 `pipewire` / `libspa` 开版本 feature 前（开了就要求构建机有对应版本的头文件）。
 
 ## 应用更新（`updater/`）
 

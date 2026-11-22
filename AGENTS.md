@@ -126,8 +126,10 @@ Kabegame 是一款跨平台动漫壁纸爬取与管理工具，使用 **Tauri 2*
 - `deno task build:ffmpeg`：构建桌面端或 Android 的 FFmpeg 静态库。
 - `deno task build:chromium`：构建 CEF/Chromium 运行时。
 - `deno task build:wpesl2wgsl`：构建场景壁纸着色器翻译器的 wasm（产物 `bin/wasm/wpesl2wgsl/`；kabegame 命令不带 `--skip vue` 时自动拷进前端，缺失只告警）。
-- `deno task build:plasma-plugin`：构建 Linux 插件模式的 Plasma 壁纸插件（产物 `bin/linux/<arch>/plasma-wallpaper-plugin-build/package/`；kabegame 的 Linux dev / build 拷进 resources，缺失只告警）。
+- `deno task build:plasma-plugin`：构建 Linux 插件模式的 Plasma 壁纸插件（产物 `bin/linux/<arch>/plasma-wallpaper-plugin-build/package/`；kabegame 的 Linux dev / build 拷进 resources，缺失只告警；出货加 `--qt <Qt 6.6 安装前缀>`，见插件 README）。
 - `deno task build:wpefont`：构建场景文本的字体引擎 wasm（FreeType + HarfBuzz，产物 `bin/wasm/wpefont/`；首次下载 wasi-sdk 工具链到 `bin/wasm/wpefont/toolchain/`，要带 wasm32 目标的 LLVM clang；kabegame 命令不带 `--skip vue` 时自动拷进场景宿主，缺失只告警）。
+
+完整的构建文档在 [BUILD.md](./BUILD.md).
 
 ### 计划与变更说明格式
 编写计划或描述代码变更时，按明确的**点**来组织内容。每个点下面按**新增 / 修改 / 删除**分组，每项可选择附带缩进说明。将现状与变更分开：

@@ -19,7 +19,7 @@ deno task dev:frontend            # 仅启动前端（不含 Tauri，端口 1420
 
 场景宿主 `apps/wpe-scene`（P3-0）：桌面 dev / build 不带 `--skip vue` 时由 `WpeSceneHostPlugin` 先构建；Android / Web 不构建，Android 还会删掉 `resources/wpe-scene` 的 prod 残留，免得被注入 APK。dev 用 `--mode development` 直接写进 `<target>/debug/resources/wpe-scene`（不经 tauri-build 复制，改宿主后跑 `deno task --cwd apps/wpe-scene build --mode development` 或带同一 mode 的 `watch`、重载 iframe 即生效，不重编 Rust），并删掉 `src-tauri/kabegame/resources/wpe-scene` 的 prod 残留；build 写进 `src-tauri/kabegame/resources/wpe-scene` 随安装包分发。见 `cocs/wpe/scene/HOST.md`「场景宿主」。
 
-Plasma 壁纸插件 `src-plasma-wallpaper-plugin/`（Linux 插件模式）：`deno task build:plasma-plugin` 用 cmake 构建 C++ QML 模块、拼出 KPackage 到 `bin/linux/<arch>/plasma-wallpaper-plugin-build/package/org.kabegame.wallpaper`（架构子目录，OSPlugin 清暂存目录时不删）。Linux standard 的 dev / build 由 `PlasmaWallpaperPlugin` 拷进 resources（dev 直接写 `<target>/debug/resources/plasma-wallpaper` 并删掉 prod 残留，build 写 `src-tauri/kabegame/resources/plasma-wallpaper`）；其它平台与 Android 删掉 prod 残留；没有产物只告警。改了插件要加 `REVISION`；用户的 Qt 不能比构建时的旧，出货要在 Qt 6.6 的环境里构建（本机构建只适合开发）。
+Plasma 壁纸插件 `src-plasma-wallpaper-plugin/`（Linux 插件模式）：`deno task build:plasma-plugin` 用 cmake 构建 C++ QML 模块、拼出 KPackage 到 `bin/linux/<arch>/plasma-wallpaper-plugin-build/package/org.kabegame.wallpaper`（架构子目录，OSPlugin 清暂存目录时不删）。Linux standard 的 dev / build 由 `PlasmaWallpaperPlugin` 拷进 resources（dev 直接写 `<target>/debug/resources/plasma-wallpaper` 并删掉 prod 残留，build 写 `src-tauri/kabegame/resources/plasma-wallpaper`）；其它平台与 Android 删掉 prod 残留；没有产物只告警。改了插件要加 `REVISION`；用户的 Qt 不能比构建时的旧，出货要对着 Qt 6.6 构建：`--qt <Qt 安装前缀>` 指向 Qt 官方二进制装的 6.6（如 `~/Qt/6.6.3/gcc_64`），不带时用系统 Qt、只适合开发；CMake 构建目录按系统与 Qt 分开（`cmake-r<修订>-<系统>-<Qt>`），见插件 README「构建与分发」。
 
 ### 构建
 ```bash

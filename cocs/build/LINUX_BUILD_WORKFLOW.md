@@ -49,7 +49,7 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
   `192.168.122.74`（按 MAC 的静态 DHCP 绑定），host 侧 `~/.ssh/config` 别名 `ubuntu22`
   免密登录。规格 8G/6core；`<memoryBacking>` 用 `memfd`+`shared`（virtiofs 前提）。
 - **源码共享**：virtiofs（host 装 `virtiofsd`），filesystem 设备 tag `kbg` → source
-  `/home/cm/i/kabegame`。**guest 必须挂到与 host 完全相同的路径 `/home/cm/i/kabegame`**
+  `/home/cm/code/kabegame`。**guest 必须挂到与 host 完全相同的路径 `/home/cm/code/kabegame`**
   （见踩坑 3）。**整棵树完整挂载**——CEF distrib、FFmpeg 产物、node_modules 全在树内，
   guest 不需要任何侧拷贝。
 - **guest 自备构建环境，仓库不再下发任何 env 脚本。** 曾经的 `.vm/env.sh` 已删除——它当年
@@ -66,7 +66,17 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
   - `.vm/cef-prod` 已废除：CEF distrib 就在树内 `bin/linux/x86_64/cef-build/`。
 - **guest 依赖**（apt）：`build-essential pkg-config cmake git curl file zlib1g-dev
   libssl-dev libgtk-3-dev libglib2.0-dev clang libclang-dev libayatana-appindicator3-dev
-  nasm`；`ubuntu-test` 开了免密 sudo；加了 6G swapfile 防链接期 OOM。
+  nasm libpipewire-0.3-dev libspa-0.2-dev`；`ubuntu-test` 开了免密 sudo；加了 6G swapfile 防链接期 OOM。
+  - PipeWire：插件模式推流与音频频谱直接链接 `libpipewire-0.3`（deb 的 `depends` 里有 `libpipewire-0.3-0`）。
+    22.04 的开发包是 0.3.48，pipewire-rs（`libspa` 0.10.1）有几处不分档地用了 0.3.65 起才有的头文件内容，由
+    `third-patches/pipewire-rs` 补上（仓库与 host 共享，在哪一侧 `deno task patch pipewire-rs` / `--all` 一次即可）。
+    就是要对着最老的头文件编：用了 0.3.48 没有的接口，在构建机上就编译失败，不会等到 22.04 的用户那里才缺符号。
+  - **不需要** `libwebkit2gtk-4.1-dev` / `libsoup-3.0-dev`：tauri 补丁 21 起桌面构建不带 wry，`soup3-sys` 等不再编译
+    （之前它们只在构建时要、从没被链接）。
+- **Plasma 壁纸插件的 Qt 6.6**（只给出货的插件用）：apt 的 Qt 是 6.2，插件要对着 Plasma 6 的 Qt 下限 6.6 构建，用 Qt
+  官方二进制装在 guest 本地：`sudo apt install python3-pip && python3 -m pip install --user aqtinstall && python3 -m aqt install-qt linux desktop 6.6.3 gcc_64 -O ~/Qt`（`-m` 的写法不依赖 `~/.local/bin` 在 PATH 里）（6.6 的 arch
+  名是 `gcc_64`，6.7 起改叫 `linux_gcc_64`）。Qt 官方二进制的 glibc 要求比 2.35 低。CMake 若报找不到 OpenGL / XKB，补装
+  `libgl-dev libegl-dev libxkbcommon-dev`。原因与兼容关系见 `src-plasma-wallpaper-plugin/README.md`「构建与分发」。
 
 ## virtiofs 挂载配置
 
@@ -84,7 +94,7 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
 <filesystem type='mount' accessmode='passthrough'>
   <driver type='virtiofs'/>
   <binary path='/usr/libexec/virtiofsd'/>
-  <source dir='/home/cm/i/kabegame'/>
+  <source dir='/home/cm/code/kabegame'/>
   <target dir='kbg'/>
 </filesystem>
 ```
@@ -94,9 +104,9 @@ Debian 13=2.41、Fedora 41…），报 `version 'GLIBC_2.43' not found`。
 **guest 侧**：挂载点必须与 host 路径完全一致（踩坑 3）：
 
 ```bash
-sudo mkdir -p /home/cm/i/kabegame
+sudo mkdir -p /home/cm/code/kabegame
 # /etc/fstab 追加(nofail:host 侧设备缺席时不阻塞开机)
-kbg /home/cm/i/kabegame virtiofs defaults,nofail 0 0
+kbg /home/cm/code/kabegame virtiofs defaults,nofail 0 0
 sudo mount -a
 ```
 
@@ -106,18 +116,22 @@ guest 内读写即以属主身份进行，无需额外权限配置（踩坑 7）
 ## 构建步骤（`.vm/run-build.sh`）
 
 ```
-ssh ubuntu22 'setsid bash /home/cm/i/kabegame/.vm/run-build.sh > \
-  /home/cm/i/kabegame/.vm/build.log 2>&1 < /dev/null &'
+ssh ubuntu22 'setsid bash /home/cm/code/kabegame/.vm/run-build.sh > \
+  /home/cm/code/kabegame/.vm/build.log 2>&1 < /dev/null &'
 ```
 
-脚本三段（每段失败写不同 rc 到 `.vm/build.done`）：
+共四步。`run-build.sh` 只做 1、2、4（每段失败写不同 rc 到 `.vm/build.done`；脚本是 guest 本地文件、不入库），第 3 步的插件目前手动跑：
 
 1. **重编 x264+FFmpeg**：`deno task build:ffmpeg`（踩坑 1），校验 `libx264.a` 无 `__isoc23`。
    产物落 `bin/linux/x86_64/{FFmpeg,x264}-build/`，host 的 debug 开发也用这一份。
 2. **构建 kabegame-cli（release）**：`deno task b -c kabegame-cli --release`，并 `--version`
    自检**能在 guest glibc 2.35 上运行**。cli 是打包 `.kgpg` 的工具，主构建的插件打包步骤
    会调用它（踩坑 4）。
-3. **构建主程序 + deb**：`deno task b -c kabegame --release` → `target/release/bundle/deb/*.deb`
+3. **构建 Plasma 壁纸插件**：`deno task build:plasma-plugin --qt ~/Qt/6.6.3/gcc_64`，日志最后一行应是「用的 Qt
+   6.6.3」。产物在树内 `bin/linux/x86_64/plasma-wallpaper-plugin-build/package/`，下一步打包时拷进 resources；没有产物
+   时 deb 照常出、只是不带插件（插件模式只在已经装过插件的 Plasma 6 上可选）。CMake 构建目录按系统与 Qt 分开
+   （`cmake-r<修订>-ubuntu-22.04-6.6.3-gcc_64`），不会和 host 开发用的那份互相污染。
+4. **构建主程序 + deb**：`deno task b -c kabegame --release` → `target/release/bundle/deb/*.deb`
    （Linux 打包目标仅 `deb`，无 appimage/rpm）。`--release` 触发 **ReleasePlugin**：
    `-C codegen-units=1`、构建后自动把 deb 以规范名
    `Kabegame-<mode>_<ver>_amd64.deb` 复制到共享盘的 `release/`（host 直接可见），无需手拷。
@@ -154,7 +168,7 @@ host 的 debug 迭代不会污染 guest 的 release 产物。真正要防的是�
 由守卫拦下。切换到本模型时清一次存量 `target/release/`。
 
 **3. 预编译产物里烧死的 host 绝对路径。** FFmpeg/x264 的 `.pc` 里
-`prefix=/home/cm/i/kabegame/...` 是绝对路径。若 guest 把源码挂在别的路径（如
+`prefix=/home/cm/code/kabegame/...` 是绝对路径。若 guest 把源码挂在别的路径（如
 `/mnt/kbg`），`.pc` 在 guest 解析不到 → 链接找不到 `.a`。**对策：guest 把 virtiofs 挂到
 与 host 完全相同的路径**，一次性消除所有此类问题（不止 `.pc`）。这也是"guest = 等同开发机"
 这条设计的硬性前提。
