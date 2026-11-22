@@ -1,0 +1,16 @@
+diff --git a/crates/tauri/Cargo.toml b/crates/tauri/Cargo.toml
+index 47e9bfc1df4a1162f13c1fa1e56dd3bda27e6624..2eae75ecad3c45813b3b2e58f2e8089fe6872ca8 100644
+--- a/crates/tauri/Cargo.toml
++++ b/crates/tauri/Cargo.toml
+@@ -184,8 +184,10 @@ cargo_toml = "1.0"
+ http-range = "0.1.5"
+ 
+ [features]
++# kabegame fork: `wry` 不在默认 feature 里。桌面用 CEF runtime(tauri-runtime-kbcef),带默认 feature 依赖 tauri 的
++# 第三方插件(如 tauri-plugin-tracing)不再把 wry 拉进来,Linux 构建因此不需要 webkit2gtk / soup3 的开发包;
++# 要 Wry 的(Android)显式开 `wry`。
+ default = [
+-  "wry",
+   "compression",
+   "common-controls-v6",
+   "dynamic-acl",

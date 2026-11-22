@@ -245,6 +245,16 @@ the frame that made the call. Design and app usage: the "子 frame IPC" section 
   (wry) must ignore them, since its requests count as the main frame. Plugin scripts and the
   isolation pattern stay out. Test: `manager::webview::tests::subframe_bridge_scripts_are_the_main_frame_bridge`.
   Re-check on bump: the script list in `prepare_pending_webview`, `WebviewAttributes::new`.
+- `21-tauri-default-without-wry.patch` — drops `wry` from tauri's `default` features. Third-party
+  plugins that depend on `tauri` with default features (`tauri-plugin-tracing`) used to turn `wry`
+  back on for the desktop CEF build, which pulled in `tauri-runtime-wry`, `wry`, `webkit2gtk`,
+  `soup3` and `javascriptcore`, so building on Linux needed `libwebkit2gtk-4.1-dev` /
+  `libsoup-3.0-dev` (nothing from them was linked: the binaries' `NEEDED` list had none of
+  them). Android, which runs on Wry, enables `wry` explicitly in `src-tauri/kabegame/Cargo.toml`.
+  Together with 06, Linux and macOS desktop builds no longer contain any wry / WebKit crate;
+  Windows still gets `webview2-com` from `tauri-runtime` (pure Rust bindings, no system
+  packages). Re-check on bump: the `default` list, and that no workspace crate relies on
+  `tauri::Wry` outside Android (`cargo tree -e features -i tauri` shows who enables `default`).
 
 The CEF runtime side of 18–19 (not a patch): `protocol::attach_request_frame` also inserts
 `SubframeId(frame.identifier())` for subframes, `ipc::post_message_request` carries it and accepts
