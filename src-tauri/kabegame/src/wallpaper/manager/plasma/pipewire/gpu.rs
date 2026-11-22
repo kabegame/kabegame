@@ -7,8 +7,8 @@
 //! - 每次拷完 `glFinish`：CEF 在回调返回后会重用它的缓冲，消费者拿到缓冲时内容也必须已经写完。
 //!
 //! 三个库都在运行时 `dlopen` 系统的（`libEGL.so.1`、`libGLESv2.so.2`、`libgbm.so.1`），不在编译期链接：一是装不上时整个
-//! dmabuf 路径退回共享内存，不影响启动；二是 CEF 自带的 ANGLE 也叫 `libEGL.so` / `libGLESv2.so`（在 exe 旁），链接期依赖
-//! 容易和它混。
+//! dmabuf 路径退回共享内存，不影响启动；二是 CEF 151 之前在 exe 旁带 ANGLE 的 `libEGL.so` / `libGLESv2.so`（之后静态
+//! 链进 libcef），链接期依赖容易和它混。
 //!
 //! GL 上下文全进程一个，所有调用都持锁、调用前设为当前、调用后还原调用线程原来的当前上下文：帧回调在 CEF UI 线程，
 //! 建删缓冲在 PipeWire 的线程，同一时刻只能有一个线程持有它。

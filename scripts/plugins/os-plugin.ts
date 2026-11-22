@@ -21,10 +21,10 @@ import path from "path";
 
 // CEF 运行时白名单:除下列单文件外,locales 只保留 kabegame 支持的 UI 语言 + en-US 回退
 // (CEF locales 是 Chromium 自身 UI 文案,与 app 的 Vue i18n 无关;全量 220 个 ~50MB)。
+// 没有 libEGL / libGLESv2：Chromium M151 起桌面端把 ANGLE 静态链进 libcef（crrev.com/f78f92beeb），剩下的是没有导出、
+// 从不加载的空壳，CEF 156 的分发包不再带它们（上游 12add0082「distrib: Remove stub ANGLE binaries」）。Windows 同。
 const CEF_RUNTIME_FILES = [
   "libcef.so",
-  "libEGL.so",
-  "libGLESv2.so",
   "libvulkan.so.1",
   "libvk_swiftshader.so",
   "vk_swiftshader_icd.json",
@@ -46,8 +46,6 @@ const WINDOWS_CEF_RUNTIME_FILES = [
   "resources.pak",
   "chrome_100_percent.pak",
   "chrome_200_percent.pak",
-  "libEGL.dll",
-  "libGLESv2.dll",
   "vk_swiftshader.dll",
   "vk_swiftshader_icd.json",
   "vulkan-1.dll",

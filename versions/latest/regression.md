@@ -1,5 +1,15 @@
 # v4.7.0 regression
 
+## 打包不再收集 CEF 的 ANGLE 空壳库（CEF 156）
+
+2026-11-22。CEF 156 的分发包不再带 `libEGL` / `libGLESv2`（Chromium M151 起 ANGLE 静态链进 libcef，上游 `12add0082`），Linux 出货构建在收集 CEF 运行时时报缺 `libEGL.so`。两份清单去掉这两项。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | CA1 清单与产物一致 | 本机 Linux | 对照 `bin/linux/x86_64/cef-build` 与清单；`deno check scripts/plugins/os-plugin.ts` | 清单里 9 个文件都在；类型检查通过 | 2026-11-22 Claude：通过；dev 一直没有这两个库也照常跑（场景壁纸 WebGPU 正常） |
+| [ ] | CA2 Linux 出货 | Ubuntu 22.04 构建虚拟机 | `deno task b` 出 deb，装上运行 | 收集通过，deb 里没有 `libEGL.so` / `libGLESv2.so`；主界面、场景壁纸、网页壁纸正常 | |
+| [ ] | CA3 Windows 出货 | Windows | 出 NSIS 安装包，装上运行 | 收集通过，安装目录没有 `libEGL.dll` / `libGLESv2.dll`；同上正常 | |
+
 ## Plasma 壁纸插件自己的消费端（修订 2，修 plasmashell 冻住）
 
 2026-11-22。插件模式下 N 卡上持续推场景帧约 43 s 后 plasmashell 丢 GL 上下文：任务栏不再更新（点击有反应、没有悬浮效果）、桌面闪旧帧、D-Bus 调用十几秒。插件修订 2 不再用 KPipeWire 的 `PipeWireSourceItem`，改用自己的 `KabegameStreamItem`。本机：Plasma 6.6.4 Wayland、Qt 6.10.2、NVIDIA 580、RTX 4090 D + 4070、4K 分数缩放 1.45。
