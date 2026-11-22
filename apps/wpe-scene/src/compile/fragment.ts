@@ -104,8 +104,6 @@ export interface FragmentDelta {
   userTextures: { from: number; list: UserTextureSource[] };
   /** 场景级绑定（`user-texture`，第一次出现的属性） */
   bindings: SceneBinding[];
-  /** 新出现的、在 WPE assets 里存在的脚本资源路径 */
-  assetPaths: string[];
 }
 
 // ———— 遍历辅助 ————

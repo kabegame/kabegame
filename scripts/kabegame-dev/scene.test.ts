@@ -87,6 +87,7 @@ async function fixture(probe: Record<string, (args: unknown) => unknown>): Promi
       invoke: async (command: string, args: unknown) => {
         invokes.push({ command, args: JSON.parse(JSON.stringify(args)) });
         if (command === "wpe_scene_target") return { path: "D:\\proj\\p4c-cp", sceneAssets: ["D:\\assets"] };
+        if (command === "wpe_scene_files") return ["scene.pkg", "models/util/solidlayer.json"];
         if (command === "get_wpe_web_properties") {
           return {
             metadataId: 3,
@@ -563,6 +564,8 @@ describe("粒子接口的参数透传", () => {
     const particles = { dts: [0.1, 0.2] };
     const response = await renderFrame(f.s, "h-1", { imageId: "14108", particles, scripts: true, userProperties: {} });
     assert.equal(calls()[0].scripts, true);
+    // 跑脚本时按图片 id 取场景文件表转交（createLayer 的 __workshopId 改写用）
+    assert.deepEqual(calls()[0].sceneFiles, ["scene.pkg", "models/util/solidlayer.json"]);
     assert.deepEqual(calls()[0].particles, particles);
     assert.equal(response.meta.scripts?.frames, 2);
     // 不要求有 particles；对象原样转
@@ -571,6 +574,7 @@ describe("粒子接口的参数透传", () => {
     assert.equal(calls()[1].time, 1.5);
     await renderFrame(f.s, "h-1", { imageId: "14108", particles, userProperties: {} });
     assert.equal("scripts" in calls()[2], false, "不给 scripts 时请求和以前一样");
+    assert.equal("sceneFiles" in calls()[2], false, "不跑脚本时不取场景文件表");
 
     const before = f.conn.evaluated.length;
     const fr = [{ object: "FR", field: "color" as const, value: [1, 0, 1], optional: true }];

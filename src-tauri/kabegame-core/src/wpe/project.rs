@@ -190,6 +190,21 @@ fn read_pkg_entry(path: &Path, name: &str) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(bytes))
 }
 
+/// `scene.pkg` 条目表里的全部条目名（原样、按表里的顺序，重名不去重），不读数据区。格式同 [`read_pkg_entry`]。
+pub fn read_pkg_entry_names(path: &Path) -> io::Result<Vec<String>> {
+    let mut reader = BufReader::new(File::open(path)?);
+    read_pkg_string(&mut reader)?;
+    let count = read_pkg_u32(&mut reader)?;
+    let mut names = Vec::new();
+    for _ in 0..count {
+        let entry = read_pkg_string(&mut reader)?;
+        read_pkg_u32(&mut reader)?;
+        read_pkg_u32(&mut reader)?;
+        names.push(String::from_utf8_lossy(&entry).into_owned());
+    }
+    Ok(names)
+}
+
 /// 跳过某个壁纸目录的原因。
 #[derive(Debug, Clone)]
 pub enum WpeSkip {

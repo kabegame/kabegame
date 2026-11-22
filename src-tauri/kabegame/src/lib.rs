@@ -1051,6 +1051,8 @@ pub(crate) fn configure_app(
             #[cfg(feature = "wpe")]
             wpe_scene_target,
             #[cfg(feature = "wpe")]
+            wpe_scene_files,
+            #[cfg(feature = "wpe")]
             wpe_scene_report,
             #[cfg(feature = "wpe")]
             wpe_scene_clear_storage,

@@ -1,5 +1,29 @@
 # v4.7.0 regression
 
+## 场景脚本建层的路径改写改查场景文件表
+
+2026-11-23 macOS。生产版打开 69031「Girl and Cat (Adjustable; 5120x1440; WUHD) MX」时每次加载都报
+`运行中用到不支持的特性：model:missing:models/workshop/3200298808/util/solidlayer.json`：隐藏的播放器 A 里 `playerplay` 的脚本
+（`__workshopId = '3200298808'`）在 `init` 里 `createLayer(getInitialLayerConfig(playerbarsexception))` 克隆 7 次，配置里的
+`image: models/util/solidlayer.json` 是 WPE 自带资源，但编译期名单 `bundle.assetPaths` 只收脚本源码里的路径字面量，没有它，于是被改写成
+不存在的工坊路径。这张壁纸上被克隆的对象本来就是 `visible: false`，画面没有差别（看得到的频谱条是播放器 B 的对象 68「Solide」的
+`Simple_Audio_Bars` effect），克隆可见对象的壁纸会真的少画。
+
+改法：新命令 `wpe_scene_files`（`kabegame_core::wpe::scene_files`）返回工程散文件、`scene.pkg` 条目与 WPE `assets` 的全部文件，
+assets 缓存一次运行、工程目录 LRU 100，都不失效；宿主每次加载拉一次建 Set（`sceneFileKey`），`createLayer` / `createModelData` 的改写查它；
+删掉 `bundle.assetPaths` 一整套；dev 探针的 `renderFrame` 带 `scripts` 时由 dev 插件取表、经 `sceneFiles` 转交。存在查询的范围从只查 assets 扩大到场景查找的三处（读码推测 WPE 也是这三处，没在 WPE 上实测）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | WF1 后端单测 | macOS | `test-kabegame` driver：`kabegame-core --lib scene_files` | 散文件、pkg 条目、assets 三处都列出；目录 / pkg 不存在为空；运行中新增文件看不到（不失效）；LRU 淘汰最久没用的 | 2026-11-23 Claude：4 passed |
+| [x] | WF2 前端单测 | macOS | wpe-scene vitest：`createLayerApi`、`createConfig`、`createLayerChange`、`createLayerCompile`、`registry`、`client`、`host.l3b/l5/l6/p14`、`probe.scripts` | 新用例：克隆 `getInitialLayerConfig` 时表里有的自带资源不改、空表照 WPE 改写；表查找不分 ASCII 大小写、认反斜杠 | 2026-11-23 Claude：11 个文件 204 passed |
+| [x] | WF2b dev 插件转交 | macOS | `deno test -A scripts/kabegame-dev/scene.test.ts`；wpe-scene vitest `src/dev` | 带 `scripts` 时探针收到 `sceneFiles`，不跑脚本时不取表；探针单测照过 | 2026-11-23 Claude：dev 插件 15 步通过；`src/dev` 等 19 个文件 252 passed |
+| [x] | WF3 类型与编译 | macOS | wpe-scene `tsc`；`check-kabegame --skip vue` | 0 error；新代码没有 warning | 2026-11-23 Claude |
+| [x] | WF4 全量 vitest | macOS | `deno task --cwd apps/wpe-scene test` | 这次改动不引入失败 | 2026-11-23 Claude：291 个文件通过；另有 6 个文件 14 个用例失败，都是没改过的文件里的既有失败（如 `materialValues` 等手写 bundle 缺 `textures`，来自 P11e `035d9754`），不在本次范围 |
+| [ ] | WF5 69031 不再报错 | macOS dev 或新构建的生产版 | 打开「Girl and Cat」的预览 | 日志没有 `model:missing:models/workshop/3200298808/util/solidlayer.json`、看板娘不提示；仍是「77 层」；播放器 B 的频谱条照常 | 没做：本轮只开着旧的生产版，dev 没在跑 |
+| [ ] | WF6 取表失败的退化 | dev | 让 `wpe_scene_files` 报错（如临时改 imageId） | 宿主记一条「取场景文件表失败」warn，场景照常加载，脚本建层的路径全部按 `__workshopId` 改写（同旧的最坏情况） | 没做 |
+| [ ] | WF7 Windows | Windows | 同 WF5，再挑一张克隆 `getInitialLayerConfig` 且被克隆对象可见的场景 | 克隆的图层照常画出；路径大小写与反斜杠不影响判断 | 未测 |
+
 ## 场景宿主构建前自动重建 wasm 依赖
 
 2026-11-22 macOS。场景「鸣潮清宵_qingxiao 时间组件+音频」整张退回预览图、报 `text:engine`：它的三个文本层（Clock / D a y / Date）

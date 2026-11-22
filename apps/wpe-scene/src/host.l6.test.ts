@@ -295,7 +295,6 @@ function deltaFor(request: FragmentRequest, extra: Partial<ObjectFragment> = {})
     textures: { from: 0, list: [] },
     userTextures: { from: 0, list: [] },
     bindings: [],
-    assetPaths: [],
   };
 }
 

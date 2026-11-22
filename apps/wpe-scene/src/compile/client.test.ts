@@ -51,7 +51,6 @@ const emptyDelta = (): FragmentDelta =>
     textures: { from: 0, list: [] },
     userTextures: { from: 0, list: [] },
     bindings: [],
-    assetPaths: [],
   }) as unknown as FragmentDelta;
 const REQUEST = { object: 5, config: "{}", parent: null, bone: null, properties: {} };
 
@@ -167,17 +166,17 @@ describe("openSceneSession 与片段请求", () => {
     worker.emit({
       type: "fragment-done",
       id: ids[1],
-      delta: { ...emptyDelta(), assetPaths: ["b"] },
+      delta: { ...emptyDelta(), fragment: { object: 6 } as never },
       stats: { ...STATS, wasmBytes: 2 },
     });
     worker.emit({
       type: "fragment-done",
       id: ids[0],
-      delta: { ...emptyDelta(), assetPaths: ["a"] },
+      delta: { ...emptyDelta(), fragment: { object: 5 } as never },
       stats: { ...STATS, wasmBytes: 1 },
     });
-    expect((await first).assetPaths).toEqual(["a"]);
-    expect((await second).assetPaths).toEqual(["b"]);
+    expect((await first).fragment.object).toBe(5);
+    expect((await second).fragment.object).toBe(6);
     expect(session.stats?.wasmBytes).toBe(1);
   });
 

@@ -38,7 +38,6 @@ import { normalizeScenePath, SceneFs, type ResourceScope, type SceneReader } fro
 import { breakCycles, childLists, resolveParents } from "./hierarchy";
 import { normalizeConfig } from "./config";
 import { asNumber, layerShellValues } from "./layerShell";
-import { scriptAssetCandidates } from "./assetPaths";
 import type { SceneStructure } from "./protocol";
 import { meshDrawOrder, meshSkin, parseMdl, type MdlFile, type MdlMesh } from "./mdl";
 import {
@@ -1046,11 +1045,6 @@ export interface SceneBundle {
    * 结构之前的 `scene.json` 原文，按 WPE 的 jsoncpp 规整（`config.ts`：去掉顶层 `id`、键按字典序、非整数 8 位有效数字）。
    */
   configs?: (string | null)[];
-  /**
-   * 脚本源码里的资源路径字面量中、在 WPE `assets` 里存在的（P6d3b，`compile/assetPaths.ts`；排序，没有时省略）：运行时 `createLayer` 的
-   * `__workshopId` 改写据此判断「是不是 WPE 自带资源」（在就不改）。
-   */
-  assetPaths?: string[];
 }
 export interface CompileSceneInput {
   projectDir: string;
@@ -1682,14 +1676,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
   // `let`：`compileFragment` 按请求换成当前属性全集（闭包读到的总是最新的）
   let properties = currentProperties(project, input.userProperties ?? {});
   const scripts = await collectScripts(scene, properties, bindings.list);
-  // 脚本里的资源路径字面量里，在 WPE assets 中存在的名单（P6d3b，`createLayer` 的 `__workshopId` 改写用）
-  const assetPaths = (
-    await Promise.all(
-      scriptAssetCandidates(scripts.list.map((script) => script.source)).map(async (path) =>
-        (await fs.existsInAssets(path)) ? path : null,
-      ),
-    )
-  ).filter((path): path is string => path !== null);
   // 属性关键帧（P10a 步骤 2）：没有就地目标的照报 `value:animation:other`（灯对象 P13f2、相机对象 P5i 起有就地目标）；其余进 bundle，
   // 由宿主每帧写（P10a 步骤 3，`animation/player.ts`）
   const animations = collectAnimations(scene);
@@ -1752,7 +1738,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     sounds,
     animations: animations.list,
     configs,
-    ...(assetPaths.length ? { assetPaths } : {}),
   };
   // 阴影档位（P13d）：决定阴影计数与宏，要在编译着色器之前定。只在 `lightconfig` 写了阴影 / cookie 计数时才去读 WPE 的设置
   const shadowSetting = input.shadows ?? "follow";
@@ -3848,7 +3833,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
     const hadLights = !!bundle.lights;
     const hadLegacyLights = !!bundle.legacyLights;
     const flips = new Set<string>();
-    const newAssetPaths: string[] = [];
     try {
       // 脚本（带绑定）：新条目跑能力检查；用了 `getEffect` 而场景没有 `usesEffectAccess` 会翻转「写死关闭的 effect 也编」这个不变量
       const fresh = collectObjectScriptsSync(object, at, properties, bindings.list);
@@ -3917,13 +3901,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
       const kept = scripts.list.slice(scriptsFrom).filter(keepsAnimationLayerScript);
       scripts.list.length = scriptsFrom;
       scripts.list.push(...kept);
-      // 脚本里的资源路径字面量里，在 WPE assets 中存在的新名单（`createLayer` 的 `__workshopId` 改写用）
-      for (const path of scriptAssetCandidates(kept.map((script) => script.source)))
-        if (!assetPaths.includes(path) && (await fs.existsInAssets(path))) {
-          assetPaths.push(path);
-          newAssetPaths.push(path);
-        }
-      if (newAssetPaths.length) bundle.assetPaths ??= assetPaths;
 
       // 切片
       const added = bindings.list.slice(bindingsFrom);
@@ -3953,7 +3930,6 @@ export async function openCompileSession(input: CompileSceneInput): Promise<Scen
         textures: { from: texturesFrom, list: bundle.textures.slice(texturesFrom) },
         userTextures: { from: userTexturesFrom, list: (bundle.userTextures ?? []).slice(userTexturesFrom) },
         bindings: added.filter((binding) => !bindingOwnedBy(binding, at)),
-        assetPaths: newAssetPaths,
       };
     } finally {
       // 把这次新增、调用前会话里没有的键删掉，关记录器

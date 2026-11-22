@@ -64,7 +64,6 @@ const deltaOf = (fragmentValue: ObjectFragment): FragmentDelta => ({
   textures: { from: 0, list: [] },
   userTextures: { from: 0, list: [] },
   bindings: [],
-  assetPaths: [],
 });
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 

@@ -126,7 +126,6 @@ export class SceneRegistry {
     if (bundle.configs) out.configs = bundle.configs.map((config, object) => (layered.has(object) ? null : config));
     if (bundle.children) out.children = [];
     if (bundle.reflection) out.reflection = { ...bundle.reflection, ...(bundle.reflection.list ? { list: [] } : {}) };
-    if (bundle.assetPaths) out.assetPaths = [...bundle.assetPaths];
     return new SceneRegistry(out);
   }
 
@@ -144,10 +143,6 @@ export class SceneRegistry {
     bundle.textures.push(...delta.textures.list);
     userTextures.push(...delta.userTextures.list);
     bundle.bindings.push(...delta.bindings);
-    if (delta.assetPaths.length) {
-      const paths = (bundle.assetPaths ??= []);
-      for (const path of delta.assetPaths) if (!paths.includes(path)) paths.push(path);
-    }
     this.revision++;
   }
 

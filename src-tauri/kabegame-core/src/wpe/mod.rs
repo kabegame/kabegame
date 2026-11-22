@@ -21,6 +21,8 @@ pub mod recognize;
 #[cfg(feature = "wpe")]
 pub mod scan;
 #[cfg(feature = "wpe")]
+pub mod scene_files;
+#[cfg(feature = "wpe")]
 pub mod steam;
 #[cfg(feature = "wpe")]
 pub mod tags;

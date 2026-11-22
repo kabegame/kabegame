@@ -109,7 +109,6 @@ describe("SceneHost.addCompiledObject（L3b）", () => {
       textures: { from: 0, list: [] },
       userTextures: { from: 0, list: [] },
       bindings: [],
-      assetPaths: [],
     };
     await host.addCompiledObject(delta, "add");
     expect(log).toEqual([

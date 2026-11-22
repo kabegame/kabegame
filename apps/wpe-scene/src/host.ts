@@ -69,6 +69,7 @@ import type { SceneReporter } from "./report";
 import { PLAYBACK_RATE_MAX, PLAYBACK_RATE_MIN, schemeColor } from "./sceneStyle";
 import { instanceControlPoint, type InstanceField } from "./compile/particles";
 import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
+import { sceneFileKey } from "./script/createConfig";
 import { applyScriptedProperties } from "./script/initialApply";
 import {
   addShellObject,
@@ -470,6 +471,11 @@ export class SceneHost {
   private readonly shortcutToken = new ShortcutToken();
   private readonly textureCache = new TextureDecodeCache(this.reader);
   private targetTask: Promise<SceneTarget> | null = null;
+  /**
+   * 场景查找范围（工程散文件、`scene.pkg`、WPE `assets`）里的全部文件，键是 `sceneFileKey`：每次加载经 `wpe_scene_files` 拉一次（缓存在后端），
+   * 脚本的 `__workshopId` 改写见到存在的路径不改（P6d3b）。拉取失败是空表（全部改写）。
+   */
+  private sceneFiles: ReadonlySet<string> = new Set();
   private readonly unlisteners: UnlistenFn[] = [];
 
   constructor(
@@ -1689,6 +1695,7 @@ export class SceneHost {
         reparented: (change) => this.onReparented(change),
         // `createLayer`（P6d3b）：当前脚本的 `__workshopId` 取自运行时；建层与新对象上的脚本经宿主落到状态与运行时
         workshopId: () => this.runtime?.currentWorkshopId() ?? null,
+        sceneFileExists: (path) => this.sceneFiles.has(sceneFileKey(path)),
         createLayer: (config, parent) => this.onCreateLayer(config, parent),
         addScripts: (scripts) => this.runtime?.addScripts(scripts),
         warn: (message) => this.options.report.warn(message),
@@ -2434,6 +2441,22 @@ export class SceneHost {
   }
 
   /**
+   * 场景文件表（P6d3b 的 `__workshopId` 改写用，见 `sceneFiles`）：拉不到时记一条 warn、返回空表，场景照常加载。
+   */
+  private async readSceneFiles(): Promise<ReadonlySet<string>> {
+    try {
+      const files = await invoke<string[]>("wpe_scene_files", { imageId: this.options.imageId });
+      return new Set(Array.isArray(files) ? files.map(sceneFileKey) : []);
+    } catch (error) {
+      this.options.report.warn(
+        `场景壁纸 ${this.options.imageId} 取场景文件表失败，脚本建层的路径会全部按 __workshopId 改写：`,
+        error,
+      );
+      return new Set();
+    }
+  }
+
+  /**
    * 等父页面的第一条设置；没有父页面回应（dev 工具直接开的宿主没替它回）时等满上限按跟随 WPE，记一条 warn。
    * 不在 iframe 里（没有父页面，单测在 node 里）不等，直接按跟随。
    */
@@ -2498,11 +2521,11 @@ export class SceneHost {
         this.targetTask = null;
         throw error;
       }));
-      const [target, { postprocess: setting, reflection, shadows, volumetrics, forceRender }] = await Promise.all([
-        targetTask,
-        this.readSceneSettings(),
-      ]);
+      const [target, { postprocess: setting, reflection, shadows, volumetrics, forceRender }, sceneFiles] =
+        await Promise.all([targetTask, this.readSceneSettings(), this.readSceneFiles()]);
       if (id !== this.generation) return;
+      // 脚本（含首次加载的 init）跑之前就位
+      this.sceneFiles = sceneFiles;
       this.postprocess = setting;
       this.reflection = reflection;
       this.shadows = shadows;

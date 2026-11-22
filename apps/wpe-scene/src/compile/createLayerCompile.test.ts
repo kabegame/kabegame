@@ -1,13 +1,11 @@
 /**
  * P6d3b 点 9、11、12 的编译期部分：
  * - `collectObjectScripts` 与 `collectScripts` 同一套遍历；
- * - `scriptAssetCandidates` 与 `bundle.assetPaths`（脚本里的资源路径字面量里，在 WPE assets 存在的）；
  * - `structure.created`：新建对象放到 `scene.objects[下标]` 之后和加载时的对象走同一条编译路径，建了又删的不编，数组配置不当图层，
  *   依赖标记只看加载时的对象。
  */
 import { describe, expect, it, vi } from "vitest";
 import { compileScene, type SceneBundle } from "./bundle";
-import { scriptAssetCandidates } from "./assetPaths";
 import type { SceneReader } from "./fs";
 import { collectObjectScripts, collectScripts } from "./scripts";
 import type { SceneJson } from "./model";
@@ -113,56 +111,6 @@ describe("collectObjectScripts（点 11）", () => {
   });
 });
 
-describe("scriptAssetCandidates（点 9 的 assets 名单）", () => {
-  it("单 / 双引号与不含插值的模板字符串；只留资源目录开头的；去前导斜杠、去重、排序", () => {
-    const source = [
-      "const a = 'models/b.json'; const b = \"/models/a.json\"; const c = `sounds/x.mp3`;",
-      "const d = `models/${name}.json`; const e = 'other/x.json'; const f = 'models/b.json';",
-      `const g = 'fonts${BACKSLASH}${BACKSLASH}kb.ttf'; const h = '${BACKSLASH}${BACKSLASH}effects/e.json';`,
-    ].join("\n");
-    expect(scriptAssetCandidates([source])).toEqual([
-      "effects/e.json",
-      "fonts/kb.ttf",
-      "models/a.json",
-      "models/b.json",
-      "sounds/x.mp3",
-    ]);
-  });
-
-  it("八个目录前缀", () => {
-    const names = ["models", "particles", "materials", "sounds", "fonts", "effects", "shaders", "textures"];
-    expect(scriptAssetCandidates(names.map((name) => `'${name}/x'`))).toEqual(names.map((name) => `${name}/x`).sort());
-    expect(scriptAssetCandidates(["'model/x'", "'models'", "'Models/x'"])).toEqual([]);
-  });
-});
-
-describe("bundle.assetPaths", () => {
-  it("只收在 assets 里存在的；项目散文件与不存在的都不收", async () => {
-    const source = script(
-      " const a = 'models/util/solidlayer.json'; const b = 'models/a.json'; const c = 'models/nothere.json'; const d = `particles/${x}.json`;",
-    );
-    const bundle = await compile([image({ id: 1, alpha: { script: source, value: 1 } })], undefined, {
-      "models/util/solidlayer.json": { material: "materials/util/solid.json" },
-      "models/a.json": { material: "x" },
-    });
-    // `models/a.json` 在项目里也有，但 assets 里也放了一份：只要 assets 里存在就收
-    expect(bundle.assetPaths).toEqual(["models/a.json", "models/util/solidlayer.json"]);
-    const onlyProject = await compile([image({ id: 1, alpha: { script: source, value: 1 } })], undefined, {
-      "models/util/solidlayer.json": {},
-    });
-    expect(onlyProject.assetPaths).toEqual(["models/util/solidlayer.json"]);
-  });
-
-  it("新建对象配置里的脚本源码也扫；没有名单时不带这个键", async () => {
-    const source = script(" const a = 'sounds/s.mp3';");
-    const bundle = await compile([image({ id: 1 })], created([1, image({ alpha: { script: source, value: 1 } })]), {
-      "sounds/s.mp3": {},
-    });
-    expect(bundle.assetPaths).toEqual(["sounds/s.mp3"]);
-    expect(Object.hasOwn(await compile([image({ id: 1 })]), "assetPaths")).toBe(false);
-  });
-});
-
 describe("compileScene：结构里的新建对象（点 12）", () => {
   const base = () => [image({ id: 1, name: "a" }), image({ id: 2, name: "b" })];
 
@@ -249,6 +197,5 @@ describe("compileScene：结构里的新建对象（点 12）", () => {
       ],
     });
     expect(bundle.layers.map((layer) => layer.name)).toEqual(["a", "b"]);
-    expect(Object.hasOwn(bundle, "assetPaths")).toBe(false);
   });
 });

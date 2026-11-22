@@ -16,7 +16,7 @@ function context(extra: Partial<CreateConfigContext> = {}): CreateConfigContext 
     stringify,
     orthographic: true,
     workshopId: "123",
-    inAssets: (path) => path === "models/util/solidlayer.json" || path === "models/util/solidlayer_depthtest.json",
+    exists: (path) => path === "models/util/solidlayer.json" || path === "models/util/solidlayer_depthtest.json",
     ...extra,
   };
 }
@@ -83,8 +83,8 @@ describe("createLayerConfig：对象参数", () => {
     expect(
       createLayerConfig([{ color: "0 1 0", name: "CN", origin: "1 2 3" }], context({ orthographic: false })),
     ).toEqual({ color: "0 1 0", image: "models/util/solidlayer.json", name: "CN", origin: "1 2 3" });
-    // 缺省模型是 WPE 自带资源，assets 名单（只收脚本里的路径字面量）查不到它也不改写（`wpe-asset.log` 的 `arg color`，__workshopId 是 123）
-    expect(createLayerConfig([{ color: "1 0 0" }], context({ inAssets: () => false }))).toEqual({
+    // 缺省模型是 WPE 自带资源，场景文件表里查不到它（拉取失败的空表）也不改写（`wpe-asset.log` 的 `arg color`，__workshopId 是 123）
+    expect(createLayerConfig([{ color: "1 0 0" }], context({ exists: () => false }))).toEqual({
       color: "1 0 0",
       image: "models/util/solidlayer_depthtest.json",
     });

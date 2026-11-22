@@ -68,7 +68,7 @@ function fnv(view: ArrayBufferView): number {
   return hash;
 }
 
-/** 规范化：键排序、Map / Set / 类型化数组展开（数组按长度 + FNV 缩成摘要），函数与 undefined 丢弃；`assetPaths` 不进（同全库摘要）。 */
+/** 规范化：键排序、Map / Set / 类型化数组展开（数组按长度 + FNV 缩成摘要），函数与 undefined 丢弃。 */
 function normalize(value: unknown, seen: WeakSet<object>): unknown {
   if (typeof value === "function") return undefined;
   if (value instanceof ArrayBuffer) return { $bytes: value.byteLength, $hash: fnv(new Uint8Array(value)) };
@@ -84,7 +84,6 @@ function normalize(value: unknown, seen: WeakSet<object>): unknown {
     seen.add(value);
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(value).sort()) {
-      if (key === "assetPaths") continue;
       const item = normalize((value as Record<string, unknown>)[key], seen);
       if (item !== undefined) out[key] = item;
     }

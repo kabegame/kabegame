@@ -84,7 +84,7 @@
 - **IPC**：两份 capability 叠加。
   - 网页壁纸的 `wpe-web-capability`（`file:///*`）同样匹配宿主，网页壁纸的命令与事件宿主都有：`wallpaper_pong`、`wpe_web_media_subscribe`、`wallpaper-ping` / `wpe-scene-clear-storage` 监听。用户属性（2026-11-21 起）由父页面 `WpeSceneView` 推送：它按图片 id 调 `wpe_web_get_state`（只给应用页），宿主 iframe 的 load 后推整份、之后推增量（`useWpeStateDelivery`，协议 `wpeWebState.ts`），返回前按同一份 metadata 覆盖这张场景的 `scenetexture` 放行（P11b）；宿主拿不到状态，也收不到设置与图片事件。
   - 暂停与音量沿用父页面到垫片的 `kabegame:wpe-volume` 消息，新增 `paused`；垫片只在值变化时调 `setPaused`，首次全量属性交付前就已暂停的，交付后补调一次 `setPaused(true)`。`SceneHost` 首次属性包到达后才加载，渲染完成后经 `wpe_scene_report` 报 `ready`，日志经同一命令进入应用日志。
-  - 场景专用命令：`init_pre` 里 `add_capability` 注册 `wpe-scene-host-capability`，`remote.urls` 只有宿主 `index.html` 的确切地址（URLPattern 特殊字符逐个转义），不用路径通配；`frames: "sub"`，窗口是 main 与壁纸窗口 label 池（`wallpaper::WALLPAPER_LABELS`，每块屏一个壁纸窗口）；放行 `wpe_scene_target`（场景目录与 `sceneAssets`）和 `wpe_scene_report`（`ready` / `fallback` 以 `wpe-scene-status` 事件回到调用方窗口，带实例号；`log` 写 tracing）。
+  - 场景专用命令：`init_pre` 里 `add_capability` 注册 `wpe-scene-host-capability`，`remote.urls` 只有宿主 `index.html` 的确切地址（URLPattern 特殊字符逐个转义），不用路径通配；`frames: "sub"`，窗口是 main 与壁纸窗口 label 池（`wallpaper::WALLPAPER_LABELS`，每块屏一个壁纸窗口）；放行 `wpe_scene_target`（场景目录与 `sceneAssets`）、`wpe_scene_files`（场景查找范围（散文件、`scene.pkg`、WPE `assets`）的全部文件，脚本的 `__workshopId` 改写用，见 [SCRIPT.md](SCRIPT.md)「运行时建层（P6d3b）」）、`wpe_scene_shortcut_icon`（P11d）和 `wpe_scene_report`（`ready` / `fallback` 以 `wpe-scene-status` 事件回到调用方窗口，带实例号；`log` 写 tracing）。
 
 ### 属性与快速路径（P3a）
 

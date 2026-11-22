@@ -10,6 +10,7 @@ import type { SceneStructure } from "../compile/protocol";
 import { collectObjectScriptsSync, type SceneScript } from "../compile/scripts";
 import { SceneState } from "../render/state";
 import { ScriptApi, type ScriptApiState } from "./api";
+import { sceneFileKey } from "./createConfig";
 import { ScriptRuntime, type ScriptRealm } from "./runtime";
 import { readScriptState, writeScriptState } from "./stateWrite";
 import { createStructureObject, syncAllocator, type ObjectAllocator } from "./structure";
@@ -23,7 +24,7 @@ const report = { ready() {}, fallback() {}, debug() {}, info() {}, warn() {}, er
 
 type Json = Record<string, unknown>;
 
-function bundleOf(objects: Json[], assetPaths?: string[], perspective = false): SceneBundle {
+function bundleOf(objects: Json[], perspective = false): SceneBundle {
   const layers = objects.map(
     (object, index) =>
       ({
@@ -74,14 +75,14 @@ function bundleOf(objects: Json[], assetPaths?: string[], perspective = false): 
     bindings: [],
     scripts: { list: [] },
     configs: objects.map((object) => normalizeConfig(object)),
-    ...(assetPaths ? { assetPaths } : {}),
   } as unknown as SceneBundle;
 }
 
 function harness(
   objects: Json[],
   options: {
-    assetPaths?: string[];
+    /** 场景文件表（宿主经 `wpe_scene_files` 拉的全表），路径在里面就不按 `__workshopId` 改写 */
+    sceneFiles?: string[];
     perspective?: boolean;
     /** 宿主在 `createLayer` 里建好壳之后再做的事（L5：命中片段缓存时当场把编好的对象接进 bundle） */
     afterCreate?: (object: number, bundle: SceneBundle) => void;
@@ -128,7 +129,8 @@ function harness(
     preparedModule: (source) => ready.get(source) ?? null,
     dispose() {},
   };
-  const bundle = bundleOf(objects, options.assetPaths, options.perspective);
+  const bundle = bundleOf(objects, options.perspective);
+  const sceneFiles = new Set((options.sceneFiles ?? []).map(sceneFileKey));
   const state = SceneState.fromBundle(bundle);
   const structure: SceneStructure = { destroyed: [], parents: [], created: [] };
   const allocator: ObjectAllocator = { next: 0 };
@@ -150,6 +152,7 @@ function harness(
     read: (target) => readScriptState(state, target),
     structure: () => structure,
     workshopId: () => runtime.currentWorkshopId(),
+    sceneFileExists: (path) => sceneFiles.has(sceneFileKey(path)),
     createLayer(config, parent) {
       syncAllocator(allocator, bundle);
       const object = createStructureObject(state, structure, allocator, config, parent);
@@ -476,15 +479,33 @@ export function init(value) {
     expect(JSON.parse(h.structure.created[0].config)).toEqual({ image: "models/workshop/2652493753/bar.json", id: 4 });
   });
 
-  it("路径在 assets 名单里不改；__workshopId 不是字符串不改", async () => {
-    const inAssets = harness(BASE, { assetPaths: ["models/bar.json"] });
-    await inAssets.runtime.load({
+  it("路径在场景文件表里不改（不分 ASCII 大小写、认反斜杠）；__workshopId 不是字符串不改", async () => {
+    const files = ["models/Bar.json", "models/util/solidlayer.json"];
+    const exists = harness(BASE, { sceneFiles: files });
+    await exists.runtime.load({
       list: [scriptOf(source("'1'", "thisScene.createLayer('models/bar.json')"))],
     } as never);
-    expect(inAssets.logs).toEqual(['{"image":"models/bar.json"}']);
+    expect(exists.logs).toEqual(['{"image":"models/bar.json"}']);
+    const backslash = harness(BASE, { sceneFiles: files });
+    await backslash.runtime.load({
+      list: [scriptOf(source("'1'", "thisScene.createLayer('models\\\\util\\\\solidlayer.json')"))],
+    } as never);
+    expect(backslash.logs).toEqual(['{"image":"models\\\\util\\\\solidlayer.json"}']);
     const numeric = harness(BASE);
     await numeric.runtime.load({ list: [scriptOf(source("5", "thisScene.createLayer('models/bar.json')"))] } as never);
     expect(numeric.logs).toEqual(['{"image":"models/bar.json"}']);
+  });
+
+  it("克隆 getInitialLayerConfig：脚本里没写过的自带资源路径也按场景文件表判断（69031 的 playerbarsexception）", async () => {
+    const objects = [...BASE, { id: 4, name: "bars", image: "models/util/solidlayer.json", visible: false }];
+    const clone = "thisScene.createLayer(thisScene.getInitialLayerConfig(thisScene.getLayer('bars')))";
+    const known = harness(objects, { sceneFiles: ["models/util/solidlayer.json"] });
+    await known.runtime.load({ list: [scriptOf(source("'3200298808'", clone))] } as never);
+    expect(JSON.parse(known.logs[0])).toMatchObject({ image: "models/util/solidlayer.json", visible: false });
+    // 表里没有（拉取失败的空表）：照 WPE 改写
+    const unknown = harness(objects);
+    await unknown.runtime.load({ list: [scriptOf(source("'3200298808'", clone))] } as never);
+    expect(JSON.parse(unknown.logs[0])).toMatchObject({ image: "models/workshop/3200298808/util/solidlayer.json" });
   });
 
   it("对象参数里的 image / sound / effects[].passes[].textures 都改写；已经带 workshop 段的先去掉旧的", async () => {

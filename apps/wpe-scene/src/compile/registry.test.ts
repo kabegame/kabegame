@@ -135,7 +135,6 @@ describe("applyDelta", () => {
     textures: { from: 0, list: [] },
     userTextures: { from: 0, list: [] },
     bindings: [],
-    assetPaths: [],
   };
 
   it("正常追加，错位抛错", () => {
@@ -143,15 +142,12 @@ describe("applyDelta", () => {
     registry.applyDelta({
       ...empty,
       programs: { from: 0, list: [{ id: "a" } as never, { id: "b" } as never] },
-      assetPaths: ["scripts/a.js"],
     });
     registry.applyDelta({
       ...empty,
       programs: { from: 2, list: [{ id: "c" } as never] },
-      assetPaths: ["scripts/a.js", "scripts/b.js"],
     });
     expect(registry.bundle.programs.length).toBe(3);
-    expect(registry.bundle.assetPaths).toEqual(["scripts/a.js", "scripts/b.js"]);
     const ok = { ...empty, programs: { from: 3, list: [] } };
     expect(() => registry.applyDelta({ ...empty, programs: { from: 2, list: [] } })).toThrow(/programs/);
     expect(() => registry.applyDelta({ ...ok, textures: { from: 1, list: [] } })).toThrow(/textures/);

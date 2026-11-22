@@ -1,11 +1,12 @@
 /**
  * `thisScene.createLayer(...args)` 的参数整理（P6d3b）：纯函数，照 WPE dll 的流程（`rea-p6d-script.md` 1.2、1.3）与 `__workshopId` 的路径改写
  * （2.2、2.3）。参数 → 一份配置对象（和 `scene.json` 里一个对象同一个形状），之后当成结构里的新建对象走编译。
- * 依赖宿主的几件事（realm 的 `stringifyConfig`、场景投影、当前脚本的 `__workshopId`、「是否 WPE 自带资源」）经 `CreateConfigContext` 传入。
+ * 依赖宿主的几件事（realm 的 `stringifyConfig`、场景投影、当前脚本的 `__workshopId`、「路径在场景里存不存在」）经 `CreateConfigContext` 传入。
  */
 
 import { isSoundObject, isTextObject, objectKind } from "../compile/features";
 import type { SceneObject } from "../compile/model";
+import { pkgKey } from "../compile/pkg";
 
 export interface CreateConfigContext {
   /** realm 里 WPE 自带的 `_Internal.stringifyConfig`（`Vec` → "x y z"）；对象参数先过它 */
@@ -14,8 +15,11 @@ export interface CreateConfigContext {
   orthographic: boolean;
   /** 「当前脚本」的 `__workshopId`（只认字符串；没有是 null） */
   workshopId: string | null;
-  /** 路径在 WPE assets 里存在（编译期名单 `bundle.assetPaths`） */
-  inAssets(path: string): boolean;
+  /**
+   * 路径在场景查找范围（工程散文件、`scene.pkg`、WPE `assets`）里存在：宿主每次加载经命令 `wpe_scene_files` 拉全表，按
+   * {@link sceneFileKey} 查。读码推测 WPE 的存在查询也是这三处（rea-p6d-script 2.2，没在 WPE 上实测）
+   */
+  exists(path: string): boolean;
   /** 值是 `IModelData` 句柄（P14，S16）：单参数时先包成 `{ model: 句柄 }` 再序列化，`model` 经 `toConfigString` 变成整数 token */
   isModelData?(value: unknown): boolean;
 }
@@ -23,6 +27,19 @@ export interface CreateConfigContext {
 /** 缺省模型（不带参数、`{ color }` 没有任何内容键时的 `image`）。 */
 export function defaultLayerModel(orthographic: boolean): string {
   return orthographic ? "models/util/solidlayer_depthtest.json" : "models/util/solidlayer.json";
+}
+
+/**
+ * 场景文件表（`wpe_scene_files`）的键：`\` 换成 `/`、去掉开头的 `./` 与 `/`、并掉连续的 `/`，ASCII 字母不分大小写
+ * （照 WPE 在 Windows 上的查找，同 {@link pkgKey}）。表里的路径与要查的路径都过它。
+ */
+export function sceneFileKey(path: string): string {
+  return pkgKey(
+    path
+      .replace(/\\/g, "/")
+      .replace(/\/{2,}/g, "/")
+      .replace(/^(?:\.\/|\/)+/, ""),
+  );
 }
 
 /** 配置里有任意一个就不补缺省模型。 */
@@ -38,14 +55,14 @@ function segments(path: string): string[] {
 }
 
 /**
- * `RP(path, key)`（rea-p6d-script 2.2）：当前脚本没有 `__workshopId`、或路径在 assets 里存在时原样；否则：
+ * `RP(path, key)`（rea-p6d-script 2.2）：当前脚本没有 `__workshopId`、或路径在场景里存在时原样；否则：
  * - `key === "textures"`：第一段是 `workshop` 去掉前两段，结果 `workshop/<id>/<其余>`；
  * - 其它：`first/workshop/<id>/其余`，其余 = 去掉第一段（只有一段时不去），其余的第一段是 `workshop` 再去掉两段。
  * 最后 `\` 换成 `/`、连续 `//` 并成一个。
  */
 export function rewriteWorkshopPath(path: string, key: string | null, ctx: CreateConfigContext): string {
   const id = ctx.workshopId;
-  if (id === null || id === "" || ctx.inAssets(path)) return path;
+  if (id === null || id === "" || ctx.exists(path)) return path;
   const parts = segments(path);
   let out: string[];
   if (key === "textures") {
@@ -92,8 +109,8 @@ function configFromPath(raw: string, ctx: CreateConfigContext): Record<string, u
 
 /**
  * 对象 / JSON 字符串分支的「整理」：补缺省模型、对资源键做 `RP`。不改入参。缺省模型是 WPE 自带资源（assets 里有），`RP` 不改它
- * （`wpe-asset.log` 的 `arg color`：带 `__workshopId` 的脚本建出的仍是 `models/util/solidlayer_depthtest.json`）；我们的 assets 名单只收脚本里的
- * 路径字面量、查不到它，所以补在改写之后。
+ * （`wpe-asset.log` 的 `arg color`：带 `__workshopId` 的脚本建出的仍是 `models/util/solidlayer_depthtest.json`）；补在改写之后，场景文件表
+ * 拉取失败（空表）时也不改它。
  */
 function tidy(input: Record<string, unknown>, ctx: CreateConfigContext): Record<string, unknown> {
   const config: Record<string, unknown> = { ...input };

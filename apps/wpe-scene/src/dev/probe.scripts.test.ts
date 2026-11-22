@@ -103,7 +103,6 @@ function fakeSession() {
     textures: { from: bundle.textures.length, list: [] },
     userTextures: { from: bundle.userTextures?.length ?? 0, list: [] },
     bindings: [],
-    assetPaths: [],
   });
   return {
     close() {},
@@ -128,7 +127,6 @@ function fakeSession() {
         textures: { from: bundle.textures.length, list: [] },
         userTextures: { from: bundle.userTextures?.length ?? 0, list: [] },
         bindings: [],
-        assetPaths: [],
       };
     }),
   } as unknown as CompileSessionClient;

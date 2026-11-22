@@ -198,28 +198,6 @@ export class SceneFs {
     return null;
   }
 
-  /**
-   * 只查 WPE `assets` 根目录里是否有这个文件（P6d3b，`createLayer` 的 `__workshopId` 改写要知道「是不是 WPE 自带资源」）：
-   * 不看项目散文件、不看 pkg，只探 1 字节、不缓存。路径不合法、读不到都当不存在。
-   */
-  async existsInAssets(raw: string): Promise<boolean> {
-    let rel: string;
-    try {
-      rel = normalizeScenePath(raw);
-    } catch {
-      return false;
-    }
-    for (const root of this.sceneAssets) {
-      try {
-        await this.reader.readRange(join(root, rel), 0, 1);
-        return true;
-      } catch (error) {
-        if (!missing(error)) return false;
-      }
-    }
-    return false;
-  }
-
   /** 任务完成时把值记进镜像（条目还是这个 Promise 才记）。 */
   private mirror<K, V>(live: Map<K, Promise<V>>, settled: Map<K, V>, key: K, task: Promise<V>): void {
     void task.then(

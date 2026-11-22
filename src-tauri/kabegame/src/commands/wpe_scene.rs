@@ -34,6 +34,29 @@ pub async fn wpe_scene_target(image_id: String) -> Result<WpeSceneTarget, String
     })
 }
 
+/// 场景查找范围里的全部文件：工程散文件、`scene.pkg` 条目、WPE `assets`，相对各自根目录、`/` 分隔、原样大小写。
+/// 宿主每次加载拉一次，脚本 `createLayer` / `createModelData` 的路径存在就不按 `__workshopId` 改写（同 WPE）。
+/// 缓存在后端（`kabegame_core::wpe::scene_files`：assets 缓存一次运行，工程目录 LRU 100，都不失效）。
+#[tauri::command]
+pub async fn wpe_scene_files(image_id: String) -> Result<Vec<String>, String> {
+    use kabegame_core::media::image_type::wpe_kind;
+    use kabegame_core::storage::Storage;
+
+    let info = Storage::find_image_by_id(&image_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("image not found")?;
+    if wpe_kind(info.media_type.as_deref()).as_deref() != Some("scene") {
+        return Err("not a scene wallpaper in the library".into());
+    }
+    let project = std::path::PathBuf::from(info.local_path);
+    tauri::async_runtime::spawn_blocking(move || {
+        let assets = kabegame_core::wpe::discover::scene_asset_dirs();
+        kabegame_core::wpe::scene_files::scene_files(&project, &assets)
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WpeSceneTarget {

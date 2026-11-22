@@ -256,6 +256,11 @@ export interface ScriptApiState {
   /** 当前正在调用的脚本的 `__workshopId`（P6d3b，`ScriptRuntime.currentWorkshopId`）；没有是 null。不传当没有。 */
   workshopId?(): string | null;
   /**
+   * 路径在场景查找范围（工程散文件、`scene.pkg`、WPE `assets`）里存在（宿主每次加载经命令 `wpe_scene_files` 拉的全表，按
+   * `sceneFileKey` 查）：`createLayer` / `createModelData` 的 `__workshopId` 改写见到存在的路径不改。不传当都不存在（全部改写）。
+   */
+  sceneFileExists?(path: string): boolean;
+  /**
    * `createLayer` 的落点（P6d3b）：宿主分配下标、建出待编对象（`createStructureObject`：状态、对象表尾、结构）、安排重编译，返回新下标；
    * 建不出来返回 null。`parent` 是 API 已按配置的父 id 解析好的 `objects` 下标（当时存在、没待删的；没有是 null）。不传时 `createLayer` 返回 null。
    */
@@ -436,7 +441,7 @@ export class ScriptApi {
   private nextLayerId = 1;
   /** `nextLayerId` 上次按哪份 bundle 取的下界。 */
   private layerIdBundle: SceneBundle | null = null;
-  /** `engine.registerAsset` 的登记表：脚本条目 id → 路径，只用来判同一段脚本重复登记（P6d3b 的 `__workshopId` 改写不读它，查的是编译期的 `bundle.assetPaths`）。 */
+  /** `engine.registerAsset` 的登记表：脚本条目 id → 路径，只用来判同一段脚本重复登记（P6d3b 的 `__workshopId` 改写不读它，查的是宿主的场景文件表 `sceneFileExists`）。 */
   private readonly registeredAssetsById = new Map<string, Set<string>>();
   /**
    * `engine.registerAudioBuffers` 的缓冲：同一分辨率返回同一个对象，由这里持有。`applySpectrum` 每帧把场景频谱（归一化后的）
@@ -1377,7 +1382,7 @@ export class ScriptApi {
       return buffers;
     });
     // 登记资源（P6d3a，rea-p6d-script 第 3 节）：只能在模块顶层调；参数不是字符串返回 null；同一段脚本重复登记同一路径返回 null；
-    // 否则记进这段脚本的登记表（P6d3b 的 `__workshopId` 改写用）并返回路径本身。WPE 的 exe 不读这张表，所以 precache 什么都不做
+    // 否则记进这段脚本的登记表（只用来判重复）并返回路径本身。WPE 的 exe 不读这张表，所以 precache 什么都不做
     this.method(this.engine, "registerAsset", (path?: unknown, _precache?: unknown) => {
       if (!this.evaluating) throw this.syntaxError("registerAsset can only be called from global scope.");
       if (typeof path !== "string") return null;
@@ -2172,7 +2177,7 @@ export class ScriptApi {
           stringify: () => undefined,
           orthographic: true,
           workshopId: this.access.workshopId?.() ?? null,
-          inAssets: (candidate) => new Set(this.access.bundle().assetPaths ?? []).has(candidate),
+          exists: (candidate) => this.access.sceneFileExists?.(candidate) ?? false,
         }),
       syntaxError: (message) => this.syntaxError(message),
       typeError: (message) => {
@@ -2194,7 +2199,6 @@ export class ScriptApi {
       const create = this.access.createLayer;
       if (!create) return null;
       const bundle = this.access.bundle();
-      const assets = new Set(bundle.assetPaths ?? []);
       const internal = this.realm.internal;
       const context: CreateConfigContext = {
         // 读调用那一刻的 `_Internal.stringifyConfig`（脚本可以改写它，rea-p6d-script 5.5），`this` 是 `_Internal`
@@ -2204,7 +2208,7 @@ export class ScriptApi {
             : JSON.stringify(value),
         orthographic: !bundle.general.perspective,
         workshopId: this.access.workshopId?.() ?? null,
-        inAssets: (path) => assets.has(path),
+        exists: (path) => this.access.sceneFileExists?.(path) ?? false,
         isModelData: (value) => this.modelDataHandle?.(value) ?? false,
       };
       const config = createLayerConfig(args, context);
