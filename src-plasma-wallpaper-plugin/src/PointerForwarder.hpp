@@ -13,7 +13,7 @@ class QMouseEvent;
 // src-tauri/kabegame/src/wallpaper/manager/pointer_socket.rs）。在 item 所在窗口（plasmashell 的桌面窗口）上装事件过滤器，
 // 只看不吞：桌面图标、右键菜单照常。发不出去就丢，不重试、不读回复。
 // 主窗口在哪由 Kabegame 自己问 KWin，这里不用任务管理器模型（TaskManager.TasksModel）取窗口几何（试验时建了它之后
-// plasmashell 卡死过，2026-11-22；元凶未必是它，见 README）。
+// plasmashell 卡死过，后来查明是 KPipeWire 接流引起的 GL 上下文丢失，与它无关，见 README「显示」）。
 class KabegamePointerForwarder : public QObject {
     Q_OBJECT
     QML_ELEMENT

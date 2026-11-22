@@ -18,9 +18,11 @@ if(NOT KB_STREAM_PROTOCOL MATCHES "^[0-9]+$")
     message(FATAL_ERROR "KB_STREAM_PROTOCOL must be a positive integer, got '${KB_STREAM_PROTOCOL}'")
 endif()
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Quick Qml)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Gui Quick Qml)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+# dmabuf 导入（StreamItem）：EGLImage 与 fence。头文件来自 libegl-dev
+pkg_check_modules(EGL REQUIRED IMPORTED_TARGET egl)
 
 set(KB_TARGET "kabegamewallpaper_r${KB_PLUGIN_REVISION}")
 qt_add_qml_module(${KB_TARGET}
@@ -33,11 +35,13 @@ qt_add_qml_module(${KB_TARGET}
         src/StreamFinder.cpp
         src/PointerForwarder.hpp
         src/PointerForwarder.cpp
+        src/StreamItem.hpp
+        src/StreamItem.cpp
 )
 
 # qmltyperegistrations 生成的文件按名字 include 头文件
 target_include_directories(${KB_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(${KB_TARGET} PRIVATE Qt6::Quick Qt6::Qml PkgConfig::PIPEWIRE)
+target_link_libraries(${KB_TARGET} PRIVATE Qt6::Gui Qt6::Quick Qt6::Qml PkgConfig::PIPEWIRE PkgConfig::EGL)
 target_compile_definitions(${KB_TARGET} PRIVATE KB_STREAM_PROTOCOL=${KB_STREAM_PROTOCOL})
-# 只依赖 Qt Core / Qml / Quick 与 libpipewire-0.3（Plasma 6 必有），用不到的库不进 NEEDED
+# 只依赖 Qt Core / Gui / Qml / Quick、libpipewire-0.3 与 libEGL（Plasma 6 必有），用不到的库不进 NEEDED
 target_link_options(${KB_TARGET} PRIVATE -Wl,--as-needed)

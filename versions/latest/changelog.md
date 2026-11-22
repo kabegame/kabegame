@@ -192,6 +192,7 @@
 - 网页壁纸自己刷新页面后不再重复收到全部属性（同 Wallpaper Engine）：用「重置场景」这类属性让页面刷新的壁纸（如创意工坊 3841846165）不再无限刷新、停在一片深色上。
 - 切换壁纸模式不再换掉当前壁纸：当前壁纸在新模式下显示不了（如 Wallpaper Engine 壁纸、视频切到原生模式）时桌面保持不变并提示；之前会从画廊随机挑一张代替，画廊里没有可用图片时还会切换失败。启动时恢复壁纸失败也不再清掉当前壁纸的记录。
 - KDE Plasma 的插件模式下退出 Kabegame 后桌面不再一片黑：退出时把桌面换回 Plasma 自己的壁纸（显示切到插件模式之前的那张），下次启动再换回 Kabegame。
+- KDE Plasma 的插件模式下用一会儿桌面就冻住的问题（N 卡上动态壁纸约 40 秒必现）：任务栏没有悬浮效果、桌面停在旧画面或来回闪、换壁纸和切模式要等很久。Kabegame 自带的壁纸插件改用自己的方式接收画面，升级后切一次插件模式（或重启 Kabegame）即自动换上，不用重启桌面。
 
 ### Changed
 - Linux 上图库预览里的网页 / 场景壁纸和 Windows、macOS 一样了：鼠标在预览外也会让壁纸跟着（贴在边上）、放大后能拖动平移、Ctrl+左键与壁纸交互，点过壁纸后 Esc 与方向键照常；插件模式下鼠标在主窗口上时桌面壁纸也跟着移动。
@@ -464,6 +465,7 @@
 - 场景壁纸 P9e：Matroska 拆包认 `V_VP9`。新增 `video/demux/vp9.ts`（关键帧未压缩帧头、`CodecPrivate` 的 level、附录 A 的 level 表、color_space → 矩阵码）；`VideoTrackIndex` 加 `vp9` 字段、`codec` 加 `"vp9"`；`codecString` 出 `vp09.PP.LL.DD`，`decoderConfig` 对 VP9 不给 `description`；用户视频的颜色来源多一个「VP9 帧头」（`ColorSource` / `rangeSource` 的 `"vp9"`）。样例 `vp9.webm`（带 superframe）、`vp9-10bit.webm`。设计与走查见 `.claude/plans/wpe-import/3-scene/phase9/phase-9e-vp9.md`。
 - `CodecVideoPlayer` 硬解优先、退到软解：`isConfigSupported` 先问 `prefer-hardware`、不支持再问 `prefer-software`（`softwareConfig`，`no-preference` 的检查不可靠不用）；硬解的解码器出错（`error` 回调，或 `decode` / `configure` 同步抛错）走 `decoderFailed` → `fallBackToSoftware`，只退一次，解码器按代数（`decoderGeneration`）丢弃旧解码器迟到的回调；`CodecVideoProbe` 与 dev 探针结果加 `acceleration`，探针改用最后一条 warn 当失败原因。测试替身 `FakeDecoder` 记 `configs`，可注入 `throwOnDecode` / `throwOnConfigure`，`supported` 可按配置定。
 - `set_wallpaper_mode` 拆出 `switch_wallpaper_mode`（GNOME 扩展掉线退回原生模式也走它），不再换壁纸：逐目标按新增的 `manager::displayable_in_mode`（WPE 只在渲染模式、`requires_window_mode` / `requires_plugin_mode` 只在对应模式、文件要在）决定设不设，显示不了或输出失败的目标保留当前壁纸记录，有这样的目标时发 `user-message`（`settings.wallpaperModeCurrentNotShown`），不再因为没有兜底图而中止；后端初始化失败时恢复轮播。删除 `rotator::pick_random_gallery_wallpaper` 与 `random_index`。启动恢复壁纸同样按 `displayable_in_mode` 跳过，`set_wallpaper` 失败只记日志、不清当前壁纸。
+- Plasma 壁纸插件修订 2：不再用 KPipeWire 的 `PipeWireSourceItem`，改用插件自己的消费端 `KabegameStreamItem`（`src-plasma-wallpaper-plugin/src/StreamItem.*`，自己的 `pw_thread_loop`）。KPipeWire 6.6.4 每帧在渲染线程上新建 / 销毁 `EGLImage` 并重绑到同一个纹理、建之前就把缓冲还给生产端，在 NVIDIA 上持续接 4K 帧约 43 s 后 plasmashell 的 GL 上下文丢失，Qt 只重建出事的窗口、面板从此不更新（可 ptrace 的 plasmashell 里复现两次，见插件 README「显示」）。新消费端：dmabuf 的 modifier 取 plasmashell 的 EGL 能导入的（`eglQueryDmaBufModifiersEXT`，去掉只能当外部纹理的），每个缓冲只导入一次（`add_buffer` 时 dup fd，`EGLImage` + `GL_TEXTURE_2D` 跟着缓冲走），显示中的缓冲不还、换下来插 EGL fence 等 GPU 读完再入队，导入失败或没有 EGL（X11 / GLX、非 OpenGL 的 RHI）时只用共享内存，不可见时流不活动。插件多链接 `libEGL`，不再依赖 KPipeWire；推流端不变。
 - Linux Plasma 插件模式：`app.run` 处理 `RunEvent::Exit`，调 `plasma::restore_system_plugin_on_exit` 把各桌面换回 `org.kde.image`（runtime 在销毁壁纸窗口前发这个事件，推流还在，不闪黑）；只在壁纸控制器初始化过（新增 `WallpaperController::try_global`）、Plasma 6 会话、插件模式且壁纸开着时做，启动页出错退出与只转发请求的第二个实例不碰。
 
 ### Fixed

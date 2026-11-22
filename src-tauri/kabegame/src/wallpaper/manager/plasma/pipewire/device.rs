@@ -1,9 +1,9 @@
-//! 找合成器的主显示设备（render node）。dmabuf 必须分配在这张卡上：KPipeWire 不做设备协商，在别的卡上分配的
-//! dmabuf 它导入报 `EGL_BAD_ALLOC`，逐个剔掉 modifier 重协商、最后才落到共享内存（P0 实测约 200 ms、12 次）。
+//! 找合成器的主显示设备（render node）。dmabuf 必须分配在这张卡上：插件的消费端不做设备协商，在别的卡上分配的
+//! dmabuf 导入失败（KPipeWire 时代报 `EGL_BAD_ALLOC`），消费端就整路改用共享内存重新连。
 //! CEF 的 GPU 进程在 Wayland 下也按合成器的主设备选卡，所以两边自然在同一张卡上。
 //!
 //! Wayland：`zwp_linux_dmabuf_v1` v4 的默认 feedback 的 `main_device`（Chromium 选卡用的也是它）。X11 不找：plasmashell 默认
-//! 用 GLX，KPipeWire 导入不了 dmabuf，本来就走共享内存。
+//! 用 GLX，消费端没有 EGL 就只要共享内存。
 //!
 //! 环境变量 `KABEGAME_PIPEWIRE_RENDER_NODE`：`none` / `off` / `0` 关掉 dmabuf（离屏 browser 走软件绘制、流只给共享内存），
 //! 其它值当作 render node 路径直接用（调试多卡用）。

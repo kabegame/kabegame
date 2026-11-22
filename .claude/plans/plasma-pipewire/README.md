@@ -340,9 +340,11 @@ pub(crate) trait Probe: Send + 'static {
    收集 `kabegame.wallpaper.protocol` 存在的节点；
    选 `kabegame.wallpaper.screen` 等于自己 `Screen.name` 的，没有就选 `screen` 为空的那一路；有多个候选（dev 与已安装版都在插件模式）时
    取 `object.serial` 最大的。
-2. **显示**：把选中节点的 `object.serial` 交给 `PipeWireSourceItem.nodeId`，`fd` 留 0（默认连接），`allowDmaBuf: true`，铺满；
-   节点消失时清空，重新出现时再接上。**不要调 `PipeWireSourceItem.error()`**：流还没建起来时调用会让 plasmashell 段错误
-   （KPipeWire 6.6.4，P0 实测）。要暂停（例如被全屏窗口挡住）时把 item 设为不可见，生产端约 20 ms 内看到流变 `paused`。
+2. **显示**：把选中节点的 `object.serial` 交给插件自己的消费端 `KabegameStreamItem.serial`，铺满；节点消失时清空，重新出现时
+   再接上。要暂停（例如被全屏窗口挡住）时把 item 设为不可见，流随之不活动、生产端停帧。修订 1 用的是 KPipeWire 的
+   `PipeWireSourceItem`（`nodeId` = serial、`fd` 0、`allowDmaBuf: true`；不能调它的 `error()`，流没建起来时会让 plasmashell
+   段错误），修订 2 换掉：它每帧新建 / 销毁 `EGLImage`、建之前就把缓冲还给生产端，在 NVIDIA 上会让 plasmashell 丢 GL 上下文
+   （2026-11-22，见插件 README「显示」）。
 3. **鼠标**：在 plasmashell 桌面窗口（`window()`）上装事件过滤器，只看不吞（总是返回 `false`）；`MouseMove` / `MouseButtonPress` /
    `MouseButtonRelease` 落在壁纸 item 范围内时（按着键拖出范围也照发，Kabegame 要配对抬起），按点 4 的格式用 `SOCK_DGRAM` 的
    `sendto`（`MSG_DONTWAIT`）发到选中节点的 `kabegame.wallpaper.input`，`slot` 取节点的 `kabegame.wallpaper.slot`，`dx` / `dy` 填光标的
@@ -460,6 +462,11 @@ plasmashell 卡死（见点 7），改成现在的做法；模拟消息验证预
 （D-Bus 正常、主线程 CPU 正常），推流也正常。两次的共同点是插件内容在运行中的 plasmashell 里被重新加载（换 `Entry`、换插件再换回），
 怀疑与 KPipeWire 在 NVIDIA 上导入 dmabuf / 卸掉旧的 `PipeWireSourceItem` 有关，但同样的换 `Entry` 在 02:43、03:13 没出事，没坐实。
 要另起一项查（对照 `allowDmaBuf: false`、反复换 `Entry`、看是哪个窗口的上下文）。
+
+**查明（2026-11-22 晚）**：与换 `Entry` 无关，是持续接 4K 场景帧约 43 s 后 plasmashell 的 GL 上下文丢失（`QRhiGles2: Context is lost`），
+Qt 只重建出事的桌面窗口，面板的上下文一直 `eglError 0x3006`，任务栏不再更新、D-Bus 慢到十几秒。在可 ptrace 的 plasmashell 里复现：
+丢之前没有失败的 ioctl，`invalid sync FD` 是别的进程报的。插件修订 2 改用自己的消费端（每个缓冲只导入一次、显示中的缓冲等 fence
+再还），见插件 README「显示」。
 
 没做：出货构建的 Qt 下限（「待定」1）；旧版插件缓存要重启 plasmashell 时的界面提示；能力表在 Plasma 6 会话下但没有内置包也没装时
 不列插件模式（与以前「装了才列」一致）。

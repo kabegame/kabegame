@@ -1,5 +1,22 @@
 # v4.7.0 regression
 
+## Plasma 壁纸插件自己的消费端（修订 2，修 plasmashell 冻住）
+
+2026-11-22。插件模式下 N 卡上持续推场景帧约 43 s 后 plasmashell 丢 GL 上下文：任务栏不再更新（点击有反应、没有悬浮效果）、桌面闪旧帧、D-Bus 调用十几秒。插件修订 2 不再用 KPipeWire 的 `PipeWireSourceItem`，改用自己的 `KabegameStreamItem`。本机：Plasma 6.6.4 Wayland、Qt 6.10.2、NVIDIA 580、RTX 4090 D + 4070、4K 分数缩放 1.45。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | PS1 构建 | 本机 Linux，系统 Qt | `deno task build:plasma-plugin` | 修订 2，URI `KabegameWallpaperR2`；`.so` 的 NEEDED 只多 `libEGL.so.1`、没有 KPipeWire | 2026-11-22 Claude：通过，编译器无告警 |
+| [x] | PS2 复现原问题（R1） | 本机，plasmashell 由带 `PR_SET_PTRACER` 的包装启动，strace 记失败的 ioctl | 插件模式 + 场景壁纸 | 约 43 s 后 `QRhiGles2: Context is lost`，之后面板的上下文一直 `eglError 0x3006` | 2026-11-22 Claude：两次都是 43 s（03:33、19:00）；丢之前 plasmashell 没有失败的 ioctl，主线程卡在 NVIDIA EGL 的交换缓冲 |
+| [x] | PS3 独立消费者 | 本机 | `qml` 开 960×540 窗口，放 `KabegameStreamFinder`（`screenName: ""`）+ `KabegameStreamItem`，150 s 里 `grabToImage` 4 次 | 走 dmabuf（modifier `0x300000000e08014`），画面方向与颜色对、各次不同，不丢上下文 | 2026-11-22 Claude：通过；对照组换 `PipeWireSourceItem` 跑 120 s 也没丢，独立进程里复现不了 |
+| [x] | PS4 plasmashell 长跑 | 同 PS2，装 R2 | 插件模式 + 场景壁纸持续 5 min 以上 | 不出现 `Context is lost`，任务栏悬浮正常，换壁纸 / 切模式即时 | 2026-11-22 Claude：同一张场景 4K dmabuf 跑 5 min（19:22:12–19:27:18），`Context is lost` / `eglError` 0 条；plasmashell 的 `sync_file` fd 在 16–24 间波动、GPU 显存约 270 MiB 不涨；用户确认任务栏悬浮正常 |
+| [x] | PS5 断流重连 | 同 PS4 | 运行中重启 dev | 节点消失时 `stream=idle`，回来后自动重连、重新协商 dmabuf | 2026-11-22 Claude：19:22:00 断、19:22:11 接上 |
+| [ ] | PS6 从 R1 升级 | Plasma 6，装着 R1 | 新 dev 切一次插件模式 | 装上 R2、`Entry` 换成 `KabegameWallpaperR2.qml`，plasmashell 不重启就换上新消费端 | 本机测试时是手动换的包 + 重启 plasmashell（`Entry` 指向的 R1 文件不在，退回 `content.qml`） |
+| [ ] | PS7 不可见时停帧 | 同 PS4 | 开一个全屏窗口挡住桌面，或临时把壁纸插件换成 `org.kde.image` | 推流端日志 `streaming=false`，回来后接着出帧 | |
+| [ ] | PS8 共享内存 | 同 PS4 | `KABEGAME_PIPEWIRE_RENDER_NODE=none` 启动 dev | 插件日志 `stream=shm 3840x2161`，画面正常 | |
+| [ ] | PS9 dmabuf 导入失败退回 | 双卡 | `KABEGAME_PIPEWIRE_RENDER_NODE` 指向另一张卡启动 dev | 插件日志「导入 dmabuf 失败」后改用共享内存重连，画面正常 | |
+| [ ] | PS10 X11 | Plasma 6 X11 | 插件模式 | 插件日志「没有 EGL 上下文，只用共享内存」，画面正常 | 本机是 Wayland |
+
 ## Plasma 插件模式退出时换回系统壁纸插件
 
 2026-11-22。插件模式下退出应用后，桌面仍挂着 Kabegame 的 Plasma 壁纸插件，推流一断就是一片黑。现在 `RunEvent::Exit` 时把各桌面换回 `org.kde.image`，下次启动时由 `ensure_plasma_plugin_aligned` 换回来。
@@ -9,7 +26,7 @@
 | [x] | PX1 编译 | 本机 Linux | `check-kabegame --skip vue` | 0 error | 2026-11-22 Claude：0 error，kabegame 告警 19（Linux 上 `app.run` 闭包的 `event` 用上了，少一个 unused） |
 | [x] | PX2 托盘退出 | Plasma 6，插件模式开着 | 托盘「退出」 | 桌面换回插件模式之前的系统壁纸，不黑屏、不闪黑；日志「退出：各桌面的壁纸插件换回 org.kde.image」 | 要用新代码重启 dev |
 | [ ] | PX3 关主窗口时确认退出 | 同上 | 关主窗口，在询问里选直接退出 | 同 PX2 | |
-| [ ] | PX4 再启动 | 接 PX2 | 启动 Kabegame | 桌面换回 Kabegame 插件，壁纸照常 | |
+| [x] | PX4 再启动 | 接 PX2 | 启动 Kabegame | 桌面换回 Kabegame 插件，壁纸照常 | 2026-11-22 Claude：19:29:35 退出换回 `org.kde.image`，19:29:54 启动后 `Entry` 写成 `KabegameWallpaperR2.qml`，R2 接上流走 dmabuf；plasmashell 无报错 |
 | [ ] | PX5 不该换的情况 | Plasma 6 | 原生模式下退出；壁纸开关关着时退出；已有实例时再启动一次（第二个实例转发后退出） | 都不改桌面的壁纸插件；第二个实例不影响正在运行的那个 | |
 | [ ] | PX6 GNOME 不受影响 | GNOME 插件模式 | 退出 | 不调 Plasma 的脚本（不是 Plasma 6 会话），壁纸窗口随进程关掉，露出 GNOME 自己的壁纸 | |
 

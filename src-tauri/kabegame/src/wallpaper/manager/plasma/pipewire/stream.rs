@@ -1,11 +1,12 @@
 //! 插件模式的壁纸推流：每个离屏壁纸窗口一个 PipeWire `Video/Source` 节点，Plasma 壁纸插件按节点属性找到它、
-//! 用 KPipeWire 的 `PipeWireSourceItem` 显示（约定见 `.claude/plans/plasma-pipewire/README.md` 点 7）。
+//! 用插件自己的消费端 `KabegameStreamItem` 显示（约定见 `.claude/plans/plasma-pipewire/README.md` 点 7；插件修订 2 起
+//! 不再用 KPipeWire 的 `PipeWireSourceItem`，原因见 `src-plasma-wallpaper-plugin/README.md`「显示」）。
 //!
 //! 帧来自离屏 browser 的帧接收器（`tauri_runtime_kbcef::OffscreenFrameSink`），在 CEF UI 线程上同步调用：持着
 //! 本流的 `pw_thread_loop` 锁取一个空缓冲、拷进去、入队，再 `trigger_process` 让图跑一轮（本流是驱动方，有新帧才出帧）。
 //! 所以只能用底层接口：pipewire-rs 的高层类型不能跨线程。
 //!
-//! 格式只给 `BGRA`（KPipeWire 6.6 的消费者不收 `BGRx`，2026-11-21 实测）、尺寸取帧的像素尺寸、帧率可变。帧尺寸变了就按
+//! 格式只给 `BGRA`（插件的消费端只宣告它；当初的 KPipeWire 6.6 也不收 `BGRx`，2026-11-21 实测）、尺寸取帧的像素尺寸、帧率可变。帧尺寸变了就按
 //! 新尺寸重新宣告格式，旧尺寸的帧丢掉。缓冲由本流分配（`ALLOC_BUFFERS`），两种：
 //!
 //! - **dmabuf**（离屏 browser 走共享纹理、[`super::gpu`] 可用时宣告在前）：宣告本设备的 modifier 列表

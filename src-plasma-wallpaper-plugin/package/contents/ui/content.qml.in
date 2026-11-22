@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Window
-import org.kde.pipewire as PipeWire
 import "Plugin/@KB_QML_URI@" as KB
 
 // 插件修订 @KB_PLUGIN_REVISION@ 的内容：找 Kabegame 的壁纸节点、铺满显示，把桌面上的鼠标发回 Kabegame。
@@ -22,12 +21,11 @@ Item {
         slot: finder.slot
     }
 
-    // 不要调 PipeWireSourceItem.error()：流还没建起来时调用会让 plasmashell 段错误（KPipeWire 6.6.4）
-    PipeWire.PipeWireSourceItem {
+    // 自己的消费端，不用 KPipeWire 的 PipeWireSourceItem（它在 NVIDIA 上会让 plasmashell 丢 GL 上下文，见 README「显示」）
+    KB.KabegameStreamItem {
         anchors.fill: parent
-        nodeId: finder.serial
-        fd: 0
-        allowDmaBuf: true
+        serial: finder.serial
         visible: finder.serial !== 0
+        onStatusChanged: console.log("[kabegame-wallpaper] r@KB_PLUGIN_REVISION@ stream=" + status)
     }
 }
