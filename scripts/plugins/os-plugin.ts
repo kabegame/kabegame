@@ -38,6 +38,12 @@ const CEF_RUNTIME_FILES = [
 // 该 build 用 v8_context_snapshot;no-sandbox 传统 exe 模式,不需要 bootstrap.exe/cef_sandbox)。
 // 收集到 resources/cef/,安装期由 NSIS hook 搬到 $INSTDIR(libcef.dll 是 load-time 链接,
 // CEF 要求 dll/pak/dat/locales 与 exe 同目录)。
+// 没有 dxil.dll：CEF 156（Chromium 156.0.8078.0）起上游不再分发它（a26ddfd27「win: dxil.dll is no longer
+// distributed」）。Dawn 的 EnsureDXCLibraries 只 LoadLibrary `dxcompiler.dll`，CLSID_DxcValidator 也从它的
+// DxcCreateInstance 取(自编 dxcompiler 内置 DxilValidation)；DXC 只有显式设了环境变量 DXC_DXIL_DLL_PATH
+// 才会去加载外部 dxil.dll(dxcapi.extval.cpp)，dxcompiler.dll 的 DllMain 不碰它、PE 导入表里也没有它。
+// 实测把它放回同目录也不会被加载进进程,所以缺它不让 Dawn 退回 FXC——别照旧笔记再把它补回来
+// (phase-compile-cache.md 那条「缺 dxil.dll 让 Dawn 退回 FXC」的归因已更正)。
 const WINDOWS_CEF_RUNTIME_FILES = [
   "libcef.dll",
   "chrome_elf.dll",
@@ -51,7 +57,6 @@ const WINDOWS_CEF_RUNTIME_FILES = [
   "vulkan-1.dll",
   "d3dcompiler_47.dll",
   "dxcompiler.dll",
-  "dxil.dll",
 ];
 // dev / start 裸跑 exe 时 Chromium 到 exe 旁找 ANGLE，找不到就退回软件合成，WebGL 与 WebGPU 都不可用；
 // 打包版是 .app，走 framework 的 Libraries，不需要这一步。GPU 进程实际只加载这两个：

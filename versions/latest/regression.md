@@ -1,5 +1,16 @@
 # v4.7.0 regression
 
+## 打包不再收集 `dxil.dll`（CEF 156）
+
+2026-11-23。CEF 156（Chromium 156.0.8078.96）不再分发 `dxil.dll`（上游 `a26ddfd27`「win: dxil.dll is no longer distributed」），Windows 出货构建在收集 CEF 运行时时报缺它。`WINDOWS_CEF_RUNTIME_FILES` 去掉这一项。顺带推翻了 `.claude/plans/wpe-import/3-scene/phase-compile-cache.md` 里「缺 `dxil.dll` 让 Dawn 退回 FXC」的归因：Dawn 与 DXC 的整条链路都不碰它（那条笔记已更正）。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | CB1 清单与产物一致 | 本机 Windows | 对照 `bin/windows/x86_64/cef-build` 与清单；`deno check scripts/plugins/os-plugin.ts` | 清单里 12 个文件都在；locales 白名单 5 项与回退 `en-US.pak` 也在；类型检查通过 | 2026-11-23 Claude：通过（12/12，缺失 0） |
+| [x] | CB2 DXC 不依赖 `dxil.dll` | 本机 Windows | 读 `dxcompiler.dll` 的 PE 导入表；在无 `dxil.dll` 的 `cef-build` 与有它的 `target-dev/debug` 各做一次 `LoadLibraryExW` + `DxcCreateInstance`（validator / compiler） | 导入表无 `dxil.dll`、无 delay-load；两种配置下都 `S_OK`；`dxil.dll` 从未被加载进进程 | 2026-11-23 Claude：通过，两组结果完全相同、`GetModuleHandleW("dxil.dll")` 均为空 |
+| [ ] | CB3 场景画面哈希不变 | 本机 Windows，dev | **先删掉 `target-dev/debug/dxil.dll`**（Oct 25 的旧件，当时手动放回去的），重启 dev，比 15013 / 16045 的画面哈希 | 与 `6d6c90b501ae` / `32d83eb1e5fe` 一致（即删掉它也不变） | 要 dev 跑着，本次没做 |
+| [ ] | CB4 Windows 出货 | Windows | 出 NSIS 安装包，装上运行 | 收集通过，安装目录没有 `dxil.dll`；主界面、场景壁纸（WebGPU / DXC）、网页壁纸正常 | |
+
 ## 场景脚本建层的路径改写改查场景文件表
 
 2026-11-23 macOS。生产版打开 69031「Girl and Cat (Adjustable; 5120x1440; WUHD) MX」时每次加载都报

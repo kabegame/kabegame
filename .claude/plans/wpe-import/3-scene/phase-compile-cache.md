@@ -109,6 +109,8 @@ commands.allow = ["wpe_scene_target", "wpe_scene_report", "wpe_scene_shortcut_ic
 
 **顺带查明**：测量期间 15013 / 16045 的画面哈希变了，不是 P13k / P14 的回归，而是 dev 换到 `target-dev` 后 `target-dev/debug` 缺 `dxil.dll`（`bin/windows/x86_64/cef-build` 的导出里没有它），Dawn 退回 FXC 编译着色器；放回旧的 `dxil.dll` 重启 dev 后哈希回到原值（15013 `6d6c90b501ae`、16045 `32d83eb1e5fe`）。CEF 导出缺 `dxil.dll` 是待修的问题。
 
+**更正（2026-11-23）：上面这条「缺 `dxil.dll` 让 Dawn 退回 FXC」的归因不成立，`dxil.dll` 不必补。** CEF 156（Chromium 156.0.8078.96）起上游不再分发它（`a26ddfd27`「win: dxil.dll is no longer distributed」），顺着查了一遍：Dawn 的 `EnsureDXCLibraries` 只 `LoadLibrary("dxcompiler.dll")`，`CLSID_DxcValidator` 也从它的 `DxcCreateInstance` 取；`dxcAvailable` 在 `DAWN_USE_BUILT_DXC` 下恒为 `true`、不检查任何文件（`PhysicalDeviceD3D12.cpp` 的注释明说不在那里查编译器库）；DXC 只有显式设了环境变量 `DXC_DXIL_DLL_PATH` 才会加载外部 `dxil.dll`（`dxcapi.extval.cpp`），`dxcompiler.dll` 的 `DllMain` / `InitMaybeFail` 不碰它，PE 导入表里也没有它（无静态导入、无 delay-load）。实测两种配置（`cef-build` 无 `dxil.dll`、`target-dev/debug` 有）下 `LoadLibraryExW` + `DxcCreateInstance` 取 validator 与 compiler 都是 `S_OK`，且 `dxil.dll` 从未被加载进进程——**有它也不加载**。`gpu_init.cc` 仍预加载 `dxil.dll`，但那只是为绕 loader lock 的 best-effort（返回值丢弃），其注释「dxcompiler.dll loads dxil.dll from DllMain」对自编的这份 DXC 已不准确。所以当时那次哈希变化应归给 `target` → `target-dev` 切换带来的别的差异（没有做控制变量），不是 `dxil.dll`。打包清单已随之去掉这一项（`scripts/plugins/os-plugin.ts`）。
+
 ## 步骤 2 — 正式：主线程编译会话，不用消息
 
 - **核对**：宿主（`host.ts`、`render/`、`script/`、`registry.ts`）有没有改写 bundle / 片段增量里与会话共享的对象；结论与对应处理写在这里再动手。
