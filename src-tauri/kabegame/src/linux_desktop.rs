@@ -208,6 +208,20 @@ mod tests {
             classify_from_env(Some("ubuntu:GNOME"), None, None, None, None),
             Some(LinuxDesktop::Gnome)
         );
+        // 仅设置 XDG_SESSION_DESKTOP 或 DESKTOP_SESSION 同样直接识别，不回退探测
+        assert_eq!(
+            classify_from_env(None, Some("sway"), None, None, None),
+            Some(LinuxDesktop::Unknown)
+        );
+        assert_eq!(
+            classify_from_env(None, None, Some("Hyprland"), None, None),
+            Some(LinuxDesktop::Unknown)
+        );
+        // KDE 专属变量优先于其它桌面名（既有约定）
+        assert_eq!(
+            classify_from_env(Some("niri"), None, None, Some("true"), None),
+            Some(LinuxDesktop::Plasma)
+        );
         assert_eq!(classify_from_env(Some("   "), Some(""), None, None, None), None);
         assert_eq!(classify_from_env(None, None, None, None, None), None);
     }

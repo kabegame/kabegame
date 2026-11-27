@@ -114,6 +114,7 @@ impl<R: Runtime> WallpaperWindow<R> {
         &mut self,
         screen: Option<&ScreenInfo>,
         #[cfg(target_os = "linux")] linux_backend: super::LinuxBackend,
+        #[cfg(target_os = "linux")] session_gen: u64,
     ) -> Result<(), String> {
         // 等待前端 ready（由 mark_ready() -> notify_all() 唤醒）后再挂载：
         // 挂载会读取窗口句柄并改其父子/样式，必须等 webview 真正建起来。
@@ -138,7 +139,7 @@ impl<R: Runtime> WallpaperWindow<R> {
         #[cfg(target_os = "linux")]
         match linux_backend {
             super::LinuxBackend::PipeWire => self.attach_stream(screen)?,
-            super::LinuxBackend::LayerShell => self.attach_layer_shell()?,
+            super::LinuxBackend::LayerShell => self.attach_layer_shell(session_gen)?,
             super::LinuxBackend::Windowed => {
                 self.window
                     .show()
@@ -240,26 +241,61 @@ impl<R: Runtime> WallpaperWindow<R> {
     }
 
     #[cfg(target_os = "linux")]
-    fn attach_layer_shell(&mut self) -> Result<(), String> {
+    pub fn layer_shell_sink_id(&self) -> Option<u64> {
+        self.layer_surface.as_ref().map(|sink| sink.health().sink_id())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn attach_layer_shell(&mut self, session_gen: u64) -> Result<(), String> {
         use crate::wallpaper::manager::layer_shell::surface::LayerShellSink;
 
         let label = self.window.label().to_string();
         let expect_dmabuf = crate::wallpaper::manager::plasma::pipewire::dmabuf_enabled();
-        let on_stalled: Option<std::sync::Arc<dyn Fn() + Send + Sync>> = expect_dmabuf.then(|| {
-            std::sync::Arc::new(|| {
-                if crate::wallpaper::manager::plasma::pipewire::disable_dmabuf_for_session() {
+        let stalled_label = label.clone();
+        let fatal_label = label.clone();
+        let sink = LayerShellSink::new(
+            label.clone(),
+            expect_dmabuf,
+            move |health| {
+                let cb_label = stalled_label.clone();
+                expect_dmabuf.then(|| {
+                    std::sync::Arc::new(move || {
+                        if let Some(controller) =
+                            crate::wallpaper::manager::WallpaperController::try_global()
+                        {
+                            if let Err(e) = controller.recover_layer_shell(
+                                session_gen,
+                                &cb_label,
+                                &health,
+                                true,
+                                None,
+                            ) {
+                                tracing::warn!("dmabuf 降级到共享内存后重建壁纸窗口失败: {e}");
+                            }
+                        }
+                    }) as std::sync::Arc<dyn Fn() + Send + Sync>
+                })
+            },
+            move |health| {
+                let cb_label = fatal_label.clone();
+                Some(std::sync::Arc::new(move |reason: String| {
                     if let Some(controller) =
                         crate::wallpaper::manager::WallpaperController::try_global()
                     {
-                        if let Err(e) = controller.restart_plasma_plugin_if_active() {
-                            tracing::warn!("dmabuf 降级到共享内存后重建壁纸窗口失败: {e}");
+                        if let Err(e) = controller.recover_layer_shell(
+                            session_gen,
+                            &cb_label,
+                            &health,
+                            false,
+                            Some(&reason),
+                        ) {
+                            tracing::error!("layer-shell 后端异常退出且恢复失败: {e}");
                         }
                     }
-                }
-            }) as std::sync::Arc<dyn Fn() + Send + Sync>
-        });
-        let sink = LayerShellSink::new(label.clone(), expect_dmabuf, on_stalled)
-            .map_err(|e| format!("建壁纸窗口 {label} 的 layer-shell 表面失败: {e}"))?;
+                }) as std::sync::Arc<dyn Fn(String) + Send + Sync>)
+            },
+        )
+        .map_err(|e| format!("建壁纸窗口 {label} 的 layer-shell 表面失败: {e}"))?;
         let sink = std::sync::Arc::new(sink);
         tauri_runtime_kbcef::set_offscreen_frame_sink(&label, Some(sink.clone()));
         // 若 Configure 早于挂 sink 触发了首帧，这里补请一次重画，保证静态壁纸不会白屏。

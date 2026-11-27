@@ -532,6 +532,7 @@ impl OffscreenFrameSink for WallpaperStream {
                 width: coded_width,
                 height: coded_height,
                 visible,
+                ..
             } => {
                 let Some(gpu) = inner.gpu else {
                     inner.report_failure("收到 dmabuf 帧但没有 GPU 上下文（离屏 browser 不该开共享纹理）");

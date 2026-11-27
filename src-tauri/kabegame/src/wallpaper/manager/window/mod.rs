@@ -138,6 +138,76 @@ pub enum LinuxBackend {
     LayerShell,
 }
 
+/// 窗口管理器的生命周期与实例代际状态：用于阻断旧 sink 迟到恢复回调对新窗口的误伤。
+#[derive(Debug, Default, Clone, Copy)]
+struct ActiveState {
+    enabled: bool,
+    generation: u64,
+    #[cfg(target_os = "linux")]
+    consecutive_disconnect_recoveries: u32,
+}
+
+#[cfg(target_os = "linux")]
+const DISCONNECT_RECOVERY_RESET_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
+#[cfg(target_os = "linux")]
+fn decide_disconnect_recovery(
+    consecutive_recoveries: u32,
+    healthy_duration: std::time::Duration,
+) -> (bool, u32) {
+    let effective = if healthy_duration >= DISCONNECT_RECOVERY_RESET_AFTER {
+        0
+    } else {
+        consecutive_recoveries
+    };
+    if effective >= 1 {
+        (false, effective)
+    } else {
+        (true, effective + 1)
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+fn should_apply_layer_shell_recovery(
+    enabled: bool,
+    current_gen: u64,
+    expected_gen: u64,
+    is_current_sink: bool,
+    sink_cancelled: bool,
+    disable_dmabuf: bool,
+    frames_published: u64,
+    dmabuf_unrecoverable: bool,
+) -> bool {
+    if !enabled || current_gen != expected_gen || !is_current_sink || sink_cancelled {
+        return false;
+    }
+    if disable_dmabuf && frames_published > 0 && !dmabuf_unrecoverable {
+        return false;
+    }
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn evaluate_recovery_under_active_lock(
+    active: &ActiveState,
+    expected_gen: u64,
+    is_current_sink: bool,
+    health: &crate::wallpaper::manager::layer_shell::surface::SinkHealth,
+    disable_dmabuf: bool,
+) -> bool {
+    should_apply_layer_shell_recovery(
+        active.enabled,
+        active.generation,
+        expected_gen,
+        is_current_sink,
+        health.is_cancelled(),
+        disable_dmabuf,
+        health.frames_published(),
+        health.dmabuf_unrecoverable(),
+    )
+}
+
 /// 窗口模式壁纸管理器：**每块在线屏一个壁纸窗口**，窗口矩形就是那块屏，各自完整渲染一幅画面。
 /// label 取自固定的池 [`WALLPAPER_LABELS`]。窗口是**懒建**的：只在 `wallpaperMode` 为本后端的壁纸模式且壁纸开着期间存在。
 ///
@@ -161,8 +231,8 @@ pub struct WindowWallpaperManager<R: Runtime> {
     app: AppHandle<R>,
     /// 本后端所属的壁纸模式（`window` / `plasma-plugin`）：布局按这个模式下生效的显示器模式现算。
     wallpaper_mode: &'static str,
-    /// 值：是否处于窗口模式（`init` 之后、`cleanup` 之前）。锁本身让对齐串行。
-    active: Mutex<bool>,
+    /// 值：是否处于窗口模式（`init` 之后、`cleanup` 之前）及实例代际。锁本身让对齐串行。
+    active: Mutex<ActiveState>,
     /// label → 窗口
     slots: Mutex<BTreeMap<String, Slot<R>>>,
     #[cfg(target_os = "linux")]
@@ -178,7 +248,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         Self {
             app,
             wallpaper_mode,
-            active: Mutex::new(false),
+            active: Mutex::new(ActiveState::default()),
             slots: Mutex::new(BTreeMap::new()),
             #[cfg(target_os = "linux")]
             linux_backend: LinuxBackend::PipeWire,
@@ -208,7 +278,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         !matches!(self.linux_backend, LinuxBackend::Windowed)
     }
 
-    fn lock_active(&self) -> MutexGuard<'_, bool> {
+    fn lock_active(&self) -> MutexGuard<'_, ActiveState> {
         self.active
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -376,7 +446,11 @@ impl<R: Runtime> WindowWallpaperManager<R> {
     }
 
     /// 把窗口集合对齐到 `layout`。调用方持有 `active` 锁。部分窗口失败时其余窗口照常对齐，返回第一个错误。
-    fn align(&self, layout: &Layout) -> Result<(), String> {
+    fn align(
+        &self,
+        layout: &Layout,
+        #[cfg(target_os = "linux")] session_gen: u64,
+    ) -> Result<(), String> {
         let mut plans = plan_windows(layout);
         if plans.len() > WALLPAPER_LABELS.len() {
             tracing::warn!(
@@ -539,7 +613,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             let mount_res = {
                 #[cfg(target_os = "linux")]
                 {
-                    wallpaper_window.mount(plan.screen.as_ref(), self.linux_backend)
+                    wallpaper_window.mount(plan.screen.as_ref(), self.linux_backend, session_gen)
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
@@ -605,12 +679,28 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
     }
 
     fn reconcile(&self) -> Result<(), String> {
+        #[cfg(target_os = "linux")]
+        let mut active = self.lock_active();
+        #[cfg(not(target_os = "linux"))]
         let active = self.lock_active();
-        if !*active {
+        if !active.enabled {
             // 不在窗口模式（或壁纸关着）：窗口不该存在，屏幕变化与本后端无关
             return Ok(());
         }
-        self.align(&self.current_layout())
+        #[cfg(target_os = "linux")]
+        {
+            if self.lock_slots().is_empty() {
+                // 例如此前连续断连停机后由布局重排重新拉起，重置断连计数。
+                active.consecutive_disconnect_recoveries = 0;
+            }
+        }
+        #[cfg(target_os = "linux")]
+        let session_gen = active.generation;
+        self.align(
+            &self.current_layout(),
+            #[cfg(target_os = "linux")]
+            session_gen,
+        )
     }
 
     fn window_assignment(&self, label: &str) -> Option<WindowAssignment> {
@@ -624,7 +714,12 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
         // 子窗口（WS_CHILD + 改过的扩展样式），留着它下次只会在一个已被改过的窗口上
         // 再挂一次。
         let mut active = self.lock_active();
-        *active = false;
+        active.enabled = false;
+        active.generation = active.generation.wrapping_add(1).max(1);
+        #[cfg(target_os = "linux")]
+        {
+            active.consecutive_disconnect_recoveries = 0;
+        }
         // 丢弃全部 WallpaperWindow：ping 看门狗随之停止（`Pinger` 的 Drop）。
         let slots = std::mem::take(&mut *self.lock_slots());
         drop(slots);
@@ -641,17 +736,47 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
 
     fn init(&self) -> Result<(), String> {
         let mut active = self.lock_active();
-        if !*active {
+        if !active.enabled {
             tracing::debug!("初始化窗口模式壁纸管理器");
-            *active = true;
+            active.enabled = true;
+            active.generation = active.generation.wrapping_add(1).max(1);
+            #[cfg(target_os = "linux")]
+            {
+                active.consecutive_disconnect_recoveries = 0;
+            }
         }
+        #[cfg(target_os = "linux")]
+        let session_gen = active.generation;
         // 已在窗口模式时等同于一次对齐（幂等）：窗口都在就什么都不做。
-        self.align(&self.current_layout())
+        self.align(
+            &self.current_layout(),
+            #[cfg(target_os = "linux")]
+            session_gen,
+        )
     }
 
     #[cfg(target_os = "linux")]
     fn restart_if_active(&self) -> Result<(), String> {
         WindowWallpaperManager::restart_if_active(self)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn recover_layer_shell(
+        &self,
+        expected_gen: u64,
+        label: &str,
+        health: &crate::wallpaper::manager::layer_shell::surface::SinkHealth,
+        disable_dmabuf: bool,
+        reason: Option<&str>,
+    ) -> Result<(), String> {
+        WindowWallpaperManager::recover_layer_shell(
+            self,
+            expected_gen,
+            label,
+            health,
+            disable_dmabuf,
+            reason,
+        )
     }
 }
 
@@ -659,10 +784,12 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
 impl<R: Runtime> WindowWallpaperManager<R> {
     /// 若窗口管理器仍处于激活态，销毁全部现有壁纸窗口并按当前布局原地重建。
     pub fn restart_if_active(&self) -> Result<(), String> {
-        let active = self.lock_active();
-        if !*active {
+        let mut active = self.lock_active();
+        if !active.enabled {
             return Ok(());
         }
+        active.generation = active.generation.wrapping_add(1).max(1);
+        let session_gen = active.generation;
         let slots = std::mem::take(&mut *self.lock_slots());
         drop(slots);
         for label in WALLPAPER_LABELS {
@@ -670,7 +797,87 @@ impl<R: Runtime> WindowWallpaperManager<R> {
                 tracing::warn!("{e}");
             }
         }
-        self.align(&self.current_layout())
+        self.align(&self.current_layout(), session_gen)
+    }
+
+    /// 持有管理器生命周期锁后实时重检 sink 身份与健康状态，再决定是否禁用 dmabuf、重建或拆除死连接窗口。
+    pub fn recover_layer_shell(
+        &self,
+        expected_gen: u64,
+        label: &str,
+        health: &crate::wallpaper::manager::layer_shell::surface::SinkHealth,
+        disable_dmabuf: bool,
+        reason: Option<&str>,
+    ) -> Result<(), String> {
+        let mut active = self.lock_active();
+        let is_current_sink = self
+            .lock_slots()
+            .get(label)
+            .and_then(|slot| slot.window.as_ref())
+            .and_then(|w| w.layer_shell_sink_id())
+            == Some(health.sink_id());
+        if !evaluate_recovery_under_active_lock(
+            &active,
+            expected_gen,
+            is_current_sink,
+            health,
+            disable_dmabuf,
+        ) {
+            tracing::debug!(
+                "忽略过期或已恢复的 layer-shell 恢复请求（label={}, sink_id={}, is_current={}, expected_gen={}, current_gen={}, enabled={}, cancelled={}, disable_dmabuf={}, frames_published={}, unrecoverable={}）",
+                label,
+                health.sink_id(),
+                is_current_sink,
+                expected_gen,
+                active.generation,
+                active.enabled,
+                health.is_cancelled(),
+                disable_dmabuf,
+                health.frames_published(),
+                health.dmabuf_unrecoverable()
+            );
+            return Ok(());
+        }
+
+        if disable_dmabuf {
+            if !super::plasma::pipewire::disable_dmabuf_for_session() {
+                return Ok(());
+            }
+            active.consecutive_disconnect_recoveries = 0;
+        } else {
+            let reason_text = reason.unwrap_or("未知 Wayland 错误");
+            let healthy_dur = health.healthy_duration(std::time::Instant::now());
+            let (allow, next_count) =
+                decide_disconnect_recovery(active.consecutive_disconnect_recoveries, healthy_dur);
+            if !allow {
+                active.generation = active.generation.wrapping_add(1).max(1);
+                let slots = std::mem::take(&mut *self.lock_slots());
+                drop(slots);
+                for slot_label in WALLPAPER_LABELS {
+                    if let Err(e) = self.destroy_window(slot_label) {
+                        tracing::warn!("{e}");
+                    }
+                }
+                let err_msg = format!(
+                    "layer-shell 连接连续异常，已停止自动重建（可在设置中关闭再开启壁纸重新启用）: {reason_text}"
+                );
+                tracing::error!("{err_msg}");
+                return Err(err_msg);
+            }
+            active.consecutive_disconnect_recoveries = next_count;
+            tracing::warn!("layer-shell 意外断开，尝试原地重建一次: {reason_text}");
+        }
+
+        active.generation = active.generation.wrapping_add(1).max(1);
+        let session_gen = active.generation;
+        let slots = std::mem::take(&mut *self.lock_slots());
+        drop(slots);
+        for slot_label in WALLPAPER_LABELS {
+            if let Err(e) = self.destroy_window(slot_label) {
+                tracing::warn!("{e}");
+            }
+        }
+        self.align(&self.current_layout(), session_gen)
     }
 }
 
@@ -894,6 +1101,102 @@ mod tests {
         assert_eq!(
             value,
             serde_json::json!({ "targetId": "screen:a", "audible": false })
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn layer_shell_recovery_rejects_stale_cancelled_or_healthy_instances() {
+        // 正常活跃同代际且尚未发布任何帧：允许降级重建
+        assert!(should_apply_layer_shell_recovery(
+            true, 2, 2, true, false, true, 0, false
+        ));
+        // 已停用、代际不匹配或当前槽位已换新 sink：拒绝旧回调误伤新窗口
+        assert!(!should_apply_layer_shell_recovery(
+            false, 2, 2, true, false, true, 0, false
+        ));
+        assert!(!should_apply_layer_shell_recovery(
+            true, 3, 2, true, false, true, 0, false
+        ));
+        assert!(!should_apply_layer_shell_recovery(
+            true, 2, 2, false, false, true, 0, false
+        ));
+        // Sink 已被 shutdown 取消：拒绝
+        assert!(!should_apply_layer_shell_recovery(
+            true, 2, 2, true, true, true, 0, false
+        ));
+        // 在迟到窗口内首帧已健康发布：拒绝误禁用 dmabuf
+        assert!(!should_apply_layer_shell_recovery(
+            true, 2, 2, true, false, true, 1, false
+        ));
+        // 连续 EGL 导入/读回不可恢复失败时，即使曾发过帧也允许降级
+        assert!(should_apply_layer_shell_recovery(
+            true, 2, 2, true, false, true, 1, true
+        ));
+        // Wayland 连接意外断开：活跃同代际允许恢复处理
+        assert!(should_apply_layer_shell_recovery(
+            true, 2, 2, true, false, false, 5, false
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn layer_shell_recovery_blocks_on_active_lock_and_observes_late_first_frame() {
+        let active = std::sync::Arc::new(Mutex::new(ActiveState {
+            enabled: true,
+            generation: 1,
+            consecutive_disconnect_recoveries: 0,
+        }));
+        let health = crate::wallpaper::manager::layer_shell::surface::SinkHealth::new_for_test();
+        let entered_lock_wait = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let active_guard = active.lock().unwrap();
+        assert_eq!(health.frames_published(), 0);
+
+        let worker = {
+            let active = active.clone();
+            let health = health.clone();
+            let entered = entered_lock_wait.clone();
+            std::thread::spawn(move || {
+                entered.wait();
+                let guard = active.lock().unwrap();
+                evaluate_recovery_under_active_lock(&guard, 1, true, &health, true)
+            })
+        };
+
+        entered_lock_wait.wait();
+        // 线程正在阻塞等 active 锁时，模拟首帧迟到发布成功；随后放锁应由锁内实时校验拒绝降级。
+        health.test_record_published(std::time::Instant::now());
+        drop(active_guard);
+
+        let should_recover = worker.join().unwrap();
+        assert!(!should_recover);
+
+        // 若随后同一健康对象发生连续不可恢复 readback 失败，锁内重检也仍能放行降级。
+        health.test_set_unrecoverable(true);
+        let guard = active.lock().unwrap();
+        assert!(evaluate_recovery_under_active_lock(
+            &guard, 1, true, &health, true
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn disconnect_recovery_resets_after_healthy_run_and_caps_rapid_failures() {
+        // 首次断连允许恢复并计 1
+        assert_eq!(
+            decide_disconnect_recovery(0, std::time::Duration::ZERO),
+            (true, 1)
+        );
+        // 短时间内再次断连（未达健康窗口）直接拦截停止
+        assert_eq!(
+            decide_disconnect_recovery(1, std::time::Duration::from_secs(10)),
+            (false, 1)
+        );
+        // 持续健康运行达到重置阈值后，新发断连可清零计数并允许再次恢复
+        assert_eq!(
+            decide_disconnect_recovery(1, DISCONNECT_RECOVERY_RESET_AFTER),
+            (true, 1)
         );
     }
 }

@@ -956,6 +956,24 @@ impl WallpaperController {
         }
         self.plasma_plugin.restart_if_active()
     }
+
+    /// Linux：带实例代际校验的 layer-shell 恢复（用于 dmabuf 降级重建或 Wayland 异常断开处理）。
+    #[cfg(target_os = "linux")]
+    pub fn recover_layer_shell(
+        &self,
+        expected_gen: u64,
+        label: &str,
+        health: &layer_shell::surface::SinkHealth,
+        disable_dmabuf: bool,
+        reason: Option<&str>,
+    ) -> Result<(), String> {
+        let settings = Settings::global();
+        if settings.get_wallpaper_mode() != "plasma-plugin" || !settings.get_wallpaper_enabled() {
+            return Ok(());
+        }
+        self.plasma_plugin
+            .recover_layer_shell(expected_gen, label, health, disable_dmabuf, reason)
+    }
 }
 
 use async_trait::async_trait;
@@ -1018,6 +1036,19 @@ pub trait WallpaperManager: Send + Sync {
     /// Linux：在仍处于激活态时原地重建壁纸窗口（例如离屏 dmabuf 首帧超时后降级为 SHM 重建）。
     #[cfg(target_os = "linux")]
     fn restart_if_active(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Linux：带实例代际校验的 layer-shell 恢复（由降级看门狗或异常断开回调触发）。
+    #[cfg(target_os = "linux")]
+    fn recover_layer_shell(
+        &self,
+        _expected_gen: u64,
+        _label: &str,
+        _health: &layer_shell::surface::SinkHealth,
+        _disable_dmabuf: bool,
+        _reason: Option<&str>,
+    ) -> Result<(), String> {
         Ok(())
     }
 }

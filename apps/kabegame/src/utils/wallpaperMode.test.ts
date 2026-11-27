@@ -188,6 +188,27 @@ describe("preparePluginMode", () => {
     expect(invoke).toHaveBeenCalledWith("set_wallpaper_mode", { mode: "plasma-plugin" });
   });
 
+  it("通用 Wayland layer-shell 就绪但用户取消确认：不切模式也不重试设壁纸", async () => {
+    env.linux = true;
+    backend.readiness = { status: "ready", gnome: false, layerShell: true };
+    confirm.mockRejectedValue("cancel");
+    await expect(setWallpaperByImageIdWithModeFallback("wpe")).rejects.toBe("cancel");
+    expect(invoke).not.toHaveBeenCalledWith("set_wallpaper_mode", expect.anything());
+    expect(setCalls()).toHaveLength(1);
+  });
+
+  it("通用 Wayland layer-shell 切模式失败：透传错误，不再重试设壁纸", async () => {
+    env.linux = true;
+    backend.readiness = { status: "ready", gnome: false, layerShell: true };
+    const baseImpl = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === "set_wallpaper_mode") throw "switch failed";
+      return baseImpl(command, args);
+    });
+    await expect(setWallpaperByImageIdWithModeFallback("wpe")).rejects.toBe("switch failed");
+    expect(setCalls()).toHaveLength(1);
+  });
+
   it("GNOME 太旧：提示升级系统，不装扩展", async () => {
     env.linux = true;
     backend.readiness = { status: "gnomeShellUnsupported", version: "41.5", min: 42, max: 51 };
