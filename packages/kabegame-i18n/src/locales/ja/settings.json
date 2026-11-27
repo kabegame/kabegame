@@ -214,6 +214,7 @@
   "wallpaperModeConfirmTitle": "確認",
   "wallpaperModePluginConfirmMessage": "プラグインモードに切り替えると、システム壁紙プラグインがKabegame壁紙プラグインに変更されます。続行しますか？",
   "wallpaperModePluginConfirmMessageGnome": "プラグインモードでは、Kabegame の GNOME Shell 拡張機能が Kabegame の壁紙ウィンドウをシステムの壁紙の代わりにデスクトップに置きます。続行しますか？",
+  "wallpaperModeLayerShellConfirmMessage": "ウィンドウモードでは、Kabegame が Wayland 背景レイヤー（wlr-layer-shell）経由でデスクトップ壁紙を直接描画して表示します。続行しますか？",
   "gnomeExtensionTitle": "GNOME Shell 拡張機能",
   "gnomeShellTooOld": "プラグインモードには GNOME {min} 以降が必要ですが、このシステムは GNOME {version} です。システムをアップグレードしてから再度お試しください。",
   "gnomeShellTooNew": "Kabegame は GNOME {version} でのプラグインモードにまだ対応していません（対応：GNOME {min}–{max}）。Kabegame のアップデートをお待ちください。",

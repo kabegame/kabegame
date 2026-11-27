@@ -119,7 +119,8 @@ pipewire = { version = "0.10", optional = true }
 libloading = { version = "0.8", optional = true }
 # 找合成器的主显示设备（linux-dmabuf v4 的 main_device，wallpaper/manager/plasma/pipewire/device.rs）：dmabuf 要分配在这张卡上
 wayland-client = { version = "0.31", optional = true }
-wayland-protocols = { version = "0.32", features = ["client"], optional = true }
+wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
+wayland-protocols-wlr = { version = "0.3", features = ["client"], optional = true }
 # 插件模式里经 KWin 的 D-Bus 查主窗口在屏上的位置（wallpaper/manager/plasma/kwin_window.rs），与 tauri-plugin-sysmedia / opener 用的是同一份
 zbus = { version = "5.9", optional = true }
 # 网页壁纸 / 场景音频频谱的两份 FFT（同 Windows 段的说明），由 wpe feature 开启；样本来自 PipeWire 的输出设备监听
@@ -263,6 +264,7 @@ standard = [
     "dep:libloading",
     "dep:wayland-client",
     "dep:wayland-protocols",
+    "dep:wayland-protocols-wlr",
     "dep:zbus",
     "dep:tauri-plugin-clipboard-manager",
     "dep:tauri-plugin-dialog",

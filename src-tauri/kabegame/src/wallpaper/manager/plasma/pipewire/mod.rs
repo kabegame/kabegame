@@ -10,9 +10,20 @@ mod device;
 pub mod gpu;
 mod stream;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 pub use stream::{StreamProps, WallpaperStream, PROTOCOL_VERSION};
 
-/// 离屏壁纸窗口走不走共享纹理（帧是 dmabuf）：GPU 上下文可用时走。建窗登记离屏与建流都按它，两边一致。
+/// 运行期检测到 CEF 共享纹理（dmabuf）离屏采集不出帧时置位，后续离屏壁纸窗口改走软件共享内存（OnPaint）。
+static DMABUF_DISABLED: AtomicBool = AtomicBool::new(false);
+
+/// 离屏壁纸窗口走不走共享纹理（帧是 dmabuf）：GPU 上下文可用且未被运行期禁用时走。建窗登记离屏与建流都按它，两边一致。
 pub fn dmabuf_enabled() -> bool {
-    gpu::get().is_some()
+    !DMABUF_DISABLED.load(Ordering::Acquire) && gpu::get().is_some()
+}
+
+/// 运行期关掉离屏 dmabuf 共享纹理采集，后续重建的离屏壁纸窗口改走 `OnPaint` 共享内存。
+/// 返回 `true` 表示本次首次从启用切为禁用（避免重复触发重建）。
+pub fn disable_dmabuf_for_session() -> bool {
+    !DMABUF_DISABLED.swap(true, Ordering::AcqRel)
 }

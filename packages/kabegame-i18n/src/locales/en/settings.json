@@ -214,6 +214,7 @@
   "wallpaperModeConfirmTitle": "Notice",
   "wallpaperModePluginConfirmMessage": "Switching to plugin mode will change the system wallpaper plugin to Kabegame wallpaper plugin. Continue?",
   "wallpaperModePluginConfirmMessageGnome": "In plugin mode, Kabegame's GNOME Shell extension puts Kabegame's wallpaper window on the desktop in place of the system wallpaper. Continue?",
+  "wallpaperModeLayerShellConfirmMessage": "In window mode, Kabegame renders and displays your desktop wallpaper directly via Wayland background layer (wlr-layer-shell). Continue?",
   "gnomeExtensionTitle": "GNOME Shell extension",
   "gnomeShellTooOld": "Plugin mode needs GNOME {min} or newer, but this system runs GNOME {version}. Please upgrade your system and try again.",
   "gnomeShellTooNew": "Kabegame doesn't support plugin mode on GNOME {version} yet (supported: GNOME {min}–{max}). Please wait for a Kabegame update.",

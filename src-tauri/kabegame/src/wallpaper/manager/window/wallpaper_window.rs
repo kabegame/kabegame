@@ -35,6 +35,9 @@ pub struct WallpaperWindow<R: Runtime> {
     /// Linux（插件模式）：离屏 browser 的帧推到这一路 PipeWire 流；随本对象丢弃而断开，帧接收器同时摘掉。
     #[cfg(target_os = "linux")]
     stream: Option<std::sync::Arc<crate::wallpaper::manager::plasma::pipewire::WallpaperStream>>,
+    /// Linux（layer-shell 模式）：离屏 browser 的帧直接提交到 Wayland `zwlr_layer_shell_v1` 背景层。
+    #[cfg(target_os = "linux")]
+    layer_surface: Option<std::sync::Arc<crate::wallpaper::manager::layer_shell::surface::LayerShellSink>>,
     /// Linux：窗口登记成了光标的外部来源（挂载后为真），随本对象丢弃注销。
     #[cfg(target_os = "linux")]
     external_pointer: bool,
@@ -52,6 +55,8 @@ impl<R: Runtime> WallpaperWindow<R> {
             pinger: None,
             #[cfg(target_os = "linux")]
             stream: None,
+            #[cfg(target_os = "linux")]
+            layer_surface: None,
             #[cfg(target_os = "linux")]
             external_pointer: false,
         }
@@ -105,7 +110,11 @@ impl<R: Runtime> WallpaperWindow<R> {
     ///
     /// `screen` 是窗口要铺满的屏；`None`（没有屏幕信息的平台）时铺满窗口所在的屏。
     #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
-    pub fn mount(&mut self, screen: Option<&ScreenInfo>) -> Result<(), String> {
+    pub fn mount(
+        &mut self,
+        screen: Option<&ScreenInfo>,
+        #[cfg(target_os = "linux")] linux_backend: super::LinuxBackend,
+    ) -> Result<(), String> {
         // 等待前端 ready（由 mark_ready() -> notify_all() 唤醒）后再挂载：
         // 挂载会读取窗口句柄并改其父子/样式，必须等 webview 真正建起来。
         Self::wait_ready(self.window.label(), std::time::Duration::from_secs(100))?;
@@ -124,15 +133,21 @@ impl<R: Runtime> WallpaperWindow<R> {
 
         // Linux（Plasma）：没有桌面层可挂，离屏 browser 的帧推到 PipeWire，由 Plasma 壁纸插件显示。离屏 browser 建成时是隐藏的，
         // 有消费者拉流才显示、出帧（流的状态回调）。
+        // Linux（layer-shell）：离屏 browser 的帧由 Wayland 线程直接挂到 `zwlr_layer_shell_v1` 背景层。
         // Linux（GNOME）：普通窗口，显示出来后由 Kabegame 的 Shell 扩展按标题认出、挂到桌面层。
         #[cfg(target_os = "linux")]
-        if tauri_runtime_kbcef::offscreen_geometry(self.window.label()).is_some() {
-            self.attach_stream(screen)?;
-        } else {
-            self.window
-                .show()
-                .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
-            crate::wallpaper::manager::pointer_socket::set_windowed_wallpaper(self.window.label(), true);
+        match linux_backend {
+            super::LinuxBackend::PipeWire => self.attach_stream(screen)?,
+            super::LinuxBackend::LayerShell => self.attach_layer_shell()?,
+            super::LinuxBackend::Windowed => {
+                self.window
+                    .show()
+                    .map_err(|e| format!("显示壁纸窗口失败: {}", e))?;
+                crate::wallpaper::manager::pointer_socket::set_windowed_wallpaper(
+                    self.window.label(),
+                    true,
+                );
+            }
         }
         // 外部光标来源：Plasma 插件经输入 socket 把桌面上的鼠标发回来（`pointer_socket`），GNOME 下页面自己收到鼠标、经
         // `push_window_pointer` 交给应用；iframe 照 Windows / macOS 登记 frame 注入
@@ -224,6 +239,35 @@ impl<R: Runtime> WallpaperWindow<R> {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    fn attach_layer_shell(&mut self) -> Result<(), String> {
+        use crate::wallpaper::manager::layer_shell::surface::LayerShellSink;
+
+        let label = self.window.label().to_string();
+        let expect_dmabuf = crate::wallpaper::manager::plasma::pipewire::dmabuf_enabled();
+        let on_stalled: Option<std::sync::Arc<dyn Fn() + Send + Sync>> = expect_dmabuf.then(|| {
+            std::sync::Arc::new(|| {
+                if crate::wallpaper::manager::plasma::pipewire::disable_dmabuf_for_session() {
+                    if let Some(controller) =
+                        crate::wallpaper::manager::WallpaperController::try_global()
+                    {
+                        if let Err(e) = controller.restart_plasma_plugin_if_active() {
+                            tracing::warn!("dmabuf 降级到共享内存后重建壁纸窗口失败: {e}");
+                        }
+                    }
+                }
+            }) as std::sync::Arc<dyn Fn() + Send + Sync>
+        });
+        let sink = LayerShellSink::new(label.clone(), expect_dmabuf, on_stalled)
+            .map_err(|e| format!("建壁纸窗口 {label} 的 layer-shell 表面失败: {e}"))?;
+        let sink = std::sync::Arc::new(sink);
+        tauri_runtime_kbcef::set_offscreen_frame_sink(&label, Some(sink.clone()));
+        // 若 Configure 早于挂 sink 触发了首帧，这里补请一次重画，保证静态壁纸不会白屏。
+        let _ = tauri_runtime_kbcef::invalidate_offscreen(&label);
+        self.layer_surface = Some(sink);
+        Ok(())
+    }
+
     /// 已挂载的壁纸窗口重新铺到 `screen`（屏的位置 / 尺寸变了、系统重排后）。只动窗口的 frame 与层级，
     /// 页面不重载。会同步等主线程，调用方不能持 manager 的窗口表锁。
     ///
@@ -251,6 +295,10 @@ impl<R: Runtime> Drop for WallpaperWindow<R> {
         // 帧接收器表里还有一份流的引用：先摘掉，流随本对象最后一份引用断开、销毁节点
         if self.stream.take().is_some() {
             tauri_runtime_kbcef::set_offscreen_frame_sink(self.window.label(), None);
+        }
+        if let Some(sink) = self.layer_surface.take() {
+            tauri_runtime_kbcef::set_offscreen_frame_sink(self.window.label(), None);
+            sink.shutdown();
         }
         // 外部光标来源一并注销：已登记的 frame 下一轮收到收尾（补抬起与离开）
         if self.external_pointer {

@@ -4764,6 +4764,7 @@ dependencies = [
  "uuid",
  "wayland-client",
  "wayland-protocols",
+ "wayland-protocols-wlr",
  "windows 0.52.0",
  "windows-sys 0.52.0",
  "winreg 0.55.0",

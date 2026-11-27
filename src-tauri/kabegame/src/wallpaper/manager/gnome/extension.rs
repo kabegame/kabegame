@@ -42,8 +42,9 @@ const CORE_PLACEHOLDER: &str = "/* @@KABEGAME_CORE@@ */";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum Readiness {
-    /// 可以切。`gnome`：是 GNOME 会话（前端据此选确认文案）。
-    Ready { gnome: bool },
+    /// 可以切。`gnome`：是 GNOME 会话；`layer_shell`：是通用 `wlr-layer-shell` Wayland 会话（前端据此选确认文案）。
+    #[serde(rename_all = "camelCase")]
+    Ready { gnome: bool, layer_shell: bool },
     /// GNOME Shell 的版本不在 [`SUPPORTED_SHELL`] 里。
     GnomeShellUnsupported { version: String, min: u32, max: u32 },
     /// 版本支持，但扩展不在线（没装、没启用、没重新登录，或者是旧版本）。
@@ -128,7 +129,10 @@ fn classify(version: &str, online: impl FnOnce() -> bool) -> Readiness {
     match shell_major(version) {
         Some(major) if SUPPORTED_SHELL.contains(&major) => {
             if online() {
-                Readiness::Ready { gnome: true }
+                Readiness::Ready {
+                    gnome: true,
+                    layer_shell: false,
+                }
             } else {
                 Readiness::GnomeExtensionMissing {
                     version: version.to_string(),
@@ -391,7 +395,13 @@ mod tests {
             }
         );
         assert!(matches!(classify("52.0", || true), Readiness::GnomeShellUnsupported { .. }));
-        assert_eq!(classify("42.9", || true), Readiness::Ready { gnome: true });
+        assert_eq!(
+            classify("42.9", || true),
+            Readiness::Ready {
+                gnome: true,
+                layer_shell: false
+            }
+        );
         assert_eq!(
             classify("50.1", || false),
             Readiness::GnomeExtensionMissing {
@@ -428,8 +438,12 @@ mod tests {
             serde_json::json!({ "status": "gnomeShellUnsupported", "version": "41.5", "min": 42, "max": 51 })
         );
         assert_eq!(
-            serde_json::to_value(Readiness::Ready { gnome: false }).unwrap(),
-            serde_json::json!({ "status": "ready", "gnome": false })
+            serde_json::to_value(Readiness::Ready {
+                gnome: false,
+                layer_shell: true,
+            })
+            .unwrap(),
+            serde_json::json!({ "status": "ready", "gnome": false, "layerShell": true })
         );
     }
 }

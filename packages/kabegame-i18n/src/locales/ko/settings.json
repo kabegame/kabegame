@@ -214,6 +214,7 @@
   "wallpaperModeConfirmTitle": "알림",
   "wallpaperModePluginConfirmMessage": "플러그인 모드로 전환하면 시스템 배경화면 플러그인이 Kabegame 배경화면 플러그인으로 변경됩니다. 계속할까요?",
   "wallpaperModePluginConfirmMessageGnome": "플러그인 모드에서는 Kabegame의 GNOME Shell 확장이 Kabegame 배경화면 창을 시스템 배경화면 대신 바탕화면에 놓습니다. 계속할까요?",
+  "wallpaperModeLayerShellConfirmMessage": "창 모드에서는 Kabegame이 Wayland 배경 레이어(wlr-layer-shell)를 통해 바탕화면 배경화면을 직접 렌더링하여 표시합니다. 계속할까요?",
   "gnomeExtensionTitle": "GNOME Shell 확장",
   "gnomeShellTooOld": "플러그인 모드에는 GNOME {min} 이상이 필요하지만 이 시스템은 GNOME {version}입니다. 시스템을 업그레이드한 뒤 다시 시도해 주세요.",
   "gnomeShellTooNew": "Kabegame은 아직 GNOME {version}에서 플러그인 모드를 지원하지 않습니다(지원: GNOME {min}–{max}). Kabegame 업데이트를 기다려 주세요.",

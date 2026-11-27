@@ -59,7 +59,7 @@ const handleChange = async (mode: string) => {
   }
   if (mode === "plasma-plugin") {
     // GNOME：先确认 Shell 版本与扩展（不满足时已经提示用户，必要时帮忙装好扩展），这次不切
-    let ready: { gnome: boolean } | null;
+    let ready: { gnome: boolean; layerShell: boolean } | null;
     try {
       ready = await preparePluginMode();
     } catch (e: any) {
@@ -69,7 +69,7 @@ const handleChange = async (mode: string) => {
     if (!ready) return;
     try {
       await messageBox.confirm(
-        pluginModeConfirmMessage(ready.gnome),
+        pluginModeConfirmMessage(ready.gnome, ready.layerShell),
         t("settings.wallpaperModeConfirmTitle"),
         {
           confirmButtonText: t("settings.wallpaperModeConfirmOk"),

@@ -35,12 +35,15 @@ pub fn available() -> bool {
     linux_desktop() == LinuxDesktop::Gnome
 }
 
-/// 能不能切到插件模式：GNOME 会话看 Shell 版本与扩展，其它会话（Plasma）总是可以。
+/// 能不能切到插件模式：GNOME 会话看 Shell 版本与扩展，其它会话（Plasma / layer-shell）总是可以。
 pub fn readiness() -> Result<Readiness, String> {
     if available() {
         extension::readiness()
     } else {
-        Ok(Readiness::Ready { gnome: false })
+        Ok(Readiness::Ready {
+            gnome: false,
+            layer_shell: super::layer_shell::available(),
+        })
     }
 }
 

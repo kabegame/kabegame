@@ -4,6 +4,8 @@ mod native_mac;
 // Linux 插件模式（GNOME）：普通壁纸窗口 + Kabegame 的 Shell 扩展
 #[cfg(target_os = "linux")]
 pub mod gnome;
+#[cfg(target_os = "linux")]
+pub mod layer_shell;
 // Linux 插件模式（Plasma）：离屏壁纸窗口 + PipeWire 推流 + Kabegame 的 Plasma 壁纸插件
 #[cfg(target_os = "linux")]
 pub mod plasma;
@@ -17,6 +19,8 @@ pub mod window;
 // 导出管理器类型
 #[cfg(target_os = "linux")]
 pub use gnome::GnomeShellWallpaperManager;
+#[cfg(target_os = "linux")]
+pub use layer_shell::LayerShellWallpaperManager;
 pub use native::NativeWallpaperManager;
 #[cfg(target_os = "linux")]
 pub use plasma::PlasmaPluginWallpaperManager;
@@ -466,10 +470,14 @@ impl WallpaperController {
         let native = Arc::new(NativeWallpaperManager::new(app.clone()))
             as Arc<dyn WallpaperManager + Send + Sync>;
 
-        // 插件模式的后端按桌面选：GNOME 是普通窗口 + Shell 扩展，其余（Plasma）是离屏窗口 + PipeWire + Plasma 壁纸插件
+        // 插件模式的后端按桌面选：GNOME 是普通窗口 + Shell 扩展，支持 zwlr_layer_shell_v1 的 Wayland 合成器
+        // （niri / Hyprland / Sway 等）直连 layer-shell，其余（Plasma）是离屏窗口 + PipeWire + Plasma 壁纸插件
         #[cfg(target_os = "linux")]
         let plasma_plugin = if gnome::available() {
             Arc::new(GnomeShellWallpaperManager::new(app.clone()))
+                as Arc<dyn WallpaperManager + Send + Sync>
+        } else if layer_shell::available() {
+            Arc::new(LayerShellWallpaperManager::new(app.clone()))
                 as Arc<dyn WallpaperManager + Send + Sync>
         } else {
             Arc::new(PlasmaPluginWallpaperManager::new(app.clone()))
@@ -537,14 +545,15 @@ impl WallpaperController {
         modes.push(wallpaper_option("window", "settings.modeWindow", None));
 
         // Plasma 6 会话且有内置插件（或已经装着能用的）：切过去时会自动装 / 升级插件。GNOME 会话：壁纸窗口由 Shell 扩展挂到
-        // 桌面（实验阶段，扩展要手动装）
+        // 桌面（实验阶段，扩展要手动装）。通用 Wayland 合成器（niri 等）：直连 zwlr_layer_shell_v1。
         #[cfg(target_os = "linux")]
-        if plasma::install::available() || gnome::available() {
-            modes.push(wallpaper_option(
-                "plasma-plugin",
-                "settings.modePlugin",
-                None,
-            ));
+        if plasma::install::available() || gnome::available() || layer_shell::available() {
+            let label_key = if layer_shell::available() {
+                "settings.modeWindow"
+            } else {
+                "settings.modePlugin"
+            };
+            modes.push(wallpaper_option("plasma-plugin", label_key, None));
         }
 
         let mut display_modes = HashMap::new();
@@ -938,6 +947,15 @@ impl WallpaperController {
         }
         self.manager_for_mode(&settings.get_wallpaper_mode()).init()
     }
+
+    /// Linux：若当前处于插件/layer-shell 壁纸模式，则原地重建活跃壁纸窗口（用于 dmabuf 首帧超时降级）。
+    #[cfg(target_os = "linux")]
+    pub fn restart_plasma_plugin_if_active(&self) -> Result<(), String> {
+        if Settings::global().get_wallpaper_mode() != "plasma-plugin" {
+            return Ok(());
+        }
+        self.plasma_plugin.restart_if_active()
+    }
 }
 
 use async_trait::async_trait;
@@ -996,6 +1014,12 @@ pub trait WallpaperManager: Send + Sync {
     /// 初始化管理器（如创建窗口等）
     ///
     fn init(&self) -> Result<(), String>;
+
+    /// Linux：在仍处于激活态时原地重建壁纸窗口（例如离屏 dmabuf 首帧超时后降级为 SHM 重建）。
+    #[cfg(target_os = "linux")]
+    fn restart_if_active(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

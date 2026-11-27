@@ -126,12 +126,24 @@ struct Slot<R: Runtime> {
     assignment: WindowAssignment,
 }
 
+/// Linux 下壁纸窗口的显示后端。
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinuxBackend {
+    /// KDE Plasma 6：离屏 browser + PipeWire 流
+    PipeWire,
+    /// GNOME：普通窗口 + Shell 扩展
+    Windowed,
+    /// 通用 Wayland 合成器（niri / Hyprland / Sway 等）：离屏 browser + `zwlr_layer_shell_v1`
+    LayerShell,
+}
+
 /// 窗口模式壁纸管理器：**每块在线屏一个壁纸窗口**，窗口矩形就是那块屏，各自完整渲染一幅画面。
 /// label 取自固定的池 [`WALLPAPER_LABELS`]。窗口是**懒建**的：只在 `wallpaperMode` 为本后端的壁纸模式且壁纸开着期间存在。
 ///
-/// 两种用法：Windows / macOS 的窗口模式（`window`，窗口挂到桌面层），Linux 的插件模式（`plasma-plugin`，由
-/// [`super::PlasmaPluginWallpaperManager`] 包一层）：Linux 没有桌面层可挂，壁纸窗口是离屏 browser，每一帧推到一路
-/// PipeWire 流，由 Plasma 壁纸插件显示（见 [`wallpaper_window`] 与 `manager::plasma::pipewire`）。
+/// 两种用法：Windows / macOS 的窗口模式（`window`，窗口挂到桌面层），Linux 的插件模式（`plasma-plugin`）：
+/// Plasma 是离屏 browser + PipeWire 流，GNOME 是普通窗口 + Shell 扩展，niri 等支持 `wlr-layer-shell` 的合成器是
+/// 离屏 browser + `zwlr_layer_shell_v1`。
 ///
 /// 窗口集合的**生命周期**：`init()` 进入窗口模式并把窗口集合对齐到当前布局，`reconcile()` 在显示器模式或在线屏
 /// 变化后重新对齐（同一块屏保留原窗口、屏矩形变了重铺、布置变了推一条新的、多的销毁、缺的新建），`cleanup()`
@@ -153,10 +165,8 @@ pub struct WindowWallpaperManager<R: Runtime> {
     active: Mutex<bool>,
     /// label → 窗口
     slots: Mutex<BTreeMap<String, Slot<R>>>,
-    /// Linux：壁纸窗口建成离屏 browser（Plasma，帧推到 PipeWire）还是普通窗口（GNOME，由 Kabegame 的 Shell 扩展
-    /// 按标题认出、挂到桌面层，见 [`WINDOWED_TITLE_PREFIX`]）。
     #[cfg(target_os = "linux")]
-    offscreen: bool,
+    linux_backend: LinuxBackend,
 }
 
 /// Linux 普通壁纸窗口的标题前缀，后跟 label 在池里的序号（`kabegame-wallpaper 0`）。GNOME Shell 扩展按它认出壁纸窗口。
@@ -171,7 +181,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             active: Mutex::new(false),
             slots: Mutex::new(BTreeMap::new()),
             #[cfg(target_os = "linux")]
-            offscreen: true,
+            linux_backend: LinuxBackend::PipeWire,
         }
     }
 
@@ -179,9 +189,23 @@ impl<R: Runtime> WindowWallpaperManager<R> {
     #[cfg(target_os = "linux")]
     pub fn new_windowed(app: AppHandle<R>, wallpaper_mode: &'static str) -> Self {
         Self {
-            offscreen: false,
+            linux_backend: LinuxBackend::Windowed,
             ..Self::new(app, wallpaper_mode)
         }
+    }
+
+    /// Linux：离屏 browser + Wayland `zwlr_layer_shell_v1`（niri / Hyprland / Sway 等）。
+    #[cfg(target_os = "linux")]
+    pub fn new_layer_shell(app: AppHandle<R>, wallpaper_mode: &'static str) -> Self {
+        Self {
+            linux_backend: LinuxBackend::LayerShell,
+            ..Self::new(app, wallpaper_mode)
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn is_offscreen(&self) -> bool {
+        !matches!(self.linux_backend, LinuxBackend::Windowed)
     }
 
     fn lock_active(&self) -> MutexGuard<'_, bool> {
@@ -239,7 +263,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         // Linux（Plasma 插件模式）：不建原生窗口，建离屏 browser，帧由挂载时建的 PipeWire 流接走。尺寸按屏的逻辑尺寸与缩放；
         // 没有屏幕信息时给 0，runtime 换成主显示器。GNOME 建普通窗口，不登记。
         #[cfg(target_os = "linux")]
-        if self.offscreen {
+        if self.is_offscreen() {
             tauri_runtime_kbcef::register_offscreen(
                 label,
                 tauri_runtime_kbcef::OffscreenOptions {
@@ -264,7 +288,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             .unwrap_or(0);
         // 固定标题，便于脚本/调试定位到正确窗口。Linux 的普通壁纸窗口由 GNOME Shell 扩展按标题认出，标题不翻译、带序号。
         #[cfg(target_os = "linux")]
-        let title = if self.offscreen {
+        let title = if self.is_offscreen() {
             t!("window.wallpaperTitle").to_string()
         } else {
             format!("{WINDOWED_TITLE_PREFIX}{slot}")
@@ -284,7 +308,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
 
         // Linux 的普通窗口（GNOME）不能自己定位与全屏：位置与尺寸由 Shell 扩展按屏设，全屏会把它抬到全屏层
         #[cfg(target_os = "linux")]
-        let positioned_by_shell = !self.offscreen;
+        let positioned_by_shell = !self.is_offscreen();
         #[cfg(not(target_os = "linux"))]
         let positioned_by_shell = false;
         let builder = match screen {
@@ -424,7 +448,7 @@ impl<R: Runtime> WindowWallpaperManager<R> {
             let _ = (label, screen);
             // Linux：离屏视图换尺寸，PipeWire 流在下一帧按新尺寸重新协商；普通窗口由 Shell 扩展跟着屏铺
             #[cfg(target_os = "linux")]
-            if !self.offscreen {
+            if !self.is_offscreen() {
                 let _ = (label, screen);
             } else if let Err(e) = tauri_runtime_kbcef::resize_offscreen(
                 &label,
@@ -512,7 +536,17 @@ impl<R: Runtime> WindowWallpaperManager<R> {
         for (label, plan, window) in built {
             let mut wallpaper_window = WallpaperWindow::new(window);
             // 挂到桌面层。内部会先等前端 ready 再动窗口句柄，并记下窗口句柄。
-            match wallpaper_window.mount(plan.screen.as_ref()) {
+            let mount_res = {
+                #[cfg(target_os = "linux")]
+                {
+                    wallpaper_window.mount(plan.screen.as_ref(), self.linux_backend)
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    wallpaper_window.mount(plan.screen.as_ref())
+                }
+            };
+            match mount_res {
                 Ok(()) => {
                     if let Some(slot) = self.lock_slots().get_mut(label) {
                         slot.window = Some(wallpaper_window);
@@ -612,6 +646,30 @@ impl<R: Runtime> WallpaperManager for WindowWallpaperManager<R> {
             *active = true;
         }
         // 已在窗口模式时等同于一次对齐（幂等）：窗口都在就什么都不做。
+        self.align(&self.current_layout())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn restart_if_active(&self) -> Result<(), String> {
+        WindowWallpaperManager::restart_if_active(self)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<R: Runtime> WindowWallpaperManager<R> {
+    /// 若窗口管理器仍处于激活态，销毁全部现有壁纸窗口并按当前布局原地重建。
+    pub fn restart_if_active(&self) -> Result<(), String> {
+        let active = self.lock_active();
+        if !*active {
+            return Ok(());
+        }
+        let slots = std::mem::take(&mut *self.lock_slots());
+        drop(slots);
+        for label in WALLPAPER_LABELS {
+            if let Err(e) = self.destroy_window(label) {
+                tracing::warn!("{e}");
+            }
+        }
         self.align(&self.current_layout())
     }
 }

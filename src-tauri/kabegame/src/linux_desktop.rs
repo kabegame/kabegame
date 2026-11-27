@@ -59,16 +59,32 @@ fn detect_linux_desktop() -> LinuxDesktop {
 }
 
 fn detect_from_env() -> Option<LinuxDesktop> {
-    fn env_lower(name: &str) -> Option<String> {
-        env::var(name).ok().map(|v| v.to_lowercase())
-    }
+    classify_from_env(
+        env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+        env::var("XDG_SESSION_DESKTOP").ok().as_deref(),
+        env::var("DESKTOP_SESSION").ok().as_deref(),
+        env::var("KDE_FULL_SESSION").ok().as_deref(),
+        env::var("KDE_SESSION_VERSION").ok().as_deref(),
+    )
+}
 
-    let xdg_current = env_lower("XDG_CURRENT_DESKTOP");
-    let xdg_session = env_lower("XDG_SESSION_DESKTOP");
-    let desktop_session = env_lower("DESKTOP_SESSION");
+fn classify_from_env(
+    xdg_current: Option<&str>,
+    xdg_session: Option<&str>,
+    desktop_session: Option<&str>,
+    kde_full: Option<&str>,
+    kde_version: Option<&str>,
+) -> Option<LinuxDesktop> {
+    let normalize = |v: Option<&str>| -> Option<String> {
+        v.map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+    };
 
-    let kde_full = env_lower("KDE_FULL_SESSION");
-    let kde_version = env_lower("KDE_SESSION_VERSION");
+    let xdg_current = normalize(xdg_current);
+    let xdg_session = normalize(xdg_session);
+    let desktop_session = normalize(desktop_session);
+    let kde_full = normalize(kde_full);
+    let kde_version = normalize(kde_version);
 
     let all = [
         xdg_current.as_deref(),
@@ -95,6 +111,12 @@ fn detect_from_env() -> Option<LinuxDesktop> {
     // 环境变量中包含 gnome/ubuntu:gnome 等
     if all.iter().any(|v| v.contains("gnome")) {
         return Some(LinuxDesktop::Gnome);
+    }
+
+    // 明确声明了其他桌面（如 niri / hyprland / sway）时，直接定为 Unknown，
+    // 避免系统同时装有 gsettings 或 qdbus 时落入能力探测误判为 GNOME / Plasma。
+    if !all.is_empty() {
+        return Some(LinuxDesktop::Unknown);
     }
 
     None
@@ -158,4 +180,35 @@ fn detect_plasma_capability() -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_from_env_handles_niri_and_other_compositors_without_falling_back() {
+        assert_eq!(
+            classify_from_env(Some("niri"), Some("niri"), None, None, None),
+            Some(LinuxDesktop::Unknown)
+        );
+        assert_eq!(
+            classify_from_env(Some("Hyprland"), None, None, None, None),
+            Some(LinuxDesktop::Unknown)
+        );
+        assert_eq!(
+            classify_from_env(Some("KDE"), None, None, None, None),
+            Some(LinuxDesktop::Plasma)
+        );
+        assert_eq!(
+            classify_from_env(None, None, None, Some("true"), Some("6")),
+            Some(LinuxDesktop::Plasma)
+        );
+        assert_eq!(
+            classify_from_env(Some("ubuntu:GNOME"), None, None, None, None),
+            Some(LinuxDesktop::Gnome)
+        );
+        assert_eq!(classify_from_env(Some("   "), Some(""), None, None, None), None);
+        assert_eq!(classify_from_env(None, None, None, None, None), None);
+    }
 }
