@@ -6,7 +6,6 @@
 
 import { isSoundObject, isTextObject, objectKind } from "../compile/features";
 import type { SceneObject } from "../compile/model";
-import { pkgKey } from "../compile/pkg";
 
 export interface CreateConfigContext {
   /** realm 里 WPE 自带的 `_Internal.stringifyConfig`（`Vec` → "x y z"）；对象参数先过它 */
@@ -17,7 +16,7 @@ export interface CreateConfigContext {
   workshopId: string | null;
   /**
    * 路径在场景查找范围（工程散文件、`scene.pkg`、WPE `assets`）里存在：宿主每次加载经命令 `wpe_scene_files` 拉全表，按
-   * {@link sceneFileKey} 查。读码推测 WPE 的存在查询也是这三处（rea-p6d-script 2.2，没在 WPE 上实测）
+   * `sceneFileKey`（`compile/fileIndex.ts`）查。读码推测 WPE 的存在查询也是这三处（rea-p6d-script 2.2，没在 WPE 上实测）
    */
   exists(path: string): boolean;
   /** 值是 `IModelData` 句柄（P14，S16）：单参数时先包成 `{ model: 句柄 }` 再序列化，`model` 经 `toConfigString` 变成整数 token */
@@ -27,19 +26,6 @@ export interface CreateConfigContext {
 /** 缺省模型（不带参数、`{ color }` 没有任何内容键时的 `image`）。 */
 export function defaultLayerModel(orthographic: boolean): string {
   return orthographic ? "models/util/solidlayer_depthtest.json" : "models/util/solidlayer.json";
-}
-
-/**
- * 场景文件表（`wpe_scene_files`）的键：`\` 换成 `/`、去掉开头的 `./` 与 `/`、并掉连续的 `/`，ASCII 字母不分大小写
- * （照 WPE 在 Windows 上的查找，同 {@link pkgKey}）。表里的路径与要查的路径都过它。
- */
-export function sceneFileKey(path: string): string {
-  return pkgKey(
-    path
-      .replace(/\\/g, "/")
-      .replace(/\/{2,}/g, "/")
-      .replace(/^(?:\.\/|\/)+/, ""),
-  );
 }
 
 /** 配置里有任意一个就不补缺省模型。 */

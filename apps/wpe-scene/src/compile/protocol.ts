@@ -1,6 +1,7 @@
 import type { SceneBundle, SessionCacheStats } from "./bundle";
 import type { FragmentDelta, FragmentRequest } from "./fragment";
 import type { ModelDataDesc } from "../modeldata/types";
+import type { SceneFileList } from "./fileIndex";
 import type {
   SceneReflectionSetting,
   ScenePostprocessSetting,
@@ -35,6 +36,8 @@ export interface SceneStructure {
 export interface OpenRequest {
   projectDir: string;
   sceneAssets: string[];
+  /** 场景文件表（`wpe_scene_files`）；没有时不带这一项，Worker 里的 `SceneFs` 照旧逐个探 */
+  files?: SceneFileList;
   userProperties: Record<string, unknown>;
   scriptOverrides: Record<string, number[] | boolean | string>;
   structure: SceneStructure;

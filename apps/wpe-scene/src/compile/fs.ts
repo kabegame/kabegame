@@ -1,4 +1,5 @@
 import { fileToUrl } from "../fileUrl";
+import { sameSceneDir, SceneRootIndex, type SceneFileList } from "./fileIndex";
 import { ScenePkg } from "./pkg";
 
 export type SceneSource = "project" | "pkg" | "assets";
@@ -83,6 +84,13 @@ function missing(error: unknown): boolean {
   return error instanceof TypeError && error.message.includes("Failed to fetch");
 }
 
+/** 一个磁盘上的根目录（工程目录或某个 assets 目录）与它的文件表；没有表时 `index` 为 null，照旧逐个探。 */
+interface LooseRoot {
+  source: "project" | "assets";
+  dir: string;
+  index: SceneRootIndex | null;
+}
+
 export class SceneFs {
   private pkg: Promise<ScenePkg | null> | null = null;
   private readonly pkgWindows = new Map<number, Promise<Uint8Array>>();
@@ -93,12 +101,39 @@ export class SceneFs {
   private readonly settledContents = new Map<string, { source: SceneSource; bytes: Uint8Array } | null>();
   private readonly settledResolved = new Map<string, SceneFile | null>();
   private readonly settledWindows = new Map<number, Uint8Array>();
+  /**
+   * 三处都没有的路径（相对路径原样）：整个会话都记着，`clearCaches` 不清。脚本按名字反复建层、对象级重编译都会再问同一批路径，
+   * 有文件表时它们本来不发请求，没表或表过时时才会逐个探，记住它们免得每次都探一遍。
+   */
+  private readonly absent = new Set<string>();
+  private readonly projectRoot: LooseRoot;
+  private readonly assetRoots: LooseRoot[];
 
+  /**
+   * `files`：场景文件表（`wpe_scene_files`）。给了就按表找：表里没有的位置不探、按表里的真实大小写读，三处都没有时才按原写法逐个探一次
+   * （表可能过时）；目录写法对不上的根当没有表。不给（单测、语料扫描、取表失败）照旧逐个探。
+   */
   constructor(
     readonly projectDir: string,
     readonly sceneAssets: readonly string[],
     readonly reader: SceneReader,
-  ) {}
+    files?: SceneFileList | null,
+  ) {
+    const indexOf = (dir: string, roots: readonly { dir: string; files: string[] }[]): SceneRootIndex | null => {
+      const root = roots.find((item) => sameSceneDir(item.dir, dir));
+      return root ? new SceneRootIndex(root.files) : null;
+    };
+    this.projectRoot = {
+      source: "project",
+      dir: projectDir,
+      index: files ? indexOf(projectDir, [files.project]) : null,
+    };
+    this.assetRoots = sceneAssets.map((dir) => ({
+      source: "assets" as const,
+      dir,
+      index: files ? indexOf(dir, files.assets) : null,
+    }));
+  }
 
   /** pkg 的小文件通常相邻；窗口合并 JSON / shader / 纹理头的请求，大 mip 直接区间读取。 */
   private async readPkgRange(start: number, end: number): Promise<Uint8Array> {
@@ -178,23 +213,60 @@ export class SceneFs {
   }
 
   private async resolveUncached(rel: string): Promise<SceneFile | null> {
-    const projectPath = join(this.projectDir, rel);
-    try {
-      return this.loose("project", projectPath, await this.reader.readRange(projectPath, 0, 4096));
-    } catch (error) {
-      if (!missing(error)) throw error;
-    }
-    const pkg = await this.openPkg();
-    const entry = pkg && this.fromPkg(pkg, rel);
-    if (entry) return entry;
-    for (const root of this.sceneAssets) {
-      const path = join(root, rel);
-      try {
-        return this.loose("assets", path, await this.reader.readRange(path, 0, 4096));
-      } catch (error) {
-        if (!missing(error)) throw error;
+    return this.locate(
+      rel,
+      async (source, path) => {
+        try {
+          return this.loose(source, path, await this.reader.readRange(path, 0, 4096));
+        } catch (error) {
+          if (!missing(error)) throw error;
+          return null;
+        }
+      },
+      async (pkg) => this.fromPkg(pkg, rel),
+    );
+  }
+
+  /**
+   * 按查找顺序（工程散文件 → `scene.pkg` → 各 assets）找 `rel`，`loose` / `packed` 是在一处读的办法（读不到返回 null）。
+   * 有文件表的根：表里有就按表里的真实写法读，没有就跳过、留到最后；没有表的根照旧按原写法探。三处都没找到时，把表说没有的位置
+   * 按原写法补探一遍（表可能过时：运行中新增的文件）。结果为 null 时记进 `absent`，之后同一路径不再找。
+   */
+  private async locate<T>(
+    rel: string,
+    loose: (source: LooseRoot["source"], path: string) => Promise<T | null>,
+    packed: (pkg: ScenePkg) => Promise<T | null>,
+  ): Promise<T | null> {
+    if (this.absent.has(rel)) return null;
+    // 表说没有、留到最后补探的位置（按查找顺序）
+    const deferred: [LooseRoot["source"], string][] = [];
+    const inRoot = async (root: LooseRoot): Promise<T | null> => {
+      const exact = join(root.dir, rel);
+      if (!root.index) return loose(root.source, exact);
+      const real = root.index.find(rel);
+      if (real !== null) {
+        const hit = await loose(root.source, real === rel ? exact : join(root.dir, real));
+        if (hit !== null || real === rel) return hit;
       }
+      deferred.push([root.source, exact]);
+      return null;
+    };
+    const project = await inRoot(this.projectRoot);
+    if (project !== null) return project;
+    const pkg = await this.openPkg();
+    if (pkg) {
+      const hit = await packed(pkg);
+      if (hit !== null) return hit;
     }
+    for (const root of this.assetRoots) {
+      const hit = await inRoot(root);
+      if (hit !== null) return hit;
+    }
+    for (const [source, path] of deferred) {
+      const hit = await loose(source, path);
+      if (hit !== null) return hit;
+    }
+    this.absent.add(rel);
     return null;
   }
 
@@ -237,7 +309,7 @@ export class SceneFs {
   }
 
   /**
-   * 清空文件缓存（L2，会话打开之后调）：`contents`、`pkgWindows`、`resolved` 连同同步镜像全部清掉，pkg 目录表保留。整场编完之后它们是重复
+   * 清空文件缓存（L2，会话打开之后调）：`contents`、`pkgWindows`、`resolved` 连同同步镜像全部清掉，pkg 目录表与 `absent` 保留。整场编完之后它们是重复
    * 数据——全库冒烟里少数场景常驻 80–290 MB（大 mdl 的原始文件字节，解析结果不再指向它们，`forgetBuffers` 释放不到）。之后编片段要用的文件
    * 再经主线程重读。只在没有读取在途时调（打开结束、片段之间）。
    */
@@ -287,34 +359,29 @@ export class SceneFs {
       return { source: known.source, bytes };
     }
     if (known === null) return null;
-    const projectPath = join(this.projectDir, rel);
-    try {
-      const bytes = await this.reader.readWhole(projectPath);
-      this.resolved.set(rel, Promise.resolve(this.loose("project", projectPath)));
-      return { source: "project", bytes };
-    } catch (error) {
-      if (!missing(error)) throw error;
-    }
-    const pkg = await this.openPkg();
-    const entry = pkg && this.fromPkg(pkg, rel);
-    if (entry) {
-      const bytes = await entry.readRange(0, entry.size!);
-      if (bytes.length !== entry.size) throw new Error(`文件被截断：${rel}`);
-      this.resolved.set(rel, Promise.resolve(entry));
-      return { source: "pkg", bytes };
-    }
-    for (const root of this.sceneAssets) {
-      const path = join(root, rel);
-      try {
-        const bytes = await this.reader.readWhole(path);
-        this.resolved.set(rel, Promise.resolve(this.loose("assets", path)));
-        return { source: "assets", bytes };
-      } catch (error) {
-        if (!missing(error)) throw error;
-      }
-    }
-    this.resolved.set(rel, Promise.resolve(null));
-    return null;
+    const found = await this.locate<{ source: SceneSource; bytes: Uint8Array }>(
+      rel,
+      async (source, path) => {
+        try {
+          const bytes = await this.reader.readWhole(path);
+          this.resolved.set(rel, Promise.resolve(this.loose(source, path)));
+          return { source, bytes };
+        } catch (error) {
+          if (!missing(error)) throw error;
+          return null;
+        }
+      },
+      async (pkg) => {
+        const entry = this.fromPkg(pkg, rel);
+        if (!entry) return null;
+        const bytes = await entry.readRange(0, entry.size!);
+        if (bytes.length !== entry.size) throw new Error(`文件被截断：${rel}`);
+        this.resolved.set(rel, Promise.resolve(entry));
+        return { source: "pkg", bytes };
+      },
+    );
+    if (!found) this.resolved.set(rel, Promise.resolve(null));
+    return found;
   }
 
   async readRange(rel: string, start: number, end: number): Promise<{ source: SceneSource; bytes: Uint8Array } | null> {

@@ -1,5 +1,23 @@
 # v4.7.0 regression
 
+## 场景编译按场景文件表找资源
+
+2026-11-28 Linux。场景宿主的编译读路径 `SceneFs` 不看 `wpe_scene_files` 的表，每个资源都先 `fetch(file:)` 探一次工程散文件（工坊场景的工程目录通常只有 `project.json`、预览图与 `scene.pkg`），探不到时 `file:` 闸门记一行 info 级 `deny file … NotFound`：11-27 在 dev 里渲染三张场景，799 行全是这种，`3643916956` 一张就有 602 行（会话开好后 `clearCaches()` 连「没找到」也清掉，18 次单对象重编译各探一遍）。这批日志 11-15 曾被误读成「依赖条目没下载、画面缺效果」。表也只给脚本的 `__workshopId` 改写用，编译和脚本对「文件存不存在」各问一处、规则不同（大小写、新鲜度）。
+
+改法：`wpe_scene_files` 改成按来源分开返回（`project` / `pkg` / `assets`，各带 `dir`），目录不存在时不缓存；宿主把同一份表经 `openSceneSession` 的 `files` 交给 Worker 里的 `SceneFs`（新模块 `compile/fileIndex.ts`，`sceneFileKey` 从 `createConfig.ts` 挪过来），键集照旧给脚本。`SceneFs` 有表时表里没有的位置不探、按表里的真实写法读（ASCII 不分大小写），三处表里都没有才按原写法补探一次，没找到的整个会话记着（`clearCaches` 不清）；没表或形状不对照旧逐个探。闸门对 `NotFound` 改记 debug 级 `file: not found`。dev 插件的 `renderFrame` 不论跑不跑脚本都转交表（同宿主）。读路径与对象关系图存进 `cocs/wpe/scene/scene-read-paths.html`。
+
+| 状态 | 项目 | 环境 | 操作 | 预期 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| [x] | SF1 后端单测 | Linux | `test-kabegame` driver：`kabegame-core --lib scene_files` | 三处按来源分开列出、`dir` 同参数写法；目录 / pkg 不存在为空；目录之后才出现时下次能看到（不缓存空表）；已缓存的不失效；LRU 淘汰最久没用的 | 2026-11-28 Claude：5 passed |
+| [x] | SF2 前端单测 | Linux | wpe-scene vitest：`compile/fs`、`compile/fileIndex`、`script/createLayerApi`、`script/createConfig` | 表里没有的位置不请求；散文件与 assets 按真实大小写读；表过时时补探读到新文件；表里有但读不到接着找；三处都没有的路径 `clearCaches` 后不再请求（有表、没表都是）；目录写法对不上的根照旧探；散文件仍优先于 assets；键规整、键集、形状校验、目录比较 | 2026-11-28 Claude：4 个文件 73 passed |
+| [x] | SF3 全量 vitest 不引入失败 | Linux | `npx vitest run`（`apps/wpe-scene`） | 失败集合与改动前相同 | 2026-11-28 Claude：294 个文件通过，4 个文件 11 个用例失败（`materialValues` 7、`p3a` 2、`pipeline` 1、`render` 1），暂存改动后在原代码上跑同样是这 11 个。中途 `host.script` / `host.usertextures` 两个测试的 `invoke` 替身对未知命令回 `"disabled"`，被新的形状校验记了 warn，替身改为对 `wpe_scene_files` 回 `null` |
+| [x] | SF4 dev 插件转交 | Linux | `deno test -A scripts/kabegame-dev/scene.test.ts` | 带不带 `scripts` 都转交按来源分开的表 | 2026-11-28 Claude：2 passed（15 步） |
+| [x] | SF5 类型与编译 | Linux | wpe-scene `tsc --noEmit`；`check-kabegame --skip vue` | 改动的文件 0 error、没有新 warning | 2026-11-28 Claude：tsc 只剩 `vitest.config.ts` 一处既有错误（vite 两份类型不兼容，来自 `1f3f9dc2`）；cargo 0 error |
+| [ ] | SF6 不再先探散文件 | Linux dev（重启 dev，后端命令改了） | 用 `render_scene` 渲染 19814（`3837598414`）、19812（`3836725625`），读这段时间的应用日志 | 两张的工程目录下没有 `file: not found`；`unsupported` 为空、画面与 11-27 相同（像素摘要 `6fe5c714…` / `2df6b692…`） | 待 dev 重启 |
+| [ ] | SF7 真缺的只探一次 | Linux dev | 渲染 19741（`3643916956`，带 `scripts`） | `BRONSON-Black.ttf` 只在工程目录与 assets 各探一次（以前 18 次重编译各探一遍）；`materials/fonts/basefont.json` 等在 assets 里的不再探工程目录 | 待 dev 重启 |
+| [ ] | SF8 旧后端 + 新宿主 | dev | 只重建宿主（`buildSceneHost.ts`）不重启应用 | 宿主记一条「场景文件表形状不对，当没有表」warn，编译照旧逐个探、场景照常 | 没做 |
+| [ ] | SF9 Windows / macOS | Windows、macOS | 同 SF6；再挑一张工程里有散文件的 `myprojects` 场景 | 画面不变；散文件照常优先于 pkg | 未测 |
+
 ## 打包不再收集 `dxil.dll`（CEF 156）
 
 2026-11-23。CEF 156（Chromium 156.0.8078.96）不再分发 `dxil.dll`（上游 `a26ddfd27`「win: dxil.dll is no longer distributed」），Windows 出货构建在收集 CEF 运行时时报缺它。`WINDOWS_CEF_RUNTIME_FILES` 去掉这一项。顺带推翻了 `.claude/plans/wpe-import/3-scene/phase-compile-cache.md` 里「缺 `dxil.dll` 让 Dawn 退回 FXC」的归因：Dawn 与 DXC 的整条链路都不碰它（那条笔记已更正）。

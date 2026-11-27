@@ -119,6 +119,9 @@
 - 条目更新后入库行的目录哈希、大小与 metadata（`project.json`）不重算，属性面板读的还是旧 metadata；要等「刷新已有行」的入口（文件夹同步也有同样的缺口）。
 - 取消订阅的条目不删除目录、不动入库的行。
 - 用户自己的 Steam 已经下过的工坊条目（在 `workshop/content/431960`）会再下一份到 `myprojects`；入库时按目录哈希去重命中已有行，只多占磁盘。
-- 依赖别的工坊条目的场景（`scene.json` 里引用 `effects/workshop/<id>/…`，2026-11-15 实测 3836725625、3837598414）：依赖条目不下载，场景渲染器也不解析这类路径（本机 Steam 装的同类壁纸一样），画面缺这些效果，日志里是 `deny file: … NotFound`。要先查 WPE 怎么把这类路径解析到依赖条目，再决定依赖条目下载到哪（`GetDetails` 的 `includechildren` 给依赖清单）。
+- 场景里的 `<种类>/workshop/<id>/…` 路径（2026-11-27 核对）：作者在编辑器里用了别的工坊素材（effect、着色器、字体、粒子预设等）时，素材被拷进工程的 `<种类>/workshop/<id>/…`，发布时随场景打进 `scene.pkg`，`SceneFs` 当普通路径从 pkg 读到，不需要下载依赖条目，渲染器也不用特殊解析。
+  - 本机 217 张场景里 142 张有这类引用，真不在包里的只有 `3643916956` 的 `fonts/workshop/3632410990/BRONSON-Black.ttf`（依赖条目 `3632410990` 本机也没装）：排版退回 arial，同 WPE 找不到字体时。WPE 在装了依赖条目时会不会去它的目录里找，没查。
+  - 另有 7 张的 effect.json `dependencies` 列着编辑器源文件（`.png`、`.tex-json`），编好的 `.tex` 都在包里，不影响渲染。
+  - 2026-11-15 曾把 `3836725625`、`3837598414` 记成「依赖条目没下载、画面缺效果」，是误诊：日志里的 `deny file: … NotFound` 是 `SceneFs` 先探工程散文件时 `file:` 闸门打的 info 日志，随后在 pkg 命中。两张都和 WPE 对照过（P7c、P6b），11-27 在 dev 里重新渲染，`unsupported` 为空，effect 与字体都在。11-28 起 `SceneFs` 按场景文件表找、不再先探散文件，闸门对不存在的文件改记 debug 级 `file: not found`（见 [scene/COMPILE.md](scene/COMPILE.md)「编译管线」）。
 - 收藏还没做，入口会排在「我的订阅」「工坊发现」旁边；工坊发现还没有题材标签（Anime、Game 等）筛选，可以先用搜索。
 - token 明文存在数据库里（P4 用 passkey 或系统钥匙串保护）。

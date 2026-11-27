@@ -48,7 +48,16 @@ count × { sizedString name, u32 offset, u32 length }
 
 ## 编译管线
 
-`apps/wpe-scene/src/compile/` 将项目转成渲染器唯一输入 `SceneBundle`。`SceneFs` 依次查项目散文件、`scene.pkg`、各个 `sceneAssets`；返回来源标签 `project` / `pkg` / `assets`。路径先规范化并拒绝 `..`、盘符与 UNC。同一相对路径的查找结果（含未命中）及整文件内容在一次编译中缓存，多个 shader 共用的 include 只读一次。
+`apps/wpe-scene/src/compile/` 将项目转成渲染器唯一输入 `SceneBundle`。`SceneFs` 依次查项目散文件、`scene.pkg`、各个 `sceneAssets`；返回来源标签 `project` / `pkg` / `assets`。路径先规范化并拒绝 `..`、盘符与 UNC。同一相对路径的查找结果及整文件内容在一次编译中缓存，多个 shader 共用的 include 只读一次；三处都没有的路径整个会话都记着（`absent`，`clearCaches` 不清），对象级重编译、脚本反复建层不再重探。读路径与相关对象的关系图见 [scene-read-paths.html](scene-read-paths.html)。
+
+**场景文件表**（2026-11-28，`compile/fileIndex.ts`、后端 `kabegame_core::wpe::scene_files`）：宿主每次加载经命令 `wpe_scene_files` 拉一次，按来源分开（`project` 散文件、`pkg` 条目名、各 `assets` 目录，`dir` 写法同 `wpe_scene_target`），经 `openSceneSession` 的 `files` 交给 Worker 里的 `SceneFs`，同一份表的键集给脚本的 `__workshopId` 改写（见 [SCRIPT.md](SCRIPT.md)「运行时建层（P6d3b）」）。`SceneFs` 有表时：
+
+- 表里没有的位置不探，直接去下一处（工坊场景的工程目录通常只有 `project.json`、预览图与 `scene.pkg`，以前每个资源都先探一次散文件）；
+- 表里有的按表里的真实写法读（`sceneFileKey`：ASCII 不分大小写，同 WPE 在 Windows 上），Linux / macOS 上大小写与场景写法不同的散文件与 assets 文件也读得到；
+- 表只决定先去哪里找、不决定存不存在：表里有但读不到（文件删了）接着找下一处，三处表里都没有时按原写法补探一遍（表过时：后端缓存运行中不失效，见 `scene_files.rs`）；
+- 目录写法对不上的根、拉表失败（`null`）或形状不对（旧版应用的扁平数组）时照旧逐个探；单测、语料扫描等不给表的调用方同样照旧。
+
+`file:` 闸门对不存在的文件记 debug 级 `file: not found: <url>`（2026-11-28 之前是 info 级的 `deny file: … NotFound`，曾被误读成读取失败）；三处都找不到的由消费方处理（材质、effect、纹理、模型、粒子报 `material:missing:*` / `effect:missing:*` / `texture:missing:*` 等能力键，文本的主字体退回 arial）。`<种类>/workshop/<id>/…`（如 `effects/workshop/2981960200/blurprecise/effect.json`、材质里的着色器名 `workshop/<id>/effects/…`）是作者用到的别的工坊素材，随场景打进 `scene.pkg`，当普通路径查，不去依赖条目的目录（见 [WPE_STEAM.md](../WPE_STEAM.md)「已知限制与后续」）。
 
 读取器只提供 `readWhole(path)` 与 `readRange(path, start, end)`。主线程的 `FetchSceneReader` 用 `fileToUrl` + `fetch(file:)`：JSON / shader 直接整读，`.tex` 用首个 4 KiB 区间读取判断散文件是否存在，并把这段头部字节交给解析器复用。`scene.pkg` 条目的长度由目录表给出，相邻小条目共用 64 KiB 区间窗口；大 mip 仍直接按区间读。散文件不探测大小。CEF 主窗口实测整读、Range、HEAD 的 `file:` 响应都没有 `Content-Length`，Range 也没有 `Content-Range`；起点越界和文件不存在都报 `TypeError: Failed to fetch`。区间响应按流读取，一旦超过请求长度立即取消并报错。`.tex` 只读容器头、mip 表与支持的 mip；Video flag 的 MP4 只记录区间，不读视频本体。每个解析到的文件带 `location: { path, offset }`（散文件为自身、pkg 条目为 `scene.pkg` 与数据区偏移），供主线程直接区间读。
 

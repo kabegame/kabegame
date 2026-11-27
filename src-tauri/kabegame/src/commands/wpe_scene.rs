@@ -34,11 +34,14 @@ pub async fn wpe_scene_target(image_id: String) -> Result<WpeSceneTarget, String
     })
 }
 
-/// 场景查找范围里的全部文件：工程散文件、`scene.pkg` 条目、WPE `assets`，相对各自根目录、`/` 分隔、原样大小写。
-/// 宿主每次加载拉一次，脚本 `createLayer` / `createModelData` 的路径存在就不按 `__workshopId` 改写（同 WPE）。
-/// 缓存在后端（`kabegame_core::wpe::scene_files`：assets 缓存一次运行，工程目录 LRU 100，都不失效）。
+/// 场景查找范围里的全部文件，按来源分开：工程散文件、`scene.pkg` 条目、各 WPE `assets` 目录，相对各自根目录、`/` 分隔、原样大小写。
+/// 宿主每次加载拉一次：编译的 `SceneFs` 按它决定去哪里读（表里没有的位置不探）、按真实大小写读；脚本 `createLayer` /
+/// `createModelData` 的路径存在就不按 `__workshopId` 改写（同 WPE）。
+/// 缓存在后端（`kabegame_core::wpe::scene_files`：assets 缓存一次运行，工程目录 LRU 100，都不失效，目录不存在时不缓存）。
 #[tauri::command]
-pub async fn wpe_scene_files(image_id: String) -> Result<Vec<String>, String> {
+pub async fn wpe_scene_files(
+    image_id: String,
+) -> Result<kabegame_core::wpe::scene_files::SceneFiles, String> {
     use kabegame_core::media::image_type::wpe_kind;
     use kabegame_core::storage::Storage;
 

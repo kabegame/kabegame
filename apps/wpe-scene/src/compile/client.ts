@@ -4,6 +4,7 @@ import type { SceneBundle } from "./bundle";
 import { decodeEncodedTextureList, decodeEncodedTextures, type TextureDecodeCache } from "./decode";
 import type { FragmentDelta, FragmentRequest } from "./fragment";
 import type { ModelDataDesc } from "../modeldata/types";
+import type { SceneFileList } from "./fileIndex";
 import type {
   SceneReflectionSetting,
   ScenePostprocessSetting,
@@ -22,6 +23,8 @@ import {
 export interface WorkerCompileInput {
   projectDir: string;
   sceneAssets: string[];
+  /** 场景文件表（`wpe_scene_files`）：交给 Worker 里的 `SceneFs`，表里没有的位置不探、按真实大小写读。不给照旧逐个探。 */
+  files?: SceneFileList | null;
   userProperties?: Record<string, unknown>;
   scriptOverrides?: Record<string, number[] | boolean | string>;
   /** 运行中改过的场景结构（P6d3）；缺省空结构。 */
@@ -255,6 +258,7 @@ export async function openSceneSession(
       {
         projectDir: input.projectDir,
         sceneAssets: input.sceneAssets,
+        ...(input.files ? { files: input.files } : {}),
         userProperties: input.userProperties ?? {},
         scriptOverrides: input.scriptOverrides ?? {},
         structure: input.structure ?? { destroyed: [], parents: [], created: [] },

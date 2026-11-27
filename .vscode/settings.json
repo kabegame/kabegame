@@ -31,5 +31,6 @@
   "i18n-ally-next.pathMatcher": "{locale}/{namespace}.json",
   "i18n-ally-next.keystyle": "nested",
   "i18n-ally-next.annotations": true,
-  "i18n-ally-next.annotationInPlace": false
+  "i18n-ally-next.annotationInPlace": false,
+  "cmake.sourceDirectory": "/home/cm/code/kabegame/src-plasma-wallpaper-plugin"
 }

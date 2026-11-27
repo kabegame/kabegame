@@ -468,7 +468,7 @@ unresponsive 也无恢复应答时，应报告并另补重建窗口兜底，不�
   | 应用页给 iframe 赋 `src` | 子 frame 导航、07 父文档头已知且不是 `file:` | 目标须落进库里**某个**网页壁纸目录：按目标路径解析，只取壁纸目录、不带用户选择 |
   | 主 frame 导航到 `file:`、其它 | — | 拒绝 |
 
-  拒绝时日志记 `deny file: <url> (outside <root>; grants N; <原因>; requester …) webview '<label>'`（info 级）。不按 frame id
+  拒绝时日志记 `deny file: <url> (outside <root>; grants N; <原因>; requester …) webview '<label>'`（info 级）；文件不存在（`NotFound`）不算越权，记 debug 级 `file: not found: <url> (requester …) webview '<label>'`（2026-11-28 起，场景宿主等调用方按查找顺序探文件时会大量出现）。不按 frame id
   建表：WPE iframe 从 `about:blank` 导航到 `file:` 时换进程、换 RenderFrameHost，frame identifier 随之变化，而 frame 自己的
   文档 URL 就说明了它属于哪张壁纸。解析器注册之前（启动早期）所有不免检的请求都被拒绝；那时只有应用页主 frame 的子资源，
   它免检。

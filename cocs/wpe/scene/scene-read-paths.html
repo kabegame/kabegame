@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>场景读路径</title>
+<!-- 场景壁纸的读路径与对象关系图（COMPILE.md「编译管线」的配图）。mermaid 从 jsDelivr 加载，要联网。 -->
+<style>
+  :root {
+    --bg: #fafaf9; --fg: #1c1917; --muted: #57534e; --card: #ffffff; --line: #e7e5e4;
+    --a: #dc2626; --b: #2563eb; --c: #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --card: #1c1917; --line: #292524;
+      --a: #f87171; --b: #60a5fa; --c: #fbbf24;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --card: #1c1917; --line: #292524;
+    --a: #f87171; --b: #60a5fa; --c: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.65 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; }
+  main { max-width: 1600px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 40px 0 8px; }
+  p, li { color: var(--muted); }
+  code { font: 13px ui-monospace, "JetBrains Mono", Consolas, monospace; color: var(--fg); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 8px 0 12px; font-size: 14px; }
+  .legend span::before { content: ""; display: inline-block; width: 22px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+  .la::before { background: var(--a); } .lb::before { background: var(--b); } .lc::before { background: var(--c); }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { color: var(--fg); font-weight: 600; }
+  td { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>场景壁纸：编译、渲染与读路径</h1>
+  <p>按 2026-11-28 的代码画（场景文件表交给编译的 <code>SceneFs</code> 之后）。宿主是 <code>apps/wpe-scene</code>（<code>file:</code> iframe），编译在 Worker 里，Worker 不能 <code>fetch(file:)</code>，文件都由主线程代读。文字说明见 <a href="COMPILE.md">COMPILE.md</a>「编译管线」。</p>
+
+  <h2>图 1　读路径：谁在读文件、经过哪里</h2>
+  <div class="legend">
+    <span class="la">① 编译读路径：SceneFs 先查文件表，按真实写法直接读</span>
+    <span class="lb">② 主线程按 bundle 给的 location 直读</span>
+    <span class="lc">③ 脚本存在性：查同一份表的键集</span>
+  </div>
+  <div class="card"><pre class="mermaid" id="paths">
+flowchart LR
+  subgraph BE["后端"]
+    FILES["wpe_scene_files（scene_files.rs）<br/>按来源分开：project / pkg / assets<br/>缓存不失效，目录不存在时不缓存"]
+    GATE{{"CEF file: 闸门<br/>越权 → info「deny file」<br/>不存在 → debug「file: not found」"}}
+  end
+  subgraph MAIN["宿主主线程"]
+    LIST["SceneFileList<br/>每次加载拉一次"]
+    SF["键集 sceneFileKeys<br/>ASCII 不分大小写"]
+    RW["rewriteWorkshopPath<br/>createLayer / createModelData"]
+    WS["WorkerSession<br/>替 Worker 读"]
+    TEX["TextureDecodeCache<br/>.tex 的 PNG / JPG mip"]
+    TXT["SceneTexts<br/>字体"]
+    SND["ScenePlayer<br/>声音"]
+    UT["UserTextureSources<br/>用户纹理"]
+    VID["CodecVideoPlayer<br/>视频纹理"]
+    RD["FetchSceneReader<br/>fetch(file:)"]
+  end
+  subgraph WK["编译 Worker"]
+    SFS["SceneFs<br/>工程 → pkg → assets<br/>有表：表里没有的不探，按真实写法读<br/>三处表里都没有才按原写法补探一次<br/>没找到的整个会话记着（absent）"]
+    IDX["SceneRootIndex<br/>工程、各 assets 各一份"]
+    PKGT["ScenePkg 目录表<br/>开包读一次，内存里查"]
+    PROXY["代理 reader<br/>postMessage「file」"]
+  end
+  subgraph DISK["磁盘"]
+    LOOSE[("工程散文件")]
+    PKG[("scene.pkg")]
+    ASSETS[("WPE assets")]
+  end
+
+  FILES -->|"invoke"| LIST
+  LIST -->|"openSceneSession 的 files"| IDX
+  LIST --> SF
+  SFS --> IDX
+  SFS --> PKGT
+  SFS ==>|"①"| PROXY
+  PROXY ==> WS
+  WS ==> RD
+  RD ==> GATE
+  GATE ==> LOOSE
+  GATE ==> PKG
+  GATE ==> ASSETS
+  TEX -->|"②"| RD
+  TXT -->|"②"| RD
+  SND -->|"②"| RD
+  UT -->|"②"| RD
+  VID -->|"② Range"| GATE
+  RW -.->|"③"| SF
+  FILES -. "walkdir + 读 pkg 目录表" .-> LOOSE
+  FILES -.-> PKG
+  FILES -.-> ASSETS
+
+  linkStyle 1,3,4,5,6,7,8,9,10,11 stroke:#dc2626,stroke-width:2.5px
+  linkStyle 12,13,14,15,16 stroke:#2563eb,stroke-width:2px
+  linkStyle 2,17 stroke:#d97706,stroke-width:2px
+  </pre></div>
+
+  <h2>图 2　对象关系：从编译到出帧</h2>
+  <div class="card"><pre class="mermaid" id="objects">
+flowchart TB
+  TGT["wpe_scene_target<br/>工程目录、assets 目录、系统字体"]
+  FILES["wpe_scene_files<br/>场景文件表"]
+  subgraph WK["编译 Worker"]
+    SESS["SceneCompileSession<br/>整场 compileScene / 片段 compileFragment"]
+    SFS["SceneFs（带文件表）"]
+  end
+  subgraph MAIN["宿主主线程：SceneHost"]
+    REG["SceneRegistry<br/>对象登记表"]
+    ST["SceneState<br/>CPU 侧状态：属性、关键帧、脚本都写它"]
+    DEC["TextureDecodeCache / SceneTexts<br/>解码纹理、排版文字"]
+    GPU["GpuScene<br/>GPU 资源"]
+    RND["SceneRenderer<br/>帧循环"]
+    RT["ScriptRuntime（realm）"]
+    API["ScriptApi"]
+    RW["rewriteWorkshopPath"]
+    SF["键集 sceneFileKeys"]
+    LIVE["LiveObjects<br/>运行中建层 / 单对象重编译"]
+  end
+
+  TGT --> SESS
+  FILES -->|"files"| SESS
+  FILES --> SF
+  SESS --> SFS
+  SESS -->|"SceneBundle（带 location）"| REG
+  REG --> ST
+  REG --> GPU
+  REG --> DEC
+  DEC --> GPU
+  GPU --> RND
+  ST -->|"每帧 sync"| RND
+  RND -.->|"帧内调用"| RT
+  RT --> API
+  API -->|"写字段"| ST
+  API -->|"createLayer"| RW
+  RW -.->|"③ 存在就不改写"| SF
+  RW --> LIVE
+  LIVE ==>|"compileFragment：同一个 SceneFs、同一份表"| SESS
+  LIVE -->|"addObject / replaceObject"| REG
+  LIVE -->|"installObject"| GPU
+
+  linkStyle 1,3,17 stroke:#dc2626,stroke-width:2.5px
+  linkStyle 2,14,15,16 stroke:#d97706,stroke-width:2px
+  </pre></div>
+
+  <h2>图 3　脚本建一个层：同一份表先后用两次</h2>
+  <div class="card"><pre class="mermaid" id="seq">
+sequenceDiagram
+  autonumber
+  participant S as 场景脚本
+  participant A as ScriptApi
+  participant T as 键集（表）
+  participant L as LiveObjects
+  participant W as Worker：SceneFs（表）
+  participant M as 主线程读取
+  participant G as file: 闸门
+  S->>A: createLayer("models/bar.json")
+  A->>T: has(sceneFileKey(path))？
+  T-->>A: 有就原样，没有就改写成 …/workshop/#lt;id#gt;/…
+  A->>L: 建壳对象（当帧返回）
+  L->>W: compileFragment(配置)
+  W->>W: 查表：工程里没有就跳过，pkg 在内存里查，assets 取真实写法
+  W->>M: file 请求：只读表里有的那个位置
+  M->>G: fetch(file:)
+  G-->>M: 文件内容
+  M-->>W: 字节
+  W-->>L: 片段，或 *:missing:*
+  L-->>S: 下一帧装上
+  </pre></div>
+
+  <h2>表的两个使用方</h2>
+  <div class="card">
+    <table>
+      <tr><th>使用方</th><th>怎么用</th><th>表过时、取不到时</th></tr>
+      <tr><td>① 编译 <code>SceneFs</code></td><td>表里没有的位置不探；表里的按真实写法读（不分 ASCII 大小写，Linux / macOS 上大小写不同的文件也读得到）；目录写法对不上的根照旧探</td><td>表里有但读不到 → 接着找下一处；三处表里都没有 → 按原写法补探一次；没有表 → 照旧逐个探。结果不受表影响，只是多探几次</td></tr>
+      <tr><td>③ 脚本 <code>__workshopId</code> 改写</td><td>三处的键并成一个集合，路径在里面就不改写</td><td>脚本是同步的、不能补探：表过时以表为准，要重启应用才看得到运行中新增的文件；取不到表 → 空集，全部改写</td></tr>
+    </table>
+  </div>
+
+  <h2>改动前的实测（2026-11-27）</h2>
+  <div class="card">
+    <table>
+      <tr><th>场景</th><th>探工程散文件</th><th>不同路径</th><th>原因</th></tr>
+      <tr><td><code>3837598414</code></td><td>44 次</td><td>22</td><td><code>render_scene</code> 的屏外宿主加载一次，探针再编译一次（产品里一次）</td></tr>
+      <tr><td><code>3836725625</code></td><td>54 次</td><td>27</td><td>同上</td></tr>
+      <tr><td><code>3643916956</code></td><td>602 次</td><td>249</td><td>会话开好后 <code>clearCaches()</code> 连「没找到」也清掉，18 次单对象重编译各探一遍</td></tr>
+    </table>
+    <p>当时每次探不到都记一行 info 级 <code>deny file … NotFound</code>（799 行全是这种），资源随后在 pkg 或 assets 命中，画面没问题，但曾被误读成「依赖条目没下载」。</p>
+  </div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.min.js"></script>
+<script>
+  const attr = document.documentElement.getAttribute("data-theme");
+  const dark = attr ? attr === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: dark ? "dark" : "default",
+    securityLevel: "strict",
+    themeVariables: { fontSize: "15px" },
+    flowchart: { htmlLabels: true, curve: "basis", useMaxWidth: false },
+    sequence: { mirrorActors: false, useMaxWidth: false },
+  });
+</script>
+</body>
+</html>

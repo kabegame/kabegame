@@ -21,7 +21,12 @@ vi.mock("@tauri-apps/api/core", () => ({
     onmessage: (message: unknown) => void = () => {};
   },
   invoke: vi.fn(async (command: string) =>
-    command === "wpe_scene_target" ? { path: "P:/p", sceneAssets: [] } : "disabled",
+    command === "wpe_scene_target"
+      ? { path: "P:/p", sceneAssets: [] }
+      : // 场景文件表：没有（编译另有替身，脚本建层当都不存在）
+        command === "wpe_scene_files"
+        ? null
+        : "disabled",
   ),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));

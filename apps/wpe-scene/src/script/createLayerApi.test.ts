@@ -10,7 +10,7 @@ import type { SceneStructure } from "../compile/protocol";
 import { collectObjectScriptsSync, type SceneScript } from "../compile/scripts";
 import { SceneState } from "../render/state";
 import { ScriptApi, type ScriptApiState } from "./api";
-import { sceneFileKey } from "./createConfig";
+import { sceneFileKey } from "../compile/fileIndex";
 import { ScriptRuntime, type ScriptRealm } from "./runtime";
 import { readScriptState, writeScriptState } from "./stateWrite";
 import { createStructureObject, syncAllocator, type ObjectAllocator } from "./structure";

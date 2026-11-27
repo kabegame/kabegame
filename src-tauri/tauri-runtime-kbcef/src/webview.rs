@@ -1343,6 +1343,15 @@ mod imp {
                         .unwrap_or_default();
                 match crate::file_access::check_file_request(&url, &access) {
                     Ok(_) => ReturnValue::CONTINUE,
+                    // 文件不存在不是越权：场景宿主等调用方会按查找顺序先探再退（如 `SceneFs` 先探工程散文件），记 debug、不写「deny」
+                    Err(crate::file_access::FileDeny::NotFound) => {
+                        tracing::debug!(
+                            "file: not found: {url} (requester {:?}) webview '{}'",
+                            self.requester,
+                            self.label
+                        );
+                        ReturnValue::CANCEL
+                    }
                     Err(reason) => {
                         let root = access.root
                             .as_deref()

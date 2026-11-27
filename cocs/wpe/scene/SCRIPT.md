@@ -310,7 +310,7 @@ P6d1b：`p6d1-mat8` 五个字段 36 次写入的读回和 WPE 实测的规则逐
   - 资源键过 `__workshopId` 改写：顶层字符串的 `particle` / `sprite` / `image` / `font` / `path`，`sound`（字符串或数组），`effects[].file`，`effects[].passes[].textures[]`。
 - **`__workshopId` 改写**：
   - 用的是**当前脚本**的导出 `__workshopId`，模块求值完读一次，只认字符串；
-  - 路径在场景查找范围里存在就不改。范围同场景读资源的三处：工程散文件、`scene.pkg` 条目、WPE `assets`（读码推测 WPE 的存在查询也是这三处，没在 WPE 上实测）。宿主每次加载经命令 `wpe_scene_files` 拉一次全表，按 `sceneFileKey`（`\` 换成 `/`、去开头的 `/`、ASCII 不分大小写，同 `pkgKey`）查；缓存在后端（`kabegame_core::wpe::scene_files`：assets 一次运行、工程目录 LRU 100，都不失效），拉取失败是空表（全部改写）。
+  - 路径在场景查找范围里存在就不改。范围同场景读资源的三处：工程散文件、`scene.pkg` 条目、WPE `assets`（读码推测 WPE 的存在查询也是这三处，没在 WPE 上实测）。宿主每次加载经命令 `wpe_scene_files` 拉一次表（按来源分开，同一份也交给编译的 `SceneFs`，见 [COMPILE.md](COMPILE.md)「编译管线」的场景文件表），三处的键并成一个集合，按 `sceneFileKey`（`compile/fileIndex.ts`：`\` 换成 `/`、去开头的 `/`、ASCII 不分大小写，同 `pkgKey`）查；缓存在后端（`kabegame_core::wpe::scene_files`：assets 一次运行、工程目录 LRU 100，都不失效，目录不存在时不缓存），拉取失败或形状不对是空集（全部改写）。
     - 2026-11-23 之前查的是编译期名单 `bundle.assetPaths`：只扫脚本源码里的资源路径字面量、只查 `assets`，克隆 `getInitialLayerConfig` 得到的路径不在名单里，自带资源被误改成 `…/workshop/<id>/…`（69031「Girl and Cat」的 `playerbarsexception` 报 `model:missing:models/workshop/3200298808/util/solidlayer.json`）；
   - 缺省模型本来就是 WPE 自带资源，补在改写之后、不改；
   - 其余改成 `<第一段>/workshop/<id>/<其余>`（已带 `workshop/<旧 id>` 的先去掉），纹理是 `workshop/<id>/<路径>`。

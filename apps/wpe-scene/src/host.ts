@@ -69,7 +69,7 @@ import type { SceneReporter } from "./report";
 import { PLAYBACK_RATE_MAX, PLAYBACK_RATE_MIN, schemeColor } from "./sceneStyle";
 import { instanceControlPoint, type InstanceField } from "./compile/particles";
 import { ScriptApi, createWpeLocalStorage, type ParticleScriptTarget } from "./script/api";
-import { sceneFileKey } from "./script/createConfig";
+import { isSceneFileList, sceneFileKey, sceneFileKeys, type SceneFileList } from "./compile/fileIndex";
 import { applyScriptedProperties } from "./script/initialApply";
 import {
   addShellObject,
@@ -472,8 +472,8 @@ export class SceneHost {
   private readonly textureCache = new TextureDecodeCache(this.reader);
   private targetTask: Promise<SceneTarget> | null = null;
   /**
-   * 场景查找范围（工程散文件、`scene.pkg`、WPE `assets`）里的全部文件，键是 `sceneFileKey`：每次加载经 `wpe_scene_files` 拉一次（缓存在后端），
-   * 脚本的 `__workshopId` 改写见到存在的路径不改（P6d3b）。拉取失败是空表（全部改写）。
+   * 场景查找范围（工程散文件、`scene.pkg`、WPE `assets`）里的全部文件的键（`sceneFileKey`）：每次加载经 `wpe_scene_files` 拉一次表
+   * （缓存在后端，表本身交给编译会话的 `SceneFs`），脚本的 `__workshopId` 改写见到存在的路径不改（P6d3b）。拉取失败是空集（全部改写）。
    */
   private sceneFiles: ReadonlySet<string> = new Set();
   private readonly unlisteners: UnlistenFn[] = [];
@@ -2441,19 +2441,23 @@ export class SceneHost {
   }
 
   /**
-   * 场景文件表（P6d3b 的 `__workshopId` 改写用，见 `sceneFiles`）：拉不到时记一条 warn、返回空表，场景照常加载。
+   * 场景文件表（`compile/fileIndex.ts`）：交给编译会话的 `SceneFs`（决定去哪里读），键集给脚本的 `__workshopId` 改写（见 `sceneFiles`）。
+   * 拉不到或形状不对时记一条 warn、返回 null：编译照旧逐个探，脚本建层的路径全部改写，场景照常加载。
    */
-  private async readSceneFiles(): Promise<ReadonlySet<string>> {
+  private async readSceneFiles(): Promise<SceneFileList | null> {
     try {
-      const files = await invoke<string[]>("wpe_scene_files", { imageId: this.options.imageId });
-      return new Set(Array.isArray(files) ? files.map(sceneFileKey) : []);
+      const files = await invoke<unknown>("wpe_scene_files", { imageId: this.options.imageId });
+      if (isSceneFileList(files)) return files;
+      // 空值（单测里没 mock 这条命令）当没有表；有值却对不上（旧版应用的扁平数组）才记
+      if (files != null)
+        this.options.report.warn(`场景壁纸 ${this.options.imageId} 的场景文件表形状不对，当没有表：`, files);
     } catch (error) {
       this.options.report.warn(
-        `场景壁纸 ${this.options.imageId} 取场景文件表失败，脚本建层的路径会全部按 __workshopId 改写：`,
+        `场景壁纸 ${this.options.imageId} 取场景文件表失败，编译逐个探资源，脚本建层的路径会全部按 __workshopId 改写：`,
         error,
       );
-      return new Set();
     }
+    return null;
   }
 
   /**
@@ -2525,7 +2529,7 @@ export class SceneHost {
         await Promise.all([targetTask, this.readSceneSettings(), this.readSceneFiles()]);
       if (id !== this.generation) return;
       // 脚本（含首次加载的 init）跑之前就位
-      this.sceneFiles = sceneFiles;
+      this.sceneFiles = sceneFiles ? sceneFileKeys(sceneFiles) : new Set();
       this.postprocess = setting;
       this.reflection = reflection;
       this.shadows = shadows;
@@ -2540,6 +2544,7 @@ export class SceneHost {
       const opened = await openSceneSession({
         projectDir: target.path,
         sceneAssets: target.sceneAssets,
+        files: sceneFiles,
         userProperties,
         scriptOverrides: Object.fromEntries(this.scriptOverrides),
         structure: {

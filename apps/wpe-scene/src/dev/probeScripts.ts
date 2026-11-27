@@ -39,7 +39,7 @@ import type { SceneState } from "../render/state";
 import { daytimeOf } from "../render/uniforms";
 import type { SceneReporter } from "../report";
 import { createWpeLocalStorage, ScriptApi } from "../script/api";
-import { sceneFileKey } from "../script/createConfig";
+import { sceneFileKey, sceneFileKeys, type SceneFileList } from "../compile/fileIndex";
 import { createIframeRealm, getJsModuleIndex } from "../script/realm";
 import { ShortcutToken } from "../shortcut/token";
 import {
@@ -293,7 +293,7 @@ export interface ProbeScriptsInput {
    * 场景文件表（`wpe_scene_files`，dev 插件按图片 id 取来、经 `renderFrame` 转交）：`createLayer` 的 `__workshopId` 改写查它，同宿主。
    * 不给时当都不存在（全部改写）。
    */
-  sceneFiles?: readonly string[];
+  sceneFiles?: SceneFileList;
   /** 全部用户属性（`readProbeUserProperties`）：`init` 之后整份交给 `applyUserProperties`，同宿主首帧之前。 */
   properties: ReadonlyMap<string, UserProperty>;
   /** 脚本的 `engine.screenResolution`。 */
@@ -421,7 +421,7 @@ export function createProbeScripts(input: ProbeScriptsInput): ProbeScripts {
   const allocator: ObjectAllocator = { next: input.firstObject ?? 0 };
   const screen: [number, number] = [input.screen[0], input.screen[1]];
   /** 场景文件表（键是 `sceneFileKey`），同宿主的 `sceneFiles`。 */
-  const sceneFiles = new Set((input.sceneFiles ?? []).map(sceneFileKey));
+  const sceneFiles = input.sceneFiles ? sceneFileKeys(input.sceneFiles) : new Set<string>();
   /** 当前的回放时间与帧时间：`init` 时都是 0。 */
   const clock = { time: 0, frametime: 0 };
   const now = () => probeClockAt(options.clock, clock.time);

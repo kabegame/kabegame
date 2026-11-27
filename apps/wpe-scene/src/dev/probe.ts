@@ -77,6 +77,7 @@ import { trackGroupIssues } from "../script/structure";
 import { SceneTexts } from "../text/host";
 import { releaseTextLayout } from "../text/layout";
 import { FetchSceneReader } from "../compile/fs";
+import type { SceneFileList } from "../compile/fileIndex";
 import type {
   ScenePostprocessSetting,
   SceneReflectionSetting,
@@ -283,10 +284,11 @@ export interface RenderFrameOptions {
   projectDir: string;
   sceneAssets: string[];
   /**
-   * 场景文件表（`wpe_scene_files`）：跑脚本时 `createLayer` 的 `__workshopId` 改写查它，同宿主。探针没有后端，由请求给（dev 插件的
-   * `renderFrame` 在带 `scripts` 时按图片 id 取来转交）；不给时当都不存在（全部改写）。
+   * 场景文件表（`wpe_scene_files`，`compile/fileIndex.ts`），同宿主：交给编译会话的 `SceneFs`（决定去哪里读），跑脚本时 `createLayer` 的
+   * `__workshopId` 改写也查它。探针没有后端，由请求给（dev 插件的 `renderFrame` 按图片 id 取来转交）；不给时编译逐个探、脚本建层的路径
+   * 当都不存在（全部改写）。
    */
-  sceneFiles?: string[];
+  sceneFiles?: SceneFileList;
   postprocess?: ScenePostprocessSetting;
   /** 「场景反射」设置（P13b2）：缺省取 dev 覆盖（`dev/reflectionOverride.ts`），再缺省跟随 WPE。 */
   reflection?: SceneReflectionSetting;
@@ -653,6 +655,7 @@ export async function renderFrame(options: RenderFrameOptions): Promise<RenderFr
   const { bundle, session, exactConfigs } = await openSceneSession({
     projectDir: options.projectDir,
     sceneAssets: options.sceneAssets,
+    ...(options.sceneFiles ? { files: options.sceneFiles } : {}),
     userProperties: options.userProperties,
     postprocess: options.postprocess ?? "disabled",
     reflection: options.reflection ?? reflectionOverride() ?? undefined,

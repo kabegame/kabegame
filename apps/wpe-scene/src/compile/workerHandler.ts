@@ -148,6 +148,7 @@ export function createWorkerHandler(
         const opened = await openCompileSession({
           projectDir: request.projectDir,
           sceneAssets: request.sceneAssets,
+          ...(request.files ? { files: request.files } : {}),
           userProperties: request.userProperties,
           scriptOverrides: request.scriptOverrides,
           structure: request.structure,

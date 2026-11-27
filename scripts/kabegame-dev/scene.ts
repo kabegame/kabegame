@@ -521,11 +521,11 @@ export async function renderFrame(
   const particles = checkRenderReplay(request);
   const target = await sceneTarget(s, request.imageId);
   const userProperties = request.userProperties ?? (await currentUserProperties(s, request.imageId)).userProperties;
-  // 场景文件表（脚本 `createLayer` 的 `__workshopId` 改写查它，同宿主）：只在跑脚本时取。应用早于这个命令时取不到，探针当都不存在
+  // 场景文件表（同宿主：编译的 `SceneFs` 按它决定去哪里读，脚本 `createLayer` 的 `__workshopId` 改写也查它）。应用早于这个命令、
+  // 或还是旧的扁平数组形状时不转，探针编译逐个探、脚本建层当都不存在
+  const files = await invoke<unknown>(s, "wpe_scene_files", { imageId: request.imageId }).catch(() => undefined);
   const sceneFiles =
-    request.scripts !== undefined
-      ? await invoke<string[]>(s, "wpe_scene_files", { imageId: request.imageId }).catch(() => undefined)
-      : undefined;
+    typeof files === "object" && files !== null && !Array.isArray(files) && "project" in files ? files : undefined;
   // 固定键：探针把每帧 PNG 存在内存里，同键覆盖才不会越跑越大
   const key = options.key ?? `kbdev-${handle}`;
   const args = {
@@ -551,7 +551,7 @@ export async function renderFrame(
     ...(request.scriptValues ? { scriptValues: request.scriptValues } : {}),
     // 跑场景脚本（第 7 批）：checkRenderReplay 已校验（true 或 { clock?, seed? }、不和 scriptValues 同给）
     ...(request.scripts !== undefined ? { scripts: request.scripts } : {}),
-    ...(Array.isArray(sceneFiles) ? { sceneFiles } : {}),
+    ...(sceneFiles ? { sceneFiles } : {}),
     // 视频时刻（P9a 步骤 3）：checkRenderReplay 已校验（形状）；路径是不是视频纹理由探针判。0 也是有效值，不能按真假判
     ...(request.videoTime !== undefined ? { videoTime: request.videoTime } : {}),
     // 用户 GIF 逐帧时间：checkRenderReplay 已校验；空数组也转

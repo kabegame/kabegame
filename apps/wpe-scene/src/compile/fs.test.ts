@@ -4,6 +4,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { SceneFs, type SceneReader } from "./fs";
+import type { SceneFileList } from "./fileIndex";
 
 vi.mock("../fileUrl", () => ({ fileToUrl: (path: string) => path }));
 
@@ -120,5 +121,107 @@ describe("SceneFs.cacheStats", () => {
     fs.forgetBuffers(new Set([a.bytes.buffer as ArrayBuffer]));
     expect(fs.cacheStats().files).toBe(1);
     expect(fs.cacheStats().bytes).toBeLessThan(stats.bytes);
+  });
+});
+
+describe("SceneFs 按场景文件表找（wpe_scene_files）", () => {
+  const DISK = {
+    "P:/p/project.json": new Uint8Array([1]),
+    "P:/p/Models/Bar.json": new Uint8Array([2]),
+    "A:/a/shaders/common.h": new Uint8Array([3]),
+    "A:/a/materials/Util.tex": new Uint8Array(64).fill(4),
+  };
+  const list = (project: string[], assets: string[], assetsDir = "A:/a"): SceneFileList => ({
+    project: { dir: "P:/p", files: project },
+    pkg: [],
+    assets: [{ dir: assetsDir, files: assets }],
+  });
+  /** 全部请求过的路径（整读与区间读都算），按出现顺序 */
+  function requested(reader: ReturnType<typeof memory>): string[] {
+    return [...new Set([...reader.wholeCalls.keys(), ...reader.rangeCalls.keys()])];
+  }
+  function total(reader: ReturnType<typeof memory>): number {
+    let sum = 0;
+    for (const count of reader.wholeCalls.values()) sum += count;
+    for (const count of reader.rangeCalls.values()) sum += count;
+    return sum;
+  }
+
+  it("表里没有的位置不探：工程目录里没有的内置着色器直接去 assets 读", async () => {
+    const disk = memory(DISK);
+    const fs = new SceneFs(
+      "P:/p",
+      ["A:/a"],
+      disk.reader,
+      list(["project.json", "Models/Bar.json"], ["shaders/common.h"]),
+    );
+    const file = (await fs.read("shaders/common.h"))!;
+    expect(file.source).toBe("assets");
+    expect(file.bytes).toEqual(DISK["A:/a/shaders/common.h"]);
+    expect(requested(disk)).not.toContain("P:/p/shaders/common.h");
+  });
+
+  it("按表里的真实大小写读：散文件与 assets 都是（照 WPE 在 Windows 上不分 ASCII 大小写）", async () => {
+    const disk = memory(DISK);
+    const fs = new SceneFs("P:/p", ["A:/a"], disk.reader, list(["Models/Bar.json"], ["materials/Util.tex"]));
+    const model = (await fs.read("models/bar.json"))!;
+    expect(model.source).toBe("project");
+    expect(model.bytes).toEqual(DISK["P:/p/Models/Bar.json"]);
+    const texture = (await fs.resolve("MATERIALS/util.tex"))!;
+    expect(texture.source).toBe("assets");
+    expect(texture.location.path.replace(/\\/g, "/")).toBe("A:/a/materials/Util.tex");
+    expect(texture.head).toEqual(DISK["A:/a/materials/Util.tex"]);
+    expect(requested(disk)).not.toContain("P:/p/models/bar.json");
+  });
+
+  it("表过时：三处表里都没有时按原写法补探，运行中新加的散文件照样读得到", async () => {
+    const disk = memory({ ...DISK, "P:/p/fresh.json": new Uint8Array([9]) });
+    const fs = new SceneFs("P:/p", ["A:/a"], disk.reader, list(["project.json"], []));
+    const file = (await fs.read("fresh.json"))!;
+    expect(file.source).toBe("project");
+    expect(file.bytes).toEqual(new Uint8Array([9]));
+  });
+
+  it("表里有但读不到（文件删了）：接着找下一处", async () => {
+    const disk = memory(DISK);
+    const fs = new SceneFs("P:/p", ["A:/a"], disk.reader, list(["shaders/common.h"], ["shaders/common.h"]));
+    const file = (await fs.read("shaders/common.h"))!;
+    expect(file.source).toBe("assets");
+  });
+
+  it("三处都没有的路径整个会话只探一次：clearCaches 之后再问也不发请求", async () => {
+    const disk = memory(DISK);
+    const fs = new SceneFs("P:/p", ["A:/a"], disk.reader, list(["project.json"], ["shaders/common.h"]));
+    expect(await fs.read("missing.json")).toBeNull();
+    const before = total(disk);
+    fs.clearCaches();
+    expect(await fs.read("missing.json")).toBeNull();
+    expect(await fs.resolve("missing.json")).toBeNull();
+    expect(total(disk)).toBe(before);
+  });
+
+  it("没有表时三处都没有的路径同样只探一次", async () => {
+    const disk = memory(DISK);
+    const fs = new SceneFs("P:/p", ["A:/a"], disk.reader);
+    expect(await fs.read("missing.json")).toBeNull();
+    const before = total(disk);
+    fs.clearCaches();
+    expect(await fs.read("missing.json")).toBeNull();
+    expect(total(disk)).toBe(before);
+  });
+
+  it("目录写法对不上的根当没有表：照旧按原写法探", async () => {
+    const disk = memory(DISK);
+    const fs = new SceneFs("P:/p", ["A:/a"], disk.reader, list(["project.json"], [], "X:/other"));
+    const file = (await fs.read("shaders/common.h"))!;
+    expect(file.source).toBe("assets");
+  });
+
+  it("有表时工程散文件仍然优先于 assets", async () => {
+    const disk = memory({ ...DISK, "P:/p/shaders/common.h": new Uint8Array([7]) });
+    const fs = new SceneFs("P:/p", ["A:/a"], disk.reader, list(["shaders/common.h"], ["shaders/common.h"]));
+    const file = (await fs.read("shaders/common.h"))!;
+    expect(file.source).toBe("project");
+    expect(file.bytes).toEqual(new Uint8Array([7]));
   });
 });

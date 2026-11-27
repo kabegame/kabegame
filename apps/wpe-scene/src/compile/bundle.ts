@@ -189,6 +189,7 @@ import type { SceneAnimation } from "../animation/types";
 import type { TranslateResult, Wpesl2wgsl } from "../wpesl2wgsl";
 import { particleUsesAudio } from "../particles/audio";
 import type { ModelDataDesc } from "../modeldata/types";
+import type { SceneFileList } from "./fileIndex";
 import {
   layerLiteral,
   modelDataMesh,
@@ -1057,6 +1058,8 @@ export interface CompileSceneInput {
   /** 脚本模型数据的描述（P14，token → 描述）：配置里 `model` 是整数 token 的对象按它编；查不到的 token 编出不画的层（S16）。 */
   modelData?: Record<number, ModelDataDesc>;
   reader: SceneReader;
+  /** 场景文件表（`wpe_scene_files`，`compile/fileIndex.ts`）：`SceneFs` 按它决定去哪里读；不给照旧逐个探。 */
+  files?: SceneFileList | null;
   translator: Wpesl2wgsl | null;
   /** 设置「场景后处理」；缺省跟随 WPE。 */
   postprocess?: ScenePostprocessSetting;
@@ -1594,7 +1597,7 @@ export async function compileScene(input: CompileSceneInput): Promise<SceneBundl
 }
 
 export async function openCompileSession(input: CompileSceneInput): Promise<SceneCompileSession> {
-  const fs = new SceneFs(input.projectDir, input.sceneAssets, input.reader);
+  const fs = new SceneFs(input.projectDir, input.sceneAssets, input.reader, input.files);
   const unsupported = new RecordingSet();
   /** 属性绑定表：每处解析 `{user}` 的地方登记一次（P3a）。 */
   const bindings = new BindingCollector();
