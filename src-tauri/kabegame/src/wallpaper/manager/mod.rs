@@ -218,6 +218,8 @@ pub struct DisplayModeCapability {
 #[serde(rename_all = "camelCase")]
 pub struct WallpaperCapabilities {
     pub modes: Vec<WallpaperOption>,
+    /// 当前桌面下由 Kabegame 自渲染壁纸窗口的模式（`window` / `plasma-plugin` / `native`）
+    pub rendered_mode: String,
     /// 壁纸模式 → 该模式下列出的显示器模式（含不可用项及原因、各自的样式与过渡）
     pub display_modes: HashMap<String, Vec<DisplayModeCapability>>,
 }
@@ -386,21 +388,41 @@ pub(crate) fn outputs_for_new_screens(
     outputs
 }
 
-/// 由 Kabegame 自己渲染壁纸页面（壁纸窗口）的壁纸模式：Windows / macOS 是窗口模式（窗口挂到桌面层），Linux 是
-/// Plasma 插件模式（离屏壁纸窗口经 PipeWire 推给插件）。WPE 壁纸只在这个模式下能设为桌面，壁纸窗口的布置也由它的后端给。
-pub const RENDERED_WALLPAPER_MODE: &str = if cfg!(target_os = "linux") {
-    "plasma-plugin"
-} else {
-    "window"
-};
+/// 由 Kabegame 自己渲染壁纸页面（壁纸窗口）的壁纸模式：
+/// - Windows / macOS：`window`（窗口挂到桌面层）
+/// - Linux 且支持 `zwlr_layer_shell_v1`：`native`（离屏壁纸窗口直连背景层 surface）
+/// - 其余 Linux（Plasma / GNOME 等）：`plasma-plugin`（PipeWire / Shell 扩展）
+///
+/// WPE 壁纸、视频壁纸与壁纸窗口布置只在这个模式下使用。
+pub fn rendered_wallpaper_mode() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        if layer_shell::available() {
+            "native"
+        } else {
+            "plasma-plugin"
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        "window"
+    }
+}
 
-/// 壁纸模式 `mode` 能不能显示这张壁纸；不能时给原因（写日志用）。规则同「设为壁纸」时要求切模式的判断：
-/// 目录型 WPE 壁纸只有 [`RENDERED_WALLPAPER_MODE`] 能显示，`requires_window_mode` / `requires_plugin_mode` 命中的
-/// 视频 / GIF 只有对应的模式能显示，文件不在了哪个模式都不能。切换壁纸模式与启动恢复壁纸都按它决定设不设，不换成别的图。
-pub fn displayable_in_mode(mode: &str, media_type: Option<&str>, path: &str) -> Result<(), &'static str> {
+/// `mode` 是否是当前桌面环境由 Kabegame 自渲染壁纸窗口的模式。
+pub fn is_rendered_wallpaper_mode(mode: &str) -> bool {
+    mode == rendered_wallpaper_mode()
+}
+
+pub(crate) fn displayable_in_mode_with_rendered(
+    mode: &str,
+    rendered_mode: &str,
+    media_type: Option<&str>,
+    path: &str,
+) -> Result<(), &'static str> {
     use kabegame_core::media::image_type::{is_wpe_type, requires_plugin_mode, requires_window_mode};
     if is_wpe_type(media_type) {
-        return if mode == RENDERED_WALLPAPER_MODE {
+        return if mode == rendered_mode {
             Ok(())
         } else {
             Err("是 Wallpaper Engine 壁纸，只有壁纸窗口能显示")
@@ -411,13 +433,33 @@ pub fn displayable_in_mode(mode: &str, media_type: Option<&str>, path: &str) -> 
     if !path.starts_with("content://") && !file.exists() {
         return Err("文件不存在");
     }
-    if requires_window_mode(file) && mode != "window" {
+    if requires_window_mode(file) && mode != rendered_mode {
         return Err("要窗口模式才能显示");
     }
-    if requires_plugin_mode(file) && mode != "plasma-plugin" {
+    if requires_plugin_mode(file) && mode != rendered_mode {
         return Err("要插件模式才能显示");
     }
     Ok(())
+}
+
+/// 壁纸模式 `mode` 能不能显示这张壁纸；不能时给原因（写日志用）。规则同「设为壁纸」时要求切模式的判断：
+/// 目录型 WPE 壁纸与 `requires_window_mode` / `requires_plugin_mode` 命中的视频 / GIF 只有当前桌面自渲染模式
+/// [`rendered_wallpaper_mode`] 能显示，文件不在了哪个模式都不能。切换壁纸模式与启动恢复壁纸都按它决定设不设，不换成别的图。
+pub fn displayable_in_mode(mode: &str, media_type: Option<&str>, path: &str) -> Result<(), &'static str> {
+    displayable_in_mode_with_rendered(mode, rendered_wallpaper_mode(), media_type, path)
+}
+
+/// 若保存的 `saved_mode` 不在当前环境支持的 `supported_modes` 中（例如跨桌面环境迁移或从旧版配置升级），
+/// 返回应当回落到的目标模式；已受支持时返回 `None`。
+pub(crate) fn fallback_wallpaper_mode<'a>(
+    saved_mode: &str,
+    supported_modes: &[&'a str],
+) -> Option<&'a str> {
+    if supported_modes.contains(&saved_mode) {
+        None
+    } else {
+        Some(supported_modes.first().copied().unwrap_or("native"))
+    }
 }
 
 /// 全新目标的平台默认过渡：Windows 为淡入淡出，其余平台就是能力表第一项（不写）。
@@ -467,17 +509,24 @@ impl WallpaperController {
     }
 
     pub fn new<R: Runtime>(app: AppHandle<R>) -> Self {
+        // 通用 Wayland 合成器（niri / Hyprland / Sway 等暴露 zwlr_layer_shell_v1）：
+        // 无需外部插件与系统状态同步，直接作为 native 后端开箱即用。
+        #[cfg(target_os = "linux")]
+        let native = if layer_shell::available() {
+            Arc::new(LayerShellWallpaperManager::new(app.clone()))
+                as Arc<dyn WallpaperManager + Send + Sync>
+        } else {
+            Arc::new(NativeWallpaperManager::new(app.clone()))
+                as Arc<dyn WallpaperManager + Send + Sync>
+        };
+        #[cfg(not(target_os = "linux"))]
         let native = Arc::new(NativeWallpaperManager::new(app.clone()))
             as Arc<dyn WallpaperManager + Send + Sync>;
 
-        // 插件模式的后端按桌面选：GNOME 是普通窗口 + Shell 扩展，支持 zwlr_layer_shell_v1 的 Wayland 合成器
-        // （niri / Hyprland / Sway 等）直连 layer-shell，其余（Plasma）是离屏窗口 + PipeWire + Plasma 壁纸插件
+        // 插件模式的后端按桌面选：GNOME 是普通窗口 + Shell 扩展，Plasma 是离屏窗口 + PipeWire + Plasma 壁纸插件
         #[cfg(target_os = "linux")]
         let plasma_plugin = if gnome::available() {
             Arc::new(GnomeShellWallpaperManager::new(app.clone()))
-                as Arc<dyn WallpaperManager + Send + Sync>
-        } else if layer_shell::available() {
-            Arc::new(LayerShellWallpaperManager::new(app.clone()))
                 as Arc<dyn WallpaperManager + Send + Sync>
         } else {
             Arc::new(PlasmaPluginWallpaperManager::new(app.clone()))
@@ -498,11 +547,42 @@ impl WallpaperController {
         }
     }
 
-    /// 启动时把设置对齐到控制器的规则：保存的显示器模式在当前壁纸模式下不可用就回落 `multiple`
-    /// （之后「设置里的显示器模式 = 实际生效的显示器模式」，前端可以直接照设置算活跃目标），
-    /// 并给缺失的活跃目标补种（全新安装、新接入的屏）。
+    /// 当前桌面环境支持的壁纸模式值列表。
+    pub fn supported_mode_values() -> Vec<&'static str> {
+        let mut modes = vec!["native"];
+        #[cfg(any(target_os = "windows", target_os = "macos"))]
+        modes.push("window");
+        #[cfg(target_os = "linux")]
+        if plasma::install::available() || gnome::available() {
+            modes.push("plasma-plugin");
+        }
+        modes
+    }
+
+    /// `mode` 是否在当前桌面环境支持的模式列表中。
+    pub fn is_mode_supported(&self, mode: &str) -> bool {
+        Self::supported_mode_values().contains(&mode)
+    }
+
+    /// 启动时把设置对齐到控制器的规则：
+    /// 1. 保存的壁纸模式在当前桌面环境不再支持时（例如换了桌面环境或旧配置残留），先迁移样式/过渡再回落到受支持的模式；
+    /// 2. 保存的显示器模式在当前壁纸模式下不可用就回落 `multiple`（之后「设置里的显示器模式 = 实际生效的显示器模式」）；
+    /// 3. 给缺失的活跃目标补种（全新安装、新接入的屏）。
     fn align_settings(&self) {
         let settings = Settings::global();
+        let saved_mode = settings.get_wallpaper_mode();
+        let supported = Self::supported_mode_values();
+        if let Some(fallback) = fallback_wallpaper_mode(&saved_mode, &supported) {
+            tracing::info!(
+                "当前桌面环境不支持已保存的壁纸模式 {saved_mode}，回落为 {fallback}"
+            );
+            if let Err(e) = self.carry_style_to_mode(&saved_mode, fallback) {
+                tracing::warn!("回落壁纸模式时沿用样式 / 过渡失败: {e}");
+            }
+            if let Err(e) = settings.set_wallpaper_mode(fallback.to_string()) {
+                tracing::warn!("回落壁纸模式失败: {e}");
+            }
+        }
         let effective = self.display_mode();
         if settings.get_wallpaper_display_mode() != effective.as_str() {
             if let Err(e) = settings.set_wallpaper_display_mode(effective.as_str()) {
@@ -528,10 +608,13 @@ impl WallpaperController {
         }
     }
 
-    /// 某个壁纸模式下列出哪些显示器模式：Android 与 Plasma 插件模式只有 `multiple`（前端据此不显示选择器），
-    /// 其余列出全部三项，不可用的带原因。
+    /// 某个壁纸模式下列出哪些显示器模式：Android 与 Linux 渲染后端（插件模式 / layer-shell）只有 `multiple`
+    /// （前端据此不显示选择器），其余列出全部三项，不可用的带原因。
     fn listed_display_modes(wallpaper_mode: &str) -> &'static [DisplayMode] {
-        if cfg!(target_os = "android") || wallpaper_mode == "plasma-plugin" {
+        if cfg!(target_os = "android")
+            || wallpaper_mode == "plasma-plugin"
+            || (cfg!(target_os = "linux") && is_rendered_wallpaper_mode(wallpaper_mode))
+        {
             &[DisplayMode::Multiple]
         } else {
             &DisplayMode::ALL
@@ -545,15 +628,10 @@ impl WallpaperController {
         modes.push(wallpaper_option("window", "settings.modeWindow", None));
 
         // Plasma 6 会话且有内置插件（或已经装着能用的）：切过去时会自动装 / 升级插件。GNOME 会话：壁纸窗口由 Shell 扩展挂到
-        // 桌面（实验阶段，扩展要手动装）。通用 Wayland 合成器（niri 等）：直连 zwlr_layer_shell_v1。
+        // 桌面（实验阶段，扩展要手动装）。layer-shell 桌面直连背景层并已归入 native，不列出插件模式。
         #[cfg(target_os = "linux")]
-        if plasma::install::available() || gnome::available() || layer_shell::available() {
-            let label_key = if layer_shell::available() {
-                "settings.modeWindow"
-            } else {
-                "settings.modePlugin"
-            };
-            modes.push(wallpaper_option("plasma-plugin", label_key, None));
+        if plasma::install::available() || gnome::available() {
+            modes.push(wallpaper_option("plasma-plugin", "settings.modePlugin", None));
         }
 
         let mut display_modes = HashMap::new();
@@ -579,6 +657,7 @@ impl WallpaperController {
 
         WallpaperCapabilities {
             modes,
+            rendered_mode: rendered_wallpaper_mode().to_string(),
             display_modes,
         }
     }
@@ -819,7 +898,7 @@ impl WallpaperController {
         if !crate::wallpaper::is_wallpaper_label(label) {
             return None;
         }
-        self.manager_for_mode(RENDERED_WALLPAPER_MODE)
+        self.manager_for_mode(rendered_wallpaper_mode())
             .window_assignment(label)
     }
 
@@ -865,10 +944,10 @@ impl WallpaperController {
             return;
         }
         match settings.get_wallpaper_mode().as_str() {
-            mode if mode == RENDERED_WALLPAPER_MODE => {
+            mode if is_rendered_wallpaper_mode(mode) => {
                 tauri::async_runtime::spawn(async {
                     Self::global()
-                        .realign_outputs(RENDERED_WALLPAPER_MODE)
+                        .realign_outputs(rendered_wallpaper_mode())
                         .await;
                 });
             }
@@ -929,10 +1008,10 @@ impl WallpaperController {
 
     /// 拉起**当前应该活跃**的后端。
     ///
-    /// 不变量：**壁纸窗口存在 ⟺ `wallpaperMode == RENDERED_WALLPAPER_MODE` ∧ `wallpaperEnabled`**
-    /// （Windows / macOS 为 `window`，Linux 为 `plasma-plugin`）。
+    /// 不变量：**壁纸窗口存在 ⟺ `is_rendered_wallpaper_mode(wallpaperMode)` ∧ `wallpaperEnabled`**
+    /// （Windows / macOS 为 `window`，layer-shell 桌面为 `native`，其余 Linux 为 `plasma-plugin`）。
     /// 本函数是该不变量的唯一实现处，两个条件缺一不可：
-    /// - 不看 mode：`WindowWallpaperManager::init()` 会建窗并挂到桌面层，native 模式下
+    /// - 不看 mode：`WindowWallpaperManager::init()` 会建窗并挂到桌面层，非渲染原生模式下
     ///   调用它等于凭空在桌面上盖一层窗口。
     /// - 不看 enabled：用户关掉壁纸后重启，窗口会照样挂出来——他关的东西又回来了。
     ///
@@ -948,13 +1027,14 @@ impl WallpaperController {
         self.manager_for_mode(&settings.get_wallpaper_mode()).init()
     }
 
-    /// Linux：若当前处于插件/layer-shell 壁纸模式，则原地重建活跃壁纸窗口（用于 dmabuf 首帧超时降级）。
+    /// Linux：若当前处于离屏/插件自渲染壁纸模式，则原地重建活跃壁纸窗口（用于 dmabuf 首帧超时降级）。
     #[cfg(target_os = "linux")]
     pub fn restart_plasma_plugin_if_active(&self) -> Result<(), String> {
-        if Settings::global().get_wallpaper_mode() != "plasma-plugin" {
+        let mode = Settings::global().get_wallpaper_mode();
+        if !is_rendered_wallpaper_mode(&mode) {
             return Ok(());
         }
-        self.plasma_plugin.restart_if_active()
+        self.manager_for_mode(&mode).restart_if_active()
     }
 
     /// Linux：带实例代际校验的 layer-shell 恢复（用于 dmabuf 降级重建或 Wayland 异常断开处理）。
@@ -968,10 +1048,13 @@ impl WallpaperController {
         reason: Option<&str>,
     ) -> Result<(), String> {
         let settings = Settings::global();
-        if settings.get_wallpaper_mode() != "plasma-plugin" || !settings.get_wallpaper_enabled() {
+        if !layer_shell::available()
+            || settings.get_wallpaper_mode() != "native"
+            || !settings.get_wallpaper_enabled()
+        {
             return Ok(());
         }
-        self.plasma_plugin
+        self.native
             .recover_layer_shell(expected_gen, label, health, disable_dmabuf, reason)
     }
 }
@@ -1518,5 +1601,69 @@ mod tests {
         assert_eq!(pick_option(Some("tile"), &options, "fill"), "fill");
         assert_eq!(pick_option(None, &options, "fill"), "fill");
         assert_eq!(pick_option(Some("fit"), &[], "none"), "none");
+    }
+
+    #[test]
+    fn displayable_in_mode_with_rendered_allows_dynamic_and_wpe_in_native_layer_shell() {
+        let tmp = std::env::temp_dir().join(format!("kabegame-disp-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let mp4 = tmp.join("demo.mp4");
+        let gif = tmp.join("anim.gif");
+        let png = tmp.join("pic.png");
+        std::fs::write(&mp4, b"x").unwrap();
+        std::fs::write(&gif, b"x").unwrap();
+        std::fs::write(&png, b"x").unwrap();
+
+        let mp4_str = mp4.to_string_lossy();
+        let gif_str = gif.to_string_lossy();
+        let png_str = png.to_string_lossy();
+
+        // layer-shell 桌面：自渲染模式即 native，WPE / 视频 / GIF / 图片都可显示
+        assert_eq!(
+            displayable_in_mode_with_rendered("native", "native", Some("x-wpe/scene"), &tmp.to_string_lossy()),
+            Ok(())
+        );
+        assert_eq!(
+            displayable_in_mode_with_rendered("native", "native", Some("video/mp4"), &mp4_str),
+            Ok(())
+        );
+        assert_eq!(
+            displayable_in_mode_with_rendered("native", "native", Some("image/gif"), &gif_str),
+            Ok(())
+        );
+        assert_eq!(
+            displayable_in_mode_with_rendered("native", "native", Some("image/png"), &png_str),
+            Ok(())
+        );
+
+        // Plasma / GNOME 桌面：自渲染模式是 plasma-plugin，native 拦住 WPE 与（Linux 下的）GIF/视频
+        assert!(displayable_in_mode_with_rendered("native", "plasma-plugin", Some("x-wpe/web"), &tmp.to_string_lossy()).is_err());
+        assert_eq!(
+            displayable_in_mode_with_rendered("plasma-plugin", "plasma-plugin", Some("x-wpe/web"), &tmp.to_string_lossy()),
+            Ok(())
+        );
+        assert_eq!(
+            displayable_in_mode_with_rendered("plasma-plugin", "plasma-plugin", Some("video/mp4"), &mp4_str),
+            Ok(())
+        );
+        assert_eq!(
+            displayable_in_mode_with_rendered("window", "window", Some("x-wpe/video"), &tmp.to_string_lossy()),
+            Ok(())
+        );
+        assert!(displayable_in_mode_with_rendered("native", "window", Some("x-wpe/video"), &tmp.to_string_lossy()).is_err());
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fallback_wallpaper_mode_recovers_unsupported_saved_mode() {
+        assert_eq!(fallback_wallpaper_mode("native", &["native"]), None);
+        assert_eq!(fallback_wallpaper_mode("plasma-plugin", &["native"]), Some("native"));
+        assert_eq!(
+            fallback_wallpaper_mode("plasma-plugin", &["native", "plasma-plugin"]),
+            None
+        );
+        assert_eq!(fallback_wallpaper_mode("window", &["native", "plasma-plugin"]), Some("native"));
+        assert_eq!(fallback_wallpaper_mode("plasma-plugin", &[]), Some("native"));
     }
 }

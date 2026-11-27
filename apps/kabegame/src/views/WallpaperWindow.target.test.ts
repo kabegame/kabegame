@@ -170,7 +170,36 @@ describe("WallpaperWindow 读布置给它的壁纸目标", () => {
     expect(stage(wrapper).props("transition")).toBe("none");
   });
 
-  it("能力表读不到时不连累初始化：直接用存下来的值", async () => {
+  it("能力表指定 renderedMode 为 native（如 layer-shell）时，读取 native 名下的样式 / 过渡与能力", async () => {
+    backend.capabilities = {
+      modes: [option("native")],
+      renderedMode: "native",
+      displayModes: {
+        native: [
+          {
+            value: "multiple",
+            label: {},
+            desc: {},
+            unavailable: null,
+            styles: ["fill", "fit"].map(option),
+            transitions: ["none", "fade"].map(option),
+            sharedStyle: false,
+          },
+        ],
+      },
+    };
+    const wrapper = await mountWindow({
+      multiple: target({
+        style: { native: "fit", "plasma-plugin": "tile", window: "stretch" },
+        transition: { native: "fade", "plasma-plugin": "zoom" },
+        currentImageId: "1",
+      }),
+    });
+    expect(stage(wrapper).props("styleMode")).toBe("fit");
+    expect(stage(wrapper).props("transition")).toBe("fade");
+  });
+
+  it("capability 缺省 renderedMode 或能力表读不到时不连累初始化：直接用存下来的值", async () => {
     backend.capabilities = null;
     const wrapper = await mountWindow({
       multiple: target({ style: { window: "tile" }, transition: { window: "slide" }, currentImageId: "1" }),

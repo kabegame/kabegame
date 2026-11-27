@@ -1,8 +1,8 @@
 // 壁纸相关命令和函数
 
 use crate::wallpaper::manager::{
-    displayable_in_mode, DisplayMode, Placement, WallpaperCapabilities, WallpaperController,
-    WindowAssignment, RENDERED_WALLPAPER_MODE,
+    displayable_in_mode, is_rendered_wallpaper_mode, rendered_wallpaper_mode, DisplayMode,
+    Placement, WallpaperCapabilities, WallpaperController, WindowAssignment,
 };
 use crate::wallpaper::screens::{self, ScreenInfo};
 use crate::wallpaper::WallpaperRotator;
@@ -237,12 +237,15 @@ pub async fn set_wallpaper_by_image_id(
     let media_type = info.media_type.clone();
     let local_path = info.local_path;
 
-    // 目录型 WPE 壁纸只能由壁纸窗口渲染（Windows / macOS 的窗口模式、Linux 的插件模式）；
-    // 用与视频相同的错误码让前端引导切换模式。
+    let current_mode = settings.get_wallpaper_mode();
+    let rendered_mode = rendered_wallpaper_mode();
+
+    // 目录型 WPE 壁纸只能由壁纸窗口渲染（Windows / macOS 为 window、layer-shell 桌面为 native、
+    // 其余 Linux 为 plasma-plugin）；用与视频相同的错误码让前端引导切换模式。
     if kabegame_core::media::image_type::is_wpe_type(media_type.as_deref())
-        && settings.get_wallpaper_mode() != RENDERED_WALLPAPER_MODE
+        && current_mode != rendered_mode
     {
-        return Err(if cfg!(target_os = "linux") {
+        return Err(if rendered_mode == "plasma-plugin" {
             "REQUIRES_PLUGIN_MODE".to_string()
         } else {
             "REQUIRES_WINDOW_MODE".to_string()
@@ -251,20 +254,14 @@ pub async fn set_wallpaper_by_image_id(
 
     let requires_window_mode =
         kabegame_core::media::image_type::requires_window_mode(Path::new(&local_path));
-    if requires_window_mode {
-        let current_mode = settings.get_wallpaper_mode();
-        if current_mode != "window" {
-            return Err("REQUIRES_WINDOW_MODE".to_string());
-        }
+    if requires_window_mode && current_mode != rendered_mode {
+        return Err("REQUIRES_WINDOW_MODE".to_string());
     }
 
     let requires_plugin_mode =
         kabegame_core::media::image_type::requires_plugin_mode(Path::new(&local_path));
-    if requires_plugin_mode {
-        let current_mode = settings.get_wallpaper_mode();
-        if current_mode != "plasma-plugin" {
-            return Err("REQUIRES_PLUGIN_MODE".to_string());
-        }
+    if requires_plugin_mode && current_mode != rendered_mode {
+        return Err("REQUIRES_PLUGIN_MODE".to_string());
     }
 
     // Android 上为 content:// URI，不能用 Path::exists 判断
@@ -626,18 +623,11 @@ fn apply_backend_lifecycle(
         .init()
         .map_err(|e| format!("init 失败: {}", e))?;
 
-    if old_mode == "window" && mode != "window" {
+    if old_mode != mode && is_rendered_wallpaper_mode(old_mode) {
         controller
-            .manager_for_mode("window")
+            .manager_for_mode(old_mode)
             .cleanup()
-            .unwrap_or_else(|e| tracing::warn!("清理 window 资源失败: {}", e));
-    }
-    #[cfg(target_os = "linux")]
-    if old_mode == "plasma-plugin" && mode != "plasma-plugin" {
-        controller
-            .manager_for_mode("plasma-plugin")
-            .cleanup()
-            .unwrap_or_else(|e| tracing::warn!("清理 plasma-plugin 资源失败: {}", e));
+            .unwrap_or_else(|e| tracing::warn!("清理 {} 资源失败: {}", old_mode, e));
     }
     Ok(())
 }
@@ -647,6 +637,9 @@ fn apply_backend_lifecycle(
 #[tauri::command]
 pub async fn set_wallpaper_mode(mode: String) -> Result<(), String> {
     reject_if_wallpaper_disabled()?;
+    if !WallpaperController::global().is_mode_supported(&mode) {
+        return Err(format!("当前桌面环境不支持壁纸模式: {mode}"));
+    }
     #[cfg(target_os = "linux")]
     if mode == "plasma-plugin" {
         crate::wallpaper::manager::gnome::ensure_ready()?;
@@ -788,8 +781,8 @@ pub fn get_wallpaper_enabled() -> bool {
 }
 
 /// 切换「打开壁纸」开关，并执行副作用：
-/// - 关掉时：停止轮播，隐藏壁纸窗口（window 模式）/ 切回 org.kde.image（plasma-plugin 模式）；
-///   native 模式保持系统壁纸现状不动（无法自动还原）。保留各目标的当前壁纸。
+/// - 关掉时：停止轮播；若当前处于自渲染模式（`window` / `plasma-plugin` / layer-shell 的 `native`），
+///   隐藏/销毁壁纸窗口并还原插件状态；普通 `native` 模式保持系统壁纸现状不动（无法自动还原）。保留各目标的当前壁纸。
 /// - 打开时：复用启动逻辑逐目标恢复上次壁纸，并在轮播启用时恢复轮播。
 #[tauri::command]
 pub async fn set_wallpaper_enabled(enabled: bool) -> Result<(), String> {
@@ -803,21 +796,13 @@ pub async fn set_wallpaper_enabled(enabled: bool) -> Result<(), String> {
     if !enabled {
         // 停止轮播
         rotator.stop();
-        // 隐藏/还原各模式（保留各目标的当前壁纸）
-        // native 模式：保持系统壁纸现状不动（无法自动还原，警告由前端提示）
+        // 隐藏/还原各渲染模式（保留各目标的当前壁纸）
+        // 普通 native 模式：保持系统壁纸现状不动（无法自动还原，警告由前端提示）
         #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
         {
-            let controller = WallpaperController::global();
-            match settings.get_wallpaper_mode().as_str() {
-                #[cfg(any(target_os = "windows", target_os = "macos"))]
-                "window" => {
-                    let _ = controller.manager_for_mode("window").cleanup();
-                }
-                #[cfg(target_os = "linux")]
-                "plasma-plugin" => {
-                    let _ = controller.manager_for_mode("plasma-plugin").cleanup();
-                }
-                _ => {}
+            let mode = settings.get_wallpaper_mode();
+            if is_rendered_wallpaper_mode(&mode) {
+                let _ = WallpaperController::global().manager_for_mode(&mode).cleanup();
             }
         }
     } else {

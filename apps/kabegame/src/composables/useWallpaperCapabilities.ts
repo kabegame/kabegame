@@ -7,13 +7,22 @@ export type { DisplayModeCapability, WallpaperOption };
 
 export interface WallpaperCapabilities {
   modes: WallpaperOption[];
+  /** 当前桌面下由 Kabegame 自渲染壁纸窗口的模式（window / plasma-plugin / native） */
+  renderedMode?: string;
   /** 壁纸模式 → 该模式下列出的显示器模式（含不可用项及原因、各自的样式与过渡） */
   displayModes: Record<string, DisplayModeCapability[]>;
 }
 
 const modes: Ref<WallpaperOption[]> = ref([]);
+const renderedMode: Ref<string | null> = ref(null);
 const displayModes: Ref<Record<string, DisplayModeCapability[]>> = ref({});
 let loadPromise: Promise<void> | null = null;
+
+export function isRenderedWallpaperMode(mode: string | null | undefined): boolean {
+  if (!mode) return false;
+  if (renderedMode.value) return mode === renderedMode.value;
+  return mode === "window" || mode === "plasma-plugin";
+}
 
 export function useWallpaperCapabilities() {
   const load = async (): Promise<void> => {
@@ -23,11 +32,13 @@ export function useWallpaperCapabilities() {
       loadPromise = invoke<WallpaperCapabilities>("get_wallpaper_capabilities")
         .then((capabilities) => {
           modes.value = capabilities.modes ?? [];
+          renderedMode.value = capabilities.renderedMode ?? null;
           displayModes.value = capabilities.displayModes ?? {};
         })
         .catch((e) => {
           console.warn("[useWallpaperCapabilities] 获取壁纸能力失败:", e);
           modes.value = [];
+          renderedMode.value = null;
           displayModes.value = {};
         });
     }
@@ -44,6 +55,8 @@ export function useWallpaperCapabilities() {
 
   return {
     modes: computed(() => modes.value),
+    renderedMode: computed(() => renderedMode.value),
+    isRenderedMode: isRenderedWallpaperMode,
     displayModes,
     displayModesFor,
     comboFor,

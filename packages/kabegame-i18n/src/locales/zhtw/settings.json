@@ -214,7 +214,6 @@
   "wallpaperModeConfirmTitle": "提示",
   "wallpaperModePluginConfirmMessage": "切換到插件模式將修改系統壁紙插件為 Kabegame 壁紙插件，是否繼續？",
   "wallpaperModePluginConfirmMessageGnome": "切換到插件模式後，Kabegame 的壁紙視窗會由它的 GNOME Shell 擴充功能放到桌面上，取代系統壁紙。是否繼續？",
-  "wallpaperModeLayerShellConfirmMessage": "切換到視窗模式後，Kabegame 會透過 Wayland 背景層（wlr-layer-shell）直接渲染並顯示桌面壁紙。是否繼續？",
   "gnomeExtensionTitle": "GNOME Shell 擴充功能",
   "gnomeShellTooOld": "插件模式需要 GNOME {min} 或更新的版本，目前系統是 GNOME {version}。請升級系統後再試。",
   "gnomeShellTooNew": "Kabegame 暫不支援 GNOME {version} 上的插件模式（支援 GNOME {min}–{max}），請等待 Kabegame 更新。",

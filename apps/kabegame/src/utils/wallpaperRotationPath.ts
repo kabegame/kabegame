@@ -58,7 +58,12 @@ export function rotatingTargetIds(
   return sources.filter((source) => !!source.path && matches(source.path)).map((source) => source.targetId);
 }
 
-/** 壁纸模式能否显示视频：窗口 / plasma 插件可以，原生（含 Android）只能显示图片。 */
-export function wallpaperModeSupportsVideo(mode: string | null | undefined): boolean {
+/** 壁纸模式能否显示视频：传 `renderedMode`（来自能力表）时按其判断，否则按窗口 / plasma 插件兜底。 */
+export function wallpaperModeSupportsVideo(
+  mode: string | null | undefined,
+  renderedMode?: string | null,
+): boolean {
+  if (!mode) return false;
+  if (renderedMode) return mode === renderedMode;
   return mode === "window" || mode === "plasma-plugin";
 }

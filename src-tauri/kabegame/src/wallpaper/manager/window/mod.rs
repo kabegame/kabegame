@@ -211,9 +211,9 @@ fn evaluate_recovery_under_active_lock(
 /// 窗口模式壁纸管理器：**每块在线屏一个壁纸窗口**，窗口矩形就是那块屏，各自完整渲染一幅画面。
 /// label 取自固定的池 [`WALLPAPER_LABELS`]。窗口是**懒建**的：只在 `wallpaperMode` 为本后端的壁纸模式且壁纸开着期间存在。
 ///
-/// 两种用法：Windows / macOS 的窗口模式（`window`，窗口挂到桌面层），Linux 的插件模式（`plasma-plugin`）：
-/// Plasma 是离屏 browser + PipeWire 流，GNOME 是普通窗口 + Shell 扩展，niri 等支持 `wlr-layer-shell` 的合成器是
-/// 离屏 browser + `zwlr_layer_shell_v1`。
+/// 几种用法：Windows / macOS 的窗口模式（`window`，窗口挂到桌面层）；Linux 的插件模式（`plasma-plugin`：
+/// Plasma 是离屏 browser + PipeWire 流，GNOME 是普通窗口 + Shell 扩展）及支持 `wlr-layer-shell` 合成器上的原生模式
+/// （`native`：离屏 browser + `zwlr_layer_shell_v1`）。
 ///
 /// 窗口集合的**生命周期**：`init()` 进入窗口模式并把窗口集合对齐到当前布局，`reconcile()` 在显示器模式或在线屏
 /// 变化后重新对齐（同一块屏保留原窗口、屏矩形变了重铺、布置变了推一条新的、多的销毁、缺的新建），`cleanup()`
@@ -229,7 +229,7 @@ fn evaluate_recovery_under_active_lock(
 /// 窗口表的瞬间持有，持有期间不调用会同步等主线程的窗口接口——页面初始化时的命令、轮播线程都要读它。
 pub struct WindowWallpaperManager<R: Runtime> {
     app: AppHandle<R>,
-    /// 本后端所属的壁纸模式（`window` / `plasma-plugin`）：布局按这个模式下生效的显示器模式现算。
+    /// 本后端所属的壁纸模式（`window` / `plasma-plugin` / `native`）：布局按这个模式下生效的显示器模式现算。
     wallpaper_mode: &'static str,
     /// 值：是否处于窗口模式（`init` 之后、`cleanup` 之前）及实例代际。锁本身让对齐串行。
     active: Mutex<ActiveState>,

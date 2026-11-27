@@ -1,5 +1,6 @@
-//! 通用 Wayland `zwlr_layer_shell_v1` 壁纸后端（niri / Hyprland / Sway / River 等）。
+//! 通用 Wayland `zwlr_layer_shell_v1` 原生（`native`）壁纸后端（niri / Hyprland / Sway / River 等）。
 //!
+//! 在支持 `zwlr_layer_shell_v1` 的合成器下无需安装外部插件或同步桌面状态，直接作为 `native` 模式运行：
 //! Kabegame 自己建离屏 CEF 壁纸窗口（[`WindowWallpaperManager::new_layer_shell`]），
 //! 由 [`surface::LayerShellSink`] 把每一帧直接提交到每个 `wl_output` 的 `background` 层 surface，
 //! 不绕 PipeWire、不依赖 Plasma / GNOME Shell 扩展，进程退出时合成器自动移除表面。
@@ -529,7 +530,7 @@ fn probe_layer_shell() -> Result<bool, String> {
     Ok(probe.has_layer_shell && probe.has_compositor && probe.has_shm)
 }
 
-/// 通用 `wlr-layer-shell` 壁纸模式管理器：包一层离屏窗口后端，帧与指针直接走 Wayland。
+/// 通用 `wlr-layer-shell` 原生模式管理器：包一层离屏窗口后端，帧与指针直接走 Wayland。
 pub struct LayerShellWallpaperManager<R: Runtime> {
     window: WindowWallpaperManager<R>,
 }
@@ -537,7 +538,7 @@ pub struct LayerShellWallpaperManager<R: Runtime> {
 impl<R: Runtime> LayerShellWallpaperManager<R> {
     pub fn new(app: AppHandle<R>) -> Self {
         Self {
-            window: WindowWallpaperManager::new_layer_shell(app, "plasma-plugin"),
+            window: WindowWallpaperManager::new_layer_shell(app, "native"),
         }
     }
 }

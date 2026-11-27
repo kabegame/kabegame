@@ -61,9 +61,13 @@ describe("wallpaperRotationPath", () => {
     expect(rotatingTargetIds([], isAlbum(ID))).toEqual([]);
   });
 
-  it("只有窗口 / plasma 插件模式能显示视频", () => {
+  it("只有窗口 / plasma 插件（或能力表指定的 renderedMode）能显示视频", () => {
     expect(wallpaperModeSupportsVideo("window")).toBe(true);
     expect(wallpaperModeSupportsVideo("plasma-plugin")).toBe(true);
     expect(wallpaperModeSupportsVideo("native")).toBe(false);
+    // layer-shell 桌面下 native 即自渲染模式
+    expect(wallpaperModeSupportsVideo("native", "native")).toBe(true);
+    expect(wallpaperModeSupportsVideo("plasma-plugin", "native")).toBe(false);
+    expect(wallpaperModeSupportsVideo("native", "plasma-plugin")).toBe(false);
   });
 });

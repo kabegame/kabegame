@@ -99,17 +99,19 @@ const targetId = computed(() => assignment.value?.targetId ?? TARGET_MULTIPLE);
  * 这里是算有效样式 / 过渡要用的原始输入（启动时拉一次，目标表之后随 `setting-change` 更新），
  * 归一化规则与后端控制器相同（见 `utils/wallpaperTargets.ts`）。本窗口不挂设置 store，所以自己留一份。
  */
+/**
+ * 兜底的壁纸窗口模式：能力表读不到时按 Windows / macOS = `window`、Linux = `plasma-plugin` 兜底；
+ * 正常初始化会以 `capabilitiesRes.renderedMode` 为准（通用 Wayland layer-shell 桌面为 `native`）。
+ */
+const DEFAULT_WINDOW_MODE = IS_LINUX ? "plasma-plugin" : "window";
+
 const targetSource: {
   targets: WallpaperTargets;
+  /** 本窗口所属壁纸模式（与后端 `rendered_wallpaper_mode()` 一致） */
+  mode: string;
   /** 本窗口所属壁纸模式下列出的显示器模式及各自的样式 / 过渡；读不到能力表时为空，样式 / 过渡直接用存下来的值 */
   combos: DisplayModeCapability[];
-} = { targets: {}, combos: [] };
-
-/**
- * 壁纸窗口所属的壁纸模式：Windows / macOS 是窗口模式，Linux 是插件模式（离屏壁纸窗口经 PipeWire 推给 Plasma 插件）。
- * 目标里按壁纸模式存的样式 / 过渡取这一份，与后端 `RENDERED_WALLPAPER_MODE` 一致。
- */
-const WINDOW_MODE = IS_LINUX ? "plasma-plugin" : "window";
+} = { targets: {}, mode: DEFAULT_WINDOW_MODE, combos: [] };
 
 /** 上一次看到的本窗口目标的当前壁纸 id；`undefined` 表示还没读过目标。 */
 let lastImageId: string | null | undefined;
@@ -126,12 +128,12 @@ function applyTargetConfig(): boolean {
   const displayMode = displayModeOfTarget(targetId.value);
   const combo = targetSource.combos.find((item) => item.value === displayMode);
 
-  const styleMode = effectiveStyle(config, WINDOW_MODE, combo) as Mode;
+  const styleMode = effectiveStyle(config, targetSource.mode, combo) as Mode;
   if (styleMode !== state.styleMode) {
     lastStyleTs.value = new Date().toLocaleTimeString();
     state.styleMode = styleMode;
   }
-  const transition = effectiveTransition(config, WINDOW_MODE, combo) as Transition;
+  const transition = effectiveTransition(config, targetSource.mode, combo) as Transition;
   if (transition !== state.transition) {
     lastTransitionTs.value = new Date().toLocaleTimeString();
     state.transition = transition;
@@ -368,7 +370,8 @@ async function init() {
     state.sceneSettings = sceneSettings;
     // 先样式 / 过渡 / 音量 / 倍速 / 暂停，最后目标：新层挂上时拿到的就是这一份（Wallpaper 按 props 渲染）。
     targetSource.targets = targetsRes && typeof targetsRes === "object" ? targetsRes : {};
-    targetSource.combos = capabilitiesRes?.displayModes?.[WINDOW_MODE] ?? [];
+    targetSource.mode = capabilitiesRes?.renderedMode || DEFAULT_WINDOW_MODE;
+    targetSource.combos = capabilitiesRes?.displayModes?.[targetSource.mode] ?? [];
     // 读取期间布置换了目标：事件那一次重算时目标表还没到，这里按现在的目标再算一遍并自己取壁纸
     const retargeted = requested !== targetId.value;
     applyTargetConfig();

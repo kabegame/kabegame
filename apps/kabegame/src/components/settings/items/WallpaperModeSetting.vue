@@ -43,7 +43,8 @@ watch(
 );
 
 const handleChange = async (mode: string) => {
-  if (switching.value) return;
+  const prevMode = (settingValue.value as any as string) || "native";
+  if (switching.value || mode === prevMode) return;
 
   if (mode === "native") {
     try {
@@ -59,7 +60,7 @@ const handleChange = async (mode: string) => {
   }
   if (mode === "plasma-plugin") {
     // GNOME：先确认 Shell 版本与扩展（不满足时已经提示用户，必要时帮忙装好扩展），这次不切
-    let ready: { gnome: boolean; layerShell: boolean } | null;
+    let ready: { gnome: boolean } | null;
     try {
       ready = await preparePluginMode();
     } catch (e: any) {
@@ -69,7 +70,7 @@ const handleChange = async (mode: string) => {
     if (!ready) return;
     try {
       await messageBox.confirm(
-        pluginModeConfirmMessage(ready.gnome, ready.layerShell),
+        pluginModeConfirmMessage(ready.gnome),
         t("settings.wallpaperModeConfirmTitle"),
         {
           confirmButtonText: t("settings.wallpaperModeConfirmOk"),
@@ -82,7 +83,6 @@ const handleChange = async (mode: string) => {
     }
   }
 
-  const prevMode = (settingValue.value as any as string) || "native";
   // 切换期间控件被 switching 禁用，这里乐观更新只为让选中框立刻跟手，失败再回滚
   localValue.value = mode;
   uiStore.wallpaperModeSwitching = true as any;
