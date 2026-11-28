@@ -45,7 +45,7 @@ type PluginModeReadiness =
  * 切到插件模式之前的检查（Linux）。GNOME 会话要 Shell 版本在支持范围内、Kabegame 的 Shell 扩展在线：版本不支持时提示升级系统
  * （或等 Kabegame 更新）；扩展不在线时问用户要不要安装，装完提示注销重新登录，这次不切。
  *
- * @returns 可以切时返回 `{ gnome }`（是不是 GNOME 会话，确认文案据此选）；不能切时返回 null（原因已经告诉用户）。
+ * @returns 可以切时返回 `{ gnome }`（确认文案据此选）；不能切时返回 null（原因已经告诉用户）。
  * @throws 读不到 Shell 版本等检查本身出错时抛后端的错误。
  */
 export async function preparePluginMode(): Promise<{ gnome: boolean } | null> {
@@ -58,9 +58,13 @@ export async function preparePluginMode(): Promise<{ gnome: boolean } | null> {
   if (readiness.status === "gnomeShellUnsupported") {
     const { version, min, max } = readiness;
     const tooNew = Number.parseInt(version, 10) > max;
-    await messageBox.alert(t(tooNew ? "settings.gnomeShellTooNew" : "settings.gnomeShellTooOld", { version, min, max }), title, {
-      type: "warning",
-    });
+    await messageBox.alert(
+      t(tooNew ? "settings.gnomeShellTooNew" : "settings.gnomeShellTooOld", { version, min, max }),
+      title,
+      {
+        type: "warning",
+      },
+    );
     return null;
   }
 
@@ -87,7 +91,9 @@ export async function preparePluginMode(): Promise<{ gnome: boolean } | null> {
 
 /** 插件模式的确认文案：GNOME 下是 Shell 扩展把壁纸窗口放到桌面，Plasma 下是换系统的壁纸插件。 */
 export function pluginModeConfirmMessage(gnome: boolean): string {
-  return i18n.global.t(gnome ? "settings.wallpaperModePluginConfirmMessageGnome" : "settings.wallpaperModePluginConfirmMessage");
+  return i18n.global.t(
+    gnome ? "settings.wallpaperModePluginConfirmMessageGnome" : "settings.wallpaperModePluginConfirmMessage",
+  );
 }
 
 async function ensurePluginModeByUserConfirm(): Promise<void> {

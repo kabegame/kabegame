@@ -225,19 +225,20 @@ const MAIN_INFO_TTL: Duration = Duration::from_millis(500);
 /// 窗口几何（KWin / Shell 扩展给的）隔多久重新取一次（光标在桌面上时主窗口很少同时在动）。
 const MAIN_FRAME_TTL: Duration = Duration::from_millis(250);
 
-/// 查窗口在全局坐标里的位置：Plasma 问 KWin，GNOME 问 Kabegame 的 Shell 扩展。
+/// 查窗口在全局坐标里的位置：Plasma 问 KWin，GNOME 问 Kabegame 的 Shell 扩展，其它桌面不查。
 enum Locator {
     Kwin(KwinWindowLocator),
     Gnome(GnomeWindowLocator),
+    None,
 }
 
 impl Locator {
     fn new() -> Self {
         use crate::linux_desktop::{linux_desktop, LinuxDesktop};
-        if linux_desktop() == LinuxDesktop::Gnome {
-            Self::Gnome(GnomeWindowLocator::new())
-        } else {
-            Self::Kwin(KwinWindowLocator::new())
+        match linux_desktop() {
+            LinuxDesktop::Plasma => Self::Kwin(KwinWindowLocator::new()),
+            LinuxDesktop::Gnome => Self::Gnome(GnomeWindowLocator::new()),
+            LinuxDesktop::Unknown => Self::None,
         }
     }
 
@@ -245,6 +246,7 @@ impl Locator {
         match self {
             Self::Kwin(locator) => locator.locate(title),
             Self::Gnome(locator) => locator.locate(title),
+            Self::None => None,
         }
     }
 }

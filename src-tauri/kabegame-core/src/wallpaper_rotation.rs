@@ -52,14 +52,19 @@ pub fn normalize_path(path: &str) -> Option<String> {
     }
 }
 
-/// 按壁纸模式得到实际 count / 取行用的路径；设置里保存的仍是原始路径。
-pub fn effective_path(path: &str, wallpaper_mode: &str) -> String {
+/// 按「当前模式是否支持视频」得到实际 count / 取行用的路径；设置里保存的仍是原始路径。
+pub fn effective_path_for_video_support(path: &str, supports_video: bool) -> String {
     let base = path.trim_end_matches('/');
-    if mode_supports_video(wallpaper_mode) {
+    if supports_video {
         base.to_string()
     } else {
         format!("{base}/{IMAGE_ONLY_TAIL}")
     }
+}
+
+/// 按壁纸模式得到实际 count / 取行用的路径；设置里保存的仍是原始路径。
+pub fn effective_path(path: &str, wallpaper_mode: &str) -> String {
+    effective_path_for_video_support(path, mode_supports_video(wallpaper_mode))
 }
 
 /// 页大小 `page_size`、第 `page`（1 起）页的取行路径；切换壁纸用页大小 1，第 `位置 + 1` 页即那一张。
@@ -113,6 +118,11 @@ mod tests {
         assert_eq!(effective_path(p, "plasma-plugin"), p);
         assert_eq!(
             effective_path(p, "native"),
+            "images://gallery/hide/sort/random-42/_kb_fc/media-type/image"
+        );
+        assert_eq!(effective_path_for_video_support("images://gallery/hide/sort/random-42/", true), p);
+        assert_eq!(
+            effective_path_for_video_support("images://gallery/hide/sort/random-42/", false),
             "images://gallery/hide/sort/random-42/_kb_fc/media-type/image"
         );
     }

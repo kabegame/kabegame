@@ -294,6 +294,7 @@ import {
   useWallpaperRotationSources,
   wallpaperTargetScreenName,
 } from "@/composables/useWallpaperTarget";
+import { useWallpaperCapabilities } from "@/composables/useWallpaperCapabilities";
 import { pickWallpaperTarget, pickedScreenName } from "@/composables/useWallpaperTargetPicker";
 import { gridViewKey } from "@/components/imageGrid/gridViewPath";
 import { kameMessage } from "@/utils/kameMessage";
@@ -409,6 +410,7 @@ const rotationPath = computed(() => (gridView?.path.value ? viewRotationPath(gri
 const showRotationAction = computed(() => !IS_WEB && !!rotationPath.value);
 // 各活跃壁纸目标的轮播来源（逐屏独立下每块屏一个）；轮播关着时没有目标算「在轮播本视图」
 const rotationSources = useWallpaperRotationSources();
+const wallpaperCapabilities = useWallpaperCapabilities();
 const rotatingThisViewTargets = computed(() =>
   settingsStore.values.wallpaperRotationEnabled
     ? rotatingTargetIds(rotationSources.value, (path) => path === rotationPath.value)
@@ -440,10 +442,10 @@ async function rotateWithCurrentView() {
     if (!settingsStore.values.wallpaperRotationEnabled) await settingsStore.save("wallpaperRotationEnabled", true);
     // 有多个壁纸目标时提示里带上是哪块屏
     const screen = pickedScreenName(target);
-    // 原生壁纸只能显示图片：后端有效路径会追加图片过滤（见 rotator 的 wallpaper_file_available），
+    // 不走自渲染壁纸窗口的模式只能显示图片：后端有效路径会追加图片过滤（见 rotator 的 wallpaper_file_available），
     // 这里直接看过滤对象是否已限定为图片，没有就提示视频会被跳过
     const skipsVideo =
-      !wallpaperModeSupportsVideo(settingsStore.values.wallpaperMode) &&
+      !wallpaperModeSupportsVideo(settingsStore.values.wallpaperMode, wallpaperCapabilities.renderedMode.value) &&
       filterMediaKind(activeFilters.value) !== "image";
     if (skipsVideo) {
       kameMessage.warning(

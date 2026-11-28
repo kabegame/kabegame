@@ -43,7 +43,8 @@ watch(
 );
 
 const handleChange = async (mode: string) => {
-  if (switching.value) return;
+  const prevMode = (settingValue.value as any as string) || "native";
+  if (switching.value || mode === prevMode) return;
 
   if (mode === "native") {
     try {
@@ -82,7 +83,6 @@ const handleChange = async (mode: string) => {
     }
   }
 
-  const prevMode = (settingValue.value as any as string) || "native";
   // 切换期间控件被 switching 禁用，这里乐观更新只为让选中框立刻跟手，失败再回滚
   localValue.value = mode;
   uiStore.wallpaperModeSwitching = true as any;

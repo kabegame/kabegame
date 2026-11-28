@@ -70,19 +70,26 @@ fn fall_back_to_default(target_id: &str, reason: &str) -> Result<String, String>
     Ok(path)
 }
 
+fn effective_rotation_path(path: &str, wallpaper_mode: &str) -> String {
+    rotation_path::effective_path_for_video_support(
+        path,
+        crate::wallpaper::manager::is_rendered_wallpaper_mode(wallpaper_mode),
+    )
+}
+
 fn count_source(
     path: String,
     wallpaper_mode: &str,
     fallback: bool,
 ) -> Result<RotationSource, String> {
-    let effective = rotation_path::effective_path(&path, wallpaper_mode);
+    let effective = effective_rotation_path(&path, wallpaper_mode);
     let count = count_at(&effective)? as u64;
     Ok(RotationSource {
         path,
         effective,
         count,
         fallback,
-        allow_wpe: wallpaper_mode == crate::wallpaper::manager::RENDERED_WALLPAPER_MODE,
+        allow_wpe: crate::wallpaper::manager::is_rendered_wallpaper_mode(wallpaper_mode),
     })
 }
 
@@ -277,7 +284,7 @@ pub fn relocate_position_for_mode(wallpaper_mode: &str) {
             if config.rotation_position == WALLPAPER_ROTATION_FROM_START {
                 return None;
             }
-            let effective = rotation_path::effective_path(path, wallpaper_mode);
+            let effective = effective_rotation_path(path, wallpaper_mode);
             let n = locate_after_current(config.current_image_id.as_deref(), &effective)?;
             Some((id, n as i64))
         })
@@ -294,7 +301,7 @@ pub fn relocate_position_for_mode(wallpaper_mode: &str) {
 
 /// 校验一个将要设为轮播来源的路径：count 成功、非空，且第 1 张能解析成图片行。
 pub fn validate_rotation_path(path: &str, wallpaper_mode: &str) -> Result<(), String> {
-    let effective = rotation_path::effective_path(path, wallpaper_mode);
+    let effective = effective_rotation_path(path, wallpaper_mode);
     let count = count_at(&effective).map_err(|e| format!("轮播路径无效: {e}"))?;
     if count == 0 {
         return Err("该视图下没有可作壁纸的图片".to_string());

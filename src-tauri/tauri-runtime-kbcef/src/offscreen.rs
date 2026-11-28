@@ -97,6 +97,7 @@ pub enum OffscreenFrame<'a> {
         width: u32,
         height: u32,
         visible: (i32, i32, u32, u32),
+        geometry: OffscreenGeometry,
     },
     /// 软件绘制的整帧，行距 `width * 4`。
     Cpu {
@@ -104,6 +105,7 @@ pub enum OffscreenFrame<'a> {
         format: OffscreenPixelFormat,
         width: u32,
         height: u32,
+        geometry: OffscreenGeometry,
     },
 }
 
@@ -324,6 +326,7 @@ wrap_render_handler! {
                 return;
             };
             let len = width as usize * height as usize * 4;
+            let geometry = self.view.geometry();
             // SAFETY: CEF 保证 buffer 是 width × height 的 BGRA 像素，在本次回调内有效。
             let data = unsafe { std::slice::from_raw_parts(buffer, len) };
             sink.on_frame(OffscreenFrame::Cpu {
@@ -331,6 +334,7 @@ wrap_render_handler! {
                 format: OffscreenPixelFormat::Bgra,
                 width: width as u32,
                 height: height as u32,
+                geometry,
             });
         }
 
@@ -360,6 +364,7 @@ wrap_render_handler! {
                 };
             }
             let visible = &info.extra.visible_rect;
+            let geometry = self.view.geometry();
             sink.on_frame(OffscreenFrame::DmaBuf {
                 planes: &planes[..count],
                 modifier: info.modifier,
@@ -372,6 +377,7 @@ wrap_render_handler! {
                     visible.width.max(0) as u32,
                     visible.height.max(0) as u32,
                 ),
+                geometry,
             });
         }
     }

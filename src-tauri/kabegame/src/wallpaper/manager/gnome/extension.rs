@@ -391,7 +391,10 @@ mod tests {
             }
         );
         assert!(matches!(classify("52.0", || true), Readiness::GnomeShellUnsupported { .. }));
-        assert_eq!(classify("42.9", || true), Readiness::Ready { gnome: true });
+        assert_eq!(
+            classify("42.9", || true),
+            Readiness::Ready { gnome: true }
+        );
         assert_eq!(
             classify("50.1", || false),
             Readiness::GnomeExtensionMissing {

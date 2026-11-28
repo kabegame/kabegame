@@ -8,9 +8,12 @@
 //! 环境变量 `KABEGAME_PIPEWIRE_RENDER_NODE`：`none` / `off` / `0` 关掉 dmabuf（离屏 browser 走软件绘制、流只给共享内存），
 //! 其它值当作 render node 路径直接用（调试多卡用）。
 
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use wayland_client::protocol::wl_registry;
+use wayland_client::backend::WaylandError;
+use wayland_client::protocol::{wl_callback, wl_registry};
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_feedback_v1::{
     self, ZwpLinuxDmabufFeedbackV1,
@@ -20,6 +23,7 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::zwp_linux_dmabuf_v1::{
 };
 
 const ENV_OVERRIDE: &str = "KABEGAME_PIPEWIRE_RENDER_NODE";
+const DEVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// dmabuf 推流用哪张卡；`None` 表示不走 dmabuf（原因已记日志）。
 pub fn render_node() -> Option<PathBuf> {
@@ -68,6 +72,7 @@ struct Probe {
     dmabuf: Option<ZwpLinuxDmabufV1>,
     main_device: Option<libc::dev_t>,
     done: bool,
+    sync_done: bool,
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for Probe {
@@ -126,16 +131,104 @@ impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for Probe {
     }
 }
 
+impl Dispatch<wl_callback::WlCallback, ()> for Probe {
+    fn event(
+        state: &mut Self,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            state.sync_done = true;
+        }
+    }
+}
+
+fn is_would_block(err: &WaylandError) -> bool {
+    matches!(err, WaylandError::Io(io_err) if io_err.kind() == std::io::ErrorKind::WouldBlock)
+}
+
+fn roundtrip_probe(
+    conn: &Connection,
+    queue: &mut wayland_client::EventQueue<Probe>,
+    qh: &QueueHandle<Probe>,
+    probe: &mut Probe,
+    deadline: Instant,
+) -> Result<(), String> {
+    probe.sync_done = false;
+    conn.display().sync(qh, ());
+    let mut need_flush = true;
+
+    while !probe.sync_done {
+        queue
+            .dispatch_pending(probe)
+            .map_err(|e| format!("Wayland 分发失败: {e}"))?;
+        if probe.sync_done {
+            break;
+        }
+        if need_flush {
+            match conn.flush() {
+                Ok(()) => need_flush = false,
+                Err(ref e) if is_would_block(e) => need_flush = true,
+                Err(e) => return Err(format!("Wayland flush 失败: {e}")),
+            }
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err("Wayland roundtrip 超时".to_string());
+        }
+        let timeout_ms = deadline
+            .saturating_duration_since(now)
+            .as_millis()
+            .clamp(1, i32::MAX as u128) as i32;
+        let Some(guard) = queue.prepare_read() else {
+            continue;
+        };
+        let mut pfd = libc::pollfd {
+            fd: guard.connection_fd().as_raw_fd(),
+            events: libc::POLLIN | if need_flush { libc::POLLOUT } else { 0 },
+            revents: 0,
+        };
+        // SAFETY: `pfd.fd` 来自本次有效的 `guard`。
+        let polled = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        if polled < 0 {
+            let err = std::io::Error::last_os_error();
+            drop(guard);
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(format!("Wayland poll 失败: {err}"));
+        }
+        if pfd.revents & libc::POLLIN != 0 {
+            match guard.read() {
+                Ok(_) => {}
+                Err(ref e) if is_would_block(e) => {}
+                Err(e) => return Err(format!("Wayland 读事件失败: {e}")),
+            }
+        } else {
+            drop(guard);
+        }
+        if pfd.revents & libc::POLLOUT != 0 {
+            need_flush = true;
+        }
+        if pfd.revents & (libc::POLLERR | libc::POLLHUP) != 0 {
+            return Err("Wayland 连接断开".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// 单独连一次合成器，读默认 feedback 的 `main_device`，读完就断开。
 fn wayland_main_device() -> Result<libc::dev_t, String> {
-    let conn = Connection::connect_to_env().map_err(|e| format!("连不上 Wayland 合成器: {e}"))?;
+    let deadline = Instant::now() + DEVICE_PROBE_TIMEOUT;
+    let conn = crate::wallpaper::manager::layer_shell::connect_wayland_with_timeout(deadline, None)?;
     let mut queue = conn.new_event_queue();
     let qh = queue.handle();
     conn.display().get_registry(&qh, ());
     let mut probe = Probe::default();
-    queue
-        .roundtrip(&mut probe)
-        .map_err(|e| format!("Wayland roundtrip 失败: {e}"))?;
+    roundtrip_probe(&conn, &mut queue, &qh, &mut probe, deadline)?;
     let Some(dmabuf) = probe.dmabuf.clone() else {
         return Err("合成器没有 zwp_linux_dmabuf_v1 v4".to_string());
     };
@@ -145,12 +238,11 @@ fn wayland_main_device() -> Result<libc::dev_t, String> {
         if probe.done {
             break;
         }
-        queue
-            .roundtrip(&mut probe)
-            .map_err(|e| format!("Wayland roundtrip 失败: {e}"))?;
+        roundtrip_probe(&conn, &mut queue, &qh, &mut probe, deadline)?;
     }
     feedback.destroy();
     dmabuf.destroy();
+    let _ = conn.flush();
     probe
         .main_device
         .ok_or_else(|| "默认 feedback 没有给 main_device".to_string())

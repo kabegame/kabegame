@@ -82,7 +82,8 @@ beforeEach(() => {
         throw `壁纸目标不在当前显示器模式的活跃集合里: ${String(args.target)}`;
       }
       if (backend.windowOnly.has(args?.imageId as string) && backend.mode !== "window") throw "REQUIRES_WINDOW_MODE";
-      if (backend.pluginOnly.has(args?.imageId as string) && backend.mode !== "plasma-plugin") throw "REQUIRES_PLUGIN_MODE";
+      if (backend.pluginOnly.has(args?.imageId as string) && backend.mode !== "plasma-plugin")
+        throw "REQUIRES_PLUGIN_MODE";
       return undefined;
     }
     if (command === "set_wallpaper_mode") {
@@ -179,7 +180,9 @@ describe("preparePluginMode", () => {
     env.linux = true;
     backend.readiness = { status: "gnomeShellUnsupported", version: "41.5", min: 42, max: 51 };
     await expect(preparePluginMode()).resolves.toBeNull();
-    expect(alert).toHaveBeenCalledWith("settings.gnomeShellTooOld", "settings.gnomeExtensionTitle", { type: "warning" });
+    expect(alert).toHaveBeenCalledWith("settings.gnomeShellTooOld", "settings.gnomeExtensionTitle", {
+      type: "warning",
+    });
     expect(confirm).not.toHaveBeenCalled();
     expect(installed()).toBe(false);
   });
@@ -188,7 +191,9 @@ describe("preparePluginMode", () => {
     env.linux = true;
     backend.readiness = { status: "gnomeShellUnsupported", version: "52.0", min: 42, max: 51 };
     await expect(preparePluginMode()).resolves.toBeNull();
-    expect(alert).toHaveBeenCalledWith("settings.gnomeShellTooNew", "settings.gnomeExtensionTitle", { type: "warning" });
+    expect(alert).toHaveBeenCalledWith("settings.gnomeShellTooNew", "settings.gnomeExtensionTitle", {
+      type: "warning",
+    });
   });
 
   it("扩展不在线：确认后安装并提示重新登录，这次不切", async () => {

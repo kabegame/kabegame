@@ -329,7 +329,7 @@
                 </SettingRow>
 
                 <SettingRow
-                  v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma)"
+                  v-if="IS_WINDOWS || IS_MACOS || (IS_LINUX && (isPlasma || wallpaperCapabilities.isRenderedMode('native')))"
                   :label="$t('settings.wallpaperTransition')"
                   :description="$t('settings.wallpaperTransitionDesc')"
                 >
@@ -756,15 +756,15 @@ watch([currentWallpaperImageId, selectedTargetId], () => {
   void refreshCurrentWallpaperPath();
 });
 const wallpaperMode = computed(() => (settingsStore.values.wallpaperMode as any as string) || "native");
-/** 只有壁纸窗口渲染的模式（Windows / macOS 的窗口模式、Linux 的插件模式）桌面上有在播放的视频、网页与场景
- *  （原生模式交给系统，Android / Web 没有壁纸窗口），暂停只在这时显示 */
+/** 只有壁纸窗口渲染的模式（Windows / macOS 的 `window`、layer-shell 桌面的 `native`、其余 Linux 的 `plasma-plugin`）
+ *  桌面上有在播放的视频、网页与场景（普通原生模式交给系统，Android / Web 没有壁纸窗口），暂停只在这时显示 */
 const desktopWallpaperLive = computed(
-  () => !IS_ANDROID && !IS_WEB && (wallpaperMode.value === "window" || wallpaperMode.value === "plasma-plugin"),
+  () => !IS_ANDROID && !IS_WEB && wallpaperCapabilities.isRenderedMode(wallpaperMode.value),
 );
-/** 桌面「壁纸设置」按平台显示的字段：暂停只在窗口模式（只有那时桌面上有在播放的实例），音量 / 倍速同原来的条件，
+/** 桌面「壁纸设置」按平台显示的字段：暂停只在自渲染壁纸窗口模式，音量 / 倍速含 Windows / macOS / Plasma / layer-shell，
  *  媒体集成要本平台有数据源（三个桌面平台都有），帧率与场景各项只在桌面端 */
 const wpeWallpaperSettingFields = computed<WpeSettingKey[]>(() => {
-  const playback = IS_WINDOWS || IS_MACOS || (IS_LINUX && isPlasma.value);
+  const playback = IS_WINDOWS || IS_MACOS || (IS_LINUX && (isPlasma.value || wallpaperCapabilities.isRenderedMode("native")));
   const desktop = !IS_ANDROID && !IS_WEB;
   return WPE_SETTING_KEYS.filter((key) => {
     if (key === "paused") return desktopWallpaperLive.value;
@@ -775,9 +775,9 @@ const wpeWallpaperSettingFields = computed<WpeSettingKey[]>(() => {
 });
 // 「打开壁纸」关掉期间将其余壁纸控件置灰（还没读到值时按开启处理）
 const wallpaperDisabled = computed(() => settingsStore.values.wallpaperEnabled === false);
-// native 模式下关掉「打开壁纸」时提示用户系统壁纸保持现状、无法自动还原
+// 普通 native 模式下关掉「打开壁纸」时提示用户系统壁纸保持现状、无法自动还原；layer-shell 原生模式会自动销毁桌面窗口，不提示
 watch(wallpaperDisabled, (disabled, prev) => {
-  if (disabled && !prev && wallpaperMode.value === "native") {
+  if (disabled && !prev && wallpaperMode.value === "native" && !wallpaperCapabilities.isRenderedMode("native")) {
     kameMessage.warning(t("settings.wallpaperDisabledNativeWarning"));
   }
 });
