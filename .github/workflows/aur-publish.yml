@@ -1,0 +1,225 @@
+name: Publish to AUR (kabegame-bin)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v4.7.0; leave empty for latest)"
+        required: false
+        type: string
+        default: ""
+      pkgrel:
+        description: "AUR pkgrel"
+        required: false
+        type: string
+        default: "1"
+      dry_run:
+        description: "Validate and show diff without pushing to AUR"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: aur-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.release.prerelease == false && github.event.release.draft == false)
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Arch packaging tools
+        run: |
+          pacman -Syu --noconfirm --needed git openssh curl jq namcap
+          id -u builder >/dev/null 2>&1 || useradd -m builder
+
+      - name: Resolve release asset and verify checksum
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_PKGREL: ${{ github.event.inputs.pkgrel }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG="${INPUT_TAG}"
+            PKGREL="${INPUT_PKGREL:-1}"
+          else
+            TAG="${RELEASE_TAG}"
+            PKGREL="1"
+          fi
+
+          if [[ -z "${TAG}" ]]; then
+            TAG=$(curl -fsSL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest" | jq -r '.tag_name')
+          fi
+
+          if [[ ! "${TAG}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag '${TAG}' is not a stable vX.Y.Z semver tag."
+            exit 1
+          fi
+          PKGVER="${BASH_REMATCH[1]}"
+
+          if [[ ! "${PKGREL}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid pkgrel '${PKGREL}'."
+            exit 1
+          fi
+
+          RELEASE_JSON=$(curl -fsSL \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}")
+
+          ASSET_NAME="Linux-Kabegame-standard_${PKGVER}_amd64.deb"
+          ASSET_URL=$(jq -r --arg name "${ASSET_NAME}" '.assets[] | select(.name == $name) | .browser_download_url' <<<"${RELEASE_JSON}")
+          ASSET_DIGEST=$(jq -r --arg name "${ASSET_NAME}" '.assets[] | select(.name == $name) | (.digest // "")' <<<"${RELEASE_JSON}")
+
+          if [[ -z "${ASSET_URL}" || "${ASSET_URL}" == "null" ]]; then
+            echo "::error::Asset '${ASSET_NAME}' not found in release '${TAG}'."
+            exit 1
+          fi
+
+          DEB_PATH="/tmp/kabegame-bin-${PKGVER}.deb"
+          curl -fsSL -L -o "${DEB_PATH}" "${ASSET_URL}"
+          SHA256=$(sha256sum "${DEB_PATH}" | awk '{print $1}')
+
+          if [[ "${ASSET_DIGEST}" == sha256:* ]]; then
+            EXPECTED="${ASSET_DIGEST#sha256:}"
+            if [[ "${SHA256}" != "${EXPECTED}" ]]; then
+              echo "::error::Checksum mismatch for ${ASSET_NAME}: got ${SHA256}, expected ${EXPECTED}"
+              exit 1
+            fi
+          fi
+
+          DATA_LIST=$(bsdtar -xOf "${DEB_PATH}" 'data.tar.*' | bsdtar -tf -)
+          if ! grep -qxE '(\./)?usr/bin/kabegame' <<<"${DATA_LIST}"; then
+            echo "::error::Missing usr/bin/kabegame inside ${ASSET_NAME}"
+            exit 1
+          fi
+          if ! grep -qxE '(\./)?usr/lib/kabegame/kabegame-cef-helper' <<<"${DATA_LIST}"; then
+            echo "::error::Missing usr/lib/kabegame/kabegame-cef-helper inside ${ASSET_NAME}"
+            exit 1
+          fi
+
+          {
+            echo "pkgver=${PKGVER}"
+            echo "pkgrel=${PKGREL}"
+            echo "sha256=${SHA256}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Configure AUR SSH
+        if: ${{ inputs.dry_run != true }}
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${AUR_SSH_PRIVATE_KEY}" ]]; then
+            echo "::error::Missing repository secret AUR_SSH_PRIVATE_KEY."
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+
+          cat > ~/.ssh/known_hosts <<'EOF'
+          aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN
+          EOF
+          chmod 644 ~/.ssh/known_hosts
+
+          cat > ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+              User aur
+              IdentityFile ~/.ssh/aur
+              IdentitiesOnly yes
+              StrictHostKeyChecking yes
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Update PKGBUILD, lint, and generate .SRCINFO
+        env:
+          PKGVER: ${{ steps.release.outputs.pkgver }}
+          PKGREL: ${{ steps.release.outputs.pkgrel }}
+          SHA256: ${{ steps.release.outputs.sha256 }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          AUR_DIR="/tmp/aur-kabegame-bin"
+          rm -rf "${AUR_DIR}"
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            CLONE_URL="https://aur.archlinux.org/kabegame-bin.git"
+          else
+            CLONE_URL="ssh://aur@aur.archlinux.org/kabegame-bin.git"
+          fi
+
+          git clone "${CLONE_URL}" "${AUR_DIR}"
+          git config --global --add safe.directory "${AUR_DIR}"
+          git -C "${AUR_DIR}" checkout -B master
+
+          cp packaging/aur/kabegame-bin/PKGBUILD "${AUR_DIR}/PKGBUILD"
+          cp packaging/aur/kabegame-bin/kabegame-bin.install "${AUR_DIR}/kabegame-bin.install"
+
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=${PKGVER}/" \
+            -e "s/^pkgrel=.*/pkgrel=${PKGREL}/" \
+            -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${SHA256}')/" \
+            "${AUR_DIR}/PKGBUILD"
+
+          namcap "${AUR_DIR}/PKGBUILD"
+
+          chown -R builder:builder "${AUR_DIR}"
+          su - builder -c "cd '${AUR_DIR}' && makepkg --printsrcinfo > .SRCINFO"
+          chown -R root:root "${AUR_DIR}"
+
+          grep -qxF $'\tpkgver = '"${PKGVER}" "${AUR_DIR}/.SRCINFO"
+          grep -qxF $'\tsha256sums_x86_64 = '"${SHA256}" "${AUR_DIR}/.SRCINFO"
+
+      - name: Commit and push to AUR
+        env:
+          PKGVER: ${{ steps.release.outputs.pkgver }}
+          PKGREL: ${{ steps.release.outputs.pkgrel }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          AUR_GIT_NAME: ${{ vars.AUR_GIT_NAME }}
+          AUR_GIT_EMAIL: ${{ vars.AUR_GIT_EMAIL }}
+        run: |
+          set -euo pipefail
+
+          AUR_DIR="/tmp/aur-kabegame-bin"
+          if [[ -z "$(git -C "${AUR_DIR}" status --porcelain)" ]]; then
+            echo "AUR package is already up to date (${PKGVER}-${PKGREL})."
+            exit 0
+          fi
+
+          git -C "${AUR_DIR}" diff
+
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "Dry run complete; skipped git push."
+            exit 0
+          fi
+
+          git -C "${AUR_DIR}" config user.name "${AUR_GIT_NAME:-yang208115}"
+          git -C "${AUR_DIR}" config user.email "${AUR_GIT_EMAIL:-a3305587173@outlook.com}"
+          git -C "${AUR_DIR}" add PKGBUILD .SRCINFO kabegame-bin.install
+          git -C "${AUR_DIR}" commit -m "Update to ${PKGVER}-${PKGREL}"
+          git -C "${AUR_DIR}" push origin master
